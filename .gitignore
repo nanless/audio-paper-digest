@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Data & logs (never commit)
+data/
+logs/
+
+# Environment variables
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude Code session files
+.claude/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Temporary / backup files
+*.backup*
+*.bak
+*.tmp
+*-cache.json
+
+# WeChat image cache (if generated locally)
+wechat-image-cache.json
