@@ -6,14 +6,21 @@ setupScriptLogging(__filename);
  * 论文深度分析器 - 使用全文+图片的深度阅读理解
  */
 
-const { loadEnvFile, parseAnalysis, detectApiType, buildApiUrl, buildRequestBody, buildHeaders, parseResponseText, loadPrompt } = require('./utils.js');
+const { loadEnvFile, parseAnalysis, detectApiType, buildApiUrl, buildRequestBody, buildHeaders, parseResponseText, loadPrompt, writeFileAtomic, getBeijingISOString } = require('./utils.js');
 loadEnvFile();
 
 // 解决 stdout 缓冲问题：后台运行时强制立即 flush
 const https = require('https');
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 const { ANALYSIS_CONFIG } = require('./config.js');
+const Config = require('./config.js');
+
+const DEEP_ANALYZER_IO_DIR = path.join(Config.CURRENT_DIR, 'deep_analyzer_input_output');
+if (!fs.existsSync(DEEP_ANALYZER_IO_DIR)) {
+    fs.mkdirSync(DEEP_ANALYZER_IO_DIR, { recursive: true });
+}
 
 // 解构配置常量（便于阅读）
 const {
@@ -389,6 +396,7 @@ async function extractPdfContent(pdfPath) {
 async function analyzePaperDeep(paper) {
     const isLocalPdf = !!paper.pdfPath;
     const paperId = paper.arxivId || paper.arnumber || paper.id || paper.paper_id || 'unknown';
+    const safePaperId = String(paperId).replace(/[^a-zA-Z0-9_-]/g, '_');
 
     let fullText = '';
     let imageDataList = [];  // {url or index, base64}
@@ -488,7 +496,28 @@ async function analyzePaperDeep(paper) {
     }
 
     try {
-        const analysis = await callModel([{ role: 'user', content: content }], API_MAX_TOKENS);
+        const messages = [{ role: 'user', content: content }];
+
+        // 保存深度分析输入
+        const inputFile = path.join(DEEP_ANALYZER_IO_DIR, `${safePaperId}_input.json`);
+        writeFileAtomic(inputFile, JSON.stringify({
+            paperId,
+            timestamp: getBeijingISOString(),
+            model: DEEP_CONFIG.model,
+            maxTokens: API_MAX_TOKENS,
+            messages: messages
+        }, null, 2));
+
+        const analysis = await callModel(messages, API_MAX_TOKENS);
+
+        // 保存深度分析输出
+        const outputFile = path.join(DEEP_ANALYZER_IO_DIR, `${safePaperId}_output.json`);
+        writeFileAtomic(outputFile, JSON.stringify({
+            paperId,
+            timestamp: getBeijingISOString(),
+            model: DEEP_CONFIG.model,
+            analysis: analysis
+        }, null, 2));
 
         return {
             ...paper,
@@ -503,8 +532,20 @@ async function analyzePaperDeep(paper) {
             console.log(`    [deep] ⚠️  带图片请求超时，尝试不带图片重试...`);
             try {
                 const textOnlyContent = [{ type: 'text', text: prompt }];
-                const analysis = await callModel([{ role: 'user', content: textOnlyContent }], API_MAX_TOKENS);
+                const messagesRetry = [{ role: 'user', content: textOnlyContent }];
+                const analysis = await callModel(messagesRetry, API_MAX_TOKENS);
                 console.log(`    [deep] ✅ 不带图片重试成功`);
+
+                // 保存重试输出
+                const outputFile = path.join(DEEP_ANALYZER_IO_DIR, `${safePaperId}_output_retry.json`);
+                writeFileAtomic(outputFile, JSON.stringify({
+                    paperId,
+                    timestamp: getBeijingISOString(),
+                    model: DEEP_CONFIG.model,
+                    retry: true,
+                    analysis: analysis
+                }, null, 2));
+
                 return {
                     ...paper,
                     analysis: analysis,

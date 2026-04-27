@@ -52,7 +52,9 @@ const Config = require('./config.js');
 
 const PAPERS_DIR = process.env.ICASSP_PAPERS_DIR || '/Users/francis7999/Documents/icassp-2026-papers/papers_2026';
 const JSON_FILE = process.env.ICASSP_JSON_FILE || '/Users/francis7999/Documents/icassp-2026-papers/papers_2026.json';
-const RESULT_FILE = process.env.ICASSP_RESULT_FILE || path.join(Config.CURRENT_DIR, 'icassp-2026-analysis.json');
+const RESULT_FILE = process.env.ICASSP_RESULT_FILE || path.join(Config.CURRENT_DIR, 'icassp_2026_deep_analyzers.json');
+const SNIPPETS_FILE = path.join(Config.CURRENT_DIR, 'icassp-2026-snippets.json');
+const FILTER_IO_DIR = path.join(Config.CURRENT_DIR, 'filter_input_output');
 const SKIP_FILTER = process.env.ICASSP_SKIP_FILTER === 'true';
 const OFFSET = parseInt(process.env.ICASSP_OFFSET || '0', 10);
 const LIMIT = parseInt(process.env.ICASSP_LIMIT || '0', 10) || Infinity;
@@ -106,7 +108,7 @@ function buildPdfPathMapping(papers, pdfDir) {
 // 筛选：纯 LLM 筛选（标题 + PDF 摘要）
 // ═══════════════════════════════════════════════════════
 
-const FILTER_CONCURRENCY = parseInt(process.env.ICASSP_FILTER_CONCURRENCY || '3', 10);
+const FILTER_CONCURRENCY = parseInt(process.env.ICASSP_FILTER_CONCURRENCY || '5', 10);
 const FILTER_TIMEOUT_MS = parseInt(process.env.ICASSP_FILTER_TIMEOUT || '60000', 10);
 const FILTER_MAX_RETRIES = parseInt(process.env.ICASSP_FILTER_RETRIES || '3', 10);
 
@@ -139,10 +141,12 @@ async function llmFilterSingle(paper, config) {
         abstract: abstract || '(无摘要)'
     });
 
+    const paperId = paper.arnumber || paper.paper_id || normalizedId(paper);
+
     let lastError = null;
     for (let attempt = 1; attempt <= FILTER_MAX_RETRIES; attempt++) {
         try {
-            const result = await _llmFilterCall(url, apiType, config, prompt);
+            const result = await _llmFilterCall(url, apiType, config, prompt, paperId);
             return { paper, isRelevant: result.isRelevant, raw: result.raw };
         } catch (err) {
             lastError = err;
@@ -156,10 +160,10 @@ async function llmFilterSingle(paper, config) {
     throw new Error(`筛选失败（重试 ${FILTER_MAX_RETRIES} 次）: ${lastError.message}`);
 }
 
-function _llmFilterCall(url, apiType, config, prompt) {
+function _llmFilterCall(url, apiType, config, prompt, paperId) {
     return new Promise((resolve, reject) => {
         const messages = [{ role: 'user', content: prompt }];
-        const bodyObj = buildRequestBody(apiType, config.model, messages, 500, 0.3);
+        const bodyObj = buildRequestBody(apiType, config.model, messages, 2000, 0.3);
         const postData = JSON.stringify(bodyObj);
 
         const headers = {
@@ -179,6 +183,16 @@ function _llmFilterCall(url, apiType, config, prompt) {
                 try {
                     const response = JSON.parse(data);
                     const content = parseResponseText(apiType, response);
+                    // 保存输入输出
+                    if (paperId) {
+                        const ioFile = path.join(FILTER_IO_DIR, `${paperId}.json`);
+                        writeFileAtomic(ioFile, JSON.stringify({
+                            paperId,
+                            timestamp: getBeijingISOString(),
+                            input: { prompt, messages },
+                            output: { statusCode: res.statusCode, rawResponse: response, parsedContent: content }
+                        }, null, 2));
+                    }
                     if (content !== null) {
                         const isRelevant = /是|yes|y/i.test(content) && !/否|no|n/i.test(content);
                         resolve({ isRelevant, raw: content });
@@ -338,22 +352,59 @@ async function main() {
 
     if (!SKIP_FILTER) {
         console.log('\n=== 筛选阶段（纯 LLM，标题 + PDF 摘要）===');
-        console.log('提取 PDF 文本片段用于筛选...');
 
-        // 提取文本片段
+        // 确保 filter IO 目录存在
+        if (!fs.existsSync(FILTER_IO_DIR)) {
+            fs.mkdirSync(FILTER_IO_DIR, { recursive: true });
+        }
+
+        // 尝试读取已有的 snippets 中间结果
+        const existingSnippets = readJsonSafe(SNIPPETS_FILE, null);
+        const snippetMap = new Map();
+        if (existingSnippets && Array.isArray(existingSnippets.papers)) {
+            console.log(`读取已有 snippets: ${existingSnippets.papers.length} 篇`);
+            for (const s of existingSnippets.papers) {
+                if (s.paper_id && s.snippet !== undefined) {
+                    snippetMap.set(s.paper_id, s.snippet);
+                }
+            }
+        }
+
+        // 提取文本片段（未缓存的才提取）
+        let extractedCount = 0;
         for (let i = 0; i < notAnalyzed.length; i++) {
             const p = notAnalyzed[i];
-            if (i % 50 === 0) {
-                process.stdout.write(`\r  提取中... ${i + 1}/${notAnalyzed.length}`);
+            const pid = p.arnumber || p.paper_id || normalizedId(p);
+            const cached = snippetMap.get(pid);
+            if (cached !== undefined) {
+                p._snippet = cached;
+                continue;
+            }
+            if (extractedCount % 50 === 0) {
+                process.stdout.write(`\r  提取中... ${i + 1}/${notAnalyzed.length} (新提取 ${extractedCount})`);
             }
             try {
                 const snippet = await extractPdfSnippet(p.pdfPath, 3000);
                 p._snippet = snippet;
+                snippetMap.set(pid, snippet);
+                extractedCount++;
             } catch (e) {
                 p._snippet = '';
+                snippetMap.set(pid, '');
+                extractedCount++;
             }
         }
-        console.log(`\r  提取完成: ${notAnalyzed.length}/${notAnalyzed.length}`);
+        console.log(`\r  提取完成: ${notAnalyzed.length}/${notAnalyzed.length} (新提取 ${extractedCount})`);
+
+        // 保存 snippets 中间结果
+        if (extractedCount > 0) {
+            const snippetsData = {
+                timestamp: getBeijingISOString(),
+                papers: Array.from(snippetMap.entries()).map(([paper_id, snippet]) => ({ paper_id, snippet }))
+            };
+            writeFileAtomic(SNIPPETS_FILE, JSON.stringify(snippetsData, null, 2));
+            console.log(`snippets 已保存: ${SNIPPETS_FILE} (${snippetMap.size} 篇)`);
+        }
 
         // 纯 LLM 筛选（全部走单篇判断）
         papersToAnalyze = await llmFilterPapers(notAnalyzed);

@@ -330,16 +330,17 @@ function buildHeaders(apiType, key, bodyStr) {
  */
 function parseResponseText(apiType, response) {
     if (apiType === 'anthropic') {
-        if (response.content && Array.isArray(response.content) && response.content[0]) {
+        if (response.content && Array.isArray(response.content)) {
+            // 优先找 text 块（最终答案），避免 thinking 块被截断导致误判
+            const textBlock = response.content.find(c => c.type === 'text');
+            if (textBlock) {
+                return textBlock.text || '';
+            }
+            // 没有 text 块时才 fallback 到第一个块
             const first = response.content[0];
-            // 支持 text 和 thinking 两种类型
-            if (first.type === 'text') {
-                return first.text || '';
+            if (first) {
+                return first.text || first.thinking || '';
             }
-            if (first.type === 'thinking') {
-                return first.thinking || '';
-            }
-            return first.text || first.thinking || '';
         }
     } else {
         if (response.choices && response.choices[0]) {
