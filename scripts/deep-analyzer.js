@@ -11,6 +11,8 @@ loadEnvFile();
 
 // 解决 stdout 缓冲问题：后台运行时强制立即 flush
 const https = require('https');
+const { spawn } = require('child_process');
+const path = require('path');
 const { ANALYSIS_CONFIG } = require('./config.js');
 
 // 解构配置常量（便于阅读）
@@ -323,106 +325,190 @@ function buildImageContent(imageUrl, base64) {
     };
 }
 
+// ═══════════════════════════════════════════════════════
+// 本地 PDF 提取（ICASSP 论文）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 调用 Python 脚本从本地 PDF 提取文本和图片
+ * @param {string} pdfPath - PDF 文件绝对路径
+ * @returns {Promise<{text: string, textLength: number, pageCount: number, images: Array, imageCount: number}>}
+ */
+async function extractPdfContent(pdfPath) {
+    const scriptPath = path.join(__dirname, 'pdf-extractor.py');
+
+    return new Promise((resolve, reject) => {
+        const args = [
+            scriptPath,
+            pdfPath,
+            '--max-text-chars', String(FULL_TEXT_MAX_CHARS),
+            '--max-images', String(IMAGE_MAX_COUNT),
+            '--max-base64-chars', String(IMAGE_MAX_BASE64_CHARS)
+        ];
+
+        const proc = spawn('python3', args, {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            timeout: 60000
+        });
+
+        let stdout = '';
+        let stderr = '';
+
+        proc.stdout.on('data', (data) => { stdout += data.toString(); });
+        proc.stderr.on('data', (data) => { stderr += data.toString(); });
+
+        proc.on('close', (code) => {
+            if (code !== 0) {
+                reject(new Error(`PDF 提取脚本退出码 ${code}: ${stderr}`));
+                return;
+            }
+            try {
+                const result = JSON.parse(stdout);
+                if (!result.success) {
+                    reject(new Error(result.error || 'PDF 提取失败'));
+                    return;
+                }
+                resolve(result);
+            } catch (e) {
+                reject(new Error(`解析 PDF 提取结果失败: ${e.message}`));
+            }
+        });
+
+        proc.on('error', (err) => {
+            reject(new Error(`启动 PDF 提取脚本失败: ${err.message}`));
+        });
+    });
+}
+
 /**
  * 深度分析单篇论文（全文 + 图片）
+ * 支持两种模式：
+ * 1. arXiv 模式：paper.arxivId 存在，从 arxiv.org 获取全文和图片
+ * 2. 本地 PDF 模式：paper.pdfPath 存在，从本地 PDF 提取文本和图片
  */
 async function analyzePaperDeep(paper) {
-    const arxivId = paper.arxivId;
-    console.log(`    [deep] 获取全文: ${arxivId}`);
+    const isLocalPdf = !!paper.pdfPath;
+    const paperId = paper.arxivId || paper.arnumber || paper.id || paper.paper_id || 'unknown';
 
     let fullText = '';
-    try {
-        fullText = await fetchArxivText(arxivId);
-        console.log(`    [deep] 全文长度: ${fullText.length} 字符`);
-    } catch (e) {
-        console.log(`    [deep] 获取全文失败: ${e.message}，使用摘要`);
+    let imageDataList = [];  // {url or index, base64}
+    let imageUrls = [];      // 用于保存到结果中
+    let hasFullText = false;
+
+    if (isLocalPdf) {
+        console.log(`    [deep] 从本地 PDF 提取: ${paperId} | ${path.basename(paper.pdfPath)}`);
+        try {
+            const pdfResult = await extractPdfContent(paper.pdfPath);
+            fullText = pdfResult.text || '';
+            hasFullText = fullText.length > FULL_TEXT_MIN_CHARS_FOR_FULL;
+            console.log(`    [deep] PDF 提取完成: ${pdfResult.pageCount} 页, 文本 ${pdfResult.textLength} 字符, 图片 ${pdfResult.imageCount} 张`);
+
+            // 将提取的图片转为消息格式
+            for (const img of pdfResult.images) {
+                const mime = img.format === 'jpeg' || img.format === 'jpg' ? 'image/jpeg' : 'image/png';
+                imageDataList.push({
+                    url: `data:${mime};base64,${img.base64}`,
+                    base64: img.base64,
+                    mime: mime,
+                    page: img.page,
+                    index: img.index
+                });
+                imageUrls.push(`pdf-image-page${img.page}-idx${img.index}`);
+            }
+        } catch (e) {
+            console.log(`    [deep] PDF 提取失败: ${e.message}，使用标题`);
+        }
+    } else {
+        // arXiv 模式
+        const arxivId = paper.arxivId;
+        console.log(`    [deep] 获取全文: ${arxivId}`);
+
+        try {
+            fullText = await fetchArxivText(arxivId);
+            console.log(`    [deep] 全文长度: ${fullText.length} 字符`);
+        } catch (e) {
+            console.log(`    [deep] 获取全文失败: ${e.message}，使用摘要`);
+        }
+
+        try {
+            const arxivImageUrls = await fetchArxivImageUrls(arxivId);
+            console.log(`    [deep] 找到 ${arxivImageUrls.length} 张图片`);
+
+            const downloadedImages = await downloadImagesParallel(arxivImageUrls, arxivImageUrls.length, IMAGE_MAX_BASE64_CHARS, 3);
+            console.log(`    [deep] 成功下载 ${downloadedImages.length}/${arxivImageUrls.length} 张图片`);
+
+            for (const img of downloadedImages) {
+                imageDataList.push({ url: img.url, base64: img.base64 });
+                imageUrls.push(img.url);
+            }
+        } catch (e) {
+            console.log(`    [deep] 获取图片失败: ${e.message}`);
+        }
     }
 
     const textForAnalysis = fullText ? fullText.substring(0, FULL_TEXT_MAX_CHARS) : (paper.abstract || paper.summary || '');
-    const hasFullText = fullText.length > FULL_TEXT_MIN_CHARS_FOR_FULL;
-
-    let imageUrls = [];
-    try {
-        imageUrls = await fetchArxivImageUrls(arxivId);
-        console.log(`    [deep] 找到 ${imageUrls.length} 张图片`);
-    } catch (e) {
-        console.log(`    [deep] 获取图片失败: ${e.message}`);
-    }
+    hasFullText = fullText.length > FULL_TEXT_MIN_CHARS_FOR_FULL;
 
     const hasFullTextIntro = hasFullText ? '以下是论文全文，请仔细阅读所有技术细节。' : '以下是论文摘要。';
 
-    // 并行下载全部图片（限制并发数以避免过载）
-    const downloadedImages = await downloadImagesParallel(imageUrls, imageUrls.length, IMAGE_MAX_BASE64_CHARS, 3);
-    console.log(`    [deep] 成功下载 ${downloadedImages.length}/${imageUrls.length} 张图片`);
-
-    // 构建图片URL映射信息，让LLM知道每张图的正确URL
-    const imageUrlMapping = imageUrls.map((url, idx) => `图${idx + 1}: ${url}`).join('\n');
-    const imagePrefix = imageUrls.length > 0
-        ? `\n\n论文中的图片及其URL如下（请在下文引用图片时使用这些URL）：\n${imageUrlMapping}\n`
-        : '';
+    // 构建图片映射信息
+    let imagePrefix = '';
+    if (imageUrls.length > 0) {
+        const imageUrlMapping = imageUrls.map((url, idx) => `图${idx + 1}: ${url}`).join('\n');
+        imagePrefix = `\n\n论文中的图片及其标识如下（请在下文引用图片时使用这些标识）：\n${imageUrlMapping}\n`;
+    }
 
     const prompt = loadPrompt('prompts/deep-analysis.md', {
         hasFullText: hasFullTextIntro,
         title: paper.title,
         authors: Array.isArray(paper.authors) ? paper.authors.join(', ') : (paper.authors || '未知'),
         categories: Array.isArray(paper.categories) ? paper.categories.join(', ') : (paper.categories || '未知'),
-        arxivId: arxivId,
+        arxivId: paperId,
         textForAnalysis: textForAnalysis + imagePrefix
     });
 
     const content = [{ type: 'text', text: prompt }];
 
-    for (const img of downloadedImages) {
-        content.push(buildImageContent(img.url, img.base64));
+    for (const img of imageDataList) {
+        if (img.base64) {
+            const mime = img.mime || (img.url && img.url.endsWith('.jpg') || img.url.endsWith('.jpeg') ? 'image/jpeg' : 'image/png');
+            content.push({
+                type: 'image_url',
+                image_url: { url: `data:${mime};base64,${img.base64}` }
+            });
+        } else if (img.url) {
+            content.push(buildImageContent(img.url, null));
+        }
     }
 
-    if (downloadedImages.length === 0) {
+    if (imageDataList.length === 0) {
         console.log(`    [deep] 无可用图片，仅文本分析`);
     } else {
-        console.log(`    [deep] 共分析 ${downloadedImages.length} 张图片`);
+        console.log(`    [deep] 共分析 ${imageDataList.length} 张图片`);
     }
 
     try {
         const analysis = await callModel([{ role: 'user', content: content }], API_MAX_TOKENS);
 
-        const recommendedImages = [];
-        const imgRecMatch = analysis.match(/图(\d+)[：:][^\n]*保留[：:]\s*是/g);
-        if (imgRecMatch) {
-            for (const rec of imgRecMatch) {
-                const numMatch = rec.match(/图(\d+)/);
-                if (numMatch) {
-                    const idx = parseInt(numMatch[1]) - 1;
-                    if (idx >= 0 && idx < imageUrls.length) {
-                        recommendedImages.push(imageUrls[idx]);
-                    }
-                }
-            }
-        }
-        // 保存全部图片URL（LLM分析文本中已按位置引用了相关图片）
-        const imagesToSave = imageUrls;
-
-        console.log(`    [deep] 共 ${imageUrls.length} 张图片URL，成功下载 ${downloadedImages.length} 张`);
-
         return {
             ...paper,
             analysis: analysis,
-            imageUrls: imagesToSave,
+            imageUrls: imageUrls,
             allImageUrls: imageUrls
         };
     } catch (err) {
         // 如果带图片超时/失败，尝试不带图片重试
         const isTimeoutOrNetwork = err.message.includes('timeout') || err.message.includes('socket hang up') || err.message.includes('504') || err.message.includes('abort');
-        if (downloadedImages.length > 0 && isTimeoutOrNetwork) {
+        if (imageDataList.length > 0 && isTimeoutOrNetwork) {
             console.log(`    [deep] ⚠️  带图片请求超时，尝试不带图片重试...`);
             try {
                 const textOnlyContent = [{ type: 'text', text: prompt }];
                 const analysis = await callModel([{ role: 'user', content: textOnlyContent }], API_MAX_TOKENS);
                 console.log(`    [deep] ✅ 不带图片重试成功`);
-                const imagesToSave = imageUrls;
                 return {
                     ...paper,
                     analysis: analysis,
-                    imageUrls: imagesToSave,
+                    imageUrls: imageUrls,
                     allImageUrls: imageUrls
                 };
             } catch (retryErr) {
@@ -438,7 +524,7 @@ async function analyzePaperDeep(paper) {
     }
 }
 
-module.exports = { analyzePaperDeep, parseAnalysis, callModel, fetchArxivText, fetchArxivImageUrls };
+module.exports = { analyzePaperDeep, parseAnalysis, callModel, fetchArxivText, fetchArxivImageUrls, extractPdfContent };
 
 // 直接运行测试
 if (require.main === module) {

@@ -9,6 +9,8 @@
     "deep": "node scripts/deep-analysis-only.js",
     "reanalyze": "node scripts/reanalyze.js",
     "batch": "node scripts/batch-analyze.js",
+    "icassp": "node scripts/icassp-batch-analyze.js",
+    "icassp-cat": "node scripts/icassp-categorize.js",
     "backfill": "python3 scripts/backfill_papers.py",
     "publish": "python3 scripts/publish-to-blog.py",
     "wechat": "python3 scripts/publish-wechat-full.py",
