@@ -106,7 +106,9 @@ function buildPdfPathMapping(papers, pdfDir) {
 // 筛选：纯 LLM 筛选（标题 + PDF 摘要）
 // ═══════════════════════════════════════════════════════
 
-const FILTER_CONCURRENCY = parseInt(process.env.ICASSP_FILTER_CONCURRENCY || '5', 10);
+const FILTER_CONCURRENCY = parseInt(process.env.ICASSP_FILTER_CONCURRENCY || '3', 10);
+const FILTER_TIMEOUT_MS = parseInt(process.env.ICASSP_FILTER_TIMEOUT || '60000', 10);
+const FILTER_MAX_RETRIES = parseInt(process.env.ICASSP_FILTER_RETRIES || '3', 10);
 
 /**
  * 从 PDF 提取前 N 个字符的文本作为摘要
@@ -121,7 +123,7 @@ async function extractPdfSnippet(pdfPath, maxChars = 5000) {
 }
 
 /**
- * 单篇 LLM 筛选
+ * 单篇 LLM 筛选（带重试）
  * 使用 prompts/filter.md 的 prompt，基于标题+摘要判断
  */
 async function llmFilterSingle(paper, config) {
@@ -137,6 +139,24 @@ async function llmFilterSingle(paper, config) {
         abstract: abstract || '(无摘要)'
     });
 
+    let lastError = null;
+    for (let attempt = 1; attempt <= FILTER_MAX_RETRIES; attempt++) {
+        try {
+            const result = await _llmFilterCall(url, apiType, config, prompt);
+            return { paper, isRelevant: result.isRelevant, raw: result.raw };
+        } catch (err) {
+            lastError = err;
+            if (attempt < FILTER_MAX_RETRIES) {
+                const delay = Math.pow(2, attempt) * 1000;
+                await new Promise(r => setTimeout(r, delay));
+            }
+        }
+    }
+
+    throw new Error(`筛选失败（重试 ${FILTER_MAX_RETRIES} 次）: ${lastError.message}`);
+}
+
+function _llmFilterCall(url, apiType, config, prompt) {
     return new Promise((resolve, reject) => {
         const messages = [{ role: 'user', content: prompt }];
         const bodyObj = buildRequestBody(apiType, config.model, messages, 500, 0.3);
@@ -151,7 +171,7 @@ async function llmFilterSingle(paper, config) {
             path: url.pathname,
             method: 'POST',
             headers,
-            timeout: 30000
+            timeout: FILTER_TIMEOUT_MS
         }, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
@@ -160,9 +180,8 @@ async function llmFilterSingle(paper, config) {
                     const response = JSON.parse(data);
                     const content = parseResponseText(apiType, response);
                     if (content !== null) {
-                        // 解析 "是" 或 "否"
                         const isRelevant = /是|yes|y/i.test(content) && !/否|no|n/i.test(content);
-                        resolve({ paper, isRelevant, raw: content });
+                        resolve({ isRelevant, raw: content });
                     } else {
                         reject(new Error('Invalid response'));
                     }
@@ -203,6 +222,7 @@ async function llmFilterPapers(papers) {
 
     const included = [];
     const excluded = [];
+    const failed = [];
     let completed = 0;
 
     // 按批次并发处理
@@ -213,15 +233,17 @@ async function llmFilterPapers(papers) {
 
         const promises = batch.map(p =>
             llmFilterSingle(p, FILTER_CONFIG).catch(err => {
-                console.log(`[filter] ⚠️ ${p.arnumber} 筛选失败: ${err.message}，默认保留`);
-                return { paper: p, isRelevant: true, raw: 'error' };
+                return { paper: p, isRelevant: false, raw: 'error: ' + err.message, failed: true };
             })
         );
 
         const results = await Promise.all(promises);
 
         for (const r of results) {
-            if (r.isRelevant) {
+            if (r.failed) {
+                failed.push(r.paper);
+                excluded.push(r.paper); // 失败的不保留
+            } else if (r.isRelevant) {
                 included.push(r.paper);
             } else {
                 excluded.push(r.paper);
@@ -229,11 +251,16 @@ async function llmFilterPapers(papers) {
             completed++;
         }
 
-        process.stdout.write(`\r[filter] 进度: ${completed}/${papers.length} | 保留 ${included.length} | 排除 ${excluded.length} | 批次 ${batchNum}/${totalBatches}`);
+        process.stdout.write(`\r[filter] 进度: ${completed}/${papers.length} | 保留 ${included.length} | 排除 ${excluded.length} | 失败 ${failed.length} | 批次 ${batchNum}/${totalBatches}`);
+
+        // 批次间延迟，避免 API 过载
+        if (i + FILTER_CONCURRENCY < papers.length) {
+            await new Promise(r => setTimeout(r, 500));
+        }
     }
 
     console.log(); // newline
-    console.log(`[filter] 筛选完成: 保留 ${included.length} 篇, 排除 ${excluded.length} 篇`);
+    console.log(`[filter] 筛选完成: 保留 ${included.length} 篇, 排除 ${excluded.length} 篇, 失败 ${failed.length} 篇`);
 
     // 保存排除列表供参考
     const excludeFile = RESULT_FILE.replace('.json', '-excluded.json');
