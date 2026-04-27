@@ -103,11 +103,13 @@ function buildPdfPathMapping(papers, pdfDir) {
 }
 
 // ═══════════════════════════════════════════════════════
-// 筛选：基于 PDF 内容判断是否与音频/语音相关
+// 筛选：纯 LLM 筛选（标题 + PDF 摘要）
 // ═══════════════════════════════════════════════════════
 
+const FILTER_CONCURRENCY = parseInt(process.env.ICASSP_FILTER_CONCURRENCY || '5', 10);
+
 /**
- * 从 PDF 提取前 N 个字符的文本（用于快速筛选）
+ * 从 PDF 提取前 N 个字符的文本作为摘要
  */
 async function extractPdfSnippet(pdfPath, maxChars = 5000) {
     try {
@@ -119,163 +121,25 @@ async function extractPdfSnippet(pdfPath, maxChars = 5000) {
 }
 
 /**
- * 快速关键词预筛选（无需 LLM）
- * 基于标题和 PDF 前 3000 字符进行关键词匹配
- *
- * 策略：
- * 1. 强包含：明确的音频/语音/音乐关键词 → 直接包含
- * 2. 强排除：明确的 CV/NLP/其他领域关键词（仅在标题中）→ 直接排除
- * 3. 弱包含：信号处理相关关键词 → 如果同时有音频上下文则包含
- * 4. 其余 → 不确定（可选 LLM 筛选）
+ * 单篇 LLM 筛选
+ * 使用 prompts/filter.md 的 prompt，基于标题+摘要判断
  */
-function keywordPreFilter(papers) {
-    // 强包含：明确的音频/语音/音乐关键词
-    const strongInclude = [
-        'audio', 'speech', 'voice', 'sound', 'acoustic', 'listening',
-        'speaker', 'spoken', 'verbal', 'vocal', 'utterance', 'pronunciation',
-        'music', 'musical', 'song', 'singing', 'melody', 'timbre', 'harmonic',
-        'asr', 'tts', 'text-to-speech', 'speech-to-text',
-        'speech enhancement', 'speech separation', 'speech recognition',
-        'speech synthesis', 'voice conversion', 'voice cloning',
-        'speaker recognition', 'speaker verification', 'speaker diarization',
-        'audio generation', 'audio synthesis', 'audio classification',
-        'audio event detection', 'sound event detection',
-        'music generation', 'music information retrieval',
-        'reverberation', 'dereverberation', 'denoising',
-        '声', '音', '语', '歌', '唱', '话', '说',
-    ];
-
-    // 强排除：明确的非音频领域（仅在标题中出现时排除）
-    const strongExclude = [
-        'image', 'video', 'visual', 'object detection', 'instance segmentation',
-        'semantic segmentation', 'face recognition', 'face detection',
-        'pose estimation', 'camera', 'photograph', 'rendering', 'graphics',
-        'text generation', 'machine translation', 'question answering',
-        'recommendation system', 'federated learning',
-        'mri', 'ct scan', 'medical imaging', 'x-ray',
-        'radar', 'lidar', 'sar',
-    ];
-
-    // 弱信号：信号处理相关（结合上下文判断）
-    const weakSignal = [
-        'signal', 'filter', 'spectrum', 'spectral', 'frequency', 'waveform',
-        'time-domain', 'frequency-domain', 'fft', 'stft',
-    ];
-
-    const results = [];
-    for (const paper of papers) {
-        const title = (paper.title || '').toLowerCase();
-        const text = (paper._snippet || '').toLowerCase();
-        const combined = title + ' ' + text;
-
-        // 1. 强包含检查
-        const hasStrongInclude = strongInclude.some(kw => combined.includes(kw.toLowerCase()));
-        if (hasStrongInclude) {
-            results.push({ ...paper, _preFilter: 'include' });
-            continue;
-        }
-
-        // 2. 强排除检查（仅在标题中）
-        const hasStrongExclude = strongExclude.some(kw => title.includes(kw.toLowerCase()));
-        if (hasStrongExclude) {
-            results.push({ ...paper, _preFilter: 'exclude' });
-            continue;
-        }
-
-        // 3. 弱信号检查：如果有信号处理关键词且文本中有音频相关词
-        const hasWeakSignal = weakSignal.some(kw => combined.includes(kw.toLowerCase()));
-        const textHasAudio = strongInclude.some(kw => text.includes(kw.toLowerCase()));
-        if (hasWeakSignal && textHasAudio) {
-            results.push({ ...paper, _preFilter: 'include' });
-            continue;
-        }
-
-        // 4. 不确定
-        results.push({ ...paper, _preFilter: 'uncertain' });
-    }
-
-    return results;
-}
-
-/**
- * LLM 筛选：对不确定的论文进行精确判断
- */
-async function llmFilterPapers(papers, batchSize = 5) {
-    loadEnvFile();
-
-    const FILTER_CONFIG = {
-        endpoint: process.env.PAPER_ANALYZER_ENDPOINT || '',
-        key: process.env.PAPER_ANALYZER_API_KEY || '',
-        model: process.env.PAPER_ANALYZER_MODEL || ''
-    };
-
-    if (!FILTER_CONFIG.endpoint || !FILTER_CONFIG.key || !FILTER_CONFIG.model) {
-        console.log('[filter] 缺少 API 配置，跳过 LLM 筛选');
-        return papers.filter(p => p._preFilter === 'include');
-    }
-
-    const uncertainPapers = papers.filter(p => p._preFilter === 'uncertain');
-    const includedPapers = papers.filter(p => p._preFilter === 'include');
-
-    console.log(`[filter] 关键词预筛选: 包含 ${includedPapers.length} 篇, 排除 ${papers.filter(p => p._preFilter === 'exclude').length} 篇, 不确定 ${uncertainPapers.length} 篇`);
-
-    if (uncertainPapers.length === 0) {
-        return includedPapers;
-    }
-
-    // 使用轻量级 prompt 进行批量筛选
-    const promptTemplate = loadPrompt('prompts/filter.md');
-
-    const filtered = [...includedPapers];
-
-    for (let i = 0; i < uncertainPapers.length; i += batchSize) {
-        const batch = uncertainPapers.slice(i, i + batchSize);
-        const batchNum = Math.floor(i / batchSize) + 1;
-        const totalBatches = Math.ceil(uncertainPapers.length / batchSize);
-
-        console.log(`[filter] 批次 ${batchNum}/${totalBatches}: ${batch.length} 篇`);
-
-        // 构建批量筛选 prompt
-        let batchPrompt = '请判断以下论文是否与语音、音频、声音处理相关。对每篇论文只回答"是"或"否"。\n\n';
-        for (let j = 0; j < batch.length; j++) {
-            const p = batch[j];
-            batchPrompt += `--- 论文 ${j + 1} ---\n标题: ${p.title}\n摘要: ${p._snippet?.substring(0, 1000) || '(无摘要)'}\n\n`;
-        }
-        batchPrompt += '请按以下格式输出（每行一篇）：\n1. 是/否\n2. 是/否\n...';
-
-        try {
-            const result = await callFilterModel(batchPrompt, FILTER_CONFIG);
-            const lines = result.split('\n').map(l => l.trim()).filter(l => l);
-
-            for (let j = 0; j < batch.length; j++) {
-                const line = lines[j] || '';
-                const isRelevant = /是|yes|y/i.test(line) && !/否|no|n/i.test(line);
-                if (isRelevant) {
-                    filtered.push(batch[j]);
-                }
-            }
-        } catch (e) {
-            console.log(`[filter] 批次 ${batchNum} 筛选失败: ${e.message}，默认全部包含`);
-            filtered.push(...batch);
-        }
-
-        if (i + batchSize < uncertainPapers.length) {
-            await new Promise(r => setTimeout(r, 2000));
-        }
-    }
-
-    console.log(`[filter] LLM 筛选完成: ${filtered.length}/${papers.length} 篇相关`);
-    return filtered;
-}
-
-async function callFilterModel(prompt, config) {
+async function llmFilterSingle(paper, config) {
     const apiType = detectApiType(config.endpoint, config.model);
     const modelUrl = buildApiUrl(apiType, config.endpoint);
     const url = new URL(modelUrl);
 
+    // 取摘要前 2000 字符，避免 prompt 过长
+    const abstract = (paper._snippet || '').substring(0, 2000);
+
+    const prompt = loadPrompt('prompts/filter.md', {
+        title: paper.title || '(无标题)',
+        abstract: abstract || '(无摘要)'
+    });
+
     return new Promise((resolve, reject) => {
         const messages = [{ role: 'user', content: prompt }];
-        const bodyObj = buildRequestBody(apiType, config.model, messages, 2000, 0.3);
+        const bodyObj = buildRequestBody(apiType, config.model, messages, 500, 0.3);
         const postData = JSON.stringify(bodyObj);
 
         const headers = {
@@ -286,7 +150,8 @@ async function callFilterModel(prompt, config) {
             hostname: url.hostname,
             path: url.pathname,
             method: 'POST',
-            headers
+            headers,
+            timeout: 30000
         }, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
@@ -295,20 +160,91 @@ async function callFilterModel(prompt, config) {
                     const response = JSON.parse(data);
                     const content = parseResponseText(apiType, response);
                     if (content !== null) {
-                        resolve(content);
+                        // 解析 "是" 或 "否"
+                        const isRelevant = /是|yes|y/i.test(content) && !/否|no|n/i.test(content);
+                        resolve({ paper, isRelevant, raw: content });
                     } else {
                         reject(new Error('Invalid response'));
                     }
                 } catch (e) {
-                    reject(new Error('Parse error'));
+                    reject(new Error('Parse error: ' + e.message));
                 }
             });
         });
 
-        req.on('error', reject);
+        req.on('error', (err) => reject(err));
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('Request timeout'));
+        });
         req.write(postData);
         req.end();
     });
+}
+
+/**
+ * 并发 LLM 筛选全部论文
+ */
+async function llmFilterPapers(papers) {
+    loadEnvFile();
+
+    const FILTER_CONFIG = {
+        endpoint: process.env.PAPER_ANALYZER_ENDPOINT || '',
+        key: process.env.PAPER_ANALYZER_API_KEY || '',
+        model: process.env.PAPER_ANALYZER_MODEL || ''
+    };
+
+    if (!FILTER_CONFIG.endpoint || !FILTER_CONFIG.key || !FILTER_CONFIG.model) {
+        console.log('[filter] 缺少 API 配置，跳过 LLM 筛选，全部保留');
+        return papers;
+    }
+
+    console.log(`[filter] 纯 LLM 筛选: ${papers.length} 篇，并发 ${FILTER_CONCURRENCY}`);
+
+    const included = [];
+    const excluded = [];
+    let completed = 0;
+
+    // 按批次并发处理
+    for (let i = 0; i < papers.length; i += FILTER_CONCURRENCY) {
+        const batch = papers.slice(i, i + FILTER_CONCURRENCY);
+        const batchNum = Math.floor(i / FILTER_CONCURRENCY) + 1;
+        const totalBatches = Math.ceil(papers.length / FILTER_CONCURRENCY);
+
+        const promises = batch.map(p =>
+            llmFilterSingle(p, FILTER_CONFIG).catch(err => {
+                console.log(`[filter] ⚠️ ${p.arnumber} 筛选失败: ${err.message}，默认保留`);
+                return { paper: p, isRelevant: true, raw: 'error' };
+            })
+        );
+
+        const results = await Promise.all(promises);
+
+        for (const r of results) {
+            if (r.isRelevant) {
+                included.push(r.paper);
+            } else {
+                excluded.push(r.paper);
+            }
+            completed++;
+        }
+
+        process.stdout.write(`\r[filter] 进度: ${completed}/${papers.length} | 保留 ${included.length} | 排除 ${excluded.length} | 批次 ${batchNum}/${totalBatches}`);
+    }
+
+    console.log(); // newline
+    console.log(`[filter] 筛选完成: 保留 ${included.length} 篇, 排除 ${excluded.length} 篇`);
+
+    // 保存排除列表供参考
+    const excludeFile = RESULT_FILE.replace('.json', '-excluded.json');
+    writeFileAtomic(excludeFile, JSON.stringify({
+        timestamp: getBeijingISOString(),
+        count: excluded.length,
+        papers: excluded.map(p => ({ arnumber: p.arnumber, title: p.title }))
+    }, null, 2));
+    console.log(`[filter] 排除列表已保存: ${excludeFile}`);
+
+    return included;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -374,7 +310,7 @@ async function main() {
     let papersToAnalyze = notAnalyzed;
 
     if (!SKIP_FILTER) {
-        console.log('\n=== 筛选阶段 ===');
+        console.log('\n=== 筛选阶段（纯 LLM，标题 + PDF 摘要）===');
         console.log('提取 PDF 文本片段用于筛选...');
 
         // 提取文本片段
@@ -392,11 +328,8 @@ async function main() {
         }
         console.log(`\r  提取完成: ${notAnalyzed.length}/${notAnalyzed.length}`);
 
-        // 关键词预筛选
-        const preFiltered = keywordPreFilter(notAnalyzed);
-
-        // LLM 筛选（仅对不确定的）
-        papersToAnalyze = await llmFilterPapers(preFiltered);
+        // 纯 LLM 筛选（全部走单篇判断）
+        papersToAnalyze = await llmFilterPapers(notAnalyzed);
 
         // 保存筛选结果
         const filterResultFile = RESULT_FILE.replace('.json', '-filtered.json');
