@@ -142,6 +142,9 @@ def parse_analysis(analysis):
 
     if detail_block:
         block = detail_block.group(1)
+    else:
+        # Fallback: if "详细分析" header is corrupted/missing, search the whole text for subsections
+        block = analysis
         intro_m = re.match(r'^([\s\S]*?)(?=\n###|$)', block)
         if intro_m and intro_m.group(1).strip():
             r['detailIntro'] = intro_m.group(1).strip()

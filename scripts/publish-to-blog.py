@@ -145,7 +145,12 @@ layout: "posts"
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
         if pa.get('summary'):
-            md += f"📌 **核心摘要**\n\n{pa['summary']}\n\n"
+            summary = pa['summary']
+            # 如果 summary 中混入了详细分析内容（因标题损坏导致解析边界失效），截断到详细分析之前
+            cutoff = re.search(r'\n##\s*详细分', summary)
+            if cutoff:
+                summary = summary[:cutoff.start()].strip()
+            md += f"📌 **核心摘要**\n\n{summary}\n\n"
 
         md += "---\n\n"
 
@@ -162,7 +167,8 @@ layout: "posts"
 
 def generate_paper_page(paper, date_str):
     """生成单篇论文的独立页面"""
-    pa = parse_analysis(paper.get('analysis', ''))
+    # 优先使用已解析好的 parsed 数据，避免重新解析时因标题损坏导致字段丢失
+    pa = paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
     title = paper.get('title', 'Unknown')
     aid = paper.get('arxivId', '')
     aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
@@ -220,6 +226,11 @@ hiddenInHomeList: true
         for label, key in sections:
             content = pa.get(key, '')
             if content:
+                # 如果 summary 中混入了详细分析内容（因标题损坏导致解析边界失效），截断到详细分析之前
+                if key == 'summary':
+                    cutoff = re.search(r'\n##\s*详细分', content)
+                    if cutoff:
+                        content = content[:cutoff.start()].strip()
                 content = re.sub(r'^###\s*\d+\.\s*[^\n]+\n', '', content, flags=re.MULTILINE)
                 content = re.sub(r'^\d+\.\s*\*\*([^*]+)\*\*\s*$', r'\1', content, flags=re.MULTILINE)
                 md += f'\n### {label}\n\n{content}\n'
