@@ -36,6 +36,9 @@ import argparse
 import io
 import fitz  # PyMuPDF
 
+# 禁用 MuPDF 错误消息输出到 stdout，避免污染 JSON 输出
+fitz.set_messages(path='/dev/null')
+
 # 尝试导入 Pillow，如果不可用则跳过图片缩放
 try:
     from PIL import Image
@@ -140,6 +143,18 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
         if len(full_text) > max_text_chars:
             full_text = full_text[:max_text_chars]
 
+        # 检测异常内容（如IEEE版权页而非论文正文）
+        content_warning = None
+        if full_text:
+            copyright_markers = full_text.count('©2026 IEEE') + full_text.count('Authorized licensed use')
+            non_empty_lines = [l.strip() for l in full_text.split('\n') if l.strip()]
+            if copyright_markers >= 3 and len(non_empty_lines) > 0:
+                # 检查前5行是否主要是版权/会议信息
+                header_lines = non_empty_lines[:5]
+                header_text = ' '.join(header_lines)
+                if 'IEEE' in header_text and 'ICASSP' in header_text:
+                    content_warning = f"检测到PDF内容可能为会议版权页而非论文正文（版权标记出现{copyright_markers}次）"
+
         # 提取图片（过滤小图标，按页面顺序）
         images = []
         seen_xrefs = set()
@@ -206,6 +221,7 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
             "pageCount": page_count,
             "images": images,
             "imageCount": len(images),
+            "warning": content_warning,
             "error": None
         }
 

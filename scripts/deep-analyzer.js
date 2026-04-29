@@ -22,6 +22,50 @@ if (!fs.existsSync(DEEP_ANALYZER_IO_DIR)) {
     fs.mkdirSync(DEEP_ANALYZER_IO_DIR, { recursive: true });
 }
 
+// ICASSP 论文图片本地保存目录
+const ICASSP_IMAGE_DIR = path.join(Config.CURRENT_DIR, 'icassp-images');
+if (!fs.existsSync(ICASSP_IMAGE_DIR)) {
+    fs.mkdirSync(ICASSP_IMAGE_DIR, { recursive: true });
+}
+
+/**
+ * 保存 PDF 提取的图片到本地文件
+ * @param {Array} images - pdf-extractor 返回的图片列表
+ * @param {string} paperId - 论文ID
+ * @returns {Array} - 保存后的图片路径列表（相对于 ICASSP_IMAGE_DIR）
+ */
+function savePdfImages(images, paperId) {
+    if (!images || images.length === 0) {
+        return [];
+    }
+    const paperDir = path.join(ICASSP_IMAGE_DIR, String(paperId));
+    if (!fs.existsSync(paperDir)) {
+        fs.mkdirSync(paperDir, { recursive: true });
+    }
+
+    const savedPaths = [];
+    for (const img of images) {
+        const ext = img.format === 'jpeg' || img.format === 'jpg' ? 'jpg' : 'png';
+        const filename = `${img.index}.${ext}`;
+        const filepath = path.join(paperDir, filename);
+        try {
+            const buf = Buffer.from(img.base64, 'base64');
+            fs.writeFileSync(filepath, buf);
+            savedPaths.push({
+                index: img.index,
+                page: img.page,
+                localPath: filepath,
+                relativePath: path.join('icassp-images', String(paperId), filename),
+                webPath: `/audio-paper-digest-blog/icassp-images/${paperId}/${filename}`,
+                filename: filename
+            });
+        } catch (e) {
+            console.log(`    [deep] 保存图片失败: ${filename} - ${e.message}`);
+        }
+    }
+    return savedPaths;
+}
+
 // 解构配置常量（便于阅读）
 const {
     apiOverallTimeoutMs: API_OVERALL_TIMEOUT_MS,
@@ -34,7 +78,8 @@ const {
     imageMaxBase64Chars: IMAGE_MAX_BASE64_CHARS,
     imageMaxCount: IMAGE_MAX_COUNT,
     fullTextMaxChars: FULL_TEXT_MAX_CHARS,
-    fullTextMinCharsForFull: FULL_TEXT_MIN_CHARS_FOR_FULL
+    fullTextMinCharsForFull: FULL_TEXT_MIN_CHARS_FOR_FULL,
+    imageMaxPerMessage: IMAGE_MAX_PER_MESSAGE
 } = ANALYSIS_CONFIG;
 
 // API 配置 - 深度分析阶段（统一使用 PAPER_ANALYZER_*）
@@ -319,7 +364,8 @@ async function downloadImagesParallel(imageUrls, maxCount, maxBase64Chars, concu
  */
 function buildImageContent(imageUrl, base64) {
     if (base64) {
-        const mime = imageUrl.endsWith('.jpg') || imageUrl.endsWith('.jpeg')
+        const safeUrl = imageUrl || '';
+        const mime = safeUrl.endsWith('.jpg') || safeUrl.endsWith('.jpeg')
             ? 'image/jpeg' : 'image/png';
         return {
             type: 'image_url',
@@ -328,7 +374,7 @@ function buildImageContent(imageUrl, base64) {
     }
     return {
         type: 'image_url',
-        image_url: { url: imageUrl }
+        image_url: { url: imageUrl || '' }
     };
 }
 
@@ -370,14 +416,29 @@ async function extractPdfContent(pdfPath) {
                 return;
             }
             try {
-                const result = JSON.parse(stdout);
+                // 尝试从 stdout 中提取最后一个有效的 JSON 对象
+                // 因为 MuPDF 可能把错误信息输出到 stdout 中
+                let result = null;
+                let lastBrace = stdout.lastIndexOf('}');
+                while (lastBrace > 0) {
+                    const jsonStr = stdout.substring(0, lastBrace + 1);
+                    try {
+                        result = JSON.parse(jsonStr);
+                        break;
+                    } catch {
+                        lastBrace = stdout.lastIndexOf('}', lastBrace - 1);
+                    }
+                }
+                if (!result) {
+                    result = JSON.parse(stdout);
+                }
                 if (!result.success) {
                     reject(new Error(result.error || 'PDF 提取失败'));
                     return;
                 }
                 resolve(result);
             } catch (e) {
-                reject(new Error(`解析 PDF 提取结果失败: ${e.message}`));
+                reject(new Error(`解析 PDF 提取结果失败: ${e.message} | stdout: ${stdout.substring(0, 200)}`));
             }
         });
 
@@ -411,7 +472,10 @@ async function analyzePaperDeep(paper) {
             hasFullText = fullText.length > FULL_TEXT_MIN_CHARS_FOR_FULL;
             console.log(`    [deep] PDF 提取完成: ${pdfResult.pageCount} 页, 文本 ${pdfResult.textLength} 字符, 图片 ${pdfResult.imageCount} 张`);
 
-            // 将提取的图片转为消息格式
+            // 保存 PDF 图片到本地，并转为消息格式
+            const savedImages = savePdfImages(pdfResult.images, paperId);
+            console.log(`    [deep] 已保存 ${savedImages.length} 张图片到 ${path.join(ICASSP_IMAGE_DIR, paperId)}`);
+
             for (const img of pdfResult.images) {
                 const mime = img.format === 'jpeg' || img.format === 'jpg' ? 'image/jpeg' : 'image/png';
                 imageDataList.push({
@@ -421,7 +485,8 @@ async function analyzePaperDeep(paper) {
                     page: img.page,
                     index: img.index
                 });
-                imageUrls.push(`pdf-image-page${img.page}-idx${img.index}`);
+                // 使用本地保存的图片路径作为标识，便于博客发布时引用
+                imageUrls.push(`icassp-img://${paperId}/${img.index}.${img.format === 'jpeg' || img.format === 'jpg' ? 'jpg' : 'png'}`);
             }
         } catch (e) {
             console.log(`    [deep] PDF 提取失败: ${e.message}，使用标题`);
@@ -459,25 +524,36 @@ async function analyzePaperDeep(paper) {
 
     const hasFullTextIntro = hasFullText ? '以下是论文全文，请仔细阅读所有技术细节。' : '以下是论文摘要。';
 
-    // 构建图片映射信息
+    // 限制单条消息图片数量，避免 API 拒绝
+    const imagesToSend = imageDataList.slice(0, IMAGE_MAX_PER_MESSAGE);
+    const imageUrlsToShow = imageUrls.slice(0, IMAGE_MAX_PER_MESSAGE);
+    if (imageDataList.length > IMAGE_MAX_PER_MESSAGE) {
+        console.log(`    [deep] 图片过多: ${imageDataList.length} 张，截取前 ${IMAGE_MAX_PER_MESSAGE} 张发送`);
+    }
+
+    // 构建图片映射信息（只包含实际会发送的图片）
     let imagePrefix = '';
-    if (imageUrls.length > 0) {
-        const imageUrlMapping = imageUrls.map((url, idx) => `图${idx + 1}: ${url}`).join('\n');
+    if (imageUrlsToShow.length > 0) {
+        const imageUrlMapping = imageUrlsToShow.map((url, idx) => `图${idx + 1}: ${url}`).join('\n');
         imagePrefix = `\n\n论文中的图片及其标识如下（请在下文引用图片时使用这些标识）：\n${imageUrlMapping}\n`;
     }
+
+    const paperInfo = isLocalPdf
+        ? `论文ID: ${paperId}\n来源: ICASSP 2026 本地PDF`
+        : `arXiv ID: ${paperId}\n链接: https://arxiv.org/abs/${paperId}`;
 
     const prompt = loadPrompt('prompts/deep-analysis.md', {
         hasFullText: hasFullTextIntro,
         title: paper.title,
         authors: Array.isArray(paper.authors) ? paper.authors.join(', ') : (paper.authors || '未知'),
         categories: Array.isArray(paper.categories) ? paper.categories.join(', ') : (paper.categories || '未知'),
-        arxivId: paperId,
+        paperInfo: paperInfo,
         textForAnalysis: textForAnalysis + imagePrefix
     });
 
     const content = [{ type: 'text', text: prompt }];
 
-    for (const img of imageDataList) {
+    for (const img of imagesToSend) {
         if (img.base64) {
             const mime = img.mime || (img.url && img.url.endsWith('.jpg') || img.url.endsWith('.jpeg') ? 'image/jpeg' : 'image/png');
             content.push({
@@ -491,8 +567,10 @@ async function analyzePaperDeep(paper) {
 
     if (imageDataList.length === 0) {
         console.log(`    [deep] 无可用图片，仅文本分析`);
+    } else if (imageDataList.length > imagesToSend.length) {
+        console.log(`    [deep] 共提取 ${imageDataList.length} 张图片，发送 ${imagesToSend.length} 张`);
     } else {
-        console.log(`    [deep] 共分析 ${imageDataList.length} 张图片`);
+        console.log(`    [deep] 共发送 ${imagesToSend.length} 张图片`);
     }
 
     try {
@@ -526,36 +604,6 @@ async function analyzePaperDeep(paper) {
             allImageUrls: imageUrls
         };
     } catch (err) {
-        // 如果带图片超时/失败，尝试不带图片重试
-        const isTimeoutOrNetwork = err.message.includes('timeout') || err.message.includes('socket hang up') || err.message.includes('504') || err.message.includes('abort');
-        if (imageDataList.length > 0 && isTimeoutOrNetwork) {
-            console.log(`    [deep] ⚠️  带图片请求超时，尝试不带图片重试...`);
-            try {
-                const textOnlyContent = [{ type: 'text', text: prompt }];
-                const messagesRetry = [{ role: 'user', content: textOnlyContent }];
-                const analysis = await callModel(messagesRetry, API_MAX_TOKENS);
-                console.log(`    [deep] ✅ 不带图片重试成功`);
-
-                // 保存重试输出
-                const outputFile = path.join(DEEP_ANALYZER_IO_DIR, `${safePaperId}_output_retry.json`);
-                writeFileAtomic(outputFile, JSON.stringify({
-                    paperId,
-                    timestamp: getBeijingISOString(),
-                    model: DEEP_CONFIG.model,
-                    retry: true,
-                    analysis: analysis
-                }, null, 2));
-
-                return {
-                    ...paper,
-                    analysis: analysis,
-                    imageUrls: imageUrls,
-                    allImageUrls: imageUrls
-                };
-            } catch (retryErr) {
-                console.error(`    [deep] 不带图片重试也失败: ${retryErr.message}`);
-            }
-        }
         console.error(`    [deep] 分析失败: ${err.message}`);
         return {
             ...paper,

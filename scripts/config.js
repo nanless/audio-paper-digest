@@ -70,6 +70,7 @@ const ANALYSIS_CONFIG = {
     imageDownloadTimeoutMs: 15000,
     imageMaxBase64Chars: 500000,
     imageMaxCount: 999,
+    imageMaxPerMessage: 20,
     fullTextMaxChars: 100000,
     fullTextMinCharsForFull: 500
 };

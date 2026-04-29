@@ -108,7 +108,7 @@ function buildPdfPathMapping(papers, pdfDir) {
 // 筛选：纯 LLM 筛选（标题 + PDF 摘要）
 // ═══════════════════════════════════════════════════════
 
-const FILTER_CONCURRENCY = parseInt(process.env.ICASSP_FILTER_CONCURRENCY || '5', 10);
+const FILTER_CONCURRENCY = parseInt(process.env.ICASSP_FILTER_CONCURRENCY || '8', 10);
 const FILTER_TIMEOUT_MS = parseInt(process.env.ICASSP_FILTER_TIMEOUT || '60000', 10);
 const FILTER_MAX_RETRIES = parseInt(process.env.ICASSP_FILTER_RETRIES || '3', 10);
 
@@ -118,8 +118,12 @@ const FILTER_MAX_RETRIES = parseInt(process.env.ICASSP_FILTER_RETRIES || '3', 10
 async function extractPdfSnippet(pdfPath, maxChars = 5000) {
     try {
         const result = await extractPdfContent(pdfPath);
+        if (result.warning) {
+            console.log(`    [pdf] ⚠️  ${path.basename(pdfPath)} | ${result.warning}`);
+        }
         return result.text ? result.text.substring(0, maxChars) : '';
     } catch (e) {
+        console.log(`    [pdf] ✗ ${path.basename(pdfPath)} | 提取失败: ${e.message}`);
         return '';
     }
 }
@@ -193,9 +197,20 @@ function _llmFilterCall(url, apiType, config, prompt, paperId) {
                             output: { statusCode: res.statusCode, rawResponse: response, parsedContent: content }
                         }, null, 2));
                     }
+                    // 检测 API 错误
+                    if (response.error || (content && /rejected|error|invalid/i.test(content))) {
+                        reject(new Error('API error: ' + (response.error?.message || content || 'unknown')));
+                        return;
+                    }
                     if (content !== null) {
-                        const isRelevant = /是|yes|y/i.test(content) && !/否|no|n/i.test(content);
-                        resolve({ isRelevant, raw: content });
+                        const trimmed = content.trim();
+                        // 严格验证输出格式：必须是"是/否"或"yes/no"
+                        if (!/^(是|否|yes|no)$/i.test(trimmed)) {
+                            reject(new Error(`Unexpected response format: "${trimmed.substring(0, 100)}"`));
+                            return;
+                        }
+                        const isRelevant = /^(是|yes)$/i.test(trimmed);
+                        resolve({ isRelevant, raw: trimmed });
                     } else {
                         reject(new Error('Invalid response'));
                     }
@@ -312,12 +327,36 @@ async function main() {
     console.log(`论文总数: ${papersData.length}`);
 
     // 2. 映射 PDF 路径
-    const { mapped, unmatched } = buildPdfPathMapping(papersData, PAPERS_DIR);
-    console.log(`PDF 映射成功: ${mapped.length}/${papersData.length}`);
-    if (unmatched.length > 0) {
-        console.log(`  未匹配: ${unmatched.length} 篇`);
-        for (const t of unmatched.slice(0, 5)) {
-            console.log(`    - ${t}`);
+    let mapped, unmatched;
+
+    if (SKIP_FILTER) {
+        // 读取已有筛选结果，用 arnumber 过滤后重新做 PDF 映射
+        const filteredFile = RESULT_FILE.replace('.json', '-filtered.json');
+        const filteredData = readJsonSafe(filteredFile, null);
+        if (filteredData && Array.isArray(filteredData.papers)) {
+            const filteredIds = new Set(filteredData.papers.map(p => String(p.arnumber)));
+            const filteredPapersData = papersData.filter(p => filteredIds.has(String(p.arnumber)));
+            const r = buildPdfPathMapping(filteredPapersData, PAPERS_DIR);
+            mapped = r.mapped;
+            unmatched = r.unmatched;
+            console.log(`PDF 映射成功: ${mapped.length}/${filteredPapersData.length} (从筛选结果)`);
+        } else {
+            console.log('未找到筛选结果文件，回退到全部论文');
+            const r = buildPdfPathMapping(papersData, PAPERS_DIR);
+            mapped = r.mapped;
+            unmatched = r.unmatched;
+            console.log(`PDF 映射成功: ${mapped.length}/${papersData.length}`);
+        }
+    } else {
+        const r = buildPdfPathMapping(papersData, PAPERS_DIR);
+        mapped = r.mapped;
+        unmatched = r.unmatched;
+        console.log(`PDF 映射成功: ${mapped.length}/${papersData.length}`);
+        if (unmatched.length > 0) {
+            console.log(`  未匹配: ${unmatched.length} 篇`);
+            for (const t of unmatched.slice(0, 5)) {
+                console.log(`    - ${t}`);
+            }
         }
     }
 

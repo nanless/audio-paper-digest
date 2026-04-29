@@ -17,7 +17,7 @@ setup_script_logging(__file__)
     python3 publish-to-blog.py --skip-push     # 只生成 .md 不推送到 GitHub
     python3 publish-to-blog.py --date YYYY-MM-DD
 """
-import json, re, sys, os, subprocess, datetime
+import base64, json, re, sys, os, subprocess, datetime
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -34,19 +34,143 @@ CONTENT_DIR = os.path.join(BLOG_REPO, "content", "posts")
 BASE_PATH = os.environ.get("PAPER_DIGEST_BLOG_BASE_PATH", "/audio-paper-digest-blog")
 GITHUB_REMOTE = os.environ.get("PAPER_DIGEST_GITHUB_REMOTE", "origin")
 
+IO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'current', 'deep_analyzer_input_output')
+ICASSP_IMG_SOURCE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'current', 'icassp-images')
+
 
 def slugify(text, max_length=50):
     """将标题转换为 URL 友好的 slug（保留中文、英文、数字）"""
     text = text.lower()
-    # 保留中文(\u4e00-\u9fff)、日文假名、韩文、英文、数字、空格和连字符
     text = re.sub(r"[^\u4e00-\u9fff\u3005\u3007\u3021-\u3029\u3038-\u303b\uff10-\uff19\uff21-\uff3a\uff41-\uff5aa-z0-9\s-]", '', text)
-    # 将空白和连续连字符替换为单个连字符
     text = re.sub(r'[\s-]+', '-', text)
     text = text.strip('-')
     if len(text) > max_length:
         text = text[:max_length].rsplit('-', 1)[0]
-    # 如果过滤后为空（极少数情况），返回 "paper" 作为兜底
     return text if text else 'paper'
+
+
+def get_paper_id(paper):
+    """获取论文唯一标识，兼容 arXiv 和 ICASSP"""
+    return paper.get('arxivId') or paper.get('arnumber') or paper.get('paper_id', '')
+
+
+def _copy_icassp_images(paper_id, date_str):
+    """从 data/current/icassp-images/{paper_id}/ 复制图片到博客 static 目录"""
+    source_dir = os.path.join(ICASSP_IMG_SOURCE_DIR, str(paper_id))
+    if not os.path.exists(source_dir):
+        return {}
+
+    img_dir = os.path.join(BLOG_REPO, 'static', 'images', 'icassp-2026', date_str)
+    os.makedirs(img_dir, exist_ok=True)
+
+    image_map = {}
+    for filename in sorted(os.listdir(source_dir)):
+        m = re.match(r'^(\d+)\.(png|jpg|jpeg|gif)$', filename, re.I)
+        if not m:
+            continue
+        idx = int(m.group(1))
+        ext = m.group(2).lower()
+        if ext == 'jpeg':
+            ext = 'jpg'
+        source_path = os.path.join(source_dir, filename)
+        dest_filename = f'{paper_id}-{idx}.{ext}'
+        dest_path = os.path.join(img_dir, dest_filename)
+        try:
+            with open(source_path, 'rb') as src, open(dest_path, 'wb') as dst:
+                dst.write(src.read())
+            web_path = f'{BASE_PATH}/images/icassp-2026/{date_str}/{dest_filename}'
+            image_map[rf'icassp-img://{paper_id}/{idx}\.{ext}'] = web_path
+            image_map[rf'pdf-image-page\d+-idx{idx}'] = web_path
+        except Exception:
+            continue
+    return image_map
+
+
+def _extract_from_input(paper_id, date_str):
+    """从 analyzer input 文件中提取 base64 图片（旧数据 fallback）"""
+    input_file = os.path.join(IO_DIR, f'{paper_id}_input.json')
+    if not os.path.exists(input_file):
+        return {}
+
+    try:
+        with open(input_file, 'r') as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+
+    images = []
+    msgs = data.get('messages', [])
+    for m in msgs:
+        if m.get('role') == 'user':
+            content = m.get('content', [])
+            for c in content:
+                if c.get('type') == 'image_url':
+                    url = c.get('image_url', {}).get('url', '')
+                    if url.startswith('data:'):
+                        parts = url.split(',', 1)
+                        if len(parts) == 2:
+                            header = parts[0]
+                            mime = header.split(';')[0].replace('data:', '')
+                            images.append((len(images), parts[1], mime))
+
+    if not images:
+        return {}
+
+    img_dir = os.path.join(BLOG_REPO, 'static', 'images', 'icassp-2026', date_str)
+    os.makedirs(img_dir, exist_ok=True)
+
+    image_map = {}
+    for idx, b64_data, mime in images:
+        ext = 'jpg' if 'jpeg' in mime else ('png' if 'png' in mime else 'jpg')
+        filename = f'{paper_id}-{idx}.{ext}'
+        filepath = os.path.join(img_dir, filename)
+        try:
+            with open(filepath, 'wb') as f:
+                f.write(base64.b64decode(b64_data))
+            web_path = f'{BASE_PATH}/images/icassp-2026/{date_str}/{filename}'
+            image_map[rf'pdf-image-page\d+-idx{idx}'] = web_path
+        except Exception:
+            continue
+    return image_map
+
+
+def extract_and_replace_images(md, paper_id, date_str):
+    """保存 ICASSP 图片到博客 static 目录，替换 markdown 中的内部标识符"""
+    image_map = _copy_icassp_images(paper_id, date_str)
+    if not image_map:
+        image_map = _extract_from_input(paper_id, date_str)
+
+    if not image_map:
+        return md
+
+    def _replacer(match):
+        url = match.group(2)
+        for pattern, web_path in image_map.items():
+            if re.fullmatch(pattern, url):
+                return match.group(1) + web_path + match.group(3)
+        desc = match.group(1)[2:-1]
+        return desc
+
+    md = re.sub(r'(!\[.*?\]\()(.*?)(\))', _replacer, md)
+    return md
+
+
+def sanitize_external_images(md):
+    """将不可用的外部图片引用降级为纯文本描述"""
+    blocked_domains = [
+        'ieeexplore.ieee.org',   # 403 防盗链
+        'images.unsplash.com',    # LLM 编造的假链接
+    ]
+
+    def _replacer(match):
+        desc = match.group(1)
+        url = match.group(2)
+        for domain in blocked_domains:
+            if domain in url:
+                return desc
+        return match.group(0)
+
+    return re.sub(r'!\[(.*?)\]\((.*?)\)', _replacer, md)
 
 
 def yaml_escape(s):
@@ -60,31 +184,40 @@ def yaml_escape(s):
              .replace('}', '}}'))
 
 
-def generate_index_page(scored, unscored, date_str, paper_slugs):
+def generate_index_page(scored, unscored, date_str, paper_slugs, category="论文速递"):
     """生成每日汇总页面（index.md），包含概览和每篇论文的链接"""
     total = len(scored) + len(unscored)
     tag_set = extract_all_tags([p for _, p, _ in scored] + unscored, limit=10)
     top_tags = extract_top_tags([p for _, p, _ in scored] + unscored, limit=8)
 
+    if category == "icassp-2026":
+        page_title = f"ICASSP 2026 语音/音频论文详细分析"
+        page_desc = f"共分析 {total} 篇 ICASSP 2026 论文"
+        overview = f"📥 {total} 篇 → 🔬 深度分析完成"
+    else:
+        page_title = f"语音/音频论文速递 {date_str}"
+        page_desc = f"共分析 {total} 篇语音/AI 论文"
+        overview = f"📥 抓取 {total} 篇 → 🔬 深度分析完成"
+
     md = f"""---
-title: "语音/音频论文速递 {date_str}"
+title: "{page_title}"
 date: {date_str}
 draft: false
 tags: [{', '.join(tag_set)}]
-categories: [论文速递]
-description: "共分析 {total} 篇语音/AI 论文"
+categories: [{category}]
+description: "{page_desc}"
 layout: "posts"
 ---
 
-# 语音/音频论文速递 {date_str}
+# {page_title}
 
-共分析 **{total}** 篇论文
+{page_desc}
 
 ---
 
 ## ⚡ 今日概览
 
-📥 抓取 {total} 篇 → 🔬 深度分析完成
+{overview}
 
 ### 🏷️ 热门方向
 
@@ -102,7 +235,7 @@ layout: "posts"
     for i, (score, p, pa) in enumerate(scored):
         m = format_medal(i)
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(p.get('arxivId', ''), '')
+        slug = paper_slugs.get(get_paper_id(p), '')
         rank_bucket = pa.get('rankBucket', '') or '-'
         primary_task = pa.get('primaryTaskTag', '') or '-'
         if slug:
@@ -111,7 +244,7 @@ layout: "posts"
             md += f"| {m} | {title[:55]} | {score}分 | {rank_bucket} | {primary_task} |\n"
     for i, p in enumerate(unscored):
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(p.get('arxivId', ''), '')
+        slug = paper_slugs.get(get_paper_id(p), '')
         if slug:
             md += f"| {len(scored)+i+1} | [{title[:55]}]({BASE_PATH}/posts/{date_str}-{slug}) | N/A | - | - |\n"
         else:
@@ -122,7 +255,7 @@ layout: "posts"
 
     for i, (score, p, pa) in enumerate(scored):
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(p.get('arxivId', ''), '')
+        slug = paper_slugs.get(get_paper_id(p), '')
         m = format_medal(i)
 
         if slug:
@@ -156,7 +289,7 @@ layout: "posts"
 
     for i, p in enumerate(unscored):
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(p.get('arxivId', ''), '')
+        slug = paper_slugs.get(get_paper_id(p), '')
         if slug:
             md += f"### {len(scored)+i+1}. [{title}]({BASE_PATH}/posts/{date_str}-{slug})\n\n"
         else:
@@ -165,7 +298,7 @@ layout: "posts"
     return md
 
 
-def generate_paper_page(paper, date_str):
+def generate_paper_page(paper, date_str, category="论文速递", summary_slug=None):
     """生成单篇论文的独立页面"""
     # 优先使用已解析好的 parsed 数据，避免重新解析时因标题损坏导致字段丢失
     pa = paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
@@ -182,7 +315,7 @@ title: "{yaml_escape(title)}"
 date: {date_str}
 draft: false
 tags: [{', '.join([t.replace('#', '') for t in (pa['tags'] if pa else [])])}]
-categories: [论文速递]
+categories: [{category}]
 description: "{yaml_escape(desc)}"
 hiddenInHomeList: true
 ---
@@ -237,12 +370,20 @@ hiddenInHomeList: true
     else:
         md += '> ⚠️ 该论文分析失败\n'
 
-    md += f'\n---\n\n[← 返回 {date_str} 论文速递]({BASE_PATH}/posts/{date_str}/)\n'
+    if summary_slug:
+        md += f'\n---\n\n[← 返回 ICASSP 2026 论文分析]({BASE_PATH}/posts/{summary_slug}/)\n'
+    else:
+        md += f'\n---\n\n[← 返回 {date_str} 论文速递]({BASE_PATH}/posts/{date_str}/)\n'
+
+    # 提取并替换内部图片标识符为实际路径
+    md = extract_and_replace_images(md, get_paper_id(paper), date_str)
+    # 降级不可用的外部图片引用（IEEE 防盗链、假链接等）
+    md = sanitize_external_images(md)
 
     return md, slug
 
 
-def git_push(date_str):
+def git_push(date_str, category="论文速递", summary_slug=None):
     """Commit and push to GitHub"""
     status = subprocess.run(
         ['git', 'status', '--porcelain'],
@@ -253,8 +394,9 @@ def git_push(date_str):
         return True
 
     subprocess.run(['git', 'add', '-A'], check=True, cwd=BLOG_REPO)
+    label = "ICASSP 2026" if category == "icassp-2026" else "论文速递"
     subprocess.run(
-        ['git', 'commit', '-m', f'add: 论文速递 {date_str}'],
+        ['git', 'commit', '-m', f'add: {label} {date_str}'],
         check=True, cwd=BLOG_REPO
     )
     result = subprocess.run(
@@ -266,7 +408,8 @@ def git_push(date_str):
         print(f"  ✅ 已推送到 GitHub，自动部署中...")
         blog_url = os.environ.get('PAPER_DIGEST_BLOG_URL', '')
         if blog_url:
-            print(f"  🌐 {blog_url}/{date_str}/")
+            slug = summary_slug or date_str
+            print(f"  🌐 {blog_url}/posts/{slug}/")
         return True
     else:
         print(f"  ❌ Push 失败: {result.stderr}")
@@ -299,22 +442,29 @@ def main():
         print("⚠️ 没有论文需要发布")
         return
 
+    # 根据数据文件路径判断分类
+    category = "icassp-2026" if data_file and "icassp" in data_file.lower() else "论文速递"
+    print(f"🏷️ 分类: {category}")
+
+    # ICASSP 汇总页面使用固定 slug，不再用日期作为文件名
+    summary_slug = "icassp2026-summary" if category == "icassp-2026" else today
+
     os.makedirs(CONTENT_DIR, exist_ok=True)
 
     paper_slugs = {}
     for paper in papers:
         pa = parse_analysis(paper.get('analysis', ''))
         if pa:
-            paper_md, slug = generate_paper_page(paper, today)
+            paper_md, slug = generate_paper_page(paper, today, category, summary_slug)
             paper_file = os.path.join(CONTENT_DIR, f"{today}-{slug}.md")
             with open(paper_file, 'w') as f:
                 f.write(paper_md)
-            paper_slugs[paper.get('arxivId', '')] = slug
+            paper_slugs[get_paper_id(paper)] = slug
 
     print(f"📄 生成 {len(paper_slugs)} 篇论文独立页面")
 
-    index_md = generate_index_page(scored, unscored, today, paper_slugs)
-    index_file = os.path.join(CONTENT_DIR, f"{today}.md")
+    index_md = generate_index_page(scored, unscored, today, paper_slugs, category)
+    index_file = os.path.join(CONTENT_DIR, f"{summary_slug}.md")
     with open(index_file, 'w') as f:
         f.write(index_md)
     print(f"📄 汇总页面: {index_file} ({len(index_md)} chars)")
@@ -323,7 +473,7 @@ def main():
         print("⏭️ 跳过推送")
         return
 
-    git_push(today)
+    git_push(today, category, summary_slug)
 
     print(f"\n🎉 博客发布完成！")
 

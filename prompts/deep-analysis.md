@@ -20,10 +20,8 @@
 论文标题: {title}
 作者: {authors}
 类别: {categories}
-arXiv ID: {arxivId}
-链接: https://arxiv.org/abs/{arxivId}
+{paperInfo}
 
-{hasFullText}
 {textForAnalysis}
 
 请按以下固定格式输出（用中文），不要增删一级标题，缺失信息必须明确写"未说明"、"未提供"或"论文中未提及"，禁止根据常识、作者名气、单位名气、邮箱、外部网页或历史记忆猜测。
