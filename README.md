@@ -43,7 +43,18 @@ audio-paper-digest/
 │   ├── utils.py                # 公共工具函数（Python）
 │   ├── log-setup.js            # Node 日志模块（Tee + 自动清理）
 │   ├── log_setup.py            # Python 日志模块（Tee + 自动清理）
-│   └── backup-data.sh          # 数据备份壳脚本
+│   ├── backup-data.sh          # 数据备份壳脚本
+│   ├── pdf-extractor.py        # 从本地 PDF 提取文本和图片（PyMuPDF）
+│   ├── icassp-batch-analyze.js # ICASSP 2026 批量分析主流程（筛选+深度分析）
+│   ├── icassp-categorize.js    # ICASSP 论文按标签分类生成 Markdown 报告
+│   ├── retry-failed-analysis.js # 重新分析评分失败的论文
+│   ├── retry-text-only.js      # 文本-only 重新分析（跳过图片，绕过 API 安全过滤）
+│   ├── retry-failed-filters.js # 重试筛选失败的论文（降低并发）
+│   ├── retry-last-failed.js    # 重试最后一批筛选/分析失败的论文
+│   ├── refilter-problematic.js # 对问题论文重新执行筛选
+│   ├── verify-filter-io.js     # 验证 filter_input_output 日志完整性
+│   ├── migrate-icassp-images.js # 从 deep_analyzer_input_output 提取图片到 icassp-images/
+│   └── batch-refilter.js       # 批量重新筛选指定论文
 ├── tests/                      # 单元测试
 │   ├── utils.test.js           # utils.js 核心函数测试
 │   └── config.test.js          # config.js 配置测试
@@ -52,7 +63,15 @@ audio-paper-digest/
 │   │   ├── papers.json         # 论文去重数据库（不归档，持续累积）
 │   │   ├── filtered-papers.json# 筛选结果（仅元数据，每日归档）
 │   │   ├── deep-analysis-result.json  # 核心分析结果（每日归档）
-│   │   └── analyzed.json       # 旧版分析记录（兼容，每日归档）
+│   │   ├── analyzed.json       # 旧版分析记录（兼容，每日归档）
+│   │   ├── icassp_2026_deep_analyzers.json      # ICASSP 2026 深度分析结果
+│   │   ├── icassp_2026_deep_analyzers-filtered.json  # ICASSP 筛选结果
+│   │   ├── icassp_2026_deep_analyzers-excluded.json  # ICASSP 排除列表
+│   │   ├── icassp-2026-snippets.json            # ICASSP PDF 文本片段缓存
+│   │   ├── icassp-images/      # ICASSP 论文图片（按 paperId 子目录）
+│   │   ├── filter_input_output/ # 筛选阶段输入输出日志（调试用）
+│   │   ├── deep_analyzer_input_output/ # 深度分析输入输出日志（调试用）
+│   │   └── output/             # 分类报告等输出文件
 │   └── archive/                # 自动归档（按日期子目录 + bak 文件）
 ├── logs/                       # 运行日志（自动按脚本+时间命名，保留最近50个）
 ├── prompts/
@@ -222,6 +241,208 @@ HF 特有字段（共 7 个）：
 - 自动备份旧文件到 `data/archive/deep-analysis-result-<时间戳>.bak.json`，并清理旧备份（保留最近 10 个）
 - **`papers.json` 自动备份**：每天运行前自动备份 `data/current/papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天
 - 更新 `data/current/papers.json` 去重库
+
+---
+
+## 3.8 ICASSP 2026 本地 PDF 分析专题流程
+
+本分支（`icassp-2026-analysis`）支持对会议本地 PDF 论文进行批量分析，与日常 arXiv 流程独立。该流程已在 ICASSP 2026 全量 3693 篇论文上验证，最终筛选出 898 篇语音/音频相关论文并完成深度分析。
+
+### 3.8.1 整体流程
+
+```
+本地 PDF (3693篇)
+    │
+    ▼
+PDF 文本+图片提取 (pdf-extractor.py / PyMuPDF)
+    │
+    ▼
+纯 LLM 筛选 (标题 + PDF 前3000字符摘要)
+    │  → 保留 898 篇语音/音频相关
+    │  → 排除 ~2795 篇非相关
+    │
+    ▼
+多模态深度分析 (全文 + PDF 图片)
+    │  → mimo-v2.5 API， Anthropic 协议
+    │  → 并发 3 篇，每篇最多 3 次重试
+    │
+    ▼
+结构化结果 (icassp_2026_deep_analyzers.json)
+    │
+    ▼
+博客发布 (Hugo，含任务分类汇总页 + 单篇页)
+```
+
+### 3.8.2 PDF 提取 (`scripts/pdf-extractor.py`)
+
+使用 **PyMuPDF (fitz)** 从本地 PDF 提取文本和图片：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `max_text_chars` | 100000 | 最大提取文本字符数 |
+| `max_images` | 10 | 最大提取图片数 |
+| `max_base64_chars` | 500000 | 单张图片 base64 字符上限 |
+| `min_image_dim` | 100 | 最小图片宽高（过滤小图标） |
+| `min_image_area` | 10000 | 最小图片面积 |
+
+图片处理：
+- 使用 **Pillow** 对 oversized 图片进行缩放和 JPEG 压缩（质量逐级降低：85% → 70% → 50% → 30%）
+- base64 编码后约增长 33%，脚本内部按 `max_base64_chars * 0.7` 作为原始大小阈值
+- 若 PDF 内容检测到大量 `©2026 IEEE` 版权标记且前5行含 `IEEE` + `ICASSP`，输出 `warning` 提示可能为会议版权页而非正文
+
+输出格式：JSON 到 stdout，包含 `text`、`images`（含 base64）、`pageCount`、`warning`。
+
+### 3.8.3 筛选阶段 (`icassp-batch-analyze.js` 前半段)
+
+**与日常 arXiv 流程的区别**：
+- 不使用 arXiv 摘要，而是从 PDF 提取前 3000 字符作为 `_snippet`
+- **纯 LLM 单篇判断**（非 batch），基于 `prompts/filter.md`
+- 并发度默认 **8**（`ICASSP_FILTER_CONCURRENCY`），单篇超时 60 秒，重试 3 次
+- 输出严格校验：必须为 `是/否` 或 `yes/no`，否则视为失败
+
+**I/O 日志**：每篇筛选的输入（prompt + messages）和输出（statusCode + rawResponse + parsedContent）保存到 `data/current/filter_input_output/{paperId}.json`，用于事后验证和重试。
+
+**断点续传**：提取的文本片段缓存在 `data/current/icassp-2026-snippets.json`，二次运行直接读取缓存，避免重复提取 PDF。
+
+**筛选结果**：
+- `icassp_2026_deep_analyzers-filtered.json`：保留的论文列表
+- `icassp_2026_deep_analyzers-excluded.json`：排除的论文列表
+
+### 3.8.4 深度分析阶段 (`icassp-batch-analyze.js` 后半段)
+
+复用 `analysis-engine.js` 的 `analyzeBatch()`，但对 ICASSP 论文的特殊处理：
+
+**全文来源**：
+- 从 PDF 提取完整文本（上限 100K 字符），而非 arXiv HTML
+- 无 `arxivId`，使用 `arnumber` 或 `paper_id` 作为唯一标识
+
+**图片处理**（`deep-analyzer.js`）：
+- `extractPdfContent()` 调用 `pdf-extractor.py` 获取文本和图片
+- `savePdfImages()` 将提取的图片保存到 `data/current/icassp-images/{paperId}/{index}.{ext}`
+- 分析时图片使用内部标识符 `icassp-img://{paperId}/{index}.{ext}` 替代 base64 数据 URL，避免 prompt 过大
+- 分析前将本地图片读取为 base64，嵌入多模态 message
+- 单张 base64 上限 500K 字符，图片数量无硬限制（实际受 API 上下文限制）
+
+**I/O 日志**：
+- 每篇分析的输入保存到 `data/current/deep_analyzer_input_output/{paperId}_input.json`
+- 输出保存到 `data/current/deep_analyzer_input_output/{paperId}_output.json`
+- 用于调试、重试和事后图片提取
+
+**增量保存**：每分析完一篇立即合并保存到 `icassp_2026_deep_analyzers.json`，已有 `analysis` 的论文不会被覆盖。
+
+### 3.8.5 图片迁移与处理
+
+**`scripts/migrate-icassp-images.js`**：
+- 从 `deep_analyzer_input_output/*_input.json` 中提取 base64 图片
+- 解码保存到 `data/current/icassp-images/{paperId}/{index}.png|jpg`
+- 用于博客发布时复制图片到 Hugo static 目录
+
+### 3.8.6 任务分类 (`scripts/icassp-categorize.js`)
+
+读取 `icassp_2026_deep_analyzers.json`，按以下维度生成分类 Markdown 报告：
+
+1. **评分分布**：按 9.0-10.0 / 7.5-8.5 / 5.5-7.0 / 3.0-5.0 / 1.0-2.5 五档统计
+2. **主任务分类**：按 `primaryTaskTag` 分组，每组内按评分降序
+3. **主方法分类**：按 `primaryMethodTag` 分组
+4. **分档分类**：按 `rankBucket` 分组
+5. **标签统计**：所有标签的出现频次和平均评分
+6. **完整列表**：全部论文的评分、分档、标签一览
+
+输出：`data/current/output/icassp-2026-report.md`
+
+### 3.8.7 博客发布（ICASSP 特殊逻辑）
+
+`publish-to-blog.py` 对 ICASSP 论文有专门的发布逻辑：
+
+**分类体系**：
+- 所有 ICASSP 论文归入 Hugo 分类 `ICASSP 2026`
+- 汇总页 slug：`icassp2026-summary`（非日期 slug）
+- 汇总页标题：`ICASSP 2026 论文深度分析`
+
+**任务分类汇总页**：
+- 从所有论文的 `primaryTaskTag` 提取任务标签（去重后约 140 个）
+- 为每个任务生成独立汇总页，文件名使用 ASCII-safe 格式：`icassp2026-task-XXX.md`
+- 通过 `url:` frontmatter 设置中文 URL 路径（如 `/posts/icassp2026-task-语音识别/`）
+- 每个任务页包含：该任务下所有论文的评分排行榜 + 每篇论文的简要分析（毒舌点评、核心摘要、标签等）
+
+**图片处理**：
+- `_copy_icassp_images()`：从 `data/current/icassp-images/{paperId}/` 复制到博客 `static/icassp-images/{date}/{paperId}/`
+- `_extract_from_input()`：若本地图片目录不存在，从 `deep_analyzer_input_output/{paperId}_input.json` 回退提取
+- `extract_and_replace_images()`：将分析文本中的内部标识符 `icassp-img://...` 替换为实际博客图片路径
+- `sanitize_external_images()`：降级外部 URL（如 IEEE Xplore 返回 403、LLM 幻觉的 Unsplash URL）为纯文本描述
+
+**Slug 生成**：
+- ICASSP 论文没有 `arxivId`，使用 `arnumber` 或 `paper_id` 作为 ID
+- `slugify()` 保留中/日/韩文、英文、数字，过滤特殊字符，最大 50 字符
+
+**YAML 安全**：
+- 标签值含 `#` 时必须用引号包裹（如 `tags: ["多音高估计 #音符跟踪"]`），否则 Hugo YAML 解析器会将 `#` 后内容视为注释
+
+### 3.8.8 重试与修复脚本
+
+| 脚本 | 用途 | 触发场景 |
+|------|------|----------|
+| `retry-failed-analysis.js` | 重新分析无评分的论文 | 深度分析后部分论文 `parsed.score` 为空 |
+| `retry-text-only.js` | 文本-only 重新分析（跳过图片） | API 安全过滤拒绝含图片的论文 |
+| `retry-failed-filters.js` | 重试筛选失败的论文 | `filter_input_output/` 中 statusCode ≠ 200 |
+| `retry-last-failed.js` | 重试最后一批失败的筛选/分析 | 批量处理末尾失败 |
+| `refilter-problematic.js` | 对问题论文重新筛选 | 筛选结果异常需重新判定 |
+| `verify-filter-io.js` | 验证 filter I/O 完整性 | 检查是否有论文缺少筛选日志 |
+
+### 3.8.9 ICASSP 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `ICASSP_PAPERS_DIR` | `/Users/.../icassp-2026-papers/papers_2026` | PDF 论文目录 |
+| `ICASSP_JSON_FILE` | `/Users/.../papers_2026.json` | 论文元数据 JSON |
+| `ICASSP_RESULT_FILE` | `data/current/icassp_2026_deep_analyzers.json` | 结果保存路径 |
+| `ICASSP_SKIP_FILTER` | `false` | 跳过筛选，直接分析 |
+| `ICASSP_FILTER_ONLY` | `false` | 仅执行筛选 |
+| `ICASSP_OFFSET` | `0` | 从第 N 篇开始（断点续传） |
+| `ICASSP_LIMIT` | `0`（无限制） | 最多分析 N 篇 |
+| `ICASSP_FILTER_CONCURRENCY` | `8` | 筛选并发度 |
+| `ICASSP_FILTER_TIMEOUT` | `60000` | 筛选单篇超时（毫秒） |
+| `ICASSP_FILTER_RETRIES` | `3` | 筛选重试次数 |
+
+### 3.8.10 ICASSP 常用命令
+
+```bash
+# 完整流程：筛选 + 深度分析（增量续传）
+node scripts/icassp-batch-analyze.js
+
+# 仅执行筛选
+ICASSP_FILTER_ONLY=true node scripts/icassp-batch-analyze.js
+
+# 跳过筛选，直接分析已筛选的论文
+ICASSP_SKIP_FILTER=true node scripts/icassp-batch-analyze.js
+
+# 从第 500 篇开始分析（断点续传）
+ICASSP_OFFSET=500 node scripts/icassp-batch-analyze.js
+
+# 只分析前 100 篇
+ICASSP_LIMIT=100 node scripts/icassp-batch-analyze.js
+
+# 提取 PDF 内容测试
+python3 scripts/pdf-extractor.py /path/to/paper.pdf --max-images 10
+
+# 生成分类报告
+node scripts/icassp-categorize.js
+
+# 重试无评分的论文
+node scripts/retry-failed-analysis.js
+
+# 文本-only 重试（绕过 API 安全过滤）
+node scripts/retry-text-only.js
+
+# 重试筛选失败的论文（降低并发）
+node scripts/retry-failed-filters.js
+
+# 从分析日志提取图片到 icassp-images/
+node scripts/migrate-icassp-images.js
+
+# 发布 ICASSP 博客（含任务分类汇总页）
+python3 scripts/publish-to-blog.py --date 2026-04-29 data/current/icassp_2026_deep_analyzers.json
+```
 
 ---
 
@@ -400,6 +621,13 @@ HuggingFace Papers 抓取模块。
 
 **重要限制**：脚本按输入文件中的全部 `papers` 生成，不会自动按 `published` 日期过滤。若文件中包含多日期论文，请确认这是你的意图。
 
+**ICASSP 2026 支持**：当输入为 `icassp_2026_deep_analyzers.json` 时，脚本自动切换为 ICASSP 发布模式：
+- 分类变为 `ICASSP 2026`，汇总页 slug 为 `icassp2026-summary`
+- 生成任务分类汇总页（约 140 个任务标签），文件名 ASCII-safe + `url:` frontmatter
+- 图片从 `data/current/icassp-images/` 复制到博客 static 目录
+- 分析文本中的 `icassp-img://` 标识符替换为实际图片路径
+- 详见 [3.8.7 博客发布（ICASSP 特殊逻辑）](#387-博客发布icassp-特殊逻辑)
+
 #### `scripts/publish-wechat-full.py`
 
 生成微信公众号图文草稿。
@@ -468,6 +696,61 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 - 额外输出 `data/backfill-result.json`
 - 独立日志：`logs/backfill.log`
 - 依赖：`requests`（Python 第三方库）
+
+#### `scripts/pdf-extractor.py`
+
+本地 PDF 文本和图片提取器（PyMuPDF）。
+- 提取文本（上限 100K 字符）和图片（上限 10 张，过滤小图标）
+- 图片自动缩放压缩（Pillow）以适配 base64 大小限制
+- 检测 IEEE 版权页异常并输出 warning
+- 命令行工具，输出 JSON 到 stdout
+
+#### `scripts/icassp-batch-analyze.js`
+
+ICASSP 2026 批量分析主流程。
+- **Title → PDF 路径映射**：通过归一化标题匹配本地 PDF 文件名
+- **筛选阶段**：从 PDF 提取 snippet → 纯 LLM 单篇筛选（标题+摘要）→ I/O 日志到 `filter_input_output/`
+- **深度分析阶段**：复用 `analysis-engine.js`，全文+图片多模态分析 → I/O 日志到 `deep_analyzer_input_output/`
+- **增量保存**：每篇分析完立即保存，支持 `OFFSET`/`LIMIT` 断点续传
+- 环境变量：`ICASSP_PAPERS_DIR`、`ICASSP_JSON_FILE`、`ICASSP_RESULT_FILE`、`ICASSP_SKIP_FILTER`、`ICASSP_FILTER_ONLY`、`ICASSP_OFFSET`、`ICASSP_LIMIT`
+
+#### `scripts/icassp-categorize.js`
+
+ICASSP 论文分类报告生成。
+- 读取 `icassp_2026_deep_analyzers.json`
+- 按评分区间、主任务标签、主方法标签、分档、全部标签生成 Markdown 报告
+- 输出：`data/current/output/icassp-2026-report.md`
+
+#### `scripts/retry-failed-analysis.js`
+
+重新分析无评分的论文。
+- 遍历 `icassp_2026_deep_analyzers.json`，找出 `parsed.score` 为空的论文
+- 调用 `analyzePaperDeep()` 重新分析
+- 处理 API 拒绝信息（含 `rejected` 字样时记录但不覆盖）
+- 每篇处理后立即保存进度
+
+#### `scripts/retry-text-only.js`
+
+文本-only 重新分析（跳过图片）。
+- 针对被 API 安全过滤拒绝的论文（如 PerformSinger）
+- 不使用图片，仅传入前 15000 字符文本
+- 调用 `callModel()` 直接获取分析文本，绕过图片相关的安全拦截
+
+#### `scripts/retry-failed-filters.js`
+
+重试筛选失败的论文。
+- 读取 `filter_input_output/`，找出 statusCode ≠ 200 的记录
+- 降低并发（默认 3）并增加批次延迟（默认 2000ms）
+- 重新执行 LLM 筛选并更新 I/O 日志
+- 重新生成 `-filtered.json` 结果
+
+#### `scripts/migrate-icassp-images.js`
+
+从深度分析输入日志提取图片。
+- 遍历 `deep_analyzer_input_output/*_input.json`
+- 提取 message 中的 base64 图片数据
+- 解码保存到 `data/current/icassp-images/{paperId}/{index}.png|jpg`
+- 用于博客发布时的图片复制
 
 #### `scripts/backup-data.sh`
 
@@ -582,6 +865,93 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 ### 5.4 `data/current/analyzed.json`
 
 旧版已分析记录（`fetch-papers.js` 直跑流程遗留）。当前主流程不直接使用，但保留兼容，参与每日归档。
+
+### 5.5 `data/current/icassp_2026_deep_analyzers.json`
+
+ICASSP 2026 深度分析核心结果。结构上与 `deep-analysis-result.json` 类似，但有以下区别：
+
+```json
+{
+  "timestamp": "2026-04-29T12:22:00+08:00",
+  "papers": [
+    {
+      "arnumber": "11460320",
+      "title": "论文标题",
+      "pdfPath": "/Users/.../papers_2026/Title Words.pdf",
+      "paper_id": "11460320",
+      "authors": ["Author A", "Author B"],
+      "categories": ["eess.AS", "cs.SD"],
+      "analysis": "## 评分\n8.5/10\n...",
+      "parsed": {
+        "score": "8.5",
+        "tags": ["#语音识别", "#自监督学习", "#多语言"],
+        "primaryTaskTag": "#语音识别",
+        "primaryMethodTag": "#自监督学习",
+        "rankBucket": "前25%",
+        "authors": "...",
+        "roast": "...",
+        "summary": "...",
+        "architecture": "...",
+        "innovation": "...",
+        "details": "...",
+        "results": "...",
+        "scoringReason": "...",
+        "opensource": "..."
+      },
+      "imageUrls": ["icassp-img://11460320/0.png"],
+      "allImageUrls": ["icassp-img://11460320/0.png", "icassp-img://11460320/1.jpg"]
+    }
+  ]
+}
+```
+
+**关键字段**：
+- `arnumber`：IEEE 论文编号（替代 arXiv 的 `arxivId`）
+- `pdfPath`：本地 PDF 文件路径
+- `paper_id`：内部唯一标识（通常为 `arnumber`）
+- `imageUrls` / `allImageUrls`：内部图片标识符列表（`icassp-img://{paperId}/{index}.{ext}`），非真实 URL
+- `parsed`：预解析的结构化数据，发布脚本优先使用此字段而非重新解析 `analysis` 文本
+
+### 5.6 `data/current/icassp-images/`
+
+本地图片存储目录，结构：
+
+```
+icassp-images/
+├── 11460320/
+│   ├── 0.png
+│   └── 1.jpg
+├── 11460321/
+│   └── 0.png
+└── ...
+```
+
+- 每个 `arnumber` 一个子目录
+- 图片从 `pdf-extractor.py` 提取后由 `savePdfImages()` 保存，或事后由 `migrate-icassp-images.js` 从分析日志中提取
+- 博客发布时复制到 Hugo 博客的 `static/icassp-images/{date}/{paperId}/`
+
+### 5.7 `data/current/filter_input_output/`
+
+筛选阶段 I/O 日志目录。每篇论文一个 JSON 文件 `{paperId}.json`：
+
+```json
+{
+  "paperId": "11460320",
+  "timestamp": "2026-04-28T14:25:00+08:00",
+  "input": { "prompt": "...", "messages": [...] },
+  "output": { "statusCode": 200, "rawResponse": {...}, "parsedContent": "是" }
+}
+```
+
+用于：筛选结果验证、失败重试、调试 prompt 效果。
+
+### 5.8 `data/current/deep_analyzer_input_output/`
+
+深度分析阶段 I/O 日志目录。每篇论文两个文件：
+- `{paperId}_input.json`：完整的 LLM 请求体（含 base64 图片）
+- `{paperId}_output.json`：LLM 原始返回结果
+
+用于：调试分析质量、事后图片提取（`migrate-icassp-images.js`）、分析失败排查。
 
 ---
 

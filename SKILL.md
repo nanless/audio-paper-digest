@@ -38,6 +38,31 @@ description: >
 
 ---
 
+## 2.5 ICASSP 2026 本地 PDF 分析流程（当前分支特有）
+
+本分支（`icassp-2026-analysis`）与日常 arXiv 流程完全独立，用于分析会议本地 PDF 论文。已在 ICASSP 2026 全量 3693 篇论文上验证，筛选出 898 篇语音/音频相关论文。
+
+**流程**：
+1. **PDF 提取**（`pdf-extractor.py`）：PyMuPDF 提取文本（上限 100K）+ 图片（上限 10 张，过滤小图标，自动压缩）
+2. **纯 LLM 筛选**（`icassp-batch-analyze.js` 前半段）：标题 + PDF 前 3000 字符摘要 → 单篇判断 → I/O 日志到 `filter_input_output/`
+3. **多模态深度分析**（`icassp-batch-analyze.js` 后半段）：全文 + PDF 图片 → `deep-analyzer.js` → I/O 日志到 `deep_analyzer_input_output/`
+4. **任务分类**（`icassp-categorize.js`）：按 `primaryTaskTag` / `primaryMethodTag` / 评分区间生成分类报告
+5. **博客发布**（`publish-to-blog.py`）：ICASSP 分类 + 任务汇总页 + 单篇页，图片从 `icassp-images/` 复制到博客 static 目录
+
+**关键差异点**：
+- 无 `arxivId`，使用 `arnumber` 作为唯一标识
+- 图片使用内部标识符 `icassp-img://{paperId}/{index}.{ext}`，非真实 URL
+- 博客汇总页 slug 为 `icassp2026-summary`（非日期 slug），分类为 `ICASSP 2026`
+- 任务汇总页使用 ASCII-safe 文件名 + `url:` frontmatter 设置中文路径
+- `parsed` 字段优先于重新解析 `analysis` 文本（`publish_common.py` 中 `score_and_sort()` 逻辑）
+
+**断点续传**：
+- `ICASSP_OFFSET` / `ICASSP_LIMIT` 控制起始位置和数量上限
+- `icassp-2026-snippets.json` 缓存 PDF 文本片段，避免重复提取
+- 每篇分析完立即增量保存，已有 `analysis` 的论文不会被覆盖
+
+---
+
 ## 3. 数据路径规范
 
 ### 3.1 优先路径（当前）
@@ -48,6 +73,12 @@ description: >
 | `data/current/filtered-papers.json` | 筛选后的论文元数据 | 每日归档移走后重新生成 |
 | `data/current/deep-analysis-result.json` | 核心分析结果（含 analysis / parsed / imageUrls） | 每日归档移走后重新生成 |
 | `data/current/analyzed.json` | 旧版已分析记录（兼容） | 每日归档移走后重新生成 |
+| `data/current/icassp_2026_deep_analyzers.json` | ICASSP 2026 深度分析结果（当前分支） | 不参与每日归档，增量保存 |
+| `data/current/icassp_2026_deep_analyzers-filtered.json` | ICASSP 筛选结果 | 随筛选更新 |
+| `data/current/icassp-2026-snippets.json` | ICASSP PDF 文本片段缓存 | 随提取更新 |
+| `data/current/icassp-images/` | ICASSP 论文图片（按 paperId 子目录） | 由 pdf-extractor / migrate 生成 |
+| `data/current/filter_input_output/` | 筛选阶段 I/O 日志 | 调试用，不参与归档 |
+| `data/current/deep_analyzer_input_output/` | 深度分析 I/O 日志 | 调试用，不参与归档 |
 
 ### 3.2 兼容行为
 
@@ -254,6 +285,46 @@ npm run xiaohongshu -- --all       # 完整汇总版
 npm run xiaohongshu -- --date 2026-04-22
 ```
 
+### ICASSP 2026 专用命令
+
+```bash
+# 完整流程：筛选 + 深度分析（增量续传）
+node scripts/icassp-batch-analyze.js
+
+# 仅执行筛选
+ICASSP_FILTER_ONLY=true node scripts/icassp-batch-analyze.js
+
+# 跳过筛选，直接分析已筛选的论文
+ICASSP_SKIP_FILTER=true node scripts/icassp-batch-analyze.js
+
+# 从第 500 篇开始分析（断点续传）
+ICASSP_OFFSET=500 node scripts/icassp-batch-analyze.js
+
+# 只分析前 100 篇
+ICASSP_LIMIT=100 node scripts/icassp-batch-analyze.js
+
+# 提取 PDF 内容测试
+python3 scripts/pdf-extractor.py /path/to/paper.pdf --max-images 10
+
+# 生成分类报告
+node scripts/icassp-categorize.js
+
+# 重试无评分的论文
+node scripts/retry-failed-analysis.js
+
+# 文本-only 重试（绕过 API 安全过滤）
+node scripts/retry-text-only.js
+
+# 重试筛选失败的论文（降低并发）
+node scripts/retry-failed-filters.js
+
+# 从分析日志提取图片到 icassp-images/
+node scripts/migrate-icassp-images.js
+
+# 发布 ICASSP 博客（含任务分类汇总页）
+python3 scripts/publish-to-blog.py --date 2026-04-29 data/current/icassp_2026_deep_analyzers.json
+```
+
 **小红书发布经验：**
 
 - 小红书单帖正文限制约 1000 字，TOP 5 模式默认约 600-800 字符，适合单帖直接发布
@@ -380,6 +451,11 @@ PY
 17. **新增 LLM 端点必须接入 API 协议自动路由**：任何新增脚本调用 LLM 时，统一使用 `scripts/utils.js` 中的 `detectApiType()`、`buildApiUrl()`、`buildHeaders()`、`buildRequestBody()`、`parseResponseText()`，禁止硬编码特定协议的 URL/Header/Body。
 18. **修改 API 协议路由逻辑时同步全链路**：修改 `detectApiType()` 的判定规则或 `buildApiUrl()`/`buildHeaders()` 等函数时，必须同步检查 `fetch-papers.js`、`deep-analyzer.js` 以及所有使用 `analysis-engine.js` 的脚本（`full-fetch.js`、`reanalyze.js`、`batch-analyze.js`、`deep-analysis-only.js`、`analyze-single-paper.js`），确保全链路行为一致。
 19. **禁止将敏感文件提交到版本控制**：`data/`、`logs/`、`*.env`、`*.backup*`、缓存文件、含密钥的日志归档等严禁进入 git；提交前必须确认 `.gitignore` 已正确配置，且仓库中不存在历史遗留的敏感文件。
+20. **ICASSP 图片处理优先使用本地目录**：博客发布时，优先从 `data/current/icassp-images/{paperId}/` 复制图片；若不存在才回退到从 `deep_analyzer_input_output/{paperId}_input.json` 提取。禁止直接引用 `icassp-img://` 标识符到博客正文。
+21. **ICASSP 任务页文件名必须 ASCII-safe**：Hugo 无法处理中文文件名，任务汇总页必须使用 ASCII-safe 文件名（如 `icassp2026-task-001.md`），通过 `url:` frontmatter 设置中文 URL 路径。
+22. **ICASSP YAML 标签含 `#` 必须引号包裹**：标签如 `多音高估计 #音符跟踪` 在 YAML 中必须写成 `"多音高估计 #音符跟踪"`，否则 `#` 后内容被解析为注释。
+23. **ICASSP 发布优先使用 `parsed` 字段**：`publish_common.py` 的 `score_and_sort()`、`extract_top_tags()` 等函数必须优先使用 `p.get('parsed')`，仅在缺失时才回退到 `parse_analysis()`，避免重新解析失败导致评分丢失。
+24. **ICASSP 博客发布使用固定 slug**：ICASSP 汇总页 slug 固定为 `icassp2026-summary`，分类为 `ICASSP 2026`，不使用日期 slug。
 
 ---
 
@@ -504,7 +580,31 @@ for (const [name, ep, model] of cases) {
 
 **重要经验**：Kimi 和 MiMo 的 Anthropic URL 结构不同，修改 `buildApiUrl()` 时必须分支处理。
 
-### 9.10 后台运行 full-fetch 被 SIGTERM 中断 (exit code 143)
+### 9.10 ICASSP 图片无法显示在博客上
+
+**排查步骤**：
+1. 检查 `data/current/icassp-images/{paperId}/` 是否存在图片文件
+2. 若不存在，运行 `node scripts/migrate-icassp-images.js` 从分析日志提取
+3. 检查博客 `static/icassp-images/{date}/{paperId}/` 是否已复制
+4. 检查分析文本中是否残留 `icassp-img://` 标识符（应已被替换为实际路径）
+5. 检查是否有外部 URL（如 `https://ieeexplore.ieee.org/...`）被硬编码，这些域名通常返回 403，应降级为纯文本
+
+### 9.11 ICASSP 任务汇总页 404
+
+**根因**：Hugo 不支持中文文件名。
+**修复**：任务汇总页文件名使用 ASCII-safe（如 `icassp2026-task-001.md`），通过 frontmatter 设置 `url: /posts/icassp2026-task-中文任务名/`。
+
+### 9.12 ICASSP 汇总页评分数量少于实际
+
+**根因**：`score_and_sort()` 重新解析 `analysis` 文本时，部分论文解析失败导致评分丢失。
+**修复**：确保 `publish_common.py` 优先使用 `p.get('parsed')` 中的预解析数据。
+
+### 9.13 ICASSP API 安全过滤拒绝（含图片的论文）
+
+**根因**：部分论文图片触发 LLM API 安全机制（如 PerformSinger 的某些图片）。
+**修复**：使用 `retry-text-only.js` 进行纯文本分析（跳过图片），通常可绕过安全过滤。
+
+### 9.14 后台运行 full-fetch 被 SIGTERM 中断 (exit code 143)
 
 **根因**：npm 脚本在后台模式下尝试访问 TTY 交互，导致 bash 报错并终止进程。
 
