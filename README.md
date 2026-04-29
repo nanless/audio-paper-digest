@@ -1122,3 +1122,9 @@ const options = {
 3. 抽样检查 `data/current/deep-analysis-result.json`，确认存在 `rank_bucket`、`primary_task_tag`、`primary_method_tag`
 4. 验证博客发布脚本产物，确认榜单、单篇页和热门方向正确显示新字段
 5. 验证微信/小红书脚本产物，确认文案中没有因字段缺失导致的空值或格式错位
+
+---
+
+## 15. 参考与致谢
+
+- 本项目在设计和实现过程中参考了 [speech-paper-daily-skill](https://github.com/JusperLee/speech-paper-daily-skill) 的思路与结构
