@@ -184,7 +184,7 @@ def yaml_escape(s):
              .replace('}', '}}'))
 
 
-def generate_index_page(scored, unscored, date_str, paper_slugs, category="论文速递"):
+def generate_index_page(scored, unscored, date_str, paper_slugs, category="论文速递", task_urls=None):
     """生成每日汇总页面（index.md），包含概览和每篇论文的链接"""
     total = len(scored) + len(unscored)
     tag_set = extract_all_tags([p for _, p, _ in scored] + unscored, limit=10)
@@ -198,6 +198,16 @@ def generate_index_page(scored, unscored, date_str, paper_slugs, category="论�
         page_title = f"语音/音频论文速递 {date_str}"
         page_desc = f"共分析 {total} 篇语音/AI 论文"
         overview = f"📥 抓取 {total} 篇 → 🔬 深度分析完成"
+
+    # 按主任务标签分类统计
+    task_tag_counts = {}
+    for p in [p for _, p, _ in scored] + unscored:
+        pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
+        task = pa.get('primaryTaskTag', '')
+        if task:
+            task = task.strip().lstrip('#')
+            task_tag_counts[task] = task_tag_counts.get(task, 0) + 1
+    sorted_tasks = sorted(task_tag_counts.items(), key=lambda x: -x[1])
 
     md = f"""---
 title: "{page_title}"
@@ -213,6 +223,18 @@ layout: "posts"
 
 {page_desc}
 
+---
+
+## 🎯 任务分类
+
+点击任务标签查看该方向所有论文：
+
+"""
+    for task, cnt in sorted_tasks:
+        task_url = task_urls.get(task, f"{BASE_PATH}/posts/icassp2026-summary/") if task_urls else f"{BASE_PATH}/posts/icassp2026-summary/"
+        md += f"- [{task}]({task_url})（{cnt}篇）\n"
+
+    md += f"""
 ---
 
 ## ⚡ 今日概览
@@ -296,6 +318,107 @@ layout: "posts"
             md += f"### {len(scored)+i+1}. {title}\n\n"
 
     return md
+
+
+def generate_task_index_page(task, papers_in_task, date_str, paper_slugs, category="icassp-2026", task_index=0):
+    """生成某任务标签下的 ICASSP 论文汇总页面"""
+    task_slug = slugify(task, max_length=80)
+    # 文件名使用纯 ASCII，避免 Hugo 构建时中文文件名问题
+    safe_filename = f"icassp2026-task-{task_index:03d}"
+    total = len(papers_in_task)
+    # 按分数排序
+    scored_in_task = []
+    unscored_in_task = []
+    for p in papers_in_task:
+        pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
+        score = 0
+        if pa.get('score'):
+            try:
+                score = float(str(pa['score']).replace('分', '').strip())
+            except ValueError:
+                score = 0
+        if score > 0:
+            scored_in_task.append((score, p, pa))
+        else:
+            unscored_in_task.append(p)
+    scored_in_task.sort(key=lambda x: -x[0])
+
+    md = f"""---
+title: "ICASSP 2026 - {task} 论文列表"
+date: {date_str}
+draft: false
+tags: ["{task}"]
+categories: [{category}]
+description: "共 {total} 篇 ICASSP 2026 {task} 方向论文"
+hiddenInHomeList: true
+---
+
+# ICASSP 2026 - {task}
+
+共 **{total}** 篇论文
+
+[← 返回 ICASSP 2026 总览]({BASE_PATH}/posts/icassp2026-summary/)
+
+---
+
+| 排名 | 论文 | 评分 | 分档 |
+|------|------|------|------|
+"""
+    for i, (score, p, pa) in enumerate(scored_in_task):
+        m = format_medal(i)
+        title = p.get('title', 'Unknown')
+        slug = paper_slugs.get(get_paper_id(p), '')
+        rank_bucket = pa.get('rankBucket', '') or '-'
+        if slug:
+            md += f"| {m} | [{title[:60]}]({BASE_PATH}/posts/{date_str}-{slug}) | {score}分 | {rank_bucket} |\n"
+        else:
+            md += f"| {m} | {title[:60]} | {score}分 | {rank_bucket} |\n"
+    for i, p in enumerate(unscored_in_task):
+        title = p.get('title', 'Unknown')
+        slug = paper_slugs.get(get_paper_id(p), '')
+        if slug:
+            md += f"| {len(scored_in_task)+i+1} | [{title[:60]}]({BASE_PATH}/posts/{date_str}-{slug}) | N/A | - |\n"
+        else:
+            md += f"| {len(scored_in_task)+i+1} | {title[:60]} | N/A | - |\n"
+
+    md += "\n---\n\n"
+    md += "## 📋 论文详情\n\n"
+
+    all_papers = scored_in_task + [(0, p, parse_analysis(p.get('analysis', '')) or {}) for p in unscored_in_task]
+    for i, (score, p, pa) in enumerate(all_papers):
+        title = p.get('title', 'Unknown')
+        slug = paper_slugs.get(get_paper_id(p), '')
+        m = format_medal(i) if score > 0 else f"{i+1}."
+
+        if slug:
+            md += f"### {m} [{title}]({BASE_PATH}/posts/{date_str}-{slug})\n\n"
+        else:
+            md += f"### {m} {title}\n\n"
+
+        if pa:
+            meta = build_paper_meta(pa, '')
+            if meta:
+                md += f"{meta}\n\n"
+
+            if pa.get('authors'):
+                authors_clean = pa['authors'].replace('- **第一作者**', '第一作者').replace('- **通讯作者**', '通讯作者').replace('- **作者列表**', '作者列表')
+                md += f"👥 **作者与机构**\n\n{authors_clean}\n\n"
+
+            if pa.get('roast'):
+                md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
+
+            if pa.get('summary'):
+                summary = pa['summary']
+                cutoff = re.search(r'\n##\s*详细分', summary)
+                if cutoff:
+                    summary = summary[:cutoff.start()].strip()
+                md += f"📌 **核心摘要**\n\n{summary}\n\n"
+        else:
+            md += "> ⚠️ 该论文分析失败\n\n"
+
+        md += "---\n\n"
+
+    return md, safe_filename, task_slug
 
 
 def generate_paper_page(paper, date_str, category="论文速递", summary_slug=None):
@@ -463,11 +586,43 @@ def main():
 
     print(f"📄 生成 {len(paper_slugs)} 篇论文独立页面")
 
-    index_md = generate_index_page(scored, unscored, today, paper_slugs, category)
+    # 为 ICASSP 预先构建任务分组和 URL 映射（汇总页面链接需要用到）
+    task_urls = None
+    task_groups = {}
+    if category == "icassp-2026":
+        for p in papers:
+            pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
+            task = pa.get('primaryTaskTag', '')
+            if task:
+                task = task.strip().lstrip('#')
+                task_groups.setdefault(task, []).append(p)
+        task_urls = {}
+        for task_index, (task, _) in enumerate(sorted(task_groups.items())):
+            task_urls[task] = f"{BASE_PATH}/posts/icassp2026-task-{task_index:03d}/"
+
+    index_md = generate_index_page(scored, unscored, today, paper_slugs, category, task_urls)
     index_file = os.path.join(CONTENT_DIR, f"{summary_slug}.md")
     with open(index_file, 'w') as f:
         f.write(index_md)
     print(f"📄 汇总页面: {index_file} ({len(index_md)} chars)")
+
+    # 为 ICASSP 每个任务标签生成独立汇总页面
+    if category == "icassp-2026":
+        # 清理旧的中文文件名任务页面
+        for old_file in os.listdir(CONTENT_DIR):
+            if old_file.startswith('icassp2026-') and old_file.endswith('.md') and 'task-' not in old_file and old_file != 'icassp2026-summary.md':
+                os.remove(os.path.join(CONTENT_DIR, old_file))
+
+        task_page_count = 0
+        for task_index, (task, task_papers) in enumerate(sorted(task_groups.items())):
+            task_md, safe_filename, task_slug = generate_task_index_page(
+                task, task_papers, today, paper_slugs, category, task_index
+            )
+            task_file = os.path.join(CONTENT_DIR, f"{safe_filename}.md")
+            with open(task_file, 'w') as f:
+                f.write(task_md)
+            task_page_count += 1
+        print(f"📄 生成 {task_page_count} 个任务标签汇总页面")
 
     if skip_push:
         print("⏭️ 跳过推送")

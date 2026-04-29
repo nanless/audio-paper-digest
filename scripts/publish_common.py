@@ -58,7 +58,7 @@ def score_and_sort(papers):
     scored = []
     unscored = []
     for p in papers:
-        pa = parse_analysis(p.get('analysis', ''))
+        pa = p.get('parsed') or parse_analysis(p.get('analysis', ''))
         if pa and pa.get('score'):
             try:
                 scored.append((float(pa['score']), p, pa))
@@ -77,7 +77,7 @@ def extract_top_tags(papers, limit=8):
     """
     tag_count = {}
     for p in papers:
-        pa = parse_analysis(p.get('analysis', ''))
+        pa = p.get('parsed') or parse_analysis(p.get('analysis', ''))
         if not pa:
             continue
         hot_tag = pa.get('primaryTaskTag') or (pa['tags'][0] if pa.get('tags') else '')
@@ -93,7 +93,7 @@ def extract_all_tags(papers, limit=10):
     """
     tag_set = set()
     for p in papers:
-        pa = parse_analysis(p.get('analysis', ''))
+        pa = p.get('parsed') or parse_analysis(p.get('analysis', ''))
         if not pa:
             continue
         if pa.get('primaryTaskTag'):
