@@ -1,9 +1,10 @@
 ---
 name: audio-paper-digest
 description: >
-  语音/音频论文速递自动化技能。抓取 arXiv + HuggingFace Papers，使用环境变量配置的 LLM 做筛选与深度分析，
-  输出结构化 JSON，并可发布到 GitHub Pages 博客、微信公众号草稿与小红书文案。
-  适用场景：论文速递、论文摘要、每日追踪、重分析、博客发布、微信发布与小红书发布。
+  ICASSP 2026 论文深度分析自动化技能。从本地 PDF 提取文本与图片，使用环境变量配置的 LLM 做筛选与多模态深度分析，
+  输出结构化 JSON，并发布到 Hugo 博客（含任务分类汇总页）。
+  适用场景：会议论文批量分析、任务分类归纳、博客发布。
+  如需 arXiv / HuggingFace 每日论文速递，请切换至 main 分支。
 ---
 
 # Paper Digest Skill（以当前代码为准）
@@ -19,26 +20,7 @@ description: >
 
 ---
 
-## 2. 当前真实流程
-
-主入口：`./run-full-fetch.sh`（或 `node scripts/full-fetch.js` / `npm run fetch`）
-
-1. **自动归档**：检查 `data/current/deep-analysis-result.json` / `filtered-papers.json` / `analyzed.json`，若时间戳早于今天（北京时间）且 `data/archive/<日期>/` 下不存在，则复制后删除原文件。**`papers.json` 不归档。**
-2. **arXiv 抓取**：7 个分类，每类最多 100 篇（可通过 `PD_ARXIV_MAX_RESULTS` 调整），遇连续 20 篇已有 ID 提前停止
-3. **HuggingFace 抓取**：`daily_papers` 分页（最多 20 页）+ `papers` API 补充，默认近 7 天
-4. **合并去重**：arXiv 优先，HF 补充 7 个特有字段，标记 `sources`
-5. **LLM 筛选**：按 `PAPER_ANALYZER_*` 配置逐篇判断语音/音频相关，`batchSize=5`（可通过 `PD_FILTER_BATCH_SIZE` 调整），单篇超时 60 秒，重试 3 次
-6. **保存筛选结果**：`data/current/filtered-papers.json`
-7. **深度分析**：`deep-analyzer.js`，全文+图片，并发 3 篇（可通过 `PD_ANALYSIS_CONCURRENCY` 调整），每篇最多重试 2 次（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整）
-8. **增量保存**：每批分析后立即保存到 `data/current/deep-analysis-result.json`，自带失败结果保护（已有成功 analysis 的论文不会被无 analysis 的失败结果覆盖）
-9. **更新去重库**：追加新论文 ID 到 `data/current/papers.json`，自动备份 papers.json（保留最近 7 天）
-10. **收尾合并**：去重合并历史结果，自动备份 bak 文件（保留最近 10 个）
-
-`full-fetch.js` **不会自动发布博客/微信**，发布需单独运行 Python 脚本。
-
----
-
-## 2.5 ICASSP 2026 本地 PDF 分析流程（当前分支特有）
+## 2. ICASSP 2026 本地 PDF 分析流程
 
 本分支（`icassp-2026-analysis`）与日常 arXiv 流程完全独立，用于分析会议本地 PDF 论文。已在 ICASSP 2026 全量 3693 篇论文上验证，筛选出 898 篇语音/音频相关论文。
 
@@ -142,14 +124,14 @@ API 调用特性：
 - 整体超时 20 分钟（AbortController）
 - max_tokens=15000，temperature=0.7
 - **双层重试**：analysis-engine.js 层面每篇最多重试 2 次（总共最多 3 次尝试）；deep-analyzer.js 内部每次 API 调用再重试最多 3 次（指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5s`）
-- **LLM API 请求明确设置 `agent: false`，强制直连以绕过本地代理（避免 MiMo 403）；arXiv/HuggingFace 等外部抓取仍使用代理自动检测**
-- arXiv HTML 解析使用 **cheerio** 结构化选择器，移除 script/style/nav/header/footer 等噪音元素
+- **LLM API 请求明确设置 `agent: false`，强制直连以绕过本地代理（避免 MiMo 403）**
+- 使用 **cheerio** 结构化选择器解析 HTML（通用能力），移除 script/style/nav/header/footer 等噪音元素
 - 图片下载 **并行化（并发 3）**，下载论文全部图片（无数量限制）；单张 base64 上限 500K 字符；超时后自动降级为纯文本重试
 - 全文上限 100K 字符
 - 所有分析配置集中管理于 `scripts/config.js`，支持环境变量覆写
 
 输出约束：
-- prompt 来源：`prompts/deep-analysis.md`，运行时通过 `loadPrompt()` 读取并替换 `{hasFullText}`、`{title}`、`{authors}`、`{categories}`、`{arxivId}`、`{textForAnalysis}` 占位符
+- prompt 来源：`prompts/deep-analysis.md`，运行时通过 `loadPrompt()` 读取并替换 `{hasFullText}`、`{title}`、`{authors}`、`{categories}`、`{paperInfo}`、`{textForAnalysis}` 占位符
 - 固定一级标题：`## 评分`、`## 标签`、`## 作者与机构`、`## 毒舌点评`、`## 核心摘要`、`## 详细分析`、`## 开源详情`
 - `## 评分` 下必须先输出总分，再输出 `### 机器摘要`，包含 `rank_bucket`、`quality_score`、`value_score`、`reproducibility_bonus`、`confidence`、`primary_task_tag`、`primary_method_tag` 等固定键
 - 总分采用三段式：学术质量（0-7）+ 选题价值（0-2）+ 开源与复现加成（-1~+1）
@@ -161,7 +143,7 @@ API 调用特性：
 
 - `WECHAT_APP_ID` 和 `WECHAT_APP_SECRET` 从 `os.environ` 读取
 - `WECHAT_THUMB_MEDIA_ID`（可选）：封面图永久素材 ID，未设置时使用内置默认素材
-- 图片上传：下载 arXiv 图片 → 上传到微信 CDN → 替换为微信 URL。缓存保存在系统临时目录下的 `wechat-image-cache.json`
+- 图片上传：下载论文图片 → 上传到微信 CDN → 替换为微信 URL。缓存保存在系统临时目录下的 `wechat-image-cache.json`
 - 该脚本会访问真实微信接口；除非用户明确要求生成或上传公众号草稿，否则不要执行
 - **注意**：所有发布脚本统一从环境变量读取凭证，禁止硬编码
 
@@ -213,7 +195,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 # PD_ANALYSIS_MAX_RETRIES=2       # 深度分析重试次数
 # PD_REANALYZE_CONCURRENCY=1      # 重分析并发度
 # PD_FILTER_BATCH_SIZE=5          # LLM 筛选每批篇数
-# PD_ARXIV_MAX_RESULTS=100        # arXiv 每类抓取数量
+# PD_ARXIV_MAX_RESULTS=100        # arXiv 每类抓取数量（main 分支）
 
 # 代理（可选，但建议为 MiMo Token Plan 关闭或绕过代理）
 # https_proxy=http://127.0.0.1:7897
@@ -233,61 +215,11 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 
 ---
 
-## 5. 常用命令（当前可用）
+## 5. 常用命令（ICASSP 2026）
 
 ```bash
 cd ~/.hermes/skills/openclaw-imports/audio-paper-digest
 
-# 全流程（抓取 + 筛选 + 深度分析）
-npm run fetch
-# 或 ./run-full-fetch.sh
-
-# 仅深度分析续跑（跳过已有 analysis）
-npm run deep
-
-# 全量重分析（默认读取 data/current/deep-analysis-result.json）
-npm run reanalyze
-
-# 指定并发度重分析
-node scripts/reanalyze.js --concurrency 3 data/current/deep-analysis-result.json
-
-# 运行单元测试
-npm test
-
-# 快速抓取测试（仅抓+筛选，不分析，输出 data/quick-test-result.json）
-node scripts/quick-test.js
-
-# 批量分析未分析论文（基于 deep-analysis-result.json）
-npm run batch
-
-# 单独分析一篇论文（命令行参数）
-node scripts/analyze-single-paper.js 2604.16044
-
-# 补录历史 paper ID（不做深度分析）
-npm run backfill
-
-# 发布博客（建议显式指定日期）
-npm run publish -- --date YYYY-MM-DD
-
-# 只生成 markdown，不推送
-npm run publish -- --skip-push --date YYYY-MM-DD
-
-# 使用自定义数据文件发布
-npm run publish -- --date YYYY-MM-DD data/current/deep-analysis-result.json
-
-# 生成微信公众号草稿（默认读 data/current/deep-analysis-result.json）
-npm run wechat
-
-# 生成小红书文案（默认 TOP 5 精选版）
-npm run xiaohongshu
-npm run xiaohongshu -- --top 7     # 指定 TOP N
-npm run xiaohongshu -- --all       # 完整汇总版
-npm run xiaohongshu -- --date 2026-04-22
-```
-
-### ICASSP 2026 专用命令
-
-```bash
 # 完整流程：筛选 + 深度分析（增量续传）
 node scripts/icassp-batch-analyze.js
 
@@ -323,36 +255,34 @@ node scripts/migrate-icassp-images.js
 
 # 发布 ICASSP 博客（含任务分类汇总页）
 python3 scripts/publish-to-blog.py --date 2026-04-29 data/current/icassp_2026_deep_analyzers.json
+
+# 只生成 Markdown，不推送
+python3 scripts/publish-to-blog.py --skip-push --date 2026-04-29 data/current/icassp_2026_deep_analyzers.json
+
+# 运行单元测试
+npm test
 ```
-
-**小红书发布经验：**
-
-- 小红书单帖正文限制约 1000 字，TOP 5 模式默认约 600-800 字符，适合单帖直接发布
-- 脚本会自动清理 Markdown 格式（`**加粗**`、`` 代码 ``）和学术化前缀（"这篇论文旨在"、"本文针对"等），避免平台渲染异常
-- 文案自动附带 emoji 热度标识：🔥≥8 分、✅≥6 分、📝<6 分（与博客、微信统一）
-- 末尾固定附博客链接和话题标签，无需手动补充
-- `--all` 模式输出更长，适合分篇发或自选精华发布
 
 ---
 
-## 6. 发布行为与日期安全
+## 6. 发布行为与日期安全（ICASSP）
 
 发布脚本：`scripts/publish-to-blog.py`
 
-### 核心原则：博客日期 = 爬取分析日期，≠ arXiv 上传日期
+### 核心原则
 
-- `published` 字段是论文在 arXiv 上的原始发布日期，可能早于今天
-- **博客的 `YYYY-MM-DD` 日期代表「今天爬取并分析」的批次**，不是论文原始发布日期
-- `deep-analysis-result.json` 已经是「今天抓取 → 和 `papers.json` 去重 → LLM 筛选」后的结果，其中所有论文都应发布在 today's blog 下
+- ICASSP 博客使用固定 slug `icassp2026-summary`，分类为 `ICASSP 2026`
+- 日期参数 `--date` 用于图片目录组织和博客文件命名，不代表论文原始发布日期
+- 全部 898 篇论文都会发布，不做任何过滤
 
 当前行为：
 
-- 默认读 `data/current/deep-analysis-result.json`
+- 读取 `data/current/icassp_2026_deep_analyzers.json`
 - 在 `~/code/github_repos/audio-paper-digest-blog/content/posts` 生成：
-  - 汇总页：`YYYY-MM-DD.md`
+  - 汇总页：`icassp2026-summary.md`
+  - 任务汇总页：`icassp2026-task-XXX.md`
   - 单篇页：`YYYY-MM-DD-<slug>.md`
 - 默认会执行 `git add -A`、`git commit`、`git push origin main`
-- **发布 `deep-analysis-result.json` 中的全部论文**，不做任何过滤（无论论文的 `published` 日期是今天还是几天前，只要是今天抓取筛选后的结果，全部发布）
 
 Agent 执行约束：
 
@@ -360,57 +290,19 @@ Agent 执行约束：
 - 只有用户明确要求“正式发布 / 推送博客”时，才允许去掉 `--skip-push`
 - 若只是检查格式、验证新字段或预览产物，禁止触发真实 `git push`
 
-发布前保障：
-
-- `full-fetch.js` 每天运行时会自动归档移走昨天的 `deep-analysis-result.json`、`filtered-papers.json` 和 `analyzed.json`，确保 `data/current/` 下只有当天新抓取的论文
-- 若意外混入非当日论文，它们也会被发布在今天的博客下，所以必须确保每天运行前 `data/current/` 已清空
-
-### 重跑/修复当天的正确姿势
-
-若当天结果需要清空重跑：
-
-1. 删除 `data/current/filtered-papers.json`、`data/current/deep-analysis-result.json`
-2. **恢复 `papers.json` 到昨天状态**（推荐，比个删 ID 更可靠）：
-   ```bash
-   # 用昨天备份替换去重库（backupPapersJson 生成，格式为 papers-YYYY-MM-DD.json）
-   cp data/archive/papers-2026-04-21.json data/current/papers.json
-   ```
-3. 删除博客仓库中当天的所有 `content/posts/YYYY-MM-DD-*.md` 文件
-4. 重新运行 `npm run fetch`
-
-**特殊场景——筛选阶段 API 全面失败（如 34→0 篇）：**
-- 即使筛选为 0 篇，`papers.json` 也已被污染（新增 ID 已写入），必须按步骤 1-2 清理后重跑。
-- 若修复后立即重跑，可用 `npm run batch` 续跑深度分析（无需重新抓取）。
-
-**关键教训——恢复 `papers.json` 前必须检查 `lastUpdated`：**
-
-第一次运行中断后，不要盲目恢复任何备份！必须先确认 `papers.json` 的状态：
-
-```bash
-# 检查 papers.json 最后更新时间
-ls -la data/current/papers.json
-# 或读取 lastUpdated 字段
-cat data/current/papers.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('lastUpdated'))"
-```
-
-判断规则：
-| `papers.json` 的 `lastUpdated` | 正确操作 |
-|-------------------------------|---------|
-| **今天**（如 `2026-04-23T03:09:03`）| **不要恢复！** 它已经是最新状态，直接删除 `filtered-papers.json` 后重新运行即可 |
-| **昨天或更早** | 可以恢复备份：`cp data/archive/papers-YYYY-MM-DD.json data/current/papers.json` |
-
-推荐检查命令（可选）：
+### 发布前检查
 
 ```bash
 python3 - <<'PY'
 import json
-from collections import Counter
-with open('data/current/deep-analysis-result.json') as f:
+with open('data/current/icassp_2026_deep_analyzers.json') as f:
     d = json.load(f)
 papers = d.get('papers', [])
-dates = [p.get('published', '')[:10] for p in papers if p.get('published')]
-print('总论文:', len(papers))
-print('日期分布:', Counter(dates))
+analyzed = sum(1 for p in papers if p.get('analysis'))
+scored = sum(1 for p in papers if p.get('parsed', {}).get('score'))
+print(f'总论文: {len(papers)}')
+print(f'已分析: {analyzed}')
+print(f'有评分: {scored}')
 PY
 ```
 
@@ -421,12 +313,9 @@ PY
 - Node 脚本统一通过 `scripts/log-setup.js` 输出日志到 `logs/<script>-YYYYMMDD-HHMMSS.log`
 - Python 脚本统一通过 `scripts/log_setup.py` 输出日志到 `logs/<script>-YYYYMMDD-HHMMSS.log`
 - **自动清理**：每次启动时清理旧日志，保留最近 50 个
-- `backfill_papers.py` 额外写独立日志到 `logs/backfill.log`
 - 主要 Node 脚本已处理后台 stdout 缓冲（`setBlocking`），便于实时查看进度
-- `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` 采用重试与增量保存，降低中断丢数风险
-- `reanalyze.js` 每 5 篇保存一次中间结果（并发模式下自动调整保存间隔）
-- `full-fetch.js` 自动备份 bak 文件到 `data/archive/`，保留最近 10 个
-- `full-fetch.js` 自动备份 `papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天
+- `icassp-batch-analyze.js` 采用重试与增量保存，降低中断丢数风险
+- 每篇分析完立即保存，已有 `analysis` 的论文不会被覆盖
 
 ---
 
@@ -435,7 +324,7 @@ PY
 1. **先查再改**：先读取相关脚本确认当前行为，再更新文档或执行命令。
 2. **发布需确认日期**：未明确日期时，先问用户；默认不要依赖"今天"。
 3. **禁止危险操作**：未获明确授权，禁止 `git reset --hard`、`git push -f`、批量删除历史文章。
-4. **不自动扩展流程**：运行 `full-fetch.js` 后，不要擅自追加博客/微信发布，除非用户明确要求。
+4. **不自动扩展流程**：运行 `icassp-batch-analyze.js` 后，不要擅自追加博客发布，除非用户明确要求。
 5. **改动留痕**：流程、参数、路径变化后，同步更新 `SKILL.md` 和 `README.md`。
 6. **禁止硬编码密钥**：不要在任何脚本或文档中写入真实 API key；所有凭证（LLM、微信公众号、飞书）统一从环境变量读取，LLM 配置放在 `~/.hermes/.env`（由脚本自动 `source`），微信/飞书凭据也写入 `~/.hermes/.env`。
 7. **修改脚本时防止安全机制破坏**：本环境会静默替换 `API_KEY` 等敏感字符为 `***`。修改含有这类字符的脚本时，修改后必须重新读取文件验证关键行未被破坏。同时定期检查 `data/`、`logs/` 目录是否残留含密钥的备份文件或日志快照，发现立即清理。
@@ -444,12 +333,12 @@ PY
 10. **新增分析脚本复用 analysis-engine.js**：新增论文分析相关脚本时，优先复用 `analysis-engine.js` 的 `analyzeBatch()` / `analyzePaperWithRetry()`，避免重复实现重试、解析、保存逻辑。
 11. **博客验证默认不推送**：未获用户明确授权时，运行 `publish-to-blog.py` 必须带 `--skip-push`。
 12. **输出契约改动要同步 parser**：若修改 `prompts/deep-analysis.md` 中的 `### 机器摘要` 键名、章节顺序或标签输出格式，必须同步检查 `scripts/utils.js` 与 `scripts/utils.py` 的解析逻辑。
-13. **变更后必须做产物级验证**：至少抽样检查一份 `data/current/deep-analysis-result.json`，确认存在 `rank_bucket`、`primary_task_tag`、`primary_method_tag` 等字段，再运行博客/社媒脚本验证最终产物。
-14. **变更后验证 prompt 加载**：修改 `prompts/` 目录下的 markdown 文件后，运行一次快速测试（`node scripts/quick-test.js` 或单篇分析）确认 `loadPrompt()` 能正确读取并替换占位符，无 `{变量名}` 残留。
+13. **变更后必须做产物级验证**：至少抽样检查一份 `data/current/icassp_2026_deep_analyzers.json`，确认存在 `rank_bucket`、`primary_task_tag`、`primary_method_tag` 等字段，再运行博客脚本验证最终产物。
+14. **变更后验证 prompt 加载**：修改 `prompts/` 目录下的 markdown 文件后，运行一次单篇分析测试确认 `loadPrompt()` 能正确读取并替换占位符，无 `{变量名}` 残留。
 15. **变更后运行单元测试**：修改 `scripts/utils.js`、`scripts/config.js` 或分析引擎核心逻辑后，必须运行 `npm test` 确保测试通过。
 16. **MiMo API 请求必须禁用代理连接复用**：`fetch-papers.js` 和 `deep-analyzer.js` 中调用 LLM API 时，`options.agent` 必须为 `false`（不是 `undefined`）。任何重构或修改 HTTP 请求逻辑时，禁止将 `agent: false` 改回 `agent: proxyAgent` 或 `agent: undefined`，否则 MiMo Token Plan 会在有系统代理的环境中返回 403。
 17. **新增 LLM 端点必须接入 API 协议自动路由**：任何新增脚本调用 LLM 时，统一使用 `scripts/utils.js` 中的 `detectApiType()`、`buildApiUrl()`、`buildHeaders()`、`buildRequestBody()`、`parseResponseText()`，禁止硬编码特定协议的 URL/Header/Body。
-18. **修改 API 协议路由逻辑时同步全链路**：修改 `detectApiType()` 的判定规则或 `buildApiUrl()`/`buildHeaders()` 等函数时，必须同步检查 `fetch-papers.js`、`deep-analyzer.js` 以及所有使用 `analysis-engine.js` 的脚本（`full-fetch.js`、`reanalyze.js`、`batch-analyze.js`、`deep-analysis-only.js`、`analyze-single-paper.js`），确保全链路行为一致。
+18. **修改 API 协议路由逻辑时同步全链路**：修改 `detectApiType()` 的判定规则或 `buildApiUrl()`/`buildHeaders()` 等函数时，必须同步检查 `deep-analyzer.js`、`icassp-batch-analyze.js` 以及所有使用 `analysis-engine.js` 的脚本，确保全链路行为一致。
 19. **禁止将敏感文件提交到版本控制**：`data/`、`logs/`、`*.env`、`*.backup*`、缓存文件、含密钥的日志归档等严禁进入 git；提交前必须确认 `.gitignore` 已正确配置，且仓库中不存在历史遗留的敏感文件。
 20. **ICASSP 图片处理优先使用本地目录**：博客发布时，优先从 `data/current/icassp-images/{paperId}/` 复制图片；若不存在才回退到从 `deep_analyzer_input_output/{paperId}_input.json` 提取。禁止直接引用 `icassp-img://` 标识符到博客正文。
 21. **ICASSP 任务页文件名必须 ASCII-safe**：Hugo 无法处理中文文件名，任务汇总页必须使用 ASCII-safe 文件名（如 `icassp2026-task-001.md`），通过 `url:` frontmatter 设置中文 URL 路径。
@@ -493,7 +382,7 @@ PY
    - MiMo Token Plan 在有系统代理时可能被屏蔽
    - 尝试用 `curl --noproxy "xiaomimimo.com"` 绕过代理测试
 
-6. **查看日志**：`logs/full-fetch-*.log`、`logs/deep-analyzer-*.log`
+6. **查看日志**：`logs/icassp-batch-analyze-*.log`、`logs/deep-analyzer-*.log`
 
 ### 9.2 MiMo API 返回 403 Illegal access / timeout / socket hang up
 
@@ -516,7 +405,7 @@ const options = {
 
 ### 9.3 深度分析慢或频繁失败
 
-- 查看日志：`logs/deep-analyzer-*.log`、`logs/full-fetch-*.log`
+- 查看日志：`logs/icassp-batch-analyze-*.log`、`logs/deep-analyzer-*.log`
 - 检查 key/endpoint/model 三元组是否匹配（见 9.1 节）
 - 若超时，脚本会自动降级为纯文本重试；若仍失败，检查代理或减小并发
 - 可用 `node scripts/deep-analysis-only.js` 安全续跑
@@ -532,7 +421,7 @@ ls -lt content/posts | head -20
 
 ### 9.5 路径混淆
 
-优先使用 `data/current/deep-analysis-result.json`，仅在兼容场景下读取旧路径。
+优先使用 `data/current/icassp_2026_deep_analyzers.json`，仅在兼容场景下读取旧路径。
 
 ### 9.6 重分析启动报 key 未设置
 
@@ -543,14 +432,9 @@ ls -lt content/posts | head -20
 
 - 检查 `WECHAT_APP_ID` / `WECHAT_APP_SECRET` 环境变量是否已设置（在 `~/.hermes/.env`）
 - 检查 `APP_SECRET` 是否过期
-- 检查图片是否过大或被 arXiv 限制
+- 检查图片是否过大
 - 微信图片上传有频率限制，大量图片可能需要分批执行
 
-### 9.8 HuggingFace 抓取为空
-
-- 检查网络连接（`curl https://huggingface.co/api/daily_papers?limit=10`）
-- 检查是否被限流或需要代理
-- `fetch-huggingface-papers.js` 使用 `curl` 命令，确保系统 `curl` 可用
 
 ### 9.9 验证 API 路由变更
 
@@ -604,20 +488,17 @@ for (const [name, ep, model] of cases) {
 **根因**：部分论文图片触发 LLM API 安全机制（如 PerformSinger 的某些图片）。
 **修复**：使用 `retry-text-only.js` 进行纯文本分析（跳过图片），通常可绕过安全过滤。
 
-### 9.14 后台运行 full-fetch 被 SIGTERM 中断 (exit code 143)
+### 9.14 后台运行 icassp-batch-analyze 被 SIGTERM 中断 (exit code 143)
 
 **根因**：npm 脚本在后台模式下尝试访问 TTY 交互，导致 bash 报错并终止进程。
 
 **修复**：后台运行时使用直接 Node 命令，绕过 npm：
 ```bash
 # ❌ 后台模式避免使用
-npm run fetch
-
 # ✅ 后台运行推荐方式
-node scripts/full-fetch.js
+node scripts/icassp-batch-analyze.js
 ```
 
-如果已在筛选阶段中断，需要按第 6 节"重跑/修复当天的正确姿势"处理：
-1. 检查 `papers.json` 的 `lastUpdated` 是否为今天（见 6 节判断矩阵）
-2. 如果是今天，不要恢复 papers.json，直接删除 `filtered-papers.json` 后重跑
-3. 如果是昨天或更早，恢复 `papers.json` 备份后重跑
+如果已在筛选或分析阶段中断：
+1. 检查 `icassp_2026_deep_analyzers.json` 中已有分析结果的论文数量
+2. 设置 `ICASSP_OFFSET` 从断点处续跑：`ICASSP_OFFSET=N node scripts/icassp-batch-analyze.js`

@@ -1,6 +1,8 @@
-# Paper Digest - 语音/音频论文速递全流程自动化
+# Paper Digest - ICASSP 2026 论文深度分析
 
-本项目用于自动生成"语音/音频论文速递"，覆盖从 arXiv 和 HuggingFace Papers 抓取、LLM 筛选、多模态深度分析，到发布 Hugo 博客、微信公众号草稿和小红书文案的完整链路。
+本分支（`icassp-2026-analysis`）专门用于 ICASSP 2026 会议论文的本地 PDF 批量分析，覆盖从 PDF 文本与图片提取、LLM 筛选、多模态深度分析，到 Hugo 博客发布的完整链路。
+
+> 如需查看 arXiv / HuggingFace 每日论文速递流程，请切换至 `main` 分支。
 
 ---
 
@@ -22,15 +24,15 @@
 ```
 audio-paper-digest/
 ├── scripts/                    # 全部脚本
-│   ├── full-fetch.js           # 主入口：归档 → 抓取 → 筛选 → 深度分析 → 保存
-│   ├── fetch-papers.js         # arXiv 抓取 + LLM 筛选模块
-│   ├── fetch-huggingface-papers.js  # HuggingFace Papers 双源抓取
+│   ├── full-fetch.js           # 主入口：归档 → 抓取 → 筛选 → 深度分析 → 保存（main 分支）
+│   ├── fetch-papers.js         # arXiv 抓取 + LLM 筛选模块（main 分支）
+│   ├── fetch-huggingface-papers.js  # HuggingFace Papers 双源抓取（main 分支）
 │   ├── deep-analyzer.js        # 多模态深度分析器（全文 + 图片）
 │   ├── deep-analysis-only.js   # 仅深度分析续跑（跳过已有 analysis）
 │   ├── reanalyze.js            # 全量重分析（支持并发配置）
 │   ├── batch-analyze.js        # 批量分析未分析论文（逐篇保存）
 │   ├── analyze-single-paper.js # 单独分析一篇并合并（命令行参数）
-│   ├── quick-test.js           # 快速抓取测试（抓+筛选，不分析）
+│   ├── quick-test.js           # 快速抓取测试（抓+筛选，不分析，main 分支）
 │   ├── publish-to-blog.py      # 发布到 Hugo 博客（GitHub Pages）
 │   ├── publish-wechat-full.py  # 生成微信公众号图文草稿
 │   ├── publish-xiaohongshu.py  # 生成小红书文案
@@ -79,176 +81,17 @@ audio-paper-digest/
 │   ├── deep-analysis.md        # 深度分析阶段 LLM prompt
 │   └── index.md                # prompt 文档索引
 ├── package.json                # npm scripts 定义
-├── run-full-fetch.sh           # 全流程启动壳脚本（推荐入口）
+├── run-full-fetch.sh           # 全流程启动壳脚本（main 分支推荐入口）
 └── README.md / SKILL.md
 ```
 
 ---
 
-## 3. 主流程详解
-
-主入口：`./run-full-fetch.sh`（或 `node scripts/full-fetch.js` / `npm run fetch`）
-
-### 3.1 自动归档
-
-运行开始时，脚本检查 `data/current/` 下的以下文件：
-- `deep-analysis-result.json`
-- `filtered-papers.json`
-- `analyzed.json`
-
-**注意：`papers.json` 是去重数据库，不参与归档移走，持续累积。**
-
-归档规则（逐文件判断）：
-1. 读取文件中的时间戳字段（支持 `timestamp` / `lastUpdated` / `deepAnalysisCompletedAt` / `previousTimestamp`）
-2. 若日期 **早于今天（北京时间）**，且 `data/archive/<日期>/` 下尚未存在该文件，则**复制**到归档目录
-3. 复制成功后，**删除**原文件，确保每天从零开始
-4. 若归档目录已存在同名文件，跳过（不覆盖）
-
-同时，若 `deep-analysis-result.json` 存在且已有数据，会在归档前自动备份到 `data/archive/deep-analysis-result-<时间戳>.bak.json`，并自动清理旧备份（保留最近 10 个）。
-
-### 3.2 arXiv 抓取
-
-从 7 个分类各抓取最新论文：
-
-| 分类 ID | 名称 | 优先级 |
-|---------|------|--------|
-| `eess.AS` | 音频语音 | core |
-| `cs.SD` | 声音 | core |
-| `eess.SP` | 信号处理 | core |
-| `cs.CL` | 计算语言学 | supplement |
-| `cs.LG` | 机器学习 | supplement |
-| `cs.AI` | 人工智能 | supplement |
-| `cs.MM` | 多媒体 | supplement |
-
-抓取参数：
-- API：`export.arxiv.org/api/query`，按 `submittedDate` 降序，每类 `max_results=100`
-- User-Agent: `Mozilla/5.0 (compatible; PaperDigest/1.0)`
-- 每分类重试最多 **6 次**，指数退避：第一次重试 4 秒，之后翻倍（`2^attempt * 2000ms`，attempt 从 1 开始）
-- 遇到 HTTP 429 限流额外等待：第一次 10 秒，之后翻倍（`2^attempt * 5000ms`，attempt 从 1 开始，上限 60 秒）
-- **提前停止**：若连续遇到 20 篇已有 ID（存在于 `papers.json`），则停止该分类抓取
-- 类别间延迟 **2 秒**
-
-去重逻辑：`deduplicatePapers()` 按 `arxivId` 去重，core 类别（eess.AS / cs.SD / eess.SP）优先于 supplement 类别保留。
-
-### 3.3 HuggingFace Papers 抓取
-
-通过 `fetch-huggingface-papers.js` 双源抓取：
-
-1. **`/api/daily_papers`**：精选每日论文，含 `ai_summary`、`githubRepo`、`upvotes`、`ai_keywords`、`projectPage`、`githubStars`、`discussionId` 等丰富字段。分页获取（`limit=100`，最多 20 页），直到覆盖近 7 天。
-2. **`/api/papers`**：最新论文补充，覆盖最近 1-2 天，用于补充 daily_papers 未收录的新论文。
-
-过滤：
-- 只保留近 7 天的论文（`published >= 今天-7天`）
-- 排除已有 ID
-- 按 `upvotes` 降序排列
-
-技术实现：使用 `curl` 命令获取数据（避免 Node fetch 在代理环境下的兼容问题），返回数据标准化为与 arXiv 一致的字段结构。
-
-### 3.4 合并去重
-
-`mergeAndDeduplicate(arxivPapers, hfPapers)` 的规则：
-
-- **arXiv 论文优先级更高**：先全部放入 `merged` Map，保留其 `categories`、`abstract` 等元数据
-- **HF 论文补充**：若 HF 论文的 `arxivId` 已存在于 arXiv 论文中，合并全部 7 个 HF 特有字段；若不存在，作为独立论文加入
-- **来源标记**：`sources: ['arxiv']`、`['huggingface']` 或 `['arxiv', 'huggingface']`
-- **摘要统一**：HF 论文同时输出 `summary` 和 `abstract`（内容相同），确保下游无需区分字段名
-
-HF 特有字段（共 7 个）：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `hf_upvotes` | number | HF 社区点赞数 |
-| `hf_ai_summary` | string | HF AI 生成的摘要 |
-| `hf_ai_keywords` | string[] | HF AI 提取的关键词 |
-| `hf_github_repo` | string | 关联 GitHub 仓库 |
-| `hf_project_page` | string | 项目主页 |
-| `hf_github_stars` | number | GitHub Stars 数 |
-| `hf_discussion_id` | string | HF Discussion ID |
-
-### 3.5 LLM 筛选
-
-使用 `~/.hermes/.env` 中的 `PAPER_ANALYZER_*` 配置逐篇判断是否为语音/音频相关。
-
-**API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动切换 OpenAI / Anthropic 协议
-- **MiMo/Kimi Token Plan / Coding Plan**（端点含 `token-plan` 或 `coding`，模型含 `mimo`/`kimi`）→ 自动切换为 **Anthropic 协议**，伪装成 Claude Code 调用
-  - **MiMo**: `https://token-plan-cn.xiaomimimo.com/v1` → `/anthropic/v1/messages`
-  - **Kimi**: `https://api.kimi.com/coding/v1` → `/v1/messages`（无需 `/anthropic` 中间路径）
-  - Headers: `x-api-key` + `anthropic-version: 2023-06-01` + `User-Agent: claude-cli/<version> (external, cli)`（版本号动态获取自本地 `claude --version`，失败回退到 `2.1.108`）
-  - system message 自动提取为请求体顶级字段
-- **其他情况**（包括 MiMo 按量付费 `api.xiaomimimo.com` 、通用 OpenAI 端点）→ 使用标准 **OpenAI 协议**
-  - URL: `/v1/chat/completions`
-  - Headers: `Authorization: Bearer {key}`
-
-筛选 prompt 从 `prompts/filter.md` 读取，运行时替换 `{title}`、`{abstract}` 占位符。判定标准如下：
-- 语音合成/识别/增强/分离/克隆/转换 → **是**
-- 音频生成/理解/音乐/事件检测 → **是**
-- 说话人相关任务 → **是**
-- 语音/音频相关模型、表示学习、预训练 → **是**
-- 多模态模型只要明确涉及语音/音频（输入、输出、训练目标、评测任务或核心能力之一）→ **是**
-- 其他领域且没有实质性语音/音频方法或任务 → **否**
-- 冲突处理：若同时看起来满足”多模态涉及语音/音频”和”其他领域”，优先判定为 **是**
-
-运行参数：
-- `batchSize = 5`（批内并行调用 LLM）
-- `delayBetweenBatches = 2000`（批次间延迟 2 秒）
-- `useKeywordPreFilter = false`（当前主流程不用关键词预筛选）
-- 单篇超时 **60 秒**，重试 **3 次**
-- 每次重试独立创建 `AbortController` 和 `setTimeout`，避免重试时复用已 abort 的 controller
-
-结果保存到 `data/current/filtered-papers.json`。
-
-### 3.6 深度分析
-
-使用 `deep-analyzer.js` 对每篇筛选后的论文进行全文 + 图片的深度阅读理解。
-
-深度分析 prompt 从 `prompts/deep-analysis.md` 读取，运行时替换 `{hasFullText}`、`{title}`、`{authors}`、`{categories}`、`{arxivId}`、`{textForAnalysis}` 占位符。
-
-**分析内容（由 LLM 生成，中文输出）**：
-
-| 章节 | 要求 |
-|------|------|
-| 评分 | 1-10 分，保留一位小数；总分 = 学术质量(0-7) + 选题价值(0-2) + 开源与复现加成(-1~+1)，并输出 `rank_bucket`、`quality_score`、`value_score`、`confidence` 等机器摘要字段 |
-| 标签 | 3-5 个，必须含至少 1 个【任务】和 1 个【方法/模型】标签；除最终标签串外，还要求输出“主任务标签”“主方法标签”“补充标签” |
-| 作者与机构 | 第一作者、通讯作者、作者列表及所属机构；缺失信息必须写“未说明”，禁止猜测 |
-| 毒舌点评 | 2-3 句话犀利点评亮点和槽点 |
-| 核心摘要 | 5-8 句话，覆盖问题、方法、效果、局限性 |
-| 模型架构 | 输入输出流程、组件结构、连接方式、设计理由 |
-| 核心创新点 | 3-5 个，每个含定义、之前方法的不足、解决机制、实际效果 |
-| 细节详述 | 训练数据、损失函数、训练策略、超参数、硬件、推理细节 |
-| 实验结果 | 必须优先给出 benchmark、指标和具体数字；拿不到数字时明确写“论文未给出具体数值” |
-| 评分理由 | 分别解释学术质量、选题价值、开源与复现加成 |
-| 开源详情 | 只允许基于论文文本或当前输入链接总结，缺失时写”未提及”，禁止编造仓库/热度信息 |
-
-> **图片与表格放置规则**：图片和表格不再集中在一个单独 section 中，而是直接嵌入到对应位置——架构图贴在**模型架构**部分，实验结果图/表贴在**实验结果**部分。严禁编造图片 URL，只能使用 prompt 中提供的 arXiv 图片 URL 列表中的真实 URL。
-
-**技术特性**：
-- **API 协议自动路由**：与筛选阶段共用同一套 `detectApiType()` 逻辑，根据 `PAPER_ANALYZER_ENDPOINT` 和 `PAPER_ANALYZER_MODEL` 自动切换 OpenAI / Anthropic 协议
-- 获取 arXiv HTML 全文（最多 100K 字符），依次尝试 `v1`、`v2`、无后缀版本；使用 **cheerio** 结构化解析 HTML，移除 script/style/nav/header/footer 等噪音元素
-- 提取图片 URL（png/jpg/jpeg），过滤 logo/favicon
-- **图片分析**：下载论文全部图片（无数量限制）；单张 base64 上限 500K 字符；**图片下载并行化（并发 3）**。图片 URL 列表会写入 prompt，即使下载失败 LLM 也能获取真实 URL 用于正文引用。若全部下载失败，自动降级为纯文本重试
-- **并发度：3 篇并行**（可通过 `PD_ANALYSIS_CONCURRENCY` 环境变量调整）
-- 每篇最多重试 **2 次**（外层 `analysis-engine.js`），每次外层重试内部 API 调用还有 **3 次** 重试（`deep-analyzer.js` 内层，指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5000ms`），外层重试间隔 3 秒（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整外层）
-- API 整体超时 **20 分钟**（AbortController）
-- `max_tokens=15000`，`temperature=0.7`
-- 支持代理自动检测（环境变量 → macOS `scutil --proxy`）
-- 支持纯 Node 内置模块的 HTTP CONNECT 代理（无需外部依赖）
-- 所有分析配置集中管理于 `scripts/config.js`，支持环境变量覆写（`PD_ANALYSIS_CONCURRENCY`、`PD_ANALYSIS_MAX_RETRIES`、`PD_FILTER_BATCH_SIZE`、`PD_ARXIV_MAX_RESULTS`）
-
-### 3.7 增量保存与收尾
-
-- **每批分析完成后立即增量保存**到 `data/current/deep-analysis-result.json`，避免中断丢失全部结果；增量合并时**自动保护已有成功分析**（失败结果不会覆盖已有 `analysis`）
-- 全部论文分析完毕后，再次读取已有结果，按 `arxivId`/`paper_id` 去重合并，保留历史数据
-- 自动备份旧文件到 `data/archive/deep-analysis-result-<时间戳>.bak.json`，并清理旧备份（保留最近 10 个）
-- **`papers.json` 自动备份**：每天运行前自动备份 `data/current/papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天
-- 更新 `data/current/papers.json` 去重库
-
----
-
-## 3.8 ICASSP 2026 本地 PDF 分析专题流程
+## 3. ICASSP 2026 本地 PDF 分析流程
 
 本分支（`icassp-2026-analysis`）支持对会议本地 PDF 论文进行批量分析，与日常 arXiv 流程独立。该流程已在 ICASSP 2026 全量 3693 篇论文上验证，最终筛选出 898 篇语音/音频相关论文并完成深度分析。
 
-### 3.8.1 整体流程
+### 3.1 整体流程
 
 ```
 本地 PDF (3693篇)
@@ -273,7 +116,7 @@ PDF 文本+图片提取 (pdf-extractor.py / PyMuPDF)
 博客发布 (Hugo，含任务分类汇总页 + 单篇页)
 ```
 
-### 3.8.2 PDF 提取 (`scripts/pdf-extractor.py`)
+### 3.2 PDF 提取 (`scripts/pdf-extractor.py`)
 
 使用 **PyMuPDF (fitz)** 从本地 PDF 提取文本和图片：
 
@@ -292,7 +135,7 @@ PDF 文本+图片提取 (pdf-extractor.py / PyMuPDF)
 
 输出格式：JSON 到 stdout，包含 `text`、`images`（含 base64）、`pageCount`、`warning`。
 
-### 3.8.3 筛选阶段 (`icassp-batch-analyze.js` 前半段)
+### 3.3 筛选阶段 (`icassp-batch-analyze.js` 前半段)
 
 **与日常 arXiv 流程的区别**：
 - 不使用 arXiv 摘要，而是从 PDF 提取前 3000 字符作为 `_snippet`
@@ -308,7 +151,7 @@ PDF 文本+图片提取 (pdf-extractor.py / PyMuPDF)
 - `icassp_2026_deep_analyzers-filtered.json`：保留的论文列表
 - `icassp_2026_deep_analyzers-excluded.json`：排除的论文列表
 
-### 3.8.4 深度分析阶段 (`icassp-batch-analyze.js` 后半段)
+### 3.4 深度分析阶段 (`icassp-batch-analyze.js` 后半段)
 
 复用 `analysis-engine.js` 的 `analyzeBatch()`，但对 ICASSP 论文的特殊处理：
 
@@ -330,14 +173,14 @@ PDF 文本+图片提取 (pdf-extractor.py / PyMuPDF)
 
 **增量保存**：每分析完一篇立即合并保存到 `icassp_2026_deep_analyzers.json`，已有 `analysis` 的论文不会被覆盖。
 
-### 3.8.5 图片迁移与处理
+### 3.5 图片迁移与处理
 
 **`scripts/migrate-icassp-images.js`**：
 - 从 `deep_analyzer_input_output/*_input.json` 中提取 base64 图片
 - 解码保存到 `data/current/icassp-images/{paperId}/{index}.png|jpg`
 - 用于博客发布时复制图片到 Hugo static 目录
 
-### 3.8.6 任务分类 (`scripts/icassp-categorize.js`)
+### 3.6 任务分类 (`scripts/icassp-categorize.js`)
 
 读取 `icassp_2026_deep_analyzers.json`，按以下维度生成分类 Markdown 报告：
 
@@ -350,7 +193,7 @@ PDF 文本+图片提取 (pdf-extractor.py / PyMuPDF)
 
 输出：`data/current/output/icassp-2026-report.md`
 
-### 3.8.7 博客发布（ICASSP 特殊逻辑）
+### 3.7 博客发布（ICASSP 特殊逻辑）
 
 `publish-to-blog.py` 对 ICASSP 论文有专门的发布逻辑：
 
@@ -378,7 +221,7 @@ PDF 文本+图片提取 (pdf-extractor.py / PyMuPDF)
 **YAML 安全**：
 - 标签值含 `#` 时必须用引号包裹（如 `tags: ["多音高估计 #音符跟踪"]`），否则 Hugo YAML 解析器会将 `#` 后内容视为注释
 
-### 3.8.8 重试与修复脚本
+### 3.8 重试与修复脚本
 
 | 脚本 | 用途 | 触发场景 |
 |------|------|----------|
@@ -389,7 +232,7 @@ PDF 文本+图片提取 (pdf-extractor.py / PyMuPDF)
 | `refilter-problematic.js` | 对问题论文重新筛选 | 筛选结果异常需重新判定 |
 | `verify-filter-io.js` | 验证 filter I/O 完整性 | 检查是否有论文缺少筛选日志 |
 
-### 3.8.9 ICASSP 环境变量
+### 3.9 ICASSP 环境变量
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
@@ -404,7 +247,7 @@ PDF 文本+图片提取 (pdf-extractor.py / PyMuPDF)
 | `ICASSP_FILTER_TIMEOUT` | `60000` | 筛选单篇超时（毫秒） |
 | `ICASSP_FILTER_RETRIES` | `3` | 筛选重试次数 |
 
-### 3.8.10 ICASSP 常用命令
+### 3.10 ICASSP 常用命令
 
 ```bash
 # 完整流程：筛选 + 深度分析（增量续传）
@@ -448,71 +291,49 @@ python3 scripts/publish-to-blog.py --date 2026-04-29 data/current/icassp_2026_de
 
 ## 4. 脚本分工（全部脚本详解）
 
-### 4.1 主链路脚本
+### 4.1 主链路脚本（本分支）
 
-#### `scripts/full-fetch.js`
+#### `scripts/icassp-batch-analyze.js`
 
-完整流程入口。执行第 3 节的所有步骤：自动归档 → arXiv 抓取 → HF 抓取 → 合并去重 → LLM 筛选 → 深度分析 → 增量保存 → 更新去重库。
+ICASSP 2026 批量分析主流程。
+- **Title → PDF 路径映射**：通过归一化标题匹配本地 PDF 文件名
+- **筛选阶段**：从 PDF 提取 snippet → 纯 LLM 单篇筛选（标题+摘要）→ I/O 日志到 `filter_input_output/`
+- **深度分析阶段**：复用 `analysis-engine.js`，全文+图片多模态分析 → I/O 日志到 `deep_analyzer_input_output/`
+- **增量保存**：每篇分析完立即保存，支持 `OFFSET`/`LIMIT` 断点续传
+- 环境变量：`ICASSP_PAPERS_DIR`、`ICASSP_JSON_FILE`、`ICASSP_RESULT_FILE`、`ICASSP_SKIP_FILTER`、`ICASSP_FILTER_ONLY`、`ICASSP_OFFSET`、`ICASSP_LIMIT`
 
-所有配置从 `scripts/config.js` 读取，支持环境变量覆写：
-- `ANALYSIS_CONCURRENCY = 3`（`PD_ANALYSIS_CONCURRENCY`）
-- `ANALYSIS_RETRY_MAX = 2`（`PD_ANALYSIS_MAX_RETRIES`）
-- `ANALYSIS_RETRY_DELAY_MS = 3000`
-- `FETCH_DELAY_MS = 2000`
+#### `scripts/retry-failed-analysis.js`
 
-#### `scripts/deep-analysis-only.js`
+重新分析无评分的论文。
+- 遍历 `icassp_2026_deep_analyzers.json`，找出 `parsed.score` 为空的论文
+- 调用 `analyzePaperDeep()` 重新分析
+- 处理 API 拒绝信息（含 `rejected` 字样时记录但不覆盖）
+- 每篇处理后立即保存进度
 
-仅运行深度分析（续跑模式）。
-- 读取 `data/current/deep-analysis-result.json`（兼容旧路径 `data/deep-analysis-result.json`，自动识别旧格式纯数组并转换）
-- 跳过已有 `analysis` 字段的论文
-- 对未分析论文逐篇调用 `deep-analyzer.js`
-- **仅成功结果写入保存**，失败结果不覆盖已有数据，断点续传安全
+#### `scripts/retry-text-only.js`
 
-#### `scripts/reanalyze.js`
+文本-only 重新分析（跳过图片）。
+- 针对被 API 安全过滤拒绝的论文
+- 不使用图片，仅传入前 15000 字符文本
+- 调用 `callModel()` 直接获取分析文本，绕过图片相关的安全拦截
 
-全量重分析。
-- 默认数据源：`data/current/deep-analysis-result.json`（支持命令行传自定义文件路径，兼容旧格式纯数组）
-- 对文件中**全部**论文重新调用 `deep-analyzer.js`
-- 默认串行执行（并发 1），支持通过 `--concurrency N` 或 `PD_REANALYZE_CONCURRENCY` 环境变量调整并发度
-- **每 5 篇保存一次中间结果**（并发模式下自动调整保存间隔），**仅成功结果覆盖旧数据**
-- 启动时检查 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT` 是否已设置，缺失则直接退出
+#### `scripts/retry-failed-filters.js`
 
-#### `scripts/quick-test.js`
+重试筛选失败的论文。
+- 读取 `filter_input_output/`，找出 statusCode ≠ 200 的记录
+- 降低并发（默认 3）并增加批次延迟（默认 2000ms）
+- 重新执行 LLM 筛选并更新 I/O 日志
+- 重新生成 `-filtered.json` 结果
 
-快速测试脚本。
-- 执行 arXiv 7 分类抓取 + 去重 + LLM 筛选（配置来自 `config.js`）
-- **不执行深度分析**
-- 输出到 `data/quick-test-result.json`（仅保存前 10 篇）
-- 用于验证抓取和筛选链路是否正常
-- 直接调用：`node scripts/quick-test.js`（`npm run test` 已改为运行单元测试）
+#### `scripts/migrate-icassp-images.js`
 
-#### `scripts/batch-analyze.js`
+从深度分析输入日志提取图片。
+- 遍历 `deep_analyzer_input_output/*_input.json`
+- 提取 message 中的 base64 图片数据
+- 解码保存到 `data/current/icassp-images/{paperId}/{index}.png|jpg`
+- 用于博客发布时的图片复制
 
-批量分析未分析论文（独立入口）。
-- 读取 `data/current/deep-analysis-result.json`
-- 对未分析论文逐篇分析，**仅成功结果写入保存，失败结果不覆盖已有数据**，便于下次重试
-- 适合在 `full-fetch.js` 中断后补跑剩余论文
-
-#### `scripts/analyze-single-paper.js`
-
-单独分析一篇论文并合并到结果中。
-
-**用法**：`node scripts/analyze-single-paper.js <arxiv_id>`
-
-- 从 `data/current/papers.json` 读取元数据
-- 调用 `deep-analyzer.js` 分析后追加到 `deep-analysis-result.json`
-- 若论文已在结果中存在则跳过
-- 兼容旧格式纯数组数据，自动转换为新对象格式保存
-
-### 4.2 抓取与分析支撑脚本
-
-#### `scripts/fetch-papers.js`
-
-arXiv 抓取与 LLM 筛选模块。
-- 导出 `fetchCategoryPapers`、`deduplicatePapers`、`filterPapersWithLLM`、`isSpeechAudioRelated`、`filterPapersByKeywords`、`loadPapers`、`savePapers`、`loadAnalyzed`、`saveAnalyzed`
-- 筛选阶段统一使用 `PAPER_ANALYZER_*` 环境变量，支持 HTTP CONNECT 代理
-- 关键词预筛选函数 `filterPapersByKeywords` 保留但当前主流程未启用
-- XML 解析为 regex 实现（arXiv API 格式稳定）
+### 4.2 分析支撑脚本
 
 #### `scripts/config.js`
 
@@ -523,31 +344,21 @@ arXiv 抓取与 LLM 筛选模块。
 | 分析并发度 | 3 | `PD_ANALYSIS_CONCURRENCY` |
 | 分析重试次数 | 2 | `PD_ANALYSIS_MAX_RETRIES` |
 | 筛选批次大小 | 5 | `PD_FILTER_BATCH_SIZE` |
-| arXiv 每类抓取数 | 100 | `PD_ARXIV_MAX_RESULTS` |
-| HF 抓取天数 | 7 | — |
-| HF 最大页数 | 20 | — |
+| 备份保留数 | 10 | — |
+| 日志保留数 | 50 | — |
 | 备份保留数 | 10 | — |
 | 日志保留数 | 50 | — |
 
-被 `fetch-papers.js`、`deep-analyzer.js`、`analysis-engine.js`、`full-fetch.js`、`reanalyze.js` 等所有核心脚本引用。
+被 `deep-analyzer.js`、`analysis-engine.js`、`icassp-batch-analyze.js` 等所有核心脚本引用。
 
 #### `scripts/analysis-engine.js`
 
-统一分析引擎。封装以下功能，消除 `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` / `reanalyze.js` / `analyze-single-paper.js` 的重复逻辑：
+统一分析引擎。封装以下功能，消除 `icassp-batch-analyze.js` 等脚本的重复逻辑：
 
 - `analyzePaperWithRetry(paper, options)`：单篇分析（带重试 + 自动解析）
 - `analyzeBatch(papers, options)`：批量分析（支持并发控制 + 增量保存回调）
 - `mergeAndSaveResults(newResults, filePath, extraData)`：按 ID 去重合并并保存，**自带失败结果保护**（已有成功 analysis 的论文不会被无 analysis 的失败结果覆盖）
 - `createFileSaver(filePath, baseData)`：创建文件保存回调，兼容旧格式纯数组数据自动转换
-
-#### `scripts/fetch-huggingface-papers.js`
-
-HuggingFace Papers 抓取模块。
-- `fetchHuggingFacePapers(existingIds, { days, minUpvotes })`：双源抓取（daily_papers + papers API）
-- `mergeAndDeduplicate(arxivPapers, hfPapers)`：合并去重，补充全部 7 个 HF 字段
-- `convertDailyPaper()` / `convertPaper()`：数据标准化，输出字段与 arXiv 一致（含 `abstract` + `summary`）
-- 使用 `curl` 命令获取数据
-- 直接运行可测试：`node scripts/fetch-huggingface-papers.js`
 
 #### `scripts/deep-analyzer.js`
 
@@ -558,7 +369,7 @@ HuggingFace Papers 抓取模块。
 - `_callModelOnce()`：单次 API 调用，每次重试独立创建 AbortController 和 20 分钟超时
 - 支持代理自动检测（环境变量 → macOS `scutil --proxy`）
 - 支持纯 Node 内置模块的 HTTP CONNECT 代理
-- 直接运行可测试：`node scripts/deep-analyzer.js <arxivId>`
+- 直接运行可测试：`node scripts/deep-analyzer.js`
 
 ### 4.3 发布脚本
 
@@ -626,7 +437,7 @@ HuggingFace Papers 抓取模块。
 - 生成任务分类汇总页（约 140 个任务标签），文件名 ASCII-safe + `url:` frontmatter
 - 图片从 `data/current/icassp-images/` 复制到博客 static 目录
 - 分析文本中的 `icassp-img://` 标识符替换为实际图片路径
-- 详见 [3.8.7 博客发布（ICASSP 特殊逻辑）](#387-博客发布icassp-特殊逻辑)
+- 详见 [3.7 博客发布（ICASSP 特殊逻辑）](#37-博客发布icassp-特殊逻辑)
 
 #### `scripts/publish-wechat-full.py`
 
@@ -690,7 +501,7 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 #### `scripts/backfill_papers.py`
 
 后台补录论文 ID（不分析）。
-- 抓取 arXiv 7 分类（每类 30 篇）和 HF Papers（近 7 天）
+- `main` 分支使用：抓取 arXiv 7 分类（每类 30 篇）和 HF Papers（近 7 天）
 - 耐限流设计：请求超时 30 秒，限流时指数退避，连续 20 篇已知 ID 提前停止
 - 写入 `data/current/papers.json`
 - 额外输出 `data/backfill-result.json`
@@ -760,113 +571,9 @@ ICASSP 论文分类报告生成。
 
 ## 5. 数据文件格式详解
 
-### 5.1 `data/current/papers.json`
+> 以下为本分支（ICASSP 2026）核心数据文件格式。`main` 分支的 arXiv/HuggingFace 每日论文速递数据格式（`papers.json`、`filtered-papers.json`、`deep-analysis-result.json`）不在此赘述。
 
-论文去重数据库。**此文件不归档，持续累积。** 结构：
-
-```json
-{
-  "papers": {
-    "arxivId-1": {
-      "arxivId": "2604.12345",
-      "title": "论文标题",
-      "abstract": "摘要...",
-      "authors": ["Author A", "Author B"],
-      "published": "2026-04-20T00:00:00+08:00",
-      "categories": ["cs.SD", "eess.AS"],
-      "fetchedFrom": "cs.SD",
-      "fetchedAt": "2026-04-21T10:00:00+08:00"
-    }
-  },
-  "lastUpdated": "2026-04-21T10:00:00+08:00"
-}
-```
-
-### 5.2 `data/current/filtered-papers.json`
-
-筛选结果（仅元数据，无深度分析）。结构：
-
-```json
-{
-  "timestamp": "2026-04-21T10:00:00+08:00",
-  "papers": [
-    {
-      "arxivId": "2604.12345",
-      "title": "...",
-      "abstract": "...",
-      "authors": [...],
-      "published": "2026-04-20T00:00:00+08:00",
-      "categories": [...],
-      "sources": ["arxiv"],
-      "hf_upvotes": 0,
-      "hf_ai_summary": "",
-      "hf_github_repo": ""
-    }
-  ]
-}
-```
-
-### 5.3 `data/current/deep-analysis-result.json`
-
-核心分析结果。结构：
-
-```json
-{
-  "timestamp": "2026-04-21T10:00:00+08:00",
-  "previousTimestamp": "2026-04-20T10:00:00+08:00",
-  "stats": {
-    "arxivFetched": 200,
-    "hfFetched": 50,
-    "totalMerged": 230,
-    "afterFilter": 28,
-    "newlyAnalyzed": 28,
-    "preservedExisting": 15,
-    "totalAfterMerge": 43,
-    "arxivOnly": 20,
-    "hfOnly": 5,
-    "both": 3
-  },
-  "papers": [
-    {
-      "arxivId": "2604.12345",
-      "title": "...",
-      "authors": [...],
-      "published": "2026-04-20T00:00:00+08:00",
-      "categories": [...],
-      "sources": ["arxiv"],
-      "hf_upvotes": 0,
-      "hf_ai_summary": "",
-      "hf_ai_keywords": [],
-      "hf_github_repo": "",
-      "hf_project_page": "",
-      "hf_github_stars": 0,
-      "hf_discussion_id": "",
-      "analysis": "## 评分\n8.5/10\n\n## 标签\n...",
-      "parsed": {
-        "score": "8.5",
-        "tags": ["#语音合成", "#扩散模型", "#多语言"],
-        "authors": "...",
-        "roast": "...",
-        "summary": "...",
-        "architecture": "...",
-        "innovation": "...",
-        "details": "...",
-        "results": "...",
-        "scoringReason": "...",
-        "opensource": "..."
-      },
-      "imageUrls": ["https://arxiv.org/html/.../fig1.png"],
-      "allImageUrls": ["..."]
-    }
-  ]
-}
-```
-
-### 5.4 `data/current/analyzed.json`
-
-旧版已分析记录（`fetch-papers.js` 直跑流程遗留）。当前主流程不直接使用，但保留兼容，参与每日归档。
-
-### 5.5 `data/current/icassp_2026_deep_analyzers.json`
+### 5.1 `data/current/icassp_2026_deep_analyzers.json`
 
 ICASSP 2026 深度分析核心结果。结构上与 `deep-analysis-result.json` 类似，但有以下区别：
 
@@ -912,7 +619,7 @@ ICASSP 2026 深度分析核心结果。结构上与 `deep-analysis-result.json` 
 - `imageUrls` / `allImageUrls`：内部图片标识符列表（`icassp-img://{paperId}/{index}.{ext}`），非真实 URL
 - `parsed`：预解析的结构化数据，发布脚本优先使用此字段而非重新解析 `analysis` 文本
 
-### 5.6 `data/current/icassp-images/`
+### 5.2 `data/current/icassp-images/`
 
 本地图片存储目录，结构：
 
@@ -930,7 +637,7 @@ icassp-images/
 - 图片从 `pdf-extractor.py` 提取后由 `savePdfImages()` 保存，或事后由 `migrate-icassp-images.js` 从分析日志中提取
 - 博客发布时复制到 Hugo 博客的 `static/icassp-images/{date}/{paperId}/`
 
-### 5.7 `data/current/filter_input_output/`
+### 5.3 `data/current/filter_input_output/`
 
 筛选阶段 I/O 日志目录。每篇论文一个 JSON 文件 `{paperId}.json`：
 
@@ -945,7 +652,7 @@ icassp-images/
 
 用于：筛选结果验证、失败重试、调试 prompt 效果。
 
-### 5.8 `data/current/deep_analyzer_input_output/`
+### 5.4 `data/current/deep_analyzer_input_output/`
 
 深度分析阶段 I/O 日志目录。每篇论文两个文件：
 - `{paperId}_input.json`：完整的 LLM 请求体（含 base64 图片）
@@ -984,7 +691,7 @@ set -a; source ~/.hermes/.env 2>/dev/null; set +a
 | `PD_ANALYSIS_MAX_RETRIES` | 深度分析单篇重试次数 | 2 |
 | `PD_REANALYZE_CONCURRENCY` | 重分析并发度 | 1 |
 | `PD_FILTER_BATCH_SIZE` | LLM 筛选每批篇数 | 5 |
-| `PD_ARXIV_MAX_RESULTS` | arXiv 每类抓取数量 | 100 |
+| `PD_ARXIV_MAX_RESULTS` | arXiv 每类抓取数量（main 分支） | 100 |
 
 **API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动判断使用 OpenAI 还是 Anthropic 协议
 - **Anthropic 协议**（自动伪装 Claude Code）：端点含 `token-plan` 或 `coding` **且** 模型含 `mimo` 或 `kimi`
@@ -1091,7 +798,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 
 特殊日志：
 - `backfill_papers.py` 额外写 `logs/backfill.log`（持久追加）
-- `logs/full-fetch-*.log` 是排查抓取/分析问题的首选
+- `logs/icassp-batch-analyze-*.log` 是排查分析问题的首选
 
 **后台缓冲处理**：所有主要 Node 脚本已调用 `process.stdout._handle.setBlocking(true)`，确保后台运行时日志实时 flush。
 
@@ -1099,100 +806,63 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 
 ## 8. 常用命令速查
 
-### npm scripts
+### ICASSP 2026 核心命令
 
 ```bash
-# 全流程（抓取 + 筛选 + 深度分析）
-npm run fetch
+# 完整流程：筛选 + 深度分析（增量续传）
+node scripts/icassp-batch-analyze.js
 
-# 仅深度分析续跑（跳过已有 analysis）
-npm run deep
+# 仅执行筛选
+ICASSP_FILTER_ONLY=true node scripts/icassp-batch-analyze.js
 
-# 全量重分析
-npm run reanalyze
+# 跳过筛选，直接分析已筛选的论文
+ICASSP_SKIP_FILTER=true node scripts/icassp-batch-analyze.js
 
-# 批量分析未分析论文
-npm run batch
+# 从第 500 篇开始分析（断点续传）
+ICASSP_OFFSET=500 node scripts/icassp-batch-analyze.js
 
+# 只分析前 100 篇
+ICASSP_LIMIT=100 node scripts/icassp-batch-analyze.js
+
+# 提取 PDF 内容测试
+python3 scripts/pdf-extractor.py /path/to/paper.pdf --max-images 10
+
+# 生成分类报告
+node scripts/icassp-categorize.js
+
+# 重试无评分的论文
+node scripts/retry-failed-analysis.js
+
+# 文本-only 重试（绕过 API 安全过滤）
+node scripts/retry-text-only.js
+
+# 重试筛选失败的论文（降低并发）
+node scripts/retry-failed-filters.js
+
+# 从分析日志提取图片到 icassp-images/
+node scripts/migrate-icassp-images.js
+
+# 发布 ICASSP 博客（含任务分类汇总页）
+python3 scripts/publish-to-blog.py --date 2026-04-29 data/current/icassp_2026_deep_analyzers.json
+
+# 只生成 Markdown，不推送
+python3 scripts/publish-to-blog.py --skip-push --date 2026-04-29 data/current/icassp_2026_deep_analyzers.json
+```
+
+### 通用工具命令
+
+```bash
 # 运行单元测试
 npm test
 
-# 快速测试（抓+筛选，不分析）
-node scripts/quick-test.js
-
-# 补录历史 paper ID
-npm run backfill
-
-# 发布博客
-npm run publish -- --date 2026-04-21
+# 深度分析单篇论文（传入 arnumber）
+node scripts/deep-analyzer.js
 
 # 生成微信公众号草稿
-npm run wechat
+python3 scripts/publish-wechat-full.py data/current/icassp_2026_deep_analyzers.json
 
 # 生成小红书文案
-npm run xiaohongshu
-
-# 生成飞书文档
-python3 scripts/publish-to-feishu.py
-python3 scripts/publish-to-feishu.py --date 2026-04-21
-```
-
-### 直接调用
-
-```bash
-# ========== 核心流程 ==========
-# 全流程（推荐入口）
-./run-full-fetch.sh
-
-# 或直接用 Node
-node scripts/full-fetch.js
-
-# 仅深度分析续跑（跳过已有 analysis）
-node scripts/deep-analysis-only.js
-
-# 全量重分析
-node scripts/reanalyze.js
-
-# 指定并发度重分析
-node scripts/reanalyze.js --concurrency 3 data/current/deep-analysis-result.json
-
-# 快速测试（抓+筛选，不分析）
-node scripts/quick-test.js
-
-# 批量分析未分析论文
-node scripts/batch-analyze.js
-
-# 单独分析一篇论文
-node scripts/analyze-single-paper.js 2604.16044
-
-# ========== 发布 ==========
-# 发布博客（强烈建议显式 --date）
-python3 scripts/publish-to-blog.py --date 2026-04-21
-
-# 只生成 Markdown，不推送
-python3 scripts/publish-to-blog.py --skip-push --date 2026-04-21
-
-# 用自定义数据发布
-python3 scripts/publish-to-blog.py --date 2026-04-21 data/current/deep-analysis-result.json
-
-# 生成微信公众号草稿
-python3 scripts/publish-wechat-full.py
-
-# 用自定义数据生成微信草稿
-python3 scripts/publish-wechat-full.py data/current/deep-analysis-result.json
-
-# 生成小红书文案（默认 TOP 5）
-python3 scripts/publish-xiaohongshu.py
-python3 scripts/publish-xiaohongshu.py --top 7
 python3 scripts/publish-xiaohongshu.py --all
-
-# 生成飞书文档
-python3 scripts/publish-to-feishu.py
-python3 scripts/publish-to-feishu.py --date 2026-04-21
-
-# ========== 辅助 ==========
-# 补录论文 ID（不分析）
-python3 scripts/backfill_papers.py
 ```
 
 ---
@@ -1203,8 +873,10 @@ python3 scripts/backfill_papers.py
 
 - **Node.js** ≥ 18.0.0（`node` / `npm`）
 - **Python** 3.x（`python3` / `pip3`）
-- Node.js 依赖：`cheerio`（arXiv HTML 结构化解析）
-- Python 第三方库：`requests`（仅 `backfill_papers.py` 使用）
+- Node.js 依赖：`cheerio`（HTML 结构化解析）
+- Python 第三方库：
+  - `PyMuPDF`（`fitz`，PDF 文本与图片提取）
+  - `Pillow`（图片缩放压缩，可选但推荐）
 
 ### 9.2 初始化
 
@@ -1214,8 +886,8 @@ cd ~/.hermes/skills/openclaw-imports/audio-paper-digest
 # 安装 Node.js 依赖
 npm install
 
-# 安装 Python 依赖（如有需要）
-pip3 install requests
+# 安装 Python 依赖
+pip3 install pymupdf pillow
 
 # 创建必要目录
 mkdir -p data/current data/archive logs
@@ -1269,58 +941,63 @@ FEISHU_APP_SECRET=your-full-app-secret
 
 ---
 
-## 10. 日期安全策略（必须遵守）
+## 10. 发布安全策略
 
 1. **发布时优先显式指定 `--date`**
-   - 不要依赖脚本的默认"今天"
+   - ICASSP 博客通常使用分析完成日期
    - 跨天运行时尤其要注意
 
-2. **发布前确认输入数据文件里的论文日期分布**
+2. **发布前确认分析结果完整性**
    ```bash
    python3 - <<'PY'
    import json
-   from collections import Counter
-   with open('data/current/deep-analysis-result.json') as f:
+   with open('data/current/icassp_2026_deep_analyzers.json') as f:
        d = json.load(f)
    papers = d.get('papers', [])
-   dates = [p.get('published', '')[:10] for p in papers if p.get('published')]
-   print('总论文:', len(papers))
-   print('日期分布:', Counter(dates))
+   analyzed = sum(1 for p in papers if p.get('analysis'))
+   scored = sum(1 for p in papers if p.get('parsed', {}).get('score'))
+   print(f'总论文: {len(papers)}')
+   print(f'已分析: {analyzed}')
+   print(f'有评分: {scored}')
    PY
    ```
 
-3. **用户明确"不要动某天"时，禁止删除/覆盖该日期内容**
-   - `publish-to-blog.py` 会全量重写目标日期的汇总页
-   - 若数据文件包含多日期论文，请拆分数据或确认意图后再发布
-
-4. **不要重复发布同一天**
-   - 重复运行 `publish-to-blog.py --date 2026-04-21` 会覆盖该日期的博客文件
+3. **不要重复发布同一批次**
+   - 重复运行 `publish-to-blog.py --date 2026-04-29` 会覆盖该日期的博客文件
+   - ICASSP 汇总页 slug 固定为 `icassp2026-summary`
    - 如需追加论文，应重新生成完整数据后再发布
 
 ---
 
-## 11. 快速开始
+## 11. 快速开始（ICASSP 2026）
 
 ```bash
 # 1. 进入项目目录
 cd ~/.hermes/skills/openclaw-imports/audio-paper-digest
 
-# 2. 运行全流程（抓取 + 筛选 + 分析）
-#    预计耗时：根据论文数量，约 30-120 分钟
-./run-full-fetch.sh
+# 2. 确保 PDF 论文已放置到正确目录
+#    默认: /Users/.../icassp-2026-papers/papers_2026/
+#    确保 papers_2026.json 元数据文件存在
 
-# 3. 检查分析结果
-ls -lh data/current/deep-analysis-result.json
-python3 -c "import json; d=json.load(open('data/current/deep-analysis-result.json')); print('论文数:', len(d['papers']))"
+# 3. 运行完整分析流程（筛选 + 深度分析）
+#    预计耗时：3693 篇约 4-6 小时（可中断续传）
+node scripts/icassp-batch-analyze.js
 
-# 4. 确认日期分布后，发布博客
-python3 scripts/publish-to-blog.py --date 2026-04-21
+# 4. 检查分析结果
+ls -lh data/current/icassp_2026_deep_analyzers.json
+python3 -c "import json; d=json.load(open('data/current/icassp_2026_deep_analyzers.json')); print('论文数:', len(d['papers'])); print('已分析:', sum(1 for p in d['papers'] if p.get('analysis')))"
 
-# 5. 生成微信公众号草稿
-python3 scripts/publish-wechat-full.py
+# 5. 如有无评分的论文，运行重试
+node scripts/retry-failed-analysis.js
 
-# 6. 生成小红书文案
-python3 scripts/publish-xiaohongshu.py
+# 6. 确认图片已提取
+node scripts/migrate-icassp-images.js
+
+# 7. 发布博客
+python3 scripts/publish-to-blog.py --date 2026-04-29 data/current/icassp_2026_deep_analyzers.json
+
+# 8. 生成分类报告（可选）
+node scripts/icassp-categorize.js
 ```
 
 ---
@@ -1353,14 +1030,14 @@ python3 scripts/publish-xiaohongshu.py
    - MiMo Token Plan 在有系统代理时可能被屏蔽，尝试关闭代理或设置 `agent: false`
    - 详见 12.7 节
 
-6. **查看日志**：`logs/full-fetch-*.log`、`logs/deep-analyzer-*.log`
+6. **查看日志**：`logs/icassp-batch-analyze-*.log`、`logs/deep-analyzer-*.log`
 
 ### 12.2 深度分析慢或频繁失败
 
-- 查看日志：`logs/deep-analyzer-*.log`、`logs/full-fetch-*.log`
+- 查看日志：`logs/icassp-batch-analyze-*.log`、`logs/deep-analyzer-*.log`
 - 检查 key/endpoint/model 三元组是否匹配（见 12.1 节）
 - 若超时，脚本会自动降级为纯文本重试；若仍失败，检查代理或减小并发
-- 可用 `node scripts/deep-analysis-only.js` 安全续跑
+- 可用 `ICASSP_OFFSET=N node scripts/icassp-batch-analyze.js` 安全续跑
 
 ### 12.3 重分析启动即报 key 未配置
 
@@ -1383,21 +1060,14 @@ ls -lt content/posts | head -20
 
 ### 12.5 路径混淆
 
-- **优先使用** `data/current/deep-analysis-result.json`
-- 旧路径 `data/deep-analysis-result.json` 仅在兼容场景下读取
-- 若同时存在新旧路径，脚本优先选择 `data/current/`
+- **优先使用** `data/current/icassp_2026_deep_analyzers.json`
+- 旧路径 `data/current/deep-analysis-result.json` 仅在兼容场景下读取
 
-### 12.6 HuggingFace 抓取为空
-
-- 检查网络连接（`curl https://huggingface.co/api/daily_papers?limit=10`）
-- 检查是否被限流或需要代理
-- `fetch-huggingface-papers.js` 使用 `curl` 命令，确保系统 `curl` 可用
-
-### 12.7 MiMo API 返回 403 / 代理问题
+### 12.6 MiMo API 返回 403 / 代理问题
 
 **根因**：Node.js `https.request` 的 `agent: undefined` 仍会复用全局默认 agent 的连接池。当系统配置了代理（`https_proxy` 等环境变量）时，全局 agent 的连接可能被代理污染，导致 MiMo Token Plan 服务端拒绝请求。
 
-**修复**：`fetch-papers.js` 和 `deep-analyzer.js` 中 LLM API 请求的 `options.agent` 必须设为 `false`（不是 `undefined`），彻底禁用连接复用，强制每个请求建立新连接：
+**修复**：`deep-analyzer.js` 和 `icassp-batch-analyze.js` 中 LLM API 请求的 `options.agent` 必须设为 `false`（不是 `undefined`），彻底禁用连接复用，强制每个请求建立新连接：
 
 ```javascript
 const options = {
@@ -1415,7 +1085,7 @@ const options = {
 ### 12.8 图片上传微信 CDN 失败
 
 - 检查 `WECHAT_APP_ID` / `WECHAT_APP_SECRET` 是否过期
-- 检查图片是否过大或被 arXiv 限制
+- 检查图片是否过大
 - 微信图片上传有频率限制，大量图片可能需要分批执行
 
 ---
@@ -1431,7 +1101,7 @@ const options = {
 - 修改 `prompts/deep-analysis.md` 或 `prompts/filter.md` 后，代码会自动读取最新内容，无需改代码
 - 修改 `deep-analyzer.js` 输出契约后，需同步检查 `scripts/utils.js` 与 `scripts/utils.py`
 - 修改 `config.js` 后，需同步更新 `tests/config.test.js`
-- 修改评分/标签/机器摘要格式后，需抽样验证 `data/current/deep-analysis-result.json` 和最终博客/社媒产物
+- 修改评分/标签/机器摘要格式后，需抽样验证 `data/current/icassp_2026_deep_analyzers.json` 和最终博客产物
 - **安全审计**：定期检查代码中是否意外泄露 API key、token、凭证备份文件或环境变量快照；`data/` 和 `logs/` 目录下的临时/备份文件严禁提交到版本控制
 - **`.gitignore` 要求**：确保 `data/`、`logs/`、`*.env`、`*.backup*`、`.DS_Store`、`*-cache.json`、敏感日志等被正确忽略
 
