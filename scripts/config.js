@@ -64,13 +64,13 @@ const ANALYSIS_CONFIG = {
     apiOverallTimeoutMs: 20 * 60 * 1000,  // 20 分钟
     apiMaxRetries: 3,
     apiRetryBaseDelayMs: 5000,
-    apiMaxTokens: 32000,
+    apiMaxTokens: 64000,
     apiTemperature: 0.7,
     arxivFetchTimeoutMs: 30000,
     imageDownloadTimeoutMs: 15000,
     imageMaxBase64Chars: 500000,
     imageMaxCount: 999,
-    fullTextMaxChars: 100000,
+    fullTextMaxChars: 500000,
     fullTextMinCharsForFull: 500
 };
 

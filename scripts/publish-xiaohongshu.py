@@ -20,6 +20,27 @@ from publish_common import (
 )
 
 
+def format_oss_badge(pa):
+    """生成开源状态简短标签"""
+    if not pa:
+        return ''
+    code = pa.get('hasCode', '')
+    model = pa.get('hasModel', '')
+    dataset = pa.get('hasDataset', '')
+
+    badges = []
+    if code and str(code).lower() in ('是', 'yes', 'true', '有'):
+        badges.append('✅代码')
+    if model and str(model).lower() in ('是', 'yes', 'true', '有'):
+        badges.append('✅模型')
+    if dataset and str(dataset).lower() in ('是', 'yes', 'true', '有'):
+        badges.append('✅数据')
+
+    if badges:
+        return '📦 开源：' + ' '.join(badges)
+    return ''
+
+
 def generate_top_n_post(scored, unscored, date_str, top_n=5):
     """生成 TOP N 精选版小红书文案"""
     top = scored[:top_n]
@@ -28,10 +49,12 @@ def generate_top_n_post(scored, unscored, date_str, top_n=5):
     hot_tag_names = [t.replace('#', '') for t, _ in hot_tags]
 
     total = len(scored) + len(unscored)
+    repo_url = os.environ.get('PAPER_DIGEST_REPO_URL', 'github.com/nanless/audio-paper-digest')
     md = f"""✅ {date_str} 语音/AI论文速递 | {total}篇精选
 
 今天挖到 {total} 篇语音/音频领域宝藏论文，
 精选 TOP {top_n} 速来看👇
+🛠️ 筛选+分析流水线开源：{repo_url}
 
 """
     for i, (score, p, pa) in enumerate(top):
@@ -51,10 +74,12 @@ def generate_top_n_post(scored, unscored, date_str, top_n=5):
         if pa.get('primaryMethodTag'):
             score_line += f' | {pa["primaryMethodTag"]}'
 
+        oss_line = format_oss_badge(pa)
+        oss_str = f"{oss_line}\n" if oss_line else ""
         md += f"""{medal} {title}
 {score_line}
 ✨ 亮点：{liner}
-🏷️ {display_tags}
+{oss_str}🏷️ {display_tags}
 {aurl and f'📄 arxiv：{aurl}' or ''}
 
 """
@@ -79,7 +104,8 @@ def generate_top_n_post(scored, unscored, date_str, top_n=5):
 def generate_all_summary_post(scored, unscored, date_str):
     """生成完整汇总版（每篇一行，适合分篇发或自己选择）"""
     total = len(scored) + len(unscored)
-    md = f"✅ {date_str} 语音/AI论文速递 | 共{total}篇\n\n"
+    repo_url = os.environ.get('PAPER_DIGEST_REPO_URL', 'github.com/nanless/audio-paper-digest')
+    md = f"✅ {date_str} 语音/AI论文速递 | 共{total}篇\n\n🛠️ 筛选+分析流水线开源：{repo_url}\n\n"
     for i, (score, p, pa) in enumerate(scored):
         medal = format_medal(i)
         title = p.get('title', '')[:50]
@@ -90,6 +116,9 @@ def generate_all_summary_post(scored, unscored, date_str):
         md += f"{medal} {title} {fire}{score}分{extra_text}\n"
         if liner:
             md += f"   ✨ {liner}\n"
+        oss_line = format_oss_badge(pa)
+        if oss_line:
+            md += f"   {oss_line}\n"
         md += "\n"
 
     md += f"""📄 全部论文：{os.environ.get('PAPER_DIGEST_BLOG_URL', '[博客地址]')}/{date_str}/

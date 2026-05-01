@@ -144,6 +144,12 @@ layout: "posts"
         if pa.get('roast'):
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
+        if pa.get('opensource'):
+            oss_text = enrich_opensource(pa, p)
+            # 清理内容开头可能残留的 Markdown 标题
+            oss_text = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', oss_text.strip(), count=1)
+            md += f"🔗 **开源详情**\n\n{oss_text}\n\n"
+
         if pa.get('summary'):
             summary = pa['summary']
             # 如果 summary 中混入了详细分析内容（因标题损坏导致解析边界失效），截断到详细分析之前
@@ -165,10 +171,87 @@ layout: "posts"
     return md
 
 
+import urllib.request
+
+_REPO_URL_PATTERNS = [
+    r'https?://github\.com/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+(?:/[^\s<>"{}|\\^`\[\]]+)?',
+    r'https?://huggingface\.co/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+(?:/[^\s<>"{}|\\^`\[\]]+)?',
+    r'https?://modelscope\.cn/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+(?:/[^\s<>"{}|\\^`\[\]]+)?',
+]
+
+_IGNORED_GH = {'github.com/arXiv', 'github.com/brucemiller', 'github.com/ggml-org'}
+
+
+def extract_repo_urls(text):
+    """从文本中提取 GitHub / HuggingFace / ModelScope 链接"""
+    if not text:
+        return []
+    urls = set()
+    for pat in _REPO_URL_PATTERNS:
+        for m in re.finditer(pat, text):
+            url = m.group(0).rstrip('.,;:)')
+            if any(ig in url for ig in _IGNORED_GH):
+                continue
+            urls.add(url)
+    return sorted(urls)
+
+
+def fetch_arxiv_html_urls(arxiv_id):
+    """从 arxiv HTML 页面抓取开源链接"""
+    if not arxiv_id:
+        return []
+    url = f'https://arxiv.org/html/{arxiv_id}'
+    try:
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            html = resp.read().decode('utf-8', errors='ignore')
+        return extract_repo_urls(html)
+    except Exception:
+        return []
+
+
+def enrich_opensource(pa, paper):
+    """如果 LLM 生成的 opensource 文本缺少具体链接，从论文原始文本或 arxiv HTML 中补充。"""
+    oss = pa.get('opensource', '')
+    if not oss:
+        return ''
+
+    sources = []
+    for key in ('abstract', 'analysis', 'comments'):
+        val = paper.get(key, '')
+        if val:
+            sources.append(val)
+
+    urls = extract_repo_urls('\n'.join(sources))
+    # 本地文本找不到时，尝试从 arxiv HTML 抓取
+    if not urls:
+        urls = fetch_arxiv_html_urls(paper.get('arxivId', ''))
+    if not urls:
+        return oss
+
+    missing = [u for u in urls if u not in oss]
+    if not missing:
+        return oss
+
+    oss += '\n\n- 补充链接（自动提取）：'
+    for url in missing:
+        if 'github.com' in url:
+            oss += f'\n  - 代码仓库：{url}'
+        elif 'huggingface.co' in url:
+            oss += f'\n  - HuggingFace：{url}'
+        elif 'modelscope.cn' in url:
+            oss += f'\n  - ModelScope：{url}'
+        else:
+            oss += f'\n  - 相关链接：{url}'
+    return oss
+
+
 def generate_paper_page(paper, date_str):
     """生成单篇论文的独立页面"""
     # 优先使用已解析好的 parsed 数据，避免重新解析时因标题损坏导致字段丢失
     pa = paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
+    # 补充 opensource 中缺失的具体链接
+    if pa and pa.get('opensource'):
+        pa['opensource'] = enrich_opensource(pa, paper)
     title = paper.get('title', 'Unknown')
     aid = paper.get('arxivId', '')
     aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
@@ -215,13 +298,13 @@ hiddenInHomeList: true
 
         sections = [
             ('💡 毒舌点评', 'roast'),
+            ('🔗 开源详情', 'opensource'),
             ('📌 核心摘要', 'summary'),
             ('🏗️ 模型架构', 'architecture'),
             ('💡 核心创新点', 'innovation'),
             ('🔬 细节详述', 'details'),
             ('📊 实验结果', 'results'),
             ('⚖️ 评分理由', 'scoringReason'),
-            ('🔗 开源详情', 'opensource'),
         ]
         for label, key in sections:
             content = pa.get(key, '')
@@ -231,6 +314,8 @@ hiddenInHomeList: true
                     cutoff = re.search(r'\n##\s*详细分', content)
                     if cutoff:
                         content = content[:cutoff.start()].strip()
+                # 清理内容开头可能残留的 Markdown 标题（如 LLM 输出自带了 ## 开源详情）
+                content = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', content.strip(), count=1)
                 content = re.sub(r'^###\s*\d+\.\s*[^\n]+\n', '', content, flags=re.MULTILINE)
                 content = re.sub(r'^\d+\.\s*\*\*([^*]+)\*\*\s*$', r'\1', content, flags=re.MULTILINE)
                 md += f'\n### {label}\n\n{content}\n'
