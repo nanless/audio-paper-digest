@@ -26,6 +26,20 @@ from publish_common import (
     extract_all_tags, score_emoji, format_medal, build_paper_meta
 )
 from utils import strip_md, parse_analysis
+from image_host import (
+    is_configured as image_host_configured,
+    upload_image,
+    get_cached_url,
+    build_remote_key,
+)
+
+# 图床环境变量（通用 S3 命名，兼容旧 R2 命名）
+IMAGE_HOST = os.environ.get('PAPER_DIGEST_IMAGE_HOST', 'local').lower()
+S3_ENDPOINT = os.environ.get('PAPER_DIGEST_S3_ENDPOINT', '') or os.environ.get('PAPER_DIGEST_R2_ENDPOINT', '')
+S3_BUCKET = os.environ.get('PAPER_DIGEST_S3_BUCKET', '') or os.environ.get('PAPER_DIGEST_R2_BUCKET', '')
+S3_ACCESS_KEY = os.environ.get('PAPER_DIGEST_S3_ACCESS_KEY', '') or os.environ.get('PAPER_DIGEST_R2_ACCESS_KEY', '')
+S3_SECRET_KEY = os.environ.get('PAPER_DIGEST_S3_SECRET_KEY', '') or os.environ.get('PAPER_DIGEST_R2_SECRET_KEY', '')
+IMAGE_BASE_URL = os.environ.get('PAPER_DIGEST_IMAGE_BASE_URL', '').rstrip('/')
 
 BLOG_REPO = os.path.expanduser(
     os.environ.get("PAPER_DIGEST_BLOG_REPO", "~/code/github_repos/audio-paper-digest-blog")
@@ -55,13 +69,16 @@ def get_paper_id(paper):
 
 
 def _copy_icassp_images(paper_id, date_str):
-    """从 data/current/icassp-images/{paper_id}/ 复制图片到博客 static 目录"""
+    """从 data/current/icassp-images/{paper_id}/ 复制图片到博客 static 目录或上传到图床"""
     source_dir = os.path.join(ICASSP_IMG_SOURCE_DIR, str(paper_id))
     if not os.path.exists(source_dir):
         return {}
 
-    img_dir = os.path.join(BLOG_REPO, 'static', 'images', 'icassp-2026', date_str)
-    os.makedirs(img_dir, exist_ok=True)
+    use_r2 = image_host_configured()
+    if not use_r2:
+        # 本地模式：复制到博客 static 目录
+        img_dir = os.path.join(BLOG_REPO, 'static', 'images', 'icassp-2026', date_str)
+        os.makedirs(img_dir, exist_ok=True)
 
     image_map = {}
     for filename in sorted(os.listdir(source_dir)):
@@ -74,14 +91,28 @@ def _copy_icassp_images(paper_id, date_str):
             ext = 'jpg'
         source_path = os.path.join(source_dir, filename)
         dest_filename = f'{paper_id}-{idx}.{ext}'
-        dest_path = os.path.join(img_dir, dest_filename)
+
         try:
-            with open(source_path, 'rb') as src, open(dest_path, 'wb') as dst:
-                dst.write(src.read())
-            web_path = f'{BASE_PATH}/images/icassp-2026/{date_str}/{dest_filename}'
+            if use_r2:
+                # 图床模式：上传到 R2
+                cached = get_cached_url(source_path)
+                if cached:
+                    web_path = cached
+                else:
+                    remote_key = build_remote_key(date_str, dest_filename, prefix='icassp-2026')
+                    web_path = upload_image(source_path, remote_key)
+            else:
+                # 本地模式：复制到博客 static 目录
+                dest_path = os.path.join(BLOG_REPO, 'static', 'images', 'icassp-2026', date_str, dest_filename)
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                with open(source_path, 'rb') as src, open(dest_path, 'wb') as dst:
+                    dst.write(src.read())
+                web_path = f'{BASE_PATH}/images/icassp-2026/{date_str}/{dest_filename}'
+
             image_map[rf'icassp-img://{paper_id}/{idx}\.{ext}'] = web_path
             image_map[rf'pdf-image-page\d+-idx{idx}'] = web_path
-        except Exception:
+        except Exception as e:
+            print(f"  ⚠️ 图片处理失败 {filename}: {e}")
             continue
     return image_map
 
@@ -116,20 +147,40 @@ def _extract_from_input(paper_id, date_str):
     if not images:
         return {}
 
-    img_dir = os.path.join(BLOG_REPO, 'static', 'images', 'icassp-2026', date_str)
-    os.makedirs(img_dir, exist_ok=True)
+    use_r2 = image_host_configured()
+    if not use_r2:
+        img_dir = os.path.join(BLOG_REPO, 'static', 'images', 'icassp-2026', date_str)
+        os.makedirs(img_dir, exist_ok=True)
 
     image_map = {}
     for idx, b64_data, mime in images:
         ext = 'jpg' if 'jpeg' in mime else ('png' if 'png' in mime else 'jpg')
         filename = f'{paper_id}-{idx}.{ext}'
-        filepath = os.path.join(img_dir, filename)
         try:
-            with open(filepath, 'wb') as f:
-                f.write(base64.b64decode(b64_data))
-            web_path = f'{BASE_PATH}/images/icassp-2026/{date_str}/{filename}'
+            img_bytes = base64.b64decode(b64_data)
+
+            if use_r2:
+                # 图床模式：先写入临时文件再上传
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=f'.{ext}', delete=False) as tmp:
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
+                try:
+                    remote_key = build_remote_key(date_str, filename, prefix='icassp-2026')
+                    web_path = upload_image(tmp_path, remote_key)
+                finally:
+                    os.unlink(tmp_path)
+            else:
+                # 本地模式
+                filepath = os.path.join(BLOG_REPO, 'static', 'images', 'icassp-2026', date_str, filename)
+                os.makedirs(os.path.dirname(filepath), exist_ok=True)
+                with open(filepath, 'wb') as f:
+                    f.write(img_bytes)
+                web_path = f'{BASE_PATH}/images/icassp-2026/{date_str}/{filename}'
+
             image_map[rf'pdf-image-page\d+-idx{idx}'] = web_path
-        except Exception:
+        except Exception as e:
+            print(f"  ⚠️ base64 图片处理失败 {filename}: {e}")
             continue
     return image_map
 
@@ -299,6 +350,9 @@ layout: "posts"
         if pa.get('roast'):
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
+        if pa.get('opensource'):
+            md += f"🔗 **开源详情**\n\n{pa['opensource']}\n\n"
+
         if pa.get('summary'):
             summary = pa['summary']
             # 如果 summary 中混入了详细分析内容（因标题损坏导致解析边界失效），截断到详细分析之前
@@ -407,6 +461,9 @@ hiddenInHomeList: true
             if pa.get('roast'):
                 md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
+            if pa.get('opensource'):
+                md += f"🔗 **开源详情**\n\n{pa['opensource']}\n\n"
+
             if pa.get('summary'):
                 summary = pa['summary']
                 cutoff = re.search(r'\n##\s*详细分', summary)
@@ -471,13 +528,13 @@ hiddenInHomeList: true
 
         sections = [
             ('💡 毒舌点评', 'roast'),
+            ('🔗 开源详情', 'opensource'),
             ('📌 核心摘要', 'summary'),
             ('🏗️ 模型架构', 'architecture'),
             ('💡 核心创新点', 'innovation'),
             ('🔬 细节详述', 'details'),
             ('📊 实验结果', 'results'),
             ('⚖️ 评分理由', 'scoringReason'),
-            ('🔗 开源详情', 'opensource'),
         ]
         for label, key in sections:
             content = pa.get(key, '')
