@@ -12,7 +12,10 @@
     "backfill": "python3 scripts/backfill_papers.py",
     "publish": "python3 scripts/publish-to-blog.py",
     "wechat": "python3 scripts/publish-wechat-full.py",
-    "xiaohongshu": "python3 scripts/publish-xiaohongshu.py"
+    "xiaohongshu": "python3 scripts/publish-xiaohongshu.py",
+    "xhs-login": "python3 scripts/xiaohongshu-publisher.py --login",
+    "xhs-publish": "python3 scripts/xiaohongshu-publisher.py",
+    "xhs-publish-all": "python3 scripts/xiaohongshu-publisher.py --all"
   },
   "keywords": [
     "arxiv",
