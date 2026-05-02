@@ -226,11 +226,28 @@ def extract_and_replace_images(md, paper_id, date_str, category='icassp-2026'):
     if not image_map:
         return md
 
+    # 收集所有可用的实际图片路径（按索引排序）
+    available_images = []
+    for pattern, web_path in image_map.items():
+        if 'icassp-img://' in pattern:
+            m = re.search(r'(\d+)\\\.', pattern)
+            if m:
+                available_images.append((int(m.group(1)), web_path))
+    available_images.sort(key=lambda x: x[0])
+    available_paths = [wp for _, wp in available_images]
+    fallback_idx = [0]  # 使用可变对象在闭包中共享状态
+
     def _replacer(match):
         url = match.group(2)
         for pattern, web_path in image_map.items():
             if re.fullmatch(pattern, url):
                 return match.group(1) + web_path + match.group(3)
+        # 如果URL不匹配任何已知模式（LLM编造的外部URL），但有实际图片可用，按顺序替换
+        if fallback_idx[0] < len(available_paths):
+            web_path = available_paths[fallback_idx[0]]
+            fallback_idx[0] += 1
+            return match.group(1) + web_path + match.group(3)
+        # 没有可用图片时降级为纯文本描述
         desc = match.group(1)[2:-1]
         return desc
 
