@@ -113,6 +113,74 @@ def is_page_mostly_text(page_pixmap_bytes):
         return False
 
 
+def _find_figure_captions(page):
+    """找到页面上所有 Figure/Table caption 的位置，返回 [(y0, y1, is_above)] 列表"""
+    captions = []
+    try:
+        blocks = page.get_text("blocks")
+    except Exception:
+        return captions
+    for b in blocks:
+        text = b[4]
+        # 匹配 Figure 1: / Fig. 1. / Table 1: 等
+        m = re.search(r'(?:Figure|Fig\.?|Table)\s*\d+', text, re.I)
+        if m:
+            rect = fitz.Rect(b[:4])
+            captions.append((rect.y0, rect.y1))
+    return captions
+
+
+def _clip_to_figure_region(page, dpi=150):
+    """
+    尝试只提取页面上的 figure 图形区域（而非整页）。
+    返回 list of (png_bytes, clip_rect)。
+    """
+    rect = page.rect
+    captions = _find_figure_captions(page)
+    results = []
+
+    # 策略1：如果页面有 caption，尝试提取 caption 上方/下方的图形区域
+    if captions:
+        for cap_y0, cap_y1 in captions:
+            # 假设图形在 caption 上方（LaTeX 默认 [htbp] 通常 caption 在下）
+            top = rect.y0 + 80     # 跳过页眉
+            bottom = cap_y0 - 5    # caption 上方留小间隙
+
+            # 如果上方区域太小，尝试 caption 下方
+            if bottom - top < 80:
+                top = cap_y1 + 5
+                bottom = rect.y1 - 40
+
+            if bottom - top < 80 or bottom - top > rect.height * 0.55:
+                continue
+
+            clip = fitz.Rect(rect.x0, top, rect.x1, bottom)
+            try:
+                pix = page.get_pixmap(dpi=dpi, clip=clip)
+                img_bytes = pix.tobytes("png")
+                # 再次检查是否主要是文字（避免 caption 上方全是正文）
+                if not is_page_mostly_text(img_bytes):
+                    results.append((img_bytes, clip))
+            except Exception:
+                continue
+
+    # 策略2：如果没找到有效区域，尝试检测页面顶部（大多数 figure 在页面上半部）
+    if not results:
+        # 渲染页面上半部分（到页面高度的 55%）
+        mid = rect.y0 + rect.height * 0.55
+        clip = fitz.Rect(rect.x0, rect.y0 + 80, rect.x1, mid)
+        if clip.height >= 150:
+            try:
+                pix = page.get_pixmap(dpi=dpi, clip=clip)
+                img_bytes = pix.tobytes("png")
+                if not is_page_mostly_text(img_bytes):
+                    results.append((img_bytes, clip))
+            except Exception:
+                pass
+
+    return results
+
+
 def render_page(page, dpi=150):
     """渲染页面为图片，裁剪页眉页脚，返回 PNG bytes 或 None"""
     rect = page.rect
@@ -310,27 +378,39 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
             if text_len > 3500 and len(page_imgs) < 2:
                 continue
 
-            rendered = render_page(page, dpi=150)
-            if not rendered:
-                continue
+            # 优先尝试只提取 figure 区域（而非整页）
+            figure_regions = _clip_to_figure_region(page, dpi=150)
+            if not figure_regions:
+                # 回退到整页渲染
+                rendered = render_page(page, dpi=150)
+                if rendered:
+                    figure_regions = [(rendered, None)]
+                else:
+                    continue
 
-            # 压缩渲染图
-            processed = resize_image_if_needed(rendered, max_base64_chars, max_dimension=1600)
-            b64 = base64.b64encode(processed).decode("utf-8")
-            if len(b64) > max_base64_chars:
-                continue
+            for img_bytes, clip_rect in figure_regions:
+                if len(images) >= max_images:
+                    break
 
-            images.append({
-                "index": len(images),
-                "page": page_num + 1,
-                "width": 0,  # 渲染图尺寸未知，标记为0
-                "height": 0,
-                "format": "png",
-                "base64": b64,
-                "size": len(processed),
-                "rendered": True,  # 标记为渲染图
-                "priority": priority  # 记录优先级
-            })
+                # 压缩渲染图
+                processed = resize_image_if_needed(img_bytes, max_base64_chars, max_dimension=1600)
+                b64 = base64.b64encode(processed).decode("utf-8")
+                if len(b64) > max_base64_chars:
+                    continue
+
+                width = int(clip_rect.width) if clip_rect else 0
+                height = int(clip_rect.height) if clip_rect else 0
+                images.append({
+                    "index": len(images),
+                    "page": page_num + 1,
+                    "width": width,
+                    "height": height,
+                    "format": "png",
+                    "base64": b64,
+                    "size": len(processed),
+                    "rendered": True,
+                    "priority": priority
+                })
 
         # 阶段2: 提取 PDF 内嵌图片（过滤小图标、碎片、头像）
         # 优先保留渲染图，内嵌图按面积排序只保留最大的几张
