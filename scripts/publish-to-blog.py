@@ -120,10 +120,10 @@ def _copy_conference_images(paper_id, date_str, category='icassp-2026'):
                 # GitHub Pages 图床模式：复制到图床仓库
                 gp_dir = os.path.join(IMAGES_REPO, category, date_str)
                 gp_path = os.path.join(gp_dir, dest_filename)
-                if not os.path.exists(gp_path):
-                    os.makedirs(gp_dir, exist_ok=True)
-                    import shutil
-                    shutil.copy2(source_path, gp_path)
+                os.makedirs(gp_dir, exist_ok=True)
+                import shutil
+                # 总是复制最新版本（重新分析后图片可能已更新）
+                shutil.copy2(source_path, gp_path)
                 web_path = f'{IMAGE_BASE_URL}/{category}/{date_str}/{dest_filename}'
             else:
                 # 本地模式：复制到博客 static 目录
@@ -713,6 +713,29 @@ def main():
         summary_slug = today
 
     os.makedirs(CONTENT_DIR, exist_ok=True)
+
+    # 清理旧的同分类博客文章（避免残留已删除/更新的论文）
+    if category in ("icassp-2026", "iclr-2026"):
+        for old_file in os.listdir(CONTENT_DIR):
+            if old_file.startswith(f'{today}-') and old_file.endswith('.md'):
+                old_path = os.path.join(CONTENT_DIR, old_file)
+                try:
+                    os.remove(old_path)
+                except Exception:
+                    pass
+
+    # 清理旧的 static/images 目录图片（重新分析后图片可能已更新）
+    static_img_dir = os.path.join(BLOG_REPO, 'static', 'images', category, today)
+    if os.path.exists(static_img_dir):
+        import shutil
+        shutil.rmtree(static_img_dir)
+
+    # 清理图床仓库中的旧图片（GitHub Pages 模式）
+    if USE_GITHUB_PAGES:
+        gp_img_dir = os.path.join(IMAGES_REPO, category, today)
+        if os.path.exists(gp_img_dir):
+            import shutil
+            shutil.rmtree(gp_img_dir)
 
     paper_slugs = {}
     for paper in papers:

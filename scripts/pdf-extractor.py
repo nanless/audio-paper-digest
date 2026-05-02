@@ -53,8 +53,15 @@ FIGURE_KEYWORDS = [
     'architecture', 'framework', 'model', 'network', 'design',
     'overview', 'pipeline', 'structure', 'schematic',
     'results', 'experiments', 'comparison', 'performance',
-    'ablation', 'evaluation', 'visualization'
+    'ablation', 'evaluation', 'visualization',
+    'annotated', 'training', 'flow', 'diagram', 'method',
+    'approach', 'system', 'module', 'component'
 ]
+
+# 外部水印/图标检测关键词
+WATERMARK_KEYWORDS = ['shutterstock', 'getty images', 'istock', 'adobe stock',
+                      'depositphotos', 'dreamstime', 'alamy', 'fotolia',
+                      '123rf', 'bigstock', 'canstock', 'pixabay']
 
 
 def is_likely_avatar(width, height):
@@ -74,6 +81,20 @@ def is_fragment_strip(width, height):
     return wh_ratio > 8 and width > 600 and height < 250
 
 
+def is_watermarked_image(image_bytes):
+    """检测图片是否包含外部图库水印（通过检查二进制内容）"""
+    # 检查常见的 PNG/JPG 水印签名
+    text_signatures = [b'shutterstock', b'gettyimages', b'istockphoto',
+                       b'adobe stock', b'depositphotos', b'dreamstime',
+                       b'alamy.com', b'fotolia', b'123rf', b'bigstockphoto',
+                       b'canstockphoto', b'pixabay']
+    lower_bytes = image_bytes.lower()
+    for sig in text_signatures:
+        if sig in lower_bytes:
+            return True
+    return False
+
+
 def is_page_mostly_text(page_pixmap_bytes):
     """检查渲染的页面是否主要是文字（白色背景占比过高）"""
     if not HAS_PIL:
@@ -83,7 +104,11 @@ def is_page_mostly_text(page_pixmap_bytes):
         small = img.resize((32, 32))
         pixels = list(small.getdata())
         avg = sum(pixels) / len(pixels)
-        return avg > 248  # 几乎全白
+        # 计算标准差：文字页面像素分布集中（低方差），图表页面分布分散（高方差）
+        variance = sum((p - avg) ** 2 for p in pixels) / len(pixels)
+        std = variance ** 0.5
+        # 纯文字页：亮度高且方差小；图表页：亮度可能也高但方差大
+        return avg > 242 and std < 8
     except Exception:
         return False
 
@@ -122,6 +147,18 @@ def get_page_figure_priority(page_text):
     # 有表格加分
     if 'table' in text_lower:
         score += 1
+    # 包含架构/流程图相关词汇的页面额外加分
+    arch_keywords = ['architecture', 'framework', 'pipeline', 'schematic',
+                     'overview', 'system design', 'model architecture']
+    for kw in arch_keywords:
+        if kw in text_lower:
+            score += 3
+    # 包含流程/方法图相关词汇额外加分
+    flow_keywords = ['annotated', 'training pipeline', 'inference pipeline',
+                     'workflow', 'procedure', 'process']
+    for kw in flow_keywords:
+        if kw in text_lower:
+            score += 2
     return score
 
 
@@ -259,13 +296,20 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
 
         # 按优先级排序，优先渲染高分页面
         page_priorities.sort(key=lambda x: -x[1])
-        max_render = min(5, max_images)
+        max_render = min(8, max_images)  # 增加到8页以捕获更多架构图
 
-        for page_num, _ in page_priorities[:max_render]:
+        for page_num, priority in page_priorities[:max_render]:
             if len(images) >= max_images:
                 break
 
             page = doc[page_num]
+            # 跳过纯文字页：文本很长且内嵌图很少
+            page_text = page.get_text()
+            page_imgs = page.get_images(full=True)
+            text_len = len(page_text.strip())
+            if text_len > 3500 and len(page_imgs) < 2:
+                continue
+
             rendered = render_page(page, dpi=150)
             if not rendered:
                 continue
@@ -284,22 +328,19 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
                 "format": "png",
                 "base64": b64,
                 "size": len(processed),
-                "rendered": True  # 标记为渲染图
+                "rendered": True,  # 标记为渲染图
+                "priority": priority  # 记录优先级
             })
 
         # 阶段2: 提取 PDF 内嵌图片（过滤小图标、碎片、头像）
+        # 优先保留渲染图，内嵌图按面积排序只保留最大的几张
+        embedded_candidates = []
         seen_xrefs = set()
         for page_num in range(page_count):
-            if len(images) >= max_images:
-                break
-
             page = doc[page_num]
             page_images = page.get_images(full=True)
 
             for img_info in page_images:
-                if len(images) >= max_images:
-                    break
-
                 xref = img_info[0]
                 if xref in seen_xrefs:
                     continue
@@ -334,6 +375,10 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
                     if is_fragment_strip(width, height):
                         continue
 
+                    # 过滤外部图库水印图片
+                    if is_watermarked_image(image_bytes):
+                        continue
+
                     # 过滤纯黑/纯白图片（渲染失败或空白遮罩）
                     if HAS_PIL and ext in ('png', 'jpg', 'jpeg'):
                         try:
@@ -345,27 +390,54 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
                         except Exception:
                             pass
 
-                    # 压缩/缩放图片
-                    processed_bytes = resize_image_if_needed(image_bytes, max_base64_chars)
-
-                    # 转换为 base64
-                    b64 = base64.b64encode(processed_bytes).decode("utf-8")
-
-                    # 最终检查 base64 长度
-                    if len(b64) > max_base64_chars:
-                        continue
-
-                    images.append({
-                        "index": len(images),
+                    embedded_candidates.append({
                         "page": page_num + 1,
                         "width": width,
                         "height": height,
                         "format": ext,
-                        "base64": b64,
-                        "size": len(processed_bytes)
+                        "image_bytes": image_bytes,
+                        "area": area
                     })
                 except Exception:
                     continue
+
+        # 按面积从大到小排序内嵌图，优先保留大图（更可能是架构图/结果图）
+        embedded_candidates.sort(key=lambda x: -x["area"])
+        # 为内嵌图分配剩余配额（渲染图最多占 max_images 的 60%，内嵌图占 40%）
+        render_count = sum(1 for img in images if img.get("rendered"))
+        remaining_slots = max_images - render_count
+        embedded_limit = min(remaining_slots, max(3, max_images // 3))
+
+        for candidate in embedded_candidates[:embedded_limit]:
+            if len(images) >= max_images:
+                break
+
+            image_bytes = candidate["image_bytes"]
+            ext = candidate["format"]
+            width = candidate["width"]
+            height = candidate["height"]
+            page_num = candidate["page"]
+
+            # 压缩/缩放图片
+            processed_bytes = resize_image_if_needed(image_bytes, max_base64_chars)
+
+            # 转换为 base64
+            b64 = base64.b64encode(processed_bytes).decode("utf-8")
+
+            # 最终检查 base64 长度
+            if len(b64) > max_base64_chars:
+                continue
+
+            images.append({
+                "index": len(images),
+                "page": page_num,
+                "width": width,
+                "height": height,
+                "format": ext,
+                "base64": b64,
+                "size": len(processed_bytes),
+                "rendered": False  # 标记为内嵌图
+            })
 
         return {
             "success": True,

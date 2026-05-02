@@ -486,7 +486,8 @@ async function analyzePaperDeep(paper) {
                     base64: img.base64,
                     mime: mime,
                     page: img.page,
-                    index: img.index
+                    index: img.index,
+                    rendered: img.rendered || false
                 });
                 // 使用本地保存的图片路径作为标识，便于博客发布时引用
                 imageUrls.push(`icassp-img://${paperId}/${img.index}.${img.format === 'jpeg' || img.format === 'jpg' ? 'jpg' : 'png'}`);
@@ -537,8 +538,15 @@ async function analyzePaperDeep(paper) {
     // 构建图片映射信息（只包含实际会发送的图片）
     let imagePrefix = '';
     if (imageUrlsToShow.length > 0) {
-        const imageUrlMapping = imageUrlsToShow.map((url, idx) => `图${idx + 1}: ${url}`).join('\n');
-        imagePrefix = `\n\n论文中的图片及其标识如下（请在下文引用图片时使用这些标识）：\n${imageUrlMapping}\n`;
+        const imageUrlMapping = imageUrlsToShow.map((url, idx) => {
+            const img = imagesToSend[idx];
+            const pageInfo = img && img.page ? `（来自第${img.page}页` : '';
+            const typeInfo = img && img.rendered ? `${pageInfo ? '' : '（'}页面渲染图` : '';
+            const closeParen = pageInfo || typeInfo ? '）' : '';
+            const prefix = pageInfo + typeInfo + closeParen;
+            return `图${idx + 1}${prefix}: ${url}`;
+        }).join('\n');
+        imagePrefix = `\n\n论文中的图片及其标识如下（请在下文引用图片时使用这些标识）：\n${imageUrlMapping}\n\n重要提示：\n1. 图片编号不对应论文中的 Figure 编号，不要根据编号猜测图片内容。\n2. 若无法确定某张图片的具体内容，不要编造描述，直接引用其 URL 并简要说明用途即可。\n3. 优先引用架构图、流程图、结果对比图；文字截图、页面缩略图等无需引用。\n`;
     }
 
     const paperInfo = isLocalPdf
