@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const https = require('https');
 
 const {
@@ -18,7 +19,7 @@ const FILTER_CONFIG = {
     model: process.env.PAPER_ANALYZER_MODEL || ''
 };
 
-const PAPERS_JSON = '/Users/francis7999/Documents/icassp-2026-papers/papers_2026.json';
+const PAPERS_JSON = process.env.ICASSP_JSON_FILE || path.join(os.homedir(), 'Documents/icassp-2026-papers/papers_2026.json');
 const papers = JSON.parse(fs.readFileSync(PAPERS_JSON, 'utf8'));
 
 const SNIPPETS_FILE = path.join(__dirname, '..', 'data', 'current', 'icassp-2026-snippets.json');

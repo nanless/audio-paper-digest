@@ -5,9 +5,10 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
-const IO_DIR = '/Users/francis7999/code/github_repos/audio-paper-digest/data/current/filter_input_output';
-const PAPERS_JSON = '/Users/francis7999/Documents/icassp-2026-papers/papers_2026.json';
+const IO_DIR = path.join(__dirname, '..', 'data', 'current', 'filter_input_output');
+const PAPERS_JSON = process.env.ICASSP_JSON_FILE || path.join(os.homedir(), 'Documents/icassp-2026-papers/papers_2026.json');
 
 const papers = JSON.parse(fs.readFileSync(PAPERS_JSON, 'utf8'));
 const paperMap = new Map();

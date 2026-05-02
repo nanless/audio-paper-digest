@@ -12,10 +12,12 @@ import fitz
 from multiprocessing import Pool, cpu_count
 from datetime import datetime, timezone, timedelta
 
-PAPERS_JSON = '/Users/francis7999/Documents/icassp-2026-papers/papers_2026.json'
-PDF_DIR = '/Users/francis7999/Documents/icassp-2026-papers/papers_2026'
-OUTPUT_FILE = '/Users/francis7999/code/github_repos/audio-paper-digest/data/current/icassp-2026-snippets.json'
-PROGRESS_FILE = '/Users/francis7999/code/github_repos/audio-paper-digest/data/current/.extract_progress.json'
+HOME = os.path.expanduser('~')
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PAPERS_JSON = os.environ.get('ICASSP_JSON_FILE') or os.path.join(HOME, 'Documents/icassp-2026-papers/papers_2026.json')
+PDF_DIR = os.environ.get('ICASSP_PAPERS_DIR') or os.path.join(HOME, 'Documents/icassp-2026-papers/papers_2026')
+OUTPUT_FILE = os.path.join(PROJECT_ROOT, 'data/current/icassp-2026-snippets.json')
+PROGRESS_FILE = os.path.join(PROJECT_ROOT, 'data/current/.extract_progress.json')
 SNIPPET_MAX_CHARS = 3000
 
 # 禁用 MuPDF 错误消息输出到 stdout

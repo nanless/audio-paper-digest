@@ -6,6 +6,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const https = require('https');
 
 const {
@@ -23,7 +24,7 @@ const Config = require('./config.js');
 
 loadEnvFile();
 
-const PAPERS_JSON = '/Users/francis7999/Documents/icassp-2026-papers/papers_2026.json';
+const PAPERS_JSON = process.env.ICASSP_JSON_FILE || path.join(os.homedir(), 'Documents/icassp-2026-papers/papers_2026.json');
 const SNIPPETS_FILE = path.join(Config.CURRENT_DIR, 'icassp-2026-snippets.json');
 const FILTER_IO_DIR = path.join(Config.CURRENT_DIR, 'filter_input_output');
 const RESULT_FILE = path.join(Config.CURRENT_DIR, 'icassp_2026_deep_analyzers.json');

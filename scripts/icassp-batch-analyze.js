@@ -16,8 +16,8 @@ setupScriptLogging(__filename);
  *   node scripts/icassp-batch-analyze.js [options]
  *
  * 选项（环境变量）:
- *   ICASSP_PAPERS_DIR   - PDF 论文目录 (默认: /Users/francis7999/Documents/icassp-2026-papers/papers_2026)
- *   ICASSP_JSON_FILE    - 论文 JSON 文件 (默认: /Users/francis7999/Documents/icassp-2026-papers/papers_2026.json)
+ *   ICASSP_PAPERS_DIR   - PDF 论文目录 (默认: ~/Documents/icassp-2026-papers/papers_2026)
+ *   ICASSP_JSON_FILE    - 论文 JSON 文件 (默认: ~/Documents/icassp-2026-papers/papers_2026.json)
  *   ICASSP_RESULT_FILE  - 结果保存路径 (默认: data/current/icassp-2026-analysis.json)
  *   ICASSP_SKIP_FILTER  - 跳过筛选阶段，直接分析所有论文 (默认: false)
  *   ICASSP_OFFSET       - 从第 N 篇开始分析（用于断点续传）
@@ -27,6 +27,7 @@ setupScriptLogging(__filename);
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const https = require('https');
 
 const {
@@ -50,8 +51,8 @@ const Config = require('./config.js');
 // 配置
 // ═══════════════════════════════════════════════════════
 
-const PAPERS_DIR = process.env.ICASSP_PAPERS_DIR || '/Users/francis7999/Documents/icassp-2026-papers/papers_2026';
-const JSON_FILE = process.env.ICASSP_JSON_FILE || '/Users/francis7999/Documents/icassp-2026-papers/papers_2026.json';
+const PAPERS_DIR = process.env.ICASSP_PAPERS_DIR || path.join(os.homedir(), 'Documents/icassp-2026-papers/papers_2026');
+const JSON_FILE = process.env.ICASSP_JSON_FILE || path.join(os.homedir(), 'Documents/icassp-2026-papers/papers_2026.json');
 const RESULT_FILE = process.env.ICASSP_RESULT_FILE || path.join(Config.CURRENT_DIR, 'icassp_2026_deep_analyzers.json');
 const SNIPPETS_FILE = path.join(Config.CURRENT_DIR, 'icassp-2026-snippets.json');
 const FILTER_IO_DIR = path.join(Config.CURRENT_DIR, 'filter_input_output');
