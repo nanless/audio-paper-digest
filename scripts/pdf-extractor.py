@@ -34,6 +34,7 @@ import json
 import base64
 import argparse
 import io
+import re
 import fitz  # PyMuPDF
 
 # 禁用 MuPDF 错误消息输出到 stdout，避免污染 JSON 输出
@@ -45,6 +46,83 @@ try:
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
+
+
+# 架构/结果图关键词（用于页面渲染优先级排序）
+FIGURE_KEYWORDS = [
+    'architecture', 'framework', 'model', 'network', 'design',
+    'overview', 'pipeline', 'structure', 'schematic',
+    'results', 'experiments', 'comparison', 'performance',
+    'ablation', 'evaluation', 'visualization'
+]
+
+
+def is_likely_avatar(width, height):
+    """判断是否为头像/小图标：接近正方形且面积较小"""
+    if width <= 0 or height <= 0:
+        return False
+    ratio = min(width, height) / max(width, height)
+    area = width * height
+    return ratio > 0.75 and 1000 < area < 60000
+
+
+def is_fragment_strip(width, height):
+    """判断是否为表格/图表碎片条带：超宽且很矮"""
+    if height <= 0 or width <= 0:
+        return False
+    wh_ratio = width / height
+    return wh_ratio > 8 and width > 600 and height < 250
+
+
+def is_page_mostly_text(page_pixmap_bytes):
+    """检查渲染的页面是否主要是文字（白色背景占比过高）"""
+    if not HAS_PIL:
+        return False
+    try:
+        img = Image.open(io.BytesIO(page_pixmap_bytes)).convert('L')
+        small = img.resize((32, 32))
+        pixels = list(small.getdata())
+        avg = sum(pixels) / len(pixels)
+        return avg > 248  # 几乎全白
+    except Exception:
+        return False
+
+
+def render_page(page, dpi=150):
+    """渲染页面为图片，裁剪页眉页脚，返回 PNG bytes 或 None"""
+    rect = page.rect
+    # 裁剪顶部 100px（会议标题/页眉）和底部 40px（页码/页脚）
+    clip = fitz.Rect(rect.x0, rect.y0 + 100, rect.x1, rect.y1 - 40)
+    if clip.height <= 200 or clip.width <= 200:
+        return None
+
+    try:
+        pix = page.get_pixmap(dpi=dpi, clip=clip)
+        img_bytes = pix.tobytes("png")
+        if is_page_mostly_text(img_bytes):
+            return None
+        return img_bytes
+    except Exception:
+        return None
+
+
+def get_page_figure_priority(page_text):
+    """计算页面的图表优先级分数，越高越值得渲染"""
+    text_lower = page_text.lower()
+    score = 0
+    # 有 Figure 引用加分
+    if re.search(r'figure\s*\d+', text_lower):
+        score += 3
+    if re.search(r'fig\.\s*\d+', text_lower):
+        score += 2
+    # 架构/结果关键词加分
+    for kw in FIGURE_KEYWORDS:
+        if kw in text_lower:
+            score += 2
+    # 有表格加分
+    if 'table' in text_lower:
+        score += 1
+    return score
 
 
 def resize_image_if_needed(image_bytes, max_base64_chars=500000, max_dimension=1200):
@@ -155,10 +233,62 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
                 if 'IEEE' in header_text and 'ICASSP' in header_text:
                     content_warning = f"检测到PDF内容可能为会议版权页而非论文正文（版权标记出现{copyright_markers}次）"
 
-        # 提取图片（过滤小图标，按页面顺序）
+        # 阶段1: 页面渲染补充 —— 优先渲染包含架构图/结果图的页面，捕获矢量图形
         images = []
-        seen_xrefs = set()
+        page_priorities = []
+        for page_num in range(page_count):
+            page = doc[page_num]
+            text = page.get_text()
+            priority = get_page_figure_priority(text)
+            page_imgs = page.get_images(full=True)
 
+            # 如果一页有很多碎片图（被拆分的架构图/表格），优先渲染
+            if len(page_imgs) > 3:
+                try:
+                    avg_h = sum(
+                        doc.extract_image(img[0]).get("height", 0)
+                        for img in page_imgs
+                    ) / len(page_imgs)
+                    if avg_h < 200:
+                        priority += 5  # 碎片页高优先级
+                except Exception:
+                    pass
+
+            if priority > 0:
+                page_priorities.append((page_num, priority))
+
+        # 按优先级排序，优先渲染高分页面
+        page_priorities.sort(key=lambda x: -x[1])
+        max_render = min(5, max_images)
+
+        for page_num, _ in page_priorities[:max_render]:
+            if len(images) >= max_images:
+                break
+
+            page = doc[page_num]
+            rendered = render_page(page, dpi=150)
+            if not rendered:
+                continue
+
+            # 压缩渲染图
+            processed = resize_image_if_needed(rendered, max_base64_chars, max_dimension=1600)
+            b64 = base64.b64encode(processed).decode("utf-8")
+            if len(b64) > max_base64_chars:
+                continue
+
+            images.append({
+                "index": len(images),
+                "page": page_num + 1,
+                "width": 0,  # 渲染图尺寸未知，标记为0
+                "height": 0,
+                "format": "png",
+                "base64": b64,
+                "size": len(processed),
+                "rendered": True  # 标记为渲染图
+            })
+
+        # 阶段2: 提取 PDF 内嵌图片（过滤小图标、碎片、头像）
+        seen_xrefs = set()
         for page_num in range(page_count):
             if len(images) >= max_images:
                 break
@@ -185,12 +315,35 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
                     width = base_image.get("width", 0)
                     height = base_image.get("height", 0)
 
+                    # 过滤空/损坏图片（文件大小异常小）
+                    if len(image_bytes) < 1500:
+                        continue
+
                     # 过滤小图标
                     area = width * height
                     if width < min_image_dim or height < min_image_dim:
                         continue
                     if area < min_image_area:
                         continue
+
+                    # 过滤头像/小图标（正方形且面积小）
+                    if is_likely_avatar(width, height):
+                        continue
+
+                    # 过滤表格/图表碎片条带（超宽且很矮）
+                    if is_fragment_strip(width, height):
+                        continue
+
+                    # 过滤纯黑/纯白图片（渲染失败或空白遮罩）
+                    if HAS_PIL and ext in ('png', 'jpg', 'jpeg'):
+                        try:
+                            img = Image.open(io.BytesIO(image_bytes)).convert('RGB').resize((8, 8))
+                            px = list(img.getdata())
+                            avg = sum(sum(p) // 3 for p in px) / len(px)
+                            if avg < 8 or avg > 252:  # 纯黑或纯白
+                                continue
+                        except Exception:
+                            pass
 
                     # 压缩/缩放图片
                     processed_bytes = resize_image_if_needed(image_bytes, max_base64_chars)
