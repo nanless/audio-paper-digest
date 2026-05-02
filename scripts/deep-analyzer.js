@@ -22,23 +22,25 @@ if (!fs.existsSync(DEEP_ANALYZER_IO_DIR)) {
     fs.mkdirSync(DEEP_ANALYZER_IO_DIR, { recursive: true });
 }
 
-// ICASSP 论文图片本地保存目录
-const ICASSP_IMAGE_DIR = path.join(Config.CURRENT_DIR, 'icassp-images');
-if (!fs.existsSync(ICASSP_IMAGE_DIR)) {
-    fs.mkdirSync(ICASSP_IMAGE_DIR, { recursive: true });
+// 论文图片本地保存目录（支持通过环境变量覆盖，用于 ICLR 等其他会议）
+const PAPER_IMAGE_DIR = process.env.PAPER_IMAGE_DIR
+    ? path.resolve(process.env.PAPER_IMAGE_DIR)
+    : path.join(Config.CURRENT_DIR, 'icassp-images');
+if (!fs.existsSync(PAPER_IMAGE_DIR)) {
+    fs.mkdirSync(PAPER_IMAGE_DIR, { recursive: true });
 }
 
 /**
  * 保存 PDF 提取的图片到本地文件
  * @param {Array} images - pdf-extractor 返回的图片列表
  * @param {string} paperId - 论文ID
- * @returns {Array} - 保存后的图片路径列表（相对于 ICASSP_IMAGE_DIR）
+ * @returns {Array} - 保存后的图片路径列表（相对于 PAPER_IMAGE_DIR）
  */
 function savePdfImages(images, paperId) {
     if (!images || images.length === 0) {
         return [];
     }
-    const paperDir = path.join(ICASSP_IMAGE_DIR, String(paperId));
+    const paperDir = path.join(PAPER_IMAGE_DIR, String(paperId));
     if (!fs.existsSync(paperDir)) {
         fs.mkdirSync(paperDir, { recursive: true });
     }
@@ -51,12 +53,13 @@ function savePdfImages(images, paperId) {
         try {
             const buf = Buffer.from(img.base64, 'base64');
             fs.writeFileSync(filepath, buf);
+            const imgDirName = path.basename(PAPER_IMAGE_DIR);
             savedPaths.push({
                 index: img.index,
                 page: img.page,
                 localPath: filepath,
-                relativePath: path.join('icassp-images', String(paperId), filename),
-                webPath: `/audio-paper-digest-blog/icassp-images/${paperId}/${filename}`,
+                relativePath: path.join(imgDirName, String(paperId), filename),
+                webPath: `/audio-paper-digest-blog/${imgDirName}/${paperId}/${filename}`,
                 filename: filename
             });
         } catch (e) {
@@ -474,7 +477,7 @@ async function analyzePaperDeep(paper) {
 
             // 保存 PDF 图片到本地，并转为消息格式
             const savedImages = savePdfImages(pdfResult.images, paperId);
-            console.log(`    [deep] 已保存 ${savedImages.length} 张图片到 ${path.join(ICASSP_IMAGE_DIR, paperId)}`);
+            console.log(`    [deep] 已保存 ${savedImages.length} 张图片到 ${path.join(PAPER_IMAGE_DIR, paperId)}`);
 
             for (const img of pdfResult.images) {
                 const mime = img.format === 'jpeg' || img.format === 'jpg' ? 'image/jpeg' : 'image/png';

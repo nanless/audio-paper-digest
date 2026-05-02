@@ -49,7 +49,16 @@ BASE_PATH = os.environ.get("PAPER_DIGEST_BLOG_BASE_PATH", "/audio-paper-digest-b
 GITHUB_REMOTE = os.environ.get("PAPER_DIGEST_GITHUB_REMOTE", "origin")
 
 IO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'current', 'deep_analyzer_input_output')
-ICASSP_IMG_SOURCE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'current', 'icassp-images')
+
+def get_img_source_dir(category):
+    """根据 category 获取图片源目录"""
+    base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'current')
+    if category == 'icassp-2026':
+        return os.path.join(base, 'icassp-images')
+    elif category == 'iclr-2026':
+        return os.path.join(base, 'iclr-images')
+    else:
+        return os.path.join(base, f'{category}-images')
 
 
 def slugify(text, max_length=50):
@@ -64,20 +73,20 @@ def slugify(text, max_length=50):
 
 
 def get_paper_id(paper):
-    """获取论文唯一标识，兼容 arXiv 和 ICASSP"""
-    return paper.get('arxivId') or paper.get('arnumber') or paper.get('paper_id', '')
+    """获取论文唯一标识，兼容 arXiv、ICASSP、ICLR"""
+    return paper.get('arxivId') or paper.get('arnumber') or paper.get('forum_id') or paper.get('paper_id', '')
 
 
-def _copy_icassp_images(paper_id, date_str):
-    """从 data/current/icassp-images/{paper_id}/ 复制图片到博客 static 目录或上传到图床"""
-    source_dir = os.path.join(ICASSP_IMG_SOURCE_DIR, str(paper_id))
+def _copy_conference_images(paper_id, date_str, category='icassp-2026'):
+    """从 data/current/{category}-images/{paper_id}/ 复制图片到博客 static 目录或上传到图床"""
+    source_dir = os.path.join(get_img_source_dir(category), str(paper_id))
     if not os.path.exists(source_dir):
         return {}
 
     use_r2 = image_host_configured()
     if not use_r2:
         # 本地模式：复制到博客 static 目录
-        img_dir = os.path.join(BLOG_REPO, 'static', 'images', 'icassp-2026', date_str)
+        img_dir = os.path.join(BLOG_REPO, 'static', 'images', category, date_str)
         os.makedirs(img_dir, exist_ok=True)
 
     image_map = {}
@@ -99,15 +108,15 @@ def _copy_icassp_images(paper_id, date_str):
                 if cached:
                     web_path = cached
                 else:
-                    remote_key = build_remote_key(date_str, dest_filename, prefix='icassp-2026')
+                    remote_key = build_remote_key(date_str, dest_filename, prefix=category)
                     web_path = upload_image(source_path, remote_key)
             else:
                 # 本地模式：复制到博客 static 目录
-                dest_path = os.path.join(BLOG_REPO, 'static', 'images', 'icassp-2026', date_str, dest_filename)
+                dest_path = os.path.join(BLOG_REPO, 'static', 'images', category, date_str, dest_filename)
                 os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                 with open(source_path, 'rb') as src, open(dest_path, 'wb') as dst:
                     dst.write(src.read())
-                web_path = f'{BASE_PATH}/images/icassp-2026/{date_str}/{dest_filename}'
+                web_path = f'{BASE_PATH}/images/{category}/{date_str}/{dest_filename}'
 
             image_map[rf'icassp-img://{paper_id}/{idx}\.{ext}'] = web_path
             image_map[rf'pdf-image-page\d+-idx{idx}'] = web_path
@@ -117,7 +126,7 @@ def _copy_icassp_images(paper_id, date_str):
     return image_map
 
 
-def _extract_from_input(paper_id, date_str):
+def _extract_from_input(paper_id, date_str, category='icassp-2026'):
     """从 analyzer input 文件中提取 base64 图片（旧数据 fallback）"""
     input_file = os.path.join(IO_DIR, f'{paper_id}_input.json')
     if not os.path.exists(input_file):
@@ -149,7 +158,7 @@ def _extract_from_input(paper_id, date_str):
 
     use_r2 = image_host_configured()
     if not use_r2:
-        img_dir = os.path.join(BLOG_REPO, 'static', 'images', 'icassp-2026', date_str)
+        img_dir = os.path.join(BLOG_REPO, 'static', 'images', category, date_str)
         os.makedirs(img_dir, exist_ok=True)
 
     image_map = {}
@@ -166,17 +175,17 @@ def _extract_from_input(paper_id, date_str):
                     tmp.write(img_bytes)
                     tmp_path = tmp.name
                 try:
-                    remote_key = build_remote_key(date_str, filename, prefix='icassp-2026')
+                    remote_key = build_remote_key(date_str, filename, prefix=category)
                     web_path = upload_image(tmp_path, remote_key)
                 finally:
                     os.unlink(tmp_path)
             else:
                 # 本地模式
-                filepath = os.path.join(BLOG_REPO, 'static', 'images', 'icassp-2026', date_str, filename)
+                filepath = os.path.join(BLOG_REPO, 'static', 'images', category, date_str, filename)
                 os.makedirs(os.path.dirname(filepath), exist_ok=True)
                 with open(filepath, 'wb') as f:
                     f.write(img_bytes)
-                web_path = f'{BASE_PATH}/images/icassp-2026/{date_str}/{filename}'
+                web_path = f'{BASE_PATH}/images/{category}/{date_str}/{filename}'
 
             image_map[rf'pdf-image-page\d+-idx{idx}'] = web_path
         except Exception as e:
@@ -185,11 +194,11 @@ def _extract_from_input(paper_id, date_str):
     return image_map
 
 
-def extract_and_replace_images(md, paper_id, date_str):
-    """保存 ICASSP 图片到博客 static 目录，替换 markdown 中的内部标识符"""
-    image_map = _copy_icassp_images(paper_id, date_str)
+def extract_and_replace_images(md, paper_id, date_str, category='icassp-2026'):
+    """保存会议论文图片到博客 static 目录，替换 markdown 中的内部标识符"""
+    image_map = _copy_conference_images(paper_id, date_str, category)
     if not image_map:
-        image_map = _extract_from_input(paper_id, date_str)
+        image_map = _extract_from_input(paper_id, date_str, category)
 
     if not image_map:
         return md
@@ -245,6 +254,10 @@ def generate_index_page(scored, unscored, date_str, paper_slugs, category="论�
         page_title = f"ICASSP 2026 语音/音频论文详细分析"
         page_desc = f"共分析 {total} 篇 ICASSP 2026 论文"
         overview = f"📥 {total} 篇 → 🔬 深度分析完成"
+    elif category == "iclr-2026":
+        page_title = f"ICLR 2026 语音/音频论文详细分析"
+        page_desc = f"共分析 {total} 篇 ICLR 2026 论文"
+        overview = f"📥 {total} 篇 → 🔬 深度分析完成"
     else:
         page_title = f"语音/音频论文速递 {date_str}"
         page_desc = f"共分析 {total} 篇语音/AI 论文"
@@ -281,8 +294,9 @@ layout: "posts"
 点击任务标签查看该方向所有论文：
 
 """
+    default_summary = f"{BASE_PATH}/posts/iclr2026-summary/" if category == "iclr-2026" else f"{BASE_PATH}/posts/icassp2026-summary/"
     for task, cnt in sorted_tasks:
-        task_url = task_urls.get(task, f"{BASE_PATH}/posts/icassp2026-summary/") if task_urls else f"{BASE_PATH}/posts/icassp2026-summary/"
+        task_url = task_urls.get(task, default_summary) if task_urls else default_summary
         md += f"- [{task}]({task_url})（{cnt}篇）\n"
 
     md += f"""
@@ -375,10 +389,12 @@ layout: "posts"
 
 
 def generate_task_index_page(task, papers_in_task, date_str, paper_slugs, category="icassp-2026", task_index=0):
-    """生成某任务标签下的 ICASSP 论文汇总页面"""
+    """生成某任务标签下的会议论文汇总页面"""
     task_slug = slugify(task, max_length=80)
     # 文件名使用纯 ASCII，避免 Hugo 构建时中文文件名问题
-    safe_filename = f"icassp2026-task-{task_index:03d}"
+    prefix = "icassp" if category == "icassp-2026" else "iclr"
+    conf_label = "ICASSP 2026" if category == "icassp-2026" else "ICLR 2026"
+    safe_filename = f"{prefix}2026-task-{task_index:03d}"
     total = len(papers_in_task)
     # 按分数排序
     scored_in_task = []
@@ -398,20 +414,20 @@ def generate_task_index_page(task, papers_in_task, date_str, paper_slugs, catego
     scored_in_task.sort(key=lambda x: -x[0])
 
     md = f"""---
-title: "ICASSP 2026 - {task} 论文列表"
+title: "{conf_label} - {task} 论文列表"
 date: {date_str}
 draft: false
 tags: ["{task}"]
 categories: [{category}]
-description: "共 {total} 篇 ICASSP 2026 {task} 方向论文"
+description: "共 {total} 篇 {conf_label} {task} 方向论文"
 hiddenInHomeList: true
 ---
 
-# ICASSP 2026 - {task}
+# {conf_label} - {task}
 
 共 **{total}** 篇论文
 
-[← 返回 ICASSP 2026 总览]({BASE_PATH}/posts/icassp2026-summary/)
+[← 返回 {conf_label} 总览]({BASE_PATH}/posts/{prefix}2026-summary/)
 
 ---
 
@@ -551,12 +567,13 @@ hiddenInHomeList: true
         md += '> ⚠️ 该论文分析失败\n'
 
     if summary_slug:
-        md += f'\n---\n\n[← 返回 ICASSP 2026 论文分析]({BASE_PATH}/posts/{summary_slug}/)\n'
+        category_label = "ICASSP 2026" if category == "icassp-2026" else ("ICLR 2026" if category == "iclr-2026" else category)
+        md += f'\n---\n\n[← 返回 {category_label} 论文分析]({BASE_PATH}/posts/{summary_slug}/)\n'
     else:
         md += f'\n---\n\n[← 返回 {date_str} 论文速递]({BASE_PATH}/posts/{date_str}/)\n'
 
     # 提取并替换内部图片标识符为实际路径
-    md = extract_and_replace_images(md, get_paper_id(paper), date_str)
+    md = extract_and_replace_images(md, get_paper_id(paper), date_str, category)
     # 降级不可用的外部图片引用（IEEE 防盗链、假链接等）
     md = sanitize_external_images(md)
 
@@ -574,7 +591,12 @@ def git_push(date_str, category="论文速递", summary_slug=None):
         return True
 
     subprocess.run(['git', 'add', '-A'], check=True, cwd=BLOG_REPO)
-    label = "ICASSP 2026" if category == "icassp-2026" else "论文速递"
+    if category == "icassp-2026":
+        label = "ICASSP 2026"
+    elif category == "iclr-2026":
+        label = "ICLR 2026"
+    else:
+        label = "论文速递"
     subprocess.run(
         ['git', 'commit', '-m', f'add: {label} {date_str}'],
         check=True, cwd=BLOG_REPO
@@ -623,11 +645,21 @@ def main():
         return
 
     # 根据数据文件路径判断分类
-    category = "icassp-2026" if data_file and "icassp" in data_file.lower() else "论文速递"
+    if data_file and "icassp" in data_file.lower():
+        category = "icassp-2026"
+    elif data_file and "iclr" in data_file.lower():
+        category = "iclr-2026"
+    else:
+        category = "论文速递"
     print(f"🏷️ 分类: {category}")
 
-    # ICASSP 汇总页面使用固定 slug，不再用日期作为文件名
-    summary_slug = "icassp2026-summary" if category == "icassp-2026" else today
+    # 会议汇总页面使用固定 slug，不再用日期作为文件名
+    if category == "icassp-2026":
+        summary_slug = "icassp2026-summary"
+    elif category == "iclr-2026":
+        summary_slug = "iclr2026-summary"
+    else:
+        summary_slug = today
 
     os.makedirs(CONTENT_DIR, exist_ok=True)
 
@@ -643,10 +675,10 @@ def main():
 
     print(f"📄 生成 {len(paper_slugs)} 篇论文独立页面")
 
-    # 为 ICASSP 预先构建任务分组和 URL 映射（汇总页面链接需要用到）
+    # 为会议论文预先构建任务分组和 URL 映射（汇总页面链接需要用到）
     task_urls = None
     task_groups = {}
-    if category == "icassp-2026":
+    if category in ("icassp-2026", "iclr-2026"):
         for p in papers:
             pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
             task = pa.get('primaryTaskTag', '')
@@ -654,8 +686,9 @@ def main():
                 task = task.strip().lstrip('#')
                 task_groups.setdefault(task, []).append(p)
         task_urls = {}
+        prefix = "icassp" if category == "icassp-2026" else "iclr"
         for task_index, (task, _) in enumerate(sorted(task_groups.items())):
-            task_urls[task] = f"{BASE_PATH}/posts/icassp2026-task-{task_index:03d}/"
+            task_urls[task] = f"{BASE_PATH}/posts/{prefix}2026-task-{task_index:03d}/"
 
     index_md = generate_index_page(scored, unscored, today, paper_slugs, category, task_urls)
     index_file = os.path.join(CONTENT_DIR, f"{summary_slug}.md")
@@ -663,11 +696,12 @@ def main():
         f.write(index_md)
     print(f"📄 汇总页面: {index_file} ({len(index_md)} chars)")
 
-    # 为 ICASSP 每个任务标签生成独立汇总页面
-    if category == "icassp-2026":
+    # 为会议论文每个任务标签生成独立汇总页面
+    if category in ("icassp-2026", "iclr-2026"):
+        prefix = "icassp" if category == "icassp-2026" else "iclr"
         # 清理旧的中文文件名任务页面
         for old_file in os.listdir(CONTENT_DIR):
-            if old_file.startswith('icassp2026-') and old_file.endswith('.md') and 'task-' not in old_file and old_file != 'icassp2026-summary.md':
+            if old_file.startswith(f'{prefix}2026-') and old_file.endswith('.md') and 'task-' not in old_file and old_file != f'{prefix}2026-summary.md':
                 os.remove(os.path.join(CONTENT_DIR, old_file))
 
         task_page_count = 0
