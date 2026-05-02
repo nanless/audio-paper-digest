@@ -43,12 +43,10 @@ const {
     buildHeaders,
     parseResponseText
 } = require('./utils.js');
-const { analyzeBatch, createFileSaver } = require('./analysis-engine.js');
-const { extractPdfContent } = require('./deep-analyzer.js');
 const Config = require('./config.js');
 
 // ═══════════════════════════════════════════════════════
-// 配置
+// 配置（必须在 require deep-analyzer.js 之前设置）
 // ═══════════════════════════════════════════════════════
 
 const PROJECT_ROOT = path.join(__dirname, '..');
@@ -66,8 +64,11 @@ const OFFSET = parseInt(process.env.ICLR_OFFSET || '0', 10);
 const LIMIT = parseInt(process.env.ICLR_LIMIT || '0', 10) || Infinity;
 const FILTER_ONLY = process.env.ICLR_FILTER_ONLY === 'true';
 
-// 图片目录（通过环境变量传给 deep-analyzer.js）
+// 图片目录（必须在 require deep-analyzer.js 之前设置，因为 deep-analyzer.js 在模块加载时读取）
 process.env.PAPER_IMAGE_DIR = process.env.PAPER_IMAGE_DIR || path.join(Config.CURRENT_DIR, 'iclr-images');
+
+const { analyzeBatch, createFileSaver } = require('./analysis-engine.js');
+const { extractPdfContent } = require('./deep-analyzer.js');
 
 // ═══════════════════════════════════════════════════════
 // forum_id -> PDF 路径映射
@@ -113,7 +114,7 @@ async function llmFilterSingle(paper, config) {
     const url = new URL(modelUrl);
 
     // ICLR 已有 abstract，不需要提取 PDF
-    const abstract = (paper.abstract || '').substring(0, 2000);
+    const abstract = (paper.abstract || '').substring(0, 5000);
 
     const prompt = loadPrompt('prompts/filter.md', {
         title: paper.title || '(无标题)',
@@ -260,7 +261,6 @@ async function llmFilterPapers(papers) {
         }
     }
 
-    console();
     console.log(`[filter] 筛选完成: 保留 ${included.length} 篇, 排除 ${excluded.length} 篇, 失败 ${failed.length} 篇`);
 
     const excludeFile = RESULT_FILE.replace('.json', '-excluded.json');
