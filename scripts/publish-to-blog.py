@@ -44,9 +44,16 @@ IMAGE_BASE_URL = os.environ.get('PAPER_DIGEST_IMAGE_BASE_URL', '').rstrip('/')
 BLOG_REPO = os.path.expanduser(
     os.environ.get("PAPER_DIGEST_BLOG_REPO", "~/code/github_repos/audio-paper-digest-blog")
 )
+IMAGES_REPO = os.path.expanduser(
+    os.environ.get("PAPER_DIGEST_IMAGES_REPO", "~/code/github_repos/audio-paper-digest-images")
+)
 CONTENT_DIR = os.path.join(BLOG_REPO, "content", "posts")
 BASE_PATH = os.environ.get("PAPER_DIGEST_BLOG_BASE_PATH", "/audio-paper-digest-blog")
 GITHUB_REMOTE = os.environ.get("PAPER_DIGEST_GITHUB_REMOTE", "origin")
+
+# 图床模式检测
+USE_R2 = image_host_configured()
+USE_GITHUB_PAGES = bool(IMAGE_BASE_URL and 'github.io' in IMAGE_BASE_URL)
 
 IO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'current', 'deep_analyzer_input_output')
 
@@ -78,13 +85,12 @@ def get_paper_id(paper):
 
 
 def _copy_conference_images(paper_id, date_str, category='icassp-2026'):
-    """从 data/current/{category}-images/{paper_id}/ 复制图片到博客 static 目录或上传到图床"""
+    """从 data/current/{category}-images/{paper_id}/ 复制图片到博客 static 目录、R2 图床或 GitHub Pages 图床"""
     source_dir = os.path.join(get_img_source_dir(category), str(paper_id))
     if not os.path.exists(source_dir):
         return {}
 
-    use_r2 = image_host_configured()
-    if not use_r2:
+    if not USE_R2 and not USE_GITHUB_PAGES:
         # 本地模式：复制到博客 static 目录
         img_dir = os.path.join(BLOG_REPO, 'static', 'images', category, date_str)
         os.makedirs(img_dir, exist_ok=True)
@@ -102,14 +108,23 @@ def _copy_conference_images(paper_id, date_str, category='icassp-2026'):
         dest_filename = f'{paper_id}-{idx}.{ext}'
 
         try:
-            if use_r2:
-                # 图床模式：上传到 R2
+            if USE_R2:
+                # R2/S3 图床模式
                 cached = get_cached_url(source_path)
                 if cached:
                     web_path = cached
                 else:
                     remote_key = build_remote_key(date_str, dest_filename, prefix=category)
                     web_path = upload_image(source_path, remote_key)
+            elif USE_GITHUB_PAGES:
+                # GitHub Pages 图床模式：复制到图床仓库
+                gp_dir = os.path.join(IMAGES_REPO, category, date_str)
+                gp_path = os.path.join(gp_dir, dest_filename)
+                if not os.path.exists(gp_path):
+                    os.makedirs(gp_dir, exist_ok=True)
+                    import shutil
+                    shutil.copy2(source_path, gp_path)
+                web_path = f'{IMAGE_BASE_URL}/{category}/{date_str}/{dest_filename}'
             else:
                 # 本地模式：复制到博客 static 目录
                 dest_path = os.path.join(BLOG_REPO, 'static', 'images', category, date_str, dest_filename)
@@ -156,8 +171,7 @@ def _extract_from_input(paper_id, date_str, category='icassp-2026'):
     if not images:
         return {}
 
-    use_r2 = image_host_configured()
-    if not use_r2:
+    if not USE_R2 and not USE_GITHUB_PAGES:
         img_dir = os.path.join(BLOG_REPO, 'static', 'images', category, date_str)
         os.makedirs(img_dir, exist_ok=True)
 
@@ -168,8 +182,8 @@ def _extract_from_input(paper_id, date_str, category='icassp-2026'):
         try:
             img_bytes = base64.b64decode(b64_data)
 
-            if use_r2:
-                # 图床模式：先写入临时文件再上传
+            if USE_R2:
+                # R2/S3 图床模式：先写入临时文件再上传
                 import tempfile
                 with tempfile.NamedTemporaryFile(suffix=f'.{ext}', delete=False) as tmp:
                     tmp.write(img_bytes)
@@ -179,6 +193,15 @@ def _extract_from_input(paper_id, date_str, category='icassp-2026'):
                     web_path = upload_image(tmp_path, remote_key)
                 finally:
                     os.unlink(tmp_path)
+            elif USE_GITHUB_PAGES:
+                # GitHub Pages 图床模式：写入图床仓库
+                gp_dir = os.path.join(IMAGES_REPO, category, date_str)
+                gp_path = os.path.join(gp_dir, filename)
+                if not os.path.exists(gp_path):
+                    os.makedirs(gp_dir, exist_ok=True)
+                    with open(gp_path, 'wb') as f:
+                        f.write(img_bytes)
+                web_path = f'{IMAGE_BASE_URL}/{category}/{date_str}/{filename}'
             else:
                 # 本地模式
                 filepath = os.path.join(BLOG_REPO, 'static', 'images', category, date_str, filename)
@@ -581,7 +604,35 @@ hiddenInHomeList: true
 
 
 def git_push(date_str, category="论文速递", summary_slug=None):
-    """Commit and push to GitHub"""
+    """Commit and push to GitHub（博客 + 图床仓库）"""
+    # 先推送图床仓库（如果有新图片）
+    if USE_GITHUB_PAGES and os.path.exists(IMAGES_REPO):
+        img_status = subprocess.run(
+            ['git', 'status', '--porcelain'],
+            capture_output=True, text=True, cwd=IMAGES_REPO
+        )
+        if img_status.stdout.strip():
+            subprocess.run(['git', 'add', '-A'], check=True, cwd=IMAGES_REPO)
+            if category == "icassp-2026":
+                label = "ICASSP 2026"
+            elif category == "iclr-2026":
+                label = "ICLR 2026"
+            else:
+                label = "论文速递"
+            subprocess.run(
+                ['git', 'commit', '-m', f'add: {label} 图片 {date_str}'],
+                check=True, cwd=IMAGES_REPO
+            )
+            img_result = subprocess.run(
+                ['git', 'push', GITHUB_REMOTE, 'main'],
+                capture_output=True, text=True, cwd=IMAGES_REPO
+            )
+            if img_result.returncode == 0:
+                print(f"  ✅ 图床仓库已推送")
+            else:
+                print(f"  ⚠️ 图床仓库 push 失败: {img_result.stderr}")
+
+    # 推送博客仓库
     status = subprocess.run(
         ['git', 'status', '--porcelain'],
         capture_output=True, text=True, cwd=BLOG_REPO
