@@ -274,18 +274,56 @@ def extract_and_replace_images(md, paper_id, date_str, category='icassp-2026'):
     # 格式B: （`icassp-img://...`） → ![图片](icassp-img://...)
     md = re.sub(
         r'[（(]`(icassp-img://' + re.escape(str(paper_id)) + r'/[^`]+)`[）)]',
-        lambda m: f'![论文中的图片]({m.group(1)})',
+        lambda m: f'![论文配图]({m.group(1)})',
         md
     )
     # 格式D: `icassp-img://...` (不在括号内) → ![图片](icassp-img://...)
     md = re.sub(
         r'(?<![（(])`(icassp-img://' + re.escape(str(paper_id)) + r'/[^`]+)`(?![）)])',
-        lambda m: f'![论文中的图片]({m.group(1)})',
+        lambda m: f'![论文配图]({m.group(1)})',
         md
     )
 
     # 阶段2：标准 markdown 图片替换
     md = re.sub(r'(\!\[.*?\]\()(.*?)(\))', _replacer, md)
+
+    # 阶段3：后处理修复常见图片格式问题
+    # 修复1: 描述是 raw URL 的情况 → 替换为 "论文配图"
+    md = re.sub(
+        r'(!\[)icassp-img://[^\]]+(\]\()',
+        r'\1论文配图\2',
+        md
+    )
+    # 修复2: 将行内图片从 bullet 中提取到独立行
+    # 例如：'- **某标题**：![描述](url) 后续文本' → 分成多行
+    def _extract_inline_images(line):
+        m = re.match(r'^([\s]*- [^!]*)(!\[.*?\]\(.*?\))(.*)$', line)
+        if m:
+            prefix = m.group(1).rstrip()
+            img = m.group(2)
+            suffix = m.group(3).strip()
+            result = [prefix, '', img]
+            if suffix:
+                result.extend(['', suffix])
+            return '\n'.join(result)
+        return line
+
+    md = '\n'.join(_extract_inline_images(line) for line in md.split('\n'))
+
+    # 修复3: 确保每张图片前后有空行（但不在表格中）
+    result_lines = []
+    lines = md.split('\n')
+    for i, line in enumerate(lines):
+        if line.strip().startswith('![') and not line.strip().startswith('|'):
+            if result_lines and result_lines[-1].strip() and not result_lines[-1].strip().startswith('#'):
+                result_lines.append('')
+            result_lines.append(line)
+            if i + 1 < len(lines) and lines[i + 1].strip() and not lines[i + 1].strip().startswith('!['):
+                result_lines.append('')
+        else:
+            result_lines.append(line)
+    md = '\n'.join(result_lines)
+
     return md
 
     # 阶段2：标准 markdown 图片替换
