@@ -242,7 +242,10 @@ def extract_and_replace_images(md, paper_id, date_str, category='icassp-2026'):
         for pattern, web_path in image_map.items():
             if re.fullmatch(pattern, url):
                 return match.group(1) + web_path + match.group(3)
-        # 如果URL不匹配任何已知模式（LLM编造的外部URL），但有实际图片可用，按顺序替换
+        # 外部URL（LLM引用的论文网页图片）保留原样，禁止用本地图片乱序替换
+        if url.startswith('http://') or url.startswith('https://'):
+            return match.group(0)
+        # 如果URL不匹配任何已知模式，但有实际图片可用，按顺序替换
         if fallback_idx[0] < len(available_paths):
             web_path = available_paths[fallback_idx[0]]
             fallback_idx[0] += 1
@@ -256,6 +259,19 @@ def extract_and_replace_images(md, paper_id, date_str, category='icassp-2026'):
     md = re.sub(
         r'https://(icassp-img://' + re.escape(str(paper_id)) + r'/[^\s\)）\]]+)',
         r'\1',
+        md
+    )
+    # 预处理：移除 LLM 编造的占位符/虚假图片URL（保留图片描述作为纯文本）
+    md = re.sub(
+        r'!\[(.*?)\]\(https?://[^\)]*(?:placeholder|example\.com|xxx)[^\)]*\)',
+        lambda m: m.group(1) if m.group(1) else '',
+        md,
+        flags=re.I
+    )
+    # 预处理：移除可疑的外部图片URL（如百度图片等明显非论文来源的URL）
+    md = re.sub(
+        r'!\[(.*?)\]\(https?://pic\.rmb\.bdstatic\.com[^\)]*\)',
+        lambda m: m.group(1) if m.group(1) else '',
         md
     )
     # 格式A: **图X (icassp-img://...)** → ![图X](icassp-img://...)

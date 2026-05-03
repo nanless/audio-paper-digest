@@ -146,6 +146,15 @@ def is_page_mostly_text(page_pixmap_bytes):
         # 额外检测：如果页面非常亮但文字密度高（深色像素少且集中）
         if avg > 245 and std < 12:
             return True
+        # 首页检测：标题页通常有大片空白（顶部标题+中部作者+底部摘要）
+        # 亮度很高且标准差适中（比纯文字页稍大因为有大字体标题）
+        if avg > 248 and 8 <= std < 20:
+            # 进一步检查：顶部区域是否有大标题特征
+            top_region = img.crop((0, 0, 64, 20))
+            top_pixels = list(top_region.getdata())
+            top_avg = sum(top_pixels) / len(top_pixels)
+            if top_avg > 245:  # 顶部也很亮（大标题区域白色多）
+                return True
         return False
     except Exception:
         return False
@@ -395,6 +404,15 @@ def _clip_to_figure_region(page, dpi=150):
                 # 没 graphic 元素且高度很大 → 可能是正文，强制切到 caption 上方模式
                 if not has_graphics and height > 180:
                     height = 0  # 强制进入下方分支
+                # 新增：即使高度不大，如果没有 graphic 元素且文字块很多，也跳过
+                if not has_graphics:
+                    try:
+                        text_in_clip = [b for b in page.get_text("blocks")
+                                        if fitz.Rect(b[:4]).intersects(clip_check) and len(b[4].strip()) > 10]
+                        if len(text_in_clip) > 5:
+                            height = 0  # 强制进入下方分支
+                    except Exception:
+                        pass
 
             # 上方太小或无 figure，则尝试下方（caption 在 figure 上方）
             if height < 60:
@@ -468,6 +486,14 @@ def _clip_to_figure_region(page, dpi=150):
 
     # 策略3：回退到页面上半部（仅在此应用 is_page_mostly_text）
     if not results:
+        # 跳过第1页（通常是标题页，没有有价值的图表）
+        try:
+            page_num = page.number
+        except Exception:
+            page_num = -1
+        if page_num == 0:
+            return results
+
         # 结构预检：text blocks 很多且 drawing/image 很少 → 纯文字页，跳过
         is_text_page = False
         try:
@@ -732,6 +758,9 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
                 except Exception:
                     pass
                 # 回退到整页渲染
+                # 跳过第1页的整页渲染（通常是标题页）
+                if page_num == 0:
+                    continue
                 rendered = render_page(page, dpi=150)
                 if rendered:
                     figure_regions = [(rendered, None)]
