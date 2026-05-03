@@ -79,11 +79,14 @@ def is_decorative_icon(width, height):
         return False
     ratio = min(width, height) / max(width, height)
     area = width * height
-    # 正方形-ish 小图 (头像、Logo、图标)
-    if ratio > 0.8 and area < 150000:
+    # 正方形-ish 小图 (头像、Logo、图标、teaser 图)
+    if ratio > 0.7 and area < 350000:
         return True
     # 特别小的图
     if width < 250 or height < 180:
+        return True
+    # 近似正方形的中等图（可能是 mascot/logo）
+    if ratio > 0.6 and width < 450 and height < 650 and area < 300000:
         return True
     return False
 
@@ -693,12 +696,18 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
                 break
 
             page = doc[page_num]
-            # 跳过纯文字页：文本很长且内嵌图很少
+            # 跳过纯文字页：文本很长且内嵌图很少，且没有矢量图形或figure caption
             page_text = page.get_text()
             page_imgs = page.get_images(full=True)
             text_len = len(page_text.strip())
             if text_len > 3500 and len(page_imgs) < 2:
-                continue
+                # 检查页面是否有真正的 figure caption（而非正文引用）
+                fig_captions = _find_figure_captions(page)
+                # 检查是否有大量矢量 drawing（可能是 TikZ 图）
+                drawings = page.get_drawings()
+                # 如果既没有 caption 又没有足够 drawing，则跳过
+                if len(fig_captions) == 0 and len(drawings) < 15:
+                    continue
 
             # 优先尝试只提取 figure 区域（而非整页）
             figure_regions = _clip_to_figure_region(page, dpi=150)
