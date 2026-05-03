@@ -371,6 +371,139 @@ def sanitize_external_images(md):
     return re.sub(r'!\[(.*?)\]\((.*?)\)', _replacer, md)
 
 
+def self_check_and_fix(md, paper_id):
+    """
+    自检查：检查博客 markdown 中的图片问题并尝试自动修复。
+    返回 (fixed_md, issues_list)。
+    issues_list 为空表示没有发现问题。
+    """
+    issues = []
+    lines = md.split('\n')
+
+    # 收集所有实际图片行
+    img_lines = []
+    for i, line in enumerate(lines):
+        if re.match(r'\s*!\[.*?\]\(.*?\)\s*$', line):
+            img_lines.append((i, line))
+
+    # 1. 检查未转换的 icassp-img://（不在标准 markdown 图片语法中）
+    unconverted = []
+    for i, line in enumerate(lines):
+        if 'icassp-img://' in line:
+            # 排除已经是标准语法的行
+            if not re.match(r'\s*!\[.*?\]\(icassp-img://.*?\)\s*$', line):
+                # 尝试自动修复：把反引号或裸 URL 转为标准语法
+                original = line
+                line = re.sub(
+                    r'`(icassp-img://' + re.escape(str(paper_id)) + r'/[^`]+)`',
+                    lambda m: f'![论文配图]({m.group(1)})',
+                    line
+                )
+                line = re.sub(
+                    r'(?<!!\[)\(icassp-img://' + re.escape(str(paper_id)) + r'/[^\s\)]+\)',
+                    lambda m: f'![论文配图]{m.group(0)}',
+                    line
+                )
+                if line != original:
+                    lines[i] = line
+                else:
+                    unconverted.append((i + 1, line[:80]))
+    if unconverted:
+        issues.append(f'未转换URL: {len(unconverted)}处')
+
+    # 2. 检查 placeholder / 虚假 URL
+    placeholder_patterns = [
+        r'placeholder\.png',
+        r'example\.com',
+        r'pic\.rmb\.bdstatic',
+        r'https://user-images\.githubusercontent',
+    ]
+    placeholder_count = 0
+    for i, line in enumerate(lines):
+        for pat in placeholder_patterns:
+            if re.search(pat, line, re.I):
+                placeholder_count += 1
+                # 自动删除：移除整行图片引用，保留描述作为纯文本
+                lines[i] = re.sub(
+                    r'!\[(.*?)\]\([^)]*' + pat + r'[^)]*\)',
+                    lambda m: m.group(1) if m.group(1) and m.group(1) not in ['论文配图', ''] else '',
+                    line,
+                    flags=re.I
+                )
+    if placeholder_count:
+        issues.append(f'占位符URL: {placeholder_count}处（已自动删除）')
+
+    # 3. 检查外部 URL（http/https）作为图片引用
+    external_urls = []
+    for i, line in enumerate(lines):
+        m = re.search(r'!\[.*?\]\((https?://[^)]+)\)', line)
+        if m:
+            url = m.group(1)
+            # 排除已知的合法外部图片（如我们自己的图床）
+            if not url.startswith(BASE_PATH) and 'githubusercontent.com' not in url:
+                external_urls.append((i + 1, url[:60]))
+    if external_urls:
+        issues.append(f'外部图片URL: {len(external_urls)}处')
+
+    # 4. 检查图片是否夹在表格中间
+    for i, line in img_lines:
+        prev_text = None
+        next_text = None
+        for j in range(i - 1, -1, -1):
+            if lines[j].strip():
+                prev_text = lines[j].strip()
+                break
+        for j in range(i + 1, len(lines)):
+            if lines[j].strip():
+                next_text = lines[j].strip()
+                break
+        if prev_text and prev_text.startswith('|') and next_text and next_text.startswith('|'):
+            # 自动修复：在图片前后各插入空行，将其移出表格
+            lines[i] = '\n' + line + '\n'
+            issues.append(f'图片在表格中(行{i+1})')
+
+    # 5. 检查图片前后是否有空行
+    for i, line in img_lines:
+        if i > 0 and lines[i - 1].strip() and not lines[i - 1].strip().startswith('#') and not lines[i - 1].strip().startswith('- ') and not lines[i - 1].strip().startswith('* '):
+            # 自动修复：在图片前插入空行
+            lines[i] = '\n' + line
+            issues.append(f'图片前无空行(行{i+1})')
+        if i + 1 < len(lines) and lines[i + 1].strip() and not lines[i + 1].strip().startswith('![') and not lines[i + 1].strip().startswith('- ') and not lines[i + 1].strip().startswith('* ') and not lines[i + 1].strip().startswith('|'):
+            # 自动修复：在图片后插入空行
+            lines[i] = line + '\n'
+            issues.append(f'图片后无空行(行{i+1})')
+
+    # 6. 检查图片描述是否过于泛泛
+    generic_count = 0
+    for i, line in img_lines:
+        m = re.match(r'!\[(.*?)\]\(', line)
+        if m:
+            desc = m.group(1).strip()
+            if desc in ['论文中的图片', '论文配图', '图片', '']:
+                generic_count += 1
+    if generic_count:
+        issues.append(f'泛泛描述: {generic_count}处')
+
+    # 7. 检查文本中提到的图号是否超出实际图片数量
+    fig_mentions = set()
+    for line in lines:
+        for m in re.finditer(r'[（(]?(?:如图|图)\s*(\d+)[）)]?', line):
+            fig_mentions.add(int(m.group(1)))
+        for m in re.finditer(r'Figure\s*(\d+)', line, re.I):
+            fig_mentions.add(int(m.group(1)))
+
+    actual_img_count = len(img_lines)
+    if fig_mentions:
+        max_fig = max(fig_mentions)
+        if max_fig > actual_img_count:
+            issues.append(f'missing-figures: 提到图{max_fig}但只有{actual_img_count}张图片')
+
+    fixed_md = '\n'.join(lines)
+    # 清理连续空行
+    fixed_md = re.sub(r'\n{3,}', '\n\n', fixed_md)
+    return fixed_md, issues
+
+
 def yaml_escape(s):
     """安全转义 YAML 双引号字符串中的特殊字符，同时避免 f-string 解析问题"""
     if not s:
@@ -714,6 +847,13 @@ hiddenInHomeList: true
     md = extract_and_replace_images(md, get_paper_id(paper), date_str, category)
     # 降级不可用的外部图片引用（IEEE 防盗链、假链接等）
     md = sanitize_external_images(md)
+
+    # 自检查：检查并自动修复图片问题
+    md, issues = self_check_and_fix(md, get_paper_id(paper))
+    if issues:
+        print(f"  ⚠️ 自检查问题 [{get_paper_id(paper)}]: {', '.join(issues)}")
+    else:
+        print(f"  ✅ 自检查通过 [{get_paper_id(paper)}]")
 
     return md, slug
 
