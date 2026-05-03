@@ -15,6 +15,7 @@ setup_script_logging(__file__)
 用法：
     python3 publish-to-blog.py [data_file]
     python3 publish-to-blog.py --skip-push     # 只生成 .md 不推送到 GitHub
+    python3 publish-to-blog.py --skip-verify   # 跳过多模态图文校验
     python3 publish-to-blog.py --date YYYY-MM-DD
     python3 publish-to-blog.py [data_file] --paper-id <id>   # 单篇生成模式(不汇总不push, 末行打印 PAPER_MD_PATH=...)
     python3 publish-to-blog.py [data_file] --list-papers     # 输出 "{id}\\t{score}\\t{task}\\t{title}" 列表
@@ -925,6 +926,37 @@ hiddenInHomeList: true
     return md, slug
 
 
+def run_image_verifier(md_files, concurrency=4):
+    """对刚生成的 .md 调多模态校验器，自动剔除文字截图、重复图，并修正纯占位 alt。
+
+    失败不抛异常：校验是质量增强环节，不应阻塞发布主流程。
+    """
+    if not md_files:
+        return
+    if os.environ.get('SKIP_IMAGE_VERIFY') == '1':
+        print('⏭️ 跳过多模态图文校验 (SKIP_IMAGE_VERIFY=1)')
+        return
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    verifier = os.path.join(script_dir, 'verify-blog-images.js')
+    if not os.path.exists(verifier):
+        print(f'⚠️ 未找到校验器脚本: {verifier}, 跳过')
+        return
+    cmd = ['node', verifier, '--apply', '--concurrency', str(concurrency)] + list(md_files)
+    print(f'🔍 多模态图文校验: {len(md_files)} 篇 (concurrency={concurrency})')
+    try:
+        result = subprocess.run(cmd, cwd=os.path.dirname(script_dir), check=False)
+        if result.returncode == 0:
+            print('✅ 校验完成')
+        elif result.returncode == 2:
+            print('⚠️ 校验完成但有 FAIL 条目（详见 /tmp/iclr_fix/verify-results.tsv）')
+        else:
+            print(f'⚠️ 校验器异常退出 code={result.returncode}, 已跳过')
+    except FileNotFoundError:
+        print('⚠️ 未找到 node 可执行文件, 跳过校验')
+    except Exception as e:
+        print(f'⚠️ 校验器调用失败: {e}, 跳过')
+
+
 def git_push(date_str, category="论文速递", summary_slug=None):
     """Commit and push to GitHub（博客 + 图床仓库）"""
     # 先推送图床仓库（如果有新图片）
@@ -994,6 +1026,7 @@ def git_push(date_str, category="论文速递", summary_slug=None):
 def main():
     data_file = None
     skip_push = False
+    skip_verify = False
     target_date = None
     single_paper_id = None
     list_papers_only = False
@@ -1003,6 +1036,8 @@ def main():
         arg = sys.argv[i]
         if arg == '--skip-push':
             skip_push = True
+        elif arg == '--skip-verify':
+            skip_verify = True
         elif arg == '--date' and i + 1 < len(sys.argv):
             target_date = sys.argv[i + 1]
             i += 1
@@ -1089,6 +1124,9 @@ def main():
         paper_file = os.path.join(CONTENT_DIR, f"{today}-{slug}.md")
         with open(paper_file, 'w') as f:
             f.write(paper_md)
+        # 单篇模式也跑一遍多模态图文校验
+        if not skip_verify:
+            run_image_verifier([paper_file], concurrency=1)
         # 单篇模式输出生成的 .md 绝对路径到 stdout 末行(方便协调脚本捕获)
         print(f"📄 单篇生成: {paper_file}")
         print(f"PAPER_MD_PATH={paper_file}")
@@ -1131,6 +1169,7 @@ def main():
             shutil.rmtree(gp_img_dir)
 
     paper_slugs = {}
+    paper_files = []
     for paper in papers:
         pa = parse_analysis(paper.get('analysis', ''))
         if pa:
@@ -1139,8 +1178,13 @@ def main():
             with open(paper_file, 'w') as f:
                 f.write(paper_md)
             paper_slugs[get_paper_id(paper)] = slug
+            paper_files.append(paper_file)
 
     print(f"📄 生成 {len(paper_slugs)} 篇论文独立页面")
+
+    # 多模态图文一致性校验：剔除文字截图、修正占位 alt、清理重复图
+    if not skip_verify:
+        run_image_verifier(paper_files, concurrency=4)
 
     # 为会议论文预先构建任务分组和 URL 映射（汇总页面链接需要用到）
     task_urls = None
