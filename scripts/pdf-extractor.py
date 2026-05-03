@@ -426,7 +426,7 @@ def _clip_to_figure_region(page, dpi=150):
                 if not has_graphics:
                     continue
 
-            if bottom - top < 60 or bottom - top > 340:
+            if bottom - top < 60 or bottom - top > 400:
                 continue
 
             clip = fitz.Rect(rect.x0, top, rect.x1, bottom)
@@ -463,7 +463,7 @@ def _clip_to_figure_region(page, dpi=150):
     # 策略2：drawing/image 聚类（用于无 caption 的页面）
     if not results:
         search_rect = fitz.Rect(rect.x0, rect.y0 + 80, rect.x1, rect.y1 - 40)
-        cluster = _find_largest_graphic_cluster(page, search_rect, min_area=5000)
+        cluster = _find_largest_graphic_cluster(page, search_rect, min_area=3000)
         if cluster:
             margin = 15
             clip = fitz.Rect(
@@ -722,7 +722,7 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
 
         # 按优先级排序，优先渲染高分页面
         page_priorities.sort(key=lambda x: -x[1])
-        max_render = min(8, max_images)  # 增加到8页以捕获更多架构图
+        max_render = min(12, max_images)  # 增加到12页以捕获更多架构图和结果图
 
         for page_num, priority in page_priorities[:max_render]:
             if len(images) >= max_images:
@@ -733,13 +733,13 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
             page_text = page.get_text()
             page_imgs = page.get_images(full=True)
             text_len = len(page_text.strip())
-            if text_len > 3500 and len(page_imgs) < 2:
+            if text_len > 4500 and len(page_imgs) < 2:
                 # 检查页面是否有真正的 figure caption（而非正文引用）
                 fig_captions = _find_figure_captions(page)
                 # 检查是否有大量矢量 drawing（可能是 TikZ 图）
                 drawings = page.get_drawings()
                 # 如果既没有 caption 又没有足够 drawing，则跳过
-                if len(fig_captions) == 0 and len(drawings) < 15:
+                if len(fig_captions) == 0 and len(drawings) < 10:
                     continue
 
             # 优先尝试只提取 figure 区域（而非整页）
@@ -821,11 +821,11 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
 
                     # 严格尺寸过滤
                     area = width * height
-                    if width < 250 or height < 180:  # 最小尺寸
+                    if width < 200 or height < 150:  # 最小尺寸（放宽）
                         continue
-                    if width > 1400 or height > 1000:  # 最大尺寸
+                    if width > 1800 or height > 1400:  # 最大尺寸（放宽）
                         continue
-                    if area < 60000:  # 最小面积 (~250x240)
+                    if area < 35000:  # 最小面积（放宽，~200x175）
                         continue
 
                     # 过滤装饰性图标/Logo/小照片
@@ -838,7 +838,7 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
 
                     # 过滤极端宽高比
                     ratio = width / height if height > 0 else 0
-                    if ratio < 0.4 or ratio > 4.0:
+                    if ratio < 0.3 or ratio > 5.0:
                         continue
 
                     # 过滤外部图库水印图片
@@ -872,7 +872,7 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
         # 为内嵌图分配剩余配额（渲染图最多占 max_images 的 60%，内嵌图占 40%）
         render_count = sum(1 for img in images if img.get("rendered"))
         remaining_slots = max_images - render_count
-        embedded_limit = min(remaining_slots, max(3, max_images // 3))
+        embedded_limit = min(remaining_slots, max(4, max_images // 2))
 
         for candidate in embedded_candidates[:embedded_limit]:
             if len(images) >= max_images:

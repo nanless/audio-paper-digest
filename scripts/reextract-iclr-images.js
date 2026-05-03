@@ -17,7 +17,7 @@ function runPdfExtractor(pdfPath) {
         const proc = spawn('python3', [
             path.join(__dirname, 'pdf-extractor.py'),
             pdfPath,
-            '--max-images', '12',
+            '--max-images', '20',
             '--max-text-chars', '1000'  // 只需要图片，减少文本提取时间
         ], {
             env: { ...process.env, PYTHONIOENCODING: 'utf-8' },

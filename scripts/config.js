@@ -69,8 +69,8 @@ const ANALYSIS_CONFIG = {
     arxivFetchTimeoutMs: 30000,
     imageDownloadTimeoutMs: 15000,
     imageMaxBase64Chars: 500000,
-    imageMaxCount: 12,
-    imageMaxPerMessage: 20,
+    imageMaxCount: 20,
+    imageMaxPerMessage: 25,
     fullTextMaxChars: 100000,
     fullTextMinCharsForFull: 500
 };
