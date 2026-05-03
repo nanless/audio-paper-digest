@@ -101,14 +101,19 @@ def is_page_mostly_text(page_pixmap_bytes):
         return False
     try:
         img = Image.open(io.BytesIO(page_pixmap_bytes)).convert('L')
-        small = img.resize((32, 32))
+        # 使用更大的采样以提高准确性
+        small = img.resize((64, 64))
         pixels = list(small.getdata())
         avg = sum(pixels) / len(pixels)
-        # 计算标准差：文字页面像素分布集中（低方差），图表页面分布分散（高方差）
         variance = sum((p - avg) ** 2 for p in pixels) / len(pixels)
         std = variance ** 0.5
         # 纯文字页：亮度高且方差小；图表页：亮度可能也高但方差大
-        return avg > 242 and std < 8
+        if avg > 242 and std < 8:
+            return True
+        # 额外检测：如果页面非常亮但文字密度高（深色像素少且集中）
+        if avg > 245 and std < 12:
+            return True
+        return False
     except Exception:
         return False
 
@@ -226,7 +231,7 @@ def _find_largest_graphic_cluster(page, search_rect, min_area=3000):
     return clusters[0]
 
 
-def _find_figure_top_bound(caption_y0, text_ranges, drawing_rects, image_rects, page_top, max_figure_height=350):
+def _find_figure_top_bound(caption_y0, text_ranges, drawing_rects, image_rects, page_top, max_figure_height=280):
     """
     综合 text blocks + drawing/image 元素，从 caption 向上找 figure 的上边界。
     优先看 drawing/image 元素的分布，其次看 text blocks。
@@ -274,6 +279,58 @@ def _find_figure_top_bound(caption_y0, text_ranges, drawing_rects, image_rects, 
         return max(page_top, caption_y0 - max_figure_height)
 
 
+def _find_figure_bottom_bound(caption_y1, text_ranges, drawing_rects, image_rects, page_bottom, max_figure_height=280):
+    """
+    从 caption 向下找 figure 的下边界。
+    优先看 drawing/image 元素的分布（找到最低的 graphic 元素），
+    其次看 text blocks（找到 figure 下方第一个正文段落）。
+    """
+    # 收集 caption 下方所有相关元素
+    relevant_text = [(y0, y1) for y0, y1 in text_ranges
+                     if y0 > caption_y1 and y1 < caption_y1 + max_figure_height + 100]
+    relevant_text.sort(key=lambda x: x[0])
+
+    relevant_drawings = [r for r in drawing_rects
+                         if r.y0 > caption_y1 and r.y1 < caption_y1 + max_figure_height + 100]
+
+    relevant_images = [r for r in image_rects
+                       if r.y0 > caption_y1 and r.y1 < caption_y1 + max_figure_height + 100]
+
+    all_graphics = relevant_drawings + relevant_images
+    if all_graphics:
+        # 如果有 graphic 元素，figure 的下边界是最低 graphic 元素的 y1
+        graphic_bottom = max(r.y1 for r in all_graphics)
+        # 往下看看有没有紧挨着的文字块（caption 子标签如 (a) (b)）
+        for y0, y1 in relevant_text:
+            if y0 > graphic_bottom and y0 - graphic_bottom < 25:
+                # 文字块紧挨着 graphic，可能是子 caption
+                continue
+            elif y0 > graphic_bottom:
+                # 文字块在 graphic 下方且有距离，figure 到 graphic 底部结束
+                break
+        return min(page_bottom, graphic_bottom + 5)
+
+    # 没有 graphic 元素，用 text-based 方法
+    if not relevant_text:
+        return min(page_bottom, caption_y1 + max_figure_height)
+
+    # 找 caption 下方第一个 text block
+    nearest = relevant_text[0]
+    gap = nearest[0] - caption_y1
+    if gap > 20:
+        # 第一个 text block 离 caption 较远，figure 可能就在中间
+        return min(page_bottom, nearest[0] - 3)
+    else:
+        # text block 紧挨着 caption，继续往下找 gap
+        last_y = nearest[1]
+        for y0, y1 in relevant_text[1:]:
+            gap = y0 - last_y
+            if gap > 25:
+                return min(page_bottom, y0 - 3)
+            last_y = y1
+        return min(page_bottom, caption_y1 + max_figure_height)
+
+
 def _clip_to_figure_region(page, dpi=150):
     """
     多策略 figure 提取：
@@ -290,30 +347,56 @@ def _clip_to_figure_region(page, dpi=150):
     # 策略1：caption 定位
     if captions:
         for cap_y0, cap_y1 in captions:
-            # 尝试 caption 上方
+            # 尝试 caption 上方（caption 在 figure 下方）
             top = _find_figure_top_bound(cap_y0, text_ranges, drawing_rects, image_rects, rect.y0 + 80)
             bottom = cap_y0 - 3
+            height = bottom - top
 
-            # 上方太小则尝试下方
-            if bottom - top < 60:
+            # 检测是否可能是误提取的正文：
+            # 如果高度很大且 crop 内没有任何 graphic 元素，说明 caption 下方没有 figure
+            if height >= 60:
+                clip_check = fitz.Rect(rect.x0, top, rect.x1, bottom)
+                has_graphics = any(
+                    clip_check.intersects(r) for r in drawing_rects + image_rects
+                )
+                # 没 graphic 元素且高度很大 → 可能是正文，强制切到 caption 上方模式
+                if not has_graphics and height > 180:
+                    height = 0  # 强制进入下方分支
+
+            # 上方太小或无 figure，则尝试下方（caption 在 figure 上方）
+            if height < 60:
                 top = cap_y1 + 3
-                bottom = min(cap_y1 + 350, rect.y1 - 40)
-                for y0, y1 in text_ranges:
-                    if y0 > cap_y1 and y0 < bottom and (y0 - cap_y1) < 100:
-                        bottom = y0 - 3
-                        break
+                bottom = _find_figure_bottom_bound(cap_y1, text_ranges, drawing_rects, image_rects, rect.y1 - 40)
 
-            if bottom - top < 60 or bottom - top > 400:
+            if bottom - top < 60 or bottom - top > 340:
                 continue
 
             clip = fitz.Rect(rect.x0, top, rect.x1, bottom)
+
             try:
                 pix = page.get_pixmap(dpi=dpi, clip=clip)
                 img_bytes = pix.tobytes("png")
-                if not is_page_mostly_text(img_bytes):
-                    results.append((img_bytes, clip))
+                results.append((img_bytes, clip))
             except Exception:
                 continue
+
+    # 去重：如果多个 caption 产生高度重叠的裁剪区域，只保留第一个
+    if len(results) > 1:
+        deduped = [results[0]]
+        for img_bytes, clip in results[1:]:
+            is_duplicate = False
+            for _, existing_clip in deduped:
+                # 计算垂直方向重叠比例
+                overlap = min(clip.y1, existing_clip.y1) - max(clip.y0, existing_clip.y0)
+                h1, h2 = clip.height, existing_clip.height
+                if h1 > 0 and h2 > 0:
+                    overlap_ratio = overlap / min(h1, h2)
+                    if overlap_ratio > 0.70:
+                        is_duplicate = True
+                        break
+            if not is_duplicate:
+                deduped.append((img_bytes, clip))
+        results = deduped
 
     # 策略2：drawing/image 聚类（用于无 caption 的页面）
     if not results:
@@ -331,23 +414,36 @@ def _clip_to_figure_region(page, dpi=150):
                 try:
                     pix = page.get_pixmap(dpi=dpi, clip=clip)
                     img_bytes = pix.tobytes("png")
+                    # 聚类裁剪也不应用 is_page_mostly_text，避免误杀架构图
+                    results.append((img_bytes, clip))
+                except Exception:
+                    pass
+
+    # 策略3：回退到页面上半部（仅在此应用 is_page_mostly_text）
+    if not results:
+        # 结构预检：text blocks 很多且 drawing/image 很少 → 纯文字页，跳过
+        is_text_page = False
+        try:
+            blocks = page.get_text("blocks")
+            text_block_count = len([b for b in blocks if len(b[4].strip()) > 15])
+            drawing_count = len(page.get_drawings())
+            image_count = len(page.get_images(full=True))
+            if text_block_count > 10 and (drawing_count + image_count) < 3:
+                is_text_page = True
+        except Exception:
+            pass
+
+        if not is_text_page:
+            mid = rect.y0 + rect.height * 0.50
+            clip = fitz.Rect(rect.x0, rect.y0 + 80, rect.x1, mid)
+            if clip.height >= 150:
+                try:
+                    pix = page.get_pixmap(dpi=dpi, clip=clip)
+                    img_bytes = pix.tobytes("png")
                     if not is_page_mostly_text(img_bytes):
                         results.append((img_bytes, clip))
                 except Exception:
                     pass
-
-    # 策略3：回退到页面上半部
-    if not results:
-        mid = rect.y0 + rect.height * 0.50
-        clip = fitz.Rect(rect.x0, rect.y0 + 80, rect.x1, mid)
-        if clip.height >= 150:
-            try:
-                pix = page.get_pixmap(dpi=dpi, clip=clip)
-                img_bytes = pix.tobytes("png")
-                if not is_page_mostly_text(img_bytes):
-                    results.append((img_bytes, clip))
-            except Exception:
-                pass
 
     return results
 
@@ -359,6 +455,17 @@ def render_page(page, dpi=150):
     clip = fitz.Rect(rect.x0, rect.y0 + 100, rect.x1, rect.y1 - 40)
     if clip.height <= 200 or clip.width <= 200:
         return None
+
+    # 结构检测：如果页面 text blocks 很多且 drawing/image 很少，跳过
+    try:
+        blocks = page.get_text("blocks")
+        text_block_count = len([b for b in blocks if len(b[4].strip()) > 15])
+        drawing_count = len(page.get_drawings())
+        image_count = len(page.get_images(full=True))
+        if text_block_count > 10 and (drawing_count + image_count) < 3:
+            return None
+    except Exception:
+        pass
 
     try:
         pix = page.get_pixmap(dpi=dpi, clip=clip)
@@ -552,6 +659,18 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
             # 优先尝试只提取 figure 区域（而非整页）
             figure_regions = _clip_to_figure_region(page, dpi=150)
             if not figure_regions:
+                # 回退到整页渲染前先检查：如果页面 text blocks 很多但无 caption，
+                # 大概率是纯文字页，跳过以避免提取正文
+                try:
+                    blocks = page.get_text("blocks")
+                    has_caption = any(
+                        re.match(r'(Figure|Fig\.?|Table)\s*\d+\s*[:.\-\u2014\u2013]', b[4].strip(), re.I)
+                        for b in blocks
+                    )
+                    if len(blocks) > 12 and not has_caption:
+                        continue
+                except Exception:
+                    pass
                 # 回退到整页渲染
                 rendered = render_page(page, dpi=150)
                 if rendered:
