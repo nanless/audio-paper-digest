@@ -70,7 +70,22 @@ def is_likely_avatar(width, height):
         return False
     ratio = min(width, height) / max(width, height)
     area = width * height
-    return ratio > 0.75 and 1000 < area < 60000
+    return ratio > 0.75 and 1000 < area < 150000
+
+
+def is_decorative_icon(width, height):
+    """判断是否为装饰性图标/Logo/小照片：正方形-ish 且不够大"""
+    if width <= 0 or height <= 0:
+        return False
+    ratio = min(width, height) / max(width, height)
+    area = width * height
+    # 正方形-ish 小图 (头像、Logo、图标)
+    if ratio > 0.8 and area < 150000:
+        return True
+    # 特别小的图
+    if width < 250 or height < 180:
+        return True
+    return False
 
 
 def is_fragment_strip(width, height):
@@ -78,7 +93,7 @@ def is_fragment_strip(width, height):
     if height <= 0 or width <= 0:
         return False
     wh_ratio = width / height
-    return wh_ratio > 8 and width > 600 and height < 250
+    return wh_ratio > 6 and width > 600 and height < 200
 
 
 def is_watermarked_image(image_bytes):
@@ -92,6 +107,21 @@ def is_watermarked_image(image_bytes):
     for sig in text_signatures:
         if sig in lower_bytes:
             return True
+    return False
+
+
+def is_rendered_watermarked(page, clip_rect):
+    """检测渲染的页面区域内是否包含外部图库水印文字（通过提取PDF文本）"""
+    watermark_keywords = ['shutterstock', 'getty images', 'istock', 'adobe stock',
+                          'depositphotos', 'dreamstime', 'alamy', 'fotolia',
+                          '123rf', 'bigstock', 'canstock', 'pixabay']
+    try:
+        text = page.get_textbox(clip_rect).lower()
+        for kw in watermark_keywords:
+            if kw in text:
+                return True
+    except Exception:
+        pass
     return False
 
 
@@ -373,6 +403,10 @@ def _clip_to_figure_region(page, dpi=150):
 
             clip = fitz.Rect(rect.x0, top, rect.x1, bottom)
 
+            # 检查裁剪区域是否包含外部水印
+            if is_rendered_watermarked(page, clip):
+                continue
+
             try:
                 pix = page.get_pixmap(dpi=dpi, clip=clip)
                 img_bytes = pix.tobytes("png")
@@ -411,13 +445,16 @@ def _clip_to_figure_region(page, dpi=150):
                 min(rect.y1 - 40, cluster.y1 + margin)
             )
             if clip.height >= 80 and clip.width >= 200:
-                try:
-                    pix = page.get_pixmap(dpi=dpi, clip=clip)
-                    img_bytes = pix.tobytes("png")
-                    # 聚类裁剪也不应用 is_page_mostly_text，避免误杀架构图
-                    results.append((img_bytes, clip))
-                except Exception:
-                    pass
+                if is_rendered_watermarked(page, clip):
+                    pass  # 有水印，跳过
+                else:
+                    try:
+                        pix = page.get_pixmap(dpi=dpi, clip=clip)
+                        img_bytes = pix.tobytes("png")
+                        # 聚类裁剪也不应用 is_page_mostly_text，避免误杀架构图
+                        results.append((img_bytes, clip))
+                    except Exception:
+                        pass
 
     # 策略3：回退到页面上半部（仅在此应用 is_page_mostly_text）
     if not results:
@@ -437,13 +474,16 @@ def _clip_to_figure_region(page, dpi=150):
             mid = rect.y0 + rect.height * 0.50
             clip = fitz.Rect(rect.x0, rect.y0 + 80, rect.x1, mid)
             if clip.height >= 150:
-                try:
-                    pix = page.get_pixmap(dpi=dpi, clip=clip)
-                    img_bytes = pix.tobytes("png")
-                    if not is_page_mostly_text(img_bytes):
-                        results.append((img_bytes, clip))
-                except Exception:
-                    pass
+                if is_rendered_watermarked(page, clip):
+                    pass  # 有水印，跳过
+                else:
+                    try:
+                        pix = page.get_pixmap(dpi=dpi, clip=clip)
+                        img_bytes = pix.tobytes("png")
+                        if not is_page_mostly_text(img_bytes):
+                            results.append((img_bytes, clip))
+                    except Exception:
+                        pass
 
     return results
 
@@ -466,6 +506,10 @@ def render_page(page, dpi=150):
             return None
     except Exception:
         pass
+
+    # 检查渲染区域是否包含外部水印
+    if is_rendered_watermarked(page, clip):
+        return None
 
     try:
         pix = page.get_pixmap(dpi=dpi, clip=clip)
@@ -730,19 +774,26 @@ def extract_pdf_content(pdf_path, max_text_chars=100000, max_images=10, max_base
                     if len(image_bytes) < 1500:
                         continue
 
-                    # 过滤小图标
+                    # 严格尺寸过滤
                     area = width * height
-                    if width < min_image_dim or height < min_image_dim:
+                    if width < 250 or height < 180:  # 最小尺寸
                         continue
-                    if area < min_image_area:
+                    if width > 1400 or height > 1000:  # 最大尺寸
+                        continue
+                    if area < 60000:  # 最小面积 (~250x240)
                         continue
 
-                    # 过滤头像/小图标（正方形且面积小）
-                    if is_likely_avatar(width, height):
+                    # 过滤装饰性图标/Logo/小照片
+                    if is_decorative_icon(width, height):
                         continue
 
                     # 过滤表格/图表碎片条带（超宽且很矮）
                     if is_fragment_strip(width, height):
+                        continue
+
+                    # 过滤极端宽高比
+                    ratio = width / height if height > 0 else 0
+                    if ratio < 0.4 or ratio > 4.0:
                         continue
 
                     # 过滤外部图库水印图片
