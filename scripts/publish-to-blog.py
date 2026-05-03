@@ -293,6 +293,12 @@ def extract_and_replace_images(md, paper_id, date_str, category='icassp-2026'):
         lambda m: f'![论文配图]({m.group(1)})',
         md
     )
+    # 格式B-2: （...`icassp-img://...`...）括号内有其他文字 → 提取URL作为图片
+    md = re.sub(
+        r'[（(][^）)]*`(icassp-img://' + re.escape(str(paper_id)) + r'/[^`]+)`[^）)]*[）)]',
+        lambda m: f'![论文配图]({m.group(1)})',
+        md
+    )
     # 格式D: `icassp-img://...` (不在括号内) → ![图片](icassp-img://...)
     md = re.sub(
         r'(?<![（(])`(icassp-img://' + re.escape(str(paper_id)) + r'/[^`]+)`(?![）)])',

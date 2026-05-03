@@ -99,7 +99,7 @@ def audit_blog(path):
 
 
 def main():
-    blogs = sorted(glob.glob(os.path.join(BLOG_DIR, '2026-05-03-*.md')))
+    blogs = sorted(glob.glob(os.path.join(BLOG_DIR, '2026-05-04-*.md')))
     total_blogs = 0
     total_issues = 0
     issue_counts = {}
