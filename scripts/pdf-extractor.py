@@ -438,6 +438,9 @@ def _clip_to_figure_region(page, dpi=150):
             try:
                 pix = page.get_pixmap(dpi=dpi, clip=clip)
                 img_bytes = pix.tobytes("png")
+                # 过滤掉亮度过高的裁剪（可能是纯文字页）
+                if is_page_mostly_text(img_bytes):
+                    continue
                 results.append((img_bytes, clip))
             except Exception:
                 continue

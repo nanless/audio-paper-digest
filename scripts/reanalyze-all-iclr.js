@@ -14,7 +14,7 @@ process.env.PAPER_IMAGE_DIR = process.env.PAPER_IMAGE_DIR || path.join(Config.CU
 const { analyzePaperDeep } = require('./deep-analyzer.js');
 
 // 并发数
-const CONCURRENCY = parseInt(process.env.REANALYZE_CONCURRENCY, 10) || 3;
+const CONCURRENCY = parseInt(process.env.REANALYZE_CONCURRENCY, 10) || 5;
 
 // 支持从环境变量指定要重新分析的论文 ID（逗号分隔），否则分析全部
 const TARGET_IDS = process.env.REANALYZE_IDS
