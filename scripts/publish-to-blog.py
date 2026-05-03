@@ -16,6 +16,8 @@ setup_script_logging(__file__)
     python3 publish-to-blog.py [data_file]
     python3 publish-to-blog.py --skip-push     # 只生成 .md 不推送到 GitHub
     python3 publish-to-blog.py --date YYYY-MM-DD
+    python3 publish-to-blog.py [data_file] --paper-id <id>   # 单篇生成模式(不汇总不push, 末行打印 PAPER_MD_PATH=...)
+    python3 publish-to-blog.py [data_file] --list-papers     # 输出 "{id}\\t{score}\\t{task}\\t{title}" 列表
 """
 import base64, json, re, sys, os, subprocess, datetime
 from pathlib import Path
@@ -32,6 +34,7 @@ from image_host import (
     get_cached_url,
     build_remote_key,
 )
+from garbage_image_filter import is_image_text_dominant
 
 # 图床环境变量（通用 S3 命名，兼容旧 R2 命名）
 IMAGE_HOST = os.environ.get('PAPER_DIGEST_IMAGE_HOST', 'local').lower()
@@ -105,6 +108,11 @@ def _copy_conference_images(paper_id, date_str, category='icassp-2026'):
         if ext == 'jpeg':
             ext = 'jpg'
         source_path = os.path.join(source_dir, filename)
+        # 启发式过滤：纯文字段落截图
+        is_text, _info = is_image_text_dominant(source_path)
+        if is_text:
+            print(f"  🚫 跳过文字截图 {filename} ({_info.get('metrics', {})})")
+            continue
         dest_filename = f'{paper_id}-{idx}.{ext}'
 
         try:
@@ -181,6 +189,19 @@ def _extract_from_input(paper_id, date_str, category='icassp-2026'):
         filename = f'{paper_id}-{idx}.{ext}'
         try:
             img_bytes = base64.b64decode(b64_data)
+
+            # 启发式过滤：写到临时文件做文字截图检测
+            import tempfile as _tf
+            with _tf.NamedTemporaryFile(suffix=f'.{ext}', delete=False) as _tmp_check:
+                _tmp_check.write(img_bytes)
+                _tmp_check_path = _tmp_check.name
+            try:
+                _is_text, _info = is_image_text_dominant(_tmp_check_path)
+            finally:
+                os.unlink(_tmp_check_path)
+            if _is_text:
+                print(f"  🚫 跳过文字截图 {filename} ({_info.get('metrics', {})})")
+                continue
 
             if USE_R2:
                 # R2/S3 图床模式：先写入临时文件再上传
@@ -974,6 +995,8 @@ def main():
     data_file = None
     skip_push = False
     target_date = None
+    single_paper_id = None
+    list_papers_only = False
 
     i = 1
     while i < len(sys.argv):
@@ -983,6 +1006,11 @@ def main():
         elif arg == '--date' and i + 1 < len(sys.argv):
             target_date = sys.argv[i + 1]
             i += 1
+        elif arg == '--paper-id' and i + 1 < len(sys.argv):
+            single_paper_id = sys.argv[i + 1]
+            i += 1
+        elif arg == '--list-papers':
+            list_papers_only = True
         elif not arg.startswith('--'):
             data_file = arg
         i += 1
@@ -990,7 +1018,6 @@ def main():
     papers = load_papers(data_file)
     scored, unscored = score_and_sort(papers)
     today = get_today_bj(target_date)
-    print(f"📅 博客日期: {today}")
 
     if not papers:
         print("⚠️ 没有论文需要发布")
@@ -1003,6 +1030,71 @@ def main():
         category = "iclr-2026"
     else:
         category = "论文速递"
+
+    # --list-papers: 只输出 paper id 列表（按 score 排序），不生成任何文件
+    if list_papers_only:
+        for entry in scored:
+            score, p, pa = entry
+            pid = get_paper_id(p)
+            task = (pa.get('primaryTaskTag', '') if pa else '').replace('#', '')
+            title = p.get('title', 'Unknown')[:60]
+            print(f"{pid}\t{score}\t{task}\t{title}")
+        for p in unscored:
+            pid = get_paper_id(p)
+            pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
+            task = (pa.get('primaryTaskTag', '') if pa else '').replace('#', '')
+            title = p.get('title', 'Unknown')[:60]
+            print(f"{pid}\t-\t{task}\t{title}")
+        return
+
+    # --paper-id: 单篇生成模式（不清理旧文件、不生成汇总、不 push）
+    if single_paper_id:
+        target_paper = None
+        for p in papers:
+            if get_paper_id(p) == single_paper_id:
+                target_paper = p
+                break
+        if not target_paper:
+            print(f"❌ 未找到 paper id: {single_paper_id}", file=sys.stderr)
+            sys.exit(1)
+
+        if category == "icassp-2026":
+            summary_slug = "icassp2026-summary"
+        elif category == "iclr-2026":
+            summary_slug = "iclr2026-summary"
+        else:
+            summary_slug = today
+
+        os.makedirs(CONTENT_DIR, exist_ok=True)
+
+        pa = parse_analysis(target_paper.get('analysis', ''))
+        if not pa:
+            print(f"❌ paper {single_paper_id} 解析失败", file=sys.stderr)
+            sys.exit(1)
+
+        # 删除该 paper 已存在的旧 .md(slug 可能因标题变化而不同)
+        for old_file in os.listdir(CONTENT_DIR):
+            if not (old_file.startswith(f'{today}-') and old_file.endswith('.md')):
+                continue
+            old_path = os.path.join(CONTENT_DIR, old_file)
+            try:
+                with open(old_path, 'r') as fh:
+                    head = fh.read(2000)
+                if f'/{category}/{today}/{single_paper_id}-' in head or f'/{category}/{today}/{single_paper_id}.' in head:
+                    os.remove(old_path)
+            except Exception:
+                pass
+
+        paper_md, slug = generate_paper_page(target_paper, today, category, summary_slug)
+        paper_file = os.path.join(CONTENT_DIR, f"{today}-{slug}.md")
+        with open(paper_file, 'w') as f:
+            f.write(paper_md)
+        # 单篇模式输出生成的 .md 绝对路径到 stdout 末行(方便协调脚本捕获)
+        print(f"📄 单篇生成: {paper_file}")
+        print(f"PAPER_MD_PATH={paper_file}")
+        return
+
+    print(f"📅 博客日期: {today}")
     print(f"🏷️ 分类: {category}")
 
     # 会议汇总页面使用固定 slug，不再用日期作为文件名
