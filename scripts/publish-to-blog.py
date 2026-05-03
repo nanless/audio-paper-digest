@@ -473,18 +473,64 @@ def self_check_and_fix(md, paper_id):
             lines[i] = line + '\n'
             issues.append(f'图片后无空行(行{i+1})')
 
-    # 6. 检查图片描述是否过于泛泛
+    # 6. 检查图片描述是否过于泛泛或只有编号
     generic_count = 0
+    fig_num_only_count = 0
     for i, line in img_lines:
         m = re.match(r'!\[(.*?)\]\(', line)
         if m:
             desc = m.group(1).strip()
             if desc in ['论文中的图片', '论文配图', '图片', '']:
                 generic_count += 1
+            # 禁止只用"图X"作为描述
+            if re.match(r'^[（(]?图\s*\d+[a-z]*[）)]?$', desc):
+                fig_num_only_count += 1
+                # 自动修复：替换为更通用的描述
+                lines[i] = re.sub(
+                    r'(!\[)[^\]]+(\]\()',
+                    r'\1论文配图\2',
+                    line
+                )
     if generic_count:
         issues.append(f'泛泛描述: {generic_count}处')
+    if fig_num_only_count:
+        issues.append(f'纯编号描述: {fig_num_only_count}处（已替换）')
 
-    # 7. 检查文本中提到的图号是否超出实际图片数量
+    # 7. 删除核心摘要section中的图片
+    in_summary = False
+    summary_images_removed = 0
+    new_lines = []
+    for line in lines:
+        if re.match(r'^#{2,4}\s+.*核心摘要', line):
+            in_summary = True
+        elif re.match(r'^#{2,4}\s+', line):
+            in_summary = False
+        if in_summary and line.strip().startswith('!['):
+            summary_images_removed += 1
+            continue  # 跳过图片行
+        new_lines.append(line)
+    lines = new_lines
+    if summary_images_removed:
+        issues.append(f'核心摘要图片: 删除{summary_images_removed}处')
+
+    # 8. 删除重复出现的图片（只保留第一次出现）
+    seen_urls = set()
+    duplicate_removed = 0
+    new_lines2 = []
+    for line in lines:
+        m = re.match(r'\s*(!\[.*?\])\((.*?)\)\s*$', line)
+        if m:
+            url = m.group(2)
+            if url in seen_urls:
+                duplicate_removed += 1
+                continue
+            seen_urls.add(url)
+        new_lines2.append(line)
+    lines = new_lines2
+    if duplicate_removed:
+        issues.append(f'重复图片: 删除{duplicate_removed}处')
+
+    # 9. 检查文本中提到的图号是否超出实际图片数量
     fig_mentions = set()
     for line in lines:
         for m in re.finditer(r'[（(]?(?:如图|图)\s*(\d+)[）)]?', line):
