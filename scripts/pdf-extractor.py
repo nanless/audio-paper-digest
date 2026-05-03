@@ -400,6 +400,13 @@ def _clip_to_figure_region(page, dpi=150):
             if height < 60:
                 top = cap_y1 + 3
                 bottom = _find_figure_bottom_bound(cap_y1, text_ranges, drawing_rects, image_rects, rect.y1 - 40)
+                # 检查下方区域是否有 graphic 元素，没有则跳过（避免提取空白区域）
+                clip_check = fitz.Rect(rect.x0, top, rect.x1, bottom)
+                has_graphics = any(
+                    clip_check.intersects(r) for r in drawing_rects + image_rects
+                )
+                if not has_graphics:
+                    continue
 
             if bottom - top < 60 or bottom - top > 340:
                 continue

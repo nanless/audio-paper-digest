@@ -149,16 +149,17 @@ def parse_analysis(analysis):
         if intro_m and intro_m.group(1).strip():
             r['detailIntro'] = intro_m.group(1).strip()
 
-        for key, pat in [
-            ('architecture', r'###\s*\d+\.\s*模型架构\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
-            ('innovation', r'###\s*\d+\.\s*核心创新点\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
-            ('details', r'###\s*\d+\.\s*细节详[述题]\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
-            ('results', r'###\s*\d+\.\s*实验结果\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
-            ('scoringReason', r'###\s*\d+\.\s*评分理由\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
-        ]:
-            sm = re.search(pat, block)
-            if sm:
-                r[key] = sm.group(1).strip()
+    # Parse subsections from the block (whether from "详细分析" or full text fallback)
+    for key, pat in [
+        ('architecture', r'###\s*\d+\.\s*模型架构\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
+        ('innovation', r'###\s*\d+\.\s*核心创新点\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
+        ('details', r'###\s*\d+\.\s*细节详[述题]\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
+        ('results', r'###\s*\d+\.\s*实验结果\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
+        ('scoringReason', r'###\s*\d+\.\s*评分理由\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
+    ]:
+        sm = re.search(pat, block)
+        if sm:
+            r[key] = sm.group(1).strip()
 
     m = re.search(r'##\s*开源(?:详情)?[：:]*\s*\n([\s\S]*?)(?=\n##|$)', analysis)
     r['opensource'] = m.group(1).strip() if m else ''

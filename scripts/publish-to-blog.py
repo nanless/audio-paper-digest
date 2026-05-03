@@ -251,7 +251,45 @@ def extract_and_replace_images(md, paper_id, date_str, category='icassp-2026'):
         desc = match.group(1)[2:-1]
         return desc
 
-    md = re.sub(r'(!\[.*?\]\()(.*?)(\))', _replacer, md)
+    # 阶段1：将非标准格式的图片引用转换为标准 markdown 格式
+    # 预处理：去除 LLM 偶尔添加的 https:// 前缀
+    md = re.sub(
+        r'https://(icassp-img://' + re.escape(str(paper_id)) + r'/[^\s\)）\]]+)',
+        r'\1',
+        md
+    )
+    # 格式A: **图X (icassp-img://...)** → ![图X](icassp-img://...)
+    md = re.sub(
+        r'\*\*(图\s*\d+[a-z]*(?:\s*[:\-]\s*[^*]*)?)\s*\(\s*(icassp-img://' + re.escape(str(paper_id)) + r'/[^)]+)\s*\)\*\*',
+        lambda m: f'![{m.group(1).strip()}]({m.group(2)})',
+        md
+    )
+    # 格式A-2: **图X...: icassp-img://...** → ![图X...](icassp-img://...)
+    # 允许图号和冒号之间有任意描述文字
+    md = re.sub(
+        r'\*\*(图\s*\d+[a-z]*[^*]*?)\s*:\s*(icassp-img://' + re.escape(str(paper_id)) + r'/[^\s*]+)\*\*',
+        lambda m: f'![{m.group(1).strip()}]({m.group(2)})',
+        md
+    )
+    # 格式B: （`icassp-img://...`） → ![图片](icassp-img://...)
+    md = re.sub(
+        r'[（(]`(icassp-img://' + re.escape(str(paper_id)) + r'/[^`]+)`[）)]',
+        lambda m: f'![论文中的图片]({m.group(1)})',
+        md
+    )
+    # 格式D: `icassp-img://...` (不在括号内) → ![图片](icassp-img://...)
+    md = re.sub(
+        r'(?<![（(])`(icassp-img://' + re.escape(str(paper_id)) + r'/[^`]+)`(?![）)])',
+        lambda m: f'![论文中的图片]({m.group(1)})',
+        md
+    )
+
+    # 阶段2：标准 markdown 图片替换
+    md = re.sub(r'(\!\[.*?\]\()(.*?)(\))', _replacer, md)
+    return md
+
+    # 阶段2：标准 markdown 图片替换
+    md = re.sub(r'(\!\[.*?\]\()(.*?)(\))', _replacer, md)
     return md
 
 
