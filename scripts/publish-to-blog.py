@@ -144,6 +144,14 @@ layout: "posts"
         if pa.get('roast'):
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
+        if pa.get('summary'):
+            summary = pa['summary']
+            # 如果 summary 中混入了详细分析内容（因标题损坏导致解析边界失效），截断到详细分析之前
+            cutoff = re.search(r'\n##\s*详细分', summary)
+            if cutoff:
+                summary = summary[:cutoff.start()].strip()
+            md += f"📌 **核心摘要**\n\n{summary}\n\n"
+
         supplementary = ''
         if pa.get('opensource'):
             oss_text = enrich_opensource(pa, p)
@@ -155,14 +163,6 @@ layout: "posts"
                 supplementary = supp_match.group(1).strip()
                 oss_text = oss_text[:supp_match.start()].strip()
             md += f"🔗 **开源详情**\n\n{oss_text}\n\n"
-
-        if pa.get('summary'):
-            summary = pa['summary']
-            # 如果 summary 中混入了详细分析内容（因标题损坏导致解析边界失效），截断到详细分析之前
-            cutoff = re.search(r'\n##\s*详细分', summary)
-            if cutoff:
-                summary = summary[:cutoff.start()].strip()
-            md += f"📌 **核心摘要**\n\n{summary}\n\n"
 
         # 补充信息放到最后面
         if supplementary:
@@ -317,8 +317,8 @@ hiddenInHomeList: true
 
         sections = [
             ('💡 毒舌点评', 'roast'),
-            ('🔗 开源详情', 'opensource', opensource_content),
             ('📌 核心摘要', 'summary'),
+            ('🔗 开源详情', 'opensource', opensource_content),
             ('🏗️ 模型架构', 'architecture'),
             ('💡 核心创新点', 'innovation'),
             ('🔬 细节详述', 'details'),
