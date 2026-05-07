@@ -112,8 +112,11 @@ function getRecordDate(data) {
 // ID 规范化
 // ═══════════════════════════════════════════════════════
 
-function normalizedId(paper) {
-    const id = paper.paper_id || paper.arxivId || paper.id || '';
+function normalizedId(paperOrId) {
+    if (typeof paperOrId === 'string') {
+        return paperOrId.replace(/v\d+$/, '').trim().toLowerCase();
+    }
+    const id = paperOrId.paper_id || paperOrId.arxivId || paperOrId.id || '';
     return id.replace(/v\d+$/, '').trim().toLowerCase();
 }
 

@@ -16,7 +16,7 @@ setupScriptLogging(__filename);
 
 const { execFileSync } = require('child_process');
 
-const { getBeijingDateString, normalizeToBeijingISOString } = require('./utils.js');
+const { getBeijingDateString, normalizeToBeijingISOString, normalizedId } = require('./utils.js');
 const { HUGGINGFACE_CONFIG } = require('./config.js');
 
 /**
@@ -242,7 +242,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
     // 排除已有论文
     if (existingIds.size > 0) {
         const before = papers.length;
-        papers = papers.filter(p => !existingIds.has(p.paper_id));
+        papers = papers.filter(p => !existingIds.has(normalizedId(p.paper_id)));
         console.log(`  排除已有论文: ${before} → ${papers.length} 篇`);
     }
 

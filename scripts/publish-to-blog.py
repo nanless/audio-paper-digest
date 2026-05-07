@@ -144,10 +144,16 @@ layout: "posts"
         if pa.get('roast'):
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
+        supplementary = ''
         if pa.get('opensource'):
             oss_text = enrich_opensource(pa, p)
             # 清理内容开头可能残留的 Markdown 标题
             oss_text = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', oss_text.strip(), count=1)
+            # 分离补充信息
+            supp_match = re.search(r'##\s*补充信息\s*\n([\s\S]*)', oss_text)
+            if supp_match:
+                supplementary = supp_match.group(1).strip()
+                oss_text = oss_text[:supp_match.start()].strip()
             md += f"🔗 **开源详情**\n\n{oss_text}\n\n"
 
         if pa.get('summary'):
@@ -157,6 +163,10 @@ layout: "posts"
             if cutoff:
                 summary = summary[:cutoff.start()].strip()
             md += f"📌 **核心摘要**\n\n{summary}\n\n"
+
+        # 补充信息放到最后面
+        if supplementary:
+            md += f"📎 **补充信息**\n\n{supplementary}\n\n"
 
         md += "---\n\n"
 
@@ -296,9 +306,18 @@ hiddenInHomeList: true
         if pa.get('authors'):
             md += f"\n### 👥 作者与机构\n\n{pa['authors']}\n"
 
+        # 分离补充信息（从 opensource 中提取）
+        opensource_content = pa.get('opensource', '')
+        supplementary = ''
+        if opensource_content:
+            supp_match = re.search(r'##\s*补充信息\s*\n([\s\S]*)', opensource_content)
+            if supp_match:
+                supplementary = supp_match.group(1).strip()
+                opensource_content = opensource_content[:supp_match.start()].strip()
+
         sections = [
             ('💡 毒舌点评', 'roast'),
-            ('🔗 开源详情', 'opensource'),
+            ('🔗 开源详情', 'opensource', opensource_content),
             ('📌 核心摘要', 'summary'),
             ('🏗️ 模型架构', 'architecture'),
             ('💡 核心创新点', 'innovation'),
@@ -306,8 +325,12 @@ hiddenInHomeList: true
             ('📊 实验结果', 'results'),
             ('⚖️ 评分理由', 'scoringReason'),
         ]
-        for label, key in sections:
-            content = pa.get(key, '')
+        for item in sections:
+            if len(item) == 3:
+                label, key, content = item
+            else:
+                label, key = item
+                content = pa.get(key, '')
             if content:
                 # 如果 summary 中混入了详细分析内容（因标题损坏导致解析边界失效），截断到详细分析之前
                 if key == 'summary':
@@ -319,6 +342,10 @@ hiddenInHomeList: true
                 content = re.sub(r'^###\s*\d+\.\s*[^\n]+\n', '', content, flags=re.MULTILINE)
                 content = re.sub(r'^\d+\.\s*\*\*([^*]+)\*\*\s*$', r'\1', content, flags=re.MULTILINE)
                 md += f'\n### {label}\n\n{content}\n'
+
+        # 补充信息放到最后面
+        if supplementary:
+            md += f'\n### 📎 补充信息\n\n{supplementary}\n'
     else:
         md += '> ⚠️ 该论文分析失败\n'
 

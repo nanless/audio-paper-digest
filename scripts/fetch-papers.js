@@ -24,7 +24,8 @@ const {
     buildHeaders,
     parseResponseText,
     detectProxyUrl,
-    loadPrompt
+    loadPrompt,
+    normalizedId
 } = require('./utils.js');
 const Config = require('./config.js');
 
@@ -247,7 +248,7 @@ function parseArxivXML(xml, categoryId, existingIds = null) {
         if (!idMatch) continue;
         const arxivId = idMatch[1].split('/abs/').pop();
 
-        if (existingIds && existingIds.has(arxivId)) {
+        if (existingIds && existingIds.has(normalizedId(arxivId))) {
             consecutiveExisting++;
             if (consecutiveExisting >= ARXIV_CONFIG.consecutiveExistingThreshold) {
                 console.log(`[fetch] 遇到连续 ${consecutiveExisting} 篇已知论文，停止抓取 ${categoryId}`);

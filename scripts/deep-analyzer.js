@@ -230,7 +230,8 @@ async function fetchArxivText(arxivId) {
 }
 
 /**
- * 从 arxiv HTML 获取图片 URL 列表
+ * 从 arxiv HTML 获取图片信息列表（含 URL 和 caption）
+ * 使用 cheerio 解析 <figure> 元素，提取图片 URL 和 figcaption 文本
  * 带重试机制，避免因并发限流偶发失败
  */
 async function fetchArxivImageUrls(arxivId) {
@@ -246,16 +247,73 @@ async function fetchArxivImageUrls(arxivId) {
                 if (!response.ok) continue;
 
                 const html = await response.text();
-                const imgRegex = /src="([^"]*\.(png|jpg|jpeg)[^"]*)"/g;
+                const $ = cheerio.load(html);
                 const images = [];
-                let match;
 
-                while ((match = imgRegex.exec(html)) !== null) {
-                    const src = match[1];
-                    if (src.includes('arxiv-logo') || src.includes('favicon') || src.includes('logo')) continue;
-                    const fullUrl = src.startsWith('http') ? src : `https://arxiv.org/html/${src}`;
-                    images.push(fullUrl);
+                // 遍历所有 <figure> 元素，提取图片和 caption
+                $('figure').each((_, elem) => {
+                    const $fig = $(elem);
+                    const $img = $fig.find('img').first();
+                    if (!$img.length) return;
+
+                    const src = $img.attr('src') || '';
+                    if (!src) return;
+                    if (src.includes('arxiv-logo') || src.includes('favicon') || src.includes('logo')) return;
+                    if (src.startsWith('data:')) return;
+
+                    // 构建完整 URL
+                    let fullUrl;
+                    if (src.startsWith('http')) {
+                        fullUrl = src;
+                    } else if (src.startsWith('/')) {
+                        fullUrl = `https://arxiv.org${src}`;
+                    } else if (src.startsWith(`${arxivId}`)) {
+                        // 新版 HTML：src 已包含 arxivId 前缀，如 2605.04749v1/figure/xxx.png
+                        fullUrl = `https://arxiv.org/html/${src}`;
+                    } else {
+                        // 旧版 HTML：src 为纯文件名，如 x1.png
+                        fullUrl = `https://arxiv.org/html/${arxivId}${suffix}/${src}`;
+                    }
+
+                    // 提取 figcaption 文本
+                    const $caption = $fig.find('figcaption');
+                    let caption = '';
+                    if ($caption.length) {
+                        caption = $caption.text().replace(/\s+/g, ' ').trim();
+                    }
+                    // 备选：从 img 的 alt 属性获取
+                    if (!caption) {
+                        const alt = $img.attr('alt') || '';
+                        if (alt && alt !== 'Refer to caption') {
+                            caption = alt.trim();
+                        }
+                    }
+
+                    images.push({ url: fullUrl, caption });
+                });
+
+                // 如果 <figure> 解析不到图片，回退到正则提取（兼容旧版 HTML）
+                if (images.length === 0) {
+                    const imgRegex = /src="([^"]*\.(png|jpg|jpeg)[^"]*)"/g;
+                    let match;
+                    while ((match = imgRegex.exec(html)) !== null) {
+                        const src = match[1];
+                        if (src.includes('arxiv-logo') || src.includes('favicon') || src.includes('logo')) continue;
+                        if (src.startsWith('data:')) continue;
+                        let fullUrl;
+                        if (src.startsWith('http')) {
+                            fullUrl = src;
+                        } else if (src.startsWith('/')) {
+                            fullUrl = `https://arxiv.org${src}`;
+                        } else if (src.startsWith(`${arxivId}`)) {
+                            fullUrl = `https://arxiv.org/html/${src}`;
+                        } else {
+                            fullUrl = `https://arxiv.org/html/${arxivId}${suffix}/${src}`;
+                        }
+                        images.push({ url: fullUrl, caption: '' });
+                    }
                 }
+
                 return images;
             } catch (e) {
                 console.log(`    [deep] fetchArxivImageUrls ${arxivId}${suffix} error: ${e.message}`);
@@ -275,52 +333,64 @@ async function fetchArxivImageUrls(arxivId) {
 /**
  * 下载图片并转为 base64
  */
-async function downloadImageBase64(imageUrl) {
-    try {
-        const response = await fetch(imageUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaperDigest/1.0)' },
-            signal: AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS)
-        });
-        if (!response.ok) return null;
-        const buffer = await response.arrayBuffer();
-        return Buffer.from(buffer).toString('base64');
-    } catch (e) {
-        return null;
+async function downloadImageBase64(imageUrl, maxRetries = 2) {
+    const fileName = imageUrl.split('/').pop();
+    let lastError = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            const response = await fetch(imageUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaperDigest/1.0)' },
+                signal: AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS)
+            });
+            if (!response.ok) {
+                if (attempt < maxRetries) {
+                    console.log(`    [deep] 下载图片 ${fileName} HTTP ${response.status}，${(attempt + 1) * 2}s 后重试...`);
+                    await new Promise(r => setTimeout(r, (attempt + 1) * 2000));
+                    continue;
+                }
+                console.log(`    [deep] 下载图片 ${fileName} 失败: HTTP ${response.status}`);
+                return null;
+            }
+            const buffer = await response.arrayBuffer();
+            const b64 = Buffer.from(buffer).toString('base64');
+            return b64;
+        } catch (e) {
+            lastError = e.message;
+            if (attempt < maxRetries) {
+                console.log(`    [deep] 下载图片 ${fileName} 失败 (${e.message})，${(attempt + 1) * 2}s 后重试...`);
+                await new Promise(r => setTimeout(r, (attempt + 1) * 2000));
+            }
+        }
     }
+    console.log(`    [deep] 下载图片 ${fileName} 最终失败: ${lastError}`);
+    return null;
 }
 
 /**
- * 并行下载图片（限制并发数）
+ * 串行下载图片（避免并发导致 arxiv 限流）
  * @param {string[]} imageUrls - 图片 URL 列表
  * @param {number} maxCount - 最大下载数量
  * @param {number} maxBase64Chars - 单张 base64 字符数上限
- * @param {number} concurrency - 并发数，默认 3
  * @returns {Promise<Array<{url: string, base64: string}>>}
  */
-async function downloadImagesParallel(imageUrls, maxCount, maxBase64Chars, concurrency = 3) {
+async function downloadImagesParallel(imageUrls, maxCount, maxBase64Chars) {
     const results = [];
+    // 去重避免同一 URL 下载多次
+    const uniqueUrls = [...new Set(imageUrls)];
 
-    for (let i = 0; i < imageUrls.length && results.length < maxCount; i += concurrency) {
-        const batch = imageUrls.slice(i, i + concurrency);
-        const batchResults = await Promise.all(
-            batch.map(async (url) => {
-                try {
-                    const b64 = await downloadImageBase64(url);
-                    if (b64 && b64.length < maxBase64Chars) {
-                        console.log(`    [deep] 下载图片 ${url.split('/').pop()}: ${(b64.length / 1024).toFixed(1)}KB`);
-                        return { url, base64: b64 };
-                    }
-                } catch (e) {
-                    // 跳过无法下载的图片
-                }
-                return null;
-            })
-        );
-
-        for (const r of batchResults) {
-            if (r && results.length < maxCount) {
-                results.push(r);
+    for (const url of uniqueUrls) {
+        if (results.length >= maxCount) break;
+        try {
+            const b64 = await downloadImageBase64(url);
+            if (b64 && b64.length < maxBase64Chars) {
+                console.log(`    [deep] 下载图片 ${url.split('/').pop()}: ${(b64.length / 1024).toFixed(1)}KB`);
+                results.push({ url, base64: b64 });
+            } else if (b64) {
+                console.log(`    [deep] 跳过图片 ${url.split('/').pop()}: base64 ${(b64.length / 1024).toFixed(1)}KB 超过限制`);
             }
+        } catch (e) {
+            // 已在 downloadImageBase64 中记录错误
         }
     }
 
@@ -363,24 +433,33 @@ async function analyzePaperDeep(paper) {
     const textForAnalysis = fullText || (paper.abstract || paper.summary || '');
     const hasFullText = fullText.length > FULL_TEXT_MIN_CHARS_FOR_FULL;
 
-    let imageUrls = [];
+    let imageInfos = [];
     try {
-        imageUrls = await fetchArxivImageUrls(arxivId);
-        console.log(`    [deep] 找到 ${imageUrls.length} 张图片`);
+        imageInfos = await fetchArxivImageUrls(arxivId);
+        console.log(`    [deep] 找到 ${imageInfos.length} 张图片`);
     } catch (e) {
         console.log(`    [deep] 获取图片失败: ${e.message}`);
     }
 
+    // 提取纯 URL 列表用于下载和保存
+    const imageUrls = imageInfos.map(info => info.url);
+
     const hasFullTextIntro = hasFullText ? '以下是论文全文，请仔细阅读所有技术细节。' : '以下是论文摘要。';
 
     // 并行下载全部图片（限制并发数以避免过载）
-    const downloadedImages = await downloadImagesParallel(imageUrls, imageUrls.length, IMAGE_MAX_BASE64_CHARS, 3);
+    const downloadedImages = await downloadImagesParallel(imageUrls, imageUrls.length, IMAGE_MAX_BASE64_CHARS);
     console.log(`    [deep] 成功下载 ${downloadedImages.length}/${imageUrls.length} 张图片`);
 
-    // 构建图片URL映射信息，让LLM知道每张图的正确URL
-    const imageUrlMapping = imageUrls.map((url, idx) => `图${idx + 1}: ${url}`).join('\n');
-    const imagePrefix = imageUrls.length > 0
-        ? `\n\n论文中的图片及其URL如下（请在下文引用图片时使用这些URL）：\n${imageUrlMapping}\n`
+    // 构建图片URL映射信息（含 caption），让LLM知道每张图的正确URL和内容
+    const imageUrlMapping = imageInfos.map((info, idx) => {
+        const lines = [`图${idx + 1}: ${info.url}`];
+        if (info.caption) {
+            lines.push(`  caption: ${info.caption}`);
+        }
+        return lines.join('\n');
+    }).join('\n');
+    const imagePrefix = imageInfos.length > 0
+        ? `\n\n论文中的图片及其URL如下（请在下文引用图片时使用这些URL，caption 可帮助判断图片内容）：\n${imageUrlMapping}\n`
         : '';
 
     const prompt = loadPrompt('prompts/deep-analysis.md', {
@@ -405,7 +484,8 @@ async function analyzePaperDeep(paper) {
     }
 
     let analysis = '';
-    let imagesToSave = imageUrls;
+    // imageUrls 只保存成功下载的图片，allImageUrls 保存所有找到的图片
+    const imagesToSave = downloadedImages.map(img => img.url);
 
     try {
         analysis = await callModel([{ role: 'user', content: content }], API_MAX_TOKENS);

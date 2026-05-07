@@ -77,6 +77,41 @@ function autoArchiveCurrentData() {
     }
 }
 
+/**
+ * 从归档目录加载已分析论文的规范化ID集合
+ * 用于跳过之前已经成功分析过的论文（避免HF论文在7天窗口内重复出现）
+ */
+function loadAnalyzedIdsFromArchive() {
+    const analyzedIds = new Set();
+    if (!fs.existsSync(ARCHIVE_DIR)) return analyzedIds;
+
+    const entries = fs.readdirSync(ARCHIVE_DIR, { withFileTypes: true });
+    for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        // 只读取日期格式的目录 (YYYY-MM-DD)
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.name)) continue;
+
+        const archiveFile = path.join(ARCHIVE_DIR, entry.name, 'deep-analysis-result.json');
+        if (!fs.existsSync(archiveFile)) continue;
+
+        try {
+            const data = readJsonSafe(archiveFile);
+            if (data.papers && Array.isArray(data.papers)) {
+                for (const paper of data.papers) {
+                    // 只跳过有成功分析结果的论文
+                    if (paper.analysis && paper.analysis.trim().length > 0) {
+                        const nid = normalizedId(paper);
+                        if (nid) analyzedIds.add(nid);
+                    }
+                }
+            }
+        } catch (e) {
+            // 忽略损坏的归档文件
+        }
+    }
+    return analyzedIds;
+}
+
 async function fullFetch() {
     console.log('=== 论文抓取 + 深度分析（arxiv + HuggingFace Papers）===');
     console.log('');
@@ -91,8 +126,8 @@ async function fullFetch() {
     const categories = Config.ARXIV_CATEGORIES;
 
     const papersData = loadPapers();
-    const existingIds = new Set(Object.keys(papersData.papers));
-    console.log(`已有 ${existingIds.size} 篇论文ID，遇到重复将跳过\n`);
+    const existingIds = new Set(Object.keys(papersData.papers).map(id => normalizedId(id)));
+    console.log(`已有 ${existingIds.size} 篇论文ID（已规范化），遇到重复将跳过\n`);
 
     // ========== 第一步：从 arxiv 抓取 ==========
     console.log('📥 第一步：从 arxiv 抓取论文');
@@ -116,7 +151,7 @@ async function fullFetch() {
     // ========== 第二步：从 HuggingFace Papers 抓取 ==========
     console.log('\n📥 第二步：从 HuggingFace Papers 抓取论文');
 
-    const allExistingIds = new Set([...existingIds, ...arxivPapers.map(p => p.paper_id || p.arxivId)]);
+    const allExistingIds = new Set([...existingIds, ...arxivPapers.map(p => normalizedId(p.paper_id || p.arxivId))]);
 
     const hfPapers = await fetchHuggingFacePapers(allExistingIds, {
         days: Config.HUGGINGFACE_CONFIG.defaultDays,
@@ -146,16 +181,34 @@ async function fullFetch() {
     });
     console.log(`筛选后: ${filtered.length} 篇相关论文`);
 
+    // ========== 第四步半：跳过已在归档中分析过的论文 ==========
+    const archiveAnalyzedIds = loadAnalyzedIdsFromArchive();
+    const beforeArchiveSkip = filtered.length;
+    const filteredNew = filtered.filter(paper => {
+        const nid = normalizedId(paper);
+        // 如果论文已在归档中成功分析过，且当前来源包含 huggingface，则跳过
+        if (archiveAnalyzedIds.has(nid) && paper.sources?.includes('huggingface')) {
+            return false;
+        }
+        return true;
+    });
+    const skippedCount = beforeArchiveSkip - filteredNew.length;
+    if (skippedCount > 0) {
+        console.log(`📦 跳过 ${skippedCount} 篇已在归档中分析过的 HuggingFace 论文`);
+    }
+
     writeFileAtomic(FILTERED_FILE, JSON.stringify({
         timestamp: getBeijingISOString(),
         stats: {
             beforeFilter: allPapers.length,
             afterFilter: filtered.length,
+            afterArchiveSkip: filteredNew.length,
+            skippedFromArchive: skippedCount,
             arxivOnly,
             hfOnly,
             both
         },
-        papers: filtered
+        papers: filteredNew
     }, null, 2));
     console.log(`💾 筛选结果已保存到: ${FILTERED_FILE}`);
 
@@ -174,7 +227,7 @@ async function fullFetch() {
         const outputFile = fs.existsSync(RESULT_FILE) || !fs.existsSync(LEGACY_RESULT_FILE) ? RESULT_FILE : LEGACY_RESULT_FILE;
         mergeAndSaveResults(analyzedPapers, outputFile, {
             timestamp: getBeijingISOString(),
-            stats: { afterFilter: filtered.length, newlyAnalyzed: analyzedPapers.filter(p => p.analysis).length }
+            stats: { afterFilter: filteredNew.length, newlyAnalyzed: analyzedPapers.filter(p => p.analysis).length }
         }).then(({ totalMerged }) => {
             console.log(`  💾 增量保存: ${analyzedPapers.filter(p => p.analysis).length}/${analyzedPapers.length} 篇已分析完成 (合并后 ${totalMerged} 篇)`);
             saveInProgress = false;
@@ -192,7 +245,7 @@ async function fullFetch() {
         });
     };
 
-    const { stats: analysisStats } = await analyzeBatch(filtered, {
+    const { stats: analysisStats } = await analyzeBatch(filteredNew, {
         concurrency: ANALYSIS_CONCURRENCY,
         maxRetries: ANALYSIS_RETRY_MAX,
         retryDelayMs: ANALYSIS_RETRY_DELAY_MS,
@@ -237,9 +290,10 @@ async function fullFetch() {
     console.log('\n💾 第六步：更新 papers.json 去重数据库');
     let newPaperCount = 0;
     for (const paper of allPapers) {
-        const id = paper.paper_id || paper.arxivId;
-        if (id && !papersData.papers[id]) {
-            papersData.papers[id] = paper;
+        const rawId = paper.paper_id || paper.arxivId;
+        const normId = normalizedId(rawId);
+        if (normId && !papersData.papers[normId]) {
+            papersData.papers[normId] = paper;
             newPaperCount++;
         }
     }
