@@ -528,15 +528,15 @@ async function analyzePaperDeep(paper) {
         console.log(`    [deep] ⚠️  开源扫描失败: ${e.message}`);
     }
 
-    // 第3轮：查缺补漏
+    // 第3轮：审校重写（对照原文修正、补充、删减，完全重写前两轮输出）
     try {
-        const gapText = await gapFill(paper, analysis, textForAnalysis);
-        if (gapText && !gapText.includes('无需补充')) {
-            analysis = analysis.trim() + '\n\n' + gapText.trim();
-            console.log(`    [deep] ✅ 查缺补漏完成`);
+        const revisedText = await reviseAnalysis(paper, analysis, textForAnalysis);
+        if (revisedText && revisedText.length > 100) {
+            analysis = revisedText.trim();
+            console.log(`    [deep] ✅ 审校重写完成`);
         }
     } catch (e) {
-        console.log(`    [deep] ⚠️  查缺补漏失败: ${e.message}`);
+        console.log(`    [deep] ⚠️  审校重写失败: ${e.message}`);
     }
 
     return {
@@ -556,14 +556,14 @@ async function scanOpensource(paper, textForAnalysis) {
     return await callModel([{ role: 'user', content: prompt }], 8000);
 }
 
-async function gapFill(paper, existingAnalysis, textForAnalysis) {
+async function reviseAnalysis(paper, existingAnalysis, textForAnalysis) {
     const prompt = loadPrompt('prompts/gap-fill.md', {
         title: paper.title,
         arxivId: paper.arxivId,
         existingAnalysis: existingAnalysis,
         textForAnalysis: textForAnalysis
     });
-    return await callModel([{ role: 'user', content: prompt }], 8000);
+    return await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
 }
 
 function mergeSection(analysis, sectionHeader, newContent) {
