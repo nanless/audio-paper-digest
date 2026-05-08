@@ -63,12 +63,12 @@ async function runDeepAnalysis() {
             }
         },
         onSave: async (results, saveStats) => {
-            // 将结果合并回原始 papers 数组（按 ID 匹配，避免顺序错位）
+            // results 里已经是 paper 对象（analysis-engine.js 解包过 r.result）
             const resultMap = new Map();
             for (const r of results) {
-                if (!r.success || !r.result) continue;
-                const key = r.result.arxivId || r.result.paper_id;
-                if (key) resultMap.set(key, r.result);
+                if (!r || !r.arxivId) continue;
+                const key = r.arxivId || r.paper_id;
+                if (key) resultMap.set(key, r);
             }
             for (let i = 0; i < papers.length; i++) {
                 const key = papers[i].arxivId || papers[i].paper_id;

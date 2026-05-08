@@ -140,7 +140,7 @@ function loadEnvFile() {
                 if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
                     val = val.slice(1, -1);
                 }
-                if (key && !process.env[key]) {
+                if (key) {
                     process.env[key] = val;
                 }
             }
