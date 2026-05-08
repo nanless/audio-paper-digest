@@ -539,6 +539,17 @@ async function analyzePaperDeep(paper) {
         console.log(`    [deep] ⚠️  审校重写失败: ${e.message}`);
     }
 
+    // 第3.5轮：检查并修复实验结果中缺失的表格
+    try {
+        const fixed = await checkAndFixTables(paper, analysis, textForAnalysis);
+        if (fixed && fixed !== analysis) {
+            analysis = fixed.trim();
+            console.log(`    [deep] ✅ 表格补充完成`);
+        }
+    } catch (e) {
+        console.log(`    [deep] ⚠️  表格补充失败: ${e.message}`);
+    }
+
     return {
         ...paper,
         analysis: analysis,
@@ -564,6 +575,94 @@ async function reviseAnalysis(paper, existingAnalysis, textForAnalysis) {
         textForAnalysis: textForAnalysis
     });
     return await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
+}
+
+/**
+ * 检查实验结果部分是否包含 Markdown 表格
+ */
+function hasMarkdownTable(text) {
+    if (!text) return false;
+    // 标准 Markdown 表格：至少有一行表头 |...| 和一行分隔符 |---|---|
+    return /\n\|[^\n]+\|\n\|[\-\s:|]+\|/.test('\n' + text);
+}
+
+/**
+ * 检查文本中是否包含表格省略标记
+ */
+function hasOmissionMarkers(text) {
+    if (!text) return false;
+    const markers = [
+        '此处省略',
+        '表格数据与论文一致',
+        '详见原文',
+        '详见论文',
+        '表格详见',
+        '数据详见',
+        '省略',
+        '详见表',
+        '（见表',
+        '(见表',
+    ];
+    return markers.some(m => text.includes(m));
+}
+
+/**
+ * 从分析文本中提取实验结果部分
+ */
+function extractResultsSection(analysis) {
+    const m = analysis.match(/###\s*04[.\s]+实验结果[：:\s]*\n([\s\S]*?)(?=###\s*05[.\s]|\n##\s*|$)/);
+    return m ? m[1].trim() : '';
+}
+
+/**
+ * 检查并修复实验结果中缺失的表格。
+ * 如果检测到省略标记或缺少 Markdown 表格，触发补充调用。
+ */
+async function checkAndFixTables(paper, analysis, textForAnalysis) {
+    const resultsSection = extractResultsSection(analysis);
+    if (!resultsSection) return analysis;
+
+    const hasTable = hasMarkdownTable(resultsSection);
+    const hasOmission = hasOmissionMarkers(resultsSection);
+    const hasTableReference = /[（(]表\d+[)）]|表[一二三四五六七八九十\d]+/.test(resultsSection);
+
+    // 如果有省略标记，或引用了表格但没有实际 Markdown 表格
+    if (!hasOmission && (!hasTableReference || hasTable)) {
+        return analysis;
+    }
+
+    console.log(`    [deep] 🔍 检测到实验结果可能缺少表格，触发补充...`);
+
+    const prompt = `你是一位严谨的学术论文分析专家。请根据下面的论文原文，为"实验结果"部分补充完整的 Markdown 表格数据。
+
+论文标题: ${paper.title}
+arXiv ID: ${paper.arxivId}
+
+## 要求
+1. 只输出"### 04.实验结果"这一个 section 的完整内容。
+2. 必须包含论文中所有实验结果表格的标准 Markdown 格式（表头、模型名称、数据集、指标、数值），不要省略任何行或列。
+3. 严禁使用"此处省略"、"详见原文"等字样。所有数据必须直接列出。
+4. 如果有图片，用 Markdown 图片语法 \`![描述](URL)\` 插入。
+5. 在表格下方用文字说明关键结论。
+
+## 已有分析（供参考，但可能缺少表格）
+
+${resultsSection}
+
+## 论文原文（权威依据）
+
+${textForAnalysis.slice(0, 80000)}
+
+请直接输出"### 04.实验结果"及之后的完整内容：
+`;
+
+    const fixedSection = await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
+    if (!fixedSection || fixedSection.length < 200) {
+        return analysis;
+    }
+
+    // 将补充的实验结果合并回原分析
+    return mergeSection(analysis, '### 04.实验结果', fixedSection);
 }
 
 function mergeSection(analysis, sectionHeader, newContent) {
