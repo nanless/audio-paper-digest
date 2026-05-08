@@ -169,8 +169,6 @@ python3 scripts/backfill_papers.py
 
 ---
 
----
-
 ## 更多文档
 
 - [主流程详解](docs/workflow.md) — 自动归档、抓取、筛选、深度分析的完整流程
@@ -179,3 +177,9 @@ python3 scripts/backfill_papers.py
 - [安装与配置](docs/setup.md) — 依赖安装、环境变量、模型配置、日志机制
 - [排错手册](docs/troubleshooting.md) — API 错误、代理问题、发布失败的排查方法
 - [维护约定](docs/maintenance.md) — 代码规范、评分标签口径、变更检查清单
+
+---
+
+## 参考与致谢
+
+- 本项目在设计和实现过程中参考了 [speech-paper-daily-skill](https://github.com/JusperLee/speech-paper-daily-skill) 的思路与结构
