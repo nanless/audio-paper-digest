@@ -203,7 +203,7 @@ def generate_paper_md(paper, date_str):
             ('作者与机构', 'authors'),
             ('毒舌点评', 'roast'),
             ('核心摘要', 'summary'),
-            ('模型架构', 'architecture'),
+            ('方法概述和架构', 'architecture'),
             ('核心创新点', 'innovation'),
             ('细节详述', 'details'),
             ('实验结果', 'results'),

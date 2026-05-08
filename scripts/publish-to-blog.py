@@ -319,7 +319,7 @@ hiddenInHomeList: true
             ('💡 毒舌点评', 'roast'),
             ('📌 核心摘要', 'summary'),
             ('🔗 开源详情', 'opensource', opensource_content),
-            ('🏗️ 模型架构', 'architecture'),
+            ('🏗️ 方法概述和架构', 'architecture'),
             ('💡 核心创新点', 'innovation'),
             ('🔬 细节详述', 'details'),
             ('📊 实验结果', 'results'),

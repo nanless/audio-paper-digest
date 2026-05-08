@@ -414,7 +414,7 @@ function parseAnalysis(analysis) {
     if (m) result.summary = stripMd(m[1]);
 
     // 详细分析子部分
-    m = analysis.match(/###?\s*01[.\s]+模型架构[：:]*\s*([\s\S]*?)(?=###?\s*02[.\s]|$)/);
+    m = analysis.match(/###?\s*01[.\s]+方法概述和架构[：:]*\s*([\s\S]*?)(?=###?\s*02[.\s]|$)/);
     if (m) result.architecture = stripMd(m[1]);
 
     m = analysis.match(/###?\s*02[.\s]+核心创新点[：:]*\s*([\s\S]*?)(?=###?\s*03[.\s]|$)/);

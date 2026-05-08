@@ -150,7 +150,7 @@ def parse_analysis(analysis):
             r['detailIntro'] = intro_m.group(1).strip()
 
         for key, pat in [
-            ('architecture', r'###\s*\d+\.\s*模型架构\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
+            ('architecture', r'###\s*\d+\.\s*方法概述和架构\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
             ('innovation', r'###\s*\d+\.\s*核心创新点\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
             ('details', r'###\s*\d+\.\s*细节详[述题]\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
             ('results', r'###\s*\d+\.\s*实验结果\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
