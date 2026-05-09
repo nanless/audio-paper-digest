@@ -413,20 +413,20 @@ function parseAnalysis(analysis) {
     m = analysis.match(/##\s*核心摘要\s*\n([\s\S]*?)(?=##\s*详细分析|$)/);
     if (m) result.summary = stripMd(m[1]);
 
-    // 详细分析子部分
-    m = analysis.match(/###?\s*01[.\s]+方法概述和架构[：:]*\s*([\s\S]*?)(?=###?\s*02[.\s]|$)/);
+    // 详细分析子部分（兼容两种格式：### 01.xxx 或 ## xxx）
+    m = analysis.match(/#{2,3}\s*(?:\d+[.\s]+)?方法概述和架构[：:\s]*\n([\s\S]*?)(?=#{2,3}\s*(?:\d+[.\s]+)?(?:核心创新点|实验结果|细节详述|评分理由)|$)/);
     if (m) result.architecture = stripMd(m[1]);
 
-    m = analysis.match(/###?\s*02[.\s]+核心创新点[：:]*\s*([\s\S]*?)(?=###?\s*03[.\s]|$)/);
+    m = analysis.match(/#{2,3}\s*(?:\d+[.\s]+)?核心创新点[：:\s]*\n([\s\S]*?)(?=#{2,3}\s*(?:\d+[.\s]+)?(?:方法概述和架构|实验结果|细节详述|评分理由)|$)/);
     if (m) result.innovation = stripMd(m[1]);
 
-    m = analysis.match(/###?\s*03[.\s]+细节详述[：:]*\s*([\s\S]*?)(?=###?\s*04[.\s]|$)/);
-    if (m) result.details = stripMd(m[1]);
-
-    m = analysis.match(/###?\s*04[.\s]+实验结果[：:]*\s*([\s\S]*?)(?=###?\s*05[.\s]|$)/);
+    m = analysis.match(/#{2,3}\s*(?:\d+[.\s]+)?实验结果[：:\s]*\n([\s\S]*?)(?=#{2,3}\s*(?:\d+[.\s]+)?(?:方法概述和架构|核心创新点|细节详述|评分理由)|$)/);
     if (m) result.results = stripMd(m[1]);
 
-    m = analysis.match(/###?\s*05[.\s]+评分理由[：:]*\s*([\s\S]*?)(?=##\s*开源|$)/);
+    m = analysis.match(/#{2,3}\s*(?:\d+[.\s]+)?细节详述[：:\s]*\n([\s\S]*?)(?=#{2,3}\s*(?:\d+[.\s]+)?(?:方法概述和架构|核心创新点|实验结果|评分理由)|$)/);
+    if (m) result.details = stripMd(m[1]);
+
+    m = analysis.match(/#{2,3}\s*(?:\d+[.\s]+)?评分理由[：:\s]*\n([\s\S]*?)(?=#{2,3}\s*(?:\d+[.\s]+)?(?:方法概述和架构|核心创新点|实验结果|细节详述)|##\s*开源|$)/);
     if (m) result.scoringReason = stripMd(m[1]);
 
     // 开源详情

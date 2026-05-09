@@ -137,25 +137,24 @@ def parse_analysis(analysis):
     m = re.search(r'##\s*核心摘要\s*\n([\s\S]*?)(?=\n##|$)', analysis)
     r['summary'] = m.group(1).strip() if m else ''
 
+    # 兼容两种格式：旧格式有 ## 详细分析 父标题 + ### 01.xxx 子标题
+    # 新格式（gap-fill 输出）直接用 ## 01.xxx 或 ## xxx 作为一级标题
     detail_block = re.search(r'##\s*详细分析\s*\n([\s\S]*?)(?=\n##\s*(?:开源|图片)|$)', analysis)
     r['detailIntro'] = r['architecture'] = r['innovation'] = r['details'] = r['results'] = r['scoringReason'] = ''
 
     if detail_block:
         block = detail_block.group(1)
     else:
-        # Fallback: if "详细分析" header is corrupted/missing, search the whole text for subsections
+        # Fallback: 在整个文本中搜索子 section（兼容 gap-fill 直接输出 ## 标题的格式）
         block = analysis
-        intro_m = re.match(r'^([\s\S]*?)(?=\n###|$)', block)
-        if intro_m and intro_m.group(1).strip():
-            r['detailIntro'] = intro_m.group(1).strip()
 
-    # 解析详细分析的各个子 section（两种情况都执行）
+    # 解析详细分析的各个子 section（支持 ### 01.xxx、## 01.xxx、### xxx、## xxx 四种格式）
     for key, pat in [
-        ('architecture', r'###\s*\d+\.\s*方法概述和架构\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
-        ('innovation', r'###\s*\d+\.\s*核心创新点\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
-        ('details', r'###\s*\d+\.\s*细节详[述题]\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
-        ('results', r'###\s*\d+\.\s*实验结果\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
-        ('scoringReason', r'###\s*\d+\.\s*评分理由\s*\n([\s\S]*?)(?=\n###|\n##|$)'),
+        ('architecture', r'#{2,3}\s*(?:\d+[.\s]+)?方法概述和架构[：:\s]*\n([\s\S]*?)(?=\n#{2,3}\s*(?:\d+[.\s]+)?(?:核心创新点|实验结果|细节详述|评分理由)|\n##\s|$)'),
+        ('innovation', r'#{2,3}\s*(?:\d+[.\s]+)?核心创新点[：:\s]*\n([\s\S]*?)(?=\n#{2,3}\s*(?:\d+[.\s]+)?(?:方法概述和架构|实验结果|细节详述|评分理由)|\n##\s|$)'),
+        ('results', r'#{2,3}\s*(?:\d+[.\s]+)?实验结果[：:\s]*\n([\s\S]*?)(?=\n#{2,3}\s*(?:\d+[.\s]+)?(?:方法概述和架构|核心创新点|细节详述|评分理由)|\n##\s|$)'),
+        ('details', r'#{2,3}\s*(?:\d+[.\s]+)?细节详[述题][：:\s]*\n([\s\S]*?)(?=\n#{2,3}\s*(?:\d+[.\s]+)?(?:方法概述和架构|核心创新点|实验结果|评分理由)|\n##\s|$)'),
+        ('scoringReason', r'#{2,3}\s*(?:\d+[.\s]+)?评分理由[：:\s]*\n([\s\S]*?)(?=\n#{2,3}\s*(?:\d+[.\s]+)?(?:方法概述和架构|核心创新点|实验结果|细节详述)|\n##\s|$)'),
     ]:
         sm = re.search(pat, block)
         if sm:

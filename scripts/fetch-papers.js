@@ -197,13 +197,15 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
     for (let attempt = 1; attempt <= retryCount; attempt++) {
         try {
             const response = await fetch(url, {
-                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaperDigest/1.0)' },
+                headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
                 signal: AbortSignal.timeout(60000)
             });
 
             if (response.status === 429) {
-                const waitTime = Math.min(Math.pow(2, attempt) * ARXIV_CONFIG.fetchRateLimitBaseDelayMs, ARXIV_CONFIG.fetchMaxWaitMs);
-                console.log(`[fetch] ${categoryId} 被限流，等待 ${waitTime/1000} 秒后重试 (${attempt}/${retryCount})...`);
+                const baseWait = Math.min(Math.pow(2, attempt) * ARXIV_CONFIG.fetchRateLimitBaseDelayMs, ARXIV_CONFIG.fetchMaxWaitMs);
+                const jitter = Math.floor(Math.random() * 5000);
+                const waitTime = baseWait + jitter;
+                console.log(`[fetch] ${categoryId} 被限流，等待 ${(waitTime/1000).toFixed(1)} 秒后重试 (${attempt}/${retryCount})...`);
                 await new Promise(resolve => setTimeout(resolve, waitTime));
                 continue;
             }
@@ -223,8 +225,10 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
                 return [];
             }
 
-            const waitTime = Math.min(Math.pow(2, attempt) * ARXIV_CONFIG.fetchRetryBaseDelayMs, ARXIV_CONFIG.fetchMaxWaitMs);
-            console.log(`[fetch] ${categoryId} 抓取出错 (${err.message})，${waitTime/1000}秒后重试...`);
+            const baseWait = Math.min(Math.pow(2, attempt) * ARXIV_CONFIG.fetchRetryBaseDelayMs, ARXIV_CONFIG.fetchMaxWaitMs);
+            const jitter = Math.floor(Math.random() * 3000);
+            const waitTime = baseWait + jitter;
+            console.log(`[fetch] ${categoryId} 抓取出错 (${err.message})，${(waitTime/1000).toFixed(1)}秒后重试...`);
             await new Promise(resolve => setTimeout(resolve, waitTime));
         }
     }

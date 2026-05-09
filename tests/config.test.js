@@ -14,7 +14,7 @@ describe('config', () => {
         Config = require('../scripts/config.js');
         assert.strictEqual(Config.ANALYSIS_CONFIG.concurrency, 3);
         assert.strictEqual(Config.ANALYSIS_CONFIG.maxRetries, 2);
-        assert.strictEqual(Config.ANALYSIS_CONFIG.apiMaxTokens, 15000);
+        assert.strictEqual(Config.ANALYSIS_CONFIG.apiMaxTokens, 64000);
         assert.strictEqual(Config.FILTER_CONFIG.batchSize, 5);
         assert.strictEqual(Config.FILTER_CONFIG.temperature, 0.3);
         assert.strictEqual(Config.ARXIV_CONFIG.maxResultsPerCategory, 100);

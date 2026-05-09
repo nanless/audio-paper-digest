@@ -11,7 +11,7 @@ loadEnvFile();
 
 // 解决 stdout 缓冲问题：后台运行时强制立即 flush
 const https = require('https');
-const { ANALYSIS_CONFIG } = require('./config.js');
+const { ANALYSIS_CONFIG, ARXIV_CONFIG } = require('./config.js');
 
 // 解构配置常量（便于阅读）
 const {
@@ -169,15 +169,25 @@ const cheerio = require('cheerio');
  * 带重试机制，避免因并发限流偶发失败
  */
 async function fetchArxivText(arxivId) {
-    const maxRetries = 3;
+    const maxRetries = 6;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         for (const suffix of ['v1', 'v2', '']) {
             const url = `https://arxiv.org/html/${arxivId}${suffix}`;
             try {
                 const response = await fetch(url, {
-                    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaperDigest/1.0)' },
+                    headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
                     signal: AbortSignal.timeout(ARXIV_FETCH_TIMEOUT_MS)
                 });
+
+                if (response.status === 429) {
+                    const baseWait = Math.min(Math.pow(2, attempt) * 8000, 120000);
+                    const jitter = Math.floor(Math.random() * 5000);
+                    const waitTime = baseWait + jitter;
+                    console.log(`    [deep] fetchArxivText ${arxivId} 被限流，等待 ${(waitTime/1000).toFixed(1)}s 后重试 (${attempt}/${maxRetries})`);
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                    break;
+                }
+
                 if (response.ok) {
                     const html = await response.text();
                     const $ = cheerio.load(html);
@@ -220,7 +230,9 @@ async function fetchArxivText(arxivId) {
             }
         }
         if (attempt < maxRetries) {
-            const delay = attempt * 2000;
+            const baseDelay = attempt * 3000;
+            const jitter = Math.floor(Math.random() * 3000);
+            const delay = baseDelay + jitter;
             console.log(`    [deep] fetchArxivText ${arxivId} retry ${attempt}/${maxRetries} after ${delay}ms`);
             await new Promise(resolve => setTimeout(resolve, delay));
         }
@@ -235,15 +247,25 @@ async function fetchArxivText(arxivId) {
  * 带重试机制，避免因并发限流偶发失败
  */
 async function fetchArxivImageUrls(arxivId) {
-    const maxRetries = 3;
+    const maxRetries = 6;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         for (const suffix of ['v1', 'v2', '']) {
             const url = `https://arxiv.org/html/${arxivId}${suffix}`;
             try {
                 const response = await fetch(url, {
-                    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaperDigest/1.0)' },
+                    headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
                     signal: AbortSignal.timeout(30000)
                 });
+
+                if (response.status === 429) {
+                    const baseWait = Math.min(Math.pow(2, attempt) * 8000, 120000);
+                    const jitter = Math.floor(Math.random() * 5000);
+                    const waitTime = baseWait + jitter;
+                    console.log(`    [deep] fetchArxivImageUrls ${arxivId} 被限流，等待 ${(waitTime/1000).toFixed(1)}s 后重试 (${attempt}/${maxRetries})`);
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                    break;
+                }
+
                 if (!response.ok) continue;
 
                 const html = await response.text();
@@ -321,7 +343,9 @@ async function fetchArxivImageUrls(arxivId) {
             }
         }
         if (attempt < maxRetries) {
-            const delay = attempt * 2000;
+            const baseDelay = attempt * 3000;
+            const jitter = Math.floor(Math.random() * 3000);
+            const delay = baseDelay + jitter;
             console.log(`    [deep] fetchArxivImageUrls ${arxivId} retry ${attempt}/${maxRetries} after ${delay}ms`);
             await new Promise(resolve => setTimeout(resolve, delay));
         }
@@ -333,7 +357,7 @@ async function fetchArxivImageUrls(arxivId) {
 /**
  * 下载图片并转为 base64
  */
-async function downloadImageBase64(imageUrl, maxRetries = 2) {
+async function downloadImageBase64(imageUrl, maxRetries = 5) {
     const fileName = imageUrl.split('/').pop();
     let lastError = null;
 
@@ -550,6 +574,17 @@ async function analyzePaperDeep(paper) {
         console.log(`    [deep] ⚠️  表格补充失败: ${e.message}`);
     }
 
+    // 第3.6轮：检查并修复方法概述部分不够详细的问题
+    try {
+        const fixed = await checkAndFixMethodSection(paper, analysis, textForAnalysis);
+        if (fixed && fixed !== analysis) {
+            analysis = fixed.trim();
+            console.log(`    [deep] ✅ 方法概述补充完成`);
+        }
+    } catch (e) {
+        console.log(`    [deep] ⚠️  方法概述补充失败: ${e.message}`);
+    }
+
     return {
         ...paper,
         analysis: analysis,
@@ -578,12 +613,125 @@ async function reviseAnalysis(paper, existingAnalysis, textForAnalysis) {
 }
 
 /**
+ * 从分析文本中提取方法概述和架构部分
+ */
+function extractMethodSection(analysis) {
+    const m = analysis.match(/###\s*01[.\s]+方法概述和架构[：:\s]*\n([\s\S]*?)(?=###\s*02[.\s]|\n##\s*|$)/);
+    return m ? m[1].trim() : '';
+}
+
+/**
+ * 计算文本中的中文字符数量（含中文标点）
+ */
+function countChineseChars(text) {
+    if (!text) return 0;
+    const matches = text.match(/[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]/g);
+    return matches ? matches.length : 0;
+}
+
+/**
+ * 检查方法概述部分是否足够详细
+ */
+function isMethodSectionDetailed(text) {
+    if (!text) return false;
+
+    // 1. 中文字符数检查（最低阈值 300，理想 600+）
+    const chineseCount = countChineseChars(text);
+    if (chineseCount < 300) {
+        console.log(`    [deep] 🔍 方法概述中文字符数不足: ${chineseCount} < 300`);
+        return false;
+    }
+
+    // 2. 检查是否有"空泛表述"（只列名称不解释）
+    const vaguePatterns = [
+        /详见原文/,
+        /论文描述了详细架构/,
+        /详细方法见/,
+        /具体实现请参考/,
+    ];
+    if (vaguePatterns.some(p => p.test(text))) {
+        console.log(`    [deep] 🔍 方法概述检测到空泛表述`);
+        return false;
+    }
+
+    // 3. 检查是否提及关键要素（至少包含一些结构词）
+    const structuralKeywords = ['输入', '输出', '流程', '组件', '模块', '阶段', '结构', '网络', '模型'];
+    const hasStructure = structuralKeywords.some(kw => text.includes(kw));
+    if (!hasStructure) {
+        console.log(`    [deep] 🔍 方法概述缺少结构性描述`);
+        return false;
+    }
+
+    // 4. 检查段落数（至少 3 个段落，说明有分层组织）
+    const paragraphs = text.split(/\n\s*\n/).filter(p => p.trim().length > 20);
+    if (paragraphs.length < 3) {
+        console.log(`    [deep] 🔍 方法概述段落数不足: ${paragraphs.length} < 3`);
+        return false;
+    }
+
+    return true;
+}
+
+/**
  * 检查实验结果部分是否包含 Markdown 表格
  */
 function hasMarkdownTable(text) {
     if (!text) return false;
     // 标准 Markdown 表格：至少有一行表头 |...| 和一行分隔符 |---|---|
     return /\n\|[^\n]+\|\n\|[\-\s:|]+\|/.test('\n' + text);
+}
+
+/**
+ * 检查并修复方法概述部分不够详细的问题。
+ * 如果检测到方法概述字数不足、过于空泛或缺少关键要素，触发补充调用。
+ */
+async function checkAndFixMethodSection(paper, analysis, textForAnalysis) {
+    const methodSection = extractMethodSection(analysis);
+    if (!methodSection) return analysis;
+
+    if (isMethodSectionDetailed(methodSection)) {
+        console.log(`    [deep] ✓ 方法概述部分已足够详细（中文字符: ${countChineseChars(methodSection)}）`);
+        return analysis;
+    }
+
+    console.log(`    [deep] 🔍 检测到方法概述不够详细，触发补充...`);
+
+    const prompt = `你是一位严谨的学术论文分析专家。请根据下面的论文原文，为"方法概述和架构"部分补充更详细、更充分的内容。
+
+论文标题: ${paper.title}
+arXiv ID: ${paper.arxivId}
+
+## 要求
+1. 只输出"### 01.方法概述和架构"这一个 section 的完整内容。
+2. 必须详细覆盖以下要素（缺一不可）：
+   - 整体流程概述（输入→处理→输出的完整链路）
+   - 每个核心组件的名称、功能、内部结构/实现、输入输出
+   - 组件间的数据流与交互方式
+   - 关键设计选择及其动机
+   - 若有多阶段/多模块，逐层展开，不能一笔带过
+   - 若原文有架构图，描述图中各模块的关系（但不要编造图片URL）
+   - 对专业术语做必要解释
+3. 字数要求：中文字符不少于 600 个。内容必须充实，不能空泛。
+4. 严禁使用"详见原文"、"论文描述了详细架构"等空泛表述替代具体描述。
+5. 严禁只罗列组件名称而不解释功能和内部结构。
+
+## 已有分析（供参考，但可能不够详细）
+
+${methodSection}
+
+## 论文原文（权威依据）
+
+${textForAnalysis.slice(0, 80000)}
+
+请直接输出"### 01.方法概述和架构"及之后的完整内容：`;
+
+    const fixedSection = await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
+    if (!fixedSection || fixedSection.length < 200) {
+        return analysis;
+    }
+
+    // 将补充的方法概述合并回原分析
+    return mergeSection(analysis, '### 01.方法概述和架构', fixedSection);
 }
 
 /**
@@ -610,7 +758,7 @@ function hasOmissionMarkers(text) {
  * 从分析文本中提取实验结果部分
  */
 function extractResultsSection(analysis) {
-    const m = analysis.match(/###\s*04[.\s]+实验结果[：:\s]*\n([\s\S]*?)(?=###\s*05[.\s]|\n##\s*|$)/);
+    const m = analysis.match(/###\s*03[.\s]+实验结果[：:\s]*\n([\s\S]*?)(?=###\s*04[.\s]|\n##\s*|$)/);
     return m ? m[1].trim() : '';
 }
 
@@ -639,7 +787,7 @@ async function checkAndFixTables(paper, analysis, textForAnalysis) {
 arXiv ID: ${paper.arxivId}
 
 ## 要求
-1. 只输出"### 04.实验结果"这一个 section 的完整内容。
+1. 只输出"### 03.实验结果"这一个 section 的完整内容。
 2. 必须包含论文中所有实验结果表格的标准 Markdown 格式（表头、模型名称、数据集、指标、数值），不要省略任何行或列。
 3. 严禁使用"此处省略"、"详见原文"等字样。所有数据必须直接列出。
 4. 如果有图片，用 Markdown 图片语法 \`![描述](URL)\` 插入。
@@ -653,7 +801,7 @@ ${resultsSection}
 
 ${textForAnalysis.slice(0, 80000)}
 
-请直接输出"### 04.实验结果"及之后的完整内容：
+请直接输出"### 03.实验结果"及之后的完整内容：
 `;
 
     const fixedSection = await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
@@ -662,7 +810,7 @@ ${textForAnalysis.slice(0, 80000)}
     }
 
     // 将补充的实验结果合并回原分析
-    return mergeSection(analysis, '### 04.实验结果', fixedSection);
+    return mergeSection(analysis, '### 03.实验结果', fixedSection);
 }
 
 function mergeSection(analysis, sectionHeader, newContent) {

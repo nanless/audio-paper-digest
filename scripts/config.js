@@ -33,12 +33,12 @@ const ARXIV_CATEGORIES = [
 const ARXIV_CONFIG = {
     maxResultsPerCategory: 100,
     fetchMaxRetries: 6,
-    fetchRetryBaseDelayMs: 2000,
-    fetchRateLimitBaseDelayMs: 5000,
-    fetchMaxWaitMs: 60000,
-    categoryDelayMs: 2000,
+    fetchRetryBaseDelayMs: 3000,
+    fetchRateLimitBaseDelayMs: 10000,
+    fetchMaxWaitMs: 120000,
+    categoryDelayMs: 5000,
     consecutiveExistingThreshold: 20,
-    userAgent: 'Mozilla/5.0 (compatible; PaperDigest/1.0)'
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 };
 
 // ═══════════════════════════════════════════════════════

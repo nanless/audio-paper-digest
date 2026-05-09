@@ -321,8 +321,8 @@ hiddenInHomeList: true
             ('🔗 开源详情', 'opensource', opensource_content),
             ('🏗️ 方法概述和架构', 'architecture'),
             ('💡 核心创新点', 'innovation'),
-            ('🔬 细节详述', 'details'),
             ('📊 实验结果', 'results'),
+            ('🔬 细节详述', 'details'),
             ('⚖️ 评分理由', 'scoringReason'),
         ]
         for item in sections:
