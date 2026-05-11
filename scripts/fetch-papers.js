@@ -331,13 +331,23 @@ function deduplicatePapers(papers) {
 async function isSpeechAudioRelated(paper) {
     const prompt = loadPrompt('prompts/filter.md', {
         title: paper.title,
-        abstract: paper.abstract || paper.summary || ''
+        abstract: paper.abstract || paper.summary || '',
+        categories: paper.categories || paper.category || ''
     });
 
     try {
         const response = await callModelForFilter([{ role: 'user', content: prompt }], 1000);
         const answer = response ? response.trim().toLowerCase() : '';
 
+        // 优先匹配新格式「判断：是/否」
+        if (answer.includes('判断：是') || answer.includes('判断:是')) {
+            return true;
+        }
+        if (answer.includes('判断：否') || answer.includes('判断:否')) {
+            return false;
+        }
+
+        // 兼容旧格式
         const isRelated = answer.includes('是') || answer.includes('yes') || answer === 'y';
         const isUnrelated = answer.includes('否') || answer.includes('no') || answer === 'n';
 

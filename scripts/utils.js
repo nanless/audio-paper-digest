@@ -410,7 +410,7 @@ function parseAnalysis(analysis) {
     if (m) result.roast = stripMd(m[1]);
 
     // 核心摘要
-    m = analysis.match(/##\s*核心摘要\s*\n([\s\S]*?)(?=##\s*详细分析|$)/);
+    m = analysis.match(/##\s*核心摘要\s*\n([\s\S]*?)(?=##\s*(?:详细分析|方法概述和架构)|$)/);
     if (m) result.summary = stripMd(m[1]);
 
     // 详细分析子部分（兼容两种格式：### 01.xxx 或 ## xxx）
