@@ -62,10 +62,9 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
     const bodyObj = buildRequestBody(apiType, FILTER_CONFIG.model, messages, maxTokens, 0.3);
     const postData = JSON.stringify(bodyObj);
 
-    // 代理检测（日志记录用途；LLM API 请求使用 agent: false 禁用连接复用以避免 MiMo 403）
     const proxyUrl = detectProxyUrl();
     if (proxyUrl) {
-        console.log(`[filter] 检测到代理: ${proxyUrl}（LLM 请求将直连绕过）`);
+        console.log(`[filter] 检测到代理: ${proxyUrl}`);
     }
 
     let lastError = null;
@@ -81,7 +80,6 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
             method: 'POST',
             headers: requestHeaders,
             timeout: FILTER_CFG.timeoutMs,
-            agent: false,
             signal: controller.signal
         };
 
@@ -339,7 +337,15 @@ async function isSpeechAudioRelated(paper) {
         const response = await callModelForFilter([{ role: 'user', content: prompt }], 1000);
         const answer = response ? response.trim().toLowerCase() : '';
 
-        // 优先匹配新格式「判断：是/否」
+        // 1. 优先匹配新格式「结论：相关/不相关」
+        if (answer.includes('结论：相关') || answer.includes('结论:相关')) {
+            return true;
+        }
+        if (answer.includes('结论：不相关') || answer.includes('结论:不相关')) {
+            return false;
+        }
+
+        // 2. 兼容旧格式「判断：是/否」
         if (answer.includes('判断：是') || answer.includes('判断:是')) {
             return true;
         }
@@ -347,18 +353,27 @@ async function isSpeechAudioRelated(paper) {
             return false;
         }
 
-        // 兼容旧格式
-        const isRelated = answer.includes('是') || answer.includes('yes') || answer === 'y';
-        const isUnrelated = answer.includes('否') || answer.includes('no') || answer === 'n';
-
-        if (isRelated) {
+        // 3. 检查最后一行
+        const lines = answer.split('\n').map(l => l.trim()).filter(l => l);
+        const lastLine = lines[lines.length - 1] || '';
+        if (lastLine === '相关' || lastLine === '是' || lastLine === 'yes' || lastLine === 'y') {
             return true;
-        } else if (isUnrelated) {
-            return false;
-        } else {
-            console.log(`[filter] 无法判断 ${paper.arxivId}: "${answer.substring(0, 30)}" → 默认过滤`);
+        }
+        if (lastLine === '不相关' || lastLine === '否' || lastLine === 'no' || lastLine === 'n') {
             return false;
         }
+
+        // 4. 文本中是否包含明确否定/肯定词
+        if (answer.includes('不相关') || answer.includes('无关') || answer.includes('否')) {
+            return false;
+        }
+        if (answer.includes('相关') || answer.includes('是')) {
+            return true;
+        }
+
+        // 5. 仍无法判断，默认保留（宁可错留不可错杀）
+        console.log(`[filter] 无法判断 ${paper.arxivId}: "${answer.substring(0, 50)}" → 默认保留`);
+        return true;
     } catch (err) {
         console.error(`[filter] 判断论文 ${paper.arxivId} 失败: ${err.message}`);
         return false;

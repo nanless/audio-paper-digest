@@ -28,6 +28,25 @@ const {
     fullTextMinCharsForFull: FULL_TEXT_MIN_CHARS_FOR_FULL
 } = ANALYSIS_CONFIG;
 
+/**
+ * 清理 gap-fill（审校重写）输出中的前缀废话
+ * 确保输出直接从 ## 评分 开始
+ */
+function cleanGapFillPrefix(text) {
+    if (!text) return text;
+    // 找到第一个 ## 评分 的位置
+    const scoreIdx = text.indexOf('## 评分');
+    if (scoreIdx > 0) {
+        return text.substring(scoreIdx).trim();
+    }
+    // 如果没有 ## 评分，尝试其他一级标题
+    const h2Idx = text.search(/\n## /);
+    if (h2Idx > 0) {
+        return text.substring(h2Idx + 1).trim();
+    }
+    return text.trim();
+}
+
 // API 配置 - 深度分析阶段（统一使用 PAPER_ANALYZER_*）
 const DEEP_CONFIG = {
     endpoint: process.env.PAPER_ANALYZER_ENDPOINT || '',
@@ -105,7 +124,6 @@ async function _callModelOnce(messages, maxTokens, config, startTime, apiType) {
             path: url.pathname,
             method: 'POST',
             headers: headers,
-            agent: false,
             signal: controller.signal
         };
 
@@ -556,7 +574,7 @@ async function analyzePaperDeep(paper) {
     try {
         const revisedText = await reviseAnalysis(paper, analysis, textForAnalysis);
         if (revisedText && revisedText.length > 100) {
-            analysis = revisedText.trim();
+            analysis = cleanGapFillPrefix(revisedText.trim());
             console.log(`    [deep] ✅ 审校重写完成`);
         }
     } catch (e) {
