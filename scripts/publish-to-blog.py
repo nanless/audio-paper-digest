@@ -37,6 +37,30 @@ from image_host import (
 )
 from garbage_image_filter import is_image_text_dominant
 
+
+def load_env_file():
+    """读取 ~/.hermes/.env，将未设置的环境变量注入当前进程（复用 Node 侧逻辑）。"""
+    env_file = os.path.expanduser('~/.hermes/.env')
+    if not os.path.exists(env_file):
+        return
+    with open(env_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            eq = line.find('=')
+            if eq <= 0:
+                continue
+            key = line[:eq].strip()
+            val = line[eq + 1:].strip()
+            if val.startswith(("'", '"')) and val.endswith(("'", '"')) and len(val) >= 2:
+                val = val[1:-1]
+            if key and os.environ.get(key) is None:
+                os.environ[key] = val
+
+
+load_env_file()
+
 # 图床环境变量（通用 S3 命名，兼容旧 R2 命名）
 IMAGE_HOST = os.environ.get('PAPER_DIGEST_IMAGE_HOST', 'local').lower()
 S3_ENDPOINT = os.environ.get('PAPER_DIGEST_S3_ENDPOINT', '') or os.environ.get('PAPER_DIGEST_R2_ENDPOINT', '')
