@@ -359,7 +359,7 @@ function parseAnalysis(analysis) {
     const result = {
         score: '', tags: [], authors: '', roast: '', summary: '',
         architecture: '', innovation: '', details: '', results: '',
-        scoringReason: '', opensource: '',
+        scoringReason: '', limitations: '', opensource: '',
         machineSummary: null,
         rankBucket: '',
         qualityScore: '',
@@ -426,8 +426,12 @@ function parseAnalysis(analysis) {
     m = analysis.match(/#{2,3}\s*(?:\d+[.\s]+)?细节详述[：:\s]*\n([\s\S]*?)(?=#{2,3}\s*(?:\d+[.\s]+)?(?:方法概述和架构|核心创新点|实验结果|评分理由)|$)/);
     if (m) result.details = stripMd(m[1]);
 
-    m = analysis.match(/#{2,3}\s*(?:\d+[.\s]+)?评分理由[：:\s]*\n([\s\S]*?)(?=#{2,3}\s*(?:\d+[.\s]+)?(?:方法概述和架构|核心创新点|实验结果|细节详述)|##\s*开源|$)/);
+    m = analysis.match(/#{2,3}\s*(?:\d+[.\s]+)?评分理由[：:\s]*\n([\s\S]*?)(?=#{2,3}\s*(?:\d+[.\s]+)?(?:方法概述和架构|核心创新点|实验结果|细节详述)|##\s*(?:局限|开源)|$)/);
     if (m) result.scoringReason = stripMd(m[1]);
+
+    // 局限与问题
+    m = analysis.match(/##\s*局限与问题\s*\n([\s\S]*?)(?=##\s*开源|$)/);
+    if (m) result.limitations = stripMd(m[1]);
 
     // 开源详情
     m = analysis.match(/##\s*开源(?:详情)?[：:]*\s*([\s\S]*?)$/);
