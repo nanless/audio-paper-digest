@@ -184,11 +184,11 @@ def main():
                 h += f'<p style="color:#666;">{" | ".join(meta)}</p>\n'
             machine_parts = []
             if pa.get('qualityScore'):
-                machine_parts.append(f'学术质量 {pa["qualityScore"]}/7')
+                machine_parts.append(f'学术质量 {pa["qualityScore"]}/8')
             if pa.get('valueScore'):
-                machine_parts.append(f'选题价值 {pa["valueScore"]}/2')
+                machine_parts.append(f'影响力 {pa["valueScore"]}/2')
             if pa.get('reproducibilityBonus'):
-                machine_parts.append(f'复现加成 {pa["reproducibilityBonus"]}')
+                machine_parts.append(f'可复现性 {pa["reproducibilityBonus"]}/1')
             if pa.get('confidence'):
                 machine_parts.append(f'置信度 {pa["confidence"]}')
             if machine_parts:
@@ -202,6 +202,7 @@ def main():
                 ('🏗️ 方法概述和架构', 'architecture'),
                 ('💡 核心创新点', 'innovation'), ('🔬 细节详述', 'details'),
                 ('📊 实验结果', 'results'), ('⚖️ 评分理由', 'scoringReason'),
+                ('🚨 局限与问题', 'limitations'),
                 ('🔗 开源详情', 'opensource'),
             ]
             for label, key in sections:

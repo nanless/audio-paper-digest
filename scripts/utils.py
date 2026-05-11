@@ -35,7 +35,7 @@ def strip_md(t):
 
 
 def parse_machine_summary(analysis):
-    """解析 ### 机器摘要 块"""
+    """解析 机器摘要 块（兼容 ## 和 ### 标题）"""
     result = {
         'rankBucket': '',
         'qualityScore': '',
@@ -52,7 +52,8 @@ def parse_machine_summary(analysis):
     if not analysis:
         return result
 
-    m = re.search(r'###\s*机器摘要\s*\n([\s\S]*?)(?=\n###\s*评分规则|\n##\s*标签|$)', analysis)
+    # 兼容 ## 机器摘要 和 ### 机器摘要，内容到下一个 ##/###/【 或结尾
+    m = re.search(r'#{2,3}\s*机器摘要\s*\n([\s\S]*?)(?=\n#{2,3}\s|\n【|$)', analysis)
     if not m:
         return result
 
@@ -134,13 +135,13 @@ def parse_analysis(analysis):
     m = re.search(r'##\s*毒舌点评\s*\n([\s\S]*?)(?=\n##|$)', analysis)
     r['roast'] = m.group(1).strip() if m else ''
 
-    m = re.search(r'##\s*核心摘要\s*\n([\s\S]*?)(?=\n##|$)', analysis)
+    # 兼容旧格式（有 ## 详细分析 父标题）和新格式（扁平 ## 标题）
+    m = re.search(r'##\s*核心摘要\s*\n([\s\S]*?)(?=\n##\s*(?:方法概述和架构|详细分析)|$)', analysis)
     r['summary'] = m.group(1).strip() if m else ''
 
-    # 兼容两种格式：旧格式有 ## 详细分析 父标题 + ### 01.xxx 子标题
-    # 新格式（gap-fill 输出）直接用 ## 01.xxx 或 ## xxx 作为一级标题
-    detail_block = re.search(r'##\s*详细分析\s*\n([\s\S]*?)(?=\n##\s*(?:开源|图片)|$)', analysis)
-    r['detailIntro'] = r['architecture'] = r['innovation'] = r['details'] = r['results'] = r['scoringReason'] = ''
+    # 兼容旧格式有 ## 详细分析 父标题的情况
+    detail_block = re.search(r'##\s*详细分析\s*\n([\s\S]*?)(?=\n##\s*(?:开源|局限|图片)|$)', analysis)
+    r['detailIntro'] = r['architecture'] = r['innovation'] = r['details'] = r['results'] = r['scoringReason'] = r['limitations'] = ''
 
     if detail_block:
         block = detail_block.group(1)
@@ -159,6 +160,11 @@ def parse_analysis(analysis):
         sm = re.search(pat, block)
         if sm:
             r[key] = sm.group(1).strip()
+
+    # 局限与问题（新章节，可能在评分理由之后）
+    m = re.search(r'##\s*局限与问题\s*\n([\s\S]*?)(?=\n##\s*(?:开源|$))', analysis)
+    if m:
+        r['limitations'] = m.group(1).strip()
 
     m = re.search(r'##\s*开源(?:详情)?[：:]*\s*\n([\s\S]*?)(?=\n##|$)', analysis)
     r['opensource'] = m.group(1).strip() if m else ''

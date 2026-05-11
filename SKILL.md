@@ -92,7 +92,7 @@ set -a; source ~/.hermes/.env 2>/dev/null; set +a
 - **agent: `false`** — LLM API 请求明确禁用连接复用，避免全局 agent 连接池被代理污染导致 MiMo 403（详见 9.2）
 - 超时 60 秒，重试 3 次，每次重试独立创建 AbortController
 - 指数退避：抓取 4s/8s/16s（`2^attempt * 2s`，上限 60s），限流 10s/20s/40s（`2^attempt * 5s`，上限 60s）
-- prompt 来源：`prompts/filter.md`，运行时通过 `loadPrompt()` 读取并替换 `{title}`、`{abstract}` 占位符
+- prompt 来源：`prompts/filter.md`，运行时通过 `loadPrompt()` 读取并替换 `{title}`、`{abstract}`、`{categories}` 占位符
 - 判定口径：多模态模型只要明确涉及语音/音频（输入、输出、训练目标、评测任务或核心能力之一）即判定为相关
 - 冲突处理：若同时满足"多模态涉及语音/音频"和"其他领域"描述，优先判定为"是"
 
@@ -119,11 +119,12 @@ API 调用特性：
 
 输出约束：
 - prompt 来源：`prompts/deep-analysis.md`，运行时通过 `loadPrompt()` 读取并替换 `{hasFullText}`、`{title}`、`{authors}`、`{categories}`、`{arxivId}`、`{textForAnalysis}` 占位符
-- 固定一级标题：`## 评分`、`## 标签`、`## 作者与机构`、`## 毒舌点评`、`## 核心摘要`、`## 详细分析`、`## 开源详情`
-- `## 评分` 下必须先输出总分，再输出 `### 机器摘要`，包含 `rank_bucket`、`quality_score`、`value_score`、`reproducibility_bonus`、`confidence`、`primary_task_tag`、`primary_method_tag` 等固定键
-- 总分采用三段式：学术质量（0-7）+ 选题价值（0-2）+ 开源与复现加成（-1~+1）
+- 固定一级标题：`## 评分`、`## 机器摘要`、`## 标签`、`## 作者与机构`、`## 毒舌点评`、`## 核心摘要`、`## 方法概述和架构`、`## 核心创新点`、`## 实验结果`、`## 细节详述`、`## 评分理由`、`## 局限与问题`、`## 开源详情`
+- `## 评分` 下必须先输出总分（X.X/10），再输出 Overall Recommendation（Strong Accept / Accept / Weak Accept / Reject / Strong Reject）
+- `## 机器摘要` 包含 `rank_bucket`（带顶会映射）、`quality_score`（综合学术质量 0-8）、`value_score`（影响力 0-2）、`reproducibility_bonus`（可复现性 0-1）、`confidence`、`primary_task_tag`、`primary_method_tag` 等固定键
+- 评分采用六维审稿人体系：创新性（0-3）+ 技术严谨性（0-2）+ 实验充分性（0-2）+ 清晰度（0-1）+ 影响力（0-1）+ 可复现性（0-1）
 - 标签输出必须同时包含最终标签串、`主任务标签`、`主方法标签`、`补充标签`
-- 缺失信息必须写“未说明/未提供/未提及”，禁止猜测作者机构、实验数字、开源状态或外部信息
+- 缺失信息必须写"未说明/未提供/未提及"，禁止猜测作者机构、实验数字、开源状态或外部信息
 - 修改 `prompts/deep-analysis.md` 或 `prompts/filter.md` 时，需同步检查 `scripts/utils.js` 与 `scripts/utils.py` 的解析逻辑是否仍能匹配新输出格式
 
 ### 4.4 微信公众号（`publish-wechat-full.py`）
@@ -286,7 +287,7 @@ npm run xiaohongshu -- --date 2026-04-22
 Agent 执行约束：
 
 - 默认仅允许使用 `--skip-push` 模式验证博客生成结果
-- 只有用户明确要求“正式发布 / 推送博客”时，才允许去掉 `--skip-push`
+- 只有用户明确要求"正式发布 / 推送博客"时，才允许去掉 `--skip-push`
 - 若只是检查格式、验证新字段或预览产物，禁止触发真实 `git push`
 
 发布前保障：
@@ -372,7 +373,7 @@ PY
 9. **新增可配置参数放入 config.js**：新增脚本涉及可调整参数（并发度、超时、批次大小等）时，统一放入 `scripts/config.js` 并添加对应的环境变量覆写支持。
 10. **新增分析脚本复用 analysis-engine.js**：新增论文分析相关脚本时，优先复用 `analysis-engine.js` 的 `analyzeBatch()` / `analyzePaperWithRetry()`，避免重复实现重试、解析、保存逻辑。
 11. **博客验证默认不推送**：未获用户明确授权时，运行 `publish-to-blog.py` 必须带 `--skip-push`。
-12. **输出契约改动要同步 parser**：若修改 `prompts/deep-analysis.md` 中的 `### 机器摘要` 键名、章节顺序或标签输出格式，必须同步检查 `scripts/utils.js` 与 `scripts/utils.py` 的解析逻辑。
+12. **输出契约改动要同步 parser**：若修改 `prompts/deep-analysis.md` 中的 `## 机器摘要` 键名、章节顺序或标签输出格式，必须同步检查 `scripts/utils.js` 与 `scripts/utils.py` 的解析逻辑。
 13. **变更后必须做产物级验证**：至少抽样检查一份 `data/current/deep-analysis-result.json`，确认存在 `rank_bucket`、`primary_task_tag`、`primary_method_tag` 等字段，再运行博客/社媒脚本验证最终产物。
 14. **变更后验证 prompt 加载**：修改 `prompts/` 目录下的 markdown 文件后，运行一次快速测试（`node scripts/quick-test.js` 或单篇分析）确认 `loadPrompt()` 能正确读取并替换占位符，无 `{变量名}` 残留。
 15. **变更后运行单元测试**：修改 `scripts/utils.js`、`scripts/config.js` 或分析引擎核心逻辑后，必须运行 `npm test` 确保测试通过。

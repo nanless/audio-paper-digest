@@ -208,6 +208,7 @@ def generate_paper_md(paper, date_str):
             ('细节详述', 'details'),
             ('实验结果', 'results'),
             ('评分理由', 'scoringReason'),
+            ('局限与问题', 'limitations'),
             ('开源详情', 'opensource'),
         ]
         for label, key in sections:

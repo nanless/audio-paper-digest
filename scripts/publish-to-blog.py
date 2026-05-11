@@ -293,11 +293,11 @@ hiddenInHomeList: true
 
         machine_bits = []
         if pa.get('qualityScore'):
-            machine_bits.append(f"学术质量 {pa['qualityScore']}/7")
+            machine_bits.append(f"学术质量 {pa['qualityScore']}/8")
         if pa.get('valueScore'):
-            machine_bits.append(f"选题价值 {pa['valueScore']}/2")
+            machine_bits.append(f"影响力 {pa['valueScore']}/2")
         if pa.get('reproducibilityBonus'):
-            machine_bits.append(f"复现加成 {pa['reproducibilityBonus']}")
+            machine_bits.append(f"可复现性 {pa['reproducibilityBonus']}/1")
         if pa.get('confidence'):
             machine_bits.append(f"置信度 {pa['confidence']}")
         if machine_bits:
@@ -324,6 +324,7 @@ hiddenInHomeList: true
             ('📊 实验结果', 'results'),
             ('🔬 细节详述', 'details'),
             ('⚖️ 评分理由', 'scoringReason'),
+            ('🚨 局限与问题', 'limitations'),
         ]
         for item in sections:
             if len(item) == 3:
