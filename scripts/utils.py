@@ -80,7 +80,18 @@ def parse_machine_summary(analysis):
             continue
         mapped = key_map.get(km.group(1))
         if mapped:
-            result[mapped] = strip_md(km.group(2))
+            val = strip_md(km.group(2))
+            # 对于数值型字段，只保留数字部分（去除中文括号说明等）
+            if mapped in ('qualityScore', 'valueScore', 'reproducibilityBonus'):
+                num_match = re.search(r'(\d+\.?\d*)', val)
+                if num_match:
+                    val = num_match.group(1)
+            # 对于 rankBucket，验证是否为合理的分档标识
+            if mapped == 'rankBucket':
+                valid_bucket = re.match(r'^(前\d+%|后\d+%|中等偏上|中等偏下|中等|Top\s*\d+%|Bottom\s*\d+%)$', val)
+                if not valid_bucket:
+                    val = ''
+            result[mapped] = val
 
     return result
 
@@ -107,6 +118,32 @@ def parse_analysis(analysis):
     m = re.search(r'##\s*评分\s*\n\s*\*?(\d+\.?\d*)\*?', analysis)
     r['score'] = m.group(1) if m else ''
 
+    # 如果未匹配到 ## 评分，从机器摘要的 quality_score 获取
+    if not r['score']:
+        ms = parse_machine_summary(analysis)
+        if ms.get('qualityScore'):
+            r['score'] = ms['qualityScore']
+
+    # 如果仍然没有评分，从 ## 评分理由 中的分项评分计算总分
+    # 格式如：**创新性：2.0/3**、**技术严谨性：1.3/2** 等
+    # 排除 "总评" 或分母为10的Overall评分（避免把总评分当成分项累加）
+    if not r['score']:
+        all_matches = re.findall(r'\*\*([\u4e00-\u9fa5]+)[:：]\s*(\d+\.?\d*)\s*/\s*(\d+\.?\d*)\*\*', analysis)
+        sub_scores = []
+        for name, num, denom in all_matches:
+            if '总评' in name or 'Overall' in name or 'overall' in name:
+                continue
+            # 如果分母是10且前面已经收集了一些分项，这很可能是总评，跳过
+            if denom == '10' and sub_scores:
+                continue
+            try:
+                sub_scores.append(float(num))
+            except (ValueError, TypeError):
+                pass
+        if sub_scores:
+            total = sum(sub_scores)
+            r['score'] = str(total)
+
     m = re.search(r'##\s*标签\s*\n\s*([^\n]+)', analysis)
     if m:
         raw = m.group(1)
@@ -118,6 +155,21 @@ def parse_analysis(analysis):
     machine_summary = parse_machine_summary(analysis)
     r['machineSummary'] = machine_summary
     r['rankBucket'] = machine_summary['rankBucket']
+
+    # 如果 rankBucket 为空，根据 score 推断分档
+    if not r['rankBucket'] and r['score']:
+        try:
+            s = float(r['score'])
+            if s >= 8.0:
+                r['rankBucket'] = '前10%'
+            elif s >= 6.5:
+                r['rankBucket'] = '前25%'
+            elif s >= 5.0:
+                r['rankBucket'] = '前50%'
+            else:
+                r['rankBucket'] = '后50%'
+        except (ValueError, TypeError):
+            pass
     r['qualityScore'] = machine_summary['qualityScore']
     r['valueScore'] = machine_summary['valueScore']
     r['reproducibilityBonus'] = machine_summary['reproducibilityBonus']

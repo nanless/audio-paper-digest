@@ -63,8 +63,10 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
     const postData = JSON.stringify(bodyObj);
 
     const proxyUrl = detectProxyUrl();
+    const isMimo = FILTER_CONFIG.endpoint.includes('xiaomimimo.com') || FILTER_CONFIG.model.includes('mimo');
+    const shouldBypassProxy = isMimo && proxyUrl;
     if (proxyUrl) {
-        console.log(`[filter] 检测到代理: ${proxyUrl}`);
+        console.log(`[filter] 检测到代理: ${proxyUrl}${shouldBypassProxy ? '（MiMo 模型，将绕过代理）' : ''}`);
     }
 
     let lastError = null;
@@ -82,6 +84,9 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
             timeout: FILTER_CFG.timeoutMs,
             signal: controller.signal
         };
+        if (shouldBypassProxy) {
+            options.agent = false;
+        }
 
         try {
             const result = await new Promise((resolve, reject) => {

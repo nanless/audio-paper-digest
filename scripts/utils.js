@@ -178,7 +178,7 @@ function parseMachineSummary(analysis) {
 
     if (!analysis) return result;
 
-    const blockMatch = analysis.match(/###\s*机器摘要\s*\n([\s\S]*?)(?=###\s*评分规则|##\s*标签|$)/);
+    const blockMatch = analysis.match(/#{2,3}\s*机器摘要\s*\n([\s\S]*?)(?=#{2,3}\s*(?:评分规则|标签)|$)/);
     if (!blockMatch) return result;
 
     const keyMap = {

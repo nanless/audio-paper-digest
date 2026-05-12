@@ -6,7 +6,7 @@ setupScriptLogging(__filename);
  * 论文深度分析器 - 使用全文+图片的深度阅读理解
  */
 
-const { loadEnvFile, parseAnalysis, detectApiType, buildApiUrl, buildRequestBody, buildHeaders, parseResponseText, loadPrompt } = require('./utils.js');
+const { loadEnvFile, parseAnalysis, detectApiType, buildApiUrl, buildRequestBody, buildHeaders, parseResponseText, loadPrompt, detectProxyUrl } = require('./utils.js');
 loadEnvFile();
 
 // 解决 stdout 缓冲问题：后台运行时强制立即 flush
@@ -119,6 +119,10 @@ async function _callModelOnce(messages, maxTokens, config, startTime, apiType) {
             controller.abort();
         }, 1200000);
 
+        const proxyUrl = detectProxyUrl();
+        const isMimo = config.endpoint.includes('xiaomimimo.com') || config.model.includes('mimo');
+        const shouldBypassProxy = isMimo && proxyUrl;
+
         const options = {
             hostname: url.hostname,
             path: url.pathname,
@@ -126,6 +130,9 @@ async function _callModelOnce(messages, maxTokens, config, startTime, apiType) {
             headers: headers,
             signal: controller.signal
         };
+        if (shouldBypassProxy) {
+            options.agent = false;
+        }
 
         const req = https.request(options, (res) => {
             let data = '';

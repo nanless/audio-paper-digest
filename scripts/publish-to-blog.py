@@ -173,10 +173,48 @@ layout: "posts"
     for i, p in enumerate(unscored):
         title = p.get('title', 'Unknown')
         slug = paper_slugs.get(p.get('arxivId', ''), '')
+
         if slug:
             md += f"### {len(scored)+i+1}. [{title}]({BASE_PATH}/posts/{date_str}-{slug})\n\n"
         else:
             md += f"### {len(scored)+i+1}. {title}\n\n"
+
+        # unscored 论文也显示完整内容（作者、点评、摘要、开源详情）
+        pa = parse_analysis(p.get('analysis', '')) or {}
+        aid = p.get('arxivId', '')
+        aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
+        meta = build_paper_meta(pa, aurl)
+        if meta:
+            md += f"{meta}\n\n"
+
+        if pa.get('authors'):
+            authors_clean = pa['authors'].replace('- **第一作者**', '第一作者').replace('- **通讯作者**', '通讯作者').replace('- **作者列表**', '作者列表')
+            md += f"👥 **作者与机构**\n\n{authors_clean}\n\n"
+
+        if pa.get('roast'):
+            md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
+
+        if pa.get('summary'):
+            summary = pa['summary']
+            cutoff = re.search(r'\n##\s*详细分', summary)
+            if cutoff:
+                summary = summary[:cutoff.start()].strip()
+            md += f"📌 **核心摘要**\n\n{summary}\n\n"
+
+        supplementary = ''
+        if pa.get('opensource'):
+            oss_text = enrich_opensource(pa, p)
+            oss_text = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', oss_text.strip(), count=1)
+            supp_match = re.search(r'##\s*补充信息\s*\n([\s\S]*)', oss_text)
+            if supp_match:
+                supplementary = supp_match.group(1).strip()
+                oss_text = oss_text[:supp_match.start()].strip()
+            md += f"🔗 **开源详情**\n\n{oss_text}\n\n"
+
+        if supplementary:
+            md += f"📎 **补充信息**\n\n{supplementary}\n\n"
+
+        md += "---\n\n"
 
     return md
 
