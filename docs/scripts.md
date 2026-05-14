@@ -107,7 +107,7 @@ HuggingFace Papers 抓取模块。
 
 多模态深度分析器。
 - `analyzePaperDeep(paper)`：全文 + 图片分析主函数
-- `parseAnalysis(analysis)`：将分析文本解析为结构化对象（score/tags/authors/roast/summary/architecture/innovation/details/results/scoringReason/opensource）
+- `parseAnalysis(analysis)`：将分析文本解析为结构化对象。其中 `score` 不是直接取 LLM 在 `## 评分` 下输出的总分，而是从 `## 评分理由` 中提取六个分项（创新性/3、技术严谨性/2、实验充分性/2、清晰度/1、影响力/1、可复现性/1）重新计算，四舍五入到 0.5，始终覆盖 LLM 原始总分，避免 LLM 算错
 - `callModel(messages, maxTokens)`：带重试的 API 调用封装（最多 3 次重试，指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5000ms`）
 - `_callModelOnce()`：单次 API 调用，每次重试独立创建 AbortController 和 20 分钟超时
 - 支持代理自动检测（环境变量 → macOS `scutil --proxy`）
@@ -203,11 +203,13 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 生成小红书文案。
 
 - 默认数据源：`data/current/deep-analysis-result.json`
-- 支持 `--top N` 精选版和 `--all` 完整汇总版
+- 支持 `--top N` 精选版（默认 TOP 5，常用 `--top 3`）和 `--all` 完整汇总版
 - 支持 `--date YYYY-MM-DD` 指定日期
 - 输出到 `data/current/xiaohongshu-YYYY-MM-DD-<suffix>.md`
+- **每篇论文的一句话介绍调用 MiMo LLM API 生成**（anthropic 协议，`session.trust_env = False` 绕过代理），LLM 失败时回退到本地 `extract_one_liner()`
 - 自动清理 Markdown 格式和学术化前缀
 - 附带 emoji 热度标识：🔥≥8 分、✅≥6 分、📝<6 分（与博客、微信统一）
+- 少于 1000 字，不输出标签和 `---` 分隔线，开源信息标注清晰
 
 #### `scripts/publish-to-feishu.py`
 

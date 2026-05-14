@@ -120,9 +120,11 @@ API 调用特性：
 输出约束：
 - prompt 来源：`prompts/deep-analysis.md`，运行时通过 `loadPrompt()` 读取并替换 `{hasFullText}`、`{title}`、`{authors}`、`{categories}`、`{arxivId}`、`{textForAnalysis}` 占位符
 - 固定一级标题：`## 评分`、`## 机器摘要`、`## 标签`、`## 作者与机构`、`## 毒舌点评`、`## 核心摘要`、`## 方法概述和架构`、`## 核心创新点`、`## 实验结果`、`## 细节详述`、`## 评分理由`、`## 局限与问题`、`## 开源详情`
-- `## 评分` 下必须先输出总分（X.X/10），再输出 Overall Recommendation（Strong Accept / Accept / Weak Accept / Reject / Strong Reject）
+- `## 评分` 下先输出总分（X.X/10）
+- **代码后处理**：`parseAnalysis`/`parse_analysis` 会从 `## 评分理由` 中提取六个分项（创新性/3、技术严谨性/2、实验充分性/2、清晰度/1、影响力/1、可复现性/1）重新计算总分，四舍五入到 0.5，覆盖 LLM 原始总分
 - `## 机器摘要` 包含 `rank_bucket`（带顶会映射）、`quality_score`（综合学术质量 0-8）、`value_score`（影响力 0-2）、`reproducibility_bonus`（可复现性 0-1）、`confidence`、`primary_task_tag`、`primary_method_tag` 等固定键
 - 评分采用六维审稿人体系：创新性（0-3）+ 技术严谨性（0-2）+ 实验充分性（0-2）+ 清晰度（0-1）+ 影响力（0-1）+ 可复现性（0-1）
+- **代码后处理**：`parseAnalysis`/`parse_analysis` 始终从 `## 评分理由` 提取分项重新计算总分，覆盖 LLM 原始输出，避免 LLM 算错总分
 - 标签输出必须同时包含最终标签串、`主任务标签`、`主方法标签`、`补充标签`
 - 缺失信息必须写"未说明/未提供/未提及"，禁止猜测作者机构、实验数字、开源状态或外部信息
 - 修改 `prompts/deep-analysis.md` 或 `prompts/filter.md` 时，需同步检查 `scripts/utils.js` 与 `scripts/utils.py` 的解析逻辑是否仍能匹配新输出格式
@@ -257,10 +259,11 @@ npm run xiaohongshu -- --date 2026-04-22
 
 **小红书发布经验：**
 
-- 小红书单帖正文限制约 1000 字，TOP 5 模式默认约 600-800 字符，适合单帖直接发布
+- 小红书单帖正文限制约 1000 字，TOP 3 模式默认约 800-950 字符，适合单帖直接发布
+- **每篇论文的一句话介绍调用 MiMo LLM API 生成**（anthropic 协议，绕过代理），LLM 失败时回退到本地 `extract_one_liner()`（优先取 innovation 第一条，其次 summary 中含"提出了/解决了/旨在"的句子，最后 roast）
 - 脚本会自动清理 Markdown 格式（`**加粗**`、`` 代码 ``）和学术化前缀（"这篇论文旨在"、"本文针对"等），避免平台渲染异常
 - 文案自动附带 emoji 热度标识：🔥≥8 分、✅≥6 分、📝<6 分（与博客、微信统一）
-- 末尾固定附博客链接和话题标签，无需手动补充
+- 末尾固定附博客链接和开源仓库链接，不输出标签和 `---` 分隔线
 - `--all` 模式输出更长，适合分篇发或自选精华发布
 
 ---

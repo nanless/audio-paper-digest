@@ -16,7 +16,7 @@
       "authors": ["Author A", "Author B"],
       "published": "2026-04-20T00:00:00+08:00",
       "categories": ["cs.SD", "eess.AS"],
-      "fetchedFrom": "cs.SD",
+      "fetchedFrom": "eess.AS",
       "fetchedAt": "2026-04-21T10:00:00+08:00"
     }
   },
@@ -39,6 +39,8 @@
       "authors": [...],
       "published": "2026-04-20T00:00:00+08:00",
       "categories": [...],
+      "fetchedFrom": "eess.AS",
+      "fetchedAt": "2026-04-21T10:00:00+08:00",
       "sources": ["arxiv"],
       "hf_upvotes": 0,
       "hf_ai_summary": "",
@@ -95,7 +97,31 @@
         "details": "...",
         "results": "...",
         "scoringReason": "...",
-        "opensource": "..."
+        "opensource": "...",
+        "machineSummary": {
+          "rankBucket": "前25%",
+          "qualityScore": "7.2",
+          "valueScore": "0.5",
+          "reproducibilityBonus": "0.3",
+          "confidence": "高",
+          "primaryTaskTag": "#语音合成",
+          "primaryMethodTag": "#扩散模型",
+          "sotaClaim": "否",
+          "hasCode": "是",
+          "hasModel": "是",
+          "hasDataset": "否"
+        },
+        "rankBucket": "前25%",
+        "qualityScore": "7.2",
+        "valueScore": "0.5",
+        "reproducibilityBonus": "0.3",
+        "confidence": "高",
+        "primaryTaskTag": "#语音合成",
+        "primaryMethodTag": "#扩散模型",
+        "sotaClaim": "否",
+        "hasCode": "是",
+        "hasModel": "是",
+        "hasDataset": "否"
       },
       "imageUrls": ["https://arxiv.org/html/.../fig1.png"],
       "allImageUrls": ["..."]
@@ -103,6 +129,13 @@
   ]
 }
 ```
+
+**关于 `parsed` 字段的说明**：
+
+- `parsed` 是 `analysis` 文本的解析缓存，由 `scripts/utils.js` 的 `parseAnalysis()` 或 `scripts/utils.py` 的 `parse_analysis()` 生成
+- **`parsed.score` 不是直接取 `## 评分` 下的 LLM 原始总分**，而是从 `## 评分理由` 中提取六个分项（创新性/3、技术严谨性/2、实验充分性/2、清晰度/1、影响力/1、可复现性/1）重新计算，四舍五入到 0.5，覆盖 LLM 原始输出
+- `parsed` 中的 `machineSummary` 是 `## 机器摘要` 的解析结果；`rankBucket`、`qualityScore`、`valueScore` 等字段同时平铺到 `parsed` 顶层以便访问
+- 解析逻辑变更后，`parsed` 缓存会被清除并在下次发布时重新生成
 
 ### 5.4 `data/current/analyzed.json`
 

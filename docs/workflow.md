@@ -122,7 +122,7 @@ HF 特有字段（共 7 个）：
 
 | 章节 | 要求 |
 |------|------|
-| 评分 | 1-10 分，保留一位小数；同时输出 Overall Recommendation（Strong Accept → Strong Reject）；机器摘要含 `rank_bucket`、`quality_score`、`value_score`、`reproducibility_bonus`、`confidence` 等字段 |
+| 评分 | 1-10 分，保留一位小数；机器摘要含 `rank_bucket`（前10%/前25%/前50%/后50%）、`quality_score`、`value_score`、`reproducibility_bonus`、`confidence` 等字段。代码后处理：从 `## 评分理由` 提取六个分项重新计算总分，覆盖 LLM 原始输出 |
 | 标签 | 3-5 个，必须含至少 1 个【任务】和 1 个【方法/模型】标签；除最终标签串外，还要求输出"主任务标签""主方法标签""补充标签" |
 | 作者与机构 | 第一作者、通讯作者、作者列表及所属机构；缺失信息必须写"未说明"，禁止猜测 |
 | 毒舌点评 | 2-3 句话犀利点评亮点和槽点，像资深审稿人的 final comment |
