@@ -11,13 +11,113 @@ setup_script_logging(__file__)
     python3 publish-xiaohongshu.py --top 7        # 指定 TOP N
     python3 publish-xiaohongshu.py --date 2026-04-22
 """
-import json, re, sys, os, datetime
+import json, re, sys, os, datetime, concurrent.futures
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from publish_common import (
     load_papers, get_today_bj, score_and_sort, extract_top_tags,
     score_emoji, format_medal, extract_one_liner
 )
+
+
+def call_llm_for_oneliner(title, abstract):
+    """调用 LLM 生成一句话论文介绍。MiMo Token Plan 使用 anthropic 协议。"""
+    api_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
+    endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', 'https://token-plan-sgp.xiaomimimo.com/v1')
+    model = os.environ.get('PAPER_ANALYZER_MODEL', 'mimo-v2.5')
+
+    if not api_key:
+        return None
+
+    # MiMo Token Plan 需要 anthropic 协议
+    # 端点转换: /v1 → /anthropic, URL: /anthropic/v1/messages
+    base = endpoint.rstrip('/')
+    if base.endswith('/v1'):
+        base = base[:-3]
+    api_url = f"{base}/anthropic/v1/messages"
+
+    prompt = f"""用2-3句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书，每篇60-80字左右：
+
+标题：{title}
+摘要：{abstract[:800]}
+
+只输出介绍文字，不要任何解释、格式标记或emoji。"""
+
+    payload = {
+        "model": model,
+        "max_tokens": 300,
+        "messages": [{"role": "user", "content": prompt}]
+    }
+
+    for attempt in range(3):
+        try:
+            import requests
+            # MiMo API 需要绕过代理直接连接
+            session = requests.Session()
+            session.trust_env = False  # 忽略环境变量中的代理设置
+            resp = session.post(
+                api_url,
+                json=payload,
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "User-Agent": "claude-cli/2.1.108 (external, cli)",
+                    "Content-Type": "application/json"
+                },
+                timeout=120
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            # anthropic 格式: 找 type=text 的内容块
+            content = ""
+            if data.get("content") and isinstance(data["content"], list):
+                for block in data["content"]:
+                    if block.get("type") == "text":
+                        content = block.get("text", "").strip()
+                        break
+            content = content.strip('"\'').strip()
+            if len(content) > 10:
+                return content
+            # 如果内容太短，重试
+            if attempt < 2:
+                import time
+                time.sleep(2)
+        except Exception as e:
+            print(f"  ⚠️  LLM one-liner 失败 (尝试 {attempt+1}/3): {e}")
+            if attempt < 2:
+                import time
+                time.sleep(2)
+
+    return None
+
+
+def generate_llm_oneliners(top_papers):
+    """为 TOP N 论文并行生成 LLM one-liner"""
+    print("🤖 正在调用 LLM 生成论文一句话介绍...")
+
+    def worker(item):
+        score, p, pa = item
+        title = p.get('title', '')
+        abstract = p.get('abstract', '') or p.get('summary', '')
+        result = call_llm_for_oneliner(title, abstract)
+        if result:
+            print(f"  ✓ {title[:40]}... → {result[:50]}...")
+            return result
+        return None
+
+    results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future_to_idx = {executor.submit(worker, item): i for i, item in enumerate(top_papers)}
+        for future in concurrent.futures.as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                result = future.result()
+                if result:
+                    results[idx] = result
+            except Exception as e:
+                print(f"  ⚠️  并行任务异常: {e}")
+
+    return results
 
 
 def format_oss_badge(pa):
@@ -45,30 +145,33 @@ def generate_top_n_post(scored, unscored, date_str, top_n=5):
     """生成 TOP N 精选版小红书文案"""
     top = scored[:top_n]
 
-    hot_tags = extract_top_tags([p for _, p, _ in scored], limit=6)
-    hot_tag_names = [t.replace('#', '') for t, _ in hot_tags]
+    # 调用 LLM 生成一句话介绍
+    llm_oneliners = generate_llm_oneliners(top)
 
     total = len(scored) + len(unscored)
     repo_url = os.environ.get('PAPER_DIGEST_REPO_URL', 'github.com/nanless/audio-paper-digest')
+    blog_url = os.environ.get('PAPER_DIGEST_BLOG_URL', '[博客地址]')
     md = f"""✅ {date_str} 语音/AI论文速递 | {total}篇精选
 
 今天挖到 {total} 篇语音/音频领域宝藏论文，
 精选 TOP {top_n} 速来看👇
-🛠️ 筛选+分析流水线开源：{repo_url}
 
 """
     for i, (score, p, pa) in enumerate(top):
         medal = format_medal(i)
         title = p.get('title', 'Unknown')
+        # 限制标题长度
+        if len(title) > 55:
+            title = title[:52] + '...'
         aid = p.get('arxivId', '')
         aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
-        liner = extract_one_liner(pa)
+        # 优先使用 LLM 生成的一句话介绍，回退到本地提取
+        liner = llm_oneliners.get(i) or extract_one_liner(pa)
+        # 限制亮点长度
+        if len(liner) > 150:
+            liner = liner[:147] + '...'
         fire = score_emoji(score)
-        tags = [t for t in pa.get('tags', [])[:3] if t]
-        if pa.get('primaryTaskTag') and pa['primaryTaskTag'] not in tags:
-            tags.insert(0, pa['primaryTaskTag'])
-        display_tags = ' '.join(tags[:3])
-        score_line = f'{fire} 评分：{score}/10'
+        score_line = f'{fire} {score}/10'
         if pa.get('rankBucket'):
             score_line += f' | {pa["rankBucket"]}'
         if pa.get('primaryMethodTag'):
@@ -78,25 +181,18 @@ def generate_top_n_post(scored, unscored, date_str, top_n=5):
         oss_str = f"{oss_line}\n" if oss_line else ""
         md += f"""{medal} {title}
 {score_line}
-✨ 亮点：{liner}
-{oss_str}🏷️ {display_tags}
-{aurl and f'📄 arxiv：{aurl}' or ''}
+✨ {liner}
+{oss_str}📄 {aurl}
 
 """
-
-    md += f"""📈 今日趋势
-"""
-    if hot_tag_names:
-        md += f"• 热门方向：{', '.join(hot_tag_names)}\n"
 
     md += f"""
 📋 全部 {total} 篇已整理到博客
-🔗 {os.environ.get('PAPER_DIGEST_BLOG_URL', '[博客地址]')}/{date_str}/
+🔗 {blog_url}/{date_str}/
+🛠️ 筛选+分析流水线开源：{repo_url}
 
 💬 你最想看哪篇的详细解读？
 评论区告诉我！
-
-#论文速递 #语音技术 #AI论文 #人工智能 #科研日常 #研究生 #读论文 #arXiv
 """
     return md.strip()
 
@@ -121,9 +217,10 @@ def generate_all_summary_post(scored, unscored, date_str):
             md += f"   {oss_line}\n"
         md += "\n"
 
-    md += f"""📄 全部论文：{os.environ.get('PAPER_DIGEST_BLOG_URL', '[博客地址]')}/{date_str}/
-
-#论文速递 #语音技术 #AI论文 #人工智能 #科研日常 #研究生 #读论文 #arXiv
+    blog_url = os.environ.get('PAPER_DIGEST_BLOG_URL', '[博客地址]')
+    repo_url = os.environ.get('PAPER_DIGEST_REPO_URL', 'github.com/nanless/audio-paper-digest')
+    md += f"""📄 全部论文：{blog_url}/{date_str}/
+🛠️ 筛选+分析流水线开源：{repo_url}
 """
     return md.strip()
 

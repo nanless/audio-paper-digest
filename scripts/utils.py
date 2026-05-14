@@ -124,25 +124,6 @@ def parse_analysis(analysis):
         if ms.get('qualityScore'):
             r['score'] = ms['qualityScore']
 
-    # 如果仍然没有评分，从 ## 评分理由 中的分项评分计算总分
-    # 格式如：**创新性：2.0/3**、**技术严谨性：1.3/2** 等
-    # 排除 "总评" 或分母为10的Overall评分（避免把总评分当成分项累加）
-    if not r['score']:
-        all_matches = re.findall(r'\*\*([\u4e00-\u9fa5]+)[:：]\s*(\d+\.?\d*)\s*/\s*(\d+\.?\d*)\*\*', analysis)
-        sub_scores = []
-        for name, num, denom in all_matches:
-            if '总评' in name or 'Overall' in name or 'overall' in name:
-                continue
-            # 如果分母是10且前面已经收集了一些分项，这很可能是总评，跳过
-            if denom == '10' and sub_scores:
-                continue
-            try:
-                sub_scores.append(float(num))
-            except (ValueError, TypeError):
-                pass
-        if sub_scores:
-            total = sum(sub_scores)
-            r['score'] = str(total)
 
     m = re.search(r'##\s*标签\s*\n\s*([^\n]+)', analysis)
     if m:
@@ -220,5 +201,31 @@ def parse_analysis(analysis):
 
     m = re.search(r'##\s*开源(?:详情)?[：:]*\s*\n([\s\S]*?)(?=\n##|$)', analysis)
     r['opensource'] = m.group(1).strip() if m else ''
+
+    # 从评分理由中提取六个分项并计算总分，始终覆盖 LLM 给出的总分
+    scoring_text = r.get('scoringReason', '')
+    if not scoring_text:
+        # fallback: 在整个分析文本中搜索
+        m = re.search(r'#+\s*(?:\d+[.\s]+)?评分理由[：:\s]*\n([\s\S]*?)(?=\n#+\s*(?:\d+[.\s]+)?(?:方法概述和架构|核心创新点|实验结果|细节详述)|\n##\s|$)', analysis)
+        if m:
+            scoring_text = m.group(1).strip()
+
+    if scoring_text:
+        dim_scores = {}
+        for dim in ['创新性', '技术严谨性', '实验充分性', '清晰度', '影响力', '可复现性']:
+            # 匹配 **创新性：2.3/3** 或 创新性: 2.3/3 等变体
+            pat = re.compile(
+                r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[:：]\s*(\d+\.?\d*)\s*/\s*\d+\.?\d*\s*(?:\*\*)?'
+            )
+            dm = pat.search(scoring_text)
+            if dm:
+                try:
+                    dim_scores[dim] = float(dm.group(1))
+                except (ValueError, TypeError):
+                    pass
+        if dim_scores:
+            total = round(sum(dim_scores.values()) * 2) / 2
+            total = max(1.0, min(10.0, total))
+            r['score'] = str(total)
 
     return r

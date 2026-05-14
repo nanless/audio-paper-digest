@@ -455,7 +455,37 @@ function parseAnalysis(analysis) {
     m = analysis.match(/##\s*开源(?:详情)?[：:]*\s*([\s\S]*?)$/);
     if (m) result.opensource = stripMd(m[1]);
 
+    // 从评分理由中提取六个分项并计算总分，始终覆盖 LLM 给出的总分
+    const scoringText = result.scoringReason || '';
+    if (scoringText) {
+        const dimScores = {};
+        const dims = ['创新性', '技术严谨性', '实验充分性', '清晰度', '影响力', '可复现性'];
+        for (const dim of dims) {
+            // 匹配 **创新性：2.3/3** 或 创新性: 2.3/3 等变体
+            const pat = new RegExp(
+                '(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*[:：]\\s*(\\d+\\.?\\d*)\\s*/\\s*\\d+\\.?\\d*\\s*(?:\\*\\*)?'
+            );
+            const dm = scoringText.match(pat);
+            if (dm) {
+                const v = parseFloat(dm[1]);
+                if (!isNaN(v)) {
+                    dimScores[dim] = v;
+                }
+            }
+        }
+        if (Object.keys(dimScores).length > 0) {
+            let total = Object.values(dimScores).reduce((a, b) => a + b, 0);
+            total = Math.round(total * 2) / 2;
+            total = Math.max(1.0, Math.min(10.0, total));
+            result.score = String(total);
+        }
+    }
+
     return result;
+}
+
+function escapeRegExp(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // ═══════════════════════════════════════════════════════
