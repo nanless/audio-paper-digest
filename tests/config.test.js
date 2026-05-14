@@ -18,7 +18,7 @@ describe('config', () => {
         assert.strictEqual(Config.FILTER_CONFIG.batchSize, 5);
         assert.strictEqual(Config.FILTER_CONFIG.temperature, 0.3);
         assert.strictEqual(Config.ARXIV_CONFIG.maxResultsPerCategory, 100);
-        assert.strictEqual(Config.ARXIV_CONFIG.categoryDelayMs, 2000);
+        assert.strictEqual(Config.ARXIV_CONFIG.categoryDelayMs, 5000);
         assert.strictEqual(Config.HUGGINGFACE_CONFIG.maxPages, 20);
         assert.strictEqual(Config.HUGGINGFACE_CONFIG.pageLimit, 100);
         assert.strictEqual(Config.ARCHIVE_CONFIG.maxBackups, 10);

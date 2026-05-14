@@ -41,7 +41,7 @@
 - 每分类重试最多 **6 次**，指数退避：第一次重试 4 秒，之后翻倍（`2^attempt * 2000ms`，attempt 从 1 开始）
 - 遇到 HTTP 429 限流额外等待：第一次 10 秒，之后翻倍（`2^attempt * 5000ms`，attempt 从 1 开始，上限 60 秒）
 - **提前停止**：若连续遇到 20 篇已有 ID（存在于 `papers.json`），则停止该分类抓取
-- 类别间延迟 **2 秒**
+- 类别间延迟 **5 秒**
 
 去重逻辑：`deduplicatePapers()` 按 `arxivId` 去重，core 类别（eess.AS / cs.SD / eess.SP）优先于 supplement 类别保留。
 
