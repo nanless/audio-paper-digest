@@ -16,7 +16,7 @@ setupScriptLogging(__filename);
 
 const { execFileSync } = require('child_process');
 
-const { getBeijingDateString, normalizeToBeijingISOString, normalizedId } = require('./utils.js');
+const { getBeijingDateString, getBeijingISOString, normalizeToBeijingISOString, normalizedId } = require('./utils.js');
 const { HUGGINGFACE_CONFIG } = require('./config.js');
 
 /**
@@ -84,6 +84,8 @@ function convertDailyPaper(hfPaper) {
         hf_project_page: paper.projectPage || '',
         hf_github_stars: paper.githubStars || 0,
         hf_discussion_id: paper.discussionId || '',
+        fetchedFrom: 'huggingface',
+        fetchedAt: getBeijingISOString(),
         source: 'huggingface'
     };
 }
@@ -122,6 +124,8 @@ function convertPaper(paper) {
         hf_project_page: '',
         hf_github_stars: 0,
         hf_discussion_id: '',
+        fetchedFrom: 'huggingface',
+        fetchedAt: getBeijingISOString(),
         source: 'huggingface'
     };
 }

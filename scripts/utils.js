@@ -49,30 +49,49 @@ function ensureDir(dirPath) {
 // 北京时间处理（统一正确实现）
 // ═══════════════════════════════════════════════════════
 
+// 使用 Intl.DateTimeFormat 正确获取北京时间的各组成部分
+function _getBeijingParts(d = new Date()) {
+    const formatter = new Intl.DateTimeFormat('zh-CN', {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        fractionalSecondDigits: 3
+    });
+    const parts = formatter.formatToParts(d);
+    const get = (type) => parts.find(p => p.type === type)?.value;
+    return {
+        year: get('year'),
+        month: get('month'),
+        day: get('day'),
+        hour: get('hour'),
+        minute: get('minute'),
+        second: get('second'),
+        millisecond: get('fractionalSecond') || '000'
+    };
+}
+
 function getBeijingISOString() {
-    const d = new Date();
-    // getTimezoneOffset() 返回本地时区与 UTC 的分钟差（东半球为负，西半球为正）
-    // Beijing 是 UTC+8，目标偏移是 +480 分钟
-    const offsetMin = 480 + d.getTimezoneOffset();
-    const beijingTime = new Date(d.getTime() + offsetMin * 60000);
-    return beijingTime.toISOString().replace('Z', '+08:00');
+    const p = _getBeijingParts();
+    return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}.${p.millisecond}+08:00`;
 }
 
 function getBeijingDateString(daysAgo = 0) {
-    const iso = getBeijingISOString();
-    if (daysAgo === 0) {
-        return iso.split('T')[0];
-    }
     const d = new Date();
-    const offsetMin = 480 + d.getTimezoneOffset() - daysAgo * 24 * 60;
-    const beijingTime = new Date(d.getTime() + offsetMin * 60000);
-    return beijingTime.toISOString().split('T')[0];
+    if (daysAgo > 0) {
+        d.setDate(d.getDate() - daysAgo);
+    }
+    const p = _getBeijingParts(d);
+    return `${p.year}-${p.month}-${p.day}`;
 }
 
 function getBeijingCompactTimestamp() {
-    const iso = getBeijingISOString();
-    const [datePart, timePart] = iso.split('T');
-    return `${datePart.replace(/-/g, '')}-${timePart.slice(0, 8).replace(/:/g, '')}`;
+    const p = _getBeijingParts();
+    return `${p.year}${p.month}${p.day}-${p.hour}${p.minute}${p.second}`;
 }
 
 function getBeijingLocaleString() {
@@ -83,9 +102,8 @@ function normalizeToBeijingISOString(isoString) {
     if (!isoString) return '';
     const date = new Date(isoString);
     if (Number.isNaN(date.getTime())) return isoString;
-    const offsetMin = 480 + date.getTimezoneOffset();
-    const beijingTime = new Date(date.getTime() + offsetMin * 60000);
-    return beijingTime.toISOString().replace('Z', '+08:00');
+    const p = _getBeijingParts(date);
+    return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}.${p.millisecond}+08:00`;
 }
 
 // ═══════════════════════════════════════════════════════
