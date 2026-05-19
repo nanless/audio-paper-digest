@@ -400,6 +400,14 @@ hiddenInHomeList: true
     else:
         md += '> ⚠️ 该论文分析失败\n'
 
+    # 嵌入 data URI 形式的 SVG 图片（arXiv HTML 内联 SVG）
+    image_urls = paper.get('imageUrls', []) or paper.get('allImageUrls', [])
+    svg_images = [url for url in image_urls if url.startswith('data:image/svg+xml;base64,')]
+    if svg_images and '![' not in md:
+        md += '\n### 📷 论文图片\n\n'
+        for i, svg_url in enumerate(svg_images[:5], 1):
+            md += f'![图{i}]({svg_url})\n\n'
+
     md += f'\n---\n\n[← 返回 {date_str} 论文速递]({BASE_PATH}/posts/{date_str}/)\n'
 
     return md, slug
