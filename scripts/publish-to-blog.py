@@ -47,6 +47,16 @@ def fix_latex_delimiters(text):
     return text
 
 
+def escape_html_like_tags(text):
+    r"""转义论文中可能被 Hugo 解析为 HTML 的标记（如 <S>、<E>），
+    避免被渲染为删除线等意外样式。"""
+    if not text:
+        return text
+    # 匹配独立的 <S>、</S>、<E>、</E> 标签，用反引号包裹为行内代码
+    text = re.sub(r'(?<![a-zA-Z0-9`])<(/?)([SE])>(?![a-zA-Z0-9`])', r'`<\1\2>`', text)
+    return text
+
+
 def slugify(text, max_length=50):
     """将标题转换为 URL 友好的 slug（保留中文、英文、数字）"""
     text = text.lower()
@@ -477,6 +487,7 @@ def main():
         if pa:
             paper_md, slug = generate_paper_page(paper, today)
             paper_md = fix_latex_delimiters(paper_md)
+            paper_md = escape_html_like_tags(paper_md)
             paper_file = os.path.join(CONTENT_DIR, f"{today}-{slug}.md")
             with open(paper_file, 'w') as f:
                 f.write(paper_md)
@@ -486,6 +497,7 @@ def main():
 
     index_md = generate_index_page(scored, unscored, today, paper_slugs)
     index_md = fix_latex_delimiters(index_md)
+    index_md = escape_html_like_tags(index_md)
     index_file = os.path.join(CONTENT_DIR, f"{today}.md")
     with open(index_file, 'w') as f:
         f.write(index_md)
