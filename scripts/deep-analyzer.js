@@ -331,26 +331,43 @@ async function fetchArxivImageUrls(arxivId) {
                 $('figure').each((_, elem) => {
                     const $fig = $(elem);
                     const $img = $fig.find('img').first();
-                    if (!$img.length) return;
 
-                    const src = $img.attr('src') || '';
-                    if (!src) return;
-                    if (src.includes('arxiv-logo') || src.includes('favicon') || src.includes('logo')) return;
-                    if (src.startsWith('data:')) return;
+                    let fullUrl = '';
+                    if ($img.length) {
+                        const src = $img.attr('src') || '';
+                        if (!src) return;
+                        if (src.includes('arxiv-logo') || src.includes('favicon') || src.includes('logo')) return;
+                        if (src.startsWith('data:')) return;
 
-                    // 构建完整 URL
-                    let fullUrl;
-                    if (src.startsWith('http')) {
-                        fullUrl = src;
-                    } else if (src.startsWith('/')) {
-                        fullUrl = `https://arxiv.org${src}`;
-                    } else if (src.startsWith(`${arxivId}`)) {
-                        // 新版 HTML：src 已包含 arxivId 前缀，如 2605.04749v1/figure/xxx.png
-                        fullUrl = `https://arxiv.org/html/${src}`;
-                    } else {
-                        // 旧版 HTML：src 为纯文件名，如 x1.png
-                        fullUrl = `https://arxiv.org/html/${arxivId}${suffix}/${src}`;
+                        // 构建完整 URL
+                        if (src.startsWith('http')) {
+                            fullUrl = src;
+                        } else if (src.startsWith('/')) {
+                            fullUrl = `https://arxiv.org${src}`;
+                        } else if (src.startsWith(`${arxivId}`)) {
+                            // 新版 HTML：src 已包含 arxivId 前缀
+                            fullUrl = `https://arxiv.org/html/${src}`;
+                        } else {
+                            // 旧版 HTML：src 为纯文件名
+                            fullUrl = `https://arxiv.org/html/${arxivId}${suffix}/${src}`;
+                        }
                     }
+
+                    // 如果 figure 中没有 <img>，尝试提取内联 <svg>
+                    if (!fullUrl) {
+                        const $svg = $fig.find('svg').first();
+                        if ($svg.length) {
+                            const svgHtml = $svg.prop('outerHTML');
+                            if (svgHtml) {
+                                // 压缩 SVG（去掉多余空白）后转为 base64 data URI
+                                const compressed = svgHtml.replace(/>\s+</g, '><').trim();
+                                const b64 = Buffer.from(compressed).toString('base64');
+                                fullUrl = `data:image/svg+xml;base64,${b64}`;
+                            }
+                        }
+                    }
+
+                    if (!fullUrl) return;
 
                     // 提取 figcaption 文本
                     const $caption = $fig.find('figcaption');
@@ -359,7 +376,7 @@ async function fetchArxivImageUrls(arxivId) {
                         caption = $caption.text().replace(/\s+/g, ' ').trim();
                     }
                     // 备选：从 img 的 alt 属性获取
-                    if (!caption) {
+                    if (!caption && $img.length) {
                         const alt = $img.attr('alt') || '';
                         if (alt && alt !== 'Refer to caption') {
                             caption = alt.trim();
@@ -410,9 +427,19 @@ async function fetchArxivImageUrls(arxivId) {
 }
 
 /**
- * 下载图片并转为 base64
+ * 下载图片并转为 base64（支持 http URL 和 data URI）
  */
 async function downloadImageBase64(imageUrl, maxRetries = 5) {
+    // 处理 data URI（如 SVG base64）
+    if (imageUrl.startsWith('data:')) {
+        const match = imageUrl.match(/^data:[^;]+;base64,(.+)$/);
+        if (match) {
+            return match[1];
+        }
+        console.log(`    [deep] data URI 格式不支持: ${imageUrl.substring(0, 50)}...`);
+        return null;
+    }
+
     const fileName = imageUrl.split('/').pop();
     let lastError = null;
 
