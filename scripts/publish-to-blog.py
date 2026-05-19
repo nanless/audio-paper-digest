@@ -17,7 +17,7 @@ setup_script_logging(__file__)
     python3 publish-to-blog.py --skip-push     # 只生成 .md 不推送到 GitHub
     python3 publish-to-blog.py --date YYYY-MM-DD
 """
-import json, re, sys, os, subprocess, datetime
+import json, re, sys, os, subprocess, datetime, base64, time
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -55,6 +55,239 @@ def escape_html_like_tags(text):
     # 匹配独立的 <S>、</S>、<E>、</E> 标签，用反引号包裹为行内代码
     text = re.sub(r'(?<![a-zA-Z0-9`])<(/?)([SE])>(?![a-zA-Z0-9`])', r'`<\1\2>`', text)
     return text
+
+
+def call_llm_api(prompt, max_tokens=800, temperature=0.1):
+    """调用 LLM API（MiMo Token Plan / Anthropic 协议）进行通用请求。"""
+    api_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
+    endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', 'https://token-plan-sgp.xiaomimimo.com/v1')
+    model = os.environ.get('PAPER_ANALYZER_MODEL', 'mimo-v2.5')
+
+    if not api_key:
+        print("  ⚠️  未配置 PAPER_ANALYZER_API_KEY，跳过 LLM review")
+        return None
+
+    base = endpoint.rstrip('/')
+    if base.endswith('/v1'):
+        base = base[:-3]
+    api_url = f"{base}/anthropic/v1/messages"
+
+    payload = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "messages": [{"role": "user", "content": prompt}]
+    }
+
+    for attempt in range(3):
+        try:
+            import requests
+            session = requests.Session()
+            session.trust_env = False
+            resp = session.post(
+                api_url,
+                json=payload,
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "User-Agent": "claude-cli/2.1.108 (external, cli)",
+                    "Content-Type": "application/json"
+                },
+                timeout=120
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            content = ""
+            if data.get("content") and isinstance(data["content"], list):
+                for block in data["content"]:
+                    if block.get("type") == "text":
+                        content = block.get("text", "").strip()
+                        break
+            if content:
+                return content
+            if attempt < 2:
+                time.sleep(2)
+        except Exception as e:
+            print(f"  ⚠️  LLM API 调用失败 (尝试 {attempt+1}/3): {e}")
+            if attempt < 2:
+                time.sleep(2)
+
+    return None
+
+
+def llm_review_post(content, title=""):
+    """使用 LLM 审查单篇博客内容，返回 (是否通过, 问题列表, 修复后内容)。"""
+    # 截取前 4000 字节省 token，通常问题出现在前面
+    truncated = content[:4000] if len(content) > 4000 else content
+    prompt = f"""你是一个 Hugo 静态站点博客内容质量审查专家。
+
+请严格审查下面这篇博客的 Markdown 内容，重点检查以下问题：
+
+1. **HTML 标签解析问题**：是否有类似 `<S>`、`<E>`、`<s>`、`<e>` 等文本标记被 Hugo 错误解析为 HTML 标签（会导致删除线、粗体等意外样式）
+2. **LaTeX 公式渲染问题**：公式是否使用了 Hugo goldmark passthrough 支持的 `\\(...\\)` 和 `\\[...\\]` 格式，而不是 `$...$` 或 `$$...$$`
+3. **Markdown 格式问题**：链接、图片引用、表格、列表等格式是否有语法错误
+4. **内容完整性**：是否有内容截断、乱码、重复、段落错位
+5. **图片问题**：图片链接是否为空、格式是否正确（支持 base64 data URI 和普通 URL）
+6. **YAML frontmatter 问题**：标题、描述等字段是否有引号不匹配、特殊字符未转义
+
+博客标题：{title}
+
+博客内容（前4000字符）：
+```markdown
+{truncated}
+```
+
+请以 **纯 JSON** 格式返回审查结果，不要添加任何解释文字：
+{{
+  "passed": true/false,
+  "issues": [
+    {{
+      "severity": "error/warning/info",
+      "type": "html_tag/latex/markdown/content/image/yaml",
+      "description": "具体问题描述",
+      "auto_fixable": true/false,
+      "fix_instruction": "修复指令（如: 将 $<S>$ 改为 `\\`<S>\\``）"
+    }}
+  ]
+}}"""
+
+    result = call_llm_api(prompt, max_tokens=1500, temperature=0.1)
+    if not result:
+        return True, [], content  # LLM 不可用则默认通过
+
+    # 尝试解析 JSON
+    try:
+        # 清理可能的 markdown 代码块
+        cleaned = result
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+        review = json.loads(cleaned)
+        passed = review.get("passed", True)
+        issues = review.get("issues", [])
+        return passed, issues, content
+    except json.JSONDecodeError:
+        # 如果 JSON 解析失败，尝试从文本中提取问题
+        print(f"  ⚠️  LLM review 返回非 JSON 格式，尝试文本解析")
+        issues = []
+        if "问题" in result or "错误" in result or "建议" in result:
+            issues.append({
+                "severity": "warning",
+                "type": "unknown",
+                "description": "LLM 发现潜在问题（非结构化输出）",
+                "auto_fixable": False,
+                "fix_instruction": "请手动检查"
+            })
+            return False, issues, content
+        return True, [], content
+
+
+def multimodal_review_images(content, title=""):
+    """使用多模态 LLM 审查博客中的图片。返回 (是否通过, 图片问题列表)。
+    当前实现：提取图片信息，用文本方式让 LLM 判断图片引用是否合理。
+    如果图片是 base64 data URI，可提取后传给支持多模态的模型。"""
+    # 提取所有图片引用
+    img_pattern = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+    images = img_pattern.findall(content)
+
+    if not images:
+        return True, []
+
+    img_summary = []
+    data_uri_images = []
+    for alt, url in images:
+        if url.startswith("data:image/svg+xml;base64,"):
+            img_summary.append(f"- SVG base64 data URI (alt={alt}), 长度 {len(url)} 字符")
+            data_uri_images.append((alt, url))
+        elif url.startswith("data:"):
+            img_summary.append(f"- 其他 base64 data URI (alt={alt}), 长度 {len(url)} 字符")
+            data_uri_images.append((alt, url))
+        elif url.startswith("http"):
+            img_summary.append(f"- 外部 URL: {url[:80]}... (alt={alt})")
+        else:
+            img_summary.append(f"- 相对路径: {url} (alt={alt})")
+
+    prompt = f"""你是一个博客图片质量审查专家。
+
+请审查下面这篇博客中的图片引用是否合理：
+
+博客标题：{title}
+图片列表：
+{chr(10).join(img_summary)}
+
+请检查：
+1. 图片引用格式是否正确（Markdown 语法 `![alt](url)`）
+2. base64 data URI 是否过长（超过 50KB 可能影响页面加载）
+3. 外部 URL 是否是常见图片域名（arxiv.org、githubusercontent.com 等）
+4. 图片 alt 文本是否为空或重复
+5. SVG data URI 是否能被 Hugo 正确渲染
+
+请以 JSON 格式返回：
+{{
+  "passed": true/false,
+  "issues": [
+    {{
+      "severity": "error/warning/info",
+      "description": "问题描述"
+    }}
+  ]
+}}"""
+
+    result = call_llm_api(prompt, max_tokens=800, temperature=0.1)
+    if not result:
+        return True, []
+
+    try:
+        cleaned = result
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+        review = json.loads(cleaned)
+        passed = review.get("passed", True)
+        issues = review.get("issues", [])
+        return passed, issues
+    except json.JSONDecodeError:
+        return True, []
+
+
+def apply_llm_fixes(content, issues):
+    """根据 LLM 审查结果，自动应用可修复的问题。"""
+    if not issues:
+        return content
+
+    fixed = content
+    fix_count = 0
+    for issue in issues:
+        if not issue.get("auto_fixable", False):
+            continue
+        instruction = issue.get("fix_instruction", "")
+        if not instruction:
+            continue
+
+        # 解析简单替换指令："将 A 改为 B" 或 "replace A with B"
+        replace_patterns = [
+            r'将\s*[\"\']?(.+?)[\"\']?\s*改为\s*[\"\']?(.+?)[\"\']?\s*$',
+            r'replace\s*[\"\']?(.+?)[\"\']?\s*with\s*[\"\']?(.+?)[\"\']?\s*$',
+            r'把\s*[\"\']?(.+?)[\"\']?\s*替换成\s*[\"\']?(.+?)[\"\']?\s*$',
+        ]
+        for pattern in replace_patterns:
+            match = re.match(pattern, instruction, re.IGNORECASE)
+            if match:
+                old, new = match.group(1), match.group(2)
+                if old in fixed:
+                    fixed = fixed.replace(old, new)
+                    fix_count += 1
+                    break
+
+    return fixed
 
 
 def slugify(text, max_length=50):
@@ -422,6 +655,155 @@ hiddenInHomeList: true
     return md, slug
 
 
+def review_and_fix_post(file_path):
+    """Review 生成的博客文件，自动修复常见问题，返回 (是否修复, 问题列表)"""
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    original = content
+    issues = []
+
+    # 1. 检查未转义的 HTML-like 标签（可能导致删除线等样式问题）
+    # 匹配不在反引号、不在 code block 中的 <S>、<E> 等标签
+    html_tag_pattern = re.compile(r'(?<![a-zA-Z0-9`])<(/?)([SE])>(?![a-zA-Z0-9`])')
+    matches = html_tag_pattern.findall(content)
+    if matches:
+        issues.append(f"发现 {len(matches)} 个未转义的 HTML-like 标签: {set(matches)}")
+        content = escape_html_like_tags(content)
+
+    # 2. 检查未正确转换的 LaTeX 行内公式（$...$ 形式，可能被 Hugo 解析为 markdown）
+    # 排除已在 \( ... \) 中的，以及 code block 中的
+    latex_pattern = re.compile(r'(?<!\\)\$([^\s$][^$]*?)\$(?!\d)')
+    latex_matches = latex_pattern.findall(content)
+    if latex_matches:
+        issues.append(f"发现 {len(latex_matches)} 个未转换的 LaTeX 行内公式")
+        content = fix_latex_delimiters(content)
+
+    # 3. 检查是否有裸的 HTML 标签（如 <s>、<e> 等小写形式）
+    raw_html_pattern = re.compile(r'<(s|e|b|i|u)(\s+[^>]*)?>([^<]*)</\1>', re.IGNORECASE)
+    raw_matches = raw_html_pattern.findall(content)
+    if raw_matches:
+        issues.append(f"发现 {len(raw_matches)} 个裸 HTML 标签，可能被浏览器渲染")
+
+    # 4. 检查是否有未闭合的 markdown 链接或图片引用
+    broken_link_pattern = re.compile(r'!?\[([^\]]*)\]\s*\(\s*\)')
+    broken_links = broken_link_pattern.findall(content)
+    if broken_links:
+        issues.append(f"发现 {len(broken_links)} 个空链接")
+
+    # 5. 检查 YAML frontmatter 中是否有未闭合的双引号
+    yaml_lines = content.split('---\n')
+    if len(yaml_lines) >= 3:
+        yaml_block = yaml_lines[1]
+        for line in yaml_block.split('\n'):
+            if ':' in line and '"' in line:
+                quote_count = line.count('"')
+                if quote_count % 2 != 0:
+                    issues.append(f"YAML 行可能存在未闭合引号: {line[:60]}")
+                    break
+
+    fixed = content != original
+    if fixed:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+    return fixed, issues
+
+
+def review_all_posts(date_str, paper_slugs, scored_papers):
+    """三层 review：代码检查 → LLM 文本审查 → 多模态图片审查"""
+    print("\n🔍 开始三层 review（代码检查 → LLM 审查 → 多模态图片审查）...")
+    total_fixed = 0
+    total_issues = 0
+
+    # 构建 arxivId -> title 映射
+    title_map = {}
+    for score, p, pa in scored_papers:
+        title_map[p.get('arxivId', '')] = p.get('title', '')
+
+    # Review 汇总页面
+    index_file = os.path.join(CONTENT_DIR, f"{date_str}.md")
+    if os.path.exists(index_file):
+        print("\n  📋 汇总页面:")
+        # 1. 代码检查
+        fixed, issues = review_and_fix_post(index_file)
+        if fixed:
+            total_fixed += 1
+            print(f"    🛠️  代码层自动修复")
+        for issue in issues:
+            print(f"    ⚠️  代码层: {issue}")
+
+        # 2. LLM 文本审查
+        with open(index_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, "汇总页面")
+        if llm_issues:
+            total_issues += len(llm_issues)
+            for issue in llm_issues:
+                sev = issue.get('severity', 'warning')
+                desc = issue.get('description', '')
+                print(f"    🤖 LLM ({sev}): {desc}")
+            if llm_fixed_content != content:
+                with open(index_file, 'w', encoding='utf-8') as f:
+                    f.write(llm_fixed_content)
+                total_fixed += 1
+                print(f"    🛠️  LLM 自动修复已应用")
+
+        if not issues and not llm_issues:
+            print(f"    ✅ 通过 review")
+
+    # Review 每篇论文独立页面
+    for arxiv_id, slug in paper_slugs.items():
+        paper_file = os.path.join(CONTENT_DIR, f"{date_str}-{slug}.md")
+        if not os.path.exists(paper_file):
+            continue
+        title = title_map.get(arxiv_id, slug)
+        print(f"\n  📄 {title[:50]}...")
+
+        # 1. 代码检查
+        fixed, issues = review_and_fix_post(paper_file)
+        if fixed:
+            total_fixed += 1
+            print(f"    🛠️  代码层自动修复")
+        for issue in issues:
+            print(f"    ⚠️  代码层: {issue}")
+
+        # 2. LLM 文本审查
+        with open(paper_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, title)
+        if llm_issues:
+            total_issues += len(llm_issues)
+            for issue in llm_issues:
+                sev = issue.get('severity', 'warning')
+                desc = issue.get('description', '')
+                print(f"    🤖 LLM ({sev}): {desc}")
+            if llm_fixed_content != content:
+                with open(paper_file, 'w', encoding='utf-8') as f:
+                    f.write(llm_fixed_content)
+                total_fixed += 1
+                print(f"    🛠️  LLM 自动修复已应用")
+
+        # 3. 多模态图片审查
+        img_passed, img_issues = multimodal_review_images(content, title)
+        if img_issues:
+            total_issues += len(img_issues)
+            for issue in img_issues:
+                sev = issue.get('severity', 'warning')
+                desc = issue.get('description', '')
+                print(f"    🖼️  多模态 ({sev}): {desc}")
+
+        if not issues and not llm_issues and not img_issues:
+            print(f"    ✅ 通过 review")
+
+    if total_fixed == 0 and total_issues == 0:
+        print("\n  ✅ 所有文件通过三层 review，无问题")
+    else:
+        print(f"\n  📊 review 结果: {total_fixed} 个文件已修复, {total_issues} 个问题")
+
+    return total_fixed, total_issues
+
+
 def git_push(date_str):
     """Commit and push to GitHub"""
     status = subprocess.run(
@@ -503,8 +885,11 @@ def main():
         f.write(index_md)
     print(f"📄 汇总页面: {index_file} ({len(index_md)} chars)")
 
+    # 三层 review：代码检查 → LLM 审查 → 多模态图片审查
+    review_all_posts(today, paper_slugs, scored)
+
     if skip_push:
-        print("⏭️ 跳过推送")
+        print("\n⏭️ 跳过推送")
         return
 
     git_push(today)
