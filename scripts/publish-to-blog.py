@@ -35,6 +35,18 @@ BASE_PATH = os.environ.get("PAPER_DIGEST_BLOG_BASE_PATH", "/audio-paper-digest-b
 GITHUB_REMOTE = os.environ.get("PAPER_DIGEST_GITHUB_REMOTE", "origin")
 
 
+def fix_latex_delimiters(text):
+    r"""将 $...$ 转换为 \(...\)，$$...$$ 转换为 \[...\]，
+    配合 Hugo goldmark passthrough 确保 MathJax 正确渲染。"""
+    if not text:
+        return text
+    # 先处理块级公式 $$...$$
+    text = re.sub(r'(?<!\\)\$\$(.+?)\$\$', r'\\[\1\\]', text, flags=re.DOTALL)
+    # 再处理行内公式 $...$（排除已转换的块级公式和货币符号）
+    text = re.sub(r'(?<!\\)\$([^\s\$][^$]*?)\$', r'\\(\1\\)', text)
+    return text
+
+
 def slugify(text, max_length=50):
     """将标题转换为 URL 友好的 slug（保留中文、英文、数字）"""
     text = text.lower()
@@ -457,6 +469,7 @@ def main():
         pa = parse_analysis(paper.get('analysis', ''))
         if pa:
             paper_md, slug = generate_paper_page(paper, today)
+            paper_md = fix_latex_delimiters(paper_md)
             paper_file = os.path.join(CONTENT_DIR, f"{today}-{slug}.md")
             with open(paper_file, 'w') as f:
                 f.write(paper_md)
@@ -465,6 +478,7 @@ def main():
     print(f"📄 生成 {len(paper_slugs)} 篇论文独立页面")
 
     index_md = generate_index_page(scored, unscored, today, paper_slugs)
+    index_md = fix_latex_delimiters(index_md)
     index_file = os.path.join(CONTENT_DIR, f"{today}.md")
     with open(index_file, 'w') as f:
         f.write(index_md)
