@@ -192,7 +192,11 @@ def parse_analysis(analysis):
     ]:
         sm = re.search(pat, block)
         if sm:
-            r[key] = sm.group(1).strip()
+            val = sm.group(1).strip()
+            if key == 'scoringReason':
+                # 过滤掉 LLM 自己写的"总分"行，避免与代码计算的总分不一致造成困惑
+                val = '\n'.join(line for line in val.split('\n') if not re.match(r'^\s*总分[：:]', line))
+            r[key] = val
 
     # 局限与问题（新章节，可能在评分理由之后）
     m = re.search(r'##\s*局限与问题\s*\n([\s\S]*?)(?=\n##\s*(?:开源|$))', analysis)
@@ -224,8 +228,21 @@ def parse_analysis(analysis):
                 except (ValueError, TypeError):
                     pass
         if dim_scores:
-            total = round(sum(dim_scores.values()) * 2) / 2
+            total = sum(dim_scores.values())
             total = max(1.0, min(10.0, total))
-            r['score'] = str(total)
+            r['score'] = str(round(total, 1))
+
+            # 用评分理由的分项覆盖机器摘要字段，确保与总分一致
+            qs = dim_scores.get('创新性', 0) + dim_scores.get('技术严谨性', 0) \
+                 + dim_scores.get('实验充分性', 0) + dim_scores.get('清晰度', 0)
+            vs = dim_scores.get('影响力', 0)
+            rb = dim_scores.get('可复现性', 0)
+            r['qualityScore'] = str(round(qs, 1))
+            r['valueScore'] = str(round(vs, 1))
+            r['reproducibilityBonus'] = str(round(rb, 1))
+            if r.get('machineSummary'):
+                r['machineSummary']['qualityScore'] = r['qualityScore']
+                r['machineSummary']['valueScore'] = r['valueScore']
+                r['machineSummary']['reproducibilityBonus'] = r['reproducibilityBonus']
 
     return r

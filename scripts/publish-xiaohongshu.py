@@ -36,12 +36,12 @@ def call_llm_for_oneliner(title, abstract):
         base = base[:-3]
     api_url = f"{base}/anthropic/v1/messages"
 
-    prompt = f"""用2-3句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书，每篇60-80字左右：
+    prompt = f"""用2-3句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书，每篇严格控制在70字以内：
 
 标题：{title}
 摘要：{abstract[:800]}
 
-只输出介绍文字，不要任何解释、格式标记或emoji。"""
+只输出介绍文字，不要任何解释、格式标记、emoji或LaTeX公式。"""
 
     payload = {
         "model": model,
@@ -151,25 +151,19 @@ def generate_top_n_post(scored, unscored, date_str, top_n=5):
     total = len(scored) + len(unscored)
     repo_url = os.environ.get('PAPER_DIGEST_REPO_URL', 'github.com/nanless/audio-paper-digest')
     blog_url = os.environ.get('PAPER_DIGEST_BLOG_URL', '[博客地址]')
-    md = f"""✅ {date_str} 语音/AI论文速递 | {total}篇精选
+    md = f"""✅ {date_str} AI论文速递 | {total}篇
 
-今天挖到 {total} 篇语音/音频领域宝藏论文，
-精选 TOP {top_n} 速来看👇
+TOP {top_n} 👇
 
 """
     for i, (score, p, pa) in enumerate(top):
         medal = format_medal(i)
         title = p.get('title', 'Unknown')
-        # 限制标题长度
-        if len(title) > 55:
-            title = title[:52] + '...'
-        aid = p.get('arxivId', '')
-        aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
-        # 优先使用 LLM 生成的一句话介绍，回退到本地提取
+        if len(title) > 45:
+            title = title[:42] + '...'
         liner = llm_oneliners.get(i) or extract_one_liner(pa)
-        # 限制亮点长度
-        if len(liner) > 150:
-            liner = liner[:147] + '...'
+        if len(liner) > 100:
+            liner = liner[:97] + '...'
         fire = score_emoji(score)
         score_line = f'{fire} {score}/10'
         if pa.get('rankBucket'):
@@ -182,18 +176,13 @@ def generate_top_n_post(scored, unscored, date_str, top_n=5):
         md += f"""{medal} {title}
 {score_line}
 ✨ {liner}
-{oss_str}📄 {aurl}
-
+{oss_str}
 """
 
-    md += f"""
-📋 全部 {total} 篇已整理到博客
-🔗 {blog_url}/{date_str}/
-🛠️ 筛选+分析流水线开源：{repo_url}
+    md += f"""📋 {total}篇：{blog_url}/{date_str}/
+🛠️ {repo_url}
 
-💬 你最想看哪篇的详细解读？
-评论区告诉我！
-"""
+💬 想看哪篇解读？告诉我！"""
     return md.strip()
 
 

@@ -36,7 +36,8 @@
   },
   "homepage": "https://github.com/<your-username>/audio-paper-digest#readme",
   "dependencies": {
-    "cheerio": "^1.2.0"
+    "cheerio": "^1.2.0",
+    "pdf-parse": "^2.4.5"
   },
   "engines": {
     "node": ">=18.0.0"

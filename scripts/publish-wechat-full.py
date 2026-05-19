@@ -186,7 +186,7 @@ def main():
             if pa.get('qualityScore'):
                 machine_parts.append(f'学术质量 {pa["qualityScore"]}/8')
             if pa.get('valueScore'):
-                machine_parts.append(f'影响力 {pa["valueScore"]}/2')
+                machine_parts.append(f'影响力 {pa["valueScore"]}/1')
             if pa.get('reproducibilityBonus'):
                 machine_parts.append(f'可复现性 {pa["reproducibilityBonus"]}/1')
             if pa.get('confidence'):

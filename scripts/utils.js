@@ -445,7 +445,12 @@ function parseAnalysis(analysis) {
     if (m) result.details = stripMd(m[1]);
 
     m = analysis.match(/#{2,3}\s*(?:\d+[.\s]+)?评分理由[：:\s]*\n([\s\S]*?)(?=#{2,3}\s*(?:\d+[.\s]+)?(?:方法概述和架构|核心创新点|实验结果|细节详述)|##\s*(?:局限|开源)|$)/);
-    if (m) result.scoringReason = stripMd(m[1]);
+    if (m) {
+        let sr = stripMd(m[1]);
+        // 过滤掉 LLM 自己写的"总分"行，避免与代码计算的总分不一致造成困惑
+        sr = sr.split('\n').filter(line => !/^\s*总分[：:]/.test(line)).join('\n');
+        result.scoringReason = sr;
+    }
 
     // 局限与问题
     m = analysis.match(/##\s*局限与问题\s*\n([\s\S]*?)(?=##\s*开源|$)/);
@@ -475,9 +480,24 @@ function parseAnalysis(analysis) {
         }
         if (Object.keys(dimScores).length > 0) {
             let total = Object.values(dimScores).reduce((a, b) => a + b, 0);
-            total = Math.round(total * 2) / 2;
             total = Math.max(1.0, Math.min(10.0, total));
-            result.score = String(total);
+            result.score = String(Math.round(total * 10) / 10);
+
+            // 用评分理由的分项覆盖机器摘要字段，确保与总分一致
+            const qs = (dimScores['创新性'] || 0) + (dimScores['技术严谨性'] || 0)
+                     + (dimScores['实验充分性'] || 0) + (dimScores['清晰度'] || 0);
+            const vs = dimScores['影响力'] || 0;
+            const rb = dimScores['可复现性'] || 0;
+
+            result.qualityScore = String(Math.round(qs * 10) / 10);
+            result.valueScore = String(Math.round(vs * 10) / 10);
+            result.reproducibilityBonus = String(Math.round(rb * 10) / 10);
+
+            if (result.machineSummary) {
+                result.machineSummary.qualityScore = result.qualityScore;
+                result.machineSummary.valueScore = result.valueScore;
+                result.machineSummary.reproducibilityBonus = result.reproducibilityBonus;
+            }
         }
     }
 

@@ -11,6 +11,7 @@ loadEnvFile();
 
 // 解决 stdout 缓冲问题：后台运行时强制立即 flush
 const https = require('https');
+const { PDFParse } = require('pdf-parse');
 const { ANALYSIS_CONFIG, ARXIV_CONFIG } = require('./config.js');
 
 // 解构配置常量（便于阅读）
@@ -262,7 +263,36 @@ async function fetchArxivText(arxivId) {
             await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
-    console.log(`    [deep] fetchArxivText ${arxivId} failed after ${maxRetries} retries`);
+    console.log(`    [deep] fetchArxivText ${arxivId} HTML failed after ${maxRetries} retries, trying PDF fallback...`);
+
+    // PDF fallback: download PDF and extract text
+    for (const pdfSuffix of ['', 'v1', 'v2']) {
+        const pdfUrl = `https://arxiv.org/pdf/${arxivId}${pdfSuffix}.pdf`;
+        try {
+            const pdfResponse = await fetch(pdfUrl, {
+                headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
+                signal: AbortSignal.timeout(60000)
+            });
+            if (!pdfResponse.ok) {
+                console.log(`    [deep] PDF ${pdfUrl} HTTP ${pdfResponse.status}`);
+                continue;
+            }
+            const buffer = await pdfResponse.arrayBuffer();
+            const parser = new PDFParse({ data: Buffer.from(buffer) });
+            const result = await parser.getText();
+            await parser.destroy();
+            if (result.text) {
+                console.log(`    [deep] PDF fallback success for ${arxivId}, extracted ${result.text.length} chars`);
+                return result.text
+                    .replace(/\n\s*\n/g, '\n')
+                    .replace(/[ \t]+/g, ' ')
+                    .trim();
+            }
+        } catch (e) {
+            console.log(`    [deep] PDF fallback ${pdfUrl} error: ${e.message}`);
+        }
+    }
+    console.log(`    [deep] fetchArxivText ${arxivId} PDF fallback also failed`);
     return '';
 }
 
