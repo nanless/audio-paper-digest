@@ -32,7 +32,7 @@ const ARXIV_CATEGORIES = [
 
 const ARXIV_CONFIG = {
     maxResultsPerCategory: 100,
-    fetchMaxRetries: 12,
+    fetchMaxRetries: 20,
     fetchRetryBaseDelayMs: 3000,
     fetchRateLimitBaseDelayMs: 10000,
     fetchMaxWaitMs: 300000,
