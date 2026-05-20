@@ -32,10 +32,10 @@ const ARXIV_CATEGORIES = [
 
 const ARXIV_CONFIG = {
     maxResultsPerCategory: 100,
-    fetchMaxRetries: 6,
+    fetchMaxRetries: 12,
     fetchRetryBaseDelayMs: 3000,
     fetchRateLimitBaseDelayMs: 10000,
-    fetchMaxWaitMs: 120000,
+    fetchMaxWaitMs: 300000,
     categoryDelayMs: 5000,
     consecutiveExistingThreshold: 20,
     userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
