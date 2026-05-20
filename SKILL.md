@@ -525,3 +525,20 @@ node scripts/full-fetch.js
 1. 检查 `papers.json` 的 `lastUpdated` 是否为今天（见 6 节判断矩阵）
 2. 如果是今天，不要恢复 papers.json，直接删除 `filtered-papers.json` 后重跑
 3. 如果是昨天或更早，恢复 `papers.json` 备份后重跑
+
+---
+
+## 10. 相关子技能
+
+### 轻量论文速递
+
+#### arXiv Trending (`references/arxiv-digest.md`)
+Daily AI/ML trending papers from HuggingFace Papers with accessible interpretations. Fetches trending papers, ranks by combined score (position + upvotes + freshness), generates plain-language summaries. Supports automated daily delivery via cron.
+- Script: `scripts/fetch_papers.py`
+- Output: JSON or Markdown
+- Deduplication: history tracking
+
+#### Daily Paper Digest (`references/daily-paper-digest.md`)
+Aggregates latest AI papers from arXiv and HuggingFace, formats output for chat apps (Feishu, Slack, Discord). Configurable sources and keyword filters via `config/sources.json`.
+- Scripts: `main.py`, `arxiv_fetcher.py`, `huggingface_fetcher.py`
+- Triggers: `论文速递`, `今日论文`, `最新论文`, `/papers`, `/digest`

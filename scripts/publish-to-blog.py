@@ -48,12 +48,21 @@ def fix_latex_delimiters(text):
 
 
 def escape_html_like_tags(text):
-    r"""转义论文中可能被 Hugo 解析为 HTML 的标记（如 <S>、<E>），
+    r"""转义论文中可能被 Hugo 解析为 HTML 的标记（如 <S>、<E>、<task> 等），
     避免被渲染为删除线等意外样式。"""
     if not text:
         return text
-    # 匹配独立的 <S>、</S>、<E>、</E> 标签，用反引号包裹为行内代码
+    # 1. 匹配独立的 <S>、</S>、<E>、</E> 标签（单字母标记）
     text = re.sub(r'(?<![a-zA-Z0-9`])<(/?)([SE])>(?![a-zA-Z0-9`])', r'`<\1\2>`', text)
+    # 2. 匹配常见的论文文本标记，如 <task>、<perception>、<comprehension>、<reasoning> 等
+    # 这些标记通常出现在多模态/认知架构/强化学习论文中，会被 Hugo 误解析为 HTML 标签
+    # 只匹配小写形式的标签（HTML 标签通常是小写），避免误匹配合法的 XML/HTML
+    text = re.sub(
+        r'(?<![a-zA-Z0-9`])<(/?)(task|perception|comprehension|reasoning|agent|action|state|observation|reward|goal|intent|belief|plan|policy|environment|module|component|feature|input|output|label|class|category|type|mode|phase|stage|step|layer|block|unit|node|edge|graph|tree|path|loop|branch|condition|constraint|rule|fact|evidence|proof|hypothesis|assumption|premise|conclusion|result|finding|insight|implication|contribution|limitation|direction|extension|variant|version|update|fix|issue|error|warning|notice|info|trace|log|record|entry|item|element|object|subject|target|source|reference|cite|quote|note|comment|remark|annotation|caption|title|heading|paragraph|sentence|phrase|word|token|char|symbol|sign|mark|tag|badge|identifier|id|key|code|pin|secret|ticket|voucher|license|permit|certificate|credential|award|medal|prize|gift|bonus|benefit|advantage|edge|lead|margin|gap|difference|distance|range|scope|span|scale|size|length|width|height|depth|volume|area|surface|space|place|spot|location|site|position|point|dot|pixel|fragment|shard|piece|part|portion|section|segment|slice|chunk|block|lump|mass|body|entity|thing|article|product|goods|material|substance|matter|fabric|cloth|garment|clothing|wear|dress|costume|uniform|outfit|suit|wardrobe|closet|cabinet|cupboard|pantry|cellar|basement|attic|loft|tower|spire|dome|vault|arch|beam|column|pillar|post|pole|rod|bar|rail|track|path|way|road|route|course|direction|heading|bearing|azimuth|elevation|altitude|latitude|longitude|coordinate)(?![a-zA-Z0-9`])>',
+        r'`<\1\2>`',
+        text,
+        flags=re.IGNORECASE
+    )
     return text
 
 
@@ -664,8 +673,11 @@ def review_and_fix_post(file_path):
     issues = []
 
     # 1. 检查未转义的 HTML-like 标签（可能导致删除线等样式问题）
-    # 匹配不在反引号、不在 code block 中的 <S>、<E> 等标签
-    html_tag_pattern = re.compile(r'(?<![a-zA-Z0-9`])<(/?)([SE])>(?![a-zA-Z0-9`])')
+    # 匹配不在反引号、不在 code block 中的 <S>、<E>、<task>、<perception> 等标签
+    html_tag_pattern = re.compile(
+        r'(?<![a-zA-Z0-9`])<(/?)([SE]|task|perception|comprehension|reasoning|agent|action|state|observation|reward|goal|intent|belief|plan|policy|environment|module|component|feature|input|output|label|class|category|type|mode|phase|stage|step|layer|block|unit|node|edge|graph|tree|path|loop|branch|condition|constraint|rule|fact|evidence|proof|hypothesis|assumption|premise|conclusion|result|finding|insight|implication|contribution|limitation|direction|extension|variant|version|update|fix|issue|error|warning|notice|info|trace|log|record|entry|item|element|object|subject|target|source|reference|cite|quote|note|comment|remark|annotation|caption|title|heading|paragraph|sentence|phrase|word|token|char|symbol|sign|mark|tag|badge|identifier|id|key|code|pin|secret|ticket|voucher|license|permit|certificate|credential|award|medal|prize|gift|bonus|benefit|advantage|edge|lead|margin|gap|difference|distance|range|scope|span|scale|size|length|width|height|depth|volume|area|surface|space|place|spot|location|site|position|point|dot|pixel|fragment|shard|piece|part|portion|section|segment|slice|chunk|block|lump|mass|body|entity|thing|article|product|goods|material|substance|matter|fabric|cloth|garment|clothing|wear|dress|costume|uniform|outfit|suit|wardrobe|closet|cabinet|cupboard|pantry|cellar|basement|attic|loft|tower|spire|dome|vault|arch|beam|column|pillar|post|pole|rod|bar|rail|track|path|way|road|route|course|direction|heading|bearing|azimuth|elevation|altitude|latitude|longitude|coordinate)(?![a-zA-Z0-9`])>',
+        re.IGNORECASE
+    )
     matches = html_tag_pattern.findall(content)
     if matches:
         issues.append(f"发现 {len(matches)} 个未转义的 HTML-like 标签: {set(matches)}")

@@ -133,7 +133,14 @@ async function fullFetch() {
     console.log('📥 第一步：从 arxiv 抓取论文');
     const arxivPapers = [];
 
-    for (const category of categories) {
+    for (let i = 0; i < categories.length; i++) {
+        const category = categories[i];
+        // 首次请求前加随机抖动，避免固定时间模式被标记
+        if (i === 0) {
+            const firstDelay = Math.floor(Math.random() * 8000) + 3000;
+            console.log(`  首次请求前等待 ${(firstDelay/1000).toFixed(1)} 秒...`);
+            await new Promise(resolve => setTimeout(resolve, firstDelay));
+        }
         console.log(`  抓取 ${category.name} (${category.id})...`);
         const papers = await fetchCategoryPapers(
             category.id,

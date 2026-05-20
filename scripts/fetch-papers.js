@@ -198,6 +198,11 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
     console.log(`[fetch] 正在抓取 ${categoryId} 类别的 ${maxResults} 篇论文...`);
 
     for (let attempt = 1; attempt <= retryCount; attempt++) {
+        // 首次请求前加随机延迟，避免被识别为固定模式
+        if (attempt === 1) {
+            const jitter = Math.floor(Math.random() * 3000) + 1000;
+            await new Promise(resolve => setTimeout(resolve, jitter));
+        }
         try {
             const response = await fetch(url, {
                 headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
