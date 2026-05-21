@@ -141,11 +141,11 @@ def parse_analysis(analysis):
     if not r['rankBucket'] and r['score']:
         try:
             s = float(r['score'])
-            if s >= 8.0:
+            if s >= 9.0:
                 r['rankBucket'] = '前10%'
-            elif s >= 6.5:
+            elif s >= 7.5:
                 r['rankBucket'] = '前25%'
-            elif s >= 5.0:
+            elif s >= 5.5:
                 r['rankBucket'] = '前50%'
             else:
                 r['rankBucket'] = '后50%'
@@ -216,7 +216,7 @@ def parse_analysis(analysis):
 
     if scoring_text:
         dim_scores = {}
-        for dim in ['创新性', '技术严谨性', '实验充分性', '清晰度', '影响力', '可复现性']:
+        for dim in ['创新性', '技术严谨性', '实验充分性', '清晰度', '影响力', '开源', '可复现性']:
             # 匹配 **创新性：2.3/3** 或 创新性: 2.3/3 等变体
             pat = re.compile(
                 r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[:：]\s*(\d+\.?\d*)\s*/\s*\d+\.?\d*\s*(?:\*\*)?'
@@ -236,7 +236,7 @@ def parse_analysis(analysis):
             qs = dim_scores.get('创新性', 0) + dim_scores.get('技术严谨性', 0) \
                  + dim_scores.get('实验充分性', 0) + dim_scores.get('清晰度', 0)
             vs = dim_scores.get('影响力', 0)
-            rb = dim_scores.get('可复现性', 0)
+            rb = dim_scores.get('开源', 0) + dim_scores.get('可复现性', 0)
             r['qualityScore'] = str(round(qs, 1))
             r['valueScore'] = str(round(vs, 1))
             r['reproducibilityBonus'] = str(round(rb, 1))

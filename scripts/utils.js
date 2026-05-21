@@ -408,6 +408,16 @@ function parseAnalysis(analysis) {
     const machineSummary = parseMachineSummary(analysis);
     result.machineSummary = machineSummary;
     result.rankBucket = machineSummary.rankBucket;
+    // 如果机器摘要未提供 rankBucket，根据 score 推断分档
+    if (!result.rankBucket && result.score) {
+        const s = parseFloat(result.score);
+        if (!isNaN(s)) {
+            if (s >= 9.0) result.rankBucket = '前10%';
+            else if (s >= 7.5) result.rankBucket = '前25%';
+            else if (s >= 5.5) result.rankBucket = '前50%';
+            else result.rankBucket = '后50%';
+        }
+    }
     result.qualityScore = machineSummary.qualityScore;
     result.valueScore = machineSummary.valueScore;
     result.reproducibilityBonus = machineSummary.reproducibilityBonus;
@@ -464,7 +474,7 @@ function parseAnalysis(analysis) {
     const scoringText = result.scoringReason || '';
     if (scoringText) {
         const dimScores = {};
-        const dims = ['创新性', '技术严谨性', '实验充分性', '清晰度', '影响力', '可复现性'];
+        const dims = ['创新性', '技术严谨性', '实验充分性', '清晰度', '影响力', '开源', '可复现性'];
         for (const dim of dims) {
             // 匹配 **创新性：2.3/3** 或 创新性: 2.3/3 等变体
             const pat = new RegExp(
@@ -487,7 +497,7 @@ function parseAnalysis(analysis) {
             const qs = (dimScores['创新性'] || 0) + (dimScores['技术严谨性'] || 0)
                      + (dimScores['实验充分性'] || 0) + (dimScores['清晰度'] || 0);
             const vs = dimScores['影响力'] || 0;
-            const rb = dimScores['可复现性'] || 0;
+            const rb = (dimScores['开源'] || 0) + (dimScores['可复现性'] || 0);
 
             result.qualityScore = String(Math.round(qs * 10) / 10);
             result.valueScore = String(Math.round(vs * 10) / 10);
