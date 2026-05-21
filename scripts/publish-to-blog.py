@@ -43,7 +43,10 @@ def fix_latex_delimiters(text):
     # 先处理块级公式 $$...$$
     text = re.sub(r'(?<!\\)\$\$(.+?)\$\$', r'\\[\1\\]', text, flags=re.DOTALL)
     # 再处理行内公式 $...$（排除已转换的块级公式和货币符号）
+    # 增强：处理反引号包裹的 $...$（代码块内不处理，但反引号包裹的行内代码中的 $...$ 需要处理）
     text = re.sub(r'(?<!\\)\$([^\s\$][^$]*?)\$', r'\\(\1\\)', text)
+    # 处理遗漏的反引号包裹的 $...$（如 `v_i^{(1)} = ... + w_vid * ...` 中的 $ 符号）
+    text = re.sub(r'`([^`]*?)\$([^`]*?)\$([^`]*?)`', r'`\1\\(\2\\)\3`', text)
     return text
 
 
@@ -53,16 +56,75 @@ def escape_html_like_tags(text):
     if not text:
         return text
     # 1. 匹配独立的 <S>、</S>、<E>、</E> 标签（单字母标记）
-    text = re.sub(r'(?<![a-zA-Z0-9`])<(/?)([SE])>(?![a-zA-Z0-9`])', r'`<\1\2>`', text)
+    # 放宽限制：中文标点、空格、行首后的 <S>/<E> 也需要转义
+    text = re.sub(r'(?<![a-zA-Z0-9])<(/?)([SEse])>(?![a-zA-Z0-9])', r'`<\1\2>`', text)
     # 2. 匹配常见的论文文本标记，如 <task>、<perception>、<comprehension>、<reasoning> 等
-    # 这些标记通常出现在多模态/认知架构/强化学习论文中，会被 Hugo 误解析为 HTML 标签
-    # 只匹配小写形式的标签（HTML 标签通常是小写），避免误匹配合法的 XML/HTML
+    # 新增：多模态论文中常见的标记
     text = re.sub(
-        r'(?<![a-zA-Z0-9`])<(/?)(task|perception|comprehension|reasoning|agent|action|state|observation|reward|goal|intent|belief|plan|policy|environment|module|component|feature|input|output|label|class|category|type|mode|phase|stage|step|layer|block|unit|node|edge|graph|tree|path|loop|branch|condition|constraint|rule|fact|evidence|proof|hypothesis|assumption|premise|conclusion|result|finding|insight|implication|contribution|limitation|direction|extension|variant|version|update|fix|issue|error|warning|notice|info|trace|log|record|entry|item|element|object|subject|target|source|reference|cite|quote|note|comment|remark|annotation|caption|title|heading|paragraph|sentence|phrase|word|token|char|symbol|sign|mark|tag|badge|identifier|id|key|code|pin|secret|ticket|voucher|license|permit|certificate|credential|award|medal|prize|gift|bonus|benefit|advantage|edge|lead|margin|gap|difference|distance|range|scope|span|scale|size|length|width|height|depth|volume|area|surface|space|place|spot|location|site|position|point|dot|pixel|fragment|shard|piece|part|portion|section|segment|slice|chunk|block|lump|mass|body|entity|thing|article|product|goods|material|substance|matter|fabric|cloth|garment|clothing|wear|dress|costume|uniform|outfit|suit|wardrobe|closet|cabinet|cupboard|pantry|cellar|basement|attic|loft|tower|spire|dome|vault|arch|beam|column|pillar|post|pole|rod|bar|rail|track|path|way|road|route|course|direction|heading|bearing|azimuth|elevation|altitude|latitude|longitude|coordinate)(?![a-zA-Z0-9`])>',
+        r'(?<![a-zA-Z0-9`])<(/?)(task|perception|comprehension|reasoning|agent|action|state|observation|reward|goal|intent|belief|plan|policy|environment|module|component|feature|input|output|label|class|category|type|mode|phase|stage|step|layer|block|unit|node|edge|graph|tree|path|loop|branch|condition|constraint|rule|fact|evidence|proof|hypothesis|assumption|premise|conclusion|result|finding|insight|implication|contribution|limitation|direction|extension|variant|version|update|fix|issue|error|warning|notice|info|trace|log|record|entry|item|element|object|subject|target|source|reference|cite|quote|note|comment|remark|annotation|caption|title|heading|paragraph|sentence|phrase|word|token|char|symbol|sign|mark|tag|badge|identifier|id|key|code|pin|secret|ticket|voucher|license|permit|certificate|credential|award|medal|prize|gift|bonus|benefit|advantage|edge|lead|margin|gap|difference|distance|range|scope|span|scale|size|length|width|height|depth|volume|area|surface|space|place|spot|location|site|position|point|dot|pixel|fragment|shard|piece|part|portion|section|segment|slice|chunk|block|lump|mass|body|entity|thing|article|product|goods|material|substance|matter|fabric|cloth|garment|clothing|wear|dress|costume|uniform|outfit|suit|wardrobe|closet|cabinet|cupboard|pantry|cellar|basement|attic|loft|tower|spire|dome|vault|arch|beam|column|pillar|post|pole|rod|bar|rail|track|path|way|road|route|course|direction|heading|bearing|azimuth|elevation|altitude|latitude|longitude|coordinate|interrupt|backchannel|response|free|BEsound)(?![a-zA-Z0-9`])>',
         r'`<\1\2>`',
         text,
         flags=re.IGNORECASE
     )
+    return text
+
+
+def fix_image_markdown(text):
+    r"""将 LLM 输出的非标准图片引用格式转换为标准 Markdown 图片语法。
+    处理以下变体：
+    - 外部 URL: https://... (alt=描述)
+    - 外部 URL: https://... alt=描述
+    - - 外部 URL: https://... (alt=描述)
+    """
+    if not text:
+        return text
+    # 匹配 "外部 URL: <url> (alt=<alt>)" 及其变体
+    text = re.sub(
+        r'(?:^|\n)\s*(?:-\s*)?外部\s*URL:\s*(https?://\S+?)\s*\(alt=([^)]+)\)',
+        r'\n![\2](\1)',
+        text,
+        flags=re.MULTILINE
+    )
+    # 匹配 "外部 URL: <url> alt=<alt>"（无括号）
+    text = re.sub(
+        r'(?:^|\n)\s*(?:-\s*)?外部\s*URL:\s*(https?://\S+?)\s+alt=(.+?)(?=\n|$)',
+        r'\n![\2](\1)',
+        text,
+        flags=re.MULTILINE
+    )
+    # 处理被截断的 URL（末尾带 ...）
+    text = re.sub(r'\(https?://[^)]+\.\.\.\)', '(image_url_truncated)', text)
+    # 处理空的 data URI
+    text = re.sub(r'!\[([^\]]*)\]\(data:;base64,\)', r'![\1](image_not_available)', text)
+    return text
+
+
+def truncate_base64_datauri(text, max_chars=50000):
+    r"""截断过长的 base64 data URI，避免影响页面加载性能。"""
+    if not text:
+        return text
+    def replacer(m):
+        data = m.group(1)
+        if len(data) > max_chars:
+            return f'{m.group(0)[:100]}...[truncated {len(data)} chars]...'
+        return m.group(0)
+    text = re.sub(r'data:image/[^;]+;base64,([A-Za-z0-9+/=]+)', replacer, text)
+    return text
+
+
+def fix_yaml_double_commas(text):
+    r"""修复 YAML frontmatter 中的双逗号问题。"""
+    if not text:
+        return text
+    # 只处理 frontmatter 区域
+    parts = text.split('---\n', 2)
+    if len(parts) >= 3:
+        frontmatter = parts[1]
+        # 修复双逗号
+        frontmatter = re.sub(r',\s*,+', ',', frontmatter)
+        # 修复 tags 行尾的逗号
+        frontmatter = re.sub(r'tags:\s*\[([^\]]*?),\s*\]', r'tags: [\1]', frontmatter)
+        text = parts[0] + '---\n' + frontmatter + '---\n' + parts[2]
     return text
 
 
@@ -178,7 +240,9 @@ def llm_review_post(content, title=""):
         review = json.loads(cleaned)
         passed = review.get("passed", True)
         issues = review.get("issues", [])
-        return passed, issues, content
+        # 自动应用可修复的问题
+        fixed_content = apply_llm_fixes(content, issues)
+        return passed, issues, fixed_content
     except json.JSONDecodeError:
         # 如果 JSON 解析失败，尝试从文本中提取问题
         print(f"  ⚠️  LLM review 返回非 JSON 格式，尝试文本解析")
@@ -595,11 +659,11 @@ hiddenInHomeList: true
 
         machine_bits = []
         if pa.get('qualityScore'):
-            machine_bits.append(f"学术质量 {pa['qualityScore']}/8")
+            machine_bits.append(f"学术质量 {pa['qualityScore']}/7")
         if pa.get('valueScore'):
-            machine_bits.append(f"影响力 {pa['valueScore']}/1")
+            machine_bits.append(f"影响力 {pa['valueScore']}/2")
         if pa.get('reproducibilityBonus'):
-            machine_bits.append(f"可复现性 {pa['reproducibilityBonus']}/1")
+            machine_bits.append(f"可复现性 {pa['reproducibilityBonus']}/2")
         if pa.get('confidence'):
             machine_bits.append(f"置信度 {pa['confidence']}")
         if machine_bits:
@@ -697,13 +761,30 @@ def review_and_fix_post(file_path):
     if raw_matches:
         issues.append(f"发现 {len(raw_matches)} 个裸 HTML 标签，可能被浏览器渲染")
 
-    # 4. 检查是否有未闭合的 markdown 链接或图片引用
+    # 4. 检查并修复非标准图片引用格式
+    if re.search(r'外部\s*URL:', content):
+        issues.append("发现非标准图片引用格式，尝试自动修复")
+        content = fix_image_markdown(content)
+
+    # 5. 检查并截断过长的 base64 data URI
+    base64_matches = re.findall(r'data:image/[^;]+;base64,([A-Za-z0-9+/=]+)', content)
+    long_base64 = [m for m in base64_matches if len(m) > 50000]
+    if long_base64:
+        issues.append(f"发现 {len(long_base64)} 个过长的 base64 data URI，已截断")
+        content = truncate_base64_datauri(content)
+
+    # 6. 修复 YAML frontmatter 双逗号
+    if ',,' in content.split('---\n')[1] if len(content.split('---\n')) >= 3 else False:
+        issues.append("发现 YAML frontmatter 双逗号，已修复")
+        content = fix_yaml_double_commas(content)
+
+    # 7. 检查是否有未闭合的 markdown 链接或图片引用
     broken_link_pattern = re.compile(r'!?\[([^\]]*)\]\s*\(\s*\)')
     broken_links = broken_link_pattern.findall(content)
     if broken_links:
         issues.append(f"发现 {len(broken_links)} 个空链接")
 
-    # 5. 检查 YAML frontmatter 中是否有未闭合的双引号
+    # 8. 检查 YAML frontmatter 中是否有未闭合的双引号
     yaml_lines = content.split('---\n')
     if len(yaml_lines) >= 3:
         yaml_block = yaml_lines[1]
@@ -882,6 +963,9 @@ def main():
             paper_md, slug = generate_paper_page(paper, today)
             paper_md = fix_latex_delimiters(paper_md)
             paper_md = escape_html_like_tags(paper_md)
+            paper_md = fix_image_markdown(paper_md)
+            paper_md = truncate_base64_datauri(paper_md)
+            paper_md = fix_yaml_double_commas(paper_md)
             paper_file = os.path.join(CONTENT_DIR, f"{today}-{slug}.md")
             with open(paper_file, 'w') as f:
                 f.write(paper_md)
@@ -892,6 +976,9 @@ def main():
     index_md = generate_index_page(scored, unscored, today, paper_slugs)
     index_md = fix_latex_delimiters(index_md)
     index_md = escape_html_like_tags(index_md)
+    index_md = fix_image_markdown(index_md)
+    index_md = truncate_base64_datauri(index_md)
+    index_md = fix_yaml_double_commas(index_md)
     index_file = os.path.join(CONTENT_DIR, f"{today}.md")
     with open(index_file, 'w') as f:
         f.write(index_md)

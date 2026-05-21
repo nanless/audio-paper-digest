@@ -20,6 +20,21 @@ from publish_common import (
 )
 
 
+def smart_truncate(text, max_len=65):
+    """在句子边界智能截断文本，确保不超过 max_len 字符。"""
+    if len(text) <= max_len:
+        return text
+    # 在 max_len 范围内找最后一个句子结束符
+    for i in range(max_len, max_len // 2, -1):
+        if i < len(text) and text[i] in '。！？.!?':
+            return text[:i+1]
+    #  fallback：在词语边界截断，避免截断到汉字中间
+    for i in range(max_len, max_len // 2, -1):
+        if i < len(text) and text[i] in '，、；：,;:\s':
+            return text[:i]
+    return text[:max_len]
+
+
 def call_llm_for_oneliner(title, abstract):
     """调用 LLM 生成一句话论文介绍。MiMo Token Plan 使用 anthropic 协议。"""
     api_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
@@ -36,7 +51,7 @@ def call_llm_for_oneliner(title, abstract):
         base = base[:-3]
     api_url = f"{base}/anthropic/v1/messages"
 
-    prompt = f"""用2-3句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书，每篇严格控制在70字以内：
+    prompt = f"""用1-2句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书。总字数严格控制在50字以内，必须输出完整内容，不要省略：
 
 标题：{title}
 摘要：{abstract[:800]}
@@ -45,11 +60,11 @@ def call_llm_for_oneliner(title, abstract):
 
     payload = {
         "model": model,
-        "max_tokens": 300,
+        "max_tokens": 500,
         "messages": [{"role": "user", "content": prompt}]
     }
 
-    for attempt in range(3):
+    for attempt in range(5):
         try:
             import requests
             # MiMo API 需要绕过代理直接连接
@@ -64,7 +79,7 @@ def call_llm_for_oneliner(title, abstract):
                     "User-Agent": "claude-cli/2.1.108 (external, cli)",
                     "Content-Type": "application/json"
                 },
-                timeout=120
+                timeout=180
             )
             resp.raise_for_status()
             data = resp.json()
@@ -77,16 +92,17 @@ def call_llm_for_oneliner(title, abstract):
                         break
             content = content.strip('"\'').strip()
             if len(content) > 10:
-                return content
+                # 应用智能截断，确保字数受控
+                return smart_truncate(content, max_len=65)
             # 如果内容太短，重试
-            if attempt < 2:
+            if attempt < 4:
                 import time
-                time.sleep(2)
+                time.sleep(3)
         except Exception as e:
-            print(f"  ⚠️  LLM one-liner 失败 (尝试 {attempt+1}/3): {e}")
-            if attempt < 2:
+            print(f"  ⚠️  LLM one-liner 失败 (尝试 {attempt+1}/5): {e}")
+            if attempt < 4:
                 import time
-                time.sleep(2)
+                time.sleep(3)
 
     return None
 
@@ -161,9 +177,7 @@ TOP {top_n} 👇
         title = p.get('title', 'Unknown')
         if len(title) > 45:
             title = title[:42] + '...'
-        liner = llm_oneliners.get(i) or extract_one_liner(pa)
-        if len(liner) > 100:
-            liner = liner[:97] + '...'
+        liner = llm_oneliners.get(i) or smart_truncate(extract_one_liner(pa) or '', max_len=65)
         fire = score_emoji(score)
         score_line = f'{fire} {score}/10'
         if pa.get('rankBucket'):
