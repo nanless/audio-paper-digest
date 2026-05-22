@@ -38,7 +38,7 @@
 抓取参数：
 - API：`export.arxiv.org/api/query`，按 `submittedDate` 降序，每类 `max_results=100`
 - User-Agent: `Mozilla/5.0 (compatible; PaperDigest/1.0)`
-- 每分类重试最多 **6 次**，指数退避：第一次重试 4 秒，之后翻倍（`2^attempt * 2000ms`，attempt 从 1 开始）
+- 每分类重试最多 **20 次**，指数退避：第一次重试 3 秒，之后翻倍（`2^attempt * 3000ms`，attempt 从 1 开始）
 - 遇到 HTTP 429 限流额外等待：第一次 10 秒，之后翻倍（`2^attempt * 5000ms`，attempt 从 1 开始，上限 60 秒）
 - **提前停止**：若连续遇到 20 篇已有 ID（存在于 `papers.json`），则停止该分类抓取
 - 类别间延迟 **5 秒**
@@ -122,7 +122,7 @@ HF 特有字段（共 7 个）：
 
 | 章节 | 要求 |
 |------|------|
-| 评分 | 1-10 分，保留一位小数；机器摘要含 `rank_bucket`（前10%/前25%/前50%/后50%）、`quality_score`、`value_score`、`reproducibility_bonus`、`confidence` 等字段。代码后处理：从 `## 评分理由` 提取六个分项重新计算总分，覆盖 LLM 原始输出 |
+| 评分 | 1-10 分，保留一位小数；机器摘要含 `rank_bucket`（前10%/前25%/前50%/后50%）、`quality_score`（0-7）、`value_score`（0-2）、`reproducibility_bonus`（0-2）、`confidence` 等字段。代码后处理：从 `## 评分理由` 提取七个分项重新计算总分，覆盖 LLM 原始输出 |
 | 标签 | 3-5 个，必须含至少 1 个【任务】和 1 个【方法/模型】标签；除最终标签串外，还要求输出"主任务标签""主方法标签""补充标签" |
 | 作者与机构 | 第一作者、通讯作者、作者列表及所属机构；缺失信息必须写"未说明"，禁止猜测 |
 | 毒舌点评 | 2-3 句话犀利点评亮点和槽点，像资深审稿人的 final comment |
@@ -141,14 +141,24 @@ HF 特有字段（共 7 个）：
 - **API 协议自动路由**：与筛选阶段共用同一套 `detectApiType()` 逻辑，根据 `PAPER_ANALYZER_ENDPOINT` 和 `PAPER_ANALYZER_MODEL` 自动切换 OpenAI / Anthropic 协议
 - 获取 arXiv HTML 全文（最多 100K 字符），依次尝试 `v1`、`v2`、无后缀版本；使用 **cheerio** 结构化解析 HTML，移除 script/style/nav/header/footer 等噪音元素
 - 提取图片 URL（png/jpg/jpeg），过滤 logo/favicon
-- **图片分析**：下载论文全部图片（无数量限制）；单张 base64 上限 500K 字符；**图片下载并行化（并发 3）**。图片 URL 列表会写入 prompt，即使下载失败 LLM 也能获取真实 URL 用于正文引用。若全部下载失败，自动降级为纯文本重试
+- **图片分析**：下载论文全部图片（无数量限制）；单张 base64 上限约 20M 字符（config.js 中 `imageMaxBase64Chars`）；**图片下载并行化（并发 3）**。图片 URL 列表会写入 prompt，即使下载失败 LLM 也能获取真实 URL 用于正文引用。若全部下载失败，自动降级为纯文本重试
 - **并发度：3 篇并行**（可通过 `PD_ANALYSIS_CONCURRENCY` 环境变量调整）
 - 每篇最多重试 **2 次**（外层 `analysis-engine.js`），每次外层重试内部 API 调用还有 **3 次** 重试（`deep-analyzer.js` 内层，指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5000ms`），外层重试间隔 3 秒（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整外层）
 - API 整体超时 **20 分钟**（AbortController）
-- `max_tokens=15000`，`temperature=0.7`
+- `max_tokens=64000`（config.js 中 `apiMaxTokens`），`temperature=0.7`
 - 支持代理自动检测（环境变量 → macOS `scutil --proxy`）
 - 支持纯 Node 内置模块的 HTTP CONNECT 代理（无需外部依赖）
 - 所有分析配置集中管理于 `scripts/config.js`，支持环境变量覆写（`PD_ANALYSIS_CONCURRENCY`、`PD_ANALYSIS_MAX_RETRIES`、`PD_FILTER_BATCH_SIZE`、`PD_ARXIV_MAX_RESULTS`）
+
+**深度分析不是单次调用，而是 5 轮递进式处理**：
+
+| 轮次 | 名称 | Prompt | 作用 |
+|------|------|--------|------|
+| Round 1 | 主深度分析 | `prompts/deep-analysis.md` | 全文+图片分析，生成所有章节 |
+| Round 2 | 开源扫描 | `prompts/opensource-scan.md` | 从论文文本提取 GitHub/HF/ModelScope 等链接，补充开源详情 |
+| Round 3 | 审校重写 | `prompts/gap-fill.md` | 对比原始论文与 Round 1 输出，修正缺失、错误、过度推断 |
+| Round 4 | 表格修复 | 代码检测 + LLM 补充 | 检测实验结果章节缺失的 Markdown 表格，触发补充 |
+| Round 5 | 方法章节修复 | 代码检测 + LLM 补充 | 检测方法概述是否过于简略（<300 字/<3 段），触发扩展至 600+ 字 |
 
 ### 3.7 增量保存与收尾
 

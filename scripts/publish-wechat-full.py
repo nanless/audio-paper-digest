@@ -184,11 +184,11 @@ def main():
                 h += f'<p style="color:#666;">{" | ".join(meta)}</p>\n'
             machine_parts = []
             if pa.get('qualityScore'):
-                machine_parts.append(f'学术质量 {pa["qualityScore"]}/8')
+                machine_parts.append(f'学术质量 {pa["qualityScore"]}/7')
             if pa.get('valueScore'):
-                machine_parts.append(f'影响力 {pa["valueScore"]}/1')
+                machine_parts.append(f'影响力 {pa["valueScore"]}/2')
             if pa.get('reproducibilityBonus'):
-                machine_parts.append(f'可复现性 {pa["reproducibilityBonus"]}/1')
+                machine_parts.append(f'可复现性 {pa["reproducibilityBonus"]}/2')
             if pa.get('confidence'):
                 machine_parts.append(f'置信度 {pa["confidence"]}')
             if machine_parts:

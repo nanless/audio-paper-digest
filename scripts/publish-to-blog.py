@@ -57,7 +57,7 @@ def escape_html_like_tags(text):
         return text
     # 1. 匹配独立的 <S>、</S>、<E>、</E> 标签（单字母标记）
     # 放宽限制：中文标点、空格、行首后的 <S>/<E> 也需要转义
-    text = re.sub(r'(?<![a-zA-Z0-9])<(/?)([SEse])>(?![a-zA-Z0-9])', r'`<\1\2>`', text)
+    text = re.sub(r'(?<![a-zA-Z])<(/?)([SEse])>(?![a-zA-Z0-9])', r'`<\1\2>`', text)
     # 2. 匹配常见的论文文本标记，如 <task>、<perception>、<comprehension>、<reasoning> 等
     # 新增：多模态论文中常见的标记
     text = re.sub(
@@ -194,12 +194,18 @@ def llm_review_post(content, title=""):
 
 请严格审查下面这篇博客的 Markdown 内容，重点检查以下问题：
 
-1. **HTML 标签解析问题**：是否有类似 `<S>`、`<E>`、`<s>`、`<e>` 等文本标记**未被反引号包裹**而被 Hugo 错误解析为 HTML 标签（会导致删除线、粗体等意外样式）。注意：已经被反引号包裹的如 `` `<S>` `` 是正确格式，不要报告。
-2. **LaTeX 公式渲染问题**：公式是否使用了 Hugo goldmark passthrough 支持的 `\\(...\\)` 和 `\\[...\\]` 格式，而不是 `$...$` 或 `$$...$$`
+1. **HTML 标签解析问题**：是否有类似 `<S>`、`<E>`、`<s>`、`<e>` 等文本标记**未被反引号包裹**而被 Hugo 错误解析为 HTML 标签（会导致删除线、粗体等意外样式）。注意：已经被反引号包裹的如 `` `<S>` `` 是正确格式，不要报告。**如果博客中所有 `<S>`/`<E>` 都已用反引号包裹，则此项检查应视为通过，不要报告**。
+2. **LaTeX 公式渲染问题**：检查是否存在使用了 `$...$` 或 `$$...$$` 格式的公式。注意：纯文本形式的数学描述（如 "RMS = sqrt(1/N)"）不是 LaTeX 公式，不需要报告；只有明确使用了 `$` 或 `$$` 包裹但未转换为 `\\(...\\)` / `\\[...\\]` 的才需要报告。
 3. **Markdown 格式问题**：链接、图片引用、表格、列表等格式是否有语法错误
 4. **内容完整性**：是否有乱码、重复、段落错位。注意：以下内容被截断到前4000字符以节省token，**不要因为截断而报告内容不完整**。
 5. **图片问题**：图片链接是否为空、格式是否正确（支持 base64 data URI 和普通 URL）
 6. **YAML frontmatter 问题**：标题、描述等字段是否有引号不匹配、特殊字符未转义
+
+【重要区分】以下情况**不要**作为错误报告：
+- 已经用反引号包裹的 HTML-like 标记（如 `` `<S>` ``）→ 这是正确格式
+- 纯文本中的数学符号或公式描述（未使用 `$` 包裹）→ 这不是 LaTeX 格式问题
+- 仅属于风格建议的问题（如 alt 文本可以更详细、列表格式可以更统一）→ 这些应评为 info 级别或干脆不报告
+- 技术术语未用反引号包裹 → 这不是格式错误，除非它会被 Hugo 解析为 HTML
 
 博客标题：{title}
 
@@ -280,24 +286,36 @@ def multimodal_review_images(content, title=""):
             img_summary.append(f"- 其他 base64 data URI (alt={alt}), 长度 {len(url)} 字符")
             data_uri_images.append((alt, url))
         elif url.startswith("http"):
-            img_summary.append(f"- 外部 URL: {url[:80]}... (alt={alt})")
+            # 不截断 URL，避免 review LLM 误判为 URL 不完整
+            img_summary.append(f"- 外部图片: {url} | alt: `{alt}`")
         else:
             img_summary.append(f"- 相对路径: {url} (alt={alt})")
 
     prompt = f"""你是一个博客图片质量审查专家。
 
-请审查下面这篇博客中的图片引用是否合理：
+请审查下面这篇博客中的图片引用是否合理。
+
+【重要】以下列表是从博客正文中提取的元数据摘要，用于辅助审查：
+- 博客正文中的实际图片格式为标准 Markdown：`![alt](url)`
+- 摘要中的格式（如"外部图片: url | alt: ..."）只是元数据展示，**不要**因为摘要格式而误判
+- 摘要中的 URL 可能为了简洁而截断，但博客正文中的 URL 是完整的
+- 如果博客正文中所有图片都使用 `![alt](url)` 格式，则格式检查项应视为通过
 
 博客标题：{title}
-图片列表：
+图片元数据摘要：
 {chr(10).join(img_summary)}
 
 请检查：
-1. 图片引用格式是否正确（Markdown 语法 `![alt](url)`）
+1. 博客正文中图片引用格式是否为标准 Markdown `![alt](url)`（基于上述元数据推断）
 2. base64 data URI 是否过长（超过 50KB 可能影响页面加载）
 3. 外部 URL 是否是常见图片域名（arxiv.org、githubusercontent.com 等）
 4. 图片 alt 文本是否为空或重复
 5. SVG data URI 是否能被 Hugo 正确渲染
+
+【禁止事项】不要报告以下伪问题：
+- 摘要格式（如"外部图片: url | alt: ..."）不是 Markdown 格式 → 这是正常的元数据摘要
+- 摘要中 URL 被截断 → 博客正文中的 URL 是完整的
+- 图片 alt 文本仅为"图1""图2"等编号 → 这在学术博客中是可以接受的
 
 请以 JSON 格式返回：
 {{
@@ -946,9 +964,21 @@ def main():
         i += 1
 
     papers = load_papers(data_file)
-    scored, unscored = score_and_sort(papers)
     today = get_today_bj(target_date)
     print(f"📅 博客日期: {today}")
+
+    # 只发布 fetchedAt 日期等于目标日期的论文（按抓取日期而非 arXiv 发布日期）
+    filtered_papers = []
+    for p in papers:
+        fa = p.get('fetchedAt', '')
+        if fa and isinstance(fa, str):
+            fa_date = fa[:10]
+            if fa_date == today:
+                filtered_papers.append(p)
+
+    papers = filtered_papers
+    scored, unscored = score_and_sort(papers)
+    print(f"📄 过滤后: {len(papers)} 篇论文 (fetchedAt={today})")
 
     if not papers:
         print("⚠️ 没有论文需要发布")
@@ -958,7 +988,8 @@ def main():
 
     paper_slugs = {}
     for paper in papers:
-        pa = parse_analysis(paper.get('analysis', ''))
+        # 优先使用已解析好的 parsed 数据（包含手动修正的标签等），避免重新解析覆盖
+        pa = paper.get('parsed') or parse_analysis(paper.get('analysis', ''))
         if pa:
             paper_md, slug = generate_paper_page(paper, today)
             paper_md = fix_latex_delimiters(paper_md)

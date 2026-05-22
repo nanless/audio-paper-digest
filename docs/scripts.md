@@ -9,10 +9,10 @@
 完整流程入口。执行第 3 节的所有步骤：自动归档 → arXiv 抓取 → HF 抓取 → 合并去重 → LLM 筛选 → 深度分析 → 增量保存 → 更新去重库。
 
 所有配置从 `scripts/config.js` 读取，支持环境变量覆写：
-- `ANALYSIS_CONCURRENCY = 3`（`PD_ANALYSIS_CONCURRENCY`）
-- `ANALYSIS_RETRY_MAX = 2`（`PD_ANALYSIS_MAX_RETRIES`）
-- `ANALYSIS_RETRY_DELAY_MS = 3000`
-- `FETCH_DELAY_MS = 2000`
+- `ANALYSIS_CONFIG.concurrency = 3`（`PD_ANALYSIS_CONCURRENCY`）
+- `ANALYSIS_CONFIG.maxRetries = 2`（`PD_ANALYSIS_MAX_RETRIES`）
+- `ANALYSIS_CONFIG.retryDelayMs = 3000`
+- `FILTER_CONFIG.delayBetweenBatchesMs = 2000`
 
 #### `scripts/deep-analysis-only.js`
 
@@ -70,20 +70,74 @@ arXiv 抓取与 LLM 筛选模块。
 
 #### `scripts/config.js`
 
-统一配置中心。所有硬编码参数集中管理，支持环境变量覆写：
+统一配置中心。所有硬编码参数集中管理，按功能分组：
 
-| 配置项 | 默认值 | 环境变量覆写 |
-|--------|--------|-------------|
-| 分析并发度 | 3 | `PD_ANALYSIS_CONCURRENCY` |
-| 分析重试次数 | 2 | `PD_ANALYSIS_MAX_RETRIES` |
-| 筛选批次大小 | 5 | `PD_FILTER_BATCH_SIZE` |
-| arXiv 每类抓取数 | 100 | `PD_ARXIV_MAX_RESULTS` |
-| HF 抓取天数 | 7 | — |
-| HF 最大页数 | 20 | — |
-| 备份保留数 | 10 | — |
-| 日志保留数 | 50 | — |
+**分析配置（`ANALYSIS_CONFIG`）**
 
-被 `fetch-papers.js`、`deep-analyzer.js`、`analysis-engine.js`、`full-fetch.js`、`reanalyze.js` 等所有核心脚本引用。
+| 配置项 | 默认值 | 环境变量覆写 | 说明 |
+|--------|--------|-------------|------|
+| 并发度 | 3 | `PD_ANALYSIS_CONCURRENCY` | 深度分析并行篇数 |
+| 外层重试次数 | 2 | `PD_ANALYSIS_MAX_RETRIES` | analysis-engine 层面每篇重试次数 |
+| 外层重试延迟 | 3000ms | — | 外层重试间隔 |
+| API 整体超时 | 20 分钟 | — | AbortController 超时 |
+| API 内层重试次数 | 3 | — | deep-analyzer 内层每次调用重试次数 |
+| API 内层退避基数 | 5000ms | — | 指数退避：第一次 5s，之后翻倍 |
+| max_tokens | 64000 | — | LLM 输出长度上限 |
+| temperature | 0.7 | — | LLM 采样温度 |
+| 图片下载超时 | 15s | — | 单张图片下载超时 |
+| 单张 base64 上限 | 20M 字符 | — | 单张图片转 base64 上限 |
+| 全文上限 | 500K 字符 | — | arXiv HTML 正文截取上限 |
+| arXiv HTML 获取超时 | 30s | — | 获取 arXiv HTML 超时 |
+
+**筛选配置（`FILTER_CONFIG`）**
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| 超时 | 60s | 单篇筛选 API 调用超时 |
+| 重试次数 | 3 | 单篇筛选重试次数 |
+| 批次大小 | 5 | `PD_FILTER_BATCH_SIZE` 可覆写 |
+| 批次间延迟 | 2000ms | 每批筛选后的等待时间 |
+| temperature | 0.3 | 筛选阶段采样温度 |
+
+**arXiv 配置（`ARXIV_CONFIG`）**
+
+| 配置项 | 默认值 | 环境变量覆写 | 说明 |
+|--------|--------|-------------|------|
+| 每类抓取数 | 100 | `PD_ARXIV_MAX_RESULTS` | 每分类最大返回数 |
+| 最大重试次数 | 20 | — | 单分类抓取重试上限 |
+| 重退避基数 | 3000ms | — | 指数退避：3s/6s/12s... |
+| 限流退避基数 | 15000ms | — | 429 限流额外等待：15s/30s/60s... |
+| 最大等待时间 | 300000ms | — | 单分类最长等待 5 分钟 |
+| 分类间延迟 | 25000ms | — | 不同分类请求间隔 |
+| 首次请求延迟 | 5000ms | — | 首个分类额外等待 |
+| 连续已知阈值 | 20 | — | 连续 20 篇已有 ID 提前停止 |
+
+**HuggingFace 配置（`HUGGINGFACE_CONFIG`）**
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| 默认天数 | 7 | 只保留近 7 天论文 |
+| 最大页数 | 20 | daily_papers 分页上限 |
+| 每页数量 | 100 | 分页每页条数 |
+| 页间延迟 | 300ms | 分页请求间隔 |
+
+**发布配置（`PUBLISH_CONFIG`）**
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| 博客仓库路径 | `~/code/github_repos/audio-paper-digest-blog` | 可通过 `PAPER_DIGEST_BLOG_REPO` 覆写 |
+| 内容目录 | `content/posts` | Hugo 内容目录 |
+| basePath | `/audio-paper-digest-blog` | 站点子路径 |
+| 微信草稿字符上限 | 48000 | 单篇草稿 HTML 字符上限 |
+
+**归档配置（`ARCHIVE_CONFIG`）**
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| 最大备份数 | 10 | `deep-analysis-result` bak 文件保留数 |
+| 最大日志数 | 50 | 日志文件保留数 |
+
+被所有核心脚本引用。
 
 #### `scripts/analysis-engine.js`
 
@@ -105,14 +159,98 @@ HuggingFace Papers 抓取模块。
 
 #### `scripts/deep-analyzer.js`
 
-多模态深度分析器。
-- `analyzePaperDeep(paper)`：全文 + 图片分析主函数
-- `parseAnalysis(analysis)`：将分析文本解析为结构化对象。其中 `score` 不是直接取 LLM 在 `## 评分` 下输出的总分，而是从 `## 评分理由` 中提取六个分项（创新性/3、技术严谨性/2、实验充分性/2、清晰度/1、影响力/1、可复现性/1）重新计算，四舍五入到 0.5，始终覆盖 LLM 原始总分，避免 LLM 算错
-- `callModel(messages, maxTokens)`：带重试的 API 调用封装（最多 3 次重试，指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5000ms`）
+多模态深度分析器。分析流程为 **5 轮递进式处理**，不是单次调用：
+
+**Round 1 — 主深度分析**
+- `analyzePaperDeep(paper)`：获取 arXiv HTML 全文（最多 500K 字符）+ 下载全部图片（并发 3）
+- 加载 `prompts/deep-analysis.md`，替换占位符后调用 LLM
+- 输出包含：评分、机器摘要、标签、作者与机构、毒舌点评、核心摘要、方法概述和架构、核心创新点、实验结果、细节详述、评分理由、局限与问题、开源详情
+- `parseAnalysis(analysis)`：将分析文本解析为结构化对象。`score` 不是直接取 `## 评分` 下的 LLM 原始总分，而是从 `## 评分理由` 中提取七个分项重新计算，四舍五入到 0.1，始终覆盖 LLM 原始总分
+
+**Round 2 — 开源扫描（`scanOpensource`）**
+- 加载 `prompts/opensource-scan.md`
+- 从论文文本中提取 GitHub / HuggingFace / ModelScope 等开源链接
+- 补充到 `## 开源详情` 章节
+
+**Round 3 — 审校重写（`reviseAnalysis`）**
+- 加载 `prompts/gap-fill.md`
+- 对比原始论文与 Round 1 输出，检查缺失、错误、过度推断
+- 生成修订版分析文本，覆盖原有内容
+
+**Round 4 — 表格修复（`checkAndFixTables`）**
+- 检测 `## 实验结果` 中缺失的 Markdown 表格
+- 若发现表格被省略或截断，触发 LLM 补充完整表格
+
+**Round 5 — 方法章节修复（`checkAndFixMethodSection`）**
+- 检测 `## 方法概述和架构` 是否过于简略（少于 300 中文字符、表述模糊、不足 3 段）
+- 若满足条件，触发 LLM 扩展至 600+ 字符的详细描述
+
+**API 调用**：
+- `callModel(messages, maxTokens)`：带重试的 API 调用封装（内层最多 3 次重试，指数退避：第一次 10 秒，之后翻倍）
 - `_callModelOnce()`：单次 API 调用，每次重试独立创建 AbortController 和 20 分钟超时
+- LLM API 请求强制设置 `agent: false`，禁用连接复用以绕过代理污染（避免 MiMo 403）
+
+**其他特性**：
 - 支持代理自动检测（环境变量 → macOS `scutil --proxy`）
 - 支持纯 Node 内置模块的 HTTP CONNECT 代理
 - 直接运行可测试：`node scripts/deep-analyzer.js <arxivId>`
+
+#### `scripts/utils.js`
+
+Node.js 公共工具模块。被几乎所有脚本引用：
+
+**文件与路径**：
+- `writeFileAtomic(filePath, data)`：原子写入（先写临时文件再重命名）
+- `readJsonSafe(filePath)`：安全读取 JSON，文件不存在时返回 `null`
+- `ensureDir(dirPath)`：确保目录存在
+
+**时间处理**：
+- `getBeijingISOString()` / `getBeijingDateString()` / `getBeijingCompactTimestamp()` / `getBeijingLocaleString()`：北京时间各种格式
+- `normalizeToBeijingISOString(isoString)`：将任意 ISO 字符串转为北京时间
+- `extractDatePrefix(str)` / `getRecordDate(paper)`：从字符串或论文对象提取日期前缀
+
+**解析与文本**：
+- `stripMd(t)`：去除 Markdown 格式标记
+- `parseMachineSummary(analysis)`：解析 `## 机器摘要` 块
+- `parseAnalysis(analysis)`：解析完整分析文本为结构化对象（评分、标签、各章节等）
+
+**API 协议自动路由**（核心基础设施）：
+- `detectApiType(endpoint, model)`：根据端点和模型自动判断 OpenAI / Anthropic 协议
+- `getAnthropicEndpoint(endpoint)`：将 OpenAI 风格端点转为 Anthropic 风格路径
+- `buildApiUrl(apiType, endpoint)`：构建完整请求 URL
+- `buildRequestBody(apiType, model, messages, maxTokens)`：构建请求体
+- `buildHeaders(apiType, key)`：构建请求头
+- `getClaudeCodeVersion()`：获取本地 Claude Code CLI 版本号
+- `parseResponseText(apiType, data)`：统一解析响应文本
+
+**代理**：
+- `detectProxyUrl()`：自动检测代理（环境变量 → macOS `scutil --proxy`）
+- `createProxyAgent(proxyUrl)`：创建 HTTP CONNECT 代理 agent
+
+**其他**：
+- `normalizedId(paper)`：生成统一论文 ID
+- `backupPapersJson()`：自动备份 `papers.json`
+- `loadPrompt(filePath, replacements)`：加载 prompt 文件并替换占位符
+
+#### `scripts/utils.py`
+
+Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`、`publish-xiaohongshu.py`、`publish-to-feishu.py` 引用：
+
+**时间**：
+- `now_bj_iso()` / `now_bj_date()`：北京时间 ISO 字符串和日期字符串
+
+**文本**：
+- `strip_md(t)`：去除 Markdown 格式标记（与 JS 版功能一致）
+
+**解析**：
+- `parse_machine_summary(analysis)`：解析 `## 机器摘要` 块（支持 `- key: value` 格式）
+- `parse_analysis(analysis)`：解析完整分析文本为结构化对象（与 JS 版功能一致）
+
+**标签体系**（核心约束）：
+- `ALLOWED_TAGS`：标准标签白名单（约 110 个中文标签），必须与 `prompts/deep-analysis.md` 中的标签表保持一致
+- `_normalize_tag(raw)`：标准化标签（加 `#` 前缀、清理分隔符）
+- `_is_bad_task_tag(tag)`：判断标签质量是否太差（snake_case、arXiv 类别、过长英文、不在白名单等）
+- `_fix_tag(tag)`：将已知错误标签映射到正确标签（覆盖 50+ 个 LLM 常犯的自创/英文标签）
 
 ### 4.3 发布脚本
 
@@ -173,7 +311,12 @@ HuggingFace Papers 抓取模块。
 - `--skip-push` 只生成文件不推送
 - 自定义数据文件路径作为最后一个参数
 
-**重要限制**：脚本按输入文件中的全部 `papers` 生成，不会自动按 `published` 日期过滤。若文件中包含多日期论文，请确认这是你的意图。
+**日期过滤**：
+- 脚本默认按 `fetchedAt` 字段过滤，只发布匹配 `--date` 指定日期（默认今天）的论文
+- `deep-analysis-result.json` 会累积历史数据，日期过滤确保只发布当日抓取的新论文
+- 若需发布全部论文（不过滤），可传入自定义数据文件或临时修改脚本
+
+**重要限制**：`fetchedAt` 是抓取时间，不是论文在 arXiv 上的 `published` 日期。跨天运行时请显式指定 `--date`。
 
 #### `scripts/publish-wechat-full.py`
 
@@ -193,10 +336,13 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 
 主要函数：
 - `load_papers(data_file)`：从 JSON 加载论文列表
-- `score_and_sort(papers)`：解析分析结果，按评分降序排列
+- `score_and_sort(papers)`：解析分析结果，按评分降序排列；优先使用已有的 `parsed` 数据，避免重新解析覆盖手动修正
 - `extract_top_tags(papers, limit)`：提取主任务标签并统计频次
+- `extract_all_tags(papers, limit)`：提取所有标签（去重），用于博客标签云
+- `extract_one_liner(pa)`：从分析结果中提取一句话亮点，优先用创新点或核心贡献句
 - `score_emoji(score)` / `format_medal(index)`：评分 emoji 和奖牌格式化
 - `build_paper_meta(pa, aurl)`：拼接评分/分档/标签元信息
+- `parse_cli_args(argv, defaults)`：通用命令行参数解析，被各发布脚本复用
 
 #### `scripts/publish-xiaohongshu.py`
 
@@ -210,6 +356,17 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 - 自动清理 Markdown 格式和学术化前缀
 - 附带 emoji 热度标识：🔥≥8 分、✅≥6 分、📝<6 分（与博客、微信统一）
 - 少于 1000 字，不输出标签和 `---` 分隔线，开源信息标注清晰
+
+#### `scripts/xiaohongshu-publisher.py`
+
+小红书自动发布脚本（调用小红书 Web API，非官方接口）。
+
+- `--login`：扫码登录，保存 cookie 到本地缓存文件
+- `--publish`：发布当前日期 TOP 3 精选帖（默认）
+- `--all`：发布全部论文（每帖一篇）
+- `--date YYYY-MM-DD`：指定日期
+- 登录后 cookie 持久化，下次无需重复扫码
+- 对应 npm 脚本：`npm run xhs-login`、`npm run xhs-publish`、`npm run xhs-publish-all`
 
 #### `scripts/publish-to-feishu.py`
 

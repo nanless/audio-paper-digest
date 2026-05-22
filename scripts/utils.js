@@ -220,7 +220,12 @@ function parseMachineSummary(analysis) {
         if (!m) continue;
         const mappedKey = keyMap[m[1]];
         if (mappedKey) {
-            result[mappedKey] = stripMd(m[2]);
+            let val = stripMd(m[2]);
+            // 对于 rankBucket，只允许四个标准分档
+            if (mappedKey === 'rankBucket' && !['前10%', '前25%', '前50%', '后50%'].includes(val)) {
+                val = '';
+            }
+            result[mappedKey] = val;
         }
     }
 
@@ -374,6 +379,36 @@ function parseResponseText(apiType, response) {
 function parseAnalysis(analysis) {
     if (!analysis) return null;
 
+    // 标准化标签：加 # 前缀，清理分隔符和多余空格
+    function _normalizeTag(raw) {
+        if (!raw) return '';
+        let t = raw.trim();
+        // 去除反引号
+        t = t.replace(/^[\`\s]+|[\`\s]+$/g, '');
+        // 如果有分号/逗号/顿号，只取第一部分
+        t = t.split(/[,，;；、]/)[0].trim();
+        // 如果还没有 # 前缀，加上
+        if (t && !t.startsWith('#')) t = '#' + t;
+        return t;
+    }
+
+    function _isBadTaskTag(tag) {
+        if (!tag) return true;
+        // snake_case
+        if (/^#[a-z]+_[a-z]+/i.test(tag)) return true;
+        // arXiv 类别
+        if (/^#cs\.[A-Z]{2}$/i.test(tag)) return true;
+        if (/^#eess\.[A-Z]{2}$/i.test(tag)) return true;
+        // 过于宽泛或不合适的标签
+        const badList = ['#theory', '#speech processing', '#system description', '#audio generation', '#系统描述'];
+        if (badList.includes(tag.toLowerCase())) return true;
+        // 过长且含空格的纯英文描述
+        if (tag.length > 15 && tag.includes(' ') && !/[\u4e00-\u9fff]/.test(tag)) return true;
+        // 包含冒号/论文类型等明显不是任务标签的内容
+        if (tag.includes('论文类型') || tag.includes('类型:') || (tag.includes('类型') && tag.includes(':'))) return true;
+        return false;
+    }
+
     const result = {
         score: '', tags: [], authors: '', roast: '', summary: '',
         architecture: '', innovation: '', details: '', results: '',
@@ -400,41 +435,91 @@ function parseAnalysis(analysis) {
     if (!m) m = analysis.match(/(\d+\.?\d*)\s*\/\s*10/);
     if (m) result.score = m[1];
 
-    // 标签
+    // 标签（兼容带 # 前缀和不带 # 前缀的格式）
+    // 先尝试从 ## 标签 部分提取"主任务标签"和"主方法标签"行
+    const tagSectionMatch = analysis.match(/##\s*标签\s*\n([\s\S]*?)(?=\n##\s|\n【|$)/);
+    let extractedTaskTag = '';
+    let extractedMethodTag = '';
+    if (tagSectionMatch) {
+        const tagSection = tagSectionMatch[1];
+        const taskLine = tagSection.match(/主任务标签\s*[：:]\s*(.+)/);
+        if (taskLine) extractedTaskTag = _normalizeTag(taskLine[1]);
+        const methodLine = tagSection.match(/主方法标签\s*[：:]\s*(.+)/);
+        if (methodLine) extractedMethodTag = _normalizeTag(methodLine[1]);
+    }
+
     m = analysis.match(/##\s*标签\s*\n\s*([^\n]+)/);
     if (!m) m = analysis.match(/(?:标签|关键词)[：:]\s*([^\n]+)/);
-    if (m) result.tags = m[1].match(/#\S+/g) || [];
+    if (m) {
+        const rawTags = m[1];
+        // 先尝试匹配带 # 前缀的标签
+        let tags = rawTags.match(/#\S+/g) || [];
+        // 如果没有带 # 的标签，尝试按分隔符拆分并自动添加 # 前缀
+        if (tags.length === 0) {
+            const parts = rawTags.split(/[,，;；、\s]+/).filter(p => p.trim());
+            tags = parts.map(p => {
+                const trimmed = p.trim().replace(/^[`\s]+|[`\s]+$/g, '');
+                return trimmed ? '#' + trimmed : null;
+            }).filter(Boolean);
+        }
+        result.tags = tags;
+    }
 
     const machineSummary = parseMachineSummary(analysis);
     result.machineSummary = machineSummary;
     result.rankBucket = machineSummary.rankBucket;
-    // 如果机器摘要未提供 rankBucket，根据 score 推断分档
-    if (!result.rankBucket && result.score) {
-        const s = parseFloat(result.score);
-        if (!isNaN(s)) {
-            if (s >= 9.0) result.rankBucket = '前10%';
-            else if (s >= 7.5) result.rankBucket = '前25%';
-            else if (s >= 5.5) result.rankBucket = '前50%';
-            else result.rankBucket = '后50%';
-        }
-    }
     result.qualityScore = machineSummary.qualityScore;
     result.valueScore = machineSummary.valueScore;
     result.reproducibilityBonus = machineSummary.reproducibilityBonus;
     result.confidence = machineSummary.confidence;
-    result.primaryTaskTag = machineSummary.primaryTaskTag;
-    result.primaryMethodTag = machineSummary.primaryMethodTag;
+    // 主任务/主方法标签：优先从 ## 标签 部分的"主任务标签"行提取，
+    // 其次从机器摘要获取，最后从 tags[0] fallback。
+    // 如果机器摘要的标签质量太差（snake_case/arXiv类别/过于宽泛），则优先使用 tags[0]。
+    const msTask = _normalizeTag(machineSummary.primaryTaskTag);
+    const msMethod = _normalizeTag(machineSummary.primaryMethodTag);
+    const firstTag = result.tags.length > 0 ? _normalizeTag(result.tags[0]) : '';
+    const secondTag = result.tags.length > 1 ? _normalizeTag(result.tags[1]) : firstTag;
+
+    // 从 tags 列表中找到第一个非坏标签
+    let goodTag = '';
+    for (const t of result.tags) {
+        const nt = _normalizeTag(t);
+        if (nt && !_isBadTaskTag(nt)) {
+            goodTag = nt;
+            break;
+        }
+    }
+
+    if (extractedTaskTag) {
+        result.primaryTaskTag = extractedTaskTag;
+    } else if (!_isBadTaskTag(msTask)) {
+        result.primaryTaskTag = msTask;
+    } else if (goodTag) {
+        result.primaryTaskTag = goodTag;
+    } else {
+        result.primaryTaskTag = msTask || firstTag;
+    }
+
+    if (extractedMethodTag) {
+        result.primaryMethodTag = extractedMethodTag;
+    } else if (!_isBadTaskTag(msMethod)) {
+        result.primaryMethodTag = msMethod;
+    } else if (goodTag && goodTag !== result.primaryTaskTag) {
+        result.primaryMethodTag = goodTag;
+    } else {
+        result.primaryMethodTag = msMethod || secondTag;
+    }
     result.sotaClaim = machineSummary.sotaClaim;
     result.hasCode = machineSummary.hasCode;
     result.hasModel = machineSummary.hasModel;
     result.hasDataset = machineSummary.hasDataset;
 
-    // 作者与机构
-    m = analysis.match(/##\s*作者与机构\s*\n([\s\S]*?)(?=##\s*毒舌点评|$)/);
+    // 作者与机构（使用任意下一节 ## 作为终止，容忍 LLM 标题 typo）
+    m = analysis.match(/##\s*作者与机构\s*\n([\s\S]*?)(?=\n##\s|$)/);
     if (m) result.authors = stripMd(m[1]);
 
-    // 毒舌点评
-    m = analysis.match(/##\s*毒舌点评\s*\n([\s\S]*?)(?=##\s*核心摘要|$)/);
+    // 毒舌点评（使用任意下一节 ## 作为终止，容忍 LLM 标题 typo）
+    m = analysis.match(/##\s*毒舌点评\s*\n([\s\S]*?)(?=\n##\s|$)/);
     if (m) result.roast = stripMd(m[1]);
 
     // 核心摘要
@@ -454,7 +539,7 @@ function parseAnalysis(analysis) {
     m = analysis.match(/#{2,3}\s*(?:\d+[.\s]+)?细节详述[：:\s]*\n([\s\S]*?)(?=#{2,3}\s*(?:\d+[.\s]+)?(?:方法概述和架构|核心创新点|实验结果|评分理由)|$)/);
     if (m) result.details = stripMd(m[1]);
 
-    m = analysis.match(/#{2,3}\s*(?:\d+[.\s]+)?评分理由[：:\s]*\n([\s\S]*?)(?=#{2,3}\s*(?:\d+[.\s]+)?(?:方法概述和架构|核心创新点|实验结果|细节详述)|##\s*(?:局限|开源)|$)/);
+    m = analysis.match(/#{2,3}\s*(?:\d+[.\s]+)?评分理由.*?\n([\s\S]*?)(?=#{2,3}\s*(?:\d+[.\s]+)?(?:方法概述和架构|核心创新点|实验结果|细节详述)|##\s*(?:局限|开源)|$)/);
     if (m) {
         let sr = stripMd(m[1]);
         // 过滤掉 LLM 自己写的"总分"行，避免与代码计算的总分不一致造成困惑
@@ -470,21 +555,44 @@ function parseAnalysis(analysis) {
     m = analysis.match(/##\s*开源(?:详情)?[：:]*\s*([\s\S]*?)$/);
     if (m) result.opensource = stripMd(m[1]);
 
-    // 从评分理由中提取六个分项并计算总分，始终覆盖 LLM 给出的总分
+    // 从评分理由中提取七个分项并计算总分，始终覆盖 LLM 给出的总分
     const scoringText = result.scoringReason || '';
     if (scoringText) {
         const dimScores = {};
-        const dims = ['创新性', '技术严谨性', '实验充分性', '清晰度', '影响力', '开源', '可复现性'];
+        // 每个维度的上限（用于截断旧格式或 LLM 越界输出）
+        const dimMax = {
+            '创新性': 3,
+            '技术严谨性': 1.5,
+            '实验充分性': 1.5,
+            '清晰度': 1,
+            '影响力': 2,
+            '开源': 1.5,
+            '可复现性': 0.5
+        };
+        const dims = Object.keys(dimMax);
         for (const dim of dims) {
-            // 匹配 **创新性：2.3/3** 或 创新性: 2.3/3 等变体
-            const pat = new RegExp(
-                '(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*[:：]\\s*(\\d+\\.?\\d*)\\s*/\\s*\\d+\\.?\\d*\\s*(?:\\*\\*)?'
-            );
-            const dm = scoringText.match(pat);
+            // 支持多种 LLM 输出格式：
+            // 1. **创新性 (3分)**：2.2分
+            // 2. **创新性 (2.5/3)**：...
+            // 3. **创新性: 2.3/3**
+            const patterns = [
+                // 格式1: dim (max/max)**：score
+                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*\\d+\\.?\\d*\\s*(?:/\\s*\\d+\\.?\\d*)?\\s*分?\\s*\\)\\s*(?:\\*\\*)?\\s*[:：]\\s*(?:\\*\\*)?\\s*(\\d+\\.?\\d*)'),
+                // 格式2: dim (score/max)
+                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*(\\d+\\.?\\d*)\\s*/\\s*\\d+\\.?\\d*\\s*\\)'),
+                // 格式3: dim: score/max
+                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*[:：]\\s*(\\d+\\.?\\d*)\\s*/\\s*\\d+\\.?\\d*\\s*(?:\\*\\*)?'),
+            ];
+            let dm = null;
+            for (const pat of patterns) {
+                dm = scoringText.match(pat);
+                if (dm) break;
+            }
             if (dm) {
                 const v = parseFloat(dm[1]);
                 if (!isNaN(v)) {
-                    dimScores[dim] = v;
+                    // 截断到该维度的上限，防止旧格式或 LLM 越界输出导致总分异常
+                    dimScores[dim] = Math.min(v, dimMax[dim]);
                 }
             }
         }
@@ -508,6 +616,17 @@ function parseAnalysis(analysis) {
                 result.machineSummary.valueScore = result.valueScore;
                 result.machineSummary.reproducibilityBonus = result.reproducibilityBonus;
             }
+        }
+    }
+
+    // rankBucket 推断：在评分计算完成后执行，确保基于最终 score
+    if (!result.rankBucket && result.score) {
+        const s = parseFloat(result.score);
+        if (!isNaN(s)) {
+            if (s >= 9.0) result.rankBucket = '前10%';
+            else if (s >= 7.5) result.rankBucket = '前25%';
+            else if (s >= 5.5) result.rankBucket = '前50%';
+            else result.rankBucket = '后50%';
         }
     }
 

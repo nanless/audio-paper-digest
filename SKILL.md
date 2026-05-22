@@ -109,21 +109,21 @@ set -a; source ~/.hermes/.env 2>/dev/null; set +a
 
 API 调用特性：
 - 整体超时 20 分钟（AbortController）
-- max_tokens=15000，temperature=0.7
+- max_tokens=64000，temperature=0.7
 - **双层重试**：analysis-engine.js 层面每篇最多重试 2 次（总共最多 3 次尝试）；deep-analyzer.js 内部每次 API 调用再重试最多 3 次（指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5s`）
 - **LLM API 请求明确设置 `agent: false`，强制直连以绕过本地代理（避免 MiMo 403）；arXiv/HuggingFace 等外部抓取仍使用代理自动检测**
 - arXiv HTML 解析使用 **cheerio** 结构化选择器，移除 script/style/nav/header/footer 等噪音元素
-- 图片下载 **并行化（并发 3）**，下载论文全部图片（无数量限制）；单张 base64 上限 500K 字符；超时后自动降级为纯文本重试
-- 全文上限 100K 字符
+- 图片下载 **并行化（并发 3）**，下载论文全部图片（无数量限制）；单张 base64 上限约 20M 字符（config.js 中 `imageMaxBase64Chars`）；超时后自动降级为纯文本重试
+- 全文上限约 500K 字符（config.js 中 `fullTextMaxChars`）
 - 所有分析配置集中管理于 `scripts/config.js`，支持环境变量覆写
 
 输出约束：
 - prompt 来源：`prompts/deep-analysis.md`，运行时通过 `loadPrompt()` 读取并替换 `{hasFullText}`、`{title}`、`{authors}`、`{categories}`、`{arxivId}`、`{textForAnalysis}` 占位符
 - 固定一级标题：`## 评分`、`## 机器摘要`、`## 标签`、`## 作者与机构`、`## 毒舌点评`、`## 核心摘要`、`## 方法概述和架构`、`## 核心创新点`、`## 实验结果`、`## 细节详述`、`## 评分理由`、`## 局限与问题`、`## 开源详情`
 - `## 评分` 下先输出总分（X.X/10）
-- **代码后处理**：`parseAnalysis`/`parse_analysis` 会从 `## 评分理由` 中提取六个分项（创新性/3、技术严谨性/2、实验充分性/2、清晰度/1、影响力/1、可复现性/1）重新计算总分，四舍五入到 0.5，覆盖 LLM 原始总分
-- `## 机器摘要` 包含 `rank_bucket`（带顶会映射）、`quality_score`（综合学术质量 0-8）、`value_score`（影响力 0-2）、`reproducibility_bonus`（可复现性 0-1）、`confidence`、`primary_task_tag`、`primary_method_tag` 等固定键
-- 评分采用六维审稿人体系：创新性（0-3）+ 技术严谨性（0-2）+ 实验充分性（0-2）+ 清晰度（0-1）+ 影响力（0-1）+ 可复现性（0-1）
+- **代码后处理**：`parseAnalysis`/`parse_analysis` 会从 `## 评分理由` 中提取七个分项（创新性/3、技术严谨性/1.5、实验充分性/1.5、清晰度/1、影响力/2、开源/1.5、可复现性/0.5）重新计算总分，四舍五入到 0.1，覆盖 LLM 原始总分
+- `## 机器摘要` 包含 `rank_bucket`（带顶会映射）、`quality_score`（综合学术质量 0-7）、`value_score`（影响力 0-2）、`reproducibility_bonus`（可复现性综合 0-2）、`confidence`、`primary_task_tag`、`primary_method_tag` 等固定键
+- 评分采用七维审稿人体系：创新性（0-3）+ 技术严谨性（0-1.5）+ 实验充分性（0-1.5）+ 清晰度（0-1）+ 影响力（0-2）+ 开源（0-1.5）+ 可复现性（0-0.5）
 - **代码后处理**：`parseAnalysis`/`parse_analysis` 始终从 `## 评分理由` 提取分项重新计算总分，覆盖 LLM 原始输出，避免 LLM 算错总分
 - 标签输出必须同时包含最终标签串、`主任务标签`、`主方法标签`、`补充标签`
 - 缺失信息必须写"未说明/未提供/未提及"，禁止猜测作者机构、实验数字、开源状态或外部信息
@@ -281,11 +281,12 @@ npm run xiaohongshu -- --date 2026-04-22
 当前行为：
 
 - 默认读 `data/current/deep-analysis-result.json`
+- **按 `fetchedAt` 日期过滤**：只发布 `fetchedAt` 匹配 `--date` 指定日期的论文（默认今天），避免历史数据被重复发布
 - 在 `~/code/github_repos/audio-paper-digest-blog/content/posts` 生成：
   - 汇总页：`YYYY-MM-DD.md`
   - 单篇页：`YYYY-MM-DD-<slug>.md`
 - 默认会执行 `git add -A`、`git commit`、`git push origin main`
-- **发布 `deep-analysis-result.json` 中的全部论文**，不做任何过滤（无论论文的 `published` 日期是今天还是几天前，只要是今天抓取筛选后的结果，全部发布）
+- 若需发布全部论文（不过滤），可手动修改脚本或使用自定义数据文件
 
 Agent 执行约束：
 

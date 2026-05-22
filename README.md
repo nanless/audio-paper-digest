@@ -17,7 +17,9 @@
 | `docs/troubleshooting.md` | 常见问题排查与修复 | 使用者 |
 | `docs/maintenance.md` | 维护约定、评分标准、标签口径 | 维护者 |
 | `prompts/filter.md` | 筛选阶段 LLM prompt | 维护者 |
-| `prompts/deep-analysis.md` | 深度分析阶段 LLM prompt | 维护者 |
+| `prompts/deep-analysis.md` | 深度分析主 prompt（Round 1） | 维护者 |
+| `prompts/opensource-scan.md` | 开源链接扫描 prompt（Round 2） | 维护者 |
+| `prompts/gap-fill.md` | 审校重写 prompt（Round 3） | 维护者 |
 
 > **铁律**：真实行为以 `scripts/*.js` / `scripts/*.py` 当前实现为最终准绳。若文档与代码冲突，以代码为准并修正文档。
 
@@ -104,6 +106,11 @@ npm run wechat
 # 生成小红书文案
 npm run xiaohongshu
 
+# 小红书自动发布（需先登录）
+npm run xhs-login
+npm run xhs-publish
+npm run xhs-publish-all
+
 # 生成飞书文档
 python3 scripts/publish-to-feishu.py
 python3 scripts/publish-to-feishu.py --date 2026-04-21
@@ -157,6 +164,11 @@ python3 scripts/publish-wechat-full.py data/current/deep-analysis-result.json
 python3 scripts/publish-xiaohongshu.py
 python3 scripts/publish-xiaohongshu.py --top 7
 python3 scripts/publish-xiaohongshu.py --all
+
+# 小红书自动发布（需先登录）
+python3 scripts/xiaohongshu-publisher.py --login
+python3 scripts/xiaohongshu-publisher.py
+python3 scripts/xiaohongshu-publisher.py --all
 
 # 生成飞书文档
 python3 scripts/publish-to-feishu.py

@@ -51,7 +51,7 @@ def call_llm_for_oneliner(title, abstract):
         base = base[:-3]
     api_url = f"{base}/anthropic/v1/messages"
 
-    prompt = f"""用1-2句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书。总字数严格控制在50字以内，必须输出完整内容，不要省略：
+    prompt = f"""用1-2句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书。总字数严格控制在70字以内，必须输出完整内容，不要省略：
 
 标题：{title}
 摘要：{abstract[:800]}
@@ -154,7 +154,8 @@ def format_oss_badge(pa):
 
     if badges:
         return '📦 开源：' + ' '.join(badges)
-    return ''
+    # 明确标记未开源，避免信息缺失感
+    return '📦 开源：❌未开源'
 
 
 def generate_top_n_post(scored, unscored, date_str, top_n=5):
@@ -177,7 +178,7 @@ TOP {top_n} 👇
         title = p.get('title', 'Unknown')
         if len(title) > 45:
             title = title[:42] + '...'
-        liner = llm_oneliners.get(i) or smart_truncate(extract_one_liner(pa) or '', max_len=65)
+        liner = llm_oneliners.get(i) or smart_truncate(extract_one_liner(pa) or '', max_len=80)
         fire = score_emoji(score)
         score_line = f'{fire} {score}/10'
         if pa.get('rankBucket'):
@@ -256,8 +257,21 @@ def main():
         i += 1
 
     papers = load_papers(data_file)
-    scored, unscored = score_and_sort(papers)
+
+    # 按 fetchedAt 日期过滤，只保留目标日期的论文
     today = get_today_bj(target_date)
+    filtered = []
+    for p in papers:
+        fa = p.get('fetchedAt', '')
+        if fa and isinstance(fa, str) and fa[:10] == today:
+            filtered.append(p)
+    if filtered:
+        papers = filtered
+        print(f"📅 过滤后: {len(papers)} 篇论文 (fetchedAt={today})")
+    else:
+        print(f"⚠️  没有 fetchedAt={today} 的论文，使用全部 {len(papers)} 篇")
+
+    scored, unscored = score_and_sort(papers)
 
     if mode == 'all':
         md = generate_all_summary_post(scored, unscored, today)

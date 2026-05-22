@@ -54,11 +54,12 @@ def score_and_sort(papers):
     """
     解析每篇论文的分析结果，按评分降序排列。
     返回 [(score, paper, parsed), ...]，未评分的排在最后。
+    优先使用已解析好的 parsed 数据，避免重新解析覆盖手动修正。
     """
     scored = []
     unscored = []
     for p in papers:
-        pa = parse_analysis(p.get('analysis', ''))
+        pa = p.get('parsed') or parse_analysis(p.get('analysis', ''))
         if pa and pa.get('score'):
             try:
                 scored.append((float(pa['score']), p, pa))
@@ -74,10 +75,11 @@ def extract_top_tags(papers, limit=8):
     """
     从论文列表中提取主任务标签并统计频次。
     返回 [(tag, count), ...]，按数量降序。
+    优先使用已解析好的 parsed 数据。
     """
     tag_count = {}
     for p in papers:
-        pa = parse_analysis(p.get('analysis', ''))
+        pa = p.get('parsed') or parse_analysis(p.get('analysis', ''))
         if not pa:
             continue
         hot_tag = pa.get('primaryTaskTag') or (pa['tags'][0] if pa.get('tags') else '')
@@ -90,10 +92,11 @@ def extract_all_tags(papers, limit=10):
     """
     提取所有标签（去重），用于博客标签云。
     返回标签字符串列表（不带 #）。
+    优先使用已解析好的 parsed 数据。
     """
     tag_set = set()
     for p in papers:
-        pa = parse_analysis(p.get('analysis', ''))
+        pa = p.get('parsed') or parse_analysis(p.get('analysis', ''))
         if not pa:
             continue
         if pa.get('primaryTaskTag'):
@@ -155,7 +158,7 @@ def extract_one_liner(pa):
     text = text.strip()
 
     if len(text) > 10:
-        return text[:90] + ('...' if len(text) > 90 else '')
+        return text[:110] + ('...' if len(text) > 110 else '')
     return ''
 
 
