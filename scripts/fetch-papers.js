@@ -224,7 +224,9 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
 
             const xml = await response.text();
             const papers = parseArxivXML(xml, categoryId, existingIds);
-            console.log(`[fetch] ${categoryId} 成功获取 ${papers.length} 篇新论文${existingIds ? '（遇到重复已提前停止）' : ''}`);
+            const meta = papers._meta || {};
+            const stoppedNote = meta.stoppedAtConsecutive ? '（遇到重复已提前停止）' : '';
+            console.log(`[fetch] ${categoryId} 成功获取 ${papers.length} 篇新论文${stoppedNote}`);
             return papers;
 
         } catch (err) {
@@ -252,9 +254,12 @@ function parseArxivXML(xml, categoryId, existingIds = null) {
     const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
     let match;
     let consecutiveExisting = 0;
+    let entryCount = 0;
+    let stoppedAtConsecutive = false;
 
     while ((match = entryRegex.exec(xml)) !== null) {
         const entry = match[1];
+        entryCount++;
 
         const idMatch = entry.match(/<id>(.*?)<\/id>/);
         if (!idMatch) continue;
@@ -264,6 +269,7 @@ function parseArxivXML(xml, categoryId, existingIds = null) {
             consecutiveExisting++;
             if (consecutiveExisting >= ARXIV_CONFIG.consecutiveExistingThreshold) {
                 console.log(`[fetch] 遇到连续 ${consecutiveExisting} 篇已知论文，停止抓取 ${categoryId}`);
+                stoppedAtConsecutive = true;
                 break;
             }
             continue;
@@ -306,6 +312,7 @@ function parseArxivXML(xml, categoryId, existingIds = null) {
         });
     }
 
+    papers._meta = { entryCount, stoppedAtConsecutive };
     return papers;
 }
 

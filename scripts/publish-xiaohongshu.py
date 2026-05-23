@@ -122,7 +122,7 @@ def generate_llm_oneliners(top_papers):
         return None
 
     results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         future_to_idx = {executor.submit(worker, item): i for i, item in enumerate(top_papers)}
         for future in concurrent.futures.as_completed(future_to_idx):
             idx = future_to_idx[future]

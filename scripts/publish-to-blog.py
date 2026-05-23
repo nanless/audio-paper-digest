@@ -17,7 +17,7 @@ setup_script_logging(__file__)
     python3 publish-to-blog.py --skip-push     # 只生成 .md 不推送到 GitHub
     python3 publish-to-blog.py --date YYYY-MM-DD
 """
-import json, re, sys, os, subprocess, datetime, base64, time
+import json, re, sys, os, subprocess, datetime, base64, time, concurrent.futures
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -821,8 +821,58 @@ def review_and_fix_post(file_path):
     return fixed, issues
 
 
+def _review_single_paper(args):
+    """并发 review 单篇论文，返回 (title, fixed_count, issue_count, output_lines)"""
+    arxiv_id, slug, date_str, title = args
+    paper_file = os.path.join(CONTENT_DIR, f"{date_str}-{slug}.md")
+    if not os.path.exists(paper_file):
+        return None
+
+    fixed_count = 0
+    issue_count = 0
+    lines = []
+
+    # 1. 代码检查
+    fixed, issues = review_and_fix_post(paper_file)
+    if fixed:
+        fixed_count += 1
+        lines.append("    🛠️  代码层自动修复")
+    for issue in issues:
+        lines.append(f"    ⚠️  代码层: {issue}")
+
+    # 2. LLM 文本审查
+    with open(paper_file, 'r', encoding='utf-8') as f:
+        content = f.read()
+    llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, title)
+    if llm_issues:
+        issue_count += len(llm_issues)
+        for issue in llm_issues:
+            sev = issue.get('severity', 'warning')
+            desc = issue.get('description', '')
+            lines.append(f"    🤖 LLM ({sev}): {desc}")
+        if llm_fixed_content != content:
+            with open(paper_file, 'w', encoding='utf-8') as f:
+                f.write(llm_fixed_content)
+            fixed_count += 1
+            lines.append("    🛠️  LLM 自动修复已应用")
+
+    # 3. 多模态图片审查
+    img_passed, img_issues = multimodal_review_images(content, title)
+    if img_issues:
+        issue_count += len(img_issues)
+        for issue in img_issues:
+            sev = issue.get('severity', 'warning')
+            desc = issue.get('description', '')
+            lines.append(f"    🖼️  多模态 ({sev}): {desc}")
+
+    if not issues and not llm_issues and not img_issues:
+        lines.append("    ✅ 通过 review")
+
+    return title, fixed_count, issue_count, lines
+
+
 def review_all_posts(date_str, paper_slugs, scored_papers):
-    """三层 review：代码检查 → LLM 文本审查 → 多模态图片审查"""
+    """三层 review：代码检查 → LLM 文本审查 → 多模态图片审查（论文独立页面并发执行）"""
     print("\n🔍 开始三层 review（代码检查 → LLM 审查 → 多模态图片审查）...")
     total_fixed = 0
     total_issues = 0
@@ -832,7 +882,7 @@ def review_all_posts(date_str, paper_slugs, scored_papers):
     for score, p, pa in scored_papers:
         title_map[p.get('arxivId', '')] = p.get('title', '')
 
-    # Review 汇总页面
+    # Review 汇总页面（串行，只有1个）
     index_file = os.path.join(CONTENT_DIR, f"{date_str}.md")
     if os.path.exists(index_file):
         print("\n  📋 汇总页面:")
@@ -863,49 +913,24 @@ def review_all_posts(date_str, paper_slugs, scored_papers):
         if not issues and not llm_issues:
             print(f"    ✅ 通过 review")
 
-    # Review 每篇论文独立页面
-    for arxiv_id, slug in paper_slugs.items():
-        paper_file = os.path.join(CONTENT_DIR, f"{date_str}-{slug}.md")
-        if not os.path.exists(paper_file):
-            continue
-        title = title_map.get(arxiv_id, slug)
-        print(f"\n  📄 {title[:50]}...")
+    # Review 每篇论文独立页面（并发）
+    paper_args = [
+        (arxiv_id, slug, date_str, title_map.get(arxiv_id, slug))
+        for arxiv_id, slug in paper_slugs.items()
+    ]
 
-        # 1. 代码检查
-        fixed, issues = review_and_fix_post(paper_file)
-        if fixed:
-            total_fixed += 1
-            print(f"    🛠️  代码层自动修复")
-        for issue in issues:
-            print(f"    ⚠️  代码层: {issue}")
-
-        # 2. LLM 文本审查
-        with open(paper_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-        llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, title)
-        if llm_issues:
-            total_issues += len(llm_issues)
-            for issue in llm_issues:
-                sev = issue.get('severity', 'warning')
-                desc = issue.get('description', '')
-                print(f"    🤖 LLM ({sev}): {desc}")
-            if llm_fixed_content != content:
-                with open(paper_file, 'w', encoding='utf-8') as f:
-                    f.write(llm_fixed_content)
-                total_fixed += 1
-                print(f"    🛠️  LLM 自动修复已应用")
-
-        # 3. 多模态图片审查
-        img_passed, img_issues = multimodal_review_images(content, title)
-        if img_issues:
-            total_issues += len(img_issues)
-            for issue in img_issues:
-                sev = issue.get('severity', 'warning')
-                desc = issue.get('description', '')
-                print(f"    🖼️  多模态 ({sev}): {desc}")
-
-        if not issues and not llm_issues and not img_issues:
-            print(f"    ✅ 通过 review")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        futures = [executor.submit(_review_single_paper, args) for args in paper_args]
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result is None:
+                continue
+            title, fixed_count, issue_count, lines = result
+            print(f"\n  📄 {title[:50]}...")
+            for line in lines:
+                print(line)
+            total_fixed += fixed_count
+            total_issues += issue_count
 
     if total_fixed == 0 and total_issues == 0:
         print("\n  ✅ 所有文件通过三层 review，无问题")

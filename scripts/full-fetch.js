@@ -151,26 +151,32 @@ async function fullFetch() {
         arxivPapers.push(...papers);
         console.log(`    获取 ${papers.length} 篇新论文`);
 
-        // 核心类别（eess.AS / cs.SD）若重试后仍获取 0 篇，说明 arXiv API 严重限流，停止运行
+        // 核心类别（eess.AS / cs.SD）若重试后仍获取 0 篇，需区分：API 正常但无新论文 vs 限流
+        const meta = papers._meta || {};
         if (category.priority === 'core' && papers.length === 0) {
-            console.error(`\n❌ 核心类别 ${category.id}（${category.name}）在全部重试后仍获取 0 篇论文，arXiv API 可能处于严重限流状态`);
-            console.error(`   停止今日运行，清除已获取的数据...`);
+            if (meta.entryCount > 0 && meta.stoppedAtConsecutive) {
+                console.log(`\nℹ️ 核心类别 ${category.id}（${category.name}）API 正常返回 ${meta.entryCount} 篇论文，但均为已知论文（可能周末/节假日无更新）`);
+                console.log(`   继续运行，尝试其他来源...`);
+            } else {
+                console.error(`\n❌ 核心类别 ${category.id}（${category.name}）在全部重试后仍获取 0 篇论文，arXiv API 可能处于严重限流状态`);
+                console.error(`   停止今日运行，清除已获取的数据...`);
 
-            // 清除今天可能已产生的数据文件
-            const filesToClear = [FILTERED_FILE, RESULT_FILE, LEGACY_RESULT_FILE];
-            for (const f of filesToClear) {
-                if (fs.existsSync(f)) {
-                    try {
-                        fs.unlinkSync(f);
-                        console.log(`   已清除: ${path.basename(f)}`);
-                    } catch (e) {
-                        console.log(`   清除失败 ${path.basename(f)}: ${e.message}`);
+                // 清除今天可能已产生的数据文件
+                const filesToClear = [FILTERED_FILE, RESULT_FILE, LEGACY_RESULT_FILE];
+                for (const f of filesToClear) {
+                    if (fs.existsSync(f)) {
+                        try {
+                            fs.unlinkSync(f);
+                            console.log(`   已清除: ${path.basename(f)}`);
+                        } catch (e) {
+                            console.log(`   清除失败 ${path.basename(f)}: ${e.message}`);
+                        }
                     }
                 }
-            }
 
-            console.error(`\n📢 今日运行已终止。建议稍后再试（arXiv 周末/节假日限流较严重）。`);
-            process.exit(1);
+                console.error(`\n📢 今日运行已终止。建议稍后再试。`);
+                process.exit(1);
+            }
         }
 
         await new Promise(resolve => setTimeout(resolve, FETCH_DELAY_MS));
