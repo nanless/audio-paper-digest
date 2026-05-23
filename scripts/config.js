@@ -32,13 +32,14 @@ const ARXIV_CATEGORIES = [
 
 const ARXIV_CONFIG = {
     maxResultsPerCategory: 100,
-    fetchMaxRetries: 6,
-    fetchRetryBaseDelayMs: 2000,
-    fetchRateLimitBaseDelayMs: 5000,
-    fetchMaxWaitMs: 60000,
-    categoryDelayMs: 2000,
+    fetchMaxRetries: 20,
+    fetchRetryBaseDelayMs: 3000,
+    fetchRateLimitBaseDelayMs: 15000,
+    fetchMaxWaitMs: 300000,
+    categoryDelayMs: 25000,
+    firstRequestDelayMs: 5000,
     consecutiveExistingThreshold: 20,
-    userAgent: 'Mozilla/5.0 (compatible; PaperDigest/1.0)'
+    userAgent: 'audio-paper-digest-bot/1.0 (https://github.com/nanless/audio-paper-digest; contact@example.com)'
 };
 
 // ═══════════════════════════════════════════════════════
@@ -64,14 +65,13 @@ const ANALYSIS_CONFIG = {
     apiOverallTimeoutMs: 20 * 60 * 1000,  // 20 分钟
     apiMaxRetries: 3,
     apiRetryBaseDelayMs: 5000,
-    apiMaxTokens: 32000,
+    apiMaxTokens: 64000,
     apiTemperature: 0.7,
     arxivFetchTimeoutMs: 30000,
     imageDownloadTimeoutMs: 15000,
-    imageMaxBase64Chars: 500000,
+    imageMaxBase64Chars: 20000000,
     imageMaxCount: 999,
-    imageMaxPerMessage: 20,
-    fullTextMaxChars: 100000,
+    fullTextMaxChars: 500000,
     fullTextMinCharsForFull: 500
 };
 
