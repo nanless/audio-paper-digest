@@ -1,7 +1,7 @@
 ---
 name: audio-paper-digest
 description: >
-  语音/音频论文速递自动化技能。抓取 arXiv + HuggingFace Papers，使用环境变量配置的 LLM 做筛选与深度分析，
+  语音/音乐/音频论文速递自动化技能。抓取 arXiv + HuggingFace Papers，使用环境变量配置的 LLM 做筛选与深度分析，
   输出结构化 JSON，并可发布到 GitHub Pages 博客、微信公众号草稿与小红书文案。
   适用场景：论文速递、论文摘要、每日追踪、重分析、博客发布、微信发布与小红书发布。
 ---
@@ -174,7 +174,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 # 博客发布
 # PAPER_DIGEST_BLOG_REPO=~/code/github_repos/audio-paper-digest-blog
 # PAPER_DIGEST_BLOG_BASE_PATH=/audio-paper-digest-blog
-# PAPER_DIGEST_BLOG_URL=https://your-username.github.io/your-repo
+# PAPER_DIGEST_BLOG_URL=https://nanless.github.io/audio-paper-digest-blog/posts
 # PAPER_DIGEST_GITHUB_REMOTE=origin
 
 # 微信公众号作者（可选）

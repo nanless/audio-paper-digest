@@ -46,7 +46,7 @@ set -a; source ~/.hermes/.env 2>/dev/null; set +a
 |------|------|--------|
 | `PAPER_DIGEST_BLOG_REPO` | Hugo 博客仓库本地路径 | `~/code/github_repos/audio-paper-digest-blog` |
 | `PAPER_DIGEST_BLOG_BASE_PATH` | 博客站点 base URL 路径（影响内部链接） | `/audio-paper-digest-blog` |
-| `PAPER_DIGEST_BLOG_URL` | 博客部署后的访问地址（如 `https://xxx.github.io/xxx`） | 空 |
+| `PAPER_DIGEST_BLOG_URL` | 博客部署后的访问地址（如 `https://nanless.github.io/audio-paper-digest-blog/posts`） | `https://nanless.github.io/audio-paper-digest-blog/posts` |
 | `PAPER_DIGEST_GITHUB_REMOTE` | Git 远程仓库名称 | `origin` |
 
 #### 微信公众号
@@ -114,7 +114,7 @@ FEISHU_APP_ID=your-feishu-app-id
 FEISHU_APP_SECRET=your-feishu-app-secret
 
 # 博客/小红书（如需在文案中展示博客地址）
-# PAPER_DIGEST_BLOG_URL=https://your-username.github.io/your-repo
+# PAPER_DIGEST_BLOG_URL=https://nanless.github.io/audio-paper-digest-blog/posts
 ```
 
 **重要说明**：
@@ -191,7 +191,7 @@ EOF
 
 ```bash
 # 默认路径（不设置 env 时的默认值）
-git clone https://github.com/your-username/your-blog-repo.git \
+git clone https://github.com/nanless/audio-paper-digest-blog.git \
   ~/code/github_repos/audio-paper-digest-blog
 
 # 或自定义路径

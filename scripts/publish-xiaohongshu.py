@@ -167,8 +167,8 @@ def generate_top_n_post(scored, unscored, date_str, top_n=5):
 
     total = len(scored) + len(unscored)
     repo_url = os.environ.get('PAPER_DIGEST_REPO_URL', 'github.com/nanless/audio-paper-digest')
-    blog_url = os.environ.get('PAPER_DIGEST_BLOG_URL', '[博客地址]')
-    md = f"""✅ {date_str} AI论文速递 | {total}篇
+    blog_url = os.environ.get('PAPER_DIGEST_BLOG_URL', 'https://nanless.github.io/audio-paper-digest-blog/posts')
+    md = f"""✅ {date_str} 语音/音乐/音频论文速递 | {total}篇
 
 TOP {top_n} 👇
 
@@ -205,7 +205,7 @@ def generate_all_summary_post(scored, unscored, date_str):
     """生成完整汇总版（每篇一行，适合分篇发或自己选择）"""
     total = len(scored) + len(unscored)
     repo_url = os.environ.get('PAPER_DIGEST_REPO_URL', 'github.com/nanless/audio-paper-digest')
-    md = f"✅ {date_str} 语音/AI论文速递 | 共{total}篇\n\n🛠️ 筛选+分析流水线开源：{repo_url}\n\n"
+    md = f"✅ {date_str} 语音/音乐/音频论文速递 | 共{total}篇\n\n🛠️ 筛选+分析流水线开源：{repo_url}\n\n"
     for i, (score, p, pa) in enumerate(scored):
         medal = format_medal(i)
         title = p.get('title', '')[:50]
@@ -221,7 +221,7 @@ def generate_all_summary_post(scored, unscored, date_str):
             md += f"   {oss_line}\n"
         md += "\n"
 
-    blog_url = os.environ.get('PAPER_DIGEST_BLOG_URL', '[博客地址]')
+    blog_url = os.environ.get('PAPER_DIGEST_BLOG_URL', 'https://nanless.github.io/audio-paper-digest-blog/posts')
     repo_url = os.environ.get('PAPER_DIGEST_REPO_URL', 'github.com/nanless/audio-paper-digest')
     md += f"""📄 全部论文：{blog_url}/{date_str}/
 🛠️ 筛选+分析流水线开源：{repo_url}

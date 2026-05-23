@@ -29,12 +29,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/<your-username>/audio-paper-digest.git"
+    "url": "git+https://github.com/nanless/audio-paper-digest.git"
   },
   "bugs": {
-    "url": "https://github.com/<your-username>/audio-paper-digest/issues"
+    "url": "https://github.com/nanless/audio-paper-digest/issues"
   },
-  "homepage": "https://github.com/<your-username>/audio-paper-digest#readme",
+  "homepage": "https://github.com/nanless/audio-paper-digest#readme",
   "dependencies": {
     "cheerio": "^1.2.0",
     "pdf-parse": "^2.4.5"

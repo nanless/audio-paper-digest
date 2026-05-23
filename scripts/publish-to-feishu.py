@@ -224,7 +224,7 @@ def generate_overview_md(scored, unscored, date_str):
     total = len(scored) + len(unscored)
     top_tags = extract_top_tags([p for _, p, _ in scored] + unscored, limit=8)
 
-    md = f'# 语音/音频论文速递 {date_str}\n\n'
+    md = f'# 语音/音乐/音频论文速递 {date_str}\n\n'
     md += f'共分析 **{total}** 篇论文\n\n'
     md += '---\n\n'
     md += '## 今日概览\n\n'
@@ -296,7 +296,7 @@ def main():
 
     # Create document
     total = len(scored) + len(unscored)
-    doc_title = f"📚 语音/音频论文速递 {today} | {total}篇"
+    doc_title = f"📚 语音/音乐/音频论文速递 {today} | {total}篇"
     print(f"📝 创建飞书文档: {doc_title}")
     doc = create_document(token, doc_title)
     doc_id = doc['document_id']

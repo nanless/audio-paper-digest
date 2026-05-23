@@ -304,7 +304,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 1. 生成 `.md` 文件到博客仓库 `content/posts/`
 2. `git add -A` → `git commit -m "add: 论文速递 YYYY-MM-DD"` → `git push origin main`
 3. GitHub Actions 自动构建并部署到 Pages
-4. 访问：`https://<your-username>.github.io/<your-repo>/posts/YYYY-MM-DD/`
+4. 访问：`https://nanless.github.io/audio-paper-digest-blog/posts/YYYY-MM-DD/`
 
 **参数**：
 - `--date YYYY-MM-DD`（强烈建议显式指定，避免跨天时日期错误）
@@ -327,7 +327,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 - **图片上传**：下载 arXiv 图片 → 上传到微信 CDN → 替换为微信 URL。缓存保存在 `/tmp/wechat-image-cache.json`
 - **自动分 Part**：单篇草稿上限约 48000 字符（HTML），超过自动拆分为多个草稿
   - 只有 Part 1 包含"今日概览"
-  - 每 Part 标题：`语音/音频论文速递 YYYY-MM-DD | part N | M篇论文`
+  - 每 Part 标题：`语音/音乐/音频论文速递 YYYY-MM-DD | part N | M篇论文`
 - 生成预览 HTML：`data/current/wechat-preview-YYYY-MM-DD.html`
 
 #### `scripts/publish_common.py`

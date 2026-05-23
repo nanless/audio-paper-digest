@@ -413,7 +413,7 @@ def generate_index_page(scored, unscored, date_str, paper_slugs):
     top_tags = extract_top_tags([p for _, p, _ in scored] + unscored, limit=8)
 
     md = f"""---
-title: "语音/音频论文速递 {date_str}"
+title: "语音/音乐/音频论文速递 {date_str}"
 date: {date_str}
 draft: false
 tags: [{', '.join(tag_set)}]
@@ -422,7 +422,7 @@ description: "共分析 {total} 篇语音/AI 论文"
 layout: "posts"
 ---
 
-# 语音/音频论文速递 {date_str}
+# 语音/音乐/音频论文速递 {date_str}
 
 共分析 **{total}** 篇论文
 
@@ -741,7 +741,7 @@ hiddenInHomeList: true
         for i, img_url in enumerate(image_urls[:5], 1):
             md += f'![图{i}]({img_url})\n\n'
 
-    md += f'\n---\n\n[← 返回 {date_str} 论文速递]({BASE_PATH}/posts/{date_str}/)\n'
+    md += f'\n---\n\n[← 返回 {date_str} 语音/音乐/音频论文速递]({BASE_PATH}/posts/{date_str}/)\n'
 
     return md, slug
 
@@ -937,7 +937,7 @@ def git_push(date_str):
 
     if result.returncode == 0:
         print(f"  ✅ 已推送到 GitHub，自动部署中...")
-        blog_url = os.environ.get('PAPER_DIGEST_BLOG_URL', '')
+        blog_url = os.environ.get('PAPER_DIGEST_BLOG_URL', 'https://nanless.github.io/audio-paper-digest-blog/posts')
         if blog_url:
             print(f"  🌐 {blog_url}/{date_str}/")
         return True

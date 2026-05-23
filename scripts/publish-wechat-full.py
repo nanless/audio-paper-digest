@@ -275,9 +275,9 @@ def main():
         part_paper_count = len(part_indices)
 
         if total_parts == 1:
-            part_title = f"语音/音频论文速递 {today} | {total}篇论文"
+            part_title = f"语音/音乐/音频论文速递 {today} | {total}篇论文"
         else:
-            part_title = f"语音/音频论文速递 {today} | part {part_num} | {part_paper_count}篇论文"
+            part_title = f"语音/音乐/音频论文速递 {today} | part {part_num} | {part_paper_count}篇论文"
 
         html = f'<h2 style="text-align:center;">{part_title}</h2>\n'
         if total_parts > 1:
@@ -330,7 +330,7 @@ def main():
             print(f"  ❌ Part {part_num} 请求异常: {e}")
 
     preview_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'current', f'wechat-preview-{today}.html')
-    first_part_html = f'<h2 style="text-align:center;">语音/音频论文速递 {today}</h2>\n'
+    first_part_html = f'<h2 style="text-align:center;">语音/音乐/音频论文速递 {today}</h2>\n'
     first_part_html += f'<p style="text-align:center;color:#888;">共 {total} 篇，分 {total_parts} 部分</p>\n<hr/>\n'
     first_part_html += overview
     for ph, _ in paper_htmls:
