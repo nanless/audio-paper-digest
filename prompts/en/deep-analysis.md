@@ -1,0 +1,335 @@
+# Deep Analysis Prompt — In-depth Reading of a Single Paper
+
+## Purpose
+Used during the deep analysis stage for the LLM to read the full paper (+ optional figures) and output a structured analysis report.
+
+## Invocation
+The code reads this file and replaces placeholders with actual values:
+- `{hasFullText}` → "Below is the full paper; please read all technical details carefully." or "Below is the paper abstract."
+- `{textForAnalysis}` → excerpt from the full paper or the abstract
+- `{title}` → paper title
+- `{authors}` → author list (comma-separated string)
+- `{categories}` → paper categories (comma-separated string)
+- `{arxivId}` → arXiv ID
+
+## Prompt Content
+
+```
+Please perform an in-depth analysis of the following paper from the perspective of a top-tier conference reviewer (NeurIPS / ICML / ICLR style). {hasFullText}
+
+Paper Title: {title}
+Authors: {authors}
+Categories: {categories}
+arXiv ID: {arxivId}
+Link: https://arxiv.org/abs/{arxivId}
+
+{textForAnalysis}
+
+Please output in the following fixed format (in Chinese). Do not add or remove any level-1 headings. Missing information must be explicitly written as "not stated", "not provided", or "not mentioned in the paper". Do not guess based on common sense, author reputation, institution reputation, email addresses, external web pages, or historical memory.
+
+## 评分
+First output the total score alone; the format must be: X.X/10
+
+## 机器摘要
+**Must strictly follow the key-value pair format below, one key-value pair per line. Key names must match the examples exactly; prose paragraphs are prohibited. If any item cannot be determined, write "未说明".**
+
+```
+rank_bucket: 前10% / 前25% / 前50% / 后50%
+quality_score: X.X
+value_score: X.X
+reproducibility_bonus: X.X
+confidence: 高 / 中 / 低
+primary_task_tag: #标签
+primary_method_tag: #标签
+sota_claim: 是 / 否 / 未说明
+has_code: 是 / 否 / 未说明
+has_model: 是 / 否 / 未说明
+has_dataset: 是 / 否 / 未说明
+```
+
+**Field descriptions**:
+- `rank_bucket`: choose exactly one from 前10% / 前25% / 前50% / 后50%
+- `quality_score`: overall academic quality (innovation + technical rigor + experimental thoroughness + clarity), range 0–7
+- `value_score`: impact and importance, range 0–2
+- `reproducibility_bonus`: overall reproducibility (open-source completeness 0–1.5 + documentation/detail sufficiency 0–0.5), combined range 0–2
+- `confidence`: 高 / 中 / 低
+- `primary_task_tag`: select the single most important **task** tag from the tags (starting with `#`, e.g. `#语音识别`, `#语音合成`, `#音频生成`, `#音乐生成`, `#音频降噪`, `#语音情感识别`, etc.). **Do not** use method names, arXiv categories, or prose descriptions as task tags.
+- `primary_method_tag`: select the single most important **method** tag from the tags (starting with `#`, e.g. `#扩散模型`, `#预训练`, `#对比学习`, `#自监督学习`, etc.)
+- `sota_claim`: whether the paper explicitly claims to achieve SOTA
+- `has_code` / `has_model` / `has_dataset`: whether code / model / dataset is provided
+
+【Scoring Rules】
+1. First determine the paper's relative position among contemporaneous work in the same direction; choose only from 前10% / 前25% / 前50% / 后50%. 前10% corresponds to breakthrough work; 前25% to clearly excellent work; 前50% to acceptable-to-good work; 后50% to work with notable issues.
+2. Total score = Innovation (0–3) + Technical Rigor (0–1.5) + Experimental Thoroughness (0–1.5) + Clarity (0–1) + Impact (0–2) + Open Source (0–1.5) + Reproducibility (0–0.5), rounded to 0.1, maximum 10.
+3. Scores must be discriminative but not artificially suppressed. Scores ≥ 9.0 are reserved for truly milestone-potential work; 8.0–8.5 for solid contributions on important problems with clear impact; most solid but non-breakthrough papers should fall in 6.0–7.5. Do not lower the innovation score of engineering papers simply because they "combine existing techniques" — what matters is whether the combination yields new insight, solves a real important problem, and brings verifiable significant improvement.
+4. rank_bucket must be consistent with the total score: total ≥ 9.0 must be 前10%; total 8.0–8.5 must be 前25%; total 6.5–7.5 should be 前50% or 前25% (depending on specific quality); total < 6.0 is generally 后50%.
+5. Do not reject paper quality simply because the task is niche. Niche, vertical, special-population, pathological speech, animal sounds, etc., should be scored normally on "innovation" and "technical rigor" — as long as the problem is well defined and the method has substantive breakthrough, the innovation score must not be suppressed due to narrow audience; however, "impact" must be scored low (typically ≤ 0.5), because such work naturally has limited broad domain-driving effect and follow-up value. Experimental thoroughness may be moderately reduced only for aspects related to dataset generality.
+6. If the paper lacks key experiments, comparisons are insufficient, or conclusions are jumpy, deduct significantly in "experimental thoroughness"; if reproduction information is vague or training details are missing, deduct in "reproducibility"; if only a GitHub link is given with no README or documentation, deduct in "open source".
+7. If the paper is poorly written, symbols are inconsistent, or key details are missing making reproduction impossible, deduct in "clarity".
+8. If the paper has obvious errors in method derivation, proofs are not rigorous, or algorithm logic has flaws, deduct significantly in "technical rigor".
+9. 【Domain-Relevance Constraint — Most Important】This analysis is aimed at **speech / music / audio domain readers**. If the paper's core contribution is not in speech / music / audio (e.g., pure computer vision, pure natural language processing, pure law/policy frameworks, pure general machine learning theory, pure robotics/embodied AI), even if the technical quality is excellent, the **"impact" dimension must be significantly reduced (typically ≤ 0.5)**, because its direct relevance and practical value for speech / music / audio domain readers is limited. Such papers should not receive high scores due to "cross-domain generality" or "the method could theoretically be adapted to audio". Only when the paper explicitly takes speech / music / audio as the core experimental object, core evaluation task, or core application scenario can impact be scored normally.
+
+【Dimension Explanations】
+- Innovation (0–3): Is the problem novel? Does the method have essential breakthrough? Is the insight deep? Is the distinction from SOTA clear and convincing? Do not give low scores merely for "combining existing techniques"; what matters is whether the combination yields new insight and solves a real problem.
+- Technical Rigor (0–1.5): Are derivations/proofs correct? Are there logical flaws in the algorithm? Are assumptions reasonable? Are boundary conditions discussed? Is mathematical formulation rigorous? Is there over-simplification?
+- Experimental Thoroughness (0–1.5): Are baselines sufficient and representative? Are ablation studies complete? Is dataset coverage adequate? Do results truly support the conclusions? Is there statistical significance testing or error analysis? Is there suspicion of overfitting?
+- Clarity (0–1): Organization, symbol definitions, formula explanations, figure quality. Can a reader understand the core method and reproduce it without reading source code? Deduct for poor writing or missing key details.
+- Impact (0–2): Domain-driving effect, potential follow-up value, practical application potential, relevance to audio/speech readers. Give high scores if the paper achieves SOTA on important benchmarks, releases large-scale datasets/tools, or solves long-standing practical problems in the domain — but only if these contributions **directly serve the speech / music / audio domain**. If the core contribution is in computer vision, natural language processing, law/policy, or general machine learning, impact must be low (typically ≤ 0.5), because speech / music / audio readers cannot directly benefit. Narrowly applicable minor improvements or non-audio-core work can only receive low scores.
+- Open Source (0–1.5): Are code / model / data / checkpoints publicly available? 1.5 requires code + model + data all open-sourced with complete README and documentation; 1.0 requires code open-sourced but missing model or documentation; 0.5 for partial resources or no documentation link; 0 for completely closed.
+- Reproducibility (0–0.5): Documentation sufficiency beyond open source — training details, hyperparameters, hardware environment, experimental configuration, reproduction steps — are they sufficient for others to reproduce without relying on the authors? 0.5 for complete details; 0.25 for partially missing information; 0 for completely missing key details.
+
+【Reference Ranges】
+- 9.0–10.0: Breakthrough contribution, domain milestone candidate, method or result has paradigm-shifting potential
+- 8.0–8.5: High-level work, solid contribution on an important problem, clear impact or significant performance improvement, worth careful reading
+- 6.5–7.5: Valuable but not outstanding, or has minor flaws, acceptable-to-good, of reference value to researchers in specific directions
+- 5.0–6.0: Limited innovation, weak experiments, conclusions not important or have obvious flaws, suitable only for quick skimming
+- 1.0–4.5: Serious problems, derivation errors, experiments do not support conclusions, or extremely poor writing, not recommended to invest time
+
+## 标签
+
+**Strict format requirements (must be followed; no lines may be omitted):**
+
+```
+#标签1 #标签2 #标签3 #标签4
+主任务标签：#任务标签
+主方法标签：#方法标签
+补充标签：#标签 #标签
+```
+
+**Example (assuming the paper is about speech recognition):**
+
+```
+#语音识别 #语音大模型 #多语言 #低资源
+主任务标签：#语音识别
+主方法标签：#语音大模型
+补充标签：#多语言 #低资源
+```
+
+**Format rules (violations will cause parsing failures):**
+1. The first line is the complete list of all tags; each tag must start with `#` and be separated by spaces. Do not use commas, semicolons, or enumeration commas.
+2. **The second line must** start with `主任务标签：`, followed by a task tag starting with `#` (select the most specific task tag from the tag table below).
+3. **The third line must** start with `主方法标签：`, followed by a method tag starting with `#` (select the most core method tag from the tag table below).
+4. The fourth line starts with `补充标签：`, followed by the remaining tags.
+5. **Do not** use arXiv categories as tags (e.g., `#cs.CL`, `#cs.AI`, `#eess.AS`, etc.).
+6. **Do not** output plain text without a `#` prefix (e.g., `uncertainty_estimation`, `Speech Processing`, etc.).
+7. **Do not** let a single tag contain multiple comma/semicolon-separated items (e.g., `#语音情感识别；政治演讲分析` is wrong; split into two independent tags).
+8. All tags must be selected from the tag table below; do not invent new tags.
+
+【Tag Rules】
+1. Total of 3–5 tags, strictly selected from the tag table below; do not invent new tags.
+2. Must contain at least one 【Task】 tag and at least one 【Method】 or 【Model/Architecture】 tag.
+3. Prefer the most specific tag; avoid broad hypernyms.
+4. Only use #多模态模型 when the paper's core contribution is multimodal modeling, or when speech/music/audio and other modalities are equally important.
+5. When #多模态模型 is already used, usually do not also use #音视频 unless the paper specifically focuses on audio-visual scenarios.
+6. Choose either #音频大模型 or #语音大模型 according to the paper's core object.
+7. If #扩散模型 or #流匹配 is already used, generally do not also use #生成模型 unless the paper indeed discusses a more general generation framework.
+
+【Tag Table (by category)】
+
+【Model / Architecture】
+#音频大模型、#语音大模型、#多模态模型、#统一音频模型、
+#大语言模型、#生成模型、#自回归模型、#端到端
+
+【Task — Speech】
+#语音合成、#语音识别、#语音增强、#语音分离、
+#语音克隆、#语音转换、#语音翻译、#语音情感识别、#语音活动检测、
+#说话人识别、#说话人验证、#说话人分离、#说话人日志、
+#语音对话系统、#语音伪造检测、#语音匿名化、#语音生物标志物、#语音编辑、#语音质量评估、#语音打断处理、
+#语音去噪、#语音超分辨、#语音补全、#语音风格迁移、#情感语音合成、#语音编码、#语音检索、#语音问答、#语音摘要
+
+【Task — Audio】
+#音频生成、#音频分类、#音频事件检测、#音频场景理解、#音频问答、#音频检索、
+#音频安全、#音频深度伪造检测、
+#空间音频、#3D音频、#声源定位、#生物声学、#音频编码、#音频修复、#音频水印、#音频质量评估、
+#声景生成、#音频超分辨、#音频指纹、#房间声学、#回声消除
+
+【Task — Music】
+#音乐生成、#音乐信息检索、#音乐理解、#歌唱语音合成、#音乐转录、#和弦识别、#节拍跟踪、#音乐源分离、#音乐结构分析、#乐器识别、#音乐表示学习、#风格迁移、#音乐评估、#舞台技术、#乐谱生成、#音乐推荐、
+#音乐去噪、#音乐超分辨
+
+【Methods】
+#预训练、#自监督学习、#对比学习、#强化学习、#知识蒸馏、#迁移学习、
+#领域适应、#数据增强、#扩散模型、#流匹配、
+#Transformer、#GAN、#VAE、#注意力机制、#联邦学习、#提示学习、#指令微调、#模型融合、
+#信号处理、#麦克风阵列、#波束成形、#时频分析、#多任务学习
+
+【Attributes / Settings】
+#多语言、#零样本、#少样本、#低资源、
+#流式处理、#实时处理、#多通道、#在线、#离线、
+#对抗样本、#鲁棒性、#模型量化、#高效推理、#长音频处理
+
+【Data / Tools / Evaluation】
+#基准测试、#数据集、#开源工具、#模型评估、#模型比较、#数据清洗、#评测协议、#数据隐私
+
+【Domains / Applications】
+#音视频、#跨模态、#工业应用、#医疗音频、#智能座舱、#内容审核、#游戏音频、
+#声纹识别、#语音驱动、#智能音箱、#助听器、#会议转录
+
+【Naming Conventions】
+- Use "语音合成" not "TTS"
+- Use "大语言模型" not "LLM"
+- Use "多语言" not "多语种"
+- Use "音频事件检测" not "声音事件检测"
+- Use "自监督学习" not "自监督"
+- Use "语音大模型" not "语音LLM" or "LALM"
+- Use "流匹配" not "Flow Matching"
+
+## 作者与机构
+Please extract author and institution information as completely as possible based on the provided paper content. Requirements:
+1. Clearly label the first author (if determinable from the paper), otherwise write "未说明"
+2. Clearly label the corresponding author (if determinable from the paper), otherwise write "未说明"
+3. List confirmed author names and their affiliations (university, lab, company)
+4. Institution information should be as specific as lab or department; if not in the text, write to the highest confirmable level
+5. Do not guess institution information; explicitly write "未说明" when unable to confirm
+
+Output format example:
+- 第一作者：张三（清华大学计算机系）
+- 通讯作者：李四（Google DeepMind）
+- 作者列表：张三（清华大学计算机系）、李四（Google DeepMind）、王五（未说明）
+
+## 毒舌点评
+Write 2–3 sentences of substantive commentary; must include at least 1 strength and 1 weakness. Can be sharp, but not empty mockery; do not just shout "very strong" or "very weak". Commentary should read like a senior reviewer's final comment — incisive and to the point.
+
+## 核心摘要
+Summarize the paper in 5–8 sentences, must cover:
+1. What problem it aims to solve
+2. What the core method is
+3. What is new compared to existing methods
+4. What the main experimental results are (include numbers if available; otherwise write "未提供"). If the paper contains experimental result tables, they must be listed in full Markdown table format; if there are experimental result figures, describe the figure content
+5. What the practical significance is
+6. What the main limitations are
+
+## 方法概述和架构
+**Must describe in detail** the paper's core method and its architectural implementation. This section is the technical core of the entire analysis; it must be substantial, clearly structured, and sufficiently detailed.
+
+**Word-count requirement**: the Method Overview and Architecture section must be no fewer than 600 Chinese characters (approximately 400–500 English words equivalent). If the paper's method is complex or has many modules, it should significantly exceed this minimum.
+
+**Required elements (all must be covered)**:
+1. **Overall process overview**: describe the complete input → processing → output flow in 2–3 sentences; state whether this is an end-to-end system, multi-stage pipeline, or some framework / methodology.
+2. **Main components / modules in detail**: for each core component, explain:
+   - **Name**: the formal name used in the paper
+   - **Function**: what sub-problem it solves, what responsibility it bears
+   - **Internal structure / implementation**: what network architecture is used (e.g., Transformer, CNN, RNN, Diffusion, etc.), what algorithmic principle, what mathematical tools; if the paper provides specific formulas, explain their meaning in words
+   - **Input / output**: what data / features it receives, what results it outputs
+3. **Data flow and interaction between components**: how are components connected? In what form is data passed? Are there loops / feedback mechanisms? Are there conditional branches?
+4. **Key design choices and motivations**: why was this architecture chosen over others? Design trade-offs explicitly mentioned in the paper or reasonably inferable (e.g., accuracy vs. speed, end-to-end vs. modular, self-supervised vs. supervised, etc.)
+5. **Multi-stage / multi-module step-by-step expansion**: if the paper's method has multiple stages (e.g., preprocessing → encoding → decoding → post-processing), each stage must be described independently; do not gloss over it
+6. **Architecture / flow diagrams**: if the paper contains architecture or flow diagrams (possibly multiple), **every figure must be inserted using standard Markdown image syntax `![description](imageURL)`**, and below each image use 3–5 sentences to explain in detail the relationships between modules and data flow.
+   - **Strictly prohibited** to use `External URL: https://... (alt=description)` or list-style image references; these formats cannot be rendered by the blog system
+   - **Correct example**: `![Model architecture diagram](https://arxiv.org/html/2605.12345v1/x1.png)`
+   - **Incorrect example**: `- External URL: https://arxiv.org/... (alt=Fig. 1)` ❌
+   - **Important: you may only use URLs provided in the "Images in the paper and their URLs" list above; do not fabricate or guess any non-existent URLs. If that list is empty, do not insert any images; use text description only.**
+7. **Technical term explanations**: provide necessary explanations for core terms appearing in the method (especially those coined by the paper or domain-specific), so that readers outside the sub-field can understand
+8. **Handling non-model work**: if the paper is a dataset, benchmark, theoretical analysis, survey, or other non-model work, focus on describing the method framework, system design, evaluation pipeline, or theoretical derivation process, rather than forcing "model" terminology
+
+**Strictly prohibited**:
+- Listing component names only without explaining function and internal structure
+- Using "see original paper", "the paper describes the detailed architecture", or other empty phrases in place of concrete description
+- Compressing the method overview into 1–2 short paragraphs
+- Omitting key components or design details explicitly described in the paper
+
+## 核心创新点
+List the 3–5 most important innovations. For each innovation, explain:
+- What it is
+- What the limitation of previous methods was
+- How this innovation works
+- What benefit or evidence it brings
+
+## 实验结果
+Evidence must be written first; do not just write conclusions. Requirements:
+- Provide main benchmark, dataset, metric names, and specific values
+- State the gap vs. the strongest baseline or SOTA; if the paper does not directly compare, explicitly state so
+- Write key ablation experiments and numerical changes
+- Write细分 results under different conditions, languages, or scenarios (if any)
+- If there are only figures without text descriptions, still try to convert key numbers into text
+- If specific numbers are unavailable, explicitly write "论文未给出具体数值"
+- **Experimental result tables must be listed in full using standard Markdown tables** (there may be multiple comparison tables); each table must include headers, model/method names, datasets, metrics, and values; do not omit any rows or columns
+- **Every experimental result figure must be inserted into the output** (using standard Markdown image syntax `![description](imageURL)`), and below each figure use text to explain the key conclusion.
+  - **Strictly prohibited** to use `External URL: https://... (alt=description)` or list-style image references; these formats cannot be rendered by the blog system
+  - **Correct example**: `![Experimental result comparison](https://arxiv.org/html/2605.12345v1/x3.png)`
+  - **Incorrect example**: `- External URL: https://arxiv.org/... (alt=Fig. 3)` ❌
+  - **Important: you may only use URLs provided in the "Images in the paper and their URLs" list above; do not fabricate or guess any non-existent URLs. If that list is empty, do not insert any images; use text and tables only to describe experimental results.**
+
+## 细节详述
+Extract all key technical details as much as possible; if missing, explicitly write "未说明":
+- Training data: dataset names, sources, scale, preprocessing, data augmentation
+- Loss functions: names, roles, weights; explain formula meaning in words when necessary
+- Training strategy: learning rate, warmup, batch size, optimizer, training steps / epochs, scheduling strategy
+- Key hyperparameters: model size, number of layers, hidden dimensions, codebook size, etc.
+- Training hardware: GPU / TPU model, quantity, training duration
+- Inference details: decoding strategy, temperature, beam size, streaming settings, etc.
+- Regularization or training stabilization tricks
+
+## 评分理由
+Please write like a top-tier conference reviewer, scoring and providing specific review comments along the following 7 dimensions. Do not just list scores; explain "why this score" — point out specific strengths and flaws.
+
+**创新性：X/3**
+Write specific review comments: novelty of problem / method / insight, key differences from SOTA, whether there is "old wine in new bottles" or incremental improvement, whether the claimed innovation holds up.
+
+**技术严谨性：X/1.5**
+Write specific review comments: correctness of derivation / proof / algorithm, whether there are flaws, undiscussed boundary conditions, over-simplification, or false assumptions, whether mathematical formulation is rigorous.
+
+**实验充分性：X/1.5**
+Write specific review comments: whether baselines, ablations, and dataset coverage are sufficient, whether results truly support the conclusions, whether there is over-interpretation of data, whether there is insufficient statistical significance.
+
+**清晰度：X/1**
+Write specific review comments: writing quality, organization, symbol definitions, figure clarity, whether key details are missing making reproduction impossible, whether the paper is easy to read.
+
+**影响力：X/2**
+Write specific review comments: domain-driving effect, follow-up potential, **relevance to speech / music / audio domain readers**. If the paper achieves SOTA on important benchmarks, releases large-scale datasets / tools, or solves long-standing practical problems in the domain, it should receive a high score — but only if these contributions **directly serve the speech / music / audio domain**. If the paper's core contribution is in computer vision, natural language processing, law / policy, or general machine learning, impact must be low (typically ≤ 0.5), because speech / music / audio readers cannot directly benefit. Narrowly applicable minor improvements or non-audio-core work can only receive low scores.
+
+**开源：X/1.5**
+Write specific review comments: whether code repository, model weights, dataset, and checkpoints are publicly available. Evaluation dimensions: presence of GitHub link, whether README is provided, whether pre-trained model downloads are available, whether dataset is accessible. Deduct points if only a link is given with no README or documentation.
+
+**可复现性：X/0.5**
+Write specific review comments: documentation sufficiency beyond open source — training details (learning rate, batch size, optimizer, scheduling strategy), hyperparameter settings, hardware environment, reproduction steps — are they sufficient for others to reproduce without relying on the authors? Deduct points for vague information or missing key details.
+
+**总分：X.X/10**
+
+## 局限与问题
+Please list the paper's limitations and potential issues like a top-tier conference reviewer. Divide into two parts:
+1. **Limitations explicitly acknowledged by the paper**: limitations, future work, and assumption constraints mentioned by the authors themselves, directly quoted or summarized.
+2. **Potential issues identified by the reviewer**: possible flaws in the method, possible loopholes in experimental design, whether conclusions are too strong, or any issues the authors did not mention but you as a reviewer feel should be pointed out. If there is no issue in a certain aspect, explicitly write "未发现明显问题".
+
+## 开源详情
+Please summarize open-source status based only on information in the paper or links in the provided text; do not fabricate repositories, stars, or platform popularity. Try to cover:
+- Code: whether a code repository link is provided; if not, write "论文中未提及代码链接"
+- Model weights: whether public weights are mentioned; if not, write "未提及"
+- Dataset: whether it is public and how to obtain; if not, write "未提及"
+- Demo: whether an online demo is provided; if not, write "未提及"
+- Reproduction materials: whether training details, configurations, checkpoints, or appendix explanations are given
+- Open-source projects cited in the paper: which dependent open-source tools / models are listed?
+- If the paper does not mention it, explicitly state "论文中未提及开源计划"
+
+**Important: output the analysis content directly as requested; do not write any preface, greeting, or confirmation statements (e.g., "好的", "我将", "以下是", "请审阅", etc.), and do not restate task requirements. Output must start from `## 评分`.**
+```
+
+## Output Format Notes
+This prompt requires the model to output in a strictly fixed structure, containing the following level-1 headings (do not add or remove):
+- `## 评分`
+- `## 机器摘要`
+- `## 标签`
+- `## 作者与机构`
+- `## 毒舌点评`
+- `## 核心摘要`
+- `## 方法概述和架构`
+- `## 核心创新点`
+- `## 实验结果`
+- `## 细节详述`
+- `## 评分理由`
+- `## 局限与问题`
+- `## 开源详情`
+
+The code extracts structured data via the `parseAnalysis()` function.
+
+**Image and table placement rules**: images and tables are no longer gathered in a single separate section; they are embedded directly at the corresponding positions — architecture diagrams go in the Method Overview and Architecture section, experimental result figures/tables go in the Experimental Results section.
+- **Strictly prohibited to fabricate image URLs**: you may only use URLs actually provided in the "Images in the paper and their URLs" list above. If that list is empty, no `![...](...)` image references may appear in any section.
+- **Strictly prohibited to use `External URL:` list format**: all images must use standard Markdown syntax `![alt](url)`; do not use `- External URL: ... (alt=...)` or other descriptive formats.
+
+**Special character handling rules**:
+- Text markers that may appear in papers (e.g., `<S>`, `</S>`, `<E>`, `</E>`, `<s>`, `</s>`, `<e>`, `</e>`, `<interrupt>`, `<backchannel>`, `<response>`, `<task>`, `<perception>`, `<BEsound>`, etc.) **must be wrapped in backticks** as code format, e.g., `` `<S>` ``, `` `<E>` ``, otherwise they will be mis-parsed as HTML tags by the blog system causing rendering errors.
+- Mathematical formulas **must be wrapped in `$...$` (inline) or `$$...$$` (block)**; **strictly prohibited to write formulas in plain text**. For example, `RMS = sqrt(1/N Σ y[n]²)` is wrong and must be written as `$RMS = \sqrt{\frac{1}{N} \sum y[n]^2}$`. Special symbols in formulas (e.g., `<`, `>`) that may be mis-parsed as HTML tags should be wrapped in backticks or placed in a formula environment.
+
+**Content completeness rules**:
+- Strictly prohibited to output truncated or incomplete sentences. If content is too long, prioritize concise description rather than cutting off mid-sentence.
+- All sections must be output completely; stopping in the middle of a section is prohibited.

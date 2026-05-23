@@ -1,0 +1,412 @@
+# Script Responsibilities
+
+## Script Responsibilities (Complete Script Reference)
+
+### 4.1 Main Pipeline Scripts
+
+#### `scripts/full-fetch.js`
+
+Complete workflow entry point. Executes all steps in Section 3: auto-archive -> arXiv fetch -> HF fetch -> merge and deduplicate -> LLM filter -> deep analysis -> incremental save -> update deduplication database.
+
+All configurations are read from `scripts/config.js`, with environment variable overrides:
+- `ANALYSIS_CONFIG.concurrency = 3` (`PD_ANALYSIS_CONCURRENCY`)
+- `ANALYSIS_CONFIG.maxRetries = 2` (`PD_ANALYSIS_MAX_RETRIES`)
+- `ANALYSIS_CONFIG.retryDelayMs = 3000`
+- `FILTER_CONFIG.delayBetweenBatchesMs = 2000`
+
+#### `scripts/deep-analysis-only.js`
+
+Runs deep analysis only (resume mode).
+- Reads `data/current/deep-analysis-result.json` (compatible with old path `data/deep-analysis-result.json`, automatically recognizes old-format pure arrays and converts them)
+- Skips papers that already have an `analysis` field
+- Calls `deep-analyzer.js` for each unanalyzed paper
+- **Only successful results are written to save**, failed results do not overwrite existing data, safe for resuming from breakpoints
+
+#### `scripts/reanalyze.js`
+
+Full reanalysis.
+- Default data source: `data/current/deep-analysis-result.json` (supports custom file path via command line, compatible with old-format pure arrays)
+- Calls `deep-analyzer.js` for **all** papers in the file
+- Default concurrency matches `ANALYSIS_CONFIG.concurrency` (default 3), adjustable via `--concurrency N` or `PD_REANALYZE_CONCURRENCY` environment variable
+- **Saves intermediate results every 5 papers** (save interval auto-adjusted in concurrent mode), **only successful results overwrite old data**
+- On startup, checks whether `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, `PAPER_ANALYZER_ENDPOINT` are set; exits directly if any are missing
+
+#### `scripts/quick-test.js`
+
+Quick test script.
+- Executes arXiv 7-category fetch + deduplication + LLM filter (configuration from `config.js`)
+- **Does not execute deep analysis**
+- Outputs to `data/quick-test-result.json` (only saves the first 10 papers)
+- Used to verify whether the fetch and filter pipeline is working correctly
+- Direct invocation: `node scripts/quick-test.js` (`npm run test` has been changed to run unit tests)
+
+#### `scripts/batch-analyze.js`
+
+Batch analysis of unanalyzed papers (standalone entry point).
+- Reads `data/current/deep-analysis-result.json`
+- Analyzes unanalyzed papers one by one, **only successful results are written to save, failed results do not overwrite existing data**, convenient for retrying remaining papers after `full-fetch.js` is interrupted
+
+#### `scripts/analyze-single-paper.js`
+
+Analyze a single paper and merge it into the results.
+
+**Usage**: `node scripts/analyze-single-paper.js <arxiv_id>`
+
+- Reads metadata from `data/current/papers.json`
+- Calls `deep-analyzer.js` for analysis, then appends to `deep-analysis-result.json`
+- Skips if the paper already exists in the results
+- Compatible with old-format pure array data, automatically converts to new object format on save
+
+### 4.2 Fetch and Analysis Support Scripts
+
+#### `scripts/fetch-papers.js`
+
+arXiv fetch and LLM filter module.
+- Exports `fetchCategoryPapers`, `deduplicatePapers`, `filterPapersWithLLM`, `isSpeechAudioRelated`, `filterPapersByKeywords`, `loadPapers`, `savePapers`, `loadAnalyzed`, `saveAnalyzed`
+- Filter stage uniformly uses `PAPER_ANALYZER_*` environment variables, supports HTTP CONNECT proxy
+- Keyword pre-filter function `filterPapersByKeywords` is retained but not currently enabled in the main workflow
+- XML parsing implemented via regex (arXiv API format is stable)
+
+#### `scripts/config.js`
+
+Unified configuration center. All hardcoded parameters are centrally managed and grouped by function:
+
+**Analysis Configuration (`ANALYSIS_CONFIG`)**
+
+| Config Item | Default | Env Override | Description |
+|--------|--------|-------------|------|
+| Concurrency | 3 | `PD_ANALYSIS_CONCURRENCY` | Number of papers analyzed in parallel |
+| Outer retries | 2 | `PD_ANALYSIS_MAX_RETRIES` | Retries per paper at the analysis-engine level |
+| Outer retry delay | 3000ms | -- | Outer retry interval |
+| API overall timeout | 20 minutes | -- | AbortController timeout |
+| API inner retries | 3 | -- | Retries per inner deep-analyzer call |
+| API inner backoff base | 5000ms | -- | Exponential backoff: first 5s, then double |
+| max_tokens | 64000 | -- | LLM output length limit |
+| temperature | 0.7 | -- | LLM sampling temperature |
+| Image download timeout | 15s | -- | Per-image download timeout |
+| Single-image base64 limit | 20M chars | -- | Base64 conversion limit per image |
+| Full-text limit | 500K chars | -- | arXiv HTML body truncation limit |
+| arXiv HTML fetch timeout | 30s | -- | arXiv HTML fetch timeout |
+
+**Filter Configuration (`FILTER_CONFIG`)**
+
+| Config Item | Default | Description |
+|--------|--------|------|
+| Timeout | 60s | Per-paper filter API call timeout |
+| Retries | 3 | Per-paper filter retries |
+| Batch size | 5 | Overridable via `PD_FILTER_BATCH_SIZE` |
+| Batch delay | 2000ms | Wait time after each filter batch |
+| temperature | 0.3 | Filter stage sampling temperature |
+
+**arXiv Configuration (`ARXIV_CONFIG`)**
+
+| Config Item | Default | Env Override | Description |
+|--------|--------|-------------|------|
+| Per-category fetch count | 100 | `PD_ARXIV_MAX_RESULTS` | Max results per category |
+| Max retries | 20 | -- | Per-category fetch retry limit |
+| Retry backoff base | 3000ms | -- | Exponential backoff: 3s/6s/12s... |
+| Rate-limit backoff base | 15000ms | -- | 429 extra wait: 15s/30s/60s... |
+| Max wait time | 300000ms | -- | Max 5 minutes wait per category |
+| Category delay | 25000ms | -- | Delay between different category requests |
+| First request delay | 5000ms | -- | Extra wait for the first category |
+| Consecutive known threshold | 20 | -- | Early stop after 20 consecutive known IDs |
+
+**HuggingFace Configuration (`HUGGINGFACE_CONFIG`)**
+
+| Config Item | Default | Description |
+|--------|--------|------|
+| Default days | 7 | Only keep papers from the last 7 days |
+| Max pages | 20 | daily_papers pagination limit |
+| Per-page count | 100 | Items per pagination page |
+| Page delay | 300ms | Delay between pagination requests |
+
+**Publish Configuration (`PUBLISH_CONFIG`)**
+
+| Config Item | Default | Description |
+|--------|--------|------|
+| Blog repo path | `~/code/github_repos/audio-paper-digest-blog` | Overridable via `PAPER_DIGEST_BLOG_REPO` |
+| Content directory | `content/posts` | Hugo content directory |
+| basePath | `/audio-paper-digest-blog` | Site subpath |
+| WeChat draft char limit | 48000 | Per-draft HTML character limit |
+
+**Archive Configuration (`ARCHIVE_CONFIG`)**
+
+| Config Item | Default | Description |
+|--------|--------|------|
+| Max backups | 10 | `deep-analysis-result` bak file retention count |
+| Max logs | 50 | Log file retention count |
+
+Referenced by all core scripts.
+
+#### `scripts/analysis-engine.js`
+
+Unified analysis engine. Encapsulates the following functionality, eliminating duplicate logic across `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` / `reanalyze.js` / `analyze-single-paper.js`:
+
+- `analyzePaperWithRetry(paper, options)`: single-paper analysis (with retry + auto-parse)
+- `analyzeBatch(papers, options)`: batch analysis (supports concurrency control + incremental save callback)
+- `mergeAndSaveResults(newResults, filePath, extraData)`: deduplicate by ID and save, **with built-in failure protection** (papers with an existing successful analysis will not be overwritten by a failed result without analysis)
+- `createFileSaver(filePath, baseData)`: creates a file save callback, compatible with old-format pure array data auto-conversion
+
+#### `scripts/fetch-huggingface-papers.js`
+
+HuggingFace Papers fetch module.
+- `fetchHuggingFacePapers(existingIds, { days, minUpvotes })`: dual-source fetch (daily_papers + papers API)
+- `mergeAndDeduplicate(arxivPapers, hfPapers)`: merge and deduplicate, supplementing all 7 HF fields
+- `convertDailyPaper()` / `convertPaper()`: data normalization, output fields consistent with arXiv (including `abstract` + `summary`)
+- Fetches data using `curl` commands
+- Direct invocation for testing: `node scripts/fetch-huggingface-papers.js`
+
+#### `scripts/deep-analyzer.js`
+
+Multimodal deep analyzer. The analysis flow is a **5-round progressive process**, not a single call:
+
+**Round 1 -- Main Deep Analysis**
+- `analyzePaperDeep(paper)`: fetches arXiv HTML full text (up to 500K characters) + downloads all images (concurrency 3)
+- Loads `prompts/deep-analysis.md`, replaces placeholders, and calls the LLM
+- Output includes: score, machine summary, tags, authors and affiliations, snarky review, core summary, method overview and architecture, core innovations, experimental results, detailed description, score rationale, limitations and issues, open source details
+- `parseAnalysis(analysis)`: parses analysis text into a structured object. `score` is not taken directly from the LLM's original total score under `## Score`, but is recalculated from seven sub-scores extracted from `## Score Rationale`, rounded to 0.1, always overriding the LLM's original total score
+
+**Round 2 -- Open Source Scan (`scanOpensource`)**
+- Loads `prompts/opensource-scan.md`
+- Extracts GitHub / HuggingFace / ModelScope etc. open source links from paper text
+- Supplements the `## Open Source Details` section
+
+**Round 3 -- Review and Rewrite (`reviseAnalysis`)**
+- Loads `prompts/gap-fill.md`
+- Compares original paper with Round 1 output, checking for omissions, errors, over-inferences
+- Generates a revised analysis text, overwriting the original content
+
+**Round 4 -- Table Fix (`checkAndFixTables`)**
+- Detects missing Markdown tables in `## Experimental Results`
+- If tables are found to be omitted or truncated, triggers LLM supplementation of the complete table
+
+**Round 5 -- Method Section Fix (`checkAndFixMethodSection`)**
+- Detects if `## Method Overview and Architecture` is too brief (fewer than 300 Chinese characters, vague expression, fewer than 3 paragraphs)
+- If conditions are met, triggers LLM expansion to a 600+ character detailed description
+
+**API Calls**:
+- `callModel(messages, maxTokens)`: retry-wrapped API call encapsulation (up to 3 inner retries, exponential backoff: first 10s, then double)
+- `_callModelOnce()`: single API call, each retry independently creates an AbortController and 20-minute timeout
+- LLM API requests forcibly set `agent: false`, disabling connection reuse to bypass proxy pollution (avoiding MiMo 403)
+
+**Other Features**:
+- Supports automatic proxy detection (environment variables -> macOS `scutil --proxy`)
+- Supports pure Node built-in module HTTP CONNECT proxy
+- Direct invocation for testing: `node scripts/deep-analyzer.js <arxivId>`
+
+#### `scripts/utils.js`
+
+Node.js common utility module. Referenced by almost all scripts:
+
+**Files and Paths**:
+- `writeFileAtomic(filePath, data)`: atomic write (write to temp file then rename)
+- `readJsonSafe(filePath)`: safely read JSON, returns `null` if file does not exist
+- `ensureDir(dirPath)`: ensure directory exists
+
+**Time Handling**:
+- `getBeijingISOString()` / `getBeijingDateString()` / `getBeijingCompactTimestamp()` / `getBeijingLocaleString()`: various Beijing Time formats
+- `normalizeToBeijingISOString(isoString)`: converts any ISO string to Beijing Time
+- `extractDatePrefix(str)` / `getRecordDate(paper)`: extract date prefix from string or paper object
+
+**Parsing and Text**:
+- `stripMd(t)`: strip Markdown formatting marks
+- `parseMachineSummary(analysis)`: parse `## Machine Summary` block
+- `parseAnalysis(analysis)`: parse full analysis text into a structured object (score, tags, sections, etc.)
+
+**API Protocol Auto-Routing** (core infrastructure):
+- `detectApiType(endpoint, model)`: automatically determine OpenAI / Anthropic protocol based on endpoint and model
+- `getAnthropicEndpoint(endpoint)`: convert OpenAI-style endpoint to Anthropic-style path
+- `buildApiUrl(apiType, endpoint)`: build complete request URL
+- `buildRequestBody(apiType, model, messages, maxTokens)`: build request body
+- `buildHeaders(apiType, key)`: build request headers
+- `getClaudeCodeVersion()`: get local Claude Code CLI version number
+- `parseResponseText(apiType, data)`: uniformly parse response text
+
+**Proxy**:
+- `detectProxyUrl()`: automatic proxy detection (environment variables -> macOS `scutil --proxy`)
+- `createProxyAgent(proxyUrl)`: create HTTP CONNECT proxy agent
+
+**Other**:
+- `normalizedId(paper)`: generate unified paper ID
+- `backupPapersJson()`: automatic backup of `papers.json`
+- `loadPrompt(filePath, replacements)`: load prompt file and replace placeholders
+
+#### `scripts/utils.py`
+
+Python common utility module. Referenced by `publish-to-blog.py`, `publish-wechat-full.py`, `publish-xiaohongshu.py`, `publish-to-feishu.py`:
+
+**Time**:
+- `now_bj_iso()` / `now_bj_date()`: Beijing Time ISO string and date string
+
+**Text**:
+- `strip_md(t)`: strip Markdown formatting marks (same functionality as JS version)
+
+**Parsing**:
+- `parse_machine_summary(analysis)`: parse `## Machine Summary` block (supports `- key: value` format)
+- `parse_analysis(analysis)`: parse full analysis text into a structured object (same as JS version)
+
+**Tag System** (core constraints):
+- `ALLOWED_TAGS`: standard tag whitelist (approx. 110 Chinese tags), must be consistent with the tag table in `prompts/deep-analysis.md`
+- `_normalize_tag(raw)`: normalize tags (add `#` prefix, clean separators)
+- `_is_bad_task_tag(tag)`: judge whether tag quality is too poor (snake_case, arXiv category, overly long English, not in whitelist, etc.)
+- `_fix_tag(tag)`: map known incorrect tags to correct tags (covering 50+ commonly LLM-invented/English tags)
+
+### 4.3 Publish Scripts
+
+#### `scripts/publish-to-blog.py`
+
+Publish to Hugo blog (GitHub Pages).
+
+**Prerequisites**:
+- Hugo blog repository must already be cloned locally to the fixed path: `~/code/github_repos/audio-paper-digest-blog`
+- Blog repository uses the PaperMod theme, automatically deployed to GitHub Pages via GitHub Actions
+- Blog repository's `content/posts/` directory stores generated Markdown files
+
+**Data Input and Processing**:
+- Default reads `data/current/deep-analysis-result.json`
+- Supports custom data file path via command line
+- Data is processed by `publish_common.py`: sorted by score descending into `scored` (has score) and `unscored` (no score / parse failed) groups
+- Each paper's structured fields are extracted via `parse_analysis()` to generate Markdown
+
+**Slug Generation Rules** (`slugify()`):
+- Preserve Chinese, Japanese kana, Korean, English, and numbers
+- Filter special characters, spaces and consecutive hyphens become single `-`
+- Max length 50 characters, truncate at the last `-` if exceeded
+- Fallback to `paper` if empty after filtering
+
+**Output Structure**:
+```
+~/code/github_repos/audio-paper-digest-blog/content/posts/
+├── YYYY-MM-DD.md              # Summary page
+├── YYYY-MM-DD-<slug-1>.md     # Paper 1 standalone page
+├── YYYY-MM-DD-<slug-2>.md     # Paper 2 standalone page
+└── ...
+```
+
+**Summary Page (`YYYY-MM-DD.md`)**:
+- Hugo frontmatter: `title` (date + paper digest), `date`, `tags` (TOP 10 tags), `categories: [Paper Digest]`, `description`, `layout: posts`
+- **Today's Overview**: total paper count, hot direction distribution (`█` character simulated bar chart), TOP 10 score leaderboard
+- **Leaderboard Table**: rank (medal), paper title (link to standalone page), score, tier (`rankBucket`), main task tag
+- **Paper List**: each paper's score emoji, title link, authors and affiliations, snarky review, core summary
+
+**Standalone Page (`YYYY-MM-DD-<slug>.md`)**:
+- Hugo frontmatter:
+  - `title`: paper title (YAML-safe escaping, handling double quotes, newlines, etc.)
+  - `date`: blog date
+  - `tags`: parsed tags (without `#`)
+  - `categories: [Paper Digest]`
+  - `description`: `main task tag | score/10`, falls back to title if absent
+  - `hiddenInHomeList: true`
+- Body: tag string -> score/tier/tag meta info -> machine score details -> authors and affiliations -> each analysis section -> link back to summary page
+
+**Publish Flow**:
+1. Generate `.md` files into blog repository `content/posts/`
+2. `git add -A` -> `git commit -m "add: Paper Digest YYYY-MM-DD"` -> `git push origin main`
+3. GitHub Actions automatically builds and deploys to Pages
+4. Visit: `https://nanless.github.io/audio-paper-digest-blog/posts/YYYY-MM-DD/`
+
+**Parameters**:
+- `--date YYYY-MM-DD` (strongly recommended to specify explicitly to avoid date errors across midnight)
+- `--skip-push` only generates files without pushing
+- Custom data file path as the last argument
+
+**Date Filtering**:
+- The script filters by the `fetchedAt` field by default, only publishing papers matching the `--date` specified date (default today)
+- `deep-analysis-result.json` accumulates historical data; date filtering ensures only newly fetched papers for the day are published
+- To publish all papers (no filtering), pass a custom data file or temporarily modify the script
+
+**Review Step**:
+After generating `.md`, a three-layer review is automatically executed (code regex check -> LLM text review -> multimodal image review). Paper standalone pages use `ThreadPoolExecutor(max_workers=3)` for concurrent review; common issues are automatically fixed before writing to file.
+
+**Important Limitation**: `fetchedAt` is the fetch time, not the paper's `published` date on arXiv. Please explicitly specify `--date` when running across midnight.
+
+#### `scripts/publish-wechat-full.py`
+
+Generate WeChat Official Account article drafts.
+
+- Default data source: `data/current/deep-analysis-result.json` (supports custom path via command line)
+- WeChat Official Account `APP_ID` / `APP_SECRET` read from environment variables
+- **Image Upload**: download arXiv images -> upload to WeChat CDN -> replace with WeChat URLs. Cache stored in `/tmp/wechat-image-cache.json`
+- **Auto Split into Parts**: single draft limit is approximately 48000 characters (HTML); automatically split into multiple drafts if exceeded
+  - Only Part 1 contains "Today's Overview"
+  - Each Part title: `Speech/Music/Audio Paper Digest YYYY-MM-DD | part N | M papers`
+- Generate preview HTML: `data/current/wechat-preview-YYYY-MM-DD.html`
+
+#### `scripts/publish_common.py`
+
+Python publish common module. Uniformly encapsulates data loading, score sorting, tag extraction, and formatting tools, eliminating duplicate logic across `publish-to-blog.py` / `publish-wechat-full.py` / `publish-xiaohongshu.py`.
+
+Main functions:
+- `load_papers(data_file)`: load paper list from JSON
+- `score_and_sort(papers)`: parse analysis results and sort by score descending; prefer existing `parsed` data to avoid re-parsing overwriting manual corrections
+- `extract_top_tags(papers, limit)`: extract main task tags and count frequencies
+- `extract_all_tags(papers, limit)`: extract all tags (deduplicated), used for blog tag cloud
+- `extract_one_liner(pa)`: extract a one-sentence highlight from analysis results, preferring innovation points or core contribution sentences
+- `score_emoji(score)` / `format_medal(index)`: score emoji and medal formatting
+- `build_paper_meta(pa, aurl)`: concatenate score/tier/tag meta info
+- `parse_cli_args(argv, defaults)`: generic command line argument parsing, reused by each publish script
+
+#### `scripts/publish-xiaohongshu.py`
+
+Generate Xiaohongshu (Little Red Book) copy.
+
+- Default data source: `data/current/deep-analysis-result.json`
+- Supports `--top N` curated version (default TOP 5, commonly `--top 3`) and `--all` full summary version
+- Supports `--date YYYY-MM-DD` to specify date
+- Outputs to `data/current/xiaohongshu-YYYY-MM-DD-<suffix>.md`
+- **One-sentence introduction per paper is generated by calling the MiMo LLM API** (anthropic protocol, `session.trust_env = False` to bypass proxy, concurrency 3); falls back to local `extract_one_liner()` on LLM failure
+- Automatically cleans Markdown formatting and academic prefixes
+- Includes emoji heat indicators: 🔥>=8 points, ✅>=6 points, 📝<6 points (consistent with blog and WeChat)
+- Under 1000 words, no tags or `---` separators are output; open source information is clearly labeled
+
+#### `scripts/xiaohongshu-publisher.py`
+
+Xiaohongshu auto-publish script (calls Xiaohongshu Web API, unofficial interface).
+
+- `--login`: scan QR code to log in, save cookie to local cache file
+- `--publish`: publish current date TOP 3 curated post (default)
+- `--all`: publish all papers (one post per paper)
+- `--date YYYY-MM-DD`: specify date
+- Cookie persists after login, no need to scan QR code again next time
+- Corresponding npm scripts: `npm run xhs-login`, `npm run xhs-publish`, `npm run xhs-publish-all`
+
+#### `scripts/publish-to-feishu.py`
+
+Generate Feishu (Lark) documents.
+
+**Credential Reading**:
+- `FEISHU_APP_ID` / `FEISHU_APP_SECRET` read from environment variables (consistent with other publish channels, all unified in `~/.hermes/.env`)
+
+**Data Input**:
+- Uniformly reads `data/current/deep-analysis-result.json` (consistent with other publish channels)
+- Supports `--date YYYY-MM-DD` to specify date
+
+**Implementation Characteristics**:
+- Python implementation, reuses `publish_common.py` for data loading and score sorting
+- Calls Feishu docx API to create documents and write content blocks
+- Markdown converted line-by-line to Feishu block types: heading1(3)/heading2(4)/heading3(5)/text(2)/bullet(12)/ordered(13)/divider(22)
+- Up to 20 blocks per batch, written in batches
+
+**Feishu docx API Call Flow**:
+1. `auth/v3/tenant_access_token/internal` to obtain tenant_access_token
+2. `docx/v1/documents` to create a new document
+3. `docx/v1/documents/{id}/blocks` to get the root block ID
+4. `docx/v1/documents/{id}/blocks/{root_id}/children` to write content in batches
+
+### 4.4 Auxiliary Scripts
+
+#### `scripts/backfill_papers.py`
+
+Backfill paper IDs in the background (no analysis).
+- Fetch arXiv 7 categories (30 papers each) and HF Papers (last 7 days)
+- Rate-limit resilient design: request timeout 30s, exponential backoff on rate-limit, early stop after 20 consecutive known IDs
+- Writes to `data/current/papers.json`
+- Additional output: `data/backfill-result.json`
+- Independent log: `logs/backfill.log`
+- Dependency: `requests` (Python third-party library)
+
+#### `scripts/backup-data.sh`
+
+Data backup shell script.
+
+---

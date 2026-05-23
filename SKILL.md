@@ -6,6 +6,8 @@ description: >
   适用场景：论文速递、论文摘要、每日追踪、重分析、博客发布、微信发布与小红书发布。
 ---
 
+**[English](SKILL.en.md)** | 中文
+
 # Paper Digest Skill（以当前代码为准）
 
 ## 1. 文档定位
