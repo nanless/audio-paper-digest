@@ -27,7 +27,7 @@
 全量重分析。
 - 默认数据源：`data/current/deep-analysis-result.json`（支持命令行传自定义文件路径，兼容旧格式纯数组）
 - 对文件中**全部**论文重新调用 `deep-analyzer.js`
-- 默认串行执行（并发 1），支持通过 `--concurrency N` 或 `PD_REANALYZE_CONCURRENCY` 环境变量调整并发度
+- 默认并发度与 `ANALYSIS_CONFIG.concurrency` 一致（默认 3），支持通过 `--concurrency N` 或 `PD_REANALYZE_CONCURRENCY` 环境变量调整
 - **每 5 篇保存一次中间结果**（并发模式下自动调整保存间隔），**仅成功结果覆盖旧数据**
 - 启动时检查 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT` 是否已设置，缺失则直接退出
 
@@ -316,6 +316,9 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 - `deep-analysis-result.json` 会累积历史数据，日期过滤确保只发布当日抓取的新论文
 - 若需发布全部论文（不过滤），可传入自定义数据文件或临时修改脚本
 
+**Review 环节**：
+生成 `.md` 后会自动执行三层 review（代码正则检查 → LLM 文本审查 → 多模态图片审查），论文独立页面使用 `ThreadPoolExecutor(max_workers=3)` 并发审查，自动修复常见问题后写入文件。
+
 **重要限制**：`fetchedAt` 是抓取时间，不是论文在 arXiv 上的 `published` 日期。跨天运行时请显式指定 `--date`。
 
 #### `scripts/publish-wechat-full.py`
@@ -352,7 +355,7 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 - 支持 `--top N` 精选版（默认 TOP 5，常用 `--top 3`）和 `--all` 完整汇总版
 - 支持 `--date YYYY-MM-DD` 指定日期
 - 输出到 `data/current/xiaohongshu-YYYY-MM-DD-<suffix>.md`
-- **每篇论文的一句话介绍调用 MiMo LLM API 生成**（anthropic 协议，`session.trust_env = False` 绕过代理），LLM 失败时回退到本地 `extract_one_liner()`
+- **每篇论文的一句话介绍调用 MiMo LLM API 生成**（anthropic 协议，`session.trust_env = False` 绕过代理，并发 3），LLM 失败时回退到本地 `extract_one_liner()`
 - 自动清理 Markdown 格式和学术化前缀
 - 附带 emoji 热度标识：🔥≥8 分、✅≥6 分、📝<6 分（与博客、微信统一）
 - 少于 1000 字，不输出标签和 `---` 分隔线，开源信息标注清晰

@@ -27,7 +27,7 @@ description: >
 2. **arXiv 抓取**：7 个分类，每类最多 100 篇（可通过 `PD_ARXIV_MAX_RESULTS` 调整），遇连续 20 篇已有 ID 提前停止
 3. **HuggingFace 抓取**：`daily_papers` 分页（最多 20 页）+ `papers` API 补充，默认近 7 天
 4. **合并去重**：arXiv 优先，HF 补充 7 个特有字段，标记 `sources`
-5. **LLM 筛选**：按 `PAPER_ANALYZER_*` 配置逐篇判断语音/音频相关，`batchSize=5`（可通过 `PD_FILTER_BATCH_SIZE` 调整），单篇超时 60 秒，重试 3 次
+5. **LLM 筛选**：按 `PAPER_ANALYZER_*` 配置逐篇判断语音/音乐/音频相关，`batchSize=5`（可通过 `PD_FILTER_BATCH_SIZE` 调整），单篇超时 60 秒，重试 3 次
 6. **保存筛选结果**：`data/current/filtered-papers.json`
 7. **深度分析**：`deep-analyzer.js`，全文+图片，并发 3 篇（可通过 `PD_ANALYSIS_CONCURRENCY` 调整），每篇最多重试 2 次（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整）
 8. **增量保存**：每批分析后立即保存到 `data/current/deep-analysis-result.json`，自带失败结果保护（已有成功 analysis 的论文不会被无 analysis 的失败结果覆盖）
@@ -93,8 +93,8 @@ set -a; source ~/.hermes/.env 2>/dev/null; set +a
 - 超时 60 秒，重试 3 次，每次重试独立创建 AbortController
 - 指数退避：抓取 4s/8s/16s（`2^attempt * 2s`，上限 60s），限流 10s/20s/40s（`2^attempt * 5s`，上限 60s）
 - prompt 来源：`prompts/filter.md`，运行时通过 `loadPrompt()` 读取并替换 `{title}`、`{abstract}`、`{categories}` 占位符
-- 判定口径：多模态模型只要明确涉及语音/音频（输入、输出、训练目标、评测任务或核心能力之一）即判定为相关
-- 冲突处理：若同时满足"多模态涉及语音/音频"和"其他领域"描述，优先判定为"是"
+- 判定口径：多模态模型只要明确涉及语音/音乐/音频（输入、输出、训练目标、评测任务或核心能力之一）即判定为相关
+- 冲突处理：若同时满足"多模态涉及语音/音乐/音频"和"其他领域"描述，优先判定为"是"
 
 ### 4.3 深度分析阶段（`deep-analyzer.js`）
 
@@ -183,7 +183,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 # 配置覆写（可选）
 # PD_ANALYSIS_CONCURRENCY=3       # 深度分析并发度
 # PD_ANALYSIS_MAX_RETRIES=2       # 深度分析重试次数
-# PD_REANALYZE_CONCURRENCY=1      # 重分析并发度
+# PD_REANALYZE_CONCURRENCY=3      # 重分析并发度（默认与 ANALYSIS_CONFIG.concurrency 一致）
 # PD_FILTER_BATCH_SIZE=5          # LLM 筛选每批篇数
 # PD_ARXIV_MAX_RESULTS=100        # arXiv 每类抓取数量
 

@@ -6,7 +6,7 @@
 
 | 文件 | 用途 | 调用位置 |
 |------|------|----------|
-| [filter.md](filter.md) | 筛选阶段：判断单篇论文是否与语音/音频相关 | `fetch-papers.js` |
+| [filter.md](filter.md) | 筛选阶段：判断单篇论文是否与语音/音乐/音频相关 | `fetch-papers.js` |
 | [deep-analysis.md](deep-analysis.md) | 深度分析阶段（第一轮）：阅读全文+图片后输出结构化报告 | `deep-analyzer.js` |
 | [gap-fill.md](gap-fill.md) | 深度分析阶段（第三轮）：对照原文审校重写前两轮结果 | `deep-analyzer.js` |
 | [opensource-scan.md](opensource-scan.md) | 开源扫描阶段（第二轮）：专门提取开源链接和复现信息 | `deep-analyzer.js` |

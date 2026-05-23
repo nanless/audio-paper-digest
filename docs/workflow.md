@@ -82,7 +82,7 @@ HF 特有字段（共 7 个）：
 
 ### 3.5 LLM 筛选
 
-使用 `~/.hermes/.env` 中的 `PAPER_ANALYZER_*` 配置逐篇判断是否为语音/音频相关。
+使用 `~/.hermes/.env` 中的 `PAPER_ANALYZER_*` 配置逐篇判断是否为语音/音乐/音频相关。
 
 **API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动切换 OpenAI / Anthropic 协议
 - **MiMo/Kimi Token Plan / Coding Plan**（端点含 `token-plan` 或 `coding`，模型含 `mimo`/`kimi`）→ 自动切换为 **Anthropic 协议**，伪装成 Claude Code 调用
@@ -98,10 +98,10 @@ HF 特有字段（共 7 个）：
 - 语音合成/识别/增强/分离/克隆/转换 → **是**
 - 音频生成/理解/音乐/事件检测 → **是**
 - 说话人相关任务 → **是**
-- 语音/音频相关模型、表示学习、预训练 → **是**
-- 多模态模型只要明确涉及语音/音频（输入、输出、训练目标、评测任务或核心能力之一）→ **是**
-- 其他领域且没有实质性语音/音频方法或任务 → **否**
-- 冲突处理：若同时看起来满足"多模态涉及语音/音频"和"其他领域"，优先判定为 **是**
+- 语音/音乐/音频相关模型、表示学习、预训练 → **是**
+- 多模态模型只要明确涉及语音/音乐/音频（输入、输出、训练目标、评测任务或核心能力之一）→ **是**
+- 其他领域且没有实质性语音/音乐/音频方法或任务 → **否**
+- 冲突处理：若同时看起来满足"多模态涉及语音/音乐/音频"和"其他领域"，优先判定为 **是**
 
 运行参数：
 - `batchSize = 5`（批内并行调用 LLM）
@@ -139,7 +139,7 @@ HF 特有字段（共 7 个）：
 
 **技术特性**：
 - **API 协议自动路由**：与筛选阶段共用同一套 `detectApiType()` 逻辑，根据 `PAPER_ANALYZER_ENDPOINT` 和 `PAPER_ANALYZER_MODEL` 自动切换 OpenAI / Anthropic 协议
-- 获取 arXiv HTML 全文（最多 100K 字符），依次尝试 `v1`、`v2`、无后缀版本；使用 **cheerio** 结构化解析 HTML，移除 script/style/nav/header/footer 等噪音元素
+- 获取 arXiv HTML 全文（最多 500K 字符），依次尝试 `v1`、`v2`、无后缀版本；使用 **cheerio** 结构化解析 HTML，移除 script/style/nav/header/footer 等噪音元素
 - 提取图片 URL（png/jpg/jpeg），过滤 logo/favicon
 - **图片分析**：下载论文全部图片（无数量限制）；单张 base64 上限约 20M 字符（config.js 中 `imageMaxBase64Chars`）；**图片下载并行化（并发 3）**。图片 URL 列表会写入 prompt，即使下载失败 LLM 也能获取真实 URL 用于正文引用。若全部下载失败，自动降级为纯文本重试
 - **并发度：3 篇并行**（可通过 `PD_ANALYSIS_CONCURRENCY` 环境变量调整）
