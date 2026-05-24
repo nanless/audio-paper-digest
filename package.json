@@ -15,7 +15,11 @@
     "xiaohongshu": "python3 scripts/publish-xiaohongshu.py",
     "xhs-login": "python3 scripts/xiaohongshu-publisher.py --login",
     "xhs-publish": "python3 scripts/xiaohongshu-publisher.py",
-    "xhs-publish-all": "python3 scripts/xiaohongshu-publisher.py --all"
+    "xhs-publish-all": "python3 scripts/xiaohongshu-publisher.py --all",
+    "icml-fetch": "python3 scripts/fetch-icml2026.py",
+    "icml-filter": "node scripts/icml-filter.js",
+    "icml-analyze": "node scripts/icml-batch-analyze.js",
+    "icml-retry": "node scripts/icml-retry-failed.js"
   },
   "keywords": [
     "arxiv",

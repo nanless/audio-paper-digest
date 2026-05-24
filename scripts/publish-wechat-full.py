@@ -15,6 +15,19 @@ from publish_common import (
 )
 from utils import parse_analysis
 
+
+def _paper_id(paper):
+    """获取论文 ID（兼容 arXiv 和 ICML 格式）"""
+    return paper.get('arxivId') or paper.get('id', '')
+
+
+def _paper_url(paper):
+    """获取论文链接（兼容 arXiv 和 ICML 格式）"""
+    if paper.get('arxivId'):
+        return f"https://arxiv.org/abs/{paper['arxivId']}"
+    return paper.get('url', '')
+
+
 APP_ID = os.environ.get('WECHAT_APP_ID', '')
 APP_SECRET = os.environ.get('WECHAT_APP_SECRET', '')
 
@@ -161,8 +174,7 @@ def main():
     for paper in papers:
         pa = parse_analysis(paper.get('analysis',''))
         title = paper.get('title','Unknown')
-        aid = paper.get('arxivId','')
-        aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
+        aurl = _paper_url(paper)
 
         h = f'<h2>📄 {html.escape(title)}</h2>\n'
         if pa:

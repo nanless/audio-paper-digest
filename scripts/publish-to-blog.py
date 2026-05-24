@@ -27,6 +27,19 @@ from publish_common import (
 )
 from utils import strip_md, parse_analysis
 
+
+def _paper_id(paper):
+    """获取论文 ID（兼容 arXiv 和 ICML 格式）"""
+    return paper.get('arxivId') or paper.get('id', '')
+
+
+def _paper_url(paper):
+    """获取论文链接（兼容 arXiv 和 ICML 格式）"""
+    if paper.get('arxivId'):
+        return f"https://arxiv.org/abs/{paper['arxivId']}"
+    return paper.get('url', '')
+
+
 BLOG_REPO = os.path.expanduser(
     os.environ.get("PAPER_DIGEST_BLOG_REPO", "~/code/github_repos/audio-paper-digest-blog")
 )
@@ -448,7 +461,7 @@ layout: "posts"
     for i, (score, p, pa) in enumerate(scored):
         m = format_medal(i)
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(p.get('arxivId', ''), '')
+        slug = paper_slugs.get(_paper_id(p), '')
         rank_bucket = pa.get('rankBucket', '') or '-'
         primary_task = pa.get('primaryTaskTag', '') or '-'
         if slug:
@@ -457,7 +470,7 @@ layout: "posts"
             md += f"| {m} | {title[:55]} | {score}分 | {rank_bucket} | {primary_task} |\n"
     for i, p in enumerate(unscored):
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(p.get('arxivId', ''), '')
+        slug = paper_slugs.get(_paper_id(p), '')
         if slug:
             md += f"| {len(scored)+i+1} | [{title[:55]}]({BASE_PATH}/posts/{date_str}-{slug}) | N/A | - | - |\n"
         else:
@@ -468,7 +481,7 @@ layout: "posts"
 
     for i, (score, p, pa) in enumerate(scored):
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(p.get('arxivId', ''), '')
+        slug = paper_slugs.get(_paper_id(p), '')
         m = format_medal(i)
 
         if slug:
@@ -477,8 +490,8 @@ layout: "posts"
             md += f"### {m} {title}\n\n"
 
         pa = parse_analysis(p.get('analysis', '')) or {}
-        aid = p.get('arxivId', '')
-        aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
+        aid = _paper_id(p)
+        aurl = _paper_url(p)
         meta = build_paper_meta(pa, aurl)
         if meta:
             md += f"{meta}\n\n"
@@ -518,7 +531,7 @@ layout: "posts"
 
     for i, p in enumerate(unscored):
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(p.get('arxivId', ''), '')
+        slug = paper_slugs.get(_paper_id(p), '')
 
         if slug:
             md += f"### {len(scored)+i+1}. [{title}]({BASE_PATH}/posts/{date_str}-{slug})\n\n"
@@ -527,8 +540,8 @@ layout: "posts"
 
         # unscored 论文也显示完整内容（作者、点评、摘要、开源详情）
         pa = parse_analysis(p.get('analysis', '')) or {}
-        aid = p.get('arxivId', '')
-        aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
+        aid = _paper_id(p)
+        aurl = _paper_url(p)
         meta = build_paper_meta(pa, aurl)
         if meta:
             md += f"{meta}\n\n"
@@ -616,9 +629,9 @@ def enrich_opensource(pa, paper):
             sources.append(val)
 
     urls = extract_repo_urls('\n'.join(sources))
-    # 本地文本找不到时，尝试从 arxiv HTML 抓取
-    if not urls:
-        urls = fetch_arxiv_html_urls(paper.get('arxivId', ''))
+    # 本地文本找不到时，尝试从 arxiv HTML 抓取（仅对 arXiv 论文）
+    if not urls and paper.get('arxivId'):
+        urls = fetch_arxiv_html_urls(paper['arxivId'])
     if not urls:
         return oss
 
@@ -647,8 +660,8 @@ def generate_paper_page(paper, date_str):
     if pa and pa.get('opensource'):
         pa['opensource'] = enrich_opensource(pa, paper)
     title = paper.get('title', 'Unknown')
-    aid = paper.get('arxivId', '')
-    aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
+    aid = _paper_id(paper)
+    aurl = _paper_url(paper)
     slug = slugify(title)
 
     score_str = pa['score'] if pa and pa.get('score') else ''
@@ -880,7 +893,7 @@ def review_all_posts(date_str, paper_slugs, scored_papers):
     # 构建 arxivId -> title 映射
     title_map = {}
     for score, p, pa in scored_papers:
-        title_map[p.get('arxivId', '')] = p.get('title', '')
+        title_map[_paper_id(p)] = p.get('title', '')
 
     # Review 汇总页面（串行，只有1个）
     index_file = os.path.join(CONTENT_DIR, f"{date_str}.md")
@@ -1001,9 +1014,13 @@ def main():
             if fa_date == today:
                 filtered_papers.append(p)
 
-    papers = filtered_papers
+    if filtered_papers:
+        papers = filtered_papers
+        print(f"📄 过滤后: {len(papers)} 篇论文 (fetchedAt={today})")
+    else:
+        print(f"⚠️ 没有 fetchedAt={today} 的论文，使用全部 {len(papers)} 篇")
+
     scored, unscored = score_and_sort(papers)
-    print(f"📄 过滤后: {len(papers)} 篇论文 (fetchedAt={today})")
 
     if not papers:
         print("⚠️ 没有论文需要发布")
@@ -1025,7 +1042,7 @@ def main():
             paper_file = os.path.join(CONTENT_DIR, f"{today}-{slug}.md")
             with open(paper_file, 'w') as f:
                 f.write(paper_md)
-            paper_slugs[paper.get('arxivId', '')] = slug
+            paper_slugs[_paper_id(paper)] = slug
 
     print(f"📄 生成 {len(paper_slugs)} 篇论文独立页面")
 
