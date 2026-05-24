@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+from dotenv import load_dotenv
+load_dotenv()
+
 from log_setup import setup_script_logging
 setup_script_logging(__file__)
 

@@ -61,7 +61,7 @@ if (!DEEP_CONFIG.endpoint) missingDeepEnv.push('PAPER_ANALYZER_ENDPOINT');
 if (!DEEP_CONFIG.key) missingDeepEnv.push('PAPER_ANALYZER_API_KEY');
 if (!DEEP_CONFIG.model) missingDeepEnv.push('PAPER_ANALYZER_MODEL');
 if (missingDeepEnv.length > 0) {
-    console.error(`[deep-analyzer] 缺少环境变量: ${missingDeepEnv.join(', ')}。请在 ~/.hermes/.env 中配置`);
+    console.error(`[deep-analyzer] 缺少环境变量: ${missingDeepEnv.join(', ')}。请在项目根目录的 .env 文件中配置`);
     process.exit(1);
 }
 

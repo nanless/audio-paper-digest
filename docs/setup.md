@@ -4,11 +4,11 @@
 
 ### 6.1 统一存放位置
 
-**所有环境变量统一放在 `~/.hermes/.env`。**
+**所有环境变量统一放在 `项目根目录的 `.env` 文件`。**
 
 `.zshrc` 已配置自动加载：
 ```zsh
-set -a; source ~/.hermes/.env 2>/dev/null; set +a
+set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
 ```
 
 这样设计的好处：
@@ -65,7 +65,7 @@ set -a; source ~/.hermes/.env 2>/dev/null; set +a
 | `FEISHU_APP_ID` | 飞书应用 App ID（如 `cli_xxx`） |
 | `FEISHU_APP_SECRET` | 飞书应用 App Secret |
 
-> 写入 `~/.hermes/.env` 即可（不需要 `export` 前缀）。脚本运行时会自动 `source` 该文件。
+> 写入 `项目根目录的 `.env` 文件` 即可（不需要 `export` 前缀）。脚本运行时会自动 `source` 该文件。
 
 #### 代理
 
@@ -79,7 +79,7 @@ set -a; source ~/.hermes/.env 2>/dev/null; set +a
 
 ### 6.3 配置示例
 
-`~/.hermes/.env` 格式（**不需要 `export` 前缀**）：
+`项目根目录的 `.env` 文件` 格式（**不需要 `export` 前缀**）：
 
 ```bash
 # Paper Digest 环境变量
@@ -171,7 +171,7 @@ mkdir -p data/current data/archive logs
 
 # 配置 API Key
 mkdir -p ~/.hermes
-cat >> ~/.hermes/.env << 'EOF'
+cat >> 项目根目录的 `.env` 文件 << 'EOF'
 PAPER_ANALYZER_API_KEY=your-llm-key
 PAPER_ANALYZER_MODEL=your-llm-model
 PAPER_ANALYZER_ENDPOINT=https://your-llm-endpoint/v1
@@ -181,8 +181,8 @@ PAPER_ANALYZER_ENDPOINT=https://your-llm-endpoint/v1
 # WECHAT_APP_SECRET=your-app-secret
 EOF
 
-# 确保 .zshrc 已 source ~/.hermes/.env
-# （若尚未配置，在 ~/.zshrc 末尾添加：set -a; source ~/.hermes/.env 2>/dev/null; set +a）
+# 确保 .zshrc 已 source 项目根目录的 `.env` 文件
+# （若尚未配置，在 ~/.zshrc 末尾添加：set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a）
 ```
 
 ### 9.3 博客仓库准备
@@ -209,7 +209,7 @@ export PAPER_DIGEST_BLOG_REPO="~/my-blog-repo"
 发布飞书文档需要飞书自建应用的 `App ID` 和 `App Secret`：
 
 ```bash
-# 写入 ~/.hermes/.env
+# 写入 项目根目录的 `.env` 文件
 FEISHU_APP_ID=cli_xxx
 FEISHU_APP_SECRET=your-full-app-secret
 ```

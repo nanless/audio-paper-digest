@@ -39,7 +39,7 @@
 
 ### 12.3 重分析启动即报 key 未配置
 
-- 在 `~/.hermes/.env` 中配置 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT`
+- 在 `项目根目录的 `.env` 文件` 中配置 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT`
 - 重新 source：`source ~/.zshrc`
 
 ### 12.4 发布后提示"没有新内容需要推送"

@@ -54,7 +54,7 @@ See [`docs/scripts.md`](docs/scripts.md) for each script's functionality, and [`
 # 1. Install dependencies
 npm install
 
-# 2. Configure API Key (write to ~/.hermes/.env)
+# 2. Configure API Key (write to `.env`)
 #    PAPER_ANALYZER_API_KEY=your-key
 #    PAPER_ANALYZER_MODEL=mimo-v2.5
 #    PAPER_ANALYZER_ENDPOINT=https://token-plan-sgp.xiaomimimo.com/v1

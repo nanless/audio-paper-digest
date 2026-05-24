@@ -54,7 +54,7 @@ audio-paper-digest/
 # 1. 安装依赖
 npm install
 
-# 2. 配置 API Key（写入 ~/.hermes/.env）
+# 2. 配置 API Key（写入 `.env`）
 #    PAPER_ANALYZER_API_KEY=your-key
 #    PAPER_ANALYZER_MODEL=mimo-v2.5
 #    PAPER_ANALYZER_ENDPOINT=https://token-plan-sgp.xiaomimimo.com/v1

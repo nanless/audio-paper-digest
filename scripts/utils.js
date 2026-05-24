@@ -143,7 +143,8 @@ function normalizedId(paperOrId) {
 // ═══════════════════════════════════════════════════════
 
 function loadEnvFile() {
-    const envFile = path.join(require('os').homedir(), '.hermes', '.env');
+    // 优先从项目根目录的 .env 加载
+    const envFile = path.join(__dirname, '..', '.env');
     if (fs.existsSync(envFile)) {
         const envContent = fs.readFileSync(envFile, 'utf8');
         envContent.split('\n').forEach(line => {

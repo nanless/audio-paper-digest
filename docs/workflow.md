@@ -82,7 +82,7 @@ HF 特有字段（共 7 个）：
 
 ### 3.5 LLM 筛选
 
-使用 `~/.hermes/.env` 中的 `PAPER_ANALYZER_*` 配置逐篇判断是否为语音/音乐/音频相关。
+使用 `项目根目录的 `.env` 文件` 中的 `PAPER_ANALYZER_*` 配置逐篇判断是否为语音/音乐/音频相关。
 
 **API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动切换 OpenAI / Anthropic 协议
 - **MiMo/Kimi Token Plan / Coding Plan**（端点含 `token-plan` 或 `coding`，模型含 `mimo`/`kimi`）→ 自动切换为 **Anthropic 协议**，伪装成 Claude Code 调用

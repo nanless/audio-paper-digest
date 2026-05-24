@@ -65,9 +65,9 @@ Some scripts read from the legacy `data/*.json` paths, but new outputs should be
 
 ### 4.1 Unified Storage Location
 
-**All environment variables are stored in `~/.hermes/.env`.** `.zshrc` is configured as:
+**All environment variables are stored in `the `.env` file in the project root`.** `.zshrc` is configured as:
 ```zsh
-set -a; source ~/.hermes/.env 2>/dev/null; set +a
+set -a; source the `.env` file in the project root 2>/dev/null; set +a
 ```
 
 This means:
@@ -373,7 +373,7 @@ PY
 3. **Prohibit dangerous operations**: Do not execute `git reset --hard`, `git push -f`, or batch deletion of historical articles without explicit authorization.
 4. **Do not auto-extend workflow**: After running `full-fetch.js`, do not arbitrarily append blog/WeChat publishing unless explicitly requested by the user.
 5. **Leave a trace after changes**: After process, parameter, or path changes, synchronously update `SKILL.md` and `README.md`.
-6. **Prohibit hard-coded keys**: Do not write real API keys in any script or document; all credentials (LLM, WeChat Official Account, Feishu) are uniformly read from environment variables, with LLM configuration in `~/.hermes/.env` (auto-`source`d by scripts), and WeChat/Feishu credentials also written to `~/.hermes/.env`.
+6. **Prohibit hard-coded keys**: Do not write real API keys in any script or document; all credentials (LLM, WeChat Official Account, Feishu) are uniformly read from environment variables, with LLM configuration in `the `.env` file in the project root` (auto-`source`d by scripts), and WeChat/Feishu credentials also written to `the `.env` file in the project root`.
 7. **Prevent security mechanism breakage when modifying scripts**: This environment silently replaces sensitive characters such as `API_KEY` with `***`. When modifying scripts containing such characters, you must re-read the file after modification to verify that key lines were not corrupted. Also periodically check whether `data/`, `logs/` directories contain residual backup files or log snapshots with keys, and clean them immediately if found.
 8. **Unified environment variable management**: When new scripts need to read LLM configuration, uniformly use `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, `PAPER_ANALYZER_ENDPOINT`; introducing alias fallback chains, hard-coding, or base64-encoded variable name hacks is prohibited.
 9. **New configurable parameters go in config.js**: When new scripts involve adjustable parameters (concurrency, timeout, batch size, etc.), uniformly place them in `scripts/config.js` and add corresponding environment variable override support.
@@ -467,12 +467,12 @@ Prefer using `data/current/deep-analysis-result.json`; only read from old paths 
 
 ### 9.6 Re-analysis Startup Reports Key Not Set
 
-- Configure `PAPER_ANALYZER_API_KEY` in `~/.hermes/.env`
+- Configure `PAPER_ANALYZER_API_KEY` in `the `.env` file in the project root`
 - Re-source: `source ~/.zshrc`
 
 ### 9.7 WeChat Official Account Publishing Failure
 
-- Check if `WECHAT_APP_ID` / `WECHAT_APP_SECRET` environment variables are set (in `~/.hermes/.env`)
+- Check if `WECHAT_APP_ID` / `WECHAT_APP_SECRET` environment variables are set (in `the `.env` file in the project root`)
 - Check if `APP_SECRET` has expired
 - Check if images are too large or restricted by arXiv
 - WeChat image upload has rate limits; large numbers of images may need to be executed in batches

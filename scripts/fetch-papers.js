@@ -51,7 +51,7 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
     if (!FILTER_CONFIG.key) missing.push('PAPER_ANALYZER_API_KEY');
     if (!FILTER_CONFIG.model) missing.push('PAPER_ANALYZER_MODEL');
     if (missing.length > 0) {
-        throw new Error(`[filter] 缺少环境变量: ${missing.join(', ')}。请在 ~/.hermes/.env 中配置`);
+        throw new Error(`[filter] 缺少环境变量: ${missing.join(', ')}。请在项目根目录的 .env 文件中配置`);
     }
 
     const apiType = detectApiType(FILTER_CONFIG.endpoint, FILTER_CONFIG.model);

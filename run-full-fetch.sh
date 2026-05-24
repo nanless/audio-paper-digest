@@ -1,5 +1,5 @@
 #!/bin/bash
-# 使用前请确保以下环境变量已设置，或在 ~/.hermes/.env 中配置：
+# 使用前请确保以下环境变量已设置，或在项目根目录的 .env 文件中配置：
 #   PAPER_ANALYZER_API_KEY
 #   PAPER_ANALYZER_ENDPOINT
 #   PAPER_ANALYZER_MODEL

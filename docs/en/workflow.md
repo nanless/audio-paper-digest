@@ -82,7 +82,7 @@ HF-specific fields (7 total):
 
 ### 3.5 LLM Filtering
 
-Using the `PAPER_ANALYZER_*` configuration in `~/.hermes/.env`, each paper is evaluated to determine whether it is speech / music / audio related.
+Using the `PAPER_ANALYZER_*` configuration in `the `.env` file in the project root`, each paper is evaluated to determine whether it is speech / music / audio related.
 
 **API Protocol Auto-Routing**: `detectApiType()` in `scripts/utils.js` automatically switches between OpenAI / Anthropic protocols based on the endpoint and model name
 - **MiMo / Kimi Token Plan / Coding Plan** (endpoint contains `token-plan` or `coding`, model contains `mimo`/`kimi`) -> automatically switches to **Anthropic protocol**, masquerading as a Claude Code call

@@ -39,7 +39,7 @@
 
 ### 12.3 Re-analysis Reports "Key Not Configured" on Startup
 
-- Configure `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, and `PAPER_ANALYZER_ENDPOINT` in `~/.hermes/.env`
+- Configure `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, and `PAPER_ANALYZER_ENDPOINT` in `the `.env` file in the project root`
 - Re-source: `source ~/.zshrc`
 
 ### 12.4 "No New Content to Push" After Publishing

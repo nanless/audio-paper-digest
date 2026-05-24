@@ -4,11 +4,11 @@
 
 ### 6.1 Unified Storage Location
 
-**All environment variables are stored in `~/.hermes/.env`.**
+**All environment variables are stored in `the `.env` file in the project root`.**
 
 `.zshrc` is already configured to auto-load:
 ```zsh
-set -a; source ~/.hermes/.env 2>/dev/null; set +a
+set -a; source the `.env` file in the project root 2>/dev/null; set +a
 ```
 
 Benefits of this design:
@@ -65,7 +65,7 @@ Benefits of this design:
 | `FEISHU_APP_ID` | Feishu app ID (e.g. `cli_xxx`) |
 | `FEISHU_APP_SECRET` | Feishu app App Secret |
 
-> Write these into `~/.hermes/.env` (no `export` prefix needed). Scripts will automatically `source` this file at runtime.
+> Write these into `the `.env` file in the project root` (no `export` prefix needed). Scripts will automatically `source` this file at runtime.
 
 #### Proxy
 
@@ -79,7 +79,7 @@ HTTP CONNECT proxies are supported, implemented with pure Node built-in modules,
 
 ### 6.3 Configuration Example
 
-`~/.hermes/.env` format (**no `export` prefix needed**):
+`the `.env` file in the project root` format (**no `export` prefix needed**):
 
 ```bash
 # Paper Digest environment variables
@@ -171,7 +171,7 @@ mkdir -p data/current data/archive logs
 
 # Configure API Key
 mkdir -p ~/.hermes
-cat >> ~/.hermes/.env << 'EOF'
+cat >> the `.env` file in the project root << 'EOF'
 PAPER_ANALYZER_API_KEY=your-llm-key
 PAPER_ANALYZER_MODEL=your-llm-model
 PAPER_ANALYZER_ENDPOINT=https://your-llm-endpoint/v1
@@ -181,8 +181,8 @@ PAPER_ANALYZER_ENDPOINT=https://your-llm-endpoint/v1
 # WECHAT_APP_SECRET=your-app-secret
 EOF
 
-# Ensure .zshrc sources ~/.hermes/.env
-# (If not yet configured, add to the end of ~/.zshrc: set -a; source ~/.hermes/.env 2>/dev/null; set +a)
+# Ensure .zshrc sources the `.env` file in the project root
+# (If not yet configured, add to the end of ~/.zshrc: set -a; source the `.env` file in the project root 2>/dev/null; set +a)
 ```
 
 ### 9.3 Blog Repository Setup
@@ -209,7 +209,7 @@ Blog repository requirements:
 Publishing to Feishu documents requires the `App ID` and `App Secret` of a Feishu custom app:
 
 ```bash
-# Write to ~/.hermes/.env
+# Write to the `.env` file in the project root
 FEISHU_APP_ID=cli_xxx
 FEISHU_APP_SECRET=your-full-app-secret
 ```

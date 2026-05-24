@@ -375,7 +375,7 @@ Xiaohongshu auto-publish script (calls Xiaohongshu Web API, unofficial interface
 Generate Feishu (Lark) documents.
 
 **Credential Reading**:
-- `FEISHU_APP_ID` / `FEISHU_APP_SECRET` read from environment variables (consistent with other publish channels, all unified in `~/.hermes/.env`)
+- `FEISHU_APP_ID` / `FEISHU_APP_SECRET` read from environment variables (consistent with other publish channels, all unified in `the `.env` file in the project root`)
 
 **Data Input**:
 - Uniformly reads `data/current/deep-analysis-result.json` (consistent with other publish channels)

@@ -65,9 +65,9 @@ description: >
 
 ### 4.1 统一存放位置
 
-**所有环境变量统一放在 `~/.hermes/.env`。** `.zshrc` 已配置：
+**所有环境变量统一放在 `项目根目录的 `.env` 文件`。** `.zshrc` 已配置：
 ```zsh
-set -a; source ~/.hermes/.env 2>/dev/null; set +a
+set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
 ```
 
 这意味着：
@@ -373,7 +373,7 @@ PY
 3. **禁止危险操作**：未获明确授权，禁止 `git reset --hard`、`git push -f`、批量删除历史文章。
 4. **不自动扩展流程**：运行 `full-fetch.js` 后，不要擅自追加博客/微信发布，除非用户明确要求。
 5. **改动留痕**：流程、参数、路径变化后，同步更新 `SKILL.md` 和 `README.md`。
-6. **禁止硬编码密钥**：不要在任何脚本或文档中写入真实 API key；所有凭证（LLM、微信公众号、飞书）统一从环境变量读取，LLM 配置放在 `~/.hermes/.env`（由脚本自动 `source`），微信/飞书凭据也写入 `~/.hermes/.env`。
+6. **禁止硬编码密钥**：不要在任何脚本或文档中写入真实 API key；所有凭证（LLM、微信公众号、飞书）统一从环境变量读取，LLM 配置放在 `项目根目录的 `.env` 文件`（由脚本自动 `source`），微信/飞书凭据也写入 `项目根目录的 `.env` 文件`。
 7. **修改脚本时防止安全机制破坏**：本环境会静默替换 `API_KEY` 等敏感字符为 `***`。修改含有这类字符的脚本时，修改后必须重新读取文件验证关键行未被破坏。同时定期检查 `data/`、`logs/` 目录是否残留含密钥的备份文件或日志快照，发现立即清理。
 8. **环境变量统一管理**：新增脚本需要读取 LLM 配置时，统一使用 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT`，禁止引入别名回退链、硬编码或 base64 编码变量名 hack。
 9. **新增可配置参数放入 config.js**：新增脚本涉及可调整参数（并发度、超时、批次大小等）时，统一放入 `scripts/config.js` 并添加对应的环境变量覆写支持。
@@ -467,12 +467,12 @@ ls -lt content/posts | head -20
 
 ### 9.6 重分析启动报 key 未设置
 
-- 在 `~/.hermes/.env` 中配置 `PAPER_ANALYZER_API_KEY`
+- 在 `项目根目录的 `.env` 文件` 中配置 `PAPER_ANALYZER_API_KEY`
 - 重新 source：`source ~/.zshrc`
 
 ### 9.7 微信公众号发布失败
 
-- 检查 `WECHAT_APP_ID` / `WECHAT_APP_SECRET` 环境变量是否已设置（在 `~/.hermes/.env`）
+- 检查 `WECHAT_APP_ID` / `WECHAT_APP_SECRET` 环境变量是否已设置（在 `项目根目录的 `.env` 文件`）
 - 检查 `APP_SECRET` 是否过期
 - 检查图片是否过大或被 arXiv 限制
 - 微信图片上传有频率限制，大量图片可能需要分批执行

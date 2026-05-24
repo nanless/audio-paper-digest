@@ -376,7 +376,7 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 生成飞书文档。
 
 **凭据读取**：
-- `FEISHU_APP_ID` / `FEISHU_APP_SECRET` 从环境变量读取（与其他发布渠道一致，统一放在 `~/.hermes/.env`）
+- `FEISHU_APP_ID` / `FEISHU_APP_SECRET` 从环境变量读取（与其他发布渠道一致，统一放在 `项目根目录的 `.env` 文件`）
 
 **数据输入**：
 - 统一读取 `data/current/deep-analysis-result.json`（与其他发布渠道一致）

@@ -19,7 +19,7 @@ const missingEnvVars = requiredEnvVars.filter(name => !process.env[name]);
 if (missingEnvVars.length > 0) {
     console.error('[reanalyze] 错误: 缺少必需环境变量');
     console.error(`[reanalyze] 缺少: ${missingEnvVars.join(', ')}`);
-    console.error('[reanalyze] 请在 ~/.hermes/.env 中配置后重试');
+    console.error('[reanalyze] 请在项目根目录的 .env 文件中配置后重试');
     process.exit(1);
 }
 
