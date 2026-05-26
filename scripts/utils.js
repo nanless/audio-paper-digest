@@ -214,18 +214,118 @@ function parseMachineSummary(analysis) {
         has_dataset: 'hasDataset'
     };
 
+    // 扩展的 rank_bucket 映射表（处理各种非标准值）
+    const rankMap = {
+        // 数字
+        '1': '前10%', '2': '前25%', '3': '前50%', '4': '后50%',
+        // 中文标准
+        '前10%': '前10%', '前25%': '前25%', '前50%': '前50%', '后50%': '后50%',
+        // 字母映射（A=前10%, B=前25%, C=前50%, D=后50%）
+        'a': '前10%', 'b': '前25%', 'c': '前50%', 'd': '后50%',
+        'A': '前10%', 'B': '前25%', 'C': '前50%', 'D': '后50%',
+        // 英文
+        'top_10_percent': '前10%', 'top_25_percent': '前25%', 
+        'top_50_percent': '前50%', 'bottom_50_percent': '后50%',
+        'top 10%': '前10%', 'top 25%': '前25%', 
+        'top 50%': '前50%', 'bottom 50%': '后50%',
+        // 中文描述映射
+        '高': '前10%', '很高': '前10%', '上': '前10%', '上上': '前10%',
+        '中高': '前25%', '中上': '前25%', '较高': '前25%', '优秀': '前25%',
+        '中': '前50%', '中等': '前50%', '中等偏下': '前50%', '中下': '前50%',
+        '中低': '前50%', '一般': '前50%',
+        '低': '后50%', '很低': '后50%', '下': '后50%', '差': '后50%',
+        '较弱': '后50%', '偏低': '后50%'
+    };
+
     for (const rawLine of blockMatch[1].split('\n')) {
         const line = rawLine.trim();
         if (!line) continue;
-        const m = line.match(/^([a-z_]+)\s*[：:]\s*(.+)$/i);
+        
+        // 支持多种格式：
+        // 1. key: value
+        // 2. - key: value
+        // 3. * **key**: value
+        // 4. - **key**: value
+        const m = line.match(/^(?:[-*]\s*)?(?:\*\*)?([a-z_]+)(?:\*\*)?\s*[：:]\s*(.+)$/i);
         if (!m) continue;
+        
         const mappedKey = keyMap[m[1]];
         if (mappedKey) {
-            let val = stripMd(m[2]);
-            // 对于 rankBucket，只允许四个标准分档
-            if (mappedKey === 'rankBucket' && !['前10%', '前25%', '前50%', '后50%'].includes(val)) {
-                val = '';
+            let val = stripMd(m[2]).trim();
+            
+            // 对于 rankBucket，使用扩展映射表
+            if (mappedKey === 'rankBucket') {
+                val = rankMap[val] || '';
             }
+            
+            // 对于分数类字段，提取数字部分
+            if (['qualityScore', 'valueScore', 'reproducibilityBonus'].includes(mappedKey)) {
+                // 处理 "3.5/5"、"3.5分"、"3.5 / 5" 等格式
+                const numMatch = val.match(/^(\d+\.?\d*)/);
+                if (numMatch) {
+                    val = numMatch[1];
+                } else {
+                    // 如果没有数字，尝试映射中文描述
+                    const scoreMap = {
+                        '高': '6', '很高': '6.5', '上': '6', '上上': '6.5',
+                        '中高': '5', '中上': '5', '较高': '5.5',
+                        '中': '3.5', '中等': '3.5', '中等偏下': '3', '中下': '3',
+                        '一般': '3.5', '中低': '3', '较低': '2.5',
+                        '低': '2', '很低': '1.5', '下': '2', '差': '1.5',
+                        '较弱': '2', '偏低': '2.5', '较低': '2.5',
+                        'solid': '4', 'incremental': '2', 'partial': '1',
+                        'high': '6', 'medium': '3.5', 'low': '2'
+                    };
+                    val = scoreMap[val.toLowerCase()] || '';
+                }
+            }
+            
+            // 对于 confidence，标准化
+            if (mappedKey === 'confidence') {
+                // 处理数字（0.9 → 高）
+                const numMatch = val.match(/^(\d+\.?\d*)/);
+                if (numMatch) {
+                    const num = parseFloat(numMatch[1]);
+                    if (num >= 0.8 || num >= 4) val = '高';
+                    else if (num >= 0.5 || num >= 3) val = '中';
+                    else val = '低';
+                } else {
+                    const confMap = {
+                        '高': '高', 'high': '高', 'h': '高',
+                        '中': '中', 'medium': '中', '中低': '中', '中等': '中', 'm': '中',
+                        '低': '低', 'low': '低', '较低': '低', 'l': '低'
+                    };
+                    val = confMap[val.toLowerCase()] || val;
+                }
+            }
+            
+            // 对于 sota_claim，标准化
+            if (mappedKey === 'sotaClaim') {
+                const sotaMap = {
+                    '是': '是', 'yes': '是', 'y': '是', '有': '是',
+                    '否': '否', 'no': '否', 'n': '否', '无': '否',
+                    '未说明': '未说明', 'unknown': '未说明', ' unclear': '未说明'
+                };
+                val = sotaMap[val.toLowerCase()] || val;
+            }
+            
+            // 对于 has_code/has_model/has_dataset，标准化
+            if (['hasCode', 'hasModel', 'hasDataset'].includes(mappedKey)) {
+                const yesNoMap = {
+                    '是': '是', 'yes': '是', 'y': '是', '有': '是',
+                    '否': '否', 'no': '否', 'n': '否', '无': '否',
+                    '未说明': '未说明', 'unknown': '未说明'
+                };
+                val = yesNoMap[val.toLowerCase()] || val;
+            }
+            
+            // 对于标签字段，确保有 # 前缀
+            if (['primaryTaskTag', 'primaryMethodTag'].includes(mappedKey)) {
+                if (val && !val.startsWith('#')) {
+                    val = '#' + val;
+                }
+            }
+            
             result[mappedKey] = val;
         }
     }
@@ -377,6 +477,79 @@ function parseResponseText(apiType, response) {
     return null;
 }
 
+// ═══════════════════════════════════════════════════════
+// 允许的标签白名单（与 prompts/deep-analysis.md 标签表同步）
+// ═══════════════════════════════════════════════════════
+const ALLOWED_TAGS = new Set([
+    // 模型/架构
+    '#音频大模型','#语音大模型','#多模态模型','#统一音频模型',
+    '#大语言模型','#生成模型','#自回归模型','#端到端',
+    // 任务 — 语音
+    '#语音合成','#语音识别','#语音增强','#语音分离',
+    '#语音生成','#语音克隆','#语音转换','#语音翻译','#语音情感识别','#语音情感计算','#语音活动检测',
+    '#说话人识别','#说话人验证','#说话人分离','#说话人日志',
+    '#语音对话系统','#语音伪造检测','#语音鉴伪','#语音匿名化','#语音生物标志物','#语音编辑','#语音质量评估','#语音打断处理',
+    '#语音去噪','#语音去混响','#语音超分辨','#语音补全','#语音风格迁移','#情感语音合成','#语音编码','#语音检索','#语音问答','#语音摘要',
+    '#语音唤醒','#关键词检测','#语音评测','#语音隐写','#语音变声','#语音混淆','#语音隐私保护',
+    '#口音识别','#年龄估计','#性别识别','#语音可懂度评估','#语音清晰度评估',
+    // 任务 — 音频
+    '#音频生成','#音频分类','#音频事件检测','#声事件定位','#音频场景理解','#音频问答','#音频检索',
+    '#盲源分离','#信号分离',
+    '#音频安全','#音频深度伪造检测','#音频鉴伪','#音频异常检测',
+    '#空间音频','#3D音频','#声源定位','#声学场景识别','#生物声学','#音频编码','#音频修复','#音频水印','#音频质量评估',
+    '#声景生成','#音频超分辨','#音频指纹','#音频降噪','#音频分离','#混响消除','#主动降噪','#回声消除','#声学测量','#信号处理基础',
+    // 任务 — 音乐
+    '#音乐生成','#音乐信息检索','#音乐理解','#歌唱语音合成','#音乐转录','#和弦识别','#节拍跟踪','#音乐源分离','#音乐结构分析','#乐器识别','#音乐表示学习','#风格迁移','#音乐评估','#舞台技术','#乐谱生成','#音乐推荐',
+    '#音乐去噪','#音乐超分辨','#音乐分类','#音乐情感识别','#自动伴奏生成','#音乐对齐','#MIDI生成','#音乐版权检测','#翻唱识别','#音乐水印','#哼唱识别','#音乐合成',
+    // 方法 — 神经网络架构
+    '#Transformer','#CNN','#RNN','#LSTM','#GRU','#ResNet','#U-Net','#Conformer',
+    '#WaveNet','#wav2vec','#HuBERT','#Whisper','#Codec','#Neural Codec','#RVQ','#VQ-VAE','#NSF',
+    '#ConNeXt','#Swin Transformer','#MLP-Mixer','#图神经网络','#胶囊网络',
+    '#生成对抗网络','#变分自编码器','#归一化流','#扩散模型','#流匹配','#条件流匹配',
+    // 方法 — 训练策略
+    '#预训练','#自监督学习','#无监督学习','#对比学习','#强化学习','#知识蒸馏','#迁移学习',
+    '#领域适应','#测试时自适应','#元学习','#持续学习','#课程学习','#对抗训练','#多任务学习',
+    '#模型压缩','#模型剪枝','#模型融合','#模型集成','#集成学习','#参数高效微调','#正则化微调',
+    '#LoRA','#Adapter','#前缀微调','#提示学习','#指令微调','#联邦学习',
+    '#混合精度训练','#梯度累积','#学习率预热','#早停','#warm-up','#冷启动',
+    // 方法 — 优化算法
+    '#Adam','#SGD','#AdamW','#RMSprop','#AdaGrad','#AdaDelta','#Adamax',
+    '#余弦退火','#指数衰减','#阶梯衰减','#多项式衰减',
+    '#梯度裁剪','#权重衰减','#动量','#Nesterov加速','#学习率调度',
+    // 方法 — 正则化与归一化
+    '#Dropout','#DropConnect','#标签平滑','#Mixup','#CutMix','#SpecAugment',
+    '#批归一化','#层归一化','#组归一化','#实例归一化','#谱归一化',
+    '#权重标准化','#数据增强','#随机擦除','#随机裁剪','#时间拉伸','#音高偏移',
+    // 方法 — 信号处理基础
+    '#STFT','#iSTFT','#短时傅里叶变换','#梅尔频谱','#梅尔频率倒谱系数','#MFCC',
+    '#滤波器组','#倒谱分析','#线性预测编码','#LPC','#谱减法','#维纳滤波',
+    '#卡尔曼滤波','#粒子滤波','#自适应滤波','#谱包络','#基频提取','#谐波分析',
+    '#包络提取','#过零率','#能量检测','#谱质心','#谱通量','#过零率检测',
+    // 方法 — 评估与统计
+    '#MOS评测','#ABX测试','#显著性检验','#交叉验证','#自助法','#假设检验',
+    '#半参数方法','#稳健估计','#统计推断',
+    '#混淆矩阵','#ROC曲线','#AUC','#t检验','#方差分析','#置信区间','#效应量',
+    '#K折交叉验证','#留一法','#分层抽样','#自助聚合',
+    // 方法 — 概率与图模型
+    '#贝叶斯方法','#隐马尔可夫模型','#条件随机场','#高斯混合模型',
+    '#变分推断','#马尔可夫链蒙特卡洛','#期望最大化','#信念传播',
+    '#概率图模型','#高斯过程','#狄利克雷过程',
+    // 方法 — 传统机器学习
+    '#聚类分析','#K均值','#层次聚类','#DBSCAN','#谱聚类',
+    '#时间序列分析','#降维','#主成分分析','#t-SNE','#UMAP','#线性判别分析',
+    '#支持向量机','#决策树','#随机森林','#梯度提升树','#XGBoost','#LightGBM',
+    '#K近邻','#线性回归','#逻辑回归','#岭回归','#Lasso','#弹性网络',
+    // 属性/设置
+    '#多语言','#零样本','#少样本','#低资源',
+    '#流式处理','#实时处理','#多通道','#在线','#离线',
+    '#对抗样本','#鲁棒性','#模型量化','#高效推理','#长音频处理','#理论分析',
+    // 数据/工具/评估
+    '#基准测试','#数据集','#开源工具','#模型评估','#模型比较','#数据清洗','#评测协议','#数据隐私',
+    // 领域/应用
+    '#音视频','#跨模态','#工业应用','#医疗音频','#智能座舱','#内容审核','#游戏音频','#计算机视觉',
+    '#声纹识别','#语音驱动','#智能音箱','#助听器','#会议转录'
+]);
+
 function parseAnalysis(analysis) {
     if (!analysis) return null;
 
@@ -391,6 +564,18 @@ function parseAnalysis(analysis) {
         // 如果还没有 # 前缀，加上
         if (t && !t.startsWith('#')) t = '#' + t;
         return t;
+    }
+
+    // 检查标签是否在白名单中
+    function _isAllowedTag(tag) {
+        if (!tag) return false;
+        return ALLOWED_TAGS.has(tag);
+    }
+
+    // 过滤标签列表，只保留白名单中的标签
+    function _filterAllowedTags(tags) {
+        if (!tags || !Array.isArray(tags)) return [];
+        return tags.map(t => _normalizeTag(t)).filter(t => _isAllowedTag(t));
     }
 
     function _isBadTaskTag(tag) {
@@ -463,7 +648,8 @@ function parseAnalysis(analysis) {
                 return trimmed ? '#' + trimmed : null;
             }).filter(Boolean);
         }
-        result.tags = tags;
+        // 强制过滤：只保留白名单中的标签
+        result.tags = _filterAllowedTags(tags);
     }
 
     const machineSummary = parseMachineSummary(analysis);
@@ -473,42 +659,114 @@ function parseAnalysis(analysis) {
     result.valueScore = machineSummary.valueScore;
     result.reproducibilityBonus = machineSummary.reproducibilityBonus;
     result.confidence = machineSummary.confidence;
-    // 主任务/主方法标签：优先从 ## 标签 部分的"主任务标签"行提取，
-    // 其次从机器摘要获取，最后从 tags[0] fallback。
-    // 如果机器摘要的标签质量太差（snake_case/arXiv类别/过于宽泛），则优先使用 tags[0]。
-    const msTask = _normalizeTag(machineSummary.primaryTaskTag);
-    const msMethod = _normalizeTag(machineSummary.primaryMethodTag);
-    const firstTag = result.tags.length > 0 ? _normalizeTag(result.tags[0]) : '';
-    const secondTag = result.tags.length > 1 ? _normalizeTag(result.tags[1]) : firstTag;
 
-    // 从 tags 列表中找到第一个非坏标签
-    let goodTag = '';
-    for (const t of result.tags) {
-        const nt = _normalizeTag(t);
-        if (nt && !_isBadTaskTag(nt)) {
-            goodTag = nt;
-            break;
+    // ═══════════════════════════════════════════════════════
+    // 主任务/主方法标签解析（强制白名单验证）
+    // ═══════════════════════════════════════════════════════
+
+    // 定义任务标签和方法标签的分类（用于验证）
+    const TASK_TAG_PREFIXES = [
+        '#语音', '#音频', '#音乐', '#说话人', '#声源', '#声景', '#声纹',
+        '#听觉', '#被动', '#痴呆', '#帕金森', '#统计信号', '#盲源', '#信号处理'
+    ];
+    const METHOD_TAG_PREFIXES = [
+        '#Transformer','#CNN','#RNN','#LSTM','#GRU','#ResNet','#U-Net','#Conformer',
+        '#WaveNet','#wav2vec','#HuBERT','#Whisper','#Codec','#Neural','#RVQ','#VQ-VAE','#NSF',
+        '#ConNeXt','#Swin','#MLP-Mixer','#图神经网络','#胶囊网络',
+        '#生成对抗网络','#变分自编码器','#归一化流','#条件流匹配',
+        '#预训练','#自监督','#对比学习','#强化学习','#知识蒸馏','#迁移学习',
+        '#领域适应','#元学习','#持续学习','#课程学习','#对抗训练','#多任务学习',
+        '#模型压缩','#模型剪枝','#模型融合','#模型集成','#集成学习','#参数高效微调',
+        '#LoRA','#Adapter','#前缀微调','#提示学习','#指令微调','#联邦学习',
+        '#混合精度训练','#梯度累积','#学习率预热','#早停','#warm-up','#冷启动',
+        '#Adam','#SGD','#AdamW','#RMSprop','#AdaGrad','#AdaDelta','#Adamax',
+        '#余弦退火','#指数衰减','#阶梯衰减','#多项式衰减',
+        '#梯度裁剪','#权重衰减','#动量','#Nesterov','#学习率调度',
+        '#Dropout','#DropConnect','#标签平滑','#Mixup','#CutMix','#SpecAugment',
+        '#批归一化','#层归一化','#组归一化','#实例归一化','#谱归一化',
+        '#权重标准化','#数据增强','#随机擦除','#随机裁剪','#时间拉伸','#音高偏移',
+        '#STFT','#iSTFT','#短时傅里叶变换','#梅尔频谱','#梅尔频率倒谱系数','#MFCC',
+        '#滤波器组','#倒谱分析','#线性预测编码','#LPC','#谱减法','#维纳滤波',
+        '#卡尔曼滤波','#粒子滤波','#自适应滤波','#谱包络','#基频提取','#谐波分析',
+        '#包络提取','#过零率','#能量检测','#谱质心','#谱通量',
+        '#MOS评测','#ABX测试','#显著性检验','#交叉验证','#自助法','#假设检验',
+        '#混淆矩阵','#ROC曲线','#AUC','#t检验','#方差分析','#置信区间','#效应量',
+        '#K折交叉验证','#留一法','#分层抽样','#自助聚合',
+        '#贝叶斯方法','#隐马尔可夫模型','#条件随机场','#高斯混合模型',
+        '#变分推断','#马尔可夫链蒙特卡洛','#期望最大化','#信念传播',
+        '#概率图模型','#高斯过程','#狄利克雷过程',
+        '#聚类分析','#K均值','#层次聚类','#DBSCAN','#谱聚类',
+        '#降维','#主成分分析','#t-SNE','#UMAP','#线性判别分析',
+        '#支持向量机','#决策树','#随机森林','#梯度提升树','#XGBoost','#LightGBM',
+        '#K近邻','#线性回归','#逻辑回归','#岭回归','#Lasso','#弹性网络'
+    ];
+
+    function _isTaskTag(tag) {
+        if (!tag) return false;
+        return TASK_TAG_PREFIXES.some(prefix => tag.startsWith(prefix));
+    }
+
+    function _isMethodTag(tag) {
+        if (!tag) return false;
+        return METHOD_TAG_PREFIXES.some(prefix => tag.startsWith(prefix));
+    }
+
+    // 从已过滤的 tags 中找到第一个任务标签
+    function _findFirstTaskTag(tags) {
+        for (const t of tags) {
+            const nt = _normalizeTag(t);
+            if (_isAllowedTag(nt) && _isTaskTag(nt)) return nt;
         }
+        return '';
     }
 
-    if (extractedTaskTag) {
-        result.primaryTaskTag = extractedTaskTag;
-    } else if (!_isBadTaskTag(msTask)) {
+    // 从已过滤的 tags 中找到第一个方法标签
+    function _findFirstMethodTag(tags) {
+        for (const t of tags) {
+            const nt = _normalizeTag(t);
+            if (_isAllowedTag(nt) && _isMethodTag(nt)) return nt;
+        }
+        return '';
+    }
+
+    // 验证并修正主任务标签
+    const validatedTaskTag = _isAllowedTag(extractedTaskTag) ? extractedTaskTag : '';
+    const msTask = _isAllowedTag(_normalizeTag(machineSummary.primaryTaskTag)) ? _normalizeTag(machineSummary.primaryTaskTag) : '';
+    const firstTaskFromTags = _findFirstTaskTag(result.tags);
+
+    if (validatedTaskTag && _isTaskTag(validatedTaskTag)) {
+        result.primaryTaskTag = validatedTaskTag;
+    } else if (msTask && _isTaskTag(msTask)) {
         result.primaryTaskTag = msTask;
-    } else if (goodTag) {
-        result.primaryTaskTag = goodTag;
+    } else if (firstTaskFromTags) {
+        result.primaryTaskTag = firstTaskFromTags;
     } else {
-        result.primaryTaskTag = msTask || firstTag;
+        // 兜底：如果找不到任务标签，使用第一个允许的 tag（即使是方法标签）
+        result.primaryTaskTag = result.tags.length > 0 ? result.tags[0] : '';
     }
 
-    if (extractedMethodTag) {
-        result.primaryMethodTag = extractedMethodTag;
-    } else if (!_isBadTaskTag(msMethod)) {
+    // 验证并修正主方法标签
+    const validatedMethodTag = _isAllowedTag(extractedMethodTag) ? extractedMethodTag : '';
+    const msMethod = _isAllowedTag(_normalizeTag(machineSummary.primaryMethodTag)) ? _normalizeTag(machineSummary.primaryMethodTag) : '';
+    const firstMethodFromTags = _findFirstMethodTag(result.tags);
+
+    if (validatedMethodTag && _isMethodTag(validatedMethodTag)) {
+        result.primaryMethodTag = validatedMethodTag;
+    } else if (msMethod && _isMethodTag(msMethod)) {
         result.primaryMethodTag = msMethod;
-    } else if (goodTag && goodTag !== result.primaryTaskTag) {
-        result.primaryMethodTag = goodTag;
+    } else if (firstMethodFromTags) {
+        result.primaryMethodTag = firstMethodFromTags;
     } else {
-        result.primaryMethodTag = msMethod || secondTag;
+        // 兜底：如果找不到方法标签，使用第一个非任务标签
+        for (const t of result.tags) {
+            if (t !== result.primaryTaskTag) {
+                result.primaryMethodTag = t;
+                break;
+            }
+        }
+        if (!result.primaryMethodTag) {
+            result.primaryMethodTag = result.tags.length > 1 ? result.tags[1] : (result.tags[0] || '');
+        }
     }
     result.sotaClaim = machineSummary.sotaClaim;
     result.hasCode = machineSummary.hasCode;
@@ -820,7 +1078,8 @@ function loadPrompt(mdPath, vars = {}) {
     }
 
     // 检测未替换的占位符并警告（只在原始模板中检测，避免将替换值中的 LaTeX 符号误判）
-    const templateVars = [...blockMatch[1].matchAll(/\{([a-zA-Z_]\w*)\}/g)].map(m => m[1]);
+    // 排除单字母（如 {N}, {k}, {i} 等数学公式变量）
+    const templateVars = [...blockMatch[1].matchAll(/\{([a-zA-Z_]\w{1,})\}/g)].map(m => m[1]);
     const providedKeys = new Set(Object.keys(vars));
     const unboundKeys = [...new Set(templateVars)].filter(k => !providedKeys.has(k));
     if (unboundKeys.length > 0) {

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)  # 强制覆盖系统环境变量，确保使用 .env 文件中的配置
 
 from log_setup import setup_script_logging
 setup_script_logging(__file__)
@@ -144,7 +144,11 @@ def call_llm_api(prompt, max_tokens=800, temperature=0.1):
     base = endpoint.rstrip('/')
     if base.endswith('/v1'):
         base = base[:-3]
-    api_url = f"{base}/anthropic/v1/messages"
+    # 避免重复添加 /anthropic（如 endpoint 已是 anthropic 路径）
+    if '/anthropic' in base:
+        api_url = f"{base}/v1/messages"
+    else:
+        api_url = f"{base}/anthropic/v1/messages"
 
     payload = {
         "model": model,
@@ -402,6 +406,11 @@ def yaml_escape(s):
     """安全转义 YAML 双引号字符串中的特殊字符，同时避免 f-string 解析问题"""
     if not s:
         return ''
+    # 先移除 LaTeX 公式，避免 YAML/Hugo 解析错误
+    s = re.sub(r'\\\([^)]+\\\)', '', s)  # \(...\) -> ''
+    s = re.sub(r'\\\[[^\]]+\\\]', '', s)  # \[...\] -> ''
+    s = re.sub(r'\$[^\s\$][^$]*?\$', '', s)  # $...$ -> ''
+    s = re.sub(r'\$\$[^$]*?\$\$', '', s)  # $$...$$ -> ''
     return (s.replace('\\', '\\\\')
              .replace('"', '\\"')
              .replace('\n', ' ')
@@ -740,9 +749,53 @@ hiddenInHomeList: true
     # 自动嵌入论文图片（当 analysis 中尚未引用时）
     image_urls = paper.get('imageUrls', []) or paper.get('allImageUrls', [])
     if image_urls and '![' not in md:
-        md += '\n### 📷 论文图片\n\n'
-        for i, img_url in enumerate(image_urls[:5], 1):
-            md += f'![图{i}]({img_url})\n\n'
+        # 将图片智能插入到对应章节，而非全部堆在最后
+        def insert_images_into_sections(markdown, urls):
+            if not urls:
+                return markdown
+            
+            # 定义可能插入图片的章节标题（按优先级）
+            # 使用 ### 匹配三级标题（博客中 analysis 的一级标题被转换为三级）
+            # [^#\n]* 匹配标题名称前的任意内容（包括 emoji）
+            section_patterns = [
+                (r'(###[^#\n]*方法概述和架构[\s\S]*?)(?=\n###\s|\Z)', '方法概述'),   # 方法概述部分后
+                (r'(###[^#\n]*实验结果[\s\S]*?)(?=\n###\s|\Z)', '实验结果'),       # 实验结果部分后
+            ]
+            
+            inserted = 0
+            urls_list = list(urls)
+            
+            for pattern, section_name in section_patterns:
+                match = re.search(pattern, markdown)
+                if match and inserted < len(urls_list):
+                    # 每个章节最多插入2张图片
+                    imgs_to_insert = urls_list[inserted:inserted+2]
+                    if imgs_to_insert:
+                        img_md = '\n'
+                        for j, img_url in enumerate(imgs_to_insert, inserted+1):
+                            img_md += f'![图{j}]({img_url})\n\n'
+                        
+                        # 在章节内容结束后插入图片
+                        end_pos = match.end(1)
+                        markdown = markdown[:end_pos] + img_md + markdown[end_pos:]
+                        inserted += len(imgs_to_insert)
+            
+            # 如果还有剩余图片未插入，放在最后
+            if inserted < len(urls_list):
+                remaining = urls_list[inserted:]
+                img_md = '\n### 📷 论文图片\n\n'
+                for j, img_url in enumerate(remaining, inserted+1):
+                    img_md += f'![图{j}]({img_url})\n\n'
+                # 插入到返回链接之前
+                return_link = f'\n---\n\n[← 返回'
+                if return_link in markdown:
+                    markdown = markdown.replace(return_link, img_md + return_link)
+                else:
+                    markdown += img_md
+            
+            return markdown
+        
+        md = insert_images_into_sections(md, image_urls[:5])
 
     md += f'\n---\n\n[← 返回 {date_str} 语音/音乐/音频论文速递]({BASE_PATH}/posts/{date_str}/)\n'
 

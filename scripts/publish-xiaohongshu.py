@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)  # 强制覆盖系统环境变量，确保使用 .env 文件中的配置
 
 from log_setup import setup_script_logging
 setup_script_logging(__file__)
@@ -52,7 +52,11 @@ def call_llm_for_oneliner(title, abstract):
     base = endpoint.rstrip('/')
     if base.endswith('/v1'):
         base = base[:-3]
-    api_url = f"{base}/anthropic/v1/messages"
+    # 避免重复添加 /anthropic（如 endpoint 已是 anthropic 路径）
+    if '/anthropic' in base:
+        api_url = f"{base}/v1/messages"
+    else:
+        api_url = f"{base}/anthropic/v1/messages"
 
     prompt = f"""用1-2句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书。总字数严格控制在70字以内，必须输出完整内容，不要省略：
 
@@ -125,7 +129,7 @@ def generate_llm_oneliners(top_papers):
         return None
 
     results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         future_to_idx = {executor.submit(worker, item): i for i, item in enumerate(top_papers)}
         for future in concurrent.futures.as_completed(future_to_idx):
             idx = future_to_idx[future]

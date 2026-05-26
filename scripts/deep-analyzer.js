@@ -32,20 +32,17 @@ const {
 /**
  * 清理 gap-fill（审校重写）输出中的前缀废话
  * 确保输出直接从 ## 评分 开始
+ * 如果找不到 ## 评分，返回 null 表示格式不正确
  */
 function cleanGapFillPrefix(text) {
-    if (!text) return text;
+    if (!text) return null;
     // 找到第一个 ## 评分 的位置
     const scoreIdx = text.indexOf('## 评分');
-    if (scoreIdx > 0) {
+    if (scoreIdx >= 0) {
         return text.substring(scoreIdx).trim();
     }
-    // 如果没有 ## 评分，尝试其他一级标题
-    const h2Idx = text.search(/\n## /);
-    if (h2Idx > 0) {
-        return text.substring(h2Idx + 1).trim();
-    }
-    return text.trim();
+    // 如果没有 ## 评分，返回 null（格式不正确，调用方应回退到原始分析）
+    return null;
 }
 
 // API 配置 - 深度分析阶段（统一使用 PAPER_ANALYZER_*）
@@ -638,8 +635,13 @@ async function analyzePaperDeep(paper) {
     try {
         const revisedText = await reviseAnalysis(paper, analysis, textForAnalysis);
         if (revisedText && revisedText.length > 100) {
-            analysis = cleanGapFillPrefix(revisedText.trim());
-            console.log(`    [deep] ✅ 审校重写完成`);
+            const cleaned = cleanGapFillPrefix(revisedText.trim());
+            if (cleaned) {
+                analysis = cleaned;
+                console.log(`    [deep] ✅ 审校重写完成`);
+            } else {
+                console.log(`    [deep] ⚠️  审校重写输出格式不正确（缺少 ## 评分），回退到原始分析`);
+            }
         }
     } catch (e) {
         console.log(`    [deep] ⚠️  审校重写失败: ${e.message}`);
