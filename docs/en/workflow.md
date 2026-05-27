@@ -21,7 +21,16 @@ Archive rules (evaluated per file):
 
 Additionally, if `deep-analysis-result.json` exists and already contains data, it is automatically backed up to `data/archive/deep-analysis-result-<timestamp>.bak.json` before archiving, and old backups are automatically cleaned up (keeping the most recent 10).
 
-### 3.2 arXiv Fetching
+### 3.2 Load Deduplication Database and Blog Dedup
+
+At startup, the deduplication set is first loaded:
+
+1. **papers.json**: Read existing paper IDs from `data/current/papers.json`
+2. **Blog published**: Scan the Hugo blog repository (`PAPER_DIGEST_BLOG_REPO`, default `~/code/github_repos/audio-paper-digest-blog`) `content/posts/` directory, extract arXiv IDs in `arxiv.org/abs/XXXX.XXXXX` format from all `.md` files
+
+Both are merged into a unified deduplication set. Subsequent arXiv and HuggingFace fetching will skip IDs in this set, **excluding already-published papers at the fetch stage to avoid wasting LLM API calls.**
+
+### 3.3 arXiv Fetching
 
 Fetch the latest papers from 7 categories:
 
@@ -45,7 +54,7 @@ Fetch parameters:
 
 Deduplication logic: `deduplicatePapers()` deduplicates by `arxivId`, with core categories (eess.AS / cs.SD / eess.SP) taking precedence over supplement categories.
 
-### 3.3 HuggingFace Papers Fetching
+### 3.4 HuggingFace Papers Fetching
 
 Dual-source fetching via `fetch-huggingface-papers.js`:
 
@@ -54,12 +63,12 @@ Dual-source fetching via `fetch-huggingface-papers.js`:
 
 Filtering:
 - Only keep papers from the last 7 days (`published >= today-7 days`)
-- Exclude already-known IDs
+- Exclude already-known IDs (including IDs from papers.json, just-fetched arXiv papers, and blog-published IDs)
 - Sort by `upvotes` descending
 
 Technical implementation: data is fetched using `curl` commands (to avoid Node fetch compatibility issues in proxy environments), and returned data is normalized to a field structure consistent with arXiv.
 
-### 3.4 Merge and Deduplicate
+### 3.5 Merge and Deduplicate
 
 `mergeAndDeduplicate(arxivPapers, hfPapers)` rules:
 
@@ -67,6 +76,8 @@ Technical implementation: data is fetched using `curl` commands (to avoid Node f
 - **HF papers supplement**: if an HF paper's `arxivId` already exists in an arXiv paper, all 7 HF-specific fields are merged; if not, it is added as an independent paper
 - **Source tags**: `sources: ['arxiv']`, `['huggingface']`, or `['arxiv', 'huggingface']`
 - **Abstract unification**: HF papers output both `summary` and `abstract` (same content), ensuring downstream consumers do not need to distinguish field names
+
+After merging, blog-published papers are filtered out (based on the blog ID set loaded in Step 3.2), ensuring already-published papers do not enter the LLM filter stage.
 
 HF-specific fields (7 total):
 
@@ -80,7 +91,7 @@ HF-specific fields (7 total):
 | `hf_github_stars` | number | GitHub Stars count |
 | `hf_discussion_id` | string | HF Discussion ID |
 
-### 3.5 LLM Filtering
+### 3.6 LLM Filtering
 
 Using the `PAPER_ANALYZER_*` configuration in `the `.env` file in the project root`, each paper is evaluated to determine whether it is speech / music / audio related.
 
@@ -112,7 +123,7 @@ Runtime parameters:
 
 Results are saved to `data/current/filtered-papers.json`.
 
-### 3.6 Deep Analysis
+### 3.7 Deep Analysis
 
 `deep-analyzer.js` performs full-text + image deep reading and comprehension for each filtered paper.
 
@@ -160,7 +171,7 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 | Round 4 | Table Fix | Code detection + LLM supplement | Detect missing Markdown tables in the Experimental Results section, trigger supplementation |
 | Round 5 | Method Section Fix | Code detection + LLM supplement | Detect if Method Overview is too brief (<300 chars / <3 paragraphs), trigger expansion to 600+ chars |
 
-### 3.7 Incremental Save and Wrap-up
+### 3.8 Incremental Save and Wrap-up
 
 - **Incremental save to `data/current/deep-analysis-result.json` immediately after each batch completes**, avoiding total loss on interruption; during incremental merge, **existing successful analyses are automatically protected** (failed results will not overwrite an existing `analysis`)
 - After all papers are analyzed, existing results are read again, deduplicated and merged by `arxivId`/`paper_id`, preserving historical data

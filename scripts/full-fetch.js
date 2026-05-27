@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const { fetchCategoryPapers, deduplicatePapers, filterPapersWithLLM, loadPapers, savePapers } = require('./fetch-papers.js');
 const { fetchHuggingFacePapers, mergeAndDeduplicate } = require('./fetch-huggingface-papers.js');
-const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson } = require('./utils.js');
+const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson, loadPublishedIdsFromBlog } = require('./utils.js');
 const { analyzeBatch, mergeAndSaveResults } = require('./analysis-engine.js');
 
 const Config = require('./config.js');
@@ -129,6 +129,13 @@ async function fullFetch() {
     const existingIds = new Set(Object.keys(papersData.papers).map(id => normalizedId(id)));
     console.log(`已有 ${existingIds.size} 篇论文ID（已规范化），遇到重复将跳过\n`);
 
+    // 加载博客已发布论文 ID，加入去重集合
+    const blogRepo = Config.PUBLISH_CONFIG.blogRepo;
+    const publishedIds = loadPublishedIdsFromBlog(blogRepo);
+    for (const pid of publishedIds) {
+        existingIds.add(pid);
+    }
+
     // ========== 第一步：从 arxiv 抓取 ==========
     console.log('📥 第一步：从 arxiv 抓取论文');
     const arxivPapers = [];
@@ -208,9 +215,17 @@ async function fullFetch() {
     console.log(`  - 仅 HuggingFace: ${hfOnly} 篇`);
     console.log(`  - 两个来源都有: ${both} 篇`);
 
+    // 过滤掉已发布到博客的论文
+    const beforeBlogSkip = allPapers.length;
+    const allPapersFiltered = allPapers.filter(paper => !publishedIds.has(normalizedId(paper)));
+    const blogSkippedCount = beforeBlogSkip - allPapersFiltered.length;
+    if (blogSkippedCount > 0) {
+        console.log(`📝 过滤 ${blogSkippedCount} 篇已发布到博客的论文`);
+    }
+
     // ========== 第四步：大模型筛选 ==========
     console.log('\n🤖 第四步：大模型筛选（判断是否语音/音频相关）');
-    const filtered = await filterPapersWithLLM(allPapers, {
+    const filtered = await filterPapersWithLLM(allPapersFiltered, {
         batchSize: Config.FILTER_CONFIG.batchSize,
         delayBetweenBatches: Config.FILTER_CONFIG.delayBetweenBatchesMs,
         useKeywordPreFilter: false
@@ -237,8 +252,11 @@ async function fullFetch() {
         timestamp: getBeijingISOString(),
         stats: {
             beforeFilter: allPapers.length,
+            beforeBlogSkip: allPapers.length,
+            afterBlogSkip: allPapersFiltered.length,
             afterFilter: filtered.length,
             afterArchiveSkip: filteredNew.length,
+            skippedFromBlog: blogSkippedCount,
             skippedFromArchive: skippedCount,
             arxivOnly,
             hfOnly,
@@ -305,7 +323,7 @@ async function fullFetch() {
             const batchFailed = batchResults.length - batchSuccess;
             const batchScores = batchResults.filter(r => r.success && r.parsed?.score).map(r => r.parsed.score);
             const batchScoreInfo = batchScores.length > 0 ? ` 评分: ${batchScores.join(', ')}` : '';
-            const totalBatches = Math.ceil(filtered.length / ANALYSIS_CONCURRENCY);
+            const totalBatches = Math.ceil(filteredNew.length / ANALYSIS_CONCURRENCY);
             console.log(`  ── 批次 ${batchNum}/${totalBatches} 完成: 成功 ${batchSuccess}/${batchResults.length}${batchScoreInfo}${batchFailed > 0 ? ` | 失败 ${batchFailed}` : ''}\n`);
 
             // 收集成功结果到 analyzedPapers
@@ -429,7 +447,9 @@ async function fullFetch() {
     console.log(`  - arxiv 抓取: ${arxivPapers.length} 篇`);
     console.log(`  - HuggingFace 抓取: ${hfPapers.length} 篇`);
     console.log(`  - 合并去重: ${allPapers.length} 篇`);
-    console.log(`  - 筛选: ${filtered.length} 篇`);
+    console.log(`  - LLM 筛选: ${filtered.length} 篇`);
+    if (skippedCount > 0) console.log(`  - 归档去重: -${skippedCount} 篇`);
+    if (blogSkippedCount > 0) console.log(`  - 博客去重: -${blogSkippedCount} 篇`);
     console.log(`  - 本次分析: ${analyzedPapers.length} 篇`);
     console.log(`  - 保留已有: ${existingPapers.length} 篇`);
     console.log(`  - 合并后总计: ${mergedPapers.length} 篇`);

@@ -26,15 +26,16 @@ When documents conflict with code, **the current implementation in `scripts/*` p
 Main entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fetch`)
 
 1. **Auto-archive**: Checks `data/current/deep-analysis-result.json` / `filtered-papers.json` / `analyzed.json`; if their timestamps are earlier than today (Beijing time) and `data/archive/<date>/` does not exist, copies them and deletes the originals. **`papers.json` is NOT archived.**
-2. **arXiv fetch**: 7 categories, up to 100 papers each (adjustable via `PD_ARXIV_MAX_RESULTS`), stops early if 20 consecutive existing IDs are encountered
-3. **HuggingFace fetch**: `daily_papers` pagination (up to 20 pages) + `papers` API supplement, defaulting to the last 7 days
-4. **Merge & deduplicate**: arXiv takes priority, HF supplements 7 unique fields, marks `sources`
-5. **LLM filtering**: Uses `PAPER_ANALYZER_*` config to judge speech/music/audio relevance paper by paper, `batchSize=5` (adjustable via `PD_FILTER_BATCH_SIZE`), 60s timeout per paper, 3 retries
-6. **Save filter results**: `data/current/filtered-papers.json`
-7. **Deep analysis**: `deep-analyzer.js`, full text + images, concurrency of 3 (adjustable via `PD_ANALYSIS_CONCURRENCY`), up to 2 retries per paper (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
-8. **Incremental save**: Saves to `data/current/deep-analysis-result.json` immediately after each batch, with failure-result protection (papers with a successful analysis will not be overwritten by a failure result with no analysis)
-9. **Update dedup DB**: Appends new paper IDs to `data/current/papers.json`, auto-backing up papers.json (retaining the last 7 days)
-10. **Final merge**: Deduplicates and merges historical results, auto-backing up bak files (retaining the last 10)
+2. **Load dedup DB**: Reads existing IDs from `data/current/papers.json`; scans the Hugo blog repository (`PAPER_DIGEST_BLOG_REPO`) for published paper arXiv IDs, merging both into a unified deduplication set
+3. **arXiv fetch**: 7 categories, up to 100 papers each (adjustable via `PD_ARXIV_MAX_RESULTS`), stops early if 20 consecutive existing IDs are encountered (dedup set includes papers.json + blog-published IDs)
+4. **HuggingFace fetch**: `daily_papers` pagination (up to 20 pages) + `papers` API supplement, defaulting to the last 7 days, excluding IDs in the dedup set
+5. **Merge & deduplicate**: arXiv takes priority, HF supplements 7 unique fields, marks `sources`; filters out blog-published papers
+6. **LLM filtering**: Uses `PAPER_ANALYZER_*` config to judge speech/music/audio relevance paper by paper, `batchSize=5` (adjustable via `PD_FILTER_BATCH_SIZE`), 60s timeout per paper, 3 retries
+7. **Save filter results**: `data/current/filtered-papers.json`
+8. **Deep analysis**: `deep-analyzer.js`, full text + images, concurrency of 3 (adjustable via `PD_ANALYSIS_CONCURRENCY`), up to 2 retries per paper (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
+9. **Incremental save**: Saves to `data/current/deep-analysis-result.json` immediately after each batch, with failure-result protection (papers with a successful analysis will not be overwritten by a failure result with no analysis)
+10. **Update dedup DB**: Appends new paper IDs to `data/current/papers.json`, auto-backing up papers.json (retaining the last 7 days)
+11. **Final merge**: Deduplicates and merges historical results, auto-backing up bak files (retaining the last 10)
 
 `full-fetch.js` **does NOT auto-publish blog/WeChat**; publishing requires running Python scripts separately.
 

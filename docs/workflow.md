@@ -21,7 +21,16 @@
 
 同时，若 `deep-analysis-result.json` 存在且已有数据，会在归档前自动备份到 `data/archive/deep-analysis-result-<时间戳>.bak.json`，并自动清理旧备份（保留最近 10 个）。
 
-### 3.2 arXiv 抓取
+### 3.2 加载去重库与博客去重
+
+运行开始时，首先加载去重集合：
+
+1. **papers.json**：读取 `data/current/papers.json` 中已有的论文 ID
+2. **博客已发布**：扫描 Hugo 博客仓库（`PAPER_DIGEST_BLOG_REPO`，默认 `~/code/github_repos/audio-paper-digest-blog`）的 `content/posts/` 目录，从所有 `.md` 文件中提取 `arxiv.org/abs/XXXX.XXXXX` 格式的 arXiv ID
+
+两者合并为统一去重集合，后续 arXiv 抓取和 HuggingFace 抓取都会跳过集合中的已有 ID，**在抓取阶段就排除已发布论文，避免浪费 LLM API 调用。**
+
+### 3.3 arXiv 抓取
 
 从 7 个分类各抓取最新论文：
 
@@ -45,7 +54,7 @@
 
 去重逻辑：`deduplicatePapers()` 按 `arxivId` 去重，core 类别（eess.AS / cs.SD / eess.SP）优先于 supplement 类别保留。
 
-### 3.3 HuggingFace Papers 抓取
+### 3.4 HuggingFace Papers 抓取
 
 通过 `fetch-huggingface-papers.js` 双源抓取：
 
@@ -54,12 +63,12 @@
 
 过滤：
 - 只保留近 7 天的论文（`published >= 今天-7天`）
-- 排除已有 ID
+- 排除已有 ID（包括 papers.json 中的 ID、刚抓取的 arXiv 论文 ID、博客已发布 ID）
 - 按 `upvotes` 降序排列
 
 技术实现：使用 `curl` 命令获取数据（避免 Node fetch 在代理环境下的兼容问题），返回数据标准化为与 arXiv 一致的字段结构。
 
-### 3.4 合并去重
+### 3.5 合并去重与博客过滤
 
 `mergeAndDeduplicate(arxivPapers, hfPapers)` 的规则：
 
@@ -67,6 +76,8 @@
 - **HF 论文补充**：若 HF 论文的 `arxivId` 已存在于 arXiv 论文中，合并全部 7 个 HF 特有字段；若不存在，作为独立论文加入
 - **来源标记**：`sources: ['arxiv']`、`['huggingface']` 或 `['arxiv', 'huggingface']`
 - **摘要统一**：HF 论文同时输出 `summary` 和 `abstract`（内容相同），确保下游无需区分字段名
+
+合并后，过滤掉博客已发布论文（基于第 3.2 步加载的博客 ID 集合），确保已发布论文不会进入 LLM 筛选阶段。
 
 HF 特有字段（共 7 个）：
 
@@ -80,7 +91,7 @@ HF 特有字段（共 7 个）：
 | `hf_github_stars` | number | GitHub Stars 数 |
 | `hf_discussion_id` | string | HF Discussion ID |
 
-### 3.5 LLM 筛选
+### 3.6 LLM 筛选
 
 使用 `项目根目录的 `.env` 文件` 中的 `PAPER_ANALYZER_*` 配置逐篇判断是否为语音/音乐/音频相关。
 
@@ -112,7 +123,7 @@ HF 特有字段（共 7 个）：
 
 结果保存到 `data/current/filtered-papers.json`。
 
-### 3.6 深度分析
+### 3.7 深度分析
 
 使用 `deep-analyzer.js` 对每篇筛选后的论文进行全文 + 图片的深度阅读理解。
 
@@ -160,7 +171,7 @@ HF 特有字段（共 7 个）：
 | Round 4 | 表格修复 | 代码检测 + LLM 补充 | 检测实验结果章节缺失的 Markdown 表格，触发补充 |
 | Round 5 | 方法章节修复 | 代码检测 + LLM 补充 | 检测方法概述是否过于简略（<300 字/<3 段），触发扩展至 600+ 字 |
 
-### 3.7 增量保存与收尾
+### 3.8 增量保存与收尾
 
 - **每批分析完成后立即增量保存**到 `data/current/deep-analysis-result.json`，避免中断丢失全部结果；增量合并时**自动保护已有成功分析**（失败结果不会覆盖已有 `analysis`）
 - 全部论文分析完毕后，再次读取已有结果，按 `arxivId`/`paper_id` 去重合并，保留历史数据

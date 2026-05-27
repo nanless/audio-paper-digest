@@ -6,7 +6,7 @@
 
 #### `scripts/full-fetch.js`
 
-完整流程入口。执行第 3 节的所有步骤：自动归档 → arXiv 抓取 → HF 抓取 → 合并去重 → LLM 筛选 → 深度分析 → 增量保存 → 更新去重库。
+完整流程入口。执行第 3 节的所有步骤：自动归档 → 加载去重库（含博客已发布 ID）→ arXiv 抓取 → HF 抓取 → 合并去重 → 过滤博客已发布论文 → LLM 筛选 → 深度分析 → 增量保存 → 更新去重库。
 
 所有配置从 `scripts/config.js` 读取，支持环境变量覆写：
 - `ANALYSIS_CONFIG.concurrency = 3`（`PD_ANALYSIS_CONCURRENCY`）
@@ -230,6 +230,7 @@ Node.js 公共工具模块。被几乎所有脚本引用：
 **其他**：
 - `normalizedId(paper)`：生成统一论文 ID
 - `backupPapersJson()`：自动备份 `papers.json`
+- `loadPublishedIdsFromBlog(blogRepo)`：扫描 Hugo 博客仓库中已发布论文的 arXiv ID 集合（从 `content/posts/*.md` 中提取 `arxiv.org/abs/XXXX.XXXXX` 格式链接）
 - `loadPrompt(filePath, replacements)`：加载 prompt 文件并替换占位符
 
 #### `scripts/utils.py`

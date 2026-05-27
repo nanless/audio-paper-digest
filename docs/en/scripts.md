@@ -6,7 +6,7 @@
 
 #### `scripts/full-fetch.js`
 
-Complete workflow entry point. Executes all steps in Section 3: auto-archive -> arXiv fetch -> HF fetch -> merge and deduplicate -> LLM filter -> deep analysis -> incremental save -> update deduplication database.
+Complete workflow entry point. Executes all steps in Section 3: auto-archive -> load dedup database (including blog-published IDs) -> arXiv fetch -> HF fetch -> merge and deduplicate -> filter blog-published papers -> LLM filter -> deep analysis -> incremental save -> update deduplication database.
 
 All configurations are read from `scripts/config.js`, with environment variable overrides:
 - `ANALYSIS_CONFIG.concurrency = 3` (`PD_ANALYSIS_CONCURRENCY`)
@@ -229,6 +229,7 @@ Node.js common utility module. Referenced by almost all scripts:
 **Other**:
 - `normalizedId(paper)`: generate unified paper ID
 - `backupPapersJson()`: automatic backup of `papers.json`
+- `loadPublishedIdsFromBlog(blogRepo)`: scan Hugo blog repository for published paper arXiv IDs (extracts `arxiv.org/abs/XXXX.XXXXX` format links from `content/posts/*.md`)
 - `loadPrompt(filePath, replacements)`: load prompt file and replace placeholders
 
 #### `scripts/utils.py`

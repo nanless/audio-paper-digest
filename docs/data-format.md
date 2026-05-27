@@ -31,6 +31,18 @@
 ```json
 {
   "timestamp": "2026-04-21T10:00:00+08:00",
+  "stats": {
+    "beforeFilter": 500,
+    "beforeBlogSkip": 500,
+    "afterBlogSkip": 450,
+    "afterFilter": 450,
+    "afterArchiveSkip": 450,
+    "skippedFromBlog": 50,
+    "skippedFromArchive": 0,
+    "arxivOnly": 400,
+    "hfOnly": 50,
+    "both": 0
+  },
   "papers": [
     {
       "arxivId": "2604.12345",

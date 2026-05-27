@@ -1037,6 +1037,51 @@ function backupPapersJson(papersFilePath, archiveDir) {
 }
 
 // ═══════════════════════════════════════════════════════
+// 博客已发布论文扫描
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 从 Hugo 博客仓库中扫描已发布论文的 arXiv ID 集合
+ * 博客文章中的 arXiv 链接格式：[arxiv](https://arxiv.org/abs/XXXX.XXXXX)
+ * @param {string} blogRepo - 博客仓库根目录路径
+ * @returns {Set<string>} 已发布的规范化 arXiv ID 集合
+ */
+function loadPublishedIdsFromBlog(blogRepo) {
+    const publishedIds = new Set();
+    if (!blogRepo) return publishedIds;
+
+    const postsDir = path.join(blogRepo, 'content', 'posts');
+    if (!fs.existsSync(postsDir)) {
+        console.log(`[blog-dedup] 博客目录不存在: ${postsDir}，跳过博客去重`);
+        return publishedIds;
+    }
+
+    try {
+        const files = fs.readdirSync(postsDir).filter(f => f.endsWith('.md'));
+        // 匹配 arxiv 链接：[arxiv](https://arxiv.org/abs/XXXX.XXXXX) 或纯 URL
+        const arxivUrlRegex = /arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})(?:v\d+)?/g;
+
+        for (const file of files) {
+            try {
+                const content = fs.readFileSync(path.join(postsDir, file), 'utf8');
+                let match;
+                while ((match = arxivUrlRegex.exec(content)) !== null) {
+                    publishedIds.add(normalizedId(match[1]));
+                }
+            } catch (e) {
+                // 忽略单个文件读取错误
+            }
+        }
+
+        console.log(`[blog-dedup] 从博客扫描到 ${publishedIds.size} 篇已发布论文`);
+    } catch (e) {
+        console.log(`[blog-dedup] 扫描博客目录失败: ${e.message}，跳过博客去重`);
+    }
+
+    return publishedIds;
+}
+
+// ═══════════════════════════════════════════════════════
 // Prompt 加载（从 markdown 文件读取）
 // ═══════════════════════════════════════════════════════
 
@@ -1118,6 +1163,8 @@ module.exports = {
     createProxyAgent,
     // 备份
     backupPapersJson,
+    // 博客去重
+    loadPublishedIdsFromBlog,
     // Prompt
     loadPrompt
 };
