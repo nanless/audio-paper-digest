@@ -320,6 +320,19 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 **Review 环节**：
 生成 `.md` 后会自动执行三层 review（代码正则检查 → LLM 文本审查 → 多模态图片审查），论文独立页面使用 `ThreadPoolExecutor(max_workers=3)` 并发审查，自动修复常见问题后写入文件。
 
+代码层自动修复覆盖以下问题：
+1. 未转义的 HTML-like 标签（`<S>`、`<E>`、`<task>` 等）→ 用反引号包裹
+2. 未转换的 LaTeX `$...$` 公式 → 转为 `\(...\)` 格式
+3. 非标准图片引用格式 → 转为标准 Markdown 图片语法
+4. 过长的 base64 data URI → 自动截断
+5. YAML frontmatter 双逗号 → 自动修复
+6. Markdown 表格子标题行（前三列全空）→ 删除该行
+7. 未闭合的 LaTeX `$ \mathcal{L}_D \(` → 转为 `\(\mathcal{L}_D\)`
+8. 错乱的 LaTeX 括号（`\)\mathcal{L}_X\(`）→ 统一修正为 `\(\mathcal{L}_X\)`
+9. 双反斜杠 LaTeX（`\(\\mathcal{L}_X\)`）→ 修正为 `\(\mathcal{L}_X\)`
+
+LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，按 `fix_instruction` 执行简单文本替换。
+
 **重要限制**：`fetchedAt` 是抓取时间，不是论文在 arXiv 上的 `published` 日期。跨天运行时请显式指定 `--date`。
 
 #### `scripts/publish-wechat-full.py`

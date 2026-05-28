@@ -319,6 +319,19 @@ Publish to Hugo blog (GitHub Pages).
 **Review Step**:
 After generating `.md`, a three-layer review is automatically executed (code regex check -> LLM text review -> multimodal image review). Paper standalone pages use `ThreadPoolExecutor(max_workers=3)` for concurrent review; common issues are automatically fixed before writing to file.
 
+Code-level auto-fix covers:
+1. Unescaped HTML-like tags (`<S>`, `<E>`, `<task>`, etc.) → wrap in backticks
+2. Unconverted LaTeX `$...$` formulas → convert to `\(...\)` format
+3. Non-standard image references → convert to standard Markdown image syntax
+4. Overly long base64 data URIs → auto-truncate
+5. YAML frontmatter double commas → auto-fix
+6. Markdown table sub-header rows (first 3 columns empty) → delete the row
+7. Unclosed LaTeX `$ \mathcal{L}_D \(` → convert to `\(\mathcal{L}_D\)`
+8. Malformed LaTeX brackets (`\)\mathcal{L}_X\(`) → unify to `\(\mathcal{L}_X\)`
+9. Double-backslash LaTeX (`\(\\mathcal{L}_X\)` → fix to `\(\mathcal{L}_X\)`)
+
+LLM-level fix: Issues where LLM review returns `auto_fixable: true` are fixed via simple text replacement per `fix_instruction`.
+
 **Important Limitation**: `fetchedAt` is the fetch time, not the paper's `published` date on arXiv. Please explicitly specify `--date` when running across midnight.
 
 #### `scripts/publish-wechat-full.py`
