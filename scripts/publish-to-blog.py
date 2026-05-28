@@ -852,13 +852,54 @@ def review_and_fix_post(file_path):
         issues.append("发现 YAML frontmatter 双逗号，已修复")
         content = fix_yaml_double_commas(content)
 
-    # 7. 检查是否有未闭合的 markdown 链接或图片引用
+    # 7. 检查并修复 Markdown 表格中的子标题行（全空首列 + 有内容的行，会破坏表格结构）
+    table_subheader_pattern = re.compile(r'^(\|[\s]*\|[\s]*\|[\s]*\|)(.+?)$', re.MULTILINE)
+    def _fix_table_subheader(m):
+        # 如果前三列都是空的，但后面有内容，这是子标题行，需要删除
+        prefix = m.group(1)
+        rest = m.group(2)
+        # 检查 rest 中是否有非空列
+        cols = [c.strip() for c in rest.split('|') if c.strip()]
+        if cols:
+            issues.append(f"发现表格子标题行，已删除: {' '.join(cols)[:40]}")
+            return ''  # 删除这一行
+        return m.group(0)
+    if re.search(r'^\|[\s]*\|[\s]*\|[\s]*\|', content, re.MULTILINE):
+        new_content = table_subheader_pattern.sub(_fix_table_subheader, content)
+        if new_content != content:
+            content = new_content
+
+    # 8. 检查并修复未闭合的 LaTeX $ 公式（$ \mathcal{L}_D \( 形式）
+    broken_latex_pattern = re.compile(r'\$ \\mathcal\{([^}]+)\}[^\\]*\\\(')
+    if broken_latex_pattern.search(content):
+        issues.append("发现未闭合的 LaTeX $ 公式，已修复")
+        content = broken_latex_pattern.sub(lambda m: f'\\(\\mathcal{{{m.group(1)}}}\\)', content)
+
+    # 9. 检查并修复表格中错乱的 LaTeX 括号（如 \)\\mathcal{L}_D$）
+    broken_latex_table = re.compile(r'\\\)\\\\mathcal\{([^}]+)\}\$')
+    if broken_latex_table.search(content):
+        issues.append("发现表格中错乱的 LaTeX，已修复")
+        content = broken_latex_table.sub(lambda m: f'\\(\\mathcal{{{m.group(1)}}}\\)', content)
+
+    # 10. 检查并修复 "仅\)\mathcal{L}_A\(" 这类错乱模式
+    broken_paren_latex = re.compile(r'仅\\\)\\mathcal\{([^}]+)\}\\\(')
+    if broken_paren_latex.search(content):
+        issues.append("发现错乱的 LaTeX 括号，已修复")
+        content = broken_paren_latex.sub(lambda m: f'仅\\(\\mathcal{{{m.group(1)}}}\\)', content)
+
+    # 11. 检查并修复 \(\\mathcal{L}_X\) 双反斜杠问题
+    double_backslash_latex = re.compile(r'\\\(\\\\mathcal\{([^}]+)\}\\\)')
+    if double_backslash_latex.search(content):
+        issues.append("发现双反斜杠 LaTeX，已修复")
+        content = double_backslash_latex.sub(lambda m: f'\\(\\mathcal{{{m.group(1)}}}\\)', content)
+
+    # 12. 检查是否有未闭合的 markdown 链接或图片引用
     broken_link_pattern = re.compile(r'!?\[([^\]]*)\]\s*\(\s*\)')
     broken_links = broken_link_pattern.findall(content)
     if broken_links:
         issues.append(f"发现 {len(broken_links)} 个空链接")
 
-    # 8. 检查 YAML frontmatter 中是否有未闭合的双引号
+    # 13. 检查 YAML frontmatter 中是否有未闭合的双引号
     yaml_lines = content.split('---\n')
     if len(yaml_lines) >= 3:
         yaml_block = yaml_lines[1]
