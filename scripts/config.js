@@ -32,14 +32,14 @@ const ARXIV_CATEGORIES = [
 
 const ARXIV_CONFIG = {
     maxResultsPerCategory: 100,
-    fetchMaxRetries: 20,
-    fetchRetryBaseDelayMs: 3000,
-    fetchRateLimitBaseDelayMs: 15000,
-    fetchMaxWaitMs: 300000,
-    categoryDelayMs: 25000,
-    firstRequestDelayMs: 5000,
+    fetchMaxRetries: 30,
+    fetchRetryBaseDelayMs: 5000,
+    fetchRateLimitBaseDelayMs: 30000,
+    fetchMaxWaitMs: 600000,
+    categoryDelayMs: 45000,
+    firstRequestDelayMs: 15000,
     consecutiveExistingThreshold: 20,
-    userAgent: 'audio-paper-digest-bot/1.0 (https://github.com/nanless/audio-paper-digest; contact@example.com)'
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 };
 
 // ═══════════════════════════════════════════════════════

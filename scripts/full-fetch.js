@@ -140,53 +140,53 @@ async function fullFetch() {
     console.log('📥 第一步：从 arxiv 抓取论文');
     const arxivPapers = [];
 
-    for (let i = 0; i < categories.length; i++) {
-        const category = categories[i];
-        // 首次请求前加随机抖动，避免固定时间模式被标记
+    // 核心类别优先，补充类别随机打乱
+    const coreCategories = categories.filter(c => c.priority === 'core');
+    const supplementCategories = categories.filter(c => c.priority !== 'core');
+    for (let i = supplementCategories.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [supplementCategories[i], supplementCategories[j]] = [supplementCategories[j], supplementCategories[i]];
+    }
+    const shuffledCategories = [...coreCategories, ...supplementCategories];
+    console.log(`  请求顺序: ${shuffledCategories.map(c => c.id).join(' → ')}\n`);
+
+    for (let i = 0; i < shuffledCategories.length; i++) {
+        const category = shuffledCategories[i];
+        // 首次请求前加随机延迟
         if (i === 0) {
-            const firstDelay = Math.floor(Math.random() * 8000) + 3000;
+            const baseDelay = Config.ARXIV_CONFIG.firstRequestDelayMs;
+            const jitter = Math.floor(Math.random() * 10000);
+            const firstDelay = baseDelay + jitter;
             console.log(`  首次请求前等待 ${(firstDelay/1000).toFixed(1)} 秒...`);
             await new Promise(resolve => setTimeout(resolve, firstDelay));
         }
-        console.log(`  抓取 ${category.name} (${category.id})...`);
+        console.log(`  [${i+1}/${shuffledCategories.length}] 抓取 ${category.name} (${category.id})...`);
+        const fetchStartTime = Date.now();
         const papers = await fetchCategoryPapers(
             category.id,
             Config.ARXIV_CONFIG.maxResultsPerCategory,
             Config.ARXIV_CONFIG.fetchMaxRetries,
             existingIds
         );
+        const fetchDuration = Date.now() - fetchStartTime;
         arxivPapers.push(...papers);
         console.log(`    获取 ${papers.length} 篇新论文`);
 
-        // 核心类别（eess.AS / cs.SD）若重试后仍获取 0 篇，需区分：API 正常但无新论文 vs 限流
-        const meta = papers._meta || {};
+        // 核心类别检查：无新论文时继续运行（可能是已知论文太多）
         if (category.priority === 'core' && papers.length === 0) {
-            if (meta.entryCount > 0 && meta.stoppedAtConsecutive) {
-                console.log(`\nℹ️ 核心类别 ${category.id}（${category.name}）API 正常返回 ${meta.entryCount} 篇论文，但均为已知论文（可能周末/节假日无更新）`);
-                console.log(`   继续运行，尝试其他来源...`);
-            } else {
-                console.error(`\n❌ 核心类别 ${category.id}（${category.name}）在全部重试后仍获取 0 篇论文，arXiv API 可能处于严重限流状态`);
-                console.error(`   停止今日运行，清除已获取的数据...`);
-
-                // 清除今天可能已产生的数据文件
-                const filesToClear = [FILTERED_FILE, RESULT_FILE, LEGACY_RESULT_FILE];
-                for (const f of filesToClear) {
-                    if (fs.existsSync(f)) {
-                        try {
-                            fs.unlinkSync(f);
-                            console.log(`   已清除: ${path.basename(f)}`);
-                        } catch (e) {
-                            console.log(`   清除失败 ${path.basename(f)}: ${e.message}`);
-                        }
-                    }
-                }
-
-                console.error(`\n📢 今日运行已终止。建议稍后再试。`);
-                process.exit(1);
-            }
+            console.log(`\nℹ️ 核心类别 ${category.id}（${category.name}）无新论文（可能均已被收录）`);
+            console.log(`   继续运行，尝试其他来源...`);
         }
 
-        await new Promise(resolve => setTimeout(resolve, FETCH_DELAY_MS));
+        // 类别间延迟：基础延迟 + 随机抖动 + 限流检测补偿
+        const baseJitter = Math.floor(Math.random() * 15000) + 5000; // 5-20秒随机
+        const rateLimitPenalty = fetchDuration > 120000 ? 60000 : (fetchDuration > 60000 ? 30000 : 0);
+        const totalDelay = FETCH_DELAY_MS + baseJitter + rateLimitPenalty;
+        if (rateLimitPenalty > 0) {
+            console.log(`    检测到可能的限流，额外等待 ${(rateLimitPenalty/1000).toFixed(0)} 秒...`);
+        }
+        console.log(`    等待 ${(totalDelay/1000).toFixed(0)} 秒后继续下一类别...`);
+        await new Promise(resolve => setTimeout(resolve, totalDelay));
     }
 
     console.log(`\narxiv 抓取完成: ${arxivPapers.length} 篇`);
