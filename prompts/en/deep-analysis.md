@@ -79,7 +79,13 @@ has_dataset: 是 / 否 / 未说明
   - **Institutional impact**: Papers from top research institutions (such as Google DeepMind, Meta FAIR, OpenAI, Microsoft Research, Apple, NVIDIA, ByteDance, Tencent, Alibaba, Baidu, Huawei, etc.) typically have stronger impact and follow-up potential, and should receive适当 higher scores
   - **Author impact**: If the authors are well-known researchers in the field (e.g., have published multiple highly-cited papers, are recognized experts in the domain), their work is typically more值得关注 and should receive适当 higher scores
   - Narrowly applicable minor improvements or non-audio-core work can only receive low scores
-- Open Source (0–1.5): Are code / model / data / checkpoints publicly available? 1.5 requires code + model + data all open-sourced with complete README and documentation; 1.0 requires code open-sourced but missing model or documentation; 0.5 for partial resources or no documentation link; 0 for completely closed.
+- Open Source (0–1.5): Is the paper's core content publicly available? **Note: Different papers have different core content** — model papers' core is code + model weights, dataset papers' core is the dataset, tool papers' core is the code repository, theory papers' core is proof materials or experiment code. Scoring rules:
+  - **1.5**: Core content is open-sourced (including cases where links are provided indirectly through demo pages) with complete documentation
+  - **1.2**: Core content is open-sourced but documentation is incomplete
+  - **1.0**: Part of the core content is open-sourced (e.g., only code without model, or only model without code)
+  - **0.5**: Authors promise to open-source but haven't released yet
+  - **0.2**: Only provides demo but no open-source core content
+  - **0**: Completely closed with no promises
 - Reproducibility (0–0.5): Documentation sufficiency beyond open source — training details, hyperparameters, hardware environment, experimental configuration, reproduction steps — are they sufficient for others to reproduce without relying on the authors? 0.5 for complete details; 0.25 for partially missing information; 0 for completely missing key details.
 
 【Reference Ranges】
