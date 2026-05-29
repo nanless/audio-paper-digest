@@ -631,6 +631,32 @@ async function analyzePaperDeep(paper) {
         console.log(`    [deep] ⚠️  开源扫描失败: ${e.message}`);
     }
 
+    // 第2.5轮：检查 demo 页面中的开源链接
+    try {
+        if (!hasOpenSourceLinks(analysis)) {
+            const demoUrls = extractDemoUrls(analysis);
+            if (demoUrls.length > 0) {
+                console.log(`    [deep] 🔍 发现 ${demoUrls.length} 个 demo 页面，检查开源链接...`);
+                const allOpenSourceLinks = [];
+                for (const url of demoUrls.slice(0, 3)) { // 最多检查3个
+                    const links = await checkDemoPageForOpensource(url);
+                    allOpenSourceLinks.push(...links);
+                }
+                if (allOpenSourceLinks.length > 0) {
+                    const uniqueLinks = [...new Set(allOpenSourceLinks)];
+                    const newLinksText = uniqueLinks.map(link => `- ${link}`).join('\n');
+                    analysis = mergeSection(analysis, '## 开源详情', 
+                        `\n\n**从 demo 页面发现的开源链接：**\n${newLinksText}`);
+                    console.log(`    [deep] ✅ 从 demo 页面发现 ${uniqueLinks.length} 个开源链接`);
+                } else {
+                    console.log(`    [deep] ℹ️  demo 页面未发现开源链接`);
+                }
+            }
+        }
+    } catch (e) {
+        console.log(`    [deep] ⚠️  检查 demo 页面失败: ${e.message}`);
+    }
+
     // 第3轮：审校重写（对照原文修正、补充、删减，完全重写前两轮输出）
     try {
         const revisedText = await reviseAnalysis(paper, analysis, textForAnalysis);
@@ -684,6 +710,118 @@ async function scanOpensource(paper, textForAnalysis) {
         textForAnalysis: textForAnalysis
     });
     return await callModel([{ role: 'user', content: prompt }], 8000);
+}
+
+/**
+ * 从分析文本中提取 demo/项目页面 URL
+ */
+function extractDemoUrls(analysis) {
+    const urls = [];
+    // 匹配各种可能的 demo/项目页面链接
+    const patterns = [
+        /Demo[：:]\s*(https?:\/\/[^\s\)]+)/gi,
+        /项目主页[：:]\s*(https?:\/\/[^\s\)]+)/gi,
+        /在线演示[：:]\s*(https?:\/\/[^\s\)]+)/gi,
+        /Homepage[：:]\s*(https?:\/\/[^\s\)]+)/gi,
+        /Project[：:]\s*(https?:\/\/[^\s\)]+)/gi,
+        /页面[：:]\s*(https?:\/\/[^\s\)]+)/gi,
+    ];
+    
+    for (const pattern of patterns) {
+        let match;
+        while ((match = pattern.exec(analysis)) !== null) {
+            const url = match[1].trim();
+            // 排除 arxiv、github、huggingface 等已知链接
+            if (!url.includes('arxiv.org') && 
+                !url.includes('github.com') && 
+                !url.includes('huggingface.co') &&
+                !url.includes('modelscope.cn')) {
+                urls.push(url);
+            }
+        }
+    }
+    
+    return [...new Set(urls)]; // 去重
+}
+
+/**
+ * 访问 demo 页面，检查是否包含开源链接
+ */
+async function checkDemoPageForOpensource(demoUrl) {
+    const openSourcePatterns = [
+        /github\.com\/[\w\-]+\/[\w\-]+/gi,
+        /huggingface\.co\/[\w\-]+\/[\w\-]+/gi,
+        /modelscope\.cn\/[\w\-]+\/[\w\-]+/gi,
+        /gitlab\.com\/[\w\-]+\/[\w\-]+/gi,
+    ];
+    
+    try {
+        console.log(`    [deep] 🔍 检查 demo 页面: ${demoUrl}`);
+        
+        // 使用 https 请求获取页面内容
+        const response = await new Promise((resolve, reject) => {
+            const url = new URL(demoUrl);
+            const options = {
+                hostname: url.hostname,
+                path: url.pathname + url.search,
+                method: 'GET',
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                },
+                timeout: 15000,
+            };
+            
+            const req = https.request(options, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => resolve({ status: res.statusCode, data }));
+            });
+            
+            req.on('error', reject);
+            req.on('timeout', () => {
+                req.destroy();
+                reject(new Error('Timeout'));
+            });
+            req.end();
+        });
+        
+        if (response.status !== 200) {
+            console.log(`    [deep] ⚠️  Demo 页面返回 ${response.status}`);
+            return [];
+        }
+        
+        const html = response.data;
+        const foundLinks = [];
+        
+        for (const pattern of openSourcePatterns) {
+            let match;
+            while ((match = pattern.exec(html)) !== null) {
+                foundLinks.push(match[0]);
+            }
+        }
+        
+        return [...new Set(foundLinks)];
+    } catch (err) {
+        console.log(`    [deep] ⚠️  访问 demo 页面失败: ${err.message}`);
+        return [];
+    }
+}
+
+/**
+ * 检查分析中是否已有开源链接
+ */
+function hasOpenSourceLinks(analysis) {
+    const patterns = [
+        /github\.com\/[\w\-]+\/[\w\-]+/gi,
+        /huggingface\.co\/[\w\-]+\/[\w\-]+/gi,
+        /modelscope\.cn\/[\w\-]+\/[\w\-]+/gi,
+    ];
+    
+    for (const pattern of patterns) {
+        if (pattern.test(analysis)) return true;
+    }
+    return false;
 }
 
 async function reviseAnalysis(paper, existingAnalysis, textForAnalysis) {
