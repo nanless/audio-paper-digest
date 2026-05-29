@@ -63,7 +63,10 @@
 #### `scripts/fetch-papers.js`
 
 arXiv 抓取与 LLM 筛选模块。
-- 导出 `fetchCategoryPapers`、`deduplicatePapers`、`filterPapersWithLLM`、`isSpeechAudioRelated`、`filterPapersByKeywords`、`loadPapers`、`savePapers`、`loadAnalyzed`、`saveAnalyzed`
+- 导出 `fetchCategoryPapers`、`fetchCategoryFromSearchPage`、`deduplicatePapers`、`filterPapersWithLLM`、`isSpeechAudioRelated`、`filterPapersByKeywords`、`loadPapers`、`savePapers`、`loadAnalyzed`、`saveAnalyzed`
+- **抓取策略：网页抓取为主，API 为辅**
+  - `fetchCategoryFromSearchPage()`：从 arXiv 搜索页面抓取，支持分页获取 100 篇
+  - `fetchCategoryPapers()`：自动先尝试网页抓取，不足时用 API 补充
 - 筛选阶段统一使用 `PAPER_ANALYZER_*` 环境变量，支持 HTTP CONNECT 代理
 - 关键词预筛选函数 `filterPapersByKeywords` 保留但当前主流程未启用
 - XML 解析为 regex 实现（arXiv API 格式稳定）

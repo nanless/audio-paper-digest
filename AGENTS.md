@@ -39,7 +39,7 @@ Python 脚本通过 `python-dotenv` 加载 `.env`。Node 脚本通过 `utils.js`
 
 - `scripts/full-fetch.js` — 主编排器（去重含博客已发布 → 抓取 → 筛选 → 分析 → 保存）
 - `scripts/deep-analyzer.js` — LLM 深度分析，3 轮流水线（分析 → 开源扫描 → 补缺重写）
-- `scripts/fetch-papers.js` — arXiv 抓取 + LLM 筛选
+- `scripts/fetch-papers.js` — arXiv 抓取（网页抓取为主，API为辅）+ LLM 筛选
 - `scripts/fetch-huggingface-papers.js` — HuggingFace Papers 抓取
 - `scripts/analysis-engine.js` — 批量分析协调器
 

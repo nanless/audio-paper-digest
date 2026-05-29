@@ -44,13 +44,28 @@
 | `cs.AI` | 人工智能 | supplement |
 | `cs.MM` | 多媒体 | supplement |
 
-抓取参数：
-- API：`export.arxiv.org/api/query`，按 `submittedDate` 降序，每类 `max_results=100`
-- User-Agent: `Mozilla/5.0 (compatible; PaperDigest/1.0)`
-- 每分类重试最多 **20 次**，指数退避：第一次重试 3 秒，之后翻倍（`2^attempt * 3000ms`，attempt 从 1 开始）
-- 遇到 HTTP 429 限流额外等待：第一次 10 秒，之后翻倍（`2^attempt * 5000ms`，attempt 从 1 开始，上限 60 秒）
-- **提前停止**：若连续遇到 20 篇已有 ID（存在于 `papers.json`），则停止该分类抓取
-- 类别间延迟 **5 秒**
+**抓取策略：网页抓取为主，API 为辅**
+
+1. **网页抓取（主要方式）**：
+   - 从 `arxiv.org/search/` 搜索页面抓取论文
+   - 每页 50 篇，支持分页获取（默认获取 2 页 = 100 篇）
+   - 使用浏览器 User-Agent 轮换，避免被识别为爬虫
+   - 页面间随机延迟 2-5 秒
+
+2. **API 补充（备用方式）**：
+   - 当网页抓取获取论文不足时，自动尝试 API 补充
+   - API：`export.arxiv.org/api/query`，按 `submittedDate` 降序，每类 `max_results=100`
+   - 遇到 HTTP 429 限流时快速失败，不重试
+
+3. **抓取参数**：
+   - **提前停止**：若连续遇到 20 篇已有 ID（存在于 `papers.json`），则停止该分类抓取
+   - 核心类别优先抓取，补充类别随机排序
+   - 类别间延迟 45-60 秒（含随机抖动）
+   - 无新论文时继续运行而非终止
+
+4. **日志输出**：
+   - 显示每篇新论文的 arXiv ID 和标题
+   - 显示搜索到的总篇数和去重后的篇数
 
 去重逻辑：`deduplicatePapers()` 按 `arxivId` 去重，core 类别（eess.AS / cs.SD / eess.SP）优先于 supplement 类别保留。
 
