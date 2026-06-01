@@ -48,7 +48,7 @@ const ARXIV_CONFIG = {
 
 const FILTER_CONFIG = {
     timeoutMs: 60000,
-    maxRetries: 3,
+    maxRetries: 5,
     batchSize: 5,
     delayBetweenBatchesMs: 2000,
     temperature: 0.3
