@@ -157,7 +157,8 @@ def call_llm_api(prompt, max_tokens=800, temperature=0.1):
         "messages": [{"role": "user", "content": prompt}]
     }
 
-    for attempt in range(3):
+    max_retries = 5
+    for attempt in range(max_retries):
         try:
             import requests
             session = requests.Session()
@@ -183,12 +184,14 @@ def call_llm_api(prompt, max_tokens=800, temperature=0.1):
                         break
             if content:
                 return content
-            if attempt < 2:
-                time.sleep(2)
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # 指数退避: 1s, 2s, 4s, 8s
+                time.sleep(wait_time)
         except Exception as e:
-            print(f"  ⚠️  LLM API 调用失败 (尝试 {attempt+1}/3): {e}")
-            if attempt < 2:
-                time.sleep(2)
+            print(f"  ⚠️  LLM API 调用失败 (尝试 {attempt+1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # 指数退避: 1s, 2s, 4s, 8s
+                time.sleep(wait_time)
 
     return None
 
