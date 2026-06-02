@@ -133,7 +133,7 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 
 | Section | Requirements |
 |------|------|
-| Score | 1-10, one decimal place; machine summary includes `rank_bucket` (top 10% / top 25% / top 50% / bottom 50%), `quality_score` (0-7), `value_score` (0-2), `reproducibility_bonus` (0-2), `confidence`, and other fields. Post-processing: extract seven sub-scores from `## Score Rationale` and recalculate the total score, overriding the LLM's original output |
+| Score | 1-10, one decimal place; machine summary includes `rank_bucket` (top 10% / top 25% / top 50% / bottom 50%), `innovation` (0-2), `technical_rigor` (0-1.5), `experimental_sufficiency` (0-1.5), `clarity` (0-1), `impact` (0-1.5), `open_source` (0-1.5), `reproducibility` (0-0.5), `engineering_score` (0-1.5), `confidence`, and other fields. Post-processing: extract eight sub-scores from `## Score Rationale` and recalculate the total score (capped at 10), overriding the LLM's original output |
 | Tags | 3-5, must include at least 1 [Task] and 1 [Method/Model] tag; in addition to the final tag string, also output "main task tag", "main method tag", and "supplementary tags" |
 | Authors and Affiliations | First author, corresponding author, author list and affiliations; missing information must be written as "not specified", no guessing allowed |
 | Snarky Review | 2-3 sentences of sharp commentary on highlights and flaws, like a senior reviewer's final comment |

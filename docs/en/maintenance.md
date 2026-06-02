@@ -21,19 +21,24 @@
 
 ## Appendix: Current Scoring and Tag Specifications
 
-`deep-analyzer.js` currently uses a seven-dimensional scoring system in the style of top-tier conference reviewers (NeurIPS/ICML/ICLR), and requires a machine summary to be output simultaneously:
+`deep-analyzer.js` currently uses an eight-dimensional scoring system in the style of top-tier conference reviewers (NeurIPS/ICML/ICLR), and requires a machine summary to be output simultaneously:
 
 ### 14.1 Scoring Formula
 
-Total score = Innovation (0-3) + Technical Rigor (0-1.5) + Experimental Soundness (0-1.5) + Clarity (0-1) + Impact (0-2) + Open Source (0-1.5) + Reproducibility (0-0.5), rounded to 0.1, with a maximum of 10.
+Dimension maxima: Innovation (0–2) + Technical Rigor (0–1.5) + Experimental Soundness (0–1.5) + Clarity (0–1) + Impact (0–1.5) + Open Source (0–1.5) + Reproducibility (0–0.5) + Engineering/Practical Value (0–1.5) = 11. Total score = sum of all dimensions, capped at 10 (anything above 10 is counted as 10), rounded to 0.1.
 
-**Code post-processing**: `scripts/utils.js` and `scripts/utils.py` recompute the total score from the seven sub-scores in `## 评分理由` via `parseAnalysis`/`parse_analysis`, rounding to 0.1, overriding the raw `## 评分` total from the LLM (which often miscalculates or omits this section).
+**Code post-processing**: `scripts/utils.js` and `scripts/utils.py` recompute the total score from the eight sub-scores in `## 评分理由` via `parseAnalysis`/`parse_analysis`, capping at 10, rounding to 0.1, overriding the raw `## 评分` total from the LLM (which often miscalculates or omits this section).
 
 Machine summary fields:
 - `rank_bucket` (top 10% / top 25% / top 50% / bottom 50%)
-- `quality_score` (overall academic quality: innovation + technical rigor + experimental soundness + clarity, range 0-7)
-- `value_score` (impact and significance, range 0-2)
-- `reproducibility_bonus` (reproducibility composite: open-source completeness + documentation/detail sufficiency, range 0-2)
+- `innovation` (innovation, range 0-2)
+- `technical_rigor` (technical rigor, range 0-1.5)
+- `experimental_sufficiency` (experimental soundness, range 0-1.5)
+- `clarity` (clarity, range 0-1)
+- `impact` (impact and significance, range 0-1.5)
+- `open_source` (open-source completeness, range 0-1.5)
+- `reproducibility` (reproducibility, range 0-0.5)
+- `engineering_score` (engineering/practical value, range 0-1.5)
 - `confidence`
 - `primary_task_tag`
 - `primary_method_tag`
@@ -42,17 +47,18 @@ Machine summary fields:
 - `has_model`
 - `has_dataset`
 
-### 14.2 Seven-Dimensional Sub-score Definitions
+### 14.2 Eight-Dimensional Sub-score Definitions
 
 | Dimension | Range | Description |
 |-----------|-------|-------------|
-| Innovation | 0-3 | Is the problem novel? Does the method represent a fundamental breakthrough? Is the insight deep? Is the distinction from SOTA clear and convincing? |
+| Innovation | 0-2 | Is the problem novel? Does the method represent a fundamental breakthrough? Is the insight deep? Is the distinction from SOTA clear and convincing? |
 | Technical Rigor | 0-1.5 | Are derivations/proofs correct? Is the algorithm logic sound? Are assumptions reasonable? Are boundary conditions discussed? Is mathematical formulation rigorous? |
 | Experimental Soundness | 0-1.5 | Are baselines sufficient and representative? Are ablation studies complete? Is dataset coverage adequate? Do results genuinely support the conclusions? |
 | Clarity | 0-1 | Organization, symbol definitions, formula explanations, figure quality. Can a reader understand and reproduce the work without reading the source code? |
-| Impact | 0-2 | Contribution to the field, potential follow-up value, practical application potential, relevance to speech/music/audio readers |
+| Impact | 0-1.5 | Contribution to the field, potential follow-up value, practical application potential, relevance to speech/music/audio readers |
 | Open Source | 0-1.5 | Are code/model/data/checkpoints publicly available? 1.5 requires full open source with complete README and documentation; 1.0 means code is open but model or docs are missing; 0.5 means only partial resources or no documentation link; 0 means completely closed |
 | Reproducibility | 0-0.5 | Documentation sufficiency beyond open source—are training details/hyperparameters/hardware environment/reproduction steps sufficient for others to reproduce? |
+| Engineering/Practical Value | 0-1.5 | Engineering落地能力, pipeline completeness, practical reference value, industrial reusability. Must be strictly scored for engineering papers (tech reports, system reports, benchmark construction) |
 
 ### 14.3 Tier Requirements
 

@@ -186,12 +186,22 @@ def main():
             if meta:
                 h += f'<p style="color:#666;">{" | ".join(meta)}</p>\n'
             machine_parts = []
-            if pa.get('qualityScore'):
-                machine_parts.append(f'学术质量 {pa["qualityScore"]}/7')
-            if pa.get('valueScore'):
-                machine_parts.append(f'影响力 {pa["valueScore"]}/2')
-            if pa.get('reproducibilityBonus'):
-                machine_parts.append(f'可复现性 {pa["reproducibilityBonus"]}/2')
+            if pa.get('innovationScore'):
+                machine_parts.append(f'创新 {pa["innovationScore"]}/2')
+            if pa.get('technicalRigorScore'):
+                machine_parts.append(f'严谨 {pa["technicalRigorScore"]}/1.5')
+            if pa.get('experimentalSufficiencyScore'):
+                machine_parts.append(f'实验 {pa["experimentalSufficiencyScore"]}/1.5')
+            if pa.get('clarityScore'):
+                machine_parts.append(f'清晰 {pa["clarityScore"]}/1')
+            if pa.get('impactScore'):
+                machine_parts.append(f'影响 {pa["impactScore"]}/1.5')
+            if pa.get('openSourceScore'):
+                machine_parts.append(f'开源 {pa["openSourceScore"]}/1.5')
+            if pa.get('reproducibilityScore'):
+                machine_parts.append(f'复现 {pa["reproducibilityScore"]}/0.5')
+            if pa.get('engineeringScore'):
+                machine_parts.append(f'工程 {pa["engineeringScore"]}/1.5')
             if pa.get('confidence'):
                 machine_parts.append(f'置信度 {pa["confidence"]}')
             if machine_parts:

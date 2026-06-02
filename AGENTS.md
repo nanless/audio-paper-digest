@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-自动化"语音/音乐/音频论文速递"流水线：arXiv + HuggingFace 抓取 → LLM 筛选 → 多模态深度分析 → 发布到 Hugo 博客 / 微信公众号 / 小红书。
+自动化"语音/音乐/音频论文速递"流水线：arXiv + HuggingFace 抓取 → LLM 筛选 → 多模态深度分析 → 发布到 Hugo 博客 / 微信公众号 / 小红书 / 飞书。
 
 **技术栈**：Node.js（核心流水线）+ Python（发布脚本）。要求 Node ≥ 18。
 
@@ -12,11 +12,23 @@
 npm install              # 安装依赖（仅 cheerio + pdf-parse）
 npm test                 # 运行单元测试（node --test tests/*.test.js）
 npm run fetch            # 全流程：抓取 + 筛选 + 深度分析
-npm run deep             # 仅深度分析（跳过已分析论文）
+npm run deep             # 仅深度分析续跑（跳过已有 analysis）
 npm run reanalyze        # 强制全量重分析
+npm run batch            # 批量分析未分析论文
+npm run backfill         # 补录历史 paper ID（不分析）
 npm run publish          # 发布到 Hugo 博客（python3 scripts/publish-to-blog.py）
-npm run wechat           # 发布微信公众号草稿
+npm run wechat           # 生成微信公众号草稿
 npm run xiaohongshu      # 生成小红书文案
+npm run xhs-login        # 小红书登录（获取 Cookie）
+npm run xhs-publish      # 小红书自动发布单篇
+npm run xhs-publish-all  # 小红书自动发布全部
+
+# 直接调用（不在 package.json 中）
+node scripts/quick-test.js              # 快速测试（抓+筛选，不分析）
+node scripts/analyze-single-paper.js <arxiv-id>  # 单独分析一篇论文
+node scripts/batch-analyze.js           # 批量分析未分析论文
+python3 scripts/publish-to-feishu.py    # 生成飞书文档
+python3 scripts/publish-to-feishu.py --date 2026-04-21
 ```
 
 未配置 linter、typecheck 或 formatter。`npm test` 是唯一的自动化检查。
@@ -26,8 +38,15 @@ npm run xiaohongshu      # 生成小红书文案
 复制 `env.example` → `.env`（已 gitignore）。必需变量：
 
 - `PAPER_ANALYZER_API_KEY` / `PAPER_ANALYZER_MODEL` / `PAPER_ANALYZER_ENDPOINT` — LLM 筛选 + 分析
-- `WECHAT_APP_ID` / `WECHAT_APP_SECRET` — 微信发布（可选）
+- `WECHAT_APP_ID` / `WECHAT_APP_SECRET` / `WECHAT_THUMB_MEDIA_ID` — 微信发布（可选）
 - `PAPER_DIGEST_BLOG_REPO` — Hugo 博客仓库路径（发布用 + 抓取时去重用）
+
+其他常用可选变量：
+
+- `FEISHU_APP_ID` / `FEISHU_APP_SECRET` — 飞书发布
+- `PAPER_DIGEST_AUTHOR` — 作者名（用于发布）
+- `PAPER_DIGEST_IMAGE_HOST` / `PAPER_DIGEST_IMAGE_BASE_URL` — 图床配置（可选 `local`/`qiniu`）
+- `XIAOHONGSHU_COOKIES` — 小红书 Cookie（JSON 格式 base64 编码）
 
 Python 脚本通过 `python-dotenv` 加载 `.env`。Node 脚本通过 `utils.js` 中的 `loadEnvFile()` 加载。
 
@@ -38,16 +57,25 @@ Python 脚本通过 `python-dotenv` 加载 `.env`。Node 脚本通过 `utils.js`
 ### 入口脚本
 
 - `scripts/full-fetch.js` — 主编排器（去重含博客已发布 → 抓取 → 筛选 → 分析 → 保存）
-- `scripts/deep-analyzer.js` — LLM 深度分析，3 轮流水线（分析 → 开源扫描 → 补缺重写）
 - `scripts/fetch-papers.js` — arXiv 抓取（网页抓取为主，API为辅）+ LLM 筛选
 - `scripts/fetch-huggingface-papers.js` — HuggingFace Papers 抓取
-- `scripts/analysis-engine.js` — 批量分析协调器
+- `scripts/deep-analysis-only.js` — 仅深度分析续跑（跳过已分析论文）
+- `scripts/reanalyze.js` — 强制全量重分析（支持 `--concurrency N`）
+- `scripts/batch-analyze.js` — 批量分析未分析论文
+- `scripts/analysis-engine.js` — 批量分析协调器（被上述脚本共用）
+- `scripts/quick-test.js` — 快速测试（抓+筛选，不分析）
+- `scripts/analyze-single-paper.js` — 单独分析一篇指定 arXiv ID 的论文
 
 ### 发布脚本（Python）
 
 - `scripts/publish-to-blog.py` — 生成 Hugo Markdown 文章并推送到博客仓库
+- `scripts/publish-wechat-full.py` — 生成微信公众号草稿
+- `scripts/publish-xiaohongshu.py` — 生成小红书文案
+- `scripts/xiaohongshu-publisher.py` — 小红书自动发布（需先 `xhs-login`）
+- `scripts/publish-to-feishu.py` — 生成飞书文档
+- `scripts/backfill_papers.py` — 补录论文 ID 到 papers.json（不分析）
 - `scripts/publish_common.py` — 发布通用工具
-- `scripts/utils.py` — Python 端工具函数（去 Markdown 标记、解析分析结果）
+- `scripts/utils.py` — Python 端工具函数
 
 ### 配置
 
@@ -84,3 +112,4 @@ prompts/               # LLM prompt 模板
 - `data/` 和 `logs/` 已 gitignore——不要提交运行时产物。
 - 博客发布脚本依赖独立的 Hugo 仓库（`PAPER_DIGEST_BLOG_REPO`），不在本仓库内。
 - 测试使用 Node.js 内置测试运行器（`node:test`），非 Jest 或 Mocha。
+- CI 会运行 `npm test` 以及对关键脚本做 `node -c` 语法检查（`scripts/utils.js`、`config.js`、`analysis-engine.js`、测试文件）。

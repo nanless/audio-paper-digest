@@ -44,11 +44,12 @@ async function runDeepAnalysis() {
 
     const saver = createFileSaver(resultPath);
 
+    const Config = require('./config.js');
     const { stats } = await analyzeBatch(notAnalyzed, {
-        concurrency: 1,
-        maxRetries: 2,
-        retryDelayMs: 3000,
-        saveInterval: 1,
+        concurrency: Config.ANALYSIS_CONFIG.concurrency,
+        maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
+        retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
+        saveInterval: Config.ANALYSIS_CONFIG.concurrency,
         shouldSkip: (paper) => !!paper.analysis,
         onPaperStart: (idx, total, paper) => {
             console.log(`  [${idx + 1}/${papers.length}] ${paper.title.substring(0, 50)}...`);

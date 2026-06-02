@@ -183,9 +183,14 @@ function stripMd(text) {
 function parseMachineSummary(analysis) {
     const result = {
         rankBucket: '',
-        qualityScore: '',
-        valueScore: '',
-        reproducibilityBonus: '',
+        innovation: '',
+        technicalRigor: '',
+        experimentalSufficiency: '',
+        clarity: '',
+        impact: '',
+        openSource: '',
+        reproducibility: '',
+        engineeringScore: '',
         confidence: '',
         primaryTaskTag: '',
         primaryMethodTag: '',
@@ -202,9 +207,14 @@ function parseMachineSummary(analysis) {
 
     const keyMap = {
         rank_bucket: 'rankBucket',
-        quality_score: 'qualityScore',
-        value_score: 'valueScore',
-        reproducibility_bonus: 'reproducibilityBonus',
+        innovation: 'innovation',
+        technical_rigor: 'technicalRigor',
+        experimental_sufficiency: 'experimentalSufficiency',
+        clarity: 'clarity',
+        impact: 'impact',
+        open_source: 'openSource',
+        reproducibility: 'reproducibility',
+        engineering_score: 'engineeringScore',
         confidence: 'confidence',
         primary_task_tag: 'primaryTaskTag',
         primary_method_tag: 'primaryMethodTag',
@@ -259,24 +269,11 @@ function parseMachineSummary(analysis) {
             }
             
             // 对于分数类字段，提取数字部分
-            if (['qualityScore', 'valueScore', 'reproducibilityBonus'].includes(mappedKey)) {
+            if (['innovation', 'technicalRigor', 'experimentalSufficiency', 'clarity', 'impact', 'openSource', 'reproducibility', 'engineeringScore'].includes(mappedKey)) {
                 // 处理 "3.5/5"、"3.5分"、"3.5 / 5" 等格式
                 const numMatch = val.match(/^(\d+\.?\d*)/);
                 if (numMatch) {
                     val = numMatch[1];
-                } else {
-                    // 如果没有数字，尝试映射中文描述
-                    const scoreMap = {
-                        '高': '6', '很高': '6.5', '上': '6', '上上': '6.5',
-                        '中高': '5', '中上': '5', '较高': '5.5',
-                        '中': '3.5', '中等': '3.5', '中等偏下': '3', '中下': '3',
-                        '一般': '3.5', '中低': '3', '较低': '2.5',
-                        '低': '2', '很低': '1.5', '下': '2', '差': '1.5',
-                        '较弱': '2', '偏低': '2.5', '较低': '2.5',
-                        'solid': '4', 'incremental': '2', 'partial': '1',
-                        'high': '6', 'medium': '3.5', 'low': '2'
-                    };
-                    val = scoreMap[val.toLowerCase()] || '';
                 }
             }
             
@@ -601,9 +598,14 @@ function parseAnalysis(analysis) {
         scoringReason: '', limitations: '', opensource: '',
         machineSummary: null,
         rankBucket: '',
-        qualityScore: '',
-        valueScore: '',
-        reproducibilityBonus: '',
+        innovationScore: '',
+        technicalRigorScore: '',
+        experimentalSufficiencyScore: '',
+        clarityScore: '',
+        impactScore: '',
+        openSourceScore: '',
+        reproducibilityScore: '',
+        engineeringScore: '',
         confidence: '',
         primaryTaskTag: '',
         primaryMethodTag: '',
@@ -655,9 +657,14 @@ function parseAnalysis(analysis) {
     const machineSummary = parseMachineSummary(analysis);
     result.machineSummary = machineSummary;
     result.rankBucket = machineSummary.rankBucket;
-    result.qualityScore = machineSummary.qualityScore;
-    result.valueScore = machineSummary.valueScore;
-    result.reproducibilityBonus = machineSummary.reproducibilityBonus;
+    result.innovationScore = machineSummary.innovation;
+    result.technicalRigorScore = machineSummary.technicalRigor;
+    result.experimentalSufficiencyScore = machineSummary.experimentalSufficiency;
+    result.clarityScore = machineSummary.clarity;
+    result.impactScore = machineSummary.impact;
+    result.openSourceScore = machineSummary.openSource;
+    result.reproducibilityScore = machineSummary.reproducibility;
+    result.engineeringScore = machineSummary.engineeringScore;
     result.confidence = machineSummary.confidence;
 
     // ═══════════════════════════════════════════════════════
@@ -820,27 +827,73 @@ function parseAnalysis(analysis) {
         const dimScores = {};
         // 每个维度的上限（用于截断旧格式或 LLM 越界输出）
         const dimMax = {
-            '创新性': 3,
+            '创新性': 2,
             '技术严谨性': 1.5,
             '实验充分性': 1.5,
             '清晰度': 1,
-            '影响力': 2,
+            '影响力': 1.5,
             '开源': 1.5,
-            '可复现性': 0.5
+            '可复现性': 0.5,
+            '工程/实践价值': 1.5
         };
         const dims = Object.keys(dimMax);
         for (const dim of dims) {
             // 支持多种 LLM 输出格式：
-            // 1. **创新性 (3分)**：2.2分
-            // 2. **创新性 (2.5/3)**：...
-            // 3. **创新性: 2.3/3**
+            // 格式A（10分制，需转换）：dim (max/max)：score/10
+            // 格式B（维度分制，直接用）：dim (score/max)：description
+            // 格式C：dim：score/max
+            // 格式D：dim/满分：得分 score
+
+            // 优先匹配10分制格式（格式A）：dim ... ：score/10
+            const tenPointPat = new RegExp(
+                '(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*[（(]\\s*\\d+\\.?\\d*\\s*/\\s*\\d+\\.?\\d*\\s*[）)]\\s*(?:\\*\\*)?\\s*[:：]\\s*(?:\\*\\*)?\\s*(\\d+\\.?\\d*)\\s*/\\s*10'
+            );
+            const tenPointMatch = scoringText.match(tenPointPat);
+            if (tenPointMatch) {
+                const v10 = parseFloat(tenPointMatch[1]);
+                if (!isNaN(v10)) {
+                    dimScores[dim] = Math.round((v10 / 10) * dimMax[dim] * 10) / 10;
+                    continue;
+                }
+            }
+
+            // 次优先：dim ... 得分X.Y/max 格式（得分在描述末尾）
+            const defenPat = new RegExp(
+                '(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '.*?得分(\\d+\\.?\\d*)\\s*(?:/\\s*(\\d+\\.?\\d*))?'
+            );
+            const defenMatch = scoringText.match(defenPat);
+            if (defenMatch) {
+                const vDefen = parseFloat(defenMatch[1]);
+                const vMax = defenMatch[2] ? parseFloat(defenMatch[2]) : null;
+                if (!isNaN(vDefen)) {
+                    if (vMax && vMax === 10) {
+                        dimScores[dim] = Math.round((vDefen / 10) * dimMax[dim] * 10) / 10;
+                    } else if (vMax && vMax > 0) {
+                        dimScores[dim] = Math.min(vDefen, dimMax[dim]);
+                    } else {
+                        // 无/max：假设是维度原始分值
+                        dimScores[dim] = Math.min(vDefen, dimMax[dim]);
+                    }
+                    continue;
+                }
+            }
+
+            // 非10分制的常规匹配
             const patterns = [
-                // 格式1: dim (max/max)**：score
-                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*\\d+\\.?\\d*\\s*(?:/\\s*\\d+\\.?\\d*)?\\s*分?\\s*\\)\\s*(?:\\*\\*)?\\s*[:：]\\s*(?:\\*\\*)?\\s*(\\d+\\.?\\d*)'),
-                // 格式2: dim (score/max)
-                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*(\\d+\\.?\\d*)\\s*/\\s*\\d+\\.?\\d*\\s*\\)'),
-                // 格式3: dim: score/max
+                // 格式0: dim (max分)：score/max（如 HAIM 的格式）
+                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*\\d+\\.?\\d*分\\s*\\)\\s*[:：]\\s*(\\d+\\.?\\d*)\\s*/\\s*\\d+\\.?\\d*'),
+                // 格式1: dim (score/max)：description（排除有/10的情况）
+                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*(\\d+\\.?\\d*)\\s*/\\s*\\d+\\.?\\d*\\s*\\)(?!.*\\/10)'),
+                // 格式2: dim：score/max
                 new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*[:：]\\s*(\\d+\\.?\\d*)\\s*/\\s*\\d+\\.?\\d*\\s*(?:\\*\\*)?'),
+                // 格式3: dim/满分：得分 score
+                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*/\\s*\\d+\\.?\\d*\\s*[:：]\\s*(?:得分\\s*)?(\\d+\\.?\\d*)'),
+                // 格式4: dim (max分 / 满分max分) -> score分
+                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*\\d+\\.?\\d*分\\s*/\\s*满分\\s*\\d+\\.?\\d*分\\s*\\)\\s*->\\s*(\\d+\\.?\\d*)分'),
+                // 格式5: dim（/max）：score/max
+                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*[（(]\\s*/\\s*\\d+\\.?\\d*\\s*[）)]\\s*[:：]\\s*(\\d+\\.?\\d*)'),
+                // 格式6: dim (max分中的score分)
+                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*\\d+\\.?\\d*分中的(\\d+\\.?\\d*)分\\s*\\)'),
             ];
             let dm = null;
             for (const pat of patterns) {
@@ -850,7 +903,6 @@ function parseAnalysis(analysis) {
             if (dm) {
                 const v = parseFloat(dm[1]);
                 if (!isNaN(v)) {
-                    // 截断到该维度的上限，防止旧格式或 LLM 越界输出导致总分异常
                     dimScores[dim] = Math.min(v, dimMax[dim]);
                 }
             }
@@ -866,16 +918,41 @@ function parseAnalysis(analysis) {
             const vs = dimScores['影响力'] || 0;
             const rb = (dimScores['开源'] || 0) + (dimScores['可复现性'] || 0);
 
-            result.qualityScore = String(Math.round(qs * 10) / 10);
-            result.valueScore = String(Math.round(vs * 10) / 10);
-            result.reproducibilityBonus = String(Math.round(rb * 10) / 10);
+            result.innovationScore = String(Math.round((dimScores['创新性'] || 0) * 10) / 10);
+            result.technicalRigorScore = String(Math.round((dimScores['技术严谨性'] || 0) * 10) / 10);
+            result.experimentalSufficiencyScore = String(Math.round((dimScores['实验充分性'] || 0) * 10) / 10);
+            result.clarityScore = String(Math.round((dimScores['清晰度'] || 0) * 10) / 10);
+            result.impactScore = String(Math.round((dimScores['影响力'] || 0) * 10) / 10);
+            result.openSourceScore = String(Math.round((dimScores['开源'] || 0) * 10) / 10);
+            result.reproducibilityScore = String(Math.round((dimScores['可复现性'] || 0) * 10) / 10);
+            result.engineeringScore = String(Math.round((dimScores['工程/实践价值'] || 0) * 10) / 10);
 
             if (result.machineSummary) {
-                result.machineSummary.qualityScore = result.qualityScore;
-                result.machineSummary.valueScore = result.valueScore;
-                result.machineSummary.reproducibilityBonus = result.reproducibilityBonus;
+                result.machineSummary.innovation = result.innovationScore;
+                result.machineSummary.technicalRigor = result.technicalRigorScore;
+                result.machineSummary.experimentalSufficiency = result.experimentalSufficiencyScore;
+                result.machineSummary.clarity = result.clarityScore;
+                result.machineSummary.impact = result.impactScore;
+                result.machineSummary.openSource = result.openSourceScore;
+                result.machineSummary.reproducibility = result.reproducibilityScore;
+                result.machineSummary.engineeringScore = result.engineeringScore;
             }
         }
+    }
+
+    // 矛盾检测：开源高分但无任何实际链接
+    const openScoreVal = parseFloat(result.openSourceScore || 0);
+    const hasCodeYes = result.hasCode === '是' || result.hasCode === 'yes';
+    const hasModelYes = result.hasModel === '是' || result.hasModel === 'yes';
+    const hasDatasetYes = result.hasDataset === '是' || result.hasDataset === 'yes';
+    if (openScoreVal >= 1.0 && !hasCodeYes && !hasModelYes && !hasDatasetYes) {
+        // 论文没有任何开源链接但得了高分，强制降低
+        result.openSourceScore = '0';
+        if (result.machineSummary) result.machineSummary.openSource = '0';
+        // 重新计算总分
+        let total = parseFloat(result.score || 0);
+        total = Math.max(1.0, Math.min(10.0, total - openScoreVal));
+        result.score = String(Math.round(total * 10) / 10);
     }
 
     // rankBucket 推断：在评分计算完成后执行，确保基于最终 score

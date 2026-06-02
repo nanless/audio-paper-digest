@@ -112,9 +112,14 @@
         "opensource": "...",
         "machineSummary": {
           "rankBucket": "前25%",
-          "qualityScore": "5.2",
-          "valueScore": "1.5",
-          "reproducibilityBonus": "0.8",
+          "innovation": "1.5",
+          "technicalRigor": "1.2",
+          "experimentalSufficiency": "1.0",
+          "clarity": "0.8",
+          "impact": "1.3",
+          "openSource": "1.0",
+          "reproducibility": "0.3",
+          "engineeringScore": "1.2",
           "confidence": "高",
           "primaryTaskTag": "#语音合成",
           "primaryMethodTag": "#扩散模型",
@@ -124,9 +129,14 @@
           "hasDataset": "否"
         },
         "rankBucket": "前25%",
-        "qualityScore": "5.2",
-        "valueScore": "1.5",
-        "reproducibilityBonus": "0.8",
+        "innovationScore": "1.5",
+        "technicalRigorScore": "1.2",
+        "experimentalSufficiencyScore": "1.0",
+        "clarityScore": "0.8",
+        "impactScore": "1.3",
+        "openSourceScore": "1.0",
+        "reproducibilityScore": "0.3",
+        "engineeringScore": "1.2",
         "confidence": "高",
         "primaryTaskTag": "#语音合成",
         "primaryMethodTag": "#扩散模型",
@@ -146,7 +156,7 @@
 
 - `parsed` 是 `analysis` 文本的解析缓存，由 `scripts/utils.js` 的 `parseAnalysis()` 或 `scripts/utils.py` 的 `parse_analysis()` 生成
 - **`parsed.score` 不是直接取 `## 评分` 下的 LLM 原始总分**，而是从 `## 评分理由` 中提取七个分项（创新性/3、技术严谨性/1.5、实验充分性/1.5、清晰度/1、影响力/2、开源/1.5、可复现性/0.5）重新计算，四舍五入到 0.1，覆盖 LLM 原始输出
-- `parsed` 中的 `machineSummary` 是 `## 机器摘要` 的解析结果；`rankBucket`、`qualityScore`、`valueScore` 等字段同时平铺到 `parsed` 顶层以便访问
+- `parsed` 中的 `machineSummary` 是 `## 机器摘要` 的解析结果；`rankBucket`、`innovationScore`、`technicalRigorScore` 等 8 个子项字段同时平铺到 `parsed` 顶层以便访问
 - 解析逻辑变更后，`parsed` 缓存会被清除并在下次发布时重新生成
 
 ### 5.4 `data/current/analyzed.json`

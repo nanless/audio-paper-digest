@@ -459,7 +459,7 @@ layout: "posts"
 ### 📊 论文评分排行榜（{len(scored)} 篇，按分数降序）
 
 """
-    md += "| 排名 | 论文 | 评分 | 分档 | 主任务 |\n|------|------|------|------|------|\n"
+    md += "| 排名 | 论文 | 总分 | 分档 | 主任务 |\n|------|------|------|------|--------|\n"
     for i, (score, p, pa) in enumerate(scored):
         m = format_medal(i)
         title = p.get('title', 'Unknown')
@@ -494,6 +494,33 @@ layout: "posts"
         pa = parse_analysis(p.get('analysis', '')) or {}
         aid = p.get('arxivId', '')
         aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
+        
+        # 显示总分和所有子项得分（单开一行）
+        score_line = []
+        if pa.get('score'):
+            score_line.append(f"**{pa['score']}/10**")
+        sub_scores = []
+        if pa.get('innovationScore'):
+            sub_scores.append(f"创新 {pa['innovationScore']}/2")
+        if pa.get('technicalRigorScore'):
+            sub_scores.append(f"严谨 {pa['technicalRigorScore']}/1.5")
+        if pa.get('experimentalSufficiencyScore'):
+            sub_scores.append(f"实验 {pa['experimentalSufficiencyScore']}/1.5")
+        if pa.get('clarityScore'):
+            sub_scores.append(f"清晰 {pa['clarityScore']}/1")
+        if pa.get('impactScore'):
+            sub_scores.append(f"影响 {pa['impactScore']}/1.5")
+        if pa.get('openSourceScore'):
+            sub_scores.append(f"开源 {pa['openSourceScore']}/1.5")
+        if pa.get('reproducibilityScore'):
+            sub_scores.append(f"复现 {pa['reproducibilityScore']}/0.5")
+        if pa.get('engineeringScore'):
+            sub_scores.append(f"工程 {pa['engineeringScore']}/1.5")
+        if sub_scores:
+            score_line.append(' | '.join(sub_scores))
+        if score_line:
+            md += f"{' | '.join(score_line)}\n\n"
+        
         meta = build_paper_meta(pa, aurl)
         if meta:
             md += f"{meta}\n\n"
@@ -686,21 +713,35 @@ hiddenInHomeList: true
         if pa['tags']:
             md += f"{' '.join(pa['tags'])}\n\n"
 
+        # 得分单开一行：总分 + 所有子项
+        score_line = []
+        if pa.get('score'):
+            score_line.append(f"**{pa['score']}/10**")
+        sub_scores = []
+        if pa.get('innovationScore'):
+            sub_scores.append(f"创新 {pa['innovationScore']}/2")
+        if pa.get('technicalRigorScore'):
+            sub_scores.append(f"严谨 {pa['technicalRigorScore']}/1.5")
+        if pa.get('experimentalSufficiencyScore'):
+            sub_scores.append(f"实验 {pa['experimentalSufficiencyScore']}/1.5")
+        if pa.get('clarityScore'):
+            sub_scores.append(f"清晰 {pa['clarityScore']}/1")
+        if pa.get('impactScore'):
+            sub_scores.append(f"影响 {pa['impactScore']}/1.5")
+        if pa.get('openSourceScore'):
+            sub_scores.append(f"开源 {pa['openSourceScore']}/1.5")
+        if pa.get('reproducibilityScore'):
+            sub_scores.append(f"复现 {pa['reproducibilityScore']}/0.5")
+        if pa.get('engineeringScore'):
+            sub_scores.append(f"工程 {pa['engineeringScore']}/1.5")
+        if sub_scores:
+            score_line.append(' | '.join(sub_scores))
+        if score_line:
+            md += f"{' | '.join(score_line)}\n\n"
+
         meta = build_paper_meta(pa, aurl)
         if meta:
             md += f"{meta}\n\n"
-
-        machine_bits = []
-        if pa.get('qualityScore'):
-            machine_bits.append(f"学术质量 {pa['qualityScore']}/7")
-        if pa.get('valueScore'):
-            machine_bits.append(f"影响力 {pa['valueScore']}/2")
-        if pa.get('reproducibilityBonus'):
-            machine_bits.append(f"可复现性 {pa['reproducibilityBonus']}/2")
-        if pa.get('confidence'):
-            machine_bits.append(f"置信度 {pa['confidence']}")
-        if machine_bits:
-            md += f"{' | '.join(machine_bits)}\n\n"
 
         if pa.get('authors'):
             md += f"\n### 👥 作者与机构\n\n{pa['authors']}\n"

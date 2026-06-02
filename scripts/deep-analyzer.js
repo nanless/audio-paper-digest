@@ -632,6 +632,7 @@ async function analyzePaperDeep(paper) {
     }
 
     // 第2.5轮：检查 demo 页面中的开源链接
+    let demoFoundLinks = [];
     try {
         if (!hasOpenSourceLinks(analysis)) {
             const demoUrls = extractDemoUrls(analysis);
@@ -643,11 +644,11 @@ async function analyzePaperDeep(paper) {
                     allOpenSourceLinks.push(...links);
                 }
                 if (allOpenSourceLinks.length > 0) {
-                    const uniqueLinks = [...new Set(allOpenSourceLinks)];
-                    const newLinksText = uniqueLinks.map(link => `- ${link}`).join('\n');
-                    analysis = mergeSection(analysis, '## 开源详情', 
+                    demoFoundLinks = [...new Set(allOpenSourceLinks)];
+                    const newLinksText = demoFoundLinks.map(link => `- ${link}`).join('\n');
+                    analysis = mergeSection(analysis, '## 开源详情',
                         `\n\n**从 demo 页面发现的开源链接：**\n${newLinksText}`);
-                    console.log(`    [deep] ✅ 从 demo 页面发现 ${uniqueLinks.length} 个开源链接`);
+                    console.log(`    [deep] ✅ 从 demo 页面发现 ${demoFoundLinks.length} 个开源链接`);
                 } else {
                     console.log(`    [deep] ℹ️  demo 页面未发现开源链接`);
                 }
@@ -655,6 +656,15 @@ async function analyzePaperDeep(paper) {
         }
     } catch (e) {
         console.log(`    [deep] ⚠️  检查 demo 页面失败: ${e.message}`);
+    }
+
+    // 第2.6轮：根据 demo 扫描结果更新开源评分和描述
+    if (demoFoundLinks.length > 0) {
+        const beforeUpdate = analysis;
+        analysis = updateOpensourceFromDemoLinks(analysis, demoFoundLinks);
+        if (analysis !== beforeUpdate) {
+            console.log(`    [deep] ✅ 已根据 demo 扫描结果更新开源评分/描述`);
+        }
     }
 
     // 第3轮：审校重写（对照原文修正、补充、删减，完全重写前两轮输出）
@@ -1033,6 +1043,70 @@ ${textForAnalysis.slice(0, 80000)}
 
     // 将补充的实验结果合并回原分析
     return mergeSection(analysis, '### 03.实验结果', fixedSection);
+}
+
+/**
+ * 根据 demo 页面扫描发现的开源链接，更新 analysis 中的机器摘要和开源详情
+ * @param {string} analysis - 分析文本
+ * @param {string[]} foundLinks - 发现的开源链接列表
+ * @returns {string} 更新后的分析文本
+ */
+function updateOpensourceFromDemoLinks(analysis, foundLinks) {
+    if (!foundLinks || foundLinks.length === 0) return analysis;
+
+    let updated = analysis;
+
+    // 1. 推断开源类型
+    let hasCode = false, hasModel = false, hasDataset = false;
+    for (const link of foundLinks) {
+        const lower = link.toLowerCase();
+        if (lower.includes('github.com')) hasCode = true;
+        if (lower.includes('huggingface.co')) {
+            if (lower.includes('/datasets/')) hasDataset = true;
+            else hasModel = true;
+        }
+        if (lower.includes('modelscope.cn')) {
+            if (lower.includes('/datasets/')) hasDataset = true;
+            else hasModel = true;
+        }
+        if (lower.includes('gitlab.com')) hasCode = true;
+    }
+
+    // 2. 更新机器摘要中的 has_code / has_model / has_dataset
+    // 匹配格式：has_code: 否 / has_code: 未说明 等，替换为"是"
+    if (hasCode) {
+        updated = updated.replace(/(has_code\s*[：:]\s*)(否|no|n|无|未说明|unknown|否\b)/i, '$1是');
+    }
+    if (hasModel) {
+        updated = updated.replace(/(has_model\s*[：:]\s*)(否|no|n|无|未说明|unknown|否\b)/i, '$1是');
+    }
+    if (hasDataset) {
+        updated = updated.replace(/(has_dataset\s*[：:]\s*)(否|no|n|无|未说明|unknown|否\b)/i, '$1是');
+    }
+
+    // 3. 在开源详情中追加验证发现的结构化信息
+    const linkDescriptions = [];
+    for (const link of foundLinks) {
+        const lower = link.toLowerCase();
+        if (lower.includes('github.com') || lower.includes('gitlab.com')) {
+            linkDescriptions.push(`- **代码仓库**：${link}`);
+        } else if (lower.includes('huggingface.co') || lower.includes('modelscope.cn')) {
+            if (lower.includes('/datasets/')) {
+                linkDescriptions.push(`- **数据集**：${link}`);
+            } else {
+                linkDescriptions.push(`- **模型权重**：${link}`);
+            }
+        } else {
+            linkDescriptions.push(`- **相关链接**：${link}`);
+        }
+    }
+
+    if (linkDescriptions.length > 0) {
+        const newContent = `\n\n**从 demo/项目页面验证发现（已更新开源评分）：**\n${linkDescriptions.join('\n')}`;
+        updated = mergeSection(updated, '## 开源详情', newContent);
+    }
+
+    return updated;
 }
 
 function mergeSection(analysis, sectionHeader, newContent) {

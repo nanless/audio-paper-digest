@@ -35,9 +35,14 @@ First output the total score alone; the format must be: X.X/10
 
 ```
 rank_bucket: 前10% / 前25% / 前50% / 后50%
-quality_score: X.X
-value_score: X.X
-reproducibility_bonus: X.X
+innovation: X.X
+technical_rigor: X.X
+experimental_sufficiency: X.X
+clarity: X.X
+impact: X.X
+open_source: X.X
+reproducibility: X.X
+engineering_score: X.X
 confidence: 高 / 中 / 低
 primary_task_tag: #标签
 primary_method_tag: #标签
@@ -49,9 +54,14 @@ has_dataset: 是 / 否 / 未说明
 
 **Field descriptions**:
 - `rank_bucket`: choose exactly one from 前10% / 前25% / 前50% / 后50%
-- `quality_score`: overall academic quality (innovation + technical rigor + experimental thoroughness + clarity), range 0–7
-- `value_score`: impact and importance, range 0–2
-- `reproducibility_bonus`: overall reproducibility (open-source completeness 0–1.5 + documentation/detail sufficiency 0–0.5), combined range 0–2
+- `innovation`: novelty, range 0–2
+- `technical_rigor`: technical rigor, range 0–1.5
+- `experimental_sufficiency`: experimental thoroughness, range 0–1.5
+- `clarity`: clarity, range 0–1
+- `impact`: impact and importance, range 0–1.5
+- `open_source`: open-source completeness, range 0–1.5
+- `reproducibility`: reproducibility (documentation/detail sufficiency), range 0–0.5
+- `engineering_score`: engineering/practical value, range 0–1.5
 - `confidence`: 高 / 中 / 低
 - `primary_task_tag`: select the single most important **task** tag from the tags (starting with `#`, e.g. `#语音识别`, `#语音合成`, `#音频生成`, `#音乐生成`, `#音频降噪`, `#语音情感识别`, etc.). **Do not** use method names, arXiv categories, or prose descriptions as task tags.
 - `primary_method_tag`: select the single most important **method** tag from the tags (starting with `#`, e.g. `#扩散模型`, `#预训练`, `#对比学习`, `#自监督学习`, etc.)
@@ -60,7 +70,7 @@ has_dataset: 是 / 否 / 未说明
 
 【Scoring Rules】
 1. First determine the paper's relative position among contemporaneous work in the same direction; choose only from 前10% / 前25% / 前50% / 后50%. 前10% corresponds to breakthrough work; 前25% to clearly excellent work; 前50% to acceptable-to-good work; 后50% to work with notable issues.
-2. Total score = Innovation (0–3) + Technical Rigor (0–1.5) + Experimental Thoroughness (0–1.5) + Clarity (0–1) + Impact (0–2) + Open Source (0–1.5) + Reproducibility (0–0.5), rounded to 0.1, maximum 10.
+2. Dimension maxima: Innovation (0–2) + Technical Rigor (0–1.5) + Experimental Thoroughness (0–1.5) + Clarity (0–1) + Impact (0–1.5) + Open Source (0–1.5) + Reproducibility (0–0.5) + Engineering/Practical Value (0–1.5) = 11. Total score = sum of all dimensions, capped at 10 (anything above 10 is counted as 10), rounded to 0.1.
 3. Scores must be discriminative but not artificially suppressed. Scores ≥ 9.0 are reserved for truly milestone-potential work; 8.0–8.5 for solid contributions on important problems with clear impact; most solid but non-breakthrough papers should fall in 6.0–7.5. Do not lower the innovation score of engineering papers simply because they "combine existing techniques" — what matters is whether the combination yields new insight, solves a real important problem, and brings verifiable significant improvement.
 4. rank_bucket must be consistent with the total score: total ≥ 9.0 must be 前10%; total 8.0–8.5 must be 前25%; total 6.5–7.5 should be 前50% or 前25% (depending on specific quality); total < 6.0 is generally 后50%.
 5. Do not reject paper quality simply because the task is niche. Niche, vertical, special-population, pathological speech, animal sounds, etc., should be scored normally on "innovation" and "technical rigor" — as long as the problem is well defined and the method has substantive breakthrough, the innovation score must not be suppressed due to narrow audience; however, "impact" must be scored low (typically ≤ 0.5), because such work naturally has limited broad domain-driving effect and follow-up value. Experimental thoroughness may be moderately reduced only for aspects related to dataset generality.
@@ -70,11 +80,11 @@ has_dataset: 是 / 否 / 未说明
 9. 【Domain-Relevance Constraint — Most Important】This analysis is aimed at **speech / music / audio domain readers**. If the paper's core contribution is not in speech / music / audio (e.g., pure computer vision, pure natural language processing, pure law/policy frameworks, pure general machine learning theory, pure robotics/embodied AI), even if the technical quality is excellent, the **"impact" dimension must be significantly reduced (typically ≤ 0.5)**, because its direct relevance and practical value for speech / music / audio domain readers is limited. Such papers should not receive high scores due to "cross-domain generality" or "the method could theoretically be adapted to audio". Only when the paper explicitly takes speech / music / audio as the core experimental object, core evaluation task, or core application scenario can impact be scored normally.
 
 【Dimension Explanations】
-- Innovation (0–3): Is the problem novel? Does the method have essential breakthrough? Is the insight deep? Is the distinction from SOTA clear and convincing? Do not give low scores merely for "combining existing techniques"; what matters is whether the combination yields new insight and solves a real problem.
+- Innovation (0–2): Is the problem novel? Does the method have essential breakthrough? Is the insight deep? Is the distinction from SOTA clear and convincing? Do not give low scores merely for "combining existing techniques"; what matters is whether the combination yields new insight and solves a real problem. 2.0 for true breakthroughs, 1.5 for clear innovation, 1.0 for minor improvements, 0.5 for trivial improvements.
 - Technical Rigor (0–1.5): Are derivations/proofs correct? Are there logical flaws in the algorithm? Are assumptions reasonable? Are boundary conditions discussed? Is mathematical formulation rigorous? Is there over-simplification?
 - Experimental Thoroughness (0–1.5): Are baselines sufficient and representative? Are ablation studies complete? Is dataset coverage adequate? Do results truly support the conclusions? Is there statistical significance testing or error analysis? Is there suspicion of overfitting?
 - Clarity (0–1): Organization, symbol definitions, formula explanations, figure quality. Can a reader understand the core method and reproduce it without reading source code? Deduct for poor writing or missing key details.
-- Impact (0–2): Domain-driving effect, potential follow-up value, practical application potential, relevance to audio/speech readers. When scoring, consider the following factors:
+- Impact (0–1.5): Domain-driving effect, potential follow-up value, practical application potential, relevance to audio/speech readers. When scoring, consider the following factors:
   - **Research成果 itself**: achieving SOTA on important benchmarks, releasing large-scale datasets/tools, solving long-standing practical problems in the domain
   - **Institutional impact**: Papers from top research institutions (such as Google DeepMind, Meta FAIR, OpenAI, Microsoft Research, Apple, NVIDIA, ByteDance, Tencent, Alibaba, Baidu, Huawei, etc.) typically have stronger impact and follow-up potential, and should receive适当 higher scores
   - **Author impact**: If the authors are well-known researchers in the field (e.g., have published multiple highly-cited papers, are recognized experts in the domain), their work is typically more值得关注 and should receive适当 higher scores
@@ -87,6 +97,11 @@ has_dataset: 是 / 否 / 未说明
   - **0.2**: Only provides demo but no open-source core content
   - **0**: Completely closed with no promises
 - Reproducibility (0–0.5): Documentation sufficiency beyond open source — training details, hyperparameters, hardware environment, experimental configuration, reproduction steps — are they sufficient for others to reproduce without relying on the authors? 0.5 for complete details; 0.25 for partially missing information; 0 for completely missing key details.
+- Engineering/Practical Value (0–1.5): Evaluates the paper's engineering落地能力, practical reference value, and industrial reusability. Scoring criteria:
+  - **1.5**: Establishes a complete industrial-grade pipeline (e.g., large-scale system reports, benchmark construction, standardized processes, end-to-end production solutions), with extensive engineering details and reusable components that can directly guide practical implementation.
+  - **1.0**: Has clear engineering contributions (e.g., detailed system design, modular architecture, complete training/deployment documentation), with significant reference value for engineering practice.
+  - **0.5**: Has some engineering details (e.g., implementation tricks, optimization experience, engineering trade-off analysis), helpful for reproduction but not systematic.
+  - **0**: Pure theory or pure academic research, no engineering落地 value (this is normal for such papers; score 0 here).
 
 【Reference Ranges】
 - 9.0–10.0: Breakthrough contribution, domain milestone candidate, method or result has paradigm-shifting potential
@@ -271,30 +286,37 @@ Extract all key technical details as much as possible; if missing, explicitly wr
 - Regularization or training stabilization tricks
 
 ## 评分理由
-Please write like a top-tier conference reviewer, scoring and providing specific review comments along the following 7 dimensions. Do not just list scores; explain "why this score" — point out specific strengths and flaws.
+Please write like a top-tier conference reviewer, scoring and providing specific review comments along the following 8 dimensions. Do not just list scores; explain "why this score" — point out specific strengths and flaws.
 
-**创新性：X/3**
+**CRITICAL FORMAT REQUIREMENT**:
+- Scores MUST use each dimension's own range (e.g., Innovation max is 2, write 1.5 NOT 9.0/10)
+- NEVER use 10-point scale, percentage, or any converted score
+- Do NOT write total score calculation (code calculates automatically)
+- Open source score must be consistent with `## 开源详情` and `has_code`/`has_model`/`has_dataset`
+
+**创新性 (X/2)**
 Write specific review comments: novelty of problem / method / insight, key differences from SOTA, whether there is "old wine in new bottles" or incremental improvement, whether the claimed innovation holds up.
 
-**技术严谨性：X/1.5**
+**技术严谨性 (X/1.5)**
 Write specific review comments: correctness of derivation / proof / algorithm, whether there are flaws, undiscussed boundary conditions, over-simplification, or false assumptions, whether mathematical formulation is rigorous.
 
-**实验充分性：X/1.5**
+**实验充分性 (X/1.5)**
 Write specific review comments: whether baselines, ablations, and dataset coverage are sufficient, whether results truly support the conclusions, whether there is over-interpretation of data, whether there is insufficient statistical significance.
 
-**清晰度：X/1**
+**清晰度 (X/1)**
 Write specific review comments: writing quality, organization, symbol definitions, figure clarity, whether key details are missing making reproduction impossible, whether the paper is easy to read.
 
-**影响力：X/2**
+**影响力 (X/1.5)**
 Write specific review comments: domain-driving effect, follow-up potential, **relevance to speech / music / audio domain readers**. If the paper achieves SOTA on important benchmarks, releases large-scale datasets / tools, or solves long-standing practical problems in the domain, it should receive a high score — but only if these contributions **directly serve the speech / music / audio domain**. If the paper's core contribution is in computer vision, natural language processing, law / policy, or general machine learning, impact must be low (typically ≤ 0.5), because speech / music / audio readers cannot directly benefit. Narrowly applicable minor improvements or non-audio-core work can only receive low scores.
 
-**开源：X/1.5**
+**开源 (X/1.5)**
 Write specific review comments: whether code repository, model weights, dataset, and checkpoints are publicly available. Evaluation dimensions: presence of GitHub link, whether README is provided, whether pre-trained model downloads are available, whether dataset is accessible. Deduct points if only a link is given with no README or documentation.
 
-**可复现性：X/0.5**
+**可复现性 (X/0.5)**
 Write specific review comments: documentation sufficiency beyond open source — training details (learning rate, batch size, optimizer, scheduling strategy), hyperparameter settings, hardware environment, reproduction steps — are they sufficient for others to reproduce without relying on the authors? Deduct points for vague information or missing key details.
 
-**总分：X.X/10**
+**工程/实践价值 (X/1.5)**
+Write specific review comments: engineering落地能力, pipeline completeness, practical reference value, industrial reusability. Must be strictly scored for engineering papers (tech reports, system reports, benchmark construction); pure theory research can score 0.
 
 ## 局限与问题
 Please list the paper's limitations and potential issues like a top-tier conference reviewer. Divide into two parts:

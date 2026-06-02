@@ -38,9 +38,14 @@ def parse_machine_summary(analysis):
     """解析 机器摘要 块（兼容 ## 和 ### 标题）"""
     result = {
         'rankBucket': '',
-        'qualityScore': '',
-        'valueScore': '',
-        'reproducibilityBonus': '',
+        'innovation': '',
+        'technicalRigor': '',
+        'experimentalSufficiency': '',
+        'clarity': '',
+        'impact': '',
+        'openSource': '',
+        'reproducibility': '',
+        'engineeringScore': '',
         'confidence': '',
         'primaryTaskTag': '',
         'primaryMethodTag': '',
@@ -59,9 +64,14 @@ def parse_machine_summary(analysis):
 
     key_map = {
         'rank_bucket': 'rankBucket',
-        'quality_score': 'qualityScore',
-        'value_score': 'valueScore',
-        'reproducibility_bonus': 'reproducibilityBonus',
+        'innovation': 'innovation',
+        'technical_rigor': 'technicalRigor',
+        'experimental_sufficiency': 'experimentalSufficiency',
+        'clarity': 'clarity',
+        'impact': 'impact',
+        'open_source': 'openSource',
+        'reproducibility': 'reproducibility',
+        'engineering_score': 'engineeringScore',
         'confidence': 'confidence',
         'primary_task_tag': 'primaryTaskTag',
         'primary_method_tag': 'primaryMethodTag',
@@ -82,7 +92,7 @@ def parse_machine_summary(analysis):
         if mapped:
             val = strip_md(km.group(2))
             # 对于数值型字段，只保留数字部分（去除中文括号说明等）
-            if mapped in ('qualityScore', 'valueScore', 'reproducibilityBonus'):
+            if mapped in ('innovation', 'technicalRigor', 'experimentalSufficiency', 'clarity', 'impact', 'openSource', 'reproducibility', 'engineeringScore'):
                 num_match = re.search(r'(\d+\.?\d*)', val)
                 if num_match:
                     val = num_match.group(1)
@@ -269,9 +279,14 @@ def parse_analysis(analysis):
     r = {
         'machineSummary': None,
         'rankBucket': '',
-        'qualityScore': '',
-        'valueScore': '',
-        'reproducibilityBonus': '',
+        'innovationScore': '',
+        'technicalRigorScore': '',
+        'experimentalSufficiencyScore': '',
+        'clarityScore': '',
+        'impactScore': '',
+        'openSourceScore': '',
+        'reproducibilityScore': '',
+        'engineeringScore': '',
         'confidence': '',
         'primaryTaskTag': '',
         'primaryMethodTag': '',
@@ -284,11 +299,11 @@ def parse_analysis(analysis):
     m = re.search(r'##\s*评分\s*\n\s*\*?(\d+\.?\d*)\*?', analysis)
     r['score'] = m.group(1) if m else ''
 
-    # 如果未匹配到 ## 评分，从机器摘要的 quality_score 获取
+    # 如果未匹配到 ## 评分，从机器摘要的 innovation 获取（作为回退）
     if not r['score']:
         ms = parse_machine_summary(analysis)
-        if ms.get('qualityScore'):
-            r['score'] = ms['qualityScore']
+        if ms.get('innovation'):
+            r['score'] = ms['innovation']
 
     # 先尝试从 ## 标签 部分提取"主任务标签"和"主方法标签"行
     extracted_task_tag = ''
@@ -324,9 +339,14 @@ def parse_analysis(analysis):
     machine_summary = parse_machine_summary(analysis)
     r['machineSummary'] = machine_summary
     r['rankBucket'] = machine_summary['rankBucket']
-    r['qualityScore'] = machine_summary['qualityScore']
-    r['valueScore'] = machine_summary['valueScore']
-    r['reproducibilityBonus'] = machine_summary['reproducibilityBonus']
+    r['innovationScore'] = machine_summary['innovation']
+    r['technicalRigorScore'] = machine_summary['technicalRigor']
+    r['experimentalSufficiencyScore'] = machine_summary['experimentalSufficiency']
+    r['clarityScore'] = machine_summary['clarity']
+    r['impactScore'] = machine_summary['impact']
+    r['openSourceScore'] = machine_summary['openSource']
+    r['reproducibilityScore'] = machine_summary['reproducibility']
+    r['engineeringScore'] = machine_summary['engineeringScore']
     r['confidence'] = machine_summary['confidence']
     # 主任务/主方法标签：优先从 ## 标签 部分的"主任务标签"行提取，
     # 其次从机器摘要获取，最后从 tags[0] fallback。
@@ -424,37 +444,79 @@ def parse_analysis(analysis):
     if scoring_text:
         # 每个维度的上限（用于截断旧格式或 LLM 越界输出）
         dim_max = {
-            '创新性': 3,
+            '创新性': 2,
             '技术严谨性': 1.5,
             '实验充分性': 1.5,
             '清晰度': 1,
-            '影响力': 2,
+            '影响力': 1.5,
             '开源': 1.5,
-            '可复现性': 0.5
+            '可复现性': 0.5,
+            '工程/实践价值': 1.5
         }
         dim_scores = {}
         for dim, max_val in dim_max.items():
-            # 支持多种 LLM 输出格式：
-            # 1. **创新性 (3分)**：2.2分
-            # 2. **创新性 (2.5/3)**：...
-            # 3. **创新性: 2.3/3**
+            # 支持多种 LLM 输出格式
+            # 格式A（10分制，需转换）：dim (max/max)：score/10
+            # 格式B（维度分制，直接用）：dim (score/max)：description
+            # 格式C：dim：score/max
+
+            # 优先匹配10分制格式（格式A）：dim ... ：score/10
+            ten_point_pat = re.compile(
+                r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*\d+\.?\d*\s*/\s*\d+\.?\d*\s*[）)]\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(\d+\.?\d*)\s*/\s*10'
+            )
+            ten_point_match = ten_point_pat.search(scoring_text)
+            if ten_point_match:
+                try:
+                    v10 = float(ten_point_match.group(1))
+                    dim_scores[dim] = round((v10 / 10) * max_val, 1)
+                    continue
+                except (ValueError, TypeError):
+                    pass
+
+            # 次优先：dim ... 得分X.Y/max 格式（得分在描述末尾）
+            defen_pat = re.compile(
+                r'(?:\*\*)?\s*' + re.escape(dim) + r'.*?得分(\d+\.?\d*)\s*(?:/\s*(\d+\.?\d*))?'
+            )
+            defen_match = defen_pat.search(scoring_text)
+            if defen_match:
+                try:
+                    v_defen = float(defen_match.group(1))
+                    v_max_str = defen_match.group(2)
+                    v_max = float(v_max_str) if v_max_str else None
+                    if v_max and v_max == 10:
+                        dim_scores[dim] = round((v_defen / 10) * max_val, 1)
+                    elif v_max and v_max > 0:
+                        dim_scores[dim] = min(v_defen, max_val)
+                    else:
+                        # 无/max：假设是维度原始分值
+                        dim_scores[dim] = min(v_defen, max_val)
+                    continue
+                except (ValueError, TypeError):
+                    pass
+
+            # 非10分制的常规匹配
             dm = None
             for pat in [
-                # 格式1: dim (max/max)**：score 或 dim（max/max）**：score
-                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*\d+\.?\d*\s*(?:/\s*\d+\.?\d*)?\s*分?\s*[）)]\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(\d+\.?\d*)'),
-                # 格式2: dim (score/max) 或 dim（score/max）
-                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*(\d+\.?\d*)\s*/\s*\d+\.?\d*\s*[）)]'),
-                # 格式3: dim: score/max
+                # 格式0: dim (max分)：score/max（如 HAIM 的格式）
+                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*\d+\.?\d*分\s*[）)]\s*[:：]\s*(\d+\.?\d*)\s*/\s*\d+\.?\d*'),
+                # 格式1: dim (score/max)：description（排除有/10的情况）
+                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*(\d+\.?\d*)\s*/\s*\d+\.?\d*\s*[）)](?!.*/10)'),
+                # 格式2: dim：score/max
                 re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[:：]\s*(\d+\.?\d*)\s*/\s*\d+\.?\d*\s*(?:\*\*)?'),
-                # 格式4: dim（score/max）：description
-                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*(\d+\.?\d*)\s*/\s*\d+\.?\d*\s*[）)]\s*[:：]'),
+                # 格式3: dim/满分：得分 score
+                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*/\s*\d+\.?\d*\s*[:：]\s*(?:得分\s*)?(\d+\.?\d*)'),
+                # 格式4: dim (max分 / 满分max分) -> score分
+                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*\d+\.?\d*分\s*/\s*满分\s*\d+\.?\d*分\s*[）)]\s*->\s*(\d+\.?\d*)分'),
+                # 格式5: dim（/max）：score/max
+                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*/\s*\d+\.?\d*\s*[）)]\s*[:：]\s*(\d+\.?\d*)'),
+                # 格式6: dim (max分中的score分)
+                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*\d+\.?\d*分中的(\d+\.?\d*)分\s*[）)]'),
             ]:
                 dm = pat.search(scoring_text)
                 if dm:
                     break
             if dm:
                 try:
-                    # 截断到该维度的上限，防止旧格式或 LLM 越界输出导致总分异常
                     dim_scores[dim] = min(float(dm.group(1)), max_val)
                 except (ValueError, TypeError):
                     pass
@@ -463,18 +525,37 @@ def parse_analysis(analysis):
             total = max(1.0, min(10.0, total))
             r['score'] = str(round(total, 1))
 
-            # 用评分理由的分项覆盖机器摘要字段，确保与总分一致
-            qs = dim_scores.get('创新性', 0) + dim_scores.get('技术严谨性', 0) \
-                 + dim_scores.get('实验充分性', 0) + dim_scores.get('清晰度', 0)
-            vs = dim_scores.get('影响力', 0)
-            rb = dim_scores.get('开源', 0) + dim_scores.get('可复现性', 0)
-            r['qualityScore'] = str(round(qs, 1))
-            r['valueScore'] = str(round(vs, 1))
-            r['reproducibilityBonus'] = str(round(rb, 1))
+            # 用评分理由的分项覆盖结果字段，确保与总分一致
+            r['innovationScore'] = str(round(dim_scores.get('创新性', 0), 1))
+            r['technicalRigorScore'] = str(round(dim_scores.get('技术严谨性', 0), 1))
+            r['experimentalSufficiencyScore'] = str(round(dim_scores.get('实验充分性', 0), 1))
+            r['clarityScore'] = str(round(dim_scores.get('清晰度', 0), 1))
+            r['impactScore'] = str(round(dim_scores.get('影响力', 0), 1))
+            r['openSourceScore'] = str(round(dim_scores.get('开源', 0), 1))
+            r['reproducibilityScore'] = str(round(dim_scores.get('可复现性', 0), 1))
+            r['engineeringScore'] = str(round(dim_scores.get('工程/实践价值', 0), 1))
             if r.get('machineSummary'):
-                r['machineSummary']['qualityScore'] = r['qualityScore']
-                r['machineSummary']['valueScore'] = r['valueScore']
-                r['machineSummary']['reproducibilityBonus'] = r['reproducibilityBonus']
+                r['machineSummary']['innovation'] = r['innovationScore']
+                r['machineSummary']['technicalRigor'] = r['technicalRigorScore']
+                r['machineSummary']['experimentalSufficiency'] = r['experimentalSufficiencyScore']
+                r['machineSummary']['clarity'] = r['clarityScore']
+                r['machineSummary']['impact'] = r['impactScore']
+                r['machineSummary']['openSource'] = r['openSourceScore']
+                r['machineSummary']['reproducibility'] = r['reproducibilityScore']
+                r['machineSummary']['engineeringScore'] = r['engineeringScore']
+
+    # 矛盾检测：开源高分但无任何实际链接
+    open_score_val = float(r.get('openSourceScore', 0) or 0)
+    has_code_yes = r.get('hasCode') in ('是', 'yes')
+    has_model_yes = r.get('hasModel') in ('是', 'yes')
+    has_dataset_yes = r.get('hasDataset') in ('是', 'yes')
+    if open_score_val >= 1.0 and not has_code_yes and not has_model_yes and not has_dataset_yes:
+        r['openSourceScore'] = '0'
+        if r.get('machineSummary'):
+            r['machineSummary']['openSource'] = '0'
+        total = float(r.get('score', 0) or 0)
+        total = max(1.0, min(10.0, total - open_score_val))
+        r['score'] = str(round(total, 1))
 
     # rankBucket 推断：在评分计算完成后执行，确保基于最终 score
     if not r.get('rankBucket') and r.get('score'):
