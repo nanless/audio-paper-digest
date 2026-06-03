@@ -47,8 +47,9 @@ arXiv ID: {arxivId}
 4. **保留格式**：输出必须包含以下完整章节，格式与已有分析一致：
    - ## 评分（**必须**以 `X.X/10` 格式输出总分）
    - ## 机器摘要（**极其重要，必须严格遵守**）：
-     * 每行必须是 `key: value` 格式，**不要用 `-`、`*`、`1.` 等列表符号开头**
-     * **不要加粗键名**（`**rank_bucket**: 是错误的）
+      * 每行必须是 `key: value` 格式，**不要用 `-`、`*`、`1.` 等列表符号开头**
+      * **禁止加粗键名或值**（`**rank_bucket**:` 和 `has_code: ** 是` 都是错误的，必须写 `has_code: 是`）
+      * **值部分严禁出现任何 Markdown 格式标记**（`**`、`__`、`*` 等）
       * 键名必须是英文小写+下划线：rank_bucket / innovation / technical_rigor / experimental_sufficiency / clarity / impact / open_source / reproducibility / engineering_score / confidence / primary_task_tag / primary_method_tag / sota_claim / has_code / has_model / has_dataset
       * `rank_bucket` 只能写 前10% / 前25% / 前50% / 后50%，**严禁使用字母或英文**
       * `innovation`、`technical_rigor`、`experimental_sufficiency`、`clarity`、`impact`、`open_source`、`reproducibility`、`engineering_score` 必须是纯数字，**严禁使用文字描述**

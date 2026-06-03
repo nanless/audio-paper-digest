@@ -30,6 +30,9 @@ def strip_md(t):
     t = re.sub(r'\*(.+?)\*', r'\1', t)
     t = re.sub(r'_(.+?)_', r'\1', t)
     t = re.sub(r'`(.+?)`', r'\1', t)
+    # 清理残留的不成对 ** 和 __
+    t = t.replace('**', '')
+    t = t.replace('__', '')
     t = re.sub(r'^#{1,6}\s+', '', t, flags=re.MULTILINE)
     return t.strip()
 

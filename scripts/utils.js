@@ -178,6 +178,9 @@ function stripMd(text) {
     t = t.replace(/\*\*(.+?)\*\*/g, '$1');
     t = t.replace(/__(.+?)__/g, '$1');
     t = t.replace(/\*(.+?)\*/g, '$1');
+    // 清理残留的不成对 ** 和 __
+    t = t.replace(/\*\*/g, '');
+    t = t.replace(/__/g, '');
     return t.trim();
 }
 
@@ -309,6 +312,8 @@ function parseMachineSummary(analysis) {
             
             // 对于 has_code/has_model/has_dataset，标准化
             if (['hasCode', 'hasModel', 'hasDataset'].includes(mappedKey)) {
+                // 先清理残留的 Markdown 加粗标记
+                val = val.replace(/\*\*/g, '').trim();
                 const yesNoMap = {
                     '是': '是', 'yes': '是', 'y': '是', '有': '是',
                     '否': '否', 'no': '否', 'n': '否', '无': '否',
