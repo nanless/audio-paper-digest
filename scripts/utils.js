@@ -131,6 +131,7 @@ function getRecordDate(data) {
 // ═══════════════════════════════════════════════════════
 
 function normalizedId(paperOrId) {
+    if (paperOrId == null) return '';
     if (typeof paperOrId === 'string') {
         return paperOrId.replace(/v\d+$/, '').trim().toLowerCase();
     }

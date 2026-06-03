@@ -78,6 +78,32 @@ function autoArchiveCurrentData() {
 }
 
 /**
+ * 清理非今日数据（归档后残留的旧数据）
+ * 归档函数只在文件日期早于今天时触发，但文件可能在当天被修改导致未归档
+ */
+function cleanOldData(filePath, name, today) {
+    if (!fs.existsSync(filePath)) return;
+    const data = readJsonSafe(filePath);
+    if (!data || !data.papers || !Array.isArray(data.papers)) return;
+
+    const before = data.papers.length;
+    data.papers = data.papers.filter(p => {
+        const date = (p.fetchedAt || p.timestamp || '').substring(0, 10);
+        // 无日期字段的论文可能是从旧格式迁移的，保留它们
+        return !date || date === today;
+    });
+    const removed = before - data.papers.length;
+
+    if (removed > 0) {
+        data.timestamp = new Date().toISOString();
+        writeFileAtomic(filePath, JSON.stringify(data, null, 2));
+        console.log(`  [清理] ${name}: 移除 ${removed} 篇旧数据，保留 ${data.papers.length} 篇今日数据`);
+    } else {
+        console.log(`  [清理] ${name}: 无需清理（${data.papers.length} 篇均为今日数据）`);
+    }
+}
+
+/**
  * 从归档目录加载已分析论文的规范化ID集合
  * 用于跳过之前已经成功分析过的论文（避免HF论文在7天窗口内重复出现）
  */
@@ -116,6 +142,12 @@ async function fullFetch() {
     console.log('=== 论文抓取 + 深度分析（arxiv + HuggingFace Papers）===');
     console.log('');
     autoArchiveCurrentData();
+    console.log('');
+
+    // 清理非今日数据（归档后残留的旧数据）
+    const today = getBeijingDateString();
+    cleanOldData(RESULT_FILE, 'deep-analysis-result', today);
+    cleanOldData(FILTERED_FILE, 'filtered-papers', today);
     console.log('');
 
     // papers.json 自动备份（去重数据库，不归档但需备份防损坏）
@@ -169,8 +201,20 @@ async function fullFetch() {
             existingIds
         );
         const fetchDuration = Date.now() - fetchStartTime;
-        arxivPapers.push(...papers);
-        console.log(`    获取 ${papers.length} 篇新论文`);
+
+        // 去重：将新论文 ID 加入 existingIds，避免下一类别重复抓取
+        let newInCategory = 0, dupInCategory = 0;
+        for (const p of papers) {
+            const id = normalizedId(p.paper_id || p.arxivId);
+            if (existingIds.has(id)) {
+                dupInCategory++;
+            } else {
+                existingIds.add(id);
+                arxivPapers.push(p);
+                newInCategory++;
+            }
+        }
+        console.log(`    ${category.id}: 获取 ${papers.length} 篇, 新增 ${newInCategory} 篇, 跨类别去重 ${dupInCategory} 篇`);
 
         // 核心类别检查：无新论文时继续运行（可能是已知论文太多）
         if (category.priority === 'core' && papers.length === 0) {
@@ -179,8 +223,8 @@ async function fullFetch() {
         }
 
         // 类别间延迟：基础延迟 + 随机抖动 + 限流检测补偿
-        const baseJitter = Math.floor(Math.random() * 15000) + 5000; // 5-20秒随机
-        const rateLimitPenalty = fetchDuration > 120000 ? 60000 : (fetchDuration > 60000 ? 30000 : 0);
+        const baseJitter = Math.floor(Math.random() * 20000) + 10000; // 10-30秒随机
+        const rateLimitPenalty = fetchDuration > 300000 ? 120000 : (fetchDuration > 120000 ? 60000 : (fetchDuration > 60000 ? 30000 : 0));
         const totalDelay = FETCH_DELAY_MS + baseJitter + rateLimitPenalty;
         if (rateLimitPenalty > 0) {
             console.log(`    检测到可能的限流，额外等待 ${(rateLimitPenalty/1000).toFixed(0)} 秒...`);

@@ -292,47 +292,266 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
     for (let page = 0; page < pagesToFetch; page++) {
         const start = page * pageSize;
         const searchUrl = `https://arxiv.org/search/?searchtype=all&query=${categoryId}&order=-announced_date_first&start=${start}`;
+        const maxRetries = 5;
 
-        try {
-            const headers = getBrowserHeaders();
-            headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
+        let pageSuccess = false;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const headers = getBrowserHeaders();
+                headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
+                headers['Referer'] = 'https://arxiv.org/';
+                headers['Accept-Language'] = 'en-US,en;q=0.9,zh-CN;q=0.8';
 
-            const response = await httpsRequestWithProxy(searchUrl, headers, proxyUrl, 60000);
+                const response = await httpsRequestWithProxy(searchUrl, headers, proxyUrl, 60000);
 
-            if (response.status !== 200) {
-                throw new Error(`HTTP ${response.status}`);
+                if (response.status !== 200) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const html = response.data;
+                const papersBeforeFilter = allPapers.length;
+                const papers = parseSearchPageHTML(html, categoryId, existingIds);
+
+                if (papers.length === 0) {
+                    console.log(`[fetch-web] 第 ${page + 1} 页无新论文，停止翻页`);
+                    pageSuccess = true;
+                    break;
+                }
+
+                allPapers.push(...papers);
+                console.log(`[fetch-web] 第 ${page + 1} 页新增 ${papers.length} 篇，累计 ${allPapers.length} 篇`);
+                pageSuccess = true;
+
+                // 如果已有足够论文，停止
+                if (allPapers.length >= maxResults) {
+                    break;
+                }
+                break; // 成功，跳出重试循环
+            } catch (err) {
+                const is429 = err.message.includes('429');
+                if (attempt < maxRetries) {
+                    // 429 指数退避：60s, 120s, 240s, 480s
+                    const baseDelay = is429 ? 60000 * Math.pow(2, attempt - 1) : 5000 * attempt;
+                    const jitter = Math.floor(Math.random() * 15000);
+                    const delay = baseDelay + jitter;
+                    console.log(`[fetch-web] 第 ${page + 1} 页第 ${attempt} 次失败: ${err.message}，${(delay/1000).toFixed(1)}s 后重试...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                } else {
+                    console.log(`[fetch-web] 第 ${page + 1} 页失败 (${maxRetries} 次重试): ${err.message}`);
+                }
             }
+        }
 
-            const html = response.data;
-            const papersBeforeFilter = allPapers.length;
-            const papers = parseSearchPageHTML(html, categoryId, existingIds);
-
-            if (papers.length === 0) {
-                console.log(`[fetch-web] 第 ${page + 1} 页无新论文，停止翻页`);
-                break;
-            }
-
-            allPapers.push(...papers);
-            console.log(`[fetch-web] 第 ${page + 1} 页新增 ${papers.length} 篇，累计 ${allPapers.length} 篇`);
-
-            // 如果已有足够论文，停止
-            if (allPapers.length >= maxResults) {
-                break;
-            }
-
-            // 页面间延迟，避免被限流
-            if (page < pagesToFetch - 1) {
-                const delay = Math.floor(Math.random() * 3000) + 2000;
-                await new Promise(resolve => setTimeout(resolve, delay));
-            }
-        } catch (err) {
-            console.log(`[fetch-web] 第 ${page + 1} 页获取失败: ${err.message}`);
+        if (!pageSuccess && page === 0) {
+            // 第一页就全部失败，没有意义继续
             break;
+        }
+
+        // 页面间延迟加大：10-25秒
+        if (page < pagesToFetch - 1) {
+            const delay = Math.floor(Math.random() * 15000) + 10000;
+            console.log(`[fetch-web] 页面间等待 ${(delay/1000).toFixed(1)}s...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
 
     console.log(`[fetch-web] ${categoryId} 共获取 ${allPapers.length} 篇论文`);
     return allPapers.slice(0, maxResults);
+}
+
+/**
+ * 从 arXiv recent 页面抓取论文（支持翻页，最多100篇）
+ * recent 页面展示最近几天的论文，限流策略通常比搜索页宽松
+ * 翻页：/list/{category}/recent?skip=50&show=50
+ */
+async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxResults = 100) {
+    const proxyUrl = detectProxyUrl();
+    const pageSize = 50;
+    const pagesToFetch = Math.min(Math.ceil(maxResults / pageSize), 2); // 最多2页100篇
+    const allPapers = [];
+
+    for (let page = 0; page < pagesToFetch; page++) {
+        const skip = page * pageSize;
+        const url = skip === 0
+            ? `https://arxiv.org/list/${categoryId}/recent`
+            : `https://arxiv.org/list/${categoryId}/recent?skip=${skip}&show=${pageSize}`;
+        const maxRetries = 5;
+        let pageSuccess = false;
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const headers = getBrowserHeaders();
+                headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
+                headers['Referer'] = 'https://arxiv.org/';
+
+                const response = await httpsRequestWithProxy(url, headers, proxyUrl, 60000);
+
+                if (response.status !== 200) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const html = response.data;
+                const papers = parseRecentPageHTML(html, categoryId, existingIds);
+
+                allPapers.push(...papers);
+                console.log(`[fetch-recent] ${categoryId} 第 ${page + 1} 页获取 ${papers.length} 篇`);
+                pageSuccess = true;
+                break;
+            } catch (err) {
+                const is429 = err.message.includes('429');
+                if (attempt < maxRetries) {
+                    const baseDelay = is429 ? 60000 * Math.pow(2, attempt - 1) : 5000 * attempt;
+                    const jitter = Math.floor(Math.random() * 10000);
+                    const delay = baseDelay + jitter;
+                    console.log(`[fetch-recent] ${categoryId} 第 ${page + 1} 页第 ${attempt} 次失败: ${err.message}，${(delay/1000).toFixed(1)}s 后重试...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                } else {
+                    console.log(`[fetch-recent] ${categoryId} 第 ${page + 1} 页失败 (${maxRetries} 次重试): ${err.message}`);
+                }
+            }
+        }
+
+        if (!pageSuccess) break;
+
+        // 页间延迟
+        if (page < pagesToFetch - 1) {
+            await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+    }
+
+    // 去重
+    const seen = new Set();
+    const unique = allPapers.filter(p => {
+        if (seen.has(p.arxivId)) return false;
+        seen.add(p.arxivId);
+        return true;
+    });
+
+    console.log(`[fetch-recent] ${categoryId} 共获取 ${unique.length} 篇论文`);
+    return unique.slice(0, maxResults);
+}
+
+/**
+ * 解析 arXiv recent/new 页面 HTML
+ */
+function parseRecentPageHTML(html, categoryId, existingIds = null) {
+    const papers = [];
+
+    // 提取所有 arXiv ID（从 href="/abs/XXXX.XXXXX"）
+    const idRegex = /href\s*=\s*['"]\/abs\/([\d.]+)['"]/gi;
+    const ids = [];
+    let m;
+    while ((m = idRegex.exec(html)) !== null) {
+        const id = m[1].replace(/v\d+$/, '');
+        if (!ids.includes(id)) ids.push(id);
+    }
+
+    // 提取所有标题
+    const titleRegex = /<div\s+class\s*=\s*['"]list-title\s+mathjax['"][^>]*>\s*<span\s+class\s*=\s*['"]descriptor['"]>Title:<\/span>\s*([\s\S]*?)\s*<\/div>/gi;
+    const titles = [];
+    while ((m = titleRegex.exec(html)) !== null) {
+        titles.push(m[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim());
+    }
+
+    // 提取所有作者列表
+    const authorRegex = /<div\s+class\s*=\s*['"]list-authors['"][^>]*>([\s\S]*?)<\/div>/gi;
+    const authorLists = [];
+    while ((m = authorRegex.exec(html)) !== null) {
+        const authorLinks = m[1].match(/<a[^>]*>([^<]+)<\/a>/gi);
+        authorLists.push(authorLinks ? authorLinks.map(a => a.replace(/<[^>]+>/g, '').trim()).filter(a => a) : []);
+    }
+
+    // 组装论文数据
+    let newCount = 0, dupCount = 0;
+    for (let i = 0; i < ids.length; i++) {
+        const arxivId = ids[i];
+        if (existingIds && existingIds.has(arxivId)) {
+            dupCount++;
+            continue;
+        }
+        newCount++;
+
+        const title = titles[i] || '';
+        const authors = authorLists[i] || [];
+
+        if (title) {
+            papers.push({
+                paper_id: arxivId,
+                arxivId: arxivId,
+                title: title,
+                authors: authors,
+                abstract: '',
+                categories: [categoryId],
+                source: 'arxiv-recent',
+                fetchedAt: new Date().toISOString()
+            });
+            console.log(`[fetch-recent]   ✓ ${arxivId} - ${title.substring(0, 70)}`);
+        }
+    }
+
+    console.log(`[fetch-recent] ${categoryId} 去重: ${newCount} 篇新论文, ${dupCount} 篇已存在`);
+
+    return papers;
+}
+
+/**
+ * 批量补充论文摘要（从 arXiv abs 页面抓取）
+ * @param {Array} papers - 论文列表（需要有 arxivId 字段）
+ * @param {number} concurrency - 并发数（默认1，避免限流）
+ * @returns {Array} 补充了摘要的论文列表
+ */
+async function fetchAbstracts(papers, concurrency = 1) {
+    const proxyUrl = detectProxyUrl();
+    const needFetch = papers.filter(p => !p.abstract && p.arxivId);
+    if (needFetch.length === 0) return papers;
+
+    console.log(`[fetch-abstract] 需要补充 ${needFetch.length} 篇论文摘要...`);
+    let fetched = 0;
+
+    for (let i = 0; i < needFetch.length; i += concurrency) {
+        const batch = needFetch.slice(i, i + concurrency);
+        await Promise.all(batch.map(async (paper) => {
+            const maxRetries = 3;
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    const url = `https://arxiv.org/abs/${paper.arxivId}`;
+                    const headers = getBrowserHeaders();
+                    headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
+                    headers['Referer'] = 'https://arxiv.org/';
+
+                    const response = await httpsRequestWithProxy(url, headers, proxyUrl, 30000);
+                    if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
+
+                    // 解析摘要：<blockquote class="abstract mathjax">...<span class="descriptor">Abstract:</span> ...</blockquote>
+                    const abstractMatch = response.data.match(/<blockquote\s+class\s*=\s*['"]abstract\s+mathjax['"][^>]*>\s*<span\s+class\s*=\s*['"]descriptor['"]>Abstract:<\/span>\s*([\s\S]*?)\s*<\/blockquote>/i);
+                    if (abstractMatch) {
+                        paper.abstract = abstractMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+                    }
+                    fetched++;
+                    break;
+                } catch (err) {
+                    const is429 = err.message.includes('429');
+                    if (attempt < maxRetries) {
+                        const delay = is429 ? 60000 * attempt : 3000 * attempt;
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                    }
+                }
+            }
+        }));
+
+        // 批间延迟
+        if (i + concurrency < needFetch.length) {
+            await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+
+        // 进度
+        if (fetched % 20 === 0 || i + concurrency >= needFetch.length) {
+            console.log(`[fetch-abstract] 已补充 ${fetched}/${needFetch.length} 篇`);
+        }
+    }
+
+    console.log(`[fetch-abstract] 摘要补充完成: ${fetched}/${needFetch.length} 篇`);
+    return papers;
 }
 
 /**
@@ -433,21 +652,36 @@ function parseSearchPageHTML(html, categoryId, existingIds = null) {
 
 /**
  * 从 arXiv 抓取指定类别的论文
- * 策略：网页抓取为主，API 为辅
+ * 策略：recent → 搜索页 → API，每步获取足够就跳过后续
  */
 async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResultsPerCategory, retryCount = ARXIV_CONFIG.fetchMaxRetries, existingIds = null) {
     console.log(`[fetch] 正在抓取 ${categoryId} 类别的 ${maxResults} 篇论文...`);
 
-    // 优先使用网页抓取
-    const webPapers = await fetchCategoryFromSearchPage(categoryId, existingIds, maxResults);
+    // 1. 优先用 recent 页面
+    let recentPapers = await fetchCategoryFromRecentPage(categoryId, existingIds, maxResults);
 
-    // 如果网页抓取获取到足够论文，直接返回
-    if (webPapers.length >= maxResults * 0.8) {
-        return webPapers;
+    // 补充摘要（recent 页面不包含摘要）
+    if (recentPapers.length > 0) {
+        recentPapers = await fetchAbstracts(recentPapers, 5);
+        return recentPapers;
     }
 
-    // 网页抓取不足，尝试 API 补充
-    console.log(`[fetch] ${categoryId} 网页抓取 ${webPapers.length} 篇，尝试 API 补充...`);
+    // 2. recent 无结果，用搜索页
+    console.log(`[fetch] ${categoryId} recent 无结果，尝试搜索页...`);
+    const webPapers = await fetchCategoryFromSearchPage(categoryId, existingIds, maxResults);
+
+    const merged = new Map();
+    for (const p of recentPapers) merged.set(p.arxivId, p);
+    for (const p of webPapers) merged.set(p.arxivId, p);
+
+    if (merged.size >= 10) {
+        const result = Array.from(merged.values());
+        console.log(`[fetch] ${categoryId} recent+搜索页合并 ${result.length} 篇`);
+        return result;
+    }
+
+    // 3. 搜索页也不够，用 API
+    console.log(`[fetch] ${categoryId} recent+搜索页仅 ${merged.size} 篇，尝试 API...`);
 
     const params = new URLSearchParams({
         'search_query': `cat:${categoryId}`,
@@ -456,11 +690,11 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
         'max_results': maxResults.toString()
     });
     const url = `https://export.arxiv.org/api/query?${params.toString()}`;
-
     const proxyUrl = detectProxyUrl();
 
-    for (let attempt = 1; attempt <= Math.min(retryCount, 3); attempt++) {
+    for (let attempt = 1; attempt <= Math.min(retryCount, 5); attempt++) {
         const headers = getBrowserHeaders();
+        headers['Referer'] = 'https://arxiv.org/';
 
         try {
             const response = await httpsRequestWithProxy(url, headers, proxyUrl, 60000);
@@ -470,25 +704,25 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
                 const apiPapers = parseArxivXML(xml, categoryId, existingIds);
 
                 if (apiPapers.length > 0) {
-                    // 合并去重
-                    const merged = new Map();
-                    for (const p of webPapers) merged.set(p.arxivId, p);
-                    for (const p of apiPapers) {
-                        if (!merged.has(p.arxivId)) merged.set(p.arxivId, p);
-                    }
-                    const result = Array.from(merged.values());
-                    console.log(`[fetch] ${categoryId} 合并后共 ${result.length} 篇论文`);
-                    return result;
+                    for (const p of apiPapers) merged.set(p.arxivId, p);
                 }
+                break;
             }
-            break;
+            throw new Error(`HTTP ${response.status}`);
         } catch (err) {
-            if (attempt === Math.min(retryCount, 3)) break;
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            if (attempt === Math.min(retryCount, 5)) break;
+            const is429 = err.message.includes('429');
+            const baseDelay = is429 ? 60000 * Math.pow(2, attempt - 1) : 5000 * attempt;
+            const jitter = Math.floor(Math.random() * 10000);
+            const delay = baseDelay + jitter;
+            console.log(`[fetch] ${categoryId} API 第 ${attempt} 次失败: ${err.message}，${(delay/1000).toFixed(0)}s 后重试...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
 
-    return webPapers;
+    const result = Array.from(merged.values());
+    console.log(`[fetch] ${categoryId} 最终 ${result.length} 篇`);
+    return result;
 }
 
 /**
@@ -758,6 +992,9 @@ module.exports = {
     CATEGORIES,
     fetchCategoryPapers,
     fetchCategoryFromSearchPage,
+    fetchCategoryFromRecentPage,
+    fetchAbstracts,
+    parseRecentPageHTML,
     deduplicatePapers,
     filterPapers,
     filterPapersWithLLM,

@@ -10,7 +10,7 @@ setupScriptLogging(__filename);
 const fs = require('fs');
 const path = require('path');
 const { loadEnvFile, writeFileAtomic, readJsonSafe, getBeijingISOString } = require('./utils.js');
-const { analyzeBatch, createFileSaver } = require('./analysis-engine.js');
+const { analyzeBatch } = require('./analysis-engine.js');
 
 loadEnvFile();
 
@@ -42,15 +42,12 @@ async function runDeepAnalysis() {
         return;
     }
 
-    const saver = createFileSaver(resultPath);
-
     const Config = require('./config.js');
     const { stats } = await analyzeBatch(notAnalyzed, {
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
         saveInterval: Config.ANALYSIS_CONFIG.concurrency,
-        shouldSkip: (paper) => !!paper.analysis,
         onPaperStart: (idx, total, paper) => {
             console.log(`  [${idx + 1}/${papers.length}] ${paper.title.substring(0, 50)}...`);
         },
@@ -67,7 +64,7 @@ async function runDeepAnalysis() {
             // results 里已经是 paper 对象（analysis-engine.js 解包过 r.result）
             const resultMap = new Map();
             for (const r of results) {
-                if (!r || !r.arxivId) continue;
+                if (!r) continue;
                 const key = r.arxivId || r.paper_id;
                 if (key) resultMap.set(key, r);
             }
@@ -77,7 +74,14 @@ async function runDeepAnalysis() {
                     papers[i] = resultMap.get(key);
                 }
             }
-            await saver(papers, saveStats);
+            // 直接写入文件，不走 createFileSaver 的合并逻辑
+            const output = {
+                ...existingData,
+                lastUpdated: new Date().toISOString(),
+                papers: papers,
+                stats: { ...existingData?.stats, ...saveStats }
+            };
+            writeFileAtomic(resultPath, JSON.stringify(output, null, 2));
             console.log(`  💾 已保存 (${saveStats.success + saveStats.failed}/${notAnalyzed.length})`);
         }
     });

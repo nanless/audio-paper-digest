@@ -10,7 +10,7 @@ setupScriptLogging(__filename);
 const fs = require('fs');
 const path = require('path');
 const { loadEnvFile, writeFileAtomic, readJsonSafe } = require('./utils.js');
-const { analyzeBatch, createFileSaver } = require('./analysis-engine.js');
+const { analyzeBatch } = require('./analysis-engine.js');
 const Config = require('./config.js');
 
 loadEnvFile();
@@ -43,8 +43,6 @@ async function main() {
         return;
     }
 
-    const saver = createFileSaver(RESULT_FILE);
-
     const { stats } = await analyzeBatch(notAnalyzed, {
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
@@ -69,12 +67,12 @@ async function main() {
             }
         },
         onSave: async (results, saveStats) => {
-            // 按 ID 匹配替换，避免顺序错位
+            // analyzeBatch 传入的是 r.result（解包后的论文对象），不是 {success, result} 包装
             const resultMap = new Map();
             for (const r of results) {
-                if (!r.success || !r.result) continue;
-                const key = r.result.arxivId || r.result.paper_id;
-                if (key) resultMap.set(key, r.result);
+                if (!r) continue;
+                const key = r.arxivId || r.paper_id;
+                if (key) resultMap.set(key, r);
             }
             for (let i = 0; i < papers.length; i++) {
                 const key = papers[i].arxivId || papers[i].paper_id;
@@ -82,7 +80,13 @@ async function main() {
                     papers[i] = resultMap.get(key);
                 }
             }
-            await saver(papers, saveStats);
+            // 直接写入文件，不走 createFileSaver 的合并逻辑（避免 normalizedId 失败导致数据丢失）
+            const output = {
+                lastUpdated: new Date().toISOString(),
+                papers: papers,
+                stats: saveStats
+            };
+            writeFileAtomic(RESULT_FILE, JSON.stringify(output, null, 2));
             console.log(`   已保存到 ${RESULT_FILE}`);
         }
     });

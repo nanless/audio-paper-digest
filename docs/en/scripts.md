@@ -145,7 +145,6 @@ Unified analysis engine. Encapsulates the following functionality, eliminating d
 - `analyzePaperWithRetry(paper, options)`: single-paper analysis (with retry + auto-parse)
 - `analyzeBatch(papers, options)`: batch analysis (supports concurrency control + incremental save callback)
 - `mergeAndSaveResults(newResults, filePath, extraData)`: deduplicate by ID and save, **with built-in failure protection** (papers with an existing successful analysis will not be overwritten by a failed result without analysis)
-- `createFileSaver(filePath, baseData)`: creates a file save callback, compatible with old-format pure array data auto-conversion
 
 #### `scripts/fetch-huggingface-papers.js`
 

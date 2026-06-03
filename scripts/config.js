@@ -36,8 +36,8 @@ const ARXIV_CONFIG = {
     fetchRetryBaseDelayMs: 5000,
     fetchRateLimitBaseDelayMs: 30000,
     fetchMaxWaitMs: 600000,
-    categoryDelayMs: 45000,
-    firstRequestDelayMs: 15000,
+    categoryDelayMs: 60000,
+    firstRequestDelayMs: 30000,
     consecutiveExistingThreshold: 20,
     userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 };

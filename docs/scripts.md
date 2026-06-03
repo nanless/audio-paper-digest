@@ -149,7 +149,6 @@ arXiv 抓取与 LLM 筛选模块。
 - `analyzePaperWithRetry(paper, options)`：单篇分析（带重试 + 自动解析）
 - `analyzeBatch(papers, options)`：批量分析（支持并发控制 + 增量保存回调）
 - `mergeAndSaveResults(newResults, filePath, extraData)`：按 ID 去重合并并保存，**自带失败结果保护**（已有成功 analysis 的论文不会被无 analysis 的失败结果覆盖）
-- `createFileSaver(filePath, baseData)`：创建文件保存回调，兼容旧格式纯数组数据自动转换
 
 #### `scripts/fetch-huggingface-papers.js`
 
