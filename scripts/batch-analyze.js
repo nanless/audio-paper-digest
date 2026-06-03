@@ -77,7 +77,8 @@ async function main() {
             for (let i = 0; i < papers.length; i++) {
                 const key = papers[i].arxivId || papers[i].paper_id;
                 if (resultMap.has(key)) {
-                    papers[i] = resultMap.get(key);
+                    // 合并新结果到原论文，保留原论文的fetchedAt等字段
+                    papers[i] = { ...papers[i], ...resultMap.get(key) };
                 }
             }
             // 直接写入文件，不走 createFileSaver 的合并逻辑（避免 normalizedId 失败导致数据丢失）

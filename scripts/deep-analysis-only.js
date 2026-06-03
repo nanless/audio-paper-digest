@@ -71,7 +71,7 @@ async function runDeepAnalysis() {
             for (let i = 0; i < papers.length; i++) {
                 const key = papers[i].arxivId || papers[i].paper_id;
                 if (resultMap.has(key)) {
-                    papers[i] = resultMap.get(key);
+                    papers[i] = { ...papers[i], ...resultMap.get(key) };
                 }
             }
             // 直接写入文件，不走 createFileSaver 的合并逻辑
