@@ -310,6 +310,24 @@ async function fullFetch() {
     }, null, 2));
     console.log(`💾 筛选结果已保存到: ${FILTERED_FILE}`);
 
+    // ========== 第4.8步：保存所有爬到论文到 papers.json（提前保存，防止后续中断丢失）==========
+    console.log('\n💾 保存所有爬取论文到 papers.json 去重数据库');
+    let newPaperCount = 0;
+    for (const paper of allPapers) {
+        const rawId = paper.paper_id || paper.arxivId;
+        const normId = normalizedId(rawId);
+        if (normId && !papersData.papers[normId]) {
+            papersData.papers[normId] = paper;
+            newPaperCount++;
+        }
+    }
+    try {
+        savePapers(papersData);
+        console.log(`  新增 ${newPaperCount} 篇论文ID到数据库，累计 ${Object.keys(papersData.papers).length} 篇`);
+    } catch (e) {
+        console.error(`  ❌ 保存 papers.json 失败: ${e.message}`);
+    }
+
     // ========== 第五步：深度分析 ==========
     console.log('\n🔬 第五步：深度分析每篇论文');
     const analyzedPapers = [];
@@ -384,26 +402,8 @@ async function fullFetch() {
         }
     });
 
-    // ========== 第六步：保存论文数据库 ==========
-    console.log('\n💾 第六步：更新 papers.json 去重数据库');
-    let newPaperCount = 0;
-    for (const paper of allPapers) {
-        const rawId = paper.paper_id || paper.arxivId;
-        const normId = normalizedId(rawId);
-        if (normId && !papersData.papers[normId]) {
-            papersData.papers[normId] = paper;
-            newPaperCount++;
-        }
-    }
-    try {
-        savePapers(papersData);
-        console.log(`  新增 ${newPaperCount} 篇论文ID到数据库，累计 ${Object.keys(papersData.papers).length} 篇`);
-    } catch (e) {
-        console.error(`  ❌ 保存 papers.json 失败: ${e.message}`);
-    }
-
-    // ========== 第七步：保存深度分析结果 ==========
-    console.log('\n💾 第七步：保存深度分析结果');
+    // ========== 第六步：保存深度分析结果 ==========
+    console.log('\n💾 第六步：保存深度分析结果');
 
     const outputFile = fs.existsSync(RESULT_FILE) || !fs.existsSync(LEGACY_RESULT_FILE) ? RESULT_FILE : LEGACY_RESULT_FILE;
 
