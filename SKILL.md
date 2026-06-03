@@ -32,9 +32,9 @@ description: >
 5. **合并去重**：arXiv 优先，HF 补充 7 个特有字段，标记 `sources`；过滤掉博客已发布论文
 6. **LLM 筛选**：按 `PAPER_ANALYZER_*` 配置逐篇判断语音/音乐/音频相关，`batchSize=5`（可通过 `PD_FILTER_BATCH_SIZE` 调整），单篇超时 60 秒，重试 3 次
 7. **保存筛选结果**：`data/current/filtered-papers.json`
-8. **深度分析**：`deep-analyzer.js`，全文+图片，并发 3 篇（可通过 `PD_ANALYSIS_CONCURRENCY` 调整），每篇最多重试 2 次（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整）
-9. **增量保存**：每批分析后立即保存到 `data/current/deep-analysis-result.json`，自带失败结果保护（已有成功 analysis 的论文不会被无 analysis 的失败结果覆盖）
-10. **更新去重库**：追加新论文 ID 到 `data/current/papers.json`，自动备份 papers.json（保留最近 7 天）
+8. **更新去重库**：追加所有爬取论文 ID 到 `data/current/papers.json`（不仅筛选通过的，提前保存防止后续中断丢失）
+9. **深度分析**：`deep-analyzer.js`，全文+图片，并发 3 篇（可通过 `PD_ANALYSIS_CONCURRENCY` 调整），每篇最多重试 2 次（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整）
+10. **增量保存**：每批分析后立即保存到 `data/current/deep-analysis-result.json`，自带失败结果保护（已有成功 analysis 的论文不会被无 analysis 的失败结果覆盖）
 11. **收尾合并**：去重合并历史结果，自动备份 bak 文件（保留最近 10 个）
 
 `full-fetch.js` **不会自动发布博客/微信**，发布需单独运行 Python 脚本。

@@ -44,13 +44,11 @@ Fetch the latest papers from 7 categories:
 | `cs.AI` | Artificial Intelligence | supplement |
 | `cs.MM` | Multimedia | supplement |
 
-Fetch parameters:
-- API: `export.arxiv.org/api/query`, sorted by `submittedDate` descending, `max_results=100` per category
-- User-Agent: `Mozilla/5.0 (compatible; PaperDigest/1.0)`
-- Up to **20 retries** per category, exponential backoff: first retry 3s, then double (`2^attempt * 3000ms`, attempt starts at 1)
-- Extra wait on HTTP 429 rate-limit: first 10s, then double (`2^attempt * 5000ms`, attempt starts at 1, capped at 60s)
-- **Early stop**: if 20 consecutive already-known IDs are encountered (existing in `papers.json`), stop fetching that category
-- **5-second delay** between categories
+Fetch strategy: 3-level (recent → search → API):
+
+1. **Recent page (primary)**: `arxiv.org/list/{category}/recent`, paginated (`?skip=50&show=50`, max 100 per category). Abstracts fetched afterward via `fetchAbstracts`. Falls through only if recent returns 0 papers.
+2. **Search page (fallback)**: `arxiv.org/search/` with User-Agent rotation, page delay 10-25s.
+3. **API (last resort)**: `export.arxiv.org/api/query`. 429 rate-limit: exponential backoff 60s, 120s, 240s, 480s, max 5 retries.
 
 Deduplication logic: `deduplicatePapers()` deduplicates by `arxivId`, with core categories (eess.AS / cs.SD / eess.SP) taking precedence over supplement categories.
 
@@ -142,7 +140,7 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 | Core Innovations | 3-5, each including definition, shortcomings of previous methods, solution mechanism, actual effect |
 | Experimental Results | Must prioritize giving benchmark, metrics, and specific numbers; when numbers are unavailable, explicitly write "paper did not provide specific values"; tables must be fully output |
 | Detailed Description | Training data, loss functions, training strategies, hyperparameters, hardware, inference details |
-| Score Rationale | Score and write specific review comments for each of 6 dimensions (Innovation / Technical Rigor / Experimental Adequacy / Clarity / Impact / Reproducibility), like a top-conference reviewer explaining "why this score" |
+| Score Rationale | Score and write specific review comments for each of 8 dimensions (Innovation/2, Technical Rigor/1.5, Experimental Sufficiency/1.5, Clarity/1, Impact/1.5, Open Source/1.5, Reproducibility/0.5, Engineering/Practical Value/1.5); 10-point scale is forbidden; code automatically recalculates total from sub-scores |
 | Limitations and Issues | Two parts: limitations explicitly acknowledged by the paper + potential issues identified by the reviewer |
 | Open Source Details | Only allowed to summarize based on paper text or current input links; write "not mentioned" when missing, strictly forbidden to fabricate repository / popularity information |
 

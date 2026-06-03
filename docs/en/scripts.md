@@ -62,10 +62,12 @@ Analyze a single paper and merge it into the results.
 #### `scripts/fetch-papers.js`
 
 arXiv fetch and LLM filter module.
-- Exports `fetchCategoryPapers`, `deduplicatePapers`, `filterPapersWithLLM`, `isSpeechAudioRelated`, `filterPapersByKeywords`, `loadPapers`, `savePapers`, `loadAnalyzed`, `saveAnalyzed`
-- Filter stage uniformly uses `PAPER_ANALYZER_*` environment variables, supports HTTP CONNECT proxy
-- Keyword pre-filter function `filterPapersByKeywords` is retained but not currently enabled in the main workflow
-- XML parsing implemented via regex (arXiv API format is stable)
+- Exports `fetchCategoryPapers`, `fetchCategoryFromRecentPage`, `fetchCategoryFromSearchPage`, `fetchAbstracts`, `parseRecentPageHTML`, `deduplicatePapers`, `filterPapersWithLLM`, `isSpeechAudioRelated`, `loadPapers`, `savePapers`
+- **3-level fetch strategy: recent → search → API**
+  - `fetchCategoryFromRecentPage()`: fetches from arXiv recent page (lenient rate limit), supports 2-page pagination (max 100 papers)
+  - `fetchCategoryFromSearchPage()`: fetches from arXiv search page, supports pagination + 5 retries
+  - `fetchCategoryPapers()`: auto 3-level fallback, stops at whichever level yields sufficient papers
+  - `fetchAbstracts()`: batch fetches abstracts from arXiv abs pages (concurrency 5)
 
 #### `scripts/config.js`
 
@@ -145,6 +147,13 @@ Unified analysis engine. Encapsulates the following functionality, eliminating d
 - `analyzePaperWithRetry(paper, options)`: single-paper analysis (with retry + auto-parse)
 - `analyzeBatch(papers, options)`: batch analysis (supports concurrency control + incremental save callback)
 - `mergeAndSaveResults(newResults, filePath, extraData)`: deduplicate by ID and save, **with built-in failure protection** (papers with an existing successful analysis will not be overwritten by a failed result without analysis)
+
+#### `scripts/validate-scores.js`
+
+Score validation and fix tool.
+- `validateAndFix(papers)`: checks sub-item bounds, total score consistency, open-source contradictions; auto-fixes
+- `DIM_MAX`: exported dimension max mapping
+- CLI: `node scripts/validate-scores.js [data-file]`
 
 #### `scripts/fetch-huggingface-papers.js`
 

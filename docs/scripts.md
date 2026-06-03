@@ -63,10 +63,12 @@
 #### `scripts/fetch-papers.js`
 
 arXiv 抓取与 LLM 筛选模块。
-- 导出 `fetchCategoryPapers`、`fetchCategoryFromSearchPage`、`deduplicatePapers`、`filterPapersWithLLM`、`isSpeechAudioRelated`、`filterPapersByKeywords`、`loadPapers`、`savePapers`、`loadAnalyzed`、`saveAnalyzed`
-- **抓取策略：网页抓取为主，API 为辅**
-  - `fetchCategoryFromSearchPage()`：从 arXiv 搜索页面抓取，支持分页获取 100 篇
-  - `fetchCategoryPapers()`：自动先尝试网页抓取，不足时用 API 补充
+- 导出 `fetchCategoryPapers`、`fetchCategoryFromRecentPage`、`fetchCategoryFromSearchPage`、`fetchAbstracts`、`parseRecentPageHTML`、`deduplicatePapers`、`filterPapersWithLLM`、`isSpeechAudioRelated`、`loadPapers`、`savePapers`
+- **抓取策略：recent → 搜索页 → API 三级**
+  - `fetchCategoryFromRecentPage()`：从 arXiv recent 页面抓取（限流宽松），支持翻页 2×50=100 篇
+  - `fetchCategoryFromSearchPage()`：从 arXiv 搜索页面抓取，支持分页 + 5 次重试
+  - `fetchCategoryPapers()`：自动三级降级，每步获取足够即跳过后续
+  - `fetchAbstracts()`：从 arXiv abs 页面批量抓取摘要（并发 5）
 - 筛选阶段统一使用 `PAPER_ANALYZER_*` 环境变量，支持 HTTP CONNECT 代理
 - 关键词预筛选函数 `filterPapersByKeywords` 保留但当前主流程未启用
 - XML 解析为 regex 实现（arXiv API 格式稳定）
@@ -149,6 +151,13 @@ arXiv 抓取与 LLM 筛选模块。
 - `analyzePaperWithRetry(paper, options)`：单篇分析（带重试 + 自动解析）
 - `analyzeBatch(papers, options)`：批量分析（支持并发控制 + 增量保存回调）
 - `mergeAndSaveResults(newResults, filePath, extraData)`：按 ID 去重合并并保存，**自带失败结果保护**（已有成功 analysis 的论文不会被无 analysis 的失败结果覆盖）
+
+#### `scripts/validate-scores.js`
+
+评分验证与修复工具。
+- `validateAndFix(papers)`：检查子项越界、总分一致性、开源矛盾，自动修复
+- `DIM_MAX`：导出各维度上限表
+- 直接运行：`node scripts/validate-scores.js [data-file]`
 
 #### `scripts/fetch-huggingface-papers.js`
 

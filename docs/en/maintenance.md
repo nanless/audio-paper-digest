@@ -84,7 +84,7 @@ When `prompts/deep-analysis.md` or scoring/tag specifications change, at minimum
 1. Confirm that `loadPrompt()` in `scripts/utils.js` correctly reads markdown files under `prompts/`
 2. Check whether `scripts/utils.js` and `scripts/utils.py` can still correctly parse `## 机器摘要`, tags, and score fields (note that machine summary headers changed from `###` to `##`)
 3. Sample-check `data/current/deep-analysis-result.json` to confirm the presence of `rank_bucket`, `primary_task_tag`, and `primary_method_tag`
-4. **Verify that `score` is correctly computed from the seven sub-scores in `## 评分理由`**: sample-compare `parsed.score` against the sum of sub-scores in `## 评分理由`, confirming rounding to 0.1 and a range of 1-10
+4. **Verify that `score` is correctly computed from the eight sub-scores in `## 评分理由`**: sample-compare `parsed.score` against the sum of sub-scores in `## 评分理由`, confirming cap of 10 and rounding to 0.1
 5. Verify blog publishing script artifacts, confirming that leaderboards, single-post pages, and trending directions correctly display new fields
 6. Verify WeChat/Xiaohongshu/Feishu script artifacts, confirming that copy does not contain null values or formatting misalignment caused by missing fields
 7. Confirm that the new `## 局限与问题` section is correctly displayed in blog/social media (if applicable)

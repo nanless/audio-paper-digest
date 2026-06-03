@@ -32,9 +32,9 @@ Main entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fe
 5. **Merge & deduplicate**: arXiv takes priority, HF supplements 7 unique fields, marks `sources`; filters out blog-published papers
 6. **LLM filtering**: Uses `PAPER_ANALYZER_*` config to judge speech/music/audio relevance paper by paper, `batchSize=5` (adjustable via `PD_FILTER_BATCH_SIZE`), 60s timeout per paper, 3 retries
 7. **Save filter results**: `data/current/filtered-papers.json`
-8. **Deep analysis**: `deep-analyzer.js`, full text + images, concurrency of 3 (adjustable via `PD_ANALYSIS_CONCURRENCY`), up to 2 retries per paper (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
-9. **Incremental save**: Saves to `data/current/deep-analysis-result.json` immediately after each batch, with failure-result protection (papers with a successful analysis will not be overwritten by a failure result with no analysis)
-10. **Update dedup DB**: Appends new paper IDs to `data/current/papers.json`, auto-backing up papers.json (retaining the last 7 days)
+8. **Update dedup DB**: Appends all crawled paper IDs to `data/current/papers.json` (not just filtered ones; save early to prevent data loss if interrupted later)
+9. **Deep analysis**: `deep-analyzer.js`, full text + images, concurrency of 3 (adjustable via `PD_ANALYSIS_CONCURRENCY`), up to 2 retries per paper (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
+10. **Incremental save**: Saves to `data/current/deep-analysis-result.json` immediately after each batch, with failure-result protection (papers with a successful analysis will not be overwritten by a failure result with no analysis)
 11. **Final merge**: Deduplicates and merges historical results, auto-backing up bak files (retaining the last 10)
 
 `full-fetch.js` **does NOT auto-publish blog/WeChat**; publishing requires running Python scripts separately.

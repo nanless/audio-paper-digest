@@ -27,6 +27,7 @@ npm run xhs-publish-all  # 小红书自动发布全部
 node scripts/quick-test.js              # 快速测试（抓+筛选，不分析）
 node scripts/analyze-single-paper.js <arxiv-id>  # 单独分析一篇论文
 node scripts/batch-analyze.js           # 批量分析未分析论文
+node scripts/validate-scores.js          # 验证并修复评分（子项越界/总分一致性/开源矛盾）
 python3 scripts/publish-to-feishu.py    # 生成飞书文档
 python3 scripts/publish-to-feishu.py --date 2026-04-21
 ```
