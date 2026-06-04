@@ -674,13 +674,13 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
     for (const p of recentPapers) merged.set(p.arxivId, p);
     for (const p of webPapers) merged.set(p.arxivId, p);
 
-    if (merged.size >= 10) {
+    if (webPapers.length > 0) {
         const result = Array.from(merged.values());
         console.log(`[fetch] ${categoryId} recent+搜索页合并 ${result.length} 篇`);
         return result;
     }
 
-    // 3. 搜索页也不够，用 API
+    // 3. 搜索页也无结果，用 API
     console.log(`[fetch] ${categoryId} recent+搜索页仅 ${merged.size} 篇，尝试 API...`);
 
     const params = new URLSearchParams({
