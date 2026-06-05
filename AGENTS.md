@@ -114,3 +114,14 @@ prompts/               # LLM prompt 模板
 - 博客发布脚本依赖独立的 Hugo 仓库（`PAPER_DIGEST_BLOG_REPO`），不在本仓库内。
 - 测试使用 Node.js 内置测试运行器（`node:test`），非 Jest 或 Mocha。
 - CI 会运行 `npm test` 以及对关键脚本做 `node -c` 语法检查（`scripts/utils.js`、`config.js`、`analysis-engine.js`、测试文件）。
+
+### ⛔ 铁律：长时间运行命令
+
+以下命令可能运行数十分钟到数小时：`npm run fetch`、`npm run reanalyze`、`npm run deep`、`node scripts/batch-analyze.js`、`python3 scripts/publish-to-blog.py` 等。
+
+**必须遵守：**
+1. **禁止设置 Bash timeout**。不得使用任何超时参数（`timeout`、`timeout_ms` 等），确保命令永不超时。
+2. **禁止检查进程状态**。运行后 **不得** 执行 `ps aux | grep`、`jobs` 或任何进程检查命令。
+3. **禁止过滤输出**。不得对输出做 `grep`、`head`、`tail` 过滤——完整输出是判断是否正常的唯一依据。
+4. **禁止 abort**。命令尚未自然结束前，**严禁** 中止、取消或重启。如果之前 abort 过导致中断，这次必须等到自然结束。
+5. **放在后台后不要碰**。启动后除了等待完成，不做任何其他操作。
