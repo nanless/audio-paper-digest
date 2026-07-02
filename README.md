@@ -19,7 +19,8 @@
 | `docs/troubleshooting.md` | 常见问题排查与修复 | 使用者 |
 | `docs/maintenance.md` | 维护约定、评分标准、标签口径 | 维护者 |
 | `prompts/filter.md` | 筛选阶段 LLM prompt | 维护者 |
-| `prompts/deep-analysis.md` | 深度分析主 prompt（Round 1） | 维护者 |
+| `prompts/deep-analysis.md` | 深度分析主 prompt（Round 1，纯文本） | 维护者 |
+| `prompts/image-supplement.md` | 图像补充 prompt（双模型模式） | 维护者 |
 | `prompts/opensource-scan.md` | 开源链接扫描 prompt（Round 2） | 维护者 |
 | `prompts/gap-fill.md` | 审校重写 prompt（Round 3） | 维护者 |
 
@@ -55,9 +56,15 @@ audio-paper-digest/
 npm install
 
 # 2. 配置 API Key（写入 `.env`）
+#    主模型（文本分析，必填）
 #    PAPER_ANALYZER_API_KEY=your-key
-#    PAPER_ANALYZER_MODEL=mimo-v2.5
-#    PAPER_ANALYZER_ENDPOINT=https://token-plan-sgp.xiaomimimo.com/v1
+#    PAPER_ANALYZER_MODEL=deepseek-v4-pro
+#    PAPER_ANALYZER_ENDPOINT=https://api.deepseek.com/anthropic
+#
+#    副模型（多模态图像分析，可选）
+#    PAPER_ANALYZER_SECONDARY_MODEL=mimo-v2.5
+#    PAPER_ANALYZER_SECONDARY_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
+#    PAPER_ANALYZER_SECONDARY_API_KEY=tp-your-key
 
 # 3. 运行全流程（抓取 + 筛选 + 深度分析）
 ./run-full-fetch.sh
@@ -179,6 +186,9 @@ python3 scripts/publish-to-feishu.py --date 2026-04-21
 # ========== 辅助 ==========
 # 补录论文 ID（不分析）
 python3 scripts/backfill_papers.py
+
+# 按日期重新筛选 + 分析
+node scripts/refilter-reanalyze-by-date.js 2026-07-01
 ```
 
 ---
