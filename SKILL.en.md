@@ -15,7 +15,9 @@ English | **[中文](SKILL.md)**
 - `SKILL.md`: Execution rules and safety constraints for the Agent
 - `README.md`: Human-run manual (commands, configuration, troubleshooting)
 - `prompts/filter.md`: LLM prompt for the filtering stage
-- `prompts/deep-analysis.md`: LLM prompt for the deep analysis stage (output format, tag system, scoring criteria)
+- `prompts/deep-analysis.md`: LLM prompt for the deep analysis stage (text-only, output format, tag system, scoring criteria)
+- `prompts/image-supplement.md`: Image supplement prompt (dual-model mode, secondary model enriches primary analysis with images)
+- `prompts/opensource-scan.md`: Open source scan prompt (Round 2)
 
 When documents conflict with code, **the current implementation in `scripts/*` prevails; update documents accordingly**.
 
@@ -30,10 +32,10 @@ Main entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fe
 3. **arXiv fetch**: 7 categories, up to 100 papers each (adjustable via `PD_ARXIV_MAX_RESULTS`), stops early if 20 consecutive existing IDs are encountered (dedup set includes papers.json + blog-published IDs)
 4. **HuggingFace fetch**: `daily_papers` pagination (up to 20 pages) + `papers` API supplement, defaulting to the last 7 days, excluding IDs in the dedup set
 5. **Merge & deduplicate**: arXiv takes priority, HF supplements 7 unique fields, marks `sources`; filters out blog-published papers
-6. **LLM filtering**: Uses `PAPER_ANALYZER_*` config to judge speech/music/audio relevance paper by paper, `batchSize=5` (adjustable via `PD_FILTER_BATCH_SIZE`), 60s timeout per paper, 3 retries
+6. **LLM filtering**: Uses `PAPER_ANALYZER_*` config to judge speech/music/audio relevance paper by paper, `batchSize=5` (adjustable via `PD_FILTER_BATCH_SIZE`), 60s timeout per paper, 5 retries
 7. **Save filter results**: `data/current/filtered-papers.json`
 8. **Update dedup DB**: Appends all crawled paper IDs to `data/current/papers.json` (not just filtered ones; save early to prevent data loss if interrupted later)
-9. **Deep analysis**: `deep-analyzer.js`, full text + images, concurrency of 3 (adjustable via `PD_ANALYSIS_CONCURRENCY`), up to 2 retries per paper (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
+9. **Deep analysis**: `deep-analyzer.js`. Dual-model mode (when `PAPER_ANALYZER_SECONDARY_MODEL` is configured): primary model text-only analysis + secondary model image supplement; Single-model mode (no secondary model): text-only analysis. Concurrency of 3 (adjustable via `PD_ANALYSIS_CONCURRENCY`), up to 2 retries per paper (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
 10. **Incremental save**: Saves to `data/current/deep-analysis-result.json` immediately after each batch, with failure-result protection (papers with a successful analysis will not be overwritten by a failure result with no analysis)
 11. **Final merge**: Deduplicates and merges historical results, auto-backing up bak files (retaining the last 10)
 
@@ -93,7 +95,7 @@ Filtering uniformly calls the LLM specified by `PAPER_ANALYZER_*`:
     - URL: `/v1/chat/completions`
     - Headers: `Authorization: Bearer {key}`
 - **agent: `false`** — LLM API requests explicitly disable connection reuse to prevent the global agent connection pool from being polluted by proxies, which causes MiMo 403 (see 9.2)
-- 60s timeout, 3 retries, each retry creates an independent AbortController
+- 60s timeout, 5 retries, each retry creates an independent AbortController
 - Exponential backoff: fetch 4s/8s/16s (`2^attempt * 2s`, cap 60s), rate limit 10s/20s/40s (`2^attempt * 5s`, cap 60s)
 - Prompt source: `prompts/filter.md`, read at runtime via `loadPrompt()` and replaces `{title}`, `{abstract}`, `{categories}` placeholders
 - Judgment criteria: Multimodal models are considered relevant if they clearly involve speech/music/audio (input, output, training objective, evaluation task, or one of the core capabilities)
@@ -132,6 +134,16 @@ Output constraints:
 - Missing information must be written as "Not stated / Not provided / Not mentioned"; guessing author institutions, experimental numbers, open source status, or external information is prohibited
 - When modifying `prompts/deep-analysis.md` or `prompts/filter.md`, synchronously check whether the parsing logic in `scripts/utils.js` and `scripts/utils.py` can still match the new output format
 
+### 4.3.1 Dual-Model Mode
+
+When `PAPER_ANALYZER_SECONDARY_MODEL` is configured, dual-model mode is enabled:
+
+- **Primary model** (`PAPER_ANALYZER_*`): text-only deep analysis, using `prompts/deep-analysis.md` (Round 1a)
+- **Secondary model** (`PAPER_ANALYZER_SECONDARY_*`): multimodal image supplement, using `prompts/image-supplement.md` (Round 1b), requires a vision-capable multimodal model (e.g. `mimo-v2.5`, `gpt-4o`)
+- Secondary model's `endpoint`/`key` default to the primary model's values if not set
+- If no secondary model is configured, automatically falls back to single-model text-only mode (no image analysis)
+- Secondary model tasks: verify image evidence, supplement visual insights, mark `[图N]` insertion positions; the system automatically replaces markers with actual image links
+
 ### 4.4 WeChat Official Account (`publish-wechat-full.py`)
 
 - `WECHAT_APP_ID` and `WECHAT_APP_SECRET` are read from `os.environ`
@@ -164,6 +176,14 @@ PAPER_ANALYZER_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
 # PAPER_ANALYZER_API_KEY=sk-your-openai-key
 # PAPER_ANALYZER_MODEL=gpt-4o
 # PAPER_ANALYZER_ENDPOINT=https://api.openai.com/v1
+
+# Option 5: Dual-model mode (primary text-only + secondary multimodal image supplement)
+# Primary model config: choose one of options 1-4 above
+# Secondary model (optional; if not set, falls back to single-model text-only mode)
+# PAPER_ANALYZER_SECONDARY_MODEL=mimo-v2.5
+# PAPER_ANALYZER_SECONDARY_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
+# PAPER_ANALYZER_SECONDARY_API_KEY=tp-your-token-plan-key
+# Note: secondary endpoint/key default to primary model values if not set
 
 # WeChat Official Account
 WECHAT_APP_ID=your-app-id
@@ -198,10 +218,12 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 
 **API Protocol Auto-Routing Overview**:
 
-| Endpoint Feature | Model Feature | Auto Route | Anthropic URL Transform |
-|------------------|---------------|------------|-------------------------|
-| Contains `token-plan` | Contains `mimo` | Anthropic | `/v1` → `/anthropic/v1/messages` |
-| Contains `coding` | Contains `kimi` | Anthropic | `/coding/v1` → `/coding/v1/messages` |
+| Endpoint Contains | Model Contains | Protocol | URL Conversion |
+|-------------------|---------------|----------|----------------|
+| `deepseek.com` or model contains `deepseek` | — | OpenAI | `/anthropic` → `/v1/chat/completions` (highest priority) |
+| `token-plan` | `mimo` | Anthropic | `/v1` → `/anthropic/v1/messages` |
+| `coding` | `kimi` | Anthropic | `/coding/v1` → `/coding/v1/messages` |
+| `/anthropic` | — | Anthropic | `{base}/messages` |
 | Any other | Any other | OpenAI | `/v1/chat/completions` |
 
 Endpoint configuration format is uniformly `protocol://domain/v1`, regardless of which protocol is used subsequently.
@@ -234,6 +256,9 @@ node scripts/quick-test.js
 
 # Batch analyze unanalyzed papers (based on deep-analysis-result.json)
 npm run batch
+
+# Re-filter & re-analyze papers by date
+node scripts/refilter-reanalyze-by-date.js 2026-07-01
 
 # Analyze a single paper (command line argument)
 node scripts/analyze-single-paper.js 2604.16044
