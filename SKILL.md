@@ -93,7 +93,7 @@ set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
     - URL: `/v1/chat/completions`
     - Headers: `Authorization: Bearer {key}`
 - **agent: `false`** — LLM API 请求明确禁用连接复用，避免全局 agent 连接池被代理污染导致 MiMo 403（详见 9.2）
-- 超时 60 秒，重试 3 次，每次重试独立创建 AbortController
+- 超时 60 秒，重试 5 次，每次重试独立创建 AbortController
 - 指数退避：抓取 4s/8s/16s（`2^attempt * 2s`，上限 60s），限流 10s/20s/40s（`2^attempt * 5s`，上限 60s）
 - prompt 来源：`prompts/filter.md`，运行时通过 `loadPrompt()` 读取并替换 `{title}`、`{abstract}`、`{categories}` 占位符
 - 判定口径：多模态模型只要明确涉及语音/音乐/音频（输入、输出、训练目标、评测任务或核心能力之一）即判定为相关

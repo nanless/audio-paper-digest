@@ -6,13 +6,13 @@ setupScriptLogging(__filename);
  * 论文深度分析器 - 使用全文+图片的深度阅读理解
  */
 
-const { loadEnvFile, parseAnalysis, detectApiType, buildApiUrl, buildRequestBody, buildHeaders, parseResponseText, loadPrompt, detectProxyUrl } = require('./utils.js');
+const { loadEnvFile, parseAnalysis, detectApiType, buildApiUrl, buildRequestBody, buildHeaders, parseResponseText, loadPrompt } = require('./utils.js');
 loadEnvFile();
 
 // 解决 stdout 缓冲问题：后台运行时强制立即 flush
 const https = require('https');
 const { PDFParse } = require('pdf-parse');
-const { ANALYSIS_CONFIG, ARXIV_CONFIG } = require('./config.js');
+const { ANALYSIS_CONFIG, ARXIV_CONFIG, SECONDARY_MODEL_CONFIG } = require('./config.js');
 
 // 解构配置常量（便于阅读）
 const {
@@ -53,6 +53,16 @@ const DEEP_CONFIG = {
     headers: {}
 };
 
+// 副模型配置（多模态图像分析，双模型模式）
+// 未设置时 endpoint/key 分别回退到主模型对应的值
+const SECONDARY_CONFIG = {
+    endpoint: SECONDARY_MODEL_CONFIG.endpoint || DEEP_CONFIG.endpoint,
+    key: SECONDARY_MODEL_CONFIG.key || DEEP_CONFIG.key,
+    model: SECONDARY_MODEL_CONFIG.model || ''
+};
+
+const isDualModel = Boolean(SECONDARY_CONFIG.model && SECONDARY_CONFIG.endpoint && SECONDARY_CONFIG.key);
+
 const missingDeepEnv = [];
 if (!DEEP_CONFIG.endpoint) missingDeepEnv.push('PAPER_ANALYZER_ENDPOINT');
 if (!DEEP_CONFIG.key) missingDeepEnv.push('PAPER_ANALYZER_API_KEY');
@@ -65,19 +75,19 @@ if (missingDeepEnv.length > 0) {
 /**
  * 调用大模型（支持多模态消息）— 带重试机制
  */
-async function callModelWithConfig(messages, maxTokens, maxRetries = 3) {
-    const config = DEEP_CONFIG;
+async function callModelWithConfig(messages, maxTokens, maxRetries = 3, config = null) {
+    const cfg = config || DEEP_CONFIG;
     const startTime = Date.now();
-    const apiType = detectApiType(config.endpoint, config.model);
-    const modelUrl = buildApiUrl(apiType, config.endpoint);
+    const apiType = detectApiType(cfg.endpoint, cfg.model);
+    const modelUrl = buildApiUrl(apiType, cfg.endpoint);
     const url = new URL(modelUrl);
-    console.log(`    [api] → ${config.model} | ${apiType} | ${url.hostname}${url.pathname} | max_tokens=${maxTokens} | max_retries=${maxRetries}`);
+    console.log(`    [api] → ${cfg.model} | ${apiType} | ${url.hostname}${url.pathname} | max_tokens=${maxTokens} | max_retries=${maxRetries}`);
 
     let lastError = null;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-            const result = await _callModelOnce(messages, maxTokens, config, startTime, apiType);
+            const result = await _callModelOnce(messages, maxTokens, cfg, startTime, apiType);
             return result;
         } catch (err) {
             lastError = err;
@@ -117,20 +127,14 @@ async function _callModelOnce(messages, maxTokens, config, startTime, apiType) {
             controller.abort();
         }, 1200000);
 
-        const proxyUrl = detectProxyUrl();
-        const isMimo = config.endpoint.includes('xiaomimimo.com') || config.model.includes('mimo');
-        const shouldBypassProxy = isMimo && proxyUrl;
-
         const options = {
             hostname: url.hostname,
             path: url.pathname,
             method: 'POST',
             headers: headers,
-            signal: controller.signal
+            signal: controller.signal,
+            agent: false   // LLM API 必须直连，禁用连接复用避免代理问题
         };
-        if (shouldBypassProxy) {
-            options.agent = false;
-        }
 
         const req = https.request(options, (res) => {
             let data = '';
@@ -519,6 +523,46 @@ function buildImageContent(imageUrl, base64) {
 }
 
 /**
+ * 替换分析文本中的 [图N] 标记为 Markdown 图片引用
+ * @param {string} text - 分析文本
+ * @param {Array} imageInfos - [{ url, caption }] 图片信息列表
+ * @returns {string} 替换后的文本
+ */
+function replaceImageMarkers(text, imageInfos) {
+    if (!text || !imageInfos || imageInfos.length === 0) return text;
+    let result = text;
+    const inserted = new Set();
+
+    // 1. 标准 [图N] 标记（独占一行）
+    result = result.replace(/\[图(\d+)\]/g, (match, num) => {
+        if (inserted.has(num)) return match;
+        const idx = parseInt(num, 10) - 1;
+        if (idx >= 0 && idx < imageInfos.length) {
+            inserted.add(num);
+            const info = imageInfos[idx];
+            const alt = info.caption || `图${num}`;
+            return `\n\n![${alt}](${info.url})\n\n`;
+        }
+        return match;
+    });
+
+    // 2. 自然语言"（图N）"或"(图N)" — 在首次出现前插入图片
+    result = result.replace(/(?:（|\()\s*(图(\d+))\s*(?:）|\))/g, (match, label, num) => {
+        if (inserted.has(num)) return match;
+        const idx = parseInt(num, 10) - 1;
+        if (idx >= 0 && idx < imageInfos.length) {
+            inserted.add(num);
+            const info = imageInfos[idx];
+            const alt = info.caption || label;
+            return `\n\n![${alt}](${info.url})\n\n${match}`;
+        }
+        return match;
+    });
+
+    return result;
+}
+
+/**
  * 深度分析单篇论文（全文 + 图片）
  */
 async function analyzePaperDeep(paper) {
@@ -553,70 +597,86 @@ async function analyzePaperDeep(paper) {
     const downloadedImages = await downloadImagesParallel(imageUrls, imageUrls.length, IMAGE_MAX_BASE64_CHARS);
     console.log(`    [deep] 成功下载 ${downloadedImages.length}/${imageUrls.length} 张图片`);
 
-    // 构建图片URL映射信息（含 caption），让LLM知道每张图的正确URL和内容
-    const imageUrlMapping = imageInfos.map((info, idx) => {
-        const lines = [`图${idx + 1}: ${info.url}`];
-        if (info.caption) {
-            lines.push(`  caption: ${info.caption}`);
-        }
-        return lines.join('\n');
-    }).join('\n');
-    const imagePrefix = imageInfos.length > 0
-        ? `\n\n论文中的图片及其URL如下（请在下文引用图片时使用这些URL，caption 可帮助判断图片内容）：\n${imageUrlMapping}\n`
-        : '';
-
     const prompt = loadPrompt('prompts/deep-analysis.md', {
         hasFullText: hasFullTextIntro,
         title: paper.title,
         authors: Array.isArray(paper.authors) ? paper.authors.join(', ') : (paper.authors || '未知'),
         categories: Array.isArray(paper.categories) ? paper.categories.join(', ') : (paper.categories || '未知'),
         arxivId: arxivId,
-        textForAnalysis: textForAnalysis + imagePrefix
+        textForAnalysis: textForAnalysis
     });
 
-    const content = [{ type: 'text', text: prompt }];
-
-    for (const img of downloadedImages) {
-        content.push(buildImageContent(img.url, img.base64));
-    }
+    let analysis = '';
+    const imagesToSave = downloadedImages.map(img => img.url);
 
     if (downloadedImages.length === 0) {
         console.log(`    [deep] 无可用图片，仅文本分析`);
-    } else {
-        console.log(`    [deep] 共分析 ${downloadedImages.length} 张图片`);
     }
 
-    let analysis = '';
-    // imageUrls 只保存成功下载的图片，allImageUrls 保存所有找到的图片
-    const imagesToSave = downloadedImages.map(img => img.url);
+    // Round 1: Main analysis
+    if (isDualModel && downloadedImages.length > 0) {
+        // ========== 双模型模式 ==========
+        console.log(`    [deep] 🧠 双模型模式：主模型(${DEEP_CONFIG.model})文本分析 + 副模型(${SECONDARY_CONFIG.model})图像补充`);
 
-    try {
-        analysis = await callModel([{ role: 'user', content: content }], API_MAX_TOKENS);
-        console.log(`    [deep] ✅ 主分析完成`);
-    } catch (err) {
-        // 如果带图片超时/失败，尝试不带图片重试
-        const isTimeoutOrNetwork = err.message.includes('timeout') || err.message.includes('socket hang up') || err.message.includes('504') || err.message.includes('abort');
-        if (downloadedImages.length > 0 && isTimeoutOrNetwork) {
-            console.log(`    [deep] ⚠️  带图片请求超时，尝试不带图片重试...`);
-            try {
-                const textOnlyContent = [{ type: 'text', text: prompt }];
-                analysis = await callModel([{ role: 'user', content: textOnlyContent }], API_MAX_TOKENS);
-                console.log(`    [deep] ✅ 不带图片重试成功`);
-            } catch (retryErr) {
-                console.error(`    [deep] 不带图片重试也失败: ${retryErr.message}`);
-                return {
-                    ...paper,
-                    analysis: null,
-                    error: retryErr.message
-                };
+        // Round 1a: Primary model (text-only)
+        try {
+            analysis = await callModelWithConfig(
+                [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+                API_MAX_TOKENS, 3, DEEP_CONFIG
+            );
+            console.log(`    [deep] ✅ 主模型文本分析完成 (${analysis.length} chars)`);
+        } catch (err) {
+            console.error(`    [deep] 主模型文本分析失败: ${err.message}`);
+            return { ...paper, analysis: null, error: err.message };
+        }
+
+        // Round 1b: Secondary model (multimodal, image supplement)
+        try {
+            const imageListStr = imageInfos.map((info, i) =>
+                `图${i + 1}: ${info.url}\n  caption: ${info.caption || '无描述'}`
+            ).join('\n\n');
+            const supplementPrompt = loadPrompt('prompts/image-supplement.md', {
+                title: paper.title,
+                arxivId,
+                imageList: imageListStr,
+                primaryAnalysis: analysis
+            });
+
+            const supplementContent = [{ type: 'text', text: supplementPrompt }];
+            for (const img of downloadedImages) {
+                supplementContent.push(buildImageContent(img.url, img.base64));
             }
-        } else {
-            console.error(`    [deep] 分析失败: ${err.message}`);
-            return {
-                ...paper,
-                analysis: null,
-                error: err.message
-            };
+
+            const enhancedAnalysis = await callModelWithConfig(
+                [{ role: 'user', content: supplementContent }],
+                API_MAX_TOKENS, 3, SECONDARY_CONFIG
+            );
+
+            const cleaned = cleanGapFillPrefix(enhancedAnalysis.trim());
+            if (cleaned && cleaned.length > 100) {
+                analysis = replaceImageMarkers(cleaned, imageInfos);
+                console.log(`    [deep] ✅ 副模型图像补充完成 (${analysis.length} chars)`);
+            } else {
+                console.log(`    [deep] ⚠️  副模型输出格式不正确，使用主模型分析结果`);
+            }
+        } catch (err) {
+            console.log(`    [deep] ⚠️  副模型图像补充失败: ${err.message}，使用主模型分析结果`);
+        }
+    } else {
+        // ========== 单模型模式：仅文本分析，不分析图片 ==========
+        if (downloadedImages.length > 0) {
+            console.log(`    [deep] 未配置副模型，跳过图片分析 (${downloadedImages.length} 张图片仅用于元数据)`);
+        }
+
+        try {
+            analysis = await callModel(
+                [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+                API_MAX_TOKENS
+            );
+            console.log(`    [deep] ✅ 文本分析完成`);
+        } catch (err) {
+            console.error(`    [deep] 文本分析失败: ${err.message}`);
+            return { ...paper, analysis: null, error: err.message };
         }
     }
 
@@ -1115,7 +1175,7 @@ function mergeSection(analysis, sectionHeader, newContent) {
     const cleanContent = newContent.replace(headerPattern, '').trim();
 
     const escaped = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp(`(${escaped}[：:\s]*\n)([\\s\\S]*?)(?=\n## |$)`, '');
+    const regex = new RegExp(`(${escaped}[：:\\s]*\n)([\\s\\S]*?)(?=\n#{2,3}\\s|$)`, '');
     if (regex.test(analysis)) {
         return analysis.replace(regex, `$1${cleanContent}\n`);
     }

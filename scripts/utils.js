@@ -343,13 +343,19 @@ function parseMachineSummary(analysis) {
 /**
  * 检测 API 协议类型：'openai' 或 'anthropic'
  * 
- * 规则：只有 MiMo/Kimi 的 Token Plan / Coding Plan 才使用 anthropic 接口
- * （需要伪装成 Claude Code，否则可能被封号）
- * 其他情况（包括 MiMo 按量付费的 OpenAI 接口）都用通用 openai 接口
+ * 规则：
+ * 1. MiMo/Kimi Token Plan / Coding Plan → Anthropic（需伪装 Claude Code）
+ * 2. 端点路径含 /anthropic 且非 DeepSeek → Anthropic
+ * 3. DeepSeek 及其他 → OpenAI
  */
 function detectApiType(endpoint, model) {
     const ep = (endpoint || '').toLowerCase();
     const m = (model || '').toLowerCase();
+
+    // DeepSeek 强制 OpenAI 协议（优先级最高）
+    if (ep.includes('deepseek.com') || m.includes('deepseek')) {
+        return 'openai';
+    }
 
     // Token Plan / Coding Plan 特征
     const isTokenPlan = ep.includes('token-plan') || ep.includes('coding');
@@ -357,6 +363,10 @@ function detectApiType(endpoint, model) {
     const isKimi = ep.includes('kimi.com') || m.includes('kimi');
 
     if ((isMimo || isKimi) && isTokenPlan) {
+        return 'anthropic';
+    }
+    // 其他含 /anthropic 路径的端点 → Anthropic 协议
+    if (ep.includes('/anthropic')) {
         return 'anthropic';
     }
     return 'openai';
@@ -372,22 +382,24 @@ function getAnthropicEndpoint(openaiEndpoint) {
 
 /**
  * 构建 API URL
- * MiMo Token Plan: /v1/chat/completions → /anthropic/v1/messages
- * Kimi Coding Plan: /coding/v1/chat/completions → /coding/v1/messages（不需要 /anthropic 中间路径）
+ * MiMo: /v1 → /anthropic/v1/messages
+ * 其他 Anthropic: {base}/messages
+ * OpenAI: 端点路径含 /anthropic 时自动修正为 /v1/chat/completions
  */
 function buildApiUrl(apiType, endpoint) {
     const base = (endpoint || '').replace(/\/+$/, '');
     if (apiType === 'anthropic') {
-        if (base.includes('kimi.com')) {
-            // Kimi Coding Plan: Anthropic 协议直接在 base URL 后加 /messages
-            // 例如 https://api.kimi.com/coding/v1 → https://api.kimi.com/coding/v1/messages
-            return `${base}/messages`;
+        if (base.includes('xiaomimimo.com')) {
+            // MiMo: 需要 /anthropic/v1/messages（必须含 /v1 中间路径）
+            const anthropicBase = getAnthropicEndpoint(base);
+            return `${anthropicBase}/v1/messages`;
         }
-        // MiMo Token Plan: 替换 /v1 为 /anthropic，再加 /v1/messages
-        const anthropicBase = getAnthropicEndpoint(base);
-        return `${anthropicBase}/v1/messages`;
+        // Kimi / 其他 Anthropic 兼容端点
+        return `${base}/messages`;
     }
-    return `${base}/chat/completions`;
+    // OpenAI: 标准化路径（如 /anthropic → /v1）
+    const normalized = base.replace(/\/anthropic\/?$/, '/v1');
+    return `${normalized}/chat/completions`;
 }
 
 /**
@@ -486,71 +498,38 @@ function parseResponseText(apiType, response) {
 const ALLOWED_TAGS = new Set([
     // 模型/架构
     '#音频大模型','#语音大模型','#多模态模型','#统一音频模型',
-    '#大语言模型','#生成模型','#自回归模型','#端到端',
+    '#大语言模型','#生成模型','#端到端',
     // 任务 — 语音
-    '#语音合成','#语音识别','#语音增强','#语音分离',
-    '#语音生成','#语音克隆','#语音转换','#语音翻译','#语音情感识别','#语音情感计算','#语音活动检测',
-    '#说话人识别','#说话人验证','#说话人分离','#说话人日志',
-    '#语音对话系统','#语音伪造检测','#语音鉴伪','#语音匿名化','#语音生物标志物','#语音编辑','#语音质量评估','#语音打断处理',
-    '#语音去噪','#语音去混响','#语音超分辨','#语音补全','#语音风格迁移','#情感语音合成','#语音编码','#语音检索','#语音问答','#语音摘要',
-    '#语音唤醒','#关键词检测','#语音评测','#语音隐写','#语音变声','#语音混淆','#语音隐私保护',
-    '#口音识别','#年龄估计','#性别识别','#语音可懂度评估','#语音清晰度评估',
+    '#语音交互','#语音合成','#语音识别','#语音增强','#语音分离',
+    '#语音克隆','#语音转换','#语音翻译','#语音情感识别','#语音活动检测',
+    '#说话人验证','#说话人日志','#语音伪造检测','#语音编辑','#语音质量评估',
+    '#语音超分','#语音编码','#语音唤醒','#语音属性识别',
     // 任务 — 音频
-    '#音频生成','#音频分类','#音频事件检测','#声事件定位','#音频场景理解','#音频问答','#音频检索',
-    '#盲源分离','#信号分离',
-    '#音频安全','#音频深度伪造检测','#音频鉴伪','#音频异常检测',
-    '#空间音频','#3D音频','#声源定位','#声学场景识别','#生物声学','#音频编码','#音频修复','#音频水印','#音频质量评估',
-    '#声景生成','#音频超分辨','#音频指纹','#音频降噪','#音频分离','#混响消除','#主动降噪','#回声消除','#声学测量','#信号处理基础',
+    '#音频交互','#音频生成','#音频分类','#音频事件检测','#音频理解','#音频检索',
+    '#音频分离','#音频伪造检测','#空间音频','#声源定位','#音频编码','#音频修复','#音频水印','#音频质量评估',
+    '#音频超分辨','#音频指纹','#主动降噪','#回声消除',
     // 任务 — 音乐
-    '#音乐生成','#音乐信息检索','#音乐理解','#歌唱语音合成','#音乐转录','#和弦识别','#节拍跟踪','#音乐源分离','#音乐结构分析','#乐器识别','#音乐表示学习','#风格迁移','#音乐评估','#舞台技术','#乐谱生成','#音乐推荐',
-    '#音乐去噪','#音乐超分辨','#音乐分类','#音乐情感识别','#自动伴奏生成','#音乐对齐','#MIDI生成','#音乐版权检测','#翻唱识别','#音乐水印','#哼唱识别','#音乐合成',
+    '#音乐生成','#音乐检索','#音乐理解','#歌唱生成','#音乐转录','#音乐源分离','#音乐推荐','#音乐超分辨',
+    // 任务 — 多模态
+    '#音视频理解','#音视频生成','#音视频交互','#音视频语音识别','#音视频语音合成','#音视频语音分离',
+    '#音视频问答','#音频字幕生成','#音视频声源分离','#音乐文本检索',
     // 方法 — 神经网络架构
-    '#Transformer','#CNN','#RNN','#LSTM','#GRU','#ResNet','#U-Net','#Conformer',
-    '#WaveNet','#wav2vec','#HuBERT','#Whisper','#Codec','#Neural Codec','#RVQ','#VQ-VAE','#NSF',
-    '#ConNeXt','#Swin Transformer','#MLP-Mixer','#图神经网络','#胶囊网络',
-    '#生成对抗网络','#变分自编码器','#归一化流','#扩散模型','#流匹配','#条件流匹配',
+    '#自回归模型','#扩散模型','#流匹配','#Transformer','#CNN','#RNN','#图神经网络','#胶囊网络',
+    '#生成对抗网络','#变分自编码器',
     // 方法 — 训练策略
-    '#预训练','#自监督学习','#无监督学习','#对比学习','#强化学习','#知识蒸馏','#迁移学习',
-    '#领域适应','#测试时自适应','#元学习','#持续学习','#课程学习','#对抗训练','#多任务学习',
-    '#模型压缩','#模型剪枝','#模型融合','#模型集成','#集成学习','#参数高效微调','#正则化微调',
+    '#预训练','#后训练','#SFT','#自监督学习','#无监督学习','#对比学习','#强化学习',
+    '#知识蒸馏','#迁移学习','#领域适应','#测试时自适应','#元学习','#持续学习','#课程学习','#对抗训练',
+    '#多任务学习','#模型压缩','#模型剪枝','#模型融合','#模型集成','#集成学习','#参数高效微调',
     '#LoRA','#Adapter','#前缀微调','#提示学习','#指令微调','#联邦学习',
-    '#混合精度训练','#梯度累积','#学习率预热','#早停','#warm-up','#冷启动',
-    // 方法 — 优化算法
-    '#Adam','#SGD','#AdamW','#RMSprop','#AdaGrad','#AdaDelta','#Adamax',
-    '#余弦退火','#指数衰减','#阶梯衰减','#多项式衰减',
-    '#梯度裁剪','#权重衰减','#动量','#Nesterov加速','#学习率调度',
-    // 方法 — 正则化与归一化
-    '#Dropout','#DropConnect','#标签平滑','#Mixup','#CutMix','#SpecAugment',
-    '#批归一化','#层归一化','#组归一化','#实例归一化','#谱归一化',
-    '#权重标准化','#数据增强','#随机擦除','#随机裁剪','#时间拉伸','#音高偏移',
-    // 方法 — 信号处理基础
-    '#STFT','#iSTFT','#短时傅里叶变换','#梅尔频谱','#梅尔频率倒谱系数','#MFCC',
-    '#滤波器组','#倒谱分析','#线性预测编码','#LPC','#谱减法','#维纳滤波',
-    '#卡尔曼滤波','#粒子滤波','#自适应滤波','#谱包络','#基频提取','#谐波分析',
-    '#包络提取','#过零率','#能量检测','#谱质心','#谱通量','#过零率检测',
-    // 方法 — 评估与统计
-    '#MOS评测','#ABX测试','#显著性检验','#交叉验证','#自助法','#假设检验',
-    '#半参数方法','#稳健估计','#统计推断',
-    '#混淆矩阵','#ROC曲线','#AUC','#t检验','#方差分析','#置信区间','#效应量',
-    '#K折交叉验证','#留一法','#分层抽样','#自助聚合',
-    // 方法 — 概率与图模型
-    '#贝叶斯方法','#隐马尔可夫模型','#条件随机场','#高斯混合模型',
-    '#变分推断','#马尔可夫链蒙特卡洛','#期望最大化','#信念传播',
-    '#概率图模型','#高斯过程','#狄利克雷过程',
-    // 方法 — 传统机器学习
-    '#聚类分析','#K均值','#层次聚类','#DBSCAN','#谱聚类',
-    '#时间序列分析','#降维','#主成分分析','#t-SNE','#UMAP','#线性判别分析',
-    '#支持向量机','#决策树','#随机森林','#梯度提升树','#XGBoost','#LightGBM',
-    '#K近邻','#线性回归','#逻辑回归','#岭回归','#Lasso','#弹性网络',
     // 属性/设置
     '#多语言','#零样本','#少样本','#低资源',
     '#流式处理','#实时处理','#多通道','#在线','#离线',
-    '#对抗样本','#鲁棒性','#模型量化','#高效推理','#长音频处理','#理论分析',
+    '#鲁棒性','#高效推理','#长音频处理','#理论分析',
     // 数据/工具/评估
-    '#基准测试','#数据集','#开源工具','#模型评估','#模型比较','#数据清洗','#评测协议','#数据隐私',
+    '#基准测试','#数据集','#开源工具','#模型评估','#模型比较','#数据清洗',
     // 领域/应用
-    '#音视频','#跨模态','#工业应用','#医疗音频','#智能座舱','#内容审核','#游戏音频','#计算机视觉',
-    '#声纹识别','#语音驱动','#智能音箱','#助听器','#会议转录'
+    '#音视频','#工业应用','#医疗音频','#智能座舱','#内容审核','#游戏音频','#智能音箱','#助听器','#会议转录','#教育',
+    '#可解释性'
 ]);
 
 function parseAnalysis(analysis) {
@@ -679,43 +658,22 @@ function parseAnalysis(analysis) {
 
     // 定义任务标签和方法标签的分类（用于验证）
     const TASK_TAG_PREFIXES = [
-        '#语音', '#音频', '#音乐', '#说话人', '#声源', '#声景', '#声纹',
-        '#听觉', '#被动', '#痴呆', '#帕金森', '#统计信号', '#盲源', '#信号处理'
+        '#语音', '#音频', '#音乐', '#说话人', '#声源', '#歌唱',
+        '#音视频', '#音频字幕', '#音乐文本'
     ];
     const METHOD_TAG_PREFIXES = [
-        '#Transformer','#CNN','#RNN','#LSTM','#GRU','#ResNet','#U-Net','#Conformer',
-        '#WaveNet','#wav2vec','#HuBERT','#Whisper','#Codec','#Neural','#RVQ','#VQ-VAE','#NSF',
-        '#ConNeXt','#Swin','#MLP-Mixer','#图神经网络','#胶囊网络',
-        '#生成对抗网络','#变分自编码器','#归一化流','#条件流匹配',
-        '#预训练','#自监督','#对比学习','#强化学习','#知识蒸馏','#迁移学习',
-        '#领域适应','#元学习','#持续学习','#课程学习','#对抗训练','#多任务学习',
+        '#自回归模型','#扩散模型','#流匹配','#Transformer','#CNN','#RNN','#图神经网络','#胶囊网络',
+        '#生成对抗网络','#变分自编码器',
+        '#音频大模型','#语音大模型','#多模态模型','#统一音频模型','#大语言模型','#生成模型','#端到端',
+        '#预训练','#后训练','#SFT','#自监督学习','#无监督学习','#对比学习','#强化学习','#知识蒸馏','#迁移学习',
+        '#领域适应','#测试时自适应','#元学习','#持续学习','#课程学习','#对抗训练','#多任务学习',
         '#模型压缩','#模型剪枝','#模型融合','#模型集成','#集成学习','#参数高效微调',
-        '#LoRA','#Adapter','#前缀微调','#提示学习','#指令微调','#联邦学习',
-        '#混合精度训练','#梯度累积','#学习率预热','#早停','#warm-up','#冷启动',
-        '#Adam','#SGD','#AdamW','#RMSprop','#AdaGrad','#AdaDelta','#Adamax',
-        '#余弦退火','#指数衰减','#阶梯衰减','#多项式衰减',
-        '#梯度裁剪','#权重衰减','#动量','#Nesterov','#学习率调度',
-        '#Dropout','#DropConnect','#标签平滑','#Mixup','#CutMix','#SpecAugment',
-        '#批归一化','#层归一化','#组归一化','#实例归一化','#谱归一化',
-        '#权重标准化','#数据增强','#随机擦除','#随机裁剪','#时间拉伸','#音高偏移',
-        '#STFT','#iSTFT','#短时傅里叶变换','#梅尔频谱','#梅尔频率倒谱系数','#MFCC',
-        '#滤波器组','#倒谱分析','#线性预测编码','#LPC','#谱减法','#维纳滤波',
-        '#卡尔曼滤波','#粒子滤波','#自适应滤波','#谱包络','#基频提取','#谐波分析',
-        '#包络提取','#过零率','#能量检测','#谱质心','#谱通量',
-        '#MOS评测','#ABX测试','#显著性检验','#交叉验证','#自助法','#假设检验',
-        '#混淆矩阵','#ROC曲线','#AUC','#t检验','#方差分析','#置信区间','#效应量',
-        '#K折交叉验证','#留一法','#分层抽样','#自助聚合',
-        '#贝叶斯方法','#隐马尔可夫模型','#条件随机场','#高斯混合模型',
-        '#变分推断','#马尔可夫链蒙特卡洛','#期望最大化','#信念传播',
-        '#概率图模型','#高斯过程','#狄利克雷过程',
-        '#聚类分析','#K均值','#层次聚类','#DBSCAN','#谱聚类',
-        '#降维','#主成分分析','#t-SNE','#UMAP','#线性判别分析',
-        '#支持向量机','#决策树','#随机森林','#梯度提升树','#XGBoost','#LightGBM',
-        '#K近邻','#线性回归','#逻辑回归','#岭回归','#Lasso','#弹性网络'
+        '#LoRA','#Adapter','#前缀微调','#提示学习','#指令微调','#联邦学习'
     ];
 
     function _isTaskTag(tag) {
         if (!tag) return false;
+        if (_isMethodTag(tag)) return false;
         return TASK_TAG_PREFIXES.some(prefix => tag.startsWith(prefix));
     }
 
@@ -961,14 +919,18 @@ function parseAnalysis(analysis) {
         result.score = String(Math.round(total * 10) / 10);
     }
 
-    // rankBucket 推断：在评分计算完成后执行，确保基于最终 score
-    if (!result.rankBucket && result.score) {
+    // rankBucket 推断：始终基于最终 score 重新计算（覆盖 LLM 原始值）
+    if (result.score) {
         const s = parseFloat(result.score);
         if (!isNaN(s)) {
             if (s >= 9.0) result.rankBucket = '前10%';
             else if (s >= 7.5) result.rankBucket = '前25%';
             else if (s >= 5.5) result.rankBucket = '前50%';
             else result.rankBucket = '后50%';
+            // 同步 machineSummary
+            if (result.machineSummary) {
+                result.machineSummary.rankBucket = result.rankBucket;
+            }
         }
     }
 
@@ -1190,13 +1152,13 @@ function loadPrompt(mdPath, vars = {}) {
 
     const content = fs.readFileSync(fullPath, 'utf8');
 
-    // 提取第一个 ``` 或 ```text 代码块内的内容
-    const blockMatch = content.match(/```(?:text)?\n([\s\S]*?)\n```/);
+    // 提取第一个 ``` 或 ~~~ 代码块内的内容（兼容 CRLF）
+    const blockMatch = content.match(/```(?:text)?\r?\n([\s\S]*?)\r?\n```|~~~\r?\n([\s\S]*?)\r?\n~~~/);
     if (!blockMatch) {
-        throw new Error(`Prompt 文件 ${mdPath} 中未找到 \`\`\` 代码块`);
+        throw new Error(`Prompt 文件 ${mdPath} 中未找到 \`\`\` 或 ~~~ 代码块`);
     }
 
-    let prompt = blockMatch[1];
+    let prompt = blockMatch[1] || blockMatch[2];
 
     // 替换占位符 {key} → value（对 key 做正则转义，防止注入；使用回调避免 $ 特殊含义）
     for (const [key, value] of Object.entries(vars)) {
@@ -1207,7 +1169,8 @@ function loadPrompt(mdPath, vars = {}) {
 
     // 检测未替换的占位符并警告（只在原始模板中检测，避免将替换值中的 LaTeX 符号误判）
     // 排除单字母（如 {N}, {k}, {i} 等数学公式变量）
-    const templateVars = [...blockMatch[1].matchAll(/\{([a-zA-Z_]\w{1,})\}/g)].map(m => m[1]);
+    const templateStr = blockMatch[1] || blockMatch[2];
+    const templateVars = [...templateStr.matchAll(/\{([a-zA-Z_]\w{1,})\}/g)].map(m => m[1]);
     const providedKeys = new Set(Object.keys(vars));
     const unboundKeys = [...new Set(templateVars)].filter(k => !providedKeys.has(k));
     if (unboundKeys.length > 0) {

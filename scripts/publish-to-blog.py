@@ -132,30 +132,67 @@ def fix_yaml_double_commas(text):
 
 
 def call_llm_api(prompt, max_tokens=800, temperature=0.1):
-    """调用 LLM API（MiMo Token Plan / Anthropic 协议）进行通用请求。"""
+    """调用 LLM API，自动检测协议（OpenAI / Anthropic）。"""
     api_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
-    endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', 'https://token-plan-sgp.xiaomimimo.com/v1')
-    model = os.environ.get('PAPER_ANALYZER_MODEL', 'mimo-v2.5')
+    endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', 'https://api.openai.com/v1')
+    model = os.environ.get('PAPER_ANALYZER_MODEL', 'gpt-4o')
 
     if not api_key:
         print("  ⚠️  未配置 PAPER_ANALYZER_API_KEY，跳过 LLM review")
         return None
 
-    base = endpoint.rstrip('/')
-    if base.endswith('/v1'):
-        base = base[:-3]
-    # 避免重复添加 /anthropic（如 endpoint 已是 anthropic 路径）
-    if '/anthropic' in base:
-        api_url = f"{base}/v1/messages"
-    else:
-        api_url = f"{base}/anthropic/v1/messages"
+    # 自动检测协议
+    ep_lower = endpoint.lower()
+    model_lower = model.lower()
+    is_token_plan = 'token-plan' in ep_lower or 'coding' in ep_lower
+    is_mimo = 'xiaomimimo.com' in ep_lower or 'mimo' in model_lower
+    is_kimi = 'kimi.com' in ep_lower or 'kimi' in model_lower
 
-    payload = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "messages": [{"role": "user", "content": prompt}]
-    }
+    if 'deepseek.com' in ep_lower or 'deepseek' in model_lower:
+        api_type = 'openai'
+    elif (is_mimo or is_kimi) and is_token_plan:
+        api_type = 'anthropic'
+    elif '/anthropic' in ep_lower:
+        api_type = 'anthropic'
+    else:
+        api_type = 'openai'
+
+    base = endpoint.rstrip('/')
+
+    if api_type == 'anthropic':
+        if 'xiaomimimo.com' in base:
+            # MiMo: /v1 → /anthropic/v1/messages
+            base = base.replace('/v1', '/anthropic')
+            api_url = f"{base}/v1/messages"
+        elif 'kimi.com' in base:
+            api_url = f"{base}/messages"
+        else:
+            api_url = f"{base}/messages"
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "User-Agent": "claude-cli/2.1.108 (external, cli)",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}]
+        }
+    else:
+        # OpenAI 协议
+        base = base.replace('/anthropic', '/v1')
+        api_url = f"{base}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": [{"role": "user", "content": prompt}]
+        }
 
     max_retries = 5
     for attempt in range(max_retries):
@@ -163,29 +200,22 @@ def call_llm_api(prompt, max_tokens=800, temperature=0.1):
             import requests
             session = requests.Session()
             session.trust_env = False
-            resp = session.post(
-                api_url,
-                json=payload,
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "User-Agent": "claude-cli/2.1.108 (external, cli)",
-                    "Content-Type": "application/json"
-                },
-                timeout=120
-            )
+            resp = session.post(api_url, json=payload, headers=headers, timeout=120)
             resp.raise_for_status()
             data = resp.json()
-            content = ""
-            if data.get("content") and isinstance(data["content"], list):
-                for block in data["content"]:
-                    if block.get("type") == "text":
-                        content = block.get("text", "").strip()
-                        break
-            if content:
-                return content
+            if api_type == 'anthropic':
+                content = ""
+                if isinstance(data.get("content"), list):
+                    for block in data["content"]:
+                        if block.get("type") == "text":
+                            content = block.get("text", "").strip()
+                            break
+                if content:
+                    return content
+            else:
+                return data.get("choices", [{}])[0].get("message", {}).get("content", "")
             if attempt < max_retries - 1:
-                wait_time = 2 ** attempt  # 指数退避: 1s, 2s, 4s, 8s
+                wait_time = 2 ** attempt
                 time.sleep(wait_time)
         except Exception as e:
             print(f"  ⚠️  LLM API 调用失败 (尝试 {attempt+1}/{max_retries}): {e}")

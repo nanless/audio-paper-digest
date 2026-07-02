@@ -109,10 +109,8 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
     const postData = JSON.stringify(bodyObj);
 
     const proxyUrl = detectProxyUrl();
-    const isMimo = FILTER_CONFIG.endpoint.includes('xiaomimimo.com') || FILTER_CONFIG.model.includes('mimo');
-    const shouldBypassProxy = isMimo && proxyUrl;
     if (proxyUrl) {
-        console.log(`[filter] 检测到代理: ${proxyUrl}${shouldBypassProxy ? '（MiMo 模型，将绕过代理）' : ''}`);
+        console.log(`[filter] 检测到代理: ${proxyUrl}，将绕过代理直连`);
     }
 
     let lastError = null;
@@ -128,11 +126,9 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
             method: 'POST',
             headers: requestHeaders,
             timeout: FILTER_CFG.timeoutMs,
-            signal: controller.signal
+            signal: controller.signal,
+            agent: false   // LLM API 必须直连
         };
-        if (shouldBypassProxy) {
-            options.agent = false;
-        }
 
         try {
             const result = await new Promise((resolve, reject) => {
@@ -871,8 +867,8 @@ async function isSpeechAudioRelated(paper) {
         console.log(`[filter] 无法判断 ${paper.arxivId}: "${answer.substring(0, 50)}" → 默认保留`);
         return true;
     } catch (err) {
-        console.error(`[filter] 判断论文 ${paper.arxivId} 失败: ${err.message}`);
-        return false;
+        console.error(`[filter] 判断论文 ${paper.arxivId} 失败: ${err.message}，默认保留`);
+        return true;   // API 失败时宁可错留不可错杀
     }
 }
 

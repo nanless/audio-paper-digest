@@ -153,6 +153,10 @@ describe('detectApiType', () => {
     it('通用 OpenAI -> openai', () => {
         assert.strictEqual(detectApiType('https://api.openai.com/v1', 'gpt-4o'), 'openai');
     });
+
+    it('DeepSeek /anthropic 路径 -> openai', () => {
+        assert.strictEqual(detectApiType('https://api.deepseek.com/anthropic', 'deepseek-v4-pro'), 'openai');
+    });
 });
 
 describe('buildApiUrl', () => {
@@ -169,6 +173,11 @@ describe('buildApiUrl', () => {
     it('OpenAI -> /v1/chat/completions', () => {
         const url = buildApiUrl('openai', 'https://api.openai.com/v1');
         assert.strictEqual(url, 'https://api.openai.com/v1/chat/completions');
+    });
+
+    it('DeepSeek /anthropic 端点 -> /v1/chat/completions', () => {
+        const url = buildApiUrl('openai', 'https://api.deepseek.com/anthropic');
+        assert.strictEqual(url, 'https://api.deepseek.com/v1/chat/completions');
     });
 });
 

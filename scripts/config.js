@@ -5,6 +5,32 @@
  */
 
 const path = require('path');
+const fs = require('fs');
+
+// ═══════════════════════════════════════════════════════
+// 自动加载 .env（所有脚本的入口点，先于 loadEnvFile 执行）
+// ═══════════════════════════════════════════════════════
+
+(function loadEnv() {
+    const envFile = path.join(__dirname, '..', '.env');
+    if (!fs.existsSync(envFile)) return;
+    const envContent = fs.readFileSync(envFile, 'utf8');
+    envContent.split('\n').forEach(line => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) return;
+        const eq = trimmed.indexOf('=');
+        if (eq > 0) {
+            const key = trimmed.substring(0, eq).trim();
+            let val = trimmed.substring(eq + 1).trim();
+            if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+                val = val.slice(1, -1);
+            }
+            if (key) {
+                process.env[key] = val;
+            }
+        }
+    });
+})();
 
 // ═══════════════════════════════════════════════════════
 // 基础路径
@@ -102,6 +128,17 @@ const FILES = {
 };
 
 // ═══════════════════════════════════════════════════════
+// 副模型配置（多模态图像分析，双模型模式）
+// 不设置 PAPER_ANALYZER_SECONDARY_MODEL 则退回到单模型模式
+// ═══════════════════════════════════════════════════════
+
+const SECONDARY_MODEL_CONFIG = {
+    endpoint: process.env.PAPER_ANALYZER_SECONDARY_ENDPOINT || '',
+    key: process.env.PAPER_ANALYZER_SECONDARY_API_KEY || '',
+    model: process.env.PAPER_ANALYZER_SECONDARY_MODEL || ''
+};
+
+// ═══════════════════════════════════════════════════════
 // 归档与备份配置
 // ═══════════════════════════════════════════════════════
 
@@ -171,6 +208,7 @@ module.exports = {
 
     FILTER_CONFIG,
     ANALYSIS_CONFIG,
+    SECONDARY_MODEL_CONFIG,
     HUGGINGFACE_CONFIG,
 
     FILES,
