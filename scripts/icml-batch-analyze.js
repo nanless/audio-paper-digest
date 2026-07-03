@@ -109,12 +109,29 @@ async function main() {
             }
         },
         onSave: async (results) => {
+            // Load R2 image mapping for ICML papers
+            let r2Map = {};
+            const r2File = path.join(Config.CURRENT_DIR, 'r2-image-mapping.json');
+            try { if (fs.existsSync(r2File)) r2Map = JSON.parse(fs.readFileSync(r2File, 'utf-8')); } catch (e) {}
+
             const map = new Map();
             for (const p of (existingResult?.papers || [])) map.set(p.id, p);
             for (const r of results) {
-                if (r?.id) map.set(r.id, { ...(map.get(r.id) || {}), ...r,
-                    categories: r.categories || r.venue || 'ICML 2026',
-                    fetchedAt: getBeijingISOString() });
+                if (r?.id) {
+                    // Find image URLs for this paper from R2 mapping
+                    const imgUrls = [];
+                    const prefix = `icml-2026/`;
+                    for (const [key, url] of Object.entries(r2Map)) {
+                        if (key.startsWith(prefix) && key.includes(r.id)) {
+                            imgUrls.push(url);
+                        }
+                    }
+                    map.set(r.id, { ...(map.get(r.id) || {}), ...r,
+                        categories: r.categories || r.venue || 'ICML 2026',
+                        imageUrls: imgUrls.length ? imgUrls : (r.imageUrls || []),
+                        allImageUrls: imgUrls.length ? imgUrls : (r.allImageUrls || []),
+                        fetchedAt: getBeijingISOString() });
+                }
             }
             writeFileAtomic(RESULT_FILE, JSON.stringify({
                 conference: 'ICML 2026', count: map.size,
