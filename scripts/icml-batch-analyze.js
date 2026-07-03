@@ -111,7 +111,7 @@ async function main() {
         concurrency: CONCURRENCY,
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
-        saveInterval: 10,
+        saveInterval: 1,
         onPaperStart: (idx, total, paper) => {
             console.log(`[analyze] ${paper.id} - ${(paper.title || '').substring(0, 60)}`);
         },
@@ -123,6 +123,18 @@ async function main() {
                 failed++;
                 console.log(`  ❌ ${r.error}`);
             }
+            // 每篇完成立刻保存，防止中断丢数据
+            const map = new Map();
+            for (const p of (existingResult?.papers || [])) map.set(p.id, p);
+            if (r.result?.id) {
+                map.set(r.result.id, { ...(map.get(r.result.id) || {}), ...r.result,
+                    categories: r.result.categories || r.result.venue || 'ICML 2026',
+                    fetchedAt: getBeijingISOString() });
+            }
+            writeFileAtomic(RESULT_FILE, JSON.stringify({
+                conference: 'ICML 2026', count: map.size,
+                papers: Array.from(map.values()), analyzed_at: getBeijingISOString()
+            }, null, 2));
         },
         onSave: async (results) => {
             const map = new Map();
