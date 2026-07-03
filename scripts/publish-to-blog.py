@@ -474,9 +474,15 @@ layout: "posts"
 
 ---
 
-## ⚡ 今日概览
+"""
 
-📥 抓取 {total} 篇 → 🔬 深度分析完成
+    overview_title = '📋 会议概览' if category != '论文速递' else '⚡ 今日概览'
+    overview_desc = f'📥 {category.upper() if category != "论文速递" else ""} 接收论文筛选分析 {total} 篇 → 🔬 深度分析完成'
+    
+    md += f"""
+## {overview_title}
+
+{overview_desc}
 
 ### 🏷️ 热门方向
 
@@ -872,7 +878,8 @@ hiddenInHomeList: true
         
         md = insert_images_into_sections(md, image_urls[:5])
 
-    md += f'\n---\n\n[← 返回 {date_str} 语音/音乐/音频论文速递]({BASE_PATH}/posts/{date_str}/)\n'
+    back_label = f'{category.upper()} 2026 论文速递' if category not in ('论文速递', '') else f'{date_str} 语音/音乐/音频论文速递'
+    md += f'\n---\n\n[← 返回 {back_label}]({BASE_PATH}/posts/{date_str}/)\n'
 
     return md, slug
 
