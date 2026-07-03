@@ -7,7 +7,7 @@ setupScriptLogging(__filename);
  */
 const fs = require('fs');
 const path = require('path');
-const { writeFileAtomic, readJsonSafe } = require('./utils.js');
+const { writeFileAtomic, readJsonSafe, getBeijingISOString } = require('./utils.js');
 const Config = require('./config.js');
 const { analyzeBatch } = require('./analysis-engine.js');
 
@@ -58,6 +58,7 @@ async function main() {
                     ok++; data.papers[idx].analysis = r.result?.analysis;
                     data.papers[idx].parsed = r.parsed;
                     data.papers[idx].pdfAnalyzed = true;
+                    data.papers[idx].fetchedAt = getBeijingISOString();
                     console.log(`  ✅ ${(dur/1000).toFixed(1)}s`);
                 } else {
                     fail++;

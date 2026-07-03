@@ -41,7 +41,9 @@ function attachPdfText(paper) {
             paper.fullText = text.length > 120000 ? text.substring(0, 120000) + '\n\n[... 已截断 ...]' : text;
             return text.length;
         }
-    } catch (e) {}
+    } catch (e) {
+        console.log(`    [icml] ⚠️  读取 PDF 失败: ${paper.id} - ${e.message}`);
+    }
     return 0;
 }
 
@@ -71,9 +73,12 @@ async function main() {
 
     const allPapers = filteredData.papers.slice(OFFSET, OFFSET + LIMIT);
 
-    // 附加 PDF 文本
+    // 附加 PDF 文本 + 设置 categories
     let withText = 0;
-    for (const p of allPapers) if (attachPdfText(p) > 0) withText++;
+    for (const p of allPapers) {
+        if (attachPdfText(p) > 0) withText++;
+        if (!p.categories) p.categories = p.venue || 'ICML 2026';
+    }
     console.log(`📄 ${withText}/${allPapers.length} 篇有 PDF 全文\n`);
 
     // 断点续传
@@ -108,7 +113,8 @@ async function main() {
             for (const p of (existingResult?.papers || [])) map.set(p.id, p);
             for (const r of results) {
                 if (r?.id) map.set(r.id, { ...(map.get(r.id) || {}), ...r,
-                    arxivId: r.id, fetchedAt: getBeijingISOString() });
+                    categories: r.categories || r.venue || 'ICML 2026',
+                    fetchedAt: getBeijingISOString() });
             }
             writeFileAtomic(RESULT_FILE, JSON.stringify({
                 conference: 'ICML 2026', count: map.size,

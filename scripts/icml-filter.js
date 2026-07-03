@@ -27,7 +27,7 @@ const { callModel } = require('./deep-analyzer.js');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 
-const DATA_FILE = process.env.ICML_DATA_FILE || path.join(PROJECT_ROOT, 'data', 'icml2026_papers.json');
+const DATA_FILE = process.env.ICML_DATA_FILE || path.join(PROJECT_ROOT, 'data', 'icml2026_openreview_papers.json');
 const FILTERED_FILE = process.env.ICML_FILTERED_FILE || path.join(Config.CURRENT_DIR, 'icml_2026_filtered.json');
 const EXCLUDED_FILE = process.env.ICML_EXCLUDED_FILE || path.join(Config.CURRENT_DIR, 'icml_2026_excluded.json');
 const CONCURRENCY = parseInt(process.env.ICML_FILTER_CONCURRENCY || '8', 10);

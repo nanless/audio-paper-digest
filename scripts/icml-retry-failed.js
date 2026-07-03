@@ -36,7 +36,7 @@ async function main() {
     const data = readJsonSafe(RESULT_FILE);
     if (!data?.papers) { console.error('无效结果文件'); process.exit(1); }
 
-    const failed = data.papers.filter(p => p.error);
+    const failed = data.papers.filter(p => p.error || !p.analysis || !p.parsed);
     console.log('=== ICML 重试失败 ===');
     console.log(`模型: ${process.env.PAPER_ANALYZER_MODEL}`);
     if (process.env.PAPER_ANALYZER_SECONDARY_MODEL) console.log(`副模型: ${process.env.PAPER_ANALYZER_SECONDARY_MODEL}`);
