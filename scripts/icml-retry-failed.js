@@ -40,12 +40,25 @@ async function analyzeSingle(paper) {
     const abstract = (paper.abstract || '').substring(0, 8000);
     const authors = Array.isArray(paper.authors) ? paper.authors.join(', ') : (paper.authors || '未知');
 
-    const prompt = loadPrompt('prompts/icml-deep-analysis.md', {
+    // 读取本地 PDF 全文
+    let pdfText = '';
+    const safeId = (paper.id || '').replace(/\//g, '_');
+    const txtFile = path.join(__dirname, '..', 'data', 'pdfs', 'icml2026', safeId + '.txt');
+    try {
+        if (fs.existsSync(txtFile)) {
+            let raw = fs.readFileSync(txtFile, 'utf-8');
+            pdfText = raw.length > 120000 ? raw.substring(0, 120000) + '\n\n[... 中间内容已截断 ...]' : raw;
+        }
+    } catch (e) {}
+    if (!pdfText) pdfText = '(全文未提供，仅基于摘要分析)';
+
+    const prompt = loadPrompt('prompts/deep-analysis.md', {
         title: paper.title || '(无标题)',
         authors: authors,
-        paperId: paper.id || 'unknown',
-        abstract: abstract || '(无摘要)',
-        pdfText: '(全文未提供，仅基于摘要分析)'
+        categories: 'ICML 2026',
+        arxivId: paper.id || 'unknown',
+        hasFullText: pdfText.length > 500 ? '以下是论文全文（从 PDF 提取），请仔细阅读所有技术细节。' : '以下是论文摘要。',
+        textForAnalysis: pdfText.length > 500 ? pdfText : abstract
     });
 
     const messages = [{ role: 'user', content: prompt }];

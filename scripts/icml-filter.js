@@ -80,9 +80,10 @@ function keywordPreFilter(papers) {
  */
 async function filterSingle(paper) {
     const abstract = (paper.abstract || '').substring(0, 5000);
-    const prompt = loadPrompt('prompts/icml-filter.md', {
+    const prompt = loadPrompt('prompts/filter.md', {
         title: paper.title || '(无标题)',
-        abstract: abstract || '(无摘要)'
+        abstract: abstract || '(无摘要)',
+        categories: paper.venue || 'ICML 2026'
     });
 
     const messages = [{ role: 'user', content: prompt }];

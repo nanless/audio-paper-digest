@@ -34,18 +34,19 @@ function checkEnv() {
 }
 
 async function analyzeWithPdf(paper, pdfText) {
-    const MAX_CHARS = 15000;
+    const MAX_CHARS = 120000;
     let truncatedText = pdfText;
     if (pdfText.length > MAX_CHARS) {
-        truncatedText = pdfText.substring(0, MAX_CHARS) + '\n\n[... 中间内容已截断，仅保留前15000字符 ...]';
+        truncatedText = pdfText.substring(0, MAX_CHARS) + '\n\n[... 中间内容已截断，保留前 120000 字符 ...]';
     }
 
-    const prompt = loadPrompt('prompts/icml-deep-analysis.md', {
-        paperId: paper.id,
+    const prompt = loadPrompt('prompts/deep-analysis.md', {
         title: paper.title || '(无标题)',
         authors: (paper.authors || []).join(', '),
-        abstract: (paper.abstract || '').substring(0, 2000),
-        pdfText: truncatedText
+        categories: 'ICML 2026',
+        arxivId: paper.id || 'unknown',
+        hasFullText: '以下是论文全文（从 PDF 提取），请仔细阅读所有技术细节。',
+        textForAnalysis: truncatedText || paper.abstract || ''
     });
 
     const messages = [{ role: 'user', content: prompt }];

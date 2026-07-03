@@ -33,6 +33,15 @@ node scripts/refilter-reanalyze-by-date.js <date>  # 按日期重新筛选+分�
 node scripts/validate-scores.js         # 验证并修复评分
 node scripts/test-api-key.js            # 测试 LLM API key 可用性
 python3 scripts/publish-to-feishu.py    # 生成飞书文档
+
+# ICML 2026 专属流程（仅 icml-2026-analysis 分支可用）
+npm run icml-fetch              # 从 OpenReview 抓取 ICML 2026 论文（需 Chrome 登录）
+npm run icml-filter             # LLM 筛选音频/语音/音乐相关论文
+npm run icml-analyze            # 批量深度分析（基于 PDF 全文）
+npm run icml-retry              # 重试失败的分析
+python3 scripts/download-icml-pdfs.py   # 下载筛选论文 PDF 并提取文本
+node scripts/icml-reanalyze-pdf.js      # 基于 PDF 全文重分析
+python3 scripts/fetch-icml2026-openreview.py  # 从 OpenReview API 拉取论文元数据（需 Chrome Cookie）
 ```
 
 未配置 linter、typecheck 或 formatter。`npm test` 是唯一的自动化检查。

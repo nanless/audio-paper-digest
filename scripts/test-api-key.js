@@ -60,7 +60,8 @@ const options = {
     path: url.pathname + url.search,
     method: 'POST',
     headers,
-    timeout: 30000
+    timeout: 30000,
+    agent: false   // LLM API 必须直连
 };
 
 const req = https.request(options, (res) => {

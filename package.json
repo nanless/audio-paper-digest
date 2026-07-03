@@ -19,7 +19,10 @@
     "icml-fetch": "python3 scripts/fetch-icml2026.py",
     "icml-filter": "node scripts/icml-filter.js",
     "icml-analyze": "node scripts/icml-batch-analyze.js",
-    "icml-retry": "node scripts/icml-retry-failed.js"
+    "icml-retry": "node scripts/icml-retry-failed.js",
+    "icml-reanalyze-pdf": "node scripts/icml-reanalyze-pdf.js",
+    "icml-download-pdfs": "python3 scripts/download-icml-pdfs.py",
+    "icml-fetch-openreview": "python3 scripts/fetch-icml2026-openreview.py"
   },
   "keywords": [
     "arxiv",
@@ -41,7 +44,8 @@
   "homepage": "https://github.com/nanless/audio-paper-digest#readme",
   "dependencies": {
     "cheerio": "^1.2.0",
-    "pdf-parse": "^2.4.5"
+    "pdf-parse": "^2.4.5",
+    "puppeteer-core": "^25.3.0"
   },
   "engines": {
     "node": ">=18.0.0"

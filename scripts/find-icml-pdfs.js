@@ -36,9 +36,9 @@ async function searchArxiv(title) {
 
     return new Promise((resolve, reject) => {
         const req = http.get(url, { timeout: 15000 }, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => resolve(data));
+            const chunks = [];
+            res.on('data', chunk => chunks.push(chunk));
+            res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
         });
         req.on('error', reject);
         req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
@@ -86,10 +86,10 @@ async function searchSemanticScholar(title) {
 
     return new Promise((resolve, reject) => {
         const req = https.get(url, { timeout: 15000 }, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
+            const chunks = [];
+            res.on('data', chunk => chunks.push(chunk));
             res.on('end', () => {
-                try { resolve(JSON.parse(data)); } catch (e) { resolve({ data: [] }); }
+                try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch (e) { resolve({ data: [] }); }
             });
         });
         req.on('error', reject);

@@ -41,9 +41,9 @@ async function fetchWithRetry(url, protocol = http, maxRetries = 3) {
                         reject(new Error(`HTTP ${res.statusCode}`));
                         return;
                     }
-                    let data = '';
-                    res.on('data', chunk => data += chunk);
-                    res.on('end', () => resolve(data));
+                    const chunks = [];
+                    res.on('data', chunk => chunks.push(chunk));
+                    res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
                 });
                 req.on('error', reject);
                 req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });

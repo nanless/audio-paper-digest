@@ -493,7 +493,7 @@ layout: "posts"
     for i, (score, p, pa) in enumerate(scored):
         m = format_medal(i)
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(p.get('arxivId', ''), '')
+        slug = paper_slugs.get(p.get('arxivId') or p.get('id', ''), '')
         rank_bucket = pa.get('rankBucket', '') or '-'
         primary_task = pa.get('primaryTaskTag', '') or '-'
         if slug:
@@ -502,7 +502,7 @@ layout: "posts"
             md += f"| {m} | {title[:55]} | {score}分 | {rank_bucket} | {primary_task} |\n"
     for i, p in enumerate(unscored):
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(p.get('arxivId', ''), '')
+        slug = paper_slugs.get(p.get('arxivId') or p.get('id', ''), '')
         if slug:
             md += f"| {len(scored)+i+1} | [{title[:55]}]({BASE_PATH}/posts/{date_str}-{slug}) | N/A | - | - |\n"
         else:
@@ -513,7 +513,7 @@ layout: "posts"
 
     for i, (score, p, pa) in enumerate(scored):
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(p.get('arxivId', ''), '')
+        slug = paper_slugs.get(p.get('arxivId') or p.get('id', ''), '')
         m = format_medal(i)
 
         if slug:
@@ -522,8 +522,8 @@ layout: "posts"
             md += f"### {m} {title}\n\n"
 
         pa = parse_analysis(p.get('analysis', '')) or {}
-        aid = p.get('arxivId', '')
-        aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
+        aid = p.get('arxivId') or p.get('id', '')
+        aurl = f'https://arxiv.org/abs/{aid}' if aid and aid[0] in '12' and '.' in aid else (p.get('forum_url', '') or f'https://openreview.net/forum?id={aid}')
         
         # 显示总分和所有子项得分（单开一行）
         score_line = []
@@ -590,7 +590,7 @@ layout: "posts"
 
     for i, p in enumerate(unscored):
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(p.get('arxivId', ''), '')
+        slug = paper_slugs.get(p.get('arxivId') or p.get('id', ''), '')
 
         if slug:
             md += f"### {len(scored)+i+1}. [{title}]({BASE_PATH}/posts/{date_str}-{slug})\n\n"
@@ -599,8 +599,8 @@ layout: "posts"
 
         # unscored 论文也显示完整内容（作者、点评、摘要、开源详情）
         pa = parse_analysis(p.get('analysis', '')) or {}
-        aid = p.get('arxivId', '')
-        aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
+        aid = p.get('arxivId') or p.get('id', '')
+        aurl = f'https://arxiv.org/abs/{aid}' if aid and aid[0] in '12' and '.' in aid else (p.get('forum_url', '') or f'https://openreview.net/forum?id={aid}')
         meta = build_paper_meta(pa, aurl)
         if meta:
             md += f"{meta}\n\n"
@@ -690,7 +690,7 @@ def enrich_opensource(pa, paper):
     urls = extract_repo_urls('\n'.join(sources))
     # 本地文本找不到时，尝试从 arxiv HTML 抓取
     if not urls:
-        urls = fetch_arxiv_html_urls(paper.get('arxivId', ''))
+        urls = fetch_arxiv_html_urls(paper.get('arxivId', '') or paper.get('id', ''))
     if not urls:
         return oss
 
@@ -719,8 +719,8 @@ def generate_paper_page(paper, date_str):
     if pa and pa.get('opensource'):
         pa['opensource'] = enrich_opensource(pa, paper)
     title = paper.get('title', 'Unknown')
-    aid = paper.get('arxivId', '')
-    aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
+    aid = paper.get('arxivId') or paper.get('id', '')
+    aurl = f'https://arxiv.org/abs/{aid}' if aid and aid[0] in '12' and '.' in aid else (paper.get('forum_url', '') or f'https://openreview.net/forum?id={aid}')
     slug = slugify(title)
 
     score_str = pa['score'] if pa and pa.get('score') else ''
@@ -1063,7 +1063,7 @@ def review_all_posts(date_str, paper_slugs, scored_papers):
     # 构建 arxivId -> title 映射
     title_map = {}
     for score, p, pa in scored_papers:
-        title_map[p.get('arxivId', '')] = p.get('title', '')
+        title_map[p.get('arxivId') or p.get('id', '')] = p.get('title', '');
 
     # Review 汇总页面（串行，只有1个）
     index_file = os.path.join(CONTENT_DIR, f"{date_str}.md")
@@ -1196,6 +1196,8 @@ def main():
 
     paper_slugs = {}
     for paper in papers:
+        # 兼容 ICML/会议数据格式：如果没有 arxivId，用 id 字段
+        paper_id = paper.get('arxivId') or paper.get('id', '')
         # 优先使用已解析好的 parsed 数据（包含手动修正的标签等），避免重新解析覆盖
         pa = paper.get('parsed') or parse_analysis(paper.get('analysis', ''))
         if pa:
@@ -1208,7 +1210,7 @@ def main():
             paper_file = os.path.join(CONTENT_DIR, f"{today}-{slug}.md")
             with open(paper_file, 'w') as f:
                 f.write(paper_md)
-            paper_slugs[paper.get('arxivId', '')] = slug
+            paper_slugs[paper.get('arxivId') or paper.get('id', '')] = slug
 
     print(f"📄 生成 {len(paper_slugs)} 篇论文独立页面")
 

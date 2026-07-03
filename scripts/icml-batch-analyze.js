@@ -49,18 +49,42 @@ function checkEnv() {
 
 /**
  * 深度分析单篇论文（使用 callModel，自动支持双模型模式）
+ * 优先使用本地 PDF 全文，回退到摘要
  */
 async function analyzeSingle(paper) {
     const abstract = (paper.abstract || '').substring(0, 8000);
     const authors = Array.isArray(paper.authors) ? paper.authors.join(', ') : (paper.authors || '未知');
 
-    // 第一步：文本深度分析
-    const prompt = loadPrompt('prompts/icml-deep-analysis.md', {
+    // 读取本地 PDF 全文（如果存在）
+    let pdfText = '';
+    const safeId = (paper.id || '').replace(/\//g, '_');
+    const txtFile = path.join(PROJECT_ROOT, 'data', 'pdfs', 'icml2026', safeId + '.txt');
+    try {
+        if (fs.existsSync(txtFile)) {
+            let rawText = fs.readFileSync(txtFile, 'utf-8');
+            // 截取前 12 万字符（足够覆盖论文主体），优先保留开头
+            if (rawText.length > 120000) {
+                pdfText = rawText.substring(0, 120000) + '\n\n[... 中间内容已截断，保留前 120000 字符 ...]';
+            } else {
+                pdfText = rawText;
+            }
+            console.log(`    [icml] 📄 使用 PDF 全文: ${rawText.length} 字符`);
+        }
+    } catch (e) {
+        console.log(`    [icml] ⚠️  读取 PDF 文本失败: ${e.message}`);
+    }
+    if (!pdfText) {
+        pdfText = '(全文未提供，仅基于摘要分析)';
+    }
+
+    // 第一步：文本深度分析（使用 main 分支的通用 prompt）
+    const prompt = loadPrompt('prompts/deep-analysis.md', {
         title: paper.title || '(无标题)',
         authors: authors,
-        paperId: paper.id || 'unknown',
-        abstract: abstract || '(无摘要)',
-        pdfText: '(全文未提供，仅基于摘要分析)'
+        categories: 'ICML 2026',
+        arxivId: paper.id || 'unknown',
+        hasFullText: pdfText.length > 500 ? '以下是论文全文（从 PDF 提取），请仔细阅读所有技术细节。' : '以下是论文摘要。',
+        textForAnalysis: pdfText.length > 500 ? pdfText : abstract
     });
 
     const messages = [{ role: 'user', content: prompt }];
@@ -72,8 +96,7 @@ async function analyzeSingle(paper) {
         const ossPrompt = loadPrompt('prompts/opensource-scan.md', {
             title: paper.title || '',
             arxivId: paper.id || 'unknown',
-            abstract: abstract.slice(0, 2000),
-            analysis: analysis.slice(0, 6000)
+            textForAnalysis: pdfText.slice(0, 30000) || abstract
         });
         openSourceLinks = await callModel(
             [{ role: 'user', content: ossPrompt }],
@@ -83,17 +106,18 @@ async function analyzeSingle(paper) {
         console.log(`    [icml] ⚠️  开源扫描失败: ${e.message}`);
     }
 
-    // 第三步：gap-fill 审校重写（可选，提高质量）
+    // 第三步：gap-fill 审校重写
     let finalAnalysis = analysis;
-    if (ENABLE_GAPFILL && openSourceLinks) {
+    if (ENABLE_GAPFILL) {
         try {
+            // 合并分析：用 opensource-scan 的开源详情替换原始分析中的开源部分，避免重复
+            let cleanedAnalysis = analysis.replace(/##\s*开源(?:详情)?[：:]*[\s\S]*$/, '');
+            const combinedAnalysis = cleanedAnalysis + (openSourceLinks ? '\n\n' + openSourceLinks : '');
             const gapFillPrompt = loadPrompt('prompts/gap-fill.md', {
                 title: paper.title || '',
-                authors: authors,
                 arxivId: paper.id || 'unknown',
-                abstract: abstract.slice(0, 3000),
-                draftAnalysis: analysis,
-                openSourceInfo: openSourceLinks
+                existingAnalysis: combinedAnalysis,
+                textForAnalysis: pdfText
             });
             finalAnalysis = await callModel(
                 [{ role: 'user', content: gapFillPrompt }],
@@ -194,6 +218,8 @@ async function main() {
                 console.log(`  ❌ ${paper.id}: ${result.error}`);
                 resultData.papers.push({
                     ...paper,
+                    arxivId: paper.id,
+                    fetchedAt: getBeijingISOString(),
                     analysis: null,
                     parsed: null,
                     error: result.error
@@ -204,6 +230,8 @@ async function main() {
                 console.log(`  ✅ ${paper.id}: 评分 ${score}/10`);
                 resultData.papers.push({
                     ...paper,
+                    arxivId: paper.id,
+                    fetchedAt: getBeijingISOString(),
                     analysis: result.analysis,
                     parsed: result.parsed,
                     error: null
