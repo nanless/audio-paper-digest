@@ -567,26 +567,38 @@ function replaceImageMarkers(text, imageInfos) {
  * 深度分析单篇论文（全文 + 图片）
  */
 async function analyzePaperDeep(paper) {
-    const arxivId = paper.arxivId;
+    const arxivId = paper.arxivId || paper.id;
     console.log(`    [deep] 获取全文: ${arxivId}`);
 
-    let fullText = '';
-    try {
-        fullText = await fetchArxivText(arxivId);
-        console.log(`    [deep] 全文长度: ${fullText.length} 字符`);
-    } catch (e) {
-        console.log(`    [deep] 获取全文失败: ${e.message}，使用摘要`);
+    // 优先使用预提供的全文（ICML/会议场景），否则从 arXiv 抓取
+    let fullText = paper.fullText || paper.pdfText || '';
+    if (!fullText && /^\d+\.\d+/.test(arxivId)) {
+        try {
+            fullText = await fetchArxivText(arxivId);
+            console.log(`    [deep] 全文长度: ${fullText.length} 字符`);
+        } catch (e) {
+            console.log(`    [deep] 获取全文失败: ${e.message}，使用摘要`);
+        }
+    } else if (fullText) {
+        console.log(`    [deep] 使用预提供全文: ${fullText.length} 字符`);
     }
 
     const textForAnalysis = fullText || (paper.abstract || paper.summary || '');
     const hasFullText = fullText.length > FULL_TEXT_MIN_CHARS_FOR_FULL;
 
+    // 优先使用预提供的图片 URL（ICML/会议场景），否则从 arXiv 抓取
     let imageInfos = [];
-    try {
-        imageInfos = await fetchArxivImageUrls(arxivId);
-        console.log(`    [deep] 找到 ${imageInfos.length} 张图片`);
-    } catch (e) {
-        console.log(`    [deep] 获取图片失败: ${e.message}`);
+    const preProvidedUrls = paper.imageUrls || paper.allImageUrls || [];
+    if (preProvidedUrls.length > 0) {
+        imageInfos = preProvidedUrls.map(url => ({ url }));
+        console.log(`    [deep] 使用预提供图片: ${imageInfos.length} 张`);
+    } else if (/^\d+\.\d+/.test(arxivId)) {
+        try {
+            imageInfos = await fetchArxivImageUrls(arxivId);
+            console.log(`    [deep] 找到 ${imageInfos.length} 张图片`);
+        } catch (e) {
+            console.log(`    [deep] 获取图片失败: ${e.message}`);
+        }
     }
 
     // 提取纯 URL 列表用于下载和保存

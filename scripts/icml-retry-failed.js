@@ -3,170 +3,72 @@ const { setupScriptLogging } = require('./log-setup');
 setupScriptLogging(__filename);
 
 /**
- * ICML 2026 重试失败的分析
- * 重新分析 icml_2026_deep_analysis.json 中 error 不为空的论文
- *
- * 环境变量:
- *   ICML_RESULT_FILE        - 分析结果文件 (默认: data/current/icml_2026_deep_analysis.json)
- *   ICML_ANALYSIS_CONCURRENCY - 并发数 (默认: 3)
+ * ICML 2026 重试失败分析 — 薄封装，委托给 analysis-engine.js
  */
-
 const fs = require('fs');
 const path = require('path');
-const {
-    writeFileAtomic,
-    readJsonSafe,
-    loadPrompt,
-    parseAnalysis
-} = require('./utils.js');
+const { writeFileAtomic, readJsonSafe } = require('./utils.js');
 const Config = require('./config.js');
-const { callModel } = require('./deep-analyzer.js');
+const { analyzeBatch } = require('./analysis-engine.js');
 
+const PROJECT_ROOT = path.join(__dirname, '..');
 const RESULT_FILE = process.env.ICML_RESULT_FILE || path.join(Config.CURRENT_DIR, 'icml_2026_deep_analysis.json');
-const CONCURRENCY = parseInt(process.env.ICML_ANALYSIS_CONCURRENCY || '3', 10);
+const CONCURRENCY = Math.min(parseInt(process.env.ICML_ANALYSIS_CONCURRENCY || '3', 10), 3);
 
-function checkEnv() {
+function attachPdfText(paper) {
+    const safeId = (paper.id || '').replace(/\//g, '_');
+    const txtFile = path.join(PROJECT_ROOT, 'data', 'pdfs', 'icml2026', safeId + '.txt');
+    try {
+        if (fs.existsSync(txtFile)) {
+            let text = fs.readFileSync(txtFile, 'utf-8');
+            paper.fullText = text.length > 120000 ? text.substring(0, 120000) + '\n\n[... 截断 ...]' : text;
+        }
+    } catch (e) {}
+}
+
+async function main() {
     const missing = [];
     if (!process.env.PAPER_ANALYZER_ENDPOINT) missing.push('PAPER_ANALYZER_ENDPOINT');
     if (!process.env.PAPER_ANALYZER_API_KEY) missing.push('PAPER_ANALYZER_API_KEY');
     if (!process.env.PAPER_ANALYZER_MODEL) missing.push('PAPER_ANALYZER_MODEL');
-    if (missing.length > 0) {
-        console.error(`[icml-retry-failed] 缺少环境变量: ${missing.join(', ')}`);
-        process.exit(1);
-    }
-}
+    if (missing.length > 0) { console.error(`缺少: ${missing.join(', ')}`); process.exit(1); }
 
-async function analyzeSingle(paper) {
-    const abstract = (paper.abstract || '').substring(0, 8000);
-    const authors = Array.isArray(paper.authors) ? paper.authors.join(', ') : (paper.authors || '未知');
+    const data = readJsonSafe(RESULT_FILE);
+    if (!data?.papers) { console.error('无效结果文件'); process.exit(1); }
 
-    // 读取本地 PDF 全文
-    let pdfText = '';
-    const safeId = (paper.id || '').replace(/\//g, '_');
-    const txtFile = path.join(__dirname, '..', 'data', 'pdfs', 'icml2026', safeId + '.txt');
-    try {
-        if (fs.existsSync(txtFile)) {
-            let raw = fs.readFileSync(txtFile, 'utf-8');
-            pdfText = raw.length > 120000 ? raw.substring(0, 120000) + '\n\n[... 中间内容已截断 ...]' : raw;
-        }
-    } catch (e) {}
-    if (!pdfText) pdfText = '(全文未提供，仅基于摘要分析)';
-
-    const prompt = loadPrompt('prompts/deep-analysis.md', {
-        title: paper.title || '(无标题)',
-        authors: authors,
-        categories: 'ICML 2026',
-        arxivId: paper.id || 'unknown',
-        hasFullText: pdfText.length > 500 ? '以下是论文全文（从 PDF 提取），请仔细阅读所有技术细节。' : '以下是论文摘要。',
-        textForAnalysis: pdfText.length > 500 ? pdfText : abstract
-    });
-
-    const messages = [{ role: 'user', content: prompt }];
-    return await callModel(messages, Config.ANALYSIS_CONFIG.apiMaxTokens);
-}
-
-async function analyzeWithRetry(paper) {
-    let lastError = null;
-    const maxRetries = Config.ANALYSIS_CONFIG.maxRetries || 3;
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-            const analysis = await analyzeSingle(paper);
-            const parsed = parseAnalysis(analysis);
-
-            if (analysis.toLowerCase().includes('rejected') || analysis.toLowerCase().includes('REJECTED')) {
-                throw new Error('API rejected the request');
-            }
-
-            return { analysis, parsed, error: null };
-        } catch (err) {
-            lastError = err;
-            if (attempt < maxRetries) {
-                const delay = Math.pow(2, attempt) * 3000;
-                await new Promise(r => setTimeout(r, delay));
-            }
-        }
-    }
-    return { analysis: null, parsed: null, error: lastError.message };
-}
-
-async function main() {
-    checkEnv();
-
-    console.log('=== ICML 2026 重试失败分析 ===');
+    const failed = data.papers.filter(p => p.error);
+    console.log('=== ICML 重试失败 ===');
     console.log(`模型: ${process.env.PAPER_ANALYZER_MODEL}`);
-    if (process.env.PAPER_ANALYZER_SECONDARY_MODEL) {
-        console.log(`副模型: ${process.env.PAPER_ANALYZER_SECONDARY_MODEL} (双模型模式)`);
-    }
-    console.log(`结果文件: ${RESULT_FILE}`);
-    console.log(`并发数: ${CONCURRENCY}`);
-    console.log('');
+    if (process.env.PAPER_ANALYZER_SECONDARY_MODEL) console.log(`副模型: ${process.env.PAPER_ANALYZER_SECONDARY_MODEL}`);
+    console.log(`失败: ${failed.length}/${data.papers.length}\n`);
 
-    const resultData = readJsonSafe(RESULT_FILE);
-    if (!resultData || !resultData.papers) {
-        console.error(`[icml-retry-failed] 无效的结果文件: ${RESULT_FILE}`);
-        process.exit(1);
-    }
+    if (!failed.length) { console.log('无失败论文'); return; }
 
-    const failedPapers = resultData.papers.filter(p => p.error);
-    console.log(`总论文数: ${resultData.papers.length}`);
-    console.log(`失败论文数: ${failedPapers.length}`);
-    console.log('');
+    for (const p of failed) attachPdfText(p);
+    let ok = 0, stillFail = 0;
 
-    if (failedPapers.length === 0) {
-        console.log('没有失败的论文需要重试');
-        return;
-    }
-
-    let success = 0;
-    let stillFailed = 0;
-
-    const queue = [...failedPapers];
-
-    async function worker() {
-        while (queue.length > 0) {
-            const paper = queue.shift();
-            console.log(`[retry] ${paper.id} - ${paper.title?.substring(0, 60)}`);
-
-            const result = await analyzeWithRetry(paper);
-
-            const idx = resultData.papers.findIndex(p => p.id === paper.id);
+    await analyzeBatch(failed, {
+        concurrency: CONCURRENCY,
+        maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
+        saveInterval: 5,
+        onPaperStart: (i, t, p) => console.log(`[retry] ${p.id} - ${(p.title || '').substring(0, 60)}`),
+        onPaperDone: (i, t, p, r, dur) => {
+            const idx = data.papers.findIndex(pp => pp.id === p.id);
             if (idx >= 0) {
-                if (result.error) {
-                    stillFailed++;
-                    console.log(`  ❌ ${paper.id}: ${result.error}`);
-                    resultData.papers[idx].retry_error = result.error;
+                if (r.success) {
+                    ok++; data.papers[idx].analysis = r.result?.analysis;
+                    data.papers[idx].parsed = r.parsed; data.papers[idx].error = null;
+                    console.log(`  ✅ ${r.parsed?.score || '?'}/10`);
                 } else {
-                    success++;
-                    const score = result.parsed?.score || 'N/A';
-                    console.log(`  ✅ ${paper.id}: 评分 ${score}/10`);
-                    resultData.papers[idx].analysis = result.analysis;
-                    resultData.papers[idx].parsed = result.parsed;
-                    resultData.papers[idx].error = null;
+                    stillFail++; data.papers[idx].retry_error = r.error;
+                    console.log(`  ❌ ${r.error}`);
                 }
             }
-
-            const total = success + stillFailed;
-            if (total % 5 === 0) {
-                writeFileAtomic(RESULT_FILE, JSON.stringify(resultData, null, 2));
-                console.log(`  [保存] 进度: ${total}/${failedPapers.length}`);
-            }
-
-            await new Promise(r => setTimeout(r, 1000));
+            writeFileAtomic(RESULT_FILE, JSON.stringify(data, null, 2));
         }
-    }
+    });
 
-    const workers = Array(Math.min(CONCURRENCY, failedPapers.length)).fill().map(() => worker());
-    await Promise.all(workers);
-
-    writeFileAtomic(RESULT_FILE, JSON.stringify(resultData, null, 2));
-
-    console.log('');
-    console.log('=== 重试完成 ===');
-    console.log(`成功: ${success} 篇`);
-    console.log(`仍失败: ${stillFailed} 篇`);
+    console.log(`\n=== 完成 ===\n成功: ${ok}, 仍失败: ${stillFail}`);
 }
 
-main().catch(e => {
-    console.error('[icml-retry-failed] 错误:', e);
-    process.exit(1);
-});
+main().catch(e => { console.error(e); process.exit(1); });

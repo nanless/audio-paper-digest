@@ -4,15 +4,14 @@ setupScriptLogging(__filename);
 
 /**
  * ICML 2026 批量深度分析
- * 对筛选后的论文进行基于摘要的深度分析（支持双模型模式）
+ * 薄封装——核心逻辑完全委托给 analysis-engine.js 和 deep-analyzer.js
  *
  * 环境变量:
- *   ICML_FILTERED_FILE      - 筛选结果输入 (默认: data/current/icml_2026_filtered.json)
- *   ICML_RESULT_FILE        - 分析结果输出 (默认: data/current/icml_2026_deep_analysis.json)
- *   ICML_ANALYSIS_CONCURRENCY - 分析并发数 (默认: 3)
- *   ICML_OFFSET             - 从第 N 篇开始分析（断点续传）
- *   ICML_LIMIT              - 最多分析 N 篇（分批）
- *   ICML_ENABLE_GAPFILL     - 是否启用 gap-fill 审校 (默认: true)
+ *   ICML_FILTERED_FILE       - 筛选结果输入
+ *   ICML_RESULT_FILE         - 分析结果输出
+ *   ICML_ANALYSIS_CONCURRENCY - 并发数 (默认: 3)
+ *   ICML_OFFSET              - 从第 N 篇开始
+ *   ICML_LIMIT               - 最多 N 篇
  */
 
 const fs = require('fs');
@@ -20,12 +19,10 @@ const path = require('path');
 const {
     writeFileAtomic,
     readJsonSafe,
-    getBeijingISOString,
-    loadPrompt,
-    parseAnalysis
+    getBeijingISOString
 } = require('./utils.js');
 const Config = require('./config.js');
-const { callModel } = require('./deep-analyzer.js');
+const { analyzeBatch } = require('./analysis-engine.js');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 
@@ -34,235 +31,96 @@ const RESULT_FILE = process.env.ICML_RESULT_FILE || path.join(Config.CURRENT_DIR
 const CONCURRENCY = parseInt(process.env.ICML_ANALYSIS_CONCURRENCY || '3', 10);
 const OFFSET = parseInt(process.env.ICML_OFFSET || '0', 10);
 const LIMIT = parseInt(process.env.ICML_LIMIT || '0', 10) || Infinity;
-const ENABLE_GAPFILL = process.env.ICML_ENABLE_GAPFILL !== 'false';
 
-function checkEnv() {
+function attachPdfText(paper) {
+    const safeId = (paper.id || '').replace(/\//g, '_');
+    const txtFile = path.join(PROJECT_ROOT, 'data', 'pdfs', 'icml2026', safeId + '.txt');
+    try {
+        if (fs.existsSync(txtFile)) {
+            let text = fs.readFileSync(txtFile, 'utf-8');
+            paper.fullText = text.length > 120000 ? text.substring(0, 120000) + '\n\n[... 已截断 ...]' : text;
+            return text.length;
+        }
+    } catch (e) {}
+    return 0;
+}
+
+async function main() {
     const missing = [];
     if (!process.env.PAPER_ANALYZER_ENDPOINT) missing.push('PAPER_ANALYZER_ENDPOINT');
     if (!process.env.PAPER_ANALYZER_API_KEY) missing.push('PAPER_ANALYZER_API_KEY');
     if (!process.env.PAPER_ANALYZER_MODEL) missing.push('PAPER_ANALYZER_MODEL');
     if (missing.length > 0) {
-        console.error(`[icml-batch-analyze] 缺少环境变量: ${missing.join(', ')}。请在 .env 中配置`);
+        console.error(`[icml-batch-analyze] 缺少环境变量: ${missing.join(', ')}`);
         process.exit(1);
     }
-}
-
-/**
- * 深度分析单篇论文（使用 callModel，自动支持双模型模式）
- * 优先使用本地 PDF 全文，回退到摘要
- */
-async function analyzeSingle(paper) {
-    const abstract = (paper.abstract || '').substring(0, 8000);
-    const authors = Array.isArray(paper.authors) ? paper.authors.join(', ') : (paper.authors || '未知');
-
-    // 读取本地 PDF 全文（如果存在）
-    let pdfText = '';
-    const safeId = (paper.id || '').replace(/\//g, '_');
-    const txtFile = path.join(PROJECT_ROOT, 'data', 'pdfs', 'icml2026', safeId + '.txt');
-    try {
-        if (fs.existsSync(txtFile)) {
-            let rawText = fs.readFileSync(txtFile, 'utf-8');
-            // 截取前 12 万字符（足够覆盖论文主体），优先保留开头
-            if (rawText.length > 120000) {
-                pdfText = rawText.substring(0, 120000) + '\n\n[... 中间内容已截断，保留前 120000 字符 ...]';
-            } else {
-                pdfText = rawText;
-            }
-            console.log(`    [icml] 📄 使用 PDF 全文: ${rawText.length} 字符`);
-        }
-    } catch (e) {
-        console.log(`    [icml] ⚠️  读取 PDF 文本失败: ${e.message}`);
-    }
-    if (!pdfText) {
-        pdfText = '(全文未提供，仅基于摘要分析)';
-    }
-
-    // 第一步：文本深度分析（使用 main 分支的通用 prompt）
-    const prompt = loadPrompt('prompts/deep-analysis.md', {
-        title: paper.title || '(无标题)',
-        authors: authors,
-        categories: 'ICML 2026',
-        arxivId: paper.id || 'unknown',
-        hasFullText: pdfText.length > 500 ? '以下是论文全文（从 PDF 提取），请仔细阅读所有技术细节。' : '以下是论文摘要。',
-        textForAnalysis: pdfText.length > 500 ? pdfText : abstract
-    });
-
-    const messages = [{ role: 'user', content: prompt }];
-    const analysis = await callModel(messages, Config.ANALYSIS_CONFIG.apiMaxTokens);
-
-    // 第二步：开源链接扫描
-    let openSourceLinks = '';
-    try {
-        const ossPrompt = loadPrompt('prompts/opensource-scan.md', {
-            title: paper.title || '',
-            arxivId: paper.id || 'unknown',
-            textForAnalysis: pdfText.slice(0, 30000) || abstract
-        });
-        openSourceLinks = await callModel(
-            [{ role: 'user', content: ossPrompt }],
-            8000
-        );
-    } catch (e) {
-        console.log(`    [icml] ⚠️  开源扫描失败: ${e.message}`);
-    }
-
-    // 第三步：gap-fill 审校重写
-    let finalAnalysis = analysis;
-    if (ENABLE_GAPFILL) {
-        try {
-            // 合并分析：用 opensource-scan 的开源详情替换原始分析中的开源部分，避免重复
-            let cleanedAnalysis = analysis.replace(/##\s*开源(?:详情)?[：:]*[\s\S]*$/, '');
-            const combinedAnalysis = cleanedAnalysis + (openSourceLinks ? '\n\n' + openSourceLinks : '');
-            const gapFillPrompt = loadPrompt('prompts/gap-fill.md', {
-                title: paper.title || '',
-                arxivId: paper.id || 'unknown',
-                existingAnalysis: combinedAnalysis,
-                textForAnalysis: pdfText
-            });
-            finalAnalysis = await callModel(
-                [{ role: 'user', content: gapFillPrompt }],
-                Config.ANALYSIS_CONFIG.apiMaxTokens
-            );
-        } catch (e) {
-            console.log(`    [icml] ⚠️  gap-fill 审校失败: ${e.message}`);
-        }
-    }
-
-    return finalAnalysis;
-}
-
-/**
- * 带重试的分析
- */
-async function analyzeWithRetry(paper) {
-    let lastError = null;
-    const maxRetries = Config.ANALYSIS_CONFIG.maxRetries || 2;
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-            const analysis = await analyzeSingle(paper);
-            const parsed = parseAnalysis(analysis);
-
-            if (analysis.toLowerCase().includes('rejected') || analysis.toLowerCase().includes('REJECTED')) {
-                throw new Error('API rejected the request');
-            }
-
-            return { analysis, parsed, error: null };
-        } catch (err) {
-            lastError = err;
-            if (attempt < maxRetries) {
-                const delay = Math.pow(2, attempt) * 3000;
-                await new Promise(r => setTimeout(r, delay));
-            }
-        }
-    }
-    return { analysis: null, parsed: null, error: lastError.message };
-}
-
-async function main() {
-    checkEnv();
 
     console.log('=== ICML 2026 批量深度分析 ===');
     console.log(`模型: ${process.env.PAPER_ANALYZER_MODEL}`);
     if (process.env.PAPER_ANALYZER_SECONDARY_MODEL) {
         console.log(`副模型: ${process.env.PAPER_ANALYZER_SECONDARY_MODEL} (双模型模式)`);
     }
-    console.log(`gap-fill 审校: ${ENABLE_GAPFILL ? '已启用' : '已禁用'}`);
-    console.log(`筛选文件: ${FILTERED_FILE}`);
-    console.log(`结果文件: ${RESULT_FILE}`);
-    console.log(`并发数: ${CONCURRENCY}`);
-    console.log(`偏移: ${OFFSET}, 限制: ${LIMIT === Infinity ? '无' : LIMIT}`);
+    console.log(`并发数: ${CONCURRENCY}, 偏移: ${OFFSET}, 限制: ${LIMIT === Infinity ? '无' : LIMIT}`);
     console.log('');
 
     const filteredData = readJsonSafe(FILTERED_FILE);
-    if (!filteredData || !filteredData.papers || !Array.isArray(filteredData.papers)) {
-        console.error(`[icml-batch-analyze] 无效的筛选文件: ${FILTERED_FILE}`);
+    if (!filteredData || !Array.isArray(filteredData.papers)) {
+        console.error(`[icml-batch-analyze] 无效筛选文件: ${FILTERED_FILE}`);
         process.exit(1);
     }
 
-    const allPapers = filteredData.papers;
-    const targetPapers = allPapers.slice(OFFSET, OFFSET + LIMIT);
-    console.log(`筛选通过论文数: ${allPapers.length}, 本次分析: ${targetPapers.length} 篇`);
+    const allPapers = filteredData.papers.slice(OFFSET, OFFSET + LIMIT);
 
-    const resultData = readJsonSafe(RESULT_FILE, {
-        conference: 'ICML 2026',
-        count: 0,
-        papers: [],
-        analyzed_at: null
+    // 附加 PDF 文本
+    let withText = 0;
+    for (const p of allPapers) if (attachPdfText(p) > 0) withText++;
+    console.log(`📄 ${withText}/${allPapers.length} 篇有 PDF 全文\n`);
+
+    // 断点续传
+    const existingResult = readJsonSafe(RESULT_FILE, null);
+    const existingIds = new Set((existingResult?.papers || []).map(p => p.id));
+    const papersToAnalyze = allPapers.filter(p => !existingIds.has(p.id));
+    console.log(`已分析: ${existingIds.size}, 待分析: ${papersToAnalyze.length}\n`);
+
+    if (papersToAnalyze.length === 0) { console.log('已完成'); return; }
+
+    let success = 0, failed = 0;
+
+    await analyzeBatch(papersToAnalyze, {
+        concurrency: CONCURRENCY,
+        maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
+        retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
+        saveInterval: 10,
+        onPaperStart: (idx, total, paper) => {
+            console.log(`[analyze] ${paper.id} - ${(paper.title || '').substring(0, 60)}`);
+        },
+        onPaperDone: (idx, total, paper, r, dur) => {
+            if (r.success) {
+                success++;
+                console.log(`  ✅ 评分 ${r.parsed?.score || 'N/A'}/10`);
+            } else {
+                failed++;
+                console.log(`  ❌ ${r.error}`);
+            }
+        },
+        onSave: async (results) => {
+            const map = new Map();
+            for (const p of (existingResult?.papers || [])) map.set(p.id, p);
+            for (const r of results) {
+                if (r?.id) map.set(r.id, { ...(map.get(r.id) || {}), ...r,
+                    arxivId: r.id, fetchedAt: getBeijingISOString() });
+            }
+            writeFileAtomic(RESULT_FILE, JSON.stringify({
+                conference: 'ICML 2026', count: map.size,
+                papers: Array.from(map.values()), analyzed_at: getBeijingISOString()
+            }, null, 2));
+            console.log(`  [保存] 成功:${success} 失败:${failed}`);
+        }
     });
 
-    const analyzedIds = new Set(resultData.papers.map(p => p.id));
-    const papersToAnalyze = targetPapers.filter(p => !analyzedIds.has(p.id));
-
-    console.log(`已分析: ${analyzedIds.size} 篇, 待分析: ${papersToAnalyze.length} 篇`);
-    console.log('');
-
-    if (papersToAnalyze.length === 0) {
-        console.log('所有论文已分析完毕');
-        return;
-    }
-
-    let success = 0;
-    let failed = 0;
-
-    const queue = [...papersToAnalyze];
-
-    async function worker() {
-        while (queue.length > 0) {
-            const paper = queue.shift();
-            console.log(`[analyze] ${paper.id} - ${paper.title?.substring(0, 60)}`);
-
-            const result = await analyzeWithRetry(paper);
-
-            if (result.error) {
-                failed++;
-                console.log(`  ❌ ${paper.id}: ${result.error}`);
-                resultData.papers.push({
-                    ...paper,
-                    arxivId: paper.id,
-                    fetchedAt: getBeijingISOString(),
-                    analysis: null,
-                    parsed: null,
-                    error: result.error
-                });
-            } else {
-                success++;
-                const score = result.parsed?.score || 'N/A';
-                console.log(`  ✅ ${paper.id}: 评分 ${score}/10`);
-                resultData.papers.push({
-                    ...paper,
-                    arxivId: paper.id,
-                    fetchedAt: getBeijingISOString(),
-                    analysis: result.analysis,
-                    parsed: result.parsed,
-                    error: null
-                });
-            }
-
-            const total = success + failed;
-            if (total % 10 === 0) {
-                resultData.count = resultData.papers.length;
-                resultData.analyzed_at = getBeijingISOString();
-                writeFileAtomic(RESULT_FILE, JSON.stringify(resultData, null, 2));
-                console.log(`  [保存] 进度: ${total}/${papersToAnalyze.length} | 成功: ${success} | 失败: ${failed}`);
-            }
-
-            await new Promise(r => setTimeout(r, 1000));
-        }
-    }
-
-    const workers = Array(Math.min(CONCURRENCY, papersToAnalyze.length)).fill().map(() => worker());
-    await Promise.all(workers);
-
-    resultData.count = resultData.papers.length;
-    resultData.analyzed_at = getBeijingISOString();
-    writeFileAtomic(RESULT_FILE, JSON.stringify(resultData, null, 2));
-
-    console.log('');
-    console.log('=== 分析完成 ===');
-    console.log(`成功: ${success} 篇`);
-    console.log(`失败: ${failed} 篇`);
-    console.log(`总计处理: ${success + failed} 篇`);
-    console.log(`结果保存: ${RESULT_FILE} (${resultData.papers.length} 篇)`);
+    console.log(`\n=== 完成 ===`);
+    console.log(`成功: ${success}, 失败: ${failed}`);
+    console.log(`结果: ${RESULT_FILE}`);
 }
 
 main().catch(e => {
