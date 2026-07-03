@@ -4,14 +4,15 @@ setupScriptLogging(__filename);
 
 /**
  * ICML 2026 批量深度分析
- * 对筛选后的论文进行基于摘要的深度分析
+ * 对筛选后的论文进行基于摘要的深度分析（支持双模型模式）
  *
  * 环境变量:
- *   ICML_FILTERED_FILE    - 筛选结果输入 (默认: data/current/icml_2026_filtered.json)
- *   ICML_RESULT_FILE      - 分析结果输出 (默认: data/current/icml_2026_deep_analysis.json)
+ *   ICML_FILTERED_FILE      - 筛选结果输入 (默认: data/current/icml_2026_filtered.json)
+ *   ICML_RESULT_FILE        - 分析结果输出 (默认: data/current/icml_2026_deep_analysis.json)
  *   ICML_ANALYSIS_CONCURRENCY - 分析并发数 (默认: 3)
- *   ICML_OFFSET           - 从第 N 篇开始分析（断点续传）
- *   ICML_LIMIT            - 最多分析 N 篇（分批）
+ *   ICML_OFFSET             - 从第 N 篇开始分析（断点续传）
+ *   ICML_LIMIT              - 最多分析 N 篇（分批）
+ *   ICML_ENABLE_GAPFILL     - 是否启用 gap-fill 审校 (默认: true)
  */
 
 const fs = require('fs');
@@ -21,14 +22,10 @@ const {
     readJsonSafe,
     getBeijingISOString,
     loadPrompt,
-    detectApiType,
-    buildApiUrl,
-    buildRequestBody,
-    buildHeaders,
-    parseResponseText,
     parseAnalysis
 } = require('./utils.js');
 const Config = require('./config.js');
+const { callModel } = require('./deep-analyzer.js');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 
@@ -37,39 +34,27 @@ const RESULT_FILE = process.env.ICML_RESULT_FILE || path.join(Config.CURRENT_DIR
 const CONCURRENCY = parseInt(process.env.ICML_ANALYSIS_CONCURRENCY || '3', 10);
 const OFFSET = parseInt(process.env.ICML_OFFSET || '0', 10);
 const LIMIT = parseInt(process.env.ICML_LIMIT || '0', 10) || Infinity;
-
-const ANALYSIS_CONFIG = {
-    endpoint: process.env.PAPER_ANALYZER_ENDPOINT || '',
-    key: process.env.PAPER_ANALYZER_API_KEY || '',
-    model: process.env.PAPER_ANALYZER_MODEL || '',
-    timeoutMs: parseInt(process.env.ICML_ANALYSIS_TIMEOUT || '600000', 10),
-    maxRetries: parseInt(process.env.ICML_ANALYSIS_RETRIES || '2', 10),
-    retryDelayMs: parseInt(process.env.ICML_ANALYSIS_RETRY_DELAY || '3000', 10),
-    maxTokens: parseInt(process.env.ICML_ANALYSIS_MAX_TOKENS || '64000', 10)
-};
+const ENABLE_GAPFILL = process.env.ICML_ENABLE_GAPFILL !== 'false';
 
 function checkEnv() {
     const missing = [];
-    if (!ANALYSIS_CONFIG.endpoint) missing.push('PAPER_ANALYZER_ENDPOINT');
-    if (!ANALYSIS_CONFIG.key) missing.push('PAPER_ANALYZER_API_KEY');
-    if (!ANALYSIS_CONFIG.model) missing.push('PAPER_ANALYZER_MODEL');
+    if (!process.env.PAPER_ANALYZER_ENDPOINT) missing.push('PAPER_ANALYZER_ENDPOINT');
+    if (!process.env.PAPER_ANALYZER_API_KEY) missing.push('PAPER_ANALYZER_API_KEY');
+    if (!process.env.PAPER_ANALYZER_MODEL) missing.push('PAPER_ANALYZER_MODEL');
     if (missing.length > 0) {
-        console.error(`[icml-batch-analyze] 缺少环境变量: ${missing.join(', ')}。请在 ~/.hermes/.env 中配置`);
+        console.error(`[icml-batch-analyze] 缺少环境变量: ${missing.join(', ')}。请在 .env 中配置`);
         process.exit(1);
     }
 }
 
 /**
- * 调用 LLM 进行深度分析
+ * 深度分析单篇论文（使用 callModel，自动支持双模型模式）
  */
 async function analyzeSingle(paper) {
-    const apiType = detectApiType(ANALYSIS_CONFIG.endpoint, ANALYSIS_CONFIG.model);
-    const apiUrl = buildApiUrl(apiType, ANALYSIS_CONFIG.endpoint);
-    const url = new URL(apiUrl);
-
     const abstract = (paper.abstract || '').substring(0, 8000);
     const authors = Array.isArray(paper.authors) ? paper.authors.join(', ') : (paper.authors || '未知');
 
+    // 第一步：文本深度分析
     const prompt = loadPrompt('prompts/icml-deep-analysis.md', {
         title: paper.title || '(无标题)',
         authors: authors,
@@ -79,51 +64,47 @@ async function analyzeSingle(paper) {
     });
 
     const messages = [{ role: 'user', content: prompt }];
-    const bodyObj = buildRequestBody(apiType, ANALYSIS_CONFIG.model, messages, ANALYSIS_CONFIG.maxTokens, 0.7);
-    const postData = JSON.stringify(bodyObj);
+    const analysis = await callModel(messages, Config.ANALYSIS_CONFIG.apiMaxTokens);
 
-    const headers = buildHeaders(apiType, ANALYSIS_CONFIG.key, postData);
+    // 第二步：开源链接扫描
+    let openSourceLinks = '';
+    try {
+        const ossPrompt = loadPrompt('prompts/opensource-scan.md', {
+            title: paper.title || '',
+            arxivId: paper.id || 'unknown',
+            abstract: abstract.slice(0, 2000),
+            analysis: analysis.slice(0, 6000)
+        });
+        openSourceLinks = await callModel(
+            [{ role: 'user', content: ossPrompt }],
+            8000
+        );
+    } catch (e) {
+        console.log(`    [icml] ⚠️  开源扫描失败: ${e.message}`);
+    }
 
-    return new Promise((resolve, reject) => {
-        const https = require('https');
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), ANALYSIS_CONFIG.timeoutMs);
-
-        const options = {
-            hostname: url.hostname,
-            path: url.pathname,
-            method: 'POST',
-            headers: headers,
-            signal: controller.signal
-        };
-
-        const req = https.request(options, (res) => {
-            const chunks = [];
-            res.on('data', chunk => chunks.push(chunk));
-            res.on('end', () => {
-                clearTimeout(timeoutId);
-                const data = Buffer.concat(chunks).toString('utf8');
-                try {
-                    const response = JSON.parse(data);
-                    const text = parseResponseText(apiType, response);
-                    if (text === null) {
-                        reject(new Error('Invalid response'));
-                        return;
-                    }
-                    resolve(text);
-                } catch (e) {
-                    reject(e);
-                }
+    // 第三步：gap-fill 审校重写（可选，提高质量）
+    let finalAnalysis = analysis;
+    if (ENABLE_GAPFILL && openSourceLinks) {
+        try {
+            const gapFillPrompt = loadPrompt('prompts/gap-fill.md', {
+                title: paper.title || '',
+                authors: authors,
+                arxivId: paper.id || 'unknown',
+                abstract: abstract.slice(0, 3000),
+                draftAnalysis: analysis,
+                openSourceInfo: openSourceLinks
             });
-        });
+            finalAnalysis = await callModel(
+                [{ role: 'user', content: gapFillPrompt }],
+                Config.ANALYSIS_CONFIG.apiMaxTokens
+            );
+        } catch (e) {
+            console.log(`    [icml] ⚠️  gap-fill 审校失败: ${e.message}`);
+        }
+    }
 
-        req.on('error', (err) => {
-            clearTimeout(timeoutId);
-            reject(err);
-        });
-        req.write(postData);
-        req.end();
-    });
+    return finalAnalysis;
 }
 
 /**
@@ -131,12 +112,12 @@ async function analyzeSingle(paper) {
  */
 async function analyzeWithRetry(paper) {
     let lastError = null;
-    for (let attempt = 1; attempt <= ANALYSIS_CONFIG.maxRetries; attempt++) {
+    const maxRetries = Config.ANALYSIS_CONFIG.maxRetries || 2;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             const analysis = await analyzeSingle(paper);
             const parsed = parseAnalysis(analysis);
 
-            // 检查是否被拒绝
             if (analysis.toLowerCase().includes('rejected') || analysis.toLowerCase().includes('REJECTED')) {
                 throw new Error('API rejected the request');
             }
@@ -144,8 +125,8 @@ async function analyzeWithRetry(paper) {
             return { analysis, parsed, error: null };
         } catch (err) {
             lastError = err;
-            if (attempt < ANALYSIS_CONFIG.maxRetries) {
-                const delay = Math.pow(2, attempt) * ANALYSIS_CONFIG.retryDelayMs;
+            if (attempt < maxRetries) {
+                const delay = Math.pow(2, attempt) * 3000;
                 await new Promise(r => setTimeout(r, delay));
             }
         }
@@ -157,6 +138,11 @@ async function main() {
     checkEnv();
 
     console.log('=== ICML 2026 批量深度分析 ===');
+    console.log(`模型: ${process.env.PAPER_ANALYZER_MODEL}`);
+    if (process.env.PAPER_ANALYZER_SECONDARY_MODEL) {
+        console.log(`副模型: ${process.env.PAPER_ANALYZER_SECONDARY_MODEL} (双模型模式)`);
+    }
+    console.log(`gap-fill 审校: ${ENABLE_GAPFILL ? '已启用' : '已禁用'}`);
     console.log(`筛选文件: ${FILTERED_FILE}`);
     console.log(`结果文件: ${RESULT_FILE}`);
     console.log(`并发数: ${CONCURRENCY}`);
@@ -173,7 +159,6 @@ async function main() {
     const targetPapers = allPapers.slice(OFFSET, OFFSET + LIMIT);
     console.log(`筛选通过论文数: ${allPapers.length}, 本次分析: ${targetPapers.length} 篇`);
 
-    // 加载已有结果（断点续传）
     const resultData = readJsonSafe(RESULT_FILE, {
         conference: 'ICML 2026',
         count: 0,
@@ -195,7 +180,6 @@ async function main() {
     let success = 0;
     let failed = 0;
 
-    // 并发分析
     const queue = [...papersToAnalyze];
 
     async function worker() {
@@ -234,7 +218,6 @@ async function main() {
                 console.log(`  [保存] 进度: ${total}/${papersToAnalyze.length} | 成功: ${success} | 失败: ${failed}`);
             }
 
-            // 避免API限流
             await new Promise(r => setTimeout(r, 1000));
         }
     }
@@ -242,7 +225,6 @@ async function main() {
     const workers = Array(Math.min(CONCURRENCY, papersToAnalyze.length)).fill().map(() => worker());
     await Promise.all(workers);
 
-    // 最终保存
     resultData.count = resultData.papers.length;
     resultData.analyzed_at = getBeijingISOString();
     writeFileAtomic(RESULT_FILE, JSON.stringify(resultData, null, 2));
