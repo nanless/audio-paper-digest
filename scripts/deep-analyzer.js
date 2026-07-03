@@ -586,6 +586,11 @@ async function analyzePaperDeep(paper) {
     const textForAnalysis = fullText || (paper.abstract || paper.summary || '');
     const hasFullText = fullText.length > FULL_TEXT_MIN_CHARS_FOR_FULL;
 
+    if (!textForAnalysis || textForAnalysis.trim().length < 10) {
+        console.log(`    [deep] ⚠️  论文无有效文本内容（全文和摘要均为空），无法分析`);
+        return { analysis: null, error: '论文无有效文本内容' };
+    }
+
     // 优先使用预提供的图片 URL（ICML/会议场景），否则从 arXiv 抓取
     let imageInfos = [];
     const preProvidedUrls = paper.imageUrls || paper.allImageUrls || [];

@@ -30,6 +30,7 @@ const PROJECT_ROOT = path.join(__dirname, '..');
 const DATA_FILE = process.env.ICML_DATA_FILE || path.join(PROJECT_ROOT, 'data', 'icml2026_openreview_papers.json');
 const FILTERED_FILE = process.env.ICML_FILTERED_FILE || path.join(Config.CURRENT_DIR, 'icml_2026_filtered.json');
 const EXCLUDED_FILE = process.env.ICML_EXCLUDED_FILE || path.join(Config.CURRENT_DIR, 'icml_2026_excluded.json');
+const FAILED_FILE = process.env.ICML_FAILED_FILE || path.join(Config.CURRENT_DIR, 'icml_2026_filter_failed.json');
 const CONCURRENCY = parseInt(process.env.ICML_FILTER_CONCURRENCY || '8', 10);
 const OFFSET = parseInt(process.env.ICML_FILTER_OFFSET || '0', 10);
 const LIMIT = parseInt(process.env.ICML_FILTER_LIMIT || '0', 10) || Infinity;
@@ -55,7 +56,15 @@ function keywordPreFilter(papers) {
         'audio', 'speech', 'music', 'voice', 'sound', 'acoustic',
         'tts', 'asr', 'speaker', 'vocal', 'singing', 'listen',
         'waveform', 'spectrogram', 'neural codec', 'audio-lm', 'musiclm',
-        'wav', '声纹', '语音识别', '语音合成', '音频'
+        'wav', '声纹', '语音识别', '语音合成', '音频',
+        'mel-spectrogram', 'mfcc', 'pitch', 'timbre', 'prosody', 'phoneme',
+        'denoising', 'dereverberation', 'reverberation', 'binaural',
+        'spatial audio', 'room acoustic', 'encodec', 'hubert', 'wav2vec',
+        'whisper', 'conformer', 'soundstream', 'audiocraft', 'vocoder',
+        'beamforming', 'diarization', 'paralinguistic', 'expressive',
+        'speech-to-text', 'text-to-speech', 'speech translation',
+        'source separation', 'audio generation', 'music generation',
+        'audio-visual', 'audiovisual', 'multimodal speech',
     ];
 
     const candidates = [];
@@ -100,18 +109,21 @@ function parseFilterResult(text) {
 
     const t = text.toLowerCase();
 
-    if (t.includes('结论：相关') || t.includes('结论:相关') || t.includes('判断：是') || t.includes('判断:是')) return true;
-    if (t.includes('结论：不相关') || t.includes('结论:不相关') || t.includes('判断：否') || t.includes('判断:否')) return false;
+    // Priority 1: Exact conclusion pattern
+    if (t.includes('结论：相关') || t.includes('结论:相关')) return true;
+    if (t.includes('结论：不相关') || t.includes('结论:不相关')) return false;
 
+    // Priority 2: Last-line verdict
     const lines = text.trim().split(/\n/);
     const lastLine = lines[lines.length - 1].trim().toLowerCase();
-    if (lastLine === '相关' || lastLine === '是') return true;
-    if (lastLine === '不相关' || lastLine === '否') return false;
+    if (lastLine === '相关' || lastLine === '是' || lastLine === 'yes') return true;
+    if (lastLine === '不相关' || lastLine === '否' || lastLine === 'no') return false;
 
-    if (t.includes('不相关') || t.includes('无关') || t.includes('否')) return false;
-    if (t.includes('相关') || t.includes('是')) return true;
+    // Priority 3: Negative indicators take priority over positive
+    if (/\b(不相关|无关|不涉及|没有关系|未涉及|不包含)\b/.test(t)) return false;
+    if (/\b(相关|是|yes)\b/.test(t)) return true;
 
-    return true;
+    return true; // 保守：宁可多留，不漏一篇
 }
 
 /**
@@ -131,7 +143,7 @@ async function filterWithRetry(paper) {
         }
     }
     console.log(`  [filter] ❌ ${paper.id} 筛选失败（重试 ${MAX_RETRIES} 次）: ${lastError.message}`);
-    return { paper, isRelevant: true, raw: '', error: lastError.message };
+    return { paper, isRelevant: false, error: lastError.message, failed: true };
 }
 
 async function main() {
@@ -156,10 +168,12 @@ async function main() {
 
     const filteredResult = readJsonSafe(FILTERED_FILE, { papers: [], count: 0 });
     const excludedResult = readJsonSafe(EXCLUDED_FILE, { papers: [], count: 0 });
+    const failedResult = readJsonSafe(FAILED_FILE, { papers: [], count: 0 });
 
     const alreadyProcessedIds = new Set([
         ...filteredResult.papers.map(p => p.id),
-        ...excludedResult.papers.map(p => p.id)
+        ...excludedResult.papers.map(p => p.id),
+        ...failedResult.papers.map(p => p.id)
     ]);
 
     const papersToProcess = targetPapers.filter(p => !alreadyProcessedIds.has(p.id));
@@ -198,7 +212,10 @@ async function main() {
             const paper = queue.shift();
             const result = await filterWithRetry(paper);
 
-            if (result.error) {
+            if (result.failed) {
+                failed++;
+                failedResult.papers.push({ ...paper, filterError: result.error });
+            } else if (result.error) {
                 failed++;
                 filteredResult.papers.push(paper);
             } else if (result.isRelevant) {
@@ -214,8 +231,10 @@ async function main() {
                 console.log(`  LLM筛选进度: ${total}/${candidates.length} | 通过: ${passed} | 排除: ${rejected} | 失败: ${failed}`);
                 filteredResult.count = filteredResult.papers.length;
                 excludedResult.count = excludedResult.papers.length;
+                failedResult.count = failedResult.papers.length;
                 writeFileAtomic(FILTERED_FILE, JSON.stringify(filteredResult, null, 2));
                 writeFileAtomic(EXCLUDED_FILE, JSON.stringify(excludedResult, null, 2));
+                writeFileAtomic(FAILED_FILE, JSON.stringify(failedResult, null, 2));
             }
         }
     }
@@ -225,18 +244,21 @@ async function main() {
 
     filteredResult.count = filteredResult.papers.length;
     excludedResult.count = excludedResult.papers.length;
+    failedResult.count = failedResult.papers.length;
     writeFileAtomic(FILTERED_FILE, JSON.stringify(filteredResult, null, 2));
     writeFileAtomic(EXCLUDED_FILE, JSON.stringify(excludedResult, null, 2));
+    writeFileAtomic(FAILED_FILE, JSON.stringify(failedResult, null, 2));
 
     console.log('');
     console.log('=== 筛选完成 ===');
     console.log(`关键词预筛选排除: ${keywordExcluded.length} 篇`);
     console.log(`LLM 筛选通过: ${passed} 篇`);
     console.log(`LLM 筛选排除: ${rejected} 篇`);
-    console.log(`LLM 筛选失败: ${failed} 篇`);
+    console.log(`LLM 筛选失败（需手动复查）: ${failed} 篇`);
     console.log(`总计: ${keywordExcluded.length + passed + rejected + failed} 篇`);
-    console.log(`结果保存: ${FILTERED_FILE} (${filteredResult.papers.length} 篇)`);
+    console.log(`通过保存: ${FILTERED_FILE} (${filteredResult.papers.length} 篇)`);
     console.log(`排除保存: ${EXCLUDED_FILE} (${excludedResult.papers.length} 篇)`);
+    if (failed > 0) console.log(`⚠️  失败保存: ${FAILED_FILE} (${failedResult.papers.length} 篇，未进入深度分析)`);
 }
 
 main().catch(e => {
