@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+from dotenv import load_dotenv
+load_dotenv(override=True)  # 强制覆盖系统环境变量，确保使用 .env 文件中的配置
+
 from log_setup import setup_script_logging
 setup_script_logging(__file__)
 
@@ -15,12 +18,9 @@ setup_script_logging(__file__)
 用法：
     python3 publish-to-blog.py [data_file]
     python3 publish-to-blog.py --skip-push     # 只生成 .md 不推送到 GitHub
-    python3 publish-to-blog.py --skip-verify   # 跳过多模态图文校验
     python3 publish-to-blog.py --date YYYY-MM-DD
-    python3 publish-to-blog.py [data_file] --paper-id <id>   # 单篇生成模式(不汇总不push, 末行打印 PAPER_MD_PATH=...)
-    python3 publish-to-blog.py [data_file] --list-papers     # 输出 "{id}\\t{score}\\t{task}\\t{title}" 列表
 """
-import base64, json, re, sys, os, subprocess, datetime
+import json, re, sys, os, subprocess, datetime, base64, time, concurrent.futures
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -29,577 +29,421 @@ from publish_common import (
     extract_all_tags, score_emoji, format_medal, build_paper_meta
 )
 from utils import strip_md, parse_analysis
-from image_host import (
-    is_configured as image_host_configured,
-    upload_image,
-    get_cached_url,
-    build_remote_key,
-)
-from garbage_image_filter import is_image_text_dominant
-
-
-def load_env_file():
-    """读取 ~/.hermes/.env，将未设置的环境变量注入当前进程（复用 Node 侧逻辑）。"""
-    env_file = os.path.expanduser('~/.hermes/.env')
-    if not os.path.exists(env_file):
-        return
-    with open(env_file, 'r', encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            eq = line.find('=')
-            if eq <= 0:
-                continue
-            key = line[:eq].strip()
-            val = line[eq + 1:].strip()
-            if val.startswith(("'", '"')) and val.endswith(("'", '"')) and len(val) >= 2:
-                val = val[1:-1]
-            if key and os.environ.get(key) is None:
-                os.environ[key] = val
-
-
-load_env_file()
-
-# 图床环境变量（通用 S3 命名，兼容旧 R2 命名）
-IMAGE_HOST = os.environ.get('PAPER_DIGEST_IMAGE_HOST', 'local').lower()
-S3_ENDPOINT = os.environ.get('PAPER_DIGEST_S3_ENDPOINT', '') or os.environ.get('PAPER_DIGEST_R2_ENDPOINT', '')
-S3_BUCKET = os.environ.get('PAPER_DIGEST_S3_BUCKET', '') or os.environ.get('PAPER_DIGEST_R2_BUCKET', '')
-S3_ACCESS_KEY = os.environ.get('PAPER_DIGEST_S3_ACCESS_KEY', '') or os.environ.get('PAPER_DIGEST_R2_ACCESS_KEY', '')
-S3_SECRET_KEY = os.environ.get('PAPER_DIGEST_S3_SECRET_KEY', '') or os.environ.get('PAPER_DIGEST_R2_SECRET_KEY', '')
-IMAGE_BASE_URL = os.environ.get('PAPER_DIGEST_IMAGE_BASE_URL', '').rstrip('/')
 
 BLOG_REPO = os.path.expanduser(
     os.environ.get("PAPER_DIGEST_BLOG_REPO", "~/code/github_repos/audio-paper-digest-blog")
-)
-IMAGES_REPO = os.path.expanduser(
-    os.environ.get("PAPER_DIGEST_IMAGES_REPO", "~/code/github_repos/audio-paper-digest-images")
 )
 CONTENT_DIR = os.path.join(BLOG_REPO, "content", "posts")
 BASE_PATH = os.environ.get("PAPER_DIGEST_BLOG_BASE_PATH", "/audio-paper-digest-blog")
 GITHUB_REMOTE = os.environ.get("PAPER_DIGEST_GITHUB_REMOTE", "origin")
 
-# 图床模式检测
-USE_R2 = image_host_configured()
-USE_GITHUB_PAGES = bool(IMAGE_BASE_URL and 'github.io' in IMAGE_BASE_URL)
 
-IO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'current', 'deep_analyzer_input_output')
+def fix_latex_delimiters(text):
+    r"""将 $...$ 转换为 \(...\)，$$...$$ 转换为 \[...\]，
+    配合 Hugo goldmark passthrough 确保 MathJax 正确渲染。"""
+    if not text:
+        return text
+    # 先处理块级公式 $$...$$
+    text = re.sub(r'(?<!\\)\$\$(.+?)\$\$', r'\\[\1\\]', text, flags=re.DOTALL)
+    # 再处理行内公式 $...$（排除已转换的块级公式和货币符号）
+    # 增强：处理反引号包裹的 $...$（代码块内不处理，但反引号包裹的行内代码中的 $...$ 需要处理）
+    text = re.sub(r'(?<!\\)\$([^\s\$][^$]*?)\$', r'\\(\1\\)', text)
+    # 处理遗漏的反引号包裹的 $...$（如 `v_i^{(1)} = ... + w_vid * ...` 中的 $ 符号）
+    text = re.sub(r'`([^`]*?)\$([^`]*?)\$([^`]*?)`', r'`\1\\(\2\\)\3`', text)
+    return text
 
-def get_img_source_dir(category):
-    """根据 category 获取图片源目录"""
-    base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'current')
-    if category == 'icassp-2026':
-        return os.path.join(base, 'icassp-images')
-    elif category == 'iclr-2026':
-        return os.path.join(base, 'iclr-images')
+
+def escape_html_like_tags(text):
+    r"""转义论文中可能被 Hugo 解析为 HTML 的标记（如 <S>、<E>、<task> 等），
+    避免被渲染为删除线等意外样式。"""
+    if not text:
+        return text
+    # 1. 匹配独立的 <S>、</S>、<E>、</E> 标签（单字母标记）
+    # 放宽限制：中文标点、空格、行首后的 <S>/<E> 也需要转义
+    text = re.sub(r'(?<![a-zA-Z])<(/?)([SEse])>(?![a-zA-Z0-9])', r'`<\1\2>`', text)
+    # 2. 匹配常见的论文文本标记，如 <task>、<perception>、<comprehension>、<reasoning> 等
+    # 新增：多模态论文中常见的标记
+    text = re.sub(
+        r'(?<![a-zA-Z0-9`])<(/?)(task|perception|comprehension|reasoning|agent|action|state|observation|reward|goal|intent|belief|plan|policy|environment|module|component|feature|input|output|label|class|category|type|mode|phase|stage|step|layer|block|unit|node|edge|graph|tree|path|loop|branch|condition|constraint|rule|fact|evidence|proof|hypothesis|assumption|premise|conclusion|result|finding|insight|implication|contribution|limitation|direction|extension|variant|version|update|fix|issue|error|warning|notice|info|trace|log|record|entry|item|element|object|subject|target|source|reference|cite|quote|note|comment|remark|annotation|caption|title|heading|paragraph|sentence|phrase|word|token|char|symbol|sign|mark|tag|badge|identifier|id|key|code|pin|secret|ticket|voucher|license|permit|certificate|credential|award|medal|prize|gift|bonus|benefit|advantage|edge|lead|margin|gap|difference|distance|range|scope|span|scale|size|length|width|height|depth|volume|area|surface|space|place|spot|location|site|position|point|dot|pixel|fragment|shard|piece|part|portion|section|segment|slice|chunk|block|lump|mass|body|entity|thing|article|product|goods|material|substance|matter|fabric|cloth|garment|clothing|wear|dress|costume|uniform|outfit|suit|wardrobe|closet|cabinet|cupboard|pantry|cellar|basement|attic|loft|tower|spire|dome|vault|arch|beam|column|pillar|post|pole|rod|bar|rail|track|path|way|road|route|course|direction|heading|bearing|azimuth|elevation|altitude|latitude|longitude|coordinate|interrupt|backchannel|response|free|BEsound)(?![a-zA-Z0-9`])>',
+        r'`<\1\2>`',
+        text,
+        flags=re.IGNORECASE
+    )
+    return text
+
+
+def fix_image_markdown(text):
+    r"""将 LLM 输出的非标准图片引用格式转换为标准 Markdown 图片语法。
+    处理以下变体：
+    - 外部 URL: https://... (alt=描述)
+    - 外部 URL: https://... alt=描述
+    - - 外部 URL: https://... (alt=描述)
+    """
+    if not text:
+        return text
+    # 匹配 "外部 URL: <url> (alt=<alt>)" 及其变体
+    text = re.sub(
+        r'(?:^|\n)\s*(?:-\s*)?外部\s*URL:\s*(https?://\S+?)\s*\(alt=([^)]+)\)',
+        r'\n![\2](\1)',
+        text,
+        flags=re.MULTILINE
+    )
+    # 匹配 "外部 URL: <url> alt=<alt>"（无括号）
+    text = re.sub(
+        r'(?:^|\n)\s*(?:-\s*)?外部\s*URL:\s*(https?://\S+?)\s+alt=(.+?)(?=\n|$)',
+        r'\n![\2](\1)',
+        text,
+        flags=re.MULTILINE
+    )
+    # 处理被截断的 URL（末尾带 ...）
+    text = re.sub(r'\(https?://[^)]+\.\.\.\)', '(image_url_truncated)', text)
+    # 处理空的 data URI
+    text = re.sub(r'!\[([^\]]*)\]\(data:;base64,\)', r'![\1](image_not_available)', text)
+    return text
+
+
+def truncate_base64_datauri(text, max_chars=50000):
+    r"""截断过长的 base64 data URI，避免影响页面加载性能。"""
+    if not text:
+        return text
+    def replacer(m):
+        data = m.group(1)
+        if len(data) > max_chars:
+            return f'{m.group(0)[:100]}...[truncated {len(data)} chars]...'
+        return m.group(0)
+    text = re.sub(r'data:image/[^;]+;base64,([A-Za-z0-9+/=]+)', replacer, text)
+    return text
+
+
+def fix_yaml_double_commas(text):
+    r"""修复 YAML frontmatter 中的双逗号问题。"""
+    if not text:
+        return text
+    # 只处理 frontmatter 区域
+    parts = text.split('---\n', 2)
+    if len(parts) >= 3:
+        frontmatter = parts[1]
+        # 修复双逗号
+        frontmatter = re.sub(r',\s*,+', ',', frontmatter)
+        # 修复 tags 行尾的逗号
+        frontmatter = re.sub(r'tags:\s*\[([^\]]*?),\s*\]', r'tags: [\1]', frontmatter)
+        text = parts[0] + '---\n' + frontmatter + '---\n' + parts[2]
+    return text
+
+
+def call_llm_api(prompt, max_tokens=800, temperature=0.1):
+    """调用 LLM API，自动检测协议（OpenAI / Anthropic）。"""
+    api_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
+    endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', 'https://api.openai.com/v1')
+    model = os.environ.get('PAPER_ANALYZER_MODEL', 'gpt-4o')
+
+    if not api_key:
+        print("  ⚠️  未配置 PAPER_ANALYZER_API_KEY，跳过 LLM review")
+        return None
+
+    # 自动检测协议
+    ep_lower = endpoint.lower()
+    model_lower = model.lower()
+    is_token_plan = 'token-plan' in ep_lower or 'coding' in ep_lower
+    is_mimo = 'xiaomimimo.com' in ep_lower or 'mimo' in model_lower
+    is_kimi = 'kimi.com' in ep_lower or 'kimi' in model_lower
+
+    if 'deepseek.com' in ep_lower or 'deepseek' in model_lower:
+        api_type = 'openai'
+    elif (is_mimo or is_kimi) and is_token_plan:
+        api_type = 'anthropic'
+    elif '/anthropic' in ep_lower:
+        api_type = 'anthropic'
     else:
-        return os.path.join(base, f'{category}-images')
+        api_type = 'openai'
+
+    base = endpoint.rstrip('/')
+
+    if api_type == 'anthropic':
+        if 'xiaomimimo.com' in base:
+            # MiMo: /v1 → /anthropic/v1/messages
+            base = base.replace('/v1', '/anthropic')
+            api_url = f"{base}/v1/messages"
+        elif 'kimi.com' in base:
+            api_url = f"{base}/messages"
+        else:
+            api_url = f"{base}/messages"
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "User-Agent": "claude-cli/2.1.108 (external, cli)",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}]
+        }
+    else:
+        # OpenAI 协议
+        base = base.replace('/anthropic', '/v1')
+        api_url = f"{base}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": [{"role": "user", "content": prompt}]
+        }
+
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            import requests
+            session = requests.Session()
+            session.trust_env = False
+            resp = session.post(api_url, json=payload, headers=headers, timeout=120)
+            resp.raise_for_status()
+            data = resp.json()
+            if api_type == 'anthropic':
+                content = ""
+                if isinstance(data.get("content"), list):
+                    for block in data["content"]:
+                        if block.get("type") == "text":
+                            content = block.get("text", "").strip()
+                            break
+                if content:
+                    return content
+            else:
+                return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                time.sleep(wait_time)
+        except Exception as e:
+            print(f"  ⚠️  LLM API 调用失败 (尝试 {attempt+1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # 指数退避: 1s, 2s, 4s, 8s
+                time.sleep(wait_time)
+
+    return None
+
+
+def llm_review_post(content, title=""):
+    """使用 LLM 审查单篇博客内容，返回 (是否通过, 问题列表, 修复后内容)。"""
+    # 截取前 4000 字节省 token，通常问题出现在前面
+    truncated = content[:4000] if len(content) > 4000 else content
+    prompt = f"""你是一个 Hugo 静态站点博客内容质量审查专家。
+
+请严格审查下面这篇博客的 Markdown 内容，重点检查以下问题：
+
+1. **HTML 标签解析问题**：是否有类似 `<S>`、`<E>`、`<s>`、`<e>` 等文本标记**未被反引号包裹**而被 Hugo 错误解析为 HTML 标签（会导致删除线、粗体等意外样式）。注意：已经被反引号包裹的如 `` `<S>` `` 是正确格式，不要报告。**如果博客中所有 `<S>`/`<E>` 都已用反引号包裹，则此项检查应视为通过，不要报告**。
+2. **LaTeX 公式渲染问题**：检查是否存在使用了 `$...$` 或 `$$...$$` 格式的公式。注意：纯文本形式的数学描述（如 "RMS = sqrt(1/N)"）不是 LaTeX 公式，不需要报告；只有明确使用了 `$` 或 `$$` 包裹但未转换为 `\\(...\\)` / `\\[...\\]` 的才需要报告。
+3. **Markdown 格式问题**：链接、图片引用、表格、列表等格式是否有语法错误
+4. **内容完整性**：是否有乱码、重复、段落错位。注意：以下内容被截断到前4000字符以节省token，**不要因为截断而报告内容不完整**。
+5. **图片问题**：图片链接是否为空、格式是否正确（支持 base64 data URI 和普通 URL）
+6. **YAML frontmatter 问题**：标题、描述等字段是否有引号不匹配、特殊字符未转义
+
+【重要区分】以下情况**不要**作为错误报告：
+- 已经用反引号包裹的 HTML-like 标记（如 `` `<S>` ``）→ 这是正确格式
+- 纯文本中的数学符号或公式描述（未使用 `$` 包裹）→ 这不是 LaTeX 格式问题
+- 仅属于风格建议的问题（如 alt 文本可以更详细、列表格式可以更统一）→ 这些应评为 info 级别或干脆不报告
+- 技术术语未用反引号包裹 → 这不是格式错误，除非它会被 Hugo 解析为 HTML
+
+博客标题：{title}
+
+博客内容（前4000字符）：
+```markdown
+{truncated}
+```
+
+请以 **纯 JSON** 格式返回审查结果，不要添加任何解释文字：
+{{
+  "passed": true/false,
+  "issues": [
+    {{
+      "severity": "error/warning/info",
+      "type": "html_tag/latex/markdown/content/image/yaml",
+      "description": "具体问题描述",
+      "auto_fixable": true/false,
+      "fix_instruction": "修复指令（如: 将 $<S>$ 改为 `\\`<S>\\``）"
+    }}
+  ]
+}}"""
+
+    result = call_llm_api(prompt, max_tokens=1500, temperature=0.1)
+    if not result:
+        return True, [], content  # LLM 不可用则默认通过
+
+    # 尝试解析 JSON
+    try:
+        # 清理可能的 markdown 代码块
+        cleaned = result
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+        review = json.loads(cleaned)
+        passed = review.get("passed", True)
+        issues = review.get("issues", [])
+        # 自动应用可修复的问题
+        fixed_content = apply_llm_fixes(content, issues)
+        return passed, issues, fixed_content
+    except json.JSONDecodeError:
+        # 如果 JSON 解析失败，尝试从文本中提取问题
+        print(f"  ⚠️  LLM review 返回非 JSON 格式，尝试文本解析")
+        issues = []
+        if "问题" in result or "错误" in result or "建议" in result:
+            issues.append({
+                "severity": "warning",
+                "type": "unknown",
+                "description": "LLM 发现潜在问题（非结构化输出）",
+                "auto_fixable": False,
+                "fix_instruction": "请手动检查"
+            })
+            return False, issues, content
+        return True, [], content
+
+
+def multimodal_review_images(content, title=""):
+    """使用多模态 LLM 审查博客中的图片。返回 (是否通过, 图片问题列表)。
+    当前实现：提取图片信息，用文本方式让 LLM 判断图片引用是否合理。
+    如果图片是 base64 data URI，可提取后传给支持多模态的模型。"""
+    # 提取所有图片引用
+    img_pattern = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+    images = img_pattern.findall(content)
+
+    if not images:
+        return True, []
+
+    img_summary = []
+    data_uri_images = []
+    for alt, url in images:
+        if url.startswith("data:image/svg+xml;base64,"):
+            img_summary.append(f"- SVG base64 data URI (alt={alt}), 长度 {len(url)} 字符")
+            data_uri_images.append((alt, url))
+        elif url.startswith("data:"):
+            img_summary.append(f"- 其他 base64 data URI (alt={alt}), 长度 {len(url)} 字符")
+            data_uri_images.append((alt, url))
+        elif url.startswith("http"):
+            # 不截断 URL，避免 review LLM 误判为 URL 不完整
+            img_summary.append(f"- 外部图片: {url} | alt: `{alt}`")
+        else:
+            img_summary.append(f"- 相对路径: {url} (alt={alt})")
+
+    prompt = f"""你是一个博客图片质量审查专家。
+
+请审查下面这篇博客中的图片引用是否合理。
+
+【重要】以下列表是从博客正文中提取的元数据摘要，用于辅助审查：
+- 博客正文中的实际图片格式为标准 Markdown：`![alt](url)`
+- 摘要中的格式（如"外部图片: url | alt: ..."）只是元数据展示，**不要**因为摘要格式而误判
+- 摘要中的 URL 可能为了简洁而截断，但博客正文中的 URL 是完整的
+- 如果博客正文中所有图片都使用 `![alt](url)` 格式，则格式检查项应视为通过
+
+博客标题：{title}
+图片元数据摘要：
+{chr(10).join(img_summary)}
+
+请检查：
+1. 博客正文中图片引用格式是否为标准 Markdown `![alt](url)`（基于上述元数据推断）
+2. base64 data URI 是否过长（超过 50KB 可能影响页面加载）
+3. 外部 URL 是否是常见图片域名（arxiv.org、githubusercontent.com 等）
+4. 图片 alt 文本是否为空或重复
+5. SVG data URI 是否能被 Hugo 正确渲染
+
+【禁止事项】不要报告以下伪问题：
+- 摘要格式（如"外部图片: url | alt: ..."）不是 Markdown 格式 → 这是正常的元数据摘要
+- 摘要中 URL 被截断 → 博客正文中的 URL 是完整的
+- 图片 alt 文本仅为"图1""图2"等编号 → 这在学术博客中是可以接受的
+
+请以 JSON 格式返回：
+{{
+  "passed": true/false,
+  "issues": [
+    {{
+      "severity": "error/warning/info",
+      "description": "问题描述"
+    }}
+  ]
+}}"""
+
+    result = call_llm_api(prompt, max_tokens=800, temperature=0.1)
+    if not result:
+        return True, []
+
+    try:
+        cleaned = result
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+        review = json.loads(cleaned)
+        passed = review.get("passed", True)
+        issues = review.get("issues", [])
+        return passed, issues
+    except json.JSONDecodeError:
+        return True, []
+
+
+def apply_llm_fixes(content, issues):
+    """根据 LLM 审查结果，自动应用可修复的问题。"""
+    if not issues:
+        return content
+
+    fixed = content
+    fix_count = 0
+    for issue in issues:
+        if not issue.get("auto_fixable", False):
+            continue
+        instruction = issue.get("fix_instruction", "")
+        if not instruction:
+            continue
+
+        # 解析简单替换指令："将 A 改为 B" 或 "replace A with B"
+        replace_patterns = [
+            r'将\s*[\"\']?(.+?)[\"\']?\s*改为\s*[\"\']?(.+?)[\"\']?\s*$',
+            r'replace\s*[\"\']?(.+?)[\"\']?\s*with\s*[\"\']?(.+?)[\"\']?\s*$',
+            r'把\s*[\"\']?(.+?)[\"\']?\s*替换成\s*[\"\']?(.+?)[\"\']?\s*$',
+        ]
+        for pattern in replace_patterns:
+            match = re.match(pattern, instruction, re.IGNORECASE)
+            if match:
+                old, new = match.group(1), match.group(2)
+                if old in fixed:
+                    fixed = fixed.replace(old, new)
+                    fix_count += 1
+                    break
+
+    return fixed
 
 
 def slugify(text, max_length=50):
     """将标题转换为 URL 友好的 slug（保留中文、英文、数字）"""
     text = text.lower()
+    # 保留中文(\u4e00-\u9fff)、日文假名、韩文、英文、数字、空格和连字符
     text = re.sub(r"[^\u4e00-\u9fff\u3005\u3007\u3021-\u3029\u3038-\u303b\uff10-\uff19\uff21-\uff3a\uff41-\uff5aa-z0-9\s-]", '', text)
+    # 将空白和连续连字符替换为单个连字符
     text = re.sub(r'[\s-]+', '-', text)
     text = text.strip('-')
     if len(text) > max_length:
         text = text[:max_length].rsplit('-', 1)[0]
+    # 如果过滤后为空（极少数情况），返回 "paper" 作为兜底
     return text if text else 'paper'
-
-
-def get_paper_id(paper):
-    """获取论文唯一标识，兼容 arXiv、ICASSP、ICLR"""
-    return paper.get('arxivId') or paper.get('arnumber') or paper.get('forum_id') or paper.get('paper_id', '')
-
-
-def _copy_conference_images(paper_id, date_str, category='icassp-2026'):
-    """从 data/current/{category}-images/{paper_id}/ 复制图片到博客 static 目录、R2 图床或 GitHub Pages 图床"""
-    source_dir = os.path.join(get_img_source_dir(category), str(paper_id))
-    if not os.path.exists(source_dir):
-        return {}
-
-    if not USE_R2 and not USE_GITHUB_PAGES:
-        # 本地模式：复制到博客 static 目录
-        img_dir = os.path.join(BLOG_REPO, 'static', 'images', category, date_str)
-        os.makedirs(img_dir, exist_ok=True)
-
-    image_map = {}
-    for filename in sorted(os.listdir(source_dir)):
-        m = re.match(r'^(\d+)\.(png|jpg|jpeg|gif)$', filename, re.I)
-        if not m:
-            continue
-        idx = int(m.group(1))
-        ext = m.group(2).lower()
-        if ext == 'jpeg':
-            ext = 'jpg'
-        source_path = os.path.join(source_dir, filename)
-        # 启发式过滤：纯文字段落截图
-        is_text, _info = is_image_text_dominant(source_path)
-        if is_text:
-            print(f"  🚫 跳过文字截图 {filename} ({_info.get('metrics', {})})")
-            continue
-        dest_filename = f'{paper_id}-{idx}.{ext}'
-
-        try:
-            if USE_R2:
-                # R2/S3 图床模式
-                cached = get_cached_url(source_path)
-                if cached:
-                    web_path = cached
-                else:
-                    remote_key = build_remote_key(date_str, dest_filename, prefix=category)
-                    web_path = upload_image(source_path, remote_key)
-            elif USE_GITHUB_PAGES:
-                # GitHub Pages 图床模式：复制到图床仓库
-                gp_dir = os.path.join(IMAGES_REPO, category, date_str)
-                gp_path = os.path.join(gp_dir, dest_filename)
-                os.makedirs(gp_dir, exist_ok=True)
-                import shutil
-                # 总是复制最新版本（重新分析后图片可能已更新）
-                shutil.copy2(source_path, gp_path)
-                web_path = f'{IMAGE_BASE_URL}/{category}/{date_str}/{dest_filename}'
-            else:
-                # 本地模式：复制到博客 static 目录
-                dest_path = os.path.join(BLOG_REPO, 'static', 'images', category, date_str, dest_filename)
-                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-                with open(source_path, 'rb') as src, open(dest_path, 'wb') as dst:
-                    dst.write(src.read())
-                web_path = f'{BASE_PATH}/images/{category}/{date_str}/{dest_filename}'
-
-            image_map[rf'icassp-img://{paper_id}/{idx}\.{ext}'] = web_path
-            image_map[rf'pdf-image-page\d+-idx{idx}'] = web_path
-        except Exception as e:
-            print(f"  ⚠️ 图片处理失败 {filename}: {e}")
-            continue
-    return image_map
-
-
-def _extract_from_input(paper_id, date_str, category='icassp-2026'):
-    """从 analyzer input 文件中提取 base64 图片（旧数据 fallback）"""
-    input_file = os.path.join(IO_DIR, f'{paper_id}_input.json')
-    if not os.path.exists(input_file):
-        return {}
-
-    try:
-        with open(input_file, 'r') as f:
-            data = json.load(f)
-    except Exception:
-        return {}
-
-    images = []
-    msgs = data.get('messages', [])
-    for m in msgs:
-        if m.get('role') == 'user':
-            content = m.get('content', [])
-            for c in content:
-                if c.get('type') == 'image_url':
-                    url = c.get('image_url', {}).get('url', '')
-                    if url.startswith('data:'):
-                        parts = url.split(',', 1)
-                        if len(parts) == 2:
-                            header = parts[0]
-                            mime = header.split(';')[0].replace('data:', '')
-                            images.append((len(images), parts[1], mime))
-
-    if not images:
-        return {}
-
-    if not USE_R2 and not USE_GITHUB_PAGES:
-        img_dir = os.path.join(BLOG_REPO, 'static', 'images', category, date_str)
-        os.makedirs(img_dir, exist_ok=True)
-
-    image_map = {}
-    for idx, b64_data, mime in images:
-        ext = 'jpg' if 'jpeg' in mime else ('png' if 'png' in mime else 'jpg')
-        filename = f'{paper_id}-{idx}.{ext}'
-        try:
-            img_bytes = base64.b64decode(b64_data)
-
-            # 启发式过滤：写到临时文件做文字截图检测
-            import tempfile as _tf
-            with _tf.NamedTemporaryFile(suffix=f'.{ext}', delete=False) as _tmp_check:
-                _tmp_check.write(img_bytes)
-                _tmp_check_path = _tmp_check.name
-            try:
-                _is_text, _info = is_image_text_dominant(_tmp_check_path)
-            finally:
-                os.unlink(_tmp_check_path)
-            if _is_text:
-                print(f"  🚫 跳过文字截图 {filename} ({_info.get('metrics', {})})")
-                continue
-
-            if USE_R2:
-                # R2/S3 图床模式：先写入临时文件再上传
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix=f'.{ext}', delete=False) as tmp:
-                    tmp.write(img_bytes)
-                    tmp_path = tmp.name
-                try:
-                    remote_key = build_remote_key(date_str, filename, prefix=category)
-                    web_path = upload_image(tmp_path, remote_key)
-                finally:
-                    os.unlink(tmp_path)
-            elif USE_GITHUB_PAGES:
-                # GitHub Pages 图床模式：写入图床仓库
-                gp_dir = os.path.join(IMAGES_REPO, category, date_str)
-                gp_path = os.path.join(gp_dir, filename)
-                if not os.path.exists(gp_path):
-                    os.makedirs(gp_dir, exist_ok=True)
-                    with open(gp_path, 'wb') as f:
-                        f.write(img_bytes)
-                web_path = f'{IMAGE_BASE_URL}/{category}/{date_str}/{filename}'
-            else:
-                # 本地模式
-                filepath = os.path.join(BLOG_REPO, 'static', 'images', category, date_str, filename)
-                os.makedirs(os.path.dirname(filepath), exist_ok=True)
-                with open(filepath, 'wb') as f:
-                    f.write(img_bytes)
-                web_path = f'{BASE_PATH}/images/{category}/{date_str}/{filename}'
-
-            image_map[rf'pdf-image-page\d+-idx{idx}'] = web_path
-        except Exception as e:
-            print(f"  ⚠️ base64 图片处理失败 {filename}: {e}")
-            continue
-    return image_map
-
-
-def extract_and_replace_images(md, paper_id, date_str, category='icassp-2026'):
-    """保存会议论文图片到博客 static 目录，替换 markdown 中的内部标识符"""
-    image_map = _copy_conference_images(paper_id, date_str, category)
-    if not image_map:
-        image_map = _extract_from_input(paper_id, date_str, category)
-
-    if not image_map:
-        return md
-
-    # 收集所有可用的实际图片路径（按索引排序）
-    available_images = []
-    for pattern, web_path in image_map.items():
-        if 'icassp-img://' in pattern:
-            m = re.search(r'(\d+)\\\.', pattern)
-            if m:
-                available_images.append((int(m.group(1)), web_path))
-    available_images.sort(key=lambda x: x[0])
-    available_paths = [wp for _, wp in available_images]
-    fallback_idx = [0]  # 使用可变对象在闭包中共享状态
-
-    def _replacer(match):
-        url = match.group(2)
-        for pattern, web_path in image_map.items():
-            if re.fullmatch(pattern, url):
-                return match.group(1) + web_path + match.group(3)
-        # 外部URL（LLM引用的论文网页图片）保留原样，禁止用本地图片乱序替换
-        if url.startswith('http://') or url.startswith('https://'):
-            return match.group(0)
-        # 如果URL不匹配任何已知模式，但有实际图片可用，按顺序替换
-        if fallback_idx[0] < len(available_paths):
-            web_path = available_paths[fallback_idx[0]]
-            fallback_idx[0] += 1
-            return match.group(1) + web_path + match.group(3)
-        # 没有可用图片时降级为纯文本描述
-        desc = match.group(1)[2:-1]
-        return desc
-
-    # 阶段1：将非标准格式的图片引用转换为标准 markdown 格式
-    # 预处理：去除 LLM 偶尔添加的 https:// 前缀
-    md = re.sub(
-        r'https://(icassp-img://' + re.escape(str(paper_id)) + r'/[^\s\)）\]]+)',
-        r'\1',
-        md
-    )
-    # 预处理：移除 LLM 编造的占位符/虚假图片URL（保留图片描述作为纯文本）
-    md = re.sub(
-        r'!\[(.*?)\]\(https?://[^\)]*(?:placeholder|example\.com|xxx)[^\)]*\)',
-        lambda m: m.group(1) if m.group(1) else '',
-        md,
-        flags=re.I
-    )
-    # 预处理：移除可疑的外部图片URL（如百度图片等明显非论文来源的URL）
-    md = re.sub(
-        r'!\[(.*?)\]\(https?://pic\.rmb\.bdstatic\.com[^\)]*\)',
-        lambda m: m.group(1) if m.group(1) else '',
-        md
-    )
-    # 格式A: **图X (icassp-img://...)** → ![图X](icassp-img://...)
-    md = re.sub(
-        r'\*\*(图\s*\d+[a-z]*(?:\s*[:\-]\s*[^*]*)?)\s*\(\s*(icassp-img://' + re.escape(str(paper_id)) + r'/[^)]+)\s*\)\*\*',
-        lambda m: f'![{m.group(1).strip()}]({m.group(2)})',
-        md
-    )
-    # 格式A-2: **图X...: icassp-img://...** → ![图X...](icassp-img://...)
-    # 允许图号和冒号之间有任意描述文字
-    md = re.sub(
-        r'\*\*(图\s*\d+[a-z]*[^*]*?)\s*:\s*(icassp-img://' + re.escape(str(paper_id)) + r'/[^\s*]+)\*\*',
-        lambda m: f'![{m.group(1).strip()}]({m.group(2)})',
-        md
-    )
-    # 格式B: （`icassp-img://...`） → ![图片](icassp-img://...)
-    md = re.sub(
-        r'[（(]`(icassp-img://' + re.escape(str(paper_id)) + r'/[^`]+)`[）)]',
-        lambda m: f'![论文配图]({m.group(1)})',
-        md
-    )
-    # 格式B-2: （...`icassp-img://...`...）括号内有其他文字 → 提取URL作为图片
-    md = re.sub(
-        r'[（(][^）)]*`(icassp-img://' + re.escape(str(paper_id)) + r'/[^`]+)`[^）)]*[）)]',
-        lambda m: f'![论文配图]({m.group(1)})',
-        md
-    )
-    # 格式D: `icassp-img://...` (不在括号内) → ![图片](icassp-img://...)
-    md = re.sub(
-        r'(?<![（(])`(icassp-img://' + re.escape(str(paper_id)) + r'/[^`]+)`(?![）)])',
-        lambda m: f'![论文配图]({m.group(1)})',
-        md
-    )
-
-    # 阶段2：标准 markdown 图片替换
-    md = re.sub(r'(\!\[.*?\]\()(.*?)(\))', _replacer, md)
-
-    # 阶段3：后处理修复常见图片格式问题
-    # 修复1: 描述是 raw URL 的情况 → 替换为 "论文配图"
-    md = re.sub(
-        r'(!\[)icassp-img://[^\]]+(\]\()',
-        r'\1论文配图\2',
-        md
-    )
-    # 修复2: 将行内图片从 bullet 中提取到独立行
-    # 例如：'- **某标题**：![描述](url) 后续文本' → 分成多行
-    def _extract_inline_images(line):
-        m = re.match(r'^([\s]*- [^!]*)(!\[.*?\]\(.*?\))(.*)$', line)
-        if m:
-            prefix = m.group(1).rstrip()
-            img = m.group(2)
-            suffix = m.group(3).strip()
-            result = [prefix, '', img]
-            if suffix:
-                result.extend(['', suffix])
-            return '\n'.join(result)
-        return line
-
-    md = '\n'.join(_extract_inline_images(line) for line in md.split('\n'))
-
-    # 修复3: 确保每张图片前后有空行（但不在表格中）
-    result_lines = []
-    lines = md.split('\n')
-    for i, line in enumerate(lines):
-        if line.strip().startswith('![') and not line.strip().startswith('|'):
-            if result_lines and result_lines[-1].strip() and not result_lines[-1].strip().startswith('#'):
-                result_lines.append('')
-            result_lines.append(line)
-            if i + 1 < len(lines) and lines[i + 1].strip() and not lines[i + 1].strip().startswith('!['):
-                result_lines.append('')
-        else:
-            result_lines.append(line)
-    md = '\n'.join(result_lines)
-
-    return md
-
-    # 阶段2：标准 markdown 图片替换
-    md = re.sub(r'(\!\[.*?\]\()(.*?)(\))', _replacer, md)
-    return md
-
-
-def sanitize_external_images(md):
-    """将不可用的外部图片引用降级为纯文本描述"""
-    blocked_domains = [
-        'ieeexplore.ieee.org',   # 403 防盗链
-        'images.unsplash.com',    # LLM 编造的假链接
-    ]
-
-    def _replacer(match):
-        desc = match.group(1)
-        url = match.group(2)
-        for domain in blocked_domains:
-            if domain in url:
-                return desc
-        return match.group(0)
-
-    return re.sub(r'!\[(.*?)\]\((.*?)\)', _replacer, md)
-
-
-def self_check_and_fix(md, paper_id):
-    """
-    自检查：检查博客 markdown 中的图片问题并尝试自动修复。
-    返回 (fixed_md, issues_list)。
-    issues_list 为空表示没有发现问题。
-    """
-    issues = []
-    lines = md.split('\n')
-
-    # 收集所有实际图片行
-    img_lines = []
-    for i, line in enumerate(lines):
-        if re.match(r'\s*!\[.*?\]\(.*?\)\s*$', line):
-            img_lines.append((i, line))
-
-    # 1. 检查未转换的 icassp-img://（不在标准 markdown 图片语法中）
-    unconverted = []
-    for i, line in enumerate(lines):
-        if 'icassp-img://' in line:
-            # 排除已经是标准语法的行
-            if not re.match(r'\s*!\[.*?\]\(icassp-img://.*?\)\s*$', line):
-                # 尝试自动修复：把反引号或裸 URL 转为标准语法
-                original = line
-                line = re.sub(
-                    r'`(icassp-img://' + re.escape(str(paper_id)) + r'/[^`]+)`',
-                    lambda m: f'![论文配图]({m.group(1)})',
-                    line
-                )
-                line = re.sub(
-                    r'(?<!!\[)\(icassp-img://' + re.escape(str(paper_id)) + r'/[^\s\)]+\)',
-                    lambda m: f'![论文配图]{m.group(0)}',
-                    line
-                )
-                if line != original:
-                    lines[i] = line
-                else:
-                    unconverted.append((i + 1, line[:80]))
-    if unconverted:
-        issues.append(f'未转换URL: {len(unconverted)}处')
-
-    # 2. 检查 placeholder / 虚假 URL
-    placeholder_patterns = [
-        r'placeholder\.png',
-        r'example\.com',
-        r'pic\.rmb\.bdstatic',
-        r'https://user-images\.githubusercontent',
-    ]
-    placeholder_count = 0
-    for i, line in enumerate(lines):
-        for pat in placeholder_patterns:
-            if re.search(pat, line, re.I):
-                placeholder_count += 1
-                # 自动删除：移除整行图片引用，保留描述作为纯文本
-                lines[i] = re.sub(
-                    r'!\[(.*?)\]\([^)]*' + pat + r'[^)]*\)',
-                    lambda m: m.group(1) if m.group(1) and m.group(1) not in ['论文配图', ''] else '',
-                    line,
-                    flags=re.I
-                )
-    if placeholder_count:
-        issues.append(f'占位符URL: {placeholder_count}处（已自动删除）')
-
-    # 3. 检查外部 URL（http/https）作为图片引用
-    external_urls = []
-    for i, line in enumerate(lines):
-        m = re.search(r'!\[.*?\]\((https?://[^)]+)\)', line)
-        if m:
-            url = m.group(1)
-            # 排除已知的合法外部图片（如我们自己的图床）
-            if not url.startswith(BASE_PATH) and 'githubusercontent.com' not in url:
-                external_urls.append((i + 1, url[:60]))
-    if external_urls:
-        issues.append(f'外部图片URL: {len(external_urls)}处')
-
-    # 4. 检查图片是否夹在表格中间
-    for i, line in img_lines:
-        prev_text = None
-        next_text = None
-        for j in range(i - 1, -1, -1):
-            if lines[j].strip():
-                prev_text = lines[j].strip()
-                break
-        for j in range(i + 1, len(lines)):
-            if lines[j].strip():
-                next_text = lines[j].strip()
-                break
-        if prev_text and prev_text.startswith('|') and next_text and next_text.startswith('|'):
-            # 自动修复：在图片前后各插入空行，将其移出表格
-            lines[i] = '\n' + line + '\n'
-            issues.append(f'图片在表格中(行{i+1})')
-
-    # 5. 检查图片前后是否有空行
-    for i, line in img_lines:
-        if i > 0 and lines[i - 1].strip() and not lines[i - 1].strip().startswith('#') and not lines[i - 1].strip().startswith('- ') and not lines[i - 1].strip().startswith('* '):
-            # 自动修复：在图片前插入空行
-            lines[i] = '\n' + line
-            issues.append(f'图片前无空行(行{i+1})')
-        if i + 1 < len(lines) and lines[i + 1].strip() and not lines[i + 1].strip().startswith('![') and not lines[i + 1].strip().startswith('- ') and not lines[i + 1].strip().startswith('* ') and not lines[i + 1].strip().startswith('|'):
-            # 自动修复：在图片后插入空行
-            lines[i] = line + '\n'
-            issues.append(f'图片后无空行(行{i+1})')
-
-    # 6. 检查图片描述是否过于泛泛或只有编号
-    generic_count = 0
-    fig_num_only_count = 0
-    for i, line in img_lines:
-        m = re.match(r'!\[(.*?)\]\(', line)
-        if m:
-            desc = m.group(1).strip()
-            if desc in ['论文中的图片', '论文配图', '图片', '']:
-                generic_count += 1
-            # 禁止只用"图X"作为描述
-            if re.match(r'^[（(]?图\s*\d+[a-z]*[）)]?$', desc):
-                fig_num_only_count += 1
-                # 自动修复：替换为更通用的描述
-                lines[i] = re.sub(
-                    r'(!\[)[^\]]+(\]\()',
-                    r'\1论文配图\2',
-                    line
-                )
-    if generic_count:
-        issues.append(f'泛泛描述: {generic_count}处')
-    if fig_num_only_count:
-        issues.append(f'纯编号描述: {fig_num_only_count}处（已替换）')
-
-    # 7. 删除核心摘要section中的图片
-    in_summary = False
-    summary_images_removed = 0
-    new_lines = []
-    for line in lines:
-        if re.match(r'^#{2,4}\s+.*核心摘要', line):
-            in_summary = True
-        elif re.match(r'^#{2,4}\s+', line):
-            in_summary = False
-        if in_summary and line.strip().startswith('!['):
-            summary_images_removed += 1
-            continue  # 跳过图片行
-        new_lines.append(line)
-    lines = new_lines
-    if summary_images_removed:
-        issues.append(f'核心摘要图片: 删除{summary_images_removed}处')
-
-    # 8. 删除重复出现的图片（只保留第一次出现）
-    seen_urls = set()
-    duplicate_removed = 0
-    new_lines2 = []
-    for line in lines:
-        m = re.match(r'\s*(!\[.*?\])\((.*?)\)\s*$', line)
-        if m:
-            url = m.group(2)
-            if url in seen_urls:
-                duplicate_removed += 1
-                continue
-            seen_urls.add(url)
-        new_lines2.append(line)
-    lines = new_lines2
-    if duplicate_removed:
-        issues.append(f'重复图片: 删除{duplicate_removed}处')
-
-    # 9. 检查文本中提到的图号是否超出实际图片数量
-    fig_mentions = set()
-    for line in lines:
-        for m in re.finditer(r'[（(]?(?:如图|图)\s*(\d+)[）)]?', line):
-            fig_mentions.add(int(m.group(1)))
-        for m in re.finditer(r'Figure\s*(\d+)', line, re.I):
-            fig_mentions.add(int(m.group(1)))
-
-    actual_img_count = len(img_lines)
-    if fig_mentions:
-        max_fig = max(fig_mentions)
-        if max_fig > actual_img_count:
-            issues.append(f'missing-figures: 提到图{max_fig}但只有{actual_img_count}张图片')
-
-    fixed_md = '\n'.join(lines)
-    # 清理连续空行
-    fixed_md = re.sub(r'\n{3,}', '\n\n', fixed_md)
-    return fixed_md, issues
 
 
 def yaml_escape(s):
     """安全转义 YAML 双引号字符串中的特殊字符，同时避免 f-string 解析问题"""
     if not s:
         return ''
+    # 先移除 LaTeX 公式，避免 YAML/Hugo 解析错误
+    s = re.sub(r'\\\([^)]+\\\)', '', s)  # \(...\) -> ''
+    s = re.sub(r'\\\[[^\]]+\\\]', '', s)  # \[...\] -> ''
+    s = re.sub(r'\$[^\s\$][^$]*?\$', '', s)  # $...$ -> ''
+    s = re.sub(r'\$\$[^$]*?\$\$', '', s)  # $$...$$ -> ''
     return (s.replace('\\', '\\\\')
              .replace('"', '\\"')
              .replace('\n', ' ')
@@ -607,67 +451,31 @@ def yaml_escape(s):
              .replace('}', '}}'))
 
 
-def generate_index_page(scored, unscored, date_str, paper_slugs, category="论文速递", task_urls=None):
+def generate_index_page(scored, unscored, date_str, paper_slugs):
     """生成每日汇总页面（index.md），包含概览和每篇论文的链接"""
     total = len(scored) + len(unscored)
     tag_set = extract_all_tags([p for _, p, _ in scored] + unscored, limit=10)
     top_tags = extract_top_tags([p for _, p, _ in scored] + unscored, limit=8)
 
-    if category == "icassp-2026":
-        page_title = f"ICASSP 2026 语音/音频论文详细分析"
-        page_desc = f"共分析 {total} 篇 ICASSP 2026 论文"
-        overview = f"📥 {total} 篇 → 🔬 深度分析完成"
-    elif category == "iclr-2026":
-        page_title = f"ICLR 2026 语音/音频论文详细分析"
-        page_desc = f"共分析 {total} 篇 ICLR 2026 论文"
-        overview = f"📥 {total} 篇 → 🔬 深度分析完成"
-    else:
-        page_title = f"语音/音频论文速递 {date_str}"
-        page_desc = f"共分析 {total} 篇语音/AI 论文"
-        overview = f"📥 抓取 {total} 篇 → 🔬 深度分析完成"
-
-    # 按主任务标签分类统计
-    task_tag_counts = {}
-    for p in [p for _, p, _ in scored] + unscored:
-        pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
-        task = pa.get('primaryTaskTag', '')
-        if task:
-            task = task.strip().lstrip('#')
-            task_tag_counts[task] = task_tag_counts.get(task, 0) + 1
-    sorted_tasks = sorted(task_tag_counts.items(), key=lambda x: -x[1])
-
     md = f"""---
-title: "{page_title}"
+title: "语音/音乐/音频论文速递 {date_str}"
 date: {date_str}
 draft: false
 tags: [{', '.join(tag_set)}]
-categories: [{category}]
-description: "{page_desc}"
+categories: [论文速递]
+description: "共分析 {total} 篇语音/AI 论文"
 layout: "posts"
 ---
 
-# {page_title}
+# 语音/音乐/音频论文速递 {date_str}
 
-{page_desc}
+共分析 **{total}** 篇论文
 
----
-
-## 🎯 任务分类
-
-点击任务标签查看该方向所有论文：
-
-"""
-    default_summary = f"{BASE_PATH}/posts/iclr2026-summary/" if category == "iclr-2026" else f"{BASE_PATH}/posts/icassp2026-summary/"
-    for task, cnt in sorted_tasks:
-        task_url = task_urls.get(task, default_summary) if task_urls else default_summary
-        md += f"- [{task}]({task_url})（{cnt}篇）\n"
-
-    md += f"""
 ---
 
 ## ⚡ 今日概览
 
-{overview}
+📥 抓取 {total} 篇 → 🔬 深度分析完成
 
 ### 🏷️ 热门方向
 
@@ -681,11 +489,11 @@ layout: "posts"
 ### 📊 论文评分排行榜（{len(scored)} 篇，按分数降序）
 
 """
-    md += "| 排名 | 论文 | 评分 | 分档 | 主任务 |\n|------|------|------|------|------|\n"
+    md += "| 排名 | 论文 | 总分 | 分档 | 主任务 |\n|------|------|------|------|--------|\n"
     for i, (score, p, pa) in enumerate(scored):
         m = format_medal(i)
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(get_paper_id(p), '')
+        slug = paper_slugs.get(p.get('arxivId', ''), '')
         rank_bucket = pa.get('rankBucket', '') or '-'
         primary_task = pa.get('primaryTaskTag', '') or '-'
         if slug:
@@ -694,7 +502,7 @@ layout: "posts"
             md += f"| {m} | {title[:55]} | {score}分 | {rank_bucket} | {primary_task} |\n"
     for i, p in enumerate(unscored):
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(get_paper_id(p), '')
+        slug = paper_slugs.get(p.get('arxivId', ''), '')
         if slug:
             md += f"| {len(scored)+i+1} | [{title[:55]}]({BASE_PATH}/posts/{date_str}-{slug}) | N/A | - | - |\n"
         else:
@@ -705,7 +513,7 @@ layout: "posts"
 
     for i, (score, p, pa) in enumerate(scored):
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(get_paper_id(p), '')
+        slug = paper_slugs.get(p.get('arxivId', ''), '')
         m = format_medal(i)
 
         if slug:
@@ -713,6 +521,83 @@ layout: "posts"
         else:
             md += f"### {m} {title}\n\n"
 
+        pa = parse_analysis(p.get('analysis', '')) or {}
+        aid = p.get('arxivId', '')
+        aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
+        
+        # 显示总分和所有子项得分（单开一行）
+        score_line = []
+        if pa.get('score'):
+            score_line.append(f"**{pa['score']}/10**")
+        sub_scores = []
+        if pa.get('innovationScore'):
+            sub_scores.append(f"创新 {pa['innovationScore']}/2")
+        if pa.get('technicalRigorScore'):
+            sub_scores.append(f"严谨 {pa['technicalRigorScore']}/1.5")
+        if pa.get('experimentalSufficiencyScore'):
+            sub_scores.append(f"实验 {pa['experimentalSufficiencyScore']}/1.5")
+        if pa.get('clarityScore'):
+            sub_scores.append(f"清晰 {pa['clarityScore']}/1")
+        if pa.get('impactScore'):
+            sub_scores.append(f"影响 {pa['impactScore']}/1.5")
+        if pa.get('openSourceScore'):
+            sub_scores.append(f"开源 {pa['openSourceScore']}/1.5")
+        if pa.get('reproducibilityScore'):
+            sub_scores.append(f"复现 {pa['reproducibilityScore']}/0.5")
+        if pa.get('engineeringScore'):
+            sub_scores.append(f"工程 {pa['engineeringScore']}/1.5")
+        if sub_scores:
+            score_line.append(' | '.join(sub_scores))
+        if score_line:
+            md += f"{' | '.join(score_line)}\n\n"
+        
+        meta = build_paper_meta(pa, aurl)
+        if meta:
+            md += f"{meta}\n\n"
+
+        if pa.get('authors'):
+            authors_clean = pa['authors'].replace('- **第一作者**', '第一作者').replace('- **通讯作者**', '通讯作者').replace('- **作者列表**', '作者列表')
+            md += f"👥 **作者与机构**\n\n{authors_clean}\n\n"
+
+        if pa.get('roast'):
+            md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
+
+        if pa.get('summary'):
+            summary = pa['summary']
+            # 如果 summary 中混入了详细分析内容（因标题损坏导致解析边界失效），截断到详细分析之前
+            cutoff = re.search(r'\n##\s*详细分', summary)
+            if cutoff:
+                summary = summary[:cutoff.start()].strip()
+            md += f"📌 **核心摘要**\n\n{summary}\n\n"
+
+        supplementary = ''
+        if pa.get('opensource'):
+            oss_text = enrich_opensource(pa, p)
+            # 清理内容开头可能残留的 Markdown 标题
+            oss_text = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', oss_text.strip(), count=1)
+            # 分离补充信息
+            supp_match = re.search(r'##\s*补充信息\s*\n([\s\S]*)', oss_text)
+            if supp_match:
+                supplementary = supp_match.group(1).strip()
+                oss_text = oss_text[:supp_match.start()].strip()
+            md += f"🔗 **开源详情**\n\n{oss_text}\n\n"
+
+        # 补充信息放到最后面
+        if supplementary:
+            md += f"📎 **补充信息**\n\n{supplementary}\n\n"
+
+        md += "---\n\n"
+
+    for i, p in enumerate(unscored):
+        title = p.get('title', 'Unknown')
+        slug = paper_slugs.get(p.get('arxivId', ''), '')
+
+        if slug:
+            md += f"### {len(scored)+i+1}. [{title}]({BASE_PATH}/posts/{date_str}-{slug})\n\n"
+        else:
+            md += f"### {len(scored)+i+1}. {title}\n\n"
+
+        # unscored 论文也显示完整内容（作者、点评、摘要、开源详情）
         pa = parse_analysis(p.get('analysis', '')) or {}
         aid = p.get('arxivId', '')
         aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
@@ -727,140 +612,112 @@ layout: "posts"
         if pa.get('roast'):
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
-        if pa.get('opensource'):
-            md += f"🔗 **开源详情**\n\n{pa['opensource']}\n\n"
-
         if pa.get('summary'):
             summary = pa['summary']
-            # 如果 summary 中混入了详细分析内容（因标题损坏导致解析边界失效），截断到详细分析之前
             cutoff = re.search(r'\n##\s*详细分', summary)
             if cutoff:
                 summary = summary[:cutoff.start()].strip()
             md += f"📌 **核心摘要**\n\n{summary}\n\n"
 
-        md += "---\n\n"
+        supplementary = ''
+        if pa.get('opensource'):
+            oss_text = enrich_opensource(pa, p)
+            oss_text = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', oss_text.strip(), count=1)
+            supp_match = re.search(r'##\s*补充信息\s*\n([\s\S]*)', oss_text)
+            if supp_match:
+                supplementary = supp_match.group(1).strip()
+                oss_text = oss_text[:supp_match.start()].strip()
+            md += f"🔗 **开源详情**\n\n{oss_text}\n\n"
 
-    for i, p in enumerate(unscored):
-        title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(get_paper_id(p), '')
-        if slug:
-            md += f"### {len(scored)+i+1}. [{title}]({BASE_PATH}/posts/{date_str}-{slug})\n\n"
-        else:
-            md += f"### {len(scored)+i+1}. {title}\n\n"
+        if supplementary:
+            md += f"📎 **补充信息**\n\n{supplementary}\n\n"
+
+        md += "---\n\n"
 
     return md
 
 
-def generate_task_index_page(task, papers_in_task, date_str, paper_slugs, category="icassp-2026", task_index=0):
-    """生成某任务标签下的会议论文汇总页面"""
-    task_slug = slugify(task, max_length=80)
-    # 文件名使用纯 ASCII，避免 Hugo 构建时中文文件名问题
-    prefix = "icassp" if category == "icassp-2026" else "iclr"
-    conf_label = "ICASSP 2026" if category == "icassp-2026" else "ICLR 2026"
-    safe_filename = f"{prefix}2026-task-{task_index:03d}"
-    total = len(papers_in_task)
-    # 按分数排序
-    scored_in_task = []
-    unscored_in_task = []
-    for p in papers_in_task:
-        pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
-        score = 0
-        if pa.get('score'):
-            try:
-                score = float(str(pa['score']).replace('分', '').strip())
-            except ValueError:
-                score = 0
-        if score > 0:
-            scored_in_task.append((score, p, pa))
+import urllib.request
+
+_REPO_URL_PATTERNS = [
+    r'https?://github\.com/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+(?:/[^\s<>"{}|\\^`\[\]]+)?',
+    r'https?://huggingface\.co/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+(?:/[^\s<>"{}|\\^`\[\]]+)?',
+    r'https?://modelscope\.cn/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+(?:/[^\s<>"{}|\\^`\[\]]+)?',
+]
+
+_IGNORED_GH = {'github.com/arXiv', 'github.com/brucemiller', 'github.com/ggml-org'}
+
+
+def extract_repo_urls(text):
+    """从文本中提取 GitHub / HuggingFace / ModelScope 链接"""
+    if not text:
+        return []
+    urls = set()
+    for pat in _REPO_URL_PATTERNS:
+        for m in re.finditer(pat, text):
+            url = m.group(0).rstrip('.,;:)')
+            if any(ig in url for ig in _IGNORED_GH):
+                continue
+            urls.add(url)
+    return sorted(urls)
+
+
+def fetch_arxiv_html_urls(arxiv_id):
+    """从 arxiv HTML 页面抓取开源链接"""
+    if not arxiv_id:
+        return []
+    url = f'https://arxiv.org/html/{arxiv_id}'
+    try:
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            html = resp.read().decode('utf-8', errors='ignore')
+        return extract_repo_urls(html)
+    except Exception:
+        return []
+
+
+def enrich_opensource(pa, paper):
+    """如果 LLM 生成的 opensource 文本缺少具体链接，从论文原始文本或 arxiv HTML 中补充。"""
+    oss = pa.get('opensource', '')
+    if not oss:
+        return ''
+
+    sources = []
+    for key in ('abstract', 'analysis', 'comments'):
+        val = paper.get(key, '')
+        if val:
+            sources.append(val)
+
+    urls = extract_repo_urls('\n'.join(sources))
+    # 本地文本找不到时，尝试从 arxiv HTML 抓取
+    if not urls:
+        urls = fetch_arxiv_html_urls(paper.get('arxivId', ''))
+    if not urls:
+        return oss
+
+    missing = [u for u in urls if u not in oss]
+    if not missing:
+        return oss
+
+    oss += '\n\n- 补充链接（自动提取）：'
+    for url in missing:
+        if 'github.com' in url:
+            oss += f'\n  - 代码仓库：{url}'
+        elif 'huggingface.co' in url:
+            oss += f'\n  - HuggingFace：{url}'
+        elif 'modelscope.cn' in url:
+            oss += f'\n  - ModelScope：{url}'
         else:
-            unscored_in_task.append(p)
-    scored_in_task.sort(key=lambda x: -x[0])
-
-    md = f"""---
-title: "{conf_label} - {task} 论文列表"
-date: {date_str}
-draft: false
-tags: ["{task}"]
-categories: [{category}]
-description: "共 {total} 篇 {conf_label} {task} 方向论文"
-hiddenInHomeList: true
----
-
-# {conf_label} - {task}
-
-共 **{total}** 篇论文
-
-[← 返回 {conf_label} 总览]({BASE_PATH}/posts/{prefix}2026-summary/)
-
----
-
-| 排名 | 论文 | 评分 | 分档 |
-|------|------|------|------|
-"""
-    for i, (score, p, pa) in enumerate(scored_in_task):
-        m = format_medal(i)
-        title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(get_paper_id(p), '')
-        rank_bucket = pa.get('rankBucket', '') or '-'
-        if slug:
-            md += f"| {m} | [{title[:60]}]({BASE_PATH}/posts/{date_str}-{slug}) | {score}分 | {rank_bucket} |\n"
-        else:
-            md += f"| {m} | {title[:60]} | {score}分 | {rank_bucket} |\n"
-    for i, p in enumerate(unscored_in_task):
-        title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(get_paper_id(p), '')
-        if slug:
-            md += f"| {len(scored_in_task)+i+1} | [{title[:60]}]({BASE_PATH}/posts/{date_str}-{slug}) | N/A | - |\n"
-        else:
-            md += f"| {len(scored_in_task)+i+1} | {title[:60]} | N/A | - |\n"
-
-    md += "\n---\n\n"
-    md += "## 📋 论文详情\n\n"
-
-    all_papers = scored_in_task + [(0, p, parse_analysis(p.get('analysis', '')) or {}) for p in unscored_in_task]
-    for i, (score, p, pa) in enumerate(all_papers):
-        title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(get_paper_id(p), '')
-        m = format_medal(i) if score > 0 else f"{i+1}."
-
-        if slug:
-            md += f"### {m} [{title}]({BASE_PATH}/posts/{date_str}-{slug})\n\n"
-        else:
-            md += f"### {m} {title}\n\n"
-
-        if pa:
-            meta = build_paper_meta(pa, '')
-            if meta:
-                md += f"{meta}\n\n"
-
-            if pa.get('authors'):
-                authors_clean = pa['authors'].replace('- **第一作者**', '第一作者').replace('- **通讯作者**', '通讯作者').replace('- **作者列表**', '作者列表')
-                md += f"👥 **作者与机构**\n\n{authors_clean}\n\n"
-
-            if pa.get('roast'):
-                md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
-
-            if pa.get('opensource'):
-                md += f"🔗 **开源详情**\n\n{pa['opensource']}\n\n"
-
-            if pa.get('summary'):
-                summary = pa['summary']
-                cutoff = re.search(r'\n##\s*详细分', summary)
-                if cutoff:
-                    summary = summary[:cutoff.start()].strip()
-                md += f"📌 **核心摘要**\n\n{summary}\n\n"
-        else:
-            md += "> ⚠️ 该论文分析失败\n\n"
-
-        md += "---\n\n"
-
-    return md, safe_filename, task_slug
+            oss += f'\n  - 相关链接：{url}'
+    return oss
 
 
-def generate_paper_page(paper, date_str, category="论文速递", summary_slug=None):
+def generate_paper_page(paper, date_str):
     """生成单篇论文的独立页面"""
     # 优先使用已解析好的 parsed 数据，避免重新解析时因标题损坏导致字段丢失
     pa = paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
+    # 补充 opensource 中缺失的具体链接
+    if pa and pa.get('opensource'):
+        pa['opensource'] = enrich_opensource(pa, paper)
     title = paper.get('title', 'Unknown')
     aid = paper.get('arxivId', '')
     aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
@@ -874,7 +731,7 @@ title: "{yaml_escape(title)}"
 date: {date_str}
 draft: false
 tags: [{', '.join([t.replace('#', '') for t in (pa['tags'] if pa else [])])}]
-categories: [{category}]
+categories: [论文速递]
 description: "{yaml_escape(desc)}"
 hiddenInHomeList: true
 ---
@@ -886,131 +743,388 @@ hiddenInHomeList: true
         if pa['tags']:
             md += f"{' '.join(pa['tags'])}\n\n"
 
+        # 得分单开一行：总分 + 所有子项
+        score_line = []
+        if pa.get('score'):
+            score_line.append(f"**{pa['score']}/10**")
+        sub_scores = []
+        if pa.get('innovationScore'):
+            sub_scores.append(f"创新 {pa['innovationScore']}/2")
+        if pa.get('technicalRigorScore'):
+            sub_scores.append(f"严谨 {pa['technicalRigorScore']}/1.5")
+        if pa.get('experimentalSufficiencyScore'):
+            sub_scores.append(f"实验 {pa['experimentalSufficiencyScore']}/1.5")
+        if pa.get('clarityScore'):
+            sub_scores.append(f"清晰 {pa['clarityScore']}/1")
+        if pa.get('impactScore'):
+            sub_scores.append(f"影响 {pa['impactScore']}/1.5")
+        if pa.get('openSourceScore'):
+            sub_scores.append(f"开源 {pa['openSourceScore']}/1.5")
+        if pa.get('reproducibilityScore'):
+            sub_scores.append(f"复现 {pa['reproducibilityScore']}/0.5")
+        if pa.get('engineeringScore'):
+            sub_scores.append(f"工程 {pa['engineeringScore']}/1.5")
+        if sub_scores:
+            score_line.append(' | '.join(sub_scores))
+        if score_line:
+            md += f"{' | '.join(score_line)}\n\n"
+
         meta = build_paper_meta(pa, aurl)
         if meta:
             md += f"{meta}\n\n"
 
-        machine_bits = []
-        if pa.get('qualityScore'):
-            machine_bits.append(f"学术质量 {pa['qualityScore']}/7")
-        if pa.get('valueScore'):
-            machine_bits.append(f"选题价值 {pa['valueScore']}/2")
-        if pa.get('reproducibilityBonus'):
-            machine_bits.append(f"复现加成 {pa['reproducibilityBonus']}")
-        if pa.get('confidence'):
-            machine_bits.append(f"置信度 {pa['confidence']}")
-        if machine_bits:
-            md += f"{' | '.join(machine_bits)}\n\n"
-
         if pa.get('authors'):
             md += f"\n### 👥 作者与机构\n\n{pa['authors']}\n"
 
+        # 分离补充信息（从 opensource 中提取）
+        opensource_content = pa.get('opensource', '')
+        supplementary = ''
+        if opensource_content:
+            supp_match = re.search(r'##\s*补充信息\s*\n([\s\S]*)', opensource_content)
+            if supp_match:
+                supplementary = supp_match.group(1).strip()
+                opensource_content = opensource_content[:supp_match.start()].strip()
+
         sections = [
             ('💡 毒舌点评', 'roast'),
-            ('🔗 开源详情', 'opensource'),
             ('📌 核心摘要', 'summary'),
-            ('🏗️ 模型架构', 'architecture'),
+            ('🔗 开源详情', 'opensource', opensource_content),
+            ('🏗️ 方法概述和架构', 'architecture'),
             ('💡 核心创新点', 'innovation'),
-            ('🔬 细节详述', 'details'),
             ('📊 实验结果', 'results'),
+            ('🔬 细节详述', 'details'),
             ('⚖️ 评分理由', 'scoringReason'),
+            ('🚨 局限与问题', 'limitations'),
         ]
-        for label, key in sections:
-            content = pa.get(key, '')
+        for item in sections:
+            if len(item) == 3:
+                label, key, content = item
+            else:
+                label, key = item
+                content = pa.get(key, '')
             if content:
                 # 如果 summary 中混入了详细分析内容（因标题损坏导致解析边界失效），截断到详细分析之前
                 if key == 'summary':
                     cutoff = re.search(r'\n##\s*详细分', content)
                     if cutoff:
                         content = content[:cutoff.start()].strip()
+                # 清理内容开头可能残留的 Markdown 标题（如 LLM 输出自带了 ## 开源详情）
+                content = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', content.strip(), count=1)
                 content = re.sub(r'^###\s*\d+\.\s*[^\n]+\n', '', content, flags=re.MULTILINE)
                 content = re.sub(r'^\d+\.\s*\*\*([^*]+)\*\*\s*$', r'\1', content, flags=re.MULTILINE)
                 md += f'\n### {label}\n\n{content}\n'
+
+        # 补充信息放到最后面
+        if supplementary:
+            md += f'\n### 📎 补充信息\n\n{supplementary}\n'
     else:
         md += '> ⚠️ 该论文分析失败\n'
 
-    if summary_slug:
-        category_label = "ICASSP 2026" if category == "icassp-2026" else ("ICLR 2026" if category == "iclr-2026" else category)
-        md += f'\n---\n\n[← 返回 {category_label} 论文分析]({BASE_PATH}/posts/{summary_slug}/)\n'
-    else:
-        md += f'\n---\n\n[← 返回 {date_str} 论文速递]({BASE_PATH}/posts/{date_str}/)\n'
+    # 自动嵌入论文图片（当 analysis 中尚未引用时）
+    image_urls = paper.get('imageUrls', []) or paper.get('allImageUrls', [])
+    if image_urls and '![' not in md:
+        # 将图片智能插入到对应章节，而非全部堆在最后
+        def insert_images_into_sections(markdown, urls):
+            if not urls:
+                return markdown
+            
+            # 定义可能插入图片的章节标题（按优先级）
+            # 使用 ### 匹配三级标题（博客中 analysis 的一级标题被转换为三级）
+            # [^#\n]* 匹配标题名称前的任意内容（包括 emoji）
+            section_patterns = [
+                (r'(###[^#\n]*方法概述和架构[\s\S]*?)(?=\n###\s|\Z)', '方法概述'),   # 方法概述部分后
+                (r'(###[^#\n]*实验结果[\s\S]*?)(?=\n###\s|\Z)', '实验结果'),       # 实验结果部分后
+            ]
+            
+            inserted = 0
+            urls_list = list(urls)
+            
+            for pattern, section_name in section_patterns:
+                match = re.search(pattern, markdown)
+                if match and inserted < len(urls_list):
+                    # 每个章节最多插入2张图片
+                    imgs_to_insert = urls_list[inserted:inserted+2]
+                    if imgs_to_insert:
+                        img_md = '\n'
+                        for j, img_url in enumerate(imgs_to_insert, inserted+1):
+                            img_md += f'![图{j}]({img_url})\n\n'
+                        
+                        # 在章节内容结束后插入图片
+                        end_pos = match.end(1)
+                        markdown = markdown[:end_pos] + img_md + markdown[end_pos:]
+                        inserted += len(imgs_to_insert)
+            
+            # 如果还有剩余图片未插入，放在最后
+            if inserted < len(urls_list):
+                remaining = urls_list[inserted:]
+                img_md = '\n### 📷 论文图片\n\n'
+                for j, img_url in enumerate(remaining, inserted+1):
+                    img_md += f'![图{j}]({img_url})\n\n'
+                # 插入到返回链接之前
+                return_link = f'\n---\n\n[← 返回'
+                if return_link in markdown:
+                    markdown = markdown.replace(return_link, img_md + return_link)
+                else:
+                    markdown += img_md
+            
+            return markdown
+        
+        md = insert_images_into_sections(md, image_urls[:5])
 
-    # 提取并替换内部图片标识符为实际路径
-    md = extract_and_replace_images(md, get_paper_id(paper), date_str, category)
-    # 降级不可用的外部图片引用（IEEE 防盗链、假链接等）
-    md = sanitize_external_images(md)
-
-    # 自检查：检查并自动修复图片问题
-    md, issues = self_check_and_fix(md, get_paper_id(paper))
-    if issues:
-        print(f"  ⚠️ 自检查问题 [{get_paper_id(paper)}]: {', '.join(issues)}")
-    else:
-        print(f"  ✅ 自检查通过 [{get_paper_id(paper)}]")
+    md += f'\n---\n\n[← 返回 {date_str} 语音/音乐/音频论文速递]({BASE_PATH}/posts/{date_str}/)\n'
 
     return md, slug
 
 
-def run_image_verifier(md_files, concurrency=4):
-    """对刚生成的 .md 调多模态校验器，自动剔除文字截图、重复图，并修正纯占位 alt。
+def review_and_fix_post(file_path):
+    """Review 生成的博客文件，自动修复常见问题，返回 (是否修复, 问题列表)"""
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
 
-    失败不抛异常：校验是质量增强环节，不应阻塞发布主流程。
-    """
-    if not md_files:
-        return
-    if os.environ.get('SKIP_IMAGE_VERIFY') == '1':
-        print('⏭️ 跳过多模态图文校验 (SKIP_IMAGE_VERIFY=1)')
-        return
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    verifier = os.path.join(script_dir, 'verify-blog-images.js')
-    if not os.path.exists(verifier):
-        print(f'⚠️ 未找到校验器脚本: {verifier}, 跳过')
-        return
-    cmd = ['node', verifier, '--apply', '--concurrency', str(concurrency)] + list(md_files)
-    print(f'🔍 多模态图文校验: {len(md_files)} 篇 (concurrency={concurrency})')
-    try:
-        result = subprocess.run(cmd, cwd=os.path.dirname(script_dir), check=False)
-        if result.returncode == 0:
-            print('✅ 校验完成')
-        elif result.returncode == 2:
-            print('⚠️ 校验完成但有 FAIL 条目（详见 /tmp/iclr_fix/verify-results.tsv）')
-        else:
-            print(f'⚠️ 校验器异常退出 code={result.returncode}, 已跳过')
-    except FileNotFoundError:
-        print('⚠️ 未找到 node 可执行文件, 跳过校验')
-    except Exception as e:
-        print(f'⚠️ 校验器调用失败: {e}, 跳过')
+    original = content
+    issues = []
+
+    # 0. 修复 UTF-8 乱码字符（U+FFFD），从上下文推断正确汉字
+    # 先统一检测，再统一修复，避免逐词替换时的顺序问题
+    garbled_count = content.count('\ufffd')
+    if garbled_count > 0:
+        # 直接删除孤立的替换字符（1-3 字节的 � 没有上下文可推断）
+        # 连续的 � 通常是 1 个中文字符损坏，替换为合理占位
+        content = content.replace('\ufffd\ufffd\ufffd', '。')
+        content = content.replace('\ufffd\ufffd', '。')
+        # 单字符乱码：如果是中文语境，替换为空；英文语境保留原意
+        content = re.sub(r'\ufffd', '', content)
+        issues.append(f"发现并修复 {garbled_count} 个 UTF-8 乱码字符")
+
+    # 1. 检查未转义的 HTML-like 标签（可能导致删除线等样式问题）
+    # 匹配不在反引号、不在 code block 中的 <S>、<E>、<task>、<perception> 等标签
+    html_tag_pattern = re.compile(
+        r'(?<![a-zA-Z0-9`])<(/?)([SE]|task|perception|comprehension|reasoning|agent|action|state|observation|reward|goal|intent|belief|plan|policy|environment|module|component|feature|input|output|label|class|category|type|mode|phase|stage|step|layer|block|unit|node|edge|graph|tree|path|loop|branch|condition|constraint|rule|fact|evidence|proof|hypothesis|assumption|premise|conclusion|result|finding|insight|implication|contribution|limitation|direction|extension|variant|version|update|fix|issue|error|warning|notice|info|trace|log|record|entry|item|element|object|subject|target|source|reference|cite|quote|note|comment|remark|annotation|caption|title|heading|paragraph|sentence|phrase|word|token|char|symbol|sign|mark|tag|badge|identifier|id|key|code|pin|secret|ticket|voucher|license|permit|certificate|credential|award|medal|prize|gift|bonus|benefit|advantage|edge|lead|margin|gap|difference|distance|range|scope|span|scale|size|length|width|height|depth|volume|area|surface|space|place|spot|location|site|position|point|dot|pixel|fragment|shard|piece|part|portion|section|segment|slice|chunk|block|lump|mass|body|entity|thing|article|product|goods|material|substance|matter|fabric|cloth|garment|clothing|wear|dress|costume|uniform|outfit|suit|wardrobe|closet|cabinet|cupboard|pantry|cellar|basement|attic|loft|tower|spire|dome|vault|arch|beam|column|pillar|post|pole|rod|bar|rail|track|path|way|road|route|course|direction|heading|bearing|azimuth|elevation|altitude|latitude|longitude|coordinate)(?![a-zA-Z0-9`])>',
+        re.IGNORECASE
+    )
+    matches = html_tag_pattern.findall(content)
+    if matches:
+        issues.append(f"发现 {len(matches)} 个未转义的 HTML-like 标签: {set(matches)}")
+        content = escape_html_like_tags(content)
+
+    # 2. 检查未正确转换的 LaTeX 行内公式（$...$ 形式，可能被 Hugo 解析为 markdown）
+    # 排除已在 \( ... \) 中的，以及 code block 中的
+    latex_pattern = re.compile(r'(?<!\\)\$([^\s$][^$]*?)\$(?!\d)')
+    latex_matches = latex_pattern.findall(content)
+    if latex_matches:
+        issues.append(f"发现 {len(latex_matches)} 个未转换的 LaTeX 行内公式")
+        content = fix_latex_delimiters(content)
+
+    # 3. 检查是否有裸的 HTML 标签（如 <s>、<e> 等小写形式）
+    raw_html_pattern = re.compile(r'<(s|e|b|i|u)(\s+[^>]*)?>([^<]*)</\1>', re.IGNORECASE)
+    raw_matches = raw_html_pattern.findall(content)
+    if raw_matches:
+        issues.append(f"发现 {len(raw_matches)} 个裸 HTML 标签，可能被浏览器渲染")
+
+    # 4. 检查并修复非标准图片引用格式
+    if re.search(r'外部\s*URL:', content):
+        issues.append("发现非标准图片引用格式，尝试自动修复")
+        content = fix_image_markdown(content)
+
+    # 5. 检查并截断过长的 base64 data URI
+    base64_matches = re.findall(r'data:image/[^;]+;base64,([A-Za-z0-9+/=]+)', content)
+    long_base64 = [m for m in base64_matches if len(m) > 50000]
+    if long_base64:
+        issues.append(f"发现 {len(long_base64)} 个过长的 base64 data URI，已截断")
+        content = truncate_base64_datauri(content)
+
+    # 6. 修复 YAML frontmatter 双逗号
+    if ',,' in content.split('---\n')[1] if len(content.split('---\n')) >= 3 else False:
+        issues.append("发现 YAML frontmatter 双逗号，已修复")
+        content = fix_yaml_double_commas(content)
+
+    # 7. 检查并修复 Markdown 表格中的子标题行（全空首列 + 有内容的行，会破坏表格结构）
+    table_subheader_pattern = re.compile(r'^(\|[\s]*\|[\s]*\|[\s]*\|)(.+?)$', re.MULTILINE)
+    def _fix_table_subheader(m):
+        # 如果前三列都是空的，但后面有内容，这是子标题行，需要删除
+        prefix = m.group(1)
+        rest = m.group(2)
+        # 检查 rest 中是否有非空列
+        cols = [c.strip() for c in rest.split('|') if c.strip()]
+        if cols:
+            issues.append(f"发现表格子标题行，已删除: {' '.join(cols)[:40]}")
+            return ''  # 删除这一行
+        return m.group(0)
+    if re.search(r'^\|[\s]*\|[\s]*\|[\s]*\|', content, re.MULTILINE):
+        new_content = table_subheader_pattern.sub(_fix_table_subheader, content)
+        if new_content != content:
+            content = new_content
+
+    # 8. 检查并修复未闭合的 LaTeX $ 公式（$ \mathcal{L}_D \( 形式）
+    broken_latex_pattern = re.compile(r'\$ \\mathcal\{([^}]+)\}[^\\]*\\\(')
+    if broken_latex_pattern.search(content):
+        issues.append("发现未闭合的 LaTeX $ 公式，已修复")
+        content = broken_latex_pattern.sub(lambda m: f'\\(\\mathcal{{{m.group(1)}}}\\)', content)
+
+    # 9. 检查并修复表格中错乱的 LaTeX 括号（如 \)\\mathcal{L}_D$）
+    broken_latex_table = re.compile(r'\\\)\\\\mathcal\{([^}]+)\}\$')
+    if broken_latex_table.search(content):
+        issues.append("发现表格中错乱的 LaTeX，已修复")
+        content = broken_latex_table.sub(lambda m: f'\\(\\mathcal{{{m.group(1)}}}\\)', content)
+
+    # 10. 检查并修复 "仅\)\mathcal{L}_A\(" 这类错乱模式
+    broken_paren_latex = re.compile(r'仅\\\)\\mathcal\{([^}]+)\}\\\(')
+    if broken_paren_latex.search(content):
+        issues.append("发现错乱的 LaTeX 括号，已修复")
+        content = broken_paren_latex.sub(lambda m: f'仅\\(\\mathcal{{{m.group(1)}}}\\)', content)
+
+    # 11. 检查并修复 \(\\mathcal{L}_X\) 双反斜杠问题
+    double_backslash_latex = re.compile(r'\\\(\\\\mathcal\{([^}]+)\}\\\)')
+    if double_backslash_latex.search(content):
+        issues.append("发现双反斜杠 LaTeX，已修复")
+        content = double_backslash_latex.sub(lambda m: f'\\(\\mathcal{{{m.group(1)}}}\\)', content)
+
+    # 12. 检查是否有未闭合的 markdown 链接或图片引用
+    broken_link_pattern = re.compile(r'!?\[([^\]]*)\]\s*\(\s*\)')
+    broken_links = broken_link_pattern.findall(content)
+    if broken_links:
+        issues.append(f"发现 {len(broken_links)} 个空链接")
+
+    # 13. 检查 YAML frontmatter 中是否有未闭合的双引号
+    yaml_lines = content.split('---\n')
+    if len(yaml_lines) >= 3:
+        yaml_block = yaml_lines[1]
+        for line in yaml_block.split('\n'):
+            if ':' in line and '"' in line:
+                quote_count = line.count('"')
+                if quote_count % 2 != 0:
+                    issues.append(f"YAML 行可能存在未闭合引号: {line[:60]}")
+                    break
+
+    fixed = content != original
+    if fixed:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+    return fixed, issues
 
 
-def git_push(date_str, category="论文速递", summary_slug=None):
-    """Commit and push to GitHub（博客 + 图床仓库）"""
-    # 先推送图床仓库（如果有新图片）
-    if USE_GITHUB_PAGES and os.path.exists(IMAGES_REPO):
-        img_status = subprocess.run(
-            ['git', 'status', '--porcelain'],
-            capture_output=True, text=True, cwd=IMAGES_REPO
-        )
-        if img_status.stdout.strip():
-            subprocess.run(['git', 'add', '-A'], check=True, cwd=IMAGES_REPO)
-            if category == "icassp-2026":
-                label = "ICASSP 2026"
-            elif category == "iclr-2026":
-                label = "ICLR 2026"
-            else:
-                label = "论文速递"
-            subprocess.run(
-                ['git', 'commit', '-m', f'add: {label} 图片 {date_str}'],
-                check=True, cwd=IMAGES_REPO
-            )
-            img_result = subprocess.run(
-                ['git', 'push', GITHUB_REMOTE, 'main'],
-                capture_output=True, text=True, cwd=IMAGES_REPO
-            )
-            if img_result.returncode == 0:
-                print(f"  ✅ 图床仓库已推送")
-            else:
-                print(f"  ⚠️ 图床仓库 push 失败: {img_result.stderr}")
+def _review_single_paper(args):
+    """并发 review 单篇论文，返回 (title, fixed_count, issue_count, output_lines)"""
+    arxiv_id, slug, date_str, title = args
+    paper_file = os.path.join(CONTENT_DIR, f"{date_str}-{slug}.md")
+    if not os.path.exists(paper_file):
+        return None
 
-    # 推送博客仓库
+    fixed_count = 0
+    issue_count = 0
+    lines = []
+
+    # 1. 代码检查
+    fixed, issues = review_and_fix_post(paper_file)
+    if fixed:
+        fixed_count += 1
+        lines.append("    🛠️  代码层自动修复")
+    for issue in issues:
+        lines.append(f"    ⚠️  代码层: {issue}")
+
+    # 2. LLM 文本审查
+    with open(paper_file, 'r', encoding='utf-8') as f:
+        content = f.read()
+    llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, title)
+    if llm_issues:
+        issue_count += len(llm_issues)
+        for issue in llm_issues:
+            sev = issue.get('severity', 'warning')
+            desc = issue.get('description', '')
+            lines.append(f"    🤖 LLM ({sev}): {desc}")
+        if llm_fixed_content != content:
+            with open(paper_file, 'w', encoding='utf-8') as f:
+                f.write(llm_fixed_content)
+            fixed_count += 1
+            lines.append("    🛠️  LLM 自动修复已应用")
+
+    # 3. 多模态图片审查
+    img_passed, img_issues = multimodal_review_images(content, title)
+    if img_issues:
+        issue_count += len(img_issues)
+        for issue in img_issues:
+            sev = issue.get('severity', 'warning')
+            desc = issue.get('description', '')
+            lines.append(f"    🖼️  多模态 ({sev}): {desc}")
+
+    if not issues and not llm_issues and not img_issues:
+        lines.append("    ✅ 通过 review")
+
+    return title, fixed_count, issue_count, lines
+
+
+def review_all_posts(date_str, paper_slugs, scored_papers):
+    """三层 review：代码检查 → LLM 文本审查 → 多模态图片审查（论文独立页面并发执行）"""
+    print("\n🔍 开始三层 review（代码检查 → LLM 审查 → 多模态图片审查）...")
+    total_fixed = 0
+    total_issues = 0
+
+    # 构建 arxivId -> title 映射
+    title_map = {}
+    for score, p, pa in scored_papers:
+        title_map[p.get('arxivId', '')] = p.get('title', '')
+
+    # Review 汇总页面（串行，只有1个）
+    index_file = os.path.join(CONTENT_DIR, f"{date_str}.md")
+    if os.path.exists(index_file):
+        print("\n  📋 汇总页面:")
+        # 1. 代码检查
+        fixed, issues = review_and_fix_post(index_file)
+        if fixed:
+            total_fixed += 1
+            print(f"    🛠️  代码层自动修复")
+        for issue in issues:
+            print(f"    ⚠️  代码层: {issue}")
+
+        # 2. LLM 文本审查
+        with open(index_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, "汇总页面")
+        if llm_issues:
+            total_issues += len(llm_issues)
+            for issue in llm_issues:
+                sev = issue.get('severity', 'warning')
+                desc = issue.get('description', '')
+                print(f"    🤖 LLM ({sev}): {desc}")
+            if llm_fixed_content != content:
+                with open(index_file, 'w', encoding='utf-8') as f:
+                    f.write(llm_fixed_content)
+                total_fixed += 1
+                print(f"    🛠️  LLM 自动修复已应用")
+
+        if not issues and not llm_issues:
+            print(f"    ✅ 通过 review")
+
+    # Review 每篇论文独立页面（并发）
+    paper_args = [
+        (arxiv_id, slug, date_str, title_map.get(arxiv_id, slug))
+        for arxiv_id, slug in paper_slugs.items()
+    ]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        futures = [executor.submit(_review_single_paper, args) for args in paper_args]
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result is None:
+                continue
+            title, fixed_count, issue_count, lines = result
+            print(f"\n  📄 {title[:50]}...")
+            for line in lines:
+                print(line)
+            total_fixed += fixed_count
+            total_issues += issue_count
+
+    if total_fixed == 0 and total_issues == 0:
+        print("\n  ✅ 所有文件通过三层 review，无问题")
+    else:
+        print(f"\n  📊 review 结果: {total_fixed} 个文件已修复, {total_issues} 个问题")
+
+    return total_fixed, total_issues
+
+
+def git_push(date_str):
+    """Commit and push to GitHub"""
     status = subprocess.run(
         ['git', 'status', '--porcelain'],
         capture_output=True, text=True, cwd=BLOG_REPO
@@ -1020,14 +1134,8 @@ def git_push(date_str, category="论文速递", summary_slug=None):
         return True
 
     subprocess.run(['git', 'add', '-A'], check=True, cwd=BLOG_REPO)
-    if category == "icassp-2026":
-        label = "ICASSP 2026"
-    elif category == "iclr-2026":
-        label = "ICLR 2026"
-    else:
-        label = "论文速递"
     subprocess.run(
-        ['git', 'commit', '-m', f'add: {label} {date_str}'],
+        ['git', 'commit', '-m', f'add: 论文速递 {date_str}'],
         check=True, cwd=BLOG_REPO
     )
     result = subprocess.run(
@@ -1037,10 +1145,9 @@ def git_push(date_str, category="论文速递", summary_slug=None):
 
     if result.returncode == 0:
         print(f"  ✅ 已推送到 GitHub，自动部署中...")
-        blog_url = os.environ.get('PAPER_DIGEST_BLOG_URL', '')
+        blog_url = os.environ.get('PAPER_DIGEST_BLOG_URL', 'https://nanless.github.io/audio-paper-digest-blog/posts')
         if blog_url:
-            slug = summary_slug or date_str
-            print(f"  🌐 {blog_url}/posts/{slug}/")
+            print(f"  🌐 {blog_url}/{date_str}/")
         return True
     else:
         print(f"  ❌ Push 失败: {result.stderr}")
@@ -1050,211 +1157,80 @@ def git_push(date_str, category="论文速递", summary_slug=None):
 def main():
     data_file = None
     skip_push = False
-    skip_verify = False
     target_date = None
-    single_paper_id = None
-    list_papers_only = False
 
     i = 1
     while i < len(sys.argv):
         arg = sys.argv[i]
         if arg == '--skip-push':
             skip_push = True
-        elif arg == '--skip-verify':
-            skip_verify = True
         elif arg == '--date' and i + 1 < len(sys.argv):
             target_date = sys.argv[i + 1]
             i += 1
-        elif arg == '--paper-id' and i + 1 < len(sys.argv):
-            single_paper_id = sys.argv[i + 1]
-            i += 1
-        elif arg == '--list-papers':
-            list_papers_only = True
         elif not arg.startswith('--'):
             data_file = arg
         i += 1
 
     papers = load_papers(data_file)
-    scored, unscored = score_and_sort(papers)
     today = get_today_bj(target_date)
+    print(f"📅 博客日期: {today}")
+
+    # 只发布 fetchedAt 日期等于目标日期的论文（按抓取日期而非 arXiv 发布日期）
+    filtered_papers = []
+    for p in papers:
+        fa = p.get('fetchedAt', '')
+        if fa and isinstance(fa, str):
+            fa_date = fa[:10]
+            if fa_date == today:
+                filtered_papers.append(p)
+
+    papers = filtered_papers
+    scored, unscored = score_and_sort(papers)
+    print(f"📄 过滤后: {len(papers)} 篇论文 (fetchedAt={today})")
 
     if not papers:
         print("⚠️ 没有论文需要发布")
         return
 
-    # 根据数据文件路径判断分类
-    if data_file and "icassp" in data_file.lower():
-        category = "icassp-2026"
-    elif data_file and "iclr" in data_file.lower():
-        category = "iclr-2026"
-    else:
-        category = "论文速递"
-
-    # --list-papers: 只输出 paper id 列表（按 score 排序），不生成任何文件
-    if list_papers_only:
-        for entry in scored:
-            score, p, pa = entry
-            pid = get_paper_id(p)
-            task = (pa.get('primaryTaskTag', '') if pa else '').replace('#', '')
-            title = p.get('title', 'Unknown')[:60]
-            print(f"{pid}\t{score}\t{task}\t{title}")
-        for p in unscored:
-            pid = get_paper_id(p)
-            pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
-            task = (pa.get('primaryTaskTag', '') if pa else '').replace('#', '')
-            title = p.get('title', 'Unknown')[:60]
-            print(f"{pid}\t-\t{task}\t{title}")
-        return
-
-    # --paper-id: 单篇生成模式（不清理旧文件、不生成汇总、不 push）
-    if single_paper_id:
-        target_paper = None
-        for p in papers:
-            if get_paper_id(p) == single_paper_id:
-                target_paper = p
-                break
-        if not target_paper:
-            print(f"❌ 未找到 paper id: {single_paper_id}", file=sys.stderr)
-            sys.exit(1)
-
-        if category == "icassp-2026":
-            summary_slug = "icassp2026-summary"
-        elif category == "iclr-2026":
-            summary_slug = "iclr2026-summary"
-        else:
-            summary_slug = today
-
-        os.makedirs(CONTENT_DIR, exist_ok=True)
-
-        pa = parse_analysis(target_paper.get('analysis', ''))
-        if not pa:
-            print(f"❌ paper {single_paper_id} 解析失败", file=sys.stderr)
-            sys.exit(1)
-
-        # 删除该 paper 已存在的旧 .md(slug 可能因标题变化而不同)
-        for old_file in os.listdir(CONTENT_DIR):
-            if not (old_file.startswith(f'{today}-') and old_file.endswith('.md')):
-                continue
-            old_path = os.path.join(CONTENT_DIR, old_file)
-            try:
-                with open(old_path, 'r') as fh:
-                    head = fh.read(2000)
-                if f'/{category}/{today}/{single_paper_id}-' in head or f'/{category}/{today}/{single_paper_id}.' in head:
-                    os.remove(old_path)
-            except Exception:
-                pass
-
-        paper_md, slug = generate_paper_page(target_paper, today, category, summary_slug)
-        paper_file = os.path.join(CONTENT_DIR, f"{today}-{slug}.md")
-        with open(paper_file, 'w') as f:
-            f.write(paper_md)
-        # 单篇模式也跑一遍多模态图文校验
-        if not skip_verify:
-            run_image_verifier([paper_file], concurrency=1)
-        # 单篇模式输出生成的 .md 绝对路径到 stdout 末行(方便协调脚本捕获)
-        print(f"📄 单篇生成: {paper_file}")
-        print(f"PAPER_MD_PATH={paper_file}")
-        return
-
-    print(f"📅 博客日期: {today}")
-    print(f"🏷️ 分类: {category}")
-
-    # 会议汇总页面使用固定 slug，不再用日期作为文件名
-    if category == "icassp-2026":
-        summary_slug = "icassp2026-summary"
-    elif category == "iclr-2026":
-        summary_slug = "iclr2026-summary"
-    else:
-        summary_slug = today
-
     os.makedirs(CONTENT_DIR, exist_ok=True)
 
-    # 清理旧的同分类博客文章（避免残留已删除/更新的论文）
-    if category in ("icassp-2026", "iclr-2026"):
-        for old_file in os.listdir(CONTENT_DIR):
-            if old_file.startswith(f'{today}-') and old_file.endswith('.md'):
-                old_path = os.path.join(CONTENT_DIR, old_file)
-                try:
-                    os.remove(old_path)
-                except Exception:
-                    pass
-
-    # 清理旧的 static/images 目录图片（重新分析后图片可能已更新）
-    static_img_dir = os.path.join(BLOG_REPO, 'static', 'images', category, today)
-    if os.path.exists(static_img_dir):
-        import shutil
-        shutil.rmtree(static_img_dir)
-
-    # 清理图床仓库中的旧图片（GitHub Pages 模式）
-    if USE_GITHUB_PAGES:
-        gp_img_dir = os.path.join(IMAGES_REPO, category, today)
-        if os.path.exists(gp_img_dir):
-            import shutil
-            shutil.rmtree(gp_img_dir)
-
     paper_slugs = {}
-    paper_files = []
     for paper in papers:
-        pa = parse_analysis(paper.get('analysis', ''))
+        # 优先使用已解析好的 parsed 数据（包含手动修正的标签等），避免重新解析覆盖
+        pa = paper.get('parsed') or parse_analysis(paper.get('analysis', ''))
         if pa:
-            paper_md, slug = generate_paper_page(paper, today, category, summary_slug)
+            paper_md, slug = generate_paper_page(paper, today)
+            paper_md = fix_latex_delimiters(paper_md)
+            paper_md = escape_html_like_tags(paper_md)
+            paper_md = fix_image_markdown(paper_md)
+            paper_md = truncate_base64_datauri(paper_md)
+            paper_md = fix_yaml_double_commas(paper_md)
             paper_file = os.path.join(CONTENT_DIR, f"{today}-{slug}.md")
             with open(paper_file, 'w') as f:
                 f.write(paper_md)
-            paper_slugs[get_paper_id(paper)] = slug
-            paper_files.append(paper_file)
+            paper_slugs[paper.get('arxivId', '')] = slug
 
     print(f"📄 生成 {len(paper_slugs)} 篇论文独立页面")
 
-    # 多模态图文一致性校验：剔除文字截图、修正占位 alt、清理重复图
-    if not skip_verify:
-        run_image_verifier(paper_files, concurrency=4)
-
-    # 为会议论文预先构建任务分组和 URL 映射（汇总页面链接需要用到）
-    task_urls = None
-    task_groups = {}
-    if category in ("icassp-2026", "iclr-2026"):
-        for p in papers:
-            pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
-            task = pa.get('primaryTaskTag', '')
-            if task:
-                task = task.strip().lstrip('#')
-                task_groups.setdefault(task, []).append(p)
-        task_urls = {}
-        prefix = "icassp" if category == "icassp-2026" else "iclr"
-        for task_index, (task, _) in enumerate(sorted(task_groups.items())):
-            task_urls[task] = f"{BASE_PATH}/posts/{prefix}2026-task-{task_index:03d}/"
-
-    index_md = generate_index_page(scored, unscored, today, paper_slugs, category, task_urls)
-    index_file = os.path.join(CONTENT_DIR, f"{summary_slug}.md")
+    index_md = generate_index_page(scored, unscored, today, paper_slugs)
+    index_md = fix_latex_delimiters(index_md)
+    index_md = escape_html_like_tags(index_md)
+    index_md = fix_image_markdown(index_md)
+    index_md = truncate_base64_datauri(index_md)
+    index_md = fix_yaml_double_commas(index_md)
+    index_file = os.path.join(CONTENT_DIR, f"{today}.md")
     with open(index_file, 'w') as f:
         f.write(index_md)
     print(f"📄 汇总页面: {index_file} ({len(index_md)} chars)")
 
-    # 为会议论文每个任务标签生成独立汇总页面
-    if category in ("icassp-2026", "iclr-2026"):
-        prefix = "icassp" if category == "icassp-2026" else "iclr"
-        # 清理旧的中文文件名任务页面
-        for old_file in os.listdir(CONTENT_DIR):
-            if old_file.startswith(f'{prefix}2026-') and old_file.endswith('.md') and 'task-' not in old_file and old_file != f'{prefix}2026-summary.md':
-                os.remove(os.path.join(CONTENT_DIR, old_file))
-
-        task_page_count = 0
-        for task_index, (task, task_papers) in enumerate(sorted(task_groups.items())):
-            task_md, safe_filename, task_slug = generate_task_index_page(
-                task, task_papers, today, paper_slugs, category, task_index
-            )
-            task_file = os.path.join(CONTENT_DIR, f"{safe_filename}.md")
-            with open(task_file, 'w') as f:
-                f.write(task_md)
-            task_page_count += 1
-        print(f"📄 生成 {task_page_count} 个任务标签汇总页面")
+    # 三层 review：代码检查 → LLM 审查 → 多模态图片审查
+    review_all_posts(today, paper_slugs, scored)
 
     if skip_push:
-        print("⏭️ 跳过推送")
+        print("\n⏭️ 跳过推送")
         return
 
-    git_push(today, category, summary_slug)
+    git_push(today)
 
     print(f"\n🎉 博客发布完成！")
 

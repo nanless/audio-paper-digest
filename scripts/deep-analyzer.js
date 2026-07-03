@@ -6,68 +6,13 @@ setupScriptLogging(__filename);
  * 论文深度分析器 - 使用全文+图片的深度阅读理解
  */
 
-const { loadEnvFile, parseAnalysis, detectApiType, buildApiUrl, buildRequestBody, buildHeaders, parseResponseText, loadPrompt, writeFileAtomic, getBeijingISOString } = require('./utils.js');
+const { loadEnvFile, parseAnalysis, detectApiType, buildApiUrl, buildRequestBody, buildHeaders, parseResponseText, loadPrompt } = require('./utils.js');
 loadEnvFile();
 
 // 解决 stdout 缓冲问题：后台运行时强制立即 flush
 const https = require('https');
-const { spawn } = require('child_process');
-const path = require('path');
-const fs = require('fs');
-const { ANALYSIS_CONFIG } = require('./config.js');
-const Config = require('./config.js');
-
-const DEEP_ANALYZER_IO_DIR = path.join(Config.CURRENT_DIR, 'deep_analyzer_input_output');
-if (!fs.existsSync(DEEP_ANALYZER_IO_DIR)) {
-    fs.mkdirSync(DEEP_ANALYZER_IO_DIR, { recursive: true });
-}
-
-// 论文图片本地保存目录（支持通过环境变量覆盖，用于 ICLR 等其他会议）
-const PAPER_IMAGE_DIR = process.env.PAPER_IMAGE_DIR
-    ? path.resolve(process.env.PAPER_IMAGE_DIR)
-    : path.join(Config.CURRENT_DIR, 'icassp-images');
-if (!fs.existsSync(PAPER_IMAGE_DIR)) {
-    fs.mkdirSync(PAPER_IMAGE_DIR, { recursive: true });
-}
-
-/**
- * 保存 PDF 提取的图片到本地文件
- * @param {Array} images - pdf-extractor 返回的图片列表
- * @param {string} paperId - 论文ID
- * @returns {Array} - 保存后的图片路径列表（相对于 PAPER_IMAGE_DIR）
- */
-function savePdfImages(images, paperId) {
-    if (!images || images.length === 0) {
-        return [];
-    }
-    const paperDir = path.join(PAPER_IMAGE_DIR, String(paperId));
-    if (!fs.existsSync(paperDir)) {
-        fs.mkdirSync(paperDir, { recursive: true });
-    }
-
-    const savedPaths = [];
-    for (const img of images) {
-        const ext = img.format === 'jpeg' || img.format === 'jpg' ? 'jpg' : 'png';
-        const filename = `${img.index}.${ext}`;
-        const filepath = path.join(paperDir, filename);
-        try {
-            const buf = Buffer.from(img.base64, 'base64');
-            fs.writeFileSync(filepath, buf);
-            const imgDirName = path.basename(PAPER_IMAGE_DIR);
-            savedPaths.push({
-                index: img.index,
-                page: img.page,
-                localPath: filepath,
-                relativePath: path.join(imgDirName, String(paperId), filename),
-                webPath: `/audio-paper-digest-blog/${imgDirName}/${paperId}/${filename}`,
-                filename: filename
-            });
-        } catch (e) {
-            console.log(`    [deep] 保存图片失败: ${filename} - ${e.message}`);
-        }
-    }
-    return savedPaths;
-}
+const { PDFParse } = require('pdf-parse');
+const { ANALYSIS_CONFIG, ARXIV_CONFIG, SECONDARY_MODEL_CONFIG } = require('./config.js');
 
 // 解构配置常量（便于阅读）
 const {
@@ -81,9 +26,24 @@ const {
     imageMaxBase64Chars: IMAGE_MAX_BASE64_CHARS,
     imageMaxCount: IMAGE_MAX_COUNT,
     fullTextMaxChars: FULL_TEXT_MAX_CHARS,
-    fullTextMinCharsForFull: FULL_TEXT_MIN_CHARS_FOR_FULL,
-    imageMaxPerMessage: IMAGE_MAX_PER_MESSAGE
+    fullTextMinCharsForFull: FULL_TEXT_MIN_CHARS_FOR_FULL
 } = ANALYSIS_CONFIG;
+
+/**
+ * 清理 gap-fill（审校重写）输出中的前缀废话
+ * 确保输出直接从 ## 评分 开始
+ * 如果找不到 ## 评分，返回 null 表示格式不正确
+ */
+function cleanGapFillPrefix(text) {
+    if (!text) return null;
+    // 找到第一个 ## 评分 的位置
+    const scoreIdx = text.indexOf('## 评分');
+    if (scoreIdx >= 0) {
+        return text.substring(scoreIdx).trim();
+    }
+    // 如果没有 ## 评分，返回 null（格式不正确，调用方应回退到原始分析）
+    return null;
+}
 
 // API 配置 - 深度分析阶段（统一使用 PAPER_ANALYZER_*）
 const DEEP_CONFIG = {
@@ -93,31 +53,41 @@ const DEEP_CONFIG = {
     headers: {}
 };
 
+// 副模型配置（多模态图像分析，双模型模式）
+// 未设置时 endpoint/key 分别回退到主模型对应的值
+const SECONDARY_CONFIG = {
+    endpoint: SECONDARY_MODEL_CONFIG.endpoint || DEEP_CONFIG.endpoint,
+    key: SECONDARY_MODEL_CONFIG.key || DEEP_CONFIG.key,
+    model: SECONDARY_MODEL_CONFIG.model || ''
+};
+
+const isDualModel = Boolean(SECONDARY_CONFIG.model && SECONDARY_CONFIG.endpoint && SECONDARY_CONFIG.key);
+
 const missingDeepEnv = [];
 if (!DEEP_CONFIG.endpoint) missingDeepEnv.push('PAPER_ANALYZER_ENDPOINT');
 if (!DEEP_CONFIG.key) missingDeepEnv.push('PAPER_ANALYZER_API_KEY');
 if (!DEEP_CONFIG.model) missingDeepEnv.push('PAPER_ANALYZER_MODEL');
 if (missingDeepEnv.length > 0) {
-    console.error(`[deep-analyzer] 缺少环境变量: ${missingDeepEnv.join(', ')}。请在 ~/.hermes/.env 中配置`);
+    console.error(`[deep-analyzer] 缺少环境变量: ${missingDeepEnv.join(', ')}。请在项目根目录的 .env 文件中配置`);
     process.exit(1);
 }
 
 /**
  * 调用大模型（支持多模态消息）— 带重试机制
  */
-async function callModelWithConfig(messages, maxTokens, maxRetries = 3) {
-    const config = DEEP_CONFIG;
+async function callModelWithConfig(messages, maxTokens, maxRetries = 3, config = null) {
+    const cfg = config || DEEP_CONFIG;
     const startTime = Date.now();
-    const apiType = detectApiType(config.endpoint, config.model);
-    const modelUrl = buildApiUrl(apiType, config.endpoint);
+    const apiType = detectApiType(cfg.endpoint, cfg.model);
+    const modelUrl = buildApiUrl(apiType, cfg.endpoint);
     const url = new URL(modelUrl);
-    console.log(`    [api] → ${config.model} | ${apiType} | ${url.hostname}${url.pathname} | max_tokens=${maxTokens} | max_retries=${maxRetries}`);
+    console.log(`    [api] → ${cfg.model} | ${apiType} | ${url.hostname}${url.pathname} | max_tokens=${maxTokens} | max_retries=${maxRetries}`);
 
     let lastError = null;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-            const result = await _callModelOnce(messages, maxTokens, config, startTime, apiType);
+            const result = await _callModelOnce(messages, maxTokens, cfg, startTime, apiType);
             return result;
         } catch (err) {
             lastError = err;
@@ -162,16 +132,17 @@ async function _callModelOnce(messages, maxTokens, config, startTime, apiType) {
             path: url.pathname,
             method: 'POST',
             headers: headers,
-            agent: false,
-            signal: controller.signal
+            signal: controller.signal,
+            agent: false   // LLM API 必须直连，禁用连接复用避免代理问题
         };
 
         const req = https.request(options, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
+            const chunks = [];
+            res.on('data', chunk => chunks.push(chunk));
             res.on('end', () => {
                 clearTimeout(timeoutId);
                 const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+                const data = Buffer.concat(chunks).toString('utf8');
                 try {
                     const response = JSON.parse(data);
                     const content = parseResponseText(apiType, response);
@@ -223,139 +194,311 @@ const cheerio = require('cheerio');
 
 /**
  * 从 arxiv HTML 获取全文文本（使用 cheerio 结构化解析）
+ * 带重试机制，避免因并发限流偶发失败
  */
 async function fetchArxivText(arxivId) {
-    for (const suffix of ['v1', 'v2', '']) {
-        const url = `https://arxiv.org/html/${arxivId}${suffix}`;
-        try {
-            const response = await fetch(url, {
-                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaperDigest/1.0)' },
-                signal: AbortSignal.timeout(ARXIV_FETCH_TIMEOUT_MS)
-            });
-            if (response.ok) {
-                const html = await response.text();
-                const $ = cheerio.load(html);
+    const maxRetries = 6;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        for (const suffix of ['v1', 'v2', '']) {
+            const url = `https://arxiv.org/html/${arxivId}${suffix}`;
+            try {
+                const response = await fetch(url, {
+                    headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
+                    signal: AbortSignal.timeout(ARXIV_FETCH_TIMEOUT_MS)
+                });
 
-                // 移除噪音元素
-                $('script, style, nav, header, footer, aside, noscript, iframe').remove();
-                // 移除交互式元素和参考文献列表（保留正文的引用标记，移除完整列表以节省空间）
-                $('.ltx_bibliography, .bibtex, [role="navigation"], .ltx_TOC').remove();
-
-                // 尝试从内容区域提取文本（按优先级）
-                let content = '';
-                const selectors = [
-                    '.ltx_page_content',      // LaTeXML 新版 arXiv
-                    '.ltx_page_main',         // LaTeXML 备选
-                    'article',                // 通用文章标签
-                    '#content',               // 旧版容器
-                    '.content',               // 通用内容区
-                    'body'                    // 最终备选
-                ];
-
-                for (const sel of selectors) {
-                    const el = $(sel);
-                    if (el.length > 0) {
-                        content = el.text();
-                        break;
-                    }
+                if (response.status === 429) {
+                    const baseWait = Math.min(Math.pow(2, attempt) * 8000, 120000);
+                    const jitter = Math.floor(Math.random() * 5000);
+                    const waitTime = baseWait + jitter;
+                    console.log(`    [deep] fetchArxivText ${arxivId} 被限流，等待 ${(waitTime/1000).toFixed(1)}s 后重试 (${attempt}/${maxRetries})`);
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                    break;
                 }
 
-                // 清理空白
-                content = content
-                    .replace(/\n\s*\n/g, '\n')     // 合并多余空行
-                    .replace(/[ \t]+/g, ' ')       // 合并多余空格
-                    .trim();
+                if (response.ok) {
+                    const html = await response.text();
+                    const $ = cheerio.load(html);
 
-                return content;
+                    // 移除噪音元素
+                    $('script, style, nav, header, footer, aside, noscript, iframe').remove();
+                    // 移除交互式元素和参考文献列表（保留正文的引用标记，移除完整列表以节省空间）
+                    $('.ltx_bibliography, .bibtex, [role="navigation"], .ltx_TOC').remove();
+
+                    // 尝试从内容区域提取文本（按优先级）
+                    let content = '';
+                    const selectors = [
+                        '.ltx_page_content',      // LaTeXML 新版 arXiv
+                        '.ltx_page_main',         // LaTeXML 备选
+                        'article',                // 通用文章标签
+                        '#content',               // 旧版容器
+                        '.content',               // 通用内容区
+                        'body'                    // 最终备选
+                    ];
+
+                    for (const sel of selectors) {
+                        const el = $(sel);
+                        if (el.length > 0) {
+                            content = el.text();
+                            break;
+                        }
+                    }
+
+                    // 清理空白
+                    content = content
+                        .replace(/\n\s*\n/g, '\n')     // 合并多余空行
+                        .replace(/[ \t]+/g, ' ')       // 合并多余空格
+                        .trim();
+
+                    return content;
+                }
+            } catch (e) {
+                console.log(`    [deep] fetchArxivText ${arxivId}${suffix} error: ${e.message}`);
+                continue;
             }
-        } catch (e) {
-            continue;
+        }
+        if (attempt < maxRetries) {
+            const baseDelay = attempt * 3000;
+            const jitter = Math.floor(Math.random() * 3000);
+            const delay = baseDelay + jitter;
+            console.log(`    [deep] fetchArxivText ${arxivId} retry ${attempt}/${maxRetries} after ${delay}ms`);
+            await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
+    console.log(`    [deep] fetchArxivText ${arxivId} HTML failed after ${maxRetries} retries, trying PDF fallback...`);
+
+    // PDF fallback: download PDF and extract text
+    for (const pdfSuffix of ['', 'v1', 'v2']) {
+        const pdfUrl = `https://arxiv.org/pdf/${arxivId}${pdfSuffix}.pdf`;
+        try {
+            const pdfResponse = await fetch(pdfUrl, {
+                headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
+                signal: AbortSignal.timeout(60000)
+            });
+            if (!pdfResponse.ok) {
+                console.log(`    [deep] PDF ${pdfUrl} HTTP ${pdfResponse.status}`);
+                continue;
+            }
+            const buffer = await pdfResponse.arrayBuffer();
+            const parser = new PDFParse({ data: Buffer.from(buffer) });
+            const result = await parser.getText();
+            await parser.destroy();
+            if (result.text) {
+                console.log(`    [deep] PDF fallback success for ${arxivId}, extracted ${result.text.length} chars`);
+                return result.text
+                    .replace(/\n\s*\n/g, '\n')
+                    .replace(/[ \t]+/g, ' ')
+                    .trim();
+            }
+        } catch (e) {
+            console.log(`    [deep] PDF fallback ${pdfUrl} error: ${e.message}`);
+        }
+    }
+    console.log(`    [deep] fetchArxivText ${arxivId} PDF fallback also failed`);
     return '';
 }
 
 /**
- * 从 arxiv HTML 获取图片 URL 列表
+ * 从 arxiv HTML 获取图片信息列表（含 URL 和 caption）
+ * 使用 cheerio 解析 <figure> 元素，提取图片 URL 和 figcaption 文本
+ * 带重试机制，避免因并发限流偶发失败
  */
 async function fetchArxivImageUrls(arxivId) {
-    for (const suffix of ['v1', 'v2', '']) {
-        const url = `https://arxiv.org/html/${arxivId}${suffix}`;
-        try {
-            const response = await fetch(url, {
-                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaperDigest/1.0)' },
-                signal: AbortSignal.timeout(30000)
-            });
-            if (!response.ok) continue;
+    const maxRetries = 6;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        for (const suffix of ['v1', 'v2', '']) {
+            const url = `https://arxiv.org/html/${arxivId}${suffix}`;
+            try {
+                const response = await fetch(url, {
+                    headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
+                    signal: AbortSignal.timeout(30000)
+                });
 
-            const html = await response.text();
-            const imgRegex = /src="([^"]*\.(png|jpg|jpeg)[^"]*)"/g;
-            const images = [];
-            let match;
+                if (response.status === 429) {
+                    const baseWait = Math.min(Math.pow(2, attempt) * 8000, 120000);
+                    const jitter = Math.floor(Math.random() * 5000);
+                    const waitTime = baseWait + jitter;
+                    console.log(`    [deep] fetchArxivImageUrls ${arxivId} 被限流，等待 ${(waitTime/1000).toFixed(1)}s 后重试 (${attempt}/${maxRetries})`);
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                    break;
+                }
 
-            while ((match = imgRegex.exec(html)) !== null) {
-                const src = match[1];
-                if (src.includes('arxiv-logo') || src.includes('favicon') || src.includes('logo')) continue;
-                const fullUrl = src.startsWith('http') ? src : `https://arxiv.org/html/${src}`;
-                images.push(fullUrl);
+                if (!response.ok) continue;
+
+                const html = await response.text();
+                const $ = cheerio.load(html);
+                const images = [];
+
+                // 遍历所有 <figure> 元素，提取图片和 caption
+                $('figure').each((_, elem) => {
+                    const $fig = $(elem);
+                    const $img = $fig.find('img').first();
+
+                    let fullUrl = '';
+                    if ($img.length) {
+                        const src = $img.attr('src') || '';
+                        if (!src) return;
+                        if (src.includes('arxiv-logo') || src.includes('favicon') || src.includes('logo')) return;
+                        if (src.startsWith('data:')) return;
+
+                        // 构建完整 URL
+                        if (src.startsWith('http')) {
+                            fullUrl = src;
+                        } else if (src.startsWith('/')) {
+                            fullUrl = `https://arxiv.org${src}`;
+                        } else if (src.startsWith(`${arxivId}`)) {
+                            // 新版 HTML：src 已包含 arxivId 前缀
+                            fullUrl = `https://arxiv.org/html/${src}`;
+                        } else {
+                            // 旧版 HTML：src 为纯文件名
+                            fullUrl = `https://arxiv.org/html/${arxivId}${suffix}/${src}`;
+                        }
+                    }
+
+                    // 如果 figure 中没有 <img>，尝试提取内联 <svg>
+                    if (!fullUrl) {
+                        const $svg = $fig.find('svg').first();
+                        if ($svg.length) {
+                            const svgHtml = $svg.prop('outerHTML');
+                            if (svgHtml) {
+                                // 压缩 SVG（去掉多余空白）后转为 base64 data URI
+                                const compressed = svgHtml.replace(/>\s+</g, '><').trim();
+                                const b64 = Buffer.from(compressed).toString('base64');
+                                fullUrl = `data:image/svg+xml;base64,${b64}`;
+                            }
+                        }
+                    }
+
+                    if (!fullUrl) return;
+
+                    // 提取 figcaption 文本
+                    const $caption = $fig.find('figcaption');
+                    let caption = '';
+                    if ($caption.length) {
+                        caption = $caption.text().replace(/\s+/g, ' ').trim();
+                    }
+                    // 备选：从 img 的 alt 属性获取
+                    if (!caption && $img.length) {
+                        const alt = $img.attr('alt') || '';
+                        if (alt && alt !== 'Refer to caption') {
+                            caption = alt.trim();
+                        }
+                    }
+
+                    images.push({ url: fullUrl, caption });
+                });
+
+                // 如果 <figure> 解析不到图片，回退到正则提取（兼容旧版 HTML）
+                if (images.length === 0) {
+                    const imgRegex = /src="([^"]*\.(png|jpg|jpeg)[^"]*)"/g;
+                    let match;
+                    while ((match = imgRegex.exec(html)) !== null) {
+                        const src = match[1];
+                        if (src.includes('arxiv-logo') || src.includes('favicon') || src.includes('logo')) continue;
+                        if (src.startsWith('data:')) continue;
+                        let fullUrl;
+                        if (src.startsWith('http')) {
+                            fullUrl = src;
+                        } else if (src.startsWith('/')) {
+                            fullUrl = `https://arxiv.org${src}`;
+                        } else if (src.startsWith(`${arxivId}`)) {
+                            fullUrl = `https://arxiv.org/html/${src}`;
+                        } else {
+                            fullUrl = `https://arxiv.org/html/${arxivId}${suffix}/${src}`;
+                        }
+                        images.push({ url: fullUrl, caption: '' });
+                    }
+                }
+
+                return images;
+            } catch (e) {
+                console.log(`    [deep] fetchArxivImageUrls ${arxivId}${suffix} error: ${e.message}`);
+                continue;
             }
-            return images;
-        } catch (e) {
-            continue;
+        }
+        if (attempt < maxRetries) {
+            const baseDelay = attempt * 3000;
+            const jitter = Math.floor(Math.random() * 3000);
+            const delay = baseDelay + jitter;
+            console.log(`    [deep] fetchArxivImageUrls ${arxivId} retry ${attempt}/${maxRetries} after ${delay}ms`);
+            await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
+    console.log(`    [deep] fetchArxivImageUrls ${arxivId} failed after ${maxRetries} retries`);
     return [];
 }
 
 /**
- * 下载图片并转为 base64
+ * 下载图片并转为 base64（支持 http URL 和 data URI）
  */
-async function downloadImageBase64(imageUrl) {
-    try {
-        const response = await fetch(imageUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaperDigest/1.0)' },
-            signal: AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS)
-        });
-        if (!response.ok) return null;
-        const buffer = await response.arrayBuffer();
-        return Buffer.from(buffer).toString('base64');
-    } catch (e) {
+async function downloadImageBase64(imageUrl, maxRetries = 5) {
+    // 处理 data URI（如 SVG base64）
+    if (imageUrl.startsWith('data:')) {
+        const match = imageUrl.match(/^data:[^;]+;base64,(.+)$/);
+        if (match) {
+            return match[1];
+        }
+        console.log(`    [deep] data URI 格式不支持: ${imageUrl.substring(0, 50)}...`);
         return null;
     }
+
+    const fileName = imageUrl.split('/').pop();
+    let lastError = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            const response = await fetch(imageUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaperDigest/1.0)' },
+                signal: AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS)
+            });
+            if (!response.ok) {
+                if (attempt < maxRetries) {
+                    console.log(`    [deep] 下载图片 ${fileName} HTTP ${response.status}，${(attempt + 1) * 2}s 后重试...`);
+                    await new Promise(r => setTimeout(r, (attempt + 1) * 2000));
+                    continue;
+                }
+                console.log(`    [deep] 下载图片 ${fileName} 失败: HTTP ${response.status}`);
+                return null;
+            }
+            const buffer = await response.arrayBuffer();
+            const b64 = Buffer.from(buffer).toString('base64');
+            return b64;
+        } catch (e) {
+            lastError = e.message;
+            if (attempt < maxRetries) {
+                console.log(`    [deep] 下载图片 ${fileName} 失败 (${e.message})，${(attempt + 1) * 2}s 后重试...`);
+                await new Promise(r => setTimeout(r, (attempt + 1) * 2000));
+            }
+        }
+    }
+    console.log(`    [deep] 下载图片 ${fileName} 最终失败: ${lastError}`);
+    return null;
 }
 
 /**
- * 并行下载图片（限制并发数）
+ * 串行下载图片（避免并发导致 arxiv 限流）
  * @param {string[]} imageUrls - 图片 URL 列表
  * @param {number} maxCount - 最大下载数量
  * @param {number} maxBase64Chars - 单张 base64 字符数上限
- * @param {number} concurrency - 并发数，默认 3
  * @returns {Promise<Array<{url: string, base64: string}>>}
  */
-async function downloadImagesParallel(imageUrls, maxCount, maxBase64Chars, concurrency = 3) {
+async function downloadImagesParallel(imageUrls, maxCount, maxBase64Chars) {
     const results = [];
+    // 去重避免同一 URL 下载多次
+    const uniqueUrls = [...new Set(imageUrls)];
 
-    for (let i = 0; i < imageUrls.length && results.length < maxCount; i += concurrency) {
-        const batch = imageUrls.slice(i, i + concurrency);
-        const batchResults = await Promise.all(
-            batch.map(async (url) => {
-                try {
-                    const b64 = await downloadImageBase64(url);
-                    if (b64 && b64.length < maxBase64Chars) {
-                        console.log(`    [deep] 下载图片 ${url.split('/').pop()}: ${(b64.length / 1024).toFixed(1)}KB`);
-                        return { url, base64: b64 };
-                    }
-                } catch (e) {
-                    // 跳过无法下载的图片
-                }
-                return null;
-            })
-        );
-
-        for (const r of batchResults) {
-            if (r && results.length < maxCount) {
-                results.push(r);
+    for (const url of uniqueUrls) {
+        if (results.length >= maxCount) break;
+        try {
+            const b64 = await downloadImageBase64(url);
+            if (b64 && b64.length < maxBase64Chars) {
+                console.log(`    [deep] 下载图片 ${url.split('/').pop()}: ${(b64.length / 1024).toFixed(1)}KB`);
+                results.push({ url, base64: b64 });
+            } else if (b64) {
+                console.log(`    [deep] 跳过图片 ${url.split('/').pop()}: base64 ${(b64.length / 1024).toFixed(1)}KB 超过限制`);
             }
+        } catch (e) {
+            // 已在 downloadImageBase64 中记录错误
         }
     }
 
@@ -367,8 +510,7 @@ async function downloadImagesParallel(imageUrls, maxCount, maxBase64Chars, concu
  */
 function buildImageContent(imageUrl, base64) {
     if (base64) {
-        const safeUrl = imageUrl || '';
-        const mime = safeUrl.endsWith('.jpg') || safeUrl.endsWith('.jpeg')
+        const mime = imageUrl.endsWith('.jpg') || imageUrl.endsWith('.jpeg')
             ? 'image/jpeg' : 'image/png';
         return {
             type: 'image_url',
@@ -377,254 +519,671 @@ function buildImageContent(imageUrl, base64) {
     }
     return {
         type: 'image_url',
-        image_url: { url: imageUrl || '' }
+        image_url: { url: imageUrl }
     };
 }
 
-// ═══════════════════════════════════════════════════════
-// 本地 PDF 提取（ICASSP 论文）
-// ═══════════════════════════════════════════════════════
-
 /**
- * 调用 Python 脚本从本地 PDF 提取文本和图片
- * @param {string} pdfPath - PDF 文件绝对路径
- * @returns {Promise<{text: string, textLength: number, pageCount: number, images: Array, imageCount: number}>}
+ * 替换分析文本中的 [图N] 标记为 Markdown 图片引用
+ * @param {string} text - 分析文本
+ * @param {Array} imageInfos - [{ url, caption }] 图片信息列表
+ * @returns {string} 替换后的文本
  */
-async function extractPdfContent(pdfPath) {
-    const scriptPath = path.join(__dirname, 'pdf-extractor.py');
+function replaceImageMarkers(text, imageInfos) {
+    if (!text || !imageInfos || imageInfos.length === 0) return text;
+    let result = text;
+    const inserted = new Set();
 
-    return new Promise((resolve, reject) => {
-        const args = [
-            scriptPath,
-            pdfPath,
-            '--max-text-chars', String(FULL_TEXT_MAX_CHARS),
-            '--max-images', String(IMAGE_MAX_COUNT),
-            '--max-base64-chars', String(IMAGE_MAX_BASE64_CHARS)
-        ];
-
-        const proc = spawn('python3', args, {
-            stdio: ['ignore', 'pipe', 'pipe'],
-            timeout: 60000
-        });
-
-        let stdout = '';
-        let stderr = '';
-
-        proc.stdout.on('data', (data) => { stdout += data.toString(); });
-        proc.stderr.on('data', (data) => { stderr += data.toString(); });
-
-        proc.on('close', (code) => {
-            if (code !== 0) {
-                reject(new Error(`PDF 提取脚本退出码 ${code}: ${stderr}`));
-                return;
-            }
-            try {
-                // 尝试从 stdout 中提取最后一个有效的 JSON 对象
-                // 因为 MuPDF 可能把错误信息输出到 stdout 中
-                let result = null;
-                let lastBrace = stdout.lastIndexOf('}');
-                while (lastBrace > 0) {
-                    const jsonStr = stdout.substring(0, lastBrace + 1);
-                    try {
-                        result = JSON.parse(jsonStr);
-                        break;
-                    } catch {
-                        lastBrace = stdout.lastIndexOf('}', lastBrace - 1);
-                    }
-                }
-                if (!result) {
-                    result = JSON.parse(stdout);
-                }
-                if (!result.success) {
-                    reject(new Error(result.error || 'PDF 提取失败'));
-                    return;
-                }
-                resolve(result);
-            } catch (e) {
-                reject(new Error(`解析 PDF 提取结果失败: ${e.message} | stdout: ${stdout.substring(0, 200)}`));
-            }
-        });
-
-        proc.on('error', (err) => {
-            reject(new Error(`启动 PDF 提取脚本失败: ${err.message}`));
-        });
+    // 1. 标准 [图N] 标记（独占一行）
+    result = result.replace(/\[图(\d+)\]/g, (match, num) => {
+        if (inserted.has(num)) return match;
+        const idx = parseInt(num, 10) - 1;
+        if (idx >= 0 && idx < imageInfos.length) {
+            inserted.add(num);
+            const info = imageInfos[idx];
+            const alt = info.caption || `图${num}`;
+            return `\n\n![${alt}](${info.url})\n\n`;
+        }
+        return match;
     });
+
+    // 2. 自然语言"（图N）"或"(图N)" — 在首次出现前插入图片
+    result = result.replace(/(?:（|\()\s*(图(\d+))\s*(?:）|\))/g, (match, label, num) => {
+        if (inserted.has(num)) return match;
+        const idx = parseInt(num, 10) - 1;
+        if (idx >= 0 && idx < imageInfos.length) {
+            inserted.add(num);
+            const info = imageInfos[idx];
+            const alt = info.caption || label;
+            return `\n\n![${alt}](${info.url})\n\n${match}`;
+        }
+        return match;
+    });
+
+    return result;
 }
 
 /**
  * 深度分析单篇论文（全文 + 图片）
- * 支持两种模式：
- * 1. arXiv 模式：paper.arxivId 存在，从 arxiv.org 获取全文和图片
- * 2. 本地 PDF 模式：paper.pdfPath 存在，从本地 PDF 提取文本和图片
  */
 async function analyzePaperDeep(paper) {
-    const isLocalPdf = !!paper.pdfPath;
-    const paperId = paper.arxivId || paper.arnumber || paper.id || paper.paper_id || 'unknown';
-    const safePaperId = String(paperId).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const arxivId = paper.arxivId;
+    console.log(`    [deep] 获取全文: ${arxivId}`);
 
     let fullText = '';
-    let imageDataList = [];  // {url or index, base64}
-    let imageUrls = [];      // 用于保存到结果中
-    let hasFullText = false;
-
-    if (isLocalPdf) {
-        console.log(`    [deep] 从本地 PDF 提取: ${paperId} | ${path.basename(paper.pdfPath)}`);
-        try {
-            const pdfResult = await extractPdfContent(paper.pdfPath);
-            fullText = pdfResult.text || '';
-            hasFullText = fullText.length > FULL_TEXT_MIN_CHARS_FOR_FULL;
-            console.log(`    [deep] PDF 提取完成: ${pdfResult.pageCount} 页, 文本 ${pdfResult.textLength} 字符, 图片 ${pdfResult.imageCount} 张`);
-
-            // 保存 PDF 图片到本地，并转为消息格式
-            const savedImages = savePdfImages(pdfResult.images, paperId);
-            console.log(`    [deep] 已保存 ${savedImages.length} 张图片到 ${path.join(PAPER_IMAGE_DIR, paperId)}`);
-
-            for (const img of pdfResult.images) {
-                const mime = img.format === 'jpeg' || img.format === 'jpg' ? 'image/jpeg' : 'image/png';
-                imageDataList.push({
-                    url: `data:${mime};base64,${img.base64}`,
-                    base64: img.base64,
-                    mime: mime,
-                    page: img.page,
-                    index: img.index,
-                    rendered: img.rendered || false
-                });
-                // 使用本地保存的图片路径作为标识，便于博客发布时引用
-                imageUrls.push(`icassp-img://${paperId}/${img.index}.${img.format === 'jpeg' || img.format === 'jpg' ? 'jpg' : 'png'}`);
-            }
-        } catch (e) {
-            console.log(`    [deep] PDF 提取失败: ${e.message}，使用标题`);
-        }
-    } else {
-        // arXiv 模式
-        const arxivId = paper.arxivId;
-        console.log(`    [deep] 获取全文: ${arxivId}`);
-
-        try {
-            fullText = await fetchArxivText(arxivId);
-            console.log(`    [deep] 全文长度: ${fullText.length} 字符`);
-        } catch (e) {
-            console.log(`    [deep] 获取全文失败: ${e.message}，使用摘要`);
-        }
-
-        try {
-            const arxivImageUrls = await fetchArxivImageUrls(arxivId);
-            console.log(`    [deep] 找到 ${arxivImageUrls.length} 张图片`);
-
-            const downloadedImages = await downloadImagesParallel(arxivImageUrls, arxivImageUrls.length, IMAGE_MAX_BASE64_CHARS, 3);
-            console.log(`    [deep] 成功下载 ${downloadedImages.length}/${arxivImageUrls.length} 张图片`);
-
-            for (const img of downloadedImages) {
-                imageDataList.push({ url: img.url, base64: img.base64 });
-                imageUrls.push(img.url);
-            }
-        } catch (e) {
-            console.log(`    [deep] 获取图片失败: ${e.message}`);
-        }
+    try {
+        fullText = await fetchArxivText(arxivId);
+        console.log(`    [deep] 全文长度: ${fullText.length} 字符`);
+    } catch (e) {
+        console.log(`    [deep] 获取全文失败: ${e.message}，使用摘要`);
     }
 
-    const textForAnalysis = fullText ? fullText.substring(0, FULL_TEXT_MAX_CHARS) : (paper.abstract || paper.summary || '');
-    hasFullText = fullText.length > FULL_TEXT_MIN_CHARS_FOR_FULL;
+    const textForAnalysis = fullText || (paper.abstract || paper.summary || '');
+    const hasFullText = fullText.length > FULL_TEXT_MIN_CHARS_FOR_FULL;
+
+    let imageInfos = [];
+    try {
+        imageInfos = await fetchArxivImageUrls(arxivId);
+        console.log(`    [deep] 找到 ${imageInfos.length} 张图片`);
+    } catch (e) {
+        console.log(`    [deep] 获取图片失败: ${e.message}`);
+    }
+
+    // 提取纯 URL 列表用于下载和保存
+    const imageUrls = imageInfos.map(info => info.url);
 
     const hasFullTextIntro = hasFullText ? '以下是论文全文，请仔细阅读所有技术细节。' : '以下是论文摘要。';
 
-    // 限制单条消息图片数量，避免 API 拒绝
-    const imagesToSend = imageDataList.slice(0, IMAGE_MAX_PER_MESSAGE);
-    const imageUrlsToShow = imageUrls.slice(0, IMAGE_MAX_PER_MESSAGE);
-    if (imageDataList.length > IMAGE_MAX_PER_MESSAGE) {
-        console.log(`    [deep] 图片过多: ${imageDataList.length} 张，截取前 ${IMAGE_MAX_PER_MESSAGE} 张发送`);
-    }
-
-    // 构建图片映射信息（只包含实际会发送的图片）
-    let imagePrefix = '';
-    if (imageUrlsToShow.length > 0) {
-        const imageUrlMapping = imageUrlsToShow.map((url, idx) => {
-            const img = imagesToSend[idx];
-            const pageInfo = img && img.page ? `（来自第${img.page}页` : '';
-            const typeInfo = img && img.rendered ? `${pageInfo ? '' : '（'}页面渲染图` : '';
-            const closeParen = pageInfo || typeInfo ? '）' : '';
-            const prefix = pageInfo + typeInfo + closeParen;
-            return `图${idx + 1}${prefix}: ${url}`;
-        }).join('\n');
-        imagePrefix = `\n\n论文中的图片及其标识如下（请在下文引用图片时使用这些标识）：\n${imageUrlMapping}\n\n重要提示：\n1. 图片编号不对应论文中的 Figure 编号，不要根据编号猜测图片内容。\n2. 若无法确定某张图片的具体内容，不要编造描述，直接引用其 URL 并简要说明用途即可。\n3. 优先引用架构图、流程图、结果对比图；文字截图、页面缩略图等无需引用。\n`;
-    }
-
-    const paperInfo = isLocalPdf
-        ? `论文ID: ${paperId}\n来源: ICASSP 2026 本地PDF`
-        : `arXiv ID: ${paperId}\n链接: https://arxiv.org/abs/${paperId}`;
+    // 并行下载全部图片（限制并发数以避免过载）
+    const downloadedImages = await downloadImagesParallel(imageUrls, imageUrls.length, IMAGE_MAX_BASE64_CHARS);
+    console.log(`    [deep] 成功下载 ${downloadedImages.length}/${imageUrls.length} 张图片`);
 
     const prompt = loadPrompt('prompts/deep-analysis.md', {
         hasFullText: hasFullTextIntro,
         title: paper.title,
         authors: Array.isArray(paper.authors) ? paper.authors.join(', ') : (paper.authors || '未知'),
         categories: Array.isArray(paper.categories) ? paper.categories.join(', ') : (paper.categories || '未知'),
-        paperInfo: paperInfo,
-        textForAnalysis: textForAnalysis + imagePrefix
+        arxivId: arxivId,
+        textForAnalysis: textForAnalysis
     });
 
-    const content = [{ type: 'text', text: prompt }];
+    let analysis = '';
+    const imagesToSave = downloadedImages.map(img => img.url);
 
-    for (const img of imagesToSend) {
-        if (img.base64) {
-            const mime = img.mime || (img.url && img.url.endsWith('.jpg') || img.url.endsWith('.jpeg') ? 'image/jpeg' : 'image/png');
-            content.push({
-                type: 'image_url',
-                image_url: { url: `data:${mime};base64,${img.base64}` }
+    if (downloadedImages.length === 0) {
+        console.log(`    [deep] 无可用图片，仅文本分析`);
+    }
+
+    // Round 1: Main analysis
+    if (isDualModel && downloadedImages.length > 0) {
+        // ========== 双模型模式 ==========
+        console.log(`    [deep] 🧠 双模型模式：主模型(${DEEP_CONFIG.model})文本分析 + 副模型(${SECONDARY_CONFIG.model})图像补充`);
+
+        // Round 1a: Primary model (text-only)
+        try {
+            analysis = await callModelWithConfig(
+                [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+                API_MAX_TOKENS, 3, DEEP_CONFIG
+            );
+            console.log(`    [deep] ✅ 主模型文本分析完成 (${analysis.length} chars)`);
+        } catch (err) {
+            console.error(`    [deep] 主模型文本分析失败: ${err.message}`);
+            return { ...paper, analysis: null, error: err.message };
+        }
+
+        // Round 1b: Secondary model (multimodal, image supplement)
+        try {
+            const imageListStr = imageInfos.map((info, i) =>
+                `图${i + 1}: ${info.url}\n  caption: ${info.caption || '无描述'}`
+            ).join('\n\n');
+            const supplementPrompt = loadPrompt('prompts/image-supplement.md', {
+                title: paper.title,
+                arxivId,
+                imageList: imageListStr,
+                primaryAnalysis: analysis
             });
-        } else if (img.url) {
-            content.push(buildImageContent(img.url, null));
+
+            const supplementContent = [{ type: 'text', text: supplementPrompt }];
+            for (const img of downloadedImages) {
+                supplementContent.push(buildImageContent(img.url, img.base64));
+            }
+
+            const enhancedAnalysis = await callModelWithConfig(
+                [{ role: 'user', content: supplementContent }],
+                API_MAX_TOKENS, 3, SECONDARY_CONFIG
+            );
+
+            const cleaned = cleanGapFillPrefix(enhancedAnalysis.trim());
+            if (cleaned && cleaned.length > 100) {
+                analysis = replaceImageMarkers(cleaned, imageInfos);
+                console.log(`    [deep] ✅ 副模型图像补充完成 (${analysis.length} chars)`);
+            } else {
+                console.log(`    [deep] ⚠️  副模型输出格式不正确，使用主模型分析结果`);
+            }
+        } catch (err) {
+            console.log(`    [deep] ⚠️  副模型图像补充失败: ${err.message}，使用主模型分析结果`);
+        }
+    } else {
+        // ========== 单模型模式：仅文本分析，不分析图片 ==========
+        if (downloadedImages.length > 0) {
+            console.log(`    [deep] 未配置副模型，跳过图片分析 (${downloadedImages.length} 张图片仅用于元数据)`);
+        }
+
+        try {
+            analysis = await callModel(
+                [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+                API_MAX_TOKENS
+            );
+            console.log(`    [deep] ✅ 文本分析完成`);
+        } catch (err) {
+            console.error(`    [deep] 文本分析失败: ${err.message}`);
+            return { ...paper, analysis: null, error: err.message };
         }
     }
 
-    if (imageDataList.length === 0) {
-        console.log(`    [deep] 无可用图片，仅文本分析`);
-    } else if (imageDataList.length > imagesToSend.length) {
-        console.log(`    [deep] 共提取 ${imageDataList.length} 张图片，发送 ${imagesToSend.length} 张`);
-    } else {
-        console.log(`    [deep] 共发送 ${imagesToSend.length} 张图片`);
+    // 第2轮：开源扫描
+    try {
+        const ossText = await scanOpensource(paper, textForAnalysis);
+        if (ossText) {
+            analysis = mergeSection(analysis, '## 开源详情', ossText);
+            console.log(`    [deep] ✅ 开源扫描完成`);
+        }
+    } catch (e) {
+        console.log(`    [deep] ⚠️  开源扫描失败: ${e.message}`);
     }
 
+    // 第2.5轮：检查 demo 页面中的开源链接
+    let demoFoundLinks = [];
     try {
-        const messages = [{ role: 'user', content: content }];
+        if (!hasOpenSourceLinks(analysis)) {
+            const demoUrls = extractDemoUrls(analysis);
+            if (demoUrls.length > 0) {
+                console.log(`    [deep] 🔍 发现 ${demoUrls.length} 个 demo 页面，检查开源链接...`);
+                const allOpenSourceLinks = [];
+                for (const url of demoUrls.slice(0, 3)) { // 最多检查3个
+                    const links = await checkDemoPageForOpensource(url);
+                    allOpenSourceLinks.push(...links);
+                }
+                if (allOpenSourceLinks.length > 0) {
+                    demoFoundLinks = [...new Set(allOpenSourceLinks)];
+                    const newLinksText = demoFoundLinks.map(link => `- ${link}`).join('\n');
+                    analysis = mergeSection(analysis, '## 开源详情',
+                        `\n\n**从 demo 页面发现的开源链接：**\n${newLinksText}`);
+                    console.log(`    [deep] ✅ 从 demo 页面发现 ${demoFoundLinks.length} 个开源链接`);
+                } else {
+                    console.log(`    [deep] ℹ️  demo 页面未发现开源链接`);
+                }
+            }
+        }
+    } catch (e) {
+        console.log(`    [deep] ⚠️  检查 demo 页面失败: ${e.message}`);
+    }
 
-        // 保存深度分析输入
-        const inputFile = path.join(DEEP_ANALYZER_IO_DIR, `${safePaperId}_input.json`);
-        writeFileAtomic(inputFile, JSON.stringify({
-            paperId,
-            timestamp: getBeijingISOString(),
-            model: DEEP_CONFIG.model,
-            maxTokens: API_MAX_TOKENS,
-            messages: messages
-        }, null, 2));
+    // 第2.6轮：根据 demo 扫描结果更新开源评分和描述
+    if (demoFoundLinks.length > 0) {
+        const beforeUpdate = analysis;
+        analysis = updateOpensourceFromDemoLinks(analysis, demoFoundLinks);
+        if (analysis !== beforeUpdate) {
+            console.log(`    [deep] ✅ 已根据 demo 扫描结果更新开源评分/描述`);
+        }
+    }
 
-        const analysis = await callModel(messages, API_MAX_TOKENS);
+    // 第3轮：审校重写（对照原文修正、补充、删减，完全重写前两轮输出）
+    try {
+        const revisedText = await reviseAnalysis(paper, analysis, textForAnalysis);
+        if (revisedText && revisedText.length > 100) {
+            const cleaned = cleanGapFillPrefix(revisedText.trim());
+            if (cleaned) {
+                analysis = cleaned;
+                console.log(`    [deep] ✅ 审校重写完成`);
+            } else {
+                console.log(`    [deep] ⚠️  审校重写输出格式不正确（缺少 ## 评分），回退到原始分析`);
+            }
+        }
+    } catch (e) {
+        console.log(`    [deep] ⚠️  审校重写失败: ${e.message}`);
+    }
 
-        // 保存深度分析输出
-        const outputFile = path.join(DEEP_ANALYZER_IO_DIR, `${safePaperId}_output.json`);
-        writeFileAtomic(outputFile, JSON.stringify({
-            paperId,
-            timestamp: getBeijingISOString(),
-            model: DEEP_CONFIG.model,
-            analysis: analysis
-        }, null, 2));
+    // 第3.5轮：检查并修复实验结果中缺失的表格
+    try {
+        const fixed = await checkAndFixTables(paper, analysis, textForAnalysis);
+        if (fixed && fixed !== analysis) {
+            analysis = fixed.trim();
+            console.log(`    [deep] ✅ 表格补充完成`);
+        }
+    } catch (e) {
+        console.log(`    [deep] ⚠️  表格补充失败: ${e.message}`);
+    }
 
-        return {
-            ...paper,
-            analysis: analysis,
-            imageUrls: imageUrls,
-            allImageUrls: imageUrls
-        };
+    // 第3.6轮：检查并修复方法概述部分不够详细的问题
+    try {
+        const fixed = await checkAndFixMethodSection(paper, analysis, textForAnalysis);
+        if (fixed && fixed !== analysis) {
+            analysis = fixed.trim();
+            console.log(`    [deep] ✅ 方法概述补充完成`);
+        }
+    } catch (e) {
+        console.log(`    [deep] ⚠️  方法概述补充失败: ${e.message}`);
+    }
+
+    return {
+        ...paper,
+        analysis: analysis,
+        imageUrls: imagesToSave,
+        allImageUrls: imageUrls
+    };
+}
+
+async function scanOpensource(paper, textForAnalysis) {
+    const prompt = loadPrompt('prompts/opensource-scan.md', {
+        title: paper.title,
+        arxivId: paper.arxivId,
+        textForAnalysis: textForAnalysis
+    });
+    return await callModel([{ role: 'user', content: prompt }], 8000);
+}
+
+/**
+ * 从分析文本中提取 demo/项目页面 URL
+ */
+function extractDemoUrls(analysis) {
+    const urls = [];
+    // 匹配各种可能的 demo/项目页面链接
+    const patterns = [
+        /Demo[：:]\s*(https?:\/\/[^\s\)]+)/gi,
+        /项目主页[：:]\s*(https?:\/\/[^\s\)]+)/gi,
+        /在线演示[：:]\s*(https?:\/\/[^\s\)]+)/gi,
+        /Homepage[：:]\s*(https?:\/\/[^\s\)]+)/gi,
+        /Project[：:]\s*(https?:\/\/[^\s\)]+)/gi,
+        /页面[：:]\s*(https?:\/\/[^\s\)]+)/gi,
+    ];
+    
+    for (const pattern of patterns) {
+        let match;
+        while ((match = pattern.exec(analysis)) !== null) {
+            const url = match[1].trim();
+            // 排除 arxiv、github、huggingface 等已知链接
+            if (!url.includes('arxiv.org') && 
+                !url.includes('github.com') && 
+                !url.includes('huggingface.co') &&
+                !url.includes('modelscope.cn')) {
+                urls.push(url);
+            }
+        }
+    }
+    
+    return [...new Set(urls)]; // 去重
+}
+
+/**
+ * 访问 demo 页面，检查是否包含开源链接
+ */
+async function checkDemoPageForOpensource(demoUrl) {
+    const openSourcePatterns = [
+        /github\.com\/[\w\-]+\/[\w\-]+/gi,
+        /huggingface\.co\/[\w\-]+\/[\w\-]+/gi,
+        /modelscope\.cn\/[\w\-]+\/[\w\-]+/gi,
+        /gitlab\.com\/[\w\-]+\/[\w\-]+/gi,
+    ];
+    
+    try {
+        console.log(`    [deep] 🔍 检查 demo 页面: ${demoUrl}`);
+        
+        // 使用 https 请求获取页面内容
+        const response = await new Promise((resolve, reject) => {
+            const url = new URL(demoUrl);
+            const options = {
+                hostname: url.hostname,
+                path: url.pathname + url.search,
+                method: 'GET',
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                },
+                timeout: 15000,
+            };
+            
+            const req = https.request(options, (res) => {
+                const chunks = [];
+                res.on('data', chunk => chunks.push(chunk));
+                res.on('end', () => resolve({ status: res.statusCode, data: Buffer.concat(chunks).toString('utf8') }));
+            });
+            
+            req.on('error', reject);
+            req.on('timeout', () => {
+                req.destroy();
+                reject(new Error('Timeout'));
+            });
+            req.end();
+        });
+        
+        if (response.status !== 200) {
+            console.log(`    [deep] ⚠️  Demo 页面返回 ${response.status}`);
+            return [];
+        }
+        
+        const html = response.data;
+        const foundLinks = [];
+        
+        for (const pattern of openSourcePatterns) {
+            let match;
+            while ((match = pattern.exec(html)) !== null) {
+                foundLinks.push(match[0]);
+            }
+        }
+        
+        return [...new Set(foundLinks)];
     } catch (err) {
-        console.error(`    [deep] 分析失败: ${err.message}`);
-        return {
-            ...paper,
-            analysis: null,
-            error: err.message
-        };
+        console.log(`    [deep] ⚠️  访问 demo 页面失败: ${err.message}`);
+        return [];
     }
 }
 
-module.exports = { analyzePaperDeep, parseAnalysis, callModel, fetchArxivText, fetchArxivImageUrls, extractPdfContent };
+/**
+ * 检查分析中是否已有开源链接
+ */
+function hasOpenSourceLinks(analysis) {
+    const patterns = [
+        /github\.com\/[\w\-]+\/[\w\-]+/gi,
+        /huggingface\.co\/[\w\-]+\/[\w\-]+/gi,
+        /modelscope\.cn\/[\w\-]+\/[\w\-]+/gi,
+    ];
+    
+    for (const pattern of patterns) {
+        if (pattern.test(analysis)) return true;
+    }
+    return false;
+}
+
+async function reviseAnalysis(paper, existingAnalysis, textForAnalysis) {
+    const prompt = loadPrompt('prompts/gap-fill.md', {
+        title: paper.title,
+        arxivId: paper.arxivId,
+        existingAnalysis: existingAnalysis,
+        textForAnalysis: textForAnalysis
+    });
+    return await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
+}
+
+/**
+ * 从分析文本中提取方法概述和架构部分
+ */
+function extractMethodSection(analysis) {
+    const m = analysis.match(/###\s*01[.\s]+方法概述和架构[：:\s]*\n([\s\S]*?)(?=###\s*02[.\s]|\n##\s*|$)/);
+    return m ? m[1].trim() : '';
+}
+
+/**
+ * 计算文本中的中文字符数量（含中文标点）
+ */
+function countChineseChars(text) {
+    if (!text) return 0;
+    const matches = text.match(/[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]/g);
+    return matches ? matches.length : 0;
+}
+
+/**
+ * 检查方法概述部分是否足够详细
+ */
+function isMethodSectionDetailed(text) {
+    if (!text) return false;
+
+    // 1. 中文字符数检查（最低阈值 300，理想 600+）
+    const chineseCount = countChineseChars(text);
+    if (chineseCount < 300) {
+        console.log(`    [deep] 🔍 方法概述中文字符数不足: ${chineseCount} < 300`);
+        return false;
+    }
+
+    // 2. 检查是否有"空泛表述"（只列名称不解释）
+    const vaguePatterns = [
+        /详见原文/,
+        /论文描述了详细架构/,
+        /详细方法见/,
+        /具体实现请参考/,
+    ];
+    if (vaguePatterns.some(p => p.test(text))) {
+        console.log(`    [deep] 🔍 方法概述检测到空泛表述`);
+        return false;
+    }
+
+    // 3. 检查是否提及关键要素（至少包含一些结构词）
+    const structuralKeywords = ['输入', '输出', '流程', '组件', '模块', '阶段', '结构', '网络', '模型'];
+    const hasStructure = structuralKeywords.some(kw => text.includes(kw));
+    if (!hasStructure) {
+        console.log(`    [deep] 🔍 方法概述缺少结构性描述`);
+        return false;
+    }
+
+    // 4. 检查段落数（至少 3 个段落，说明有分层组织）
+    const paragraphs = text.split(/\n\s*\n/).filter(p => p.trim().length > 20);
+    if (paragraphs.length < 3) {
+        console.log(`    [deep] 🔍 方法概述段落数不足: ${paragraphs.length} < 3`);
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * 检查实验结果部分是否包含 Markdown 表格
+ */
+function hasMarkdownTable(text) {
+    if (!text) return false;
+    // 标准 Markdown 表格：至少有一行表头 |...| 和一行分隔符 |---|---|
+    return /\n\|[^\n]+\|\n\|[\-\s:|]+\|/.test('\n' + text);
+}
+
+/**
+ * 检查并修复方法概述部分不够详细的问题。
+ * 如果检测到方法概述字数不足、过于空泛或缺少关键要素，触发补充调用。
+ */
+async function checkAndFixMethodSection(paper, analysis, textForAnalysis) {
+    const methodSection = extractMethodSection(analysis);
+    if (!methodSection) return analysis;
+
+    if (isMethodSectionDetailed(methodSection)) {
+        console.log(`    [deep] ✓ 方法概述部分已足够详细（中文字符: ${countChineseChars(methodSection)}）`);
+        return analysis;
+    }
+
+    console.log(`    [deep] 🔍 检测到方法概述不够详细，触发补充...`);
+
+    const prompt = `你是一位严谨的学术论文分析专家。请根据下面的论文原文，为"方法概述和架构"部分补充更详细、更充分的内容。
+
+论文标题: ${paper.title}
+arXiv ID: ${paper.arxivId}
+
+## 要求
+1. 只输出"### 01.方法概述和架构"这一个 section 的完整内容。
+2. 必须详细覆盖以下要素（缺一不可）：
+   - 整体流程概述（输入→处理→输出的完整链路）
+   - 每个核心组件的名称、功能、内部结构/实现、输入输出
+   - 组件间的数据流与交互方式
+   - 关键设计选择及其动机
+   - 若有多阶段/多模块，逐层展开，不能一笔带过
+   - 若原文有架构图，描述图中各模块的关系（但不要编造图片URL）
+   - 对专业术语做必要解释
+3. 字数要求：中文字符不少于 600 个。内容必须充实，不能空泛。
+4. 严禁使用"详见原文"、"论文描述了详细架构"等空泛表述替代具体描述。
+5. 严禁只罗列组件名称而不解释功能和内部结构。
+
+## 已有分析（供参考，但可能不够详细）
+
+${methodSection}
+
+## 论文原文（权威依据）
+
+${textForAnalysis.slice(0, 80000)}
+
+请直接输出"### 01.方法概述和架构"及之后的完整内容：`;
+
+    const fixedSection = await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
+    if (!fixedSection || fixedSection.length < 200) {
+        return analysis;
+    }
+
+    // 将补充的方法概述合并回原分析
+    return mergeSection(analysis, '### 01.方法概述和架构', fixedSection);
+}
+
+/**
+ * 检查文本中是否包含表格省略标记
+ */
+function hasOmissionMarkers(text) {
+    if (!text) return false;
+    const markers = [
+        '此处省略',
+        '表格数据与论文一致',
+        '详见原文',
+        '详见论文',
+        '表格详见',
+        '数据详见',
+        '省略',
+        '详见表',
+        '（见表',
+        '(见表',
+    ];
+    return markers.some(m => text.includes(m));
+}
+
+/**
+ * 从分析文本中提取实验结果部分
+ */
+function extractResultsSection(analysis) {
+    const m = analysis.match(/###\s*03[.\s]+实验结果[：:\s]*\n([\s\S]*?)(?=###\s*04[.\s]|\n##\s*|$)/);
+    return m ? m[1].trim() : '';
+}
+
+/**
+ * 检查并修复实验结果中缺失的表格。
+ * 如果检测到省略标记或缺少 Markdown 表格，触发补充调用。
+ */
+async function checkAndFixTables(paper, analysis, textForAnalysis) {
+    const resultsSection = extractResultsSection(analysis);
+    if (!resultsSection) return analysis;
+
+    const hasTable = hasMarkdownTable(resultsSection);
+    const hasOmission = hasOmissionMarkers(resultsSection);
+    const hasTableReference = /[（(]表\d+[)）]|表[一二三四五六七八九十\d]+/.test(resultsSection);
+
+    // 如果有省略标记，或引用了表格但没有实际 Markdown 表格
+    if (!hasOmission && (!hasTableReference || hasTable)) {
+        return analysis;
+    }
+
+    console.log(`    [deep] 🔍 检测到实验结果可能缺少表格，触发补充...`);
+
+    const prompt = `你是一位严谨的学术论文分析专家。请根据下面的论文原文，为"实验结果"部分补充完整的 Markdown 表格数据。
+
+论文标题: ${paper.title}
+arXiv ID: ${paper.arxivId}
+
+## 要求
+1. 只输出"### 03.实验结果"这一个 section 的完整内容。
+2. 必须包含论文中所有实验结果表格的标准 Markdown 格式（表头、模型名称、数据集、指标、数值），不要省略任何行或列。
+3. 严禁使用"此处省略"、"详见原文"等字样。所有数据必须直接列出。
+4. 如果有图片，用 Markdown 图片语法 \`![描述](URL)\` 插入。
+5. 在表格下方用文字说明关键结论。
+
+## 已有分析（供参考，但可能缺少表格）
+
+${resultsSection}
+
+## 论文原文（权威依据）
+
+${textForAnalysis.slice(0, 80000)}
+
+请直接输出"### 03.实验结果"及之后的完整内容：
+`;
+
+    const fixedSection = await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
+    if (!fixedSection || fixedSection.length < 200) {
+        return analysis;
+    }
+
+    // 将补充的实验结果合并回原分析
+    return mergeSection(analysis, '### 03.实验结果', fixedSection);
+}
+
+/**
+ * 根据 demo 页面扫描发现的开源链接，更新 analysis 中的机器摘要和开源详情
+ * @param {string} analysis - 分析文本
+ * @param {string[]} foundLinks - 发现的开源链接列表
+ * @returns {string} 更新后的分析文本
+ */
+function updateOpensourceFromDemoLinks(analysis, foundLinks) {
+    if (!foundLinks || foundLinks.length === 0) return analysis;
+
+    let updated = analysis;
+
+    // 1. 推断开源类型
+    let hasCode = false, hasModel = false, hasDataset = false;
+    for (const link of foundLinks) {
+        const lower = link.toLowerCase();
+        if (lower.includes('github.com')) hasCode = true;
+        if (lower.includes('huggingface.co')) {
+            if (lower.includes('/datasets/')) hasDataset = true;
+            else hasModel = true;
+        }
+        if (lower.includes('modelscope.cn')) {
+            if (lower.includes('/datasets/')) hasDataset = true;
+            else hasModel = true;
+        }
+        if (lower.includes('gitlab.com')) hasCode = true;
+    }
+
+    // 2. 更新机器摘要中的 has_code / has_model / has_dataset
+    // 匹配格式：has_code: 否 / has_code: 未说明 等，替换为"是"
+    if (hasCode) {
+        updated = updated.replace(/(has_code\s*[：:]\s*)(否|no|n|无|未说明|unknown|否\b)/i, '$1是');
+    }
+    if (hasModel) {
+        updated = updated.replace(/(has_model\s*[：:]\s*)(否|no|n|无|未说明|unknown|否\b)/i, '$1是');
+    }
+    if (hasDataset) {
+        updated = updated.replace(/(has_dataset\s*[：:]\s*)(否|no|n|无|未说明|unknown|否\b)/i, '$1是');
+    }
+
+    // 3. 在开源详情中追加验证发现的结构化信息
+    const linkDescriptions = [];
+    for (const link of foundLinks) {
+        const lower = link.toLowerCase();
+        if (lower.includes('github.com') || lower.includes('gitlab.com')) {
+            linkDescriptions.push(`- **代码仓库**：${link}`);
+        } else if (lower.includes('huggingface.co') || lower.includes('modelscope.cn')) {
+            if (lower.includes('/datasets/')) {
+                linkDescriptions.push(`- **数据集**：${link}`);
+            } else {
+                linkDescriptions.push(`- **模型权重**：${link}`);
+            }
+        } else {
+            linkDescriptions.push(`- **相关链接**：${link}`);
+        }
+    }
+
+    if (linkDescriptions.length > 0) {
+        const newContent = `\n\n**从 demo/项目页面验证发现（已更新开源评分）：**\n${linkDescriptions.join('\n')}`;
+        updated = mergeSection(updated, '## 开源详情', newContent);
+    }
+
+    return updated;
+}
+
+function mergeSection(analysis, sectionHeader, newContent) {
+    // 去掉 newContent 开头重复的 sectionHeader，避免合并后出现双标题
+    const headerPattern = new RegExp('^' + sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[：:\s]*\n*');
+    const cleanContent = newContent.replace(headerPattern, '').trim();
+
+    const escaped = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(${escaped}[：:\\s]*\n)([\\s\\S]*?)(?=\n#{2,3}\\s|$)`, '');
+    if (regex.test(analysis)) {
+        return analysis.replace(regex, `$1${cleanContent}\n`);
+    }
+    return analysis.trim() + '\n\n' + sectionHeader + '\n' + cleanContent;
+}
+
+module.exports = { analyzePaperDeep, parseAnalysis, callModel, fetchArxivText, fetchArxivImageUrls };
 
 // 直接运行测试
 if (require.main === module) {

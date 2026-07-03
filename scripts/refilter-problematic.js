@@ -50,9 +50,10 @@ async function filterSingle(paper) {
             hostname: url.hostname, path: url.pathname, method: 'POST',
             headers, timeout: 60000
         }, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
+            const chunks = [];
+            res.on('data', chunk => chunks.push(chunk));
             res.on('end', () => {
+                const data = Buffer.concat(chunks).toString('utf8');
                 try {
                     const response = JSON.parse(data);
                     const content = parseResponseText(apiType, response);

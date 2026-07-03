@@ -54,6 +54,7 @@ def score_and_sort(papers):
     """
     解析每篇论文的分析结果，按评分降序排列。
     返回 [(score, paper, parsed), ...]，未评分的排在最后。
+    优先使用已解析好的 parsed 数据，避免重新解析覆盖手动修正。
     """
     scored = []
     unscored = []
@@ -74,6 +75,7 @@ def extract_top_tags(papers, limit=8):
     """
     从论文列表中提取主任务标签并统计频次。
     返回 [(tag, count), ...]，按数量降序。
+    优先使用已解析好的 parsed 数据。
     """
     tag_count = {}
     for p in papers:
@@ -90,6 +92,7 @@ def extract_all_tags(papers, limit=10):
     """
     提取所有标签（去重），用于博客标签云。
     返回标签字符串列表（不带 #）。
+    优先使用已解析好的 parsed 数据。
     """
     tag_set = set()
     for p in papers:
@@ -106,27 +109,56 @@ def extract_all_tags(papers, limit=10):
 
 
 def extract_one_liner(pa):
-    """从分析结果中提取一句话亮点，清理 Markdown 格式"""
+    """从分析结果中提取一句话亮点，优先用创新点或核心贡献，而非截断摘要"""
     text = ''
-    if pa.get('summary'):
-        text = pa['summary'].split('。')[0].strip()
-    elif pa.get('roast'):
-        text = pa['roast'].split('。')[0].strip()
 
+    # 1. 优先尝试 innovation 第一条
+    innovation = pa.get('innovation', '')
+    if innovation:
+        first = innovation.split('\n')[0].strip()
+        first = re.sub(r'^\d+\.\s*', '', first)
+        if len(first) > 15:
+            text = first
+
+    # 2. 尝试从 summary 中提取核心贡献句（找"提出了"/"解决了"/"旨在"等）
+    if not text:
+        summary = pa.get('summary', '')
+        if summary:
+            sentences = re.split(r'[。\n]', summary)
+            for s in sentences:
+                s = s.strip()
+                if not s or len(s) < 15:
+                    continue
+                # 优先找包含核心动作词的句子
+                if re.search(r'提出了|解决了|旨在|针对|引入|设计|构建|发现|证明', s):
+                    text = s
+                    break
+            if not text and sentences:
+                text = sentences[0].strip()
+
+    # 3. 回退到 roast
+    if not text:
+        roast = pa.get('roast', '')
+        if roast:
+            text = roast.split('。')[0].strip()
+
+    # 清理 Markdown 和废话前缀
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
     text = re.sub(r'__(.+?)__', r'\1', text)
     text = re.sub(r'`(.+?)`', r'\1', text)
-    text = re.sub(r'^这篇论文旨在', '', text)
-    text = re.sub(r'^这篇技术报告全面介绍了', '', text)
-    text = re.sub(r'^本文针对', '', text)
-    text = re.sub(r'^本文提出了', '', text)
-    text = re.sub(r'^解决', '', text)
-    text = re.sub(r'^核心贡献：', '', text)
-    text = re.sub(r'^本文', '', text)
+    text = re.sub(r'^这篇论文旨在\s*', '', text)
+    text = re.sub(r'^这篇技术报告全面介绍了\s*', '', text)
+    text = re.sub(r'^本文针对\s*', '', text)
+    text = re.sub(r'^本文提出了\s*', '', text)
+    text = re.sub(r'^解决\s*', '', text)
+    text = re.sub(r'^核心贡献：\s*', '', text)
+    text = re.sub(r'^本文\s*', '', text)
+    text = re.sub(r'^该工作\s*', '', text)
+    text = re.sub(r'^本文中\s*', '', text)
     text = text.strip()
 
     if len(text) > 10:
-        return text[:80] + ('...' if len(text) > 80 else '')
+        return text[:110] + ('...' if len(text) > 110 else '')
     return ''
 
 

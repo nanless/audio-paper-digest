@@ -16,7 +16,7 @@ setupScriptLogging(__filename);
 
 const { execFileSync } = require('child_process');
 
-const { getBeijingDateString, normalizeToBeijingISOString } = require('./utils.js');
+const { getBeijingDateString, getBeijingISOString, normalizeToBeijingISOString, normalizedId } = require('./utils.js');
 const { HUGGINGFACE_CONFIG } = require('./config.js');
 
 /**
@@ -84,6 +84,8 @@ function convertDailyPaper(hfPaper) {
         hf_project_page: paper.projectPage || '',
         hf_github_stars: paper.githubStars || 0,
         hf_discussion_id: paper.discussionId || '',
+        fetchedFrom: 'huggingface',
+        fetchedAt: getBeijingISOString(),
         source: 'huggingface'
     };
 }
@@ -122,6 +124,8 @@ function convertPaper(paper) {
         hf_project_page: '',
         hf_github_stars: 0,
         hf_discussion_id: '',
+        fetchedFrom: 'huggingface',
+        fetchedAt: getBeijingISOString(),
         source: 'huggingface'
     };
 }
@@ -239,11 +243,30 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         console.log(`  upvotes >= ${minUpvotes} 过滤: ${before} → ${papers.length} 篇`);
     }
 
-    // 排除已有论文
+    // 排除已有论文（历史papers.json + 博客已发布 + 本次arxiv抓取）
     if (existingIds.size > 0) {
         const before = papers.length;
-        papers = papers.filter(p => !existingIds.has(p.paper_id));
-        console.log(`  排除已有论文: ${before} → ${papers.length} 篇`);
+        const dupPapers = papers.filter(p => existingIds.has(normalizedId(p.paper_id)));
+        const newPapers = papers.filter(p => !existingIds.has(normalizedId(p.paper_id)));
+
+        // 详细打印被去重的论文
+        if (dupPapers.length > 0) {
+            console.log(`\n  去重详情（排除 ${dupPapers.length} 篇已存在论文）:`);
+            for (const p of dupPapers) {
+                console.log(`    ✗ ${p.paper_id} - ${(p.title || '').substring(0, 60)} (${p.published?.split('T')[0]})`);
+            }
+        }
+
+        // 详细打印新论文
+        if (newPapers.length > 0) {
+            console.log(`\n  新增论文 (${newPapers.length} 篇):`);
+            for (const p of newPapers) {
+                console.log(`    ✓ ${p.paper_id} - ${(p.title || '').substring(0, 60)} (↑${p.hf_upvotes})`);
+            }
+        }
+
+        papers = newPapers;
+        console.log(`\n  排除已有论文: ${before} → ${papers.length} 篇`);
     }
 
     // 按 upvotes 降序排列
@@ -270,6 +293,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
  */
 function mergeAndDeduplicate(arxivPapers, hfPapers) {
     const merged = new Map();
+    let mergedCount = 0, hfOnlyCount = 0;
 
     // 先添加 arxiv 论文（优先级更高）
     for (const paper of arxivPapers) {
@@ -300,10 +324,16 @@ function mergeAndDeduplicate(arxivPapers, hfPapers) {
             if (!existing.summary && paper.summary) {
                 existing.summary = paper.summary;
             }
+            mergedCount++;
+            console.log(`    ⟳ ${id} - arxiv+HuggingFace 合并 (↑${paper.hf_upvotes})`);
         } else {
             merged.set(id, { ...paper, sources: ['huggingface'] });
+            hfOnlyCount++;
+            console.log(`    ✓ ${id} - ${(paper.title || '').substring(0, 60)} (↑${paper.hf_upvotes}) [仅HF]`);
         }
     }
+
+    console.log(`\n  合并统计: arxiv+HF ${mergedCount} 篇, 仅HF ${hfOnlyCount} 篇, 合并后总计 ${merged.size} 篇`);
 
     return Array.from(merged.values());
 }

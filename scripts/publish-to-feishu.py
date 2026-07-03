@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+from dotenv import load_dotenv
+load_dotenv()
+
 from log_setup import setup_script_logging
 setup_script_logging(__file__)
 
@@ -203,11 +206,12 @@ def generate_paper_md(paper, date_str):
             ('作者与机构', 'authors'),
             ('毒舌点评', 'roast'),
             ('核心摘要', 'summary'),
-            ('模型架构', 'architecture'),
+            ('方法概述和架构', 'architecture'),
             ('核心创新点', 'innovation'),
             ('细节详述', 'details'),
             ('实验结果', 'results'),
             ('评分理由', 'scoringReason'),
+            ('局限与问题', 'limitations'),
             ('开源详情', 'opensource'),
         ]
         for label, key in sections:
@@ -223,7 +227,7 @@ def generate_overview_md(scored, unscored, date_str):
     total = len(scored) + len(unscored)
     top_tags = extract_top_tags([p for _, p, _ in scored] + unscored, limit=8)
 
-    md = f'# 语音/音频论文速递 {date_str}\n\n'
+    md = f'# 语音/音乐/音频论文速递 {date_str}\n\n'
     md += f'共分析 **{total}** 篇论文\n\n'
     md += '---\n\n'
     md += '## 今日概览\n\n'
@@ -295,7 +299,7 @@ def main():
 
     # Create document
     total = len(scored) + len(unscored)
-    doc_title = f"📚 语音/音频论文速递 {today} | {total}篇"
+    doc_title = f"📚 语音/音乐/音频论文速递 {today} | {total}篇"
     print(f"📝 创建飞书文档: {doc_title}")
     doc = create_document(token, doc_title)
     doc_id = doc['document_id']

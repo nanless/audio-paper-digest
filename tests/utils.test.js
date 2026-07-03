@@ -38,9 +38,14 @@ describe('parseMachineSummary', () => {
     it('解析标准机器摘要块', () => {
         const analysis = `### 机器摘要
 rank_bucket: 前10%
-quality_score: 6.5
-value_score: 1.5
-reproducibility_bonus: 0.5
+innovation: 2.0
+technical_rigor: 1.2
+experimental_sufficiency: 1.0
+clarity: 0.8
+impact: 1.3
+open_source: 1.0
+reproducibility: 0.3
+engineering_score: 1.2
 confidence: 高
 primary_task_tag: #语音识别
 primary_method_tag: #语音大模型
@@ -53,9 +58,14 @@ has_dataset: 否
 ...`;
         const r = parseMachineSummary(analysis);
         assert.strictEqual(r.rankBucket, '前10%');
-        assert.strictEqual(r.qualityScore, '6.5');
-        assert.strictEqual(r.valueScore, '1.5');
-        assert.strictEqual(r.reproducibilityBonus, '0.5');
+        assert.strictEqual(r.innovation, '2.0');
+        assert.strictEqual(r.technicalRigor, '1.2');
+        assert.strictEqual(r.experimentalSufficiency, '1.0');
+        assert.strictEqual(r.clarity, '0.8');
+        assert.strictEqual(r.impact, '1.3');
+        assert.strictEqual(r.openSource, '1.0');
+        assert.strictEqual(r.reproducibility, '0.3');
+        assert.strictEqual(r.engineeringScore, '1.2');
         assert.strictEqual(r.confidence, '高');
         assert.strictEqual(r.primaryTaskTag, '#语音识别');
         assert.strictEqual(r.primaryMethodTag, '#语音大模型');
@@ -68,7 +78,7 @@ has_dataset: 否
     it('空输入返回空对象', () => {
         const r = parseMachineSummary('');
         assert.strictEqual(r.rankBucket, '');
-        assert.strictEqual(r.qualityScore, '');
+        assert.strictEqual(r.innovation, '');
     });
 });
 
@@ -79,7 +89,7 @@ describe('parseAnalysis', () => {
 
 ### 机器摘要
 rank_bucket: 前25%
-quality_score: 6.0
+innovation: 2.0
 
 ## 标签
 #语音识别 #语音大模型 #多语言
@@ -92,7 +102,7 @@ quality_score: 6.0
 
 ## 详细分析
 
-### 01. 模型架构
+### 01. 方法概述和架构
 架构描述
 
 ### 02. 核心创新点
@@ -116,7 +126,7 @@ quality_score: 6.0
         assert.strictEqual(r.score, '8.5');
         assert.deepStrictEqual(r.tags, ['#语音识别', '#语音大模型', '#多语言']);
         assert.strictEqual(r.rankBucket, '前25%');
-        assert.strictEqual(r.qualityScore, '6.0');
+        assert.strictEqual(r.innovationScore, '2.0');
         assert.ok(r.roast.includes('不错'));
         assert.ok(r.summary.includes('摘要'));
     });
@@ -143,6 +153,10 @@ describe('detectApiType', () => {
     it('通用 OpenAI -> openai', () => {
         assert.strictEqual(detectApiType('https://api.openai.com/v1', 'gpt-4o'), 'openai');
     });
+
+    it('DeepSeek /anthropic 路径 -> openai', () => {
+        assert.strictEqual(detectApiType('https://api.deepseek.com/anthropic', 'deepseek-v4-pro'), 'openai');
+    });
 });
 
 describe('buildApiUrl', () => {
@@ -159,6 +173,11 @@ describe('buildApiUrl', () => {
     it('OpenAI -> /v1/chat/completions', () => {
         const url = buildApiUrl('openai', 'https://api.openai.com/v1');
         assert.strictEqual(url, 'https://api.openai.com/v1/chat/completions');
+    });
+
+    it('DeepSeek /anthropic 端点 -> /v1/chat/completions', () => {
+        const url = buildApiUrl('openai', 'https://api.deepseek.com/anthropic');
+        assert.strictEqual(url, 'https://api.deepseek.com/v1/chat/completions');
     });
 });
 

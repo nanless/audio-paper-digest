@@ -30,6 +30,9 @@ def strip_md(t):
     t = re.sub(r'\*(.+?)\*', r'\1', t)
     t = re.sub(r'_(.+?)_', r'\1', t)
     t = re.sub(r'`(.+?)`', r'\1', t)
+    # 清理残留的不成对 ** 和 __
+    t = t.replace('**', '')
+    t = t.replace('__', '')
     t = re.sub(r'^#{1,6}\s+', '', t, flags=re.MULTILINE)
     return t.strip()
 
@@ -38,9 +41,14 @@ def parse_machine_summary(analysis):
     """解析 机器摘要 块（兼容 ## 和 ### 标题）"""
     result = {
         'rankBucket': '',
-        'qualityScore': '',
-        'valueScore': '',
-        'reproducibilityBonus': '',
+        'innovation': '',
+        'technicalRigor': '',
+        'experimentalSufficiency': '',
+        'clarity': '',
+        'impact': '',
+        'openSource': '',
+        'reproducibility': '',
+        'engineeringScore': '',
         'confidence': '',
         'primaryTaskTag': '',
         'primaryMethodTag': '',
@@ -59,9 +67,14 @@ def parse_machine_summary(analysis):
 
     key_map = {
         'rank_bucket': 'rankBucket',
-        'quality_score': 'qualityScore',
-        'value_score': 'valueScore',
-        'reproducibility_bonus': 'reproducibilityBonus',
+        'innovation': 'innovation',
+        'technical_rigor': 'technicalRigor',
+        'experimental_sufficiency': 'experimentalSufficiency',
+        'clarity': 'clarity',
+        'impact': 'impact',
+        'open_source': 'openSource',
+        'reproducibility': 'reproducibility',
+        'engineering_score': 'engineeringScore',
         'confidence': 'confidence',
         'primary_task_tag': 'primaryTaskTag',
         'primary_method_tag': 'primaryMethodTag',
@@ -82,7 +95,7 @@ def parse_machine_summary(analysis):
         if mapped:
             val = strip_md(km.group(2))
             # 对于数值型字段，只保留数字部分（去除中文括号说明等）
-            if mapped in ('qualityScore', 'valueScore', 'reproducibilityBonus'):
+            if mapped in ('innovation', 'technicalRigor', 'experimentalSufficiency', 'clarity', 'impact', 'openSource', 'reproducibility', 'engineeringScore'):
                 num_match = re.search(r'(\d+\.?\d*)', val)
                 if num_match:
                     val = num_match.group(1)
@@ -115,61 +128,57 @@ def _normalize_tag(raw):
     return t
 
 
-# 允许的标签表（必须与 deep-analysis.md 中的标签表保持一致）
+# 允许的标签表（必须与 deep-analysis.md 中的标签表 + JS ALLOWED_TAGS 严格一致）
 ALLOWED_TAGS = {
-    '音频大模型', '语音大模型', '多模态模型', '统一音频模型', '大语言模型',
-    '生成模型', '自回归模型', '端到端', '语音合成', '语音识别', '语音增强',
-    '语音分离', '语音克隆', '语音转换', '语音翻译', '语音情感识别',
-    '语音活动检测', '说话人识别', '说话人验证', '说话人分离', '说话人日志',
-    '语音对话系统', '语音伪造检测', '语音匿名化', '语音生物标志物', '语音编辑',
-    '语音质量评估', '语音打断处理', '语音去噪', '语音超分辨', '语音补全',
-    '语音风格迁移', '情感语音合成', '语音编码', '语音检索', '语音问答', '语音摘要',
-    '音频生成', '音频分类', '音频事件检测', '音频场景理解', '音频问答', '音频检索',
-    '音频安全', '音频深度伪造检测', '声景生成', '音频超分辨', '音频指纹',
-    '房间声学', '回声消除', '空间音频', '3D音频', '声源定位', '生物声学',
-    '音频编码', '音频修复', '音频水印', '音频质量评估',
-    '音乐生成', '音乐信息检索', '音乐理解', '歌唱语音合成', '音乐转录',
-    '和弦识别', '节拍跟踪', '音乐源分离', '音乐结构分析', '乐器识别',
-    '音乐表示学习', '风格迁移', '音乐评估', '舞台技术', '乐谱生成', '音乐推荐',
-    '音乐去噪', '音乐超分辨',
-    '深度学习', '神经网络', '生成模型', '关键词检测', '声区控制', '数据声化', '认知科学', '统计信号处理',
-    '预训练', '自监督学习', '对比学习', '强化学习', '知识蒸馏', '迁移学习',
-    '领域适应', '数据增强', '扩散模型', '流匹配',
-    'Transformer', 'GAN', 'VAE', '注意力机制', '联邦学习', '提示学习', '指令微调', '模型融合',
-    '信号处理', '麦克风阵列', '波束成形', '时频分析', '多任务学习',
-    '多语言', '零样本', '少样本', '低资源', '流式处理', '实时处理', '多通道', '在线', '离线',
-    '对抗样本', '鲁棒性', '模型量化', '高效推理', '长音频处理', '基准测试',
-    '数据集', '开源工具', '模型评估', '模型比较', '数据清洗', '评测协议',
-    '数据隐私', '音视频', '跨模态', '工业应用', '医疗音频', '智能座舱',
-    '内容审核', '游戏音频', '声纹识别', '语音驱动', '智能音箱', '助听器', '会议转录',
+    # 任务 — 语音（19个）
+    '语音交互', '语音合成', '语音识别', '语音增强', '语音分离',
+    '语音克隆', '语音转换', '语音翻译', '语音情感识别', '语音活动检测',
+    '说话人验证', '说话人日志', '语音伪造检测', '语音编辑', '语音质量评估',
+    '语音超分', '语音编码', '语音唤醒', '语音属性识别',
+    # 任务 — 音频（18个）
+    '音频交互', '音频生成', '音频分类', '音频事件检测', '音频理解', '音频检索',
+    '音频分离', '音频伪造检测', '空间音频', '声源定位', '音频编码', '音频修复', '音频水印', '音频质量评估',
+    '音频超分辨', '音频指纹', '主动降噪', '回声消除',
+    # 任务 — 音乐（8个）
+    '音乐生成', '音乐检索', '音乐理解', '歌唱生成', '音乐转录', '音乐源分离', '音乐推荐', '音乐超分辨',
+    # 任务 — 多模态（10个）
+    '音视频理解', '音视频生成', '音视频交互', '音视频语音识别', '音视频语音合成', '音视频语音分离',
+    '音视频问答', '音视频声源分离', '音频字幕生成', '音乐文本检索',
+    # 方法 — 神经网络架构（17个）
+    '自回归模型', '扩散模型', '流匹配', 'Transformer', 'CNN', 'RNN', '图神经网络', '胶囊网络',
+    '生成对抗网络', '变分自编码器', '音频大模型', '语音大模型', '多模态模型', '统一音频模型',
+    '大语言模型', '生成模型', '端到端',
+    # 方法 — 训练策略（28个）
+    '预训练', '后训练', 'SFT', '自监督学习', '无监督学习', '对比学习', '强化学习',
+    '知识蒸馏', '迁移学习', '领域适应', '测试时自适应', '元学习', '持续学习', '课程学习', '对抗训练',
+    '多任务学习', '模型压缩', '模型剪枝', '模型融合', '模型集成', '集成学习', '参数高效微调',
+    'LoRA', 'Adapter', '前缀微调', '提示学习', '指令微调', '联邦学习',
+    # 属性/设置（12个）
+    '多语言', '零样本', '少样本', '低资源',
+    '流式处理', '实时处理', '多通道', '在线', '离线',
+    '鲁棒性', '高效推理', '长音频处理', '理论分析',
+    # 数据/工具/评估（6个）
+    '基准测试', '数据集', '开源工具', '模型评估', '模型比较', '数据清洗',
+    # 领域/应用（11个）
+    '音视频', '工业应用', '医疗音频', '智能座舱', '内容审核', '游戏音频', '智能音箱', '助听器', '会议转录', '教育',
+    '可解释性',
 }
 
 _BAD_TASK_TAG_PATTERNS = [
-    r'^#[a-z]+_[a-z]+',           # snake_case 如 #uncertainty_estimation
-    r'^#cs\.[A-Z]{2}$',            # arXiv 类别如 #cs.CL
-    r'^#eess\.[A-Z]{2}$',          # arXiv 类别如 #eess.AS
-    r'^#Theory$',                  # 过于宽泛
-    r'^#Speech Processing$',       # 过于宽泛
-    r'^#System Description$',      # 不是任务标签
-    r'^#Audio Generation$',        # 方法 disguised as 任务 (英文)
-    r'^#系统描述$',                # 不是具体任务标签
+    r'^#[a-z]+_[a-z]+',           # snake_case
+    r'^#cs\.[A-Z]{2}$',            # arXiv 类别
+    r'^#eess\.[A-Z]{2}$',
 ]
 _BAD_TASK_TAG_RE = [re.compile(p, re.I) for p in _BAD_TASK_TAG_PATTERNS]
 
 
 def _is_bad_task_tag(tag):
-    """判断任务标签质量是否太差，需要 fallback 到 tags[0]"""
+    """判断标签是否不合格（不在白名单或匹配坏模式）"""
     if not tag:
         return True
     for pat in _BAD_TASK_TAG_RE:
         if pat.search(tag):
             return True
-    # 过长且含空格的英文描述（如 #Sound Zone Control）
-    if len(tag) > 15 and ' ' in tag and not any('\u4e00' <= c <= '\u9fff' for c in tag):
-        return True
-    # 包含冒号/论文类型等明显不是任务标签的内容
-    if '论文类型' in tag or '类型:' in tag or ('类型' in tag and ':' in tag):
-        return True
     # 不在允许标签表中
     tag_name = tag[1:] if tag.startswith('#') else tag
     if tag_name not in ALLOWED_TAGS:
@@ -177,62 +186,57 @@ def _is_bad_task_tag(tag):
     return False
 
 
-# 已知错误标签 -> 正确标签映射表（LLM 常犯的自创/英文标签）
+# 已知错误标签 → 正确标签映射表（LLM 常犯的自创/英文标签）
 _TAG_FIX_MAP = {
-    # 英文标签
-    '#InteractiveMusicGeneration': '#音乐生成',
+    # 英文标签 → 中文
     '#DiffusionModels': '#扩散模型',
     '#FlowMatching': '#流匹配',
     '#Benchmark': '#基准测试',
     '#MusicGeneration': '#音乐生成',
-    '#AutoregressiveGeneration': '#自回归模型',
     '#RealTimeSystem': '#实时处理',
     '#KV-Caching': '#高效推理',
-    # 自创/不在列表的中文标签
-    '#政治演讲中的情感诉求分析': '#语音情感识别',
-    '#基于大语言模型的多模态情感分析': '#大语言模型',
-    '#音频去噪': '#语音去噪',
-    '#条件生成模型': '#生成模型',
-    '#用户定义关键词检测': '#关键词检测',
-    '#个人声区滤波器生成': '#声区控制',
-    '#数据声化': '#数据声化',
-    '#参数映射': '#信号处理',
+    '#InteractiveMusicGeneration': '#音乐生成',
+    '#AutoregressiveGeneration': '#自回归模型',
+    # 旧标签 → 新标签（LLM 可能还在用旧版标签表中的名称）
+    '#语音超分辨': '#语音超分',
+    '#语音对话系统': '#语音交互',
+    '#音频场景理解': '#音频理解',
+    '#音频深度伪造检测': '#音频伪造检测',
+    '#歌唱语音合成': '#歌唱生成',
+    '#音乐信息检索': '#音乐检索',
+    '#说话人识别': '#说话人验证',
+    '#说话人分离': '#说话人日志',
+    '#语音去噪': '#语音增强',
+    '#语音检索': '#音频检索',
+    '#风格迁移': '#语音合成',
+    '#数据增强': '#预训练',
+    '#跨模态': '#多模态模型',
+    '#声纹识别': '#说话人验证',
+    '#语音驱动': '#音视频生成',
+    '#3D音频': '#空间音频',
+    '#关键词检测': '#语音唤醒',
+    '#信号处理': '#音频理解',
+    '#深度学习': '#预训练',
+    '#神经网络': '#自监督学习',
+    '#GAN': '#生成对抗网络',
+    '#VAE': '#变分自编码器',
+    '#对抗样本': '#鲁棒性',
+    '#模型量化': '#高效推理',
+    '#评测协议': '#模型评估',
+    '#数据隐私': '#可解释性',
+    '#注意力机制': '#Transformer',
+    # 常见自创标签
+    '#盲源分离': '#音频分离',
+    '#语音问答': '#语音交互',
+    '#语音摘要': '#语音交互',
+    '#语音属性编辑': '#语音编辑',
     '#文本到音乐生成': '#音乐生成',
-    '#标准化基准': '#基准测试',
-    '#多阶段评估': '#模型评估',
-    '#非高斯随机过程估计': '#统计信号处理',
-    '#Kunchenko随机多项式': '#统计信号处理',
-    '#多项式最大化方法': '#统计信号处理',
-    '#听觉认知建模': '#认知科学',
-    '#语音熵': '#统计信号处理',
-    '#语音语言模型内部机制分析': '#大语言模型',
-    '#因果中介分析': '#模型评估',
-    '#多模态联合推理': '#跨模态',
-    '#潜在空间推理': '#跨模态',
-    '#交错推理': '#跨模态',
-    '#跨模态指代消歧与定位': '#跨模态',
-    '#上下文改写与视觉定位解耦': '#跨模态',
-    '#视频理解基准测试': '#音视频',
-    '#多模态数据集构建': '#数据集',
-    '#双阶段匹配': '#迁移学习',
-    '#多模态注册': '#迁移学习',
-    '#参数高效微调': '#迁移学习',
-    '#坐标条件神经网络': '#神经网络',
-    '#盲源分离': '#语音分离',
-    '#声场重建': '#空间音频',
-    '#LMMSE估计': '#信号处理',
-    '#伪标签学习': '#自监督学习',
-    '#多媒体取证': '#音频安全',
-    '#合成媒体与深度伪造检测': '#音频深度伪造检测',
-    '#音频推理': '#音频问答',
-    '#长期助手': '#语音对话系统',
-    '#代理基准测试': '#基准测试',
     '#多模态情感识别': '#语音情感识别',
-    '#多编码器融合': '#模型融合',
-    '#视频生成': '#音视频',
-    '#不确定性估计': '#模型评估',
-    '#证据深度学习': '#深度学习',
-    '#视觉语言定位': '#跨模态',
+    '#多模态联合推理': '#音视频理解',
+    '#音频推理': '#音频理解',
+    '#长期助手': '#语音交互',
+    '#伪标签学习': '#自监督学习',
+    '#参数高效微调': '#LoRA',
     '#多阶段管线': '#模型融合',
 }
 
@@ -269,9 +273,14 @@ def parse_analysis(analysis):
     r = {
         'machineSummary': None,
         'rankBucket': '',
-        'qualityScore': '',
-        'valueScore': '',
-        'reproducibilityBonus': '',
+        'innovationScore': '',
+        'technicalRigorScore': '',
+        'experimentalSufficiencyScore': '',
+        'clarityScore': '',
+        'impactScore': '',
+        'openSourceScore': '',
+        'reproducibilityScore': '',
+        'engineeringScore': '',
         'confidence': '',
         'primaryTaskTag': '',
         'primaryMethodTag': '',
@@ -284,11 +293,11 @@ def parse_analysis(analysis):
     m = re.search(r'##\s*评分\s*\n\s*\*?(\d+\.?\d*)\*?', analysis)
     r['score'] = m.group(1) if m else ''
 
-    # 如果未匹配到 ## 评分，从机器摘要的 quality_score 获取
+    # 如果未匹配到 ## 评分，从机器摘要的 innovation 获取（作为回退）
     if not r['score']:
         ms = parse_machine_summary(analysis)
-        if ms.get('qualityScore'):
-            r['score'] = ms['qualityScore']
+        if ms.get('innovation'):
+            r['score'] = ms['innovation']
 
     # 先尝试从 ## 标签 部分提取"主任务标签"和"主方法标签"行
     extracted_task_tag = ''
@@ -324,9 +333,14 @@ def parse_analysis(analysis):
     machine_summary = parse_machine_summary(analysis)
     r['machineSummary'] = machine_summary
     r['rankBucket'] = machine_summary['rankBucket']
-    r['qualityScore'] = machine_summary['qualityScore']
-    r['valueScore'] = machine_summary['valueScore']
-    r['reproducibilityBonus'] = machine_summary['reproducibilityBonus']
+    r['innovationScore'] = machine_summary['innovation']
+    r['technicalRigorScore'] = machine_summary['technicalRigor']
+    r['experimentalSufficiencyScore'] = machine_summary['experimentalSufficiency']
+    r['clarityScore'] = machine_summary['clarity']
+    r['impactScore'] = machine_summary['impact']
+    r['openSourceScore'] = machine_summary['openSource']
+    r['reproducibilityScore'] = machine_summary['reproducibility']
+    r['engineeringScore'] = machine_summary['engineeringScore']
     r['confidence'] = machine_summary['confidence']
     # 主任务/主方法标签：优先从 ## 标签 部分的"主任务标签"行提取，
     # 其次从机器摘要获取，最后从 tags[0] fallback。
@@ -424,37 +438,79 @@ def parse_analysis(analysis):
     if scoring_text:
         # 每个维度的上限（用于截断旧格式或 LLM 越界输出）
         dim_max = {
-            '创新性': 3,
+            '创新性': 2,
             '技术严谨性': 1.5,
             '实验充分性': 1.5,
             '清晰度': 1,
-            '影响力': 2,
+            '影响力': 1.5,
             '开源': 1.5,
-            '可复现性': 0.5
+            '可复现性': 0.5,
+            '工程/实践价值': 1.5
         }
         dim_scores = {}
         for dim, max_val in dim_max.items():
-            # 支持多种 LLM 输出格式：
-            # 1. **创新性 (3分)**：2.2分
-            # 2. **创新性 (2.5/3)**：...
-            # 3. **创新性: 2.3/3**
+            # 支持多种 LLM 输出格式
+            # 格式A（10分制，需转换）：dim (max/max)：score/10
+            # 格式B（维度分制，直接用）：dim (score/max)：description
+            # 格式C：dim：score/max
+
+            # 优先匹配10分制格式（格式A）：dim ... ：score/10
+            ten_point_pat = re.compile(
+                r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*\d+\.?\d*\s*/\s*\d+\.?\d*\s*[）)]\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(\d+\.?\d*)\s*/\s*10'
+            )
+            ten_point_match = ten_point_pat.search(scoring_text)
+            if ten_point_match:
+                try:
+                    v10 = float(ten_point_match.group(1))
+                    dim_scores[dim] = round((v10 / 10) * max_val, 1)
+                    continue
+                except (ValueError, TypeError):
+                    pass
+
+            # 次优先：dim ... 得分X.Y/max 格式（得分在描述末尾）
+            defen_pat = re.compile(
+                r'(?:\*\*)?\s*' + re.escape(dim) + r'.*?得分(\d+\.?\d*)\s*(?:/\s*(\d+\.?\d*))?'
+            )
+            defen_match = defen_pat.search(scoring_text)
+            if defen_match:
+                try:
+                    v_defen = float(defen_match.group(1))
+                    v_max_str = defen_match.group(2)
+                    v_max = float(v_max_str) if v_max_str else None
+                    if v_max and v_max == 10:
+                        dim_scores[dim] = round((v_defen / 10) * max_val, 1)
+                    elif v_max and v_max > 0:
+                        dim_scores[dim] = min(v_defen, max_val)
+                    else:
+                        # 无/max：假设是维度原始分值
+                        dim_scores[dim] = min(v_defen, max_val)
+                    continue
+                except (ValueError, TypeError):
+                    pass
+
+            # 非10分制的常规匹配
             dm = None
             for pat in [
-                # 格式1: dim (max/max)**：score 或 dim（max/max）**：score
-                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*\d+\.?\d*\s*(?:/\s*\d+\.?\d*)?\s*分?\s*[）)]\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(\d+\.?\d*)'),
-                # 格式2: dim (score/max) 或 dim（score/max）
-                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*(\d+\.?\d*)\s*/\s*\d+\.?\d*\s*[）)]'),
-                # 格式3: dim: score/max
+                # 格式0: dim (max分)：score/max（如 HAIM 的格式）
+                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*\d+\.?\d*分\s*[）)]\s*[:：]\s*(\d+\.?\d*)\s*/\s*\d+\.?\d*'),
+                # 格式1: dim (score/max)：description（排除有/10的情况）
+                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*(\d+\.?\d*)\s*/\s*\d+\.?\d*\s*[）)](?!.*/10)'),
+                # 格式2: dim：score/max
                 re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[:：]\s*(\d+\.?\d*)\s*/\s*\d+\.?\d*\s*(?:\*\*)?'),
-                # 格式4: dim（score/max）：description
-                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*(\d+\.?\d*)\s*/\s*\d+\.?\d*\s*[）)]\s*[:：]'),
+                # 格式3: dim/满分：得分 score
+                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*/\s*\d+\.?\d*\s*[:：]\s*(?:得分\s*)?(\d+\.?\d*)'),
+                # 格式4: dim (max分 / 满分max分) -> score分
+                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*\d+\.?\d*分\s*/\s*满分\s*\d+\.?\d*分\s*[）)]\s*->\s*(\d+\.?\d*)分'),
+                # 格式5: dim（/max）：score/max
+                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*/\s*\d+\.?\d*\s*[）)]\s*[:：]\s*(\d+\.?\d*)'),
+                # 格式6: dim (max分中的score分)
+                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*\d+\.?\d*分中的(\d+\.?\d*)分\s*[）)]'),
             ]:
                 dm = pat.search(scoring_text)
                 if dm:
                     break
             if dm:
                 try:
-                    # 截断到该维度的上限，防止旧格式或 LLM 越界输出导致总分异常
                     dim_scores[dim] = min(float(dm.group(1)), max_val)
                 except (ValueError, TypeError):
                     pass
@@ -463,21 +519,40 @@ def parse_analysis(analysis):
             total = max(1.0, min(10.0, total))
             r['score'] = str(round(total, 1))
 
-            # 用评分理由的分项覆盖机器摘要字段，确保与总分一致
-            qs = dim_scores.get('创新性', 0) + dim_scores.get('技术严谨性', 0) \
-                 + dim_scores.get('实验充分性', 0) + dim_scores.get('清晰度', 0)
-            vs = dim_scores.get('影响力', 0)
-            rb = dim_scores.get('开源', 0) + dim_scores.get('可复现性', 0)
-            r['qualityScore'] = str(round(qs, 1))
-            r['valueScore'] = str(round(vs, 1))
-            r['reproducibilityBonus'] = str(round(rb, 1))
+            # 用评分理由的分项覆盖结果字段，确保与总分一致
+            r['innovationScore'] = str(round(dim_scores.get('创新性', 0), 1))
+            r['technicalRigorScore'] = str(round(dim_scores.get('技术严谨性', 0), 1))
+            r['experimentalSufficiencyScore'] = str(round(dim_scores.get('实验充分性', 0), 1))
+            r['clarityScore'] = str(round(dim_scores.get('清晰度', 0), 1))
+            r['impactScore'] = str(round(dim_scores.get('影响力', 0), 1))
+            r['openSourceScore'] = str(round(dim_scores.get('开源', 0), 1))
+            r['reproducibilityScore'] = str(round(dim_scores.get('可复现性', 0), 1))
+            r['engineeringScore'] = str(round(dim_scores.get('工程/实践价值', 0), 1))
             if r.get('machineSummary'):
-                r['machineSummary']['qualityScore'] = r['qualityScore']
-                r['machineSummary']['valueScore'] = r['valueScore']
-                r['machineSummary']['reproducibilityBonus'] = r['reproducibilityBonus']
+                r['machineSummary']['innovation'] = r['innovationScore']
+                r['machineSummary']['technicalRigor'] = r['technicalRigorScore']
+                r['machineSummary']['experimentalSufficiency'] = r['experimentalSufficiencyScore']
+                r['machineSummary']['clarity'] = r['clarityScore']
+                r['machineSummary']['impact'] = r['impactScore']
+                r['machineSummary']['openSource'] = r['openSourceScore']
+                r['machineSummary']['reproducibility'] = r['reproducibilityScore']
+                r['machineSummary']['engineeringScore'] = r['engineeringScore']
 
-    # rankBucket 推断：在评分计算完成后执行，确保基于最终 score
-    if not r.get('rankBucket') and r.get('score'):
+    # 矛盾检测：开源高分但无任何实际链接
+    open_score_val = float(r.get('openSourceScore', 0) or 0)
+    has_code_yes = r.get('hasCode') in ('是', 'yes')
+    has_model_yes = r.get('hasModel') in ('是', 'yes')
+    has_dataset_yes = r.get('hasDataset') in ('是', 'yes')
+    if open_score_val >= 1.0 and not has_code_yes and not has_model_yes and not has_dataset_yes:
+        r['openSourceScore'] = '0'
+        if r.get('machineSummary'):
+            r['machineSummary']['openSource'] = '0'
+        total = float(r.get('score', 0) or 0)
+        total = max(1.0, min(10.0, total - open_score_val))
+        r['score'] = str(round(total, 1))
+
+    # rankBucket 推断：始终基于最终 score 重新计算（覆盖 LLM 原始值）
+    if r.get('score'):
         try:
             s = float(r['score'])
             if s >= 9.0:
@@ -488,6 +563,9 @@ def parse_analysis(analysis):
                 r['rankBucket'] = '前50%'
             else:
                 r['rankBucket'] = '后50%'
+            # 同步 machineSummary
+            if r.get('machineSummary'):
+                r['machineSummary']['rankBucket'] = r['rankBucket']
         except (ValueError, TypeError):
             pass
 

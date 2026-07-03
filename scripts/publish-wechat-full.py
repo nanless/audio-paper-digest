@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+from dotenv import load_dotenv
+load_dotenv()
+
 from log_setup import setup_script_logging
 setup_script_logging(__file__)
 
@@ -183,12 +186,22 @@ def main():
             if meta:
                 h += f'<p style="color:#666;">{" | ".join(meta)}</p>\n'
             machine_parts = []
-            if pa.get('qualityScore'):
-                machine_parts.append(f'学术质量 {pa["qualityScore"]}/7')
-            if pa.get('valueScore'):
-                machine_parts.append(f'选题价值 {pa["valueScore"]}/2')
-            if pa.get('reproducibilityBonus'):
-                machine_parts.append(f'复现加成 {pa["reproducibilityBonus"]}')
+            if pa.get('innovationScore'):
+                machine_parts.append(f'创新 {pa["innovationScore"]}/2')
+            if pa.get('technicalRigorScore'):
+                machine_parts.append(f'严谨 {pa["technicalRigorScore"]}/1.5')
+            if pa.get('experimentalSufficiencyScore'):
+                machine_parts.append(f'实验 {pa["experimentalSufficiencyScore"]}/1.5')
+            if pa.get('clarityScore'):
+                machine_parts.append(f'清晰 {pa["clarityScore"]}/1')
+            if pa.get('impactScore'):
+                machine_parts.append(f'影响 {pa["impactScore"]}/1.5')
+            if pa.get('openSourceScore'):
+                machine_parts.append(f'开源 {pa["openSourceScore"]}/1.5')
+            if pa.get('reproducibilityScore'):
+                machine_parts.append(f'复现 {pa["reproducibilityScore"]}/0.5')
+            if pa.get('engineeringScore'):
+                machine_parts.append(f'工程 {pa["engineeringScore"]}/1.5')
             if pa.get('confidence'):
                 machine_parts.append(f'置信度 {pa["confidence"]}')
             if machine_parts:
@@ -199,9 +212,10 @@ def main():
 
             sections = [
                 ('💡 毒舌点评', 'roast'), ('📌 核心摘要', 'summary'),
-                ('🏗️ 模型架构', 'architecture'),
+                ('🏗️ 方法概述和架构', 'architecture'),
                 ('💡 核心创新点', 'innovation'), ('🔬 细节详述', 'details'),
                 ('📊 实验结果', 'results'), ('⚖️ 评分理由', 'scoringReason'),
+                ('🚨 局限与问题', 'limitations'),
                 ('🔗 开源详情', 'opensource'),
             ]
             for label, key in sections:
@@ -274,9 +288,9 @@ def main():
         part_paper_count = len(part_indices)
 
         if total_parts == 1:
-            part_title = f"语音/音频论文速递 {today} | {total}篇论文"
+            part_title = f"语音/音乐/音频论文速递 {today} | {total}篇论文"
         else:
-            part_title = f"语音/音频论文速递 {today} | part {part_num} | {part_paper_count}篇论文"
+            part_title = f"语音/音乐/音频论文速递 {today} | part {part_num} | {part_paper_count}篇论文"
 
         html = f'<h2 style="text-align:center;">{part_title}</h2>\n'
         if total_parts > 1:
@@ -329,7 +343,7 @@ def main():
             print(f"  ❌ Part {part_num} 请求异常: {e}")
 
     preview_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'current', f'wechat-preview-{today}.html')
-    first_part_html = f'<h2 style="text-align:center;">语音/音频论文速递 {today}</h2>\n'
+    first_part_html = f'<h2 style="text-align:center;">语音/音乐/音频论文速递 {today}</h2>\n'
     first_part_html += f'<p style="text-align:center;color:#888;">共 {total} 篇，分 {total_parts} 部分</p>\n<hr/>\n'
     first_part_html += overview
     for ph, _ in paper_htmls:

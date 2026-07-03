@@ -158,9 +158,10 @@ function _llmFilterCall(url, apiType, config, prompt, paperId) {
             headers,
             timeout: FILTER_TIMEOUT_MS
         }, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
+            const chunks = [];
+            res.on('data', chunk => chunks.push(chunk));
             res.on('end', () => {
+                const data = Buffer.concat(chunks).toString('utf8');
                 try {
                     const response = JSON.parse(data);
                     const content = parseResponseText(apiType, response);
