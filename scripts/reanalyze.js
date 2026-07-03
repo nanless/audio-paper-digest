@@ -19,7 +19,7 @@ const missingEnvVars = requiredEnvVars.filter(name => !process.env[name]);
 if (missingEnvVars.length > 0) {
     console.error('[reanalyze] 错误: 缺少必需环境变量');
     console.error(`[reanalyze] 缺少: ${missingEnvVars.join(', ')}`);
-    console.error('[reanalyze] 请在 ~/.hermes/.env 中配置后重试');
+    console.error('[reanalyze] 请在项目根目录的 .env 文件中配置后重试');
     process.exit(1);
 }
 
@@ -77,8 +77,6 @@ async function reanalyzeAll() {
         writeFileAtomic(DATA_FILE, JSON.stringify(payload, null, 2));
     };
 
-    let lastSaveIndex = 0;
-
     // 预先建立 ID -> 索引映射，避免并发时 findIndex 可能找到错误位置
     const paperIndexMap = new Map(papers.map((p, i) => [(p.arxivId || p.paper_id), i]));
 
@@ -116,7 +114,6 @@ async function reanalyzeAll() {
             const processed = saveStats.success + saveStats.failed;
             console.log(`[reanalyze] 💾 中间结果已保存 (${processed}/${papers.length})`);
             doSave();
-            lastSaveIndex = processed;
         }
     });
 

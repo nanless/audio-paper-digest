@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+from dotenv import load_dotenv
+load_dotenv(override=True)  # 强制覆盖系统环境变量，确保使用 .env 文件中的配置
+
 from log_setup import setup_script_logging
 setup_script_logging(__file__)
 
@@ -26,19 +29,6 @@ from publish_common import (
     extract_all_tags, score_emoji, format_medal, build_paper_meta
 )
 from utils import strip_md, parse_analysis
-
-
-def _paper_id(paper):
-    """获取论文 ID（兼容 arXiv 和 ICML 格式）"""
-    return paper.get('arxivId') or paper.get('id', '')
-
-
-def _paper_url(paper):
-    """获取论文链接（兼容 arXiv 和 ICML 格式）"""
-    if paper.get('arxivId'):
-        return f"https://arxiv.org/abs/{paper['arxivId']}"
-    return paper.get('url', '')
-
 
 BLOG_REPO = os.path.expanduser(
     os.environ.get("PAPER_DIGEST_BLOG_REPO", "~/code/github_repos/audio-paper-digest-blog")
@@ -142,59 +132,96 @@ def fix_yaml_double_commas(text):
 
 
 def call_llm_api(prompt, max_tokens=800, temperature=0.1):
-    """调用 LLM API（MiMo Token Plan / Anthropic 协议）进行通用请求。"""
+    """调用 LLM API，自动检测协议（OpenAI / Anthropic）。"""
     api_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
-    endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', 'https://token-plan-sgp.xiaomimimo.com/v1')
-    model = os.environ.get('PAPER_ANALYZER_MODEL', 'mimo-v2.5')
+    endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', 'https://api.openai.com/v1')
+    model = os.environ.get('PAPER_ANALYZER_MODEL', 'gpt-4o')
 
     if not api_key:
         print("  ⚠️  未配置 PAPER_ANALYZER_API_KEY，跳过 LLM review")
         return None
 
+    # 自动检测协议
+    ep_lower = endpoint.lower()
+    model_lower = model.lower()
+    is_token_plan = 'token-plan' in ep_lower or 'coding' in ep_lower
+    is_mimo = 'xiaomimimo.com' in ep_lower or 'mimo' in model_lower
+    is_kimi = 'kimi.com' in ep_lower or 'kimi' in model_lower
+
+    if 'deepseek.com' in ep_lower or 'deepseek' in model_lower:
+        api_type = 'openai'
+    elif (is_mimo or is_kimi) and is_token_plan:
+        api_type = 'anthropic'
+    elif '/anthropic' in ep_lower:
+        api_type = 'anthropic'
+    else:
+        api_type = 'openai'
+
     base = endpoint.rstrip('/')
-    if base.endswith('/v1'):
-        base = base[:-3]
-    api_url = f"{base}/anthropic/v1/messages"
 
-    payload = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "messages": [{"role": "user", "content": prompt}]
-    }
+    if api_type == 'anthropic':
+        if 'xiaomimimo.com' in base:
+            # MiMo: /v1 → /anthropic/v1/messages
+            base = base.replace('/v1', '/anthropic')
+            api_url = f"{base}/v1/messages"
+        elif 'kimi.com' in base:
+            api_url = f"{base}/messages"
+        else:
+            api_url = f"{base}/messages"
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "User-Agent": "claude-cli/2.1.108 (external, cli)",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}]
+        }
+    else:
+        # OpenAI 协议
+        base = base.replace('/anthropic', '/v1')
+        api_url = f"{base}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": [{"role": "user", "content": prompt}]
+        }
 
-    for attempt in range(3):
+    max_retries = 5
+    for attempt in range(max_retries):
         try:
             import requests
             session = requests.Session()
             session.trust_env = False
-            resp = session.post(
-                api_url,
-                json=payload,
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "User-Agent": "claude-cli/2.1.108 (external, cli)",
-                    "Content-Type": "application/json"
-                },
-                timeout=120
-            )
+            resp = session.post(api_url, json=payload, headers=headers, timeout=120)
             resp.raise_for_status()
             data = resp.json()
-            content = ""
-            if data.get("content") and isinstance(data["content"], list):
-                for block in data["content"]:
-                    if block.get("type") == "text":
-                        content = block.get("text", "").strip()
-                        break
-            if content:
-                return content
-            if attempt < 2:
-                time.sleep(2)
+            if api_type == 'anthropic':
+                content = ""
+                if isinstance(data.get("content"), list):
+                    for block in data["content"]:
+                        if block.get("type") == "text":
+                            content = block.get("text", "").strip()
+                            break
+                if content:
+                    return content
+            else:
+                return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                time.sleep(wait_time)
         except Exception as e:
-            print(f"  ⚠️  LLM API 调用失败 (尝试 {attempt+1}/3): {e}")
-            if attempt < 2:
-                time.sleep(2)
+            print(f"  ⚠️  LLM API 调用失败 (尝试 {attempt+1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # 指数退避: 1s, 2s, 4s, 8s
+                time.sleep(wait_time)
 
     return None
 
@@ -412,6 +439,11 @@ def yaml_escape(s):
     """安全转义 YAML 双引号字符串中的特殊字符，同时避免 f-string 解析问题"""
     if not s:
         return ''
+    # 先移除 LaTeX 公式，避免 YAML/Hugo 解析错误
+    s = re.sub(r'\\\([^)]+\\\)', '', s)  # \(...\) -> ''
+    s = re.sub(r'\\\[[^\]]+\\\]', '', s)  # \[...\] -> ''
+    s = re.sub(r'\$[^\s\$][^$]*?\$', '', s)  # $...$ -> ''
+    s = re.sub(r'\$\$[^$]*?\$\$', '', s)  # $$...$$ -> ''
     return (s.replace('\\', '\\\\')
              .replace('"', '\\"')
              .replace('\n', ' ')
@@ -457,11 +489,11 @@ layout: "posts"
 ### 📊 论文评分排行榜（{len(scored)} 篇，按分数降序）
 
 """
-    md += "| 排名 | 论文 | 评分 | 分档 | 主任务 |\n|------|------|------|------|------|\n"
+    md += "| 排名 | 论文 | 总分 | 分档 | 主任务 |\n|------|------|------|------|--------|\n"
     for i, (score, p, pa) in enumerate(scored):
         m = format_medal(i)
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(_paper_id(p), '')
+        slug = paper_slugs.get(p.get('arxivId', ''), '')
         rank_bucket = pa.get('rankBucket', '') or '-'
         primary_task = pa.get('primaryTaskTag', '') or '-'
         if slug:
@@ -470,7 +502,7 @@ layout: "posts"
             md += f"| {m} | {title[:55]} | {score}分 | {rank_bucket} | {primary_task} |\n"
     for i, p in enumerate(unscored):
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(_paper_id(p), '')
+        slug = paper_slugs.get(p.get('arxivId', ''), '')
         if slug:
             md += f"| {len(scored)+i+1} | [{title[:55]}]({BASE_PATH}/posts/{date_str}-{slug}) | N/A | - | - |\n"
         else:
@@ -481,7 +513,7 @@ layout: "posts"
 
     for i, (score, p, pa) in enumerate(scored):
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(_paper_id(p), '')
+        slug = paper_slugs.get(p.get('arxivId', ''), '')
         m = format_medal(i)
 
         if slug:
@@ -490,8 +522,35 @@ layout: "posts"
             md += f"### {m} {title}\n\n"
 
         pa = parse_analysis(p.get('analysis', '')) or {}
-        aid = _paper_id(p)
-        aurl = _paper_url(p)
+        aid = p.get('arxivId', '')
+        aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
+        
+        # 显示总分和所有子项得分（单开一行）
+        score_line = []
+        if pa.get('score'):
+            score_line.append(f"**{pa['score']}/10**")
+        sub_scores = []
+        if pa.get('innovationScore'):
+            sub_scores.append(f"创新 {pa['innovationScore']}/2")
+        if pa.get('technicalRigorScore'):
+            sub_scores.append(f"严谨 {pa['technicalRigorScore']}/1.5")
+        if pa.get('experimentalSufficiencyScore'):
+            sub_scores.append(f"实验 {pa['experimentalSufficiencyScore']}/1.5")
+        if pa.get('clarityScore'):
+            sub_scores.append(f"清晰 {pa['clarityScore']}/1")
+        if pa.get('impactScore'):
+            sub_scores.append(f"影响 {pa['impactScore']}/1.5")
+        if pa.get('openSourceScore'):
+            sub_scores.append(f"开源 {pa['openSourceScore']}/1.5")
+        if pa.get('reproducibilityScore'):
+            sub_scores.append(f"复现 {pa['reproducibilityScore']}/0.5")
+        if pa.get('engineeringScore'):
+            sub_scores.append(f"工程 {pa['engineeringScore']}/1.5")
+        if sub_scores:
+            score_line.append(' | '.join(sub_scores))
+        if score_line:
+            md += f"{' | '.join(score_line)}\n\n"
+        
         meta = build_paper_meta(pa, aurl)
         if meta:
             md += f"{meta}\n\n"
@@ -531,7 +590,7 @@ layout: "posts"
 
     for i, p in enumerate(unscored):
         title = p.get('title', 'Unknown')
-        slug = paper_slugs.get(_paper_id(p), '')
+        slug = paper_slugs.get(p.get('arxivId', ''), '')
 
         if slug:
             md += f"### {len(scored)+i+1}. [{title}]({BASE_PATH}/posts/{date_str}-{slug})\n\n"
@@ -540,8 +599,8 @@ layout: "posts"
 
         # unscored 论文也显示完整内容（作者、点评、摘要、开源详情）
         pa = parse_analysis(p.get('analysis', '')) or {}
-        aid = _paper_id(p)
-        aurl = _paper_url(p)
+        aid = p.get('arxivId', '')
+        aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
         meta = build_paper_meta(pa, aurl)
         if meta:
             md += f"{meta}\n\n"
@@ -629,9 +688,9 @@ def enrich_opensource(pa, paper):
             sources.append(val)
 
     urls = extract_repo_urls('\n'.join(sources))
-    # 本地文本找不到时，尝试从 arxiv HTML 抓取（仅对 arXiv 论文）
-    if not urls and paper.get('arxivId'):
-        urls = fetch_arxiv_html_urls(paper['arxivId'])
+    # 本地文本找不到时，尝试从 arxiv HTML 抓取
+    if not urls:
+        urls = fetch_arxiv_html_urls(paper.get('arxivId', ''))
     if not urls:
         return oss
 
@@ -660,8 +719,8 @@ def generate_paper_page(paper, date_str):
     if pa and pa.get('opensource'):
         pa['opensource'] = enrich_opensource(pa, paper)
     title = paper.get('title', 'Unknown')
-    aid = _paper_id(paper)
-    aurl = _paper_url(paper)
+    aid = paper.get('arxivId', '')
+    aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
     slug = slugify(title)
 
     score_str = pa['score'] if pa and pa.get('score') else ''
@@ -684,21 +743,35 @@ hiddenInHomeList: true
         if pa['tags']:
             md += f"{' '.join(pa['tags'])}\n\n"
 
+        # 得分单开一行：总分 + 所有子项
+        score_line = []
+        if pa.get('score'):
+            score_line.append(f"**{pa['score']}/10**")
+        sub_scores = []
+        if pa.get('innovationScore'):
+            sub_scores.append(f"创新 {pa['innovationScore']}/2")
+        if pa.get('technicalRigorScore'):
+            sub_scores.append(f"严谨 {pa['technicalRigorScore']}/1.5")
+        if pa.get('experimentalSufficiencyScore'):
+            sub_scores.append(f"实验 {pa['experimentalSufficiencyScore']}/1.5")
+        if pa.get('clarityScore'):
+            sub_scores.append(f"清晰 {pa['clarityScore']}/1")
+        if pa.get('impactScore'):
+            sub_scores.append(f"影响 {pa['impactScore']}/1.5")
+        if pa.get('openSourceScore'):
+            sub_scores.append(f"开源 {pa['openSourceScore']}/1.5")
+        if pa.get('reproducibilityScore'):
+            sub_scores.append(f"复现 {pa['reproducibilityScore']}/0.5")
+        if pa.get('engineeringScore'):
+            sub_scores.append(f"工程 {pa['engineeringScore']}/1.5")
+        if sub_scores:
+            score_line.append(' | '.join(sub_scores))
+        if score_line:
+            md += f"{' | '.join(score_line)}\n\n"
+
         meta = build_paper_meta(pa, aurl)
         if meta:
             md += f"{meta}\n\n"
-
-        machine_bits = []
-        if pa.get('qualityScore'):
-            machine_bits.append(f"学术质量 {pa['qualityScore']}/7")
-        if pa.get('valueScore'):
-            machine_bits.append(f"影响力 {pa['valueScore']}/2")
-        if pa.get('reproducibilityBonus'):
-            machine_bits.append(f"可复现性 {pa['reproducibilityBonus']}/2")
-        if pa.get('confidence'):
-            machine_bits.append(f"置信度 {pa['confidence']}")
-        if machine_bits:
-            md += f"{' | '.join(machine_bits)}\n\n"
 
         if pa.get('authors'):
             md += f"\n### 👥 作者与机构\n\n{pa['authors']}\n"
@@ -750,9 +823,53 @@ hiddenInHomeList: true
     # 自动嵌入论文图片（当 analysis 中尚未引用时）
     image_urls = paper.get('imageUrls', []) or paper.get('allImageUrls', [])
     if image_urls and '![' not in md:
-        md += '\n### 📷 论文图片\n\n'
-        for i, img_url in enumerate(image_urls[:5], 1):
-            md += f'![图{i}]({img_url})\n\n'
+        # 将图片智能插入到对应章节，而非全部堆在最后
+        def insert_images_into_sections(markdown, urls):
+            if not urls:
+                return markdown
+            
+            # 定义可能插入图片的章节标题（按优先级）
+            # 使用 ### 匹配三级标题（博客中 analysis 的一级标题被转换为三级）
+            # [^#\n]* 匹配标题名称前的任意内容（包括 emoji）
+            section_patterns = [
+                (r'(###[^#\n]*方法概述和架构[\s\S]*?)(?=\n###\s|\Z)', '方法概述'),   # 方法概述部分后
+                (r'(###[^#\n]*实验结果[\s\S]*?)(?=\n###\s|\Z)', '实验结果'),       # 实验结果部分后
+            ]
+            
+            inserted = 0
+            urls_list = list(urls)
+            
+            for pattern, section_name in section_patterns:
+                match = re.search(pattern, markdown)
+                if match and inserted < len(urls_list):
+                    # 每个章节最多插入2张图片
+                    imgs_to_insert = urls_list[inserted:inserted+2]
+                    if imgs_to_insert:
+                        img_md = '\n'
+                        for j, img_url in enumerate(imgs_to_insert, inserted+1):
+                            img_md += f'![图{j}]({img_url})\n\n'
+                        
+                        # 在章节内容结束后插入图片
+                        end_pos = match.end(1)
+                        markdown = markdown[:end_pos] + img_md + markdown[end_pos:]
+                        inserted += len(imgs_to_insert)
+            
+            # 如果还有剩余图片未插入，放在最后
+            if inserted < len(urls_list):
+                remaining = urls_list[inserted:]
+                img_md = '\n### 📷 论文图片\n\n'
+                for j, img_url in enumerate(remaining, inserted+1):
+                    img_md += f'![图{j}]({img_url})\n\n'
+                # 插入到返回链接之前
+                return_link = f'\n---\n\n[← 返回'
+                if return_link in markdown:
+                    markdown = markdown.replace(return_link, img_md + return_link)
+                else:
+                    markdown += img_md
+            
+            return markdown
+        
+        md = insert_images_into_sections(md, image_urls[:5])
 
     md += f'\n---\n\n[← 返回 {date_str} 语音/音乐/音频论文速递]({BASE_PATH}/posts/{date_str}/)\n'
 
@@ -767,11 +884,15 @@ def review_and_fix_post(file_path):
     original = content
     issues = []
 
-    # 0. 修复 UTF-8 乱码字符（U+FFFD），避免中文被截断产生乱码
+    # 0. 修复 UTF-8 乱码字符（U+FFFD），从上下文推断正确汉字
+    # 先统一检测，再统一修复，避免逐词替换时的顺序问题
     garbled_count = content.count('\ufffd')
     if garbled_count > 0:
+        # 直接删除孤立的替换字符（1-3 字节的 � 没有上下文可推断）
+        # 连续的 � 通常是 1 个中文字符损坏，替换为合理占位
         content = content.replace('\ufffd\ufffd\ufffd', '。')
         content = content.replace('\ufffd\ufffd', '。')
+        # 单字符乱码：如果是中文语境，替换为空；英文语境保留原意
         content = re.sub(r'\ufffd', '', content)
         issues.append(f"发现并修复 {garbled_count} 个 UTF-8 乱码字符")
 
@@ -817,13 +938,54 @@ def review_and_fix_post(file_path):
         issues.append("发现 YAML frontmatter 双逗号，已修复")
         content = fix_yaml_double_commas(content)
 
-    # 7. 检查是否有未闭合的 markdown 链接或图片引用
+    # 7. 检查并修复 Markdown 表格中的子标题行（全空首列 + 有内容的行，会破坏表格结构）
+    table_subheader_pattern = re.compile(r'^(\|[\s]*\|[\s]*\|[\s]*\|)(.+?)$', re.MULTILINE)
+    def _fix_table_subheader(m):
+        # 如果前三列都是空的，但后面有内容，这是子标题行，需要删除
+        prefix = m.group(1)
+        rest = m.group(2)
+        # 检查 rest 中是否有非空列
+        cols = [c.strip() for c in rest.split('|') if c.strip()]
+        if cols:
+            issues.append(f"发现表格子标题行，已删除: {' '.join(cols)[:40]}")
+            return ''  # 删除这一行
+        return m.group(0)
+    if re.search(r'^\|[\s]*\|[\s]*\|[\s]*\|', content, re.MULTILINE):
+        new_content = table_subheader_pattern.sub(_fix_table_subheader, content)
+        if new_content != content:
+            content = new_content
+
+    # 8. 检查并修复未闭合的 LaTeX $ 公式（$ \mathcal{L}_D \( 形式）
+    broken_latex_pattern = re.compile(r'\$ \\mathcal\{([^}]+)\}[^\\]*\\\(')
+    if broken_latex_pattern.search(content):
+        issues.append("发现未闭合的 LaTeX $ 公式，已修复")
+        content = broken_latex_pattern.sub(lambda m: f'\\(\\mathcal{{{m.group(1)}}}\\)', content)
+
+    # 9. 检查并修复表格中错乱的 LaTeX 括号（如 \)\\mathcal{L}_D$）
+    broken_latex_table = re.compile(r'\\\)\\\\mathcal\{([^}]+)\}\$')
+    if broken_latex_table.search(content):
+        issues.append("发现表格中错乱的 LaTeX，已修复")
+        content = broken_latex_table.sub(lambda m: f'\\(\\mathcal{{{m.group(1)}}}\\)', content)
+
+    # 10. 检查并修复 "仅\)\mathcal{L}_A\(" 这类错乱模式
+    broken_paren_latex = re.compile(r'仅\\\)\\mathcal\{([^}]+)\}\\\(')
+    if broken_paren_latex.search(content):
+        issues.append("发现错乱的 LaTeX 括号，已修复")
+        content = broken_paren_latex.sub(lambda m: f'仅\\(\\mathcal{{{m.group(1)}}}\\)', content)
+
+    # 11. 检查并修复 \(\\mathcal{L}_X\) 双反斜杠问题
+    double_backslash_latex = re.compile(r'\\\(\\\\mathcal\{([^}]+)\}\\\)')
+    if double_backslash_latex.search(content):
+        issues.append("发现双反斜杠 LaTeX，已修复")
+        content = double_backslash_latex.sub(lambda m: f'\\(\\mathcal{{{m.group(1)}}}\\)', content)
+
+    # 12. 检查是否有未闭合的 markdown 链接或图片引用
     broken_link_pattern = re.compile(r'!?\[([^\]]*)\]\s*\(\s*\)')
     broken_links = broken_link_pattern.findall(content)
     if broken_links:
         issues.append(f"发现 {len(broken_links)} 个空链接")
 
-    # 8. 检查 YAML frontmatter 中是否有未闭合的双引号
+    # 13. 检查 YAML frontmatter 中是否有未闭合的双引号
     yaml_lines = content.split('---\n')
     if len(yaml_lines) >= 3:
         yaml_block = yaml_lines[1]
@@ -901,7 +1063,7 @@ def review_all_posts(date_str, paper_slugs, scored_papers):
     # 构建 arxivId -> title 映射
     title_map = {}
     for score, p, pa in scored_papers:
-        title_map[_paper_id(p)] = p.get('title', '')
+        title_map[p.get('arxivId', '')] = p.get('title', '')
 
     # Review 汇总页面（串行，只有1个）
     index_file = os.path.join(CONTENT_DIR, f"{date_str}.md")
@@ -1022,13 +1184,9 @@ def main():
             if fa_date == today:
                 filtered_papers.append(p)
 
-    if filtered_papers:
-        papers = filtered_papers
-        print(f"📄 过滤后: {len(papers)} 篇论文 (fetchedAt={today})")
-    else:
-        print(f"⚠️ 没有 fetchedAt={today} 的论文，使用全部 {len(papers)} 篇")
-
+    papers = filtered_papers
     scored, unscored = score_and_sort(papers)
+    print(f"📄 过滤后: {len(papers)} 篇论文 (fetchedAt={today})")
 
     if not papers:
         print("⚠️ 没有论文需要发布")
@@ -1050,7 +1208,7 @@ def main():
             paper_file = os.path.join(CONTENT_DIR, f"{today}-{slug}.md")
             with open(paper_file, 'w') as f:
                 f.write(paper_md)
-            paper_slugs[_paper_id(paper)] = slug
+            paper_slugs[paper.get('arxivId', '')] = slug
 
     print(f"📄 生成 {len(paper_slugs)} 篇论文独立页面")
 

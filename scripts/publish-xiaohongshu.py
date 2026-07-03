@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+from dotenv import load_dotenv
+load_dotenv(override=True)  # 强制覆盖系统环境变量，确保使用 .env 文件中的配置
+
 from log_setup import setup_script_logging
 setup_script_logging(__file__)
 
@@ -36,20 +39,13 @@ def smart_truncate(text, max_len=65):
 
 
 def call_llm_for_oneliner(title, abstract):
-    """调用 LLM 生成一句话论文介绍。MiMo Token Plan 使用 anthropic 协议。"""
+    """调用 LLM 生成一句话论文介绍，自动检测协议。"""
     api_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
-    endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', 'https://token-plan-sgp.xiaomimimo.com/v1')
-    model = os.environ.get('PAPER_ANALYZER_MODEL', 'mimo-v2.5')
+    endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', 'https://api.openai.com/v1')
+    model = os.environ.get('PAPER_ANALYZER_MODEL', 'gpt-4o')
 
     if not api_key:
         return None
-
-    # MiMo Token Plan 需要 anthropic 协议
-    # 端点转换: /v1 → /anthropic, URL: /anthropic/v1/messages
-    base = endpoint.rstrip('/')
-    if base.endswith('/v1'):
-        base = base[:-3]
-    api_url = f"{base}/anthropic/v1/messages"
 
     prompt = f"""用1-2句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书。总字数严格控制在70字以内，必须输出完整内容，不要省略：
 
@@ -58,43 +54,68 @@ def call_llm_for_oneliner(title, abstract):
 
 只输出介绍文字，不要任何解释、格式标记、emoji或LaTeX公式。"""
 
-    payload = {
-        "model": model,
-        "max_tokens": 500,
-        "messages": [{"role": "user", "content": prompt}]
-    }
+    # 自动检测协议（与 Node.js detectApiType 一致）
+    ep_lower = endpoint.lower()
+    model_lower = model.lower()
+    is_token_plan = 'token-plan' in ep_lower or 'coding' in ep_lower
+    is_mimo = 'xiaomimimo.com' in ep_lower or 'mimo' in model_lower
+    is_kimi = 'kimi.com' in ep_lower or 'kimi' in model_lower
+
+    if 'deepseek.com' in ep_lower or 'deepseek' in model_lower:
+        api_type = 'openai'
+    elif (is_mimo or is_kimi) and is_token_plan:
+        api_type = 'anthropic'
+    elif '/anthropic' in ep_lower:
+        api_type = 'anthropic'
+    else:
+        api_type = 'openai'
+
+    base = endpoint.rstrip('/')
+
+    if api_type == 'anthropic':
+        if 'xiaomimimo.com' in base:
+            base = base.replace('/v1', '/anthropic')
+            api_url = f"{base}/v1/messages"
+        elif 'kimi.com' in base:
+            api_url = f"{base}/messages"
+        else:
+            api_url = f"{base}/messages"
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "User-Agent": "claude-cli/2.1.108 (external, cli)",
+            "Content-Type": "application/json"
+        }
+        payload = {"model": model, "max_tokens": 500, "messages": [{"role": "user", "content": prompt}]}
+    else:
+        base = base.replace('/anthropic', '/v1')
+        api_url = f"{base}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {"model": model, "max_tokens": 500, "temperature": 0.7, "messages": [{"role": "user", "content": prompt}]}
 
     for attempt in range(5):
         try:
             import requests
-            # MiMo API 需要绕过代理直接连接
             session = requests.Session()
-            session.trust_env = False  # 忽略环境变量中的代理设置
-            resp = session.post(
-                api_url,
-                json=payload,
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "User-Agent": "claude-cli/2.1.108 (external, cli)",
-                    "Content-Type": "application/json"
-                },
-                timeout=180
-            )
+            session.trust_env = False
+            resp = session.post(api_url, json=payload, headers=headers, timeout=180)
             resp.raise_for_status()
             data = resp.json()
-            # anthropic 格式: 找 type=text 的内容块
             content = ""
-            if data.get("content") and isinstance(data["content"], list):
-                for block in data["content"]:
-                    if block.get("type") == "text":
-                        content = block.get("text", "").strip()
-                        break
+            if api_type == 'anthropic':
+                if data.get("content") and isinstance(data["content"], list):
+                    for block in data["content"]:
+                        if block.get("type") == "text":
+                            content = block.get("text", "").strip()
+                            break
+            else:
+                content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             content = content.strip('"\'').strip()
             if len(content) > 10:
-                # 应用智能截断，确保字数受控
                 return smart_truncate(content, max_len=65)
-            # 如果内容太短，重试
             if attempt < 4:
                 import time
                 time.sleep(3)
@@ -122,7 +143,7 @@ def generate_llm_oneliners(top_papers):
         return None
 
     results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         future_to_idx = {executor.submit(worker, item): i for i, item in enumerate(top_papers)}
         for future in concurrent.futures.as_completed(future_to_idx):
             idx = future_to_idx[future]

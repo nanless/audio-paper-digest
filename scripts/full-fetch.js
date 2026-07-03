@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const { fetchCategoryPapers, deduplicatePapers, filterPapersWithLLM, loadPapers, savePapers } = require('./fetch-papers.js');
 const { fetchHuggingFacePapers, mergeAndDeduplicate } = require('./fetch-huggingface-papers.js');
-const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson } = require('./utils.js');
+const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson, loadPublishedIdsFromBlog } = require('./utils.js');
 const { analyzeBatch, mergeAndSaveResults } = require('./analysis-engine.js');
 
 const Config = require('./config.js');
@@ -78,6 +78,32 @@ function autoArchiveCurrentData() {
 }
 
 /**
+ * 清理非今日数据（归档后残留的旧数据）
+ * 归档函数只在文件日期早于今天时触发，但文件可能在当天被修改导致未归档
+ */
+function cleanOldData(filePath, name, today) {
+    if (!fs.existsSync(filePath)) return;
+    const data = readJsonSafe(filePath);
+    if (!data || !data.papers || !Array.isArray(data.papers)) return;
+
+    const before = data.papers.length;
+    data.papers = data.papers.filter(p => {
+        const date = (p.fetchedAt || p.timestamp || '').substring(0, 10);
+        // 无日期字段的论文可能是从旧格式迁移的，保留它们
+        return !date || date === today;
+    });
+    const removed = before - data.papers.length;
+
+    if (removed > 0) {
+        data.timestamp = new Date().toISOString();
+        writeFileAtomic(filePath, JSON.stringify(data, null, 2));
+        console.log(`  [清理] ${name}: 移除 ${removed} 篇旧数据，保留 ${data.papers.length} 篇今日数据`);
+    } else {
+        console.log(`  [清理] ${name}: 无需清理（${data.papers.length} 篇均为今日数据）`);
+    }
+}
+
+/**
  * 从归档目录加载已分析论文的规范化ID集合
  * 用于跳过之前已经成功分析过的论文（避免HF论文在7天窗口内重复出现）
  */
@@ -118,6 +144,12 @@ async function fullFetch() {
     autoArchiveCurrentData();
     console.log('');
 
+    // 清理非今日数据（归档后残留的旧数据）
+    const today = getBeijingDateString();
+    cleanOldData(RESULT_FILE, 'deep-analysis-result', today);
+    cleanOldData(FILTERED_FILE, 'filtered-papers', today);
+    console.log('');
+
     // papers.json 自动备份（去重数据库，不归档但需备份防损坏）
     const backupResult = backupPapersJson(PAPERS_FILE, ARCHIVE_DIR);
     console.log(`📦 ${backupResult.message}`);
@@ -129,57 +161,76 @@ async function fullFetch() {
     const existingIds = new Set(Object.keys(papersData.papers).map(id => normalizedId(id)));
     console.log(`已有 ${existingIds.size} 篇论文ID（已规范化），遇到重复将跳过\n`);
 
+    // 加载博客已发布论文 ID，加入去重集合
+    const blogRepo = Config.PUBLISH_CONFIG.blogRepo;
+    const publishedIds = loadPublishedIdsFromBlog(blogRepo);
+    for (const pid of publishedIds) {
+        existingIds.add(pid);
+    }
+
     // ========== 第一步：从 arxiv 抓取 ==========
     console.log('📥 第一步：从 arxiv 抓取论文');
     const arxivPapers = [];
 
-    for (let i = 0; i < categories.length; i++) {
-        const category = categories[i];
-        // 首次请求前加随机抖动，避免固定时间模式被标记
+    // 核心类别优先，补充类别随机打乱
+    const coreCategories = categories.filter(c => c.priority === 'core');
+    const supplementCategories = categories.filter(c => c.priority !== 'core');
+    for (let i = supplementCategories.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [supplementCategories[i], supplementCategories[j]] = [supplementCategories[j], supplementCategories[i]];
+    }
+    const shuffledCategories = [...coreCategories, ...supplementCategories];
+    console.log(`  请求顺序: ${shuffledCategories.map(c => c.id).join(' → ')}\n`);
+
+    for (let i = 0; i < shuffledCategories.length; i++) {
+        const category = shuffledCategories[i];
+        // 首次请求前加随机延迟
         if (i === 0) {
-            const firstDelay = Math.floor(Math.random() * 8000) + 3000;
+            const baseDelay = Config.ARXIV_CONFIG.firstRequestDelayMs;
+            const jitter = Math.floor(Math.random() * 10000);
+            const firstDelay = baseDelay + jitter;
             console.log(`  首次请求前等待 ${(firstDelay/1000).toFixed(1)} 秒...`);
             await new Promise(resolve => setTimeout(resolve, firstDelay));
         }
-        console.log(`  抓取 ${category.name} (${category.id})...`);
+        console.log(`  [${i+1}/${shuffledCategories.length}] 抓取 ${category.name} (${category.id})...`);
+        const fetchStartTime = Date.now();
         const papers = await fetchCategoryPapers(
             category.id,
             Config.ARXIV_CONFIG.maxResultsPerCategory,
             Config.ARXIV_CONFIG.fetchMaxRetries,
             existingIds
         );
-        arxivPapers.push(...papers);
-        console.log(`    获取 ${papers.length} 篇新论文`);
+        const fetchDuration = Date.now() - fetchStartTime;
 
-        // 核心类别（eess.AS / cs.SD）若重试后仍获取 0 篇，需区分：API 正常但无新论文 vs 限流
-        const meta = papers._meta || {};
-        if (category.priority === 'core' && papers.length === 0) {
-            if (meta.entryCount > 0 && meta.stoppedAtConsecutive) {
-                console.log(`\nℹ️ 核心类别 ${category.id}（${category.name}）API 正常返回 ${meta.entryCount} 篇论文，但均为已知论文（可能周末/节假日无更新）`);
-                console.log(`   继续运行，尝试其他来源...`);
+        // 去重：将新论文 ID 加入 existingIds，避免下一类别重复抓取
+        let newInCategory = 0, dupInCategory = 0;
+        for (const p of papers) {
+            const id = normalizedId(p.paper_id || p.arxivId);
+            if (existingIds.has(id)) {
+                dupInCategory++;
             } else {
-                console.error(`\n❌ 核心类别 ${category.id}（${category.name}）在全部重试后仍获取 0 篇论文，arXiv API 可能处于严重限流状态`);
-                console.error(`   停止今日运行，清除已获取的数据...`);
-
-                // 清除今天可能已产生的数据文件
-                const filesToClear = [FILTERED_FILE, RESULT_FILE, LEGACY_RESULT_FILE];
-                for (const f of filesToClear) {
-                    if (fs.existsSync(f)) {
-                        try {
-                            fs.unlinkSync(f);
-                            console.log(`   已清除: ${path.basename(f)}`);
-                        } catch (e) {
-                            console.log(`   清除失败 ${path.basename(f)}: ${e.message}`);
-                        }
-                    }
-                }
-
-                console.error(`\n📢 今日运行已终止。建议稍后再试。`);
-                process.exit(1);
+                existingIds.add(id);
+                arxivPapers.push(p);
+                newInCategory++;
             }
         }
+        console.log(`    ${category.id}: 获取 ${papers.length} 篇, 新增 ${newInCategory} 篇, 跨类别去重 ${dupInCategory} 篇`);
 
-        await new Promise(resolve => setTimeout(resolve, FETCH_DELAY_MS));
+        // 核心类别检查：无新论文时继续运行（可能是已知论文太多）
+        if (category.priority === 'core' && papers.length === 0) {
+            console.log(`\nℹ️ 核心类别 ${category.id}（${category.name}）无新论文（可能均已被收录）`);
+            console.log(`   继续运行，尝试其他来源...`);
+        }
+
+        // 类别间延迟：基础延迟 + 随机抖动 + 限流检测补偿
+        const baseJitter = Math.floor(Math.random() * 20000) + 10000; // 10-30秒随机
+        const rateLimitPenalty = fetchDuration > 300000 ? 120000 : (fetchDuration > 120000 ? 60000 : (fetchDuration > 60000 ? 30000 : 0));
+        const totalDelay = FETCH_DELAY_MS + baseJitter + rateLimitPenalty;
+        if (rateLimitPenalty > 0) {
+            console.log(`    检测到可能的限流，额外等待 ${(rateLimitPenalty/1000).toFixed(0)} 秒...`);
+        }
+        console.log(`    等待 ${(totalDelay/1000).toFixed(0)} 秒后继续下一类别...`);
+        await new Promise(resolve => setTimeout(resolve, totalDelay));
     }
 
     console.log(`\narxiv 抓取完成: ${arxivPapers.length} 篇`);
@@ -208,9 +259,17 @@ async function fullFetch() {
     console.log(`  - 仅 HuggingFace: ${hfOnly} 篇`);
     console.log(`  - 两个来源都有: ${both} 篇`);
 
+    // 过滤掉已发布到博客的论文
+    const beforeBlogSkip = allPapers.length;
+    const allPapersFiltered = allPapers.filter(paper => !publishedIds.has(normalizedId(paper)));
+    const blogSkippedCount = beforeBlogSkip - allPapersFiltered.length;
+    if (blogSkippedCount > 0) {
+        console.log(`📝 过滤 ${blogSkippedCount} 篇已发布到博客的论文`);
+    }
+
     // ========== 第四步：大模型筛选 ==========
     console.log('\n🤖 第四步：大模型筛选（判断是否语音/音频相关）');
-    const filtered = await filterPapersWithLLM(allPapers, {
+    const filtered = await filterPapersWithLLM(allPapersFiltered, {
         batchSize: Config.FILTER_CONFIG.batchSize,
         delayBetweenBatches: Config.FILTER_CONFIG.delayBetweenBatchesMs,
         useKeywordPreFilter: false
@@ -237,8 +296,11 @@ async function fullFetch() {
         timestamp: getBeijingISOString(),
         stats: {
             beforeFilter: allPapers.length,
+            beforeBlogSkip: allPapers.length,
+            afterBlogSkip: allPapersFiltered.length,
             afterFilter: filtered.length,
             afterArchiveSkip: filteredNew.length,
+            skippedFromBlog: blogSkippedCount,
             skippedFromArchive: skippedCount,
             arxivOnly,
             hfOnly,
@@ -247,6 +309,24 @@ async function fullFetch() {
         papers: filteredNew
     }, null, 2));
     console.log(`💾 筛选结果已保存到: ${FILTERED_FILE}`);
+
+    // ========== 第4.8步：保存所有爬到论文到 papers.json（提前保存，防止后续中断丢失）==========
+    console.log('\n💾 保存所有爬取论文到 papers.json 去重数据库');
+    let newPaperCount = 0;
+    for (const paper of allPapers) {
+        const rawId = paper.paper_id || paper.arxivId;
+        const normId = normalizedId(rawId);
+        if (normId && !papersData.papers[normId]) {
+            papersData.papers[normId] = paper;
+            newPaperCount++;
+        }
+    }
+    try {
+        savePapers(papersData);
+        console.log(`  新增 ${newPaperCount} 篇论文ID到数据库，累计 ${Object.keys(papersData.papers).length} 篇`);
+    } catch (e) {
+        console.error(`  ❌ 保存 papers.json 失败: ${e.message}`);
+    }
 
     // ========== 第五步：深度分析 ==========
     console.log('\n🔬 第五步：深度分析每篇论文');
@@ -305,7 +385,7 @@ async function fullFetch() {
             const batchFailed = batchResults.length - batchSuccess;
             const batchScores = batchResults.filter(r => r.success && r.parsed?.score).map(r => r.parsed.score);
             const batchScoreInfo = batchScores.length > 0 ? ` 评分: ${batchScores.join(', ')}` : '';
-            const totalBatches = Math.ceil(filtered.length / ANALYSIS_CONCURRENCY);
+            const totalBatches = Math.ceil(filteredNew.length / ANALYSIS_CONCURRENCY);
             console.log(`  ── 批次 ${batchNum}/${totalBatches} 完成: 成功 ${batchSuccess}/${batchResults.length}${batchScoreInfo}${batchFailed > 0 ? ` | 失败 ${batchFailed}` : ''}\n`);
 
             // 收集成功结果到 analyzedPapers
@@ -322,26 +402,8 @@ async function fullFetch() {
         }
     });
 
-    // ========== 第六步：保存论文数据库 ==========
-    console.log('\n💾 第六步：更新 papers.json 去重数据库');
-    let newPaperCount = 0;
-    for (const paper of allPapers) {
-        const rawId = paper.paper_id || paper.arxivId;
-        const normId = normalizedId(rawId);
-        if (normId && !papersData.papers[normId]) {
-            papersData.papers[normId] = paper;
-            newPaperCount++;
-        }
-    }
-    try {
-        savePapers(papersData);
-        console.log(`  新增 ${newPaperCount} 篇论文ID到数据库，累计 ${Object.keys(papersData.papers).length} 篇`);
-    } catch (e) {
-        console.error(`  ❌ 保存 papers.json 失败: ${e.message}`);
-    }
-
-    // ========== 第七步：保存深度分析结果 ==========
-    console.log('\n💾 第七步：保存深度分析结果');
+    // ========== 第六步：保存深度分析结果 ==========
+    console.log('\n💾 第六步：保存深度分析结果');
 
     const outputFile = fs.existsSync(RESULT_FILE) || !fs.existsSync(LEGACY_RESULT_FILE) ? RESULT_FILE : LEGACY_RESULT_FILE;
 
@@ -429,7 +491,9 @@ async function fullFetch() {
     console.log(`  - arxiv 抓取: ${arxivPapers.length} 篇`);
     console.log(`  - HuggingFace 抓取: ${hfPapers.length} 篇`);
     console.log(`  - 合并去重: ${allPapers.length} 篇`);
-    console.log(`  - 筛选: ${filtered.length} 篇`);
+    console.log(`  - LLM 筛选: ${filtered.length} 篇`);
+    if (skippedCount > 0) console.log(`  - 归档去重: -${skippedCount} 篇`);
+    if (blogSkippedCount > 0) console.log(`  - 博客去重: -${blogSkippedCount} 篇`);
     console.log(`  - 本次分析: ${analyzedPapers.length} 篇`);
     console.log(`  - 保留已有: ${existingPapers.length} 篇`);
     console.log(`  - 合并后总计: ${mergedPapers.length} 篇`);

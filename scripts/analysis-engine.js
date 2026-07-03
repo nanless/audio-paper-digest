@@ -333,7 +333,6 @@ module.exports = {
     analyzePaperWithRetry,
     analyzeBatch,
     mergeAndSaveResults,
-    createFileSaver,
     DEFAULT_MAX_RETRIES,
     DEFAULT_RETRY_DELAY_MS,
     DEFAULT_CONCURRENCY

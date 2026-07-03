@@ -131,6 +131,7 @@ function getRecordDate(data) {
 // ═══════════════════════════════════════════════════════
 
 function normalizedId(paperOrId) {
+    if (paperOrId == null) return '';
     if (typeof paperOrId === 'string') {
         return paperOrId.replace(/v\d+$/, '').trim().toLowerCase();
     }
@@ -143,7 +144,8 @@ function normalizedId(paperOrId) {
 // ═══════════════════════════════════════════════════════
 
 function loadEnvFile() {
-    const envFile = path.join(require('os').homedir(), '.hermes', '.env');
+    // 优先从项目根目录的 .env 加载
+    const envFile = path.join(__dirname, '..', '.env');
     if (fs.existsSync(envFile)) {
         const envContent = fs.readFileSync(envFile, 'utf8');
         envContent.split('\n').forEach(line => {
@@ -176,15 +178,23 @@ function stripMd(text) {
     t = t.replace(/\*\*(.+?)\*\*/g, '$1');
     t = t.replace(/__(.+?)__/g, '$1');
     t = t.replace(/\*(.+?)\*/g, '$1');
+    // 清理残留的不成对 ** 和 __
+    t = t.replace(/\*\*/g, '');
+    t = t.replace(/__/g, '');
     return t.trim();
 }
 
 function parseMachineSummary(analysis) {
     const result = {
         rankBucket: '',
-        qualityScore: '',
-        valueScore: '',
-        reproducibilityBonus: '',
+        innovation: '',
+        technicalRigor: '',
+        experimentalSufficiency: '',
+        clarity: '',
+        impact: '',
+        openSource: '',
+        reproducibility: '',
+        engineeringScore: '',
         confidence: '',
         primaryTaskTag: '',
         primaryMethodTag: '',
@@ -201,9 +211,14 @@ function parseMachineSummary(analysis) {
 
     const keyMap = {
         rank_bucket: 'rankBucket',
-        quality_score: 'qualityScore',
-        value_score: 'valueScore',
-        reproducibility_bonus: 'reproducibilityBonus',
+        innovation: 'innovation',
+        technical_rigor: 'technicalRigor',
+        experimental_sufficiency: 'experimentalSufficiency',
+        clarity: 'clarity',
+        impact: 'impact',
+        open_source: 'openSource',
+        reproducibility: 'reproducibility',
+        engineering_score: 'engineeringScore',
         confidence: 'confidence',
         primary_task_tag: 'primaryTaskTag',
         primary_method_tag: 'primaryMethodTag',
@@ -213,18 +228,107 @@ function parseMachineSummary(analysis) {
         has_dataset: 'hasDataset'
     };
 
+    // 扩展的 rank_bucket 映射表（处理各种非标准值）
+    const rankMap = {
+        // 数字
+        '1': '前10%', '2': '前25%', '3': '前50%', '4': '后50%',
+        // 中文标准
+        '前10%': '前10%', '前25%': '前25%', '前50%': '前50%', '后50%': '后50%',
+        // 字母映射（A=前10%, B=前25%, C=前50%, D=后50%）
+        'a': '前10%', 'b': '前25%', 'c': '前50%', 'd': '后50%',
+        'A': '前10%', 'B': '前25%', 'C': '前50%', 'D': '后50%',
+        // 英文
+        'top_10_percent': '前10%', 'top_25_percent': '前25%', 
+        'top_50_percent': '前50%', 'bottom_50_percent': '后50%',
+        'top 10%': '前10%', 'top 25%': '前25%', 
+        'top 50%': '前50%', 'bottom 50%': '后50%',
+        // 中文描述映射
+        '高': '前10%', '很高': '前10%', '上': '前10%', '上上': '前10%',
+        '中高': '前25%', '中上': '前25%', '较高': '前25%', '优秀': '前25%',
+        '中': '前50%', '中等': '前50%', '中等偏下': '前50%', '中下': '前50%',
+        '中低': '前50%', '一般': '前50%',
+        '低': '后50%', '很低': '后50%', '下': '后50%', '差': '后50%',
+        '较弱': '后50%', '偏低': '后50%'
+    };
+
     for (const rawLine of blockMatch[1].split('\n')) {
         const line = rawLine.trim();
         if (!line) continue;
-        const m = line.match(/^([a-z_]+)\s*[：:]\s*(.+)$/i);
+        
+        // 支持多种格式：
+        // 1. key: value
+        // 2. - key: value
+        // 3. * **key**: value
+        // 4. - **key**: value
+        const m = line.match(/^(?:[-*]\s*)?(?:\*\*)?([a-z_]+)(?:\*\*)?\s*[：:]\s*(.+)$/i);
         if (!m) continue;
+        
         const mappedKey = keyMap[m[1]];
         if (mappedKey) {
-            let val = stripMd(m[2]);
-            // 对于 rankBucket，只允许四个标准分档
-            if (mappedKey === 'rankBucket' && !['前10%', '前25%', '前50%', '后50%'].includes(val)) {
-                val = '';
+            let val = stripMd(m[2]).trim();
+            
+            // 对于 rankBucket，使用扩展映射表
+            if (mappedKey === 'rankBucket') {
+                val = rankMap[val] || '';
             }
+            
+            // 对于分数类字段，提取数字部分
+            if (['innovation', 'technicalRigor', 'experimentalSufficiency', 'clarity', 'impact', 'openSource', 'reproducibility', 'engineeringScore'].includes(mappedKey)) {
+                // 处理 "3.5/5"、"3.5分"、"3.5 / 5" 等格式
+                const numMatch = val.match(/^(\d+\.?\d*)/);
+                if (numMatch) {
+                    val = numMatch[1];
+                }
+            }
+            
+            // 对于 confidence，标准化
+            if (mappedKey === 'confidence') {
+                // 处理数字（0.9 → 高）
+                const numMatch = val.match(/^(\d+\.?\d*)/);
+                if (numMatch) {
+                    const num = parseFloat(numMatch[1]);
+                    if (num >= 0.8 || num >= 4) val = '高';
+                    else if (num >= 0.5 || num >= 3) val = '中';
+                    else val = '低';
+                } else {
+                    const confMap = {
+                        '高': '高', 'high': '高', 'h': '高',
+                        '中': '中', 'medium': '中', '中低': '中', '中等': '中', 'm': '中',
+                        '低': '低', 'low': '低', '较低': '低', 'l': '低'
+                    };
+                    val = confMap[val.toLowerCase()] || val;
+                }
+            }
+            
+            // 对于 sota_claim，标准化
+            if (mappedKey === 'sotaClaim') {
+                const sotaMap = {
+                    '是': '是', 'yes': '是', 'y': '是', '有': '是',
+                    '否': '否', 'no': '否', 'n': '否', '无': '否',
+                    '未说明': '未说明', 'unknown': '未说明', ' unclear': '未说明'
+                };
+                val = sotaMap[val.toLowerCase()] || val;
+            }
+            
+            // 对于 has_code/has_model/has_dataset，标准化
+            if (['hasCode', 'hasModel', 'hasDataset'].includes(mappedKey)) {
+                // 先清理残留的 Markdown 加粗标记
+                val = val.replace(/\*\*/g, '').trim();
+                const yesNoMap = {
+                    '是': '是', 'yes': '是', 'y': '是', '有': '是',
+                    '否': '否', 'no': '否', 'n': '否', '无': '否',
+                    '未说明': '未说明', 'unknown': '未说明'
+                };
+                val = yesNoMap[val.toLowerCase()] || val;
+            }
+            
+            // 对于标签字段，确保有 # 前缀
+            if (['primaryTaskTag', 'primaryMethodTag'].includes(mappedKey)) {
+                if (val && !val.startsWith('#')) {
+                    val = '#' + val;
+                }
+            }
+            
             result[mappedKey] = val;
         }
     }
@@ -239,13 +343,19 @@ function parseMachineSummary(analysis) {
 /**
  * 检测 API 协议类型：'openai' 或 'anthropic'
  * 
- * 规则：只有 MiMo/Kimi 的 Token Plan / Coding Plan 才使用 anthropic 接口
- * （需要伪装成 Claude Code，否则可能被封号）
- * 其他情况（包括 MiMo 按量付费的 OpenAI 接口）都用通用 openai 接口
+ * 规则：
+ * 1. MiMo/Kimi Token Plan / Coding Plan → Anthropic（需伪装 Claude Code）
+ * 2. 端点路径含 /anthropic 且非 DeepSeek → Anthropic
+ * 3. DeepSeek 及其他 → OpenAI
  */
 function detectApiType(endpoint, model) {
     const ep = (endpoint || '').toLowerCase();
     const m = (model || '').toLowerCase();
+
+    // DeepSeek 强制 OpenAI 协议（优先级最高）
+    if (ep.includes('deepseek.com') || m.includes('deepseek')) {
+        return 'openai';
+    }
 
     // Token Plan / Coding Plan 特征
     const isTokenPlan = ep.includes('token-plan') || ep.includes('coding');
@@ -253,6 +363,10 @@ function detectApiType(endpoint, model) {
     const isKimi = ep.includes('kimi.com') || m.includes('kimi');
 
     if ((isMimo || isKimi) && isTokenPlan) {
+        return 'anthropic';
+    }
+    // 其他含 /anthropic 路径的端点 → Anthropic 协议
+    if (ep.includes('/anthropic')) {
         return 'anthropic';
     }
     return 'openai';
@@ -268,22 +382,24 @@ function getAnthropicEndpoint(openaiEndpoint) {
 
 /**
  * 构建 API URL
- * MiMo Token Plan: /v1/chat/completions → /anthropic/v1/messages
- * Kimi Coding Plan: /coding/v1/chat/completions → /coding/v1/messages（不需要 /anthropic 中间路径）
+ * MiMo: /v1 → /anthropic/v1/messages
+ * 其他 Anthropic: {base}/messages
+ * OpenAI: 端点路径含 /anthropic 时自动修正为 /v1/chat/completions
  */
 function buildApiUrl(apiType, endpoint) {
     const base = (endpoint || '').replace(/\/+$/, '');
     if (apiType === 'anthropic') {
-        if (base.includes('kimi.com')) {
-            // Kimi Coding Plan: Anthropic 协议直接在 base URL 后加 /messages
-            // 例如 https://api.kimi.com/coding/v1 → https://api.kimi.com/coding/v1/messages
-            return `${base}/messages`;
+        if (base.includes('xiaomimimo.com')) {
+            // MiMo: 需要 /anthropic/v1/messages（必须含 /v1 中间路径）
+            const anthropicBase = getAnthropicEndpoint(base);
+            return `${anthropicBase}/v1/messages`;
         }
-        // MiMo Token Plan: 替换 /v1 为 /anthropic，再加 /v1/messages
-        const anthropicBase = getAnthropicEndpoint(base);
-        return `${anthropicBase}/v1/messages`;
+        // Kimi / 其他 Anthropic 兼容端点
+        return `${base}/messages`;
     }
-    return `${base}/chat/completions`;
+    // OpenAI: 标准化路径（如 /anthropic → /v1）
+    const normalized = base.replace(/\/anthropic\/?$/, '/v1');
+    return `${normalized}/chat/completions`;
 }
 
 /**
@@ -376,6 +492,46 @@ function parseResponseText(apiType, response) {
     return null;
 }
 
+// ═══════════════════════════════════════════════════════
+// 允许的标签白名单（与 prompts/deep-analysis.md 标签表同步）
+// ═══════════════════════════════════════════════════════
+const ALLOWED_TAGS = new Set([
+    // 模型/架构
+    '#音频大模型','#语音大模型','#多模态模型','#统一音频模型',
+    '#大语言模型','#生成模型','#端到端',
+    // 任务 — 语音
+    '#语音交互','#语音合成','#语音识别','#语音增强','#语音分离',
+    '#语音克隆','#语音转换','#语音翻译','#语音情感识别','#语音活动检测',
+    '#说话人验证','#说话人日志','#语音伪造检测','#语音编辑','#语音质量评估',
+    '#语音超分','#语音编码','#语音唤醒','#语音属性识别',
+    // 任务 — 音频
+    '#音频交互','#音频生成','#音频分类','#音频事件检测','#音频理解','#音频检索',
+    '#音频分离','#音频伪造检测','#空间音频','#声源定位','#音频编码','#音频修复','#音频水印','#音频质量评估',
+    '#音频超分辨','#音频指纹','#主动降噪','#回声消除',
+    // 任务 — 音乐
+    '#音乐生成','#音乐检索','#音乐理解','#歌唱生成','#音乐转录','#音乐源分离','#音乐推荐','#音乐超分辨',
+    // 任务 — 多模态
+    '#音视频理解','#音视频生成','#音视频交互','#音视频语音识别','#音视频语音合成','#音视频语音分离',
+    '#音视频问答','#音频字幕生成','#音视频声源分离','#音乐文本检索',
+    // 方法 — 神经网络架构
+    '#自回归模型','#扩散模型','#流匹配','#Transformer','#CNN','#RNN','#图神经网络','#胶囊网络',
+    '#生成对抗网络','#变分自编码器',
+    // 方法 — 训练策略
+    '#预训练','#后训练','#SFT','#自监督学习','#无监督学习','#对比学习','#强化学习',
+    '#知识蒸馏','#迁移学习','#领域适应','#测试时自适应','#元学习','#持续学习','#课程学习','#对抗训练',
+    '#多任务学习','#模型压缩','#模型剪枝','#模型融合','#模型集成','#集成学习','#参数高效微调',
+    '#LoRA','#Adapter','#前缀微调','#提示学习','#指令微调','#联邦学习',
+    // 属性/设置
+    '#多语言','#零样本','#少样本','#低资源',
+    '#流式处理','#实时处理','#多通道','#在线','#离线',
+    '#鲁棒性','#高效推理','#长音频处理','#理论分析',
+    // 数据/工具/评估
+    '#基准测试','#数据集','#开源工具','#模型评估','#模型比较','#数据清洗',
+    // 领域/应用
+    '#音视频','#工业应用','#医疗音频','#智能座舱','#内容审核','#游戏音频','#智能音箱','#助听器','#会议转录','#教育',
+    '#可解释性'
+]);
+
 function parseAnalysis(analysis) {
     if (!analysis) return null;
 
@@ -390,6 +546,18 @@ function parseAnalysis(analysis) {
         // 如果还没有 # 前缀，加上
         if (t && !t.startsWith('#')) t = '#' + t;
         return t;
+    }
+
+    // 检查标签是否在白名单中
+    function _isAllowedTag(tag) {
+        if (!tag) return false;
+        return ALLOWED_TAGS.has(tag);
+    }
+
+    // 过滤标签列表，只保留白名单中的标签
+    function _filterAllowedTags(tags) {
+        if (!tags || !Array.isArray(tags)) return [];
+        return tags.map(t => _normalizeTag(t)).filter(t => _isAllowedTag(t));
     }
 
     function _isBadTaskTag(tag) {
@@ -415,9 +583,14 @@ function parseAnalysis(analysis) {
         scoringReason: '', limitations: '', opensource: '',
         machineSummary: null,
         rankBucket: '',
-        qualityScore: '',
-        valueScore: '',
-        reproducibilityBonus: '',
+        innovationScore: '',
+        technicalRigorScore: '',
+        experimentalSufficiencyScore: '',
+        clarityScore: '',
+        impactScore: '',
+        openSourceScore: '',
+        reproducibilityScore: '',
+        engineeringScore: '',
         confidence: '',
         primaryTaskTag: '',
         primaryMethodTag: '',
@@ -462,52 +635,109 @@ function parseAnalysis(analysis) {
                 return trimmed ? '#' + trimmed : null;
             }).filter(Boolean);
         }
-        result.tags = tags;
+        // 强制过滤：只保留白名单中的标签
+        result.tags = _filterAllowedTags(tags);
     }
 
     const machineSummary = parseMachineSummary(analysis);
     result.machineSummary = machineSummary;
     result.rankBucket = machineSummary.rankBucket;
-    result.qualityScore = machineSummary.qualityScore;
-    result.valueScore = machineSummary.valueScore;
-    result.reproducibilityBonus = machineSummary.reproducibilityBonus;
+    result.innovationScore = machineSummary.innovation;
+    result.technicalRigorScore = machineSummary.technicalRigor;
+    result.experimentalSufficiencyScore = machineSummary.experimentalSufficiency;
+    result.clarityScore = machineSummary.clarity;
+    result.impactScore = machineSummary.impact;
+    result.openSourceScore = machineSummary.openSource;
+    result.reproducibilityScore = machineSummary.reproducibility;
+    result.engineeringScore = machineSummary.engineeringScore;
     result.confidence = machineSummary.confidence;
-    // 主任务/主方法标签：优先从 ## 标签 部分的"主任务标签"行提取，
-    // 其次从机器摘要获取，最后从 tags[0] fallback。
-    // 如果机器摘要的标签质量太差（snake_case/arXiv类别/过于宽泛），则优先使用 tags[0]。
-    const msTask = _normalizeTag(machineSummary.primaryTaskTag);
-    const msMethod = _normalizeTag(machineSummary.primaryMethodTag);
-    const firstTag = result.tags.length > 0 ? _normalizeTag(result.tags[0]) : '';
-    const secondTag = result.tags.length > 1 ? _normalizeTag(result.tags[1]) : firstTag;
 
-    // 从 tags 列表中找到第一个非坏标签
-    let goodTag = '';
-    for (const t of result.tags) {
-        const nt = _normalizeTag(t);
-        if (nt && !_isBadTaskTag(nt)) {
-            goodTag = nt;
-            break;
+    // ═══════════════════════════════════════════════════════
+    // 主任务/主方法标签解析（强制白名单验证）
+    // ═══════════════════════════════════════════════════════
+
+    // 定义任务标签和方法标签的分类（用于验证）
+    const TASK_TAG_PREFIXES = [
+        '#语音', '#音频', '#音乐', '#说话人', '#声源', '#歌唱',
+        '#音视频', '#音频字幕', '#音乐文本'
+    ];
+    const METHOD_TAG_PREFIXES = [
+        '#自回归模型','#扩散模型','#流匹配','#Transformer','#CNN','#RNN','#图神经网络','#胶囊网络',
+        '#生成对抗网络','#变分自编码器',
+        '#音频大模型','#语音大模型','#多模态模型','#统一音频模型','#大语言模型','#生成模型','#端到端',
+        '#预训练','#后训练','#SFT','#自监督学习','#无监督学习','#对比学习','#强化学习','#知识蒸馏','#迁移学习',
+        '#领域适应','#测试时自适应','#元学习','#持续学习','#课程学习','#对抗训练','#多任务学习',
+        '#模型压缩','#模型剪枝','#模型融合','#模型集成','#集成学习','#参数高效微调',
+        '#LoRA','#Adapter','#前缀微调','#提示学习','#指令微调','#联邦学习'
+    ];
+
+    function _isTaskTag(tag) {
+        if (!tag) return false;
+        if (_isMethodTag(tag)) return false;
+        return TASK_TAG_PREFIXES.some(prefix => tag.startsWith(prefix));
+    }
+
+    function _isMethodTag(tag) {
+        if (!tag) return false;
+        return METHOD_TAG_PREFIXES.some(prefix => tag.startsWith(prefix));
+    }
+
+    // 从已过滤的 tags 中找到第一个任务标签
+    function _findFirstTaskTag(tags) {
+        for (const t of tags) {
+            const nt = _normalizeTag(t);
+            if (_isAllowedTag(nt) && _isTaskTag(nt)) return nt;
         }
+        return '';
     }
 
-    if (extractedTaskTag) {
-        result.primaryTaskTag = extractedTaskTag;
-    } else if (!_isBadTaskTag(msTask)) {
+    // 从已过滤的 tags 中找到第一个方法标签
+    function _findFirstMethodTag(tags) {
+        for (const t of tags) {
+            const nt = _normalizeTag(t);
+            if (_isAllowedTag(nt) && _isMethodTag(nt)) return nt;
+        }
+        return '';
+    }
+
+    // 验证并修正主任务标签
+    const validatedTaskTag = _isAllowedTag(extractedTaskTag) ? extractedTaskTag : '';
+    const msTask = _isAllowedTag(_normalizeTag(machineSummary.primaryTaskTag)) ? _normalizeTag(machineSummary.primaryTaskTag) : '';
+    const firstTaskFromTags = _findFirstTaskTag(result.tags);
+
+    if (validatedTaskTag && _isTaskTag(validatedTaskTag)) {
+        result.primaryTaskTag = validatedTaskTag;
+    } else if (msTask && _isTaskTag(msTask)) {
         result.primaryTaskTag = msTask;
-    } else if (goodTag) {
-        result.primaryTaskTag = goodTag;
+    } else if (firstTaskFromTags) {
+        result.primaryTaskTag = firstTaskFromTags;
     } else {
-        result.primaryTaskTag = msTask || firstTag;
+        // 兜底：如果找不到任务标签，使用第一个允许的 tag（即使是方法标签）
+        result.primaryTaskTag = result.tags.length > 0 ? result.tags[0] : '';
     }
 
-    if (extractedMethodTag) {
-        result.primaryMethodTag = extractedMethodTag;
-    } else if (!_isBadTaskTag(msMethod)) {
+    // 验证并修正主方法标签
+    const validatedMethodTag = _isAllowedTag(extractedMethodTag) ? extractedMethodTag : '';
+    const msMethod = _isAllowedTag(_normalizeTag(machineSummary.primaryMethodTag)) ? _normalizeTag(machineSummary.primaryMethodTag) : '';
+    const firstMethodFromTags = _findFirstMethodTag(result.tags);
+
+    if (validatedMethodTag && _isMethodTag(validatedMethodTag)) {
+        result.primaryMethodTag = validatedMethodTag;
+    } else if (msMethod && _isMethodTag(msMethod)) {
         result.primaryMethodTag = msMethod;
-    } else if (goodTag && goodTag !== result.primaryTaskTag) {
-        result.primaryMethodTag = goodTag;
+    } else if (firstMethodFromTags) {
+        result.primaryMethodTag = firstMethodFromTags;
     } else {
-        result.primaryMethodTag = msMethod || secondTag;
+        // 兜底：如果找不到方法标签，使用第一个非任务标签
+        for (const t of result.tags) {
+            if (t !== result.primaryTaskTag) {
+                result.primaryMethodTag = t;
+                break;
+            }
+        }
+        if (!result.primaryMethodTag) {
+            result.primaryMethodTag = result.tags.length > 1 ? result.tags[1] : (result.tags[0] || '');
+        }
     }
     result.sotaClaim = machineSummary.sotaClaim;
     result.hasCode = machineSummary.hasCode;
@@ -561,27 +791,73 @@ function parseAnalysis(analysis) {
         const dimScores = {};
         // 每个维度的上限（用于截断旧格式或 LLM 越界输出）
         const dimMax = {
-            '创新性': 3,
+            '创新性': 2,
             '技术严谨性': 1.5,
             '实验充分性': 1.5,
             '清晰度': 1,
-            '影响力': 2,
+            '影响力': 1.5,
             '开源': 1.5,
-            '可复现性': 0.5
+            '可复现性': 0.5,
+            '工程/实践价值': 1.5
         };
         const dims = Object.keys(dimMax);
         for (const dim of dims) {
             // 支持多种 LLM 输出格式：
-            // 1. **创新性 (3分)**：2.2分
-            // 2. **创新性 (2.5/3)**：...
-            // 3. **创新性: 2.3/3**
+            // 格式A（10分制，需转换）：dim (max/max)：score/10
+            // 格式B（维度分制，直接用）：dim (score/max)：description
+            // 格式C：dim：score/max
+            // 格式D：dim/满分：得分 score
+
+            // 优先匹配10分制格式（格式A）：dim ... ：score/10
+            const tenPointPat = new RegExp(
+                '(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*[（(]\\s*\\d+\\.?\\d*\\s*/\\s*\\d+\\.?\\d*\\s*[）)]\\s*(?:\\*\\*)?\\s*[:：]\\s*(?:\\*\\*)?\\s*(\\d+\\.?\\d*)\\s*/\\s*10'
+            );
+            const tenPointMatch = scoringText.match(tenPointPat);
+            if (tenPointMatch) {
+                const v10 = parseFloat(tenPointMatch[1]);
+                if (!isNaN(v10)) {
+                    dimScores[dim] = Math.round((v10 / 10) * dimMax[dim] * 10) / 10;
+                    continue;
+                }
+            }
+
+            // 次优先：dim ... 得分X.Y/max 格式（得分在描述末尾）
+            const defenPat = new RegExp(
+                '(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '.*?得分(\\d+\\.?\\d*)\\s*(?:/\\s*(\\d+\\.?\\d*))?'
+            );
+            const defenMatch = scoringText.match(defenPat);
+            if (defenMatch) {
+                const vDefen = parseFloat(defenMatch[1]);
+                const vMax = defenMatch[2] ? parseFloat(defenMatch[2]) : null;
+                if (!isNaN(vDefen)) {
+                    if (vMax && vMax === 10) {
+                        dimScores[dim] = Math.round((vDefen / 10) * dimMax[dim] * 10) / 10;
+                    } else if (vMax && vMax > 0) {
+                        dimScores[dim] = Math.min(vDefen, dimMax[dim]);
+                    } else {
+                        // 无/max：假设是维度原始分值
+                        dimScores[dim] = Math.min(vDefen, dimMax[dim]);
+                    }
+                    continue;
+                }
+            }
+
+            // 非10分制的常规匹配
             const patterns = [
-                // 格式1: dim (max/max)**：score
-                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*\\d+\\.?\\d*\\s*(?:/\\s*\\d+\\.?\\d*)?\\s*分?\\s*\\)\\s*(?:\\*\\*)?\\s*[:：]\\s*(?:\\*\\*)?\\s*(\\d+\\.?\\d*)'),
-                // 格式2: dim (score/max)
-                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*(\\d+\\.?\\d*)\\s*/\\s*\\d+\\.?\\d*\\s*\\)'),
-                // 格式3: dim: score/max
+                // 格式0: dim (max分)：score/max（如 HAIM 的格式）
+                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*\\d+\\.?\\d*分\\s*\\)\\s*[:：]\\s*(\\d+\\.?\\d*)\\s*/\\s*\\d+\\.?\\d*'),
+                // 格式1: dim (score/max)：description（排除有/10的情况）
+                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*(\\d+\\.?\\d*)\\s*/\\s*\\d+\\.?\\d*\\s*\\)(?!.*\\/10)'),
+                // 格式2: dim：score/max
                 new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*[:：]\\s*(\\d+\\.?\\d*)\\s*/\\s*\\d+\\.?\\d*\\s*(?:\\*\\*)?'),
+                // 格式3: dim/满分：得分 score
+                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*/\\s*\\d+\\.?\\d*\\s*[:：]\\s*(?:得分\\s*)?(\\d+\\.?\\d*)'),
+                // 格式4: dim (max分 / 满分max分) -> score分
+                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*\\d+\\.?\\d*分\\s*/\\s*满分\\s*\\d+\\.?\\d*分\\s*\\)\\s*->\\s*(\\d+\\.?\\d*)分'),
+                // 格式5: dim（/max）：score/max
+                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*[（(]\\s*/\\s*\\d+\\.?\\d*\\s*[）)]\\s*[:：]\\s*(\\d+\\.?\\d*)'),
+                // 格式6: dim (max分中的score分)
+                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*\\d+\\.?\\d*分中的(\\d+\\.?\\d*)分\\s*\\)'),
             ];
             let dm = null;
             for (const pat of patterns) {
@@ -591,7 +867,6 @@ function parseAnalysis(analysis) {
             if (dm) {
                 const v = parseFloat(dm[1]);
                 if (!isNaN(v)) {
-                    // 截断到该维度的上限，防止旧格式或 LLM 越界输出导致总分异常
                     dimScores[dim] = Math.min(v, dimMax[dim]);
                 }
             }
@@ -607,26 +882,55 @@ function parseAnalysis(analysis) {
             const vs = dimScores['影响力'] || 0;
             const rb = (dimScores['开源'] || 0) + (dimScores['可复现性'] || 0);
 
-            result.qualityScore = String(Math.round(qs * 10) / 10);
-            result.valueScore = String(Math.round(vs * 10) / 10);
-            result.reproducibilityBonus = String(Math.round(rb * 10) / 10);
+            result.innovationScore = String(Math.round((dimScores['创新性'] || 0) * 10) / 10);
+            result.technicalRigorScore = String(Math.round((dimScores['技术严谨性'] || 0) * 10) / 10);
+            result.experimentalSufficiencyScore = String(Math.round((dimScores['实验充分性'] || 0) * 10) / 10);
+            result.clarityScore = String(Math.round((dimScores['清晰度'] || 0) * 10) / 10);
+            result.impactScore = String(Math.round((dimScores['影响力'] || 0) * 10) / 10);
+            result.openSourceScore = String(Math.round((dimScores['开源'] || 0) * 10) / 10);
+            result.reproducibilityScore = String(Math.round((dimScores['可复现性'] || 0) * 10) / 10);
+            result.engineeringScore = String(Math.round((dimScores['工程/实践价值'] || 0) * 10) / 10);
 
             if (result.machineSummary) {
-                result.machineSummary.qualityScore = result.qualityScore;
-                result.machineSummary.valueScore = result.valueScore;
-                result.machineSummary.reproducibilityBonus = result.reproducibilityBonus;
+                result.machineSummary.innovation = result.innovationScore;
+                result.machineSummary.technicalRigor = result.technicalRigorScore;
+                result.machineSummary.experimentalSufficiency = result.experimentalSufficiencyScore;
+                result.machineSummary.clarity = result.clarityScore;
+                result.machineSummary.impact = result.impactScore;
+                result.machineSummary.openSource = result.openSourceScore;
+                result.machineSummary.reproducibility = result.reproducibilityScore;
+                result.machineSummary.engineeringScore = result.engineeringScore;
             }
         }
     }
 
-    // rankBucket 推断：在评分计算完成后执行，确保基于最终 score
-    if (!result.rankBucket && result.score) {
+    // 矛盾检测：开源高分但无任何实际链接
+    const openScoreVal = parseFloat(result.openSourceScore || 0);
+    const hasCodeYes = result.hasCode === '是' || result.hasCode === 'yes';
+    const hasModelYes = result.hasModel === '是' || result.hasModel === 'yes';
+    const hasDatasetYes = result.hasDataset === '是' || result.hasDataset === 'yes';
+    if (openScoreVal >= 1.0 && !hasCodeYes && !hasModelYes && !hasDatasetYes) {
+        // 论文没有任何开源链接但得了高分，强制降低
+        result.openSourceScore = '0';
+        if (result.machineSummary) result.machineSummary.openSource = '0';
+        // 重新计算总分
+        let total = parseFloat(result.score || 0);
+        total = Math.max(1.0, Math.min(10.0, total - openScoreVal));
+        result.score = String(Math.round(total * 10) / 10);
+    }
+
+    // rankBucket 推断：始终基于最终 score 重新计算（覆盖 LLM 原始值）
+    if (result.score) {
         const s = parseFloat(result.score);
         if (!isNaN(s)) {
             if (s >= 9.0) result.rankBucket = '前10%';
             else if (s >= 7.5) result.rankBucket = '前25%';
             else if (s >= 5.5) result.rankBucket = '前50%';
             else result.rankBucket = '后50%';
+            // 同步 machineSummary
+            if (result.machineSummary) {
+                result.machineSummary.rankBucket = result.rankBucket;
+            }
         }
     }
 
@@ -778,6 +1082,51 @@ function backupPapersJson(papersFilePath, archiveDir) {
 }
 
 // ═══════════════════════════════════════════════════════
+// 博客已发布论文扫描
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 从 Hugo 博客仓库中扫描已发布论文的 arXiv ID 集合
+ * 博客文章中的 arXiv 链接格式：[arxiv](https://arxiv.org/abs/XXXX.XXXXX)
+ * @param {string} blogRepo - 博客仓库根目录路径
+ * @returns {Set<string>} 已发布的规范化 arXiv ID 集合
+ */
+function loadPublishedIdsFromBlog(blogRepo) {
+    const publishedIds = new Set();
+    if (!blogRepo) return publishedIds;
+
+    const postsDir = path.join(blogRepo, 'content', 'posts');
+    if (!fs.existsSync(postsDir)) {
+        console.log(`[blog-dedup] 博客目录不存在: ${postsDir}，跳过博客去重`);
+        return publishedIds;
+    }
+
+    try {
+        const files = fs.readdirSync(postsDir).filter(f => f.endsWith('.md'));
+        // 匹配 arxiv 链接：[arxiv](https://arxiv.org/abs/XXXX.XXXXX) 或纯 URL
+        const arxivUrlRegex = /arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})(?:v\d+)?/g;
+
+        for (const file of files) {
+            try {
+                const content = fs.readFileSync(path.join(postsDir, file), 'utf8');
+                let match;
+                while ((match = arxivUrlRegex.exec(content)) !== null) {
+                    publishedIds.add(normalizedId(match[1]));
+                }
+            } catch (e) {
+                // 忽略单个文件读取错误
+            }
+        }
+
+        console.log(`[blog-dedup] 从博客扫描到 ${publishedIds.size} 篇已发布论文`);
+    } catch (e) {
+        console.log(`[blog-dedup] 扫描博客目录失败: ${e.message}，跳过博客去重`);
+    }
+
+    return publishedIds;
+}
+
+// ═══════════════════════════════════════════════════════
 // Prompt 加载（从 markdown 文件读取）
 // ═══════════════════════════════════════════════════════
 
@@ -803,13 +1152,13 @@ function loadPrompt(mdPath, vars = {}) {
 
     const content = fs.readFileSync(fullPath, 'utf8');
 
-    // 提取第一个 ``` 或 ```text 代码块内的内容
-    const blockMatch = content.match(/```(?:text)?\n([\s\S]*?)\n```/);
+    // 提取第一个 ``` 或 ~~~ 代码块内的内容（兼容 CRLF）
+    const blockMatch = content.match(/```(?:text)?\r?\n([\s\S]*?)\r?\n```|~~~\r?\n([\s\S]*?)\r?\n~~~/);
     if (!blockMatch) {
-        throw new Error(`Prompt 文件 ${mdPath} 中未找到 \`\`\` 代码块`);
+        throw new Error(`Prompt 文件 ${mdPath} 中未找到 \`\`\` 或 ~~~ 代码块`);
     }
 
-    let prompt = blockMatch[1];
+    let prompt = blockMatch[1] || blockMatch[2];
 
     // 替换占位符 {key} → value（对 key 做正则转义，防止注入；使用回调避免 $ 特殊含义）
     for (const [key, value] of Object.entries(vars)) {
@@ -819,7 +1168,9 @@ function loadPrompt(mdPath, vars = {}) {
     }
 
     // 检测未替换的占位符并警告（只在原始模板中检测，避免将替换值中的 LaTeX 符号误判）
-    const templateVars = [...blockMatch[1].matchAll(/\{([a-zA-Z_]\w*)\}/g)].map(m => m[1]);
+    // 排除单字母（如 {N}, {k}, {i} 等数学公式变量）
+    const templateStr = blockMatch[1] || blockMatch[2];
+    const templateVars = [...templateStr.matchAll(/\{([a-zA-Z_]\w{1,})\}/g)].map(m => m[1]);
     const providedKeys = new Set(Object.keys(vars));
     const unboundKeys = [...new Set(templateVars)].filter(k => !providedKeys.has(k));
     if (unboundKeys.length > 0) {
@@ -858,6 +1209,8 @@ module.exports = {
     createProxyAgent,
     // 备份
     backupPapersJson,
+    // 博客去重
+    loadPublishedIdsFromBlog,
     // Prompt
     loadPrompt
 };

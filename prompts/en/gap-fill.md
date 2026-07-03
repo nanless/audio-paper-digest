@@ -46,7 +46,7 @@ arXiv ID: {arxivId}
 3. **Remove redundancy**: delete content in the analysis that lacks support from the original text, over-inference, or statements unrelated to the paper. Fabrication is strictly prohibited.
 4. **Preserve format**: the output must contain the following complete sections, with formatting consistent with the existing analysis:
    - ## 评分
-   - ## 机器摘要 (**must** be in strict key-value pair format, one per line, with key names unchanged: rank_bucket / quality_score / value_score / reproducibility_bonus / confidence / primary_task_tag / primary_method_tag / sota_claim / has_code / has_model / has_dataset. Prose paragraphs are prohibited.)
+   - ## 机器摘要 (**must** be in strict key-value pair format, one per line, with key names unchanged: rank_bucket / innovation / technical_rigor / experimental_sufficiency / clarity / impact / open_source / reproducibility / engineering_score / confidence / primary_task_tag / primary_method_tag / sota_claim / has_code / has_model / has_dataset. Prose paragraphs are prohibited.)
    - ## 标签 (**must** strictly follow the four-line format; no omission or merging allowed: line 1 `#标签1 #标签2...`; line 2 `主任务标签：#具体任务标签`; line 3 `主方法标签：#具体方法标签`; line 4 `补充标签：#标签...`. All tags must start with `#` and be separated by spaces; commas / semicolons / enumeration commas are strictly prohibited. arXiv categories such as `#cs.CL` are strictly prohibited as tags. The primary task tag must be a specific task direction; method names, arXiv categories, or prose descriptions are not allowed.)
    - ## 作者与机构
    - ## 毒舌点评
@@ -55,7 +55,15 @@ arXiv ID: {arxivId}
    - ## 核心创新点
    - ## 实验结果
    - ## 细节详述
-   - ## 评分理由 (along 7 dimensions: 创新性/3, 技术严谨性/1.5, 实验充分性/1.5, 清晰度/1, 影响力/2, 开源/1.5, 可复现性/0.5)
+   - ## 评分理由 (**EXTREMELY IMPORTANT, format must be strictly followed**):
+     * Each dimension in a separate paragraph, format must be: `*   dim_name (score/max): specific review comments`
+     * **Score must use each dimension's own range** (e.g., Innovation max is 2, write 1.5 NOT 9.0/10)
+     * **NEVER use 10-point scale, percentage, or any converted score**
+     * Correct example: `*   创新性 (1.5/2): Clear problem definition, novel insights...`
+     * Wrong example: `*   创新性 (2/2)：9.0/10。...` ← FORBIDDEN, uses 10-point scale
+     * All 8 dimensions must be listed, fixed order: 创新性, 技术严谨性, 实验充分性, 清晰度, 影响力, 开源, 可复现性, 工程/实践价值
+     * **Do NOT write total score calculation** (code calculates automatically)
+     * Open source score must be consistent with `## 开源详情` and `has_code`/`has_model`/`has_dataset`
    - ## 局限与问题
    - ## 开源详情
 5. **Complete rewrite**: do not output only modified fragments. What is output is a complete, directly substitutable final version.

@@ -64,6 +64,7 @@ async function reanalyzeSelected(ids) {
         concurrency: 3,
         maxRetries: 2,
         retryDelayMs: 3000,
+        saveInterval: 1,
         onPaperStart: (idx, total, paper) => {
             console.log(`  [${idx + 1}/${total}] ▶ 开始: ${paper.title?.substring(0, 50)}...`);
         },
@@ -76,6 +77,22 @@ async function reanalyzeSelected(ids) {
             } else {
                 console.log(`  [${idx + 1}/${total}] ❌ 失败 | ${durSec}s | ${result.error}`);
             }
+        },
+        onSave: async (results) => {
+            // 增量保存分析进度
+            const mergedMap = new Map();
+            for (const p of papers) {
+                const key = p.arxivId || p.paper_id;
+                if (key) mergedMap.set(key, p);
+            }
+            for (const r of results) {
+                if (!r) continue;
+                const key = r.arxivId || r.paper_id;
+                if (key) mergedMap.set(key, r);
+            }
+            data.papers = Array.from(mergedMap.values());
+            data.lastUpdated = new Date().toISOString();
+            writeFileAtomic(RESULT_FILE, JSON.stringify(data, null, 2));
         }
     });
 

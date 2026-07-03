@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+from dotenv import load_dotenv
+load_dotenv()
+
 """
 小红书自动发布脚本（基于 Playwright）
 
@@ -38,7 +41,7 @@ except ImportError:
 PROJECT_ROOT = Path(__file__).parent.parent
 PUBLISH_URL = "https://creator.xiaohongshu.com/publish/publish"
 LOGIN_URL = "https://creator.xiaohongshu.com/"
-ENV_FILE = Path.home() / ".hermes" / ".env"
+ENV_FILE = PROJECT_ROOT / ".env"
 
 # 小红书正文限制（标题 30 字，正文 1000 字）
 MAX_TITLE_LEN = 30
@@ -50,7 +53,7 @@ MAX_BODY_LEN = 1000
 # ═══════════════════════════════════════════════════════
 
 def _load_env_file():
-    """加载 ~/.hermes/.env 到 os.environ（只加载，不覆盖已有环境变量）"""
+    """加载 .env 到 os.environ（只加载，不覆盖已有环境变量）"""
     if not ENV_FILE.exists():
         return
     with open(ENV_FILE, "r", encoding="utf-8") as f:
@@ -69,7 +72,7 @@ def _load_env_file():
 
 
 def _update_env_key(key: str, value: str):
-    """更新 ~/.hermes/.env 中的指定 key，保留其他内容"""
+    """更新 .env 中的指定 key，保留其他内容"""
     ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
     lines = []
     found = False
@@ -94,7 +97,7 @@ def _update_env_key(key: str, value: str):
 
 
 # ═══════════════════════════════════════════════════════
-# Cookie 管理（存放到 ~/.hermes/.env）
+# Cookie 管理（存放到 .env）
 # ═══════════════════════════════════════════════════════
 
 async def save_cookies(context):
@@ -104,7 +107,7 @@ async def save_cookies(context):
     _update_env_key("XIAOHONGSHU_COOKIES", cookies_b64)
     # 同时刷新当前进程的环境变量
     os.environ["XIAOHONGSHU_COOKIES"] = cookies_b64
-    print(f"[xhs] Cookie 已保存到 {ENV_FILE} (XIAOHONGSHU_COOKIES)")
+    print(f"[xhs] Cookie 已保存到 .env (XIAOHONGSHU_COOKIES)")
 
 
 async def load_cookies(context):
@@ -120,7 +123,7 @@ async def load_cookies(context):
         cookies_json = base64.b64decode(cookies_b64).decode("utf-8")
         cookies = json.loads(cookies_json)
         await context.add_cookies(cookies)
-        print("[xhs] Cookie 已从 ~/.hermes/.env 加载")
+        print("[xhs] Cookie 已从 .env 加载")
         return True
     except Exception as e:
         print(f"[xhs] ⚠️ Cookie 解析失败: {e}")

@@ -1,285 +1,209 @@
-# Paper Digest - ICML 2026 论文深度分析
+# Paper Digest - 语音/音乐/音频论文速递全流程自动化
 
-本分支（`icml-2026-analysis`）专门用于 ICML 2026 会议论文的筛选与深度分析，覆盖从 icml.cc 官网爬取、LLM 筛选、基于摘要的深度分析到 Hugo 博客发布的完整链路。
+**[English](README.en.md)** | 中文
 
-> 如需查看 arXiv / HuggingFace 每日论文速递流程，请切换至 `main` 分支。
+本项目用于自动生成"语音/音乐/音频论文速递"，覆盖从 arXiv 和 HuggingFace Papers 抓取、LLM 筛选、多模态深度分析，到发布 Hugo 博客、微信公众号草稿和小红书文案的完整链路。
 
 ---
 
-## 1. 文档说明
+## 文档说明
 
 | 文件 | 用途 | 读者 |
 |------|------|------|
-| `README.md` | 给人的完整运行手册（架构、配置、命令、排错） | 人类用户 |
+| `README.md` | 项目概览、快速开始、命令速查 | 人类用户 |
 | `SKILL.md` | 给 Agent 的执行规则与安全约束 | AI Agent |
-| `prompts/icml-filter.md` | 筛选阶段 LLM prompt（判断论文是否语音/音乐/音频相关） | 维护者 |
-| `prompts/icml-deep-analysis.md` | 深度分析阶段 LLM prompt（输出格式、标签体系、评分标准） | 维护者 |
+| `docs/workflow.md` | 主流程详解（归档、抓取、筛选、分析、保存） | 使用者 |
+| `docs/scripts.md` | 全部脚本功能说明 | 开发者 |
+| `docs/data-format.md` | 数据文件格式与字段说明 | 开发者 |
+| `docs/setup.md` | 安装初始化、环境变量、日志、代理配置 | 新用户 |
+| `docs/troubleshooting.md` | 常见问题排查与修复 | 使用者 |
+| `docs/maintenance.md` | 维护约定、评分标准、标签口径 | 维护者 |
+| `prompts/filter.md` | 筛选阶段 LLM prompt | 维护者 |
+| `prompts/deep-analysis.md` | 深度分析主 prompt（Round 1，纯文本） | 维护者 |
+| `prompts/image-supplement.md` | 图像补充 prompt（双模型模式） | 维护者 |
+| `prompts/opensource-scan.md` | 开源链接扫描 prompt（Round 2） | 维护者 |
+| `prompts/gap-fill.md` | 审校重写 prompt（Round 3） | 维护者 |
 
 > **铁律**：真实行为以 `scripts/*.js` / `scripts/*.py` 当前实现为最终准绳。若文档与代码冲突，以代码为准并修正文档。
 
 ---
 
-## 2. 项目结构
+## 项目结构
 
 ```
 audio-paper-digest/
-├── scripts/
-│   ├── fetch-icml2026.py       # 从 icml.cc 爬取完整论文列表
-│   ├── icml-filter.js          # 筛选音频/语音/音乐相关论文
-│   ├── icml-batch-analyze.js   # 批量深度分析（基于摘要）
-│   ├── icml-retry-failed.js    # 重试分析失败的论文
-│   ├── publish-to-blog.py      # 发布到 Hugo 博客
-│   ├── publish-wechat-full.py  # 生成微信公众号图文草稿
-│   ├── publish-xiaohongshu.py  # 生成小红书文案
-│   ├── utils.js                # 公共工具函数
-│   ├── utils.py                # 公共工具函数（Python）
-│   └── config.js               # 统一配置中心
-├── data/
-│   ├── icml2026_papers.json    # 完整论文列表（6567篇，从icml.cc爬取）
-│   └── current/
-│       ├── icml_2026_filtered.json      # 筛选通过的论文
-│       ├── icml_2026_excluded.json      # 排除的论文
-│       └── icml_2026_deep_analysis.json # 深度分析结果
-├── prompts/
-│   ├── icml-filter.md          # ICML 筛选 prompt
-│   └── icml-deep-analysis.md   # ICML 深度分析 prompt
-├── package.json
+├── scripts/              # 全部脚本
+├── tests/                # 单元测试
+├── data/                 # 工作数据与归档（gitignored）
+│   ├── current/          # 当前工作数据
+│   └── archive/          # 按日期自动归档
+├── logs/                 # 运行日志（gitignored）
+├── prompts/              # LLM prompt 文件
+├── docs/                 # 详细文档
+├── package.json          # npm scripts
+├── run-full-fetch.sh     # 全流程入口
 └── README.md / SKILL.md
 ```
 
----
-
-## 3. ICML 2026 工作流
-
-### 3.1 整体流程
-
-```
-icml.cc 官网 (6567篇)
-    │
-    ▼
-爬取论文列表 (fetch-icml2026.py)
-    │
-    ▼
-LLM 筛选音频相关论文 (icml-filter.js)
-    │
-    ▼
-基于摘要的深度分析 (icml-batch-analyze.js)
-    │
-    ▼
-发布到博客 / 公众号 / 小红书
-```
-
-### 3.2 数据来源特点
-
-- **来源**：`icml.cc/virtual/2026/papers.html`
-- **格式**：每篇论文包含 `id`（poster ID）、`title`、`authors`、`abstract`、`date_published`、`url`
-- **限制**：无 PDF 全文，无图片，分析完全基于标题和摘要
-- **数据文件**：`data/icml2026_papers.json`
-
-### 3.3 环境变量配置
-
-在 `~/.hermes/.env` 中配置：
-
-```bash
-# LLM API 配置（筛选和分析共用）
-PAPER_ANALYZER_ENDPOINT=https://api.xxx.com/v1
-PAPER_ANALYZER_API_KEY=sk-xxx
-PAPER_ANALYZER_MODEL=claude-sonnet-4-6
-
-# 博客发布配置
-PAPER_DIGEST_BLOG_URL=https://nanless.github.io/audio-paper-digest-blog/posts
-PAPER_DIGEST_BLOG_REPO=/Users/xxx/audio-paper-digest-blog
-
-# 可选：ICML 专用配置
-ICML_FILTER_CONCURRENCY=8       # 筛选并发数
-ICML_ANALYSIS_CONCURRENCY=3     # 分析并发数
-```
+详见 [`docs/scripts.md`](docs/scripts.md) 了解每个脚本的功能，[`docs/data-format.md`](docs/data-format.md) 了解数据文件格式。
 
 ---
 
-## 4. 运行命令
-
-### 4.1 爬取完整论文列表
+## 快速开始
 
 ```bash
-npm run icml-fetch
+# 1. 安装依赖
+npm install
+
+# 2. 配置 API Key（写入 `.env`）
+#    主模型（文本分析，必填）
+#    PAPER_ANALYZER_API_KEY=your-key
+#    PAPER_ANALYZER_MODEL=deepseek-v4-pro
+#    PAPER_ANALYZER_ENDPOINT=https://api.deepseek.com/anthropic
+#
+#    副模型（多模态图像分析，可选）
+#    PAPER_ANALYZER_SECONDARY_MODEL=mimo-v2.5
+#    PAPER_ANALYZER_SECONDARY_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
+#    PAPER_ANALYZER_SECONDARY_API_KEY=tp-your-key
+
+# 3. 运行全流程（抓取 + 筛选 + 深度分析）
+./run-full-fetch.sh
+
+# 4. 发布博客
+python3 scripts/publish-to-blog.py --date 2026-05-08
+
+# 5. 生成小红书文案
+python3 scripts/publish-xiaohongshu.py
 ```
 
-或：
-```bash
-python3 scripts/fetch-icml2026.py
-```
+完整安装指南见 [`docs/setup.md`](docs/setup.md)。
 
-输出：`data/icml2026_papers.json`（约 8 MB，6567 篇论文）
+---
 
-### 4.2 筛选音频相关论文
+## 8. 常用命令速查
 
-```bash
-npm run icml-filter
-```
-
-或：
-```bash
-node scripts/icml-filter.js
-```
-
-输出：
-- `data/current/icml_2026_filtered.json` — 筛选通过的论文
-- `data/current/icml_2026_excluded.json` — 排除的论文
-
-**断点续传**：
-```bash
-# 从第 500 篇开始，最多筛选 1000 篇
-ICML_FILTER_OFFSET=500 ICML_FILTER_LIMIT=1000 node scripts/icml-filter.js
-```
-
-### 4.3 批量深度分析
+### npm scripts
 
 ```bash
-npm run icml-analyze
-```
+# 全流程（抓取 + 筛选 + 深度分析）
+npm run fetch
 
-或：
-```bash
-node scripts/icml-batch-analyze.js
-```
+# 仅深度分析续跑（跳过已有 analysis）
+npm run deep
 
-输出：`data/current/icml_2026_deep_analysis.json`
+# 全量重分析
+npm run reanalyze
 
-**断点续传**：
-```bash
-# 从第 50 篇开始，最多分析 100 篇
-ICML_OFFSET=50 ICML_LIMIT=100 node scripts/icml-batch-analyze.js
-```
+# 批量分析未分析论文
+npm run batch
 
-### 4.4 重试失败分析
+# 运行单元测试
+npm test
 
-```bash
-npm run icml-retry
-```
+# 快速测试（抓+筛选，不分析）
+node scripts/quick-test.js
 
-或：
-```bash
-node scripts/icml-retry-failed.js
-```
+# 补录历史 paper ID
+npm run backfill
 
-### 4.5 发布
-
-```bash
-# 发布到博客
-npm run publish
+# 发布博客
+npm run publish -- --date 2026-04-21
 
 # 生成微信公众号草稿
 npm run wechat
 
 # 生成小红书文案
 npm run xiaohongshu
+
+# 小红书自动发布（需先登录）
+npm run xhs-login
+npm run xhs-publish
+npm run xhs-publish-all
+
+# 生成飞书文档
+python3 scripts/publish-to-feishu.py
+python3 scripts/publish-to-feishu.py --date 2026-04-21
+```
+
+### 直接调用
+
+```bash
+# ========== 核心流程 ==========
+# 全流程（推荐入口）
+./run-full-fetch.sh
+
+# 或直接用 Node
+node scripts/full-fetch.js
+
+# 仅深度分析续跑（跳过已有 analysis）
+node scripts/deep-analysis-only.js
+
+# 全量重分析
+node scripts/reanalyze.js
+
+# 指定并发度重分析
+node scripts/reanalyze.js --concurrency 3 data/current/deep-analysis-result.json
+
+# 快速测试（抓+筛选，不分析）
+node scripts/quick-test.js
+
+# 批量分析未分析论文
+node scripts/batch-analyze.js
+
+# 单独分析一篇论文
+node scripts/analyze-single-paper.js 2604.16044
+
+# ========== 发布 ==========
+# 发布博客（强烈建议显式 --date）
+python3 scripts/publish-to-blog.py --date 2026-04-21
+
+# 只生成 Markdown，不推送
+python3 scripts/publish-to-blog.py --skip-push --date 2026-04-21
+
+# 用自定义数据发布
+python3 scripts/publish-to-blog.py --date 2026-04-21 data/current/deep-analysis-result.json
+
+# 生成微信公众号草稿
+python3 scripts/publish-wechat-full.py
+
+# 用自定义数据生成微信草稿
+python3 scripts/publish-wechat-full.py data/current/deep-analysis-result.json
+
+# 生成小红书文案（默认 TOP 5）
+python3 scripts/publish-xiaohongshu.py
+python3 scripts/publish-xiaohongshu.py --top 7
+python3 scripts/publish-xiaohongshu.py --all
+
+# 小红书自动发布（需先登录）
+python3 scripts/xiaohongshu-publisher.py --login
+python3 scripts/xiaohongshu-publisher.py
+python3 scripts/xiaohongshu-publisher.py --all
+
+# 生成飞书文档
+python3 scripts/publish-to-feishu.py
+python3 scripts/publish-to-feishu.py --date 2026-04-21
+
+# ========== 辅助 ==========
+# 补录论文 ID（不分析）
+python3 scripts/backfill_papers.py
+
+# 按日期重新筛选 + 分析
+node scripts/refilter-reanalyze-by-date.js 2026-07-01
 ```
 
 ---
 
-## 5. 数据文件格式
+## 更多文档
 
-### 5.1 爬取结果 `data/icml2026_papers.json`
-
-```json
-{
-  "conference": "ICML 2026",
-  "count": 6567,
-  "fetched_at": "2026-05-23T12:00:00+08:00",
-  "papers": [
-    {
-      "id": "61337",
-      "title": "Hyper-ICL: Attention Calibration with Hyperbolic Anchor Distillation for Multimodal In-Context Learning",
-      "authors": ["Niloufar Alipour Talemi", "Hossein Kashiani", "Fatemeh Afghah"],
-      "date_published": "2026-05-05",
-      "abstract": "Multimodal In-Context Learning (ICL) has emerged as...",
-      "url": "https://icml.cc/virtual/2026/poster/61337"
-    }
-  ]
-}
-```
-
-### 5.2 筛选结果 `data/current/icml_2026_filtered.json`
-
-```json
-{
-  "count": 171,
-  "papers": [
-    {
-      "id": "61337",
-      "title": "...",
-      "authors": [...],
-      "abstract": "...",
-      "url": "..."
-    }
-  ]
-}
-```
-
-### 5.3 深度分析结果 `data/current/icml_2026_deep_analysis.json`
-
-```json
-{
-  "conference": "ICML 2026",
-  "count": 171,
-  "analyzed_at": "2026-05-23T15:00:00+08:00",
-  "papers": [
-    {
-      "id": "61337",
-      "title": "...",
-      "authors": [...],
-      "abstract": "...",
-      "url": "...",
-      "analysis": "## 评分\n7.5/10\n\n## 机器摘要\n...",
-      "parsed": {
-        "score": 7.5,
-        "rank_bucket": "前25%",
-        "primary_task_tag": "#多模态学习",
-        "primary_method_tag": "#注意力机制"
-      },
-      "error": null
-    }
-  ]
-}
-```
+- [主流程详解](docs/workflow.md) — 自动归档、抓取、筛选、深度分析的完整流程
+- [脚本分工](docs/scripts.md) — 全部脚本的功能说明与用法
+- [数据格式](docs/data-format.md) — papers.json、filtered-papers.json、deep-analysis-result.json 结构
+- [安装与配置](docs/setup.md) — 依赖安装、环境变量、模型配置、日志机制
+- [排错手册](docs/troubleshooting.md) — API 错误、代理问题、发布失败的排查方法
+- [维护约定](docs/maintenance.md) — 代码规范、评分标签口径、变更检查清单
 
 ---
 
-## 6. 与 arXiv 流程的差异
+## 参考与致谢
 
-| 维度 | arXiv 流程 (main) | ICML 流程 (本分支) |
-|------|-------------------|-------------------|
-| 数据来源 | arXiv API + HuggingFace | icml.cc 官网爬取 |
-| 论文总量 | 每日新增数十篇 | 固定 6567 篇 |
-| 全文获取 | arXiv HTML 全文 | 仅摘要 |
-| 图片分析 | 有（arXiv 图片） | 无 |
-| 筛选依据 | 标题 + 摘要 + arXiv 类别 | 标题 + 摘要 |
-| 分析深度 | 全文 + 图片 | 摘要（较浅） |
-| 数据更新 | 每日增量 | 一次性全量 |
-
----
-
-## 7. 排错
-
-### 7.1 筛选阶段
-
-- **API 超时**：降低 `ICML_FILTER_CONCURRENCY`，增加 `ICML_FILTER_TIMEOUT`
-- **大量失败**：检查 `PAPER_ANALYZER_ENDPOINT` / `KEY` / `MODEL` 配置
-- **断点续传失败**：检查 `data/current/icml_2026_filtered.json` 和 `excluded.json` 是否损坏
-
-### 7.2 分析阶段
-
-- **API 拒绝（rejected）**：通常是内容安全过滤，可尝试 `icml-retry-failed.js`
-- **解析失败**：检查模型输出格式，必要时更新 `prompts/icml-deep-analysis.md`
-- **内存不足**：减少 `ICML_ANALYSIS_CONCURRENCY`，分批运行
-
----
-
-## 8. 技术栈
-
-- **Node.js** >= 18
-- **Python** 3.x
-- **API**：Anthropic / OpenAI 兼容接口
-- **数据存储**：JSON 文件
-- **博客**：Hugo + GitHub Pages
+- 本项目在设计和实现过程中参考了 [speech-paper-daily-skill](https://github.com/JusperLee/speech-paper-daily-skill) 的思路与结构
