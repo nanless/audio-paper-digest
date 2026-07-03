@@ -451,23 +451,24 @@ def yaml_escape(s):
              .replace('}', '}}'))
 
 
-def generate_index_page(scored, unscored, date_str, paper_slugs):
+def generate_index_page(scored, unscored, date_str, paper_slugs, category='论文速递'):
     """生成每日汇总页面（index.md），包含概览和每篇论文的链接"""
     total = len(scored) + len(unscored)
     tag_set = extract_all_tags([p for _, p, _ in scored] + unscored, limit=10)
     top_tags = extract_top_tags([p for _, p, _ in scored] + unscored, limit=8)
 
+    conference_title = f'ICML 2026 论文速递' if category == 'icml-2026' else f'语音/音乐/音频论文速递 {date_str}'
     md = f"""---
-title: "语音/音乐/音频论文速递 {date_str}"
+title: "{conference_title}"
 date: {date_str}
 draft: false
 tags: [{', '.join(tag_set)}]
-categories: [论文速递]
+categories: [{category}]
 description: "共分析 {total} 篇语音/AI 论文"
 layout: "posts"
 ---
 
-# 语音/音乐/音频论文速递 {date_str}
+# {conference_title}
 
 共分析 **{total}** 篇论文
 
@@ -711,7 +712,7 @@ def enrich_opensource(pa, paper):
     return oss
 
 
-def generate_paper_page(paper, date_str):
+def generate_paper_page(paper, date_str, category='论文速递'):
     """生成单篇论文的独立页面"""
     # 优先使用已解析好的 parsed 数据，避免重新解析时因标题损坏导致字段丢失
     pa = paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
@@ -731,7 +732,7 @@ title: "{yaml_escape(title)}"
 date: {date_str}
 draft: false
 tags: [{', '.join([t.replace('#', '') for t in (pa['tags'] if pa else [])])}]
-categories: [论文速递]
+categories: [{category}]
 description: "{yaml_escape(desc)}"
 hiddenInHomeList: true
 ---
@@ -1158,6 +1159,7 @@ def main():
     data_file = None
     skip_push = False
     target_date = None
+    category = '论文速递'
 
     i = 1
     while i < len(sys.argv):
@@ -1166,6 +1168,9 @@ def main():
             skip_push = True
         elif arg == '--date' and i + 1 < len(sys.argv):
             target_date = sys.argv[i + 1]
+            i += 1
+        elif arg == '--category' and i + 1 < len(sys.argv):
+            category = sys.argv[i + 1]
             i += 1
         elif not arg.startswith('--'):
             data_file = arg
@@ -1199,7 +1204,7 @@ def main():
         # 优先使用已解析好的 parsed 数据（包含手动修正的标签等），避免重新解析覆盖
         pa = paper.get('parsed') or parse_analysis(paper.get('analysis', ''))
         if pa:
-            paper_md, slug = generate_paper_page(paper, today)
+            paper_md, slug = generate_paper_page(paper, today, category)
             paper_md = fix_latex_delimiters(paper_md)
             paper_md = escape_html_like_tags(paper_md)
             paper_md = fix_image_markdown(paper_md)
@@ -1212,7 +1217,7 @@ def main():
 
     print(f"📄 生成 {len(paper_slugs)} 篇论文独立页面")
 
-    index_md = generate_index_page(scored, unscored, today, paper_slugs)
+    index_md = generate_index_page(scored, unscored, today, paper_slugs, category)
     index_md = fix_latex_delimiters(index_md)
     index_md = escape_html_like_tags(index_md)
     index_md = fix_image_markdown(index_md)
