@@ -73,13 +73,29 @@ async function main() {
 
     const allPapers = filteredData.papers.slice(OFFSET, OFFSET + LIMIT);
 
-    // 附加 PDF 文本 + 设置 categories
-    let withText = 0;
+    // 附加 PDF 文本 + 设置 categories + 注入图片 URL
+    let withText = 0, withImages = 0;
+    // 加载 R2 图片映射
+    let r2Map = {};
+    const r2File = path.join(PROJECT_ROOT, 'data', 'current', 'r2-image-mapping.json');
+    try { if (fs.existsSync(r2File)) r2Map = JSON.parse(fs.readFileSync(r2File, 'utf-8')); } catch (e) {}
+
     for (const p of allPapers) {
         if (attachPdfText(p) > 0) withText++;
         if (!p.categories) p.categories = p.venue || 'ICML 2026';
+        // 从 R2 映射注入图片 URL（供 deep-analyzer.js 做 image supplement）
+        const imgUrls = [];
+        const paperPrefix = `/${p.id}-`;
+        for (const [key, url] of Object.entries(r2Map)) {
+            if (key.includes(paperPrefix)) imgUrls.push(url);
+        }
+        if (imgUrls.length) {
+            p.imageUrls = imgUrls;
+            p.allImageUrls = imgUrls;
+            withImages++;
+        }
     }
-    console.log(`📄 ${withText}/${allPapers.length} 篇有 PDF 全文\n`);
+    console.log(`📄 ${withText}/${allPapers.length} 篇有 PDF 全文, ${withImages} 篇有图片\n`);
 
     // 断点续传
     const existingResult = readJsonSafe(RESULT_FILE, null);
@@ -109,28 +125,12 @@ async function main() {
             }
         },
         onSave: async (results) => {
-            // Load R2 image mapping for ICML papers
-            let r2Map = {};
-            const r2File = path.join(Config.CURRENT_DIR, 'r2-image-mapping.json');
-            try { if (fs.existsSync(r2File)) r2Map = JSON.parse(fs.readFileSync(r2File, 'utf-8')); } catch (e) {}
-
             const map = new Map();
             for (const p of (existingResult?.papers || [])) map.set(p.id, p);
             for (const r of results) {
                 if (r?.id) {
-                    // Find image URLs for this paper from R2 mapping
-                    const imgUrls = [];
-                    const prefix = `icml-2026/`;
-                    const paperPrefix = `/${r.id}-`;
-                    for (const [key, url] of Object.entries(r2Map)) {
-                        if (key.includes(paperPrefix)) {
-                            imgUrls.push(url);
-                        }
-                    }
                     map.set(r.id, { ...(map.get(r.id) || {}), ...r,
                         categories: r.categories || r.venue || 'ICML 2026',
-                        imageUrls: imgUrls.length ? imgUrls : (r.imageUrls || []),
-                        allImageUrls: imgUrls.length ? imgUrls : (r.allImageUrls || []),
                         fetchedAt: getBeijingISOString() });
                 }
             }

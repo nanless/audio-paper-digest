@@ -90,7 +90,7 @@ for i, paper in enumerate(papers):
     try:
         # Download PDF
         print(f'  [{i+1}/{len(papers)}] {pid}: downloading...', end=' ')
-        resp = session.get(pdf_url, headers={'Cookie': cookie_str}, timeout=30)
+        resp = session.get(pdf_url, headers={'Cookie': cookie_str}, timeout=120)
         
         if resp.status_code != 200 or len(resp.content) < 1000:
             print(f'FAILED (status={resp.status_code}, size={len(resp.content)})')
