@@ -53,18 +53,100 @@ function checkEnv() {
  */
 function keywordPreFilter(papers) {
     const audioKeywords = [
-        'audio', 'speech', 'music', 'voice', 'sound', 'acoustic',
-        'tts', 'asr', 'speaker', 'vocal', 'singing', 'listen',
-        'waveform', 'spectrogram', 'neural codec', 'audio-lm', 'musiclm',
-        'wav', '声纹', '语音识别', '语音合成', '音频',
-        'mel-spectrogram', 'mfcc', 'pitch', 'timbre', 'prosody', 'phoneme',
-        'denoising', 'dereverberation', 'reverberation', 'binaural',
-        'spatial audio', 'room acoustic', 'encodec', 'hubert', 'wav2vec',
-        'whisper', 'conformer', 'soundstream', 'audiocraft', 'vocoder',
-        'beamforming', 'diarization', 'paralinguistic', 'expressive',
-        'speech-to-text', 'text-to-speech', 'speech translation',
-        'source separation', 'audio generation', 'music generation',
-        'audio-visual', 'audiovisual', 'multimodal speech',
+        // 原子关键词（高频强信号）
+        'audio', 'speech', 'music', 'voice', 'sound', 'acoustic', 'noise',
+        'vocal', 'singing', 'spoken', 'utterance', 'hearing', 'listening',
+        'phoneme', 'phonetic', 'syllable', 'vowel', 'consonant', 'prosodic',
+        'intonation', 'formant', 'larynx', 'fricative', 'plosive',
+        'audiogram', 'audiometry', 'anechoic', 'monaural', 'binaural',
+        'interaural', 'loudness', 'decibel', 'stereo', 'multichannel',
+        'transducer', 'wav', 'flac', 'codec', 'bitrate', 'khz',
+        'equalizer', 'compressor', 'reverb', 'autotune', 'pitch shift',
+        'audiobook', 'podcast', 'dubbing', 'conferencing', 'telephony',
+        'handsfree', 'hearing aid', 'cochlear implant', 'stethoscope',
+        // 语音识别/ASR
+        'speech recognition', 'asr', 'speech-to-text', 'whisper', 'wav2vec',
+        'wav2vec2', 'wavlm', 'hubert', 'conformer', 'rnn-t', 'rnnt',
+        'transducer', 'ctc', 'end-to-end asr', 'streaming asr', 'keyword spotting',
+        'wake word', 'hotword', 'spoken language understanding', 'slu',
+        'voice activity detection', 'vad', 'forced alignment', 'language identification',
+        'code-switching', 'pronunciation', 'mispronunciation',
+        // 语音合成/TTS
+        'text-to-speech', 'tts', 'speech synthesis', 'voice synthesis',
+        'voice cloning', 'voice conversion', 'singing voice synthesis',
+        'vall-e', 'valle', 'vits', 'tacotron', 'fastspeech', 'hifigan',
+        'bigvgan', 'parallel wavegan', 'vocoder', 'neural vocoder', 'melgan',
+        'expressive tts', 'emotional tts', 'prosody', 'zero-shot tts',
+        // 说话人
+        'speaker recognition', 'speaker identification', 'speaker verification',
+        'speaker diarization', 'speaker embedding', 'voice biometric',
+        'x-vector', 'ecapa', 'speaker change detection',
+        // 语音增强/分离
+        'speech enhancement', 'speech separation', 'source separation',
+        'denoising', 'noise suppression', 'dereverberation', 'echo cancellation',
+        'aec', 'packet loss concealment', 'plc', 'bandwidth extension',
+        'audio inpainting', 'deep filter', 'demucs',
+        // 音频编码
+        'speech codec', 'audio codec', 'neural codec', 'encodec',
+        'soundstream', 'opus', 'lyra', 'audio compression',
+        // 音频分类/事件检测
+        'audio classification', 'sound event detection', 'audio tagging',
+        'audio captioning', 'acoustic scene classification',
+        // 麦克风阵列/空间音频
+        'sound source localization', 'ssl', 'direction of arrival', 'doa',
+        'beamforming', 'beamformer', 'microphone array', 'mic array',
+        'multi-channel', 'spatial audio', '3d audio', 'hrtf', 'hrir',
+        'room impulse response', 'rir', 'brir', 'room acoustics',
+        'ambisonics', 'sound field', 'far-field', 'near-field',
+        // 音乐/MIR
+        'music generation', 'music information retrieval', 'mir',
+        'music transcription', 'automatic music transcription', 'amt',
+        'midi', 'music source separation', 'demixing', 'music understanding',
+        'beat tracking', 'onset detection', 'tempo estimation',
+        'chord recognition', 'harmony', 'melody extraction', 'musiclm',
+        'musicgen', 'juke box', 'symbolic music', 'piano', 'drum',
+        'rhythm', 'timbre', 'pitch detection', 'music classification',
+        'music representation', 'score', 'notation', 'orchestration',
+        // 乐器
+        'guitar', 'violin', 'saxophone', 'trumpet', 'flute', 'cello',
+        'clarinet', 'organ', 'synthesizer', 'synth', 'harp', 'xylophone',
+        'marimba', 'viola', 'accordion', 'bagpipe', 'harmonica', 'ukulele',
+        // 生物声学/医学
+        'bioacoustic', 'bioacoustics', 'animal sound', 'bird sound',
+        'whale', 'echolocation', 'heart sound', 'lung sound',
+        'respiratory sound', 'phonocardiogram', 'pathological speech',
+        'dysarthria', 'dysphonia', 'cough detection', 'auscultation',
+        // 语音情感
+        'speech emotion', 'emotion recognition', 'paralinguistic',
+        'ser', 'valence', 'arousal', 'affective computing', 'emotional speech',
+        // 语音翻译
+        'speech translation', 'speech-to-speech', 's2st',
+        'simultaneous translation', 'cascaded speech translation',
+        // 多模态(含音频)
+        'audio-visual', 'audiovisual', 'lip reading', 'lip sync',
+        'talking head', 'visual speech', 'multimodal speech',
+        'audio-language', 'audio-text', 'speech-text',
+        // 信号处理
+        'short-time fourier', 'stft', 'mel-spectrogram', 'mfcc',
+        'filter bank', 'gammatone', 'cochlear', 'cepstrum', 'cepstral',
+        'lpc', 'time-frequency', 'spectral analysis', 'griffin-lim',
+        'auditory model', 'waveform', 'spectrogram',
+        // 评测/数据集
+        'pesq', 'stoi', 'mos', 'wer', 'cer', 'sdr', 'si-sdr',
+        'librispeech', 'voxceleb', 'audioset', 'commonvoice', 'musdb',
+        'ljspeech', 'vctk', 'chime', 'timit', 'iemocap', 'ravdess',
+        'esc-50', 'urbansound', 'fsd50k', 'speechcommands',
+        'dns-challenge', 'maestro', 'gtzan',
+        // 框架/工具
+        'espnet', 'speechbrain', 'kaldi', 'funasr', 'wenet',
+        'torchaudio', 'librosa', 'pyannote', 'asteroid',
+        // 反欺诈/安全
+        'audio deepfake', 'deepfake detection', 'anti-spoofing',
+        'voice spoof', 'audio adversarial', 'audio watermark',
+        'speech privacy', 'voice privacy', 'audio forensics',
+        // 边缘部署
+        'on-device', 'edge speech', 'small footprint', 'low latency audio',
+        'real-time speech', 'streaming speech', 'mobile speech',
     ];
 
     const candidates = [];
