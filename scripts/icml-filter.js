@@ -4,7 +4,7 @@ setupScriptLogging(__filename);
 
 /**
  * ICML 2026 论文筛选脚本
- * 从 data/icml2026_papers.json 加载论文，用 LLM 筛选音频/语音/音乐相关论文
+ * 从 data/icml2026_openreview_papers.json 加载论文，用 LLM 筛选音频/语音/音乐相关论文
  *
  * 环境变量:
  *   ICML_DATA_FILE      - 输入文件 (默认: data/icml2026_papers.json)
@@ -215,9 +215,6 @@ async function main() {
             if (result.failed) {
                 failed++;
                 failedResult.papers.push({ ...paper, filterError: result.error });
-            } else if (result.error) {
-                failed++;
-                filteredResult.papers.push(paper);
             } else if (result.isRelevant) {
                 passed++;
                 filteredResult.papers.push(paper);

@@ -82,7 +82,7 @@ def main():
     new_images = []
     
     for paper in papers:
-        pid = paper['id']
+        pid = paper['id'].replace('/', '_')
         safe_id = pid.replace('/', '_')
         pdf_path = os.path.join(PDF_DIR, f'{safe_id}.pdf')
         

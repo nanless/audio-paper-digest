@@ -457,7 +457,12 @@ def generate_index_page(scored, unscored, date_str, paper_slugs, category='论�
     tag_set = extract_all_tags([p for _, p, _ in scored] + unscored, limit=10)
     top_tags = extract_top_tags([p for _, p, _ in scored] + unscored, limit=8)
 
-    conference_title = f'ICML 2026 论文速递' if category == 'icml-2026' else f'语音/音乐/音频论文速递 {date_str}'
+    conf_lower = category.lower()
+    if conf_lower.startswith('icml-'): conf_name = 'ICML ' + conf_lower.replace('icml-', '')
+    elif conf_lower.startswith('iclr-'): conf_name = 'ICLR ' + conf_lower.replace('iclr-', '')
+    elif conf_lower.startswith('icassp-'): conf_name = 'ICASSP ' + conf_lower.replace('icassp-', '')
+    else: conf_name = None
+    conference_title = f'{conf_name} 论文速递' if conf_name else f'语音/音乐/音频论文速递 {date_str}'
     md = f"""---
 title: "{conference_title}"
 date: {date_str}
@@ -878,7 +883,11 @@ hiddenInHomeList: true
         
         md = insert_images_into_sections(md, image_urls[:5])
 
-    back_label = f'{category.upper()} 2026 论文速递' if category not in ('论文速递', '') else f'{date_str} 语音/音乐/音频论文速递'
+    cat_upper = category.upper()
+    if category != '论文速递' and '2026' in cat_upper:
+        back_label = f'{cat_upper.replace("-2026", " 2026")} 论文速递'
+    else:
+        back_label = f'{date_str} 语音/音乐/音频论文速递'
     md += f'\n---\n\n[← 返回 {back_label}]({BASE_PATH}/posts/{date_str}/)\n'
 
     return md, slug

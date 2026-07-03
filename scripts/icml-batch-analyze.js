@@ -121,8 +121,9 @@ async function main() {
                     // Find image URLs for this paper from R2 mapping
                     const imgUrls = [];
                     const prefix = `icml-2026/`;
+                    const paperPrefix = `/${r.id}-`;
                     for (const [key, url] of Object.entries(r2Map)) {
-                        if (key.startsWith(prefix) && key.includes(r.id)) {
+                        if (key.includes(paperPrefix)) {
                             imgUrls.push(url);
                         }
                     }
