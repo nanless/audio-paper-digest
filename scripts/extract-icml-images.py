@@ -3,7 +3,7 @@
 ICML 2026 PDF image extraction — dual-engine:
   A. pdfplumber → embedded raster images
   B. PyMuPDF (fitz) → vector graphics rendered as bitmaps
-Filtering: min 150px, max 5:1 AR, min 50Kpx² area, max 30 per paper
+Filtering: min 150px, min 50Kpx² area, max 30 per paper
 """
 import json, os, io, hashlib, logging, sys
 
@@ -36,15 +36,14 @@ PDF_DIR = 'data/pdfs/icml2026'
 BASE_URL = 'https://nanless.github.io/audio-paper-digest-images'
 TODAY = '2026-07-04'
 MAX_PER_PAPER = 30
-MIN_PX = 150       # both dimensions must be >= this
-MIN_AREA = 50000   # ~224x224
-MAX_AR_RATIO = 5   # max aspect ratio
+MIN_PX = 150
+MIN_AREA = 50000
 
 out_dir = os.path.join(IMAGE_REPO, 'icml-2026', TODAY)
 os.makedirs(out_dir, exist_ok=True)
 
 def is_valid(w, h):
-    return w >= MIN_PX and h >= MIN_PX and (w * h) >= MIN_AREA and (max(w, h) / max(min(w, h), 1)) <= MAX_AR_RATIO
+    return w >= MIN_PX and h >= MIN_PX and (w * h) >= MIN_AREA
 
 def save_jpeg(im, max_size=2*1024*1024):
     """Convert to RGB JPEG, enforce size limit, return (data, ok)"""
