@@ -6,7 +6,7 @@
 
 **技术栈**：Node.js（核心流水线）+ Python（发布脚本）。要求 Node ≥ 18。`scripts/config.js` 集中管理所有可调参数（支持 `PD_*` 环境变量覆写）。
 
-详细执行规则见 `SKILL.md`（548 行），本文是紧凑版——只保留 Agent 不看代码就容易漏掉的要点。
+详细执行规则见 `SKILL.md`（576 行），本文是紧凑版——只保留 Agent 不看代码就容易漏掉的要点。
 
 ## 常用命令
 
@@ -29,6 +29,7 @@ npm run xhs-publish-all  # 小红书自动发布全部
 node scripts/quick-test.js              # 快速测试（抓+筛选，不分析）
 node scripts/analyze-single-paper.js <arxiv-id>  # 单独分析一篇论文
 node scripts/reanalyze-selected.js <arxivId1> [arxivId2] ...  # 重分析指定论文
+node scripts/refilter-reanalyze-by-date.js <date>  # 按日期重新筛选+分析
 node scripts/validate-scores.js         # 验证并修复评分
 node scripts/test-api-key.js            # 测试 LLM API key 可用性
 python3 scripts/publish-to-feishu.py    # 生成飞书文档
@@ -42,7 +43,7 @@ python3 scripts/publish-to-feishu.py    # 生成飞书文档
 
 **必需变量**：`PAPER_ANALYZER_API_KEY` / `PAPER_ANALYZER_MODEL` / `PAPER_ANALYZER_ENDPOINT` + `PAPER_DIGEST_BLOG_REPO`
 
-Node 脚本通过 `scripts/utils.js` 的 `loadEnvFile()` 加载 `.env`，**该函数自行解析 `.env` 文件，不依赖任何三方库**。Python 脚本通过 `python-dotenv` 加载。
+Node 脚本双层加载 `.env`：① `scripts/config.js` 模块级 IIFE 最先执行（任何 `require('config')` 即触发）；② `scripts/utils.js` 的 `loadEnvFile()` 二次兜底补漏。都自行解析 `.env` 文件，不依赖任何三方库。Python 脚本通过 `python-dotenv` 加载。
 
 ### LLM API 协议自动路由
 
@@ -93,10 +94,10 @@ prompts/                # LLM prompt 模板
   opensource-scan.md    # 开源链接扫描（Round 2）
   gap-fill.md           # 审校重写（Round 3）
   index.md              # Prompt 文档索引（含占位符规范）
-  en/                   # 英文版 prompt（结构相同）
+  en/                   # 英文版 prompt（含 filter / deep-analysis / gap-fill / opensource-scan / index，不含 image-supplement）
 ```
 
-`papers.json` 同时支持 `data/current/papers.json` 和 `data/papers.json`（旧版路径），均被 `config.js` 引用。**`papers.json` 持久化去重数据库，永不归档**。
+`papers.json` 同时支持 `data/current/papers.json` 和 `data/papers.json`（旧版路径），均被 `config.js` 引用。**`papers.json` 持久化去重数据库，永不归档**。`full-fetch.js` 每次运行自动备份 `papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天。
 
 ## 分支策略
 
@@ -145,3 +146,4 @@ prompts/                # LLM prompt 模板
 - `deep-analysis-result.json` 中的论文都是当日抓取+去重+筛选后的结果
 - `full-fetch.js` 每天运行时自动归档移走昨日数据文件
 - 重跑当天步骤见 `SKILL.md` §6（先检查 `papers.json` 的 `lastUpdated`）
+- **恢复 `papers.json` 的关键判断**：`lastUpdated` 是今天→不要恢复，直接删 `filtered-papers.json` 重跑；是昨天或更早→可恢复 `data/archive/papers-<日期>.json` 备份
