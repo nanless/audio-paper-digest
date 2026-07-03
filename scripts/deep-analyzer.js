@@ -136,11 +136,12 @@ async function _callModelOnce(messages, maxTokens, config, startTime, apiType) {
         }
 
         const req = https.request(options, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
+            const chunks = [];
+            res.on('data', chunk => chunks.push(chunk));
             res.on('end', () => {
                 clearTimeout(timeoutId);
                 const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+                const data = Buffer.concat(chunks).toString('utf8');
                 try {
                     const response = JSON.parse(data);
                     const content = parseResponseText(apiType, response);

@@ -92,10 +92,11 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
             const result = await new Promise((resolve, reject) => {
                 const https = require('https');
                 const req = https.request(options, (res) => {
-                    let data = '';
-                    res.on('data', chunk => data += chunk);
+                    const chunks = [];
+                    res.on('data', chunk => chunks.push(chunk));
                     res.on('end', () => {
                         clearTimeout(timeoutId);
+                        const data = Buffer.concat(chunks).toString('utf8');
                         try {
                             const response = JSON.parse(data);
                             const content = parseResponseText(apiType, response);

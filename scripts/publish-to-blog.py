@@ -767,6 +767,14 @@ def review_and_fix_post(file_path):
     original = content
     issues = []
 
+    # 0. 修复 UTF-8 乱码字符（U+FFFD），避免中文被截断产生乱码
+    garbled_count = content.count('\ufffd')
+    if garbled_count > 0:
+        content = content.replace('\ufffd\ufffd\ufffd', '。')
+        content = content.replace('\ufffd\ufffd', '。')
+        content = re.sub(r'\ufffd', '', content)
+        issues.append(f"发现并修复 {garbled_count} 个 UTF-8 乱码字符")
+
     # 1. 检查未转义的 HTML-like 标签（可能导致删除线等样式问题）
     # 匹配不在反引号、不在 code block 中的 <S>、<E>、<task>、<perception> 等标签
     html_tag_pattern = re.compile(
