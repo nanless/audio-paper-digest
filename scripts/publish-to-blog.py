@@ -572,30 +572,30 @@ layout: "posts"
             md += f"👥 **作者与机构**\n\n{authors_clean}\n\n"
 
         if pa.get('roast'):
-            md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
+            roast_clean = re.sub(r'^##\s', '### ', pa['roast'], flags=re.MULTILINE)
+            md += f"💡 **毒舌点评**\n\n{roast_clean}\n\n"
 
         if pa.get('summary'):
             summary = pa['summary']
-            # 如果 summary 中混入了详细分析内容（因标题损坏导致解析边界失效），截断到详细分析之前
             cutoff = re.search(r'\n##\s*详细分', summary)
             if cutoff:
                 summary = summary[:cutoff.start()].strip()
+            summary = re.sub(r'^##\s', '### ', summary, flags=re.MULTILINE)
             md += f"📌 **核心摘要**\n\n{summary}\n\n"
 
         supplementary = ''
         if pa.get('opensource'):
             oss_text = enrich_opensource(pa, p)
-            # 清理内容开头可能残留的 Markdown 标题
             oss_text = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', oss_text.strip(), count=1)
-            # 分离补充信息
+            oss_text = re.sub(r'^##\s', '### ', oss_text, flags=re.MULTILINE)
             supp_match = re.search(r'##\s*补充信息\s*\n([\s\S]*)', oss_text)
             if supp_match:
                 supplementary = supp_match.group(1).strip()
                 oss_text = oss_text[:supp_match.start()].strip()
             md += f"🔗 **开源详情**\n\n{oss_text}\n\n"
 
-        # 补充信息放到最后面
         if supplementary:
+            supplementary = re.sub(r'^##\s', '### ', supplementary, flags=re.MULTILINE)
             md += f"📎 **补充信息**\n\n{supplementary}\n\n"
 
         md += "---\n\n"
@@ -622,19 +622,22 @@ layout: "posts"
             md += f"👥 **作者与机构**\n\n{authors_clean}\n\n"
 
         if pa.get('roast'):
-            md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
+            roast_clean = re.sub(r'^##\s', '### ', pa['roast'], flags=re.MULTILINE)
+            md += f"💡 **毒舌点评**\n\n{roast_clean}\n\n"
 
         if pa.get('summary'):
             summary = pa['summary']
             cutoff = re.search(r'\n##\s*详细分', summary)
             if cutoff:
                 summary = summary[:cutoff.start()].strip()
+            summary = re.sub(r'^##\s', '### ', summary, flags=re.MULTILINE)
             md += f"📌 **核心摘要**\n\n{summary}\n\n"
 
         supplementary = ''
         if pa.get('opensource'):
             oss_text = enrich_opensource(pa, p)
             oss_text = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', oss_text.strip(), count=1)
+            oss_text = re.sub(r'^##\s', '### ', oss_text, flags=re.MULTILINE)
             supp_match = re.search(r'##\s*补充信息\s*\n([\s\S]*)', oss_text)
             if supp_match:
                 supplementary = supp_match.group(1).strip()
@@ -642,10 +645,11 @@ layout: "posts"
             md += f"🔗 **开源详情**\n\n{oss_text}\n\n"
 
         if supplementary:
+            supplementary = re.sub(r'^##\s', '### ', supplementary, flags=re.MULTILINE)
             md += f"📎 **补充信息**\n\n{supplementary}\n\n"
 
         md += "---\n\n"
-
+    
     return md
 
 
@@ -884,11 +888,13 @@ hiddenInHomeList: true
         md = insert_images_into_sections(md, image_urls[:5])
 
     cat_upper = category.upper()
-    if category != '论文速递' and '2026' in cat_upper:
+    if category != '论文速递':
+        summary_slug = f'{category.replace("-2026","2026")}-summary'
         back_label = f'{cat_upper.replace("-2026", " 2026")} 论文速递'
+        md += f'\n---\n\n[← 返回 {back_label}]({BASE_PATH}/posts/{summary_slug}/)\n'
     else:
         back_label = f'{date_str} 语音/音乐/音频论文速递'
-    md += f'\n---\n\n[← 返回 {back_label}]({BASE_PATH}/posts/{date_str}/)\n'
+        md += f'\n---\n\n[← 返回 {back_label}]({BASE_PATH}/posts/{date_str}/)\n'
 
     return md, slug
 
