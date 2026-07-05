@@ -6,7 +6,7 @@
 
 **技术栈**：Node.js（核心流水线）+ Python（发布脚本）。要求 Node ≥ 18。`scripts/config.js` 集中管理所有可调参数（支持 `PD_*` 环境变量覆写）。
 
-详细执行规则见 `SKILL.md`（576 行），本文是紧凑版——只保留 Agent 不看代码就容易漏掉的要点。
+详细执行规则见 `SKILL.md`，本文是紧凑版——只保留 Agent 不看代码就容易漏掉的要点。
 
 ## 常用命令
 
@@ -14,7 +14,7 @@
 npm install              # 安装依赖（cheerio + pdf-parse）
 npm test                 # 运行单元测试（node --test tests/*.test.js）
 npm run fetch            # 全流程：抓取 + 筛选 + 深度分析
-npm run deep             # 仅深度分析续跑（跳过已有 analysis）
+npm run deep             # 仅深度分析续跑（跳过已有 analysis；无分析结果时可从 filtered-papers.json 初始化）
 npm run reanalyze        # 强制全量重分析（支持 --concurrency N）
 npm run batch            # 批量分析未分析论文
 npm run backfill         # 补录历史 paper ID（Python 脚本，不分析）
@@ -45,7 +45,7 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 # 发布博客：python3 scripts/publish-to-blog.py --category icml-2026 --date YYYY-MM-DD data/current/icml_2026_deep_analysis.json
 ```
 
-未配置 linter、typecheck 或 formatter。`npm test` 是唯一的自动化检查。
+未配置 linter、typecheck 或 formatter。CI 会运行 `npm test`、关键 JS 文件 `node -c` 语法检查、关键 Python 发布脚本 `py_compile` 语法检查。
 
 ## 环境配置
 
@@ -75,7 +75,7 @@ Node 脚本双层加载 `.env`：① `scripts/config.js` 模块级 IIFE 最先�
 
 | 文件 | 角色 |
 |------|------|
-| `scripts/full-fetch.js` | 主编排器（归档→去重含博客已发布→抓取→筛选→分析→增量保存） |
+| `scripts/full-fetch.js` | 主编排器（归档→去重含博客已发布→抓取→筛选→更新去重库→分析→增量保存） |
 | `scripts/fetch-papers.js` | arXiv 网页抓取 + LLM 筛选 |
 | `scripts/fetch-huggingface-papers.js` | HuggingFace Papers 抓取（curl 命令） |
 | `scripts/deep-analyzer.js` | 单篇多模态深度分析（支持双模型模式：主模型做文本分析，副模型做图像补充；单模型模式向后兼容） |
@@ -85,7 +85,7 @@ Node 脚本双层加载 `.env`：① `scripts/config.js` 模块级 IIFE 最先�
 
 ### 发布脚本（Python）
 
-`publish-to-blog.py` / `publish-wechat-full.py` / `publish-xiaohongshu.py` / `xiaohongshu-publisher.py` / `publish-to-feishu.py` + 共用模块 `publish_common.py` / `utils.py`
+`publish-to-blog.py` / `publish-wechat-full.py` / `publish-xiaohongshu.py` / `xiaohongshu-publisher.py` / `publish-to-feishu.py` + 共用模块 `publish_common.py` / `utils.py`。博客、微信、飞书发布优先使用论文对象中已有的 `parsed`，没有时才回退解析 `analysis`，避免覆盖人工修正或已缓存的结构化结果。
 
 ### 数据目录
 
@@ -119,12 +119,13 @@ prompts/                # LLM prompt 模板
 - **资料权威性**：文档与代码冲突时，以 `scripts/*` 当前实现为准。详尽的执行规则与安全约束见 `SKILL.md`。
 - **提交信息**：中文或语义化约定式提交（`feat:` / `fix:` / `docs:`）。
 - **测试框架**：Node.js 内置 `node:test`，非 Jest/Mocha。
-- **CI**：运行 `npm test` + 对 `scripts/utils.js` / `config.js` / `analysis-engine.js` / 测试文件做 `node -c` 语法检查。**新增 JS 文件不会自动纳入 CI 语法检查**，需手动更新 `.github/workflows/ci.yml`。
+- **CI**：运行 `npm test` + 关键 JS 脚本 `node -c` 语法检查 + 关键 Python 发布脚本 `py_compile` 语法检查。**新增 JS/Python 入口脚本不会自动纳入 CI 语法检查**，需手动更新 `.github/workflows/ci.yml`。
 - **新增分析脚本必须复用 `analysis-engine.js`**，使用 `analyzePaperWithRetry()` + `analyzeBatch()`，禁止重复实现重试/解析/保存逻辑。
 - **新增 LLM 调用必须通过 `utils.js` 的 `detectApiType()` / `buildApiUrl()` / `buildHeaders()` / `buildRequestBody()` / `parseResponseText()`**，禁止硬编码协议。
 - **环境变量加载**：Node 端 `loadEnvFile()` 自行解析 `.env` 无三方依赖；Python 端用 `python-dotenv`。
 - **`loadPrompt()` 从 markdown 文件内的 \`\`\` 代码块提取 prompt**，并替换 `{变量名}` 占位符。修改 prompt 后需验证 `utils.js` 解析逻辑兼容。
 - **原子写入**：使用 `writeFileAtomic()` 保存数据文件，先写临时文件再 rename，防止写入中断损坏数据。
+- **北京时间时间戳**：运行数据中的 `timestamp` / `lastUpdated` / `fetchedAt` 应使用 `getBeijingISOString()` 或 Python 端 `now_bj_iso()`，避免 UTC 日期导致跨天归档或发布筛选错误。
 - **博客验证默认 `--skip-push`**，仅用户明确要求时才执行真实 `git push`。
 - **后台运行全流程时用 `node scripts/full-fetch.js`** 而非 `npm run fetch`（npm 可能因 TTY 导致 SIGTERM，exit code 143）。
 - **`data/` 和 `logs/` 已 gitignore** — 禁止提交运行时产物。

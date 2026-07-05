@@ -522,7 +522,7 @@ layout: "posts"
         else:
             md += f"### {m} {title}\n\n"
 
-        pa = parse_analysis(p.get('analysis', '')) or {}
+        pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
         aid = p.get('arxivId', '')
         aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
         
@@ -599,7 +599,7 @@ layout: "posts"
             md += f"### {len(scored)+i+1}. {title}\n\n"
 
         # unscored 论文也显示完整内容（作者、点评、摘要、开源详情）
-        pa = parse_analysis(p.get('analysis', '')) or {}
+        pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
         aid = p.get('arxivId', '')
         aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
         meta = build_paper_meta(pa, aurl)

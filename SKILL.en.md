@@ -2,8 +2,8 @@
 name: audio-paper-digest
 description: >
   Automated speech/music/audio paper digest skill. Fetches arXiv + HuggingFace Papers, uses environment-variable-configured LLM for filtering and deep analysis,
-  outputs structured JSON, and can publish to GitHub Pages blog, WeChat Official Account drafts, and Xiaohongshu (Little Red Book) copy.
-  Applicable scenarios: paper digests, paper summaries, daily tracking, re-analysis, blog publishing, WeChat publishing, and Xiaohongshu publishing.
+  outputs structured JSON, and can publish to GitHub Pages blog, WeChat Official Account drafts, Xiaohongshu (Little Red Book) copy, and Feishu (Lark) documents.
+  Applicable scenarios: paper digests, paper summaries, daily tracking, re-analysis, blog publishing, WeChat publishing, Xiaohongshu publishing, and Feishu publishing.
 ---
 
 # Paper Digest Skill (Code Prevails)
@@ -118,7 +118,7 @@ API call characteristics:
 - **Double-layer retry**: analysis-engine.js level retries up to 2 times per paper (max 3 total attempts); deep-analyzer.js internally retries each API call up to 3 times (exponential backoff: first 10s, then doubles, `2^attempt * 5s`)
 - **LLM API requests explicitly set `agent: false`, forcing direct connections to bypass local proxies (avoids MiMo 403); arXiv/HuggingFace and other external fetches still use proxy auto-detection**
 - arXiv HTML parsing uses **cheerio** structured selectors, removing noise elements such as script/style/nav/header/footer
-- Image downloads are **parallelized (concurrency 3)**, downloading all paper images (no quantity limit); single image base64 cap is approximately 20M characters (`imageMaxBase64Chars` in config.js); automatically downgrades to pure text retry after timeout
+- Image downloads are **serial**, downloading all paper images (no quantity limit); single image base64 cap is approximately 20M characters (`imageMaxBase64Chars` in config.js); automatically downgrades to pure text retry after timeout
 - Full text cap is approximately 500K characters (`fullTextMaxChars` in config.js)
 - All analysis configurations are centrally managed in `scripts/config.js`, supporting environment variable overrides
 
@@ -413,6 +413,8 @@ PY
 17. **New LLM endpoints must integrate API protocol auto-routing**: Any new script calling an LLM must uniformly use `detectApiType()`, `buildApiUrl()`, `buildHeaders()`, `buildRequestBody()`, `parseResponseText()` from `scripts/utils.js`; hard-coding specific protocol URLs/Headers/Bodies is prohibited.
 18. **Sync the full pipeline when modifying API protocol routing logic**: When modifying `detectApiType()` judgment rules or `buildApiUrl()`/`buildHeaders()` and other functions, you must synchronously check `fetch-papers.js`, `deep-analyzer.js`, and all scripts using `analysis-engine.js` (`full-fetch.js`, `reanalyze.js`, `batch-analyze.js`, `deep-analysis-only.js`, `analyze-single-paper.js`) to ensure consistent behavior across the full pipeline.
 19. **Prohibit committing sensitive files to version control**: `data/`, `logs/`, `*.env`, `*.backup*`, cache files, log archives containing keys, etc. are strictly forbidden from entering git; before committing, confirm `.gitignore` is correctly configured and that no historically遗留 sensitive files exist in the repository.
+20. **Keep the CI checklist in sync**: When adding or renaming JS/Python entry scripts, update `.github/workflows/ci.yml` so the `node -c` / `py_compile` lists continue to cover critical scripts.
+21. **Use Beijing-time timestamps for runtime data**: Use `getBeijingISOString()` when writing `timestamp` / `lastUpdated` / `fetchedAt`; Python publishing code should use `now_bj_iso()` / `now_bj_date()` to avoid UTC dates causing cross-day archiving or publish filtering mistakes.
 
 ---
 

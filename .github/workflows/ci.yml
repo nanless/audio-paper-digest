@@ -28,10 +28,31 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Check code style (basic lint)
+      - name: Check JavaScript syntax
         run: |
           node -c scripts/utils.js
           node -c scripts/config.js
           node -c scripts/analysis-engine.js
+          node -c scripts/full-fetch.js
+          node -c scripts/fetch-papers.js
+          node -c scripts/fetch-huggingface-papers.js
+          node -c scripts/deep-analyzer.js
+          node -c scripts/deep-analysis-only.js
+          node -c scripts/batch-analyze.js
+          node -c scripts/reanalyze.js
+          node -c scripts/reanalyze-selected.js
+          node -c scripts/analyze-single-paper.js
+          node -c scripts/quick-test.js
+          node -c scripts/validate-scores.js
           node -c tests/utils.test.js
           node -c tests/config.test.js
+
+      - name: Check Python syntax
+        run: |
+          PYTHONPYCACHEPREFIX=/tmp/audio-paper-digest-pycache python3 -m py_compile \
+            scripts/publish_common.py \
+            scripts/utils.py \
+            scripts/publish-to-blog.py \
+            scripts/publish-wechat-full.py \
+            scripts/publish-xiaohongshu.py \
+            scripts/publish-to-feishu.py

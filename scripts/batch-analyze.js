@@ -9,7 +9,7 @@ setupScriptLogging(__filename);
 
 const fs = require('fs');
 const path = require('path');
-const { loadEnvFile, writeFileAtomic, readJsonSafe } = require('./utils.js');
+const { loadEnvFile, writeFileAtomic, readJsonSafe, getBeijingISOString } = require('./utils.js');
 const { analyzeBatch } = require('./analysis-engine.js');
 const Config = require('./config.js');
 
@@ -83,7 +83,7 @@ async function main() {
             }
             // 直接写入文件，不走 createFileSaver 的合并逻辑（避免 normalizedId 失败导致数据丢失）
             const output = {
-                lastUpdated: new Date().toISOString(),
+                lastUpdated: getBeijingISOString(),
                 papers: papers,
                 stats: saveStats
             };

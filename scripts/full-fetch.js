@@ -8,7 +8,7 @@ setupScriptLogging(__filename);
 
 const fs = require('fs');
 const path = require('path');
-const { fetchCategoryPapers, deduplicatePapers, filterPapersWithLLM, loadPapers, savePapers } = require('./fetch-papers.js');
+const { fetchCategoryPapers, filterPapersWithLLM, loadPapers, savePapers } = require('./fetch-papers.js');
 const { fetchHuggingFacePapers, mergeAndDeduplicate } = require('./fetch-huggingface-papers.js');
 const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson, loadPublishedIdsFromBlog } = require('./utils.js');
 const { analyzeBatch, mergeAndSaveResults } = require('./analysis-engine.js');
@@ -95,7 +95,7 @@ function cleanOldData(filePath, name, today) {
     const removed = before - data.papers.length;
 
     if (removed > 0) {
-        data.timestamp = new Date().toISOString();
+        data.timestamp = getBeijingISOString();
         writeFileAtomic(filePath, JSON.stringify(data, null, 2));
         console.log(`  [清理] ${name}: 移除 ${removed} 篇旧数据，保留 ${data.papers.length} 篇今日数据`);
     } else {

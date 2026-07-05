@@ -184,7 +184,7 @@ def md_to_feishu_blocks(md_text):
 
 def generate_paper_md(paper, date_str):
     """生成单篇论文的 Markdown 内容"""
-    pa = parse_analysis(paper.get('analysis', ''))
+    pa = paper.get('parsed') or parse_analysis(paper.get('analysis', ''))
     title = paper.get('title', 'Unknown')
     aid = paper.get('arxivId', '')
     aurl = f'https://arxiv.org/abs/{aid}' if aid else ''

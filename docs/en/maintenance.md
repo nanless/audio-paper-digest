@@ -5,7 +5,7 @@
 - After any change to workflows, paths, or critical parameters, **you must update** `README.md` and `SKILL.md` accordingly
 - When documentation conflicts with code, treat the current script behavior as the source of truth and fix the docs immediately
 - **Hard-coding real API keys, WeChat credentials, or Feishu credentials in scripts is prohibited**; all credentials must be read from environment variables
-- New scripts must be registered in Section 4 of `README.md` and Section 5 of `SKILL.md`
+- New scripts must be registered in the command reference in `README.md`, the common-command section in `SKILL.md`, and the syntax-check checklist in `.github/workflows/ci.yml`
 - New analysis-related scripts should prefer reusing `analysis-engine.js` to avoid duplicating retry/save logic
 - New configurable parameters should be added to `config.js`, with environment variable override support added in tandem
 - After modifying `prompts/deep-analysis.md` or `prompts/filter.md`, the code will automatically read the latest content; no code changes are needed

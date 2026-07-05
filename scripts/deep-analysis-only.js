@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const { loadEnvFile, writeFileAtomic, readJsonSafe, getBeijingISOString } = require('./utils.js');
 const { analyzeBatch } = require('./analysis-engine.js');
+const Config = require('./config.js');
 
 loadEnvFile();
 
@@ -19,16 +20,29 @@ async function runDeepAnalysis() {
 
     const currentPath = path.join(__dirname, '../data/current/deep-analysis-result.json');
     const legacyPath = path.join(__dirname, '../data/deep-analysis-result.json');
+    const filteredPath = path.join(__dirname, '../data/current/filtered-papers.json');
     const resultPath = fs.existsSync(currentPath) || !fs.existsSync(legacyPath) ? currentPath : legacyPath;
 
-    if (!fs.existsSync(resultPath)) {
-        console.error('❌ 找不到分析结果文件，请先运行 full-fetch.js');
-        process.exit(1);
-    }
-
-    const existingData = readJsonSafe(resultPath, null);
-    if (!existingData) {
-        console.error('❌ 读取分析结果文件失败，文件可能损坏');
+    let existingData = null;
+    if (fs.existsSync(resultPath)) {
+        existingData = readJsonSafe(resultPath, null);
+        if (!existingData) {
+            console.error('❌ 读取分析结果文件失败，文件可能损坏');
+            process.exit(1);
+        }
+    } else if (fs.existsSync(filteredPath)) {
+        const filteredData = readJsonSafe(filteredPath, null);
+        const filteredPapers = filteredData && Array.isArray(filteredData.papers) ? filteredData.papers : [];
+        existingData = {
+            timestamp: getBeijingISOString(),
+            source: filteredPath,
+            stats: filteredData?.stats || {},
+            papers: filteredPapers
+        };
+        writeFileAtomic(resultPath, JSON.stringify(existingData, null, 2));
+        console.log(`📄 未找到分析结果，已从筛选结果初始化: ${filteredPath}`);
+    } else {
+        console.error('❌ 找不到分析结果文件或筛选结果文件，请先运行 full-fetch.js 完成筛选');
         process.exit(1);
     }
 
@@ -42,7 +56,6 @@ async function runDeepAnalysis() {
         return;
     }
 
-    const Config = require('./config.js');
     const { stats } = await analyzeBatch(notAnalyzed, {
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
@@ -77,7 +90,7 @@ async function runDeepAnalysis() {
             // 直接写入文件，不走 createFileSaver 的合并逻辑
             const output = {
                 ...existingData,
-                lastUpdated: new Date().toISOString(),
+                lastUpdated: getBeijingISOString(),
                 papers: papers,
                 stats: { ...existingData?.stats, ...saveStats }
             };

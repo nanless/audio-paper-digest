@@ -91,7 +91,7 @@ async function reanalyzeSelected(ids) {
                 if (key) mergedMap.set(key, r);
             }
             data.papers = Array.from(mergedMap.values());
-            data.lastUpdated = new Date().toISOString();
+            data.lastUpdated = getBeijingISOString();
             writeFileAtomic(RESULT_FILE, JSON.stringify(data, null, 2));
         }
     });

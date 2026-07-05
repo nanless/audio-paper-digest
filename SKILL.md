@@ -118,7 +118,7 @@ API 调用特性：
 - **双层重试**：analysis-engine.js 层面每篇最多重试 2 次（总共最多 3 次尝试）；deep-analyzer.js 内部每次 API 调用再重试最多 3 次（指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5s`）
 - **LLM API 请求明确设置 `agent: false`，强制直连以绕过本地代理（避免 MiMo 403）；arXiv/HuggingFace 等外部抓取仍使用代理自动检测**
 - arXiv HTML 解析使用 **cheerio** 结构化选择器，移除 script/style/nav/header/footer 等噪音元素
-- 图片下载 **并行化（并发 3）**，下载论文全部图片（无数量限制）；单张 base64 上限约 20M 字符（config.js 中 `imageMaxBase64Chars`）；超时后自动降级为纯文本重试
+- 图片下载为**串行下载**，下载论文全部图片（无数量限制）；单张 base64 上限约 20M 字符（config.js 中 `imageMaxBase64Chars`）；超时后自动降级为纯文本重试
 - 全文上限约 500K 字符（config.js 中 `fullTextMaxChars`）
 - 所有分析配置集中管理于 `scripts/config.js`，支持环境变量覆写
 
@@ -239,10 +239,7 @@ cd ~/.hermes/skills/openclaw-imports/audio-paper-digest
 npm run fetch
 # 或 ./run-full-fetch.sh
 
-# 仅深度分析续跑（跳过已有 analysis）
-npm run deep
-
-# 仅深度分析续跑（跳过已有 analysis）
+# 仅深度分析续跑（跳过已有 analysis；若尚无分析结果，会从 filtered-papers.json 初始化）
 npm run deep
 
 # 全量重分析（默认读取 data/current/deep-analysis-result.json）
@@ -416,6 +413,8 @@ PY
 17. **新增 LLM 端点必须接入 API 协议自动路由**：任何新增脚本调用 LLM 时，统一使用 `scripts/utils.js` 中的 `detectApiType()`、`buildApiUrl()`、`buildHeaders()`、`buildRequestBody()`、`parseResponseText()`，禁止硬编码特定协议的 URL/Header/Body。
 18. **修改 API 协议路由逻辑时同步全链路**：修改 `detectApiType()` 的判定规则或 `buildApiUrl()`/`buildHeaders()` 等函数时，必须同步检查 `fetch-papers.js`、`deep-analyzer.js` 以及所有使用 `analysis-engine.js` 的脚本（`full-fetch.js`、`reanalyze.js`、`batch-analyze.js`、`deep-analysis-only.js`、`analyze-single-paper.js`），确保全链路行为一致。
 19. **禁止将敏感文件提交到版本控制**：`data/`、`logs/`、`*.env`、`*.backup*`、缓存文件、含密钥的日志归档等严禁进入 git；提交前必须确认 `.gitignore` 已正确配置，且仓库中不存在历史遗留的敏感文件。
+20. **CI 清单同步**：新增或改名 JS/Python 入口脚本时，同步更新 `.github/workflows/ci.yml` 的 `node -c` / `py_compile` 清单，避免关键脚本语法错误绕过 CI。
+21. **运行数据使用北京时间**：写入 `timestamp` / `lastUpdated` / `fetchedAt` 时使用 `getBeijingISOString()`；Python 发布侧使用 `now_bj_iso()` / `now_bj_date()`，避免 UTC 日期造成跨天归档或发布筛选错误。
 
 ---
 

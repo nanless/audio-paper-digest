@@ -6,7 +6,7 @@
 
 #### `scripts/full-fetch.js`
 
-完整流程入口。执行第 3 节的所有步骤：自动归档 → 加载去重库（含博客已发布 ID）→ arXiv 抓取 → HF 抓取 → 合并去重 → 过滤博客已发布论文 → LLM 筛选 → 深度分析 → 增量保存 → 更新去重库。
+完整流程入口。执行第 3 节的所有步骤：自动归档 → 加载去重库（含博客已发布 ID）→ arXiv 抓取 → HF 抓取 → 合并去重 → 过滤博客已发布论文 → LLM 筛选 → 更新去重库 → 深度分析 → 增量保存。
 
 所有配置从 `scripts/config.js` 读取，支持环境变量覆写：
 - `ANALYSIS_CONFIG.concurrency = 3`（`PD_ANALYSIS_CONCURRENCY`）
@@ -17,7 +17,7 @@
 #### `scripts/deep-analysis-only.js`
 
 仅运行深度分析（续跑模式）。
-- 读取 `data/current/deep-analysis-result.json`（兼容旧路径 `data/deep-analysis-result.json`，自动识别旧格式纯数组并转换）
+- 读取 `data/current/deep-analysis-result.json`（兼容旧路径 `data/deep-analysis-result.json`，自动识别旧格式纯数组并转换）；若分析结果尚不存在但 `data/current/filtered-papers.json` 已存在，则从筛选结果初始化分析结果文件后续跑
 - 跳过已有 `analysis` 字段的论文
 - 对未分析论文逐篇调用 `deep-analyzer.js`
 - **仅成功结果写入保存**，失败结果不覆盖已有数据，断点续传安全
@@ -173,10 +173,10 @@ HuggingFace Papers 抓取模块。
 多模态深度分析器。分析流程为 **5 轮递进式处理**，不是单次调用：
 
 **Round 1 — 主深度分析**
-- `analyzePaperDeep(paper)`：获取 arXiv HTML 全文（最多 500K 字符）+ 下载全部图片（并发 3）
+- `analyzePaperDeep(paper)`：获取 arXiv HTML 全文（最多 500K 字符）+ 串行下载全部图片，降低代理/远端限流下的失败率
 - 加载 `prompts/deep-analysis.md`，替换占位符后调用 LLM
 - 输出包含：评分、机器摘要、标签、作者与机构、毒舌点评、核心摘要、方法概述和架构、核心创新点、实验结果、细节详述、评分理由、局限与问题、开源详情
-- `parseAnalysis(analysis)`：将分析文本解析为结构化对象。`score` 不是直接取 `## 评分` 下的 LLM 原始总分，而是从 `## 评分理由` 中提取七个分项重新计算，四舍五入到 0.1，始终覆盖 LLM 原始总分
+- `parseAnalysis(analysis)`：将分析文本解析为结构化对象。`score` 不是直接取 `## 评分` 下的 LLM 原始总分，而是从 `## 评分理由` 中提取八个分项重新计算，四舍五入到 0.1，始终覆盖 LLM 原始总分
 
 **Round 2 — 开源扫描（`scanOpensource`）**
 - 加载 `prompts/opensource-scan.md`
@@ -360,7 +360,7 @@ LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，按 `fix_instr
 
 #### `scripts/publish_common.py`
 
-Python 发布公共模块。统一封装数据加载、评分排序、标签提取、格式化工具，消除 `publish-to-blog.py` / `publish-wechat-full.py` / `publish-xiaohongshu.py` 的重复逻辑。
+Python 发布公共模块。统一封装数据加载、评分排序、标签提取、格式化工具，消除 `publish-to-blog.py` / `publish-wechat-full.py` / `publish-xiaohongshu.py` / `publish-to-feishu.py` 的重复逻辑。
 
 主要函数：
 - `load_papers(data_file)`：从 JSON 加载论文列表
@@ -408,7 +408,7 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 - 支持 `--date YYYY-MM-DD` 指定日期
 
 **实现特点**：
-- Python 实现，复用 `publish_common.py` 的数据加载和评分排序
+- Python 实现，复用 `publish_common.py` 的数据加载和评分排序；生成正文时优先使用已有 `parsed`，没有时才重新解析 `analysis`
 - 调用飞书 docx API 创建文档并写入内容块
 - Markdown 逐行转换为飞书块类型：heading1(3)/heading2(4)/heading3(5)/text(2)/bullet(12)/ordered(13)/divider(22)
 - 每批最多 20 个块，分批写入

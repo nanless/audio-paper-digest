@@ -2,7 +2,7 @@
 
 **[English](README.en.md)** | 中文
 
-本项目用于自动生成"语音/音乐/音频论文速递"，覆盖从 arXiv 和 HuggingFace Papers 抓取、LLM 筛选、多模态深度分析，到发布 Hugo 博客、微信公众号草稿和小红书文案的完整链路。
+本项目用于自动生成"语音/音乐/音频论文速递"，覆盖从 arXiv 和 HuggingFace Papers 抓取、LLM 筛选、多模态深度分析，到发布 Hugo 博客、微信公众号草稿、小红书文案和飞书文档的完整链路。
 
 ---
 
@@ -88,7 +88,7 @@ python3 scripts/publish-xiaohongshu.py
 # 全流程（抓取 + 筛选 + 深度分析）
 npm run fetch
 
-# 仅深度分析续跑（跳过已有 analysis）
+# 仅深度分析续跑（跳过已有 analysis；无分析结果时可从 filtered-papers.json 初始化）
 npm run deep
 
 # 全量重分析
@@ -135,7 +135,7 @@ python3 scripts/publish-to-feishu.py --date 2026-04-21
 # 或直接用 Node
 node scripts/full-fetch.js
 
-# 仅深度分析续跑（跳过已有 analysis）
+# 仅深度分析续跑（跳过已有 analysis；无分析结果时可从 filtered-papers.json 初始化）
 node scripts/deep-analysis-only.js
 
 # 全量重分析

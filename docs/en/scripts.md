@@ -6,7 +6,7 @@
 
 #### `scripts/full-fetch.js`
 
-Complete workflow entry point. Executes all steps in Section 3: auto-archive -> load dedup database (including blog-published IDs) -> arXiv fetch -> HF fetch -> merge and deduplicate -> filter blog-published papers -> LLM filter -> deep analysis -> incremental save -> update deduplication database.
+Complete workflow entry point. Executes all steps in Section 3: auto-archive -> load dedup database (including blog-published IDs) -> arXiv fetch -> HF fetch -> merge and deduplicate -> filter blog-published papers -> LLM filter -> update deduplication database -> deep analysis -> incremental save.
 
 All configurations are read from `scripts/config.js`, with environment variable overrides:
 - `ANALYSIS_CONFIG.concurrency = 3` (`PD_ANALYSIS_CONCURRENCY`)
@@ -17,7 +17,7 @@ All configurations are read from `scripts/config.js`, with environment variable 
 #### `scripts/deep-analysis-only.js`
 
 Runs deep analysis only (resume mode).
-- Reads `data/current/deep-analysis-result.json` (compatible with old path `data/deep-analysis-result.json`, automatically recognizes old-format pure arrays and converts them)
+- Reads `data/current/deep-analysis-result.json` (compatible with old path `data/deep-analysis-result.json`, automatically recognizes old-format pure arrays and converts them); if no analysis result exists yet but `data/current/filtered-papers.json` exists, initializes the analysis result from the filtered papers and resumes
 - Skips papers that already have an `analysis` field
 - Calls `deep-analyzer.js` for each unanalyzed paper
 - **Only successful results are written to save**, failed results do not overwrite existing data, safe for resuming from breakpoints
@@ -169,10 +169,10 @@ HuggingFace Papers fetch module.
 Multimodal deep analyzer. The analysis flow is a **5-round progressive process**, not a single call:
 
 **Round 1 -- Main Deep Analysis**
-- `analyzePaperDeep(paper)`: fetches arXiv HTML full text (up to 500K characters) + downloads all images (concurrency 3)
+- `analyzePaperDeep(paper)`: fetches arXiv HTML full text (up to 500K characters) + downloads all images serially to reduce failures under proxy or remote rate-limit conditions
 - Loads `prompts/deep-analysis.md`, replaces placeholders, and calls the LLM
 - Output includes: score, machine summary, tags, authors and affiliations, snarky review, core summary, method overview and architecture, core innovations, experimental results, detailed description, score rationale, limitations and issues, open source details
-- `parseAnalysis(analysis)`: parses analysis text into a structured object. `score` is not taken directly from the LLM's original total score under `## Score`, but is recalculated from seven sub-scores extracted from `## Score Rationale`, rounded to 0.1, always overriding the LLM's original total score
+- `parseAnalysis(analysis)`: parses analysis text into a structured object. `score` is not taken directly from the LLM's original total score under `## Score`, but is recalculated from eight sub-scores extracted from `## Score Rationale`, rounded to 0.1, always overriding the LLM's original total score
 
 **Round 2 -- Open Source Scan (`scanOpensource`)**
 - Loads `prompts/opensource-scan.md`
@@ -356,7 +356,7 @@ Generate WeChat Official Account article drafts.
 
 #### `scripts/publish_common.py`
 
-Python publish common module. Uniformly encapsulates data loading, score sorting, tag extraction, and formatting tools, eliminating duplicate logic across `publish-to-blog.py` / `publish-wechat-full.py` / `publish-xiaohongshu.py`.
+Python publish common module. Uniformly encapsulates data loading, score sorting, tag extraction, and formatting tools, eliminating duplicate logic across `publish-to-blog.py` / `publish-wechat-full.py` / `publish-xiaohongshu.py` / `publish-to-feishu.py`.
 
 Main functions:
 - `load_papers(data_file)`: load paper list from JSON
@@ -404,7 +404,7 @@ Generate Feishu (Lark) documents.
 - Supports `--date YYYY-MM-DD` to specify date
 
 **Implementation Characteristics**:
-- Python implementation, reuses `publish_common.py` for data loading and score sorting
+- Python implementation, reuses `publish_common.py` for data loading and score sorting; content generation prefers existing `parsed` data and only reparses `analysis` when needed
 - Calls Feishu docx API to create documents and write content blocks
 - Markdown converted line-by-line to Feishu block types: heading1(3)/heading2(4)/heading3(5)/text(2)/bullet(12)/ordered(13)/divider(22)
 - Up to 20 blocks per batch, written in batches

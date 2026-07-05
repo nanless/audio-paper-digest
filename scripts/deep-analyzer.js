@@ -482,7 +482,7 @@ async function downloadImageBase64(imageUrl, maxRetries = 5) {
  * @param {number} maxBase64Chars - 单张 base64 字符数上限
  * @returns {Promise<Array<{url: string, base64: string}>>}
  */
-async function downloadImagesParallel(imageUrls, maxCount, maxBase64Chars) {
+async function downloadImagesSerial(imageUrls, maxCount, maxBase64Chars) {
     const results = [];
     // 去重避免同一 URL 下载多次
     const uniqueUrls = [...new Set(imageUrls)];
@@ -586,6 +586,11 @@ async function analyzePaperDeep(paper) {
     const textForAnalysis = fullText || (paper.abstract || paper.summary || '');
     const hasFullText = fullText.length > FULL_TEXT_MIN_CHARS_FOR_FULL;
 
+    if (!textForAnalysis || textForAnalysis.trim().length < 10) {
+        console.log(`    [deep] ⚠️  论文无有效文本内容（全文和摘要均为空），无法分析`);
+        return { ...paper, analysis: null, error: '论文无有效文本内容' };
+    }
+
     // 优先使用预提供的图片 URL（ICML/会议场景），否则从 arXiv 抓取
     let imageInfos = [];
     const preProvidedUrls = paper.imageUrls || paper.allImageUrls || [];
@@ -606,8 +611,7 @@ async function analyzePaperDeep(paper) {
 
     const hasFullTextIntro = hasFullText ? '以下是论文全文，请仔细阅读所有技术细节。' : '以下是论文摘要。';
 
-    // 并行下载全部图片（限制并发数以避免过载）
-    const downloadedImages = await downloadImagesParallel(imageUrls, imageUrls.length, IMAGE_MAX_BASE64_CHARS);
+    const downloadedImages = await downloadImagesSerial(imageUrls, imageUrls.length, IMAGE_MAX_BASE64_CHARS);
     console.log(`    [deep] 成功下载 ${downloadedImages.length}/${imageUrls.length} 张图片`);
 
     const prompt = loadPrompt('prompts/deep-analysis.md', {

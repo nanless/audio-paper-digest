@@ -2,7 +2,7 @@
 
 English | **[中文](README.md)**
 
-This project automatically generates "Speech / Music / Audio Paper Digests," covering the complete pipeline from arXiv and HuggingFace Papers crawling, LLM-based filtering, multimodal deep analysis, to publishing Hugo blog posts, WeChat Official Account drafts, and Xiaohongshu (Little Red Book) copy.
+This project automatically generates "Speech / Music / Audio Paper Digests," covering the complete pipeline from arXiv and HuggingFace Papers crawling, LLM-based filtering, multimodal deep analysis, to publishing Hugo blog posts, WeChat Official Account drafts, Xiaohongshu (Little Red Book) copy, and Feishu (Lark) documents.
 
 ---
 
@@ -20,6 +20,7 @@ This project automatically generates "Speech / Music / Audio Paper Digests," cov
 | `docs/maintenance.md` | Maintenance conventions, scoring standards, tag definitions | Maintainers |
 | `prompts/filter.md` | LLM prompt for the filtering stage | Maintainers |
 | `prompts/deep-analysis.md` | Deep analysis main prompt (Round 1) | Maintainers |
+| `prompts/image-supplement.md` | Image supplement prompt (dual-model mode) | Maintainers |
 | `prompts/opensource-scan.md` | Open-source link scanning prompt (Round 2) | Maintainers |
 | `prompts/gap-fill.md` | Review and rewrite prompt (Round 3) | Maintainers |
 
@@ -81,7 +82,7 @@ For the complete installation guide, see [`docs/setup.md`](docs/setup.md).
 # Full pipeline (crawl + filter + deep analysis)
 npm run fetch
 
-# Resume deep analysis only (skip existing analysis)
+# Resume deep analysis only (skip existing analysis; can initialize from filtered-papers.json)
 npm run deep
 
 # Full re-analysis
@@ -128,7 +129,7 @@ python3 scripts/publish-to-feishu.py --date 2026-04-21
 # Or use Node directly
 node scripts/full-fetch.js
 
-# Resume deep analysis only (skip existing analysis)
+# Resume deep analysis only (skip existing analysis; can initialize from filtered-papers.json)
 node scripts/deep-analysis-only.js
 
 # Full re-analysis

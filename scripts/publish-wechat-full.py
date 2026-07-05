@@ -162,7 +162,7 @@ def main():
 
     paper_htmls = []
     for paper in papers:
-        pa = parse_analysis(paper.get('analysis',''))
+        pa = paper.get('parsed') or parse_analysis(paper.get('analysis',''))
         title = paper.get('title','Unknown')
         aid = paper.get('arxivId','')
         aurl = f'https://arxiv.org/abs/{aid}' if aid else ''

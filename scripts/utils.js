@@ -785,7 +785,7 @@ function parseAnalysis(analysis) {
     m = analysis.match(/##\s*开源(?:详情)?[：:]*\s*([\s\S]*?)$/);
     if (m) result.opensource = stripMd(m[1]);
 
-    // 从评分理由中提取七个分项并计算总分，始终覆盖 LLM 给出的总分
+    // 从评分理由中提取八个分项并计算总分，始终覆盖 LLM 给出的总分
     const scoringText = result.scoringReason || '';
     if (scoringText) {
         const dimScores = {};

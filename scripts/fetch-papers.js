@@ -480,7 +480,7 @@ function parseRecentPageHTML(html, categoryId, existingIds = null) {
                 abstract: '',
                 categories: [categoryId],
                 source: 'arxiv-recent',
-                fetchedAt: new Date().toISOString()
+                fetchedAt: getBeijingISOString()
             });
             console.log(`[fetch-recent]   ✓ ${arxivId} - ${title.substring(0, 70)}`);
         }
