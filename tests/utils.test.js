@@ -15,7 +15,8 @@ const {
     normalizedId,
     extractDatePrefix,
     getRecordDate,
-    backupPapersJson
+    backupPapersJson,
+    loadPrompt
 } = require('../scripts/utils.js');
 
 describe('stripMd', () => {
@@ -135,6 +136,51 @@ innovation: 2.0
         assert.strictEqual(parseAnalysis(''), null);
         assert.strictEqual(parseAnalysis(null), null);
     });
+
+    it('从八维评分理由重算总分并修正开源矛盾', () => {
+        const analysis = `## 评分
+9.9/10
+
+### 机器摘要
+rank_bucket: 前10%
+innovation: 0
+technical_rigor: 0
+experimental_sufficiency: 0
+clarity: 0
+impact: 0
+open_source: 1.2
+reproducibility: 0
+engineering_score: 0
+confidence: 高
+primary_task_tag: #语音识别
+primary_method_tag: #语音大模型
+has_code: 否
+has_model: 否
+has_dataset: 否
+
+## 标签
+#语音识别 #语音大模型
+
+## 评分理由
+创新性：2/2
+技术严谨性：1.5/1.5
+实验充分性：1.5/1.5
+清晰度：1/1
+影响力：1.5/1.5
+开源：1.2/1.5
+可复现性：0.5/0.5
+工程/实践价值：1.5/1.5
+
+## 局限与问题
+未说明
+
+## 开源详情
+未提供`;
+        const r = parseAnalysis(analysis);
+        assert.strictEqual(r.openSourceScore, '0');
+        assert.strictEqual(r.score, '8.8');
+        assert.strictEqual(r.rankBucket, '前25%');
+    });
 });
 
 describe('detectApiType', () => {
@@ -167,6 +213,11 @@ describe('buildApiUrl', () => {
 
     it('Kimi -> /coding/v1/messages', () => {
         const url = buildApiUrl('anthropic', 'https://api.kimi.com/coding/v1');
+        assert.strictEqual(url, 'https://api.kimi.com/coding/v1/messages');
+    });
+
+    it('Kimi 端点尾随斜杠仍保持 /coding/v1/messages', () => {
+        const url = buildApiUrl('anthropic', 'https://api.kimi.com/coding/v1/');
         assert.strictEqual(url, 'https://api.kimi.com/coding/v1/messages');
     });
 
@@ -289,5 +340,29 @@ describe('getRecordDate', () => {
     it('无效输入返回 null', () => {
         assert.strictEqual(getRecordDate(null), null);
         assert.strictEqual(getRecordDate({}), null);
+    });
+});
+
+describe('loadPrompt', () => {
+    it('提取第一个代码块并替换占位符', () => {
+        const prompt = loadPrompt('tests/fixtures/prompt.md', {
+            title: '测试标题',
+            score: '9.5'
+        });
+        assert.strictEqual(prompt.trim(), '标题: 测试标题\n分数: 9.5');
+    });
+
+    it('缺少代码块时报错', () => {
+        assert.throws(
+            () => loadPrompt('tests/fixtures/no-codeblock.md'),
+            /未找到/
+        );
+    });
+
+    it('拒绝项目目录外路径', () => {
+        assert.throws(
+            () => loadPrompt('../outside.md'),
+            /路径不安全/
+        );
     });
 });

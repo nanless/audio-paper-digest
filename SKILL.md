@@ -270,7 +270,8 @@ npm run backfill
 npm run publish -- --date YYYY-MM-DD
 
 # 只生成 markdown，不推送
-npm run publish -- --skip-push --date YYYY-MM-DD
+npm run publish -- --date YYYY-MM-DD          # 只生成并验证，不推送（默认）
+npm run publish -- --push --date YYYY-MM-DD   # 正式发布并推送
 
 # 使用自定义数据文件发布
 npm run publish -- --date YYYY-MM-DD data/current/deep-analysis-result.json
@@ -313,13 +314,14 @@ npm run xiaohongshu -- --date 2026-04-22
 - 在 `~/code/github_repos/audio-paper-digest-blog/content/posts` 生成：
   - 汇总页：`YYYY-MM-DD.md`
   - 单篇页：`YYYY-MM-DD-<slug>.md`
-- 默认会执行 `git add -A`、`git commit`、`git push origin main`
+- 默认只生成 `.md` 文件并执行 review，不推送
+- 只有显式传 `--push` 时才执行 `git add -A`、`git commit`、`git push origin main`
 - 若需发布全部论文（不过滤），可手动修改脚本或使用自定义数据文件
 
 Agent 执行约束：
 
-- 默认仅允许使用 `--skip-push` 模式验证博客生成结果
-- 只有用户明确要求"正式发布 / 推送博客"时，才允许去掉 `--skip-push`
+- 默认仅允许生成和验证博客结果，不推送
+- 只有用户明确要求"正式发布 / 推送博客"时，才允许添加 `--push`
 - 若只是检查格式、验证新字段或预览产物，禁止触发真实 `git push`
 
 发布前保障：
@@ -404,7 +406,7 @@ PY
 8. **环境变量统一管理**：新增脚本需要读取 LLM 配置时，统一使用 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT`，禁止引入别名回退链、硬编码或 base64 编码变量名 hack。
 9. **新增可配置参数放入 config.js**：新增脚本涉及可调整参数（并发度、超时、批次大小等）时，统一放入 `scripts/config.js` 并添加对应的环境变量覆写支持。
 10. **新增分析脚本复用 analysis-engine.js**：新增论文分析相关脚本时，优先复用 `analysis-engine.js` 的 `analyzeBatch()` / `analyzePaperWithRetry()`，避免重复实现重试、解析、保存逻辑。
-11. **博客验证默认不推送**：未获用户明确授权时，运行 `publish-to-blog.py` 必须带 `--skip-push`。
+11. **博客验证默认不推送**：`publish-to-blog.py` 当前默认不推送；未获用户明确授权时禁止添加 `--push`。
 12. **输出契约改动要同步 parser**：若修改 `prompts/deep-analysis.md` 中的 `## 机器摘要` 键名、章节顺序或标签输出格式，必须同步检查 `scripts/utils.js` 与 `scripts/utils.py` 的解析逻辑。
 13. **变更后必须做产物级验证**：至少抽样检查一份 `data/current/deep-analysis-result.json`，确认存在 `rank_bucket`、`primary_task_tag`、`primary_method_tag` 等字段，再运行博客/社媒脚本验证最终产物。
 14. **变更后验证 prompt 加载**：修改 `prompts/` 目录下的 markdown 文件后，运行一次快速测试（`node scripts/quick-test.js` 或单篇分析）确认 `loadPrompt()` 能正确读取并替换占位符，无 `{变量名}` 残留。
@@ -437,7 +439,7 @@ PY
 
 2. **检查是否走对了协议**（日志中查找 `[filter] API 类型: xxx` 或 `[api] → model | xxx` 行）
    - 若使用 MiMo/Kimi Token Plan 却显示 `openai`，检查端点是否含 `token-plan` 或 `coding`，模型是否含 `mimo` 或 `kimi`
-   - 若日志显示 `anthropic`但仍失败，检查是否走的是 `/anthropic/v1/messages` 路径（不是 `/v1/chat/completions`）
+   - 若日志显示 `anthropic` 但仍失败，检查 URL 是否正确：MiMo 是 `/anthropic/v1/messages`，Kimi 是 `/coding/v1/messages`，都不是 `/v1/chat/completions`
 
 3. **Anthropic 协议专项检查**（日志显示 `anthropic` 时）
    - 请求头是否为 `x-api-key`（非 `Authorization: Bearer`）

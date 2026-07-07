@@ -106,11 +106,16 @@ node scripts/quick-test.js
 # Backfill historical paper IDs
 npm run backfill
 
-# Publish blog
+# Generate blog Markdown (does not push by default)
 npm run publish -- --date 2026-04-21
+
+# Publish blog (commit and push)
+npm run publish -- --push --date 2026-04-21
 
 # Generate WeChat Official Account draft
 npm run wechat
+# Generate WeChat preview only, without calling WeChat APIs
+python3 scripts/publish-wechat-full.py --dry-run
 
 # Generate Xiaohongshu copy
 npm run xiaohongshu
@@ -123,6 +128,8 @@ npm run xhs-publish-all
 # Generate Feishu (Lark) document
 python3 scripts/publish-to-feishu.py
 python3 scripts/publish-to-feishu.py --date 2026-04-21
+# Preview Feishu document size only, without creating a document
+python3 scripts/publish-to-feishu.py --dry-run --date 2026-04-21
 ```
 
 ### Direct Invocation
@@ -160,11 +167,15 @@ python3 scripts/publish-to-blog.py --date 2026-04-21
 # Generate Markdown only, do not push
 python3 scripts/publish-to-blog.py --skip-push --date 2026-04-21
 
+# Commit and push
+python3 scripts/publish-to-blog.py --push --date 2026-04-21
+
 # Publish with custom data
 python3 scripts/publish-to-blog.py --date 2026-04-21 data/current/deep-analysis-result.json
 
 # Generate WeChat Official Account draft
 python3 scripts/publish-wechat-full.py
+python3 scripts/publish-wechat-full.py --dry-run
 
 # Generate WeChat draft with custom data
 python3 scripts/publish-wechat-full.py data/current/deep-analysis-result.json
@@ -182,6 +193,7 @@ python3 scripts/xiaohongshu-publisher.py --all
 # Generate Feishu (Lark) document
 python3 scripts/publish-to-feishu.py
 python3 scripts/publish-to-feishu.py --date 2026-04-21
+python3 scripts/publish-to-feishu.py --dry-run --date 2026-04-21
 
 # ========== Utilities ==========
 # Backfill paper IDs (no analysis)

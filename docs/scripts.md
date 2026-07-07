@@ -316,13 +316,15 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 
 **发布流程**：
 1. 生成 `.md` 文件到博客仓库 `content/posts/`
-2. `git add -A` → `git commit -m "add: 论文速递 YYYY-MM-DD"` → `git push origin main`
-3. GitHub Actions 自动构建并部署到 Pages
-4. 访问：`https://nanless.github.io/audio-paper-digest-blog/posts/YYYY-MM-DD/`
+2. 默认停止在本地生成和 review，不推送
+3. 传 `--push` 后执行 `git add -A` → `git commit -m "add: 论文速递 YYYY-MM-DD"` → `git push origin main`
+4. GitHub Actions 自动构建并部署到 Pages
+5. 访问：`https://nanless.github.io/audio-paper-digest-blog/posts/YYYY-MM-DD/`
 
 **参数**：
 - `--date YYYY-MM-DD`（强烈建议显式指定，避免跨天时日期错误）
-- `--skip-push` 只生成文件不推送
+- `--skip-push` 只生成文件不推送（兼容旧参数，当前默认行为）
+- `--push` 正式提交并推送博客仓库
 - 自定义数据文件路径作为最后一个参数
 
 **日期过滤**：
@@ -354,6 +356,7 @@ LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，按 `fix_instr
 
 - 默认数据源：`data/current/deep-analysis-result.json`（支持命令行传入自定义路径）
 - 微信公众号 `APP_ID` / `APP_SECRET` 从环境变量读取
+- 支持 `--dry-run`：只生成本地预览 HTML，不获取 Token、不上传图片、不创建草稿
 - **图片上传**：下载 arXiv 图片 → 上传到微信 CDN → 替换为微信 URL。缓存保存在 `/tmp/wechat-image-cache.json`
 - **自动分 Part**：单篇草稿上限约 48000 字符（HTML），超过自动拆分为多个草稿
   - 只有 Part 1 包含"今日概览"
@@ -408,6 +411,7 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 **数据输入**：
 - 统一读取 `data/current/deep-analysis-result.json`（与其他发布渠道一致）
 - 支持 `--date YYYY-MM-DD` 指定日期
+- 支持 `--dry-run`：只统计将生成的文档标题和块数量，不获取 Token、不创建飞书文档
 
 **实现特点**：
 - Python 实现，复用 `publish_common.py` 的数据加载和评分排序；生成正文时优先使用已有 `parsed`，没有时才重新解析 `analysis`

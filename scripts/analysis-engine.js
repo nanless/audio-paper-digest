@@ -5,7 +5,6 @@
  * 消除 full-fetch.js / deep-analysis-only.js / batch-analyze.js / reanalyze.js / analyze-single-paper.js 的重复逻辑
  */
 
-const { analyzePaperDeep } = require('./deep-analyzer.js');
 const { parseAnalysis, writeFileAtomic, readJsonSafe, getBeijingISOString, normalizedId } = require('./utils.js');
 const { ANALYSIS_CONFIG } = require('./config.js');
 
@@ -47,6 +46,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
         }
 
         try {
+            const { analyzePaperDeep } = require('./deep-analyzer.js');
             const analyzed = await analyzePaperDeep(paper);
 
             if (analyzed && analyzed.analysis) {

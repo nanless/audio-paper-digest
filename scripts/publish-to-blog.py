@@ -17,7 +17,8 @@ setup_script_logging(__file__)
 
 用法：
     python3 publish-to-blog.py [data_file]
-    python3 publish-to-blog.py --skip-push     # 只生成 .md 不推送到 GitHub
+    python3 publish-to-blog.py --push          # 生成 .md 并推送到 GitHub
+    python3 publish-to-blog.py --skip-push     # 兼容旧参数；默认已不推送
     python3 publish-to-blog.py --date YYYY-MM-DD
 """
 import json, re, sys, os, subprocess, datetime, base64, time, concurrent.futures
@@ -1157,7 +1158,7 @@ def git_push(date_str):
 
 def main():
     data_file = None
-    skip_push = False
+    skip_push = True
     target_date = None
     category = '论文速递'
 
@@ -1166,6 +1167,8 @@ def main():
         arg = sys.argv[i]
         if arg == '--skip-push':
             skip_push = True
+        elif arg == '--push':
+            skip_push = False
         elif arg == '--date' and i + 1 < len(sys.argv):
             target_date = sys.argv[i + 1]
             i += 1
@@ -1232,7 +1235,7 @@ def main():
     review_all_posts(today, paper_slugs, scored)
 
     if skip_push:
-        print("\n⏭️ 跳过推送")
+        print("\n⏭️ 默认跳过推送；如需正式发布请显式传 --push")
         return
 
     git_push(today)

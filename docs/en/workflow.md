@@ -96,7 +96,7 @@ Using the `PAPER_ANALYZER_*` configuration in `the `.env` file in the project ro
 **API Protocol Auto-Routing**: `detectApiType()` in `scripts/utils.js` automatically switches between OpenAI / Anthropic protocols based on the endpoint and model name
 - **MiMo / Kimi Token Plan / Coding Plan** (endpoint contains `token-plan` or `coding`, model contains `mimo`/`kimi`) -> automatically switches to **Anthropic protocol**, masquerading as a Claude Code call
   - **MiMo**: `https://token-plan-cn.xiaomimimo.com/v1` -> `/anthropic/v1/messages`
-  - **Kimi**: `https://api.kimi.com/coding/v1` -> `/v1/messages` (no `/anthropic` intermediate path needed)
+  - **Kimi**: `https://api.kimi.com/coding/v1` -> `https://api.kimi.com/coding/v1/messages` (no `/anthropic` intermediate path needed)
   - Headers: `x-api-key` + `anthropic-version: 2023-06-01` + `User-Agent: claude-cli/<version> (external, cli)` (version dynamically obtained from local `claude --version`, fallback to `2.1.108` on failure)
   - system message is automatically extracted as a top-level request body field
 - **Other cases** (including MiMo pay-as-you-go `api.xiaomimimo.com`, generic OpenAI endpoints) -> standard **OpenAI protocol**

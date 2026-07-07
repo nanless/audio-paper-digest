@@ -18,7 +18,7 @@
 3. **Anthropic protocol checks** (when logs show `anthropic`)
    - Confirm the request header includes `User-Agent: claude-cli/<version> (external, cli)` (this won't appear directly in logs, but can be verified with tcpdump or a proxy tool)
    - Confirm you are using `x-api-key` instead of `Authorization: Bearer`
-   - Confirm the URL path is `/anthropic/v1/messages` rather than `/v1/chat/completions`
+   - Confirm the URL path is correct: MiMo Token Plan uses `/anthropic/v1/messages`, Kimi Coding Plan uses `/coding/v1/messages`, not `/v1/chat/completions`
 
 4. **OpenAI protocol checks** (when logs show `openai`)
    - Confirm you are using `Authorization: Bearer {key}`
@@ -52,7 +52,7 @@ ls -lt content/posts | head -20
 ```
 
 Possible causes:
-- `--skip-push` was mistakenly used
+- `--push` was not passed explicitly (the blog script only generates and reviews files by default)
 - Data file is empty or paper analysis failed
 - Target date file already exists with identical content
 

@@ -41,11 +41,14 @@ jobs:
           node -c scripts/batch-analyze.js
           node -c scripts/reanalyze.js
           node -c scripts/reanalyze-selected.js
+          node -c scripts/refilter-reanalyze-by-date.js
           node -c scripts/analyze-single-paper.js
           node -c scripts/quick-test.js
+          node -c scripts/test-api-key.js
           node -c scripts/validate-scores.js
           node -c tests/utils.test.js
           node -c tests/config.test.js
+          node -c tests/analysis-engine.test.js
 
       - name: Check Python syntax
         run: |
@@ -55,4 +58,6 @@ jobs:
             scripts/publish-to-blog.py \
             scripts/publish-wechat-full.py \
             scripts/publish-xiaohongshu.py \
-            scripts/publish-to-feishu.py
+            scripts/publish-to-feishu.py \
+            scripts/backfill_papers.py \
+            scripts/xiaohongshu-publisher.py

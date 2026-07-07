@@ -318,7 +318,8 @@ Publish to Hugo blog (GitHub Pages).
 
 **Parameters**:
 - `--date YYYY-MM-DD` (strongly recommended to specify explicitly to avoid date errors across midnight)
-- `--skip-push` only generates files without pushing
+- `--skip-push` only generates files without pushing (kept for compatibility; this is now the default)
+- `--push` commits and pushes the generated blog files
 - Custom data file path as the last argument
 
 **Date Filtering**:
@@ -350,6 +351,7 @@ Generate WeChat Official Account article drafts.
 
 - Default data source: `data/current/deep-analysis-result.json` (supports custom path via command line)
 - WeChat Official Account `APP_ID` / `APP_SECRET` read from environment variables
+- Supports `--dry-run`: only generates the local preview HTML; does not fetch a token, upload images, or create drafts
 - **Image Upload**: download arXiv images -> upload to WeChat CDN -> replace with WeChat URLs. Cache stored in `/tmp/wechat-image-cache.json`
 - **Auto Split into Parts**: single draft limit is approximately 48000 characters (HTML); automatically split into multiple drafts if exceeded
   - Only Part 1 contains "Today's Overview"
@@ -404,6 +406,7 @@ Generate Feishu (Lark) documents.
 **Data Input**:
 - Uniformly reads `data/current/deep-analysis-result.json` (consistent with other publish channels)
 - Supports `--date YYYY-MM-DD` to specify date
+- Supports `--dry-run`: only reports the document title and block counts; does not fetch a token or create a Feishu document
 
 **Implementation Characteristics**:
 - Python implementation, reuses `publish_common.py` for data loading and score sorting; content generation prefers existing `parsed` data and only reparses `analysis` when needed

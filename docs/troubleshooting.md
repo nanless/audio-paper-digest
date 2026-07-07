@@ -18,7 +18,7 @@
 3. **Anthropic 协议专项检查**（日志显示 `anthropic` 时）
    - 确认请求头中包含 `User-Agent: claude-cli/<version> (external, cli)`（日志中不会直接显示，但可以用 tcpdump 或代理工具验证）
    - 确认使用的是 `x-api-key` 而非 `Authorization: Bearer`
-   - 确认 URL 路径是 `/anthropic/v1/messages` 而非 `/v1/chat/completions`
+   - 确认 URL 路径正确：MiMo Token Plan 是 `/anthropic/v1/messages`，Kimi Coding Plan 是 `/coding/v1/messages`，而不是 `/v1/chat/completions`
 
 4. **OpenAI 协议专项检查**（日志显示 `openai` 时）
    - 确认使用 `Authorization: Bearer {key}`
@@ -52,7 +52,7 @@ ls -lt content/posts | head -20
 ```
 
 可能原因：
-- `--skip-push` 被误用
+- 未显式使用 `--push`（博客脚本默认只生成和 review，不推送）
 - 数据文件为空或论文分析失败
 - 目标日期文件已存在且内容相同
 

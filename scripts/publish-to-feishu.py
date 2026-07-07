@@ -15,6 +15,7 @@ setup_script_logging(__file__)
 用法：
     python3 publish-to-feishu.py [data_file]
     python3 publish-to-feishu.py --date YYYY-MM-DD
+    python3 publish-to-feishu.py --dry-run [data_file]
 """
 import json, os, sys, re, html
 
@@ -25,10 +26,6 @@ from utils import parse_analysis
 # ─── Feishu Config ────────────────────────────────────────────
 FEISHU_APP_ID = os.environ.get('FEISHU_APP_ID', '')
 FEISHU_APP_SECRET = os.environ.get('FEISHU_APP_SECRET', '')
-
-if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
-    print("❌ 错误: 未设置 FEISHU_APP_ID 或 FEISHU_APP_SECRET 环境变量")
-    sys.exit(1)
 
 
 def feishu_request(url, headers=None, data=None, method='GET'):
@@ -273,11 +270,14 @@ def generate_overview_md(scored, unscored, date_str):
 def main():
     data_file = None
     target_date = None
+    dry_run = False
 
     i = 1
     while i < len(sys.argv):
         arg = sys.argv[i]
-        if arg == '--date' and i + 1 < len(sys.argv):
+        if arg == '--dry-run':
+            dry_run = True
+        elif arg == '--date' and i + 1 < len(sys.argv):
             target_date = sys.argv[i + 1]
             i += 1
         elif not arg.startswith('--'):
@@ -291,6 +291,23 @@ def main():
     if not papers:
         print("⚠️ 没有论文需要发布")
         return
+
+    if dry_run:
+        total = len(scored) + len(unscored)
+        overview_md = generate_overview_md(scored, unscored, today)
+        overview_blocks = md_to_feishu_blocks(overview_md)
+        all_papers = [(p, pa) for _, p, pa in scored] + [(p, None) for p in unscored]
+        paper_block_count = 0
+        for paper, _ in all_papers:
+            paper_block_count += len(md_to_feishu_blocks(generate_paper_md(paper, today)))
+        print(f"🧪 dry-run: 将创建飞书文档《📚 语音/音乐/音频论文速递 {today} | {total}篇》")
+        print(f"🧪 dry-run: 汇总 {len(overview_blocks)} 个块，论文正文约 {paper_block_count} 个块")
+        print("🧪 dry-run: 未获取 Token，未创建飞书文档")
+        return
+
+    if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
+        print("❌ 错误: 未设置 FEISHU_APP_ID 或 FEISHU_APP_SECRET 环境变量")
+        sys.exit(1)
 
     # Get token
     print(f"🔑 飞书凭据: app_id={FEISHU_APP_ID[:10]}...")

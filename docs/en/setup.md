@@ -23,7 +23,7 @@ Benefits of this design:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PAPER_ANALYZER_API_KEY` | LLM API Key | **Required** |
-| `PAPER_ANALYZER_ENDPOINT` | LLM API endpoint (without path suffix; scripts auto-append) | **Required** |
+| `PAPER_ANALYZER_ENDPOINT` | LLM API base path (for example `/v1`, `/coding/v1`, or `/anthropic`; scripts append the final request path) | **Required** |
 | `PAPER_ANALYZER_MODEL` | LLM model name | **Required** |
 | `PD_ANALYSIS_CONCURRENCY` | Deep analysis concurrency | 3 |
 | `PD_ANALYSIS_MAX_RETRIES` | Per-paper retry count for deep analysis | 2 |

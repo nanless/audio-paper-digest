@@ -106,11 +106,16 @@ node scripts/quick-test.js
 # 补录历史 paper ID
 npm run backfill
 
-# 发布博客
+# 生成博客 Markdown（默认不推送）
 npm run publish -- --date 2026-04-21
+
+# 正式发布博客（提交并推送）
+npm run publish -- --push --date 2026-04-21
 
 # 生成微信公众号草稿
 npm run wechat
+# 仅生成公众号预览，不调用微信接口
+python3 scripts/publish-wechat-full.py --dry-run
 
 # 生成小红书文案
 npm run xiaohongshu
@@ -123,6 +128,8 @@ npm run xhs-publish-all
 # 生成飞书文档
 python3 scripts/publish-to-feishu.py
 python3 scripts/publish-to-feishu.py --date 2026-04-21
+# 仅预览飞书文档规模，不创建文档
+python3 scripts/publish-to-feishu.py --dry-run --date 2026-04-21
 ```
 
 ### 直接调用
@@ -160,11 +167,15 @@ python3 scripts/publish-to-blog.py --date 2026-04-21
 # 只生成 Markdown，不推送
 python3 scripts/publish-to-blog.py --skip-push --date 2026-04-21
 
+# 正式提交并推送
+python3 scripts/publish-to-blog.py --push --date 2026-04-21
+
 # 用自定义数据发布
 python3 scripts/publish-to-blog.py --date 2026-04-21 data/current/deep-analysis-result.json
 
 # 生成微信公众号草稿
 python3 scripts/publish-wechat-full.py
+python3 scripts/publish-wechat-full.py --dry-run
 
 # 用自定义数据生成微信草稿
 python3 scripts/publish-wechat-full.py data/current/deep-analysis-result.json
@@ -182,6 +193,7 @@ python3 scripts/xiaohongshu-publisher.py --all
 # 生成飞书文档
 python3 scripts/publish-to-feishu.py
 python3 scripts/publish-to-feishu.py --date 2026-04-21
+python3 scripts/publish-to-feishu.py --dry-run --date 2026-04-21
 
 # ========== 辅助 ==========
 # 补录论文 ID（不分析）

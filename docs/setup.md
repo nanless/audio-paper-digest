@@ -23,7 +23,7 @@ set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `PAPER_ANALYZER_API_KEY` | LLM API Key | **必填** |
-| `PAPER_ANALYZER_ENDPOINT` | LLM API 端点（不带路径后缀，脚本自动拼接） | **必填** |
+| `PAPER_ANALYZER_ENDPOINT` | LLM API 基路径（如 `/v1`、`/coding/v1`、`/anthropic`，脚本自动拼接最终请求路径） | **必填** |
 | `PAPER_ANALYZER_MODEL` | LLM 模型名 | **必填** |
 | `PD_ANALYSIS_CONCURRENCY` | 深度分析并发度 | 3 |
 | `PD_ANALYSIS_MAX_RETRIES` | 深度分析单篇重试次数 | 2 |

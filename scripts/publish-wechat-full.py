@@ -8,6 +8,10 @@ setup_script_logging(__file__)
 """
 论文速递 → 微信公众号（含图片上传）
 从 arxiv 下载论文图片，上传到微信 CDN，生成完整文章草稿。
+
+用法：
+    python3 publish-wechat-full.py [data_file]
+    python3 publish-wechat-full.py --dry-run [data_file]  # 只生成本地预览，不调用微信接口
 """
 import urllib.request, json, time, sys, re, datetime, hashlib, os, html, tempfile
 
@@ -20,10 +24,6 @@ from utils import parse_analysis
 
 APP_ID = os.environ.get('WECHAT_APP_ID', '')
 APP_SECRET = os.environ.get('WECHAT_APP_SECRET', '')
-
-if not APP_ID or not APP_SECRET:
-    print("❌ 错误: 未设置 WECHAT_APP_ID 或 WECHAT_APP_SECRET 环境变量")
-    sys.exit(1)
 
 # 封面图素材 ID（永久素材），支持环境变量覆写
 THUMB_MEDIA_ID = os.environ.get('WECHAT_THUMB_MEDIA_ID', '')
@@ -126,13 +126,28 @@ def get_wechat_image_url(token, arxiv_url):
 
 
 def main():
-    data_file = sys.argv[1] if len(sys.argv) > 1 else None
+    data_file = None
+    dry_run = False
+
+    for arg in sys.argv[1:]:
+        if arg == '--dry-run':
+            dry_run = True
+        elif not arg.startswith('--'):
+            data_file = arg
+
+    if not dry_run and (not APP_ID or not APP_SECRET):
+        print("❌ 错误: 未设置 WECHAT_APP_ID 或 WECHAT_APP_SECRET 环境变量")
+        sys.exit(1)
 
     papers = load_papers(data_file)
     scored, unscored = score_and_sort(papers)
 
-    token = get_token()
-    print(f"🔑 Token OK")
+    token = None
+    if dry_run:
+        print("🧪 dry-run: 跳过微信 Token 获取、图片上传和草稿创建")
+    else:
+        token = get_token()
+        print(f"🔑 Token OK")
 
     today = get_today_bj()
 
@@ -146,17 +161,21 @@ def main():
     img_map = {}
     success = 0
     fail = 0
-    for i, img_url in enumerate(all_imgs):
-        cdn_url = get_wechat_image_url(token, img_url)
-        if cdn_url:
-            img_map[img_url] = cdn_url
-            success += 1
-        else:
-            fail += 1
-        if (i + 1) % 10 == 0:
-            print(f"  上传进度: {i+1}/{len(all_imgs)} (成功:{success} 失败:{fail})")
+    if dry_run:
+        img_map = {u: u for u in all_imgs}
+        print("🧪 dry-run: 预览 HTML 中保留原始图片 URL")
+    else:
+        for i, img_url in enumerate(all_imgs):
+            cdn_url = get_wechat_image_url(token, img_url)
+            if cdn_url:
+                img_map[img_url] = cdn_url
+                success += 1
+            else:
+                fail += 1
+            if (i + 1) % 10 == 0:
+                print(f"  上传进度: {i+1}/{len(all_imgs)} (成功:{success} 失败:{fail})")
 
-    print(f"✅ 图片上传完成: 成功 {success}, 失败 {fail}")
+        print(f"✅ 图片上传完成: 成功 {success}, 失败 {fail}")
 
     MAX_CHARS = 48000
 
@@ -308,6 +327,10 @@ def main():
 
         html += footer
 
+        if dry_run:
+            print(f"\n🧪 dry-run: 跳过创建草稿 Part {part_num} ({len(html)} chars)")
+            continue
+
         print(f"\n📝 创建草稿 Part {part_num}... ({len(html)} chars)")
 
         payload = json.dumps({
@@ -352,7 +375,10 @@ def main():
     with open(preview_path, 'w') as f:
         f.write(first_part_html)
 
-    print(f"\n🎉 全部完成！共 {total_parts} 个草稿已创建")
+    if dry_run:
+        print(f"\n🎉 dry-run 完成！本地预览已生成，未创建微信草稿")
+    else:
+        print(f"\n🎉 全部完成！共 {total_parts} 个草稿已创建")
 
 
 if __name__ == '__main__':
