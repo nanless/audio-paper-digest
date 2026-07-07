@@ -2,6 +2,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const http = require('node:http');
 
 const {
     stripMd,
@@ -18,6 +19,7 @@ const {
     extractDatePrefix,
     getRecordDate,
     backupPapersJson,
+    requestJson,
     loadPrompt
 } = require('../scripts/utils.js');
 
@@ -315,6 +317,46 @@ describe('parseResponseText', () => {
     });
 });
 
+describe('requestJson', () => {
+    it('支持本地 HTTP endpoint', async (t) => {
+        const server = http.createServer((req, res) => {
+            const chunks = [];
+            req.on('data', chunk => chunks.push(chunk));
+            req.on('end', () => {
+                const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ ok: true, echo: body.value }));
+            });
+        });
+        try {
+            await new Promise((resolve, reject) => {
+                server.once('error', reject);
+                server.listen(0, '127.0.0.1', resolve);
+            });
+        } catch (err) {
+            if (err.code === 'EPERM' || err.code === 'EACCES') {
+                t.skip(`当前环境不允许监听本地端口: ${err.code}`);
+                return;
+            }
+            throw err;
+        }
+        try {
+            const { port } = server.address();
+            const response = await requestJson(
+                `http://127.0.0.1:${port}/v1/chat/completions`,
+                { value: 'hello' },
+                { 'Content-Type': 'application/json' },
+                { timeoutMs: 1000, agent: false }
+            );
+
+            assert.strictEqual(response.statusCode, 200);
+            assert.deepStrictEqual(response.body, { ok: true, echo: 'hello' });
+        } finally {
+            await new Promise(resolve => server.close(resolve));
+        }
+    });
+});
+
 describe('normalizedId', () => {
     it('去除版本号', () => {
         assert.strictEqual(normalizedId({ arxivId: '2604.12345v1' }), '2604.12345');
@@ -405,6 +447,33 @@ describe('loadPrompt', () => {
         for (const file of promptFiles) {
             const prompt = loadPrompt(file, vars);
             assert.ok(prompt.length > 20, `${file} prompt 过短`);
+        }
+    });
+
+    it('运行时中文 prompt 不包含未绑定占位符', () => {
+        const vars = {
+            title: 'Test Title',
+            abstract: 'Test abstract',
+            categories: 'cs.SD',
+            hasFullText: '以下是论文摘要。',
+            authors: 'Test Author',
+            arxivId: '2604.12345',
+            textForAnalysis: 'Paper text',
+            imageList: '图1: https://example.com/a.png',
+            primaryAnalysis: '## 评分\n8/10',
+            existingAnalysis: '## 评分\n8/10'
+        };
+        const promptFiles = [
+            'prompts/filter.md',
+            'prompts/deep-analysis.md',
+            'prompts/image-supplement.md',
+            'prompts/opensource-scan.md',
+            'prompts/gap-fill.md'
+        ];
+        for (const file of promptFiles) {
+            const prompt = loadPrompt(file, vars);
+            const unbound = [...prompt.matchAll(/\{([a-zA-Z_]\w{1,})\}/g)].map(m => m[0]);
+            assert.deepStrictEqual([...new Set(unbound)], [], `${file} 存在未绑定占位符`);
         }
     });
 });

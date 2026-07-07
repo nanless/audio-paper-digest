@@ -5,7 +5,7 @@ setupScriptLogging(__filename);
 /**
  * 单独分析一篇论文并合并到结果中
  * 使用 analysis-engine.js 统一封装的分析逻辑
- * 用法: node scripts/analyze-single-paper.js <arxiv_id>
+ * 用法: node scripts/analyze-single-paper.js <arxiv_id> [--force]
  */
 
 const fs = require('fs');
@@ -14,12 +14,14 @@ const { readJsonSafe, getBeijingISOString, writeFileAtomic, normalizedId } = req
 const { analyzePaperWithRetry } = require('./analysis-engine.js');
 const Config = require('./config.js');
 
-const TARGET_ARXIV_ID = process.argv[2];
+const args = process.argv.slice(2);
+const FORCE_REANALYZE = args.includes('--force');
+const TARGET_ARXIV_ID = args.find(arg => !arg.startsWith('--'));
 const TARGET_NORMALIZED_ID = normalizedId(TARGET_ARXIV_ID);
 
 if (!TARGET_ARXIV_ID) {
-    console.error('❌ 用法: node scripts/analyze-single-paper.js <arxiv_id>');
-    console.error('   示例: node scripts/analyze-single-paper.js 2604.16044');
+    console.error('❌ 用法: node scripts/analyze-single-paper.js <arxiv_id> [--force]');
+    console.error('   示例: node scripts/analyze-single-paper.js 2604.16044 --force');
     process.exit(1);
 }
 
@@ -49,10 +51,13 @@ async function analyzeSinglePaper() {
     const existingData = readJsonSafe(resultPath, { papers: [], stats: {} });
 
     const papersList = Array.isArray(existingData) ? existingData : (existingData.papers || []);
-    const alreadyExists = papersList.some(p => normalizedId(p) === TARGET_NORMALIZED_ID);
-    if (alreadyExists) {
-        console.log('⚠️ 该论文已在分析结果中，跳过');
+    const existingIndex = papersList.findIndex(p => normalizedId(p) === TARGET_NORMALIZED_ID);
+    if (existingIndex >= 0 && !FORCE_REANALYZE) {
+        console.log('⚠️ 该论文已在分析结果中，跳过（使用 --force 可强制重分析）');
         process.exit(0);
+    }
+    if (existingIndex >= 0 && FORCE_REANALYZE) {
+        console.log('♻️ 该论文已存在，将强制重分析并替换旧结果');
     }
 
     console.log('🔬 开始深度分析...');
@@ -68,11 +73,15 @@ async function analyzeSinglePaper() {
         let payload;
         if (Array.isArray(existingData)) {
             // 兼容旧格式：将纯数组转换为新对象格式
-            payload = { papers: [...existingData, r.result], lastUpdated: getBeijingISOString() };
+            const nextPapers = [...existingData];
+            if (existingIndex >= 0) nextPapers[existingIndex] = { ...nextPapers[existingIndex], ...r.result };
+            else nextPapers.push(r.result);
+            payload = { papers: nextPapers, lastUpdated: getBeijingISOString() };
         } else {
             payload = existingData;
             payload.papers = payload.papers || [];
-            payload.papers.push(r.result);
+            if (existingIndex >= 0) payload.papers[existingIndex] = { ...payload.papers[existingIndex], ...r.result };
+            else payload.papers.push(r.result);
             payload.lastUpdated = getBeijingISOString();
         }
         writeFileAtomic(resultPath, JSON.stringify(payload, null, 2));

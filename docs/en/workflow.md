@@ -46,7 +46,7 @@ Fetch the latest papers from 7 categories:
 
 Fetch strategy: 3-level (recent → search → API):
 
-1. **Recent page (primary)**: `arxiv.org/list/{category}/recent`, paginated (`?skip=50&show=50`, max 100 per category). Abstracts fetched afterward via `fetchAbstracts`. Falls through only if recent returns 0 papers.
+1. **Recent page (primary)**: `arxiv.org/list/{category}/recent`, paginated (`?skip=50&show=50`, max 100 per category). Abstracts fetched afterward via `fetchAbstracts`. If recent returns fewer than the target count, the flow continues to the search/API fallbacks to fill the candidate pool.
 2. **Search page (fallback)**: `arxiv.org/search/` with User-Agent rotation, page delay 10-25s.
 3. **API (last resort)**: `export.arxiv.org/api/query`. 429 rate-limit: exponential backoff 60s, 120s, 240s, 480s, max 5 retries.
 
@@ -131,7 +131,7 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 
 | Section | Requirements |
 |------|------|
-| Score | 1-10, one decimal place; machine summary includes `rank_bucket` (top 10% / top 25% / top 50% / bottom 50%), `innovation` (0-2), `technical_rigor` (0-1.5), `experimental_sufficiency` (0-1.5), `clarity` (0-1), `impact` (0-1.5), `open_source` (0-1.5), `reproducibility` (0-0.5), `engineering_score` (0-1.5), `confidence`, and other fields. Post-processing: extract eight sub-scores from `## Score Rationale` and recalculate the total score (capped at 10), overriding the LLM's original output |
+| Score (`## 评分`) | 1-10, one decimal place; machine summary includes `rank_bucket` (top 10% / top 25% / top 50% / bottom 50%), `innovation` (0-2), `technical_rigor` (0-1.5), `experimental_sufficiency` (0-1.5), `clarity` (0-1), `impact` (0-1.5), `open_source` (0-1.5), `reproducibility` (0-0.5), `engineering_score` (0-1.5), `confidence`, and other fields. Runtime output headings remain Chinese. Post-processing extracts eight sub-scores from `## 评分理由` and recalculates the total score (capped at 10), overriding the LLM's original output |
 | Tags | 3-5, must include at least 1 [Task] and 1 [Method/Model] tag; in addition to the final tag string, also output "main task tag", "main method tag", and "supplementary tags" |
 | Authors and Affiliations | First author, corresponding author, author list and affiliations; missing information must be written as "not specified", no guessing allowed |
 | Snarky Review | 2-3 sentences of sharp commentary on highlights and flaws, like a senior reviewer's final comment |
@@ -140,7 +140,7 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 | Core Innovations | 3-5, each including definition, shortcomings of previous methods, solution mechanism, actual effect |
 | Experimental Results | Must prioritize giving benchmark, metrics, and specific numbers; when numbers are unavailable, explicitly write "paper did not provide specific values"; tables must be fully output |
 | Detailed Description | Training data, loss functions, training strategies, hyperparameters, hardware, inference details |
-| Score Rationale | Score and write specific review comments for each of 8 dimensions (Innovation/2, Technical Rigor/1.5, Experimental Sufficiency/1.5, Clarity/1, Impact/1.5, Open Source/1.5, Reproducibility/0.5, Engineering/Practical Value/1.5); 10-point scale is forbidden; code automatically recalculates total from sub-scores |
+| Score Rationale (`## 评分理由`) | Score and write specific review comments for each of 8 dimensions (Innovation/2, Technical Rigor/1.5, Experimental Sufficiency/1.5, Clarity/1, Impact/1.5, Open Source/1.5, Reproducibility/0.5, Engineering/Practical Value/1.5); 10-point scale is forbidden; code automatically recalculates total from sub-scores |
 | Limitations and Issues | Two parts: limitations explicitly acknowledged by the paper + potential issues identified by the reviewer |
 | Open Source Details | Only allowed to summarize based on paper text or current input links; write "not mentioned" when missing, strictly forbidden to fabricate repository / popularity information |
 

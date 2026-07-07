@@ -27,7 +27,7 @@ npm run xhs-publish-all  # 小红书自动发布全部
 
 # 直接调用（不在 package.json 中）
 node scripts/quick-test.js              # 快速测试（抓+筛选，不分析）
-node scripts/analyze-single-paper.js <arxiv-id>  # 单独分析一篇论文
+node scripts/analyze-single-paper.js <arxiv-id> [--force]  # 单独分析一篇论文（--force 覆盖已有结果）
 node scripts/reanalyze-selected.js <arxivId1> [arxivId2] ...  # 重分析指定论文
 node scripts/refilter-reanalyze-by-date.js <date>  # 按日期重新筛选+分析
 node scripts/validate-scores.js         # 验证并修复评分

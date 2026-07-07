@@ -47,6 +47,10 @@ function cleanGapFillPrefix(text) {
     return null;
 }
 
+function getPaperArxivId(paper) {
+    return paper?.arxivId || paper?.paper_id || paper?.id || '';
+}
+
 // API 配置 - 深度分析阶段（统一使用 PAPER_ANALYZER_*）
 const DEEP_CONFIG = {
     endpoint: process.env.PAPER_ANALYZER_ENDPOINT || '',
@@ -514,6 +518,21 @@ function selectImageCandidates(imageInfos, maxCount) {
         .map(item => item.info);
 }
 
+function normalizeImageInfos(input) {
+    if (!Array.isArray(input)) return [];
+    return input.map(item => {
+        if (!item) return null;
+        if (typeof item === 'string') return { url: item, caption: '' };
+        if (typeof item === 'object' && item.url) {
+            return {
+                url: item.url,
+                caption: item.caption || item.alt || item.description || ''
+            };
+        }
+        return null;
+    }).filter(info => info && info.url);
+}
+
 /**
  * 构造图片消息块
  */
@@ -664,7 +683,7 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
  * 深度分析单篇论文（全文 + 图片）
  */
 async function analyzePaperDeep(paper) {
-    const arxivId = paper.arxivId || paper.id;
+    const arxivId = getPaperArxivId(paper);
     console.log(`    [deep] 获取全文: ${arxivId}`);
 
     // 优先使用预提供的全文（ICML/会议场景），否则从 arXiv 抓取
@@ -698,7 +717,7 @@ async function analyzePaperDeep(paper) {
     let imageInfos = [];
     const preProvidedUrls = paper.allImageUrls || paper.imageUrls || [];
     if (preProvidedUrls.length > 0) {
-        imageInfos = preProvidedUrls.map(url => ({ url }));
+        imageInfos = normalizeImageInfos(preProvidedUrls);
         console.log(`    [deep] 使用预提供图片: ${imageInfos.length} 张`);
     } else if (/^\d+\.\d+/.test(arxivId)) {
         try {
@@ -879,7 +898,7 @@ async function analyzePaperDeep(paper) {
 async function scanOpensource(paper, textForAnalysis) {
     const prompt = loadPrompt('prompts/opensource-scan.md', {
         title: paper.title,
-        arxivId: paper.arxivId,
+        arxivId: getPaperArxivId(paper),
         textForAnalysis: textForAnalysis
     });
     return await callModel([{ role: 'user', content: prompt }], 8000);
@@ -1002,7 +1021,7 @@ function hasOpenSourceLinks(analysis) {
 async function reviseAnalysis(paper, existingAnalysis, textForAnalysis) {
     const prompt = loadPrompt('prompts/gap-fill.md', {
         title: paper.title,
-        arxivId: paper.arxivId,
+        arxivId: getPaperArxivId(paper),
         existingAnalysis: existingAnalysis,
         textForAnalysis: textForAnalysis
     });
@@ -1095,7 +1114,7 @@ async function checkAndFixMethodSection(paper, analysis, textForAnalysis) {
     const prompt = `你是一位严谨的学术论文分析专家。请根据下面的论文原文，为"方法概述和架构"部分补充更详细、更充分的内容。
 
 论文标题: ${paper.title}
-arXiv ID: ${paper.arxivId}
+arXiv ID: ${getPaperArxivId(paper)}
 
 ## 要求
 1. 只输出"## 方法概述和架构"这一个 section 的完整内容。
@@ -1157,6 +1176,13 @@ function extractResultsSection(analysis) {
     return extractSectionByTitle(analysis, '实验结果', ['细节详述', '评分理由', '局限与问题', '开源详情']);
 }
 
+function sourceTextLikelyHasTables(text) {
+    if (!text) return false;
+    return /(?:^|\n)\s*(?:Table|表)\s*[\dIVX一二三四五六七八九十]+/i.test(text)
+        || /\\begin\{tabular\}|<table[\s>]/i.test(text)
+        || /\n\s*\|[^\n]+\|\s*\n\s*\|[\-\s:|]+\|/.test(text);
+}
+
 /**
  * 检查并修复实验结果中缺失的表格。
  * 如果检测到省略标记或缺少 Markdown 表格，触发补充调用。
@@ -1168,9 +1194,13 @@ async function checkAndFixTables(paper, analysis, textForAnalysis) {
     const hasTable = hasMarkdownTable(resultsSection);
     const hasOmission = hasOmissionMarkers(resultsSection);
     const hasTableReference = /[（(]表\d+[)）]|表[一二三四五六七八九十\d]+/.test(resultsSection);
+    const sourceHasTables = sourceTextLikelyHasTables(textForAnalysis);
 
     // 如果有省略标记，或引用了表格但没有实际 Markdown 表格
-    if (!hasOmission && (!hasTableReference || hasTable)) {
+    if (!hasOmission && hasTable) {
+        return analysis;
+    }
+    if (!hasOmission && !hasTableReference && !sourceHasTables) {
         return analysis;
     }
 
@@ -1179,7 +1209,7 @@ async function checkAndFixTables(paper, analysis, textForAnalysis) {
     const prompt = `你是一位严谨的学术论文分析专家。请根据下面的论文原文，为"实验结果"部分补充完整的 Markdown 表格数据。
 
 论文标题: ${paper.title}
-arXiv ID: ${paper.arxivId}
+arXiv ID: ${getPaperArxivId(paper)}
 
 ## 要求
 1. 只输出"## 实验结果"这一个 section 的完整内容。
@@ -1347,6 +1377,9 @@ module.exports = {
     removeUnapprovedMarkdownImages,
     selectImageCandidates,
     hasRequiredAnalysisSections,
+    normalizeImageInfos,
+    sourceTextLikelyHasTables,
+    getPaperArxivId,
     extractSectionByTitle,
     mergeSectionByTitle
 };

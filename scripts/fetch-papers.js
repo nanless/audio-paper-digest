@@ -252,6 +252,7 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
         const maxRetries = 5;
 
         let pageSuccess = false;
+        let shouldStopPaging = false;
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 const headers = getBrowserHeaders();
@@ -266,12 +267,18 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
                 }
 
                 const html = response.data;
-                const papersBeforeFilter = allPapers.length;
                 const papers = parseSearchPageHTML(html, categoryId, existingIds);
+                const meta = papers._meta || {};
 
                 if (papers.length === 0) {
-                    console.log(`[fetch-web] 第 ${page + 1} 页无新论文，停止翻页`);
+                    if (meta.totalFound > 0 && meta.skippedExisting > 0) {
+                        console.log(`[fetch-web] 第 ${page + 1} 页均为已知论文，继续翻页寻找更旧新论文`);
+                        pageSuccess = true;
+                        break;
+                    }
+                    console.log(`[fetch-web] 第 ${page + 1} 页无论文结果，停止翻页`);
                     pageSuccess = true;
+                    shouldStopPaging = true;
                     break;
                 }
 
@@ -281,6 +288,7 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
 
                 // 如果已有足够论文，停止
                 if (allPapers.length >= maxResults) {
+                    shouldStopPaging = true;
                     break;
                 }
                 break; // 成功，跳出重试循环
@@ -301,6 +309,10 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
 
         if (!pageSuccess && page === 0) {
             // 第一页就全部失败，没有意义继续
+            break;
+        }
+
+        if (shouldStopPaging) {
             break;
         }
 
@@ -604,6 +616,7 @@ function parseSearchPageHTML(html, categoryId, existingIds = null) {
         console.log(`[fetch-web] 搜索到 ${totalFound} 篇，去重后 ${papers.length} 篇（跳过 ${skippedExisting} 篇已有论文）`);
     }
 
+    papers._meta = { totalFound, skippedExisting };
     return papers;
 }
 
@@ -614,16 +627,20 @@ function parseSearchPageHTML(html, categoryId, existingIds = null) {
 async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResultsPerCategory, retryCount = ARXIV_CONFIG.fetchMaxRetries, existingIds = null) {
     console.log(`[fetch] 正在抓取 ${categoryId} 类别的 ${maxResults} 篇论文...`);
     const merged = new Map();
+    const seenIds = new Set(existingIds ? Array.from(existingIds) : []);
 
     // 1. 优先用 recent 页面
-    let recentPapers = await fetchCategoryFromRecentPage(categoryId, existingIds, maxResults);
+    let recentPapers = await fetchCategoryFromRecentPage(categoryId, seenIds, maxResults);
 
     // 补充摘要（recent 页面不包含摘要）
     if (recentPapers.length > 0) {
         recentPapers = await fetchAbstracts(recentPapers, 5);
         for (const p of recentPapers) {
             const key = normalizedId(p);
-            if (key) merged.set(key, p);
+            if (key) {
+                merged.set(key, p);
+                seenIds.add(key);
+            }
         }
         if (merged.size >= maxResults) {
             return Array.from(merged.values()).slice(0, maxResults);
@@ -634,10 +651,13 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
     }
 
     // 2. recent 无结果，用搜索页
-    const webPapers = await fetchCategoryFromSearchPage(categoryId, existingIds, maxResults);
+    const webPapers = await fetchCategoryFromSearchPage(categoryId, seenIds, maxResults);
     for (const p of webPapers) {
         const key = normalizedId(p);
-        if (key && !merged.has(key)) merged.set(key, p);
+        if (key && !merged.has(key)) {
+            merged.set(key, p);
+            seenIds.add(key);
+        }
     }
 
     if (merged.size >= maxResults || webPapers.length > 0) {
@@ -667,12 +687,15 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
 
             if (response.status === 200) {
                 const xml = response.data;
-                const apiPapers = parseArxivXML(xml, categoryId, existingIds);
+                const apiPapers = parseArxivXML(xml, categoryId, seenIds, { stopAtConsecutiveExisting: false });
 
                 if (apiPapers.length > 0) {
                     for (const p of apiPapers) {
                         const key = normalizedId(p);
-                        if (key && !merged.has(key)) merged.set(key, p);
+                        if (key && !merged.has(key)) {
+                            merged.set(key, p);
+                            seenIds.add(key);
+                        }
                     }
                 }
                 break;
@@ -697,7 +720,8 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
 /**
  * 解析 arXiv API 返回的 XML
  */
-function parseArxivXML(xml, categoryId, existingIds = null) {
+function parseArxivXML(xml, categoryId, existingIds = null, options = {}) {
+    const { stopAtConsecutiveExisting = true } = options;
     const papers = [];
     const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
     let match;
@@ -715,7 +739,7 @@ function parseArxivXML(xml, categoryId, existingIds = null) {
 
         if (existingIds && existingIds.has(normalizedId(arxivId))) {
             consecutiveExisting++;
-            if (consecutiveExisting >= ARXIV_CONFIG.consecutiveExistingThreshold) {
+            if (stopAtConsecutiveExisting && consecutiveExisting >= ARXIV_CONFIG.consecutiveExistingThreshold) {
                 console.log(`[fetch] 遇到连续 ${consecutiveExisting} 篇已知论文，停止抓取 ${categoryId}`);
                 stoppedAtConsecutive = true;
                 break;
@@ -839,6 +863,7 @@ function parseFilterDecision(responseText, paperId = '') {
 }
 
 async function isSpeechAudioRelated(paper) {
+    const paperId = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
     const prompt = loadPrompt('prompts/filter.md', {
         title: paper.title,
         abstract: paper.abstract || paper.summary || '',
@@ -847,9 +872,9 @@ async function isSpeechAudioRelated(paper) {
 
     try {
         const response = await callModelForFilter([{ role: 'user', content: prompt }], 1000);
-        return parseFilterDecision(response, paper.arxivId);
+        return parseFilterDecision(response, paperId);
     } catch (err) {
-        console.error(`[filter] 判断论文 ${paper.arxivId} 失败: ${err.message}，默认保留`);
+        console.error(`[filter] 判断论文 ${paperId} 失败: ${err.message}，默认保留`);
         return true;   // API 失败时宁可错留不可错杀
     }
 }
@@ -891,10 +916,12 @@ async function filterPapersWithLLM(papers, options = {}) {
             const isRelated = await isSpeechAudioRelated(paper);
 
             if (isRelated) {
-                console.log(`[filter] ✓ 相关: ${paper.arxivId} - ${paper.title.substring(0, 40)}...`);
+                const paperId = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
+                console.log(`[filter] ✓ 相关: ${paperId} - ${paper.title.substring(0, 40)}...`);
                 return paper;
             } else {
-                console.log(`[filter] ✗ 过滤: ${paper.arxivId} - ${paper.title.substring(0, 40)}...`);
+                const paperId = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
+                console.log(`[filter] ✗ 过滤: ${paperId} - ${paper.title.substring(0, 40)}...`);
                 return null;
             }
         }));
@@ -974,6 +1001,8 @@ module.exports = {
     fetchCategoryFromRecentPage,
     fetchAbstracts,
     parseRecentPageHTML,
+    parseSearchPageHTML,
+    parseArxivXML,
     deduplicatePapers,
     filterPapers,
     filterPapersWithLLM,

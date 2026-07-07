@@ -1,10 +1,10 @@
 # Deep Analysis Prompt — In-depth Reading of a Single Paper
 
 ## Purpose
-Used during the deep analysis stage for the LLM to read the full paper (+ optional figures) and output a structured analysis report.
+Reference translation of the Chinese deep-analysis prompt. The current runtime loads `prompts/deep-analysis.md` only: the primary model reads text only, and figures are handled later by `prompts/image-supplement.md` in dual-model mode.
 
 ## Invocation
-The code reads this file and replaces placeholders with actual values:
+If this file is ever wired into runtime, the code would need to replace placeholders with actual values:
 - `{hasFullText}` → "Below is the full paper; please read all technical details carefully." or "Below is the paper abstract."
 - `{textForAnalysis}` → excerpt from the full paper or the abstract
 - `{title}` → paper title
@@ -239,11 +239,7 @@ Summarize the paper in 5–8 sentences, must cover:
 3. **Data flow and interaction between components**: how are components connected? In what form is data passed? Are there loops / feedback mechanisms? Are there conditional branches?
 4. **Key design choices and motivations**: why was this architecture chosen over others? Design trade-offs explicitly mentioned in the paper or reasonably inferable (e.g., accuracy vs. speed, end-to-end vs. modular, self-supervised vs. supervised, etc.)
 5. **Multi-stage / multi-module step-by-step expansion**: if the paper's method has multiple stages (e.g., preprocessing → encoding → decoding → post-processing), each stage must be described independently; do not gloss over it
-6. **Architecture / flow diagrams**: if the paper contains architecture or flow diagrams (possibly multiple), **every figure must be inserted using standard Markdown image syntax `![description](imageURL)`**, and below each image use 3–5 sentences to explain in detail the relationships between modules and data flow.
-   - **Strictly prohibited** to use `External URL: https://... (alt=description)` or list-style image references; these formats cannot be rendered by the blog system
-   - **Correct example**: `![Model architecture diagram](https://arxiv.org/html/2605.12345v1/x1.png)`
-   - **Incorrect example**: `- External URL: https://arxiv.org/... (alt=Fig. 1)` ❌
-   - **Important: you may only use URLs provided in the "Images in the paper and their URLs" list above; do not fabricate or guess any non-existent URLs. If that list is empty, do not insert any images; use text description only.**
+6. **Architecture / flow diagrams**: in the current runtime, the primary deep-analysis round is text-only. Do not insert Markdown image URLs in this prompt. Figure selection and insertion are handled later by the dual-model image-supplement round.
 7. **Technical term explanations**: provide necessary explanations for core terms appearing in the method (especially those coined by the paper or domain-specific), so that readers outside the sub-field can understand
 8. **Handling non-model work**: if the paper is a dataset, benchmark, theoretical analysis, survey, or other non-model work, focus on describing the method framework, system design, evaluation pipeline, or theoretical derivation process, rather than forcing "model" terminology
 
@@ -269,11 +265,7 @@ Evidence must be written first; do not just write conclusions. Requirements:
 - If there are only figures without text descriptions, still try to convert key numbers into text
 - If specific numbers are unavailable, explicitly write "论文未给出具体数值"
 - **Experimental result tables must be listed in full using standard Markdown tables** (there may be multiple comparison tables); each table must include headers, model/method names, datasets, metrics, and values; do not omit any rows or columns
-- **Every experimental result figure must be inserted into the output** (using standard Markdown image syntax `![description](imageURL)`), and below each figure use text to explain the key conclusion.
-  - **Strictly prohibited** to use `External URL: https://... (alt=description)` or list-style image references; these formats cannot be rendered by the blog system
-  - **Correct example**: `![Experimental result comparison](https://arxiv.org/html/2605.12345v1/x3.png)`
-  - **Incorrect example**: `- External URL: https://arxiv.org/... (alt=Fig. 3)` ❌
-  - **Important: you may only use URLs provided in the "Images in the paper and their URLs" list above; do not fabricate or guess any non-existent URLs. If that list is empty, do not insert any images; use text and tables only to describe experimental results.**
+- Experimental result figures are not inserted in this primary text prompt. In dual-model mode, `image-supplement.md` selects useful result figures and inserts them later with `[图N]` markers.
 
 ## 细节详述
 Extract all key technical details as much as possible; if missing, explicitly write "未说明":
@@ -354,9 +346,7 @@ This prompt requires the model to output in a strictly fixed structure, containi
 
 The code extracts structured data via the `parseAnalysis()` function.
 
-**Image and table placement rules**: images and tables are no longer gathered in a single separate section; they are embedded directly at the corresponding positions — architecture diagrams go in the Method Overview and Architecture section, experimental result figures/tables go in the Experimental Results section.
-- **Strictly prohibited to fabricate image URLs**: you may only use URLs actually provided in the "Images in the paper and their URLs" list above. If that list is empty, no `![...](...)` image references may appear in any section.
-- **Strictly prohibited to use `External URL:` list format**: all images must use standard Markdown syntax `![alt](url)`; do not use `- External URL: ... (alt=...)` or other descriptive formats.
+**Image and table placement rules**: tables are embedded directly in the corresponding sections. Images are selected and inserted only by the later `image-supplement.md` round; this prompt must not fabricate or insert image URLs.
 
 **Special character handling rules**:
 - Text markers that may appear in papers (e.g., `<S>`, `</S>`, `<E>`, `</E>`, `<s>`, `</s>`, `<e>`, `</e>`, `<interrupt>`, `<backchannel>`, `<response>`, `<task>`, `<perception>`, `<BEsound>`, etc.) **must be wrapped in backticks** as code format, e.g., `` `<S>` ``, `` `<E>` ``, otherwise they will be mis-parsed as HTML tags by the blog system causing rendering errors.

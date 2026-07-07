@@ -261,7 +261,7 @@ node scripts/quick-test.js
 npm run batch
 
 # 单独分析一篇论文（命令行参数）
-node scripts/analyze-single-paper.js 2604.16044
+node scripts/analyze-single-paper.js 2604.16044 --force
 
 # 补录历史 paper ID（不做深度分析）
 npm run backfill

@@ -50,11 +50,11 @@ Batch analysis of unanalyzed papers (standalone entry point).
 
 Analyze a single paper and merge it into the results.
 
-**Usage**: `node scripts/analyze-single-paper.js <arxiv_id>`
+**Usage**: `node scripts/analyze-single-paper.js <arxiv_id> [--force]`
 
 - Reads metadata from `data/current/papers.json`
 - Calls `deep-analyzer.js` for analysis, then appends to `deep-analysis-result.json`
-- Skips if the paper already exists in the results
+- Skips if the paper already exists in the results by default; `--force` reanalyzes and replaces the old result
 - Compatible with old-format pure array data, automatically converts to new object format on save
 
 ### 4.2 Fetch and Analysis Support Scripts
@@ -175,7 +175,7 @@ Multimodal deep analyzer. The analysis flow is a **6-round progressive process**
 - `analyzePaperDeep(paper)`: fetches arXiv HTML full text (up to 500K characters) + downloads candidate images serially; in dual-model mode the secondary model finally selects high-value figures and inserts them into the body. `allImageUrls` stores candidates, while `selectedImageUrls` / `imageUrls` store selected figures
 - Loads `prompts/deep-analysis.md`, replaces placeholders, and calls the LLM
 - Output includes: score, machine summary, tags, authors and affiliations, snarky review, core summary, method overview and architecture, core innovations, experimental results, detailed description, score rationale, limitations and issues, open source details
-- `parseAnalysis(analysis)`: parses analysis text into a structured object. `score` is not taken directly from the LLM's original total score under `## Score`, but is recalculated from eight sub-scores extracted from `## Score Rationale`, rounded to 0.1, always overriding the LLM's original total score
+- `parseAnalysis(analysis)`: parses analysis text into a structured object. Runtime output headings remain Chinese. `score` is not taken directly from the LLM's original total score under `## 评分`, but is recalculated from eight sub-scores extracted from `## 评分理由`, rounded to 0.1, always overriding the LLM's original total score
 
 **Round 2 -- Open Source Scan (`scanOpensource`)**
 - Loads `prompts/opensource-scan.md`

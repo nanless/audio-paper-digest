@@ -51,11 +51,11 @@
 
 单独分析一篇论文并合并到结果中。
 
-**用法**：`node scripts/analyze-single-paper.js <arxiv_id>`
+**用法**：`node scripts/analyze-single-paper.js <arxiv_id> [--force]`
 
 - 从 `data/current/papers.json` 读取元数据
 - 调用 `deep-analyzer.js` 分析后追加到 `deep-analysis-result.json`
-- 若论文已在结果中存在则跳过
+- 若论文已在结果中存在则默认跳过；加 `--force` 可强制重分析并替换旧结果
 - 兼容旧格式纯数组数据，自动转换为新对象格式保存
 
 ### 4.2 抓取与分析支撑脚本

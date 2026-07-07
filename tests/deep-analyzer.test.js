@@ -99,4 +99,42 @@ describe('deep-analyzer section helpers', () => {
         assert.strictEqual(hasRequiredAnalysisSections(full), true);
         assert.strictEqual(hasRequiredAnalysisSections('## 评分\n8.0/10\n\n## 实验结果\n结果'), false);
     });
+
+    it('兼容预提供图片 URL 字符串和对象数组', () => {
+        const {
+            normalizeImageInfos
+        } = require('../scripts/deep-analyzer.js');
+
+        assert.deepStrictEqual(normalizeImageInfos([
+            'https://example.com/a.png',
+            { url: 'https://example.com/b.png', caption: 'Architecture figure' },
+            { url: 'https://example.com/c.png', alt: 'Spectrogram' },
+            null
+        ]), [
+            { url: 'https://example.com/a.png', caption: '' },
+            { url: 'https://example.com/b.png', caption: 'Architecture figure' },
+            { url: 'https://example.com/c.png', caption: 'Spectrogram' }
+        ]);
+    });
+
+    it('识别原文中的表格证据', () => {
+        const {
+            sourceTextLikelyHasTables
+        } = require('../scripts/deep-analyzer.js');
+
+        assert.strictEqual(sourceTextLikelyHasTables('Table 1: WER comparison'), true);
+        assert.strictEqual(sourceTextLikelyHasTables('表2 展示不同模型结果'), true);
+        assert.strictEqual(sourceTextLikelyHasTables('\\begin{tabular}{lll}'), true);
+        assert.strictEqual(sourceTextLikelyHasTables('No quantitative table is provided.'), false);
+    });
+
+    it('统一识别论文 ID 字段', () => {
+        const {
+            getPaperArxivId
+        } = require('../scripts/deep-analyzer.js');
+
+        assert.strictEqual(getPaperArxivId({ arxivId: '2604.1' }), '2604.1');
+        assert.strictEqual(getPaperArxivId({ paper_id: '2604.2' }), '2604.2');
+        assert.strictEqual(getPaperArxivId({ id: 'openreview-1' }), 'openreview-1');
+    });
 });

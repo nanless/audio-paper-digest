@@ -162,7 +162,7 @@ node scripts/quick-test.js
 node scripts/batch-analyze.js
 
 # 单独分析一篇论文
-node scripts/analyze-single-paper.js 2604.16044
+node scripts/analyze-single-paper.js 2604.16044 --force
 
 # ========== 发布 ==========
 # 发布博客（强烈建议显式 --date）

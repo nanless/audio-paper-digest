@@ -1,7 +1,12 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 
-const { parseFilterDecision, filterPapersByKeywords } = require('../scripts/fetch-papers.js');
+const {
+    parseFilterDecision,
+    filterPapersByKeywords,
+    parseSearchPageHTML,
+    parseArxivXML
+} = require('../scripts/fetch-papers.js');
 
 describe('parseFilterDecision', () => {
     it('正确解析是否相关格式，不被“是否”的“否”误伤', () => {
@@ -34,5 +39,50 @@ describe('filterPapersByKeywords', () => {
         ]);
         assert.strictEqual(result.length, 1);
         assert.strictEqual(result[0].title, 'A Speech Recognition Model');
+    });
+});
+
+describe('arXiv parsers', () => {
+    it('搜索页解析会暴露总数和已跳过数，便于全重复页继续翻页', () => {
+        const html = `
+        <li class="arxiv-result">
+          <p>arXiv:2604.00001</p>
+          <p class="title is-5 mathjax">Known Speech Paper</p>
+          <span class="abstract-full has-text-grey-dark mathjax">speech abstract</span>
+        </li>`;
+        const existing = new Set(['2604.00001']);
+        const papers = parseSearchPageHTML(html, 'cs.SD', existing);
+
+        assert.strictEqual(papers.length, 0);
+        assert.deepStrictEqual(papers._meta, { totalFound: 1, skippedExisting: 1 });
+    });
+
+    it('API 解析可关闭连续已知论文提前停止', () => {
+        const entries = Array.from({ length: 21 }, (_, i) => `
+          <entry>
+            <id>http://arxiv.org/abs/2604.${String(i).padStart(5, '0')}v1</id>
+            <title>Known ${i}</title>
+            <summary>Known summary</summary>
+            <published>2026-04-01T00:00:00Z</published>
+            <category term="cs.SD"/>
+          </entry>`).join('');
+        const xml = `<feed>${entries}
+          <entry>
+            <id>http://arxiv.org/abs/2604.99999v1</id>
+            <title>New Paper</title>
+            <summary>New summary</summary>
+            <published>2026-04-01T00:00:00Z</published>
+            <category term="cs.SD"/>
+          </entry>
+        </feed>`;
+        const existing = new Set(Array.from({ length: 21 }, (_, i) => `2604.${String(i).padStart(5, '0')}`));
+
+        const stopped = parseArxivXML(xml, 'cs.SD', existing);
+        const notStopped = parseArxivXML(xml, 'cs.SD', existing, { stopAtConsecutiveExisting: false });
+
+        assert.strictEqual(stopped.length, 0);
+        assert.strictEqual(stopped._meta.stoppedAtConsecutive, true);
+        assert.strictEqual(notStopped.length, 1);
+        assert.strictEqual(notStopped[0].arxivId, '2604.99999v1');
     });
 });
