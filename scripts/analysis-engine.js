@@ -57,6 +57,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
                         ...paper,
                         analysis: analyzed.analysis,
                         parsed: parsed,
+                        selectedImageUrls: analyzed.selectedImageUrls || [],
                         imageUrls: analyzed.imageUrls || paper.imageUrls || [],
                         allImageUrls: analyzed.allImageUrls || paper.allImageUrls || [],
                         error: null

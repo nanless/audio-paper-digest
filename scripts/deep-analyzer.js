@@ -510,8 +510,17 @@ async function downloadImagesSerial(imageUrls, maxCount, maxBase64Chars) {
  */
 function buildImageContent(imageUrl, base64) {
     if (base64) {
-        const mime = imageUrl.endsWith('.jpg') || imageUrl.endsWith('.jpeg')
-            ? 'image/jpeg' : 'image/png';
+        const lower = imageUrl.toLowerCase().split('?')[0];
+        let mime = 'image/png';
+        if (imageUrl.startsWith('data:image/svg+xml')) {
+            mime = 'image/svg+xml';
+        } else if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+            mime = 'image/jpeg';
+        } else if (lower.endsWith('.svg')) {
+            mime = 'image/svg+xml';
+        } else if (lower.endsWith('.webp')) {
+            mime = 'image/webp';
+        }
         return {
             type: 'image_url',
             image_url: { url: `data:${mime};base64,${base64}` }
@@ -563,6 +572,61 @@ function replaceImageMarkers(text, imageInfos) {
     return result;
 }
 
+function extractMarkdownImageUrls(text) {
+    if (!text) return [];
+    const urls = [];
+    const re = /!\[[^\]]*\]\(([^)]+)\)/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+        urls.push(m[1]);
+    }
+    return [...new Set(urls)];
+}
+
+async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downloadedImages) {
+    if (!isDualModel || downloadedImages.length === 0) {
+        return { analysis, selectedImageUrls: [] };
+    }
+
+    const imageInfoByUrl = new Map(imageInfos.map(info => [info.url, info]));
+    const usableImageInfos = downloadedImages.map(img => imageInfoByUrl.get(img.url) || { url: img.url, caption: '' });
+
+    console.log(`    [deep] 🖼️  副模型(${SECONDARY_CONFIG.model})筛选并插入高价值图片`);
+
+    const imageListStr = usableImageInfos.map((info, i) =>
+        `图${i + 1}: ${info.url}\n  caption: ${info.caption || '无描述'}`
+    ).join('\n\n');
+    const supplementPrompt = loadPrompt('prompts/image-supplement.md', {
+        title: paper.title,
+        arxivId,
+        imageList: imageListStr,
+        primaryAnalysis: analysis
+    });
+
+    const supplementContent = [{ type: 'text', text: supplementPrompt }];
+    for (const img of downloadedImages) {
+        supplementContent.push(buildImageContent(img.url, img.base64));
+    }
+
+    const enhancedAnalysis = await callModelWithConfig(
+        [{ role: 'user', content: supplementContent }],
+        API_MAX_TOKENS, 3, SECONDARY_CONFIG
+    );
+
+    const cleaned = cleanGapFillPrefix(enhancedAnalysis.trim());
+    if (!cleaned || cleaned.length <= 100) {
+        console.log(`    [deep] ⚠️  副模型输出格式不正确，保留纯文本分析结果`);
+        return { analysis, selectedImageUrls: [] };
+    }
+
+    const replaced = replaceImageMarkers(cleaned, usableImageInfos);
+    const selectedImageUrls = extractMarkdownImageUrls(replaced)
+        .filter(url => usableImageInfos.some(info => info.url === url));
+    console.log(`    [deep] ✅ 副模型图片筛选完成：插入 ${selectedImageUrls.length}/${usableImageInfos.length} 张`);
+
+    return { analysis: replaced, selectedImageUrls };
+}
+
 /**
  * 深度分析单篇论文（全文 + 图片）
  */
@@ -593,7 +657,7 @@ async function analyzePaperDeep(paper) {
 
     // 优先使用预提供的图片 URL（ICML/会议场景），否则从 arXiv 抓取
     let imageInfos = [];
-    const preProvidedUrls = paper.imageUrls || paper.allImageUrls || [];
+    const preProvidedUrls = paper.allImageUrls || paper.imageUrls || [];
     if (preProvidedUrls.length > 0) {
         imageInfos = preProvidedUrls.map(url => ({ url }));
         console.log(`    [deep] 使用预提供图片: ${imageInfos.length} 张`);
@@ -611,7 +675,7 @@ async function analyzePaperDeep(paper) {
 
     const hasFullTextIntro = hasFullText ? '以下是论文全文，请仔细阅读所有技术细节。' : '以下是论文摘要。';
 
-    const downloadedImages = await downloadImagesSerial(imageUrls, imageUrls.length, IMAGE_MAX_BASE64_CHARS);
+    const downloadedImages = await downloadImagesSerial(imageUrls, IMAGE_MAX_COUNT, IMAGE_MAX_BASE64_CHARS);
     console.log(`    [deep] 成功下载 ${downloadedImages.length}/${imageUrls.length} 张图片`);
 
     const prompt = loadPrompt('prompts/deep-analysis.md', {
@@ -624,16 +688,10 @@ async function analyzePaperDeep(paper) {
     });
 
     let analysis = '';
-    const imagesToSave = downloadedImages.map(img => img.url);
-
-    if (downloadedImages.length === 0) {
-        console.log(`    [deep] 无可用图片，仅文本分析`);
-    }
-
     // Round 1: Main analysis
     if (isDualModel && downloadedImages.length > 0) {
         // ========== 双模型模式 ==========
-        console.log(`    [deep] 🧠 双模型模式：主模型(${DEEP_CONFIG.model})文本分析 + 副模型(${SECONDARY_CONFIG.model})图像补充`);
+        console.log(`    [deep] 🧠 双模型模式：主模型(${DEEP_CONFIG.model})先做文本分析，后续由副模型(${SECONDARY_CONFIG.model})最终筛图补充`);
 
         // Round 1a: Primary model (text-only)
         try {
@@ -646,43 +704,12 @@ async function analyzePaperDeep(paper) {
             console.error(`    [deep] 主模型文本分析失败: ${err.message}`);
             return { ...paper, analysis: null, error: err.message };
         }
-
-        // Round 1b: Secondary model (multimodal, image supplement)
-        try {
-            const imageListStr = imageInfos.map((info, i) =>
-                `图${i + 1}: ${info.url}\n  caption: ${info.caption || '无描述'}`
-            ).join('\n\n');
-            const supplementPrompt = loadPrompt('prompts/image-supplement.md', {
-                title: paper.title,
-                arxivId,
-                imageList: imageListStr,
-                primaryAnalysis: analysis
-            });
-
-            const supplementContent = [{ type: 'text', text: supplementPrompt }];
-            for (const img of downloadedImages) {
-                supplementContent.push(buildImageContent(img.url, img.base64));
-            }
-
-            const enhancedAnalysis = await callModelWithConfig(
-                [{ role: 'user', content: supplementContent }],
-                API_MAX_TOKENS, 3, SECONDARY_CONFIG
-            );
-
-            const cleaned = cleanGapFillPrefix(enhancedAnalysis.trim());
-            if (cleaned && cleaned.length > 100) {
-                analysis = replaceImageMarkers(cleaned, imageInfos);
-                console.log(`    [deep] ✅ 副模型图像补充完成 (${analysis.length} chars)`);
-            } else {
-                console.log(`    [deep] ⚠️  副模型输出格式不正确，使用主模型分析结果`);
-            }
-        } catch (err) {
-            console.log(`    [deep] ⚠️  副模型图像补充失败: ${err.message}，使用主模型分析结果`);
-        }
     } else {
         // ========== 单模型模式：仅文本分析，不分析图片 ==========
         if (downloadedImages.length > 0) {
             console.log(`    [deep] 未配置副模型，跳过图片分析 (${downloadedImages.length} 张图片仅用于元数据)`);
+        } else {
+            console.log(`    [deep] 无可用图片，仅文本分析`);
         }
 
         try {
@@ -696,6 +723,8 @@ async function analyzePaperDeep(paper) {
             return { ...paper, analysis: null, error: err.message };
         }
     }
+
+    let selectedImageUrls = [];
 
     // 第2轮：开源扫描
     try {
@@ -782,10 +811,23 @@ async function analyzePaperDeep(paper) {
         console.log(`    [deep] ⚠️  方法概述补充失败: ${e.message}`);
     }
 
+    // 最后一轮：副模型基于最终文本筛选高价值图片并改写对应段落。
+    // 必须放在纯文本修复之后，否则 gap-fill / 表格补充 / 方法补充可能删掉图片。
+    if (isDualModel && downloadedImages.length > 0) {
+        try {
+            const imageResult = await applyImageSupplement(paper, arxivId, analysis, imageInfos, downloadedImages);
+            analysis = imageResult.analysis;
+            selectedImageUrls = imageResult.selectedImageUrls;
+        } catch (err) {
+            console.log(`    [deep] ⚠️  副模型图片筛选失败: ${err.message}，保留纯文本分析结果`);
+        }
+    }
+
     return {
         ...paper,
         analysis: analysis,
-        imageUrls: imagesToSave,
+        imageUrls: selectedImageUrls,
+        selectedImageUrls,
         allImageUrls: imageUrls
     };
 }
@@ -1199,7 +1241,15 @@ function mergeSection(analysis, sectionHeader, newContent) {
     return analysis.trim() + '\n\n' + sectionHeader + '\n' + cleanContent;
 }
 
-module.exports = { analyzePaperDeep, parseAnalysis, callModel, fetchArxivText, fetchArxivImageUrls };
+module.exports = {
+    analyzePaperDeep,
+    parseAnalysis,
+    callModel,
+    fetchArxivText,
+    fetchArxivImageUrls,
+    replaceImageMarkers,
+    extractMarkdownImageUrls
+};
 
 // 直接运行测试
 if (require.main === module) {

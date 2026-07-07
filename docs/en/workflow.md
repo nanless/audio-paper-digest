@@ -171,7 +171,7 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 | Round 4 | Table Fix | Code detection + LLM supplement | Detect missing Markdown tables in the Experimental Results section, trigger supplementation |
 | Round 5 | Method Section Fix | Code detection + LLM supplement | Detect if Method Overview is too brief (<300 chars / <3 paragraphs), trigger expansion to 600+ chars |
 
-> **Single-model vs dual-model**: setting `PAPER_ANALYZER_SECONDARY_MODEL` (plus optional `SECONDARY_ENDPOINT`/`SECONDARY_API_KEY`, which reuse the primary values if unset) enables dual-model mode — the primary model does text-only analysis (Round 1) while the secondary model handles the image supplement (Round 1b). Without a secondary model it falls back to single-model: images are still downloaded and saved as `imageUrls` metadata for blog embedding, but are not sent to any vision model for analysis.
+> **Single-model vs dual-model**: setting `PAPER_ANALYZER_SECONDARY_MODEL` (plus optional `SECONDARY_ENDPOINT`/`SECONDARY_API_KEY`, which reuse the primary values if unset) enables dual-model mode — the primary model first does text-only analysis, then after text-only repair rounds finish, the secondary model selects high-value figures from the candidates (flow diagrams, model diagrams, spectrograms, comparisons, result plots, etc.), drops low-information figures, and inserts the chosen figures into the relevant paragraphs. Without a secondary model it falls back to single-model: image URLs are kept only as `allImageUrls` candidate metadata and are not automatically embedded in the blog body.
 
 ### 3.8 Incremental Save and Wrap-up
 

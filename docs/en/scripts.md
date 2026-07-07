@@ -172,7 +172,7 @@ HuggingFace Papers fetch module.
 Multimodal deep analyzer. The analysis flow is a **5-round progressive process**, not a single call:
 
 **Round 1 -- Main Deep Analysis**
-- `analyzePaperDeep(paper)`: fetches arXiv HTML full text (up to 500K characters) + downloads all images serially to reduce failures under proxy or remote rate-limit conditions
+- `analyzePaperDeep(paper)`: fetches arXiv HTML full text (up to 500K characters) + downloads candidate images serially; in dual-model mode the secondary model finally selects high-value figures and inserts them into the body. `allImageUrls` stores candidates, while `selectedImageUrls` / `imageUrls` store selected figures
 - Loads `prompts/deep-analysis.md`, replaces placeholders, and calls the LLM
 - Output includes: score, machine summary, tags, authors and affiliations, snarky review, core summary, method overview and architecture, core innovations, experimental results, detailed description, score rationale, limitations and issues, open source details
 - `parseAnalysis(analysis)`: parses analysis text into a structured object. `score` is not taken directly from the LLM's original total score under `## Score`, but is recalculated from eight sub-scores extracted from `## Score Rationale`, rounded to 0.1, always overriding the LLM's original total score
@@ -356,7 +356,7 @@ Generate WeChat Official Account article drafts.
 - Filters by `fetchedAt == --date` by default (default date is today in Beijing time); pass `--all` to use all papers in the input file
 - WeChat Official Account `APP_ID` / `APP_SECRET` read from environment variables
 - Supports `--dry-run`: only generates the local preview HTML; does not fetch a token, upload images, or create drafts
-- **Image Upload**: download arXiv images -> upload to WeChat CDN -> replace with WeChat URLs. Cache stored in `/tmp/wechat-image-cache.json`
+- **Image Upload**: upload only in-body Markdown images and figures listed in `selectedImageUrls` -> upload to WeChat CDN -> replace with WeChat URLs. Cache stored in `/tmp/wechat-image-cache.json`; raw `allImageUrls` candidates are not uploaded or published directly
 - **Auto Split into Parts**: single draft limit is approximately 48000 characters (HTML); automatically split into multiple drafts if exceeded
   - Only Part 1 contains "Today's Overview"
   - Each Part title: `Speech/Music/Audio Paper Digest YYYY-MM-DD | part N | M papers`

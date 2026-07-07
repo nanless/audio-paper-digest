@@ -408,3 +408,64 @@ describe('LLM request invariants', () => {
         assert.match(deepAnalyzer, /agent:\s*false/);
     });
 });
+
+describe('image markdown parsing', () => {
+    it('保留方法和实验章节中的 Markdown 图片引用', () => {
+        const analysis = `## 评分
+8.0
+
+## 机器摘要
+rank_bucket: 前25%
+innovation: 1.5/2
+technical_rigor: 1.2/1.5
+experimental_sufficiency: 1.2/1.5
+clarity: 0.8/1
+impact: 1.2/1.5
+open_source: 0/1.5
+reproducibility: 0.3/0.5
+engineering_value: 1.0/1.5
+confidence: 高
+primary_task_tag: #语音识别
+primary_method_tag: #Transformer
+sota_claim: 否
+has_code: 否
+has_model: 否
+has_dataset: 否
+
+## 标签
+#语音识别 #Transformer
+主任务标签: #语音识别
+主方法标签: #Transformer
+
+## 方法概述和架构
+模型流程如下。
+
+![模型架构](https://arxiv.org/html/2604.12345/x1.png)
+
+图中展示了编码器到解码器的数据流。
+
+## 实验结果
+结果图显示低信噪比下更稳定。
+
+![语谱图对比](https://arxiv.org/html/2604.12345/x2.png)
+
+## 评分理由
+*   创新性 (1.5/2)：有新意。
+*   技术严谨性 (1.2/1.5)：基本严谨。
+*   实验充分性 (1.2/1.5)：实验较充分。
+*   清晰度 (0.8/1)：图文清楚。
+*   影响力 (1.2/1.5)：有影响。
+*   开源 (0/1.5)：未开源。
+*   可复现性 (0.3/0.5)：细节一般。
+*   工程/实践价值 (1.0/1.5)：有实践价值。
+
+## 局限与问题
+未说明。
+
+## 开源详情
+未提及。`;
+        const parsed = parseAnalysis(analysis);
+        assert.match(parsed.architecture, /!\[模型架构\]\(https:\/\/arxiv\.org\/html\/2604\.12345\/x1\.png\)/);
+        assert.match(parsed.results, /!\[语谱图对比\]\(https:\/\/arxiv\.org\/html\/2604\.12345\/x2\.png\)/);
+    });
+});

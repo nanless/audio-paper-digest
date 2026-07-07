@@ -173,9 +173,17 @@ def main():
         token = get_token()
         print(f"🔑 Token OK")
 
+    def extract_markdown_image_urls(text):
+        if not text:
+            return []
+        return [m.group(2) for m in re.finditer(r'!\[([^\]]*)\]\(([^)]+)\)', text)]
+
     all_imgs = set()
     for p in papers:
-        for u in (p.get('imageUrls') or []) + (p.get('allImageUrls') or []):
+        for u in (p.get('selectedImageUrls') or []):
+            all_imgs.add(u)
+        analysis = p.get('analysis') or ''
+        for u in extract_markdown_image_urls(analysis):
             all_imgs.add(u)
     all_imgs = list(all_imgs)
     print(f"🖼️ 共 {len(all_imgs)} 张图片需要上传")
@@ -209,6 +217,31 @@ def main():
         aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
 
         h = f'<h2>📄 {html.escape(title)}</h2>\n'
+
+        def render_rich_text(text):
+            if not text:
+                return ''
+            out = []
+            pos = 0
+            for m in re.finditer(r'!\[([^\]]*)\]\(([^)]+)\)', text):
+                before = text[pos:m.start()]
+                if before.strip():
+                    for para in re.split(r'\n\s*\n', before.strip()):
+                        if para.strip():
+                            out.append(f'<p>{html.escape(para.strip()).replace(chr(10), "<br/>")}</p>')
+                alt = m.group(1).strip() or '论文图片'
+                raw_url = m.group(2).strip()
+                cdn_url = img_map.get(raw_url, raw_url)
+                if cdn_url:
+                    out.append(f'<p><img src="{html.escape(cdn_url)}" data-src="{html.escape(cdn_url)}" alt="{html.escape(alt)}" /></p>')
+                pos = m.end()
+            tail = text[pos:]
+            if tail.strip():
+                for para in re.split(r'\n\s*\n', tail.strip()):
+                    if para.strip():
+                        out.append(f'<p>{html.escape(para.strip()).replace(chr(10), "<br/>")}</p>')
+            return '\n'.join(out) + ('\n' if out else '')
+
         if pa:
             if pa['tags']:
                 h += f'<p style="color:#1a73e8;">{" ".join(pa["tags"])}</p>\n'
@@ -261,12 +294,13 @@ def main():
             ]
             for label, key in sections:
                 if pa.get(key):
-                    h += f'<p><strong>{label}</strong></p>\n<p>{html.escape(pa[key])}</p>\n'
+                    h += f'<p><strong>{label}</strong></p>\n{render_rich_text(pa[key])}'
         else:
             h += '<p style="color:#999;">⚠️ 该论文分析失败</p>\n'
 
-        imgs = paper.get('imageUrls') or paper.get('allImageUrls') or []
-        if imgs:
+        rendered_body_has_image = '<img ' in h
+        imgs = paper.get('selectedImageUrls') or []
+        if imgs and not rendered_body_has_image:
             h += '<p><strong>📸 论文图片</strong></p>\n'
             for img_url in imgs:
                 cdn_url = img_map.get(img_url)

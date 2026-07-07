@@ -51,7 +51,7 @@ description: >
 |------|------|---------|
 | `data/current/papers.json` | 论文去重数据库 | **不归档**，持续累积 |
 | `data/current/filtered-papers.json` | 筛选后的论文元数据 | 每日归档移走后重新生成 |
-| `data/current/deep-analysis-result.json` | 核心分析结果（含 analysis / parsed / imageUrls） | 每日归档移走后重新生成 |
+| `data/current/deep-analysis-result.json` | 核心分析结果（含 analysis / parsed / selectedImageUrls / imageUrls / allImageUrls） | 每日归档移走后重新生成 |
 | `data/current/analyzed.json` | 旧版已分析记录（兼容） | 每日归档移走后重新生成 |
 
 ### 3.2 兼容行为
@@ -139,10 +139,10 @@ API 调用特性：
 配置 `PAPER_ANALYZER_SECONDARY_MODEL` 时启用双模型模式：
 
 - **主模型**（`PAPER_ANALYZER_*`）：纯文本深度分析，使用 `prompts/deep-analysis.md`（Round 1a）
-- **副模型**（`PAPER_ANALYZER_SECONDARY_*`）：多模态图像补充，使用 `prompts/image-supplement.md`（Round 1b），需要支持图片输入的多模态模型（如 `mimo-v2.5`、`gpt-4o` 等）
+- **副模型**（`PAPER_ANALYZER_SECONDARY_*`）：多模态图像筛选与补充，使用 `prompts/image-supplement.md`（最终文本修复后执行），需要支持图片输入的多模态模型（如 `mimo-v2.5`、`gpt-4o` 等）
 - 副模型的 `endpoint` / `key` 不设置时分别回退到主模型的对应值
 - 未配置副模型时，自动退回单模型纯文本模式（不分析图片）
-- 副模型任务：验证图像证据、补充视觉信息、标记 `[图N]` 插入位置，系统自动替换为实际图片链接
+- 副模型任务：从候选图中筛选高价值图（流程图、模型图、语谱图、对比图、结果图等），丢弃无关/低信息图，补充相邻文本并标记 `[图N]` 插入位置，系统自动替换为实际图片链接
 
 ### 4.4 微信公众号（`publish-wechat-full.py`）
 

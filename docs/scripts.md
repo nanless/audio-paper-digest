@@ -175,7 +175,7 @@ HuggingFace Papers 抓取模块。
 多模态深度分析器。分析流程为 **5 轮递进式处理**，不是单次调用：
 
 **Round 1 — 主深度分析**
-- `analyzePaperDeep(paper)`：获取 arXiv HTML 全文（最多 500K 字符）+ 串行下载全部图片，降低代理/远端限流下的失败率
+- `analyzePaperDeep(paper)`：获取 arXiv HTML 全文（最多 500K 字符）+ 串行下载候选图片，双模型模式下由副模型最终筛选高价值图片并插入正文；`allImageUrls` 保存候选图，`selectedImageUrls` / `imageUrls` 保存已选图
 - 加载 `prompts/deep-analysis.md`，替换占位符后调用 LLM
 - 输出包含：评分、机器摘要、标签、作者与机构、毒舌点评、核心摘要、方法概述和架构、核心创新点、实验结果、细节详述、评分理由、局限与问题、开源详情
 - `parseAnalysis(analysis)`：将分析文本解析为结构化对象。`score` 不是直接取 `## 评分` 下的 LLM 原始总分，而是从 `## 评分理由` 中提取八个分项重新计算，四舍五入到 0.1，始终覆盖 LLM 原始总分
@@ -359,7 +359,7 @@ LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，按 `fix_instr
 - 默认按 `fetchedAt == --date`（默认今天，北京时间）过滤；传 `--all` 才使用输入文件中的全部论文
 - 微信公众号 `APP_ID` / `APP_SECRET` 从环境变量读取
 - 支持 `--dry-run`：只生成本地预览 HTML，不获取 Token、不上传图片、不创建草稿
-- **图片上传**：下载 arXiv 图片 → 上传到微信 CDN → 替换为微信 URL。缓存保存在 `/tmp/wechat-image-cache.json`
+- **图片上传**：仅上传正文 Markdown 图片和 `selectedImageUrls` 中的已选图片 → 上传到微信 CDN → 替换为微信 URL。缓存保存在 `/tmp/wechat-image-cache.json`，不会直接上传/发布 `allImageUrls` 候选图
 - **自动分 Part**：单篇草稿上限约 48000 字符（HTML），超过自动拆分为多个草稿
   - 只有 Part 1 包含"今日概览"
   - 每 Part 标题：`语音/音乐/音频论文速递 YYYY-MM-DD | part N | M篇论文`
