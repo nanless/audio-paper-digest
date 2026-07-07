@@ -24,7 +24,7 @@ load_dotenv()
 
 import base64, json, os, sys, re, asyncio
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 try:
     from playwright.async_api import async_playwright, TimeoutError as PWTimeout
@@ -46,6 +46,17 @@ ENV_FILE = PROJECT_ROOT / ".env"
 # 小红书正文限制（标题 30 字，正文 1000 字）
 MAX_TITLE_LEN = 30
 MAX_BODY_LEN = 1000
+BJ_TZ = timezone(timedelta(hours=8))
+
+
+def today_bj():
+    return datetime.now(BJ_TZ).strftime("%Y-%m-%d")
+
+
+def find_screenshot_images(target_date):
+    pic_dir = Path.home() / "Pictures"
+    compact = target_date.replace("-", "")
+    return sorted(str(p) for p in pic_dir.glob(f"微信图片_{compact}*.png"))
 
 
 # ═══════════════════════════════════════════════════════
@@ -673,7 +684,7 @@ def main():
             body = custom_text
         else:
             # 读取今日文案
-            today = target_date or datetime.now().strftime("%Y-%m-%d")
+            today = target_date or today_bj()
             md_path = PROJECT_ROOT / "data" / "current" / f"xiaohongshu-{today}-top5.md"
             if not md_path.exists():
                 # 尝试 all 版本
@@ -685,10 +696,7 @@ def main():
             title, body = parse_xiaohongshu_md(md_path)
 
         # 自动使用 ~/Pictures/ 下的博客截图（按时间顺序）
-        pic_dir = Path.home() / "Pictures"
-        image_files = sorted([
-            str(p) for p in pic_dir.glob("微信图片_20260501*.png")
-        ])
+        image_files = find_screenshot_images(today)
         if len(image_files) >= 4:
             images = image_files[:4]
             print(f"[xhs] 将上传 {len(images)} 张图片")
@@ -700,7 +708,7 @@ def main():
         sys.exit(0 if result else 1)
 
     if mode == "publish_all":
-        today = target_date or datetime.now().strftime("%Y-%m-%d")
+        today = target_date or today_bj()
         md_path = PROJECT_ROOT / "data" / "current" / f"xiaohongshu-{today}-all.md"
         if not md_path.exists():
             md_path = PROJECT_ROOT / "data" / "current" / f"xiaohongshu-{today}-top5.md"
@@ -709,10 +717,7 @@ def main():
             sys.exit(1)
         title, body = parse_xiaohongshu_md(md_path)
 
-        pic_dir = Path.home() / "Pictures"
-        image_files = sorted([
-            str(p) for p in pic_dir.glob("微信图片_20260501*.png")
-        ])
+        image_files = find_screenshot_images(today)
         images = image_files[:4] if len(image_files) >= 4 else None
 
         result = asyncio.run(publish_note(title, body, images=images, headless=headless))

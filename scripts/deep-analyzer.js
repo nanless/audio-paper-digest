@@ -125,11 +125,11 @@ async function _callModelOnce(messages, maxTokens, config, startTime, apiType) {
             const duration = ((Date.now() - startTime) / 1000).toFixed(1);
             console.log(`    [api] ✗ ${config.model} | abort timeout | ${duration}s`);
             controller.abort();
-        }, 1200000);
+        }, API_OVERALL_TIMEOUT_MS);
 
         const options = {
             hostname: url.hostname,
-            path: url.pathname,
+            path: url.pathname + url.search,
             method: 'POST',
             headers: headers,
             signal: controller.signal,

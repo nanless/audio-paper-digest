@@ -1161,6 +1161,7 @@ def main():
     skip_push = True
     target_date = None
     category = '论文速递'
+    publish_all = False
 
     i = 1
     while i < len(sys.argv):
@@ -1169,6 +1170,8 @@ def main():
             skip_push = True
         elif arg == '--push':
             skip_push = False
+        elif arg == '--all':
+            publish_all = True
         elif arg == '--date' and i + 1 < len(sys.argv):
             target_date = sys.argv[i + 1]
             i += 1
@@ -1184,17 +1187,20 @@ def main():
     print(f"📅 博客日期: {today}")
 
     # 只发布 fetchedAt 日期等于目标日期的论文（按抓取日期而非 arXiv 发布日期）
-    filtered_papers = []
-    for p in papers:
-        fa = p.get('fetchedAt', '')
-        if fa and isinstance(fa, str):
-            fa_date = fa[:10]
-            if fa_date == today:
-                filtered_papers.append(p)
-
-    papers = filtered_papers
+    if not publish_all:
+        filtered_papers = []
+        for p in papers:
+            fa = p.get('fetchedAt', '')
+            if fa and isinstance(fa, str):
+                fa_date = fa[:10]
+                if fa_date == today:
+                    filtered_papers.append(p)
+        papers = filtered_papers
+    else:
+        print("📦 --all: 跳过 fetchedAt 日期过滤，发布输入文件中的全部论文")
     scored, unscored = score_and_sort(papers)
-    print(f"📄 过滤后: {len(papers)} 篇论文 (fetchedAt={today})")
+    filter_note = '全部论文' if publish_all else f'fetchedAt={today}'
+    print(f"📄 过滤后: {len(papers)} 篇论文 ({filter_note})")
 
     if not papers:
         print("⚠️ 没有论文需要发布")

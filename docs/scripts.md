@@ -69,7 +69,7 @@ arXiv 抓取与 LLM 筛选模块。
   - `fetchCategoryFromSearchPage()`：从 arXiv 搜索页面抓取，支持分页 + 5 次重试
   - `fetchCategoryPapers()`：自动三级降级，每步获取足够即跳过后续
   - `fetchAbstracts()`：从 arXiv abs 页面批量抓取摘要（并发 5）
-- 筛选阶段统一使用 `PAPER_ANALYZER_*` 环境变量，支持 HTTP CONNECT 代理
+- 筛选阶段统一使用 `PAPER_ANALYZER_*` 环境变量；LLM 请求强制 `agent: false` 直连，HTTP CONNECT 代理仅用于抓取侧请求
 - 关键词预筛选函数 `filterPapersByKeywords` 保留但当前主流程未启用
 - XML 解析为 regex 实现（arXiv API 格式稳定）
 
@@ -325,12 +325,13 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 - `--date YYYY-MM-DD`（强烈建议显式指定，避免跨天时日期错误）
 - `--skip-push` 只生成文件不推送（兼容旧参数，当前默认行为）
 - `--push` 正式提交并推送博客仓库
+- `--all` 跳过 `fetchedAt` 日期过滤，发布输入文件中的全部论文
 - 自定义数据文件路径作为最后一个参数
 
 **日期过滤**：
 - 脚本默认按 `fetchedAt` 字段过滤，只发布匹配 `--date` 指定日期（默认今天）的论文
 - `deep-analysis-result.json` 会累积历史数据，日期过滤确保只发布当日抓取的新论文
-- 若需发布全部论文（不过滤），可传入自定义数据文件或临时修改脚本
+- 若需发布全部论文（不过滤），显式传 `--all`
 
 **Review 环节**：
 生成 `.md` 后会自动执行三层 review（代码正则检查 → LLM 文本审查 → 多模态图片审查），论文独立页面使用 `ThreadPoolExecutor(max_workers=3)` 并发审查，自动修复常见问题后写入文件。
@@ -355,6 +356,7 @@ LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，按 `fix_instr
 生成微信公众号图文草稿。
 
 - 默认数据源：`data/current/deep-analysis-result.json`（支持命令行传入自定义路径）
+- 默认按 `fetchedAt == --date`（默认今天，北京时间）过滤；传 `--all` 才使用输入文件中的全部论文
 - 微信公众号 `APP_ID` / `APP_SECRET` 从环境变量读取
 - 支持 `--dry-run`：只生成本地预览 HTML，不获取 Token、不上传图片、不创建草稿
 - **图片上传**：下载 arXiv 图片 → 上传到微信 CDN → 替换为微信 URL。缓存保存在 `/tmp/wechat-image-cache.json`
@@ -384,6 +386,7 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 - 默认数据源：`data/current/deep-analysis-result.json`
 - 支持 `--top N` 精选版（默认 TOP 5，常用 `--top 3`）和 `--all` 完整汇总版
 - 支持 `--date YYYY-MM-DD` 指定日期
+- 若没有匹配 `fetchedAt == --date` 的论文，脚本会停止生成，避免跨日混入历史论文
 - 输出到 `data/current/xiaohongshu-YYYY-MM-DD-<suffix>.md`
 - **每篇论文的一句话介绍调用 MiMo LLM API 生成**（anthropic 协议，`session.trust_env = False` 绕过代理，并发 3），LLM 失败时回退到本地 `extract_one_liner()`
 - 自动清理 Markdown 格式和学术化前缀
@@ -398,6 +401,7 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 - `--publish`：发布当前日期 TOP 3 精选帖（默认）
 - `--all`：发布全部论文（每帖一篇）
 - `--date YYYY-MM-DD`：指定日期
+- 默认日期使用北京时间；截图匹配 `~/Pictures/微信图片_YYYYMMDD*.png`
 - 登录后 cookie 持久化，下次无需重复扫码
 - 对应 npm 脚本：`npm run xhs-login`、`npm run xhs-publish`、`npm run xhs-publish-all`
 
@@ -411,6 +415,7 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 **数据输入**：
 - 统一读取 `data/current/deep-analysis-result.json`（与其他发布渠道一致）
 - 支持 `--date YYYY-MM-DD` 指定日期
+- 默认按 `fetchedAt == --date`（默认今天，北京时间）过滤；传 `--all` 才使用输入文件中的全部论文
 - 支持 `--dry-run`：只统计将生成的文档标题和块数量，不获取 Token、不创建飞书文档
 
 **实现特点**：
@@ -435,7 +440,7 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 - 写入 `data/current/papers.json`
 - 额外输出 `data/backfill-result.json`
 - 独立日志：`logs/backfill.log`
-- 依赖：`requests`（Python 第三方库）
+- 依赖：见根目录 `requirements.txt`（`python-dotenv`、`requests`、`playwright`）
 
 #### `scripts/backup-data.sh`
 

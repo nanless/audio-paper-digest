@@ -290,7 +290,8 @@ def main():
         papers = filtered
         print(f"📅 过滤后: {len(papers)} 篇论文 (fetchedAt={today})")
     else:
-        print(f"⚠️  没有 fetchedAt={today} 的论文，使用全部 {len(papers)} 篇")
+        print(f"⚠️  没有 fetchedAt={today} 的论文，停止生成，避免跨日混入历史论文")
+        return
 
     scored, unscored = score_and_sort(papers)
 

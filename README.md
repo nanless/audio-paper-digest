@@ -116,6 +116,8 @@ npm run publish -- --push --date 2026-04-21
 npm run wechat
 # 仅生成公众号预览，不调用微信接口
 python3 scripts/publish-wechat-full.py --dry-run
+# 发布输入文件全部论文到公众号草稿
+python3 scripts/publish-wechat-full.py --all
 
 # 生成小红书文案
 npm run xiaohongshu
@@ -130,6 +132,8 @@ python3 scripts/publish-to-feishu.py
 python3 scripts/publish-to-feishu.py --date 2026-04-21
 # 仅预览飞书文档规模，不创建文档
 python3 scripts/publish-to-feishu.py --dry-run --date 2026-04-21
+# 发布输入文件全部论文到飞书
+python3 scripts/publish-to-feishu.py --all
 ```
 
 ### 直接调用
@@ -172,6 +176,7 @@ python3 scripts/publish-to-blog.py --push --date 2026-04-21
 
 # 用自定义数据发布
 python3 scripts/publish-to-blog.py --date 2026-04-21 data/current/deep-analysis-result.json
+python3 scripts/publish-to-blog.py --all data/current/deep-analysis-result.json
 
 # 生成微信公众号草稿
 python3 scripts/publish-wechat-full.py
@@ -179,6 +184,7 @@ python3 scripts/publish-wechat-full.py --dry-run
 
 # 用自定义数据生成微信草稿
 python3 scripts/publish-wechat-full.py data/current/deep-analysis-result.json
+python3 scripts/publish-wechat-full.py --all data/current/deep-analysis-result.json
 
 # 生成小红书文案（默认 TOP 5）
 python3 scripts/publish-xiaohongshu.py
@@ -194,6 +200,7 @@ python3 scripts/xiaohongshu-publisher.py --all
 python3 scripts/publish-to-feishu.py
 python3 scripts/publish-to-feishu.py --date 2026-04-21
 python3 scripts/publish-to-feishu.py --dry-run --date 2026-04-21
+python3 scripts/publish-to-feishu.py --all
 
 # ========== 辅助 ==========
 # 补录论文 ID（不分析）

@@ -19,7 +19,7 @@
 3. 复制成功后，**删除**原文件，确保每天从零开始
 4. 若归档目录已存在同名文件，跳过（不覆盖）
 
-同时，若 `deep-analysis-result.json` 存在且已有数据，会在归档前自动备份到 `data/archive/deep-analysis-result-<时间戳>.bak.json`，并自动清理旧备份（保留最近 10 个）。
+此外，最终保存新的深度分析结果前，若已有 `deep-analysis-result.json` 且包含数据，会先备份到 `data/archive/deep-analysis-result-<时间戳>.bak.json`，并自动清理旧备份（保留最近 10 个）。这一步发生在分析完成后的最终保存阶段，不属于启动时的每日归档。
 
 ### 3.2 加载去重库与博客去重
 

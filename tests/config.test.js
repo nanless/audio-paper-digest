@@ -85,4 +85,23 @@ describe('config', () => {
         assert.strictEqual(Config.ARXIV_CONFIG.maxResultsPerCategory, 50);
         delete process.env.PD_ARXIV_MAX_RESULTS;
     });
+
+    it('环境变量覆写 PAPER_DIGEST_BLOG_REPO 并同步 contentDir', () => {
+        const fs = require('fs');
+        const envPath = path.join(__dirname, '..', '.env');
+        if (fs.existsSync(envPath) && /(^|\n)\s*PAPER_DIGEST_BLOG_REPO\s*=/.test(fs.readFileSync(envPath, 'utf8'))) {
+            return;
+        }
+        const old = process.env.PAPER_DIGEST_BLOG_REPO;
+        process.env.PAPER_DIGEST_BLOG_REPO = '~/tmp-paper-digest-blog';
+        delete require.cache[require.resolve('../scripts/config.js')];
+        Config = require('../scripts/config.js');
+        assert.ok(Config.PUBLISH_CONFIG.blogRepo.endsWith(path.join('tmp-paper-digest-blog')));
+        assert.strictEqual(
+            Config.PUBLISH_CONFIG.contentDir,
+            path.join(Config.PUBLISH_CONFIG.blogRepo, 'content', 'posts')
+        );
+        if (old === undefined) delete process.env.PAPER_DIGEST_BLOG_REPO;
+        else process.env.PAPER_DIGEST_BLOG_REPO = old;
+    });
 });

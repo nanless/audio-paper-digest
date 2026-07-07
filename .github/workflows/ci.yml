@@ -32,6 +32,7 @@ jobs:
         run: |
           node -c scripts/utils.js
           node -c scripts/config.js
+          node -c scripts/log-setup.js
           node -c scripts/analysis-engine.js
           node -c scripts/full-fetch.js
           node -c scripts/fetch-papers.js
@@ -49,6 +50,7 @@ jobs:
           node -c tests/utils.test.js
           node -c tests/config.test.js
           node -c tests/analysis-engine.test.js
+          node -c tests/fetch-huggingface-papers.test.js
 
       - name: Check Python syntax
         run: |
@@ -60,4 +62,9 @@ jobs:
             scripts/publish-xiaohongshu.py \
             scripts/publish-to-feishu.py \
             scripts/backfill_papers.py \
-            scripts/xiaohongshu-publisher.py
+            scripts/xiaohongshu-publisher.py \
+            scripts/log_setup.py
+
+      - name: Check shell syntax
+        run: |
+          bash -n scripts/backup-data.sh

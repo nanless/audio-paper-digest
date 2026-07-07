@@ -19,7 +19,7 @@ Archive rules (evaluated per file):
 3. After a successful copy, **delete** the original file to ensure a fresh start each day
 4. If an identically named file already exists in the archive directory, skip it (do not overwrite)
 
-Additionally, if `deep-analysis-result.json` exists and already contains data, it is automatically backed up to `data/archive/deep-analysis-result-<timestamp>.bak.json` before archiving, and old backups are automatically cleaned up (keeping the most recent 10).
+Additionally, before final saving of a new deep-analysis result, if an existing `deep-analysis-result.json` contains data, it is backed up to `data/archive/deep-analysis-result-<timestamp>.bak.json`, and old backups are cleaned up automatically (keeping the most recent 10). This happens during the final save after analysis, not during startup archive.
 
 ### 3.2 Load Deduplication Database and Blog Dedup
 

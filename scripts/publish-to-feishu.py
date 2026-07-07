@@ -271,12 +271,15 @@ def main():
     data_file = None
     target_date = None
     dry_run = False
+    publish_all = False
 
     i = 1
     while i < len(sys.argv):
         arg = sys.argv[i]
         if arg == '--dry-run':
             dry_run = True
+        elif arg == '--all':
+            publish_all = True
         elif arg == '--date' and i + 1 < len(sys.argv):
             target_date = sys.argv[i + 1]
             i += 1
@@ -285,8 +288,17 @@ def main():
         i += 1
 
     papers = load_papers(data_file)
-    scored, unscored = score_and_sort(papers)
     today = get_today_bj(target_date)
+    if not publish_all:
+        papers = [
+            p for p in papers
+            if isinstance(p.get('fetchedAt', ''), str) and p.get('fetchedAt', '')[:10] == today
+        ]
+        print(f"📅 过滤后: {len(papers)} 篇论文 (fetchedAt={today})")
+    else:
+        print("📦 --all: 跳过 fetchedAt 日期过滤，使用输入文件中的全部论文")
+
+    scored, unscored = score_and_sort(papers)
 
     if not papers:
         print("⚠️ 没有论文需要发布")

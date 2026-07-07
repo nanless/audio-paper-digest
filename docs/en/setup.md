@@ -14,7 +14,7 @@ set -a; source the `.env` file in the project root 2>/dev/null; set +a
 Benefits of this design:
 - Sensitive configurations are centralized and never written into scripts
 - Automatically injected on shell startup; Python scripts (`publish-wechat-full.py`, etc.) read directly via `os.environ`
-- Node scripts get a secondary fallback via `loadEnvFile()` (only fills in variables that are not already set)
+- Node scripts read the project-root `.env` via `config.js` and `loadEnvFile()` and write values into the current process environment
 
 ### 6.2 Environment Variable Reference
 
@@ -25,6 +25,9 @@ Benefits of this design:
 | `PAPER_ANALYZER_API_KEY` | LLM API Key | **Required** |
 | `PAPER_ANALYZER_ENDPOINT` | LLM API base path (for example `/v1`, `/coding/v1`, or `/anthropic`; scripts append the final request path) | **Required** |
 | `PAPER_ANALYZER_MODEL` | LLM model name | **Required** |
+| `PAPER_ANALYZER_SECONDARY_MODEL` | Secondary model name; enables image supplementation when set | Optional |
+| `PAPER_ANALYZER_SECONDARY_ENDPOINT` | Secondary model API base path; falls back to the primary endpoint when unset | Optional |
+| `PAPER_ANALYZER_SECONDARY_API_KEY` | Secondary model API key; falls back to the primary key when unset | Optional |
 | `PD_ANALYSIS_CONCURRENCY` | Deep analysis concurrency | 3 |
 | `PD_ANALYSIS_MAX_RETRIES` | Per-paper retry count for deep analysis | 2 |
 | `PD_REANALYZE_CONCURRENCY` | Re-analysis concurrency | 3 (matches `ANALYSIS_CONFIG.concurrency`) |
@@ -153,24 +156,23 @@ Special logs:
 - **Node.js** >= 18.0.0 (`node` / `npm`)
 - **Python** 3.x (`python3` / `pip3`)
 - Node.js dependency: `cheerio` (arXiv HTML structured parsing)
-- Python third-party library: `requests` (used only by `backfill_papers.py`)
+- Python third-party libraries: see the root `requirements.txt` (`python-dotenv`, `requests`, `playwright`)
 
 ### 9.2 Initialization
 
 ```bash
-cd ~/.hermes/skills/openclaw-imports/audio-paper-digest
+cd /path/to/audio-paper-digest
 
 # Install Node.js dependencies
 npm install
 
 # Install Python dependencies (if needed)
-pip3 install requests
+pip3 install -r requirements.txt
 
 # Create required directories
 mkdir -p data/current data/archive logs
 
 # Configure API Key
-mkdir -p ~/.hermes
 cat >> the `.env` file in the project root << 'EOF'
 PAPER_ANALYZER_API_KEY=your-llm-key
 PAPER_ANALYZER_MODEL=your-llm-model

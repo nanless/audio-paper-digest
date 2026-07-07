@@ -77,7 +77,7 @@ ls -lt content/posts | head -20
 ```javascript
 const options = {
     hostname: url.hostname,
-    path: url.pathname,
+    path: url.pathname + url.search,
     method: 'POST',
     headers: headers,
     agent: false,  // ← 必须是 false，undefined 无效

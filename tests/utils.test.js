@@ -1,5 +1,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const {
     stripMd,
@@ -364,5 +366,45 @@ describe('loadPrompt', () => {
             () => loadPrompt('../outside.md'),
             /路径不安全/
         );
+    });
+
+    it('真实 prompt 文件都包含可解析代码块', () => {
+        const vars = {
+            title: 'Test Title',
+            abstract: 'Test abstract',
+            categories: 'cs.SD',
+            hasFullText: '以下是论文摘要。',
+            authors: 'Test Author',
+            arxivId: '2604.12345',
+            textForAnalysis: 'Paper text',
+            imageList: '图1: https://example.com/a.png',
+            primaryAnalysis: '## 评分\n8/10',
+            existingAnalysis: '## 评分\n8/10'
+        };
+        const promptFiles = [
+            'prompts/filter.md',
+            'prompts/deep-analysis.md',
+            'prompts/image-supplement.md',
+            'prompts/opensource-scan.md',
+            'prompts/gap-fill.md',
+            'prompts/en/filter.md',
+            'prompts/en/deep-analysis.md',
+            'prompts/en/opensource-scan.md',
+            'prompts/en/gap-fill.md'
+        ];
+        for (const file of promptFiles) {
+            const prompt = loadPrompt(file, vars);
+            assert.ok(prompt.length > 20, `${file} prompt 过短`);
+        }
+    });
+});
+
+describe('LLM request invariants', () => {
+    it('筛选和深度分析请求显式禁用 agent', () => {
+        const root = path.join(__dirname, '..');
+        const fetchPapers = fs.readFileSync(path.join(root, 'scripts', 'fetch-papers.js'), 'utf8');
+        const deepAnalyzer = fs.readFileSync(path.join(root, 'scripts', 'deep-analyzer.js'), 'utf8');
+        assert.match(fetchPapers, /agent:\s*false/);
+        assert.match(deepAnalyzer, /agent:\s*false/);
     });
 });

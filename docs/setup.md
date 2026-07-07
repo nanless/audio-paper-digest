@@ -14,7 +14,7 @@ set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
 这样设计的好处：
 - 敏感配置集中管理，不写入脚本
 - shell 启动时自动注入，Python 脚本（`publish-wechat-full.py` 等）直接通过 `os.environ` 读取
-- Node 脚本通过 `loadEnvFile()` 二次兜底（仅补未设置的变量）
+- Node 脚本通过 `config.js` 与 `loadEnvFile()` 读取项目根 `.env` 并写入当前进程环境
 
 ### 6.2 环境变量清单
 
@@ -25,6 +25,9 @@ set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
 | `PAPER_ANALYZER_API_KEY` | LLM API Key | **必填** |
 | `PAPER_ANALYZER_ENDPOINT` | LLM API 基路径（如 `/v1`、`/coding/v1`、`/anthropic`，脚本自动拼接最终请求路径） | **必填** |
 | `PAPER_ANALYZER_MODEL` | LLM 模型名 | **必填** |
+| `PAPER_ANALYZER_SECONDARY_MODEL` | 副模型名；设置后启用图像补充 | 可选 |
+| `PAPER_ANALYZER_SECONDARY_ENDPOINT` | 副模型 API 基路径；未设置时复用主模型 endpoint | 可选 |
+| `PAPER_ANALYZER_SECONDARY_API_KEY` | 副模型 API Key；未设置时复用主模型 key | 可选 |
 | `PD_ANALYSIS_CONCURRENCY` | 深度分析并发度 | 3 |
 | `PD_ANALYSIS_MAX_RETRIES` | 深度分析单篇重试次数 | 2 |
 | `PD_REANALYZE_CONCURRENCY` | 重分析并发度 | 3（与 `ANALYSIS_CONFIG.concurrency` 一致） |
@@ -153,24 +156,23 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 - **Node.js** ≥ 18.0.0（`node` / `npm`）
 - **Python** 3.x（`python3` / `pip3`）
 - Node.js 依赖：`cheerio`（arXiv HTML 结构化解析）
-- Python 第三方库：`requests`（仅 `backfill_papers.py` 使用）
+- Python 第三方库：见根目录 `requirements.txt`（`python-dotenv`、`requests`、`playwright`）
 
 ### 9.2 初始化
 
 ```bash
-cd ~/.hermes/skills/openclaw-imports/audio-paper-digest
+cd /path/to/audio-paper-digest
 
 # 安装 Node.js 依赖
 npm install
 
 # 安装 Python 依赖（如有需要）
-pip3 install requests
+pip3 install -r requirements.txt
 
 # 创建必要目录
 mkdir -p data/current data/archive logs
 
 # 配置 API Key
-mkdir -p ~/.hermes
 cat >> 项目根目录的 `.env` 文件 << 'EOF'
 PAPER_ANALYZER_API_KEY=your-llm-key
 PAPER_ANALYZER_MODEL=your-llm-model

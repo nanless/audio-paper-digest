@@ -76,7 +76,7 @@ set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
 这意味着：
 - shell 启动时自动注入所有变量
 - Python 脚本直接通过 `os.environ` 读取
-- Node 脚本通过 `loadEnvFile()` 二次兜底（仅补未设置的变量）
+- Node 脚本通过 `config.js` 与 `loadEnvFile()` 读取项目根 `.env` 并写入当前进程环境
 
 ### 4.2 筛选阶段（`fetch-papers.js`）
 
@@ -233,7 +233,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 ## 5. 常用命令（当前可用）
 
 ```bash
-cd ~/.hermes/skills/openclaw-imports/audio-paper-digest
+cd /path/to/audio-paper-digest
 
 # 全流程（抓取 + 筛选 + 深度分析）
 npm run fetch
@@ -311,12 +311,13 @@ npm run xiaohongshu -- --date 2026-04-22
 
 - 默认读 `data/current/deep-analysis-result.json`
 - **按 `fetchedAt` 日期过滤**：只发布 `fetchedAt` 匹配 `--date` 指定日期的论文（默认今天），避免历史数据被重复发布
+- 微信公众号和飞书同样默认按 `fetchedAt` 日期过滤；如需发布输入文件全部论文，显式传 `--all`
 - 在 `~/code/github_repos/audio-paper-digest-blog/content/posts` 生成：
   - 汇总页：`YYYY-MM-DD.md`
   - 单篇页：`YYYY-MM-DD-<slug>.md`
 - 默认只生成 `.md` 文件并执行 review，不推送
 - 只有显式传 `--push` 时才执行 `git add -A`、`git commit`、`git push origin main`
-- 若需发布全部论文（不过滤），可手动修改脚本或使用自定义数据文件
+- 若需发布全部论文（不过滤），显式传 `--all`
 
 Agent 执行约束：
 
@@ -416,7 +417,7 @@ PY
 18. **修改 API 协议路由逻辑时同步全链路**：修改 `detectApiType()` 的判定规则或 `buildApiUrl()`/`buildHeaders()` 等函数时，必须同步检查 `fetch-papers.js`、`deep-analyzer.js` 以及所有使用 `analysis-engine.js` 的脚本（`full-fetch.js`、`reanalyze.js`、`batch-analyze.js`、`deep-analysis-only.js`、`analyze-single-paper.js`），确保全链路行为一致。
 19. **禁止将敏感文件提交到版本控制**：`data/`、`logs/`、`*.env`、`*.backup*`、缓存文件、含密钥的日志归档等严禁进入 git；提交前必须确认 `.gitignore` 已正确配置，且仓库中不存在历史遗留的敏感文件。
 20. **CI 清单同步**：新增或改名 JS/Python 入口脚本时，同步更新 `.github/workflows/ci.yml` 的 `node -c` / `py_compile` 清单，避免关键脚本语法错误绕过 CI。
-21. **运行数据使用北京时间**：写入 `timestamp` / `lastUpdated` / `fetchedAt` 时使用 `getBeijingISOString()`；Python 发布侧使用 `now_bj_iso()` / `now_bj_date()`，避免 UTC 日期造成跨天归档或发布筛选错误。
+21. **运行数据使用北京时间**：写入 `timestamp` / `lastUpdated` / `fetchedAt` 时使用 `getBeijingISOString()`；Python 发布侧使用北京时间 helper（如 `get_today_bj()`），避免 UTC 日期造成跨天归档或发布筛选错误。
 
 ---
 
@@ -465,7 +466,7 @@ PY
 ```javascript
 const options = {
     hostname: url.hostname,
-    path: url.pathname,
+    path: url.pathname + url.search,
     method: 'POST',
     headers: headers,
     agent: false,  // ← 必须是 false，undefined 无效

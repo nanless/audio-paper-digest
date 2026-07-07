@@ -297,7 +297,7 @@ function mergeAndDeduplicate(arxivPapers, hfPapers) {
 
     // 先添加 arxiv 论文（优先级更高）
     for (const paper of arxivPapers) {
-        const id = paper.paper_id || paper.arxivId;
+        const id = normalizedId(paper);
         if (id) {
             merged.set(id, { ...paper, sources: ['arxiv'] });
         }
@@ -305,7 +305,7 @@ function mergeAndDeduplicate(arxivPapers, hfPapers) {
 
     // 再添加 HuggingFace 论文
     for (const paper of hfPapers) {
-        const id = paper.paper_id || paper.arxivId;
+        const id = normalizedId(paper);
         if (!id) continue;
 
         if (merged.has(id)) {

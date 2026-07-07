@@ -42,6 +42,13 @@ const CURRENT_DIR = path.join(DATA_DIR, 'current');
 const ARCHIVE_DIR = path.join(DATA_DIR, 'archive');
 const LOGS_DIR = path.join(PROJECT_ROOT, 'logs');
 
+function expandHome(p) {
+    if (!p) return p;
+    if (p === '~') return require('os').homedir();
+    if (p.startsWith('~/')) return path.join(require('os').homedir(), p.slice(2));
+    return p;
+}
+
 // ═══════════════════════════════════════════════════════
 // arXiv 抓取配置
 // ═══════════════════════════════════════════════════════
@@ -151,10 +158,14 @@ const ARCHIVE_CONFIG = {
 // 发布配置
 // ═══════════════════════════════════════════════════════
 
+const BLOG_REPO = expandHome(
+    process.env.PAPER_DIGEST_BLOG_REPO || path.join(require('os').homedir(), 'code/github_repos/audio-paper-digest-blog')
+);
+
 const PUBLISH_CONFIG = {
-    blogRepo: path.join(require('os').homedir(), 'code/github_repos/audio-paper-digest-blog'),
-    contentDir: path.join(require('os').homedir(), 'code/github_repos/audio-paper-digest-blog/content/posts'),
-    basePath: '/audio-paper-digest-blog',
+    blogRepo: BLOG_REPO,
+    contentDir: path.join(BLOG_REPO, 'content', 'posts'),
+    basePath: process.env.PAPER_DIGEST_BLOG_BASE_PATH || '/audio-paper-digest-blog',
     wechatImageCache: '/tmp/wechat-image-cache.json',
     wechatMaxChars: 48000
 };

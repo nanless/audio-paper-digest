@@ -116,6 +116,8 @@ npm run publish -- --push --date 2026-04-21
 npm run wechat
 # Generate WeChat preview only, without calling WeChat APIs
 python3 scripts/publish-wechat-full.py --dry-run
+# Publish all papers from the input file to WeChat drafts
+python3 scripts/publish-wechat-full.py --all
 
 # Generate Xiaohongshu copy
 npm run xiaohongshu
@@ -130,6 +132,8 @@ python3 scripts/publish-to-feishu.py
 python3 scripts/publish-to-feishu.py --date 2026-04-21
 # Preview Feishu document size only, without creating a document
 python3 scripts/publish-to-feishu.py --dry-run --date 2026-04-21
+# Publish all papers from the input file to Feishu
+python3 scripts/publish-to-feishu.py --all
 ```
 
 ### Direct Invocation
@@ -172,6 +176,7 @@ python3 scripts/publish-to-blog.py --push --date 2026-04-21
 
 # Publish with custom data
 python3 scripts/publish-to-blog.py --date 2026-04-21 data/current/deep-analysis-result.json
+python3 scripts/publish-to-blog.py --all data/current/deep-analysis-result.json
 
 # Generate WeChat Official Account draft
 python3 scripts/publish-wechat-full.py
@@ -179,6 +184,7 @@ python3 scripts/publish-wechat-full.py --dry-run
 
 # Generate WeChat draft with custom data
 python3 scripts/publish-wechat-full.py data/current/deep-analysis-result.json
+python3 scripts/publish-wechat-full.py --all data/current/deep-analysis-result.json
 
 # Generate Xiaohongshu copy (default TOP 5)
 python3 scripts/publish-xiaohongshu.py
@@ -194,6 +200,7 @@ python3 scripts/xiaohongshu-publisher.py --all
 python3 scripts/publish-to-feishu.py
 python3 scripts/publish-to-feishu.py --date 2026-04-21
 python3 scripts/publish-to-feishu.py --dry-run --date 2026-04-21
+python3 scripts/publish-to-feishu.py --all
 
 # ========== Utilities ==========
 # Backfill paper IDs (no analysis)

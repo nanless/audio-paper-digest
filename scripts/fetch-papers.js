@@ -122,7 +122,7 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
 
         const options = {
             hostname: url.hostname,
-            path: url.pathname,
+            path: url.pathname + url.search,
             method: 'POST',
             headers: requestHeaders,
             timeout: FILTER_CFG.timeoutMs,
@@ -462,7 +462,7 @@ function parseRecentPageHTML(html, categoryId, existingIds = null) {
     let newCount = 0, dupCount = 0;
     for (let i = 0; i < ids.length; i++) {
         const arxivId = ids[i];
-        if (existingIds && existingIds.has(arxivId)) {
+        if (existingIds && existingIds.has(normalizedId(arxivId))) {
             dupCount++;
             continue;
         }

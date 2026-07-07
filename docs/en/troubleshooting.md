@@ -77,7 +77,7 @@ Possible causes:
 ```javascript
 const options = {
     hostname: url.hostname,
-    path: url.pathname,
+    path: url.pathname + url.search,
     method: 'POST',
     headers: headers,
     agent: false,  // ← must be false; undefined is not enough
