@@ -4,6 +4,7 @@ const assert = require('node:assert');
 const {
     parseFilterDecision,
     filterPapersByKeywords,
+    parseRecentPageHTML,
     parseSearchPageHTML,
     parseArxivXML
 } = require('../scripts/fetch-papers.js');
@@ -43,6 +44,33 @@ describe('filterPapersByKeywords', () => {
 });
 
 describe('arXiv parsers', () => {
+    it('recent 页按 dt/dd 条目绑定 ID、标题和作者，避免跨数组错配', () => {
+        const html = `
+        <dl>
+          <dt>
+            <a href="/abs/2604.00001">abs</a>
+            <a href="/pdf/2604.00001">pdf</a>
+          </dt>
+          <dd>
+            <div class="list-title mathjax"><span class="descriptor">Title:</span> First Speech Paper</div>
+            <div class="list-authors"><span class="descriptor">Authors:</span> <a>Alice</a></div>
+          </dd>
+          <dt>
+            <a href="/abs/2604.00002">abs</a>
+          </dt>
+          <dd>
+            <div class="list-title mathjax"><span class="descriptor">Title:</span> Second Audio Paper</div>
+            <div class="list-authors"><span class="descriptor">Authors:</span> <a>Bob</a><a>Carol</a></div>
+          </dd>
+        </dl>`;
+        const papers = parseRecentPageHTML(html, 'cs.SD', new Set(['2604.00001']));
+
+        assert.strictEqual(papers.length, 1);
+        assert.strictEqual(papers[0].arxivId, '2604.00002');
+        assert.strictEqual(papers[0].title, 'Second Audio Paper');
+        assert.deepStrictEqual(papers[0].authors, ['Bob', 'Carol']);
+    });
+
     it('搜索页解析会暴露总数和已跳过数，便于全重复页继续翻页', () => {
         const html = `
         <li class="arxiv-result">

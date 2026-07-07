@@ -1,7 +1,11 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 
-const { mergeAndDeduplicate } = require('../scripts/fetch-huggingface-papers.js');
+const {
+    mergeAndDeduplicate,
+    convertDailyPaper,
+    convertPaper
+} = require('../scripts/fetch-huggingface-papers.js');
 
 describe('mergeAndDeduplicate', () => {
     it('按 normalizedId 合并 arXiv 与 HuggingFace 版本号差异', () => {
@@ -33,5 +37,27 @@ describe('mergeAndDeduplicate', () => {
         assert.strictEqual(merged[0].paper_id, '2604.12345v1');
         assert.strictEqual(merged[0].summary, 'HF summary');
         assert.strictEqual(merged[0].hf_upvotes, 12);
+    });
+});
+
+describe('HuggingFace date guards', () => {
+    it('缺少 publishedAt 的 daily paper 会被跳过', () => {
+        const paper = convertDailyPaper({
+            paper: {
+                id: '2604.10000',
+                title: 'No date',
+                authors: []
+            }
+        });
+        assert.strictEqual(paper, null);
+    });
+
+    it('缺少 publishedAt 的 papers API 记录会被跳过', () => {
+        const paper = convertPaper({
+            id: '2604.10001',
+            title: 'No date',
+            authors: []
+        });
+        assert.strictEqual(paper, null);
     });
 });

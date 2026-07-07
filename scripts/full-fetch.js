@@ -28,6 +28,23 @@ const FILTERED_FILE = Config.FILES.filteredPapers;
 const PAPERS_FILE = Config.FILES.papers;
 const ANALYZED_FILE = Config.FILES.analyzed;
 
+function shouldUsePaperForFetchDedup(paper) {
+    const status = paper?.digestStatus?.status;
+    return status !== 'pending_analysis' && status !== 'analysis_failed';
+}
+
+function markPaperDigestStatus(paper, status, extra = {}) {
+    return {
+        ...paper,
+        digestStatus: {
+            ...(paper.digestStatus || {}),
+            status,
+            updatedAt: getBeijingISOString(),
+            ...extra
+        }
+    };
+}
+
 function autoArchiveCurrentData() {
     const today = getBeijingDateString();
     const targets = [RESULT_FILE, FILTERED_FILE, ANALYZED_FILE];
@@ -175,7 +192,10 @@ async function fullFetch() {
     const categories = Config.ARXIV_CATEGORIES;
 
     const papersData = loadPapers();
-    const existingIds = new Set(Object.keys(papersData.papers).map(id => normalizedId(id)));
+    const existingIds = new Set(Object.entries(papersData.papers)
+        .filter(([, paper]) => shouldUsePaperForFetchDedup(paper))
+        .map(([id]) => normalizedId(id))
+        .filter(Boolean));
     console.log(`已有 ${existingIds.size} 篇论文ID（已规范化），遇到重复将跳过\n`);
 
     // 加载博客已发布论文 ID，加入去重集合
@@ -330,17 +350,27 @@ async function fullFetch() {
     // ========== 第4.8步：保存所有爬到论文到 papers.json（提前保存，防止后续中断丢失）==========
     console.log('\n💾 保存所有爬取论文到 papers.json 去重数据库');
     let newPaperCount = 0;
+    let pendingPaperCount = 0;
+    const filteredNewIds = new Set(filteredNew.map(paper => normalizedId(paper)).filter(Boolean));
     for (const paper of allPapers) {
         const rawId = paper.paper_id || paper.arxivId;
         const normId = normalizedId(rawId);
-        if (normId && !papersData.papers[normId]) {
-            papersData.papers[normId] = paper;
+        if (!normId) continue;
+        const status = filteredNewIds.has(normId) ? 'pending_analysis' : 'seen';
+        const nextPaper = markPaperDigestStatus(
+            { ...(papersData.papers[normId] || {}), ...paper },
+            status,
+            { batchDate: today }
+        );
+        if (!papersData.papers[normId]) {
             newPaperCount++;
         }
+        if (status === 'pending_analysis') pendingPaperCount++;
+        papersData.papers[normId] = nextPaper;
     }
     try {
         savePapers(papersData);
-        console.log(`  新增 ${newPaperCount} 篇论文ID到数据库，累计 ${Object.keys(papersData.papers).length} 篇`);
+        console.log(`  新增 ${newPaperCount} 篇论文ID到数据库，待分析 ${pendingPaperCount} 篇，累计 ${Object.keys(papersData.papers).length} 篇`);
     } catch (e) {
         console.error(`  ❌ 保存 papers.json 失败: ${e.message}`);
     }
@@ -501,6 +531,27 @@ async function fullFetch() {
     } catch (e) {
         console.error(`\n❌ 保存结果失败: ${e.message}`);
         throw e;
+    }
+
+    let statusUpdated = 0;
+    for (const paper of analyzedPapers) {
+        const key = normalizedId(paper);
+        if (!key) continue;
+        const status = paper.analysis ? 'analyzed' : 'analysis_failed';
+        papersData.papers[key] = markPaperDigestStatus(
+            { ...(papersData.papers[key] || {}), ...paper },
+            status,
+            { batchDate: today, error: paper.error || null }
+        );
+        statusUpdated++;
+    }
+    if (statusUpdated > 0) {
+        try {
+            savePapers(papersData);
+            console.log(`  已更新 papers.json 分析状态: ${statusUpdated} 篇`);
+        } catch (e) {
+            console.error(`  ⚠️ 更新 papers.json 分析状态失败: ${e.message}`);
+        }
     }
 
     console.log(`\n✅ 分析完成！`);

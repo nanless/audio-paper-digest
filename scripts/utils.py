@@ -293,12 +293,6 @@ def parse_analysis(analysis):
     m = re.search(r'##\s*评分\s*\n\s*\*?(\d+\.?\d*)\*?', analysis)
     r['score'] = m.group(1) if m else ''
 
-    # 如果未匹配到 ## 评分，从机器摘要的 innovation 获取（作为回退）
-    if not r['score']:
-        ms = parse_machine_summary(analysis)
-        if ms.get('innovation'):
-            r['score'] = ms['innovation']
-
     # 先尝试从 ## 标签 部分提取"主任务标签"和"主方法标签"行
     extracted_task_tag = ''
     extracted_method_tag = ''
@@ -318,7 +312,7 @@ def parse_analysis(analysis):
         # 先尝试匹配带 # 前缀的标签
         hash_tags = re.findall(r'#\S+', raw)
         if hash_tags:
-            r['tags'] = hash_tags
+            r['tags'] = [t for t in (_normalize_tag(tag) for tag in hash_tags) if not _is_bad_task_tag(t)]
         else:
             # 没有 # 前缀时，按分隔符拆分并自动添加 # 前缀
             parts = re.split(r'[,，;；、\s]+', raw)
@@ -326,7 +320,9 @@ def parse_analysis(analysis):
             for p in parts:
                 trimmed = p.strip().strip('`').strip()
                 if trimmed:
-                    r['tags'].append('#' + trimmed)
+                    tag = _normalize_tag(trimmed)
+                    if not _is_bad_task_tag(tag):
+                        r['tags'].append(tag)
     else:
         r['tags'] = []
 

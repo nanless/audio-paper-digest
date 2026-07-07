@@ -17,12 +17,20 @@ Paper deduplication database. **This file is not archived; it accumulates contin
       "published": "2026-04-20T00:00:00+08:00",
       "categories": ["cs.SD", "eess.AS"],
       "fetchedFrom": "eess.AS",
-      "fetchedAt": "2026-04-21T10:00:00+08:00"
+      "fetchedAt": "2026-04-21T10:00:00+08:00",
+      "digestStatus": {
+        "status": "seen | pending_analysis | analyzed | analysis_failed",
+        "batchDate": "2026-04-21",
+        "updatedAt": "2026-04-21T10:00:00+08:00",
+        "error": null
+      }
     }
   },
   "lastUpdated": "2026-04-21T10:00:00+08:00"
 }
 ```
+
+`pending_analysis` and `analysis_failed` are not used for strong deduplication in the next `full-fetch`, so interrupted or failed analyses can naturally re-enter the pipeline. Successful analysis updates the status to `analyzed`.
 
 ### 5.2 `data/current/filtered-papers.json`
 

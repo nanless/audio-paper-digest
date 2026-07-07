@@ -14,7 +14,7 @@ If this file is ever wired into runtime, the code would need to replace placehol
 
 ## Prompt Content
 
-```
+````
 Please perform an in-depth analysis of the following paper from the perspective of a top-tier conference reviewer (NeurIPS / ICML / ICLR style). {hasFullText}
 
 Paper Title: {title}
@@ -72,7 +72,7 @@ has_dataset: 是 / 否 / 未说明
 1. First determine the paper's relative position among contemporaneous work in the same direction; choose only from 前10% / 前25% / 前50% / 后50%. 前10% corresponds to breakthrough work; 前25% to clearly excellent work; 前50% to acceptable-to-good work; 后50% to work with notable issues.
 2. Dimension maxima: Innovation (0–2) + Technical Rigor (0–1.5) + Experimental Thoroughness (0–1.5) + Clarity (0–1) + Impact (0–1.5) + Open Source (0–1.5) + Reproducibility (0–0.5) + Engineering/Practical Value (0–1.5) = 11. Total score = sum of all dimensions, capped at 10 (anything above 10 is counted as 10), rounded to 0.1.
 3. Scores must be discriminative but not artificially suppressed. Scores ≥ 9.0 are reserved for truly milestone-potential work; 8.0–8.5 for solid contributions on important problems with clear impact; most solid but non-breakthrough papers should fall in 6.0–7.5. Do not lower the innovation score of engineering papers simply because they "combine existing techniques" — what matters is whether the combination yields new insight, solves a real important problem, and brings verifiable significant improvement.
-4. rank_bucket must be consistent with the total score: total ≥ 9.0 must be 前10%; total 8.0–8.5 must be 前25%; total 6.5–7.5 should be 前50% or 前25% (depending on specific quality); total < 6.0 is generally 后50%.
+4. rank_bucket must be consistent with the final score recalculated from the eight sub-scores: total ≥ 9.0 → 前10%; total ≥ 7.5 and < 9.0 → 前25%; total ≥ 5.5 and < 7.5 → 前50%; total < 5.5 → 后50%.
 5. Do not reject paper quality simply because the task is niche. Niche, vertical, special-population, pathological speech, animal sounds, etc., should be scored normally on "innovation" and "technical rigor" — as long as the problem is well defined and the method has substantive breakthrough, the innovation score must not be suppressed due to narrow audience; however, "impact" must be scored low (typically ≤ 0.5), because such work naturally has limited broad domain-driving effect and follow-up value. Experimental thoroughness may be moderately reduced only for aspects related to dataset generality.
 6. If the paper lacks key experiments, comparisons are insufficient, or conclusions are jumpy, deduct significantly in "experimental thoroughness"; if reproduction information is vague or training details are missing, deduct in "reproducibility"; if only a GitHub link is given with no README or documentation, deduct in "open source".
 7. If the paper is poorly written, symbols are inconsistent, or key details are missing making reproduction impossible, deduct in "clarity".
@@ -86,8 +86,7 @@ has_dataset: 是 / 否 / 未说明
 - Clarity (0–1): Organization, symbol definitions, formula explanations, figure quality. Can a reader understand the core method and reproduce it without reading source code? Deduct for poor writing or missing key details.
 - Impact (0–1.5): Domain-driving effect, potential follow-up value, practical application potential, relevance to audio/speech readers. When scoring, consider the following factors:
   - **Research成果 itself**: achieving SOTA on important benchmarks, releasing large-scale datasets/tools, solving long-standing practical problems in the domain
-  - **Institutional impact**: Papers from top research institutions (such as Google DeepMind, Meta FAIR, OpenAI, Microsoft Research, Apple, NVIDIA, ByteDance, Tencent, Alibaba, Baidu, Huawei, etc.) typically have stronger impact and follow-up potential, and should receive适当 higher scores
-  - **Author impact**: If the authors are well-known researchers in the field (e.g., have published multiple highly-cited papers, are recognized experts in the domain), their work is typically more值得关注 and should receive适当 higher scores
+  - **Boundary for author/institution information**: Only use facts explicitly provided by the paper text, such as author list, affiliations, released resources, system deployment, data scale, or benchmark coverage, as background. Do not add points based on external memory, author fame, institution fame, or stereotypes about organizations.
   - Narrowly applicable minor improvements or non-audio-core work can only receive low scores
 - Open Source (0–1.5): Is the paper's core content publicly available? **Note: Different papers have different core content** — model papers' core is code + model weights, dataset papers' core is the dataset, tool papers' core is the code repository, theory papers' core is proof materials or experiment code. Scoring rules:
   - **1.5**: Core content is open-sourced (including cases where links are provided indirectly through demo pages) with complete documentation
@@ -326,7 +325,7 @@ Please summarize open-source status based only on information in the paper or li
 - If the paper does not mention it, explicitly state "论文中未提及开源计划"
 
 **Important: output the analysis content directly as requested; do not write any preface, greeting, or confirmation statements (e.g., "好的", "我将", "以下是", "请审阅", etc.), and do not restate task requirements. Output must start from `## 评分`.**
-```
+````
 
 ## Output Format Notes
 This prompt requires the model to output in a strictly fixed structure, containing the following level-1 headings (do not add or remove):

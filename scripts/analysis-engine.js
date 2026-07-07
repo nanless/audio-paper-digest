@@ -35,7 +35,8 @@ async function analyzePaperWithRetry(paper, options = {}) {
         maxRetries = DEFAULT_MAX_RETRIES,
         retryDelayMs = DEFAULT_RETRY_DELAY_MS,
         onAttempt = null,
-        onRetry = null
+        onRetry = null,
+        analyzeFn = null
     } = options;
 
     let lastError = null;
@@ -46,11 +47,20 @@ async function analyzePaperWithRetry(paper, options = {}) {
         }
 
         try {
-            const { analyzePaperDeep } = require('./deep-analyzer.js');
+            const analyzePaperDeep = analyzeFn || require('./deep-analyzer.js').analyzePaperDeep;
             const analyzed = await analyzePaperDeep(paper);
 
             if (analyzed && analyzed.analysis) {
                 const parsed = parseAnalysis(analyzed.analysis);
+                const invalidReason = getInvalidAnalysisReason(analyzed.analysis, parsed);
+                if (invalidReason) {
+                    lastError = invalidReason;
+                    if (attempt < maxRetries) {
+                        if (onRetry) onRetry(attempt + 1, new Error(invalidReason), paper);
+                        await sleep(retryDelayMs);
+                    }
+                    continue;
+                }
                 return {
                     success: true,
                     result: {
@@ -96,6 +106,26 @@ async function analyzePaperWithRetry(paper, options = {}) {
             error: lastError || '分析失败'
         }
     };
+}
+
+function hasRequiredSections(text) {
+    const required = [
+        '评分', '机器摘要', '标签', '作者与机构', '毒舌点评', '核心摘要',
+        '方法概述和架构', '核心创新点', '实验结果', '细节详述',
+        '评分理由', '局限与问题', '开源详情'
+    ];
+    return required.every(title => new RegExp(`(^|\\n)#{2,3}\\s*${escapeRegExp(title)}[：:\\s]*\\n`, 'm').test(text));
+}
+
+function getInvalidAnalysisReason(analysis, parsed) {
+    if (!hasRequiredSections(analysis)) return '分析结果缺少必要章节';
+    if (!parsed) return '分析结果无法解析';
+    if (!parsed.score) return '分析结果缺少有效评分';
+    if (!parsed.scoringReason || parsed.scoringReason.trim().length < 20) return '分析结果缺少有效评分理由';
+    if (!parsed.summary || parsed.summary.trim().length < 20) return '分析结果缺少有效核心摘要';
+    if (!parsed.architecture || parsed.architecture.trim().length < 20) return '分析结果缺少有效方法概述';
+    if (!parsed.results || parsed.results.trim().length < 10) return '分析结果缺少有效实验结果';
+    return null;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -352,10 +382,16 @@ function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
 }
 
+function escapeRegExp(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 module.exports = {
     analyzePaperWithRetry,
     analyzeBatch,
     mergeAndSaveResults,
+    getInvalidAnalysisReason,
+    hasRequiredSections,
     DEFAULT_MAX_RETRIES,
     DEFAULT_RETRY_DELAY_MS,
     DEFAULT_CONCURRENCY

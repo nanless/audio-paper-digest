@@ -192,7 +192,7 @@ Multimodal deep analyzer. The analysis flow is a **6-round progressive process**
 - If tables are found to be omitted or truncated, triggers LLM supplementation of the complete table
 
 **Round 5 -- Method Section Fix (`checkAndFixMethodSection`)**
-- Detects if `## Method Overview and Architecture` is too brief (fewer than 300 Chinese characters, vague expression, fewer than 3 paragraphs)
+- Detects if `## Method Overview and Architecture` is too brief (fewer than 600 Chinese characters, vague expression, fewer than 3 paragraphs)
 - If conditions are met, triggers LLM expansion to a 600+ character detailed description
 
 **Round 6 -- Image Selection and Supplement (`applyImageSupplement`, dual-model mode)**

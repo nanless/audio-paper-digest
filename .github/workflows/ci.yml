@@ -30,42 +30,15 @@ jobs:
 
       - name: Check JavaScript syntax
         run: |
-          node -c scripts/utils.js
-          node -c scripts/config.js
-          node -c scripts/log-setup.js
-          node -c scripts/analysis-engine.js
-          node -c scripts/full-fetch.js
-          node -c scripts/fetch-papers.js
-          node -c scripts/fetch-huggingface-papers.js
-          node -c scripts/deep-analyzer.js
-          node -c scripts/deep-analysis-only.js
-          node -c scripts/batch-analyze.js
-          node -c scripts/reanalyze.js
-          node -c scripts/reanalyze-selected.js
-          node -c scripts/refilter-reanalyze-by-date.js
-          node -c scripts/analyze-single-paper.js
-          node -c scripts/quick-test.js
-          node -c scripts/test-api-key.js
-          node -c scripts/validate-scores.js
-          node -c tests/utils.test.js
-          node -c tests/config.test.js
-          node -c tests/analysis-engine.test.js
-          node -c tests/fetch-huggingface-papers.test.js
-          node -c tests/deep-analyzer.test.js
-          node -c tests/fetch-papers.test.js
+          find scripts tests -name '*.js' -print0 | while IFS= read -r -d '' file; do
+            node -c "$file"
+          done
 
       - name: Check Python syntax
         run: |
-          PYTHONPYCACHEPREFIX=/tmp/audio-paper-digest-pycache python3 -m py_compile \
-            scripts/publish_common.py \
-            scripts/utils.py \
-            scripts/publish-to-blog.py \
-            scripts/publish-wechat-full.py \
-            scripts/publish-xiaohongshu.py \
-            scripts/publish-to-feishu.py \
-            scripts/backfill_papers.py \
-            scripts/xiaohongshu-publisher.py \
-            scripts/log_setup.py
+          find scripts -name '*.py' -print0 | while IFS= read -r -d '' file; do
+            PYTHONPYCACHEPREFIX=/tmp/audio-paper-digest-pycache python3 -m py_compile "$file"
+          done
 
       - name: Check shell syntax
         run: |

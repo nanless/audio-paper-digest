@@ -409,6 +409,37 @@ function buildApiUrl(apiType, endpoint) {
  * OpenAI: {model, messages, max_tokens, temperature}
  * Anthropic: {model, messages, max_tokens, system?} (system 是顶级字段)
  */
+function normalizeAnthropicContent(content) {
+    if (!Array.isArray(content)) return content;
+    return content.map(block => {
+        if (!block || typeof block !== 'object') return block;
+        if (block.type !== 'image_url') return block;
+
+        const imageUrl = block.image_url?.url || block.url || '';
+        const dataMatch = imageUrl.match(/^data:([^;,]+);base64,(.+)$/);
+        if (dataMatch) {
+            return {
+                type: 'image',
+                source: {
+                    type: 'base64',
+                    media_type: dataMatch[1],
+                    data: dataMatch[2]
+                }
+            };
+        }
+        if (imageUrl) {
+            return {
+                type: 'image',
+                source: {
+                    type: 'url',
+                    url: imageUrl
+                }
+            };
+        }
+        return block;
+    });
+}
+
 function buildRequestBody(apiType, model, messages, maxTokens, temperature) {
     if (apiType === 'anthropic') {
         // Anthropic: system 必须是顶级字段，不能在 messages 中
@@ -418,7 +449,10 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature) {
             if (msg.role === 'system') {
                 system = msg.content;
             } else {
-                anthropicMessages.push(msg);
+                anthropicMessages.push({
+                    ...msg,
+                    content: normalizeAnthropicContent(msg.content)
+                });
             }
         }
         const body = { model, max_tokens: maxTokens, messages: anthropicMessages };
@@ -1151,13 +1185,24 @@ function loadPublishedIdsFromBlog(blogRepo) {
     }
 
     try {
-        const files = fs.readdirSync(postsDir).filter(f => f.endsWith('.md'));
+        const files = [];
+        const walk = (dir) => {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                const fullPath = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    walk(fullPath);
+                } else if (entry.isFile() && entry.name.endsWith('.md')) {
+                    files.push(fullPath);
+                }
+            }
+        };
+        walk(postsDir);
         // 匹配 arxiv 链接：[arxiv](https://arxiv.org/abs/XXXX.XXXXX) 或纯 URL
         const arxivUrlRegex = /arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})(?:v\d+)?/g;
 
         for (const file of files) {
             try {
-                const content = fs.readFileSync(path.join(postsDir, file), 'utf8');
+                const content = fs.readFileSync(file, 'utf8');
                 let match;
                 while ((match = arxivUrlRegex.exec(content)) !== null) {
                     publishedIds.add(normalizedId(match[1]));
@@ -1181,7 +1226,7 @@ function loadPublishedIdsFromBlog(blogRepo) {
 
 /**
  * 从 markdown 文件加载 prompt
- * 读取文件后，提取第一个 ``` 代码块内的内容，并替换占位符
+ * 读取文件后，提取第一个 fenced code block 内的内容，并替换占位符
  * @param {string} mdPath - markdown 文件路径（相对项目根目录或绝对路径）
  * @param {Object} vars - 占位符替换映射，如 { title: '...', abstract: '...' }
  * @returns {string} 处理后的 prompt 文本
@@ -1201,13 +1246,13 @@ function loadPrompt(mdPath, vars = {}) {
 
     const content = fs.readFileSync(fullPath, 'utf8');
 
-    // 提取第一个 ``` 或 ~~~ 代码块内的内容（兼容 CRLF）
-    const blockMatch = content.match(/```(?:text)?\r?\n([\s\S]*?)\r?\n```|~~~\r?\n([\s\S]*?)\r?\n~~~/);
+    // 提取第一个 fenced code block 内的内容（兼容 CRLF 和更长 fence）
+    const blockMatch = content.match(/^(`{3,}|~{3,})(?:text)?\r?\n([\s\S]*?)\r?\n\1/m);
     if (!blockMatch) {
-        throw new Error(`Prompt 文件 ${mdPath} 中未找到 \`\`\` 或 ~~~ 代码块`);
+        throw new Error(`Prompt 文件 ${mdPath} 中未找到 fenced code block`);
     }
 
-    let prompt = blockMatch[1] || blockMatch[2];
+    let prompt = blockMatch[2];
 
     // 替换占位符 {key} → value（对 key 做正则转义，防止注入；使用回调避免 $ 特殊含义）
     for (const [key, value] of Object.entries(vars)) {

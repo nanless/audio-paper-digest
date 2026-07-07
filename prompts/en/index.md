@@ -17,6 +17,12 @@ This directory contains all LLM prompts for the audio-paper-digest skill, separa
 
 Template placeholders in each prompt are denoted by `{variableName}`; the code injects actual values via string replacement after reading the file. See the "Invocation" section in each document for specific placeholders.
 
+## Loading Rules
+
+- `loadPrompt()` reads only the first fenced code block in the markdown file as the runtime prompt.
+- If the prompt body itself needs to show code fences, the outer fenced block must use a longer fence such as ```` or `~~~~`, otherwise the first inner ``` block will truncate the loaded prompt.
+- When adding a `{variableName}` placeholder, update the calling code and tests at the same time. Unreplaced placeholders currently produce warnings rather than automatically stopping the pipeline.
+
 ## Modification Suggestions
 
 - When adjusting the tag system, scoring criteria, or output format, simply edit the corresponding markdown file; no code changes are needed.

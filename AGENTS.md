@@ -4,7 +4,7 @@
 
 自动化"语音/音乐/音频论文速递"流水线：arXiv + HuggingFace 抓取 → LLM 筛选 → 多模态深度分析 → 发布到 Hugo 博客 / 微信公众号 / 小红书 / 飞书。
 
-**技术栈**：Node.js（核心流水线）+ Python（发布脚本）。要求 Node ≥ 18。`scripts/config.js` 集中管理所有可调参数（支持 `PD_*` 环境变量覆写）。
+**技术栈**：Node.js（核心流水线）+ Python（发布脚本）。要求 Node ≥ 18。`scripts/config.js` 集中管理主要可调参数（部分高频参数支持 `PD_*` 环境变量覆写）。
 
 详细执行规则见 `SKILL.md`，本文是紧凑版——只保留 Agent 不看代码就容易漏掉的要点。
 
@@ -45,7 +45,7 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 # 发布博客：python3 scripts/publish-to-blog.py --category icml-2026 --date YYYY-MM-DD data/current/icml_2026_deep_analysis.json
 ```
 
-未配置 linter、typecheck 或 formatter。CI 会运行 `npm test`、关键 JS 文件 `node -c` 语法检查、关键 Python 发布脚本 `py_compile` 语法检查。
+未配置 linter、typecheck 或 formatter。CI 会运行 `npm test`、所有 `scripts/` / `tests/` 下 JS 文件 `node -c` 语法检查、所有 `scripts/` 下 Python 文件 `py_compile` 语法检查。
 
 ## 环境配置
 
@@ -83,7 +83,7 @@ Node 脚本双层加载 `.env`：① `scripts/config.js` 模块级 IIFE 最先�
 | `scripts/deep-analyzer.js` | 单篇多模态深度分析（支持双模型模式：主模型做文本分析，副模型做图像补充；单模型模式向后兼容） |
 | `scripts/analysis-engine.js` | 批量分析协调器，提供 `analyzePaperWithRetry()` + `analyzeBatch()` |
 | `scripts/utils.js` | Node 端共用工具（API 路由、JSON 解析、prompt 加载、`normalizedId` 去重、代理检测、文件原子写入） |
-| `scripts/config.js` | 所有可调参数集中配置 + `PD_*` 环境变量覆写 |
+| `scripts/config.js` | 主要可调参数集中配置 + 部分 `PD_*` 环境变量覆写 |
 
 ### 发布脚本（Python）
 
@@ -109,7 +109,7 @@ prompts/                # LLM prompt 模板
   en/                   # 英文版 prompt（含 filter / deep-analysis / gap-fill / opensource-scan / index，不含 image-supplement）
 ```
 
-`papers.json` 同时支持 `data/current/papers.json` 和 `data/papers.json`（旧版路径），均被 `config.js` 引用。**`papers.json` 持久化去重数据库，永不归档**。`full-fetch.js` 每次运行自动备份 `papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天。
+`papers.json` 同时支持 `data/current/papers.json` 和 `data/papers.json`（旧版路径），均被 `config.js` 引用。**`papers.json` 持久化去重数据库，永不归档**。`full-fetch.js` 每次运行自动备份 `papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天。条目可带 `digestStatus.status`：`pending_analysis` / `analysis_failed` 不参与强去重，便于中断后重跑；成功后更新为 `analyzed`。
 
 ## 分支策略
 
@@ -121,11 +121,11 @@ prompts/                # LLM prompt 模板
 - **资料权威性**：文档与代码冲突时，以 `scripts/*` 当前实现为准。详尽的执行规则与安全约束见 `SKILL.md`。
 - **提交信息**：中文或语义化约定式提交（`feat:` / `fix:` / `docs:`）。
 - **测试框架**：Node.js 内置 `node:test`，非 Jest/Mocha。
-- **CI**：运行 `npm test` + 关键 JS 脚本 `node -c` 语法检查 + 关键 Python 发布脚本 `py_compile` 语法检查。**新增 JS/Python 入口脚本不会自动纳入 CI 语法检查**，需手动更新 `.github/workflows/ci.yml`。
+- **CI**：运行 `npm test` + `find scripts tests -name '*.js'` 的 `node -c` 语法检查 + `find scripts -name '*.py'` 的 `py_compile` 语法检查。新增 JS/Python 文件会自动纳入语法检查。
 - **新增分析脚本必须复用 `analysis-engine.js`**，使用 `analyzePaperWithRetry()` + `analyzeBatch()`，禁止重复实现重试/解析/保存逻辑。
 - **新增 LLM 调用必须通过 `utils.js` 的 `detectApiType()` / `buildApiUrl()` / `buildHeaders()` / `buildRequestBody()` / `parseResponseText()`**，禁止硬编码协议。
 - **环境变量加载**：Node 端 `loadEnvFile()` 自行解析 `.env` 无三方依赖；Python 端用 `python-dotenv`。
-- **`loadPrompt()` 从 markdown 文件内的 \`\`\` 代码块提取 prompt**，并替换 `{变量名}` 占位符。修改 prompt 后需验证 `utils.js` 解析逻辑兼容。
+- **`loadPrompt()` 从 markdown 文件内的第一个 fenced code block 提取 prompt**，并替换 `{变量名}` 占位符。内部示例代码块需使用比外层更短的 fence，修改 prompt 后需验证 `utils.js` 解析逻辑兼容。
 - **原子写入**：使用 `writeFileAtomic()` 保存数据文件，先写临时文件再 rename，防止写入中断损坏数据。
 - **北京时间时间戳**：运行数据中的 `timestamp` / `lastUpdated` / `fetchedAt` 应使用 `getBeijingISOString()` 或 Python 端 `now_bj_iso()`，避免 UTC 日期导致跨天归档或发布筛选错误。
 - **博客验证默认 `--skip-push`**，仅用户明确要求时才执行真实 `git push`。

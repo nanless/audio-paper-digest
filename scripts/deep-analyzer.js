@@ -129,6 +129,12 @@ async function _callModelOnce(messages, maxTokens, config, startTime, apiType) {
             agent: false
         });
         const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+            const apiError = response.body?.error;
+            const message = apiError?.message || apiError || response.raw.substring(0, 200);
+            console.log(`    [api] ✗ ${config.model} | HTTP ${response.statusCode} | ${duration}s | error: ${typeof message === 'string' ? message : JSON.stringify(message).substring(0, 200)}`);
+            throw new Error(`HTTP ${response.statusCode}: ${typeof message === 'string' ? message : JSON.stringify(message)}`);
+        }
         const content = parseResponseText(apiType, response.body);
         if (content !== null) {
             console.log(`    [api] ✓ ${config.model} | HTTP ${response.statusCode} | ${content.length} chars | ${duration}s`);
@@ -157,6 +163,16 @@ async function callModel(messages, maxTokens = 8000) {
 
 const cheerio = require('cheerio');
 
+function getArxivHtmlIds(arxivId) {
+    const id = String(arxivId || '').trim();
+    if (!id) return [];
+    if (/v\d+$/i.test(id)) {
+        const base = id.replace(/v\d+$/i, '');
+        return [id, base];
+    }
+    return [`${id}v1`, `${id}v2`, id];
+}
+
 /**
  * 从 arxiv HTML 获取全文文本（使用 cheerio 结构化解析）
  * 带重试机制，避免因并发限流偶发失败
@@ -164,8 +180,8 @@ const cheerio = require('cheerio');
 async function fetchArxivText(arxivId) {
     const maxRetries = 6;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        for (const suffix of ['v1', 'v2', '']) {
-            const url = `https://arxiv.org/html/${arxivId}${suffix}`;
+        for (const htmlId of getArxivHtmlIds(arxivId)) {
+            const url = `https://arxiv.org/html/${htmlId}`;
             try {
                 const response = await fetch(url, {
                     headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
@@ -271,8 +287,8 @@ async function fetchArxivText(arxivId) {
 async function fetchArxivImageUrls(arxivId) {
     const maxRetries = 6;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        for (const suffix of ['v1', 'v2', '']) {
-            const url = `https://arxiv.org/html/${arxivId}${suffix}`;
+        for (const htmlId of getArxivHtmlIds(arxivId)) {
+            const url = `https://arxiv.org/html/${htmlId}`;
             try {
                 const response = await fetch(url, {
                     headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
@@ -311,12 +327,12 @@ async function fetchArxivImageUrls(arxivId) {
                             fullUrl = src;
                         } else if (src.startsWith('/')) {
                             fullUrl = `https://arxiv.org${src}`;
-                        } else if (src.startsWith(`${arxivId}`)) {
+                        } else if (src.startsWith(`${htmlId}`) || src.startsWith(`${String(arxivId).replace(/v\d+$/i, '')}`)) {
                             // 新版 HTML：src 已包含 arxivId 前缀
                             fullUrl = `https://arxiv.org/html/${src}`;
                         } else {
                             // 旧版 HTML：src 为纯文件名
-                            fullUrl = `https://arxiv.org/html/${arxivId}${suffix}/${src}`;
+                            fullUrl = `https://arxiv.org/html/${htmlId}/${src}`;
                         }
                     }
 
@@ -1050,10 +1066,10 @@ function countChineseChars(text) {
 function isMethodSectionDetailed(text) {
     if (!text) return false;
 
-    // 1. 中文字符数检查（最低阈值 300，理想 600+）
+    // 1. 中文字符数检查（与 prompt 中的 600 中文字符要求对齐）
     const chineseCount = countChineseChars(text);
-    if (chineseCount < 300) {
-        console.log(`    [deep] 🔍 方法概述中文字符数不足: ${chineseCount} < 300`);
+    if (chineseCount < 600) {
+        console.log(`    [deep] 🔍 方法概述中文字符数不足: ${chineseCount} < 600`);
         return false;
     }
 
@@ -1206,15 +1222,15 @@ async function checkAndFixTables(paper, analysis, textForAnalysis) {
 
     console.log(`    [deep] 🔍 检测到实验结果可能缺少表格，触发补充...`);
 
-    const prompt = `你是一位严谨的学术论文分析专家。请根据下面的论文原文，为"实验结果"部分补充完整的 Markdown 表格数据。
+    const prompt = `你是一位严谨的学术论文分析专家。请根据下面可见的论文原文，为"实验结果"部分补充 Markdown 表格数据。
 
 论文标题: ${paper.title}
 arXiv ID: ${getPaperArxivId(paper)}
 
 ## 要求
 1. 只输出"## 实验结果"这一个 section 的完整内容。
-2. 必须包含论文中所有实验结果表格的标准 Markdown 格式（表头、模型名称、数据集、指标、数值），不要省略任何行或列。
-3. 严禁使用"此处省略"、"详见原文"等字样。所有数据必须直接列出。
+2. 必须包含可见原文中与实验结果直接相关的表格，使用标准 Markdown 格式（表头、模型名称、数据集、指标、数值），不要省略可见表格中的行或列。
+3. 严禁使用"此处省略"、"详见原文"等字样。可见数据必须直接列出；不可见或原文未给出的数据必须写"论文未给出具体数值"，严禁编造。
 4. 严禁编造或插入任何 Markdown 图片、HTML 图片或图片 URL；本轮只补表格和文字。
 5. 在表格下方用文字说明关键结论。
 
@@ -1380,6 +1396,7 @@ module.exports = {
     normalizeImageInfos,
     sourceTextLikelyHasTables,
     getPaperArxivId,
+    getArxivHtmlIds,
     extractSectionByTitle,
     mergeSectionByTitle
 };

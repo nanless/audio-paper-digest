@@ -137,4 +137,13 @@ describe('deep-analyzer section helpers', () => {
         assert.strictEqual(getPaperArxivId({ paper_id: '2604.2' }), '2604.2');
         assert.strictEqual(getPaperArxivId({ id: 'openreview-1' }), 'openreview-1');
     });
+
+    it('arXiv HTML URL 尝试顺序不会重复拼接版本号', () => {
+        const {
+            getArxivHtmlIds
+        } = require('../scripts/deep-analyzer.js');
+
+        assert.deepStrictEqual(getArxivHtmlIds('2604.12345'), ['2604.12345v1', '2604.12345v2', '2604.12345']);
+        assert.deepStrictEqual(getArxivHtmlIds('2604.12345v2'), ['2604.12345v2', '2604.12345']);
+    });
 });

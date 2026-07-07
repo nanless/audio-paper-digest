@@ -19,6 +19,7 @@ const {
     extractDatePrefix,
     getRecordDate,
     backupPapersJson,
+    loadPublishedIdsFromBlog,
     requestJson,
     loadPrompt
 } = require('../scripts/utils.js');
@@ -257,6 +258,28 @@ describe('buildRequestBody', () => {
         assert.strictEqual(body.messages.length, 1);
         assert.strictEqual(body.messages[0].role, 'user');
     });
+
+    it('Anthropic 多模态消息转换为 image source 格式', () => {
+        const body = buildRequestBody('anthropic', 'mimo', [
+            {
+                role: 'user',
+                content: [
+                    { type: 'text', text: '请分析图片' },
+                    { type: 'image_url', image_url: { url: 'data:image/png;base64,abc123' } }
+                ]
+            }
+        ], 1000, 0.5);
+
+        assert.deepStrictEqual(body.messages[0].content[0], { type: 'text', text: '请分析图片' });
+        assert.deepStrictEqual(body.messages[0].content[1], {
+            type: 'image',
+            source: {
+                type: 'base64',
+                media_type: 'image/png',
+                data: 'abc123'
+            }
+        });
+    });
 });
 
 describe('buildHeaders', () => {
@@ -357,6 +380,18 @@ describe('requestJson', () => {
     });
 });
 
+describe('loadPublishedIdsFromBlog', () => {
+    it('递归扫描 content/posts 子目录中的 arXiv 链接', () => {
+        const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'paper-blog-'));
+        const nested = path.join(root, 'content', 'posts', '2026', 'audio');
+        fs.mkdirSync(nested, { recursive: true });
+        fs.writeFileSync(path.join(nested, 'post.md'), '[arxiv](https://arxiv.org/abs/2604.12345v2)');
+
+        const ids = loadPublishedIdsFromBlog(root);
+        assert.strictEqual(ids.has('2604.12345'), true);
+    });
+});
+
 describe('normalizedId', () => {
     it('去除版本号', () => {
         assert.strictEqual(normalizedId({ arxivId: '2604.12345v1' }), '2604.12345');
@@ -448,6 +483,9 @@ describe('loadPrompt', () => {
             const prompt = loadPrompt(file, vars);
             assert.ok(prompt.length > 20, `${file} prompt 过短`);
         }
+        const enDeep = loadPrompt('prompts/en/deep-analysis.md', vars);
+        assert.match(enDeep, /## 评分理由/, 'prompts/en/deep-analysis.md 被截断，缺少评分理由章节');
+        assert.match(enDeep, /## 开源详情/, 'prompts/en/deep-analysis.md 被截断，缺少开源详情章节');
     });
 
     it('运行时中文 prompt 不包含未绑定占位符', () => {

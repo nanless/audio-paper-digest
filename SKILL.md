@@ -49,7 +49,7 @@ description: >
 
 | 文件 | 用途 | 归档行为 |
 |------|------|---------|
-| `data/current/papers.json` | 论文去重数据库 | **不归档**，持续累积 |
+| `data/current/papers.json` | 论文去重数据库（含 `digestStatus` 分析状态） | **不归档**，持续累积；`pending_analysis` / `analysis_failed` 不参与强去重，便于中断后重跑 |
 | `data/current/filtered-papers.json` | 筛选后的论文元数据 | 每日归档移走后重新生成 |
 | `data/current/deep-analysis-result.json` | 核心分析结果（含 analysis / parsed / selectedImageUrls / imageUrls / allImageUrls） | 每日归档移走后重新生成 |
 | `data/current/analyzed.json` | 旧版已分析记录（兼容） | 每日归档移走后重新生成 |
@@ -416,7 +416,7 @@ PY
 17. **新增 LLM 端点必须接入 API 协议自动路由**：任何新增脚本调用 LLM 时，统一使用 `scripts/utils.js` 中的 `detectApiType()`、`buildApiUrl()`、`buildHeaders()`、`buildRequestBody()`、`parseResponseText()`，禁止硬编码特定协议的 URL/Header/Body。
 18. **修改 API 协议路由逻辑时同步全链路**：修改 `detectApiType()` 的判定规则或 `buildApiUrl()`/`buildHeaders()` 等函数时，必须同步检查 `fetch-papers.js`、`deep-analyzer.js` 以及所有使用 `analysis-engine.js` 的脚本（`full-fetch.js`、`reanalyze.js`、`batch-analyze.js`、`deep-analysis-only.js`、`analyze-single-paper.js`），确保全链路行为一致。
 19. **禁止将敏感文件提交到版本控制**：`data/`、`logs/`、`*.env`、`*.backup*`、缓存文件、含密钥的日志归档等严禁进入 git；提交前必须确认 `.gitignore` 已正确配置，且仓库中不存在历史遗留的敏感文件。
-20. **CI 清单同步**：新增或改名 JS/Python 入口脚本时，同步更新 `.github/workflows/ci.yml` 的 `node -c` / `py_compile` 清单，避免关键脚本语法错误绕过 CI。
+20. **CI 自动语法检查**：CI 会通过 `find scripts tests -name '*.js'` 和 `find scripts -name '*.py'` 自动覆盖新增 JS/Python 文件；新增特殊文件类型时再更新 `.github/workflows/ci.yml`。
 21. **运行数据使用北京时间**：写入 `timestamp` / `lastUpdated` / `fetchedAt` 时使用 `getBeijingISOString()`；Python 发布侧使用北京时间 helper（如 `get_today_bj()`），避免 UTC 日期造成跨天归档或发布筛选错误。
 
 ---

@@ -77,9 +77,9 @@ arXiv ID: {arxivId}
     - Key design motivations must have basis (explicitly mentioned in the paper or reasonably inferable)
     - Multi-stage / multi-module methods must be unfolded layer by layer; glossing over is not allowed
     - Technical terms must be explained
-    - If the original text has architecture diagrams, the analysis must reference and explain them in detail with the figures
+    - If the original text mentions architecture diagrams, describe the module relationships in text only; this round has no image URLs, so inserting or fabricating image references is strictly prohibited
     - **The method overview section should be no fewer than 600 Chinese characters in total**. If the current analysis's method section is obviously too short, empty, or omits key components, it must be substantially expanded against the original text
-11. **Scoring rationale must read like a reviewer**: the 7-dimensional review comments must not be generic; write out specific strengths and weaknesses. If the existing analysis's scores are obviously too high or too low (inconsistent with the paper's actual contribution), the scores must be adjusted and reasons given.
+11. **Scoring rationale must read like a reviewer**: the 8-dimensional review comments must not be generic; write out specific strengths and weaknesses. If the existing analysis's scores are obviously too high or too low (inconsistent with the paper's actual contribution), the scores must be adjusted and reasons given.
 12. **Domain-relevance constraint**: this analysis is aimed at speech / music / audio domain readers. If the paper's core contribution is not in the speech / music / audio domain (e.g., pure CV, pure NLP, pure law/policy, pure general ML), even if the technique is excellent, the **"impact" dimension must be significantly reduced (typically ≤ 0.5)**, because speech / music / audio readers cannot directly benefit. Such papers should not receive high scores due to "cross-domain generality".
 13. **Limitations and issues must be deep**: do not just list limitations the authors themselves mentioned. Like a real reviewer, point out possible flaws in the method, loopholes in experimental design, whether conclusions are too strong, and whether there is over-claiming.
 

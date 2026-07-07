@@ -12,6 +12,7 @@ setupScriptLogging(__filename);
 
 const fs = require('fs');
 const path = require('path');
+const cheerio = require('cheerio');
 const {
     writeFileAtomic,
     getBeijingISOString,
@@ -87,6 +88,8 @@ const FILTER_CONFIG = {
     model: process.env.PAPER_ANALYZER_MODEL || '',
     headers: {}
 };
+const FILTER_SYSTEM_FAILURE_THRESHOLD = 5;
+let consecutiveFilterApiFailures = 0;
 
 /**
  * 筛选阶段专用：调用 LLM（带重试机制）
@@ -121,6 +124,11 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
                 timeoutMs: FILTER_CFG.timeoutMs,
                 agent: false
             });
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+                const apiError = response.body?.error;
+                const message = apiError?.message || apiError || response.raw.substring(0, 200);
+                throw new Error(`HTTP ${response.statusCode}: ${typeof message === 'string' ? message : JSON.stringify(message)}`);
+            }
             const content = parseResponseText(apiType, response.body);
             if (content !== null) return content;
             if (response.body.error) {
@@ -405,43 +413,30 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
  */
 function parseRecentPageHTML(html, categoryId, existingIds = null) {
     const papers = [];
-
-    // 提取所有 arXiv ID（从 href="/abs/XXXX.XXXXX"）
-    const idRegex = /href\s*=\s*['"]\/abs\/([\d.]+)['"]/gi;
-    const ids = [];
-    let m;
-    while ((m = idRegex.exec(html)) !== null) {
-        const id = m[1].replace(/v\d+$/, '');
-        if (!ids.includes(id)) ids.push(id);
-    }
-
-    // 提取所有标题
-    const titleRegex = /<div\s+class\s*=\s*['"]list-title\s+mathjax['"][^>]*>\s*<span\s+class\s*=\s*['"]descriptor['"]>Title:<\/span>\s*([\s\S]*?)\s*<\/div>/gi;
-    const titles = [];
-    while ((m = titleRegex.exec(html)) !== null) {
-        titles.push(m[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim());
-    }
-
-    // 提取所有作者列表
-    const authorRegex = /<div\s+class\s*=\s*['"]list-authors['"][^>]*>([\s\S]*?)<\/div>/gi;
-    const authorLists = [];
-    while ((m = authorRegex.exec(html)) !== null) {
-        const authorLinks = m[1].match(/<a[^>]*>([^<]+)<\/a>/gi);
-        authorLists.push(authorLinks ? authorLinks.map(a => a.replace(/<[^>]+>/g, '').trim()).filter(a => a) : []);
-    }
+    const $ = cheerio.load(html);
 
     // 组装论文数据
     let newCount = 0, dupCount = 0;
-    for (let i = 0; i < ids.length; i++) {
-        const arxivId = ids[i];
+    $('dl > dt').each((_, dt) => {
+        const $dt = $(dt);
+        const $dd = $dt.next('dd');
+        const href = $dt.find('a[href^="/abs/"]').first().attr('href') || '';
+        const idMatch = href.match(/\/abs\/([^/?#]+)/);
+        if (!idMatch || !$dd.length) return;
+
+        const arxivId = idMatch[1].replace(/v\d+$/, '');
         if (existingIds && existingIds.has(normalizedId(arxivId))) {
             dupCount++;
-            continue;
+            return;
         }
         newCount++;
 
-        const title = titles[i] || '';
-        const authors = authorLists[i] || [];
+        const title = $dd.find('.list-title').first().clone()
+            .find('.descriptor').remove().end()
+            .text().replace(/\s+/g, ' ').trim();
+        const authors = $dd.find('.list-authors a').map((__, a) =>
+            $(a).text().replace(/\s+/g, ' ').trim()
+        ).get().filter(Boolean);
 
         if (title) {
             papers.push({
@@ -456,7 +451,7 @@ function parseRecentPageHTML(html, categoryId, existingIds = null) {
             });
             console.log(`[fetch-recent]   ✓ ${arxivId} - ${title.substring(0, 70)}`);
         }
-    }
+    });
 
     console.log(`[fetch-recent] ${categoryId} 去重: ${newCount} 篇新论文, ${dupCount} 篇已存在`);
 
@@ -872,8 +867,13 @@ async function isSpeechAudioRelated(paper) {
 
     try {
         const response = await callModelForFilter([{ role: 'user', content: prompt }], 1000);
+        consecutiveFilterApiFailures = 0;
         return parseFilterDecision(response, paperId);
     } catch (err) {
+        consecutiveFilterApiFailures++;
+        if (consecutiveFilterApiFailures >= FILTER_SYSTEM_FAILURE_THRESHOLD) {
+            throw new Error(`筛选模型连续 ${consecutiveFilterApiFailures} 次调用失败，疑似 API 配置或服务故障: ${err.message}`);
+        }
         console.error(`[filter] 判断论文 ${paperId} 失败: ${err.message}，默认保留`);
         return true;   // API 失败时宁可错留不可错杀
     }

@@ -17,12 +17,20 @@
       "published": "2026-04-20T00:00:00+08:00",
       "categories": ["cs.SD", "eess.AS"],
       "fetchedFrom": "eess.AS",
-      "fetchedAt": "2026-04-21T10:00:00+08:00"
+      "fetchedAt": "2026-04-21T10:00:00+08:00",
+      "digestStatus": {
+        "status": "seen | pending_analysis | analyzed | analysis_failed",
+        "batchDate": "2026-04-21",
+        "updatedAt": "2026-04-21T10:00:00+08:00",
+        "error": null
+      }
     }
   },
   "lastUpdated": "2026-04-21T10:00:00+08:00"
 }
 ```
+
+`pending_analysis` 和 `analysis_failed` 不参与下一次 `full-fetch` 的强去重，因此分析中断或失败后可自然重跑；成功分析后更新为 `analyzed`。
 
 ### 5.2 `data/current/filtered-papers.json`
 

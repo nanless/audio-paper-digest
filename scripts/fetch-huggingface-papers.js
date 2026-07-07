@@ -60,6 +60,10 @@ function convertDailyPaper(hfPaper) {
     const authors = (paper.authors || []).map(a => a.name).filter(Boolean);
 
     const publishedAt = normalizeToBeijingISOString(paper.publishedAt || hfPaper.publishedAt || '');
+    if (!publishedAt) {
+        console.warn(`  ⚠️  跳过 HuggingFace 论文 ${arxivId}: 缺少有效 publishedAt`);
+        return null;
+    }
     return {
         paper_id: arxivId,
         arxivId: arxivId,
@@ -100,6 +104,10 @@ function convertPaper(paper) {
     const authors = (paper.authors || []).map(a => a.name).filter(Boolean);
 
     const publishedAt = normalizeToBeijingISOString(paper.publishedAt || '');
+    if (!publishedAt) {
+        console.warn(`  ⚠️  跳过 HuggingFace 论文 ${arxivId}: 缺少有效 publishedAt`);
+        return null;
+    }
     return {
         paper_id: arxivId,
         arxivId: arxivId,
