@@ -93,4 +93,14 @@ const options = {
 - 检查图片是否过大或被 arXiv 限制
 - 微信图片上传有频率限制，大量图片可能需要分批执行
 
+### 12.9 API 协议路由验证
+
+运行 `node scripts/test-api-key.js` 测试 API 配置是否正确——会输出检测到的协议类型（`openai` / `anthropic`）、实际请求的 URL 和模型响应。Anthropic 协议输出类似 `[test-api-key] 协议: anthropic`，OpenAI 类似 `[test-api-key] 协议: openai`。若你使用 MiMo/Kimi Token Plan 但输出显示 `openai`，检查端点是否含 `token-plan` 或 `coding`。
+
+### 12.10 后台运行时 `npm run fetch` 被 SIGTERM 终止（exit code 143）
+
+**直接原因**：npm 创建一个 TTY 控制终端来运行子进程，当终端信号处理不当时，子进程可能收到 SIGTERM 终止信号，npm 返回 exit code 143。
+
+**解决方案**：用 `node scripts/full-fetch.js` 直接调用，避免 npm 的进程管理。根目录 `run-full-fetch.sh` 已经包装好这个行为（`exec node scripts/full-fetch.js`）。
+
 ---

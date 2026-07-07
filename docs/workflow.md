@@ -137,7 +137,7 @@ HF 特有字段（共 7 个）：
 - `batchSize = 5`（批内并行调用 LLM）
 - `delayBetweenBatches = 2000`（批次间延迟 2 秒）
 - `useKeywordPreFilter = false`（当前主流程不用关键词预筛选）
-- 单篇超时 **60 秒**，重试 **3 次**
+- 单篇超时 **60 秒**，重试 **5 次**（退避 `2^attempt * 1s`）
 - 每次重试独立创建 `AbortController` 和 `setTimeout`，避免重试时复用已 abort 的 controller
 
 结果保存到 `data/current/filtered-papers.json`。
@@ -180,15 +180,19 @@ HF 特有字段（共 7 个）：
 - 支持纯 Node 内置模块的 HTTP CONNECT 代理（无需外部依赖）
 - 所有分析配置集中管理于 `scripts/config.js`，支持环境变量覆写（`PD_ANALYSIS_CONCURRENCY`、`PD_ANALYSIS_MAX_RETRIES`、`PD_FILTER_BATCH_SIZE`、`PD_ARXIV_MAX_RESULTS`）
 
-**深度分析不是单次调用，而是 5 轮递进式处理**：
+**深度分析不是单次调用，而是多轮递进式处理**：
 
 | 轮次 | 名称 | Prompt | 作用 |
 |------|------|--------|------|
-| Round 1 | 主深度分析 | `prompts/deep-analysis.md` | 全文+图片分析，生成所有章节 |
+| Round 1 | 主深度分析 | `prompts/deep-analysis.md` | 主模型对**全文纯文本**分析，生成所有章节 |
+| Round 1b | 图像补充（仅双模型模式） | `prompts/image-supplement.md` | 副模型接收图片 + 主模型输出做多模态补充，替换 Round 1 结果；副模型未配置或无图片时跳过 |
 | Round 2 | 开源扫描 | `prompts/opensource-scan.md` | 从论文文本提取 GitHub/HF/ModelScope 等链接，补充开源详情 |
-| Round 3 | 审校重写 | `prompts/gap-fill.md` | 对比原始论文与 Round 1 输出，修正缺失、错误、过度推断 |
+| Round 2.5 | Demo 页链接发现 | 代码抓取 | 若无开源链接，访问分析中出现的 demo 页（最多 3 个），从中回捞代码/模型/数据集链接 |
+| Round 3 | 审校重写 | `prompts/gap-fill.md` | 对比原始论文与前几轮输出，修正缺失、错误、过度推断 |
 | Round 4 | 表格修复 | 代码检测 + LLM 补充 | 检测实验结果章节缺失的 Markdown 表格，触发补充 |
 | Round 5 | 方法章节修复 | 代码检测 + LLM 补充 | 检测方法概述是否过于简略（<300 字/<3 段），触发扩展至 600+ 字 |
+
+> **单模型 vs 双模型**：设置 `PAPER_ANALYZER_SECONDARY_MODEL`（及可选的 `SECONDARY_ENDPOINT`/`SECONDARY_API_KEY`，未设置则复用主模型）即启用双模型模式——主模型只做纯文本分析（Round 1），副模型负责看图补充（Round 1b）。未设置副模型时退回单模型：图片仍会下载并作为 `imageUrls` 元数据保存供博客嵌入，但不送入任何视觉模型分析。
 
 ### 3.8 增量保存与收尾
 

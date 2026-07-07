@@ -53,6 +53,8 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 
 **必需变量**：`PAPER_ANALYZER_API_KEY` / `PAPER_ANALYZER_MODEL` / `PAPER_ANALYZER_ENDPOINT` + `PAPER_DIGEST_BLOG_REPO`
 
+**双模型（可选，多模态）**：设置 `PAPER_ANALYZER_SECONDARY_MODEL` 即启用副模型做图像补充（主模型仅做纯文本分析）；不设置则跳过图片、退回单模型纯文本。`PAPER_ANALYZER_SECONDARY_ENDPOINT` / `PAPER_ANALYZER_SECONDARY_API_KEY` 未设置时默认复用主模型对应值。
+
 Node 脚本双层加载 `.env`：① `scripts/config.js` 模块级 IIFE 最先执行（任何 `require('config')` 即触发）；② `scripts/utils.js` 的 `loadEnvFile()` 二次兜底补漏。都自行解析 `.env` 文件，不依赖任何三方库。Python 脚本通过 `python-dotenv` 加载。
 
 ### LLM API 协议自动路由
@@ -127,7 +129,7 @@ prompts/                # LLM prompt 模板
 - **原子写入**：使用 `writeFileAtomic()` 保存数据文件，先写临时文件再 rename，防止写入中断损坏数据。
 - **北京时间时间戳**：运行数据中的 `timestamp` / `lastUpdated` / `fetchedAt` 应使用 `getBeijingISOString()` 或 Python 端 `now_bj_iso()`，避免 UTC 日期导致跨天归档或发布筛选错误。
 - **博客验证默认 `--skip-push`**，仅用户明确要求时才执行真实 `git push`。
-- **后台运行全流程时用 `node scripts/full-fetch.js`** 而非 `npm run fetch`（npm 可能因 TTY 导致 SIGTERM，exit code 143）。
+- **后台运行全流程时用 `node scripts/full-fetch.js`** 而非 `npm run fetch`（npm 可能因 TTY 导致 SIGTERM，exit code 143）。根目录 `run-full-fetch.sh` 即此包装（`cd` 到项目根后 `exec node`）。
 - **`data/` 和 `logs/` 已 gitignore** — 禁止提交运行时产物。
 
 ### 致命 Bug 防御

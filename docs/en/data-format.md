@@ -56,7 +56,11 @@ Filtering results (metadata only, no deep analysis). Structure:
       "sources": ["arxiv"],
       "hf_upvotes": 0,
       "hf_ai_summary": "",
-      "hf_github_repo": ""
+      "hf_ai_keywords": [],
+      "hf_github_repo": "",
+      "hf_project_page": "",
+      "hf_github_stars": 0,
+      "hf_discussion_id": ""
     }
   ]
 }

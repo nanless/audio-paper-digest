@@ -58,7 +58,7 @@ Machine summary fields:
 | Impact | 0-1.5 | Contribution to the field, potential follow-up value, practical application potential, relevance to speech/music/audio readers |
 | Open Source | 0-1.5 | Are code/model/data/checkpoints publicly available? 1.5 requires full open source with complete README and documentation; 1.0 means code is open but model or docs are missing; 0.5 means only partial resources or no documentation link; 0 means completely closed |
 | Reproducibility | 0-0.5 | Documentation sufficiency beyond open source—are training details/hyperparameters/hardware environment/reproduction steps sufficient for others to reproduce? |
-| Engineering/Practical Value | 0-1.5 | Engineering落地能力, pipeline completeness, practical reference value, industrial reusability. Must be strictly scored for engineering papers (tech reports, system reports, benchmark construction) |
+| Engineering/Practical Value | 0-1.5 | Practical deployment maturity, pipeline completeness, practical reference value, industrial reusability. Must be strictly scored for engineering papers (tech reports, system reports, benchmark construction) |
 
 ### 14.3 Tier Requirements
 

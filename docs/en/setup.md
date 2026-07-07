@@ -27,7 +27,7 @@ Benefits of this design:
 | `PAPER_ANALYZER_MODEL` | LLM model name | **Required** |
 | `PD_ANALYSIS_CONCURRENCY` | Deep analysis concurrency | 3 |
 | `PD_ANALYSIS_MAX_RETRIES` | Per-paper retry count for deep analysis | 2 |
-| `PD_REANALYZE_CONCURRENCY` | Re-analysis concurrency | 1 |
+| `PD_REANALYZE_CONCURRENCY` | Re-analysis concurrency | 3 (matches `ANALYSIS_CONFIG.concurrency`) |
 | `PD_FILTER_BATCH_SIZE` | LLM filtering batch size | 5 |
 | `PD_ARXIV_MAX_RESULTS` | Number of papers to fetch per arXiv category | 100 |
 

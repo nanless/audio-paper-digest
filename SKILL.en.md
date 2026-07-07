@@ -96,7 +96,7 @@ Filtering uniformly calls the LLM specified by `PAPER_ANALYZER_*`:
     - Headers: `Authorization: Bearer {key}`
 - **agent: `false`** — LLM API requests explicitly disable connection reuse to prevent the global agent connection pool from being polluted by proxies, which causes MiMo 403 (see 9.2)
 - 60s timeout, 5 retries, each retry creates an independent AbortController
-- Exponential backoff: fetch 4s/8s/16s (`2^attempt * 2s`, cap 60s), rate limit 10s/20s/40s (`2^attempt * 5s`, cap 60s)
+- Exponential backoff: filter LLM call `2^attempt * 1s` (2s/4s/8s/16s/32s); arXiv page-fetch 429 rate-limit `60s * 2^(attempt-1)`, other errors linear `5s * attempt`
 - Prompt source: `prompts/filter.md`, read at runtime via `loadPrompt()` and replaces `{title}`, `{abstract}`, `{categories}` placeholders
 - Judgment criteria: Multimodal models are considered relevant if they clearly involve speech/music/audio (input, output, training objective, evaluation task, or one of the core capabilities)
 - Conflict handling: If a paper simultaneously satisfies "multimodal involving speech/music/audio" and "other domain" descriptions, it is prioritized as "yes"
@@ -412,7 +412,7 @@ PY
 16. **MiMo API requests must disable proxy connection reuse**: In `fetch-papers.js` and `deep-analyzer.js`, when calling the LLM API, `options.agent` must be `false` (not `undefined`). During any refactoring or modification of HTTP request logic, changing `agent: false` back to `agent: proxyAgent` or `agent: undefined` is prohibited, otherwise MiMo Token Plan will return 403 in environments with system proxies.
 17. **New LLM endpoints must integrate API protocol auto-routing**: Any new script calling an LLM must uniformly use `detectApiType()`, `buildApiUrl()`, `buildHeaders()`, `buildRequestBody()`, `parseResponseText()` from `scripts/utils.js`; hard-coding specific protocol URLs/Headers/Bodies is prohibited.
 18. **Sync the full pipeline when modifying API protocol routing logic**: When modifying `detectApiType()` judgment rules or `buildApiUrl()`/`buildHeaders()` and other functions, you must synchronously check `fetch-papers.js`, `deep-analyzer.js`, and all scripts using `analysis-engine.js` (`full-fetch.js`, `reanalyze.js`, `batch-analyze.js`, `deep-analysis-only.js`, `analyze-single-paper.js`) to ensure consistent behavior across the full pipeline.
-19. **Prohibit committing sensitive files to version control**: `data/`, `logs/`, `*.env`, `*.backup*`, cache files, log archives containing keys, etc. are strictly forbidden from entering git; before committing, confirm `.gitignore` is correctly configured and that no historically遗留 sensitive files exist in the repository.
+19. **Prohibit committing sensitive files to version control**: `data/`, `logs/`, `*.env`, `*.backup*`, cache files, log archives containing keys, etc. are strictly forbidden from entering git; before committing, confirm `.gitignore` is correctly configured and that no historically leftover sensitive files exist in the repository.
 20. **Keep the CI checklist in sync**: When adding or renaming JS/Python entry scripts, update `.github/workflows/ci.yml` so the `node -c` / `py_compile` lists continue to cover critical scripts.
 21. **Use Beijing-time timestamps for runtime data**: Use `getBeijingISOString()` when writing `timestamp` / `lastUpdated` / `fetchedAt`; Python publishing code should use `now_bj_iso()` / `now_bj_date()` to avoid UTC dates causing cross-day archiving or publish filtering mistakes.
 
@@ -439,12 +439,12 @@ PY
    - If using MiMo/Kimi Token Plan but it shows `openai`, check if the endpoint contains `token-plan` or `coding`, and if the model contains `mimo` or `kimi`
    - If logs show `anthropic` but it still fails, check if the path is `/anthropic/v1/messages` (not `/v1/chat/completions`)
 
-3. **Anthropic protocol专项检查** (when logs show `anthropic`)
+3. **Anthropic protocol specific checks** (when logs show `anthropic`)
    - Is the request header `x-api-key` (not `Authorization: Bearer`)
    - Does it include `anthropic-version: 2023-06-01`
    - Does it include `User-Agent: claude-cli/<version> (external, cli)` (logs won't directly show this, verify with proxy tools)
 
-4. **OpenAI protocol专项检查** (when logs show `openai`)
+4. **OpenAI protocol specific checks** (when logs show `openai`)
    - Confirm using `Authorization: Bearer {key}`
    - Confirm URL path is `/v1/chat/completions`
 

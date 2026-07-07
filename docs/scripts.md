@@ -99,7 +99,7 @@ arXiv 抓取与 LLM 筛选模块。
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | 超时 | 60s | 单篇筛选 API 调用超时 |
-| 重试次数 | 3 | 单篇筛选重试次数 |
+| 重试次数 | 5 | 单篇筛选重试次数（`FILTER_CONFIG.maxRetries`，退避 `2^attempt * 1s`） |
 | 批次大小 | 5 | `PD_FILTER_BATCH_SIZE` 可覆写 |
 | 批次间延迟 | 2000ms | 每批筛选后的等待时间 |
 | temperature | 0.3 | 筛选阶段采样温度 |
@@ -109,13 +109,15 @@ arXiv 抓取与 LLM 筛选模块。
 | 配置项 | 默认值 | 环境变量覆写 | 说明 |
 |--------|--------|-------------|------|
 | 每类抓取数 | 100 | `PD_ARXIV_MAX_RESULTS` | 每分类最大返回数 |
-| 最大重试次数 | 20 | — | 单分类抓取重试上限 |
-| 重退避基数 | 3000ms | — | 指数退避：3s/6s/12s... |
-| 限流退避基数 | 15000ms | — | 429 限流额外等待：15s/30s/60s... |
-| 最大等待时间 | 300000ms | — | 单分类最长等待 5 分钟 |
-| 分类间延迟 | 25000ms | — | 不同分类请求间隔 |
-| 首次请求延迟 | 5000ms | — | 首个分类额外等待 |
+| 最大重试次数 | 30 | — | `fetchMaxRetries`，单分类抓取重试上限 |
+| 重退避基数 | 5000ms | — | `fetchRetryBaseDelayMs` |
+| 限流退避基数 | 30000ms | — | `fetchRateLimitBaseDelayMs`，429 限流额外等待 |
+| 最大等待时间 | 600000ms | — | `fetchMaxWaitMs`，单分类最长等待 10 分钟 |
+| 分类间延迟 | 60000ms | — | `categoryDelayMs`，不同分类请求间隔（full-fetch 另加抖动+限流惩罚） |
+| 首次请求延迟 | 30000ms | — | `firstRequestDelayMs`，首个分类额外等待 |
 | 连续已知阈值 | 20 | — | 连续 20 篇已有 ID 提前停止 |
+
+> 注：`fetch-papers.js` 中各抓取路径（recent/search/API）的实际重试上限硬编码为 5 次，429 退避为 `60s * 2^(attempt-1)`（60s/120s/240s/480s），其他错误 `5s * attempt`；上表为 `config.js` 中 `ARXIV_CONFIG` 的登记值。
 
 **HuggingFace 配置（`HUGGINGFACE_CONFIG`）**
 

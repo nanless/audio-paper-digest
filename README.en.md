@@ -56,9 +56,15 @@ See [`docs/scripts.md`](docs/scripts.md) for each script's functionality, and [`
 npm install
 
 # 2. Configure API Key (write to `.env`)
+#    Primary model (text analysis, required)
 #    PAPER_ANALYZER_API_KEY=your-key
-#    PAPER_ANALYZER_MODEL=mimo-v2.5
-#    PAPER_ANALYZER_ENDPOINT=https://token-plan-sgp.xiaomimimo.com/v1
+#    PAPER_ANALYZER_MODEL=deepseek-v4-pro
+#    PAPER_ANALYZER_ENDPOINT=https://api.deepseek.com/anthropic
+#
+#    Secondary model (multimodal image analysis, optional)
+#    PAPER_ANALYZER_SECONDARY_MODEL=mimo-v2.5
+#    PAPER_ANALYZER_SECONDARY_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
+#    PAPER_ANALYZER_SECONDARY_API_KEY=tp-your-key
 
 # 3. Run the full pipeline (crawl + filter + deep analysis)
 ./run-full-fetch.sh
@@ -180,6 +186,9 @@ python3 scripts/publish-to-feishu.py --date 2026-04-21
 # ========== Utilities ==========
 # Backfill paper IDs (no analysis)
 python3 scripts/backfill_papers.py
+
+# Re-filter + re-analyze by date
+node scripts/refilter-reanalyze-by-date.js 2026-07-01
 ```
 
 ---

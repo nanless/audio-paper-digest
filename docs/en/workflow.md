@@ -116,7 +116,7 @@ Runtime parameters:
 - `batchSize = 5` (parallel LLM calls within a batch)
 - `delayBetweenBatches = 2000` (2-second delay between batches)
 - `useKeywordPreFilter = false` (keyword pre-filtering is currently not used in the main workflow)
-- Per-paper timeout **60 seconds**, **3 retries**
+- Per-paper timeout **60 seconds**, **5 retries** (backoff `2^attempt * 1s`)
 - Each retry independently creates an `AbortController` and `setTimeout`, avoiding reuse of an already-aborted controller
 
 Results are saved to `data/current/filtered-papers.json`.
@@ -159,15 +159,19 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 - Supports pure Node built-in module HTTP CONNECT proxy (no external dependencies)
 - All analysis configurations are centrally managed in `scripts/config.js`, with environment variable overrides (`PD_ANALYSIS_CONCURRENCY`, `PD_ANALYSIS_MAX_RETRIES`, `PD_FILTER_BATCH_SIZE`, `PD_ARXIV_MAX_RESULTS`)
 
-**Deep analysis is not a single call, but a 5-round progressive process**:
+**Deep analysis is not a single call, but a multi-round progressive process**:
 
 | Round | Name | Prompt | Purpose |
 |------|------|--------|--------|
-| Round 1 | Main Deep Analysis | `prompts/deep-analysis.md` | Full-text + image analysis, generates all sections |
+| Round 1 | Main Deep Analysis | `prompts/deep-analysis.md` | Primary model performs **text-only** full-text analysis, generating all sections |
+| Round 1b | Image Supplement (dual-model only) | `prompts/image-supplement.md` | Secondary model takes images + primary output for multimodal supplement, replacing Round 1 result; skipped when no secondary model or no images |
 | Round 2 | Open Source Scan | `prompts/opensource-scan.md` | Extract GitHub/HF/ModelScope etc. links from paper text, supplement open source details |
-| Round 3 | Review and Rewrite | `prompts/gap-fill.md` | Compare original paper with Round 1 output, correct omissions, errors, over-inferences |
+| Round 2.5 | Demo Page Link Discovery | Code fetch | If no open-source links, visit demo pages found in the analysis (up to 3) and recover code/model/dataset links |
+| Round 3 | Review and Rewrite | `prompts/gap-fill.md` | Compare original paper with earlier output, correct omissions, errors, over-inferences |
 | Round 4 | Table Fix | Code detection + LLM supplement | Detect missing Markdown tables in the Experimental Results section, trigger supplementation |
 | Round 5 | Method Section Fix | Code detection + LLM supplement | Detect if Method Overview is too brief (<300 chars / <3 paragraphs), trigger expansion to 600+ chars |
+
+> **Single-model vs dual-model**: setting `PAPER_ANALYZER_SECONDARY_MODEL` (plus optional `SECONDARY_ENDPOINT`/`SECONDARY_API_KEY`, which reuse the primary values if unset) enables dual-model mode — the primary model does text-only analysis (Round 1) while the secondary model handles the image supplement (Round 1b). Without a secondary model it falls back to single-model: images are still downloaded and saved as `imageUrls` metadata for blog embedding, but are not sent to any vision model for analysis.
 
 ### 3.8 Incremental Save and Wrap-up
 

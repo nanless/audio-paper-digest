@@ -95,7 +95,7 @@ Unified configuration center. All hardcoded parameters are centrally managed and
 | Config Item | Default | Description |
 |--------|--------|------|
 | Timeout | 60s | Per-paper filter API call timeout |
-| Retries | 3 | Per-paper filter retries |
+| Retries | 5 | Per-paper filter retries (`FILTER_CONFIG.maxRetries`, backoff `2^attempt * 1s`) |
 | Batch size | 5 | Overridable via `PD_FILTER_BATCH_SIZE` |
 | Batch delay | 2000ms | Wait time after each filter batch |
 | temperature | 0.3 | Filter stage sampling temperature |
@@ -105,13 +105,15 @@ Unified configuration center. All hardcoded parameters are centrally managed and
 | Config Item | Default | Env Override | Description |
 |--------|--------|-------------|------|
 | Per-category fetch count | 100 | `PD_ARXIV_MAX_RESULTS` | Max results per category |
-| Max retries | 20 | -- | Per-category fetch retry limit |
-| Retry backoff base | 3000ms | -- | Exponential backoff: 3s/6s/12s... |
-| Rate-limit backoff base | 15000ms | -- | 429 extra wait: 15s/30s/60s... |
-| Max wait time | 300000ms | -- | Max 5 minutes wait per category |
-| Category delay | 25000ms | -- | Delay between different category requests |
-| First request delay | 5000ms | -- | Extra wait for the first category |
+| Max retries | 30 | -- | `fetchMaxRetries`, per-category fetch retry limit |
+| Retry backoff base | 5000ms | -- | `fetchRetryBaseDelayMs` |
+| Rate-limit backoff base | 30000ms | -- | `fetchRateLimitBaseDelayMs`, 429 extra wait |
+| Max wait time | 600000ms | -- | `fetchMaxWaitMs`, max 10 minutes wait per category |
+| Category delay | 60000ms | -- | `categoryDelayMs`, delay between categories (full-fetch adds jitter + rate-limit penalty) |
+| First request delay | 30000ms | -- | `firstRequestDelayMs`, extra wait for the first category |
 | Consecutive known threshold | 20 | -- | Early stop after 20 consecutive known IDs |
+
+> Note: the actual retry limit hard-coded in each `fetch-papers.js` path (recent/search/API) is 5; the 429 backoff is `60s * 2^(attempt-1)` (60s/120s/240s/480s), other errors `5s * attempt`. The table above lists the `ARXIV_CONFIG` values registered in `config.js`.
 
 **HuggingFace Configuration (`HUGGINGFACE_CONFIG`)**
 

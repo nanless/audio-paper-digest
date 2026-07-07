@@ -27,7 +27,7 @@ set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
 | `PAPER_ANALYZER_MODEL` | LLM 模型名 | **必填** |
 | `PD_ANALYSIS_CONCURRENCY` | 深度分析并发度 | 3 |
 | `PD_ANALYSIS_MAX_RETRIES` | 深度分析单篇重试次数 | 2 |
-| `PD_REANALYZE_CONCURRENCY` | 重分析并发度 | 1 |
+| `PD_REANALYZE_CONCURRENCY` | 重分析并发度 | 3（与 `ANALYSIS_CONFIG.concurrency` 一致） |
 | `PD_FILTER_BATCH_SIZE` | LLM 筛选每批篇数 | 5 |
 | `PD_ARXIV_MAX_RESULTS` | arXiv 每类抓取数量 | 100 |
 

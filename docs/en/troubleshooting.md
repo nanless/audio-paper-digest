@@ -93,4 +93,14 @@ const options = {
 - Check whether the image is too large or restricted by arXiv
 - WeChat image uploads are rate-limited; large batches may need to be executed in chunks
 
+### 12.9 API Protocol Routing Verification
+
+Run `node scripts/test-api-key.js` to test whether the API configuration is correct — it prints the detected protocol type (`openai` / `anthropic`), the actual request URL, and the model response. If you use MiMo/Kimi Token Plan but the output shows `openai`, check whether the endpoint contains `token-plan` or `coding` and whether the model name contains `mimo` or `kimi`.
+
+### 12.10 `npm run fetch` killed by SIGTERM (exit code 143) when running in background
+
+**Root cause**: npm creates a controlling TTY to run the child process; when terminal signal handling misbehaves, the child may receive SIGTERM and npm returns exit code 143.
+
+**Fix**: invoke `node scripts/full-fetch.js` directly to bypass npm's process management. The root-level `run-full-fetch.sh` already wraps this behavior (`exec node scripts/full-fetch.js`).
+
 ---

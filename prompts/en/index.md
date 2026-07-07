@@ -7,9 +7,11 @@ This directory contains all LLM prompts for the audio-paper-digest skill, separa
 | File | Purpose | Called From |
 |------|---------|-------------|
 | [filter.md](filter.md) | Filtering stage: determine whether a single paper is related to speech / music / audio | `fetch-papers.js` |
-| [deep-analysis.md](deep-analysis.md) | Deep analysis stage (round 1): read full text + figures and output structured report | `deep-analyzer.js` |
-| [gap-fill.md](gap-fill.md) | Deep analysis stage (round 3): review and rewrite the first two rounds' results against the original text | `deep-analyzer.js` |
+| [deep-analysis.md](deep-analysis.md) | Deep analysis stage (round 1, text-only): read full text and output structured report | `deep-analyzer.js` |
 | [opensource-scan.md](opensource-scan.md) | Open-source scan stage (round 2): specifically extract open-source links and reproduction information | `deep-analyzer.js` |
+| [gap-fill.md](gap-fill.md) | Deep analysis stage (round 3): review and rewrite the earlier rounds' results against the original text | `deep-analyzer.js` |
+
+> Note: `image-supplement.md` (dual-model mode — the secondary model reads figures to supplement the primary model's analysis) has **no English version**; the code always loads the Chinese `prompts/image-supplement.md`. See the Chinese [prompts/index.md](../index.md).
 
 ## Placeholder Conventions
 
