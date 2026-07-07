@@ -440,6 +440,17 @@ function normalizeAnthropicContent(content) {
     });
 }
 
+function normalizeOpenAIContent(content) {
+    if (!Array.isArray(content)) return content;
+    if (content.length === 1) {
+        const only = content[0];
+        if (only && only.type === 'text' && typeof only.text === 'string') {
+            return only.text;
+        }
+    }
+    return content;
+}
+
 function buildRequestBody(apiType, model, messages, maxTokens, temperature) {
     if (apiType === 'anthropic') {
         // Anthropic: system 必须是顶级字段，不能在 messages 中
@@ -460,7 +471,15 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature) {
         return body;
     }
     // OpenAI: 标准格式
-    return { model, messages, max_tokens: maxTokens, temperature };
+    return {
+        model,
+        messages: messages.map(msg => ({
+            ...msg,
+            content: normalizeOpenAIContent(msg.content)
+        })),
+        max_tokens: maxTokens,
+        temperature
+    };
 }
 
 /**

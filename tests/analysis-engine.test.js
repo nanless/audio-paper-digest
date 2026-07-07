@@ -147,6 +147,12 @@ describe('analyzePaperWithRetry', () => {
         assert.strictEqual(getInvalidAnalysisReason(validAnalysisText(), require('../scripts/utils.js').parseAnalysis(validAnalysisText())), null);
         assert.match(getInvalidAnalysisReason('## 评分\n8.0/10', {}), /缺少必要章节/);
     });
+
+    it('校验不会把 0 分误判为缺少评分', () => {
+        const parsed = require('../scripts/utils.js').parseAnalysis(validAnalysisText());
+        parsed.score = 0;
+        assert.strictEqual(getInvalidAnalysisReason(validAnalysisText(), parsed), null);
+    });
 });
 
 describe('analyzeBatch', () => {

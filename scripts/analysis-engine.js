@@ -120,7 +120,9 @@ function hasRequiredSections(text) {
 function getInvalidAnalysisReason(analysis, parsed) {
     if (!hasRequiredSections(analysis)) return '分析结果缺少必要章节';
     if (!parsed) return '分析结果无法解析';
-    if (!parsed.score) return '分析结果缺少有效评分';
+    if (parsed.score === undefined || parsed.score === null || Number.isNaN(Number(parsed.score))) {
+        return '分析结果缺少有效评分';
+    }
     if (!parsed.scoringReason || parsed.scoringReason.trim().length < 20) return '分析结果缺少有效评分理由';
     if (!parsed.summary || parsed.summary.trim().length < 20) return '分析结果缺少有效核心摘要';
     if (!parsed.architecture || parsed.architecture.trim().length < 20) return '分析结果缺少有效方法概述';

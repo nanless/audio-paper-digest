@@ -53,6 +53,11 @@ function setStdoutBlocking() {
     }
 }
 
+function isTestProcess() {
+    if (process.env.NODE_TEST_CONTEXT) return true;
+    return process.argv.some(arg => /(?:^|[/\\])tests[/\\].+\.test\.js$/.test(arg));
+}
+
 function setupScriptLogging(scriptPath) {
     if (global.__PAPER_DIGEST_LOG_SETUP_DONE__) {
         return;
@@ -60,6 +65,10 @@ function setupScriptLogging(scriptPath) {
     global.__PAPER_DIGEST_LOG_SETUP_DONE__ = true;
 
     setStdoutBlocking();
+
+    if (isTestProcess()) {
+        return;
+    }
 
     const entryPath = scriptPath || process.argv[1] || __filename;
     const projectRoot = path.resolve(__dirname, '..');

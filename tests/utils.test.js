@@ -248,6 +248,13 @@ describe('buildRequestBody', () => {
         assert.strictEqual(body.temperature, 0.5);
     });
 
+    it('OpenAI 纯文本 content block 会规范化为字符串', () => {
+        const body = buildRequestBody('openai', 'deepseek-v4-pro', [
+            { role: 'user', content: [{ type: 'text', text: 'hello' }] }
+        ], 1000, 0.5);
+        assert.strictEqual(body.messages[0].content, 'hello');
+    });
+
     it('Anthropic system 为顶级字段', () => {
         const body = buildRequestBody('anthropic', 'mimo', [
             { role: 'system', content: 'sys' },

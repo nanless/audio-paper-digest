@@ -234,7 +234,7 @@ async function fetchArxivText(arxivId) {
                     return content;
                 }
             } catch (e) {
-                console.log(`    [deep] fetchArxivText ${arxivId}${suffix} error: ${e.message}`);
+                console.log(`    [deep] fetchArxivText ${htmlId} error: ${e.message}`);
                 continue;
             }
         }
@@ -249,8 +249,8 @@ async function fetchArxivText(arxivId) {
     console.log(`    [deep] fetchArxivText ${arxivId} HTML failed after ${maxRetries} retries, trying PDF fallback...`);
 
     // PDF fallback: download PDF and extract text
-    for (const pdfSuffix of ['', 'v1', 'v2']) {
-        const pdfUrl = `https://arxiv.org/pdf/${arxivId}${pdfSuffix}.pdf`;
+    for (const pdfId of getArxivHtmlIds(arxivId)) {
+        const pdfUrl = `https://arxiv.org/pdf/${pdfId}.pdf`;
         try {
             const pdfResponse = await fetch(pdfUrl, {
                 headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
@@ -382,10 +382,10 @@ async function fetchArxivImageUrls(arxivId) {
                             fullUrl = src;
                         } else if (src.startsWith('/')) {
                             fullUrl = `https://arxiv.org${src}`;
-                        } else if (src.startsWith(`${arxivId}`)) {
+                        } else if (src.startsWith(`${htmlId}`) || src.startsWith(`${String(arxivId).replace(/v\d+$/i, '')}`)) {
                             fullUrl = `https://arxiv.org/html/${src}`;
                         } else {
-                            fullUrl = `https://arxiv.org/html/${arxivId}${suffix}/${src}`;
+                            fullUrl = `https://arxiv.org/html/${htmlId}/${src}`;
                         }
                         images.push({ url: fullUrl, caption: '' });
                     }
@@ -393,7 +393,7 @@ async function fetchArxivImageUrls(arxivId) {
 
                 return images;
             } catch (e) {
-                console.log(`    [deep] fetchArxivImageUrls ${arxivId}${suffix} error: ${e.message}`);
+                console.log(`    [deep] fetchArxivImageUrls ${htmlId} error: ${e.message}`);
                 continue;
             }
         }
