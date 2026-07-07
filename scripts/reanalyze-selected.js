@@ -9,7 +9,7 @@ setupScriptLogging(__filename);
 
 const fs = require('fs');
 const path = require('path');
-const { readJsonSafe, getBeijingISOString, writeFileAtomic } = require('./utils.js');
+const { readJsonSafe, getBeijingISOString, writeFileAtomic, normalizedId } = require('./utils.js');
 const { analyzeBatch } = require('./analysis-engine.js');
 const Config = require('./config.js');
 
@@ -28,10 +28,10 @@ async function reanalyzeSelected(ids) {
 
     // 找到目标论文，清除旧的 analysis
     const toReanalyze = [];
-    const idSet = new Set(ids);
+    const idSet = new Set(ids.map(id => normalizedId(id)));
 
     for (const p of papers) {
-        const aid = p.arxivId || p.paper_id || '';
+        const aid = normalizedId(p);
         if (idSet.has(aid)) {
             // 清除旧分析结果但保留论文基本信息
             const cleanPaper = {
@@ -82,12 +82,12 @@ async function reanalyzeSelected(ids) {
             // 增量保存分析进度
             const mergedMap = new Map();
             for (const p of papers) {
-                const key = p.arxivId || p.paper_id;
+                const key = normalizedId(p);
                 if (key) mergedMap.set(key, p);
             }
             for (const r of results) {
                 if (!r) continue;
-                const key = r.arxivId || r.paper_id;
+                const key = normalizedId(r);
                 if (key) mergedMap.set(key, r);
             }
             data.papers = Array.from(mergedMap.values());
@@ -99,12 +99,12 @@ async function reanalyzeSelected(ids) {
     // 合并结果：用新结果替换旧结果
     const mergedMap = new Map();
     for (const p of papers) {
-        const key = p.arxivId || p.paper_id;
+        const key = normalizedId(p);
         if (key) mergedMap.set(key, p);
     }
 
     for (const p of analyzedResults) {
-        const key = p.arxivId || p.paper_id;
+        const key = normalizedId(p);
         if (key) mergedMap.set(key, p);
     }
 

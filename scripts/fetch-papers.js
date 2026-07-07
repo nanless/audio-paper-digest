@@ -23,6 +23,7 @@ const {
     buildRequestBody,
     buildHeaders,
     parseResponseText,
+    requestJson,
     detectProxyUrl,
     createProxyAgent,
     loadPrompt,
@@ -57,7 +58,6 @@ function getBrowserHeaders() {
         'User-Agent': ua,
         'Accept': 'application/atom+xml,application/xml,text/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
         'Connection': 'keep-alive',
         'Cache-Control': 'no-cache',
         'Pragma': 'no-cache',
@@ -105,8 +105,7 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
     const url = new URL(apiUrl);
     console.log(`[filter] API 类型: ${apiType} | 端点: ${url.hostname}${url.pathname}`);
 
-    const bodyObj = buildRequestBody(apiType, FILTER_CONFIG.model, messages, maxTokens, 0.3);
-    const postData = JSON.stringify(bodyObj);
+    const bodyObj = buildRequestBody(apiType, FILTER_CONFIG.model, messages, maxTokens, FILTER_CFG.temperature);
 
     const proxyUrl = detectProxyUrl();
     if (proxyUrl) {
@@ -115,58 +114,19 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
 
     let lastError = null;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), FILTER_CFG.timeoutMs);
-
-        const requestHeaders = buildHeaders(apiType, FILTER_CONFIG.key, postData);
-
-        const options = {
-            hostname: url.hostname,
-            path: url.pathname + url.search,
-            method: 'POST',
-            headers: requestHeaders,
-            timeout: FILTER_CFG.timeoutMs,
-            signal: controller.signal,
-            agent: false   // LLM API 必须直连
-        };
+        const requestHeaders = buildHeaders(apiType, FILTER_CONFIG.key, JSON.stringify(bodyObj));
 
         try {
-            const result = await new Promise((resolve, reject) => {
-                const https = require('https');
-                const req = https.request(options, (res) => {
-                    const chunks = [];
-                    res.on('data', chunk => chunks.push(chunk));
-                    res.on('end', () => {
-                        clearTimeout(timeoutId);
-                        const data = Buffer.concat(chunks).toString('utf8');
-                        try {
-                            const response = JSON.parse(data);
-                            const content = parseResponseText(apiType, response);
-                            if (content !== null) {
-                                resolve(content);
-                            } else if (response.error) {
-                                reject(new Error(response.error.message || JSON.stringify(response.error)));
-                            } else {
-                                reject(new Error('Invalid response: ' + data.substring(0, 200)));
-                            }
-                        } catch (e) {
-                            reject(new Error('Parse error: ' + e.message));
-                        }
-                    });
-                });
-                req.on('error', (err) => {
-                    clearTimeout(timeoutId);
-                    reject(err);
-                });
-                req.on('timeout', () => {
-                    clearTimeout(timeoutId);
-                    req.destroy();
-                    reject(new Error('Request timeout'));
-                });
-                req.write(postData);
-                req.end();
+            const response = await requestJson(apiUrl, bodyObj, requestHeaders, {
+                timeoutMs: FILTER_CFG.timeoutMs,
+                agent: false
             });
-            return result;
+            const content = parseResponseText(apiType, response.body);
+            if (content !== null) return content;
+            if (response.body.error) {
+                throw new Error(response.body.error.message || JSON.stringify(response.body.error));
+            }
+            throw new Error(`Invalid response (HTTP ${response.statusCode}): ${response.raw.substring(0, 200)}`);
         } catch (err) {
             lastError = err;
             console.log(`[filter] ⚠️  LLM 调用失败 (尝试 ${attempt}/${maxRetries}): ${err.message}`);
@@ -653,6 +613,7 @@ function parseSearchPageHTML(html, categoryId, existingIds = null) {
  */
 async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResultsPerCategory, retryCount = ARXIV_CONFIG.fetchMaxRetries, existingIds = null) {
     console.log(`[fetch] 正在抓取 ${categoryId} 类别的 ${maxResults} 篇论文...`);
+    const merged = new Map();
 
     // 1. 优先用 recent 页面
     let recentPapers = await fetchCategoryFromRecentPage(categoryId, existingIds, maxResults);
@@ -660,21 +621,29 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
     // 补充摘要（recent 页面不包含摘要）
     if (recentPapers.length > 0) {
         recentPapers = await fetchAbstracts(recentPapers, 5);
-        return recentPapers;
+        for (const p of recentPapers) {
+            const key = normalizedId(p);
+            if (key) merged.set(key, p);
+        }
+        if (merged.size >= maxResults) {
+            return Array.from(merged.values()).slice(0, maxResults);
+        }
+        console.log(`[fetch] ${categoryId} recent 仅 ${merged.size}/${maxResults} 篇，继续用搜索页补足...`);
+    } else {
+        console.log(`[fetch] ${categoryId} recent 无结果，尝试搜索页...`);
     }
 
     // 2. recent 无结果，用搜索页
-    console.log(`[fetch] ${categoryId} recent 无结果，尝试搜索页...`);
     const webPapers = await fetchCategoryFromSearchPage(categoryId, existingIds, maxResults);
+    for (const p of webPapers) {
+        const key = normalizedId(p);
+        if (key && !merged.has(key)) merged.set(key, p);
+    }
 
-    const merged = new Map();
-    for (const p of recentPapers) merged.set(p.arxivId, p);
-    for (const p of webPapers) merged.set(p.arxivId, p);
-
-    if (webPapers.length > 0) {
+    if (merged.size >= maxResults || webPapers.length > 0) {
         const result = Array.from(merged.values());
         console.log(`[fetch] ${categoryId} recent+搜索页合并 ${result.length} 篇`);
-        return result;
+        if (result.length >= maxResults) return result.slice(0, maxResults);
     }
 
     // 3. 搜索页也无结果，用 API
@@ -701,7 +670,10 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
                 const apiPapers = parseArxivXML(xml, categoryId, existingIds);
 
                 if (apiPapers.length > 0) {
-                    for (const p of apiPapers) merged.set(p.arxivId, p);
+                    for (const p of apiPapers) {
+                        const key = normalizedId(p);
+                        if (key && !merged.has(key)) merged.set(key, p);
+                    }
                 }
                 break;
             }
@@ -719,7 +691,7 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
 
     const result = Array.from(merged.values());
     console.log(`[fetch] ${categoryId} 最终 ${result.length} 篇`);
-    return result;
+    return result.slice(0, maxResults);
 }
 
 /**
@@ -819,6 +791,53 @@ function deduplicatePapers(papers) {
 /**
  * 用大模型判断论文是否语音/音频相关
  */
+function parseFilterDecision(responseText, paperId = '') {
+    const answer = responseText ? responseText.trim().toLowerCase() : '';
+
+    // 1. 优先解析 JSON 格式，便于未来让 prompt 输出机器可读结构
+    try {
+        const jsonStart = answer.indexOf('{');
+        const jsonEnd = answer.lastIndexOf('}');
+        if (jsonStart >= 0 && jsonEnd > jsonStart) {
+            const parsed = JSON.parse(answer.slice(jsonStart, jsonEnd + 1));
+            const decision = String(parsed.decision || parsed.related || parsed.conclusion || '').toLowerCase();
+            if (['related', 'yes', 'y', 'true', '相关', '是'].includes(decision)) return true;
+            if (['not_related', 'not related', 'no', 'n', 'false', '不相关', '无关', '否'].includes(decision)) return false;
+        }
+    } catch {
+        // fall through to text parsing
+    }
+
+    // 2. 优先匹配结构化结论行，先判否定，避免 fallback 中“是否相关”的“否”误伤
+    const conclusionMatch = answer.match(/(?:结论|判断|是否相关|conclusion|judgment|related)\s*[：:]\s*(not\s+related|not_related|unrelated|不相关|无关|否|no|n|related|相关|是|yes|y)(?=\s|$|[。；;，,])/i);
+    if (conclusionMatch) {
+        const v = conclusionMatch[1].toLowerCase();
+        return !(v === 'not related' || v === 'not_related' || v === 'unrelated' || v === '不相关' || v === '无关' || v === '否' || v === 'no' || v === 'n');
+    }
+
+    // 3. 检查最后一行
+    const lines = answer.split('\n').map(l => l.trim()).filter(l => l);
+    const lastLine = lines[lines.length - 1] || '';
+    if (lastLine === '相关' || lastLine === '是' || lastLine === 'yes' || lastLine === 'y' || lastLine === 'related') {
+        return true;
+    }
+    if (lastLine === '不相关' || lastLine === '无关' || lastLine === '否' || lastLine === 'no' || lastLine === 'n' || lastLine === 'not related' || lastLine === 'not_related' || lastLine === 'unrelated') {
+        return false;
+    }
+
+    // 4. 文本中是否包含明确否定/肯定短语。避免单字“是/否”误伤说明句。
+    if (answer.includes('不相关') || answer.includes('无关') || /\b(not related|not_related|unrelated)\b/i.test(answer)) {
+        return false;
+    }
+    if (answer.includes('相关') || /\brelated\b/i.test(answer)) {
+        return true;
+    }
+
+    // 4. 仍无法判断，默认保留（宁可错留不可错杀）
+    console.log(`[filter] 无法判断 ${paperId}: "${answer.substring(0, 50)}" → 默认保留`);
+    return true;
+}
+
 async function isSpeechAudioRelated(paper) {
     const prompt = loadPrompt('prompts/filter.md', {
         title: paper.title,
@@ -828,45 +847,7 @@ async function isSpeechAudioRelated(paper) {
 
     try {
         const response = await callModelForFilter([{ role: 'user', content: prompt }], 1000);
-        const answer = response ? response.trim().toLowerCase() : '';
-
-        // 1. 优先匹配新格式「结论：相关/不相关」
-        if (answer.includes('结论：相关') || answer.includes('结论:相关')) {
-            return true;
-        }
-        if (answer.includes('结论：不相关') || answer.includes('结论:不相关')) {
-            return false;
-        }
-
-        // 2. 兼容旧格式「判断：是/否」
-        if (answer.includes('判断：是') || answer.includes('判断:是')) {
-            return true;
-        }
-        if (answer.includes('判断：否') || answer.includes('判断:否')) {
-            return false;
-        }
-
-        // 3. 检查最后一行
-        const lines = answer.split('\n').map(l => l.trim()).filter(l => l);
-        const lastLine = lines[lines.length - 1] || '';
-        if (lastLine === '相关' || lastLine === '是' || lastLine === 'yes' || lastLine === 'y') {
-            return true;
-        }
-        if (lastLine === '不相关' || lastLine === '否' || lastLine === 'no' || lastLine === 'n') {
-            return false;
-        }
-
-        // 4. 文本中是否包含明确否定/肯定词
-        if (answer.includes('不相关') || answer.includes('无关') || answer.includes('否')) {
-            return false;
-        }
-        if (answer.includes('相关') || answer.includes('是')) {
-            return true;
-        }
-
-        // 5. 仍无法判断，默认保留（宁可错留不可错杀）
-        console.log(`[filter] 无法判断 ${paper.arxivId}: "${answer.substring(0, 50)}" → 默认保留`);
-        return true;
+        return parseFilterDecision(response, paper.arxivId);
     } catch (err) {
         console.error(`[filter] 判断论文 ${paper.arxivId} 失败: ${err.message}，默认保留`);
         return true;   // API 失败时宁可错留不可错杀
@@ -969,7 +950,8 @@ function filterPapersByKeywords(papers) {
             return false;
         }
 
-        const hasCoreCategory = paper.categories.some(cat => coreCategories.includes(cat));
+        const categories = Array.isArray(paper.categories) ? paper.categories : [];
+        const hasCoreCategory = categories.some(cat => coreCategories.includes(cat));
         if (hasCoreCategory) {
             return true;
         }
@@ -995,6 +977,7 @@ module.exports = {
     deduplicatePapers,
     filterPapers,
     filterPapersWithLLM,
+    parseFilterDecision,
     isSpeechAudioRelated,
     filterPapersByKeywords,
     loadPapers,

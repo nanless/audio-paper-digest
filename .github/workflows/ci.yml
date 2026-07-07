@@ -51,6 +51,8 @@ jobs:
           node -c tests/config.test.js
           node -c tests/analysis-engine.test.js
           node -c tests/fetch-huggingface-papers.test.js
+          node -c tests/deep-analyzer.test.js
+          node -c tests/fetch-papers.test.js
 
       - name: Check Python syntax
         run: |

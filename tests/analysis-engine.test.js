@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { mergeAndSaveResults } = require('../scripts/analysis-engine.js');
+const { mergeAndSaveResults, analyzeBatch } = require('../scripts/analysis-engine.js');
 
 describe('mergeAndSaveResults', () => {
     it('不会用无 analysis 的失败结果覆盖已有成功结果', async () => {
@@ -33,5 +33,27 @@ describe('mergeAndSaveResults', () => {
         assert.strictEqual(saved.papers[0].title, 'Existing success');
         assert.strictEqual(saved.papers[0].analysis, 'successful analysis');
         assert.deepStrictEqual(saved.papers[0].parsed, { score: '8.0' });
+    });
+});
+
+describe('analyzeBatch', () => {
+    it('shouldSkip 决策只对每篇论文计算一次', async () => {
+        const calls = new Map();
+        const papers = [
+            { arxivId: '2604.00001v1', title: 'A' },
+            { arxivId: '2604.00002v1', title: 'B' }
+        ];
+
+        const { stats } = await analyzeBatch(papers, {
+            concurrency: 2,
+            shouldSkip: (paper) => {
+                calls.set(paper.arxivId, (calls.get(paper.arxivId) || 0) + 1);
+                return true;
+            }
+        });
+
+        assert.strictEqual(stats.skipped, 2);
+        assert.strictEqual(calls.get('2604.00001v1'), 1);
+        assert.strictEqual(calls.get('2604.00002v1'), 1);
     });
 });

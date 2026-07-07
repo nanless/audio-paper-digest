@@ -6,6 +6,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
+const https = require('https');
 
 // ═══════════════════════════════════════════════════════
 // 文件操作
@@ -468,19 +470,19 @@ function buildHeaders(apiType, key, bodyStr) {
 /**
  * 解析响应，提取文本内容
  * OpenAI: response.choices[0].message.content
- * Anthropic: response.content[0].text
+ * Anthropic: 合并所有 text content block
  */
 function parseResponseText(apiType, response) {
     if (apiType === 'anthropic') {
-        if (response.content && Array.isArray(response.content) && response.content[0]) {
+        if (response.content && Array.isArray(response.content) && response.content.length > 0) {
+            const textBlocks = response.content
+                .filter(block => block && (block.type === 'text' || block.text))
+                .map(block => block.text || '')
+                .filter(Boolean);
+            if (textBlocks.length > 0) {
+                return textBlocks.join('\n');
+            }
             const first = response.content[0];
-            // 支持 text 和 thinking 两种类型
-            if (first.type === 'text') {
-                return first.text || '';
-            }
-            if (first.type === 'thinking') {
-                return first.thinking || '';
-            }
             return first.text || first.thinking || '';
         }
     } else {
@@ -490,6 +492,53 @@ function parseResponseText(apiType, response) {
         }
     }
     return null;
+}
+
+function requestJson(urlString, bodyObj, headers, options = {}) {
+    const {
+        timeoutMs = 60000,
+        agent = false,
+        method = 'POST'
+    } = options;
+    const url = new URL(urlString);
+    const transport = url.protocol === 'http:' ? http : https;
+    const postData = JSON.stringify(bodyObj);
+    const requestHeaders = {
+        ...headers,
+        'Content-Length': Buffer.byteLength(postData)
+    };
+
+    return new Promise((resolve, reject) => {
+        const req = transport.request({
+            hostname: url.hostname,
+            port: url.port || (url.protocol === 'http:' ? 80 : 443),
+            path: url.pathname + url.search,
+            method,
+            headers: requestHeaders,
+            timeout: timeoutMs,
+            agent
+        }, (res) => {
+            const chunks = [];
+            res.on('data', chunk => chunks.push(chunk));
+            res.on('end', () => {
+                const raw = Buffer.concat(chunks).toString('utf8');
+                try {
+                    const json = JSON.parse(raw);
+                    resolve({ statusCode: res.statusCode, headers: res.headers, body: json, raw });
+                } catch (err) {
+                    reject(new Error(`JSON parse error (HTTP ${res.statusCode}): ${err.message}; body=${raw.substring(0, 300)}`));
+                }
+            });
+        });
+
+        req.on('error', reject);
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('Request timeout'));
+        });
+        req.write(postData);
+        req.end();
+    });
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1204,6 +1253,7 @@ module.exports = {
     buildHeaders,
     getClaudeCodeVersion,
     parseResponseText,
+    requestJson,
     // 代理
     detectProxyUrl,
     createProxyAgent,

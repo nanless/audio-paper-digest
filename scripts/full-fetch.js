@@ -48,7 +48,24 @@ function autoArchiveCurrentData() {
         const archiveDayDir = path.join(ARCHIVE_DIR, recordDate);
         const archivePath = path.join(archiveDayDir, path.basename(filePath));
         if (fs.existsSync(archivePath)) {
-            console.log(`  [归档] 已存在，跳过 ${recordDate}/${path.basename(filePath)}`);
+            try {
+                const currentContent = fs.readFileSync(filePath, 'utf8');
+                const archivedContent = fs.readFileSync(archivePath, 'utf8');
+                if (currentContent === archivedContent) {
+                    console.log(`  [归档] 已存在且内容一致，跳过 ${recordDate}/${path.basename(filePath)}`);
+                } else {
+                    const backupPath = path.join(
+                        archiveDayDir,
+                        `${path.basename(filePath, '.json')}-${getBeijingCompactTimestamp()}.json`
+                    );
+                    fs.copyFileSync(filePath, backupPath);
+                    archived++;
+                    console.log(`  [归档] 已存在但内容不同，另存为 ${path.basename(backupPath)}`);
+                }
+            } catch (e) {
+                console.log(`  [归档] 校验已有归档失败 ${path.basename(filePath)}: ${e.message}`);
+                continue;
+            }
         } else {
             try {
                 fs.mkdirSync(archiveDayDir, { recursive: true });

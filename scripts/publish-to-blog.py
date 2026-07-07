@@ -822,10 +822,14 @@ hiddenInHomeList: true
     else:
         md += '> ⚠️ 该论文分析失败\n'
 
-    # 自动嵌入已筛选图片（当 analysis 中尚未引用时）。
+    # 自动补足已筛选图片（按 URL 去重，保留 analysis 中已有图片）。
     # 不使用 allImageUrls，避免把未经过副模型筛选的无关图片兜底发布出去。
     image_urls = paper.get('selectedImageUrls', [])
-    if image_urls and '![' not in md:
+    if image_urls:
+        existing_image_urls = set(re.findall(r'!\[[^\]]*\]\(([^)]+)\)', md))
+        image_urls = [url for url in image_urls if url not in existing_image_urls]
+
+    if image_urls:
         # 将图片智能插入到对应章节，而非全部堆在最后
         def insert_images_into_sections(markdown, urls):
             if not urls:

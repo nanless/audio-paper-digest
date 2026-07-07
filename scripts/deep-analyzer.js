@@ -6,10 +6,11 @@ setupScriptLogging(__filename);
  * 论文深度分析器 - 使用全文+图片的深度阅读理解
  */
 
-const { loadEnvFile, parseAnalysis, detectApiType, buildApiUrl, buildRequestBody, buildHeaders, parseResponseText, loadPrompt } = require('./utils.js');
+const { loadEnvFile, parseAnalysis, detectApiType, buildApiUrl, buildRequestBody, buildHeaders, parseResponseText, requestJson, loadPrompt } = require('./utils.js');
 loadEnvFile();
 
 // 解决 stdout 缓冲问题：后台运行时强制立即 flush
+const http = require('http');
 const https = require('https');
 const { PDFParse } = require('pdf-parse');
 const { ANALYSIS_CONFIG, ARXIV_CONFIG, SECONDARY_MODEL_CONFIG } = require('./config.js');
@@ -25,6 +26,7 @@ const {
     imageDownloadTimeoutMs: IMAGE_DOWNLOAD_TIMEOUT_MS,
     imageMaxBase64Chars: IMAGE_MAX_BASE64_CHARS,
     imageMaxCount: IMAGE_MAX_COUNT,
+    imageCandidateMax: IMAGE_CANDIDATE_MAX = IMAGE_MAX_COUNT,
     fullTextMaxChars: FULL_TEXT_MAX_CHARS,
     fullTextMinCharsForFull: FULL_TEXT_MIN_CHARS_FOR_FULL
 } = ANALYSIS_CONFIG;
@@ -109,77 +111,36 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = 3, config =
  * 单次 API 调用（内部方法）
  */
 async function _callModelOnce(messages, maxTokens, config, startTime, apiType) {
-    const url = new URL(buildApiUrl(apiType, config.endpoint));
+    const apiUrl = buildApiUrl(apiType, config.endpoint);
+    const bodyObj = buildRequestBody(apiType, config.model, messages, maxTokens, API_TEMPERATURE);
+    const postData = JSON.stringify(bodyObj);
+    const headers = {
+        ...buildHeaders(apiType, config.key, postData),
+        ...config.headers
+    };
 
-    return new Promise((resolve, reject) => {
-        const bodyObj = buildRequestBody(apiType, config.model, messages, maxTokens, API_TEMPERATURE);
-        const postData = JSON.stringify(bodyObj);
-
-        const headers = {
-            ...buildHeaders(apiType, config.key, postData),
-            ...config.headers
-        };
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => {
-            const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-            console.log(`    [api] ✗ ${config.model} | abort timeout | ${duration}s`);
-            controller.abort();
-        }, API_OVERALL_TIMEOUT_MS);
-
-        const options = {
-            hostname: url.hostname,
-            path: url.pathname + url.search,
-            method: 'POST',
-            headers: headers,
-            signal: controller.signal,
-            agent: false   // LLM API 必须直连，禁用连接复用避免代理问题
-        };
-
-        const req = https.request(options, (res) => {
-            const chunks = [];
-            res.on('data', chunk => chunks.push(chunk));
-            res.on('end', () => {
-                clearTimeout(timeoutId);
-                const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-                const data = Buffer.concat(chunks).toString('utf8');
-                try {
-                    const response = JSON.parse(data);
-                    const content = parseResponseText(apiType, response);
-                    if (content !== null) {
-                        console.log(`    [api] ✓ ${config.model} | HTTP ${res.statusCode} | ${content.length} chars | ${duration}s`);
-                        resolve(content);
-                    } else if (response.error) {
-                        console.log(`    [api] ✗ ${config.model} | HTTP ${res.statusCode} | ${duration}s | error: ${response.error.message || JSON.stringify(response.error).substring(0, 100)}`);
-                        reject(new Error(response.error.message || JSON.stringify(response.error)));
-                    } else {
-                        console.log(`    [api] ✗ ${config.model} | HTTP ${res.statusCode} | ${duration}s | invalid response`);
-                        reject(new Error('Invalid response: ' + data.substring(0, 200)));
-                    }
-                } catch (e) {
-                    console.log(`    [api] ✗ ${config.model} | HTTP ${res.statusCode} | ${duration}s | parse error: ${e.message}`);
-                    console.log(`    [api] ✗ ${config.model} | response body (first 500 chars): ${data.substring(0, 500)}`);
-                    reject(new Error('Parse error: ' + e.message));
-                }
-            });
+    try {
+        const response = await requestJson(apiUrl, bodyObj, headers, {
+            timeoutMs: API_OVERALL_TIMEOUT_MS,
+            agent: false
         });
-
-        req.on('error', (err) => {
-            clearTimeout(timeoutId);
-            const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-            console.log(`    [api] ✗ ${config.model} | network error | ${duration}s | ${err.message}`);
-            reject(err);
-        });
-        req.on('timeout', () => {
-            clearTimeout(timeoutId);
-            const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-            console.log(`    [api] ✗ ${config.model} | timeout | ${duration}s`);
-            req.destroy();
-            reject(new Error('Request timeout'));
-        });
-        req.write(postData);
-        req.end();
-    });
+        const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+        const content = parseResponseText(apiType, response.body);
+        if (content !== null) {
+            console.log(`    [api] ✓ ${config.model} | HTTP ${response.statusCode} | ${content.length} chars | ${duration}s`);
+            return content;
+        }
+        if (response.body.error) {
+            console.log(`    [api] ✗ ${config.model} | HTTP ${response.statusCode} | ${duration}s | error: ${response.body.error.message || JSON.stringify(response.body.error).substring(0, 100)}`);
+            throw new Error(response.body.error.message || JSON.stringify(response.body.error));
+        }
+        console.log(`    [api] ✗ ${config.model} | HTTP ${response.statusCode} | ${duration}s | invalid response`);
+        throw new Error('Invalid response: ' + response.raw.substring(0, 200));
+    } catch (err) {
+        const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+        console.log(`    [api] ✗ ${config.model} | request error | ${duration}s | ${err.message}`);
+        throw err;
+    }
 }
 
 async function callModel(messages, maxTokens = 8000) {
@@ -505,6 +466,54 @@ async function downloadImagesSerial(imageUrls, maxCount, maxBase64Chars) {
     return results;
 }
 
+function scoreImageCandidate(info, index) {
+    const text = `${info.url || ''} ${info.caption || ''}`.toLowerCase();
+    let score = 0;
+    const strong = [
+        'architecture', 'framework', 'overview', 'pipeline', 'method', 'model',
+        'spectrogram', 'waveform', 'mel', 'audio', 'speech', 'music',
+        'result', 'results', 'comparison', 'ablation', 'analysis', 'evaluation',
+        'table', 'benchmark', 'performance', 'visualization',
+        '架构', '框架', '流程', '模型', '模块', '方法', '系统',
+        '语谱', '频谱', '波形', '音频', '语音', '音乐',
+        '结果', '对比', '消融', '实验', '评估', '性能', '可视化'
+    ];
+    const weak = ['fig', 'figure', '图'];
+    const negative = ['logo', 'favicon', 'icon', 'author', 'portrait', 'license', 'qr', '二维码'];
+
+    for (const kw of strong) {
+        if (text.includes(kw)) score += 3;
+    }
+    for (const kw of weak) {
+        if (text.includes(kw)) score += 1;
+    }
+    for (const kw of negative) {
+        if (text.includes(kw)) score -= 8;
+    }
+    if (info.caption && info.caption.length > 20) score += 2;
+    // 论文前几张图通常是 overview/architecture，给一点顺序先验。
+    score += Math.max(0, 6 - index);
+    return score;
+}
+
+function selectImageCandidates(imageInfos, maxCount) {
+    if (!Array.isArray(imageInfos) || imageInfos.length === 0) return [];
+    const seen = new Set();
+    const unique = [];
+    for (const info of imageInfos) {
+        if (!info || !info.url || seen.has(info.url)) continue;
+        seen.add(info.url);
+        unique.push(info);
+    }
+    if (unique.length <= maxCount) return unique;
+    return unique
+        .map((info, index) => ({ info, index, score: scoreImageCandidate(info, index) }))
+        .sort((a, b) => b.score - a.score || a.index - b.index)
+        .slice(0, maxCount)
+        .sort((a, b) => a.index - b.index)
+        .map(item => item.info);
+}
+
 /**
  * 构造图片消息块
  */
@@ -583,6 +592,23 @@ function extractMarkdownImageUrls(text) {
     return [...new Set(urls)];
 }
 
+function removeUnapprovedMarkdownImages(text, allowedUrls) {
+    if (!text) return text;
+    const allowed = new Set(allowedUrls || []);
+    return text.replace(/!\[[^\]]*\]\(([^)]+)\)/g, (match, url) => {
+        return allowed.has(url) ? match : '';
+    });
+}
+
+function hasRequiredAnalysisSections(text) {
+    const required = [
+        '评分', '机器摘要', '标签', '作者与机构', '毒舌点评', '核心摘要',
+        '方法概述和架构', '核心创新点', '实验结果', '细节详述',
+        '评分理由', '局限与问题', '开源详情'
+    ];
+    return required.every(title => new RegExp(`(^|\\n)#{2,3}\\s*${escapeRegExp(title)}[：:\\s]*\\n`, 'm').test(text));
+}
+
 async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downloadedImages) {
     if (!isDualModel || downloadedImages.length === 0) {
         return { analysis, selectedImageUrls: [] };
@@ -618,8 +644,15 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
         console.log(`    [deep] ⚠️  副模型输出格式不正确，保留纯文本分析结果`);
         return { analysis, selectedImageUrls: [] };
     }
+    if (!hasRequiredAnalysisSections(cleaned)) {
+        console.log(`    [deep] ⚠️  副模型输出缺少必要章节，保留纯文本分析结果`);
+        return { analysis, selectedImageUrls: [] };
+    }
 
-    const replaced = replaceImageMarkers(cleaned, usableImageInfos);
+    const replaced = removeUnapprovedMarkdownImages(
+        replaceImageMarkers(cleaned, usableImageInfos),
+        usableImageInfos.map(info => info.url)
+    );
     const selectedImageUrls = extractMarkdownImageUrls(replaced)
         .filter(url => usableImageInfos.some(info => info.url === url));
     console.log(`    [deep] ✅ 副模型图片筛选完成：插入 ${selectedImageUrls.length}/${usableImageInfos.length} 张`);
@@ -647,7 +680,13 @@ async function analyzePaperDeep(paper) {
         console.log(`    [deep] 使用预提供全文: ${fullText.length} 字符`);
     }
 
-    const textForAnalysis = fullText || (paper.abstract || paper.summary || '');
+    const rawTextForAnalysis = fullText || (paper.abstract || paper.summary || '');
+    const textForAnalysis = rawTextForAnalysis.length > FULL_TEXT_MAX_CHARS
+        ? rawTextForAnalysis.slice(0, FULL_TEXT_MAX_CHARS)
+        : rawTextForAnalysis;
+    if (rawTextForAnalysis.length > textForAnalysis.length) {
+        console.log(`    [deep] 全文过长，截断到 ${textForAnalysis.length}/${rawTextForAnalysis.length} 字符`);
+    }
     const hasFullText = fullText.length > FULL_TEXT_MIN_CHARS_FOR_FULL;
 
     if (!textForAnalysis || textForAnalysis.trim().length < 10) {
@@ -672,11 +711,16 @@ async function analyzePaperDeep(paper) {
 
     // 提取纯 URL 列表用于下载和保存
     const imageUrls = imageInfos.map(info => info.url);
+    const candidateImageInfos = selectImageCandidates(imageInfos, IMAGE_CANDIDATE_MAX);
+    const candidateImageUrls = candidateImageInfos.map(info => info.url);
+    if (imageInfos.length > candidateImageInfos.length) {
+        console.log(`    [deep] 图片候选预筛: ${imageInfos.length} → ${candidateImageInfos.length} 张`);
+    }
 
     const hasFullTextIntro = hasFullText ? '以下是论文全文，请仔细阅读所有技术细节。' : '以下是论文摘要。';
 
-    const downloadedImages = await downloadImagesSerial(imageUrls, IMAGE_MAX_COUNT, IMAGE_MAX_BASE64_CHARS);
-    console.log(`    [deep] 成功下载 ${downloadedImages.length}/${imageUrls.length} 张图片`);
+    const downloadedImages = await downloadImagesSerial(candidateImageUrls, IMAGE_MAX_COUNT, IMAGE_MAX_BASE64_CHARS);
+    console.log(`    [deep] 成功下载 ${downloadedImages.length}/${candidateImageUrls.length} 张候选图片（总图片 ${imageUrls.length} 张）`);
 
     const prompt = loadPrompt('prompts/deep-analysis.md', {
         hasFullText: hasFullTextIntro,
@@ -793,7 +837,7 @@ async function analyzePaperDeep(paper) {
     try {
         const fixed = await checkAndFixTables(paper, analysis, textForAnalysis);
         if (fixed && fixed !== analysis) {
-            analysis = fixed.trim();
+            analysis = removeUnapprovedMarkdownImages(fixed.trim(), []);
             console.log(`    [deep] ✅ 表格补充完成`);
         }
     } catch (e) {
@@ -804,7 +848,7 @@ async function analyzePaperDeep(paper) {
     try {
         const fixed = await checkAndFixMethodSection(paper, analysis, textForAnalysis);
         if (fixed && fixed !== analysis) {
-            analysis = fixed.trim();
+            analysis = removeUnapprovedMarkdownImages(fixed.trim(), []);
             console.log(`    [deep] ✅ 方法概述补充完成`);
         }
     } catch (e) {
@@ -888,12 +932,14 @@ async function checkDemoPageForOpensource(demoUrl) {
         console.log(`    [deep] 🔍 检查 demo 页面: ${demoUrl}`);
         
         // 使用 https 请求获取页面内容
-        const response = await new Promise((resolve, reject) => {
-            const url = new URL(demoUrl);
-            const options = {
-                hostname: url.hostname,
-                path: url.pathname + url.search,
-                method: 'GET',
+            const response = await new Promise((resolve, reject) => {
+                const url = new URL(demoUrl);
+                const transport = url.protocol === 'http:' ? http : https;
+                const options = {
+                    hostname: url.hostname,
+                    port: url.port || (url.protocol === 'http:' ? 80 : 443),
+                    path: url.pathname + url.search,
+                    method: 'GET',
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -901,7 +947,7 @@ async function checkDemoPageForOpensource(demoUrl) {
                 timeout: 15000,
             };
             
-            const req = https.request(options, (res) => {
+                const req = transport.request(options, (res) => {
                 const chunks = [];
                 res.on('data', chunk => chunks.push(chunk));
                 res.on('end', () => resolve({ status: res.statusCode, data: Buffer.concat(chunks).toString('utf8') }));
@@ -967,8 +1013,7 @@ async function reviseAnalysis(paper, existingAnalysis, textForAnalysis) {
  * 从分析文本中提取方法概述和架构部分
  */
 function extractMethodSection(analysis) {
-    const m = analysis.match(/###\s*01[.\s]+方法概述和架构[：:\s]*\n([\s\S]*?)(?=###\s*02[.\s]|\n##\s*|$)/);
-    return m ? m[1].trim() : '';
+    return extractSectionByTitle(analysis, '方法概述和架构', ['核心创新点', '实验结果', '细节详述', '评分理由']);
 }
 
 /**
@@ -1053,7 +1098,7 @@ async function checkAndFixMethodSection(paper, analysis, textForAnalysis) {
 arXiv ID: ${paper.arxivId}
 
 ## 要求
-1. 只输出"### 01.方法概述和架构"这一个 section 的完整内容。
+1. 只输出"## 方法概述和架构"这一个 section 的完整内容。
 2. 必须详细覆盖以下要素（缺一不可）：
    - 整体流程概述（输入→处理→输出的完整链路）
    - 每个核心组件的名称、功能、内部结构/实现、输入输出
@@ -1074,7 +1119,7 @@ ${methodSection}
 
 ${textForAnalysis.slice(0, 80000)}
 
-请直接输出"### 01.方法概述和架构"及之后的完整内容：`;
+请直接输出"## 方法概述和架构"及之后的完整内容：`;
 
     const fixedSection = await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
     if (!fixedSection || fixedSection.length < 200) {
@@ -1082,7 +1127,7 @@ ${textForAnalysis.slice(0, 80000)}
     }
 
     // 将补充的方法概述合并回原分析
-    return mergeSection(analysis, '### 01.方法概述和架构', fixedSection);
+    return mergeSectionByTitle(analysis, '方法概述和架构', fixedSection);
 }
 
 /**
@@ -1109,8 +1154,7 @@ function hasOmissionMarkers(text) {
  * 从分析文本中提取实验结果部分
  */
 function extractResultsSection(analysis) {
-    const m = analysis.match(/###\s*03[.\s]+实验结果[：:\s]*\n([\s\S]*?)(?=###\s*04[.\s]|\n##\s*|$)/);
-    return m ? m[1].trim() : '';
+    return extractSectionByTitle(analysis, '实验结果', ['细节详述', '评分理由', '局限与问题', '开源详情']);
 }
 
 /**
@@ -1138,10 +1182,10 @@ async function checkAndFixTables(paper, analysis, textForAnalysis) {
 arXiv ID: ${paper.arxivId}
 
 ## 要求
-1. 只输出"### 03.实验结果"这一个 section 的完整内容。
+1. 只输出"## 实验结果"这一个 section 的完整内容。
 2. 必须包含论文中所有实验结果表格的标准 Markdown 格式（表头、模型名称、数据集、指标、数值），不要省略任何行或列。
 3. 严禁使用"此处省略"、"详见原文"等字样。所有数据必须直接列出。
-4. 如果有图片，用 Markdown 图片语法 \`![描述](URL)\` 插入。
+4. 严禁编造或插入任何 Markdown 图片、HTML 图片或图片 URL；本轮只补表格和文字。
 5. 在表格下方用文字说明关键结论。
 
 ## 已有分析（供参考，但可能缺少表格）
@@ -1152,7 +1196,7 @@ ${resultsSection}
 
 ${textForAnalysis.slice(0, 80000)}
 
-请直接输出"### 03.实验结果"及之后的完整内容：
+请直接输出"## 实验结果"及之后的完整内容：
 `;
 
     const fixedSection = await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
@@ -1161,7 +1205,7 @@ ${textForAnalysis.slice(0, 80000)}
     }
 
     // 将补充的实验结果合并回原分析
-    return mergeSection(analysis, '### 03.实验结果', fixedSection);
+    return mergeSectionByTitle(analysis, '实验结果', fixedSection);
 }
 
 /**
@@ -1230,7 +1274,7 @@ function updateOpensourceFromDemoLinks(analysis, foundLinks) {
 
 function mergeSection(analysis, sectionHeader, newContent) {
     // 去掉 newContent 开头重复的 sectionHeader，避免合并后出现双标题
-    const headerPattern = new RegExp('^' + sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[：:\s]*\n*');
+    const headerPattern = new RegExp('^' + sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[：:\\s]*\\n*');
     const cleanContent = newContent.replace(headerPattern, '').trim();
 
     const escaped = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1241,6 +1285,57 @@ function mergeSection(analysis, sectionHeader, newContent) {
     return analysis.trim() + '\n\n' + sectionHeader + '\n' + cleanContent;
 }
 
+function escapeRegExp(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function extractSectionByTitle(analysis, title, followingTitles = []) {
+    if (!analysis) return '';
+    const heading = new RegExp(
+        `(^|\\n)(#{2,3}\\s*(?:\\d+[.\\s]+)?${escapeRegExp(title)}[：:\\s]*\\n)`,
+        'm'
+    );
+    const match = heading.exec(analysis);
+    if (!match) return '';
+
+    const contentStart = match.index + match[1].length + match[2].length;
+    const rest = analysis.slice(contentStart);
+    let end = rest.length;
+    const titleAlternation = followingTitles.map(escapeRegExp).join('|');
+    const nextSpecific = titleAlternation
+        ? new RegExp(`\\n#{2,3}\\s*(?:\\d+[.\\s]+)?(?:${titleAlternation})[：:\\s]*\\n`)
+        : null;
+    const nextAny = /\n#{2,3}\s/g;
+    const specificMatch = nextSpecific ? nextSpecific.exec(rest) : null;
+    const anyMatch = nextAny.exec(rest);
+    if (specificMatch) {
+        end = specificMatch.index;
+    } else if (anyMatch) {
+        end = anyMatch.index;
+    }
+    return rest.slice(0, end).trim();
+}
+
+function normalizeSectionContent(title, newContent) {
+    const heading = new RegExp(
+        `^#{1,6}\\s*(?:\\d+[.\\s]+)?${escapeRegExp(title)}[：:\\s]*\\n*`,
+        'i'
+    );
+    return (newContent || '').replace(heading, '').trim();
+}
+
+function mergeSectionByTitle(analysis, title, newContent) {
+    const cleanContent = normalizeSectionContent(title, newContent);
+    const heading = new RegExp(
+        `(^|\\n)(#{2,3}\\s*(?:\\d+[.\\s]+)?${escapeRegExp(title)}[：:\\s]*\\n)([\\s\\S]*?)(?=\\n#{2,3}\\s|$)`,
+        'm'
+    );
+    if (heading.test(analysis)) {
+        return analysis.replace(heading, (match, prefix, header) => `${prefix}${header}${cleanContent}\n`);
+    }
+    return `${analysis.trim()}\n\n## ${title}\n${cleanContent}`;
+}
+
 module.exports = {
     analyzePaperDeep,
     parseAnalysis,
@@ -1248,7 +1343,12 @@ module.exports = {
     fetchArxivText,
     fetchArxivImageUrls,
     replaceImageMarkers,
-    extractMarkdownImageUrls
+    extractMarkdownImageUrls,
+    removeUnapprovedMarkdownImages,
+    selectImageCandidates,
+    hasRequiredAnalysisSections,
+    extractSectionByTitle,
+    mergeSectionByTitle
 };
 
 // 直接运行测试

@@ -9,7 +9,7 @@ setupScriptLogging(__filename);
 
 const fs = require('fs');
 const path = require('path');
-const { loadEnvFile, writeFileAtomic, readJsonSafe, getBeijingISOString } = require('./utils.js');
+const { loadEnvFile, writeFileAtomic, readJsonSafe, getBeijingISOString, normalizedId } = require('./utils.js');
 const { analyzeBatch } = require('./analysis-engine.js');
 const Config = require('./config.js');
 
@@ -78,11 +78,11 @@ async function runDeepAnalysis() {
             const resultMap = new Map();
             for (const r of results) {
                 if (!r) continue;
-                const key = r.arxivId || r.paper_id;
+                const key = normalizedId(r);
                 if (key) resultMap.set(key, r);
             }
             for (let i = 0; i < papers.length; i++) {
-                const key = papers[i].arxivId || papers[i].paper_id;
+                const key = normalizedId(papers[i]);
                 if (resultMap.has(key)) {
                     papers[i] = { ...papers[i], ...resultMap.get(key) };
                 }

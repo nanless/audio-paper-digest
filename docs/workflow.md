@@ -64,7 +64,7 @@
 3. **抓取参数**：
    - **提前停止**：若连续遇到 20 篇已有 ID（存在于 `papers.json`），则停止该分类抓取
    - 核心类别优先抓取，补充类别随机排序
-   - 类别间延迟 45-60 秒（含随机抖动）
+   - 类别间延迟约 70-90 秒起（`categoryDelayMs=60s` + 10-30 秒随机抖动，限流时额外补偿）
    - 无新论文时继续运行而非终止
 
 4. **日志输出**：
@@ -165,13 +165,13 @@ HF 特有字段（共 7 个）：
 | 局限与问题 | 分两部分：论文明确承认的局限 + 审稿人发现的潜在问题 |
 | 开源详情 | 只允许基于论文文本或当前输入链接总结，缺失时写"未提及"，禁止编造仓库/热度信息 |
 
-> **图片与表格放置规则**：图片和表格不再集中在一个单独 section 中，而是直接嵌入到对应位置——架构图贴在**方法概述和架构**部分，实验结果图/表贴在**实验结果**部分。严禁编造图片 URL，只能使用 prompt 中提供的 arXiv 图片 URL 列表中的真实 URL。
+> **图片与表格放置规则**：图片和表格不再集中在一个单独 section 中，而是直接嵌入到对应位置——架构图贴在**方法概述和架构**部分，实验结果图/表贴在**实验结果**部分。严禁编造图片 URL；只有双模型 `image-supplement` 阶段提供的候选图片可被副模型选择并插入。
 
 **技术特性**：
 - **API 协议自动路由**：与筛选阶段共用同一套 `detectApiType()` 逻辑，根据 `PAPER_ANALYZER_ENDPOINT` 和 `PAPER_ANALYZER_MODEL` 自动切换 OpenAI / Anthropic 协议
 - 获取 arXiv HTML 全文（最多 500K 字符），依次尝试 `v1`、`v2`、无后缀版本；使用 **cheerio** 结构化解析 HTML，移除 script/style/nav/header/footer 等噪音元素
 - 提取图片 URL（png/jpg/jpeg），过滤 logo/favicon
-- **图片分析**：串行下载论文全部图片（无数量限制）；单张 base64 上限约 20M 字符（config.js 中 `imageMaxBase64Chars`）。图片 URL 列表会写入 prompt，即使下载失败 LLM 也能获取真实 URL 用于正文引用。若全部下载失败，自动降级为纯文本重试
+- **图片分析**：先按 caption/文件名/顺序启发式预筛候选图片（默认最多 `imageCandidateMax=20` 张），再串行下载最多 `imageMaxCount=20` 张；单张 base64 上限约 20M 字符（config.js 中 `imageMaxBase64Chars`）。双模型模式下只有成功下载并通过副模型筛选的图片会写入正文；若没有可用图片，自动退回纯文本分析
 - **并发度：3 篇并行**（可通过 `PD_ANALYSIS_CONCURRENCY` 环境变量调整）
 - 每篇最多重试 **2 次**（外层 `analysis-engine.js`），每次外层重试内部 API 调用还有 **3 次** 重试（`deep-analyzer.js` 内层，指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5000ms`），外层重试间隔 3 秒（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整外层）
 - API 整体超时 **20 分钟**（AbortController）
@@ -185,12 +185,12 @@ HF 特有字段（共 7 个）：
 | 轮次 | 名称 | Prompt | 作用 |
 |------|------|--------|------|
 | Round 1 | 主深度分析 | `prompts/deep-analysis.md` | 主模型对**全文纯文本**分析，生成所有章节 |
-| Round 1b | 图像补充（仅双模型模式） | `prompts/image-supplement.md` | 副模型接收图片 + 主模型输出做多模态补充，替换 Round 1 结果；副模型未配置或无图片时跳过 |
 | Round 2 | 开源扫描 | `prompts/opensource-scan.md` | 从论文文本提取 GitHub/HF/ModelScope 等链接，补充开源详情 |
 | Round 2.5 | Demo 页链接发现 | 代码抓取 | 若无开源链接，访问分析中出现的 demo 页（最多 3 个），从中回捞代码/模型/数据集链接 |
 | Round 3 | 审校重写 | `prompts/gap-fill.md` | 对比原始论文与前几轮输出，修正缺失、错误、过度推断 |
 | Round 4 | 表格修复 | 代码检测 + LLM 补充 | 检测实验结果章节缺失的 Markdown 表格，触发补充 |
 | Round 5 | 方法章节修复 | 代码检测 + LLM 补充 | 检测方法概述是否过于简略（<300 字/<3 段），触发扩展至 600+ 字 |
+| Round 6 | 图像筛选与补充（仅双模型模式） | `prompts/image-supplement.md` | 副模型接收候选图片 + 最终文本，筛选高价值图、丢弃低信息图，并把图片插入对应段落 |
 
 > **单模型 vs 双模型**：设置 `PAPER_ANALYZER_SECONDARY_MODEL`（及可选的 `SECONDARY_ENDPOINT`/`SECONDARY_API_KEY`，未设置则复用主模型）即启用双模型模式——主模型先做纯文本分析，后续纯文本修复完成后，副模型负责从候选图片中筛选高价值图（流程图、模型图、语谱图、对比图、结果图等）、丢弃低信息图，并把图片插入到相应段落。未设置副模型时退回单模型：图片 URL 只保存在 `allImageUrls` 候选元数据中，不会自动嵌入博客正文。
 

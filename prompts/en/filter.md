@@ -62,9 +62,9 @@ Important: You must output "Conclusion: related" or "Conclusion: not related".
 
 ## Output Requirements
 The model must output "Conclusion: related" or "Conclusion: not related". The code parses the output with the following priority:
-1. Exact match for "Conclusion: related" / "Conclusion: not related"
-2. Match for "Judgment: yes" / "Judgment: no" (backward compatibility)
+1. JSON fields `decision` / `related` / `conclusion` (`related` / `not_related`)
+2. Structured conclusion lines: `Conclusion/Judgment/Related: related|not related|yes|no`
 3. Match whether the last line is "related" / "not related" / "yes" / "no"
-4. Text contains "not related" / "unrelated" / "no" → not related
-5. Text contains "related" / "yes" → related
+4. Text contains explicit phrases "not related" / "unrelated" → not related
+5. Text contains explicit phrase "related" → related
 6. If still undetermined, default to keeping the paper (better to keep a false positive than to drop a true positive)

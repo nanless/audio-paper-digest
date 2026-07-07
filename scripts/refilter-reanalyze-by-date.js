@@ -29,7 +29,9 @@ async function main() {
         const fetched = paper.fetchedAt || '';
         if (fetched.startsWith(TARGET_DATE)) {
             targetPapers.push({
-                arxivId: paper.arxivId || key,
+                ...paper,
+                paper_id: paper.paper_id || paper.arxivId || key,
+                arxivId: paper.arxivId || paper.paper_id || key,
                 title: paper.title || '',
                 abstract: paper.abstract || paper.summary || '',
                 categories: paper.categories || [],

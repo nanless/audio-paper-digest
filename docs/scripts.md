@@ -172,7 +172,7 @@ HuggingFace Papers 抓取模块。
 
 #### `scripts/deep-analyzer.js`
 
-多模态深度分析器。分析流程为 **5 轮递进式处理**，不是单次调用：
+多模态深度分析器。分析流程为 **6 轮递进式处理**，不是单次调用：
 
 **Round 1 — 主深度分析**
 - `analyzePaperDeep(paper)`：获取 arXiv HTML 全文（最多 500K 字符）+ 串行下载候选图片，双模型模式下由副模型最终筛选高价值图片并插入正文；`allImageUrls` 保存候选图，`selectedImageUrls` / `imageUrls` 保存已选图
@@ -197,6 +197,10 @@ HuggingFace Papers 抓取模块。
 **Round 5 — 方法章节修复（`checkAndFixMethodSection`）**
 - 检测 `## 方法概述和架构` 是否过于简略（少于 300 中文字符、表述模糊、不足 3 段）
 - 若满足条件，触发 LLM 扩展至 600+ 字符的详细描述
+
+**Round 6 — 图像筛选与补充（`applyImageSupplement`，双模型模式）**
+- 加载 `prompts/image-supplement.md`
+- 副模型基于最终文本和候选图片筛选高价值图，丢弃低信息图，并把图片插入到对应段落
 
 **API 调用**：
 - `callModel(messages, maxTokens)`：带重试的 API 调用封装（内层最多 3 次重试，指数退避：第一次 10 秒，之后翻倍）

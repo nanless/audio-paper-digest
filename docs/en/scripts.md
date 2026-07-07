@@ -169,7 +169,7 @@ HuggingFace Papers fetch module.
 
 #### `scripts/deep-analyzer.js`
 
-Multimodal deep analyzer. The analysis flow is a **5-round progressive process**, not a single call:
+Multimodal deep analyzer. The analysis flow is a **6-round progressive process**, not a single call:
 
 **Round 1 -- Main Deep Analysis**
 - `analyzePaperDeep(paper)`: fetches arXiv HTML full text (up to 500K characters) + downloads candidate images serially; in dual-model mode the secondary model finally selects high-value figures and inserts them into the body. `allImageUrls` stores candidates, while `selectedImageUrls` / `imageUrls` store selected figures
@@ -194,6 +194,10 @@ Multimodal deep analyzer. The analysis flow is a **5-round progressive process**
 **Round 5 -- Method Section Fix (`checkAndFixMethodSection`)**
 - Detects if `## Method Overview and Architecture` is too brief (fewer than 300 Chinese characters, vague expression, fewer than 3 paragraphs)
 - If conditions are met, triggers LLM expansion to a 600+ character detailed description
+
+**Round 6 -- Image Selection and Supplement (`applyImageSupplement`, dual-model mode)**
+- Loads `prompts/image-supplement.md`
+- The secondary model uses the final text and candidate images to select high-value figures, drop low-information figures, and insert selected figures into relevant paragraphs
 
 **API Calls**:
 - `callModel(messages, maxTokens)`: retry-wrapped API call encapsulation (up to 3 inner retries, exponential backoff: first 10s, then double)

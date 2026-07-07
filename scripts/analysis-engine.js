@@ -141,6 +141,16 @@ async function analyzeBatch(papers, options = {}) {
     };
 
     let processedCount = 0;
+    const skipDecisions = new Map();
+
+    const shouldSkipCached = (paper) => {
+        if (!shouldSkip) return false;
+        const key = normalizedId(paper) || paper;
+        if (skipDecisions.has(key)) return skipDecisions.get(key);
+        const value = Boolean(shouldSkip(paper));
+        skipDecisions.set(key, value);
+        return value;
+    };
 
     for (let i = 0; i < papers.length; i += concurrency) {
         const batch = papers.slice(i, i + concurrency);
@@ -152,7 +162,7 @@ async function analyzeBatch(papers, options = {}) {
 
             try {
                 if (shouldSkip) {
-                    const skip = shouldSkip(paper);
+                    const skip = shouldSkipCached(paper);
                     if (skip) {
                         stats.skipped++;
                         if (onPaperDone) {
@@ -200,7 +210,19 @@ async function analyzeBatch(papers, options = {}) {
             batchResults = await Promise.all(batchPromises);
         } catch (e) {
             console.error(`[analyzeBatch] 批次 ${batchNum} 执行失败: ${e.message}`);
-            batchResults = [];
+            batchResults = batch.map(paper => {
+                stats.failed++;
+                return {
+                    success: false,
+                    error: e.message,
+                    result: {
+                        ...paper,
+                        analysis: null,
+                        parsed: null,
+                        error: e.message
+                    }
+                };
+            });
         }
 
         for (const r of batchResults) {
@@ -215,7 +237,7 @@ async function analyzeBatch(papers, options = {}) {
 
         processedCount += batch.filter(p => {
             if (!shouldSkip) return true;
-            try { return !shouldSkip(p); } catch (e) { return true; }
+            try { return !shouldSkipCached(p); } catch (e) { return true; }
         }).length;
 
         // 增量保存

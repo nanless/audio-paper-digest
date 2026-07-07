@@ -10,11 +10,12 @@ setupScriptLogging(__filename);
 
 const fs = require('fs');
 const path = require('path');
-const { readJsonSafe, getBeijingISOString, writeFileAtomic } = require('./utils.js');
+const { readJsonSafe, getBeijingISOString, writeFileAtomic, normalizedId } = require('./utils.js');
 const { analyzePaperWithRetry } = require('./analysis-engine.js');
 const Config = require('./config.js');
 
 const TARGET_ARXIV_ID = process.argv[2];
+const TARGET_NORMALIZED_ID = normalizedId(TARGET_ARXIV_ID);
 
 if (!TARGET_ARXIV_ID) {
     console.error('❌ 用法: node scripts/analyze-single-paper.js <arxiv_id>');
@@ -31,7 +32,7 @@ async function analyzeSinglePaper() {
 
     let targetPaper = null;
     for (const [key, paper] of Object.entries(allPapers)) {
-        if (paper && (paper.arxivId === TARGET_ARXIV_ID || paper.paper_id === TARGET_ARXIV_ID)) {
+        if (paper && (normalizedId(paper) === TARGET_NORMALIZED_ID || normalizedId(key) === TARGET_NORMALIZED_ID)) {
             targetPaper = paper;
             break;
         }
@@ -48,9 +49,7 @@ async function analyzeSinglePaper() {
     const existingData = readJsonSafe(resultPath, { papers: [], stats: {} });
 
     const papersList = Array.isArray(existingData) ? existingData : (existingData.papers || []);
-    const alreadyExists = papersList.some(p =>
-        p.arxivId === TARGET_ARXIV_ID || p.paper_id === TARGET_ARXIV_ID
-    );
+    const alreadyExists = papersList.some(p => normalizedId(p) === TARGET_NORMALIZED_ID);
     if (alreadyExists) {
         console.log('⚠️ 该论文已在分析结果中，跳过');
         process.exit(0);

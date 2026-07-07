@@ -179,8 +179,9 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
             if (pubDate && pubDate < cutoffStr) continue;
 
             // 去重
-            if (!merged.has(paper.paper_id)) {
-                merged.set(paper.paper_id, paper);
+            const key = normalizedId(paper);
+            if (key && !merged.has(key)) {
+                merged.set(key, paper);
                 newCount++;
             }
         }
@@ -219,12 +220,13 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
             const pubDate = paper.published.split('T')[0];
             if (pubDate && pubDate < cutoffStr) continue;
 
-            if (!merged.has(paper.paper_id)) {
-                merged.set(paper.paper_id, paper);
+            const key = normalizedId(paper);
+            if (key && !merged.has(key)) {
+                merged.set(key, paper);
                 newCount++;
-            } else {
+            } else if (key) {
                 // 如果已存在但 papers API 有 upvotes 信息，更新
-                const existing = merged.get(paper.paper_id);
+                const existing = merged.get(key);
                 if (paper.hf_upvotes > 0 && existing.hf_upvotes === 0) {
                     existing.hf_upvotes = paper.hf_upvotes;
                 }

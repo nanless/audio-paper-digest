@@ -16,7 +16,7 @@ description: >
 - `README.md`：给人的运行手册（命令、配置、排错）
 - `prompts/filter.md`：筛选阶段 LLM prompt
 - `prompts/deep-analysis.md`：深度分析阶段 LLM prompt（纯文本，输出格式、标签体系、评分标准）
-- `prompts/image-supplement.md`：图像补充 prompt（双模型模式，副模型看图补充主模型分析）
+- `prompts/image-supplement.md`：图像筛选与补充 prompt（双模型模式，最终文本修复后副模型看图选图并补充正文）
 - `prompts/opensource-scan.md`：开源链接扫描 prompt（Round 2）
 
 当文档与代码冲突时，**以 `scripts/*` 当前实现为准，并同步更新文档**。
@@ -35,7 +35,7 @@ description: >
 6. **LLM 筛选**：按 `PAPER_ANALYZER_*` 配置逐篇判断语音/音乐/音频相关，`batchSize=5`（可通过 `PD_FILTER_BATCH_SIZE` 调整），单篇超时 60 秒，重试 5 次
 7. **保存筛选结果**：`data/current/filtered-papers.json`
 8. **更新去重库**：追加所有爬取论文 ID 到 `data/current/papers.json`（不仅筛选通过的，提前保存防止后续中断丢失）
-9. **深度分析**：`deep-analyzer.js`。双模型模式（配置 `PAPER_ANALYZER_SECONDARY_MODEL` 时）：主模型纯文本分析，副模型看图补充；单模型模式（未配置副模型）：仅文本分析。并发 3 篇（可通过 `PD_ANALYSIS_CONCURRENCY` 调整），每篇最多重试 2 次（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整）
+9. **深度分析**：`deep-analyzer.js`。双模型模式（配置 `PAPER_ANALYZER_SECONDARY_MODEL` 时）：主模型纯文本分析，完成开源扫描/审校/表格和方法修复后，副模型最终看图筛选高价值图片并补充正文；单模型模式（未配置副模型）：仅文本分析。并发 3 篇（可通过 `PD_ANALYSIS_CONCURRENCY` 调整），每篇最多重试 2 次（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整）
 10. **增量保存**：每批分析后立即保存到 `data/current/deep-analysis-result.json`，自带失败结果保护（已有成功 analysis 的论文不会被无 analysis 的失败结果覆盖）
 11. **收尾合并**：去重合并历史结果，自动备份 bak 文件（保留最近 10 个）
 
@@ -118,7 +118,7 @@ API 调用特性：
 - **双层重试**：analysis-engine.js 层面每篇最多重试 2 次（总共最多 3 次尝试）；deep-analyzer.js 内部每次 API 调用再重试最多 3 次（指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5s`）
 - **LLM API 请求明确设置 `agent: false`，强制直连以绕过本地代理（避免 MiMo 403）；arXiv/HuggingFace 等外部抓取仍使用代理自动检测**
 - arXiv HTML 解析使用 **cheerio** 结构化选择器，移除 script/style/nav/header/footer 等噪音元素
-- 图片下载为**串行下载**，下载论文全部图片（无数量限制）；单张 base64 上限约 20M 字符（config.js 中 `imageMaxBase64Chars`）；超时后自动降级为纯文本重试
+- 图片先按 caption/文件名/顺序启发式预筛（默认 `imageCandidateMax=20`），再**串行下载**最多 `imageMaxCount=20` 张候选图片；单张 base64 上限约 20M 字符（config.js 中 `imageMaxBase64Chars`）；超时后自动降级为纯文本重试
 - 全文上限约 500K 字符（config.js 中 `fullTextMaxChars`）
 - 所有分析配置集中管理于 `scripts/config.js`，支持环境变量覆写
 

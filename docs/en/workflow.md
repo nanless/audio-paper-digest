@@ -144,13 +144,13 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 | Limitations and Issues | Two parts: limitations explicitly acknowledged by the paper + potential issues identified by the reviewer |
 | Open Source Details | Only allowed to summarize based on paper text or current input links; write "not mentioned" when missing, strictly forbidden to fabricate repository / popularity information |
 
-> **Image and Table Placement Rules**: Images and tables are no longer gathered in a separate section, but embedded directly at the corresponding positions -- architecture diagrams go in the **Method Overview and Architecture** section, experimental result figures/tables go in the **Experimental Results** section. Fabricating image URLs is strictly forbidden; only real URLs from the arXiv image URL list provided in the prompt may be used.
+> **Image and Table Placement Rules**: Images and tables are no longer gathered in a separate section, but embedded directly at the corresponding positions -- architecture diagrams go in the **方法概述和架构** section, experimental result figures/tables go in the **实验结果** section. Fabricating image URLs is strictly forbidden; only candidate figures provided in the dual-model `image-supplement` round may be selected and inserted.
 
 **Technical Features**:
 - **API Protocol Auto-Routing**: shares the same `detectApiType()` logic as the filtering stage, automatically switching between OpenAI / Anthropic protocols based on `PAPER_ANALYZER_ENDPOINT` and `PAPER_ANALYZER_MODEL`
 - Fetches arXiv HTML full text (up to 500K characters), trying `v1`, `v2`, and no-suffix versions in order; uses **cheerio** for structured HTML parsing, removing noise elements such as script/style/nav/header/footer
 - Extracts image URLs (png/jpg/jpeg), filtering out logo/favicon
-- **Image Analysis**: downloads all paper images serially (no quantity limit); single-image base64 cap is approximately 20M characters (`imageMaxBase64Chars` in config.js). The image URL list is written into the prompt, so even if downloads fail the LLM can still obtain real URLs for in-text citations. If all downloads fail, automatically falls back to a pure-text retry
+- **Image Analysis**: first preselects candidate figures by caption/filename/order heuristics (default `imageCandidateMax=20`), then downloads up to `imageMaxCount=20` images serially; single-image base64 cap is approximately 20M characters (`imageMaxBase64Chars` in config.js). In dual-model mode, only successfully downloaded images selected by the secondary model are inserted into the body. If no usable images are available, the flow falls back to text-only analysis
 - **Concurrency: 3 papers in parallel** (adjustable via `PD_ANALYSIS_CONCURRENCY` environment variable)
 - Up to **2 retries** per paper (outer `analysis-engine.js`), with each outer retry having **3 retries** for internal API calls (`deep-analyzer.js` inner layer, exponential backoff: first 10s, then double, `2^attempt * 5000ms`), outer retry interval 3s (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
 - API overall timeout **20 minutes** (AbortController)
@@ -164,12 +164,12 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 | Round | Name | Prompt | Purpose |
 |------|------|--------|--------|
 | Round 1 | Main Deep Analysis | `prompts/deep-analysis.md` | Primary model performs **text-only** full-text analysis, generating all sections |
-| Round 1b | Image Supplement (dual-model only) | `prompts/image-supplement.md` | Secondary model takes images + primary output for multimodal supplement, replacing Round 1 result; skipped when no secondary model or no images |
 | Round 2 | Open Source Scan | `prompts/opensource-scan.md` | Extract GitHub/HF/ModelScope etc. links from paper text, supplement open source details |
 | Round 2.5 | Demo Page Link Discovery | Code fetch | If no open-source links, visit demo pages found in the analysis (up to 3) and recover code/model/dataset links |
 | Round 3 | Review and Rewrite | `prompts/gap-fill.md` | Compare original paper with earlier output, correct omissions, errors, over-inferences |
 | Round 4 | Table Fix | Code detection + LLM supplement | Detect missing Markdown tables in the Experimental Results section, trigger supplementation |
 | Round 5 | Method Section Fix | Code detection + LLM supplement | Detect if Method Overview is too brief (<300 chars / <3 paragraphs), trigger expansion to 600+ chars |
+| Round 6 | Image Selection and Supplement (dual-model only) | `prompts/image-supplement.md` | Secondary model takes candidate images + final text, selects high-value figures, drops low-information figures, and inserts chosen figures into relevant paragraphs |
 
 > **Single-model vs dual-model**: setting `PAPER_ANALYZER_SECONDARY_MODEL` (plus optional `SECONDARY_ENDPOINT`/`SECONDARY_API_KEY`, which reuse the primary values if unset) enables dual-model mode — the primary model first does text-only analysis, then after text-only repair rounds finish, the secondary model selects high-value figures from the candidates (flow diagrams, model diagrams, spectrograms, comparisons, result plots, etc.), drops low-information figures, and inserts the chosen figures into the relevant paragraphs. Without a secondary model it falls back to single-model: image URLs are kept only as `allImageUrls` candidate metadata and are not automatically embedded in the blog body.
 

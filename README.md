@@ -20,7 +20,7 @@
 | `docs/maintenance.md` | 维护约定、评分标准、标签口径 | 维护者 |
 | `prompts/filter.md` | 筛选阶段 LLM prompt | 维护者 |
 | `prompts/deep-analysis.md` | 深度分析主 prompt（Round 1，纯文本） | 维护者 |
-| `prompts/image-supplement.md` | 图像补充 prompt（双模型模式） | 维护者 |
+| `prompts/image-supplement.md` | 图像筛选与补充 prompt（双模型模式） | 维护者 |
 | `prompts/opensource-scan.md` | 开源链接扫描 prompt（Round 2） | 维护者 |
 | `prompts/gap-fill.md` | 审校重写 prompt（Round 3） | 维护者 |
 

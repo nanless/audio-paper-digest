@@ -7,7 +7,7 @@ setupScriptLogging(__filename);
  */
 
 const { fetchCategoryPapers, deduplicatePapers, filterPapers, loadPapers } = require('./fetch-papers.js');
-const { getBeijingISOString } = require('./utils.js');
+const { getBeijingISOString, normalizedId } = require('./utils.js');
 const fs = require('fs');
 const { writeFileAtomic } = require('./utils.js');
 const Config = require('./config.js');
@@ -21,7 +21,7 @@ async function quickTest() {
     const allPapers = [];
 
     const papersData = loadPapers();
-    const existingIds = new Set(Object.keys(papersData.papers));
+    const existingIds = new Set(Object.keys(papersData.papers).map(id => normalizedId(id)));
     console.log(`已有 ${existingIds.size} 篇论文ID，遇到重复将提前停止`);
 
     for (const category of categories) {

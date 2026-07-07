@@ -300,6 +300,16 @@ describe('parseResponseText', () => {
         assert.strictEqual(text, 'hello');
     });
 
+    it('Anthropic 多 text block 会合并', () => {
+        const text = parseResponseText('anthropic', {
+            content: [
+                { type: 'text', text: 'hello' },
+                { type: 'text', text: 'world' }
+            ]
+        });
+        assert.strictEqual(text, 'hello\nworld');
+    });
+
     it('无效响应返回 null', () => {
         assert.strictEqual(parseResponseText('openai', {}), null);
     });

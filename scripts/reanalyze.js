@@ -9,7 +9,7 @@ setupScriptLogging(__filename);
 
 const fs = require('fs');
 const path = require('path');
-const { loadEnvFile, getBeijingISOString, getBeijingLocaleString, writeFileAtomic, readJsonSafe } = require('./utils.js');
+const { loadEnvFile, getBeijingISOString, getBeijingLocaleString, writeFileAtomic, readJsonSafe, normalizedId } = require('./utils.js');
 const { analyzeBatch } = require('./analysis-engine.js');
 
 loadEnvFile();
@@ -78,7 +78,7 @@ async function reanalyzeAll() {
     };
 
     // 预先建立 ID -> 索引映射，避免并发时 findIndex 可能找到错误位置
-    const paperIndexMap = new Map(papers.map((p, i) => [(p.arxivId || p.paper_id), i]));
+    const paperIndexMap = new Map(papers.map((p, i) => [normalizedId(p), i]).filter(([key]) => key));
 
     const { stats } = await analyzeBatch(papers, {
         concurrency: CONCURRENCY,
@@ -93,7 +93,7 @@ async function reanalyzeAll() {
         },
         onPaperDone: (idx, total, paper, result, duration) => {
             if (result.success && result.result) {
-                const key = paper.arxivId || paper.paper_id;
+                const key = normalizedId(paper);
                 const targetIdx = paperIndexMap.get(key);
                 if (targetIdx !== undefined) {
                     papers[targetIdx] = result.result;
