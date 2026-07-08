@@ -142,7 +142,7 @@ HF 特有字段（共 7 个）：
 - 每次重试独立创建 `AbortController` 和 `setTimeout`，避免重试时复用已 abort 的 controller
 
 筛选阶段会增量保存三类文件：
-- `data/current/raw-candidates.json`：合并和博客去重后的候选输入，并包含 arXiv/HF 的 `sourceHealth`；单类别或 HF 抓取失败时会记录 `ok:false`、`error`、`durationMs`
+- `data/current/raw-candidates.json`：合并和博客去重后的候选输入，并包含 arXiv/HF 的 `sourceHealth`；单类别或 HF 抓取失败时会记录 `ok:false`、`error`、`durationMs`。如果合并后候选为空，只有 arXiv 核心来源全部失败或唯一尝试来源失败时才中止；单个补充来源失败但核心来源已成功返回空结果时不再误判为致命错误
 - `data/current/filter-decisions.json`：逐篇 LLM 决策缓存，包含筛选模型、`prompts/filter.md` hash、`related`、`reason`、`rawResponse`、`parseSource`；中断重跑时只复用同模型同 prompt 的决策
 - `data/current/filtered-papers.json`：阶段性/最终筛选输出，最终状态为 `status: "complete"`
 
@@ -204,6 +204,7 @@ HF 特有字段（共 7 个）：
 ### 3.8 增量保存与收尾
 
 - **每批分析完成后立即增量保存**到 `data/current/deep-analysis-result.json`，避免中断丢失全部结果；增量合并时**自动保护已有成功分析**（失败结果不会覆盖已有 `analysis`）
+- 增量保存和最终保存都会通过 `scripts/digest-status.js` 同步 `data/current/papers.json` 的 `digestStatus.status`，成功为 `analyzed`，失败为 `analysis_failed`
 - 全部论文分析完毕后，再次读取已有结果，按 `arxivId`/`paper_id` 去重合并，保留历史数据
 - 自动备份旧文件到 `data/archive/deep-analysis-result-<时间戳>.bak.json`，并清理旧备份（保留最近 10 个）
 - **`papers.json` 自动备份**：每天运行前自动备份 `data/current/papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天

@@ -97,6 +97,9 @@ npm run reanalyze
 # 批量分析未分析论文
 npm run batch
 
+# 只读校验当前 JSON 数据结构
+npm run validate:data
+
 # 运行单元测试
 npm test
 
@@ -109,7 +112,7 @@ npm run backfill
 # 生成博客 Markdown（默认不推送）
 npm run publish -- --date 2026-04-21
 
-# 正式发布博客（review 通过且 LLM review 可用后提交并推送）
+# 正式发布博客（LLM review 可用且无 error 级阻断问题后提交并推送）
 npm run publish -- --push --date 2026-04-21
 
 # 生成微信公众号草稿
@@ -164,6 +167,9 @@ node scripts/batch-analyze.js
 # 单独分析一篇论文
 node scripts/analyze-single-paper.js 2604.16044 --force
 
+# 只读校验当前数据结构
+node scripts/validate-data-files.js
+
 # ========== 发布 ==========
 # 发布博客（强烈建议显式 --date）
 python3 scripts/publish-to-blog.py --date 2026-04-21
@@ -171,7 +177,7 @@ python3 scripts/publish-to-blog.py --date 2026-04-21
 # 只生成 Markdown，不推送
 python3 scripts/publish-to-blog.py --skip-push --date 2026-04-21
 
-# 正式提交并推送（要求 LLM review 可用）
+# 正式提交并推送（要求 LLM review 可用且无 error 级阻断问题）
 python3 scripts/publish-to-blog.py --push --date 2026-04-21
 
 # 用自定义数据发布

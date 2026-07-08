@@ -97,6 +97,9 @@ npm run reanalyze
 # Batch analyze unanalyzed papers
 npm run batch
 
+# Read-only validation for current JSON data files
+npm run validate:data
+
 # Run unit tests
 npm test
 
@@ -109,7 +112,7 @@ npm run backfill
 # Generate blog Markdown (does not push by default)
 npm run publish -- --date 2026-04-21
 
-# Publish blog (commit and push)
+# Publish blog (commit and push after required review passes)
 npm run publish -- --push --date 2026-04-21
 
 # Generate WeChat Official Account draft
@@ -164,6 +167,9 @@ node scripts/batch-analyze.js
 # Analyze a single paper
 node scripts/analyze-single-paper.js 2604.16044
 
+# Read-only validation for current data structure
+node scripts/validate-data-files.js
+
 # ========== Publishing ==========
 # Publish blog (strongly recommend explicit --date)
 python3 scripts/publish-to-blog.py --date 2026-04-21
@@ -171,7 +177,7 @@ python3 scripts/publish-to-blog.py --date 2026-04-21
 # Generate Markdown only, do not push
 python3 scripts/publish-to-blog.py --skip-push --date 2026-04-21
 
-# Commit and push
+# Commit and push after required review passes
 python3 scripts/publish-to-blog.py --push --date 2026-04-21
 
 # Publish with custom data

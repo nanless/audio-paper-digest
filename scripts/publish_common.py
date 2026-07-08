@@ -8,6 +8,7 @@ Paper Digest 发布公共模块 (Python)
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone, timedelta
@@ -20,6 +21,25 @@ BJ_TZ = timezone(timedelta(hours=8))
 
 class PublishLLMUnavailable(RuntimeError):
     """Raised when a required publish-time LLM review cannot run."""
+
+
+def get_claude_code_version():
+    """Return local Claude CLI version for Anthropic-compatible User-Agent."""
+    try:
+        result = subprocess.run(
+            ['claude', '--version'],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            check=False
+        )
+        output = (result.stdout or result.stderr or '').strip()
+        match = re.match(r'^(\d+\.\d+\.\d+)', output)
+        if match:
+            return match.group(1)
+    except Exception:
+        pass
+    return '2.1.108'
 
 
 def detect_publish_api_type(endpoint, model):
@@ -50,12 +70,13 @@ def build_publish_api_url(api_type, endpoint):
     return f'{base}/chat/completions'
 
 
-def build_publish_headers(api_type, api_key):
+def build_publish_headers(api_type, api_key, claude_version=None):
     if api_type == 'anthropic':
+        version = claude_version or get_claude_code_version()
         return {
             'x-api-key': api_key,
             'anthropic-version': '2023-06-01',
-            'User-Agent': 'claude-cli/2.1.108 (external, cli)',
+            'User-Agent': f'claude-cli/{version} (external, cli)',
             'Content-Type': 'application/json'
         }
     return {
@@ -129,6 +150,20 @@ def call_publish_llm_api(prompt, max_tokens=800, temperature=0.1, required=False
     if required:
         raise PublishLLMUnavailable(f'{context} 连续失败: {last_error}')
     return None
+
+
+def review_issue_severity(issue):
+    if isinstance(issue, dict):
+        return str(issue.get('severity', 'warning')).lower()
+    return 'error'
+
+
+def is_blocking_review_issue(issue):
+    return review_issue_severity(issue) == 'error'
+
+
+def count_blocking_review_issues(issues):
+    return sum(1 for issue in issues if is_blocking_review_issue(issue))
 
 
 def load_papers(data_file=None):

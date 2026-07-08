@@ -121,7 +121,7 @@ Runtime parameters:
 - Each retry independently creates an `AbortController` and `setTimeout`, avoiding reuse of an already-aborted controller
 
 The filtering stage writes three files incrementally:
-- `data/current/raw-candidates.json`: candidate input after merge and blog deduplication, including arXiv/HF `sourceHealth`; single-category or HuggingFace failures are recorded with `ok:false`, `error`, and `durationMs`
+- `data/current/raw-candidates.json`: candidate input after merge and blog deduplication, including arXiv/HF `sourceHealth`; single-category or HuggingFace failures are recorded with `ok:false`, `error`, and `durationMs`. If merged candidates are empty, the run only aborts when the core arXiv source fully failed or the only attempted source failed; a supplementary-source failure no longer turns a legitimate empty day into a fatal error when the core source succeeded
 - `data/current/filter-decisions.json`: per-paper LLM decisions, including filter model, `prompts/filter.md` hash, `related`, `reason`, `rawResponse`, and `parseSource`; interrupted runs only reuse decisions from the same model and prompt hash
 - `data/current/filtered-papers.json`: partial/final filtered output; final output uses `status: "complete"`
 
@@ -183,6 +183,7 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 ### 3.8 Incremental Save and Wrap-up
 
 - **Incremental save to `data/current/deep-analysis-result.json` immediately after each batch completes**, avoiding total loss on interruption; during incremental merge, **existing successful analyses are automatically protected** (failed results will not overwrite an existing `analysis`)
+- Incremental and final saves sync `data/current/papers.json` `digestStatus.status` through `scripts/digest-status.js`: successful analyses become `analyzed`, failures become `analysis_failed`
 - After all papers are analyzed, existing results are read again, deduplicated and merged by `arxivId`/`paper_id`, preserving historical data
 - Automatically backs up the old file to `data/archive/deep-analysis-result-<timestamp>.bak.json`, and cleans up old backups (keeping the most recent 10)
 - **`papers.json` automatic backup**: before each daily run, automatically backs up `data/current/papers.json` to `data/archive/papers-<date>.json`, keeping the most recent 7 days

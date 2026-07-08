@@ -9,10 +9,11 @@ setupScriptLogging(__filename);
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { fetchCategoryPapers, filterPapersWithLLM, loadPapers, savePapers } = require('./fetch-papers.js');
+const { fetchCategoryPapers, filterPapersWithLLM, loadPapers } = require('./fetch-papers.js');
 const { fetchHuggingFacePapers, mergeAndDeduplicate } = require('./fetch-huggingface-papers.js');
 const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson, loadPublishedIdsFromBlog } = require('./utils.js');
 const { analyzeBatch, mergeAndSaveResults } = require('./analysis-engine.js');
+const { markPaperDigestStatus, applyAnalysisDigestStatuses, savePapersDatabase } = require('./digest-status.js');
 
 const Config = require('./config.js');
 
@@ -34,18 +35,6 @@ const FILTER_DECISIONS_FILE = path.join(Config.CURRENT_DIR, 'filter-decisions.js
 function shouldUsePaperForFetchDedup(paper) {
     const status = paper?.digestStatus?.status;
     return status !== 'pending_analysis' && status !== 'analysis_failed';
-}
-
-function markPaperDigestStatus(paper, status, extra = {}) {
-    return {
-        ...paper,
-        digestStatus: {
-            ...(paper.digestStatus || {}),
-            status,
-            updatedAt: getBeijingISOString(),
-            ...extra
-        }
-    };
 }
 
 function getFilterPromptHash() {
@@ -119,6 +108,28 @@ function getSourceFailures(sourceHealth) {
         failures.push(`huggingface:${sourceHealth.huggingface.error || 'unknown error'}`);
     }
     return failures;
+}
+
+function getFatalEmptyCandidateSourceFailures(sourceHealth) {
+    const arxivCategories = sourceHealth?.arxiv?.categories || [];
+    const arxivAttempted = arxivCategories.length > 0;
+    const arxivSucceeded = arxivCategories.some(category => category.ok !== false);
+    const arxivAllFailed = arxivAttempted && !arxivSucceeded;
+    const huggingfaceAttempted = Boolean(sourceHealth?.huggingface);
+    const huggingfaceFailed = sourceHealth?.huggingface?.ok === false;
+
+    if (arxivAllFailed) {
+        return getSourceFailures({
+            arxiv: sourceHealth.arxiv,
+            huggingface: huggingfaceAttempted && huggingfaceFailed && !arxivSucceeded ? sourceHealth.huggingface : undefined
+        });
+    }
+
+    if (!arxivAttempted && huggingfaceAttempted && huggingfaceFailed) {
+        return getSourceFailures({ huggingface: sourceHealth.huggingface });
+    }
+
+    return [];
 }
 
 function writeFilterArtifacts({
@@ -508,9 +519,10 @@ async function fullFetch() {
         console.log('\n🔄 第三步：合并去重（arxiv + HuggingFace）');
         allPapers = mergeAndDeduplicate(arxivPapers, hfPapers);
         console.log(`合并后: ${allPapers.length} 篇`);
-        const sourceFailures = getSourceFailures(sourceHealth);
-        if (allPapers.length === 0 && sourceFailures.length > 0) {
-            throw new Error(`所有抓取来源均无可用候选，且存在来源失败: ${sourceFailures.join('; ')}`);
+        sourceHealth = buildSourceHealth(sourceHealth, arxivPapers, hfPapers);
+        const fatalSourceFailures = getFatalEmptyCandidateSourceFailures(sourceHealth);
+        if (allPapers.length === 0 && fatalSourceFailures.length > 0) {
+            throw new Error(`核心抓取来源无可用候选，且存在致命来源失败: ${fatalSourceFailures.join('; ')}`);
         }
 
         arxivOnly = allPapers.filter(p => p.sources?.includes('arxiv') && !p.sources?.includes('huggingface')).length;
@@ -528,7 +540,6 @@ async function fullFetch() {
             console.log(`📝 过滤 ${blogSkippedCount} 篇已发布到博客的论文`);
         }
 
-        sourceHealth = buildSourceHealth(sourceHealth, arxivPapers, hfPapers);
         writeFileAtomic(RAW_CANDIDATES_FILE, JSON.stringify({
             timestamp: getBeijingISOString(),
             stats: {
@@ -657,7 +668,7 @@ async function fullFetch() {
         papersData.papers[normId] = nextPaper;
     }
     try {
-        savePapers(papersData);
+        savePapersDatabase(papersData);
         console.log(`  新增 ${newPaperCount} 篇论文ID到数据库，待分析 ${pendingPaperCount} 篇，累计 ${Object.keys(papersData.papers).length} 篇`);
     } catch (e) {
         console.error(`  ❌ 保存 papers.json 失败: ${e.message}`);
@@ -669,6 +680,12 @@ async function fullFetch() {
     let saveInProgress = false;
     let pendingSave = false;
 
+    const waitForIncrementalSave = async () => {
+        while (saveInProgress) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+    };
+
     const doIncrementalSave = () => {
         if (saveInProgress) {
             pendingSave = true;
@@ -676,11 +693,17 @@ async function fullFetch() {
         }
         saveInProgress = true;
         const outputFile = fs.existsSync(RESULT_FILE) || !fs.existsSync(LEGACY_RESULT_FILE) ? RESULT_FILE : LEGACY_RESULT_FILE;
-        mergeAndSaveResults(analyzedPapers, outputFile, {
+        const snapshot = analyzedPapers.slice();
+        mergeAndSaveResults(snapshot, outputFile, {
             timestamp: getBeijingISOString(),
-            stats: { afterFilter: filteredNew.length, newlyAnalyzed: analyzedPapers.filter(p => p.analysis).length }
+            stats: { afterFilter: filteredNew.length, newlyAnalyzed: snapshot.filter(p => p.analysis).length }
         }).then(({ totalMerged }) => {
-            console.log(`  💾 增量保存: ${analyzedPapers.filter(p => p.analysis).length}/${analyzedPapers.length} 篇已分析完成 (合并后 ${totalMerged} 篇)`);
+            const statusUpdated = applyAnalysisDigestStatuses(papersData, snapshot, { batchDate: today });
+            if (statusUpdated > 0) {
+                savePapersDatabase(papersData);
+            }
+            const statusNote = statusUpdated > 0 ? `，papers.json 状态 ${statusUpdated} 篇` : '';
+            console.log(`  💾 增量保存: ${snapshot.filter(p => p.analysis).length}/${snapshot.length} 篇已分析完成 (合并后 ${totalMerged} 篇${statusNote})`);
             saveInProgress = false;
             if (pendingSave) {
                 pendingSave = false;
@@ -739,6 +762,7 @@ async function fullFetch() {
 
     // ========== 第六步：保存深度分析结果 ==========
     console.log('\n💾 第六步：保存深度分析结果');
+    await waitForIncrementalSave();
 
     const outputFile = fs.existsSync(RESULT_FILE) || !fs.existsSync(LEGACY_RESULT_FILE) ? RESULT_FILE : LEGACY_RESULT_FILE;
 
@@ -824,21 +848,10 @@ async function fullFetch() {
         throw e;
     }
 
-    let statusUpdated = 0;
-    for (const paper of analyzedPapers) {
-        const key = normalizedId(paper);
-        if (!key) continue;
-        const status = paper.analysis ? 'analyzed' : 'analysis_failed';
-        papersData.papers[key] = markPaperDigestStatus(
-            { ...(papersData.papers[key] || {}), ...paper },
-            status,
-            { batchDate: today, error: paper.error || null }
-        );
-        statusUpdated++;
-    }
+    const statusUpdated = applyAnalysisDigestStatuses(papersData, analyzedPapers, { batchDate: today });
     if (statusUpdated > 0) {
         try {
-            savePapers(papersData);
+            savePapersDatabase(papersData);
             console.log(`  已更新 papers.json 分析状态: ${statusUpdated} 篇`);
         } catch (e) {
             console.error(`  ⚠️ 更新 papers.json 分析状态失败: ${e.message}`);
@@ -881,5 +894,6 @@ module.exports = {
     buildSourceHealth,
     getSourceFetchedCount,
     getSourceFailures,
+    getFatalEmptyCandidateSourceFailures,
     loadCompleteFilteredForToday
 };

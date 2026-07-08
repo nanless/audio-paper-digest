@@ -30,7 +30,7 @@ Paper deduplication database. **This file is not archived; it accumulates contin
 }
 ```
 
-`pending_analysis` and `analysis_failed` are not used for strong deduplication in the next `full-fetch`, so interrupted or failed analyses can naturally re-enter the pipeline. Successful analysis updates the status to `analyzed`.
+`pending_analysis` and `analysis_failed` are not used for strong deduplication in the next `full-fetch`, so interrupted or failed analyses can naturally re-enter the pipeline. Successful analysis updates the status to `analyzed`. `full-fetch.js`, `deep-analysis-only.js`, `reanalyze.js`, `batch-analyze.js`, `reanalyze-selected.js`, and `analyze-single-paper.js` all sync this status through `scripts/digest-status.js` to avoid divergent write paths.
 
 ### 5.2 `data/current/raw-candidates.json`
 
@@ -77,6 +77,8 @@ Candidate input after arXiv + HuggingFace merge and blog-published filtering. Us
   "papers": []
 }
 ```
+
+When `papers` is empty and `sourceHealth` contains failures, the main workflow only treats a complete core arXiv failure or a failure of the only attempted source as fatal; individual category failures or HuggingFace supplementary-source failures are recorded but do not necessarily block a legitimate empty candidate batch.
 
 ### 5.3 `data/current/filter-decisions.json`
 

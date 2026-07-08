@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const { readJsonSafe, getBeijingISOString, writeFileAtomic, normalizedId } = require('./utils.js');
 const { analyzeBatch } = require('./analysis-engine.js');
+const { updateAnalysisDigestStatuses } = require('./digest-status.js');
 const Config = require('./config.js');
 
 const RESULT_FILE = Config.FILES.deepAnalysisResult;
@@ -25,6 +26,7 @@ async function reanalyzeSelected(ids) {
     }
 
     const papers = data.papers || [];
+    const batchDate = (data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10);
 
     // 找到目标论文，清除旧的 analysis
     const toReanalyze = [];
@@ -93,6 +95,7 @@ async function reanalyzeSelected(ids) {
             data.papers = Array.from(mergedMap.values());
             data.lastUpdated = getBeijingISOString();
             writeFileAtomic(RESULT_FILE, JSON.stringify(data, null, 2));
+            updateAnalysisDigestStatuses(data.papers, { batchDate });
         }
     });
 
@@ -112,8 +115,10 @@ async function reanalyzeSelected(ids) {
     data.timestamp = getBeijingISOString();
 
     writeFileAtomic(RESULT_FILE, JSON.stringify(data, null, 2));
+    const digestStatus = updateAnalysisDigestStatuses(data.papers, { batchDate });
 
     console.log(`\n✅ 重分析完成: 成功 ${stats.success} | 失败 ${stats.failed}`);
+    if (digestStatus.updated > 0) console.log(`papers.json 状态已同步: ${digestStatus.updated} 篇`);
     console.log(`💾 结果已保存到: ${RESULT_FILE}`);
 }
 

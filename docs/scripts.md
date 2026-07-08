@@ -28,7 +28,7 @@
 - 默认数据源：`data/current/deep-analysis-result.json`（支持命令行传自定义文件路径，兼容旧格式纯数组）
 - 对文件中**全部**论文重新调用 `deep-analyzer.js`
 - 默认并发度与 `ANALYSIS_CONFIG.concurrency` 一致（默认 3），支持通过 `--concurrency N` 或 `PD_REANALYZE_CONCURRENCY` 环境变量调整
-- **每 5 篇保存一次中间结果**（并发模式下自动调整保存间隔），**仅成功结果覆盖旧数据**
+- **每 5 篇保存一次中间结果**（并发模式下自动调整保存间隔），**仅成功结果覆盖旧数据**；保存时按当前结果同步 `papers.json.digestStatus`
 - 启动时检查 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT` 是否已设置，缺失则直接退出
 
 #### `scripts/quick-test.js`
@@ -44,7 +44,7 @@
 
 批量分析未分析论文（独立入口）。
 - 读取 `data/current/deep-analysis-result.json`
-- 对未分析论文逐篇分析，**仅成功结果写入保存，失败结果不覆盖已有数据**，便于下次重试
+- 对未分析论文逐篇分析，保存成功/失败结果并同步 `papers.json.digestStatus`，便于下次重试
 - 适合在 `full-fetch.js` 中断后补跑剩余论文
 
 #### `scripts/analyze-single-paper.js`
@@ -57,6 +57,15 @@
 - 调用 `deep-analyzer.js` 分析后追加到 `deep-analysis-result.json`
 - 若论文已在结果中存在则默认跳过；加 `--force` 可强制重分析并替换旧结果
 - 兼容旧格式纯数组数据，自动转换为新对象格式保存
+- 成功保存后同步 `papers.json.digestStatus`
+
+#### `scripts/validate-data-files.js`
+
+只读校验当前运行数据结构。
+- 默认检查 `data/current/papers.json`、`data/current/filtered-papers.json`、`data/current/deep-analysis-result.json`
+- 校验 `digestStatus.status` 枚举、论文 ID、`sourceHealth` 基本形状、评分范围、图片字段数组和 `imageManifest` 类型
+- 不修改任何数据；发现问题时输出错误并以非零状态退出
+- npm 入口：`npm run validate:data`
 
 ### 4.2 抓取与分析支撑脚本
 
@@ -326,7 +335,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 **发布流程**：
 1. 生成 `.md` 文件到博客仓库 `content/posts/`
 2. 默认停止在本地生成和 review，不推送
-3. 传 `--push` 后必须先通过三层 review 且 LLM review 可用，再执行 `git add -A` → `git commit -m "add: 论文速递 YYYY-MM-DD"` → `git push origin main`
+3. 传 `--push` 后必须先确认 LLM review 可用、代码层无剩余问题、LLM/图片 review 无 `error` 级阻断问题，再执行 `git add -A` → `git commit -m "add: 论文速递 YYYY-MM-DD"` → `git push origin main`
 4. GitHub Actions 自动构建并部署到 Pages
 5. 访问：`https://nanless.github.io/audio-paper-digest-blog/posts/YYYY-MM-DD/`
 
@@ -343,7 +352,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 - 若需发布全部论文（不过滤），显式传 `--all`
 
 **Review 环节**：
-生成 `.md` 后会自动执行三层 review（代码正则检查 → LLM 文本审查 → 多模态图片审查），论文独立页面使用 `ThreadPoolExecutor(max_workers=3)` 并发审查，自动修复常见问题后写入文件。本地生成/预览时，未配置 LLM API 会跳过 LLM review；正式 `--push` 时 LLM review 必须可用，否则停止发布。
+生成 `.md` 后会自动执行三层 review（代码正则检查 → LLM 文本审查 → 多模态图片审查），论文独立页面使用 `ThreadPoolExecutor(max_workers=3)` 并发审查，自动修复常见问题后写入文件。本地生成/预览时，未配置 LLM API 会跳过 LLM review；正式 `--push` 时 LLM review 必须可用，否则停止发布。代码层剩余问题始终阻断；LLM/图片 review 中只有 `severity=error` 阻断，`warning/info` 会打印出来但不直接阻断推送。
 
 代码层自动修复覆盖以下问题：
 1. 未转义的 HTML-like 标签（`<S>`、`<E>`、`<task>` 等）→ 用反引号包裹
@@ -356,7 +365,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 8. 错乱的 LaTeX 括号（`\)\mathcal{L}_X\(`）→ 统一修正为 `\(\mathcal{L}_X\)`
 9. 双反斜杠 LaTeX（`\(\\mathcal{L}_X\)`）→ 修正为 `\(\mathcal{L}_X\)`
 
-LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，按 `fix_instruction` 执行简单文本替换。博客 review 与小红书 one-liner 共用 `publish_common.py` 中的 `call_publish_llm_api()`，协议路由与 Node 端保持一致。
+LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，按 `fix_instruction` 执行简单文本替换。博客 review 与小红书 one-liner 共用 `publish_common.py` 中的 `call_publish_llm_api()`，协议路由与 Node 端保持一致；Anthropic 兼容请求会动态读取本地 `claude --version` 生成 `User-Agent`，失败时回退默认版本。
 
 **重要限制**：`fetchedAt` 是抓取时间，不是论文在 arXiv 上的 `published` 日期。跨天运行时请显式指定 `--date`。
 

@@ -24,6 +24,19 @@ function savePapersDatabase(data, filePath = Config.FILES.papers) {
     writeFileAtomic(filePath, JSON.stringify(data, null, 2));
 }
 
+function markPaperDigestStatus(paper, status, extra = {}) {
+    const updatedAt = extra.updatedAt || getBeijingISOString();
+    return {
+        ...paper,
+        digestStatus: {
+            ...(paper.digestStatus || {}),
+            status,
+            updatedAt,
+            ...extra
+        }
+    };
+}
+
 function applyAnalysisDigestStatuses(papersData, analyzedPapers, options = {}) {
     const now = options.updatedAt || getBeijingISOString();
     const batchDate = options.batchDate || now.slice(0, 10);
@@ -34,17 +47,15 @@ function applyAnalysisDigestStatuses(papersData, analyzedPapers, options = {}) {
         if (!key) continue;
         const existing = papersData.papers[key] || {};
         const status = paper.analysis ? 'analyzed' : 'analysis_failed';
-        papersData.papers[key] = {
-            ...existing,
-            ...paper,
-            digestStatus: {
-                ...(existing.digestStatus || {}),
-                status,
+        papersData.papers[key] = markPaperDigestStatus(
+            { ...existing, ...paper },
+            status,
+            {
                 batchDate,
                 updatedAt: now,
                 error: paper.error || null
             }
-        };
+        );
         updated++;
     }
 
@@ -63,6 +74,7 @@ function updateAnalysisDigestStatuses(analyzedPapers, options = {}) {
 module.exports = {
     loadPapersDatabase,
     savePapersDatabase,
+    markPaperDigestStatus,
     applyAnalysisDigestStatuses,
     updateAnalysisDigestStatuses
 };

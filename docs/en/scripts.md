@@ -28,7 +28,7 @@ Full reanalysis.
 - Default data source: `data/current/deep-analysis-result.json` (supports custom file path via command line, compatible with old-format pure arrays)
 - Calls `deep-analyzer.js` for **all** papers in the file
 - Default concurrency matches `ANALYSIS_CONFIG.concurrency` (default 3), adjustable via `--concurrency N` or `PD_REANALYZE_CONCURRENCY` environment variable
-- **Saves intermediate results every 5 papers** (save interval auto-adjusted in concurrent mode), **only successful results overwrite old data**
+- **Saves intermediate results every 5 papers** (save interval auto-adjusted in concurrent mode), **only successful results overwrite old data**; saves also sync `papers.json.digestStatus` from the current persisted results
 - On startup, checks whether `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, `PAPER_ANALYZER_ENDPOINT` are set; exits directly if any are missing
 
 #### `scripts/quick-test.js`
@@ -44,7 +44,7 @@ Quick test script.
 
 Batch analysis of unanalyzed papers (standalone entry point).
 - Reads `data/current/deep-analysis-result.json`
-- Analyzes unanalyzed papers one by one, **only successful results are written to save, failed results do not overwrite existing data**, convenient for retrying remaining papers after `full-fetch.js` is interrupted
+- Analyzes unanalyzed papers one by one, saves success/failure results, and syncs `papers.json.digestStatus`, convenient for retrying remaining papers after `full-fetch.js` is interrupted
 
 #### `scripts/analyze-single-paper.js`
 
@@ -56,6 +56,15 @@ Analyze a single paper and merge it into the results.
 - Calls `deep-analyzer.js` for analysis, then appends to `deep-analysis-result.json`
 - Skips if the paper already exists in the results by default; `--force` reanalyzes and replaces the old result
 - Compatible with old-format pure array data, automatically converts to new object format on save
+- Syncs `papers.json.digestStatus` after a successful save
+
+#### `scripts/validate-data-files.js`
+
+Read-only validation for current runtime data.
+- Checks `data/current/papers.json`, `data/current/filtered-papers.json`, and `data/current/deep-analysis-result.json` by default
+- Validates `digestStatus.status` enum values, paper IDs, basic `sourceHealth` shape, score ranges, image URL array fields, and `imageManifest` type
+- Does not modify any data; prints errors and exits non-zero on failure
+- npm entry: `npm run validate:data`
 
 ### 4.2 Fetch and Analysis Support Scripts
 
@@ -323,7 +332,7 @@ Publish to Hugo blog (GitHub Pages).
 **Publish Flow**:
 1. Generate `.md` files into blog repository `content/posts/`
 2. Stop after local generation and review by default
-3. With `--push`, the three-layer review must pass and LLM review must be available before running `git add -A` -> `git commit -m "add: Paper Digest YYYY-MM-DD"` -> `git push origin main`
+3. With `--push`, LLM review must be available, code-level review must have no remaining issues, and LLM/image review must have no `severity=error` blocking issues before running `git add -A` -> `git commit -m "add: Paper Digest YYYY-MM-DD"` -> `git push origin main`
 4. GitHub Actions automatically builds and deploys to Pages
 5. Visit: `https://nanless.github.io/audio-paper-digest-blog/posts/YYYY-MM-DD/`
 
@@ -340,7 +349,7 @@ Publish to Hugo blog (GitHub Pages).
 - To publish all papers (no filtering), pass `--all` explicitly
 
 **Review Step**:
-After generating `.md`, a three-layer review is automatically executed (code regex check -> LLM text review -> multimodal image review). Paper standalone pages use `ThreadPoolExecutor(max_workers=3)` for concurrent review; common issues are automatically fixed before writing to file. Local generation/preview skips LLM review when the API is not configured; formal `--push` requires LLM review to be available, otherwise publishing stops.
+After generating `.md`, a three-layer review is automatically executed (code regex check -> LLM text review -> multimodal image review). Paper standalone pages use `ThreadPoolExecutor(max_workers=3)` for concurrent review; common issues are automatically fixed before writing to file. Local generation/preview skips LLM review when the API is not configured; formal `--push` requires LLM review to be available, otherwise publishing stops. Remaining code-level issues always block; for LLM/image review, only `severity=error` blocks, while `warning/info` is reported but does not directly block push.
 
 Code-level auto-fix covers:
 1. Unescaped HTML-like tags (`<S>`, `<E>`, `<task>`, etc.) → wrap in backticks
@@ -353,7 +362,7 @@ Code-level auto-fix covers:
 8. Malformed LaTeX brackets (`\)\mathcal{L}_X\(`) → unify to `\(\mathcal{L}_X\)`
 9. Double-backslash LaTeX (`\(\\mathcal{L}_X\)` → fix to `\(\mathcal{L}_X\)`)
 
-LLM-level fix: Issues where LLM review returns `auto_fixable: true` are fixed via simple text replacement per `fix_instruction`. Blog review and Xiaohongshu one-liners share `call_publish_llm_api()` in `publish_common.py`, keeping protocol routing aligned with the Node side.
+LLM-level fix: Issues where LLM review returns `auto_fixable: true` are fixed via simple text replacement per `fix_instruction`. Blog review and Xiaohongshu one-liners share `call_publish_llm_api()` in `publish_common.py`, keeping protocol routing aligned with the Node side; Anthropic-compatible requests dynamically read local `claude --version` for `User-Agent`, falling back to the default version if unavailable.
 
 **Important Limitation**: `fetchedAt` is the fetch time, not the paper's `published` date on arXiv. Please explicitly specify `--date` when running across midnight.
 

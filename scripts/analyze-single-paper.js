@@ -12,6 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { readJsonSafe, getBeijingISOString, writeFileAtomic, normalizedId } = require('./utils.js');
 const { analyzePaperWithRetry } = require('./analysis-engine.js');
+const { updateAnalysisDigestStatuses } = require('./digest-status.js');
 const Config = require('./config.js');
 
 const args = process.argv.slice(2);
@@ -85,7 +86,11 @@ async function analyzeSinglePaper() {
             payload.lastUpdated = getBeijingISOString();
         }
         writeFileAtomic(resultPath, JSON.stringify(payload, null, 2));
+        const digestStatus = updateAnalysisDigestStatuses([r.result], {
+            batchDate: getBeijingISOString().slice(0, 10)
+        });
         console.log(`    ✅ 成功！已合并到分析结果中`);
+        if (digestStatus.updated > 0) console.log(`    papers.json 状态已同步: ${digestStatus.updated} 篇`);
         console.log(`    📊 当前总数: ${payload.papers.length} 篇`);
     } else {
         console.log(`    ❌ 最终失败: ${r.error}`);

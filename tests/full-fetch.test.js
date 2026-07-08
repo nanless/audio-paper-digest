@@ -50,6 +50,36 @@ describe('full-fetch helpers', () => {
         assert.deepStrictEqual(failures, ['arxiv:eess.AS:HTTP 429', 'huggingface:timeout']);
     });
 
+    it('空候选只在核心来源致命失败时阻断', () => {
+        const { getFatalEmptyCandidateSourceFailures } = require('../scripts/full-fetch.js');
+
+        assert.deepStrictEqual(
+            getFatalEmptyCandidateSourceFailures({
+                arxiv: {
+                    categories: [
+                        { id: 'cs.SD', ok: true, fetched: 0 },
+                        { id: 'eess.AS', ok: false, error: 'HTTP 429' }
+                    ]
+                },
+                huggingface: { ok: false, error: 'timeout' }
+            }),
+            []
+        );
+
+        assert.deepStrictEqual(
+            getFatalEmptyCandidateSourceFailures({
+                arxiv: {
+                    categories: [
+                        { id: 'cs.SD', ok: false, error: 'HTTP 429' },
+                        { id: 'eess.AS', ok: false, error: 'HTTP 500' }
+                    ]
+                },
+                huggingface: { ok: true, fetched: 0 }
+            }),
+            ['arxiv:cs.SD:HTTP 429', 'arxiv:eess.AS:HTTP 500']
+        );
+    });
+
     it('只复用今日 complete 的 filtered-papers 文件', () => {
         const { loadCompleteFilteredForToday } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-filtered-'));

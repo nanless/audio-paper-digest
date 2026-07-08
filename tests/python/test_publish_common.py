@@ -8,12 +8,14 @@ sys.path.insert(0, SCRIPTS)
 
 from publish_common import (  # noqa: E402
     PublishLLMUnavailable,
+    build_publish_headers,
     build_publish_api_url,
     dedupe_image_alts,
     detect_publish_api_type,
     fix_empty_markdown_links,
     fix_yaml_unbalanced_quotes,
     call_publish_llm_api,
+    count_blocking_review_issues,
     sanitize_markdown_for_publish,
     strip_raw_inline_html,
 )
@@ -72,6 +74,10 @@ class PublishCommonSanitizerTest(unittest.TestCase):
             'https://api.deepseek.com/v1/chat/completions'
         )
 
+    def test_publish_anthropic_headers_include_claude_version(self):
+        headers = build_publish_headers('anthropic', 'key', claude_version='9.8.7')
+        self.assertEqual(headers['User-Agent'], 'claude-cli/9.8.7 (external, cli)')
+
     def test_required_publish_llm_without_key_fails(self):
         old = os.environ.get('PAPER_ANALYZER_API_KEY')
         try:
@@ -81,6 +87,17 @@ class PublishCommonSanitizerTest(unittest.TestCase):
         finally:
             if old is not None:
                 os.environ['PAPER_ANALYZER_API_KEY'] = old
+
+    def test_only_error_review_issues_block_publish(self):
+        self.assertEqual(
+            count_blocking_review_issues([
+                {'severity': 'warning'},
+                {'severity': 'info'},
+                {'severity': 'error'}
+            ]),
+            1
+        )
+        self.assertEqual(count_blocking_review_issues(['代码层硬问题']), 1)
 
 
 if __name__ == '__main__':

@@ -31,7 +31,8 @@ from publish_common import (
     fix_latex_delimiters, escape_html_like_tags, fix_image_markdown,
     truncate_base64_datauri, fix_yaml_double_commas, strip_raw_inline_html,
     fix_empty_markdown_links, dedupe_image_alts, fix_yaml_unbalanced_quotes,
-    sanitize_markdown_for_publish, call_publish_llm_api, PublishLLMUnavailable
+    sanitize_markdown_for_publish, call_publish_llm_api, PublishLLMUnavailable,
+    count_blocking_review_issues
 )
 from utils import strip_md, parse_analysis
 
@@ -856,14 +857,15 @@ def review_and_fix_post(file_path):
 
 
 def _review_single_paper(args):
-    """并发 review 单篇论文，返回 (title, fixed_count, issue_count, output_lines)"""
+    """并发 review 单篇论文，返回 (title, fixed_count, blocking_count, advisory_count, output_lines)"""
     arxiv_id, slug, date_str, title, require_llm = args
     paper_file = os.path.join(CONTENT_DIR, f"{date_str}-{slug}.md")
     if not os.path.exists(paper_file):
         return None
 
     fixed_count = 0
-    issue_count = 0
+    blocking_count = 0
+    advisory_count = 0
     lines = []
 
     # 1. 代码检查
@@ -874,7 +876,7 @@ def _review_single_paper(args):
         _, remaining_code_issues = review_and_fix_post(paper_file)
     else:
         remaining_code_issues = issues
-    issue_count += len(remaining_code_issues)
+    blocking_count += len(remaining_code_issues)
     for issue in issues:
         lines.append(f"    ⚠️  代码层: {issue}")
 
@@ -894,21 +896,28 @@ def _review_single_paper(args):
             lines.append("    🛠️  LLM 自动修复已应用")
             content = llm_fixed_content
             llm_passed, llm_issues, _ = llm_review_post(llm_fixed_content, title, required=require_llm)
-        issue_count += len(llm_issues)
+        llm_blocking = count_blocking_review_issues(llm_issues)
+        blocking_count += llm_blocking
+        advisory_count += len(llm_issues) - llm_blocking
 
     # 3. 多模态图片审查
     img_passed, img_issues = multimodal_review_images(content, title, required=require_llm)
     if img_issues:
-        issue_count += len(img_issues)
+        img_blocking = count_blocking_review_issues(img_issues)
+        blocking_count += img_blocking
+        advisory_count += len(img_issues) - img_blocking
         for issue in img_issues:
             sev = issue.get('severity', 'warning')
             desc = issue.get('description', '')
             lines.append(f"    🖼️  多模态 ({sev}): {desc}")
 
-    if not remaining_code_issues and not llm_issues and not img_issues:
-        lines.append("    ✅ 通过 review")
+    if blocking_count == 0:
+        if advisory_count == 0:
+            lines.append("    ✅ 通过 review")
+        else:
+            lines.append(f"    ✅ 无阻断问题（保留 {advisory_count} 个 warning/info）")
 
-    return title, fixed_count, issue_count, lines
+    return title, fixed_count, blocking_count, advisory_count, lines
 
 
 def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False):
@@ -917,7 +926,8 @@ def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False):
     if require_llm:
         print("  🔒 正式发布模式：LLM review 必须可用，失败将阻断推送")
     total_fixed = 0
-    total_issues = 0
+    total_blocking_issues = 0
+    total_advisory_issues = 0
 
     # 构建 arxivId -> title 映射
     title_map = {}
@@ -936,7 +946,7 @@ def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False):
             _, remaining_code_issues = review_and_fix_post(index_file)
         else:
             remaining_code_issues = issues
-        total_issues += len(remaining_code_issues)
+        total_blocking_issues += len(remaining_code_issues)
         for issue in issues:
             print(f"    ⚠️  代码层: {issue}")
 
@@ -955,10 +965,15 @@ def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False):
                 total_fixed += 1
                 print(f"    🛠️  LLM 自动修复已应用")
                 llm_passed, llm_issues, _ = llm_review_post(llm_fixed_content, "汇总页面", required=require_llm)
-            total_issues += len(llm_issues)
+            llm_blocking = count_blocking_review_issues(llm_issues)
+            total_blocking_issues += llm_blocking
+            total_advisory_issues += len(llm_issues) - llm_blocking
 
-        if not remaining_code_issues and not llm_issues:
-            print(f"    ✅ 通过 review")
+        if not remaining_code_issues and count_blocking_review_issues(llm_issues) == 0:
+            if llm_issues:
+                print(f"    ✅ 无阻断问题（保留 {len(llm_issues)} 个 warning/info）")
+            else:
+                print(f"    ✅ 通过 review")
 
     # Review 每篇论文独立页面（并发）
     paper_args = [
@@ -972,19 +987,20 @@ def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False):
             result = future.result()
             if result is None:
                 continue
-            title, fixed_count, issue_count, lines = result
+            title, fixed_count, blocking_count, advisory_count, lines = result
             print(f"\n  📄 {title[:50]}...")
             for line in lines:
                 print(line)
             total_fixed += fixed_count
-            total_issues += issue_count
+            total_blocking_issues += blocking_count
+            total_advisory_issues += advisory_count
 
-    if total_fixed == 0 and total_issues == 0:
+    if total_fixed == 0 and total_blocking_issues == 0 and total_advisory_issues == 0:
         print("\n  ✅ 所有文件通过三层 review，无问题")
     else:
-        print(f"\n  📊 review 结果: {total_fixed} 个文件已修复, {total_issues} 个问题")
+        print(f"\n  📊 review 结果: {total_fixed} 个文件已修复, {total_blocking_issues} 个阻断问题, {total_advisory_issues} 个 warning/info")
 
-    return total_fixed, total_issues
+    return total_fixed, total_blocking_issues
 
 
 def git_push(date_str):

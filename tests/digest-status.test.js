@@ -5,10 +5,24 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
+    markPaperDigestStatus,
     updateAnalysisDigestStatuses
 } = require('../scripts/digest-status.js');
 
 describe('digest status helpers', () => {
+    it('统一生成 digestStatus 元数据', () => {
+        const paper = markPaperDigestStatus(
+            { arxivId: '2607.00001', digestStatus: { filterModel: 'm1' } },
+            'pending_analysis',
+            { batchDate: '2026-07-08', updatedAt: '2026-07-08T12:00:00+08:00' }
+        );
+
+        assert.strictEqual(paper.digestStatus.status, 'pending_analysis');
+        assert.strictEqual(paper.digestStatus.filterModel, 'm1');
+        assert.strictEqual(paper.digestStatus.batchDate, '2026-07-08');
+        assert.strictEqual(paper.digestStatus.updatedAt, '2026-07-08T12:00:00+08:00');
+    });
+
     it('将深度分析成功和失败状态回写到 papers.json', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-status-'));
         const file = path.join(dir, 'papers.json');

@@ -17,6 +17,7 @@ npm run fetch            # 全流程：抓取 + 筛选 + 深度分析
 npm run deep             # 仅深度分析续跑（跳过已有 analysis；无分析结果时可从 filtered-papers.json 初始化）
 npm run reanalyze        # 强制全量重分析（支持 --concurrency N）
 npm run batch            # 批量分析未分析论文
+npm run validate:data    # 只读校验当前 JSON 数据结构
 npm run backfill         # 补录历史 paper ID（Python 脚本，不分析）
 npm run publish          # 发布到 Hugo 博客（python3 scripts/publish-to-blog.py）
 npm run wechat           # 生成微信公众号草稿
@@ -111,7 +112,7 @@ prompts/                # LLM prompt 模板
   en/                   # 英文版 prompt（含 filter / deep-analysis / gap-fill / opensource-scan / index，不含 image-supplement）
 ```
 
-`papers.json` 同时支持 `data/current/papers.json` 和 `data/papers.json`（旧版路径），均被 `config.js` 引用。**`papers.json` 持久化去重数据库，永不归档**。`full-fetch.js` 每次运行自动备份 `papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天。条目可带 `digestStatus.status`：`pending_analysis` / `analysis_failed` 不参与强去重，便于中断后重跑；成功后更新为 `analyzed`。
+`papers.json` 同时支持 `data/current/papers.json` 和 `data/papers.json`（旧版路径），均被 `config.js` 引用。**`papers.json` 持久化去重数据库，永不归档**。`full-fetch.js` 每次运行自动备份 `papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天。条目可带 `digestStatus.status`：`pending_analysis` / `analysis_failed` 不参与强去重，便于中断后重跑；所有分析入口应通过 `scripts/digest-status.js` 将成功/失败同步为 `analyzed` / `analysis_failed`。
 
 ## 分支策略
 
@@ -121,16 +122,16 @@ prompts/                # LLM prompt 模板
 ## 重要约定
 
 - **资料权威性**：文档与代码冲突时，以 `scripts/*` 当前实现为准。详尽的执行规则与安全约束见 `SKILL.md`。
-- **提交信息**：中文或语义化约定式提交（`feat:` / `fix:` / `docs:`）。
+- **提交信息**：必须使用中文且描述要具体，说明主要修复点/影响范围；禁止只写“修复”“更新”这类空泛信息。可保留 `feat:` / `fix:` / `docs:` 前缀，但正文必须是中文详细描述。
 - **测试框架**：Node.js 内置 `node:test`，非 Jest/Mocha。
 - **CI**：运行 `npm test` + `find scripts tests -name '*.js'` 的 `node -c` 语法检查 + `find scripts -name '*.py'` 的 `py_compile` 语法检查 + `python3 -m unittest discover -s tests/python` + 所有 `.sh` 的 `bash -n`。新增 JS/Python/shell 文件会自动纳入检查。
-- **新增分析脚本必须复用 `analysis-engine.js`**，使用 `analyzePaperWithRetry()` + `analyzeBatch()`，禁止重复实现重试/解析/保存逻辑。
+- **新增分析脚本必须复用 `analysis-engine.js`**，使用 `analyzePaperWithRetry()` + `analyzeBatch()`，禁止重复实现重试/解析/保存逻辑；保存分析结果后必须复用 `scripts/digest-status.js` 同步 `papers.json.digestStatus`。
 - **新增 Node LLM 调用必须通过 `utils.js` 的 `detectApiType()` / `buildApiUrl()` / `buildHeaders()` / `buildRequestBody()` / `parseResponseText()`**，禁止硬编码协议。Python 发布阶段 LLM 调用必须复用 `publish_common.py` 的 `call_publish_llm_api()`。
 - **环境变量加载**：Node 端 `loadEnvFile()` 自行解析 `.env` 无三方依赖；Python 端用 `python-dotenv`。两端都必须保持 shell 环境优先，禁止让 `.env` 覆盖调用者显式传入的变量。
 - **`loadPrompt()` 从 markdown 文件内的第一个 fenced code block 提取 prompt**，并替换 `{变量名}` 占位符。内部示例代码块需使用比外层更短的 fence，修改 prompt 后需验证 `utils.js` 解析逻辑兼容。
 - **原子写入**：使用 `writeFileAtomic()` 保存数据文件，先写临时文件再 rename，防止写入中断损坏数据。
 - **北京时间时间戳**：运行数据中的 `timestamp` / `lastUpdated` / `fetchedAt` 应使用 `getBeijingISOString()` 或 Python 端 `now_bj_iso()`，避免 UTC 日期导致跨天归档或发布筛选错误。
-- **博客验证默认 `--skip-push`**，仅用户明确要求时才执行真实 `git push`。`publish-to-blog.py --push` 必须在三层 review 无剩余问题且 LLM review 可用后才允许 commit/push。
+- **博客验证默认 `--skip-push`**，仅用户明确要求时才执行真实 `git push`。`publish-to-blog.py --push` 必须在 LLM review 可用、代码层无剩余问题、LLM/图片 review 无 `error` 级阻断问题后才允许 commit/push；`warning/info` 会输出但不直接阻断。
 - **后台运行全流程时用 `node scripts/full-fetch.js`** 而非 `npm run fetch`（npm 可能因 TTY 导致 SIGTERM，exit code 143）。根目录 `run-full-fetch.sh` 即此包装（`cd` 到项目根后 `exec node`）。
 - **`data/` 和 `logs/` 已 gitignore** — 禁止提交运行时产物。
 

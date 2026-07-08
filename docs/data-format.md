@@ -34,7 +34,7 @@
 }
 ```
 
-`pending_analysis` 和 `analysis_failed` 不参与下一次 `full-fetch` 的强去重，因此分析中断或失败后可自然重跑；成功分析后更新为 `analyzed`。
+`pending_analysis` 和 `analysis_failed` 不参与下一次 `full-fetch` 的强去重，因此分析中断或失败后可自然重跑；成功分析后更新为 `analyzed`。`full-fetch.js`、`deep-analysis-only.js`、`reanalyze.js`、`batch-analyze.js`、`reanalyze-selected.js` 和 `analyze-single-paper.js` 都通过 `scripts/digest-status.js` 同步该状态，避免不同入口写法分叉。
 
 ### 5.2 `data/current/raw-candidates.json`
 
@@ -81,6 +81,8 @@
   "papers": []
 }
 ```
+
+当 `papers` 为空且 `sourceHealth` 存在失败时，主流程只把“arXiv 核心来源全部失败”或“唯一尝试来源失败”视为致命错误；单个分类或 HuggingFace 补充源失败会被记录，但不一定阻断一个真实的空候选批次。
 
 ### 5.3 `data/current/filter-decisions.json`
 

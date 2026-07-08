@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const { loadEnvFile, getBeijingISOString, getBeijingLocaleString, writeFileAtomic, readJsonSafe, normalizedId } = require('./utils.js');
 const { analyzeBatch } = require('./analysis-engine.js');
+const { updateAnalysisDigestStatuses } = require('./digest-status.js');
 
 loadEnvFile();
 
@@ -67,6 +68,7 @@ async function reanalyzeAll() {
 
     // 保存中间结果的辅助函数
     const isLegacyArray = Array.isArray(data);
+    const batchDate = (data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10);
     const doSave = () => {
         const payload = isLegacyArray
             ? { papers, timestamp: getBeijingISOString() }
@@ -75,6 +77,7 @@ async function reanalyzeAll() {
             payload.timestamp = getBeijingISOString();
         }
         writeFileAtomic(DATA_FILE, JSON.stringify(payload, null, 2));
+        return updateAnalysisDigestStatuses(papers, { batchDate });
     };
 
     // 预先建立 ID -> 索引映射，避免并发时 findIndex 可能找到错误位置
@@ -112,8 +115,9 @@ async function reanalyzeAll() {
         },
         onSave: (results, saveStats) => {
             const processed = saveStats.success + saveStats.failed;
-            console.log(`[reanalyze] 💾 中间结果已保存 (${processed}/${papers.length})`);
-            doSave();
+            const digestStatus = doSave();
+            const statusNote = digestStatus.updated > 0 ? `，papers.json 状态 ${digestStatus.updated} 篇` : '';
+            console.log(`[reanalyze] 💾 中间结果已保存 (${processed}/${papers.length})${statusNote}`);
         }
     });
 
@@ -131,11 +135,13 @@ async function reanalyzeAll() {
         };
     }
     writeFileAtomic(DATA_FILE, JSON.stringify(finalPayload, null, 2));
+    const digestStatus = updateAnalysisDigestStatuses(papers, { batchDate });
 
     console.log('');
     console.log(`[reanalyze] ════════════════════════════════════════════`);
     console.log(`[reanalyze] 重新分析完成`);
     console.log(`[reanalyze] 成功: ${stats.success} | 失败: ${stats.failed} | 总计: ${papers.length}`);
+    if (digestStatus.updated > 0) console.log(`[reanalyze] papers.json 状态已同步: ${digestStatus.updated} 篇`);
     console.log(`[reanalyze] 结束时间: ${getBeijingLocaleString()}`);
     console.log(`[reanalyze] 数据已保存至: ${DATA_FILE}`);
 
