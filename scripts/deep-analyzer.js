@@ -24,8 +24,10 @@ const {
     apiTemperature: API_TEMPERATURE,
     arxivFetchTimeoutMs: ARXIV_FETCH_TIMEOUT_MS,
     imageDownloadTimeoutMs: IMAGE_DOWNLOAD_TIMEOUT_MS,
+    imageMaxBytes: IMAGE_MAX_BYTES,
     imageMaxBase64Chars: IMAGE_MAX_BASE64_CHARS,
     imageMaxCount: IMAGE_MAX_COUNT,
+    imageTotalBase64Chars: IMAGE_TOTAL_BASE64_CHARS = IMAGE_MAX_BASE64_CHARS * IMAGE_MAX_COUNT,
     imageCandidateMax: IMAGE_CANDIDATE_MAX = IMAGE_MAX_COUNT,
     fullTextMaxChars: FULL_TEXT_MAX_CHARS,
     fullTextMinCharsForFull: FULL_TEXT_MIN_CHARS_FOR_FULL
@@ -38,10 +40,10 @@ const {
  */
 function cleanGapFillPrefix(text) {
     if (!text) return null;
-    // 找到第一个 ## 评分 的位置
-    const scoreIdx = text.indexOf('## 评分');
-    if (scoreIdx >= 0) {
-        return text.substring(scoreIdx).trim();
+    // 找到独立的 "## 评分" 标题；不能误命中 "## 评分理由"
+    const scoreMatch = text.match(/(^|\n)##\s*评分\s*(?:\n|$)/);
+    if (scoreMatch) {
+        return text.substring(scoreMatch.index + scoreMatch[1].length).trim();
     }
     // 如果没有 ## 评分，返回 null（格式不正确，调用方应回退到原始分析）
     return null;
@@ -182,9 +184,94 @@ function safeImageLabel(url) {
 function isSupportedImageUrl(url) {
     const value = String(url || '').trim();
     if (!/^https?:\/\//i.test(value)) return false;
-    const path = value.split('?')[0].toLowerCase();
+    let path = '';
+    try {
+        path = new URL(value).pathname.toLowerCase();
+    } catch {
+        path = value.split('?')[0].toLowerCase();
+    }
     if (path.endsWith('.svg')) return false;
-    return /\.(png|jpe?g|webp)$/i.test(path);
+    if (/\.(png|jpe?g|webp)$/i.test(path)) return true;
+    const leaf = path.split('/').pop() || '';
+    return !/\.[a-z0-9]{2,5}$/i.test(leaf);
+}
+
+function parseContentLength(value) {
+    if (!value) return null;
+    const n = Number.parseInt(value, 10);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function normalizeImageMime(contentType) {
+    if (!contentType) return '';
+    return String(contentType).split(';')[0].trim().toLowerCase();
+}
+
+function sniffImageMime(buffer) {
+    if (!buffer || buffer.length < 12) return '';
+    if (
+        buffer[0] === 0x89 &&
+        buffer[1] === 0x50 &&
+        buffer[2] === 0x4e &&
+        buffer[3] === 0x47 &&
+        buffer[4] === 0x0d &&
+        buffer[5] === 0x0a &&
+        buffer[6] === 0x1a &&
+        buffer[7] === 0x0a
+    ) {
+        return 'image/png';
+    }
+    if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+        return 'image/jpeg';
+    }
+    if (
+        buffer.toString('ascii', 0, 4) === 'RIFF' &&
+        buffer.toString('ascii', 8, 12) === 'WEBP'
+    ) {
+        return 'image/webp';
+    }
+    return '';
+}
+
+function isAllowedImageMime(mime) {
+    return mime === 'image/png' || mime === 'image/jpeg' || mime === 'image/webp';
+}
+
+async function readResponseBufferWithLimit(response, maxBytes) {
+    if (!response.body || typeof response.body.getReader !== 'function') {
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        if (maxBytes > 0 && buffer.byteLength > maxBytes) {
+            throw new Error(`response body ${(buffer.byteLength / 1024 / 1024).toFixed(1)}MB exceeds limit`);
+        }
+        return buffer;
+    }
+
+    const reader = response.body.getReader();
+    const chunks = [];
+    let total = 0;
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const chunk = Buffer.from(value);
+            total += chunk.byteLength;
+            if (maxBytes > 0 && total > maxBytes) {
+                try {
+                    await reader.cancel();
+                } catch (e) {
+                    // ignore cancel errors
+                }
+                throw new Error(`response body ${(total / 1024 / 1024).toFixed(1)}MB exceeds limit`);
+            }
+            chunks.push(chunk);
+        }
+    } finally {
+        if (reader.releaseLock) {
+            reader.releaseLock();
+        }
+    }
+    return Buffer.concat(chunks, total);
 }
 
 function getArxivHtmlIds(arxivId) {
@@ -425,7 +512,7 @@ async function fetchArxivImageUrls(arxivId) {
 /**
  * 下载图片并转为 base64
  */
-async function downloadImageBase64(imageUrl, maxRetries = 5) {
+async function downloadImageBase64(imageUrl, maxRetries = 5, maxBytes = IMAGE_MAX_BYTES) {
     if (!isSupportedImageUrl(imageUrl)) {
         console.log(`    [deep] 跳过不支持的图片: ${safeImageLabel(imageUrl)}`);
         return null;
@@ -449,11 +536,37 @@ async function downloadImageBase64(imageUrl, maxRetries = 5) {
                 console.log(`    [deep] 下载图片 ${fileName} 失败: HTTP ${response.status}`);
                 return null;
             }
-            const buffer = await response.arrayBuffer();
-            const b64 = Buffer.from(buffer).toString('base64');
-            return b64;
+
+            const headerMime = normalizeImageMime(response.headers.get('content-type'));
+            if (headerMime && !isAllowedImageMime(headerMime) && headerMime !== 'application/octet-stream') {
+                console.log(`    [deep] 跳过图片 ${fileName}: Content-Type=${headerMime}`);
+                return null;
+            }
+
+            const contentLength = parseContentLength(response.headers.get('content-length'));
+            if (contentLength !== null && maxBytes > 0 && contentLength > maxBytes) {
+                console.log(`    [deep] 跳过图片 ${fileName}: Content-Length ${(contentLength / 1024 / 1024).toFixed(1)}MB 超过限制`);
+                return null;
+            }
+
+            const buffer = await readResponseBufferWithLimit(response, maxBytes);
+
+            const sniffedMime = sniffImageMime(buffer);
+            if (!isAllowedImageMime(sniffedMime)) {
+                console.log(`    [deep] 跳过图片 ${fileName}: 文件头不是支持的 PNG/JPEG/WebP`);
+                return null;
+            }
+
+            return {
+                base64: buffer.toString('base64'),
+                mime: sniffedMime
+            };
         } catch (e) {
             lastError = e.message;
+            if (/exceeds limit/i.test(e.message)) {
+                console.log(`    [deep] 跳过图片 ${fileName}: ${e.message}`);
+                return null;
+            }
             if (attempt < maxRetries) {
                 console.log(`    [deep] 下载图片 ${fileName} 失败 (${e.message})，${(attempt + 1) * 2}s 后重试...`);
                 await new Promise(r => setTimeout(r, (attempt + 1) * 2000));
@@ -469,22 +582,33 @@ async function downloadImageBase64(imageUrl, maxRetries = 5) {
  * @param {string[]} imageUrls - 图片 URL 列表
  * @param {number} maxCount - 最大下载数量
  * @param {number} maxBase64Chars - 单张 base64 字符数上限
- * @returns {Promise<Array<{url: string, base64: string}>>}
+ * @param {number} maxTotalBase64Chars - 所有图片 base64 字符数上限
+ * @returns {Promise<Array<{url: string, base64: string, mime: string}>>}
  */
-async function downloadImagesSerial(imageUrls, maxCount, maxBase64Chars) {
+async function downloadImagesSerial(imageUrls, maxCount, maxBase64Chars, maxTotalBase64Chars = IMAGE_TOTAL_BASE64_CHARS) {
     const results = [];
+    let totalBase64Chars = 0;
     // 去重避免同一 URL 下载多次
     const uniqueUrls = [...new Set(imageUrls)];
 
     for (const url of uniqueUrls) {
         if (results.length >= maxCount) break;
+        if (maxTotalBase64Chars > 0 && totalBase64Chars >= maxTotalBase64Chars) {
+            console.log(`    [deep] 图片总 payload 已达上限 ${(maxTotalBase64Chars / 1024).toFixed(1)}KB，停止下载更多图片`);
+            break;
+        }
         try {
-            const b64 = await downloadImageBase64(url);
-            if (b64 && b64.length < maxBase64Chars) {
-                console.log(`    [deep] 下载图片 ${safeImageLabel(url)}: ${(b64.length / 1024).toFixed(1)}KB`);
-                results.push({ url, base64: b64 });
-            } else if (b64) {
-                console.log(`    [deep] 跳过图片 ${safeImageLabel(url)}: base64 ${(b64.length / 1024).toFixed(1)}KB 超过限制`);
+            const image = await downloadImageBase64(url, 5, IMAGE_MAX_BYTES);
+            if (image?.base64 && image.base64.length < maxBase64Chars) {
+                if (maxTotalBase64Chars > 0 && totalBase64Chars + image.base64.length > maxTotalBase64Chars) {
+                    console.log(`    [deep] 跳过图片 ${safeImageLabel(url)}: 加入后总 base64 ${((totalBase64Chars + image.base64.length) / 1024).toFixed(1)}KB 超过上限`);
+                    continue;
+                }
+                totalBase64Chars += image.base64.length;
+                console.log(`    [deep] 下载图片 ${safeImageLabel(url)}: ${(image.base64.length / 1024).toFixed(1)}KB, ${image.mime}`);
+                results.push({ url, base64: image.base64, mime: image.mime });
+            } else if (image?.base64) {
+                console.log(`    [deep] 跳过图片 ${safeImageLabel(url)}: base64 ${(image.base64.length / 1024).toFixed(1)}KB 超过限制`);
             }
         } catch (e) {
             // 已在 downloadImageBase64 中记录错误
@@ -561,17 +685,17 @@ function normalizeImageInfos(input) {
 /**
  * 构造图片消息块
  */
-function buildImageContent(imageUrl, base64) {
+function buildImageContent(imageUrl, base64, detectedMime = '') {
     if (base64) {
         const lower = imageUrl.toLowerCase().split('?')[0];
-        let mime = 'image/png';
+        let mime = isAllowedImageMime(detectedMime) ? detectedMime : 'image/png';
         if (imageUrl.startsWith('data:image/svg+xml')) {
             mime = 'image/svg+xml';
-        } else if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+        } else if (!detectedMime && (lower.endsWith('.jpg') || lower.endsWith('.jpeg'))) {
             mime = 'image/jpeg';
         } else if (lower.endsWith('.svg')) {
             mime = 'image/svg+xml';
-        } else if (lower.endsWith('.webp')) {
+        } else if (!detectedMime && lower.endsWith('.webp')) {
             mime = 'image/webp';
         }
         return {
@@ -675,7 +799,7 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
 
     const supplementContent = [{ type: 'text', text: supplementPrompt }];
     for (const img of downloadedImages) {
-        supplementContent.push(buildImageContent(img.url, img.base64));
+        supplementContent.push(buildImageContent(img.url, img.base64, img.mime));
     }
 
     const enhancedAnalysis = await callModelWithConfig(
@@ -763,7 +887,7 @@ async function analyzePaperDeep(paper) {
 
     const hasFullTextIntro = hasFullText ? '以下是论文全文，请仔细阅读所有技术细节。' : '以下是论文摘要。';
 
-    const downloadedImages = await downloadImagesSerial(candidateImageUrls, IMAGE_MAX_COUNT, IMAGE_MAX_BASE64_CHARS);
+    const downloadedImages = await downloadImagesSerial(candidateImageUrls, IMAGE_MAX_COUNT, IMAGE_MAX_BASE64_CHARS, IMAGE_TOTAL_BASE64_CHARS);
     console.log(`    [deep] 成功下载 ${downloadedImages.length}/${candidateImageUrls.length} 张候选图片（总图片 ${imageUrls.length} 张）`);
 
     const prompt = loadPrompt('prompts/deep-analysis.md', {
@@ -1408,6 +1532,7 @@ module.exports = {
     getArxivHtmlIds,
     isSupportedImageUrl,
     safeImageLabel,
+    cleanGapFillPrefix,
     extractSectionByTitle,
     mergeSectionByTitle
 };

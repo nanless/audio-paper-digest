@@ -886,7 +886,10 @@ async function filterPapersWithLLM(papers, options = {}) {
     const {
         batchSize = 5,
         delayBetweenBatches = 2000,
-        useKeywordPreFilter = false
+        useKeywordPreFilter = false,
+        initialDecisions = null,
+        onBatchComplete = null,
+        decisionMetadata = {}
     } = options;
 
     console.log(`[filter] 开始筛选 ${papers.length} 篇论文（全部使用大模型）...`);
@@ -899,11 +902,45 @@ async function filterPapersWithLLM(papers, options = {}) {
         papersToCheck = keywordFiltered;
     }
 
-    const results = [];
+    const decisions = new Map();
+    const loadDecision = (id, decision) => {
+        const key = normalizedId(id);
+        if (!key || !decision || typeof decision.related !== 'boolean') return;
+        decisions.set(key, decision);
+    };
+    if (initialDecisions instanceof Map) {
+        for (const [id, decision] of initialDecisions.entries()) {
+            loadDecision(id, decision);
+        }
+    } else if (initialDecisions && typeof initialDecisions === 'object') {
+        for (const [id, decision] of Object.entries(initialDecisions)) {
+            loadDecision(id, decision);
+        }
+    }
+
+    const getFilteredFromDecisions = () => papersToCheck.filter(paper => {
+        const id = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
+        return decisions.get(id)?.related === true;
+    });
+
+    const papersNeedingDecision = [];
+    let reusedDecisions = 0;
+    for (const paper of papersToCheck) {
+        const id = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
+        if (decisions.has(id)) {
+            reusedDecisions++;
+        } else {
+            papersNeedingDecision.push(paper);
+        }
+    }
+    if (reusedDecisions > 0) {
+        console.log(`[filter] 复用已有筛选决策 ${reusedDecisions} 篇，待调用模型 ${papersNeedingDecision.length} 篇`);
+    }
+
     const batches = [];
 
-    for (let i = 0; i < papersToCheck.length; i += batchSize) {
-        batches.push(papersToCheck.slice(i, i + batchSize));
+    for (let i = 0; i < papersNeedingDecision.length; i += batchSize) {
+        batches.push(papersNeedingDecision.slice(i, i + batchSize));
     }
 
     console.log(`[filter] 分成 ${batches.length} 批处理，每批 ${batchSize} 篇`);
@@ -914,20 +951,33 @@ async function filterPapersWithLLM(papers, options = {}) {
 
         const batchResults = await Promise.all(batch.map(async (paper) => {
             const isRelated = await isSpeechAudioRelated(paper);
+            const paperId = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
+            const decision = {
+                id: paperId,
+                paper_id: paper.paper_id || paper.arxivId || paper.id || paperId,
+                title: paper.title || '',
+                related: isRelated,
+                decidedAt: getBeijingISOString(),
+                ...decisionMetadata
+            };
+            decisions.set(paperId, decision);
 
             if (isRelated) {
-                const paperId = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
                 console.log(`[filter] ✓ 相关: ${paperId} - ${paper.title.substring(0, 40)}...`);
-                return paper;
             } else {
-                const paperId = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
                 console.log(`[filter] ✗ 过滤: ${paperId} - ${paper.title.substring(0, 40)}...`);
-                return null;
             }
+            return decision;
         }));
 
-        for (const paper of batchResults) {
-            if (paper) results.push(paper);
+        if (typeof onBatchComplete === 'function') {
+            await onBatchComplete({
+                batchIndex,
+                totalBatches: batches.length,
+                batchResults,
+                results: getFilteredFromDecisions(),
+                decisions: Object.fromEntries(decisions)
+            });
         }
 
         if (batchIndex < batches.length - 1) {
@@ -935,6 +985,7 @@ async function filterPapersWithLLM(papers, options = {}) {
         }
     }
 
+    const results = getFilteredFromDecisions();
     console.log(`[filter] 筛选完成：${papers.length} → ${results.length} 篇相关论文`);
     return results;
 }

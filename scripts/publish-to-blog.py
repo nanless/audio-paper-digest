@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from dotenv import load_dotenv
-load_dotenv(override=True)  # 强制覆盖系统环境变量，确保使用 .env 文件中的配置
+load_dotenv(override=False)  # shell 环境优先，.env 只补齐缺失配置
 
 from log_setup import setup_script_logging
 setup_script_logging(__file__)
@@ -130,6 +130,71 @@ def fix_yaml_double_commas(text):
         frontmatter = re.sub(r'tags:\s*\[([^\]]*?),\s*\]', r'tags: [\1]', frontmatter)
         text = parts[0] + '---\n' + frontmatter + '---\n' + parts[2]
     return text
+
+
+def strip_raw_inline_html(text):
+    r"""去掉 LLM 偶尔输出的裸行内 HTML 样式标签，避免 Hugo/浏览器误渲染。"""
+    if not text:
+        return text
+    return re.sub(
+        r'<(s|e|b|i|u)(?:\s+[^>]*)?>(.*?)</\1>',
+        lambda m: m.group(2),
+        text,
+        flags=re.IGNORECASE | re.DOTALL
+    )
+
+
+def fix_empty_markdown_links(text):
+    r"""修复空 Markdown 链接/图片，防止生成不可点击的坏节点。"""
+    if not text:
+        return text
+    text = re.sub(r'!\[([^\]]*)\]\s*\(\s*\)', r'![\1](image_not_available)', text)
+    text = re.sub(r'(?<!!)\[([^\]]*)\]\s*\(\s*\)', r'\1', text)
+    return text
+
+
+def dedupe_image_alts(text):
+    r"""补齐空图片 alt，并为重复 alt 加序号，避免 review/无障碍检查误报。"""
+    if not text:
+        return text
+    seen = {}
+    index = 0
+
+    def repl(m):
+        nonlocal index
+        index += 1
+        alt = (m.group(1) or '').strip()
+        url = m.group(2)
+        if not alt:
+            alt = f"论文图{index}"
+        count = seen.get(alt, 0) + 1
+        seen[alt] = count
+        if count > 1:
+            alt = f"{alt} - 图{count}"
+        return f"![{alt}]({url})"
+
+    return re.sub(r'!\[([^\]]*)\]\(([^)\n]+)\)', repl, text)
+
+
+def fix_yaml_unbalanced_quotes(text):
+    r"""修复 frontmatter 中由标题/标签引入的未闭合双引号。"""
+    if not text:
+        return text
+    parts = text.split('---\n', 2)
+    if len(parts) < 3:
+        return text
+    fixed_lines = []
+    changed = False
+    for line in parts[1].split('\n'):
+        if ':' in line and '"' in line and line.count('"') % 2 != 0 and '[' not in line and ']' not in line:
+            key, value = line.split(':', 1)
+            fixed_lines.append(f"{key}: {json.dumps(value.strip().strip(chr(34)), ensure_ascii=False)}")
+            changed = True
+        else:
+            fixed_lines.append(line)
+    if not changed:
+        return text
+    return parts[0] + '---\n' + '\n'.join(fixed_lines) + '---\n' + parts[2]
 
 
 def call_llm_api(prompt, max_tokens=800, temperature=0.1):
@@ -926,7 +991,8 @@ def review_and_fix_post(file_path):
     raw_html_pattern = re.compile(r'<(s|e|b|i|u)(\s+[^>]*)?>([^<]*)</\1>', re.IGNORECASE)
     raw_matches = raw_html_pattern.findall(content)
     if raw_matches:
-        issues.append(f"发现 {len(raw_matches)} 个裸 HTML 标签，可能被浏览器渲染")
+        issues.append(f"发现 {len(raw_matches)} 个裸 HTML 标签，已转为纯文本")
+        content = strip_raw_inline_html(content)
 
     # 4. 检查并修复非标准图片引用格式
     if re.search(r'外部\s*URL:', content):
@@ -990,9 +1056,20 @@ def review_and_fix_post(file_path):
     broken_link_pattern = re.compile(r'!?\[([^\]]*)\]\s*\(\s*\)')
     broken_links = broken_link_pattern.findall(content)
     if broken_links:
-        issues.append(f"发现 {len(broken_links)} 个空链接")
+        issues.append(f"发现 {len(broken_links)} 个空链接，已修复")
+        content = fix_empty_markdown_links(content)
+
+    # 12.5 检查并修复空/重复图片 alt
+    deduped_content = dedupe_image_alts(content)
+    if deduped_content != content:
+        issues.append("发现空或重复图片 alt，已补齐/去重")
+        content = deduped_content
 
     # 13. 检查 YAML frontmatter 中是否有未闭合的双引号
+    content_before_yaml_quote_fix = content
+    content = fix_yaml_unbalanced_quotes(content)
+    if content != content_before_yaml_quote_fix:
+        issues.append("发现 YAML frontmatter 未闭合引号，已修复")
     yaml_lines = content.split('---\n')
     if len(yaml_lines) >= 3:
         yaml_block = yaml_lines[1]
@@ -1027,6 +1104,10 @@ def _review_single_paper(args):
     if fixed:
         fixed_count += 1
         lines.append("    🛠️  代码层自动修复")
+        _, remaining_code_issues = review_and_fix_post(paper_file)
+    else:
+        remaining_code_issues = issues
+    issue_count += len(remaining_code_issues)
     for issue in issues:
         lines.append(f"    ⚠️  代码层: {issue}")
 
@@ -1035,7 +1116,6 @@ def _review_single_paper(args):
         content = f.read()
     llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, title)
     if llm_issues:
-        issue_count += len(llm_issues)
         for issue in llm_issues:
             sev = issue.get('severity', 'warning')
             desc = issue.get('description', '')
@@ -1045,6 +1125,9 @@ def _review_single_paper(args):
                 f.write(llm_fixed_content)
             fixed_count += 1
             lines.append("    🛠️  LLM 自动修复已应用")
+            content = llm_fixed_content
+            llm_passed, llm_issues, _ = llm_review_post(llm_fixed_content, title)
+        issue_count += len(llm_issues)
 
     # 3. 多模态图片审查
     img_passed, img_issues = multimodal_review_images(content, title)
@@ -1055,7 +1138,7 @@ def _review_single_paper(args):
             desc = issue.get('description', '')
             lines.append(f"    🖼️  多模态 ({sev}): {desc}")
 
-    if not issues and not llm_issues and not img_issues:
+    if not remaining_code_issues and not llm_issues and not img_issues:
         lines.append("    ✅ 通过 review")
 
     return title, fixed_count, issue_count, lines
@@ -1081,6 +1164,10 @@ def review_all_posts(date_str, paper_slugs, scored_papers):
         if fixed:
             total_fixed += 1
             print(f"    🛠️  代码层自动修复")
+            _, remaining_code_issues = review_and_fix_post(index_file)
+        else:
+            remaining_code_issues = issues
+        total_issues += len(remaining_code_issues)
         for issue in issues:
             print(f"    ⚠️  代码层: {issue}")
 
@@ -1089,7 +1176,6 @@ def review_all_posts(date_str, paper_slugs, scored_papers):
             content = f.read()
         llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, "汇总页面")
         if llm_issues:
-            total_issues += len(llm_issues)
             for issue in llm_issues:
                 sev = issue.get('severity', 'warning')
                 desc = issue.get('description', '')
@@ -1099,8 +1185,10 @@ def review_all_posts(date_str, paper_slugs, scored_papers):
                     f.write(llm_fixed_content)
                 total_fixed += 1
                 print(f"    🛠️  LLM 自动修复已应用")
+                llm_passed, llm_issues, _ = llm_review_post(llm_fixed_content, "汇总页面")
+            total_issues += len(llm_issues)
 
-        if not issues and not llm_issues:
+        if not remaining_code_issues and not llm_issues:
             print(f"    ✅ 通过 review")
 
     # Review 每篇论文独立页面（并发）
@@ -1221,9 +1309,13 @@ def main():
             paper_md, slug = generate_paper_page(paper, today, category)
             paper_md = fix_latex_delimiters(paper_md)
             paper_md = escape_html_like_tags(paper_md)
+            paper_md = strip_raw_inline_html(paper_md)
             paper_md = fix_image_markdown(paper_md)
+            paper_md = fix_empty_markdown_links(paper_md)
+            paper_md = dedupe_image_alts(paper_md)
             paper_md = truncate_base64_datauri(paper_md)
             paper_md = fix_yaml_double_commas(paper_md)
+            paper_md = fix_yaml_unbalanced_quotes(paper_md)
             paper_file = os.path.join(CONTENT_DIR, f"{today}-{slug}.md")
             with open(paper_file, 'w') as f:
                 f.write(paper_md)
@@ -1234,16 +1326,25 @@ def main():
     index_md = generate_index_page(scored, unscored, today, paper_slugs, category)
     index_md = fix_latex_delimiters(index_md)
     index_md = escape_html_like_tags(index_md)
+    index_md = strip_raw_inline_html(index_md)
     index_md = fix_image_markdown(index_md)
+    index_md = fix_empty_markdown_links(index_md)
+    index_md = dedupe_image_alts(index_md)
     index_md = truncate_base64_datauri(index_md)
     index_md = fix_yaml_double_commas(index_md)
+    index_md = fix_yaml_unbalanced_quotes(index_md)
     index_file = os.path.join(CONTENT_DIR, f"{today}.md")
     with open(index_file, 'w') as f:
         f.write(index_md)
     print(f"📄 汇总页面: {index_file} ({len(index_md)} chars)")
 
     # 三层 review：代码检查 → LLM 审查 → 多模态图片审查
-    review_all_posts(today, paper_slugs, scored)
+    review_fixed, review_issues = review_all_posts(today, paper_slugs, scored)
+    if review_issues > 0:
+        print(f"\n❌ review 仍有 {review_issues} 个未解决问题，停止发布。请修复后重跑 publish。")
+        sys.exit(1)
+    if review_fixed > 0:
+        print(f"\n✅ review 自动修复 {review_fixed} 个文件，复查后无阻断问题")
 
     if skip_push:
         print("\n⏭️ 默认跳过推送；如需正式发布请显式传 --push")

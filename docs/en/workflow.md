@@ -61,7 +61,8 @@ Dual-source fetching via `fetch-huggingface-papers.js`:
 
 Filtering:
 - Only keep papers from the last 7 days (`published >= today-7 days`)
-- Exclude already-known IDs (including IDs from papers.json, just-fetched arXiv papers, and blog-published IDs)
+- Exclude historical already-known IDs (completed/published IDs from papers.json and blog-published IDs)
+- Do **not** exclude arXiv IDs fetched in the same run; same-batch overlaps are kept so the merge stage can enrich arXiv papers with HF upvotes, AI summaries, and project links
 - Sort by `upvotes` descending
 
 Technical implementation: data is fetched using `curl` commands (to avoid Node fetch compatibility issues in proxy environments), and returned data is normalized to a field structure consistent with arXiv.
@@ -119,7 +120,10 @@ Runtime parameters:
 - Per-paper timeout **60 seconds**, **5 retries** (backoff `2^attempt * 1s`)
 - Each retry independently creates an `AbortController` and `setTimeout`, avoiding reuse of an already-aborted controller
 
-Results are saved to `data/current/filtered-papers.json`.
+The filtering stage writes three files incrementally:
+- `data/current/raw-candidates.json`: candidate input after merge and blog deduplication
+- `data/current/filter-decisions.json`: per-paper LLM decisions, including filter model and `prompts/filter.md` hash; interrupted runs only reuse decisions from the same model and prompt hash
+- `data/current/filtered-papers.json`: partial/final filtered output; final output uses `status: "complete"`
 
 ### 3.7 Deep Analysis
 
@@ -149,8 +153,8 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 **Technical Features**:
 - **API Protocol Auto-Routing**: shares the same `detectApiType()` logic as the filtering stage, automatically switching between OpenAI / Anthropic protocols based on `PAPER_ANALYZER_ENDPOINT` and `PAPER_ANALYZER_MODEL`
 - Fetches arXiv HTML full text (up to 500K characters), trying `v1`, `v2`, and no-suffix versions in order; uses **cheerio** for structured HTML parsing, removing noise elements such as script/style/nav/header/footer
-- Extracts image URLs (png/jpg/jpeg), filtering out logo/favicon
-- **Image Analysis**: first preselects candidate figures by caption/filename/order heuristics (default `imageCandidateMax=20`), then downloads up to `imageMaxCount=20` images serially; single-image base64 cap is approximately 20M characters (`imageMaxBase64Chars` in config.js). In dual-model mode, only successfully downloaded images selected by the secondary model are inserted into the body. If no usable images are available, the flow falls back to text-only analysis
+- Extracts image URLs and filters out logo/favicon; the download layer validates Content-Type, Content-Length, and PNG/JPEG/WebP magic bytes before sending images to the model
+- **Image Analysis**: first preselects candidate figures by caption/filename/order heuristics (default `imageCandidateMax=20`), then downloads up to `imageMaxCount=20` images serially; defaults are 6MB raw bytes per image, 8M base64 chars per image, and 20M total base64 chars per paper. In dual-model mode, only successfully downloaded images selected by the secondary model are inserted into the body. If no usable images are available, the flow falls back to text-only analysis
 - **Concurrency: 3 papers in parallel** (adjustable via `PD_ANALYSIS_CONCURRENCY` environment variable)
 - Up to **2 retries** per paper (outer `analysis-engine.js`), with each outer retry having **3 retries** for internal API calls (`deep-analyzer.js` inner layer, exponential backoff: first 10s, then double, `2^attempt * 5000ms`), outer retry interval 3s (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
 - API overall timeout **20 minutes** (AbortController)

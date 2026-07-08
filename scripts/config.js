@@ -25,7 +25,7 @@ const fs = require('fs');
             if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
                 val = val.slice(1, -1);
             }
-            if (key) {
+            if (key && process.env[key] === undefined) {
                 process.env[key] = val;
             }
         }
@@ -102,7 +102,9 @@ const ANALYSIS_CONFIG = {
     apiTemperature: 0.7,
     arxivFetchTimeoutMs: 30000,
     imageDownloadTimeoutMs: 15000,
-    imageMaxBase64Chars: 20000000,
+    imageMaxBytes: 6 * 1024 * 1024,
+    imageMaxBase64Chars: 8 * 1024 * 1024,
+    imageTotalBase64Chars: 20 * 1024 * 1024,
     imageMaxCount: 20,
     imageCandidateMax: 20,
     fullTextMaxChars: 500000,
@@ -152,7 +154,10 @@ const SECONDARY_MODEL_CONFIG = {
 
 const ARCHIVE_CONFIG = {
     maxBackups: 10,
-    maxLogFiles: 50
+    maxLogFiles: 50,
+    maxLogFileBytes: 10 * 1024 * 1024,
+    maxTotalLogBytes: 250 * 1024 * 1024,
+    disableFileLogs: process.env.PAPER_DIGEST_DISABLE_FILE_LOGS === '1'
 };
 
 // ═══════════════════════════════════════════════════════
@@ -176,12 +181,16 @@ const PUBLISH_CONFIG = {
 // ═══════════════════════════════════════════════════════
 
 function applyEnvOverrides() {
+    const readPositiveInt = (name) => {
+        if (!process.env[name]) return null;
+        const val = parseInt(process.env[name], 10);
+        return !Number.isNaN(val) && val > 0 ? val : null;
+    };
+
     // 分析并发度
-    if (process.env.PD_ANALYSIS_CONCURRENCY) {
-        const val = parseInt(process.env.PD_ANALYSIS_CONCURRENCY, 10);
-        if (!Number.isNaN(val) && val > 0) {
-            ANALYSIS_CONFIG.concurrency = val;
-        }
+    const analysisConcurrency = readPositiveInt('PD_ANALYSIS_CONCURRENCY');
+    if (analysisConcurrency) {
+        ANALYSIS_CONFIG.concurrency = analysisConcurrency;
     }
     // 分析重试次数
     if (process.env.PD_ANALYSIS_MAX_RETRIES) {
@@ -191,18 +200,41 @@ function applyEnvOverrides() {
         }
     }
     // 筛选批次大小
-    if (process.env.PD_FILTER_BATCH_SIZE) {
-        const val = parseInt(process.env.PD_FILTER_BATCH_SIZE, 10);
-        if (!Number.isNaN(val) && val > 0) {
-            FILTER_CONFIG.batchSize = val;
-        }
+    const filterBatchSize = readPositiveInt('PD_FILTER_BATCH_SIZE');
+    if (filterBatchSize) {
+        FILTER_CONFIG.batchSize = filterBatchSize;
     }
     // arXiv 每类抓取数量
-    if (process.env.PD_ARXIV_MAX_RESULTS) {
-        const val = parseInt(process.env.PD_ARXIV_MAX_RESULTS, 10);
-        if (!Number.isNaN(val) && val > 0) {
-            ARXIV_CONFIG.maxResultsPerCategory = val;
-        }
+    const arxivMaxResults = readPositiveInt('PD_ARXIV_MAX_RESULTS');
+    if (arxivMaxResults) {
+        ARXIV_CONFIG.maxResultsPerCategory = arxivMaxResults;
+    }
+    const imageMaxBytes = readPositiveInt('PD_IMAGE_MAX_BYTES');
+    if (imageMaxBytes) {
+        ANALYSIS_CONFIG.imageMaxBytes = imageMaxBytes;
+    }
+    const imageMaxBase64Chars = readPositiveInt('PD_IMAGE_MAX_BASE64_CHARS');
+    if (imageMaxBase64Chars) {
+        ANALYSIS_CONFIG.imageMaxBase64Chars = imageMaxBase64Chars;
+    }
+    const imageTotalBase64Chars = readPositiveInt('PD_IMAGE_TOTAL_BASE64_CHARS');
+    if (imageTotalBase64Chars) {
+        ANALYSIS_CONFIG.imageTotalBase64Chars = imageTotalBase64Chars;
+    }
+    const maxLogFiles = readPositiveInt('PD_LOG_MAX_FILES');
+    if (maxLogFiles) {
+        ARCHIVE_CONFIG.maxLogFiles = maxLogFiles;
+    }
+    const maxLogFileBytes = readPositiveInt('PD_LOG_MAX_BYTES');
+    if (maxLogFileBytes) {
+        ARCHIVE_CONFIG.maxLogFileBytes = maxLogFileBytes;
+    }
+    const maxTotalLogBytes = readPositiveInt('PD_LOG_TOTAL_MAX_BYTES');
+    if (maxTotalLogBytes) {
+        ARCHIVE_CONFIG.maxTotalLogBytes = maxTotalLogBytes;
+    }
+    if (process.env.PD_DISABLE_FILE_LOGS === '1') {
+        ARCHIVE_CONFIG.disableFileLogs = true;
     }
 }
 

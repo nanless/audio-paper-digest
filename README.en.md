@@ -216,7 +216,7 @@ node scripts/refilter-reanalyze-by-date.js 2026-07-01
 
 - [Main Workflow](docs/workflow.md) — Complete flow of automatic archiving, crawling, filtering, and deep analysis
 - [Script Reference](docs/scripts.md) — Function descriptions and usage for all scripts
-- [Data Format](docs/data-format.md) — Structure of papers.json, filtered-papers.json, and deep-analysis-result.json
+- [Data Format](docs/data-format.md) — Structure of papers.json, raw-candidates.json, filter-decisions.json, filtered-papers.json, and deep-analysis-result.json
 - [Installation & Configuration](docs/setup.md) — Dependency installation, environment variables, model configuration, logging
 - [Troubleshooting](docs/troubleshooting.md) — Diagnosis for API errors, proxy issues, and publishing failures
 - [Maintenance Conventions](docs/maintenance.md) — Code standards, scoring and tag definitions, change checklist

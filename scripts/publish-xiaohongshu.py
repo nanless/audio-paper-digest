@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from dotenv import load_dotenv
-load_dotenv(override=True)  # 强制覆盖系统环境变量，确保使用 .env 文件中的配置
+load_dotenv(override=False)  # shell 环境优先，.env 只补齐缺失配置
 
 from log_setup import setup_script_logging
 setup_script_logging(__file__)

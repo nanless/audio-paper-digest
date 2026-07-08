@@ -462,6 +462,23 @@ describe('loadPrompt', () => {
         );
     });
 
+    it('未绑定占位符 warning 检查 prompt 内容而不是 fence 标记', () => {
+        const warnings = [];
+        const oldWarn = console.warn;
+        console.warn = (msg) => warnings.push(String(msg));
+        try {
+            const prompt = loadPrompt('tests/fixtures/prompt-unbound.md', {
+                title: '测试标题'
+            });
+            assert.match(prompt, /\{missing_value\}/);
+        } finally {
+            console.warn = oldWarn;
+        }
+        assert.strictEqual(warnings.length, 1);
+        assert.match(warnings[0], /\{missing_value\}/);
+        assert.doesNotMatch(warnings[0], /\{N\}/);
+    });
+
     it('真实 prompt 文件都包含可解析代码块', () => {
         const vars = {
             title: 'Test Title',
@@ -547,7 +564,7 @@ clarity: 0.8/1
 impact: 1.2/1.5
 open_source: 0/1.5
 reproducibility: 0.3/0.5
-engineering_value: 1.0/1.5
+engineering_score: 1.0/1.5
 confidence: 高
 primary_task_tag: #语音识别
 primary_method_tag: #Transformer

@@ -14,7 +14,7 @@ set -a; source the `.env` file in the project root 2>/dev/null; set +a
 Benefits of this design:
 - Sensitive configurations are centralized and never written into scripts
 - Automatically injected on shell startup; Python scripts (`publish-wechat-full.py`, etc.) read directly via `os.environ`
-- Node scripts read the project-root `.env` via `config.js` and `loadEnvFile()` and write values into the current process environment
+- Node scripts read the project-root `.env` via `config.js` and `loadEnvFile()` and write values into the current process environment; existing shell variables take priority and `.env` only fills missing values
 
 ### 6.2 Environment Variable Reference
 
@@ -33,6 +33,13 @@ Benefits of this design:
 | `PD_REANALYZE_CONCURRENCY` | Re-analysis concurrency | 3 (matches `ANALYSIS_CONFIG.concurrency`) |
 | `PD_FILTER_BATCH_SIZE` | LLM filtering batch size | 5 |
 | `PD_ARXIV_MAX_RESULTS` | Number of papers to fetch per arXiv category | 100 |
+| `PD_IMAGE_MAX_BYTES` | Raw byte-size limit per image for deep analysis | 6291456 |
+| `PD_IMAGE_MAX_BASE64_CHARS` | Base64 character limit per image for deep analysis | 8388608 |
+| `PD_IMAGE_TOTAL_BASE64_CHARS` | Total image base64 character limit per paper | 20971520 |
+| `PD_LOG_MAX_FILES` | Number of log files to keep | 50 |
+| `PD_LOG_MAX_BYTES` | Max bytes written to one log file; later output remains terminal-only | 10485760 |
+| `PD_LOG_TOTAL_MAX_BYTES` | Total retained bytes under `logs/` | 262144000 |
+| `PAPER_DIGEST_DISABLE_FILE_LOGS` / `PD_DISABLE_FILE_LOGS` | Set to `1` to disable file logs | Disabled |
 
 **API Protocol Auto-Routing**: `detectApiType()` in `scripts/utils.js` automatically selects OpenAI or Anthropic protocol based on the endpoint and model name.
 - **Anthropic Protocol** (auto-masquerades as Claude Code): endpoint contains `token-plan` or `coding` **and** model contains `mimo` or `kimi`
@@ -137,7 +144,7 @@ All main scripts automatically write logs on startup:
 - **Python scripts**: via `scripts/log_setup.py`
 - **Output location**: `logs/<script-name>-YYYYMMDD-HHMMSS.log`
 - **Features**: simultaneous terminal and file output (tee mode), timely flush
-- **Auto-cleanup**: old logs are cleaned up on each startup, **keeping the most recent 50**
+- **Auto-cleanup**: old logs are cleaned up on each startup, keeping the most recent 50 by default with a 250MB total cap; each log file writes at most 10MB by default, then continues terminal-only
 
 Special logs:
 - `backfill_papers.py` additionally writes to `logs/backfill.log` (persistent append mode)

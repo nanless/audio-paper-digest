@@ -8,6 +8,7 @@ setupScriptLogging(__filename);
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { fetchCategoryPapers, filterPapersWithLLM, loadPapers, savePapers } = require('./fetch-papers.js');
 const { fetchHuggingFacePapers, mergeAndDeduplicate } = require('./fetch-huggingface-papers.js');
 const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson, loadPublishedIdsFromBlog } = require('./utils.js');
@@ -27,6 +28,8 @@ const LEGACY_RESULT_FILE = Config.FILES.deepAnalysisResultLegacy;
 const FILTERED_FILE = Config.FILES.filteredPapers;
 const PAPERS_FILE = Config.FILES.papers;
 const ANALYZED_FILE = Config.FILES.analyzed;
+const RAW_CANDIDATES_FILE = path.join(Config.CURRENT_DIR, 'raw-candidates.json');
+const FILTER_DECISIONS_FILE = path.join(Config.CURRENT_DIR, 'filter-decisions.json');
 
 function shouldUsePaperForFetchDedup(paper) {
     const status = paper?.digestStatus?.status;
@@ -43,6 +46,62 @@ function markPaperDigestStatus(paper, status, extra = {}) {
             ...extra
         }
     };
+}
+
+function getFilterPromptHash() {
+    const promptPath = path.join(Config.PROJECT_ROOT, 'prompts', 'filter.md');
+    try {
+        return crypto.createHash('sha256').update(fs.readFileSync(promptPath)).digest('hex').slice(0, 16);
+    } catch (e) {
+        return 'unknown';
+    }
+}
+
+function loadReusableFilterDecisions(today, filterModel, filterPromptHash) {
+    if (!fs.existsSync(FILTER_DECISIONS_FILE)) return {};
+    const data = readJsonSafe(FILTER_DECISIONS_FILE);
+    if (!data || getRecordDate(data) !== today) return {};
+    if (data.filterModel !== filterModel || data.filterPromptHash !== filterPromptHash) {
+        console.log('  [filter] 已有筛选决策与当前模型/prompt 不一致，忽略旧缓存');
+        return {};
+    }
+    return data.decisions && typeof data.decisions === 'object' ? data.decisions : {};
+}
+
+function writeFilterArtifacts({
+    allPapers,
+    allPapersFiltered,
+    filtered,
+    filterDecisions,
+    filterModel,
+    filterPromptHash,
+    stats,
+    complete
+}) {
+    const timestamp = getBeijingISOString();
+    writeFileAtomic(FILTER_DECISIONS_FILE, JSON.stringify({
+        timestamp,
+        filterModel,
+        filterPromptHash,
+        stats: {
+            totalCandidates: allPapersFiltered.length,
+            decided: Object.keys(filterDecisions).length,
+            related: filtered.length,
+            complete
+        },
+        decisions: filterDecisions
+    }, null, 2));
+
+    writeFileAtomic(FILTERED_FILE, JSON.stringify({
+        timestamp,
+        status: complete ? 'filter_complete' : 'filtering',
+        stats: {
+            ...stats,
+            afterFilter: filtered.length,
+            decisionCount: Object.keys(filterDecisions).length
+        },
+        papers: filtered
+    }, null, 2));
 }
 
 function autoArchiveCurrentData() {
@@ -129,6 +188,16 @@ function cleanOldData(filePath, name, today) {
     const removed = before - data.papers.length;
 
     if (removed > 0) {
+        try {
+            const cleanupDir = path.join(ARCHIVE_DIR, 'cleanup');
+            fs.mkdirSync(cleanupDir, { recursive: true });
+            const backupPath = path.join(cleanupDir, `${name}-${getBeijingCompactTimestamp()}.json`);
+            fs.copyFileSync(filePath, backupPath);
+            console.log(`  [清理] ${name}: 清理前已备份到 ${backupPath}`);
+        } catch (e) {
+            console.log(`  [清理] ${name}: 清理前备份失败，跳过清理（${e.message}）`);
+            return;
+        }
         data.timestamp = getBeijingISOString();
         writeFileAtomic(filePath, JSON.stringify(data, null, 2));
         console.log(`  [清理] ${name}: 移除 ${removed} 篇旧数据，保留 ${data.papers.length} 篇今日数据`);
@@ -204,6 +273,7 @@ async function fullFetch() {
     for (const pid of publishedIds) {
         existingIds.add(pid);
     }
+    const historicalExistingIds = new Set(existingIds);
 
     // ========== 第一步：从 arxiv 抓取 ==========
     console.log('📥 第一步：从 arxiv 抓取论文');
@@ -275,9 +345,7 @@ async function fullFetch() {
     // ========== 第二步：从 HuggingFace Papers 抓取 ==========
     console.log('\n📥 第二步：从 HuggingFace Papers 抓取论文');
 
-    const allExistingIds = new Set([...existingIds, ...arxivPapers.map(p => normalizedId(p.paper_id || p.arxivId))]);
-
-    const hfPapers = await fetchHuggingFacePapers(allExistingIds, {
+    const hfPapers = await fetchHuggingFacePapers(historicalExistingIds, {
         days: Config.HUGGINGFACE_CONFIG.defaultDays,
         minUpvotes: Config.HUGGINGFACE_CONFIG.defaultMinUpvotes
     });
@@ -304,14 +372,69 @@ async function fullFetch() {
         console.log(`📝 过滤 ${blogSkippedCount} 篇已发布到博客的论文`);
     }
 
+    writeFileAtomic(RAW_CANDIDATES_FILE, JSON.stringify({
+        timestamp: getBeijingISOString(),
+        stats: {
+            beforeBlogSkip: allPapers.length,
+            afterBlogSkip: allPapersFiltered.length,
+            skippedFromBlog: blogSkippedCount,
+            arxivOnly,
+            hfOnly,
+            both
+        },
+        papers: allPapersFiltered
+    }, null, 2));
+    console.log(`💾 原始候选论文已保存到: ${RAW_CANDIDATES_FILE}`);
+
     // ========== 第四步：大模型筛选 ==========
     console.log('\n🤖 第四步：大模型筛选（判断是否语音/音频相关）');
+    const filterModel = process.env.PAPER_ANALYZER_MODEL || '';
+    const filterPromptHash = getFilterPromptHash();
+    let filterDecisions = loadReusableFilterDecisions(today, filterModel, filterPromptHash);
+    const baseFilterStats = {
+        beforeFilter: allPapers.length,
+        beforeBlogSkip: allPapers.length,
+        afterBlogSkip: allPapersFiltered.length,
+        skippedFromBlog: blogSkippedCount,
+        arxivOnly,
+        hfOnly,
+        both
+    };
     const filtered = await filterPapersWithLLM(allPapersFiltered, {
         batchSize: Config.FILTER_CONFIG.batchSize,
         delayBetweenBatches: Config.FILTER_CONFIG.delayBetweenBatchesMs,
-        useKeywordPreFilter: false
+        useKeywordPreFilter: false,
+        initialDecisions: filterDecisions,
+        decisionMetadata: {
+            filterModel,
+            filterPromptHash
+        },
+        onBatchComplete: async ({ results, decisions }) => {
+            filterDecisions = decisions;
+            writeFilterArtifacts({
+                allPapers,
+                allPapersFiltered,
+                filtered: results,
+                filterDecisions,
+                filterModel,
+                filterPromptHash,
+                stats: baseFilterStats,
+                complete: false
+            });
+            console.log(`  💾 筛选进度已保存: ${Object.keys(filterDecisions).length}/${allPapersFiltered.length} 篇已判断`);
+        }
     });
     console.log(`筛选后: ${filtered.length} 篇相关论文`);
+    writeFilterArtifacts({
+        allPapers,
+        allPapersFiltered,
+        filtered,
+        filterDecisions,
+        filterModel,
+        filterPromptHash,
+        stats: baseFilterStats,
+        complete: true
+    });
 
     // ========== 第四步半：跳过已在归档中分析过的论文 ==========
     const archiveAnalyzedIds = loadAnalyzedIdsFromArchive();
@@ -331,17 +454,14 @@ async function fullFetch() {
 
     writeFileAtomic(FILTERED_FILE, JSON.stringify({
         timestamp: getBeijingISOString(),
+        status: 'complete',
         stats: {
-            beforeFilter: allPapers.length,
-            beforeBlogSkip: allPapers.length,
+            ...baseFilterStats,
             afterBlogSkip: allPapersFiltered.length,
             afterFilter: filtered.length,
             afterArchiveSkip: filteredNew.length,
-            skippedFromBlog: blogSkippedCount,
             skippedFromArchive: skippedCount,
-            arxivOnly,
-            hfOnly,
-            both
+            decisionCount: Object.keys(filterDecisions).length
         },
         papers: filteredNew
     }, null, 2));
@@ -357,10 +477,17 @@ async function fullFetch() {
         const normId = normalizedId(rawId);
         if (!normId) continue;
         const status = filteredNewIds.has(normId) ? 'pending_analysis' : 'seen';
+        const decision = filterDecisions[normId];
         const nextPaper = markPaperDigestStatus(
             { ...(papersData.papers[normId] || {}), ...paper },
             status,
-            { batchDate: today }
+            {
+                batchDate: today,
+                filterDecision: typeof decision?.related === 'boolean' ? decision.related : null,
+                filterModel,
+                filterPromptHash,
+                filterDecidedAt: decision?.decidedAt || null
+            }
         );
         if (!papersData.papers[normId]) {
             newPaperCount++;

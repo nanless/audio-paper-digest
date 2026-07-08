@@ -123,10 +123,10 @@ function getInvalidAnalysisReason(analysis, parsed) {
     if (parsed.score === undefined || parsed.score === null || Number.isNaN(Number(parsed.score))) {
         return '分析结果缺少有效评分';
     }
-    if (!parsed.scoringReason || parsed.scoringReason.trim().length < 20) return '分析结果缺少有效评分理由';
-    if (!parsed.summary || parsed.summary.trim().length < 20) return '分析结果缺少有效核心摘要';
-    if (!parsed.architecture || parsed.architecture.trim().length < 20) return '分析结果缺少有效方法概述';
-    if (!parsed.results || parsed.results.trim().length < 10) return '分析结果缺少有效实验结果';
+    if (!parsed.scoringReason || parsed.scoringReason.trim().length < 80) return '分析结果缺少有效评分理由';
+    if (!parsed.summary || parsed.summary.trim().length < 80) return '分析结果缺少有效核心摘要';
+    if (!parsed.architecture || parsed.architecture.trim().length < 80) return '分析结果缺少有效方法概述';
+    if (!parsed.results || parsed.results.trim().length < 50) return '分析结果缺少有效实验结果';
     return null;
 }
 

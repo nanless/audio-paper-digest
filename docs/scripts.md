@@ -90,7 +90,9 @@ arXiv 抓取与 LLM 筛选模块。
 | max_tokens | 64000 | — | LLM 输出长度上限 |
 | temperature | 0.7 | — | LLM 采样温度 |
 | 图片下载超时 | 15s | — | 单张图片下载超时 |
-| 单张 base64 上限 | 20M 字符 | — | 单张图片转 base64 上限 |
+| 单张图片原始大小上限 | 6MB | `PD_IMAGE_MAX_BYTES` | 下载后按字节数校验 |
+| 单张 base64 上限 | 8M 字符 | `PD_IMAGE_MAX_BASE64_CHARS` | 单张图片转 base64 上限 |
+| 单篇图片 base64 总上限 | 20M 字符 | `PD_IMAGE_TOTAL_BASE64_CHARS` | 防止多图请求体过大 |
 | 全文上限 | 500K 字符 | — | arXiv HTML 正文截取上限 |
 | arXiv HTML 获取超时 | 30s | — | 获取 arXiv HTML 超时 |
 
@@ -143,6 +145,8 @@ arXiv 抓取与 LLM 筛选模块。
 |--------|--------|------|
 | 最大备份数 | 10 | `deep-analysis-result` bak 文件保留数 |
 | 最大日志数 | 50 | 日志文件保留数 |
+| 单日志文件上限 | 10MB | 超过后只继续输出到终端 |
+| 日志总量上限 | 250MB | 启动时自动清理超过总量的旧日志 |
 
 被所有核心脚本引用。
 

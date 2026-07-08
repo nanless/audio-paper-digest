@@ -14,7 +14,7 @@ set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
 这样设计的好处：
 - 敏感配置集中管理，不写入脚本
 - shell 启动时自动注入，Python 脚本（`publish-wechat-full.py` 等）直接通过 `os.environ` 读取
-- Node 脚本通过 `config.js` 与 `loadEnvFile()` 读取项目根 `.env` 并写入当前进程环境
+- Node 脚本通过 `config.js` 与 `loadEnvFile()` 读取项目根 `.env` 并写入当前进程环境；shell 已存在的变量优先，`.env` 只补齐缺失项
 
 ### 6.2 环境变量清单
 
@@ -33,6 +33,13 @@ set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
 | `PD_REANALYZE_CONCURRENCY` | 重分析并发度 | 3（与 `ANALYSIS_CONFIG.concurrency` 一致） |
 | `PD_FILTER_BATCH_SIZE` | LLM 筛选每批篇数 | 5 |
 | `PD_ARXIV_MAX_RESULTS` | arXiv 每类抓取数量 | 100 |
+| `PD_IMAGE_MAX_BYTES` | 深度分析单张图片原始字节上限 | 6291456 |
+| `PD_IMAGE_MAX_BASE64_CHARS` | 深度分析单张图片 base64 字符上限 | 8388608 |
+| `PD_IMAGE_TOTAL_BASE64_CHARS` | 深度分析单篇论文所有图片 base64 总上限 | 20971520 |
+| `PD_LOG_MAX_FILES` | 自动保留的日志文件数量 | 50 |
+| `PD_LOG_MAX_BYTES` | 单个日志文件最多写入字节数，超过后只输出到终端 | 10485760 |
+| `PD_LOG_TOTAL_MAX_BYTES` | logs 目录自动保留的总字节数上限 | 262144000 |
+| `PAPER_DIGEST_DISABLE_FILE_LOGS` / `PD_DISABLE_FILE_LOGS` | 设为 `1` 时禁用文件日志 | 未启用 |
 
 **API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动判断使用 OpenAI 还是 Anthropic 协议
 - **Anthropic 协议**（自动伪装 Claude Code）：端点含 `token-plan` 或 `coding` **且** 模型含 `mimo` 或 `kimi`
@@ -137,7 +144,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 - **Python 脚本**：通过 `scripts/log_setup.py`
 - **输出位置**：`logs/<script-name>-YYYYMMDD-HHMMSS.log`
 - **特性**：同时输出到终端和日志文件（Tee 模式），flush 及时
-- **自动清理**：每次启动时清理旧日志，**保留最近 50 个**
+- **自动清理**：每次启动时清理旧日志，默认保留最近 50 个、总量 250MB；单文件默认最多写 10MB，超过后只继续输出到终端
 
 特殊日志：
 - `backfill_papers.py` 额外写 `logs/backfill.log`（持久追加）

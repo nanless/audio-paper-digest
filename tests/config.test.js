@@ -23,6 +23,10 @@ describe('config', () => {
         assert.strictEqual(Config.HUGGINGFACE_CONFIG.pageLimit, 100);
         assert.strictEqual(Config.ARCHIVE_CONFIG.maxBackups, 10);
         assert.strictEqual(Config.ARCHIVE_CONFIG.maxLogFiles, 50);
+        assert.strictEqual(Config.ANALYSIS_CONFIG.imageMaxBytes, 6 * 1024 * 1024);
+        assert.strictEqual(Config.ANALYSIS_CONFIG.imageTotalBase64Chars, 20 * 1024 * 1024);
+        assert.strictEqual(Config.ARCHIVE_CONFIG.maxLogFileBytes, 10 * 1024 * 1024);
+        assert.strictEqual(Config.ARCHIVE_CONFIG.maxTotalLogBytes, 250 * 1024 * 1024);
     });
 
     it('arXiv 分类包含核心和补充类别', () => {
@@ -84,6 +88,20 @@ describe('config', () => {
         Config = require('../scripts/config.js');
         assert.strictEqual(Config.ARXIV_CONFIG.maxResultsPerCategory, 50);
         delete process.env.PD_ARXIV_MAX_RESULTS;
+    });
+
+    it('环境变量覆写图片和日志上限', () => {
+        process.env.PD_IMAGE_MAX_BYTES = '123456';
+        process.env.PD_IMAGE_TOTAL_BASE64_CHARS = '654321';
+        process.env.PD_LOG_MAX_BYTES = '999999';
+        delete require.cache[require.resolve('../scripts/config.js')];
+        Config = require('../scripts/config.js');
+        assert.strictEqual(Config.ANALYSIS_CONFIG.imageMaxBytes, 123456);
+        assert.strictEqual(Config.ANALYSIS_CONFIG.imageTotalBase64Chars, 654321);
+        assert.strictEqual(Config.ARCHIVE_CONFIG.maxLogFileBytes, 999999);
+        delete process.env.PD_IMAGE_MAX_BYTES;
+        delete process.env.PD_IMAGE_TOTAL_BASE64_CHARS;
+        delete process.env.PD_LOG_MAX_BYTES;
     });
 
     it('环境变量覆写 PAPER_DIGEST_BLOG_REPO 并同步 contentDir', () => {

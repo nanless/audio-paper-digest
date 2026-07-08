@@ -87,7 +87,9 @@ Unified configuration center. All hardcoded parameters are centrally managed and
 | max_tokens | 64000 | -- | LLM output length limit |
 | temperature | 0.7 | -- | LLM sampling temperature |
 | Image download timeout | 15s | -- | Per-image download timeout |
-| Single-image base64 limit | 20M chars | -- | Base64 conversion limit per image |
+| Single-image raw-size limit | 6MB | `PD_IMAGE_MAX_BYTES` | Byte-size guard after download |
+| Single-image base64 limit | 8M chars | `PD_IMAGE_MAX_BASE64_CHARS` | Base64 conversion limit per image |
+| Per-paper total image base64 limit | 20M chars | `PD_IMAGE_TOTAL_BASE64_CHARS` | Prevents oversized multi-image model payloads |
 | Full-text limit | 500K chars | -- | arXiv HTML body truncation limit |
 | arXiv HTML fetch timeout | 30s | -- | arXiv HTML fetch timeout |
 
@@ -140,6 +142,8 @@ Unified configuration center. All hardcoded parameters are centrally managed and
 |--------|--------|------|
 | Max backups | 10 | `deep-analysis-result` bak file retention count |
 | Max logs | 50 | Log file retention count |
+| Per-log file cap | 10MB | Further output remains terminal-only after the cap |
+| Total log cap | 250MB | Old logs over the total cap are cleaned on startup |
 
 Referenced by all core scripts.
 

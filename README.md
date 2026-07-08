@@ -216,7 +216,7 @@ node scripts/refilter-reanalyze-by-date.js 2026-07-01
 
 - [主流程详解](docs/workflow.md) — 自动归档、抓取、筛选、深度分析的完整流程
 - [脚本分工](docs/scripts.md) — 全部脚本的功能说明与用法
-- [数据格式](docs/data-format.md) — papers.json、filtered-papers.json、deep-analysis-result.json 结构
+- [数据格式](docs/data-format.md) — papers.json、raw-candidates.json、filter-decisions.json、filtered-papers.json、deep-analysis-result.json 结构
 - [安装与配置](docs/setup.md) — 依赖安装、环境变量、模型配置、日志机制
 - [排错手册](docs/troubleshooting.md) — API 错误、代理问题、发布失败的排查方法
 - [维护约定](docs/maintenance.md) — 代码规范、评分标签口径、变更检查清单

@@ -253,7 +253,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         console.log(`  upvotes >= ${minUpvotes} 过滤: ${before} → ${papers.length} 篇`);
     }
 
-    // 排除已有论文（历史papers.json + 博客已发布 + 本次arxiv抓取）
+    // 排除已有论文（历史 papers.json + 博客已发布）。同批 arXiv 重叠保留给后续合并，避免丢失 HF 元数据。
     if (existingIds.size > 0) {
         const before = papers.length;
         const dupPapers = papers.filter(p => existingIds.has(normalizedId(p.paper_id)));

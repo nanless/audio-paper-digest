@@ -4,6 +4,7 @@ const assert = require('node:assert');
 const {
     parseFilterDecision,
     filterPapersByKeywords,
+    filterPapersWithLLM,
     parseRecentPageHTML,
     parseSearchPageHTML,
     parseArxivXML
@@ -40,6 +41,26 @@ describe('filterPapersByKeywords', () => {
         ]);
         assert.strictEqual(result.length, 1);
         assert.strictEqual(result[0].title, 'A Speech Recognition Model');
+    });
+});
+
+describe('filterPapersWithLLM resume decisions', () => {
+    it('复用已有筛选决策时不调用模型，并按原论文顺序返回相关论文', async () => {
+        const papers = [
+            { arxivId: '2604.00001', title: 'Speech Paper', abstract: 'speech' },
+            { arxivId: '2604.00002', title: 'Text Paper', abstract: 'text' },
+            { arxivId: '2604.00003', title: 'Audio Paper', abstract: 'audio' }
+        ];
+        const filtered = await filterPapersWithLLM(papers, {
+            batchSize: 1,
+            initialDecisions: {
+                '2604.00001': { related: true },
+                '2604.00002': { related: false },
+                '2604.00003': { related: true }
+            }
+        });
+
+        assert.deepStrictEqual(filtered.map(p => p.arxivId), ['2604.00001', '2604.00003']);
     });
 });
 

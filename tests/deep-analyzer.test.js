@@ -97,6 +97,8 @@ describe('deep-analyzer section helpers', () => {
         assert.strictEqual(isSupportedImageUrl('data:image/svg+xml;base64,PHN2Zy8+'), false);
         assert.strictEqual(isSupportedImageUrl('https://example.com/figure.svg'), false);
         assert.strictEqual(isSupportedImageUrl('https://example.com/figure.png?download=1'), true);
+        assert.strictEqual(isSupportedImageUrl('https://example.com/arxiv-figure?id=1'), true);
+        assert.strictEqual(isSupportedImageUrl('https://example.com/paper.pdf'), false);
         assert.deepStrictEqual(normalizeImageInfos([
             'data:image/svg+xml;base64,PHN2Zy8+',
             'https://example.com/figure.svg',
@@ -105,6 +107,15 @@ describe('deep-analyzer section helpers', () => {
             { url: 'https://example.com/figure.png', caption: '' }
         ]);
         assert.strictEqual(safeImageLabel('data:image/svg+xml;base64,' + 'x'.repeat(1000)), 'image/svg+xml;base64,<omitted>');
+    });
+
+    it('gap-fill 前缀清理不会误命中评分理由标题', () => {
+        const {
+            cleanGapFillPrefix
+        } = require('../scripts/deep-analyzer.js');
+
+        assert.strictEqual(cleanGapFillPrefix('废话\n## 评分理由\n理由'), null);
+        assert.strictEqual(cleanGapFillPrefix('废话\n## 评分\n8.0/10\n\n## 评分理由\n理由'), '## 评分\n8.0/10\n\n## 评分理由\n理由');
     });
 
     it('校验副模型输出是否保留必要章节', () => {

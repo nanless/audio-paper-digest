@@ -30,10 +30,10 @@ description: >
 1. **自动归档**：检查 `data/current/deep-analysis-result.json` / `filtered-papers.json` / `analyzed.json`，若时间戳早于今天（北京时间）且 `data/archive/<日期>/` 下不存在，则复制后删除原文件。**`papers.json` 不归档。**
 2. **加载去重库**：读取 `data/current/papers.json` 已有 ID；扫描 Hugo 博客仓库（`PAPER_DIGEST_BLOG_REPO`）中已发布论文的 arXiv ID，两者合并为统一去重集合
 3. **arXiv 抓取**：7 个分类，每类最多 100 篇（可通过 `PD_ARXIV_MAX_RESULTS` 调整），遇连续 20 篇已有 ID 提前停止（去重集合包含 papers.json + 博客已发布 ID）
-4. **HuggingFace 抓取**：`daily_papers` 分页（最多 20 页）+ `papers` API 补充，默认近 7 天，排除去重集合中的已有 ID
+4. **HuggingFace 抓取**：`daily_papers` 分页（最多 20 页）+ `papers` API 补充，默认近 7 天，只排除历史去重集合/博客已发布 ID；同批 arXiv 重叠论文保留给合并阶段补齐 HF 元数据
 5. **合并去重**：arXiv 优先，HF 补充 7 个特有字段，标记 `sources`；过滤掉博客已发布论文
-6. **LLM 筛选**：按 `PAPER_ANALYZER_*` 配置逐篇判断语音/音乐/音频相关，`batchSize=5`（可通过 `PD_FILTER_BATCH_SIZE` 调整），单篇超时 60 秒，重试 5 次
-7. **保存筛选结果**：`data/current/filtered-papers.json`
+6. **LLM 筛选**：按 `PAPER_ANALYZER_*` 配置逐篇判断语音/音乐/音频相关，`batchSize=5`（可通过 `PD_FILTER_BATCH_SIZE` 调整），单篇超时 60 秒，重试 5 次；每批写入 `data/current/filter-decisions.json`，中断后会按模型名和 `prompts/filter.md` hash 续跑
+7. **保存筛选结果**：`data/current/raw-candidates.json` 保存筛选输入，`data/current/filtered-papers.json` 保存筛选/归档去重后的输出
 8. **更新去重库**：追加所有爬取论文 ID 到 `data/current/papers.json`（不仅筛选通过的，提前保存防止后续中断丢失）
 9. **深度分析**：`deep-analyzer.js`。双模型模式（配置 `PAPER_ANALYZER_SECONDARY_MODEL` 时）：主模型纯文本分析，完成开源扫描/审校/表格和方法修复后，副模型最终看图筛选高价值图片并补充正文；单模型模式（未配置副模型）：仅文本分析。并发 3 篇（可通过 `PD_ANALYSIS_CONCURRENCY` 调整），每篇最多重试 2 次（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整）
 10. **增量保存**：每批分析后立即保存到 `data/current/deep-analysis-result.json`，自带失败结果保护（已有成功 analysis 的论文不会被无 analysis 的失败结果覆盖）
@@ -50,6 +50,8 @@ description: >
 | 文件 | 用途 | 归档行为 |
 |------|------|---------|
 | `data/current/papers.json` | 论文去重数据库（含 `digestStatus` 分析状态） | **不归档**，持续累积；`pending_analysis` / `analysis_failed` 不参与强去重，便于中断后重跑 |
+| `data/current/raw-candidates.json` | 当日合并与博客去重后的筛选候选 | 每次全流程重写，用于排查筛选输入 |
+| `data/current/filter-decisions.json` | 当日逐篇 LLM 筛选决策缓存 | 每批增量写入，模型或 prompt hash 变化后自动失效 |
 | `data/current/filtered-papers.json` | 筛选后的论文元数据 | 每日归档移走后重新生成 |
 | `data/current/deep-analysis-result.json` | 核心分析结果（含 analysis / parsed / selectedImageUrls / imageUrls / allImageUrls） | 每日归档移走后重新生成 |
 | `data/current/analyzed.json` | 旧版已分析记录（兼容） | 每日归档移走后重新生成 |
@@ -118,7 +120,7 @@ API 调用特性：
 - **双层重试**：analysis-engine.js 层面每篇最多重试 2 次（总共最多 3 次尝试）；deep-analyzer.js 内部每次 API 调用再重试最多 3 次（指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5s`）
 - **LLM API 请求明确设置 `agent: false`，强制直连以绕过本地代理（避免 MiMo 403）；arXiv/HuggingFace 等外部抓取仍使用代理自动检测**
 - arXiv HTML 解析使用 **cheerio** 结构化选择器，移除 script/style/nav/header/footer 等噪音元素
-- 图片先按 caption/文件名/顺序启发式预筛（默认 `imageCandidateMax=20`），再**串行下载**最多 `imageMaxCount=20` 张候选图片；单张 base64 上限约 20M 字符（config.js 中 `imageMaxBase64Chars`）；超时后自动降级为纯文本重试
+- 图片先按 caption/文件名/顺序启发式预筛（默认 `imageCandidateMax=20`），再**串行下载**最多 `imageMaxCount=20` 张候选图片；下载层会校验 Content-Type、Content-Length 与 PNG/JPEG/WebP 文件头；默认单图原始大小上限 6MB、单图 base64 上限 8M 字符、总 base64 上限 20M 字符（均在 `config.js` 中可配）；超时或图片不可用后自动降级为纯文本重试
 - 全文上限约 500K 字符（config.js 中 `fullTextMaxChars`）
 - 所有分析配置集中管理于 `scripts/config.js`，支持环境变量覆写
 
@@ -385,7 +387,8 @@ PY
 
 - Node 脚本统一通过 `scripts/log-setup.js` 输出日志到 `logs/<script>-YYYYMMDD-HHMMSS.log`
 - Python 脚本统一通过 `scripts/log_setup.py` 输出日志到 `logs/<script>-YYYYMMDD-HHMMSS.log`
-- **自动清理**：每次启动时清理旧日志，保留最近 50 个
+- **自动清理与限额**：每次启动时清理旧日志，默认保留最近 50 个，总量上限 250MB；单个日志默认最多写 10MB，超过后继续输出到终端但停止写文件
+- 可用 `PD_LOG_MAX_FILES`、`PD_LOG_MAX_BYTES`、`PD_LOG_TOTAL_MAX_BYTES` 调整日志限额；`PAPER_DIGEST_DISABLE_FILE_LOGS=1` 或 `PD_DISABLE_FILE_LOGS=1` 可禁用文件日志
 - `backfill_papers.py` 额外写独立日志到 `logs/backfill.log`
 - 主要 Node 脚本已处理后台 stdout 缓冲（`setBlocking`），便于实时查看进度
 - `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` 采用重试与增量保存，降低中断丢数风险

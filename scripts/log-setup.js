@@ -3,6 +3,9 @@ const path = require('path');
 const { ARCHIVE_CONFIG } = require('./config.js');
 
 const MAX_LOG_FILES = ARCHIVE_CONFIG.maxLogFiles;
+const MAX_LOG_FILE_BYTES = ARCHIVE_CONFIG.maxLogFileBytes;
+const MAX_TOTAL_LOG_BYTES = ARCHIVE_CONFIG.maxTotalLogBytes;
+const DISABLE_FILE_LOGS = ARCHIVE_CONFIG.disableFileLogs;
 
 function ensureDir(dirPath) {
     if (!fs.existsSync(dirPath)) {
@@ -20,19 +23,35 @@ function formatTs(date = new Date()) {
     return `${y}${m}${d}-${hh}${mm}${ss}`;
 }
 
-function cleanupOldLogs(logsDir, maxFiles = MAX_LOG_FILES) {
+function cleanupOldLogs(logsDir, maxFiles = MAX_LOG_FILES, maxTotalBytes = MAX_TOTAL_LOG_BYTES) {
     try {
         const files = fs.readdirSync(logsDir)
             .filter(f => f.endsWith('.log'))
-            .map(f => ({
-                name: f,
-                path: path.join(logsDir, f),
-                mtime: fs.statSync(path.join(logsDir, f)).mtimeMs
-            }))
+            .map(f => {
+                const filePath = path.join(logsDir, f);
+                const stat = fs.statSync(filePath);
+                return {
+                    name: f,
+                    path: filePath,
+                    mtime: stat.mtimeMs,
+                    size: stat.size
+                };
+            })
             .sort((a, b) => b.mtime - a.mtime);
 
-        if (files.length > maxFiles) {
-            const toDelete = files.slice(maxFiles);
+        const toDelete = [];
+        let keptBytes = 0;
+        for (const [idx, file] of files.entries()) {
+            const overCount = idx >= maxFiles;
+            const overSize = maxTotalBytes > 0 && keptBytes + file.size > maxTotalBytes;
+            if (overCount || overSize) {
+                toDelete.push(file);
+            } else {
+                keptBytes += file.size;
+            }
+        }
+
+        if (toDelete.length > 0) {
             for (const file of toDelete) {
                 try {
                     fs.unlinkSync(file.path);
@@ -40,11 +59,44 @@ function cleanupOldLogs(logsDir, maxFiles = MAX_LOG_FILES) {
                     // ignore
                 }
             }
-            console.log(`[log] 已清理 ${toDelete.length} 个过期日志文件（保留最近 ${maxFiles} 个）`);
+            const keptSizeMb = (keptBytes / 1024 / 1024).toFixed(1);
+            console.log(`[log] 已清理 ${toDelete.length} 个过期/超额日志文件（保留最近 ${maxFiles} 个，总量约 ${keptSizeMb}MB）`);
         }
     } catch (e) {
         // ignore cleanup errors
     }
+}
+
+function makeBoundedLogWriter(stream, maxBytes) {
+    let written = 0;
+    let truncated = false;
+
+    return (chunk, encoding) => {
+        if (!maxBytes || maxBytes <= 0) {
+            stream.write(chunk, encoding);
+            return;
+        }
+        if (written >= maxBytes) {
+            return;
+        }
+
+        const buffer = Buffer.isBuffer(chunk)
+            ? chunk
+            : Buffer.from(String(chunk), Buffer.isEncoding(encoding) ? encoding : 'utf8');
+        const remaining = maxBytes - written;
+        if (buffer.length <= remaining) {
+            stream.write(buffer);
+            written += buffer.length;
+            return;
+        }
+
+        stream.write(buffer.subarray(0, remaining));
+        written = maxBytes;
+        if (!truncated) {
+            truncated = true;
+            stream.write(`\n[log] 单文件日志达到 ${maxBytes} bytes，上限后的输出仅保留在终端。\n`);
+        }
+    };
 }
 
 function setStdoutBlocking() {
@@ -69,27 +121,31 @@ function setupScriptLogging(scriptPath) {
     if (isTestProcess()) {
         return;
     }
+    if (DISABLE_FILE_LOGS) {
+        return;
+    }
 
     const entryPath = scriptPath || process.argv[1] || __filename;
     const projectRoot = path.resolve(__dirname, '..');
     const logsDir = path.join(projectRoot, 'logs');
     ensureDir(logsDir);
 
-    cleanupOldLogs(logsDir, MAX_LOG_FILES);
+    cleanupOldLogs(logsDir, MAX_LOG_FILES, MAX_TOTAL_LOG_BYTES);
 
     const base = path.basename(entryPath, path.extname(entryPath)) || 'script';
     const logFile = path.join(logsDir, `${base}-${formatTs()}.log`);
     const stream = fs.createWriteStream(logFile, { flags: 'a' });
+    const writeLog = makeBoundedLogWriter(stream, MAX_LOG_FILE_BYTES);
 
     const stdoutWrite = process.stdout.write.bind(process.stdout);
     const stderrWrite = process.stderr.write.bind(process.stderr);
 
     process.stdout.write = (chunk, encoding, cb) => {
-        stream.write(chunk, encoding);
+        writeLog(chunk, encoding);
         return stdoutWrite(chunk, encoding, cb);
     };
     process.stderr.write = (chunk, encoding, cb) => {
-        stream.write(chunk, encoding);
+        writeLog(chunk, encoding);
         return stderrWrite(chunk, encoding, cb);
     };
 
@@ -101,7 +157,7 @@ function setupScriptLogging(scriptPath) {
         }
     });
 
-    console.log(`[log] 输出文件: ${logFile}`);
+    console.log(`[log] 输出文件: ${logFile}（单文件上限 ${(MAX_LOG_FILE_BYTES / 1024 / 1024).toFixed(1)}MB）`);
 }
 
 module.exports = {

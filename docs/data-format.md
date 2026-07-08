@@ -22,6 +22,10 @@
         "status": "seen | pending_analysis | analyzed | analysis_failed",
         "batchDate": "2026-04-21",
         "updatedAt": "2026-04-21T10:00:00+08:00",
+        "filterDecision": true,
+        "filterModel": "mimo-v2.5",
+        "filterPromptHash": "a1b2c3d4e5f6a7b8",
+        "filterDecidedAt": "2026-04-21T10:02:00+08:00",
         "error": null
       }
     }
@@ -32,13 +36,62 @@
 
 `pending_analysis` 和 `analysis_failed` 不参与下一次 `full-fetch` 的强去重，因此分析中断或失败后可自然重跑；成功分析后更新为 `analyzed`。
 
-### 5.2 `data/current/filtered-papers.json`
+### 5.2 `data/current/raw-candidates.json`
+
+当日 arXiv + HuggingFace 合并、博客已发布过滤后的筛选输入。用于排查“为什么某篇论文进/没进筛选”。结构：
+
+```json
+{
+  "timestamp": "2026-04-21T10:00:00+08:00",
+  "stats": {
+    "beforeBlogSkip": 520,
+    "afterBlogSkip": 480,
+    "skippedFromBlog": 40,
+    "arxivOnly": 420,
+    "hfOnly": 45,
+    "both": 15
+  },
+  "papers": []
+}
+```
+
+### 5.3 `data/current/filter-decisions.json`
+
+LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只有 `filterModel` 和 `filterPromptHash` 与当前配置一致才会复用。
+
+```json
+{
+  "timestamp": "2026-04-21T10:05:00+08:00",
+  "filterModel": "mimo-v2.5",
+  "filterPromptHash": "a1b2c3d4e5f6a7b8",
+  "stats": {
+    "totalCandidates": 480,
+    "decided": 120,
+    "related": 26,
+    "complete": false
+  },
+  "decisions": {
+    "2604.12345": {
+      "id": "2604.12345",
+      "paper_id": "2604.12345v1",
+      "title": "论文标题",
+      "related": true,
+      "decidedAt": "2026-04-21T10:05:00+08:00",
+      "filterModel": "mimo-v2.5",
+      "filterPromptHash": "a1b2c3d4e5f6a7b8"
+    }
+  }
+}
+```
+
+### 5.4 `data/current/filtered-papers.json`
 
 筛选结果（仅元数据，无深度分析）。结构：
 
 ```json
 {
   "timestamp": "2026-04-21T10:00:00+08:00",
+  "status": "complete",
   "stats": {
     "beforeFilter": 500,
     "beforeBlogSkip": 500,
@@ -49,7 +102,8 @@
     "skippedFromArchive": 0,
     "arxivOnly": 400,
     "hfOnly": 50,
-    "both": 0
+    "both": 0,
+    "decisionCount": 450
   },
   "papers": [
     {
@@ -74,7 +128,7 @@
 }
 ```
 
-### 5.3 `data/current/deep-analysis-result.json`
+### 5.5 `data/current/deep-analysis-result.json`
 
 核心分析结果。结构：
 
@@ -173,7 +227,7 @@
 - `parsed` 中的 `machineSummary` 是 `## 机器摘要` 的解析结果；`rankBucket`、`innovationScore`、`technicalRigorScore` 等 8 个子项字段同时平铺到 `parsed` 顶层以便访问
 - 解析逻辑变更后，`parsed` 缓存会被清除并在下次发布时重新生成
 
-### 5.4 `data/current/analyzed.json`
+### 5.6 `data/current/analyzed.json`
 
 旧版已分析记录（`fetch-papers.js` 直跑流程遗留）。当前主流程不直接使用，但保留兼容，参与每日归档。
 

@@ -32,13 +32,62 @@ Paper deduplication database. **This file is not archived; it accumulates contin
 
 `pending_analysis` and `analysis_failed` are not used for strong deduplication in the next `full-fetch`, so interrupted or failed analyses can naturally re-enter the pipeline. Successful analysis updates the status to `analyzed`.
 
-### 5.2 `data/current/filtered-papers.json`
+### 5.2 `data/current/raw-candidates.json`
+
+Candidate input after arXiv + HuggingFace merge and blog-published filtering. Used to debug why a paper did or did not enter filtering.
+
+```json
+{
+  "timestamp": "2026-04-21T10:00:00+08:00",
+  "stats": {
+    "beforeBlogSkip": 520,
+    "afterBlogSkip": 480,
+    "skippedFromBlog": 40,
+    "arxivOnly": 420,
+    "hfOnly": 45,
+    "both": 15
+  },
+  "papers": []
+}
+```
+
+### 5.3 `data/current/filter-decisions.json`
+
+Per-paper LLM filtering decision cache. It is written after every batch; reruns only reuse it when `filterModel` and `filterPromptHash` match the current configuration.
+
+```json
+{
+  "timestamp": "2026-04-21T10:05:00+08:00",
+  "filterModel": "mimo-v2.5",
+  "filterPromptHash": "a1b2c3d4e5f6a7b8",
+  "stats": {
+    "totalCandidates": 480,
+    "decided": 120,
+    "related": 26,
+    "complete": false
+  },
+  "decisions": {
+    "2604.12345": {
+      "id": "2604.12345",
+      "paper_id": "2604.12345v1",
+      "title": "Paper Title",
+      "related": true,
+      "decidedAt": "2026-04-21T10:05:00+08:00",
+      "filterModel": "mimo-v2.5",
+      "filterPromptHash": "a1b2c3d4e5f6a7b8"
+    }
+  }
+}
+```
+
+### 5.4 `data/current/filtered-papers.json`
 
 Filtering results (metadata only, no deep analysis). Structure:
 
 ```json
 {
   "timestamp": "2026-04-21T10:00:00+08:00",
+  "status": "complete",
   "stats": {
     "beforeFilter": 500,
     "beforeBlogSkip": 500,
@@ -49,7 +98,8 @@ Filtering results (metadata only, no deep analysis). Structure:
     "skippedFromArchive": 0,
     "arxivOnly": 400,
     "hfOnly": 50,
-    "both": 0
+    "both": 0,
+    "decisionCount": 450
   },
   "papers": [
     {
@@ -74,7 +124,7 @@ Filtering results (metadata only, no deep analysis). Structure:
 }
 ```
 
-### 5.3 `data/current/deep-analysis-result.json`
+### 5.5 `data/current/deep-analysis-result.json`
 
 Core analysis results. Structure:
 
@@ -173,7 +223,7 @@ Core analysis results. Structure:
 - `machineSummary` inside `parsed` is the parsed result of `## 机器摘要`; fields such as `rankBucket`, `innovationScore`, `technicalRigorScore`, etc. are also flattened to the top level of `parsed` for easier access
 - When parsing logic changes, the `parsed` cache is cleared and regenerated on the next publish
 
-### 5.4 `data/current/analyzed.json`
+### 5.6 `data/current/analyzed.json`
 
 Legacy analyzed records (leftover from the `fetch-papers.js` direct-run workflow). Not directly used by the current main workflow, but kept for compatibility and included in daily archiving.
 

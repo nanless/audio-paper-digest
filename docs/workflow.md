@@ -82,7 +82,8 @@
 
 过滤：
 - 只保留近 7 天的论文（`published >= 今天-7天`）
-- 排除已有 ID（包括 papers.json 中的 ID、刚抓取的 arXiv 论文 ID、博客已发布 ID）
+- 排除历史已有 ID（papers.json 中已完成/已发布论文、博客已发布 ID）
+- **不排除本轮刚抓取的 arXiv ID**：同批重叠论文会进入合并阶段，用 HF upvotes、AI 摘要、项目页等字段补齐 arXiv 元数据
 - 按 `upvotes` 降序排列
 
 技术实现：使用 `curl` 命令获取数据（避免 Node fetch 在代理环境下的兼容问题），返回数据标准化为与 arXiv 一致的字段结构。
@@ -140,7 +141,10 @@ HF 特有字段（共 7 个）：
 - 单篇超时 **60 秒**，重试 **5 次**（退避 `2^attempt * 1s`）
 - 每次重试独立创建 `AbortController` 和 `setTimeout`，避免重试时复用已 abort 的 controller
 
-结果保存到 `data/current/filtered-papers.json`。
+筛选阶段会增量保存三类文件：
+- `data/current/raw-candidates.json`：合并和博客去重后的候选输入
+- `data/current/filter-decisions.json`：逐篇 LLM 决策缓存，包含筛选模型与 `prompts/filter.md` hash；中断重跑时只复用同模型同 prompt 的决策
+- `data/current/filtered-papers.json`：阶段性/最终筛选输出，最终状态为 `status: "complete"`
 
 ### 3.7 深度分析
 
@@ -170,8 +174,8 @@ HF 特有字段（共 7 个）：
 **技术特性**：
 - **API 协议自动路由**：与筛选阶段共用同一套 `detectApiType()` 逻辑，根据 `PAPER_ANALYZER_ENDPOINT` 和 `PAPER_ANALYZER_MODEL` 自动切换 OpenAI / Anthropic 协议
 - 获取 arXiv HTML 全文（最多 500K 字符），依次尝试 `v1`、`v2`、无后缀版本；使用 **cheerio** 结构化解析 HTML，移除 script/style/nav/header/footer 等噪音元素
-- 提取图片 URL（png/jpg/jpeg），过滤 logo/favicon
-- **图片分析**：先按 caption/文件名/顺序启发式预筛候选图片（默认最多 `imageCandidateMax=20` 张），再串行下载最多 `imageMaxCount=20` 张；单张 base64 上限约 20M 字符（config.js 中 `imageMaxBase64Chars`）。双模型模式下只有成功下载并通过副模型筛选的图片会写入正文；若没有可用图片，自动退回纯文本分析
+- 提取图片 URL，过滤 logo/favicon；下载层会校验 Content-Type、Content-Length 和 PNG/JPEG/WebP 文件头，避免把 HTML 错误页或过大图片送入模型
+- **图片分析**：先按 caption/文件名/顺序启发式预筛候选图片（默认最多 `imageCandidateMax=20` 张），再串行下载最多 `imageMaxCount=20` 张；默认单图原始大小上限 6MB、单图 base64 上限 8M 字符、所有图片 base64 总上限 20M 字符。双模型模式下只有成功下载并通过副模型筛选的图片会写入正文；若没有可用图片，自动退回纯文本分析
 - **并发度：3 篇并行**（可通过 `PD_ANALYSIS_CONCURRENCY` 环境变量调整）
 - 每篇最多重试 **2 次**（外层 `analysis-engine.js`），每次外层重试内部 API 调用还有 **3 次** 重试（`deep-analyzer.js` 内层，指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5000ms`），外层重试间隔 3 秒（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整外层）
 - API 整体超时 **20 分钟**（AbortController）

@@ -162,7 +162,7 @@ function loadEnvFile() {
                 if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
                     val = val.slice(1, -1);
                 }
-                if (key) {
+                if (key && process.env[key] === undefined) {
                     process.env[key] = val;
                 }
             }
@@ -1282,7 +1282,7 @@ function loadPrompt(mdPath, vars = {}) {
 
     // 检测未替换的占位符并警告（只在原始模板中检测，避免将替换值中的 LaTeX 符号误判）
     // 排除单字母（如 {N}, {k}, {i} 等数学公式变量）
-    const templateStr = blockMatch[1] || blockMatch[2];
+    const templateStr = blockMatch[2];
     const templateVars = [...templateStr.matchAll(/\{([a-zA-Z_]\w{1,})\}/g)].map(m => m[1]);
     const providedKeys = new Set(Object.keys(vars));
     const unboundKeys = [...new Set(templateVars)].filter(k => !providedKeys.has(k));
