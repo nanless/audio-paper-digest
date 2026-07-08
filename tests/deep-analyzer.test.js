@@ -72,6 +72,8 @@ describe('deep-analyzer section helpers', () => {
 
         const selected = selectImageCandidates([
             { url: 'https://example.com/logo.png', caption: 'publisher logo' },
+            { url: 'data:image/svg+xml;base64,PHN2Zy8+', caption: 'inline svg' },
+            { url: 'https://example.com/vector.svg', caption: 'svg diagram' },
             { url: 'https://example.com/architecture.png', caption: 'Model architecture overview' },
             { url: 'https://example.com/spectrogram.png', caption: 'Speech spectrogram comparison' },
             { url: 'https://example.com/author.png', caption: 'author photo' },
@@ -83,6 +85,26 @@ describe('deep-analyzer section helpers', () => {
             'https://example.com/spectrogram.png',
             'https://example.com/results.png'
         ]);
+    });
+
+    it('过滤副模型不稳定的内联图片和 SVG，并截断日志标签', () => {
+        const {
+            isSupportedImageUrl,
+            safeImageLabel,
+            normalizeImageInfos
+        } = require('../scripts/deep-analyzer.js');
+
+        assert.strictEqual(isSupportedImageUrl('data:image/svg+xml;base64,PHN2Zy8+'), false);
+        assert.strictEqual(isSupportedImageUrl('https://example.com/figure.svg'), false);
+        assert.strictEqual(isSupportedImageUrl('https://example.com/figure.png?download=1'), true);
+        assert.deepStrictEqual(normalizeImageInfos([
+            'data:image/svg+xml;base64,PHN2Zy8+',
+            'https://example.com/figure.svg',
+            'https://example.com/figure.png'
+        ]), [
+            { url: 'https://example.com/figure.png', caption: '' }
+        ]);
+        assert.strictEqual(safeImageLabel('data:image/svg+xml;base64,' + 'x'.repeat(1000)), 'image/svg+xml;base64,<omitted>');
     });
 
     it('校验副模型输出是否保留必要章节', () => {

@@ -163,6 +163,30 @@ async function callModel(messages, maxTokens = 8000) {
 
 const cheerio = require('cheerio');
 
+function safeImageLabel(url) {
+    const value = String(url || '');
+    if (!value) return '<empty>';
+    if (value.startsWith('data:')) {
+        const mime = value.match(/^data:([^;,]+)/)?.[1] || 'data-uri';
+        return `${mime};base64,<omitted>`;
+    }
+    try {
+        const parsed = new URL(value);
+        const name = parsed.pathname.split('/').filter(Boolean).pop() || parsed.hostname;
+        return name.length > 120 ? `${name.slice(0, 117)}...` : name;
+    } catch {
+        return value.length > 120 ? `${value.slice(0, 117)}...` : value;
+    }
+}
+
+function isSupportedImageUrl(url) {
+    const value = String(url || '').trim();
+    if (!/^https?:\/\//i.test(value)) return false;
+    const path = value.split('?')[0].toLowerCase();
+    if (path.endsWith('.svg')) return false;
+    return /\.(png|jpe?g|webp)$/i.test(path);
+}
+
 function getArxivHtmlIds(arxivId) {
     const id = String(arxivId || '').trim();
     if (!id) return [];
@@ -336,21 +360,8 @@ async function fetchArxivImageUrls(arxivId) {
                         }
                     }
 
-                    // 如果 figure 中没有 <img>，尝试提取内联 <svg>
-                    if (!fullUrl) {
-                        const $svg = $fig.find('svg').first();
-                        if ($svg.length) {
-                            const svgHtml = $svg.prop('outerHTML');
-                            if (svgHtml) {
-                                // 压缩 SVG（去掉多余空白）后转为 base64 data URI
-                                const compressed = svgHtml.replace(/>\s+</g, '><').trim();
-                                const b64 = Buffer.from(compressed).toString('base64');
-                                fullUrl = `data:image/svg+xml;base64,${b64}`;
-                            }
-                        }
-                    }
-
                     if (!fullUrl) return;
+                    if (!isSupportedImageUrl(fullUrl)) return;
 
                     // 提取 figcaption 文本
                     const $caption = $fig.find('figcaption');
@@ -387,7 +398,9 @@ async function fetchArxivImageUrls(arxivId) {
                         } else {
                             fullUrl = `https://arxiv.org/html/${htmlId}/${src}`;
                         }
-                        images.push({ url: fullUrl, caption: '' });
+                        if (isSupportedImageUrl(fullUrl)) {
+                            images.push({ url: fullUrl, caption: '' });
+                        }
                     }
                 }
 
@@ -410,20 +423,15 @@ async function fetchArxivImageUrls(arxivId) {
 }
 
 /**
- * 下载图片并转为 base64（支持 http URL 和 data URI）
+ * 下载图片并转为 base64
  */
 async function downloadImageBase64(imageUrl, maxRetries = 5) {
-    // 处理 data URI（如 SVG base64）
-    if (imageUrl.startsWith('data:')) {
-        const match = imageUrl.match(/^data:[^;]+;base64,(.+)$/);
-        if (match) {
-            return match[1];
-        }
-        console.log(`    [deep] data URI 格式不支持: ${imageUrl.substring(0, 50)}...`);
+    if (!isSupportedImageUrl(imageUrl)) {
+        console.log(`    [deep] 跳过不支持的图片: ${safeImageLabel(imageUrl)}`);
         return null;
     }
 
-    const fileName = imageUrl.split('/').pop();
+    const fileName = safeImageLabel(imageUrl);
     let lastError = null;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -473,10 +481,10 @@ async function downloadImagesSerial(imageUrls, maxCount, maxBase64Chars) {
         try {
             const b64 = await downloadImageBase64(url);
             if (b64 && b64.length < maxBase64Chars) {
-                console.log(`    [deep] 下载图片 ${url.split('/').pop()}: ${(b64.length / 1024).toFixed(1)}KB`);
+                console.log(`    [deep] 下载图片 ${safeImageLabel(url)}: ${(b64.length / 1024).toFixed(1)}KB`);
                 results.push({ url, base64: b64 });
             } else if (b64) {
-                console.log(`    [deep] 跳过图片 ${url.split('/').pop()}: base64 ${(b64.length / 1024).toFixed(1)}KB 超过限制`);
+                console.log(`    [deep] 跳过图片 ${safeImageLabel(url)}: base64 ${(b64.length / 1024).toFixed(1)}KB 超过限制`);
             }
         } catch (e) {
             // 已在 downloadImageBase64 中记录错误
@@ -522,6 +530,7 @@ function selectImageCandidates(imageInfos, maxCount) {
     const unique = [];
     for (const info of imageInfos) {
         if (!info || !info.url || seen.has(info.url)) continue;
+        if (!isSupportedImageUrl(info.url)) continue;
         seen.add(info.url);
         unique.push(info);
     }
@@ -546,7 +555,7 @@ function normalizeImageInfos(input) {
             };
         }
         return null;
-    }).filter(info => info && info.url);
+    }).filter(info => info && info.url && isSupportedImageUrl(info.url));
 }
 
 /**
@@ -655,7 +664,7 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
     console.log(`    [deep] 🖼️  副模型(${SECONDARY_CONFIG.model})筛选并插入高价值图片`);
 
     const imageListStr = usableImageInfos.map((info, i) =>
-        `图${i + 1}: ${info.url}\n  caption: ${info.caption || '无描述'}`
+        `图${i + 1}: ${safeImageLabel(info.url)}\n  URL: ${info.url}\n  caption: ${info.caption || '无描述'}`
     ).join('\n\n');
     const supplementPrompt = loadPrompt('prompts/image-supplement.md', {
         title: paper.title,
@@ -1397,6 +1406,8 @@ module.exports = {
     sourceTextLikelyHasTables,
     getPaperArxivId,
     getArxivHtmlIds,
+    isSupportedImageUrl,
+    safeImageLabel,
     extractSectionByTitle,
     mergeSectionByTitle
 };
