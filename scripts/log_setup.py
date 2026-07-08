@@ -87,6 +87,8 @@ def setup_script_logging(script_path=None):
     if os.environ.get("PAPER_DIGEST_LOG_SETUP_DONE") == "1":
         return
     os.environ["PAPER_DIGEST_LOG_SETUP_DONE"] = "1"
+    if os.environ.get("PAPER_DIGEST_ENABLE_FILE_LOGS") != "1" and os.environ.get("PD_ENABLE_FILE_LOGS") != "1":
+        return
     if os.environ.get("PAPER_DIGEST_DISABLE_FILE_LOGS") == "1" or os.environ.get("PD_DISABLE_FILE_LOGS") == "1":
         return
 

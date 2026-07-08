@@ -5,6 +5,7 @@ const { ARCHIVE_CONFIG } = require('./config.js');
 const MAX_LOG_FILES = ARCHIVE_CONFIG.maxLogFiles;
 const MAX_LOG_FILE_BYTES = ARCHIVE_CONFIG.maxLogFileBytes;
 const MAX_TOTAL_LOG_BYTES = ARCHIVE_CONFIG.maxTotalLogBytes;
+const ENABLE_FILE_LOGS = ARCHIVE_CONFIG.enableFileLogs;
 const DISABLE_FILE_LOGS = ARCHIVE_CONFIG.disableFileLogs;
 
 function ensureDir(dirPath) {
@@ -121,7 +122,7 @@ function setupScriptLogging(scriptPath) {
     if (isTestProcess()) {
         return;
     }
-    if (DISABLE_FILE_LOGS) {
+    if (!ENABLE_FILE_LOGS || DISABLE_FILE_LOGS) {
         return;
     }
 

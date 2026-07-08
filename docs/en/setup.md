@@ -39,7 +39,8 @@ Benefits of this design:
 | `PD_LOG_MAX_FILES` | Number of log files to keep | 50 |
 | `PD_LOG_MAX_BYTES` | Max bytes written to one log file; later output remains terminal-only | 10485760 |
 | `PD_LOG_TOTAL_MAX_BYTES` | Total retained bytes under `logs/` | 262144000 |
-| `PAPER_DIGEST_DISABLE_FILE_LOGS` / `PD_DISABLE_FILE_LOGS` | Set to `1` to disable file logs | Disabled |
+| `PAPER_DIGEST_ENABLE_FILE_LOGS` / `PD_ENABLE_FILE_LOGS` | Set to `1` to enable file logs | Disabled |
+| `PAPER_DIGEST_DISABLE_FILE_LOGS` / `PD_DISABLE_FILE_LOGS` | Set to `1` to force-disable file logs | Disabled |
 
 **API Protocol Auto-Routing**: `detectApiType()` in `scripts/utils.js` automatically selects OpenAI or Anthropic protocol based on the endpoint and model name.
 - **Anthropic Protocol** (auto-masquerades as Claude Code): endpoint contains `token-plan` or `coding` **and** model contains `mimo` or `kimi`
@@ -138,17 +139,17 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 
 ## Logging Mechanism
 
-All main scripts automatically write logs on startup:
+All main scripts write to the terminal by default and do not create `logs/*.log`. To keep file logs, explicitly set `PD_ENABLE_FILE_LOGS=1` or `PAPER_DIGEST_ENABLE_FILE_LOGS=1`.
 
 - **Node scripts**: via `scripts/log-setup.js`
 - **Python scripts**: via `scripts/log_setup.py`
-- **Output location**: `logs/<script-name>-YYYYMMDD-HHMMSS.log`
-- **Features**: simultaneous terminal and file output (tee mode), timely flush
-- **Auto-cleanup**: old logs are cleaned up on each startup, keeping the most recent 50 by default with a 250MB total cap; each log file writes at most 10MB by default, then continues terminal-only
+- **Output location when enabled**: `logs/<script-name>-YYYYMMDD-HHMMSS.log`
+- **Behavior when enabled**: simultaneous terminal and file output (tee mode), timely flush
+- **Auto-cleanup when enabled**: old logs are cleaned up on each startup, keeping the most recent 50 by default with a 250MB total cap; each log file writes at most 10MB by default, then continues terminal-only
 
 Special logs:
-- `backfill_papers.py` additionally writes to `logs/backfill.log` (persistent append mode)
-- `logs/full-fetch-*.log` are the first place to check when debugging fetch/analysis issues
+- `backfill_papers.py` also does not create `logs/backfill.log` by default; it only appends when file logs are enabled
+- When file logs are enabled, `logs/full-fetch-*.log` can help debug fetch/analysis issues; otherwise rely on full terminal output
 
 **Background Buffer Handling**: all major Node scripts call `process.stdout._handle.setBlocking(true)` to ensure real-time log flush when running in the background.
 

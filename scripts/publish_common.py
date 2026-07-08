@@ -9,12 +9,126 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils import parse_analysis
 
 BJ_TZ = timezone(timedelta(hours=8))
+
+
+class PublishLLMUnavailable(RuntimeError):
+    """Raised when a required publish-time LLM review cannot run."""
+
+
+def detect_publish_api_type(endpoint, model):
+    """检测发布脚本使用的 LLM API 协议，与 Node utils.js 保持一致。"""
+    ep = (endpoint or '').lower()
+    m = (model or '').lower()
+    if 'deepseek.com' in ep or 'deepseek' in m:
+        return 'openai'
+    is_token_plan = 'token-plan' in ep or 'coding' in ep
+    is_mimo = 'xiaomimimo.com' in ep or 'mimo' in m
+    is_kimi = 'kimi.com' in ep or 'kimi' in m
+    if (is_mimo or is_kimi) and is_token_plan:
+        return 'anthropic'
+    if '/anthropic' in ep:
+        return 'anthropic'
+    return 'openai'
+
+
+def build_publish_api_url(api_type, endpoint):
+    """根据协议构造最终 LLM 请求 URL。"""
+    base = (endpoint or '').rstrip('/')
+    if api_type == 'anthropic':
+        if 'xiaomimimo.com' in base:
+            base = re.sub(r'/v1/?$', '/anthropic', base)
+            return f'{base}/v1/messages'
+        return f'{base}/messages'
+    base = re.sub(r'/anthropic/?$', '/v1', base)
+    return f'{base}/chat/completions'
+
+
+def build_publish_headers(api_type, api_key):
+    if api_type == 'anthropic':
+        return {
+            'x-api-key': api_key,
+            'anthropic-version': '2023-06-01',
+            'User-Agent': 'claude-cli/2.1.108 (external, cli)',
+            'Content-Type': 'application/json'
+        }
+    return {
+        'Authorization': f'Bearer {api_key}',
+        'Content-Type': 'application/json'
+    }
+
+
+def build_publish_payload(api_type, model, prompt, max_tokens, temperature):
+    if api_type == 'anthropic':
+        return {
+            'model': model,
+            'max_tokens': max_tokens,
+            'messages': [{'role': 'user', 'content': prompt}]
+        }
+    return {
+        'model': model,
+        'max_tokens': max_tokens,
+        'temperature': temperature,
+        'messages': [{'role': 'user', 'content': prompt}]
+    }
+
+
+def parse_publish_response_text(api_type, data):
+    if api_type == 'anthropic':
+        if isinstance(data.get('content'), list):
+            for block in data['content']:
+                if block.get('type') == 'text':
+                    return (block.get('text') or '').strip()
+        return ''
+    return (data.get('choices', [{}])[0].get('message', {}).get('content') or '').strip()
+
+
+def call_publish_llm_api(prompt, max_tokens=800, temperature=0.1, required=False, context='LLM review', timeout=120, max_retries=5):
+    """调用发布阶段 LLM API。required=True 时，缺配置或连续失败会抛错。"""
+    api_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
+    endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', 'https://api.openai.com/v1')
+    model = os.environ.get('PAPER_ANALYZER_MODEL', 'gpt-4o')
+
+    if not api_key:
+        message = f'未配置 PAPER_ANALYZER_API_KEY，无法执行 {context}'
+        if required:
+            raise PublishLLMUnavailable(message)
+        print(f'  ⚠️  {message}，跳过')
+        return None
+
+    api_type = detect_publish_api_type(endpoint, model)
+    api_url = build_publish_api_url(api_type, endpoint)
+    headers = build_publish_headers(api_type, api_key)
+    payload = build_publish_payload(api_type, model, prompt, max_tokens, temperature)
+
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            import requests
+            session = requests.Session()
+            session.trust_env = False
+            resp = session.post(api_url, json=payload, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            content = parse_publish_response_text(api_type, resp.json())
+            if content:
+                return content
+            last_error = RuntimeError('LLM 返回内容为空')
+        except Exception as exc:
+            last_error = exc
+            print(f'  ⚠️  {context} 调用失败 (尝试 {attempt + 1}/{max_retries}): {exc}')
+
+        if attempt < max_retries - 1:
+            time.sleep(2 ** attempt)
+
+    if required:
+        raise PublishLLMUnavailable(f'{context} 连续失败: {last_error}')
+    return None
 
 
 def load_papers(data_file=None):

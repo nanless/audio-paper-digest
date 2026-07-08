@@ -121,6 +121,30 @@ describe('analyzePaperWithRetry', () => {
         assert.ok(result.result.parsed.score);
     });
 
+    it('保留深度分析返回的 imageManifest', async () => {
+        const imageManifest = {
+            totalFound: 3,
+            candidates: [{ url: 'https://example.com/architecture.png', score: 10 }],
+            downloaded: [{ url: 'https://example.com/architecture.png', mime: 'image/png' }],
+            selected: ['https://example.com/architecture.png']
+        };
+        const result = await analyzePaperWithRetry(
+            { arxivId: '2604.00010', title: 'Valid with images' },
+            {
+                maxRetries: 0,
+                analyzeFn: async () => ({
+                    analysis: validAnalysisText(),
+                    selectedImageUrls: imageManifest.selected,
+                    allImageUrls: imageManifest.candidates.map(x => x.url),
+                    imageManifest
+                })
+            }
+        );
+
+        assert.strictEqual(result.success, true);
+        assert.deepStrictEqual(result.result.imageManifest, imageManifest);
+    });
+
     it('缺少必要章节会重试后失败', async () => {
         let calls = 0;
         let retries = 0;

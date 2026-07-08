@@ -19,7 +19,7 @@ import json, re, sys, os, datetime, concurrent.futures
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from publish_common import (
     load_papers, get_today_bj, score_and_sort, extract_top_tags,
-    score_emoji, format_medal, extract_one_liner
+    score_emoji, format_medal, extract_one_liner, call_publish_llm_api
 )
 
 
@@ -61,13 +61,6 @@ def build_oneliner_context(title, abstract, pa=None):
 
 def call_llm_for_oneliner(title, abstract, pa=None):
     """调用 LLM 生成一句话论文介绍，自动检测协议。"""
-    api_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
-    endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', 'https://api.openai.com/v1')
-    model = os.environ.get('PAPER_ANALYZER_MODEL', 'gpt-4o')
-
-    if not api_key:
-        return None
-
     context = build_oneliner_context(title, abstract, pa)
     prompt = f"""用1-2句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书。总字数严格控制在70字以内，必须输出完整内容，不要省略。优先突出任务、方法、实验收益或开源价值，不要只复述标题：
 
@@ -75,77 +68,17 @@ def call_llm_for_oneliner(title, abstract, pa=None):
 
 只输出介绍文字，不要任何解释、格式标记、emoji或LaTeX公式。"""
 
-    # 自动检测协议（与 Node.js detectApiType 一致）
-    ep_lower = endpoint.lower()
-    model_lower = model.lower()
-    is_token_plan = 'token-plan' in ep_lower or 'coding' in ep_lower
-    is_mimo = 'xiaomimimo.com' in ep_lower or 'mimo' in model_lower
-    is_kimi = 'kimi.com' in ep_lower or 'kimi' in model_lower
-
-    if 'deepseek.com' in ep_lower or 'deepseek' in model_lower:
-        api_type = 'openai'
-    elif (is_mimo or is_kimi) and is_token_plan:
-        api_type = 'anthropic'
-    elif '/anthropic' in ep_lower:
-        api_type = 'anthropic'
-    else:
-        api_type = 'openai'
-
-    base = endpoint.rstrip('/')
-
-    if api_type == 'anthropic':
-        if 'xiaomimimo.com' in base:
-            base = base.replace('/v1', '/anthropic')
-            api_url = f"{base}/v1/messages"
-        elif 'kimi.com' in base:
-            api_url = f"{base}/messages"
-        else:
-            api_url = f"{base}/messages"
-        headers = {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "User-Agent": "claude-cli/2.1.108 (external, cli)",
-            "Content-Type": "application/json"
-        }
-        payload = {"model": model, "max_tokens": 500, "messages": [{"role": "user", "content": prompt}]}
-    else:
-        base = base.replace('/anthropic', '/v1')
-        api_url = f"{base}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {"model": model, "max_tokens": 500, "temperature": 0.7, "messages": [{"role": "user", "content": prompt}]}
-
-    for attempt in range(5):
-        try:
-            import requests
-            session = requests.Session()
-            session.trust_env = False
-            resp = session.post(api_url, json=payload, headers=headers, timeout=180)
-            resp.raise_for_status()
-            data = resp.json()
-            content = ""
-            if api_type == 'anthropic':
-                if data.get("content") and isinstance(data["content"], list):
-                    for block in data["content"]:
-                        if block.get("type") == "text":
-                            content = block.get("text", "").strip()
-                            break
-            else:
-                content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-            content = content.strip('"\'').strip()
-            if len(content) > 10:
-                return smart_truncate(content, max_len=65)
-            if attempt < 4:
-                import time
-                time.sleep(3)
-        except Exception as e:
-            print(f"  ⚠️  LLM one-liner 失败 (尝试 {attempt+1}/5): {e}")
-            if attempt < 4:
-                import time
-                time.sleep(3)
-
+    content = call_publish_llm_api(
+        prompt,
+        max_tokens=500,
+        temperature=0.7,
+        required=False,
+        context="小红书 one-liner",
+        timeout=180
+    )
+    content = (content or '').strip('"\'').strip()
+    if len(content) > 10:
+        return smart_truncate(content, max_len=65)
     return None
 
 

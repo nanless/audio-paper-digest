@@ -20,7 +20,7 @@
 - 读取 `data/current/deep-analysis-result.json`（兼容旧路径 `data/deep-analysis-result.json`，自动识别旧格式纯数组并转换）；若分析结果尚不存在但 `data/current/filtered-papers.json` 已存在，则从筛选结果初始化分析结果文件后续跑
 - 跳过已有 `analysis` 字段的论文
 - 对未分析论文逐篇调用 `deep-analyzer.js`
-- **仅成功结果写入保存**，失败结果不覆盖已有数据，断点续传安全
+- 增量保存成功/失败结果，并同步回写 `data/current/papers.json` 的 `digestStatus.status` 为 `analyzed` / `analysis_failed`，断点续传安全
 
 #### `scripts/reanalyze.js`
 
@@ -144,9 +144,10 @@ arXiv 抓取与 LLM 筛选模块。
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | 最大备份数 | 10 | `deep-analysis-result` bak 文件保留数 |
-| 最大日志数 | 50 | 日志文件保留数 |
-| 单日志文件上限 | 10MB | 超过后只继续输出到终端 |
-| 日志总量上限 | 250MB | 启动时自动清理超过总量的旧日志 |
+| 文件日志启用 | 默认关闭 | 需 `PD_ENABLE_FILE_LOGS=1` 或 `PAPER_DIGEST_ENABLE_FILE_LOGS=1` 显式开启 |
+| 最大日志数 | 50 | 启用文件日志后的日志文件保留数 |
+| 单日志文件上限 | 10MB | 启用文件日志后，超过上限只继续输出到终端 |
+| 日志总量上限 | 250MB | 启用文件日志后，启动时自动清理超过总量的旧日志 |
 
 被所有核心脚本引用。
 
@@ -325,7 +326,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 **发布流程**：
 1. 生成 `.md` 文件到博客仓库 `content/posts/`
 2. 默认停止在本地生成和 review，不推送
-3. 传 `--push` 后执行 `git add -A` → `git commit -m "add: 论文速递 YYYY-MM-DD"` → `git push origin main`
+3. 传 `--push` 后必须先通过三层 review 且 LLM review 可用，再执行 `git add -A` → `git commit -m "add: 论文速递 YYYY-MM-DD"` → `git push origin main`
 4. GitHub Actions 自动构建并部署到 Pages
 5. 访问：`https://nanless.github.io/audio-paper-digest-blog/posts/YYYY-MM-DD/`
 
@@ -342,7 +343,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 - 若需发布全部论文（不过滤），显式传 `--all`
 
 **Review 环节**：
-生成 `.md` 后会自动执行三层 review（代码正则检查 → LLM 文本审查 → 多模态图片审查），论文独立页面使用 `ThreadPoolExecutor(max_workers=3)` 并发审查，自动修复常见问题后写入文件。
+生成 `.md` 后会自动执行三层 review（代码正则检查 → LLM 文本审查 → 多模态图片审查），论文独立页面使用 `ThreadPoolExecutor(max_workers=3)` 并发审查，自动修复常见问题后写入文件。本地生成/预览时，未配置 LLM API 会跳过 LLM review；正式 `--push` 时 LLM review 必须可用，否则停止发布。
 
 代码层自动修复覆盖以下问题：
 1. 未转义的 HTML-like 标签（`<S>`、`<E>`、`<task>` 等）→ 用反引号包裹
@@ -355,7 +356,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 8. 错乱的 LaTeX 括号（`\)\mathcal{L}_X\(`）→ 统一修正为 `\(\mathcal{L}_X\)`
 9. 双反斜杠 LaTeX（`\(\\mathcal{L}_X\)`）→ 修正为 `\(\mathcal{L}_X\)`
 
-LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，按 `fix_instruction` 执行简单文本替换。
+LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，按 `fix_instruction` 执行简单文本替换。博客 review 与小红书 one-liner 共用 `publish_common.py` 中的 `call_publish_llm_api()`，协议路由与 Node 端保持一致。
 
 **重要限制**：`fetchedAt` 是抓取时间，不是论文在 arXiv 上的 `published` 日期。跨天运行时请显式指定 `--date`。
 
@@ -386,6 +387,7 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 - `score_emoji(score)` / `format_medal(index)`：评分 emoji 和奖牌格式化
 - `build_paper_meta(pa, aurl)`：拼接评分/分档/标签元信息
 - `parse_cli_args(argv, defaults)`：通用命令行参数解析，被各发布脚本复用
+- `call_publish_llm_api()`：发布阶段公共 LLM API client，自动处理 OpenAI / Anthropic / MiMo / Kimi / DeepSeek 路由；正式发布可用 `required=True` 强制失败即阻断
 
 #### `scripts/publish-xiaohongshu.py`
 
@@ -447,7 +449,7 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 - 耐限流设计：请求超时 30 秒，限流时指数退避，连续 20 篇已知 ID 提前停止
 - 写入 `data/current/papers.json`
 - 额外输出 `data/backfill-result.json`
-- 独立日志：`logs/backfill.log`
+- 独立日志：默认不生成；启用文件日志后追加写入 `logs/backfill.log`
 - 依赖：见根目录 `requirements.txt`（`python-dotenv`、`requests`、`playwright`）
 
 #### `scripts/backup-data.sh`

@@ -35,6 +35,21 @@ describe('full-fetch helpers', () => {
         assert.strictEqual(getSourceFetchedCount({}, 'arxiv', 7), 7);
     });
 
+    it('sourceHealth 可提取抓取失败原因', () => {
+        const { getSourceFailures } = require('../scripts/full-fetch.js');
+        const failures = getSourceFailures({
+            arxiv: {
+                categories: [
+                    { id: 'cs.SD', ok: true },
+                    { id: 'eess.AS', ok: false, error: 'HTTP 429' }
+                ]
+            },
+            huggingface: { ok: false, error: 'timeout' }
+        });
+
+        assert.deepStrictEqual(failures, ['arxiv:eess.AS:HTTP 429', 'huggingface:timeout']);
+    });
+
     it('只复用今日 complete 的 filtered-papers 文件', () => {
         const { loadCompleteFilteredForToday } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-filtered-'));

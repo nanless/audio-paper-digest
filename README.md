@@ -37,7 +37,7 @@ audio-paper-digest/
 ├── data/                 # 工作数据与归档（gitignored）
 │   ├── current/          # 当前工作数据
 │   └── archive/          # 按日期自动归档
-├── logs/                 # 运行日志（gitignored）
+├── logs/                 # 可选文件日志（gitignored；默认不生成，需 PD_ENABLE_FILE_LOGS=1）
 ├── prompts/              # LLM prompt 文件
 ├── docs/                 # 详细文档
 ├── package.json          # npm scripts
@@ -109,7 +109,7 @@ npm run backfill
 # 生成博客 Markdown（默认不推送）
 npm run publish -- --date 2026-04-21
 
-# 正式发布博客（提交并推送）
+# 正式发布博客（review 通过且 LLM review 可用后提交并推送）
 npm run publish -- --push --date 2026-04-21
 
 # 生成微信公众号草稿
@@ -171,7 +171,7 @@ python3 scripts/publish-to-blog.py --date 2026-04-21
 # 只生成 Markdown，不推送
 python3 scripts/publish-to-blog.py --skip-push --date 2026-04-21
 
-# 正式提交并推送
+# 正式提交并推送（要求 LLM review 可用）
 python3 scripts/publish-to-blog.py --push --date 2026-04-21
 
 # 用自定义数据发布

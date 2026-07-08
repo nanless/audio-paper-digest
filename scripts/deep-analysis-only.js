@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const { loadEnvFile, writeFileAtomic, readJsonSafe, getBeijingISOString, normalizedId } = require('./utils.js');
 const { analyzeBatch } = require('./analysis-engine.js');
+const { updateAnalysisDigestStatuses } = require('./digest-status.js');
 const Config = require('./config.js');
 
 loadEnvFile();
@@ -95,7 +96,11 @@ async function runDeepAnalysis() {
                 stats: { ...existingData?.stats, ...saveStats }
             };
             writeFileAtomic(resultPath, JSON.stringify(output, null, 2));
-            console.log(`  💾 已保存 (${saveStats.success + saveStats.failed}/${notAnalyzed.length})`);
+            const digestStatus = updateAnalysisDigestStatuses(results, {
+                batchDate: (existingData?.timestamp || getBeijingISOString()).slice(0, 10)
+            });
+            const statusNote = digestStatus.updated > 0 ? `，papers.json 状态 ${digestStatus.updated} 篇` : '';
+            console.log(`  💾 已保存 (${saveStats.success + saveStats.failed}/${notAnalyzed.length})${statusNote}`);
         }
     });
 

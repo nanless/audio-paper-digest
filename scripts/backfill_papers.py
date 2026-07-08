@@ -38,6 +38,10 @@ CATEGORIES = [
 def log(msg):
     line = f"[{now_bj().isoformat()}] {msg}"
     print(line)
+    if os.environ.get("PAPER_DIGEST_ENABLE_FILE_LOGS") != "1" and os.environ.get("PD_ENABLE_FILE_LOGS") != "1":
+        return
+    if os.environ.get("PAPER_DIGEST_DISABLE_FILE_LOGS") == "1" or os.environ.get("PD_DISABLE_FILE_LOGS") == "1":
+        return
     os.makedirs(LOGS_DIR, exist_ok=True)
     with open(LOG_FILE, 'a', encoding='utf-8') as f:
         f.write(line + '\n')

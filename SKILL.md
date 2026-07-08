@@ -320,7 +320,7 @@ npm run xiaohongshu -- --date 2026-04-22
   - 汇总页：`YYYY-MM-DD.md`
   - 单篇页：`YYYY-MM-DD-<slug>.md`
 - 默认只生成 `.md` 文件并执行 review，不推送
-- 只有显式传 `--push` 时才执行 `git add -A`、`git commit`、`git push origin main`
+- 只有显式传 `--push` 且三层 review 通过、LLM review 可用时，才执行 `git add -A`、`git commit`、`git push origin main`
 - 若需发布全部论文（不过滤），显式传 `--all`
 
 Agent 执行约束：
@@ -389,11 +389,11 @@ PY
 
 ## 7. 日志与运行特性
 
-- Node 脚本统一通过 `scripts/log-setup.js` 输出日志到 `logs/<script>-YYYYMMDD-HHMMSS.log`
-- Python 脚本统一通过 `scripts/log_setup.py` 输出日志到 `logs/<script>-YYYYMMDD-HHMMSS.log`
-- **自动清理与限额**：每次启动时清理旧日志，默认保留最近 50 个，总量上限 250MB；单个日志默认最多写 10MB，超过后继续输出到终端但停止写文件
-- 可用 `PD_LOG_MAX_FILES`、`PD_LOG_MAX_BYTES`、`PD_LOG_TOTAL_MAX_BYTES` 调整日志限额；`PAPER_DIGEST_DISABLE_FILE_LOGS=1` 或 `PD_DISABLE_FILE_LOGS=1` 可禁用文件日志
-- `backfill_papers.py` 额外写独立日志到 `logs/backfill.log`
+- Node/Python 脚本默认只输出到终端，不生成 `logs/*.log`
+- 只有显式设置 `PD_ENABLE_FILE_LOGS=1` 或 `PAPER_DIGEST_ENABLE_FILE_LOGS=1` 时，`scripts/log-setup.js` / `scripts/log_setup.py` 才会写 `logs/<script>-YYYYMMDD-HHMMSS.log`
+- **启用文件日志后的清理与限额**：每次启动时清理旧日志，默认保留最近 50 个，总量上限 250MB；单个日志默认最多写 10MB，超过后继续输出到终端但停止写文件
+- 可用 `PD_LOG_MAX_FILES`、`PD_LOG_MAX_BYTES`、`PD_LOG_TOTAL_MAX_BYTES` 调整日志限额；`PAPER_DIGEST_DISABLE_FILE_LOGS=1` 或 `PD_DISABLE_FILE_LOGS=1` 可强制禁用文件日志
+- `backfill_papers.py` 的 `logs/backfill.log` 也默认不生成，只有启用文件日志时才追加写入
 - 主要 Node 脚本已处理后台 stdout 缓冲（`setBlocking`），便于实时查看进度
 - `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` 采用重试与增量保存，降低中断丢数风险
 - `reanalyze.js` 每 5 篇保存一次中间结果（并发模式下自动调整保存间隔）
@@ -414,13 +414,13 @@ PY
 8. **环境变量统一管理**：新增脚本需要读取 LLM 配置时，统一使用 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT`，禁止引入别名回退链、硬编码或 base64 编码变量名 hack。
 9. **新增可配置参数放入 config.js**：新增脚本涉及可调整参数（并发度、超时、批次大小等）时，统一放入 `scripts/config.js` 并添加对应的环境变量覆写支持。
 10. **新增分析脚本复用 analysis-engine.js**：新增论文分析相关脚本时，优先复用 `analysis-engine.js` 的 `analyzeBatch()` / `analyzePaperWithRetry()`，避免重复实现重试、解析、保存逻辑。
-11. **博客验证默认不推送**：`publish-to-blog.py` 当前默认不推送；未获用户明确授权时禁止添加 `--push`。
+11. **博客验证默认不推送**：`publish-to-blog.py` 当前默认不推送；未获用户明确授权时禁止添加 `--push`。正式 `--push` 要求 LLM review 可用，不能静默跳过。
 12. **输出契约改动要同步 parser**：若修改 `prompts/deep-analysis.md` 中的 `## 机器摘要` 键名、章节顺序或标签输出格式，必须同步检查 `scripts/utils.js` 与 `scripts/utils.py` 的解析逻辑。
 13. **变更后必须做产物级验证**：至少抽样检查一份 `data/current/deep-analysis-result.json`，确认存在 `rank_bucket`、`primary_task_tag`、`primary_method_tag` 等字段，再运行博客/社媒脚本验证最终产物。
 14. **变更后验证 prompt 加载**：修改 `prompts/` 目录下的 markdown 文件后，运行一次快速测试（`node scripts/quick-test.js` 或单篇分析）确认 `loadPrompt()` 能正确读取并替换占位符，无 `{变量名}` 残留。
 15. **变更后运行单元测试**：修改 `scripts/utils.js`、`scripts/config.js` 或分析引擎核心逻辑后，必须运行 `npm test` 确保测试通过。
 16. **MiMo API 请求必须禁用代理连接复用**：`fetch-papers.js` 和 `deep-analyzer.js` 中调用 LLM API 时，`options.agent` 必须为 `false`（不是 `undefined`）。任何重构或修改 HTTP 请求逻辑时，禁止将 `agent: false` 改回 `agent: proxyAgent` 或 `agent: undefined`，否则 MiMo Token Plan 会在有系统代理的环境中返回 403。
-17. **新增 LLM 端点必须接入 API 协议自动路由**：任何新增脚本调用 LLM 时，统一使用 `scripts/utils.js` 中的 `detectApiType()`、`buildApiUrl()`、`buildHeaders()`、`buildRequestBody()`、`parseResponseText()`，禁止硬编码特定协议的 URL/Header/Body。
+17. **新增 LLM 端点必须接入 API 协议自动路由**：任何新增 Node 脚本调用 LLM 时，统一使用 `scripts/utils.js` 中的 `detectApiType()`、`buildApiUrl()`、`buildHeaders()`、`buildRequestBody()`、`parseResponseText()`；Python 发布阶段 LLM 调用必须复用 `publish_common.py` 的 `call_publish_llm_api()`，禁止硬编码特定协议的 URL/Header/Body。
 18. **修改 API 协议路由逻辑时同步全链路**：修改 `detectApiType()` 的判定规则或 `buildApiUrl()`/`buildHeaders()` 等函数时，必须同步检查 `fetch-papers.js`、`deep-analyzer.js` 以及所有使用 `analysis-engine.js` 的脚本（`full-fetch.js`、`reanalyze.js`、`batch-analyze.js`、`deep-analysis-only.js`、`analyze-single-paper.js`），确保全链路行为一致。
 19. **禁止将敏感文件提交到版本控制**：`data/`、`logs/`、`*.env`、`*.backup*`、缓存文件、含密钥的日志归档等严禁进入 git；提交前必须确认 `.gitignore` 已正确配置，且仓库中不存在历史遗留的敏感文件。
 20. **CI 自动检查**：CI 会通过 `npm test`、`find scripts tests -name '*.js'`、`find scripts -name '*.py'`、`python3 -m unittest discover -s tests/python` 和全仓库 `.sh` 语法检查覆盖新增 JS/Python/shell 文件；新增特殊文件类型时再更新 `.github/workflows/ci.yml`。
@@ -445,16 +445,16 @@ PY
    - MiMo Token Plan key 前缀为 `tp-`，必须配合 Token Plan 端点，两者混用必返回 401
    - 确保 `.env` 已正确配置，且 `.zshrc` 已 source
 
-2. **检查是否走对了协议**（日志中查找 `[filter] API 类型: xxx` 或 `[api] → model | xxx` 行）
+2. **检查是否走对了协议**（终端输出中查找 `[filter] API 类型: xxx` 或 `[api] → model | xxx` 行；若显式启用文件日志，也可在 `logs/*.log` 中查找）
    - 若使用 MiMo/Kimi Token Plan 却显示 `openai`，检查端点是否含 `token-plan` 或 `coding`，模型是否含 `mimo` 或 `kimi`
-   - 若日志显示 `anthropic` 但仍失败，检查 URL 是否正确：MiMo 是 `/anthropic/v1/messages`，Kimi 是 `/coding/v1/messages`，都不是 `/v1/chat/completions`
+   - 若输出显示 `anthropic` 但仍失败，检查 URL 是否正确：MiMo 是 `/anthropic/v1/messages`，Kimi 是 `/coding/v1/messages`，都不是 `/v1/chat/completions`
 
-3. **Anthropic 协议专项检查**（日志显示 `anthropic` 时）
+3. **Anthropic 协议专项检查**（输出显示 `anthropic` 时）
    - 请求头是否为 `x-api-key`（非 `Authorization: Bearer`）
    - 是否带 `anthropic-version: 2023-06-01`
    - 是否带 `User-Agent: claude-cli/<version> (external, cli)`（日志不会直接显示，可用代理工具验证）
 
-4. **OpenAI 协议专项检查**（日志显示 `openai` 时）
+4. **OpenAI 协议专项检查**（输出显示 `openai` 时）
    - 确认使用 `Authorization: Bearer {key}`
    - 确认 URL 路径是 `/v1/chat/completions`
 
@@ -462,7 +462,7 @@ PY
    - MiMo Token Plan 在有系统代理时可能被屏蔽
    - 尝试用 `curl --noproxy "xiaomimimo.com"` 绕过代理测试
 
-6. **查看日志**：`logs/full-fetch-*.log`、`logs/deep-analyzer-*.log`
+6. **查看输出**：默认看终端完整输出；若已显式启用文件日志，再查看 `logs/full-fetch-*.log`、`logs/deep-analyzer-*.log`
 
 ### 9.2 MiMo API 返回 403 Illegal access / timeout / socket hang up
 
@@ -485,7 +485,7 @@ const options = {
 
 ### 9.3 深度分析慢或频繁失败
 
-- 查看日志：`logs/deep-analyzer-*.log`、`logs/full-fetch-*.log`
+- 查看终端完整输出；若已显式启用文件日志，再看 `logs/deep-analyzer-*.log`、`logs/full-fetch-*.log`
 - 检查 key/endpoint/model 三元组是否匹配（见 9.1 节）
 - 若超时，脚本会自动降级为纯文本重试；若仍失败，检查代理或减小并发
 - 可用 `node scripts/deep-analysis-only.js` 安全续跑

@@ -21,7 +21,7 @@ setup_script_logging(__file__)
     python3 publish-to-blog.py --skip-push     # 兼容旧参数；默认已不推送
     python3 publish-to-blog.py --date YYYY-MM-DD
 """
-import json, re, sys, os, subprocess, datetime, base64, time, concurrent.futures
+import json, re, sys, os, subprocess, datetime, base64, concurrent.futures
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -31,7 +31,7 @@ from publish_common import (
     fix_latex_delimiters, escape_html_like_tags, fix_image_markdown,
     truncate_base64_datauri, fix_yaml_double_commas, strip_raw_inline_html,
     fix_empty_markdown_links, dedupe_image_alts, fix_yaml_unbalanced_quotes,
-    sanitize_markdown_for_publish
+    sanitize_markdown_for_publish, call_publish_llm_api, PublishLLMUnavailable
 )
 from utils import strip_md, parse_analysis
 
@@ -42,102 +42,19 @@ CONTENT_DIR = os.path.join(BLOG_REPO, "content", "posts")
 BASE_PATH = os.environ.get("PAPER_DIGEST_BLOG_BASE_PATH", "/audio-paper-digest-blog")
 GITHUB_REMOTE = os.environ.get("PAPER_DIGEST_GITHUB_REMOTE", "origin")
 
-def call_llm_api(prompt, max_tokens=800, temperature=0.1):
-    """调用 LLM API，自动检测协议（OpenAI / Anthropic）。"""
-    api_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
-    endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', 'https://api.openai.com/v1')
-    model = os.environ.get('PAPER_ANALYZER_MODEL', 'gpt-4o')
-
-    if not api_key:
-        print("  ⚠️  未配置 PAPER_ANALYZER_API_KEY，跳过 LLM review")
-        return None
-
-    # 自动检测协议
-    ep_lower = endpoint.lower()
-    model_lower = model.lower()
-    is_token_plan = 'token-plan' in ep_lower or 'coding' in ep_lower
-    is_mimo = 'xiaomimimo.com' in ep_lower or 'mimo' in model_lower
-    is_kimi = 'kimi.com' in ep_lower or 'kimi' in model_lower
-
-    if 'deepseek.com' in ep_lower or 'deepseek' in model_lower:
-        api_type = 'openai'
-    elif (is_mimo or is_kimi) and is_token_plan:
-        api_type = 'anthropic'
-    elif '/anthropic' in ep_lower:
-        api_type = 'anthropic'
-    else:
-        api_type = 'openai'
-
-    base = endpoint.rstrip('/')
-
-    if api_type == 'anthropic':
-        if 'xiaomimimo.com' in base:
-            # MiMo: /v1 → /anthropic/v1/messages
-            base = base.replace('/v1', '/anthropic')
-            api_url = f"{base}/v1/messages"
-        elif 'kimi.com' in base:
-            api_url = f"{base}/messages"
-        else:
-            api_url = f"{base}/messages"
-        headers = {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "User-Agent": "claude-cli/2.1.108 (external, cli)",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "messages": [{"role": "user", "content": prompt}]
-        }
-    else:
-        # OpenAI 协议
-        base = base.replace('/anthropic', '/v1')
-        api_url = f"{base}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": model,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "messages": [{"role": "user", "content": prompt}]
-        }
-
-    max_retries = 5
-    for attempt in range(max_retries):
-        try:
-            import requests
-            session = requests.Session()
-            session.trust_env = False
-            resp = session.post(api_url, json=payload, headers=headers, timeout=120)
-            resp.raise_for_status()
-            data = resp.json()
-            if api_type == 'anthropic':
-                content = ""
-                if isinstance(data.get("content"), list):
-                    for block in data["content"]:
-                        if block.get("type") == "text":
-                            content = block.get("text", "").strip()
-                            break
-                if content:
-                    return content
-            else:
-                return data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            if attempt < max_retries - 1:
-                wait_time = 2 ** attempt
-                time.sleep(wait_time)
-        except Exception as e:
-            print(f"  ⚠️  LLM API 调用失败 (尝试 {attempt+1}/{max_retries}): {e}")
-            if attempt < max_retries - 1:
-                wait_time = 2 ** attempt  # 指数退避: 1s, 2s, 4s, 8s
-                time.sleep(wait_time)
-
-    return None
+def call_llm_api(prompt, max_tokens=800, temperature=0.1, required=False, context="LLM review", timeout=120):
+    """调用发布阶段公共 LLM API client。"""
+    return call_publish_llm_api(
+        prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        required=required,
+        context=context,
+        timeout=timeout
+    )
 
 
-def llm_review_post(content, title=""):
+def llm_review_post(content, title="", required=False):
     """使用 LLM 审查单篇博客内容，返回 (是否通过, 问题列表, 修复后内容)。"""
     # 截取前 4000 字节省 token，通常问题出现在前面
     truncated = content[:4000] if len(content) > 4000 else content
@@ -179,7 +96,7 @@ def llm_review_post(content, title=""):
   ]
 }}"""
 
-    result = call_llm_api(prompt, max_tokens=1500, temperature=0.1)
+    result = call_llm_api(prompt, max_tokens=1500, temperature=0.1, required=required, context=f"LLM 文本 review: {title}")
     if not result:
         return True, [], content  # LLM 不可用则默认通过
 
@@ -216,7 +133,7 @@ def llm_review_post(content, title=""):
         return True, [], content
 
 
-def multimodal_review_images(content, title=""):
+def multimodal_review_images(content, title="", required=False):
     """使用多模态 LLM 审查博客中的图片。返回 (是否通过, 图片问题列表)。
     当前实现：提取图片信息，用文本方式让 LLM 判断图片引用是否合理。
     如果图片是 base64 data URI，可提取后传给支持多模态的模型。"""
@@ -279,7 +196,7 @@ def multimodal_review_images(content, title=""):
   ]
 }}"""
 
-    result = call_llm_api(prompt, max_tokens=800, temperature=0.1)
+    result = call_llm_api(prompt, max_tokens=800, temperature=0.1, required=required, context=f"多模态图片 review: {title}")
     if not result:
         return True, []
 
@@ -297,6 +214,11 @@ def multimodal_review_images(content, title=""):
         issues = review.get("issues", [])
         return passed, issues
     except json.JSONDecodeError:
+        if required:
+            return False, [{
+                "severity": "error",
+                "description": "多模态图片 review 返回非 JSON，正式发布时不能忽略"
+            }]
         return True, []
 
 
@@ -935,7 +857,7 @@ def review_and_fix_post(file_path):
 
 def _review_single_paper(args):
     """并发 review 单篇论文，返回 (title, fixed_count, issue_count, output_lines)"""
-    arxiv_id, slug, date_str, title = args
+    arxiv_id, slug, date_str, title, require_llm = args
     paper_file = os.path.join(CONTENT_DIR, f"{date_str}-{slug}.md")
     if not os.path.exists(paper_file):
         return None
@@ -959,7 +881,7 @@ def _review_single_paper(args):
     # 2. LLM 文本审查
     with open(paper_file, 'r', encoding='utf-8') as f:
         content = f.read()
-    llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, title)
+    llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, title, required=require_llm)
     if llm_issues:
         for issue in llm_issues:
             sev = issue.get('severity', 'warning')
@@ -971,11 +893,11 @@ def _review_single_paper(args):
             fixed_count += 1
             lines.append("    🛠️  LLM 自动修复已应用")
             content = llm_fixed_content
-            llm_passed, llm_issues, _ = llm_review_post(llm_fixed_content, title)
+            llm_passed, llm_issues, _ = llm_review_post(llm_fixed_content, title, required=require_llm)
         issue_count += len(llm_issues)
 
     # 3. 多模态图片审查
-    img_passed, img_issues = multimodal_review_images(content, title)
+    img_passed, img_issues = multimodal_review_images(content, title, required=require_llm)
     if img_issues:
         issue_count += len(img_issues)
         for issue in img_issues:
@@ -989,9 +911,11 @@ def _review_single_paper(args):
     return title, fixed_count, issue_count, lines
 
 
-def review_all_posts(date_str, paper_slugs, scored_papers):
+def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False):
     """三层 review：代码检查 → LLM 文本审查 → 多模态图片审查（论文独立页面并发执行）"""
     print("\n🔍 开始三层 review（代码检查 → LLM 审查 → 多模态图片审查）...")
+    if require_llm:
+        print("  🔒 正式发布模式：LLM review 必须可用，失败将阻断推送")
     total_fixed = 0
     total_issues = 0
 
@@ -1019,7 +943,7 @@ def review_all_posts(date_str, paper_slugs, scored_papers):
         # 2. LLM 文本审查
         with open(index_file, 'r', encoding='utf-8') as f:
             content = f.read()
-        llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, "汇总页面")
+        llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, "汇总页面", required=require_llm)
         if llm_issues:
             for issue in llm_issues:
                 sev = issue.get('severity', 'warning')
@@ -1030,7 +954,7 @@ def review_all_posts(date_str, paper_slugs, scored_papers):
                     f.write(llm_fixed_content)
                 total_fixed += 1
                 print(f"    🛠️  LLM 自动修复已应用")
-                llm_passed, llm_issues, _ = llm_review_post(llm_fixed_content, "汇总页面")
+                llm_passed, llm_issues, _ = llm_review_post(llm_fixed_content, "汇总页面", required=require_llm)
             total_issues += len(llm_issues)
 
         if not remaining_code_issues and not llm_issues:
@@ -1038,7 +962,7 @@ def review_all_posts(date_str, paper_slugs, scored_papers):
 
     # Review 每篇论文独立页面（并发）
     paper_args = [
-        (arxiv_id, slug, date_str, title_map.get(arxiv_id, slug))
+        (arxiv_id, slug, date_str, title_map.get(arxiv_id, slug), require_llm)
         for arxiv_id, slug in paper_slugs.items()
     ]
 
@@ -1168,7 +1092,11 @@ def main():
     print(f"📄 汇总页面: {index_file} ({len(index_md)} chars)")
 
     # 三层 review：代码检查 → LLM 审查 → 多模态图片审查
-    review_fixed, review_issues = review_all_posts(today, paper_slugs, scored)
+    try:
+        review_fixed, review_issues = review_all_posts(today, paper_slugs, scored, require_llm=not skip_push)
+    except PublishLLMUnavailable as exc:
+        print(f"\n❌ 正式发布要求 LLM review 可用，但当前不可用: {exc}")
+        sys.exit(1)
     if review_issues > 0:
         print(f"\n❌ review 仍有 {review_issues} 个未解决问题，停止发布。请修复后重跑 publish。")
         sys.exit(1)

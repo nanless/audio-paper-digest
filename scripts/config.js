@@ -157,7 +157,8 @@ const ARCHIVE_CONFIG = {
     maxLogFiles: 50,
     maxLogFileBytes: 10 * 1024 * 1024,
     maxTotalLogBytes: 250 * 1024 * 1024,
-    disableFileLogs: process.env.PAPER_DIGEST_DISABLE_FILE_LOGS === '1'
+    enableFileLogs: process.env.PAPER_DIGEST_ENABLE_FILE_LOGS === '1' || process.env.PD_ENABLE_FILE_LOGS === '1',
+    disableFileLogs: process.env.PAPER_DIGEST_DISABLE_FILE_LOGS === '1' || process.env.PD_DISABLE_FILE_LOGS === '1'
 };
 
 // ═══════════════════════════════════════════════════════
@@ -233,7 +234,11 @@ function applyEnvOverrides() {
     if (maxTotalLogBytes) {
         ARCHIVE_CONFIG.maxTotalLogBytes = maxTotalLogBytes;
     }
-    if (process.env.PD_DISABLE_FILE_LOGS === '1') {
+    if (process.env.PAPER_DIGEST_ENABLE_FILE_LOGS === '1' || process.env.PD_ENABLE_FILE_LOGS === '1') {
+        ARCHIVE_CONFIG.enableFileLogs = true;
+    }
+    if (process.env.PAPER_DIGEST_DISABLE_FILE_LOGS === '1' || process.env.PD_DISABLE_FILE_LOGS === '1') {
+        ARCHIVE_CONFIG.enableFileLogs = false;
         ARCHIVE_CONFIG.disableFileLogs = true;
     }
 }

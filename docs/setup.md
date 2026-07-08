@@ -39,7 +39,8 @@ set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
 | `PD_LOG_MAX_FILES` | 自动保留的日志文件数量 | 50 |
 | `PD_LOG_MAX_BYTES` | 单个日志文件最多写入字节数，超过后只输出到终端 | 10485760 |
 | `PD_LOG_TOTAL_MAX_BYTES` | logs 目录自动保留的总字节数上限 | 262144000 |
-| `PAPER_DIGEST_DISABLE_FILE_LOGS` / `PD_DISABLE_FILE_LOGS` | 设为 `1` 时禁用文件日志 | 未启用 |
+| `PAPER_DIGEST_ENABLE_FILE_LOGS` / `PD_ENABLE_FILE_LOGS` | 设为 `1` 时启用文件日志 | 未启用 |
+| `PAPER_DIGEST_DISABLE_FILE_LOGS` / `PD_DISABLE_FILE_LOGS` | 设为 `1` 时强制禁用文件日志 | 未启用 |
 
 **API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动判断使用 OpenAI 还是 Anthropic 协议
 - **Anthropic 协议**（自动伪装 Claude Code）：端点含 `token-plan` 或 `coding` **且** 模型含 `mimo` 或 `kimi`
@@ -138,17 +139,17 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 
 ## 日志机制
 
-所有主脚本启动后会自动写日志：
+所有主脚本默认只输出到终端，不生成 `logs/*.log`。需要留存文件日志时，显式设置 `PD_ENABLE_FILE_LOGS=1` 或 `PAPER_DIGEST_ENABLE_FILE_LOGS=1`。
 
 - **Node 脚本**：通过 `scripts/log-setup.js`
 - **Python 脚本**：通过 `scripts/log_setup.py`
-- **输出位置**：`logs/<script-name>-YYYYMMDD-HHMMSS.log`
-- **特性**：同时输出到终端和日志文件（Tee 模式），flush 及时
-- **自动清理**：每次启动时清理旧日志，默认保留最近 50 个、总量 250MB；单文件默认最多写 10MB，超过后只继续输出到终端
+- **启用后的输出位置**：`logs/<script-name>-YYYYMMDD-HHMMSS.log`
+- **启用后的特性**：同时输出到终端和日志文件（Tee 模式），flush 及时
+- **启用后的自动清理**：每次启动时清理旧日志，默认保留最近 50 个、总量 250MB；单文件默认最多写 10MB，超过后只继续输出到终端
 
 特殊日志：
-- `backfill_papers.py` 额外写 `logs/backfill.log`（持久追加）
-- `logs/full-fetch-*.log` 是排查抓取/分析问题的首选
+- `backfill_papers.py` 的 `logs/backfill.log` 也默认不生成，只有启用文件日志时才追加写入
+- 已启用文件日志时，`logs/full-fetch-*.log` 可用于排查抓取/分析问题；否则以终端完整输出为准
 
 **后台缓冲处理**：所有主要 Node 脚本已调用 `process.stdout._handle.setBlocking(true)`，确保后台运行时日志实时 flush。
 

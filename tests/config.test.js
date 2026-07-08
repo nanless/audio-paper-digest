@@ -104,6 +104,41 @@ describe('config', () => {
         delete process.env.PD_LOG_MAX_BYTES;
     });
 
+    it('文件日志默认关闭，显式开启，禁用开关优先', () => {
+        const saved = {
+            PD_ENABLE_FILE_LOGS: process.env.PD_ENABLE_FILE_LOGS,
+            PAPER_DIGEST_ENABLE_FILE_LOGS: process.env.PAPER_DIGEST_ENABLE_FILE_LOGS,
+            PD_DISABLE_FILE_LOGS: process.env.PD_DISABLE_FILE_LOGS,
+            PAPER_DIGEST_DISABLE_FILE_LOGS: process.env.PAPER_DIGEST_DISABLE_FILE_LOGS
+        };
+        try {
+            process.env.PD_ENABLE_FILE_LOGS = '0';
+            process.env.PAPER_DIGEST_ENABLE_FILE_LOGS = '0';
+            process.env.PD_DISABLE_FILE_LOGS = '0';
+            process.env.PAPER_DIGEST_DISABLE_FILE_LOGS = '0';
+            delete require.cache[require.resolve('../scripts/config.js')];
+            Config = require('../scripts/config.js');
+            assert.strictEqual(Config.ARCHIVE_CONFIG.enableFileLogs, false);
+            assert.strictEqual(Config.ARCHIVE_CONFIG.disableFileLogs, false);
+
+            process.env.PD_ENABLE_FILE_LOGS = '1';
+            delete require.cache[require.resolve('../scripts/config.js')];
+            Config = require('../scripts/config.js');
+            assert.strictEqual(Config.ARCHIVE_CONFIG.enableFileLogs, true);
+
+            process.env.PD_DISABLE_FILE_LOGS = '1';
+            delete require.cache[require.resolve('../scripts/config.js')];
+            Config = require('../scripts/config.js');
+            assert.strictEqual(Config.ARCHIVE_CONFIG.enableFileLogs, false);
+            assert.strictEqual(Config.ARCHIVE_CONFIG.disableFileLogs, true);
+        } finally {
+            for (const [key, value] of Object.entries(saved)) {
+                if (value === undefined) delete process.env[key];
+                else process.env[key] = value;
+            }
+        }
+    });
+
     it('环境变量覆写 PAPER_DIGEST_BLOG_REPO 并同步 contentDir', () => {
         const fs = require('fs');
         const envPath = path.join(__dirname, '..', '.env');

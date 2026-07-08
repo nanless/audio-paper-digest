@@ -70,6 +70,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
                         selectedImageUrls: analyzed.selectedImageUrls || [],
                         imageUrls: analyzed.imageUrls || paper.imageUrls || [],
                         allImageUrls: analyzed.allImageUrls || paper.allImageUrls || [],
+                        imageManifest: analyzed.imageManifest || paper.imageManifest || null,
                         error: null
                     },
                     parsed: parsed

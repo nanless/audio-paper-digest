@@ -82,11 +82,17 @@ function loadCompleteFilteredForToday(today, filePath = FILTERED_FILE) {
 }
 
 function buildSourceHealth(sourceHealth, arxivPapers, hfPapers) {
+    const arxivCategories = sourceHealth.arxiv?.categories || [];
+    const arxivFailed = arxivCategories.filter(c => c.ok === false).length;
+    const arxivSucceeded = arxivCategories.filter(c => c.ok !== false).length;
     return {
         ...sourceHealth,
         arxiv: {
             ...(sourceHealth.arxiv || {}),
-            totalFetched: arxivPapers.length
+            totalFetched: arxivPapers.length,
+            ok: arxivFailed === 0,
+            failedCategories: arxivFailed,
+            succeededCategories: arxivSucceeded
         },
         huggingface: {
             ...(sourceHealth.huggingface || {}),
@@ -100,6 +106,19 @@ function getSourceFetchedCount(sourceHealth, sourceName, fallbackCount = 0) {
     const source = sourceHealth?.[sourceName] || {};
     const value = Number.isFinite(source.totalFetched) ? source.totalFetched : source.fetched;
     return Number.isFinite(value) ? value : fallbackCount;
+}
+
+function getSourceFailures(sourceHealth) {
+    const failures = [];
+    for (const category of sourceHealth?.arxiv?.categories || []) {
+        if (category.ok === false) {
+            failures.push(`arxiv:${category.id}:${category.error || 'unknown error'}`);
+        }
+    }
+    if (sourceHealth?.huggingface?.ok === false) {
+        failures.push(`huggingface:${sourceHealth.huggingface.error || 'unknown error'}`);
+    }
+    return failures;
 }
 
 function writeFilterArtifacts({
@@ -381,13 +400,33 @@ async function fullFetch() {
             }
             console.log(`  [${i+1}/${shuffledCategories.length}] 抓取 ${category.name} (${category.id})...`);
             const fetchStartTime = Date.now();
-            const papers = await fetchCategoryPapers(
-                category.id,
-                Config.ARXIV_CONFIG.maxResultsPerCategory,
-                Config.ARXIV_CONFIG.fetchMaxRetries,
-                existingIds
-            );
+            let papers = [];
+            let fetchError = null;
+            try {
+                papers = await fetchCategoryPapers(
+                    category.id,
+                    Config.ARXIV_CONFIG.maxResultsPerCategory,
+                    Config.ARXIV_CONFIG.fetchMaxRetries,
+                    existingIds
+                );
+            } catch (e) {
+                fetchError = e;
+                console.log(`    ⚠️ ${category.id} 抓取失败: ${e.message}`);
+            }
             const fetchDuration = Date.now() - fetchStartTime;
+            if (fetchError) {
+                sourceHealth.arxiv.categories.push({
+                    id: category.id,
+                    name: category.name,
+                    priority: category.priority,
+                    fetched: 0,
+                    newInCategory: 0,
+                    duplicateInCategory: 0,
+                    durationMs: fetchDuration,
+                    ok: false,
+                    error: fetchError.message
+                });
+            }
 
             // 去重：将新论文 ID 加入 existingIds，避免下一类别重复抓取
             let newInCategory = 0, dupInCategory = 0;
@@ -401,20 +440,22 @@ async function fullFetch() {
                     newInCategory++;
                 }
             }
-            sourceHealth.arxiv.categories.push({
-                id: category.id,
-                name: category.name,
-                priority: category.priority,
-                fetched: papers.length,
-                newInCategory,
-                duplicateInCategory: dupInCategory,
-                durationMs: fetchDuration,
-                ok: true
-            });
+            if (!fetchError) {
+                sourceHealth.arxiv.categories.push({
+                    id: category.id,
+                    name: category.name,
+                    priority: category.priority,
+                    fetched: papers.length,
+                    newInCategory,
+                    duplicateInCategory: dupInCategory,
+                    durationMs: fetchDuration,
+                    ok: true
+                });
+            }
             console.log(`    ${category.id}: 获取 ${papers.length} 篇, 新增 ${newInCategory} 篇, 跨类别去重 ${dupInCategory} 篇`);
 
             // 核心类别检查：无新论文时继续运行（可能是已知论文太多）
-            if (category.priority === 'core' && papers.length === 0) {
+            if (!fetchError && category.priority === 'core' && papers.length === 0) {
                 console.log(`\nℹ️ 核心类别 ${category.id}（${category.name}）无新论文（可能均已被收录）`);
                 console.log(`   继续运行，尝试其他来源...`);
             }
@@ -436,17 +477,30 @@ async function fullFetch() {
         console.log('\n📥 第二步：从 HuggingFace Papers 抓取论文');
 
         const hfStartTime = Date.now();
-        hfPapers = await fetchHuggingFacePapers(historicalExistingIds, {
-            days: Config.HUGGINGFACE_CONFIG.defaultDays,
-            minUpvotes: Config.HUGGINGFACE_CONFIG.defaultMinUpvotes
-        });
-        sourceHealth.huggingface = {
-            ok: true,
-            fetched: hfPapers.length,
-            days: Config.HUGGINGFACE_CONFIG.defaultDays,
-            minUpvotes: Config.HUGGINGFACE_CONFIG.defaultMinUpvotes,
-            durationMs: Date.now() - hfStartTime
-        };
+        try {
+            hfPapers = await fetchHuggingFacePapers(historicalExistingIds, {
+                days: Config.HUGGINGFACE_CONFIG.defaultDays,
+                minUpvotes: Config.HUGGINGFACE_CONFIG.defaultMinUpvotes
+            });
+            sourceHealth.huggingface = {
+                ok: true,
+                fetched: hfPapers.length,
+                days: Config.HUGGINGFACE_CONFIG.defaultDays,
+                minUpvotes: Config.HUGGINGFACE_CONFIG.defaultMinUpvotes,
+                durationMs: Date.now() - hfStartTime
+            };
+        } catch (e) {
+            hfPapers = [];
+            sourceHealth.huggingface = {
+                ok: false,
+                fetched: 0,
+                days: Config.HUGGINGFACE_CONFIG.defaultDays,
+                minUpvotes: Config.HUGGINGFACE_CONFIG.defaultMinUpvotes,
+                durationMs: Date.now() - hfStartTime,
+                error: e.message
+            };
+            console.log(`  ⚠️ HuggingFace Papers 抓取失败: ${e.message}`);
+        }
 
         console.log(`\nHuggingFace Papers 抓取完成: ${hfPapers.length} 篇`);
 
@@ -454,6 +508,10 @@ async function fullFetch() {
         console.log('\n🔄 第三步：合并去重（arxiv + HuggingFace）');
         allPapers = mergeAndDeduplicate(arxivPapers, hfPapers);
         console.log(`合并后: ${allPapers.length} 篇`);
+        const sourceFailures = getSourceFailures(sourceHealth);
+        if (allPapers.length === 0 && sourceFailures.length > 0) {
+            throw new Error(`所有抓取来源均无可用候选，且存在来源失败: ${sourceFailures.join('; ')}`);
+        }
 
         arxivOnly = allPapers.filter(p => p.sources?.includes('arxiv') && !p.sources?.includes('huggingface')).length;
         hfOnly = allPapers.filter(p => !p.sources?.includes('arxiv') && p.sources?.includes('huggingface')).length;
@@ -822,5 +880,6 @@ module.exports = {
     loadReusableFilterDecisions,
     buildSourceHealth,
     getSourceFetchedCount,
+    getSourceFailures,
     loadCompleteFilteredForToday
 };

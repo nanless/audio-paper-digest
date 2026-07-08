@@ -20,7 +20,7 @@ Runs deep analysis only (resume mode).
 - Reads `data/current/deep-analysis-result.json` (compatible with old path `data/deep-analysis-result.json`, automatically recognizes old-format pure arrays and converts them); if no analysis result exists yet but `data/current/filtered-papers.json` exists, initializes the analysis result from the filtered papers and resumes
 - Skips papers that already have an `analysis` field
 - Calls `deep-analyzer.js` for each unanalyzed paper
-- **Only successful results are written to save**, failed results do not overwrite existing data, safe for resuming from breakpoints
+- Incrementally saves success/failure results and writes `data/current/papers.json` `digestStatus.status` back as `analyzed` / `analysis_failed`, safe for breakpoint resume
 
 #### `scripts/reanalyze.js`
 
@@ -141,9 +141,10 @@ Unified configuration center. All hardcoded parameters are centrally managed and
 | Config Item | Default | Description |
 |--------|--------|------|
 | Max backups | 10 | `deep-analysis-result` bak file retention count |
-| Max logs | 50 | Log file retention count |
-| Per-log file cap | 10MB | Further output remains terminal-only after the cap |
-| Total log cap | 250MB | Old logs over the total cap are cleaned on startup |
+| File logs | Disabled by default | Explicitly enable with `PD_ENABLE_FILE_LOGS=1` or `PAPER_DIGEST_ENABLE_FILE_LOGS=1` |
+| Max logs | 50 | Log file retention count after file logs are enabled |
+| Per-log file cap | 10MB | After file logs are enabled, further output remains terminal-only after the cap |
+| Total log cap | 250MB | After file logs are enabled, old logs over the total cap are cleaned on startup |
 
 Referenced by all core scripts.
 
@@ -322,7 +323,7 @@ Publish to Hugo blog (GitHub Pages).
 **Publish Flow**:
 1. Generate `.md` files into blog repository `content/posts/`
 2. Stop after local generation and review by default
-3. With `--push`, run `git add -A` -> `git commit -m "add: Paper Digest YYYY-MM-DD"` -> `git push origin main`
+3. With `--push`, the three-layer review must pass and LLM review must be available before running `git add -A` -> `git commit -m "add: Paper Digest YYYY-MM-DD"` -> `git push origin main`
 4. GitHub Actions automatically builds and deploys to Pages
 5. Visit: `https://nanless.github.io/audio-paper-digest-blog/posts/YYYY-MM-DD/`
 
@@ -339,7 +340,7 @@ Publish to Hugo blog (GitHub Pages).
 - To publish all papers (no filtering), pass `--all` explicitly
 
 **Review Step**:
-After generating `.md`, a three-layer review is automatically executed (code regex check -> LLM text review -> multimodal image review). Paper standalone pages use `ThreadPoolExecutor(max_workers=3)` for concurrent review; common issues are automatically fixed before writing to file.
+After generating `.md`, a three-layer review is automatically executed (code regex check -> LLM text review -> multimodal image review). Paper standalone pages use `ThreadPoolExecutor(max_workers=3)` for concurrent review; common issues are automatically fixed before writing to file. Local generation/preview skips LLM review when the API is not configured; formal `--push` requires LLM review to be available, otherwise publishing stops.
 
 Code-level auto-fix covers:
 1. Unescaped HTML-like tags (`<S>`, `<E>`, `<task>`, etc.) → wrap in backticks
@@ -352,7 +353,7 @@ Code-level auto-fix covers:
 8. Malformed LaTeX brackets (`\)\mathcal{L}_X\(`) → unify to `\(\mathcal{L}_X\)`
 9. Double-backslash LaTeX (`\(\\mathcal{L}_X\)` → fix to `\(\mathcal{L}_X\)`)
 
-LLM-level fix: Issues where LLM review returns `auto_fixable: true` are fixed via simple text replacement per `fix_instruction`.
+LLM-level fix: Issues where LLM review returns `auto_fixable: true` are fixed via simple text replacement per `fix_instruction`. Blog review and Xiaohongshu one-liners share `call_publish_llm_api()` in `publish_common.py`, keeping protocol routing aligned with the Node side.
 
 **Important Limitation**: `fetchedAt` is the fetch time, not the paper's `published` date on arXiv. Please explicitly specify `--date` when running across midnight.
 
@@ -383,6 +384,7 @@ Main functions:
 - `score_emoji(score)` / `format_medal(index)`: score emoji and medal formatting
 - `build_paper_meta(pa, aurl)`: concatenate score/tier/tag meta info
 - `parse_cli_args(argv, defaults)`: generic command line argument parsing, reused by each publish script
+- `call_publish_llm_api()`: shared publish-time LLM API client for OpenAI / Anthropic / MiMo / Kimi / DeepSeek routing; `required=True` can block formal publishing on failure
 
 #### `scripts/publish-xiaohongshu.py`
 
@@ -444,7 +446,7 @@ Backfill paper IDs in the background (no analysis).
 - Rate-limit resilient design: request timeout 30s, exponential backoff on rate-limit, early stop after 20 consecutive known IDs
 - Writes to `data/current/papers.json`
 - Additional output: `data/backfill-result.json`
-- Independent log: `logs/backfill.log`
+- Independent log: not created by default; when file logs are enabled, appends to `logs/backfill.log`
 - Dependency: `requests` (Python third-party library)
 
 #### `scripts/backup-data.sh`

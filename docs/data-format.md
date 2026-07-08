@@ -62,6 +62,13 @@
           "duplicateInCategory": 6,
           "durationMs": 12000,
           "ok": true
+        },
+        {
+          "id": "cs.CL",
+          "fetched": 0,
+          "durationMs": 60000,
+          "ok": false,
+          "error": "HTTP 429"
         }
       ]
     },

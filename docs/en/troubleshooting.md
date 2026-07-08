@@ -12,15 +12,15 @@
    - Mixing the two will always return 401
 
 2. **Check that the correct protocol is being used**
-   - Look for `[filter] API 类型: xxx` or `[api] → model | xxx` in the logs to confirm whether it shows `anthropic` or `openai`
+   - Look for `[filter] API 类型: xxx` or `[api] → model | xxx` in terminal output to confirm whether it shows `anthropic` or `openai`; if file logs were explicitly enabled, you can also check `logs/*.log`
    - If you are using MiMo/Kimi Token Plan but it shows `openai`, check whether the endpoint contains `token-plan` or `coding`, and whether the model name contains `mimo` or `kimi`
 
-3. **Anthropic protocol checks** (when logs show `anthropic`)
-   - Confirm the request header includes `User-Agent: claude-cli/<version> (external, cli)` (this won't appear directly in logs, but can be verified with tcpdump or a proxy tool)
+3. **Anthropic protocol checks** (when output shows `anthropic`)
+   - Confirm the request header includes `User-Agent: claude-cli/<version> (external, cli)` (this won't appear directly in terminal output, but can be verified with tcpdump or a proxy tool)
    - Confirm you are using `x-api-key` instead of `Authorization: Bearer`
    - Confirm the URL path is correct: MiMo Token Plan uses `/anthropic/v1/messages`, Kimi Coding Plan uses `/coding/v1/messages`, not `/v1/chat/completions`
 
-4. **OpenAI protocol checks** (when logs show `openai`)
+4. **OpenAI protocol checks** (when output shows `openai`)
    - Confirm you are using `Authorization: Bearer {key}`
    - Confirm the URL path is `/v1/chat/completions`
 
@@ -28,11 +28,11 @@
    - MiMo Token Plan may be blocked when a system proxy is active; try disabling the proxy or setting `agent: false`
    - See Section 12.7 for details
 
-6. **Review logs**: `logs/full-fetch-*.log`, `logs/deep-analyzer-*.log`
+6. **Review output**: use full terminal output by default; if `PD_ENABLE_FILE_LOGS=1` was set, also check `logs/full-fetch-*.log`, `logs/deep-analyzer-*.log`
 
 ### 12.2 Deep Analysis Is Slow or Frequently Fails
 
-- Review logs: `logs/deep-analyzer-*.log`, `logs/full-fetch-*.log`
+- Review full terminal output; if file logs were enabled, also check `logs/deep-analyzer-*.log`, `logs/full-fetch-*.log`
 - Check whether the key/endpoint/model triplet is correct (see Section 12.1)
 - If a timeout occurs, the script will automatically fall back to plain-text retry; if it still fails, check the proxy or reduce concurrency
 - You can safely resume with `node scripts/deep-analysis-only.js`
