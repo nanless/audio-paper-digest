@@ -8,7 +8,6 @@ setupScriptLogging(__filename);
  */
 
 const fs = require('fs');
-const path = require('path');
 const { loadEnvFile, writeFileAtomic, readJsonSafe, getBeijingISOString, normalizedId } = require('./utils.js');
 const { analyzeBatch } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses } = require('./digest-status.js');
@@ -19,9 +18,9 @@ loadEnvFile();
 async function runDeepAnalysis() {
     console.log('=== 仅运行深度分析 ===\n');
 
-    const currentPath = path.join(__dirname, '../data/current/deep-analysis-result.json');
-    const legacyPath = path.join(__dirname, '../data/deep-analysis-result.json');
-    const filteredPath = path.join(__dirname, '../data/current/filtered-papers.json');
+    const currentPath = Config.FILES.deepAnalysisResult;
+    const legacyPath = Config.FILES.deepAnalysisResultLegacy;
+    const filteredPath = Config.FILES.filteredPapers;
     const resultPath = fs.existsSync(currentPath) || !fs.existsSync(legacyPath) ? currentPath : legacyPath;
 
     let existingData = null;

@@ -8,10 +8,10 @@ setupScriptLogging(__filename);
  */
 
 const fs = require('fs');
-const path = require('path');
 const { loadEnvFile, getBeijingISOString, getBeijingLocaleString, writeFileAtomic, readJsonSafe, normalizedId } = require('./utils.js');
 const { analyzeBatch } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses } = require('./digest-status.js');
+const Config = require('./config.js');
 
 loadEnvFile();
 
@@ -37,12 +37,11 @@ for (let i = 0; i < args.length; i++) {
     }
 }
 
-const DEFAULT_CURRENT_FILE = path.join(__dirname, '..', 'data', 'current', 'deep-analysis-result.json');
-const DEFAULT_LEGACY_FILE = path.join(__dirname, '..', 'data', 'deep-analysis-result.json');
+const DEFAULT_CURRENT_FILE = Config.FILES.deepAnalysisResult;
+const DEFAULT_LEGACY_FILE = Config.FILES.deepAnalysisResultLegacy;
 const DATA_FILE = dataFileArg || (fs.existsSync(DEFAULT_CURRENT_FILE) || !fs.existsSync(DEFAULT_LEGACY_FILE) ? DEFAULT_CURRENT_FILE : DEFAULT_LEGACY_FILE);
 
 // 并发度：命令行 > 环境变量 > 配置默认值
-const Config = require('./config.js');
 const CONCURRENCY = concurrencyArg || parseInt(process.env.PD_REANALYZE_CONCURRENCY, 10) || Config.ANALYSIS_CONFIG.concurrency;
 
 async function reanalyzeAll() {

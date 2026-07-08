@@ -130,6 +130,8 @@ const HUGGINGFACE_CONFIG = {
 const FILES = {
     papers: path.join(CURRENT_DIR, 'papers.json'),
     papersLegacy: path.join(DATA_DIR, 'papers.json'),
+    rawCandidates: path.join(CURRENT_DIR, 'raw-candidates.json'),
+    filterDecisions: path.join(CURRENT_DIR, 'filter-decisions.json'),
     filteredPapers: path.join(CURRENT_DIR, 'filtered-papers.json'),
     deepAnalysisResult: path.join(CURRENT_DIR, 'deep-analysis-result.json'),
     deepAnalysisResultLegacy: path.join(DATA_DIR, 'deep-analysis-result.json'),

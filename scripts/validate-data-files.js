@@ -7,7 +7,7 @@ const { readJsonSafe, normalizedId } = require('./utils.js');
 
 const ALLOWED_DIGEST_STATUSES = new Set(['seen', 'pending_analysis', 'analyzed', 'analysis_failed']);
 const ALLOWED_FILTERED_STATUSES = new Set(['filtering', 'filter_complete', 'complete']);
-const DEFAULT_FILTER_DECISIONS_FILE = path.join(Config.CURRENT_DIR, 'filter-decisions.json');
+const DEFAULT_FILTER_DECISIONS_FILE = Config.FILES.filterDecisions;
 
 function addIssue(issues, file, message) {
     issues.push(`${path.basename(file)}: ${message}`);

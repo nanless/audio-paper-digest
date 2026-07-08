@@ -83,6 +83,10 @@ arXiv fetch and LLM filter module.
 
 Unified configuration center. All hardcoded parameters are centrally managed and grouped by function:
 
+**Runtime Data Paths (`FILES`)**
+
+`Config.FILES` centrally registers the core JSON files read/written by the current workflow: `papers` / `rawCandidates` / `filterDecisions` / `filteredPapers` / `deepAnalysisResult` / `analyzed`, plus the legacy paths that still need compatibility. New scripts should reuse these constants instead of hand-writing `data/current/*.json` paths.
+
 **Analysis Configuration (`ANALYSIS_CONFIG`)**
 
 | Config Item | Default | Env Override | Description |

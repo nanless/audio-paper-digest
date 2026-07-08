@@ -4,9 +4,8 @@
  * 检查：子项越界、总分一致性、开源矛盾
  */
 
-const fs = require('fs');
-const path = require('path');
 const { parseAnalysis, writeFileAtomic, readJsonSafe } = require('./utils.js');
+const Config = require('./config.js');
 
 const DIM_MAX = {
     innovationScore: 2,
@@ -90,7 +89,7 @@ function validateAndFix(papers) {
 
 // 主入口
 if (require.main === module) {
-    const dataFile = process.argv[2] || path.join(__dirname, '..', 'data', 'current', 'deep-analysis-result.json');
+    const dataFile = process.argv[2] || Config.FILES.deepAnalysisResult;
     const data = readJsonSafe(dataFile);
     if (!data || !data.papers) {
         console.error('无法读取数据文件:', dataFile);

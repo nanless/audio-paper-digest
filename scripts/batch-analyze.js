@@ -8,7 +8,6 @@ setupScriptLogging(__filename);
  */
 
 const fs = require('fs');
-const path = require('path');
 const { loadEnvFile, writeFileAtomic, readJsonSafe, getBeijingISOString, normalizedId } = require('./utils.js');
 const { analyzeBatch } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses } = require('./digest-status.js');
@@ -16,11 +15,9 @@ const Config = require('./config.js');
 
 loadEnvFile();
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const CURRENT_DIR = path.join(DATA_DIR, 'current');
-const LEGACY_RESULT_FILE = path.join(DATA_DIR, 'deep-analysis-result.json');
-const RESULT_FILE = fs.existsSync(path.join(CURRENT_DIR, 'deep-analysis-result.json')) || !fs.existsSync(LEGACY_RESULT_FILE)
-    ? path.join(CURRENT_DIR, 'deep-analysis-result.json')
+const LEGACY_RESULT_FILE = Config.FILES.deepAnalysisResultLegacy;
+const RESULT_FILE = fs.existsSync(Config.FILES.deepAnalysisResult) || !fs.existsSync(LEGACY_RESULT_FILE)
+    ? Config.FILES.deepAnalysisResult
     : LEGACY_RESULT_FILE;
 
 async function main() {

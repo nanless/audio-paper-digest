@@ -54,8 +54,14 @@ describe('config', () => {
     it('FILES 路径都在 current 目录下（非 legacy）', () => {
         Config = require('../scripts/config.js');
         assert.ok(Config.FILES.papers.includes('current'));
+        assert.ok(Config.FILES.rawCandidates.includes('current'));
+        assert.ok(Config.FILES.filterDecisions.includes('current'));
         assert.ok(Config.FILES.filteredPapers.includes('current'));
         assert.ok(Config.FILES.deepAnalysisResult.includes('current'));
+        assert.strictEqual(path.basename(Config.FILES.rawCandidates), 'raw-candidates.json');
+        assert.strictEqual(path.basename(Config.FILES.filterDecisions), 'filter-decisions.json');
+        assert.strictEqual(path.basename(Config.FILES.filteredPapers), 'filtered-papers.json');
+        assert.strictEqual(path.basename(Config.FILES.deepAnalysisResult), 'deep-analysis-result.json');
     });
 
     it('环境变量覆写 PD_ANALYSIS_CONCURRENCY', () => {

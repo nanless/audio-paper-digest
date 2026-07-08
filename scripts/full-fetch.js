@@ -29,8 +29,8 @@ const LEGACY_RESULT_FILE = Config.FILES.deepAnalysisResultLegacy;
 const FILTERED_FILE = Config.FILES.filteredPapers;
 const PAPERS_FILE = Config.FILES.papers;
 const ANALYZED_FILE = Config.FILES.analyzed;
-const RAW_CANDIDATES_FILE = path.join(Config.CURRENT_DIR, 'raw-candidates.json');
-const FILTER_DECISIONS_FILE = path.join(Config.CURRENT_DIR, 'filter-decisions.json');
+const RAW_CANDIDATES_FILE = Config.FILES.rawCandidates;
+const FILTER_DECISIONS_FILE = Config.FILES.filterDecisions;
 
 function shouldUsePaperForFetchDedup(paper) {
     const status = paper?.digestStatus?.status;

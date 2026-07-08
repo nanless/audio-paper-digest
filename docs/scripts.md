@@ -86,6 +86,10 @@ arXiv 抓取与 LLM 筛选模块。
 
 统一配置中心。所有硬编码参数集中管理，按功能分组：
 
+**运行数据路径（`FILES`）**
+
+`Config.FILES` 统一登记当前流程会读写的核心 JSON 文件：`papers` / `rawCandidates` / `filterDecisions` / `filteredPapers` / `deepAnalysisResult` / `analyzed`，以及仍需兼容的 legacy 路径。新增脚本不要手写 `data/current/*.json` 路径，优先复用这里的常量。
+
 **分析配置（`ANALYSIS_CONFIG`）**
 
 | 配置项 | 默认值 | 环境变量覆写 | 说明 |
