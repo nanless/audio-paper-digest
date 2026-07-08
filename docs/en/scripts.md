@@ -62,7 +62,7 @@ Analyze a single paper and merge it into the results.
 
 Read-only validation for current runtime data.
 - Checks `data/current/papers.json`, `data/current/filtered-papers.json`, and `data/current/deep-analysis-result.json` by default
-- Validates `digestStatus.status` enum values, paper IDs, basic `sourceHealth` shape, score ranges, image URL array fields, and `imageManifest` type
+- Also checks `data/current/filter-decisions.json`; validates `digestStatus.status`, filtered-result status values, paper IDs, basic `sourceHealth` shape, score ranges, image URL array fields, `imageManifest` type, and consistency between filter decision counts/related counts and `filtered-papers.json` stats
 - Does not modify any data; prints errors and exits non-zero on failure
 - npm entry: `npm run validate:data`
 

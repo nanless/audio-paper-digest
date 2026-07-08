@@ -63,7 +63,7 @@
 
 只读校验当前运行数据结构。
 - 默认检查 `data/current/papers.json`、`data/current/filtered-papers.json`、`data/current/deep-analysis-result.json`
-- 校验 `digestStatus.status` 枚举、论文 ID、`sourceHealth` 基本形状、评分范围、图片字段数组和 `imageManifest` 类型
+- 额外检查 `data/current/filter-decisions.json`；校验 `digestStatus.status` 枚举、筛选状态枚举、论文 ID、`sourceHealth` 基本形状、评分范围、图片字段数组、`imageManifest` 类型，以及筛选决策数量/相关数量和 `filtered-papers.json` 统计字段的一致性
 - 不修改任何数据；发现问题时输出错误并以非零状态退出
 - npm 入口：`npm run validate:data`
 

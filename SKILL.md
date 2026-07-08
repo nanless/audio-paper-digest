@@ -397,7 +397,7 @@ PY
 - 主要 Node 脚本已处理后台 stdout 缓冲（`setBlocking`），便于实时查看进度
 - `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` 采用重试与增量保存，降低中断丢数风险
 - `reanalyze.js` 每 5 篇保存一次中间结果（并发模式下自动调整保存间隔）
-- 可运行 `npm run validate:data` 只读校验当前 `papers.json`、`filtered-papers.json`、`deep-analysis-result.json` 的结构；该命令不修复数据，发现问题会非零退出
+- 可运行 `npm run validate:data` 只读校验当前 `papers.json`、`filter-decisions.json`、`filtered-papers.json`、`deep-analysis-result.json` 的结构和筛选计数一致性；该命令不修复数据，发现问题会非零退出
 - `full-fetch.js` 自动备份 bak 文件到 `data/archive/`，保留最近 10 个
 - `full-fetch.js` 自动备份 `papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天
 

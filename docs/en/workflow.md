@@ -123,9 +123,10 @@ Runtime parameters:
 The filtering stage writes three files incrementally:
 - `data/current/raw-candidates.json`: candidate input after merge and blog deduplication, including arXiv/HF `sourceHealth`; single-category or HuggingFace failures are recorded with `ok:false`, `error`, and `durationMs`. If merged candidates are empty, the run only aborts when the core arXiv source fully failed or the only attempted source failed; a supplementary-source failure no longer turns a legitimate empty day into a fatal error when the core source succeeded
 - `data/current/filter-decisions.json`: per-paper LLM decisions, including filter model, `prompts/filter.md` hash, `related`, `reason`, `rawResponse`, and `parseSource`; interrupted runs only reuse decisions from the same model and prompt hash
-- `data/current/filtered-papers.json`: partial/final filtered output; final output uses `status: "complete"`
+- `data/current/filtered-papers.json`: partial/final filtered output; `status: "filter_complete"` only means per-paper filtering has finished before archive deduplication, while final skip-ready output must use `status: "complete"`
 
 If today's complete `filtered-papers.json` already exists, rerunning `node scripts/full-fetch.js` skips crawling/filtering and resumes deep analysis directly. If filtering is incomplete, existing decisions in `filter-decisions.json` are reused.
+`npm run validate:data` cross-checks decision counts, related counts, and final paper counts between `filter-decisions.json` and `filtered-papers.json`.
 
 ### 3.7 Deep Analysis
 

@@ -389,7 +389,7 @@ PY
 - Major Node scripts have handled background stdout buffering (`setBlocking`) for real-time progress viewing
 - `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` use retry and incremental saving to reduce data loss risk from interruptions
 - `reanalyze.js` saves intermediate results every 5 papers (save interval auto-adjusted in concurrent mode)
-- `npm run validate:data` performs read-only validation for current `papers.json`, `filtered-papers.json`, and `deep-analysis-result.json`; it does not repair data and exits non-zero on problems
+- `npm run validate:data` performs read-only validation for current `papers.json`, `filter-decisions.json`, `filtered-papers.json`, and `deep-analysis-result.json`, including filter-count consistency; it does not repair data and exits non-zero on problems
 - `full-fetch.js` auto-backs up bak files to `data/archive/`, retaining the last 10
 - `full-fetch.js` auto-backs up `papers.json` to `data/archive/papers-<date>.json`, retaining the last 7 days
 

@@ -144,9 +144,10 @@ HF 特有字段（共 7 个）：
 筛选阶段会增量保存三类文件：
 - `data/current/raw-candidates.json`：合并和博客去重后的候选输入，并包含 arXiv/HF 的 `sourceHealth`；单类别或 HF 抓取失败时会记录 `ok:false`、`error`、`durationMs`。如果合并后候选为空，只有 arXiv 核心来源全部失败或唯一尝试来源失败时才中止；单个补充来源失败但核心来源已成功返回空结果时不再误判为致命错误
 - `data/current/filter-decisions.json`：逐篇 LLM 决策缓存，包含筛选模型、`prompts/filter.md` hash、`related`、`reason`、`rawResponse`、`parseSource`；中断重跑时只复用同模型同 prompt 的决策
-- `data/current/filtered-papers.json`：阶段性/最终筛选输出，最终状态为 `status: "complete"`
+- `data/current/filtered-papers.json`：阶段性/最终筛选输出；`status: "filter_complete"` 只表示逐篇筛选已完成但归档去重尚未完成，最终可跳过抓取/筛选的状态必须是 `status: "complete"`
 
 若今天已经存在完整 `filtered-papers.json`，再次运行 `node scripts/full-fetch.js` 会跳过抓取与筛选，直接进入深度分析续跑；若筛选尚未完成，则复用 `filter-decisions.json` 中已有逐篇决策继续筛选。
+`npm run validate:data` 会交叉校验 `filter-decisions.json` 与 `filtered-papers.json` 的决策数量、相关数量和最终论文数量。
 
 ### 3.7 深度分析
 

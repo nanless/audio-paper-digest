@@ -97,7 +97,7 @@ npm run reanalyze
 # 批量分析未分析论文
 npm run batch
 
-# 只读校验当前 JSON 数据结构
+# 只读校验当前 JSON 数据结构（含筛选决策缓存一致性）
 npm run validate:data
 
 # 运行单元测试

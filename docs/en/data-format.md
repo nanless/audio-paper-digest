@@ -83,6 +83,7 @@ When `papers` is empty and `sourceHealth` contains failures, the main workflow o
 ### 5.3 `data/current/filter-decisions.json`
 
 Per-paper LLM filtering decision cache. It is written after every batch; reruns only reuse it when `filterModel` and `filterPromptHash` match the current configuration.
+`npm run validate:data` checks that `stats.decided` equals the number of `decisions`, `stats.related` equals the number of decisions with `related: true`, each decision has a boolean `related`, and fields such as `reason` / `rawResponse` / `parseSource` are strings when present.
 
 ```json
 {
@@ -115,6 +116,7 @@ Per-paper LLM filtering decision cache. It is written after every batch; reruns 
 ### 5.4 `data/current/filtered-papers.json`
 
 Filtering results (metadata only, no deep analysis). Structure:
+New-format allowed `status` values are `filtering`, `filter_complete`, and `complete`. `filter_complete` is a transient state after per-paper LLM filtering but before archive deduplication. Only `complete` represents final filtering output, so only that state lets the main workflow skip crawling/filtering and resume deep analysis on same-day reruns. Older object-format files without `status` are tolerated as ordinary filtered results, but they do not trigger the skip-crawl/filter resume path.
 
 ```json
 {
@@ -159,6 +161,13 @@ Filtering results (metadata only, no deep analysis). Structure:
   ]
 }
 ```
+
+For `complete` output:
+- `stats.decisionCount` must equal the number of entries in `filter-decisions.json.decisions`
+- `stats.afterFilter` must equal the number of `filter-decisions.json` entries with `related: true`
+- `stats.afterArchiveSkip` must equal final `papers.length`
+
+`npm run validate:data` checks these constraints read-only so corrupted filter caches are not silently reused by resumed runs.
 
 ### 5.5 `data/current/deep-analysis-result.json`
 

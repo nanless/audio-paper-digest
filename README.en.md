@@ -97,7 +97,7 @@ npm run reanalyze
 # Batch analyze unanalyzed papers
 npm run batch
 
-# Read-only validation for current JSON data files
+# Read-only validation for current JSON data files, including filter-decision cache consistency
 npm run validate:data
 
 # Run unit tests
