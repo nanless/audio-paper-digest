@@ -30,7 +30,7 @@ Paper deduplication database. **This file is not archived; it accumulates contin
 }
 ```
 
-`pending_analysis` and `analysis_failed` are not used for strong deduplication in the next `full-fetch`, so interrupted or failed analyses can naturally re-enter the pipeline. Successful analysis updates the status to `analyzed`. `full-fetch.js`, `deep-analysis-only.js`, `reanalyze.js`, `batch-analyze.js`, `reanalyze-selected.js`, and `analyze-single-paper.js` all sync this status through `scripts/digest-status.js` to avoid divergent write paths.
+`pending_analysis` and `analysis_failed` are not used for strong deduplication in the next `full-fetch`, so interrupted or failed analyses can naturally re-enter the pipeline. Successful analysis updates the status to `analyzed`. `full-fetch.js`, `deep-analysis-only.js`, `reanalyze.js`, `batch-analyze.js`, `reanalyze-selected.js`, and `analyze-single-paper.js` all sync this status through `scripts/digest-status.js` to avoid divergent write paths. Failure status writes only update status/error metadata and do not overwrite existing successful `analysis` / `parsed` / image metadata in `papers.json` with empty values.
 
 ### 5.2 `data/current/raw-candidates.json`
 

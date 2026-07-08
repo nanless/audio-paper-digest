@@ -34,7 +34,7 @@
 }
 ```
 
-`pending_analysis` 和 `analysis_failed` 不参与下一次 `full-fetch` 的强去重，因此分析中断或失败后可自然重跑；成功分析后更新为 `analyzed`。`full-fetch.js`、`deep-analysis-only.js`、`reanalyze.js`、`batch-analyze.js`、`reanalyze-selected.js` 和 `analyze-single-paper.js` 都通过 `scripts/digest-status.js` 同步该状态，避免不同入口写法分叉。
+`pending_analysis` 和 `analysis_failed` 不参与下一次 `full-fetch` 的强去重，因此分析中断或失败后可自然重跑；成功分析后更新为 `analyzed`。`full-fetch.js`、`deep-analysis-only.js`、`reanalyze.js`、`batch-analyze.js`、`reanalyze-selected.js` 和 `analyze-single-paper.js` 都通过 `scripts/digest-status.js` 同步该状态，避免不同入口写法分叉。失败状态回写只更新状态和错误信息，不会把 `papers.json` 中已有的成功 `analysis` / `parsed` / 图片元数据覆盖为空。
 
 ### 5.2 `data/current/raw-candidates.json`
 

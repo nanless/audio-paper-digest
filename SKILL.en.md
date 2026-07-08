@@ -33,10 +33,10 @@ Main entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fe
 4. **HuggingFace fetch**: `daily_papers` pagination (up to 20 pages) + `papers` API supplement, defaulting to the last 7 days, excluding IDs in the dedup set
 5. **Merge & deduplicate**: arXiv takes priority, HF supplements 7 unique fields, marks `sources`; filters out blog-published papers
 6. **LLM filtering**: Uses `PAPER_ANALYZER_*` config to judge speech/music/audio relevance paper by paper, `batchSize=5` (adjustable via `PD_FILTER_BATCH_SIZE`), 60s timeout per paper, 5 retries
-7. **Save filter results**: `data/current/filtered-papers.json`
+7. **Save filter results**: `data/current/raw-candidates.json` stores filtering input, and `data/current/filtered-papers.json` stores filtered/archive-deduplicated output
 8. **Update dedup DB**: Appends all crawled paper IDs to `data/current/papers.json` (not just filtered ones; save early to prevent data loss if interrupted later)
 9. **Deep analysis**: `deep-analyzer.js`. Dual-model mode (when `PAPER_ANALYZER_SECONDARY_MODEL` is configured): primary model text-only analysis + secondary model image supplement; Single-model mode (no secondary model): text-only analysis. Concurrency of 3 (adjustable via `PD_ANALYSIS_CONCURRENCY`), up to 2 retries per paper (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
-10. **Incremental save**: Saves to `data/current/deep-analysis-result.json` immediately after each batch, with failure-result protection (papers with a successful analysis will not be overwritten by a failure result with no analysis)
+10. **Incremental save**: Saves to `data/current/deep-analysis-result.json` immediately after each batch, with failure-result protection (papers with a successful analysis will not be overwritten by a failure result with no analysis); also writes `papers.json.digestStatus` back through `scripts/digest-status.js`
 11. **Final merge**: Deduplicates and merges historical results, auto-backing up bak files (retaining the last 10)
 
 `full-fetch.js` **does NOT auto-publish blog/WeChat**; publishing requires running Python scripts separately.
@@ -49,9 +49,11 @@ Main entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fe
 
 | File | Purpose | Archive Behavior |
 |------|---------|------------------|
-| `data/current/papers.json` | Paper deduplication database | **Not archived**, accumulates continuously |
+| `data/current/papers.json` | Paper deduplication database with `digestStatus` | **Not archived**, accumulates continuously; `pending_analysis` / `analysis_failed` are not used for strong deduplication; all analysis entry points sync status through `scripts/digest-status.js` |
+| `data/current/raw-candidates.json` | Candidate input after merge and blog deduplication, including `sourceHealth` | Rewritten by each full run, useful for debugging filter input |
+| `data/current/filter-decisions.json` | Per-paper LLM filter decision cache with reason/rawResponse | Incrementally written after each batch; invalidated when model or prompt hash changes |
 | `data/current/filtered-papers.json` | Filtered paper metadata | Archived daily and regenerated |
-| `data/current/deep-analysis-result.json` | Core analysis results (includes analysis / parsed / imageUrls) | Archived daily and regenerated |
+| `data/current/deep-analysis-result.json` | Core analysis results (includes analysis / parsed / selectedImageUrls / imageManifest / sourceHealth) | Archived daily and regenerated |
 | `data/current/analyzed.json` | Legacy analyzed records (for compatibility) | Archived daily and regenerated |
 
 ### 3.2 Compatibility Behavior
@@ -380,13 +382,14 @@ PY
 
 ## 7. Logging & Runtime Characteristics
 
-- Node scripts uniformly output logs to `logs/<script>-YYYYMMDD-HHMMSS.log` via `scripts/log-setup.js`
-- Python scripts uniformly output logs to `logs/<script>-YYYYMMDD-HHMMSS.log` via `scripts/log_setup.py`
-- **Auto-cleanup**: cleans old logs on each startup, retaining the last 50
-- `backfill_papers.py` additionally writes independent logs to `logs/backfill.log`
+- Node/Python scripts output only to terminal by default and do not create `logs/*.log`
+- File logs are written only when `PD_ENABLE_FILE_LOGS=1` or `PAPER_DIGEST_ENABLE_FILE_LOGS=1` is explicitly set
+- **File-log cleanup after enablement**: cleans old logs on each startup, retaining the last 50 by default
+- `backfill_papers.py` also does not create `logs/backfill.log` by default; it only appends when file logs are enabled
 - Major Node scripts have handled background stdout buffering (`setBlocking`) for real-time progress viewing
 - `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` use retry and incremental saving to reduce data loss risk from interruptions
 - `reanalyze.js` saves intermediate results every 5 papers (save interval auto-adjusted in concurrent mode)
+- `npm run validate:data` performs read-only validation for current `papers.json`, `filtered-papers.json`, and `deep-analysis-result.json`; it does not repair data and exits non-zero on problems
 - `full-fetch.js` auto-backs up bak files to `data/archive/`, retaining the last 10
 - `full-fetch.js` auto-backs up `papers.json` to `data/archive/papers-<date>.json`, retaining the last 7 days
 
@@ -398,13 +401,13 @@ PY
 2. **Confirm date for publishing**: Ask the user when the date is not explicitly specified; do not default to "today".
 3. **Prohibit dangerous operations**: Do not execute `git reset --hard`, `git push -f`, or batch deletion of historical articles without explicit authorization.
 4. **Do not auto-extend workflow**: After running `full-fetch.js`, do not arbitrarily append blog/WeChat publishing unless explicitly requested by the user.
-5. **Leave a trace after changes**: After process, parameter, or path changes, synchronously update `SKILL.md` and `README.md`.
+5. **Leave a trace after changes**: After process, parameter, or path changes, synchronously update `SKILL.md`, `SKILL.en.md`, `README.md`, `AGENTS.md`, and relevant `docs/` files.
 6. **Prohibit hard-coded keys**: Do not write real API keys in any script or document; all credentials (LLM, WeChat Official Account, Feishu) are uniformly read from environment variables, with LLM configuration in `the `.env` file in the project root` (auto-`source`d by scripts), and WeChat/Feishu credentials also written to `the `.env` file in the project root`.
 7. **Prevent security mechanism breakage when modifying scripts**: This environment silently replaces sensitive characters such as `API_KEY` with `***`. When modifying scripts containing such characters, you must re-read the file after modification to verify that key lines were not corrupted. Also periodically check whether `data/`, `logs/` directories contain residual backup files or log snapshots with keys, and clean them immediately if found.
 8. **Unified environment variable management**: When new scripts need to read LLM configuration, uniformly use `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, `PAPER_ANALYZER_ENDPOINT`; introducing alias fallback chains, hard-coding, or base64-encoded variable name hacks is prohibited.
 9. **New configurable parameters go in config.js**: When new scripts involve adjustable parameters (concurrency, timeout, batch size, etc.), uniformly place them in `scripts/config.js` and add corresponding environment variable override support.
-10. **New analysis scripts reuse analysis-engine.js**: When adding paper analysis-related scripts, prioritize reusing `analyzeBatch()` / `analyzePaperWithRetry()` from `analysis-engine.js` to avoid re-implementing retry, parsing, and saving logic.
-11. **Blog verification defaults to no push**: When running `publish-to-blog.py` without explicit user authorization, `--skip-push` must be included.
+10. **New analysis scripts reuse analysis-engine.js**: When adding paper analysis-related scripts, prioritize reusing `analyzeBatch()` / `analyzePaperWithRetry()` from `analysis-engine.js` to avoid re-implementing retry, parsing, and saving logic; after saving results, sync `papers.json.digestStatus` through `scripts/digest-status.js`.
+11. **Blog verification defaults to no push**: When running `publish-to-blog.py` without explicit user authorization, `--skip-push` must be included. Formal `--push` requires LLM review availability; remaining code-level issues and `error` severity LLM/image review issues block the push, while `warning/info` is reported but does not directly block.
 12. **Output contract changes must sync parser**: If modifying `## Machine Summary` key names, section order, or tag output format in `prompts/deep-analysis.md`, you must synchronously check the parsing logic in `scripts/utils.js` and `scripts/utils.py`.
 13. **Artifact-level verification required after changes**: At minimum, spot-check one `data/current/deep-analysis-result.json` to confirm the presence of `rank_bucket`, `primary_task_tag`, `primary_method_tag`, and other fields, then run blog/social media scripts to verify final artifacts.
 14. **Verify prompt loading after changes**: After modifying markdown files in the `prompts/` directory, run a quick test (`node scripts/quick-test.js` or single-paper analysis) to confirm `loadPrompt()` can correctly read and replace placeholders without `{variableName}` residue.
@@ -413,8 +416,9 @@ PY
 17. **New LLM endpoints must integrate API protocol auto-routing**: Any new script calling an LLM must uniformly use `detectApiType()`, `buildApiUrl()`, `buildHeaders()`, `buildRequestBody()`, `parseResponseText()` from `scripts/utils.js`; hard-coding specific protocol URLs/Headers/Bodies is prohibited.
 18. **Sync the full pipeline when modifying API protocol routing logic**: When modifying `detectApiType()` judgment rules or `buildApiUrl()`/`buildHeaders()` and other functions, you must synchronously check `fetch-papers.js`, `deep-analyzer.js`, and all scripts using `analysis-engine.js` (`full-fetch.js`, `reanalyze.js`, `batch-analyze.js`, `deep-analysis-only.js`, `analyze-single-paper.js`) to ensure consistent behavior across the full pipeline.
 19. **Prohibit committing sensitive files to version control**: `data/`, `logs/`, `*.env`, `*.backup*`, cache files, log archives containing keys, etc. are strictly forbidden from entering git; before committing, confirm `.gitignore` is correctly configured and that no historically leftover sensitive files exist in the repository.
-20. **Keep the CI checklist in sync**: When adding or renaming JS/Python entry scripts, update `.github/workflows/ci.yml` so the `node -c` / `py_compile` lists continue to cover critical scripts.
+20. **CI checks**: CI runs `npm test`, `npm run validate:data`, JS syntax checks, Python `py_compile`, Python unit tests, and shell syntax checks. When adding special file types, update `.github/workflows/ci.yml` accordingly.
 21. **Use Beijing-time timestamps for runtime data**: Use `getBeijingISOString()` when writing `timestamp` / `lastUpdated` / `fetchedAt`; Python publishing code should use `now_bj_iso()` / `now_bj_date()` to avoid UTC dates causing cross-day archiving or publish filtering mistakes.
+22. **Commit messages must be detailed Chinese**: Commit messages must be written in Chinese and explain the main changes and impact scope; avoid vague one-liners such as "fix" or "update".
 
 ---
 

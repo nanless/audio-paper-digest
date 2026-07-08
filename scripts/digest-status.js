@@ -37,6 +37,19 @@ function markPaperDigestStatus(paper, status, extra = {}) {
     };
 }
 
+function mergeAnalysisDigestPaper(existing, paper) {
+    const merged = { ...existing, ...paper };
+    if (!paper.analysis && existing.analysis) {
+        merged.analysis = existing.analysis;
+        if (Object.prototype.hasOwnProperty.call(existing, 'parsed')) merged.parsed = existing.parsed;
+        if (Object.prototype.hasOwnProperty.call(existing, 'selectedImageUrls')) merged.selectedImageUrls = existing.selectedImageUrls;
+        if (Object.prototype.hasOwnProperty.call(existing, 'imageUrls')) merged.imageUrls = existing.imageUrls;
+        if (Object.prototype.hasOwnProperty.call(existing, 'allImageUrls')) merged.allImageUrls = existing.allImageUrls;
+        if (Object.prototype.hasOwnProperty.call(existing, 'imageManifest')) merged.imageManifest = existing.imageManifest;
+    }
+    return merged;
+}
+
 function applyAnalysisDigestStatuses(papersData, analyzedPapers, options = {}) {
     const now = options.updatedAt || getBeijingISOString();
     const batchDate = options.batchDate || now.slice(0, 10);
@@ -48,7 +61,7 @@ function applyAnalysisDigestStatuses(papersData, analyzedPapers, options = {}) {
         const existing = papersData.papers[key] || {};
         const status = paper.analysis ? 'analyzed' : 'analysis_failed';
         papersData.papers[key] = markPaperDigestStatus(
-            { ...existing, ...paper },
+            mergeAnalysisDigestPaper(existing, paper),
             status,
             {
                 batchDate,
@@ -75,6 +88,7 @@ module.exports = {
     loadPapersDatabase,
     savePapersDatabase,
     markPaperDigestStatus,
+    mergeAnalysisDigestPaper,
     applyAnalysisDigestStatuses,
     updateAnalysisDigestStatuses
 };

@@ -93,7 +93,11 @@ async function analyzeSinglePaper() {
         if (digestStatus.updated > 0) console.log(`    papers.json 状态已同步: ${digestStatus.updated} 篇`);
         console.log(`    📊 当前总数: ${payload.papers.length} 篇`);
     } else {
+        const digestStatus = updateAnalysisDigestStatuses([r.result], {
+            batchDate: getBeijingISOString().slice(0, 10)
+        });
         console.log(`    ❌ 最终失败: ${r.error}`);
+        if (digestStatus.updated > 0) console.log(`    papers.json 状态已同步: ${digestStatus.updated} 篇`);
         process.exit(1);
     }
 }

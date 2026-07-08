@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const {
     markPaperDigestStatus,
+    mergeAnalysisDigestPaper,
     updateAnalysisDigestStatuses
 } = require('../scripts/digest-status.js');
 
@@ -53,5 +54,31 @@ describe('digest status helpers', () => {
         assert.strictEqual(saved.papers['2607.00001'].digestStatus.batchDate, '2026-07-08');
         assert.strictEqual(saved.papers['2607.00002'].digestStatus.status, 'analysis_failed');
         assert.strictEqual(saved.papers['2607.00002'].digestStatus.error, 'timeout');
+    });
+
+    it('失败状态回写不会抹掉已有成功分析内容', () => {
+        const merged = mergeAnalysisDigestPaper(
+            {
+                arxivId: '2607.00001',
+                analysis: 'previous ok',
+                parsed: { score: 8.2 },
+                selectedImageUrls: ['https://example.com/fig.png'],
+                imageManifest: { selected: ['fig'] }
+            },
+            {
+                arxivId: '2607.00001',
+                analysis: null,
+                parsed: null,
+                selectedImageUrls: [],
+                imageManifest: null,
+                error: 'timeout'
+            }
+        );
+
+        assert.strictEqual(merged.analysis, 'previous ok');
+        assert.deepStrictEqual(merged.parsed, { score: 8.2 });
+        assert.deepStrictEqual(merged.selectedImageUrls, ['https://example.com/fig.png']);
+        assert.deepStrictEqual(merged.imageManifest, { selected: ['fig'] });
+        assert.strictEqual(merged.error, 'timeout');
     });
 });

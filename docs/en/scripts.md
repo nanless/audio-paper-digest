@@ -56,7 +56,7 @@ Analyze a single paper and merge it into the results.
 - Calls `deep-analyzer.js` for analysis, then appends to `deep-analysis-result.json`
 - Skips if the paper already exists in the results by default; `--force` reanalyzes and replaces the old result
 - Compatible with old-format pure array data, automatically converts to new object format on save
-- Syncs `papers.json.digestStatus` after a successful save
+- Syncs `papers.json.digestStatus` after a successful save; failed analysis also writes `analysis_failed` without modifying `deep-analysis-result.json`
 
 #### `scripts/validate-data-files.js`
 
