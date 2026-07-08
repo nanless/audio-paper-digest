@@ -1,5 +1,9 @@
 import os
 import sys
+import contextlib
+import io
+import json
+import tempfile
 import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -14,6 +18,7 @@ from publish_common import (  # noqa: E402
     detect_publish_api_type,
     fix_empty_markdown_links,
     fix_yaml_unbalanced_quotes,
+    load_papers,
     call_publish_llm_api,
     count_blocking_review_issues,
     sanitize_markdown_for_publish,
@@ -98,6 +103,27 @@ class PublishCommonSanitizerTest(unittest.TestCase):
             1
         )
         self.assertEqual(count_blocking_review_issues(['代码层硬问题']), 1)
+
+    def test_load_papers_accepts_object_or_list_and_rejects_bad_shape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            object_file = os.path.join(tmp, 'object.json')
+            list_file = os.path.join(tmp, 'list.json')
+            bad_file = os.path.join(tmp, 'bad.json')
+
+            with open(object_file, 'w', encoding='utf-8') as f:
+                json.dump({'papers': [{'arxivId': '2607.00001'}]}, f)
+            with open(list_file, 'w', encoding='utf-8') as f:
+                json.dump([{'arxivId': '2607.00002'}], f)
+            with open(bad_file, 'w', encoding='utf-8') as f:
+                json.dump({'papers': {'bad': True}}, f)
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                object_papers = load_papers(object_file)
+                list_papers = load_papers(list_file)
+            self.assertEqual(object_papers[0]['arxivId'], '2607.00001')
+            self.assertEqual(list_papers[0]['arxivId'], '2607.00002')
+            with self.assertRaises(ValueError):
+                load_papers(bad_file)
 
 
 if __name__ == '__main__':

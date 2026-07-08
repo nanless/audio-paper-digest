@@ -389,7 +389,7 @@ Generate WeChat Official Account article drafts.
 Python publish common module. Uniformly encapsulates data loading, score sorting, tag extraction, and formatting tools, eliminating duplicate logic across `publish-to-blog.py` / `publish-wechat-full.py` / `publish-xiaohongshu.py` / `publish-to-feishu.py`.
 
 Main functions:
-- `load_papers(data_file)`: load paper list from JSON
+- `load_papers(data_file)`: load paper list from JSON; when no path is passed, it prefers `data/current/deep-analysis-result.json` and falls back to the legacy `data/deep-analysis-result.json` only when the current file is missing; the root must be either an array or `{papers: [...]}`, otherwise it fails immediately
 - `score_and_sort(papers)`: parse analysis results and sort by score descending; prefer existing `parsed` data to avoid re-parsing overwriting manual corrections
 - `extract_top_tags(papers, limit)`: extract main task tags and count frequencies
 - `extract_all_tags(papers, limit)`: extract all tags (deduplicated), used for blog tag cloud
@@ -398,6 +398,10 @@ Main functions:
 - `build_paper_meta(pa, aurl)`: concatenate score/tier/tag meta info
 - `parse_cli_args(argv, defaults)`: generic command line argument parsing, reused by each publish script
 - `call_publish_llm_api()`: shared publish-time LLM API client for OpenAI / Anthropic / MiMo / Kimi / DeepSeek routing; `required=True` can block formal publishing on failure
+
+#### `scripts/path_config.py`
+
+Shared path configuration for Python publish/maintenance scripts. It exposes constants such as `PROJECT_ROOT`, `DATA_DIR`, `CURRENT_DIR`, `LOGS_DIR`, `PAPERS_FILE`, and `DEEP_ANALYSIS_RESULT_FILE`, plus path helpers such as `resolve_deep_analysis_result_path()`, `xiaohongshu_markdown_path()`, `wechat_preview_path()`, and `backfill_result_path()`. New Python scripts should not hand-write default `data/current/*.json` or publish-output paths again.
 
 #### `scripts/publish-xiaohongshu.py`
 

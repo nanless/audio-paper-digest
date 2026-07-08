@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from path_config import resolve_deep_analysis_result_path
 from utils import parse_analysis
 
 BJ_TZ = timezone(timedelta(hours=8))
@@ -169,12 +170,12 @@ def count_blocking_review_issues(issues):
 def load_papers(data_file=None):
     """从 deep-analysis-result.json 加载论文列表"""
     if data_file is None:
-        data_file = os.path.join(
-            os.path.dirname(__file__), '..', 'data', 'current', 'deep-analysis-result.json'
-        )
-    with open(data_file) as f:
+        data_file = resolve_deep_analysis_result_path()
+    with open(data_file, encoding='utf-8') as f:
         raw = json.load(f)
-    papers = raw['papers'] if isinstance(raw, dict) else raw
+    papers = raw.get('papers') if isinstance(raw, dict) else raw
+    if not isinstance(papers, list):
+        raise ValueError(f'数据文件格式错误，papers 必须是数组: {data_file}')
     print(f"📚 读取 {len(papers)} 篇论文")
     return papers
 

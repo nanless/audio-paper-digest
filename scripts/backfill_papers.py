@@ -15,10 +15,8 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-BASE_DIR = os.path.join(os.path.dirname(__file__), '..')
-DATA_DIR = os.path.join(BASE_DIR, 'data')
-LOGS_DIR = os.path.join(BASE_DIR, 'logs')
-PAPERS_FILE = os.path.join(DATA_DIR, 'current', 'papers.json')
+from path_config import DATA_DIR, LOGS_DIR, PAPERS_FILE, backfill_result_path
+
 LOG_FILE = os.path.join(LOGS_DIR, 'backfill.log')
 BJ_TZ = timezone(timedelta(hours=8))
 
@@ -302,7 +300,7 @@ def main():
         'totalInDb': len(papers_data['papers']),
         'paperIds': list(all_papers.keys()),
     }
-    result_path = os.path.join(DATA_DIR, 'backfill-result.json')
+    result_path = backfill_result_path()
     with open(result_path, 'w', encoding='utf-8') as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
     log(f"详细结果已保存到 {result_path}")

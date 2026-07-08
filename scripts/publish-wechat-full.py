@@ -20,6 +20,7 @@ from publish_common import (
     load_papers, get_today_bj, score_and_sort, extract_top_tags,
     score_emoji, format_medal
 )
+from path_config import wechat_preview_path
 from utils import parse_analysis
 
 APP_ID = os.environ.get('WECHAT_APP_ID', '')
@@ -421,7 +422,7 @@ def main():
         except Exception as e:
             print(f"  ❌ Part {part_num} 请求异常: {e}")
 
-    preview_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'current', f'wechat-preview-{today}.html')
+    preview_path = wechat_preview_path(today)
     first_part_html = f'<h2 style="text-align:center;">语音/音乐/音频论文速递 {today}</h2>\n'
     first_part_html += f'<p style="text-align:center;color:#888;">共 {total} 篇，分 {total_parts} 部分</p>\n<hr/>\n'
     first_part_html += overview

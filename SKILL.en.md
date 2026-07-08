@@ -58,7 +58,7 @@ Main entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fe
 
 ### 3.2 Compatibility Behavior
 
-Some scripts read from the legacy `data/*.json` paths, but new outputs should be written to `data/current/`.
+Some scripts read from the legacy `data/*.json` paths, but new outputs should be written to `data/current/`. Python publishing entrypoints use `path_config.resolve_deep_analysis_result_path()` to prefer current data and fall back to legacy only when needed.
 
 ### 3.3 Archive Directory
 
@@ -405,7 +405,7 @@ PY
 6. **Prohibit hard-coded keys**: Do not write real API keys in any script or document; all credentials (LLM, WeChat Official Account, Feishu) are uniformly read from environment variables, with LLM configuration in `the `.env` file in the project root` (auto-`source`d by scripts), and WeChat/Feishu credentials also written to `the `.env` file in the project root`.
 7. **Prevent security mechanism breakage when modifying scripts**: This environment silently replaces sensitive characters such as `API_KEY` with `***`. When modifying scripts containing such characters, you must re-read the file after modification to verify that key lines were not corrupted. Also periodically check whether `data/`, `logs/` directories contain residual backup files or log snapshots with keys, and clean them immediately if found.
 8. **Unified environment variable management**: When new scripts need to read LLM configuration, uniformly use `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, `PAPER_ANALYZER_ENDPOINT`; introducing alias fallback chains, hard-coding, or base64-encoded variable name hacks is prohibited.
-9. **New configurable parameters and runtime data paths go in config.js**: When new scripts involve adjustable parameters (concurrency, timeout, batch size, etc.) or `data/current/*.json` runtime data files, place/reuse them in `scripts/config.js` (runtime data paths via `Config.FILES`), and add environment variable overrides for parameters when needed.
+9. **New configurable parameters and runtime data paths go in shared config**: New Node scripts with adjustable parameters (concurrency, timeout, batch size, etc.) or `data/current/*.json` runtime data files must place/reuse them in `scripts/config.js` (runtime data paths via `Config.FILES`) and add environment variable overrides for parameters when needed; new Python publish/maintenance scripts with shared paths must reuse `scripts/path_config.py` instead of hand-writing default `data/current/*.json` paths again.
 10. **New analysis scripts reuse analysis-engine.js**: When adding paper analysis-related scripts, prioritize reusing `analyzeBatch()` / `analyzePaperWithRetry()` from `analysis-engine.js` to avoid re-implementing retry, parsing, and saving logic; after saving results, sync `papers.json.digestStatus` through `scripts/digest-status.js`.
 11. **Blog verification defaults to no push**: When running `publish-to-blog.py` without explicit user authorization, `--skip-push` must be included. Formal `--push` requires LLM review availability; remaining code-level issues and `error` severity LLM/image review issues block the push, while `warning/info` is reported but does not directly block.
 12. **Output contract changes must sync parser**: If modifying `## Machine Summary` key names, section order, or tag output format in `prompts/deep-analysis.md`, you must synchronously check the parsing logic in `scripts/utils.js` and `scripts/utils.py`.

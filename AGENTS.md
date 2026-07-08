@@ -4,7 +4,7 @@
 
 自动化"语音/音乐/音频论文速递"流水线：arXiv + HuggingFace 抓取 → LLM 筛选 → 多模态深度分析 → 发布到 Hugo 博客 / 微信公众号 / 小红书 / 飞书。
 
-**技术栈**：Node.js（核心流水线）+ Python（发布脚本）。要求 Node ≥ 18。`scripts/config.js` 集中管理主要可调参数和当前运行数据文件路径（部分高频参数支持 `PD_*` 环境变量覆写）。
+**技术栈**：Node.js（核心流水线）+ Python（发布脚本）。要求 Node ≥ 18。`scripts/config.js` 集中管理 Node 端主要可调参数和当前运行数据文件路径（部分高频参数支持 `PD_*` 环境变量覆写）；`scripts/path_config.py` 集中管理 Python 发布/维护脚本共享路径。
 
 详细执行规则见 `SKILL.md`，本文是紧凑版——只保留 Agent 不看代码就容易漏掉的要点。
 
@@ -84,11 +84,11 @@ Node 脚本双层加载 `.env`：① `scripts/config.js` 模块级 IIFE 最先�
 | `scripts/deep-analyzer.js` | 单篇多模态深度分析（支持双模型模式：主模型做文本分析，副模型做图像补充；单模型模式向后兼容） |
 | `scripts/analysis-engine.js` | 批量分析协调器，提供 `analyzePaperWithRetry()` + `analyzeBatch()` |
 | `scripts/utils.js` | Node 端共用工具（API 路由、JSON 解析、prompt 加载、`normalizedId` 去重、代理检测、文件原子写入） |
-| `scripts/config.js` | 主要可调参数集中配置 + 部分 `PD_*` 环境变量覆写 |
+| `scripts/config.js` | Node 端主要可调参数与运行数据路径集中配置 + 部分 `PD_*` 环境变量覆写 |
 
 ### 发布脚本（Python）
 
-`publish-to-blog.py` / `publish-wechat-full.py` / `publish-xiaohongshu.py` / `xiaohongshu-publisher.py` / `publish-to-feishu.py` + 共用模块 `publish_common.py` / `utils.py`。博客、微信、飞书发布优先使用论文对象中已有的 `parsed`，没有时才回退解析 `analysis`，避免覆盖人工修正或已缓存的结构化结果。
+`publish-to-blog.py` / `publish-wechat-full.py` / `publish-xiaohongshu.py` / `xiaohongshu-publisher.py` / `publish-to-feishu.py` + 共用模块 `publish_common.py` / `path_config.py` / `utils.py`。博客、微信、飞书发布优先使用论文对象中已有的 `parsed`，没有时才回退解析 `analysis`，避免覆盖人工修正或已缓存的结构化结果；Python 侧默认运行数据路径统一从 `path_config.py` 取，发布输入默认优先 `data/current/deep-analysis-result.json`，缺失时才回退 `data/deep-analysis-result.json`。
 
 ### 数据目录
 

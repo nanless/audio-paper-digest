@@ -2,7 +2,7 @@
 
 English | **[中文](README.md)**
 
-This project automatically generates "Speech / Music / Audio Paper Digests," covering the complete pipeline from arXiv and HuggingFace Papers crawling, LLM-based filtering, multimodal deep analysis, to publishing Hugo blog posts, WeChat Official Account drafts, Xiaohongshu (Little Red Book) copy, and Feishu (Lark) documents. Node-side tunable parameters and current runtime data-file paths are centralized in `scripts/config.js`.
+This project automatically generates "Speech / Music / Audio Paper Digests," covering the complete pipeline from arXiv and HuggingFace Papers crawling, LLM-based filtering, multimodal deep analysis, to publishing Hugo blog posts, WeChat Official Account drafts, Xiaohongshu (Little Red Book) copy, and Feishu (Lark) documents. Node-side tunable parameters and current runtime data-file paths are centralized in `scripts/config.js`; shared Python publish/maintenance paths are centralized in `scripts/path_config.py`.
 
 ---
 

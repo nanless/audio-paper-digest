@@ -21,6 +21,7 @@ from publish_common import (
     load_papers, get_today_bj, score_and_sort, extract_top_tags,
     score_emoji, format_medal, extract_one_liner, call_publish_llm_api
 )
+from path_config import CURRENT_DIR, xiaohongshu_markdown_path
 
 
 def smart_truncate(text, max_len=65):
@@ -256,9 +257,8 @@ def main():
         md = generate_top_n_post(scored, unscored, today, top_n)
         suffix = f'top{top_n}'
 
-    out_dir = os.path.join(os.path.dirname(__file__), '..', 'data', 'current')
-    os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f'xiaohongshu-{today}-{suffix}.md')
+    os.makedirs(CURRENT_DIR, exist_ok=True)
+    out_path = xiaohongshu_markdown_path(today, suffix)
     with open(out_path, 'w') as f:
         f.write(md)
 

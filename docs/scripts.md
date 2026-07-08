@@ -392,7 +392,7 @@ LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，按 `fix_instr
 Python 发布公共模块。统一封装数据加载、评分排序、标签提取、格式化工具，消除 `publish-to-blog.py` / `publish-wechat-full.py` / `publish-xiaohongshu.py` / `publish-to-feishu.py` 的重复逻辑。
 
 主要函数：
-- `load_papers(data_file)`：从 JSON 加载论文列表
+- `load_papers(data_file)`：从 JSON 加载论文列表；未传路径时优先读取 `data/current/deep-analysis-result.json`，缺失时回退旧路径 `data/deep-analysis-result.json`；根对象必须是数组或 `{papers: [...]}`，否则直接报错
 - `score_and_sort(papers)`：解析分析结果，按评分降序排列；优先使用已有的 `parsed` 数据，避免重新解析覆盖手动修正
 - `extract_top_tags(papers, limit)`：提取主任务标签并统计频次
 - `extract_all_tags(papers, limit)`：提取所有标签（去重），用于博客标签云
@@ -401,6 +401,10 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 - `build_paper_meta(pa, aurl)`：拼接评分/分档/标签元信息
 - `parse_cli_args(argv, defaults)`：通用命令行参数解析，被各发布脚本复用
 - `call_publish_llm_api()`：发布阶段公共 LLM API client，自动处理 OpenAI / Anthropic / MiMo / Kimi / DeepSeek 路由；正式发布可用 `required=True` 强制失败即阻断
+
+#### `scripts/path_config.py`
+
+Python 发布/维护脚本共享路径配置。集中提供 `PROJECT_ROOT`、`DATA_DIR`、`CURRENT_DIR`、`LOGS_DIR`、`PAPERS_FILE`、`DEEP_ANALYSIS_RESULT_FILE` 等常量，以及 `resolve_deep_analysis_result_path()`、`xiaohongshu_markdown_path()`、`wechat_preview_path()`、`backfill_result_path()` 等路径 helper。新增 Python 脚本不要再手写默认 `data/current/*.json` 或发布产物路径。
 
 #### `scripts/publish-xiaohongshu.py`
 

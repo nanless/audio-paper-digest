@@ -26,6 +26,8 @@ import base64, json, os, sys, re, asyncio
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
+from path_config import PROJECT_ROOT, xiaohongshu_markdown_path
+
 try:
     from playwright.async_api import async_playwright, TimeoutError as PWTimeout
 except ImportError:
@@ -38,7 +40,6 @@ except ImportError:
 # 配置
 # ═══════════════════════════════════════════════════════
 
-PROJECT_ROOT = Path(__file__).parent.parent
 PUBLISH_URL = "https://creator.xiaohongshu.com/publish/publish"
 LOGIN_URL = "https://creator.xiaohongshu.com/"
 ENV_FILE = PROJECT_ROOT / ".env"
@@ -685,10 +686,10 @@ def main():
         else:
             # 读取今日文案
             today = target_date or today_bj()
-            md_path = PROJECT_ROOT / "data" / "current" / f"xiaohongshu-{today}-top5.md"
+            md_path = xiaohongshu_markdown_path(today, "top5")
             if not md_path.exists():
                 # 尝试 all 版本
-                md_path = PROJECT_ROOT / "data" / "current" / f"xiaohongshu-{today}-all.md"
+                md_path = xiaohongshu_markdown_path(today, "all")
             if not md_path.exists():
                 print(f"[xhs] ❌ 未找到文案文件: {md_path}")
                 print(f"[xhs] 请先生成文案: npm run xiaohongshu -- --date {today}")
@@ -709,9 +710,9 @@ def main():
 
     if mode == "publish_all":
         today = target_date or today_bj()
-        md_path = PROJECT_ROOT / "data" / "current" / f"xiaohongshu-{today}-all.md"
+        md_path = xiaohongshu_markdown_path(today, "all")
         if not md_path.exists():
-            md_path = PROJECT_ROOT / "data" / "current" / f"xiaohongshu-{today}-top5.md"
+            md_path = xiaohongshu_markdown_path(today, "top5")
         if not md_path.exists():
             print(f"[xhs] ❌ 未找到文案文件")
             sys.exit(1)
