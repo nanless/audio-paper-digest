@@ -55,6 +55,13 @@ function getPaperArxivId(paper) {
     return paper?.arxivId || paper?.paper_id || paper?.id || '';
 }
 
+function getPreProvidedImageUrls(paper) {
+    for (const value of [paper?.allImageUrls, paper?.imageUrls]) {
+        if (Array.isArray(value) && value.length > 0) return value;
+    }
+    return [];
+}
+
 // API 配置 - 深度分析阶段（统一使用 PAPER_ANALYZER_*）
 const DEEP_CONFIG = {
     endpoint: process.env.PAPER_ANALYZER_ENDPOINT || '',
@@ -866,7 +873,7 @@ async function analyzePaperDeep(paper) {
 
     // 优先使用预提供的图片 URL（ICML/会议场景），否则从 arXiv 抓取
     let imageInfos = [];
-    const preProvidedUrls = paper.allImageUrls || paper.imageUrls || [];
+    const preProvidedUrls = getPreProvidedImageUrls(paper);
     if (preProvidedUrls.length > 0) {
         imageInfos = normalizeImageInfos(preProvidedUrls);
         console.log(`    [deep] 使用预提供图片: ${imageInfos.length} 张`);
@@ -906,13 +913,19 @@ async function analyzePaperDeep(paper) {
 
     const hasFullTextIntro = hasFullText ? '以下是论文全文，请仔细阅读所有技术细节。' : '以下是论文摘要。';
 
-    const downloadedImages = await downloadImagesSerial(candidateImageUrls, IMAGE_MAX_COUNT, IMAGE_MAX_BASE64_CHARS, IMAGE_TOTAL_BASE64_CHARS);
+    const downloadedImages = isDualModel
+        ? await downloadImagesSerial(candidateImageUrls, IMAGE_MAX_COUNT, IMAGE_MAX_BASE64_CHARS, IMAGE_TOTAL_BASE64_CHARS)
+        : [];
     imageManifest.downloaded = downloadedImages.map(img => ({
         url: img.url,
         mime: img.mime,
         base64Chars: img.base64.length
     }));
-    console.log(`    [deep] 成功下载 ${downloadedImages.length}/${candidateImageUrls.length} 张候选图片（总图片 ${imageUrls.length} 张）`);
+    if (isDualModel) {
+        console.log(`    [deep] 成功下载 ${downloadedImages.length}/${candidateImageUrls.length} 张候选图片（总图片 ${imageUrls.length} 张）`);
+    } else if (candidateImageUrls.length > 0) {
+        console.log(`    [deep] 单模型模式：跳过 ${candidateImageUrls.length} 张候选图片下载，仅保存候选元数据`);
+    }
 
     const prompt = loadPrompt('prompts/deep-analysis.md', {
         hasFullText: hasFullTextIntro,
@@ -1379,34 +1392,12 @@ async function checkAndFixMethodSection(paper, analysis, textForAnalysis) {
 
     console.log(`    [deep] 🔍 检测到方法概述不够详细，触发补充...`);
 
-    const prompt = `你是一位严谨的学术论文分析专家。请根据下面的论文原文，为"方法概述和架构"部分补充更详细、更充分的内容。
-
-论文标题: ${paper.title}
-arXiv ID: ${getPaperArxivId(paper)}
-
-## 要求
-1. 只输出"## 方法概述和架构"这一个 section 的完整内容。
-2. 必须详细覆盖以下要素（缺一不可）：
-   - 整体流程概述（输入→处理→输出的完整链路）
-   - 每个核心组件的名称、功能、内部结构/实现、输入输出
-   - 组件间的数据流与交互方式
-   - 关键设计选择及其动机
-   - 若有多阶段/多模块，逐层展开，不能一笔带过
-   - 若原文有架构图，描述图中各模块的关系（但不要编造图片URL）
-   - 对专业术语做必要解释
-3. 字数要求：中文字符不少于 600 个。内容必须充实，不能空泛。
-4. 严禁使用"详见原文"、"论文描述了详细架构"等空泛表述替代具体描述。
-5. 严禁只罗列组件名称而不解释功能和内部结构。
-
-## 已有分析（供参考，但可能不够详细）
-
-${methodSection}
-
-## 论文原文（权威依据）
-
-${textForAnalysis.slice(0, 80000)}
-
-请直接输出"## 方法概述和架构"及之后的完整内容：`;
+    const prompt = loadPrompt('prompts/method-fill.md', {
+        title: paper.title,
+        arxivId: getPaperArxivId(paper),
+        methodSection,
+        textForAnalysis: textForAnalysis.slice(0, 80000)
+    });
 
     const fixedSection = await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
     if (!fixedSection || fixedSection.length < 200) {
@@ -1474,28 +1465,12 @@ async function checkAndFixTables(paper, analysis, textForAnalysis) {
 
     console.log(`    [deep] 🔍 检测到实验结果可能缺少表格，触发补充...`);
 
-    const prompt = `你是一位严谨的学术论文分析专家。请根据下面可见的论文原文，为"实验结果"部分补充 Markdown 表格数据。
-
-论文标题: ${paper.title}
-arXiv ID: ${getPaperArxivId(paper)}
-
-## 要求
-1. 只输出"## 实验结果"这一个 section 的完整内容。
-2. 必须包含可见原文中与实验结果直接相关的表格，使用标准 Markdown 格式（表头、模型名称、数据集、指标、数值），不要省略可见表格中的行或列。
-3. 严禁使用"此处省略"、"详见原文"等字样。可见数据必须直接列出；不可见或原文未给出的数据必须写"论文未给出具体数值"，严禁编造。
-4. 严禁编造或插入任何 Markdown 图片、HTML 图片或图片 URL；本轮只补表格和文字。
-5. 在表格下方用文字说明关键结论。
-
-## 已有分析（供参考，但可能缺少表格）
-
-${resultsSection}
-
-## 论文原文（权威依据）
-
-${textForAnalysis.slice(0, 80000)}
-
-请直接输出"## 实验结果"及之后的完整内容：
-`;
+    const prompt = loadPrompt('prompts/table-fill.md', {
+        title: paper.title,
+        arxivId: getPaperArxivId(paper),
+        resultsSection,
+        textForAnalysis: textForAnalysis.slice(0, 80000)
+    });
 
     const fixedSection = await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
     if (!fixedSection || fixedSection.length < 200) {
@@ -1649,6 +1624,7 @@ module.exports = {
     normalizeImageInfos,
     sourceTextLikelyHasTables,
     getPaperArxivId,
+    getPreProvidedImageUrls,
     getArxivHtmlIds,
     isSupportedImageUrl,
     safeImageLabel,

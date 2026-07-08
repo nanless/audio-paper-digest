@@ -7,6 +7,7 @@ const path = require('node:path');
 const {
     markPaperDigestStatus,
     mergeAnalysisDigestPaper,
+    applyAnalysisDigestStatuses,
     updateAnalysisDigestStatuses
 } = require('../scripts/digest-status.js');
 
@@ -51,8 +52,10 @@ describe('digest status helpers', () => {
         assert.strictEqual(result.updated, 2);
         const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
         assert.strictEqual(saved.papers['2607.00001'].digestStatus.status, 'analyzed');
+        assert.strictEqual(saved.papers['2607.00001'].digestStatus.latestAttemptStatus, 'analyzed');
         assert.strictEqual(saved.papers['2607.00001'].digestStatus.batchDate, '2026-07-08');
         assert.strictEqual(saved.papers['2607.00002'].digestStatus.status, 'analysis_failed');
+        assert.strictEqual(saved.papers['2607.00002'].digestStatus.latestAttemptStatus, 'analysis_failed');
         assert.strictEqual(saved.papers['2607.00002'].digestStatus.error, 'timeout');
     });
 
@@ -80,5 +83,31 @@ describe('digest status helpers', () => {
         assert.deepStrictEqual(merged.selectedImageUrls, ['https://example.com/fig.png']);
         assert.deepStrictEqual(merged.imageManifest, { selected: ['fig'] });
         assert.strictEqual(merged.error, 'timeout');
+    });
+
+    it('新一次分析失败但旧分析仍可用时主状态保持 analyzed', () => {
+        const papersData = {
+            papers: {
+                '2607.00001': {
+                    arxivId: '2607.00001',
+                    analysis: 'previous ok',
+                    parsed: { score: 8.0 },
+                    digestStatus: { status: 'analyzed' }
+                }
+            }
+        };
+
+        const updated = applyAnalysisDigestStatuses(papersData, [
+            { arxivId: '2607.00001', analysis: null, error: 'timeout' }
+        ], {
+            batchDate: '2026-07-08',
+            updatedAt: '2026-07-08T12:00:00+08:00'
+        });
+
+        assert.strictEqual(updated, 1);
+        assert.strictEqual(papersData.papers['2607.00001'].analysis, 'previous ok');
+        assert.strictEqual(papersData.papers['2607.00001'].digestStatus.status, 'analyzed');
+        assert.strictEqual(papersData.papers['2607.00001'].digestStatus.latestAttemptStatus, 'analysis_failed');
+        assert.strictEqual(papersData.papers['2607.00001'].digestStatus.error, 'timeout');
     });
 });

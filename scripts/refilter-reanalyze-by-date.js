@@ -8,6 +8,7 @@ loadEnvFile();
 
 const { filterPapersWithLLM } = require('./fetch-papers.js');
 const { analyzeBatch } = require('./analysis-engine.js');
+const { updateAnalysisDigestStatuses } = require('./digest-status.js');
 const Config = require('./config.js');
 
 const TARGET_DATE = process.argv[2];
@@ -105,6 +106,9 @@ async function main() {
     };
     writeFileAtomic(resultFile, JSON.stringify(payload, null, 2));
     console.log(`💾 结果已保存: ${resultFile} (共 ${existingPapers.length} 篇)`);
+
+    const digestUpdate = updateAnalysisDigestStatuses(allResults, { batchDate: TARGET_DATE });
+    console.log(`💾 papers.json digestStatus 已同步: ${digestUpdate.updated} 篇`);
 }
 
 main().catch(err => {

@@ -11,6 +11,8 @@
 | [image-supplement.md](image-supplement.md) | 深度分析阶段（双模型模式）：副模型看图补充主模型分析 | `deep-analyzer.js` |
 | [opensource-scan.md](opensource-scan.md) | 开源扫描阶段（第二轮）：专门提取开源链接和复现信息 | `deep-analyzer.js` |
 | [gap-fill.md](gap-fill.md) | 深度分析阶段（第三轮）：对照原文审校重写前两轮结果 | `deep-analyzer.js` |
+| [method-fill.md](method-fill.md) | 深度分析后处理：方法章节过短或空泛时补写结构化方法说明 | `deep-analyzer.js` |
+| [table-fill.md](table-fill.md) | 深度分析后处理：实验结果缺少可见表格或出现省略标记时补表 | `deep-analyzer.js` |
 
 ## 占位符规范
 

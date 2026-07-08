@@ -26,6 +26,7 @@
         "filterModel": "mimo-v2.5",
         "filterPromptHash": "a1b2c3d4e5f6a7b8",
         "filterDecidedAt": "2026-04-21T10:02:00+08:00",
+        "latestAttemptStatus": "analyzed | analysis_failed",
         "error": null
       }
     }
@@ -34,7 +35,7 @@
 }
 ```
 
-`pending_analysis` 和 `analysis_failed` 不参与下一次 `full-fetch` 的强去重，因此分析中断或失败后可自然重跑；成功分析后更新为 `analyzed`。`full-fetch.js`、`deep-analysis-only.js`、`reanalyze.js`、`batch-analyze.js`、`reanalyze-selected.js` 和 `analyze-single-paper.js` 都通过 `scripts/digest-status.js` 同步该状态，避免不同入口写法分叉。失败状态回写只更新状态和错误信息，不会把 `papers.json` 中已有的成功 `analysis` / `parsed` / 图片元数据覆盖为空。
+`pending_analysis` 和 `analysis_failed` 不参与下一次 `full-fetch` 的强去重，因此分析中断或失败后可自然重跑；成功分析后更新为 `analyzed`。`full-fetch.js`、`deep-analysis-only.js`、`reanalyze.js`、`batch-analyze.js`、`reanalyze-selected.js`、`analyze-single-paper.js` 和 `refilter-reanalyze-by-date.js` 都通过 `scripts/digest-status.js` 同步该状态，避免不同入口写法分叉。若最新一次尝试失败但已有旧的成功分析可用，`status` 保持 `analyzed`，并用 `latestAttemptStatus: "analysis_failed"` 与 `error` 记录这次失败；失败写回不会把已有成功 `analysis` / `parsed` / 图片元数据覆盖为空。
 
 ### 5.2 `data/current/raw-candidates.json`
 
@@ -84,6 +85,8 @@
 
 当 `papers` 为空且 `sourceHealth` 存在失败时，主流程只把“arXiv 核心来源全部失败”或“唯一尝试来源失败”视为致命错误；单个分类或 HuggingFace 补充源失败会被记录，但不一定阻断一个真实的空候选批次。
 
+`npm run validate:data` 会检查 `papers` 数组、`sourceHealth` 基本形状，并要求 `stats.afterBlogSkip` 等于候选论文数量、`stats.skippedFromBlog` 等于博客去重前后差值、`stats.arxivOnly + stats.hfOnly + stats.both` 等于博客去重前候选总量。
+
 ### 5.3 `data/current/filter-decisions.json`
 
 LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只有 `filterModel` 和 `filterPromptHash` 与当前配置一致才会复用。
@@ -120,12 +123,14 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只有 `fi
 ### 5.4 `data/current/filtered-papers.json`
 
 筛选结果（仅元数据，无深度分析）。结构：
-新格式 `status` 允许值为 `filtering`、`filter_complete`、`complete`。其中 `filter_complete` 是逐篇 LLM 筛选完成但尚未完成归档去重的临时状态；只有 `complete` 表示最终筛选结果，主流程才会在当天重跑时跳过抓取/筛选并直接续跑深度分析。早期没有 `status` 的旧对象格式只作为普通筛选结果读取，不会触发跳过抓取/筛选。
+新格式 `status` 允许值为 `filtering`、`filter_complete`、`complete`，并必须包含 `filterModel` 与 `filterPromptHash`。其中 `filter_complete` 是逐篇 LLM 筛选完成但尚未完成归档去重的临时状态；只有 `complete` 且模型/hash 与当前配置一致时，主流程才会在当天重跑时跳过抓取/筛选并直接续跑深度分析。早期没有 `status` 的旧对象格式不会触发跳过抓取/筛选，`npm run validate:data` 会提示补齐或重生成。
 
 ```json
 {
   "timestamp": "2026-04-21T10:00:00+08:00",
   "status": "complete",
+  "filterModel": "mimo-v2.5",
+  "filterPromptHash": "a1b2c3d4e5f6a7b8",
   "stats": {
     "beforeFilter": 500,
     "beforeBlogSkip": 500,
@@ -167,6 +172,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只有 `fi
 ```
 
 `complete` 状态必须满足：
+- `filterModel` 和 `filterPromptHash` 存在，用于判断同日筛选结果是否可被当前配置安全复用
 - `stats.decisionCount` 等于 `filter-decisions.json.decisions` 数量
 - `stats.afterFilter` 等于 `filter-decisions.json` 中 `related: true` 的数量
 - `stats.afterArchiveSkip` 等于最终 `papers.length`

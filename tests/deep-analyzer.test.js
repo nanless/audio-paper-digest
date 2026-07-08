@@ -155,7 +155,8 @@ describe('deep-analyzer section helpers', () => {
 
     it('兼容预提供图片 URL 字符串和对象数组', () => {
         const {
-            normalizeImageInfos
+            normalizeImageInfos,
+            getPreProvidedImageUrls
         } = require('../scripts/deep-analyzer.js');
 
         assert.deepStrictEqual(normalizeImageInfos([
@@ -168,6 +169,14 @@ describe('deep-analyzer section helpers', () => {
             { url: 'https://example.com/b.png', caption: 'Architecture figure' },
             { url: 'https://example.com/c.png', caption: 'Spectrogram' }
         ]);
+        assert.deepStrictEqual(getPreProvidedImageUrls({
+            allImageUrls: [],
+            imageUrls: ['https://example.com/fallback.png']
+        }), ['https://example.com/fallback.png']);
+        assert.deepStrictEqual(getPreProvidedImageUrls({
+            allImageUrls: ['https://example.com/primary.png'],
+            imageUrls: ['https://example.com/fallback.png']
+        }), ['https://example.com/primary.png']);
     });
 
     it('识别原文中的表格证据', () => {

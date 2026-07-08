@@ -83,7 +83,7 @@
 
 1. 确认 `scripts/utils.js` 中的 `loadPrompt()` 能正确读取 `prompts/` 目录下的 markdown 文件
 2. `scripts/utils.js` 与 `scripts/utils.py` 是否仍能正确解析 `## 机器摘要`、标签和评分字段（注意机器摘要从 `###` 变为 `##`）
-3. 抽样检查 `data/current/deep-analysis-result.json`，确认存在 `rank_bucket`、`primary_task_tag`、`primary_method_tag`
+3. 抽样检查 `data/current/deep-analysis-result.json`：在原始 `analysis` 的机器摘要中确认存在 `rank_bucket`、`primary_task_tag`、`primary_method_tag`；在 `parsed` 缓存中确认存在对应 camelCase 字段 `rankBucket`、`primaryTaskTag`、`primaryMethodTag`
 4. **验证 `score` 是否从 `## 评分理由` 的八个分项正确计算**：抽样对比 `parsed.score` 与 `## 评分理由` 中各分项之和，确认上限为 10、四舍五入到 0.1
 5. 验证博客发布脚本产物，确认榜单、单篇页和热门方向正确显示新字段
 6. 验证微信/小红书/飞书脚本产物，确认文案中没有因字段缺失导致的空值或格式错位

@@ -42,14 +42,12 @@ Benefits of this design:
 | `PAPER_DIGEST_ENABLE_FILE_LOGS` / `PD_ENABLE_FILE_LOGS` | Set to `1` to enable file logs | Disabled |
 | `PAPER_DIGEST_DISABLE_FILE_LOGS` / `PD_DISABLE_FILE_LOGS` | Set to `1` to force-disable file logs | Disabled |
 
-**API Protocol Auto-Routing**: `detectApiType()` in `scripts/utils.js` automatically selects OpenAI or Anthropic protocol based on the endpoint and model name.
-- **Anthropic Protocol** (auto-masquerades as Claude Code): endpoint contains `token-plan` or `coding` **and** model contains `mimo` or `kimi`
-  - **MiMo Token Plan**: `https://token-plan-cn.xiaomimimo.com/v1` -> `https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages`
-  - **Kimi Coding Plan**: `https://api.kimi.com/coding/v1` -> `https://api.kimi.com/coding/v1/messages` (no `/anthropic` intermediate path needed)
-  - Headers: `x-api-key` + `anthropic-version: 2023-06-01` + `User-Agent: claude-cli/<version> (external, cli)` (version dynamically obtained from local `claude --version`, falls back to `2.1.108` on failure)
-- **OpenAI Protocol** (generic mode): all other endpoints/models
-  - Endpoint is left as-is; `/v1/chat/completions` is auto-appended
-  - Headers: `Authorization: Bearer {key}`
+**API Protocol Auto-Routing**: `detectApiType()` in `scripts/utils.js` automatically selects OpenAI or Anthropic protocol based on endpoint and model, in this priority order:
+- **DeepSeek**: endpoints containing `deepseek.com` or models containing `deepseek` are forced to OpenAI; `/anthropic` paths are converted to `/v1/chat/completions`
+- **MiMo Token Plan**: endpoint contains `token-plan` and model contains `mimo`, using Anthropic; `https://token-plan-cn.xiaomimimo.com/v1` -> `https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages`
+- **Kimi Coding Plan**: endpoint contains `coding` and model contains `kimi`, using Anthropic; `https://api.kimi.com/coding/v1` -> `https://api.kimi.com/coding/v1/messages` with no `/anthropic` intermediate path
+- **Generic `/anthropic` endpoint**: non-DeepSeek endpoints containing `/anthropic` use Anthropic and append `/messages`
+- **Other endpoints/models**: use OpenAI and append `/v1/chat/completions`
 
 #### Blog Publishing
 

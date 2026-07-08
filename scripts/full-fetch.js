@@ -64,9 +64,11 @@ function loadTodayJsonFile(filePath, today) {
     return data;
 }
 
-function loadCompleteFilteredForToday(today, filePath = FILTERED_FILE) {
+function loadCompleteFilteredForToday(today, filePath = FILTERED_FILE, expected = {}) {
     const data = loadTodayJsonFile(filePath, today);
     if (!data || data.status !== 'complete' || !Array.isArray(data.papers)) return null;
+    if (expected.filterModel !== undefined && data.filterModel !== expected.filterModel) return null;
+    if (expected.filterPromptHash !== undefined && data.filterPromptHash !== expected.filterPromptHash) return null;
     return data;
 }
 
@@ -159,6 +161,8 @@ function writeFilterArtifacts({
     writeFileAtomic(FILTERED_FILE, JSON.stringify({
         timestamp,
         status: complete ? 'filter_complete' : 'filtering',
+        filterModel,
+        filterPromptHash,
         stats: {
             ...stats,
             afterFilter: filtered.length,
@@ -359,7 +363,7 @@ async function fullFetch() {
     const filterModel = process.env.PAPER_ANALYZER_MODEL || '';
     const filterPromptHash = getFilterPromptHash();
 
-    const completedFiltered = loadCompleteFilteredForToday(today);
+    const completedFiltered = loadCompleteFilteredForToday(today, FILTERED_FILE, { filterModel, filterPromptHash });
     if (completedFiltered) {
         console.log('⏭️ 检测到今日完整 filtered-papers.json，跳过抓取与筛选，直接续跑深度分析');
         filteredNew = completedFiltered.papers;
@@ -622,6 +626,8 @@ async function fullFetch() {
         writeFileAtomic(FILTERED_FILE, JSON.stringify({
             timestamp: getBeijingISOString(),
             status: 'complete',
+            filterModel,
+            filterPromptHash,
             stats: {
                 ...baseFilterStats,
                 afterBlogSkip: allPapersFiltered.length,

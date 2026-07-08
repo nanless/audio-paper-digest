@@ -144,10 +144,10 @@ HF 特有字段（共 7 个）：
 筛选阶段会增量保存三类文件：
 - `data/current/raw-candidates.json`：合并和博客去重后的候选输入，并包含 arXiv/HF 的 `sourceHealth`；单类别或 HF 抓取失败时会记录 `ok:false`、`error`、`durationMs`。如果合并后候选为空，只有 arXiv 核心来源全部失败或唯一尝试来源失败时才中止；单个补充来源失败但核心来源已成功返回空结果时不再误判为致命错误
 - `data/current/filter-decisions.json`：逐篇 LLM 决策缓存，包含筛选模型、`prompts/filter.md` hash、`related`、`reason`、`rawResponse`、`parseSource`；中断重跑时只复用同模型同 prompt 的决策
-- `data/current/filtered-papers.json`：阶段性/最终筛选输出；`status: "filter_complete"` 只表示逐篇筛选已完成但归档去重尚未完成，最终可跳过抓取/筛选的状态必须是 `status: "complete"`
+- `data/current/filtered-papers.json`：阶段性/最终筛选输出；包含 `filterModel` 和 `filterPromptHash`。`status: "filter_complete"` 只表示逐篇筛选已完成但归档去重尚未完成，最终可跳过抓取/筛选的状态必须是 `status: "complete"`，且模型/hash 必须匹配当前配置
 
-若今天已经存在完整 `filtered-papers.json`，再次运行 `node scripts/full-fetch.js` 会跳过抓取与筛选，直接进入深度分析续跑；若筛选尚未完成，则复用 `filter-decisions.json` 中已有逐篇决策继续筛选。
-`npm run validate:data` 会交叉校验 `filter-decisions.json` 与 `filtered-papers.json` 的决策数量、相关数量和最终论文数量。
+若今天已经存在完整且模型/hash 匹配的 `filtered-papers.json`，再次运行 `node scripts/full-fetch.js` 会跳过抓取与筛选，直接进入深度分析续跑；若筛选尚未完成，则复用同模型同 prompt 的 `filter-decisions.json` 中已有逐篇决策继续筛选。
+`npm run validate:data` 会交叉校验 `raw-candidates.json`、`filter-decisions.json` 与 `filtered-papers.json` 的候选统计、决策数量、相关数量和最终论文数量。
 
 ### 3.7 深度分析
 
@@ -178,7 +178,7 @@ HF 特有字段（共 7 个）：
 - **API 协议自动路由**：与筛选阶段共用同一套 `detectApiType()` 逻辑，根据 `PAPER_ANALYZER_ENDPOINT` 和 `PAPER_ANALYZER_MODEL` 自动切换 OpenAI / Anthropic 协议
 - 获取 arXiv HTML 全文（最多 500K 字符），依次尝试 `v1`、`v2`、无后缀版本；使用 **cheerio** 结构化解析 HTML，移除 script/style/nav/header/footer 等噪音元素
 - 提取图片 URL，过滤 logo/favicon；下载层会校验 Content-Type、Content-Length 和 PNG/JPEG/WebP 文件头，避免把 HTML 错误页或过大图片送入模型
-- **图片分析**：先按 caption/文件名/顺序启发式预筛候选图片（默认最多 `imageCandidateMax=20` 张），再串行下载最多 `imageMaxCount=20` 张；默认单图原始大小上限 6MB、单图 base64 上限 8M 字符、所有图片 base64 总上限 20M 字符。双模型模式下只有成功下载并通过副模型筛选的图片会写入正文；若没有可用图片，自动退回纯文本分析
+- **图片分析**：先按 caption/文件名/顺序启发式预筛候选图片（默认最多 `imageCandidateMax=20` 张）。双模型模式才串行下载最多 `imageMaxCount=20` 张并交给副模型；单模型模式只保存候选 URL/manifest 元数据，不下载 base64 图片。默认单图原始大小上限 6MB、单图 base64 上限 8M 字符、所有图片 base64 总上限 20M 字符。双模型模式下只有成功下载并通过副模型筛选的图片会写入正文；若没有可用图片，自动退回纯文本分析
 - 每篇结果会保存 `imageManifest`：包含总发现图片数、候选评分、下载成功列表、最终选图；该字段由 `analysis-engine.js` 保留到最终 `deep-analysis-result.json`，便于复盘图片筛选质量
 - **并发度：3 篇并行**（可通过 `PD_ANALYSIS_CONCURRENCY` 环境变量调整）
 - 每篇最多重试 **2 次**（外层 `analysis-engine.js`），每次外层重试内部 API 调用还有 **3 次** 重试（`deep-analyzer.js` 内层，指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5000ms`），外层重试间隔 3 秒（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整外层）

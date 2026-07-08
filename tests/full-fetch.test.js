@@ -88,13 +88,29 @@ describe('full-fetch helpers', () => {
         fs.writeFileSync(file, JSON.stringify({
             timestamp: '2026-07-08T10:00:00+08:00',
             status: 'complete',
+            filterModel: 'model-a',
+            filterPromptHash: 'hash-a',
             papers: [{ arxivId: '2607.00001' }]
         }));
         assert.strictEqual(loadCompleteFilteredForToday('2026-07-08', file).papers.length, 1);
+        assert.strictEqual(loadCompleteFilteredForToday('2026-07-08', file, {
+            filterModel: 'model-a',
+            filterPromptHash: 'hash-a'
+        }).papers.length, 1);
+        assert.strictEqual(loadCompleteFilteredForToday('2026-07-08', file, {
+            filterModel: 'model-b',
+            filterPromptHash: 'hash-a'
+        }), null);
+        assert.strictEqual(loadCompleteFilteredForToday('2026-07-08', file, {
+            filterModel: 'model-a',
+            filterPromptHash: 'hash-b'
+        }), null);
 
         fs.writeFileSync(file, JSON.stringify({
             timestamp: '2026-07-08T10:00:00+08:00',
             status: 'filtering',
+            filterModel: 'model-a',
+            filterPromptHash: 'hash-a',
             papers: [{ arxivId: '2607.00001' }]
         }));
         assert.strictEqual(loadCompleteFilteredForToday('2026-07-08', file), null);

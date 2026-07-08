@@ -490,7 +490,9 @@ describe('loadPrompt', () => {
             textForAnalysis: 'Paper text',
             imageList: '图1: https://example.com/a.png',
             primaryAnalysis: '## 评分\n8/10',
-            existingAnalysis: '## 评分\n8/10'
+            existingAnalysis: '## 评分\n8/10',
+            methodSection: '## 方法概述和架构\n已有方法。',
+            resultsSection: '## 实验结果\n已有结果。'
         };
         const promptFiles = [
             'prompts/filter.md',
@@ -498,6 +500,8 @@ describe('loadPrompt', () => {
             'prompts/image-supplement.md',
             'prompts/opensource-scan.md',
             'prompts/gap-fill.md',
+            'prompts/method-fill.md',
+            'prompts/table-fill.md',
             'prompts/en/filter.md',
             'prompts/en/deep-analysis.md',
             'prompts/en/opensource-scan.md',
@@ -523,14 +527,18 @@ describe('loadPrompt', () => {
             textForAnalysis: 'Paper text',
             imageList: '图1: https://example.com/a.png',
             primaryAnalysis: '## 评分\n8/10',
-            existingAnalysis: '## 评分\n8/10'
+            existingAnalysis: '## 评分\n8/10',
+            methodSection: '## 方法概述和架构\n已有方法。',
+            resultsSection: '## 实验结果\n已有结果。'
         };
         const promptFiles = [
             'prompts/filter.md',
             'prompts/deep-analysis.md',
             'prompts/image-supplement.md',
             'prompts/opensource-scan.md',
-            'prompts/gap-fill.md'
+            'prompts/gap-fill.md',
+            'prompts/method-fill.md',
+            'prompts/table-fill.md'
         ];
         for (const file of promptFiles) {
             const prompt = loadPrompt(file, vars);

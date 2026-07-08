@@ -17,7 +17,7 @@ npm run fetch            # 全流程：抓取 + 筛选 + 深度分析
 npm run deep             # 仅深度分析续跑（跳过已有 analysis；无分析结果时可从 filtered-papers.json 初始化）
 npm run reanalyze        # 强制全量重分析（支持 --concurrency N）
 npm run batch            # 批量分析未分析论文
-npm run validate:data    # 只读校验当前 JSON 数据结构和筛选决策缓存一致性
+npm run validate:data    # 只读校验候选/筛选/分析 JSON 数据和筛选决策缓存一致性
 npm run backfill         # 补录历史 paper ID（Python 脚本，不分析）
 npm run publish          # 发布到 Hugo 博客（python3 scripts/publish-to-blog.py）
 npm run wechat           # 生成微信公众号草稿
@@ -52,7 +52,9 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 
 复制 `env.example` → `.env`（已 gitignore）。
 
-**必需变量**：`PAPER_ANALYZER_API_KEY` / `PAPER_ANALYZER_MODEL` / `PAPER_ANALYZER_ENDPOINT` + `PAPER_DIGEST_BLOG_REPO`
+**抓取/筛选/分析必需变量**：`PAPER_ANALYZER_API_KEY` / `PAPER_ANALYZER_MODEL` / `PAPER_ANALYZER_ENDPOINT`
+
+**博客相关变量**：`PAPER_DIGEST_BLOG_REPO` 可覆写 Hugo 博客仓库路径；未设置时使用默认路径，目录不存在会跳过博客已发布去重，真实博客发布仍需要本地仓库存在。
 
 **双模型（可选，多模态）**：设置 `PAPER_ANALYZER_SECONDARY_MODEL` 即启用副模型做图像补充（主模型仅做纯文本分析）；不设置则跳过图片、退回单模型纯文本。`PAPER_ANALYZER_SECONDARY_ENDPOINT` / `PAPER_ANALYZER_SECONDARY_API_KEY` 未设置时默认复用主模型对应值。
 
@@ -108,11 +110,13 @@ prompts/                # LLM prompt 模板
   image-supplement.md   # 图像补充（双模型模式副模型用）
   opensource-scan.md    # 开源链接扫描（Round 2）
   gap-fill.md           # 审校重写（Round 3）
+  method-fill.md        # 方法章节补充（后处理）
+  table-fill.md         # 实验表格补充（后处理）
   index.md              # Prompt 文档索引（含占位符规范）
-  en/                   # 英文版 prompt（含 filter / deep-analysis / gap-fill / opensource-scan / index，不含 image-supplement）
+  en/                   # 英文版 prompt（含 filter / deep-analysis / gap-fill / opensource-scan / index，不含 image-supplement / method-fill / table-fill）
 ```
 
-`papers.json` 同时支持 `data/current/papers.json` 和 `data/papers.json`（旧版路径），均被 `config.js` 引用。**`papers.json` 持久化去重数据库，永不归档**。`full-fetch.js` 每次运行自动备份 `papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天。条目可带 `digestStatus.status`：`pending_analysis` / `analysis_failed` 不参与强去重，便于中断后重跑；所有分析入口应通过 `scripts/digest-status.js` 将成功/失败同步为 `analyzed` / `analysis_failed`。
+`papers.json` 同时支持 `data/current/papers.json` 和 `data/papers.json`（旧版路径），均被 `config.js` 引用。**`papers.json` 持久化去重数据库，永不归档**。`full-fetch.js` 每次运行自动备份 `papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天。条目可带 `digestStatus.status`：`pending_analysis` / `analysis_failed` 不参与强去重，便于中断后重跑；所有分析入口应通过 `scripts/digest-status.js` 将成功/失败同步为 `analyzed` / `analysis_failed`。若最新一次分析失败但旧成功分析仍可用，`status` 保持 `analyzed`，失败记录写入 `digestStatus.latestAttemptStatus` / `error`。
 
 ## 分支策略
 

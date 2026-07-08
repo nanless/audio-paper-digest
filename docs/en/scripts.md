@@ -61,8 +61,8 @@ Analyze a single paper and merge it into the results.
 #### `scripts/validate-data-files.js`
 
 Read-only validation for current runtime data.
-- Checks `data/current/papers.json`, `data/current/filtered-papers.json`, and `data/current/deep-analysis-result.json` by default
-- Also checks `data/current/filter-decisions.json`; validates `digestStatus.status`, filtered-result status values, paper IDs, basic `sourceHealth` shape, score ranges, image URL array fields, `imageManifest` type, and consistency between filter decision counts/related counts and `filtered-papers.json` stats
+- Checks `data/current/papers.json`, `data/current/raw-candidates.json`, `data/current/filtered-papers.json`, and `data/current/deep-analysis-result.json` by default
+- Also checks `data/current/filter-decisions.json`; validates `digestStatus.status`, candidate stat relationships, filtered-result status values, `filterModel` / `filterPromptHash` required for safe filtered-result reuse, paper IDs, basic `sourceHealth` shape, score ranges, deep-analysis `stats.totalAfterMerge`, image URL array fields, `imageManifest` type, and consistency between filter decision counts/related counts and `filtered-papers.json` stats
 - Does not modify any data; prints errors and exits non-zero on failure
 - npm entry: `npm run validate:data`
 
@@ -190,7 +190,7 @@ HuggingFace Papers fetch module.
 Multimodal deep analyzer. The analysis flow is a **6-round progressive process**, not a single call:
 
 **Round 1 -- Main Deep Analysis**
-- `analyzePaperDeep(paper)`: fetches arXiv HTML full text (up to 500K characters) + downloads candidate images serially; in dual-model mode the secondary model finally selects high-value figures and inserts them into the body. `allImageUrls` stores candidates, while `selectedImageUrls` / `imageUrls` store selected figures
+- `analyzePaperDeep(paper)`: fetches arXiv HTML full text (up to 500K characters) and preselects candidate images. Dual-model mode downloads candidate images serially and lets the secondary model select high-value figures for insertion; single-model mode only stores candidate image metadata. `allImageUrls` stores candidates, while `selectedImageUrls` / `imageUrls` store selected figures
 - Loads `prompts/deep-analysis.md`, replaces placeholders, and calls the LLM
 - Output includes: score, machine summary, tags, authors and affiliations, snarky review, core summary, method overview and architecture, core innovations, experimental results, detailed description, score rationale, limitations and issues, open source details
 - `parseAnalysis(analysis)`: parses analysis text into a structured object. Runtime output headings remain Chinese. `score` is not taken directly from the LLM's original total score under `## 评分`, but is recalculated from eight sub-scores extracted from `## 评分理由`, rounded to 0.1, always overriding the LLM's original total score
@@ -206,10 +206,12 @@ Multimodal deep analyzer. The analysis flow is a **6-round progressive process**
 - Generates a revised analysis text, overwriting the original content
 
 **Round 4 -- Table Fix (`checkAndFixTables`)**
+- Loads `prompts/table-fill.md`
 - Detects missing Markdown tables in `## Experimental Results`
 - If tables are found to be omitted or truncated, triggers LLM supplementation of the complete table
 
 **Round 5 -- Method Section Fix (`checkAndFixMethodSection`)**
+- Loads `prompts/method-fill.md`
 - Detects if `## Method Overview and Architecture` is too brief (fewer than 600 Chinese characters, vague expression, fewer than 3 paragraphs)
 - If conditions are met, triggers LLM expansion to a 600+ character detailed description
 
@@ -422,8 +424,8 @@ Generate Xiaohongshu (Little Red Book) copy.
 Xiaohongshu auto-publish script (calls Xiaohongshu Web API, unofficial interface).
 
 - `--login`: scan QR code to log in, save cookie to local cache file
-- `--publish`: publish current date TOP 3 curated post (default)
-- `--all`: publish all papers (one post per paper)
+- `--publish`: publish current date TOP 5 curated post by default (reads the `top5` copy; generate copy with `--top 3` if you want TOP 3)
+- `--all`: publish the current date full-summary post once (reads one `all` summary copy; not one post per paper)
 - `--date YYYY-MM-DD`: specify date
 - Default date uses Beijing time; screenshots are matched by `~/Pictures/微信图片_YYYYMMDD*.png`
 - Cookie persists after login, no need to scan QR code again next time

@@ -23,7 +23,7 @@ function ensurePaperId(paper, file, index, issues) {
 
 function validatePapersDatabase(filePath = Config.FILES.papers) {
     const issues = [];
-    if (!fs.existsSync(filePath)) return issues;
+    if (!filePath || !fs.existsSync(filePath)) return issues;
 
     const data = readJsonSafe(filePath, null);
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
@@ -75,8 +75,18 @@ function validateNonNegativeInteger(filePath, fieldName, value, issues) {
 function validateFilteredMetadata(filePath, data, papers, issues) {
     if (Array.isArray(data)) return;
 
-    if (data.status !== undefined && !ALLOWED_FILTERED_STATUSES.has(data.status)) {
+    if (data.status === undefined) {
+        addIssue(issues, filePath, 'status 必须存在，且为 filtering/filter_complete/complete');
+    } else if (!ALLOWED_FILTERED_STATUSES.has(data.status)) {
         addIssue(issues, filePath, `status 非法: ${data.status}`);
+    }
+
+    for (const field of ['filterModel', 'filterPromptHash']) {
+        if (data[field] === undefined || data[field] === '') {
+            addIssue(issues, filePath, `${field} 必须存在，用于判断筛选结果是否可安全复用`);
+        } else if (typeof data[field] !== 'string') {
+            addIssue(issues, filePath, `${field} 必须是字符串`);
+        }
     }
 
     if (data.stats !== undefined && !isPlainObject(data.stats)) {
@@ -104,14 +114,73 @@ function validateFilteredMetadata(filePath, data, papers, issues) {
     }
 }
 
+function validateDeepAnalysisMetadata(filePath, data, papers, issues) {
+    if (Array.isArray(data) || data.stats === undefined) return;
+    if (!isPlainObject(data.stats)) {
+        addIssue(issues, filePath, 'stats 必须是对象');
+        return;
+    }
+
+    const stats = data.stats;
+    for (const field of ['arxivFetched', 'hfFetched', 'totalMerged', 'afterFilter', 'newlyAnalyzed', 'preservedExisting', 'totalAfterMerge']) {
+        validateNonNegativeInteger(filePath, `stats.${field}`, stats[field], issues);
+    }
+    if (Number.isInteger(stats.totalAfterMerge) && stats.totalAfterMerge !== papers.length) {
+        addIssue(issues, filePath, `stats.totalAfterMerge (${stats.totalAfterMerge}) 必须等于 papers 数量 (${papers.length})`);
+    }
+}
+
+function validateRawCandidateMetadata(filePath, data, papers, issues) {
+    if (Array.isArray(data)) return;
+
+    if (!isPlainObject(data.stats)) {
+        addIssue(issues, filePath, 'raw-candidates stats 必须是对象');
+        return;
+    }
+
+    const stats = data.stats;
+    for (const field of ['beforeBlogSkip', 'afterBlogSkip', 'skippedFromBlog', 'arxivOnly', 'hfOnly', 'both']) {
+        if (stats[field] === undefined) {
+            addIssue(issues, filePath, `stats.${field} 必须存在且为非负整数`);
+        } else {
+            validateNonNegativeInteger(filePath, `stats.${field}`, stats[field], issues);
+        }
+    }
+
+    const expectedAfterBlogSkip = stats.afterBlogSkip;
+    if (Number.isInteger(expectedAfterBlogSkip) && expectedAfterBlogSkip !== papers.length) {
+        addIssue(issues, filePath, `stats.afterBlogSkip (${expectedAfterBlogSkip}) 必须等于 papers 数量 (${papers.length})`);
+    }
+
+    if (Number.isInteger(stats.beforeBlogSkip) && Number.isInteger(stats.afterBlogSkip)) {
+        if (stats.beforeBlogSkip < stats.afterBlogSkip) {
+            addIssue(issues, filePath, 'stats.beforeBlogSkip 不能小于 stats.afterBlogSkip');
+        }
+        if (Number.isInteger(stats.skippedFromBlog) && stats.skippedFromBlog !== stats.beforeBlogSkip - stats.afterBlogSkip) {
+            addIssue(issues, filePath, `stats.skippedFromBlog (${stats.skippedFromBlog}) 必须等于 beforeBlogSkip-afterBlogSkip (${stats.beforeBlogSkip - stats.afterBlogSkip})`);
+        }
+    }
+
+    if ([stats.arxivOnly, stats.hfOnly, stats.both, stats.beforeBlogSkip].every(Number.isInteger)) {
+        const sourceTotal = stats.arxivOnly + stats.hfOnly + stats.both;
+        if (sourceTotal !== stats.beforeBlogSkip) {
+            addIssue(issues, filePath, `stats.arxivOnly+hfOnly+both (${sourceTotal}) 必须等于 stats.beforeBlogSkip (${stats.beforeBlogSkip})`);
+        }
+    }
+}
+
 function validatePaperListFile(filePath, options = {}) {
     const issues = [];
-    if (!fs.existsSync(filePath)) return issues;
+    if (!filePath || !fs.existsSync(filePath)) return issues;
 
     const data = readJsonSafe(filePath, null);
     if (!data) {
         addIssue(issues, filePath, 'JSON 无法解析');
         return issues;
+    }
+
+    if (options.rawCandidates && Array.isArray(data)) {
+        addIssue(issues, filePath, 'raw-candidates 根对象必须是 { stats, sourceHealth, papers }');
     }
 
     const papers = Array.isArray(data) ? data : data.papers;
@@ -122,8 +191,14 @@ function validatePaperListFile(filePath, options = {}) {
 
     if (!Array.isArray(data)) {
         validateSourceHealth(filePath, data.sourceHealth || data.stats?.sourceHealth, issues);
+        if (options.rawCandidates) {
+            validateRawCandidateMetadata(filePath, data, papers, issues);
+        }
         if (options.filtered) {
             validateFilteredMetadata(filePath, data, papers, issues);
+        }
+        if (options.deepAnalysis) {
+            validateDeepAnalysisMetadata(filePath, data, papers, issues);
         }
     }
 
@@ -156,7 +231,7 @@ function validatePaperListFile(filePath, options = {}) {
 
 function validateFilterDecisionsFile(filePath = DEFAULT_FILTER_DECISIONS_FILE) {
     const issues = [];
-    if (!fs.existsSync(filePath)) return issues;
+    if (!filePath || !fs.existsSync(filePath)) return issues;
 
     const data = readJsonSafe(filePath, null);
     if (!isPlainObject(data)) {
@@ -224,6 +299,7 @@ function resolveFilterDecisionsPath(files = Config.FILES) {
 
 function validateFilterArtifactsConsistency(filteredPath, decisionsPath) {
     const issues = [];
+    if (!filteredPath || !decisionsPath) return issues;
     if (!fs.existsSync(filteredPath) || !fs.existsSync(decisionsPath)) return issues;
 
     const filtered = readJsonSafe(filteredPath, null);
@@ -251,14 +327,29 @@ function validateFilterArtifactsConsistency(filteredPath, decisionsPath) {
     return issues;
 }
 
+function validateRequiredCompanionFiles(files, filterDecisions) {
+    const issues = [];
+    if (!files.filteredPapers || !fs.existsSync(files.filteredPapers)) return issues;
+
+    const filtered = readJsonSafe(files.filteredPapers, null);
+    if (!isPlainObject(filtered)) return issues;
+    const stats = isPlainObject(filtered.stats) ? filtered.stats : {};
+    if (stats.decisionCount !== undefined && !fs.existsSync(filterDecisions)) {
+        addIssue(issues, filterDecisions, '有 filtered-papers.json stats.decisionCount，但 filter-decisions.json 缺失，无法校验逐篇筛选决策');
+    }
+    return issues;
+}
+
 function validateCurrentDataFiles(files = Config.FILES) {
     const filterDecisions = resolveFilterDecisionsPath(files);
     return [
         ...validatePapersDatabase(files.papers),
+        ...validatePaperListFile(files.rawCandidates, { rawCandidates: true }),
         ...validateFilterDecisionsFile(filterDecisions),
         ...validatePaperListFile(files.filteredPapers, { filtered: true }),
         ...validatePaperListFile(files.deepAnalysisResult, { deepAnalysis: true }),
-        ...validateFilterArtifactsConsistency(files.filteredPapers, filterDecisions)
+        ...validateFilterArtifactsConsistency(files.filteredPapers, filterDecisions),
+        ...validateRequiredCompanionFiles(files, filterDecisions)
     ];
 }
 

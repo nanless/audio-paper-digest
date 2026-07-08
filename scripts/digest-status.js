@@ -59,13 +59,16 @@ function applyAnalysisDigestStatuses(papersData, analyzedPapers, options = {}) {
         const key = normalizedId(paper);
         if (!key) continue;
         const existing = papersData.papers[key] || {};
-        const status = paper.analysis ? 'analyzed' : 'analysis_failed';
+        const mergedPaper = mergeAnalysisDigestPaper(existing, paper);
+        const latestAttemptStatus = paper.analysis ? 'analyzed' : 'analysis_failed';
+        const status = mergedPaper.analysis ? 'analyzed' : 'analysis_failed';
         papersData.papers[key] = markPaperDigestStatus(
-            mergeAnalysisDigestPaper(existing, paper),
+            mergedPaper,
             status,
             {
                 batchDate,
                 updatedAt: now,
+                latestAttemptStatus,
                 error: paper.error || null
             }
         );

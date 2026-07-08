@@ -62,8 +62,8 @@
 #### `scripts/validate-data-files.js`
 
 只读校验当前运行数据结构。
-- 默认检查 `data/current/papers.json`、`data/current/filtered-papers.json`、`data/current/deep-analysis-result.json`
-- 额外检查 `data/current/filter-decisions.json`；校验 `digestStatus.status` 枚举、筛选状态枚举、论文 ID、`sourceHealth` 基本形状、评分范围、图片字段数组、`imageManifest` 类型，以及筛选决策数量/相关数量和 `filtered-papers.json` 统计字段的一致性
+- 默认检查 `data/current/papers.json`、`data/current/raw-candidates.json`、`data/current/filtered-papers.json`、`data/current/deep-analysis-result.json`
+- 额外检查 `data/current/filter-decisions.json`；校验 `digestStatus.status` 枚举、候选统计关系、筛选状态枚举、筛选复用所需的 `filterModel` / `filterPromptHash`、论文 ID、`sourceHealth` 基本形状、评分范围、深度分析 `stats.totalAfterMerge`、图片字段数组、`imageManifest` 类型，以及筛选决策数量/相关数量和 `filtered-papers.json` 统计字段的一致性
 - 不修改任何数据；发现问题时输出错误并以非零状态退出
 - npm 入口：`npm run validate:data`
 
@@ -193,7 +193,7 @@ HuggingFace Papers 抓取模块。
 多模态深度分析器。分析流程为 **6 轮递进式处理**，不是单次调用：
 
 **Round 1 — 主深度分析**
-- `analyzePaperDeep(paper)`：获取 arXiv HTML 全文（最多 500K 字符）+ 串行下载候选图片，双模型模式下由副模型最终筛选高价值图片并插入正文；`allImageUrls` 保存候选图，`selectedImageUrls` / `imageUrls` 保存已选图
+- `analyzePaperDeep(paper)`：获取 arXiv HTML 全文（最多 500K 字符）+ 预筛候选图片；双模型模式才串行下载候选图片并由副模型最终筛选高价值图片插入正文，单模型模式只保存候选图元数据；`allImageUrls` 保存候选图，`selectedImageUrls` / `imageUrls` 保存已选图
 - 加载 `prompts/deep-analysis.md`，替换占位符后调用 LLM
 - 输出包含：评分、机器摘要、标签、作者与机构、毒舌点评、核心摘要、方法概述和架构、核心创新点、实验结果、细节详述、评分理由、局限与问题、开源详情
 - `parseAnalysis(analysis)`：将分析文本解析为结构化对象。`score` 不是直接取 `## 评分` 下的 LLM 原始总分，而是从 `## 评分理由` 中提取八个分项重新计算，四舍五入到 0.1，始终覆盖 LLM 原始总分
@@ -209,10 +209,12 @@ HuggingFace Papers 抓取模块。
 - 生成修订版分析文本，覆盖原有内容
 
 **Round 4 — 表格修复（`checkAndFixTables`）**
+- 加载 `prompts/table-fill.md`
 - 检测 `## 实验结果` 中缺失的 Markdown 表格
 - 若发现表格被省略或截断，触发 LLM 补充完整表格
 
 **Round 5 — 方法章节修复（`checkAndFixMethodSection`）**
+- 加载 `prompts/method-fill.md`
 - 检测 `## 方法概述和架构` 是否过于简略（少于 600 中文字符、表述模糊、不足 3 段）
 - 若满足条件，触发 LLM 扩展至 600+ 字符的详细描述
 
@@ -425,8 +427,8 @@ Python 发布/维护脚本共享路径配置。集中提供 `PROJECT_ROOT`、`DA
 小红书自动发布脚本（调用小红书 Web API，非官方接口）。
 
 - `--login`：扫码登录，保存 cookie 到本地缓存文件
-- `--publish`：发布当前日期 TOP 3 精选帖（默认）
-- `--all`：发布全部论文（每帖一篇）
+- `--publish`：发布当前日期 TOP 5 精选帖（默认读取 `top5` 文案；生成文案时可用 `--top 3` 产出 TOP 3）
+- `--all`：发布当前日期完整汇总帖（读取一份 `all` 汇总文案并发布一次，不是逐篇多帖）
 - `--date YYYY-MM-DD`：指定日期
 - 默认日期使用北京时间；截图匹配 `~/Pictures/微信图片_YYYYMMDD*.png`
 - 登录后 cookie 持久化，下次无需重复扫码

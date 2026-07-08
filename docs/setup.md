@@ -42,14 +42,12 @@ set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
 | `PAPER_DIGEST_ENABLE_FILE_LOGS` / `PD_ENABLE_FILE_LOGS` | 设为 `1` 时启用文件日志 | 未启用 |
 | `PAPER_DIGEST_DISABLE_FILE_LOGS` / `PD_DISABLE_FILE_LOGS` | 设为 `1` 时强制禁用文件日志 | 未启用 |
 
-**API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动判断使用 OpenAI 还是 Anthropic 协议
-- **Anthropic 协议**（自动伪装 Claude Code）：端点含 `token-plan` 或 `coding` **且** 模型含 `mimo` 或 `kimi`
-  - **MiMo Token Plan**: `https://token-plan-cn.xiaomimimo.com/v1` → `https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages`
-  - **Kimi Coding Plan**: `https://api.kimi.com/coding/v1` → `https://api.kimi.com/coding/v1/messages` 不需要 `/anthropic` 中间路径
-  - Headers: `x-api-key` + `anthropic-version: 2023-06-01` + `User-Agent: claude-cli/<version> (external, cli)`（版本号动态获取自本地 `claude --version`，失败回退到 `2.1.108`）
-- **OpenAI 协议**（通用模式）：所有其他端点/模型
-  - 端点保持原样，自动拼接 `/v1/chat/completions`
-  - Headers: `Authorization: Bearer {key}`
+**API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动判断使用 OpenAI 还是 Anthropic 协议，优先级如下：
+- **DeepSeek**：端点含 `deepseek.com` 或模型含 `deepseek` 时强制 OpenAI 协议，`/anthropic` 路径也会转为 `/v1/chat/completions`
+- **MiMo Token Plan**：端点含 `token-plan` 且模型含 `mimo` 时走 Anthropic 协议，`https://token-plan-cn.xiaomimimo.com/v1` → `https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages`
+- **Kimi Coding Plan**：端点含 `coding` 且模型含 `kimi` 时走 Anthropic 协议，`https://api.kimi.com/coding/v1` → `https://api.kimi.com/coding/v1/messages`，不需要 `/anthropic` 中间路径
+- **普通 `/anthropic` 端点**：非 DeepSeek endpoint 中含 `/anthropic` 时走 Anthropic 协议并拼接 `/messages`
+- **其他端点/模型**：走 OpenAI 协议并拼接 `/v1/chat/completions`
 
 #### 博客发布
 

@@ -22,6 +22,7 @@ Paper deduplication database. **This file is not archived; it accumulates contin
         "status": "seen | pending_analysis | analyzed | analysis_failed",
         "batchDate": "2026-04-21",
         "updatedAt": "2026-04-21T10:00:00+08:00",
+        "latestAttemptStatus": "analyzed | analysis_failed",
         "error": null
       }
     }
@@ -30,7 +31,7 @@ Paper deduplication database. **This file is not archived; it accumulates contin
 }
 ```
 
-`pending_analysis` and `analysis_failed` are not used for strong deduplication in the next `full-fetch`, so interrupted or failed analyses can naturally re-enter the pipeline. Successful analysis updates the status to `analyzed`. `full-fetch.js`, `deep-analysis-only.js`, `reanalyze.js`, `batch-analyze.js`, `reanalyze-selected.js`, and `analyze-single-paper.js` all sync this status through `scripts/digest-status.js` to avoid divergent write paths. Failure status writes only update status/error metadata and do not overwrite existing successful `analysis` / `parsed` / image metadata in `papers.json` with empty values.
+`pending_analysis` and `analysis_failed` are not used for strong deduplication in the next `full-fetch`, so interrupted or failed analyses can naturally re-enter the pipeline. Successful analysis updates the status to `analyzed`. `full-fetch.js`, `deep-analysis-only.js`, `reanalyze.js`, `batch-analyze.js`, `reanalyze-selected.js`, `analyze-single-paper.js`, and `refilter-reanalyze-by-date.js` all sync this status through `scripts/digest-status.js` to avoid divergent write paths. If the latest attempt fails but an older successful analysis is still available, `status` remains `analyzed`, while `latestAttemptStatus: "analysis_failed"` and `error` record the failed attempt; failure writes do not overwrite existing successful `analysis` / `parsed` / image metadata with empty values.
 
 ### 5.2 `data/current/raw-candidates.json`
 
@@ -80,6 +81,8 @@ Candidate input after arXiv + HuggingFace merge and blog-published filtering. Us
 
 When `papers` is empty and `sourceHealth` contains failures, the main workflow only treats a complete core arXiv failure or a failure of the only attempted source as fatal; individual category failures or HuggingFace supplementary-source failures are recorded but do not necessarily block a legitimate empty candidate batch.
 
+`npm run validate:data` checks the `papers` array, the basic `sourceHealth` shape, and candidate stats: `stats.afterBlogSkip` must equal the candidate paper count, `stats.skippedFromBlog` must equal the before/after blog-deduplication difference, and `stats.arxivOnly + stats.hfOnly + stats.both` must equal the pre-blog-deduplication candidate total.
+
 ### 5.3 `data/current/filter-decisions.json`
 
 Per-paper LLM filtering decision cache. It is written after every batch; reruns only reuse it when `filterModel` and `filterPromptHash` match the current configuration.
@@ -116,12 +119,14 @@ Per-paper LLM filtering decision cache. It is written after every batch; reruns 
 ### 5.4 `data/current/filtered-papers.json`
 
 Filtering results (metadata only, no deep analysis). Structure:
-New-format allowed `status` values are `filtering`, `filter_complete`, and `complete`. `filter_complete` is a transient state after per-paper LLM filtering but before archive deduplication. Only `complete` represents final filtering output, so only that state lets the main workflow skip crawling/filtering and resume deep analysis on same-day reruns. Older object-format files without `status` are tolerated as ordinary filtered results, but they do not trigger the skip-crawl/filter resume path.
+New-format allowed `status` values are `filtering`, `filter_complete`, and `complete`, and the file must include `filterModel` and `filterPromptHash`. `filter_complete` is a transient state after per-paper LLM filtering but before archive deduplication. Only `complete` with a model/hash matching the current configuration lets the main workflow skip crawling/filtering and resume deep analysis on same-day reruns. Older object-format files without `status` do not trigger the skip-crawl/filter resume path, and `npm run validate:data` reports them so they can be regenerated or migrated.
 
 ```json
 {
   "timestamp": "2026-04-21T10:00:00+08:00",
   "status": "complete",
+  "filterModel": "mimo-v2.5",
+  "filterPromptHash": "a1b2c3d4e5f6a7b8",
   "stats": {
     "beforeFilter": 500,
     "beforeBlogSkip": 500,
@@ -163,6 +168,7 @@ New-format allowed `status` values are `filtering`, `filter_complete`, and `comp
 ```
 
 For `complete` output:
+- `filterModel` and `filterPromptHash` must exist so same-day filtered output can be safely matched against the current configuration before reuse
 - `stats.decisionCount` must equal the number of entries in `filter-decisions.json.decisions`
 - `stats.afterFilter` must equal the number of `filter-decisions.json` entries with `related: true`
 - `stats.afterArchiveSkip` must equal final `papers.length`

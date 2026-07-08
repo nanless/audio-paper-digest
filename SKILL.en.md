@@ -49,7 +49,7 @@ Main entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fe
 
 | File | Purpose | Archive Behavior |
 |------|---------|------------------|
-| `data/current/papers.json` | Paper deduplication database with `digestStatus` | **Not archived**, accumulates continuously; `pending_analysis` / `analysis_failed` are not used for strong deduplication; all analysis entry points sync status through `scripts/digest-status.js` |
+| `data/current/papers.json` | Paper deduplication database with `digestStatus` | **Not archived**, accumulates continuously; `pending_analysis` / `analysis_failed` are not used for strong deduplication; all analysis entry points sync status through `scripts/digest-status.js`; when an older successful analysis is preserved, `latestAttemptStatus` records a later failed attempt |
 | `data/current/raw-candidates.json` | Candidate input after merge and blog deduplication, including `sourceHealth` | Rewritten by each full run, useful for debugging filter input |
 | `data/current/filter-decisions.json` | Per-paper LLM filter decision cache with reason/rawResponse | Incrementally written after each batch; invalidated when model or prompt hash changes |
 | `data/current/filtered-papers.json` | Filtered paper metadata | Archived daily and regenerated |
@@ -87,13 +87,14 @@ Filtering uniformly calls the LLM specified by `PAPER_ANALYZER_*`:
 - endpoint: `PAPER_ANALYZER_ENDPOINT` (required)
 - key: `PAPER_ANALYZER_API_KEY` (required)
 - model: `PAPER_ANALYZER_MODEL` (required)
-- **API protocol auto-routing**: `detectApiType()` in `scripts/utils.js` automatically determines whether to use OpenAI or Anthropic protocol based on the endpoint and model name
+- **API protocol auto-routing**: `detectApiType()` in `scripts/utils.js` automatically determines whether to use OpenAI or Anthropic protocol based on the endpoint and model name; see Section 4.2 for the full priority order. DeepSeek is forced to OpenAI, while `token-plan+mimo`, `coding+kimi`, and non-DeepSeek `/anthropic` endpoints use Anthropic
   - **MiMo/Kimi Token Plan / Coding Plan** (endpoint contains `token-plan` or `coding`, model contains `mimo`/`kimi`) → automatically switches to **Anthropic protocol**, masquerading as a Claude Code call
     - **MiMo**: `https://token-plan-cn.xiaomimimo.com/v1` → `https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages` (replaces `/v1` with `/anthropic`)
     - **Kimi**: `https://api.kimi.com/coding/v1` → `https://api.kimi.com/coding/v1/messages` (directly appends `/messages`, no `/anthropic` intermediate path)
     - Headers: `x-api-key` + `anthropic-version: 2023-06-01` + `User-Agent: claude-cli/<version> (external, cli)` (version dynamically obtained from local `claude --version`, falling back to `2.1.108`)
     - system message is automatically extracted as a top-level field in the request body (Anthropic requirement)
-  - **All other cases** (including MiMo pay-as-you-go, generic OpenAI-compatible endpoints) → uses standard **OpenAI protocol**
+  - **Other non-DeepSeek `/anthropic` endpoints** → use Anthropic protocol and append `/messages`
+  - **All other cases** (including DeepSeek, MiMo pay-as-you-go, generic OpenAI-compatible endpoints) → uses standard **OpenAI protocol**
     - URL: `/v1/chat/completions`
     - Headers: `Authorization: Bearer {key}`
 - **agent: `false`** — LLM API requests explicitly disable connection reuse to prevent the global agent connection pool from being polluted by proxies, which causes MiMo 403 (see 9.2)
@@ -120,7 +121,7 @@ API call characteristics:
 - **Double-layer retry**: analysis-engine.js level retries up to 2 times per paper (max 3 total attempts); deep-analyzer.js internally retries each API call up to 3 times (exponential backoff: first 10s, then doubles, `2^attempt * 5s`)
 - **LLM API requests explicitly set `agent: false`, forcing direct connections to bypass local proxies (avoids MiMo 403); arXiv/HuggingFace and other external fetches still use proxy auto-detection**
 - arXiv HTML parsing uses **cheerio** structured selectors, removing noise elements such as script/style/nav/header/footer
-- Image downloads are **serial**, downloading all paper images (no quantity limit); single image base64 cap is approximately 20M characters (`imageMaxBase64Chars` in config.js); automatically downgrades to pure text retry after timeout
+- Images are first preselected by caption/filename/order heuristics (default `imageCandidateMax=20`); only dual-model mode with a configured secondary model downloads up to `imageMaxCount=20` candidate images serially and sends them to the secondary model. Single-model mode only keeps candidate URL/manifest metadata. Downloads validate Content-Type, Content-Length, and PNG/JPEG/WebP file signatures; defaults are 6MB raw bytes per image, 8M base64 chars per image, and 20M total base64 chars per paper
 - Full text cap is approximately 500K characters (`fullTextMaxChars` in config.js)
 - All analysis configurations are centrally managed in `scripts/config.js`, supporting environment variable overrides
 
@@ -289,12 +290,12 @@ npm run xiaohongshu -- --date 2026-04-22
 
 **Xiaohongshu Publishing Tips:**
 
-- Xiaohongshu single post body limit is approximately 1000 characters; TOP 3 mode defaults to approximately 800-950 characters, suitable for direct single-post publishing
+- Xiaohongshu single post body limit is approximately 1000 characters; curated mode defaults to TOP 5 (use `--top 3` to adjust), with roughly 800-950 characters, suitable for direct single-post publishing
 - **The one-sentence introduction for each paper is generated by calling the MiMo LLM API** (anthropic protocol, bypassing proxy); falls back to local `extract_one_liner()` on LLM failure (prioritizes the first innovation item, then a sentence in summary containing "proposes/solves/aims to", then roast)
 - The script automatically cleans Markdown formatting (`**bold**`, `` `code` ``) and academic prefixes ("This paper aims to", "This paper addresses", etc.) to avoid platform rendering issues
 - Copy automatically includes emoji heat indicators: 🔥≥8 pts, ✅≥6 pts, 📝<6 pts (consistent with blog and WeChat)
 - Fixed blog link and open source repository link appended at the end; tags and `---` separators are not output
-- `--all` mode outputs longer content, suitable for split-posting or self-selecting highlights for publishing
+- `--all` mode outputs one full summary copy, suitable for manual splitting or self-selecting highlights for publishing
 
 ---
 
@@ -306,7 +307,7 @@ Publishing script: `scripts/publish-to-blog.py`
 
 - The `published` field is the paper's original publication date on arXiv, which may be earlier than today
 - **The blog's `YYYY-MM-DD` date represents the "crawled and analyzed today" batch**, not the paper's original publication date
-- `deep-analysis-result.json` is already the result of "today's fetch → deduplicate with `papers.json` → LLM filter"; all papers in it should be published under today's blog
+- `deep-analysis-result.json` may contain both newly analyzed papers for the day and previously preserved merged results; blog, WeChat, and Feishu publishing filter by `fetchedAt == --date` by default, so only papers matching the batch date are published under that date
 
 Current behavior:
 
@@ -315,35 +316,37 @@ Current behavior:
 - Generates in `~/code/github_repos/audio-paper-digest-blog/content/posts`:
   - Summary page: `YYYY-MM-DD.md`
   - Single paper page: `YYYY-MM-DD-<slug>.md`
-- By default executes `git add -A`, `git commit`, `git push origin main`
-- To publish all papers (no filtering), manually modify the script or use a custom data file
+- By default only generates Markdown files and runs review; it does not push
+- To publish all papers (no filtering), pass `--all` explicitly
 
 Agent execution constraints:
 
-- By default only allows using `--skip-push` mode to verify blog generation results
-- Only when the user explicitly requests "official publish / push blog" is `--skip-push` allowed to be omitted
+- By default only generate and verify blog output, without pushing
+- Only when the user explicitly requests "official publish / push blog" may `--push` be added
 - If only checking format, verifying new fields, or previewing artifacts, triggering a real `git push` is prohibited
 
 Pre-publish safeguards:
 
 - `full-fetch.js` automatically archives and moves yesterday's `deep-analysis-result.json`, `filtered-papers.json`, and `analyzed.json` when run daily, ensuring `data/current/` only contains newly fetched papers for the day
-- If non-current-day papers are accidentally mixed in, they will also be published under today's blog, so it is essential to ensure `data/current/` is cleared before each daily run
+- Publishing filters by `fetchedAt == --date` by default; still keep `data/current/` clean so validation, review, and `--all` publishing do not mix batches accidentally
 
 ### Correct Procedure for Re-running / Fixing the Same Day
 
-If the day's results need to be cleared and re-run:
+If the day's results need to be resumed or re-run:
 
-1. Delete `data/current/filtered-papers.json`, `data/current/deep-analysis-result.json`
-2. **Restore `papers.json` to yesterday's state** (recommended, more reliable than deleting IDs one by one):
+1. If `data/current/filtered-papers.json` is from today, has `status: complete`, and its `filterModel` / `filterPromptHash` match the current `.env` and `prompts/filter.md`, keep it and run `node scripts/full-fetch.js` to skip crawling/filtering and resume deep analysis. If the model or prompt changed, the main workflow will crawl/filter again.
+2. If filtering is incomplete but `data/current/filter-decisions.json` is from today and matches the current model/prompt hash, run `node scripts/full-fetch.js` to reuse existing per-paper decisions.
+3. To force a full refetch/refilter, delete `data/current/raw-candidates.json`, `data/current/filter-decisions.json`, `data/current/filtered-papers.json`, and `data/current/deep-analysis-result.json`.
+4. **Restore `papers.json` to yesterday's state only when necessary** (recommended over deleting IDs one by one):
    ```bash
    # Replace dedup DB with yesterday's backup (generated by backupPapersJson, format is papers-YYYY-MM-DD.json)
    cp data/archive/papers-2026-04-21.json data/current/papers.json
    ```
-3. Delete all `content/posts/YYYY-MM-DD-*.md` files in the blog repository for the day
-4. Re-run `npm run fetch`
+5. Delete all `content/posts/YYYY-MM-DD-*.md` files in the blog repository for the day
+6. Re-run `node scripts/full-fetch.js`
 
 **Special Scenario — Filtering Stage API Completely Fails (e.g., 34→0 papers):**
-- Even if filtering results in 0 papers, `papers.json` has already been contaminated (new IDs have been written), and must be cleaned and re-run following steps 1-2.
+- Even if filtering results in 0 papers, `papers.json` has already been contaminated (new IDs have been written), and must be cleaned/restored and re-run following steps 3-4.
 - If re-running immediately after fixing, `npm run batch` can be used to resume deep analysis (no need to re-fetch).
 
 **Key Lesson — Must Check `lastUpdated` Before Restoring `papers.json`:**
@@ -389,7 +392,7 @@ PY
 - Major Node scripts have handled background stdout buffering (`setBlocking`) for real-time progress viewing
 - `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` use retry and incremental saving to reduce data loss risk from interruptions
 - `reanalyze.js` saves intermediate results every 5 papers (save interval auto-adjusted in concurrent mode)
-- `npm run validate:data` performs read-only validation for current `papers.json`, `filter-decisions.json`, `filtered-papers.json`, and `deep-analysis-result.json`, including filter-count consistency; it does not repair data and exits non-zero on problems
+- `npm run validate:data` performs read-only validation for current `papers.json`, `raw-candidates.json`, `filter-decisions.json`, `filtered-papers.json`, and `deep-analysis-result.json`, including candidate stats and filter-count consistency; it does not repair data and exits non-zero on problems
 - `full-fetch.js` auto-backs up bak files to `data/archive/`, retaining the last 10
 - `full-fetch.js` auto-backs up `papers.json` to `data/archive/papers-<date>.json`, retaining the last 7 days
 
@@ -409,7 +412,7 @@ PY
 10. **New analysis scripts reuse analysis-engine.js**: When adding paper analysis-related scripts, prioritize reusing `analyzeBatch()` / `analyzePaperWithRetry()` from `analysis-engine.js` to avoid re-implementing retry, parsing, and saving logic; after saving results, sync `papers.json.digestStatus` through `scripts/digest-status.js`.
 11. **Blog verification defaults to no push**: When running `publish-to-blog.py` without explicit user authorization, `--skip-push` must be included. Formal `--push` requires LLM review availability; remaining code-level issues and `error` severity LLM/image review issues block the push, while `warning/info` is reported but does not directly block.
 12. **Output contract changes must sync parser**: If modifying `## Machine Summary` key names, section order, or tag output format in `prompts/deep-analysis.md`, you must synchronously check the parsing logic in `scripts/utils.js` and `scripts/utils.py`.
-13. **Artifact-level verification required after changes**: At minimum, spot-check one `data/current/deep-analysis-result.json` to confirm the presence of `rank_bucket`, `primary_task_tag`, `primary_method_tag`, and other fields, then run blog/social media scripts to verify final artifacts.
+13. **Artifact-level verification required after changes**: At minimum, spot-check one `data/current/deep-analysis-result.json` to confirm the `analysis` machine summary contains `rank_bucket`, `primary_task_tag`, and `primary_method_tag`, and the `parsed` cache contains camelCase fields such as `rankBucket`, `primaryTaskTag`, and `primaryMethodTag`; then run blog/social media scripts to verify final artifacts.
 14. **Verify prompt loading after changes**: After modifying markdown files in the `prompts/` directory, run a quick test (`node scripts/quick-test.js` or single-paper analysis) to confirm `loadPrompt()` can correctly read and replace placeholders without `{variableName}` residue.
 15. **Run unit tests after changes**: After modifying `scripts/utils.js`, `scripts/config.js`, or core analysis engine logic, you must run `npm test` to ensure tests pass.
 16. **MiMo API requests must disable proxy connection reuse**: In `fetch-papers.js` and `deep-analyzer.js`, when calling the LLM API, `options.agent` must be `false` (not `undefined`). During any refactoring or modification of HTTP request logic, changing `agent: false` back to `agent: proxyAgent` or `agent: undefined` is prohibited, otherwise MiMo Token Plan will return 403 in environments with system proxies.
@@ -558,22 +561,11 @@ node scripts/full-fetch.js
 
 If interrupted during the filtering stage, handle according to Section 6 "Correct Procedure for Re-running / Fixing the Same Day":
 1. Check if `papers.json`'s `lastUpdated` is today (see Section 6 judgment matrix)
-2. If today, do not restore papers.json, simply delete `filtered-papers.json` and re-run
+2. If today, do not restore papers.json; prefer resuming from today's `status: complete` `filtered-papers.json` when the filter model/hash match, and delete `filtered-papers.json` only when forcing a full refilter
 3. If yesterday or earlier, restore `papers.json` backup and re-run
 
 ---
 
-## 10. Related Sub-Skills
+## 10. Related Entrypoints
 
-### Lightweight Paper Digest
-
-#### arXiv Trending (`references/arxiv-digest.md`)
-Daily AI/ML trending papers from HuggingFace Papers with accessible interpretations. Fetches trending papers, ranks by combined score (position + upvotes + freshness), generates plain-language summaries. Supports automated daily delivery via cron.
-- Script: `scripts/fetch_papers.py`
-- Output: JSON or Markdown
-- Deduplication: history tracking
-
-#### Daily Paper Digest (`references/daily-paper-digest.md`)
-Aggregates latest AI papers from arXiv and HuggingFace, formats output for chat apps (Feishu, Slack, Discord). Configurable sources and keyword filters via `config/sources.json`.
-- Scripts: `main.py`, `arxiv_fetcher.py`, `huggingface_fetcher.py`
-- Triggers: `论文速递`, `今日论文`, `最新论文`, `/papers`, `/digest`
+This repository does not currently contain a standalone `references/` sub-skill directory, nor legacy entrypoints such as `scripts/fetch_papers.py` or `main.py`. Use the Node/Python scripts listed in Section 3 as the source of truth. New conference or special-topic flows should be explicitly registered in their branch-specific docs.
