@@ -56,6 +56,7 @@ set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
 | `PAPER_DIGEST_BLOG_REPO` | Hugo 博客仓库本地路径 | `~/code/github_repos/audio-paper-digest-blog` |
 | `PAPER_DIGEST_BLOG_BASE_PATH` | 博客站点 base URL 路径（影响内部链接） | `/audio-paper-digest-blog` |
 | `PAPER_DIGEST_BLOG_URL` | 博客部署后的访问地址（如 `https://nanless.github.io/audio-paper-digest-blog/posts`） | `https://nanless.github.io/audio-paper-digest-blog/posts` |
+| `PAPER_DIGEST_REPO_URL` | 小红书等文案中附带的项目仓库地址 | `github.com/nanless/audio-paper-digest` |
 | `PAPER_DIGEST_GITHUB_REMOTE` | Git 远程仓库名称 | `origin` |
 
 #### 微信公众号
@@ -66,6 +67,12 @@ set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
 | `WECHAT_APP_SECRET` | 微信公众号 AppSecret |
 | `WECHAT_THUMB_MEDIA_ID` | 封面图永久素材 ID（可选，未设置时使用默认素材） |
 | `PAPER_DIGEST_AUTHOR` | 微信公众号文章作者名（可选） |
+
+#### 小红书
+
+| 变量 | 说明 |
+|------|------|
+| `XIAOHONGSHU_COOKIES` | 小红书自动发布 Cookie；可通过 `npm run xhs-login` 获取 |
 
 #### 飞书文档
 
@@ -242,9 +249,9 @@ FEISHU_APP_SECRET=your-full-app-secret
    with open('data/current/deep-analysis-result.json') as f:
        d = json.load(f)
    papers = d.get('papers', [])
-   dates = [p.get('published', '')[:10] for p in papers if p.get('published')]
+   dates = [p.get('fetchedAt', '')[:10] for p in papers if p.get('fetchedAt')]
    print('总论文:', len(papers))
-   print('日期分布:', Counter(dates))
+   print('fetchedAt 批次日期分布:', Counter(dates))
    PY
    ```
 

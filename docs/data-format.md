@@ -90,7 +90,7 @@
 ### 5.3 `data/current/filter-decisions.json`
 
 LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只有 `filterModel` 和 `filterPromptHash` 与当前配置一致才会复用。
-`npm run validate:data` 会检查 `stats.decided` 是否等于 `decisions` 数量、`stats.related` 是否等于 `related: true` 数量，并要求每条决策的 `related` 为布尔值，`reason` / `rawResponse` / `parseSource` 等字段为字符串。
+`npm run validate:data` 会检查 `stats.decided` 是否等于 `decisions` 数量、`stats.related` 是否等于 `related: true` 数量，并要求每条决策的 `related` 为布尔值，`reason` / `rawResponse` / `parseSource` 等字段为字符串。若 `stats.complete=true`，还会要求 `decisions` 覆盖 `raw-candidates.json` 中的全部候选论文。
 
 ```json
 {
@@ -173,9 +173,12 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只有 `fi
 
 `complete` 状态必须满足：
 - `filterModel` 和 `filterPromptHash` 存在，用于判断同日筛选结果是否可被当前配置安全复用
+- `filterModel` / `filterPromptHash` 与 `filter-decisions.json` 根字段一致
+- `stats.afterBlogSkip` 等于 `filter-decisions.json.stats.totalCandidates`
 - `stats.decisionCount` 等于 `filter-decisions.json.decisions` 数量
 - `stats.afterFilter` 等于 `filter-decisions.json` 中 `related: true` 的数量
 - `stats.afterArchiveSkip` 等于最终 `papers.length`
+- 当 `stats.afterBlogSkip` 大于最终 `papers.length` 时，必须保留同批次 `raw-candidates.json` 以便审计筛选输入全集
 
 这些约束由 `npm run validate:data` 只读检查，避免筛选缓存损坏后被续跑流程误用。
 

@@ -63,7 +63,7 @@
 
 只读校验当前运行数据结构。
 - 默认检查 `data/current/papers.json`、`data/current/raw-candidates.json`、`data/current/filtered-papers.json`、`data/current/deep-analysis-result.json`
-- 额外检查 `data/current/filter-decisions.json`；校验 `digestStatus.status` 枚举、候选统计关系、筛选状态枚举、筛选复用所需的 `filterModel` / `filterPromptHash`、论文 ID、`sourceHealth` 基本形状、评分范围、深度分析 `stats.totalAfterMerge`、图片字段数组、`imageManifest` 类型，以及筛选决策数量/相关数量和 `filtered-papers.json` 统计字段的一致性
+- 额外检查 `data/current/filter-decisions.json`；校验 `digestStatus.status` / `latestAttemptStatus` 枚举、候选统计关系、筛选状态枚举、筛选复用所需的 `filterModel` / `filterPromptHash` 及其与决策缓存的一致性、论文 ID、`sourceHealth` 基本形状、评分范围、深度分析 `stats.totalAfterMerge`、图片字段数组、`imageManifest` 类型、筛选决策数量/相关数量和 `filtered-papers.json` 统计字段的一致性，以及 `complete=true` 决策缓存对 `raw-candidates.json` 候选全集的覆盖
 - 不修改任何数据；发现问题时输出错误并以非零状态退出
 - npm 入口：`npm run validate:data`
 
@@ -417,7 +417,7 @@ Python 发布/维护脚本共享路径配置。集中提供 `PROJECT_ROOT`、`DA
 - 支持 `--date YYYY-MM-DD` 指定日期
 - 若没有匹配 `fetchedAt == --date` 的论文，脚本会停止生成，避免跨日混入历史论文
 - 输出到 `data/current/xiaohongshu-YYYY-MM-DD-<suffix>.md`
-- **每篇论文的一句话介绍调用 MiMo LLM API 生成**（anthropic 协议，`session.trust_env = False` 绕过代理）；输入优先使用 `parsed.summary/results/limitations/opensource` 和主标签，再回退摘要；LLM 失败时回退到本地 `extract_one_liner()`
+- **每篇论文的一句话介绍调用发布阶段 LLM API 生成**（复用 `publish_common.py` 的协议路由，`session.trust_env = False` 绕过代理）；输入优先使用 `parsed.summary/results/limitations/opensource` 和主标签，再回退摘要；LLM 失败时回退到本地 `extract_one_liner()`
 - 自动清理 Markdown 格式和学术化前缀
 - 附带 emoji 热度标识：🔥≥8 分、✅≥6 分、📝<6 分（与博客、微信统一）
 - 少于 1000 字，不输出标签和 `---` 分隔线，开源信息标注清晰

@@ -72,6 +72,36 @@ function loadCompleteFilteredForToday(today, filePath = FILTERED_FILE, expected 
     return data;
 }
 
+function loadCurrentSuccessfulAnalysisIds(filePath = RESULT_FILE, today = null) {
+    const data = readJsonSafe(filePath, null);
+    if (!data) return new Set();
+    const papers = Array.isArray(data) ? data : (data.papers || []);
+    const ids = new Set();
+    for (const paper of papers) {
+        if (!paper || !paper.analysis) continue;
+        if (today) {
+            const paperDate = (paper.fetchedAt || paper.timestamp || '').slice(0, 10);
+            if (paperDate && paperDate !== today) continue;
+        }
+        const id = normalizedId(paper);
+        if (id) ids.add(id);
+    }
+    return ids;
+}
+
+function loadTodayPapersFromDatabase(papersData, today) {
+    const papers = [];
+    for (const paper of Object.values(papersData?.papers || {})) {
+        const recordDate = paper.digestStatus?.batchDate
+            || (paper.fetchedAt || '').slice(0, 10)
+            || getRecordDate(paper);
+        if (recordDate === today) {
+            papers.push(paper);
+        }
+    }
+    return papers;
+}
+
 function buildSourceHealth(sourceHealth, arxivPapers, hfPapers) {
     const arxivCategories = sourceHealth.arxiv?.categories || [];
     const arxivFailed = arxivCategories.filter(c => c.ok === false).length;
@@ -369,7 +399,10 @@ async function fullFetch() {
         filteredNew = completedFiltered.papers;
         filtered = completedFiltered.papers;
         const rawCandidates = loadTodayJsonFile(RAW_CANDIDATES_FILE, today);
-        allPapers = Array.isArray(rawCandidates?.papers) ? rawCandidates.papers : filteredNew;
+        const databaseTodayPapers = loadTodayPapersFromDatabase(papersData, today);
+        allPapers = Array.isArray(rawCandidates?.papers)
+            ? rawCandidates.papers
+            : (databaseTodayPapers.length >= filteredNew.length ? databaseTodayPapers : filteredNew);
         allPapersFiltered = allPapers.filter(paper => !publishedIds.has(normalizedId(paper)));
         const existingDecisions = loadReusableFilterDecisions(today, filterModel, filterPromptHash);
         filterDecisions = existingDecisions;
@@ -642,6 +675,9 @@ async function fullFetch() {
         console.log(`💾 筛选结果已保存到: ${FILTERED_FILE}`);
     }
 
+    const outputFile = fs.existsSync(RESULT_FILE) || !fs.existsSync(LEGACY_RESULT_FILE) ? RESULT_FILE : LEGACY_RESULT_FILE;
+    const successfulAnalysisIds = loadCurrentSuccessfulAnalysisIds(outputFile, today);
+
     // ========== 第4.8步：保存所有爬到论文到 papers.json（提前保存，防止后续中断丢失）==========
     console.log('\n💾 保存所有爬取论文到 papers.json 去重数据库');
     let newPaperCount = 0;
@@ -651,13 +687,15 @@ async function fullFetch() {
         const rawId = paper.paper_id || paper.arxivId;
         const normId = normalizedId(rawId);
         if (!normId) continue;
-        const status = filteredNewIds.has(normId) ? 'pending_analysis' : 'seen';
+        const status = successfulAnalysisIds.has(normId) ? 'analyzed' : (filteredNewIds.has(normId) ? 'pending_analysis' : 'seen');
         const decision = filterDecisions[normId];
         const nextPaper = markPaperDigestStatus(
             { ...(papersData.papers[normId] || {}), ...paper },
             status,
             {
                 batchDate: today,
+                latestAttemptStatus: successfulAnalysisIds.has(normId) ? 'analyzed' : undefined,
+                error: successfulAnalysisIds.has(normId) ? null : undefined,
                 filterDecision: typeof decision?.related === 'boolean' ? decision.related : null,
                 filterReason: decision?.reason || '',
                 filterRawResponse: decision?.rawResponse || '',
@@ -682,6 +720,11 @@ async function fullFetch() {
 
     // ========== 第五步：深度分析 ==========
     console.log('\n🔬 第五步：深度分析每篇论文');
+    const papersToAnalyze = filteredNew.filter(paper => !successfulAnalysisIds.has(normalizedId(paper)));
+    const skippedAlreadyAnalyzed = filteredNew.length - papersToAnalyze.length;
+    if (skippedAlreadyAnalyzed > 0) {
+        console.log(`  ⏭️ 跳过 ${skippedAlreadyAnalyzed} 篇已有成功分析的论文，仅续跑剩余 ${papersToAnalyze.length} 篇`);
+    }
     const analyzedPapers = [];
     let saveInProgress = false;
     let pendingSave = false;
@@ -698,7 +741,6 @@ async function fullFetch() {
             return;
         }
         saveInProgress = true;
-        const outputFile = fs.existsSync(RESULT_FILE) || !fs.existsSync(LEGACY_RESULT_FILE) ? RESULT_FILE : LEGACY_RESULT_FILE;
         const snapshot = analyzedPapers.slice();
         mergeAndSaveResults(snapshot, outputFile, {
             timestamp: getBeijingISOString(),
@@ -725,7 +767,7 @@ async function fullFetch() {
         });
     };
 
-    const { stats: analysisStats } = await analyzeBatch(filteredNew, {
+    const { stats: analysisStats } = await analyzeBatch(papersToAnalyze, {
         concurrency: ANALYSIS_CONCURRENCY,
         maxRetries: ANALYSIS_RETRY_MAX,
         retryDelayMs: ANALYSIS_RETRY_DELAY_MS,
@@ -749,7 +791,7 @@ async function fullFetch() {
             const batchFailed = batchResults.length - batchSuccess;
             const batchScores = batchResults.filter(r => r.success && r.parsed?.score).map(r => r.parsed.score);
             const batchScoreInfo = batchScores.length > 0 ? ` 评分: ${batchScores.join(', ')}` : '';
-            const totalBatches = Math.ceil(filteredNew.length / ANALYSIS_CONCURRENCY);
+            const totalBatches = Math.ceil(papersToAnalyze.length / ANALYSIS_CONCURRENCY);
             console.log(`  ── 批次 ${batchNum}/${totalBatches} 完成: 成功 ${batchSuccess}/${batchResults.length}${batchScoreInfo}${batchFailed > 0 ? ` | 失败 ${batchFailed}` : ''}\n`);
 
             // 收集成功结果到 analyzedPapers
@@ -769,8 +811,6 @@ async function fullFetch() {
     // ========== 第六步：保存深度分析结果 ==========
     console.log('\n💾 第六步：保存深度分析结果');
     await waitForIncrementalSave();
-
-    const outputFile = fs.existsSync(RESULT_FILE) || !fs.existsSync(LEGACY_RESULT_FILE) ? RESULT_FILE : LEGACY_RESULT_FILE;
 
     let existingPapers = [];
     let existingTimestamp = null;
@@ -901,5 +941,7 @@ module.exports = {
     getSourceFetchedCount,
     getSourceFailures,
     getFatalEmptyCandidateSourceFailures,
-    loadCompleteFilteredForToday
+    loadCompleteFilteredForToday,
+    loadCurrentSuccessfulAnalysisIds,
+    loadTodayPapersFromDatabase
 };

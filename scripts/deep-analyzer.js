@@ -290,7 +290,11 @@ function getArxivHtmlIds(arxivId) {
         const base = id.replace(/v\d+$/i, '');
         return [id, base];
     }
-    return [`${id}v1`, `${id}v2`, id];
+    return [id, `${id}v2`, `${id}v1`];
+}
+
+function isStableArxivHtmlMiss(status) {
+    return status === 400 || status === 403 || status === 404;
 }
 
 /**
@@ -300,6 +304,7 @@ function getArxivHtmlIds(arxivId) {
 async function fetchArxivText(arxivId) {
     const maxRetries = 6;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        let shouldRetryHtml = false;
         for (const htmlId of getArxivHtmlIds(arxivId)) {
             const url = `https://arxiv.org/html/${htmlId}`;
             try {
@@ -309,6 +314,7 @@ async function fetchArxivText(arxivId) {
                 });
 
                 if (response.status === 429) {
+                    shouldRetryHtml = true;
                     const baseWait = Math.min(Math.pow(2, attempt) * 8000, 120000);
                     const jitter = Math.floor(Math.random() * 5000);
                     const waitTime = baseWait + jitter;
@@ -353,10 +359,19 @@ async function fetchArxivText(arxivId) {
 
                     return content;
                 }
+                console.log(`    [deep] fetchArxivText ${htmlId} HTTP ${response.status}`);
+                if (!isStableArxivHtmlMiss(response.status)) {
+                    shouldRetryHtml = true;
+                }
             } catch (e) {
+                shouldRetryHtml = true;
                 console.log(`    [deep] fetchArxivText ${htmlId} error: ${e.message}`);
                 continue;
             }
+        }
+        if (!shouldRetryHtml) {
+            console.log(`    [deep] fetchArxivText ${arxivId} HTML stable miss, trying PDF fallback...`);
+            break;
         }
         if (attempt < maxRetries) {
             const baseDelay = attempt * 3000;

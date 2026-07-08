@@ -53,7 +53,14 @@ describe('validate-data-files', () => {
 
         fs.writeFileSync(papersFile, JSON.stringify({
             papers: {
-                bad: { arxivId: '2607.00001', digestStatus: { status: 'done' } }
+                bad: {
+                    arxivId: '2607.00001',
+                    digestStatus: {
+                        status: 'done',
+                        latestAttemptStatus: 'pending_analysis',
+                        error: { message: 'timeout' }
+                    }
+                }
             }
         }));
         fs.writeFileSync(resultFile, JSON.stringify({
@@ -64,7 +71,10 @@ describe('validate-data-files', () => {
             }]
         }));
 
-        assert.match(validatePapersDatabase(papersFile).join('\n'), /digestStatus\.status/);
+        const paperIssues = validatePapersDatabase(papersFile).join('\n');
+        assert.match(paperIssues, /digestStatus\.status/);
+        assert.match(paperIssues, /digestStatus\.latestAttemptStatus/);
+        assert.match(paperIssues, /digestStatus\.error/);
         const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
         assert.match(issues, /parsed\.score/);
         assert.match(issues, /selectedImageUrls/);
@@ -79,8 +89,8 @@ describe('validate-data-files', () => {
         fs.writeFileSync(rawCandidatesFile, JSON.stringify({
             stats: {
                 beforeBlogSkip: 3,
-                afterBlogSkip: 1,
-                skippedFromBlog: 2,
+                afterBlogSkip: 3,
+                skippedFromBlog: 0,
                 arxivOnly: 1,
                 hfOnly: 1,
                 both: 1
@@ -89,13 +99,18 @@ describe('validate-data-files', () => {
                 arxiv: { categories: [{ id: 'cs.SD', ok: true }] },
                 huggingface: { ok: true }
             },
-            papers: [{ arxivId: '2607.00001' }]
+            papers: [
+                { arxivId: '2607.00001' },
+                { arxivId: '2607.00002' },
+                { arxivId: '2607.00003' }
+            ]
         }));
         fs.writeFileSync(filteredFile, JSON.stringify({
             status: 'complete',
             filterModel: 'model-a',
             filterPromptHash: 'hash-a',
             stats: {
+                afterBlogSkip: 3,
                 afterFilter: 2,
                 afterArchiveSkip: 1,
                 decisionCount: 3
@@ -172,6 +187,7 @@ describe('validate-data-files', () => {
             filterModel: 'model-a',
             filterPromptHash: 'hash-a',
             stats: {
+                afterBlogSkip: 3,
                 afterFilter: 2,
                 afterArchiveSkip: 2,
                 decisionCount: 2
@@ -180,10 +196,13 @@ describe('validate-data-files', () => {
         }));
         fs.writeFileSync(decisionsFile, JSON.stringify({
             stats: {
+                totalCandidates: 4,
                 decided: 2,
                 related: 2,
                 complete: 'yes'
             },
+            filterModel: 'model-b',
+            filterPromptHash: 'hash-b',
             decisions: {
                 '2607.00001': { id: '2607.00001', related: true, reason: 'audio' }
             }
@@ -203,8 +222,53 @@ describe('validate-data-files', () => {
             filterDecisions: decisionsFile,
             deepAnalysisResult: path.join(dir, 'missing-analysis.json')
         }).join('\n');
+        assert.match(allIssues, /filterModel/);
+        assert.match(allIssues, /filterPromptHash/);
+        assert.match(allIssues, /stats\.afterBlogSkip/);
         assert.match(allIssues, /stats\.decisionCount/);
         assert.match(allIssues, /stats\.afterFilter/);
+        assert.match(allIssues, /raw-candidates\.json 缺失/);
+    });
+
+    it('报告 raw-candidates 与 filter-decisions 覆盖不一致', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-'));
+        const rawCandidatesFile = path.join(dir, 'raw-candidates.json');
+        const decisionsFile = path.join(dir, 'filter-decisions.json');
+
+        fs.writeFileSync(rawCandidatesFile, JSON.stringify({
+            stats: {
+                beforeBlogSkip: 2,
+                afterBlogSkip: 2,
+                skippedFromBlog: 0,
+                arxivOnly: 2,
+                hfOnly: 0,
+                both: 0
+            },
+            papers: [{ arxivId: '2607.00001' }, { arxivId: '2607.00002' }]
+        }));
+        fs.writeFileSync(decisionsFile, JSON.stringify({
+            stats: {
+                totalCandidates: 3,
+                decided: 1,
+                related: 1,
+                complete: true
+            },
+            decisions: {
+                '2607.00001': { id: '2607.00001', related: true, reason: 'audio' }
+            }
+        }));
+
+        const issues = validateCurrentDataFiles({
+            papers: path.join(dir, 'missing-papers.json'),
+            rawCandidates: rawCandidatesFile,
+            filterDecisions: decisionsFile,
+            filteredPapers: path.join(dir, 'missing-filtered.json'),
+            deepAnalysisResult: path.join(dir, 'missing-analysis.json')
+        }).join('\n');
+
+        assert.match(issues, /stats\.afterBlogSkip/);
+        assert.match(issues, /complete=true 时 decisions 数量/);
+        assert.match(issues, /缺少 raw-candidates\.json papers\[1\]/);
     });
 
     it('报告缺少筛选复用元数据、决策缓存和深度分析统计问题', () => {

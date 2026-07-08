@@ -68,6 +68,7 @@ async function reanalyzeAll() {
     // 保存中间结果的辅助函数
     const isLegacyArray = Array.isArray(data);
     const batchDate = (data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10);
+    const attemptResults = [];
     const doSave = () => {
         const payload = isLegacyArray
             ? { papers, timestamp: getBeijingISOString() }
@@ -76,7 +77,7 @@ async function reanalyzeAll() {
             payload.timestamp = getBeijingISOString();
         }
         writeFileAtomic(DATA_FILE, JSON.stringify(payload, null, 2));
-        return updateAnalysisDigestStatuses(papers, { batchDate });
+        return updateAnalysisDigestStatuses(attemptResults, { batchDate });
     };
 
     // 预先建立 ID -> 索引映射，避免并发时 findIndex 可能找到错误位置
@@ -100,6 +101,14 @@ async function reanalyzeAll() {
                 if (targetIdx !== undefined) {
                     papers[targetIdx] = result.result;
                 }
+                attemptResults.push(result.result);
+            } else if (!result.skipped) {
+                attemptResults.push(result.result || {
+                    ...paper,
+                    analysis: null,
+                    parsed: null,
+                    error: result.error || '分析失败'
+                });
             }
             if (CONCURRENCY > 1) {
                 const status = result.success ? '✅' : '❌';
@@ -134,7 +143,7 @@ async function reanalyzeAll() {
         };
     }
     writeFileAtomic(DATA_FILE, JSON.stringify(finalPayload, null, 2));
-    const digestStatus = updateAnalysisDigestStatuses(papers, { batchDate });
+    const digestStatus = updateAnalysisDigestStatuses(attemptResults, { batchDate });
 
     console.log('');
     console.log(`[reanalyze] ════════════════════════════════════════════`);

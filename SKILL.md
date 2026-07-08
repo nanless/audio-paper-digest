@@ -293,7 +293,7 @@ npm run xiaohongshu -- --date 2026-04-22
 **小红书发布经验：**
 
 - 小红书单帖正文限制约 1000 字，精选模式默认 TOP 5（可用 `--top 3` 调整），正文约 800-950 字符，适合单帖直接发布
-- **每篇论文的一句话介绍调用 MiMo LLM API 生成**（anthropic 协议，绕过代理），LLM 失败时回退到本地 `extract_one_liner()`（优先取 innovation 第一条，其次 summary 中含"提出了/解决了/旨在"的句子，最后 roast）
+- **每篇论文的一句话介绍调用发布阶段 LLM API 生成**（复用 `publish_common.py` 的协议路由并绕过代理），LLM 失败时回退到本地 `extract_one_liner()`（优先取 innovation 第一条，其次 summary 中含"提出了/解决了/旨在"的句子，最后 roast）
 - LLM one-liner 优先使用深度分析的 `parsed.summary`、`parsed.results`、`parsed.limitations`、`parsed.opensource` 与主标签，再回退摘要，避免只复述标题
 - 脚本会自动清理 Markdown 格式（`**加粗**`、`` 代码 ``）和学术化前缀（"这篇论文旨在"、"本文针对"等），避免平台渲染异常
 - 文案自动附带 emoji 热度标识：🔥≥8 分、✅≥6 分、📝<6 分（与博客、微信统一）
@@ -380,9 +380,9 @@ from collections import Counter
 with open('data/current/deep-analysis-result.json') as f:
     d = json.load(f)
 papers = d.get('papers', [])
-dates = [p.get('published', '')[:10] for p in papers if p.get('published')]
+dates = [p.get('fetchedAt', '')[:10] for p in papers if p.get('fetchedAt')]
 print('总论文:', len(papers))
-print('日期分布:', Counter(dates))
+print('fetchedAt 批次日期分布:', Counter(dates))
 PY
 ```
 
@@ -398,7 +398,7 @@ PY
 - 主要 Node 脚本已处理后台 stdout 缓冲（`setBlocking`），便于实时查看进度
 - `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` 采用重试与增量保存，降低中断丢数风险
 - `reanalyze.js` 每 5 篇保存一次中间结果（并发模式下自动调整保存间隔）
-- 可运行 `npm run validate:data` 只读校验当前 `papers.json`、`raw-candidates.json`、`filter-decisions.json`、`filtered-papers.json`、`deep-analysis-result.json` 的结构、候选统计和筛选计数一致性；该命令不修复数据，发现问题会非零退出
+- 可运行 `npm run validate:data` 只读校验当前 `papers.json`、`raw-candidates.json`、`filter-decisions.json`、`filtered-papers.json`、`deep-analysis-result.json` 的结构、候选统计、筛选计数一致性，以及完整筛选决策对候选全集的覆盖；该命令不修复数据，发现问题会非零退出
 - `full-fetch.js` 自动备份 bak 文件到 `data/archive/`，保留最近 10 个
 - `full-fetch.js` 自动备份 `papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天
 

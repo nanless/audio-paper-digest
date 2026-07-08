@@ -6,6 +6,7 @@ const Config = require('./config.js');
 const { readJsonSafe, normalizedId } = require('./utils.js');
 
 const ALLOWED_DIGEST_STATUSES = new Set(['seen', 'pending_analysis', 'analyzed', 'analysis_failed']);
+const ALLOWED_ANALYSIS_ATTEMPT_STATUSES = new Set(['analyzed', 'analysis_failed']);
 const ALLOWED_FILTERED_STATUSES = new Set(['filtering', 'filter_complete', 'complete']);
 const DEFAULT_FILTER_DECISIONS_FILE = Config.FILES.filterDecisions;
 
@@ -45,6 +46,14 @@ function validatePapersDatabase(filePath = Config.FILES.papers) {
         const status = paper.digestStatus?.status;
         if (status && !ALLOWED_DIGEST_STATUSES.has(status)) {
             addIssue(issues, filePath, `${key} digestStatus.status 非法: ${status}`);
+        }
+        const latestAttemptStatus = paper.digestStatus?.latestAttemptStatus;
+        if (latestAttemptStatus && !ALLOWED_ANALYSIS_ATTEMPT_STATUSES.has(latestAttemptStatus)) {
+            addIssue(issues, filePath, `${key} digestStatus.latestAttemptStatus 非法: ${latestAttemptStatus}`);
+        }
+        const error = paper.digestStatus?.error;
+        if (error !== undefined && error !== null && typeof error !== 'string') {
+            addIssue(issues, filePath, `${key} digestStatus.error 必须是字符串或 null`);
         }
     }
     return issues;
@@ -310,10 +319,23 @@ function validateFilterArtifactsConsistency(filteredPath, decisionsPath) {
 
     const papers = Array.isArray(filtered.papers) ? filtered.papers : null;
     const stats = isPlainObject(filtered.stats) ? filtered.stats : {};
+    const decisionStats = isPlainObject(decisionData.stats) ? decisionData.stats : {};
     const decisions = Object.values(decisionData.decisions).filter(isPlainObject);
     const decisionCount = Object.keys(decisionData.decisions).length;
     const relatedCount = decisions.filter(decision => decision.related === true).length;
 
+    for (const field of ['filterModel', 'filterPromptHash']) {
+        if (filtered[field] !== undefined && decisionData[field] !== undefined && filtered[field] !== decisionData[field]) {
+            addIssue(issues, filteredPath, `${field} (${filtered[field]}) 必须等于 filter-decisions.json ${field} (${decisionData[field]})`);
+        }
+    }
+    if (
+        Number.isInteger(stats.afterBlogSkip)
+        && Number.isInteger(decisionStats.totalCandidates)
+        && stats.afterBlogSkip !== decisionStats.totalCandidates
+    ) {
+        addIssue(issues, filteredPath, `stats.afterBlogSkip (${stats.afterBlogSkip}) 必须等于 filter-decisions.json stats.totalCandidates (${decisionStats.totalCandidates})`);
+    }
     if (stats.decisionCount !== undefined && Number.isInteger(stats.decisionCount) && stats.decisionCount !== decisionCount) {
         addIssue(issues, filteredPath, `stats.decisionCount (${stats.decisionCount}) 必须等于 filter-decisions.json decisions 数量 (${decisionCount})`);
     }
@@ -327,6 +349,46 @@ function validateFilterArtifactsConsistency(filteredPath, decisionsPath) {
     return issues;
 }
 
+function validateRawCandidateFilterConsistency(rawPath, decisionsPath) {
+    const issues = [];
+    if (!rawPath || !decisionsPath) return issues;
+    if (!fs.existsSync(rawPath) || !fs.existsSync(decisionsPath)) return issues;
+
+    const raw = readJsonSafe(rawPath, null);
+    const decisionData = readJsonSafe(decisionsPath, null);
+    if (!isPlainObject(raw) || !isPlainObject(decisionData) || !isPlainObject(decisionData.decisions)) {
+        return issues;
+    }
+
+    const rawPapers = Array.isArray(raw.papers) ? raw.papers : [];
+    const rawStats = isPlainObject(raw.stats) ? raw.stats : {};
+    const decisionStats = isPlainObject(decisionData.stats) ? decisionData.stats : {};
+    const decisionCount = Object.keys(decisionData.decisions).length;
+
+    if (
+        Number.isInteger(rawStats.afterBlogSkip)
+        && Number.isInteger(decisionStats.totalCandidates)
+        && rawStats.afterBlogSkip !== decisionStats.totalCandidates
+    ) {
+        addIssue(issues, rawPath, `stats.afterBlogSkip (${rawStats.afterBlogSkip}) 必须等于 filter-decisions.json stats.totalCandidates (${decisionStats.totalCandidates})`);
+    }
+
+    if (decisionStats.complete === true) {
+        if (decisionCount !== rawPapers.length) {
+            addIssue(issues, decisionsPath, `complete=true 时 decisions 数量 (${decisionCount}) 必须等于 raw-candidates.json papers 数量 (${rawPapers.length})`);
+        }
+        const decisionIds = new Set(Object.keys(decisionData.decisions).map(normalizedId).filter(Boolean));
+        for (const [index, paper] of rawPapers.entries()) {
+            const id = normalizedId(paper);
+            if (id && !decisionIds.has(id)) {
+                addIssue(issues, decisionsPath, `complete=true 但缺少 raw-candidates.json papers[${index}] (${id}) 的筛选决策`);
+            }
+        }
+    }
+
+    return issues;
+}
+
 function validateRequiredCompanionFiles(files, filterDecisions) {
     const issues = [];
     if (!files.filteredPapers || !fs.existsSync(files.filteredPapers)) return issues;
@@ -334,8 +396,17 @@ function validateRequiredCompanionFiles(files, filterDecisions) {
     const filtered = readJsonSafe(files.filteredPapers, null);
     if (!isPlainObject(filtered)) return issues;
     const stats = isPlainObject(filtered.stats) ? filtered.stats : {};
+    const papers = Array.isArray(filtered.papers) ? filtered.papers : [];
     if (stats.decisionCount !== undefined && !fs.existsSync(filterDecisions)) {
         addIssue(issues, filterDecisions, '有 filtered-papers.json stats.decisionCount，但 filter-decisions.json 缺失，无法校验逐篇筛选决策');
+    }
+    if (
+        Number.isInteger(stats.afterBlogSkip)
+        && stats.afterBlogSkip > papers.length
+        && (!files.rawCandidates || !fs.existsSync(files.rawCandidates))
+    ) {
+        const rawCandidates = files.rawCandidates || path.join(path.dirname(files.filteredPapers), 'raw-candidates.json');
+        addIssue(issues, rawCandidates, 'filtered-papers.json 显示存在被筛掉的候选论文，但 raw-candidates.json 缺失，无法校验筛选输入全集');
     }
     return issues;
 }
@@ -349,6 +420,7 @@ function validateCurrentDataFiles(files = Config.FILES) {
         ...validatePaperListFile(files.filteredPapers, { filtered: true }),
         ...validatePaperListFile(files.deepAnalysisResult, { deepAnalysis: true }),
         ...validateFilterArtifactsConsistency(files.filteredPapers, filterDecisions),
+        ...validateRawCandidateFilterConsistency(files.rawCandidates, filterDecisions),
         ...validateRequiredCompanionFiles(files, filterDecisions)
     ];
 }

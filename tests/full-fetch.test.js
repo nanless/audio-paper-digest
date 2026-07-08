@@ -116,4 +116,37 @@ describe('full-fetch helpers', () => {
         assert.strictEqual(loadCompleteFilteredForToday('2026-07-08', file), null);
         assert.strictEqual(loadCompleteFilteredForToday('2026-07-09', file), null);
     });
+
+    it('从当前分析结果识别今日已有成功分析论文', () => {
+        const { loadCurrentSuccessfulAnalysisIds } = require('../scripts/full-fetch.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-analysis-ids-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+
+        fs.writeFileSync(file, JSON.stringify({
+            timestamp: '2026-07-08T10:00:00+08:00',
+            papers: [
+                { arxivId: '2607.00001v2', fetchedAt: '2026-07-08T09:00:00+08:00', analysis: 'ok' },
+                { arxivId: '2607.00002', fetchedAt: '2026-07-08T09:00:00+08:00', error: 'failed' },
+                { arxivId: '2607.00003', fetchedAt: '2026-07-07T09:00:00+08:00', analysis: 'old' }
+            ]
+        }));
+
+        assert.deepStrictEqual(
+            Array.from(loadCurrentSuccessfulAnalysisIds(file, '2026-07-08')),
+            ['2607.00001']
+        );
+    });
+
+    it('从 papers.json 恢复当天候选论文', () => {
+        const { loadTodayPapersFromDatabase } = require('../scripts/full-fetch.js');
+        const papers = loadTodayPapersFromDatabase({
+            papers: {
+                a: { arxivId: '2607.00001', fetchedAt: '2026-07-08T09:00:00+08:00' },
+                b: { arxivId: '2607.00002', lastUpdated: '2026-07-07T09:00:00+08:00', digestStatus: { batchDate: '2026-07-08' } },
+                c: { arxivId: '2607.00003', fetchedAt: '2026-07-07T09:00:00+08:00' }
+            }
+        }, '2026-07-08');
+
+        assert.deepStrictEqual(papers.map(p => p.arxivId), ['2607.00001', '2607.00002']);
+    });
 });

@@ -86,7 +86,7 @@ When `papers` is empty and `sourceHealth` contains failures, the main workflow o
 ### 5.3 `data/current/filter-decisions.json`
 
 Per-paper LLM filtering decision cache. It is written after every batch; reruns only reuse it when `filterModel` and `filterPromptHash` match the current configuration.
-`npm run validate:data` checks that `stats.decided` equals the number of `decisions`, `stats.related` equals the number of decisions with `related: true`, each decision has a boolean `related`, and fields such as `reason` / `rawResponse` / `parseSource` are strings when present.
+`npm run validate:data` checks that `stats.decided` equals the number of `decisions`, `stats.related` equals the number of decisions with `related: true`, each decision has a boolean `related`, and fields such as `reason` / `rawResponse` / `parseSource` are strings when present. When `stats.complete=true`, `decisions` must cover every candidate in `raw-candidates.json`.
 
 ```json
 {
@@ -169,9 +169,12 @@ New-format allowed `status` values are `filtering`, `filter_complete`, and `comp
 
 For `complete` output:
 - `filterModel` and `filterPromptHash` must exist so same-day filtered output can be safely matched against the current configuration before reuse
+- `filterModel` / `filterPromptHash` must match the root fields in `filter-decisions.json`
+- `stats.afterBlogSkip` must equal `filter-decisions.json.stats.totalCandidates`
 - `stats.decisionCount` must equal the number of entries in `filter-decisions.json.decisions`
 - `stats.afterFilter` must equal the number of `filter-decisions.json` entries with `related: true`
 - `stats.afterArchiveSkip` must equal final `papers.length`
+- When `stats.afterBlogSkip` is larger than final `papers.length`, the same-batch `raw-candidates.json` must be retained so the full filtering input can be audited
 
 `npm run validate:data` checks these constraints read-only so corrupted filter caches are not silently reused by resumed runs.
 

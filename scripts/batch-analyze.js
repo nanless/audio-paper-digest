@@ -80,11 +80,21 @@ async function main() {
                 }
             }
             // 直接写入文件，不走 createFileSaver 的合并逻辑（避免 normalizedId 失败导致数据丢失）
-            const output = {
-                lastUpdated: getBeijingISOString(),
-                papers: papers,
-                stats: saveStats
-            };
+            const output = Array.isArray(data)
+                ? {
+                    lastUpdated: getBeijingISOString(),
+                    papers,
+                    stats: saveStats
+                }
+                : {
+                    ...data,
+                    lastUpdated: getBeijingISOString(),
+                    papers,
+                    stats: {
+                        ...(data.stats || {}),
+                        ...saveStats
+                    }
+                };
             writeFileAtomic(RESULT_FILE, JSON.stringify(output, null, 2));
             const digestStatus = updateAnalysisDigestStatuses(papers, {
                 batchDate: (data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10)

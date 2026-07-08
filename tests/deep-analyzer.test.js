@@ -205,7 +205,7 @@ describe('deep-analyzer section helpers', () => {
             getArxivHtmlIds
         } = require('../scripts/deep-analyzer.js');
 
-        assert.deepStrictEqual(getArxivHtmlIds('2604.12345'), ['2604.12345v1', '2604.12345v2', '2604.12345']);
+        assert.deepStrictEqual(getArxivHtmlIds('2604.12345'), ['2604.12345', '2604.12345v2', '2604.12345v1']);
         assert.deepStrictEqual(getArxivHtmlIds('2604.12345v2'), ['2604.12345v2', '2604.12345']);
     });
 });

@@ -148,6 +148,7 @@ function getInvalidAnalysisReason(analysis, parsed) {
  * @param {Function} options.onBatchDone - 每批完成回调 (batchIndex, batchResults) => void
  * @param {Function} options.onSave - 保存回调 (results, stats) => Promise<void> | void
  * @param {Function} options.shouldSkip - 是否跳过某篇 (paper) => boolean
+ * @param {Function} options.analyzeFn - 可选自定义单篇分析函数，默认使用 deep-analyzer.js
  * @returns {Promise<Object>} { results: Object[], stats: Object }
  */
 async function analyzeBatch(papers, options = {}) {
@@ -161,7 +162,8 @@ async function analyzeBatch(papers, options = {}) {
         onBatchDone = null,
         onSave = null,
         shouldSkip = null,
-        onAttempt = null
+        onAttempt = null,
+        analyzeFn = null
     } = options;
 
     const results = [];
@@ -216,6 +218,7 @@ async function analyzeBatch(papers, options = {}) {
             const r = await analyzePaperWithRetry(paper, {
                 maxRetries,
                 retryDelayMs,
+                analyzeFn,
                 onAttempt: (att, max) => {
                     if (onAttempt) {
                         try { onAttempt(att, max, paper); } catch (e) { /* ignore */ }

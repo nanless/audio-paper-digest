@@ -180,6 +180,26 @@ describe('analyzePaperWithRetry', () => {
 });
 
 describe('analyzeBatch', () => {
+    it('透传自定义 analyzeFn 到每篇论文分析', async () => {
+        const calls = [];
+        const { results, stats } = await analyzeBatch(
+            [{ arxivId: '2604.00003', title: 'Custom analyzer' }],
+            {
+                concurrency: 1,
+                maxRetries: 0,
+                analyzeFn: async (paper) => {
+                    calls.push(paper.arxivId);
+                    return { analysis: validAnalysisText() };
+                }
+            }
+        );
+
+        assert.deepStrictEqual(calls, ['2604.00003']);
+        assert.strictEqual(stats.success, 1);
+        assert.strictEqual(results.length, 1);
+        assert.strictEqual(results[0].error, null);
+    });
+
     it('shouldSkip 决策只对每篇论文计算一次', async () => {
         const calls = new Map();
         const papers = [

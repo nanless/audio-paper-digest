@@ -17,7 +17,7 @@ npm run fetch            # 全流程：抓取 + 筛选 + 深度分析
 npm run deep             # 仅深度分析续跑（跳过已有 analysis；无分析结果时可从 filtered-papers.json 初始化）
 npm run reanalyze        # 强制全量重分析（支持 --concurrency N）
 npm run batch            # 批量分析未分析论文
-npm run validate:data    # 只读校验候选/筛选/分析 JSON 数据和筛选决策缓存一致性
+npm run validate:data    # 只读校验候选/筛选/分析 JSON 数据、筛选决策缓存一致性和完整候选覆盖
 npm run backfill         # 补录历史 paper ID（Python 脚本，不分析）
 npm run publish          # 发布到 Hugo 博客（python3 scripts/publish-to-blog.py）
 npm run wechat           # 生成微信公众号草稿

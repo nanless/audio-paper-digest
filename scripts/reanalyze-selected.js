@@ -62,6 +62,7 @@ async function reanalyzeSelected(ids) {
 
     // 重新分析
     const analyzedResults = [];
+    const attemptResults = [];
     const { stats } = await analyzeBatch(toReanalyze, {
         concurrency: 3,
         maxRetries: 2,
@@ -76,8 +77,15 @@ async function reanalyzeSelected(ids) {
                 const score = result.parsed?.score ? `[${result.parsed.score}分]` : '[N/A]';
                 console.log(`  [${idx + 1}/${total}] ✅ 完成 ${score} | ${durSec}s`);
                 analyzedResults.push(result.result);
+                attemptResults.push(result.result);
             } else {
                 console.log(`  [${idx + 1}/${total}] ❌ 失败 | ${durSec}s | ${result.error}`);
+                attemptResults.push(result.result || {
+                    ...paper,
+                    analysis: null,
+                    parsed: null,
+                    error: result.error || '分析失败'
+                });
             }
         },
         onSave: async (results) => {
@@ -90,12 +98,17 @@ async function reanalyzeSelected(ids) {
             for (const r of results) {
                 if (!r) continue;
                 const key = normalizedId(r);
-                if (key) mergedMap.set(key, r);
+                if (!key) continue;
+                const existing = mergedMap.get(key);
+                if (existing && existing.analysis && !r.analysis) {
+                    continue;
+                }
+                mergedMap.set(key, r);
             }
             data.papers = Array.from(mergedMap.values());
             data.lastUpdated = getBeijingISOString();
             writeFileAtomic(RESULT_FILE, JSON.stringify(data, null, 2));
-            updateAnalysisDigestStatuses(data.papers, { batchDate });
+            updateAnalysisDigestStatuses(attemptResults, { batchDate });
         }
     });
 
@@ -115,7 +128,7 @@ async function reanalyzeSelected(ids) {
     data.timestamp = getBeijingISOString();
 
     writeFileAtomic(RESULT_FILE, JSON.stringify(data, null, 2));
-    const digestStatus = updateAnalysisDigestStatuses(data.papers, { batchDate });
+    const digestStatus = updateAnalysisDigestStatuses(attemptResults, { batchDate });
 
     console.log(`\n✅ 重分析完成: 成功 ${stats.success} | 失败 ${stats.failed}`);
     if (digestStatus.updated > 0) console.log(`papers.json 状态已同步: ${digestStatus.updated} 篇`);

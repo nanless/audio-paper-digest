@@ -56,6 +56,7 @@ Benefits of this design:
 | `PAPER_DIGEST_BLOG_REPO` | Local path to the Hugo blog repository | `~/code/github_repos/audio-paper-digest-blog` |
 | `PAPER_DIGEST_BLOG_BASE_PATH` | Base URL path of the blog site (affects internal links) | `/audio-paper-digest-blog` |
 | `PAPER_DIGEST_BLOG_URL` | Deployed blog URL (e.g. `https://nanless.github.io/audio-paper-digest-blog/posts`) | `https://nanless.github.io/audio-paper-digest-blog/posts` |
+| `PAPER_DIGEST_REPO_URL` | Project repository URL appended to Xiaohongshu and related copy | `github.com/nanless/audio-paper-digest` |
 | `PAPER_DIGEST_GITHUB_REMOTE` | Git remote name | `origin` |
 
 #### WeChat Official Account
@@ -66,6 +67,12 @@ Benefits of this design:
 | `WECHAT_APP_SECRET` | WeChat Official Account AppSecret |
 | `WECHAT_THUMB_MEDIA_ID` | Permanent cover image media ID (optional; default material is used if not set) |
 | `PAPER_DIGEST_AUTHOR` | Article author name for WeChat Official Account (optional) |
+
+#### Xiaohongshu
+
+| Variable | Description |
+|----------|-------------|
+| `XIAOHONGSHU_COOKIES` | Cookie used by automated Xiaohongshu publishing; can be obtained via `npm run xhs-login` |
 
 #### Feishu (Lark) Documents
 
@@ -242,9 +249,9 @@ FEISHU_APP_SECRET=your-full-app-secret
    with open('data/current/deep-analysis-result.json') as f:
        d = json.load(f)
    papers = d.get('papers', [])
-   dates = [p.get('published', '')[:10] for p in papers if p.get('published')]
+   dates = [p.get('fetchedAt', '')[:10] for p in papers if p.get('fetchedAt')]
    print('Total papers:', len(papers))
-   print('Date distribution:', Counter(dates))
+   print('fetchedAt batch date distribution:', Counter(dates))
    PY
    ```
 
