@@ -40,6 +40,10 @@ jobs:
             PYTHONPYCACHEPREFIX=/tmp/audio-paper-digest-pycache python3 -m py_compile "$file"
           done
 
+      - name: Run Python tests
+        run: |
+          python3 -m unittest discover -s tests/python -p 'test_*.py'
+
       - name: Check shell syntax
         run: |
           find . -name '*.sh' -not -path './node_modules/*' -print0 | while IFS= read -r -d '' file; do

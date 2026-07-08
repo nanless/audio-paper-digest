@@ -68,6 +68,40 @@ function loadReusableFilterDecisions(today, filterModel, filterPromptHash) {
     return data.decisions && typeof data.decisions === 'object' ? data.decisions : {};
 }
 
+function loadTodayJsonFile(filePath, today) {
+    if (!fs.existsSync(filePath)) return null;
+    const data = readJsonSafe(filePath);
+    if (!data || getRecordDate(data) !== today) return null;
+    return data;
+}
+
+function loadCompleteFilteredForToday(today, filePath = FILTERED_FILE) {
+    const data = loadTodayJsonFile(filePath, today);
+    if (!data || data.status !== 'complete' || !Array.isArray(data.papers)) return null;
+    return data;
+}
+
+function buildSourceHealth(sourceHealth, arxivPapers, hfPapers) {
+    return {
+        ...sourceHealth,
+        arxiv: {
+            ...(sourceHealth.arxiv || {}),
+            totalFetched: arxivPapers.length
+        },
+        huggingface: {
+            ...(sourceHealth.huggingface || {}),
+            totalFetched: hfPapers.length
+        },
+        generatedAt: getBeijingISOString()
+    };
+}
+
+function getSourceFetchedCount(sourceHealth, sourceName, fallbackCount = 0) {
+    const source = sourceHealth?.[sourceName] || {};
+    const value = Number.isFinite(source.totalFetched) ? source.totalFetched : source.fetched;
+    return Number.isFinite(value) ? value : fallbackCount;
+}
+
 function writeFilterArtifacts({
     allPapers,
     allPapersFiltered,
@@ -275,197 +309,263 @@ async function fullFetch() {
     }
     const historicalExistingIds = new Set(existingIds);
 
-    // ========== 第一步：从 arxiv 抓取 ==========
-    console.log('📥 第一步：从 arxiv 抓取论文');
-    const arxivPapers = [];
+    let arxivPapers = [];
+    let hfPapers = [];
+    let allPapers = [];
+    let allPapersFiltered = [];
+    let filtered = [];
+    let filteredNew = [];
+    let arxivOnly = 0;
+    let hfOnly = 0;
+    let both = 0;
+    let blogSkippedCount = 0;
+    let skippedCount = 0;
+    let sourceHealth = {
+        arxiv: { categories: [] },
+        huggingface: {}
+    };
+    let baseFilterStats = {};
+    let filterDecisions = {};
+    const filterModel = process.env.PAPER_ANALYZER_MODEL || '';
+    const filterPromptHash = getFilterPromptHash();
 
-    // 核心类别优先，补充类别随机打乱
-    const coreCategories = categories.filter(c => c.priority === 'core');
-    const supplementCategories = categories.filter(c => c.priority !== 'core');
-    for (let i = supplementCategories.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [supplementCategories[i], supplementCategories[j]] = [supplementCategories[j], supplementCategories[i]];
-    }
-    const shuffledCategories = [...coreCategories, ...supplementCategories];
-    console.log(`  请求顺序: ${shuffledCategories.map(c => c.id).join(' → ')}\n`);
+    const completedFiltered = loadCompleteFilteredForToday(today);
+    if (completedFiltered) {
+        console.log('⏭️ 检测到今日完整 filtered-papers.json，跳过抓取与筛选，直接续跑深度分析');
+        filteredNew = completedFiltered.papers;
+        filtered = completedFiltered.papers;
+        const rawCandidates = loadTodayJsonFile(RAW_CANDIDATES_FILE, today);
+        allPapers = Array.isArray(rawCandidates?.papers) ? rawCandidates.papers : filteredNew;
+        allPapersFiltered = allPapers.filter(paper => !publishedIds.has(normalizedId(paper)));
+        const existingDecisions = loadReusableFilterDecisions(today, filterModel, filterPromptHash);
+        filterDecisions = existingDecisions;
+        const stats = completedFiltered.stats || rawCandidates?.stats || {};
+        arxivOnly = stats.arxivOnly || allPapers.filter(p => p.sources?.includes('arxiv') && !p.sources?.includes('huggingface')).length;
+        hfOnly = stats.hfOnly || allPapers.filter(p => !p.sources?.includes('arxiv') && p.sources?.includes('huggingface')).length;
+        both = stats.both || allPapers.filter(p => p.sources?.includes('arxiv') && p.sources?.includes('huggingface')).length;
+        blogSkippedCount = stats.skippedFromBlog || 0;
+        skippedCount = stats.skippedFromArchive || 0;
+        baseFilterStats = {
+            beforeFilter: stats.beforeFilter || allPapers.length,
+            beforeBlogSkip: stats.beforeBlogSkip || allPapers.length,
+            afterBlogSkip: stats.afterBlogSkip || allPapersFiltered.length,
+            skippedFromBlog: blogSkippedCount,
+            arxivOnly,
+            hfOnly,
+            both
+        };
+        sourceHealth = rawCandidates?.sourceHealth || completedFiltered.sourceHealth || sourceHealth;
+    } else {
+        // ========== 第一步：从 arxiv 抓取 ==========
+        console.log('📥 第一步：从 arxiv 抓取论文');
 
-    for (let i = 0; i < shuffledCategories.length; i++) {
-        const category = shuffledCategories[i];
-        // 首次请求前加随机延迟
-        if (i === 0) {
-            const baseDelay = Config.ARXIV_CONFIG.firstRequestDelayMs;
-            const jitter = Math.floor(Math.random() * 10000);
-            const firstDelay = baseDelay + jitter;
-            console.log(`  首次请求前等待 ${(firstDelay/1000).toFixed(1)} 秒...`);
-            await new Promise(resolve => setTimeout(resolve, firstDelay));
+        // 核心类别优先，补充类别随机打乱
+        const coreCategories = categories.filter(c => c.priority === 'core');
+        const supplementCategories = categories.filter(c => c.priority !== 'core');
+        for (let i = supplementCategories.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [supplementCategories[i], supplementCategories[j]] = [supplementCategories[j], supplementCategories[i]];
         }
-        console.log(`  [${i+1}/${shuffledCategories.length}] 抓取 ${category.name} (${category.id})...`);
-        const fetchStartTime = Date.now();
-        const papers = await fetchCategoryPapers(
-            category.id,
-            Config.ARXIV_CONFIG.maxResultsPerCategory,
-            Config.ARXIV_CONFIG.fetchMaxRetries,
-            existingIds
-        );
-        const fetchDuration = Date.now() - fetchStartTime;
+        const shuffledCategories = [...coreCategories, ...supplementCategories];
+        console.log(`  请求顺序: ${shuffledCategories.map(c => c.id).join(' → ')}\n`);
 
-        // 去重：将新论文 ID 加入 existingIds，避免下一类别重复抓取
-        let newInCategory = 0, dupInCategory = 0;
-        for (const p of papers) {
-            const id = normalizedId(p.paper_id || p.arxivId);
-            if (existingIds.has(id)) {
-                dupInCategory++;
-            } else {
-                existingIds.add(id);
-                arxivPapers.push(p);
-                newInCategory++;
+        for (let i = 0; i < shuffledCategories.length; i++) {
+            const category = shuffledCategories[i];
+            // 首次请求前加随机延迟
+            if (i === 0) {
+                const baseDelay = Config.ARXIV_CONFIG.firstRequestDelayMs;
+                const jitter = Math.floor(Math.random() * 10000);
+                const firstDelay = baseDelay + jitter;
+                console.log(`  首次请求前等待 ${(firstDelay/1000).toFixed(1)} 秒...`);
+                await new Promise(resolve => setTimeout(resolve, firstDelay));
             }
+            console.log(`  [${i+1}/${shuffledCategories.length}] 抓取 ${category.name} (${category.id})...`);
+            const fetchStartTime = Date.now();
+            const papers = await fetchCategoryPapers(
+                category.id,
+                Config.ARXIV_CONFIG.maxResultsPerCategory,
+                Config.ARXIV_CONFIG.fetchMaxRetries,
+                existingIds
+            );
+            const fetchDuration = Date.now() - fetchStartTime;
+
+            // 去重：将新论文 ID 加入 existingIds，避免下一类别重复抓取
+            let newInCategory = 0, dupInCategory = 0;
+            for (const p of papers) {
+                const id = normalizedId(p.paper_id || p.arxivId);
+                if (existingIds.has(id)) {
+                    dupInCategory++;
+                } else {
+                    existingIds.add(id);
+                    arxivPapers.push(p);
+                    newInCategory++;
+                }
+            }
+            sourceHealth.arxiv.categories.push({
+                id: category.id,
+                name: category.name,
+                priority: category.priority,
+                fetched: papers.length,
+                newInCategory,
+                duplicateInCategory: dupInCategory,
+                durationMs: fetchDuration,
+                ok: true
+            });
+            console.log(`    ${category.id}: 获取 ${papers.length} 篇, 新增 ${newInCategory} 篇, 跨类别去重 ${dupInCategory} 篇`);
+
+            // 核心类别检查：无新论文时继续运行（可能是已知论文太多）
+            if (category.priority === 'core' && papers.length === 0) {
+                console.log(`\nℹ️ 核心类别 ${category.id}（${category.name}）无新论文（可能均已被收录）`);
+                console.log(`   继续运行，尝试其他来源...`);
+            }
+
+            // 类别间延迟：基础延迟 + 随机抖动 + 限流检测补偿
+            const baseJitter = Math.floor(Math.random() * 20000) + 10000; // 10-30秒随机
+            const rateLimitPenalty = fetchDuration > 300000 ? 120000 : (fetchDuration > 120000 ? 60000 : (fetchDuration > 60000 ? 30000 : 0));
+            const totalDelay = FETCH_DELAY_MS + baseJitter + rateLimitPenalty;
+            if (rateLimitPenalty > 0) {
+                console.log(`    检测到可能的限流，额外等待 ${(rateLimitPenalty/1000).toFixed(0)} 秒...`);
+            }
+            console.log(`    等待 ${(totalDelay/1000).toFixed(0)} 秒后继续下一类别...`);
+            await new Promise(resolve => setTimeout(resolve, totalDelay));
         }
-        console.log(`    ${category.id}: 获取 ${papers.length} 篇, 新增 ${newInCategory} 篇, 跨类别去重 ${dupInCategory} 篇`);
 
-        // 核心类别检查：无新论文时继续运行（可能是已知论文太多）
-        if (category.priority === 'core' && papers.length === 0) {
-            console.log(`\nℹ️ 核心类别 ${category.id}（${category.name}）无新论文（可能均已被收录）`);
-            console.log(`   继续运行，尝试其他来源...`);
+        console.log(`\narxiv 抓取完成: ${arxivPapers.length} 篇`);
+
+        // ========== 第二步：从 HuggingFace Papers 抓取 ==========
+        console.log('\n📥 第二步：从 HuggingFace Papers 抓取论文');
+
+        const hfStartTime = Date.now();
+        hfPapers = await fetchHuggingFacePapers(historicalExistingIds, {
+            days: Config.HUGGINGFACE_CONFIG.defaultDays,
+            minUpvotes: Config.HUGGINGFACE_CONFIG.defaultMinUpvotes
+        });
+        sourceHealth.huggingface = {
+            ok: true,
+            fetched: hfPapers.length,
+            days: Config.HUGGINGFACE_CONFIG.defaultDays,
+            minUpvotes: Config.HUGGINGFACE_CONFIG.defaultMinUpvotes,
+            durationMs: Date.now() - hfStartTime
+        };
+
+        console.log(`\nHuggingFace Papers 抓取完成: ${hfPapers.length} 篇`);
+
+        // ========== 第三步：合并去重 ==========
+        console.log('\n🔄 第三步：合并去重（arxiv + HuggingFace）');
+        allPapers = mergeAndDeduplicate(arxivPapers, hfPapers);
+        console.log(`合并后: ${allPapers.length} 篇`);
+
+        arxivOnly = allPapers.filter(p => p.sources?.includes('arxiv') && !p.sources?.includes('huggingface')).length;
+        hfOnly = allPapers.filter(p => !p.sources?.includes('arxiv') && p.sources?.includes('huggingface')).length;
+        both = allPapers.filter(p => p.sources?.includes('arxiv') && p.sources?.includes('huggingface')).length;
+        console.log(`  - 仅 arxiv: ${arxivOnly} 篇`);
+        console.log(`  - 仅 HuggingFace: ${hfOnly} 篇`);
+        console.log(`  - 两个来源都有: ${both} 篇`);
+
+        // 过滤掉已发布到博客的论文
+        const beforeBlogSkip = allPapers.length;
+        allPapersFiltered = allPapers.filter(paper => !publishedIds.has(normalizedId(paper)));
+        blogSkippedCount = beforeBlogSkip - allPapersFiltered.length;
+        if (blogSkippedCount > 0) {
+            console.log(`📝 过滤 ${blogSkippedCount} 篇已发布到博客的论文`);
         }
 
-        // 类别间延迟：基础延迟 + 随机抖动 + 限流检测补偿
-        const baseJitter = Math.floor(Math.random() * 20000) + 10000; // 10-30秒随机
-        const rateLimitPenalty = fetchDuration > 300000 ? 120000 : (fetchDuration > 120000 ? 60000 : (fetchDuration > 60000 ? 30000 : 0));
-        const totalDelay = FETCH_DELAY_MS + baseJitter + rateLimitPenalty;
-        if (rateLimitPenalty > 0) {
-            console.log(`    检测到可能的限流，额外等待 ${(rateLimitPenalty/1000).toFixed(0)} 秒...`);
-        }
-        console.log(`    等待 ${(totalDelay/1000).toFixed(0)} 秒后继续下一类别...`);
-        await new Promise(resolve => setTimeout(resolve, totalDelay));
-    }
+        sourceHealth = buildSourceHealth(sourceHealth, arxivPapers, hfPapers);
+        writeFileAtomic(RAW_CANDIDATES_FILE, JSON.stringify({
+            timestamp: getBeijingISOString(),
+            stats: {
+                beforeBlogSkip: allPapers.length,
+                afterBlogSkip: allPapersFiltered.length,
+                skippedFromBlog: blogSkippedCount,
+                arxivOnly,
+                hfOnly,
+                both
+            },
+            sourceHealth,
+            papers: allPapersFiltered
+        }, null, 2));
+        console.log(`💾 原始候选论文已保存到: ${RAW_CANDIDATES_FILE}`);
 
-    console.log(`\narxiv 抓取完成: ${arxivPapers.length} 篇`);
-
-    // ========== 第二步：从 HuggingFace Papers 抓取 ==========
-    console.log('\n📥 第二步：从 HuggingFace Papers 抓取论文');
-
-    const hfPapers = await fetchHuggingFacePapers(historicalExistingIds, {
-        days: Config.HUGGINGFACE_CONFIG.defaultDays,
-        minUpvotes: Config.HUGGINGFACE_CONFIG.defaultMinUpvotes
-    });
-
-    console.log(`\nHuggingFace Papers 抓取完成: ${hfPapers.length} 篇`);
-
-    // ========== 第三步：合并去重 ==========
-    console.log('\n🔄 第三步：合并去重（arxiv + HuggingFace）');
-    const allPapers = mergeAndDeduplicate(arxivPapers, hfPapers);
-    console.log(`合并后: ${allPapers.length} 篇`);
-
-    const arxivOnly = allPapers.filter(p => p.sources?.includes('arxiv') && !p.sources?.includes('huggingface')).length;
-    const hfOnly = allPapers.filter(p => !p.sources?.includes('arxiv') && p.sources?.includes('huggingface')).length;
-    const both = allPapers.filter(p => p.sources?.includes('arxiv') && p.sources?.includes('huggingface')).length;
-    console.log(`  - 仅 arxiv: ${arxivOnly} 篇`);
-    console.log(`  - 仅 HuggingFace: ${hfOnly} 篇`);
-    console.log(`  - 两个来源都有: ${both} 篇`);
-
-    // 过滤掉已发布到博客的论文
-    const beforeBlogSkip = allPapers.length;
-    const allPapersFiltered = allPapers.filter(paper => !publishedIds.has(normalizedId(paper)));
-    const blogSkippedCount = beforeBlogSkip - allPapersFiltered.length;
-    if (blogSkippedCount > 0) {
-        console.log(`📝 过滤 ${blogSkippedCount} 篇已发布到博客的论文`);
-    }
-
-    writeFileAtomic(RAW_CANDIDATES_FILE, JSON.stringify({
-        timestamp: getBeijingISOString(),
-        stats: {
+        // ========== 第四步：大模型筛选 ==========
+        console.log('\n🤖 第四步：大模型筛选（判断是否语音/音频相关）');
+        filterDecisions = loadReusableFilterDecisions(today, filterModel, filterPromptHash);
+        baseFilterStats = {
+            beforeFilter: allPapers.length,
             beforeBlogSkip: allPapers.length,
             afterBlogSkip: allPapersFiltered.length,
             skippedFromBlog: blogSkippedCount,
             arxivOnly,
             hfOnly,
             both
-        },
-        papers: allPapersFiltered
-    }, null, 2));
-    console.log(`💾 原始候选论文已保存到: ${RAW_CANDIDATES_FILE}`);
-
-    // ========== 第四步：大模型筛选 ==========
-    console.log('\n🤖 第四步：大模型筛选（判断是否语音/音频相关）');
-    const filterModel = process.env.PAPER_ANALYZER_MODEL || '';
-    const filterPromptHash = getFilterPromptHash();
-    let filterDecisions = loadReusableFilterDecisions(today, filterModel, filterPromptHash);
-    const baseFilterStats = {
-        beforeFilter: allPapers.length,
-        beforeBlogSkip: allPapers.length,
-        afterBlogSkip: allPapersFiltered.length,
-        skippedFromBlog: blogSkippedCount,
-        arxivOnly,
-        hfOnly,
-        both
-    };
-    const filtered = await filterPapersWithLLM(allPapersFiltered, {
-        batchSize: Config.FILTER_CONFIG.batchSize,
-        delayBetweenBatches: Config.FILTER_CONFIG.delayBetweenBatchesMs,
-        useKeywordPreFilter: false,
-        initialDecisions: filterDecisions,
-        decisionMetadata: {
-            filterModel,
-            filterPromptHash
-        },
-        onBatchComplete: async ({ results, decisions }) => {
-            filterDecisions = decisions;
-            writeFilterArtifacts({
-                allPapers,
-                allPapersFiltered,
-                filtered: results,
-                filterDecisions,
+        };
+        filtered = await filterPapersWithLLM(allPapersFiltered, {
+            batchSize: Config.FILTER_CONFIG.batchSize,
+            delayBetweenBatches: Config.FILTER_CONFIG.delayBetweenBatchesMs,
+            useKeywordPreFilter: false,
+            initialDecisions: filterDecisions,
+            decisionMetadata: {
                 filterModel,
-                filterPromptHash,
-                stats: baseFilterStats,
-                complete: false
-            });
-            console.log(`  💾 筛选进度已保存: ${Object.keys(filterDecisions).length}/${allPapersFiltered.length} 篇已判断`);
-        }
-    });
-    console.log(`筛选后: ${filtered.length} 篇相关论文`);
-    writeFilterArtifacts({
-        allPapers,
-        allPapersFiltered,
-        filtered,
-        filterDecisions,
-        filterModel,
-        filterPromptHash,
-        stats: baseFilterStats,
-        complete: true
-    });
+                filterPromptHash
+            },
+            onBatchComplete: async ({ results, decisions }) => {
+                filterDecisions = decisions;
+                writeFilterArtifacts({
+                    allPapers,
+                    allPapersFiltered,
+                    filtered: results,
+                    filterDecisions,
+                    filterModel,
+                    filterPromptHash,
+                    stats: baseFilterStats,
+                    complete: false
+                });
+                console.log(`  💾 筛选进度已保存: ${Object.keys(filterDecisions).length}/${allPapersFiltered.length} 篇已判断`);
+            }
+        });
+        console.log(`筛选后: ${filtered.length} 篇相关论文`);
+        writeFilterArtifacts({
+            allPapers,
+            allPapersFiltered,
+            filtered,
+            filterDecisions,
+            filterModel,
+            filterPromptHash,
+            stats: baseFilterStats,
+            complete: true
+        });
 
-    // ========== 第四步半：跳过已在归档中分析过的论文 ==========
-    const archiveAnalyzedIds = loadAnalyzedIdsFromArchive();
-    const beforeArchiveSkip = filtered.length;
-    const filteredNew = filtered.filter(paper => {
-        const nid = normalizedId(paper);
-        // 如果论文已在归档中成功分析过，且当前来源包含 huggingface，则跳过
-        if (archiveAnalyzedIds.has(nid) && paper.sources?.includes('huggingface')) {
-            return false;
+        // ========== 第四步半：跳过已在归档中分析过的论文 ==========
+        const archiveAnalyzedIds = loadAnalyzedIdsFromArchive();
+        const beforeArchiveSkip = filtered.length;
+        filteredNew = filtered.filter(paper => {
+            const nid = normalizedId(paper);
+            // 如果论文已在归档中成功分析过，且当前来源包含 huggingface，则跳过
+            if (archiveAnalyzedIds.has(nid) && paper.sources?.includes('huggingface')) {
+                return false;
+            }
+            return true;
+        });
+        skippedCount = beforeArchiveSkip - filteredNew.length;
+        if (skippedCount > 0) {
+            console.log(`📦 跳过 ${skippedCount} 篇已在归档中分析过的 HuggingFace 论文`);
         }
-        return true;
-    });
-    const skippedCount = beforeArchiveSkip - filteredNew.length;
-    if (skippedCount > 0) {
-        console.log(`📦 跳过 ${skippedCount} 篇已在归档中分析过的 HuggingFace 论文`);
+
+        writeFileAtomic(FILTERED_FILE, JSON.stringify({
+            timestamp: getBeijingISOString(),
+            status: 'complete',
+            stats: {
+                ...baseFilterStats,
+                afterBlogSkip: allPapersFiltered.length,
+                afterFilter: filtered.length,
+                afterArchiveSkip: filteredNew.length,
+                skippedFromArchive: skippedCount,
+                decisionCount: Object.keys(filterDecisions).length
+            },
+            sourceHealth,
+            papers: filteredNew
+        }, null, 2));
+        console.log(`💾 筛选结果已保存到: ${FILTERED_FILE}`);
     }
-
-    writeFileAtomic(FILTERED_FILE, JSON.stringify({
-        timestamp: getBeijingISOString(),
-        status: 'complete',
-        stats: {
-            ...baseFilterStats,
-            afterBlogSkip: allPapersFiltered.length,
-            afterFilter: filtered.length,
-            afterArchiveSkip: filteredNew.length,
-            skippedFromArchive: skippedCount,
-            decisionCount: Object.keys(filterDecisions).length
-        },
-        papers: filteredNew
-    }, null, 2));
-    console.log(`💾 筛选结果已保存到: ${FILTERED_FILE}`);
 
     // ========== 第4.8步：保存所有爬到论文到 papers.json（提前保存，防止后续中断丢失）==========
     console.log('\n💾 保存所有爬取论文到 papers.json 去重数据库');
@@ -484,6 +584,9 @@ async function fullFetch() {
             {
                 batchDate: today,
                 filterDecision: typeof decision?.related === 'boolean' ? decision.related : null,
+                filterReason: decision?.reason || '',
+                filterRawResponse: decision?.rawResponse || '',
+                filterParseSource: decision?.parseSource || '',
                 filterModel,
                 filterPromptHash,
                 filterDecidedAt: decision?.decidedAt || null
@@ -634,13 +737,15 @@ async function fullFetch() {
     }
 
     const mergedPapers = Array.from(mergedMap.values());
+    const arxivFetchedCount = arxivPapers.length || getSourceFetchedCount(sourceHealth, 'arxiv', 0);
+    const hfFetchedCount = hfPapers.length || getSourceFetchedCount(sourceHealth, 'huggingface', 0);
 
     const result = {
         timestamp: getBeijingISOString(),
         previousTimestamp: existingTimestamp,
         stats: {
-            arxivFetched: arxivPapers.length,
-            hfFetched: hfPapers.length,
+            arxivFetched: arxivFetchedCount,
+            hfFetched: hfFetchedCount,
             totalMerged: allPapers.length,
             afterFilter: filtered.length,
             newlyAnalyzed: analyzedPapers.length,
@@ -648,7 +753,8 @@ async function fullFetch() {
             totalAfterMerge: mergedPapers.length,
             arxivOnly,
             hfOnly,
-            both
+            both,
+            sourceHealth
         },
         papers: mergedPapers
     };
@@ -683,8 +789,8 @@ async function fullFetch() {
 
     console.log(`\n✅ 分析完成！`);
     console.log(`📊 统计:`);
-    console.log(`  - arxiv 抓取: ${arxivPapers.length} 篇`);
-    console.log(`  - HuggingFace 抓取: ${hfPapers.length} 篇`);
+    console.log(`  - arxiv 抓取: ${arxivFetchedCount} 篇`);
+    console.log(`  - HuggingFace 抓取: ${hfFetchedCount} 篇`);
     console.log(`  - 合并去重: ${allPapers.length} 篇`);
     console.log(`  - LLM 筛选: ${filtered.length} 篇`);
     if (skippedCount > 0) console.log(`  - 归档去重: -${skippedCount} 篇`);
@@ -701,7 +807,20 @@ async function fullFetch() {
     return result;
 }
 
-fullFetch().catch(err => {
-    console.error(`❌ 失败: ${err.message}`);
-    process.exit(1);
-});
+if (require.main === module) {
+    fullFetch().catch(err => {
+        console.error(`❌ 失败: ${err.message}`);
+        process.exit(1);
+    });
+}
+
+module.exports = {
+    fullFetch,
+    shouldUsePaperForFetchDedup,
+    markPaperDigestStatus,
+    getFilterPromptHash,
+    loadReusableFilterDecisions,
+    buildSourceHealth,
+    getSourceFetchedCount,
+    loadCompleteFilteredForToday
+};

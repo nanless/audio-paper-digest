@@ -118,6 +118,26 @@ describe('deep-analyzer section helpers', () => {
         assert.strictEqual(cleanGapFillPrefix('废话\n## 评分\n8.0/10\n\n## 评分理由\n理由'), '## 评分\n8.0/10\n\n## 评分理由\n理由');
     });
 
+    it('demo 页面安全检查会拒绝本机和私网地址', async () => {
+        const {
+            isPrivateIpAddress,
+            validatePublicHttpUrl
+        } = require('../scripts/deep-analyzer.js');
+
+        assert.strictEqual(isPrivateIpAddress('127.0.0.1'), true);
+        assert.strictEqual(isPrivateIpAddress('10.0.0.8'), true);
+        assert.strictEqual(isPrivateIpAddress('100.64.1.1'), true);
+        assert.strictEqual(isPrivateIpAddress('172.16.1.1'), true);
+        assert.strictEqual(isPrivateIpAddress('192.168.1.1'), true);
+        assert.strictEqual(isPrivateIpAddress('::ffff:7f00:1'), true);
+        assert.strictEqual(isPrivateIpAddress('8.8.8.8'), false);
+        const publicIpUrl = await validatePublicHttpUrl('https://8.8.8.8/demo');
+        assert.strictEqual(publicIpUrl.validatedAddress, '8.8.8.8');
+        await assert.rejects(() => validatePublicHttpUrl('http://127.0.0.1/demo'), /非公网|localhost/);
+        await assert.rejects(() => validatePublicHttpUrl('file:///tmp/demo.html'), /协议/);
+        await assert.rejects(() => validatePublicHttpUrl('https://user:pass@example.com'), /用户名/);
+    });
+
     it('校验副模型输出是否保留必要章节', () => {
         const {
             hasRequiredAnalysisSections

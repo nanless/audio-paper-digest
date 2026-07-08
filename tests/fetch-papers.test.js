@@ -3,6 +3,7 @@ const assert = require('node:assert');
 
 const {
     parseFilterDecision,
+    parseFilterDecisionDetails,
     filterPapersByKeywords,
     filterPapersWithLLM,
     parseRecentPageHTML,
@@ -30,6 +31,20 @@ describe('parseFilterDecision', () => {
 
     it('不再用说明句里的单字是否作为兜底结论', () => {
         assert.strictEqual(parseFilterDecision('理由：是否属于音频任务无法从摘要判断。'), true);
+    });
+
+    it('保留筛选理由、原始响应和解析来源', () => {
+        const decision = parseFilterDecisionDetails('{"decision":"not_related","reason":"纯文本检索，没有音频任务"}', '2604.1');
+        assert.strictEqual(decision.related, false);
+        assert.strictEqual(decision.reason, '纯文本检索，没有音频任务');
+        assert.match(decision.rawResponse, /not_related/);
+        assert.strictEqual(decision.parseSource, 'json');
+    });
+
+    it('正确解析 JSON 布尔 related=false，不会因为假值回退为保留', () => {
+        const decision = parseFilterDecisionDetails('{"related":false,"reason":"仅讨论文本检索"}', '2604.2');
+        assert.strictEqual(decision.related, false);
+        assert.strictEqual(decision.parseSource, 'json');
     });
 });
 

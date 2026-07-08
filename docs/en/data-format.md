@@ -47,6 +47,26 @@ Candidate input after arXiv + HuggingFace merge and blog-published filtering. Us
     "hfOnly": 45,
     "both": 15
   },
+  "sourceHealth": {
+    "arxiv": {
+      "totalFetched": 273,
+      "categories": [
+        {
+          "id": "cs.SD",
+          "fetched": 50,
+          "newInCategory": 44,
+          "duplicateInCategory": 6,
+          "durationMs": 12000,
+          "ok": true
+        }
+      ]
+    },
+    "huggingface": {
+      "ok": true,
+      "fetched": 51,
+      "durationMs": 1800
+    }
+  },
   "papers": []
 }
 ```
@@ -72,6 +92,9 @@ Per-paper LLM filtering decision cache. It is written after every batch; reruns 
       "paper_id": "2604.12345v1",
       "title": "Paper Title",
       "related": true,
+      "reason": "The paper contains a speech recognition task and audio experiments",
+      "rawResponse": "Reason: speech recognition task...\nConclusion: related",
+      "parseSource": "conclusion_line",
       "decidedAt": "2026-04-21T10:05:00+08:00",
       "filterModel": "mimo-v2.5",
       "filterPromptHash": "a1b2c3d4e5f6a7b8"
@@ -100,6 +123,10 @@ Filtering results (metadata only, no deep analysis). Structure:
     "hfOnly": 50,
     "both": 0,
     "decisionCount": 450
+  },
+  "sourceHealth": {
+    "arxiv": {"totalFetched": 273},
+    "huggingface": {"totalFetched": 51}
   },
   "papers": [
     {
@@ -209,7 +236,15 @@ Core analysis results. Structure:
       },
       "selectedImageUrls": ["https://arxiv.org/html/.../fig1.png"],
       "imageUrls": ["https://arxiv.org/html/.../fig1.png"],
-      "allImageUrls": ["https://arxiv.org/html/.../fig1.png", "..."]
+      "allImageUrls": ["https://arxiv.org/html/.../fig1.png", "..."],
+      "imageManifest": {
+        "totalFound": 8,
+        "candidateLimit": 20,
+        "downloaded": [
+          {"url": "https://arxiv.org/html/.../fig1.png", "mime": "image/png", "base64Chars": 120000}
+        ],
+        "selected": ["https://arxiv.org/html/.../fig1.png"]
+      }
     }
   ]
 }

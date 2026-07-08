@@ -27,7 +27,11 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from publish_common import (
     load_papers, get_today_bj, score_and_sort, extract_top_tags,
-    extract_all_tags, score_emoji, format_medal, build_paper_meta
+    extract_all_tags, score_emoji, format_medal, build_paper_meta,
+    fix_latex_delimiters, escape_html_like_tags, fix_image_markdown,
+    truncate_base64_datauri, fix_yaml_double_commas, strip_raw_inline_html,
+    fix_empty_markdown_links, dedupe_image_alts, fix_yaml_unbalanced_quotes,
+    sanitize_markdown_for_publish
 )
 from utils import strip_md, parse_analysis
 
@@ -37,165 +41,6 @@ BLOG_REPO = os.path.expanduser(
 CONTENT_DIR = os.path.join(BLOG_REPO, "content", "posts")
 BASE_PATH = os.environ.get("PAPER_DIGEST_BLOG_BASE_PATH", "/audio-paper-digest-blog")
 GITHUB_REMOTE = os.environ.get("PAPER_DIGEST_GITHUB_REMOTE", "origin")
-
-
-def fix_latex_delimiters(text):
-    r"""将 $...$ 转换为 \(...\)，$$...$$ 转换为 \[...\]，
-    配合 Hugo goldmark passthrough 确保 MathJax 正确渲染。"""
-    if not text:
-        return text
-    # 先处理块级公式 $$...$$
-    text = re.sub(r'(?<!\\)\$\$(.+?)\$\$', r'\\[\1\\]', text, flags=re.DOTALL)
-    # 再处理行内公式 $...$（排除已转换的块级公式和货币符号）
-    # 增强：处理反引号包裹的 $...$（代码块内不处理，但反引号包裹的行内代码中的 $...$ 需要处理）
-    text = re.sub(r'(?<!\\)\$([^\s\$][^$]*?)\$', r'\\(\1\\)', text)
-    # 处理遗漏的反引号包裹的 $...$（如 `v_i^{(1)} = ... + w_vid * ...` 中的 $ 符号）
-    text = re.sub(r'`([^`]*?)\$([^`]*?)\$([^`]*?)`', r'`\1\\(\2\\)\3`', text)
-    return text
-
-
-def escape_html_like_tags(text):
-    r"""转义论文中可能被 Hugo 解析为 HTML 的标记（如 <S>、<E>、<task> 等），
-    避免被渲染为删除线等意外样式。"""
-    if not text:
-        return text
-    # 1. 匹配独立的 <S>、</S>、<E>、</E> 标签（单字母标记）
-    # 放宽限制：中文标点、空格、行首后的 <S>/<E> 也需要转义
-    text = re.sub(r'(?<![a-zA-Z])<(/?)([SEse])>(?![a-zA-Z0-9])', r'`<\1\2>`', text)
-    # 2. 匹配常见的论文文本标记，如 <task>、<perception>、<comprehension>、<reasoning> 等
-    # 新增：多模态论文中常见的标记
-    text = re.sub(
-        r'(?<![a-zA-Z0-9`])<(/?)(task|perception|comprehension|reasoning|agent|action|state|observation|reward|goal|intent|belief|plan|policy|environment|module|component|feature|input|output|label|class|category|type|mode|phase|stage|step|layer|block|unit|node|edge|graph|tree|path|loop|branch|condition|constraint|rule|fact|evidence|proof|hypothesis|assumption|premise|conclusion|result|finding|insight|implication|contribution|limitation|direction|extension|variant|version|update|fix|issue|error|warning|notice|info|trace|log|record|entry|item|element|object|subject|target|source|reference|cite|quote|note|comment|remark|annotation|caption|title|heading|paragraph|sentence|phrase|word|token|char|symbol|sign|mark|tag|badge|identifier|id|key|code|pin|secret|ticket|voucher|license|permit|certificate|credential|award|medal|prize|gift|bonus|benefit|advantage|edge|lead|margin|gap|difference|distance|range|scope|span|scale|size|length|width|height|depth|volume|area|surface|space|place|spot|location|site|position|point|dot|pixel|fragment|shard|piece|part|portion|section|segment|slice|chunk|block|lump|mass|body|entity|thing|article|product|goods|material|substance|matter|fabric|cloth|garment|clothing|wear|dress|costume|uniform|outfit|suit|wardrobe|closet|cabinet|cupboard|pantry|cellar|basement|attic|loft|tower|spire|dome|vault|arch|beam|column|pillar|post|pole|rod|bar|rail|track|path|way|road|route|course|direction|heading|bearing|azimuth|elevation|altitude|latitude|longitude|coordinate|interrupt|backchannel|response|free|BEsound)(?![a-zA-Z0-9`])>',
-        r'`<\1\2>`',
-        text,
-        flags=re.IGNORECASE
-    )
-    return text
-
-
-def fix_image_markdown(text):
-    r"""将 LLM 输出的非标准图片引用格式转换为标准 Markdown 图片语法。
-    处理以下变体：
-    - 外部 URL: https://... (alt=描述)
-    - 外部 URL: https://... alt=描述
-    - - 外部 URL: https://... (alt=描述)
-    """
-    if not text:
-        return text
-    # 匹配 "外部 URL: <url> (alt=<alt>)" 及其变体
-    text = re.sub(
-        r'(?:^|\n)\s*(?:-\s*)?外部\s*URL:\s*(https?://\S+?)\s*\(alt=([^)]+)\)',
-        r'\n![\2](\1)',
-        text,
-        flags=re.MULTILINE
-    )
-    # 匹配 "外部 URL: <url> alt=<alt>"（无括号）
-    text = re.sub(
-        r'(?:^|\n)\s*(?:-\s*)?外部\s*URL:\s*(https?://\S+?)\s+alt=(.+?)(?=\n|$)',
-        r'\n![\2](\1)',
-        text,
-        flags=re.MULTILINE
-    )
-    # 处理被截断的 URL（末尾带 ...）
-    text = re.sub(r'\(https?://[^)]+\.\.\.\)', '(image_url_truncated)', text)
-    # 处理空的 data URI
-    text = re.sub(r'!\[([^\]]*)\]\(data:;base64,\)', r'![\1](image_not_available)', text)
-    return text
-
-
-def truncate_base64_datauri(text, max_chars=50000):
-    r"""截断过长的 base64 data URI，避免影响页面加载性能。"""
-    if not text:
-        return text
-    def replacer(m):
-        data = m.group(1)
-        if len(data) > max_chars:
-            return f'{m.group(0)[:100]}...[truncated {len(data)} chars]...'
-        return m.group(0)
-    text = re.sub(r'data:image/[^;]+;base64,([A-Za-z0-9+/=]+)', replacer, text)
-    return text
-
-
-def fix_yaml_double_commas(text):
-    r"""修复 YAML frontmatter 中的双逗号问题。"""
-    if not text:
-        return text
-    # 只处理 frontmatter 区域
-    parts = text.split('---\n', 2)
-    if len(parts) >= 3:
-        frontmatter = parts[1]
-        # 修复双逗号
-        frontmatter = re.sub(r',\s*,+', ',', frontmatter)
-        # 修复 tags 行尾的逗号
-        frontmatter = re.sub(r'tags:\s*\[([^\]]*?),\s*\]', r'tags: [\1]', frontmatter)
-        text = parts[0] + '---\n' + frontmatter + '---\n' + parts[2]
-    return text
-
-
-def strip_raw_inline_html(text):
-    r"""去掉 LLM 偶尔输出的裸行内 HTML 样式标签，避免 Hugo/浏览器误渲染。"""
-    if not text:
-        return text
-    return re.sub(
-        r'<(s|e|b|i|u)(?:\s+[^>]*)?>(.*?)</\1>',
-        lambda m: m.group(2),
-        text,
-        flags=re.IGNORECASE | re.DOTALL
-    )
-
-
-def fix_empty_markdown_links(text):
-    r"""修复空 Markdown 链接/图片，防止生成不可点击的坏节点。"""
-    if not text:
-        return text
-    text = re.sub(r'!\[([^\]]*)\]\s*\(\s*\)', r'![\1](image_not_available)', text)
-    text = re.sub(r'(?<!!)\[([^\]]*)\]\s*\(\s*\)', r'\1', text)
-    return text
-
-
-def dedupe_image_alts(text):
-    r"""补齐空图片 alt，并为重复 alt 加序号，避免 review/无障碍检查误报。"""
-    if not text:
-        return text
-    seen = {}
-    index = 0
-
-    def repl(m):
-        nonlocal index
-        index += 1
-        alt = (m.group(1) or '').strip()
-        url = m.group(2)
-        if not alt:
-            alt = f"论文图{index}"
-        count = seen.get(alt, 0) + 1
-        seen[alt] = count
-        if count > 1:
-            alt = f"{alt} - 图{count}"
-        return f"![{alt}]({url})"
-
-    return re.sub(r'!\[([^\]]*)\]\(([^)\n]+)\)', repl, text)
-
-
-def fix_yaml_unbalanced_quotes(text):
-    r"""修复 frontmatter 中由标题/标签引入的未闭合双引号。"""
-    if not text:
-        return text
-    parts = text.split('---\n', 2)
-    if len(parts) < 3:
-        return text
-    fixed_lines = []
-    changed = False
-    for line in parts[1].split('\n'):
-        if ':' in line and '"' in line and line.count('"') % 2 != 0 and '[' not in line and ']' not in line:
-            key, value = line.split(':', 1)
-            fixed_lines.append(f"{key}: {json.dumps(value.strip().strip(chr(34)), ensure_ascii=False)}")
-            changed = True
-        else:
-            fixed_lines.append(line)
-    if not changed:
-        return text
-    return parts[0] + '---\n' + '\n'.join(fixed_lines) + '---\n' + parts[2]
-
 
 def call_llm_api(prompt, max_tokens=800, temperature=0.1):
     """调用 LLM API，自动检测协议（OpenAI / Anthropic）。"""
@@ -1307,15 +1152,7 @@ def main():
         pa = paper.get('parsed') or parse_analysis(paper.get('analysis', ''))
         if pa:
             paper_md, slug = generate_paper_page(paper, today, category)
-            paper_md = fix_latex_delimiters(paper_md)
-            paper_md = escape_html_like_tags(paper_md)
-            paper_md = strip_raw_inline_html(paper_md)
-            paper_md = fix_image_markdown(paper_md)
-            paper_md = fix_empty_markdown_links(paper_md)
-            paper_md = dedupe_image_alts(paper_md)
-            paper_md = truncate_base64_datauri(paper_md)
-            paper_md = fix_yaml_double_commas(paper_md)
-            paper_md = fix_yaml_unbalanced_quotes(paper_md)
+            paper_md = sanitize_markdown_for_publish(paper_md)
             paper_file = os.path.join(CONTENT_DIR, f"{today}-{slug}.md")
             with open(paper_file, 'w') as f:
                 f.write(paper_md)
@@ -1324,15 +1161,7 @@ def main():
     print(f"📄 生成 {len(paper_slugs)} 篇论文独立页面")
 
     index_md = generate_index_page(scored, unscored, today, paper_slugs, category)
-    index_md = fix_latex_delimiters(index_md)
-    index_md = escape_html_like_tags(index_md)
-    index_md = strip_raw_inline_html(index_md)
-    index_md = fix_image_markdown(index_md)
-    index_md = fix_empty_markdown_links(index_md)
-    index_md = dedupe_image_alts(index_md)
-    index_md = truncate_base64_datauri(index_md)
-    index_md = fix_yaml_double_commas(index_md)
-    index_md = fix_yaml_unbalanced_quotes(index_md)
+    index_md = sanitize_markdown_for_publish(index_md)
     index_file = os.path.join(CONTENT_DIR, f"{today}.md")
     with open(index_file, 'w') as f:
         f.write(index_md)

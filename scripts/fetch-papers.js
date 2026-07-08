@@ -811,17 +811,51 @@ function deduplicatePapers(papers) {
  * 用大模型判断论文是否语音/音频相关
  */
 function parseFilterDecision(responseText, paperId = '') {
-    const answer = responseText ? responseText.trim().toLowerCase() : '';
+    return parseFilterDecisionDetails(responseText, paperId).related;
+}
+
+function extractFilterReason(responseText) {
+    const text = String(responseText || '').trim();
+    if (!text) return '';
+    try {
+        const jsonStart = text.indexOf('{');
+        const jsonEnd = text.lastIndexOf('}');
+        if (jsonStart >= 0 && jsonEnd > jsonStart) {
+            const parsed = JSON.parse(text.slice(jsonStart, jsonEnd + 1));
+            if (parsed.reason || parsed.rationale || parsed.explanation) {
+                return String(parsed.reason || parsed.rationale || parsed.explanation).trim();
+            }
+        }
+    } catch {
+        // fall through
+    }
+    const reasonMatch = text.match(/(?:理由|原因|reason|rationale)\s*[：:]\s*([^\n]+)/i);
+    if (reasonMatch) return reasonMatch[1].trim();
+    return text.split('\n').map(l => l.trim()).filter(Boolean).slice(0, 2).join(' ');
+}
+
+function parseFilterDecisionDetails(responseText, paperId = '') {
+    const rawText = String(responseText || '').trim();
+    const answer = rawText.toLowerCase();
+    const reason = extractFilterReason(responseText);
+    const makeDecision = (related, source) => ({
+        related,
+        reason,
+        rawResponse: rawText,
+        parseSource: source
+    });
 
     // 1. 优先解析 JSON 格式，便于未来让 prompt 输出机器可读结构
     try {
         const jsonStart = answer.indexOf('{');
         const jsonEnd = answer.lastIndexOf('}');
         if (jsonStart >= 0 && jsonEnd > jsonStart) {
-            const parsed = JSON.parse(answer.slice(jsonStart, jsonEnd + 1));
-            const decision = String(parsed.decision || parsed.related || parsed.conclusion || '').toLowerCase();
-            if (['related', 'yes', 'y', 'true', '相关', '是'].includes(decision)) return true;
-            if (['not_related', 'not related', 'no', 'n', 'false', '不相关', '无关', '否'].includes(decision)) return false;
+            const parsed = JSON.parse(rawText.slice(jsonStart, jsonEnd + 1));
+            const decisionValue = getCaseInsensitiveField(parsed, ['decision', 'related', 'conclusion']);
+            if (typeof decisionValue === 'boolean') return makeDecision(decisionValue, 'json');
+            const decision = String(decisionValue ?? '').trim().toLowerCase();
+            if (['related', 'yes', 'y', 'true', '相关', '是'].includes(decision)) return makeDecision(true, 'json');
+            if (['not_related', 'not related', 'no', 'n', 'false', '不相关', '无关', '否'].includes(decision)) return makeDecision(false, 'json');
         }
     } catch {
         // fall through to text parsing
@@ -831,33 +865,45 @@ function parseFilterDecision(responseText, paperId = '') {
     const conclusionMatch = answer.match(/(?:结论|判断|是否相关|conclusion|judgment|related)\s*[：:]\s*(not\s+related|not_related|unrelated|不相关|无关|否|no|n|related|相关|是|yes|y)(?=\s|$|[。；;，,])/i);
     if (conclusionMatch) {
         const v = conclusionMatch[1].toLowerCase();
-        return !(v === 'not related' || v === 'not_related' || v === 'unrelated' || v === '不相关' || v === '无关' || v === '否' || v === 'no' || v === 'n');
+        return makeDecision(
+            !(v === 'not related' || v === 'not_related' || v === 'unrelated' || v === '不相关' || v === '无关' || v === '否' || v === 'no' || v === 'n'),
+            'conclusion_line'
+        );
     }
 
     // 3. 检查最后一行
     const lines = answer.split('\n').map(l => l.trim()).filter(l => l);
     const lastLine = lines[lines.length - 1] || '';
     if (lastLine === '相关' || lastLine === '是' || lastLine === 'yes' || lastLine === 'y' || lastLine === 'related') {
-        return true;
+        return makeDecision(true, 'last_line');
     }
     if (lastLine === '不相关' || lastLine === '无关' || lastLine === '否' || lastLine === 'no' || lastLine === 'n' || lastLine === 'not related' || lastLine === 'not_related' || lastLine === 'unrelated') {
-        return false;
+        return makeDecision(false, 'last_line');
     }
 
     // 4. 文本中是否包含明确否定/肯定短语。避免单字“是/否”误伤说明句。
     if (answer.includes('不相关') || answer.includes('无关') || /\b(not related|not_related|unrelated)\b/i.test(answer)) {
-        return false;
+        return makeDecision(false, 'keyword_negative');
     }
     if (answer.includes('相关') || /\brelated\b/i.test(answer)) {
-        return true;
+        return makeDecision(true, 'keyword_positive');
     }
 
     // 4. 仍无法判断，默认保留（宁可错留不可错杀）
     console.log(`[filter] 无法判断 ${paperId}: "${answer.substring(0, 50)}" → 默认保留`);
-    return true;
+    return makeDecision(true, 'fallback_keep');
 }
 
-async function isSpeechAudioRelated(paper) {
+function getCaseInsensitiveField(obj, names) {
+    if (!obj || typeof obj !== 'object') return undefined;
+    const wanted = new Set(names.map(name => name.toLowerCase()));
+    for (const [key, value] of Object.entries(obj)) {
+        if (wanted.has(String(key).toLowerCase())) return value;
+    }
+    return undefined;
+}
+
+async function getSpeechAudioDecision(paper) {
     const paperId = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
     const prompt = loadPrompt('prompts/filter.md', {
         title: paper.title,
@@ -868,15 +914,26 @@ async function isSpeechAudioRelated(paper) {
     try {
         const response = await callModelForFilter([{ role: 'user', content: prompt }], 1000);
         consecutiveFilterApiFailures = 0;
-        return parseFilterDecision(response, paperId);
+        return parseFilterDecisionDetails(response, paperId);
     } catch (err) {
         consecutiveFilterApiFailures++;
         if (consecutiveFilterApiFailures >= FILTER_SYSTEM_FAILURE_THRESHOLD) {
             throw new Error(`筛选模型连续 ${consecutiveFilterApiFailures} 次调用失败，疑似 API 配置或服务故障: ${err.message}`);
         }
         console.error(`[filter] 判断论文 ${paperId} 失败: ${err.message}，默认保留`);
-        return true;   // API 失败时宁可错留不可错杀
+        return {
+            related: true,
+            reason: `筛选 API 调用失败，按保守策略保留: ${err.message}`,
+            rawResponse: '',
+            parseSource: 'api_error_keep',
+            error: err.message,
+            fallback: true
+        };   // API 失败时宁可错留不可错杀
     }
+}
+
+async function isSpeechAudioRelated(paper) {
+    return (await getSpeechAudioDecision(paper)).related;
 }
 
 /**
@@ -950,13 +1007,19 @@ async function filterPapersWithLLM(papers, options = {}) {
         console.log(`[filter] 处理批次 ${batchIndex + 1}/${batches.length}...`);
 
         const batchResults = await Promise.all(batch.map(async (paper) => {
-            const isRelated = await isSpeechAudioRelated(paper);
+            const modelDecision = await getSpeechAudioDecision(paper);
+            const isRelated = modelDecision.related;
             const paperId = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
             const decision = {
                 id: paperId,
                 paper_id: paper.paper_id || paper.arxivId || paper.id || paperId,
                 title: paper.title || '',
                 related: isRelated,
+                reason: modelDecision.reason || '',
+                rawResponse: modelDecision.rawResponse || '',
+                parseSource: modelDecision.parseSource || '',
+                error: modelDecision.error || null,
+                fallback: Boolean(modelDecision.fallback),
                 decidedAt: getBeijingISOString(),
                 ...decisionMetadata
             };
@@ -1058,7 +1121,9 @@ module.exports = {
     filterPapers,
     filterPapersWithLLM,
     parseFilterDecision,
+    parseFilterDecisionDetails,
     isSpeechAudioRelated,
+    getSpeechAudioDecision,
     filterPapersByKeywords,
     loadPapers,
     savePapers,

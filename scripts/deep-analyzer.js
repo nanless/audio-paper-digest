@@ -12,6 +12,8 @@ loadEnvFile();
 // 解决 stdout 缓冲问题：后台运行时强制立即 flush
 const http = require('http');
 const https = require('https');
+const dns = require('dns').promises;
+const net = require('net');
 const { PDFParse } = require('pdf-parse');
 const { ANALYSIS_CONFIG, ARXIV_CONFIG, SECONDARY_MODEL_CONFIG } = require('./config.js');
 
@@ -881,6 +883,23 @@ async function analyzePaperDeep(paper) {
     const imageUrls = imageInfos.map(info => info.url);
     const candidateImageInfos = selectImageCandidates(imageInfos, IMAGE_CANDIDATE_MAX);
     const candidateImageUrls = candidateImageInfos.map(info => info.url);
+    const candidateUrlSet = new Set(candidateImageUrls);
+    const imageManifest = {
+        totalFound: imageInfos.length,
+        candidateLimit: IMAGE_CANDIDATE_MAX,
+        downloadLimit: IMAGE_MAX_COUNT,
+        maxImageBytes: IMAGE_MAX_BYTES,
+        maxImageBase64Chars: IMAGE_MAX_BASE64_CHARS,
+        maxTotalBase64Chars: IMAGE_TOTAL_BASE64_CHARS,
+        candidates: imageInfos.map((info, index) => ({
+            url: info.url,
+            caption: info.caption || '',
+            score: scoreImageCandidate(info, index),
+            selectedForDownload: candidateUrlSet.has(info.url)
+        })),
+        downloaded: [],
+        selected: []
+    };
     if (imageInfos.length > candidateImageInfos.length) {
         console.log(`    [deep] 图片候选预筛: ${imageInfos.length} → ${candidateImageInfos.length} 张`);
     }
@@ -888,6 +907,11 @@ async function analyzePaperDeep(paper) {
     const hasFullTextIntro = hasFullText ? '以下是论文全文，请仔细阅读所有技术细节。' : '以下是论文摘要。';
 
     const downloadedImages = await downloadImagesSerial(candidateImageUrls, IMAGE_MAX_COUNT, IMAGE_MAX_BASE64_CHARS, IMAGE_TOTAL_BASE64_CHARS);
+    imageManifest.downloaded = downloadedImages.map(img => ({
+        url: img.url,
+        mime: img.mime,
+        base64Chars: img.base64.length
+    }));
     console.log(`    [deep] 成功下载 ${downloadedImages.length}/${candidateImageUrls.length} 张候选图片（总图片 ${imageUrls.length} 张）`);
 
     const prompt = loadPrompt('prompts/deep-analysis.md', {
@@ -1030,6 +1054,7 @@ async function analyzePaperDeep(paper) {
             const imageResult = await applyImageSupplement(paper, arxivId, analysis, imageInfos, downloadedImages);
             analysis = imageResult.analysis;
             selectedImageUrls = imageResult.selectedImageUrls;
+            imageManifest.selected = selectedImageUrls;
         } catch (err) {
             console.log(`    [deep] ⚠️  副模型图片筛选失败: ${err.message}，保留纯文本分析结果`);
         }
@@ -1040,7 +1065,8 @@ async function analyzePaperDeep(paper) {
         analysis: analysis,
         imageUrls: selectedImageUrls,
         selectedImageUrls,
-        allImageUrls: imageUrls
+        allImageUrls: imageUrls,
+        imageManifest
     };
 }
 
@@ -1098,26 +1124,44 @@ async function checkDemoPageForOpensource(demoUrl) {
     
     try {
         console.log(`    [deep] 🔍 检查 demo 页面: ${demoUrl}`);
+        const parsedUrl = await validatePublicHttpUrl(demoUrl);
+        const requestHostname = parsedUrl.validatedAddress || parsedUrl.hostname;
         
-        // 使用 https 请求获取页面内容
-            const response = await new Promise((resolve, reject) => {
-                const url = new URL(demoUrl);
-                const transport = url.protocol === 'http:' ? http : https;
-                const options = {
-                    hostname: url.hostname,
-                    port: url.port || (url.protocol === 'http:' ? 80 : 443),
-                    path: url.pathname + url.search,
-                    method: 'GET',
+        // 使用 http/https 请求获取页面内容；不自动跟随重定向，避免被跳到内网地址。
+        const response = await new Promise((resolve, reject) => {
+            const transport = parsedUrl.protocol === 'http:' ? http : https;
+            const options = {
+                hostname: requestHostname,
+                port: parsedUrl.port || (parsedUrl.protocol === 'http:' ? 80 : 443),
+                path: parsedUrl.pathname + parsedUrl.search,
+                method: 'GET',
+                servername: parsedUrl.hostname,
                 headers: {
+                    'Host': parsedUrl.host,
                     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 },
                 timeout: 15000,
             };
             
-                const req = transport.request(options, (res) => {
+            const req = transport.request(options, (res) => {
+                const contentType = String(res.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+                if (contentType && !['text/html', 'application/xhtml+xml', 'application/xml', 'text/plain'].includes(contentType)) {
+                    res.resume();
+                    resolve({ status: res.statusCode, data: '', skipped: `Content-Type=${contentType}` });
+                    return;
+                }
                 const chunks = [];
-                res.on('data', chunk => chunks.push(chunk));
+                let total = 0;
+                const maxBytes = 1024 * 1024;
+                res.on('data', chunk => {
+                    total += chunk.length;
+                    if (total > maxBytes) {
+                        req.destroy(new Error(`Demo page exceeds ${maxBytes} bytes`));
+                        return;
+                    }
+                    chunks.push(chunk);
+                });
                 res.on('end', () => resolve({ status: res.statusCode, data: Buffer.concat(chunks).toString('utf8') }));
             });
             
@@ -1129,6 +1173,10 @@ async function checkDemoPageForOpensource(demoUrl) {
             req.end();
         });
         
+        if (response.skipped) {
+            console.log(`    [deep] ⚠️  Demo 页面跳过: ${response.skipped}`);
+            return [];
+        }
         if (response.status !== 200) {
             console.log(`    [deep] ⚠️  Demo 页面返回 ${response.status}`);
             return [];
@@ -1149,6 +1197,77 @@ async function checkDemoPageForOpensource(demoUrl) {
         console.log(`    [deep] ⚠️  访问 demo 页面失败: ${err.message}`);
         return [];
     }
+}
+
+function isPrivateIpAddress(address) {
+    const ipType = net.isIP(address);
+    if (ipType === 4) {
+        const parts = address.split('.').map(n => Number.parseInt(n, 10));
+        const [a, b] = parts;
+        return (
+            a === 0 ||
+            a === 10 ||
+            a === 127 ||
+            (a === 100 && b >= 64 && b <= 127) ||
+            (a === 169 && b === 254) ||
+            (a === 172 && b >= 16 && b <= 31) ||
+            (a === 192 && b === 0) ||
+            (a === 192 && b === 168) ||
+            (a === 198 && (b === 18 || b === 19)) ||
+            (a === 198 && b === 51) ||
+            (a === 203 && b === 0) ||
+            (a >= 224)
+        );
+    }
+    if (ipType === 6) {
+        const lower = address.toLowerCase();
+        const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+        if (mapped) return isPrivateIpAddress(mapped[1]);
+        const mappedHex = lower.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+        if (mappedHex) {
+            const hi = Number.parseInt(mappedHex[1], 16);
+            const lo = Number.parseInt(mappedHex[2], 16);
+            return isPrivateIpAddress(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+        }
+        return (
+            lower === '::1' ||
+            lower === '::' ||
+            lower.startsWith('fc') ||
+            lower.startsWith('fd') ||
+            lower.startsWith('fe80')
+        );
+    }
+    return true;
+}
+
+async function validatePublicHttpUrl(rawUrl) {
+    const url = new URL(rawUrl);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        throw new Error(`不支持的 demo URL 协议: ${url.protocol}`);
+    }
+    if (url.username || url.password) {
+        throw new Error('demo URL 不允许包含用户名或密码');
+    }
+    const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
+        throw new Error('demo URL 指向 localhost');
+    }
+    if (net.isIP(hostname)) {
+        if (isPrivateIpAddress(hostname)) throw new Error(`demo URL 指向非公网 IP: ${hostname}`);
+        url.validatedAddress = hostname;
+        return url;
+    }
+    const records = await dns.lookup(hostname, { all: true, verbatim: false });
+    if (!records || records.length === 0) {
+        throw new Error(`demo URL DNS 解析为空: ${hostname}`);
+    }
+    for (const record of records) {
+        if (isPrivateIpAddress(record.address)) {
+            throw new Error(`demo URL DNS 解析到非公网 IP: ${record.address}`);
+        }
+    }
+    url.validatedAddress = records[0].address;
+    return url;
 }
 
 /**
@@ -1525,6 +1644,7 @@ module.exports = {
     extractMarkdownImageUrls,
     removeUnapprovedMarkdownImages,
     selectImageCandidates,
+    scoreImageCandidate,
     hasRequiredAnalysisSections,
     normalizeImageInfos,
     sourceTextLikelyHasTables,
@@ -1533,6 +1653,9 @@ module.exports = {
     isSupportedImageUrl,
     safeImageLabel,
     cleanGapFillPrefix,
+    checkDemoPageForOpensource,
+    isPrivateIpAddress,
+    validatePublicHttpUrl,
     extractSectionByTitle,
     mergeSectionByTitle
 };

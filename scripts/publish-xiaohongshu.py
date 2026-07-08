@@ -38,7 +38,28 @@ def smart_truncate(text, max_len=65):
     return text[:max_len]
 
 
-def call_llm_for_oneliner(title, abstract):
+def build_oneliner_context(title, abstract, pa=None):
+    """构造 one-liner 输入，优先使用深度分析 parsed 字段。"""
+    pa = pa or {}
+    parts = [
+        f"标题：{title}",
+    ]
+    if pa.get('summary'):
+        parts.append(f"核心摘要：{pa.get('summary', '')[:500]}")
+    if pa.get('results'):
+        parts.append(f"实验结果：{pa.get('results', '')[:450]}")
+    if pa.get('limitations'):
+        parts.append(f"局限：{pa.get('limitations', '')[:250]}")
+    if pa.get('opensource'):
+        parts.append(f"开源：{pa.get('opensource', '')[:220]}")
+    if pa.get('primaryTaskTag') or pa.get('primaryMethodTag'):
+        parts.append(f"标签：{pa.get('primaryTaskTag', '')} {pa.get('primaryMethodTag', '')}".strip())
+    if len(parts) <= 1 and abstract:
+        parts.append(f"摘要：{abstract[:800]}")
+    return "\n".join(parts)
+
+
+def call_llm_for_oneliner(title, abstract, pa=None):
     """调用 LLM 生成一句话论文介绍，自动检测协议。"""
     api_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
     endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', 'https://api.openai.com/v1')
@@ -47,10 +68,10 @@ def call_llm_for_oneliner(title, abstract):
     if not api_key:
         return None
 
-    prompt = f"""用1-2句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书。总字数严格控制在70字以内，必须输出完整内容，不要省略：
+    context = build_oneliner_context(title, abstract, pa)
+    prompt = f"""用1-2句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书。总字数严格控制在70字以内，必须输出完整内容，不要省略。优先突出任务、方法、实验收益或开源价值，不要只复述标题：
 
-标题：{title}
-摘要：{abstract[:800]}
+{context}
 
 只输出介绍文字，不要任何解释、格式标记、emoji或LaTeX公式。"""
 
@@ -136,7 +157,7 @@ def generate_llm_oneliners(top_papers):
         score, p, pa = item
         title = p.get('title', '')
         abstract = p.get('abstract', '') or p.get('summary', '')
-        result = call_llm_for_oneliner(title, abstract)
+        result = call_llm_for_oneliner(title, abstract, pa)
         if result:
             print(f"  ✓ {title[:40]}... → {result[:50]}...")
             return result

@@ -50,6 +50,157 @@ def format_medal(index):
     return medals[index] if index < 3 else f'{index + 1}.'
 
 
+def fix_latex_delimiters(text):
+    r"""将 $...$ 转换为 \(...\)，$$...$$ 转换为 \[...\]。"""
+    if not text:
+        return text
+    text = re.sub(r'(?<!\\)\$\$(.+?)\$\$', r'\\[\1\\]', text, flags=re.DOTALL)
+    text = re.sub(r'(?<!\\)\$([^\s\$][^$]*?)\$', r'\\(\1\\)', text)
+    text = re.sub(r'`([^`]*?)\$([^`]*?)\$([^`]*?)`', r'`\1\\(\2\\)\3`', text)
+    return text
+
+
+def escape_html_like_tags(text):
+    r"""转义论文中可能被 Hugo 解析为 HTML 的标记。"""
+    if not text:
+        return text
+    text = re.sub(r'(?<![a-zA-Z])<(/?)([SEse])>(?![a-zA-Z0-9])', r'`<\1\2>`', text)
+    text = re.sub(
+        r'(?<![a-zA-Z0-9`])<(/?)(task|perception|comprehension|reasoning|agent|action|state|observation|reward|goal|intent|belief|plan|policy|environment|module|component|feature|input|output|label|class|category|type|mode|phase|stage|step|layer|block|unit|node|edge|graph|tree|path|loop|branch|condition|constraint|rule|fact|evidence|proof|hypothesis|assumption|premise|conclusion|result|finding|insight|implication|contribution|limitation|direction|extension|variant|version|update|fix|issue|error|warning|notice|info|trace|log|record|entry|item|element|object|subject|target|source|reference|cite|quote|note|comment|remark|annotation|caption|title|heading|paragraph|sentence|phrase|word|token|char|symbol|sign|mark|tag|badge|identifier|id|key|code|pin|secret|ticket|voucher|license|permit|certificate|credential|award|medal|prize|gift|bonus|benefit|advantage|edge|lead|margin|gap|difference|distance|range|scope|span|scale|size|length|width|height|depth|volume|area|surface|space|place|spot|location|site|position|point|dot|pixel|fragment|shard|piece|part|portion|section|segment|slice|chunk|block|lump|mass|body|entity|thing|article|product|goods|material|substance|matter|fabric|cloth|garment|clothing|wear|dress|costume|uniform|outfit|suit|wardrobe|closet|cabinet|cupboard|pantry|cellar|basement|attic|loft|tower|spire|dome|vault|arch|beam|column|pillar|post|pole|rod|bar|rail|track|path|way|road|route|course|direction|heading|bearing|azimuth|elevation|altitude|latitude|longitude|coordinate|interrupt|backchannel|response|free|BEsound)(?![a-zA-Z0-9`])>',
+        r'`<\1\2>`',
+        text,
+        flags=re.IGNORECASE
+    )
+    return text
+
+
+def fix_image_markdown(text):
+    r"""将 LLM 输出的非标准图片引用格式转换为标准 Markdown 图片语法。"""
+    if not text:
+        return text
+    text = re.sub(
+        r'(?:^|\n)\s*(?:-\s*)?外部\s*URL:\s*(https?://\S+?)\s*\(alt=([^)]+)\)',
+        r'\n![\2](\1)',
+        text,
+        flags=re.MULTILINE
+    )
+    text = re.sub(
+        r'(?:^|\n)\s*(?:-\s*)?外部\s*URL:\s*(https?://\S+?)\s+alt=(.+?)(?=\n|$)',
+        r'\n![\2](\1)',
+        text,
+        flags=re.MULTILINE
+    )
+    text = re.sub(r'\(https?://[^)]+\.\.\.\)', '(image_url_truncated)', text)
+    text = re.sub(r'!\[([^\]]*)\]\(data:;base64,\)', r'![\1](image_not_available)', text)
+    return text
+
+
+def truncate_base64_datauri(text, max_chars=50000):
+    r"""截断过长的 base64 data URI，避免影响页面加载性能。"""
+    if not text:
+        return text
+
+    def replacer(m):
+        data = m.group(1)
+        if len(data) > max_chars:
+            return f'{m.group(0)[:100]}...[truncated {len(data)} chars]...'
+        return m.group(0)
+
+    return re.sub(r'data:image/[^;]+;base64,([A-Za-z0-9+/=]+)', replacer, text)
+
+
+def fix_yaml_double_commas(text):
+    r"""修复 YAML frontmatter 中的双逗号问题。"""
+    if not text:
+        return text
+    parts = text.split('---\n', 2)
+    if len(parts) >= 3:
+        frontmatter = parts[1]
+        frontmatter = re.sub(r',\s*,+', ',', frontmatter)
+        frontmatter = re.sub(r'tags:\s*\[([^\]]*?),\s*\]', r'tags: [\1]', frontmatter)
+        text = parts[0] + '---\n' + frontmatter + '---\n' + parts[2]
+    return text
+
+
+def strip_raw_inline_html(text):
+    r"""去掉裸行内 HTML 样式标签，避免 Hugo/浏览器误渲染。"""
+    if not text:
+        return text
+    return re.sub(
+        r'<(s|e|b|i|u)(?:\s+[^>]*)?>(.*?)</\1>',
+        lambda m: m.group(2),
+        text,
+        flags=re.IGNORECASE | re.DOTALL
+    )
+
+
+def fix_empty_markdown_links(text):
+    r"""修复空 Markdown 链接/图片。"""
+    if not text:
+        return text
+    text = re.sub(r'!\[([^\]]*)\]\s*\(\s*\)', r'![\1](image_not_available)', text)
+    text = re.sub(r'(?<!!)\[([^\]]*)\]\s*\(\s*\)', r'\1', text)
+    return text
+
+
+def dedupe_image_alts(text):
+    r"""补齐空图片 alt，并为重复 alt 加序号。"""
+    if not text:
+        return text
+    seen = {}
+    index = 0
+
+    def repl(m):
+        nonlocal index
+        index += 1
+        alt = (m.group(1) or '').strip()
+        url = m.group(2)
+        if not alt:
+            alt = f"论文图{index}"
+        count = seen.get(alt, 0) + 1
+        seen[alt] = count
+        if count > 1:
+            alt = f"{alt} - 图{count}"
+        return f"![{alt}]({url})"
+
+    return re.sub(r'!\[([^\]]*)\]\(([^)\n]+)\)', repl, text)
+
+
+def fix_yaml_unbalanced_quotes(text):
+    r"""修复 frontmatter 中未闭合双引号。"""
+    if not text:
+        return text
+    parts = text.split('---\n', 2)
+    if len(parts) < 3:
+        return text
+    fixed_lines = []
+    changed = False
+    for line in parts[1].split('\n'):
+        if ':' in line and '"' in line and line.count('"') % 2 != 0 and '[' not in line and ']' not in line:
+            key, value = line.split(':', 1)
+            fixed_lines.append(f"{key}: {json.dumps(value.strip().strip(chr(34)), ensure_ascii=False)}")
+            changed = True
+        else:
+            fixed_lines.append(line)
+    if not changed:
+        return text
+    return parts[0] + '---\n' + '\n'.join(fixed_lines) + '---\n' + parts[2]
+
+
+def sanitize_markdown_for_publish(text):
+    """发布前通用 Markdown 清洗。"""
+    text = fix_latex_delimiters(text)
+    text = escape_html_like_tags(text)
+    text = strip_raw_inline_html(text)
+    text = fix_image_markdown(text)
+    text = fix_empty_markdown_links(text)
+    text = dedupe_image_alts(text)
+    text = truncate_base64_datauri(text)
+    text = fix_yaml_double_commas(text)
+    text = fix_yaml_unbalanced_quotes(text)
+    return text
+
+
 def score_and_sort(papers):
     """
     解析每篇论文的分析结果，按评分降序排列。

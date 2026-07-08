@@ -51,6 +51,26 @@
     "hfOnly": 45,
     "both": 15
   },
+  "sourceHealth": {
+    "arxiv": {
+      "totalFetched": 273,
+      "categories": [
+        {
+          "id": "cs.SD",
+          "fetched": 50,
+          "newInCategory": 44,
+          "duplicateInCategory": 6,
+          "durationMs": 12000,
+          "ok": true
+        }
+      ]
+    },
+    "huggingface": {
+      "ok": true,
+      "fetched": 51,
+      "durationMs": 1800
+    }
+  },
   "papers": []
 }
 ```
@@ -76,6 +96,9 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只有 `fi
       "paper_id": "2604.12345v1",
       "title": "论文标题",
       "related": true,
+      "reason": "论文包含语音识别任务和音频实验",
+      "rawResponse": "理由：论文包含语音识别任务...\n结论：相关",
+      "parseSource": "conclusion_line",
       "decidedAt": "2026-04-21T10:05:00+08:00",
       "filterModel": "mimo-v2.5",
       "filterPromptHash": "a1b2c3d4e5f6a7b8"
@@ -104,6 +127,10 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只有 `fi
     "hfOnly": 50,
     "both": 0,
     "decisionCount": 450
+  },
+  "sourceHealth": {
+    "arxiv": {"totalFetched": 273},
+    "huggingface": {"totalFetched": 51}
   },
   "papers": [
     {
@@ -213,7 +240,15 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只有 `fi
       },
       "selectedImageUrls": ["https://arxiv.org/html/.../fig1.png"],
       "imageUrls": ["https://arxiv.org/html/.../fig1.png"],
-      "allImageUrls": ["https://arxiv.org/html/.../fig1.png", "..."]
+      "allImageUrls": ["https://arxiv.org/html/.../fig1.png", "..."],
+      "imageManifest": {
+        "totalFound": 8,
+        "candidateLimit": 20,
+        "downloaded": [
+          {"url": "https://arxiv.org/html/.../fig1.png", "mime": "image/png", "base64Chars": 120000}
+        ],
+        "selected": ["https://arxiv.org/html/.../fig1.png"]
+      }
     }
   ]
 }

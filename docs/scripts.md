@@ -396,7 +396,7 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 - 支持 `--date YYYY-MM-DD` 指定日期
 - 若没有匹配 `fetchedAt == --date` 的论文，脚本会停止生成，避免跨日混入历史论文
 - 输出到 `data/current/xiaohongshu-YYYY-MM-DD-<suffix>.md`
-- **每篇论文的一句话介绍调用 MiMo LLM API 生成**（anthropic 协议，`session.trust_env = False` 绕过代理，并发 3），LLM 失败时回退到本地 `extract_one_liner()`
+- **每篇论文的一句话介绍调用 MiMo LLM API 生成**（anthropic 协议，`session.trust_env = False` 绕过代理）；输入优先使用 `parsed.summary/results/limitations/opensource` 和主标签，再回退摘要；LLM 失败时回退到本地 `extract_one_liner()`
 - 自动清理 Markdown 格式和学术化前缀
 - 附带 emoji 热度标识：🔥≥8 分、✅≥6 分、📝<6 分（与博客、微信统一）
 - 少于 1000 字，不输出标签和 `---` 分隔线，开源信息标注清晰

@@ -32,7 +32,7 @@ description: >
 3. **arXiv 抓取**：7 个分类，每类最多 100 篇（可通过 `PD_ARXIV_MAX_RESULTS` 调整），遇连续 20 篇已有 ID 提前停止（去重集合包含 papers.json + 博客已发布 ID）
 4. **HuggingFace 抓取**：`daily_papers` 分页（最多 20 页）+ `papers` API 补充，默认近 7 天，只排除历史去重集合/博客已发布 ID；同批 arXiv 重叠论文保留给合并阶段补齐 HF 元数据
 5. **合并去重**：arXiv 优先，HF 补充 7 个特有字段，标记 `sources`；过滤掉博客已发布论文
-6. **LLM 筛选**：按 `PAPER_ANALYZER_*` 配置逐篇判断语音/音乐/音频相关，`batchSize=5`（可通过 `PD_FILTER_BATCH_SIZE` 调整），单篇超时 60 秒，重试 5 次；每批写入 `data/current/filter-decisions.json`，中断后会按模型名和 `prompts/filter.md` hash 续跑
+6. **LLM 筛选**：按 `PAPER_ANALYZER_*` 配置逐篇判断语音/音乐/音频相关，`batchSize=5`（可通过 `PD_FILTER_BATCH_SIZE` 调整），单篇超时 60 秒，重试 5 次；每批写入 `data/current/filter-decisions.json`，中断后会按模型名和 `prompts/filter.md` hash 续跑；每条决策保存 `related`、`reason`、`rawResponse`、`parseSource`
 7. **保存筛选结果**：`data/current/raw-candidates.json` 保存筛选输入，`data/current/filtered-papers.json` 保存筛选/归档去重后的输出
 8. **更新去重库**：追加所有爬取论文 ID 到 `data/current/papers.json`（不仅筛选通过的，提前保存防止后续中断丢失）
 9. **深度分析**：`deep-analyzer.js`。双模型模式（配置 `PAPER_ANALYZER_SECONDARY_MODEL` 时）：主模型纯文本分析，完成开源扫描/审校/表格和方法修复后，副模型最终看图筛选高价值图片并补充正文；单模型模式（未配置副模型）：仅文本分析。并发 3 篇（可通过 `PD_ANALYSIS_CONCURRENCY` 调整），每篇最多重试 2 次（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整）
@@ -50,10 +50,10 @@ description: >
 | 文件 | 用途 | 归档行为 |
 |------|------|---------|
 | `data/current/papers.json` | 论文去重数据库（含 `digestStatus` 分析状态） | **不归档**，持续累积；`pending_analysis` / `analysis_failed` 不参与强去重，便于中断后重跑 |
-| `data/current/raw-candidates.json` | 当日合并与博客去重后的筛选候选 | 每次全流程重写，用于排查筛选输入 |
-| `data/current/filter-decisions.json` | 当日逐篇 LLM 筛选决策缓存 | 每批增量写入，模型或 prompt hash 变化后自动失效 |
+| `data/current/raw-candidates.json` | 当日合并与博客去重后的筛选候选，含 `sourceHealth` | 每次全流程重写，用于排查筛选输入 |
+| `data/current/filter-decisions.json` | 当日逐篇 LLM 筛选决策缓存，含 reason/rawResponse | 每批增量写入，模型或 prompt hash 变化后自动失效 |
 | `data/current/filtered-papers.json` | 筛选后的论文元数据 | 每日归档移走后重新生成 |
-| `data/current/deep-analysis-result.json` | 核心分析结果（含 analysis / parsed / selectedImageUrls / imageUrls / allImageUrls） | 每日归档移走后重新生成 |
+| `data/current/deep-analysis-result.json` | 核心分析结果（含 analysis / parsed / selectedImageUrls / imageManifest / sourceHealth） | 每日归档移走后重新生成 |
 | `data/current/analyzed.json` | 旧版已分析记录（兼容） | 每日归档移走后重新生成 |
 
 ### 3.2 兼容行为
@@ -121,6 +121,7 @@ API 调用特性：
 - **LLM API 请求明确设置 `agent: false`，强制直连以绕过本地代理（避免 MiMo 403）；arXiv/HuggingFace 等外部抓取仍使用代理自动检测**
 - arXiv HTML 解析使用 **cheerio** 结构化选择器，移除 script/style/nav/header/footer 等噪音元素
 - 图片先按 caption/文件名/顺序启发式预筛（默认 `imageCandidateMax=20`），再**串行下载**最多 `imageMaxCount=20` 张候选图片；下载层会校验 Content-Type、Content-Length 与 PNG/JPEG/WebP 文件头；默认单图原始大小上限 6MB、单图 base64 上限 8M 字符、总 base64 上限 20M 字符（均在 `config.js` 中可配）；超时或图片不可用后自动降级为纯文本重试
+- 每篇分析结果写入 `imageManifest`，记录图片发现数、候选评分、下载成功列表和最终选图，便于复盘图像筛选
 - 全文上限约 500K 字符（config.js 中 `fullTextMaxChars`）
 - 所有分析配置集中管理于 `scripts/config.js`，支持环境变量覆写
 
@@ -292,6 +293,7 @@ npm run xiaohongshu -- --date 2026-04-22
 
 - 小红书单帖正文限制约 1000 字，TOP 3 模式默认约 800-950 字符，适合单帖直接发布
 - **每篇论文的一句话介绍调用 MiMo LLM API 生成**（anthropic 协议，绕过代理），LLM 失败时回退到本地 `extract_one_liner()`（优先取 innovation 第一条，其次 summary 中含"提出了/解决了/旨在"的句子，最后 roast）
+- LLM one-liner 优先使用深度分析的 `parsed.summary`、`parsed.results`、`parsed.limitations`、`parsed.opensource` 与主标签，再回退摘要，避免只复述标题
 - 脚本会自动清理 Markdown 格式（`**加粗**`、`` 代码 ``）和学术化前缀（"这篇论文旨在"、"本文针对"等），避免平台渲染异常
 - 文案自动附带 emoji 热度标识：🔥≥8 分、✅≥6 分、📝<6 分（与博客、微信统一）
 - 末尾固定附博客链接和开源仓库链接，不输出标签和 `---` 分隔线
@@ -336,14 +338,16 @@ Agent 执行约束：
 
 若当天结果需要清空重跑：
 
-1. 删除 `data/current/filtered-papers.json`、`data/current/deep-analysis-result.json`
-2. **恢复 `papers.json` 到昨天状态**（推荐，比个删 ID 更可靠）：
+1. 若 `data/current/filtered-papers.json` 是今天且 `status: complete`：不要删筛选结果，直接运行 `node scripts/full-fetch.js`，主流程会跳过抓取/筛选并续跑深度分析。
+2. 若筛选未完成但 `data/current/filter-decisions.json` 是今天且模型/prompt hash 一致：直接运行 `node scripts/full-fetch.js`，筛选会复用已有逐篇决策继续。
+3. 若要彻底重抓重筛，再删除 `data/current/raw-candidates.json`、`data/current/filter-decisions.json`、`data/current/filtered-papers.json`、`data/current/deep-analysis-result.json`
+4. **必要时恢复 `papers.json` 到昨天状态**（推荐，比个删 ID 更可靠）：
    ```bash
    # 用昨天备份替换去重库（backupPapersJson 生成，格式为 papers-YYYY-MM-DD.json）
    cp data/archive/papers-2026-04-21.json data/current/papers.json
    ```
-3. 删除博客仓库中当天的所有 `content/posts/YYYY-MM-DD-*.md` 文件
-4. 重新运行 `npm run fetch`
+5. 删除博客仓库中当天的所有 `content/posts/YYYY-MM-DD-*.md` 文件
+6. 重新运行 `node scripts/full-fetch.js`
 
 **特殊场景——筛选阶段 API 全面失败（如 34→0 篇）：**
 - 即使筛选为 0 篇，`papers.json` 也已被污染（新增 ID 已写入），必须按步骤 1-2 清理后重跑。
@@ -363,7 +367,7 @@ cat data/current/papers.json | python3 -c "import json,sys; d=json.load(sys.stdi
 判断规则：
 | `papers.json` 的 `lastUpdated` | 正确操作 |
 |-------------------------------|---------|
-| **今天**（如 `2026-04-23T03:09:03`）| **不要恢复！** 它已经是最新状态，直接删除 `filtered-papers.json` 后重新运行即可 |
+| **今天**（如 `2026-04-23T03:09:03`）| **不要恢复！** 它已经是最新状态；优先用今日 `filtered-papers.json` / `filter-decisions.json` 续跑 |
 | **昨天或更早** | 可以恢复备份：`cp data/archive/papers-YYYY-MM-DD.json data/current/papers.json` |
 
 推荐检查命令（可选）：
@@ -419,7 +423,7 @@ PY
 17. **新增 LLM 端点必须接入 API 协议自动路由**：任何新增脚本调用 LLM 时，统一使用 `scripts/utils.js` 中的 `detectApiType()`、`buildApiUrl()`、`buildHeaders()`、`buildRequestBody()`、`parseResponseText()`，禁止硬编码特定协议的 URL/Header/Body。
 18. **修改 API 协议路由逻辑时同步全链路**：修改 `detectApiType()` 的判定规则或 `buildApiUrl()`/`buildHeaders()` 等函数时，必须同步检查 `fetch-papers.js`、`deep-analyzer.js` 以及所有使用 `analysis-engine.js` 的脚本（`full-fetch.js`、`reanalyze.js`、`batch-analyze.js`、`deep-analysis-only.js`、`analyze-single-paper.js`），确保全链路行为一致。
 19. **禁止将敏感文件提交到版本控制**：`data/`、`logs/`、`*.env`、`*.backup*`、缓存文件、含密钥的日志归档等严禁进入 git；提交前必须确认 `.gitignore` 已正确配置，且仓库中不存在历史遗留的敏感文件。
-20. **CI 自动语法检查**：CI 会通过 `find scripts tests -name '*.js'` 和 `find scripts -name '*.py'` 自动覆盖新增 JS/Python 文件；新增特殊文件类型时再更新 `.github/workflows/ci.yml`。
+20. **CI 自动检查**：CI 会通过 `npm test`、`find scripts tests -name '*.js'`、`find scripts -name '*.py'`、`python3 -m unittest discover -s tests/python` 和全仓库 `.sh` 语法检查覆盖新增 JS/Python/shell 文件；新增特殊文件类型时再更新 `.github/workflows/ci.yml`。
 21. **运行数据使用北京时间**：写入 `timestamp` / `lastUpdated` / `fetchedAt` 时使用 `getBeijingISOString()`；Python 发布侧使用北京时间 helper（如 `get_today_bj()`），避免 UTC 日期造成跨天归档或发布筛选错误。
 
 ---
