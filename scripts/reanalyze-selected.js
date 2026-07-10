@@ -9,12 +9,42 @@ setupScriptLogging(__filename);
 
 const fs = require('fs');
 const path = require('path');
-const { readJsonSafe, getBeijingISOString, writeFileAtomic, normalizedId } = require('./utils.js');
+const {
+    readJsonSafe,
+    getBeijingISOString,
+    writeFileAtomic,
+    normalizedId,
+    SCORING_RUBRIC_VERSION
+} = require('./utils.js');
 const { analyzeBatch } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses } = require('./digest-status.js');
 const Config = require('./config.js');
 
 const RESULT_FILE = Config.FILES.deepAnalysisResult;
+
+function updateReanalysisStats(data, analyzedResults, previousCurrentRubricIds, runStats, updatedAt) {
+    const recoveredCount = analyzedResults.filter(result => {
+        const key = normalizedId(result);
+        return key && !previousCurrentRubricIds.has(key)
+            && result.parsed?.scoringRubricVersion === SCORING_RUBRIC_VERSION;
+    }).length;
+
+    data.stats = { ...(data.stats || {}) };
+    if (Number.isFinite(Number(data.stats.reanalyzed))) {
+        data.stats.reanalyzed = Math.min(
+            Array.isArray(data.papers) ? data.papers.length : Number.MAX_SAFE_INTEGER,
+            Number(data.stats.reanalyzed) + recoveredCount
+        );
+    }
+    if (Number.isFinite(Number(data.stats.reanalyzeFailed))) {
+        data.stats.reanalyzeFailed = Math.max(0, Number(data.stats.reanalyzeFailed) - recoveredCount);
+    }
+    data.stats.reanalyzeAt = updatedAt;
+    data.stats.selectedReanalyzed = runStats.success;
+    data.stats.selectedReanalyzeFailed = runStats.failed;
+    data.stats.selectedReanalyzeAt = updatedAt;
+    return recoveredCount;
+}
 
 async function reanalyzeSelected(ids) {
     console.log(`=== 重新分析 ${ids.length} 篇论文 ===\n`);
@@ -27,6 +57,11 @@ async function reanalyzeSelected(ids) {
 
     const papers = data.papers || [];
     const batchDate = (data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10);
+    const previousCurrentRubricIds = new Set(papers
+        .filter(p => p.parsed?.scoringRubricVersion === SCORING_RUBRIC_VERSION
+            || p.scoringRubricVersion === SCORING_RUBRIC_VERSION)
+        .map(normalizedId)
+        .filter(Boolean));
 
     // 找到目标论文，清除旧的 analysis
     const toReanalyze = [];
@@ -125,23 +160,36 @@ async function reanalyzeSelected(ids) {
     }
 
     data.papers = Array.from(mergedMap.values());
-    data.timestamp = getBeijingISOString();
+    const updatedAt = getBeijingISOString();
+    data.timestamp = updatedAt;
+    const recoveredCount = updateReanalysisStats(
+        data,
+        analyzedResults,
+        previousCurrentRubricIds,
+        stats,
+        updatedAt
+    );
 
     writeFileAtomic(RESULT_FILE, JSON.stringify(data, null, 2));
     const digestStatus = updateAnalysisDigestStatuses(attemptResults, { batchDate });
 
     console.log(`\n✅ 重分析完成: 成功 ${stats.success} | 失败 ${stats.failed}`);
+    if (recoveredCount > 0) console.log(`历史失败恢复: ${recoveredCount} 篇`);
     if (digestStatus.updated > 0) console.log(`papers.json 状态已同步: ${digestStatus.updated} 篇`);
     console.log(`💾 结果已保存到: ${RESULT_FILE}`);
 }
 
-const ids = process.argv.slice(2);
-if (ids.length === 0) {
-    console.error('❌ 用法: node scripts/reanalyze-selected.js <arxivId1> [arxivId2] ...');
-    process.exit(1);
+if (require.main === module) {
+    const ids = process.argv.slice(2);
+    if (ids.length === 0) {
+        console.error('❌ 用法: node scripts/reanalyze-selected.js <arxivId1> [arxivId2] ...');
+        process.exit(1);
+    }
+
+    reanalyzeSelected(ids).catch(err => {
+        console.error('❌ 错误:', err);
+        process.exit(1);
+    });
 }
 
-reanalyzeSelected(ids).catch(err => {
-    console.error('❌ 错误:', err);
-    process.exit(1);
-});
+module.exports = { reanalyzeSelected, updateReanalysisStats };

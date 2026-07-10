@@ -196,6 +196,14 @@ def generate_paper_md(paper, date_str):
         se = '🔥' if score >= 8 else '✅' if score >= 6 else '📝'
         md += f'{se} **{pa.get("score", "N/A")}/10**\n\n'
 
+        metadata = []
+        if pa.get('documentType'):
+            metadata.append(f'文档类型：{pa["documentType"]}')
+        if pa.get('confidence'):
+            metadata.append(f'评分置信度：{pa["confidence"]}')
+        if metadata:
+            md += f'{" | ".join(metadata)}\n\n'
+
         if aurl:
             md += f'[arXiv]({aurl})\n\n'
 
@@ -242,7 +250,9 @@ def generate_overview_md(scored, unscored, date_str):
         for i, (score, p, pa) in enumerate(scored):
             medal = '🥇' if i == 0 else '🥈' if i == 1 else '🥉' if i == 2 else f'{i+1}.'
             title = p.get('title', 'Unknown')[:60]
-            md += f'- {medal} {title}（{score}分）\n'
+            document_type = pa.get('documentType', '') if pa else ''
+            type_suffix = f'，{document_type}' if document_type else ''
+            md += f'- {medal} {title}（{score}分{type_suffix}）\n'
         md += '\n'
 
     md += '---\n\n'

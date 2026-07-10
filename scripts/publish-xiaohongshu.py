@@ -34,7 +34,7 @@ def smart_truncate(text, max_len=65):
             return text[:i+1]
     #  fallback：在词语边界截断，避免截断到汉字中间
     for i in range(max_len, max_len // 2, -1):
-        if i < len(text) and text[i] in '，、；：,;:\s':
+        if i < len(text) and (text[i] in '，、；：,;:' or text[i].isspace()):
             return text[:i]
     return text[:max_len]
 
@@ -159,6 +159,8 @@ TOP {top_n} 👇
         score_line = f'{fire} {score}/10'
         if pa.get('rankBucket'):
             score_line += f' | {pa["rankBucket"]}'
+        if pa.get('documentType'):
+            score_line += f' | {pa["documentType"]}'
         if pa.get('primaryMethodTag'):
             score_line += f' | {pa["primaryMethodTag"]}'
 
@@ -187,7 +189,7 @@ def generate_all_summary_post(scored, unscored, date_str):
         title = p.get('title', '')[:50]
         liner = extract_one_liner(pa)
         fire = score_emoji(score)
-        extras = [v for v in [pa.get('rankBucket', ''), pa.get('primaryTaskTag', '')] if v]
+        extras = [v for v in [pa.get('rankBucket', ''), pa.get('documentType', ''), pa.get('primaryTaskTag', '')] if v]
         extra_text = f" | {' | '.join(extras)}" if extras else ''
         md += f"{medal} {title} {fire}{score}分{extra_text}\n"
         if liner:

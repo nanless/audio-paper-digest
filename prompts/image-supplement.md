@@ -70,6 +70,7 @@ arXiv ID: {arxivId}
 - `section` 必须是允许章节之一。
 - `anchor` 必须来自主模型分析报告原文，尽量短；如果没有合适 anchor，留空字符串，代码会插到对应章节末尾。
 - `replacement` 只有在 `anchor` 能精确定位且确实需要修改插图前后文字时填写；不得超过一个短段落，不得改变主模型原本事实判断。
+- `lead`、`replacement` 和 `explanation` 引用当前图片时统一写“下图”，不要写候选编号“图1/图2/Figure 1”；代码会按最终正文出现顺序生成展示编号。
 - `lead` 和 `explanation` 必须是中文，且只包含图像相关说明。
 - 如果没有任何图片值得插入，输出 `{"insertions":[]}`。
 ~~~

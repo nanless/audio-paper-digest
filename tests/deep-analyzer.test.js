@@ -51,6 +51,20 @@ describe('deep-analyzer section helpers', () => {
         assert.match(merged, /## 核心创新点\n创新。/);
     });
 
+    it('合并多行章节时会完整删除旧内容', () => {
+        const { mergeSectionByTitle } = require('../scripts/deep-analyzer.js');
+        const analysis = `## 方法概述和架构
+旧方法第一行。
+旧方法第二行。
+
+## 核心创新点
+创新。`;
+        const merged = mergeSectionByTitle(analysis, '方法概述和架构', '新方法第一行。\n新方法第二行。');
+        assert.doesNotMatch(merged, /旧方法/);
+        assert.match(merged, /新方法第一行。\n新方法第二行。/);
+        assert.match(merged, /## 核心创新点\n创新。/);
+    });
+
     it('移除副模型输出中的未授权 Markdown 图片', () => {
         const {
             removeUnapprovedMarkdownImages
@@ -116,6 +130,115 @@ describe('deep-analyzer section helpers', () => {
 
         assert.strictEqual(cleanGapFillPrefix('废话\n## 评分理由\n理由'), null);
         assert.strictEqual(cleanGapFillPrefix('废话\n## 评分\n8.0/10\n\n## 评分理由\n理由'), '## 评分\n8.0/10\n\n## 评分理由\n理由');
+    });
+
+    it('最终评分审计只更新类型、分数和评分理由', () => {
+        const {
+            parseScoringAuditResult,
+            applyScoringAuditResult
+        } = require('../scripts/deep-analyzer.js');
+        const analysis = `## 评分
+4.8/10
+
+## 机器摘要
+document_type: 系统技术报告
+rank_bucket: 后50%
+innovation: 0.8
+technical_rigor: 0.7
+experimental_sufficiency: 0.6
+clarity: 0.6
+impact: 0.5
+open_source: 0.2
+reproducibility: 0.1
+engineering_score: 1.3
+confidence: 高
+primary_task_tag: #音视频生成
+
+## 核心摘要
+正文事实和结论必须保持不变。
+
+## 评分理由
+旧评分理由。`;
+        const reason = '该维度根据已有分析中的具体证据独立判断，不重复使用其他维度的扣分事实。';
+        const audit = parseScoringAuditResult(JSON.stringify({
+            documentType: 'tech report',
+            confidence: '中',
+            dimensions: {
+                innovation: { score: 1.6, reason },
+                technicalRigor: { score: 1.1, reason: '公开方法逻辑基本自洽，技术路线中没有发现明确推导错误或系统逻辑漏洞。' },
+                experimentalSufficiency: { score: 0.8, reason: '端到端结果支持系统能力，但组件级贡献缺少独立证据且竞品配置控制不足。' },
+                clarity: { score: 0.8, reason },
+                impact: { score: 0.5, reason },
+                openSource: { score: 0.2, reason },
+                reproducibility: { score: 0.1, reason: '模型架构规格、训练细节和完整推理配置披露不足，第三方无法据此重建相同系统。' },
+                engineering: { score: 1.5, reason }
+            }
+        }));
+        const updated = applyScoringAuditResult(analysis, audit);
+
+        assert.strictEqual(audit.total, 6.6);
+        assert.match(updated, /## 评分\n6\.6\/10/);
+        assert.match(updated, /document_type: 系统技术报告/);
+        assert.match(updated, /rank_bucket: 前50%/);
+        assert.match(updated, /confidence: 中/);
+        assert.match(updated, /technical_rigor: 1\.1/);
+        assert.match(updated, /正文事实和结论必须保持不变/);
+        assert.match(updated, /技术严谨性 \(1\.1\/1\.5\)：公开方法逻辑基本自洽/);
+        assert.match(updated, /可复现性 \(0\.1\/0\.5\)：模型架构规格、训练细节/);
+        assert.doesNotMatch(updated, /旧评分理由/);
+    });
+
+    it('最终评分审计拒绝缺失维度和越界分数', () => {
+        const { parseScoringAuditResult } = require('../scripts/deep-analyzer.js');
+        assert.throws(() => parseScoringAuditResult('{"documentType":"方法研究","confidence":"高","dimensions":{}}'), /缺少维度/);
+    });
+
+    it('最终评分审计拒绝跨维度重复扣分事实', () => {
+        const { parseScoringAuditResult } = require('../scripts/deep-analyzer.js');
+        const reason = '该维度根据已有分析中的具体证据独立判断，不重复使用其他维度的扣分事实。';
+        const payload = {
+            documentType: '系统技术报告',
+            confidence: '中',
+            dimensions: {
+                innovation: { score: 1, reason },
+                technicalRigor: { score: 1, reason: '由于训练超参数没有披露，所以本文技术严谨性明显不足，需要在这里扣分。' },
+                experimentalSufficiency: { score: 1, reason },
+                clarity: { score: 0.8, reason },
+                impact: { score: 0.5, reason },
+                openSource: { score: 0.2, reason },
+                reproducibility: { score: 0.1, reason },
+                engineering: { score: 1.2, reason }
+            }
+        };
+        assert.throws(() => parseScoringAuditResult(JSON.stringify(payload)), /其他维度/);
+    });
+
+    it('最终评分审计会按已有资源状态确定性归一化开源分和总分', () => {
+        const {
+            parseScoringAuditResult,
+            validateScoringAuditAgainstAnalysis
+        } = require('../scripts/deep-analyzer.js');
+        const reason = '该维度根据已有分析中的具体证据独立判断，不重复使用其他维度的扣分事实。';
+        const payload = {
+            documentType: '系统技术报告',
+            confidence: '中',
+            dimensions: {
+                innovation: { score: 1, reason },
+                technicalRigor: { score: 1, reason },
+                experimentalSufficiency: { score: 1, reason },
+                clarity: { score: 0.8, reason },
+                impact: { score: 0.5, reason },
+                openSource: { score: 0.5, reason: '论文只提供在线演示页面，没有发布任何核心代码、模型权重或训练数据资源。' },
+                reproducibility: { score: 0.1, reason },
+                engineering: { score: 1.2, reason }
+            }
+        };
+        const audit = parseScoringAuditResult(JSON.stringify(payload));
+        const analysis = `## 评分\n5.0/10\n\n## 机器摘要\nhas_code: 否\nhas_model: 否\nhas_dataset: 否\n\n## 开源详情\n仅提供在线演示 Demo：https://example.com/demo`;
+        const normalized = validateScoringAuditAgainstAnalysis(analysis, audit);
+        assert.strictEqual(normalized.dimensions.openSource.score, 0.2);
+        assert.match(normalized.dimensions.openSource.reason, /只提供可访问的在线演示页面/);
+        assert.strictEqual(normalized.total, 5.8);
     });
 
     it('demo 页面安全检查会拒绝本机和私网地址', async () => {
@@ -230,6 +353,31 @@ describe('deep-analyzer section helpers', () => {
             /系统整体流程如图1所示。第一段先概括输入、编码和融合。\n\n图1展示系统整体流程。\n\n!\[图1\]\(https:\/\/arxiv\.org\/html\/2607\.1\/figure_1\.jpg\)/
         );
         assert.match(result.analysis, /第二段详细解释训练协议。/);
+    });
+
+    it('通用图片 alt 和已选 URL 按最终正文出现顺序编号', () => {
+        const { parseImageInsertionPlan, applyImageInsertionPlan } = require('../scripts/deep-analyzer.js');
+        const analysis = `## 方法概述和架构
+方法正文。
+
+## 实验结果
+实验正文。`;
+        const images = [
+            { url: 'https://example.com/result.png', caption: '' },
+            { url: 'https://example.com/method.png', caption: '' }
+        ];
+        const plans = parseImageInsertionPlan(JSON.stringify({ insertions: [
+            { image: 1, section: '实验结果', lead: '结果图。', explanation: '结果说明内容足够。' },
+            { image: 2, section: '方法概述和架构', lead: '方法图。', explanation: '方法说明内容足够。' }
+        ] }), images);
+        const result = applyImageInsertionPlan(analysis, plans, images);
+
+        assert.match(result.analysis, /!\[图1\]\(https:\/\/example\.com\/method\.png\)/);
+        assert.match(result.analysis, /!\[图2\]\(https:\/\/example\.com\/result\.png\)/);
+        assert.deepStrictEqual(result.selectedImageUrls, [
+            'https://example.com/method.png',
+            'https://example.com/result.png'
+        ]);
     });
 
     it('兼容预提供图片 URL 字符串和对象数组', () => {

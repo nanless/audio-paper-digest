@@ -36,7 +36,20 @@ describe('validate-data-files', () => {
             papers: [{
                 arxivId: '2607.00001',
                 analysis: 'ok',
-                parsed: { score: 8.5 },
+                scoringRubricVersion: 'type-aware-v1',
+                parsed: {
+                    score: 8.5,
+                    documentType: '系统技术报告',
+                    scoringRubricVersion: 'type-aware-v1',
+                    innovationScore: 1.5,
+                    technicalRigorScore: 1.2,
+                    experimentalSufficiencyScore: 1.1,
+                    clarityScore: 0.8,
+                    impactScore: 1.0,
+                    openSourceScore: 1.2,
+                    reproducibilityScore: 0.3,
+                    engineeringScore: 1.4
+                },
                 selectedImageUrls: [],
                 imageManifest: { selected: [] }
             }]
@@ -78,6 +91,52 @@ describe('validate-data-files', () => {
         const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
         assert.match(issues, /parsed\.score/);
         assert.match(issues, /selectedImageUrls/);
+    });
+
+    it('报告非法文档类型、评分版本、分项越界和总分不一致', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-'));
+        const resultFile = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(resultFile, JSON.stringify({
+            papers: [{
+                arxivId: '2607.00001',
+                scoringRubricVersion: 'future-v9',
+                parsed: {
+                    score: 9.9,
+                    documentType: '宣传稿',
+                    scoringRubricVersion: 'future-v9',
+                    innovationScore: 3,
+                    technicalRigorScore: 1.2,
+                    experimentalSufficiencyScore: 1.1,
+                    clarityScore: 0.8,
+                    impactScore: 1.0,
+                    openSourceScore: 1.2,
+                    reproducibilityScore: 0.3,
+                    engineeringScore: 1.4
+                }
+            }, {
+                arxivId: '2607.00002',
+                scoringRubricVersion: 'type-aware-v1',
+                parsed: {
+                    score: 9.9,
+                    documentType: '方法研究',
+                    scoringRubricVersion: 'type-aware-v1',
+                    innovationScore: 1.5,
+                    technicalRigorScore: 1.2,
+                    experimentalSufficiencyScore: 1.1,
+                    clarityScore: 0.8,
+                    impactScore: 1.0,
+                    openSourceScore: 1.2,
+                    reproducibilityScore: 0.3,
+                    engineeringScore: 1.4
+                }
+            }]
+        }));
+
+        const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
+        assert.match(issues, /documentType 非法/);
+        assert.match(issues, /scoringRubricVersion 非法/);
+        assert.match(issues, /innovationScore 非法/);
+        assert.match(issues, /八项合计封顶结果/);
     });
 
     it('接受合法筛选结果和逐篇筛选决策缓存', () => {

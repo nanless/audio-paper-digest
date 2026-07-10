@@ -8,6 +8,8 @@ const {
     stripMd,
     parseMachineSummary,
     parseAnalysis,
+    normalizeDocumentType,
+    SCORING_RUBRIC_VERSION,
     detectApiType,
     getAnthropicEndpoint,
     buildApiUrl,
@@ -43,6 +45,7 @@ describe('stripMd', () => {
 describe('parseMachineSummary', () => {
     it('解析标准机器摘要块', () => {
         const analysis = `### 机器摘要
+document_type: 系统技术报告
 rank_bucket: 前10%
 innovation: 2.0
 technical_rigor: 1.2
@@ -63,6 +66,7 @@ has_dataset: 否
 ### 评分规则
 ...`;
         const r = parseMachineSummary(analysis);
+        assert.strictEqual(r.documentType, '系统技术报告');
         assert.strictEqual(r.rankBucket, '前10%');
         assert.strictEqual(r.innovation, '2.0');
         assert.strictEqual(r.technicalRigor, '1.2');
@@ -85,6 +89,12 @@ has_dataset: 否
         const r = parseMachineSummary('');
         assert.strictEqual(r.rankBucket, '');
         assert.strictEqual(r.innovation, '');
+    });
+
+    it('文档类型别名归一化且未知类型拒绝进入结构化结果', () => {
+        assert.strictEqual(normalizeDocumentType('white paper'), '系统技术报告');
+        assert.strictEqual(normalizeDocumentType('benchmark'), '数据集与基准');
+        assert.strictEqual(normalizeDocumentType('宣传稿'), '');
     });
 });
 
@@ -135,6 +145,17 @@ innovation: 2.0
         assert.strictEqual(r.innovationScore, '2.0');
         assert.ok(r.roast.includes('不错'));
         assert.ok(r.summary.includes('摘要'));
+    });
+
+    it('新评分文本保存文档类型和评分版本，旧文本保持兼容', () => {
+        const modern = `## 评分\n6.0/10\n\n## 机器摘要\ndocument_type: 白皮书\nrank_bucket: 前50%\n\n## 标签\n#语音识别 #Transformer`;
+        const parsedModern = parseAnalysis(modern);
+        assert.strictEqual(parsedModern.documentType, '系统技术报告');
+        assert.strictEqual(parsedModern.scoringRubricVersion, SCORING_RUBRIC_VERSION);
+
+        const legacy = parseAnalysis('## 评分\n6.0/10\n\n## 机器摘要\nrank_bucket: 前50%\n\n## 标签\n#语音识别 #Transformer');
+        assert.strictEqual(legacy.documentType, '');
+        assert.strictEqual(legacy.scoringRubricVersion, '');
     });
 
     it('空输入返回 null', () => {
@@ -491,6 +512,8 @@ describe('loadPrompt', () => {
             imageList: '图1: https://example.com/a.png',
             primaryAnalysis: '## 评分\n8/10',
             existingAnalysis: '## 评分\n8/10',
+            validationFeedback: '没有校验错误',
+            missingSections: '细节详述',
             methodSection: '## 方法概述和架构\n已有方法。',
             resultsSection: '## 实验结果\n已有结果。'
         };
@@ -502,6 +525,8 @@ describe('loadPrompt', () => {
             'prompts/gap-fill.md',
             'prompts/method-fill.md',
             'prompts/table-fill.md',
+            'prompts/scoring-audit.md',
+            'prompts/structure-repair.md',
             'prompts/en/filter.md',
             'prompts/en/deep-analysis.md',
             'prompts/en/opensource-scan.md',
@@ -514,6 +539,12 @@ describe('loadPrompt', () => {
         const enDeep = loadPrompt('prompts/en/deep-analysis.md', vars);
         assert.match(enDeep, /## 评分理由/, 'prompts/en/deep-analysis.md 被截断，缺少评分理由章节');
         assert.match(enDeep, /## 开源详情/, 'prompts/en/deep-analysis.md 被截断，缺少开源详情章节');
+        for (const file of ['prompts/deep-analysis.md', 'prompts/gap-fill.md', 'prompts/en/deep-analysis.md', 'prompts/en/gap-fill.md']) {
+            const prompt = loadPrompt(file, vars);
+            assert.match(prompt, /document_type/, `${file} 缺少文档类型契约`);
+            assert.match(prompt, /系统技术报告/, `${file} 缺少系统技术报告类型`);
+            assert.match(prompt, /单一问题单一主维度|同一个缺陷|single-issue-single-primary-dimension|single defect/i, `${file} 缺少防重复扣分规则`);
+        }
     });
 
     it('运行时中文 prompt 不包含未绑定占位符', () => {
@@ -528,6 +559,8 @@ describe('loadPrompt', () => {
             imageList: '图1: https://example.com/a.png',
             primaryAnalysis: '## 评分\n8/10',
             existingAnalysis: '## 评分\n8/10',
+            validationFeedback: '没有校验错误',
+            missingSections: '细节详述',
             methodSection: '## 方法概述和架构\n已有方法。',
             resultsSection: '## 实验结果\n已有结果。'
         };
@@ -538,7 +571,9 @@ describe('loadPrompt', () => {
             'prompts/opensource-scan.md',
             'prompts/gap-fill.md',
             'prompts/method-fill.md',
-            'prompts/table-fill.md'
+            'prompts/table-fill.md',
+            'prompts/scoring-audit.md',
+            'prompts/structure-repair.md'
         ];
         for (const file of promptFiles) {
             const prompt = loadPrompt(file, vars);

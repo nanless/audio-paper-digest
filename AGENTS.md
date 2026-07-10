@@ -112,8 +112,10 @@ prompts/                # LLM prompt 模板
   gap-fill.md           # 审校重写（Round 3）
   method-fill.md        # 方法章节补充（后处理）
   table-fill.md         # 实验表格补充（后处理）
+  structure-repair.md   # 缺失必要章节时的主模型局部结构修复
+  scoring-audit.md      # 主模型最终类型感知评分审计（JSON）
   index.md              # Prompt 文档索引（含占位符规范）
-  en/                   # 英文版 prompt（含 filter / deep-analysis / gap-fill / opensource-scan / index，不含 image-supplement / method-fill / table-fill）
+  en/                   # 英文版 prompt（含 filter / deep-analysis / gap-fill / opensource-scan / index，不含 image-supplement / method-fill / table-fill / structure-repair / scoring-audit）
 ```
 
 `papers.json` 同时支持 `data/current/papers.json` 和 `data/papers.json`（旧版路径），均被 `config.js` 引用。**`papers.json` 持久化去重数据库，永不归档**。`full-fetch.js` 每次运行自动备份 `papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天。条目可带 `digestStatus.status`：`pending_analysis` / `analysis_failed` 不参与强去重，便于中断后重跑；所有分析入口应通过 `scripts/digest-status.js` 将成功/失败同步为 `analyzed` / `analysis_failed`。若最新一次分析失败但旧成功分析仍可用，`status` 保持 `analyzed`，失败记录写入 `digestStatus.latestAttemptStatus` / `error`。
@@ -136,6 +138,9 @@ prompts/                # LLM prompt 模板
 - **原子写入**：使用 `writeFileAtomic()` 保存数据文件，先写临时文件再 rename，防止写入中断损坏数据。
 - **北京时间时间戳**：运行数据中的 `timestamp` / `lastUpdated` / `fetchedAt` 应使用 `getBeijingISOString()` 或 Python 端 `now_bj_iso()`，避免 UTC 日期导致跨天归档或发布筛选错误。
 - **博客验证默认 `--skip-push`**，仅用户明确要求时才执行真实 `git push`。`publish-to-blog.py --push` 必须在 LLM review 可用、代码层无剩余问题、LLM/图片 review 无 `error` 级阻断问题后才允许 commit/push；`warning/info` 会输出但不直接阻断。
+- **发布 review 不得删除合法表格续行**：Markdown 表格允许前导分组列为空，这通常表示沿用上一行模型/配置；不能把 `| | | | Filter2 ... |` 一类数据行当成子标题删除。普通模型名或技术术语未加反引号属于样式建议，不是格式问题。
+- **图片展示顺序**：候选图编号不是最终展示图号；无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 必须按图片在最终正文中的出现顺序归一化。
+- **副模型日志**：插图筛选必须记录 `[secondary]` 详细输入/输出摘要（模型、协议、endpoint/key 来源、候选和下载数量、图片安全标签/MIME/负载、Prompt/响应长度、每个插图计划和最终选图），只能记录 key 来源，严禁记录 API key 内容。
 - **后台运行全流程时用 `node scripts/full-fetch.js`** 而非 `npm run fetch`（npm 可能因 TTY 导致 SIGTERM，exit code 143）。根目录 `run-full-fetch.sh` 即此包装（`cd` 到项目根后 `exec node`）。
 - **`data/` 和 `logs/` 已 gitignore** — 禁止提交运行时产物。
 
@@ -156,7 +161,11 @@ prompts/                # LLM prompt 模板
 
 深度分析采用八维审稿人评分：创新性(2) + 技术严谨性(1.5) + 实验充分性(1.5) + 清晰度(1) + 影响力(1.5) + 开源(1.5) + 可复现性(0.5) + 工程/实践价值(1.5) = 满分 11 分，**总分上限 10**。
 
-`parseAnalysis()` 从 `## 评分理由` 提取各分项重新计算总分，始终覆盖 LLM 原始总分（防止 LLM 算错）。同时执行矛盾检测：开源分≥1.0 但 `hasCode/hasModel/hasDataset` 全为"否"时强制降为 0。
+当前评分契约为 `type-aware-v1`。主模型必须先输出 `document_type`，且只能取：`方法研究` / `系统技术报告` / `模型报告` / `数据集与基准` / `综述` / `理论研究` / `应用研究`。类型只选择证据标准，不提供固定加分、保底或豁免；系统/模型报告按端到端质量、延迟、吞吐、成本、规模、压力测试、竞品公平性和失败案例评估，综述、理论和数据集论文也使用各自适配证据，不能机械套用方法论文的消融标准。
+
+评分必须遵守“单一问题单一主维度扣分”：缺少开源产物只归开源，缺少超参数/复现步骤只归可复现性，证据不足只归实验充分性，表达问题只归清晰度，推导/假设/逻辑错误才归技术严谨性。信息不足时降低 `confidence`，不得把“无法验证”写成“技术错误”。副模型仍只负责插图，不得参与类型判断或评分。
+
+最终评分审计会把精确校验错误反馈给下一次局部审计，避免相同违规输出造成整篇重跑。无核心产物时，代码按资源状态固定开源分：明确承诺未来开放为 0.5、仅有可访问 Demo 为 0.2、完全关闭且无承诺为 0；并同步改写开源理由。`parseAnalysis()` 随后从 `## 评分理由` 提取各分项重新计算总分，始终覆盖 LLM 原始总分，并保留旧数据的开源矛盾兜底检测。
 
 `rankBucket` 推断（基于最终 score）：≥9.0 → 前10%，≥7.5 → 前25%，≥5.5 → 前50%，<5.5 → 后50%。
 

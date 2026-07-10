@@ -200,7 +200,13 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只有 `fi
     "totalAfterMerge": 43,
     "arxivOnly": 20,
     "hfOnly": 5,
-    "both": 3
+    "both": 3,
+    "reanalyzed": 28,
+    "reanalyzeFailed": 0,
+    "reanalyzeAt": "2026-04-21T12:00:00+08:00",
+    "selectedReanalyzed": 2,
+    "selectedReanalyzeFailed": 0,
+    "selectedReanalyzeAt": "2026-04-21T12:30:00+08:00"
   },
   "papers": [
     {
@@ -218,8 +224,11 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只有 `fi
       "hf_github_stars": 0,
       "hf_discussion_id": "",
       "analysis": "## 评分\n8.5/10\n\n## 标签\n...",
+      "scoringRubricVersion": "type-aware-v1",
       "parsed": {
         "score": "8.5",
+        "documentType": "模型报告",
+        "scoringRubricVersion": "type-aware-v1",
         "tags": ["#语音合成", "#扩散模型", "#多语言"],
         "authors": "...",
         "roast": "...",
@@ -231,6 +240,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只有 `fi
         "scoringReason": "...",
         "opensource": "...",
         "machineSummary": {
+          "documentType": "模型报告",
           "rankBucket": "前25%",
           "innovation": "1.5",
           "technicalRigor": "1.2",
@@ -281,12 +291,17 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只有 `fi
 }
 ```
 
+`reanalyzed` / `reanalyzeFailed` 记录最近全量重分析及后续失败恢复后的累计状态。`reanalyze-selected.js` 另写本次指定重跑统计，并只对从旧评分契约恢复到当前契约的论文校正累计成功/失败数，避免重复重跑造成计数膨胀。
+
 **关于 `parsed` 字段的说明**：
 
 - `parsed` 是 `analysis` 文本的解析缓存，由 `scripts/utils.js` 的 `parseAnalysis()` 或 `scripts/utils.py` 的 `parse_analysis()` 生成
-- `selectedImageUrls` / `imageUrls` 是副模型确认插入正文的高价值图片；`allImageUrls` 是原始候选图片列表，不能直接当作可发布图片使用
+- `documentType` 来自机器摘要的 `document_type`，受控值为方法研究、系统技术报告、模型报告、数据集与基准、综述、理论研究、应用研究；常见中英文别名会归一化，未知类型会被拒绝
+- 只有包含合法 `document_type` 的新分析才写入 `scoringRubricVersion: type-aware-v1`；历史结果不补写版本，以免误标
+- `selectedImageUrls` / `imageUrls` 是副模型确认插入正文的高价值图片，并按最终正文出现顺序保存；无真实 caption 的通用 `图N` alt 也按该顺序归一化。`allImageUrls` 是原始候选图片列表，不能直接当作可发布图片使用
 - **`parsed.score` 不是直接取 `## 评分` 下的 LLM 原始总分**，而是从 `## 评分理由` 中提取八个分项（创新性/2、技术严谨性/1.5、实验充分性/1.5、清晰度/1、影响力/1.5、开源/1.5、可复现性/0.5、工程/实践价值/1.5）重新计算，上限为 10 分，覆盖 LLM 原始输出
 - `parsed` 中的 `machineSummary` 是 `## 机器摘要` 的解析结果；`rankBucket`、`innovationScore`、`technicalRigorScore` 等 8 个子项字段同时平铺到 `parsed` 顶层以便访问
+- `npm run validate:data` 会校验文档类型、rubric 版本、八个子项范围以及 `parsed.score == min(八项之和, 10)`
 - 解析逻辑变更后，`parsed` 缓存会被清除并在下次发布时重新生成
 
 ### 5.6 `data/current/analyzed.json`

@@ -4,6 +4,8 @@
 
 本项目用于自动生成"语音/音乐/音频论文速递"，覆盖从 arXiv 和 HuggingFace Papers 抓取、LLM 筛选、多模态深度分析，到发布 Hugo 博客、微信公众号草稿、小红书文案和飞书文档的完整链路。Node 端可调参数和当前运行数据文件路径集中在 `scripts/config.js`；Python 发布/维护脚本的共享路径集中在 `scripts/path_config.py`。
 
+深度分析采用 `type-aware-v1` 类型感知评分：先将文档归类为方法研究、系统技术报告、模型报告、数据集与基准、综述、理论研究或应用研究，再按对应证据标准评审。八维权重、满分 11 和总分封顶 10 保持统一；文档类型不提供固定加分，同一个缺陷只能在一个主要维度扣分，避免白皮书和技术报告因同一处披露不足被重复惩罚。
+
 ---
 
 ## 文档说明
@@ -23,6 +25,8 @@
 | `prompts/image-supplement.md` | 图像筛选与插图计划 prompt（双模型模式；可局部调整插图附近文字） | 维护者 |
 | `prompts/opensource-scan.md` | 开源链接扫描 prompt（Round 2） | 维护者 |
 | `prompts/gap-fill.md` | 审校重写 prompt（Round 3） | 维护者 |
+| `prompts/structure-repair.md` | 缺失必要章节时的主模型局部结构修复 prompt | 维护者 |
+| `prompts/scoring-audit.md` | 主模型最终类型感知评分审计（仅修订评分字段与理由） | 维护者 |
 
 > **铁律**：真实行为以 `scripts/*.js` / `scripts/*.py` 当前实现为最终准绳。若文档与代码冲突，以代码为准并修正文档。
 

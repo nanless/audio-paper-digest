@@ -87,6 +87,8 @@ def filter_false_positive_review_issues(content, issues):
     for issue in issues:
         desc = str(issue.get('description', ''))
         issue_type = str(issue.get('type', '')).lower()
+        if ('反引号' in desc or 'backtick' in desc.lower()) and re.search(r'模型名|模型名称|技术术语|model name|technical term', desc, re.IGNORECASE):
+            continue
         if not raw_dollar_math and (issue_type == 'latex' or '$' in desc) and ('LaTeX' in desc or '公式' in desc or '$' in desc):
             continue
         mentioned_angle_tags = set(re.findall(r'</?[A-Za-z][A-Za-z0-9_†-]{0,40}>', desc))
@@ -384,24 +386,25 @@ layout: "posts"
 ### 📊 论文评分排行榜（{len(scored)} 篇，按分数降序）
 
 """
-    md += "| 排名 | 论文 | 总分 | 分档 | 主任务 |\n|------|------|------|------|--------|\n"
+    md += "| 排名 | 论文 | 总分 | 分档 | 文档类型 | 主任务 |\n|------|------|------|------|----------|--------|\n"
     for i, (score, p, pa) in enumerate(scored):
         m = format_medal(i)
         title = p.get('title', 'Unknown')
         slug = paper_slugs.get(p.get('arxivId', ''), '')
         rank_bucket = pa.get('rankBucket', '') or '-'
+        document_type = pa.get('documentType', '') or '-'
         primary_task = pa.get('primaryTaskTag', '') or '-'
         if slug:
-            md += f"| {m} | [{title[:55]}]({BASE_PATH}/posts/{date_str}-{slug}) | {score}分 | {rank_bucket} | {primary_task} |\n"
+            md += f"| {m} | [{title[:55]}]({BASE_PATH}/posts/{date_str}-{slug}) | {score}分 | {rank_bucket} | {document_type} | {primary_task} |\n"
         else:
-            md += f"| {m} | {title[:55]} | {score}分 | {rank_bucket} | {primary_task} |\n"
+            md += f"| {m} | {title[:55]} | {score}分 | {rank_bucket} | {document_type} | {primary_task} |\n"
     for i, p in enumerate(unscored):
         title = p.get('title', 'Unknown')
         slug = paper_slugs.get(p.get('arxivId', ''), '')
         if slug:
-            md += f"| {len(scored)+i+1} | [{title[:55]}]({BASE_PATH}/posts/{date_str}-{slug}) | N/A | - | - |\n"
+            md += f"| {len(scored)+i+1} | [{title[:55]}]({BASE_PATH}/posts/{date_str}-{slug}) | N/A | - | - | - |\n"
         else:
-            md += f"| {len(scored)+i+1} | {title[:55]} | N/A | - | - |\n"
+            md += f"| {len(scored)+i+1} | {title[:55]} | N/A | - | - | - |\n"
 
     md += "\n---\n\n"
     md += "## 📋 论文列表\n\n"
@@ -840,61 +843,44 @@ def review_and_fix_post(file_path):
         issues.append("发现 YAML frontmatter 双逗号，已修复")
         content = fix_yaml_double_commas(content)
 
-    # 7. 检查并修复 Markdown 表格中的子标题行（全空首列 + 有内容的行，会破坏表格结构）
-    table_subheader_pattern = re.compile(r'^(\|[\s]*\|[\s]*\|[\s]*\|)(.+?)$', re.MULTILINE)
-    def _fix_table_subheader(m):
-        # 如果前三列都是空的，但后面有内容，这是子标题行，需要删除
-        prefix = m.group(1)
-        rest = m.group(2)
-        # 检查 rest 中是否有非空列
-        cols = [c.strip() for c in rest.split('|') if c.strip()]
-        if cols:
-            issues.append(f"发现表格子标题行，已删除: {' '.join(cols)[:40]}")
-            return ''  # 删除这一行
-        return m.group(0)
-    if re.search(r'^\|[\s]*\|[\s]*\|[\s]*\|', content, re.MULTILINE):
-        new_content = table_subheader_pattern.sub(_fix_table_subheader, content)
-        if new_content != content:
-            content = new_content
-
-    # 8. 检查并修复未闭合的 LaTeX $ 公式（$ \mathcal{L}_D \( 形式）
+    # 7. 检查并修复未闭合的 LaTeX $ 公式（$ \mathcal{L}_D \( 形式）
     broken_latex_pattern = re.compile(r'\$ \\mathcal\{([^}]+)\}[^\\]*\\\(')
     if broken_latex_pattern.search(content):
         issues.append("发现未闭合的 LaTeX $ 公式，已修复")
         content = broken_latex_pattern.sub(lambda m: f'\\(\\mathcal{{{m.group(1)}}}\\)', content)
 
-    # 9. 检查并修复表格中错乱的 LaTeX 括号（如 \)\\mathcal{L}_D$）
+    # 8. 检查并修复表格中错乱的 LaTeX 括号（如 \)\\mathcal{L}_D$）
     broken_latex_table = re.compile(r'\\\)\\\\mathcal\{([^}]+)\}\$')
     if broken_latex_table.search(content):
         issues.append("发现表格中错乱的 LaTeX，已修复")
         content = broken_latex_table.sub(lambda m: f'\\(\\mathcal{{{m.group(1)}}}\\)', content)
 
-    # 10. 检查并修复 "仅\)\mathcal{L}_A\(" 这类错乱模式
+    # 9. 检查并修复 "仅\)\mathcal{L}_A\(" 这类错乱模式
     broken_paren_latex = re.compile(r'仅\\\)\\mathcal\{([^}]+)\}\\\(')
     if broken_paren_latex.search(content):
         issues.append("发现错乱的 LaTeX 括号，已修复")
         content = broken_paren_latex.sub(lambda m: f'仅\\(\\mathcal{{{m.group(1)}}}\\)', content)
 
-    # 11. 检查并修复 \(\\mathcal{L}_X\) 双反斜杠问题
+    # 10. 检查并修复 \(\\mathcal{L}_X\) 双反斜杠问题
     double_backslash_latex = re.compile(r'\\\(\\\\mathcal\{([^}]+)\}\\\)')
     if double_backslash_latex.search(content):
         issues.append("发现双反斜杠 LaTeX，已修复")
         content = double_backslash_latex.sub(lambda m: f'\\(\\mathcal{{{m.group(1)}}}\\)', content)
 
-    # 12. 检查是否有未闭合的 markdown 链接或图片引用
+    # 11. 检查是否有未闭合的 markdown 链接或图片引用
     broken_link_pattern = re.compile(r'!?\[([^\]]*)\]\s*\(\s*\)')
     broken_links = broken_link_pattern.findall(content)
     if broken_links:
         issues.append(f"发现 {len(broken_links)} 个空链接，已修复")
         content = fix_empty_markdown_links(content)
 
-    # 12.5 检查并修复空/重复图片 alt
+    # 11.5 检查并修复空/重复图片 alt
     deduped_content = dedupe_image_alts(content)
     if deduped_content != content:
         issues.append("发现空或重复图片 alt，已补齐/去重")
         content = deduped_content
 
-    # 13. 检查 YAML frontmatter 中是否有未闭合的双引号
+    # 12. 检查 YAML frontmatter 中是否有未闭合的双引号
     content_before_yaml_quote_fix = content
     content = fix_yaml_unbalanced_quotes(content)
     if content != content_before_yaml_quote_fix:

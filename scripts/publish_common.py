@@ -485,6 +485,10 @@ def build_paper_meta(pa, aurl=''):
 
     if pa.get('rankBucket'):
         bits.append(pa['rankBucket'])
+    if pa.get('documentType'):
+        bits.append(f'文档类型：{pa["documentType"]}')
+    if pa.get('confidence'):
+        bits.append(f'评分置信度：{pa["confidence"]}')
     if pa.get('primaryTaskTag'):
         bits.append(pa['primaryTaskTag'])
     if pa.get('primaryMethodTag'):

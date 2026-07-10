@@ -166,8 +166,60 @@ function stripMd(text) {
     return t.trim();
 }
 
+const SCORING_RUBRIC_VERSION = 'type-aware-v1';
+const DOCUMENT_TYPES = Object.freeze([
+    '方法研究',
+    '系统技术报告',
+    '模型报告',
+    '数据集与基准',
+    '综述',
+    '理论研究',
+    '应用研究'
+]);
+
+function normalizeDocumentType(value) {
+    const raw = stripMd(value || '').trim();
+    if (!raw) return '';
+    if (DOCUMENT_TYPES.includes(raw)) return raw;
+
+    const normalized = raw.toLowerCase().replace(/[\s_-]+/g, '');
+    const aliases = {
+        '方法论文': '方法研究',
+        '研究论文': '方法研究',
+        'methodpaper': '方法研究',
+        'methodresearch': '方法研究',
+        '技术报告': '系统技术报告',
+        '系统报告': '系统技术报告',
+        '工业技术报告': '系统技术报告',
+        '白皮书': '系统技术报告',
+        'techreport': '系统技术报告',
+        'technicalreport': '系统技术报告',
+        'systemreport': '系统技术报告',
+        'whitepaper': '系统技术报告',
+        '工业模型报告': '模型报告',
+        'modelreport': '模型报告',
+        '数据集': '数据集与基准',
+        '基准': '数据集与基准',
+        '基准测试': '数据集与基准',
+        'dataset': '数据集与基准',
+        'benchmark': '数据集与基准',
+        'datasetbenchmark': '数据集与基准',
+        '综述论文': '综述',
+        'survey': '综述',
+        'review': '综述',
+        '理论论文': '理论研究',
+        'theory': '理论研究',
+        'theoreticalresearch': '理论研究',
+        '应用论文': '应用研究',
+        'application': '应用研究',
+        'appliedresearch': '应用研究'
+    };
+    return aliases[normalized] || '';
+}
+
 function parseMachineSummary(analysis) {
     const result = {
+        documentType: '',
         rankBucket: '',
         innovation: '',
         technicalRigor: '',
@@ -192,6 +244,7 @@ function parseMachineSummary(analysis) {
     if (!blockMatch) return result;
 
     const keyMap = {
+        document_type: 'documentType',
         rank_bucket: 'rankBucket',
         innovation: 'innovation',
         technical_rigor: 'technicalRigor',
@@ -246,8 +299,12 @@ function parseMachineSummary(analysis) {
         if (!m) continue;
         
         const mappedKey = keyMap[m[1]];
-        if (mappedKey) {
-            let val = stripMd(m[2]).trim();
+            if (mappedKey) {
+                let val = stripMd(m[2]).trim();
+
+                if (mappedKey === 'documentType') {
+                    val = normalizeDocumentType(val);
+                }
             
             // 对于 rankBucket，使用扩展映射表
             if (mappedKey === 'rankBucket') {
@@ -664,6 +721,8 @@ function parseAnalysis(analysis) {
         architecture: '', innovation: '', details: '', results: '',
         scoringReason: '', limitations: '', opensource: '',
         machineSummary: null,
+        documentType: '',
+        scoringRubricVersion: '',
         rankBucket: '',
         innovationScore: '',
         technicalRigorScore: '',
@@ -723,6 +782,8 @@ function parseAnalysis(analysis) {
 
     const machineSummary = parseMachineSummary(analysis);
     result.machineSummary = machineSummary;
+    result.documentType = machineSummary.documentType;
+    result.scoringRubricVersion = machineSummary.documentType ? SCORING_RUBRIC_VERSION : '';
     result.rankBucket = machineSummary.rankBucket;
     result.innovationScore = machineSummary.innovation;
     result.technicalRigorScore = machineSummary.technicalRigor;
@@ -1289,6 +1350,9 @@ module.exports = {
     stripMd,
     parseMachineSummary,
     parseAnalysis,
+    normalizeDocumentType,
+    DOCUMENT_TYPES,
+    SCORING_RUBRIC_VERSION,
     // API 路由
     detectApiType,
     getAnthropicEndpoint,

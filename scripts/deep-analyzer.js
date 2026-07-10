@@ -6,7 +6,22 @@ setupScriptLogging(__filename);
  * 论文深度分析器 - 使用全文+图片的深度阅读理解
  */
 
-const { loadEnvFile, parseAnalysis, detectApiType, buildApiUrl, buildRequestBody, buildHeaders, parseResponseText, requestJson, loadPrompt } = require('./utils.js');
+const {
+    loadEnvFile,
+    parseAnalysis,
+    detectApiType,
+    buildApiUrl,
+    buildRequestBody,
+    buildHeaders,
+    parseResponseText,
+    requestJson,
+    loadPrompt,
+    normalizeDocumentType
+} = require('./utils.js');
+const {
+    getMissingRequiredSections,
+    getInvalidAnalysisReason
+} = require('./analysis-contract.js');
 loadEnvFile();
 
 // 解决 stdout 缓冲问题：后台运行时强制立即 flush
@@ -49,6 +64,149 @@ function cleanGapFillPrefix(text) {
     }
     // 如果没有 ## 评分，返回 null（格式不正确，调用方应回退到原始分析）
     return null;
+}
+
+const SCORING_DIMENSIONS = Object.freeze([
+    { key: 'innovation', machineKey: 'innovation', label: '创新性', max: 2 },
+    { key: 'technicalRigor', machineKey: 'technical_rigor', label: '技术严谨性', max: 1.5 },
+    { key: 'experimentalSufficiency', machineKey: 'experimental_sufficiency', label: '实验充分性', max: 1.5 },
+    { key: 'clarity', machineKey: 'clarity', label: '清晰度', max: 1 },
+    { key: 'impact', machineKey: 'impact', label: '影响力', max: 1.5 },
+    { key: 'openSource', machineKey: 'open_source', label: '开源', max: 1.5 },
+    { key: 'reproducibility', machineKey: 'reproducibility', label: '可复现性', max: 0.5 },
+    { key: 'engineering', machineKey: 'engineering_score', label: '工程/实践价值', max: 1.5 }
+]);
+
+const FORBIDDEN_SCORING_REASON_PATTERNS = Object.freeze({
+    technicalRigor: /不开源|闭源|无法复现|复现性|超参数|训练配置|硬件配置|模型参数|参数量|源码|代码未提供|权重未提供/,
+    experimentalSufficiency: /不开源|闭源|无法复现|复现性|超参数|训练配置|硬件配置|源码|代码未提供|权重未提供/,
+    clarity: /不开源|闭源|无法复现|复现性|超参数|训练配置|硬件配置|源码|代码未提供|权重未提供/,
+    impact: /不开源|闭源|开源程度|开源状态/,
+    openSource: /复现性|无法复现|复现步骤/,
+    reproducibility: /不开源|闭源|开源程度|开源状态|在线演示/
+});
+
+function parseScoringAuditResult(raw) {
+    let parsed;
+    try {
+        parsed = JSON.parse(extractJsonObjectText(raw));
+    } catch (error) {
+        throw new Error(`评分审计 JSON 无法解析: ${error.message}`);
+    }
+
+    const documentType = normalizeDocumentType(parsed.documentType || parsed.document_type);
+    if (!documentType) throw new Error('评分审计缺少有效 documentType');
+
+    const confidence = String(parsed.confidence || '').trim();
+    if (!['高', '中', '低'].includes(confidence)) throw new Error('评分审计 confidence 非法');
+    if (!parsed.dimensions || typeof parsed.dimensions !== 'object' || Array.isArray(parsed.dimensions)) {
+        throw new Error('评分审计缺少 dimensions 对象');
+    }
+
+    const dimensions = {};
+    for (const spec of SCORING_DIMENSIONS) {
+        const item = parsed.dimensions[spec.key];
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+            throw new Error(`评分审计缺少维度 ${spec.key}`);
+        }
+        const score = Number(item.score);
+        const reason = String(item.reason || '').trim();
+        if (!Number.isFinite(score) || score < 0 || score > spec.max) {
+            throw new Error(`评分审计维度 ${spec.key} 分数越界`);
+        }
+        if (reason.length < 20) throw new Error(`评分审计维度 ${spec.key} 理由过短`);
+        const forbiddenPattern = FORBIDDEN_SCORING_REASON_PATTERNS[spec.key];
+        if (forbiddenPattern?.test(reason)) {
+            throw new Error(`评分审计维度 ${spec.key} 使用了属于其他维度的扣分事实`);
+        }
+        dimensions[spec.key] = { score: Math.round(score * 10) / 10, reason };
+    }
+
+    return recalculateScoringAudit({ documentType, confidence, dimensions });
+}
+
+function recalculateScoringAudit(audit) {
+    const subtotal = SCORING_DIMENSIONS.reduce((sum, spec) => sum + audit.dimensions[spec.key].score, 0);
+    const total = Math.round(Math.min(10, subtotal) * 10) / 10;
+    const rankBucket = total >= 9 ? '前10%' : total >= 7.5 ? '前25%' : total >= 5.5 ? '前50%' : '后50%';
+    return { ...audit, total, rankBucket };
+}
+
+function setMachineSummaryField(analysis, key, value) {
+    const bounds = findSectionBounds(analysis, '机器摘要');
+    if (!bounds) return analysis;
+    const section = analysis.slice(bounds.contentStart, bounds.end);
+    const fieldPattern = new RegExp(`^${escapeRegExp(key)}\\s*[：:].*$`, 'm');
+    const updatedSection = fieldPattern.test(section)
+        ? section.replace(fieldPattern, `${key}: ${value}`)
+        : `${key}: ${value}\n${section.replace(/^\s+/, '')}`;
+    return analysis.slice(0, bounds.contentStart) + updatedSection + analysis.slice(bounds.end);
+}
+
+function applyScoringAuditResult(analysis, audit) {
+    let updated = mergeSectionByTitle(analysis, '评分', `${audit.total}/10`);
+    updated = setMachineSummaryField(updated, 'document_type', audit.documentType);
+    updated = setMachineSummaryField(updated, 'rank_bucket', audit.rankBucket);
+    updated = setMachineSummaryField(updated, 'confidence', audit.confidence);
+    for (const spec of SCORING_DIMENSIONS) {
+        updated = setMachineSummaryField(updated, spec.machineKey, audit.dimensions[spec.key].score);
+    }
+
+    const scoringReason = SCORING_DIMENSIONS.map(spec => {
+        const item = audit.dimensions[spec.key];
+        return `*   ${spec.label} (${item.score}/${spec.max})：${item.reason}`;
+    }).join('\n\n');
+    return mergeSectionByTitle(updated, '评分理由', scoringReason);
+}
+
+function validateScoringAuditAgainstAnalysis(analysis, audit) {
+    const current = parseAnalysis(analysis) || {};
+    const hasReleasedArtifact = [current.hasCode, current.hasModel, current.hasDataset]
+        .some(value => value === '是' || value === 'yes');
+    if (!hasReleasedArtifact) {
+        const sourceText = String(current.opensource || '');
+        const promisesRelease = /承诺开源|计划开源|将(?:会)?开源|will\s+(?:be\s+)?release|will\s+open[- ]source/i.test(sourceText);
+        const hasDemo = /\bdemo\b|在线演示|线上演示|体验页面/i.test(sourceText);
+        const normalizedScore = promisesRelease ? 0.5 : hasDemo ? 0.2 : 0;
+        const normalizedReason = promisesRelease
+            ? '论文明确承诺未来开放核心产物，但当前尚未发布可用代码、模型权重或数据资源。'
+            : hasDemo
+                ? '论文目前只提供可访问的在线演示页面，未发布核心代码、模型权重或训练数据。'
+                : '论文未发布核心代码、模型权重或数据资源，也未给出明确的后续开源承诺。';
+        if (audit.dimensions.openSource.score !== normalizedScore) {
+            console.log(`    [deep] ℹ️  开源分按资源状态归一化: ${audit.dimensions.openSource.score} → ${normalizedScore}`);
+        }
+        const normalizedAudit = {
+            ...audit,
+            dimensions: {
+                ...audit.dimensions,
+                openSource: { score: normalizedScore, reason: normalizedReason }
+            }
+        };
+        return recalculateScoringAudit(normalizedAudit);
+    }
+    return audit;
+}
+
+async function auditTypeAwareScoring(analysis) {
+    let lastError = null;
+    let validationFeedback = '这是第一次输出，没有上一次校验错误。';
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        const prompt = loadPrompt('prompts/scoring-audit.md', {
+            existingAnalysis: analysis,
+            validationFeedback
+        });
+        const raw = await callModel([{ role: 'user', content: [{ type: 'text', text: prompt }] }], 16000);
+        try {
+            const audit = validateScoringAuditAgainstAnalysis(analysis, parseScoringAuditResult(raw));
+            return applyScoringAuditResult(analysis, audit);
+        } catch (error) {
+            lastError = error;
+            validationFeedback = `上一次 JSON 被代码拒绝，精确错误为：${error.message}。请只纠正该错误，同时重新检查全部八个维度。`;
+            console.log(`    [deep] ⚠️  评分审计结构校验失败 (${attempt}/3): ${error.message}`);
+        }
+    }
+    throw lastError || new Error('评分审计失败');
 }
 
 function getPaperArxivId(paper) {
@@ -889,6 +1047,26 @@ function insertImageBlockIntoSection(analysis, plan, imageInfo) {
     };
 }
 
+function normalizeGenericImageOrder(analysis, selectedImageUrls) {
+    let updated = analysis;
+    let genericAltIndex = 0;
+    updated = updated.replace(/!\[图\d+\]\(([^)]+)\)/g, (match, url) => {
+        if (!selectedImageUrls.includes(url)) return match;
+        genericAltIndex++;
+        return `![图${genericAltIndex}](${url})`;
+    });
+
+    const selectedSet = new Set(selectedImageUrls);
+    const orderedSelectedImageUrls = [];
+    for (const match of updated.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)) {
+        const url = match[1];
+        if (selectedSet.has(url) && !orderedSelectedImageUrls.includes(url)) {
+            orderedSelectedImageUrls.push(url);
+        }
+    }
+    return { analysis: updated, selectedImageUrls: orderedSelectedImageUrls };
+}
+
 function applyImageInsertionPlan(analysis, plans, imageInfos) {
     let updated = analysis;
     const selectedImageUrls = [];
@@ -902,7 +1080,7 @@ function applyImageInsertionPlan(analysis, plans, imageInfos) {
     }
 
     updated = removeUnapprovedMarkdownImages(updated, selectedImageUrls);
-    return { analysis: updated, selectedImageUrls };
+    return normalizeGenericImageOrder(updated, selectedImageUrls);
 }
 
 async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downloadedImages) {
@@ -913,7 +1091,18 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
     const imageInfoByUrl = new Map(imageInfos.map(info => [info.url, info]));
     const usableImageInfos = downloadedImages.map(img => imageInfoByUrl.get(img.url) || { url: img.url, caption: '' });
 
-    console.log(`    [deep] 🖼️  副模型(${SECONDARY_CONFIG.model})仅生成插图计划，保留主模型正文`);
+    const secondaryApiType = detectApiType(SECONDARY_CONFIG.endpoint, SECONDARY_CONFIG.model);
+    const secondaryUrl = new URL(buildApiUrl(secondaryApiType, SECONDARY_CONFIG.endpoint));
+    const secondaryEndpointSource = SECONDARY_MODEL_CONFIG.endpoint ? '副模型 endpoint' : '复用主模型 endpoint';
+    const secondaryKeySource = SECONDARY_MODEL_CONFIG.key ? '副模型 key' : '复用主模型 key';
+    const downloadedBase64Chars = downloadedImages.reduce((sum, img) => sum + (img.base64?.length || 0), 0);
+    console.log(`    [secondary] ▶ 图片筛选开始 | paper=${arxivId} | model=${SECONDARY_CONFIG.model} | protocol=${secondaryApiType}`);
+    console.log(`    [secondary]    endpoint=${secondaryUrl.hostname}${secondaryUrl.pathname} | endpoint_source=${secondaryEndpointSource} | key_source=${secondaryKeySource}`);
+    console.log(`    [secondary]    candidates=${imageInfos.length} | downloaded=${downloadedImages.length} | prompt_images=${usableImageInfos.length} | base64_chars=${downloadedBase64Chars} | max_tokens=${API_MAX_TOKENS}`);
+    usableImageInfos.forEach((info, index) => {
+        const downloaded = downloadedImages[index];
+        console.log(`    [secondary]    input[${index + 1}] ${safeImageLabel(info.url)} | mime=${downloaded?.mime || 'unknown'} | base64_chars=${downloaded?.base64?.length || 0} | caption=${info.caption || '无描述'}`);
+    });
 
     const imageListStr = usableImageInfos.map((info, i) =>
         `图${i + 1}: ${safeImageLabel(info.url)}\n  URL: ${info.url}\n  caption: ${info.caption || '无描述'}`
@@ -930,19 +1119,29 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
         supplementContent.push(buildImageContent(img.url, img.base64, img.mime));
     }
 
+    console.log(`    [secondary]    request_content_blocks=${supplementContent.length} | text_chars=${supplementPrompt.length}`);
+    const secondaryStartedAt = Date.now();
+
     const planText = await callModelWithConfig(
         [{ role: 'user', content: supplementContent }],
         API_MAX_TOKENS, 3, SECONDARY_CONFIG
     );
 
     const plans = parseImageInsertionPlan(planText, usableImageInfos);
+    console.log(`    [secondary] ◀ 图片筛选返回 | duration_s=${((Date.now() - secondaryStartedAt) / 1000).toFixed(1)} | response_chars=${planText.length} | valid_insertions=${plans.length}`);
+    if (plans.length > 0) {
+        plans.forEach((plan, index) => {
+            const imageInfo = usableImageInfos[plan.imageNumber - 1];
+            console.log(`    [secondary]    plan[${index + 1}] image=${plan.imageNumber}(${safeImageLabel(imageInfo?.url)}) | section=${plan.section} | anchor=${plan.anchor ? 'matched' : 'section-end'} | replacement=${plan.replacement ? 'yes' : 'no'} | lead_chars=${plan.lead.length} | explanation_chars=${plan.explanation.length}`);
+        });
+    }
     if (plans.length === 0) {
-        console.log(`    [deep] ℹ️  副模型未选择高价值图片，保留主模型纯文本分析`);
+        console.log(`    [secondary] ℹ️  未生成有效插图计划，保留主模型纯文本分析`);
         return { analysis, selectedImageUrls: [] };
     }
 
     const { analysis: replaced, selectedImageUrls } = applyImageInsertionPlan(analysis, plans, usableImageInfos);
-    console.log(`    [deep] ✅ 副模型图片筛选完成：插入 ${selectedImageUrls.length}/${usableImageInfos.length} 张`);
+    console.log(`    [secondary] ✅ 图片计划合并完成 | inserted=${selectedImageUrls.length}/${usableImageInfos.length} | selected=${selectedImageUrls.map(safeImageLabel).join(', ') || 'none'}`);
 
     return { analysis: replaced, selectedImageUrls };
 }
@@ -1170,14 +1369,35 @@ async function analyzePaperDeep(paper) {
         console.log(`    [deep] ⚠️  方法概述补充失败: ${e.message}`);
     }
 
+    // 第3.65轮：只在分析缺少标题时修复完整结构，避免外层重新执行全部分析轮次。
+    const missingSections = getMissingRequiredSections(analysis);
+    if (missingSections.length > 0) {
+        console.log(`    [deep] 🔧 检测到缺失章节，执行最终结构修复: ${missingSections.join('、')}`);
+        analysis = await repairMissingAnalysisSections(paper, analysis, textForAnalysis);
+        console.log(`    [deep] ✅ 最终结构修复完成`);
+    }
+
+    // 第3.7轮：主模型只审计文档类型和八维评分，避免长文审校时发生重复扣分。
+    analysis = await auditTypeAwareScoring(analysis);
+    console.log(`    [deep] ✅ 类型感知评分审计完成`);
+    const auditedInvalidReason = getInvalidAnalysisReason(analysis, parseAnalysis(analysis));
+    if (auditedInvalidReason) {
+        throw new Error(`评分审计后的分析未通过最终契约: ${auditedInvalidReason}`);
+    }
+
     // 最后一轮：副模型基于最终文本筛选高价值图片，代码按 JSON 计划做受限局部插图合并。
     // 必须放在纯文本修复之后，否则 gap-fill / 表格补充 / 方法补充可能删掉图片。
     if (isDualModel && downloadedImages.length > 0) {
         try {
             const imageResult = await applyImageSupplement(paper, arxivId, analysis, imageInfos, downloadedImages);
-            analysis = imageResult.analysis;
-            selectedImageUrls = imageResult.selectedImageUrls;
-            imageManifest.selected = selectedImageUrls;
+            const imageInvalidReason = getInvalidAnalysisReason(imageResult.analysis, parseAnalysis(imageResult.analysis));
+            if (imageInvalidReason) {
+                console.log(`    [deep] ⚠️  插图结果破坏最终契约，丢弃本篇插图计划: ${imageInvalidReason}`);
+            } else {
+                analysis = imageResult.analysis;
+                selectedImageUrls = imageResult.selectedImageUrls;
+                imageManifest.selected = selectedImageUrls;
+            }
         } catch (err) {
             console.log(`    [deep] ⚠️  副模型图片筛选失败: ${err.message}，保留纯文本分析结果`);
         }
@@ -1417,6 +1637,34 @@ async function reviseAnalysis(paper, existingAnalysis, textForAnalysis) {
         textForAnalysis: textForAnalysis
     });
     return await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
+}
+
+async function repairMissingAnalysisSections(paper, existingAnalysis, textForAnalysis) {
+    let currentAnalysis = existingAnalysis;
+    let missingSections = getMissingRequiredSections(currentAnalysis);
+    let validationFeedback = '这是第一次结构修复，没有上一次校验错误。';
+
+    for (let attempt = 1; attempt <= 2 && missingSections.length > 0; attempt++) {
+        const prompt = loadPrompt('prompts/structure-repair.md', {
+            title: paper.title,
+            arxivId: getPaperArxivId(paper),
+            missingSections: missingSections.join('、'),
+            validationFeedback,
+            existingAnalysis: currentAnalysis,
+            textForAnalysis
+        });
+        const repairedText = await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
+        const cleaned = cleanGapFillPrefix(repairedText.trim());
+        if (cleaned) currentAnalysis = removeUnapprovedMarkdownImages(cleaned, []);
+
+        missingSections = getMissingRequiredSections(currentAnalysis);
+        if (missingSections.length === 0) return currentAnalysis;
+
+        validationFeedback = `上一次输出仍缺少：${missingSections.join('、')}。必须输出完整分析并补齐这些标题。`;
+        console.log(`    [deep] ⚠️  最终结构修复未通过 (${attempt}/2): 仍缺少 ${missingSections.join('、')}`);
+    }
+
+    throw new Error(`最终结构修复失败，仍缺少必要章节: ${missingSections.join('、')}`);
 }
 
 /**
@@ -1710,8 +1958,7 @@ function normalizeSectionContent(title, newContent) {
 function mergeSectionByTitle(analysis, title, newContent) {
     const cleanContent = normalizeSectionContent(title, newContent);
     const heading = new RegExp(
-        `(^|\\n)(#{2,3}\\s*(?:\\d+[.\\s]+)?${escapeRegExp(title)}[：:\\s]*\\n)([\\s\\S]*?)(?=\\n#{2,3}\\s|$)`,
-        'm'
+        `(^|\\n)(#{2,3}\\s*(?:\\d+[.\\s]+)?${escapeRegExp(title)}[：:\\s]*\\n)([\\s\\S]*?)(?=\\n#{2,3}\\s|$)`
     );
     if (heading.test(analysis)) {
         return analysis.replace(heading, (match, prefix, header) => `${prefix}${header}${cleanContent}\n`);
@@ -1742,7 +1989,13 @@ module.exports = {
     extractSectionByTitle,
     mergeSectionByTitle,
     parseImageInsertionPlan,
-    applyImageInsertionPlan
+    applyImageInsertionPlan,
+    normalizeGenericImageOrder,
+    parseScoringAuditResult,
+    applyScoringAuditResult,
+    validateScoringAuditAgainstAnalysis,
+    auditTypeAwareScoring,
+    repairMissingAnalysisSections
 };
 
 // 直接运行测试

@@ -11,7 +11,7 @@ This directory contains all LLM prompts for the audio-paper-digest skill, separa
 | [opensource-scan.md](opensource-scan.md) | Open-source scan stage (round 2): specifically extract open-source links and reproduction information | `deep-analyzer.js` |
 | [gap-fill.md](gap-fill.md) | Deep analysis stage (round 3): review and rewrite the earlier rounds' results against the original text | `deep-analyzer.js` |
 
-> Note: `image-supplement.md`, `method-fill.md`, and `table-fill.md` have **no English versions**; the code always loads the Chinese files under `prompts/` for image, method-section, and table supplementation. See the Chinese [prompts/index.md](../index.md).
+> Note: `image-supplement.md`, `method-fill.md`, `table-fill.md`, `structure-repair.md`, and `scoring-audit.md` have **no English versions**; the code always loads the Chinese files under `prompts/` for these final processing stages. Structural repair and scoring audit are executed by the primary model. See the Chinese [prompts/index.md](../index.md).
 
 ## Placeholder Conventions
 
@@ -26,5 +26,7 @@ Template placeholders in each prompt are denoted by `{variableName}`; the code i
 ## Modification Suggestions
 
 - When adjusting the tag system, scoring criteria, or output format, simply edit the corresponding markdown file; no code changes are needed.
+- Type-aware scoring uses the controlled `document_type` field (方法研究 / 系统技术报告 / 模型报告 / 数据集与基准 / 综述 / 理论研究 / 应用研究). Keep `deep-analysis.md`, `gap-fill.md`, and both English variants synchronized.
+- Claim-evidence matching and single-issue-single-primary-dimension deduction must remain intact. `image-supplement.md` must never classify or score papers.
 - Keep placeholder names consistent with the replacement logic in the code.
 - After modifying a prompt, it is recommended to run a single-paper analysis or `quick-test.js` to verify the effect.

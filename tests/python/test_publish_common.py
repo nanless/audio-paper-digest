@@ -14,6 +14,7 @@ from publish_common import (  # noqa: E402
     PublishLLMUnavailable,
     build_publish_headers,
     build_publish_api_url,
+    build_paper_meta,
     dedupe_image_alts,
     detect_publish_api_type,
     fix_empty_markdown_links,
@@ -24,9 +25,29 @@ from publish_common import (  # noqa: E402
     sanitize_markdown_for_publish,
     strip_raw_inline_html,
 )
+from utils import parse_analysis  # noqa: E402
 
 
 class PublishCommonSanitizerTest(unittest.TestCase):
+    def test_type_aware_analysis_and_publish_meta(self):
+        analysis = '''## 评分
+6.0/10
+
+## 机器摘要
+document_type: tech report
+rank_bucket: 前50%
+confidence: 中
+
+## 标签
+#语音识别 #Transformer
+'''
+        parsed = parse_analysis(analysis)
+        self.assertEqual(parsed['documentType'], '系统技术报告')
+        self.assertEqual(parsed['scoringRubricVersion'], 'type-aware-v1')
+        meta = build_paper_meta(parsed)
+        self.assertIn('文档类型：系统技术报告', meta)
+        self.assertIn('评分置信度：中', meta)
+
     def test_empty_links_and_duplicate_alts(self):
         text = '![图]()\n![same](a.png)\n![same](b.png)\n[空]()'
         fixed = dedupe_image_alts(fix_empty_markdown_links(text))

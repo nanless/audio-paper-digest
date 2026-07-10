@@ -138,7 +138,7 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 
 | Section | Requirements |
 |------|------|
-| Score (`## 评分`) | 1-10, one decimal place; machine summary includes `rank_bucket` (top 10% / top 25% / top 50% / bottom 50%), `innovation` (0-2), `technical_rigor` (0-1.5), `experimental_sufficiency` (0-1.5), `clarity` (0-1), `impact` (0-1.5), `open_source` (0-1.5), `reproducibility` (0-0.5), `engineering_score` (0-1.5), `confidence`, and other fields. Runtime output headings remain Chinese. Post-processing extracts eight sub-scores from `## 评分理由` and recalculates the total score (capped at 10), overriding the LLM's original output |
+| Score (`## 评分`) | `type-aware-v1`: first output `document_type` (方法研究 / 系统技术报告 / 模型报告 / 数据集与基准 / 综述 / 理论研究 / 应用研究), then use the matching evidence standard. The machine summary also includes `rank_bucket`, eight sub-scores, and `confidence`. Dimensions sum to 11 and the total is capped at 10; code recomputes it from `## 评分理由`. Type grants no fixed bonus and one defect may reduce only one primary dimension |
 | Tags | 3-5, must include at least 1 [Task] and 1 [Method/Model] tag; in addition to the final tag string, also output "main task tag", "main method tag", and "supplementary tags" |
 | Authors and Affiliations | First author, corresponding author, author list and affiliations; missing information must be written as "not specified", no guessing allowed |
 | Snarky Review | 2-3 sentences of sharp commentary on highlights and flaws, like a senior reviewer's final comment |
@@ -177,9 +177,13 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 | Round 3 | Review and Rewrite | `prompts/gap-fill.md` | Compare original paper with earlier output, correct omissions, errors, over-inferences |
 | Round 4 | Table Fix | Code detection + LLM supplement | Detect missing Markdown tables in the Experimental Results section, trigger supplementation |
 | Round 5 | Method Section Fix | Code detection + LLM supplement | Detect if Method Overview is too brief (<600 chars / <3 paragraphs), trigger expansion to 600+ chars |
-| Round 6 | Image Selection and Insertion Plan (dual-model only) | `prompts/image-supplement.md` | Secondary model takes candidate images + final text and outputs a JSON insertion plan; code inserts selected figures, lead/explanation text, and optional local `replacement` around matched anchors |
+| Round 6 | Final Structural Repair (conditional) | `prompts/structure-repair.md` | If the shared contract finds any of the 13 required sections missing, the primary model repairs only the current report structure; otherwise this round is skipped |
+| Round 7 | Type-aware Scoring Audit | `prompts/scoring-audit.md` | Primary model returns JSON only; code feeds validation errors into the next local attempt and deterministically normalizes Open Source when no artifact is released |
+| Round 8 | Image Selection and Insertion Plan (dual-model only) | `prompts/image-supplement.md` | Secondary model returns JSON only; the complete contract is checked after merging, and an invalid plan is discarded without losing the audited primary text |
 
 > **Single-model vs dual-model**: setting `PAPER_ANALYZER_SECONDARY_MODEL` (plus optional `SECONDARY_ENDPOINT`/`SECONDARY_API_KEY`, which reuse the primary values if unset) enables dual-model mode — the primary model first does text-only analysis, then after text-only repair rounds finish, the secondary model selects high-value figures from the candidates (flow diagrams, model diagrams, spectrograms, comparisons, result plots, etc.), drops low-information figures, and outputs target section, anchor, optional `replacement`, lead, and explanation. `replacement` is limited to local text near the insertion point; the secondary model must not rewrite the full analysis report. Without a secondary model it falls back to single-model: image URLs are kept only as `allImageUrls` candidate metadata and are not automatically embedded in the blog body.
+
+Single-issue-single-dimension ownership is enforced in code. A cross-dimension rationale triggers a local retry with the exact validation error instead of immediately restarting full-paper analysis. When resource state is deterministic, fixed Open Source anchors are applied: 0.5 for an explicit future release promise, 0.2 for demo-only, and 0 for fully closed with no promise.
 
 ### 3.8 Incremental Save and Wrap-up
 

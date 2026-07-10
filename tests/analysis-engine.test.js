@@ -10,12 +10,14 @@ const {
     analyzePaperWithRetry,
     getInvalidAnalysisReason
 } = require('../scripts/analysis-engine.js');
+const { getMissingRequiredSections } = require('../scripts/analysis-contract.js');
 
 function validAnalysisText() {
     return `## 评分
 7.7/10
 
 ## 机器摘要
+document_type: 方法研究
 rank_bucket: 前25%
 innovation: 1.5/2
 technical_rigor: 1.2/1.5
@@ -61,7 +63,7 @@ has_dataset: 否
 
 ## 评分理由
 创新性：1.5/2，有明确方法增量，虽然不是全新范式，但把上下文信息显式并入声学编码流程，针对噪声鲁棒性给出清楚设计。
-技术严谨性：1.2/1.5，实验设置基本合理，训练和评测流程没有明显漏洞，但部分超参数和实现细节仍然可以更完整。
+技术严谨性：1.2/1.5，公开的方法逻辑基本合理，核心假设没有明显漏洞，但边界条件仍可讨论得更完整。
 实验充分性：1.1/1.5，覆盖主要基准并提供消融实验，但跨域数据和真实远场场景还可以进一步扩展。
 清晰度：0.8/1，结构描述清楚，模块关系和指标解释都比较直接，读者可以较快理解方法作用。
 影响力：1.0/1.5，对语音识别读者有参考价值，尤其适合关注噪声鲁棒和上下文建模的研究者。
@@ -119,6 +121,9 @@ describe('analyzePaperWithRetry', () => {
         assert.strictEqual(result.success, true);
         assert.strictEqual(result.result.error, null);
         assert.ok(result.result.parsed.score);
+        assert.strictEqual(result.result.parsed.documentType, '方法研究');
+        assert.strictEqual(result.result.parsed.scoringRubricVersion, 'type-aware-v1');
+        assert.strictEqual(result.result.scoringRubricVersion, 'type-aware-v1');
     });
 
     it('保留深度分析返回的 imageManifest', async () => {
@@ -172,6 +177,18 @@ describe('analyzePaperWithRetry', () => {
         assert.match(getInvalidAnalysisReason('## 评分\n8.0/10', {}), /缺少必要章节/);
     });
 
+    it('结构契约会返回精确缺失章节供局部修复', () => {
+        const text = validAnalysisText().replace(/## 细节详述[\s\S]*?(?=\n## 评分理由)/, '');
+        assert.deepStrictEqual(getMissingRequiredSections(text), ['细节详述']);
+        assert.match(getInvalidAnalysisReason(text, require('../scripts/utils.js').parseAnalysis(text)), /细节详述/);
+    });
+
+    it('校验会拒绝缺少文档类型的新分析', () => {
+        const text = validAnalysisText().replace('document_type: 方法研究\n', '');
+        const parsed = require('../scripts/utils.js').parseAnalysis(text);
+        assert.match(getInvalidAnalysisReason(text, parsed), /文档类型/);
+    });
+
     it('校验不会把 0 分误判为缺少评分', () => {
         const parsed = require('../scripts/utils.js').parseAnalysis(validAnalysisText());
         parsed.score = 0;
@@ -218,5 +235,26 @@ describe('analyzeBatch', () => {
         assert.strictEqual(stats.skipped, 2);
         assert.strictEqual(calls.get('2604.00001v1'), 1);
         assert.strictEqual(calls.get('2604.00002v1'), 1);
+    });
+});
+
+describe('selected reanalysis stats', () => {
+    it('只把旧评分契约恢复为当前契约的论文计入恢复数', () => {
+        const { updateReanalysisStats } = require('../scripts/reanalyze-selected.js');
+        const data = {
+            papers: [{ arxivId: 'a' }, { arxivId: 'b' }, { arxivId: 'c' }],
+            stats: { reanalyzed: 1, reanalyzeFailed: 2 }
+        };
+        const results = [
+            { arxivId: 'a', parsed: { scoringRubricVersion: 'type-aware-v1' } },
+            { arxivId: 'b', parsed: { scoringRubricVersion: 'type-aware-v1' } }
+        ];
+        const recovered = updateReanalysisStats(data, results, new Set(['a']), { success: 2, failed: 0 }, '2026-07-10T18:00:00+08:00');
+
+        assert.strictEqual(recovered, 1);
+        assert.strictEqual(data.stats.reanalyzed, 2);
+        assert.strictEqual(data.stats.reanalyzeFailed, 1);
+        assert.strictEqual(data.stats.selectedReanalyzed, 2);
+        assert.strictEqual(data.stats.selectedReanalyzeFailed, 0);
     });
 });

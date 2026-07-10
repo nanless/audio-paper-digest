@@ -46,7 +46,7 @@ arXiv ID: {arxivId}
 3. **Remove redundancy**: delete content in the analysis that lacks support from the original text, over-inference, or statements unrelated to the paper. Fabrication is strictly prohibited.
 4. **Preserve format**: the output must contain the following complete sections, with formatting consistent with the existing analysis:
    - ## 评分
-   - ## 机器摘要 (**must** be in strict key-value pair format, one per line, with key names unchanged: rank_bucket / innovation / technical_rigor / experimental_sufficiency / clarity / impact / open_source / reproducibility / engineering_score / confidence / primary_task_tag / primary_method_tag / sota_claim / has_code / has_model / has_dataset. Prose paragraphs are prohibited.)
+   - ## 机器摘要 (**must** be in strict key-value pair format, one per line, with key names unchanged: document_type / rank_bucket / innovation / technical_rigor / experimental_sufficiency / clarity / impact / open_source / reproducibility / engineering_score / confidence / primary_task_tag / primary_method_tag / sota_claim / has_code / has_model / has_dataset. `document_type` must be exactly one of 方法研究 / 系统技术报告 / 模型报告 / 数据集与基准 / 综述 / 理论研究 / 应用研究. Prose paragraphs are prohibited.)
    - ## 标签 (**must** strictly follow the four-line format; no omission or merging allowed: line 1 `#标签1 #标签2...`; line 2 `主任务标签：#具体任务标签`; line 3 `主方法标签：#具体方法标签`; line 4 `补充标签：#标签...`. All tags must start with `#` and be separated by spaces; commas / semicolons / enumeration commas are strictly prohibited. arXiv categories such as `#cs.CL` are strictly prohibited as tags. The primary task tag must be a specific task direction; method names, arXiv categories, or prose descriptions are not allowed.)
    - ## 作者与机构
    - ## 毒舌点评
@@ -64,6 +64,8 @@ arXiv ID: {arxivId}
      * All 8 dimensions must be listed, fixed order: 创新性, 技术严谨性, 实验充分性, 清晰度, 影响力, 开源, 可复现性, 工程/实践价值
      * **Do NOT write total score calculation** (code calculates automatically)
      * Open source score must be consistent with `## 开源详情` and `has_code`/`has_model`/`has_dataset`
+     * A single defect may be used for deduction in only one primary dimension; do not repeatedly penalize the same disclosure gap across Technical Rigor, Experimental Thoroughness, Clarity, Open Source, and Reproducibility
+     * Apply the evidence standard selected by `document_type`; type itself provides no bonus, floor, or exemption
    - ## 局限与问题
    - ## 开源详情
 5. **Complete rewrite**: do not output only modified fragments. What is output is a complete, directly substitutable final version.
@@ -82,6 +84,9 @@ arXiv ID: {arxivId}
 11. **Scoring rationale must read like a reviewer**: the 8-dimensional review comments must not be generic; write out specific strengths and weaknesses. If the existing analysis's scores are obviously too high or too low (inconsistent with the paper's actual contribution), the scores must be adjusted and reasons given.
 12. **Domain-relevance constraint**: this analysis is aimed at speech / music / audio domain readers. If the paper's core contribution is not in the speech / music / audio domain (e.g., pure CV, pure NLP, pure law/policy, pure general ML), even if the technique is excellent, the **"impact" dimension must be significantly reduced (typically ≤ 0.5)**, because speech / music / audio readers cannot directly benefit. Such papers should not receive high scores due to "cross-domain generality".
 13. **Limitations and issues must be deep**: do not just list limitations the authors themselves mentioned. Like a real reviewer, point out possible flaws in the method, loopholes in experimental design, whether conclusions are too strong, and whether there is over-claiming.
+14. **Type-aware scoring**: classify `document_type` before scoring. Method research uses baselines, ablations, generalization, and statistics; system/model reports use end-to-end quality, latency, throughput, cost, scale, stress tests, fair competitor comparisons, and failure cases; datasets/benchmarks use coverage, annotation quality, leakage controls, protocols, and baselines; surveys use search methodology, coverage, taxonomy, and synthesis; theory uses proofs, assumptions, boundaries, and counterexamples; applied research uses real-world settings, external validation, user studies, and deployment constraints.
+15. **Claim-evidence matching**: lack of conventional ablations does not automatically make a system report, survey, or theory paper experimentally weak. Require component ablation only when the paper claims a component-level causal contribution. System-level novelty, hardware-software co-design, and scaling engineering can count as Innovation, but marketing claims without inspectable evidence cannot score highly.
+16. **Deduction ownership**: missing artifacts belongs to Open Source; missing hyperparameters and reproduction steps belongs to Reproducibility; unsupported claims belongs to Experimental Thoroughness; presentation problems belongs to Clarity; derivation, assumption, or logic errors belongs to Technical Rigor. Lower `confidence` when information is insufficient; do not turn "cannot verify" into "technically wrong".
 
 Re-emphasized: output starts directly from `## 评分`; do not have any prefix text.
 ````

@@ -9,6 +9,44 @@ import os
 from datetime import datetime, timezone, timedelta
 
 BJ_TZ = timezone(timedelta(hours=8))
+SCORING_RUBRIC_VERSION = 'type-aware-v1'
+DOCUMENT_TYPES = (
+    '方法研究',
+    '系统技术报告',
+    '模型报告',
+    '数据集与基准',
+    '综述',
+    '理论研究',
+    '应用研究',
+)
+
+
+def normalize_document_type(value):
+    """将常见文档类型别名归一化为评分契约中的受控值。"""
+    raw = strip_md(value or '').strip()
+    if not raw:
+        return ''
+    if raw in DOCUMENT_TYPES:
+        return raw
+    normalized = re.sub(r'[\s_-]+', '', raw.lower())
+    aliases = {
+        '方法论文': '方法研究', '研究论文': '方法研究',
+        'methodpaper': '方法研究', 'methodresearch': '方法研究',
+        '技术报告': '系统技术报告', '系统报告': '系统技术报告',
+        '工业技术报告': '系统技术报告', '白皮书': '系统技术报告',
+        'techreport': '系统技术报告', 'technicalreport': '系统技术报告',
+        'systemreport': '系统技术报告', 'whitepaper': '系统技术报告',
+        '工业模型报告': '模型报告', 'modelreport': '模型报告',
+        '数据集': '数据集与基准', '基准': '数据集与基准',
+        '基准测试': '数据集与基准', 'dataset': '数据集与基准',
+        'benchmark': '数据集与基准', 'datasetbenchmark': '数据集与基准',
+        '综述论文': '综述', 'survey': '综述', 'review': '综述',
+        '理论论文': '理论研究', 'theory': '理论研究',
+        'theoreticalresearch': '理论研究',
+        '应用论文': '应用研究', 'application': '应用研究',
+        'appliedresearch': '应用研究',
+    }
+    return aliases.get(normalized, '')
 
 
 def now_bj_iso():
@@ -40,6 +78,7 @@ def strip_md(t):
 def parse_machine_summary(analysis):
     """解析 机器摘要 块（兼容 ## 和 ### 标题）"""
     result = {
+        'documentType': '',
         'rankBucket': '',
         'innovation': '',
         'technicalRigor': '',
@@ -66,6 +105,7 @@ def parse_machine_summary(analysis):
         return result
 
     key_map = {
+        'document_type': 'documentType',
         'rank_bucket': 'rankBucket',
         'innovation': 'innovation',
         'technical_rigor': 'technicalRigor',
@@ -94,6 +134,8 @@ def parse_machine_summary(analysis):
         mapped = key_map.get(km.group(1))
         if mapped:
             val = strip_md(km.group(2))
+            if mapped == 'documentType':
+                val = normalize_document_type(val)
             # 对于数值型字段，只保留数字部分（去除中文括号说明等）
             if mapped in ('innovation', 'technicalRigor', 'experimentalSufficiency', 'clarity', 'impact', 'openSource', 'reproducibility', 'engineeringScore'):
                 num_match = re.search(r'(\d+\.?\d*)', val)
@@ -272,6 +314,8 @@ def parse_analysis(analysis):
         return None
     r = {
         'machineSummary': None,
+        'documentType': '',
+        'scoringRubricVersion': '',
         'rankBucket': '',
         'innovationScore': '',
         'technicalRigorScore': '',
@@ -328,6 +372,8 @@ def parse_analysis(analysis):
 
     machine_summary = parse_machine_summary(analysis)
     r['machineSummary'] = machine_summary
+    r['documentType'] = machine_summary['documentType']
+    r['scoringRubricVersion'] = SCORING_RUBRIC_VERSION if r['documentType'] else ''
     r['rankBucket'] = machine_summary['rankBucket']
     r['innovationScore'] = machine_summary['innovation']
     r['technicalRigorScore'] = machine_summary['technicalRigor']

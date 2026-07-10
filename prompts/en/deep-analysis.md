@@ -34,6 +34,7 @@ First output the total score alone; the format must be: X.X/10
 **Must strictly follow the key-value pair format below, one key-value pair per line. Key names must match the examples exactly; prose paragraphs are prohibited. If any item cannot be determined, write "未说明".**
 
 ```
+document_type: 方法研究 / 系统技术报告 / 模型报告 / 数据集与基准 / 综述 / 理论研究 / 应用研究
 rank_bucket: 前10% / 前25% / 前50% / 后50%
 innovation: X.X
 technical_rigor: X.X
@@ -53,6 +54,7 @@ has_dataset: 是 / 否 / 未说明
 ```
 
 **Field descriptions**:
+- `document_type`: first classify the primary contribution form; choose exactly one of 方法研究 / 系统技术报告 / 模型报告 / 数据集与基准 / 综述 / 理论研究 / 应用研究. Type selects the applicable evidence standard and never directly adds or removes points
 - `rank_bucket`: choose exactly one from 前10% / 前25% / 前50% / 后50%
 - `innovation`: novelty, range 0–2
 - `technical_rigor`: technical rigor, range 0–1.5
@@ -74,16 +76,19 @@ has_dataset: 是 / 否 / 未说明
 3. Scores must be discriminative but not artificially suppressed. Scores ≥ 9.0 are reserved for truly milestone-potential work; 8.0–8.5 for solid contributions on important problems with clear impact; most solid but non-breakthrough papers should fall in 6.0–7.5. Do not lower the innovation score of engineering papers simply because they "combine existing techniques" — what matters is whether the combination yields new insight, solves a real important problem, and brings verifiable significant improvement.
 4. rank_bucket must be consistent with the final score recalculated from the eight sub-scores: total ≥ 9.0 → 前10%; total ≥ 7.5 and < 9.0 → 前25%; total ≥ 5.5 and < 7.5 → 前50%; total < 5.5 → 后50%.
 5. Do not reject paper quality simply because the task is niche. Niche, vertical, special-population, pathological speech, animal sounds, etc., should be scored normally on "innovation" and "technical rigor" — as long as the problem is well defined and the method has substantive breakthrough, the innovation score must not be suppressed due to narrow audience; however, "impact" must be scored low (typically ≤ 0.5), because such work naturally has limited broad domain-driving effect and follow-up value. Experimental thoroughness may be moderately reduced only for aspects related to dataset generality.
-6. If the paper lacks key experiments, comparisons are insufficient, or conclusions are jumpy, deduct significantly in "experimental thoroughness"; if reproduction information is vague or training details are missing, deduct in "reproducibility"; if only a GitHub link is given with no README or documentation, deduct in "open source".
-7. If the paper is poorly written, symbols are inconsistent, or key details are missing making reproduction impossible, deduct in "clarity".
-8. If the paper has obvious errors in method derivation, proofs are not rigorous, or algorithm logic has flaws, deduct significantly in "technical rigor".
+6. Use claim-evidence matching: identify the core claims first, then judge whether experiments, proofs, system tests, or data analyses support those claims. Do not mechanically demand the same evidence from every document type.
+7. Use a single-issue-single-primary-dimension rule. Missing artifacts belongs to Open Source; missing hyperparameters or reproduction instructions belongs to Reproducibility; missing evidence for claims belongs to Experimental Thoroughness; writing or presentation problems belong to Clarity; derivation, assumption, or logic flaws belong to Technical Rigor. Never deduct the same disclosure gap across multiple dimensions.
+8. "Cannot verify" is not the same as "demonstrably wrong". When disclosure is insufficient, lower `confidence` and deduct only in directly relevant dimensions. Closed source or missing implementation detail alone is not evidence of flawed technical logic.
 9. 【Domain-Relevance Constraint — Most Important】This analysis is aimed at **speech / music / audio domain readers**. If the paper's core contribution is not in speech / music / audio (e.g., pure computer vision, pure natural language processing, pure law/policy frameworks, pure general machine learning theory, pure robotics/embodied AI), even if the technical quality is excellent, the **"impact" dimension must be significantly reduced (typically ≤ 0.5)**, because its direct relevance and practical value for speech / music / audio domain readers is limited. Such papers should not receive high scores due to "cross-domain generality" or "the method could theoretically be adapted to audio". Only when the paper explicitly takes speech / music / audio as the core experimental object, core evaluation task, or core application scenario can impact be scored normally.
+10. Apply type-specific evidence: method research uses representative baselines, ablations, cross-dataset generalization, and statistics; system/model reports use end-to-end quality, latency, throughput, cost, scale, stress tests, fair competitor comparisons, and failure cases, with component ablations required only for component-level causal claims; datasets/benchmarks use coverage, annotation quality, leakage controls, protocols, and baselines; surveys use search methodology, coverage, taxonomy, and synthesis; theory uses proofs, assumptions, boundaries, and counterexamples; applied research uses real-world settings, external validation, user studies, and deployment constraints.
+11. System-level novelty, hardware-software co-design, scaling methods, and new capabilities produced by engineering combinations can count as Innovation. Product descriptions without inspectable evidence cannot receive high Innovation or Experimental scores.
+12. Document type provides no fixed bonus, floor, or exemption. Closed reports still lose Open Source and Reproducibility points as warranted; pure theory may legitimately receive zero Engineering points. The common eight dimensions remain unchanged.
 
 【Dimension Explanations】
 - Innovation (0–2): Is the problem novel? Does the method have essential breakthrough? Is the insight deep? Is the distinction from SOTA clear and convincing? Do not give low scores merely for "combining existing techniques"; what matters is whether the combination yields new insight and solves a real problem. 2.0 for true breakthroughs, 1.5 for clear innovation, 1.0 for minor improvements, 0.5 for trivial improvements.
-- Technical Rigor (0–1.5): Are derivations/proofs correct? Are there logical flaws in the algorithm? Are assumptions reasonable? Are boundary conditions discussed? Is mathematical formulation rigorous? Is there over-simplification?
-- Experimental Thoroughness (0–1.5): Are baselines sufficient and representative? Are ablation studies complete? Is dataset coverage adequate? Do results truly support the conclusions? Is there statistical significance testing or error analysis? Is there suspicion of overfitting?
-- Clarity (0–1): Organization, symbol definitions, formula explanations, figure quality. Can a reader understand the core method and reproduce it without reading source code? Deduct for poor writing or missing key details.
+- Technical Rigor (0–1.5): Evaluate correctness and internal logic of the disclosed derivations, algorithms, systems, assumptions, and boundaries. Closed source, absent hyperparameters, or missing code are not by themselves Technical Rigor defects.
+- Experimental Thoroughness (0–1.5): Apply the evidence standard selected by `document_type`; the central question is whether evidence supports the claims. Require ablations only for component-level causal attribution, and do not force method-paper conventions onto surveys, theory, datasets, or system reports.
+- Clarity (0–1): Evaluate organization, notation, explanations, figures, and readability only. Missing reproduction detail belongs to Reproducibility unless the writing itself is unclear.
 - Impact (0–1.5): Domain-driving effect, potential follow-up value, practical application potential, relevance to audio/speech readers. When scoring, consider the following factors:
   - **Research成果 itself**: achieving SOTA on important benchmarks, releasing large-scale datasets/tools, solving long-standing practical problems in the domain
   - **Boundary for author/institution information**: Only use facts explicitly provided by the paper text, such as author list, affiliations, released resources, system deployment, data scale, or benchmark coverage, as background. Do not add points based on external memory, author fame, institution fame, or stereotypes about organizations.
@@ -284,6 +289,8 @@ Please write like a top-tier conference reviewer, scoring and providing specific
 - NEVER use 10-point scale, percentage, or any converted score
 - Do NOT write total score calculation (code calculates automatically)
 - Open source score must be consistent with `## 开源详情` and `has_code`/`has_model`/`has_dataset`
+- Each defect may be used as a deduction in only one primary dimension
+- Apply the evidence standard for `document_type`; the type itself is never a scoring reason
 
 **创新性 (X/2)**
 Write specific review comments: novelty of problem / method / insight, key differences from SOTA, whether there is "old wine in new bottles" or incremental improvement, whether the claimed innovation holds up.

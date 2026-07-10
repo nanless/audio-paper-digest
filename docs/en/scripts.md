@@ -31,6 +31,10 @@ Full reanalysis.
 - **Saves intermediate results every 5 papers** (save interval auto-adjusted in concurrent mode), **only successful results overwrite old data**; saves also sync `papers.json.digestStatus` from the current persisted results
 - On startup, checks whether `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, `PAPER_ANALYZER_ENDPOINT` are set; exits directly if any are missing
 
+#### `scripts/reanalyze-selected.js`
+
+Reanalyzes specified IDs with the fixed default concurrency of 3, replaces old analyses only on success, and syncs `digestStatus`. When a target did not previously use the current scoring contract, success reconciles the corresponding historical failure in `stats.reanalyzed` / `stats.reanalyzeFailed`. It also records `selectedReanalyzed`, `selectedReanalyzeFailed`, and `selectedReanalyzeAt`; rerunning an already-current result does not inflate recovered counts.
+
 #### `scripts/quick-test.js`
 
 Quick test script.
@@ -62,7 +66,7 @@ Analyze a single paper and merge it into the results.
 
 Read-only validation for current runtime data.
 - Checks `data/current/papers.json`, `data/current/raw-candidates.json`, `data/current/filtered-papers.json`, and `data/current/deep-analysis-result.json` by default
-- Also checks `data/current/filter-decisions.json`; validates `digestStatus.status` / `latestAttemptStatus`, candidate stat relationships, filtered-result status values, `filterModel` / `filterPromptHash` required for safe filtered-result reuse and their consistency with the decision cache, paper IDs, basic `sourceHealth` shape, score ranges, deep-analysis `stats.totalAfterMerge`, image URL array fields, `imageManifest` type, consistency between filter decision counts/related counts and `filtered-papers.json` stats, and `complete=true` decision-cache coverage of the full `raw-candidates.json` candidate set
+- Also checks `data/current/filter-decisions.json`; validates digest/filter metadata, paper IDs, `sourceHealth`, `documentType`, `scoringRubricVersion`, all eight dimension ranges, total-score consistency with the capped subtotal, deep-analysis statistics, image fields, and complete filter-decision coverage
 - Does not modify any data; prints errors and exits non-zero on failure
 - npm entry: `npm run validate:data`
 
@@ -185,13 +189,13 @@ HuggingFace Papers fetch module.
 
 #### `scripts/deep-analyzer.js`
 
-Multimodal deep analyzer. The analysis flow is a **6-round progressive process**, not a single call:
+Multimodal deep analyzer. The analysis flow is an **up-to-8-round progressive process**, not a single call:
 
 **Round 1 -- Main Deep Analysis**
 - `analyzePaperDeep(paper)`: fetches arXiv HTML full text (up to 500K characters) and preselects candidate images. Dual-model mode downloads candidate images serially and lets the secondary model output a JSON insertion plan for high-value figures; single-model mode only stores candidate image metadata. `allImageUrls` stores candidates, while `selectedImageUrls` / `imageUrls` store selected figures
 - Loads `prompts/deep-analysis.md`, replaces placeholders, and calls the LLM
-- Output includes: score, machine summary, tags, authors and affiliations, snarky review, core summary, method overview and architecture, core innovations, experimental results, detailed description, score rationale, limitations and issues, open source details
-- `parseAnalysis(analysis)`: parses analysis text into a structured object. Runtime output headings remain Chinese. `score` is not taken directly from the LLM's original total score under `## 评分`, but is recalculated from eight sub-scores extracted from `## 评分理由`, rounded to 0.1, always overriding the LLM's original total score
+- Output includes: document type, score, machine summary, tags, authors and affiliations, snarky review, core summary, method overview and architecture, core innovations, experimental results, detailed description, score rationale, limitations and issues, open source details
+- `parseAnalysis(analysis)`: parses the analysis, normalizes `document_type`, and marks new results with `type-aware-v1`. `score` is recalculated from the eight sub-scores in `## 评分理由` and capped at 10
 
 **Round 2 -- Open Source Scan (`scanOpensource`)**
 - Loads `prompts/opensource-scan.md`
@@ -213,11 +217,24 @@ Multimodal deep analyzer. The analysis flow is a **6-round progressive process**
 - Detects if the runtime `## 方法概述和架构` section is too brief (fewer than 600 Chinese characters, vague expression, fewer than 3 paragraphs)
 - If conditions are met, triggers LLM expansion to a 600+ character detailed description
 
-**Round 6 -- Image Selection and Insertion Plan (`applyImageSupplement`, dual-model mode)**
+**Round 6 -- Final Structural Repair (`repairMissingAnalysisSections`, conditional)**
+- Uses `scripts/analysis-contract.js` to check all 13 required sections
+- When sections are missing, loads `prompts/structure-repair.md` with exact missing titles and prior validation feedback; complete reports skip this round
+
+**Round 7 -- Type-aware Scoring Audit (`auditTypeAwareScoring`)**
+- Loads `prompts/scoring-audit.md`; the primary model returns JSON only
+- Re-audits document type, confidence, eight scores, and unique deduction ownership; cross-dimension failures are fed into the next local attempt
+- With no released core artifact, code normalizes Open Source to 0.5 for an explicit promise, 0.2 for demo-only, or 0 otherwise
+- Code updates scoring sections and machine-summary score fields without rewriting body text
+
+**Round 8 -- Image Selection and Insertion Plan (`applyImageSupplement`, dual-model mode)**
 - Loads `prompts/image-supplement.md`
 - The secondary model uses the final text and candidate images to select high-value figures, drop low-information figures, and output JSON only
+- `[secondary]` logs record paper ID, model, protocol, endpoint/key source (source only, never secrets), candidate/download counts, each input image label and MIME/payload size, prompt/response lengths, valid plan count, and each plan's section/anchor/replacement/description lengths; API keys are never printed
 - The insertion plan may include `anchor`, optional `replacement`, lead, and explanation; `replacement` may only locally replace a precisely matched short anchor so the surrounding text naturally introduces the figure
 - Code merges the plan into allowed sections of the primary-model text; the secondary model must not return a complete analysis report or rewrite scores, summaries, tags, or score rationales
+- The shared complete contract runs again after merging. An invalid plan is discarded while the audited primary-model text is retained
+- Generic `图N` alts without real captions and `selectedImageUrls` are normalized to final body order, preventing candidate numbers from becoming out-of-order display numbers
 
 **API Calls**:
 - `callModel(messages, maxTokens)`: retry-wrapped API call encapsulation (up to 3 inner retries, exponential backoff: first 10s, then double)
@@ -363,10 +380,11 @@ Code-level auto-fix covers:
 3. Non-standard image references → convert to standard Markdown image syntax
 4. Overly long base64 data URIs → auto-truncate
 5. YAML frontmatter double commas → auto-fix
-6. Markdown table sub-header rows (first 3 columns empty) → delete the row
-7. Unclosed LaTeX `$ \mathcal{L}_D \(` → convert to `\(\mathcal{L}_D\)`
-8. Malformed LaTeX brackets (`\)\mathcal{L}_X\(`) → unify to `\(\mathcal{L}_X\)`
-9. Double-backslash LaTeX (`\(\\mathcal{L}_X\)` → fix to `\(\mathcal{L}_X\)`)
+6. Unclosed LaTeX `$ \mathcal{L}_D \(` → convert to `\(\mathcal{L}_D\)`
+7. Malformed LaTeX brackets (`\)\mathcal{L}_X\(`) → unify to `\(\mathcal{L}_X\)`
+8. Double-backslash LaTeX (`\(\\mathcal{L}_X\)` → fix to `\(\mathcal{L}_X\)`)
+
+Markdown tables may legitimately use empty leading group cells for continuation rows. Code review preserves those rows instead of treating them as removable subheaders. LLM advice that ordinary model names or technical terms require backticks is filtered as a style false positive.
 
 LLM-level fix: Issues where LLM review returns `auto_fixable: true` are fixed via simple text replacement per `fix_instruction`. Blog review and Xiaohongshu one-liners share `call_publish_llm_api()` in `publish_common.py`, keeping protocol routing aligned with the Node side; Anthropic-compatible requests dynamically read local `claude --version` for `User-Agent`, falling back to the default version if unavailable.
 

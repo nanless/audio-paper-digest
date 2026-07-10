@@ -5,12 +5,28 @@ setupScriptLogging(__filename);
 const fs = require('fs');
 const path = require('path');
 const Config = require('./config.js');
-const { readJsonSafe, normalizedId } = require('./utils.js');
+const {
+    readJsonSafe,
+    normalizedId,
+    DOCUMENT_TYPES,
+    SCORING_RUBRIC_VERSION
+} = require('./utils.js');
 
 const ALLOWED_DIGEST_STATUSES = new Set(['seen', 'pending_analysis', 'analyzed', 'analysis_failed']);
 const ALLOWED_ANALYSIS_ATTEMPT_STATUSES = new Set(['analyzed', 'analysis_failed']);
 const ALLOWED_FILTERED_STATUSES = new Set(['filtering', 'filter_complete', 'complete']);
 const DEFAULT_FILTER_DECISIONS_FILE = Config.FILES.filterDecisions;
+const ALLOWED_DOCUMENT_TYPES = new Set(DOCUMENT_TYPES);
+const SCORE_DIMENSIONS = Object.freeze({
+    innovationScore: 2,
+    technicalRigorScore: 1.5,
+    experimentalSufficiencyScore: 1.5,
+    clarityScore: 1,
+    impactScore: 1.5,
+    openSourceScore: 1.5,
+    reproducibilityScore: 0.5,
+    engineeringScore: 1.5
+});
 
 function addIssue(issues, file, message) {
     issues.push(`${path.basename(file)}: ${message}`);
@@ -225,6 +241,39 @@ function validatePaperListFile(filePath, options = {}) {
                 if (!Number.isFinite(score) || score < 0 || score > 10) {
                     addIssue(issues, filePath, `papers[${index}] parsed.score 非法: ${paper.parsed.score}`);
                 }
+            }
+            const parsed = paper.parsed;
+            if (parsed && typeof parsed === 'object') {
+                if (parsed.documentType && !ALLOWED_DOCUMENT_TYPES.has(parsed.documentType)) {
+                    addIssue(issues, filePath, `papers[${index}] parsed.documentType 非法: ${parsed.documentType}`);
+                }
+                if (parsed.scoringRubricVersion && parsed.scoringRubricVersion !== SCORING_RUBRIC_VERSION) {
+                    addIssue(issues, filePath, `papers[${index}] parsed.scoringRubricVersion 非法: ${parsed.scoringRubricVersion}`);
+                }
+                if (parsed.scoringRubricVersion && !parsed.documentType) {
+                    addIssue(issues, filePath, `papers[${index}] 有评分版本但缺少 parsed.documentType`);
+                }
+
+                const dimensionValues = [];
+                for (const [field, maxScore] of Object.entries(SCORE_DIMENSIONS)) {
+                    if (parsed[field] === undefined || parsed[field] === '') continue;
+                    const value = Number(parsed[field]);
+                    if (!Number.isFinite(value) || value < 0 || value > maxScore) {
+                        addIssue(issues, filePath, `papers[${index}] parsed.${field} 非法: ${parsed[field]}`);
+                    } else {
+                        dimensionValues.push(value);
+                    }
+                }
+                if (dimensionValues.length === Object.keys(SCORE_DIMENSIONS).length && parsed.score !== undefined) {
+                    const expected = Math.round(Math.min(10, dimensionValues.reduce((sum, value) => sum + value, 0)) * 10) / 10;
+                    const actual = Math.round(Number(parsed.score) * 10) / 10;
+                    if (Number.isFinite(actual) && actual !== expected) {
+                        addIssue(issues, filePath, `papers[${index}] parsed.score (${actual}) 与八项合计封顶结果 (${expected}) 不一致`);
+                    }
+                }
+            }
+            if (paper.scoringRubricVersion && paper.scoringRubricVersion !== SCORING_RUBRIC_VERSION) {
+                addIssue(issues, filePath, `papers[${index}] scoringRubricVersion 非法: ${paper.scoringRubricVersion}`);
             }
             for (const key of ['selectedImageUrls', 'imageUrls', 'allImageUrls']) {
                 if (paper[key] !== undefined && !Array.isArray(paper[key])) {

@@ -7,6 +7,7 @@
 
 const { parseAnalysis, writeFileAtomic, readJsonSafe, getBeijingISOString, normalizedId } = require('./utils.js');
 const { ANALYSIS_CONFIG } = require('./config.js');
+const { getInvalidAnalysisReason, hasRequiredSections } = require('./analysis-contract.js');
 
 // ═══════════════════════════════════════════════════════
 // 默认配置常量（从 config.js 读取）
@@ -67,6 +68,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
                         ...paper,
                         analysis: analyzed.analysis,
                         parsed: parsed,
+                        scoringRubricVersion: parsed.scoringRubricVersion || '',
                         selectedImageUrls: analyzed.selectedImageUrls || [],
                         imageUrls: analyzed.imageUrls || paper.imageUrls || [],
                         allImageUrls: analyzed.allImageUrls || paper.allImageUrls || [],
@@ -107,28 +109,6 @@ async function analyzePaperWithRetry(paper, options = {}) {
             error: lastError || '分析失败'
         }
     };
-}
-
-function hasRequiredSections(text) {
-    const required = [
-        '评分', '机器摘要', '标签', '作者与机构', '毒舌点评', '核心摘要',
-        '方法概述和架构', '核心创新点', '实验结果', '细节详述',
-        '评分理由', '局限与问题', '开源详情'
-    ];
-    return required.every(title => new RegExp(`(^|\\n)#{2,3}\\s*${escapeRegExp(title)}[：:\\s]*\\n`, 'm').test(text));
-}
-
-function getInvalidAnalysisReason(analysis, parsed) {
-    if (!hasRequiredSections(analysis)) return '分析结果缺少必要章节';
-    if (!parsed) return '分析结果无法解析';
-    if (parsed.score === undefined || parsed.score === null || Number.isNaN(Number(parsed.score))) {
-        return '分析结果缺少有效评分';
-    }
-    if (!parsed.scoringReason || parsed.scoringReason.trim().length < 80) return '分析结果缺少有效评分理由';
-    if (!parsed.summary || parsed.summary.trim().length < 80) return '分析结果缺少有效核心摘要';
-    if (!parsed.architecture || parsed.architecture.trim().length < 80) return '分析结果缺少有效方法概述';
-    if (!parsed.results || parsed.results.trim().length < 50) return '分析结果缺少有效实验结果';
-    return null;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -386,10 +366,6 @@ function mergePapersById(existingPapers, newPapers) {
 
 function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
-}
-
-function escapeRegExp(string) {
-    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 module.exports = {

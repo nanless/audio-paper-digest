@@ -31,6 +31,10 @@
 - **每 5 篇保存一次中间结果**（并发模式下自动调整保存间隔），**仅成功结果覆盖旧数据**；保存时按当前结果同步 `papers.json.digestStatus`
 - 启动时检查 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT` 是否已设置，缺失则直接退出
 
+#### `scripts/reanalyze-selected.js`
+
+指定 ID 重分析，固定使用默认并发 3，成功结果替换旧分析并同步 `digestStatus`。若目标论文此前尚未使用当前评分契约，成功后会把全量 `stats.reanalyzed` / `stats.reanalyzeFailed` 中对应的历史失败校正为成功；同时记录 `selectedReanalyzed`、`selectedReanalyzeFailed`、`selectedReanalyzeAt`，重复重跑当前契约论文不会重复累计恢复数。
+
 #### `scripts/quick-test.js`
 
 快速测试脚本。
@@ -63,7 +67,7 @@
 
 只读校验当前运行数据结构。
 - 默认检查 `data/current/papers.json`、`data/current/raw-candidates.json`、`data/current/filtered-papers.json`、`data/current/deep-analysis-result.json`
-- 额外检查 `data/current/filter-decisions.json`；校验 `digestStatus.status` / `latestAttemptStatus` 枚举、候选统计关系、筛选状态枚举、筛选复用所需的 `filterModel` / `filterPromptHash` 及其与决策缓存的一致性、论文 ID、`sourceHealth` 基本形状、评分范围、深度分析 `stats.totalAfterMerge`、图片字段数组、`imageManifest` 类型、筛选决策数量/相关数量和 `filtered-papers.json` 统计字段的一致性，以及 `complete=true` 决策缓存对 `raw-candidates.json` 候选全集的覆盖
+- 额外检查 `data/current/filter-decisions.json`；校验 `digestStatus.status` / `latestAttemptStatus` 枚举、候选统计关系、筛选复用元数据、论文 ID、`sourceHealth`、`documentType`、`scoringRubricVersion`、八维分项范围、总分与分项封顶合计、深度分析统计、图片字段和筛选决策完整覆盖
 - 不修改任何数据；发现问题时输出错误并以非零状态退出
 - npm 入口：`npm run validate:data`
 
@@ -188,13 +192,13 @@ HuggingFace Papers 抓取模块。
 
 #### `scripts/deep-analyzer.js`
 
-多模态深度分析器。分析流程为 **6 轮递进式处理**，不是单次调用：
+多模态深度分析器。分析流程为 **最多 8 轮递进式处理**，不是单次调用：
 
 **Round 1 — 主深度分析**
 - `analyzePaperDeep(paper)`：获取 arXiv HTML 全文（最多 500K 字符）+ 预筛候选图片；双模型模式才串行下载候选图片并由副模型最终筛选高价值图片插入正文，单模型模式只保存候选图元数据；`allImageUrls` 保存候选图，`selectedImageUrls` / `imageUrls` 保存已选图
 - 加载 `prompts/deep-analysis.md`，替换占位符后调用 LLM
-- 输出包含：评分、机器摘要、标签、作者与机构、毒舌点评、核心摘要、方法概述和架构、核心创新点、实验结果、细节详述、评分理由、局限与问题、开源详情
-- `parseAnalysis(analysis)`：将分析文本解析为结构化对象。`score` 不是直接取 `## 评分` 下的 LLM 原始总分，而是从 `## 评分理由` 中提取八个分项重新计算，四舍五入到 0.1，始终覆盖 LLM 原始总分
+- 输出包含：文档类型、评分、机器摘要、标签、作者与机构、毒舌点评、核心摘要、方法概述和架构、核心创新点、实验结果、细节详述、评分理由、局限与问题、开源详情
+- `parseAnalysis(analysis)`：将分析文本解析为结构化对象，归一化 `document_type` 并为新结果写入 `type-aware-v1` 版本。`score` 从 `## 评分理由` 的八个分项重新计算并封顶为 10，覆盖 LLM 原始总分
 
 **Round 2 — 开源扫描（`scanOpensource`）**
 - 加载 `prompts/opensource-scan.md`
@@ -216,11 +220,24 @@ HuggingFace Papers 抓取模块。
 - 检测 `## 方法概述和架构` 是否过于简略（少于 600 中文字符、表述模糊、不足 3 段）
 - 若满足条件，触发 LLM 扩展至 600+ 字符的详细描述
 
-**Round 6 — 图像筛选与插图计划（`applyImageSupplement`，双模型模式）**
+**Round 6 — 最终结构修复（`repairMissingAnalysisSections`，按需）**
+- 通过 `scripts/analysis-contract.js` 检查 13 个必要章节
+- 缺失时加载 `prompts/structure-repair.md`，把缺失标题和上次校验反馈交给主模型；完整结果不调用本轮
+
+**Round 7 — 类型感知评分审计（`auditTypeAwareScoring`）**
+- 加载 `prompts/scoring-audit.md`，由主模型只输出 JSON
+- 重新审计文档类型、置信度和八维评分；跨维度理由失败时把精确错误反馈给下一次局部审计
+- 无核心产物时按承诺开放 0.5、仅 Demo 0.2、完全关闭 0 确定性归一化开源分和理由
+- 代码只更新评分章节、机器摘要评分字段和评分理由，正文保持不变
+
+**Round 8 — 图像筛选与插图计划（`applyImageSupplement`，双模型模式）**
 - 加载 `prompts/image-supplement.md`
 - 副模型基于最终文本和候选图片筛选高价值图，丢弃低信息图，并只输出 JSON 插图计划
+- `[secondary]` 日志会记录论文 ID、模型、协议、endpoint 来源、key 来源（只显示来源不显示密钥）、候选/下载图片数量、每张输入图的文件名与 MIME/负载大小、请求文本长度、返回长度、有效计划数量及每个计划的章节/anchor/replacement/说明长度；不会打印 API key
 - 插图计划可包含 `anchor`、可选 `replacement`、图前 `lead` 和图后 `explanation`；`replacement` 只允许局部替换精确命中的 anchor 短句，用于让插图前后文字自然衔接
 - 代码根据插图计划在主模型文本的允许章节中插入图片和相邻说明；副模型不得返回完整分析报告，也不得改写评分、摘要、标签、评分理由等主模型内容
+- 合并后再次执行共享完整契约；若计划破坏章节、评分或解析结果，只丢弃该计划并保留已审计正文
+- 无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 按最终正文出现顺序归一化，避免候选编号在重排插入后成为倒序展示图号
 
 **API 调用**：
 - `callModel(messages, maxTokens)`：带重试的 API 调用封装（内层最多 3 次重试，指数退避：第一次 10 秒，之后翻倍）
@@ -325,7 +342,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 **汇总页（`YYYY-MM-DD.md`）**：
 - Hugo frontmatter：`title`（日期+论文速递）、`date`、`tags`（TOP 10 标签）、`categories: [论文速递]`、`description`、`layout: posts`
 - **今日概览**：论文总数、热门方向分布（`█` 字符模拟柱状图）、评分排行榜 TOP 10
-- **排行榜表格**：排名（medal）、论文标题（链接到单篇页）、评分、分档（`rankBucket`）、主任务标签
+- **排行榜表格**：排名（medal）、论文标题（链接到单篇页）、评分、分档（`rankBucket`）、文档类型、主任务标签
 - **论文列表**：每篇的评分 emoji、标题链接、作者与机构、毒舌点评、核心摘要
 
 **单篇页（`YYYY-MM-DD-<slug>.md`）**：
@@ -336,7 +353,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
   - `categories: [论文速递]`
   - `description`：`主任务标签 | 评分/10`，无则回退到标题
   - `hiddenInHomeList: true`
-- 正文：标签串 → 评分/分档/标签元信息 → 机器评分详情 → 作者与机构 → 各分析章节 → 返回汇总页链接
+- 正文：标签串 → 评分/分档/文档类型/评分置信度/标签元信息 → 机器评分详情 → 作者与机构 → 各分析章节 → 返回汇总页链接
 
 **发布流程**：
 1. 生成 `.md` 文件到博客仓库 `content/posts/`
@@ -366,10 +383,11 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 3. 非标准图片引用格式 → 转为标准 Markdown 图片语法
 4. 过长的 base64 data URI → 自动截断
 5. YAML frontmatter 双逗号 → 自动修复
-6. Markdown 表格子标题行（前三列全空）→ 删除该行
-7. 未闭合的 LaTeX `$ \mathcal{L}_D \(` → 转为 `\(\mathcal{L}_D\)`
-8. 错乱的 LaTeX 括号（`\)\mathcal{L}_X\(`）→ 统一修正为 `\(\mathcal{L}_X\)`
-9. 双反斜杠 LaTeX（`\(\\mathcal{L}_X\)`）→ 修正为 `\(\mathcal{L}_X\)`
+6. 未闭合的 LaTeX `$ \mathcal{L}_D \(` → 转为 `\(\mathcal{L}_D\)`
+7. 错乱的 LaTeX 括号（`\)\mathcal{L}_X\(`）→ 统一修正为 `\(\mathcal{L}_X\)`
+8. 双反斜杠 LaTeX（`\(\\mathcal{L}_X\)`）→ 修正为 `\(\mathcal{L}_X\)`
+
+Markdown 表格允许前导分组列为空；代码层不得把这类合法阶段续行当作子标题删除。LLM 提出的“普通模型名/技术术语必须加反引号”属于样式伪问题，会被过滤。
 
 LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，按 `fix_instruction` 执行简单文本替换。博客 review 与小红书 one-liner 共用 `publish_common.py` 中的 `call_publish_llm_api()`，协议路由与 Node 端保持一致；Anthropic 兼容请求会动态读取本地 `claude --version` 生成 `User-Agent`，失败时回退默认版本。
 

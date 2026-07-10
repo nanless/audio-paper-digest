@@ -254,6 +254,8 @@ def main():
             meta = []
             if pa.get('rankBucket'):
                 meta.append(pa['rankBucket'])
+            if pa.get('documentType'):
+                meta.append(f'文档类型：{pa["documentType"]}')
             if pa.get('primaryTaskTag'):
                 meta.append(pa['primaryTaskTag'])
             if pa.get('primaryMethodTag'):
