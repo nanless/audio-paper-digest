@@ -42,19 +42,24 @@ class LogSetupTest(unittest.TestCase):
         ]:
             env.pop(key, None)
 
-        with ProjectEnvPatch('PD_DISABLE_FILE_LOGS=0\nPAPER_DIGEST_DISABLE_FILE_LOGS=0') as env_path:
-            env['PAPER_DIGEST_TEST_ENV_FILE'] = env_path
+        env.pop('PAPER_DIGEST_TEST_ENV_FILE', None)
+        with ProjectEnvPatch('PD_DISABLE_FILE_LOGS=0\nPAPER_DIGEST_DISABLE_FILE_LOGS=0\nPAPER_ANALYZER_API_KEY=tp-provider-secret') as env_path:
             result = subprocess.run(
                 [
                     sys.executable,
                     '-c',
                     (
-                        "import sys; "
+                        "import sys; from pathlib import Path; "
                         "sys.path.insert(0, 'scripts'); "
+                        "import project_env; "
+                        "project_env.DEFAULT_ENV_FILE = Path(sys.argv[1]); "
                         "from log_setup import setup_script_logging; "
                         "setup_script_logging('scripts/default-log-test.py'); "
+                        "print('api_key=sk-secret-value'); "
+                        "print('provider echoed tp-provider-secret without a field'); "
                         "print('ok')"
-                    )
+                    ),
+                    env_path,
                 ],
                 cwd=ROOT,
                 env=env,
@@ -71,20 +76,32 @@ class LogSetupTest(unittest.TestCase):
         ]
         self.assertEqual(len(created), 1)
         self.assertIn('[log] 输出文件:', result.stdout)
+        self.assertNotIn('sk-secret-value', result.stdout)
+        self.assertNotIn('tp-provider-secret', result.stdout)
+        self.assertRegex(created[0], r'^default-log-test-\d{8}-\d{6}-\d+-\d+\.log$')
+        with open(os.path.join(LOGS_DIR, created[0]), encoding='utf-8') as log_handle:
+            log_text = log_handle.read()
+        self.assertIn('api_key=[REDACTED]', log_text)
+        self.assertNotIn('sk-secret-value', log_text)
+        self.assertNotIn('tp-provider-secret', log_text)
+        self.assertEqual(os.stat(os.path.join(LOGS_DIR, created[0])).st_mode & 0o777, 0o600)
 
-        with ProjectEnvPatch('PD_DISABLE_FILE_LOGS=1') as env_path:
-            env['PAPER_DIGEST_TEST_ENV_FILE'] = env_path
+        with ProjectEnvPatch('PD_DISABLE_FILE_LOGS=1\nPAPER_ANALYZER_API_KEY=disabled-provider-secret') as env_path:
             disabled = subprocess.run(
                 [
                     sys.executable,
                     '-c',
                     (
-                        "import sys; "
+                        "import sys; from pathlib import Path; "
                         "sys.path.insert(0, 'scripts'); "
+                        "import project_env; "
+                        "project_env.DEFAULT_ENV_FILE = Path(sys.argv[1]); "
                         "from log_setup import setup_script_logging; "
                         "setup_script_logging('scripts/default-log-test-disabled.py'); "
+                        "print('provider echoed disabled-provider-secret'); "
                         "print('ok')"
-                    )
+                    ),
+                    env_path,
                 ],
                 cwd=ROOT,
                 env=env,
@@ -93,6 +110,8 @@ class LogSetupTest(unittest.TestCase):
                 check=False
             )
         self.assertEqual(disabled.returncode, 0, disabled.stderr)
+        self.assertNotIn('disabled-provider-secret', disabled.stdout)
+        self.assertIn('[REDACTED]', disabled.stdout)
         after_disabled = list_log_files()
         disabled_created = [
             name for name in after_disabled

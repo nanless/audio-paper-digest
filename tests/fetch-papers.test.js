@@ -6,6 +6,9 @@ const {
     parseFilterDecisionDetails,
     filterPapersByKeywords,
     filterPapersWithLLM,
+    fetchCategoryPapers,
+    fetchAbstracts,
+    redactProxyUrl,
     parseRecentPageHTML,
     parseSearchPageHTML,
     parseArxivXML
@@ -29,8 +32,17 @@ describe('parseFilterDecision', () => {
         assert.strictEqual(parseFilterDecision('Reason: text-only benchmark\nConclusion: not related'), false);
     });
 
-    it('不再用说明句里的单字是否作为兜底结论', () => {
-        assert.strictEqual(parseFilterDecision('理由：是否属于音频任务无法从摘要判断。'), true);
+    it('无法解析明确结论时标记为待重试，不再默认缓存为相关', () => {
+        assert.strictEqual(parseFilterDecision('理由：是否属于音频任务无法从摘要判断。'), null);
+        const decision = parseFilterDecisionDetails('理由：是否属于音频任务无法从摘要判断。');
+        assert.strictEqual(decision.retryable, true);
+        assert.strictEqual(decision.fallback, true);
+        assert.strictEqual(decision.parseSource, 'fallback_retryable');
+
+        const keywordOnly = parseFilterDecisionDetails('This work appears related to audio, but no conclusion was provided.');
+        assert.strictEqual(keywordOnly.related, null);
+        assert.strictEqual(keywordOnly.retryable, true);
+        assert.strictEqual(keywordOnly.suggestedRelated, true);
     });
 
     it('保留筛选理由、原始响应和解析来源', () => {
@@ -104,6 +116,95 @@ describe('filterPapersWithLLM resume decisions', () => {
 
         assert.deepStrictEqual(filtered.map(p => p.arxivId), ['2604.00001']);
         assert.deepStrictEqual(savedDecisionIds, ['2604.00001', '2604.00002']);
+    });
+
+    it('不缓存 retryable fallback，并把筛选批次标记为未完成', async () => {
+        const paper = { arxivId: '2604.00001', title: 'Uncertain Paper', abstract: 'unknown' };
+        let checkpoint = null;
+        const filtered = await filterPapersWithLLM([paper], {
+            batchSize: 1,
+            delayBetweenBatches: 0,
+            decisionFn: async () => ({
+                related: null,
+                retryable: true,
+                fallback: true,
+                parseSource: 'api_error_retryable',
+                error: 'temporary failure'
+            }),
+            onBatchComplete: async data => { checkpoint = data; }
+        });
+
+        assert.deepStrictEqual(filtered, []);
+        assert.strictEqual(filtered._filterStats.complete, false);
+        assert.deepStrictEqual(filtered._filterStats.retryableIds, ['2604.00001']);
+        assert.deepStrictEqual(checkpoint.decisions, {});
+        assert.strictEqual(checkpoint.retryableDecisions['2604.00001'].retryable, true);
+        assert.strictEqual(checkpoint.stats.complete, false);
+    });
+});
+
+describe('抓取健康状态', () => {
+    it('arXiv 所有请求失败时抛出结构化异常', async () => {
+        const requestFn = async () => { throw new Error('network down'); };
+        await assert.rejects(
+            fetchCategoryPapers('cs.SD', 1, 1, new Set(), {
+                requestFn,
+                sleepFn: async () => {},
+                maxRetries: 1,
+                abstractMaxRetries: 1
+            }),
+            error => error.code === 'SOURCE_FETCH_FAILED'
+                && error.sourceHealth.allFailed === true
+                && error.sourceHealth.successfulRequests === 0
+                && error.sourceHealth.attempts === 3
+        );
+    });
+
+    it('arXiv 成功空响应与全失败严格区分', async () => {
+        const requestFn = async url => ({
+            status: 200,
+            data: url.includes('/api/query') ? '<feed></feed>' : '<html></html>'
+        });
+        const papers = await fetchCategoryPapers('cs.SD', 1, 1, new Set(), {
+            requestFn,
+            sleepFn: async () => {},
+            maxRetries: 1,
+            abstractMaxRetries: 1
+        });
+
+        assert.deepStrictEqual(papers, []);
+        assert.strictEqual(papers._sourceHealth.ok, true);
+        assert.strictEqual(papers._sourceHealth.allFailed, false);
+        assert.strictEqual(papers._sourceHealth.successfulRequests, 3);
+    });
+
+    it('摘要仅在解析到非空内容时计成功，并记录最终失败 ID', async () => {
+        const papers = [
+            { arxivId: '2604.00001', abstract: '' },
+            { arxivId: '2604.00002', abstract: '' }
+        ];
+        const requestFn = async url => ({
+            status: 200,
+            data: url.endsWith('00001')
+                ? '<html>no abstract</html>'
+                : '<blockquote class="abstract mathjax"><span class="descriptor">Abstract:</span> useful speech result </blockquote>'
+        });
+        const result = await fetchAbstracts(papers, 2, {
+            requestFn,
+            sleepFn: async () => {},
+            maxRetries: 1
+        });
+
+        assert.strictEqual(result[0].abstract, '');
+        assert.strictEqual(result[1].abstract, 'useful speech result');
+        assert.strictEqual(result._abstractHealth.fetched, 1);
+        assert.deepStrictEqual(result._abstractHealth.failedIds, ['2604.00001']);
+    });
+
+    it('代理日志地址会隐藏 userinfo', () => {
+        const redacted = redactProxyUrl('http://alice:secret@proxy.example:8080');
+        assert.doesNotMatch(redacted, /alice|secret/);
+        assert.match(redacted, /proxy\.example:8080/);
     });
 });
 

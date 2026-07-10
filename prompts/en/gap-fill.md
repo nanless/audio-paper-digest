@@ -63,7 +63,7 @@ arXiv ID: {arxivId}
      * Wrong example: `*   创新性 (2/2)：9.0/10。...` ← FORBIDDEN, uses 10-point scale
      * All 8 dimensions must be listed, fixed order: 创新性, 技术严谨性, 实验充分性, 清晰度, 影响力, 开源, 可复现性, 工程/实践价值
      * **Do NOT write total score calculation** (code calculates automatically)
-     * Open source score must be consistent with `## 开源详情` and `has_code`/`has_model`/`has_dataset`
+     * Open Source must match the type-specific core artifact in `## 开源详情`; theory proof material in the paper/appendix is not fully represented by `has_code`/`has_model`/`has_dataset`
      * A single defect may be used for deduction in only one primary dimension; do not repeatedly penalize the same disclosure gap across Technical Rigor, Experimental Thoroughness, Clarity, Open Source, and Reproducibility
      * Apply the evidence standard selected by `document_type`; type itself provides no bonus, floor, or exemption
    - ## 局限与问题

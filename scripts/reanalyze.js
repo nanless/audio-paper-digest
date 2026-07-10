@@ -8,8 +8,16 @@ setupScriptLogging(__filename);
  */
 
 const fs = require('fs');
-const { loadEnvFile, getBeijingISOString, getBeijingLocaleString, writeFileAtomic, readJsonSafe, normalizedId } = require('./utils.js');
-const { analyzeBatch } = require('./analysis-engine.js');
+const { loadEnvFile, getBeijingISOString, getBeijingLocaleString, normalizedId } = require('./utils.js');
+const {
+    analyzeBatch,
+    readJsonFileStrict,
+    updateJsonFileLocked,
+    mergePapersById,
+    isSuccessfulAnalysisRecord,
+    getAnalysisRunStatus,
+    getAnalysisExitCode
+} = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses } = require('./digest-status.js');
 const Config = require('./config.js');
 
@@ -52,11 +60,7 @@ async function reanalyzeAll() {
         process.exit(1);
     }
 
-    const data = readJsonSafe(DATA_FILE, null);
-    if (!data) {
-        console.error('[reanalyze] ❌ 读取数据文件失败，文件可能损坏');
-        process.exit(1);
-    }
+    const data = readJsonFileStrict(DATA_FILE);
 
     const papers = Array.isArray(data) ? data : (data.papers || []);
     console.log(`[reanalyze] 共 ${papers.length} 篇论文需要重新分析`);
@@ -66,22 +70,30 @@ async function reanalyzeAll() {
     console.log('');
 
     // 保存中间结果的辅助函数
-    const isLegacyArray = Array.isArray(data);
     const batchDate = (data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10);
     const attemptResults = [];
     const doSave = () => {
-        const payload = isLegacyArray
-            ? { papers, timestamp: getBeijingISOString() }
-            : data;
-        if (!isLegacyArray) {
-            payload.timestamp = getBeijingISOString();
-        }
-        writeFileAtomic(DATA_FILE, JSON.stringify(payload, null, 2));
+        updateJsonFileLocked(DATA_FILE, current => ({
+            ...(!Array.isArray(current) && current ? current : {}),
+            timestamp: getBeijingISOString(),
+            papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), attemptResults, { preserveSuccessfulAnalysis: true })
+        }));
         return updateAnalysisDigestStatuses(attemptResults, { batchDate });
     };
 
     // 预先建立 ID -> 索引映射，避免并发时 findIndex 可能找到错误位置
     const paperIndexMap = new Map(papers.map((p, i) => [normalizedId(p), i]).filter(([key]) => key));
+
+    updateJsonFileLocked(DATA_FILE, current => {
+        const payload = {
+            ...(!Array.isArray(current) && current ? current : {}),
+            papers: Array.isArray(current) ? current : (current?.papers || []),
+            timestamp: getBeijingISOString(),
+            stats: { ...(!Array.isArray(current) ? current?.stats : {}), reanalyzeStatus: 'running' }
+        };
+        delete payload.deepAnalysisCompletedAt;
+        return payload;
+    });
 
     const { stats } = await analyzeBatch(papers, {
         concurrency: CONCURRENCY,
@@ -129,38 +141,49 @@ async function reanalyzeAll() {
         }
     });
 
-    // 最终保存
-    const finalPayload = isLegacyArray
-        ? { papers, timestamp: getBeijingISOString() }
-        : data;
-    if (!isLegacyArray) {
-        finalPayload.timestamp = getBeijingISOString();
-        finalPayload.stats = {
-            ...data.stats,
-            reanalyzed: stats.success,
-            reanalyzeFailed: stats.failed,
-            reanalyzeAt: getBeijingISOString()
+    const status = getAnalysisRunStatus(stats, stats.failed);
+    updateJsonFileLocked(DATA_FILE, current => {
+        const payload = {
+            ...(!Array.isArray(current) && current ? current : {}),
+            timestamp: getBeijingISOString(),
+            papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), attemptResults, { preserveSuccessfulAnalysis: true }),
+            stats: {
+                ...(!Array.isArray(current) ? current?.stats : {}),
+                reanalyzed: stats.success,
+                reanalyzeFailed: stats.failed,
+                reanalyzeAt: getBeijingISOString(),
+                reanalyzeStatus: status
+            }
         };
-    }
-    writeFileAtomic(DATA_FILE, JSON.stringify(finalPayload, null, 2));
+        if (status === 'complete') payload.deepAnalysisCompletedAt = getBeijingISOString();
+        else delete payload.deepAnalysisCompletedAt;
+        return payload;
+    });
     const digestStatus = updateAnalysisDigestStatuses(attemptResults, { batchDate });
 
     console.log('');
     console.log(`[reanalyze] ════════════════════════════════════════════`);
-    console.log(`[reanalyze] 重新分析完成`);
+    console.log(`[reanalyze] 重新分析状态: ${status}`);
     console.log(`[reanalyze] 成功: ${stats.success} | 失败: ${stats.failed} | 总计: ${papers.length}`);
     if (digestStatus.updated > 0) console.log(`[reanalyze] papers.json 状态已同步: ${digestStatus.updated} 篇`);
     console.log(`[reanalyze] 结束时间: ${getBeijingLocaleString()}`);
     console.log(`[reanalyze] 数据已保存至: ${DATA_FILE}`);
 
-    return { success: stats.success, failed: stats.failed, total: papers.length };
+    return { success: stats.success, failed: stats.failed, total: papers.length, status, exitCode: getAnalysisExitCode(status) };
 }
 
-reanalyzeAll().then(result => {
-    console.log('\n[reanalyze] 重新分析完成，请运行 publish-to-blog.py 更新博客');
-    // 部分失败是正常情况，不返回错误码
-    process.exit(0);
-}).catch(err => {
-    console.error('[reanalyze] 错误:', err);
-    process.exit(1);
-});
+if (require.main === module) {
+    reanalyzeAll().then(result => {
+        if (result.status === 'complete') {
+            console.log('\n[reanalyze] 重新分析完成，请运行 publish-to-blog.py 更新博客');
+        } else {
+            console.error(`\n[reanalyze] 尚有 ${result.failed} 篇未恢复，禁止视为完整批次`);
+        }
+        process.exitCode = result.exitCode;
+    }).catch(err => {
+        console.error('[reanalyze] 错误:', err);
+        process.exitCode = 1;
+    });
+}
+
+module.exports = { reanalyzeAll };

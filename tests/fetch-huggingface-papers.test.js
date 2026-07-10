@@ -2,6 +2,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert');
 
 const {
+    fetchHuggingFacePapers,
     mergeAndDeduplicate,
     convertDailyPaper,
     convertPaper
@@ -59,5 +60,52 @@ describe('HuggingFace date guards', () => {
             authors: []
         });
         assert.strictEqual(paper, null);
+    });
+});
+
+describe('HuggingFace 抓取健康状态', () => {
+    it('所有 API 请求失败时抛出带健康状态的异常', async () => {
+        await assert.rejects(
+            fetchHuggingFacePapers(new Set(), {
+                days: 7,
+                minUpvotes: 0,
+                fetchFn: () => ({ ok: false, data: null, error: 'network down' }),
+                sleepFn: async () => {}
+            }),
+            error => error.code === 'SOURCE_FETCH_FAILED'
+                && error.sourceHealth.allFailed === true
+                && error.sourceHealth.attempts === 2
+                && error.sourceHealth.successfulRequests === 0
+        );
+    });
+
+    it('两个 API 均成功返回空数组时是合法空结果', async () => {
+        const papers = await fetchHuggingFacePapers(new Set(), {
+            days: 7,
+            minUpvotes: 0,
+            fetchFn: () => ({ ok: true, data: [], error: null }),
+            sleepFn: async () => {}
+        });
+
+        assert.deepStrictEqual(papers, []);
+        assert.strictEqual(papers._sourceHealth.ok, true);
+        assert.strictEqual(papers._sourceHealth.allFailed, false);
+        assert.strictEqual(papers._sourceHealth.attempts, 2);
+        assert.strictEqual(papers._sourceHealth.successfulRequests, 2);
+    });
+
+    it('一个 API 失败、另一个成功为空时保留部分失败诊断但不误报全失败', async () => {
+        const papers = await fetchHuggingFacePapers(new Set(), {
+            days: 7,
+            minUpvotes: 0,
+            fetchFn: url => url.includes('daily_papers')
+                ? { ok: false, data: null, error: 'daily unavailable' }
+                : { ok: true, data: [], error: null },
+            sleepFn: async () => {}
+        });
+
+        assert.strictEqual(papers._sourceHealth.ok, true);
+        assert.strictEqual(papers._sourceHealth.allFailed, false);
+        assert.strictEqual(papers._sourceHealth.failures.length, 1);
     });
 });

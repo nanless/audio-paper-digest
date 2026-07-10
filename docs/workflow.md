@@ -142,8 +142,8 @@ HF 特有字段（共 7 个）：
 - 每次重试独立创建 `AbortController` 和 `setTimeout`，避免重试时复用已 abort 的 controller
 
 筛选阶段会增量保存三类文件：
-- `data/current/raw-candidates.json`：合并和博客去重后的候选输入，并包含 arXiv/HF 的 `sourceHealth`；单类别或 HF 抓取失败时会记录 `ok:false`、`error`、`durationMs`。如果合并后候选为空，只有 arXiv 核心来源全部失败或唯一尝试来源失败时才中止；单个补充来源失败但核心来源已成功返回空结果时不再误判为致命错误
-- `data/current/filter-decisions.json`：逐篇 LLM 决策缓存，包含筛选模型、`prompts/filter.md` hash、`related`、`reason`、`rawResponse`、`parseSource`；中断重跑时只复用同模型同 prompt 的决策
+- `data/current/raw-candidates.json`：合并和博客去重后的候选输入，并包含 arXiv/HF 的 `sourceHealth`、请求次数、成功次数和失败明细。抓取器区分真实成功空响应与全请求失败；所有尝试均失败时抛错并中止，禁止生成伪成功空批次
+- `data/current/filter-decisions.json`：逐篇 LLM 决策缓存，包含筛选模型、`prompts/filter.md` hash、`related`、`reason`、`rawResponse`、`parseSource`；API 错误或无法判断记为 `retryable`，不进入正式决定缓存，中断重跑时只复用同模型同 prompt 的明确决定
 - `data/current/filtered-papers.json`：阶段性/最终筛选输出；包含 `filterModel` 和 `filterPromptHash`。`status: "filter_complete"` 只表示逐篇筛选已完成但归档去重尚未完成，最终可跳过抓取/筛选的状态必须是 `status: "complete"`，且模型/hash 必须匹配当前配置
 
 若今天已经存在完整且模型/hash 匹配的 `filtered-papers.json`，再次运行 `node scripts/full-fetch.js` 会跳过抓取与筛选，直接进入深度分析续跑；若筛选尚未完成，则复用同模型同 prompt 的 `filter-decisions.json` 中已有逐篇决策继续筛选。
@@ -159,7 +159,7 @@ HF 特有字段（共 7 个）：
 
 | 章节 | 要求 |
 |------|------|
-| 评分 | `type-aware-v1`：先输出 `document_type`（方法研究/系统技术报告/模型报告/数据集与基准/综述/理论研究/应用研究），再按对应证据标准评分；机器摘要另含 `rank_bucket`、八维分项和 `confidence`。八维合计满分 11，总分封顶 10；代码从 `## 评分理由` 重算总分。类型不固定加分，同一缺陷只能在一个主要维度扣分 |
+| 评分 | `type-aware-v1`：先输出 `document_type`（方法研究/系统技术报告/模型报告/数据集与基准/综述/理论研究/应用研究），再按对应证据标准评分；机器摘要另含 `rank_bucket`、八维分项和 `confidence`。八维合计满分 11，总分封顶 10；只有八项完整、唯一、分母和范围合法时才从 `## 评分理由` 重算总分，否则契约失败。类型不固定加分，同一缺陷只能在一个主要维度扣分 |
 | 标签 | 3-5 个，必须含至少 1 个【任务】和 1 个【方法/模型】标签；除最终标签串外，还要求输出"主任务标签""主方法标签""补充标签" |
 | 作者与机构 | 第一作者、通讯作者、作者列表及所属机构；缺失信息必须写"未说明"，禁止猜测 |
 | 毒舌点评 | 2-3 句话犀利点评亮点和槽点，像资深审稿人的 final comment |
@@ -178,13 +178,14 @@ HF 特有字段（共 7 个）：
 - **API 协议自动路由**：与筛选阶段共用同一套 `detectApiType()` 逻辑，根据 `PAPER_ANALYZER_ENDPOINT` 和 `PAPER_ANALYZER_MODEL` 自动切换 OpenAI / Anthropic 协议
 - 获取 arXiv HTML 全文（最多 500K 字符），依次尝试 `v1`、`v2`、无后缀版本；使用 **cheerio** 结构化解析 HTML，移除 script/style/nav/header/footer 等噪音元素
 - 提取图片 URL，过滤 logo/favicon；下载层会校验 Content-Type、Content-Length 和 PNG/JPEG/WebP 文件头，避免把 HTML 错误页或过大图片送入模型
-- **图片分析**：先按 caption/文件名/顺序启发式预筛候选图片（默认最多 `imageCandidateMax=20` 张）。双模型模式才串行下载最多 `imageMaxCount=20` 张并交给副模型；单模型模式只保存候选 URL/manifest 元数据，不下载 base64 图片。默认单图原始大小上限 6MB、单图 base64 上限 8M 字符、所有图片 base64 总上限 20M 字符。双模型模式下副模型只输出 JSON 插图计划，代码在主模型文本上局部插入图片、图前/图后说明，并可按计划只替换插图位置附近精确命中的 anchor 短句；若没有可用图片或没有高价值图片，自动保留主模型纯文本分析
+- **图片分析**：先按 caption/文件名/顺序启发式预筛候选图片，并按信息得分决定有限下载预算的优先级。双模型模式才串行下载最多 `imageMaxCount=20` 张并交给副模型；预提供 URL 和每次重定向都必须通过公网地址校验。副模型只输出 JSON 插图计划，代码根据精确 anchor 或章节末尾插入图片及 `lead`/`explanation`，忽略旧 `replacement` / `rewrite`，不允许覆盖主模型原句。严格 `{"insertions":[]}` 表示确认无高价值图；缺字段、错误类型、非法 JSON 或图片下载全失败均不是成功空计划，必须保留恢复点等待重试
 - 每篇结果会保存 `imageManifest`：包含总发现图片数、候选评分、下载成功列表、最终选图；该字段由 `analysis-engine.js` 保留到最终 `deep-analysis-result.json`，便于复盘图片筛选质量
+- `analysisManifest` 记录图片下载、主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计和插图阶段；失败时保留 `analysisCheckpoint` 与 `analysisRecoveryImageManifest`。再次运行从首个未完成阶段继续，只有所有必需阶段进入完成/无需/跳过等终态才视为成功
 - **并发度：3 篇并行**（可通过项目 `.env` 中的 `PD_ANALYSIS_CONCURRENCY` 调整）
 - 每篇最多重试 **2 次**（外层 `analysis-engine.js`），每次外层重试内部 API 调用还有 **3 次** 重试（`deep-analyzer.js` 内层，指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5000ms`），外层重试间隔 3 秒（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整外层）
 - API 整体超时 **20 分钟**（AbortController）
 - `max_tokens=64000`（config.js 中 `apiMaxTokens`），`temperature=0.7`
-- 支持代理自动检测（环境变量 → macOS `scutil --proxy`）
+- 代理只从项目根 `.env` 中显式配置的大小写代理变量读取；不继承 shell/IDE 代理，也不读取 macOS `scutil`
 - 支持纯 Node 内置模块的 HTTP CONNECT 代理（无需外部依赖）
 - 所有分析配置集中管理于 `scripts/config.js`，支持项目 `.env` 覆写（`PD_ANALYSIS_CONCURRENCY`、`PD_ANALYSIS_MAX_RETRIES`、`PD_FILTER_BATCH_SIZE`、`PD_ARXIV_MAX_RESULTS`）
 
@@ -202,13 +203,14 @@ HF 特有字段（共 7 个）：
 | Round 7 | 类型感知评分审计 | `prompts/scoring-audit.md` | 主模型只输出 JSON；代码把校验错误反馈给下一次局部审计，并按资源状态确定性归一化无产物论文的开源分 |
 | Round 8 | 图像筛选与插图计划（仅双模型模式） | `prompts/image-supplement.md` | 副模型只输出 JSON 插图计划；合并后再次校验完整契约，不合格时只丢弃插图计划并保留主模型正文 |
 
-> **单模型 vs 双模型**：主模型始终负责正文和最终评分审计。设置 `PAPER_ANALYZER_SECONDARY_MODEL` 后，副模型只从候选图片中筛选高价值图、丢弃低信息图并输出受限插图计划；不得改写完整报告或参与评分。未设置副模型时图片 URL 只保存在候选元数据中。
+> **单模型 vs 双模型**：主模型始终负责正文和最终评分审计。设置 `PAPER_ANALYZER_SECONDARY_MODEL` 后，副模型只从候选图片中筛选高价值图、丢弃低信息图并输出章节、anchor、图前和图后说明；代码不会接受副模型替换主模型原文。未设置副模型时图片 URL 只保存在候选元数据中。
 
-评分审计的“单一问题单一维度”规则是硬校验。跨维度理由会触发带精确错误反馈的局部重试，而不会立即重跑前面的全文分析。开源状态能由机器摘要与 `## 开源详情` 确定时，代码使用固定锚点：明确承诺未来开放 0.5、仅 Demo 0.2、完全关闭且无承诺 0。
+评分审计的“单一问题单一维度”规则是硬校验。跨维度理由会触发带精确错误反馈的局部重试，而不会立即重跑前面的全文分析。开源状态能由机器摘要与 `## 开源详情` 确定时，代码使用固定锚点：肯定语境明确承诺未来开放 0.5、带 URL 或肯定结构化状态的 Demo 0.2、否定/未提及且无承诺 0；理论研究根据公开证明、推导和附录判断核心产物，不机械要求代码/模型/数据链接。
 
 ### 3.8 增量保存与收尾
 
-- **每批分析完成后立即增量保存**到 `data/current/deep-analysis-result.json`，避免中断丢失全部结果；增量合并时**自动保护已有成功分析**（失败结果不会覆盖已有 `analysis`）
+- **每批分析完成后立即增量保存**到 `data/current/deep-analysis-result.json`；分析结果和 `papers.json` 在跨进程锁内重新读取合并并校验 `generation`，避免多个入口并发丢更新。失败结果不会覆盖已有成功 `analysis`，当前 JSON 损坏时会阻断而不是回退旧文件覆盖
+- `full-fetch.js` 用单实例运行锁覆盖归档、清理、筛选和最终合并，但不降低论文分析并发度；失败 checkpoint 也会增量保存，旧成功正文可继续发布，同时 `latestAttemptStatus` 明确记录本次失败
 - 增量保存和最终保存都会通过 `scripts/digest-status.js` 同步 `data/current/papers.json` 的 `digestStatus.status`，成功为 `analyzed`，失败为 `analysis_failed`
 - 全部论文分析完毕后，再次读取已有结果，按 `arxivId`/`paper_id` 去重合并，保留历史数据
 - 自动备份旧文件到 `data/archive/deep-analysis-result-<时间戳>.bak.json`，并清理旧备份（保留最近 10 个）

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from project_env import load_project_env
+from project_env import BROWSER_CHILD_ENV_KEYS, TRANSPORT_ENV_KEYS, build_child_process_env, load_project_env
 load_project_env()
 
 from log_setup import setup_script_logging
@@ -29,7 +29,7 @@ import base64, json, os, sys, re, asyncio
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
-from path_config import PROJECT_ROOT, xiaohongshu_markdown_path
+from path_config import PROJECT_ROOT, atomic_write_text, xiaohongshu_markdown_path
 
 try:
     from playwright.async_api import async_playwright, TimeoutError as PWTimeout
@@ -73,7 +73,11 @@ def _load_env_file():
 
 
 def _update_env_key(key: str, value: str):
-    """更新 .env 中的指定 key，保留其他内容"""
+    """原子更新 .env 中的指定 key，并完整保留其他配置。"""
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key):
+        raise ValueError(f"非法环境变量名: {key!r}")
+    if any(char in value for char in ('\n', '\r', '"', '\\')):
+        raise ValueError("环境变量值包含无法安全写入双引号 .env 的字符")
     ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
     lines = []
     found = False
@@ -93,8 +97,7 @@ def _update_env_key(key: str, value: str):
         if lines and lines[-1].strip():
             lines.append("\n")
         lines.append(f'{key}="{value}"\n')
-    with open(ENV_FILE, "w", encoding="utf-8") as f:
-        f.writelines(lines)
+    atomic_write_text(ENV_FILE, ''.join(lines), mode=0o600)
 
 
 # ═══════════════════════════════════════════════════════
@@ -138,7 +141,10 @@ async def load_cookies(context):
 async def do_login(headless=False):
     """打开浏览器让用户扫码登录，保存 Cookie"""
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=headless)
+        browser = await p.chromium.launch(
+            headless=headless,
+            env=build_child_process_env(allowed_keys=(*BROWSER_CHILD_ENV_KEYS, *TRANSPORT_ENV_KEYS)),
+        )
         context = await browser.new_context(
             viewport={"width": 1280, "height": 800},
             user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -189,7 +195,10 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
         headless: 是否无头模式（调试用 False，定时跑可用 True）
     """
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=headless)
+        browser = await p.chromium.launch(
+            headless=headless,
+            env=build_child_process_env(allowed_keys=(*BROWSER_CHILD_ENV_KEYS, *TRANSPORT_ENV_KEYS)),
+        )
         context = await browser.new_context(
             viewport={"width": 1280, "height": 800},
             user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"

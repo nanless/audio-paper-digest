@@ -1,9 +1,10 @@
 const fs = require('fs');
 const path = require('path');
-const { ARCHIVE_CONFIG } = require('./config.js');
+const { loadProjectEnv } = require('./env-loader.js');
 
-const ENABLE_FILE_LOGS = ARCHIVE_CONFIG.enableFileLogs;
-const DISABLE_FILE_LOGS = ARCHIVE_CONFIG.disableFileLogs;
+let activeLogger = null;
+let fileSequence = 0;
+let configuredSecrets = [];
 
 function ensureDir(dirPath) {
     if (!fs.existsSync(dirPath)) {
@@ -21,6 +22,32 @@ function formatTs(date = new Date()) {
     return `${y}${m}${d}-${hh}${mm}${ss}`;
 }
 
+function redactLogText(value) {
+    let text = String(value ?? '');
+
+    for (const secret of configuredSecrets) {
+        if (secret && text.includes(secret)) text = text.split(secret).join('[REDACTED]');
+    }
+
+    // URL credentials must be removed before generic credential fields are handled.
+    text = text.replace(
+        /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/@]+)@/gi,
+        '$1[REDACTED]@'
+    );
+
+    // Header, environment-variable and JSON-style credential fields.
+    text = text.replace(
+        /((?:["']?(?:authorization|proxy-authorization|x-api-key|api[-_ ]?key|key|access[-_ ]?token|refresh[-_ ]?token|token|secret|password|passwd|cookie|set-cookie|paper_analyzer_api_key|kimi_api_key|[a-z0-9-]+_(?:api_key|token|secret|password))["']?)\s*[:=]\s*)([^\r\n]+)/gi,
+        '$1[REDACTED]'
+    );
+
+    // Also protect standalone authorization values and commonly printed key fragments.
+    text = text.replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '[REDACTED]');
+    text = text.replace(/\bsk-[A-Za-z0-9._-]{3,}/gi, '[REDACTED]');
+
+    return text;
+}
+
 function setStdoutBlocking() {
     if (process.stdout._handle && process.stdout._handle.setBlocking) {
         process.stdout._handle.setBlocking(true);
@@ -32,54 +59,150 @@ function isTestProcess() {
     return process.argv.some(arg => /(?:^|[/\\])tests[/\\].+\.test\.js$/.test(arg));
 }
 
-function setupScriptLogging(scriptPath) {
-    if (global.__PAPER_DIGEST_LOG_SETUP_DONE__) {
-        return;
+function createUniqueLogFile(logsDir, base) {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+        const sequence = fileSequence++;
+        const suffix = `${formatTs()}-${process.pid}-${sequence}`;
+        const logFile = path.join(logsDir, `${base}-${suffix}.log`);
+        try {
+            const fd = fs.openSync(logFile, 'ax', 0o600);
+            return { fd, logFile };
+        } catch (err) {
+            if (err.code !== 'EEXIST') throw err;
+        }
     }
-    global.__PAPER_DIGEST_LOG_SETUP_DONE__ = true;
+    throw new Error(`无法为 ${base} 创建唯一日志文件`);
+}
 
+function normalizeWriteArgs(chunk, encoding, callback) {
+    let resolvedEncoding = encoding;
+    let resolvedCallback = callback;
+    if (typeof encoding === 'function') {
+        resolvedCallback = encoding;
+        resolvedEncoding = undefined;
+    }
+    const source = Buffer.isBuffer(chunk)
+        ? chunk.toString(typeof resolvedEncoding === 'string' ? resolvedEncoding : 'utf8')
+        : String(chunk);
+    return {
+        text: redactLogText(source),
+        encoding: resolvedEncoding,
+        callback: resolvedCallback
+    };
+}
+
+function setupScriptLogging(scriptPath, options = {}) {
+    if (activeLogger) return activeLogger;
+
+    // A non-default env file is accepted only through this explicit test/programmatic API.
+    loadProjectEnv(options.envFile);
+    configuredSecrets = Object.entries(process.env)
+        .filter(([key, value]) => /(?:API_KEY|SECRET|TOKEN|PASSWORD|PASSWD|COOKIES?)$/i.test(key) && String(value).length >= 6)
+        .map(([, value]) => String(value));
     setStdoutBlocking();
 
-    if (isTestProcess()) {
-        return;
-    }
-    if (!ENABLE_FILE_LOGS || DISABLE_FILE_LOGS) {
-        return;
-    }
+    if (isTestProcess() && !options.allowInTestProcess) return null;
+    const disableFileLogs = process.env.PAPER_DIGEST_DISABLE_FILE_LOGS === '1'
+        || process.env.PD_DISABLE_FILE_LOGS === '1';
 
     const entryPath = scriptPath || process.argv[1] || __filename;
     const projectRoot = path.resolve(__dirname, '..');
-    const logsDir = path.join(projectRoot, 'logs');
-    ensureDir(logsDir);
-
+    const logsDir = options.logsDir || path.join(projectRoot, 'logs');
     const base = path.basename(entryPath, path.extname(entryPath)) || 'script';
-    const logFile = path.join(logsDir, `${base}-${formatTs()}.log`);
-    const stream = fs.createWriteStream(logFile, { flags: 'a' });
-
+    let fd = null;
+    let logFile = null;
+    if (!disableFileLogs) {
+        ensureDir(logsDir);
+        ({ fd, logFile } = createUniqueLogFile(logsDir, base));
+    }
     const stdoutWrite = process.stdout.write.bind(process.stdout);
     const stderrWrite = process.stderr.write.bind(process.stderr);
+    let fileOpen = fd !== null;
+    let fileFailed = false;
+    let closing = false;
+    let closePromise = null;
 
-    process.stdout.write = (chunk, encoding, cb) => {
-        stream.write(chunk, encoding);
-        return stdoutWrite(chunk, encoding, cb);
-    };
-    process.stderr.write = (chunk, encoding, cb) => {
-        stream.write(chunk, encoding);
-        return stderrWrite(chunk, encoding, cb);
-    };
-
-    process.on('exit', () => {
+    function reportFileError(err) {
+        if (fileFailed) return;
+        fileFailed = true;
+        const message = redactLogText(`[log] 文件日志写入失败: ${err.message}\n`);
         try {
-            stream.end();
-        } catch (e) {
-            // ignore
+            stderrWrite(message);
+        } catch (_) {
+            // Logging failure must not terminate the business script.
         }
+    }
+
+    function wrapWrite(originalWrite) {
+        return (chunk, encoding, callback) => {
+            const args = normalizeWriteArgs(chunk, encoding, callback);
+            if (fileOpen && !fileFailed && !closing) {
+                try {
+                    fs.writeSync(fd, args.text, null, typeof args.encoding === 'string' ? args.encoding : 'utf8');
+                } catch (err) {
+                    reportFileError(err);
+                }
+            }
+            return originalWrite(args.text, args.encoding, args.callback);
+        };
+    }
+
+    process.stdout.write = wrapWrite(stdoutWrite);
+    process.stderr.write = wrapWrite(stderrWrite);
+
+    function restoreWrites() {
+        process.stdout.write = stdoutWrite;
+        process.stderr.write = stderrWrite;
+    }
+
+    function flushAndClose() {
+        if (!fileOpen) return;
+        fileOpen = false;
+        if (!fileFailed) {
+            try {
+                fs.fsyncSync(fd);
+            } catch (err) {
+                reportFileError(err);
+            }
+        }
+        if (fd !== null) {
+            try {
+                fs.closeSync(fd);
+            } catch (err) {
+                reportFileError(err);
+            }
+        }
+    }
+
+    function close() {
+        if (closePromise) return closePromise;
+        closing = true;
+        restoreWrites();
+        flushAndClose();
+        closePromise = Promise.resolve();
+        return closePromise;
+    }
+
+    activeLogger = { logFile, close };
+    global.__PAPER_DIGEST_LOG_SETUP_DONE__ = true;
+
+    process.once('beforeExit', close);
+    process.once('exit', () => {
+        restoreWrites();
+        flushAndClose();
     });
 
-    console.log(`[log] 输出文件: ${logFile}`);
+    if (logFile) console.log(`[log] 输出文件: ${logFile}`);
+    return activeLogger;
+}
+
+function closeScriptLogging() {
+    return activeLogger ? activeLogger.close() : Promise.resolve();
 }
 
 module.exports = {
     setupScriptLogging,
+    closeScriptLogging,
+    redactLogText,
     setStdoutBlocking
 };

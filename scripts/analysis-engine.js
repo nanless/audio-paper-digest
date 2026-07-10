@@ -5,7 +5,11 @@
  * 消除 full-fetch.js / deep-analysis-only.js / batch-analyze.js / reanalyze.js / analyze-single-paper.js 的重复逻辑
  */
 
-const { parseAnalysis, writeFileAtomic, readJsonSafe, getBeijingISOString, normalizedId } = require('./utils.js');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
+const { parseAnalysis, writeFileAtomic, getBeijingISOString, normalizedId } = require('./utils.js');
 const { ANALYSIS_CONFIG } = require('./config.js');
 const { getInvalidAnalysisReason, hasRequiredSections } = require('./analysis-contract.js');
 
@@ -16,6 +20,177 @@ const { getInvalidAnalysisReason, hasRequiredSections } = require('./analysis-co
 const DEFAULT_MAX_RETRIES = ANALYSIS_CONFIG.maxRetries;
 const DEFAULT_RETRY_DELAY_MS = ANALYSIS_CONFIG.retryDelayMs;
 const DEFAULT_CONCURRENCY = ANALYSIS_CONFIG.concurrency;
+const DEFAULT_LOCK_TIMEOUT_MS = 30000;
+const DEFAULT_STALE_LOCK_MS = 2 * 60 * 60 * 1000;
+const COMPLETE_RECOVERY_STATUSES = new Set([
+    'complete', 'not_needed', 'skipped', 'no_candidates', 'no_high_value_images'
+]);
+const REQUIRED_RECOVERY_STAGES = Object.freeze([
+    'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
+    'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
+]);
+
+function readJsonFileStrict(filePath, options = {}) {
+    const { allowMissing = false } = options;
+    try {
+        const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        if (parsed === null || (typeof parsed !== 'object')) {
+            throw new Error('顶层必须是对象或数组');
+        }
+        return parsed;
+    } catch (error) {
+        if (error.code === 'ENOENT' && allowMissing) return null;
+        if (error.code === 'ENOENT') {
+            throw new Error(`JSON 文件不存在: ${filePath}`);
+        }
+        throw new Error(`JSON 文件损坏或不可读，已阻止覆盖 ${filePath}: ${error.message}`);
+    }
+}
+
+function sleepSync(ms) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function canReclaimFileLock(lockPath, staleMs) {
+    const ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
+    try {
+        const owner = JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8'));
+        if (owner.hostname === os.hostname() && Number.isInteger(owner.pid) && owner.pid > 0) {
+            try {
+                process.kill(owner.pid, 0);
+                return false;
+            } catch (error) {
+                if (error.code === 'ESRCH') return true;
+                if (error.code === 'EPERM') return false;
+                throw error;
+            }
+        }
+        if (owner.hostname) return false;
+    } catch (error) {
+        if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+    }
+    return ageMs > staleMs;
+}
+
+function acquireFileLockSync(filePath, options = {}) {
+    const timeoutMs = options.timeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
+    const staleMs = options.staleMs ?? DEFAULT_STALE_LOCK_MS;
+    const lockPath = `${filePath}.lock`;
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const startedAt = Date.now();
+
+    while (true) {
+        try {
+            fs.mkdirSync(lockPath);
+            const ownerToken = crypto.randomUUID();
+            try {
+                fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+                    pid: process.pid,
+                    hostname: os.hostname(),
+                    token: ownerToken,
+                    acquiredAt: new Date().toISOString()
+                }));
+            } catch (ownerError) {
+                fs.rmSync(lockPath, { recursive: true, force: true });
+                throw ownerError;
+            }
+            return () => {
+                try {
+                    const owner = JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8'));
+                    if (owner.token !== ownerToken) return false;
+                    fs.rmSync(lockPath, { recursive: true, force: true });
+                    return true;
+                } catch (error) {
+                    if (error.code === 'ENOENT') return false;
+                    console.warn(`[file-lock] 释放锁失败 ${lockPath}: ${error.message}`);
+                    return false;
+                }
+            };
+        } catch (error) {
+            if (error.code !== 'EEXIST') throw error;
+            try {
+                if (canReclaimFileLock(lockPath, staleMs)) {
+                    fs.rmSync(lockPath, { recursive: true, force: true });
+                    continue;
+                }
+            } catch (statError) {
+                if (statError.code === 'ENOENT') continue;
+                throw statError;
+            }
+            if (Date.now() - startedAt >= timeoutMs) {
+                throw new Error(`等待文件锁超时: ${lockPath}`);
+            }
+            sleepSync(50);
+        }
+    }
+}
+
+function withFileLockSync(filePath, callback, options = {}) {
+    const release = acquireFileLockSync(filePath, options);
+    try {
+        return callback();
+    } finally {
+        release();
+    }
+}
+
+async function withFileLock(filePath, callback, options = {}) {
+    const release = acquireFileLockSync(filePath, options);
+    try {
+        return await callback();
+    } finally {
+        release();
+    }
+}
+
+function updateJsonFileLocked(filePath, updater, options = {}) {
+    return withFileLockSync(filePath, () => {
+        const current = readJsonFileStrict(filePath, { allowMissing: options.allowMissing !== false });
+        const next = updater(current);
+        if (next && typeof next.then === 'function') {
+            throw new Error('updateJsonFileLocked 的 updater 必须是同步函数');
+        }
+        if (next === undefined) return current;
+        const currentGeneration = Number.isInteger(current?.generation) ? current.generation : 0;
+        if (next && !Array.isArray(next) && typeof next === 'object') {
+            next.generation = currentGeneration + 1;
+        }
+        writeFileAtomic(filePath, JSON.stringify(next, null, 2));
+        return next;
+    }, options);
+}
+
+function isSuccessfulAnalysisRecord(paper) {
+    if (!paper || typeof paper.analysis !== 'string' || !paper.analysis.trim()) return false;
+    if (paper.analysisManifest?.version === 1) {
+        const stages = paper.analysisManifest.stages;
+        if (!stages || typeof stages !== 'object' || REQUIRED_RECOVERY_STAGES.some(stage =>
+            !COMPLETE_RECOVERY_STATUSES.has(stages[stage]?.status))) {
+            return false;
+        }
+    }
+    // Cached parsed data may belong to an older or manually edited analysis body.
+    // Re-parse the source text so every resume/status decision uses one contract.
+    try {
+        const parsed = parseAnalysis(paper.analysis);
+        return !getInvalidAnalysisReason(paper.analysis, parsed);
+    } catch (error) {
+        return false;
+    }
+}
+
+function getAnalysisRunStatus(stats = {}, remainingFailures = stats.failed || 0) {
+    const failed = Number(remainingFailures) || 0;
+    const success = Number(stats.success) || 0;
+    if (failed <= 0) return 'complete';
+    return success > 0 ? 'partial_failed' : 'failed';
+}
+
+function getAnalysisExitCode(status) {
+    if (status === 'complete') return 0;
+    if (status === 'partial_failed') return 2;
+    return 1;
+}
 
 // ═══════════════════════════════════════════════════════
 // 单篇分析（带重试 + 解析）
@@ -180,9 +355,7 @@ async function analyzeBatch(papers, options = {}) {
                     const skip = shouldSkipCached(paper);
                     if (skip) {
                         stats.skipped++;
-                        if (onPaperDone) {
-                            try { onPaperDone(idx, papers.length, paper, { skipped: true }, 0); } catch (e) { /* ignore callback error */ }
-                        }
+                        if (onPaperDone) await onPaperDone(idx, papers.length, paper, { skipped: true }, 0);
                         return { skipped: true, paper };
                     }
                 }
@@ -214,9 +387,7 @@ async function analyzeBatch(papers, options = {}) {
                 stats.failed++;
             }
 
-            if (onPaperDone) {
-                try { onPaperDone(idx, papers.length, paper, r, duration); } catch (e) { /* ignore callback error */ }
-            }
+            if (onPaperDone) await onPaperDone(idx, papers.length, paper, r, duration);
 
             return r;
         });
@@ -224,21 +395,8 @@ async function analyzeBatch(papers, options = {}) {
         let batchResults;
         try {
             batchResults = await Promise.all(batchPromises);
-        } catch (e) {
-            console.error(`[analyzeBatch] 批次 ${batchNum} 执行失败: ${e.message}`);
-            batchResults = batch.map(paper => {
-                stats.failed++;
-                return {
-                    success: false,
-                    error: e.message,
-                    result: {
-                        ...paper,
-                        analysis: null,
-                        parsed: null,
-                        error: e.message
-                    }
-                };
-            });
+        } catch (error) {
+            throw new Error(`[analyzeBatch] 批次 ${batchNum}/${totalBatches} 关键回调或执行失败: ${error.message}`, { cause: error });
         }
 
         for (const r of batchResults) {
@@ -247,9 +405,7 @@ async function analyzeBatch(papers, options = {}) {
             }
         }
 
-        if (onBatchDone) {
-            try { onBatchDone(batchNum, batchResults); } catch (e) { /* ignore callback error */ }
-        }
+        if (onBatchDone) await onBatchDone(batchNum, batchResults);
 
         processedCount += batch.filter(p => {
             if (!shouldSkip) return true;
@@ -281,43 +437,19 @@ async function analyzeBatch(papers, options = {}) {
  * @param {Object} extraData - 额外写入的顶层字段（如 stats, timestamp 等）
  */
 async function mergeAndSaveResults(newResults, filePath, extraData = {}) {
-    const existingData = readJsonSafe(filePath, null);
-    const existingPapers = existingData ? (existingData.papers || []) : [];
-
-    const mergedMap = new Map();
-
-    for (const paper of existingPapers) {
-        const key = normalizedId(paper);
-        if (key) {
-            mergedMap.set(key, paper);
-        } else {
-            console.warn(`[mergeAndSaveResults] 跳过无法识别 ID 的论文: ${paper.title || '(无标题)'}`);
-        }
-    }
-
-    for (const paper of newResults) {
-        const key = normalizedId(paper);
-        if (key) {
-            const existing = mergedMap.get(key);
-            if (existing && existing.analysis && !paper.analysis) {
-                continue;
-            }
-            mergedMap.set(key, paper);
-        } else {
-            console.warn(`[mergeAndSaveResults] 跳过无法识别 ID 的论文: ${paper.title || '(无标题)'}`);
-        }
-    }
-
-    const mergedPapers = Array.from(mergedMap.values());
-
-    const output = {
-        timestamp: getBeijingISOString(),
-        ...extraData,
-        papers: mergedPapers
-    };
-
-    writeFileAtomic(filePath, JSON.stringify(output, null, 2));
-    return { totalMerged: mergedPapers.length, existingCount: existingPapers.length, newCount: newResults.length };
+    let counts;
+    updateJsonFileLocked(filePath, existingData => {
+        const existingPapers = Array.isArray(existingData) ? existingData : (existingData?.papers || []);
+        const mergedPapers = mergePapersById(existingPapers, newResults, { preserveSuccessfulAnalysis: true });
+        counts = { totalMerged: mergedPapers.length, existingCount: existingPapers.length, newCount: newResults.length };
+        return {
+            ...(existingData && !Array.isArray(existingData) ? existingData : {}),
+            timestamp: getBeijingISOString(),
+            ...extraData,
+            papers: mergedPapers
+        };
+    });
+    return counts;
 }
 
 /**
@@ -327,23 +459,26 @@ async function mergeAndSaveResults(newResults, filePath, extraData = {}) {
  */
 function createFileSaver(filePath, baseData = {}) {
     return async (results, stats) => {
-        const existing = readJsonSafe(filePath, null);
-        const isLegacyArray = Array.isArray(existing);
-        const existingPapers = isLegacyArray ? existing : (existing && existing.papers);
-        const existingStats = !isLegacyArray && existing && existing.stats ? existing.stats : null;
-        const output = {
-            ...(!isLegacyArray && existing ? existing : {}),
-            ...baseData,
-            lastUpdated: getBeijingISOString(),
-            papers: existingPapers ? mergePapersById(existingPapers, results) : results,
-            stats: existingStats ? { ...existingStats, ...stats } : stats
-        };
-        writeFileAtomic(filePath, JSON.stringify(output, null, 2));
+        updateJsonFileLocked(filePath, existing => {
+            const isLegacyArray = Array.isArray(existing);
+            const existingPapers = isLegacyArray ? existing : (existing && existing.papers);
+            const existingStats = !isLegacyArray && existing && existing.stats ? existing.stats : null;
+            return {
+                ...(!isLegacyArray && existing ? existing : {}),
+                ...baseData,
+                lastUpdated: getBeijingISOString(),
+                papers: existingPapers ? mergePapersById(existingPapers, results) : results,
+                stats: existingStats ? { ...existingStats, ...stats } : stats
+            };
+        });
     };
 }
 
 // 辅助：合并论文列表（按 ID 去重，新的覆盖旧的）
-function mergePapersById(existingPapers, newPapers) {
+function mergePapersById(existingPapers, newPapers, options = {}) {
+    if (!Array.isArray(existingPapers) || !Array.isArray(newPapers)) {
+        throw new Error('分析结果 papers 必须是数组，已阻止覆盖结构异常的 JSON');
+    }
     const map = new Map();
     for (const p of existingPapers) {
         const key = normalizedId(p);
@@ -356,6 +491,22 @@ function mergePapersById(existingPapers, newPapers) {
     for (const p of newPapers) {
         const key = normalizedId(p);
         if (key) {
+            const existing = map.get(key);
+            if (options.preserveSuccessfulAnalysis
+                && isSuccessfulAnalysisRecord(existing)
+                && !isSuccessfulAnalysisRecord(p)) {
+                if (p.analysisManifest || p.analysisCheckpoint || p.imageManifest) {
+                    map.set(key, {
+                        ...existing,
+                        ...(p.analysisManifest ? { analysisManifest: p.analysisManifest } : {}),
+                        ...(p.analysisCheckpoint ? { analysisCheckpoint: p.analysisCheckpoint } : {}),
+                        ...(p.imageManifest ? { analysisRecoveryImageManifest: p.imageManifest } : {}),
+                        latestAnalysisAttemptError: p.error || '分析未完成',
+                        latestAnalysisAttemptAt: getBeijingISOString()
+                    });
+                }
+                continue;
+            }
             map.set(key, p);
         } else {
             console.warn(`[mergePapersById] 跳过无法识别 ID 的论文: ${p.title || '(无标题)'}`);
@@ -372,6 +523,17 @@ module.exports = {
     analyzePaperWithRetry,
     analyzeBatch,
     mergeAndSaveResults,
+    createFileSaver,
+    mergePapersById,
+    readJsonFileStrict,
+    acquireFileLockSync,
+    canReclaimFileLock,
+    withFileLockSync,
+    withFileLock,
+    updateJsonFileLocked,
+    isSuccessfulAnalysisRecord,
+    getAnalysisRunStatus,
+    getAnalysisExitCode,
     getInvalidAnalysisReason,
     hasRequiredSections,
     DEFAULT_MAX_RETRIES,

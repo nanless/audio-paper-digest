@@ -7,16 +7,20 @@ setupScriptLogging(__filename);
  * 用法: node scripts/reanalyze-selected.js <arxivId1> [arxivId2] ...
  */
 
-const fs = require('fs');
-const path = require('path');
 const {
-    readJsonSafe,
     getBeijingISOString,
-    writeFileAtomic,
     normalizedId,
     SCORING_RUBRIC_VERSION
 } = require('./utils.js');
-const { analyzeBatch } = require('./analysis-engine.js');
+const {
+    analyzeBatch,
+    readJsonFileStrict,
+    updateJsonFileLocked,
+    mergePapersById,
+    isSuccessfulAnalysisRecord,
+    getAnalysisRunStatus,
+    getAnalysisExitCode
+} = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses } = require('./digest-status.js');
 const Config = require('./config.js');
 
@@ -49,11 +53,7 @@ function updateReanalysisStats(data, analyzedResults, previousCurrentRubricIds, 
 async function reanalyzeSelected(ids) {
     console.log(`=== 重新分析 ${ids.length} 篇论文 ===\n`);
 
-    const data = readJsonSafe(RESULT_FILE, null);
-    if (!data) {
-        console.error('❌ 读取结果文件失败');
-        process.exit(1);
-    }
+    const data = readJsonFileStrict(RESULT_FILE);
 
     const papers = data.papers || [];
     const batchDate = (data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10);
@@ -83,10 +83,15 @@ async function reanalyzeSelected(ids) {
             toReanalyze.push(cleanPaper);
         }
     }
+    const foundIds = new Set(toReanalyze.map(normalizedId).filter(Boolean));
+    const missingIds = [...idSet].filter(id => !foundIds.has(id));
+    if (missingIds.length > 0) {
+        console.error(`⚠️ 结果文件中缺少 ${missingIds.length} 个请求 ID: ${missingIds.join(', ')}`);
+    }
 
     if (toReanalyze.length === 0) {
         console.log('⚠️ 没有找到需要重跑的论文');
-        return;
+        return { status: 'failed', exitCode: 1, success: 0, failed: ids.length };
     }
 
     console.log(`找到 ${toReanalyze.length} 篇需要重跑的论文:`);
@@ -95,13 +100,24 @@ async function reanalyzeSelected(ids) {
     }
     console.log();
 
+    updateJsonFileLocked(RESULT_FILE, current => {
+        const payload = {
+            ...(!Array.isArray(current) && current ? current : {}),
+            papers: Array.isArray(current) ? current : (current?.papers || []),
+            lastUpdated: getBeijingISOString(),
+            stats: { ...(!Array.isArray(current) ? current?.stats : {}), selectedReanalyzeStatus: 'running' }
+        };
+        delete payload.deepAnalysisCompletedAt;
+        return payload;
+    });
+
     // 重新分析
     const analyzedResults = [];
     const attemptResults = [];
     const { stats } = await analyzeBatch(toReanalyze, {
-        concurrency: 3,
-        maxRetries: 2,
-        retryDelayMs: 3000,
+        concurrency: Config.ANALYSIS_CONFIG.concurrency,
+        maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
+        retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
         saveInterval: 1,
         onPaperStart: (idx, total, paper) => {
             console.log(`  [${idx + 1}/${total}] ▶ 开始: ${paper.title?.substring(0, 50)}...`);
@@ -124,25 +140,11 @@ async function reanalyzeSelected(ids) {
             }
         },
         onSave: async (results) => {
-            // 增量保存分析进度
-            const mergedMap = new Map();
-            for (const p of papers) {
-                const key = normalizedId(p);
-                if (key) mergedMap.set(key, p);
-            }
-            for (const r of results) {
-                if (!r) continue;
-                const key = normalizedId(r);
-                if (!key) continue;
-                const existing = mergedMap.get(key);
-                if (existing && existing.analysis && !r.analysis) {
-                    continue;
-                }
-                mergedMap.set(key, r);
-            }
-            data.papers = Array.from(mergedMap.values());
-            data.lastUpdated = getBeijingISOString();
-            writeFileAtomic(RESULT_FILE, JSON.stringify(data, null, 2));
+            updateJsonFileLocked(RESULT_FILE, current => ({
+                ...(!Array.isArray(current) && current ? current : {}),
+                lastUpdated: getBeijingISOString(),
+                papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), results.filter(Boolean), { preserveSuccessfulAnalysis: true })
+            }));
             updateAnalysisDigestStatuses(attemptResults, { batchDate });
         }
     });
@@ -159,24 +161,39 @@ async function reanalyzeSelected(ids) {
         if (key) mergedMap.set(key, p);
     }
 
-    data.papers = Array.from(mergedMap.values());
     const updatedAt = getBeijingISOString();
-    data.timestamp = updatedAt;
+    const effectiveStats = { ...stats, failed: stats.failed + missingIds.length };
+    const status = getAnalysisRunStatus(effectiveStats, effectiveStats.failed);
+    data.papers = Array.from(mergedMap.values());
     const recoveredCount = updateReanalysisStats(
         data,
         analyzedResults,
         previousCurrentRubricIds,
-        stats,
+        effectiveStats,
         updatedAt
     );
 
-    writeFileAtomic(RESULT_FILE, JSON.stringify(data, null, 2));
+    updateJsonFileLocked(RESULT_FILE, current => {
+        const payload = {
+            ...(!Array.isArray(current) && current ? current : {}),
+            timestamp: updatedAt,
+            papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), attemptResults, { preserveSuccessfulAnalysis: true }),
+            stats: { ...(!Array.isArray(current) ? current?.stats : {}), ...data.stats, selectedReanalyzeStatus: status }
+        };
+        if (status === 'complete' && payload.papers.every(isSuccessfulAnalysisRecord)) {
+            payload.deepAnalysisCompletedAt = getBeijingISOString();
+        } else {
+            delete payload.deepAnalysisCompletedAt;
+        }
+        return payload;
+    });
     const digestStatus = updateAnalysisDigestStatuses(attemptResults, { batchDate });
 
-    console.log(`\n✅ 重分析完成: 成功 ${stats.success} | 失败 ${stats.failed}`);
+    console.log(`\n${status === 'complete' ? '✅' : '⚠️'} 重分析状态 ${status}: 成功 ${stats.success} | 失败 ${effectiveStats.failed}`);
     if (recoveredCount > 0) console.log(`历史失败恢复: ${recoveredCount} 篇`);
     if (digestStatus.updated > 0) console.log(`papers.json 状态已同步: ${digestStatus.updated} 篇`);
     console.log(`💾 结果已保存到: ${RESULT_FILE}`);
+    return { status, exitCode: getAnalysisExitCode(status), success: stats.success, failed: effectiveStats.failed, recoveredCount };
 }
 
 if (require.main === module) {
@@ -186,9 +203,11 @@ if (require.main === module) {
         process.exit(1);
     }
 
-    reanalyzeSelected(ids).catch(err => {
+    reanalyzeSelected(ids).then(result => {
+        process.exitCode = result.exitCode;
+    }).catch(err => {
         console.error('❌ 错误:', err);
-        process.exit(1);
+        process.exitCode = 1;
     });
 }
 

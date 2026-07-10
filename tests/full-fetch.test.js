@@ -3,6 +3,11 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
+const { validAnalysisPaper: validAnalysisRecord } = require('./valid-analysis-fixture.js');
+
+const execFileAsync = promisify(execFile);
 
 describe('full-fetch helpers', () => {
     it('模块可安全导入且不会自动启动长流程', () => {
@@ -48,6 +53,61 @@ describe('full-fetch helpers', () => {
         });
 
         assert.deepStrictEqual(failures, ['arxiv:eess.AS:HTTP 429', 'huggingface:timeout']);
+    });
+
+    it('筛选覆盖只接受每个候选都有明确且不可重试的决定', () => {
+        const { validateFilterDecisionCoverage } = require('../scripts/full-fetch.js');
+        const papers = [{ arxivId: '2607.00001' }, { arxivId: '2607.00002' }];
+
+        const complete = validateFilterDecisionCoverage(papers, {
+            '2607.00001': { related: true },
+            '2607.00002': { related: false }
+        });
+        assert.strictEqual(complete.complete, true);
+        assert.strictEqual(complete.decided, 2);
+
+        const incomplete = validateFilterDecisionCoverage(papers, {
+            '2607.00001': { related: true },
+            '2607.00002': { related: null, retryable: true, fallback: true }
+        });
+        assert.strictEqual(incomplete.complete, false);
+        assert.deepStrictEqual(incomplete.missingIds, ['2607.00002']);
+        assert.deepStrictEqual(incomplete.retryableIds, ['2607.00002']);
+    });
+
+    it('筛选产物一致性同时校验 stats.complete、候选覆盖和相关结果', () => {
+        const { validateFilterArtifacts } = require('../scripts/full-fetch.js');
+        const decisions = {
+            timestamp: '2026-07-10T10:00:00+08:00',
+            filterModel: 'model-a',
+            filterPromptHash: 'hash-a',
+            stats: { complete: true, totalCandidates: 2, decided: 2 },
+            decisions: {
+                '2607.00001': { related: true },
+                '2607.00002': { related: false }
+            }
+        };
+        const filtered = {
+            filterModel: 'model-a',
+            filterPromptHash: 'hash-a',
+            stats: { decisionCount: 2 },
+            papers: [{ arxivId: '2607.00001' }]
+        };
+        const raw = { papers: [{ arxivId: '2607.00001' }, { arxivId: '2607.00002' }] };
+
+        assert.strictEqual(validateFilterArtifacts(filtered, decisions, raw), true);
+        assert.strictEqual(validateFilterArtifacts(filtered, {
+            ...decisions,
+            stats: { ...decisions.stats, complete: false }
+        }, raw), false);
+        assert.strictEqual(validateFilterArtifacts({
+            ...filtered,
+            papers: [{ arxivId: '2607.00002' }]
+        }, decisions, raw), false);
+        assert.strictEqual(validateFilterArtifacts(filtered, {
+            ...decisions,
+            decisions: { '2607.00001': { related: true } }
+        }, raw), false);
     });
 
     it('空候选只在核心来源致命失败时阻断', () => {
@@ -125,7 +185,8 @@ describe('full-fetch helpers', () => {
         fs.writeFileSync(file, JSON.stringify({
             timestamp: '2026-07-08T10:00:00+08:00',
             papers: [
-                { arxivId: '2607.00001v2', fetchedAt: '2026-07-08T09:00:00+08:00', analysis: 'ok' },
+                validAnalysisRecord('2607.00001v2', { fetchedAt: '2026-07-08T09:00:00+08:00' }),
+                validAnalysisRecord('2607.00009'),
                 { arxivId: '2607.00002', fetchedAt: '2026-07-08T09:00:00+08:00', error: 'failed' },
                 { arxivId: '2607.00003', fetchedAt: '2026-07-07T09:00:00+08:00', analysis: 'old' }
             ]
@@ -134,6 +195,103 @@ describe('full-fetch helpers', () => {
         assert.deepStrictEqual(
             Array.from(loadCurrentSuccessfulAnalysisIds(file, '2026-07-08')),
             ['2607.00001']
+        );
+    });
+
+    it('短 analysis 和陈旧 parsed 不会被当作可续跑成功结果', () => {
+        const { loadCurrentSuccessfulAnalysisIds } = require('../scripts/full-fetch.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-invalid-analysis-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(file, JSON.stringify({
+            papers: [{ arxivId: '2607.00004', analysis: 'ok', parsed: { score: 9.9 } }]
+        }));
+        assert.deepStrictEqual(Array.from(loadCurrentSuccessfulAnalysisIds(file)), []);
+    });
+
+    it('最终保存锁内重读合并并递增 generation，部分失败写入 partial_failed', () => {
+        const { saveFinalAnalysisResults } = require('../scripts/full-fetch.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-final-save-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(file, JSON.stringify({
+            generation: 7,
+            timestamp: '2026-07-10T08:00:00+08:00',
+            papers: [validAnalysisRecord('2607.10001'), { arxivId: 'concurrent', title: 'keep' }]
+        }));
+
+        const saved = saveFinalAnalysisResults(file, [
+            { arxivId: '2607.10002', analysis: null, error: 'timeout' }
+        ], [{ arxivId: '2607.10001' }, { arxivId: '2607.10002' }], { newlyAnalyzed: 0 });
+
+        assert.strictEqual(saved.generation, 8);
+        assert.strictEqual(saved.status, 'partial_failed');
+        assert.strictEqual(saved.stats.analysisStatus, 'partial_failed');
+        assert.strictEqual(saved.stats.remainingFailed, 1);
+        assert.ok(saved.papers.some(paper => paper.arxivId === 'concurrent'));
+        assert.strictEqual(saved.deepAnalysisCompletedAt, undefined);
+    });
+
+    it('最终保存遇到损坏文件时阻断且不覆盖', () => {
+        const { saveFinalAnalysisResults } = require('../scripts/full-fetch.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-final-corrupt-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(file, '{broken');
+        assert.throws(() => saveFinalAnalysisResults(file, [], []), /JSON 文件损坏或不可读/);
+        assert.strictEqual(fs.readFileSync(file, 'utf8'), '{broken');
+    });
+
+    it('最终保存全失败时写 failed', () => {
+        const { saveFinalAnalysisResults } = require('../scripts/full-fetch.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-final-failed-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        const saved = saveFinalAnalysisResults(file, [
+            { arxivId: '2607.20001', analysis: null, error: 'timeout' }
+        ], [{ arxivId: '2607.20001' }]);
+        assert.strictEqual(saved.status, 'failed');
+        assert.strictEqual(saved.stats.analysisStatus, 'failed');
+        assert.strictEqual(saved.stats.remainingFailed, 1);
+    });
+
+    it('最终状态忽略锁外尝试统计，按锁内 expected ID 全集重算', () => {
+        const { saveFinalAnalysisResults } = require('../scripts/full-fetch.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-final-expected-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(file, JSON.stringify({
+            papers: [validAnalysisRecord('2607.21001'), validAnalysisRecord('unrelated')]
+        }));
+
+        const saved = saveFinalAnalysisResults(file, [], [{ arxivId: '2607.21001' }], {
+            analysisStatus: 'failed'
+        });
+        assert.strictEqual(saved.status, 'complete');
+        assert.strictEqual(saved.stats.analysisStatus, 'complete');
+        assert.strictEqual(saved.stats.successfulExpected, 1);
+        assert.strictEqual(saved.stats.remainingFailed, 0);
+    });
+
+    it('多个 full-fetch 最终保存进程并发时保留全部更新', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-full-final-lock-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(file, JSON.stringify({ generation: 4, papers: [{ arxivId: 'seed' }] }));
+        const fullFetchPath = path.resolve(__dirname, '../scripts/full-fetch.js');
+        const fixturePath = path.resolve(__dirname, './valid-analysis-fixture.js');
+        const worker = `
+            const { saveFinalAnalysisResults } = require(process.argv[1]);
+            const { validAnalysisPaper } = require(process.argv[2]);
+            const file = process.argv[3];
+            const id = process.argv[4];
+            saveFinalAnalysisResults(file, [validAnalysisPaper(id)], [{ arxivId: id }]);
+        `;
+
+        await Promise.all(['2607.30001', '2607.30002'].map(id => execFileAsync(
+            process.execPath,
+            ['-e', worker, fullFetchPath, fixturePath, file, id]
+        )));
+
+        const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+        assert.strictEqual(saved.generation, 6);
+        assert.deepStrictEqual(
+            new Set(saved.papers.map(paper => paper.arxivId)),
+            new Set(['seed', '2607.30001', '2607.30002'])
         );
     });
 

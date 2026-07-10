@@ -72,7 +72,7 @@ Possible causes:
 
 **Root cause**: Node.js `https.request` with `agent: undefined` still reuses the global default agent's connection pool. When a system proxy is configured (via `https_proxy` or similar environment variables), connections from the global agent may be tainted by the proxy, causing the MiMo Token Plan server to reject the request.
 
-**Fix**: In `fetch-papers.js` and `deep-analyzer.js`, the `options.agent` for LLM API requests must be set to `false` (not `undefined`), completely disabling connection reuse and forcing each request to establish a new connection:
+**Fix**: Every Node LLM request, including `test-api-key.js`, must set `options.agent` to `false` (not `undefined`), completely disabling connection reuse and forcing each request to establish a new connection:
 
 ```javascript
 const options = {

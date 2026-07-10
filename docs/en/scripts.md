@@ -168,8 +168,10 @@ Referenced by all core scripts.
 Unified analysis engine. Encapsulates the following functionality, eliminating duplicate logic across `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` / `reanalyze.js` / `analyze-single-paper.js`:
 
 - `analyzePaperWithRetry(paper, options)`: single-paper analysis (with retry + auto-parse)
-- `analyzeBatch(papers, options)`: batch analysis (supports concurrency control + incremental save callback)
+- `analyzeBatch(papers, options)`: batch analysis (supports concurrency control + incremental save callbacks); callback failures propagate to the entry point instead of being counted as successful analysis
 - `mergeAndSaveResults(newResults, filePath, extraData)`: deduplicate by ID and save, **with built-in failure protection** (papers with an existing successful analysis will not be overwritten by a failed result without analysis)
+- Success requires every mandatory version-1 `analysisManifest` stage to be terminal. Failure merges retain an older valid body while overlaying the new checkpoint, recovery image manifest, and latest-attempt error
+- Lock owners carry random tokens and local PID liveness checks, so an old owner cannot delete a replacement lock and a live process is not reclaimed merely because its lock is old
 
 #### `scripts/validate-scores.js`
 
@@ -195,7 +197,7 @@ Multimodal deep analyzer. The analysis flow is an **up-to-8-round progressive pr
 - `analyzePaperDeep(paper)`: fetches arXiv HTML full text (up to 500K characters) and preselects candidate images. Dual-model mode downloads candidate images serially and lets the secondary model output a JSON insertion plan for high-value figures; single-model mode only stores candidate image metadata. `allImageUrls` stores candidates, while `selectedImageUrls` / `imageUrls` store selected figures
 - Loads `prompts/deep-analysis.md`, replaces placeholders, and calls the LLM
 - Output includes: document type, score, machine summary, tags, authors and affiliations, snarky review, core summary, method overview and architecture, core innovations, experimental results, detailed description, score rationale, limitations and issues, open source details
-- `parseAnalysis(analysis)`: parses the analysis, normalizes `document_type`, and marks new results with `type-aware-v1`. `score` is recalculated from the eight sub-scores in `## 评分理由` and capped at 10
+- `parseAnalysis(analysis)`: parses the analysis, normalizes `document_type`, and marks new results with `type-aware-v1`. `score` is recalculated only when all eight dimensions are complete, unique, use the correct denominators, and contain finite in-range values; otherwise a contract error blocks saving and publishing
 
 **Round 2 -- Open Source Scan (`scanOpensource`)**
 - Loads `prompts/opensource-scan.md`
@@ -224,17 +226,20 @@ Multimodal deep analyzer. The analysis flow is an **up-to-8-round progressive pr
 **Round 7 -- Type-aware Scoring Audit (`auditTypeAwareScoring`)**
 - Loads `prompts/scoring-audit.md`; the primary model returns JSON only
 - Re-audits document type, confidence, eight scores, and unique deduction ownership; cross-dimension failures are fed into the next local attempt
-- With no released core artifact, code normalizes Open Source to 0.5 for an explicit promise, 0.2 for demo-only, or 0 otherwise
+- Non-theory papers with no released core artifact are normalized to 0.5 for an explicit promise, 0.2 for demo-only, or 0 otherwise; theory retains the judgment based on public proof material
 - Code updates scoring sections and machine-summary score fields without rewriting body text
 
 **Round 8 -- Image Selection and Insertion Plan (`applyImageSupplement`, dual-model mode)**
 - Loads `prompts/image-supplement.md`
 - The secondary model uses the final text and candidate images to select high-value figures, drop low-information figures, and output JSON only
-- `[secondary]` logs record paper ID, model, protocol, endpoint/key source (source only, never secrets), candidate/download counts, each input image label and MIME/payload size, prompt/response lengths, valid plan count, and each plan's section/anchor/replacement/description lengths; API keys are never printed
-- The insertion plan may include `anchor`, optional `replacement`, lead, and explanation; `replacement` may only locally replace a precisely matched short anchor so the surrounding text naturally introduces the figure
-- Code merges the plan into allowed sections of the primary-model text; the secondary model must not return a complete analysis report or rewrite scores, summaries, tags, or score rationales
+- `[secondary]` logs record paper ID, model, protocol, endpoint/key source, candidate/download counts, safe image labels and payloads, response parse status, actual anchor matches, section-end fallbacks, rejection reasons, and inserted figures; secrets are never printed
+- The insertion plan accepts only `anchor`, lead, and explanation. Legacy `replacement` / `rewrite` fields are ignored
+- Code adds figures and adjacent explanation to allowed sections without replacing any primary-model sentence; candidate numbers are not treated as source Figure numbers
 - The shared complete contract runs again after merging. An invalid plan is discarded while the audited primary-model text is retained
 - Generic `图N` alts without real captions and `selectedImageUrls` are normalized to final body order, preventing candidate numbers from becoming out-of-order display numbers
+- Only an object with strict `insertions: []` becomes `no_high_value_images`. Schema errors, malformed JSON, total image-download failure, and contract damage remain non-terminal recovery states instead of masquerading as success
+
+**Stage recovery**: `analysisManifest` persists each stage, `analysisCheckpoint` stores the intermediate body, and `analysisRecoveryImageManifest` stores figure recovery metadata. Force-reanalyzing an older successful record clears primary and downstream completion markers because no checkpoint exists; a normal failed run resumes at the first incomplete stage.
 
 **API Calls**:
 - `callModel(messages, maxTokens)`: retry-wrapped API call encapsulation (up to 3 inner retries, exponential backoff: first 10s, then double)
@@ -242,7 +247,7 @@ Multimodal deep analyzer. The analysis flow is an **up-to-8-round progressive pr
 - LLM API requests forcibly set `agent: false`, disabling connection reuse to bypass proxy pollution (avoiding MiMo 403)
 
 **Other Features**:
-- Supports automatic proxy detection (environment variables -> macOS `scutil --proxy`)
+- Reads proxy variables only after project-root `.env` isolation; inherited shell/IDE proxies and macOS `scutil` are not used
 - Supports pure Node built-in module HTTP CONNECT proxy
 - Direct invocation for testing: `node scripts/deep-analyzer.js <arxivId>`
 
@@ -275,7 +280,7 @@ Node.js common utility module. Referenced by almost all scripts:
 - `parseResponseText(apiType, data)`: uniformly parse response text
 
 **Proxy**:
-- `detectProxyUrl()`: automatic proxy detection (environment variables -> macOS `scutil --proxy`)
+- `detectProxyUrl()`: read only proxy variables isolated and loaded by the project environment loader
 - `createProxyAgent(proxyUrl)`: create HTTP CONNECT proxy agent
 
 **Other**:
@@ -355,7 +360,7 @@ Publish to Hugo blog (GitHub Pages).
 **Publish Flow**:
 1. Generate `.md` files into blog repository `content/posts/`
 2. Stop after local generation and review by default
-3. With `--push`, LLM review must be available, code-level review must have no remaining issues, and LLM/image review must have no `severity=error` blocking issues before running `git add -A` -> `git commit -m "add: Paper Digest YYYY-MM-DD"` -> `git push origin main`
+3. With `--push`, LLM review must be available, no blocking issue may remain, the blog repository must be on `main`, and the Hugo staging build must pass. The script stages only manifest paths, commits with a detailed Chinese message, pushes `origin HEAD:main`, and verifies the remote OID. Existing manual edits on manifest paths block publication; stale pages are deleted only when `paper_digest_pipeline_owned: true` marks pipeline ownership.
 4. GitHub Actions automatically builds and deploys to Pages
 5. Visit: `https://nanless.github.io/audio-paper-digest-blog/posts/YYYY-MM-DD/`
 
@@ -372,7 +377,7 @@ Publish to Hugo blog (GitHub Pages).
 - To publish all papers (no filtering), pass `--all` explicitly
 
 **Review Step**:
-After generating `.md`, a three-layer review is automatically executed (code regex check -> LLM text review -> multimodal image review). Paper standalone pages use `ThreadPoolExecutor(max_workers=3)` for concurrent review; common issues are automatically fixed before writing to file. Local generation/preview skips LLM review when the API is not configured; formal `--push` requires LLM review to be available, otherwise publishing stops. Remaining code-level issues always block; for LLM/image review, only `severity=error` blocks, while `warning/info` is reported but does not directly block push.
+Before generation, publishing reparses scoring from `analysis` and compares it with cached `parsed` data and the top-level rubric version; manual overrides require explicit provenance and still obey one-decimal values and fixed Open Source anchors. Normalized duplicate arXiv IDs are rejected. Image review uses the secondary-model configuration, includes nearby body context, and validates the connected HTTPS peer against DNS results to prevent rebinding. Formal `--push` fails closed on malformed or indeterminate review output, and a failed Git push exits nonzero with verifiable retry information.
 
 Code-level auto-fix covers:
 1. Unescaped HTML-like tags (`<S>`, `<E>`, `<task>`, etc.) → wrap in backticks
@@ -463,7 +468,7 @@ Generate Feishu (Lark) documents.
 - Supports `--dry-run`: only reports the document title and block counts; does not fetch a token or create a Feishu document
 
 **Implementation Characteristics**:
-- Python implementation, reuses `publish_common.py` for data loading and score sorting; content generation prefers existing `parsed` data and only reparses `analysis` when needed
+- Python implementation, reuses `publish_common.py` for data loading and score sorting; publishing always validates a fresh parse of `analysis` against cached `parsed` data before using it
 - Calls Feishu docx API to create documents and write content blocks
 - Markdown converted line-by-line to Feishu block types: heading1(3)/heading2(4)/heading3(5)/text(2)/bullet(12)/ordered(13)/divider(22)
 - Up to 20 blocks per batch, written in batches
@@ -483,7 +488,8 @@ Backfill paper IDs in the background (no analysis).
 - Rate-limit resilient design: request timeout 30s, exponential backoff on rate-limit, early stop after 20 consecutive known IDs
 - Writes to `data/current/papers.json`
 - Additional output: `data/backfill-result.json`
-- Independent log: appends to `logs/backfill.log` by default; it is not written when file logs are disabled
+- Uses the unified per-run log and no longer appends a duplicate `logs/backfill.log`
+- Uses the same `.lock` directory and `generation` protocol as Node when merging `papers.json`, preventing a stale post-fetch snapshot from overwriting concurrent analysis status
 - Dependency: `requests` (Python third-party library)
 
 #### `scripts/backup-data.sh`

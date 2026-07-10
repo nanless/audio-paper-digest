@@ -288,7 +288,7 @@ Please write like a top-tier conference reviewer, scoring and providing specific
 - Scores MUST use each dimension's own range (e.g., Innovation max is 2, write 1.5 NOT 9.0/10)
 - NEVER use 10-point scale, percentage, or any converted score
 - Do NOT write total score calculation (code calculates automatically)
-- Open source score must be consistent with `## 开源详情` and `has_code`/`has_model`/`has_dataset`
+- Open Source must match the type-specific core artifact status in `## 开源详情`; code/model/data flags apply to model, dataset, and tool papers, while theory also depends on whether core proofs, derivations, assumptions, and boundaries are fully public in the paper or appendix
 - Each defect may be used as a deduction in only one primary dimension
 - Apply the evidence standard for `document_type`; the type itself is never a scoring reason
 

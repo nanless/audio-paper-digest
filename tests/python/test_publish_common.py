@@ -1,10 +1,12 @@
 import os
 import sys
 import contextlib
+import copy
 import io
 import json
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 SCRIPTS = os.path.join(ROOT, 'scripts')
@@ -12,7 +14,9 @@ sys.path.insert(0, SCRIPTS)
 
 from publish_common import (  # noqa: E402
     PublishLLMUnavailable,
+    PublishDataValidationError,
     build_publish_headers,
+    build_publish_payload,
     build_publish_api_url,
     build_paper_meta,
     dedupe_image_alts,
@@ -22,10 +26,47 @@ from publish_common import (  # noqa: E402
     load_papers,
     call_publish_llm_api,
     count_blocking_review_issues,
+    resolve_publish_parsed,
     sanitize_markdown_for_publish,
     strip_raw_inline_html,
+    validate_papers_for_publish,
+    validate_review_payload,
 )
 from utils import parse_analysis  # noqa: E402
+
+
+def complete_analysis():
+    return '''## 评分
+7.0/10
+
+## 机器摘要
+document_type: 方法研究
+rank_bucket: 前50%
+confidence: 高
+
+## 标签
+#语音识别 #Transformer
+
+## 评分理由
+* 创新性 (1/2)：理由
+* 技术严谨性 (1/1.5)：理由
+* 实验充分性 (1/1.5)：理由
+* 清晰度 (1/1)：理由
+* 影响力 (1/1.5)：理由
+* 开源 (0/1.5)：理由
+* 可复现性 (0.5/0.5)：理由
+* 工程/实践价值 (1.5/1.5)：理由
+'''
+
+
+def complete_paper():
+    analysis = complete_analysis()
+    return {
+        'arxivId': '2607.00001',
+        'analysis': analysis,
+        'parsed': parse_analysis(analysis),
+        'scoringRubricVersion': 'type-aware-v1',
+    }
 
 
 class PublishCommonSanitizerTest(unittest.TestCase):
@@ -104,15 +145,91 @@ confidence: 中
         headers = build_publish_headers('anthropic', 'key', claude_version='9.8.7')
         self.assertEqual(headers['User-Agent'], 'claude-cli/9.8.7 (external, cli)')
 
+    def test_publish_multimodal_payload_preserves_protocol_routing(self):
+        image = {'media_type': 'image/png', 'data': 'cG5n'}
+        anthropic = build_publish_payload(
+            'anthropic', 'mimo', 'review', 100, 0.1, images=[image]
+        )
+        blocks = anthropic['messages'][0]['content']
+        self.assertEqual(blocks[0]['type'], 'image')
+        self.assertEqual(blocks[0]['source']['data'], 'cG5n')
+        self.assertEqual(blocks[-1], {'type': 'text', 'text': 'review'})
+
+        openai = build_publish_payload(
+            'openai', 'gpt', 'review', 100, 0.1, images=[image]
+        )
+        blocks = openai['messages'][0]['content']
+        self.assertEqual(blocks[0], {'type': 'text', 'text': 'review'})
+        self.assertEqual(blocks[1]['type'], 'image_url')
+        self.assertTrue(blocks[1]['image_url']['url'].startswith('data:image/png;base64,'))
+
+    def test_secondary_publish_llm_uses_secondary_model_with_primary_endpoint_and_key_fallback(self):
+        response = mock.Mock()
+        response.json.return_value = {'choices': [{'message': {'content': 'ok'}}]}
+        response.raise_for_status.return_value = None
+        session = mock.MagicMock()
+        session.__enter__.return_value = session
+        session.post.return_value = response
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'primary-key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://api.example.com/v1',
+            'PAPER_ANALYZER_MODEL': 'text-model',
+            'PAPER_ANALYZER_SECONDARY_MODEL': 'vision-model',
+        }
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('requests.Session', return_value=session):
+            result = call_publish_llm_api(
+                'inspect', required=True, use_secondary=True, max_retries=1,
+                images=[{'media_type': 'image/png', 'data': 'cG5n'}],
+            )
+        self.assertEqual(result, 'ok')
+        url = session.post.call_args.args[0]
+        kwargs = session.post.call_args.kwargs
+        self.assertEqual(url, 'https://api.example.com/v1/chat/completions')
+        self.assertEqual(kwargs['headers']['Authorization'], 'Bearer primary-key')
+        self.assertEqual(kwargs['json']['model'], 'vision-model')
+
+    def test_required_secondary_publish_llm_does_not_fallback_to_primary_model(self):
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'primary-key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://api.example.com/v1',
+            'PAPER_ANALYZER_MODEL': 'text-model',
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(PublishLLMUnavailable, 'PAPER_ANALYZER_SECONDARY_MODEL'):
+                call_publish_llm_api('inspect', required=True, use_secondary=True)
+
     def test_required_publish_llm_without_key_fails(self):
-        old = os.environ.get('PAPER_ANALYZER_API_KEY')
+        names = ('PAPER_ANALYZER_API_KEY', 'PAPER_ANALYZER_ENDPOINT', 'PAPER_ANALYZER_MODEL')
+        old = {name: os.environ.get(name) for name in names}
         try:
             os.environ.pop('PAPER_ANALYZER_API_KEY', None)
             with self.assertRaises(PublishLLMUnavailable):
                 call_publish_llm_api('hello', required=True, context='test')
         finally:
-            if old is not None:
-                os.environ['PAPER_ANALYZER_API_KEY'] = old
+            for name, value in old.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+    def test_publish_llm_requires_endpoint_and_model_instead_of_using_foreign_defaults(self):
+        names = ('PAPER_ANALYZER_API_KEY', 'PAPER_ANALYZER_ENDPOINT', 'PAPER_ANALYZER_MODEL')
+        old = {name: os.environ.get(name) for name in names}
+        try:
+            os.environ['PAPER_ANALYZER_API_KEY'] = 'provider-specific-key'
+            os.environ.pop('PAPER_ANALYZER_ENDPOINT', None)
+            os.environ.pop('PAPER_ANALYZER_MODEL', None)
+            with self.assertRaises(PublishLLMUnavailable) as raised:
+                call_publish_llm_api('hello', required=True, context='test')
+            self.assertIn('PAPER_ANALYZER_ENDPOINT', str(raised.exception))
+            self.assertIn('PAPER_ANALYZER_MODEL', str(raised.exception))
+        finally:
+            for name, value in old.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
 
     def test_only_error_review_issues_block_publish(self):
         self.assertEqual(
@@ -145,6 +262,150 @@ confidence: 中
             self.assertEqual(list_papers[0]['arxivId'], '2607.00002')
             with self.assertRaises(ValueError):
                 load_papers(bad_file)
+
+    def test_publish_preflight_requires_complete_consistent_scoring(self):
+        paper = complete_paper()
+        validated = validate_papers_for_publish([paper])
+        self.assertEqual(validated[0]['parsed']['score'], '7.0')
+        self.assertEqual(validated[0]['parsed']['tags'], ['#语音识别', '#Transformer'])
+
+        incomplete = copy.deepcopy(paper)
+        incomplete['parsed'].pop('engineeringScore')
+        with self.assertRaisesRegex(PublishDataValidationError, 'engineeringScore'):
+            resolve_publish_parsed(incomplete)
+
+    def test_publish_preflight_rejects_partial_scoring_reason(self):
+        paper = complete_paper()
+        paper['analysis'] = paper['analysis'].replace('* 工程/实践价值 (1.5/1.5)：理由\n', '')
+        with self.assertRaisesRegex(PublishDataValidationError, '评分维度|工程/实践价值'):
+            resolve_publish_parsed(paper)
+
+    def test_publish_preflight_requires_explicit_manual_override_provenance(self):
+        paper = complete_paper()
+        paper['parsed']['engineeringScore'] = '1'
+        paper['parsed']['score'] = '6.5'
+        with self.assertRaisesRegex(PublishDataValidationError, 'parsedOverride'):
+            resolve_publish_parsed(paper)
+
+        paper['parsedOverride'] = {
+            'type': 'manual',
+            'source': 'editor:francis/review-2026-07-10',
+            'reason': '人工复核后调整工程价值',
+            'fields': ['engineeringScore', 'score'],
+        }
+        parsed = resolve_publish_parsed(paper)
+        self.assertEqual(parsed['score'], '6.5')
+
+    def test_publish_baseline_ignores_stale_cached_body_fields(self):
+        paper = complete_paper()
+        paper['parsed']['summary'] = '陈旧摘要不得发布'
+        paper['parsed']['tags'] = {'invalid': '陈旧标签缓存也必须被忽略'}
+        paper['parsed']['results'] = '陈旧实验结果'
+        parsed = resolve_publish_parsed(paper)
+        self.assertNotEqual(parsed.get('summary'), '陈旧摘要不得发布')
+        self.assertEqual(parsed['tags'], ['#语音识别', '#Transformer'])
+        self.assertNotEqual(parsed.get('results'), '陈旧实验结果')
+
+    def test_manual_override_rejects_unknown_metadata_and_non_scoring_fields(self):
+        paper = complete_paper()
+        paper['parsed']['summary'] = '人工摘要'
+        paper['parsedOverride'] = {
+            'type': 'manual',
+            'source': 'editor:test',
+            'reason': 'test',
+            'fields': ['summary'],
+        }
+        with self.assertRaisesRegex(PublishDataValidationError, '不允许覆盖'):
+            resolve_publish_parsed(paper)
+
+        paper = complete_paper()
+        paper['parsed']['score'] = '6.5'
+        paper['parsed']['engineeringScore'] = '1'
+        paper['parsedOverride'] = {
+            'type': 'manual',
+            'source': 'editor:test',
+            'reason': 'test',
+            'fields': ['score', 'engineeringScore'],
+            'unknown': True,
+        }
+        with self.assertRaisesRegex(PublishDataValidationError, '未知字段'):
+            resolve_publish_parsed(paper)
+
+    def test_publish_preflight_requires_matching_top_level_version(self):
+        paper = complete_paper()
+        paper['scoringRubricVersion'] = 'legacy'
+        with self.assertRaisesRegex(PublishDataValidationError, '顶层 scoringRubricVersion'):
+            resolve_publish_parsed(paper)
+
+    def test_publish_preflight_rejects_duplicate_normalized_arxiv_ids(self):
+        first = complete_paper()
+        first['arxivId'] = 'https://arxiv.org/abs/2607.00001v2'
+        second = complete_paper()
+        second['arxivId'] = 'arXiv:2607.00001'
+        with self.assertRaisesRegex(PublishDataValidationError, '重复 normalized arXiv ID 2607.00001'):
+            validate_papers_for_publish([first, second])
+
+    def test_required_review_payload_fails_closed_on_malformed_contract(self):
+        for payload in (
+            [],
+            {'issues': []},
+            {'passed': True},
+            {'passed': True, 'issues': [{'severity': 'critical', 'description': 'bad'}]},
+            {'passed': False, 'issues': [{'severity': 'warning', 'description': 'unclear'}]},
+            {'passed': True, 'issues': [{'severity': 'info', 'description': '无法判断图片是否正确'}]},
+        ):
+            passed, issues = validate_review_payload(payload, required=True, context='test')
+            self.assertFalse(passed)
+            self.assertEqual(count_blocking_review_issues(issues), 1)
+
+    def test_required_review_payload_accepts_valid_warning(self):
+        passed, issues = validate_review_payload({
+            'passed': True,
+            'issues': [{'severity': 'warning', 'description': 'style'}],
+        }, required=True, context='test')
+        self.assertTrue(passed)
+        self.assertEqual(count_blocking_review_issues(issues), 0)
+
+    def test_publish_score_keeps_one_decimal_place(self):
+        paper = complete_paper()
+        paper['analysis'] = paper['analysis'].replace('7.0/10', '6.0/10').replace(
+            '工程/实践价值 (1.5/1.5)',
+            '工程/实践价值 (0.5/1.5)',
+        )
+        paper['parsed'] = parse_analysis(paper['analysis'])
+        paper['scoringRubricVersion'] = paper['parsed']['scoringRubricVersion']
+        resolved = resolve_publish_parsed(paper)
+        self.assertEqual(resolved['score'], '6.0')
+
+    def test_publish_rejects_multi_decimal_and_non_anchor_scores(self):
+        paper = complete_paper()
+        paper['parsed'] = copy.deepcopy(paper['parsed'])
+        paper['parsed']['innovationScore'] = 1.01
+        with self.assertRaisesRegex(PublishDataValidationError, '最多只能有一位小数'):
+            validate_papers_for_publish([paper])
+
+        paper = complete_paper()
+        paper['parsed'] = copy.deepcopy(paper['parsed'])
+        paper['parsed']['openSourceScore'] = 0.7
+        paper['parsed']['score'] = 7.7
+        paper['parsedOverride'] = {
+            'type': 'manual_scoring_correction',
+            'source': '人工复核论文正文',
+            'reason': '根据公开资源状态修正评分字段',
+            'fields': ['openSourceScore', 'score'],
+        }
+        with self.assertRaisesRegex(PublishDataValidationError, '固定锚点集合'):
+            validate_papers_for_publish([paper])
+
+    def test_build_paper_meta_deduplicates_equal_primary_tags(self):
+        meta = build_paper_meta({
+            'score': '6.0',
+            'primaryTaskTag': '#多模态模型',
+            'primaryMethodTag': '#多模态模型',
+            'tags': ['#多模态模型', '#数据集'],
+        })
+        self.assertEqual(meta.count('#多模态模型'), 1)
+        self.assertEqual(meta.count('#数据集'), 1)
 
 
 if __name__ == '__main__':

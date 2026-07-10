@@ -15,9 +15,14 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from path_config import DATA_DIR, LOGS_DIR, PAPERS_FILE, backfill_result_path
+from path_config import (
+    DATA_DIR,
+    PAPERS_FILE,
+    atomic_write_json,
+    backfill_result_path,
+    update_json_file_locked,
+)
 
-LOG_FILE = os.path.join(LOGS_DIR, 'backfill.log')
 BJ_TZ = timezone(timedelta(hours=8))
 
 def now_bj():
@@ -36,11 +41,6 @@ CATEGORIES = [
 def log(msg):
     line = f"[{now_bj().isoformat()}] {msg}"
     print(line)
-    if os.environ.get("PAPER_DIGEST_DISABLE_FILE_LOGS") == "1" or os.environ.get("PD_DISABLE_FILE_LOGS") == "1":
-        return
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    with open(LOG_FILE, 'a', encoding='utf-8') as f:
-        f.write(line + '\n')
 
 def load_papers():
     if os.path.exists(PAPERS_FILE):
@@ -49,16 +49,43 @@ def load_papers():
     return {'papers': {}, 'lastUpdated': None}
 
 def save_papers(data):
+    expected_generation = data.get('generation', 0) if isinstance(data, dict) else None
     data['lastUpdated'] = now_bj().isoformat()
-    tmp_path = f"{PAPERS_FILE}.{os.getpid()}.tmp"
-    try:
-        with open(tmp_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, PAPERS_FILE)
-    except Exception:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        raise
+    return update_json_file_locked(
+        PAPERS_FILE,
+        lambda _current: data,
+        expected_generation=expected_generation,
+    )
+
+
+def merge_and_save_papers(new_papers):
+    counts = {'added': 0, 'skipped': 0}
+
+    def merge(current):
+        if current is None:
+            current = {'papers': {}, 'lastUpdated': None}
+        if not isinstance(current, dict) or not isinstance(current.get('papers'), dict):
+            raise RuntimeError('papers.json 结构非法，拒绝覆盖')
+        merged = dict(current)
+        merged_papers = dict(current['papers'])
+        for pid, paper in new_papers.items():
+            if pid in merged_papers:
+                counts['skipped'] += 1
+                continue
+            merged_papers[pid] = paper
+            counts['added'] += 1
+        merged['papers'] = merged_papers
+        merged['lastUpdated'] = now_bj().isoformat()
+        return merged
+
+    saved = update_json_file_locked(PAPERS_FILE, merge)
+    return saved, counts
+
+
+def save_backfill_result(data, result_path=None):
+    target = result_path or backfill_result_path()
+    atomic_write_json(target, data)
+    return target
 
 def fetch_arxiv_category(category_id, max_results=30, existing_ids=None):
     """抓取单个 arxiv 类别，带重试和提前停止"""
@@ -235,8 +262,7 @@ def fetch_hf_papers(existing_ids, days=7):
     return result
 
 def main():
-    with open(LOG_FILE, 'a', encoding='utf-8') as f:
-        f.write(f"\n=== 补录开始 {now_bj().isoformat()} ===\n")
+    log(f"=== 补录开始 {now_bj().isoformat()} ===")
 
     papers_data = load_papers()
     existing_ids = set(papers_data['papers'].keys())
@@ -273,19 +299,15 @@ def main():
 
     log(f"合并去重后: {len(all_papers)} 篇")
 
-    added = 0
-    skipped = 0
+    valid_new_papers = {}
     for p in all_papers.values():
         pid = p.get('paper_id') or p.get('arxivId')
-        if not pid:
-            continue
-        if pid in papers_data['papers']:
-            skipped += 1
-            continue
-        papers_data['papers'][pid] = p
-        added += 1
+        if pid:
+            valid_new_papers[pid] = p
 
-    save_papers(papers_data)
+    papers_data, counts = merge_and_save_papers(valid_new_papers)
+    added = counts['added']
+    skipped = counts['skipped']
     log(f"已保存: 新增 {added} 篇，跳过 {skipped} 篇，总计 {len(papers_data['papers'])} 篇")
 
     result = {
@@ -298,9 +320,7 @@ def main():
         'totalInDb': len(papers_data['papers']),
         'paperIds': list(all_papers.keys()),
     }
-    result_path = backfill_result_path()
-    with open(result_path, 'w', encoding='utf-8') as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+    result_path = save_backfill_result(result)
     log(f"详细结果已保存到 {result_path}")
 
     log("=== 补录完成 ===")

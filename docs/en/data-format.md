@@ -79,13 +79,13 @@ Candidate input after arXiv + HuggingFace merge and blog-published filtering. Us
 }
 ```
 
-When `papers` is empty and `sourceHealth` contains failures, the main workflow only treats a complete core arXiv failure or a failure of the only attempted source as fatal; individual category failures or HuggingFace supplementary-source failures are recorded but do not necessarily block a legitimate empty candidate batch.
+Fetchers record attempts, successful requests, and failure details in `sourceHealth`. A source whose every request failed is fatal and cannot be represented as a successful empty batch; an actual successful empty response remains valid. Partial supplementary-source failures remain diagnostic when another request succeeded.
 
 `npm run validate:data` checks the `papers` array, the basic `sourceHealth` shape, and candidate stats: `stats.afterBlogSkip` must equal the candidate paper count, `stats.skippedFromBlog` must equal the before/after blog-deduplication difference, and `stats.arxivOnly + stats.hfOnly + stats.both` must equal the pre-blog-deduplication candidate total.
 
 ### 5.3 `data/current/filter-decisions.json`
 
-Per-paper LLM filtering decision cache. It is written after every batch; reruns only reuse it when `filterModel` and `filterPromptHash` match the current configuration.
+Per-paper LLM filtering decision cache. It is written after every batch; reruns only reuse definitive boolean decisions from the same `filterModel` and `filterPromptHash`. API failures and indeterminate outputs are stored separately as retryable diagnostics and prevent `stats.complete=true`.
 `npm run validate:data` checks that `stats.decided` equals the number of `decisions`, `stats.related` equals the number of decisions with `related: true`, each decision has a boolean `related`, and fields such as `reason` / `rawResponse` / `parseSource` are strings when present. When `stats.complete=true`, `decisions` must cover every candidate in `raw-candidates.json`.
 
 ```json
@@ -184,6 +184,7 @@ Core analysis results. Structure:
 
 ```json
 {
+  "generation": 12,
   "timestamp": "2026-04-21T10:00:00+08:00",
   "previousTimestamp": "2026-04-20T10:00:00+08:00",
   "stats": {
@@ -281,6 +282,21 @@ Core analysis results. Structure:
           {"url": "https://arxiv.org/html/.../fig1.png", "mime": "image/png", "base64Chars": 120000}
         ],
         "selected": ["https://arxiv.org/html/.../fig1.png"]
+      },
+      "analysisManifest": {
+        "version": 1,
+        "stages": {
+          "imageDownload": {"status": "complete"},
+          "primaryAnalysis": {"status": "complete"},
+          "openSourceScan": {"status": "complete"},
+          "demoLinkScan": {"status": "complete"},
+          "revision": {"status": "complete"},
+          "tableRepair": {"status": "not_needed"},
+          "methodRepair": {"status": "complete"},
+          "structureRepair": {"status": "not_needed"},
+          "scoringAudit": {"status": "complete"},
+          "imageSupplement": {"status": "complete"}
+        }
       }
     }
   ]
@@ -295,10 +311,12 @@ Core analysis results. Structure:
 - `documentType` comes from machine-summary `document_type` and is controlled to 方法研究, 系统技术报告, 模型报告, 数据集与基准, 综述, 理论研究, or 应用研究. Common Chinese/English aliases are normalized and unknown values are rejected
 - `scoringRubricVersion: type-aware-v1` is written only for new analyses containing a valid `document_type`; historical results are not mislabeled
 - `selectedImageUrls` / `imageUrls` are the high-value figures confirmed by the secondary model and are stored in final body order. Generic `图N` alts without real captions are normalized to that order as well. `allImageUrls` is only the raw candidate list and must not be treated as publishable figures by default
-- **`parsed.score` is not the raw total score from the LLM under `## 评分`**. Instead, it is recalculated by extracting eight sub-items from `## 评分理由` (Innovation/2, Technical Rigor/1.5, Experimental Sufficiency/1.5, Clarity/1, Impact/1.5, Open Source/1.5, Reproducibility/0.5, Engineering/Practical Value/1.5), capping at 10, rounding to 0.1, and overriding the LLM's raw output
+- Root `generation` increments on each locked object write so concurrent updates can be detected and merged. Every mandatory version-1 `analysisManifest` stage must be terminal (`complete`, `not_needed`, `skipped`, `no_candidates`, or `no_high_value_images`) before the paper is successful; only a strict empty insertion plan produces `no_high_value_images`
+- Failed records may retain `analysisCheckpoint` and `analysisRecoveryImageManifest`. When an older successful body is still valid, `analysis` / `parsed` stay intact while recovery fields and `digestStatus.latestAttemptStatus: analysis_failed` are overlaid; recovery checkpoint fields are removed after eventual success
+- **`parsed.score` is not the raw total score from the LLM under `## 评分`**. It is recomputed only when all eight dimensions are complete and unique, denominators are correct, and values are finite and in range. Otherwise `scoreValidation` records a contract error and saving/publishing is blocked rather than treating missing dimensions as zero
 - `machineSummary` inside `parsed` is the parsed result of `## 机器摘要`; fields such as `rankBucket`, `innovationScore`, `technicalRigorScore`, etc. are also flattened to the top level of `parsed` for easier access
 - `npm run validate:data` checks document type, rubric version, all dimension ranges, and `parsed.score == min(sum of eight dimensions, 10)`
-- When parsing logic changes, the `parsed` cache is cleared and regenerated on the next publish
+- Before publishing, `analysis` is reparsed and compared with cached `parsed` data and the top-level rubric version. Mismatches block publishing; manual overrides require explicit type, source, reason, and allowed fields in `parsedOverride` and still must satisfy one-decimal values and fixed Open Source anchors
 
 ### 5.6 `data/current/analyzed.json`
 

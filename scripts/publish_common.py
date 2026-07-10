@@ -6,6 +6,7 @@ Paper Digest 发布公共模块 (Python)
 """
 
 import json
+import math
 import os
 import re
 import subprocess
@@ -15,6 +16,7 @@ from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from path_config import resolve_deep_analysis_result_path
+from project_env import build_child_process_env
 from utils import parse_analysis
 
 BJ_TZ = timezone(timedelta(hours=8))
@@ -22,6 +24,276 @@ BJ_TZ = timezone(timedelta(hours=8))
 
 class PublishLLMUnavailable(RuntimeError):
     """Raised when a required publish-time LLM review cannot run."""
+
+
+class PublishDataValidationError(ValueError):
+    """Raised when analysis data is unsafe or inconsistent for publishing."""
+
+
+SCORING_RUBRIC_VERSION = 'type-aware-v1'
+ALLOWED_DOCUMENT_TYPES = {
+    '方法研究', '系统技术报告', '模型报告', '数据集与基准',
+    '综述', '理论研究', '应用研究'
+}
+SCORING_DIMENSIONS = (
+    ('innovationScore', '创新性', 2.0),
+    ('technicalRigorScore', '技术严谨性', 1.5),
+    ('experimentalSufficiencyScore', '实验充分性', 1.5),
+    ('clarityScore', '清晰度', 1.0),
+    ('impactScore', '影响力', 1.5),
+    ('openSourceScore', '开源', 1.5),
+    ('reproducibilityScore', '可复现性', 0.5),
+    ('engineeringScore', '工程/实践价值', 1.5),
+)
+OPEN_SOURCE_SCORE_ANCHORS = {0.0, 0.2, 0.5, 1.0, 1.2, 1.5}
+SCORING_COMPARE_FIELDS = (
+    'score', 'documentType', 'scoringRubricVersion',
+    *(field for field, _label, _maximum in SCORING_DIMENSIONS),
+)
+MANUAL_OVERRIDE_ALLOWED_FIELDS = frozenset(SCORING_COMPARE_FIELDS)
+MANUAL_OVERRIDE_KEYS = frozenset({'type', 'source', 'reason', 'fields'})
+
+
+def _finite_score(value, field, source):
+    try:
+        score = float(value)
+    except (TypeError, ValueError) as exc:
+        raise PublishDataValidationError(f'{source} 的 {field} 不是有效数字') from exc
+    if not math.isfinite(score):
+        raise PublishDataValidationError(f'{source} 的 {field} 不是有限数字')
+    return score
+
+
+def _dimension_occurrences(scoring_reason, label):
+    pattern = re.compile(
+        r'^\s*(?:[-+*]\s*)?(?:\*\*)?'
+        + re.escape(label)
+        + r'(?:\*\*)?\s*(?=[（(:：/]|$)',
+        flags=re.MULTILINE,
+    )
+    return len(pattern.findall(scoring_reason or ''))
+
+
+def validate_publish_parsed(
+    parsed,
+    source='parsed',
+    require_reason_dimensions=False,
+    validate_tags=True,
+):
+    """Validate and normalize the complete type-aware scoring contract."""
+    if not isinstance(parsed, dict):
+        raise PublishDataValidationError(f'{source} 必须是对象')
+
+    normalized = dict(parsed)
+    document_type = normalized.get('documentType')
+    if document_type not in ALLOWED_DOCUMENT_TYPES:
+        raise PublishDataValidationError(f'{source} 缺少有效 documentType: {document_type!r}')
+    if normalized.get('scoringRubricVersion') != SCORING_RUBRIC_VERSION:
+        raise PublishDataValidationError(
+            f'{source} 的 scoringRubricVersion 必须为 {SCORING_RUBRIC_VERSION}'
+        )
+
+    dimension_total = 0.0
+    scoring_reason = normalized.get('scoringReason', '')
+    for field, label, maximum in SCORING_DIMENSIONS:
+        if field not in normalized or normalized.get(field) in (None, ''):
+            raise PublishDataValidationError(f'{source} 缺少评分维度 {field}')
+        score = _finite_score(normalized[field], field, source)
+        if score < 0 or score > maximum:
+            raise PublishDataValidationError(
+                f'{source} 的 {field}={score:g} 超出 0-{maximum:g}'
+            )
+        if abs(score * 10 - round(score * 10)) > 1e-9:
+            raise PublishDataValidationError(f'{source} 的 {field} 最多只能有一位小数')
+        if field == 'openSourceScore' and not any(
+            abs(score - anchor) <= 1e-9 for anchor in OPEN_SOURCE_SCORE_ANCHORS
+        ):
+            raise PublishDataValidationError(
+                f'{source} 的 openSourceScore={score:g} 不在固定锚点集合'
+            )
+        dimension_total += score
+        normalized[field] = f'{score:g}'
+        if require_reason_dimensions:
+            count = _dimension_occurrences(scoring_reason, label)
+            if count != 1:
+                raise PublishDataValidationError(
+                    f'{source} 的评分理由中 {label} 必须且只能出现一个维度条目，当前为 {count}'
+                )
+
+    total = _finite_score(normalized.get('score'), 'score', source)
+    if abs(total * 10 - round(total * 10)) > 1e-9:
+        raise PublishDataValidationError(f'{source} 的 score 最多只能有一位小数')
+    expected_total = min(10.0, dimension_total)
+    if abs(total - expected_total) > 0.051:
+        raise PublishDataValidationError(
+            f'{source} 总分 {total:g} 与八维合计 {expected_total:g} 不一致'
+        )
+    normalized['score'] = f'{total:.1f}'
+
+    if validate_tags:
+        tags = normalized.get('tags', [])
+        if tags is None:
+            tags = []
+        if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+            raise PublishDataValidationError(f'{source} 的 tags 必须是字符串数组')
+        normalized['tags'] = tags
+    return normalized
+
+
+def _scoring_mismatches(analysis_parsed, cached_parsed):
+    mismatches = []
+    for field in SCORING_COMPARE_FIELDS:
+        left = analysis_parsed.get(field)
+        right = cached_parsed.get(field)
+        if field == 'score' or field.endswith('Score'):
+            if abs(float(left) - float(right)) > 0.051:
+                mismatches.append(field)
+        elif left != right:
+            mismatches.append(field)
+    return mismatches
+
+
+def _validate_manual_override(paper, mismatches, paper_label):
+    override = paper.get('parsedOverride')
+    if not isinstance(override, dict):
+        raise PublishDataValidationError(
+            f'{paper_label} 的 analysis 与 parsed 在 {", ".join(mismatches)} 不一致，'
+            '必须提供 parsedOverride 人工覆盖来源'
+        )
+    unknown_keys = sorted(set(override) - MANUAL_OVERRIDE_KEYS)
+    if unknown_keys:
+        raise PublishDataValidationError(
+            f'{paper_label} 的 parsedOverride 包含未知字段: {", ".join(unknown_keys)}'
+        )
+    if override.get('type') != 'manual':
+        raise PublishDataValidationError(f'{paper_label} 的 parsedOverride.type 必须为 manual')
+    source = override.get('source')
+    reason = override.get('reason')
+    fields = override.get('fields')
+    if not isinstance(source, str) or not source.strip():
+        raise PublishDataValidationError(f'{paper_label} 的 parsedOverride.source 不能为空')
+    if not isinstance(reason, str) or not reason.strip():
+        raise PublishDataValidationError(f'{paper_label} 的 parsedOverride.reason 不能为空')
+    if not isinstance(fields, list) or any(not isinstance(field, str) for field in fields):
+        raise PublishDataValidationError(f'{paper_label} 的 parsedOverride.fields 必须是字符串数组')
+    if not fields or len(fields) != len(set(fields)):
+        raise PublishDataValidationError(
+            f'{paper_label} 的 parsedOverride.fields 必须非空且不能重复'
+        )
+    unknown_fields = sorted(set(fields) - MANUAL_OVERRIDE_ALLOWED_FIELDS)
+    if unknown_fields:
+        raise PublishDataValidationError(
+            f'{paper_label} 的 parsedOverride.fields 包含不允许覆盖的字段: '
+            f'{", ".join(unknown_fields)}'
+        )
+    missing_fields = sorted(set(mismatches) - set(fields))
+    extra_fields = sorted(set(fields) - set(mismatches))
+    if missing_fields or extra_fields:
+        details = []
+        if missing_fields:
+            details.append(f'未声明差异字段: {", ".join(missing_fields)}')
+        if extra_fields:
+            details.append(f'声明了无差异字段: {", ".join(extra_fields)}')
+        raise PublishDataValidationError(
+            f'{paper_label} 的 parsedOverride.fields 与实际差异不一致（{"；".join(details)}）'
+        )
+    return fields
+
+
+def resolve_publish_parsed(paper):
+    """Return publish-safe parsed data after cross-checking its analysis source."""
+    if not isinstance(paper, dict):
+        raise PublishDataValidationError('论文记录必须是对象')
+    paper_label = paper.get('arxivId') or paper.get('title') or '<unknown paper>'
+    analysis = paper.get('analysis')
+    if not isinstance(analysis, str) or not analysis.strip():
+        raise PublishDataValidationError(f'{paper_label} 缺少 analysis')
+    analysis_parsed = validate_publish_parsed(
+        parse_analysis(analysis),
+        f'{paper_label}.analysis',
+        require_reason_dimensions=True,
+    )
+
+    if 'parsed' not in paper or paper.get('parsed') is None:
+        raise PublishDataValidationError(f'{paper_label} 缺少 parsed 缓存，禁止未经一致性校验发布')
+    cached_parsed = validate_publish_parsed(
+        paper.get('parsed'),
+        f'{paper_label}.parsed',
+        validate_tags=False,
+    )
+
+    top_version = paper.get('scoringRubricVersion')
+    if top_version != SCORING_RUBRIC_VERSION:
+        raise PublishDataValidationError(
+            f'{paper_label} 顶层 scoringRubricVersion 必须为 {SCORING_RUBRIC_VERSION}'
+        )
+    if top_version != cached_parsed['scoringRubricVersion']:
+        raise PublishDataValidationError(f'{paper_label} 顶层与 parsed 评分版本不一致')
+
+    mismatches = _scoring_mismatches(analysis_parsed, cached_parsed)
+    if mismatches:
+        override_fields = _validate_manual_override(paper, mismatches, paper_label)
+    elif paper.get('parsedOverride') is not None:
+        _validate_manual_override(paper, [], paper_label)
+        raise PublishDataValidationError(f'{paper_label} 提供了无实际差异的 parsedOverride')
+    else:
+        override_fields = []
+
+    # analysis is always the publication baseline. The cache can contribute only
+    # explicitly declared, validated manual scoring overrides.
+    resolved = dict(analysis_parsed)
+    for field in override_fields:
+        resolved[field] = cached_parsed[field]
+    return validate_publish_parsed(
+        resolved,
+        f'{paper_label}.publishBaseline',
+        require_reason_dimensions=True,
+    )
+
+
+def normalize_publish_arxiv_id(arxiv_id):
+    """Normalize an arXiv ID for duplicate checks and stable filenames."""
+    value = str(arxiv_id or '').strip().lower()
+    value = re.sub(r'^https?://arxiv\.org/(?:abs|pdf)/', '', value)
+    value = re.sub(r'^arxiv:', '', value)
+    value = re.sub(r'\.pdf$', '', value)
+    value = re.sub(r'v\d+$', '', value)
+    if not value or not re.fullmatch(r'[a-z0-9][a-z0-9./-]*[a-z0-9]', value):
+        raise PublishDataValidationError(f'无效 arXiv ID: {arxiv_id!r}')
+    if '..' in value or value.startswith('/') or value.endswith('/'):
+        raise PublishDataValidationError(f'不安全 arXiv ID: {arxiv_id!r}')
+    return value
+
+
+def validate_papers_for_publish(papers):
+    """Validate every paper before creating any publish artifact."""
+    if not isinstance(papers, list):
+        raise PublishDataValidationError('待发布论文必须是数组')
+    validated = []
+    errors = []
+    seen_arxiv_ids = {}
+    for paper in papers:
+        try:
+            if not isinstance(paper, dict):
+                raise PublishDataValidationError('论文记录必须是对象')
+            normalized_id = normalize_publish_arxiv_id(paper.get('arxivId'))
+            if normalized_id in seen_arxiv_ids:
+                raise PublishDataValidationError(
+                    f'重复 normalized arXiv ID {normalized_id}: '
+                    f'{seen_arxiv_ids[normalized_id]!r} 与 {paper.get("arxivId")!r}'
+                )
+            seen_arxiv_ids[normalized_id] = paper.get('arxivId')
+            parsed = resolve_publish_parsed(paper)
+            normalized_paper = dict(paper)
+            normalized_paper['parsed'] = parsed
+            normalized_paper['normalizedArxivId'] = normalized_id
+            validated.append(normalized_paper)
+        except PublishDataValidationError as exc:
+            errors.append(str(exc))
+    if errors:
+        details = '\n'.join(f'- {error}' for error in errors)
+        raise PublishDataValidationError(f'发布数据预检失败（{len(errors)} 篇）:\n{details}')
+    return validated
 
 
 def get_claude_code_version():
@@ -32,7 +304,8 @@ def get_claude_code_version():
             capture_output=True,
             text=True,
             timeout=1,
-            check=False
+            check=False,
+            env=build_child_process_env(),
         )
         output = (result.stdout or result.stderr or '').strip()
         match = re.match(r'^(\d+\.\d+\.\d+)', output)
@@ -86,18 +359,37 @@ def build_publish_headers(api_type, api_key, claude_version=None):
     }
 
 
-def build_publish_payload(api_type, model, prompt, max_tokens, temperature):
+def build_publish_payload(api_type, model, prompt, max_tokens, temperature, images=None):
+    images = images or []
     if api_type == 'anthropic':
+        content = []
+        for image in images:
+            content.append({
+                'type': 'image',
+                'source': {
+                    'type': 'base64',
+                    'media_type': image['media_type'],
+                    'data': image['data'],
+                },
+            })
+        content.append({'type': 'text', 'text': prompt})
         return {
             'model': model,
             'max_tokens': max_tokens,
-            'messages': [{'role': 'user', 'content': prompt}]
+            'messages': [{'role': 'user', 'content': content if images else prompt}]
         }
+    content = [{'type': 'text', 'text': prompt}]
+    for image in images:
+        data_uri = f"data:{image['media_type']};base64,{image['data']}"
+        content.append({
+            'type': 'image_url',
+            'image_url': {'url': data_uri, 'detail': 'low'},
+        })
     return {
         'model': model,
         'max_tokens': max_tokens,
         'temperature': temperature,
-        'messages': [{'role': 'user', 'content': prompt}]
+        'messages': [{'role': 'user', 'content': content if images else prompt}]
     }
 
 
@@ -111,14 +403,44 @@ def parse_publish_response_text(api_type, data):
     return (data.get('choices', [{}])[0].get('message', {}).get('content') or '').strip()
 
 
-def call_publish_llm_api(prompt, max_tokens=800, temperature=0.1, required=False, context='LLM review', timeout=120, max_retries=5):
+def call_publish_llm_api(
+    prompt,
+    max_tokens=800,
+    temperature=0.1,
+    required=False,
+    context='LLM review',
+    timeout=120,
+    max_retries=5,
+    images=None,
+    use_secondary=False,
+):
     """调用发布阶段 LLM API。required=True 时，缺配置或连续失败会抛错。"""
-    api_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
-    endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', 'https://api.openai.com/v1')
-    model = os.environ.get('PAPER_ANALYZER_MODEL', 'gpt-4o')
+    primary_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
+    primary_endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', '')
+    if use_secondary:
+        api_key = os.environ.get('PAPER_ANALYZER_SECONDARY_API_KEY', '') or primary_key
+        endpoint = os.environ.get('PAPER_ANALYZER_SECONDARY_ENDPOINT', '') or primary_endpoint
+        model = os.environ.get('PAPER_ANALYZER_SECONDARY_MODEL', '')
+        config_names = (
+            ('PAPER_ANALYZER_SECONDARY_API_KEY 或 PAPER_ANALYZER_API_KEY', api_key),
+            ('PAPER_ANALYZER_SECONDARY_ENDPOINT 或 PAPER_ANALYZER_ENDPOINT', endpoint),
+            ('PAPER_ANALYZER_SECONDARY_MODEL', model),
+        )
+    else:
+        api_key = primary_key
+        endpoint = primary_endpoint
+        model = os.environ.get('PAPER_ANALYZER_MODEL', '')
+        config_names = (
+            ('PAPER_ANALYZER_API_KEY', api_key),
+            ('PAPER_ANALYZER_ENDPOINT', endpoint),
+            ('PAPER_ANALYZER_MODEL', model),
+        )
 
-    if not api_key:
-        message = f'未配置 PAPER_ANALYZER_API_KEY，无法执行 {context}'
+    missing = [
+        name for name, value in config_names if not value
+    ]
+    if missing:
+        message = f"未配置 {', '.join(missing)}，无法执行 {context}"
         if required:
             raise PublishLLMUnavailable(message)
         print(f'  ⚠️  {message}，跳过')
@@ -127,17 +449,19 @@ def call_publish_llm_api(prompt, max_tokens=800, temperature=0.1, required=False
     api_type = detect_publish_api_type(endpoint, model)
     api_url = build_publish_api_url(api_type, endpoint)
     headers = build_publish_headers(api_type, api_key)
-    payload = build_publish_payload(api_type, model, prompt, max_tokens, temperature)
+    payload = build_publish_payload(
+        api_type, model, prompt, max_tokens, temperature, images=images
+    )
 
     last_error = None
     for attempt in range(max_retries):
         try:
             import requests
-            session = requests.Session()
-            session.trust_env = False
-            resp = session.post(api_url, json=payload, headers=headers, timeout=timeout)
-            resp.raise_for_status()
-            content = parse_publish_response_text(api_type, resp.json())
+            with requests.Session() as session:
+                session.trust_env = False
+                resp = session.post(api_url, json=payload, headers=headers, timeout=timeout)
+                resp.raise_for_status()
+                content = parse_publish_response_text(api_type, resp.json())
             if content:
                 return content
             last_error = RuntimeError('LLM 返回内容为空')
@@ -165,6 +489,109 @@ def is_blocking_review_issue(issue):
 
 def count_blocking_review_issues(issues):
     return sum(1 for issue in issues if is_blocking_review_issue(issue))
+
+
+def review_protocol_failure(context, message):
+    """Build a blocking issue for malformed or indeterminate review output."""
+    return False, [{
+        'severity': 'error',
+        'description': f'{context} 协议校验失败：{message}',
+    }]
+
+
+def validate_review_payload(review, *, required=False, context='LLM review', issue_fields=()):
+    """Validate structured review output; required mode fails closed."""
+    if not isinstance(review, dict):
+        if required:
+            return review_protocol_failure(context, '顶层必须是 JSON 对象')
+        return True, []
+
+    if 'passed' not in review or not isinstance(review.get('passed'), bool):
+        if required:
+            return review_protocol_failure(context, '缺少布尔字段 passed')
+        passed = bool(review.get('passed', True))
+    else:
+        passed = review['passed']
+
+    issues = review.get('issues')
+    if not isinstance(issues, list):
+        if required:
+            return review_protocol_failure(context, '缺少数组字段 issues')
+        issues = []
+
+    normalized_issues = []
+    allowed_severities = {'error', 'warning', 'info'}
+    required_issue_fields = {'severity', 'description', *issue_fields}
+    for index, issue in enumerate(issues):
+        if not isinstance(issue, dict):
+            if required:
+                return review_protocol_failure(context, f'issues[{index}] 必须是对象')
+            normalized_issues.append({
+                'severity': 'error',
+                'description': str(issue),
+            })
+            continue
+        missing = sorted(field for field in required_issue_fields if field not in issue)
+        if missing and required:
+            return review_protocol_failure(
+                context,
+                f'issues[{index}] 缺少字段: {", ".join(missing)}',
+            )
+        severity = str(issue.get('severity', 'warning')).lower()
+        if severity not in allowed_severities:
+            if required:
+                return review_protocol_failure(
+                    context,
+                    f'issues[{index}].severity 非法: {severity!r}',
+                )
+            severity = 'warning'
+        description = issue.get('description')
+        if required and (not isinstance(description, str) or not description.strip()):
+            return review_protocol_failure(
+                context,
+                f'issues[{index}].description 必须是非空字符串',
+            )
+        if required and re.search(
+            r'无法判断|不能判断|无法确认|不确定|cannot\s+determine|unable\s+to\s+determine|uncertain|indeterminate',
+            description or '',
+            flags=re.IGNORECASE,
+        ):
+            return review_protocol_failure(
+                context,
+                f'issues[{index}] 表示无法确定审查结论',
+            )
+        if required and 'type' in issue_fields and (
+            not isinstance(issue.get('type'), str) or not issue.get('type', '').strip()
+        ):
+            return review_protocol_failure(
+                context,
+                f'issues[{index}].type 必须是非空字符串',
+            )
+        if required and 'auto_fixable' in issue_fields and not isinstance(issue.get('auto_fixable'), bool):
+            return review_protocol_failure(
+                context,
+                f'issues[{index}].auto_fixable 必须是布尔值',
+            )
+        if required and 'fix_instruction' in issue_fields and not isinstance(issue.get('fix_instruction'), str):
+            return review_protocol_failure(
+                context,
+                f'issues[{index}].fix_instruction 必须是字符串',
+            )
+        normalized = dict(issue)
+        normalized['severity'] = severity
+        normalized['description'] = str(description or '')
+        normalized_issues.append(normalized)
+
+    has_error = any(issue['severity'] == 'error' for issue in normalized_issues)
+    if not passed and not has_error:
+        normalized_issues.append({
+            'severity': 'error',
+            'description': f'{context} 返回 passed=false，但没有提供 error 级原因',
+        })
+        has_error = True
+    if passed and has_error:
+        passed = False
+    return passed, normalized_issues
 
 
 def load_papers(data_file=None):
@@ -361,19 +788,21 @@ def score_and_sort(papers):
     """
     解析每篇论文的分析结果，按评分降序排列。
     返回 [(score, paper, parsed), ...]，未评分的排在最后。
-    优先使用已解析好的 parsed 数据，避免重新解析覆盖手动修正。
+    发布排序前强制校验 analysis、parsed、八维评分和版本一致性。
     """
     scored = []
     unscored = []
     for p in papers:
-        pa = p.get('parsed') or parse_analysis(p.get('analysis', ''))
+        pa = resolve_publish_parsed(p)
+        normalized_paper = dict(p)
+        normalized_paper['parsed'] = pa
         if pa and pa.get('score'):
             try:
-                scored.append((float(pa['score']), p, pa))
+                scored.append((float(pa['score']), normalized_paper, pa))
             except (ValueError, TypeError):
-                unscored.append(p)
+                unscored.append(normalized_paper)
         else:
-            unscored.append(p)
+            unscored.append(normalized_paper)
     scored.sort(key=lambda x: -x[0])
     return scored, unscored
 
@@ -489,13 +918,15 @@ def build_paper_meta(pa, aurl=''):
         bits.append(f'文档类型：{pa["documentType"]}')
     if pa.get('confidence'):
         bits.append(f'评分置信度：{pa["confidence"]}')
-    if pa.get('primaryTaskTag'):
-        bits.append(pa['primaryTaskTag'])
-    if pa.get('primaryMethodTag'):
-        bits.append(pa['primaryMethodTag'])
+    primary_tags = []
+    for key in ('primaryTaskTag', 'primaryMethodTag'):
+        tag = pa.get(key)
+        if tag and tag not in primary_tags:
+            primary_tags.append(tag)
+            bits.append(tag)
 
     extra_tags = [t for t in pa.get('tags', [])
-                  if t not in {pa.get('primaryTaskTag'), pa.get('primaryMethodTag')}]
+                  if t not in set(primary_tags)]
     if extra_tags:
         bits.append(' '.join(extra_tags[:2]))
     if aurl:

@@ -8,12 +8,46 @@ setupScriptLogging(__filename);
  */
 
 const fs = require('fs');
-const { loadEnvFile, writeFileAtomic, readJsonSafe, getBeijingISOString, normalizedId } = require('./utils.js');
-const { analyzeBatch } = require('./analysis-engine.js');
+const { loadEnvFile, getBeijingISOString, getBeijingDateString, getRecordDate, normalizedId } = require('./utils.js');
+const {
+    analyzeBatch,
+    readJsonFileStrict,
+    updateJsonFileLocked,
+    mergePapersById,
+    isSuccessfulAnalysisRecord,
+    getAnalysisRunStatus,
+    getAnalysisExitCode
+} = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses } = require('./digest-status.js');
 const Config = require('./config.js');
 
 loadEnvFile();
+
+function validateCompleteFilteredForToday(filteredData, today) {
+    if (!filteredData || filteredData.status !== 'complete' || !Array.isArray(filteredData.papers)) {
+        throw new Error('筛选结果未完成或 papers 字段无效，拒绝启动深度分析');
+    }
+    const recordDate = getRecordDate(filteredData);
+    if (recordDate !== today) {
+        throw new Error(`筛选结果不是当日批次: 期望 ${today}，实际 ${recordDate || '未知'}`);
+    }
+    return filteredData;
+}
+
+function validateDeepAnalysisInput(existingData, filteredData, today) {
+    if (getRecordDate(existingData) !== today) {
+        throw new Error(`分析结果不是当日批次: 期望 ${today}，实际 ${getRecordDate(existingData) || '未知'}`);
+    }
+    const existingPapers = Array.isArray(existingData) ? existingData : (existingData?.papers || []);
+    const expectedIds = new Set(filteredData.papers.map(normalizedId).filter(Boolean));
+    const actualIds = new Set(existingPapers.map(normalizedId).filter(Boolean));
+    const missing = [...expectedIds].filter(id => !actualIds.has(id));
+    const unexpected = [...actualIds].filter(id => !expectedIds.has(id));
+    if (missing.length > 0 || unexpected.length > 0) {
+        throw new Error(`分析结果与当日筛选结果不一致: 缺少 ${missing.length} 篇，多出 ${unexpected.length} 篇`);
+    }
+    return existingData;
+}
 
 async function runDeepAnalysis() {
     console.log('=== 仅运行深度分析 ===\n');
@@ -21,40 +55,52 @@ async function runDeepAnalysis() {
     const currentPath = Config.FILES.deepAnalysisResult;
     const legacyPath = Config.FILES.deepAnalysisResultLegacy;
     const filteredPath = Config.FILES.filteredPapers;
+    const today = getBeijingDateString();
+    const filteredData = validateCompleteFilteredForToday(readJsonFileStrict(filteredPath), today);
+
     const resultPath = fs.existsSync(currentPath) || !fs.existsSync(legacyPath) ? currentPath : legacyPath;
 
     let existingData = null;
     if (fs.existsSync(resultPath)) {
-        existingData = readJsonSafe(resultPath, null);
-        if (!existingData) {
-            console.error('❌ 读取分析结果文件失败，文件可能损坏');
-            process.exit(1);
-        }
-    } else if (fs.existsSync(filteredPath)) {
-        const filteredData = readJsonSafe(filteredPath, null);
-        const filteredPapers = filteredData && Array.isArray(filteredData.papers) ? filteredData.papers : [];
+        existingData = validateDeepAnalysisInput(readJsonFileStrict(resultPath), filteredData, today);
+    } else {
+        const filteredPapers = filteredData.papers;
         existingData = {
             timestamp: getBeijingISOString(),
             source: filteredPath,
-            stats: filteredData?.stats || {},
+            stats: filteredData.stats || {},
             papers: filteredPapers
         };
-        writeFileAtomic(resultPath, JSON.stringify(existingData, null, 2));
+        existingData = updateJsonFileLocked(resultPath, () => existingData);
         console.log(`📄 未找到分析结果，已从筛选结果初始化: ${filteredPath}`);
-    } else {
-        console.error('❌ 找不到分析结果文件或筛选结果文件，请先运行 full-fetch.js 完成筛选');
-        process.exit(1);
     }
 
     const papers = Array.isArray(existingData) ? existingData : (existingData.papers || []);
-    const analyzedCount = papers.filter(p => p.analysis).length;
+    const analyzedCount = papers.filter(isSuccessfulAnalysisRecord).length;
     console.log(`📊 读取到 ${papers.length} 篇筛选后的论文 (已分析: ${analyzedCount})\n`);
 
-    const notAnalyzed = papers.filter(p => !p.analysis);
+    const notAnalyzed = papers.filter(p => !isSuccessfulAnalysisRecord(p));
     if (notAnalyzed.length === 0) {
+        updateJsonFileLocked(resultPath, current => ({
+            ...(!Array.isArray(current) && current ? current : {}),
+            papers: Array.isArray(current) ? current : (current?.papers || []),
+            deepAnalysisCompletedAt: getBeijingISOString(),
+            stats: { ...(!Array.isArray(current) ? current?.stats : {}), analysisStatus: 'complete', remainingFailed: 0 }
+        }));
         console.log('✅ 所有论文已分析完成！');
-        return;
+        return { status: 'complete', exitCode: 0, stats: { success: 0, failed: 0, skipped: papers.length } };
     }
+
+    updateJsonFileLocked(resultPath, current => {
+        const payload = {
+            ...(!Array.isArray(current) && current ? current : {}),
+            papers: Array.isArray(current) ? current : (current?.papers || []),
+            deepAnalysisLastAttemptAt: getBeijingISOString(),
+            stats: { ...(!Array.isArray(current) ? current?.stats : {}), analysisStatus: 'running' }
+        };
+        delete payload.deepAnalysisCompletedAt;
+        return payload;
+    });
 
     const { stats } = await analyzeBatch(notAnalyzed, {
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
@@ -74,68 +120,65 @@ async function runDeepAnalysis() {
             }
         },
         onSave: async (results, saveStats) => {
-            // results 里已经是 paper 对象（analysis-engine.js 解包过 r.result）
-            const resultMap = new Map();
-            for (const r of results) {
-                if (!r) continue;
-                const key = normalizedId(r);
-                if (key) resultMap.set(key, r);
-            }
-            for (let i = 0; i < papers.length; i++) {
-                const key = normalizedId(papers[i]);
-                if (resultMap.has(key)) {
-                    papers[i] = { ...papers[i], ...resultMap.get(key) };
-                }
-            }
-            // 直接写入文件，不走 createFileSaver 的合并逻辑
-            const output = {
-                ...existingData,
+            const processed = saveStats.success + saveStats.failed;
+            const progressStatus = processed < notAnalyzed.length
+                ? 'running'
+                : getAnalysisRunStatus(saveStats);
+            const output = updateJsonFileLocked(resultPath, current => ({
+                ...(!Array.isArray(current) && current ? current : {}),
                 lastUpdated: getBeijingISOString(),
-                papers: papers,
-                stats: { ...existingData?.stats, ...saveStats }
-            };
-            writeFileAtomic(resultPath, JSON.stringify(output, null, 2));
+                papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), results.filter(Boolean), { preserveSuccessfulAnalysis: true }),
+                stats: { ...(!Array.isArray(current) ? current?.stats : {}), ...saveStats, analysisStatus: progressStatus }
+            }));
+            papers.splice(0, papers.length, ...(output.papers || []));
             const digestStatus = updateAnalysisDigestStatuses(results, {
-                batchDate: (existingData?.timestamp || getBeijingISOString()).slice(0, 10)
+                batchDate: today
             });
             const statusNote = digestStatus.updated > 0 ? `，papers.json 状态 ${digestStatus.updated} 篇` : '';
             console.log(`  💾 已保存 (${saveStats.success + saveStats.failed}/${notAnalyzed.length})${statusNote}`);
         }
     });
 
-    // 最终保存
-    const isLegacyArray = Array.isArray(existingData);
-    const finalPayload = isLegacyArray
-        ? {
-            papers,
-            deepAnalysisCompletedAt: getBeijingISOString(),
+    const finalPayload = updateJsonFileLocked(resultPath, current => {
+        const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
+        const remaining = currentPapers.filter(p => !isSuccessfulAnalysisRecord(p)).length;
+        const status = getAnalysisRunStatus(stats, remaining);
+        const payload = {
+            ...(!Array.isArray(current) && current ? current : {}),
+            papers: currentPapers,
+            deepAnalysisLastAttemptAt: getBeijingISOString(),
             stats: {
+                ...(!Array.isArray(current) ? current?.stats : {}),
                 analyzedSuccess: stats.success,
-                analyzedFailed: stats.failed
-            }
-        }
-        : {
-            ...existingData,
-            papers,
-            deepAnalysisCompletedAt: getBeijingISOString(),
-            stats: {
-                ...existingData.stats,
-                analyzedSuccess: stats.success,
-                analyzedFailed: stats.failed
+                analyzedFailed: stats.failed,
+                remainingFailed: remaining,
+                analysisStatus: status
             }
         };
-    writeFileAtomic(resultPath, JSON.stringify(finalPayload, null, 2));
+        if (status === 'complete') payload.deepAnalysisCompletedAt = getBeijingISOString();
+        else delete payload.deepAnalysisCompletedAt;
+        return payload;
+    });
+    const remaining = finalPayload.papers.filter(p => !isSuccessfulAnalysisRecord(p)).length;
+    const status = getAnalysisRunStatus(stats, remaining);
 
-    console.log('\n✅ 深度分析完成！');
+    console.log(`\n${status === 'complete' ? '✅' : '⚠️'} 深度分析状态: ${status}`);
     console.log(`📊 统计:`);
     console.log(`  - 总计: ${papers.length} 篇`);
     console.log(`  - 成功: ${stats.success} 篇`);
     console.log(`  - 失败: ${stats.failed} 篇`);
     console.log(`  - 跳过: ${stats.skipped} 篇`);
     console.log(`💾 结果已保存到: ${resultPath}`);
+    return { status, exitCode: getAnalysisExitCode(status), stats, remaining };
 }
 
-runDeepAnalysis().catch(err => {
-    console.error(`❌ 失败: ${err.message}`);
-    process.exit(1);
-});
+if (require.main === module) {
+    runDeepAnalysis().then(result => {
+        process.exitCode = result.exitCode;
+    }).catch(err => {
+        console.error(`❌ 失败: ${err.message}`);
+        process.exitCode = 1;
+    });
+}
+
+module.exports = { runDeepAnalysis, validateCompleteFilteredForToday, validateDeepAnalysisInput };

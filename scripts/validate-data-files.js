@@ -9,12 +9,19 @@ const {
     readJsonSafe,
     normalizedId,
     DOCUMENT_TYPES,
-    SCORING_RUBRIC_VERSION
+    SCORING_RUBRIC_VERSION,
+    normalizeScoreToOneDecimal,
+    isOpenSourceScoreAnchor,
+    OPEN_SOURCE_SCORE_ANCHORS
 } = require('./utils.js');
 
 const ALLOWED_DIGEST_STATUSES = new Set(['seen', 'pending_analysis', 'analyzed', 'analysis_failed']);
 const ALLOWED_ANALYSIS_ATTEMPT_STATUSES = new Set(['analyzed', 'analysis_failed']);
 const ALLOWED_FILTERED_STATUSES = new Set(['filtering', 'filter_complete', 'complete']);
+const ALLOWED_RECOVERY_STAGE_STATUSES = new Set([
+    'pending', 'complete', 'not_needed', 'skipped', 'no_candidates',
+    'no_high_value_images', 'transient_failure', 'invalid_output', 'contract_rejected'
+]);
 const DEFAULT_FILTER_DECISIONS_FILE = Config.FILES.filterDecisions;
 const ALLOWED_DOCUMENT_TYPES = new Set(DOCUMENT_TYPES);
 const SCORE_DIMENSIONS = Object.freeze({
@@ -30,6 +37,14 @@ const SCORE_DIMENSIONS = Object.freeze({
 
 function addIssue(issues, file, message) {
     issues.push(`${path.basename(file)}: ${message}`);
+}
+
+function numericScore(value) {
+    if (typeof value === 'number') {
+        return Number.isFinite(value) && Number.isInteger(value * 10) ? value : Number.NaN;
+    }
+    if (typeof value !== 'string' || !/^-?\d+(?:\.\d)?$/.test(value.trim())) return Number.NaN;
+    return Number(value);
 }
 
 function ensurePaperId(paper, file, index, issues) {
@@ -96,6 +111,41 @@ function isPlainObject(value) {
 function validateNonNegativeInteger(filePath, fieldName, value, issues) {
     if (value !== undefined && (!Number.isInteger(value) || value < 0)) {
         addIssue(issues, filePath, `${fieldName} 必须是非负整数`);
+    }
+}
+
+function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analysisCheckpoint) {
+    const prefix = `papers[${paperIndex}].analysisManifest`;
+    if (!isPlainObject(manifest)) {
+        addIssue(issues, filePath, `${prefix} 必须是对象`);
+        return;
+    }
+    if (manifest.version !== 1) addIssue(issues, filePath, `${prefix}.version 必须为 1`);
+    if (!isPlainObject(manifest.stages)) {
+        addIssue(issues, filePath, `${prefix}.stages 必须是对象`);
+        return;
+    }
+    let hasRecoverableFailure = false;
+    for (const [stage, state] of Object.entries(manifest.stages)) {
+        if (!isPlainObject(state)) {
+            addIssue(issues, filePath, `${prefix}.stages.${stage} 必须是对象`);
+            continue;
+        }
+        if (!ALLOWED_RECOVERY_STAGE_STATUSES.has(state.status)) {
+            addIssue(issues, filePath, `${prefix}.stages.${stage}.status 非法: ${state.status}`);
+        }
+        if (['pending', 'transient_failure', 'invalid_output', 'contract_rejected'].includes(state.status)) {
+            hasRecoverableFailure = true;
+        }
+        if (state.updatedAt !== undefined && typeof state.updatedAt !== 'string') {
+            addIssue(issues, filePath, `${prefix}.stages.${stage}.updatedAt 必须是字符串`);
+        }
+        if (state.error !== undefined && typeof state.error !== 'string') {
+            addIssue(issues, filePath, `${prefix}.stages.${stage}.error 必须是字符串`);
+        }
+    }
+    if (hasRecoverableFailure && typeof analysisCheckpoint !== 'string') {
+        addIssue(issues, filePath, `${prefix} 存在可恢复失败阶段但缺少 analysisCheckpoint`);
     }
 }
 
@@ -236,14 +286,14 @@ function validatePaperListFile(filePath, options = {}) {
         }
         ensurePaperId(paper, filePath, index, issues);
         if (options.deepAnalysis) {
-            if (paper.parsed?.score !== undefined) {
-                const score = Number(paper.parsed.score);
-                if (!Number.isFinite(score) || score < 0 || score > 10) {
-                    addIssue(issues, filePath, `papers[${index}] parsed.score 非法: ${paper.parsed.score}`);
-                }
-            }
             const parsed = paper.parsed;
-            if (parsed && typeof parsed === 'object') {
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                addIssue(issues, filePath, `papers[${index}] 缺少有效 parsed 评分缓存`);
+            } else {
+                const score = numericScore(parsed.score);
+                if (parsed.score === undefined || parsed.score === '' || !Number.isFinite(score) || score < 0 || score > 10) {
+                    addIssue(issues, filePath, `papers[${index}] parsed.score 非法: ${parsed.score}`);
+                }
                 if (parsed.documentType && !ALLOWED_DOCUMENT_TYPES.has(parsed.documentType)) {
                     addIssue(issues, filePath, `papers[${index}] parsed.documentType 非法: ${parsed.documentType}`);
                 }
@@ -256,20 +306,33 @@ function validatePaperListFile(filePath, options = {}) {
 
                 const dimensionValues = [];
                 for (const [field, maxScore] of Object.entries(SCORE_DIMENSIONS)) {
-                    if (parsed[field] === undefined || parsed[field] === '') continue;
-                    const value = Number(parsed[field]);
+                    if (parsed[field] === undefined || parsed[field] === '') {
+                        addIssue(issues, filePath, `papers[${index}] 缺少 parsed.${field}`);
+                        continue;
+                    }
+                    const value = numericScore(parsed[field]);
                     if (!Number.isFinite(value) || value < 0 || value > maxScore) {
                         addIssue(issues, filePath, `papers[${index}] parsed.${field} 非法: ${parsed[field]}`);
+                    } else if (field === 'openSourceScore' && !isOpenSourceScoreAnchor(value)) {
+                        addIssue(issues, filePath, `papers[${index}] parsed.${field} 非法，必须使用固定锚点 ${OPEN_SOURCE_SCORE_ANCHORS.join('/')}`);
                     } else {
-                        dimensionValues.push(value);
+                        dimensionValues.push(normalizeScoreToOneDecimal(value));
                     }
                 }
-                if (dimensionValues.length === Object.keys(SCORE_DIMENSIONS).length && parsed.score !== undefined) {
-                    const expected = Math.round(Math.min(10, dimensionValues.reduce((sum, value) => sum + value, 0)) * 10) / 10;
-                    const actual = Math.round(Number(parsed.score) * 10) / 10;
-                    if (Number.isFinite(actual) && actual !== expected) {
+                if (dimensionValues.length === Object.keys(SCORE_DIMENSIONS).length && Number.isFinite(score)) {
+                    const expected = normalizeScoreToOneDecimal(Math.min(10, dimensionValues.reduce((sum, value) => sum + value, 0)));
+                    const actual = normalizeScoreToOneDecimal(score);
+                    if (actual !== expected) {
                         addIssue(issues, filePath, `papers[${index}] parsed.score (${actual}) 与八项合计封顶结果 (${expected}) 不一致`);
                     }
+                }
+
+                const openSourceScore = numericScore(parsed.openSourceScore);
+                const hasResource = [parsed.hasCode, parsed.hasModel, parsed.hasDataset]
+                    .some(value => value === '是' || value === 'yes');
+                if (parsed.documentType !== '理论研究'
+                    && Number.isFinite(openSourceScore) && openSourceScore >= 1 && !hasResource) {
+                    addIssue(issues, filePath, `papers[${index}] parsed.openSourceScore=${openSourceScore} 但无代码、模型或数据资源`);
                 }
             }
             if (paper.scoringRubricVersion && paper.scoringRubricVersion !== SCORING_RUBRIC_VERSION) {
@@ -282,6 +345,12 @@ function validatePaperListFile(filePath, options = {}) {
             }
             if (paper.imageManifest !== undefined && paper.imageManifest !== null && typeof paper.imageManifest !== 'object') {
                 addIssue(issues, filePath, `papers[${index}].imageManifest 必须是对象或 null`);
+            }
+            if (paper.analysisManifest !== undefined) {
+                validateAnalysisManifest(filePath, paper.analysisManifest, index, issues, paper.analysisCheckpoint);
+            }
+            if (paper.analysisCheckpoint !== undefined && typeof paper.analysisCheckpoint !== 'string') {
+                addIssue(issues, filePath, `papers[${index}].analysisCheckpoint 必须是字符串`);
             }
         }
     });

@@ -6,14 +6,55 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DATA_DIR="$(dirname "$SCRIPT_DIR")/data"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+DATA_DIR="$PROJECT_ROOT/data"
 ARCHIVE_DIR="$DATA_DIR/archive"
+LOGS_DIR="$PROJECT_ROOT/logs"
+
+# 备份脚本及其外部命令使用最小环境，不继承项目凭据、代理或其他工具凭据。
+for _env_name in $(compgen -e); do
+    case "$_env_name" in
+        PATH|HOME|TMPDIR|LANG|LC_*|TZ|USER|LOGNAME|SHELL|TERM|__CF_USER_TEXT_ENCODING) ;;
+        *) unset "$_env_name" ;;
+    esac
+done
+
+# 只读取项目根 .env 中的日志禁用开关，不接受外层 shell 同名变量。
+PD_DISABLE_FILE_LOGS=""
+PAPER_DIGEST_DISABLE_FILE_LOGS=""
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    chmod 600 "$PROJECT_ROOT/.env"
+    while IFS='=' read -r key value; do
+        key="$(printf '%s' "$key" | tr -d '[:space:]')"
+        value="$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^['\"'\'']//' -e 's/['\"'\'']$//')"
+        case "$key" in
+            PD_DISABLE_FILE_LOGS) PD_DISABLE_FILE_LOGS="$value" ;;
+            PAPER_DIGEST_DISABLE_FILE_LOGS) PAPER_DIGEST_DISABLE_FILE_LOGS="$value" ;;
+        esac
+    done < "$PROJECT_ROOT/.env"
+fi
+
+if [ "$PD_DISABLE_FILE_LOGS" != "1" ] && [ "$PAPER_DIGEST_DISABLE_FILE_LOGS" != "1" ]; then
+    umask 077
+    mkdir -p "$LOGS_DIR"
+    LOG_FILE="$LOGS_DIR/backup-data-$(date +%Y%m%d-%H%M%S)-$$.log"
+    exec 3>&1 4>&2
+    exec > "$LOG_FILE" 2>&1
+    trap '_status=$?; trap - EXIT; cat "$LOG_FILE" >&3; exit "$_status"' EXIT
+    echo "[log] 输出文件: $LOG_FILE"
+fi
 
 RESULT_FILE="$DATA_DIR/current/deep-analysis-result.json"
 PAPERS_FILE="$DATA_DIR/current/papers.json"
 
 # 可选标签
 LABEL="${1:-$(date +%Y%m%d-%H%M%S)}"
+case "$LABEL" in
+    ''|*/*|*'..'*)
+        echo "错误: 备份标签不能为空、包含斜杠或包含 '..'" >&2
+        exit 2
+        ;;
+esac
 
 mkdir -p "$ARCHIVE_DIR"
 
@@ -26,7 +67,7 @@ echo ""
 _count_papers() {
     local file="$1"
     if [ -f "$file" ]; then
-        python3 -c "import json,sys; d=json.load(open('$file')); print(len(d.get('papers', d if isinstance(d, list) else [])))" 2>/dev/null || echo "?"
+        python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(len(d.get("papers", d if isinstance(d, list) else [])))' "$file" 2>/dev/null || echo "?"
     else
         echo "0"
     fi

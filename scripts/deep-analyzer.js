@@ -16,10 +16,18 @@ const {
     parseResponseText,
     requestJson,
     loadPrompt,
-    normalizeDocumentType
+    normalizeDocumentType,
+    normalizeScoreToOneDecimal,
+    isOpenSourceScoreAnchor,
+    OPEN_SOURCE_SCORE_ANCHORS,
+    getBeijingISOString
 } = require('./utils.js');
 const {
     getMissingRequiredSections,
+    getDuplicateRequiredSections,
+    validateTopLevelSectionContract,
+    validateMachineSummaryContract,
+    validateTagSectionContract,
     getInvalidAnalysisReason
 } = require('./analysis-contract.js');
 loadEnvFile();
@@ -77,14 +85,64 @@ const SCORING_DIMENSIONS = Object.freeze([
     { key: 'engineering', machineKey: 'engineering_score', label: '工程/实践价值', max: 1.5 }
 ]);
 
-const FORBIDDEN_SCORING_REASON_PATTERNS = Object.freeze({
-    technicalRigor: /不开源|闭源|无法复现|复现性|超参数|训练配置|硬件配置|模型参数|参数量|源码|代码未提供|权重未提供/,
-    experimentalSufficiency: /不开源|闭源|无法复现|复现性|超参数|训练配置|硬件配置|源码|代码未提供|权重未提供/,
-    clarity: /不开源|闭源|无法复现|复现性|超参数|训练配置|硬件配置|源码|代码未提供|权重未提供/,
-    impact: /不开源|闭源|开源程度|开源状态/,
-    openSource: /复现性|无法复现|复现步骤/,
-    reproducibility: /不开源|闭源|开源程度|开源状态|在线演示/
+const TYPE_AWARE_EVIDENCE_GUIDES = Object.freeze({
+    '方法研究': '代表性基线、消融、跨数据集泛化、统计检验、误差分析，以及组件级声明对应的因果证据。',
+    '系统技术报告': '端到端质量、延迟、吞吐、成本、规模、压力测试、公平竞品对比、失败案例与部署约束。',
+    '模型报告': '端到端能力、训练与推理规模、质量/延迟/成本权衡、公平竞品对比、安全或失败案例。',
+    '数据集与基准': '覆盖范围、标注质量、泄漏控制、协议设计、代表性基线与数据治理证据。',
+    '综述': '检索方法、覆盖范围、分类体系、比较框架、综合洞察与遗漏分析。',
+    '理论研究': '证明、假设、边界条件、反例，以及理论声明与实验验证之间的对应关系。',
+    '应用研究': '真实场景、外部验证、用户研究、部署约束、失败案例与实际效益。'
 });
+
+function getTypeAwareEvidenceGuide(documentType) {
+    return TYPE_AWARE_EVIDENCE_GUIDES[documentType]
+        || '先依据主要贡献形态确定文档类型，再使用对应证据标准；不得机械套用方法论文的消融要求。';
+}
+
+function buildTypeAwareSourceContext(analysis, sourceText, maxChars = 120000) {
+    const documentType = parseAnalysis(analysis)?.documentType || '待最终确认';
+    return `当前文档类型：${documentType}\n适用证据标准：${getTypeAwareEvidenceGuide(documentType)}\n\n论文原文证据：\n${String(sourceText || '').slice(0, maxChars)}`;
+}
+
+const AUDIT_TOP_LEVEL_KEYS = Object.freeze(['documentType', 'confidence', 'dimensions']);
+const AUDIT_ITEM_KEYS = Object.freeze(['score', 'reason']);
+const OPEN_SOURCE_DEFICIT = /(?:不开源|闭源|未开源|没有开源|代码未提供|权重未提供|数据集未提供|缺少(?:代码|权重|数据集|核心产物)|(?:代码|权重|数据集|核心产物)(?:未|没有|尚未)公开)/;
+const REPRODUCIBILITY_DEFICIT = /(?:无法复现|不可复现|缺少|未提供|未披露|没有|不足|不完整|不清楚)[^.。；;]{0,18}(?:超参数|训练配置|硬件配置|复现步骤|实现细节)|(?:超参数|训练配置|硬件配置|复现步骤|实现细节)[^.。；;]{0,18}(?:缺失|不足|不完整|未提供|未披露|不清楚)/;
+
+const FORBIDDEN_SCORING_REASON_PATTERNS = Object.freeze({
+    innovation: [OPEN_SOURCE_DEFICIT, REPRODUCIBILITY_DEFICIT],
+    technicalRigor: [OPEN_SOURCE_DEFICIT, REPRODUCIBILITY_DEFICIT],
+    experimentalSufficiency: [OPEN_SOURCE_DEFICIT, REPRODUCIBILITY_DEFICIT],
+    clarity: [OPEN_SOURCE_DEFICIT, REPRODUCIBILITY_DEFICIT],
+    impact: [OPEN_SOURCE_DEFICIT, REPRODUCIBILITY_DEFICIT],
+    openSource: [REPRODUCIBILITY_DEFICIT],
+    reproducibility: [OPEN_SOURCE_DEFICIT],
+    engineering: [OPEN_SOURCE_DEFICIT, REPRODUCIBILITY_DEFICIT]
+});
+
+const EXPLICIT_NON_DEDUCTION = /(?:不应|不会|不该|不能|未被用来|并未用来)(?:据此)?(?:影响|降低|扣分|失分)|(?:不影响|不损害|无损于)|(?:不能|不应|不可)作为[^。；;]{0,20}扣分/;
+
+function reasonUsesForbiddenDeduction(reason, patterns) {
+    return String(reason || '').split(/[。！？；;\n]/).some(clause => {
+        if (EXPLICIT_NON_DEDUCTION.test(clause)) return false;
+        return patterns.some(pattern => {
+            pattern.lastIndex = 0;
+            return pattern.test(clause);
+        });
+    });
+}
+
+function assertExactObjectKeys(value, expectedKeys, context) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error(`${context} 必须是对象`);
+    }
+    const actual = Object.keys(value);
+    const missing = expectedKeys.filter(key => !Object.prototype.hasOwnProperty.call(value, key));
+    const extra = actual.filter(key => !expectedKeys.includes(key));
+    if (missing.length > 0) throw new Error(`${context} 缺少字段: ${missing.join(', ')}`);
+    if (extra.length > 0) throw new Error(`${context} 包含额外字段: ${extra.join(', ')}`);
+}
 
 function parseScoringAuditResult(raw) {
     let parsed;
@@ -94,40 +152,58 @@ function parseScoringAuditResult(raw) {
         throw new Error(`评分审计 JSON 无法解析: ${error.message}`);
     }
 
-    const documentType = normalizeDocumentType(parsed.documentType || parsed.document_type);
+    assertExactObjectKeys(parsed, AUDIT_TOP_LEVEL_KEYS, '评分审计顶层');
+    if (typeof parsed.documentType !== 'string' || !parsed.documentType.trim()) {
+        throw new Error('评分审计 documentType 必须是非空字符串');
+    }
+    const documentType = normalizeDocumentType(parsed.documentType);
     if (!documentType) throw new Error('评分审计缺少有效 documentType');
 
-    const confidence = String(parsed.confidence || '').trim();
-    if (!['高', '中', '低'].includes(confidence)) throw new Error('评分审计 confidence 非法');
-    if (!parsed.dimensions || typeof parsed.dimensions !== 'object' || Array.isArray(parsed.dimensions)) {
-        throw new Error('评分审计缺少 dimensions 对象');
+    if (typeof parsed.confidence !== 'string' || !parsed.confidence.trim()) {
+        throw new Error('评分审计 confidence 必须是非空字符串');
     }
+    const confidence = parsed.confidence.trim();
+    if (!['高', '中', '低'].includes(confidence)) throw new Error('评分审计 confidence 非法');
+    assertExactObjectKeys(parsed.dimensions, SCORING_DIMENSIONS.map(spec => spec.key), '评分审计 dimensions');
 
     const dimensions = {};
     for (const spec of SCORING_DIMENSIONS) {
         const item = parsed.dimensions[spec.key];
-        if (!item || typeof item !== 'object' || Array.isArray(item)) {
-            throw new Error(`评分审计缺少维度 ${spec.key}`);
+        assertExactObjectKeys(item, AUDIT_ITEM_KEYS, `评分审计维度 ${spec.key}`);
+        if (typeof item.score !== 'number' || !Number.isFinite(item.score)) {
+            throw new Error(`评分审计维度 ${spec.key} score 必须是有限数字`);
         }
-        const score = Number(item.score);
-        const reason = String(item.reason || '').trim();
-        if (!Number.isFinite(score) || score < 0 || score > spec.max) {
+        if (!Number.isInteger(item.score * 10)) {
+            throw new Error(`评分审计维度 ${spec.key} score 最多一位小数`);
+        }
+        const score = normalizeScoreToOneDecimal(item.score);
+        if (score < 0 || score > spec.max) {
             throw new Error(`评分审计维度 ${spec.key} 分数越界`);
         }
+        if (spec.key === 'openSource' && !isOpenSourceScoreAnchor(score)) {
+            throw new Error(`评分审计维度 openSource 必须使用固定锚点 ${OPEN_SOURCE_SCORE_ANCHORS.join('/')}`);
+        }
+        if (typeof item.reason !== 'string' || !item.reason.trim()) {
+            throw new Error(`评分审计维度 ${spec.key} reason 必须是非空字符串`);
+        }
+        const reason = item.reason.trim();
         if (reason.length < 20) throw new Error(`评分审计维度 ${spec.key} 理由过短`);
-        const forbiddenPattern = FORBIDDEN_SCORING_REASON_PATTERNS[spec.key];
-        if (forbiddenPattern?.test(reason)) {
+        const forbiddenPatterns = FORBIDDEN_SCORING_REASON_PATTERNS[spec.key] || [];
+        if (reasonUsesForbiddenDeduction(reason, forbiddenPatterns)) {
             throw new Error(`评分审计维度 ${spec.key} 使用了属于其他维度的扣分事实`);
         }
-        dimensions[spec.key] = { score: Math.round(score * 10) / 10, reason };
+        dimensions[spec.key] = { score, reason };
     }
 
     return recalculateScoringAudit({ documentType, confidence, dimensions });
 }
 
 function recalculateScoringAudit(audit) {
-    const subtotal = SCORING_DIMENSIONS.reduce((sum, spec) => sum + audit.dimensions[spec.key].score, 0);
-    const total = Math.round(Math.min(10, subtotal) * 10) / 10;
+    const subtotal = SCORING_DIMENSIONS.reduce(
+        (sum, spec) => sum + normalizeScoreToOneDecimal(audit.dimensions[spec.key].score),
+        0
+    );
+    const total = normalizeScoreToOneDecimal(Math.min(10, subtotal));
     const rankBucket = total >= 9 ? '前10%' : total >= 7.5 ? '前25%' : total >= 5.5 ? '前50%' : '后50%';
     return { ...audit, total, rankBucket };
 }
@@ -144,29 +220,32 @@ function setMachineSummaryField(analysis, key, value) {
 }
 
 function applyScoringAuditResult(analysis, audit) {
-    let updated = mergeSectionByTitle(analysis, '评分', `${audit.total}/10`);
+    let updated = mergeSectionByTitle(analysis, '评分', `${Number(audit.total).toFixed(1)}/10`);
     updated = setMachineSummaryField(updated, 'document_type', audit.documentType);
     updated = setMachineSummaryField(updated, 'rank_bucket', audit.rankBucket);
     updated = setMachineSummaryField(updated, 'confidence', audit.confidence);
     for (const spec of SCORING_DIMENSIONS) {
-        updated = setMachineSummaryField(updated, spec.machineKey, audit.dimensions[spec.key].score);
+        updated = setMachineSummaryField(updated, spec.machineKey, audit.dimensions[spec.key].score.toFixed(1));
     }
 
     const scoringReason = SCORING_DIMENSIONS.map(spec => {
         const item = audit.dimensions[spec.key];
-        return `*   ${spec.label} (${item.score}/${spec.max})：${item.reason}`;
+        return `*   ${spec.label} (${item.score.toFixed(1)}/${spec.max})：${item.reason}`;
     }).join('\n\n');
     return mergeSectionByTitle(updated, '评分理由', scoringReason);
 }
 
 function validateScoringAuditAgainstAnalysis(analysis, audit) {
     const current = parseAnalysis(analysis) || {};
+    // 理论论文的核心公开产物可以就是论文中完整披露的证明、推导与附录，
+    // 不能仅凭没有代码/模型/数据链接就覆盖主模型已经按文类作出的判断。
+    if (audit.documentType === '理论研究') return audit;
     const hasReleasedArtifact = [current.hasCode, current.hasModel, current.hasDataset]
         .some(value => value === '是' || value === 'yes');
     if (!hasReleasedArtifact) {
         const sourceText = String(current.opensource || '');
-        const promisesRelease = /承诺开源|计划开源|将(?:会)?开源|will\s+(?:be\s+)?release|will\s+open[- ]source/i.test(sourceText);
-        const hasDemo = /\bdemo\b|在线演示|线上演示|体验页面/i.test(sourceText);
+        const promisesRelease = hasAffirmativeReleasePromise(sourceText);
+        const hasDemo = hasAffirmativeDemoEvidence(sourceText);
         const normalizedScore = promisesRelease ? 0.5 : hasDemo ? 0.2 : 0;
         const normalizedReason = promisesRelease
             ? '论文明确承诺未来开放核心产物，但当前尚未发布可用代码、模型权重或数据资源。'
@@ -188,12 +267,37 @@ function validateScoringAuditAgainstAnalysis(analysis, audit) {
     return audit;
 }
 
-async function auditTypeAwareScoring(analysis) {
+function hasAffirmativeReleasePromise(sourceText) {
+    const segments = String(sourceText || '').split(/[\n。；;]/).map(part => part.trim()).filter(Boolean);
+    return segments.some(segment => {
+        const positive = /承诺(?:未来|后续)?(?:将|会)?(?:公开|开放|开源)|计划(?:未来|后续)?(?:公开|开放|开源)|将(?:会)?(?:公开|开放|开源)|will\s+(?:be\s+)?(?:released|open[- ]sourced)|plan(?:s|ned)?\s+to\s+(?:release|open[- ]source)/i.test(segment);
+        if (!positive) return false;
+        return !/(?:未(?!来)|没有|无|尚未|并未|不)(?:明确)?(?:承诺|计划|表示|说明|提及)?[^\n。；;]{0,12}(?:公开|开放|开源)|(?:no|not|never|without)\b[^.]{0,20}\b(?:plan|promise|release|open[- ]source)/i.test(segment);
+    });
+}
+
+function hasAffirmativeDemoEvidence(sourceText) {
+    const segments = String(sourceText || '').split(/[\n。；;]/).map(part => part.trim()).filter(Boolean);
+    return segments.some(segment => {
+        if (!/(?:\bdemo\b|demo_available|在线演示|线上演示|体验页面|演示页面)/i.test(segment)) return false;
+        if (/(?:未|没有|无|尚未|并未|不)(?:提供|公开|开放|包含|提及|可用|可访问)?[^\n。；;]{0,12}(?:\bdemo\b|在线演示|线上演示|体验页面|演示页面)|(?:\bdemo\b|在线演示|线上演示|体验页面|演示页面)\s*[：:]?\s*(?:否|无|未|没有|不可用|未提及|none|false|no\b|not\s+available|unavailable)|(?:no|not|without)\b[^.]{0,12}\bdemo\b|\bdemo\b[^.]{0,12}\bnot\s+available/i.test(segment)) {
+            return false;
+        }
+        const hasUrl = /https?:\/\/[^\s<>()\[\]{}"']+/i.test(segment);
+        const affirmativeStructuredValue = /(?:\bdemo\b|在线演示|线上演示|体验页面|演示页面)\s*(?:可用|可访问|已提供|已上线|available)|(?:\bdemo\b|demo_available|在线演示|线上演示|体验页面|演示页面)\s*[：:=]\s*(?:是|有|true|yes|available|可用|可访问|已提供|已上线)/i.test(segment);
+        return hasUrl || affirmativeStructuredValue;
+    });
+}
+
+async function auditTypeAwareScoring(analysis, sourceEvidence = '') {
     let lastError = null;
     let validationFeedback = '这是第一次输出，没有上一次校验错误。';
     for (let attempt = 1; attempt <= 3; attempt++) {
         const prompt = loadPrompt('prompts/scoring-audit.md', {
             existingAnalysis: analysis,
+            sourceEvidence: sourceEvidence
+                ? buildTypeAwareSourceContext(analysis, sourceEvidence)
+                : '未提供额外原文证据，只能根据已有分析审计。',
             validationFeedback
         });
         const raw = await callModel([{ role: 'user', content: [{ type: 'text', text: prompt }] }], 16000);
@@ -213,11 +317,72 @@ function getPaperArxivId(paper) {
     return paper?.arxivId || paper?.paper_id || paper?.id || '';
 }
 
-function getPreProvidedImageUrls(paper) {
-    for (const value of [paper?.allImageUrls, paper?.imageUrls]) {
-        if (Array.isArray(value) && value.length > 0) return value;
+const RECOVERY_MANIFEST_VERSION = 1;
+const RECOVERY_STAGE_STATUSES = new Set([
+    'pending', 'complete', 'not_needed', 'skipped', 'no_candidates',
+    'no_high_value_images', 'transient_failure', 'invalid_output', 'contract_rejected'
+]);
+const RECOVERY_STAGE_ORDER = Object.freeze([
+    'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision', 'tableRepair',
+    'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
+]);
+
+function createAnalysisRecoveryManifest(paper) {
+    const existing = paper?.analysisManifest;
+    const stages = existing && existing.version === RECOVERY_MANIFEST_VERSION && existing.stages && typeof existing.stages === 'object'
+        ? { ...existing.stages }
+        : {};
+    const firstFailedIndex = RECOVERY_STAGE_ORDER.findIndex(stage =>
+        stages[stage] && !isRecoveryStageComplete({ stages }, stage)
+    );
+    if (firstFailedIndex >= 0) {
+        for (const stage of RECOVERY_STAGE_ORDER.slice(firstFailedIndex + 1)) delete stages[stage];
     }
-    return [];
+    // 成功结果不会长期保存正文 checkpoint。强制重分析这类记录时，必须同时
+    // 清除主分析及全部下游阶段，否则新正文会错误复用旧轮次的审校/评分状态。
+    if (isRecoveryStageComplete({ stages }, 'primaryAnalysis') && !paper?.analysisCheckpoint) {
+        for (const stage of RECOVERY_STAGE_ORDER) delete stages[stage];
+    }
+    return { version: RECOVERY_MANIFEST_VERSION, stages, updatedAt: getBeijingISOString() };
+}
+
+function markRecoveryStage(manifest, stage, status, details = {}) {
+    if (!RECOVERY_STAGE_STATUSES.has(status)) throw new Error(`非法恢复阶段状态: ${status}`);
+    const updatedAt = getBeijingISOString();
+    manifest.stages[stage] = { status, ...details, updatedAt };
+    manifest.updatedAt = updatedAt;
+    return manifest.stages[stage];
+}
+
+function isRecoveryStageComplete(manifest, stage) {
+    return ['complete', 'not_needed', 'skipped', 'no_candidates', 'no_high_value_images']
+        .includes(manifest?.stages?.[stage]?.status);
+}
+
+function hasIncompleteRecoveryStage(manifest) {
+    return Object.values(manifest?.stages || {}).some(stage =>
+        stage && !['complete', 'not_needed', 'skipped', 'no_candidates', 'no_high_value_images'].includes(stage.status)
+    );
+}
+
+function saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest = null) {
+    paper.analysisCheckpoint = String(analysis || '');
+    paper.analysisManifest = analysisManifest;
+    if (imageManifest) paper.imageManifest = imageManifest;
+}
+
+function getPreProvidedImageUrls(paper) {
+    const restored = normalizeImageInfos((paper?.analysisRecoveryImageManifest || paper?.imageManifest)?.candidates);
+    const seen = new Set(restored.map(info => info.url));
+    for (const value of [paper?.allImageUrls, paper?.imageUrls]) {
+        for (const info of normalizeImageInfos(value)) {
+            if (!seen.has(info.url)) {
+                restored.push(info);
+                seen.add(info.url);
+            }
+        }
+    }
+    return restored;
 }
 
 // API 配置 - 深度分析阶段（统一使用 PAPER_ANALYZER_*）
@@ -253,6 +418,7 @@ if (missingDeepEnv.length > 0) {
 async function callModelWithConfig(messages, maxTokens, maxRetries = 3, config = null) {
     const cfg = config || DEEP_CONFIG;
     const startTime = Date.now();
+    const deadline = startTime + API_OVERALL_TIMEOUT_MS;
     const apiType = detectApiType(cfg.endpoint, cfg.model);
     const modelUrl = buildApiUrl(apiType, cfg.endpoint);
     const url = new URL(modelUrl);
@@ -262,7 +428,8 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = 3, config =
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-            const result = await _callModelOnce(messages, maxTokens, cfg, startTime, apiType);
+            const timeoutMs = getRemainingTimeoutMs(deadline);
+            const result = await _callModelOnce(messages, maxTokens, cfg, startTime, apiType, timeoutMs);
             return result;
         } catch (err) {
             lastError = err;
@@ -271,19 +438,44 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = 3, config =
 
             if (attempt < maxRetries) {
                 const delay = Math.pow(2, attempt) * API_RETRY_BASE_DELAY_MS;
+                const remainingMs = deadline - Date.now();
+                if (remainingMs <= delay) {
+                    throw createOverallTimeoutError(startTime, lastError);
+                }
                 console.log(`    [api] ⏳  ${delay/1000}s 后第 ${attempt + 1} 次重试...`);
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
         }
     }
 
+    if (Date.now() >= deadline || lastError?.code === 'MODEL_OVERALL_TIMEOUT') {
+        throw createOverallTimeoutError(startTime, lastError);
+    }
     throw new Error(`模型调用失败，已重试 ${maxRetries} 次: ${lastError.message}`);
+}
+
+function createOverallTimeoutError(startTime, cause = null) {
+    const elapsedMs = Date.now() - startTime;
+    const error = new Error(`模型调用整体超时: 预算 ${API_OVERALL_TIMEOUT_MS}ms，已用 ${elapsedMs}ms`);
+    error.code = 'MODEL_OVERALL_TIMEOUT';
+    if (cause) error.cause = cause;
+    return error;
+}
+
+function getRemainingTimeoutMs(deadline, now = Date.now()) {
+    const remaining = Math.floor(deadline - now);
+    if (remaining <= 0) {
+        const error = new Error('模型调用整体超时');
+        error.code = 'MODEL_OVERALL_TIMEOUT';
+        throw error;
+    }
+    return remaining;
 }
 
 /**
  * 单次 API 调用（内部方法）
  */
-async function _callModelOnce(messages, maxTokens, config, startTime, apiType) {
+async function _callModelOnce(messages, maxTokens, config, startTime, apiType, timeoutMs) {
     const apiUrl = buildApiUrl(apiType, config.endpoint);
     const bodyObj = buildRequestBody(apiType, config.model, messages, maxTokens, API_TEMPERATURE);
     const postData = JSON.stringify(bodyObj);
@@ -294,7 +486,7 @@ async function _callModelOnce(messages, maxTokens, config, startTime, apiType) {
 
     try {
         const response = await requestJson(apiUrl, bodyObj, headers, {
-            timeoutMs: API_OVERALL_TIMEOUT_MS,
+            timeoutMs,
             agent: false
         });
         const duration = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -577,6 +769,60 @@ async function fetchArxivText(arxivId) {
  * 使用 cheerio 解析 <figure> 元素，提取图片 URL 和 figcaption 文本
  * 带重试机制，避免因并发限流偶发失败
  */
+function resolveArxivImageUrl(src, htmlId, arxivId) {
+    const value = String(src || '').trim();
+    if (!value || value.startsWith('data:')) return '';
+    if (/^https?:\/\//i.test(value)) return value;
+    if (value.startsWith('/')) return `https://arxiv.org${value}`;
+    const baseId = String(arxivId || '').replace(/v\d+$/i, '');
+    if (value.startsWith(`${htmlId}`) || (baseId && value.startsWith(baseId))) {
+        return `https://arxiv.org/html/${value}`;
+    }
+    return `https://arxiv.org/html/${htmlId}/${value}`;
+}
+
+function parseArxivImageInfosFromHtml(html, htmlId, arxivId = htmlId) {
+    const $ = cheerio.load(String(html || ''));
+    const byUrl = new Map();
+    let sourceOrder = 0;
+
+    const addImage = (src, caption = '') => {
+        const normalizedSrc = String(src || '').trim();
+        if (!normalizedSrc || /arxiv-logo|favicon|(?:^|[/_.-])logo(?:[/_.-]|$)/i.test(normalizedSrc)) return;
+        const fullUrl = resolveArxivImageUrl(normalizedSrc, htmlId, arxivId);
+        if (!fullUrl || !isSupportedImageUrl(fullUrl)) return;
+        const cleanCaption = String(caption || '').replace(/\s+/g, ' ').trim();
+        const existing = byUrl.get(fullUrl);
+        if (existing) {
+            if (cleanCaption.length > existing.caption.length) existing.caption = cleanCaption;
+            return;
+        }
+        byUrl.set(fullUrl, { url: fullUrl, caption: cleanCaption, sourceOrder: sourceOrder++ });
+    };
+
+    $('figure img').each((_, elem) => {
+        const $img = $(elem);
+        const $figure = $img.closest('figure');
+        let caption = $figure.children('figcaption').first().text().replace(/\s+/g, ' ').trim();
+        if (!caption) caption = $figure.find('figcaption').first().text().replace(/\s+/g, ' ').trim();
+        if (!caption) {
+            const alt = String($img.attr('alt') || '').trim();
+            if (alt && alt !== 'Refer to caption') caption = alt;
+        }
+        addImage($img.attr('src'), caption);
+    });
+
+    if (byUrl.size === 0) {
+        $('img').each((_, elem) => {
+            const $img = $(elem);
+            const alt = String($img.attr('alt') || '').trim();
+            addImage($img.attr('src'), alt === 'Refer to caption' ? '' : alt);
+        });
+    }
+
+    return [...byUrl.values()];
+}
+
 async function fetchArxivImageUrls(arxivId) {
     const maxRetries = 6;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -600,80 +846,7 @@ async function fetchArxivImageUrls(arxivId) {
                 if (!response.ok) continue;
 
                 const html = await response.text();
-                const $ = cheerio.load(html);
-                const images = [];
-
-                // 遍历所有 <figure> 元素，提取图片和 caption
-                $('figure').each((_, elem) => {
-                    const $fig = $(elem);
-                    const $img = $fig.find('img').first();
-
-                    let fullUrl = '';
-                    if ($img.length) {
-                        const src = $img.attr('src') || '';
-                        if (!src) return;
-                        if (src.includes('arxiv-logo') || src.includes('favicon') || src.includes('logo')) return;
-                        if (src.startsWith('data:')) return;
-
-                        // 构建完整 URL
-                        if (src.startsWith('http')) {
-                            fullUrl = src;
-                        } else if (src.startsWith('/')) {
-                            fullUrl = `https://arxiv.org${src}`;
-                        } else if (src.startsWith(`${htmlId}`) || src.startsWith(`${String(arxivId).replace(/v\d+$/i, '')}`)) {
-                            // 新版 HTML：src 已包含 arxivId 前缀
-                            fullUrl = `https://arxiv.org/html/${src}`;
-                        } else {
-                            // 旧版 HTML：src 为纯文件名
-                            fullUrl = `https://arxiv.org/html/${htmlId}/${src}`;
-                        }
-                    }
-
-                    if (!fullUrl) return;
-                    if (!isSupportedImageUrl(fullUrl)) return;
-
-                    // 提取 figcaption 文本
-                    const $caption = $fig.find('figcaption');
-                    let caption = '';
-                    if ($caption.length) {
-                        caption = $caption.text().replace(/\s+/g, ' ').trim();
-                    }
-                    // 备选：从 img 的 alt 属性获取
-                    if (!caption && $img.length) {
-                        const alt = $img.attr('alt') || '';
-                        if (alt && alt !== 'Refer to caption') {
-                            caption = alt.trim();
-                        }
-                    }
-
-                    images.push({ url: fullUrl, caption });
-                });
-
-                // 如果 <figure> 解析不到图片，回退到正则提取（兼容旧版 HTML）
-                if (images.length === 0) {
-                    const imgRegex = /src="([^"]*\.(png|jpg|jpeg)[^"]*)"/g;
-                    let match;
-                    while ((match = imgRegex.exec(html)) !== null) {
-                        const src = match[1];
-                        if (src.includes('arxiv-logo') || src.includes('favicon') || src.includes('logo')) continue;
-                        if (src.startsWith('data:')) continue;
-                        let fullUrl;
-                        if (src.startsWith('http')) {
-                            fullUrl = src;
-                        } else if (src.startsWith('/')) {
-                            fullUrl = `https://arxiv.org${src}`;
-                        } else if (src.startsWith(`${htmlId}`) || src.startsWith(`${String(arxivId).replace(/v\d+$/i, '')}`)) {
-                            fullUrl = `https://arxiv.org/html/${src}`;
-                        } else {
-                            fullUrl = `https://arxiv.org/html/${htmlId}/${src}`;
-                        }
-                        if (isSupportedImageUrl(fullUrl)) {
-                            images.push({ url: fullUrl, caption: '' });
-                        }
-                    }
-                }
-
-                return images;
+                return parseArxivImageInfosFromHtml(html, htmlId, arxivId);
             } catch (e) {
                 console.log(`    [deep] fetchArxivImageUrls ${htmlId} error: ${e.message}`);
                 continue;
@@ -694,6 +867,31 @@ async function fetchArxivImageUrls(arxivId) {
 /**
  * 下载图片并转为 base64
  */
+async function fetchPublicImageResponse(imageUrl, maxRedirects = 5) {
+    let currentUrl = String(imageUrl || '');
+    for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount++) {
+        await validatePublicHttpUrl(currentUrl);
+        const response = await fetch(currentUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaperDigest/1.0)' },
+            signal: AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS),
+            redirect: 'manual'
+        });
+        if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+        const location = response.headers.get('location');
+        if (response.body && typeof response.body.cancel === 'function') {
+            try {
+                await response.body.cancel();
+            } catch (e) {
+                // Redirect body cleanup failure does not change the validation result.
+            }
+        }
+        if (!location) throw new Error(`图片重定向 ${response.status} 缺少 Location`);
+        if (redirectCount >= maxRedirects) throw new Error(`图片重定向超过 ${maxRedirects} 次`);
+        currentUrl = new URL(location, currentUrl).toString();
+    }
+    throw new Error('图片重定向校验失败');
+}
+
 async function downloadImageBase64(imageUrl, maxRetries = 5, maxBytes = IMAGE_MAX_BYTES) {
     if (!isSupportedImageUrl(imageUrl)) {
         console.log(`    [deep] 跳过不支持的图片: ${safeImageLabel(imageUrl)}`);
@@ -705,10 +903,7 @@ async function downloadImageBase64(imageUrl, maxRetries = 5, maxBytes = IMAGE_MA
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
-            const response = await fetch(imageUrl, {
-                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaperDigest/1.0)' },
-                signal: AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS)
-            });
+            const response = await fetchPublicImageResponse(imageUrl);
             if (!response.ok) {
                 if (attempt < maxRetries) {
                     console.log(`    [deep] 下载图片 ${fileName} HTTP ${response.status}，${(attempt + 1) * 2}s 后重试...`);
@@ -746,6 +941,10 @@ async function downloadImageBase64(imageUrl, maxRetries = 5, maxBytes = IMAGE_MA
         } catch (e) {
             lastError = e.message;
             if (/exceeds limit/i.test(e.message)) {
+                console.log(`    [deep] 跳过图片 ${fileName}: ${e.message}`);
+                return null;
+            }
+            if (/非公网|localhost|不支持的公网 URL 协议|用户名或密码|重定向超过|重定向.*缺少 Location/i.test(e.message)) {
                 console.log(`    [deep] 跳过图片 ${fileName}: ${e.message}`);
                 return null;
             }
@@ -834,19 +1033,20 @@ function selectImageCandidates(imageInfos, maxCount) {
     if (!Array.isArray(imageInfos) || imageInfos.length === 0) return [];
     const seen = new Set();
     const unique = [];
-    for (const info of imageInfos) {
+    for (const [index, info] of imageInfos.entries()) {
         if (!info || !info.url || seen.has(info.url)) continue;
         if (!isSupportedImageUrl(info.url)) continue;
         seen.add(info.url);
-        unique.push(info);
+        const sourceOrder = Number.isInteger(info.sourceOrder) ? info.sourceOrder : index;
+        unique.push({
+            ...info,
+            sourceOrder,
+            candidateScore: scoreImageCandidate(info, sourceOrder)
+        });
     }
-    if (unique.length <= maxCount) return unique;
     return unique
-        .map((info, index) => ({ info, index, score: scoreImageCandidate(info, index) }))
-        .sort((a, b) => b.score - a.score || a.index - b.index)
-        .slice(0, maxCount)
-        .sort((a, b) => a.index - b.index)
-        .map(item => item.info);
+        .sort((a, b) => b.candidateScore - a.candidateScore || a.sourceOrder - b.sourceOrder)
+        .slice(0, Math.max(0, maxCount));
 }
 
 function normalizeImageInfos(input) {
@@ -855,10 +1055,14 @@ function normalizeImageInfos(input) {
         if (!item) return null;
         if (typeof item === 'string') return { url: item, caption: '' };
         if (typeof item === 'object' && item.url) {
-            return {
+            const normalized = {
                 url: item.url,
                 caption: item.caption || item.alt || item.description || ''
             };
+            if (Number.isInteger(item.sourceOrder)) normalized.sourceOrder = item.sourceOrder;
+            if (Number.isFinite(item.candidateScore)) normalized.candidateScore = item.candidateScore;
+            else if (Number.isFinite(item.score)) normalized.candidateScore = item.score;
+            return normalized;
         }
         return null;
     }).filter(info => info && info.url && isSupportedImageUrl(info.url));
@@ -894,7 +1098,7 @@ function buildImageContent(imageUrl, base64, detectedMime = '') {
 function removeUnapprovedMarkdownImages(text, allowedUrls) {
     if (!text) return text;
     const allowed = new Set(allowedUrls || []);
-    return text.replace(/!\[[^\]]*\]\(([^)]+)\)/g, (match, url) => {
+    return text.replace(/!\[(?:\\.|[^\]\\])*\]\(([^)]+)\)/g, (match, url) => {
         return allowed.has(url) ? match : '';
     });
 }
@@ -909,7 +1113,7 @@ const ALLOWED_IMAGE_INSERTION_SECTIONS = new Set([
 
 function sanitizeImagePlanText(text, maxChars = 260) {
     return String(text || '')
-        .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
+        .replace(/!\[(?:\\.|[^\]\\])*\]\([^)]+\)/g, '')
         .replace(/<img\b[^>]*>/gi, '')
         .replace(/^#{1,6}\s+/gm, '')
         .replace(/\s+/g, ' ')
@@ -933,48 +1137,97 @@ function extractJsonObjectText(raw) {
     return text;
 }
 
-function parseImageInsertionPlan(raw, imageInfos = []) {
+function parseImageInsertionPlanDetailed(raw, imageInfos = []) {
+    const diagnostics = {
+        status: 'invalid_json',
+        totalItems: 0,
+        acceptedItems: 0,
+        rejectedItems: 0,
+        replacementIgnored: 0,
+        rejectionReasons: []
+    };
     let parsed;
     try {
         parsed = JSON.parse(extractJsonObjectText(raw));
     } catch (e) {
-        return [];
+        diagnostics.error = e.message;
+        return { plans: [], diagnostics };
     }
 
-    const items = Array.isArray(parsed)
-        ? parsed
-        : (Array.isArray(parsed?.insertions) ? parsed.insertions : []);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+        || Object.keys(parsed).length !== 1 || !Array.isArray(parsed.insertions)) {
+        diagnostics.status = 'invalid_schema';
+        diagnostics.error = '顶层必须是仅含 insertions 数组的 JSON 对象';
+        return { plans: [], diagnostics };
+    }
+
+    const items = parsed.insertions;
+    diagnostics.totalItems = items.length;
+    if (items.length === 0) {
+        diagnostics.status = 'empty_plan';
+        return { plans: [], diagnostics };
+    }
     const used = new Set();
     const plans = [];
 
-    for (const item of items) {
-        if (!item || typeof item !== 'object') continue;
-        const imageNumber = Number(item.image ?? item.imageIndex ?? item.figure ?? item.figureNumber);
-        if (!Number.isInteger(imageNumber) || imageNumber < 1 || imageNumber > imageInfos.length) continue;
-        if (used.has(imageNumber)) continue;
+    const reject = reason => {
+        diagnostics.rejectedItems++;
+        diagnostics.rejectionReasons.push(reason);
+    };
+
+    for (const [itemIndex, item] of items.entries()) {
+        if (!item || typeof item !== 'object') {
+            reject(`item_${itemIndex + 1}:not_object`);
+            continue;
+        }
+        const imageNumber = Number(item.image ?? item.imageIndex);
+        if (!Number.isInteger(imageNumber) || imageNumber < 1 || imageNumber > imageInfos.length) {
+            reject(`item_${itemIndex + 1}:invalid_image`);
+            continue;
+        }
+        if (used.has(imageNumber)) {
+            reject(`item_${itemIndex + 1}:duplicate_image`);
+            continue;
+        }
 
         const section = sanitizeImagePlanText(item.section, 60);
-        if (!ALLOWED_IMAGE_INSERTION_SECTIONS.has(section)) continue;
+        if (!ALLOWED_IMAGE_INSERTION_SECTIONS.has(section)) {
+            reject(`item_${itemIndex + 1}:forbidden_section`);
+            continue;
+        }
 
         const anchor = sanitizeImagePlanText(item.anchor, 180);
-        const replacement = anchor
-            ? sanitizeImagePlanText(item.replacement || item.replaceAnchorWith || item.rewrite, 420)
-            : '';
+        if (item.replacement || item.replaceAnchorWith || item.rewrite) diagnostics.replacementIgnored++;
         const lead = sanitizeImagePlanText(item.lead || item.before || item.intro, 220);
         const explanation = sanitizeImagePlanText(item.explanation || item.after || item.note, 320);
-        if (!lead && !explanation) continue;
+        if (!lead && !explanation) {
+            reject(`item_${itemIndex + 1}:missing_context_text`);
+            continue;
+        }
 
         used.add(imageNumber);
         plans.push({
             imageNumber,
             section,
             anchor,
-            replacement,
             lead,
             explanation
         });
     }
 
+    diagnostics.acceptedItems = plans.length;
+    diagnostics.status = plans.length > 0 ? 'ok' : 'all_items_rejected';
+    return { plans, diagnostics };
+}
+
+function parseImageInsertionPlan(raw, imageInfos = []) {
+    const { plans, diagnostics } = parseImageInsertionPlanDetailed(raw, imageInfos);
+    Object.defineProperty(plans, 'diagnostics', {
+        value: diagnostics,
+        enumerable: false,
+        configurable: false,
+        writable: false
+    });
     return plans;
 }
 
@@ -993,22 +1246,51 @@ function findSectionBounds(analysis, title) {
     return { start, contentStart, end };
 }
 
+function sanitizeMarkdownImageAlt(caption, fallback) {
+    const singleLine = String(caption || fallback || '')
+        .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 240);
+    return singleLine
+        .replace(/\\/g, '\\\\')
+        .replace(/\[/g, '\\[')
+        .replace(/\]/g, '\\]');
+}
+
+function sanitizeLogField(value, maxChars = 180) {
+    const clean = String(value || '')
+        .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    return clean.length > maxChars ? `${clean.slice(0, maxChars - 3)}...` : clean;
+}
+
 function buildImageInsertionBlock(plan, imageInfo) {
     const parts = [];
     if (plan.lead) parts.push(plan.lead);
-    parts.push(`![${imageInfo.caption || `图${plan.imageNumber}`}](${imageInfo.url})`);
+    const alt = sanitizeMarkdownImageAlt(imageInfo.caption, `图${plan.imageNumber}`);
+    parts.push(`![${alt}](${imageInfo.url})`);
     if (plan.explanation) parts.push(plan.explanation);
     return parts.join('\n\n');
 }
 
 function paragraphEndAfter(text, offset) {
     const paragraphEnd = text.indexOf('\n\n', offset);
-    return paragraphEnd >= 0 ? paragraphEnd : offset;
+    return paragraphEnd >= 0 ? paragraphEnd : text.length;
 }
 
 function insertImageBlockIntoSection(analysis, plan, imageInfo) {
     const bounds = findSectionBounds(analysis, plan.section);
-    if (!bounds) return { analysis, inserted: false };
+    const diagnostics = {
+        imageNumber: plan.imageNumber,
+        section: plan.section,
+        anchorProvided: Boolean(plan.anchor),
+        anchorMatched: false,
+        fallbackToSectionEnd: false,
+        inserted: false
+    };
+    if (!bounds) return { analysis, inserted: false, diagnostics: { ...diagnostics, rejectionReason: 'section_not_found' } };
 
     const block = buildImageInsertionBlock(plan, imageInfo);
     let sectionText = analysis.slice(bounds.contentStart, bounds.end);
@@ -1017,23 +1299,13 @@ function insertImageBlockIntoSection(analysis, plan, imageInfo) {
     if (plan.anchor) {
         const anchorIndex = sectionText.indexOf(plan.anchor);
         if (anchorIndex >= 0) {
-            const hasReplacement = plan.replacement && plan.replacement !== plan.anchor;
-            const anchorEnd = anchorIndex + plan.anchor.length;
-            if (hasReplacement) {
-                sectionText = sectionText.slice(0, anchorIndex)
-                    + plan.replacement
-                    + sectionText.slice(anchorEnd);
-            }
-
-            const afterAnchorText = anchorIndex + (hasReplacement ? plan.replacement.length : plan.anchor.length);
-            insertOffset = paragraphEndAfter(sectionText, afterAnchorText);
+            diagnostics.anchorMatched = true;
+            insertOffset = paragraphEndAfter(sectionText, anchorIndex + plan.anchor.length);
+        } else {
+            diagnostics.fallbackToSectionEnd = true;
         }
-    }
-
-    const mentionPattern = new RegExp(`(?:图|Figure\\s*)${plan.imageNumber}(?!\\d)`, 'i');
-    const mentionMatch = mentionPattern.exec(sectionText);
-    if (mentionMatch && mentionMatch.index < insertOffset) {
-        insertOffset = paragraphEndAfter(sectionText, mentionMatch.index + mentionMatch[0].length);
+    } else {
+        diagnostics.fallbackToSectionEnd = true;
     }
 
     const beforeSection = analysis.slice(0, bounds.contentStart);
@@ -1043,7 +1315,8 @@ function insertImageBlockIntoSection(analysis, plan, imageInfo) {
 
     return {
         analysis: `${beforeSection}${beforeInsert}\n\n${block}\n\n${afterInsert}${afterSection}`.replace(/\n{4,}/g, '\n\n\n'),
-        inserted: true
+        inserted: true,
+        diagnostics: { ...diagnostics, inserted: true }
     };
 }
 
@@ -1058,7 +1331,7 @@ function normalizeGenericImageOrder(analysis, selectedImageUrls) {
 
     const selectedSet = new Set(selectedImageUrls);
     const orderedSelectedImageUrls = [];
-    for (const match of updated.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)) {
+    for (const match of updated.matchAll(/!\[(?:\\.|[^\]\\])*\]\(([^)]+)\)/g)) {
         const url = match[1];
         if (selectedSet.has(url) && !orderedSelectedImageUrls.includes(url)) {
             orderedSelectedImageUrls.push(url);
@@ -1070,17 +1343,30 @@ function normalizeGenericImageOrder(analysis, selectedImageUrls) {
 function applyImageInsertionPlan(analysis, plans, imageInfos) {
     let updated = analysis;
     const selectedImageUrls = [];
+    const insertionDiagnostics = [];
     for (const plan of plans) {
         const imageInfo = imageInfos[plan.imageNumber - 1];
-        if (!imageInfo) continue;
+        if (!imageInfo) {
+            insertionDiagnostics.push({
+                imageNumber: plan.imageNumber,
+                section: plan.section,
+                anchorProvided: Boolean(plan.anchor),
+                anchorMatched: false,
+                fallbackToSectionEnd: false,
+                inserted: false,
+                rejectionReason: 'image_not_found'
+            });
+            continue;
+        }
         const result = insertImageBlockIntoSection(updated, plan, imageInfo);
+        insertionDiagnostics.push(result.diagnostics);
         if (!result.inserted) continue;
         updated = result.analysis;
         selectedImageUrls.push(imageInfo.url);
     }
 
     updated = removeUnapprovedMarkdownImages(updated, selectedImageUrls);
-    return normalizeGenericImageOrder(updated, selectedImageUrls);
+    return { ...normalizeGenericImageOrder(updated, selectedImageUrls), insertionDiagnostics };
 }
 
 async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downloadedImages) {
@@ -1101,11 +1387,11 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
     console.log(`    [secondary]    candidates=${imageInfos.length} | downloaded=${downloadedImages.length} | prompt_images=${usableImageInfos.length} | base64_chars=${downloadedBase64Chars} | max_tokens=${API_MAX_TOKENS}`);
     usableImageInfos.forEach((info, index) => {
         const downloaded = downloadedImages[index];
-        console.log(`    [secondary]    input[${index + 1}] ${safeImageLabel(info.url)} | mime=${downloaded?.mime || 'unknown'} | base64_chars=${downloaded?.base64?.length || 0} | caption=${info.caption || '无描述'}`);
+        console.log(`    [secondary]    input[${index + 1}] ${safeImageLabel(info.url)} | mime=${downloaded?.mime || 'unknown'} | base64_chars=${downloaded?.base64?.length || 0} | caption=${sanitizeLogField(info.caption || '无描述')}`);
     });
 
     const imageListStr = usableImageInfos.map((info, i) =>
-        `图${i + 1}: ${safeImageLabel(info.url)}\n  URL: ${info.url}\n  caption: ${info.caption || '无描述'}`
+        `候选${i + 1}: ${safeImageLabel(info.url)}\n  URL: ${info.url}\n  caption: ${sanitizeImagePlanText(info.caption || '无描述', 500)}`
     ).join('\n\n');
     const supplementPrompt = loadPrompt('prompts/image-supplement.md', {
         title: paper.title,
@@ -1128,22 +1414,33 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
     );
 
     const plans = parseImageInsertionPlan(planText, usableImageInfos);
-    console.log(`    [secondary] ◀ 图片筛选返回 | duration_s=${((Date.now() - secondaryStartedAt) / 1000).toFixed(1)} | response_chars=${planText.length} | valid_insertions=${plans.length}`);
+    const parseDiagnostics = plans.diagnostics || { status: 'unknown', rejectedItems: 0, replacementIgnored: 0, rejectionReasons: [] };
+    console.log(`    [secondary] ◀ 图片筛选返回 | duration_s=${((Date.now() - secondaryStartedAt) / 1000).toFixed(1)} | response_chars=${planText.length} | parse_status=${parseDiagnostics.status} | valid_insertions=${plans.length} | rejected=${parseDiagnostics.rejectedItems} | replacement_ignored=${parseDiagnostics.replacementIgnored}`);
+    if (parseDiagnostics.rejectionReasons?.length > 0) {
+        console.log(`    [secondary]    rejected_reasons=${sanitizeLogField(parseDiagnostics.rejectionReasons.join(','), 300)}`);
+    }
+    if (parseDiagnostics.error) {
+        console.log(`    [secondary]    parse_error=${sanitizeLogField(parseDiagnostics.error, 240)}`);
+    }
     if (plans.length > 0) {
         plans.forEach((plan, index) => {
             const imageInfo = usableImageInfos[plan.imageNumber - 1];
-            console.log(`    [secondary]    plan[${index + 1}] image=${plan.imageNumber}(${safeImageLabel(imageInfo?.url)}) | section=${plan.section} | anchor=${plan.anchor ? 'matched' : 'section-end'} | replacement=${plan.replacement ? 'yes' : 'no'} | lead_chars=${plan.lead.length} | explanation_chars=${plan.explanation.length}`);
+            console.log(`    [secondary]    plan[${index + 1}] candidate=${plan.imageNumber}(${safeImageLabel(imageInfo?.url)}) | section=${plan.section} | anchor_provided=${Boolean(plan.anchor)} | lead_chars=${plan.lead.length} | explanation_chars=${plan.explanation.length}`);
         });
     }
     if (plans.length === 0) {
-        console.log(`    [secondary] ℹ️  未生成有效插图计划，保留主模型纯文本分析`);
-        return { analysis, selectedImageUrls: [] };
+        console.log(`    [secondary] ℹ️  未生成有效插图计划，保留主模型纯文本分析 | reason=${parseDiagnostics.status}`);
+        return { analysis, selectedImageUrls: [], parseDiagnostics };
     }
 
-    const { analysis: replaced, selectedImageUrls } = applyImageInsertionPlan(analysis, plans, usableImageInfos);
-    console.log(`    [secondary] ✅ 图片计划合并完成 | inserted=${selectedImageUrls.length}/${usableImageInfos.length} | selected=${selectedImageUrls.map(safeImageLabel).join(', ') || 'none'}`);
+    const { analysis: replaced, selectedImageUrls, insertionDiagnostics } = applyImageInsertionPlan(analysis, plans, usableImageInfos);
+    insertionDiagnostics.forEach((item, index) => {
+        console.log(`    [secondary]    merge[${index + 1}] candidate=${item.imageNumber} | section=${item.section} | anchor_provided=${item.anchorProvided} | anchor_matched=${item.anchorMatched} | fallback_section_end=${item.fallbackToSectionEnd} | inserted=${item.inserted}${item.rejectionReason ? ` | rejection=${item.rejectionReason}` : ''}`);
+    });
+    const insertedCount = insertionDiagnostics.filter(item => item.inserted).length;
+    console.log(`    [secondary] ✅ 图片计划合并完成 | inserted=${insertedCount}/${plans.length} | selected=${selectedImageUrls.map(safeImageLabel).join(', ') || 'none'}`);
 
-    return { analysis: replaced, selectedImageUrls };
+    return { analysis: replaced, selectedImageUrls, insertionDiagnostics, parseDiagnostics };
 }
 
 /**
@@ -1151,6 +1448,7 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
  */
 async function analyzePaperDeep(paper) {
     const arxivId = getPaperArxivId(paper);
+    const analysisManifest = createAnalysisRecoveryManifest(paper);
     console.log(`    [deep] 获取全文: ${arxivId}`);
 
     // 优先使用预提供的全文（ICML/会议场景），否则从 arXiv 抓取
@@ -1200,6 +1498,7 @@ async function analyzePaperDeep(paper) {
     const candidateImageInfos = selectImageCandidates(imageInfos, IMAGE_CANDIDATE_MAX);
     const candidateImageUrls = candidateImageInfos.map(info => info.url);
     const candidateUrlSet = new Set(candidateImageUrls);
+    const candidateRankByUrl = new Map(candidateImageInfos.map((info, index) => [info.url, index + 1]));
     const imageManifest = {
         totalFound: imageInfos.length,
         candidateLimit: IMAGE_CANDIDATE_MAX,
@@ -1210,12 +1509,24 @@ async function analyzePaperDeep(paper) {
         candidates: imageInfos.map((info, index) => ({
             url: info.url,
             caption: info.caption || '',
-            score: scoreImageCandidate(info, index),
+            sourceOrder: Number.isInteger(info.sourceOrder) ? info.sourceOrder : index,
+            score: Number.isFinite(info.candidateScore)
+                ? info.candidateScore
+                : scoreImageCandidate(info, Number.isInteger(info.sourceOrder) ? info.sourceOrder : index),
+            downloadPriority: candidateRankByUrl.get(info.url) || null,
             selectedForDownload: candidateUrlSet.has(info.url)
         })),
         downloaded: [],
-        selected: []
+        selected: Array.isArray((paper?.analysisRecoveryImageManifest || paper?.imageManifest)?.selected)
+            ? [...(paper.analysisRecoveryImageManifest || paper.imageManifest).selected]
+            : []
     };
+    markRecoveryStage(
+        analysisManifest,
+        'imageDiscovery',
+        imageInfos.length > 0 ? 'complete' : 'no_candidates',
+        { totalFound: imageInfos.length, candidateCount: candidateImageInfos.length }
+    );
     if (imageInfos.length > candidateImageInfos.length) {
         console.log(`    [deep] 图片候选预筛: ${imageInfos.length} → ${candidateImageInfos.length} 张`);
     }
@@ -1235,6 +1546,17 @@ async function analyzePaperDeep(paper) {
     } else if (candidateImageUrls.length > 0) {
         console.log(`    [deep] 单模型模式：跳过 ${candidateImageUrls.length} 张候选图片下载，仅保存候选元数据`);
     }
+    const downloadStatus = !isDualModel
+        ? 'skipped'
+        : candidateImageUrls.length === 0
+            ? 'no_candidates'
+            : downloadedImages.length > 0
+                ? 'complete'
+                : 'transient_failure';
+    markRecoveryStage(analysisManifest, 'imageDownload', downloadStatus, {
+        attempted: candidateImageUrls.length,
+        downloaded: downloadedImages.length
+    });
 
     const prompt = loadPrompt('prompts/deep-analysis.md', {
         hasFullText: hasFullTextIntro,
@@ -1245,9 +1567,16 @@ async function analyzePaperDeep(paper) {
         textForAnalysis: textForAnalysis
     });
 
-    let analysis = '';
+    let analysis = isRecoveryStageComplete(analysisManifest, 'primaryAnalysis')
+        ? String(paper.analysisCheckpoint || '')
+        : '';
+    if (!analysis && analysisManifest.stages.primaryAnalysis) {
+        markRecoveryStage(analysisManifest, 'primaryAnalysis', 'pending', { reason: 'checkpoint_missing' });
+    }
     // Round 1: Main analysis
-    if (isDualModel && downloadedImages.length > 0) {
+    if (analysis) {
+        console.log(`    [deep] ↩ 从主分析 checkpoint 恢复 (${analysis.length} chars)`);
+    } else if (isDualModel && downloadedImages.length > 0) {
         // ========== 双模型模式 ==========
         console.log(`    [deep] 🧠 双模型模式：主模型(${DEEP_CONFIG.model})先做文本分析，后续由副模型(${SECONDARY_CONFIG.model})最终筛图补充`);
 
@@ -1257,10 +1586,14 @@ async function analyzePaperDeep(paper) {
                 [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
                 API_MAX_TOKENS, 3, DEEP_CONFIG
             );
+            markRecoveryStage(analysisManifest, 'primaryAnalysis', 'complete');
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.log(`    [deep] ✅ 主模型文本分析完成 (${analysis.length} chars)`);
         } catch (err) {
+            markRecoveryStage(analysisManifest, 'primaryAnalysis', 'transient_failure', { error: err.message });
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.error(`    [deep] 主模型文本分析失败: ${err.message}`);
-            return { ...paper, analysis: null, error: err.message };
+            return { ...paper, analysis: null, analysisManifest, imageManifest, error: err.message };
         }
     } else {
         // ========== 单模型模式：仅文本分析，不分析图片 ==========
@@ -1275,133 +1608,247 @@ async function analyzePaperDeep(paper) {
                 [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
                 API_MAX_TOKENS
             );
+            markRecoveryStage(analysisManifest, 'primaryAnalysis', 'complete');
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.log(`    [deep] ✅ 文本分析完成`);
         } catch (err) {
+            markRecoveryStage(analysisManifest, 'primaryAnalysis', 'transient_failure', { error: err.message });
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.error(`    [deep] 文本分析失败: ${err.message}`);
-            return { ...paper, analysis: null, error: err.message };
+            return { ...paper, analysis: null, analysisManifest, imageManifest, error: err.message };
         }
     }
 
-    let selectedImageUrls = [];
+    let selectedImageUrls = [...imageManifest.selected];
 
     // 第2轮：开源扫描
-    try {
-        const ossText = await scanOpensource(paper, textForAnalysis);
-        if (ossText) {
-            analysis = mergeSection(analysis, '## 开源详情', ossText);
-            console.log(`    [deep] ✅ 开源扫描完成`);
+    if (!isRecoveryStageComplete(analysisManifest, 'openSourceScan')) {
+        try {
+            const ossText = await scanOpensource(paper, textForAnalysis);
+            if (ossText) {
+                analysis = mergeSectionByTitle(analysis, '开源详情', ossText);
+                analysis = syncResourceFieldsFromOpenSource(analysis, ossText);
+                console.log(`    [deep] ✅ 开源扫描完成`);
+            }
+            markRecoveryStage(analysisManifest, 'openSourceScan', ossText ? 'complete' : 'invalid_output');
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+            if (!ossText) {
+                const error = new Error('开源扫描输出为空');
+                error.code = 'INVALID_STAGE_OUTPUT';
+                throw error;
+            }
+        } catch (e) {
+            markRecoveryStage(analysisManifest, 'openSourceScan', e.code === 'INVALID_STAGE_OUTPUT' ? 'invalid_output' : 'transient_failure', { error: e.message });
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+            console.log(`    [deep] ⚠️  开源扫描失败: ${e.message}`);
+            throw e;
         }
-    } catch (e) {
-        console.log(`    [deep] ⚠️  开源扫描失败: ${e.message}`);
     }
 
     // 第2.5轮：检查 demo 页面中的开源链接
     let demoFoundLinks = [];
-    try {
-        if (!hasOpenSourceLinks(analysis)) {
-            const demoUrls = extractDemoUrls(analysis);
-            if (demoUrls.length > 0) {
-                console.log(`    [deep] 🔍 发现 ${demoUrls.length} 个 demo 页面，检查开源链接...`);
-                const allOpenSourceLinks = [];
-                for (const url of demoUrls.slice(0, 3)) { // 最多检查3个
-                    const links = await checkDemoPageForOpensource(url);
-                    allOpenSourceLinks.push(...links);
-                }
-                if (allOpenSourceLinks.length > 0) {
-                    demoFoundLinks = [...new Set(allOpenSourceLinks)];
-                    const newLinksText = demoFoundLinks.map(link => `- ${link}`).join('\n');
-                    analysis = mergeSection(analysis, '## 开源详情',
-                        `\n\n**从 demo 页面发现的开源链接：**\n${newLinksText}`);
-                    console.log(`    [deep] ✅ 从 demo 页面发现 ${demoFoundLinks.length} 个开源链接`);
-                } else {
-                    console.log(`    [deep] ℹ️  demo 页面未发现开源链接`);
+    if (!isRecoveryStageComplete(analysisManifest, 'demoLinkScan')) {
+        let demoScanError = null;
+        try {
+            if (!hasOpenSourceLinks(analysis)) {
+                const demoUrls = extractDemoUrls(analysis);
+                if (demoUrls.length > 0) {
+                    console.log(`    [deep] 🔍 发现 ${demoUrls.length} 个 demo 页面，检查开源链接...`);
+                    const allOpenSourceLinks = [];
+                    for (const url of demoUrls.slice(0, 3)) { // 最多检查3个
+                        const links = await checkDemoPageForOpensource(url);
+                        allOpenSourceLinks.push(...links);
+                    }
+                    if (allOpenSourceLinks.length > 0) {
+                        demoFoundLinks = [...new Set(allOpenSourceLinks)];
+                        console.log(`    [deep] ✅ 从 demo 页面发现 ${demoFoundLinks.length} 个开源链接`);
+                    } else {
+                        console.log(`    [deep] ℹ️  demo 页面未发现开源链接`);
+                    }
                 }
             }
+        } catch (e) {
+            demoScanError = e;
+            console.log(`    [deep] ⚠️  检查 demo 页面失败: ${e.message}`);
+            markRecoveryStage(analysisManifest, 'demoLinkScan', 'transient_failure', { error: e.message });
         }
-    } catch (e) {
-        console.log(`    [deep] ⚠️  检查 demo 页面失败: ${e.message}`);
-    }
 
-    // 第2.6轮：根据 demo 扫描结果更新开源评分和描述
-    if (demoFoundLinks.length > 0) {
-        const beforeUpdate = analysis;
-        analysis = updateOpensourceFromDemoLinks(analysis, demoFoundLinks);
-        if (analysis !== beforeUpdate) {
-            console.log(`    [deep] ✅ 已根据 demo 扫描结果更新开源评分/描述`);
+        // 第2.6轮：根据 demo 扫描结果更新开源评分和描述
+        if (demoFoundLinks.length > 0) {
+            const beforeUpdate = analysis;
+            analysis = updateOpensourceFromDemoLinks(analysis, demoFoundLinks);
+            if (analysis !== beforeUpdate) {
+                console.log(`    [deep] ✅ 已根据 demo 扫描结果更新开源评分/描述`);
+            }
         }
+        if (!demoScanError) {
+            markRecoveryStage(analysisManifest, 'demoLinkScan', 'complete', { linksFound: demoFoundLinks.length });
+        }
+        saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+        if (demoScanError) throw demoScanError;
     }
 
     // 第3轮：审校重写（对照原文修正、补充、删减，完全重写前两轮输出）
-    try {
-        const revisedText = await reviseAnalysis(paper, analysis, textForAnalysis);
-        if (revisedText && revisedText.length > 100) {
-            const cleaned = cleanGapFillPrefix(revisedText.trim());
-            if (cleaned) {
-                analysis = cleaned;
-                console.log(`    [deep] ✅ 审校重写完成`);
-            } else {
-                console.log(`    [deep] ⚠️  审校重写输出格式不正确（缺少 ## 评分），回退到原始分析`);
+    if (!isRecoveryStageComplete(analysisManifest, 'revision')) {
+        try {
+            const revisedText = await reviseAnalysis(paper, analysis, textForAnalysis);
+            const cleaned = revisedText && revisedText.length > 100
+                ? cleanGapFillPrefix(revisedText.trim())
+                : null;
+            if (!cleaned) {
+                const error = new Error('审校重写输出无效或缺少 ## 评分');
+                error.code = 'INVALID_STAGE_OUTPUT';
+                throw error;
             }
+            analysis = cleaned;
+            analysis = syncResourceFieldsFromOpenSource(
+                analysis,
+                extractSectionByTitle(analysis, '开源详情')
+            );
+            markRecoveryStage(analysisManifest, 'revision', 'complete');
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+            console.log(`    [deep] ✅ 审校重写完成`);
+        } catch (e) {
+            markRecoveryStage(analysisManifest, 'revision', e.code === 'INVALID_STAGE_OUTPUT' ? 'invalid_output' : 'transient_failure', { error: e.message });
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+            throw e;
         }
-    } catch (e) {
-        console.log(`    [deep] ⚠️  审校重写失败: ${e.message}`);
     }
 
     // 第3.5轮：检查并修复实验结果中缺失的表格
-    try {
-        const fixed = await checkAndFixTables(paper, analysis, textForAnalysis);
-        if (fixed && fixed !== analysis) {
-            analysis = removeUnapprovedMarkdownImages(fixed.trim(), []);
-            console.log(`    [deep] ✅ 表格补充完成`);
+    if (!isRecoveryStageComplete(analysisManifest, 'tableRepair')) {
+        try {
+            const fixed = await checkAndFixTables(paper, analysis, textForAnalysis);
+            const changed = Boolean(fixed && fixed !== analysis);
+            if (changed) {
+                analysis = removeUnapprovedMarkdownImages(fixed.trim(), []);
+                console.log(`    [deep] ✅ 表格补充完成`);
+            }
+            markRecoveryStage(analysisManifest, 'tableRepair', changed ? 'complete' : 'not_needed');
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+        } catch (e) {
+            markRecoveryStage(analysisManifest, 'tableRepair', 'transient_failure', { error: e.message });
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+            throw e;
         }
-    } catch (e) {
-        console.log(`    [deep] ⚠️  表格补充失败: ${e.message}`);
     }
 
     // 第3.6轮：检查并修复方法概述部分不够详细的问题
-    try {
-        const fixed = await checkAndFixMethodSection(paper, analysis, textForAnalysis);
-        if (fixed && fixed !== analysis) {
-            analysis = removeUnapprovedMarkdownImages(fixed.trim(), []);
-            console.log(`    [deep] ✅ 方法概述补充完成`);
+    if (!isRecoveryStageComplete(analysisManifest, 'methodRepair')) {
+        try {
+            const fixed = await checkAndFixMethodSection(paper, analysis, textForAnalysis);
+            const changed = Boolean(fixed && fixed !== analysis);
+            if (changed) {
+                analysis = removeUnapprovedMarkdownImages(fixed.trim(), []);
+                console.log(`    [deep] ✅ 方法概述补充完成`);
+            }
+            markRecoveryStage(analysisManifest, 'methodRepair', changed ? 'complete' : 'not_needed');
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+        } catch (e) {
+            markRecoveryStage(analysisManifest, 'methodRepair', 'transient_failure', { error: e.message });
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+            throw e;
         }
-    } catch (e) {
-        console.log(`    [deep] ⚠️  方法概述补充失败: ${e.message}`);
     }
 
-    // 第3.65轮：只在分析缺少标题时修复完整结构，避免外层重新执行全部分析轮次。
-    const missingSections = getMissingRequiredSections(analysis);
-    if (missingSections.length > 0) {
-        console.log(`    [deep] 🔧 检测到缺失章节，执行最终结构修复: ${missingSections.join('、')}`);
-        analysis = await repairMissingAnalysisSections(paper, analysis, textForAnalysis);
-        console.log(`    [deep] ✅ 最终结构修复完成`);
+    // 第3.65轮：修复缺失/重复章节、机器摘要和标签契约。
+    if (!isRecoveryStageComplete(analysisManifest, 'structureRepair')) {
+        const structureIssues = getRepairableAnalysisStructureIssues(analysis);
+        try {
+            if (structureIssues.length > 0) {
+                console.log(`    [deep] 🔧 检测到结构契约问题，执行最终结构修复: ${structureIssues.join('、')}`);
+                analysis = await repairMissingAnalysisSections(paper, analysis, textForAnalysis);
+                console.log(`    [deep] ✅ 最终结构修复完成`);
+            }
+            markRecoveryStage(analysisManifest, 'structureRepair', structureIssues.length > 0 ? 'complete' : 'not_needed');
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+        } catch (error) {
+            markRecoveryStage(analysisManifest, 'structureRepair', 'transient_failure', { error: error.message });
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+            throw error;
+        }
     }
 
     // 第3.7轮：主模型只审计文档类型和八维评分，避免长文审校时发生重复扣分。
-    analysis = await auditTypeAwareScoring(analysis);
-    console.log(`    [deep] ✅ 类型感知评分审计完成`);
-    const auditedInvalidReason = getInvalidAnalysisReason(analysis, parseAnalysis(analysis));
-    if (auditedInvalidReason) {
-        throw new Error(`评分审计后的分析未通过最终契约: ${auditedInvalidReason}`);
+    if (!isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
+        try {
+            analysis = await auditTypeAwareScoring(analysis, textForAnalysis);
+            const auditedInvalidReason = getInvalidAnalysisReason(analysis, parseAnalysis(analysis));
+            if (auditedInvalidReason) {
+                const error = new Error(`评分审计后的分析未通过最终契约: ${auditedInvalidReason}`);
+                error.code = 'CONTRACT_REJECTED';
+                throw error;
+            }
+            markRecoveryStage(analysisManifest, 'scoringAudit', 'complete');
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+            console.log(`    [deep] ✅ 类型感知评分审计完成`);
+        } catch (error) {
+            markRecoveryStage(analysisManifest, 'scoringAudit', error.code === 'CONTRACT_REJECTED' ? 'contract_rejected' : 'transient_failure', { error: error.message });
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+            throw error;
+        }
     }
 
     // 最后一轮：副模型基于最终文本筛选高价值图片，代码按 JSON 计划做受限局部插图合并。
     // 必须放在纯文本修复之后，否则 gap-fill / 表格补充 / 方法补充可能删掉图片。
-    if (isDualModel && downloadedImages.length > 0) {
+    if (isDualModel && downloadedImages.length > 0 && !isRecoveryStageComplete(analysisManifest, 'imageSupplement')) {
         try {
             const imageResult = await applyImageSupplement(paper, arxivId, analysis, imageInfos, downloadedImages);
             const imageInvalidReason = getInvalidAnalysisReason(imageResult.analysis, parseAnalysis(imageResult.analysis));
             if (imageInvalidReason) {
+                markRecoveryStage(analysisManifest, 'imageSupplement', 'contract_rejected', { error: imageInvalidReason });
                 console.log(`    [deep] ⚠️  插图结果破坏最终契约，丢弃本篇插图计划: ${imageInvalidReason}`);
             } else {
                 analysis = imageResult.analysis;
                 selectedImageUrls = imageResult.selectedImageUrls;
                 imageManifest.selected = selectedImageUrls;
+                const imageStatus = imageResult.parseDiagnostics?.status === 'empty_plan'
+                    ? 'no_high_value_images'
+                    : imageResult.parseDiagnostics?.status === 'ok'
+                        ? 'complete'
+                        : 'transient_failure';
+                markRecoveryStage(analysisManifest, 'imageSupplement', imageStatus, {
+                    parseStatus: imageResult.parseDiagnostics?.status || 'unknown',
+                    selectedCount: selectedImageUrls.length
+                });
             }
         } catch (err) {
+            markRecoveryStage(analysisManifest, 'imageSupplement', 'transient_failure', { error: err.message });
             console.log(`    [deep] ⚠️  副模型图片筛选失败: ${err.message}，保留纯文本分析结果`);
         }
+    } else if (!analysisManifest.stages.imageSupplement) {
+        const status = !isDualModel
+            ? 'skipped'
+            : candidateImageUrls.length === 0
+                ? 'no_candidates'
+                : downloadedImages.length === 0
+                    ? 'transient_failure'
+                    : 'pending';
+        markRecoveryStage(analysisManifest, 'imageSupplement', status, {
+            reason: status === 'transient_failure' ? 'candidate_downloads_failed' : undefined
+        });
     }
+
+    saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+    if (hasIncompleteRecoveryStage(analysisManifest)) {
+        const incompleteStages = Object.entries(analysisManifest.stages)
+            .filter(([, stage]) => !isRecoveryStageComplete({ stages: { current: stage } }, 'current'))
+            .map(([stage, details]) => `${stage}:${details.status}`);
+        return {
+            ...paper,
+            analysis: null,
+            parsed: null,
+            imageUrls: selectedImageUrls,
+            selectedImageUrls,
+            allImageUrls: imageUrls,
+            imageManifest,
+            analysisManifest,
+            analysisCheckpoint: paper.analysisCheckpoint,
+            error: `深度分析阶段未完成: ${incompleteStages.join(', ')}`
+        };
+    }
+    delete paper.analysisCheckpoint;
+    delete paper.analysisRecoveryImageManifest;
 
     return {
         ...paper,
@@ -1409,7 +1856,9 @@ async function analyzePaperDeep(paper) {
         imageUrls: selectedImageUrls,
         selectedImageUrls,
         allImageUrls: imageUrls,
-        imageManifest
+        imageManifest,
+        analysisManifest,
+        ...(paper.analysisCheckpoint ? { analysisCheckpoint: paper.analysisCheckpoint } : {})
     };
 }
 
@@ -1586,27 +2035,27 @@ function isPrivateIpAddress(address) {
 async function validatePublicHttpUrl(rawUrl) {
     const url = new URL(rawUrl);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-        throw new Error(`不支持的 demo URL 协议: ${url.protocol}`);
+        throw new Error(`不支持的公网 URL 协议: ${url.protocol}`);
     }
     if (url.username || url.password) {
-        throw new Error('demo URL 不允许包含用户名或密码');
+        throw new Error('公网 URL 不允许包含用户名或密码');
     }
     const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
     if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
-        throw new Error('demo URL 指向 localhost');
+        throw new Error('公网 URL 指向 localhost');
     }
     if (net.isIP(hostname)) {
-        if (isPrivateIpAddress(hostname)) throw new Error(`demo URL 指向非公网 IP: ${hostname}`);
+        if (isPrivateIpAddress(hostname)) throw new Error(`URL 指向非公网 IP: ${hostname}`);
         url.validatedAddress = hostname;
         return url;
     }
     const records = await dns.lookup(hostname, { all: true, verbatim: false });
     if (!records || records.length === 0) {
-        throw new Error(`demo URL DNS 解析为空: ${hostname}`);
+        throw new Error(`公网 URL DNS 解析为空: ${hostname}`);
     }
     for (const record of records) {
         if (isPrivateIpAddress(record.address)) {
-            throw new Error(`demo URL DNS 解析到非公网 IP: ${record.address}`);
+            throw new Error(`公网 URL DNS 解析到非公网 IP: ${record.address}`);
         }
     }
     url.validatedAddress = records[0].address;
@@ -1641,30 +2090,46 @@ async function reviseAnalysis(paper, existingAnalysis, textForAnalysis) {
 
 async function repairMissingAnalysisSections(paper, existingAnalysis, textForAnalysis) {
     let currentAnalysis = existingAnalysis;
-    let missingSections = getMissingRequiredSections(currentAnalysis);
+    let structureIssues = getRepairableAnalysisStructureIssues(currentAnalysis);
     let validationFeedback = '这是第一次结构修复，没有上一次校验错误。';
 
-    for (let attempt = 1; attempt <= 2 && missingSections.length > 0; attempt++) {
+    for (let attempt = 1; attempt <= 2 && structureIssues.length > 0; attempt++) {
         const prompt = loadPrompt('prompts/structure-repair.md', {
             title: paper.title,
             arxivId: getPaperArxivId(paper),
-            missingSections: missingSections.join('、'),
+            missingSections: structureIssues.join('、'),
             validationFeedback,
             existingAnalysis: currentAnalysis,
-            textForAnalysis
+            textForAnalysis: buildTypeAwareSourceContext(currentAnalysis, textForAnalysis)
         });
         const repairedText = await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
         const cleaned = cleanGapFillPrefix(repairedText.trim());
         if (cleaned) currentAnalysis = removeUnapprovedMarkdownImages(cleaned, []);
 
-        missingSections = getMissingRequiredSections(currentAnalysis);
-        if (missingSections.length === 0) return currentAnalysis;
+        structureIssues = getRepairableAnalysisStructureIssues(currentAnalysis);
+        if (structureIssues.length === 0) return currentAnalysis;
 
-        validationFeedback = `上一次输出仍缺少：${missingSections.join('、')}。必须输出完整分析并补齐这些标题。`;
-        console.log(`    [deep] ⚠️  最终结构修复未通过 (${attempt}/2): 仍缺少 ${missingSections.join('、')}`);
+        validationFeedback = `上一次输出仍有结构契约问题：${structureIssues.join('、')}。必须输出完整分析并逐项修正。`;
+        console.log(`    [deep] ⚠️  最终结构修复未通过 (${attempt}/2): ${structureIssues.join('、')}`);
     }
 
-    throw new Error(`最终结构修复失败，仍缺少必要章节: ${missingSections.join('、')}`);
+    throw new Error(`最终结构修复失败: ${structureIssues.join('、')}`);
+}
+
+function getRepairableAnalysisStructureIssues(analysis) {
+    const issues = [];
+    const missing = getMissingRequiredSections(analysis);
+    if (missing.length > 0) issues.push(`缺少必要章节: ${missing.join('/')}`);
+    const duplicate = getDuplicateRequiredSections(analysis);
+    if (duplicate.length > 0) issues.push(`必要章节重复: ${duplicate.join('/')}`);
+    const topLevelIssue = validateTopLevelSectionContract(analysis);
+    if (topLevelIssue) issues.push(`一级章节: ${topLevelIssue}`);
+    const parsed = parseAnalysis(analysis);
+    const machineIssue = validateMachineSummaryContract(analysis, parsed);
+    if (machineIssue) issues.push(`机器摘要: ${machineIssue}`);
+    const tagIssue = validateTagSectionContract(analysis, parsed);
+    if (tagIssue) issues.push(`标签: ${tagIssue}`);
+    return issues;
 }
 
 /**
@@ -1754,7 +2219,7 @@ async function checkAndFixMethodSection(paper, analysis, textForAnalysis) {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
         methodSection,
-        textForAnalysis: textForAnalysis.slice(0, 80000)
+        textForAnalysis: buildTypeAwareSourceContext(analysis, textForAnalysis, 80000)
     });
 
     const fixedSection = await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
@@ -1827,7 +2292,7 @@ async function checkAndFixTables(paper, analysis, textForAnalysis) {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
         resultsSection,
-        textForAnalysis: textForAnalysis.slice(0, 80000)
+        textForAnalysis: buildTypeAwareSourceContext(analysis, textForAnalysis, 80000)
     });
 
     const fixedSection = await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
@@ -1897,10 +2362,41 @@ function updateOpensourceFromDemoLinks(analysis, foundLinks) {
 
     if (linkDescriptions.length > 0) {
         const newContent = `\n\n**从 demo/项目页面验证发现（已更新开源评分）：**\n${linkDescriptions.join('\n')}`;
-        updated = mergeSection(updated, '## 开源详情', newContent);
+        updated = appendSectionByTitle(updated, '开源详情', newContent);
     }
 
     return updated;
+}
+
+function getStructuredOpenSourceValue(openSourceText, label) {
+    const pattern = new RegExp(`^(?:[-*+]\\s*)?(?:\\*\\*)?${escapeRegExp(label)}(?:\\*\\*)?\\s*[:：]\\s*(.+)$`, 'mi');
+    return pattern.exec(String(openSourceText || ''))?.[1]?.trim() || '';
+}
+
+function inferResourceState(value) {
+    const text = String(value || '').replace(/\*\*/g, '').trim();
+    if (!text || /^(?:论文中)?未提及|未说明|未提供|无|none\b|not\s+(?:mentioned|provided)/i.test(text)) {
+        return '未说明';
+    }
+    if (/https?:\/\/\S+|(?:github|gitlab)\.com\/\S+|(?:huggingface|modelscope)\.(?:co|cn)\/\S+/i.test(text)) {
+        return '是';
+    }
+    if (/(?:已公开|已开源|可下载|可访问|获取方式|申请获取)/.test(text)) return '是';
+    return '未说明';
+}
+
+function syncResourceFieldsFromOpenSource(analysis, openSourceText) {
+    const resources = [
+        ['has_code', '代码'],
+        ['has_model', '模型权重'],
+        ['has_dataset', '数据集']
+    ];
+    return resources.reduce((updated, [machineKey, label]) => {
+        const resourceValue = getStructuredOpenSourceValue(openSourceText, label);
+        if (!resourceValue) return updated;
+        const state = inferResourceState(resourceValue);
+        return setMachineSummaryField(updated, machineKey, state);
+    }, analysis);
 }
 
 function mergeSection(analysis, sectionHeader, newContent) {
@@ -1966,12 +2462,20 @@ function mergeSectionByTitle(analysis, title, newContent) {
     return `${analysis.trim()}\n\n## ${title}\n${cleanContent}`;
 }
 
+function appendSectionByTitle(analysis, title, newContent) {
+    const existing = extractSectionByTitle(analysis, title);
+    const addition = normalizeSectionContent(title, newContent);
+    if (!addition || existing.includes(addition)) return analysis;
+    return mergeSectionByTitle(analysis, title, [existing, addition].filter(Boolean).join('\n\n'));
+}
+
 module.exports = {
     analyzePaperDeep,
     parseAnalysis,
     callModel,
     fetchArxivText,
     fetchArxivImageUrls,
+    parseArxivImageInfosFromHtml,
     removeUnapprovedMarkdownImages,
     selectImageCandidates,
     scoreImageCandidate,
@@ -1982,20 +2486,39 @@ module.exports = {
     getArxivHtmlIds,
     isSupportedImageUrl,
     safeImageLabel,
+    downloadImageBase64,
+    fetchPublicImageResponse,
+    sanitizeMarkdownImageAlt,
+    sanitizeLogField,
     cleanGapFillPrefix,
     checkDemoPageForOpensource,
     isPrivateIpAddress,
     validatePublicHttpUrl,
     extractSectionByTitle,
     mergeSectionByTitle,
+    appendSectionByTitle,
+    syncResourceFieldsFromOpenSource,
+    inferResourceState,
     parseImageInsertionPlan,
+    parseImageInsertionPlanDetailed,
     applyImageInsertionPlan,
     normalizeGenericImageOrder,
     parseScoringAuditResult,
     applyScoringAuditResult,
     validateScoringAuditAgainstAnalysis,
+    hasAffirmativeReleasePromise,
+    hasAffirmativeDemoEvidence,
+    reasonUsesForbiddenDeduction,
+    updateOpensourceFromDemoLinks,
     auditTypeAwareScoring,
-    repairMissingAnalysisSections
+    repairMissingAnalysisSections,
+    getRepairableAnalysisStructureIssues,
+    getRemainingTimeoutMs,
+    getTypeAwareEvidenceGuide,
+    buildTypeAwareSourceContext,
+    createAnalysisRecoveryManifest,
+    markRecoveryStage,
+    isRecoveryStageComplete
 };
 
 // 直接运行测试

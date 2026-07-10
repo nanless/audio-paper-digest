@@ -74,7 +74,9 @@
 | `FEISHU_APP_ID` | 飞书应用 App ID（如 `cli_xxx`） |
 | `FEISHU_APP_SECRET` | 飞书应用 App Secret |
 
-> 写入 `项目根目录的 `.env` 文件` 即可（不需要 `export` 前缀）。脚本运行时会直接读取当前项目 `.env`。
+> 写入项目根目录的 `.env` 文件即可（不需要 `export` 前缀）。脚本运行时会直接读取当前项目 `.env`。
+
+Node/Python 加载器会先清除外层进程中的同名项目变量，再加载该文件，并把 `.env` 权限收紧为 `0600`。LLM 调用要求 API key、endpoint、model 三项同时存在；任何入口都不会用硬编码 OpenAI endpoint/model 补齐残缺配置。
 
 #### 代理
 
@@ -84,11 +86,11 @@
 | `http_proxy` / `HTTP_PROXY` | HTTP 代理 |
 | `all_proxy` / `ALL_PROXY` | 全局代理 |
 
-支持 HTTP CONNECT 代理，纯 Node 内置模块实现，无需外部依赖。自动检测顺序：环境变量 → macOS 系统代理（`scutil --proxy`）。
+支持 HTTP CONNECT 代理，纯 Node 内置模块实现，无需外部依赖。代理变量也只从项目根 `.env` 加载；脚本会清除 shell/IDE 继承的同名代理变量，不再读取 macOS `scutil` 系统代理。
 
 ### 6.3 配置示例
 
-`项目根目录的 `.env` 文件` 格式（**不需要 `export` 前缀**）：
+项目根目录的 `.env` 文件格式（**不需要 `export` 前缀**）：
 
 ```bash
 # Paper Digest 环境变量
@@ -141,13 +143,11 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 
 - **Node 脚本**：通过 `scripts/log-setup.js`
 - **Python 脚本**：通过 `scripts/log_setup.py`
-- **默认输出位置**：`logs/<script-name>-YYYYMMDD-HHMMSS.log`
-- **默认特性**：同时输出到终端和日志文件（Tee 模式），flush 及时
+- **默认输出位置**：`logs/<script-name>-YYYYMMDD-HHMMSS-<pid>-<seq>.log`
+- **默认特性**：UTF-8 纯文本、`0600` 权限、同时输出到终端和日志文件、唯一文件名、同步落盘；统一脱敏认证头、Cookie、token、secret、password、任意项目密钥实际值和 URL userinfo
 - **无上限与无自动清理**：日志不做数量、总量或单文件大小限制，也不会自动删除旧日志
 
-特殊日志：
-- `backfill_papers.py` 的 `logs/backfill.log` 默认也会追加写入，同样受禁用开关控制
-- `logs/full-fetch-*.log` 可用于排查抓取/分析问题；终端仍会保留完整输出
+`backfill_papers.py` 复用相同统一日志，不再额外追加 `logs/backfill.log`。`logs/full-fetch-*.log` 可用于排查抓取/分析问题；终端仍会保留完整输出。
 
 **后台缓冲处理**：所有主要 Node 脚本已调用 `process.stdout._handle.setBlocking(true)`，确保后台运行时日志实时 flush。
 

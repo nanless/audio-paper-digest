@@ -326,8 +326,8 @@ function parseMachineSummary(analysis) {
                 const numMatch = val.match(/^(\d+\.?\d*)/);
                 if (numMatch) {
                     const num = parseFloat(numMatch[1]);
-                    if (num >= 0.8 || num >= 4) val = '高';
-                    else if (num >= 0.5 || num >= 3) val = '中';
+                    if ((num <= 1 && num >= 0.8) || (num > 1 && num >= 4)) val = '高';
+                    else if ((num <= 1 && num >= 0.5) || (num > 1 && num >= 3)) val = '中';
                     else val = '低';
                 } else {
                     const confMap = {
@@ -525,10 +525,13 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature) {
  */
 function getClaudeCodeVersion() {
     try {
-        const { execSync } = require('child_process');
-        const output = execSync('claude --version 2>/dev/null', {
+        const { execFileSync } = require('child_process');
+        const { buildChildProcessEnv } = require('./env-loader.js');
+        const output = execFileSync('claude', ['--version'], {
             encoding: 'utf8',
-            timeout: 1000
+            timeout: 1000,
+            stdio: ['ignore', 'pipe', 'ignore'],
+            env: buildChildProcessEnv()
         }).trim();
         const match = output.match(/^(\d+\.\d+\.\d+)/);
         if (match) return match[1];
@@ -671,6 +674,118 @@ const ALLOWED_TAGS = new Set([
     '#可解释性'
 ]);
 
+const SCORE_DIMENSIONS = Object.freeze({
+    innovationScore: Object.freeze({ label: '创新性', max: 2 }),
+    technicalRigorScore: Object.freeze({ label: '技术严谨性', max: 1.5 }),
+    experimentalSufficiencyScore: Object.freeze({ label: '实验充分性', max: 1.5 }),
+    clarityScore: Object.freeze({ label: '清晰度', max: 1 }),
+    impactScore: Object.freeze({ label: '影响力', max: 1.5 }),
+    openSourceScore: Object.freeze({ label: '开源', max: 1.5 }),
+    reproducibilityScore: Object.freeze({ label: '可复现性', max: 0.5 }),
+    engineeringScore: Object.freeze({ label: '工程/实践价值', max: 1.5 })
+});
+
+const OPEN_SOURCE_SCORE_ANCHORS = Object.freeze([0, 0.2, 0.5, 1.0, 1.2, 1.5]);
+
+function normalizeScoreToOneDecimal(value) {
+    return Math.round((Number(value) + Number.EPSILON) * 10) / 10;
+}
+
+function isOpenSourceScoreAnchor(value) {
+    const normalized = normalizeScoreToOneDecimal(value);
+    return OPEN_SOURCE_SCORE_ANCHORS.some(anchor => Math.abs(anchor - normalized) < 1e-9);
+}
+
+function parseScoringDimensions(scoringText) {
+    const occurrences = Object.fromEntries(Object.keys(SCORE_DIMENSIONS).map(field => [field, []]));
+    const errors = [];
+
+    for (const rawLine of String(scoringText || '').split('\n')) {
+        const line = rawLine.trim().replace(/^(?:[-*+]\s+|\d+[.)]\s+)/, '').replace(/\*\*/g, '').trim();
+        if (!line) continue;
+
+        for (const [field, definition] of Object.entries(SCORE_DIMENSIONS)) {
+            const labelPattern = escapeRegExp(definition.label);
+            if (!new RegExp(`^${labelPattern}(?=\\s|[（(:：/])`).test(line)) continue;
+
+            const rest = line.slice(definition.label.length).trim();
+            const patterns = [
+                /^[(（]\s*(-?\d+(?:\.\d)?)\s*\/\s*(-?\d+(?:\.\d)?)\s*[)）]/,
+                /^[:：]\s*(-?\d+(?:\.\d)?)\s*\/\s*(-?\d+(?:\.\d)?)/,
+                /^[(（]\s*(-?\d+(?:\.\d)?)\s*分\s*[)）]\s*[:：]\s*(-?\d+(?:\.\d)?)\s*\/\s*(-?\d+(?:\.\d)?)/,
+                /^\/\s*(-?\d+(?:\.\d)?)\s*[:：]\s*(?:得分\s*)?(-?\d+(?:\.\d)?)/,
+                /^[(（]\s*(-?\d+(?:\.\d)?)\s*分中的\s*(-?\d+(?:\.\d)?)\s*分\s*[)）]/,
+                /^[(（]\s*\/\s*(-?\d+(?:\.\d)?)\s*[)）]\s*[:：]\s*(-?\d+(?:\.\d)?)(?:\s*\/\s*(-?\d+(?:\.\d)?))?/
+            ];
+
+            let score;
+            let denominator;
+            let declaredMaximum;
+            let matchedFormat = false;
+            for (let index = 0; index < patterns.length; index++) {
+                const match = rest.match(patterns[index]);
+                if (!match) continue;
+                matchedFormat = true;
+                if (index <= 1) {
+                    score = Number(match[1]);
+                    denominator = Number(match[2]);
+                } else if (index === 2) {
+                    declaredMaximum = Number(match[1]);
+                    score = Number(match[2]);
+                    denominator = Number(match[3]);
+                } else if (index === 3 || index === 4) {
+                    denominator = Number(match[1]);
+                    score = Number(match[2]);
+                } else {
+                    denominator = Number(match[1]);
+                    score = Number(match[2]);
+                    if (match[3] !== undefined) declaredMaximum = Number(match[3]);
+                }
+                break;
+            }
+
+            occurrences[field].push({ score, denominator, declaredMaximum, matchedFormat });
+            break;
+        }
+    }
+
+    const scores = {};
+    for (const [field, definition] of Object.entries(SCORE_DIMENSIONS)) {
+        const found = occurrences[field];
+        if (found.length === 0) {
+            errors.push(`缺少评分维度“${definition.label}”`);
+            continue;
+        }
+        if (found.length > 1) {
+            errors.push(`评分维度“${definition.label}”重复出现 ${found.length} 次`);
+            continue;
+        }
+
+        const item = found[0];
+        if (!item.matchedFormat || !Number.isFinite(item.score) || !Number.isFinite(item.denominator)) {
+            errors.push(`评分维度“${definition.label}”格式非法，必须写成 得分/${definition.max}`);
+            continue;
+        }
+        if (item.denominator !== definition.max ||
+            (item.declaredMaximum !== undefined && item.declaredMaximum !== definition.max)) {
+            errors.push(`评分维度“${definition.label}”分母必须为 ${definition.max}`);
+            continue;
+        }
+        if (item.score < 0 || item.score > definition.max) {
+            errors.push(`评分维度“${definition.label}”得分 ${item.score} 超出 0-${definition.max}`);
+            continue;
+        }
+        const normalizedScore = normalizeScoreToOneDecimal(item.score);
+        if (field === 'openSourceScore' && !isOpenSourceScoreAnchor(normalizedScore)) {
+            errors.push(`评分维度“${definition.label}”得分必须为 ${OPEN_SOURCE_SCORE_ANCHORS.map(value => value.toFixed(1)).join('/')}`);
+            continue;
+        }
+        scores[field] = normalizedScore;
+    }
+
+    return { valid: errors.length === 0, scores, errors };
+}
+
 function parseAnalysis(analysis) {
     if (!analysis) return null;
 
@@ -738,7 +853,8 @@ function parseAnalysis(analysis) {
         sotaClaim: '',
         hasCode: '',
         hasModel: '',
-        hasDataset: ''
+        hasDataset: '',
+        scoreValidation: { valid: false, scores: {}, errors: ['缺少评分理由'] }
     };
 
     let m;
@@ -928,111 +1044,19 @@ function parseAnalysis(analysis) {
     m = analysis.match(/##\s*开源(?:详情)?[：:]*\s*([\s\S]*?)$/);
     if (m) result.opensource = stripMd(m[1]);
 
-    // 从评分理由中提取八个分项并计算总分，始终覆盖 LLM 给出的总分
+    // 只有八维评分完整、唯一且分母/范围合法时才覆盖 LLM 给出的总分。
     const scoringText = result.scoringReason || '';
-    if (scoringText) {
-        const dimScores = {};
-        // 每个维度的上限（用于截断旧格式或 LLM 越界输出）
-        const dimMax = {
-            '创新性': 2,
-            '技术严谨性': 1.5,
-            '实验充分性': 1.5,
-            '清晰度': 1,
-            '影响力': 1.5,
-            '开源': 1.5,
-            '可复现性': 0.5,
-            '工程/实践价值': 1.5
-        };
-        const dims = Object.keys(dimMax);
-        for (const dim of dims) {
-            // 支持多种 LLM 输出格式：
-            // 格式A（10分制，需转换）：dim (max/max)：score/10
-            // 格式B（维度分制，直接用）：dim (score/max)：description
-            // 格式C：dim：score/max
-            // 格式D：dim/满分：得分 score
-
-            // 优先匹配10分制格式（格式A）：dim ... ：score/10
-            const tenPointPat = new RegExp(
-                '(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*[（(]\\s*\\d+\\.?\\d*\\s*/\\s*\\d+\\.?\\d*\\s*[）)]\\s*(?:\\*\\*)?\\s*[:：]\\s*(?:\\*\\*)?\\s*(\\d+\\.?\\d*)\\s*/\\s*10'
-            );
-            const tenPointMatch = scoringText.match(tenPointPat);
-            if (tenPointMatch) {
-                const v10 = parseFloat(tenPointMatch[1]);
-                if (!isNaN(v10)) {
-                    dimScores[dim] = Math.round((v10 / 10) * dimMax[dim] * 10) / 10;
-                    continue;
-                }
-            }
-
-            // 次优先：dim ... 得分X.Y/max 格式（得分在描述末尾）
-            const defenPat = new RegExp(
-                '(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '.*?得分(\\d+\\.?\\d*)\\s*(?:/\\s*(\\d+\\.?\\d*))?'
-            );
-            const defenMatch = scoringText.match(defenPat);
-            if (defenMatch) {
-                const vDefen = parseFloat(defenMatch[1]);
-                const vMax = defenMatch[2] ? parseFloat(defenMatch[2]) : null;
-                if (!isNaN(vDefen)) {
-                    if (vMax && vMax === 10) {
-                        dimScores[dim] = Math.round((vDefen / 10) * dimMax[dim] * 10) / 10;
-                    } else if (vMax && vMax > 0) {
-                        dimScores[dim] = Math.min(vDefen, dimMax[dim]);
-                    } else {
-                        // 无/max：假设是维度原始分值
-                        dimScores[dim] = Math.min(vDefen, dimMax[dim]);
-                    }
-                    continue;
-                }
-            }
-
-            // 非10分制的常规匹配
-            const patterns = [
-                // 格式0: dim (max分)：score/max（如 HAIM 的格式）
-                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*\\d+\\.?\\d*分\\s*\\)\\s*[:：]\\s*(\\d+\\.?\\d*)\\s*/\\s*\\d+\\.?\\d*'),
-                // 格式1: dim (score/max)：description（排除有/10的情况）
-                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*(\\d+\\.?\\d*)\\s*/\\s*\\d+\\.?\\d*\\s*\\)(?!.*\\/10)'),
-                // 格式2: dim：score/max
-                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*[:：]\\s*(\\d+\\.?\\d*)\\s*/\\s*\\d+\\.?\\d*\\s*(?:\\*\\*)?'),
-                // 格式3: dim/满分：得分 score
-                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*/\\s*\\d+\\.?\\d*\\s*[:：]\\s*(?:得分\\s*)?(\\d+\\.?\\d*)'),
-                // 格式4: dim (max分 / 满分max分) -> score分
-                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*\\d+\\.?\\d*分\\s*/\\s*满分\\s*\\d+\\.?\\d*分\\s*\\)\\s*->\\s*(\\d+\\.?\\d*)分'),
-                // 格式5: dim（/max）：score/max
-                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*[（(]\\s*/\\s*\\d+\\.?\\d*\\s*[）)]\\s*[:：]\\s*(\\d+\\.?\\d*)'),
-                // 格式6: dim (max分中的score分)
-                new RegExp('(?:\\*\\*)?\\s*' + escapeRegExp(dim) + '\\s*\\(\\s*\\d+\\.?\\d*分中的(\\d+\\.?\\d*)分\\s*\\)'),
-            ];
-            let dm = null;
-            for (const pat of patterns) {
-                dm = scoringText.match(pat);
-                if (dm) break;
-            }
-            if (dm) {
-                const v = parseFloat(dm[1]);
-                if (!isNaN(v)) {
-                    dimScores[dim] = Math.min(v, dimMax[dim]);
-                }
-            }
-        }
-        if (Object.keys(dimScores).length > 0) {
-            let total = Object.values(dimScores).reduce((a, b) => a + b, 0);
-            total = Math.max(1.0, Math.min(10.0, total));
-            result.score = String(Math.round(total * 10) / 10);
+    result.scoreValidation = parseScoringDimensions(scoringText);
+    if (result.scoreValidation.valid) {
+            const dimScores = result.scoreValidation.scores;
+            let total = Object.values(dimScores).reduce((a, b) => a + normalizeScoreToOneDecimal(b), 0);
+            total = Math.min(10.0, total);
+            result.score = normalizeScoreToOneDecimal(total).toFixed(1);
 
             // 用评分理由的分项覆盖机器摘要字段，确保与总分一致
-            const qs = (dimScores['创新性'] || 0) + (dimScores['技术严谨性'] || 0)
-                     + (dimScores['实验充分性'] || 0) + (dimScores['清晰度'] || 0);
-            const vs = dimScores['影响力'] || 0;
-            const rb = (dimScores['开源'] || 0) + (dimScores['可复现性'] || 0);
-
-            result.innovationScore = String(Math.round((dimScores['创新性'] || 0) * 10) / 10);
-            result.technicalRigorScore = String(Math.round((dimScores['技术严谨性'] || 0) * 10) / 10);
-            result.experimentalSufficiencyScore = String(Math.round((dimScores['实验充分性'] || 0) * 10) / 10);
-            result.clarityScore = String(Math.round((dimScores['清晰度'] || 0) * 10) / 10);
-            result.impactScore = String(Math.round((dimScores['影响力'] || 0) * 10) / 10);
-            result.openSourceScore = String(Math.round((dimScores['开源'] || 0) * 10) / 10);
-            result.reproducibilityScore = String(Math.round((dimScores['可复现性'] || 0) * 10) / 10);
-            result.engineeringScore = String(Math.round((dimScores['工程/实践价值'] || 0) * 10) / 10);
+            for (const field of Object.keys(SCORE_DIMENSIONS)) {
+                result[field] = normalizeScoreToOneDecimal(dimScores[field]).toFixed(1);
+            }
 
             if (result.machineSummary) {
                 result.machineSummary.innovation = result.innovationScore;
@@ -1044,22 +1068,27 @@ function parseAnalysis(analysis) {
                 result.machineSummary.reproducibility = result.reproducibilityScore;
                 result.machineSummary.engineeringScore = result.engineeringScore;
             }
-        }
     }
 
-    // 矛盾检测：开源高分但无任何实际链接
+    // 非理论论文的资源字段与高开源分矛盾时归零；理论论文的核心产物
+    // 可以是正文/附录中的公开证明，三个资源字段不能完整表达其状态。
     const openScoreVal = parseFloat(result.openSourceScore || 0);
+    const isTheoryPaper = result.documentType === '理论研究';
     const hasCodeYes = result.hasCode === '是' || result.hasCode === 'yes';
     const hasModelYes = result.hasModel === '是' || result.hasModel === 'yes';
     const hasDatasetYes = result.hasDataset === '是' || result.hasDataset === 'yes';
-    if (openScoreVal >= 1.0 && !hasCodeYes && !hasModelYes && !hasDatasetYes) {
+    if (result.scoreValidation.valid && !isTheoryPaper && openScoreVal >= 1.0
+        && !hasCodeYes && !hasModelYes && !hasDatasetYes) {
         // 论文没有任何开源链接但得了高分，强制降低
-        result.openSourceScore = '0';
-        if (result.machineSummary) result.machineSummary.openSource = '0';
-        // 重新计算总分
-        let total = parseFloat(result.score || 0);
-        total = Math.max(1.0, Math.min(10.0, total - openScoreVal));
-        result.score = String(Math.round(total * 10) / 10);
+        result.openSourceScore = '0.0';
+        if (result.machineSummary) result.machineSummary.openSource = '0.0';
+        // 必须从修正后的八个子项重新求和。不能从已封顶的总分直接减，
+        // 否则原始子项和超过 10 时会丢失封顶前的分数。
+        result.scoreValidation.scores.openSourceScore = 0.0;
+        let total = Object.values(result.scoreValidation.scores)
+            .reduce((sum, value) => sum + normalizeScoreToOneDecimal(value), 0);
+        total = Math.min(10.0, Math.max(0, total));
+        result.score = normalizeScoreToOneDecimal(total).toFixed(1);
     }
 
     // rankBucket 推断：始终基于最终 score 重新计算（覆盖 LLM 原始值）
@@ -1091,38 +1120,14 @@ function escapeRegExp(string) {
 const PROXY_ENV_VARS = ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY'];
 
 /**
- * 检测系统代理 URL
- * 优先级：环境变量 > macOS 系统代理设置(scutil) > null
+ * 检测当前项目 .env 明确配置的代理 URL。
+ * env-loader 会先清除外层同名变量，因此这里不会继承 shell/IDE 代理。
  */
 function detectProxyUrl() {
-    // 1. 检查环境变量
     for (const envVar of PROXY_ENV_VARS) {
         if (process.env[envVar]) {
             return process.env[envVar];
         }
-    }
-
-    // 2. 检查 macOS 系统代理 (scutil)
-    try {
-        const { execSync } = require('child_process');
-        const output = execSync('scutil --proxy', { encoding: 'utf8', timeout: 3000 });
-        const lines = output.trim().split('\n');
-        const proxyInfo = {};
-        lines.forEach(line => {
-            const match = line.match(/^\s*(\w+)\s*:\s*(.+)$/);
-            if (match) {
-                proxyInfo[match[1]] = match[2].trim();
-            }
-        });
-
-        if (proxyInfo.HTTPSEnable === '1' && proxyInfo.HTTPSProxy && proxyInfo.HTTPSPort) {
-            return `http://${proxyInfo.HTTPSProxy}:${proxyInfo.HTTPSPort}`;
-        }
-        if (proxyInfo.HTTPEnable === '1' && proxyInfo.HTTPProxy && proxyInfo.HTTPPort) {
-            return `http://${proxyInfo.HTTPProxy}:${proxyInfo.HTTPPort}`;
-        }
-    } catch (e) {
-        // scutil 不可用或失败，忽略
     }
 
     return null;
@@ -1350,6 +1355,11 @@ module.exports = {
     stripMd,
     parseMachineSummary,
     parseAnalysis,
+    parseScoringDimensions,
+    SCORE_DIMENSIONS,
+    OPEN_SOURCE_SCORE_ANCHORS,
+    normalizeScoreToOneDecimal,
+    isOpenSourceScoreAnchor,
     normalizeDocumentType,
     DOCUMENT_TYPES,
     SCORING_RUBRIC_VERSION,

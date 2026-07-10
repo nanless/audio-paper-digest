@@ -25,7 +25,7 @@ Template placeholders in each prompt are denoted by `{variableName}`; the code i
 
 ## Modification Suggestions
 
-- When adjusting the tag system, scoring criteria, or output format, simply edit the corresponding markdown file; no code changes are needed.
+- When adjusting the tag system, scoring criteria, or output format, synchronize `scripts/utils.js`, `scripts/utils.py`, analysis/publish validators, fixtures, and both language variants.
 - Type-aware scoring uses the controlled `document_type` field (方法研究 / 系统技术报告 / 模型报告 / 数据集与基准 / 综述 / 理论研究 / 应用研究). Keep `deep-analysis.md`, `gap-fill.md`, and both English variants synchronized.
 - Claim-evidence matching and single-issue-single-primary-dimension deduction must remain intact. `image-supplement.md` must never classify or score papers.
 - Keep placeholder names consistent with the replacement logic in the code.

@@ -74,7 +74,9 @@ Benefits of this design:
 | `FEISHU_APP_ID` | Feishu app ID (e.g. `cli_xxx`) |
 | `FEISHU_APP_SECRET` | Feishu app App Secret |
 
-> Write these into `the `.env` file in the project root` (no `export` prefix needed). Scripts read the current project's `.env` directly at runtime.
+> Write these into the `.env` file in the project root (no `export` prefix needed). Scripts read the current project's `.env` directly at runtime.
+
+The Node/Python loaders clear same-name inherited project variables before loading this file and tighten `.env` permissions to `0600`. LLM calls require API key, endpoint, and model together; no entry point fills a partial configuration with hard-coded OpenAI defaults.
 
 #### Proxy
 
@@ -84,11 +86,11 @@ Benefits of this design:
 | `http_proxy` / `HTTP_PROXY` | HTTP proxy |
 | `all_proxy` / `ALL_PROXY` | Global proxy |
 
-HTTP CONNECT proxies are supported, implemented with pure Node built-in modules, no external dependencies. Auto-detection order: environment variables -> macOS system proxy (`scutil --proxy`).
+HTTP CONNECT proxies are supported with pure Node built-ins. Proxy variables are also loaded only from the project-root `.env`; same-name values inherited from the shell or IDE are cleared, and the macOS `scutil` system proxy is no longer consulted.
 
 ### 6.3 Configuration Example
 
-`the `.env` file in the project root` format (**no `export` prefix needed**):
+Project-root `.env` format (**no `export` prefix needed**):
 
 ```bash
 # Paper Digest environment variables
@@ -141,13 +143,11 @@ All main scripts write to both the terminal and `logs/*.log` by default. To disa
 
 - **Node scripts**: via `scripts/log-setup.js`
 - **Python scripts**: via `scripts/log_setup.py`
-- **Default output location**: `logs/<script-name>-YYYYMMDD-HHMMSS.log`
-- **Default behavior**: simultaneous terminal and file output (tee mode), timely flush
+- **Default output location**: `logs/<script-name>-YYYYMMDD-HHMMSS-<pid>-<seq>.log`
+- **Default behavior**: UTF-8 plain text, `0600` permissions, unique files, synchronous persistence, and central redaction of authentication headers, cookies, tokens, secrets, passwords, actual configured key values, and URL userinfo
 - **No limits and no automatic cleanup**: logs have no count, total-size, or per-file-size limit, and old logs are not deleted automatically
 
-Special logs:
-- `backfill_papers.py` also appends to `logs/backfill.log` by default; the same disable switches apply
-- `logs/full-fetch-*.log` can help debug fetch/analysis issues; terminal output is still preserved
+`backfill_papers.py` uses the same unified per-run log and no longer appends a second `logs/backfill.log`. `logs/full-fetch-*.log` can help debug fetch/analysis issues; terminal output is still preserved.
 
 **Background Buffer Handling**: all major Node scripts call `process.stdout._handle.setBlocking(true)` to ensure real-time log flush when running in the background.
 

@@ -1,4 +1,6 @@
+import atexit
 import os
+import re
 import sys
 from datetime import datetime
 
@@ -6,6 +8,35 @@ from project_env import load_project_env
 
 
 _LOG_SETUP_DONE = False
+_ACTIVE_LOGGER = None
+_CONFIGURED_SECRETS = ()
+
+
+def redact_log_text(value):
+    text = str(value if value is not None else '')
+    for secret in _CONFIGURED_SECRETS:
+        text = text.replace(secret, '[REDACTED]')
+    text = re.sub(
+        r'\b([a-z][a-z0-9+.-]*://)([^\s/@]+)@',
+        r'\1[REDACTED]@',
+        text,
+        flags=re.IGNORECASE,
+    )
+    credential_name = (
+        r'(?:authorization|proxy-authorization|x-api-key|api[-_ ]?key|key|'
+        r'access[-_ ]?token|refresh[-_ ]?token|token|secret|password|passwd|'
+        r'cookie|set-cookie|paper_analyzer_api_key|kimi_api_key|'
+        r'[a-z0-9-]+_(?:api_key|token|secret|password))'
+    )
+    text = re.sub(
+        rf'((?:["\']?{credential_name}["\']?)\s*[:=]\s*)([^\r\n]+)',
+        r'\1[REDACTED]',
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r'\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+', '[REDACTED]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bsk-[A-Za-z0-9._-]{3,}', '[REDACTED]', text, flags=re.IGNORECASE)
+    return text
 
 
 class _Tee:
@@ -14,30 +45,80 @@ class _Tee:
         self.original_stream = original_stream
 
     def write(self, data):
-        self.file_handle.write(data)
-        self.file_handle.flush()
-        return self.original_stream.write(data)
+        sanitized = redact_log_text(data)
+        if self.file_handle is not None:
+            self.file_handle.write(sanitized)
+            self.file_handle.flush()
+        return self.original_stream.write(sanitized)
 
     def flush(self):
-        self.file_handle.flush()
+        if self.file_handle is not None:
+            self.file_handle.flush()
         return self.original_stream.flush()
 
     def isatty(self):
         return self.original_stream.isatty()
+
+    def fileno(self):
+        return self.original_stream.fileno()
+
+
+class _Logger:
+    def __init__(self, file_handle, log_file, stdout, stderr):
+        self.file_handle = file_handle
+        self.log_file = log_file
+        self.stdout = stdout
+        self.stderr = stderr
+        self.closed = False
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        if isinstance(sys.stdout, _Tee) and sys.stdout.file_handle is self.file_handle:
+            sys.stdout = self.stdout
+        if isinstance(sys.stderr, _Tee) and sys.stderr.file_handle is self.file_handle:
+            sys.stderr = self.stderr
+        if self.file_handle is not None:
+            try:
+                self.file_handle.flush()
+                os.fsync(self.file_handle.fileno())
+            finally:
+                self.file_handle.close()
 
 
 def _timestamp():
     return datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
+def _create_unique_log_file(logs_dir, base_name):
+    timestamp = _timestamp()
+    for sequence in range(100):
+        log_file = os.path.join(logs_dir, f"{base_name}-{timestamp}-{os.getpid()}-{sequence}.log")
+        try:
+            fd = os.open(log_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            return os.fdopen(fd, 'w', encoding='utf-8', buffering=1), log_file
+        except FileExistsError:
+            continue
+    raise RuntimeError(f"无法为 {base_name} 创建唯一日志文件")
+
+
 def setup_script_logging(script_path=None):
-    global _LOG_SETUP_DONE
+    global _LOG_SETUP_DONE, _ACTIVE_LOGGER, _CONFIGURED_SECRETS
     if _LOG_SETUP_DONE:
-        return
+        return _ACTIVE_LOGGER
     _LOG_SETUP_DONE = True
     load_project_env()
-    if os.environ.get("PAPER_DIGEST_DISABLE_FILE_LOGS") == "1" or os.environ.get("PD_DISABLE_FILE_LOGS") == "1":
-        return
+    _CONFIGURED_SECRETS = tuple(
+        str(value)
+        for key, value in os.environ.items()
+        if re.search(r'(?:API_KEY|SECRET|TOKEN|PASSWORD|PASSWD|COOKIES?)$', key, re.IGNORECASE)
+        and len(str(value)) >= 6
+    )
+    disable_file_logs = (
+        os.environ.get("PAPER_DIGEST_DISABLE_FILE_LOGS") == "1"
+        or os.environ.get("PD_DISABLE_FILE_LOGS") == "1"
+    )
 
     if not script_path:
         script_path = sys.argv[0] if sys.argv else "script.py"
@@ -45,12 +126,19 @@ def setup_script_logging(script_path=None):
     scripts_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(scripts_dir)
     logs_dir = os.path.join(project_root, "logs")
-    os.makedirs(logs_dir, exist_ok=True)
-
     base_name = os.path.splitext(os.path.basename(script_path))[0] or "script"
-    log_file = os.path.join(logs_dir, f"{base_name}-{_timestamp()}.log")
-    fh = open(log_file, "a", encoding="utf-8")
+    fh = None
+    log_file = None
+    if not disable_file_logs:
+        os.makedirs(logs_dir, exist_ok=True)
+        fh, log_file = _create_unique_log_file(logs_dir, base_name)
 
-    sys.stdout = _Tee(fh, sys.__stdout__)
-    sys.stderr = _Tee(fh, sys.__stderr__)
-    print(f"[log] 输出文件: {log_file}")
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    sys.stdout = _Tee(fh, original_stdout)
+    sys.stderr = _Tee(fh, original_stderr)
+    _ACTIVE_LOGGER = _Logger(fh, log_file, original_stdout, original_stderr)
+    atexit.register(_ACTIVE_LOGGER.close)
+    if log_file:
+        print(f"[log] 输出文件: {log_file}")
+    return _ACTIVE_LOGGER

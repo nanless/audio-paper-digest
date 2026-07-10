@@ -1,27 +1,136 @@
 const Config = require('./config.js');
-const { getBeijingISOString, readJsonSafe, writeFileAtomic, normalizedId } = require('./utils.js');
+const fs = require('fs');
+const { getBeijingISOString, writeFileAtomic, normalizedId } = require('./utils.js');
+const { readJsonFileStrict, withFileLockSync, isSuccessfulAnalysisRecord } = require('./analysis-engine.js');
+
+const ANALYSIS_FIELDS = Object.freeze([
+    'analysis',
+    'parsed',
+    'scoringRubricVersion',
+    'selectedImageUrls',
+    'imageUrls',
+    'allImageUrls',
+    'imageManifest'
+]);
+
+function normalizePapersMap(rawPapers, options = {}) {
+    const strict = options.strict === true;
+    if (rawPapers != null && !Array.isArray(rawPapers) && (typeof rawPapers !== 'object')) {
+        throw new Error('papers.json 的 papers 必须是对象或数组');
+    }
+    if (strict && (Array.isArray(rawPapers) || rawPapers === null || typeof rawPapers !== 'object')) {
+        throw new Error('papers.json 的 papers 必须是对象');
+    }
+    const papers = {};
+    const entries = Array.isArray(rawPapers)
+        ? rawPapers.map(paper => [normalizedId(paper), paper])
+        : Object.entries(rawPapers || {});
+    for (const [rawKey, paper] of entries) {
+        if (!paper || typeof paper !== 'object' || Array.isArray(paper)) {
+            if (strict) throw new Error(`papers.json 论文条目必须是对象: ${rawKey || '(空 key)'}`);
+            continue;
+        }
+        const paperKey = normalizedId(paper);
+        const objectKey = normalizedId(rawKey);
+        if (paperKey && objectKey && paperKey !== objectKey) {
+            throw new Error(`papers.json key 与论文版本 ID 冲突: ${rawKey} -> ${paperKey}`);
+        }
+        const key = paperKey || objectKey;
+        if (!key) {
+            if (strict) throw new Error(`papers.json 论文条目缺少有效 ID: ${rawKey || '(空 key)'}`);
+            continue;
+        }
+        if (papers[key]) {
+            throw new Error(`papers.json 存在规范化 ID 冲突: ${rawKey} 与 ${key}`);
+        }
+        papers[key] = paper;
+    }
+    return papers;
+}
+
+function normalizePapersDatabase(data) {
+    if (Array.isArray(data)) return { papers: normalizePapersMap(data), lastUpdated: null, generation: 0 };
+    const normalized = data && typeof data === 'object' ? { ...data } : { papers: {}, lastUpdated: null };
+    normalized.papers = normalizePapersMap(normalized.papers);
+    normalized.generation = Number.isInteger(normalized.generation) ? normalized.generation : 0;
+    return normalized;
+}
+
+function validatePapersDatabaseSchema(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        throw new Error('papers.json 顶层必须是对象');
+    }
+    if (!Object.prototype.hasOwnProperty.call(data, 'papers')) {
+        throw new Error('papers.json 顶层缺少 papers 字段');
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'generation')
+        && (!Number.isInteger(data.generation) || data.generation < 0)) {
+        throw new Error('papers.json generation 必须是非负整数');
+    }
+    return {
+        ...data,
+        papers: normalizePapersMap(data.papers, { strict: true }),
+        generation: data.generation || 0
+    };
+}
 
 function loadPapersDatabase(filePath = Config.FILES.papers, legacyPath = Config.FILES.papersLegacy) {
-    const data = readJsonSafe(filePath, null)
-        || readJsonSafe(legacyPath, null)
-        || { papers: {}, lastUpdated: null };
-    if (Array.isArray(data)) {
-        const papers = {};
-        for (const paper of data) {
-            const key = normalizedId(paper);
-            if (key) papers[key] = paper;
+    let data = readJsonFileStrict(filePath, { allowMissing: true });
+    if (data === null && legacyPath && fs.existsSync(legacyPath)) {
+        data = readJsonFileStrict(legacyPath);
+    }
+    return normalizePapersDatabase(data || { papers: {}, lastUpdated: null });
+}
+
+function preserveAnalysisFields(target, source) {
+    for (const field of ANALYSIS_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(source, field)) target[field] = source[field];
+        else delete target[field];
+    }
+}
+
+function mergePapersDatabases(currentData, incomingData) {
+    const current = normalizePapersDatabase(currentData || { papers: {} });
+    const incoming = normalizePapersDatabase(incomingData || { papers: {} });
+    const merged = {
+        ...current,
+        ...incoming,
+        generation: Math.max(current.generation, incoming.generation),
+        papers: { ...current.papers }
+    };
+
+    for (const [key, incomingPaper] of Object.entries(incoming.papers)) {
+        const currentPaper = current.papers[key];
+        if (!currentPaper) {
+            merged.papers[key] = incomingPaper;
+            continue;
         }
-        return { papers, lastUpdated: null };
+
+        const nextPaper = mergeAnalysisDigestPaper(currentPaper, incomingPaper);
+        const currentUpdatedAt = currentPaper.digestStatus?.updatedAt || '';
+        const incomingUpdatedAt = incomingPaper.digestStatus?.updatedAt || '';
+        const wouldDowngradeAnalyzed = currentPaper.digestStatus?.status === 'analyzed'
+            && ['pending_analysis', 'seen'].includes(incomingPaper.digestStatus?.status);
+        if (wouldDowngradeAnalyzed || currentUpdatedAt > incomingUpdatedAt) {
+            nextPaper.digestStatus = currentPaper.digestStatus;
+            if (isSuccessfulAnalysisRecord(currentPaper)) preserveAnalysisFields(nextPaper, currentPaper);
+        }
+        merged.papers[key] = nextPaper;
     }
-    if (!data.papers || typeof data.papers !== 'object') {
-        data.papers = {};
-    }
-    return data;
+    return merged;
 }
 
 function savePapersDatabase(data, filePath = Config.FILES.papers) {
-    data.lastUpdated = getBeijingISOString();
-    writeFileAtomic(filePath, JSON.stringify(data, null, 2));
+    return withFileLockSync(filePath, () => {
+        const currentRaw = readJsonFileStrict(filePath, { allowMissing: true });
+        const current = currentRaw === null ? normalizePapersDatabase({ papers: {} }) : normalizePapersDatabase(currentRaw);
+        const saved = mergePapersDatabases(current, data);
+        saved.lastUpdated = getBeijingISOString();
+        saved.generation = current.generation + 1;
+        writeFileAtomic(filePath, JSON.stringify(saved, null, 2));
+        Object.assign(data, saved);
+        return saved;
+    });
 }
 
 function markPaperDigestStatus(paper, status, extra = {}) {
@@ -39,13 +148,13 @@ function markPaperDigestStatus(paper, status, extra = {}) {
 
 function mergeAnalysisDigestPaper(existing, paper) {
     const merged = { ...existing, ...paper };
-    if (!paper.analysis && existing.analysis) {
-        merged.analysis = existing.analysis;
-        if (Object.prototype.hasOwnProperty.call(existing, 'parsed')) merged.parsed = existing.parsed;
-        if (Object.prototype.hasOwnProperty.call(existing, 'selectedImageUrls')) merged.selectedImageUrls = existing.selectedImageUrls;
-        if (Object.prototype.hasOwnProperty.call(existing, 'imageUrls')) merged.imageUrls = existing.imageUrls;
-        if (Object.prototype.hasOwnProperty.call(existing, 'allImageUrls')) merged.allImageUrls = existing.allImageUrls;
-        if (Object.prototype.hasOwnProperty.call(existing, 'imageManifest')) merged.imageManifest = existing.imageManifest;
+    if (isSuccessfulAnalysisRecord(existing) && !isSuccessfulAnalysisRecord(paper)) {
+        if (paper.imageManifest) merged.analysisRecoveryImageManifest = paper.imageManifest;
+        preserveAnalysisFields(merged, existing);
+    } else if (isSuccessfulAnalysisRecord(paper)) {
+        delete merged.analysisRecoveryImageManifest;
+        delete merged.latestAnalysisAttemptError;
+        delete merged.latestAnalysisAttemptAt;
     }
     return merged;
 }
@@ -59,9 +168,10 @@ function applyAnalysisDigestStatuses(papersData, analyzedPapers, options = {}) {
         const key = normalizedId(paper);
         if (!key) continue;
         const existing = papersData.papers[key] || {};
+        const hadUsableAnalysis = isSuccessfulAnalysisRecord(existing);
         const mergedPaper = mergeAnalysisDigestPaper(existing, paper);
-        const latestAttemptStatus = paper.analysis ? 'analyzed' : 'analysis_failed';
-        const status = mergedPaper.analysis ? 'analyzed' : 'analysis_failed';
+        const latestAttemptStatus = isSuccessfulAnalysisRecord(paper) ? 'analyzed' : 'analysis_failed';
+        const status = (isSuccessfulAnalysisRecord(paper) || hadUsableAnalysis) ? 'analyzed' : 'analysis_failed';
         papersData.papers[key] = markPaperDigestStatus(
             mergedPaper,
             status,
@@ -79,16 +189,31 @@ function applyAnalysisDigestStatuses(papersData, analyzedPapers, options = {}) {
 }
 
 function updateAnalysisDigestStatuses(analyzedPapers, options = {}) {
-    const papersData = loadPapersDatabase(options.filePath, options.legacyPath);
-    const updated = applyAnalysisDigestStatuses(papersData, analyzedPapers, options);
-    if (updated > 0) {
-        savePapersDatabase(papersData, options.filePath);
-    }
-    return { updated, papersData };
+    const filePath = options.filePath || Config.FILES.papers;
+    return withFileLockSync(filePath, () => {
+        let raw = readJsonFileStrict(filePath, { allowMissing: true });
+        if (raw === null && options.legacyPath && fs.existsSync(options.legacyPath)) {
+            raw = readJsonFileStrict(options.legacyPath);
+        } else if (raw === null && !options.filePath && fs.existsSync(Config.FILES.papersLegacy)) {
+            raw = readJsonFileStrict(Config.FILES.papersLegacy);
+        }
+        const papersData = normalizePapersDatabase(raw || { papers: {}, lastUpdated: null });
+        const updated = applyAnalysisDigestStatuses(papersData, analyzedPapers, options);
+        if (updated > 0) {
+            papersData.lastUpdated = options.updatedAt || getBeijingISOString();
+            papersData.generation = (papersData.generation || 0) + 1;
+            writeFileAtomic(filePath, JSON.stringify(papersData, null, 2));
+        }
+        return { updated, papersData };
+    });
 }
 
 module.exports = {
     loadPapersDatabase,
+    normalizePapersMap,
+    normalizePapersDatabase,
+    validatePapersDatabaseSchema,
+    mergePapersDatabases,
     savePapersDatabase,
     markPaperDigestStatus,
     mergeAnalysisDigestPaper,

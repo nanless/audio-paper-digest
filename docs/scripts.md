@@ -48,7 +48,7 @@
 
 批量分析未分析论文（独立入口）。
 - 读取 `data/current/deep-analysis-result.json`
-- 对未分析论文逐篇分析，保存成功/失败结果并同步 `papers.json.digestStatus`，便于下次重试
+- 对未分析论文逐篇分析，保存成功/失败结果并同步 `papers.json.digestStatus`，便于下次重试；存在未恢复失败时写入 `partial_failed` 并以非零状态退出
 - 适合在 `full-fetch.js` 中断后补跑剩余论文
 
 #### `scripts/analyze-single-paper.js`
@@ -59,7 +59,7 @@
 
 - 从 `data/current/papers.json` 读取元数据
 - 调用 `deep-analyzer.js` 分析后追加到 `deep-analysis-result.json`
-- 若论文已在结果中存在则默认跳过；加 `--force` 可强制重分析并替换旧结果
+- 仅当已有结果通过完整分析契约时默认跳过；加 `--force` 可强制重分析并替换旧结果
 - 兼容旧格式纯数组数据，自动转换为新对象格式保存
 - 成功保存后同步 `papers.json.digestStatus`；分析失败时也会回写 `analysis_failed`，但不会修改 `deep-analysis-result.json`
 
@@ -171,8 +171,10 @@ arXiv 抓取与 LLM 筛选模块。
 统一分析引擎。封装以下功能，消除 `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` / `reanalyze.js` / `analyze-single-paper.js` 的重复逻辑：
 
 - `analyzePaperWithRetry(paper, options)`：单篇分析（带重试 + 自动解析）
-- `analyzeBatch(papers, options)`：批量分析（支持并发控制 + 增量保存回调）
-- `mergeAndSaveResults(newResults, filePath, extraData)`：按 ID 去重合并并保存，**自带失败结果保护**（已有成功 analysis 的论文不会被无 analysis 的失败结果覆盖）
+- `analyzeBatch(papers, options)`：批量分析（支持并发控制 + 增量保存回调）；关键回调异常会向入口传播，不能被当作分析成功吞掉
+- `mergeAndSaveResults(newResults, filePath, extraData)`：按 ID 去重合并并保存，**自带失败结果保护**；跨进程锁内重新读取并校验 `generation`，拒绝陈旧快照覆盖或损坏 current JSON
+- 成功判定要求 `analysisManifest` 版本 1 的全部必需阶段进入终态；失败合并保留旧成功正文，同时叠加新的 checkpoint、恢复图片清单与最近尝试错误
+- 文件锁 owner 带随机 token 并检查本机 PID；旧 owner 不能删除替代锁，存活进程持有的锁不会因时间过长被回收
 
 #### `scripts/validate-scores.js`
 
@@ -198,7 +200,7 @@ HuggingFace Papers 抓取模块。
 - `analyzePaperDeep(paper)`：获取 arXiv HTML 全文（最多 500K 字符）+ 预筛候选图片；双模型模式才串行下载候选图片并由副模型最终筛选高价值图片插入正文，单模型模式只保存候选图元数据；`allImageUrls` 保存候选图，`selectedImageUrls` / `imageUrls` 保存已选图
 - 加载 `prompts/deep-analysis.md`，替换占位符后调用 LLM
 - 输出包含：文档类型、评分、机器摘要、标签、作者与机构、毒舌点评、核心摘要、方法概述和架构、核心创新点、实验结果、细节详述、评分理由、局限与问题、开源详情
-- `parseAnalysis(analysis)`：将分析文本解析为结构化对象，归一化 `document_type` 并为新结果写入 `type-aware-v1` 版本。`score` 从 `## 评分理由` 的八个分项重新计算并封顶为 10，覆盖 LLM 原始总分
+- `parseAnalysis(analysis)`：将分析文本解析为结构化对象，归一化 `document_type` 并为新结果写入 `type-aware-v1` 版本。只有八个分项完整、唯一、分母正确且分值合法时才重算 `score` 并封顶为 10；其余情况返回 `scoreValidation` 错误并阻断保存/发布
 
 **Round 2 — 开源扫描（`scanOpensource`）**
 - 加载 `prompts/opensource-scan.md`
@@ -227,17 +229,20 @@ HuggingFace Papers 抓取模块。
 **Round 7 — 类型感知评分审计（`auditTypeAwareScoring`）**
 - 加载 `prompts/scoring-audit.md`，由主模型只输出 JSON
 - 重新审计文档类型、置信度和八维评分；跨维度理由失败时把精确错误反馈给下一次局部审计
-- 无核心产物时按承诺开放 0.5、仅 Demo 0.2、完全关闭 0 确定性归一化开源分和理由
+- 非理论论文无核心产物时按肯定语境承诺开放 0.5、带 URL/肯定结构化状态的 Demo 0.2、否定或未提及 0 确定性归一化；理论研究保留基于公开证明材料的文类判断
 - 代码只更新评分章节、机器摘要评分字段和评分理由，正文保持不变
 
 **Round 8 — 图像筛选与插图计划（`applyImageSupplement`，双模型模式）**
 - 加载 `prompts/image-supplement.md`
 - 副模型基于最终文本和候选图片筛选高价值图，丢弃低信息图，并只输出 JSON 插图计划
-- `[secondary]` 日志会记录论文 ID、模型、协议、endpoint 来源、key 来源（只显示来源不显示密钥）、候选/下载图片数量、每张输入图的文件名与 MIME/负载大小、请求文本长度、返回长度、有效计划数量及每个计划的章节/anchor/replacement/说明长度；不会打印 API key
-- 插图计划可包含 `anchor`、可选 `replacement`、图前 `lead` 和图后 `explanation`；`replacement` 只允许局部替换精确命中的 anchor 短句，用于让插图前后文字自然衔接
-- 代码根据插图计划在主模型文本的允许章节中插入图片和相邻说明；副模型不得返回完整分析报告，也不得改写评分、摘要、标签、评分理由等主模型内容
+- `[secondary]` 日志会记录论文 ID、模型、协议、endpoint/key 来源、候选与下载数量、图片安全标签/MIME/负载、请求/响应长度、JSON 解析状态、anchor 实际命中、章节末尾回退、拒绝原因和实际插入数量；不会打印 API key
+- 插图计划只接受 `anchor`、图前 `lead` 和图后 `explanation`；旧 `replacement` / `rewrite` 字段会被忽略
+- 代码根据插图计划在允许章节中插入图片和相邻说明，不替换主模型任何原句；候选编号不会被当成论文原始 Figure 编号
 - 合并后再次执行共享完整契约；若计划破坏章节、评分或解析结果，只丢弃该计划并保留已审计正文
 - 无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 按最终正文出现顺序归一化，避免候选编号在重排插入后成为倒序展示图号
+- 只有严格 JSON 对象中的 `insertions: []` 才标记 `no_high_value_images`；schema 错误、非法 JSON、全图下载失败或契约破坏会写入非终态恢复状态，不能伪装成成功分析
+
+**阶段恢复**：`analysisManifest` 逐阶段保存状态，失败正文写入 `analysisCheckpoint`，候选/下载/选图元数据写入 `analysisRecoveryImageManifest`。强制重分析成功旧记录时因没有 checkpoint 会清空主分析及所有下游完成标记；普通失败续跑则从首个未完成阶段继续。
 
 **API 调用**：
 - `callModel(messages, maxTokens)`：带重试的 API 调用封装（内层最多 3 次重试，指数退避：第一次 10 秒，之后翻倍）
@@ -245,7 +250,7 @@ HuggingFace Papers 抓取模块。
 - LLM API 请求强制设置 `agent: false`，禁用连接复用以绕过代理污染（避免 MiMo 403）
 
 **其他特性**：
-- 支持代理自动检测（环境变量 → macOS `scutil --proxy`）
+- 只检测项目根 `.env` 中显式配置的代理变量；不继承 shell/IDE 代理，也不读取 macOS `scutil`
 - 支持纯 Node 内置模块的 HTTP CONNECT 代理
 - 直接运行可测试：`node scripts/deep-analyzer.js <arxivId>`
 
@@ -278,7 +283,7 @@ Node.js 公共工具模块。被几乎所有脚本引用：
 - `parseResponseText(apiType, data)`：统一解析响应文本
 
 **代理**：
-- `detectProxyUrl()`：自动检测代理（环境变量 → macOS `scutil --proxy`）
+- `detectProxyUrl()`：只读取已经由项目环境加载器隔离过的代理变量
 - `createProxyAgent(proxyUrl)`：创建 HTTP CONNECT 代理 agent
 
 **其他**：
@@ -358,7 +363,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 **发布流程**：
 1. 生成 `.md` 文件到博客仓库 `content/posts/`
 2. 默认停止在本地生成和 review，不推送
-3. 传 `--push` 后必须先确认 LLM review 可用、代码层无剩余问题、LLM/图片 review 无 `error` 级阻断问题，再执行 `git add -A` → `git commit -m "add: 论文速递 YYYY-MM-DD"` → `git push origin main`
+3. 传 `--push` 后必须先确认 LLM review 可用、代码层无剩余问题、LLM/图片 review 无 `error` 级阻断问题，并要求博客仓库当前分支为 `main`、Hugo staging 构建通过。随后按本次发布清单精确 stage → 中文详细 commit → `git push origin HEAD:main` → 验证远端 OID；清单路径已有人工修改会阻断，旧页仅按 `paper_digest_pipeline_owned: true` 所有权删除
 4. GitHub Actions 自动构建并部署到 Pages
 5. 访问：`https://nanless.github.io/audio-paper-digest-blog/posts/YYYY-MM-DD/`
 
@@ -375,7 +380,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 - 若需发布全部论文（不过滤），显式传 `--all`
 
 **Review 环节**：
-生成 `.md` 后会自动执行三层 review（代码正则检查 → LLM 文本审查 → 多模态图片审查），论文独立页面使用 `ThreadPoolExecutor(max_workers=3)` 并发审查，自动修复常见问题后写入文件。本地生成/预览时，未配置 LLM API 会跳过 LLM review；正式 `--push` 时 LLM review 必须可用，否则停止发布。代码层剩余问题始终阻断；LLM/图片 review 中只有 `severity=error` 阻断，`warning/info` 会打印出来但不直接阻断推送。
+生成 `.md` 前先从 `analysis` 重解析评分，并与缓存 `parsed`、顶层评分版本比较；人工覆盖必须提供显式 provenance，仍须满足一位小数和开源固定锚点。预检还拒绝规范化后重复的 arXiv ID。随后执行代码正则、LLM 文本和多模态图片三层 review；图片 review 使用副模型配置、携带图片邻近正文，并校验实际 HTTPS peer 防 DNS rebinding。正式 `--push` 时任何不确定 review 都按错误阻断。
 
 代码层自动修复覆盖以下问题：
 1. 未转义的 HTML-like 标签（`<S>`、`<E>`、`<task>` 等）→ 用反引号包裹
@@ -413,7 +418,7 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 
 主要函数：
 - `load_papers(data_file)`：从 JSON 加载论文列表；未传路径时优先读取 `data/current/deep-analysis-result.json`，缺失时回退旧路径 `data/deep-analysis-result.json`；根对象必须是数组或 `{papers: [...]}`，否则直接报错
-- `score_and_sort(papers)`：解析分析结果，按评分降序排列；优先使用已有的 `parsed` 数据，避免重新解析覆盖手动修正
+- `score_and_sort(papers)`：从正文重解析并校验评分，再与缓存 `parsed` 比较后按评分降序排列；人工修正必须使用 `parsedOverride` 声明来源、原因和允许覆盖字段
 - `extract_top_tags(papers, limit)`：提取主任务标签并统计频次
 - `extract_all_tags(papers, limit)`：提取所有标签（去重），用于博客标签云
 - `extract_one_liner(pa)`：从分析结果中提取一句话亮点，优先用创新点或核心贡献句
@@ -466,7 +471,7 @@ Python 发布/维护脚本共享路径配置。集中提供 `PROJECT_ROOT`、`DA
 - 支持 `--dry-run`：只统计将生成的文档标题和块数量，不获取 Token、不创建飞书文档
 
 **实现特点**：
-- Python 实现，复用 `publish_common.py` 的数据加载和评分排序；生成正文时优先使用已有 `parsed`，没有时才重新解析 `analysis`
+- Python 实现，复用 `publish_common.py` 的数据加载和评分排序；生成正文前从 `analysis` 重解析并与缓存 `parsed` 校验一致，人工覆盖必须带显式 provenance
 - 调用飞书 docx API 创建文档并写入内容块
 - Markdown 逐行转换为飞书块类型：heading1(3)/heading2(4)/heading3(5)/text(2)/bullet(12)/ordered(13)/divider(22)
 - 每批最多 20 个块，分批写入
@@ -486,7 +491,8 @@ Python 发布/维护脚本共享路径配置。集中提供 `PROJECT_ROOT`、`DA
 - 耐限流设计：请求超时 30 秒，限流时指数退避，连续 20 篇已知 ID 提前停止
 - 写入 `data/current/papers.json`
 - 额外输出 `data/backfill-result.json`
-- 独立日志：默认追加写入 `logs/backfill.log`；禁用文件日志后不写入
+- 复用统一的每次运行日志，不再重复追加 `logs/backfill.log`
+- 对 `papers.json` 使用与 Node 端相同的 `.lock` 目录和 `generation` 协议，锁内重读合并，避免长时间抓取后的陈旧快照覆盖并发分析状态
 - 依赖：见根目录 `requirements.txt`（`requests`、`playwright`）
 
 #### `scripts/backup-data.sh`

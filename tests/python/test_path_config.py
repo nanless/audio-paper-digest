@@ -2,7 +2,11 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
+import json
+import shutil
+import socket
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 SCRIPTS = os.path.join(ROOT, 'scripts')
@@ -14,8 +18,12 @@ from path_config import (  # noqa: E402
     FILTER_DECISIONS_FILE,
     PAPERS_FILE,
     PROJECT_ROOT,
+    atomic_write_json,
+    atomic_write_text,
     backfill_result_path,
+    file_lock,
     resolve_deep_analysis_result_path,
+    update_json_file_locked,
     wechat_preview_path,
     xiaohongshu_markdown_path,
 )
@@ -53,6 +61,78 @@ class PathConfigTest(unittest.TestCase):
 
             current.write_text('[]', encoding='utf-8')
             self.assertEqual(resolve_deep_analysis_result_path(current, legacy), current)
+
+    def test_atomic_write_replaces_content_and_preserves_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'config.env'
+            target.write_text('OLD=1\n', encoding='utf-8')
+            target.chmod(0o640)
+            atomic_write_text(target, 'NEW=2\n')
+            self.assertEqual(target.read_text(encoding='utf-8'), 'NEW=2\n')
+            self.assertEqual(target.stat().st_mode & 0o777, 0o640)
+            self.assertEqual(list(Path(tmp).glob('.config.env.*.tmp')), [])
+
+    def test_atomic_write_failure_keeps_original_and_cleans_temp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'result.json'
+            target.write_text('{"old": true}\n', encoding='utf-8')
+            with mock.patch('path_config.os.replace', side_effect=OSError('replace failed')):
+                with self.assertRaises(OSError):
+                    atomic_write_json(target, {'new': True})
+            self.assertEqual(target.read_text(encoding='utf-8'), '{"old": true}\n')
+            self.assertEqual(list(Path(tmp).glob('.result.json.*.tmp')), [])
+
+    def test_locked_update_increments_generation_and_blocks_corrupt_overwrite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'papers.json'
+            atomic_write_json(target, {'generation': 3, 'papers': {'a': {}}})
+            updated = update_json_file_locked(
+                target,
+                lambda current: {**current, 'papers': {**current['papers'], 'b': {}}},
+                allow_missing=False,
+            )
+            self.assertEqual(updated['generation'], 4)
+            self.assertEqual(set(updated['papers']), {'a', 'b'})
+            self.assertFalse(Path(f'{target}.lock').exists())
+
+            target.write_text('{broken', encoding='utf-8')
+            with self.assertRaises(RuntimeError):
+                update_json_file_locked(target, lambda _current: {'papers': {}}, allow_missing=False)
+            self.assertEqual(target.read_text(encoding='utf-8'), '{broken')
+
+    def test_locked_update_rejects_stale_generation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'papers.json'
+            atomic_write_json(target, {'generation': 4, 'papers': {}})
+            with self.assertRaisesRegex(RuntimeError, 'generation 冲突'):
+                update_json_file_locked(
+                    target,
+                    lambda current: {**current, 'papers': {'stale': {}}},
+                    expected_generation=3,
+                )
+            self.assertEqual(read_json_strict_for_test(target)['generation'], 4)
+
+    def test_old_lock_owner_cannot_release_replacement_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'result.json'
+            context = file_lock(target)
+            context.__enter__()
+            lock_path = Path(f'{target}.lock')
+            shutil.rmtree(lock_path)
+            lock_path.mkdir()
+            (lock_path / 'owner.json').write_text(json.dumps({
+                'pid': os.getpid(),
+                'hostname': socket.gethostname(),
+                'token': 'replacement-owner',
+            }), encoding='utf-8')
+            context.__exit__(None, None, None)
+            self.assertTrue(lock_path.exists())
+            shutil.rmtree(lock_path)
+
+
+def read_json_strict_for_test(path):
+    with Path(path).open('r', encoding='utf-8') as handle:
+        return json.load(handle)
 
 
 if __name__ == '__main__':

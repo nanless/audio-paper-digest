@@ -96,8 +96,8 @@ describe('deep-analyzer section helpers', () => {
 
         assert.deepStrictEqual(selected.map(x => x.url), [
             'https://example.com/architecture.png',
-            'https://example.com/spectrogram.png',
-            'https://example.com/results.png'
+            'https://example.com/results.png',
+            'https://example.com/spectrogram.png'
         ]);
     });
 
@@ -121,6 +121,62 @@ describe('deep-analyzer section helpers', () => {
             { url: 'https://example.com/figure.png', caption: '' }
         ]);
         assert.strictEqual(safeImageLabel('data:image/svg+xml;base64,' + 'x'.repeat(1000)), 'image/svg+xml;base64,<omitted>');
+    });
+
+    it('arXiv figure 内多张图片会全部提取并按 URL 去重', () => {
+        const { parseArxivImageInfosFromHtml } = require('../scripts/deep-analyzer.js');
+        const html = `
+            <figure>
+                <img src="panels/a.png" alt="Refer to caption">
+                <img src="panels/b.png" alt="Refer to caption">
+                <img src="panels/a.png" alt="duplicate">
+                <figcaption>Figure 2: Spectrogram comparison across systems.</figcaption>
+            </figure>`;
+        const images = parseArxivImageInfosFromHtml(html, '2607.12345v1', '2607.12345');
+
+        assert.deepStrictEqual(images, [
+            {
+                url: 'https://arxiv.org/html/2607.12345v1/panels/a.png',
+                caption: 'Figure 2: Spectrogram comparison across systems.',
+                sourceOrder: 0
+            },
+            {
+                url: 'https://arxiv.org/html/2607.12345v1/panels/b.png',
+                caption: 'Figure 2: Spectrogram comparison across systems.',
+                sourceOrder: 1
+            }
+        ]);
+    });
+
+    it('候选图按信息得分决定下载优先级并保留原始顺序', () => {
+        const { selectImageCandidates } = require('../scripts/deep-analyzer.js');
+        const selected = selectImageCandidates([
+            { url: 'https://example.com/first.png', caption: 'Figure' },
+            { url: 'https://example.com/result.png', caption: 'Ablation results benchmark comparison' },
+            { url: 'https://example.com/third.png', caption: 'Figure' }
+        ], 2);
+
+        assert.strictEqual(selected[0].url, 'https://example.com/result.png');
+        assert.strictEqual(selected[0].sourceOrder, 1);
+        assert.ok(selected[0].candidateScore >= selected[1].candidateScore);
+    });
+
+    it('图片下载会拒绝重定向到本机或私网地址', async () => {
+        const { fetchPublicImageResponse } = require('../scripts/deep-analyzer.js');
+        const originalFetch = global.fetch;
+        global.fetch = async () => ({
+            status: 302,
+            headers: new Headers({ location: 'http://127.0.0.1/private.png' }),
+            body: { cancel: async () => {} }
+        });
+        try {
+            await assert.rejects(
+                () => fetchPublicImageResponse('https://8.8.8.8/image.png'),
+                /非公网|localhost/
+            );
+        } finally {
+            global.fetch = originalFetch;
+        }
     });
 
     it('gap-fill 前缀清理不会误命中评分理由标题', () => {
@@ -190,7 +246,34 @@ primary_task_tag: #音视频生成
 
     it('最终评分审计拒绝缺失维度和越界分数', () => {
         const { parseScoringAuditResult } = require('../scripts/deep-analyzer.js');
-        assert.throws(() => parseScoringAuditResult('{"documentType":"方法研究","confidence":"高","dimensions":{}}'), /缺少维度/);
+        assert.throws(() => parseScoringAuditResult('{"documentType":"方法研究","confidence":"高","dimensions":{}}'), /缺少字段/);
+    });
+
+    it('最终评分审计拒绝 null、布尔、空值、额外维度和多位小数', () => {
+        const { parseScoringAuditResult } = require('../scripts/deep-analyzer.js');
+        const reason = '该维度依据原文中可核对的具体证据独立评分，并且没有复用其他维度的扣分事实。';
+        const payload = {
+            documentType: '方法研究',
+            confidence: '高',
+            dimensions: {
+                innovation: { score: 1.0, reason },
+                technicalRigor: { score: 1.0, reason },
+                experimentalSufficiency: { score: 1.0, reason },
+                clarity: { score: 0.8, reason },
+                impact: { score: 1.0, reason },
+                openSource: { score: 0.5, reason },
+                reproducibility: { score: 0.3, reason },
+                engineering: { score: 1.0, reason }
+            }
+        };
+        for (const invalidScore of [null, true, '', 1.11]) {
+            const candidate = structuredClone(payload);
+            candidate.dimensions.innovation.score = invalidScore;
+            assert.throws(() => parseScoringAuditResult(JSON.stringify(candidate)), /有限数字|最多一位小数/);
+        }
+        const extraDimension = structuredClone(payload);
+        extraDimension.dimensions.marketing = { score: 1.0, reason };
+        assert.throws(() => parseScoringAuditResult(JSON.stringify(extraDimension)), /额外字段/);
     });
 
     it('最终评分审计拒绝跨维度重复扣分事实', () => {
@@ -211,6 +294,109 @@ primary_task_tag: #音视频生成
             }
         };
         assert.throws(() => parseScoringAuditResult(JSON.stringify(payload)), /其他维度/);
+    });
+
+    it('跨维度检查覆盖创新和工程，但不误杀正向或非扣分证据', () => {
+        const { reasonUsesForbiddenDeduction, parseScoringAuditResult } = require('../scripts/deep-analyzer.js');
+        assert.strictEqual(reasonUsesForbiddenDeduction('论文已提供完整训练配置和超参数，技术证据可核对。', []), false);
+        const reason = '该维度依据原文中可核对的具体证据独立评分，并且没有复用其他维度的扣分事实。';
+        const payload = {
+            documentType: '系统技术报告',
+            confidence: '中',
+            dimensions: {
+                innovation: { score: 1.0, reason: '虽然系统闭源，但闭源不应影响创新性判断；系统级协同设计具有明确新意。' },
+                technicalRigor: { score: 1.0, reason },
+                experimentalSufficiency: { score: 1.0, reason },
+                clarity: { score: 0.8, reason },
+                impact: { score: 1.0, reason },
+                openSource: { score: 0.0, reason },
+                reproducibility: { score: 0.3, reason },
+                engineering: { score: 1.0, reason }
+            }
+        };
+        assert.doesNotThrow(() => parseScoringAuditResult(JSON.stringify(payload)));
+        payload.dimensions.engineering.reason = '由于系统闭源且没有开源，因此工程实践价值只能得较低分。';
+        assert.throws(() => parseScoringAuditResult(JSON.stringify(payload)), /其他维度/);
+    });
+
+    it('恢复 manifest 区分无高价值图成功和瞬时失败', () => {
+        const {
+            createAnalysisRecoveryManifest,
+            markRecoveryStage,
+            isRecoveryStageComplete
+        } = require('../scripts/deep-analyzer.js');
+        const manifest = createAnalysisRecoveryManifest({});
+        markRecoveryStage(manifest, 'imageSupplement', 'no_high_value_images', { selectedCount: 0 });
+        assert.strictEqual(isRecoveryStageComplete(manifest, 'imageSupplement'), true);
+        markRecoveryStage(manifest, 'scoringAudit', 'transient_failure', { error: 'timeout' });
+        assert.strictEqual(isRecoveryStageComplete(manifest, 'scoringAudit'), false);
+        assert.match(manifest.updatedAt, /\+08:00$/);
+    });
+
+    it('整体超时预算使用剩余时间而不是每次重置', () => {
+        const { getRemainingTimeoutMs } = require('../scripts/deep-analyzer.js');
+        assert.strictEqual(getRemainingTimeoutMs(1500, 1000), 500);
+        assert.throws(() => getRemainingTimeoutMs(1000, 1000), error => error.code === 'MODEL_OVERALL_TIMEOUT');
+    });
+
+    it('类型证据上下文同时包含文类标准和原文', () => {
+        const { buildTypeAwareSourceContext } = require('../scripts/deep-analyzer.js');
+        const context = buildTypeAwareSourceContext('## 机器摘要\ndocument_type: 系统技术报告', 'latency throughput evidence');
+        assert.match(context, /系统技术报告/);
+        assert.match(context, /延迟、吞吐、成本/);
+        assert.match(context, /latency throughput evidence/);
+    });
+
+    it('demo 发现的资源链接追加到开源详情且同步资源字段', () => {
+        const { updateOpensourceFromDemoLinks } = require('../scripts/deep-analyzer.js');
+        const analysis = `## 机器摘要
+has_code: 否
+has_model: 否
+has_dataset: 否
+
+## 开源详情
+- Demo：https://example.com/demo
+- 复现材料：论文中未提及`;
+        const updated = updateOpensourceFromDemoLinks(analysis, [
+            'https://github.com/example/project',
+            'https://huggingface.co/example/model'
+        ]);
+        assert.match(updated, /Demo：https:\/\/example\.com\/demo/);
+        assert.match(updated, /复现材料：论文中未提及/);
+        assert.match(updated, /github\.com\/example\/project/);
+        assert.match(updated, /has_code: 是/);
+        assert.match(updated, /has_model: 是/);
+    });
+
+    it('开源扫描同步结构化资源字段且不用缺失行覆盖旧值', () => {
+        const { syncResourceFieldsFromOpenSource } = require('../scripts/deep-analyzer.js');
+        const analysis = `## 机器摘要
+has_code: 否
+has_model: 是
+has_dataset: 否
+
+## 开源详情
+旧内容`;
+        const updated = syncResourceFieldsFromOpenSource(analysis, `## 开源详情
+- 代码：https://github.com/example/project
+- 数据集：论文中未提及`);
+
+        assert.match(updated, /has_code: 是/);
+        assert.match(updated, /has_model: 是/);
+        assert.match(updated, /has_dataset: 未说明/);
+    });
+
+    it('最终章节契约拒绝额外标题和顺序变化', () => {
+        const {
+            REQUIRED_ANALYSIS_SECTIONS,
+            validateTopLevelSectionContract
+        } = require('../scripts/analysis-contract.js');
+        const valid = REQUIRED_ANALYSIS_SECTIONS.map(title => `## ${title}\n内容`).join('\n\n');
+        assert.strictEqual(validateTopLevelSectionContract(valid), null);
+        assert.match(validateTopLevelSectionContract(`${valid}\n\n## 附录\n内容`), /额外一级章节/);
+        const swapped = [...REQUIRED_ANALYSIS_SECTIONS];
+        [swapped[2], swapped[3]] = [swapped[3], swapped[2]];
+        assert.match(validateTopLevelSectionContract(swapped.map(title => `## ${title}\n内容`).join('\n\n')), /顺序非法/);
     });
 
     it('最终评分审计会按已有资源状态确定性归一化开源分和总分', () => {
@@ -239,6 +425,30 @@ primary_task_tag: #音视频生成
         assert.strictEqual(normalized.dimensions.openSource.score, 0.2);
         assert.match(normalized.dimensions.openSource.reason, /只提供可访问的在线演示页面/);
         assert.strictEqual(normalized.total, 5.8);
+
+        const negativeAnalysis = `## 评分\n5.0/10\n\n## 机器摘要\nhas_code: 否\nhas_model: 否\nhas_dataset: 否\n\n## 开源详情\nDemo：论文中未提及；作者未承诺开源。`;
+        const negativeNormalized = validateScoringAuditAgainstAnalysis(negativeAnalysis, audit);
+        assert.strictEqual(negativeNormalized.dimensions.openSource.score, 0);
+        assert.match(negativeNormalized.dimensions.openSource.reason, /未给出明确的后续开源承诺/);
+        assert.strictEqual(negativeNormalized.total, 5.6);
+    });
+
+    it('开源状态不会把否定语境误判为 Demo 或未来开源承诺', () => {
+        const {
+            hasAffirmativeDemoEvidence,
+            hasAffirmativeReleasePromise
+        } = require('../scripts/deep-analyzer.js');
+
+        assert.strictEqual(hasAffirmativeDemoEvidence('Demo：论文中未提及'), false);
+        assert.strictEqual(hasAffirmativeDemoEvidence('未提供在线演示'), false);
+        assert.strictEqual(hasAffirmativeDemoEvidence('No demo is available.'), false);
+        assert.strictEqual(hasAffirmativeDemoEvidence('Demo unavailable: https://example.com/demo'), false);
+        assert.strictEqual(hasAffirmativeDemoEvidence('论文提到了 demo 概念，但没有链接'), false);
+        assert.strictEqual(hasAffirmativeDemoEvidence('在线演示：https://example.com/demo'), true);
+        assert.strictEqual(hasAffirmativeDemoEvidence('demo_available: true'), true);
+        assert.strictEqual(hasAffirmativeReleasePromise('论文未承诺开源'), false);
+        assert.strictEqual(hasAffirmativeReleasePromise('没有明确的后续开源计划'), false);
+        assert.strictEqual(hasAffirmativeReleasePromise('作者承诺未来将开放模型权重'), true);
     });
 
     it('demo 页面安全检查会拒绝本机和私网地址', async () => {
@@ -261,7 +471,7 @@ primary_task_tag: #音视频生成
         await assert.rejects(() => validatePublicHttpUrl('https://user:pass@example.com'), /用户名/);
     });
 
-    it('副模型只输出插图计划，主模型原文和评分不被重写', () => {
+    it('副模型的 replacement 被代码忽略，主模型原文和评分不被重写', () => {
         const {
             parseImageInsertionPlan,
             applyImageInsertionPlan
@@ -294,7 +504,7 @@ primary_task_tag: #音视频生成
                     image: 1,
                     section: '方法概述和架构',
                     anchor: '模型先做声学编码，再做语义融合。',
-                    replacement: '模型先做声学编码，再做语义融合；下图展示这两个阶段的连接方式。',
+                    replacement: '模型改成先做文本编码，并删除原有结论。',
                     lead: '下图补充展示模型的声学编码与语义融合流程。',
                     explanation: '图中可以看到声学分支和语义分支在融合模块汇合，支持主模型对架构流程的描述。'
                 },
@@ -314,14 +524,16 @@ primary_task_tag: #音视频生成
         assert.match(result.analysis, /8\.0\/10/);
         assert.match(result.analysis, /主模型核心结论必须保留/);
         assert.match(result.analysis, /主模型评分理由必须保留/);
-        assert.match(result.analysis, /下图展示这两个阶段的连接方式。\n\n下图补充展示模型的声学编码与语义融合流程/);
+        assert.match(result.analysis, /模型先做声学编码，再做语义融合。/);
+        assert.doesNotMatch(result.analysis, /模型改成先做文本编码/);
+        assert.strictEqual(plans.diagnostics.replacementIgnored, 1);
         assert.match(result.analysis, /下图补充展示模型的声学编码与语义融合流程/);
         assert.match(result.analysis, /!\[Architecture diagram\]\(https:\/\/arxiv\.org\/html\/2607\.1\/arch\.png\)/);
         assert.doesNotMatch(result.analysis, /logo\.png/);
         assert.doesNotMatch(result.analysis, /不应该修改评分理由/);
     });
 
-    it('正文已提到图号时优先把图片插到首次提及的段落后', () => {
+    it('候选编号不被当作论文原始 Figure 编号，精确 anchor 决定位置', () => {
         const {
             parseImageInsertionPlan,
             applyImageInsertionPlan
@@ -334,7 +546,7 @@ primary_task_tag: #音视频生成
 
 第三段才是副模型给出的 anchor。`;
         const images = [
-            { url: 'https://arxiv.org/html/2607.1/figure_1.jpg', caption: '图1' }
+            { url: 'https://arxiv.org/html/2607.1/figure_4.jpg', caption: 'Figure 4: System overview' }
         ];
         const plans = parseImageInsertionPlan(JSON.stringify({
             insertions: [{
@@ -350,9 +562,106 @@ primary_task_tag: #音视频生成
 
         assert.match(
             result.analysis,
-            /系统整体流程如图1所示。第一段先概括输入、编码和融合。\n\n图1展示系统整体流程。\n\n!\[图1\]\(https:\/\/arxiv\.org\/html\/2607\.1\/figure_1\.jpg\)/
+            /第三段才是副模型给出的 anchor。\n\n图1展示系统整体流程。\n\n!\[Figure 4: System overview\]\(https:\/\/arxiv\.org\/html\/2607\.1\/figure_4\.jpg\)/
         );
         assert.match(result.analysis, /第二段详细解释训练协议。/);
+        assert.strictEqual(result.insertionDiagnostics[0].anchorMatched, true);
+        assert.strictEqual(result.insertionDiagnostics[0].fallbackToSectionEnd, false);
+    });
+
+    it('单段章节找不到空行时会在段落末尾插图，不会截断句子', () => {
+        const { parseImageInsertionPlan, applyImageInsertionPlan } = require('../scripts/deep-analyzer.js');
+        const analysis = `## 方法概述和架构\n开头锚点。后半句仍属于同一个段落，必须保持连续。`;
+        const images = [{ url: 'https://example.com/method.png', caption: 'Method' }];
+        const plans = parseImageInsertionPlan(JSON.stringify({ insertions: [{
+            image: 1,
+            section: '方法概述和架构',
+            anchor: '开头锚点。',
+            lead: '下图展示方法。'
+        }] }), images);
+        const result = applyImageInsertionPlan(analysis, plans, images);
+
+        assert.match(result.analysis, /开头锚点。后半句仍属于同一个段落，必须保持连续。\n\n下图展示方法。/);
+        assert.strictEqual(result.insertionDiagnostics[0].anchorMatched, true);
+    });
+
+    it('计划解析区分 invalid_json、empty_plan 和 all_items_rejected', () => {
+        const { parseImageInsertionPlanDetailed } = require('../scripts/deep-analyzer.js');
+        const images = [{ url: 'https://example.com/a.png', caption: '' }];
+
+        assert.strictEqual(parseImageInsertionPlanDetailed('not json', images).diagnostics.status, 'invalid_json');
+        assert.strictEqual(parseImageInsertionPlanDetailed('{}', images).diagnostics.status, 'invalid_schema');
+        assert.strictEqual(parseImageInsertionPlanDetailed('{"insertions":null}', images).diagnostics.status, 'invalid_schema');
+        assert.strictEqual(parseImageInsertionPlanDetailed('{"insertions":[],"note":"extra"}', images).diagnostics.status, 'invalid_schema');
+        assert.strictEqual(parseImageInsertionPlanDetailed('[]', images).diagnostics.status, 'invalid_schema');
+        assert.strictEqual(parseImageInsertionPlanDetailed('{"insertions":[]}', images).diagnostics.status, 'empty_plan');
+        const rejected = parseImageInsertionPlanDetailed('{"insertions":[{"image":2,"section":"评分理由","lead":"x"}]}', images);
+        assert.strictEqual(rejected.diagnostics.status, 'all_items_rejected');
+        assert.strictEqual(rejected.diagnostics.rejectedItems, 1);
+    });
+
+    it('成功 manifest 没有 checkpoint 时会清空主分析及全部下游状态', () => {
+        const { createAnalysisRecoveryManifest } = require('../scripts/deep-analyzer.js');
+        const manifest = createAnalysisRecoveryManifest({
+            analysisManifest: {
+                version: 1,
+                stages: {
+                    imageDownload: { status: 'complete' },
+                    primaryAnalysis: { status: 'complete' },
+                    revision: { status: 'complete' },
+                    scoringAudit: { status: 'complete' },
+                    imageSupplement: { status: 'complete' }
+                }
+            }
+        });
+
+        assert.strictEqual(manifest.stages.imageDownload.status, 'complete');
+        assert.strictEqual(manifest.stages.primaryAnalysis, undefined);
+        assert.strictEqual(manifest.stages.revision, undefined);
+        assert.strictEqual(manifest.stages.scoringAudit, undefined);
+        assert.strictEqual(manifest.stages.imageSupplement, undefined);
+    });
+
+    it('理论研究的开源分不会因缺少代码模型数据字段被强制归零', () => {
+        const { validateScoringAuditAgainstAnalysis } = require('../scripts/deep-analyzer.js');
+        const audit = {
+            documentType: '理论研究',
+            confidence: '高',
+            dimensions: {
+                innovation: { score: 1, reason: '创新理由足够具体并且能够通过结构校验要求。' },
+                technicalRigor: { score: 1, reason: '严谨性理由足够具体并且能够通过结构校验要求。' },
+                experimentalSufficiency: { score: 1, reason: '证据理由足够具体并且能够通过结构校验要求。' },
+                clarity: { score: 1, reason: '清晰度理由足够具体并且能够通过结构校验要求。' },
+                impact: { score: 1, reason: '影响力理由足够具体并且能够通过结构校验要求。' },
+                openSource: { score: 1.2, reason: '完整证明已在论文正文和附录中公开，但文档导航仍不完整。' },
+                reproducibility: { score: 0.3, reason: '复现理由足够具体并且能够通过结构校验要求。' },
+                engineering: { score: 0, reason: '该工作是纯理论研究，没有宣称工程落地或部署价值。' }
+            },
+            total: 6.5,
+            rankBucket: '前50%'
+        };
+        const analysis = '## 机器摘要\ndocument_type: 理论研究\nhas_code: 否\nhas_model: 否\nhas_dataset: 否\n\n## 开源详情\n完整证明见正文与附录。';
+
+        assert.strictEqual(validateScoringAuditAgainstAnalysis(analysis, audit), audit);
+    });
+
+    it('caption 写入 Markdown alt 前会转义方括号、反斜杠和换行', () => {
+        const {
+            parseImageInsertionPlan,
+            applyImageInsertionPlan,
+            sanitizeLogField,
+            sanitizeMarkdownImageAlt
+        } = require('../scripts/deep-analyzer.js');
+        const analysis = '## 实验结果\n结果正文。';
+        const caption = String.raw`A [B] \ C` + '\nsecond line';
+        const images = [{ url: 'https://example.com/result.png', caption }];
+        const plans = parseImageInsertionPlan('{"insertions":[{"image":1,"section":"实验结果","lead":"结果图。"}]}', images);
+        const result = applyImageInsertionPlan(analysis, plans, images);
+
+        assert.strictEqual(sanitizeMarkdownImageAlt(caption, ''), String.raw`A \[B\] \\ C second line`);
+        assert.match(result.analysis, /result\.png/);
+        assert.deepStrictEqual(result.selectedImageUrls, ['https://example.com/result.png']);
+        assert.strictEqual(sanitizeLogField('first\nsecond\u0000third', 100), 'first second third');
     });
 
     it('通用图片 alt 和已选 URL 按最终正文出现顺序编号', () => {
@@ -399,11 +708,21 @@ primary_task_tag: #音视频生成
         assert.deepStrictEqual(getPreProvidedImageUrls({
             allImageUrls: [],
             imageUrls: ['https://example.com/fallback.png']
-        }), ['https://example.com/fallback.png']);
+        }), [{ url: 'https://example.com/fallback.png', caption: '' }]);
         assert.deepStrictEqual(getPreProvidedImageUrls({
             allImageUrls: ['https://example.com/primary.png'],
             imageUrls: ['https://example.com/fallback.png']
-        }), ['https://example.com/primary.png']);
+        }), [
+            { url: 'https://example.com/primary.png', caption: '' },
+            { url: 'https://example.com/fallback.png', caption: '' }
+        ]);
+        assert.deepStrictEqual(getPreProvidedImageUrls({
+            imageManifest: { candidates: [{ url: 'https://example.com/primary.png', caption: 'Restored caption' }] },
+            allImageUrls: ['https://example.com/primary.png', 'https://example.com/fallback.png']
+        }), [
+            { url: 'https://example.com/primary.png', caption: 'Restored caption' },
+            { url: 'https://example.com/fallback.png', caption: '' }
+        ]);
     });
 
     it('识别原文中的表格证据', () => {

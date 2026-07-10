@@ -16,7 +16,7 @@ English | **[中文](SKILL.md)**
 - `README.md`: Human-run manual (commands, configuration, troubleshooting)
 - `prompts/filter.md`: LLM prompt for the filtering stage
 - `prompts/deep-analysis.md`: LLM prompt for the deep analysis stage (text-only, output format, tag system, scoring criteria)
-- `prompts/image-supplement.md`: Image selection and insertion-plan prompt (dual-model mode; the secondary model outputs JSON only, with optional local `replacement` around the insertion anchor)
+- `prompts/image-supplement.md`: Image selection and insertion-plan prompt (dual-model mode; the secondary model outputs JSON only and may add only figure-adjacent lead/explanation text)
 - `prompts/opensource-scan.md`: Open source scan prompt (Round 2)
 - `prompts/structure-repair.md`: primary-model structural repair used only when required sections are missing
 - `prompts/scoring-audit.md`: final type-aware JSON scoring audit after text repair; executed by the primary model only
@@ -121,6 +121,7 @@ API call characteristics:
 - **LLM API requests explicitly set `agent: false`, forcing direct connections to bypass local proxies (avoids MiMo 403); arXiv/HuggingFace and other external fetches still use proxy auto-detection**
 - arXiv HTML parsing uses **cheerio** structured selectors, removing noise elements such as script/style/nav/header/footer
 - Images are first preselected by caption/filename/order heuristics (default `imageCandidateMax=20`); only dual-model mode with a configured secondary model downloads up to `imageMaxCount=20` candidate images serially and sends them to the secondary model. Single-model mode only keeps candidate URL/manifest metadata. Downloads validate Content-Type, Content-Length, and PNG/JPEG/WebP file signatures; defaults are 6MB raw bytes per image, 8M base64 chars per image, and 20M total base64 chars per paper
+- Every analysis stage is recorded in `analysisManifest`. Failed attempts retain `analysisCheckpoint` and a separate `analysisRecoveryImageManifest`, and every analysis entry point persists those fields so the next run resumes at the first incomplete stage. Only strict `{"insertions":[]}` is a valid empty image plan; missing fields, wrong types, and malformed JSON remain retryable failures
 - Full text cap is approximately 500K characters (`fullTextMaxChars` in config.js)
 - All analysis configurations are centrally managed in `scripts/config.js`, supporting overrides from the project-root `.env`
 
@@ -135,11 +136,11 @@ Output constraints:
 - Claim-evidence matching and single-issue-single-primary-dimension deduction are mandatory. Missing artifacts, missing reproduction details, insufficient evidence, presentation problems, and technical logic flaws belong to separate dimensions; lower `confidence` when claims cannot be verified
 - System/model reports are evaluated through end-to-end quality, latency, throughput, cost, scale, stress testing, fair comparisons, and failure cases. Datasets, surveys, theory, and applied work use their own evidence standards rather than a method-paper ablation template
 - After text repair, the shared analysis contract checks all 13 required sections. Missing sections trigger only `prompts/structure-repair.md`, avoiding a full paper-level rerun
-- The primary model then runs `prompts/scoring-audit.md` and returns JSON only. Validation errors are fed into the next local audit attempt. With no released core artifact, code deterministically normalizes Open Source to 0.5 for an explicit release promise, 0.2 for demo-only, or 0 otherwise
+- The primary model then runs `prompts/scoring-audit.md` and returns JSON only. Validation errors are fed into the next local audit attempt. With no released core artifact, code deterministically normalizes Open Source to 0.5 for an explicit release promise, 0.2 for demo-only, or 0 otherwise; theory papers are judged by public proofs, derivations, and appendices and are not forced to zero solely because code/model/data flags are absent
 - The complete contract is checked again after image insertion. If an insertion plan damages structure or parsing, only that plan is discarded and the audited primary-model text is retained
 - Candidate numbers are not display numbers. Code normalizes generic alts and `selectedImageUrls` to final body order. Publish review must preserve valid Markdown continuation rows whose leading group cells are empty
 - The secondary image stage must emit detailed `[secondary]` logs: model/protocol/endpoint and key sources, candidate/download counts, safe image labels/MIME/payload sizes, request/response lengths, valid plans, and final selections. Never print API key contents
-- **Code post-processing**: `parseAnalysis`/`parse_analysis` always extracts sub-items from `## 评分理由` to recalculate the total score, overriding the LLM's raw output to prevent LLM calculation errors
+- Scores are accepted only when all eight dimensions are complete and unique, denominators are correct, and values use at most one decimal; Open Source is restricted to the fixed anchor set
 - Tag output must simultaneously include the final tag string, `Primary Task Tag`, `Primary Method Tag`, and `Supplementary Tags`
 - Missing information must be written as "Not stated / Not provided / Not mentioned"; guessing author institutions, experimental numbers, open source status, or external information is prohibited
 - When modifying `prompts/deep-analysis.md` or `prompts/filter.md`, synchronously check whether the parsing logic in `scripts/utils.js` and `scripts/utils.py` can still match the new output format
@@ -152,7 +153,7 @@ When `PAPER_ANALYZER_SECONDARY_MODEL` is configured, dual-model mode is enabled:
 - **Secondary model** (`PAPER_ANALYZER_SECONDARY_*`): multimodal image selection and insertion planning, using `prompts/image-supplement.md`, requires a vision-capable multimodal model (e.g. `mimo-v2.5`, `gpt-4o`)
 - Secondary model's `endpoint`/`key` default to the primary model's values if not set
 - If no secondary model is configured, automatically falls back to single-model text-only mode (no image analysis)
-- Secondary model tasks: select high-value figures (flow diagrams, model diagrams, spectrograms, comparison/result plots, etc.), discard irrelevant or low-information images, and output a JSON insertion plan with target section, anchor, optional `replacement`, lead, and explanation. `replacement` may only locally replace a precisely matched short anchor near the insertion point; the secondary model must not output a complete analysis report or rewrite scores, summaries, or score rationales.
+- Secondary model tasks: select high-value figures (flow diagrams, model diagrams, spectrograms, comparison/result plots, etc.), discard irrelevant or low-information images, and output a JSON insertion plan with target section, anchor, lead, and explanation. Legacy `replacement` / `rewrite` fields are ignored by code. The secondary model must never replace primary-model sentences, output a complete analysis report, or participate in scoring.
 
 ### 4.4 WeChat Official Account (`publish-wechat-full.py`)
 
@@ -329,7 +330,7 @@ Current behavior:
 Agent execution constraints:
 
 - By default only generate and verify blog output, without pushing
-- Only when the user explicitly requests "official publish / push blog" may `--push` be added
+- Only when the user explicitly requests "official publish / push blog" may `--push` be added. Formal publishing requires the blog repository on `main`, a successful Hugo staging build, manifest-only staging with no pre-existing edits on those paths, an explicit `HEAD:main` push, and remote OID verification. Stale pages are deleted only when marked as pipeline-owned
 - If only checking format, verifying new fields, or previewing artifacts, triggering a real `git push` is prohibited
 
 Pre-publish safeguards:
@@ -352,9 +353,9 @@ If the day's results need to be resumed or re-run:
 5. Delete all `content/posts/YYYY-MM-DD-*.md` files in the blog repository for the day
 6. Re-run `node scripts/full-fetch.js`
 
-**Special Scenario — Filtering Stage API Completely Fails (e.g., 34→0 papers):**
-- Even if filtering results in 0 papers, `papers.json` has already been contaminated (new IDs have been written), and must be cleaned/restored and re-run following steps 3-4.
-- If re-running immediately after fixing, `npm run batch` can be used to resume deep analysis (no need to re-fetch).
+**Special Scenario — Filtering Stage API Completely Fails:**
+- Retryable or indeterminate decisions keep filtering incomplete and are not cached as definitive decisions. The main workflow stops before committing the incomplete batch as `complete` and can resume from matching per-paper decisions.
+- Do not restore `papers.json` merely because filtering failed. Inspect `lastUpdated`, batch status, and backups first; restore only when a verified write from an invalid run actually needs to be reverted.
 
 **Key Lesson — Must Check `lastUpdated` Before Restoring `papers.json`:**
 
@@ -392,12 +393,14 @@ PY
 
 ## 7. Logging & Runtime Characteristics
 
-- Node/Python executable scripts write to both terminal and `logs/<script>-YYYYMMDD-HHMMSS.log` by default
+- Node/Python executable scripts write UTF-8 plain text to both terminal and unique `logs/<script>-YYYYMMDD-HHMMSS-<pid>-<seq>.log` files with `0600` permissions by default
 - `PD_ENABLE_FILE_LOGS=1` / `PAPER_DIGEST_ENABLE_FILE_LOGS=1` remain compatible, but are no longer required for log creation
 - File logs have no count, total-size, or per-file-size limit and old logs are not cleaned automatically
-- `backfill_papers.py` also appends to `logs/backfill.log` by default; the same disable switches apply
+- `backfill_papers.py` uses the same unified per-run log and no longer appends a duplicate `logs/backfill.log`
+- Authentication headers, cookies, tokens, secrets, passwords, actual configured key values, and URL userinfo are centrally redacted
 - Major Node scripts have handled background stdout buffering (`setBlocking`) for real-time progress viewing
 - `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` use retry and incremental saving to reduce data loss risk from interruptions
+- `full-fetch.js` also holds a single-run lock across archive, cleanup, filtering, and final merge while retaining configured paper-analysis concurrency; random owner tokens prevent an old owner from releasing a replacement lock
 - `reanalyze.js` saves intermediate results every 5 papers (save interval auto-adjusted in concurrent mode)
 - `npm run validate:data` performs read-only validation for current `papers.json`, `raw-candidates.json`, `filter-decisions.json`, `filtered-papers.json`, and `deep-analysis-result.json`, including candidate stats, filter-count consistency, and full candidate-set coverage when filter decisions are complete; it does not repair data and exits non-zero on problems
 - `full-fetch.js` auto-backs up bak files to `data/archive/`, retaining the last 10
@@ -422,7 +425,7 @@ PY
 13. **Artifact-level verification required after changes**: At minimum, spot-check one `data/current/deep-analysis-result.json` to confirm the `analysis` machine summary contains `document_type`, `rank_bucket`, `primary_task_tag`, and `primary_method_tag`, and the `parsed` cache contains `documentType`, `scoringRubricVersion`, `rankBucket`, `primaryTaskTag`, and `primaryMethodTag`; then run blog/social media scripts to verify final artifacts.
 14. **Verify prompt loading after changes**: After modifying markdown files in the `prompts/` directory, run a quick test (`node scripts/quick-test.js` or single-paper analysis) to confirm `loadPrompt()` can correctly read and replace placeholders without `{variableName}` residue.
 15. **Run unit tests after changes**: After modifying `scripts/utils.js`, `scripts/config.js`, or core analysis engine logic, you must run `npm test` to ensure tests pass.
-16. **MiMo API requests must disable proxy connection reuse**: In `fetch-papers.js` and `deep-analyzer.js`, when calling the LLM API, `options.agent` must be `false` (not `undefined`). During any refactoring or modification of HTTP request logic, changing `agent: false` back to `agent: proxyAgent` or `agent: undefined` is prohibited, otherwise MiMo Token Plan will return 403 in environments with system proxies.
+16. **MiMo API requests must disable proxy connection reuse**: Every Node LLM call, including `test-api-key.js`, must set `options.agent` to `false` (not `undefined`). During refactoring, changing it back to `proxyAgent` or `undefined` is prohibited because MiMo Token Plan can return 403 in environments with system proxies.
 17. **New LLM endpoints must integrate API protocol auto-routing**: Any new script calling an LLM must uniformly use `detectApiType()`, `buildApiUrl()`, `buildHeaders()`, `buildRequestBody()`, `parseResponseText()` from `scripts/utils.js`; hard-coding specific protocol URLs/Headers/Bodies is prohibited.
 18. **Sync the full pipeline when modifying API protocol routing logic**: When modifying `detectApiType()` judgment rules or `buildApiUrl()`/`buildHeaders()` and other functions, you must synchronously check `fetch-papers.js`, `deep-analyzer.js`, and all scripts using `analysis-engine.js` (`full-fetch.js`, `reanalyze.js`, `batch-analyze.js`, `deep-analysis-only.js`, `analyze-single-paper.js`) to ensure consistent behavior across the full pipeline.
 19. **Prohibit committing sensitive files to version control**: `data/`, `logs/`, `*.env`, `*.backup*`, cache files, log archives containing keys, etc. are strictly forbidden from entering git; before committing, confirm `.gitignore` is correctly configured and that no historically leftover sensitive files exist in the repository.
@@ -472,7 +475,7 @@ PY
 
 **Root cause**: Node.js `https.request` with `agent: undefined` still reuses the global default agent's connection pool. When a system proxy is configured (`https_proxy` etc.), connections from the global agent may be polluted by the proxy, causing the MiMo Token Plan server to reject requests.
 
-**Fix**: In `fetch-papers.js` and `deep-analyzer.js`, LLM API requests must set `options.agent` to `false` (not `undefined`), completely disabling connection reuse and forcing each request to establish a new connection:
+**Fix**: Every Node LLM request, including the API test script, must set `options.agent` to `false` (not `undefined`), completely disabling connection reuse and forcing each request to establish a new connection:
 
 ```javascript
 const options = {

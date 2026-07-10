@@ -4,8 +4,10 @@ Paper Digest 公共工具模块 (Python)
 统一封装：Markdown 处理、分析文本解析、时间处理
 """
 
+import math
 import re
 import os
+from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, timezone, timedelta
 
 BJ_TZ = timezone(timedelta(hours=8))
@@ -152,6 +154,23 @@ def parse_machine_summary(analysis):
                 val = rank_map.get(val.lower(), val)
                 if val not in ('前10%', '前25%', '前50%', '后50%'):
                     val = ''
+            if mapped == 'confidence':
+                number_match = re.match(r'^(\d+(?:\.\d+)?)', val)
+                if number_match:
+                    number = float(number_match.group(1))
+                    if (number <= 1 and number >= 0.8) or (number > 1 and number >= 4):
+                        val = '高'
+                    elif (number <= 1 and number >= 0.5) or (number > 1 and number >= 3):
+                        val = '中'
+                    else:
+                        val = '低'
+                else:
+                    confidence_map = {
+                        '高': '高', 'high': '高', 'h': '高',
+                        '中': '中', 'medium': '中', '中低': '中', '中等': '中', 'm': '中',
+                        '低': '低', 'low': '低', '较低': '低', 'l': '低',
+                    }
+                    val = confidence_map.get(val.lower(), val)
             result[mapped] = val
 
     return result
@@ -308,6 +327,114 @@ def _fix_tag(tag):
     return tag
 
 
+SCORE_DIMENSIONS = {
+    'innovationScore': {'label': '创新性', 'max': 2},
+    'technicalRigorScore': {'label': '技术严谨性', 'max': 1.5},
+    'experimentalSufficiencyScore': {'label': '实验充分性', 'max': 1.5},
+    'clarityScore': {'label': '清晰度', 'max': 1},
+    'impactScore': {'label': '影响力', 'max': 1.5},
+    'openSourceScore': {'label': '开源', 'max': 1.5},
+    'reproducibilityScore': {'label': '可复现性', 'max': 0.5},
+    'engineeringScore': {'label': '工程/实践价值', 'max': 1.5},
+}
+
+OPEN_SOURCE_SCORE_ANCHORS = (0.0, 0.2, 0.5, 1.0, 1.2, 1.5)
+
+
+def normalize_score_to_one_decimal(value):
+    return float(Decimal(str(value)).quantize(Decimal('0.1'), rounding=ROUND_HALF_UP))
+
+
+def is_open_source_score_anchor(value):
+    normalized = normalize_score_to_one_decimal(value)
+    return any(abs(anchor - normalized) < 1e-9 for anchor in OPEN_SOURCE_SCORE_ANCHORS)
+
+
+def parse_scoring_dimensions(scoring_text):
+    occurrences = {field: [] for field in SCORE_DIMENSIONS}
+    errors = []
+
+    for raw_line in str(scoring_text or '').splitlines():
+        line = re.sub(r'^(?:[-*+]\s+|\d+[.)]\s+)', '', raw_line.strip())
+        line = line.replace('**', '').strip()
+        if not line:
+            continue
+
+        for field, definition in SCORE_DIMENSIONS.items():
+            label = definition['label']
+            if not re.match(r'^' + re.escape(label) + r'(?=\s|[（(:：/])', line):
+                continue
+
+            rest = line[len(label):].strip()
+            patterns = [
+                re.compile(r'^[(（]\s*(-?\d+(?:\.\d)?)\s*/\s*(-?\d+(?:\.\d)?)\s*[)）]'),
+                re.compile(r'^[:：]\s*(-?\d+(?:\.\d)?)\s*/\s*(-?\d+(?:\.\d)?)'),
+                re.compile(r'^[(（]\s*(-?\d+(?:\.\d)?)\s*分\s*[)）]\s*[:：]\s*(-?\d+(?:\.\d)?)\s*/\s*(-?\d+(?:\.\d)?)'),
+                re.compile(r'^/\s*(-?\d+(?:\.\d)?)\s*[:：]\s*(?:得分\s*)?(-?\d+(?:\.\d)?)'),
+                re.compile(r'^[(（]\s*(-?\d+(?:\.\d)?)\s*分中的\s*(-?\d+(?:\.\d)?)\s*分\s*[)）]'),
+                re.compile(r'^[(（]\s*/\s*(-?\d+(?:\.\d)?)\s*[)）]\s*[:：]\s*(-?\d+(?:\.\d)?)(?:\s*/\s*(-?\d+(?:\.\d)?))?'),
+            ]
+
+            item = {'score': None, 'denominator': None, 'declaredMaximum': None, 'matchedFormat': False}
+            for index, pattern in enumerate(patterns):
+                match = pattern.search(rest)
+                if not match:
+                    continue
+                item['matchedFormat'] = True
+                if index <= 1:
+                    item['score'] = float(match.group(1))
+                    item['denominator'] = float(match.group(2))
+                elif index == 2:
+                    item['declaredMaximum'] = float(match.group(1))
+                    item['score'] = float(match.group(2))
+                    item['denominator'] = float(match.group(3))
+                elif index in (3, 4):
+                    item['denominator'] = float(match.group(1))
+                    item['score'] = float(match.group(2))
+                else:
+                    item['denominator'] = float(match.group(1))
+                    item['score'] = float(match.group(2))
+                    if match.group(3) is not None:
+                        item['declaredMaximum'] = float(match.group(3))
+                break
+
+            occurrences[field].append(item)
+            break
+
+    scores = {}
+    for field, definition in SCORE_DIMENSIONS.items():
+        found = occurrences[field]
+        label = definition['label']
+        maximum = definition['max']
+        if not found:
+            errors.append(f'缺少评分维度“{label}”')
+            continue
+        if len(found) > 1:
+            errors.append(f'评分维度“{label}”重复出现 {len(found)} 次')
+            continue
+
+        item = found[0]
+        score = item['score']
+        denominator = item['denominator']
+        if not item['matchedFormat'] or score is None or denominator is None or not math.isfinite(score) or not math.isfinite(denominator):
+            errors.append(f'评分维度“{label}”格式非法，必须写成 得分/{maximum}')
+            continue
+        if denominator != maximum or (item['declaredMaximum'] is not None and item['declaredMaximum'] != maximum):
+            errors.append(f'评分维度“{label}”分母必须为 {maximum}')
+            continue
+        if score < 0 or score > maximum:
+            errors.append(f'评分维度“{label}”得分 {score:g} 超出 0-{maximum}')
+            continue
+        normalized_score = normalize_score_to_one_decimal(score)
+        if field == 'openSourceScore' and not is_open_source_score_anchor(normalized_score):
+            anchors = '/'.join(f'{value:.1f}' for value in OPEN_SOURCE_SCORE_ANCHORS)
+            errors.append(f'评分维度“{label}”得分必须为 {anchors}')
+            continue
+        scores[field] = normalized_score
+
+    return {'valid': not errors, 'scores': scores, 'errors': errors}
+
+
 def parse_analysis(analysis):
     """解析深度分析文本为结构化字典"""
     if not analysis:
@@ -332,6 +459,7 @@ def parse_analysis(analysis):
         'hasCode': '',
         'hasModel': '',
         'hasDataset': '',
+        'scoreValidation': {'valid': False, 'scores': {}, 'errors': ['缺少评分理由']},
     }
 
     m = re.search(r'##\s*评分\s*\n\s*\*?(\d+\.?\d*)\*?', analysis)
@@ -469,7 +597,7 @@ def parse_analysis(analysis):
     m = re.search(r'##\s*开源(?:详情)?[：:]*\s*\n([\s\S]*?)(?=\n##|$)', analysis)
     r['opensource'] = m.group(1).strip() if m else ''
 
-    # 从评分理由中提取六个分项并计算总分，始终覆盖 LLM 给出的总分
+    # 只有八维评分完整、唯一且分母/范围合法时才覆盖 LLM 给出的总分。
     scoring_text = r.get('scoringReason', '')
     if not scoring_text:
         # fallback: 在整个分析文本中搜索
@@ -477,99 +605,15 @@ def parse_analysis(analysis):
         if m:
             scoring_text = m.group(1).strip()
 
-    if scoring_text:
-        # 每个维度的上限（用于截断旧格式或 LLM 越界输出）
-        dim_max = {
-            '创新性': 2,
-            '技术严谨性': 1.5,
-            '实验充分性': 1.5,
-            '清晰度': 1,
-            '影响力': 1.5,
-            '开源': 1.5,
-            '可复现性': 0.5,
-            '工程/实践价值': 1.5
-        }
-        dim_scores = {}
-        for dim, max_val in dim_max.items():
-            # 支持多种 LLM 输出格式
-            # 格式A（10分制，需转换）：dim (max/max)：score/10
-            # 格式B（维度分制，直接用）：dim (score/max)：description
-            # 格式C：dim：score/max
-
-            # 优先匹配10分制格式（格式A）：dim ... ：score/10
-            ten_point_pat = re.compile(
-                r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*\d+\.?\d*\s*/\s*\d+\.?\d*\s*[）)]\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(\d+\.?\d*)\s*/\s*10'
-            )
-            ten_point_match = ten_point_pat.search(scoring_text)
-            if ten_point_match:
-                try:
-                    v10 = float(ten_point_match.group(1))
-                    dim_scores[dim] = round((v10 / 10) * max_val, 1)
-                    continue
-                except (ValueError, TypeError):
-                    pass
-
-            # 次优先：dim ... 得分X.Y/max 格式（得分在描述末尾）
-            defen_pat = re.compile(
-                r'(?:\*\*)?\s*' + re.escape(dim) + r'.*?得分(\d+\.?\d*)\s*(?:/\s*(\d+\.?\d*))?'
-            )
-            defen_match = defen_pat.search(scoring_text)
-            if defen_match:
-                try:
-                    v_defen = float(defen_match.group(1))
-                    v_max_str = defen_match.group(2)
-                    v_max = float(v_max_str) if v_max_str else None
-                    if v_max and v_max == 10:
-                        dim_scores[dim] = round((v_defen / 10) * max_val, 1)
-                    elif v_max and v_max > 0:
-                        dim_scores[dim] = min(v_defen, max_val)
-                    else:
-                        # 无/max：假设是维度原始分值
-                        dim_scores[dim] = min(v_defen, max_val)
-                    continue
-                except (ValueError, TypeError):
-                    pass
-
-            # 非10分制的常规匹配
-            dm = None
-            for pat in [
-                # 格式0: dim (max分)：score/max（如 HAIM 的格式）
-                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*\d+\.?\d*分\s*[）)]\s*[:：]\s*(\d+\.?\d*)\s*/\s*\d+\.?\d*'),
-                # 格式1: dim (score/max)：description（排除有/10的情况）
-                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*(\d+\.?\d*)\s*/\s*\d+\.?\d*\s*[）)](?!.*/10)'),
-                # 格式2: dim：score/max
-                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[:：]\s*(\d+\.?\d*)\s*/\s*\d+\.?\d*\s*(?:\*\*)?'),
-                # 格式3: dim/满分：得分 score
-                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*/\s*\d+\.?\d*\s*[:：]\s*(?:得分\s*)?(\d+\.?\d*)'),
-                # 格式4: dim (max分 / 满分max分) -> score分
-                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*\d+\.?\d*分\s*/\s*满分\s*\d+\.?\d*分\s*[）)]\s*->\s*(\d+\.?\d*)分'),
-                # 格式5: dim（/max）：score/max
-                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*/\s*\d+\.?\d*\s*[）)]\s*[:：]\s*(\d+\.?\d*)'),
-                # 格式6: dim (max分中的score分)
-                re.compile(r'(?:\*\*)?\s*' + re.escape(dim) + r'\s*[（(]\s*\d+\.?\d*分中的(\d+\.?\d*)分\s*[）)]'),
-            ]:
-                dm = pat.search(scoring_text)
-                if dm:
-                    break
-            if dm:
-                try:
-                    dim_scores[dim] = min(float(dm.group(1)), max_val)
-                except (ValueError, TypeError):
-                    pass
-        if dim_scores:
-            total = sum(dim_scores.values())
-            total = max(1.0, min(10.0, total))
-            r['score'] = str(round(total, 1))
+    r['scoreValidation'] = parse_scoring_dimensions(scoring_text)
+    if r['scoreValidation']['valid']:
+            dim_scores = r['scoreValidation']['scores']
+            total = min(10.0, sum(normalize_score_to_one_decimal(value) for value in dim_scores.values()))
+            r['score'] = f'{normalize_score_to_one_decimal(total):.1f}'
 
             # 用评分理由的分项覆盖结果字段，确保与总分一致
-            r['innovationScore'] = str(round(dim_scores.get('创新性', 0), 1))
-            r['technicalRigorScore'] = str(round(dim_scores.get('技术严谨性', 0), 1))
-            r['experimentalSufficiencyScore'] = str(round(dim_scores.get('实验充分性', 0), 1))
-            r['clarityScore'] = str(round(dim_scores.get('清晰度', 0), 1))
-            r['impactScore'] = str(round(dim_scores.get('影响力', 0), 1))
-            r['openSourceScore'] = str(round(dim_scores.get('开源', 0), 1))
-            r['reproducibilityScore'] = str(round(dim_scores.get('可复现性', 0), 1))
-            r['engineeringScore'] = str(round(dim_scores.get('工程/实践价值', 0), 1))
+            for field in SCORE_DIMENSIONS:
+                r[field] = f'{normalize_score_to_one_decimal(dim_scores[field]):.1f}'
             if r.get('machineSummary'):
                 r['machineSummary']['innovation'] = r['innovationScore']
                 r['machineSummary']['technicalRigor'] = r['technicalRigorScore']
@@ -580,18 +624,23 @@ def parse_analysis(analysis):
                 r['machineSummary']['reproducibility'] = r['reproducibilityScore']
                 r['machineSummary']['engineeringScore'] = r['engineeringScore']
 
-    # 矛盾检测：开源高分但无任何实际链接
+    # 理论论文的核心产物可以是正文/附录中的公开证明，资源字段不能完整表达其状态。
     open_score_val = float(r.get('openSourceScore', 0) or 0)
+    is_theory_paper = r.get('documentType') == '理论研究'
     has_code_yes = r.get('hasCode') in ('是', 'yes')
     has_model_yes = r.get('hasModel') in ('是', 'yes')
     has_dataset_yes = r.get('hasDataset') in ('是', 'yes')
-    if open_score_val >= 1.0 and not has_code_yes and not has_model_yes and not has_dataset_yes:
-        r['openSourceScore'] = '0'
+    if (r['scoreValidation']['valid'] and not is_theory_paper and open_score_val >= 1.0
+            and not has_code_yes and not has_model_yes and not has_dataset_yes):
+        r['openSourceScore'] = '0.0'
         if r.get('machineSummary'):
-            r['machineSummary']['openSource'] = '0'
-        total = float(r.get('score', 0) or 0)
-        total = max(1.0, min(10.0, total - open_score_val))
-        r['score'] = str(round(total, 1))
+            r['machineSummary']['openSource'] = '0.0'
+        r['scoreValidation']['scores']['openSourceScore'] = 0.0
+        total = sum(
+            normalize_score_to_one_decimal(value)
+            for value in r['scoreValidation']['scores'].values()
+        )
+        r['score'] = f'{normalize_score_to_one_decimal(min(10.0, max(0.0, total))):.1f}'
 
     # rankBucket 推断：始终基于最终 score 重新计算（覆盖 LLM 原始值）
     if r.get('score'):

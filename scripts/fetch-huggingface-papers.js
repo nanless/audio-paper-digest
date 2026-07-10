@@ -15,6 +15,7 @@ setupScriptLogging(__filename);
  */
 
 const { execFileSync } = require('child_process');
+const { buildChildProcessEnv, TRANSPORT_ENV_KEYS } = require('./env-loader.js');
 
 const { getBeijingDateString, getBeijingISOString, normalizeToBeijingISOString, normalizedId } = require('./utils.js');
 const { HUGGINGFACE_CONFIG } = require('./config.js');
@@ -26,14 +27,15 @@ function fetchWithCurl(url, timeout = 60) {
     try {
         const result = execFileSync('curl', ['-s', '-f', '-L', '--max-time', String(timeout), url], {
             encoding: 'utf8',
-            maxBuffer: 10 * 1024 * 1024
+            maxBuffer: 10 * 1024 * 1024,
+            env: buildChildProcessEnv({}, TRANSPORT_ENV_KEYS)
         });
 
         if (!result || result.trim() === '') {
-            return null;
+            return { ok: false, data: null, error: 'empty response' };
         }
 
-        return JSON.parse(result);
+        return { ok: true, data: JSON.parse(result), error: null };
     } catch (e) {
         if (e.status === 22) {
             // curl --fail returns exit code 22 for HTTP errors (4xx, 5xx)
@@ -43,8 +45,24 @@ function fetchWithCurl(url, timeout = 60) {
         } else {
             console.error(`  请求失败 (${url}): ${e.message.substring(0, 100)}`);
         }
-        return null;
+        return { ok: false, data: null, error: e.message || String(e) };
     }
+}
+
+function attachSourceHealth(items, health) {
+    Object.defineProperty(items, '_sourceHealth', {
+        value: health,
+        enumerable: false,
+        configurable: true
+    });
+    return items;
+}
+
+function makeSourceFetchError(message, sourceHealth) {
+    const error = new Error(message);
+    error.code = 'SOURCE_FETCH_FAILED';
+    error.sourceHealth = sourceHealth;
+    return error;
 }
 
 /**
@@ -144,7 +162,9 @@ function convertPaper(paper) {
 async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
     const {
         days = HUGGINGFACE_CONFIG.defaultDays,
-        minUpvotes = HUGGINGFACE_CONFIG.defaultMinUpvotes
+        minUpvotes = HUGGINGFACE_CONFIG.defaultMinUpvotes,
+        fetchFn = fetchWithCurl,
+        sleepFn = ms => new Promise(resolve => setTimeout(resolve, ms))
     } = options;
 
     const cutoffStr = getBeijingDateString(days);
@@ -152,6 +172,27 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
     console.log(`📥 从 HuggingFace Papers 获取过去 ${days} 天的论文 (>= ${cutoffStr})...`);
 
     const merged = new Map(); // paper_id -> paper
+    const health = {
+        source: 'huggingface',
+        attempts: 0,
+        successfulRequests: 0,
+        failures: [],
+        requests: []
+    };
+    const fetchTracked = (name, url) => {
+        health.attempts++;
+        const rawResult = fetchFn(url);
+        const result = rawResult && typeof rawResult.ok === 'boolean'
+            ? rawResult
+            : { ok: rawResult !== null && rawResult !== undefined, data: rawResult, error: rawResult == null ? 'empty response' : null };
+        health.requests.push({ name, ok: result.ok });
+        if (result.ok) {
+            health.successfulRequests++;
+        } else {
+            health.failures.push({ name, error: result.error || 'unknown error' });
+        }
+        return result;
+    };
 
     // ====== 1. 获取 daily_papers（分页，含丰富数据）======
     console.log(`\n  📰 获取 daily_papers（精选每日论文）...`);
@@ -161,9 +202,21 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
     while (!reachedCutoff && page < HUGGINGFACE_CONFIG.maxPages) {
         const offset = page * HUGGINGFACE_CONFIG.pageLimit;
         const url = `https://huggingface.co/api/daily_papers?limit=${HUGGINGFACE_CONFIG.pageLimit}&offset=${offset}`;
-        const data = fetchWithCurl(url);
+        const response = fetchTracked(`daily_papers:${page + 1}`, url);
+        const data = response.data;
 
-        if (!data || !Array.isArray(data) || data.length === 0) {
+        if (!response.ok) {
+            console.log(`  页${page + 1}: 请求失败，停止 daily_papers 分页`);
+            break;
+        }
+        if (!Array.isArray(data)) {
+            health.failures.push({ name: `daily_papers:${page + 1}`, error: 'response is not an array' });
+            health.successfulRequests--;
+            health.requests[health.requests.length - 1].ok = false;
+            console.log(`  页${page + 1}: 响应格式错误，停止`);
+            break;
+        }
+        if (data.length === 0) {
             console.log(`  页${page + 1}: 无数据，停止`);
             break;
         }
@@ -208,16 +261,17 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
 
         page++;
         // 延迟避免请求过快
-        await new Promise(resolve => setTimeout(resolve, HUGGINGFACE_CONFIG.pageDelayMs));
+        await sleepFn(HUGGINGFACE_CONFIG.pageDelayMs);
     }
 
     console.log(`  daily_papers 共获取: ${merged.size} 篇`);
 
     // ====== 2. 获取 papers API（补充最近1-2天的新论文）======
     console.log(`\n  📰 获取 papers API（最新论文补充）...`);
-    const papersData = fetchWithCurl(`https://huggingface.co/api/papers?limit=${HUGGINGFACE_CONFIG.pageLimit}`);
+    const papersResponse = fetchTracked('papers', `https://huggingface.co/api/papers?limit=${HUGGINGFACE_CONFIG.pageLimit}`);
+    const papersData = papersResponse.data;
 
-    if (papersData && Array.isArray(papersData)) {
+    if (papersResponse.ok && Array.isArray(papersData)) {
         let newCount = 0;
         for (const item of papersData) {
             if (typeof item !== 'object' || !item) continue;
@@ -241,6 +295,17 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
             }
         }
         console.log(`  papers API 新增: ${newCount} 篇`);
+    } else if (papersResponse.ok) {
+        health.failures.push({ name: 'papers', error: 'response is not an array' });
+        health.successfulRequests--;
+        health.requests[health.requests.length - 1].ok = false;
+    }
+
+    health.ok = health.successfulRequests > 0;
+    health.allFailed = health.attempts > 0 && health.successfulRequests === 0;
+    if (health.allFailed) {
+        const summary = health.failures.map(item => `${item.name}:${item.error}`).join('; ');
+        throw makeSourceFetchError(`HuggingFace 所有抓取请求均失败${summary ? `: ${summary}` : ''}`, health);
     }
 
     // ====== 3. 过滤和排序 ======
@@ -295,7 +360,8 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         console.log(`    ${d}: ${dateCounts[d]} 篇`);
     }
 
-    return papers;
+    health.fetched = papers.length;
+    return attachSourceHealth(papers, health);
 }
 
 /**
@@ -351,6 +417,7 @@ function mergeAndDeduplicate(arxivPapers, hfPapers) {
 // 导出
 module.exports = {
     fetchHuggingFacePapers,
+    fetchWithCurl,
     mergeAndDeduplicate,
     convertDailyPaper,
     convertPaper

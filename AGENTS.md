@@ -56,9 +56,9 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 
 **博客相关变量**：`PAPER_DIGEST_BLOG_REPO` 可覆写 Hugo 博客仓库路径；未设置时使用默认路径，目录不存在会跳过博客已发布去重，真实博客发布仍需要本地仓库存在。
 
-**双模型（可选，多模态）**：设置 `PAPER_ANALYZER_SECONDARY_MODEL` 即启用副模型做图像筛选与插图计划（主模型仅做纯文本分析）；副模型只输出 JSON 计划，可包含目标章节、anchor、可选 replacement、图前/图后说明；代码只在主模型文本上合并这些局部插图改动。不设置则跳过图片、退回单模型纯文本。`PAPER_ANALYZER_SECONDARY_ENDPOINT` / `PAPER_ANALYZER_SECONDARY_API_KEY` 未设置时默认复用主模型对应值。
+**双模型（可选，多模态）**：设置 `PAPER_ANALYZER_SECONDARY_MODEL` 即启用副模型做图像筛选与插图计划（主模型仅做纯文本分析）；副模型只输出 JSON 计划，包含目标章节、anchor、图前 `lead` 和图后 `explanation`。代码只新增插图及相邻说明，忽略旧 `replacement` / `rewrite` 字段，禁止副模型替换主模型原文。不设置则跳过图片、退回单模型纯文本。`PAPER_ANALYZER_SECONDARY_ENDPOINT` / `PAPER_ANALYZER_SECONDARY_API_KEY` 未设置时默认复用主模型对应值。
 
-Node 脚本通过 `scripts/env-loader.js` 加载当前项目根 `.env`：① `scripts/config.js` 模块级最先执行（任何 `require('config')` 即触发）；② `scripts/utils.js` 的 `loadEnvFile()` 二次兜底补漏。Python 脚本通过 `scripts/project_env.py` 加载同一个 `.env`。两端都会先清理继承自 Trae/Codex/shell 的项目同名变量（`PAPER_ANALYZER_*`、`PAPER_DIGEST_*`、`PD_*`、`WECHAT_*`、`FEISHU_*`、`XIAOHONGSHU_*`、`KIMI_API_KEY`），再写入项目 `.env`，禁止外层环境变量和当前项目配置混用。
+Node 脚本通过 `scripts/env-loader.js` 加载当前项目根 `.env`：① `scripts/config.js` 模块级最先执行（任何 `require('config')` 即触发）；② `scripts/utils.js` 的 `loadEnvFile()` 二次兜底补漏。Python 脚本通过 `scripts/project_env.py` 加载同一个 `.env`。两端都会先清理继承自 Trae/Codex/shell 的项目同名变量（`PAPER_ANALYZER_*`、`PAPER_DIGEST_*`、`PD_*`、`WECHAT_*`、`FEISHU_*`、`XIAOHONGSHU_*`、`KIMI_API_KEY`）以及大小写代理变量，再写入项目 `.env`；代理不再回退 macOS `scutil`，加载器会把 `.env` 权限收紧为 `0600`。外部命令必须使用最小子进程环境，禁止把 LLM/发布凭据传给 curl、CLI、Git hook 或浏览器进程。
 
 ### LLM API 协议自动路由
 
@@ -72,7 +72,7 @@ Node 脚本通过 `scripts/env-loader.js` 加载当前项目根 `.env`：① `sc
 | `/anthropic` | — | Anthropic | `{base}/messages` |
 | 其他 | 其他 | OpenAI | `/v1/chat/completions` |
 
-**关键**：LLM API 请求中 `options.agent` 必须显式设为 `false`（禁用连接复用），否则在有系统代理时 MiMo Token Plan 返回 403。适用于 `fetch-papers.js` 和 `deep-analyzer.js` 中的所有 LLM API 调用。
+**关键**：LLM API 请求中 `options.agent` 必须显式设为 `false`（禁用连接复用），否则在有系统代理时 MiMo Token Plan 返回 403。适用于 `fetch-papers.js`、`deep-analyzer.js`、`test-api-key.js` 以及后续新增的所有 Node LLM API 调用。
 
 ## 架构
 
@@ -90,7 +90,7 @@ Node 脚本通过 `scripts/env-loader.js` 加载当前项目根 `.env`：① `sc
 
 ### 发布脚本（Python）
 
-`publish-to-blog.py` / `publish-wechat-full.py` / `publish-xiaohongshu.py` / `xiaohongshu-publisher.py` / `publish-to-feishu.py` + 共用模块 `publish_common.py` / `path_config.py` / `utils.py`。博客、微信、飞书发布优先使用论文对象中已有的 `parsed`，没有时才回退解析 `analysis`，避免覆盖人工修正或已缓存的结构化结果；Python 侧默认运行数据路径统一从 `path_config.py` 取，发布输入默认优先 `data/current/deep-analysis-result.json`，缺失时才回退 `data/deep-analysis-result.json`。
+`publish-to-blog.py` / `publish-wechat-full.py` / `publish-xiaohongshu.py` / `xiaohongshu-publisher.py` / `publish-to-feishu.py` + 共用模块 `publish_common.py` / `path_config.py` / `utils.py`。发布前必须从 `analysis` 重解析评分并校验八维完整性，再与缓存 `parsed` 和顶层评分版本逐字段比较；人工修正必须声明 `parsedOverride.type=manual`、来源、原因和字段白名单。Python 侧默认运行数据路径统一从 `path_config.py` 取，发布输入默认优先 `data/current/deep-analysis-result.json`，缺失时才回退 `data/deep-analysis-result.json`。
 
 ### 数据目录
 
@@ -133,20 +133,22 @@ prompts/                # LLM prompt 模板
 - **CI**：运行 `npm test` + `npm run validate:data` + `find scripts tests -name '*.js'` 的 `node -c` 语法检查 + `find scripts -name '*.py'` 的 `py_compile` 语法检查 + `python3 -m unittest discover -s tests/python` + 所有 `.sh` 的 `bash -n`。新增 JS/Python/shell 文件会自动纳入检查。
 - **新增分析脚本必须复用 `analysis-engine.js`**，使用 `analyzePaperWithRetry()` + `analyzeBatch()`，禁止重复实现重试/解析/保存逻辑；保存分析结果后必须复用 `scripts/digest-status.js` 同步 `papers.json.digestStatus`。
 - **新增 Node LLM 调用必须通过 `utils.js` 的 `detectApiType()` / `buildApiUrl()` / `buildHeaders()` / `buildRequestBody()` / `parseResponseText()`**，禁止硬编码协议。Python 发布阶段 LLM 调用必须复用 `publish_common.py` 的 `call_publish_llm_api()`。
-- **环境变量加载**：Node 端必须复用 `scripts/env-loader.js` / `loadEnvFile()`；Python 端必须复用 `scripts/project_env.py`。项目配置只允许来自当前项目根 `.env`，脚本启动时必须清理继承进程里的同名项目变量，禁止 shell / Trae / Codex 外层变量覆盖或补齐当前项目配置。
+- **环境变量加载**：Node 端必须复用 `scripts/env-loader.js` / `loadEnvFile()`；Python 端必须复用 `scripts/project_env.py`。项目配置只允许来自当前项目根 `.env`，脚本启动时必须清理继承进程里的同名项目变量与代理变量，禁止 shell / Trae / Codex 外层变量覆盖或补齐当前项目配置。外部命令复用 `buildChildProcessEnv()` / `build_child_process_env()`；只有 Git 可显式追加 SSH/GPG agent。
 - **`loadPrompt()` 从 markdown 文件内的第一个 fenced code block 提取 prompt**，并替换 `{变量名}` 占位符。内部示例代码块需使用比外层更短的 fence，修改 prompt 后需验证 `utils.js` 解析逻辑兼容。
-- **原子写入**：使用 `writeFileAtomic()` 保存数据文件，先写临时文件再 rename，防止写入中断损坏数据。
+- **原子与并发写入**：使用 `writeFileAtomic()` 保存普通数据；分析结果和 `papers.json` 的读改写必须使用跨进程文件锁并校验 `generation`，防止多个入口后写覆盖先写。Python 侧复用 `path_config.py` 的原子写入和 `update_json_file_locked()`，锁目录/owner/generation 协议必须与 Node 一致。
+- **阶段恢复**：深度分析失败结果必须保留 `analysisManifest`、`analysisCheckpoint` 和 `analysisRecoveryImageManifest`，下一次从首个未完成阶段续跑；只有下载、主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计和插图阶段均处于终态时才算成功。强制重分析成功旧记录时因无 checkpoint 必须清空主分析及全部下游完成标记。
 - **北京时间时间戳**：运行数据中的 `timestamp` / `lastUpdated` / `fetchedAt` 应使用 `getBeijingISOString()` 或 Python 端 `now_bj_iso()`，避免 UTC 日期导致跨天归档或发布筛选错误。
-- **博客验证默认 `--skip-push`**，仅用户明确要求时才执行真实 `git push`。`publish-to-blog.py --push` 必须在 LLM review 可用、代码层无剩余问题、LLM/图片 review 无 `error` 级阻断问题后才允许 commit/push；`warning/info` 会输出但不直接阻断。
+- **博客验证默认 `--skip-push`**，仅用户明确要求时才执行真实 `git push`。`publish-to-blog.py --push` 必须在发布数据预检通过、LLM review 可用、代码层无剩余问题、LLM/图片 review 无 `error` 级阻断问题后才允许 commit/push；正式发布还要求博客仓库位于 `main`、Hugo 构建可用且通过，并以 `HEAD:main` 推送后核对远端 OID。Git 只能 stage 本次发布清单中的生成/删除文件，清单路径已有人工修改会阻断；旧页面仅在带 `paper_digest_pipeline_owned: true` 所有权标记时自动删除。
 - **发布 review 不得删除合法表格续行**：Markdown 表格允许前导分组列为空，这通常表示沿用上一行模型/配置；不能把 `| | | | Filter2 ... |` 一类数据行当成子标题删除。普通模型名或技术术语未加反引号属于样式建议，不是格式问题。
 - **图片展示顺序**：候选图编号不是最终展示图号；无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 必须按图片在最终正文中的出现顺序归一化。
-- **副模型日志**：插图筛选必须记录 `[secondary]` 详细输入/输出摘要（模型、协议、endpoint/key 来源、候选和下载数量、图片安全标签/MIME/负载、Prompt/响应长度、每个插图计划和最终选图），只能记录 key 来源，严禁记录 API key 内容。
+- **副模型日志**：插图筛选必须记录 `[secondary]` 详细输入/输出摘要（模型、协议、endpoint/key 来源、候选和下载数量、图片安全标签/MIME/负载、Prompt/响应长度、计划解析状态、anchor 实际命中/章节末尾回退、拒绝原因和最终选图），只能记录 key 来源，严禁记录 API key 内容。统一日志必须是 UTF-8 纯文本、唯一文件名和 `0600` 权限，并脱敏认证头、Cookie、token、secret、password、任意已配置密钥实际值和 URL userinfo；不得轮转、限量或自动清理。
+- **评分数值契约**：八个分项与总分最多一位小数；开源分仅允许 `0/0.2/0.5/1.0/1.2/1.5`。理论研究的完整证明、推导和附录可作为核心公开产物，不能因 `hasCode/hasModel/hasDataset` 均为否而被代码强制归零。Python 发布预检与人工覆盖也必须执行同一契约。
 - **后台运行全流程时用 `node scripts/full-fetch.js`** 而非 `npm run fetch`（npm 可能因 TTY 导致 SIGTERM，exit code 143）。根目录 `run-full-fetch.sh` 即此包装（`cd` 到项目根后 `exec node`）。
 - **`data/` 和 `logs/` 已 gitignore** — 禁止提交运行时产物。
 
 ### 致命 Bug 防御
 
-**MiMo Token Plan 403**：`fetch-papers.js` 和 `deep-analyzer.js` 中 LLM 请求的 `options.agent` 必须为 `false`（不是 `undefined`）。这会彻底禁用连接复用，强制直连。任何重构 HTTP 代码时绝对不能改回 `agent: proxyAgent` 或 `undefined`。
+**MiMo Token Plan 403**：所有 Node LLM 请求（包括 API 测试脚本）的 `options.agent` 必须为 `false`（不是 `undefined`）。这会彻底禁用连接复用，强制直连。任何重构 HTTP 代码时绝对不能改回 `agent: proxyAgent` 或 `undefined`。
 
 ### 长时间运行命令
 
@@ -165,7 +167,7 @@ prompts/                # LLM prompt 模板
 
 评分必须遵守“单一问题单一主维度扣分”：缺少开源产物只归开源，缺少超参数/复现步骤只归可复现性，证据不足只归实验充分性，表达问题只归清晰度，推导/假设/逻辑错误才归技术严谨性。信息不足时降低 `confidence`，不得把“无法验证”写成“技术错误”。副模型仍只负责插图，不得参与类型判断或评分。
 
-最终评分审计会把精确校验错误反馈给下一次局部审计，避免相同违规输出造成整篇重跑。无核心产物时，代码按资源状态固定开源分：明确承诺未来开放为 0.5、仅有可访问 Demo 为 0.2、完全关闭且无承诺为 0；并同步改写开源理由。`parseAnalysis()` 随后从 `## 评分理由` 提取各分项重新计算总分，始终覆盖 LLM 原始总分，并保留旧数据的开源矛盾兜底检测。
+最终评分审计会把精确校验错误反馈给下一次局部审计，避免相同违规输出造成整篇重跑。非理论论文无核心产物时，代码按资源状态固定开源分：明确肯定语境的未来开放承诺为 0.5、带可访问 URL 或肯定结构化状态的 Demo 为 0.2、否定/未提及且无承诺为 0；理论研究保留基于公开证明材料的判断。`parseAnalysis()` 只有在八个分项完整、唯一、分母正确、最多一位小数且分值有限并位于合法范围时才重算总分，否则返回契约错误并阻断保存或发布。
 
 `rankBucket` 推断（基于最终 score）：≥9.0 → 前10%，≥7.5 → 前25%，≥5.5 → 前50%，<5.5 → 后50%。
 

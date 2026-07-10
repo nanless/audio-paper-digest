@@ -83,13 +83,13 @@
 }
 ```
 
-当 `papers` 为空且 `sourceHealth` 存在失败时，主流程只把“arXiv 核心来源全部失败”或“唯一尝试来源失败”视为致命错误；单个分类或 HuggingFace 补充源失败会被记录，但不一定阻断一个真实的空候选批次。
+抓取器在 `sourceHealth` 中记录请求次数、成功次数和失败明细。某个来源的所有请求都失败时属于致命错误，不能表示成“成功但零篇”；至少一次请求成功后返回的空结果才是合法空批次，其他补充请求失败只保留为诊断信息。
 
 `npm run validate:data` 会检查 `papers` 数组、`sourceHealth` 基本形状，并要求 `stats.afterBlogSkip` 等于候选论文数量、`stats.skippedFromBlog` 等于博客去重前后差值、`stats.arxivOnly + stats.hfOnly + stats.both` 等于博客去重前候选总量。
 
 ### 5.3 `data/current/filter-decisions.json`
 
-LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只有 `filterModel` 和 `filterPromptHash` 与当前配置一致才会复用。
+LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用同模型、同 prompt 的明确布尔决定。API 错误或无法判断的响应单独记为 `retryable` 诊断，不能进入正式决定缓存，也会阻止 `stats.complete=true`。
 `npm run validate:data` 会检查 `stats.decided` 是否等于 `decisions` 数量、`stats.related` 是否等于 `related: true` 数量，并要求每条决策的 `related` 为布尔值，`reason` / `rawResponse` / `parseSource` 等字段为字符串。若 `stats.complete=true`，还会要求 `decisions` 覆盖 `raw-candidates.json` 中的全部候选论文。
 
 ```json
@@ -188,6 +188,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只有 `fi
 
 ```json
 {
+  "generation": 12,
   "timestamp": "2026-04-21T10:00:00+08:00",
   "previousTimestamp": "2026-04-20T10:00:00+08:00",
   "stats": {
@@ -285,6 +286,21 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只有 `fi
           {"url": "https://arxiv.org/html/.../fig1.png", "mime": "image/png", "base64Chars": 120000}
         ],
         "selected": ["https://arxiv.org/html/.../fig1.png"]
+      },
+      "analysisManifest": {
+        "version": 1,
+        "stages": {
+          "imageDownload": {"status": "complete"},
+          "primaryAnalysis": {"status": "complete"},
+          "openSourceScan": {"status": "complete"},
+          "demoLinkScan": {"status": "complete"},
+          "revision": {"status": "complete"},
+          "tableRepair": {"status": "not_needed"},
+          "methodRepair": {"status": "complete"},
+          "structureRepair": {"status": "not_needed"},
+          "scoringAudit": {"status": "complete"},
+          "imageSupplement": {"status": "complete"}
+        }
       }
     }
   ]
@@ -299,10 +315,12 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只有 `fi
 - `documentType` 来自机器摘要的 `document_type`，受控值为方法研究、系统技术报告、模型报告、数据集与基准、综述、理论研究、应用研究；常见中英文别名会归一化，未知类型会被拒绝
 - 只有包含合法 `document_type` 的新分析才写入 `scoringRubricVersion: type-aware-v1`；历史结果不补写版本，以免误标
 - `selectedImageUrls` / `imageUrls` 是副模型确认插入正文的高价值图片，并按最终正文出现顺序保存；无真实 caption 的通用 `图N` alt 也按该顺序归一化。`allImageUrls` 是原始候选图片列表，不能直接当作可发布图片使用
-- **`parsed.score` 不是直接取 `## 评分` 下的 LLM 原始总分**，而是从 `## 评分理由` 中提取八个分项（创新性/2、技术严谨性/1.5、实验充分性/1.5、清晰度/1、影响力/1.5、开源/1.5、可复现性/0.5、工程/实践价值/1.5）重新计算，上限为 10 分，覆盖 LLM 原始输出
+- `generation` 每次锁内对象写入递增，用于检测和合并并发更新。`analysisManifest` 版本 1 的所有必需阶段必须处于 `complete` / `not_needed` / `skipped` / `no_candidates` / `no_high_value_images` 才算成功；严格空插图计划才会产生 `no_high_value_images`
+- 失败结果可暂存 `analysisCheckpoint` 与 `analysisRecoveryImageManifest` 供续跑；若旧成功正文仍有效，`analysis` / `parsed` 保持不变，恢复字段和 `digestStatus.latestAttemptStatus: analysis_failed` 叠加保存。下一次成功后恢复 checkpoint 字段会被删除
+- **`parsed.score` 不是直接取 `## 评分` 下的 LLM 原始总分**。只有八个分项完整、唯一、分母正确、数值有限且位于合法范围时才重新计算并封顶为 10；否则 `scoreValidation` 记录契约错误并阻断保存/发布，不会把缺失维度当 0 覆盖原分数
 - `parsed` 中的 `machineSummary` 是 `## 机器摘要` 的解析结果；`rankBucket`、`innovationScore`、`technicalRigorScore` 等 8 个子项字段同时平铺到 `parsed` 顶层以便访问
 - `npm run validate:data` 会校验文档类型、rubric 版本、八个子项范围以及 `parsed.score == min(八项之和, 10)`
-- 解析逻辑变更后，`parsed` 缓存会被清除并在下次发布时重新生成
+- 发布前会从 `analysis` 重新解析并与 `parsed`、顶层评分版本比较；缓存不一致会阻断发布。人工覆盖必须通过 `parsedOverride` 明确声明类型、来源、原因和允许覆盖字段，并仍满足最多一位小数及开源固定锚点契约
 
 ### 5.6 `data/current/analyzed.json`
 

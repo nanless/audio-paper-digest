@@ -8,8 +8,16 @@ setupScriptLogging(__filename);
  */
 
 const fs = require('fs');
-const { loadEnvFile, writeFileAtomic, readJsonSafe, getBeijingISOString, normalizedId } = require('./utils.js');
-const { analyzeBatch } = require('./analysis-engine.js');
+const { loadEnvFile, getBeijingISOString } = require('./utils.js');
+const {
+    analyzeBatch,
+    readJsonFileStrict,
+    updateJsonFileLocked,
+    mergePapersById,
+    isSuccessfulAnalysisRecord,
+    getAnalysisRunStatus,
+    getAnalysisExitCode
+} = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses } = require('./digest-status.js');
 const Config = require('./config.js');
 
@@ -24,22 +32,35 @@ async function main() {
     console.log('=== 批量论文分析 ===');
     console.log(`数据文件: ${RESULT_FILE}`);
 
-    const data = readJsonSafe(RESULT_FILE, null);
-    if (!data) {
-        console.error(`读取数据文件失败: ${RESULT_FILE}`);
-        process.exit(1);
-    }
+    const data = readJsonFileStrict(RESULT_FILE);
 
     const papers = Array.isArray(data) ? data : (data.papers || []);
     console.log(`总论文数: ${papers.length}`);
 
-    const notAnalyzed = papers.filter(p => !p.analysis);
+    const notAnalyzed = papers.filter(p => !isSuccessfulAnalysisRecord(p));
     console.log(`未分析论文: ${notAnalyzed.length}`);
 
     if (notAnalyzed.length === 0) {
+        updateJsonFileLocked(RESULT_FILE, current => ({
+            ...(!Array.isArray(current) && current ? current : {}),
+            papers: Array.isArray(current) ? current : (current?.papers || []),
+            deepAnalysisCompletedAt: getBeijingISOString(),
+            stats: { ...(!Array.isArray(current) ? current?.stats : {}), analysisStatus: 'complete', remainingFailed: 0 }
+        }));
         console.log('所有论文已分析完成！');
-        return;
+        return { status: 'complete', exitCode: 0, stats: { success: 0, failed: 0, skipped: papers.length } };
     }
+
+    updateJsonFileLocked(RESULT_FILE, current => {
+        const payload = {
+            ...(!Array.isArray(current) && current ? current : {}),
+            papers: Array.isArray(current) ? current : (current?.papers || []),
+            lastUpdated: getBeijingISOString(),
+            stats: { ...(!Array.isArray(current) ? current?.stats : {}), analysisStatus: 'running' }
+        };
+        delete payload.deepAnalysisCompletedAt;
+        return payload;
+    });
 
     const { stats } = await analyzeBatch(notAnalyzed, {
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
@@ -65,38 +86,23 @@ async function main() {
             }
         },
         onSave: async (results, saveStats) => {
-            // analyzeBatch 传入的是 r.result（解包后的论文对象），不是 {success, result} 包装
-            const resultMap = new Map();
-            for (const r of results) {
-                if (!r) continue;
-                const key = normalizedId(r);
-                if (key) resultMap.set(key, r);
-            }
-            for (let i = 0; i < papers.length; i++) {
-                const key = normalizedId(papers[i]);
-                if (resultMap.has(key)) {
-                    // 合并新结果到原论文，保留原论文的fetchedAt等字段
-                    papers[i] = { ...papers[i], ...resultMap.get(key) };
+            const attemptedResults = results.filter(Boolean);
+            const processed = saveStats.success + saveStats.failed;
+            const progressStatus = processed < notAnalyzed.length
+                ? 'running'
+                : getAnalysisRunStatus(saveStats);
+            const output = updateJsonFileLocked(RESULT_FILE, current => ({
+                ...(!Array.isArray(current) && current ? current : {}),
+                lastUpdated: getBeijingISOString(),
+                papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), attemptedResults, { preserveSuccessfulAnalysis: true }),
+                stats: {
+                    ...(!Array.isArray(current) ? current?.stats : {}),
+                    ...saveStats,
+                    analysisStatus: progressStatus
                 }
-            }
-            // 直接写入文件，不走 createFileSaver 的合并逻辑（避免 normalizedId 失败导致数据丢失）
-            const output = Array.isArray(data)
-                ? {
-                    lastUpdated: getBeijingISOString(),
-                    papers,
-                    stats: saveStats
-                }
-                : {
-                    ...data,
-                    lastUpdated: getBeijingISOString(),
-                    papers,
-                    stats: {
-                        ...(data.stats || {}),
-                        ...saveStats
-                    }
-                };
-            writeFileAtomic(RESULT_FILE, JSON.stringify(output, null, 2));
-            const digestStatus = updateAnalysisDigestStatuses(papers, {
+            }));
+            papers.splice(0, papers.length, ...(output.papers || []));
+            const digestStatus = updateAnalysisDigestStatuses(attemptedResults, {
                 batchDate: (data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10)
             });
             const statusNote = digestStatus.updated > 0 ? `，papers.json 状态 ${digestStatus.updated} 篇` : '';
@@ -106,11 +112,40 @@ async function main() {
 
     console.log('\n=== 批量分析完成 ===');
     console.log(`成功: ${stats.success} | 失败: ${stats.failed} | 总计处理: ${notAnalyzed.length}`);
-    const remaining = papers.filter(p => !p.analysis).length;
+    const finalPayload = updateJsonFileLocked(RESULT_FILE, current => {
+        const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
+        const remaining = currentPapers.filter(p => !isSuccessfulAnalysisRecord(p)).length;
+        const status = getAnalysisRunStatus(stats, remaining);
+        const payload = {
+            ...(!Array.isArray(current) && current ? current : {}),
+            papers: currentPapers,
+            lastUpdated: getBeijingISOString(),
+            stats: {
+                ...(!Array.isArray(current) ? current?.stats : {}),
+                analyzedSuccess: stats.success,
+                analyzedFailed: stats.failed,
+                remainingFailed: remaining,
+                analysisStatus: status
+            }
+        };
+        if (status === 'complete') payload.deepAnalysisCompletedAt = getBeijingISOString();
+        else delete payload.deepAnalysisCompletedAt;
+        return payload;
+    });
+    const remaining = finalPayload.papers.filter(p => !isSuccessfulAnalysisRecord(p)).length;
+    const status = getAnalysisRunStatus(stats, remaining);
     console.log(`剩余未分析: ${remaining}`);
+    console.log(`运行状态: ${status}`);
+    return { status, exitCode: getAnalysisExitCode(status), stats, remaining };
 }
 
-main().catch(err => {
-    console.error('批量分析异常:', err);
-    process.exit(1);
-});
+if (require.main === module) {
+    main().then(result => {
+        process.exitCode = result.exitCode;
+    }).catch(err => {
+        console.error('批量分析异常:', err);
+        process.exitCode = 1;
+    });
+}
+
+module.exports = { main };

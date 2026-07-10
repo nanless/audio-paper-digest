@@ -7,7 +7,14 @@ setupScriptLogging(__filename);
  * 检查：子项越界、总分一致性、开源矛盾
  */
 
-const { parseAnalysis, writeFileAtomic, readJsonSafe } = require('./utils.js');
+const {
+    parseAnalysis,
+    writeFileAtomic,
+    readJsonSafe,
+    normalizeScoreToOneDecimal,
+    isOpenSourceScoreAnchor,
+    OPEN_SOURCE_SCORE_ANCHORS
+} = require('./utils.js');
 const Config = require('./config.js');
 
 const DIM_MAX = {
@@ -21,6 +28,14 @@ const DIM_MAX = {
     engineeringScore: 1.5
 };
 
+function numericScore(value) {
+    if (typeof value === 'number') {
+        return Number.isFinite(value) && Number.isInteger(value * 10) ? value : Number.NaN;
+    }
+    if (typeof value !== 'string' || !/^-?\d+(?:\.\d)?$/.test(value.trim())) return Number.NaN;
+    return Number(value);
+}
+
 function validateAndFix(papers) {
     let fixedCount = 0;
     const issues = [];
@@ -28,66 +43,107 @@ function validateAndFix(papers) {
     papers.forEach((p, idx) => {
         if (!p.analysis) return;
 
-        const pa = p.parsed;
-        if (!pa) return;
-
+        const oldParsed = p.parsed;
+        const freshParsed = parseAnalysis(p.analysis);
         const paperIssues = [];
-        let needsReparse = false;
+        const sourceValidation = freshParsed?.scoreValidation;
+        const sourceIssues = sourceValidation?.valid
+            ? getParsedScoreIssues(freshParsed)
+            : (sourceValidation?.errors || ['analysis 无法解析出合法八维评分'])
+                .map(message => `源分析评分非法: ${message}`);
 
-        // 1. 检查子项越界
-        for (const [key, max] of Object.entries(DIM_MAX)) {
-            const val = parseFloat(pa[key] || 0);
-            if (val > max + 0.01) {
-                paperIssues.push(`子项越界: ${key}=${val} (上限${max})`);
-                needsReparse = true;
+        if (sourceIssues.length > 0) {
+            paperIssues.push(...sourceIssues);
+        } else {
+            const cacheIssues = getParsedScoreIssues(oldParsed);
+            paperIssues.push(...cacheIssues.map(message => `缓存非法: ${message}`));
+            if (!sameScoringSnapshot(oldParsed, freshParsed)) {
+                paperIssues.push('评分缓存与 analysis 重解析结果不一致');
             }
         }
 
-        // 2. 检查开源矛盾：高分但无链接
-        const openScore = parseFloat(pa.openSourceScore || 0);
-        const hasCode = pa.hasCode === '是' || pa.hasCode === 'yes';
-        const hasModel = pa.hasModel === '是' || pa.hasModel === 'yes';
-        const hasDataset = pa.hasDataset === '是' || pa.hasDataset === 'yes';
-        if (openScore >= 1.0 && !hasCode && !hasModel && !hasDataset) {
-            paperIssues.push(`开源矛盾: ${openScore}分但无链接`);
-            needsReparse = true;
+        if (paperIssues.length === 0) return;
+
+        let stillHasIssues = sourceIssues.length > 0;
+        if (!stillHasIssues) {
+            p.parsed = freshParsed;
+            fixedCount++;
+            stillHasIssues = getParsedScoreIssues(p.parsed).length > 0;
         }
 
-        // 3. 检查总分与子项之和一致性
-        const subtotal = Object.keys(DIM_MAX).reduce((sum, k) => sum + parseFloat(pa[k] || 0), 0);
-        const expectedTotal = Math.round(Math.min(10, Math.max(1, subtotal)) * 10) / 10;
-        const actualTotal = parseFloat(pa.score || 0);
-        if (Math.abs(expectedTotal - actualTotal) > 0.15) {
-            paperIssues.push(`总分不一致: 子项和=${subtotal.toFixed(1)} 期望=${expectedTotal} 实际=${actualTotal}`);
-            needsReparse = true;
-        }
-
-        // 4. 重新解析（如果有问题）
-        if (needsReparse) {
-            const newParsed = parseAnalysis(p.analysis);
-            if (newParsed) {
-                p.parsed = newParsed;
-                fixedCount++;
-
-                // 检查修复后是否还有问题
-                const newSubtotal = Object.keys(DIM_MAX).reduce((sum, k) => sum + parseFloat(newParsed[k] || 0), 0);
-                const newExpected = Math.round(Math.min(10, Math.max(1, newSubtotal)) * 10) / 10;
-                const newActual = parseFloat(newParsed.score || 0);
-
-                issues.push({
-                    idx: idx + 1,
-                    title: p.title?.substring(0, 40),
-                    arxivId: p.arxivId,
-                    oldScore: pa.score,
-                    newScore: newParsed.score,
-                    oldIssues: paperIssues,
-                    stillHasIssues: Math.abs(newExpected - newActual) > 0.15
-                });
-            }
-        }
+        issues.push({
+            idx: idx + 1,
+            title: p.title?.substring(0, 40),
+            arxivId: p.arxivId,
+            oldScore: oldParsed?.score,
+            newScore: p.parsed?.score,
+            oldIssues: paperIssues,
+            stillHasIssues
+        });
     });
 
-    return { fixedCount, issues };
+    return {
+        fixedCount,
+        issues,
+        remainingIssueCount: issues.filter(issue => issue.stillHasIssues).length
+    };
+}
+
+function getParsedScoreIssues(parsed) {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return ['缺少 parsed 评分缓存'];
+    }
+
+    const issues = [];
+    const values = [];
+    for (const [key, max] of Object.entries(DIM_MAX)) {
+        if (parsed[key] === undefined || parsed[key] === '') {
+            issues.push(`缺少子项: ${key}`);
+            continue;
+        }
+        const value = numericScore(parsed[key]);
+        if (!Number.isFinite(value) || value < 0 || value > max) {
+            issues.push(`子项非法: ${key}=${parsed[key]} (范围 0-${max}，最多一位小数)`);
+            continue;
+        }
+        if (key === 'openSourceScore' && !isOpenSourceScoreAnchor(value)) {
+            issues.push(`子项非法: ${key}=${parsed[key]} (固定锚点 ${OPEN_SOURCE_SCORE_ANCHORS.join('/')})`);
+            continue;
+        }
+        values.push(normalizeScoreToOneDecimal(value));
+    }
+
+    const actualTotal = numericScore(parsed.score);
+    if (parsed.score === undefined || parsed.score === '' || !Number.isFinite(actualTotal) || actualTotal < 0 || actualTotal > 10) {
+        issues.push(`总分非法: ${parsed.score}`);
+    } else if (values.length === Object.keys(DIM_MAX).length) {
+        const subtotal = values.reduce((sum, value) => sum + value, 0);
+        const expectedTotal = normalizeScoreToOneDecimal(Math.min(10, subtotal));
+        if (Math.abs(expectedTotal - actualTotal) > 0.01) {
+            issues.push(`总分不一致: 子项和=${subtotal.toFixed(1)} 期望=${expectedTotal} 实际=${actualTotal}`);
+        }
+    }
+
+    const openScore = numericScore(parsed.openSourceScore);
+    const hasResource = [parsed.hasCode, parsed.hasModel, parsed.hasDataset]
+        .some(value => value === '是' || value === 'yes');
+    if (parsed.documentType !== '理论研究' && Number.isFinite(openScore) && openScore >= 1 && !hasResource) {
+        issues.push(`开源矛盾: ${openScore}分但无代码、模型或数据资源`);
+    }
+    return issues;
+}
+
+function sameScoringSnapshot(left, right) {
+    if (!left || !right) return false;
+    const fields = ['score', 'documentType', ...Object.keys(DIM_MAX), 'hasCode', 'hasModel', 'hasDataset'];
+    return fields.every(field => {
+        if (field === 'documentType' || field === 'hasCode' || field === 'hasModel' || field === 'hasDataset') {
+            return String(left[field] || '') === String(right[field] || '');
+        }
+        const leftValue = numericScore(left[field]);
+        const rightValue = numericScore(right[field]);
+        return Number.isFinite(leftValue) && Number.isFinite(rightValue) && Math.abs(leftValue - rightValue) <= 0.01;
+    });
 }
 
 // 主入口
@@ -100,7 +156,7 @@ if (require.main === module) {
     }
 
     console.log(`[validate] 验证 ${data.papers.length} 篇论文...`);
-    const { fixedCount, issues } = validateAndFix(data.papers);
+    const { fixedCount, issues, remainingIssueCount } = validateAndFix(data.papers);
 
     if (fixedCount > 0) {
         writeFileAtomic(dataFile, JSON.stringify(data, null, 2));
@@ -119,26 +175,8 @@ if (require.main === module) {
         console.log('[validate] ✅ 所有论文评分正确');
     }
 
-    // 输出统计
-    const dimMax = DIM_MAX;
-    let totalIssues = 0;
-    data.papers.forEach(p => {
-        const pa = p.parsed;
-        if (!pa) return;
-        for (const [k, max] of Object.entries(dimMax)) {
-            if (parseFloat(pa[k] || 0) > max + 0.01) totalIssues++;
-        }
-        const sub = Object.keys(dimMax).reduce((s,k) => s + parseFloat(pa[k]||0), 0);
-        const exp = Math.round(Math.min(10, Math.max(1, sub)) * 10) / 10;
-        if (Math.abs(exp - parseFloat(pa.score||0)) > 0.15) totalIssues++;
-        const os = parseFloat(pa.openSourceScore || 0);
-        const hc = pa.hasCode === '是' || pa.hasCode === 'yes';
-        const hm = pa.hasModel === '是' || pa.hasModel === 'yes';
-        const hd = pa.hasDataset === '是' || pa.hasDataset === 'yes';
-        if (os >= 1.0 && !hc && !hm && !hd) totalIssues++;
-    });
-    console.log(`[validate] 剩余问题: ${totalIssues}`);
-    process.exit(totalIssues > 0 ? 1 : 0);
+    console.log(`[validate] 剩余问题论文: ${remainingIssueCount}`);
+    process.exit(remainingIssueCount > 0 ? 1 : 0);
 }
 
-module.exports = { validateAndFix, DIM_MAX };
+module.exports = { validateAndFix, getParsedScoreIssues, sameScoringSnapshot, DIM_MAX };

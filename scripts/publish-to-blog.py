@@ -22,7 +22,9 @@ setup_script_logging(__file__)
     python3 publish-to-blog.py --date YYYY-MM-DD
 """
 import json, re, sys, os, subprocess, datetime, base64, concurrent.futures
+import ipaddress, shutil, socket, tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from publish_common import (
@@ -32,8 +34,12 @@ from publish_common import (
     truncate_base64_datauri, fix_yaml_double_commas, strip_raw_inline_html,
     fix_empty_markdown_links, dedupe_image_alts, fix_yaml_unbalanced_quotes,
     sanitize_markdown_for_publish, call_publish_llm_api, PublishLLMUnavailable,
-    count_blocking_review_issues
+    PublishDataValidationError, count_blocking_review_issues,
+    normalize_publish_arxiv_id, review_protocol_failure,
+    validate_papers_for_publish, validate_review_payload
 )
+from path_config import atomic_write_text
+from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env
 from utils import strip_md, parse_analysis
 
 BLOG_REPO = os.path.expanduser(
@@ -43,7 +49,16 @@ CONTENT_DIR = os.path.join(BLOG_REPO, "content", "posts")
 BASE_PATH = os.environ.get("PAPER_DIGEST_BLOG_BASE_PATH", "/audio-paper-digest-blog")
 GITHUB_REMOTE = os.environ.get("PAPER_DIGEST_GITHUB_REMOTE", "origin")
 
-def call_llm_api(prompt, max_tokens=800, temperature=0.1, required=False, context="LLM review", timeout=120):
+def call_llm_api(
+    prompt,
+    max_tokens=800,
+    temperature=0.1,
+    required=False,
+    context="LLM review",
+    timeout=120,
+    images=None,
+    use_secondary=False,
+):
     """调用发布阶段公共 LLM API client。"""
     return call_publish_llm_api(
         prompt,
@@ -51,18 +66,65 @@ def call_llm_api(prompt, max_tokens=800, temperature=0.1, required=False, contex
         temperature=temperature,
         required=required,
         context=context,
-        timeout=timeout
+        timeout=timeout,
+        images=images,
+        use_secondary=use_secondary,
     )
 
 
-def truncate_review_content(content, limit=4000):
-    """按行截断 review 输入，避免把 Markdown 链接或图片 URL 切成半截。"""
-    if len(content) <= limit:
-        return content
-    cut = content.rfind('\n', 0, limit)
-    if cut < max(1000, limit // 2):
-        cut = limit
-    return content[:cut].rstrip() + '\n\n[内容已按行截断，后续正文未送审；不要报告由截断造成的 URL/段落不完整。]'
+def validate_publish_date(value):
+    """Return a canonical real Gregorian date in strict YYYY-MM-DD form."""
+    if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+        raise PublishDataValidationError('博客日期必须严格使用 YYYY-MM-DD 格式')
+    try:
+        parsed = datetime.datetime.strptime(value, '%Y-%m-%d')
+    except ValueError as exc:
+        raise PublishDataValidationError(f'博客日期不是有效日期: {value}') from exc
+    if parsed.strftime('%Y-%m-%d') != value:
+        raise PublishDataValidationError(f'博客日期不是规范日期: {value}')
+    return value
+
+
+def validate_publish_target(blog_repo=None, content_dir=None):
+    """Constrain publication writes to <blog repo>/content/posts."""
+    blog_repo = BLOG_REPO if blog_repo is None else blog_repo
+    content_dir = CONTENT_DIR if content_dir is None else content_dir
+    repo = Path(blog_repo).expanduser().resolve()
+    target = Path(content_dir).expanduser().resolve()
+    expected = (repo / 'content' / 'posts').resolve()
+    try:
+        expected.relative_to(repo)
+    except ValueError as exc:
+        raise PublishDataValidationError('博客 content/posts 不能通过符号链接逃逸仓库') from exc
+    if target != expected:
+        raise PublishDataValidationError(
+            f'CONTENT_DIR 必须严格为博客仓库的 content/posts: {expected}'
+        )
+    if not repo.is_dir():
+        raise PublishDataValidationError(f'博客仓库不存在或不是目录: {repo}')
+    return repo, target
+
+
+def split_review_content(content, limit=4000):
+    """Split the complete body into bounded chunks without dropping any text."""
+    if not content:
+        return ['']
+    chunks = []
+    current = ''
+    for line in content.splitlines(keepends=True):
+        while len(line) > limit:
+            if current:
+                chunks.append(current)
+                current = ''
+            chunks.append(line[:limit])
+            line = line[limit:]
+        if current and len(current) + len(line) > limit:
+            chunks.append(current)
+            current = ''
+        current += line
+    if current or not chunks:
+        chunks.append(current)
+    return chunks
 
 
 def has_unconverted_dollar_math(content):
@@ -100,11 +162,9 @@ def filter_false_positive_review_issues(content, issues):
     return filtered
 
 
-def llm_review_post(content, title="", required=False):
-    """使用 LLM 审查单篇博客内容，返回 (是否通过, 问题列表, 修复后内容)。"""
+def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1'):
+    """Review one bounded chunk of a post."""
     title = plain_title_for_publish(title) if title else title
-    # 截取前 4000 字符节省 token；按行截断，避免切断 Markdown 链接/图片 URL。
-    truncated = truncate_review_content(content, 4000)
     prompt = f"""你是一个 Hugo 静态站点博客内容质量审查专家。
 
 请严格审查下面这篇博客的 Markdown 内容，重点检查以下问题：
@@ -112,7 +172,7 @@ def llm_review_post(content, title="", required=False):
 1. **HTML 标签解析问题**：只检查尖括号包裹的文本标记，例如 `<S>`、`<E>`、`<Sigmoid>`、`<B†>`、`<s>`、`<e>` 等是否**未被反引号包裹**而被 Hugo 错误解析为 HTML 标签（会导致删除线、粗体等意外样式）。普通英文名词或数据集名（如 Lakh MIDI、TheoryTab、MELD、CMU-MOSEI）不是 HTML-like 标签，不要报告。注意：已经被反引号包裹的如 `` `<S>` `` 是正确格式，不要报告。
 2. **LaTeX 公式渲染问题**：检查是否存在使用了 `$...$` 或 `$$...$$` 格式的公式。注意：纯文本形式的数学描述（如 "RMS = sqrt(1/N)"）不是 LaTeX 公式，不需要报告；只有明确使用了 `$` 或 `$$` 包裹但未转换为 `\\(...\\)` / `\\[...\\]` 的才需要报告。
 3. **Markdown 格式问题**：链接、图片引用、表格、列表等格式是否有语法错误
-4. **内容完整性**：是否有乱码、重复、段落错位。注意：以下内容被按行截断到前4000字符左右以节省token，**不要因为截断而报告内容不完整、链接不完整或图片 URL 不完整**。
+4. **内容完整性**：是否有乱码、重复、段落错位。当前内容是完整正文的分块 {chunk_label}，不要因为分块边界报告内容不完整。
 5. **图片问题**：图片链接是否为空、格式是否正确（支持 base64 data URI 和普通 URL）
 6. **YAML frontmatter 问题**：标题、描述等字段是否有引号不匹配、特殊字符未转义
 
@@ -124,9 +184,9 @@ def llm_review_post(content, title="", required=False):
 
 博客标题：{title}
 
-博客内容（前4000字符左右，按行截断）：
+博客正文分块 {chunk_label}：
 ```markdown
-{truncated}
+{content}
 ```
 
 请以 **纯 JSON** 格式返回审查结果，不要添加任何解释文字：
@@ -143,9 +203,20 @@ def llm_review_post(content, title="", required=False):
   ]
 }}"""
 
+    prompt += """
+
+协议一致性要求：
+- 只有 `issues` 中至少存在一条 `severity=error` 时，`passed` 才能为 `false`。
+- 若只有 `warning` / `info` 或没有问题，`passed` 必须为 `true`。
+- `passed=false` 时必须给出至少一条具体、可执行的 `error` 级原因。
+"""
+
     result = call_llm_api(prompt, max_tokens=1500, temperature=0.1, required=required, context=f"LLM 文本 review: {title}")
     if not result:
-        return True, [], content  # LLM 不可用则默认通过
+        if required:
+            passed, issues = review_protocol_failure(f"LLM 文本 review: {title}", '响应为空')
+            return passed, issues, content
+        return True, [], content
 
     # 尝试解析 JSON
     try:
@@ -159,16 +230,27 @@ def llm_review_post(content, title="", required=False):
             cleaned = cleaned[:-3]
         cleaned = cleaned.strip()
         review = json.loads(cleaned)
-        passed = review.get("passed", True)
-        issues = filter_false_positive_review_issues(content, review.get("issues", []))
+        passed, issues = validate_review_payload(
+            review,
+            required=required,
+            context=f"LLM 文本 review: {title}",
+            issue_fields=('type', 'auto_fixable', 'fix_instruction'),
+        )
+        issues = filter_false_positive_review_issues(content, issues)
         if not issues:
             passed = True
         # 自动应用可修复的问题
         fixed_content = apply_llm_fixes(content, issues)
         return passed, issues, fixed_content
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError, ValueError):
         # 如果 JSON 解析失败，尝试从文本中提取问题
         print(f"  ⚠️  LLM review 返回非 JSON 格式，尝试文本解析")
+        if required:
+            passed, issues = review_protocol_failure(
+                f"LLM 文本 review: {title}",
+                '响应不是可解析的 JSON',
+            )
+            return passed, issues, content
         issues = []
         if "问题" in result or "错误" in result or "建议" in result:
             issues.append({
@@ -182,38 +264,210 @@ def llm_review_post(content, title="", required=False):
         return True, [], content
 
 
+def llm_review_post(content, title="", required=False):
+    """Review every chunk of a post and return merged issues and fixes."""
+    chunks = split_review_content(content, 4000)
+    all_issues = []
+    passed = True
+    for index, chunk in enumerate(chunks, 1):
+        chunk_passed, issues, _unused = _llm_review_post_chunk(
+            chunk,
+            title,
+            required=required,
+            chunk_label=f'{index}/{len(chunks)}',
+        )
+        passed = passed and chunk_passed
+        all_issues.extend(issues)
+    fixed_content = apply_llm_fixes(content, all_issues)
+    if count_blocking_review_issues(all_issues):
+        passed = False
+    return passed, all_issues, fixed_content
+
+
+REVIEW_IMAGE_MIME_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}
+REVIEW_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _validate_public_image_url(url):
+    parsed = urlparse(url)
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+        raise PublishDataValidationError('图片 review 只允许无认证信息的 HTTPS URL')
+    hostname = parsed.hostname.lower().rstrip('.')
+    if hostname == 'localhost' or hostname.endswith('.local'):
+        raise PublishDataValidationError('图片 review 拒绝本地主机 URL')
+    try:
+        addresses = {item[4][0] for item in socket.getaddrinfo(hostname, None)}
+    except socket.gaierror as exc:
+        raise PublishDataValidationError(f'图片域名无法解析: {hostname}') from exc
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
+        if not ip.is_global:
+            raise PublishDataValidationError(f'图片 URL 解析到非公网地址: {address}')
+    return {str(ipaddress.ip_address(address)) for address in addresses}
+
+
+def _response_peer_ip(response):
+    """Extract the connected peer from requests/urllib3 without trusting DNS twice."""
+    raw = getattr(response, 'raw', None)
+    candidates = [
+        getattr(getattr(raw, '_connection', None), 'sock', None),
+        getattr(getattr(raw, 'connection', None), 'sock', None),
+    ]
+    original = getattr(raw, '_original_response', None)
+    try:
+        candidates.append(original.fp.raw._sock)
+    except AttributeError:
+        pass
+    for sock in candidates:
+        if sock is None:
+            continue
+        try:
+            return str(ipaddress.ip_address(sock.getpeername()[0].split('%', 1)[0]))
+        except (AttributeError, OSError, ValueError):
+            continue
+    raise PublishDataValidationError('无法验证图片 HTTPS 连接的实际 peer IP')
+
+
+def _validate_response_peer(response, resolved_addresses):
+    peer = _response_peer_ip(response)
+    if not ipaddress.ip_address(peer).is_global:
+        raise PublishDataValidationError(f'图片 HTTPS 连接命中非公网 peer: {peer}')
+    if peer not in resolved_addresses:
+        raise PublishDataValidationError(
+            f'图片 HTTPS peer {peer} 不在预先验证的 DNS 解析结果中，疑似 DNS rebinding'
+        )
+    return peer
+
+
+def _download_review_image(url):
+    """Download a public image with redirect, MIME, and size validation."""
+    import requests
+
+    session = requests.Session()
+    session.trust_env = False
+    try:
+        current = url
+        for _redirect in range(4):
+            resolved_addresses = _validate_public_image_url(current)
+            response = session.get(current, timeout=30, stream=True, allow_redirects=False)
+            try:
+                _validate_response_peer(response, resolved_addresses)
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get('Location')
+                    if not location:
+                        raise PublishDataValidationError('图片重定向缺少 Location')
+                    from urllib.parse import urljoin
+                    current = urljoin(current, location)
+                    continue
+                response.raise_for_status()
+                media_type = response.headers.get('Content-Type', '').split(';', 1)[0].lower()
+                if media_type not in REVIEW_IMAGE_MIME_TYPES:
+                    raise PublishDataValidationError(f'图片 MIME 不受支持: {media_type or "unknown"}')
+                declared_size = response.headers.get('Content-Length')
+                if declared_size and int(declared_size) > REVIEW_IMAGE_MAX_BYTES:
+                    raise PublishDataValidationError('图片超过 8 MiB review 上限')
+                chunks = []
+                size = 0
+                for chunk in response.iter_content(65536):
+                    if not chunk:
+                        continue
+                    size += len(chunk)
+                    if size > REVIEW_IMAGE_MAX_BYTES:
+                        raise PublishDataValidationError('图片超过 8 MiB review 上限')
+                    chunks.append(chunk)
+                raw = b''.join(chunks)
+                _validate_image_signature(media_type, raw)
+                return {
+                    'media_type': media_type,
+                    'data': base64.b64encode(raw).decode('ascii'),
+                }
+            finally:
+                close = getattr(response, 'close', None)
+                if callable(close):
+                    close()
+        raise PublishDataValidationError('图片重定向次数过多')
+    except PublishDataValidationError:
+        raise
+    except (requests.RequestException, OSError, ValueError) as exc:
+        raise PublishDataValidationError(f'图片下载失败: {exc}') from exc
+    finally:
+        session.close()
+
+
+def _validate_image_signature(media_type, raw):
+    signatures = {
+        'image/jpeg': raw.startswith(b'\xff\xd8\xff'),
+        'image/png': raw.startswith(b'\x89PNG\r\n\x1a\n'),
+        'image/gif': raw.startswith((b'GIF87a', b'GIF89a')),
+        'image/webp': len(raw) >= 12 and raw.startswith(b'RIFF') and raw[8:12] == b'WEBP',
+    }
+    if not raw:
+        raise PublishDataValidationError('图片内容为空')
+    if not signatures.get(media_type, False):
+        raise PublishDataValidationError(f'图片内容与 MIME 签名不一致: {media_type}')
+
+
+def _load_review_image(url):
+    if url.startswith('data:'):
+        match = re.fullmatch(r'data:([^;,]+);base64,([A-Za-z0-9+/=\s]+)', url)
+        if not match:
+            raise PublishDataValidationError('图片 data URI 必须是合法 base64')
+        media_type = match.group(1).lower()
+        if media_type not in REVIEW_IMAGE_MIME_TYPES:
+            raise PublishDataValidationError(f'图片 MIME 不受支持: {media_type}')
+        try:
+            encoded = re.sub(r'\s+', '', match.group(2))
+            raw = base64.b64decode(encoded, validate=True)
+        except ValueError as exc:
+            raise PublishDataValidationError('图片 data URI base64 非法') from exc
+        if not raw or len(raw) > REVIEW_IMAGE_MAX_BYTES:
+            raise PublishDataValidationError('图片 data URI 为空或超过 8 MiB')
+        _validate_image_signature(media_type, raw)
+        return {'media_type': media_type, 'data': base64.b64encode(raw).decode('ascii')}
+    if url.startswith('https://'):
+        return _download_review_image(url)
+    raise PublishDataValidationError('图片 review 不允许相对路径或非 HTTPS URL')
+
+
 def multimodal_review_images(content, title="", required=False):
-    """使用多模态 LLM 审查博客中的图片。返回 (是否通过, 图片问题列表)。
-    当前实现：提取图片信息，用文本方式让 LLM 判断图片引用是否合理。
-    如果图片是 base64 data URI，可提取后传给支持多模态的模型。"""
+    """Send actual image bytes to the routed multimodal publish API."""
     title = plain_title_for_publish(title) if title else title
     # 提取所有图片引用
     img_pattern = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
-    images = img_pattern.findall(content)
+    image_matches = list(img_pattern.finditer(content))
 
-    if not images:
+    if not image_matches:
         return True, []
 
     img_summary = []
-    data_uri_images = []
-    for alt, url in images:
-        if url.startswith("data:image/svg+xml;base64,"):
-            img_summary.append(f"- SVG base64 data URI (alt={alt}), 长度 {len(url)} 字符")
-            data_uri_images.append((alt, url))
-        elif url.startswith("data:"):
-            img_summary.append(f"- 其他 base64 data URI (alt={alt}), 长度 {len(url)} 字符")
-            data_uri_images.append((alt, url))
-        elif url.startswith("http"):
-            # 不截断 URL，避免 review LLM 误判为 URL 不完整
-            img_summary.append(f"- 外部图片: {url} | alt: `{alt}`")
-        else:
-            img_summary.append(f"- 相对路径: {url} (alt={alt})")
+    image_payloads = []
+    load_issues = []
+    for match in image_matches:
+        alt, url = match.groups()
+        nearby = content[max(0, match.start() - 600):min(len(content), match.end() + 600)]
+        nearby = nearby.replace(url, '[图片 URL]').strip()
+        img_summary.append(
+            f"- 图片 {len(img_summary) + 1} | alt: `{alt}` | 来源: {url[:500]}\n"
+            f"  正文附近上下文：\n```markdown\n{nearby}\n```"
+        )
+        try:
+            image_payloads.append(_load_review_image(url))
+        except PublishDataValidationError as exc:
+            load_issues.append({
+                'severity': 'error' if required else 'warning',
+                'description': f'无法加载图片内容用于多模态 review: {exc}',
+            })
+
+    if load_issues and required:
+        return False, load_issues
+    if not image_payloads:
+        return (not required), load_issues
 
     prompt = f"""你是一个博客图片质量审查专家。
 
 请审查下面这篇博客中的图片引用是否合理。
 
-【重要】以下列表是从博客正文中提取的元数据摘要，用于辅助审查：
+【重要】本请求已按列表顺序附上实际图片字节，以下是正文中提取的对应元数据：
 - 博客正文中的实际图片格式为标准 Markdown：`![alt](url)`
 - 摘要中的格式（如"外部图片: url | alt: ..."）只是元数据展示，**不要**因为摘要格式而误判
 - 摘要中的 URL 可能为了简洁而截断，但博客正文中的 URL 是完整的
@@ -224,11 +478,9 @@ def multimodal_review_images(content, title="", required=False):
 {chr(10).join(img_summary)}
 
 请检查：
-1. 博客正文中图片引用格式是否为标准 Markdown `![alt](url)`（基于上述元数据推断）
-2. base64 data URI 是否过长（超过 50KB 可能影响页面加载）
-3. 外部 URL 是否是常见图片域名（arxiv.org、githubusercontent.com 等）
-4. 图片 alt 文本是否为空或重复
-5. SVG data URI 是否能被 Hugo 正确渲染
+1. 图片内容是否可解码、清晰且与 alt 和论文正文语义一致
+2. 图片是否包含明显错误、空白、损坏、无关内容或隐私信息
+3. 图片 alt 文本是否为空、重复或与实际内容冲突
 
 【禁止事项】不要报告以下伪问题：
 - 摘要格式（如"外部图片: url | alt: ..."）不是 Markdown 格式 → 这是正常的元数据摘要
@@ -246,8 +498,23 @@ def multimodal_review_images(content, title="", required=False):
   ]
 }}"""
 
-    result = call_llm_api(prompt, max_tokens=800, temperature=0.1, required=required, context=f"多模态图片 review: {title}")
+    prompt += """
+
+协议一致性要求：只有存在 `severity=error` 的问题时 `passed` 才能为 `false`；仅有 warning/info 或无问题时必须为 `true`。`passed=false` 时必须提供至少一条具体的 error 级原因。
+"""
+
+    result = call_llm_api(
+        prompt,
+        max_tokens=800,
+        temperature=0.1,
+        required=required,
+        context=f"多模态图片 review: {title}",
+        images=image_payloads,
+        use_secondary=True,
+    )
     if not result:
+        if required:
+            return review_protocol_failure(f"多模态图片 review: {title}", '响应为空')
         return True, []
 
     try:
@@ -260,11 +527,19 @@ def multimodal_review_images(content, title="", required=False):
             cleaned = cleaned[:-3]
         cleaned = cleaned.strip()
         review = json.loads(cleaned)
-        passed = review.get("passed", True)
-        issues = review.get("issues", [])
-        return passed, issues
-    except json.JSONDecodeError:
+        passed, issues = validate_review_payload(
+            review,
+            required=required,
+            context=f"多模态图片 review: {title}",
+        )
+        return passed, load_issues + issues
+    except (json.JSONDecodeError, TypeError, ValueError):
         fallback = cleaned.strip()
+        if required:
+            return review_protocol_failure(
+                f"多模态图片 review: {title}",
+                '响应不是可解析的 JSON',
+            )
         lower = fallback.lower()
         error_markers = ['error', '错误', '阻断', '不合理', '无法渲染', '过长', '空 alt', '重复 alt']
         pass_markers = ['passed', '"passed": true', '通过', '无问题', '没有问题', '未发现问题']
@@ -274,8 +549,6 @@ def multimodal_review_images(content, title="", required=False):
                 "description": f"多模态图片 review 返回非 JSON，但文本中包含错误信号：{fallback[:240]}"
             }]
         if any(marker in lower for marker in pass_markers):
-            return True, []
-        if required:
             return True, []
         return True, []
 
@@ -326,6 +599,16 @@ def slugify(text, max_length=50):
     return text if text else 'paper'
 
 
+def normalize_arxiv_id(arxiv_id):
+    """Normalize an arXiv identifier for stable, traversal-safe filenames."""
+    return normalize_publish_arxiv_id(arxiv_id)
+
+
+def paper_slug(title, arxiv_id):
+    id_suffix = normalize_arxiv_id(arxiv_id).replace('/', '-').replace('.', '-')
+    return f'{slugify(title, max_length=50)}-{id_suffix}'
+
+
 def yaml_escape(s):
     """安全转义 YAML 双引号字符串中的特殊字符，同时避免 f-string 解析问题"""
     if not s:
@@ -362,6 +645,8 @@ tags: [{', '.join(tag_set)}]
 categories: [{category}]
 description: "共分析 {total} 篇语音/AI 论文"
 layout: "posts"
+paper_digest_pipeline_owned: true
+paper_digest_page_type: index
 ---
 
 # {conference_title}
@@ -611,8 +896,8 @@ def enrich_opensource(pa, paper):
 
 def generate_paper_page(paper, date_str, category='论文速递'):
     """生成单篇论文的独立页面"""
-    # 优先使用已解析好的 parsed 数据，避免重新解析时因标题损坏导致字段丢失
-    pa = paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
+    # main() replaces parsed with the validated analysis baseline before generation.
+    pa = dict(paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {})
     # 补充 opensource 中缺失的具体链接
     if pa and pa.get('opensource'):
         pa['opensource'] = enrich_opensource(pa, paper)
@@ -620,27 +905,31 @@ def generate_paper_page(paper, date_str, category='论文速递'):
     display_title = plain_title_for_publish(title)
     aid = paper.get('arxivId', '')
     aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
-    slug = slugify(title)
+    slug = paper_slug(title, aid)
 
     score_str = pa['score'] if pa and pa.get('score') else ''
     task_str = pa['primaryTaskTag'].replace('#', '') if pa and pa.get('primaryTaskTag') else ''
     desc = f"{task_str} | {score_str}/10" if score_str and task_str else display_title
+    tags = pa.get('tags', []) if pa else []
     md = f"""---
 title: "{yaml_escape(display_title)}"
 date: {date_str}
 draft: false
-tags: [{', '.join([t.replace('#', '') for t in (pa['tags'] if pa else [])])}]
+tags: [{', '.join([t.replace('#', '') for t in tags])}]
 categories: [{category}]
 description: "{yaml_escape(desc)}"
 hiddenInHomeList: true
+paper_digest_pipeline_owned: true
+paper_digest_page_type: paper
+paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
 ---
 
 # 📄 {display_title}
 
 """
     if pa:
-        if pa['tags']:
-            md += f"标签：{' '.join(pa['tags'])}\n\n"
+        if tags:
+            md += f"标签：{' '.join(tags)}\n\n"
 
         # 得分单开一行：总分 + 所有子项
         score_line = []
@@ -897,16 +1186,15 @@ def review_and_fix_post(file_path):
 
     fixed = content != original
     if fixed:
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(content)
+        atomic_write_text(file_path, content)
 
     return fixed, issues
 
 
 def _review_single_paper(args):
     """并发 review 单篇论文，返回 (title, fixed_count, blocking_count, advisory_count, output_lines)"""
-    arxiv_id, slug, date_str, title, require_llm = args
-    paper_file = os.path.join(CONTENT_DIR, f"{date_str}-{slug}.md")
+    arxiv_id, slug, date_str, title, require_llm, content_dir = args
+    paper_file = os.path.join(content_dir, f"{date_str}-{slug}.md")
     if not os.path.exists(paper_file):
         return None
 
@@ -937,8 +1225,7 @@ def _review_single_paper(args):
             desc = issue.get('description', '')
             lines.append(f"    🤖 LLM ({sev}): {desc}")
         if llm_fixed_content != content:
-            with open(paper_file, 'w', encoding='utf-8') as f:
-                f.write(llm_fixed_content)
+            atomic_write_text(paper_file, llm_fixed_content)
             fixed_count += 1
             lines.append("    🛠️  LLM 自动修复已应用")
             content = llm_fixed_content
@@ -967,7 +1254,7 @@ def _review_single_paper(args):
     return title, fixed_count, blocking_count, advisory_count, lines
 
 
-def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False):
+def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False, content_dir=None):
     """三层 review：代码检查 → LLM 文本审查 → 多模态图片审查（论文独立页面并发执行）"""
     print("\n🔍 开始三层 review（代码检查 → LLM 审查 → 多模态图片审查）...")
     if require_llm:
@@ -976,13 +1263,14 @@ def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False):
     total_blocking_issues = 0
     total_advisory_issues = 0
 
+    content_dir = content_dir or CONTENT_DIR
     # 构建 arxivId -> title 映射
     title_map = {}
     for score, p, pa in scored_papers:
         title_map[p.get('arxivId', '')] = p.get('title', '')
 
     # Review 汇总页面（串行，只有1个）
-    index_file = os.path.join(CONTENT_DIR, f"{date_str}.md")
+    index_file = os.path.join(content_dir, f"{date_str}.md")
     if os.path.exists(index_file):
         print("\n  📋 汇总页面:")
         # 1. 代码检查
@@ -1007,8 +1295,7 @@ def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False):
                 desc = issue.get('description', '')
                 print(f"    🤖 LLM ({sev}): {desc}")
             if llm_fixed_content != content:
-                with open(index_file, 'w', encoding='utf-8') as f:
-                    f.write(llm_fixed_content)
+                atomic_write_text(index_file, llm_fixed_content)
                 total_fixed += 1
                 print(f"    🛠️  LLM 自动修复已应用")
                 llm_passed, llm_issues, _ = llm_review_post(llm_fixed_content, "汇总页面", required=require_llm)
@@ -1024,7 +1311,7 @@ def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False):
 
     # Review 每篇论文独立页面（并发）
     paper_args = [
-        (arxiv_id, slug, date_str, title_map.get(arxiv_id, slug), require_llm)
+        (arxiv_id, slug, date_str, title_map.get(arxiv_id, slug), require_llm, content_dir)
         for arxiv_id, slug in paper_slugs.items()
     ]
 
@@ -1050,35 +1337,416 @@ def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False):
     return total_fixed, total_blocking_issues
 
 
-def git_push(date_str):
-    """Commit and push to GitHub"""
-    status = subprocess.run(
-        ['git', 'status', '--porcelain'],
-        capture_output=True, text=True, cwd=BLOG_REPO
-    )
-    if not status.stdout.strip():
-        print("  ℹ️ 没有新内容需要推送")
-        return True
+def _load_frontmatter(path):
+    try:
+        import yaml
+    except ImportError as exc:
+        raise PublishDataValidationError('缺少 PyYAML，无法执行确定性 frontmatter 门禁') from exc
 
-    subprocess.run(['git', 'add', '-A'], check=True, cwd=BLOG_REPO)
-    subprocess.run(
-        ['git', 'commit', '-m', f'add: 论文速递 {date_str}'],
-        check=True, cwd=BLOG_REPO
+    class UniqueKeyLoader(yaml.SafeLoader):
+        pass
+
+    def construct_mapping(loader, node, deep=False):
+        mapping = {}
+        for key_node, value_node in node.value:
+            key = loader.construct_object(key_node, deep=deep)
+            if key in mapping:
+                raise PublishDataValidationError(f'{path.name} frontmatter 存在重复字段: {key}')
+            mapping[key] = loader.construct_object(value_node, deep=deep)
+        return mapping
+
+    UniqueKeyLoader.add_constructor(
+        yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+        construct_mapping,
     )
+    content = path.read_text(encoding='utf-8')
+    match = re.match(r'^---\n(.*?)\n---\n', content, flags=re.DOTALL)
+    if not match:
+        raise PublishDataValidationError(f'{path.name} 缺少合法 YAML frontmatter')
+    try:
+        frontmatter = yaml.load(match.group(1), Loader=UniqueKeyLoader)
+    except (yaml.YAMLError, PublishDataValidationError) as exc:
+        raise PublishDataValidationError(f'{path.name} YAML 解析失败: {exc}') from exc
+    if not isinstance(frontmatter, dict):
+        raise PublishDataValidationError(f'{path.name} frontmatter 必须是对象')
+    return frontmatter, content[match.end():]
+
+
+def validate_staged_posts(staged_posts_dir, date_str):
+    """Deterministically validate YAML and generated Markdown structure."""
+    date_str = validate_publish_date(date_str)
+    staged = Path(staged_posts_dir)
+    files = sorted(staged.glob('*.md'))
+    if not files:
+        raise PublishDataValidationError('staging 目录没有待发布 Markdown 文件')
+    for path in files:
+        if path.name != f'{date_str}.md' and not path.name.startswith(f'{date_str}-'):
+            raise PublishDataValidationError(f'发布文件名不属于本次日期: {path.name}')
+        frontmatter, body = _load_frontmatter(path)
+        for field in ('title', 'date', 'draft', 'tags', 'categories', 'description'):
+            if field not in frontmatter:
+                raise PublishDataValidationError(f'{path.name} 缺少 frontmatter.{field}')
+        yaml_date = frontmatter['date']
+        if hasattr(yaml_date, 'isoformat'):
+            yaml_date = yaml_date.isoformat()
+        if yaml_date != date_str:
+            raise PublishDataValidationError(f'{path.name} frontmatter.date 与发布日期不一致')
+        if frontmatter['draft'] is not False:
+            raise PublishDataValidationError(f'{path.name} frontmatter.draft 必须为 false')
+        if not isinstance(frontmatter['tags'], list) or not isinstance(frontmatter['categories'], list):
+            raise PublishDataValidationError(f'{path.name} tags/categories 必须为 YAML 数组')
+        if '\ufffd' in body:
+            raise PublishDataValidationError(f'{path.name} 正文包含 UTF-8 替换字符')
+        if re.search(r'!?\[[^\]]*\]\(\s*\)', body):
+            raise PublishDataValidationError(f'{path.name} 正文包含空 Markdown 链接')
+    return files
+
+
+def run_hugo_gate(blog_repo, staged_posts_dir, required=False):
+    """Build staged content with Hugo when available; structural gates always run."""
+    hugo = shutil.which('hugo')
+    if not hugo:
+        if required:
+            raise PublishDataValidationError('正式 --push 要求 Hugo 可用，当前未找到 hugo 命令')
+        print('  ℹ️ Hugo 不可用，已执行严格 YAML/Markdown 回退门禁')
+        return 'fallback'
+    with tempfile.TemporaryDirectory(prefix='paper-digest-hugo-') as output_dir:
+        result = subprocess.run(
+            [
+                hugo,
+                '--contentDir', str(Path(staged_posts_dir).parent),
+                '--destination', output_dir,
+                '--cleanDestinationDir',
+                '--noBuildLock',
+            ],
+            cwd=blog_repo,
+            capture_output=True,
+            text=True,
+            env=build_child_process_env(),
+        )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or '').strip()
+        raise PublishDataValidationError(f'Hugo 构建门禁失败: {detail[-2000:]}')
+    print('  ✅ Hugo staging 构建通过')
+    return 'hugo'
+
+
+def _is_pipeline_owned_paper(path, date_str):
+    """Only explicit pipeline-owned paper pages are eligible for stale deletion."""
+    try:
+        frontmatter, _body = _load_frontmatter(path)
+    except (OSError, UnicodeError, PublishDataValidationError):
+        return False
+    yaml_date = frontmatter.get('date')
+    if hasattr(yaml_date, 'isoformat'):
+        yaml_date = yaml_date.isoformat()
+    return (
+        frontmatter.get('paper_digest_pipeline_owned') is True
+        and frontmatter.get('paper_digest_page_type') == 'paper'
+        and yaml_date == date_str
+    )
+
+
+def planned_publish_paths(staged_posts_dir, content_dir, date_str):
+    staged = Path(staged_posts_dir)
+    target = Path(content_dir)
+    generated_names = {path.name for path in staged.glob('*.md')}
+    expected_index = f'{date_str}.md'
+    if expected_index not in generated_names:
+        raise PublishDataValidationError(f'staging 缺少汇总页 {expected_index}')
+    changed = []
+    for name in sorted(generated_names):
+        source = staged / name
+        destination = target / name
+        if not destination.exists() or source.read_bytes() != destination.read_bytes():
+            changed.append(destination)
+    for old_page in sorted(target.glob(f'{date_str}-*.md')) if target.exists() else []:
+        if old_page.name not in generated_names and _is_pipeline_owned_paper(old_page, date_str):
+            changed.append(old_page)
+    return changed
+
+
+def publish_manifest_paths(staged_posts_dir, content_dir, date_str):
+    """Return every generated path plus explicitly owned stale deletion candidate."""
+    staged = Path(staged_posts_dir)
+    target = Path(content_dir)
+    generated_names = {path.name for path in staged.glob('*.md')}
+    manifest = {target / name for name in generated_names}
+    for old_page in sorted(target.glob(f'{date_str}-*.md')) if target.exists() else []:
+        if old_page.name not in generated_names and _is_pipeline_owned_paper(old_page, date_str):
+            manifest.add(old_page)
+    return sorted(manifest)
+
+
+def install_staged_posts(staged_posts_dir, content_dir, date_str):
+    """Install the reviewed manifest atomically, rolling back on local failure."""
+    staged = Path(staged_posts_dir)
+    target = Path(content_dir)
+    changes = planned_publish_paths(staged, target, date_str)
+    snapshots = {path: path.read_bytes() if path.exists() else None for path in changes}
+    generated = {path.name: path for path in staged.glob('*.md')}
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        for name, source in sorted(generated.items()):
+            destination = target / name
+            if destination in snapshots:
+                atomic_write_text(destination, source.read_text(encoding='utf-8'))
+        for path, previous in snapshots.items():
+            if path.name not in generated and previous is not None:
+                path.unlink()
+    except Exception:
+        for path, previous in snapshots.items():
+            if previous is None:
+                path.unlink(missing_ok=True)
+            else:
+                atomic_write_text(path, previous.decode('utf-8'))
+        raise
+    return changes
+
+
+def _git_relative_manifest(paths):
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    allowed_root = (repo / 'content' / 'posts').resolve()
+    relative = []
+    for path in paths:
+        resolved = Path(path).expanduser().resolve()
+        try:
+            resolved.relative_to(allowed_root)
+            item = resolved.relative_to(repo).as_posix()
+        except ValueError as exc:
+            raise PublishDataValidationError(f'git 清单包含 content/posts 外路径: {path}') from exc
+        relative.append(item)
+    return sorted(set(relative))
+
+
+def _git_env():
+    return build_child_process_env(allowed_keys=VCS_CHILD_ENV_KEYS)
+
+
+def validate_git_publish_branch():
+    """Formal publication is only allowed from the blog repository's main branch."""
+    branch = subprocess.run(
+        ['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'],
+        cwd=BLOG_REPO,
+        capture_output=True,
+        text=True,
+        env=_git_env(),
+    )
+    current = branch.stdout.strip() if branch.returncode == 0 else '<detached HEAD>'
+    if current != 'main':
+        raise PublishDataValidationError(
+            f'正式发布要求博客仓库当前分支为 main，当前为 {current}'
+        )
+    head = subprocess.run(
+        ['git', 'rev-parse', '--verify', 'HEAD'],
+        cwd=BLOG_REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+        env=_git_env(),
+    ).stdout.strip()
+    if not re.fullmatch(r'[0-9a-fA-F]{40,64}', head):
+        raise PublishDataValidationError(f'无法验证博客仓库 HEAD: {head!r}')
+    return head.lower()
+
+
+def validate_manifest_clean_against_head(paths):
+    """Reject any pre-existing staged, unstaged, or untracked manifest edits."""
+    manifest = _git_relative_manifest(paths)
+    if not manifest:
+        return
     result = subprocess.run(
-        ['git', 'push', GITHUB_REMOTE, 'main'],
-        capture_output=True, text=True, cwd=BLOG_REPO
+        [
+            'git', 'status', '--porcelain=v1', '-z', '--untracked-files=all',
+            '--', *manifest,
+        ],
+        cwd=BLOG_REPO,
+        capture_output=True,
+        check=True,
+        env=_git_env(),
     )
+    if result.stdout:
+        entries = [item.decode('utf-8', errors='replace') for item in result.stdout.split(b'\0') if item]
+        raise PublishDataValidationError(
+            '发布清单路径已有相对 HEAD 的人工 staged/unstaged/untracked 修改，拒绝覆盖或删除: '
+            + ', '.join(entries)
+        )
 
-    if result.returncode == 0:
-        print(f"  ✅ 已推送到 GitHub，自动部署中...")
+
+def capture_git_publish_state(paths):
+    """Capture the pre-install Git/index/worktree state for add/commit rollback."""
+    manifest = _git_relative_manifest(paths)
+    head = validate_git_publish_branch()
+    index_tree = subprocess.run(
+        ['git', 'write-tree'],
+        cwd=BLOG_REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+        env=_git_env(),
+    ).stdout.strip()
+    snapshots = {}
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    for item in manifest:
+        path = repo / item
+        snapshots[path] = (
+            {'content': path.read_bytes(), 'mode': path.stat().st_mode & 0o777}
+            if path.exists() else None
+        )
+    return {
+        'head': head,
+        'index_tree': index_tree,
+        'snapshots': snapshots,
+    }
+
+
+def restore_git_publish_state(state):
+    """Restore HEAD (if needed), the complete index, and manifest worktree files."""
+    if not state:
+        return
+    current = subprocess.run(
+        ['git', 'rev-parse', '--verify', 'HEAD'],
+        cwd=BLOG_REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+        env=_git_env(),
+    ).stdout.strip().lower()
+    original = state['head'].lower()
+    if current != original:
+        subprocess.run(
+            ['git', 'update-ref', 'refs/heads/main', original, current],
+            cwd=BLOG_REPO,
+            check=True,
+            env=_git_env(),
+        )
+    subprocess.run(
+        ['git', 'read-tree', state['index_tree']],
+        cwd=BLOG_REPO,
+        check=True,
+        env=_git_env(),
+    )
+    for path, snapshot in state['snapshots'].items():
+        if snapshot is None:
+            path.unlink(missing_ok=True)
+        else:
+            atomic_write_text(
+                path,
+                snapshot['content'].decode('utf-8'),
+                mode=snapshot['mode'],
+            )
+
+
+def validate_git_index(paths):
+    allowed = set(_git_relative_manifest(paths))
+    result = subprocess.run(
+        ['git', 'diff', '--cached', '--name-only', '-z'],
+        cwd=BLOG_REPO,
+        capture_output=True,
+        check=True,
+        env=_git_env(),
+    )
+    staged = {item.decode('utf-8') for item in result.stdout.split(b'\0') if item}
+    unrelated = sorted(staged - allowed)
+    if unrelated:
+        raise PublishDataValidationError(
+            f'博客仓库已有无关 staged 文件，拒绝提交: {", ".join(unrelated)}'
+        )
+
+
+def _remote_main_oid():
+    result = subprocess.run(
+        ['git', 'ls-remote', '--exit-code', GITHUB_REMOTE, 'refs/heads/main'],
+        cwd=BLOG_REPO,
+        capture_output=True,
+        text=True,
+        env=_git_env(),
+    )
+    if result.returncode != 0:
+        return None, (result.stderr or result.stdout or '').strip()
+    first_line = (result.stdout or '').splitlines()[0] if result.stdout else ''
+    oid = first_line.split(None, 1)[0].lower() if first_line else ''
+    if not re.fullmatch(r'[0-9a-f]{40,64}', oid):
+        return None, f'远端返回不可验证的 OID: {oid!r}'
+    return oid, ''
+
+
+def _report_push_retry(local_head, detail):
+    print(f'  ❌ Push/远端验证失败，本地提交 {local_head} 已保留，远端发布尚未确认')
+    if detail:
+        print(f'  原因: {detail}')
+    print(f'  可重试: git -C {BLOG_REPO} push {GITHUB_REMOTE} HEAD:main')
+    print(f'  可验证: git -C {BLOG_REPO} ls-remote {GITHUB_REMOTE} refs/heads/main')
+    print(f'  预期远端 OID: {local_head}')
+
+
+def git_push(date_str, publish_paths, rollback_state=None):
+    """Commit, push HEAD explicitly to main, and verify the remote object ID."""
+    manifest = _git_relative_manifest(publish_paths)
+    state = rollback_state
+    try:
+        validate_git_publish_branch()
+        validate_git_index(publish_paths)
+        if state is None:
+            state = capture_git_publish_state(publish_paths)
+        if manifest:
+            subprocess.run(
+                ['git', 'add', '--', *manifest],
+                check=True,
+                cwd=BLOG_REPO,
+                env=_git_env(),
+            )
+            validate_git_index(publish_paths)
+        staged = subprocess.run(
+            ['git', 'diff', '--cached', '--quiet', '--', *manifest],
+            cwd=BLOG_REPO,
+            env=_git_env(),
+        ) if manifest else None
+        if staged is not None and staged.returncode == 1:
+            subprocess.run(
+                [
+                    'git', 'commit',
+                    '-m', f'content: 发布 {date_str} 论文速递并同步评分与审查结果',
+                ],
+                check=True, cwd=BLOG_REPO,
+                env=_git_env()
+            )
+        elif staged is not None and staged.returncode > 1:
+            raise subprocess.CalledProcessError(staged.returncode, staged.args)
+        else:
+            print("  ℹ️ 本次清单没有新内容，继续推送已有未同步提交")
+        local_head = validate_git_publish_branch()
+    except (subprocess.CalledProcessError, PublishDataValidationError, OSError, UnicodeError) as exc:
+        try:
+            restore_git_publish_state(state)
+            print(f"  ❌ Git add/commit 失败，已恢复发布前 index 与工作树: {exc}")
+        except Exception as restore_exc:
+            print(f"  ❌ Git add/commit 失败，且自动恢复失败: {exc}; 恢复错误: {restore_exc}")
+        return False
+
+    result = subprocess.run(
+        ['git', 'push', GITHUB_REMOTE, 'HEAD:main'],
+        capture_output=True, text=True, cwd=BLOG_REPO,
+        env=_git_env(),
+    )
+    remote_oid, verify_error = _remote_main_oid()
+    if remote_oid == local_head:
+        if result.returncode != 0:
+            print('  ℹ️ git push 返回非零，但远端 main 已与本地 HEAD 一致，以 OID 验证结果为准')
+        print(f"  ✅ 已推送并验证远端 main={remote_oid}，自动部署中...")
         blog_url = os.environ.get('PAPER_DIGEST_BLOG_URL', 'https://nanless.github.io/audio-paper-digest-blog/posts')
         if blog_url:
             print(f"  🌐 {blog_url}/{date_str}/")
         return True
-    else:
-        print(f"  ❌ Push 失败: {result.stderr}")
-        return False
+
+    detail = verify_error
+    push_detail = (result.stderr or result.stdout or '').strip()
+    if push_detail:
+        detail = f'{push_detail}; {detail}' if detail else push_detail
+    elif remote_oid:
+        detail = f'远端 main={remote_oid}，与本地 HEAD 不一致'
+    _report_push_retry(local_head, detail)
+    return False
 
 
 def main():
@@ -1107,8 +1775,13 @@ def main():
             data_file = arg
         i += 1
 
+    try:
+        blog_repo, content_dir = validate_publish_target()
+        today = validate_publish_date(get_today_bj(target_date))
+    except PublishDataValidationError as exc:
+        print(f"\n❌ 发布目标校验失败: {exc}")
+        sys.exit(1)
     papers = load_papers(data_file)
-    today = get_today_bj(target_date)
     print(f"📅 博客日期: {today}")
 
     # 只发布 fetchedAt 日期等于目标日期的论文（按抓取日期而非 arXiv 发布日期）
@@ -1123,7 +1796,6 @@ def main():
         papers = filtered_papers
     else:
         print("📦 --all: 跳过 fetchedAt 日期过滤，发布输入文件中的全部论文")
-    scored, unscored = score_and_sort(papers)
     filter_note = '全部论文' if publish_all else f'fetchedAt={today}'
     print(f"📄 过滤后: {len(papers)} 篇论文 ({filter_note})")
 
@@ -1131,46 +1803,84 @@ def main():
         print("⚠️ 没有论文需要发布")
         return
 
-    os.makedirs(CONTENT_DIR, exist_ok=True)
-
-    paper_slugs = {}
-    for paper in papers:
-        # 优先使用已解析好的 parsed 数据（包含手动修正的标签等），避免重新解析覆盖
-        pa = paper.get('parsed') or parse_analysis(paper.get('analysis', ''))
-        if pa:
-            paper_md, slug = generate_paper_page(paper, today, category)
-            paper_md = sanitize_markdown_for_publish(paper_md)
-            paper_file = os.path.join(CONTENT_DIR, f"{today}-{slug}.md")
-            with open(paper_file, 'w') as f:
-                f.write(paper_md)
-            paper_slugs[paper.get('arxivId', '')] = slug
-
-    print(f"📄 生成 {len(paper_slugs)} 篇论文独立页面")
-
-    index_md = generate_index_page(scored, unscored, today, paper_slugs, category)
-    index_md = sanitize_markdown_for_publish(index_md)
-    index_file = os.path.join(CONTENT_DIR, f"{today}.md")
-    with open(index_file, 'w') as f:
-        f.write(index_md)
-    print(f"📄 汇总页面: {index_file} ({len(index_md)} chars)")
-
-    # 三层 review：代码检查 → LLM 审查 → 多模态图片审查
     try:
-        review_fixed, review_issues = review_all_posts(today, paper_slugs, scored, require_llm=not skip_push)
+        papers = validate_papers_for_publish(papers)
+    except PublishDataValidationError as exc:
+        print(f"\n❌ 发布数据预检失败，未生成任何博客文件：\n{exc}")
+        sys.exit(1)
+    scored, unscored = score_and_sort(papers)
+    print(f"✅ 发布数据预检通过: {len(papers)} 篇论文以 analysis 重解析结果为发布基线")
+
+    publish_paths = []
+    git_publish_state = None
+    try:
+        with tempfile.TemporaryDirectory(prefix='paper-digest-publish-') as transaction_dir:
+            staged_posts = Path(transaction_dir) / 'content' / 'posts'
+            staged_posts.mkdir(parents=True)
+
+            paper_slugs = {}
+            for paper in papers:
+                paper_md, slug = generate_paper_page(paper, today, category)
+                paper_md = sanitize_markdown_for_publish(paper_md)
+                paper_file = staged_posts / f"{today}-{slug}.md"
+                if paper_file.exists():
+                    raise PublishDataValidationError(
+                        f'重复论文会覆盖同一 staging 文件: {paper_file.name}'
+                    )
+                atomic_write_text(paper_file, paper_md)
+                paper_slugs[paper.get('arxivId', '')] = slug
+
+            print(f"📄 staging 生成 {len(paper_slugs)} 篇论文独立页面")
+            index_md = generate_index_page(scored, unscored, today, paper_slugs, category)
+            index_md = sanitize_markdown_for_publish(index_md)
+            index_file = staged_posts / f"{today}.md"
+            atomic_write_text(index_file, index_md)
+            print(f"📄 staging 汇总页面: {index_file.name} ({len(index_md)} chars)")
+
+            review_fixed, review_issues = review_all_posts(
+                today,
+                paper_slugs,
+                scored,
+                require_llm=not skip_push,
+                content_dir=str(staged_posts),
+            )
+            if review_issues > 0:
+                raise PublishDataValidationError(
+                    f'review 仍有 {review_issues} 个未解决阻断问题'
+                )
+            if review_fixed > 0:
+                print(f"\n✅ review 自动修复 {review_fixed} 个文件，复查后无阻断问题")
+
+            validate_staged_posts(staged_posts, today)
+            run_hugo_gate(blog_repo, staged_posts, required=not skip_push)
+            planned_paths = planned_publish_paths(staged_posts, content_dir, today)
+            if not skip_push:
+                manifest_paths = publish_manifest_paths(staged_posts, content_dir, today)
+                validate_git_publish_branch()
+                validate_manifest_clean_against_head(manifest_paths)
+                validate_git_index(manifest_paths)
+                git_publish_state = capture_git_publish_state(planned_paths)
+            publish_paths = install_staged_posts(staged_posts, content_dir, today)
     except PublishLLMUnavailable as exc:
         print(f"\n❌ 正式发布要求 LLM review 可用，但当前不可用: {exc}")
         sys.exit(1)
-    if review_issues > 0:
-        print(f"\n❌ review 仍有 {review_issues} 个未解决问题，停止发布。请修复后重跑 publish。")
+    except PublishDataValidationError as exc:
+        print(f"\n❌ 发布事务已阻断，博客工作树未写入本次 staging 内容: {exc}")
         sys.exit(1)
-    if review_fixed > 0:
-        print(f"\n✅ review 自动修复 {review_fixed} 个文件，复查后无阻断问题")
+    except (subprocess.CalledProcessError, OSError) as exc:
+        print(f"\n❌ 发布事务的 Git 前置校验失败，博客工作树未写入本次 staging 内容: {exc}")
+        sys.exit(1)
+
+    deleted_count = sum(1 for path in publish_paths if not Path(path).exists())
+    print(f"📦 已安装本次清单: {len(publish_paths) - deleted_count} 个更新，{deleted_count} 个旧页删除")
 
     if skip_push:
         print("\n⏭️ 默认跳过推送；如需正式发布请显式传 --push")
         return
 
-    git_push(today)
+    if not git_push(today, publish_paths, rollback_state=git_publish_state):
+        print("\n❌ Git 发布未完成；是否已有本地提交及重试方式以上方状态为准")
+        sys.exit(1)
 
     print(f"\n🎉 博客发布完成！")
 

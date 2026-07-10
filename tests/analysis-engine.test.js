@@ -3,30 +3,43 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
+
+const execFileAsync = promisify(execFile);
 
 const {
     mergeAndSaveResults,
     analyzeBatch,
     analyzePaperWithRetry,
-    getInvalidAnalysisReason
+    getInvalidAnalysisReason,
+    readJsonFileStrict,
+    updateJsonFileLocked,
+    acquireFileLockSync,
+    canReclaimFileLock,
+    withFileLock,
+    isSuccessfulAnalysisRecord,
+    getAnalysisRunStatus,
+    getAnalysisExitCode
 } = require('../scripts/analysis-engine.js');
 const { getMissingRequiredSections } = require('../scripts/analysis-contract.js');
+const { validAnalysisText } = require('./valid-analysis-fixture.js');
 
-function validAnalysisText() {
+function legacyValidAnalysisText() {
     return `## 评分
 7.7/10
 
 ## 机器摘要
 document_type: 方法研究
 rank_bucket: 前25%
-innovation: 1.5/2
-technical_rigor: 1.2/1.5
-experimental_sufficiency: 1.1/1.5
-clarity: 0.8/1
-impact: 1.0/1.5
-open_source: 0/1.5
-reproducibility: 0.3/0.5
-engineering_score: 1.0/1.5
+innovation: 1.5
+technical_rigor: 1.2
+experimental_sufficiency: 1.1
+clarity: 0.8
+impact: 1.0
+open_source: 0
+reproducibility: 0.3
+engineering_score: 1.0
 confidence: 高
 primary_task_tag: #语音识别
 primary_method_tag: #Transformer
@@ -36,9 +49,10 @@ has_model: 否
 has_dataset: 否
 
 ## 标签
-#语音识别 #Transformer
+#语音识别 #Transformer #鲁棒性
 主任务标签: #语音识别
 主方法标签: #Transformer
+补充标签: #鲁棒性
 
 ## 作者与机构
 作者信息未说明。
@@ -87,7 +101,7 @@ describe('mergeAndSaveResults', () => {
             papers: [{
                 arxivId: '2604.12345v1',
                 title: 'Existing success',
-                analysis: 'successful analysis',
+                analysis: validAnalysisText(),
                 parsed: { score: '8.0' }
             }]
         }, null, 2));
@@ -103,8 +117,69 @@ describe('mergeAndSaveResults', () => {
         const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
         assert.strictEqual(saved.papers.length, 1);
         assert.strictEqual(saved.papers[0].title, 'Existing success');
-        assert.strictEqual(saved.papers[0].analysis, 'successful analysis');
+        assert.strictEqual(saved.papers[0].analysis, validAnalysisText());
         assert.deepStrictEqual(saved.papers[0].parsed, { score: '8.0' });
+    });
+
+    it('损坏的当前 JSON 会阻断覆盖', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-corrupt-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(file, '{broken');
+
+        await assert.rejects(
+            mergeAndSaveResults([{ arxivId: '2604.99999', analysis: 'new' }], file),
+            /JSON 文件损坏或不可读，已阻止覆盖/
+        );
+        assert.strictEqual(fs.readFileSync(file, 'utf8'), '{broken');
+    });
+
+    it('结构非法的 current JSON 不会被当作缺失文件覆盖', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-null-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(file, 'null');
+        assert.throws(() => updateJsonFileLocked(file, () => ({ papers: [] })), /顶层必须是对象或数组/);
+        assert.strictEqual(fs.readFileSync(file, 'utf8'), 'null');
+    });
+
+    it('多个进程并发锁内合并不会丢更新', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-lock-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(file, JSON.stringify({ papers: [] }));
+        const enginePath = path.resolve(__dirname, '../scripts/analysis-engine.js');
+        const worker = `
+            const { updateJsonFileLocked } = require(process.argv[1]);
+            const file = process.argv[2];
+            const prefix = process.argv[3];
+            for (let i = 0; i < 12; i++) {
+                updateJsonFileLocked(file, current => ({
+                    ...current,
+                    papers: [...(current.papers || []), { arxivId: prefix + '.' + i }]
+                }));
+            }
+        `;
+
+        await Promise.all(['a', 'b', 'c', 'd'].map(prefix =>
+            execFileAsync(process.execPath, ['-e', worker, enginePath, file, prefix])
+        ));
+
+        const saved = readJsonFileStrict(file);
+        assert.strictEqual(saved.papers.length, 48);
+        assert.strictEqual(new Set(saved.papers.map(p => p.arxivId)).size, 48);
+        assert.strictEqual(saved.generation, 48);
+    });
+
+    it('进程崩溃遗留的锁可由后续写入立即回收', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-dead-lock-'));
+        const file = path.join(dir, 'result.json');
+        const lockDir = `${file}.lock`;
+        fs.mkdirSync(lockDir);
+        fs.writeFileSync(path.join(lockDir, 'owner.json'), JSON.stringify({
+            pid: 2147483647,
+            hostname: os.hostname()
+        }));
+        updateJsonFileLocked(file, () => ({ papers: [] }), { timeoutMs: 100 });
+        assert.strictEqual(readJsonFileStrict(file).generation, 1);
+        assert.strictEqual(fs.existsSync(lockDir), false);
     });
 });
 
@@ -186,13 +261,101 @@ describe('analyzePaperWithRetry', () => {
     it('校验会拒绝缺少文档类型的新分析', () => {
         const text = validAnalysisText().replace('document_type: 方法研究\n', '');
         const parsed = require('../scripts/utils.js').parseAnalysis(text);
-        assert.match(getInvalidAnalysisReason(text, parsed), /文档类型/);
+        assert.match(getInvalidAnalysisReason(text, parsed), /document_type|文档类型/);
     });
 
     it('校验不会把 0 分误判为缺少评分', () => {
-        const parsed = require('../scripts/utils.js').parseAnalysis(validAnalysisText());
-        parsed.score = 0;
-        assert.strictEqual(getInvalidAnalysisReason(validAnalysisText(), parsed), null);
+        let text = validAnalysisText()
+            .replace('6.9/10', '0.0/10')
+            .replace('rank_bucket: 前50%', 'rank_bucket: 后50%');
+        for (const key of [
+            'innovation', 'technical_rigor', 'experimental_sufficiency', 'clarity',
+            'impact', 'open_source', 'reproducibility', 'engineering_score'
+        ]) {
+            text = text.replace(new RegExp(`^${key}: [^\\n]+`, 'm'), `${key}: 0.0`);
+        }
+        for (const label of [
+            '创新性', '技术严谨性', '实验充分性', '清晰度',
+            '影响力', '开源', '可复现性', '工程/实践价值'
+        ]) {
+            text = text.replace(new RegExp(`^${label}：[^/]+/`, 'm'), `${label}：0.0/`);
+        }
+        const parsed = require('../scripts/utils.js').parseAnalysis(text);
+        assert.strictEqual(parsed.score, '0.0');
+        assert.strictEqual(getInvalidAnalysisReason(text, parsed), null);
+    });
+
+    it('成功判断会重解析正文，不信任陈旧 parsed 缓存', () => {
+        assert.strictEqual(isSuccessfulAnalysisRecord({
+            arxivId: '2604.00020',
+            analysis: 'truncated',
+            parsed: require('../scripts/utils.js').parseAnalysis(validAnalysisText())
+        }), false);
+        assert.strictEqual(isSuccessfulAnalysisRecord({
+            arxivId: '2604.00021',
+            analysis: validAnalysisText(),
+            parsed: null
+        }), true);
+    });
+
+    it('恢复 manifest 未完成时不视为成功，失败尝试会保留 checkpoint', async () => {
+        const manifest = {
+            version: 1,
+            stages: {
+                imageDownload: { status: 'no_candidates' },
+                primaryAnalysis: { status: 'complete' },
+                openSourceScan: { status: 'transient_failure' }
+            }
+        };
+        assert.strictEqual(isSuccessfulAnalysisRecord({
+            arxivId: '2604.00022',
+            analysis: validAnalysisText(),
+            analysisManifest: manifest
+        }), false);
+
+        const paper = { arxivId: '2604.00023', title: 'Recoverable' };
+        const attempt = await analyzePaperWithRetry(paper, {
+            maxRetries: 0,
+            analyzeFn: async current => {
+                current.analysisManifest = manifest;
+                current.analysisCheckpoint = validAnalysisText();
+                return { analysis: null, error: 'stage timeout' };
+            }
+        });
+        assert.strictEqual(attempt.success, false);
+        assert.strictEqual(attempt.result.analysisCheckpoint, validAnalysisText());
+        assert.strictEqual(attempt.result.analysisManifest, manifest);
+    });
+
+    it('失败重试不覆盖旧成功正文，但合并恢复元数据供下次续跑', () => {
+        const complete = {
+            arxivId: '2604.00024', title: 'Existing', analysis: validAnalysisText(),
+            imageManifest: { selected: ['old-image'] }
+        };
+        const failed = {
+            arxivId: '2604.00024',
+            title: 'Existing',
+            analysis: null,
+            error: 'secondary timeout',
+            imageManifest: { selected: [], downloaded: [] },
+            analysisCheckpoint: validAnalysisText(),
+            analysisManifest: { version: 1, stages: { imageDownload: { status: 'transient_failure' } } }
+        };
+        const { mergePapersById } = require('../scripts/analysis-engine.js');
+        const [merged] = mergePapersById([complete], [failed], { preserveSuccessfulAnalysis: true });
+        assert.strictEqual(merged.analysis, complete.analysis);
+        assert.strictEqual(merged.analysisCheckpoint, failed.analysisCheckpoint);
+        assert.deepStrictEqual(merged.imageManifest, complete.imageManifest);
+        assert.deepStrictEqual(merged.analysisRecoveryImageManifest, failed.imageManifest);
+        assert.strictEqual(merged.latestAnalysisAttemptError, 'secondary timeout');
+        assert.strictEqual(isSuccessfulAnalysisRecord(merged), false);
+    });
+
+    it('最终契约拒绝展示总分或分档与八维重算结果不一致', () => {
+        const wrongScore = validAnalysisText().replace('6.9/10', '6.0/10');
+        assert.match(getInvalidAnalysisReason(wrongScore, require('../scripts/utils.js').parseAnalysis(wrongScore)), /总分.*不一致/);
+        const wrongRank = validAnalysisText().replace('rank_bucket: 前50%', 'rank_bucket: 后50%');
+        assert.match(getInvalidAnalysisReason(wrongRank, require('../scripts/utils.js').parseAnalysis(wrongRank)), /rank_bucket.*不一致/);
     });
 });
 
@@ -235,6 +398,104 @@ describe('analyzeBatch', () => {
         assert.strictEqual(stats.skipped, 2);
         assert.strictEqual(calls.get('2604.00001v1'), 1);
         assert.strictEqual(calls.get('2604.00002v1'), 1);
+    });
+
+    it('onPaperDone 异常会终止批次并向入口传播', async () => {
+        await assert.rejects(analyzeBatch(
+            [{ arxivId: '2604.00011', title: 'Callback failure' }],
+            {
+                concurrency: 1,
+                maxRetries: 0,
+                analyzeFn: async () => ({ analysis: validAnalysisText() }),
+                onPaperDone: () => { throw new Error('paper save failed'); }
+            }
+        ), /paper save failed/);
+    });
+
+    it('异步 onBatchDone 异常会终止批次并向入口传播', async () => {
+        await assert.rejects(analyzeBatch(
+            [{ arxivId: '2604.00012', title: 'Batch callback failure' }],
+            {
+                concurrency: 1,
+                maxRetries: 0,
+                analyzeFn: async () => ({ analysis: validAnalysisText() }),
+                onBatchDone: async () => { throw new Error('batch save failed'); }
+            }
+        ), /batch save failed/);
+    });
+});
+
+describe('analysis run status', () => {
+    it('区分 complete、partial_failed 和 failed 并映射非零退出码', () => {
+        assert.strictEqual(getAnalysisRunStatus({ success: 2, failed: 0 }), 'complete');
+        assert.strictEqual(getAnalysisRunStatus({ success: 2, failed: 1 }), 'partial_failed');
+        assert.strictEqual(getAnalysisRunStatus({ success: 0, failed: 2 }), 'failed');
+        assert.strictEqual(getAnalysisExitCode('complete'), 0);
+        assert.strictEqual(getAnalysisExitCode('partial_failed'), 2);
+        assert.strictEqual(getAnalysisExitCode('failed'), 1);
+    });
+
+    it('锁内更新为对象结果自动递增 generation', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-generation-'));
+        const file = path.join(dir, 'result.json');
+        updateJsonFileLocked(file, () => ({ papers: [] }));
+        updateJsonFileLocked(file, current => ({ ...current, marker: true }));
+        const saved = readJsonFileStrict(file);
+        assert.strictEqual(saved.generation, 2);
+        assert.strictEqual(saved.marker, true);
+    });
+
+    it('活着的本机 PID 不会仅因锁超龄而被回收', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-lock-live-'));
+        const lockPath = path.join(dir, 'result.json.lock');
+        fs.mkdirSync(lockPath);
+        fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+            pid: process.pid,
+            hostname: os.hostname(),
+            token: 'live-owner'
+        }));
+        const old = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        fs.utimesSync(lockPath, old, old);
+
+        assert.strictEqual(canReclaimFileLock(lockPath, 1), false);
+    });
+
+    it('无法判活的远端主机锁不会按超龄擅自回收', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-lock-remote-'));
+        const lockPath = path.join(dir, 'result.json.lock');
+        fs.mkdirSync(lockPath);
+        fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+            pid: 12345,
+            hostname: `${os.hostname()}-remote`,
+            token: 'remote-owner'
+        }));
+        const old = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        fs.utimesSync(lockPath, old, old);
+
+        assert.strictEqual(canReclaimFileLock(lockPath, 1), false);
+    });
+
+    it('旧 owner 的 release 不会删除同路径的新锁', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-lock-aba-'));
+        const target = path.join(dir, 'result.json');
+        const releaseOld = acquireFileLockSync(target);
+        fs.rmSync(`${target}.lock`, { recursive: true, force: true });
+        const releaseNew = acquireFileLockSync(target);
+
+        assert.strictEqual(releaseOld(), false);
+        assert.strictEqual(fs.existsSync(`${target}.lock`), true);
+        assert.strictEqual(releaseNew(), true);
+    });
+
+    it('异步锁在 callback 完成前保持持有', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-lock-async-'));
+        const target = path.join(dir, 'run');
+        await withFileLock(target, async () => {
+            assert.strictEqual(fs.existsSync(`${target}.lock`), true);
+            await new Promise(resolve => setTimeout(resolve, 5));
+            assert.strictEqual(fs.existsSync(`${target}.lock`), true);
+        });
+        assert.strictEqual(fs.existsSync(`${target}.lock`), false);
     });
 });
 

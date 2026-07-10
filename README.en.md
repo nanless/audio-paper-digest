@@ -4,7 +4,7 @@ English | **[中文](README.md)**
 
 This project automatically generates "Speech / Music / Audio Paper Digests," covering the complete pipeline from arXiv and HuggingFace Papers crawling, LLM-based filtering, multimodal deep analysis, to publishing Hugo blog posts, WeChat Official Account drafts, Xiaohongshu (Little Red Book) copy, and Feishu (Lark) documents. Node-side tunable parameters and current runtime data-file paths are centralized in `scripts/config.js`; shared Python publish/maintenance paths are centralized in `scripts/path_config.py`.
 
-Deep analysis uses the `type-aware-v1` rubric: it first classifies a document as method research, system technical report, model report, dataset/benchmark, survey, theory, or applied research, then evaluates it with the matching evidence standard. The common eight dimensions, 11-point subtotal, and 10-point cap remain unchanged. Type grants no fixed bonus, and one defect may reduce only one primary dimension so disclosure gaps are not repeatedly penalized.
+Deep analysis uses the `type-aware-v1` rubric: it first classifies a document as method research, system technical report, model report, dataset/benchmark, survey, theory, or applied research, then evaluates it with the matching evidence standard. The common eight dimensions, 11-point subtotal, and 10-point cap remain unchanged; values use at most one decimal and Open Source uses fixed anchors. Type grants no fixed bonus, and complete proof material may count as a theory paper's public core artifact instead of being forced to zero merely because code/model/data flags are absent.
 
 ---
 
@@ -22,7 +22,7 @@ Deep analysis uses the `type-aware-v1` rubric: it first classifies a document as
 | `docs/maintenance.md` | Maintenance conventions, scoring standards, tag definitions | Maintainers |
 | `prompts/filter.md` | LLM prompt for the filtering stage | Maintainers |
 | `prompts/deep-analysis.md` | Deep analysis main prompt (Round 1) | Maintainers |
-| `prompts/image-supplement.md` | Image selection and insertion-plan prompt (dual-model mode; may locally adjust text around inserted figures) | Maintainers |
+| `prompts/image-supplement.md` | Image selection and insertion-plan prompt (dual-model mode; adds only figures plus adjacent lead/explanation text) | Maintainers |
 | `prompts/opensource-scan.md` | Open-source link scanning prompt (Round 2) | Maintainers |
 | `prompts/gap-fill.md` | Review and rewrite prompt (Round 3) | Maintainers |
 | `prompts/structure-repair.md` | Primary-model structural repair used only when required sections are missing | Maintainers |

@@ -91,6 +91,40 @@ const FILTER_CONFIG = {
 const FILTER_SYSTEM_FAILURE_THRESHOLD = 5;
 let consecutiveFilterApiFailures = 0;
 
+function redactProxyUrl(proxyUrl) {
+    if (!proxyUrl) return '';
+    try {
+        const parsed = new URL(proxyUrl);
+        parsed.username = '';
+        parsed.password = '';
+        return parsed.toString();
+    } catch {
+        return String(proxyUrl).replace(/\/\/[^/@\s]+@/, '//***@');
+    }
+}
+
+function attachHealth(items, health, property = '_sourceHealth') {
+    Object.defineProperty(items, property, {
+        value: health,
+        enumerable: false,
+        configurable: true
+    });
+    return items;
+}
+
+function getHealth(items, property = '_sourceHealth') {
+    return Array.isArray(items) && items[property] && typeof items[property] === 'object'
+        ? items[property]
+        : null;
+}
+
+function makeSourceFetchError(message, sourceHealth) {
+    const error = new Error(message);
+    error.code = 'SOURCE_FETCH_FAILED';
+    error.sourceHealth = sourceHealth;
+    return error;
+}
+
 /**
  * 筛选阶段专用：调用 LLM（带重试机制）
  */
@@ -112,7 +146,7 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
 
     const proxyUrl = detectProxyUrl();
     if (proxyUrl) {
-        console.log(`[filter] 检测到代理: ${proxyUrl}，将绕过代理直连`);
+        console.log(`[filter] 检测到代理: ${redactProxyUrl(proxyUrl)}，将绕过代理直连`);
     }
 
     let lastError = null;
@@ -246,19 +280,21 @@ function httpsRequestWithProxy(url, headers, proxyUrl, timeoutMs = 90000) {
  * 从 arXiv 搜索页面抓取论文（当 API 被限流时的备用方案）
  * 支持分页获取，默认获取 2 页（100 篇）
  */
-async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxResults = 100) {
+async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxResults = 100, options = {}) {
     const pageSize = 50;
     const pagesToFetch = Math.ceil(maxResults / pageSize);
     const allPapers = [];
     const proxyUrl = detectProxyUrl();
+    const requestFn = options.requestFn || httpsRequestWithProxy;
+    const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    const maxRetries = options.maxRetries || 5;
+    const health = { source: 'arxiv-search', attempts: 0, successfulRequests: 0, failures: [] };
 
     console.log(`[fetch-web] 尝试从搜索页面获取 ${categoryId}（最多 ${maxResults} 篇）...`);
 
     for (let page = 0; page < pagesToFetch; page++) {
         const start = page * pageSize;
         const searchUrl = `https://arxiv.org/search/?searchtype=all&query=${categoryId}&order=-announced_date_first&start=${start}`;
-        const maxRetries = 5;
-
         let pageSuccess = false;
         let shouldStopPaging = false;
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -268,7 +304,8 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
                 headers['Referer'] = 'https://arxiv.org/';
                 headers['Accept-Language'] = 'en-US,en;q=0.9,zh-CN;q=0.8';
 
-                const response = await httpsRequestWithProxy(searchUrl, headers, proxyUrl, 60000);
+                health.attempts++;
+                const response = await requestFn(searchUrl, headers, proxyUrl, 60000);
 
                 if (response.status !== 200) {
                     throw new Error(`HTTP ${response.status}`);
@@ -277,6 +314,7 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
                 const html = response.data;
                 const papers = parseSearchPageHTML(html, categoryId, existingIds);
                 const meta = papers._meta || {};
+                health.successfulRequests++;
 
                 if (papers.length === 0) {
                     if (meta.totalFound > 0 && meta.skippedExisting > 0) {
@@ -308,9 +346,10 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
                     const jitter = Math.floor(Math.random() * 15000);
                     const delay = baseDelay + jitter;
                     console.log(`[fetch-web] 第 ${page + 1} 页第 ${attempt} 次失败: ${err.message}，${(delay/1000).toFixed(1)}s 后重试...`);
-                    await new Promise(resolve => setTimeout(resolve, delay));
+                    await sleepFn(delay);
                 } else {
                     console.log(`[fetch-web] 第 ${page + 1} 页失败 (${maxRetries} 次重试): ${err.message}`);
+                    health.failures.push({ page: page + 1, error: err.message });
                 }
             }
         }
@@ -328,12 +367,14 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
         if (page < pagesToFetch - 1) {
             const delay = Math.floor(Math.random() * 15000) + 10000;
             console.log(`[fetch-web] 页面间等待 ${(delay/1000).toFixed(1)}s...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
+            await sleepFn(delay);
         }
     }
 
     console.log(`[fetch-web] ${categoryId} 共获取 ${allPapers.length} 篇论文`);
-    return allPapers.slice(0, maxResults);
+    health.ok = health.successfulRequests > 0;
+    health.allFailed = health.attempts > 0 && health.successfulRequests === 0;
+    return attachHealth(allPapers.slice(0, maxResults), health);
 }
 
 /**
@@ -341,18 +382,21 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
  * recent 页面展示最近几天的论文，限流策略通常比搜索页宽松
  * 翻页：/list/{category}/recent?skip=50&show=50
  */
-async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxResults = 100) {
+async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxResults = 100, options = {}) {
     const proxyUrl = detectProxyUrl();
     const pageSize = 50;
     const pagesToFetch = Math.min(Math.ceil(maxResults / pageSize), 2); // 最多2页100篇
     const allPapers = [];
+    const requestFn = options.requestFn || httpsRequestWithProxy;
+    const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    const maxRetries = options.maxRetries || 5;
+    const health = { source: 'arxiv-recent', attempts: 0, successfulRequests: 0, failures: [] };
 
     for (let page = 0; page < pagesToFetch; page++) {
         const skip = page * pageSize;
         const url = skip === 0
             ? `https://arxiv.org/list/${categoryId}/recent`
             : `https://arxiv.org/list/${categoryId}/recent?skip=${skip}&show=${pageSize}`;
-        const maxRetries = 5;
         let pageSuccess = false;
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -361,7 +405,8 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
                 headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
                 headers['Referer'] = 'https://arxiv.org/';
 
-                const response = await httpsRequestWithProxy(url, headers, proxyUrl, 60000);
+                health.attempts++;
+                const response = await requestFn(url, headers, proxyUrl, 60000);
 
                 if (response.status !== 200) {
                     throw new Error(`HTTP ${response.status}`);
@@ -369,6 +414,7 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
 
                 const html = response.data;
                 const papers = parseRecentPageHTML(html, categoryId, existingIds);
+                health.successfulRequests++;
 
                 allPapers.push(...papers);
                 console.log(`[fetch-recent] ${categoryId} 第 ${page + 1} 页获取 ${papers.length} 篇`);
@@ -381,9 +427,10 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
                     const jitter = Math.floor(Math.random() * 10000);
                     const delay = baseDelay + jitter;
                     console.log(`[fetch-recent] ${categoryId} 第 ${page + 1} 页第 ${attempt} 次失败: ${err.message}，${(delay/1000).toFixed(1)}s 后重试...`);
-                    await new Promise(resolve => setTimeout(resolve, delay));
+                    await sleepFn(delay);
                 } else {
                     console.log(`[fetch-recent] ${categoryId} 第 ${page + 1} 页失败 (${maxRetries} 次重试): ${err.message}`);
+                    health.failures.push({ page: page + 1, error: err.message });
                 }
             }
         }
@@ -392,7 +439,7 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
 
         // 页间延迟
         if (page < pagesToFetch - 1) {
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            await sleepFn(5000);
         }
     }
 
@@ -405,7 +452,9 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
     });
 
     console.log(`[fetch-recent] ${categoryId} 共获取 ${unique.length} 篇论文`);
-    return unique.slice(0, maxResults);
+    health.ok = health.successfulRequests > 0;
+    health.allFailed = health.attempts > 0 && health.successfulRequests === 0;
+    return attachHealth(unique.slice(0, maxResults), health);
 }
 
 /**
@@ -464,10 +513,14 @@ function parseRecentPageHTML(html, categoryId, existingIds = null) {
  * @param {number} concurrency - 并发数（默认1，避免限流）
  * @returns {Array} 补充了摘要的论文列表
  */
-async function fetchAbstracts(papers, concurrency = 1) {
+async function fetchAbstracts(papers, concurrency = 1, options = {}) {
     const proxyUrl = detectProxyUrl();
     const needFetch = papers.filter(p => !p.abstract && p.arxivId);
-    if (needFetch.length === 0) return papers;
+    const requestFn = options.requestFn || httpsRequestWithProxy;
+    const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    const maxRetries = options.maxRetries || 3;
+    const health = { attempted: needFetch.length, fetched: 0, failedIds: [], failures: [] };
+    if (needFetch.length === 0) return attachHealth(papers, health, '_abstractHealth');
 
     console.log(`[fetch-abstract] 需要补充 ${needFetch.length} 篇论文摘要...`);
     let fetched = 0;
@@ -475,7 +528,7 @@ async function fetchAbstracts(papers, concurrency = 1) {
     for (let i = 0; i < needFetch.length; i += concurrency) {
         const batch = needFetch.slice(i, i + concurrency);
         await Promise.all(batch.map(async (paper) => {
-            const maxRetries = 3;
+            let lastError = null;
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
                 try {
                     const url = `https://arxiv.org/abs/${paper.arxivId}`;
@@ -483,29 +536,38 @@ async function fetchAbstracts(papers, concurrency = 1) {
                     headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
                     headers['Referer'] = 'https://arxiv.org/';
 
-                    const response = await httpsRequestWithProxy(url, headers, proxyUrl, 30000);
+                    const response = await requestFn(url, headers, proxyUrl, 30000);
                     if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
 
                     // 解析摘要：<blockquote class="abstract mathjax">...<span class="descriptor">Abstract:</span> ...</blockquote>
                     const abstractMatch = response.data.match(/<blockquote\s+class\s*=\s*['"]abstract\s+mathjax['"][^>]*>\s*<span\s+class\s*=\s*['"]descriptor['"]>Abstract:<\/span>\s*([\s\S]*?)\s*<\/blockquote>/i);
-                    if (abstractMatch) {
-                        paper.abstract = abstractMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-                    }
+                    const abstract = abstractMatch
+                        ? abstractMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+                        : '';
+                    if (!abstract) throw new Error('响应中缺少非空摘要');
+                    paper.abstract = abstract;
                     fetched++;
+                    health.fetched++;
                     break;
                 } catch (err) {
+                    lastError = err;
                     const is429 = err.message.includes('429');
                     if (attempt < maxRetries) {
                         const delay = is429 ? 60000 * attempt : 3000 * attempt;
-                        await new Promise(resolve => setTimeout(resolve, delay));
+                        await sleepFn(delay);
                     }
                 }
+            }
+            if (!paper.abstract) {
+                const paperId = normalizedId(paper) || paper.arxivId;
+                health.failedIds.push(paperId);
+                health.failures.push({ id: paperId, error: lastError?.message || 'unknown error' });
             }
         }));
 
         // 批间延迟
         if (i + concurrency < needFetch.length) {
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            await sleepFn(5000);
         }
 
         // 进度
@@ -515,7 +577,10 @@ async function fetchAbstracts(papers, concurrency = 1) {
     }
 
     console.log(`[fetch-abstract] 摘要补充完成: ${fetched}/${needFetch.length} 篇`);
-    return papers;
+    if (health.failedIds.length > 0) {
+        console.log(`[fetch-abstract] 最终失败 ID: ${health.failedIds.join(', ')}`);
+    }
+    return attachHealth(papers, health, '_abstractHealth');
 }
 
 /**
@@ -619,17 +684,51 @@ function parseSearchPageHTML(html, categoryId, existingIds = null) {
  * 从 arXiv 抓取指定类别的论文
  * 策略：recent → 搜索页 → API，每步获取足够就跳过后续
  */
-async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResultsPerCategory, retryCount = ARXIV_CONFIG.fetchMaxRetries, existingIds = null) {
+async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResultsPerCategory, retryCount = ARXIV_CONFIG.fetchMaxRetries, existingIds = null, options = {}) {
     console.log(`[fetch] 正在抓取 ${categoryId} 类别的 ${maxResults} 篇论文...`);
     const merged = new Map();
     const seenIds = new Set(existingIds ? Array.from(existingIds) : []);
+    const requestFn = options.requestFn || httpsRequestWithProxy;
+    const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    const perSourceOptions = { requestFn, sleepFn, maxRetries: options.maxRetries };
+    const health = {
+        categoryId,
+        attempts: 0,
+        successfulRequests: 0,
+        failures: [],
+        methods: {}
+    };
+
+    const absorbHealth = (method, methodHealth) => {
+        if (!methodHealth) return;
+        health.methods[method] = methodHealth;
+        health.attempts += methodHealth.attempts || 0;
+        health.successfulRequests += methodHealth.successfulRequests || 0;
+        for (const failure of methodHealth.failures || []) {
+            health.failures.push({ method, ...failure });
+        }
+    };
+
+    const finish = () => {
+        const result = Array.from(merged.values()).slice(0, maxResults);
+        health.ok = health.successfulRequests > 0;
+        health.allFailed = health.attempts > 0 && health.successfulRequests === 0;
+        health.fetched = result.length;
+        if (health.allFailed) {
+            const failureSummary = health.failures.map(item => `${item.method || 'unknown'}:${item.error}`).join('; ');
+            throw makeSourceFetchError(`arXiv ${categoryId} 所有抓取请求均失败${failureSummary ? `: ${failureSummary}` : ''}`, health);
+        }
+        return attachHealth(result, health);
+    };
 
     // 1. 优先用 recent 页面
-    let recentPapers = await fetchCategoryFromRecentPage(categoryId, seenIds, maxResults);
+    let recentPapers = await fetchCategoryFromRecentPage(categoryId, seenIds, maxResults, perSourceOptions);
+    absorbHealth('recent', getHealth(recentPapers));
 
     // 补充摘要（recent 页面不包含摘要）
     if (recentPapers.length > 0) {
-        recentPapers = await fetchAbstracts(recentPapers, 5);
+        recentPapers = await fetchAbstracts(recentPapers, 5, { requestFn, sleepFn, maxRetries: options.abstractMaxRetries });
+        health.abstracts = getHealth(recentPapers, '_abstractHealth');
         for (const p of recentPapers) {
             const key = normalizedId(p);
             if (key) {
@@ -638,7 +737,7 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
             }
         }
         if (merged.size >= maxResults) {
-            return Array.from(merged.values()).slice(0, maxResults);
+            return finish();
         }
         console.log(`[fetch] ${categoryId} recent 仅 ${merged.size}/${maxResults} 篇，继续用搜索页补足...`);
     } else {
@@ -646,7 +745,8 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
     }
 
     // 2. recent 无结果，用搜索页
-    const webPapers = await fetchCategoryFromSearchPage(categoryId, seenIds, maxResults);
+    const webPapers = await fetchCategoryFromSearchPage(categoryId, seenIds, maxResults, perSourceOptions);
+    absorbHealth('search', getHealth(webPapers));
     for (const p of webPapers) {
         const key = normalizedId(p);
         if (key && !merged.has(key)) {
@@ -658,7 +758,7 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
     if (merged.size >= maxResults || webPapers.length > 0) {
         const result = Array.from(merged.values());
         console.log(`[fetch] ${categoryId} recent+搜索页合并 ${result.length} 篇`);
-        if (result.length >= maxResults) return result.slice(0, maxResults);
+        if (result.length >= maxResults) return finish();
     }
 
     // 3. 搜索页也无结果，用 API
@@ -672,15 +772,19 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
     });
     const url = `https://export.arxiv.org/api/query?${params.toString()}`;
     const proxyUrl = detectProxyUrl();
+    const apiHealth = { source: 'arxiv-api', attempts: 0, successfulRequests: 0, failures: [] };
+    let apiLastError = null;
 
     for (let attempt = 1; attempt <= Math.min(retryCount, 5); attempt++) {
         const headers = getBrowserHeaders();
         headers['Referer'] = 'https://arxiv.org/';
 
         try {
-            const response = await httpsRequestWithProxy(url, headers, proxyUrl, 60000);
+            apiHealth.attempts++;
+            const response = await requestFn(url, headers, proxyUrl, 60000);
 
             if (response.status === 200) {
+                apiHealth.successfulRequests++;
                 const xml = response.data;
                 const apiPapers = parseArxivXML(xml, categoryId, seenIds, { stopAtConsecutiveExisting: false });
 
@@ -697,19 +801,26 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
             }
             throw new Error(`HTTP ${response.status}`);
         } catch (err) {
+            apiLastError = err;
             if (attempt === Math.min(retryCount, 5)) break;
             const is429 = err.message.includes('429');
             const baseDelay = is429 ? 60000 * Math.pow(2, attempt - 1) : 5000 * attempt;
             const jitter = Math.floor(Math.random() * 10000);
             const delay = baseDelay + jitter;
             console.log(`[fetch] ${categoryId} API 第 ${attempt} 次失败: ${err.message}，${(delay/1000).toFixed(0)}s 后重试...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
+            await sleepFn(delay);
         }
     }
+    if (apiHealth.successfulRequests === 0 && apiLastError) {
+        apiHealth.failures.push({ error: apiLastError.message });
+    }
+    apiHealth.ok = apiHealth.successfulRequests > 0;
+    apiHealth.allFailed = apiHealth.attempts > 0 && apiHealth.successfulRequests === 0;
+    absorbHealth('api', apiHealth);
 
     const result = Array.from(merged.values());
     console.log(`[fetch] ${categoryId} 最终 ${result.length} 篇`);
-    return result.slice(0, maxResults);
+    return finish();
 }
 
 /**
@@ -844,6 +955,12 @@ function parseFilterDecisionDetails(responseText, paperId = '') {
         rawResponse: rawText,
         parseSource: source
     });
+    const makeRetryable = (source, suggestedRelated = null) => ({
+        ...makeDecision(null, source),
+        suggestedRelated,
+        retryable: true,
+        fallback: true
+    });
 
     // 1. 优先解析 JSON 格式，便于未来让 prompt 输出机器可读结构
     try {
@@ -881,17 +998,17 @@ function parseFilterDecisionDetails(responseText, paperId = '') {
         return makeDecision(false, 'last_line');
     }
 
-    // 4. 文本中是否包含明确否定/肯定短语。避免单字“是/否”误伤说明句。
+    // 非结构化关键词只能作为诊断提示，不能写入正式完成缓存。
     if (answer.includes('不相关') || answer.includes('无关') || /\b(not related|not_related|unrelated)\b/i.test(answer)) {
-        return makeDecision(false, 'keyword_negative');
+        return makeRetryable('keyword_negative_retryable', false);
     }
     if (answer.includes('相关') || /\brelated\b/i.test(answer)) {
-        return makeDecision(true, 'keyword_positive');
+        return makeRetryable('keyword_positive_retryable', true);
     }
 
-    // 4. 仍无法判断，默认保留（宁可错留不可错杀）
-    console.log(`[filter] 无法判断 ${paperId}: "${answer.substring(0, 50)}" → 默认保留`);
-    return makeDecision(true, 'fallback_keep');
+    // 无法可靠解析时保留为可重试状态，不得作为正式相关结论进入缓存。
+    console.log(`[filter] 无法判断 ${paperId}: "${answer.substring(0, 50)}" → 标记为待重试`);
+    return makeRetryable('fallback_retryable');
 }
 
 function getCaseInsensitiveField(obj, names) {
@@ -920,15 +1037,16 @@ async function getSpeechAudioDecision(paper) {
         if (consecutiveFilterApiFailures >= FILTER_SYSTEM_FAILURE_THRESHOLD) {
             throw new Error(`筛选模型连续 ${consecutiveFilterApiFailures} 次调用失败，疑似 API 配置或服务故障: ${err.message}`);
         }
-        console.error(`[filter] 判断论文 ${paperId} 失败: ${err.message}，默认保留`);
+        console.error(`[filter] 判断论文 ${paperId} 失败: ${err.message}，标记为待重试`);
         return {
-            related: true,
-            reason: `筛选 API 调用失败，按保守策略保留: ${err.message}`,
+            related: null,
+            reason: `筛选 API 调用失败，等待重试: ${err.message}`,
             rawResponse: '',
-            parseSource: 'api_error_keep',
+            parseSource: 'api_error_retryable',
             error: err.message,
-            fallback: true
-        };   // API 失败时宁可错留不可错杀
+            fallback: true,
+            retryable: true
+        };
     }
 }
 
@@ -961,12 +1079,13 @@ async function filterPapersWithLLM(papers, options = {}) {
     }
 
     const decisions = new Map();
+    const retryableDecisions = new Map();
     const currentPaperIds = new Set(papersToCheck
         .map(paper => normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '')
         .filter(Boolean));
     const loadDecision = (id, decision) => {
         const key = normalizedId(id);
-        if (!key || !decision || typeof decision.related !== 'boolean') return;
+        if (!key || !decision || typeof decision.related !== 'boolean' || decision.retryable || decision.fallback) return;
         if (!currentPaperIds.has(key)) return;
         decisions.set(key, decision);
     };
@@ -1013,7 +1132,10 @@ async function filterPapersWithLLM(papers, options = {}) {
 
         const batchResults = await Promise.all(batch.map(async (paper) => {
             const modelDecision = await decisionFn(paper);
-            const isRelated = modelDecision.related;
+            const isDefinitive = typeof modelDecision.related === 'boolean'
+                && !modelDecision.retryable
+                && !modelDecision.fallback;
+            const isRelated = isDefinitive ? modelDecision.related : null;
             const paperId = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
             const decision = {
                 id: paperId,
@@ -1025,12 +1147,20 @@ async function filterPapersWithLLM(papers, options = {}) {
                 parseSource: modelDecision.parseSource || '',
                 error: modelDecision.error || null,
                 fallback: Boolean(modelDecision.fallback),
+                retryable: !isDefinitive,
                 decidedAt: getBeijingISOString(),
                 ...decisionMetadata
             };
-            decisions.set(paperId, decision);
+            if (isDefinitive) {
+                decisions.set(paperId, decision);
+                retryableDecisions.delete(paperId);
+            } else {
+                retryableDecisions.set(paperId, decision);
+            }
 
-            if (isRelated) {
+            if (!isDefinitive) {
+                console.log(`[filter] ↻ 待重试: ${paperId} - ${paper.title.substring(0, 40)}...`);
+            } else if (isRelated) {
                 console.log(`[filter] ✓ 相关: ${paperId} - ${paper.title.substring(0, 40)}...`);
             } else {
                 console.log(`[filter] ✗ 过滤: ${paperId} - ${paper.title.substring(0, 40)}...`);
@@ -1044,7 +1174,14 @@ async function filterPapersWithLLM(papers, options = {}) {
                 totalBatches: batches.length,
                 batchResults,
                 results: getFilteredFromDecisions(),
-                decisions: Object.fromEntries(decisions)
+                decisions: Object.fromEntries(decisions),
+                retryableDecisions: Object.fromEntries(retryableDecisions),
+                stats: {
+                    totalCandidates: papersToCheck.length,
+                    decided: decisions.size,
+                    retryable: retryableDecisions.size,
+                    complete: decisions.size === papersToCheck.length && retryableDecisions.size === 0
+                }
             });
         }
 
@@ -1054,8 +1191,15 @@ async function filterPapersWithLLM(papers, options = {}) {
     }
 
     const results = getFilteredFromDecisions();
-    console.log(`[filter] 筛选完成：${papers.length} → ${results.length} 篇相关论文`);
-    return results;
+    const filterStats = {
+        totalCandidates: papersToCheck.length,
+        decided: decisions.size,
+        retryable: retryableDecisions.size,
+        retryableIds: Array.from(retryableDecisions.keys()),
+        complete: decisions.size === papersToCheck.length && retryableDecisions.size === 0
+    };
+    console.log(`[filter] 筛选阶段结束：${papers.length} 篇候选，明确决定 ${decisions.size} 篇，待重试 ${retryableDecisions.size} 篇，相关 ${results.length} 篇`);
+    return attachHealth(results, filterStats, '_filterStats');
 }
 
 /**
@@ -1127,6 +1271,7 @@ module.exports = {
     filterPapersWithLLM,
     parseFilterDecision,
     parseFilterDecisionDetails,
+    redactProxyUrl,
     isSpeechAudioRelated,
     getSpeechAudioDecision,
     filterPapersByKeywords,

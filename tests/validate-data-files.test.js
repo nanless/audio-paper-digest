@@ -48,7 +48,10 @@ describe('validate-data-files', () => {
                     impactScore: 1.0,
                     openSourceScore: 1.2,
                     reproducibilityScore: 0.3,
-                    engineeringScore: 1.4
+                    engineeringScore: 1.4,
+                    hasCode: '是',
+                    hasModel: '否',
+                    hasDataset: '否'
                 },
                 selectedImageUrls: [],
                 imageManifest: { selected: [] }
@@ -137,6 +140,95 @@ describe('validate-data-files', () => {
         assert.match(issues, /scoringRubricVersion 非法/);
         assert.match(issues, /innovationScore 非法/);
         assert.match(issues, /八项合计封顶结果/);
+    });
+
+    it('报告评分缓存缺项、非有限数、负数和开源矛盾', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-'));
+        const resultFile = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(resultFile, JSON.stringify({
+            papers: [{
+                arxivId: '2607.00001',
+                parsed: {
+                    score: 'NaN',
+                    innovationScore: -0.1,
+                    technicalRigorScore: 1.2,
+                    experimentalSufficiencyScore: 1.1,
+                    clarityScore: 0.8,
+                    impactScore: 1.0,
+                    openSourceScore: 1.2,
+                    reproducibilityScore: 0.3,
+                    engineeringScore: null,
+                    hasCode: '否',
+                    hasModel: '否',
+                    hasDataset: '否'
+                }
+            }]
+        }));
+
+        const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
+        assert.match(issues, /parsed\.score 非法/);
+        assert.match(issues, /innovationScore 非法/);
+        assert.match(issues, /engineeringScore 非法/);
+        assert.match(issues, /但无代码、模型或数据资源/);
+    });
+
+    it('校验可恢复分析 manifest 的阶段状态', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-manifest-'));
+        const resultFile = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(resultFile, JSON.stringify({
+            papers: [{
+                arxivId: '2607.00002',
+                parsed: {
+                    score: '0.0',
+                    innovationScore: '0.0',
+                    technicalRigorScore: '0.0',
+                    experimentalSufficiencyScore: '0.0',
+                    clarityScore: '0.0',
+                    impactScore: '0.0',
+                    openSourceScore: '0.0',
+                    reproducibilityScore: '0.0',
+                    engineeringScore: '0.0',
+                    hasCode: '否', hasModel: '否', hasDataset: '否'
+                },
+                analysisManifest: {
+                    version: 1,
+                    stages: {
+                        revision: { status: 'transient_failure', error: 'timeout', updatedAt: 123 },
+                        imageSupplement: { status: 'empty_plan' }
+                    }
+                }
+            }]
+        }));
+        const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
+        assert.match(issues, /updatedAt 必须是字符串/);
+        assert.match(issues, /status 非法: empty_plan/);
+    });
+
+    it('理论研究公开证明材料不会被资源字段矛盾检查误报', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-theory-'));
+        const resultFile = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(resultFile, JSON.stringify({
+            papers: [{
+                arxivId: '2607.00002',
+                parsed: {
+                    score: 7.2,
+                    documentType: '理论研究',
+                    scoringRubricVersion: 'type-aware-v1',
+                    innovationScore: 1.5,
+                    technicalRigorScore: 1.2,
+                    experimentalSufficiencyScore: 1.1,
+                    clarityScore: 0.8,
+                    impactScore: 1.0,
+                    openSourceScore: 1.2,
+                    reproducibilityScore: 0.4,
+                    engineeringScore: 0,
+                    hasCode: '否', hasModel: '否', hasDataset: '否'
+                }
+            }]
+        }));
+
+        const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
+        assert.doesNotMatch(issues, /但无代码、模型或数据资源/);
     });
 
     it('接受合法筛选结果和逐篇筛选决策缓存', () => {

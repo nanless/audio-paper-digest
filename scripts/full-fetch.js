@@ -9,11 +9,27 @@ setupScriptLogging(__filename);
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { fetchCategoryPapers, filterPapersWithLLM, loadPapers } = require('./fetch-papers.js');
+const { fetchCategoryPapers, filterPapersWithLLM } = require('./fetch-papers.js');
 const { fetchHuggingFacePapers, mergeAndDeduplicate } = require('./fetch-huggingface-papers.js');
 const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson, loadPublishedIdsFromBlog } = require('./utils.js');
-const { analyzeBatch, mergeAndSaveResults } = require('./analysis-engine.js');
-const { markPaperDigestStatus, applyAnalysisDigestStatuses, savePapersDatabase } = require('./digest-status.js');
+const {
+    analyzeBatch,
+    mergeAndSaveResults,
+    mergePapersById,
+    readJsonFileStrict,
+    updateJsonFileLocked,
+    withFileLock,
+    withFileLockSync,
+    isSuccessfulAnalysisRecord,
+    getAnalysisRunStatus,
+    getAnalysisExitCode
+} = require('./analysis-engine.js');
+const {
+    markPaperDigestStatus,
+    savePapersDatabase,
+    loadPapersDatabase,
+    updateAnalysisDigestStatuses
+} = require('./digest-status.js');
 
 const Config = require('./config.js');
 
@@ -31,6 +47,7 @@ const PAPERS_FILE = Config.FILES.papers;
 const ANALYZED_FILE = Config.FILES.analyzed;
 const RAW_CANDIDATES_FILE = Config.FILES.rawCandidates;
 const FILTER_DECISIONS_FILE = Config.FILES.filterDecisions;
+const FULL_FETCH_RUN_LOCK = path.join(Config.CURRENT_DIR, '.full-fetch-run');
 
 function shouldUsePaperForFetchDedup(paper) {
     const status = paper?.digestStatus?.status;
@@ -46,6 +63,36 @@ function getFilterPromptHash() {
     }
 }
 
+function isDefinitiveFilterDecision(decision) {
+    return Boolean(decision)
+        && typeof decision.related === 'boolean'
+        && !decision.retryable
+        && !decision.fallback;
+}
+
+function validateFilterDecisionCoverage(papers, decisions) {
+    const candidateIds = new Set((papers || []).map(paper => normalizedId(paper)).filter(Boolean));
+    const decisionEntries = Object.entries(decisions || {})
+        .map(([id, decision]) => [normalizedId(id), decision])
+        .filter(([id]) => Boolean(id));
+    const validDecisionIds = new Set(decisionEntries
+        .filter(([, decision]) => isDefinitiveFilterDecision(decision))
+        .map(([id]) => id));
+    const retryableIds = decisionEntries
+        .filter(([, decision]) => !isDefinitiveFilterDecision(decision))
+        .map(([id]) => id);
+    const missingIds = Array.from(candidateIds).filter(id => !validDecisionIds.has(id));
+    const unexpectedIds = Array.from(validDecisionIds).filter(id => !candidateIds.has(id));
+    return {
+        complete: missingIds.length === 0 && unexpectedIds.length === 0 && retryableIds.length === 0,
+        totalCandidates: candidateIds.size,
+        decided: Array.from(validDecisionIds).filter(id => candidateIds.has(id)).length,
+        missingIds,
+        unexpectedIds,
+        retryableIds
+    };
+}
+
 function loadReusableFilterDecisions(today, filterModel, filterPromptHash) {
     if (!fs.existsSync(FILTER_DECISIONS_FILE)) return {};
     const data = readJsonSafe(FILTER_DECISIONS_FILE);
@@ -54,7 +101,8 @@ function loadReusableFilterDecisions(today, filterModel, filterPromptHash) {
         console.log('  [filter] 已有筛选决策与当前模型/prompt 不一致，忽略旧缓存');
         return {};
     }
-    return data.decisions && typeof data.decisions === 'object' ? data.decisions : {};
+    if (!data.decisions || typeof data.decisions !== 'object') return {};
+    return Object.fromEntries(Object.entries(data.decisions).filter(([, decision]) => isDefinitiveFilterDecision(decision)));
 }
 
 function loadTodayJsonFile(filePath, today) {
@@ -78,9 +126,15 @@ function loadCompleteFilteredForToday(today, filePath = FILTERED_FILE, expected 
 
 function hasConsistentFilterArtifacts(today, filteredData) {
     const decisionsData = loadTodayJsonFile(FILTER_DECISIONS_FILE, today);
-    if (!decisionsData || !decisionsData.decisions || typeof decisionsData.decisions !== 'object') {
+    const rawCandidates = loadTodayJsonFile(RAW_CANDIDATES_FILE, today);
+    return validateFilterArtifacts(filteredData, decisionsData, rawCandidates);
+}
+
+function validateFilterArtifacts(filteredData, decisionsData, rawCandidates = null) {
+    if (!filteredData || !decisionsData || !decisionsData.decisions || typeof decisionsData.decisions !== 'object') {
         return false;
     }
+    if (decisionsData.stats?.complete !== true) return false;
     if (decisionsData.filterModel !== filteredData.filterModel) return false;
     if (decisionsData.filterPromptHash !== filteredData.filterPromptHash) return false;
 
@@ -91,34 +145,79 @@ function hasConsistentFilterArtifacts(today, filteredData) {
         return false;
     }
 
-    const rawCandidates = loadTodayJsonFile(RAW_CANDIDATES_FILE, today);
     const rawPapers = Array.isArray(rawCandidates?.papers) ? rawCandidates.papers : null;
     if (rawPapers) {
-        if (decisionCount !== rawPapers.length) return false;
-        for (const paper of rawPapers) {
-            const id = normalizedId(paper);
-            if (id && !decisionIds.has(id)) return false;
-        }
+        const coverage = validateFilterDecisionCoverage(rawPapers, decisionsData.decisions);
+        if (!coverage.complete || coverage.decided !== decisionCount) return false;
+        if (decisionsData.stats.totalCandidates !== coverage.totalCandidates) return false;
+        if (decisionsData.stats.decided !== coverage.decided) return false;
+    }
+
+    for (const paper of filteredData.papers || []) {
+        const id = normalizedId(paper);
+        if (!id || decisionsData.decisions[id]?.related !== true) return false;
     }
 
     return true;
 }
 
 function loadCurrentSuccessfulAnalysisIds(filePath = RESULT_FILE, today = null) {
-    const data = readJsonSafe(filePath, null);
+    const data = readJsonFileStrict(filePath, { allowMissing: true });
     if (!data) return new Set();
     const papers = Array.isArray(data) ? data : (data.papers || []);
+    if (!Array.isArray(papers)) {
+        throw new Error(`分析结果 papers 必须是数组，已阻止读取损坏文件: ${filePath}`);
+    }
     const ids = new Set();
     for (const paper of papers) {
-        if (!paper || !paper.analysis) continue;
+        if (!isSuccessfulAnalysisRecord(paper)) continue;
         if (today) {
-            const paperDate = (paper.fetchedAt || paper.timestamp || '').slice(0, 10);
-            if (paperDate && paperDate !== today) continue;
+            const paperDate = (paper.digestStatus?.batchDate || paper.batchDate
+                || paper.fetchedAt || paper.timestamp || '').slice(0, 10);
+            if (paperDate !== today) continue;
         }
         const id = normalizedId(paper);
         if (id) ids.add(id);
     }
     return ids;
+}
+
+function saveFinalAnalysisResults(filePath, newResults, expectedPapers, stats = {}) {
+    return updateJsonFileLocked(filePath, current => {
+        const existingPapers = Array.isArray(current) ? current : (current?.papers || []);
+        const mergedPapers = mergePapersById(existingPapers, newResults, {
+            preserveSuccessfulAnalysis: true
+        });
+        const mergedById = new Map(mergedPapers.map(paper => [normalizedId(paper), paper]));
+        const expectedIds = new Set((expectedPapers || []).map(normalizedId).filter(Boolean));
+        let successful = 0;
+        for (const id of expectedIds) {
+            if (isSuccessfulAnalysisRecord(mergedById.get(id))) successful++;
+        }
+        const remainingFailed = expectedIds.size - successful;
+        const inferredStatus = getAnalysisRunStatus({ success: successful }, remainingFailed);
+        const analysisStatus = inferredStatus;
+        const now = getBeijingISOString();
+        const payload = {
+            ...(!Array.isArray(current) && current ? current : {}),
+            timestamp: now,
+            previousTimestamp: !Array.isArray(current) ? current?.timestamp || null : null,
+            status: analysisStatus,
+            stats: {
+                ...(!Array.isArray(current) ? current?.stats : {}),
+                ...stats,
+                analysisStatus,
+                remainingFailed,
+                successfulExpected: successful,
+                preservedExisting: existingPapers.length,
+                totalAfterMerge: mergedPapers.length
+            },
+            papers: mergedPapers
+        };
+        if (analysisStatus === 'complete') payload.deepAnalysisCompletedAt = now;
+        else delete payload.deepAnalysisCompletedAt;
+        return payload;
+    });
 }
 
 function loadTodayPapersFromDatabase(papersData, today) {
@@ -137,13 +236,13 @@ function loadTodayPapersFromDatabase(papersData, today) {
 function buildSourceHealth(sourceHealth, arxivPapers, hfPapers) {
     const arxivCategories = sourceHealth.arxiv?.categories || [];
     const arxivFailed = arxivCategories.filter(c => c.ok === false).length;
-    const arxivSucceeded = arxivCategories.filter(c => c.ok !== false).length;
+    const arxivSucceeded = arxivCategories.filter(c => c.ok === true).length;
     return {
         ...sourceHealth,
         arxiv: {
             ...(sourceHealth.arxiv || {}),
             totalFetched: arxivPapers.length,
-            ok: arxivFailed === 0,
+            ok: arxivCategories.length > 0 && arxivFailed === 0 && arxivSucceeded > 0,
             failedCategories: arxivFailed,
             succeededCategories: arxivSucceeded
         },
@@ -177,7 +276,7 @@ function getSourceFailures(sourceHealth) {
 function getFatalEmptyCandidateSourceFailures(sourceHealth) {
     const arxivCategories = sourceHealth?.arxiv?.categories || [];
     const arxivAttempted = arxivCategories.length > 0;
-    const arxivSucceeded = arxivCategories.some(category => category.ok !== false);
+    const arxivSucceeded = arxivCategories.some(category => category.ok === true);
     const arxivAllFailed = arxivAttempted && !arxivSucceeded;
     const huggingfaceAttempted = Boolean(sourceHealth?.huggingface);
     const huggingfaceFailed = sourceHealth?.huggingface?.ok === false;
@@ -204,25 +303,33 @@ function writeFilterArtifacts({
     filterModel,
     filterPromptHash,
     stats,
-    complete
+    complete,
+    retryableDecisions = {}
 }) {
     const timestamp = getBeijingISOString();
+    const coverage = validateFilterDecisionCoverage(allPapersFiltered, filterDecisions);
+    if (complete && !coverage.complete) {
+        throw new Error(`筛选决策覆盖不完整，禁止标记 complete：明确决定 ${coverage.decided}/${coverage.totalCandidates}，待重试/缺失 ${coverage.missingIds.join(', ') || '无'}`);
+    }
+    const artifactComplete = complete && coverage.complete;
     writeFileAtomic(FILTER_DECISIONS_FILE, JSON.stringify({
         timestamp,
         filterModel,
         filterPromptHash,
         stats: {
-            totalCandidates: allPapersFiltered.length,
-            decided: Object.keys(filterDecisions).length,
+            totalCandidates: coverage.totalCandidates,
+            decided: coverage.decided,
             related: filtered.length,
-            complete
+            retryable: Object.keys(retryableDecisions).length,
+            complete: artifactComplete
         },
-        decisions: filterDecisions
+        decisions: filterDecisions,
+        retryableDecisions
     }, null, 2));
 
     writeFileAtomic(FILTERED_FILE, JSON.stringify({
         timestamp,
-        status: complete ? 'filter_complete' : 'filtering',
+        status: artifactComplete ? 'filter_complete' : 'filtering',
         filterModel,
         filterPromptHash,
         stats: {
@@ -241,56 +348,58 @@ function autoArchiveCurrentData() {
     let removed = 0;
 
     for (const filePath of targets) {
-        if (!fs.existsSync(filePath)) continue;
-        const data = readJsonSafe(filePath);
-        const recordDate = getRecordDate(data);
+        withFileLockSync(filePath, () => {
+            if (!fs.existsSync(filePath)) return;
+            const data = readJsonSafe(filePath);
+            const recordDate = getRecordDate(data);
 
-        if (!recordDate) {
-            console.log(`  [归档] 跳过 ${path.basename(filePath)}（缺少可识别日期字段）`);
-            continue;
-        }
-        if (recordDate >= today) continue;
+            if (!recordDate) {
+                console.log(`  [归档] 跳过 ${path.basename(filePath)}（缺少可识别日期字段）`);
+                return;
+            }
+            if (recordDate >= today) return;
 
-        const archiveDayDir = path.join(ARCHIVE_DIR, recordDate);
-        const archivePath = path.join(archiveDayDir, path.basename(filePath));
-        if (fs.existsSync(archivePath)) {
-            try {
-                const currentContent = fs.readFileSync(filePath, 'utf8');
-                const archivedContent = fs.readFileSync(archivePath, 'utf8');
-                if (currentContent === archivedContent) {
-                    console.log(`  [归档] 已存在且内容一致，跳过 ${recordDate}/${path.basename(filePath)}`);
-                } else {
-                    const backupPath = path.join(
-                        archiveDayDir,
-                        `${path.basename(filePath, '.json')}-${getBeijingCompactTimestamp()}.json`
-                    );
-                    fs.copyFileSync(filePath, backupPath);
-                    archived++;
-                    console.log(`  [归档] 已存在但内容不同，另存为 ${path.basename(backupPath)}`);
+            const archiveDayDir = path.join(ARCHIVE_DIR, recordDate);
+            const archivePath = path.join(archiveDayDir, path.basename(filePath));
+            if (fs.existsSync(archivePath)) {
+                try {
+                    const currentContent = fs.readFileSync(filePath, 'utf8');
+                    const archivedContent = fs.readFileSync(archivePath, 'utf8');
+                    if (currentContent === archivedContent) {
+                        console.log(`  [归档] 已存在且内容一致，跳过 ${recordDate}/${path.basename(filePath)}`);
+                    } else {
+                        const backupPath = path.join(
+                            archiveDayDir,
+                            `${path.basename(filePath, '.json')}-${getBeijingCompactTimestamp()}.json`
+                        );
+                        fs.copyFileSync(filePath, backupPath);
+                        archived++;
+                        console.log(`  [归档] 已存在但内容不同，另存为 ${path.basename(backupPath)}`);
+                    }
+                } catch (e) {
+                    console.log(`  [归档] 校验已有归档失败 ${path.basename(filePath)}: ${e.message}`);
+                    return;
                 }
-            } catch (e) {
-                console.log(`  [归档] 校验已有归档失败 ${path.basename(filePath)}: ${e.message}`);
-                continue;
+            } else {
+                try {
+                    fs.mkdirSync(archiveDayDir, { recursive: true });
+                    fs.copyFileSync(filePath, archivePath);
+                    archived++;
+                    console.log(`  [归档] ${path.basename(filePath)} -> ${recordDate}/${path.basename(filePath)}`);
+                } catch (e) {
+                    console.log(`  [归档] 复制失败 ${path.basename(filePath)}: ${e.message}`);
+                    return;
+                }
             }
-        } else {
-            try {
-                fs.mkdirSync(archiveDayDir, { recursive: true });
-                fs.copyFileSync(filePath, archivePath);
-                archived++;
-                console.log(`  [归档] ${path.basename(filePath)} -> ${recordDate}/${path.basename(filePath)}`);
-            } catch (e) {
-                console.log(`  [归档] 复制失败 ${path.basename(filePath)}: ${e.message}`);
-                continue;
-            }
-        }
 
-        try {
-            fs.unlinkSync(filePath);
-            removed++;
-            console.log(`  [移走] 已清空 ${path.basename(filePath)}`);
-        } catch (e) {
-            console.log(`  [移走] 删除失败 ${path.basename(filePath)}: ${e.message}`);
-        }
+            try {
+                fs.unlinkSync(filePath);
+                removed++;
+                console.log(`  [移走] 已清空 ${path.basename(filePath)}`);
+            } catch (e) {
+                console.log(`  [移走] 删除失败 ${path.basename(filePath)}: ${e.message}`);
+            }
+        });
     }
 
     if (archived > 0 || removed > 0) {
@@ -305,35 +414,37 @@ function autoArchiveCurrentData() {
  * 归档函数只在文件日期早于今天时触发，但文件可能在当天被修改导致未归档
  */
 function cleanOldData(filePath, name, today) {
-    if (!fs.existsSync(filePath)) return;
-    const data = readJsonSafe(filePath);
-    if (!data || !data.papers || !Array.isArray(data.papers)) return;
+    return withFileLockSync(filePath, () => {
+        if (!fs.existsSync(filePath)) return;
+        const data = readJsonSafe(filePath);
+        if (!data || !data.papers || !Array.isArray(data.papers)) return;
 
-    const before = data.papers.length;
-    data.papers = data.papers.filter(p => {
-        const date = (p.fetchedAt || p.timestamp || '').substring(0, 10);
-        // 无日期字段的论文可能是从旧格式迁移的，保留它们
-        return !date || date === today;
-    });
-    const removed = before - data.papers.length;
+        const before = data.papers.length;
+        data.papers = data.papers.filter(p => {
+            const date = (p.fetchedAt || p.timestamp || '').substring(0, 10);
+            // 无日期字段的论文可能是从旧格式迁移的，保留它们
+            return !date || date === today;
+        });
+        const removed = before - data.papers.length;
 
-    if (removed > 0) {
-        try {
-            const cleanupDir = path.join(ARCHIVE_DIR, 'cleanup');
-            fs.mkdirSync(cleanupDir, { recursive: true });
-            const backupPath = path.join(cleanupDir, `${name}-${getBeijingCompactTimestamp()}.json`);
-            fs.copyFileSync(filePath, backupPath);
-            console.log(`  [清理] ${name}: 清理前已备份到 ${backupPath}`);
-        } catch (e) {
-            console.log(`  [清理] ${name}: 清理前备份失败，跳过清理（${e.message}）`);
-            return;
+        if (removed > 0) {
+            try {
+                const cleanupDir = path.join(ARCHIVE_DIR, 'cleanup');
+                fs.mkdirSync(cleanupDir, { recursive: true });
+                const backupPath = path.join(cleanupDir, `${name}-${getBeijingCompactTimestamp()}.json`);
+                fs.copyFileSync(filePath, backupPath);
+                console.log(`  [清理] ${name}: 清理前已备份到 ${backupPath}`);
+            } catch (e) {
+                console.log(`  [清理] ${name}: 清理前备份失败，跳过清理（${e.message}）`);
+                return;
+            }
+            data.timestamp = getBeijingISOString();
+            writeFileAtomic(filePath, JSON.stringify(data, null, 2));
+            console.log(`  [清理] ${name}: 移除 ${removed} 篇旧数据，保留 ${data.papers.length} 篇今日数据`);
+        } else {
+            console.log(`  [清理] ${name}: 无需清理（${data.papers.length} 篇均为今日数据）`);
         }
-        data.timestamp = getBeijingISOString();
-        writeFileAtomic(filePath, JSON.stringify(data, null, 2));
-        console.log(`  [清理] ${name}: 移除 ${removed} 篇旧数据，保留 ${data.papers.length} 篇今日数据`);
-    } else {
-        console.log(`  [清理] ${name}: 无需清理（${data.papers.length} 篇均为今日数据）`);
-    }
+    });
 }
 
 /**
@@ -357,8 +468,8 @@ function loadAnalyzedIdsFromArchive() {
             const data = readJsonSafe(archiveFile);
             if (data.papers && Array.isArray(data.papers)) {
                 for (const paper of data.papers) {
-                    // 只跳过有成功分析结果的论文
-                    if (paper.analysis && paper.analysis.trim().length > 0) {
+                    // 只跳过通过当前完整分析契约的论文
+                    if (isSuccessfulAnalysisRecord(paper)) {
                         const nid = normalizedId(paper);
                         if (nid) analyzedIds.add(nid);
                     }
@@ -371,7 +482,7 @@ function loadAnalyzedIdsFromArchive() {
     return analyzedIds;
 }
 
-async function fullFetch() {
+async function runFullFetch() {
     console.log('=== 论文抓取 + 深度分析（arxiv + HuggingFace Papers）===');
     console.log('');
     autoArchiveCurrentData();
@@ -390,7 +501,7 @@ async function fullFetch() {
 
     const categories = Config.ARXIV_CATEGORIES;
 
-    const papersData = loadPapers();
+    const papersData = loadPapersDatabase();
     const existingIds = new Set(Object.entries(papersData.papers)
         .filter(([, paper]) => shouldUsePaperForFetchDedup(paper))
         .map(([id]) => normalizedId(id))
@@ -486,6 +597,7 @@ async function fullFetch() {
             const fetchStartTime = Date.now();
             let papers = [];
             let fetchError = null;
+            let categoryFetchHealth = null;
             try {
                 papers = await fetchCategoryPapers(
                     category.id,
@@ -493,8 +605,10 @@ async function fullFetch() {
                     Config.ARXIV_CONFIG.fetchMaxRetries,
                     existingIds
                 );
+                categoryFetchHealth = papers._sourceHealth || null;
             } catch (e) {
                 fetchError = e;
+                categoryFetchHealth = e.sourceHealth || null;
                 console.log(`    ⚠️ ${category.id} 抓取失败: ${e.message}`);
             }
             const fetchDuration = Date.now() - fetchStartTime;
@@ -508,7 +622,10 @@ async function fullFetch() {
                     duplicateInCategory: 0,
                     durationMs: fetchDuration,
                     ok: false,
-                    error: fetchError.message
+                    error: fetchError.message,
+                    attempts: categoryFetchHealth?.attempts || 0,
+                    successfulRequests: categoryFetchHealth?.successfulRequests || 0,
+                    failures: categoryFetchHealth?.failures || []
                 });
             }
 
@@ -533,7 +650,11 @@ async function fullFetch() {
                     newInCategory,
                     duplicateInCategory: dupInCategory,
                     durationMs: fetchDuration,
-                    ok: true
+                    ok: true,
+                    attempts: categoryFetchHealth?.attempts || 0,
+                    successfulRequests: categoryFetchHealth?.successfulRequests || 0,
+                    failures: categoryFetchHealth?.failures || [],
+                    abstractFailures: categoryFetchHealth?.abstracts?.failedIds || []
                 });
             }
             console.log(`    ${category.id}: 获取 ${papers.length} 篇, 新增 ${newInCategory} 篇, 跨类别去重 ${dupInCategory} 篇`);
@@ -567,6 +688,7 @@ async function fullFetch() {
                 minUpvotes: Config.HUGGINGFACE_CONFIG.defaultMinUpvotes
             });
             sourceHealth.huggingface = {
+                ...(hfPapers._sourceHealth || {}),
                 ok: true,
                 fetched: hfPapers.length,
                 days: Config.HUGGINGFACE_CONFIG.defaultDays,
@@ -576,6 +698,7 @@ async function fullFetch() {
         } catch (e) {
             hfPapers = [];
             sourceHealth.huggingface = {
+                ...(e.sourceHealth || {}),
                 ok: false,
                 fetched: 0,
                 days: Config.HUGGINGFACE_CONFIG.defaultDays,
@@ -640,6 +763,7 @@ async function fullFetch() {
             hfOnly,
             both
         };
+        let retryableFilterDecisions = {};
         filtered = await filterPapersWithLLM(allPapersFiltered, {
             batchSize: Config.FILTER_CONFIG.batchSize,
             delayBetweenBatches: Config.FILTER_CONFIG.delayBetweenBatchesMs,
@@ -649,8 +773,9 @@ async function fullFetch() {
                 filterModel,
                 filterPromptHash
             },
-            onBatchComplete: async ({ results, decisions }) => {
+            onBatchComplete: async ({ results, decisions, retryableDecisions }) => {
                 filterDecisions = decisions;
+                retryableFilterDecisions = retryableDecisions;
                 writeFilterArtifacts({
                     allPapers,
                     allPapersFiltered,
@@ -659,11 +784,27 @@ async function fullFetch() {
                     filterModel,
                     filterPromptHash,
                     stats: baseFilterStats,
-                    complete: false
+                    complete: false,
+                    retryableDecisions
                 });
-                console.log(`  💾 筛选进度已保存: ${Object.keys(filterDecisions).length}/${allPapersFiltered.length} 篇已判断`);
+                console.log(`  💾 筛选进度已保存: ${Object.keys(filterDecisions).length}/${allPapersFiltered.length} 篇明确判断，${Object.keys(retryableDecisions).length} 篇待重试`);
             }
         });
+        const filterRunStats = filtered._filterStats || validateFilterDecisionCoverage(allPapersFiltered, filterDecisions);
+        if (!filterRunStats.complete) {
+            writeFilterArtifacts({
+                allPapers,
+                allPapersFiltered,
+                filtered,
+                filterDecisions,
+                filterModel,
+                filterPromptHash,
+                stats: baseFilterStats,
+                complete: false,
+                retryableDecisions: retryableFilterDecisions
+            });
+            throw new Error(`筛选未完成：明确决定 ${filterRunStats.decided}/${filterRunStats.totalCandidates}，待重试 ${filterRunStats.retryable || filterRunStats.retryableIds?.length || 0} 篇${filterRunStats.retryableIds?.length ? `（${filterRunStats.retryableIds.join(', ')}）` : ''}`);
+        }
         console.log(`筛选后: ${filtered.length} 篇相关论文`);
         writeFilterArtifacts({
             allPapers,
@@ -673,7 +814,8 @@ async function fullFetch() {
             filterModel,
             filterPromptHash,
             stats: baseFilterStats,
-            complete: true
+            complete: true,
+            retryableDecisions: {}
         });
 
         // ========== 第四步半：跳过已在归档中分析过的论文 ==========
@@ -747,12 +889,8 @@ async function fullFetch() {
         if (status === 'pending_analysis') pendingPaperCount++;
         papersData.papers[normId] = nextPaper;
     }
-    try {
-        savePapersDatabase(papersData);
-        console.log(`  新增 ${newPaperCount} 篇论文ID到数据库，待分析 ${pendingPaperCount} 篇，累计 ${Object.keys(papersData.papers).length} 篇`);
-    } catch (e) {
-        console.error(`  ❌ 保存 papers.json 失败: ${e.message}`);
-    }
+    savePapersDatabase(papersData);
+    console.log(`  新增 ${newPaperCount} 篇论文ID到数据库，待分析 ${pendingPaperCount} 篇，累计 ${Object.keys(papersData.papers).length} 篇`);
 
     // ========== 第五步：深度分析 ==========
     console.log('\n🔬 第五步：深度分析每篇论文');
@@ -762,46 +900,6 @@ async function fullFetch() {
         console.log(`  ⏭️ 跳过 ${skippedAlreadyAnalyzed} 篇已有成功分析的论文，仅续跑剩余 ${papersToAnalyze.length} 篇`);
     }
     const analyzedPapers = [];
-    let saveInProgress = false;
-    let pendingSave = false;
-
-    const waitForIncrementalSave = async () => {
-        while (saveInProgress) {
-            await new Promise(resolve => setTimeout(resolve, 100));
-        }
-    };
-
-    const doIncrementalSave = () => {
-        if (saveInProgress) {
-            pendingSave = true;
-            return;
-        }
-        saveInProgress = true;
-        const snapshot = analyzedPapers.slice();
-        mergeAndSaveResults(snapshot, outputFile, {
-            timestamp: getBeijingISOString(),
-            stats: { afterFilter: filteredNew.length, newlyAnalyzed: snapshot.filter(p => p.analysis).length }
-        }).then(({ totalMerged }) => {
-            const statusUpdated = applyAnalysisDigestStatuses(papersData, snapshot, { batchDate: today });
-            if (statusUpdated > 0) {
-                savePapersDatabase(papersData);
-            }
-            const statusNote = statusUpdated > 0 ? `，papers.json 状态 ${statusUpdated} 篇` : '';
-            console.log(`  💾 增量保存: ${snapshot.filter(p => p.analysis).length}/${snapshot.length} 篇已分析完成 (合并后 ${totalMerged} 篇${statusNote})`);
-            saveInProgress = false;
-            if (pendingSave) {
-                pendingSave = false;
-                doIncrementalSave();
-            }
-        }).catch(err => {
-            console.log(`  ⚠️ 增量保存失败: ${err.message}`);
-            saveInProgress = false;
-            if (pendingSave) {
-                pendingSave = false;
-                doIncrementalSave();
-            }
-        });
-    };
 
     const { stats: analysisStats } = await analyzeBatch(papersToAnalyze, {
         concurrency: ANALYSIS_CONCURRENCY,
@@ -822,7 +920,7 @@ async function fullFetch() {
                 console.log(`  [${idx + 1}/${total}] ❌ 最终失败 | ${durSec}s | ${paper.title.substring(0, 50)}... | ${result.error}`);
             }
         },
-        onBatchDone: (batchNum, batchResults) => {
+        onBatchDone: async (batchNum, batchResults) => {
             const batchSuccess = batchResults.filter(r => r.success).length;
             const batchFailed = batchResults.length - batchSuccess;
             const batchScores = batchResults.filter(r => r.success && r.parsed?.score).map(r => r.parsed.score);
@@ -839,20 +937,32 @@ async function fullFetch() {
                 }
             }
 
-            // 增量保存（带锁防止竞态条件）
-            doIncrementalSave();
+            const snapshot = analyzedPapers.slice();
+            const { totalMerged } = await mergeAndSaveResults(snapshot, outputFile, {
+                timestamp: getBeijingISOString(),
+                status: 'running',
+                stats: {
+                    afterFilter: filteredNew.length,
+                    newlyAnalyzed: snapshot.filter(isSuccessfulAnalysisRecord).length
+                }
+            });
+            const { updated: statusUpdated } = updateAnalysisDigestStatuses(snapshot, { batchDate: today });
+            const statusNote = statusUpdated > 0 ? `，papers.json 状态 ${statusUpdated} 篇` : '';
+            console.log(`  💾 增量保存: ${snapshot.filter(isSuccessfulAnalysisRecord).length}/${snapshot.length} 篇已分析完成 (合并后 ${totalMerged} 篇${statusNote})`);
         }
     });
 
     // ========== 第六步：保存深度分析结果 ==========
     console.log('\n💾 第六步：保存深度分析结果');
-    await waitForIncrementalSave();
 
     let existingPapers = [];
     let existingTimestamp = null;
-    const existingData = readJsonSafe(outputFile, null);
+    const existingData = readJsonFileStrict(outputFile, { allowMissing: true });
     if (existingData) {
         existingPapers = Array.isArray(existingData) ? existingData : (existingData.papers || []);
+        if (!Array.isArray(existingPapers)) {
+            throw new Error(`分析结果 papers 必须是数组，已阻止覆盖损坏文件: ${outputFile}`);
+        }
         existingTimestamp = existingData.timestamp || null;
         console.log(`  读取到已有结果: ${existingPapers.length} 篇 (${existingTimestamp})`);
     } else {
@@ -882,65 +992,40 @@ async function fullFetch() {
         }
     }
 
-    const mergedMap = new Map();
-
-    for (const paper of existingPapers) {
-        const key = normalizedId(paper);
-        if (key) mergedMap.set(key, paper);
-    }
-
-    for (const paper of analyzedPapers) {
-        const key = normalizedId(paper);
-        if (!key) continue;
-        // 避免用无 analysis 的失败结果覆盖已有成功结果
-        const existing = mergedMap.get(key);
-        if (existing && existing.analysis && !paper.analysis) {
-            continue;
-        }
-        mergedMap.set(key, paper);
-    }
-
-    const mergedPapers = Array.from(mergedMap.values());
     const arxivFetchedCount = arxivPapers.length || getSourceFetchedCount(sourceHealth, 'arxiv', 0);
     const hfFetchedCount = hfPapers.length || getSourceFetchedCount(sourceHealth, 'huggingface', 0);
+    const analysisStatus = getAnalysisRunStatus({
+        success: (analysisStats?.success || 0) + skippedAlreadyAnalyzed,
+        failed: analysisStats?.failed || 0
+    }, analysisStats?.failed || 0);
 
-    const result = {
-        timestamp: getBeijingISOString(),
-        previousTimestamp: existingTimestamp,
-        stats: {
+    let result;
+    try {
+        result = saveFinalAnalysisResults(outputFile, analyzedPapers, filteredNew, {
+            analysisStatus,
             arxivFetched: arxivFetchedCount,
             hfFetched: hfFetchedCount,
             totalMerged: allPapers.length,
             afterFilter: filtered.length,
-            newlyAnalyzed: analyzedPapers.length,
+            newlyAnalyzed: analyzedPapers.filter(isSuccessfulAnalysisRecord).length,
             preservedExisting: existingPapers.length,
-            totalAfterMerge: mergedPapers.length,
             arxivOnly,
             hfOnly,
             both,
             sourceHealth
-        },
-        papers: mergedPapers
-    };
-
-    try {
-        writeFileAtomic(outputFile, JSON.stringify(result, null, 2));
+        });
     } catch (e) {
         console.error(`\n❌ 保存结果失败: ${e.message}`);
         throw e;
     }
 
-    const statusUpdated = applyAnalysisDigestStatuses(papersData, analyzedPapers, { batchDate: today });
+    const { updated: statusUpdated } = updateAnalysisDigestStatuses(analyzedPapers, { batchDate: today });
     if (statusUpdated > 0) {
-        try {
-            savePapersDatabase(papersData);
-            console.log(`  已更新 papers.json 分析状态: ${statusUpdated} 篇`);
-        } catch (e) {
-            console.error(`  ⚠️ 更新 papers.json 分析状态失败: ${e.message}`);
-        }
+        console.log(`  已更新 papers.json 分析状态: ${statusUpdated} 篇`);
     }
 
-    console.log(`\n✅ 分析完成！`);
+    const finalStatus = result.stats.analysisStatus;
+    console.log(`\n${finalStatus === 'complete' ? '✅' : '❌'} 分析状态: ${finalStatus}`);
     console.log(`📊 统计:`);
     console.log(`  - arxiv 抓取: ${arxivFetchedCount} 篇`);
     console.log(`  - HuggingFace 抓取: ${hfFetchedCount} 篇`);
@@ -948,30 +1033,44 @@ async function fullFetch() {
     console.log(`  - LLM 筛选: ${filtered.length} 篇`);
     if (skippedCount > 0) console.log(`  - 归档去重: -${skippedCount} 篇`);
     if (blogSkippedCount > 0) console.log(`  - 博客去重: -${blogSkippedCount} 篇`);
-    console.log(`  - 本次分析: ${analyzedPapers.length} 篇`);
+    console.log(`  - 本次分析成功: ${analyzedPapers.filter(isSuccessfulAnalysisRecord).length} 篇`);
     console.log(`  - 保留已有: ${existingPapers.length} 篇`);
-    console.log(`  - 合并后总计: ${mergedPapers.length} 篇`);
+    console.log(`  - 合并后总计: ${result.papers.length} 篇`);
+    if (result.stats.remainingFailed > 0) console.log(`  - 尚未完成: ${result.stats.remainingFailed} 篇`);
     if (analysisStats) {
         const avgSec = analysisStats.durationTotal > 0 ? (analysisStats.durationTotal / 1000 / (analysisStats.success + analysisStats.failed)).toFixed(1) : '0';
         console.log(`  - 分析引擎: 成功 ${analysisStats.success} | 失败 ${analysisStats.failed} | 跳过 ${analysisStats.skipped} | 平均 ${avgSec}s/篇`);
     }
     console.log(`\n💾 结果已保存到: ${outputFile}`);
 
-    return result;
+    return { ...result, exitCode: getAnalysisExitCode(finalStatus) };
+}
+
+async function fullFetch(options = {}) {
+    const lockTarget = options.lockTarget || FULL_FETCH_RUN_LOCK;
+    return withFileLock(lockTarget, runFullFetch, options.lockOptions);
 }
 
 if (require.main === module) {
-    fullFetch().catch(err => {
+    fullFetch().then(result => {
+        process.exitCode = result.exitCode;
+    }).catch(err => {
         console.error(`❌ 失败: ${err.message}`);
-        process.exit(1);
+        process.exitCode = 1;
     });
 }
 
 module.exports = {
     fullFetch,
+    runFullFetch,
+    autoArchiveCurrentData,
+    cleanOldData,
     shouldUsePaperForFetchDedup,
     markPaperDigestStatus,
     getFilterPromptHash,
+    isDefinitiveFilterDecision,
+    validateFilterDecisionCoverage,
+    validateFilterArtifacts,
     loadReusableFilterDecisions,
     buildSourceHealth,
     getSourceFetchedCount,
@@ -979,5 +1078,7 @@ module.exports = {
     getFatalEmptyCandidateSourceFailures,
     loadCompleteFilteredForToday,
     loadCurrentSuccessfulAnalysisIds,
-    loadTodayPapersFromDatabase
+    loadAnalyzedIdsFromArchive,
+    loadTodayPapersFromDatabase,
+    saveFinalAnalysisResults
 };
