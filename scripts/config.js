@@ -5,32 +5,13 @@
  */
 
 const path = require('path');
-const fs = require('fs');
+const { loadProjectEnv } = require('./env-loader.js');
 
 // ═══════════════════════════════════════════════════════
 // 自动加载 .env（所有脚本的入口点，先于 loadEnvFile 执行）
 // ═══════════════════════════════════════════════════════
 
-(function loadEnv() {
-    const envFile = path.join(__dirname, '..', '.env');
-    if (!fs.existsSync(envFile)) return;
-    const envContent = fs.readFileSync(envFile, 'utf8');
-    envContent.split('\n').forEach(line => {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) return;
-        const eq = trimmed.indexOf('=');
-        if (eq > 0) {
-            const key = trimmed.substring(0, eq).trim();
-            let val = trimmed.substring(eq + 1).trim();
-            if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-                val = val.slice(1, -1);
-            }
-            if (key && process.env[key] === undefined) {
-                process.env[key] = val;
-            }
-        }
-    });
-})();
+loadProjectEnv();
 
 // ═══════════════════════════════════════════════════════
 // 基础路径
@@ -156,10 +137,7 @@ const SECONDARY_MODEL_CONFIG = {
 
 const ARCHIVE_CONFIG = {
     maxBackups: 10,
-    maxLogFiles: 50,
-    maxLogFileBytes: 10 * 1024 * 1024,
-    maxTotalLogBytes: 250 * 1024 * 1024,
-    enableFileLogs: process.env.PAPER_DIGEST_ENABLE_FILE_LOGS === '1' || process.env.PD_ENABLE_FILE_LOGS === '1',
+    enableFileLogs: process.env.PAPER_DIGEST_DISABLE_FILE_LOGS !== '1' && process.env.PD_DISABLE_FILE_LOGS !== '1',
     disableFileLogs: process.env.PAPER_DIGEST_DISABLE_FILE_LOGS === '1' || process.env.PD_DISABLE_FILE_LOGS === '1'
 };
 
@@ -180,7 +158,7 @@ const PUBLISH_CONFIG = {
 };
 
 // ═══════════════════════════════════════════════════════
-// 环境变量覆写（支持通过环境变量调整配置）
+// 项目 .env 覆写（支持通过项目根 .env 调整配置）
 // ═══════════════════════════════════════════════════════
 
 function applyEnvOverrides() {
@@ -223,18 +201,6 @@ function applyEnvOverrides() {
     const imageTotalBase64Chars = readPositiveInt('PD_IMAGE_TOTAL_BASE64_CHARS');
     if (imageTotalBase64Chars) {
         ANALYSIS_CONFIG.imageTotalBase64Chars = imageTotalBase64Chars;
-    }
-    const maxLogFiles = readPositiveInt('PD_LOG_MAX_FILES');
-    if (maxLogFiles) {
-        ARCHIVE_CONFIG.maxLogFiles = maxLogFiles;
-    }
-    const maxLogFileBytes = readPositiveInt('PD_LOG_MAX_BYTES');
-    if (maxLogFileBytes) {
-        ARCHIVE_CONFIG.maxLogFileBytes = maxLogFileBytes;
-    }
-    const maxTotalLogBytes = readPositiveInt('PD_LOG_TOTAL_MAX_BYTES');
-    if (maxTotalLogBytes) {
-        ARCHIVE_CONFIG.maxTotalLogBytes = maxTotalLogBytes;
     }
     if (process.env.PAPER_DIGEST_ENABLE_FILE_LOGS === '1' || process.env.PD_ENABLE_FILE_LOGS === '1') {
         ARCHIVE_CONFIG.enableFileLogs = true;

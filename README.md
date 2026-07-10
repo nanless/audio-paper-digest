@@ -20,7 +20,7 @@
 | `docs/maintenance.md` | 维护约定、评分标准、标签口径 | 维护者 |
 | `prompts/filter.md` | 筛选阶段 LLM prompt | 维护者 |
 | `prompts/deep-analysis.md` | 深度分析主 prompt（Round 1，纯文本） | 维护者 |
-| `prompts/image-supplement.md` | 图像筛选与补充 prompt（双模型模式） | 维护者 |
+| `prompts/image-supplement.md` | 图像筛选与插图计划 prompt（双模型模式；可局部调整插图附近文字） | 维护者 |
 | `prompts/opensource-scan.md` | 开源链接扫描 prompt（Round 2） | 维护者 |
 | `prompts/gap-fill.md` | 审校重写 prompt（Round 3） | 维护者 |
 
@@ -37,7 +37,7 @@ audio-paper-digest/
 ├── data/                 # 工作数据与归档（gitignored）
 │   ├── current/          # 当前工作数据
 │   └── archive/          # 按日期自动归档
-├── logs/                 # 可选文件日志（gitignored；默认不生成，需 PD_ENABLE_FILE_LOGS=1）
+├── logs/                 # 默认文件日志（gitignored；可在 .env 中用 PD_DISABLE_FILE_LOGS=1 关闭）
 ├── prompts/              # LLM prompt 文件
 ├── docs/                 # 详细文档
 ├── package.json          # npm scripts

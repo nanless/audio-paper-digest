@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-from dotenv import load_dotenv
-load_dotenv()
+from project_env import load_project_env
+load_project_env()
 
 from log_setup import setup_script_logging
 setup_script_logging(__file__)
@@ -26,7 +26,7 @@ from utils import parse_analysis
 APP_ID = os.environ.get('WECHAT_APP_ID', '')
 APP_SECRET = os.environ.get('WECHAT_APP_SECRET', '')
 
-# 封面图素材 ID（永久素材），支持环境变量覆写
+# 封面图素材 ID（永久素材），支持项目 .env 覆写
 THUMB_MEDIA_ID = os.environ.get('WECHAT_THUMB_MEDIA_ID', '')
 if not THUMB_MEDIA_ID:
     # 兜底默认值（硬编码素材 ID，若过期请设置 WECHAT_THUMB_MEDIA_ID 环境变量）

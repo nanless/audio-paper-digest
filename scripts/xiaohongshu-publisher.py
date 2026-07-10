@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-from dotenv import load_dotenv
-load_dotenv()
+from project_env import load_project_env
+load_project_env()
+
+from log_setup import setup_script_logging
+setup_script_logging(__file__)
 
 """
 小红书自动发布脚本（基于 Playwright）
@@ -65,22 +68,8 @@ def find_screenshot_images(target_date):
 # ═══════════════════════════════════════════════════════
 
 def _load_env_file():
-    """加载 .env 到 os.environ（只加载，不覆盖已有环境变量）"""
-    if not ENV_FILE.exists():
-        return
-    with open(ENV_FILE, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" in line:
-                key, val = line.split("=", 1)
-                key = key.strip()
-                val = val.strip()
-                if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
-                    val = val[1:-1]
-                if key and key not in os.environ:
-                    os.environ[key] = val
+    """重新加载当前项目 .env，覆盖外层项目变量。"""
+    load_project_env(ENV_FILE)
 
 
 def _update_env_key(key: str, value: str):

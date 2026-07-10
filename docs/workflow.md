@@ -178,15 +178,15 @@ HF 特有字段（共 7 个）：
 - **API 协议自动路由**：与筛选阶段共用同一套 `detectApiType()` 逻辑，根据 `PAPER_ANALYZER_ENDPOINT` 和 `PAPER_ANALYZER_MODEL` 自动切换 OpenAI / Anthropic 协议
 - 获取 arXiv HTML 全文（最多 500K 字符），依次尝试 `v1`、`v2`、无后缀版本；使用 **cheerio** 结构化解析 HTML，移除 script/style/nav/header/footer 等噪音元素
 - 提取图片 URL，过滤 logo/favicon；下载层会校验 Content-Type、Content-Length 和 PNG/JPEG/WebP 文件头，避免把 HTML 错误页或过大图片送入模型
-- **图片分析**：先按 caption/文件名/顺序启发式预筛候选图片（默认最多 `imageCandidateMax=20` 张）。双模型模式才串行下载最多 `imageMaxCount=20` 张并交给副模型；单模型模式只保存候选 URL/manifest 元数据，不下载 base64 图片。默认单图原始大小上限 6MB、单图 base64 上限 8M 字符、所有图片 base64 总上限 20M 字符。双模型模式下只有成功下载并通过副模型筛选的图片会写入正文；若没有可用图片，自动退回纯文本分析
+- **图片分析**：先按 caption/文件名/顺序启发式预筛候选图片（默认最多 `imageCandidateMax=20` 张）。双模型模式才串行下载最多 `imageMaxCount=20` 张并交给副模型；单模型模式只保存候选 URL/manifest 元数据，不下载 base64 图片。默认单图原始大小上限 6MB、单图 base64 上限 8M 字符、所有图片 base64 总上限 20M 字符。双模型模式下副模型只输出 JSON 插图计划，代码在主模型文本上局部插入图片、图前/图后说明，并可按计划只替换插图位置附近精确命中的 anchor 短句；若没有可用图片或没有高价值图片，自动保留主模型纯文本分析
 - 每篇结果会保存 `imageManifest`：包含总发现图片数、候选评分、下载成功列表、最终选图；该字段由 `analysis-engine.js` 保留到最终 `deep-analysis-result.json`，便于复盘图片筛选质量
-- **并发度：3 篇并行**（可通过 `PD_ANALYSIS_CONCURRENCY` 环境变量调整）
+- **并发度：3 篇并行**（可通过项目 `.env` 中的 `PD_ANALYSIS_CONCURRENCY` 调整）
 - 每篇最多重试 **2 次**（外层 `analysis-engine.js`），每次外层重试内部 API 调用还有 **3 次** 重试（`deep-analyzer.js` 内层，指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5000ms`），外层重试间隔 3 秒（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整外层）
 - API 整体超时 **20 分钟**（AbortController）
 - `max_tokens=64000`（config.js 中 `apiMaxTokens`），`temperature=0.7`
 - 支持代理自动检测（环境变量 → macOS `scutil --proxy`）
 - 支持纯 Node 内置模块的 HTTP CONNECT 代理（无需外部依赖）
-- 所有分析配置集中管理于 `scripts/config.js`，支持环境变量覆写（`PD_ANALYSIS_CONCURRENCY`、`PD_ANALYSIS_MAX_RETRIES`、`PD_FILTER_BATCH_SIZE`、`PD_ARXIV_MAX_RESULTS`）
+- 所有分析配置集中管理于 `scripts/config.js`，支持项目 `.env` 覆写（`PD_ANALYSIS_CONCURRENCY`、`PD_ANALYSIS_MAX_RETRIES`、`PD_FILTER_BATCH_SIZE`、`PD_ARXIV_MAX_RESULTS`）
 
 **深度分析不是单次调用，而是多轮递进式处理**：
 
@@ -198,9 +198,9 @@ HF 特有字段（共 7 个）：
 | Round 3 | 审校重写 | `prompts/gap-fill.md` | 对比原始论文与前几轮输出，修正缺失、错误、过度推断 |
 | Round 4 | 表格修复 | 代码检测 + LLM 补充 | 检测实验结果章节缺失的 Markdown 表格，触发补充 |
 | Round 5 | 方法章节修复 | 代码检测 + LLM 补充 | 检测方法概述是否过于简略（<600 字/<3 段），触发扩展至 600+ 字 |
-| Round 6 | 图像筛选与补充（仅双模型模式） | `prompts/image-supplement.md` | 副模型接收候选图片 + 最终文本，筛选高价值图、丢弃低信息图，并把图片插入对应段落 |
+| Round 6 | 图像筛选与插图计划（仅双模型模式） | `prompts/image-supplement.md` | 副模型接收候选图片 + 最终文本，只输出 JSON 插图计划；代码在主模型文本上局部插入图片、图前/图后说明，并可用 `replacement` 调整插图附近短句 |
 
-> **单模型 vs 双模型**：设置 `PAPER_ANALYZER_SECONDARY_MODEL`（及可选的 `SECONDARY_ENDPOINT`/`SECONDARY_API_KEY`，未设置则复用主模型）即启用双模型模式——主模型先做纯文本分析，后续纯文本修复完成后，副模型负责从候选图片中筛选高价值图（流程图、模型图、语谱图、对比图、结果图等）、丢弃低信息图，并把图片插入到相应段落。未设置副模型时退回单模型：图片 URL 只保存在 `allImageUrls` 候选元数据中，不会自动嵌入博客正文。
+> **单模型 vs 双模型**：设置 `PAPER_ANALYZER_SECONDARY_MODEL`（及可选的 `SECONDARY_ENDPOINT`/`SECONDARY_API_KEY`，未设置则复用主模型）即启用双模型模式——主模型先做纯文本分析，后续纯文本修复完成后，副模型负责从候选图片中筛选高价值图（流程图、模型图、语谱图、对比图、结果图等）、丢弃低信息图，并输出目标章节、anchor、可选 replacement、图前引导、图后说明。`replacement` 只用于插图附近短句的自然衔接，副模型不得改写完整分析报告；插图由代码合并回主模型文本。未设置副模型时退回单模型：图片 URL 只保存在 `allImageUrls` 候选元数据中，不会自动嵌入博客正文。
 
 ### 3.8 增量保存与收尾
 

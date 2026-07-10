@@ -138,19 +138,98 @@ describe('deep-analyzer section helpers', () => {
         await assert.rejects(() => validatePublicHttpUrl('https://user:pass@example.com'), /用户名/);
     });
 
-    it('校验副模型输出是否保留必要章节', () => {
+    it('副模型只输出插图计划，主模型原文和评分不被重写', () => {
         const {
-            hasRequiredAnalysisSections
+            parseImageInsertionPlan,
+            applyImageInsertionPlan
         } = require('../scripts/deep-analyzer.js');
 
-        const full = [
-            '评分', '机器摘要', '标签', '作者与机构', '毒舌点评', '核心摘要',
-            '方法概述和架构', '核心创新点', '实验结果', '细节详述',
-            '评分理由', '局限与问题', '开源详情'
-        ].map(title => `## ${title}\n内容`).join('\n\n');
+        const analysis = `## 评分
+8.0/10
 
-        assert.strictEqual(hasRequiredAnalysisSections(full), true);
-        assert.strictEqual(hasRequiredAnalysisSections('## 评分\n8.0/10\n\n## 实验结果\n结果'), false);
+## 机器摘要
+原始摘要。
+
+## 核心摘要
+主模型核心结论必须保留。
+
+## 方法概述和架构
+模型先做声学编码，再做语义融合。
+
+## 实验结果
+实验结果显示低噪声场景更稳定。
+
+## 评分理由
+主模型评分理由必须保留。`;
+        const images = [
+            { url: 'https://arxiv.org/html/2607.1/arch.png', caption: 'Architecture diagram' },
+            { url: 'https://arxiv.org/html/2607.1/logo.png', caption: 'logo' }
+        ];
+        const rawPlan = JSON.stringify({
+            insertions: [
+                {
+                    image: 1,
+                    section: '方法概述和架构',
+                    anchor: '模型先做声学编码，再做语义融合。',
+                    replacement: '模型先做声学编码，再做语义融合；下图展示这两个阶段的连接方式。',
+                    lead: '下图补充展示模型的声学编码与语义融合流程。',
+                    explanation: '图中可以看到声学分支和语义分支在融合模块汇合，支持主模型对架构流程的描述。'
+                },
+                {
+                    image: 2,
+                    section: '评分理由',
+                    lead: '不应该插入。',
+                    explanation: '不应该修改评分理由。'
+                }
+            ]
+        });
+
+        const plans = parseImageInsertionPlan(rawPlan, images);
+        const result = applyImageInsertionPlan(analysis, plans, images);
+
+        assert.deepStrictEqual(result.selectedImageUrls, ['https://arxiv.org/html/2607.1/arch.png']);
+        assert.match(result.analysis, /8\.0\/10/);
+        assert.match(result.analysis, /主模型核心结论必须保留/);
+        assert.match(result.analysis, /主模型评分理由必须保留/);
+        assert.match(result.analysis, /下图展示这两个阶段的连接方式。\n\n下图补充展示模型的声学编码与语义融合流程/);
+        assert.match(result.analysis, /下图补充展示模型的声学编码与语义融合流程/);
+        assert.match(result.analysis, /!\[Architecture diagram\]\(https:\/\/arxiv\.org\/html\/2607\.1\/arch\.png\)/);
+        assert.doesNotMatch(result.analysis, /logo\.png/);
+        assert.doesNotMatch(result.analysis, /不应该修改评分理由/);
+    });
+
+    it('正文已提到图号时优先把图片插到首次提及的段落后', () => {
+        const {
+            parseImageInsertionPlan,
+            applyImageInsertionPlan
+        } = require('../scripts/deep-analyzer.js');
+
+        const analysis = `## 方法概述和架构
+系统整体流程如图1所示。第一段先概括输入、编码和融合。
+
+第二段详细解释训练协议。
+
+第三段才是副模型给出的 anchor。`;
+        const images = [
+            { url: 'https://arxiv.org/html/2607.1/figure_1.jpg', caption: '图1' }
+        ];
+        const plans = parseImageInsertionPlan(JSON.stringify({
+            insertions: [{
+                image: 1,
+                section: '方法概述和架构',
+                anchor: '第三段才是副模型给出的 anchor。',
+                lead: '图1展示系统整体流程。',
+                explanation: '图中可以看到输入、编码和融合模块的连接关系。'
+            }]
+        }), images);
+
+        const result = applyImageInsertionPlan(analysis, plans, images);
+
+        assert.match(
+            result.analysis,
+            /系统整体流程如图1所示。第一段先概括输入、编码和融合。\n\n图1展示系统整体流程。\n\n!\[图1\]\(https:\/\/arxiv\.org\/html\/2607\.1\/figure_1\.jpg\)/
+        );
+        assert.match(result.analysis, /第二段详细解释训练协议。/);
     });
 
     it('兼容预提供图片 URL 字符串和对象数组', () => {

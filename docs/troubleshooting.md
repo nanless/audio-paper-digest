@@ -12,7 +12,7 @@
    - 两者混用必返回 401
 
 2. **检查是否走对了协议**
-   - 查看终端输出中的 `[filter] API 类型: xxx` 或 `[api] → model | xxx` 行，确认显示 `anthropic` 还是 `openai`；若已显式启用文件日志，也可查 `logs/*.log`
+   - 查看终端输出或 `logs/*.log` 中的 `[filter] API 类型: xxx` / `[api] → model | xxx` 行，确认显示 `anthropic` 还是 `openai`
    - 若使用 MiMo/Kimi Token Plan 却显示 `openai`，检查端点是否含 `token-plan` 或 `coding`，模型是否含 `mimo` 或 `kimi`
 
 3. **Anthropic 协议专项检查**（输出显示 `anthropic` 时）
@@ -28,11 +28,11 @@
    - MiMo Token Plan 在有系统代理时可能被屏蔽，尝试关闭代理或设置 `agent: false`
    - 详见 12.7 节
 
-6. **查看输出**：默认查看终端完整输出；若设置了 `PD_ENABLE_FILE_LOGS=1`，再查看 `logs/full-fetch-*.log`、`logs/deep-analyzer-*.log`
+6. **查看输出**：查看 `logs/full-fetch-*.log`、`logs/deep-analyzer-*.log`，同时保留终端完整输出
 
 ### 12.2 深度分析慢或频繁失败
 
-- 查看终端完整输出；若已启用文件日志，再查看 `logs/deep-analyzer-*.log`、`logs/full-fetch-*.log`
+- 查看 `logs/deep-analyzer-*.log`、`logs/full-fetch-*.log`，同时保留终端完整输出
 - 检查 key/endpoint/model 三元组是否匹配（见 12.1 节）
 - 若超时，脚本会自动降级为纯文本重试；若仍失败，检查代理或减小并发
 - 可用 `node scripts/deep-analysis-only.js` 安全续跑
@@ -40,7 +40,7 @@
 ### 12.3 重分析启动即报 key 未配置
 
 - 在 `项目根目录的 `.env` 文件` 中配置 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT`
-- 重新 source：`source ~/.zshrc`
+- 重新运行脚本即可；不要依赖 `.zshrc` / Trae / Codex 外层环境变量补齐项目配置
 
 ### 12.4 发布后提示"没有新内容需要推送"
 

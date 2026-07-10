@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-from dotenv import load_dotenv
-load_dotenv(override=False)  # shell 环境优先，.env 只补齐缺失配置
+from project_env import load_project_env
+load_project_env()
 
 from log_setup import setup_script_logging
 setup_script_logging(__file__)

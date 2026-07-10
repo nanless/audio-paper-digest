@@ -70,15 +70,12 @@ description: >
 
 ### 4.1 统一存放位置
 
-**所有环境变量统一放在 `项目根目录的 `.env` 文件`。** `.zshrc` 已配置：
-```zsh
-set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
-```
+**所有项目配置统一放在 `项目根目录的 `.env` 文件`。**
 
 这意味着：
-- shell 启动时自动注入所有变量
-- Python 脚本直接通过 `os.environ` 读取
-- Node 脚本通过 `config.js` 与 `loadEnvFile()` 读取项目根 `.env` 并写入当前进程环境
+- Node 脚本通过 `scripts/env-loader.js` / `loadEnvFile()` 读取项目根 `.env`
+- Python 脚本通过 `scripts/project_env.py` 读取项目根 `.env`
+- 脚本启动时会清理继承自 Trae/Codex/shell 的同名项目变量，再写入当前项目 `.env`；禁止外层环境变量与当前项目配置混用
 
 ### 4.2 筛选阶段（`fetch-papers.js`）
 
@@ -124,7 +121,7 @@ API 调用特性：
 - 图片先按 caption/文件名/顺序启发式预筛（默认 `imageCandidateMax=20`）；只有配置副模型的双模型模式才**串行下载**最多 `imageMaxCount=20` 张候选图片并送入副模型，单模型模式只保存候选 URL/manifest 元数据；下载层会校验 Content-Type、Content-Length 与 PNG/JPEG/WebP 文件头；默认单图原始大小上限 6MB、单图 base64 上限 8M 字符、总 base64 上限 20M 字符（均在 `config.js` 中可配）；超时或图片不可用后自动降级为纯文本重试
 - 每篇分析结果写入 `imageManifest`，记录图片发现数、候选评分、下载成功列表和最终选图，便于复盘图像筛选
 - 全文上限约 500K 字符（config.js 中 `fullTextMaxChars`）
-- 所有分析配置集中管理于 `scripts/config.js`，支持环境变量覆写
+- 所有分析配置集中管理于 `scripts/config.js`，支持在项目根 `.env` 中覆写
 
 输出约束：
 - prompt 来源：`prompts/deep-analysis.md`，运行时通过 `loadPrompt()` 读取并替换 `{hasFullText}`、`{title}`、`{authors}`、`{categories}`、`{arxivId}`、`{textForAnalysis}` 占位符
@@ -143,10 +140,10 @@ API 调用特性：
 配置 `PAPER_ANALYZER_SECONDARY_MODEL` 时启用双模型模式：
 
 - **主模型**（`PAPER_ANALYZER_*`）：纯文本深度分析，使用 `prompts/deep-analysis.md`（Round 1a）
-- **副模型**（`PAPER_ANALYZER_SECONDARY_*`）：多模态图像筛选与补充，使用 `prompts/image-supplement.md`（最终文本修复后执行），需要支持图片输入的多模态模型（如 `mimo-v2.5`、`gpt-4o` 等）
+- **副模型**（`PAPER_ANALYZER_SECONDARY_*`）：多模态图像筛选与插图计划，使用 `prompts/image-supplement.md`（最终文本修复后执行），需要支持图片输入的多模态模型（如 `mimo-v2.5`、`gpt-4o` 等）
 - 副模型的 `endpoint` / `key` 不设置时分别回退到主模型的对应值
 - 未配置副模型时，自动退回单模型纯文本模式（不分析图片）
-- 副模型任务：从候选图中筛选高价值图（流程图、模型图、语谱图、对比图、结果图等），丢弃无关/低信息图，补充相邻文本并标记 `[图N]` 插入位置，系统自动替换为实际图片链接
+- 副模型任务：从候选图中筛选高价值图（流程图、模型图、语谱图、对比图、结果图等），丢弃无关/低信息图，只输出 JSON 插图计划（目标章节、anchor、可选 replacement、图前引导、图后说明）。`replacement` 只能在 anchor 精确命中时局部替换插图位置附近短句，用于自然承接图片；副模型不得输出完整分析报告、不得改写评分/摘要/评分理由，代码只在主模型文本上合并这类局部插图改动。
 
 ### 4.4 微信公众号（`publish-wechat-full.py`）
 
@@ -181,7 +178,7 @@ PAPER_ANALYZER_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
 # PAPER_ANALYZER_MODEL=gpt-4o
 # PAPER_ANALYZER_ENDPOINT=https://api.openai.com/v1
 
-# 方案 5: 双模型模式（主模型纯文本 + 副模型多模态图像补充）
+# 方案 5: 双模型模式（主模型纯文本 + 副模型多模态图像筛选与插图计划）
 # 主模型配置同上（选方案 1-4 之一）
 # 副模型（可选，不设置则退回单模型纯文本模式）
 # PAPER_ANALYZER_SECONDARY_MODEL=mimo-v2.5
@@ -390,11 +387,10 @@ PY
 
 ## 7. 日志与运行特性
 
-- Node/Python 脚本默认只输出到终端，不生成 `logs/*.log`
-- 只有显式设置 `PD_ENABLE_FILE_LOGS=1` 或 `PAPER_DIGEST_ENABLE_FILE_LOGS=1` 时，`scripts/log-setup.js` / `scripts/log_setup.py` 才会写 `logs/<script>-YYYYMMDD-HHMMSS.log`
-- **启用文件日志后的清理与限额**：每次启动时清理旧日志，默认保留最近 50 个，总量上限 250MB；单个日志默认最多写 10MB，超过后继续输出到终端但停止写文件
-- 可用 `PD_LOG_MAX_FILES`、`PD_LOG_MAX_BYTES`、`PD_LOG_TOTAL_MAX_BYTES` 调整日志限额；`PAPER_DIGEST_DISABLE_FILE_LOGS=1` 或 `PD_DISABLE_FILE_LOGS=1` 可强制禁用文件日志
-- `backfill_papers.py` 的 `logs/backfill.log` 也默认不生成，只有启用文件日志时才追加写入
+- Node/Python 可执行脚本默认同时输出到终端和 `logs/<script>-YYYYMMDD-HHMMSS.log`
+- `PD_ENABLE_FILE_LOGS=1` / `PAPER_DIGEST_ENABLE_FILE_LOGS=1` 继续兼容，但不再是生成日志的必要条件
+- 文件日志不做数量、总量或单文件大小限制，也不会自动清理旧日志；`PAPER_DIGEST_DISABLE_FILE_LOGS=1` 或 `PD_DISABLE_FILE_LOGS=1` 可强制禁用文件日志
+- `backfill_papers.py` 默认也会追加写入 `logs/backfill.log`，同样受禁用开关控制
 - 主要 Node 脚本已处理后台 stdout 缓冲（`setBlocking`），便于实时查看进度
 - `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` 采用重试与增量保存，降低中断丢数风险
 - `reanalyze.js` 每 5 篇保存一次中间结果（并发模式下自动调整保存间隔）
@@ -411,10 +407,10 @@ PY
 3. **禁止危险操作**：未获明确授权，禁止 `git reset --hard`、`git push -f`、批量删除历史文章。
 4. **不自动扩展流程**：运行 `full-fetch.js` 后，不要擅自追加博客/微信发布，除非用户明确要求。
 5. **改动留痕**：流程、参数、路径变化后，同步更新 `SKILL.md`、`README.md`、`AGENTS.md` 和相关 `docs/` 文档。
-6. **禁止硬编码密钥**：不要在任何脚本或文档中写入真实 API key；所有凭证（LLM、微信公众号、飞书）统一从环境变量读取，LLM 配置放在 `项目根目录的 `.env` 文件`（由脚本自动 `source`），微信/飞书凭据也写入 `项目根目录的 `.env` 文件`。
+6. **禁止硬编码密钥**：不要在任何脚本或文档中写入真实 API key；所有凭证（LLM、微信公众号、飞书）统一放在 `项目根目录的 `.env` 文件`，由脚本通过项目 env loader 加载。
 7. **修改脚本时防止安全机制破坏**：本环境会静默替换 `API_KEY` 等敏感字符为 `***`。修改含有这类字符的脚本时，修改后必须重新读取文件验证关键行未被破坏。同时定期检查 `data/`、`logs/` 目录是否残留含密钥的备份文件或日志快照，发现立即清理。
-8. **环境变量统一管理**：新增脚本需要读取 LLM 配置时，统一使用 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT`，禁止引入别名回退链、硬编码或 base64 编码变量名 hack。
-9. **新增可配置参数和运行数据路径放入统一配置**：新增 Node 脚本涉及可调整参数（并发度、超时、批次大小等）或 `data/current/*.json` 运行数据文件时，统一放入/复用 `scripts/config.js`（运行数据路径使用 `Config.FILES`），参数项按需添加环境变量覆写支持；新增 Python 发布/维护脚本涉及共享路径时，复用 `scripts/path_config.py`，禁止再次手写 `data/current/*.json` 默认路径。
+8. **环境变量统一管理**：新增脚本需要读取 LLM 配置时，统一使用项目 `.env` 中的 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT`，并复用 Node `scripts/env-loader.js` 或 Python `scripts/project_env.py`；禁止引入别名回退链、硬编码、base64 编码变量名 hack，或读取外层 shell/Codex/Trae 继承变量作为项目配置。
+9. **新增可配置参数和运行数据路径放入统一配置**：新增 Node 脚本涉及可调整参数（并发度、超时、批次大小等）或 `data/current/*.json` 运行数据文件时，统一放入/复用 `scripts/config.js`（运行数据路径使用 `Config.FILES`），参数项按需添加项目 `.env` 覆写支持；新增 Python 发布/维护脚本涉及共享路径时，复用 `scripts/path_config.py`，禁止再次手写 `data/current/*.json` 默认路径。
 10. **新增分析脚本复用 analysis-engine.js**：新增论文分析相关脚本时，优先复用 `analysis-engine.js` 的 `analyzeBatch()` / `analyzePaperWithRetry()`，避免重复实现重试、解析、保存逻辑；保存结果后必须通过 `scripts/digest-status.js` 同步 `papers.json.digestStatus`。
 11. **博客验证默认不推送**：`publish-to-blog.py` 当前默认不推送；未获用户明确授权时禁止添加 `--push`。正式 `--push` 要求 LLM review 可用，不能静默跳过；代码层剩余问题和 LLM/图片 review 的 `error` 级问题会阻断，`warning/info` 只报告不直接阻断。
 12. **输出契约改动要同步 parser**：若修改 `prompts/deep-analysis.md` 中的 `## 机器摘要` 键名、章节顺序或标签输出格式，必须同步检查 `scripts/utils.js` 与 `scripts/utils.py` 的解析逻辑。
@@ -446,9 +442,9 @@ PY
    | 通用 OpenAI | 自定义端点 | `sk-...` | OpenAI |
 
    - MiMo Token Plan key 前缀为 `tp-`，必须配合 Token Plan 端点，两者混用必返回 401
-   - 确保 `.env` 已正确配置，且 `.zshrc` 已 source
+   - 确保当前项目根 `.env` 中的 key/endpoint/model 三元组来自同一供应商，不依赖 `.zshrc` 或外层 shell 变量
 
-2. **检查是否走对了协议**（终端输出中查找 `[filter] API 类型: xxx` 或 `[api] → model | xxx` 行；若显式启用文件日志，也可在 `logs/*.log` 中查找）
+2. **检查是否走对了协议**（终端输出或 `logs/*.log` 中查找 `[filter] API 类型: xxx` 或 `[api] → model | xxx` 行）
    - 若使用 MiMo/Kimi Token Plan 却显示 `openai`，检查端点是否含 `token-plan` 或 `coding`，模型是否含 `mimo` 或 `kimi`
    - 若输出显示 `anthropic` 但仍失败，检查 URL 是否正确：MiMo 是 `/anthropic/v1/messages`，Kimi 是 `/coding/v1/messages`，都不是 `/v1/chat/completions`
 
@@ -465,7 +461,7 @@ PY
    - MiMo Token Plan 在有系统代理时可能被屏蔽
    - 尝试用 `curl --noproxy "xiaomimimo.com"` 绕过代理测试
 
-6. **查看输出**：默认看终端完整输出；若已显式启用文件日志，再查看 `logs/full-fetch-*.log`、`logs/deep-analyzer-*.log`
+6. **查看输出**：优先查看 `logs/full-fetch-*.log`、`logs/deep-analyzer-*.log`，同时保留终端完整输出
 
 ### 9.2 MiMo API 返回 403 Illegal access / timeout / socket hang up
 
@@ -488,7 +484,7 @@ const options = {
 
 ### 9.3 深度分析慢或频繁失败
 
-- 查看终端完整输出；若已显式启用文件日志，再看 `logs/deep-analyzer-*.log`、`logs/full-fetch-*.log`
+- 查看 `logs/deep-analyzer-*.log`、`logs/full-fetch-*.log`，同时保留终端完整输出
 - 检查 key/endpoint/model 三元组是否匹配（见 9.1 节）
 - 若超时，脚本会自动降级为纯文本重试；若仍失败，检查代理或减小并发
 - 可用 `node scripts/deep-analysis-only.js` 安全续跑
@@ -508,12 +504,12 @@ ls -lt content/posts | head -20
 
 ### 9.6 重分析启动报 key 未设置
 
-- 在 `项目根目录的 `.env` 文件` 中配置 `PAPER_ANALYZER_API_KEY`
-- 重新 source：`source ~/.zshrc`
+- 在 `项目根目录的 `.env` 文件` 中配置 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT`
+- 重新运行脚本即可；不要依赖 `.zshrc` / Trae / Codex 外层环境变量补齐项目配置
 
 ### 9.7 微信公众号发布失败
 
-- 检查 `WECHAT_APP_ID` / `WECHAT_APP_SECRET` 环境变量是否已设置（在 `项目根目录的 `.env` 文件`）
+- 检查 `WECHAT_APP_ID` / `WECHAT_APP_SECRET` 是否已写入 `项目根目录的 `.env` 文件`
 - 检查 `APP_SECRET` 是否过期
 - 检查图片是否过大或被 arXiv 限制
 - 微信图片上传有频率限制，大量图片可能需要分批执行

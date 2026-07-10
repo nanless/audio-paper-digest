@@ -78,7 +78,7 @@ function getBrowserHeaders() {
     return headers;
 }
 
-// 从 config.js 读取配置（支持环境变量覆写）
+// 从 config.js 读取配置（支持项目 .env 覆写）
 const { ARXIV_CATEGORIES: CATEGORIES, ARXIV_CONFIG, FILTER_CONFIG: FILTER_CFG } = Config;
 
 // ========== 筛选阶段专用：LLM 配置（统一使用 PAPER_ANALYZER_*） ===========
@@ -946,6 +946,7 @@ async function filterPapersWithLLM(papers, options = {}) {
         useKeywordPreFilter = false,
         initialDecisions = null,
         onBatchComplete = null,
+        decisionFn = getSpeechAudioDecision,
         decisionMetadata = {}
     } = options;
 
@@ -960,9 +961,13 @@ async function filterPapersWithLLM(papers, options = {}) {
     }
 
     const decisions = new Map();
+    const currentPaperIds = new Set(papersToCheck
+        .map(paper => normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '')
+        .filter(Boolean));
     const loadDecision = (id, decision) => {
         const key = normalizedId(id);
         if (!key || !decision || typeof decision.related !== 'boolean') return;
+        if (!currentPaperIds.has(key)) return;
         decisions.set(key, decision);
     };
     if (initialDecisions instanceof Map) {
@@ -1007,7 +1012,7 @@ async function filterPapersWithLLM(papers, options = {}) {
         console.log(`[filter] 处理批次 ${batchIndex + 1}/${batches.length}...`);
 
         const batchResults = await Promise.all(batch.map(async (paper) => {
-            const modelDecision = await getSpeechAudioDecision(paper);
+            const modelDecision = await decisionFn(paper);
             const isRelated = modelDecision.related;
             const paperId = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
             const decision = {

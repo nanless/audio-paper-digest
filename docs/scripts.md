@@ -8,7 +8,7 @@
 
 完整流程入口。执行第 3 节的所有步骤：自动归档 → 加载去重库（含博客已发布 ID）→ arXiv 抓取 → HF 抓取 → 合并去重 → 过滤博客已发布论文 → LLM 筛选 → 更新去重库 → 深度分析 → 增量保存。
 
-所有配置从 `scripts/config.js` 读取，支持环境变量覆写：
+所有配置从 `scripts/config.js` 读取，支持项目根 `.env` 覆写：
 - `ANALYSIS_CONFIG.concurrency = 3`（`PD_ANALYSIS_CONCURRENCY`）
 - `ANALYSIS_CONFIG.maxRetries = 2`（`PD_ANALYSIS_MAX_RETRIES`）
 - `ANALYSIS_CONFIG.retryDelayMs = 3000`
@@ -27,7 +27,7 @@
 全量重分析。
 - 默认数据源：`data/current/deep-analysis-result.json`（支持命令行传自定义文件路径，兼容旧格式纯数组）
 - 对文件中**全部**论文重新调用 `deep-analyzer.js`
-- 默认并发度与 `ANALYSIS_CONFIG.concurrency` 一致（默认 3），支持通过 `--concurrency N` 或 `PD_REANALYZE_CONCURRENCY` 环境变量调整
+- 默认并发度与 `ANALYSIS_CONFIG.concurrency` 一致（默认 3），支持通过 `--concurrency N` 或项目 `.env` 中的 `PD_REANALYZE_CONCURRENCY` 调整
 - **每 5 篇保存一次中间结果**（并发模式下自动调整保存间隔），**仅成功结果覆盖旧数据**；保存时按当前结果同步 `papers.json.digestStatus`
 - 启动时检查 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT` 是否已设置，缺失则直接退出
 
@@ -92,7 +92,7 @@ arXiv 抓取与 LLM 筛选模块。
 
 **分析配置（`ANALYSIS_CONFIG`）**
 
-| 配置项 | 默认值 | 环境变量覆写 | 说明 |
+| 配置项 | 默认值 | 项目 `.env` 覆写 | 说明 |
 |--------|--------|-------------|------|
 | 并发度 | 3 | `PD_ANALYSIS_CONCURRENCY` | 深度分析并行篇数 |
 | 外层重试次数 | 2 | `PD_ANALYSIS_MAX_RETRIES` | analysis-engine 层面每篇重试次数 |
@@ -121,7 +121,7 @@ arXiv 抓取与 LLM 筛选模块。
 
 **arXiv 配置（`ARXIV_CONFIG`）**
 
-| 配置项 | 默认值 | 环境变量覆写 | 说明 |
+| 配置项 | 默认值 | 项目 `.env` 覆写 | 说明 |
 |--------|--------|-------------|------|
 | 每类抓取数 | 100 | `PD_ARXIV_MAX_RESULTS` | 每分类最大返回数 |
 | 最大重试次数 | 30 | — | `fetchMaxRetries`，单分类抓取重试上限 |
@@ -147,7 +147,7 @@ arXiv 抓取与 LLM 筛选模块。
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| 博客仓库路径 | `~/code/github_repos/audio-paper-digest-blog` | 可通过 `PAPER_DIGEST_BLOG_REPO` 覆写 |
+| 博客仓库路径 | `~/code/github_repos/audio-paper-digest-blog` | 可通过项目 `.env` 中的 `PAPER_DIGEST_BLOG_REPO` 覆写 |
 | 内容目录 | `content/posts` | Hugo 内容目录 |
 | basePath | `/audio-paper-digest-blog` | 站点子路径 |
 | 微信草稿字符上限 | 48000 | 单篇草稿 HTML 字符上限 |
@@ -157,10 +157,8 @@ arXiv 抓取与 LLM 筛选模块。
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | 最大备份数 | 10 | `deep-analysis-result` bak 文件保留数 |
-| 文件日志启用 | 默认关闭 | 需 `PD_ENABLE_FILE_LOGS=1` 或 `PAPER_DIGEST_ENABLE_FILE_LOGS=1` 显式开启 |
-| 最大日志数 | 50 | 启用文件日志后的日志文件保留数 |
-| 单日志文件上限 | 10MB | 启用文件日志后，超过上限只继续输出到终端 |
-| 日志总量上限 | 250MB | 启用文件日志后，启动时自动清理超过总量的旧日志 |
+| 文件日志启用 | 默认开启 | 在项目 `.env` 中设置 `PD_DISABLE_FILE_LOGS=1` 或 `PAPER_DIGEST_DISABLE_FILE_LOGS=1` 强制关闭 |
+| 日志数量/体积限制 | 无 | 不限制日志数量、总量或单文件大小，也不自动清理旧日志 |
 
 被所有核心脚本引用。
 
@@ -218,9 +216,11 @@ HuggingFace Papers 抓取模块。
 - 检测 `## 方法概述和架构` 是否过于简略（少于 600 中文字符、表述模糊、不足 3 段）
 - 若满足条件，触发 LLM 扩展至 600+ 字符的详细描述
 
-**Round 6 — 图像筛选与补充（`applyImageSupplement`，双模型模式）**
+**Round 6 — 图像筛选与插图计划（`applyImageSupplement`，双模型模式）**
 - 加载 `prompts/image-supplement.md`
-- 副模型基于最终文本和候选图片筛选高价值图，丢弃低信息图，并把图片插入到对应段落
+- 副模型基于最终文本和候选图片筛选高价值图，丢弃低信息图，并只输出 JSON 插图计划
+- 插图计划可包含 `anchor`、可选 `replacement`、图前 `lead` 和图后 `explanation`；`replacement` 只允许局部替换精确命中的 anchor 短句，用于让插图前后文字自然衔接
+- 代码根据插图计划在主模型文本的允许章节中插入图片和相邻说明；副模型不得返回完整分析报告，也不得改写评分、摘要、标签、评分理由等主模型内容
 
 **API 调用**：
 - `callModel(messages, maxTokens)`：带重试的 API 调用封装（内层最多 3 次重试，指数退避：第一次 10 秒，之后翻倍）
@@ -381,7 +381,7 @@ LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，按 `fix_instr
 
 - 默认数据源：`data/current/deep-analysis-result.json`（支持命令行传入自定义路径）
 - 默认按 `fetchedAt == --date`（默认今天，北京时间）过滤；传 `--all` 才使用输入文件中的全部论文
-- 微信公众号 `APP_ID` / `APP_SECRET` 从环境变量读取
+- 微信公众号 `APP_ID` / `APP_SECRET` 从项目 `.env` 读取
 - 支持 `--dry-run`：只生成本地预览 HTML，不获取 Token、不上传图片、不创建草稿
 - **图片上传**：仅上传正文 Markdown 图片和 `selectedImageUrls` 中的已选图片 → 上传到微信 CDN → 替换为微信 URL。缓存保存在 `/tmp/wechat-image-cache.json`，不会直接上传/发布 `allImageUrls` 候选图
 - **自动分 Part**：单篇草稿上限约 48000 字符（HTML），超过自动拆分为多个草稿
@@ -439,7 +439,7 @@ Python 发布/维护脚本共享路径配置。集中提供 `PROJECT_ROOT`、`DA
 生成飞书文档。
 
 **凭据读取**：
-- `FEISHU_APP_ID` / `FEISHU_APP_SECRET` 从环境变量读取（与其他发布渠道一致，统一放在 `项目根目录的 `.env` 文件`）
+- `FEISHU_APP_ID` / `FEISHU_APP_SECRET` 从项目 `.env` 读取（与其他发布渠道一致，统一放在 `项目根目录的 `.env` 文件`）
 
 **数据输入**：
 - 统一读取 `data/current/deep-analysis-result.json`（与其他发布渠道一致）
@@ -468,8 +468,8 @@ Python 发布/维护脚本共享路径配置。集中提供 `PROJECT_ROOT`、`DA
 - 耐限流设计：请求超时 30 秒，限流时指数退避，连续 20 篇已知 ID 提前停止
 - 写入 `data/current/papers.json`
 - 额外输出 `data/backfill-result.json`
-- 独立日志：默认不生成；启用文件日志后追加写入 `logs/backfill.log`
-- 依赖：见根目录 `requirements.txt`（`python-dotenv`、`requests`、`playwright`）
+- 独立日志：默认追加写入 `logs/backfill.log`；禁用文件日志后不写入
+- 依赖：见根目录 `requirements.txt`（`requests`、`playwright`）
 
 #### `scripts/backup-data.sh`
 

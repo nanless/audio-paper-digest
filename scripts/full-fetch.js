@@ -69,7 +69,39 @@ function loadCompleteFilteredForToday(today, filePath = FILTERED_FILE, expected 
     if (!data || data.status !== 'complete' || !Array.isArray(data.papers)) return null;
     if (expected.filterModel !== undefined && data.filterModel !== expected.filterModel) return null;
     if (expected.filterPromptHash !== undefined && data.filterPromptHash !== expected.filterPromptHash) return null;
+    if (expected.requireConsistentFilterArtifacts && !hasConsistentFilterArtifacts(today, data)) {
+        console.log('  [filter] 今日筛选产物与逐篇决策缓存不一致，忽略 complete 缓存并重新筛选');
+        return null;
+    }
     return data;
+}
+
+function hasConsistentFilterArtifacts(today, filteredData) {
+    const decisionsData = loadTodayJsonFile(FILTER_DECISIONS_FILE, today);
+    if (!decisionsData || !decisionsData.decisions || typeof decisionsData.decisions !== 'object') {
+        return false;
+    }
+    if (decisionsData.filterModel !== filteredData.filterModel) return false;
+    if (decisionsData.filterPromptHash !== filteredData.filterPromptHash) return false;
+
+    const decisionIds = new Set(Object.keys(decisionsData.decisions).map(id => normalizedId(id)).filter(Boolean));
+    const decisionCount = decisionIds.size;
+    const filteredStats = filteredData.stats || {};
+    if (Number.isInteger(filteredStats.decisionCount) && filteredStats.decisionCount !== decisionCount) {
+        return false;
+    }
+
+    const rawCandidates = loadTodayJsonFile(RAW_CANDIDATES_FILE, today);
+    const rawPapers = Array.isArray(rawCandidates?.papers) ? rawCandidates.papers : null;
+    if (rawPapers) {
+        if (decisionCount !== rawPapers.length) return false;
+        for (const paper of rawPapers) {
+            const id = normalizedId(paper);
+            if (id && !decisionIds.has(id)) return false;
+        }
+    }
+
+    return true;
 }
 
 function loadCurrentSuccessfulAnalysisIds(filePath = RESULT_FILE, today = null) {
@@ -393,7 +425,11 @@ async function fullFetch() {
     const filterModel = process.env.PAPER_ANALYZER_MODEL || '';
     const filterPromptHash = getFilterPromptHash();
 
-    const completedFiltered = loadCompleteFilteredForToday(today, FILTERED_FILE, { filterModel, filterPromptHash });
+    const completedFiltered = loadCompleteFilteredForToday(today, FILTERED_FILE, {
+        filterModel,
+        filterPromptHash,
+        requireConsistentFilterArtifacts: true
+    });
     if (completedFiltered) {
         console.log('⏭️ 检测到今日完整 filtered-papers.json，跳过抓取与筛选，直接续跑深度分析');
         filteredNew = completedFiltered.papers;

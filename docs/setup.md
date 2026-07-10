@@ -6,15 +6,11 @@
 
 **所有环境变量统一放在 `项目根目录的 `.env` 文件`。**
 
-`.zshrc` 已配置自动加载：
-```zsh
-set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
-```
-
 这样设计的好处：
 - 敏感配置集中管理，不写入脚本
-- shell 启动时自动注入，Python 脚本（`publish-wechat-full.py` 等）直接通过 `os.environ` 读取
-- Node 脚本通过 `config.js` 与 `loadEnvFile()` 读取项目根 `.env` 并写入当前进程环境；shell 已存在的变量优先，`.env` 只补齐缺失项
+- Node 脚本通过 `scripts/env-loader.js` / `loadEnvFile()` 读取项目根 `.env`
+- Python 脚本通过 `scripts/project_env.py` 读取项目根 `.env`
+- 脚本启动时会清理继承自 Trae/Codex/shell 的同名项目变量，再写入当前项目 `.env`，避免不同供应商 key/model/endpoint 混用
 
 ### 6.2 环境变量清单
 
@@ -25,7 +21,7 @@ set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
 | `PAPER_ANALYZER_API_KEY` | LLM API Key | **必填** |
 | `PAPER_ANALYZER_ENDPOINT` | LLM API 基路径（如 `/v1`、`/coding/v1`、`/anthropic`，脚本自动拼接最终请求路径） | **必填** |
 | `PAPER_ANALYZER_MODEL` | LLM 模型名 | **必填** |
-| `PAPER_ANALYZER_SECONDARY_MODEL` | 副模型名；设置后启用图像补充 | 可选 |
+| `PAPER_ANALYZER_SECONDARY_MODEL` | 副模型名；设置后启用图像筛选与插图计划 | 可选 |
 | `PAPER_ANALYZER_SECONDARY_ENDPOINT` | 副模型 API 基路径；未设置时复用主模型 endpoint | 可选 |
 | `PAPER_ANALYZER_SECONDARY_API_KEY` | 副模型 API Key；未设置时复用主模型 key | 可选 |
 | `PD_ANALYSIS_CONCURRENCY` | 深度分析并发度 | 3 |
@@ -36,10 +32,7 @@ set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
 | `PD_IMAGE_MAX_BYTES` | 深度分析单张图片原始字节上限 | 6291456 |
 | `PD_IMAGE_MAX_BASE64_CHARS` | 深度分析单张图片 base64 字符上限 | 8388608 |
 | `PD_IMAGE_TOTAL_BASE64_CHARS` | 深度分析单篇论文所有图片 base64 总上限 | 20971520 |
-| `PD_LOG_MAX_FILES` | 自动保留的日志文件数量 | 50 |
-| `PD_LOG_MAX_BYTES` | 单个日志文件最多写入字节数，超过后只输出到终端 | 10485760 |
-| `PD_LOG_TOTAL_MAX_BYTES` | logs 目录自动保留的总字节数上限 | 262144000 |
-| `PAPER_DIGEST_ENABLE_FILE_LOGS` / `PD_ENABLE_FILE_LOGS` | 设为 `1` 时启用文件日志 | 未启用 |
+| `PAPER_DIGEST_ENABLE_FILE_LOGS` / `PD_ENABLE_FILE_LOGS` | 兼容旧配置；文件日志现在默认启用 | 已启用 |
 | `PAPER_DIGEST_DISABLE_FILE_LOGS` / `PD_DISABLE_FILE_LOGS` | 设为 `1` 时强制禁用文件日志 | 未启用 |
 
 **API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动判断使用 OpenAI 还是 Anthropic 协议，优先级如下：
@@ -81,7 +74,7 @@ set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a
 | `FEISHU_APP_ID` | 飞书应用 App ID（如 `cli_xxx`） |
 | `FEISHU_APP_SECRET` | 飞书应用 App Secret |
 
-> 写入 `项目根目录的 `.env` 文件` 即可（不需要 `export` 前缀）。脚本运行时会自动 `source` 该文件。
+> 写入 `项目根目录的 `.env` 文件` 即可（不需要 `export` 前缀）。脚本运行时会直接读取当前项目 `.env`。
 
 #### 代理
 
@@ -144,17 +137,17 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 
 ## 日志机制
 
-所有主脚本默认只输出到终端，不生成 `logs/*.log`。需要留存文件日志时，显式设置 `PD_ENABLE_FILE_LOGS=1` 或 `PAPER_DIGEST_ENABLE_FILE_LOGS=1`。
+所有主脚本默认同时输出到终端和 `logs/*.log`。如需关闭文件日志，在项目根 `.env` 中设置 `PD_DISABLE_FILE_LOGS=1` 或 `PAPER_DIGEST_DISABLE_FILE_LOGS=1`。
 
 - **Node 脚本**：通过 `scripts/log-setup.js`
 - **Python 脚本**：通过 `scripts/log_setup.py`
-- **启用后的输出位置**：`logs/<script-name>-YYYYMMDD-HHMMSS.log`
-- **启用后的特性**：同时输出到终端和日志文件（Tee 模式），flush 及时
-- **启用后的自动清理**：每次启动时清理旧日志，默认保留最近 50 个、总量 250MB；单文件默认最多写 10MB，超过后只继续输出到终端
+- **默认输出位置**：`logs/<script-name>-YYYYMMDD-HHMMSS.log`
+- **默认特性**：同时输出到终端和日志文件（Tee 模式），flush 及时
+- **无上限与无自动清理**：日志不做数量、总量或单文件大小限制，也不会自动删除旧日志
 
 特殊日志：
-- `backfill_papers.py` 的 `logs/backfill.log` 也默认不生成，只有启用文件日志时才追加写入
-- 已启用文件日志时，`logs/full-fetch-*.log` 可用于排查抓取/分析问题；否则以终端完整输出为准
+- `backfill_papers.py` 的 `logs/backfill.log` 默认也会追加写入，同样受禁用开关控制
+- `logs/full-fetch-*.log` 可用于排查抓取/分析问题；终端仍会保留完整输出
 
 **后台缓冲处理**：所有主要 Node 脚本已调用 `process.stdout._handle.setBlocking(true)`，确保后台运行时日志实时 flush。
 
@@ -169,7 +162,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 - **Node.js** ≥ 18.0.0（`node` / `npm`）
 - **Python** 3.x（`python3` / `pip3`）
 - Node.js 依赖：`cheerio`（arXiv HTML 结构化解析）
-- Python 第三方库：见根目录 `requirements.txt`（`python-dotenv`、`requests`、`playwright`）
+- Python 第三方库：见根目录 `requirements.txt`（`requests`、`playwright`）
 
 ### 9.2 初始化
 
@@ -196,13 +189,12 @@ PAPER_ANALYZER_ENDPOINT=https://your-llm-endpoint/v1
 # WECHAT_APP_SECRET=your-app-secret
 EOF
 
-# 确保 .zshrc 已 source 项目根目录的 `.env` 文件
-# （若尚未配置，在 ~/.zshrc 末尾添加：set -a; source 项目根目录的 `.env` 文件 2>/dev/null; set +a）
+# 保存后直接运行脚本即可；脚本会读取当前项目根 `.env`
 ```
 
 ### 9.3 博客仓库准备
 
-发布博客需要本地已克隆 Hugo 博客仓库。默认路径为 `~/code/github_repos/audio-paper-digest-blog`，可通过环境变量 `PAPER_DIGEST_BLOG_REPO` 自定义：
+发布博客需要本地已克隆 Hugo 博客仓库。默认路径为 `~/code/github_repos/audio-paper-digest-blog`，可通过项目根 `.env` 中的 `PAPER_DIGEST_BLOG_REPO` 自定义：
 
 ```bash
 # 默认路径（不设置 env 时的默认值）
@@ -210,7 +202,7 @@ git clone https://github.com/nanless/audio-paper-digest-blog.git \
   ~/code/github_repos/audio-paper-digest-blog
 
 # 或自定义路径
-export PAPER_DIGEST_BLOG_REPO="~/my-blog-repo"
+PAPER_DIGEST_BLOG_REPO="~/my-blog-repo"
 ```
 
 博客仓库要求：

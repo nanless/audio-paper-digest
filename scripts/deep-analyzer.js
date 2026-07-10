@@ -733,57 +733,6 @@ function buildImageContent(imageUrl, base64, detectedMime = '') {
     };
 }
 
-/**
- * 替换分析文本中的 [图N] 标记为 Markdown 图片引用
- * @param {string} text - 分析文本
- * @param {Array} imageInfos - [{ url, caption }] 图片信息列表
- * @returns {string} 替换后的文本
- */
-function replaceImageMarkers(text, imageInfos) {
-    if (!text || !imageInfos || imageInfos.length === 0) return text;
-    let result = text;
-    const inserted = new Set();
-
-    // 1. 标准 [图N] 标记（独占一行）
-    result = result.replace(/\[图(\d+)\]/g, (match, num) => {
-        if (inserted.has(num)) return match;
-        const idx = parseInt(num, 10) - 1;
-        if (idx >= 0 && idx < imageInfos.length) {
-            inserted.add(num);
-            const info = imageInfos[idx];
-            const alt = info.caption || `图${num}`;
-            return `\n\n![${alt}](${info.url})\n\n`;
-        }
-        return match;
-    });
-
-    // 2. 自然语言"（图N）"或"(图N)" — 在首次出现前插入图片
-    result = result.replace(/(?:（|\()\s*(图(\d+))\s*(?:）|\))/g, (match, label, num) => {
-        if (inserted.has(num)) return match;
-        const idx = parseInt(num, 10) - 1;
-        if (idx >= 0 && idx < imageInfos.length) {
-            inserted.add(num);
-            const info = imageInfos[idx];
-            const alt = info.caption || label;
-            return `\n\n![${alt}](${info.url})\n\n${match}`;
-        }
-        return match;
-    });
-
-    return result;
-}
-
-function extractMarkdownImageUrls(text) {
-    if (!text) return [];
-    const urls = [];
-    const re = /!\[[^\]]*\]\(([^)]+)\)/g;
-    let m;
-    while ((m = re.exec(text)) !== null) {
-        urls.push(m[1]);
-    }
-    return [...new Set(urls)];
-}
-
 function removeUnapprovedMarkdownImages(text, allowedUrls) {
     if (!text) return text;
     const allowed = new Set(allowedUrls || []);
@@ -792,13 +741,168 @@ function removeUnapprovedMarkdownImages(text, allowedUrls) {
     });
 }
 
-function hasRequiredAnalysisSections(text) {
-    const required = [
-        '评分', '机器摘要', '标签', '作者与机构', '毒舌点评', '核心摘要',
-        '方法概述和架构', '核心创新点', '实验结果', '细节详述',
-        '评分理由', '局限与问题', '开源详情'
-    ];
-    return required.every(title => new RegExp(`(^|\\n)#{2,3}\\s*${escapeRegExp(title)}[：:\\s]*\\n`, 'm').test(text));
+const ALLOWED_IMAGE_INSERTION_SECTIONS = new Set([
+    '核心摘要',
+    '方法概述和架构',
+    '核心创新点',
+    '实验结果',
+    '细节详述'
+]);
+
+function sanitizeImagePlanText(text, maxChars = 260) {
+    return String(text || '')
+        .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
+        .replace(/<img\b[^>]*>/gi, '')
+        .replace(/^#{1,6}\s+/gm, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, maxChars)
+        .trim();
+}
+
+function extractJsonObjectText(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return '';
+
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fenced) return fenced[1].trim();
+
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+        return text.slice(start, end + 1).trim();
+    }
+    return text;
+}
+
+function parseImageInsertionPlan(raw, imageInfos = []) {
+    let parsed;
+    try {
+        parsed = JSON.parse(extractJsonObjectText(raw));
+    } catch (e) {
+        return [];
+    }
+
+    const items = Array.isArray(parsed)
+        ? parsed
+        : (Array.isArray(parsed?.insertions) ? parsed.insertions : []);
+    const used = new Set();
+    const plans = [];
+
+    for (const item of items) {
+        if (!item || typeof item !== 'object') continue;
+        const imageNumber = Number(item.image ?? item.imageIndex ?? item.figure ?? item.figureNumber);
+        if (!Number.isInteger(imageNumber) || imageNumber < 1 || imageNumber > imageInfos.length) continue;
+        if (used.has(imageNumber)) continue;
+
+        const section = sanitizeImagePlanText(item.section, 60);
+        if (!ALLOWED_IMAGE_INSERTION_SECTIONS.has(section)) continue;
+
+        const anchor = sanitizeImagePlanText(item.anchor, 180);
+        const replacement = anchor
+            ? sanitizeImagePlanText(item.replacement || item.replaceAnchorWith || item.rewrite, 420)
+            : '';
+        const lead = sanitizeImagePlanText(item.lead || item.before || item.intro, 220);
+        const explanation = sanitizeImagePlanText(item.explanation || item.after || item.note, 320);
+        if (!lead && !explanation) continue;
+
+        used.add(imageNumber);
+        plans.push({
+            imageNumber,
+            section,
+            anchor,
+            replacement,
+            lead,
+            explanation
+        });
+    }
+
+    return plans;
+}
+
+function findSectionBounds(analysis, title) {
+    const heading = new RegExp(
+        `(^|\\n)(#{2,3}\\s*(?:\\d+[.\\s]+)?${escapeRegExp(title)}[：:\\s]*\\n)`,
+        'm'
+    );
+    const match = heading.exec(analysis);
+    if (!match) return null;
+    const start = match.index + match[1].length;
+    const contentStart = start + match[2].length;
+    const rest = analysis.slice(contentStart);
+    const next = /\n#{2,3}\s/.exec(rest);
+    const end = next ? contentStart + next.index : analysis.length;
+    return { start, contentStart, end };
+}
+
+function buildImageInsertionBlock(plan, imageInfo) {
+    const parts = [];
+    if (plan.lead) parts.push(plan.lead);
+    parts.push(`![${imageInfo.caption || `图${plan.imageNumber}`}](${imageInfo.url})`);
+    if (plan.explanation) parts.push(plan.explanation);
+    return parts.join('\n\n');
+}
+
+function paragraphEndAfter(text, offset) {
+    const paragraphEnd = text.indexOf('\n\n', offset);
+    return paragraphEnd >= 0 ? paragraphEnd : offset;
+}
+
+function insertImageBlockIntoSection(analysis, plan, imageInfo) {
+    const bounds = findSectionBounds(analysis, plan.section);
+    if (!bounds) return { analysis, inserted: false };
+
+    const block = buildImageInsertionBlock(plan, imageInfo);
+    let sectionText = analysis.slice(bounds.contentStart, bounds.end);
+    let insertOffset = sectionText.length;
+
+    if (plan.anchor) {
+        const anchorIndex = sectionText.indexOf(plan.anchor);
+        if (anchorIndex >= 0) {
+            const hasReplacement = plan.replacement && plan.replacement !== plan.anchor;
+            const anchorEnd = anchorIndex + plan.anchor.length;
+            if (hasReplacement) {
+                sectionText = sectionText.slice(0, anchorIndex)
+                    + plan.replacement
+                    + sectionText.slice(anchorEnd);
+            }
+
+            const afterAnchorText = anchorIndex + (hasReplacement ? plan.replacement.length : plan.anchor.length);
+            insertOffset = paragraphEndAfter(sectionText, afterAnchorText);
+        }
+    }
+
+    const mentionPattern = new RegExp(`(?:图|Figure\\s*)${plan.imageNumber}(?!\\d)`, 'i');
+    const mentionMatch = mentionPattern.exec(sectionText);
+    if (mentionMatch && mentionMatch.index < insertOffset) {
+        insertOffset = paragraphEndAfter(sectionText, mentionMatch.index + mentionMatch[0].length);
+    }
+
+    const beforeSection = analysis.slice(0, bounds.contentStart);
+    const afterSection = analysis.slice(bounds.end);
+    const beforeInsert = sectionText.slice(0, insertOffset).replace(/\s+$/, '');
+    const afterInsert = sectionText.slice(insertOffset).replace(/^\s+/, '\n\n');
+
+    return {
+        analysis: `${beforeSection}${beforeInsert}\n\n${block}\n\n${afterInsert}${afterSection}`.replace(/\n{4,}/g, '\n\n\n'),
+        inserted: true
+    };
+}
+
+function applyImageInsertionPlan(analysis, plans, imageInfos) {
+    let updated = analysis;
+    const selectedImageUrls = [];
+    for (const plan of plans) {
+        const imageInfo = imageInfos[plan.imageNumber - 1];
+        if (!imageInfo) continue;
+        const result = insertImageBlockIntoSection(updated, plan, imageInfo);
+        if (!result.inserted) continue;
+        updated = result.analysis;
+        selectedImageUrls.push(imageInfo.url);
+    }
+
+    updated = removeUnapprovedMarkdownImages(updated, selectedImageUrls);
+    return { analysis: updated, selectedImageUrls };
 }
 
 async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downloadedImages) {
@@ -809,7 +913,7 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
     const imageInfoByUrl = new Map(imageInfos.map(info => [info.url, info]));
     const usableImageInfos = downloadedImages.map(img => imageInfoByUrl.get(img.url) || { url: img.url, caption: '' });
 
-    console.log(`    [deep] 🖼️  副模型(${SECONDARY_CONFIG.model})筛选并插入高价值图片`);
+    console.log(`    [deep] 🖼️  副模型(${SECONDARY_CONFIG.model})仅生成插图计划，保留主模型正文`);
 
     const imageListStr = usableImageInfos.map((info, i) =>
         `图${i + 1}: ${safeImageLabel(info.url)}\n  URL: ${info.url}\n  caption: ${info.caption || '无描述'}`
@@ -826,27 +930,18 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
         supplementContent.push(buildImageContent(img.url, img.base64, img.mime));
     }
 
-    const enhancedAnalysis = await callModelWithConfig(
+    const planText = await callModelWithConfig(
         [{ role: 'user', content: supplementContent }],
         API_MAX_TOKENS, 3, SECONDARY_CONFIG
     );
 
-    const cleaned = cleanGapFillPrefix(enhancedAnalysis.trim());
-    if (!cleaned || cleaned.length <= 100) {
-        console.log(`    [deep] ⚠️  副模型输出格式不正确，保留纯文本分析结果`);
-        return { analysis, selectedImageUrls: [] };
-    }
-    if (!hasRequiredAnalysisSections(cleaned)) {
-        console.log(`    [deep] ⚠️  副模型输出缺少必要章节，保留纯文本分析结果`);
+    const plans = parseImageInsertionPlan(planText, usableImageInfos);
+    if (plans.length === 0) {
+        console.log(`    [deep] ℹ️  副模型未选择高价值图片，保留主模型纯文本分析`);
         return { analysis, selectedImageUrls: [] };
     }
 
-    const replaced = removeUnapprovedMarkdownImages(
-        replaceImageMarkers(cleaned, usableImageInfos),
-        usableImageInfos.map(info => info.url)
-    );
-    const selectedImageUrls = extractMarkdownImageUrls(replaced)
-        .filter(url => usableImageInfos.some(info => info.url === url));
+    const { analysis: replaced, selectedImageUrls } = applyImageInsertionPlan(analysis, plans, usableImageInfos);
     console.log(`    [deep] ✅ 副模型图片筛选完成：插入 ${selectedImageUrls.length}/${usableImageInfos.length} 张`);
 
     return { analysis: replaced, selectedImageUrls };
@@ -1075,7 +1170,7 @@ async function analyzePaperDeep(paper) {
         console.log(`    [deep] ⚠️  方法概述补充失败: ${e.message}`);
     }
 
-    // 最后一轮：副模型基于最终文本筛选高价值图片并改写对应段落。
+    // 最后一轮：副模型基于最终文本筛选高价值图片，代码按 JSON 计划做受限局部插图合并。
     // 必须放在纯文本修复之后，否则 gap-fill / 表格补充 / 方法补充可能删掉图片。
     if (isDualModel && downloadedImages.length > 0) {
         try {
@@ -1630,12 +1725,9 @@ module.exports = {
     callModel,
     fetchArxivText,
     fetchArxivImageUrls,
-    replaceImageMarkers,
-    extractMarkdownImageUrls,
     removeUnapprovedMarkdownImages,
     selectImageCandidates,
     scoreImageCandidate,
-    hasRequiredAnalysisSections,
     normalizeImageInfos,
     sourceTextLikelyHasTables,
     getPaperArxivId,
@@ -1648,7 +1740,9 @@ module.exports = {
     isPrivateIpAddress,
     validatePublicHttpUrl,
     extractSectionByTitle,
-    mergeSectionByTitle
+    mergeSectionByTitle,
+    parseImageInsertionPlan,
+    applyImageInsertionPlan
 };
 
 // 直接运行测试

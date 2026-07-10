@@ -4,10 +4,10 @@
 
 - 流程、路径、关键参数变更后，**必须同步更新** `README.md` 与 `SKILL.md`
 - 文档冲突时，以当前脚本行为为准并立即修正文档
-- **禁止在脚本中硬编码真实 API key、微信凭证或飞书凭证**，所有凭证统一通过环境变量读取
+- **禁止在脚本中硬编码真实 API key、微信凭证或飞书凭证**，所有凭证统一写入当前项目根 `.env` 并通过项目 env loader 读取
 - 新增脚本需在 `README.md` 的命令速查、`SKILL.md` 的常用命令，以及 `.github/workflows/ci.yml` 的语法检查清单中登记
 - 新增分析相关脚本应优先复用 `analysis-engine.js`，避免重复实现重试/保存逻辑
-- 新增可配置参数应放入 `config.js`，并同步添加环境变量覆写支持
+- 新增可配置参数应放入 `config.js`，并同步添加项目 `.env` 覆写支持
 - 修改 `prompts/deep-analysis.md` 或 `prompts/filter.md` 后，代码会自动读取最新内容，无需改代码
 - 修改 `deep-analyzer.js` 输出契约后，需同步检查 `scripts/utils.js` 与 `scripts/utils.py`
 - 修改 `config.js` 后，需同步更新 `tests/config.test.js`

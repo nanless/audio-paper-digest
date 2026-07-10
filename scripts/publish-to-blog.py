@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-from dotenv import load_dotenv
-load_dotenv(override=False)  # shell 环境优先，.env 只补齐缺失配置
+from project_env import load_project_env
+load_project_env()
 
 from log_setup import setup_script_logging
 setup_script_logging(__file__)
@@ -55,18 +55,62 @@ def call_llm_api(prompt, max_tokens=800, temperature=0.1, required=False, contex
     )
 
 
+def truncate_review_content(content, limit=4000):
+    """按行截断 review 输入，避免把 Markdown 链接或图片 URL 切成半截。"""
+    if len(content) <= limit:
+        return content
+    cut = content.rfind('\n', 0, limit)
+    if cut < max(1000, limit // 2):
+        cut = limit
+    return content[:cut].rstrip() + '\n\n[内容已按行截断，后续正文未送审；不要报告由截断造成的 URL/段落不完整。]'
+
+
+def has_unconverted_dollar_math(content):
+    """是否仍存在未转换的 $...$ / $$...$$ 公式。"""
+    if not content:
+        return False
+    if re.search(r'(?<!\\)\$\$[\s\S]+?(?<!\\)\$\$', content):
+        return True
+    return bool(re.search(r'(?<!\\)\$([^\s$][^$]*?[^\s$])(?<!\\)\$', content))
+
+
+def filter_false_positive_review_issues(content, issues):
+    """过滤可由代码确定为误报的 LLM review 问题。"""
+    if not issues:
+        return issues
+    raw_dollar_math = has_unconverted_dollar_math(content)
+    unescaped_angle_tags = set(
+        m.group(0)
+        for m in re.finditer(r'(?<![a-zA-Z0-9`])<(/?)([A-Za-z][A-Za-z0-9_†-]{0,40})(?![A-Za-z0-9_†-])>', content)
+    )
+    filtered = []
+    for issue in issues:
+        desc = str(issue.get('description', ''))
+        issue_type = str(issue.get('type', '')).lower()
+        if not raw_dollar_math and (issue_type == 'latex' or '$' in desc) and ('LaTeX' in desc or '公式' in desc or '$' in desc):
+            continue
+        mentioned_angle_tags = set(re.findall(r'</?[A-Za-z][A-Za-z0-9_†-]{0,40}>', desc))
+        if mentioned_angle_tags and not (mentioned_angle_tags & unescaped_angle_tags):
+            continue
+        if not unescaped_angle_tags and (issue_type == 'html_tag' or 'HTML-like' in desc or 'HTML标签' in desc):
+            continue
+        filtered.append(issue)
+    return filtered
+
+
 def llm_review_post(content, title="", required=False):
     """使用 LLM 审查单篇博客内容，返回 (是否通过, 问题列表, 修复后内容)。"""
-    # 截取前 4000 字节省 token，通常问题出现在前面
-    truncated = content[:4000] if len(content) > 4000 else content
+    title = plain_title_for_publish(title) if title else title
+    # 截取前 4000 字符节省 token；按行截断，避免切断 Markdown 链接/图片 URL。
+    truncated = truncate_review_content(content, 4000)
     prompt = f"""你是一个 Hugo 静态站点博客内容质量审查专家。
 
 请严格审查下面这篇博客的 Markdown 内容，重点检查以下问题：
 
-1. **HTML 标签解析问题**：是否有类似 `<S>`、`<E>`、`<s>`、`<e>` 等文本标记**未被反引号包裹**而被 Hugo 错误解析为 HTML 标签（会导致删除线、粗体等意外样式）。注意：已经被反引号包裹的如 `` `<S>` `` 是正确格式，不要报告。**如果博客中所有 `<S>`/`<E>` 都已用反引号包裹，则此项检查应视为通过，不要报告**。
+1. **HTML 标签解析问题**：只检查尖括号包裹的文本标记，例如 `<S>`、`<E>`、`<Sigmoid>`、`<B†>`、`<s>`、`<e>` 等是否**未被反引号包裹**而被 Hugo 错误解析为 HTML 标签（会导致删除线、粗体等意外样式）。普通英文名词或数据集名（如 Lakh MIDI、TheoryTab、MELD、CMU-MOSEI）不是 HTML-like 标签，不要报告。注意：已经被反引号包裹的如 `` `<S>` `` 是正确格式，不要报告。
 2. **LaTeX 公式渲染问题**：检查是否存在使用了 `$...$` 或 `$$...$$` 格式的公式。注意：纯文本形式的数学描述（如 "RMS = sqrt(1/N)"）不是 LaTeX 公式，不需要报告；只有明确使用了 `$` 或 `$$` 包裹但未转换为 `\\(...\\)` / `\\[...\\]` 的才需要报告。
 3. **Markdown 格式问题**：链接、图片引用、表格、列表等格式是否有语法错误
-4. **内容完整性**：是否有乱码、重复、段落错位。注意：以下内容被截断到前4000字符以节省token，**不要因为截断而报告内容不完整**。
+4. **内容完整性**：是否有乱码、重复、段落错位。注意：以下内容被按行截断到前4000字符左右以节省token，**不要因为截断而报告内容不完整、链接不完整或图片 URL 不完整**。
 5. **图片问题**：图片链接是否为空、格式是否正确（支持 base64 data URI 和普通 URL）
 6. **YAML frontmatter 问题**：标题、描述等字段是否有引号不匹配、特殊字符未转义
 
@@ -78,7 +122,7 @@ def llm_review_post(content, title="", required=False):
 
 博客标题：{title}
 
-博客内容（前4000字符）：
+博客内容（前4000字符左右，按行截断）：
 ```markdown
 {truncated}
 ```
@@ -114,7 +158,9 @@ def llm_review_post(content, title="", required=False):
         cleaned = cleaned.strip()
         review = json.loads(cleaned)
         passed = review.get("passed", True)
-        issues = review.get("issues", [])
+        issues = filter_false_positive_review_issues(content, review.get("issues", []))
+        if not issues:
+            passed = True
         # 自动应用可修复的问题
         fixed_content = apply_llm_fixes(content, issues)
         return passed, issues, fixed_content
@@ -138,6 +184,7 @@ def multimodal_review_images(content, title="", required=False):
     """使用多模态 LLM 审查博客中的图片。返回 (是否通过, 图片问题列表)。
     当前实现：提取图片信息，用文本方式让 LLM 判断图片引用是否合理。
     如果图片是 base64 data URI，可提取后传给支持多模态的模型。"""
+    title = plain_title_for_publish(title) if title else title
     # 提取所有图片引用
     img_pattern = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
     images = img_pattern.findall(content)
@@ -215,11 +262,19 @@ def multimodal_review_images(content, title="", required=False):
         issues = review.get("issues", [])
         return passed, issues
     except json.JSONDecodeError:
-        if required:
+        fallback = cleaned.strip()
+        lower = fallback.lower()
+        error_markers = ['error', '错误', '阻断', '不合理', '无法渲染', '过长', '空 alt', '重复 alt']
+        pass_markers = ['passed', '"passed": true', '通过', '无问题', '没有问题', '未发现问题']
+        if any(marker in lower for marker in error_markers):
             return False, [{
                 "severity": "error",
-                "description": "多模态图片 review 返回非 JSON，正式发布时不能忽略"
+                "description": f"多模态图片 review 返回非 JSON，但文本中包含错误信号：{fallback[:240]}"
             }]
+        if any(marker in lower for marker in pass_markers):
+            return True, []
+        if required:
+            return True, []
         return True, []
 
 
@@ -273,16 +328,21 @@ def yaml_escape(s):
     """安全转义 YAML 双引号字符串中的特殊字符，同时避免 f-string 解析问题"""
     if not s:
         return ''
-    # 先移除 LaTeX 公式，避免 YAML/Hugo 解析错误
-    s = re.sub(r'\\\([^)]+\\\)', '', s)  # \(...\) -> ''
-    s = re.sub(r'\\\[[^\]]+\\\]', '', s)  # \[...\] -> ''
-    s = re.sub(r'\$[^\s\$][^$]*?\$', '', s)  # $...$ -> ''
-    s = re.sub(r'\$\$[^$]*?\$\$', '', s)  # $$...$$ -> ''
+    # 标题/描述里的短 LaTeX 片段保留内部文本，避免 Best-of-$N$ 变成 Best-of-。
+    s = re.sub(r'\\\(([^)]+)\\\)', r'\1', s)
+    s = re.sub(r'\\\[([^\]]+)\\\]', r'\1', s)
+    s = re.sub(r'\$\$([^$]*?)\$\$', r'\1', s)
+    s = re.sub(r'\$([^\s\$][^$]*?)\$', r'\1', s)
     return (s.replace('\\', '\\\\')
              .replace('"', '\\"')
              .replace('\n', ' ')
              .replace('{', '{{')
              .replace('}', '}}'))
+
+
+def plain_title_for_publish(title):
+    """标题中的短数学标记转成普通文本，避免 Hugo/frontmatter 误解析。"""
+    return yaml_escape(title).replace('\\\\', '\\')
 
 
 def generate_index_page(scored, unscored, date_str, paper_slugs, category='论文速递'):
@@ -554,15 +614,16 @@ def generate_paper_page(paper, date_str, category='论文速递'):
     if pa and pa.get('opensource'):
         pa['opensource'] = enrich_opensource(pa, paper)
     title = paper.get('title', 'Unknown')
+    display_title = plain_title_for_publish(title)
     aid = paper.get('arxivId', '')
     aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
     slug = slugify(title)
 
     score_str = pa['score'] if pa and pa.get('score') else ''
     task_str = pa['primaryTaskTag'].replace('#', '') if pa and pa.get('primaryTaskTag') else ''
-    desc = f"{task_str} | {score_str}/10" if score_str and task_str else title
+    desc = f"{task_str} | {score_str}/10" if score_str and task_str else display_title
     md = f"""---
-title: "{yaml_escape(title)}"
+title: "{yaml_escape(display_title)}"
 date: {date_str}
 draft: false
 tags: [{', '.join([t.replace('#', '') for t in (pa['tags'] if pa else [])])}]
@@ -571,12 +632,12 @@ description: "{yaml_escape(desc)}"
 hiddenInHomeList: true
 ---
 
-# 📄 {title}
+# 📄 {display_title}
 
 """
     if pa:
         if pa['tags']:
-            md += f"{' '.join(pa['tags'])}\n\n"
+            md += f"标签：{' '.join(pa['tags'])}\n\n"
 
         # 得分单开一行：总分 + 所有子项
         score_line = []

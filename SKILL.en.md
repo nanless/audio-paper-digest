@@ -16,7 +16,7 @@ English | **[中文](SKILL.md)**
 - `README.md`: Human-run manual (commands, configuration, troubleshooting)
 - `prompts/filter.md`: LLM prompt for the filtering stage
 - `prompts/deep-analysis.md`: LLM prompt for the deep analysis stage (text-only, output format, tag system, scoring criteria)
-- `prompts/image-supplement.md`: Image supplement prompt (dual-model mode, secondary model enriches primary analysis with images)
+- `prompts/image-supplement.md`: Image selection and insertion-plan prompt (dual-model mode; the secondary model outputs JSON only, with optional local `replacement` around the insertion anchor)
 - `prompts/opensource-scan.md`: Open source scan prompt (Round 2)
 
 When documents conflict with code, **the current implementation in `scripts/*` prevails; update documents accordingly**.
@@ -35,7 +35,7 @@ Main entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fe
 6. **LLM filtering**: Uses `PAPER_ANALYZER_*` config to judge speech/music/audio relevance paper by paper, `batchSize=5` (adjustable via `PD_FILTER_BATCH_SIZE`), 60s timeout per paper, 5 retries
 7. **Save filter results**: `data/current/raw-candidates.json` stores filtering input, and `data/current/filtered-papers.json` stores filtered/archive-deduplicated output
 8. **Update dedup DB**: Appends all crawled paper IDs to `data/current/papers.json` (not just filtered ones; save early to prevent data loss if interrupted later)
-9. **Deep analysis**: `deep-analyzer.js`. Dual-model mode (when `PAPER_ANALYZER_SECONDARY_MODEL` is configured): primary model text-only analysis + secondary model image supplement; Single-model mode (no secondary model): text-only analysis. Concurrency of 3 (adjustable via `PD_ANALYSIS_CONCURRENCY`), up to 2 retries per paper (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
+9. **Deep analysis**: `deep-analyzer.js`. Dual-model mode (when `PAPER_ANALYZER_SECONDARY_MODEL` is configured): primary model text-only analysis + secondary model JSON image insertion plan; Single-model mode (no secondary model): text-only analysis. Concurrency of 3 (adjustable via `PD_ANALYSIS_CONCURRENCY`), up to 2 retries per paper (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
 10. **Incremental save**: Saves to `data/current/deep-analysis-result.json` immediately after each batch, with failure-result protection (papers with a successful analysis will not be overwritten by a failure result with no analysis); also writes `papers.json.digestStatus` back through `scripts/digest-status.js`
 11. **Final merge**: Deduplicates and merges historical results, auto-backing up bak files (retaining the last 10)
 
@@ -70,15 +70,12 @@ Some scripts read from the legacy `data/*.json` paths, but new outputs should be
 
 ### 4.1 Unified Storage Location
 
-**All environment variables are stored in `the `.env` file in the project root`.** `.zshrc` is configured as:
-```zsh
-set -a; source the `.env` file in the project root 2>/dev/null; set +a
-```
+**All project configuration lives in `the `.env` file in the project root`.**
 
 This means:
-- All variables are automatically injected on shell startup
-- Python scripts read directly via `os.environ`
-- Node scripts have a secondary fallback via `loadEnvFile()` (only fills in unset variables)
+- Node scripts read the project-root `.env` through `scripts/env-loader.js` / `loadEnvFile()`
+- Python scripts read the project-root `.env` through `scripts/project_env.py`
+- Scripts clear inherited project-scoped variables from Trae/Codex/shell before loading the current project's `.env`; inherited outer variables must not be mixed with current project configuration
 
 ### 4.2 Filtering Stage (`fetch-papers.js`)
 
@@ -123,7 +120,7 @@ API call characteristics:
 - arXiv HTML parsing uses **cheerio** structured selectors, removing noise elements such as script/style/nav/header/footer
 - Images are first preselected by caption/filename/order heuristics (default `imageCandidateMax=20`); only dual-model mode with a configured secondary model downloads up to `imageMaxCount=20` candidate images serially and sends them to the secondary model. Single-model mode only keeps candidate URL/manifest metadata. Downloads validate Content-Type, Content-Length, and PNG/JPEG/WebP file signatures; defaults are 6MB raw bytes per image, 8M base64 chars per image, and 20M total base64 chars per paper
 - Full text cap is approximately 500K characters (`fullTextMaxChars` in config.js)
-- All analysis configurations are centrally managed in `scripts/config.js`, supporting environment variable overrides
+- All analysis configurations are centrally managed in `scripts/config.js`, supporting overrides from the project-root `.env`
 
 Output constraints:
 - Prompt source: `prompts/deep-analysis.md`, read at runtime via `loadPrompt()` and replaces `{hasFullText}`, `{title}`, `{authors}`, `{categories}`, `{arxivId}`, `{textForAnalysis}` placeholders
@@ -142,10 +139,10 @@ Output constraints:
 When `PAPER_ANALYZER_SECONDARY_MODEL` is configured, dual-model mode is enabled:
 
 - **Primary model** (`PAPER_ANALYZER_*`): text-only deep analysis, using `prompts/deep-analysis.md` (Round 1a)
-- **Secondary model** (`PAPER_ANALYZER_SECONDARY_*`): multimodal image supplement, using `prompts/image-supplement.md` (Round 1b), requires a vision-capable multimodal model (e.g. `mimo-v2.5`, `gpt-4o`)
+- **Secondary model** (`PAPER_ANALYZER_SECONDARY_*`): multimodal image selection and insertion planning, using `prompts/image-supplement.md`, requires a vision-capable multimodal model (e.g. `mimo-v2.5`, `gpt-4o`)
 - Secondary model's `endpoint`/`key` default to the primary model's values if not set
 - If no secondary model is configured, automatically falls back to single-model text-only mode (no image analysis)
-- Secondary model tasks: verify image evidence, supplement visual insights, mark `[图N]` insertion positions; the system automatically replaces markers with actual image links
+- Secondary model tasks: select high-value figures (flow diagrams, model diagrams, spectrograms, comparison/result plots, etc.), discard irrelevant or low-information images, and output a JSON insertion plan with target section, anchor, optional `replacement`, lead, and explanation. `replacement` may only locally replace a precisely matched short anchor near the insertion point; the secondary model must not output a complete analysis report or rewrite scores, summaries, or score rationales.
 
 ### 4.4 WeChat Official Account (`publish-wechat-full.py`)
 
@@ -180,7 +177,7 @@ PAPER_ANALYZER_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
 # PAPER_ANALYZER_MODEL=gpt-4o
 # PAPER_ANALYZER_ENDPOINT=https://api.openai.com/v1
 
-# Option 5: Dual-model mode (primary text-only + secondary multimodal image supplement)
+# Option 5: Dual-model mode (primary text-only + secondary multimodal image selection and insertion plan)
 # Primary model config: choose one of options 1-4 above
 # Secondary model (optional; if not set, falls back to single-model text-only mode)
 # PAPER_ANALYZER_SECONDARY_MODEL=mimo-v2.5
@@ -385,10 +382,10 @@ PY
 
 ## 7. Logging & Runtime Characteristics
 
-- Node/Python scripts output only to terminal by default and do not create `logs/*.log`
-- File logs are written only when `PD_ENABLE_FILE_LOGS=1` or `PAPER_DIGEST_ENABLE_FILE_LOGS=1` is explicitly set
-- **File-log cleanup after enablement**: cleans old logs on each startup, retaining the last 50 by default
-- `backfill_papers.py` also does not create `logs/backfill.log` by default; it only appends when file logs are enabled
+- Node/Python executable scripts write to both terminal and `logs/<script>-YYYYMMDD-HHMMSS.log` by default
+- `PD_ENABLE_FILE_LOGS=1` / `PAPER_DIGEST_ENABLE_FILE_LOGS=1` remain compatible, but are no longer required for log creation
+- File logs have no count, total-size, or per-file-size limit and old logs are not cleaned automatically
+- `backfill_papers.py` also appends to `logs/backfill.log` by default; the same disable switches apply
 - Major Node scripts have handled background stdout buffering (`setBlocking`) for real-time progress viewing
 - `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` use retry and incremental saving to reduce data loss risk from interruptions
 - `reanalyze.js` saves intermediate results every 5 papers (save interval auto-adjusted in concurrent mode)
@@ -405,10 +402,10 @@ PY
 3. **Prohibit dangerous operations**: Do not execute `git reset --hard`, `git push -f`, or batch deletion of historical articles without explicit authorization.
 4. **Do not auto-extend workflow**: After running `full-fetch.js`, do not arbitrarily append blog/WeChat publishing unless explicitly requested by the user.
 5. **Leave a trace after changes**: After process, parameter, or path changes, synchronously update `SKILL.md`, `SKILL.en.md`, `README.md`, `AGENTS.md`, and relevant `docs/` files.
-6. **Prohibit hard-coded keys**: Do not write real API keys in any script or document; all credentials (LLM, WeChat Official Account, Feishu) are uniformly read from environment variables, with LLM configuration in `the `.env` file in the project root` (auto-`source`d by scripts), and WeChat/Feishu credentials also written to `the `.env` file in the project root`.
+6. **Prohibit hard-coded keys**: Do not write real API keys in any script or document; all credentials (LLM, WeChat Official Account, Feishu) live in `the `.env` file in the project root` and are loaded through the project env loader.
 7. **Prevent security mechanism breakage when modifying scripts**: This environment silently replaces sensitive characters such as `API_KEY` with `***`. When modifying scripts containing such characters, you must re-read the file after modification to verify that key lines were not corrupted. Also periodically check whether `data/`, `logs/` directories contain residual backup files or log snapshots with keys, and clean them immediately if found.
-8. **Unified environment variable management**: When new scripts need to read LLM configuration, uniformly use `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, `PAPER_ANALYZER_ENDPOINT`; introducing alias fallback chains, hard-coding, or base64-encoded variable name hacks is prohibited.
-9. **New configurable parameters and runtime data paths go in shared config**: New Node scripts with adjustable parameters (concurrency, timeout, batch size, etc.) or `data/current/*.json` runtime data files must place/reuse them in `scripts/config.js` (runtime data paths via `Config.FILES`) and add environment variable overrides for parameters when needed; new Python publish/maintenance scripts with shared paths must reuse `scripts/path_config.py` instead of hand-writing default `data/current/*.json` paths again.
+8. **Unified environment variable management**: When new scripts need to read LLM configuration, uniformly use `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, and `PAPER_ANALYZER_ENDPOINT` from the project `.env`, and reuse Node `scripts/env-loader.js` or Python `scripts/project_env.py`; alias fallback chains, hard-coding, base64-encoded variable name hacks, or inherited shell/Codex/Trae variables as project configuration are prohibited.
+9. **New configurable parameters and runtime data paths go in shared config**: New Node scripts with adjustable parameters (concurrency, timeout, batch size, etc.) or `data/current/*.json` runtime data files must place/reuse them in `scripts/config.js` (runtime data paths via `Config.FILES`) and add project `.env` overrides for parameters when needed; new Python publish/maintenance scripts with shared paths must reuse `scripts/path_config.py` instead of hand-writing default `data/current/*.json` paths again.
 10. **New analysis scripts reuse analysis-engine.js**: When adding paper analysis-related scripts, prioritize reusing `analyzeBatch()` / `analyzePaperWithRetry()` from `analysis-engine.js` to avoid re-implementing retry, parsing, and saving logic; after saving results, sync `papers.json.digestStatus` through `scripts/digest-status.js`.
 11. **Blog verification defaults to no push**: When running `publish-to-blog.py` without explicit user authorization, `--skip-push` must be included. Formal `--push` requires LLM review availability; remaining code-level issues and `error` severity LLM/image review issues block the push, while `warning/info` is reported but does not directly block.
 12. **Output contract changes must sync parser**: If modifying `## 机器摘要` key names, section order, or tag output format in `prompts/deep-analysis.md`, you must synchronously check the parsing logic in `scripts/utils.js` and `scripts/utils.py`.
@@ -440,7 +437,7 @@ PY
    | Generic OpenAI | Custom endpoint | `sk-...` | OpenAI |
 
    - MiMo Token Plan key prefix is `tp-`, must be paired with the Token Plan endpoint; mixing the two will definitely return 401
-   - Ensure `.env` is correctly configured and `.zshrc` has been sourced
+   - Ensure the key/endpoint/model triplet in the current project-root `.env` comes from the same provider; do not rely on `.zshrc` or outer shell variables
 
 2. **Check if the correct protocol is being used** (search logs for `[filter] API type: xxx` or `[api] → model | xxx` lines)
    - If using MiMo/Kimi Token Plan but it shows `openai`, check if the endpoint contains `token-plan` or `coding`, and if the model contains `mimo` or `kimi`
@@ -502,12 +499,12 @@ Prefer using `data/current/deep-analysis-result.json`; only read from old paths 
 
 ### 9.6 Re-analysis Startup Reports Key Not Set
 
-- Configure `PAPER_ANALYZER_API_KEY` in `the `.env` file in the project root`
-- Re-source: `source ~/.zshrc`
+- Configure `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, and `PAPER_ANALYZER_ENDPOINT` in `the `.env` file in the project root`
+- Re-run the script; do not rely on `.zshrc` / Trae / Codex outer environment variables to fill project configuration
 
 ### 9.7 WeChat Official Account Publishing Failure
 
-- Check if `WECHAT_APP_ID` / `WECHAT_APP_SECRET` environment variables are set (in `the `.env` file in the project root`)
+- Check whether `WECHAT_APP_ID` / `WECHAT_APP_SECRET` are written to `the `.env` file in the project root`
 - Check if `APP_SECRET` has expired
 - Check if images are too large or restricted by arXiv
 - WeChat image upload has rate limits; large numbers of images may need to be executed in batches

@@ -264,7 +264,7 @@ Evidence must be written first; do not just write conclusions. Requirements:
 - If there are only figures without text descriptions, still try to convert key numbers into text
 - If specific numbers are unavailable, explicitly write "论文未给出具体数值"
 - **Experimental result tables must be listed in full using standard Markdown tables** (there may be multiple comparison tables); each table must include headers, model/method names, datasets, metrics, and values; do not omit any rows or columns
-- Experimental result figures are not inserted in this primary text prompt. In dual-model mode, `image-supplement.md` selects useful result figures and inserts them later with `[图N]` markers.
+- Experimental result figures are not inserted in this primary text prompt. In dual-model mode, `image-supplement.md` selects useful result figures later through a JSON insertion plan, and code merges selected figures plus local lead/explanation text back into the primary analysis.
 
 ## 细节详述
 Extract all key technical details as much as possible; if missing, explicitly write "未说明":

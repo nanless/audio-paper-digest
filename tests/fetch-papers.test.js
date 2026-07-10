@@ -77,6 +77,34 @@ describe('filterPapersWithLLM resume decisions', () => {
 
         assert.deepStrictEqual(filtered.map(p => p.arxivId), ['2604.00001', '2604.00003']);
     });
+
+    it('不会把不属于当前候选集的旧筛选决策写回进度文件', async () => {
+        const papers = [
+            { arxivId: '2604.00001', title: 'Speech Paper', abstract: 'speech' },
+            { arxivId: '2604.00002', title: 'New Audio Paper', abstract: 'audio' }
+        ];
+        let savedDecisionIds = [];
+
+        const filtered = await filterPapersWithLLM(papers, {
+            batchSize: 1,
+            initialDecisions: {
+                '2604.00001': { related: true },
+                '2604.99999': { related: true }
+            },
+            decisionFn: async () => ({
+                related: false,
+                reason: 'not audio',
+                rawResponse: 'Conclusion: not related',
+                parseSource: 'test'
+            }),
+            onBatchComplete: async ({ decisions }) => {
+                savedDecisionIds = Object.keys(decisions).sort();
+            }
+        });
+
+        assert.deepStrictEqual(filtered.map(p => p.arxivId), ['2604.00001']);
+        assert.deepStrictEqual(savedDecisionIds, ['2604.00001', '2604.00002']);
+    });
 });
 
 describe('arXiv parsers', () => {

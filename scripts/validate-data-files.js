@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+const { setupScriptLogging } = require('./log-setup');
+setupScriptLogging(__filename);
 
 const fs = require('fs');
 const path = require('path');

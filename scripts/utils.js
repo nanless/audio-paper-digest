@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const https = require('https');
+const { loadProjectEnv } = require('./env-loader.js');
 
 // ═══════════════════════════════════════════════════════
 // 文件操作
@@ -146,28 +147,7 @@ function normalizedId(paperOrId) {
 // ═══════════════════════════════════════════════════════
 
 function loadEnvFile() {
-    // 优先从项目根目录的 .env 加载
-    const envFile = path.join(__dirname, '..', '.env');
-    if (fs.existsSync(envFile)) {
-        const envContent = fs.readFileSync(envFile, 'utf8');
-        envContent.split('\n').forEach(line => {
-            const trimmed = line.trim();
-            // 跳过空行和注释
-            if (!trimmed || trimmed.startsWith('#')) return;
-            const eq = trimmed.indexOf('=');
-            if (eq > 0) {
-                const key = trimmed.substring(0, eq).trim();
-                let val = trimmed.substring(eq + 1).trim();
-                // 去除首尾引号（单引号或双引号）
-                if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-                    val = val.slice(1, -1);
-                }
-                if (key && process.env[key] === undefined) {
-                    process.env[key] = val;
-                }
-            }
-        });
-    }
+    return loadProjectEnv();
 }
 
 // ═══════════════════════════════════════════════════════

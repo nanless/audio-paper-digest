@@ -12,7 +12,7 @@
    - Mixing the two will always return 401
 
 2. **Check that the correct protocol is being used**
-   - Look for `[filter] API 类型: xxx` or `[api] → model | xxx` in terminal output to confirm whether it shows `anthropic` or `openai`; if file logs were explicitly enabled, you can also check `logs/*.log`
+   - Look for `[filter] API 类型: xxx` or `[api] → model | xxx` in terminal output or `logs/*.log` to confirm whether it shows `anthropic` or `openai`
    - If you are using MiMo/Kimi Token Plan but it shows `openai`, check whether the endpoint contains `token-plan` or `coding`, and whether the model name contains `mimo` or `kimi`
 
 3. **Anthropic protocol checks** (when output shows `anthropic`)
@@ -28,11 +28,11 @@
    - MiMo Token Plan may be blocked when a system proxy is active; try disabling the proxy or setting `agent: false`
    - See Section 12.7 for details
 
-6. **Review output**: use full terminal output by default; if `PD_ENABLE_FILE_LOGS=1` was set, also check `logs/full-fetch-*.log`, `logs/deep-analyzer-*.log`
+6. **Review output**: check `logs/full-fetch-*.log`, `logs/deep-analyzer-*.log`; full terminal output is still preserved
 
 ### 12.2 Deep Analysis Is Slow or Frequently Fails
 
-- Review full terminal output; if file logs were enabled, also check `logs/deep-analyzer-*.log`, `logs/full-fetch-*.log`
+- Review `logs/deep-analyzer-*.log`, `logs/full-fetch-*.log`; full terminal output is still preserved
 - Check whether the key/endpoint/model triplet is correct (see Section 12.1)
 - If a timeout occurs, the script will automatically fall back to plain-text retry; if it still fails, check the proxy or reduce concurrency
 - You can safely resume with `node scripts/deep-analysis-only.js`
@@ -40,7 +40,7 @@
 ### 12.3 Re-analysis Reports "Key Not Configured" on Startup
 
 - Configure `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, and `PAPER_ANALYZER_ENDPOINT` in `the `.env` file in the project root`
-- Re-source: `source ~/.zshrc`
+- Re-run the script; do not rely on `.zshrc` / Trae / Codex outer environment variables to fill project configuration
 
 ### 12.4 "No New Content to Push" After Publishing
 

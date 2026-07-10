@@ -8,7 +8,7 @@
 
 Complete workflow entry point. Executes all steps in Section 3: auto-archive -> load dedup database (including blog-published IDs) -> arXiv fetch -> HF fetch -> merge and deduplicate -> filter blog-published papers -> LLM filter -> update deduplication database -> deep analysis -> incremental save.
 
-All configurations are read from `scripts/config.js`, with environment variable overrides:
+All configurations are read from `scripts/config.js`, with project-root `.env` overrides:
 - `ANALYSIS_CONFIG.concurrency = 3` (`PD_ANALYSIS_CONCURRENCY`)
 - `ANALYSIS_CONFIG.maxRetries = 2` (`PD_ANALYSIS_MAX_RETRIES`)
 - `ANALYSIS_CONFIG.retryDelayMs = 3000`
@@ -27,7 +27,7 @@ Runs deep analysis only (resume mode).
 Full reanalysis.
 - Default data source: `data/current/deep-analysis-result.json` (supports custom file path via command line, compatible with old-format pure arrays)
 - Calls `deep-analyzer.js` for **all** papers in the file
-- Default concurrency matches `ANALYSIS_CONFIG.concurrency` (default 3), adjustable via `--concurrency N` or `PD_REANALYZE_CONCURRENCY` environment variable
+- Default concurrency matches `ANALYSIS_CONFIG.concurrency` (default 3), adjustable via `--concurrency N` or `PD_REANALYZE_CONCURRENCY` in the project `.env`
 - **Saves intermediate results every 5 papers** (save interval auto-adjusted in concurrent mode), **only successful results overwrite old data**; saves also sync `papers.json.digestStatus` from the current persisted results
 - On startup, checks whether `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, `PAPER_ANALYZER_ENDPOINT` are set; exits directly if any are missing
 
@@ -144,7 +144,7 @@ Unified configuration center. All hardcoded parameters are centrally managed and
 
 | Config Item | Default | Description |
 |--------|--------|------|
-| Blog repo path | `~/code/github_repos/audio-paper-digest-blog` | Overridable via `PAPER_DIGEST_BLOG_REPO` |
+| Blog repo path | `~/code/github_repos/audio-paper-digest-blog` | Overridable via `PAPER_DIGEST_BLOG_REPO` in the project `.env` |
 | Content directory | `content/posts` | Hugo content directory |
 | basePath | `/audio-paper-digest-blog` | Site subpath |
 | WeChat draft char limit | 48000 | Per-draft HTML character limit |
@@ -154,10 +154,8 @@ Unified configuration center. All hardcoded parameters are centrally managed and
 | Config Item | Default | Description |
 |--------|--------|------|
 | Max backups | 10 | `deep-analysis-result` bak file retention count |
-| File logs | Disabled by default | Explicitly enable with `PD_ENABLE_FILE_LOGS=1` or `PAPER_DIGEST_ENABLE_FILE_LOGS=1` |
-| Max logs | 50 | Log file retention count after file logs are enabled |
-| Per-log file cap | 10MB | After file logs are enabled, further output remains terminal-only after the cap |
-| Total log cap | 250MB | After file logs are enabled, old logs over the total cap are cleaned on startup |
+| File logs | Enabled by default | Can be forced off by setting `PD_DISABLE_FILE_LOGS=1` or `PAPER_DIGEST_DISABLE_FILE_LOGS=1` in the project `.env` |
+| Log count/size limits | None | No count, total-size, or per-file-size limit; old logs are not cleaned automatically |
 
 Referenced by all core scripts.
 
@@ -190,7 +188,7 @@ HuggingFace Papers fetch module.
 Multimodal deep analyzer. The analysis flow is a **6-round progressive process**, not a single call:
 
 **Round 1 -- Main Deep Analysis**
-- `analyzePaperDeep(paper)`: fetches arXiv HTML full text (up to 500K characters) and preselects candidate images. Dual-model mode downloads candidate images serially and lets the secondary model select high-value figures for insertion; single-model mode only stores candidate image metadata. `allImageUrls` stores candidates, while `selectedImageUrls` / `imageUrls` store selected figures
+- `analyzePaperDeep(paper)`: fetches arXiv HTML full text (up to 500K characters) and preselects candidate images. Dual-model mode downloads candidate images serially and lets the secondary model output a JSON insertion plan for high-value figures; single-model mode only stores candidate image metadata. `allImageUrls` stores candidates, while `selectedImageUrls` / `imageUrls` store selected figures
 - Loads `prompts/deep-analysis.md`, replaces placeholders, and calls the LLM
 - Output includes: score, machine summary, tags, authors and affiliations, snarky review, core summary, method overview and architecture, core innovations, experimental results, detailed description, score rationale, limitations and issues, open source details
 - `parseAnalysis(analysis)`: parses analysis text into a structured object. Runtime output headings remain Chinese. `score` is not taken directly from the LLM's original total score under `## 评分`, but is recalculated from eight sub-scores extracted from `## 评分理由`, rounded to 0.1, always overriding the LLM's original total score
@@ -215,9 +213,11 @@ Multimodal deep analyzer. The analysis flow is a **6-round progressive process**
 - Detects if the runtime `## 方法概述和架构` section is too brief (fewer than 600 Chinese characters, vague expression, fewer than 3 paragraphs)
 - If conditions are met, triggers LLM expansion to a 600+ character detailed description
 
-**Round 6 -- Image Selection and Supplement (`applyImageSupplement`, dual-model mode)**
+**Round 6 -- Image Selection and Insertion Plan (`applyImageSupplement`, dual-model mode)**
 - Loads `prompts/image-supplement.md`
-- The secondary model uses the final text and candidate images to select high-value figures, drop low-information figures, and insert selected figures into relevant paragraphs
+- The secondary model uses the final text and candidate images to select high-value figures, drop low-information figures, and output JSON only
+- The insertion plan may include `anchor`, optional `replacement`, lead, and explanation; `replacement` may only locally replace a precisely matched short anchor so the surrounding text naturally introduces the figure
+- Code merges the plan into allowed sections of the primary-model text; the secondary model must not return a complete analysis report or rewrite scores, summaries, tags, or score rationales
 
 **API Calls**:
 - `callModel(messages, maxTokens)`: retry-wrapped API call encapsulation (up to 3 inner retries, exponential backoff: first 10s, then double)
@@ -378,7 +378,7 @@ Generate WeChat Official Account article drafts.
 
 - Default data source: `data/current/deep-analysis-result.json` (supports custom path via command line)
 - Filters by `fetchedAt == --date` by default (default date is today in Beijing time); pass `--all` to use all papers in the input file
-- WeChat Official Account `APP_ID` / `APP_SECRET` read from environment variables
+- WeChat Official Account `APP_ID` / `APP_SECRET` are read from the project `.env`
 - Supports `--dry-run`: only generates the local preview HTML; does not fetch a token, upload images, or create drafts
 - **Image Upload**: upload only in-body Markdown images and figures listed in `selectedImageUrls` -> upload to WeChat CDN -> replace with WeChat URLs. Cache stored in `/tmp/wechat-image-cache.json`; raw `allImageUrls` candidates are not uploaded or published directly
 - **Auto Split into Parts**: single draft limit is approximately 48000 characters (HTML); automatically split into multiple drafts if exceeded
@@ -436,7 +436,7 @@ Xiaohongshu auto-publish script (calls Xiaohongshu Web API, unofficial interface
 Generate Feishu (Lark) documents.
 
 **Credential Reading**:
-- `FEISHU_APP_ID` / `FEISHU_APP_SECRET` read from environment variables (consistent with other publish channels, all unified in `the `.env` file in the project root`)
+- `FEISHU_APP_ID` / `FEISHU_APP_SECRET` are read from the project `.env` (consistent with other publish channels, all unified in `the `.env` file in the project root`)
 
 **Data Input**:
 - Uniformly reads `data/current/deep-analysis-result.json` (consistent with other publish channels)
@@ -465,7 +465,7 @@ Backfill paper IDs in the background (no analysis).
 - Rate-limit resilient design: request timeout 30s, exponential backoff on rate-limit, early stop after 20 consecutive known IDs
 - Writes to `data/current/papers.json`
 - Additional output: `data/backfill-result.json`
-- Independent log: not created by default; when file logs are enabled, appends to `logs/backfill.log`
+- Independent log: appends to `logs/backfill.log` by default; it is not written when file logs are disabled
 - Dependency: `requests` (Python third-party library)
 
 #### `scripts/backup-data.sh`

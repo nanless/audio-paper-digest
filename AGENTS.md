@@ -4,7 +4,7 @@
 
 自动化"语音/音乐/音频论文速递"流水线：arXiv + HuggingFace 抓取 → LLM 筛选 → 多模态深度分析 → 发布到 Hugo 博客 / 微信公众号 / 小红书 / 飞书。
 
-**技术栈**：Node.js（核心流水线）+ Python（发布脚本）。要求 Node ≥ 18。`scripts/config.js` 集中管理 Node 端主要可调参数和当前运行数据文件路径（部分高频参数支持 `PD_*` 环境变量覆写）；`scripts/path_config.py` 集中管理 Python 发布/维护脚本共享路径。
+**技术栈**：Node.js（核心流水线）+ Python（发布脚本）。要求 Node ≥ 18。`scripts/config.js` 集中管理 Node 端主要可调参数和当前运行数据文件路径（部分高频参数支持在项目根 `.env` 中用 `PD_*` 覆写）；`scripts/path_config.py` 集中管理 Python 发布/维护脚本共享路径。
 
 详细执行规则见 `SKILL.md`，本文是紧凑版——只保留 Agent 不看代码就容易漏掉的要点。
 
@@ -56,9 +56,9 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 
 **博客相关变量**：`PAPER_DIGEST_BLOG_REPO` 可覆写 Hugo 博客仓库路径；未设置时使用默认路径，目录不存在会跳过博客已发布去重，真实博客发布仍需要本地仓库存在。
 
-**双模型（可选，多模态）**：设置 `PAPER_ANALYZER_SECONDARY_MODEL` 即启用副模型做图像补充（主模型仅做纯文本分析）；不设置则跳过图片、退回单模型纯文本。`PAPER_ANALYZER_SECONDARY_ENDPOINT` / `PAPER_ANALYZER_SECONDARY_API_KEY` 未设置时默认复用主模型对应值。
+**双模型（可选，多模态）**：设置 `PAPER_ANALYZER_SECONDARY_MODEL` 即启用副模型做图像筛选与插图计划（主模型仅做纯文本分析）；副模型只输出 JSON 计划，可包含目标章节、anchor、可选 replacement、图前/图后说明；代码只在主模型文本上合并这些局部插图改动。不设置则跳过图片、退回单模型纯文本。`PAPER_ANALYZER_SECONDARY_ENDPOINT` / `PAPER_ANALYZER_SECONDARY_API_KEY` 未设置时默认复用主模型对应值。
 
-Node 脚本双层加载 `.env`：① `scripts/config.js` 模块级 IIFE 最先执行（任何 `require('config')` 即触发）；② `scripts/utils.js` 的 `loadEnvFile()` 二次兜底补漏。都自行解析 `.env` 文件，不依赖任何三方库，且 **shell 环境变量优先，`.env` 只补齐缺失项**。Python 脚本通过 `python-dotenv` 加载，同样不覆盖已存在环境变量。
+Node 脚本通过 `scripts/env-loader.js` 加载当前项目根 `.env`：① `scripts/config.js` 模块级最先执行（任何 `require('config')` 即触发）；② `scripts/utils.js` 的 `loadEnvFile()` 二次兜底补漏。Python 脚本通过 `scripts/project_env.py` 加载同一个 `.env`。两端都会先清理继承自 Trae/Codex/shell 的项目同名变量（`PAPER_ANALYZER_*`、`PAPER_DIGEST_*`、`PD_*`、`WECHAT_*`、`FEISHU_*`、`XIAOHONGSHU_*`、`KIMI_API_KEY`），再写入项目 `.env`，禁止外层环境变量和当前项目配置混用。
 
 ### LLM API 协议自动路由
 
@@ -83,10 +83,10 @@ Node 脚本双层加载 `.env`：① `scripts/config.js` 模块级 IIFE 最先�
 | `scripts/full-fetch.js` | 主编排器（归档→去重含博客已发布→抓取→筛选→更新去重库→分析→增量保存） |
 | `scripts/fetch-papers.js` | arXiv 网页抓取 + LLM 筛选 |
 | `scripts/fetch-huggingface-papers.js` | HuggingFace Papers 抓取（curl 命令） |
-| `scripts/deep-analyzer.js` | 单篇多模态深度分析（支持双模型模式：主模型做文本分析，副模型做图像补充；单模型模式向后兼容） |
+| `scripts/deep-analyzer.js` | 单篇多模态深度分析（支持双模型模式：主模型做文本分析，副模型做图像筛选与局部插图计划；单模型模式向后兼容） |
 | `scripts/analysis-engine.js` | 批量分析协调器，提供 `analyzePaperWithRetry()` + `analyzeBatch()` |
 | `scripts/utils.js` | Node 端共用工具（API 路由、JSON 解析、prompt 加载、`normalizedId` 去重、代理检测、文件原子写入） |
-| `scripts/config.js` | Node 端主要可调参数与运行数据路径集中配置 + 部分 `PD_*` 环境变量覆写 |
+| `scripts/config.js` | Node 端主要可调参数与运行数据路径集中配置 + 部分 `PD_*` 项目 `.env` 覆写 |
 
 ### 发布脚本（Python）
 
@@ -103,11 +103,11 @@ data/current/           # 工作数据（gitignored）
   deep-analysis-result.json  # 当日分析结果
   analyzed.json         # 分析状态（兼容）
 data/archive/<date>/    # 每日快照（自动创建）
-logs/                   # 可选文件日志（gitignored；默认不生成，需 PD_ENABLE_FILE_LOGS=1 显式启用）
+logs/                   # 默认生成文件日志（gitignored；可用 PD_DISABLE_FILE_LOGS=1 强制关闭）
 prompts/                # LLM prompt 模板
   filter.md             # 筛选阶段
   deep-analysis.md      # 深度分析主 prompt（Round 1，纯文本）
-  image-supplement.md   # 图像补充（双模型模式副模型用）
+  image-supplement.md   # 图像筛选与插图计划（双模型模式副模型用）
   opensource-scan.md    # 开源链接扫描（Round 2）
   gap-fill.md           # 审校重写（Round 3）
   method-fill.md        # 方法章节补充（后处理）
@@ -131,7 +131,7 @@ prompts/                # LLM prompt 模板
 - **CI**：运行 `npm test` + `npm run validate:data` + `find scripts tests -name '*.js'` 的 `node -c` 语法检查 + `find scripts -name '*.py'` 的 `py_compile` 语法检查 + `python3 -m unittest discover -s tests/python` + 所有 `.sh` 的 `bash -n`。新增 JS/Python/shell 文件会自动纳入检查。
 - **新增分析脚本必须复用 `analysis-engine.js`**，使用 `analyzePaperWithRetry()` + `analyzeBatch()`，禁止重复实现重试/解析/保存逻辑；保存分析结果后必须复用 `scripts/digest-status.js` 同步 `papers.json.digestStatus`。
 - **新增 Node LLM 调用必须通过 `utils.js` 的 `detectApiType()` / `buildApiUrl()` / `buildHeaders()` / `buildRequestBody()` / `parseResponseText()`**，禁止硬编码协议。Python 发布阶段 LLM 调用必须复用 `publish_common.py` 的 `call_publish_llm_api()`。
-- **环境变量加载**：Node 端 `loadEnvFile()` 自行解析 `.env` 无三方依赖；Python 端用 `python-dotenv`。两端都必须保持 shell 环境优先，禁止让 `.env` 覆盖调用者显式传入的变量。
+- **环境变量加载**：Node 端必须复用 `scripts/env-loader.js` / `loadEnvFile()`；Python 端必须复用 `scripts/project_env.py`。项目配置只允许来自当前项目根 `.env`，脚本启动时必须清理继承进程里的同名项目变量，禁止 shell / Trae / Codex 外层变量覆盖或补齐当前项目配置。
 - **`loadPrompt()` 从 markdown 文件内的第一个 fenced code block 提取 prompt**，并替换 `{变量名}` 占位符。内部示例代码块需使用比外层更短的 fence，修改 prompt 后需验证 `utils.js` 解析逻辑兼容。
 - **原子写入**：使用 `writeFileAtomic()` 保存数据文件，先写临时文件再 rename，防止写入中断损坏数据。
 - **北京时间时间戳**：运行数据中的 `timestamp` / `lastUpdated` / `fetchedAt` 应使用 `getBeijingISOString()` 或 Python 端 `now_bj_iso()`，避免 UTC 日期导致跨天归档或发布筛选错误。

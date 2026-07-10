@@ -8,7 +8,7 @@
 |------|------|----------|
 | [filter.md](filter.md) | 筛选阶段：判断单篇论文是否与语音/音乐/音频相关 | `fetch-papers.js` |
 | [deep-analysis.md](deep-analysis.md) | 深度分析阶段（第一轮）：纯文本阅读后输出结构化报告 | `deep-analyzer.js` |
-| [image-supplement.md](image-supplement.md) | 深度分析阶段（双模型模式）：副模型看图补充主模型分析 | `deep-analyzer.js` |
+| [image-supplement.md](image-supplement.md) | 深度分析阶段（双模型模式）：副模型只输出 JSON 插图计划，代码局部插图，并可用 `replacement` 调整插图附近短句 | `deep-analyzer.js` |
 | [opensource-scan.md](opensource-scan.md) | 开源扫描阶段（第二轮）：专门提取开源链接和复现信息 | `deep-analyzer.js` |
 | [gap-fill.md](gap-fill.md) | 深度分析阶段（第三轮）：对照原文审校重写前两轮结果 | `deep-analyzer.js` |
 | [method-fill.md](method-fill.md) | 深度分析后处理：方法章节过短或空泛时补写结构化方法说明 | `deep-analyzer.js` |

@@ -204,6 +204,7 @@ def fix_latex_delimiters(text):
     r"""将 $...$ 转换为 \(...\)，$$...$$ 转换为 \[...\]。"""
     if not text:
         return text
+    text = re.sub(r'(\^|_)\{<([a-zA-Z])\}', r'\1{(\2)}', text)
     text = re.sub(r'(?<!\\)\$\$(.+?)\$\$', r'\\[\1\\]', text, flags=re.DOTALL)
     text = re.sub(r'(?<!\\)\$([^\s\$][^$]*?)\$', r'\\(\1\\)', text)
     text = re.sub(r'`([^`]*?)\$([^`]*?)\$([^`]*?)`', r'`\1\\(\2\\)\3`', text)
@@ -220,6 +221,11 @@ def escape_html_like_tags(text):
         r'`<\1\2>`',
         text,
         flags=re.IGNORECASE
+    )
+    text = re.sub(
+        r'(?<![a-zA-Z0-9`])<(/?)([A-Za-z][A-Za-z0-9_†-]{0,40})(?![A-Za-z0-9_†-])>',
+        r'`<\1\2>`',
+        text
     )
     return text
 

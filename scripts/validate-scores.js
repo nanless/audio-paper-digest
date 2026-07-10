@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+const { setupScriptLogging } = require('./log-setup');
+setupScriptLogging(__filename);
+
 /**
  * 验证并修复论文评分
  * 检查：子项越界、总分一致性、开源矛盾

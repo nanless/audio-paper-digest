@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -13,8 +14,23 @@ def list_log_files():
     return sorted(name for name in os.listdir(LOGS_DIR) if name.endswith('.log'))
 
 
+class ProjectEnvPatch:
+    def __init__(self, extra_lines):
+        self.extra_lines = extra_lines
+        self.temp_dir = tempfile.TemporaryDirectory(prefix='paper-digest-py-env-')
+        self.env_path = os.path.join(self.temp_dir.name, '.env')
+
+    def __enter__(self):
+        with open(self.env_path, 'w', encoding='utf-8') as f:
+            f.write(f'{self.extra_lines}\n')
+        return self.env_path
+
+    def __exit__(self, exc_type, exc, tb):
+        self.temp_dir.cleanup()
+
+
 class LogSetupTest(unittest.TestCase):
-    def test_python_logging_does_not_create_file_logs_by_default(self):
+    def test_python_logging_creates_file_logs_by_default_and_disable_switch_stops_it(self):
         before = list_log_files()
         env = os.environ.copy()
         for key in [
@@ -26,27 +42,66 @@ class LogSetupTest(unittest.TestCase):
         ]:
             env.pop(key, None)
 
-        result = subprocess.run(
-            [
-                sys.executable,
-                '-c',
-                (
-                    "import sys; "
-                    "sys.path.insert(0, 'scripts'); "
-                    "from log_setup import setup_script_logging; "
-                    "setup_script_logging('scripts/default-log-test.py'); "
-                    "print('ok')"
-                )
-            ],
-            cwd=ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False
-        )
+        with ProjectEnvPatch('PD_DISABLE_FILE_LOGS=0\nPAPER_DIGEST_DISABLE_FILE_LOGS=0') as env_path:
+            env['PAPER_DIGEST_TEST_ENV_FILE'] = env_path
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    '-c',
+                    (
+                        "import sys; "
+                        "sys.path.insert(0, 'scripts'); "
+                        "from log_setup import setup_script_logging; "
+                        "setup_script_logging('scripts/default-log-test.py'); "
+                        "print('ok')"
+                    )
+                ],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False
+            )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(list_log_files(), before)
+        after_default = list_log_files()
+        created = [
+            name for name in after_default
+            if name not in before and name.startswith('default-log-test-')
+        ]
+        self.assertEqual(len(created), 1)
+        self.assertIn('[log] 输出文件:', result.stdout)
+
+        with ProjectEnvPatch('PD_DISABLE_FILE_LOGS=1') as env_path:
+            env['PAPER_DIGEST_TEST_ENV_FILE'] = env_path
+            disabled = subprocess.run(
+                [
+                    sys.executable,
+                    '-c',
+                    (
+                        "import sys; "
+                        "sys.path.insert(0, 'scripts'); "
+                        "from log_setup import setup_script_logging; "
+                        "setup_script_logging('scripts/default-log-test-disabled.py'); "
+                        "print('ok')"
+                    )
+                ],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False
+            )
+        self.assertEqual(disabled.returncode, 0, disabled.stderr)
+        after_disabled = list_log_files()
+        disabled_created = [
+            name for name in after_disabled
+            if name not in after_default and name.startswith('default-log-test-disabled-')
+        ]
+        self.assertEqual(disabled_created, [])
+
+        for name in created:
+            os.remove(os.path.join(LOGS_DIR, name))
 
 
 if __name__ == '__main__':

@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+const { setupScriptLogging } = require('./log-setup');
+setupScriptLogging(__filename);
+
 /**
  * 测试 PAPER_ANALYZER_API_KEY 可用性
  */

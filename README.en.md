@@ -15,12 +15,12 @@ This project automatically generates "Speech / Music / Audio Paper Digests," cov
 | `docs/workflow.md` | Main workflow details (archiving, crawling, filtering, analysis, saving) | Users |
 | `docs/scripts.md` | All script function descriptions | Developers |
 | `docs/data-format.md` | Data file formats and field descriptions | Developers |
-| `docs/setup.md` | Installation, initialization, environment variables, logging, proxy config | New users |
+| `docs/setup.md` | Installation, initialization, project `.env`, logging, proxy config | New users |
 | `docs/troubleshooting.md` | Common issues diagnosis and fixes | Users |
 | `docs/maintenance.md` | Maintenance conventions, scoring standards, tag definitions | Maintainers |
 | `prompts/filter.md` | LLM prompt for the filtering stage | Maintainers |
 | `prompts/deep-analysis.md` | Deep analysis main prompt (Round 1) | Maintainers |
-| `prompts/image-supplement.md` | Image supplement prompt (dual-model mode) | Maintainers |
+| `prompts/image-supplement.md` | Image selection and insertion-plan prompt (dual-model mode; may locally adjust text around inserted figures) | Maintainers |
 | `prompts/opensource-scan.md` | Open-source link scanning prompt (Round 2) | Maintainers |
 | `prompts/gap-fill.md` | Review and rewrite prompt (Round 3) | Maintainers |
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-from dotenv import load_dotenv
-load_dotenv()
+from project_env import load_project_env
+load_project_env()
 
 from log_setup import setup_script_logging
 setup_script_logging(__file__)
