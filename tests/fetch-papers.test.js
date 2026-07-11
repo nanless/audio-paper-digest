@@ -144,6 +144,23 @@ describe('filterPapersWithLLM resume decisions', () => {
 });
 
 describe('抓取健康状态', () => {
+    it('默认 arXiv 抓取缺少项目代理时拒绝直连', async () => {
+        const keys = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'];
+        const original = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+        try {
+            for (const key of keys) delete process.env[key];
+            await assert.rejects(
+                fetchCategoryPapers('cs.SD', 1, 1, new Set()),
+                /必须通过当前项目.*代理|拒绝在无代理配置时直连/
+            );
+        } finally {
+            for (const key of keys) {
+                if (original[key] === undefined) delete process.env[key];
+                else process.env[key] = original[key];
+            }
+        }
+    });
+
     it('arXiv 所有请求失败时抛出结构化异常', async () => {
         const requestFn = async () => { throw new Error('network down'); };
         await assert.rejects(

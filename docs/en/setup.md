@@ -88,11 +88,12 @@ The Node/Python loaders clear same-name inherited project variables before loadi
 
 | Variable | Description |
 |----------|-------------|
-| `https_proxy` / `HTTPS_PROXY` | HTTPS proxy |
-| `http_proxy` / `HTTP_PROXY` | HTTP proxy |
-| `all_proxy` / `ALL_PROXY` | Global proxy |
+| `HTTPS_PROXY` | **Required** HTTP CONNECT proxy for arXiv Node fetches, for example `http://127.0.0.1:7897` |
+| `HTTP_PROXY` | **Required** HTTP CONNECT proxy, normally the same as `HTTPS_PROXY` |
+| `ALL_PROXY` | Optional SOCKS/global proxy for HuggingFace `curl`, for example `socks5h://127.0.0.1:7897` |
+| `NO_PROXY` | Local-address allow list, for example `localhost,127.0.0.1,::1` |
 
-HTTP CONNECT proxies are supported with pure Node built-ins. Proxy variables are also loaded only from the project-root `.env`; same-name values inherited from the shell or IDE are cleared, and the macOS `scutil` system proxy is no longer consulted.
+Fetch proxy configuration is mandatory: arXiv metadata, HTML/PDF/images and HuggingFace Papers reject direct fallback when it is missing. Node arXiv fetches only support HTTP CONNECT, so `HTTPS_PROXY` / `HTTP_PROXY` cannot be SOCKS URLs; HuggingFace `curl` may additionally use `ALL_PROXY=socks5h://...`. LLM requests always use direct `agent: false` connections and never use the fetch proxy. Proxy values are loaded only from the project-root `.env`; same-name shell/IDE values are cleared and macOS `scutil` is not consulted. Commands that need a local proxy must run outside the sandbox, because sandbox loopback cannot reach `127.0.0.1`.
 
 ### 6.3 Configuration Example
 

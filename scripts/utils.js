@@ -1118,6 +1118,7 @@ function escapeRegExp(string) {
 // ═══════════════════════════════════════════════════════
 
 const PROXY_ENV_VARS = ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY'];
+const proxyDispatcherCache = new Map();
 
 /**
  * 检测当前项目 .env 明确配置的代理 URL。
@@ -1141,6 +1142,9 @@ function detectProxyUrl() {
  */
 function createProxyAgent(proxyUrl, targetHost, targetPort = 443) {
     const proxy = new URL(proxyUrl);
+    if (!['http:', 'https:'].includes(proxy.protocol)) {
+        throw new Error(`当前 Node arXiv 抓取只支持 HTTP CONNECT 代理，收到不兼容协议: ${proxy.protocol}`);
+    }
     const proxyPort = parseInt(proxy.port) || (proxy.protocol === 'https:' ? 443 : 80);
     const https = require('https');
     const net = require('net');
@@ -1179,6 +1183,23 @@ function createProxyAgent(proxyUrl, targetHost, targetPort = 443) {
             socket.on('error', callback);
         }
     });
+}
+
+/**
+ * 创建仅用于非 LLM fetch 请求的 undici 代理 dispatcher。
+ * 不设置全局 dispatcher，确保 LLM requestJson 继续使用 agent:false 直连。
+ */
+function createProxyDispatcher(proxyUrl) {
+    if (!proxyUrl) throw new Error('缺少项目代理配置');
+    if (proxyDispatcherCache.has(proxyUrl)) return proxyDispatcherCache.get(proxyUrl);
+    const proxy = new URL(proxyUrl);
+    if (!['http:', 'https:'].includes(proxy.protocol)) {
+        throw new Error(`Node fetch 抓取只支持 HTTP(S) 代理；请通过 HTTPS_PROXY/HTTP_PROXY 配置 HTTP CONNECT 地址，收到: ${proxy.protocol}`);
+    }
+    const { ProxyAgent } = require('undici');
+    const dispatcher = new ProxyAgent(proxyUrl);
+    proxyDispatcherCache.set(proxyUrl, dispatcher);
+    return dispatcher;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1375,6 +1396,7 @@ module.exports = {
     // 代理
     detectProxyUrl,
     createProxyAgent,
+    createProxyDispatcher,
     // 备份
     backupPapersJson,
     // 博客去重

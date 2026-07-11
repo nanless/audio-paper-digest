@@ -24,7 +24,8 @@ const {
     backupPapersJson,
     loadPublishedIdsFromBlog,
     requestJson,
-    loadPrompt
+    loadPrompt,
+    createProxyDispatcher
 } = require('../scripts/utils.js');
 const { validateAndFix } = require('../scripts/validate-scores.js');
 const { getInvalidAnalysisReason } = require('../scripts/analysis-contract.js');
@@ -74,6 +75,19 @@ describe('stripMd', () => {
     it('去除空值', () => {
         assert.strictEqual(stripMd(null), '');
         assert.strictEqual(stripMd(''), '');
+    });
+});
+
+describe('fetch proxy dispatcher', () => {
+    it('拒绝将 SOCKS URL 用于 Node arXiv fetch dispatcher', () => {
+        assert.throws(
+            () => createProxyDispatcher('socks5h://127.0.0.1:7897'),
+            /HTTP\(S\).*代理|HTTP CONNECT/
+        );
+    });
+
+    it('接受 HTTP CONNECT dispatcher', () => {
+        assert.ok(createProxyDispatcher('http://127.0.0.1:7897'));
     });
 });
 

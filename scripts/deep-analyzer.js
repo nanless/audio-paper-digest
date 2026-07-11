@@ -20,6 +20,8 @@ const {
     normalizeScoreToOneDecimal,
     isOpenSourceScoreAnchor,
     OPEN_SOURCE_SCORE_ANCHORS,
+    detectProxyUrl,
+    createProxyDispatcher,
     getBeijingISOString
 } = require('./utils.js');
 const {
@@ -68,6 +70,14 @@ const {
     fullTextMinCharsForFull: FULL_TEXT_MIN_CHARS_FOR_FULL
 } = ANALYSIS_CONFIG;
 const IMAGE_CACHE_DIR = path.join(CURRENT_DIR, 'image-cache');
+
+function getArxivFetchDispatcher() {
+    const proxyUrl = detectProxyUrl();
+    if (!proxyUrl) {
+        throw new Error('arXiv 全文、PDF 与图片抓取必须通过当前项目 .env 中的 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY，拒绝直连');
+    }
+    return createProxyDispatcher(proxyUrl);
+}
 
 /**
  * 清理 gap-fill（审校重写）输出中的前缀废话
@@ -775,7 +785,8 @@ async function fetchArxivTextDetailed(arxivId) {
             try {
                 const response = await fetch(url, {
                     headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
-                    signal: AbortSignal.timeout(ARXIV_FETCH_TIMEOUT_MS)
+                    signal: AbortSignal.timeout(ARXIV_FETCH_TIMEOUT_MS),
+                    dispatcher: getArxivFetchDispatcher()
                 });
 
                 if (response.status === 429) {
@@ -873,7 +884,8 @@ async function fetchArxivTextDetailed(arxivId) {
         try {
             const pdfResponse = await fetch(pdfUrl, {
                 headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
-                signal: AbortSignal.timeout(ARXIV_PDF_FETCH_TIMEOUT_MS)
+                signal: AbortSignal.timeout(ARXIV_PDF_FETCH_TIMEOUT_MS),
+                dispatcher: getArxivFetchDispatcher()
             });
             if (!pdfResponse.ok) {
                 console.log(`    [deep] PDF ${pdfUrl} HTTP ${pdfResponse.status}`);
@@ -1011,7 +1023,8 @@ async function fetchArxivImageUrls(arxivId, options = {}) {
             try {
                 const response = await fetch(url, {
                     headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
-                    signal: AbortSignal.timeout(ARXIV_FETCH_TIMEOUT_MS)
+                    signal: AbortSignal.timeout(ARXIV_FETCH_TIMEOUT_MS),
+                    dispatcher: getArxivFetchDispatcher()
                 });
 
                 if (response.status === 429) {
@@ -1066,7 +1079,8 @@ async function fetchPublicImageResponse(imageUrl, maxRedirects = 5) {
         const response = await fetch(currentUrl, {
             headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaperDigest/1.0)' },
             signal: AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS),
-            redirect: 'manual'
+            redirect: 'manual',
+            dispatcher: getArxivFetchDispatcher()
         });
         if (![301, 302, 303, 307, 308].includes(response.status)) return response;
         const location = response.headers.get('location');

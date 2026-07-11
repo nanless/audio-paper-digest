@@ -242,6 +242,11 @@ function httpsRequestWithProxy(url, headers, proxyUrl, timeoutMs = 90000) {
         const https = require('https');
         const urlObj = new URL(url);
 
+        if (!proxyUrl) {
+            reject(new Error(`arXiv 抓取必须配置当前项目代理（HTTPS_PROXY/HTTP_PROXY/ALL_PROXY），拒绝直连: ${urlObj.hostname}`));
+            return;
+        }
+
         const options = {
             hostname: urlObj.hostname,
             path: urlObj.pathname + urlObj.search,
@@ -686,6 +691,9 @@ function parseSearchPageHTML(html, categoryId, existingIds = null) {
  */
 async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResultsPerCategory, retryCount = ARXIV_CONFIG.fetchMaxRetries, existingIds = null, options = {}) {
     console.log(`[fetch] 正在抓取 ${categoryId} 类别的 ${maxResults} 篇论文...`);
+    if (!options.requestFn && !detectProxyUrl()) {
+        throw new Error('arXiv 抓取必须通过当前项目 .env 中的 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY，拒绝在无代理配置时直连');
+    }
     const merged = new Map();
     const seenIds = new Set(existingIds ? Array.from(existingIds) : []);
     const requestFn = options.requestFn || httpsRequestWithProxy;

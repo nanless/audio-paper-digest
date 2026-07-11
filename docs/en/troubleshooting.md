@@ -67,9 +67,15 @@ Possible causes:
 
 ### 12.6 HuggingFace Fetch Returns Empty
 
-- Check network connectivity (`curl https://huggingface.co/api/daily_papers?limit=10`)
-- Check whether you are being rate-limited or need a proxy
-- `fetch-huggingface-papers.js` uses the `curl` command; ensure system `curl` is available
+- Check the project-root `.env` contains both `HTTPS_PROXY=http://127.0.0.1:7897` and `HTTP_PROXY=http://127.0.0.1:7897`; if the local proxy provides SOCKS, also set `ALL_PROXY=socks5h://127.0.0.1:7897`
+- Run `node scripts/fetch-huggingface-papers.js` **outside the sandbox**. A sandbox cannot reach the local `127.0.0.1:7897` proxy, so that result does not diagnose HuggingFace or the proxy
+- `fetch-huggingface-papers.js` uses `curl`; ensure it is available. The script deliberately errors without project proxy configuration to avoid pseudo-success empty output
+
+### 12.6.1 arXiv Fetch or Full-Text Download Fails
+
+- arXiv metadata, HTML, PDF and images all require the project `.env` `HTTPS_PROXY` / `HTTP_PROXY`. Both must be `http://` or `https://` HTTP CONNECT URLs; SOCKS `ALL_PROXY` alone is insufficient
+- Verify outside the sandbox with `node scripts/quick-test.js` or the full workflow. Sandbox loopback failure is an environment limitation
+- LLM routing is independent: ensure every Node LLM request remains `agent: false` and never receives a proxy agent/dispatcher
 
 ### 12.7 MiMo API Returns 403 / Proxy Issues
 

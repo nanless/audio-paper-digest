@@ -90,11 +90,12 @@ Node/Python 加载器会先清除外层进程中的同名项目变量，再加�
 
 | 变量 | 说明 |
 |------|------|
-| `https_proxy` / `HTTPS_PROXY` | HTTPS 代理 |
-| `http_proxy` / `HTTP_PROXY` | HTTP 代理 |
-| `all_proxy` / `ALL_PROXY` | 全局代理 |
+| `HTTPS_PROXY` | **必填**。arXiv Node 抓取使用的 HTTP CONNECT 代理，例如 `http://127.0.0.1:7897` |
+| `HTTP_PROXY` | **必填**。与 `HTTPS_PROXY` 相同的 HTTP CONNECT 代理 |
+| `ALL_PROXY` | 可选。HuggingFace `curl` 可使用的 SOCKS/全局代理，例如 `socks5h://127.0.0.1:7897` |
+| `NO_PROXY` | 本地地址白名单，例如 `localhost,127.0.0.1,::1` |
 
-支持 HTTP CONNECT 代理，纯 Node 内置模块实现，无需外部依赖。代理变量也只从项目根 `.env` 加载；脚本会清除 shell/IDE 继承的同名代理变量，不再读取 macOS `scutil` 系统代理。
+抓取代理是必需项：arXiv 元数据、HTML/PDF/图片和 HuggingFace Papers 都会拒绝无代理直连。Node 的 arXiv 请求只支持 HTTP CONNECT，因此 `HTTPS_PROXY` / `HTTP_PROXY` 不可填 SOCKS URL；HuggingFace 的 `curl` 可以额外使用 `ALL_PROXY=socks5h://...`。LLM 请求始终以 `agent: false` 直连，不会走抓取代理。代理变量只从项目根 `.env` 加载；脚本会清除 shell/IDE 继承的同名代理变量，不再读取 macOS `scutil` 系统代理。使用本机代理时，抓取、深度分析和重分析命令必须在沙箱外运行，沙箱内无法连接 `127.0.0.1` 不能作为网络故障依据。
 
 ### 6.3 配置示例
 

@@ -118,6 +118,7 @@ API 调用特性：
 - 整体超时 20 分钟，按进程活跃时间记账；系统睡眠/长时间挂起从预算中排除，唤醒后的底层超时继续使用剩余预算重试
 - max_tokens=64000，temperature=0.7
 - **双层重试**：analysis-engine.js 层面每篇最多重试 2 次（总共最多 3 次尝试）；deep-analyzer.js 内部每次 API 调用再重试最多 3 次（指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5s`）
+- **抓取代理为强制项**：LLM API 固定 `agent: false` 直连，不得注入代理 agent/dispatcher；arXiv/HuggingFace 抓取缺少项目 `.env` 代理必须失败，禁止直接回退。Node arXiv 仅使用 `HTTPS_PROXY` / `HTTP_PROXY` 的 HTTP CONNECT 地址，HuggingFace curl 可额外使用 SOCKS `ALL_PROXY`；访问本机代理的网络命令必须在沙箱外运行。
 - **LLM API 请求明确设置 `agent: false`，强制直连以绕过本地代理（避免 MiMo 403）；arXiv/HuggingFace 等外部抓取仍使用代理自动检测**
 - arXiv HTML 解析使用 **cheerio** 结构化选择器，移除 script/style/nav/header/footer 等噪音元素
 - 图片先按 caption/文件名/顺序启发式预筛（默认 `imageCandidateMax=20`）；HTML 正文与图注在同一次响应中解析并复用，预提供 URL 会按完整 URL或唯一文件名补全 caption。只有配置副模型的双模型模式才**串行下载**最多 `imageMaxCount=20` 张候选图片并送入副模型；成功内容写入 `data/current/image-cache/`，恢复时校验 MIME/文件头后复用。仅 408/425/429/5xx 和网络异常重试，404、非法 MIME、超限与安全拒绝立即终止
@@ -226,10 +227,11 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 # PD_SCORING_AUDIT_TEMPERATURE=0.1
 # PD_IMAGE_PLAN_TEMPERATURE=0.2
 
-# 代理（可选，但建议为 MiMo Token Plan 关闭或绕过代理）
-# https_proxy=http://127.0.0.1:7897
-# http_proxy=http://127.0.0.1:7897
-# all_proxy=socks5://127.0.0.1:7897
+# 抓取代理（必需）：arXiv 的 Node 请求必须使用 HTTP CONNECT 地址
+# HTTPS_PROXY=http://127.0.0.1:7897
+# HTTP_PROXY=http://127.0.0.1:7897
+# HuggingFace 的 curl 可额外使用 SOCKS；LLM 请求固定 agent:false 直连
+# ALL_PROXY=socks5h://127.0.0.1:7897
 ```
 
 **API 协议自动路由概览**：

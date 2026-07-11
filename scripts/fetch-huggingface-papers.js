@@ -17,7 +17,7 @@ setupScriptLogging(__filename);
 const { execFileSync } = require('child_process');
 const { buildChildProcessEnv, TRANSPORT_ENV_KEYS } = require('./env-loader.js');
 
-const { getBeijingDateString, getBeijingISOString, normalizeToBeijingISOString, normalizedId } = require('./utils.js');
+const { getBeijingDateString, getBeijingISOString, normalizeToBeijingISOString, normalizedId, detectProxyUrl } = require('./utils.js');
 const { HUGGINGFACE_CONFIG } = require('./config.js');
 
 /**
@@ -166,6 +166,10 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         fetchFn = fetchWithCurl,
         sleepFn = ms => new Promise(resolve => setTimeout(resolve, ms))
     } = options;
+
+    if (fetchFn === fetchWithCurl && !detectProxyUrl()) {
+        throw new Error('HuggingFace 抓取必须通过当前项目 .env 中的 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY，拒绝直连');
+    }
 
     const cutoffStr = getBeijingDateString(days);
 

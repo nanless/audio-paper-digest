@@ -64,6 +64,23 @@ describe('HuggingFace date guards', () => {
 });
 
 describe('HuggingFace 抓取健康状态', () => {
+    it('默认 HuggingFace 抓取缺少项目代理时拒绝直连', async () => {
+        const keys = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'];
+        const original = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+        try {
+            for (const key of keys) delete process.env[key];
+            await assert.rejects(
+                fetchHuggingFacePapers(),
+                /必须通过当前项目.*代理|拒绝直连/
+            );
+        } finally {
+            for (const key of keys) {
+                if (original[key] === undefined) delete process.env[key];
+                else process.env[key] = original[key];
+            }
+        }
+    });
+
     it('所有 API 请求失败时抛出带健康状态的异常', async () => {
         await assert.rejects(
             fetchHuggingFacePapers(new Set(), {

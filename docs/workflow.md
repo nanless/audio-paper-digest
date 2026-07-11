@@ -86,7 +86,7 @@
 - **不排除本轮刚抓取的 arXiv ID**：同批重叠论文会进入合并阶段，用 HF upvotes、AI 摘要、项目页等字段补齐 arXiv 元数据
 - 按 `upvotes` 降序排列
 
-技术实现：使用 `curl` 命令获取数据（避免 Node fetch 在代理环境下的兼容问题），返回数据标准化为与 arXiv 一致的字段结构。
+技术实现：使用 `curl` 命令获取数据（避免 Node fetch 在代理环境下的兼容问题），返回数据标准化为与 arXiv 一致的字段结构。HuggingFace 抓取必须经项目 `.env` 的代理，缺失代理配置会立即失败而非生成空批次。
 
 ### 3.5 合并去重与博客过滤
 
@@ -176,7 +176,7 @@ HF 特有字段（共 7 个）：
 
 **技术特性**：
 - **API 协议自动路由**：与筛选阶段共用同一套 `detectApiType()` 逻辑，根据 `PAPER_ANALYZER_ENDPOINT` 和 `PAPER_ANALYZER_MODEL` 自动切换 OpenAI / Anthropic 协议
-- 获取 arXiv HTML 全文（最多 500K 字符），依次尝试 `v1`、`v2`、无后缀版本；使用 **cheerio** 结构化解析 HTML，移除 script/style/nav/header/footer 等噪音元素
+- 获取 arXiv HTML 全文（最多 500K 字符），依次尝试 `v1`、`v2`、无后缀版本；所有 HTML/PDF/图片请求均通过项目 `.env` 的 HTTP CONNECT 代理 dispatcher，缺失配置即失败；使用 **cheerio** 结构化解析 HTML，移除 script/style/nav/header/footer 等噪音元素
 - 提取图片 URL，过滤 logo/favicon；下载层会校验 Content-Type、Content-Length 和 PNG/JPEG/WebP 文件头，避免把 HTML 错误页或过大图片送入模型
 - **图片分析**：HTML 正文和 figure caption 同次解析，预提供 URL 用同 URL 或唯一文件名补全图注。候选按 caption/文件名/顺序预筛后串行下载，成功内容写入 `data/current/image-cache/`；404、错误 MIME、超限和安全拒绝不重试，只有限流、服务端错误和网络异常重试。副模型按价值排序输出最多 4 张计划，并从代码提供的段落目录选择稳定 `paragraph_id`；旧自由文本 anchor 只兼容历史响应。非法 ID、定位失败和超限图片不会回退到章节末尾
 - 每篇结果会保存 `imageManifest`：包含候选评分、逐 URL 下载结果、缓存命中、副模型/温度、prompt/响应哈希、插入与拒绝诊断及最终选图。严格空计划为 `no_high_value_images`；全部永久不可下载为 `no_downloadable_images`；有计划但零插入为 `invalid_output` 并只重试插图阶段
@@ -185,8 +185,8 @@ HF 特有字段（共 7 个）：
 - 每篇最多重试 **2 次**（外层 `analysis-engine.js`），每次外层重试内部 API 调用还有 **3 次** 重试（`deep-analyzer.js` 内层，指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5000ms`），外层重试间隔 3 秒（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整外层）
 - API 整体超时为 **20 分钟活跃时间**；每秒心跳识别超过 30 秒的系统睡眠/事件循环挂起并排除该墙钟跳变，唤醒后的请求超时仍按剩余预算重试
 - `max_tokens=64000`（config.js 中 `apiMaxTokens`），`temperature=0.7`
-- 代理只从项目根 `.env` 中显式配置的大小写代理变量读取；不继承 shell/IDE 代理，也不读取 macOS `scutil`
-- 支持纯 Node 内置模块的 HTTP CONNECT 代理（无需外部依赖）
+- 代理只从项目根 `.env` 中显式配置的大小写代理变量读取；不继承 shell/IDE 代理，也不读取 macOS `scutil`。`HTTPS_PROXY` / `HTTP_PROXY` 是 arXiv 抓取必填的 HTTP CONNECT 地址，HuggingFace `curl` 可额外使用 SOCKS `ALL_PROXY`
+- LLM 请求与抓取请求完全隔离：全部 LLM 调用固定 `agent: false` 直连，绝不复用抓取 dispatcher；使用本机代理的网络命令必须在沙箱外运行
 - 所有分析配置集中管理于 `scripts/config.js`，支持项目 `.env` 覆写（并发、重试、arXiv/PDF 超时与大小、评分审计温度、插图计划温度及图片预算）
 
 **深度分析不是单次调用，而是多轮递进式处理**：

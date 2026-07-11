@@ -65,7 +65,7 @@ Filtering:
 - Do **not** exclude arXiv IDs fetched in the same run; same-batch overlaps are kept so the merge stage can enrich arXiv papers with HF upvotes, AI summaries, and project links
 - Sort by `upvotes` descending
 
-Technical implementation: data is fetched using `curl` commands (to avoid Node fetch compatibility issues in proxy environments), and returned data is normalized to a field structure consistent with arXiv.
+Technical implementation: data is fetched using `curl` commands (to avoid Node fetch compatibility issues in proxy environments), and returned data is normalized to a field structure consistent with arXiv. HuggingFace fetches must use the project `.env` proxy; missing proxy configuration fails immediately instead of creating an empty pseudo-success batch.
 
 ### 3.5 Merge and Deduplicate
 
@@ -155,7 +155,7 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 
 **Technical Features**:
 - **API Protocol Auto-Routing**: shares the same `detectApiType()` logic as the filtering stage, automatically switching between OpenAI / Anthropic protocols based on `PAPER_ANALYZER_ENDPOINT` and `PAPER_ANALYZER_MODEL`
-- Fetches arXiv HTML full text (up to 500K characters), trying `v1`, `v2`, and no-suffix versions in order; uses **cheerio** for structured HTML parsing, removing noise elements such as script/style/nav/header/footer
+- Fetches arXiv HTML full text (up to 500K characters), trying `v1`, `v2`, and no-suffix versions in order; all HTML/PDF/image requests use the HTTP CONNECT proxy dispatcher from project `.env` and fail when it is absent; uses **cheerio** for structured HTML parsing, removing noise elements such as script/style/nav/header/footer
 - Extracts image URLs and filters out logo/favicon; the download layer validates Content-Type, Content-Length, and PNG/JPEG/WebP magic bytes before sending images to the model
 - **Image Analysis**: HTML body text and figure captions are parsed from the same response, and captions enrich preprovided URLs by exact URL or unique basename. Successful downloads use `data/current/image-cache/`; permanent HTTP/MIME/size/security failures are not retried. The secondary model selects a code-generated stable `paragraph_id` instead of copying free-form anchors; legacy anchors remain read-compatible. Invalid IDs and over-limit plans are rejected without section-end fallback
 - Each result stores candidate scores, per-URL download/cache outcomes, secondary model/options, prompt/response hashes, insertion diagnostics, and final URLs in `imageManifest`. `no_downloadable_images` is a successful permanent terminal state; a non-empty plan with zero insertions is `invalid_output` and retries only the image stage
@@ -164,8 +164,8 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 - Up to **2 retries** per paper (outer `analysis-engine.js`), with each outer retry having **3 retries** for internal API calls (`deep-analyzer.js` inner layer, exponential backoff: first 10s, then double, `2^attempt * 5000ms`), outer retry interval 3s (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
 - API overall timeout is **20 minutes of active process time**. A heartbeat excludes system-sleep or long-suspension wall-clock jumps, so a socket timeout after wake can retry with the remaining budget
 - `max_tokens=64000` (`apiMaxTokens` in config.js), `temperature=0.7`
-- Proxy settings come only from case-insensitive proxy variables explicitly configured in the project-root `.env`; inherited shell/IDE proxies and macOS `scutil` are not used
-- Supports pure Node built-in module HTTP CONNECT proxy (no external dependencies)
+- Proxy settings come only from case-insensitive proxy variables explicitly configured in the project-root `.env`; inherited shell/IDE proxies and macOS `scutil` are not used. `HTTPS_PROXY` / `HTTP_PROXY` are required HTTP CONNECT addresses for arXiv; HuggingFace `curl` may additionally use SOCKS `ALL_PROXY`
+- LLM and fetch transport are isolated: every LLM call is direct with `agent: false` and never reuses a fetch dispatcher; commands using a local proxy must run outside the sandbox
 - All analysis configurations are centrally managed in `scripts/config.js`, with project `.env` overrides (`PD_ANALYSIS_CONCURRENCY`, `PD_ANALYSIS_MAX_RETRIES`, `PD_FILTER_BATCH_SIZE`, `PD_ARXIV_MAX_RESULTS`)
 
 **Deep analysis is not a single call, but a multi-round progressive process**:

@@ -118,6 +118,7 @@ API call characteristics:
 - Overall timeout is 20 minutes of active process time. Heartbeat gaps over 30 seconds are treated as system sleep or long suspension and excluded, so wake-up socket errors can retry with the remaining budget.
 - max_tokens=64000, temperature=0.7
 - **Double-layer retry**: analysis-engine.js level retries up to 2 times per paper (max 3 total attempts); deep-analyzer.js internally retries each API call up to 3 times (exponential backoff: first 10s, then doubles, `2^attempt * 5s`)
+- **Fetch proxy is mandatory**: LLM APIs remain direct with `agent: false` and must never receive a proxy agent/dispatcher; arXiv/HuggingFace must fail when the project `.env` proxy is absent rather than falling back to direct access. Node arXiv requires HTTP CONNECT `HTTPS_PROXY` / `HTTP_PROXY`, while HuggingFace curl may additionally use SOCKS `ALL_PROXY`; network commands accessing a local proxy must run outside the sandbox.
 - **LLM API requests explicitly set `agent: false`, forcing direct connections to bypass local proxies (avoids MiMo 403); arXiv/HuggingFace and other external fetches still use proxy auto-detection**
 - arXiv HTML parsing uses **cheerio** structured selectors, removing noise elements such as script/style/nav/header/footer
 - Images are first preselected by caption/filename/order heuristics (default `imageCandidateMax=20`); only dual-model mode with a configured secondary model downloads up to `imageMaxCount=20` candidate images serially and sends them to the secondary model. Single-model mode only keeps candidate URL/manifest metadata. Downloads validate Content-Type, Content-Length, and PNG/JPEG/WebP file signatures; defaults are a 60-second per-image timeout (`PD_IMAGE_DOWNLOAD_TIMEOUT_MS`), 6MB raw bytes per image, 8M base64 chars per image, and 20M total base64 chars per paper
@@ -225,10 +226,11 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 # PD_SCORING_AUDIT_TEMPERATURE=0.1
 # PD_IMAGE_PLAN_TEMPERATURE=0.2
 
-# Proxy (optional, but recommended to disable or bypass for MiMo Token Plan)
-# https_proxy=http://127.0.0.1:7897
-# http_proxy=http://127.0.0.1:7897
-# all_proxy=socks5://127.0.0.1:7897
+# Fetch proxy (required): Node arXiv requests require an HTTP CONNECT URL
+# HTTPS_PROXY=http://127.0.0.1:7897
+# HTTP_PROXY=http://127.0.0.1:7897
+# HuggingFace curl may additionally use SOCKS; LLM requests stay direct with agent:false
+# ALL_PROXY=socks5h://127.0.0.1:7897
 ```
 
 **API Protocol Auto-Routing Overview**:
@@ -529,9 +531,9 @@ Prefer using `data/current/deep-analysis-result.json`; only read from old paths 
 
 ### 9.8 HuggingFace Fetch Empty
 
-- Check network connection (`curl https://huggingface.co/api/daily_papers?limit=10`)
-- Check if rate-limited or proxy required
-- `fetch-huggingface-papers.js` uses the `curl` command, ensure system `curl` is available
+- Check that project `.env` configures `HTTPS_PROXY` and `HTTP_PROXY` as HTTP CONNECT addresses; optionally configure `ALL_PROXY=socks5h://127.0.0.1:7897` for curl
+- Run the command outside the sandbox. Sandbox loopback cannot reach a local proxy and is not a HuggingFace diagnostic
+- `fetch-huggingface-papers.js` uses `curl`; missing project proxy configuration now fails explicitly instead of returning a pseudo-success empty batch
 
 ### 9.9 Verify API Routing Changes
 

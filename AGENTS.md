@@ -75,7 +75,7 @@ Node 脚本通过 `scripts/env-loader.js` 加载当前项目根 `.env`：① `sc
 | `/anthropic` | — | Anthropic | `{base}/messages` |
 | 其他 | 其他 | OpenAI | `/v1/chat/completions` |
 
-**关键**：LLM API 请求中 `options.agent` 必须显式设为 `false`（禁用连接复用），否则在有系统代理时 MiMo Token Plan 返回 403。适用于 `fetch-papers.js`、`deep-analyzer.js`、`test-api-key.js` 以及后续新增的所有 Node LLM API 调用。
+**网络职责必须隔离**：LLM API 请求中 `options.agent` 必须显式设为 `false`（禁用连接复用且强制直连），否则在有系统代理时 MiMo Token Plan 返回 403。适用于 `fetch-papers.js`、`deep-analyzer.js`、`test-api-key.js` 以及后续新增的所有 Node LLM API 调用。arXiv 元数据、HTML、PDF、图片及 HuggingFace Papers 则必须通过当前项目 `.env` 的代理访问，缺少代理配置时必须报错，严禁静默直连；Node 的 arXiv 请求只接受 `HTTPS_PROXY` / `HTTP_PROXY` 中的 HTTP CONNECT 代理，HuggingFace 的 curl 可额外使用 SOCKS `ALL_PROXY`。
 
 ## 架构
 
@@ -137,10 +137,11 @@ prompts/                # LLM prompt 模板
 - **新增分析脚本必须复用 `analysis-engine.js`**，使用 `analyzePaperWithRetry()` + `analyzeBatch()`，禁止重复实现重试/解析/保存逻辑；保存分析结果后必须复用 `scripts/digest-status.js` 同步 `papers.json.digestStatus`。
 - **新增 Node LLM 调用必须通过 `utils.js` 的 `detectApiType()` / `buildApiUrl()` / `buildHeaders()` / `buildRequestBody()` / `parseResponseText()`**，禁止硬编码协议。Python 发布阶段 LLM 调用必须复用 `publish_common.py` 的 `call_publish_llm_api()`。
 - **环境变量加载**：Node 端必须复用 `scripts/env-loader.js` / `loadEnvFile()`；Python 端必须复用 `scripts/project_env.py`。项目配置只允许来自当前项目根 `.env`，脚本启动时必须清理继承进程里的同名项目变量与代理变量，禁止 shell / Trae / Codex 外层变量覆盖或补齐当前项目配置。外部命令复用 `buildChildProcessEnv()` / `build_child_process_env()`；只有 Git 可显式追加 SSH/GPG agent。
+- **代理网络命令必须沙箱外运行**：凡是需要访问本机代理的抓取、深度分析、重分析和网络连通性命令，Agent 必须以沙箱外权限启动；沙箱无法访问 `127.0.0.1:7897` 时不得把该失败误判为目标站点或代理故障。纯本地测试、语法检查和数据校验可在沙箱内执行。
 - **`loadPrompt()` 从 markdown 文件内的第一个 fenced code block 提取 prompt**，并替换 `{变量名}` 占位符。内部示例代码块需使用比外层更短的 fence，修改 prompt 后需验证 `utils.js` 解析逻辑兼容。
 - **原子与并发写入**：使用 `writeFileAtomic()` 保存普通数据；分析结果和 `papers.json` 的读改写必须使用跨进程文件锁并校验 `generation`，防止多个入口后写覆盖先写。Python 侧复用 `path_config.py` 的原子写入和 `update_json_file_locked()`，锁目录/owner/generation 协议必须与 Node 一致。
 - **阶段恢复**：深度分析失败结果必须保留 `analysisManifest`、`analysisCheckpoint` 和 `analysisRecoveryImageManifest`，下一次从首个未完成阶段续跑；只有下载、主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计和插图阶段均处于终态时才算成功。失败合并判断旧正文是否可用时必须独立重解析正文，不得因最新失败 manifest 把旧成功正文判为不可用；连续多次失败也不能覆盖旧正文。强制重分析成功旧记录时因无 checkpoint 必须清空主分析及全部下游完成标记。
-- **arXiv 与 Demo 网络恢复**：深度分析的 arXiv HTML/图片发现默认超时 60 秒，PDF fallback 默认 180 秒且默认最大 50MB，分别支持 `PD_ARXIV_FETCH_TIMEOUT_MS` / `PD_ARXIV_PDF_TIMEOUT_MS` / `PD_ARXIV_PDF_MAX_BYTES`。稳定 400/403/404 只尝试一轮；指定版本号不得静默回退到最新版。Demo 页面允许最多 3 次 HTTP 重定向，但每一跳都必须重新执行公网 DNS/IP 校验，严禁自动跟随到私网地址。
+- **arXiv 与 Demo 网络恢复**：深度分析的 arXiv HTML/图片发现默认超时 60 秒，PDF fallback 默认 180 秒且默认最大 50MB，分别支持 `PD_ARXIV_FETCH_TIMEOUT_MS` / `PD_ARXIV_PDF_TIMEOUT_MS` / `PD_ARXIV_PDF_MAX_BYTES`。arXiv 全文、PDF 和图片必须使用项目 HTTP CONNECT 代理 dispatcher；稳定 400/403/404 只尝试一轮；指定版本号不得静默回退到最新版。Demo 页面允许最多 3 次 HTTP 重定向，但每一跳都必须重新执行公网 DNS/IP 校验，严禁自动跟随到私网地址。
 - **北京时间时间戳**：运行数据中的 `timestamp` / `lastUpdated` / `fetchedAt` 应使用 `getBeijingISOString()` 或 Python 端 `now_bj_iso()`，避免 UTC 日期导致跨天归档或发布筛选错误。
 - **博客三阶段必须分离**：依次运行 `generate-blog.py` → `review-blog.py` → `push-blog.py`。生成阶段禁止 review/push；review 阶段禁止 Git commit/push，通过严格 LLM/图片 review 和 Hugo gate 后写入带逐文件 SHA-256 的审查凭证；push 阶段禁止重新生成或 review，只能验证凭证与工作树完全一致后精确 stage、中文详细 commit、`git push origin HEAD:main` 并核对远端 OID。仅用户明确要求发博客时才允许运行 `push-blog.py`。
 - **发布 review 不得删除合法表格续行**：Markdown 表格允许前导分组列为空，这通常表示沿用上一行模型/配置；不能把 `| | | | Filter2 ... |` 一类数据行当成子标题删除。普通模型名或技术术语未加反引号属于样式建议，不是格式问题。
