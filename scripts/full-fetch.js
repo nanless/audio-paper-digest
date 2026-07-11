@@ -335,7 +335,9 @@ function writeFilterArtifacts({
 
     writeFileAtomic(FILTERED_FILE, JSON.stringify({
         timestamp,
-        status: artifactComplete ? 'filter_complete' : (sourceFailure ? 'source_partial_failed' : 'filtering'),
+        // 这是筛选过程中的 checkpoint，不是可供深度分析复用的最终批次。
+        // 只有后续归档去重完成后，才会由主流程写入 status=complete。
+        status: sourceFailure ? 'source_partial_failed' : 'filtering',
         filterModel,
         filterPromptHash,
         stats: {

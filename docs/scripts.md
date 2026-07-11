@@ -374,6 +374,8 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 
 **运行环境**：上述三个入口和兼容 `publish-to-blog.py` 都强制要求沙箱外运行。它们检测到可靠沙箱标志 `CODEX_SANDBOX` 即拒绝开始；沙箱外权限包装会保留网络禁用环境标志，不能将其单独视为仍在沙箱内。此时应从沙箱外重新运行原阶段，不得跳过审查或伪造凭证。
 
+**推送边界**：review 凭证绑定 review 时博客 `main` 的基线提交和逐文件 SHA-256。`push-blog.py` 只允许从该基线提交本次清单，或重试凭证中已记录的同一发布提交；发现人工提交、工作树改动或基线偏移会拒绝推送。生成阶段也会拒绝覆盖目标日期页面的人工 Git 修改。
+
 **参数**：三个脚本都支持 `--date YYYY-MM-DD`；只有 `generate-blog.py` 接受 `--all`、`--category` 和自定义数据文件。`publish-to-blog.py --push` 会直接拒绝，防止恢复合并流程。
 
 **日期过滤**：

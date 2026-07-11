@@ -74,8 +74,10 @@ npm install
 # Every project script must run outside the sandbox; entrypoints reject Codex sandbox execution.
 ./run-full-fetch.sh
 
-# 4. Publish blog (must run outside the sandbox; entries reject Codex sandbox execution)
-python3 scripts/publish-to-blog.py --date 2026-05-08
+# 4. Generate, review, then push the blog (all stages must run outside the sandbox)
+python3 scripts/generate-blog.py --date 2026-05-08
+python3 scripts/review-blog.py --date 2026-05-08
+python3 scripts/push-blog.py --date 2026-05-08
 
 # 5. Generate Xiaohongshu copy
 python3 scripts/publish-xiaohongshu.py

@@ -22,6 +22,8 @@ const DEFAULT_RETRY_DELAY_MS = ANALYSIS_CONFIG.retryDelayMs;
 const DEFAULT_CONCURRENCY = ANALYSIS_CONFIG.concurrency;
 const DEFAULT_LOCK_TIMEOUT_MS = 30000;
 const DEFAULT_STALE_LOCK_MS = 2 * 60 * 60 * 1000;
+const PAPER_ANALYSIS_LOCK_TIMEOUT_MS = 4 * 60 * 60 * 1000;
+const PAPER_ANALYSIS_LOCK_STALE_MS = 6 * 60 * 60 * 1000;
 const COMPLETE_RECOVERY_STATUSES = new Set([
     'complete', 'not_needed', 'skipped', 'no_candidates', 'no_high_value_images', 'no_downloadable_images'
 ]);
@@ -141,6 +143,20 @@ async function withFileLock(filePath, callback, options = {}) {
     } finally {
         release();
     }
+}
+
+function getPaperAnalysisLockPath(paper) {
+    const id = normalizedId(paper);
+    if (!id) throw new Error('无法为缺少规范化 ID 的论文创建分析锁');
+    return path.join(__dirname, '..', 'data', 'current', '.analysis-runs', id);
+}
+
+async function withPaperAnalysisLock(paper, callback, options = {}) {
+    return withFileLock(getPaperAnalysisLockPath(paper), callback, {
+        timeoutMs: PAPER_ANALYSIS_LOCK_TIMEOUT_MS,
+        staleMs: PAPER_ANALYSIS_LOCK_STALE_MS,
+        ...options
+    });
 }
 
 function updateJsonFileLocked(filePath, updater, options = {}) {
@@ -394,16 +410,18 @@ async function analyzeBatch(papers, options = {}) {
             }
 
             const startTime = Date.now();
-            const r = await analyzePaperWithRetry(paper, {
-                maxRetries,
-                retryDelayMs,
-                analyzeFn,
-                onAttempt: (att, max) => {
-                    if (onAttempt) {
-                        try { onAttempt(att, max, paper); } catch (e) { /* ignore */ }
+            const r = await withPaperAnalysisLock(paper, () =>
+                analyzePaperWithRetry(paper, {
+                    maxRetries,
+                    retryDelayMs,
+                    analyzeFn,
+                    onAttempt: (att, max) => {
+                        if (onAttempt) {
+                            try { onAttempt(att, max, paper); } catch (e) { /* ignore */ }
+                        }
                     }
-                }
-            });
+                })
+            );
             const duration = Date.now() - startTime;
             stats.durationTotal += duration;
 
@@ -559,6 +577,8 @@ module.exports = {
     canReclaimFileLock,
     withFileLockSync,
     withFileLock,
+    withPaperAnalysisLock,
+    getPaperAnalysisLockPath,
     updateJsonFileLocked,
     isSuccessfulAnalysisRecord,
     getAnalysisRunStatus,

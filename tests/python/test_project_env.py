@@ -23,6 +23,8 @@ PROJECT_KEYS = (
     "KIMI_API_KEY",
     "HTTP_PROXY",
     "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
 )
 
 
@@ -93,6 +95,8 @@ class ProjectEnvTest(unittest.TestCase):
         with SavedEnvironment():
             os.environ.pop("HTTPS_PROXY", None)
             os.environ.pop("HTTP_PROXY", None)
+            os.environ.pop("https_proxy", None)
+            os.environ.pop("http_proxy", None)
             self.assertRaisesRegex(RuntimeError, "必须在项目 .env 配置", get_required_fetch_proxy)
 
             os.environ["HTTPS_PROXY"] = "socks5://127.0.0.1:7897"
@@ -104,6 +108,13 @@ class ProjectEnvTest(unittest.TestCase):
                 "http": "http://127.0.0.1:7897",
                 "https": "http://127.0.0.1:7897",
             })
+
+    def test_fetch_proxy_accepts_lowercase_project_variable(self):
+        with SavedEnvironment():
+            os.environ.pop("HTTPS_PROXY", None)
+            os.environ.pop("HTTP_PROXY", None)
+            os.environ["https_proxy"] = "http://127.0.0.1:7897"
+            self.assertEqual(get_required_fetch_proxy(), "http://127.0.0.1:7897")
 
 
 if __name__ == "__main__":

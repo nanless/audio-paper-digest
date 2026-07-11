@@ -105,7 +105,10 @@ def build_child_process_env(extra=None, allowed_keys=()):
 
 def get_required_fetch_proxy():
     """Return the project-scoped HTTP CONNECT proxy required for arXiv/HF fetches."""
-    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+    proxy = (
+        os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY")
+        or os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY")
+    )
     if not proxy:
         raise RuntimeError('抓取 arXiv/HuggingFace 必须在项目 .env 配置 HTTPS_PROXY 或 HTTP_PROXY')
     parsed = urlparse(proxy)

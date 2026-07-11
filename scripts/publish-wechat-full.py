@@ -18,7 +18,7 @@ import urllib.request, json, time, sys, re, datetime, hashlib, os, html, tempfil
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from publish_common import (
     load_papers, get_today_bj, score_and_sort, extract_top_tags,
-    score_emoji, format_medal
+    score_emoji, format_medal, validate_papers_for_publish, PublishDataValidationError
 )
 from path_config import wechat_preview_path
 from utils import parse_analysis
@@ -166,6 +166,11 @@ def main():
         print("⚠️ 没有论文需要发布")
         return True
 
+    try:
+        papers = validate_papers_for_publish(papers)
+    except PublishDataValidationError as exc:
+        print(f"❌ 发布数据预检失败: {exc}")
+        return False
     scored, unscored = score_and_sort(papers)
 
     token = None

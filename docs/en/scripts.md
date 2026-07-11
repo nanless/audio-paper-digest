@@ -369,6 +369,8 @@ Publish to Hugo blog (GitHub Pages).
 
 **Runtime requirement**: the three entry points and compatibility `publish-to-blog.py` require an external runtime. They reject the reliable `CODEX_SANDBOX` marker; the elevation wrapper preserves the network-disabled marker, so it cannot independently identify a sandbox. Re-run the same stage outside the sandbox; never skip review or fabricate a receipt.
 
+**Push boundary**: the review receipt binds the blog `main` baseline at review time and every file SHA-256. `push-blog.py` may create only this manifest's commit from that baseline, or retry the same receipt-recorded publication commit. Manual commits, worktree edits, or a shifted baseline block the push; generation also refuses to overwrite manual Git edits to same-date pages.
+
 **Parameters**: all three scripts accept `--date YYYY-MM-DD`. Only `generate-blog.py` accepts `--all`, `--category`, and a custom data path. `publish-to-blog.py --push` is rejected to prevent the combined workflow from returning.
 
 **Date Filtering**:

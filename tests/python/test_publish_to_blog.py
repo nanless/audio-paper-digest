@@ -359,7 +359,7 @@ body
         review.assert_not_called()
         push.assert_not_called()
 
-    def test_git_push_retries_existing_commit_and_verifies_remote_oid(self):
+    def test_git_push_rejects_unreviewed_existing_commit(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, _posts, remote = init_blog_repo(tmp, with_remote=True)
             (repo / 'README.md').write_text('local commit\n', encoding='utf-8')
@@ -368,9 +368,9 @@ body
             local_head = git(repo, 'rev-parse', 'HEAD').stdout.strip()
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'GITHUB_REMOTE', 'origin'):
-                self.assertTrue(publish_to_blog.git_push('2026-07-10', []))
+                self.assertFalse(publish_to_blog.git_push('2026-07-10', []))
             remote_head = git(remote, 'rev-parse', 'refs/heads/main').stdout.strip()
-            self.assertEqual(remote_head, local_head)
+            self.assertNotEqual(remote_head, local_head)
 
     def test_git_push_stages_only_manifest_with_vcs_environment(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -380,7 +380,9 @@ body
             original_env = publish_to_blog.build_child_process_env
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'GITHUB_REMOTE', 'origin'), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', Path(tmp) / 'data' / 'current'), \
                     mock.patch.object(publish_to_blog, 'build_child_process_env', side_effect=original_env) as env:
+                publish_to_blog.save_review_receipt('2026-07-10', [path], 'hugo')
                 self.assertTrue(publish_to_blog.git_push('2026-07-10', [path]))
             changed_paths = git(repo, 'show', '--pretty=format:', '--name-only', 'HEAD').stdout.splitlines()
             self.assertEqual(changed_paths, ['content/posts/2026-07-10.md'])
@@ -461,7 +463,9 @@ body
             path = posts / '2026-07-10.md'
             path.write_text('generated\n', encoding='utf-8')
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', Path(tmp) / 'data' / 'current'), \
                     contextlib.redirect_stdout(io.StringIO()) as output:
+                publish_to_blog.save_review_receipt('2026-07-10', [path], 'hugo')
                 self.assertFalse(publish_to_blog.git_push('2026-07-10', [path]))
             local_head = git(repo, 'rev-parse', 'HEAD').stdout.strip()
             self.assertEqual(git(repo, 'show', '--format=%H', '-s', 'HEAD').stdout.strip(), local_head)
@@ -486,12 +490,13 @@ body
             'parsed': {'score': '7', 'tags': []},
         }
         with tempfile.TemporaryDirectory() as tmp:
-            content_dir = Path(tmp) / 'content' / 'posts'
-            content_dir.mkdir(parents=True)
+            repo, content_dir, _remote = init_blog_repo(tmp)
             current_dir = Path(tmp) / 'data' / 'current'
             old_page = content_dir / '2026-07-10-old.md'
             old_page.write_text('original', encoding='utf-8')
-            with mock.patch.object(publish_to_blog, 'BLOG_REPO', tmp), \
+            git(repo, 'add', '--', 'content/posts/2026-07-10-old.md')
+            git(repo, 'commit', '-m', 'existing generated page')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'CONTENT_DIR', str(content_dir)), \
                     mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir), \
                     mock.patch.object(publish_to_blog, 'load_papers', return_value=[paper]), \
@@ -511,9 +516,7 @@ body
 
     def test_review_receipt_detects_any_post_review_file_change(self):
         with tempfile.TemporaryDirectory() as tmp:
-            repo = Path(tmp) / 'blog'
-            posts = repo / 'content' / 'posts'
-            posts.mkdir(parents=True)
+            repo, posts, _remote = init_blog_repo(tmp)
             current_dir = Path(tmp) / 'data' / 'current'
             page = posts / '2026-07-10.md'
             page.write_text('reviewed\n', encoding='utf-8')

@@ -14,7 +14,8 @@ const {
     readJsonFileStrict,
     updateJsonFileLocked,
     mergePapersById,
-    isSuccessfulAnalysisRecord
+    isSuccessfulAnalysisRecord,
+    withPaperAnalysisLock
 } = require('./analysis-engine.js');
 const { loadPapersDatabase, updateAnalysisDigestStatuses } = require('./digest-status.js');
 const Config = require('./config.js');
@@ -67,13 +68,13 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
     });
 
     console.log('🔬 开始深度分析...');
-    const r = await analyzePaperWithRetry(targetPaper, {
+    const r = await withPaperAnalysisLock(targetPaper, () => analyzePaperWithRetry(targetPaper, {
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
         onAttempt: (attempt, max) => {
             if (attempt > 0) console.log(`    🔄 第 ${attempt + 1} 次尝试...`);
         }
-    });
+    }));
 
     if (r.success) {
         const payload = updateJsonFileLocked(resultPath, current => {
@@ -97,22 +98,28 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
         console.log(`    📊 当前总数: ${payload.papers.length} 篇`);
         return { status: 'complete', exitCode: 0, result: r.result };
     } else {
-        updateJsonFileLocked(resultPath, current => {
-            const payload = {
+        const payload = updateJsonFileLocked(resultPath, current => {
+            const mergedPapers = mergePapersById(
+                Array.isArray(current) ? current : (current?.papers || []),
+                [r.result],
+                { preserveSuccessfulAnalysis: true }
+            );
+            const next = {
                 ...(!Array.isArray(current) && current ? current : {}),
-                papers: Array.isArray(current) ? current : (current?.papers || []),
+                papers: mergedPapers,
                 lastUpdated: getBeijingISOString(),
                 stats: { ...(!Array.isArray(current) ? current?.stats : {}), singleAnalysisStatus: 'failed' }
             };
-            delete payload.deepAnalysisCompletedAt;
-            return payload;
+            delete next.deepAnalysisCompletedAt;
+            return next;
         });
         const digestStatus = updateAnalysisDigestStatuses([r.result], {
             batchDate: getBeijingISOString().slice(0, 10)
         });
         console.log(`    ❌ 最终失败: ${r.error}`);
         if (digestStatus.updated > 0) console.log(`    papers.json 状态已同步: ${digestStatus.updated} 篇`);
-        return { status: 'failed', exitCode: 1, error: r.error };
+        console.log(`    💾 已保留恢复 checkpoint（当前总数: ${payload.papers.length} 篇）`);
+        return { status: 'failed', exitCode: 1, error: r.error, result: r.result };
     }
 }
 

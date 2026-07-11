@@ -1280,8 +1280,18 @@ def _review_single_paper(args):
             atomic_write_text(paper_file, llm_fixed_content)
             fixed_count += 1
             lines.append("    🛠️  LLM 自动修复已应用")
-            content = llm_fixed_content
-            llm_passed, llm_issues, _ = llm_review_post(llm_fixed_content, title, required=require_llm)
+            # LLM replacement can reintroduce deterministic Markdown/YAML defects.
+            code_fixed, code_issues = review_and_fix_post(paper_file)
+            if code_fixed:
+                fixed_count += 1
+                lines.append("    🛠️  LLM 后代码层自动修复")
+                _, code_issues = review_and_fix_post(paper_file)
+            blocking_count += len(code_issues)
+            for issue in code_issues:
+                lines.append(f"    ⚠️  LLM 后代码层: {issue}")
+            with open(paper_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            llm_passed, llm_issues, _ = llm_review_post(content, title, required=require_llm)
         llm_blocking = count_blocking_review_issues(llm_issues)
         blocking_count += llm_blocking
         advisory_count += len(llm_issues) - llm_blocking
@@ -1350,7 +1360,17 @@ def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False, co
                 atomic_write_text(index_file, llm_fixed_content)
                 total_fixed += 1
                 print(f"    🛠️  LLM 自动修复已应用")
-                llm_passed, llm_issues, _ = llm_review_post(llm_fixed_content, "汇总页面", required=require_llm)
+                code_fixed, code_issues = review_and_fix_post(index_file)
+                if code_fixed:
+                    total_fixed += 1
+                    print("    🛠️  LLM 后代码层自动修复")
+                    _, code_issues = review_and_fix_post(index_file)
+                total_blocking_issues += len(code_issues)
+                for issue in code_issues:
+                    print(f"    ⚠️  LLM 后代码层: {issue}")
+                with open(index_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                llm_passed, llm_issues, _ = llm_review_post(content, "汇总页面", required=require_llm)
         llm_blocking = count_blocking_review_issues(llm_issues)
         total_blocking_issues += llm_blocking
         total_advisory_issues += len(llm_issues) - llm_blocking
@@ -1748,16 +1768,40 @@ def _report_push_retry(local_head, detail):
     print(f'  预期远端 OID: {local_head}')
 
 
+def _load_push_receipt(date_str):
+    path = review_receipt_path(date_str)
+    try:
+        receipt = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PublishDataValidationError(f'无法读取推送审查凭证: {path}') from exc
+    base_head = str(receipt.get('baseHead') or '').lower()
+    if receipt.get('schemaVersion') != 2 or not re.fullmatch(r'[0-9a-f]{40,64}', base_head):
+        raise PublishDataValidationError('审查凭证缺少受保护的博客基线提交；请重新 review')
+    return receipt, path, base_head
+
+
 def git_push(date_str, publish_paths, rollback_state=None):
     """Commit, push HEAD explicitly to main, and verify the remote object ID."""
     manifest = _git_relative_manifest(publish_paths)
     state = rollback_state
     try:
-        validate_git_publish_branch()
+        receipt, receipt_path, base_head = _load_push_receipt(date_str)
+        current_head = validate_git_publish_branch()
         validate_git_index(publish_paths)
+        publication_commit = str(receipt.get('publicationCommit') or '').lower()
+        retrying_existing_commit = publication_commit and current_head == publication_commit
+        if retrying_existing_commit:
+            parent = subprocess.run(
+                ['git', 'rev-parse', 'HEAD^'], cwd=BLOG_REPO, capture_output=True,
+                text=True, check=True, env=_git_env(),
+            ).stdout.strip().lower()
+            if parent != base_head:
+                raise PublishDataValidationError('待重试发布提交的父提交与 review 基线不一致，拒绝推送')
+        if not retrying_existing_commit and current_head != base_head:
+            raise PublishDataValidationError('博客 HEAD 已偏离 review 时基线，拒绝推送未审查的本地提交；请重新生成并 review')
         if state is None:
             state = capture_git_publish_state(publish_paths)
-        if manifest:
+        if manifest and not retrying_existing_commit:
             subprocess.run(
                 ['git', 'add', '--', *manifest],
                 check=True,
@@ -1770,7 +1814,9 @@ def git_push(date_str, publish_paths, rollback_state=None):
             cwd=BLOG_REPO,
             env=_git_env(),
         ) if manifest else None
-        if staged is not None and staged.returncode == 1:
+        if retrying_existing_commit:
+            local_head = current_head
+        elif staged is not None and staged.returncode == 1:
             subprocess.run(
                 [
                     'git', 'commit',
@@ -1781,11 +1827,13 @@ def git_push(date_str, publish_paths, rollback_state=None):
                 check=True, cwd=BLOG_REPO,
                 env=_git_env()
             )
+            local_head = validate_git_publish_branch()
+            receipt['publicationCommit'] = local_head
+            atomic_write_json(receipt_path, receipt, ensure_ascii=False, indent=2)
         elif staged is not None and staged.returncode > 1:
             raise subprocess.CalledProcessError(staged.returncode, staged.args)
         else:
-            print("  ℹ️ 本次清单没有新内容，继续推送已有未同步提交")
-        local_head = validate_git_publish_branch()
+            raise PublishDataValidationError('审查文件相对基线没有可提交差异，拒绝推送任意已有本地提交')
     except (subprocess.CalledProcessError, PublishDataValidationError, OSError, UnicodeError) as exc:
         try:
             restore_git_publish_state(state)
@@ -1918,13 +1966,14 @@ def save_review_receipt(date_str, publish_paths, hugo_gate):
             'sha256': _sha256_file(path) if exists else None,
         })
     receipt = {
-        'schemaVersion': 1,
+        'schemaVersion': 2,
         'date': validate_publish_date(date_str),
         'reviewedAt': datetime.datetime.now(
             datetime.timezone(datetime.timedelta(hours=8))
         ).isoformat(),
         'strictReview': True,
         'hugoGate': hugo_gate,
+        'baseHead': validate_git_publish_branch(),
         'files': files,
     }
     path = review_receipt_path(date_str)
@@ -1943,7 +1992,7 @@ def load_verified_review_receipt(date_str):
         receipt = json.loads(path.read_text(encoding='utf-8'))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PublishDataValidationError(f'审查凭证无法解析: {path}') from exc
-    if receipt.get('schemaVersion') != 1 or receipt.get('date') != date_str:
+    if receipt.get('schemaVersion') != 2 or receipt.get('date') != date_str:
         raise PublishDataValidationError('审查凭证版本或日期不匹配')
     if receipt.get('strictReview') is not True:
         raise PublishDataValidationError('审查凭证不是严格 review 结果')
@@ -2075,6 +2124,8 @@ def generate_main():
             print(f"📄 staging 汇总页面: {index_file.name} ({len(index_md)} chars)")
 
             validate_staged_posts(staged_posts, today)
+            # Refuse to overwrite/delete same-day posts carrying manual Git changes.
+            validate_manifest_clean_against_head(list(content_dir.glob(f'{today}*.md')))
             publish_paths = install_staged_posts(staged_posts, content_dir, today)
     except PublishDataValidationError as exc:
         print(f"\n❌ 生成事务已阻断，博客工作树未写入本次 staging 内容: {exc}")
