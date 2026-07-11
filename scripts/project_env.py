@@ -8,6 +8,7 @@ configuration so inherited Trae/Codex/shell variables cannot be mixed with it.
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 from runtime_guard import require_external_runtime
 
@@ -100,6 +101,30 @@ def build_child_process_env(extra=None, allowed_keys=()):
     if extra:
         env.update(extra)
     return env
+
+
+def get_required_fetch_proxy():
+    """Return the project-scoped HTTP CONNECT proxy required for arXiv/HF fetches."""
+    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+    if not proxy:
+        raise RuntimeError('抓取 arXiv/HuggingFace 必须在项目 .env 配置 HTTPS_PROXY 或 HTTP_PROXY')
+    parsed = urlparse(proxy)
+    if parsed.scheme not in ('http', 'https') or not parsed.hostname:
+        raise RuntimeError(f'Python 抓取只支持 HTTP CONNECT 代理，收到: {proxy}')
+    return proxy
+
+
+def build_fetch_proxies():
+    """Build explicit requests proxies without reading inherited process settings."""
+    proxy = get_required_fetch_proxy()
+    return {'http': proxy, 'https': proxy}
+
+
+def build_fetch_url_opener():
+    """Build an explicit urllib opener for arXiv/HuggingFace assets only."""
+    import urllib.request
+    proxy = get_required_fetch_proxy()
+    return urllib.request.build_opener(urllib.request.ProxyHandler({'http': proxy, 'https': proxy}))
 
 
 def _is_scripts_entrypoint():

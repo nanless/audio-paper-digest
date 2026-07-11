@@ -22,6 +22,7 @@ from publish_common import (
 )
 from path_config import wechat_preview_path
 from utils import parse_analysis
+from project_env import build_fetch_url_opener
 
 APP_ID = os.environ.get('WECHAT_APP_ID', '')
 APP_SECRET = os.environ.get('WECHAT_APP_SECRET', '')
@@ -57,7 +58,7 @@ def download_image(url, timeout=15):
     """Download image from URL, return bytes or None"""
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with build_fetch_url_opener().open(req, timeout=timeout) as resp:
             data = resp.read()
         if len(data) < 100:
             return None
@@ -163,7 +164,7 @@ def main():
 
     if not papers:
         print("⚠️ 没有论文需要发布")
-        return
+        return True
 
     scored, unscored = score_and_sort(papers)
 
@@ -360,6 +361,8 @@ def main():
 
     thumb_id = THUMB_MEDIA_ID
     draft_url = f'https://api.weixin.qq.com/cgi-bin/draft/add?access_token={token}'
+    created_parts = []
+    failed_parts = []
 
     for pi, part_indices in enumerate(parts):
         part_num = pi + 1
@@ -412,10 +415,13 @@ def main():
 
             if 'media_id' in resp:
                 print(f"  ✅ Part {part_num} 草稿成功！")
+                created_parts.append({'part': part_num, 'media_id': resp['media_id']})
             else:
                 print(f"  ❌ Part {part_num} 失败: {json.dumps(resp, ensure_ascii=False)}")
+                failed_parts.append({'part': part_num, 'error': json.dumps(resp, ensure_ascii=False)[:500]})
         except urllib.error.HTTPError as e:
             print(f"  ❌ Part {part_num} HTTP 错误: {e.code} {e.reason}")
+            failed_parts.append({'part': part_num, 'error': f'HTTP {e.code} {e.reason}'})
             try:
                 err_body = e.read().decode('utf-8', errors='replace')
                 print(f"     响应: {err_body[:200]}")
@@ -423,6 +429,7 @@ def main():
                 pass
         except Exception as e:
             print(f"  ❌ Part {part_num} 请求异常: {e}")
+            failed_parts.append({'part': part_num, 'error': str(e)})
 
     preview_path = wechat_preview_path(today)
     first_part_html = f'<h2 style="text-align:center;">语音/音乐/音频论文速递 {today}</h2>\n'
@@ -436,9 +443,15 @@ def main():
 
     if dry_run:
         print(f"\n🎉 dry-run 完成！本地预览已生成，未创建微信草稿")
+        return True
+    if failed_parts:
+        print(f"\n❌ 微信草稿未完整创建：成功 {len(created_parts)}/{total_parts}，失败 part: {', '.join(str(item['part']) for item in failed_parts)}")
+        print(f"   成功 media_id: {', '.join(item['media_id'] for item in created_parts) or '无'}")
+        return False
     else:
         print(f"\n🎉 全部完成！共 {total_parts} 个草稿已创建")
+        return True
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(0 if main() else 1)

@@ -1,5 +1,6 @@
 import os
 import sys
+import subprocess
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -13,6 +14,18 @@ from runtime_guard import ExternalRuntimeRequired, require_external_runtime  # n
 
 
 class ExternalRuntimeGuardTest(unittest.TestCase):
+    def test_all_direct_python_scripts_reject_sandbox_before_business_logic(self):
+        env = os.environ.copy()
+        env['CODEX_SANDBOX'] = 'test-seatbelt'
+        for script in sorted(SCRIPTS.glob('*.py')):
+            result = subprocess.run(
+                [sys.executable, str(script)], cwd=ROOT, env=env,
+                capture_output=True, text=True, timeout=5,
+            )
+            output = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0, script.name)
+            self.assertIn('必须在沙箱外运行', output, script.name)
+
     def test_rejects_codex_sandbox(self):
         with mock.patch.dict(os.environ, {'CODEX_SANDBOX': 'seatbelt'}, clear=True):
             with self.assertRaisesRegex(ExternalRuntimeRequired, '必须在沙箱外运行'):

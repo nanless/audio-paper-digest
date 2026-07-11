@@ -8,7 +8,10 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from project_env import DEFAULT_ENV_FILE, build_child_process_env, load_project_env, resolve_env_file  # noqa: E402
+from project_env import (  # noqa: E402
+    DEFAULT_ENV_FILE, build_child_process_env, build_fetch_proxies,
+    get_required_fetch_proxy, load_project_env, resolve_env_file,
+)
 
 
 PROJECT_KEYS = (
@@ -18,6 +21,7 @@ PROJECT_KEYS = (
     "PAPER_DIGEST_TEST_ENV_FILE",
     "PD_ANALYSIS_CONCURRENCY",
     "KIMI_API_KEY",
+    "HTTP_PROXY",
     "HTTPS_PROXY",
 )
 
@@ -84,6 +88,22 @@ class ProjectEnvTest(unittest.TestCase):
             self.assertEqual(child_env["HTTPS_PROXY"], "http://project-proxy.invalid")
             self.assertNotIn("PAPER_ANALYZER_API_KEY", child_env)
             self.assertNotIn("SSH_AUTH_SOCK", child_env)
+
+    def test_fetch_proxy_requires_project_http_connect_url(self):
+        with SavedEnvironment():
+            os.environ.pop("HTTPS_PROXY", None)
+            os.environ.pop("HTTP_PROXY", None)
+            self.assertRaisesRegex(RuntimeError, "必须在项目 .env 配置", get_required_fetch_proxy)
+
+            os.environ["HTTPS_PROXY"] = "socks5://127.0.0.1:7897"
+            self.assertRaisesRegex(RuntimeError, "只支持 HTTP CONNECT", get_required_fetch_proxy)
+
+            os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7897"
+            self.assertEqual(get_required_fetch_proxy(), "http://127.0.0.1:7897")
+            self.assertEqual(build_fetch_proxies(), {
+                "http": "http://127.0.0.1:7897",
+                "https": "http://127.0.0.1:7897",
+            })
 
 
 if __name__ == "__main__":

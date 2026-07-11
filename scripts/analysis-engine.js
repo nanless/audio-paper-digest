@@ -339,6 +339,13 @@ async function analyzeBatch(papers, options = {}) {
         analyzeFn = null
     } = options;
 
+    if (!Number.isInteger(concurrency) || concurrency < 1) {
+        throw new RangeError(`[analyzeBatch] concurrency 必须是正整数，收到: ${concurrency}`);
+    }
+    if (!Array.isArray(papers)) {
+        throw new TypeError('[analyzeBatch] papers 必须是数组');
+    }
+
     const results = [];
     const stats = {
         total: papers.length,

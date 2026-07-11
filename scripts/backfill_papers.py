@@ -22,6 +22,7 @@ from path_config import (
     backfill_result_path,
     update_json_file_locked,
 )
+from project_env import build_fetch_proxies
 
 BJ_TZ = timezone(timedelta(hours=8))
 
@@ -37,6 +38,8 @@ CATEGORIES = [
     ('cs.AI', '人工智能'),
     ('cs.MM', '多媒体'),
 ]
+def fetch_proxies():
+    return build_fetch_proxies()
 
 def log(msg):
     line = f"[{now_bj().isoformat()}] {msg}"
@@ -100,7 +103,7 @@ def fetch_arxiv_category(category_id, max_results=30, existing_ids=None):
     for attempt in range(1, 6):
         try:
             log(f"  请求 {category_id} (尝试 {attempt}/5)...")
-            resp = requests.get(url, headers=headers, timeout=30)
+            resp = requests.get(url, headers=headers, timeout=30, proxies=fetch_proxies())
             if resp.status_code == 429:
                 wait = min(2 ** attempt * 5, 60)
                 log(f"  限流，等待 {wait}秒...")
@@ -180,7 +183,7 @@ def fetch_hf_papers(existing_ids, days=7):
         offset = page * 100
         url = f"https://huggingface.co/api/daily_papers?limit=100&offset={offset}"
         try:
-            resp = requests.get(url, timeout=30)
+            resp = requests.get(url, timeout=30, proxies=fetch_proxies())
             resp.raise_for_status()
             data = resp.json()
             if not isinstance(data, list) or not data:
@@ -226,7 +229,7 @@ def fetch_hf_papers(existing_ids, days=7):
             break
 
     try:
-        resp = requests.get("https://huggingface.co/api/papers?limit=100", timeout=30)
+        resp = requests.get("https://huggingface.co/api/papers?limit=100", timeout=30, proxies=fetch_proxies())
         resp.raise_for_status()
         data = resp.json()
         for item in data:

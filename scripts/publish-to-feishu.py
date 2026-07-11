@@ -353,29 +353,31 @@ def main():
     overview_blocks = md_to_feishu_blocks(overview_md)
     print(f"📊 汇总内容: {len(overview_blocks)} 个块")
 
-    # Write overview
-    batch_size = 20
-    for i in range(0, len(overview_blocks), batch_size):
-        batch = overview_blocks[i:i + batch_size]
-        create_blocks(token, doc_id, root_block_id, batch, index=i)
-        print(f"  ✅ 写入汇总块 {i+1}-{i+len(batch)}")
-
-    # Generate each paper
-    all_papers = [(p, pa) for _, p, pa in scored] + [(p, None) for p in unscored]
-    for idx, (paper, pa) in enumerate(all_papers):
-        paper_md = generate_paper_md(paper, today)
-        paper_blocks = md_to_feishu_blocks(paper_md)
-
-        # Write after existing content
-        current_index = len(overview_blocks) + idx * 100  # rough offset
-        for i in range(0, len(paper_blocks), batch_size):
-            batch = paper_blocks[i:i + batch_size]
-            create_blocks(token, doc_id, root_block_id, batch, index=current_index + i)
-
-        title = paper.get('title', 'Unknown')[:40]
-        print(f"  ✅ 写入论文 {idx+1}/{len(all_papers)}: {title}")
-
     doc_url = f"https://feishu.cn/docx/{doc_id}"
+    try:
+        # Write overview and every subsequent batch at the exact number of blocks
+        # already accepted by Feishu. Fixed per-paper offsets corrupt long documents.
+        batch_size = 20
+        next_index = 0
+        for i in range(0, len(overview_blocks), batch_size):
+            batch = overview_blocks[i:i + batch_size]
+            create_blocks(token, doc_id, root_block_id, batch, index=next_index)
+            next_index += len(batch)
+            print(f"  ✅ 写入汇总块 {i+1}-{i+len(batch)}")
+
+        all_papers = [(p, pa) for _, p, pa in scored] + [(p, None) for p in unscored]
+        for idx, (paper, pa) in enumerate(all_papers):
+            paper_blocks = md_to_feishu_blocks(generate_paper_md(paper, today))
+            for i in range(0, len(paper_blocks), batch_size):
+                batch = paper_blocks[i:i + batch_size]
+                create_blocks(token, doc_id, root_block_id, batch, index=next_index)
+                next_index += len(batch)
+            title = paper.get('title', 'Unknown')[:40]
+            print(f"  ✅ 写入论文 {idx+1}/{len(all_papers)}: {title}")
+    except Exception as exc:
+        print(f"\n❌ 飞书文档写入未完成，已写入 {next_index} 个块；保留文档供恢复：{doc_url}")
+        raise RuntimeError(f'飞书文档写入失败: {exc}') from exc
+
     print(f"\n🎉 飞书文档发布成功！")
     print(f"📎 文档链接: {doc_url}")
     print(f"📊 共 {total} 篇论文")

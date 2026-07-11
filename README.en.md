@@ -114,11 +114,14 @@ node scripts/quick-test.js
 # Backfill historical paper IDs
 npm run backfill
 
-# Generate blog Markdown (does not push by default)
-npm run publish -- --date 2026-04-21
+# Generate blog Markdown only
+python3 scripts/generate-blog.py --date 2026-04-21
 
-# Publish blog (commit and push after required review passes)
-npm run publish -- --push --date 2026-04-21
+# Review generated Markdown and create a SHA-256 receipt
+python3 scripts/review-blog.py --date 2026-04-21
+
+# Verify the receipt, commit, and push (only after an explicit publish request)
+python3 scripts/push-blog.py --date 2026-04-21
 
 # Generate WeChat Official Account draft
 npm run wechat
@@ -176,14 +179,10 @@ node scripts/analyze-single-paper.js 2604.16044
 node scripts/validate-data-files.js
 
 # ========== Publishing ==========
-# Publish blog (strongly recommend explicit --date)
-python3 scripts/publish-to-blog.py --date 2026-04-21
-
-# Generate Markdown only, do not push
-python3 scripts/publish-to-blog.py --skip-push --date 2026-04-21
-
-# Commit and push after required review passes
-python3 scripts/publish-to-blog.py --push --date 2026-04-21
+# Blog stages are intentionally separate
+python3 scripts/generate-blog.py --date 2026-04-21
+python3 scripts/review-blog.py --date 2026-04-21
+python3 scripts/push-blog.py --date 2026-04-21
 
 # Publish with custom data
 python3 scripts/publish-to-blog.py --date 2026-04-21 data/current/deep-analysis-result.json

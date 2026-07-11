@@ -2253,6 +2253,12 @@ async function analyzePaperDeep(paper) {
             if (structureIssues.length > 0) {
                 console.log(`    [deep] 🔧 检测到结构契约问题，执行最终结构修复: ${structureIssues.join('、')}`);
                 analysis = await repairMissingAnalysisSections(paper, analysis, textForAnalysis);
+                const postRepairIssues = getRepairableAnalysisStructureIssues(analysis);
+                if (postRepairIssues.length > 0) {
+                    const error = new Error(`最终结构修复后的分析仍未通过结构契约: ${postRepairIssues.join('、')}`);
+                    error.code = 'CONTRACT_REJECTED';
+                    throw error;
+                }
                 console.log(`    [deep] ✅ 最终结构修复完成`);
             }
             markRecoveryStage(analysisManifest, 'structureRepair', structureIssues.length > 0 ? 'complete' : 'not_needed', {

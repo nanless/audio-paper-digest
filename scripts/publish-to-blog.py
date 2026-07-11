@@ -38,7 +38,7 @@ from publish_common import (
     validate_papers_for_publish, validate_review_payload
 )
 from path_config import CURRENT_DIR, atomic_write_json, atomic_write_text
-from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env
+from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env, get_required_fetch_proxy
 from runtime_guard import require_external_runtime
 from utils import strip_md, parse_analysis
 
@@ -387,6 +387,8 @@ def _download_review_image(url):
 
     session = requests.Session()
     session.trust_env = False
+    proxy = get_required_fetch_proxy()
+    session.proxies.update({'http': proxy, 'https': proxy})
     try:
         current = url
         for _redirect in range(4):
@@ -1349,13 +1351,27 @@ def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False, co
                 total_fixed += 1
                 print(f"    🛠️  LLM 自动修复已应用")
                 llm_passed, llm_issues, _ = llm_review_post(llm_fixed_content, "汇总页面", required=require_llm)
-            llm_blocking = count_blocking_review_issues(llm_issues)
-            total_blocking_issues += llm_blocking
-            total_advisory_issues += len(llm_issues) - llm_blocking
+        llm_blocking = count_blocking_review_issues(llm_issues)
+        total_blocking_issues += llm_blocking
+        total_advisory_issues += len(llm_issues) - llm_blocking
 
-        if not remaining_code_issues and count_blocking_review_issues(llm_issues) == 0:
-            if llm_issues:
-                print(f"    ✅ 无阻断问题（保留 {len(llm_issues)} 个 warning/info）")
+        # 汇总页同样可能包含论文图片，必须经过与独立论文页一致的多模态审查。
+        with open(index_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        _img_passed, img_issues = multimodal_review_images(content, '汇总页面', required=require_llm)
+        if img_issues:
+            img_blocking = count_blocking_review_issues(img_issues)
+            total_blocking_issues += img_blocking
+            total_advisory_issues += len(img_issues) - img_blocking
+            for issue in img_issues:
+                sev = issue.get('severity', 'warning')
+                desc = issue.get('description', '')
+                print(f"    🖼️ 多模态 ({sev}): {desc}")
+
+        if not remaining_code_issues and count_blocking_review_issues(llm_issues) == 0 and count_blocking_review_issues(img_issues) == 0:
+            advisory = len(llm_issues) + len(img_issues)
+            if advisory:
+                print(f"    ✅ 无阻断问题（保留 {advisory} 个 warning/info）")
             else:
                 print(f"    ✅ 通过 review")
 

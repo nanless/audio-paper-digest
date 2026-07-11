@@ -273,6 +273,10 @@ function getSourceFailures(sourceHealth) {
     return failures;
 }
 
+function hasRequiredSourceFailure(sourceHealth) {
+    return getSourceFailures(sourceHealth).length > 0;
+}
+
 function getFatalEmptyCandidateSourceFailures(sourceHealth) {
     const arxivCategories = sourceHealth?.arxiv?.categories || [];
     const arxivAttempted = arxivCategories.length > 0;
@@ -304,6 +308,7 @@ function writeFilterArtifacts({
     filterPromptHash,
     stats,
     complete,
+    sourceHealth = null,
     retryableDecisions = {}
 }) {
     const timestamp = getBeijingISOString();
@@ -311,7 +316,8 @@ function writeFilterArtifacts({
     if (complete && !coverage.complete) {
         throw new Error(`筛选决策覆盖不完整，禁止标记 complete：明确决定 ${coverage.decided}/${coverage.totalCandidates}，待重试/缺失 ${coverage.missingIds.join(', ') || '无'}`);
     }
-    const artifactComplete = complete && coverage.complete;
+    const sourceFailure = sourceHealth && hasRequiredSourceFailure(sourceHealth);
+    const artifactComplete = complete && coverage.complete && !sourceFailure;
     writeFileAtomic(FILTER_DECISIONS_FILE, JSON.stringify({
         timestamp,
         filterModel,
@@ -329,7 +335,7 @@ function writeFilterArtifacts({
 
     writeFileAtomic(FILTERED_FILE, JSON.stringify({
         timestamp,
-        status: artifactComplete ? 'filter_complete' : 'filtering',
+        status: artifactComplete ? 'filter_complete' : (sourceFailure ? 'source_partial_failed' : 'filtering'),
         filterModel,
         filterPromptHash,
         stats: {
@@ -337,6 +343,7 @@ function writeFilterArtifacts({
             afterFilter: filtered.length,
             decisionCount: Object.keys(filterDecisions).length
         },
+        sourceHealth,
         papers: filtered
     }, null, 2));
 }
@@ -785,6 +792,7 @@ async function runFullFetch() {
                     filterPromptHash,
                     stats: baseFilterStats,
                     complete: false,
+                    sourceHealth,
                     retryableDecisions
                 });
                 console.log(`  💾 筛选进度已保存: ${Object.keys(filterDecisions).length}/${allPapersFiltered.length} 篇明确判断，${Object.keys(retryableDecisions).length} 篇待重试`);
@@ -801,6 +809,7 @@ async function runFullFetch() {
                 filterPromptHash,
                 stats: baseFilterStats,
                 complete: false,
+                sourceHealth,
                 retryableDecisions: retryableFilterDecisions
             });
             throw new Error(`筛选未完成：明确决定 ${filterRunStats.decided}/${filterRunStats.totalCandidates}，待重试 ${filterRunStats.retryable || filterRunStats.retryableIds?.length || 0} 篇${filterRunStats.retryableIds?.length ? `（${filterRunStats.retryableIds.join(', ')}）` : ''}`);
@@ -815,8 +824,13 @@ async function runFullFetch() {
             filterPromptHash,
             stats: baseFilterStats,
             complete: true,
+            sourceHealth,
             retryableDecisions: {}
         });
+
+        if (hasRequiredSourceFailure(sourceHealth)) {
+            throw new Error(`抓取来源不完整，已保存筛选进度但禁止进入分析或复用缓存: ${getSourceFailures(sourceHealth).join('; ')}`);
+        }
 
         // ========== 第四步半：跳过已在归档中分析过的论文 ==========
         const archiveAnalyzedIds = loadAnalyzedIdsFromArchive();
@@ -1077,6 +1091,7 @@ module.exports = {
     buildSourceHealth,
     getSourceFetchedCount,
     getSourceFailures,
+    hasRequiredSourceFailure,
     getFatalEmptyCandidateSourceFailures,
     loadCompleteFilteredForToday,
     loadCurrentSuccessfulAnalysisIds,

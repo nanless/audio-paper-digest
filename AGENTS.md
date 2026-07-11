@@ -125,6 +125,8 @@ prompts/                # LLM prompt 模板
 
 `papers.json` 同时支持 `data/current/papers.json` 和 `data/papers.json`（旧版路径），均被 `config.js` 引用。**`papers.json` 持久化去重数据库，永不归档**。`full-fetch.js` 每次运行自动备份 `papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天。条目可带 `digestStatus.status`：`pending_analysis` / `analysis_failed` 不参与强去重，便于中断后重跑；所有分析入口应通过 `scripts/digest-status.js` 将成功/失败同步为 `analyzed` / `analysis_failed`。若最新一次分析失败但旧成功分析仍可用，`status` 保持 `analyzed`，失败记录写入 `digestStatus.latestAttemptStatus` / `error`。
 
+`filtered-papers.json` 只有在全部必需来源健康且筛选决定完整时才能写为 `filter_complete`。任一 arXiv 类别或 HuggingFace 来源失败时会写为 `source_partial_failed` 并停止在筛选阶段，禁止分析、写入去重库或在下一次运行中跳过抓取；必须先恢复缺失来源。
+
 ## 分支策略
 
 - `main` — 每日论文速递流水线（arXiv + HuggingFace）
@@ -139,7 +141,7 @@ prompts/                # LLM prompt 模板
 - **新增分析脚本必须复用 `analysis-engine.js`**，使用 `analyzePaperWithRetry()` + `analyzeBatch()`，禁止重复实现重试/解析/保存逻辑；保存分析结果后必须复用 `scripts/digest-status.js` 同步 `papers.json.digestStatus`。
 - **新增 Node LLM 调用必须通过 `utils.js` 的 `detectApiType()` / `buildApiUrl()` / `buildHeaders()` / `buildRequestBody()` / `parseResponseText()`**，禁止硬编码协议。Python 发布阶段 LLM 调用必须复用 `publish_common.py` 的 `call_publish_llm_api()`。
 - **环境变量加载**：Node 端必须复用 `scripts/env-loader.js` / `loadEnvFile()`；Python 端必须复用 `scripts/project_env.py`。项目配置只允许来自当前项目根 `.env`，脚本启动时必须清理继承进程里的同名项目变量与代理变量，禁止 shell / Trae / Codex 外层变量覆盖或补齐当前项目配置。外部命令复用 `buildChildProcessEnv()` / `build_child_process_env()`；只有 Git 可显式追加 SSH/GPG agent。
-- **代理网络命令必须沙箱外运行**：凡是需要访问本机代理的抓取、深度分析、重分析和网络连通性命令，Agent 必须以沙箱外权限启动；沙箱无法访问 `127.0.0.1:7897` 时不得把该失败误判为目标站点或代理故障。纯本地测试、语法检查和数据校验可在沙箱内执行。
+- **所有脚本必须沙箱外运行**：凡是直接执行项目脚本的抓取、分析、发布、测试、语法检查或数据校验命令，Agent 必须以沙箱外权限启动；沙箱无法访问 `127.0.0.1:7897` 时不得把该失败误判为目标站点或代理故障。仅可在沙箱内阅读文件或由测试框架导入模块，禁止直接运行脚本入口。
 - **`loadPrompt()` 从 markdown 文件内的第一个 fenced code block 提取 prompt**，并替换 `{变量名}` 占位符。内部示例代码块需使用比外层更短的 fence，修改 prompt 后需验证 `utils.js` 解析逻辑兼容。
 - **原子与并发写入**：使用 `writeFileAtomic()` 保存普通数据；分析结果和 `papers.json` 的读改写必须使用跨进程文件锁并校验 `generation`，防止多个入口后写覆盖先写。Python 侧复用 `path_config.py` 的原子写入和 `update_json_file_locked()`，锁目录/owner/generation 协议必须与 Node 一致。
 - **阶段恢复**：深度分析失败结果必须保留 `analysisManifest`、`analysisCheckpoint` 和 `analysisRecoveryImageManifest`，下一次从首个未完成阶段续跑；只有下载、主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计和插图阶段均处于终态时才算成功。失败合并判断旧正文是否可用时必须独立重解析正文，不得因最新失败 manifest 把旧成功正文判为不可用；连续多次失败也不能覆盖旧正文。强制重分析成功旧记录时因无 checkpoint 必须清空主分析及全部下游完成标记。

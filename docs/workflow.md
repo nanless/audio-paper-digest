@@ -187,6 +187,7 @@ HF 特有字段（共 7 个）：
 - `max_tokens=64000`（config.js 中 `apiMaxTokens`），`temperature=0.7`
 - 代理只从项目根 `.env` 中显式配置的大小写代理变量读取；不继承 shell/IDE 代理，也不读取 macOS `scutil`。`HTTPS_PROXY` / `HTTP_PROXY` 是 arXiv 抓取必填的 HTTP CONNECT 地址，HuggingFace `curl` 可额外使用 SOCKS `ALL_PROXY`
 - LLM 请求与抓取请求完全隔离：全部 LLM 调用固定 `agent: false` 直连，绝不复用抓取 dispatcher；使用本机代理的网络命令必须在沙箱外运行
+- 抓取阶段只要任一 arXiv 类别或 HuggingFace 来源失败，即写入 `source_partial_failed` 并终止在筛选阶段；此状态不能复用为 `filter_complete`，也不能进入深度分析或更新持久化去重库。
 - 所有分析配置集中管理于 `scripts/config.js`，支持项目 `.env` 覆写（并发、重试、arXiv/PDF 超时与大小、评分审计温度、插图计划温度及图片预算）
 
 **深度分析不是单次调用，而是多轮递进式处理**：

@@ -397,6 +397,12 @@ describe('analyzePaperWithRetry', () => {
 });
 
 describe('analyzeBatch', () => {
+    it('拒绝零、负数和非整数并发，避免循环无法推进', async () => {
+        for (const concurrency of [0, -1, 1.5, Number.NaN]) {
+            await assert.rejects(analyzeBatch([], { concurrency }), /concurrency 必须是正整数/);
+        }
+    });
+
     it('透传自定义 analyzeFn 到每篇论文分析', async () => {
         const calls = [];
         const { results, stats } = await analyzeBatch(

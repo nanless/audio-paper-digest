@@ -1152,9 +1152,11 @@ function createProxyAgent(proxyUrl, targetHost, targetPort = 443) {
 
     return new https.Agent({
         createConnection: (opts, callback) => {
-            const socket = net.connect({ host: proxy.hostname, port: proxyPort });
+            const socket = proxy.protocol === 'https:'
+                ? tls.connect({ host: proxy.hostname, port: proxyPort, servername: proxy.hostname, rejectUnauthorized: true })
+                : net.connect({ host: proxy.hostname, port: proxyPort });
 
-            socket.once('connect', () => {
+            socket.once(proxy.protocol === 'https:' ? 'secureConnect' : 'connect', () => {
                 const connectReq = `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\nConnection: close\r\n\r\n`;
                 socket.write(connectReq);
 

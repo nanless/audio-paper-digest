@@ -55,6 +55,18 @@ describe('full-fetch helpers', () => {
         assert.deepStrictEqual(failures, ['arxiv:eess.AS:HTTP 429', 'huggingface:timeout']);
     });
 
+    it('任一必需抓取来源失败时禁止将筛选缓存视为完整', () => {
+        const { hasRequiredSourceFailure } = require('../scripts/full-fetch.js');
+        assert.strictEqual(hasRequiredSourceFailure({
+            arxiv: { categories: [{ id: 'cs.SD', ok: true }, { id: 'eess.AS', ok: false }] },
+            huggingface: { ok: true }
+        }), true);
+        assert.strictEqual(hasRequiredSourceFailure({
+            arxiv: { categories: [{ id: 'cs.SD', ok: true }] },
+            huggingface: { ok: true }
+        }), false);
+    });
+
     it('筛选覆盖只接受每个候选都有明确且不可重试的决定', () => {
         const { validateFilterDecisionCoverage } = require('../scripts/full-fetch.js');
         const papers = [{ arxivId: '2607.00001' }, { arxivId: '2607.00002' }];

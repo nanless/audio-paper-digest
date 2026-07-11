@@ -50,7 +50,11 @@ const DEFAULT_LEGACY_FILE = Config.FILES.deepAnalysisResultLegacy;
 const DATA_FILE = dataFileArg || (fs.existsSync(DEFAULT_CURRENT_FILE) || !fs.existsSync(DEFAULT_LEGACY_FILE) ? DEFAULT_CURRENT_FILE : DEFAULT_LEGACY_FILE);
 
 // 并发度：命令行 > 环境变量 > 配置默认值
-const CONCURRENCY = concurrencyArg || parseInt(process.env.PD_REANALYZE_CONCURRENCY, 10) || Config.ANALYSIS_CONFIG.concurrency;
+const CONCURRENCY = concurrencyArg ?? (parseInt(process.env.PD_REANALYZE_CONCURRENCY, 10) || Config.ANALYSIS_CONFIG.concurrency);
+if (!Number.isInteger(CONCURRENCY) || CONCURRENCY < 1) {
+    console.error(`[reanalyze] 错误: --concurrency / PD_REANALYZE_CONCURRENCY 必须是正整数，收到: ${CONCURRENCY}`);
+    process.exit(1);
+}
 
 function inferBatchDate(data, papers) {
     return data.batchDate

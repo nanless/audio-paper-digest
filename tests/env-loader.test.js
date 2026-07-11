@@ -3,6 +3,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const {
     DEFAULT_ENV_FILE,
@@ -49,6 +50,21 @@ function withTempEnv(lines, fn) {
 }
 
 describe('env-loader', () => {
+    it('所有直接 Node 脚本在沙箱标记下均于业务逻辑前拒绝运行', () => {
+        const scriptsDir = path.join(__dirname, '..', 'scripts');
+        const scripts = fs.readdirSync(scriptsDir).filter(name => name.endsWith('.js'));
+        for (const script of scripts) {
+            const result = spawnSync(process.execPath, [path.join(scriptsDir, script)], {
+                cwd: path.join(__dirname, '..'),
+                env: { ...process.env, CODEX_SANDBOX: 'test-seatbelt' },
+                encoding: 'utf8',
+                timeout: 5000
+            });
+            assert.notStrictEqual(result.status, 0, `${script} 不应在沙箱中启动`);
+            assert.match(`${result.stdout}${result.stderr}`, /必须在沙箱外运行/, `${script} 缺少运行时守卫`);
+        }
+    });
+
     it('仅将 scripts 目录下的 JS 主入口识别为受守卫脚本', () => {
         assert.strictEqual(isScriptsEntrypoint(path.join(__dirname, '../scripts/full-fetch.js')), true);
         assert.strictEqual(isScriptsEntrypoint(path.join(__dirname, 'env-loader.test.js')), false);

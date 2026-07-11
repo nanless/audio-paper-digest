@@ -166,6 +166,7 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 - `max_tokens=64000` (`apiMaxTokens` in config.js), `temperature=0.7`
 - Proxy settings come only from case-insensitive proxy variables explicitly configured in the project-root `.env`; inherited shell/IDE proxies and macOS `scutil` are not used. `HTTPS_PROXY` / `HTTP_PROXY` are required HTTP CONNECT addresses for arXiv; HuggingFace `curl` may additionally use SOCKS `ALL_PROXY`
 - LLM and fetch transport are isolated: every LLM call is direct with `agent: false` and never reuses a fetch dispatcher; commands using a local proxy must run outside the sandbox
+- If any arXiv category or HuggingFace source fails, the run records `source_partial_failed` and stops after filtering. That state is never reusable as `filter_complete` and cannot enter deep analysis or update the persistent deduplication database.
 - All analysis configurations are centrally managed in `scripts/config.js`, with project `.env` overrides (`PD_ANALYSIS_CONCURRENCY`, `PD_ANALYSIS_MAX_RETRIES`, `PD_FILTER_BATCH_SIZE`, `PD_ARXIV_MAX_RESULTS`)
 
 **Deep analysis is not a single call, but a multi-round progressive process**:
