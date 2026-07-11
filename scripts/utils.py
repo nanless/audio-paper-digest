@@ -661,3 +661,8 @@ def parse_analysis(analysis):
             pass
 
     return r
+
+
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime('utils.py')

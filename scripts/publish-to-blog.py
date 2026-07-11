@@ -2,9 +2,6 @@
 from project_env import load_project_env
 load_project_env()
 
-from log_setup import setup_script_logging
-setup_script_logging(__file__)
-
 """
 论文速递 → GitHub Pages 博客
 
@@ -42,6 +39,7 @@ from publish_common import (
 )
 from path_config import CURRENT_DIR, atomic_write_json, atomic_write_text
 from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env
+from runtime_guard import require_external_runtime
 from utils import strip_md, parse_analysis
 
 BLOG_REPO = os.path.expanduser(
@@ -1972,6 +1970,8 @@ def load_verified_review_receipt(date_str):
 
 
 def generate_main():
+    from log_setup import setup_script_logging
+    setup_script_logging(__file__)
     data_file = None
     target_date = None
     category = '论文速递'
@@ -2080,4 +2080,5 @@ def main():
 
 
 if __name__ == '__main__':
+    require_external_runtime('publish-to-blog.py')
     main()

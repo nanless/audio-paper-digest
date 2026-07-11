@@ -67,7 +67,8 @@ body
                 save_review_receipt=mock.Mock(return_value=Path('receipt.json')),
                 git_push=git_push,
             )
-            with mock.patch.object(review_blog, 'load_publish_to_blog', return_value=module), \
+            with mock.patch.object(review_blog, 'require_external_runtime'), \
+                    mock.patch.object(review_blog, 'load_publish_to_blog', return_value=module), \
                     mock.patch.object(sys, 'argv', ['review-blog.py', '--date', '2026-07-10']), \
                     contextlib.redirect_stdout(io.StringIO()):
                 review_blog.main()
@@ -89,7 +90,8 @@ body
             review_all_posts=mock.Mock(side_effect=AssertionError('push must not review')),
             load_papers=mock.Mock(side_effect=AssertionError('push must not load papers')),
         )
-        with mock.patch.object(push_blog, 'load_publish_to_blog', return_value=module), \
+        with mock.patch.object(push_blog, 'require_external_runtime'), \
+                mock.patch.object(push_blog, 'load_publish_to_blog', return_value=module), \
                 mock.patch.object(sys, 'argv', ['push-blog.py', '--date', '2026-07-10']), \
                 contextlib.redirect_stdout(io.StringIO()):
             push_blog.main()

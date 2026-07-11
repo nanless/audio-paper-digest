@@ -239,3 +239,7 @@ module.exports = {
     validateTopLevelSectionContract,
     getInvalidAnalysisReason
 };
+
+if (require.main === module) {
+    require('./env-loader.js').requireExternalRuntime('analysis-contract.js');
+}

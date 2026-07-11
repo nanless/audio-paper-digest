@@ -71,9 +71,10 @@ npm install
 #    PAPER_ANALYZER_SECONDARY_API_KEY=tp-your-key
 
 # 3. Run the full pipeline (crawl + filter + deep analysis)
+# Every project script must run outside the sandbox; entrypoints reject Codex sandbox execution.
 ./run-full-fetch.sh
 
-# 4. Publish blog
+# 4. Publish blog (must run outside the sandbox; entries reject Codex sandbox execution)
 python3 scripts/publish-to-blog.py --date 2026-05-08
 
 # 5. Generate Xiaohongshu copy

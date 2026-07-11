@@ -8,10 +8,8 @@ from pathlib import Path
 from project_env import load_project_env
 load_project_env()
 
-from log_setup import setup_script_logging
-setup_script_logging(__file__)
-
 from blog_entry_loader import load_publish_to_blog
+from runtime_guard import require_external_runtime
 
 
 def parse_date(module):
@@ -50,6 +48,9 @@ def read_generated_pages(module, date_str, paths):
 
 
 def main():
+    require_external_runtime('review-blog.py')
+    from log_setup import setup_script_logging
+    setup_script_logging(__file__)
     module = load_publish_to_blog()
     try:
         blog_repo, content_dir = module.validate_publish_target()

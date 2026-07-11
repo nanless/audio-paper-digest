@@ -2,6 +2,8 @@
 
 ## 脚本分工（全部脚本详解）
 
+> **运行前置条件**：所有本项目脚本必须在沙箱外执行。直接启动的 Node/Python 脚本会由公共环境加载器检测 `CODEX_SANDBOX` 并在任何业务操作前拒绝执行；`run-full-fetch.sh` 和 `scripts/backup-data.sh` 也有同样的入口检查。单元测试导入模块不会触发该检查。
+
 ### 4.1 主链路脚本
 
 #### `scripts/full-fetch.js`
@@ -370,6 +372,8 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 3. `push-blog.py` 只验证审查凭证与工作树文件哈希完全一致，再精确 stage → 中文详细 commit → `git push origin HEAD:main` → 验证远端 OID；该脚本不生成也不 review。
 4. GitHub Actions 自动构建并部署到 Pages。
 
+**运行环境**：上述三个入口和兼容 `publish-to-blog.py` 都强制要求沙箱外运行。它们检测到可靠沙箱标志 `CODEX_SANDBOX` 即拒绝开始；沙箱外权限包装会保留网络禁用环境标志，不能将其单独视为仍在沙箱内。此时应从沙箱外重新运行原阶段，不得跳过审查或伪造凭证。
+
 **参数**：三个脚本都支持 `--date YYYY-MM-DD`；只有 `generate-blog.py` 接受 `--all`、`--category` 和自定义数据文件。`publish-to-blog.py --push` 会直接拒绝，防止恢复合并流程。
 
 **日期过滤**：
@@ -394,7 +398,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 
 Markdown 表格允许前导分组列为空；代码层不得把这类合法阶段续行当作子标题删除。LLM 提出的“普通模型名/技术术语必须加反引号”属于样式伪问题，会被过滤。
 
-LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，按 `fix_instruction` 执行简单文本替换。博客 review 与小红书 one-liner 共用 `publish_common.py` 中的 `call_publish_llm_api()`，协议路由与 Node 端保持一致；Anthropic 兼容请求会动态读取本地 `claude --version` 生成 `User-Agent`，失败时回退默认版本。
+LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，按 `fix_instruction` 执行简单文本替换。博客 review 与小红书 one-liner 共用 `publish_common.py` 中的 `call_publish_llm_api()`，协议路由与 Node 端保持一致；客户端使用标准库的显式空代理处理器强制 LLM 直连，避免受 `requests` 版本兼容性和抓取代理污染影响；Anthropic 兼容请求会动态读取本地 `claude --version` 生成 `User-Agent`，失败时回退默认版本。
 
 **重要限制**：`fetchedAt` 是抓取时间，不是论文在 arXiv 上的 `published` 日期。跨天运行时请显式指定 `--date`。
 
@@ -440,7 +444,7 @@ Python 发布/维护脚本共享路径配置。集中提供 `PROJECT_ROOT`、`DA
 - 支持 `--date YYYY-MM-DD` 指定日期
 - 若没有匹配 `fetchedAt == --date` 的论文，脚本会停止生成，避免跨日混入历史论文
 - 输出到 `data/current/xiaohongshu-YYYY-MM-DD-<suffix>.md`
-- **每篇论文的一句话介绍调用发布阶段 LLM API 生成**（复用 `publish_common.py` 的协议路由，`session.trust_env = False` 绕过代理）；输入优先使用 `parsed.summary/results/limitations/opensource` 和主标签，再回退摘要；LLM 失败时回退到本地 `extract_one_liner()`
+- **每篇论文的一句话介绍调用发布阶段 LLM API 生成**（复用 `publish_common.py` 的协议路由和标准库显式无代理传输，强制绕过代理）；输入优先使用 `parsed.summary/results/limitations/opensource` 和主标签，再回退摘要；LLM 失败时回退到本地 `extract_one_liner()`
 - 自动清理 Markdown 格式和学术化前缀
 - 附带 emoji 热度标识：🔥≥8 分、✅≥6 分、📝<6 分（与博客、微信统一）
 - 少于 1000 字，不输出标签和 `---` 分隔线，开源信息标注清晰

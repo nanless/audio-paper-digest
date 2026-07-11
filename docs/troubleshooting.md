@@ -65,6 +65,11 @@ ls -lt content/posts | head -20
 - 旧路径 `data/deep-analysis-result.json` 仅在兼容场景下读取
 - 若同时存在新旧路径，脚本优先选择 `data/current/`
 
+### 12.5.1 博客阶段提示必须沙箱外运行
+
+- `generate-blog.py`、`review-blog.py`、`push-blog.py` 与兼容 `publish-to-blog.py` 会主动拒绝可靠沙箱标志 `CODEX_SANDBOX`；沙箱外权限包装可能保留网络禁用标志，不能单独据此判定仍在沙箱内
+- 应以沙箱外权限重跑**同一阶段**；这不是内容问题，不要无故重新生成，也绝不能跳过 LLM/图片审查或伪造 SHA-256 审查凭证
+
 ### 12.6 HuggingFace 抓取为空
 
 - 检查项目根 `.env` 是否同时有 `HTTPS_PROXY=http://127.0.0.1:7897` 与 `HTTP_PROXY=http://127.0.0.1:7897`；若本机代理提供 SOCKS，可再设置 `ALL_PROXY=socks5h://127.0.0.1:7897`

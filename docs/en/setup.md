@@ -84,6 +84,10 @@ Benefits of this design:
 
 The Node/Python loaders clear same-name inherited project variables before loading this file and tighten `.env` permissions to `0600`. LLM calls require API key, endpoint, and model together; no entry point fills a partial configuration with hard-coded OpenAI defaults.
 
+#### Execution Environment
+
+**Every project script must run outside the sandbox**, including direct `scripts/*.js`, `scripts/*.py`, `run-full-fetch.sh`, and `scripts/*.sh` invocations. Node `env-loader.js`, Python `project_env.py`, and shell entry points reject `CODEX_SANDBOX` before logging, network requests, file writes, or business logic. Unit-test module imports do not trigger the guard. The external-runtime wrapper may preserve a network-disabled marker, so that marker alone cannot identify a sandbox.
+
 #### Proxy
 
 | Variable | Description |
@@ -94,6 +98,8 @@ The Node/Python loaders clear same-name inherited project variables before loadi
 | `NO_PROXY` | Local-address allow list, for example `localhost,127.0.0.1,::1` |
 
 Fetch proxy configuration is mandatory: arXiv metadata, HTML/PDF/images and HuggingFace Papers reject direct fallback when it is missing. Node arXiv fetches only support HTTP CONNECT, so `HTTPS_PROXY` / `HTTP_PROXY` cannot be SOCKS URLs; HuggingFace `curl` may additionally use `ALL_PROXY=socks5h://...`. LLM requests always use direct `agent: false` connections and never use the fetch proxy. Proxy values are loaded only from the project-root `.env`; same-name shell/IDE values are cleared and macOS `scutil` is not consulted. Commands that need a local proxy must run outside the sandbox, because sandbox loopback cannot reach `127.0.0.1`.
+
+Blog generation, review, and push must also run outside the sandbox, including the generation-only stage. `generate-blog.py`, `review-blog.py`, `push-blog.py`, and compatibility `publish-to-blog.py` reject the reliable `CODEX_SANDBOX` marker; the elevation wrapper may preserve the network-disabled marker, so it cannot independently reject an external runtime.
 
 ### 6.3 Configuration Example
 

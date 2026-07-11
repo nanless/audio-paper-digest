@@ -63,6 +63,8 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 
 Node 脚本通过 `scripts/env-loader.js` 加载当前项目根 `.env`：① `scripts/config.js` 模块级最先执行（任何 `require('config')` 即触发）；② `scripts/utils.js` 的 `loadEnvFile()` 二次兜底补漏。Python 脚本通过 `scripts/project_env.py` 加载同一个 `.env`。两端都会先清理继承自 Trae/Codex/shell 的项目同名变量（`PAPER_ANALYZER_*`、`PAPER_DIGEST_*`、`PD_*`、`WECHAT_*`、`FEISHU_*`、`XIAOHONGSHU_*`、`KIMI_API_KEY`）以及大小写代理变量，再写入项目 `.env`；代理不再回退 macOS `scutil`，加载器会把 `.env` 权限收紧为 `0600`。外部命令必须使用最小子进程环境，禁止把 LLM/发布凭据传给 curl、CLI、Git hook 或浏览器进程。
 
+**所有项目脚本必须沙箱外执行**：任何直接执行的 `scripts/*.js`、`scripts/*.py`、`run-full-fetch.sh` 或 `scripts/*.sh` 都必须以沙箱外权限启动。Node `env-loader.js`、Python `project_env.py` 与 shell 入口会检测可靠的 `CODEX_SANDBOX` 标志并在业务逻辑、日志、网络和写入前失败退出；测试导入模块不触发守卫。`CODEX_SANDBOX_NETWORK_DISABLED` 可能被沙箱外权限包装保留，不能单独判定仍在沙箱内。
+
 ### LLM API 协议自动路由
 
 `detectApiType()`（`scripts/utils.js`）根据 endpoint + model 自动判断协议：
@@ -143,7 +145,7 @@ prompts/                # LLM prompt 模板
 - **阶段恢复**：深度分析失败结果必须保留 `analysisManifest`、`analysisCheckpoint` 和 `analysisRecoveryImageManifest`，下一次从首个未完成阶段续跑；只有下载、主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计和插图阶段均处于终态时才算成功。失败合并判断旧正文是否可用时必须独立重解析正文，不得因最新失败 manifest 把旧成功正文判为不可用；连续多次失败也不能覆盖旧正文。强制重分析成功旧记录时因无 checkpoint 必须清空主分析及全部下游完成标记。
 - **arXiv 与 Demo 网络恢复**：深度分析的 arXiv HTML/图片发现默认超时 60 秒，PDF fallback 默认 180 秒且默认最大 50MB，分别支持 `PD_ARXIV_FETCH_TIMEOUT_MS` / `PD_ARXIV_PDF_TIMEOUT_MS` / `PD_ARXIV_PDF_MAX_BYTES`。arXiv 全文、PDF 和图片必须使用项目 HTTP CONNECT 代理 dispatcher；稳定 400/403/404 只尝试一轮；指定版本号不得静默回退到最新版。Demo 页面允许最多 3 次 HTTP 重定向，但每一跳都必须重新执行公网 DNS/IP 校验，严禁自动跟随到私网地址。
 - **北京时间时间戳**：运行数据中的 `timestamp` / `lastUpdated` / `fetchedAt` 应使用 `getBeijingISOString()` 或 Python 端 `now_bj_iso()`，避免 UTC 日期导致跨天归档或发布筛选错误。
-- **博客三阶段必须分离**：依次运行 `generate-blog.py` → `review-blog.py` → `push-blog.py`。生成阶段禁止 review/push；review 阶段禁止 Git commit/push，通过严格 LLM/图片 review 和 Hugo gate 后写入带逐文件 SHA-256 的审查凭证；push 阶段禁止重新生成或 review，只能验证凭证与工作树完全一致后精确 stage、中文详细 commit、`git push origin HEAD:main` 并核对远端 OID。仅用户明确要求发博客时才允许运行 `push-blog.py`。
+- **博客三阶段必须分离且必须沙箱外运行**：依次运行 `generate-blog.py` → `review-blog.py` → `push-blog.py`。三个入口及兼容 `publish-to-blog.py` 会检测 `CODEX_SANDBOX` 并拒绝在沙箱内运行；`CODEX_SANDBOX_NETWORK_DISABLED` 会被沙箱外权限包装保留，不能单独作为阻断依据。Agent 必须以沙箱外权限启动，禁止在沙箱内重试、跳过 LLM/图片审查或手写凭证。生成阶段禁止 review/push；review 阶段禁止 Git commit/push，通过严格 LLM/图片 review 和 Hugo gate 后写入带逐文件 SHA-256 的审查凭证；push 阶段禁止重新生成或 review，只能验证凭证与工作树完全一致后精确 stage、中文详细 commit、`git push origin HEAD:main` 并核对远端 OID。仅用户明确要求发博客时才允许运行 `push-blog.py`。
 - **发布 review 不得删除合法表格续行**：Markdown 表格允许前导分组列为空，这通常表示沿用上一行模型/配置；不能把 `| | | | Filter2 ... |` 一类数据行当成子标题删除。普通模型名或技术术语未加反引号属于样式建议，不是格式问题。
 - **图片展示顺序与质量门禁**：候选图编号不是最终展示图号；无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 必须按图片在最终正文中的出现顺序归一化。副模型每篇最多插入 4 张图（可用 `PD_IMAGE_INSERTION_MAX` 覆写），必须选择代码生成的稳定段落 ID；非法 ID 和超限图片一律拒绝，不得回退堆到章节末尾。HTML 正文和图注必须同次解析复用，成功下载写入 `data/current/image-cache/`，永久 HTTP/MIME/大小错误不得反复重试。
 - **分析来源与发布门禁**：结果必须保存 `analysisSource`、全文/实际输入字符数、截断状态、来源 SHA-256、抓取告警和置信度。来源指纹变化时清除主分析及下游 checkpoint。仅摘要分析默认禁止发布；人工确认后必须显式设置 `allowAbstractAnalysisPublish: true`，博客同时显示醒目降级提示。最新一次重分析失败时禁止用陈旧正文发布。

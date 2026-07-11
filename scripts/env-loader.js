@@ -32,6 +32,23 @@ const TRANSPORT_ENV_KEYS = Object.freeze([
     'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy'
 ]);
 
+function isScriptsEntrypoint(scriptPath = process.argv[1]) {
+    if (!scriptPath) return false;
+    const resolved = path.resolve(scriptPath);
+    const scriptsDir = path.resolve(__dirname);
+    return resolved.startsWith(`${scriptsDir}${path.sep}`) && path.extname(resolved) === '.js';
+}
+
+function requireExternalRuntime(commandName = path.basename(process.argv[1] || 'script')) {
+    const sandbox = String(process.env.CODEX_SANDBOX || '').trim();
+    if (!sandbox) return;
+    throw new Error(
+        `${commandName} 必须在沙箱外运行（检测到 CODEX_SANDBOX=${sandbox}）。`
+        + '项目脚本可能访问本机代理、LLM、外部站点、Hugo 或 Git；'
+        + '请以沙箱外权限重新执行，禁止在沙箱内降级、跳过或伪造运行结果。'
+    );
+}
+
 function resolveEnvFile(envFile) {
     if (envFile) return envFile;
     return DEFAULT_ENV_FILE;
@@ -96,6 +113,11 @@ function loadProjectEnv(envFile) {
     return parsed;
 }
 
+// Run only for a direct scripts/*.js entrypoint, never when tests import modules.
+if (isScriptsEntrypoint()) {
+    requireExternalRuntime();
+}
+
 module.exports = {
     DEFAULT_ENV_FILE,
     PROJECT_ENV_PREFIXES,
@@ -103,6 +125,8 @@ module.exports = {
     CHILD_ENV_PASSTHROUGH_KEYS,
     VCS_CHILD_ENV_KEYS,
     TRANSPORT_ENV_KEYS,
+    isScriptsEntrypoint,
+    requireExternalRuntime,
     resolveEnvFile,
     isProjectEnvKey,
     parseEnvFile,

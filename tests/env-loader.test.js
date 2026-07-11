@@ -7,7 +7,9 @@ const path = require('node:path');
 const {
     DEFAULT_ENV_FILE,
     buildChildProcessEnv,
+    isScriptsEntrypoint,
     loadProjectEnv,
+    requireExternalRuntime,
     resolveEnvFile
 } = require('../scripts/env-loader.js');
 
@@ -47,6 +49,22 @@ function withTempEnv(lines, fn) {
 }
 
 describe('env-loader', () => {
+    it('仅将 scripts 目录下的 JS 主入口识别为受守卫脚本', () => {
+        assert.strictEqual(isScriptsEntrypoint(path.join(__dirname, '../scripts/full-fetch.js')), true);
+        assert.strictEqual(isScriptsEntrypoint(path.join(__dirname, 'env-loader.test.js')), false);
+    });
+
+    it('在 Codex 沙箱中拒绝实际脚本入口', () => {
+        const original = process.env.CODEX_SANDBOX;
+        try {
+            process.env.CODEX_SANDBOX = 'seatbelt';
+            assert.throws(() => requireExternalRuntime('full-fetch.js'), /必须在沙箱外运行/);
+        } finally {
+            if (original === undefined) delete process.env.CODEX_SANDBOX;
+            else process.env.CODEX_SANDBOX = original;
+        }
+    });
+
     it('项目 .env 覆盖并清理外层项目变量', () => {
         withSavedEnv(() => {
             process.env.PAPER_ANALYZER_API_KEY = 'outer-key';

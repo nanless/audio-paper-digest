@@ -71,9 +71,11 @@ npm install
 #    PAPER_ANALYZER_SECONDARY_API_KEY=tp-your-key
 
 # 3. 运行全流程（抓取 + 筛选 + 深度分析）
+# 所有项目脚本必须在沙箱外运行；脚本入口会拒绝 Codex 沙箱
 ./run-full-fetch.sh
 
 # 4. 博客三阶段：生成、审查、推送
+# 必须在沙箱外运行；入口检测到 Codex 沙箱会拒绝执行
 python3 scripts/generate-blog.py --date 2026-05-08
 python3 scripts/review-blog.py --date 2026-05-08
 python3 scripts/push-blog.py --date 2026-05-08

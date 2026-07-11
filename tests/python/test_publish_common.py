@@ -165,11 +165,12 @@ confidence: 中
 
     def test_secondary_publish_llm_uses_secondary_model_with_primary_endpoint_and_key_fallback(self):
         response = mock.Mock()
-        response.json.return_value = {'choices': [{'message': {'content': 'ok'}}]}
-        response.raise_for_status.return_value = None
-        session = mock.MagicMock()
-        session.__enter__.return_value = session
-        session.post.return_value = response
+        response.status = 200
+        response.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        opener = mock.Mock()
+        opener.open.return_value = response
         env = {
             'PAPER_ANALYZER_API_KEY': 'primary-key',
             'PAPER_ANALYZER_ENDPOINT': 'https://api.example.com/v1',
@@ -177,17 +178,17 @@ confidence: 中
             'PAPER_ANALYZER_SECONDARY_MODEL': 'vision-model',
         }
         with mock.patch.dict(os.environ, env, clear=True), \
-                mock.patch('requests.Session', return_value=session):
+                mock.patch('urllib.request.build_opener', return_value=opener):
             result = call_publish_llm_api(
                 'inspect', required=True, use_secondary=True, max_retries=1,
                 images=[{'media_type': 'image/png', 'data': 'cG5n'}],
             )
         self.assertEqual(result, 'ok')
-        url = session.post.call_args.args[0]
-        kwargs = session.post.call_args.kwargs
-        self.assertEqual(url, 'https://api.example.com/v1/chat/completions')
-        self.assertEqual(kwargs['headers']['Authorization'], 'Bearer primary-key')
-        self.assertEqual(kwargs['json']['model'], 'vision-model')
+        request = opener.open.call_args.args[0]
+        payload = json.loads(request.data.decode('utf-8'))
+        self.assertEqual(request.full_url, 'https://api.example.com/v1/chat/completions')
+        self.assertEqual(request.get_header('Authorization'), 'Bearer primary-key')
+        self.assertEqual(payload['model'], 'vision-model')
 
     def test_required_secondary_publish_llm_does_not_fallback_to_primary_model(self):
         env = {

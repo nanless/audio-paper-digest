@@ -190,3 +190,8 @@ def update_json_file_locked(path, updater, *, allow_missing=True, expected_gener
             updated["generation"] = current_generation + 1
         atomic_write_json(target, updated)
         return updated
+
+
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime('path_config.py')

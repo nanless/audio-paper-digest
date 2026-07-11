@@ -4,6 +4,10 @@
 import importlib.util
 from pathlib import Path
 
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime('blog_entry_loader.py')
+
 
 def load_publish_to_blog():
     module_path = Path(__file__).resolve().parent / 'publish-to-blog.py'

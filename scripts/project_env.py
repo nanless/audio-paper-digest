@@ -6,7 +6,10 @@ configuration so inherited Trae/Codex/shell variables cannot be mixed with it.
 """
 
 import os
+import sys
 from pathlib import Path
+
+from runtime_guard import require_external_runtime
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
@@ -97,3 +100,18 @@ def build_child_process_env(extra=None, allowed_keys=()):
     if extra:
         env.update(extra)
     return env
+
+
+def _is_scripts_entrypoint():
+    if not sys.argv or not sys.argv[0]:
+        return False
+    try:
+        entry = Path(sys.argv[0]).resolve()
+    except OSError:
+        return False
+    return entry.parent == Path(__file__).resolve().parent and entry.suffix == '.py'
+
+
+# Run only for a direct scripts/*.py entrypoint, never when tests import modules.
+if _is_scripts_entrypoint():
+    require_external_runtime(Path(sys.argv[0]).name)

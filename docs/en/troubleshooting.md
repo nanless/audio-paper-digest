@@ -65,6 +65,11 @@ Possible causes:
 - The legacy path `data/deep-analysis-result.json` is only read for backward compatibility
 - If both old and new paths exist, scripts prefer `data/current/`
 
+### 12.5.1 Blog Stage Refuses to Run in Codex
+
+- `generate-blog.py`, `review-blog.py`, `push-blog.py`, and compatibility `publish-to-blog.py` deliberately reject the reliable `CODEX_SANDBOX` marker; the elevation wrapper may preserve the network-disabled marker, so it cannot independently identify a sandbox
+- Start the exact same stage outside the sandbox. Do not treat this as a content failure, do not regenerate unnecessarily, and never bypass LLM/image review or fabricate a SHA-256 receipt
+
 ### 12.6 HuggingFace Fetch Returns Empty
 
 - Check the project-root `.env` contains both `HTTPS_PROXY=http://127.0.0.1:7897` and `HTTP_PROXY=http://127.0.0.1:7897`; if the local proxy provides SOCKS, also set `ALL_PROXY=socks5h://127.0.0.1:7897`

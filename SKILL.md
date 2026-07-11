@@ -119,7 +119,6 @@ API 调用特性：
 - max_tokens=64000，temperature=0.7
 - **双层重试**：analysis-engine.js 层面每篇最多重试 2 次（总共最多 3 次尝试）；deep-analyzer.js 内部每次 API 调用再重试最多 3 次（指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5s`）
 - **抓取代理为强制项**：LLM API 固定 `agent: false` 直连，不得注入代理 agent/dispatcher；arXiv/HuggingFace 抓取缺少项目 `.env` 代理必须失败，禁止直接回退。Node arXiv 仅使用 `HTTPS_PROXY` / `HTTP_PROXY` 的 HTTP CONNECT 地址，HuggingFace curl 可额外使用 SOCKS `ALL_PROXY`；访问本机代理的网络命令必须在沙箱外运行。
-- **LLM API 请求明确设置 `agent: false`，强制直连以绕过本地代理（避免 MiMo 403）；arXiv/HuggingFace 等外部抓取仍使用代理自动检测**
 - arXiv HTML 解析使用 **cheerio** 结构化选择器，移除 script/style/nav/header/footer 等噪音元素
 - 图片先按 caption/文件名/顺序启发式预筛（默认 `imageCandidateMax=20`）；HTML 正文与图注在同一次响应中解析并复用，预提供 URL 会按完整 URL或唯一文件名补全 caption。只有配置副模型的双模型模式才**串行下载**最多 `imageMaxCount=20` 张候选图片并送入副模型；成功内容写入 `data/current/image-cache/`，恢复时校验 MIME/文件头后复用。仅 408/425/429/5xx 和网络异常重试，404、非法 MIME、超限与安全拒绝立即终止
 - 每篇分析结果写入 `imageManifest`，记录图片发现数、候选评分、逐 URL 下载结果、缓存命中、插图计划哈希、拒绝原因和最终选图，便于复盘图像筛选
@@ -335,6 +334,7 @@ npm run xiaohongshu -- --date 2026-04-22
 - `generate-blog.py` 只生成并安装 `.md`，写入 generation manifest，禁止 review/commit/push
 - `review-blog.py` 只审查 generation manifest 中的文件，通过严格 LLM/图片 review 与 Hugo gate 后写入逐文件 SHA-256 凭证，禁止 commit/push
 - `push-blog.py` 只验证审查凭证和当前文件哈希，精确 stage 后使用中文详细提交信息 commit，再 `git push origin HEAD:main` 并验证远端 OID；禁止重新生成或 review
+- **三个阶段及兼容 `publish-to-blog.py` 必须在沙箱外运行**：入口检测到可靠沙箱标志 `CODEX_SANDBOX` 会立即拒绝执行；沙箱外权限包装会保留网络禁用环境标志，不能据此误拒绝。原因是 review 会直连 LLM、下载图片并运行 Hugo，push 需要真实 Git 网络；不得在沙箱内跳过 review、伪造凭证或改用无网络降级路径。
 - 若需发布全部论文（不过滤），显式传 `--all`
 
 Agent 执行约束：
@@ -427,9 +427,11 @@ PY
 6. **禁止硬编码密钥**：不要在任何脚本或文档中写入真实 API key；所有凭证（LLM、微信公众号、飞书）统一放在 `项目根目录的 `.env` 文件`，由脚本通过项目 env loader 加载。
 7. **修改脚本时防止安全机制破坏**：本环境会静默替换 `API_KEY` 等敏感字符为 `***`。修改含有这类字符的脚本时，修改后必须重新读取文件验证关键行未被破坏。同时定期检查 `data/`、`logs/` 目录是否残留含密钥的备份文件或日志快照，发现立即清理。
 8. **环境变量统一管理**：新增脚本需要读取 LLM 配置时，统一使用项目 `.env` 中的 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT`，并复用 Node `scripts/env-loader.js` 或 Python `scripts/project_env.py`；禁止引入别名回退链、硬编码、base64 编码变量名 hack，或读取外层 shell/Codex/Trae 继承变量作为项目配置。
+8.1 **所有脚本必须沙箱外执行**：直接运行任意 `scripts/*.js`、`scripts/*.py`、`run-full-fetch.sh` 或 `scripts/*.sh` 时，必须使用沙箱外权限。Node/Python 公共环境加载器和两个 shell 入口会在检测到 `CODEX_SANDBOX` 后、任何业务逻辑/日志/网络/写入之前失败退出；不得在沙箱内换命令、手动取消检查或伪造结果。单元测试导入模块不会触发该守卫。
 9. **新增可配置参数和运行数据路径放入统一配置**：新增 Node 脚本涉及可调整参数（并发度、超时、批次大小等）或 `data/current/*.json` 运行数据文件时，统一放入/复用 `scripts/config.js`（运行数据路径使用 `Config.FILES`），参数项按需添加项目 `.env` 覆写支持；新增 Python 发布/维护脚本涉及共享路径时，复用 `scripts/path_config.py`，禁止再次手写 `data/current/*.json` 默认路径。
 10. **新增分析脚本复用 analysis-engine.js**：新增论文分析相关脚本时，优先复用 `analysis-engine.js` 的 `analyzeBatch()` / `analyzePaperWithRetry()`，避免重复实现重试、解析、保存逻辑；保存结果后必须通过 `scripts/digest-status.js` 同步 `papers.json.digestStatus`。
 11. **博客三阶段不得合并**：`generate-blog.py` 只生成并写 generation manifest；`review-blog.py` 只执行严格 LLM/图片 review 和 Hugo gate，通过后写入逐文件 SHA-256 凭证；`push-blog.py` 只验证凭证后 commit/push，禁止调用生成或 review。未获用户明确授权时禁止运行 push 阶段。
+11.1 **博客发布必须沙箱外执行**：运行 `generate-blog.py`、`review-blog.py`、`push-blog.py` 或兼容 `publish-to-blog.py` 时，Agent 必须使用沙箱外权限。脚本检测到 Codex 沙箱标志会失败退出；该失败不是内容问题，不得在沙箱内重复执行或绕过 LLM/图片/Hugo/Git 检查。
 12. **输出契约改动要同步 parser**：若修改 `prompts/deep-analysis.md` 中的 `## 机器摘要` 键名、章节顺序或标签输出格式，必须同步检查 `scripts/utils.js` 与 `scripts/utils.py` 的解析逻辑。
 13. **变更后必须做产物级验证**：至少抽样检查一份 `data/current/deep-analysis-result.json`，确认 `analysis` 文本的机器摘要包含 `document_type`、`rank_bucket`、`primary_task_tag`、`primary_method_tag`，且 `parsed` 缓存包含 `documentType`、`scoringRubricVersion`、`rankBucket`、`primaryTaskTag`、`primaryMethodTag` 等字段，再运行博客/社媒脚本验证最终产物。
 14. **变更后验证 prompt 加载**：修改 `prompts/` 目录下的 markdown 文件后，运行一次快速测试（`node scripts/quick-test.js` 或单篇分析）确认 `loadPrompt()` 能正确读取并替换占位符，无 `{变量名}` 残留。

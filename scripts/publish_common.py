@@ -12,6 +12,8 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -466,12 +468,19 @@ def call_publish_llm_api(
     last_error = None
     for attempt in range(max_retries):
         try:
-            import requests
-            with requests.Session() as session:
-                session.trust_env = False
-                resp = session.post(api_url, json=payload, headers=headers, timeout=timeout)
-                resp.raise_for_status()
-                content = parse_publish_response_text(api_type, resp.json())
+            request = urllib.request.Request(
+                api_url,
+                data=json.dumps(payload).encode('utf-8'),
+                headers={**headers, 'Content-Type': 'application/json'},
+                method='POST',
+            )
+            # Publishing LLM calls must remain direct even when fetch proxies are configured.
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(request, timeout=timeout) as response:
+                if response.status < 200 or response.status >= 300:
+                    raise RuntimeError(f'HTTP {response.status}')
+                data = json.loads(response.read().decode('utf-8'))
+            content = parse_publish_response_text(api_type, data)
             if content:
                 return content
             last_error = RuntimeError('LLM 返回内容为空')
