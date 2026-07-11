@@ -30,8 +30,15 @@
 | `PD_FILTER_BATCH_SIZE` | LLM 筛选每批篇数 | 5 |
 | `PD_ARXIV_MAX_RESULTS` | arXiv 每类抓取数量 | 100 |
 | `PD_IMAGE_MAX_BYTES` | 深度分析单张图片原始字节上限 | 6291456 |
+| `PD_IMAGE_DOWNLOAD_TIMEOUT_MS` | 深度分析单张候选图片下载超时（毫秒） | 60000 |
+| `PD_ARXIV_FETCH_TIMEOUT_MS` | arXiv HTML 与图片发现请求超时（毫秒） | 60000 |
+| `PD_ARXIV_PDF_TIMEOUT_MS` | arXiv PDF 全文 fallback 下载超时（毫秒） | 180000 |
+| `PD_ARXIV_PDF_MAX_BYTES` | arXiv PDF fallback 最大字节数 | 52428800 |
+| `PD_SCORING_AUDIT_TEMPERATURE` | 最终评分审计温度 | 0.1 |
+| `PD_IMAGE_PLAN_TEMPERATURE` | 副模型图片计划温度 | 0.2 |
 | `PD_IMAGE_MAX_BASE64_CHARS` | 深度分析单张图片 base64 字符上限 | 8388608 |
 | `PD_IMAGE_TOTAL_BASE64_CHARS` | 深度分析单篇论文所有图片 base64 总上限 | 20971520 |
+| `PD_IMAGE_INSERTION_MAX` | 副模型每篇最多实际插入的高价值图片数 | 4 |
 | `PAPER_DIGEST_ENABLE_FILE_LOGS` / `PD_ENABLE_FILE_LOGS` | 兼容旧配置；文件日志现在默认启用 | 已启用 |
 | `PAPER_DIGEST_DISABLE_FILE_LOGS` / `PD_DISABLE_FILE_LOGS` | 设为 `1` 时强制禁用文件日志 | 未启用 |
 
@@ -51,6 +58,7 @@
 | `PAPER_DIGEST_BLOG_URL` | 博客部署后的访问地址（如 `https://nanless.github.io/audio-paper-digest-blog/posts`） | `https://nanless.github.io/audio-paper-digest-blog/posts` |
 | `PAPER_DIGEST_REPO_URL` | 小红书等文案中附带的项目仓库地址 | `github.com/nanless/audio-paper-digest` |
 | `PAPER_DIGEST_GITHUB_REMOTE` | Git 远程仓库名称 | `origin` |
+| `PD_BLOG_REVIEW_CONCURRENCY` | 独立论文页三层 review 并发度（汇总页仍先串行审查） | `8` |
 
 #### 微信公众号
 
@@ -248,11 +256,11 @@ FEISHU_APP_SECRET=your-full-app-secret
    ```
 
 3. **用户明确"不要动某天"时，禁止删除/覆盖该日期内容**
-   - `publish-to-blog.py` 会全量重写目标日期的汇总页
+   - `generate-blog.py` 会全量重写目标日期的汇总页并写生成清单
    - 若数据文件包含多日期论文，请拆分数据或确认意图后再发布
 
 4. **不要重复发布同一天**
-   - 重复运行 `publish-to-blog.py --date 2026-04-21` 会覆盖该日期的博客文件
+   - 重复运行 `generate-blog.py --date 2026-04-21` 会覆盖该日期的博客文件；随后必须重新运行 `review-blog.py`。`push-blog.py` 只接受未变更的 SHA-256 审查凭证。
    - 如需追加论文，应重新生成完整数据后再发布
 
 ---

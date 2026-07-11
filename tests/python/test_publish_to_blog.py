@@ -47,6 +47,42 @@ def init_blog_repo(root, with_remote=False):
 
 
 class PublishToBlogReviewTest(unittest.TestCase):
+    def test_blog_review_concurrency_defaults_to_eight_and_reads_project_env(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('PD_BLOG_REVIEW_CONCURRENCY', None)
+            self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 8)
+        with mock.patch.dict(os.environ, {'PD_BLOG_REVIEW_CONCURRENCY': '12'}):
+            self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 12)
+        with mock.patch.dict(os.environ, {'PD_BLOG_REVIEW_CONCURRENCY': 'invalid'}):
+            self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 8)
+
+    def test_index_review_chunks_run_concurrently_and_merge_in_source_order(self):
+        import threading
+        import time
+
+        active = 0
+        peak = 0
+        lock = threading.Lock()
+
+        def review_chunk(_chunk, _title, **kwargs):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.03)
+            with lock:
+                active -= 1
+            label = kwargs['chunk_label']
+            return True, [{'severity': 'info', 'description': label}], _chunk
+
+        with mock.patch.object(publish_to_blog, 'get_blog_review_concurrency', return_value=3), \
+                mock.patch.object(publish_to_blog, '_llm_review_post_chunk', side_effect=review_chunk):
+            passed, issues, _ = publish_to_blog.llm_review_post('A' * 9000, '汇总页')
+
+        self.assertTrue(passed)
+        self.assertGreater(peak, 1)
+        self.assertEqual([issue['description'] for issue in issues], ['1/3', '2/3', '3/3'])
+
     def test_review_preserves_valid_table_rows_with_empty_group_cells(self):
         content = '''---
 title: "Table"
@@ -136,6 +172,13 @@ title: "Table"
         self.assertIn('SECOND-CHUNK-MARKER', prompts)
         self.assertIn('AAAA', prompts)
 
+    def test_review_split_keeps_table_header_with_separator(self):
+        content = 'A' * 20 + '\n| 方法 | 得分 |\n| --- | --- |\n| A | 1 |\n'
+        chunks = publish_to_blog.split_review_content(content, limit=36)
+        table_chunk = next(chunk for chunk in chunks if '| 方法 | 得分 |' in chunk)
+        self.assertIn('| --- | --- |', table_chunk)
+        self.assertEqual(''.join(chunks), content)
+
     def test_image_review_sends_actual_image_payload(self):
         image = {'media_type': 'image/png', 'data': 'cG5nLWJ5dGVz'}
         response = '{"passed": true, "issues": []}'
@@ -160,6 +203,33 @@ title: "Table"
         prompt = call.call_args.args[0]
         self.assertIn('前文指标提升 12%', prompt)
         self.assertIn('后文解释低频误差', prompt)
+
+    def test_image_review_keeps_payload_and_context_aligned_after_download_failure(self):
+        content = (
+            '![失败图](https://example.com/failed.png)\n失败图上下文\n'
+            '![成功图](https://example.com/ok.png)\n成功图上下文'
+        )
+        image = {'media_type': 'image/png', 'data': 'cG5n'}
+
+        def load(url):
+            if url.endswith('failed.png'):
+                raise publish_to_blog.PublishDataValidationError('模拟超时')
+            return image
+
+        with mock.patch.object(publish_to_blog, '_load_review_image', side_effect=load), \
+                mock.patch.object(
+                    publish_to_blog,
+                    'call_llm_api',
+                    return_value='{"passed": true, "issues": []}',
+                ) as call:
+            passed, issues = publish_to_blog.multimodal_review_images(content, '标题')
+
+        self.assertTrue(passed)
+        self.assertEqual(len(call.call_args.kwargs['images']), 1)
+        prompt = call.call_args.args[0]
+        self.assertIn('alt: `成功图`', prompt)
+        self.assertNotIn('alt: `失败图`', prompt)
+        self.assertEqual(issues[0]['severity'], 'warning')
 
     def test_image_download_rejects_dns_rebinding_peer(self):
         sock = mock.Mock()
@@ -277,35 +347,17 @@ body
                 with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '要求 Hugo'):
                     publish_to_blog.run_hugo_gate(tmp, posts, required=True)
 
-    def test_push_failure_exits_nonzero_and_never_reports_completion(self):
-        paper = {
-            'title': 'Push failure',
-            'arxivId': '2607.00001',
-            'fetchedAt': '2026-07-10T00:00:00+08:00',
-            'parsed': {'score': '7', 'tags': []},
-        }
-        with tempfile.TemporaryDirectory() as tmp:
-            content_dir = os.path.join(tmp, 'content', 'posts')
-            os.makedirs(content_dir)
-            with mock.patch.object(publish_to_blog, 'BLOG_REPO', tmp), \
-                mock.patch.object(publish_to_blog, 'CONTENT_DIR', content_dir), \
-                mock.patch.object(publish_to_blog, 'load_papers', return_value=[paper]), \
-                mock.patch.object(publish_to_blog, 'validate_papers_for_publish', return_value=[paper]), \
-                mock.patch.object(publish_to_blog, 'score_and_sort', return_value=([(7.0, paper, paper['parsed'])], [])), \
-                mock.patch.object(publish_to_blog, 'review_all_posts', return_value=(0, 0)), \
-                mock.patch.object(publish_to_blog, 'run_hugo_gate', return_value='fallback'), \
-                mock.patch.object(publish_to_blog, 'validate_git_publish_branch'), \
-                mock.patch.object(publish_to_blog, 'validate_manifest_clean_against_head'), \
-                mock.patch.object(publish_to_blog, 'validate_git_index'), \
-                mock.patch.object(publish_to_blog, 'capture_git_publish_state', return_value={'state': True}), \
-                mock.patch.object(publish_to_blog, 'git_push', return_value=False), \
-                mock.patch.object(sys, 'argv', ['publish-to-blog.py', '--push', '--all']), \
+    def test_legacy_publish_entry_rejects_push_mode(self):
+        with mock.patch.object(sys, 'argv', ['publish-to-blog.py', '--push']), \
+                mock.patch.object(publish_to_blog, 'review_all_posts') as review, \
+                mock.patch.object(publish_to_blog, 'git_push') as push, \
                 contextlib.redirect_stdout(io.StringIO()) as output:
-                with self.assertRaises(SystemExit) as raised:
-                    publish_to_blog.main()
-        self.assertEqual(raised.exception.code, 1)
-        self.assertIn('发布未完成', output.getvalue())
-        self.assertNotIn('博客发布完成', output.getvalue())
+            with self.assertRaises(SystemExit) as raised:
+                publish_to_blog.main()
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn('generate-blog.py', output.getvalue())
+        review.assert_not_called()
+        push.assert_not_called()
 
     def test_git_push_retries_existing_commit_and_verifies_remote_oid(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -427,7 +479,7 @@ body
                 with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, 'main'):
                     publish_to_blog.validate_git_publish_branch()
 
-    def test_review_block_does_not_pollute_blog_worktree(self):
+    def test_generation_never_calls_review_or_push(self):
         paper = {
             'title': 'Blocked paper',
             'arxivId': '2607.00001',
@@ -436,20 +488,43 @@ body
         with tempfile.TemporaryDirectory() as tmp:
             content_dir = Path(tmp) / 'content' / 'posts'
             content_dir.mkdir(parents=True)
+            current_dir = Path(tmp) / 'data' / 'current'
             old_page = content_dir / '2026-07-10-old.md'
             old_page.write_text('original', encoding='utf-8')
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', tmp), \
                     mock.patch.object(publish_to_blog, 'CONTENT_DIR', str(content_dir)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir), \
                     mock.patch.object(publish_to_blog, 'load_papers', return_value=[paper]), \
                     mock.patch.object(publish_to_blog, 'validate_papers_for_publish', return_value=[paper]), \
                     mock.patch.object(publish_to_blog, 'score_and_sort', return_value=([(7.0, paper, paper['parsed'])], [])), \
-                    mock.patch.object(publish_to_blog, 'review_all_posts', return_value=(0, 1)), \
-                    mock.patch.object(sys, 'argv', ['publish-to-blog.py', '--all']), \
+                    mock.patch.object(publish_to_blog, 'review_all_posts') as review, \
+                    mock.patch.object(publish_to_blog, 'git_push') as push, \
+                    mock.patch.object(sys, 'argv', ['publish-to-blog.py', '--all', '--date', '2026-07-10']), \
                     contextlib.redirect_stdout(io.StringIO()):
-                with self.assertRaises(SystemExit):
-                    publish_to_blog.main()
+                publish_to_blog.main()
+            review.assert_not_called()
+            push.assert_not_called()
+            self.assertTrue((current_dir / 'blog-generation-manifest-2026-07-10.json').is_file())
+            self.assertTrue(old_page.exists())
             self.assertEqual(old_page.read_text(encoding='utf-8'), 'original')
-            self.assertFalse((content_dir / '2026-07-10.md').exists())
+            self.assertTrue((content_dir / '2026-07-10.md').is_file())
+
+    def test_review_receipt_detects_any_post_review_file_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'blog'
+            posts = repo / 'content' / 'posts'
+            posts.mkdir(parents=True)
+            current_dir = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10.md'
+            page.write_text('reviewed\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
+                publish_to_blog.save_review_receipt('2026-07-10', [page], 'hugo')
+                paths, _receipt = publish_to_blog.load_verified_review_receipt('2026-07-10')
+                self.assertEqual(paths, [page.resolve()])
+                page.write_text('changed after review\n', encoding='utf-8')
+                with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, 'review 后已变更'):
+                    publish_to_blog.load_verified_review_receipt('2026-07-10')
 
 
 if __name__ == '__main__':

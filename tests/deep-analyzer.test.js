@@ -1,5 +1,6 @@
 const { describe, it, before } = require('node:test');
 const assert = require('node:assert');
+const { validAnalysisText } = require('./valid-analysis-fixture.js');
 
 before(() => {
     process.env.PAPER_ANALYZER_ENDPOINT = process.env.PAPER_ANALYZER_ENDPOINT || 'https://api.openai.com/v1';
@@ -146,6 +147,58 @@ describe('deep-analyzer section helpers', () => {
                 sourceOrder: 1
             }
         ]);
+    });
+
+    it('会用同 URL 或唯一文件名匹配补全预提供图片 caption', () => {
+        const { mergeImageInfoMetadata } = require('../scripts/deep-analyzer.js');
+        const merged = mergeImageInfoMetadata([
+            'https://arxiv.org/html/2607.1/figures/x1.png',
+            'https://cdn.example/result.png'
+        ], [
+            { url: 'https://arxiv.org/html/2607.1/figures/x1.png', caption: 'Figure 1: Architecture overview' },
+            { url: 'https://arxiv.org/html/2607.1/result.png', caption: 'Figure 2: Result comparison' }
+        ]);
+        assert.strictEqual(merged[0].caption, 'Figure 1: Architecture overview');
+        assert.strictEqual(merged[1].caption, 'Figure 2: Result comparison');
+    });
+
+    it('稳定 HTML 404 只尝试一轮，且图片发现可复用永久 miss', async () => {
+        const { fetchArxivTextDetailed, fetchArxivImageUrls } = require('../scripts/deep-analyzer.js');
+        const originalFetch = global.fetch;
+        let calls = 0;
+        global.fetch = async () => {
+            calls++;
+            return { ok: false, status: 404, headers: new Headers(), body: null };
+        };
+        try {
+            const result = await fetchArxivTextDetailed('2607.99999');
+            assert.strictEqual(result.source, 'unavailable');
+            assert.strictEqual(result.htmlAvailability, 'permanent_miss');
+            assert.strictEqual(result.htmlAttempts, 1);
+            assert.strictEqual(calls, 6);
+            const images = await fetchArxivImageUrls('2607.99999', { htmlAvailability: 'permanent_miss' });
+            assert.deepStrictEqual(images, []);
+            assert.strictEqual(calls, 6);
+        } finally {
+            global.fetch = originalFetch;
+        }
+    });
+
+    it('图片 HTTP 404 是永久失败且不会重试', async () => {
+        const { downloadImageBase64 } = require('../scripts/deep-analyzer.js');
+        const originalFetch = global.fetch;
+        let calls = 0;
+        global.fetch = async () => {
+            calls++;
+            return { ok: false, status: 404, headers: new Headers(), body: null };
+        };
+        try {
+            const result = await downloadImageBase64(`https://8.8.8.8/not-found-${Date.now()}.png`, 5);
+            assert.strictEqual(result, null);
+            assert.strictEqual(calls, 1);
+        } finally {
+            global.fetch = originalFetch;
+        }
     });
 
     it('候选图按信息得分决定下载优先级并保留原始顺序', () => {
@@ -334,9 +387,28 @@ primary_task_tag: #音视频生成
     });
 
     it('整体超时预算使用剩余时间而不是每次重置', () => {
-        const { getRemainingTimeoutMs } = require('../scripts/deep-analyzer.js');
+        const {
+            createActiveTimeBudget,
+            getActiveRemainingTimeoutMs,
+            getRemainingTimeoutMs
+        } = require('../scripts/deep-analyzer.js');
         assert.strictEqual(getRemainingTimeoutMs(1500, 1000), 500);
         assert.throws(() => getRemainingTimeoutMs(1000, 1000), error => error.code === 'MODEL_OVERALL_TIMEOUT');
+
+        let now = 0;
+        const budget = createActiveTimeBudget(100000, {
+            now: () => now,
+            tickMs: 1000,
+            suspendThresholdMs: 30000,
+            autoStart: false
+        });
+        now = 10000;
+        assert.strictEqual(budget.elapsedMs(), 10000);
+        now += 60 * 60 * 1000;
+        assert.strictEqual(budget.elapsedMs(), 12000);
+        assert.strictEqual(budget.suspendedMs(), 3598000);
+        assert.strictEqual(getActiveRemainingTimeoutMs(100000, budget.elapsedMs()), 88000);
+        budget.stop();
     });
 
     it('类型证据上下文同时包含文类标准和原文', () => {
@@ -345,6 +417,18 @@ primary_task_tag: #音视频生成
         assert.match(context, /系统技术报告/);
         assert.match(context, /延迟、吞吐、成本/);
         assert.match(context, /latency throughput evidence/);
+    });
+
+    it('评分证据账本覆盖原文开头、中段和末尾', () => {
+        const { buildTypeAwareSourceContext } = require('../scripts/deep-analyzer.js');
+        const source = `HEAD_MARKER${'x'.repeat(9000)}MIDDLE_MARKER${'y'.repeat(9000)}TAIL_MARKER`;
+        const context = buildTypeAwareSourceContext(validAnalysisText(), source, 12000);
+        assert.match(context, /\[S_HEAD\]/);
+        assert.match(context, /\[S_MIDDLE\]/);
+        assert.match(context, /\[S_TAIL\]/);
+        assert.match(context, /HEAD_MARKER/);
+        assert.match(context, /MIDDLE_MARKER/);
+        assert.match(context, /TAIL_MARKER/);
     });
 
     it('demo 发现的资源链接追加到开源详情且同步资源字段', () => {
@@ -397,6 +481,87 @@ has_dataset: 否
         const swapped = [...REQUIRED_ANALYSIS_SECTIONS];
         [swapped[2], swapped[3]] = [swapped[3], swapped[2]];
         assert.match(validateTopLevelSectionContract(swapped.map(title => `## ${title}\n内容`).join('\n\n')), /顺序非法/);
+    });
+
+    it('结构预修复忽略待评分审计修正的总分差异', () => {
+        const { getRepairableAnalysisStructureIssues } = require('../scripts/deep-analyzer.js');
+        const mismatched = validAnalysisText().replace('6.9/10', '9.9/10');
+        assert.deepStrictEqual(getRepairableAnalysisStructureIssues(mismatched), []);
+    });
+
+    it('确定性规范化额外标题、机器摘要杂项和破损标签', () => {
+        const {
+            normalizeAnalysisStructure,
+            getRepairableAnalysisStructureIssues,
+            parseAnalysis
+        } = require('../scripts/deep-analyzer.js');
+        const {
+            validateMachineSummaryContract,
+            validateTagSectionContract,
+            validateTopLevelSectionContract
+        } = require('../scripts/analysis-contract.js');
+        let malformed = validAnalysisText()
+            .replace('6.9/10', '9.9/10')
+            .replace('has_dataset: 否', 'has_dataset: 否\ntotal_score: 9.9\n#语音识别 #Transformer #鲁棒性')
+            .replace(/\n## 标签\n[\s\S]*?(?=\n## 作者与机构)/, '')
+            .replace('## 实验结果\n', '## 实验结果\n## # 表 I：对比结果\n')
+            .replace('## 细节详述\n', '## 关键结论\n结果总结。\n\n## 细节详述\n');
+
+        const normalized = normalizeAnalysisStructure(malformed);
+        const parsed = parseAnalysis(normalized);
+        assert.strictEqual(validateTopLevelSectionContract(normalized), null);
+        assert.strictEqual(validateMachineSummaryContract(normalized, parsed, { checkScoringConsistency: false }), null);
+        assert.strictEqual(validateTagSectionContract(normalized, parsed), null);
+        assert.deepStrictEqual(getRepairableAnalysisStructureIssues(normalized), []);
+        assert.match(normalized, /### 表 I：对比结果/);
+        assert.match(normalized, /### 关键结论/);
+        assert.doesNotMatch(normalized, /total_score:/);
+    });
+
+    it('确定性规范化用评分理由覆盖非法的机器摘要开源分', () => {
+        const {
+            normalizeAnalysisStructure,
+            getRepairableAnalysisStructureIssues,
+            parseAnalysis
+        } = require('../scripts/deep-analyzer.js');
+        const { validateMachineSummaryContract } = require('../scripts/analysis-contract.js');
+        const malformed = validAnalysisText().replace('open_source: 0.2', 'open_source: 0.7');
+
+        const normalized = normalizeAnalysisStructure(malformed);
+        const parsed = parseAnalysis(normalized);
+        assert.match(normalized, /open_source: 0\.0/);
+        assert.doesNotMatch(normalized, /open_source: 0\.7/);
+        assert.strictEqual(validateMachineSummaryContract(normalized, parsed, { checkScoringConsistency: false }), null);
+        assert.deepStrictEqual(getRepairableAnalysisStructureIssues(normalized), []);
+    });
+
+    it('确定性规范化机器摘要中的受限枚举和越界数值', () => {
+        const {
+            normalizeAnalysisStructure,
+            getRepairableAnalysisStructureIssues,
+            parseAnalysis
+        } = require('../scripts/deep-analyzer.js');
+        const { validateMachineSummaryContract } = require('../scripts/analysis-contract.js');
+        const malformed = validAnalysisText()
+            .replace('document_type: 方法研究', 'document_type: 白皮书')
+            .replace('confidence: 高', 'confidence: 中等')
+            .replace('sota_claim: 否', 'sota_claim: 未明确声称达到 SOTA')
+            .replace('has_code: 否', 'has_code: 尚未开源')
+            .replace('has_model: 否', 'has_model: 未知')
+            .replace('has_dataset: 否', 'has_dataset: 提供数据下载')
+            .replace('open_source: 0.2', 'open_source: 7.8');
+
+        const normalized = normalizeAnalysisStructure(malformed);
+        const parsed = parseAnalysis(normalized);
+        assert.match(normalized, /document_type: 系统技术报告/);
+        assert.match(normalized, /confidence: 低/);
+        assert.match(normalized, /sota_claim: 未说明/);
+        assert.match(normalized, /has_code: 未说明/);
+        assert.match(normalized, /has_model: 未说明/);
+        assert.match(normalized, /has_dataset: 是/);
+        assert.match(normalized, /open_source: 0\.0/);
+        assert.strictEqual(validateMachineSummaryContract(normalized, parsed, { checkScoringConsistency: false }), null);
+        assert.deepStrictEqual(getRepairableAnalysisStructureIssues(normalized), []);
     });
 
     it('最终评分审计会按已有资源状态确定性归一化开源分和总分', () => {
@@ -569,6 +734,24 @@ has_dataset: 否
         assert.strictEqual(result.insertionDiagnostics[0].fallbackToSectionEnd, false);
     });
 
+    it('副模型可用稳定 paragraph_id 定位，不依赖自由文本 anchor', () => {
+        const { parseImageInsertionPlan, applyImageInsertionPlan, buildImageAnchorCatalog } = require('../scripts/deep-analyzer.js');
+        const analysis = `## 方法概述和架构\n第一段。\n\n第二段用于插图。\n\n## 实验结果\n结果段。`;
+        const catalog = buildImageAnchorCatalog(analysis);
+        const target = catalog.find(item => item.text === '第二段用于插图。');
+        const images = [{ url: 'https://example.com/method.png', caption: 'Method overview' }];
+        const plans = parseImageInsertionPlan(JSON.stringify({ insertions: [{
+            image: 1,
+            section: '方法概述和架构',
+            paragraph_id: target.id,
+            lead: '下图展示方法流程。'
+        }] }), images);
+        const result = applyImageInsertionPlan(analysis, plans, images);
+        assert.strictEqual(result.insertionDiagnostics[0].paragraphId, target.id);
+        assert.strictEqual(result.insertionDiagnostics[0].inserted, true);
+        assert.match(result.analysis, /第二段用于插图。\n\n下图展示方法流程。/);
+    });
+
     it('单段章节找不到空行时会在段落末尾插图，不会截断句子', () => {
         const { parseImageInsertionPlan, applyImageInsertionPlan } = require('../scripts/deep-analyzer.js');
         const analysis = `## 方法概述和架构\n开头锚点。后半句仍属于同一个段落，必须保持连续。`;
@@ -655,7 +838,7 @@ has_dataset: 否
         const analysis = '## 实验结果\n结果正文。';
         const caption = String.raw`A [B] \ C` + '\nsecond line';
         const images = [{ url: 'https://example.com/result.png', caption }];
-        const plans = parseImageInsertionPlan('{"insertions":[{"image":1,"section":"实验结果","lead":"结果图。"}]}', images);
+        const plans = parseImageInsertionPlan('{"insertions":[{"image":1,"section":"实验结果","anchor":"结果正文。","lead":"结果图。"}]}', images);
         const result = applyImageInsertionPlan(analysis, plans, images);
 
         assert.strictEqual(sanitizeMarkdownImageAlt(caption, ''), String.raw`A \[B\] \\ C second line`);
@@ -676,8 +859,8 @@ has_dataset: 否
             { url: 'https://example.com/method.png', caption: '' }
         ];
         const plans = parseImageInsertionPlan(JSON.stringify({ insertions: [
-            { image: 1, section: '实验结果', lead: '结果图。', explanation: '结果说明内容足够。' },
-            { image: 2, section: '方法概述和架构', lead: '方法图。', explanation: '方法说明内容足够。' }
+            { image: 1, section: '实验结果', anchor: '实验正文。', lead: '结果图。', explanation: '结果说明内容足够。' },
+            { image: 2, section: '方法概述和架构', anchor: '方法正文。', lead: '方法图。', explanation: '方法说明内容足够。' }
         ] }), images);
         const result = applyImageInsertionPlan(analysis, plans, images);
 
@@ -687,6 +870,33 @@ has_dataset: 否
             'https://example.com/method.png',
             'https://example.com/result.png'
         ]);
+    });
+
+    it('插图计划拒绝空锚点、错锚点和超过上限的图片', () => {
+        const { parseImageInsertionPlan, applyImageInsertionPlan } = require('../scripts/deep-analyzer.js');
+        const analysis = '## 实验结果\n锚点一。\n\n锚点二。\n\n锚点三。\n\n锚点四。\n\n锚点五。';
+        const images = Array.from({ length: 7 }, (_, index) => ({
+            url: `https://example.com/${index + 1}.png`,
+            caption: `Figure ${index + 1}`
+        }));
+        const raw = JSON.stringify({ insertions: [
+            { image: 1, section: '实验结果', anchor: '', lead: '空锚点。' },
+            { image: 2, section: '实验结果', anchor: '正文中不存在。', lead: '错锚点。' },
+            ...[1, 2, 3, 4, 5].map((number, index) => ({
+                image: index + 3,
+                section: '实验结果',
+                anchor: `锚点${['一', '二', '三', '四', '五'][index]}。`,
+                lead: `有效图${number}。`
+            }))
+        ] });
+
+        const result = applyImageInsertionPlan(analysis, parseImageInsertionPlan(raw, images), images, 4);
+        assert.strictEqual(result.selectedImageUrls.length, 4);
+        assert.deepStrictEqual(
+            result.insertionDiagnostics.map(item => item.rejectionReason || 'inserted'),
+            ['anchor_required', 'anchor_not_found', 'inserted', 'inserted', 'inserted', 'inserted', 'insertion_limit']
+        );
+        assert.doesNotMatch(result.analysis, /\/1\.png|\/2\.png|\/7\.png/);
     });
 
     it('兼容预提供图片 URL 字符串和对象数组', () => {
@@ -752,6 +962,6 @@ has_dataset: 否
         } = require('../scripts/deep-analyzer.js');
 
         assert.deepStrictEqual(getArxivHtmlIds('2604.12345'), ['2604.12345', '2604.12345v2', '2604.12345v1']);
-        assert.deepStrictEqual(getArxivHtmlIds('2604.12345v2'), ['2604.12345v2', '2604.12345']);
+        assert.deepStrictEqual(getArxivHtmlIds('2604.12345v2'), ['2604.12345v2']);
     });
 });

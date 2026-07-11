@@ -157,12 +157,12 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 - **API Protocol Auto-Routing**: shares the same `detectApiType()` logic as the filtering stage, automatically switching between OpenAI / Anthropic protocols based on `PAPER_ANALYZER_ENDPOINT` and `PAPER_ANALYZER_MODEL`
 - Fetches arXiv HTML full text (up to 500K characters), trying `v1`, `v2`, and no-suffix versions in order; uses **cheerio** for structured HTML parsing, removing noise elements such as script/style/nav/header/footer
 - Extracts image URLs and filters out logo/favicon; the download layer validates Content-Type, Content-Length, and PNG/JPEG/WebP magic bytes before sending images to the model
-- **Image Analysis**: candidate figures are preselected and prioritized by information score before the limited download budget is spent. Dual-model mode validates every provided URL and redirect as public, then sends downloaded images to the secondary model. The model outputs only section, anchor, lead, and explanation fields; legacy `replacement` / `rewrite` fields are ignored, so primary-model sentences are never replaced. Strict `{"insertions":[]}` confirms that no high-value figure exists; missing fields, wrong types, malformed JSON, and total download failure remain retryable rather than becoming successful empty plans
-- Each paper result stores `imageManifest`, including total discovered figures, candidate scores, downloaded images, and final selected URLs; `analysis-engine.js` preserves this field into the final `deep-analysis-result.json` for later review
+- **Image Analysis**: HTML body text and figure captions are parsed from the same response, and captions enrich preprovided URLs by exact URL or unique basename. Successful downloads use `data/current/image-cache/`; permanent HTTP/MIME/size/security failures are not retried. The secondary model selects a code-generated stable `paragraph_id` instead of copying free-form anchors; legacy anchors remain read-compatible. Invalid IDs and over-limit plans are rejected without section-end fallback
+- Each result stores candidate scores, per-URL download/cache outcomes, secondary model/options, prompt/response hashes, insertion diagnostics, and final URLs in `imageManifest`. `no_downloadable_images` is a successful permanent terminal state; a non-empty plan with zero insertions is `invalid_output` and retries only the image stage
 - `analysisManifest` records image download, primary analysis, open-source scan, demo scan, revision, table/method/structure repair, scoring audit, and image supplementation. Failures retain `analysisCheckpoint` and `analysisRecoveryImageManifest`; reruns resume at the first incomplete stage and success requires every mandatory stage to reach a terminal status
 - **Concurrency: 3 papers in parallel** (adjustable via `PD_ANALYSIS_CONCURRENCY` in the project `.env`)
 - Up to **2 retries** per paper (outer `analysis-engine.js`), with each outer retry having **3 retries** for internal API calls (`deep-analyzer.js` inner layer, exponential backoff: first 10s, then double, `2^attempt * 5000ms`), outer retry interval 3s (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
-- API overall timeout **20 minutes** (AbortController)
+- API overall timeout is **20 minutes of active process time**. A heartbeat excludes system-sleep or long-suspension wall-clock jumps, so a socket timeout after wake can retry with the remaining budget
 - `max_tokens=64000` (`apiMaxTokens` in config.js), `temperature=0.7`
 - Proxy settings come only from case-insensitive proxy variables explicitly configured in the project-root `.env`; inherited shell/IDE proxies and macOS `scutil` are not used
 - Supports pure Node built-in module HTTP CONNECT proxy (no external dependencies)
@@ -174,7 +174,7 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 |------|------|--------|--------|
 | Round 1 | Main Deep Analysis | `prompts/deep-analysis.md` | Primary model performs **text-only** full-text analysis, generating all sections |
 | Round 2 | Open Source Scan | `prompts/opensource-scan.md` | Extract GitHub/HF/ModelScope etc. links from paper text, supplement open source details |
-| Round 2.5 | Demo Page Link Discovery | Code fetch | If no open-source links, visit demo pages found in the analysis (up to 3) and recover code/model/dataset links |
+| Round 2.5 | Demo Page Link Discovery | Code fetch | If no open-source links, visit up to three demo pages, following at most three redirects per page while revalidating public DNS/IP on every hop, and recover code/model/dataset links |
 | Round 3 | Review and Rewrite | `prompts/gap-fill.md` | Compare original paper with earlier output, correct omissions, errors, over-inferences |
 | Round 4 | Table Fix | Code detection + LLM supplement | Detect missing Markdown tables in the Experimental Results section, trigger supplementation |
 | Round 5 | Method Section Fix | Code detection + LLM supplement | Detect if Method Overview is too brief (<600 chars / <3 paragraphs), trigger expansion to 600+ chars |
@@ -182,9 +182,11 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 | Round 7 | Type-aware Scoring Audit | `prompts/scoring-audit.md` | Primary model returns JSON only; code feeds validation errors into the next local attempt and deterministically normalizes Open Source when no artifact is released |
 | Round 8 | Image Selection and Insertion Plan (dual-model only) | `prompts/image-supplement.md` | Secondary model returns JSON only; the complete contract is checked after merging, and an invalid plan is discarded without losing the audited primary text |
 
-> **Single-model vs dual-model**: setting `PAPER_ANALYZER_SECONDARY_MODEL` enables the secondary model to select high-value figures and output a constrained insertion plan containing section, anchor, lead, and explanation. Code only adds figures and adjacent text; it does not accept any replacement of primary-model prose. Without a secondary model, image URLs remain candidate metadata and are not embedded automatically.
+> **Single-model vs dual-model**: setting `PAPER_ANALYZER_SECONDARY_MODEL` enables the secondary model to select high-value figures and output a constrained insertion plan containing section, stable paragraph ID, lead, and explanation. Code only adds figures and adjacent text. Scoring audit and image planning use independent low temperatures (0.1 and 0.2 by default).
 
 Single-issue-single-dimension ownership is enforced in code. A cross-dimension rationale triggers a local retry with the exact validation error instead of immediately restarting full-paper analysis. When resource state is deterministic, fixed Open Source anchors are applied: 0.5 for an explicit future release promise, 0.2 for demo-only, and 0 for fully closed with no promise. Theory papers use public proofs, derivations, and appendices as the applicable core artifact rather than mechanically requiring code/model/data links.
+
+Text acquisition persists source type, original/used/full-text lengths, truncation, SHA-256, HTML availability, and warnings. Stable HTML misses do not retry; versioned IDs never silently upgrade; PDFs are size/header/MIME checked. Abstract fallback is marked `degraded_abstract` and is blocked from publishing unless `allowAbstractAnalysisPublish: true` is explicitly approved. Source, model, temperature, prompt, or evidence fingerprint changes invalidate only the affected checkpoint stages.
 
 ### 3.8 Incremental Save and Wrap-up
 

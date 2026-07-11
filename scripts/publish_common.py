@@ -276,6 +276,16 @@ def validate_papers_for_publish(papers):
         try:
             if not isinstance(paper, dict):
                 raise PublishDataValidationError('论文记录必须是对象')
+            paper_label = paper.get('arxivId') or paper.get('title') or '<unknown paper>'
+            if paper.get('latestAnalysisAttemptError'):
+                raise PublishDataValidationError(
+                    f'{paper_label} 最新一次深度分析失败，禁止使用陈旧成功正文发布'
+                )
+            if (paper.get('analysisSource') == 'abstract'
+                    and paper.get('allowAbstractAnalysisPublish') is not True):
+                raise PublishDataValidationError(
+                    f'{paper_label} 仅基于摘要分析；如经人工确认仍需发布，必须显式设置 allowAbstractAnalysisPublish=true'
+                )
             normalized_id = normalize_publish_arxiv_id(paper.get('arxivId'))
             if normalized_id in seen_arxiv_ids:
                 raise PublishDataValidationError(

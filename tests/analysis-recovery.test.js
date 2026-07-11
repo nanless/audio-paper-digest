@@ -58,17 +58,21 @@ describe('papers database recovery safety', () => {
         assert.ok(data.papers['2607.1']);
     });
 
-    it('规范化对象 key 并拒绝不同版本键冲突', () => {
+    it('规范化对象 key 并合并同一论文的不同版本', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-db-conflict-'));
         const file = path.join(dir, 'papers.json');
         fs.writeFileSync(file, JSON.stringify({
             papers: {
-                '2607.12345v1': { arxivId: '2607.12345v1', title: 'v1' },
-                '2607.12345v2': { arxivId: '2607.12345v2', title: 'v2' }
+                '2607.12345v1': { arxivId: '2607.12345v1', title: 'v1', sources: ['arxiv'] },
+                '2607.12345v2': { arxivId: '2607.12345v2', title: 'v2', sources: ['huggingface'] }
             }
         }));
 
-        assert.throws(() => loadPapersDatabase(file), /规范化 ID 冲突/);
+        const loaded = loadPapersDatabase(file);
+        assert.deepStrictEqual(Object.keys(loaded.papers), ['2607.12345']);
+        assert.strictEqual(loaded.papers['2607.12345'].arxivId, '2607.12345v2');
+        assert.strictEqual(loaded.papers['2607.12345'].title, 'v2');
+        assert.deepStrictEqual(loaded.papers['2607.12345'].sources.sort(), ['arxiv', 'huggingface']);
     });
 
     it('拒绝对象 key 与论文自身 ID 指向不同论文', () => {

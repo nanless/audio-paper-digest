@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""Generate and install blog Markdown only; never review, commit, or push."""
+
+from project_env import load_project_env
+load_project_env()
+
+from log_setup import setup_script_logging
+setup_script_logging(__file__)
+
+from blog_entry_loader import load_publish_to_blog
+
+
+if __name__ == '__main__':
+    load_publish_to_blog().generate_main()

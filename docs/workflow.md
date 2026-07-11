@@ -178,16 +178,16 @@ HF 特有字段（共 7 个）：
 - **API 协议自动路由**：与筛选阶段共用同一套 `detectApiType()` 逻辑，根据 `PAPER_ANALYZER_ENDPOINT` 和 `PAPER_ANALYZER_MODEL` 自动切换 OpenAI / Anthropic 协议
 - 获取 arXiv HTML 全文（最多 500K 字符），依次尝试 `v1`、`v2`、无后缀版本；使用 **cheerio** 结构化解析 HTML，移除 script/style/nav/header/footer 等噪音元素
 - 提取图片 URL，过滤 logo/favicon；下载层会校验 Content-Type、Content-Length 和 PNG/JPEG/WebP 文件头，避免把 HTML 错误页或过大图片送入模型
-- **图片分析**：先按 caption/文件名/顺序启发式预筛候选图片，并按信息得分决定有限下载预算的优先级。双模型模式才串行下载最多 `imageMaxCount=20` 张并交给副模型；预提供 URL 和每次重定向都必须通过公网地址校验。副模型只输出 JSON 插图计划，代码根据精确 anchor 或章节末尾插入图片及 `lead`/`explanation`，忽略旧 `replacement` / `rewrite`，不允许覆盖主模型原句。严格 `{"insertions":[]}` 表示确认无高价值图；缺字段、错误类型、非法 JSON 或图片下载全失败均不是成功空计划，必须保留恢复点等待重试
-- 每篇结果会保存 `imageManifest`：包含总发现图片数、候选评分、下载成功列表、最终选图；该字段由 `analysis-engine.js` 保留到最终 `deep-analysis-result.json`，便于复盘图片筛选质量
+- **图片分析**：HTML 正文和 figure caption 同次解析，预提供 URL 用同 URL 或唯一文件名补全图注。候选按 caption/文件名/顺序预筛后串行下载，成功内容写入 `data/current/image-cache/`；404、错误 MIME、超限和安全拒绝不重试，只有限流、服务端错误和网络异常重试。副模型按价值排序输出最多 4 张计划，并从代码提供的段落目录选择稳定 `paragraph_id`；旧自由文本 anchor 只兼容历史响应。非法 ID、定位失败和超限图片不会回退到章节末尾
+- 每篇结果会保存 `imageManifest`：包含候选评分、逐 URL 下载结果、缓存命中、副模型/温度、prompt/响应哈希、插入与拒绝诊断及最终选图。严格空计划为 `no_high_value_images`；全部永久不可下载为 `no_downloadable_images`；有计划但零插入为 `invalid_output` 并只重试插图阶段
 - `analysisManifest` 记录图片下载、主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计和插图阶段；失败时保留 `analysisCheckpoint` 与 `analysisRecoveryImageManifest`。再次运行从首个未完成阶段继续，只有所有必需阶段进入完成/无需/跳过等终态才视为成功
 - **并发度：3 篇并行**（可通过项目 `.env` 中的 `PD_ANALYSIS_CONCURRENCY` 调整）
 - 每篇最多重试 **2 次**（外层 `analysis-engine.js`），每次外层重试内部 API 调用还有 **3 次** 重试（`deep-analyzer.js` 内层，指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5000ms`），外层重试间隔 3 秒（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整外层）
-- API 整体超时 **20 分钟**（AbortController）
+- API 整体超时为 **20 分钟活跃时间**；每秒心跳识别超过 30 秒的系统睡眠/事件循环挂起并排除该墙钟跳变，唤醒后的请求超时仍按剩余预算重试
 - `max_tokens=64000`（config.js 中 `apiMaxTokens`），`temperature=0.7`
 - 代理只从项目根 `.env` 中显式配置的大小写代理变量读取；不继承 shell/IDE 代理，也不读取 macOS `scutil`
 - 支持纯 Node 内置模块的 HTTP CONNECT 代理（无需外部依赖）
-- 所有分析配置集中管理于 `scripts/config.js`，支持项目 `.env` 覆写（`PD_ANALYSIS_CONCURRENCY`、`PD_ANALYSIS_MAX_RETRIES`、`PD_FILTER_BATCH_SIZE`、`PD_ARXIV_MAX_RESULTS`）
+- 所有分析配置集中管理于 `scripts/config.js`，支持项目 `.env` 覆写（并发、重试、arXiv/PDF 超时与大小、评分审计温度、插图计划温度及图片预算）
 
 **深度分析不是单次调用，而是多轮递进式处理**：
 
@@ -195,7 +195,7 @@ HF 特有字段（共 7 个）：
 |------|------|--------|------|
 | Round 1 | 主深度分析 | `prompts/deep-analysis.md` | 主模型对**全文纯文本**分析，生成所有章节 |
 | Round 2 | 开源扫描 | `prompts/opensource-scan.md` | 从论文文本提取 GitHub/HF/ModelScope 等链接，补充开源详情 |
-| Round 2.5 | Demo 页链接发现 | 代码抓取 | 若无开源链接，访问分析中出现的 demo 页（最多 3 个），从中回捞代码/模型/数据集链接 |
+| Round 2.5 | Demo 页链接发现 | 代码抓取 | 若无开源链接，访问分析中出现的 demo 页（最多 3 个），每页最多安全跟随 3 跳且逐跳重验公网地址，从中回捞代码/模型/数据集链接 |
 | Round 3 | 审校重写 | `prompts/gap-fill.md` | 对比原始论文与前几轮输出，修正缺失、错误、过度推断 |
 | Round 4 | 表格修复 | 代码检测 + LLM 补充 | 检测实验结果章节缺失的 Markdown 表格，触发补充 |
 | Round 5 | 方法章节修复 | 代码检测 + LLM 补充 | 检测方法概述是否过于简略（<600 字/<3 段），触发扩展至 600+ 字 |
@@ -203,9 +203,11 @@ HF 特有字段（共 7 个）：
 | Round 7 | 类型感知评分审计 | `prompts/scoring-audit.md` | 主模型只输出 JSON；代码把校验错误反馈给下一次局部审计，并按资源状态确定性归一化无产物论文的开源分 |
 | Round 8 | 图像筛选与插图计划（仅双模型模式） | `prompts/image-supplement.md` | 副模型只输出 JSON 插图计划；合并后再次校验完整契约，不合格时只丢弃插图计划并保留主模型正文 |
 
-> **单模型 vs 双模型**：主模型始终负责正文和最终评分审计。设置 `PAPER_ANALYZER_SECONDARY_MODEL` 后，副模型只从候选图片中筛选高价值图、丢弃低信息图并输出章节、anchor、图前和图后说明；代码不会接受副模型替换主模型原文。未设置副模型时图片 URL 只保存在候选元数据中。
+> **单模型 vs 双模型**：主模型始终负责正文和最终评分审计。评分审计默认使用独立低温 0.1。设置 `PAPER_ANALYZER_SECONDARY_MODEL` 后，副模型只从候选图片中筛选高价值图、丢弃低信息图并输出章节、稳定段落 ID、图前和图后说明；代码不会接受副模型替换主模型原文。未设置副模型时图片 URL 只保存在候选元数据中。
 
 评分审计的“单一问题单一维度”规则是硬校验。跨维度理由会触发带精确错误反馈的局部重试，而不会立即重跑前面的全文分析。开源状态能由机器摘要与 `## 开源详情` 确定时，代码使用固定锚点：肯定语境明确承诺未来开放 0.5、带 URL 或肯定结构化状态的 Demo 0.2、否定/未提及且无承诺 0；理论研究根据公开证明、推导和附录判断核心产物，不机械要求代码/模型/数据链接。
+
+全文获取会记录 `analysisSource`、字符数、截断状态、来源 SHA-256 和告警。HTML/PDF 均不可用时使用摘要并标记 `degraded_abstract`；该结果默认不能发布，只有人工设置 `allowAbstractAnalysisPublish: true` 后才允许生成带降级提示的博客。来源、评分模型、低温、评分 prompt 或证据指纹变化会精确失效对应 checkpoint，避免混用旧证据。
 
 ### 3.8 增量保存与收尾
 

@@ -20,7 +20,7 @@ const ALLOWED_ANALYSIS_ATTEMPT_STATUSES = new Set(['analyzed', 'analysis_failed'
 const ALLOWED_FILTERED_STATUSES = new Set(['filtering', 'filter_complete', 'complete']);
 const ALLOWED_RECOVERY_STAGE_STATUSES = new Set([
     'pending', 'complete', 'not_needed', 'skipped', 'no_candidates',
-    'no_high_value_images', 'transient_failure', 'invalid_output', 'contract_rejected'
+    'no_high_value_images', 'no_downloadable_images', 'transient_failure', 'invalid_output', 'contract_rejected'
 ]);
 const DEFAULT_FILTER_DECISIONS_FILE = Config.FILES.filterDecisions;
 const ALLOWED_DOCUMENT_TYPES = new Set(DOCUMENT_TYPES);
@@ -125,6 +125,9 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
         addIssue(issues, filePath, `${prefix}.stages 必须是对象`);
         return;
     }
+    if (manifest.sourceAcquisition !== undefined) {
+        validateAnalysisSourceProvenance(filePath, manifest.sourceAcquisition, `${prefix}.sourceAcquisition`, issues);
+    }
     let hasRecoverableFailure = false;
     for (const [stage, state] of Object.entries(manifest.stages)) {
         if (!isPlainObject(state)) {
@@ -146,6 +149,31 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
     }
     if (hasRecoverableFailure && typeof analysisCheckpoint !== 'string') {
         addIssue(issues, filePath, `${prefix} 存在可恢复失败阶段但缺少 analysisCheckpoint`);
+    }
+}
+
+function validateAnalysisSourceProvenance(filePath, source, prefix, issues) {
+    if (!isPlainObject(source)) {
+        addIssue(issues, filePath, `${prefix} 必须是对象`);
+        return;
+    }
+    const allowedSources = new Set(['html', 'pdf', 'provided_full_text', 'provided_pdf_text', 'abstract']);
+    if (!allowedSources.has(source.analysisSource)) {
+        addIssue(issues, filePath, `${prefix}.analysisSource 非法: ${source.analysisSource}`);
+    }
+    for (const key of ['sourceTextChars', 'usedTextChars', 'fullTextChars', 'htmlAttempts']) {
+        validateNonNegativeInteger(filePath, `${prefix}.${key}`, source[key], issues);
+    }
+    for (const key of ['fullTextAvailable', 'truncated']) {
+        if (source[key] !== undefined && typeof source[key] !== 'boolean') {
+            addIssue(issues, filePath, `${prefix}.${key} 必须是布尔值`);
+        }
+    }
+    if (source.sourceSha256 !== undefined && !/^[a-f0-9]{64}$/.test(String(source.sourceSha256))) {
+        addIssue(issues, filePath, `${prefix}.sourceSha256 必须是 SHA-256`);
+    }
+    if (source.warnings !== undefined && !Array.isArray(source.warnings)) {
+        addIssue(issues, filePath, `${prefix}.warnings 必须是数组`);
     }
 }
 
@@ -348,6 +376,19 @@ function validatePaperListFile(filePath, options = {}) {
             }
             if (paper.analysisManifest !== undefined) {
                 validateAnalysisManifest(filePath, paper.analysisManifest, index, issues, paper.analysisCheckpoint);
+            }
+            if (paper.analysisSource !== undefined) {
+                validateAnalysisSourceProvenance(filePath, {
+                    analysisSource: paper.analysisSource,
+                    sourceTextChars: paper.sourceTextChars,
+                    usedTextChars: paper.usedTextChars,
+                    fullTextChars: paper.fullTextChars,
+                    fullTextAvailable: paper.fullTextAvailable,
+                    truncated: paper.truncated,
+                    sourceSha256: paper.sourceSha256,
+                    htmlAttempts: paper.htmlAttempts,
+                    warnings: paper.sourceWarnings
+                }, `papers[${index}].sourceProvenance`, issues);
             }
             if (paper.analysisCheckpoint !== undefined && typeof paper.analysisCheckpoint !== 'string') {
                 addIssue(issues, filePath, `papers[${index}].analysisCheckpoint 必须是字符串`);

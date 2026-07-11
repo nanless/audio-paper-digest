@@ -345,6 +345,20 @@ confidence: 中
         with self.assertRaisesRegex(PublishDataValidationError, '重复 normalized arXiv ID 2607.00001'):
             validate_papers_for_publish([first, second])
 
+    def test_publish_preflight_blocks_unapproved_abstract_fallback_and_latest_failure(self):
+        paper = complete_paper()
+        paper['analysisSource'] = 'abstract'
+        with self.assertRaisesRegex(PublishDataValidationError, '仅基于摘要分析'):
+            validate_papers_for_publish([paper])
+
+        paper['allowAbstractAnalysisPublish'] = True
+        self.assertEqual(len(validate_papers_for_publish([paper])), 1)
+
+        paper = complete_paper()
+        paper['latestAnalysisAttemptError'] = '全文重分析失败'
+        with self.assertRaisesRegex(PublishDataValidationError, '最新一次深度分析失败'):
+            validate_papers_for_publish([paper])
+
     def test_required_review_payload_fails_closed_on_malformed_contract(self):
         for payload in (
             [],

@@ -10,8 +10,41 @@ const ANALYSIS_FIELDS = Object.freeze([
     'selectedImageUrls',
     'imageUrls',
     'allImageUrls',
-    'imageManifest'
+    'imageManifest',
+    'analysisManifest',
+    'analysisSource',
+    'sourceId',
+    'sourceTextChars',
+    'usedTextChars',
+    'fullTextChars',
+    'fullTextAvailable',
+    'truncated',
+    'sourceSha256',
+    'analysisConfidence',
+    'htmlAvailability',
+    'htmlAttempts',
+    'sourceWarnings'
 ]);
+
+function paperVersion(record, rawKey = '') {
+    const rawId = record?.arxivId || record?.paper_id || rawKey;
+    const match = String(rawId || '').match(/v(\d+)$/i);
+    return match ? Number(match[1]) : 0;
+}
+
+function mergeVersionedPaperRecords(existing, incoming, existingRawKey, incomingRawKey) {
+    const incomingIsNewer = paperVersion(incoming, incomingRawKey) >= paperVersion(existing, existingRawKey);
+    const older = incomingIsNewer ? existing : incoming;
+    const newer = incomingIsNewer ? incoming : existing;
+    const merged = mergeAnalysisDigestPaper(older, newer);
+    if (older.digestStatus?.updatedAt > newer.digestStatus?.updatedAt) {
+        merged.digestStatus = older.digestStatus;
+    }
+    if (Array.isArray(older.sources) || Array.isArray(newer.sources)) {
+        merged.sources = [...new Set([...(older.sources || []), ...(newer.sources || [])])];
+    }
+    return merged;
+}
 
 function normalizePapersMap(rawPapers, options = {}) {
     const strict = options.strict === true;
@@ -22,6 +55,7 @@ function normalizePapersMap(rawPapers, options = {}) {
         throw new Error('papers.json 的 papers 必须是对象');
     }
     const papers = {};
+    const rawKeys = {};
     const entries = Array.isArray(rawPapers)
         ? rawPapers.map(paper => [normalizedId(paper), paper])
         : Object.entries(rawPapers || {});
@@ -41,9 +75,14 @@ function normalizePapersMap(rawPapers, options = {}) {
             continue;
         }
         if (papers[key]) {
-            throw new Error(`papers.json 存在规范化 ID 冲突: ${rawKey} 与 ${key}`);
+            papers[key] = mergeVersionedPaperRecords(papers[key], paper, rawKeys[key], rawKey);
+            rawKeys[key] = paperVersion(paper, rawKey) >= paperVersion(papers[key], rawKeys[key])
+                ? rawKey
+                : rawKeys[key];
+            continue;
         }
         papers[key] = paper;
+        rawKeys[key] = rawKey;
     }
     return papers;
 }

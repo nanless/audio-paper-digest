@@ -22,7 +22,7 @@
 | `docs/maintenance.md` | 维护约定、评分标准、标签口径 | 维护者 |
 | `prompts/filter.md` | 筛选阶段 LLM prompt | 维护者 |
 | `prompts/deep-analysis.md` | 深度分析主 prompt（Round 1，纯文本） | 维护者 |
-| `prompts/image-supplement.md` | 图像筛选与插图计划 prompt（双模型模式；只新增图前/图后说明，不替换主模型原文） | 维护者 |
+| `prompts/image-supplement.md` | 图像筛选与插图计划 prompt（双模型模式；默认最多 4 张并使用稳定段落 ID，只新增图前/图后说明） | 维护者 |
 | `prompts/opensource-scan.md` | 开源链接扫描 prompt（Round 2） | 维护者 |
 | `prompts/gap-fill.md` | 审校重写 prompt（Round 3） | 维护者 |
 | `prompts/structure-repair.md` | 缺失必要章节时的主模型局部结构修复 prompt | 维护者 |
@@ -73,8 +73,10 @@ npm install
 # 3. 运行全流程（抓取 + 筛选 + 深度分析）
 ./run-full-fetch.sh
 
-# 4. 发布博客
-python3 scripts/publish-to-blog.py --date 2026-05-08
+# 4. 博客三阶段：生成、审查、推送
+python3 scripts/generate-blog.py --date 2026-05-08
+python3 scripts/review-blog.py --date 2026-05-08
+python3 scripts/push-blog.py --date 2026-05-08
 
 # 5. 生成小红书文案
 python3 scripts/publish-xiaohongshu.py
@@ -113,11 +115,10 @@ node scripts/quick-test.js
 # 补录历史 paper ID
 npm run backfill
 
-# 生成博客 Markdown（默认不推送）
-npm run publish -- --date 2026-04-21
-
-# 正式发布博客（LLM review 可用且无 error 级阻断问题后提交并推送）
-npm run publish -- --push --date 2026-04-21
+# 博客三阶段：生成 → 审查 → 推送（三个入口不会互相重复执行）
+npm run blog:generate -- --date 2026-04-21
+npm run blog:review -- --date 2026-04-21
+npm run blog:push -- --date 2026-04-21
 
 # 生成微信公众号草稿
 npm run wechat
@@ -175,18 +176,14 @@ node scripts/analyze-single-paper.js 2604.16044 --force
 node scripts/validate-data-files.js
 
 # ========== 发布 ==========
-# 发布博客（强烈建议显式 --date）
-python3 scripts/publish-to-blog.py --date 2026-04-21
-
-# 只生成 Markdown，不推送
-python3 scripts/publish-to-blog.py --skip-push --date 2026-04-21
-
-# 正式提交并推送（要求 LLM review 可用且无 error 级阻断问题）
-python3 scripts/publish-to-blog.py --push --date 2026-04-21
+# 博客生成、review、push 必须依次使用独立脚本
+python3 scripts/generate-blog.py --date 2026-04-21
+python3 scripts/review-blog.py --date 2026-04-21
+python3 scripts/push-blog.py --date 2026-04-21
 
 # 用自定义数据发布
-python3 scripts/publish-to-blog.py --date 2026-04-21 data/current/deep-analysis-result.json
-python3 scripts/publish-to-blog.py --all data/current/deep-analysis-result.json
+python3 scripts/generate-blog.py --date 2026-04-21 data/current/deep-analysis-result.json
+python3 scripts/generate-blog.py --all data/current/deep-analysis-result.json
 
 # 生成微信公众号草稿
 python3 scripts/publish-wechat-full.py

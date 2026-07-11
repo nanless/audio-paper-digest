@@ -23,7 +23,7 @@ const DEFAULT_CONCURRENCY = ANALYSIS_CONFIG.concurrency;
 const DEFAULT_LOCK_TIMEOUT_MS = 30000;
 const DEFAULT_STALE_LOCK_MS = 2 * 60 * 60 * 1000;
 const COMPLETE_RECOVERY_STATUSES = new Set([
-    'complete', 'not_needed', 'skipped', 'no_candidates', 'no_high_value_images'
+    'complete', 'not_needed', 'skipped', 'no_candidates', 'no_high_value_images', 'no_downloadable_images'
 ]);
 const REQUIRED_RECOVERY_STAGES = Object.freeze([
     'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
@@ -161,7 +161,7 @@ function updateJsonFileLocked(filePath, updater, options = {}) {
 }
 
 function isSuccessfulAnalysisRecord(paper) {
-    if (!paper || typeof paper.analysis !== 'string' || !paper.analysis.trim()) return false;
+    if (!hasValidAnalysisBody(paper)) return false;
     if (paper.analysisManifest?.version === 1) {
         const stages = paper.analysisManifest.stages;
         if (!stages || typeof stages !== 'object' || REQUIRED_RECOVERY_STAGES.some(stage =>
@@ -169,8 +169,13 @@ function isSuccessfulAnalysisRecord(paper) {
             return false;
         }
     }
-    // Cached parsed data may belong to an older or manually edited analysis body.
-    // Re-parse the source text so every resume/status decision uses one contract.
+    return true;
+}
+
+function hasValidAnalysisBody(paper) {
+    if (!paper || typeof paper.analysis !== 'string' || !paper.analysis.trim()) return false;
+    // Recovery manifests describe the latest attempt, not whether an older body is usable.
+    // Re-parse the body independently so repeated failed saves cannot erase valid content.
     try {
         const parsed = parseAnalysis(paper.analysis);
         return !getInvalidAnalysisReason(paper.analysis, parsed);
@@ -248,6 +253,19 @@ async function analyzePaperWithRetry(paper, options = {}) {
                         imageUrls: analyzed.imageUrls || paper.imageUrls || [],
                         allImageUrls: analyzed.allImageUrls || paper.allImageUrls || [],
                         imageManifest: analyzed.imageManifest || paper.imageManifest || null,
+                        analysisSource: analyzed.analysisSource || paper.analysisSource || 'unknown',
+                        sourceId: analyzed.sourceId || paper.sourceId || '',
+                        sourceTextChars: analyzed.sourceTextChars ?? paper.sourceTextChars ?? 0,
+                        usedTextChars: analyzed.usedTextChars ?? paper.usedTextChars ?? 0,
+                        fullTextChars: analyzed.fullTextChars ?? paper.fullTextChars ?? 0,
+                        fullTextAvailable: analyzed.fullTextAvailable ?? paper.fullTextAvailable ?? false,
+                        truncated: analyzed.truncated ?? paper.truncated ?? false,
+                        sourceSha256: analyzed.sourceSha256 || paper.sourceSha256 || '',
+                        analysisConfidence: analyzed.analysisConfidence || paper.analysisConfidence || 'unknown',
+                        htmlAvailability: analyzed.htmlAvailability || paper.htmlAvailability || 'unknown',
+                        htmlAttempts: analyzed.htmlAttempts ?? paper.htmlAttempts ?? 0,
+                        sourceWarnings: analyzed.sourceWarnings || paper.sourceWarnings || [],
+                        analysisManifest: analyzed.analysisManifest || paper.analysisManifest || null,
                         error: null
                     },
                     parsed: parsed
@@ -327,7 +345,8 @@ async function analyzeBatch(papers, options = {}) {
         success: 0,
         failed: 0,
         skipped: 0,
-        durationTotal: 0
+        durationTotal: 0,
+        sourceCounts: {}
     };
 
     let processedCount = 0;
@@ -383,6 +402,8 @@ async function analyzeBatch(papers, options = {}) {
 
             if (r.success) {
                 stats.success++;
+                const source = r.result?.analysisSource || 'unknown';
+                stats.sourceCounts[source] = (stats.sourceCounts[source] || 0) + 1;
             } else {
                 stats.failed++;
             }
@@ -493,7 +514,7 @@ function mergePapersById(existingPapers, newPapers, options = {}) {
         if (key) {
             const existing = map.get(key);
             if (options.preserveSuccessfulAnalysis
-                && isSuccessfulAnalysisRecord(existing)
+                && hasValidAnalysisBody(existing)
                 && !isSuccessfulAnalysisRecord(p)) {
                 if (p.analysisManifest || p.analysisCheckpoint || p.imageManifest) {
                     map.set(key, {
@@ -523,6 +544,7 @@ module.exports = {
     analyzePaperWithRetry,
     analyzeBatch,
     mergeAndSaveResults,
+    hasValidAnalysisBody,
     createFileSaver,
     mergePapersById,
     readJsonFileStrict,

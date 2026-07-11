@@ -168,6 +168,8 @@ async function runDeepAnalysis() {
     console.log(`  - 成功: ${stats.success} 篇`);
     console.log(`  - 失败: ${stats.failed} 篇`);
     console.log(`  - 跳过: ${stats.skipped} 篇`);
+    const sourceSummary = Object.entries(stats.sourceCounts || {}).map(([key, count]) => `${key}=${count}`).join(' | ');
+    if (sourceSummary) console.log(`  - 文本来源: ${sourceSummary}`);
     console.log(`💾 结果已保存到: ${resultPath}`);
     return { status, exitCode: getAnalysisExitCode(status), stats, remaining };
 }

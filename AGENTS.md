@@ -19,7 +19,9 @@ npm run reanalyze        # 强制全量重分析（支持 --concurrency N）
 npm run batch            # 批量分析未分析论文
 npm run validate:data    # 只读校验候选/筛选/分析 JSON 数据、筛选决策缓存一致性和完整候选覆盖
 npm run backfill         # 补录历史 paper ID（Python 脚本，不分析）
-npm run publish          # 发布到 Hugo 博客（python3 scripts/publish-to-blog.py）
+npm run blog:generate    # 只生成并安装 Hugo 博客文件
+npm run blog:review      # 只 review 已生成文件并保存 SHA-256 凭证
+npm run blog:push        # 只验证凭证并 commit/push，不生成、不 review
 npm run wechat           # 生成微信公众号草稿
 npm run xiaohongshu      # 生成小红书文案
 npm run xhs-login        # 小红书登录（获取 Cookie）
@@ -43,7 +45,7 @@ npm run icml-analyze            # 批量深度分析（基于 PDF 全文 + 自�
 npm run icml-retry              # 重试失败的分析
 npm run icml-reanalyze-pdf      # 基于 PDF 全文重分析
 python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
-# 发布博客：python3 scripts/publish-to-blog.py --category icml-2026 --date YYYY-MM-DD data/current/icml_2026_deep_analysis.json
+# 会议博客也须依次运行 generate-blog.py、review-blog.py、push-blog.py；生成阶段传 category/date/data file
 ```
 
 未配置 linter、typecheck 或 formatter。CI 会运行 `npm test`、`npm run validate:data`、所有 `scripts/` / `tests/` 下 JS 文件 `node -c` 语法检查、所有 `scripts/` 下 Python 文件 `py_compile` 语法检查、`tests/python` 下 Python 单测，以及所有 `.sh` 的 `bash -n`。
@@ -55,8 +57,9 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 **抓取/筛选/分析必需变量**：`PAPER_ANALYZER_API_KEY` / `PAPER_ANALYZER_MODEL` / `PAPER_ANALYZER_ENDPOINT`
 
 **博客相关变量**：`PAPER_DIGEST_BLOG_REPO` 可覆写 Hugo 博客仓库路径；未设置时使用默认路径，目录不存在会跳过博客已发布去重，真实博客发布仍需要本地仓库存在。
+`PD_BLOG_REVIEW_CONCURRENCY` 控制博客独立论文页的三层 review 并发度，默认为 8；汇总页仍先串行完成审查。
 
-**双模型（可选，多模态）**：设置 `PAPER_ANALYZER_SECONDARY_MODEL` 即启用副模型做图像筛选与插图计划（主模型仅做纯文本分析）；副模型只输出 JSON 计划，包含目标章节、anchor、图前 `lead` 和图后 `explanation`。代码只新增插图及相邻说明，忽略旧 `replacement` / `rewrite` 字段，禁止副模型替换主模型原文。不设置则跳过图片、退回单模型纯文本。`PAPER_ANALYZER_SECONDARY_ENDPOINT` / `PAPER_ANALYZER_SECONDARY_API_KEY` 未设置时默认复用主模型对应值。
+**双模型（可选，多模态）**：设置 `PAPER_ANALYZER_SECONDARY_MODEL` 即启用副模型做图像筛选与插图计划（主模型仅做纯文本分析）；副模型只输出 JSON 计划，包含目标章节、代码提供的稳定 `paragraph_id`、图前 `lead` 和图后 `explanation`。代码只新增插图及相邻说明，忽略旧 `replacement` / `rewrite` 字段，禁止副模型替换主模型原文；每篇默认最多插入 4 张，非法段落 ID 直接丢弃，旧 `anchor` 格式仅保留兼容。不设置则跳过图片、退回单模型纯文本。`PAPER_ANALYZER_SECONDARY_ENDPOINT` / `PAPER_ANALYZER_SECONDARY_API_KEY` 未设置时默认复用主模型对应值。
 
 Node 脚本通过 `scripts/env-loader.js` 加载当前项目根 `.env`：① `scripts/config.js` 模块级最先执行（任何 `require('config')` 即触发）；② `scripts/utils.js` 的 `loadEnvFile()` 二次兜底补漏。Python 脚本通过 `scripts/project_env.py` 加载同一个 `.env`。两端都会先清理继承自 Trae/Codex/shell 的项目同名变量（`PAPER_ANALYZER_*`、`PAPER_DIGEST_*`、`PD_*`、`WECHAT_*`、`FEISHU_*`、`XIAOHONGSHU_*`、`KIMI_API_KEY`）以及大小写代理变量，再写入项目 `.env`；代理不再回退 macOS `scutil`，加载器会把 `.env` 权限收紧为 `0600`。外部命令必须使用最小子进程环境，禁止把 LLM/发布凭据传给 curl、CLI、Git hook 或浏览器进程。
 
@@ -90,7 +93,7 @@ Node 脚本通过 `scripts/env-loader.js` 加载当前项目根 `.env`：① `sc
 
 ### 发布脚本（Python）
 
-`publish-to-blog.py` / `publish-wechat-full.py` / `publish-xiaohongshu.py` / `xiaohongshu-publisher.py` / `publish-to-feishu.py` + 共用模块 `publish_common.py` / `path_config.py` / `utils.py`。发布前必须从 `analysis` 重解析评分并校验八维完整性，再与缓存 `parsed` 和顶层评分版本逐字段比较；人工修正必须声明 `parsedOverride.type=manual`、来源、原因和字段白名单。Python 侧默认运行数据路径统一从 `path_config.py` 取，发布输入默认优先 `data/current/deep-analysis-result.json`，缺失时才回退 `data/deep-analysis-result.json`。
+`generate-blog.py` / `review-blog.py` / `push-blog.py` 是博客生成、审查、推送的三个独立入口；`publish-to-blog.py` 仅保留生成兼容入口与共用实现。`publish-wechat-full.py` / `publish-xiaohongshu.py` / `xiaohongshu-publisher.py` / `publish-to-feishu.py` + 共用模块 `publish_common.py` / `path_config.py` / `utils.py`。生成前必须从 `analysis` 重解析评分并校验八维完整性，再与缓存 `parsed` 和顶层评分版本逐字段比较；人工修正必须声明 `parsedOverride.type=manual`、来源、原因和字段白名单。Python 侧默认运行数据路径统一从 `path_config.py` 取。
 
 ### 数据目录
 
@@ -136,12 +139,16 @@ prompts/                # LLM prompt 模板
 - **环境变量加载**：Node 端必须复用 `scripts/env-loader.js` / `loadEnvFile()`；Python 端必须复用 `scripts/project_env.py`。项目配置只允许来自当前项目根 `.env`，脚本启动时必须清理继承进程里的同名项目变量与代理变量，禁止 shell / Trae / Codex 外层变量覆盖或补齐当前项目配置。外部命令复用 `buildChildProcessEnv()` / `build_child_process_env()`；只有 Git 可显式追加 SSH/GPG agent。
 - **`loadPrompt()` 从 markdown 文件内的第一个 fenced code block 提取 prompt**，并替换 `{变量名}` 占位符。内部示例代码块需使用比外层更短的 fence，修改 prompt 后需验证 `utils.js` 解析逻辑兼容。
 - **原子与并发写入**：使用 `writeFileAtomic()` 保存普通数据；分析结果和 `papers.json` 的读改写必须使用跨进程文件锁并校验 `generation`，防止多个入口后写覆盖先写。Python 侧复用 `path_config.py` 的原子写入和 `update_json_file_locked()`，锁目录/owner/generation 协议必须与 Node 一致。
-- **阶段恢复**：深度分析失败结果必须保留 `analysisManifest`、`analysisCheckpoint` 和 `analysisRecoveryImageManifest`，下一次从首个未完成阶段续跑；只有下载、主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计和插图阶段均处于终态时才算成功。强制重分析成功旧记录时因无 checkpoint 必须清空主分析及全部下游完成标记。
+- **阶段恢复**：深度分析失败结果必须保留 `analysisManifest`、`analysisCheckpoint` 和 `analysisRecoveryImageManifest`，下一次从首个未完成阶段续跑；只有下载、主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计和插图阶段均处于终态时才算成功。失败合并判断旧正文是否可用时必须独立重解析正文，不得因最新失败 manifest 把旧成功正文判为不可用；连续多次失败也不能覆盖旧正文。强制重分析成功旧记录时因无 checkpoint 必须清空主分析及全部下游完成标记。
+- **arXiv 与 Demo 网络恢复**：深度分析的 arXiv HTML/图片发现默认超时 60 秒，PDF fallback 默认 180 秒且默认最大 50MB，分别支持 `PD_ARXIV_FETCH_TIMEOUT_MS` / `PD_ARXIV_PDF_TIMEOUT_MS` / `PD_ARXIV_PDF_MAX_BYTES`。稳定 400/403/404 只尝试一轮；指定版本号不得静默回退到最新版。Demo 页面允许最多 3 次 HTTP 重定向，但每一跳都必须重新执行公网 DNS/IP 校验，严禁自动跟随到私网地址。
 - **北京时间时间戳**：运行数据中的 `timestamp` / `lastUpdated` / `fetchedAt` 应使用 `getBeijingISOString()` 或 Python 端 `now_bj_iso()`，避免 UTC 日期导致跨天归档或发布筛选错误。
-- **博客验证默认 `--skip-push`**，仅用户明确要求时才执行真实 `git push`。`publish-to-blog.py --push` 必须在发布数据预检通过、LLM review 可用、代码层无剩余问题、LLM/图片 review 无 `error` 级阻断问题后才允许 commit/push；正式发布还要求博客仓库位于 `main`、Hugo 构建可用且通过，并以 `HEAD:main` 推送后核对远端 OID。Git 只能 stage 本次发布清单中的生成/删除文件，清单路径已有人工修改会阻断；旧页面仅在带 `paper_digest_pipeline_owned: true` 所有权标记时自动删除。
+- **博客三阶段必须分离**：依次运行 `generate-blog.py` → `review-blog.py` → `push-blog.py`。生成阶段禁止 review/push；review 阶段禁止 Git commit/push，通过严格 LLM/图片 review 和 Hugo gate 后写入带逐文件 SHA-256 的审查凭证；push 阶段禁止重新生成或 review，只能验证凭证与工作树完全一致后精确 stage、中文详细 commit、`git push origin HEAD:main` 并核对远端 OID。仅用户明确要求发博客时才允许运行 `push-blog.py`。
 - **发布 review 不得删除合法表格续行**：Markdown 表格允许前导分组列为空，这通常表示沿用上一行模型/配置；不能把 `| | | | Filter2 ... |` 一类数据行当成子标题删除。普通模型名或技术术语未加反引号属于样式建议，不是格式问题。
-- **图片展示顺序**：候选图编号不是最终展示图号；无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 必须按图片在最终正文中的出现顺序归一化。
-- **副模型日志**：插图筛选必须记录 `[secondary]` 详细输入/输出摘要（模型、协议、endpoint/key 来源、候选和下载数量、图片安全标签/MIME/负载、Prompt/响应长度、计划解析状态、anchor 实际命中/章节末尾回退、拒绝原因和最终选图），只能记录 key 来源，严禁记录 API key 内容。统一日志必须是 UTF-8 纯文本、唯一文件名和 `0600` 权限，并脱敏认证头、Cookie、token、secret、password、任意已配置密钥实际值和 URL userinfo；不得轮转、限量或自动清理。
+- **图片展示顺序与质量门禁**：候选图编号不是最终展示图号；无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 必须按图片在最终正文中的出现顺序归一化。副模型每篇最多插入 4 张图（可用 `PD_IMAGE_INSERTION_MAX` 覆写），必须选择代码生成的稳定段落 ID；非法 ID 和超限图片一律拒绝，不得回退堆到章节末尾。HTML 正文和图注必须同次解析复用，成功下载写入 `data/current/image-cache/`，永久 HTTP/MIME/大小错误不得反复重试。
+- **分析来源与发布门禁**：结果必须保存 `analysisSource`、全文/实际输入字符数、截断状态、来源 SHA-256、抓取告警和置信度。来源指纹变化时清除主分析及下游 checkpoint。仅摘要分析默认禁止发布；人工确认后必须显式设置 `allowAbstractAnalysisPublish: true`，博客同时显示醒目降级提示。最新一次重分析失败时禁止用陈旧正文发布。
+- **评分稳定性**：最终评分审计默认低温 `0.1`（`PD_SCORING_AUDIT_TEMPERATURE`），副模型图片计划默认 `0.2`（`PD_IMAGE_PLAN_TEMPERATURE`）。评分 manifest 必须保留模型、温度、prompt 模板哈希、证据哈希、尝试次数、前后总分/差值和最终八维 JSON；变化超过 0.5 分必须打印稳定性告警，指纹变化时只失效评分及插图阶段。
+- **副模型日志**：插图筛选必须记录 `[secondary]` 详细输入/输出摘要（模型、协议、endpoint/key 来源、候选和下载数量、图片安全标签/MIME/负载、Prompt/响应长度、活跃请求时长、计划解析状态、anchor 实际命中、拒绝原因和最终选图），只能记录 key 来源，严禁记录 API key 内容。统一日志必须是 UTF-8 纯文本、唯一文件名和 `0600` 权限，并脱敏认证头、Cookie、token、secret、password、任意已配置密钥实际值和 URL userinfo；不得轮转、限量或自动清理。
+- **睡眠恢复**：LLM 的 20 分钟整体超时按进程活跃时间记账；检测到超过 30 秒的事件循环跳变时视为系统睡眠/长时间挂起，排除睡眠时长并记录 `[api]` 日志。唤醒后底层请求超时必须保留剩余预算进入正常重试，不能把睡眠墙钟时间算成 API 已用时间。
 - **评分数值契约**：八个分项与总分最多一位小数；开源分仅允许 `0/0.2/0.5/1.0/1.2/1.5`。理论研究的完整证明、推导和附录可作为核心公开产物，不能因 `hasCode/hasModel/hasDataset` 均为否而被代码强制归零。Python 发布预检与人工覆盖也必须执行同一契约。
 - **后台运行全流程时用 `node scripts/full-fetch.js`** 而非 `npm run fetch`（npm 可能因 TTY 导致 SIGTERM，exit code 143）。根目录 `run-full-fetch.sh` 即此包装（`cd` 到项目根后 `exec node`）。
 - **`data/` 和 `logs/` 已 gitignore** — 禁止提交运行时产物。

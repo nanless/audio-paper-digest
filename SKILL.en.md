@@ -115,13 +115,13 @@ Deep analysis uniformly uses the LLM specified by `PAPER_ANALYZER_*`, **sharing 
   - **Kimi**: `/coding/v1` → `/coding/v1/messages`
 
 API call characteristics:
-- Overall timeout 20 minutes (AbortController)
+- Overall timeout is 20 minutes of active process time. Heartbeat gaps over 30 seconds are treated as system sleep or long suspension and excluded, so wake-up socket errors can retry with the remaining budget.
 - max_tokens=64000, temperature=0.7
 - **Double-layer retry**: analysis-engine.js level retries up to 2 times per paper (max 3 total attempts); deep-analyzer.js internally retries each API call up to 3 times (exponential backoff: first 10s, then doubles, `2^attempt * 5s`)
 - **LLM API requests explicitly set `agent: false`, forcing direct connections to bypass local proxies (avoids MiMo 403); arXiv/HuggingFace and other external fetches still use proxy auto-detection**
 - arXiv HTML parsing uses **cheerio** structured selectors, removing noise elements such as script/style/nav/header/footer
-- Images are first preselected by caption/filename/order heuristics (default `imageCandidateMax=20`); only dual-model mode with a configured secondary model downloads up to `imageMaxCount=20` candidate images serially and sends them to the secondary model. Single-model mode only keeps candidate URL/manifest metadata. Downloads validate Content-Type, Content-Length, and PNG/JPEG/WebP file signatures; defaults are 6MB raw bytes per image, 8M base64 chars per image, and 20M total base64 chars per paper
-- Every analysis stage is recorded in `analysisManifest`. Failed attempts retain `analysisCheckpoint` and a separate `analysisRecoveryImageManifest`, and every analysis entry point persists those fields so the next run resumes at the first incomplete stage. Only strict `{"insertions":[]}` is a valid empty image plan; missing fields, wrong types, and malformed JSON remain retryable failures
+- Images are first preselected by caption/filename/order heuristics (default `imageCandidateMax=20`); only dual-model mode with a configured secondary model downloads up to `imageMaxCount=20` candidate images serially and sends them to the secondary model. Single-model mode only keeps candidate URL/manifest metadata. Downloads validate Content-Type, Content-Length, and PNG/JPEG/WebP file signatures; defaults are a 60-second per-image timeout (`PD_IMAGE_DOWNLOAD_TIMEOUT_MS`), 6MB raw bytes per image, 8M base64 chars per image, and 20M total base64 chars per paper
+- Every analysis stage is recorded in `analysisManifest`. Failed attempts retain `analysisCheckpoint` and a separate `analysisRecoveryImageManifest`. Merge logic validates an older body independently of the latest failed manifest, so repeated failures cannot erase usable content. arXiv HTML/image discovery uses 60 seconds per request and PDF fallback uses 180 seconds; demo pages may follow at most three redirects while revalidating public DNS/IP on every hop. Only strict `{"insertions":[]}` is a valid empty image plan; missing fields, wrong types, and malformed JSON remain retryable failures
 - Full text cap is approximately 500K characters (`fullTextMaxChars` in config.js)
 - All analysis configurations are centrally managed in `scripts/config.js`, supporting overrides from the project-root `.env`
 
@@ -153,7 +153,8 @@ When `PAPER_ANALYZER_SECONDARY_MODEL` is configured, dual-model mode is enabled:
 - **Secondary model** (`PAPER_ANALYZER_SECONDARY_*`): multimodal image selection and insertion planning, using `prompts/image-supplement.md`, requires a vision-capable multimodal model (e.g. `mimo-v2.5`, `gpt-4o`)
 - Secondary model's `endpoint`/`key` default to the primary model's values if not set
 - If no secondary model is configured, automatically falls back to single-model text-only mode (no image analysis)
-- Secondary model tasks: select high-value figures (flow diagrams, model diagrams, spectrograms, comparison/result plots, etc.), discard irrelevant or low-information images, and output a JSON insertion plan with target section, anchor, lead, and explanation. Legacy `replacement` / `rewrite` fields are ignored by code. The secondary model must never replace primary-model sentences, output a complete analysis report, or participate in scoring.
+- Secondary model tasks: select high-value figures and return at most four value-ranked JSON plans with target section, a code-generated stable `paragraph_id`, lead, and explanation. Invalid IDs and over-limit plans are rejected; free-form anchors are legacy-only. HTML captions enrich candidates, successful downloads use a validated disk cache, and permanent HTTP/MIME/size failures are not retried.
+- Every result records text source, original/used/full-text lengths, truncation, SHA-256, warnings, and confidence. Abstract fallback is publication-blocking unless explicitly approved. Scoring audit uses a separate low temperature and persists model, prompt/evidence fingerprints, attempts, and final audit JSON so stale checkpoints can be invalidated precisely.
 
 ### 4.4 WeChat Official Account (`publish-wechat-full.py`)
 
@@ -220,6 +221,9 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 # PD_REANALYZE_CONCURRENCY=3      # Re-analysis concurrency (defaults to ANALYSIS_CONFIG.concurrency)
 # PD_FILTER_BATCH_SIZE=5          # LLM filtering batch size
 # PD_ARXIV_MAX_RESULTS=100        # arXiv fetch count per category
+# PD_ARXIV_PDF_MAX_BYTES=52428800
+# PD_SCORING_AUDIT_TEMPERATURE=0.1
+# PD_IMAGE_PLAN_TEMPERATURE=0.2
 
 # Proxy (optional, but recommended to disable or bypass for MiMo Token Plan)
 # https_proxy=http://127.0.0.1:7897
@@ -278,13 +282,14 @@ node scripts/analyze-single-paper.js 2604.16044
 npm run backfill
 
 # Publish blog (explicitly specifying date is recommended)
-npm run publish -- --date YYYY-MM-DD
+npm run blog:generate -- --date YYYY-MM-DD
 
 # Generate markdown only, do not push
-npm run publish -- --skip-push --date YYYY-MM-DD
+npm run blog:review -- --date YYYY-MM-DD
+npm run blog:push -- --date YYYY-MM-DD
 
 # Publish with custom data file
-npm run publish -- --date YYYY-MM-DD data/current/deep-analysis-result.json
+npm run blog:generate -- --date YYYY-MM-DD data/current/deep-analysis-result.json
 
 # Generate WeChat Official Account draft (defaults to reading data/current/deep-analysis-result.json)
 npm run wechat
@@ -309,7 +314,7 @@ npm run xiaohongshu -- --date 2026-04-22
 
 ## 6. Publishing Behavior & Date Safety
 
-Publishing script: `scripts/publish-to-blog.py`
+Blog entry points: `scripts/generate-blog.py` → `scripts/review-blog.py` → `scripts/push-blog.py`. `scripts/publish-to-blog.py` remains only as a generation compatibility entry and shared implementation.
 
 ### Core Principle: Blog Date = Crawl/Analysis Date, ≠ arXiv Upload Date
 
@@ -324,13 +329,13 @@ Current behavior:
 - Generates in `~/code/github_repos/audio-paper-digest-blog/content/posts`:
   - Summary page: `YYYY-MM-DD.md`
   - Single paper page: `YYYY-MM-DD-<slug>.md`
-- By default only generates Markdown files and runs review; it does not push
+- Generation, review, and push are separate commands. Generation writes a manifest; review writes a strict per-file SHA-256 receipt after LLM/image review and the Hugo gate; push only verifies that receipt and never regenerates or re-reviews.
 - To publish all papers (no filtering), pass `--all` explicitly
 
 Agent execution constraints:
 
-- By default only generate and verify blog output, without pushing
-- Only when the user explicitly requests "official publish / push blog" may `--push` be added. Formal publishing requires the blog repository on `main`, a successful Hugo staging build, manifest-only staging with no pre-existing edits on those paths, an explicit `HEAD:main` push, and remote OID verification. Stale pages are deleted only when marked as pipeline-owned
+- By default only run the separate generation and review stages.
+- Only when the user explicitly requests "official publish / push blog" may `push-blog.py` run. It requires an unchanged strict review receipt, the blog repository on `main`, manifest-only staging, an explicit `HEAD:main` push, and remote OID verification.
 - If only checking format, verifying new fields, or previewing artifacts, triggering a real `git push` is prohibited
 
 Pre-publish safeguards:
@@ -420,7 +425,7 @@ PY
 8. **Unified environment variable management**: When new scripts need to read LLM configuration, uniformly use `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, and `PAPER_ANALYZER_ENDPOINT` from the project `.env`, and reuse Node `scripts/env-loader.js` or Python `scripts/project_env.py`; alias fallback chains, hard-coding, base64-encoded variable name hacks, or inherited shell/Codex/Trae variables as project configuration are prohibited.
 9. **New configurable parameters and runtime data paths go in shared config**: New Node scripts with adjustable parameters (concurrency, timeout, batch size, etc.) or `data/current/*.json` runtime data files must place/reuse them in `scripts/config.js` (runtime data paths via `Config.FILES`) and add project `.env` overrides for parameters when needed; new Python publish/maintenance scripts with shared paths must reuse `scripts/path_config.py` instead of hand-writing default `data/current/*.json` paths again.
 10. **New analysis scripts reuse analysis-engine.js**: When adding paper analysis-related scripts, prioritize reusing `analyzeBatch()` / `analyzePaperWithRetry()` from `analysis-engine.js` to avoid re-implementing retry, parsing, and saving logic; after saving results, sync `papers.json.digestStatus` through `scripts/digest-status.js`.
-11. **Blog verification defaults to no push**: When running `publish-to-blog.py` without explicit user authorization, `--skip-push` must be included. Formal `--push` requires LLM review availability; remaining code-level issues and `error` severity LLM/image review issues block the push, while `warning/info` is reported but does not directly block.
+11. **Never merge the three blog stages**: `generate-blog.py` only generates and records a manifest; `review-blog.py` only performs strict LLM/image review plus the Hugo gate and writes a per-file SHA-256 receipt; `push-blog.py` only validates that receipt and commits/pushes. Push must never regenerate or re-run review.
 12. **Output contract changes must sync parser**: If modifying `## 机器摘要` key names, section order, or tag output format in `prompts/deep-analysis.md`, you must synchronously check the parsing logic in `scripts/utils.js` and `scripts/utils.py`.
 13. **Artifact-level verification required after changes**: At minimum, spot-check one `data/current/deep-analysis-result.json` to confirm the `analysis` machine summary contains `document_type`, `rank_bucket`, `primary_task_tag`, and `primary_method_tag`, and the `parsed` cache contains `documentType`, `scoringRubricVersion`, `rankBucket`, `primaryTaskTag`, and `primaryMethodTag`; then run blog/social media scripts to verify final artifacts.
 14. **Verify prompt loading after changes**: After modifying markdown files in the `prompts/` directory, run a quick test (`node scripts/quick-test.js` or single-paper analysis) to confirm `loadPrompt()` can correctly read and replace placeholders without `{variableName}` residue.

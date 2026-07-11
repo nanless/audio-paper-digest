@@ -52,6 +52,12 @@ const DATA_FILE = dataFileArg || (fs.existsSync(DEFAULT_CURRENT_FILE) || !fs.exi
 // 并发度：命令行 > 环境变量 > 配置默认值
 const CONCURRENCY = concurrencyArg || parseInt(process.env.PD_REANALYZE_CONCURRENCY, 10) || Config.ANALYSIS_CONFIG.concurrency;
 
+function inferBatchDate(data, papers) {
+    return data.batchDate
+        || papers.map(p => p.digestStatus?.batchDate || String(p.fetchedAt || '').slice(0, 10)).find(Boolean)
+        || String(data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10);
+}
+
 async function reanalyzeAll() {
     console.log(`[reanalyze] 读取数据文件: ${DATA_FILE}`);
 
@@ -70,12 +76,13 @@ async function reanalyzeAll() {
     console.log('');
 
     // 保存中间结果的辅助函数
-    const batchDate = (data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10);
+    const batchDate = inferBatchDate(data, papers);
     const attemptResults = [];
     const doSave = () => {
         updateJsonFileLocked(DATA_FILE, current => ({
             ...(!Array.isArray(current) && current ? current : {}),
             timestamp: getBeijingISOString(),
+            batchDate,
             papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), attemptResults, { preserveSuccessfulAnalysis: true })
         }));
         return updateAnalysisDigestStatuses(attemptResults, { batchDate });
@@ -89,6 +96,7 @@ async function reanalyzeAll() {
             ...(!Array.isArray(current) && current ? current : {}),
             papers: Array.isArray(current) ? current : (current?.papers || []),
             timestamp: getBeijingISOString(),
+            batchDate,
             stats: { ...(!Array.isArray(current) ? current?.stats : {}), reanalyzeStatus: 'running' }
         };
         delete payload.deepAnalysisCompletedAt;
@@ -99,7 +107,7 @@ async function reanalyzeAll() {
         concurrency: CONCURRENCY,
         maxRetries: 2,
         retryDelayMs: 2000,
-        saveInterval: 5 * CONCURRENCY,         // 按并发度调整保存间隔
+        saveInterval: 0,
         onPaperStart: (idx, total, paper) => {
             if (CONCURRENCY === 1) {
                 console.log(`\n[reanalyze] ════════════════════════════════════════════`);
@@ -132,12 +140,12 @@ async function reanalyzeAll() {
                     console.log(`[reanalyze] ❌ 失败: ${paper.arxivId} - ${result.error}`);
                 }
             }
-        },
-        onSave: (results, saveStats) => {
-            const processed = saveStats.success + saveStats.failed;
-            const digestStatus = doSave();
-            const statusNote = digestStatus.updated > 0 ? `，papers.json 状态 ${digestStatus.updated} 篇` : '';
-            console.log(`[reanalyze] 💾 中间结果已保存 (${processed}/${papers.length})${statusNote}`);
+            if (!result.skipped) {
+                const processed = attemptResults.length;
+                const digestStatus = doSave();
+                const statusNote = digestStatus.updated > 0 ? `，papers.json 状态 ${digestStatus.updated} 篇` : '';
+                console.log(`[reanalyze] 💾 单篇结果已保存 (${processed}/${papers.length})${statusNote}`);
+            }
         }
     });
 
@@ -151,6 +159,7 @@ async function reanalyzeAll() {
                 ...(!Array.isArray(current) ? current?.stats : {}),
                 reanalyzed: stats.success,
                 reanalyzeFailed: stats.failed,
+                reanalyzeSourceCounts: stats.sourceCounts,
                 reanalyzeAt: getBeijingISOString(),
                 reanalyzeStatus: status
             }
@@ -165,6 +174,10 @@ async function reanalyzeAll() {
     console.log(`[reanalyze] ════════════════════════════════════════════`);
     console.log(`[reanalyze] 重新分析状态: ${status}`);
     console.log(`[reanalyze] 成功: ${stats.success} | 失败: ${stats.failed} | 总计: ${papers.length}`);
+    const sourceSummary = Object.entries(stats.sourceCounts || {})
+        .map(([source, count]) => `${source}=${count}`)
+        .join(' | ');
+    if (sourceSummary) console.log(`[reanalyze] 文本来源: ${sourceSummary}`);
     if (digestStatus.updated > 0) console.log(`[reanalyze] papers.json 状态已同步: ${digestStatus.updated} 篇`);
     console.log(`[reanalyze] 结束时间: ${getBeijingLocaleString()}`);
     console.log(`[reanalyze] 数据已保存至: ${DATA_FILE}`);

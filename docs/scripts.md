@@ -24,6 +24,8 @@
 
 #### `scripts/reanalyze.js`
 
+除成功/失败外，最终汇总会按 `analysisSource` 统计 HTML、PDF、预提供全文和摘要降级数量；摘要降级不会被视为等价的全文成功。
+
 全量重分析。
 - 默认数据源：`data/current/deep-analysis-result.json`（支持命令行传自定义文件路径，兼容旧格式纯数组）
 - 对文件中**全部**论文重新调用 `deep-analyzer.js`
@@ -101,17 +103,19 @@ arXiv 抓取与 LLM 筛选模块。
 | 并发度 | 3 | `PD_ANALYSIS_CONCURRENCY` | 深度分析并行篇数 |
 | 外层重试次数 | 2 | `PD_ANALYSIS_MAX_RETRIES` | analysis-engine 层面每篇重试次数 |
 | 外层重试延迟 | 3000ms | — | 外层重试间隔 |
-| API 整体超时 | 20 分钟 | — | AbortController 超时 |
+| API 整体超时 | 20 分钟活跃时间 | — | 排除系统睡眠/长时间挂起的墙钟跳变 |
 | API 内层重试次数 | 3 | — | deep-analyzer 内层每次调用重试次数 |
 | API 内层退避基数 | 5000ms | — | 指数退避：第一次 5s，之后翻倍 |
 | max_tokens | 64000 | — | LLM 输出长度上限 |
 | temperature | 0.7 | — | LLM 采样温度 |
-| 图片下载超时 | 15s | — | 单张图片下载超时 |
+| 图片下载超时 | 60s | `PD_IMAGE_DOWNLOAD_TIMEOUT_MS` | 单张图片下载超时，失败后仍按既定次数重试 |
 | 单张图片原始大小上限 | 6MB | `PD_IMAGE_MAX_BYTES` | 下载后按字节数校验 |
 | 单张 base64 上限 | 8M 字符 | `PD_IMAGE_MAX_BASE64_CHARS` | 单张图片转 base64 上限 |
 | 单篇图片 base64 总上限 | 20M 字符 | `PD_IMAGE_TOTAL_BASE64_CHARS` | 防止多图请求体过大 |
+| 每篇实际插图上限 | 4 张 | `PD_IMAGE_INSERTION_MAX` | 按副模型价值顺序截断，且只接受精确 anchor |
 | 全文上限 | 500K 字符 | — | arXiv HTML 正文截取上限 |
-| arXiv HTML 获取超时 | 30s | — | 获取 arXiv HTML 超时 |
+| arXiv HTML/图片发现超时 | 60s | `PD_ARXIV_FETCH_TIMEOUT_MS` | HTML 正文与图片列表请求超时 |
+| arXiv PDF fallback 超时 | 180s | `PD_ARXIV_PDF_TIMEOUT_MS` | HTML 不可用时的单次 PDF 下载超时 |
 
 **筛选配置（`FILTER_CONFIG`）**
 
@@ -235,18 +239,18 @@ HuggingFace Papers 抓取模块。
 **Round 8 — 图像筛选与插图计划（`applyImageSupplement`，双模型模式）**
 - 加载 `prompts/image-supplement.md`
 - 副模型基于最终文本和候选图片筛选高价值图，丢弃低信息图，并只输出 JSON 插图计划
-- `[secondary]` 日志会记录论文 ID、模型、协议、endpoint/key 来源、候选与下载数量、图片安全标签/MIME/负载、请求/响应长度、JSON 解析状态、anchor 实际命中、章节末尾回退、拒绝原因和实际插入数量；不会打印 API key
+- `[secondary]` 日志会记录论文 ID、模型、协议、endpoint/key 来源、候选与下载数量、图片安全标签/MIME/负载、活跃请求时长、请求/响应长度、JSON 解析状态、anchor 实际命中、拒绝原因和实际插入数量；不会打印 API key
 - 插图计划只接受 `anchor`、图前 `lead` 和图后 `explanation`；旧 `replacement` / `rewrite` 字段会被忽略
-- 代码根据插图计划在允许章节中插入图片和相邻说明，不替换主模型任何原句；候选编号不会被当成论文原始 Figure 编号
+- 代码按价值顺序最多插入 4 张图片；每张必须带有能在目标章节逐字匹配的非空 anchor，空值、错位或超限计划会被拒绝，不再回退到章节末尾。插入只新增图片和相邻说明，不替换主模型任何原句；候选编号不会被当成论文原始 Figure 编号
 - 合并后再次执行共享完整契约；若计划破坏章节、评分或解析结果，只丢弃该计划并保留已审计正文
 - 无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 按最终正文出现顺序归一化，避免候选编号在重排插入后成为倒序展示图号
 - 只有严格 JSON 对象中的 `insertions: []` 才标记 `no_high_value_images`；schema 错误、非法 JSON、全图下载失败或契约破坏会写入非终态恢复状态，不能伪装成成功分析
 
-**阶段恢复**：`analysisManifest` 逐阶段保存状态，失败正文写入 `analysisCheckpoint`，候选/下载/选图元数据写入 `analysisRecoveryImageManifest`。强制重分析成功旧记录时因没有 checkpoint 会清空主分析及所有下游完成标记；普通失败续跑则从首个未完成阶段继续。
+**阶段恢复**：`analysisManifest` 逐阶段保存状态，失败正文写入 `analysisCheckpoint`，候选/下载/选图元数据写入 `analysisRecoveryImageManifest`。失败合并会独立按完整契约重解析旧正文，不受最新失败 manifest 影响，连续多次失败仍保留旧成功正文。强制重分析成功旧记录时因没有 checkpoint 会清空主分析及所有下游完成标记；普通失败续跑则从首个未完成阶段继续。
 
 **API 调用**：
 - `callModel(messages, maxTokens)`：带重试的 API 调用封装（内层最多 3 次重试，指数退避：第一次 10 秒，之后翻倍）
-- `_callModelOnce()`：单次 API 调用，每次重试独立创建 AbortController 和 20 分钟超时
+- `_callModelOnce()`：单次 API 调用共享 20 分钟活跃时间预算；每秒心跳检测系统睡眠/长时间挂起并排除墙钟跳变，唤醒后的请求错误仍可在剩余预算内重试
 - LLM API 请求强制设置 `agent: false`，禁用连接复用以绕过代理污染（避免 MiMo 403）
 
 **其他特性**：
@@ -314,7 +318,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 
 ### 4.3 发布脚本
 
-#### `scripts/publish-to-blog.py`
+#### `scripts/generate-blog.py` / `scripts/review-blog.py` / `scripts/push-blog.py`
 
 发布到 Hugo 博客（GitHub Pages）。
 
@@ -361,18 +365,12 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 - 正文：标签串 → 评分/分档/文档类型/评分置信度/标签元信息 → 机器评分详情 → 作者与机构 → 各分析章节 → 返回汇总页链接
 
 **发布流程**：
-1. 生成 `.md` 文件到博客仓库 `content/posts/`
-2. 默认停止在本地生成和 review，不推送
-3. 传 `--push` 后必须先确认 LLM review 可用、代码层无剩余问题、LLM/图片 review 无 `error` 级阻断问题，并要求博客仓库当前分支为 `main`、Hugo staging 构建通过。随后按本次发布清单精确 stage → 中文详细 commit → `git push origin HEAD:main` → 验证远端 OID；清单路径已有人工修改会阻断，旧页仅按 `paper_digest_pipeline_owned: true` 所有权删除
-4. GitHub Actions 自动构建并部署到 Pages
-5. 访问：`https://nanless.github.io/audio-paper-digest-blog/posts/YYYY-MM-DD/`
+1. `generate-blog.py` 只生成并安装 `.md`，然后写入 `blog-generation-manifest-YYYY-MM-DD.json`；不调用 LLM，不提交、不推送。
+2. `review-blog.py` 只读取 generation manifest 对已生成文件执行代码、LLM 和多模态图片三层 review 以及 Hugo gate；通过后写入带逐文件 SHA-256 的 `blog-review-receipt-YYYY-MM-DD.json`，不执行 Git 发布。
+3. `push-blog.py` 只验证审查凭证与工作树文件哈希完全一致，再精确 stage → 中文详细 commit → `git push origin HEAD:main` → 验证远端 OID；该脚本不生成也不 review。
+4. GitHub Actions 自动构建并部署到 Pages。
 
-**参数**：
-- `--date YYYY-MM-DD`（强烈建议显式指定，避免跨天时日期错误）
-- `--skip-push` 只生成文件不推送（兼容旧参数，当前默认行为）
-- `--push` 正式提交并推送博客仓库
-- `--all` 跳过 `fetchedAt` 日期过滤，发布输入文件中的全部论文
-- 自定义数据文件路径作为最后一个参数
+**参数**：三个脚本都支持 `--date YYYY-MM-DD`；只有 `generate-blog.py` 接受 `--all`、`--category` 和自定义数据文件。`publish-to-blog.py --push` 会直接拒绝，防止恢复合并流程。
 
 **日期过滤**：
 - 脚本默认按 `fetchedAt` 字段过滤，只发布匹配 `--date` 指定日期（默认今天）的论文
@@ -380,9 +378,11 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 - 若需发布全部论文（不过滤），显式传 `--all`
 
 **Review 环节**：
-生成 `.md` 前先从 `analysis` 重解析评分，并与缓存 `parsed`、顶层评分版本比较；人工覆盖必须提供显式 provenance，仍须满足一位小数和开源固定锚点。预检还拒绝规范化后重复的 arXiv ID。随后执行代码正则、LLM 文本和多模态图片三层 review；图片 review 使用副模型配置、携带图片邻近正文，并校验实际 HTTPS peer 防 DNS rebinding。正式 `--push` 时任何不确定 review 都按错误阻断。
+生成阶段先从 `analysis` 重解析评分，并与缓存 `parsed`、顶层评分版本比较。review 阶段执行代码正则、LLM 文本和多模态图片三层 review；汇总页文本分块与独立论文页默认以 8 并发执行，可用 `PD_BLOG_REVIEW_CONCURRENCY` 调整。任何不确定 review 都按错误阻断，未生成严格审查凭证时 push 阶段必须失败。
 
 代码层自动修复覆盖以下问题：
+三层 review 分块会保持连续 Markdown 表格行的完整性，避免将表头与分隔行分到不同请求后产生伪误报。多模态 review 只对成功加载的图片同步追加上下文与 payload，个别图片下载失败不会使后续图片错配到前一张图的正文。
+
 1. 未转义的 HTML-like 标签（`<S>`、`<E>`、`<task>` 等）→ 用反引号包裹
 2. 未转换的 LaTeX `$...$` 公式 → 转为 `\(...\)` 格式
 3. 非标准图片引用格式 → 转为标准 Markdown 图片语法

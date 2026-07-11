@@ -81,13 +81,18 @@ const ANALYSIS_CONFIG = {
     apiRetryBaseDelayMs: 5000,
     apiMaxTokens: 64000,
     apiTemperature: 0.7,
-    arxivFetchTimeoutMs: 30000,
-    imageDownloadTimeoutMs: 15000,
+    scoringAuditTemperature: 0.1,
+    imagePlanTemperature: 0.2,
+    arxivFetchTimeoutMs: 60000,
+    arxivPdfFetchTimeoutMs: 180000,
+    arxivPdfMaxBytes: 50 * 1024 * 1024,
+    imageDownloadTimeoutMs: 60000,
     imageMaxBytes: 6 * 1024 * 1024,
     imageMaxBase64Chars: 8 * 1024 * 1024,
     imageTotalBase64Chars: 20 * 1024 * 1024,
     imageMaxCount: 20,
     imageCandidateMax: 20,
+    imageInsertionMax: 4,
     fullTextMaxChars: 500000,
     fullTextMinCharsForFull: 500
 };
@@ -194,6 +199,22 @@ function applyEnvOverrides() {
     if (imageMaxBytes) {
         ANALYSIS_CONFIG.imageMaxBytes = imageMaxBytes;
     }
+    const arxivFetchTimeoutMs = readPositiveInt('PD_ARXIV_FETCH_TIMEOUT_MS');
+    if (arxivFetchTimeoutMs) {
+        ANALYSIS_CONFIG.arxivFetchTimeoutMs = arxivFetchTimeoutMs;
+    }
+    const arxivPdfFetchTimeoutMs = readPositiveInt('PD_ARXIV_PDF_TIMEOUT_MS');
+    if (arxivPdfFetchTimeoutMs) {
+        ANALYSIS_CONFIG.arxivPdfFetchTimeoutMs = arxivPdfFetchTimeoutMs;
+    }
+    const arxivPdfMaxBytes = readPositiveInt('PD_ARXIV_PDF_MAX_BYTES');
+    if (arxivPdfMaxBytes) {
+        ANALYSIS_CONFIG.arxivPdfMaxBytes = arxivPdfMaxBytes;
+    }
+    const imageDownloadTimeoutMs = readPositiveInt('PD_IMAGE_DOWNLOAD_TIMEOUT_MS');
+    if (imageDownloadTimeoutMs) {
+        ANALYSIS_CONFIG.imageDownloadTimeoutMs = imageDownloadTimeoutMs;
+    }
     const imageMaxBase64Chars = readPositiveInt('PD_IMAGE_MAX_BASE64_CHARS');
     if (imageMaxBase64Chars) {
         ANALYSIS_CONFIG.imageMaxBase64Chars = imageMaxBase64Chars;
@@ -201,6 +222,22 @@ function applyEnvOverrides() {
     const imageTotalBase64Chars = readPositiveInt('PD_IMAGE_TOTAL_BASE64_CHARS');
     if (imageTotalBase64Chars) {
         ANALYSIS_CONFIG.imageTotalBase64Chars = imageTotalBase64Chars;
+    }
+    const imageInsertionMax = readPositiveInt('PD_IMAGE_INSERTION_MAX');
+    if (imageInsertionMax) {
+        ANALYSIS_CONFIG.imageInsertionMax = imageInsertionMax;
+    }
+    if (process.env.PD_SCORING_AUDIT_TEMPERATURE !== undefined) {
+        const value = Number(process.env.PD_SCORING_AUDIT_TEMPERATURE);
+        if (Number.isFinite(value) && value >= 0 && value <= 1) {
+            ANALYSIS_CONFIG.scoringAuditTemperature = value;
+        }
+    }
+    if (process.env.PD_IMAGE_PLAN_TEMPERATURE !== undefined) {
+        const value = Number(process.env.PD_IMAGE_PLAN_TEMPERATURE);
+        if (Number.isFinite(value) && value >= 0 && value <= 1) {
+            ANALYSIS_CONFIG.imagePlanTemperature = value;
+        }
     }
     if (process.env.PAPER_DIGEST_ENABLE_FILE_LOGS === '1' || process.env.PD_ENABLE_FILE_LOGS === '1') {
         ARCHIVE_CONFIG.enableFileLogs = true;

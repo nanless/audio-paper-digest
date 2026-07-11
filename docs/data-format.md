@@ -279,16 +279,27 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
       "selectedImageUrls": ["https://arxiv.org/html/.../fig1.png"],
       "imageUrls": ["https://arxiv.org/html/.../fig1.png"],
       "allImageUrls": ["https://arxiv.org/html/.../fig1.png", "..."],
+      "analysisSource": "html",
+      "sourceTextChars": 82431,
+      "usedTextChars": 82431,
+      "fullTextChars": 82431,
+      "fullTextAvailable": true,
+      "truncated": false,
+      "sourceSha256": "<64位十六进制>",
+      "analysisConfidence": "full_text",
+      "sourceWarnings": [],
       "imageManifest": {
         "totalFound": 8,
         "candidateLimit": 20,
         "downloaded": [
-          {"url": "https://arxiv.org/html/.../fig1.png", "mime": "image/png", "base64Chars": 120000}
+          {"url": "https://arxiv.org/html/.../fig1.png", "mime": "image/png", "base64Chars": 120000, "sha256": "<64位十六进制>", "cacheHit": false}
         ],
+        "downloadOutcomes": [{"url": "...", "status": "downloaded", "cacheHit": false}],
         "selected": ["https://arxiv.org/html/.../fig1.png"]
       },
       "analysisManifest": {
         "version": 1,
+        "sourceAcquisition": {"analysisSource": "html", "sourceSha256": "<64位十六进制>"},
         "stages": {
           "imageDownload": {"status": "complete"},
           "primaryAnalysis": {"status": "complete"},
@@ -314,8 +325,10 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 - `parsed` 是 `analysis` 文本的解析缓存，由 `scripts/utils.js` 的 `parseAnalysis()` 或 `scripts/utils.py` 的 `parse_analysis()` 生成
 - `documentType` 来自机器摘要的 `document_type`，受控值为方法研究、系统技术报告、模型报告、数据集与基准、综述、理论研究、应用研究；常见中英文别名会归一化，未知类型会被拒绝
 - 只有包含合法 `document_type` 的新分析才写入 `scoringRubricVersion: type-aware-v1`；历史结果不补写版本，以免误标
-- `selectedImageUrls` / `imageUrls` 是副模型确认插入正文的高价值图片，并按最终正文出现顺序保存；无真实 caption 的通用 `图N` alt 也按该顺序归一化。`allImageUrls` 是原始候选图片列表，不能直接当作可发布图片使用
-- `generation` 每次锁内对象写入递增，用于检测和合并并发更新。`analysisManifest` 版本 1 的所有必需阶段必须处于 `complete` / `not_needed` / `skipped` / `no_candidates` / `no_high_value_images` 才算成功；严格空插图计划才会产生 `no_high_value_images`
+- `analysisSource` 为 `html` / `pdf` / `provided_full_text` / `provided_pdf_text` / `abstract`；字符数、截断状态、来源哈希和告警用于识别摘要降级及 checkpoint 证据变化。`abstract` 默认阻断发布，人工批准需设置 `allowAbstractAnalysisPublish: true`
+- `selectedImageUrls` / `imageUrls` 只保存通过稳定 `paragraph_id`、目标章节匹配和每篇默认 4 张上限门禁后实际插入正文的高价值图片，并按最终正文出现顺序保存；旧精确 anchor 仅用于兼容。`allImageUrls` 不能直接当作可发布图片使用
+- `generation` 每次锁内对象写入递增。恢复终态还包括 `no_downloadable_images`：候选均为永久不可下载；`invalid_output` 表示有插图计划但无法落地，必须只重试插图阶段
+- `analysisManifest.stages.scoringAudit` 保存模型、温度、prompt 模板哈希、证据哈希、尝试次数、前后总分/差值、稳定性告警和最终八维 JSON；分数变化超过 0.5 会写 `stabilityWarning: true`。`imageManifest.supplement` 保存副模型、温度、prompt/响应哈希及逐项插入诊断
 - 失败结果可暂存 `analysisCheckpoint` 与 `analysisRecoveryImageManifest` 供续跑；若旧成功正文仍有效，`analysis` / `parsed` 保持不变，恢复字段和 `digestStatus.latestAttemptStatus: analysis_failed` 叠加保存。下一次成功后恢复 checkpoint 字段会被删除
 - **`parsed.score` 不是直接取 `## 评分` 下的 LLM 原始总分**。只有八个分项完整、唯一、分母正确、数值有限且位于合法范围时才重新计算并封顶为 10；否则 `scoreValidation` 记录契约错误并阻断保存/发布，不会把缺失维度当 0 覆盖原分数
 - `parsed` 中的 `machineSummary` 是 `## 机器摘要` 的解析结果；`rankBucket`、`innovationScore`、`technicalRigorScore` 等 8 个子项字段同时平铺到 `parsed` 顶层以便访问
@@ -327,3 +340,8 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 旧版已分析记录（`fetch-papers.js` 直跑流程遗留）。当前主流程不直接使用，但保留兼容，参与每日归档。
 
 ---
+
+### 5.7 博客阶段清单与审查凭证
+
+- `blog-generation-manifest-YYYY-MM-DD.json`：由 `generate-blog.py` 写入，记录本次生成和删除的精确 `content/posts` 路径。
+- `blog-review-receipt-YYYY-MM-DD.json`：由 `review-blog.py` 在严格 LLM/图片 review 和 Hugo gate 通过后写入，包含每个已审查文件的 SHA-256 或删除标记。`push-blog.py` 只读取该凭证，任一文件在 review 后变更都会阻断推送。

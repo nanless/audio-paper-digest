@@ -54,13 +54,13 @@ function escapeRegExp(value) {
 function getMissingRequiredSections(text) {
     const analysis = String(text || '');
     return REQUIRED_ANALYSIS_SECTIONS.filter(title => {
-        const heading = new RegExp(`(^|\\n)##\\s*${escapeRegExp(title)}[：:\\s]*\\n`, 'm');
+        const heading = new RegExp(`(^|\\n)##(?!#)\\s*${escapeRegExp(title)}[：:\\s]*\\n`, 'm');
         return !heading.test(analysis);
     });
 }
 
 function countSectionHeadings(text, title) {
-    const heading = new RegExp(`(^|\\n)##\\s*${escapeRegExp(title)}[：:\\s]*(?=\\n|$)`, 'gm');
+    const heading = new RegExp(`(^|\\n)##(?!#)\\s*${escapeRegExp(title)}[：:\\s]*(?=\\n|$)`, 'gm');
     return [...String(text || '').matchAll(heading)].length;
 }
 
@@ -70,14 +70,14 @@ function getDuplicateRequiredSections(text) {
 
 function extractSection(text, title) {
     const heading = new RegExp(
-        `(^|\\n)##\\s*${escapeRegExp(title)}[：:\\s]*\\n([\\s\\S]*?)(?=\\n##\\s|$)`,
+        `(^|\\n)##(?!#)\\s*${escapeRegExp(title)}[：:\\s]*\\n([\\s\\S]*?)(?=\\n##(?!#)\\s|$)`,
         ''
     );
     return heading.exec(String(text || ''))?.[2]?.trim() || '';
 }
 
 function validateTopLevelSectionContract(analysis) {
-    const headings = [...String(analysis || '').matchAll(/^##\s*([^\n]+?)\s*$/gm)]
+    const headings = [...String(analysis || '').matchAll(/^##(?!#)\s*([^\n]+?)\s*$/gm)]
         .map(match => match[1].replace(/[：:]\s*$/, '').trim());
     const extra = headings.filter(title => !REQUIRED_ANALYSIS_SECTIONS.includes(title));
     if (extra.length > 0) return `包含额外一级章节: ${[...new Set(extra)].join('、')}`;
@@ -89,7 +89,7 @@ function validateTopLevelSectionContract(analysis) {
     return null;
 }
 
-function validateMachineSummaryContract(analysis, parsed) {
+function validateMachineSummaryContract(analysis, parsed, options = {}) {
     const block = extractSection(analysis, '机器摘要');
     if (!block) return '机器摘要为空';
 
@@ -147,8 +147,8 @@ function validateMachineSummaryContract(analysis, parsed) {
         reproducibility: 'reproducibilityScore',
         engineering_score: 'engineeringScore'
     };
-    if (parsed?.scoreValidation?.valid) {
-        const displayedScore = String(analysis || '').match(/(^|\n)##\s*评分[：:\s]*\n\s*(\d+(?:\.\d)?)\s*\/\s*10(?=\s|$)/)?.[2];
+    if (options.checkScoringConsistency !== false && parsed?.scoreValidation?.valid) {
+        const displayedScore = String(analysis || '').match(/(^|\n)##(?!#)\s*评分[：:\s]*\n\s*(\d+(?:\.\d)?)\s*\/\s*10(?=\s|$)/)?.[2];
         if (displayedScore === undefined || Number(displayedScore) !== Number(parsed.score)) {
             return '评分章节总分与八维评分理由不一致';
         }

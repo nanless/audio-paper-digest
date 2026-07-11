@@ -32,6 +32,12 @@ Benefits of this design:
 | `PD_IMAGE_MAX_BYTES` | Raw byte-size limit per image for deep analysis | 6291456 |
 | `PD_IMAGE_MAX_BASE64_CHARS` | Base64 character limit per image for deep analysis | 8388608 |
 | `PD_IMAGE_TOTAL_BASE64_CHARS` | Total image base64 character limit per paper | 20971520 |
+| `PD_ARXIV_FETCH_TIMEOUT_MS` | arXiv HTML/image discovery timeout in milliseconds | 60000 |
+| `PD_ARXIV_PDF_TIMEOUT_MS` | arXiv PDF fallback timeout in milliseconds | 180000 |
+| `PD_ARXIV_PDF_MAX_BYTES` | Maximum arXiv PDF fallback size | 52428800 |
+| `PD_SCORING_AUDIT_TEMPERATURE` | Final scoring-audit temperature | 0.1 |
+| `PD_IMAGE_PLAN_TEMPERATURE` | Secondary image-plan temperature | 0.2 |
+| `PD_IMAGE_INSERTION_MAX` | Maximum inserted high-value figures per paper | 4 |
 | `PAPER_DIGEST_ENABLE_FILE_LOGS` / `PD_ENABLE_FILE_LOGS` | Backward-compatible setting; file logs are now enabled by default | Enabled |
 | `PAPER_DIGEST_DISABLE_FILE_LOGS` / `PD_DISABLE_FILE_LOGS` | Set to `1` to force-disable file logs | Disabled |
 
@@ -248,11 +254,11 @@ FEISHU_APP_SECRET=your-full-app-secret
    ```
 
 3. **When the user explicitly says "do not touch a certain day", deleting/overwriting content for that date is prohibited**
-   - `publish-to-blog.py` fully rewrites the summary page for the target date
+   - `generate-blog.py` fully rewrites the summary page for the target date and records a generation manifest
    - If the data file contains papers from multiple dates, split the data or confirm intent before publishing
 
 4. **Do not publish the same day repeatedly**
-   - Re-running `publish-to-blog.py --date 2026-04-21` will overwrite that day's blog files
+   - Re-running `generate-blog.py --date 2026-04-21` overwrites that day's files and requires a new `review-blog.py` run. `push-blog.py` accepts only an unchanged SHA-256 review receipt.
    - To append papers, regenerate the complete data first, then publish
 
 ---

@@ -115,19 +115,21 @@ description: >
   - **Kimi**: `/coding/v1` → `/coding/v1/messages`
 
 API 调用特性：
-- 整体超时 20 分钟（AbortController）
+- 整体超时 20 分钟，按进程活跃时间记账；系统睡眠/长时间挂起从预算中排除，唤醒后的底层超时继续使用剩余预算重试
 - max_tokens=64000，temperature=0.7
 - **双层重试**：analysis-engine.js 层面每篇最多重试 2 次（总共最多 3 次尝试）；deep-analyzer.js 内部每次 API 调用再重试最多 3 次（指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5s`）
 - **LLM API 请求明确设置 `agent: false`，强制直连以绕过本地代理（避免 MiMo 403）；arXiv/HuggingFace 等外部抓取仍使用代理自动检测**
 - arXiv HTML 解析使用 **cheerio** 结构化选择器，移除 script/style/nav/header/footer 等噪音元素
-- 图片先按 caption/文件名/顺序启发式预筛（默认 `imageCandidateMax=20`）；只有配置副模型的双模型模式才**串行下载**最多 `imageMaxCount=20` 张候选图片并送入副模型，单模型模式只保存候选 URL/manifest 元数据；下载层会校验 Content-Type、Content-Length 与 PNG/JPEG/WebP 文件头；默认单图原始大小上限 6MB、单图 base64 上限 8M 字符、总 base64 上限 20M 字符（均在 `config.js` 中可配）；超时或图片不可用后自动降级为纯文本重试
-- 每篇分析结果写入 `imageManifest`，记录图片发现数、候选评分、下载成功列表和最终选图，便于复盘图像筛选
-- 每个分析阶段写入 `analysisManifest`；失败尝试保留 `analysisCheckpoint` 和独立的 `analysisRecoveryImageManifest`，所有分析入口都会持久化这些恢复字段，下一次从首个未完成阶段继续。只有严格的 `{"insertions":[]}` 才是有效空插图计划，缺字段、错误类型或非法 JSON 都保持为可重试失败
+- 图片先按 caption/文件名/顺序启发式预筛（默认 `imageCandidateMax=20`）；HTML 正文与图注在同一次响应中解析并复用，预提供 URL 会按完整 URL或唯一文件名补全 caption。只有配置副模型的双模型模式才**串行下载**最多 `imageMaxCount=20` 张候选图片并送入副模型；成功内容写入 `data/current/image-cache/`，恢复时校验 MIME/文件头后复用。仅 408/425/429/5xx 和网络异常重试，404、非法 MIME、超限与安全拒绝立即终止
+- 每篇分析结果写入 `imageManifest`，记录图片发现数、候选评分、逐 URL 下载结果、缓存命中、插图计划哈希、拒绝原因和最终选图，便于复盘图像筛选
+- 每个分析阶段写入 `analysisManifest`；失败尝试保留 `analysisCheckpoint` 和独立的 `analysisRecoveryImageManifest`。失败合并会独立按完整契约重解析旧正文，不受最新失败 manifest 影响，连续多次失败也不能覆盖旧成功正文。arXiv HTML/图片发现默认单次 60 秒，PDF fallback 默认 180 秒；Demo 页面最多跟随 3 次重定向并逐跳重验公网 DNS/IP。只有严格的 `{"insertions":[]}` 才是有效空插图计划，缺字段、错误类型或非法 JSON 都保持为可重试失败
 - 全文上限约 500K 字符（config.js 中 `fullTextMaxChars`）
 - 所有分析配置集中管理于 `scripts/config.js`，支持在项目根 `.env` 中覆写
 
 输出约束：
 - prompt 来源：`prompts/deep-analysis.md`，运行时通过 `loadPrompt()` 读取并替换 `{hasFullText}`、`{title}`、`{authors}`、`{categories}`、`{arxivId}`、`{textForAnalysis}` 占位符
+- arXiv 获取结果保存结构化来源：`analysisSource`、`sourceId`、原始/实际输入/全文字符数、`truncated`、`sourceSha256`、HTML 可用性和告警。稳定 400/403/404 不重复请求；版本化 ID 只读取指定版本；PDF 有 50MB 默认上限并校验 MIME、文件头与提取长度。全文不可用时优先使用完整摘要，不允许短错误页覆盖摘要
+- checkpoint 的来源 SHA-256 变化时清除主分析及全部下游状态，避免旧全文正文被新一轮摘要审校。评分审计另保存模型、低温、prompt 模板哈希、证据哈希、尝试次数和最终 JSON；这些指纹变化只失效评分与插图阶段
 - 固定一级标题：`## 评分`、`## 机器摘要`、`## 标签`、`## 作者与机构`、`## 毒舌点评`、`## 核心摘要`、`## 方法概述和架构`、`## 核心创新点`、`## 实验结果`、`## 细节详述`、`## 评分理由`、`## 局限与问题`、`## 开源详情`
 - `## 评分` 下先输出总分（X.X/10）
 - **代码后处理**：`parseAnalysis`/`parse_analysis` 仅在 `## 评分理由` 的八个分项完整、唯一、分母正确、数值有限且位于各自范围时重新计算总分；合计上限为 10，四舍五入到 0.1，覆盖 LLM 原始总分。缺失、重复、错误分母、负数、越界或非有限值会产生契约错误并阻断保存/发布，不存在最低 1 分保底
@@ -140,7 +142,7 @@ API 调用特性：
 - 主模型使用 `prompts/scoring-audit.md` 做最终 JSON 评分审计；校验失败会把精确错误反馈给下一次局部审计。无核心产物时，代码按“肯定语境承诺开放 0.5 / 明确 URL 或肯定结构化 Demo 0.2 / 否定或未提及 0”确定性归一化开源分和理由；理论研究按公开证明、推导和附录判断核心产物，不因代码/模型/数据标记为空而强制归零。代码只替换评分相关字段，副模型不参与评分
 - 插图合并后再次执行完整分析契约；若插图计划破坏章节或解析结果，只丢弃该篇插图计划并保留已审计的主模型正文
 - 候选编号不能直接作为展示图号；代码将无真实 caption 的通用 alt 和 `selectedImageUrls` 按最终正文顺序归一化。发布 review 必须保留 Markdown 表格中前导分组列为空的合法续行
-- 副模型插图阶段必须输出详细 `[secondary]` 日志：模型/协议/endpoint 与 key 来源、候选和下载数量、每张输入图的安全文件名/MIME/负载大小、请求/返回长度、JSON 解析状态、anchor 是否实际命中、章节末尾回退、拒绝原因和最终选图；禁止打印 API key 内容
+- 副模型最多按价值顺序选择 4 张图（`PD_IMAGE_INSERTION_MAX` 可覆写），每张必须从代码生成的段落目录中选择稳定 `paragraph_id`；非法 ID、定位失败和超限图片由代码拒绝，不回退到章节末尾。旧自由文本 `anchor` 仅兼容历史响应。`[secondary]` 日志记录模型/协议/endpoint 与 key 来源、候选和下载数量、caption、缓存、段落 ID、JSON 解析状态、拒绝原因和最终选图；禁止打印 API key 内容
 - 标签输出必须同时包含最终标签串、`主任务标签`、`主方法标签`、`补充标签`
 - 缺失信息必须写"未说明/未提供/未提及"，禁止猜测作者机构、实验数字、开源状态或外部信息
 - 修改 `prompts/deep-analysis.md` 或 `prompts/filter.md` 时，需同步检查 `scripts/utils.js` 与 `scripts/utils.py` 的解析逻辑是否仍能匹配新输出格式
@@ -153,7 +155,7 @@ API 调用特性：
 - **副模型**（`PAPER_ANALYZER_SECONDARY_*`）：多模态图像筛选与插图计划，使用 `prompts/image-supplement.md`（最终文本修复后执行），需要支持图片输入的多模态模型（如 `mimo-v2.5`、`gpt-4o` 等）
 - 副模型的 `endpoint` / `key` 不设置时分别回退到主模型的对应值
 - 未配置副模型时，自动退回单模型纯文本模式（不分析图片）
-- 副模型任务：从候选图中筛选高价值图（流程图、模型图、语谱图、对比图、结果图等），丢弃无关/低信息图，只输出 JSON 插图计划（目标章节、anchor、图前 `lead`、图后 `explanation`）。代码忽略旧 `replacement` / `rewrite` 字段，副模型不得替换主模型任何原句，也不得输出完整分析报告或参与评分。
+- 副模型任务：从候选图中筛选高价值图（流程图、模型图、语谱图、对比图、结果图等），丢弃无关/低信息图，按价值顺序输出最多 4 张的 JSON 插图计划（目标章节、稳定 `paragraph_id`、图前 `lead`、图后 `explanation`）。代码拒绝非法段落 ID 和超限计划，并忽略旧 `replacement` / `rewrite` 字段；副模型不得替换主模型任何原句，也不得输出完整分析报告或参与评分。
 
 ### 4.4 微信公众号（`publish-wechat-full.py`）
 
@@ -220,6 +222,9 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 # PD_REANALYZE_CONCURRENCY=3      # 重分析并发度（默认与 ANALYSIS_CONFIG.concurrency 一致）
 # PD_FILTER_BATCH_SIZE=5          # LLM 筛选每批篇数
 # PD_ARXIV_MAX_RESULTS=100        # arXiv 每类抓取数量
+# PD_ARXIV_PDF_MAX_BYTES=52428800 # PDF fallback 最大字节数
+# PD_SCORING_AUDIT_TEMPERATURE=0.1
+# PD_IMAGE_PLAN_TEMPERATURE=0.2
 
 # 代理（可选，但建议为 MiMo Token Plan 关闭或绕过代理）
 # https_proxy=http://127.0.0.1:7897
@@ -277,15 +282,13 @@ node scripts/analyze-single-paper.js 2604.16044 --force
 # 补录历史 paper ID（不做深度分析）
 npm run backfill
 
-# 发布博客（建议显式指定日期）
-npm run publish -- --date YYYY-MM-DD
-
-# 只生成 markdown，不推送
-npm run publish -- --date YYYY-MM-DD          # 只生成并验证，不推送（默认）
-npm run publish -- --push --date YYYY-MM-DD   # 正式发布并推送
+# 博客必须分三阶段执行
+npm run blog:generate -- --date YYYY-MM-DD
+npm run blog:review -- --date YYYY-MM-DD
+npm run blog:push -- --date YYYY-MM-DD
 
 # 使用自定义数据文件发布
-npm run publish -- --date YYYY-MM-DD data/current/deep-analysis-result.json
+npm run blog:generate -- --date YYYY-MM-DD data/current/deep-analysis-result.json
 
 # 生成微信公众号草稿（默认读 data/current/deep-analysis-result.json）
 npm run wechat
@@ -311,7 +314,7 @@ npm run xiaohongshu -- --date 2026-04-22
 
 ## 6. 发布行为与日期安全
 
-发布脚本：`scripts/publish-to-blog.py`
+博客入口：`scripts/generate-blog.py` → `scripts/review-blog.py` → `scripts/push-blog.py`；`scripts/publish-to-blog.py` 只作生成兼容入口和共用实现。
 
 ### 核心原则：博客日期 = 爬取分析日期，≠ arXiv 上传日期
 
@@ -327,14 +330,15 @@ npm run xiaohongshu -- --date 2026-04-22
 - 在 `~/code/github_repos/audio-paper-digest-blog/content/posts` 生成：
   - 汇总页：`YYYY-MM-DD.md`
   - 单篇页：`YYYY-MM-DD-<slug>.md`
-- 默认只生成 `.md` 文件并执行 review，不推送
-- 只有显式传 `--push` 且三层 review 通过、LLM review 可用时，才按本次生成/删除清单精确 stage 文件、使用中文详细提交信息执行 `git commit`，再显式 `git push origin HEAD:main` 并验证远端 OID；正式发布要求博客仓库当前分支为 `main` 且 Hugo staging 构建通过。清单路径已有人工修改会阻断，旧页仅在带流水线所有权标记时删除，禁止 `git add -A` 带入无关改动
+- `generate-blog.py` 只生成并安装 `.md`，写入 generation manifest，禁止 review/commit/push
+- `review-blog.py` 只审查 generation manifest 中的文件，通过严格 LLM/图片 review 与 Hugo gate 后写入逐文件 SHA-256 凭证，禁止 commit/push
+- `push-blog.py` 只验证审查凭证和当前文件哈希，精确 stage 后使用中文详细提交信息 commit，再 `git push origin HEAD:main` 并验证远端 OID；禁止重新生成或 review
 - 若需发布全部论文（不过滤），显式传 `--all`
 
 Agent 执行约束：
 
-- 默认仅允许生成和验证博客结果，不推送
-- 只有用户明确要求"正式发布 / 推送博客"时，才允许添加 `--push`
+- 默认只允许运行生成和 review 两个独立阶段
+- 只有用户明确要求"正式发布 / 推送博客"时，才允许运行 `push-blog.py`
 - 若只是检查格式、验证新字段或预览产物，禁止触发真实 `git push`
 
 发布前保障：
@@ -423,7 +427,7 @@ PY
 8. **环境变量统一管理**：新增脚本需要读取 LLM 配置时，统一使用项目 `.env` 中的 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT`，并复用 Node `scripts/env-loader.js` 或 Python `scripts/project_env.py`；禁止引入别名回退链、硬编码、base64 编码变量名 hack，或读取外层 shell/Codex/Trae 继承变量作为项目配置。
 9. **新增可配置参数和运行数据路径放入统一配置**：新增 Node 脚本涉及可调整参数（并发度、超时、批次大小等）或 `data/current/*.json` 运行数据文件时，统一放入/复用 `scripts/config.js`（运行数据路径使用 `Config.FILES`），参数项按需添加项目 `.env` 覆写支持；新增 Python 发布/维护脚本涉及共享路径时，复用 `scripts/path_config.py`，禁止再次手写 `data/current/*.json` 默认路径。
 10. **新增分析脚本复用 analysis-engine.js**：新增论文分析相关脚本时，优先复用 `analysis-engine.js` 的 `analyzeBatch()` / `analyzePaperWithRetry()`，避免重复实现重试、解析、保存逻辑；保存结果后必须通过 `scripts/digest-status.js` 同步 `papers.json.digestStatus`。
-11. **博客验证默认不推送**：`publish-to-blog.py` 当前默认不推送；未获用户明确授权时禁止添加 `--push`。正式 `--push` 先强制比较 `analysis`、缓存 `parsed` 和顶层评分版本，并要求 LLM review 可用；非 JSON、字段缺失、非法 severity、不可判断响应以及任何 `error` 都会阻断，合法 `warning/info` 只报告。人工评分覆盖必须提供显式类型、来源、原因和字段白名单。
+11. **博客三阶段不得合并**：`generate-blog.py` 只生成并写 generation manifest；`review-blog.py` 只执行严格 LLM/图片 review 和 Hugo gate，通过后写入逐文件 SHA-256 凭证；`push-blog.py` 只验证凭证后 commit/push，禁止调用生成或 review。未获用户明确授权时禁止运行 push 阶段。
 12. **输出契约改动要同步 parser**：若修改 `prompts/deep-analysis.md` 中的 `## 机器摘要` 键名、章节顺序或标签输出格式，必须同步检查 `scripts/utils.js` 与 `scripts/utils.py` 的解析逻辑。
 13. **变更后必须做产物级验证**：至少抽样检查一份 `data/current/deep-analysis-result.json`，确认 `analysis` 文本的机器摘要包含 `document_type`、`rank_bucket`、`primary_task_tag`、`primary_method_tag`，且 `parsed` 缓存包含 `documentType`、`scoringRubricVersion`、`rankBucket`、`primaryTaskTag`、`primaryMethodTag` 等字段，再运行博客/社媒脚本验证最终产物。
 14. **变更后验证 prompt 加载**：修改 `prompts/` 目录下的 markdown 文件后，运行一次快速测试（`node scripts/quick-test.js` 或单篇分析）确认 `loadPrompt()` 能正确读取并替换占位符，无 `{变量名}` 残留。

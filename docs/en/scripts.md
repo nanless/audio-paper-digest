@@ -24,6 +24,8 @@ Runs deep analysis only (resume mode).
 
 #### `scripts/reanalyze.js`
 
+Besides success/failure counts, the final summary groups results by `analysisSource` (HTML, PDF, provided full text, or abstract fallback). Abstract fallback is not treated as equivalent to full-text analysis.
+
 Full reanalysis.
 - Default data source: `data/current/deep-analysis-result.json` (supports custom file path via command line, compatible with old-format pure arrays)
 - Calls `deep-analyzer.js` for **all** papers in the file
@@ -98,17 +100,18 @@ Unified configuration center. All hardcoded parameters are centrally managed and
 | Concurrency | 3 | `PD_ANALYSIS_CONCURRENCY` | Number of papers analyzed in parallel |
 | Outer retries | 2 | `PD_ANALYSIS_MAX_RETRIES` | Retries per paper at the analysis-engine level |
 | Outer retry delay | 3000ms | -- | Outer retry interval |
-| API overall timeout | 20 minutes | -- | AbortController timeout |
+| API overall timeout | 20 active minutes | -- | Excludes system-sleep and long-suspension wall-clock jumps |
 | API inner retries | 3 | -- | Retries per inner deep-analyzer call |
 | API inner backoff base | 5000ms | -- | Exponential backoff: first 5s, then double |
 | max_tokens | 64000 | -- | LLM output length limit |
 | temperature | 0.7 | -- | LLM sampling temperature |
-| Image download timeout | 15s | -- | Per-image download timeout |
+| Image download timeout | 60s | `PD_IMAGE_DOWNLOAD_TIMEOUT_MS` | Per-image timeout; failures still use the configured retry loop |
 | Single-image raw-size limit | 6MB | `PD_IMAGE_MAX_BYTES` | Byte-size guard after download |
 | Single-image base64 limit | 8M chars | `PD_IMAGE_MAX_BASE64_CHARS` | Base64 conversion limit per image |
 | Per-paper total image base64 limit | 20M chars | `PD_IMAGE_TOTAL_BASE64_CHARS` | Prevents oversized multi-image model payloads |
 | Full-text limit | 500K chars | -- | arXiv HTML body truncation limit |
-| arXiv HTML fetch timeout | 30s | -- | arXiv HTML fetch timeout |
+| arXiv HTML/image discovery timeout | 60s | `PD_ARXIV_FETCH_TIMEOUT_MS` | HTML body and image-list request timeout |
+| arXiv PDF fallback timeout | 180s | `PD_ARXIV_PDF_TIMEOUT_MS` | Per-PDF timeout when HTML is unavailable |
 
 **Filter Configuration (`FILTER_CONFIG`)**
 
@@ -232,14 +235,14 @@ Multimodal deep analyzer. The analysis flow is an **up-to-8-round progressive pr
 **Round 8 -- Image Selection and Insertion Plan (`applyImageSupplement`, dual-model mode)**
 - Loads `prompts/image-supplement.md`
 - The secondary model uses the final text and candidate images to select high-value figures, drop low-information figures, and output JSON only
-- `[secondary]` logs record paper ID, model, protocol, endpoint/key source, candidate/download counts, safe image labels and payloads, response parse status, actual anchor matches, section-end fallbacks, rejection reasons, and inserted figures; secrets are never printed
+- `[secondary]` logs record paper ID, model, protocol, endpoint/key source, candidate/download counts, safe image labels and payloads, active request duration, response parse status, exact anchor matches, rejection reasons, and inserted figures; secrets are never printed
 - The insertion plan accepts only `anchor`, lead, and explanation. Legacy `replacement` / `rewrite` fields are ignored
-- Code adds figures and adjacent explanation to allowed sections without replacing any primary-model sentence; candidate numbers are not treated as source Figure numbers
+- Code inserts at most four figures in secondary-model priority order. Every plan needs a non-empty anchor that exactly matches the target section; empty, unmatched, and over-limit plans are rejected instead of falling back to the section end. Primary-model sentences are never replaced, and candidate numbers are not treated as source Figure numbers
 - The shared complete contract runs again after merging. An invalid plan is discarded while the audited primary-model text is retained
 - Generic `图N` alts without real captions and `selectedImageUrls` are normalized to final body order, preventing candidate numbers from becoming out-of-order display numbers
 - Only an object with strict `insertions: []` becomes `no_high_value_images`. Schema errors, malformed JSON, total image-download failure, and contract damage remain non-terminal recovery states instead of masquerading as success
 
-**Stage recovery**: `analysisManifest` persists each stage, `analysisCheckpoint` stores the intermediate body, and `analysisRecoveryImageManifest` stores figure recovery metadata. Force-reanalyzing an older successful record clears primary and downstream completion markers because no checkpoint exists; a normal failed run resumes at the first incomplete stage.
+**Stage recovery**: `analysisManifest` persists each stage, `analysisCheckpoint` stores the intermediate body, and `analysisRecoveryImageManifest` stores figure recovery metadata. Failed merges validate an older body independently of the latest failed manifest, so repeated failures cannot erase usable content. Force-reanalyzing an older successful record clears primary and downstream completion markers because no checkpoint exists; a normal failed run resumes at the first incomplete stage.
 
 **API Calls**:
 - `callModel(messages, maxTokens)`: retry-wrapped API call encapsulation (up to 3 inner retries, exponential backoff: first 10s, then double)
@@ -311,7 +314,7 @@ Python common utility module. Referenced by `publish-to-blog.py`, `publish-wecha
 
 ### 4.3 Publish Scripts
 
-#### `scripts/publish-to-blog.py`
+#### `scripts/generate-blog.py` / `scripts/review-blog.py` / `scripts/push-blog.py`
 
 Publish to Hugo blog (GitHub Pages).
 
@@ -358,18 +361,11 @@ Publish to Hugo blog (GitHub Pages).
 - Body: tag string -> score/tier/tag meta info -> machine score details -> authors and affiliations -> each analysis section -> link back to summary page
 
 **Publish Flow**:
-1. Generate `.md` files into blog repository `content/posts/`
-2. Stop after local generation and review by default
-3. With `--push`, LLM review must be available, no blocking issue may remain, the blog repository must be on `main`, and the Hugo staging build must pass. The script stages only manifest paths, commits with a detailed Chinese message, pushes `origin HEAD:main`, and verifies the remote OID. Existing manual edits on manifest paths block publication; stale pages are deleted only when `paper_digest_pipeline_owned: true` marks pipeline ownership.
-4. GitHub Actions automatically builds and deploys to Pages
-5. Visit: `https://nanless.github.io/audio-paper-digest-blog/posts/YYYY-MM-DD/`
+1. `generate-blog.py` only generates and installs Markdown, then writes a generation manifest. It never calls an LLM, commits, or pushes.
+2. `review-blog.py` only reviews that manifest with code, strict LLM, multimodal image, and Hugo gates. Success writes a per-file SHA-256 review receipt; it never commits or pushes.
+3. `push-blog.py` only verifies that receipt against the current files, then stages the exact manifest, commits with a detailed Chinese message, pushes `origin HEAD:main`, and verifies the remote OID. It never regenerates or re-reviews.
 
-**Parameters**:
-- `--date YYYY-MM-DD` (strongly recommended to specify explicitly to avoid date errors across midnight)
-- `--skip-push` only generates files without pushing (kept for compatibility; this is now the default)
-- `--push` commits and pushes the generated blog files
-- `--all` skips `fetchedAt` date filtering and publishes all papers in the input file
-- Custom data file path as the last argument
+**Parameters**: all three scripts accept `--date YYYY-MM-DD`. Only `generate-blog.py` accepts `--all`, `--category`, and a custom data path. `publish-to-blog.py --push` is rejected to prevent the combined workflow from returning.
 
 **Date Filtering**:
 - The script filters by the `fetchedAt` field by default, only publishing papers matching the `--date` specified date (default today)
@@ -377,7 +373,7 @@ Publish to Hugo blog (GitHub Pages).
 - To publish all papers (no filtering), pass `--all` explicitly
 
 **Review Step**:
-Before generation, publishing reparses scoring from `analysis` and compares it with cached `parsed` data and the top-level rubric version; manual overrides require explicit provenance and still obey one-decimal values and fixed Open Source anchors. Normalized duplicate arXiv IDs are rejected. Image review uses the secondary-model configuration, includes nearby body context, and validates the connected HTTPS peer against DNS results to prevent rebinding. Formal `--push` fails closed on malformed or indeterminate review output, and a failed Git push exits nonzero with verifiable retry information.
+Generation reparses scoring from `analysis` and compares it with cached `parsed` data and the rubric version. The separate review step uses 8 workers by default, configurable through `PD_BLOG_REVIEW_CONCURRENCY`, and validates image payload/context alignment plus HTTPS peers. Any indeterminate strict review blocks receipt creation. Push fails closed when the receipt is absent or any reviewed file hash changed.
 
 Code-level auto-fix covers:
 1. Unescaped HTML-like tags (`<S>`, `<E>`, `<task>`, etc.) → wrap in backticks

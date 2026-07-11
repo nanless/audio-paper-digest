@@ -1040,6 +1040,8 @@ async function runFullFetch() {
     if (analysisStats) {
         const avgSec = analysisStats.durationTotal > 0 ? (analysisStats.durationTotal / 1000 / (analysisStats.success + analysisStats.failed)).toFixed(1) : '0';
         console.log(`  - 分析引擎: 成功 ${analysisStats.success} | 失败 ${analysisStats.failed} | 跳过 ${analysisStats.skipped} | 平均 ${avgSec}s/篇`);
+        const sourceSummary = Object.entries(analysisStats.sourceCounts || {}).map(([key, count]) => `${key}=${count}`).join(' | ');
+        if (sourceSummary) console.log(`  - 文本来源: ${sourceSummary}`);
     }
     console.log(`\n💾 结果已保存到: ${outputFile}`);
 

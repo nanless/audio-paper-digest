@@ -33,6 +33,9 @@ describe('config', () => {
         assert.strictEqual(Config.ANALYSIS_CONFIG.concurrency, 3);
         assert.strictEqual(Config.ANALYSIS_CONFIG.maxRetries, 2);
         assert.strictEqual(Config.ANALYSIS_CONFIG.apiMaxTokens, 64000);
+        assert.strictEqual(Config.ANALYSIS_CONFIG.scoringAuditTemperature, 0.1);
+        assert.strictEqual(Config.ANALYSIS_CONFIG.imagePlanTemperature, 0.2);
+        assert.strictEqual(Config.ANALYSIS_CONFIG.arxivPdfMaxBytes, 50 * 1024 * 1024);
         assert.strictEqual(Config.FILTER_CONFIG.batchSize, 5);
         assert.strictEqual(Config.FILTER_CONFIG.temperature, 0.3);
         assert.strictEqual(Config.ARXIV_CONFIG.maxResultsPerCategory, 100);
@@ -104,9 +107,16 @@ describe('config', () => {
     });
 
     it('项目 .env 覆写图片上限', () => {
-        withProjectEnv('PD_IMAGE_MAX_BYTES=123456\nPD_IMAGE_TOTAL_BASE64_CHARS=654321', (Config) => {
+        withProjectEnv('PD_IMAGE_MAX_BYTES=123456\nPD_IMAGE_TOTAL_BASE64_CHARS=654321\nPD_IMAGE_DOWNLOAD_TIMEOUT_MS=45000\nPD_IMAGE_INSERTION_MAX=3\nPD_ARXIV_FETCH_TIMEOUT_MS=70000\nPD_ARXIV_PDF_TIMEOUT_MS=190000\nPD_ARXIV_PDF_MAX_BYTES=7654321\nPD_SCORING_AUDIT_TEMPERATURE=0\nPD_IMAGE_PLAN_TEMPERATURE=0.15', (Config) => {
             assert.strictEqual(Config.ANALYSIS_CONFIG.imageMaxBytes, 123456);
             assert.strictEqual(Config.ANALYSIS_CONFIG.imageTotalBase64Chars, 654321);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.imageDownloadTimeoutMs, 45000);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.imageInsertionMax, 3);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.arxivFetchTimeoutMs, 70000);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.arxivPdfFetchTimeoutMs, 190000);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.arxivPdfMaxBytes, 7654321);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.scoringAuditTemperature, 0);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.imagePlanTemperature, 0.15);
         });
     });
 

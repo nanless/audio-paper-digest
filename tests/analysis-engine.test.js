@@ -225,6 +225,35 @@ describe('analyzePaperWithRetry', () => {
         assert.deepStrictEqual(result.result.imageManifest, imageManifest);
     });
 
+    it('显式保留深度分析的来源与恢复 manifest，不依赖输入对象被修改', async () => {
+        const sourceSha256 = 'a'.repeat(64);
+        const analysisManifest = {
+            version: 1,
+            stages: {},
+            sourceAcquisition: { analysisSource: 'abstract', sourceSha256 }
+        };
+        const result = await analyzePaperWithRetry({ arxivId: '2607.12345' }, {
+            maxRetries: 0,
+            analyzeFn: async () => ({
+                analysis: validAnalysisText(),
+                analysisSource: 'abstract',
+                sourceTextChars: 800,
+                usedTextChars: 800,
+                fullTextChars: 0,
+                fullTextAvailable: false,
+                truncated: false,
+                sourceSha256,
+                analysisConfidence: 'degraded_abstract',
+                sourceWarnings: ['全文不可用'],
+                analysisManifest
+            })
+        });
+        assert.strictEqual(result.success, true);
+        assert.strictEqual(result.result.analysisSource, 'abstract');
+        assert.strictEqual(result.result.sourceSha256, sourceSha256);
+        assert.deepStrictEqual(result.result.analysisManifest, analysisManifest);
+    });
+
     it('缺少必要章节会重试后失败', async () => {
         let calls = 0;
         let retries = 0;
@@ -349,6 +378,14 @@ describe('analyzePaperWithRetry', () => {
         assert.deepStrictEqual(merged.analysisRecoveryImageManifest, failed.imageManifest);
         assert.strictEqual(merged.latestAnalysisAttemptError, 'secondary timeout');
         assert.strictEqual(isSuccessfulAnalysisRecord(merged), false);
+
+        const [mergedAgain] = mergePapersById([merged], [{
+            ...failed,
+            error: 'secondary timeout again',
+            analysisCheckpoint: null
+        }], { preserveSuccessfulAnalysis: true });
+        assert.strictEqual(mergedAgain.analysis, complete.analysis);
+        assert.strictEqual(mergedAgain.latestAnalysisAttemptError, 'secondary timeout again');
     });
 
     it('最终契约拒绝展示总分或分档与八维重算结果不一致', () => {

@@ -1,0 +1,103 @@
+import contextlib
+import importlib.util
+import io
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS = ROOT / 'scripts'
+sys.path.insert(0, str(SCRIPTS))
+
+
+def load_script(name):
+    path = SCRIPTS / name
+    spec = importlib.util.spec_from_file_location(name.replace('-', '_'), path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+review_blog = load_script('review-blog.py')
+push_blog = load_script('push-blog.py')
+generate_blog = load_script('generate-blog.py')
+
+
+class BlogStageEntryTest(unittest.TestCase):
+    def test_generate_entry_only_calls_generation(self):
+        generate = mock.Mock()
+        module = SimpleNamespace(generate_main=generate)
+        with mock.patch.object(generate_blog, 'load_publish_to_blog', return_value=module):
+            # The executable guard is not active on import; call the same entry target.
+            generate_blog.load_publish_to_blog().generate_main()
+        generate.assert_called_once_with()
+
+    def test_review_entry_never_calls_git_push(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'blog'
+            posts = repo / 'content' / 'posts'
+            posts.mkdir(parents=True)
+            index = posts / '2026-07-10.md'
+            index.write_text('index', encoding='utf-8')
+            paper = posts / '2026-07-10-paper-2607-00001.md'
+            paper.write_text('''---
+title: "Paper"
+paper_digest_pipeline_owned: true
+paper_digest_page_type: paper
+paper_digest_arxiv_id: "2607.00001"
+---
+body
+''', encoding='utf-8')
+            git_push = mock.Mock(side_effect=AssertionError('review must not push'))
+            module = SimpleNamespace(
+                PublishDataValidationError=ValueError,
+                PublishLLMUnavailable=RuntimeError,
+                validate_publish_target=lambda: (repo, posts),
+                get_today_bj=lambda value=None: value or '2026-07-10',
+                validate_publish_date=lambda value: value,
+                load_generation_manifest=lambda _date: ([index, paper], Path('manifest.json')),
+                review_all_posts=mock.Mock(return_value=(0, 0)),
+                validate_staged_posts=mock.Mock(),
+                run_hugo_gate=mock.Mock(return_value='hugo'),
+                save_review_receipt=mock.Mock(return_value=Path('receipt.json')),
+                git_push=git_push,
+            )
+            with mock.patch.object(review_blog, 'load_publish_to_blog', return_value=module), \
+                    mock.patch.object(sys, 'argv', ['review-blog.py', '--date', '2026-07-10']), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                review_blog.main()
+            module.review_all_posts.assert_called_once()
+            module.save_review_receipt.assert_called_once()
+            git_push.assert_not_called()
+
+    def test_push_entry_only_verifies_receipt_and_pushes(self):
+        path = Path('/tmp/content/posts/2026-07-10.md')
+        module = SimpleNamespace(
+            PublishDataValidationError=ValueError,
+            validate_publish_target=mock.Mock(),
+            get_today_bj=lambda value=None: value or '2026-07-10',
+            validate_publish_date=lambda value: value,
+            load_verified_review_receipt=mock.Mock(return_value=([path], Path('receipt.json'))),
+            validate_git_publish_branch=mock.Mock(),
+            validate_git_index=mock.Mock(),
+            git_push=mock.Mock(return_value=True),
+            review_all_posts=mock.Mock(side_effect=AssertionError('push must not review')),
+            load_papers=mock.Mock(side_effect=AssertionError('push must not load papers')),
+        )
+        with mock.patch.object(push_blog, 'load_publish_to_blog', return_value=module), \
+                mock.patch.object(sys, 'argv', ['push-blog.py', '--date', '2026-07-10']), \
+                contextlib.redirect_stdout(io.StringIO()):
+            push_blog.main()
+        module.load_verified_review_receipt.assert_called_once_with('2026-07-10')
+        module.git_push.assert_called_once_with('2026-07-10', [path])
+        module.review_all_posts.assert_not_called()
+        module.load_papers.assert_not_called()
+
+
+if __name__ == '__main__':
+    unittest.main()

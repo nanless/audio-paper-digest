@@ -17,11 +17,13 @@ setup_script_logging(__file__)
 
 用法：
     python3 publish-to-blog.py [data_file]
-    python3 publish-to-blog.py --push          # 生成 .md 并推送到 GitHub
-    python3 publish-to-blog.py --skip-push     # 兼容旧参数；默认已不推送
+    python3 generate-blog.py                   # 只生成并写 generation manifest
+    python3 review-blog.py                     # 只 review 并写 SHA-256 审查凭证
+    python3 push-blog.py                       # 只验证凭证后 commit/push
+    python3 publish-to-blog.py                 # 兼容生成入口
     python3 publish-to-blog.py --date YYYY-MM-DD
 """
-import json, re, sys, os, subprocess, datetime, base64, concurrent.futures
+import json, re, sys, os, subprocess, datetime, base64, concurrent.futures, hashlib
 import ipaddress, shutil, socket, tempfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -38,7 +40,7 @@ from publish_common import (
     normalize_publish_arxiv_id, review_protocol_failure,
     validate_papers_for_publish, validate_review_payload
 )
-from path_config import atomic_write_text
+from path_config import CURRENT_DIR, atomic_write_json, atomic_write_text
 from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env
 from utils import strip_md, parse_analysis
 
@@ -48,6 +50,16 @@ BLOG_REPO = os.path.expanduser(
 CONTENT_DIR = os.path.join(BLOG_REPO, "content", "posts")
 BASE_PATH = os.environ.get("PAPER_DIGEST_BLOG_BASE_PATH", "/audio-paper-digest-blog")
 GITHUB_REMOTE = os.environ.get("PAPER_DIGEST_GITHUB_REMOTE", "origin")
+
+
+def get_blog_review_concurrency():
+    """Return the project-scoped concurrency for independent post reviews."""
+    raw = os.environ.get("PD_BLOG_REVIEW_CONCURRENCY", "8").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 8
+    return max(1, value)
 
 def call_llm_api(
     prompt,
@@ -119,6 +131,17 @@ def split_review_content(content, limit=4000):
             chunks.append(line[:limit])
             line = line[limit:]
         if current and len(current) + len(line) > limit:
+            if line.lstrip().startswith('|'):
+                current_lines = current.splitlines(keepends=True)
+                table_start = len(current_lines)
+                while table_start > 0 and current_lines[table_start - 1].lstrip().startswith('|'):
+                    table_start -= 1
+                if 0 < table_start < len(current_lines):
+                    chunks.append(''.join(current_lines[:table_start]))
+                    current = ''.join(current_lines[table_start:])
+            if current and len(current) + len(line) <= limit:
+                current += line
+                continue
             chunks.append(current)
             current = ''
         current += line
@@ -269,13 +292,34 @@ def llm_review_post(content, title="", required=False):
     chunks = split_review_content(content, 4000)
     all_issues = []
     passed = True
-    for index, chunk in enumerate(chunks, 1):
-        chunk_passed, issues, _unused = _llm_review_post_chunk(
-            chunk,
+    chunk_results = [None] * len(chunks)
+
+    def review_chunk(index):
+        return _llm_review_post_chunk(
+            chunks[index],
             title,
             required=required,
-            chunk_label=f'{index}/{len(chunks)}',
+            chunk_label=f'{index + 1}/{len(chunks)}',
         )
+
+    # The large daily index is otherwise the serial bottleneck. Paper pages are
+    # already parallelized by review_all_posts, so keep their chunks sequential
+    # to avoid multiplying page concurrency by chunk concurrency.
+    if title == "汇总页" and len(chunks) > 1:
+        workers = min(get_blog_review_concurrency(), len(chunks))
+        print(f"    🔀 汇总页文本分块 review 并发度: {workers}")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(review_chunk, index): index
+                for index in range(len(chunks))
+            }
+            for future in concurrent.futures.as_completed(futures):
+                chunk_results[futures[future]] = future.result()
+    else:
+        for index in range(len(chunks)):
+            chunk_results[index] = review_chunk(index)
+
+    for chunk_passed, issues, _unused in chunk_results:
         passed = passed and chunk_passed
         all_issues.extend(issues)
     fixed_content = apply_llm_fixes(content, all_issues)
@@ -446,17 +490,21 @@ def multimodal_review_images(content, title="", required=False):
         alt, url = match.groups()
         nearby = content[max(0, match.start() - 600):min(len(content), match.end() + 600)]
         nearby = nearby.replace(url, '[图片 URL]').strip()
-        img_summary.append(
-            f"- 图片 {len(img_summary) + 1} | alt: `{alt}` | 来源: {url[:500]}\n"
-            f"  正文附近上下文：\n```markdown\n{nearby}\n```"
-        )
         try:
-            image_payloads.append(_load_review_image(url))
+            image_payload = _load_review_image(url)
         except PublishDataValidationError as exc:
             load_issues.append({
                 'severity': 'error' if required else 'warning',
                 'description': f'无法加载图片内容用于多模态 review: {exc}',
             })
+            continue
+        # Keep prompt metadata and attached bytes in the same append path.
+        # A failed download must not shift later images onto earlier contexts.
+        image_payloads.append(image_payload)
+        img_summary.append(
+            f"- 图片 {len(img_summary) + 1} | alt: `{alt}` | 来源: {url[:500]}\n"
+            f"  正文附近上下文：\n```markdown\n{nearby}\n```"
+        )
 
     if load_issues and required:
         return False, load_issues
@@ -927,6 +975,10 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
 # 📄 {display_title}
 
 """
+    if paper.get('analysisSource') == 'abstract':
+        md += '> ⚠️ 本文仅基于论文摘要生成，未能取得可验证的全文，技术细节与评分置信度有限。\n\n'
+    elif paper.get('analysisConfidence') == 'full_text' and paper.get('sourceTextChars', 0) > paper.get('usedTextChars', paper.get('sourceTextChars', 0)):
+        md += '> ℹ️ 本文基于论文全文节选生成，超出分析上下文上限的内容未纳入。\n\n'
     if pa:
         if tags:
             md += f"标签：{' '.join(tags)}\n\n"
@@ -1315,7 +1367,9 @@ def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False, co
         for arxiv_id, slug in paper_slugs.items()
     ]
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+    review_concurrency = min(get_blog_review_concurrency(), max(1, len(paper_args)))
+    print(f"\n  🔀 论文页 review 并发度: {review_concurrency}")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=review_concurrency) as executor:
         futures = [executor.submit(_review_single_paper, args) for args in paper_args]
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
@@ -1372,11 +1426,11 @@ def _load_frontmatter(path):
     return frontmatter, content[match.end():]
 
 
-def validate_staged_posts(staged_posts_dir, date_str):
+def validate_staged_posts(staged_posts_dir, date_str, date_only=False):
     """Deterministically validate YAML and generated Markdown structure."""
     date_str = validate_publish_date(date_str)
     staged = Path(staged_posts_dir)
-    files = sorted(staged.glob('*.md'))
+    files = sorted(staged.glob(f'{date_str}*.md' if date_only else '*.md'))
     if not files:
         raise PublishDataValidationError('staging 目录没有待发布 Markdown 文件')
     for path in files:
@@ -1707,6 +1761,8 @@ def git_push(date_str, publish_paths, rollback_state=None):
                 [
                     'git', 'commit',
                     '-m', f'content: 发布 {date_str} 论文速递并同步评分与审查结果',
+                    '-m', '提交已通过严格 LLM、多模态图片与 Hugo gate 的生成清单；'
+                          '推送前已逐文件校验审查凭证 SHA-256，本步不重新生成或 review。',
                 ],
                 check=True, cwd=BLOG_REPO,
                 env=_git_env()
@@ -1749,9 +1805,174 @@ def git_push(date_str, publish_paths, rollback_state=None):
     return False
 
 
-def main():
+def review_receipt_path(date_str):
+    return CURRENT_DIR / f'blog-review-receipt-{validate_publish_date(date_str)}.json'
+
+
+def generation_manifest_path(date_str):
+    return CURRENT_DIR / f'blog-generation-manifest-{validate_publish_date(date_str)}.json'
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _manifest_record(path, repo):
+    path = Path(path).expanduser().resolve()
+    try:
+        relative = path.relative_to(repo)
+    except ValueError as exc:
+        raise PublishDataValidationError(f'博客清单路径逃逸仓库: {path}') from exc
+    if relative.parts[:2] != ('content', 'posts'):
+        raise PublishDataValidationError(f'博客清单只允许 content/posts 路径: {relative}')
+    return path, relative.as_posix()
+
+
+def save_generation_manifest(date_str, publish_paths):
+    """Save the exact generated/removed path list for the separate review step."""
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    records = []
+    for item in sorted({Path(value).expanduser().resolve() for value in publish_paths}):
+        path, relative = _manifest_record(item, repo)
+        records.append({'path': relative, 'deleted': not path.is_file()})
+    manifest = {
+        'schemaVersion': 1,
+        'date': validate_publish_date(date_str),
+        'generatedAt': datetime.datetime.now(
+            datetime.timezone(datetime.timedelta(hours=8))
+        ).isoformat(),
+        'files': records,
+    }
+    path = generation_manifest_path(date_str)
+    atomic_write_json(path, manifest, ensure_ascii=False, indent=2)
+    return path
+
+
+def load_generation_manifest(date_str):
+    """Load and constrain the generation manifest without performing review."""
+    manifest_path = generation_manifest_path(date_str)
+    if not manifest_path.is_file():
+        raise PublishDataValidationError(
+            f'缺少生成清单: {manifest_path}；请先运行 generate-blog.py'
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PublishDataValidationError(f'生成清单无法解析: {manifest_path}') from exc
+    if manifest.get('schemaVersion') != 1 or manifest.get('date') != date_str:
+        raise PublishDataValidationError('生成清单版本或日期不匹配')
+    records = manifest.get('files')
+    if not isinstance(records, list) or not records:
+        raise PublishDataValidationError('生成清单中没有文件')
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    paths = []
+    seen = set()
+    for record in records:
+        if not isinstance(record, dict) or not isinstance(record.get('path'), str):
+            raise PublishDataValidationError('生成清单文件记录格式非法')
+        relative = Path(record['path'])
+        if relative.is_absolute():
+            raise PublishDataValidationError(f'生成清单包含绝对路径: {relative}')
+        target = (repo / relative).resolve()
+        _target, normalized = _manifest_record(target, repo)
+        if normalized in seen:
+            raise PublishDataValidationError(f'生成清单包含重复路径: {normalized}')
+        seen.add(normalized)
+        if record.get('deleted') is True:
+            if target.exists():
+                raise PublishDataValidationError(f'生成清单标记删除但文件仍存在: {normalized}')
+        elif not target.is_file():
+            raise PublishDataValidationError(f'生成文件缺失: {normalized}')
+        paths.append(target)
+    return paths, manifest_path
+
+
+def save_review_receipt(date_str, publish_paths, hugo_gate):
+    """Persist the exact reviewed blog manifest for a later push-only command."""
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    files = []
+    for item in sorted({Path(value).expanduser().resolve() for value in publish_paths}):
+        path, relative = _manifest_record(item, repo)
+        exists = path.is_file()
+        files.append({
+            'path': relative,
+            'deleted': not exists,
+            'sha256': _sha256_file(path) if exists else None,
+        })
+    receipt = {
+        'schemaVersion': 1,
+        'date': validate_publish_date(date_str),
+        'reviewedAt': datetime.datetime.now(
+            datetime.timezone(datetime.timedelta(hours=8))
+        ).isoformat(),
+        'strictReview': True,
+        'hugoGate': hugo_gate,
+        'files': files,
+    }
+    path = review_receipt_path(date_str)
+    atomic_write_json(path, receipt, ensure_ascii=False, indent=2)
+    return path
+
+
+def load_verified_review_receipt(date_str):
+    """Load a strict review receipt and verify every current blog file hash."""
+    path = review_receipt_path(date_str)
+    if not path.is_file():
+        raise PublishDataValidationError(
+            f'缺少已通过审查的发布凭证: {path}；请先不带 --push 运行 review'
+        )
+    try:
+        receipt = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PublishDataValidationError(f'审查凭证无法解析: {path}') from exc
+    if receipt.get('schemaVersion') != 1 or receipt.get('date') != date_str:
+        raise PublishDataValidationError('审查凭证版本或日期不匹配')
+    if receipt.get('strictReview') is not True:
+        raise PublishDataValidationError('审查凭证不是严格 review 结果')
+    if receipt.get('hugoGate') != 'hugo':
+        raise PublishDataValidationError('审查凭证未通过 Hugo staging gate')
+    records = receipt.get('files')
+    if not isinstance(records, list) or not records:
+        raise PublishDataValidationError('审查凭证没有发布文件清单')
+
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    paths = []
+    seen = set()
+    for record in records:
+        if not isinstance(record, dict) or not isinstance(record.get('path'), str):
+            raise PublishDataValidationError('审查凭证文件记录格式非法')
+        relative = Path(record['path'])
+        if relative.is_absolute() or relative.parts[:2] != ('content', 'posts'):
+            raise PublishDataValidationError(f'审查凭证包含非法路径: {relative}')
+        target = (repo / relative).resolve()
+        try:
+            target.relative_to(repo / 'content' / 'posts')
+        except ValueError as exc:
+            raise PublishDataValidationError(f'审查凭证路径逃逸 content/posts: {relative}') from exc
+        key = relative.as_posix()
+        if key in seen:
+            raise PublishDataValidationError(f'审查凭证包含重复路径: {key}')
+        seen.add(key)
+        if record.get('deleted') is True:
+            if target.exists():
+                raise PublishDataValidationError(f'review 后应删除的文件重新出现: {key}')
+        else:
+            expected = record.get('sha256')
+            if not target.is_file() or not re.fullmatch(r'[0-9a-f]{64}', str(expected or '')):
+                raise PublishDataValidationError(f'已审查文件缺失或哈希非法: {key}')
+            actual = _sha256_file(target)
+            if actual != expected:
+                raise PublishDataValidationError(f'文件在 review 后已变更，拒绝推送: {key}')
+        paths.append(target)
+    return paths, path
+
+
+def generate_main():
     data_file = None
-    skip_push = True
     target_date = None
     category = '论文速递'
     publish_all = False
@@ -1760,9 +1981,10 @@ def main():
     while i < len(sys.argv):
         arg = sys.argv[i]
         if arg == '--skip-push':
-            skip_push = True
+            pass
         elif arg == '--push':
-            skip_push = False
+            print('❌ 生成、review 和推送已分离；请依次使用 generate-blog.py、review-blog.py、push-blog.py')
+            sys.exit(2)
         elif arg == '--all':
             publish_all = True
         elif arg == '--date' and i + 1 < len(sys.argv):
@@ -1812,7 +2034,6 @@ def main():
     print(f"✅ 发布数据预检通过: {len(papers)} 篇论文以 analysis 重解析结果为发布基线")
 
     publish_paths = []
-    git_publish_state = None
     try:
         with tempfile.TemporaryDirectory(prefix='paper-digest-publish-') as transaction_dir:
             staged_posts = Path(transaction_dir) / 'content' / 'posts'
@@ -1837,52 +2058,25 @@ def main():
             atomic_write_text(index_file, index_md)
             print(f"📄 staging 汇总页面: {index_file.name} ({len(index_md)} chars)")
 
-            review_fixed, review_issues = review_all_posts(
-                today,
-                paper_slugs,
-                scored,
-                require_llm=not skip_push,
-                content_dir=str(staged_posts),
-            )
-            if review_issues > 0:
-                raise PublishDataValidationError(
-                    f'review 仍有 {review_issues} 个未解决阻断问题'
-                )
-            if review_fixed > 0:
-                print(f"\n✅ review 自动修复 {review_fixed} 个文件，复查后无阻断问题")
-
             validate_staged_posts(staged_posts, today)
-            run_hugo_gate(blog_repo, staged_posts, required=not skip_push)
-            planned_paths = planned_publish_paths(staged_posts, content_dir, today)
-            if not skip_push:
-                manifest_paths = publish_manifest_paths(staged_posts, content_dir, today)
-                validate_git_publish_branch()
-                validate_manifest_clean_against_head(manifest_paths)
-                validate_git_index(manifest_paths)
-                git_publish_state = capture_git_publish_state(planned_paths)
             publish_paths = install_staged_posts(staged_posts, content_dir, today)
-    except PublishLLMUnavailable as exc:
-        print(f"\n❌ 正式发布要求 LLM review 可用，但当前不可用: {exc}")
-        sys.exit(1)
     except PublishDataValidationError as exc:
-        print(f"\n❌ 发布事务已阻断，博客工作树未写入本次 staging 内容: {exc}")
+        print(f"\n❌ 生成事务已阻断，博客工作树未写入本次 staging 内容: {exc}")
         sys.exit(1)
     except (subprocess.CalledProcessError, OSError) as exc:
-        print(f"\n❌ 发布事务的 Git 前置校验失败，博客工作树未写入本次 staging 内容: {exc}")
+        print(f"\n❌ 生成事务失败，博客工作树未写入本次 staging 内容: {exc}")
         sys.exit(1)
 
     deleted_count = sum(1 for path in publish_paths if not Path(path).exists())
     print(f"📦 已安装本次清单: {len(publish_paths) - deleted_count} 个更新，{deleted_count} 个旧页删除")
+    manifest_path = save_generation_manifest(today, publish_paths)
+    print(f"🧾 生成清单: {manifest_path}")
+    print(f"\n✅ 博客文件生成完成；下一步: python3 scripts/review-blog.py --date {today}")
 
-    if skip_push:
-        print("\n⏭️ 默认跳过推送；如需正式发布请显式传 --push")
-        return
 
-    if not git_push(today, publish_paths, rollback_state=git_publish_state):
-        print("\n❌ Git 发布未完成；是否已有本地提交及重试方式以上方状态为准")
-        sys.exit(1)
-
-    print(f"\n🎉 博客发布完成！")
+def main():
+    """Compatibility generation entry point; review and push live in separate scripts."""
+    return generate_main()
 
 
 if __name__ == '__main__':

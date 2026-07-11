@@ -33,6 +33,8 @@
 ### 12.2 Deep Analysis Is Slow or Frequently Fails
 
 - Review `logs/deep-analyzer-*.log`, `logs/full-fetch-*.log`; full terminal output is still preserved
+- `analysisSource=abstract` means both HTML and PDF full text were unavailable. Publishing blocks it by default; explicit human approval requires `allowAbstractAnalysisPublish: true`. Never remove provenance fields to disguise an abstract-only result
+- Successful figures are cached under `data/current/image-cache/`. Use `imageManifest.downloadOutcomes` for permanent versus transient failures and `imageManifest.supplement.insertionDiagnostics` for invalid `paragraph_id` values; do not restore section-end fallback
 - Check whether the key/endpoint/model triplet is correct (see Section 12.1)
 - If a timeout occurs, the script will automatically fall back to plain-text retry; if it still fails, check the proxy or reduce concurrency
 - You can safely resume with `node scripts/deep-analysis-only.js`
@@ -52,7 +54,8 @@ ls -lt content/posts | head -20
 ```
 
 Possible causes:
-- `--push` was not passed explicitly (the blog script only generates and reviews files by default)
+- Only `generate-blog.py` or `review-blog.py` ran; an explicit `push-blog.py` invocation is required for remote publication
+- `push-blog.py` cannot find a review receipt or a reviewed file SHA-256 changed; run `review-blog.py` again
 - Data file is empty or paper analysis failed
 - Target date file already exists with identical content
 

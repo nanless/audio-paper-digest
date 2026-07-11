@@ -112,6 +112,8 @@ async function main() {
 
     console.log('\n=== 批量分析完成 ===');
     console.log(`成功: ${stats.success} | 失败: ${stats.failed} | 总计处理: ${notAnalyzed.length}`);
+    const sourceSummary = Object.entries(stats.sourceCounts || {}).map(([key, count]) => `${key}=${count}`).join(' | ');
+    if (sourceSummary) console.log(`文本来源: ${sourceSummary}`);
     const finalPayload = updateJsonFileLocked(RESULT_FILE, current => {
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
         const remaining = currentPapers.filter(p => !isSuccessfulAnalysisRecord(p)).length;

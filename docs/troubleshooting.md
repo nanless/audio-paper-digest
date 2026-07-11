@@ -33,6 +33,8 @@
 ### 12.2 深度分析慢或频繁失败
 
 - 查看 `logs/deep-analyzer-*.log`、`logs/full-fetch-*.log`，同时保留终端完整输出
+- 若成功结果的 `analysisSource=abstract`，说明 HTML/PDF 全文均不可用；该结果默认被博客发布预检阻断。人工确认必须发布时显式设置 `allowAbstractAnalysisPublish: true`，不要删除来源字段伪装成全文结果
+- 图片成功缓存位于 `data/current/image-cache/`；查看 `imageManifest.downloadOutcomes` 区分永久拒绝与瞬时错误，查看 `imageManifest.supplement.insertionDiagnostics` 排查非法 `paragraph_id`。禁止恢复章节末尾兜底
 - 检查 key/endpoint/model 三元组是否匹配（见 12.1 节）
 - 若超时，脚本会自动降级为纯文本重试；若仍失败，检查代理或减小并发
 - 可用 `node scripts/deep-analysis-only.js` 安全续跑
@@ -52,7 +54,8 @@ ls -lt content/posts | head -20
 ```
 
 可能原因：
-- 未显式使用 `--push`（博客脚本默认只生成和 review，不推送）
+- 只运行了 `generate-blog.py` 或 `review-blog.py`；正式推送必须显式运行 `push-blog.py`
+- `push-blog.py` 找不到审查凭证，或 review 后文件 SHA-256 已变更：需重新运行 `review-blog.py`
 - 数据文件为空或论文分析失败
 - 目标日期文件已存在且内容相同
 

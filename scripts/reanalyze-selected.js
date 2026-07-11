@@ -26,6 +26,12 @@ const Config = require('./config.js');
 
 const RESULT_FILE = Config.FILES.deepAnalysisResult;
 
+function inferBatchDate(data, papers) {
+    return data.batchDate
+        || papers.map(p => p.digestStatus?.batchDate || String(p.fetchedAt || '').slice(0, 10)).find(Boolean)
+        || String(data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10);
+}
+
 function updateReanalysisStats(data, analyzedResults, previousCurrentRubricIds, runStats, updatedAt) {
     const recoveredCount = analyzedResults.filter(result => {
         const key = normalizedId(result);
@@ -56,7 +62,7 @@ async function reanalyzeSelected(ids) {
     const data = readJsonFileStrict(RESULT_FILE);
 
     const papers = data.papers || [];
-    const batchDate = (data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10);
+    const batchDate = inferBatchDate(data, papers);
     const previousCurrentRubricIds = new Set(papers
         .filter(p => p.parsed?.scoringRubricVersion === SCORING_RUBRIC_VERSION
             || p.scoringRubricVersion === SCORING_RUBRIC_VERSION)
@@ -105,6 +111,7 @@ async function reanalyzeSelected(ids) {
             ...(!Array.isArray(current) && current ? current : {}),
             papers: Array.isArray(current) ? current : (current?.papers || []),
             lastUpdated: getBeijingISOString(),
+            batchDate,
             stats: { ...(!Array.isArray(current) ? current?.stats : {}), selectedReanalyzeStatus: 'running' }
         };
         delete payload.deepAnalysisCompletedAt;
@@ -118,7 +125,7 @@ async function reanalyzeSelected(ids) {
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
-        saveInterval: 1,
+        saveInterval: 0,
         onPaperStart: (idx, total, paper) => {
             console.log(`  [${idx + 1}/${total}] ▶ 开始: ${paper.title?.substring(0, 50)}...`);
         },
@@ -138,14 +145,14 @@ async function reanalyzeSelected(ids) {
                     error: result.error || '分析失败'
                 });
             }
-        },
-        onSave: async (results) => {
+            const latestAttempt = attemptResults[attemptResults.length - 1];
             updateJsonFileLocked(RESULT_FILE, current => ({
                 ...(!Array.isArray(current) && current ? current : {}),
                 lastUpdated: getBeijingISOString(),
-                papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), results.filter(Boolean), { preserveSuccessfulAnalysis: true })
+                batchDate,
+                papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), latestAttempt ? [latestAttempt] : [], { preserveSuccessfulAnalysis: true })
             }));
-            updateAnalysisDigestStatuses(attemptResults, { batchDate });
+            if (latestAttempt) updateAnalysisDigestStatuses([latestAttempt], { batchDate });
         }
     });
 
@@ -177,6 +184,7 @@ async function reanalyzeSelected(ids) {
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             timestamp: updatedAt,
+            batchDate,
             papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), attemptResults, { preserveSuccessfulAnalysis: true }),
             stats: { ...(!Array.isArray(current) ? current?.stats : {}), ...data.stats, selectedReanalyzeStatus: status }
         };
@@ -190,6 +198,8 @@ async function reanalyzeSelected(ids) {
     const digestStatus = updateAnalysisDigestStatuses(attemptResults, { batchDate });
 
     console.log(`\n${status === 'complete' ? '✅' : '⚠️'} 重分析状态 ${status}: 成功 ${stats.success} | 失败 ${effectiveStats.failed}`);
+    const sourceSummary = Object.entries(stats.sourceCounts || {}).map(([key, count]) => `${key}=${count}`).join(' | ');
+    if (sourceSummary) console.log(`文本来源: ${sourceSummary}`);
     if (recoveredCount > 0) console.log(`历史失败恢复: ${recoveredCount} 篇`);
     if (digestStatus.updated > 0) console.log(`papers.json 状态已同步: ${digestStatus.updated} 篇`);
     console.log(`💾 结果已保存到: ${RESULT_FILE}`);
