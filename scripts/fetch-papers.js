@@ -1019,6 +1019,48 @@ function parseFilterDecisionDetails(responseText, paperId = '') {
     return makeRetryable('fallback_retryable');
 }
 
+/**
+ * 某些模型会给出完整推理，却遗漏最后的机器可读结论行。不能把推理中的
+ * 关键词直接当正式决定（会误判），但也不应该因此让整个日批次永久卡住。
+ * 对这种有明确倾向的响应，额外发起一次极短的格式修复请求；只有修复响应
+ * 自身可被严格解析时才升级为正式决定。
+ */
+async function repairMalformedFilterDecision(initialDecision, paperId, requestFn = callModelForFilter) {
+    if (!initialDecision?.retryable
+        || typeof initialDecision.suggestedRelated !== 'boolean'
+        || !initialDecision.rawResponse) {
+        return initialDecision;
+    }
+
+    const repairPrompt = [
+        '上一条筛选回答缺少可解析的最终结论。',
+        '只根据上一条回答已经表达的最终判断，严格只输出一行：',
+        '结论：相关',
+        '或',
+        '结论：不相关',
+        '不要解释，不要复述标准，不要输出其他文字。',
+        `上一条回答：\n${initialDecision.rawResponse.slice(0, 12000)}`
+    ].join('\n');
+
+    try {
+        const repairedText = await requestFn([{ role: 'user', content: repairPrompt }], 32);
+        const repaired = parseFilterDecisionDetails(repairedText, paperId);
+        if (typeof repaired.related === 'boolean' && !repaired.retryable && !repaired.fallback) {
+            return {
+                ...repaired,
+                reason: initialDecision.reason || repaired.reason,
+                rawResponse: `${initialDecision.rawResponse}\n\n[format-repair]\n${repairedText}`,
+                parseSource: `format_repair:${repaired.parseSource}`,
+                repairedFrom: initialDecision.parseSource
+            };
+        }
+        return initialDecision;
+    } catch (err) {
+        console.warn(`[filter] 格式修复失败 ${paperId}: ${err.message}`);
+        return initialDecision;
+    }
+}
+
 function getCaseInsensitiveField(obj, names) {
     if (!obj || typeof obj !== 'object') return undefined;
     const wanted = new Set(names.map(name => name.toLowerCase()));
@@ -1039,7 +1081,8 @@ async function getSpeechAudioDecision(paper) {
     try {
         const response = await callModelForFilter([{ role: 'user', content: prompt }], 1000);
         consecutiveFilterApiFailures = 0;
-        return parseFilterDecisionDetails(response, paperId);
+        const initialDecision = parseFilterDecisionDetails(response, paperId);
+        return repairMalformedFilterDecision(initialDecision, paperId);
     } catch (err) {
         consecutiveFilterApiFailures++;
         if (consecutiveFilterApiFailures >= FILTER_SYSTEM_FAILURE_THRESHOLD) {
@@ -1279,6 +1322,7 @@ module.exports = {
     filterPapersWithLLM,
     parseFilterDecision,
     parseFilterDecisionDetails,
+    repairMalformedFilterDecision,
     redactProxyUrl,
     isSpeechAudioRelated,
     getSpeechAudioDecision,

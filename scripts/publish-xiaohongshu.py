@@ -19,9 +19,24 @@ import json, re, sys, os, datetime, concurrent.futures
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from publish_common import (
     load_papers, get_today_bj, score_and_sort, extract_top_tags,
-    score_emoji, format_medal, extract_one_liner, call_publish_llm_api
+    score_emoji, format_medal, extract_one_liner, call_publish_llm_api,
+    validate_papers_for_publish,
 )
-from path_config import CURRENT_DIR, xiaohongshu_markdown_path
+from path_config import atomic_write_text, xiaohongshu_markdown_path
+
+
+_OSS_YES = {'是', 'yes', 'true', '有', '已开源', '已公开'}
+_OSS_NO = {'否', 'no', 'false', '无', '未开源', '未公开'}
+
+
+def get_oneliner_concurrency():
+    """返回项目 .env 配置的 one-liner 并发度，限制在安全范围内。"""
+    raw = os.environ.get('PD_XIAOHONGSHU_ONELINER_CONCURRENCY', '5')
+    try:
+        value = int(raw)
+        return 5 if value < 1 else min(value, 5)
+    except (TypeError, ValueError):
+        return 5
 
 
 def smart_truncate(text, max_len=65):
@@ -39,6 +54,50 @@ def smart_truncate(text, max_len=65):
     return text[:max_len]
 
 
+def normalize_oss_status(value):
+    """把结构化开源字段归一化为 yes/no/unknown。"""
+    normalized = str(value or '').strip().lower()
+    if normalized in _OSS_YES:
+        return 'yes'
+    if normalized in _OSS_NO:
+        return 'no'
+    return 'unknown'
+
+
+def sanitize_oneliner_claims(text, pa=None):
+    """依据结构化开源状态删除 one-liner 中相冲突的开源断言。"""
+    pa = pa or {}
+    claims = (
+        ('hasCode', r'(?:代码|源码)(?:仓库)?'),
+        ('hasModel', r'(?:模型权重|模型|权重|checkpoint)'),
+        ('hasDataset', r'(?:数据集|数据)'),
+    )
+    cleaned = str(text or '')
+    for field, subject in claims:
+        if normalize_oss_status(pa.get(field)) != 'yes':
+            cleaned = re.sub(
+                rf'[，,；;]?\s*{subject}(?:已经|已|现已|目前)?(?:开源|公开|发布|可下载|可用)[！!。.]?',
+                '。',
+                cleaned,
+                flags=re.IGNORECASE,
+            )
+    cleaned = re.sub(r'[\r\n\t\x00-\x1f]+', ' ', cleaned)
+    cleaned = re.sub(r'^\s*(?:[-*•]+|\d+[.)、])\s*', '', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip(' \"\'`#')
+    cleaned = re.sub(r'。{2,}', '。', cleaned)
+    cleaned = re.sub(r'\s+([，。！？；：,.!?;:])', r'\1', cleaned)
+    return cleaned.strip()
+
+
+def safe_oneliner(text, pa=None, max_len=65):
+    """清洗、校验并截断 one-liner；不可用时返回 None 触发本地回退。"""
+    cleaned = sanitize_oneliner_claims(text, pa)
+    meaningful = re.findall(r'[\u4e00-\u9fffA-Za-z0-9]', cleaned)
+    if len(meaningful) < 10:
+        return None
+    return smart_truncate(cleaned, max_len=max_len)
+
+
 def build_oneliner_context(title, abstract, pa=None):
     """构造 one-liner 输入，优先使用深度分析 parsed 字段。"""
     pa = pa or {}
@@ -53,17 +112,24 @@ def build_oneliner_context(title, abstract, pa=None):
         parts.append(f"局限：{pa.get('limitations', '')[:250]}")
     if pa.get('opensource'):
         parts.append(f"开源：{pa.get('opensource', '')[:220]}")
-    if pa.get('primaryTaskTag') or pa.get('primaryMethodTag'):
-        parts.append(f"标签：{pa.get('primaryTaskTag', '')} {pa.get('primaryMethodTag', '')}".strip())
     if len(parts) <= 1 and abstract:
         parts.append(f"摘要：{abstract[:800]}")
+    status_labels = {'yes': '已公开', 'no': '未公开', 'unknown': '未说明'}
+    parts.append(
+        '结构化开源状态：'
+        f"代码={status_labels[normalize_oss_status(pa.get('hasCode'))]}；"
+        f"模型={status_labels[normalize_oss_status(pa.get('hasModel'))]}；"
+        f"数据集={status_labels[normalize_oss_status(pa.get('hasDataset'))]}"
+    )
+    if pa.get('primaryTaskTag') or pa.get('primaryMethodTag'):
+        parts.append(f"标签：{pa.get('primaryTaskTag', '')} {pa.get('primaryMethodTag', '')}".strip())
     return "\n".join(parts)
 
 
 def call_llm_for_oneliner(title, abstract, pa=None):
     """调用 LLM 生成一句话论文介绍，自动检测协议。"""
     context = build_oneliner_context(title, abstract, pa)
-    prompt = f"""用1-2句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书。总字数严格控制在70字以内，必须输出完整内容，不要省略。优先突出任务、方法、实验收益或开源价值，不要只复述标题：
+    prompt = f"""用1-2句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书。总字数严格控制在70字以内，必须输出完整内容，不要省略。优先突出任务、方法、实验收益或开源价值，不要只复述标题。开源情况只能依据“结构化开源状态”，不得从其他文字推断：
 
 {context}
 
@@ -77,28 +143,26 @@ def call_llm_for_oneliner(title, abstract, pa=None):
         context="小红书 one-liner",
         timeout=180
     )
-    content = (content or '').strip('"\'').strip()
-    if len(content) > 10:
-        return smart_truncate(content, max_len=65)
-    return None
+    return safe_oneliner((content or '').strip('"\''), pa, max_len=65)
 
 
 def generate_llm_oneliners(top_papers):
-    """为 TOP N 论文并行生成 LLM one-liner"""
-    print("🤖 正在调用 LLM 生成论文一句话介绍...")
+    """为 TOP N 论文受控并行生成 LLM one-liner，结果按输入排名索引保存。"""
+    if not top_papers:
+        return {}
+    workers = min(get_oneliner_concurrency(), max(1, len(top_papers)))
+    print(f"🤖 正在并发生成论文一句话介绍（并发度: {workers}）...")
 
     def worker(item):
         score, p, pa = item
         title = p.get('title', '')
         abstract = p.get('abstract', '') or p.get('summary', '')
         result = call_llm_for_oneliner(title, abstract, pa)
-        if result:
-            print(f"  ✓ {title[:40]}... → {result[:50]}...")
-            return result
-        return None
+        return result
 
     results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+    statuses = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_idx = {executor.submit(worker, item): i for i, item in enumerate(top_papers)}
         for future in concurrent.futures.as_completed(future_to_idx):
             idx = future_to_idx[future]
@@ -106,32 +170,46 @@ def generate_llm_oneliners(top_papers):
                 result = future.result()
                 if result:
                     results[idx] = result
-            except Exception as e:
-                print(f"  ⚠️  并行任务异常: {e}")
+                    statuses[idx] = 'success'
+                else:
+                    statuses[idx] = 'fallback'
+            except Exception:
+                statuses[idx] = 'error'
+
+    for idx in range(len(top_papers)):
+        if statuses.get(idx) == 'success':
+            print(f"  ✓ 第 {idx + 1} 名：LLM one-liner 生成成功")
+        elif statuses.get(idx) == 'error':
+            print(f"  ⚠️  第 {idx + 1} 名：调用异常，将使用本地摘要")
+        else:
+            print(f"  ⚠️  第 {idx + 1} 名：LLM 无可用结果，将使用本地摘要")
 
     return results
 
 
 def format_oss_badge(pa):
     """生成开源状态简短标签"""
-    if not pa:
+    if pa is None:
         return ''
-    code = pa.get('hasCode', '')
-    model = pa.get('hasModel', '')
-    dataset = pa.get('hasDataset', '')
+    statuses = {
+        'code': normalize_oss_status(pa.get('hasCode')),
+        'model': normalize_oss_status(pa.get('hasModel')),
+        'dataset': normalize_oss_status(pa.get('hasDataset')),
+    }
 
     badges = []
-    if code and str(code).lower() in ('是', 'yes', 'true', '有'):
+    if statuses['code'] == 'yes':
         badges.append('✅代码')
-    if model and str(model).lower() in ('是', 'yes', 'true', '有'):
+    if statuses['model'] == 'yes':
         badges.append('✅模型')
-    if dataset and str(dataset).lower() in ('是', 'yes', 'true', '有'):
+    if statuses['dataset'] == 'yes':
         badges.append('✅数据')
 
     if badges:
         return '📦 开源：' + ' '.join(badges)
-    # 明确标记未开源，避免信息缺失感
-    return '📦 开源：❌未开源'
+    if all(status == 'no' for status in statuses.values()):
+        return '📦 开源：❌未开源'
+    return '📦 开源：未说明'
 
 
 def generate_top_n_post(scored, unscored, date_str, top_n=5):
@@ -154,7 +232,7 @@ TOP {top_n} 👇
         title = p.get('title', 'Unknown')
         if len(title) > 45:
             title = title[:42] + '...'
-        liner = llm_oneliners.get(i) or smart_truncate(extract_one_liner(pa) or '', max_len=80)
+        liner = llm_oneliners.get(i) or safe_oneliner(extract_one_liner(pa), pa, max_len=80) or ''
         fire = score_emoji(score)
         score_line = f'{fire} {score}/10'
         if pa.get('rankBucket'):
@@ -187,7 +265,7 @@ def generate_all_summary_post(scored, unscored, date_str):
     for i, (score, p, pa) in enumerate(scored):
         medal = format_medal(i)
         title = p.get('title', '')[:50]
-        liner = extract_one_liner(pa)
+        liner = safe_oneliner(extract_one_liner(pa), pa, max_len=80)
         fire = score_emoji(score)
         extras = [v for v in [pa.get('rankBucket', ''), pa.get('documentType', ''), pa.get('primaryTaskTag', '')] if v]
         extra_text = f" | {' | '.join(extras)}" if extras else ''
@@ -250,6 +328,7 @@ def main():
         print(f"⚠️  没有 fetchedAt={today} 的论文，停止生成，避免跨日混入历史论文")
         return
 
+    papers = validate_papers_for_publish(papers)
     scored, unscored = score_and_sort(papers)
 
     if mode == 'all':
@@ -259,10 +338,8 @@ def main():
         md = generate_top_n_post(scored, unscored, today, top_n)
         suffix = f'top{top_n}'
 
-    os.makedirs(CURRENT_DIR, exist_ok=True)
     out_path = xiaohongshu_markdown_path(today, suffix)
-    with open(out_path, 'w') as f:
-        f.write(md)
+    atomic_write_text(out_path, md)
 
     print(f"✅ 小红书文案已生成：{out_path}")
     print(f"   字数：{len(md)} 字符")

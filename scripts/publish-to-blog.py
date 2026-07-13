@@ -52,11 +52,11 @@ GITHUB_REMOTE = os.environ.get("PAPER_DIGEST_GITHUB_REMOTE", "origin")
 
 def get_blog_review_concurrency():
     """Return the project-scoped concurrency for independent post reviews."""
-    raw = os.environ.get("PD_BLOG_REVIEW_CONCURRENCY", "8").strip()
+    raw = os.environ.get("PD_BLOG_REVIEW_CONCURRENCY", "5").strip()
     try:
         value = int(raw)
     except ValueError:
-        value = 8
+        value = 5
     return max(1, value)
 
 def call_llm_api(
@@ -166,6 +166,8 @@ def filter_false_positive_review_issues(content, issues):
         m.group(0)
         for m in re.finditer(r'(?<![a-zA-Z0-9`])<(/?)([A-Za-z][A-Za-z0-9_†-]{0,40})(?![A-Za-z0-9_†-])>', content)
     )
+    fence_count = len(re.findall(r'^\s*`{3,}[^`]*$', content, re.MULTILINE))
+    fences_are_balanced = fence_count % 2 == 0
     filtered = []
     for issue in issues:
         desc = str(issue.get('description', ''))
@@ -179,8 +181,137 @@ def filter_false_positive_review_issues(content, issues):
             continue
         if not unescaped_angle_tags and (issue_type == 'html_tag' or 'HTML-like' in desc or 'HTML标签' in desc):
             continue
+        fence_claim = re.search(
+            r'代码块|code\s*fence|fenced\s+code|backtick',
+            desc,
+            re.IGNORECASE,
+        ) and re.search(
+            r'未闭合|没有.*结束|孤立|unclosed|unterminated|unmatched|isolated',
+            desc,
+            re.IGNORECASE,
+        )
+        if fences_are_balanced and fence_claim:
+            continue
         filtered.append(issue)
     return filtered
+
+
+def parse_review_json(text):
+    """Parse a JSON response even when the model adds a short prose wrapper."""
+    cleaned = (text or '').strip()
+    cleaned = re.sub(r'^```(?:json)?\s*|\s*```$', '', cleaned, flags=re.IGNORECASE).strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        start, end = cleaned.find('{'), cleaned.rfind('}')
+        if start < 0 or end <= start:
+            raise
+        return json.loads(cleaned[start:end + 1])
+
+
+def repair_review_payload(
+    raw_response,
+    context,
+    *,
+    use_secondary=False,
+    issue_fields=(),
+    retry_prompt=None,
+    retry_images=None,
+):
+    """Convert a malformed review response to the strict review JSON contract once."""
+    raw_response = raw_response or ''
+    original_retry_attempted = False
+    if retry_prompt and len(raw_response.strip()) < 32:
+        original_retry_attempted = True
+        try:
+            retried = call_llm_api(
+                retry_prompt + '\n\n上一次响应不完整。请重新完成审查，并且只输出符合上述契约的完整 JSON 对象。',
+                max_tokens=1500,
+                temperature=0.1,
+                required=True,
+                context=f'{context} 协议重试',
+                images=retry_images,
+                use_secondary=use_secondary,
+            )
+            review = parse_review_json(retried)
+            return validate_review_payload(
+                review,
+                required=True,
+                context=context,
+                issue_fields=issue_fields,
+            )
+        except (PublishLLMUnavailable, json.JSONDecodeError, TypeError, ValueError):
+            raw_response = retried if 'retried' in locals() else raw_response
+
+    prompt = f"""你只负责修复审查响应的输出格式，不得新增、删除或改变审查结论。
+
+原始审查响应：
+```text
+{(raw_response or '')[:12000]}
+```
+
+只输出一个 JSON 对象，不要输出代码围栏或解释：
+{{
+  "passed": true/false,
+  "issues": [
+    {{
+      "severity": "error/warning/info",
+      "type": "html_tag/latex/markdown/content/image/yaml/unknown",
+      "description": "原响应中的具体问题",
+      "auto_fixable": false,
+      "fix_instruction": ""
+    }}
+  ]
+}}
+
+约束：只有 issues 中存在 severity=error 时 passed 才能为 false；没有问题时 issues 必须为空数组。"""
+    try:
+        repaired = call_llm_api(
+            prompt,
+            max_tokens=1000,
+            temperature=0.1,
+            required=True,
+            context=f'{context} 格式修复',
+            use_secondary=use_secondary,
+        )
+        review = parse_review_json(repaired)
+        return validate_review_payload(
+            review,
+            required=True,
+            context=context,
+            issue_fields=issue_fields,
+        )
+    except (PublishLLMUnavailable, json.JSONDecodeError, TypeError, ValueError) as exc:
+        repair_error = exc
+
+    # A format-repair response can itself be truncated or malformed. In that
+    # case, retry the actual review once so text and image evidence remain in
+    # scope instead of repeatedly asking a model to repair broken JSON.
+    if retry_prompt and not original_retry_attempted:
+        try:
+            retried = call_llm_api(
+                retry_prompt + '\n\n上一次响应及其格式修复均无效。请重新完成审查，并且只输出符合上述契约的完整 JSON 对象。',
+                max_tokens=1500,
+                temperature=0.1,
+                required=True,
+                context=f'{context} 协议重试',
+                images=retry_images,
+                use_secondary=use_secondary,
+            )
+            review = parse_review_json(retried)
+            return validate_review_payload(
+                review,
+                required=True,
+                context=context,
+                issue_fields=issue_fields,
+            )
+        except (PublishLLMUnavailable, json.JSONDecodeError, TypeError, ValueError) as retry_exc:
+            return review_protocol_failure(
+                context,
+                f'响应不是可解析的 JSON，格式修复失败：{repair_error}；协议重试失败：{retry_exc}',
+            )
+
+    return review_protocol_failure(context, f'响应不是可解析的 JSON，格式修复失败：{repair_error}')
 
 
 def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1'):
@@ -250,7 +381,7 @@ def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1')
         if cleaned.endswith("```"):
             cleaned = cleaned[:-3]
         cleaned = cleaned.strip()
-        review = json.loads(cleaned)
+        review = parse_review_json(cleaned)
         passed, issues = validate_review_payload(
             review,
             required=required,
@@ -267,11 +398,17 @@ def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1')
         # 如果 JSON 解析失败，尝试从文本中提取问题
         print(f"  ⚠️  LLM review 返回非 JSON 格式，尝试文本解析")
         if required:
-            passed, issues = review_protocol_failure(
+            passed, issues = repair_review_payload(
+                result,
                 f"LLM 文本 review: {title}",
-                '响应不是可解析的 JSON',
+                issue_fields=('type', 'auto_fixable', 'fix_instruction'),
+                retry_prompt=prompt,
             )
-            return passed, issues, content
+            issues = filter_false_positive_review_issues(content, issues)
+            if not issues:
+                passed = True
+            fixed_content = apply_llm_fixes(content, issues)
+            return passed, issues, fixed_content
         issues = []
         if "问题" in result or "错误" in result or "建议" in result:
             issues.append({
@@ -371,7 +508,34 @@ def _response_peer_ip(response):
 
 
 def _validate_response_peer(response, resolved_addresses):
+    return _validate_response_peer_with_transport(response, resolved_addresses)
+
+
+def _resolve_proxy_addresses(proxy):
+    """Resolve the explicitly configured CONNECT proxy, which is a trusted transport hop."""
+    parsed = urlparse(proxy)
+    if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
+        raise PublishDataValidationError('图片 review 代理必须是 HTTP CONNECT 地址')
+    try:
+        return {
+            str(ipaddress.ip_address(item[4][0].split('%', 1)[0]))
+            for item in socket.getaddrinfo(parsed.hostname, parsed.port or 443)
+        }
+    except socket.gaierror as exc:
+        raise PublishDataValidationError(f'图片 review 代理无法解析: {parsed.hostname}') from exc
+
+
+def _validate_response_peer_with_transport(response, resolved_addresses, proxy_addresses=None):
     peer = _response_peer_ip(response)
+    # With an explicit HTTP CONNECT proxy the socket peer is the configured proxy
+    # (often 127.0.0.1), not the remote image host. The URL is still DNS-checked
+    # before every hop; validate the transport peer against the configured proxy.
+    if proxy_addresses is not None:
+        if peer not in proxy_addresses:
+            raise PublishDataValidationError(
+                f'图片 HTTPS 连接未命中已配置代理 peer: {peer}'
+            )
+        return peer
     if not ipaddress.ip_address(peer).is_global:
         raise PublishDataValidationError(f'图片 HTTPS 连接命中非公网 peer: {peer}')
     if peer not in resolved_addresses:
@@ -388,6 +552,7 @@ def _download_review_image(url):
     session = requests.Session()
     session.trust_env = False
     proxy = get_required_fetch_proxy()
+    proxy_addresses = _resolve_proxy_addresses(proxy)
     session.proxies.update({'http': proxy, 'https': proxy})
     try:
         current = url
@@ -395,7 +560,7 @@ def _download_review_image(url):
             resolved_addresses = _validate_public_image_url(current)
             response = session.get(current, timeout=30, stream=True, allow_redirects=False)
             try:
-                _validate_response_peer(response, resolved_addresses)
+                _validate_response_peer_with_transport(response, resolved_addresses, proxy_addresses)
                 if response.status_code in {301, 302, 303, 307, 308}:
                     location = response.headers.get('Location')
                     if not location:
@@ -489,7 +654,7 @@ def multimodal_review_images(content, title="", required=False):
     for match in image_matches:
         alt, url = match.groups()
         nearby = content[max(0, match.start() - 600):min(len(content), match.end() + 600)]
-        nearby = nearby.replace(url, '[图片 URL]').strip()
+        nearby = nearby.replace(match.group(0), f'图片（alt：{alt}）').strip()
         try:
             image_payload = _load_review_image(url)
         except PublishDataValidationError as exc:
@@ -574,7 +739,7 @@ def multimodal_review_images(content, title="", required=False):
         if cleaned.endswith("```"):
             cleaned = cleaned[:-3]
         cleaned = cleaned.strip()
-        review = json.loads(cleaned)
+        review = parse_review_json(cleaned)
         passed, issues = validate_review_payload(
             review,
             required=required,
@@ -584,10 +749,14 @@ def multimodal_review_images(content, title="", required=False):
     except (json.JSONDecodeError, TypeError, ValueError):
         fallback = cleaned.strip()
         if required:
-            return review_protocol_failure(
+            passed, issues = repair_review_payload(
+                result,
                 f"多模态图片 review: {title}",
-                '响应不是可解析的 JSON',
+                use_secondary=True,
+                retry_prompt=prompt,
+                retry_images=image_payloads,
             )
+            return passed, load_issues + issues
         lower = fallback.lower()
         error_markers = ['error', '错误', '阻断', '不合理', '无法渲染', '过长', '空 alt', '重复 alt']
         pass_markers = ['passed', '"passed": true', '通过', '无问题', '没有问题', '未发现问题']
@@ -1244,7 +1413,7 @@ def review_and_fix_post(file_path):
 
 
 def _review_single_paper(args):
-    """并发 review 单篇论文，返回 (title, fixed_count, blocking_count, advisory_count, output_lines)"""
+    """并发 review 单篇论文，返回路径、标题、计数和输出。"""
     arxiv_id, slug, date_str, title, require_llm, content_dir = args
     paper_file = os.path.join(content_dir, f"{date_str}-{slug}.md")
     if not os.path.exists(paper_file):
@@ -1313,10 +1482,18 @@ def _review_single_paper(args):
         else:
             lines.append(f"    ✅ 无阻断问题（保留 {advisory_count} 个 warning/info）")
 
-    return title, fixed_count, blocking_count, advisory_count, lines
+    return os.path.realpath(paper_file), title, fixed_count, blocking_count, advisory_count, lines
 
 
-def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False, content_dir=None):
+def review_all_posts(
+    date_str,
+    paper_slugs,
+    scored_papers,
+    require_llm=False,
+    content_dir=None,
+    review_paths=None,
+    return_details=False,
+):
     """三层 review：代码检查 → LLM 文本审查 → 多模态图片审查（论文独立页面并发执行）"""
     print("\n🔍 开始三层 review（代码检查 → LLM 审查 → 多模态图片审查）...")
     if require_llm:
@@ -1324,8 +1501,12 @@ def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False, co
     total_fixed = 0
     total_blocking_issues = 0
     total_advisory_issues = 0
+    file_results = {}
 
     content_dir = content_dir or CONTENT_DIR
+    selected_paths = None
+    if review_paths is not None:
+        selected_paths = {os.path.realpath(str(path)) for path in review_paths}
     # 构建 arxivId -> title 映射
     title_map = {}
     for score, p, pa in scored_papers:
@@ -1333,7 +1514,9 @@ def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False, co
 
     # Review 汇总页面（串行，只有1个）
     index_file = os.path.join(content_dir, f"{date_str}.md")
-    if os.path.exists(index_file):
+    if os.path.exists(index_file) and (
+        selected_paths is None or os.path.realpath(index_file) in selected_paths
+    ):
         print("\n  📋 汇总页面:")
         # 1. 代码检查
         fixed, issues = review_and_fix_post(index_file)
@@ -1394,34 +1577,58 @@ def review_all_posts(date_str, paper_slugs, scored_papers, require_llm=False, co
                 print(f"    ✅ 无阻断问题（保留 {advisory} 个 warning/info）")
             else:
                 print(f"    ✅ 通过 review")
+        file_results[os.path.realpath(index_file)] = {
+            'passed': (
+                not remaining_code_issues
+                and count_blocking_review_issues(llm_issues) == 0
+                and count_blocking_review_issues(img_issues) == 0
+            ),
+            'blockingCount': (
+                len(remaining_code_issues)
+                + count_blocking_review_issues(llm_issues)
+                + count_blocking_review_issues(img_issues)
+            ),
+        }
 
     # Review 每篇论文独立页面（并发）
     paper_args = [
         (arxiv_id, slug, date_str, title_map.get(arxiv_id, slug), require_llm, content_dir)
         for arxiv_id, slug in paper_slugs.items()
+        if selected_paths is None or os.path.realpath(
+            os.path.join(content_dir, f"{date_str}-{slug}.md")
+        ) in selected_paths
     ]
 
-    review_concurrency = min(get_blog_review_concurrency(), max(1, len(paper_args)))
-    print(f"\n  🔀 论文页 review 并发度: {review_concurrency}")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=review_concurrency) as executor:
-        futures = [executor.submit(_review_single_paper, args) for args in paper_args]
-        for future in concurrent.futures.as_completed(futures):
-            result = future.result()
-            if result is None:
-                continue
-            title, fixed_count, blocking_count, advisory_count, lines = result
-            print(f"\n  📄 {title[:50]}...")
-            for line in lines:
-                print(line)
-            total_fixed += fixed_count
-            total_blocking_issues += blocking_count
-            total_advisory_issues += advisory_count
+    if paper_args:
+        review_concurrency = min(get_blog_review_concurrency(), len(paper_args))
+        print(f"\n  🔀 论文页 review 并发度: {review_concurrency}")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=review_concurrency) as executor:
+            futures = [executor.submit(_review_single_paper, args) for args in paper_args]
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if result is None:
+                    continue
+                path, title, fixed_count, blocking_count, advisory_count, lines = result
+                print(f"\n  📄 {title[:50]}...")
+                for line in lines:
+                    print(line)
+                total_fixed += fixed_count
+                total_blocking_issues += blocking_count
+                total_advisory_issues += advisory_count
+                file_results[path] = {
+                    'passed': blocking_count == 0,
+                    'blockingCount': blocking_count,
+                }
+    elif selected_paths is not None:
+        print("\n  ℹ️ 本轮没有需要复审的论文页")
 
     if total_fixed == 0 and total_blocking_issues == 0 and total_advisory_issues == 0:
         print("\n  ✅ 所有文件通过三层 review，无问题")
     else:
         print(f"\n  📊 review 结果: {total_fixed} 个文件已修复, {total_blocking_issues} 个阻断问题, {total_advisory_issues} 个 warning/info")
 
+    if return_details:
+        return total_fixed, total_blocking_issues, file_results
     return total_fixed, total_blocking_issues
 
 
@@ -1871,6 +2078,10 @@ def review_receipt_path(date_str):
     return CURRENT_DIR / f'blog-review-receipt-{validate_publish_date(date_str)}.json'
 
 
+def review_failure_path(date_str):
+    return CURRENT_DIR / f'blog-review-failure-{validate_publish_date(date_str)}.json'
+
+
 def generation_manifest_path(date_str):
     return CURRENT_DIR / f'blog-generation-manifest-{validate_publish_date(date_str)}.json'
 
@@ -1881,6 +2092,14 @@ def _sha256_file(path):
         for chunk in iter(lambda: handle.read(1024 * 1024), b''):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _file_fingerprint(path):
+    path = Path(path)
+    return {
+        'deleted': not path.is_file(),
+        'sha256': _sha256_file(path) if path.is_file() else None,
+    }
 
 
 def _manifest_record(path, repo):
@@ -1911,6 +2130,11 @@ def save_generation_manifest(date_str, publish_paths):
     }
     path = generation_manifest_path(date_str)
     atomic_write_json(path, manifest, ensure_ascii=False, indent=2)
+    # A new generation invalidates both successful review evidence and any
+    # partial-review checkpoint from an older manifest, even if bytes happen
+    # to be identical.
+    review_receipt_path(date_str).unlink(missing_ok=True)
+    review_failure_path(date_str).unlink(missing_ok=True)
     return path
 
 
@@ -1953,7 +2177,7 @@ def load_generation_manifest(date_str):
     return paths, manifest_path
 
 
-def save_review_receipt(date_str, publish_paths, hugo_gate):
+def save_review_receipt(date_str, publish_paths, hugo_gate, expected_base_head=None):
     """Persist the exact reviewed blog manifest for a later push-only command."""
     repo = Path(BLOG_REPO).expanduser().resolve()
     files = []
@@ -1965,6 +2189,11 @@ def save_review_receipt(date_str, publish_paths, hugo_gate):
             'deleted': not exists,
             'sha256': _sha256_file(path) if exists else None,
         })
+    current_head = validate_git_publish_branch()
+    if expected_base_head is not None and current_head != str(expected_base_head).lower():
+        raise PublishDataValidationError(
+            'review 期间博客 main 基线发生变化，拒绝签发审查凭证'
+        )
     receipt = {
         'schemaVersion': 2,
         'date': validate_publish_date(date_str),
@@ -1973,12 +2202,115 @@ def save_review_receipt(date_str, publish_paths, hugo_gate):
         ).isoformat(),
         'strictReview': True,
         'hugoGate': hugo_gate,
-        'baseHead': validate_git_publish_branch(),
+        'baseHead': current_head,
         'files': files,
     }
     path = review_receipt_path(date_str)
     atomic_write_json(path, receipt, ensure_ascii=False, indent=2)
     return path
+
+
+def save_review_failure_state(
+    date_str,
+    publish_paths,
+    manifest_path,
+    base_head,
+    file_results,
+):
+    """Persist per-file failed-review evidence for a safe incremental retry."""
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    records = []
+    for item in sorted({Path(value).expanduser().resolve() for value in publish_paths}):
+        path, relative = _manifest_record(item, repo)
+        result = file_results.get(str(path.resolve()), {})
+        fingerprint = _file_fingerprint(path)
+        records.append({
+            'path': relative,
+            **fingerprint,
+            'passed': bool(result.get('passed', False)) if not fingerprint['deleted'] else True,
+        })
+    state = {
+        'schemaVersion': 1,
+        'date': validate_publish_date(date_str),
+        'baseHead': str(base_head).lower(),
+        'generationManifestSha256': _sha256_file(manifest_path),
+        'savedAt': datetime.datetime.now(
+            datetime.timezone(datetime.timedelta(hours=8))
+        ).isoformat(),
+        'files': records,
+    }
+    path = review_failure_path(date_str)
+    atomic_write_json(path, state, ensure_ascii=False, indent=2, mode=0o600)
+    review_receipt_path(date_str).unlink(missing_ok=True)
+    return path
+
+
+def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
+    """Return a fail-closed full/incremental review plan from prior evidence."""
+    state_path = review_failure_path(date_str)
+    full = {
+        'mode': 'full',
+        'paths': [Path(path).resolve() for path in publish_paths if Path(path).is_file()],
+        'priorResults': {},
+        'unchangedFailed': [],
+        'reason': None,
+    }
+    if not state_path.is_file():
+        return full
+    try:
+        state = json.loads(state_path.read_text(encoding='utf-8'))
+        if (
+            state.get('schemaVersion') != 1
+            or state.get('date') != date_str
+            or state.get('baseHead') != str(base_head).lower()
+            or state.get('generationManifestSha256') != _sha256_file(manifest_path)
+        ):
+            raise ValueError('审查基线或生成清单已变化')
+        records = state.get('files')
+        if not isinstance(records, list):
+            raise ValueError('失败状态缺少文件记录')
+        repo = Path(BLOG_REPO).expanduser().resolve()
+        expected = []
+        for item in sorted({Path(value).expanduser().resolve() for value in publish_paths}):
+            _path, relative = _manifest_record(item, repo)
+            expected.append(relative)
+        if [record.get('path') for record in records] != expected:
+            raise ValueError('失败状态与生成文件集合不一致')
+
+        selected = []
+        unchanged_failed = []
+        prior_results = {}
+        for record, item in zip(records, sorted({Path(value).expanduser().resolve() for value in publish_paths})):
+            if not isinstance(record, dict) or not isinstance(record.get('passed'), bool):
+                raise ValueError('失败状态文件记录格式非法')
+            current = _file_fingerprint(item)
+            recorded = {
+                'deleted': record.get('deleted') is True,
+                'sha256': record.get('sha256'),
+            }
+            key = str(item.resolve())
+            if record['passed']:
+                if current != recorded:
+                    raise ValueError(f'已通过文件发生变化: {record.get("path")}')
+                prior_results[key] = {'passed': True}
+                continue
+            if current['deleted'] != recorded['deleted']:
+                raise ValueError(f'失败文件删除状态变化: {record.get("path")}')
+            if current == recorded:
+                unchanged_failed.append(item.resolve())
+                prior_results[key] = {'passed': False}
+            else:
+                selected.append(item.resolve())
+        return {
+            'mode': 'incremental',
+            'paths': selected,
+            'priorResults': prior_results,
+            'unchangedFailed': unchanged_failed,
+            'reason': None,
+        }
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError) as exc:
+        full['reason'] = str(exc)
+        return full
 
 
 def load_verified_review_receipt(date_str):

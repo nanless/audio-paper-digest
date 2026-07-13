@@ -112,6 +112,25 @@ function loadTodayJsonFile(filePath, today) {
     return data;
 }
 
+// 筛选中断后，raw-candidates 已经记录了同一批候选与来源健康状态。只要
+// 模型/prompt 未变化且来源健康，就应直接续跑缺失决定，不能再次全量请求
+// arXiv；后者既浪费时间，也会把一次格式异常放大为 429 限流问题。
+function loadResumableFilterForToday(today, expected = {}, files = {}) {
+    const rawFile = files.rawCandidates || RAW_CANDIDATES_FILE;
+    const decisionsFile = files.filterDecisions || FILTER_DECISIONS_FILE;
+    const rawCandidates = loadTodayJsonFile(rawFile, today);
+    const decisionsData = loadTodayJsonFile(decisionsFile, today);
+    if (!rawCandidates || !Array.isArray(rawCandidates.papers) || !decisionsData) return null;
+    if (expected.filterModel !== undefined && decisionsData.filterModel !== expected.filterModel) return null;
+    if (expected.filterPromptHash !== undefined && decisionsData.filterPromptHash !== expected.filterPromptHash) return null;
+    if (!decisionsData.decisions || typeof decisionsData.decisions !== 'object') return null;
+    if (!rawCandidates.sourceHealth || hasRequiredSourceFailure(rawCandidates.sourceHealth)) return null;
+
+    const coverage = validateFilterDecisionCoverage(rawCandidates.papers, decisionsData.decisions);
+    if (coverage.complete) return null;
+    return { rawCandidates, decisionsData, coverage };
+}
+
 function loadCompleteFilteredForToday(today, filePath = FILTERED_FILE, expected = {}) {
     const data = loadTodayJsonFile(filePath, today);
     if (!data || data.status !== 'complete' || !Array.isArray(data.papers)) return null;
@@ -350,6 +369,100 @@ function writeFilterArtifacts({
     }, null, 2));
 }
 
+async function resumeFilterStage({
+    allPapers,
+    allPapersFiltered,
+    sourceHealth,
+    baseFilterStats,
+    initialDecisions,
+    filterModel,
+    filterPromptHash,
+    today
+}) {
+    let filterDecisions = initialDecisions;
+    let retryableFilterDecisions = {};
+    const filtered = await filterPapersWithLLM(allPapersFiltered, {
+        batchSize: Config.FILTER_CONFIG.batchSize,
+        delayBetweenBatches: Config.FILTER_CONFIG.delayBetweenBatchesMs,
+        useKeywordPreFilter: false,
+        initialDecisions: filterDecisions,
+        decisionMetadata: { filterModel, filterPromptHash },
+        onBatchComplete: async ({ results, decisions, retryableDecisions }) => {
+            filterDecisions = decisions;
+            retryableFilterDecisions = retryableDecisions;
+            writeFilterArtifacts({
+                allPapers,
+                allPapersFiltered,
+                filtered: results,
+                filterDecisions,
+                filterModel,
+                filterPromptHash,
+                stats: baseFilterStats,
+                complete: false,
+                sourceHealth,
+                retryableDecisions
+            });
+            console.log(`  💾 筛选续跑进度已保存: ${Object.keys(filterDecisions).length}/${allPapersFiltered.length} 篇明确判断，${Object.keys(retryableDecisions).length} 篇待重试`);
+        }
+    });
+
+    const filterRunStats = filtered._filterStats || validateFilterDecisionCoverage(allPapersFiltered, filterDecisions);
+    if (!filterRunStats.complete) {
+        writeFilterArtifacts({
+            allPapers,
+            allPapersFiltered,
+            filtered,
+            filterDecisions,
+            filterModel,
+            filterPromptHash,
+            stats: baseFilterStats,
+            complete: false,
+            sourceHealth,
+            retryableDecisions: retryableFilterDecisions
+        });
+        throw new Error(`筛选续跑未完成：明确决定 ${filterRunStats.decided}/${filterRunStats.totalCandidates}，待重试 ${filterRunStats.retryable || filterRunStats.retryableIds?.length || 0}`);
+    }
+    if (hasRequiredSourceFailure(sourceHealth)) {
+        throw new Error(`缓存候选的抓取来源不完整，禁止进入分析: ${getSourceFailures(sourceHealth).join('; ')}`);
+    }
+
+    const archiveAnalyzedIds = loadAnalyzedIdsFromArchive();
+    const filteredNew = filtered.filter(paper => {
+        const nid = normalizedId(paper);
+        return !(archiveAnalyzedIds.has(nid) && paper.sources?.includes('huggingface'));
+    });
+    const skippedCount = filtered.length - filteredNew.length;
+    writeFilterArtifacts({
+        allPapers,
+        allPapersFiltered,
+        filtered,
+        filterDecisions,
+        filterModel,
+        filterPromptHash,
+        stats: baseFilterStats,
+        complete: true,
+        sourceHealth,
+        retryableDecisions: {}
+    });
+    writeFileAtomic(FILTERED_FILE, JSON.stringify({
+        timestamp: getBeijingISOString(),
+        status: 'complete',
+        filterModel,
+        filterPromptHash,
+        stats: {
+            ...baseFilterStats,
+            afterBlogSkip: allPapersFiltered.length,
+            afterFilter: filtered.length,
+            afterArchiveSkip: filteredNew.length,
+            skippedFromArchive: skippedCount,
+            decisionCount: Object.keys(filterDecisions).length
+        },
+        sourceHealth,
+        papers: filteredNew
+    }, null, 2));
+    return { filtered, filteredNew, filterDecisions, skippedCount };
+}
+
 function autoArchiveCurrentData() {
     const today = getBeijingDateString();
     const targets = [RESULT_FILE, FILTERED_FILE, ANALYZED_FILE];
@@ -550,6 +663,10 @@ async function runFullFetch() {
         filterPromptHash,
         requireConsistentFilterArtifacts: true
     });
+    const resumableFilter = completedFiltered ? null : loadResumableFilterForToday(today, {
+        filterModel,
+        filterPromptHash
+    });
     if (completedFiltered) {
         console.log('⏭️ 检测到今日完整 filtered-papers.json，跳过抓取与筛选，直接续跑深度分析');
         filteredNew = completedFiltered.papers;
@@ -578,6 +695,41 @@ async function runFullFetch() {
             both
         };
         sourceHealth = rawCandidates?.sourceHealth || completedFiltered.sourceHealth || sourceHealth;
+    } else if (resumableFilter) {
+        console.log(`⏭️ 检测到今日来源健康的筛选 checkpoint，跳过抓取，仅续跑 ${resumableFilter.coverage.missingIds.length} 篇未决论文`);
+        const rawCandidates = resumableFilter.rawCandidates;
+        allPapers = rawCandidates.papers;
+        allPapersFiltered = rawCandidates.papers;
+        sourceHealth = rawCandidates.sourceHealth;
+        const stats = rawCandidates.stats || {};
+        arxivOnly = stats.arxivOnly || allPapers.filter(p => p.sources?.includes('arxiv') && !p.sources?.includes('huggingface')).length;
+        hfOnly = stats.hfOnly || allPapers.filter(p => !p.sources?.includes('arxiv') && p.sources?.includes('huggingface')).length;
+        both = stats.both || allPapers.filter(p => p.sources?.includes('arxiv') && p.sources?.includes('huggingface')).length;
+        blogSkippedCount = stats.skippedFromBlog || 0;
+        baseFilterStats = {
+            beforeFilter: stats.beforeFilter || allPapers.length,
+            beforeBlogSkip: stats.beforeBlogSkip || allPapers.length,
+            afterBlogSkip: allPapersFiltered.length,
+            skippedFromBlog: blogSkippedCount,
+            arxivOnly,
+            hfOnly,
+            both
+        };
+        const resumed = await resumeFilterStage({
+            allPapers,
+            allPapersFiltered,
+            sourceHealth,
+            baseFilterStats,
+            initialDecisions: loadReusableFilterDecisions(today, filterModel, filterPromptHash),
+            filterModel,
+            filterPromptHash,
+            today
+        });
+        filtered = resumed.filtered;
+        filteredNew = resumed.filteredNew;
+        filterDecisions = resumed.filterDecisions;
+        skippedCount = resumed.skippedCount;
+        console.log(`💾 筛选续跑完成，结果已保存到: ${FILTERED_FILE}`);
     } else {
         // ========== 第一步：从 arxiv 抓取 ==========
         console.log('📥 第一步：从 arxiv 抓取论文');
@@ -1090,6 +1242,8 @@ module.exports = {
     validateFilterDecisionCoverage,
     validateFilterArtifacts,
     loadReusableFilterDecisions,
+    loadResumableFilterForToday,
+    resumeFilterStage,
     buildSourceHealth,
     getSourceFetchedCount,
     getSourceFailures,

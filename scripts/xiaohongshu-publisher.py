@@ -194,6 +194,10 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
         images: 图片路径列表（可选，至少传 1 张图效果更好）
         headless: 是否无头模式（调试用 False，定时跑可用 True）
     """
+    if len(body) > MAX_BODY_LEN:
+        print(f"[xhs] ❌ 正文共 {len(body)} 字，超过平台上限 {MAX_BODY_LEN} 字；已停止发布，禁止静默截断")
+        return False
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=headless,
@@ -678,12 +682,12 @@ def main():
         sys.exit(0 if result else 1)
 
     if mode == "publish":
+        today = target_date or today_bj()
         if custom_text:
             title = custom_text[:MAX_TITLE_LEN]
             body = custom_text
         else:
             # 读取今日文案
-            today = target_date or today_bj()
             md_path = xiaohongshu_markdown_path(today, "top5")
             if not md_path.exists():
                 # 尝试 all 版本

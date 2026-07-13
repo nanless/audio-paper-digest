@@ -4,6 +4,7 @@ const assert = require('node:assert');
 const {
     parseFilterDecision,
     parseFilterDecisionDetails,
+    repairMalformedFilterDecision,
     filterPapersByKeywords,
     filterPapersWithLLM,
     fetchCategoryPapers,
@@ -57,6 +58,16 @@ describe('parseFilterDecision', () => {
         const decision = parseFilterDecisionDetails('{"related":false,"reason":"仅讨论文本检索"}', '2604.2');
         assert.strictEqual(decision.related, false);
         assert.strictEqual(decision.parseSource, 'json');
+    });
+
+    it('格式异常但语义明确时，通过受控格式修复获得正式决定', async () => {
+        const initial = parseFilterDecisionDetails('这篇论文核心是手语视频翻译，语音输出只是辅助，因此不相关。');
+        assert.strictEqual(initial.retryable, true);
+        const repaired = await repairMalformedFilterDecision(initial, '2607.09611', async () => '结论：不相关');
+        assert.strictEqual(repaired.related, false);
+        assert.strictEqual(repaired.retryable, undefined);
+        assert.strictEqual(repaired.parseSource, 'format_repair:conclusion_line');
+        assert.match(repaired.rawResponse, /\[format-repair\]/);
     });
 });
 

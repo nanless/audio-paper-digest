@@ -1,4 +1,5 @@
 import importlib.util
+import asyncio
 import json
 import sys
 import tempfile
@@ -51,6 +52,26 @@ class AtomicPublishWritesTest(unittest.TestCase):
             xhs_publisher._update_env_key('VALID_NAME', 'value\nINJECTED=1')
         with self.assertRaises(ValueError):
             xhs_publisher._update_env_key('VALID_NAME', 'value"broken')
+
+    def test_custom_text_mode_initializes_date_before_image_lookup(self):
+        async def fake_publish(*_args, **_kwargs):
+            return True
+
+        with mock.patch.object(sys, 'argv', ['xiaohongshu-publisher.py', '--text', '自定义文案']), \
+                mock.patch.object(xhs_publisher, 'today_bj', return_value='2026-07-13'), \
+                mock.patch.object(xhs_publisher, 'find_screenshot_images', return_value=[]) as find_images, \
+                mock.patch.object(xhs_publisher, 'publish_note', side_effect=fake_publish), \
+                self.assertRaises(SystemExit) as raised:
+            xhs_publisher.main()
+
+        self.assertEqual(raised.exception.code, 0)
+        find_images.assert_called_once_with('2026-07-13')
+
+    def test_publish_rejects_oversized_body_without_starting_browser(self):
+        with mock.patch.object(xhs_publisher, 'async_playwright') as playwright:
+            result = asyncio.run(xhs_publisher.publish_note('标题', '长' * 1001))
+        self.assertFalse(result)
+        playwright.assert_not_called()
 
     def test_backfill_outputs_use_shared_atomic_json_writer(self):
         with tempfile.TemporaryDirectory() as tmp:

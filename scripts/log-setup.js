@@ -12,14 +12,47 @@ function ensureDir(dirPath) {
     }
 }
 
+function getBeijingTimeParts(date = new Date(), fractionalSecondDigits) {
+    const options = {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23'
+    };
+    if (fractionalSecondDigits) options.fractionalSecondDigits = fractionalSecondDigits;
+    return Object.fromEntries(
+        new Intl.DateTimeFormat('en-CA', options)
+            .formatToParts(date)
+            .filter(part => part.type !== 'literal')
+            .map(part => [part.type, part.value])
+    );
+}
+
 function formatTs(date = new Date()) {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    const hh = String(date.getHours()).padStart(2, '0');
-    const mm = String(date.getMinutes()).padStart(2, '0');
-    const ss = String(date.getSeconds()).padStart(2, '0');
-    return `${y}${m}${d}-${hh}${mm}${ss}`;
+    const values = getBeijingTimeParts(date);
+    return `${values.year}${values.month}${values.day}-${values.hour}${values.minute}${values.second}`;
+}
+
+function formatLogTimestamp(date = new Date()) {
+    const values = getBeijingTimeParts(date, 3);
+    return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}:${values.second}.${values.fractionalSecond}+08:00`;
+}
+
+function timestampLogLines(text, state) {
+    let output = '';
+    for (const char of text) {
+        if (state.atLineStart && char !== '\n' && char !== '\r') {
+            output += `[${formatLogTimestamp()}] `;
+            state.atLineStart = false;
+        }
+        output += char;
+        if (char === '\n') state.atLineStart = true;
+    }
+    return output;
 }
 
 function redactLogText(value) {
@@ -125,7 +158,10 @@ function setupScriptLogging(scriptPath, options = {}) {
     function reportFileError(err) {
         if (fileFailed) return;
         fileFailed = true;
-        const message = redactLogText(`[log] 文件日志写入失败: ${err.message}\n`);
+        const message = timestampLogLines(
+            redactLogText(`[log] 文件日志写入失败: ${err.message}\n`),
+            { atLineStart: true }
+        );
         try {
             stderrWrite(message);
         } catch (_) {
@@ -134,8 +170,10 @@ function setupScriptLogging(scriptPath, options = {}) {
     }
 
     function wrapWrite(originalWrite) {
+        const state = { atLineStart: true };
         return (chunk, encoding, callback) => {
             const args = normalizeWriteArgs(chunk, encoding, callback);
+            args.text = timestampLogLines(args.text, state);
             if (fileOpen && !fileFailed && !closing) {
                 try {
                     fs.writeSync(fd, args.text, null, typeof args.encoding === 'string' ? args.encoding : 'utf8');
@@ -204,5 +242,8 @@ module.exports = {
     setupScriptLogging,
     closeScriptLogging,
     redactLogText,
-    setStdoutBlocking
+    setStdoutBlocking,
+    formatTs,
+    formatLogTimestamp,
+    timestampLogLines
 };

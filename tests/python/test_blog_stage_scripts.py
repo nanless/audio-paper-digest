@@ -54,6 +54,8 @@ paper_digest_arxiv_id: "2607.00001"
 body
 ''', encoding='utf-8')
             git_push = mock.Mock(side_effect=AssertionError('review must not push'))
+            receipt_path = Path(tmp) / 'receipt.json'
+            failure_path = Path(tmp) / 'failure.json'
             module = SimpleNamespace(
                 PublishDataValidationError=ValueError,
                 PublishLLMUnavailable=RuntimeError,
@@ -61,10 +63,24 @@ body
                 get_today_bj=lambda value=None: value or '2026-07-10',
                 validate_publish_date=lambda value: value,
                 load_generation_manifest=lambda _date: ([index, paper], Path('manifest.json')),
-                review_all_posts=mock.Mock(return_value=(0, 0)),
+                validate_git_publish_branch=mock.Mock(return_value='a' * 40),
+                review_receipt_path=mock.Mock(return_value=receipt_path),
+                review_failure_path=mock.Mock(return_value=failure_path),
+                plan_incremental_review=mock.Mock(return_value={
+                    'mode': 'full',
+                    'paths': [index, paper],
+                    'priorResults': {},
+                    'unchangedFailed': [],
+                    'reason': None,
+                }),
+                review_all_posts=mock.Mock(return_value=(0, 0, {
+                    str(index.resolve()): {'passed': True},
+                    str(paper.resolve()): {'passed': True},
+                })),
                 validate_staged_posts=mock.Mock(),
                 run_hugo_gate=mock.Mock(return_value='hugo'),
                 save_review_receipt=mock.Mock(return_value=Path('receipt.json')),
+                save_review_failure_state=mock.Mock(),
                 git_push=git_push,
             )
             with mock.patch.object(review_blog, 'require_external_runtime'), \

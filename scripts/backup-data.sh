@@ -42,10 +42,11 @@ fi
 if [ "$PD_DISABLE_FILE_LOGS" != "1" ] && [ "$PAPER_DIGEST_DISABLE_FILE_LOGS" != "1" ]; then
     umask 077
     mkdir -p "$LOGS_DIR"
-    LOG_FILE="$LOGS_DIR/backup-data-$(date +%Y%m%d-%H%M%S)-$$.log"
+    LOG_FILE="$LOGS_DIR/backup-data-$(TZ=Asia/Shanghai date +%Y%m%d-%H%M%S)-$$.log"
+    RAW_LOG_FILE="${LOG_FILE}.raw"
     exec 3>&1 4>&2
-    exec > "$LOG_FILE" 2>&1
-    trap '_status=$?; trap - EXIT; cat "$LOG_FILE" >&3; exit "$_status"' EXIT
+    exec > "$RAW_LOG_FILE" 2>&1
+    trap '_status=$?; trap - EXIT; while IFS= read -r _log_line || [ -n "$_log_line" ]; do printf "[%s] %s\n" "$(TZ=Asia/Shanghai date "+%Y-%m-%d %H:%M:%S.000+08:00")" "$_log_line"; done < "$RAW_LOG_FILE" > "$LOG_FILE"; rm -f "$RAW_LOG_FILE"; cat "$LOG_FILE" >&3; exit "$_status"' EXIT
     echo "[log] 输出文件: $LOG_FILE"
 fi
 

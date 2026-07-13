@@ -76,12 +76,14 @@ class LogSetupTest(unittest.TestCase):
         ]
         self.assertEqual(len(created), 1)
         self.assertIn('[log] 输出文件:', result.stdout)
+        self.assertRegex(result.stdout, r'\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\+08:00\]')
         self.assertNotIn('sk-secret-value', result.stdout)
         self.assertNotIn('tp-provider-secret', result.stdout)
         self.assertRegex(created[0], r'^default-log-test-\d{8}-\d{6}-\d+-\d+\.log$')
         with open(os.path.join(LOGS_DIR, created[0]), encoding='utf-8') as log_handle:
             log_text = log_handle.read()
         self.assertIn('api_key=[REDACTED]', log_text)
+        self.assertRegex(log_text, r'\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\+08:00\]')
         self.assertNotIn('sk-secret-value', log_text)
         self.assertNotIn('tp-provider-secret', log_text)
         self.assertEqual(os.stat(os.path.join(LOGS_DIR, created[0])).st_mode & 0o777, 0o600)

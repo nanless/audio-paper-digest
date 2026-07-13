@@ -344,4 +344,5 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 ### 5.7 博客阶段清单与审查凭证
 
 - `blog-generation-manifest-YYYY-MM-DD.json`：由 `generate-blog.py` 写入，记录本次生成和删除的精确 `content/posts` 路径。
+- `blog-review-failure-YYYY-MM-DD.json`：严格 review 失败时写入，绑定生成清单 SHA-256、博客 `main` 基线、逐文件最终 SHA-256 和通过状态，用于只复审已修改的失败页面；它不是推送凭证。
 - `blog-review-receipt-YYYY-MM-DD.json`：由 `review-blog.py` 在严格 LLM/图片 review 和 Hugo gate 通过后写入，包含每个已审查文件的 SHA-256 或删除标记。`push-blog.py` 只读取该凭证，任一文件在 review 后变更都会阻断推送。

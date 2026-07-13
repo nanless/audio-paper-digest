@@ -143,10 +143,10 @@ HF 特有字段（共 7 个）：
 
 筛选阶段会增量保存三类文件：
 - `data/current/raw-candidates.json`：合并和博客去重后的候选输入，并包含 arXiv/HF 的 `sourceHealth`、请求次数、成功次数和失败明细。抓取器区分真实成功空响应与全请求失败；所有尝试均失败时抛错并中止，禁止生成伪成功空批次
-- `data/current/filter-decisions.json`：逐篇 LLM 决策缓存，包含筛选模型、`prompts/filter.md` hash、`related`、`reason`、`rawResponse`、`parseSource`；API 错误或无法判断记为 `retryable`，不进入正式决定缓存，中断重跑时只复用同模型同 prompt 的明确决定
+- `data/current/filter-decisions.json`：逐篇 LLM 决策缓存，包含筛选模型、`prompts/filter.md` hash、`related`、`reason`、`rawResponse`、`parseSource`；API 错误或无法判断记为 `retryable`，不进入正式决定缓存。模型遗漏结构化结论但语义倾向明确时只允许一次受控格式修复，修复响应仍须严格解析
 - `data/current/filtered-papers.json`：阶段性/最终筛选输出；包含 `filterModel` 和 `filterPromptHash`。`status: "filter_complete"` 只表示逐篇筛选已完成但归档去重尚未完成，最终可跳过抓取/筛选的状态必须是 `status: "complete"`，且模型/hash 必须匹配当前配置
 
-若今天已经存在完整且模型/hash 匹配的 `filtered-papers.json`，再次运行 `node scripts/full-fetch.js` 会跳过抓取与筛选，直接进入深度分析续跑；若筛选尚未完成，则复用同模型同 prompt 的 `filter-decisions.json` 中已有逐篇决策继续筛选。
+若今天已经存在完整且模型/hash 匹配的 `filtered-papers.json`，再次运行 `node scripts/full-fetch.js` 会跳过抓取与筛选，直接进入深度分析续跑；若筛选尚未完成，但同日 `raw-candidates.json` 显示所有来源健康且模型/hash 匹配，则跳过抓取，只复用候选与明确决策、重试未决论文。来源失败时才禁止该续跑，必须恢复缺失来源。
 `npm run validate:data` 会交叉校验 `raw-candidates.json`、`filter-decisions.json` 与 `filtered-papers.json` 的候选统计、决策数量、相关数量和最终论文数量。
 
 ### 3.7 深度分析
@@ -203,6 +203,8 @@ HF 特有字段（共 7 个）：
 | Round 6 | 最终结构修复（按需） | `prompts/structure-repair.md` | 共享契约发现 13 个必要章节有缺失时，主模型只补齐当前报告结构；完整时不调用 |
 | Round 7 | 类型感知评分审计 | `prompts/scoring-audit.md` | 主模型只输出 JSON；代码把校验错误反馈给下一次局部审计，并按资源状态确定性归一化无产物论文的开源分 |
 | Round 8 | 图像筛选与插图计划（仅双模型模式） | `prompts/image-supplement.md` | 副模型只输出 JSON 插图计划；合并后再次校验完整契约，不合格时只丢弃插图计划并保留主模型正文 |
+
+评分审计和上述插图阶段均通过后，如需要图文视觉摘要，Codex Agent 可读取 `prompts/visual-summary.md` 并直接使用内置 `image_gen` 生成研究概览、方法结构、实验与边界三张编辑性解释图。该步骤属于 Agent 工作流，不是 Node/Python 脚本或 API 阶段：不得要求图像 API key，不得把生成图当论文原始 Figure，也不得让提示词编造数值或结论。选中的项目资产必须从 Codex 默认生成目录复制到工作区后再被发布流程引用。
 
 > **单模型 vs 双模型**：主模型始终负责正文和最终评分审计。评分审计默认使用独立低温 0.1。设置 `PAPER_ANALYZER_SECONDARY_MODEL` 后，副模型只从候选图片中筛选高价值图、丢弃低信息图并输出章节、稳定段落 ID、图前和图后说明；代码不会接受副模型替换主模型原文。未设置副模型时图片 URL 只保存在候选元数据中。
 

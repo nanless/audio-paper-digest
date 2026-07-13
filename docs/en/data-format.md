@@ -329,4 +329,5 @@ Legacy analyzed records (leftover from the `fetch-papers.js` direct-run workflow
 ### 5.7 Blog Stage Manifest and Review Receipt
 
 - `blog-generation-manifest-YYYY-MM-DD.json`: written by `generate-blog.py`; records the exact generated and deleted `content/posts` paths.
+- `blog-review-failure-YYYY-MM-DD.json`: written after a failed strict review; binds the generation-manifest SHA-256, blog `main` baseline, final per-file hashes, and pass/fail status for safe failed-page-only retries. It is not a push receipt.
 - `blog-review-receipt-YYYY-MM-DD.json`: written by `review-blog.py` only after strict LLM/image review and the Hugo gate pass; stores each reviewed file SHA-256 or deletion marker. `push-blog.py` only consumes this receipt and rejects any post-review file change.

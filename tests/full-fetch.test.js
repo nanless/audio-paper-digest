@@ -189,6 +189,34 @@ describe('full-fetch helpers', () => {
         assert.strictEqual(loadCompleteFilteredForToday('2026-07-09', file), null);
     });
 
+    it('来源健康的当日未完成筛选会直接续跑，不重新抓取候选', () => {
+        const { loadResumableFilterForToday } = require('../scripts/full-fetch.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-resume-filter-'));
+        const rawFile = path.join(dir, 'raw-candidates.json');
+        const decisionsFile = path.join(dir, 'filter-decisions.json');
+        const timestamp = '2026-07-13T10:00:00+08:00';
+        fs.writeFileSync(rawFile, JSON.stringify({
+            timestamp,
+            sourceHealth: { arxiv: { categories: [{ id: 'cs.SD', ok: true }] }, huggingface: { ok: true } },
+            papers: [{ arxivId: '2607.00001' }, { arxivId: '2607.00002' }]
+        }));
+        fs.writeFileSync(decisionsFile, JSON.stringify({
+            timestamp,
+            filterModel: 'model-a',
+            filterPromptHash: 'hash-a',
+            decisions: {
+                '2607.00001': { related: true },
+                '2607.00002': { related: null, retryable: true, fallback: true }
+            }
+        }));
+        const resumed = loadResumableFilterForToday('2026-07-13', {
+            filterModel: 'model-a',
+            filterPromptHash: 'hash-a'
+        }, { rawCandidates: rawFile, filterDecisions: decisionsFile });
+        assert.ok(resumed);
+        assert.deepStrictEqual(resumed.coverage.missingIds, ['2607.00002']);
+    });
+
     it('从当前分析结果识别今日已有成功分析论文', () => {
         const { loadCurrentSuccessfulAnalysisIds } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-analysis-ids-'));

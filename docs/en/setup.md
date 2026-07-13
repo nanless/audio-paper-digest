@@ -72,6 +72,7 @@ Benefits of this design:
 | Variable | Description |
 |----------|-------------|
 | `XIAOHONGSHU_COOKIES` | Cookie used by automated Xiaohongshu publishing; can be obtained via `npm run xhs-login` |
+| `PD_XIAOHONGSHU_ONELINER_CONCURRENCY` | LLM concurrency for TOP-N one-liners; range 1–5 (default: `5`) |
 
 #### Feishu (Lark) Documents
 

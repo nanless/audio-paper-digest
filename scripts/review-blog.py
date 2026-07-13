@@ -57,22 +57,58 @@ def main():
         date_str = parse_date(module)
         paths, manifest_path = module.load_generation_manifest(date_str)
         paper_slugs, scored_papers = read_generated_pages(module, date_str, paths)
+        base_head = module.validate_git_publish_branch()
+        # A review attempt invalidates any older success receipt immediately.
+        module.review_receipt_path(date_str).unlink(missing_ok=True)
+        plan = module.plan_incremental_review(
+            date_str, paths, manifest_path, base_head,
+        )
         print(f'📋 读取生成清单: {manifest_path}')
-        print(f'🔍 开始严格 review: {len(paper_slugs)} 篇论文')
-        fixed, blocking = module.review_all_posts(
+        if plan['mode'] == 'incremental':
+            print(
+                f'♻️ 失败集续审: {len(plan["paths"])} 个已修改失败文件；'
+                f'{len(plan["unchangedFailed"])} 个失败文件尚未修改'
+            )
+        else:
+            if plan.get('reason'):
+                print(f'ℹ️ 续审证据不可复用，退回全量 review: {plan["reason"]}')
+            print(f'🔍 开始严格全量 review: {len(paper_slugs)} 篇论文')
+        fixed, blocking, current_results = module.review_all_posts(
             date_str,
             paper_slugs,
             scored_papers,
             require_llm=True,
             content_dir=str(content_dir),
+            review_paths=plan['paths'],
+            return_details=True,
         )
+        combined_results = dict(plan['priorResults'])
+        combined_results.update(current_results)
+        blocking += len(plan['unchangedFailed'])
         if blocking:
+            failure_path = module.save_review_failure_state(
+                date_str,
+                paths,
+                manifest_path,
+                base_head,
+                combined_results,
+            )
+            print(f'💾 已保存失败集续审状态: {failure_path}')
             raise module.PublishDataValidationError(f'review 仍有 {blocking} 个未解决阻断问题')
         if fixed:
             print(f'✅ review 自动修复 {fixed} 个文件')
-        module.validate_staged_posts(Path(content_dir), date_str, date_only=True)
-        gate = module.run_hugo_gate(blog_repo, Path(content_dir), required=True)
-        receipt = module.save_review_receipt(date_str, paths, gate)
+        try:
+            module.validate_staged_posts(Path(content_dir), date_str, date_only=True)
+            gate = module.run_hugo_gate(blog_repo, Path(content_dir), required=True)
+        except Exception:
+            # A site-wide deterministic/Hugo failure is not safely attributable
+            # to a subset of pages; force the next attempt back to full review.
+            module.review_failure_path(date_str).unlink(missing_ok=True)
+            raise
+        receipt = module.save_review_receipt(
+            date_str, paths, gate, expected_base_head=base_head,
+        )
+        module.review_failure_path(date_str).unlink(missing_ok=True)
     except (module.PublishDataValidationError, module.PublishLLMUnavailable) as exc:
         print(f'\n❌ review 失败，未生成审查凭证: {exc}')
         sys.exit(1)

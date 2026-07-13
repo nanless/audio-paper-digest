@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const { redactLogText } = require('../scripts/log-setup.js');
+const { redactLogText, formatTs, timestampLogLines } = require('../scripts/log-setup.js');
 
 const ROOT = path.resolve(__dirname, '..');
 const LOGS_DIR = path.join(ROOT, 'logs');
@@ -40,6 +40,16 @@ function runLogger(base, envPath, lines = []) {
 }
 
 describe('log setup', () => {
+    it('为每个非空物理日志行添加北京时间戳，分块写入不重复添加', () => {
+        const state = { atLineStart: true };
+        const first = timestampLogLines('first\nsecond', state);
+        const second = timestampLogLines(' continued\nthird\n', state);
+        const timestamp = String.raw`\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\+08:00\] `;
+        assert.match(first, new RegExp(`^${timestamp}first\\n${timestamp}second$`));
+        assert.match(second, new RegExp(`^ continued\\n${timestamp}third\\n$`));
+        assert.strictEqual(formatTs(new Date('2026-07-13T00:00:00.000Z')), '20260713-080000');
+    });
+
     it('统一脱敏认证头、Cookie、token、secret、Key 片段和 URL userinfo', () => {
         const input = [
             'Authorization: Bearer bearer-value',
@@ -86,6 +96,7 @@ describe('log setup', () => {
             assert.ok(!first.stdout.includes('first-secret'));
             assert.ok(!first.stdout.includes('tp-provider-secret'));
             assert.ok(!second.stdout.includes('second-secret'));
+            assert.match(first.stdout, /\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\+08:00\]/);
 
             const created = listLogFiles().filter(
                 name => !before.includes(name) && name.startsWith(`${base}-`)
@@ -95,6 +106,7 @@ describe('log setup', () => {
 
             const contents = created.map(name => fs.readFileSync(path.join(LOGS_DIR, name), 'utf8'));
             assert.ok(contents.some(content => content.includes('final-line')));
+            assert.ok(contents.every(content => /\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\+08:00\]/.test(content)));
             assert.ok(contents.every(content => !content.includes('first-secret')));
             assert.ok(contents.every(content => !content.includes('second-secret')));
             assert.ok(contents.every(content => !content.includes('tp-provider-secret')));
@@ -215,6 +227,7 @@ describe('log setup', () => {
             const created = fs.readdirSync(logsDir).filter(name => /^backup-data-.+-\d+\.log$/.test(name));
             assert.strictEqual(created.length, 1);
             assert.match(fs.readFileSync(path.join(logsDir, created[0]), 'utf8'), /备份完成/);
+            assert.match(fs.readFileSync(path.join(logsDir, created[0]), 'utf8'), /\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.000\+08:00\]/);
 
             fs.writeFileSync(path.join(projectDir, '.env'), 'PD_DISABLE_FILE_LOGS=1\n', 'utf8');
             const disabled = spawnSync('bash', ['scripts/backup-data.sh', 'test-disabled'], {

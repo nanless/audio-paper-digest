@@ -364,7 +364,7 @@ Publish to Hugo blog (GitHub Pages).
 
 **Publish Flow**:
 1. `generate-blog.py` only generates and installs Markdown, then writes a generation manifest. It never calls an LLM, commits, or pushes.
-2. `review-blog.py` only reviews that manifest with code, strict LLM, multimodal image, and Hugo gates. Success writes a per-file SHA-256 review receipt; it never commits or pushes.
+2. `review-blog.py` reviews that manifest with code, strict LLM, multimodal image, and Hugo gates. A failed first pass stores a manifest/base-HEAD/per-file-hash-bound failure set; a retry reviews only modified failed pages when all reuse invariants still hold, otherwise it falls back to a full review. Success writes a per-file SHA-256 review receipt; it never commits or pushes.
 3. `push-blog.py` only verifies that receipt against the current files, then stages the exact manifest, commits with a detailed Chinese message, pushes `origin HEAD:main`, and verifies the remote OID. It never regenerates or re-reviews.
 
 **Runtime requirement**: the three entry points and compatibility `publish-to-blog.py` require an external runtime. They reject the reliable `CODEX_SANDBOX` marker; the elevation wrapper preserves the network-disabled marker, so it cannot independently identify a sandbox. Re-run the same stage outside the sandbox; never skip review or fabricate a receipt.
@@ -379,7 +379,7 @@ Publish to Hugo blog (GitHub Pages).
 - To publish all papers (no filtering), pass `--all` explicitly
 
 **Review Step**:
-Generation reparses scoring from `analysis` and compares it with cached `parsed` data and the rubric version. The separate review step uses 8 workers by default, configurable through `PD_BLOG_REVIEW_CONCURRENCY`, and validates image payload/context alignment plus HTTPS peers. Any indeterminate strict review blocks receipt creation. Push fails closed when the receipt is absent or any reviewed file hash changed.
+Generation reparses scoring from `analysis` and compares it with cached `parsed` data and the rubric version. The separate review step uses 5 workers by default, configurable through `PD_BLOG_REVIEW_CONCURRENCY`, and validates image payload/context alignment plus HTTPS peers. Any indeterminate strict review blocks receipt creation. Push fails closed when the receipt is absent or any reviewed file hash changed.
 
 The shared publish LLM client uses a standard-library explicit empty proxy handler, keeping LLM calls direct and avoiding `requests` compatibility issues or fetch-proxy contamination.
 
@@ -433,6 +433,8 @@ Main functions:
 Shared path configuration for Python publish/maintenance scripts. It exposes constants such as `PROJECT_ROOT`, `DATA_DIR`, `CURRENT_DIR`, `LOGS_DIR`, `PAPERS_FILE`, and `DEEP_ANALYSIS_RESULT_FILE`, plus path helpers such as `resolve_deep_analysis_result_path()`, `xiaohongshu_markdown_path()`, `wechat_preview_path()`, and `backfill_result_path()`. New Python scripts should not hand-write default `data/current/*.json` or publish-output paths again.
 
 #### `scripts/publish-xiaohongshu.py`
+
+TOP-N one-liners are generated with bounded concurrency (default 5, configurable from 1 to 5 through `PD_XIAOHONGSHU_ONELINER_CONCURRENCY`). Results are restored to ranking order, and a failed request falls back locally for that paper only.
 
 Generate Xiaohongshu (Little Red Book) copy.
 

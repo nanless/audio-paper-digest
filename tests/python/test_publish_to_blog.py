@@ -50,11 +50,11 @@ class PublishToBlogReviewTest(unittest.TestCase):
     def test_blog_review_concurrency_defaults_to_eight_and_reads_project_env(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop('PD_BLOG_REVIEW_CONCURRENCY', None)
-            self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 8)
+            self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 5)
         with mock.patch.dict(os.environ, {'PD_BLOG_REVIEW_CONCURRENCY': '12'}):
             self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 12)
         with mock.patch.dict(os.environ, {'PD_BLOG_REVIEW_CONCURRENCY': 'invalid'}):
-            self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 8)
+            self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 5)
 
     def test_index_review_chunks_run_concurrently_and_merge_in_source_order(self):
         import threading
@@ -116,17 +116,98 @@ title: "Table"
         }]
         self.assertEqual(publish_to_blog.filter_false_positive_review_issues('正文', issues), [])
 
+    def test_review_filters_unclosed_fence_claim_when_fences_are_balanced(self):
+        issues = [{
+            'severity': 'error',
+            'type': 'markdown',
+            'description': '文档末尾存在孤立的代码块开始标记，但没有结束标记。',
+            'auto_fixable': True,
+        }]
+        self.assertEqual(
+            publish_to_blog.filter_false_positive_review_issues('正文没有代码块。', issues),
+            [],
+        )
+        self.assertEqual(
+            publish_to_blog.filter_false_positive_review_issues(
+                '```text\n未闭合', issues,
+            ),
+            issues,
+        )
+
     def test_required_text_review_fails_closed_on_non_json_and_missing_fields(self):
         with mock.patch.object(publish_to_blog, 'call_llm_api', return_value='无法判断'):
             passed, issues, _ = publish_to_blog.llm_review_post('正文', '标题', required=True)
         self.assertFalse(passed)
         self.assertEqual(issues[0]['severity'], 'error')
 
+    def test_required_text_review_retries_truncated_protocol_response(self):
+        responses = iter([
+            '{"passed": }',
+            '{"passed": true, "issues": []}',
+        ])
+        with mock.patch.object(
+            publish_to_blog,
+            'call_llm_api',
+            side_effect=lambda *args, **kwargs: next(responses),
+        ) as call:
+            passed, issues, reviewed = publish_to_blog.llm_review_post('正文', '标题', required=True)
+
+        self.assertTrue(passed)
+        self.assertEqual(issues, [])
+        self.assertEqual(reviewed, '正文')
+        self.assertEqual(call.call_count, 2)
+        self.assertIn('上一次响应不完整', call.call_args_list[1].args[0])
+
         malformed = '{"passed": true, "issues": [{"severity": "warning"}]}'
         with mock.patch.object(publish_to_blog, 'call_llm_api', return_value=malformed):
             passed, issues, _ = publish_to_blog.llm_review_post('正文', '标题', required=True)
         self.assertFalse(passed)
         self.assertEqual(issues[0]['severity'], 'error')
+
+    def test_required_text_review_retries_original_after_format_repair_fails(self):
+        responses = iter([
+            '审查结论存在，但不是 JSON；这是一个长度超过短响应阈值的非结构化审查结果，必须先尝试格式修复。',
+            '{"passed": true, "issues": [',
+            '{"passed": true, "issues": []}',
+        ])
+        with mock.patch.object(
+            publish_to_blog,
+            'call_llm_api',
+            side_effect=lambda *args, **kwargs: next(responses),
+        ) as call:
+            passed, issues, reviewed = publish_to_blog.llm_review_post('正文', '标题', required=True)
+
+        self.assertTrue(passed)
+        self.assertEqual(issues, [])
+        self.assertEqual(reviewed, '正文')
+        self.assertEqual(call.call_count, 3)
+        self.assertIn('响应及其格式修复均无效', call.call_args_list[2].args[0])
+
+    def test_required_repaired_text_review_filters_prompt_only_angle_tags(self):
+        repaired_issue = {
+            'passed': False,
+            'issues': [{
+                'severity': 'error',
+                'type': 'html_tag',
+                'description': '文本中出现了 `<S>`，未被反引号包裹。',
+                'auto_fixable': False,
+                'fix_instruction': '',
+            }],
+        }
+        responses = iter([
+            '这不是 JSON，但响应足够长，会先进入格式修复流程。',
+            __import__('json').dumps(repaired_issue, ensure_ascii=False),
+        ])
+        with mock.patch.object(
+            publish_to_blog,
+            'call_llm_api',
+            side_effect=lambda *args, **kwargs: next(responses),
+        ):
+            passed, issues, reviewed = publish_to_blog.llm_review_post('正文没有尖括号标签。', '标题', required=True)
+
+        self.assertTrue(passed)
+        self.assertEqual(issues, [])
+        self.assertEqual(reviewed, '正文没有尖括号标签。')
 
     def test_required_image_review_fails_closed_on_non_json_and_invalid_severity(self):
         content = '![结果图](https://arxiv.org/result.png)'
@@ -243,7 +324,7 @@ title: "Table"
         with mock.patch.object(publish_to_blog.socket, 'getaddrinfo', return_value=[
             (publish_to_blog.socket.AF_INET, publish_to_blog.socket.SOCK_STREAM, 6, '', ('93.184.216.34', 443)),
         ]), mock.patch('requests.Session', return_value=session):
-            with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '非公网 peer'):
+            with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '已配置代理 peer'):
                 publish_to_blog._download_review_image('https://example.com/a.png')
         response.close.assert_called_once()
 
@@ -259,8 +340,29 @@ title: "Table"
         with mock.patch.object(publish_to_blog.socket, 'getaddrinfo', return_value=[
             (publish_to_blog.socket.AF_INET, publish_to_blog.socket.SOCK_STREAM, 6, '', ('93.184.216.34', 443)),
         ]), mock.patch('requests.Session', return_value=session):
-            with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, 'DNS rebinding'):
+            with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '已配置代理 peer'):
                 publish_to_blog._download_review_image('https://example.com/a.png')
+
+    def test_image_download_accepts_the_explicit_proxy_peer_after_public_url_validation(self):
+        sock = mock.Mock()
+        sock.getpeername.return_value = ('127.0.0.1', 7897)
+        response = mock.Mock()
+        response.raw._connection.sock = sock
+        response.status_code = 200
+        response.headers = {'Content-Type': 'image/png', 'Content-Length': '8'}
+        response.iter_content.return_value = [b'\x89PNG\r\n\x1a\n']
+        session = mock.MagicMock()
+        session.get.return_value = response
+        def resolve(host, *_args, **_kwargs):
+            address = '127.0.0.1' if host == '127.0.0.1' else '93.184.216.34'
+            return [(publish_to_blog.socket.AF_INET, publish_to_blog.socket.SOCK_STREAM, 6, '', (address, 443))]
+
+        with mock.patch.object(publish_to_blog.socket, 'getaddrinfo', side_effect=resolve), \
+                mock.patch('requests.Session', return_value=session), \
+                mock.patch.object(publish_to_blog, 'get_required_fetch_proxy', return_value='http://127.0.0.1:7897'):
+            image = publish_to_blog._download_review_image('https://example.com/a.png')
+        self.assertEqual(image['media_type'], 'image/png')
+        response.close.assert_called_once()
 
     def test_publish_date_and_content_target_are_strict(self):
         for invalid in ('2026-2-03', '2026-02-30', '../2026-07-10'):
@@ -528,6 +630,77 @@ body
                 page.write_text('changed after review\n', encoding='utf-8')
                 with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, 'review 后已变更'):
                     publish_to_blog.load_verified_review_receipt('2026-07-10')
+
+    def test_incremental_review_selects_only_modified_failed_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            passed = posts / '2026-07-10-passed.md'
+            failed = posts / '2026-07-10-failed.md'
+            passed.write_text('passed\n', encoding='utf-8')
+            failed.write_text('failed before fix\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
+                manifest = publish_to_blog.save_generation_manifest(
+                    '2026-07-10', [passed, failed],
+                )
+                publish_to_blog.save_review_failure_state(
+                    '2026-07-10', [passed, failed], manifest, 'a' * 40, {
+                        str(passed.resolve()): {'passed': True},
+                        str(failed.resolve()): {'passed': False},
+                    },
+                )
+                failed.write_text('failed after fix\n', encoding='utf-8')
+                plan = publish_to_blog.plan_incremental_review(
+                    '2026-07-10', [passed, failed], manifest, 'a' * 40,
+                )
+            self.assertEqual(plan['mode'], 'incremental')
+            self.assertEqual(plan['paths'], [failed.resolve()])
+            self.assertEqual(plan['unchangedFailed'], [])
+            self.assertTrue(plan['priorResults'][str(passed.resolve())]['passed'])
+
+    def test_incremental_review_falls_back_to_full_if_passed_file_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            passed = posts / '2026-07-10-passed.md'
+            failed = posts / '2026-07-10-failed.md'
+            passed.write_text('passed\n', encoding='utf-8')
+            failed.write_text('failed\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
+                manifest = publish_to_blog.save_generation_manifest(
+                    '2026-07-10', [passed, failed],
+                )
+                publish_to_blog.save_review_failure_state(
+                    '2026-07-10', [passed, failed], manifest, 'b' * 40, {
+                        str(passed.resolve()): {'passed': True},
+                        str(failed.resolve()): {'passed': False},
+                    },
+                )
+                passed.write_text('tampered\n', encoding='utf-8')
+                plan = publish_to_blog.plan_incremental_review(
+                    '2026-07-10', [passed, failed], manifest, 'b' * 40,
+                )
+            self.assertEqual(plan['mode'], 'full')
+            self.assertIn('已通过文件发生变化', plan['reason'])
+            self.assertEqual(set(plan['paths']), {passed.resolve(), failed.resolve()})
+
+    def test_review_receipt_rejects_base_head_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10.md'
+            page.write_text('reviewed\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir), \
+                    self.assertRaisesRegex(
+                        publish_to_blog.PublishDataValidationError,
+                        '基线发生变化',
+                    ):
+                publish_to_blog.save_review_receipt(
+                    '2026-07-10', [page], 'hugo', expected_base_head='f' * 40,
+                )
 
 
 if __name__ == '__main__':

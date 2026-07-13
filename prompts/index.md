@@ -9,6 +9,7 @@
 | [filter.md](filter.md) | 筛选阶段：判断单篇论文是否与语音/音乐/音频相关 | `fetch-papers.js` |
 | [deep-analysis.md](deep-analysis.md) | 深度分析阶段（第一轮）：纯文本阅读后输出结构化报告 | `deep-analyzer.js` |
 | [image-supplement.md](image-supplement.md) | 深度分析阶段（双模型模式）：副模型只输出严格 JSON 插图计划，代码只新增图片及相邻说明，不替换主模型原文 | `deep-analyzer.js` |
+| [visual-summary.md](visual-summary.md) | 评分审计后的 Codex 视觉摘要：生成研究概览、方法结构、实验与边界卡片，禁止伪造论文原图或数值 | Codex 内置 `image_gen`（按需调用） |
 | [opensource-scan.md](opensource-scan.md) | 开源扫描阶段（第二轮）：专门提取开源链接和复现信息 | `deep-analyzer.js` |
 | [gap-fill.md](gap-fill.md) | 深度分析阶段（第三轮）：对照原文审校重写前两轮结果 | `deep-analyzer.js` |
 | [method-fill.md](method-fill.md) | 深度分析后处理：方法章节过短或空泛时补写结构化方法说明 | `deep-analyzer.js` |
@@ -34,5 +35,6 @@
 - `image-supplement.md` 的顶层只能包含 `insertions` 数组；只有严格 `{"insertions":[]}` 表示确认没有高价值图片，schema 错误保持可重试。
 - `image-supplement.md` 额外使用 `{anchorCatalog}`；副模型必须从目录中选择稳定 `paragraph_id`，旧自由文本 `anchor` 仅用于兼容历史响应。
 - `scoring-audit.md` 的 `{validationFeedback}` 用于把代码校验错误反馈给下一次局部审计；`structure-repair.md` 仅在共享结构契约发现缺失标题时调用。
+- `visual-summary.md` 仅使用已审计的摘要、方法和实验章节构造编辑性说明图；必须保持为单一第一个 fenced code block，且不能要求模型在图内输出无法可靠校验的长文本或精确数字。
 - 保持占位符名称与代码中的替换逻辑一致。
 - 修改 prompt 后建议运行一次单篇分析或 `quick-test.js` 验证效果。

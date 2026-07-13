@@ -58,7 +58,9 @@
 | `PAPER_DIGEST_BLOG_URL` | 博客部署后的访问地址（如 `https://nanless.github.io/audio-paper-digest-blog/posts`） | `https://nanless.github.io/audio-paper-digest-blog/posts` |
 | `PAPER_DIGEST_REPO_URL` | 小红书等文案中附带的项目仓库地址 | `github.com/nanless/audio-paper-digest` |
 | `PAPER_DIGEST_GITHUB_REMOTE` | Git 远程仓库名称 | `origin` |
-| `PD_BLOG_REVIEW_CONCURRENCY` | 独立论文页三层 review 并发度（汇总页仍先串行审查） | `8` |
+| `PD_BLOG_REVIEW_CONCURRENCY` | 独立论文页三层 review 并发度（汇总页仍先串行审查） | `5` |
+
+发布阶段的 LLM 调用会记录请求开始、响应/异常、单次耗时、prompt 长度和图片数；日志不会输出 API key、认证头或正文内容。若日志只出现 `→` 而没有 `✓` 或失败行，表示进程在 HTTP 请求尚未返回时被外部终止，不能据此签发审查凭证或推送。
 
 #### 微信公众号
 
@@ -74,6 +76,7 @@
 | 变量 | 说明 |
 |------|------|
 | `XIAOHONGSHU_COOKIES` | 小红书自动发布 Cookie；可通过 `npm run xhs-login` 获取 |
+| `PD_XIAOHONGSHU_ONELINER_CONCURRENCY` | TOP N 一句话亮点的 LLM 并发度，范围 1–5，默认 `5` |
 
 #### 飞书文档
 
@@ -159,7 +162,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 - **Node 脚本**：通过 `scripts/log-setup.js`
 - **Python 脚本**：通过 `scripts/log_setup.py`
 - **默认输出位置**：`logs/<script-name>-YYYYMMDD-HHMMSS-<pid>-<seq>.log`
-- **默认特性**：UTF-8 纯文本、`0600` 权限、同时输出到终端和日志文件、唯一文件名、同步落盘；统一脱敏认证头、Cookie、token、secret、password、任意项目密钥实际值和 URL userinfo
+- **默认特性**：UTF-8 纯文本、`0600` 权限、同时输出到终端和日志文件、唯一文件名、同步落盘；每个非空物理日志行以毫秒级北京时间戳（`[YYYY-MM-DD HH:mm:ss.SSS+08:00]`）开头（`backup-data.sh` 在退出汇总日志时补写）；统一脱敏认证头、Cookie、token、secret、password、任意项目密钥实际值和 URL userinfo
 - **无上限与无自动清理**：日志不做数量、总量或单文件大小限制，也不会自动删除旧日志
 
 `backfill_papers.py` 复用相同统一日志，不再额外追加 `logs/backfill.log`。`logs/full-fetch-*.log` 可用于排查抓取/分析问题；终端仍会保留完整输出。

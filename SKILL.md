@@ -34,10 +34,10 @@ description: >
 3. **arXiv 抓取**：7 个分类，每类最多 100 篇（可通过 `PD_ARXIV_MAX_RESULTS` 调整），遇连续 20 篇已有 ID 提前停止（去重集合包含 papers.json + 博客已发布 ID）
 4. **HuggingFace 抓取**：`daily_papers` 分页（最多 20 页）+ `papers` API 补充，默认近 7 天，只排除历史去重集合/博客已发布 ID；同批 arXiv 重叠论文保留给合并阶段补齐 HF 元数据
 5. **合并去重**：arXiv 优先，HF 补充 7 个特有字段，标记 `sources`；过滤掉博客已发布论文
-6. **LLM 筛选**：按 `PAPER_ANALYZER_*` 配置逐篇判断语音/音乐/音频相关，`batchSize=5`（可通过 `PD_FILTER_BATCH_SIZE` 调整），单篇超时 60 秒，重试 5 次；每批写入 `data/current/filter-decisions.json`，中断后会按模型名和 `prompts/filter.md` hash 续跑；每条决策保存 `related`、`reason`、`rawResponse`、`parseSource`
+6. **LLM 筛选**：按 `PAPER_ANALYZER_*` 配置逐篇判断语音/音乐/音频相关，`batchSize=5`（可通过 `PD_FILTER_BATCH_SIZE` 调整），单篇超时 60 秒，重试 5 次；每批写入 `data/current/filter-decisions.json`。模型缺少机器可读结论但文本有明确倾向时，额外只做一次“只输出结论”的格式修复，修复响应仍须严格解析；中断后若当日 `raw-candidates.json` 的来源健康且模型/prompt hash 一致，只重试未决论文，不重新抓取 arXiv/HuggingFace；每条决策保存 `related`、`reason`、`rawResponse`、`parseSource`
 7. **保存筛选结果**：`data/current/raw-candidates.json` 保存筛选输入，`data/current/filtered-papers.json` 保存筛选/归档去重后的输出
 8. **更新去重库**：追加所有爬取论文 ID 到 `data/current/papers.json`（不仅筛选通过的，提前保存防止后续中断丢失）
-9. **深度分析**：`deep-analyzer.js`。主模型完成纯文本分析、开源扫描、审校、表格/方法修复和最终类型感知评分审计；评分审计只输出 JSON，由代码更新文档类型、机器摘要分项、总分和评分理由，不改正文。双模型模式随后由副模型最终看图筛选高价值图片并只新增图片及图前/图后说明；单模型模式跳过图片。并发 3 篇（可通过 `PD_ANALYSIS_CONCURRENCY` 调整），每篇最多重试 2 次（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整）
+9. **深度分析**：`deep-analyzer.js`。主模型完成纯文本分析、开源扫描、审校、表格/方法修复和最终类型感知评分审计；评分审计只输出 JSON，由代码更新文档类型、机器摘要分项、总分和评分理由，不改正文。双模型模式随后由副模型最终看图筛选高价值图片并只新增图片及图前/图后说明；单模型模式跳过图片。需要图文视觉摘要时，Codex 必须在分析契约通过后读取 `prompts/visual-summary.md`，直接使用内置 `image_gen` 为每篇论文分别生成研究概览、方法结构、实验与边界三张卡，再将选定资产复制到项目；禁止由 Node/Python 脚本调用图像 API 或要求用户提供图像 API key。并发 3 篇（可通过 `PD_ANALYSIS_CONCURRENCY` 调整），每篇最多重试 2 次（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整）
 10. **增量保存**：每批分析后立即保存到 `data/current/deep-analysis-result.json`，自带失败结果保护（已有成功 analysis 的论文不会被无 analysis 的失败结果覆盖）；同时通过 `scripts/digest-status.js` 回写 `papers.json.digestStatus`。分析结果和论文库写入使用跨进程锁与 `generation` 校验，部分失败状态为 `partial_failed` 并返回非零退出码
 11. **收尾合并**：去重合并历史结果，自动备份 bak 文件（保留最近 10 个）
 
@@ -305,6 +305,7 @@ npm run xiaohongshu -- --date 2026-04-22
 
 - 小红书单帖正文限制约 1000 字，精选模式默认 TOP 5（可用 `--top 3` 调整），正文约 800-950 字符，适合单帖直接发布
 - **每篇论文的一句话介绍调用发布阶段 LLM API 生成**（复用 `publish_common.py` 的协议路由并绕过代理），LLM 失败时回退到本地 `extract_one_liner()`（优先取 innovation 第一条，其次 summary 中含"提出了/解决了/旨在"的句子，最后 roast）
+- TOP N 一句话默认以 5 并发生成，可通过项目 `.env` 的 `PD_XIAOHONGSHU_ONELINER_CONCURRENCY` 调整为 1–5；完成顺序不会改变最终排名顺序，单篇异常只回退该篇
 - LLM one-liner 优先使用深度分析的 `parsed.summary`、`parsed.results`、`parsed.limitations`、`parsed.opensource` 与主标签，再回退摘要，避免只复述标题
 - 脚本会自动清理 Markdown 格式（`**加粗**`、`` 代码 ``）和学术化前缀（"这篇论文旨在"、"本文针对"等），避免平台渲染异常
 - 文案自动附带 emoji 热度标识：🔥≥8 分、✅≥6 分、📝<6 分（与博客、微信统一）
@@ -332,7 +333,7 @@ npm run xiaohongshu -- --date 2026-04-22
   - 汇总页：`YYYY-MM-DD.md`
   - 单篇页：`YYYY-MM-DD-<slug>.md`
 - `generate-blog.py` 只生成并安装 `.md`，写入 generation manifest，禁止 review/commit/push
-- `review-blog.py` 只审查 generation manifest 中的文件，通过严格 LLM/图片 review 与 Hugo gate 后写入逐文件 SHA-256 凭证，禁止 commit/push
+- `review-blog.py` 只审查 generation manifest 中的文件。首次失败会写入绑定 generation manifest SHA-256、博客 `main` 基线和逐文件最终 SHA-256 的失败集状态；修复后仅复审已修改的失败文件，任何已通过文件、清单或基线变化都会退回全量 review。全部内容仍须通过确定性校验与全量 Hugo gate，之后才写入逐文件 SHA-256 凭证；禁止 commit/push
 - `push-blog.py` 只验证审查凭证和当前文件哈希，精确 stage 后使用中文详细提交信息 commit，再 `git push origin HEAD:main` 并验证远端 OID；禁止重新生成或 review
 - **三个阶段及兼容 `publish-to-blog.py` 必须在沙箱外运行**：入口检测到可靠沙箱标志 `CODEX_SANDBOX` 会立即拒绝执行；沙箱外权限包装会保留网络禁用环境标志，不能据此误拒绝。原因是 review 会直连 LLM、下载图片并运行 Hugo，push 需要真实 Git 网络；不得在沙箱内跳过 review、伪造凭证或改用无网络降级路径。
 - 若需发布全部论文（不过滤），显式传 `--all`
@@ -353,7 +354,7 @@ Agent 执行约束：
 若当天结果需要清空重跑：
 
 1. 若 `data/current/filtered-papers.json` 是今天且 `status: complete`，并且其中 `filterModel` / `filterPromptHash` 与当前 `.env` 和 `prompts/filter.md` 一致：不要删筛选结果，直接运行 `node scripts/full-fetch.js`，主流程会跳过抓取/筛选并续跑深度分析；若模型或 prompt 已变更，会重新抓取/筛选。
-2. 若筛选未完成但 `data/current/filter-decisions.json` 是今天且模型/prompt hash 一致：直接运行 `node scripts/full-fetch.js`，筛选会复用已有逐篇决策继续。
+2. 若筛选未完成且 `data/current/raw-candidates.json` / `filter-decisions.json` 是今天、来源健康且模型/prompt hash 一致：直接运行 `node scripts/full-fetch.js`，主流程跳过抓取，只重试未决论文；不能删除这两个 checkpoint。
 3. 若要彻底重抓重筛，再删除 `data/current/raw-candidates.json`、`data/current/filter-decisions.json`、`data/current/filtered-papers.json`、`data/current/deep-analysis-result.json`
 4. **必要时恢复 `papers.json` 到昨天状态**（推荐，比个删 ID 更可靠）：
    ```bash
@@ -365,7 +366,7 @@ Agent 执行约束：
 
 **特殊场景——抓取或筛选 API 全面失败：**
 - arXiv/HuggingFace 抓取器会区分“请求成功但结果为空”和“所有请求失败”；全失败会抛出带 `sourceHealth` 的异常，禁止生成完整空批次。
-- 筛选 API 错误或无法判断的结果标记为 `retryable`，不会写入正式决定缓存，也不能把筛选产物标记为 `complete`；修复 API 后直接重跑主流程复用已有明确决定。
+- 筛选 API 错误或无法判断的结果标记为 `retryable`，不会写入正式决定缓存，也不能把筛选产物标记为 `complete`；若同日候选来源健康，重跑主流程只复用候选和明确决定、重试未决项，禁止为此重新抓取全部来源。
 
 **关键教训——恢复 `papers.json` 前必须检查 `lastUpdated`：**
 
@@ -403,11 +404,11 @@ PY
 
 ## 7. 日志与运行特性
 
-- Node/Python 可执行脚本默认同时输出到终端和唯一的 `logs/<script>-YYYYMMDD-HHMMSS-<pid>-<seq>.log`；`backup-data.sh` 同样默认生成文件日志
+- Node/Python 可执行脚本默认同时输出到终端和唯一的 `logs/<script>-YYYYMMDD-HHMMSS-<pid>-<seq>.log`；`backup-data.sh` 同样默认生成文件日志并在退出时为每一行补写北京时间戳
 - `PD_ENABLE_FILE_LOGS=1` / `PAPER_DIGEST_ENABLE_FILE_LOGS=1` 继续兼容，但不再是生成日志的必要条件
 - 文件日志不做数量、总量或单文件大小限制，也不会自动清理旧日志；`PAPER_DIGEST_DISABLE_FILE_LOGS=1` 或 `PD_DISABLE_FILE_LOGS=1` 可强制禁用文件日志
 - `backfill_papers.py` 复用统一的每次运行日志，不再额外追加 `logs/backfill.log`
-- 日志均为 UTF-8 纯文本并使用 `0600` 权限；日志层统一脱敏 `Authorization`、`x-api-key`、Cookie、token、secret、password、任意已配置密钥实际值和 URL userinfo，并同步落盘，避免 `process.exit()` 丢失尾部日志
+- 日志均为 UTF-8 纯文本并使用 `0600` 权限；每个非空物理日志行均以毫秒级北京时间戳（`[YYYY-MM-DD HH:mm:ss.SSS+08:00]`）开头。日志层统一脱敏 `Authorization`、`x-api-key`、Cookie、token、secret、password、任意已配置密钥实际值和 URL userinfo，并同步落盘，避免 `process.exit()` 丢失尾部日志
 - `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` 采用重试、增量保存、跨进程锁和 `generation` 校验；损坏的 current JSON 会阻断写入，不会回退 legacy 后覆盖
 - `full-fetch.js` 另有覆盖归档、清理、筛选和最终合并的单实例运行锁，内部论文分析仍保持配置的并发度；锁 owner 使用随机 token，旧 owner 不能释放后来者的同路径新锁
 - `reanalyze.js` 每 5 篇保存一次中间结果（并发模式下自动调整保存间隔）
@@ -438,6 +439,7 @@ PY
 15. **变更后运行单元测试**：修改 `scripts/utils.js`、`scripts/config.js` 或分析引擎核心逻辑后，必须运行 `npm test` 确保测试通过。
 16. **MiMo API 请求必须禁用代理连接复用**：所有 Node LLM 调用（包括 `test-api-key.js`）的 `options.agent` 必须为 `false`（不是 `undefined`）。任何重构或修改 HTTP 请求逻辑时，禁止将 `agent: false` 改回 `agent: proxyAgent` 或 `agent: undefined`，否则 MiMo Token Plan 会在有系统代理的环境中返回 403。
 17. **新增 LLM 端点必须接入 API 协议自动路由**：任何新增 Node 脚本调用 LLM 时，统一使用 `scripts/utils.js` 中的 `detectApiType()`、`buildApiUrl()`、`buildHeaders()`、`buildRequestBody()`、`parseResponseText()`；Python 发布阶段 LLM 调用必须复用 `publish_common.py` 的 `call_publish_llm_api()`，禁止硬编码特定协议的 URL/Header/Body。
+17.1 **视觉摘要由 Codex 内置图像工具生成**：绝不在项目脚本中调用图像 API，也不读取或要求 `OPENAI_API_KEY`。Agent 先读取已审计分析和 `prompts/visual-summary.md`，再对每种卡片单独调用内置 `image_gen`；项目引用的最终资产必须从 Codex 的默认生成目录复制到工作区，且不得伪装成论文原图、编造实验数字、论文结论或作者信息。
 18. **修改 API 协议路由逻辑时同步全链路**：修改 `detectApiType()` 的判定规则或 `buildApiUrl()`/`buildHeaders()` 等函数时，必须同步检查 `fetch-papers.js`、`deep-analyzer.js` 以及所有使用 `analysis-engine.js` 的脚本（`full-fetch.js`、`reanalyze.js`、`batch-analyze.js`、`deep-analysis-only.js`、`analyze-single-paper.js`），确保全链路行为一致。
 19. **禁止将敏感文件提交到版本控制**：`data/`、`logs/`、`*.env`、`*.backup*`、缓存文件、含密钥的日志归档等严禁进入 git；提交前必须确认 `.gitignore` 已正确配置，且仓库中不存在历史遗留的敏感文件。
 20. **CI 自动检查**：CI 会通过 `npm test`、`npm run validate:data`、`find scripts tests -name '*.js'`、`find scripts -name '*.py'`、`python3 -m unittest discover -s tests/python` 和全仓库 `.sh` 语法检查覆盖新增 JS/Python/shell 文件；新增特殊文件类型时再更新 `.github/workflows/ci.yml`。

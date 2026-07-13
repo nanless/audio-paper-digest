@@ -3,6 +3,7 @@ import os
 import re
 import sys
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from project_env import load_project_env
 
@@ -39,13 +40,37 @@ def redact_log_text(value):
     return text
 
 
+def format_log_timestamp(now=None):
+    # The project uses Beijing time for all operational timestamps, regardless of host locale.
+    if now is None:
+        now = datetime.now(tz=ZoneInfo('Asia/Shanghai'))
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=ZoneInfo('Asia/Shanghai'))
+    else:
+        now = now.astimezone(ZoneInfo('Asia/Shanghai'))
+    beijing = now
+    return beijing.strftime('%Y-%m-%d %H:%M:%S.') + f'{beijing.microsecond // 1000:03d}+08:00'
+
+
 class _Tee:
     def __init__(self, file_handle, original_stream):
         self.file_handle = file_handle
         self.original_stream = original_stream
+        self.at_line_start = True
+
+    def _timestamp_lines(self, text):
+        output = []
+        for char in text:
+            if self.at_line_start and char not in ('\n', '\r'):
+                output.append(f'[{format_log_timestamp()}] ')
+                self.at_line_start = False
+            output.append(char)
+            if char == '\n':
+                self.at_line_start = True
+        return ''.join(output)
 
     def write(self, data):
-        sanitized = redact_log_text(data)
+        sanitized = self._timestamp_lines(redact_log_text(data))
         if self.file_handle is not None:
             self.file_handle.write(sanitized)
             self.file_handle.flush()
@@ -88,7 +113,7 @@ class _Logger:
 
 
 def _timestamp():
-    return datetime.now().strftime("%Y%m%d-%H%M%S")
+    return datetime.now(tz=ZoneInfo('Asia/Shanghai')).strftime("%Y%m%d-%H%M%S")
 
 
 def _create_unique_log_file(logs_dir, base_name):

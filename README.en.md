@@ -203,6 +203,9 @@ python3 scripts/publish-xiaohongshu.py
 python3 scripts/publish-xiaohongshu.py --top 7
 python3 scripts/publish-xiaohongshu.py --all
 
+# TOP-N one-liners default to concurrency 5; configurable from 1 to 5 in project .env
+# PD_XIAOHONGSHU_ONELINER_CONCURRENCY=5
+
 # Xiaohongshu auto-publish (login required first)
 python3 scripts/xiaohongshu-publisher.py --login
 python3 scripts/xiaohongshu-publisher.py

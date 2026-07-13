@@ -467,7 +467,13 @@ def call_publish_llm_api(
 
     last_error = None
     for attempt in range(max_retries):
+        started_at = time.monotonic()
         try:
+            print(
+                f'  [publish-api] → {context} '
+                f'(尝试 {attempt + 1}/{max_retries}, timeout={timeout}s, '
+                f'prompt_chars={len(prompt)}, images={len(images or [])})'
+            )
             request = urllib.request.Request(
                 api_url,
                 data=json.dumps(payload).encode('utf-8'),
@@ -477,16 +483,24 @@ def call_publish_llm_api(
             # Publishing LLM calls must remain direct even when fetch proxies are configured.
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             with opener.open(request, timeout=timeout) as response:
+                status = response.status
                 if response.status < 200 or response.status >= 300:
                     raise RuntimeError(f'HTTP {response.status}')
                 data = json.loads(response.read().decode('utf-8'))
             content = parse_publish_response_text(api_type, data)
             if content:
+                print(
+                    f'  [publish-api] ✓ {context} | HTTP {status} | '
+                    f'{time.monotonic() - started_at:.1f}s | response_chars={len(content)}'
+                )
                 return content
             last_error = RuntimeError('LLM 返回内容为空')
         except Exception as exc:
             last_error = exc
-            print(f'  ⚠️  {context} 调用失败 (尝试 {attempt + 1}/{max_retries}): {exc}')
+            print(
+                f'  ⚠️  {context} 调用失败 (尝试 {attempt + 1}/{max_retries}, '
+                f'{time.monotonic() - started_at:.1f}s): {exc}'
+            )
 
         if attempt < max_retries - 1:
             time.sleep(2 ** attempt)

@@ -8,7 +8,7 @@
 
 #### `scripts/full-fetch.js`
 
-完整流程入口。执行第 3 节的所有步骤：自动归档 → 加载去重库（含博客已发布 ID）→ arXiv 抓取 → HF 抓取 → 合并去重 → 过滤博客已发布论文 → LLM 筛选 → 更新去重库 → 深度分析 → 增量保存。
+完整流程入口。执行自动归档 → 加载去重库（含博客已发布 ID）→ arXiv 抓取 → HF 抓取 → 合并去重 → 过滤博客已发布论文 → LLM 筛选 → 更新去重库 → 深度分析 → 增量保存。当天筛选若只剩未决项且 raw candidates 的来源健康，则直接续跑未决项，不重新抓取来源；格式异常只做一次严格的结论格式修复。
 
 所有配置从 `scripts/config.js` 读取，支持项目根 `.env` 覆写：
 - `ANALYSIS_CONFIG.concurrency = 3`（`PD_ANALYSIS_CONCURRENCY`）
@@ -248,6 +248,10 @@ HuggingFace Papers 抓取模块。
 - 无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 按最终正文出现顺序归一化，避免候选编号在重排插入后成为倒序展示图号
 - 只有严格 JSON 对象中的 `insertions: []` 才标记 `no_high_value_images`；schema 错误、非法 JSON、全图下载失败或契约破坏会写入非终态恢复状态，不能伪装成成功分析
 
+**Codex 视觉摘要（按需后处理）**
+- Agent 在论文的深度分析和评分审计通过后，读取 `prompts/visual-summary.md`，用 Codex 内置 `image_gen` 分三次生成研究概览、方法结构、实验与边界卡片；这不是可由项目脚本自行运行的 API 阶段
+- 每张只以经过评分审计的章节内容构造提示词，禁止把生成内容当论文原始图、编造数值或插入作者/论文编号。选定图片必须复制到工作区，供博客或社媒发布流程显式消费
+
 **阶段恢复**：`analysisManifest` 逐阶段保存状态，失败正文写入 `analysisCheckpoint`，候选/下载/选图元数据写入 `analysisRecoveryImageManifest`。失败合并会独立按完整契约重解析旧正文，不受最新失败 manifest 影响，连续多次失败仍保留旧成功正文。强制重分析成功旧记录时因没有 checkpoint 会清空主分析及所有下游完成标记；普通失败续跑则从首个未完成阶段继续。
 
 **API 调用**：
@@ -368,7 +372,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 
 **发布流程**：
 1. `generate-blog.py` 只生成并安装 `.md`，然后写入 `blog-generation-manifest-YYYY-MM-DD.json`；不调用 LLM，不提交、不推送。
-2. `review-blog.py` 只读取 generation manifest 对已生成文件执行代码、LLM 和多模态图片三层 review 以及 Hugo gate；通过后写入带逐文件 SHA-256 的 `blog-review-receipt-YYYY-MM-DD.json`，不执行 Git 发布。
+2. `review-blog.py` 只读取 generation manifest 对已生成文件执行代码、LLM 和多模态图片三层 review 以及 Hugo gate；首次失败写入 `blog-review-failure-YYYY-MM-DD.json`。修复后在清单、博客 `main` 基线和已通过文件 SHA-256 均不变时只复审已修改的失败页面，否则自动退回全量；通过后写入带逐文件 SHA-256 的 `blog-review-receipt-YYYY-MM-DD.json`，不执行 Git 发布。
 3. `push-blog.py` 只验证审查凭证与工作树文件哈希完全一致，再精确 stage → 中文详细 commit → `git push origin HEAD:main` → 验证远端 OID；该脚本不生成也不 review。
 4. GitHub Actions 自动构建并部署到 Pages。
 
@@ -384,7 +388,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 - 若需发布全部论文（不过滤），显式传 `--all`
 
 **Review 环节**：
-生成阶段先从 `analysis` 重解析评分，并与缓存 `parsed`、顶层评分版本比较。review 阶段执行代码正则、LLM 文本和多模态图片三层 review；汇总页文本分块与独立论文页默认以 8 并发执行，可用 `PD_BLOG_REVIEW_CONCURRENCY` 调整。任何不确定 review 都按错误阻断，未生成严格审查凭证时 push 阶段必须失败。
+生成阶段先从 `analysis` 重解析评分，并与缓存 `parsed`、顶层评分版本比较。review 阶段执行代码正则、LLM 文本和多模态图片三层 review；汇总页文本分块与独立论文页默认以 5 并发执行，可用 `PD_BLOG_REVIEW_CONCURRENCY` 调整。任何不确定 review 都按错误阻断，未生成严格审查凭证时 push 阶段必须失败。
 
 代码层自动修复覆盖以下问题：
 三层 review 分块会保持连续 Markdown 表格行的完整性，避免将表头与分隔行分到不同请求后产生伪误报。多模态 review 只对成功加载的图片同步追加上下文与 payload，个别图片下载失败不会使后续图片错配到前一张图的正文。
@@ -438,6 +442,8 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 Python 发布/维护脚本共享路径配置。集中提供 `PROJECT_ROOT`、`DATA_DIR`、`CURRENT_DIR`、`LOGS_DIR`、`PAPERS_FILE`、`DEEP_ANALYSIS_RESULT_FILE` 等常量，以及 `resolve_deep_analysis_result_path()`、`xiaohongshu_markdown_path()`、`wechat_preview_path()`、`backfill_result_path()` 等路径 helper。新增 Python 脚本不要再手写默认 `data/current/*.json` 或发布产物路径。
 
 #### `scripts/publish-xiaohongshu.py`
+
+TOP N 精选版的一句话亮点使用受控并发生成，默认并发度为 5，可通过项目 `.env` 的 `PD_XIAOHONGSHU_ONELINER_CONCURRENCY` 设置为 1–5。结果始终按论文排名回填，单篇调用失败仅对该篇使用本地摘要回退。
 
 生成小红书文案。
 
