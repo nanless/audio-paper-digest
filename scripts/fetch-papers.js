@@ -125,6 +125,21 @@ function makeSourceFetchError(message, sourceHealth) {
     return error;
 }
 
+function hasRecentResponseSignature(html) {
+    return /<dl(?:\s|>)/i.test(String(html || ''));
+}
+
+function hasSearchResponseSignature(html) {
+    const text = String(html || '');
+    return /<ol[^>]*class=["'][^"']*breathe-horizontal/i.test(text)
+        || /<li[^>]*class=["']arxiv-result["']/i.test(text)
+        || /(?:no results|sorry, your query)/i.test(text);
+}
+
+function hasApiResponseSignature(xml) {
+    return /<(?:[a-z]+:)?feed(?:\s|>)/i.test(String(xml || ''));
+}
+
 /**
  * 筛选阶段专用：调用 LLM（带重试机制）
  */
@@ -293,7 +308,7 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
     const requestFn = options.requestFn || httpsRequestWithProxy;
     const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     const maxRetries = options.maxRetries || 5;
-    const health = { source: 'arxiv-search', attempts: 0, successfulRequests: 0, failures: [] };
+    const health = { source: 'arxiv-search', attempts: 0, successfulRequests: 0, failures: [], coverageComplete: false };
 
     console.log(`[fetch-web] 尝试从搜索页面获取 ${categoryId}（最多 ${maxResults} 篇）...`);
 
@@ -317,8 +332,10 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
                 }
 
                 const html = response.data;
+                if (!hasSearchResponseSignature(html)) throw new Error('响应缺少 arXiv 搜索页结构签名');
                 const papers = parseSearchPageHTML(html, categoryId, existingIds);
                 const meta = papers._meta || {};
+                if (meta.rawItems > 0 && meta.totalFound === 0) throw new Error('搜索页包含结果节点但无合法论文条目');
                 health.successfulRequests++;
 
                 if (papers.length === 0) {
@@ -330,6 +347,7 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
                     console.log(`[fetch-web] 第 ${page + 1} 页无论文结果，停止翻页`);
                     pageSuccess = true;
                     shouldStopPaging = true;
+                    health.coverageComplete = true;
                     break;
                 }
 
@@ -340,6 +358,7 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
                 // 如果已有足够论文，停止
                 if (allPapers.length >= maxResults) {
                     shouldStopPaging = true;
+                    health.coverageComplete = true;
                     break;
                 }
                 break; // 成功，跳出重试循环
@@ -378,6 +397,7 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
 
     console.log(`[fetch-web] ${categoryId} 共获取 ${allPapers.length} 篇论文`);
     health.ok = health.successfulRequests > 0;
+    if (health.successfulRequests === pagesToFetch) health.coverageComplete = true;
     health.allFailed = health.attempts > 0 && health.successfulRequests === 0;
     return attachHealth(allPapers.slice(0, maxResults), health);
 }
@@ -395,7 +415,7 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
     const requestFn = options.requestFn || httpsRequestWithProxy;
     const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     const maxRetries = options.maxRetries || 5;
-    const health = { source: 'arxiv-recent', attempts: 0, successfulRequests: 0, failures: [] };
+    const health = { source: 'arxiv-recent', attempts: 0, successfulRequests: 0, failures: [], coverageComplete: false };
 
     for (let page = 0; page < pagesToFetch; page++) {
         const skip = page * pageSize;
@@ -418,7 +438,10 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
                 }
 
                 const html = response.data;
+                if (!hasRecentResponseSignature(html)) throw new Error('响应缺少 arXiv recent 页结构签名');
                 const papers = parseRecentPageHTML(html, categoryId, existingIds);
+                const meta = papers._meta || {};
+                if (meta.rawItems > 0 && meta.validItems === 0) throw new Error('recent 页包含结果节点但无合法论文条目');
                 health.successfulRequests++;
 
                 allPapers.push(...papers);
@@ -458,6 +481,7 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
 
     console.log(`[fetch-recent] ${categoryId} 共获取 ${unique.length} 篇论文`);
     health.ok = health.successfulRequests > 0;
+    health.coverageComplete = health.successfulRequests === pagesToFetch;
     health.allFailed = health.attempts > 0 && health.successfulRequests === 0;
     return attachHealth(unique.slice(0, maxResults), health);
 }
@@ -470,13 +494,15 @@ function parseRecentPageHTML(html, categoryId, existingIds = null) {
     const $ = cheerio.load(html);
 
     // 组装论文数据
-    let newCount = 0, dupCount = 0;
+    let newCount = 0, dupCount = 0, validItems = 0;
+    const rawItems = $('dl > dt').length;
     $('dl > dt').each((_, dt) => {
         const $dt = $(dt);
         const $dd = $dt.next('dd');
         const href = $dt.find('a[href^="/abs/"]').first().attr('href') || '';
         const idMatch = href.match(/\/abs\/([^/?#]+)/);
         if (!idMatch || !$dd.length) return;
+        validItems++;
 
         const arxivId = idMatch[1].replace(/v\d+$/, '');
         if (existingIds && existingIds.has(normalizedId(arxivId))) {
@@ -509,6 +535,7 @@ function parseRecentPageHTML(html, categoryId, existingIds = null) {
 
     console.log(`[fetch-recent] ${categoryId} 去重: ${newCount} 篇新论文, ${dupCount} 篇已存在`);
 
+    papers._meta = { rawItems, validItems, skippedExisting: dupCount };
     return papers;
 }
 
@@ -595,6 +622,7 @@ function parseSearchPageHTML(html, categoryId, existingIds = null) {
     const papers = [];
     let totalFound = 0;
     let skippedExisting = 0;
+    const rawItems = (String(html || '').match(/<li class="arxiv-result">/g) || []).length;
 
     // 匹配搜索结果中的论文条目
     const itemRegex = /<li class="arxiv-result">([\s\S]*?)<\/li>/g;
@@ -681,7 +709,7 @@ function parseSearchPageHTML(html, categoryId, existingIds = null) {
         console.log(`[fetch-web] 搜索到 ${totalFound} 篇，去重后 ${papers.length} 篇（跳过 ${skippedExisting} 篇已有论文）`);
     }
 
-    papers._meta = { totalFound, skippedExisting };
+    papers._meta = { totalFound, skippedExisting, rawItems };
     return papers;
 }
 
@@ -699,7 +727,7 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
     const requestFn = options.requestFn || httpsRequestWithProxy;
     const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     const perSourceOptions = { requestFn, sleepFn, maxRetries: options.maxRetries };
-    const health = {
+        const health = {
         categoryId,
         attempts: 0,
         successfulRequests: 0,
@@ -719,12 +747,25 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
 
     const finish = () => {
         const result = Array.from(merged.values()).slice(0, maxResults);
-        health.ok = health.successfulRequests > 0;
+        const abstractFailures = health.abstracts?.failedIds || [];
+        const coverageComplete = Object.values(health.methods).some(method => method?.coverageComplete === true);
+        health.coverageComplete = coverageComplete;
+        health.warnings = coverageComplete ? [...health.failures] : [];
+        health.ok = health.successfulRequests > 0
+            && coverageComplete
+            && abstractFailures.length === 0;
         health.allFailed = health.attempts > 0 && health.successfulRequests === 0;
         health.fetched = result.length;
         if (health.allFailed) {
             const failureSummary = health.failures.map(item => `${item.method || 'unknown'}:${item.error}`).join('; ');
             throw makeSourceFetchError(`arXiv ${categoryId} 所有抓取请求均失败${failureSummary ? `: ${failureSummary}` : ''}`, health);
+        }
+        if (!health.ok) {
+            const failureSummary = [
+                ...health.failures.map(item => `${item.method || 'unknown'}:${item.error}`),
+                ...abstractFailures.map(id => `abstract:${id}`)
+            ].join('; ');
+            throw makeSourceFetchError(`arXiv ${categoryId} 抓取覆盖不完整${failureSummary ? `: ${failureSummary}` : ''}`, health);
         }
         return attachHealth(result, health);
     };
@@ -780,7 +821,7 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
     });
     const url = `https://export.arxiv.org/api/query?${params.toString()}`;
     const proxyUrl = detectProxyUrl();
-    const apiHealth = { source: 'arxiv-api', attempts: 0, successfulRequests: 0, failures: [] };
+    const apiHealth = { source: 'arxiv-api', attempts: 0, successfulRequests: 0, failures: [], coverageComplete: false };
     let apiLastError = null;
 
     for (let attempt = 1; attempt <= Math.min(retryCount, 5); attempt++) {
@@ -792,9 +833,15 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
             const response = await requestFn(url, headers, proxyUrl, 60000);
 
             if (response.status === 200) {
-                apiHealth.successfulRequests++;
                 const xml = response.data;
+                if (!hasApiResponseSignature(xml)) throw new Error('响应缺少 arXiv Atom feed 结构签名');
                 const apiPapers = parseArxivXML(xml, categoryId, seenIds, { stopAtConsecutiveExisting: false });
+                const apiMeta = apiPapers._meta || {};
+                if (apiMeta.entryCount > 0 && apiMeta.legalEntryCount === 0) {
+                    throw new Error('Atom feed 非空但没有任何合法论文条目');
+                }
+                apiHealth.successfulRequests++;
+                apiHealth.coverageComplete = true;
 
                 if (apiPapers.length > 0) {
                     for (const p of apiPapers) {
@@ -841,6 +888,7 @@ function parseArxivXML(xml, categoryId, existingIds = null, options = {}) {
     let match;
     let consecutiveExisting = 0;
     let entryCount = 0;
+    let legalEntryCount = 0;
     let stoppedAtConsecutive = false;
 
     while ((match = entryRegex.exec(xml)) !== null) {
@@ -849,6 +897,7 @@ function parseArxivXML(xml, categoryId, existingIds = null, options = {}) {
 
         const idMatch = entry.match(/<id>(.*?)<\/id>/);
         if (!idMatch) continue;
+        legalEntryCount++;
         const arxivId = idMatch[1].split('/abs/').pop();
 
         if (existingIds && existingIds.has(normalizedId(arxivId))) {
@@ -898,7 +947,7 @@ function parseArxivXML(xml, categoryId, existingIds = null, options = {}) {
         });
     }
 
-    papers._meta = { entryCount, stoppedAtConsecutive };
+    papers._meta = { entryCount, legalEntryCount, stoppedAtConsecutive };
     return papers;
 }
 
@@ -1079,7 +1128,7 @@ async function getSpeechAudioDecision(paper) {
     });
 
     try {
-        const response = await callModelForFilter([{ role: 'user', content: prompt }], 1000);
+        const response = await callModelForFilter([{ role: 'user', content: prompt }], FILTER_CFG.maxTokens);
         consecutiveFilterApiFailures = 0;
         const initialDecision = parseFilterDecisionDetails(response, paperId);
         return repairMalformedFilterDecision(initialDecision, paperId);
@@ -1323,6 +1372,9 @@ module.exports = {
     parseFilterDecision,
     parseFilterDecisionDetails,
     repairMalformedFilterDecision,
+    hasRecentResponseSignature,
+    hasSearchResponseSignature,
+    hasApiResponseSignature,
     redactProxyUrl,
     isSpeechAudioRelated,
     getSpeechAudioDecision,

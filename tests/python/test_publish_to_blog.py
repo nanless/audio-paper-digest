@@ -1,6 +1,7 @@
 import importlib.util
 import contextlib
 import io
+import json
 import os
 import subprocess
 import sys
@@ -44,6 +45,24 @@ def init_blog_repo(root, with_remote=False):
         git(repo, 'remote', 'add', 'origin', str(remote))
         git(repo, 'push', '-u', 'origin', 'main')
     return repo, posts, remote
+
+
+def save_bound_review_receipt(date_str, paths, hugo_gate='hugo', expected_base_head=None):
+    manifest = publish_to_blog.save_generation_manifest(date_str, paths)
+    results = {}
+    for path in paths:
+        path = Path(path).resolve()
+        if path.is_file():
+            results[str(path)] = {
+                'passed': True,
+                'reviewedSha256': publish_to_blog._sha256_file(path),
+            }
+    return publish_to_blog.save_review_receipt(
+        date_str, paths, hugo_gate,
+        expected_base_head=expected_base_head,
+        generation_manifest=manifest,
+        reviewed_results=results,
+    )
 
 
 class PublishToBlogReviewTest(unittest.TestCase):
@@ -484,7 +503,7 @@ body
                     mock.patch.object(publish_to_blog, 'GITHUB_REMOTE', 'origin'), \
                     mock.patch.object(publish_to_blog, 'CURRENT_DIR', Path(tmp) / 'data' / 'current'), \
                     mock.patch.object(publish_to_blog, 'build_child_process_env', side_effect=original_env) as env:
-                publish_to_blog.save_review_receipt('2026-07-10', [path], 'hugo')
+                save_bound_review_receipt('2026-07-10', [path])
                 self.assertTrue(publish_to_blog.git_push('2026-07-10', [path]))
             changed_paths = git(repo, 'show', '--pretty=format:', '--name-only', 'HEAD').stdout.splitlines()
             self.assertEqual(changed_paths, ['content/posts/2026-07-10.md'])
@@ -567,7 +586,7 @@ body
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'CURRENT_DIR', Path(tmp) / 'data' / 'current'), \
                     contextlib.redirect_stdout(io.StringIO()) as output:
-                publish_to_blog.save_review_receipt('2026-07-10', [path], 'hugo')
+                save_bound_review_receipt('2026-07-10', [path])
                 self.assertFalse(publish_to_blog.git_push('2026-07-10', [path]))
             local_head = git(repo, 'rev-parse', 'HEAD').stdout.strip()
             self.assertEqual(git(repo, 'show', '--format=%H', '-s', 'HEAD').stdout.strip(), local_head)
@@ -624,12 +643,68 @@ body
             page.write_text('reviewed\n', encoding='utf-8')
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
-                publish_to_blog.save_review_receipt('2026-07-10', [page], 'hugo')
+                save_bound_review_receipt('2026-07-10', [page])
                 paths, _receipt = publish_to_blog.load_verified_review_receipt('2026-07-10')
                 self.assertEqual(paths, [page.resolve()])
                 page.write_text('changed after review\n', encoding='utf-8')
                 with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, 'review 后已变更'):
                     publish_to_blog.load_verified_review_receipt('2026-07-10')
+
+    def test_index_blob_must_match_review_receipt_after_git_add(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10.md'
+            page.write_text('reviewed\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
+                save_bound_review_receipt('2026-07-10', [page])
+                receipt, _path, _head = publish_to_blog._load_push_receipt('2026-07-10')
+                page.write_text('unreviewed race\n', encoding='utf-8')
+                git(repo, 'add', '--', 'content/posts/2026-07-10.md')
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, 'index.*review',
+                ):
+                    publish_to_blog.validate_git_index_against_review_receipt(receipt, [page])
+
+    def test_index_deletion_semantics_must_match_review_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10-old.md'
+            page.write_text('old\n', encoding='utf-8')
+            git(repo, 'add', '--', 'content/posts/2026-07-10-old.md')
+            git(repo, 'commit', '-m', 'old page')
+            page.unlink()
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
+                save_bound_review_receipt('2026-07-10', [page])
+                receipt, _path, _head = publish_to_blog._load_push_receipt('2026-07-10')
+                # Not staged yet: index still contains the supposedly deleted page.
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, 'index.*仍包含',
+                ):
+                    publish_to_blog.validate_git_index_against_review_receipt(receipt, [page])
+                git(repo, 'add', '--', 'content/posts/2026-07-10-old.md')
+                publish_to_blog.validate_git_index_against_review_receipt(receipt, [page])
+
+    def test_committed_blob_must_match_review_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10.md'
+            page.write_text('reviewed\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
+                save_bound_review_receipt('2026-07-10', [page])
+                receipt, _path, _head = publish_to_blog._load_push_receipt('2026-07-10')
+                page.write_text('changed by hook\n', encoding='utf-8')
+                git(repo, 'add', '--', 'content/posts/2026-07-10.md')
+                git(repo, 'commit', '-m', 'tampered commit')
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, '提交.*review',
+                ):
+                    publish_to_blog.validate_git_commit_against_review_receipt(receipt, [page])
 
     def test_incremental_review_selects_only_modified_failed_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -646,7 +721,10 @@ body
                 )
                 publish_to_blog.save_review_failure_state(
                     '2026-07-10', [passed, failed], manifest, 'a' * 40, {
-                        str(passed.resolve()): {'passed': True},
+                        str(passed.resolve()): {
+                            'passed': True,
+                            'reviewedSha256': publish_to_blog._sha256_file(passed),
+                        },
                         str(failed.resolve()): {'passed': False},
                     },
                 )
@@ -674,7 +752,10 @@ body
                 )
                 publish_to_blog.save_review_failure_state(
                     '2026-07-10', [passed, failed], manifest, 'b' * 40, {
-                        str(passed.resolve()): {'passed': True},
+                        str(passed.resolve()): {
+                            'passed': True,
+                            'reviewedSha256': publish_to_blog._sha256_file(passed),
+                        },
                         str(failed.resolve()): {'passed': False},
                     },
                 )
@@ -685,6 +766,292 @@ body
             self.assertEqual(plan['mode'], 'full')
             self.assertIn('已通过文件发生变化', plan['reason'])
             self.assertEqual(set(plan['paths']), {passed.resolve(), failed.resolve()})
+
+    def test_incremental_review_retries_unchanged_transient_but_blocks_unchanged_content_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            transient = posts / '2026-07-10-transient.md'
+            content = posts / '2026-07-10-content.md'
+            transient.write_text('same transient\n', encoding='utf-8')
+            content.write_text('same content\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
+                manifest = publish_to_blog.save_generation_manifest(
+                    '2026-07-10', [transient, content],
+                )
+                publish_to_blog.save_review_failure_state(
+                    '2026-07-10', [transient, content], manifest, 'c' * 40, {
+                        str(transient.resolve()): {
+                            'passed': False, 'completed': True, 'failureKind': 'transient',
+                        },
+                        str(content.resolve()): {
+                            'passed': False, 'completed': True, 'failureKind': 'content',
+                        },
+                    },
+                )
+                plan = publish_to_blog.plan_incremental_review(
+                    '2026-07-10', [transient, content], manifest, 'c' * 40,
+                )
+            self.assertEqual(plan['mode'], 'incremental')
+            self.assertEqual(plan['paths'], [transient.resolve()])
+            self.assertEqual(plan['unchangedFailed'], [content.resolve()])
+
+    def test_review_worker_exception_becomes_checkpointable_transient_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            posts = Path(tmp)
+            paper = posts / '2026-07-10-paper.md'
+            paper.write_text('body\n', encoding='utf-8')
+            callbacks = []
+            with mock.patch.object(
+                publish_to_blog, '_review_single_paper',
+                side_effect=publish_to_blog.PublishLLMUnavailable('temporary'),
+            ):
+                fixed, blocking, details = publish_to_blog.review_all_posts(
+                    '2026-07-10', {'2607.00001': 'paper'},
+                    [(0.0, {'arxivId': '2607.00001', 'title': 'Paper'}, {})],
+                    content_dir=str(posts), review_paths=[paper], return_details=True,
+                    result_callback=lambda path, result: callbacks.append((path, result)),
+                )
+            self.assertEqual(fixed, 0)
+            self.assertEqual(blocking, 1)
+            result = details[str(paper.resolve())]
+            self.assertEqual(result['failureKind'], 'transient')
+            self.assertTrue(result['completed'])
+            self.assertEqual(len(callbacks), 1)
+
+    def test_generation_install_journal_adopts_crash_after_replace_and_rejects_later_edit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            stage = current_dir / 'blog-generation-stage-2026-07-10' / 'posts'
+            stage.mkdir(parents=True)
+            staged_index = stage / '2026-07-10.md'
+            staged_paper = stage / '2026-07-10-paper.md'
+            staged_index.write_text('new index\n', encoding='utf-8')
+            staged_paper.write_text('new paper\n', encoding='utf-8')
+            journal_path = current_dir / 'blog-generation-journal-2026-07-10.json'
+            journal = {'installation': None}
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
+                publish_to_blog.prepare_generation_installation(
+                    journal, journal_path, stage, posts, '2026-07-10',
+                )
+                first_record = journal['installation']['files'][0]
+                first_target = repo / first_record['path']
+                first_source = stage / first_target.name
+                # Simulate SIGKILL after target replacement but before installed=true flush.
+                first_target.write_text(first_source.read_text(encoding='utf-8'), encoding='utf-8')
+                installed = publish_to_blog.resume_generation_installation(
+                    journal, journal_path, stage,
+                )
+                self.assertEqual(set(installed), {
+                    (posts / '2026-07-10.md').resolve(),
+                    (posts / '2026-07-10-paper.md').resolve(),
+                })
+                self.assertTrue(all(
+                    record['installed'] for record in journal['installation']['files']
+                ))
+                first_target.write_text('manual edit\n', encoding='utf-8')
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, '人工修改',
+                ):
+                    publish_to_blog.resume_generation_installation(
+                        journal, journal_path, stage,
+                    )
+
+    def test_completed_generation_manifest_is_reusable_only_for_identical_hashes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10.md'
+            page.write_text('generated\n', encoding='utf-8')
+            base_head = git(repo, 'rev-parse', 'HEAD').stdout.strip()
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
+                manifest = publish_to_blog.save_generation_manifest(
+                    '2026-07-10', [page], input_fingerprint='a' * 64,
+                    template_fingerprint='b' * 64, base_head=base_head,
+                )
+                reused = publish_to_blog.reusable_generation_manifest(
+                    '2026-07-10', 'a' * 64, 'b' * 64, base_head,
+                )
+                self.assertEqual(reused, ([page.resolve()], manifest))
+                page.write_text('manual review edit\n', encoding='utf-8')
+                self.assertIsNone(publish_to_blog.reusable_generation_manifest(
+                    '2026-07-10', 'a' * 64, 'b' * 64, base_head,
+                ))
+
+    def test_template_fingerprint_includes_base_path_and_dependency_hashes(self):
+        with mock.patch.object(publish_to_blog, 'BASE_PATH', '/one'):
+            first = publish_to_blog.generation_template_fingerprint()
+        with mock.patch.object(publish_to_blog, 'BASE_PATH', '/two'):
+            second = publish_to_blog.generation_template_fingerprint()
+        self.assertNotEqual(first, second)
+        with mock.patch.object(publish_to_blog, '_sha256_file', return_value='f' * 64):
+            dependency_changed = publish_to_blog.generation_template_fingerprint()
+        self.assertNotEqual(first, dependency_changed)
+
+    def test_reusable_generation_manifest_rejects_empty_duplicate_and_bad_sha_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, _posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            manifest_path = current_dir / 'blog-generation-manifest-2026-07-10.json'
+            base = {
+                'schemaVersion': 2,
+                'date': '2026-07-10',
+                'inputFingerprint': 'a' * 64,
+                'templateFingerprint': 'b' * 64,
+                'baseHead': 'c' * 40,
+            }
+            cases = [
+                [],
+                [
+                    {'path': 'content/posts/a.md', 'deleted': False, 'sha256': 'd' * 64},
+                    {'path': 'content/posts/a.md', 'deleted': False, 'sha256': 'd' * 64},
+                ],
+                [{'path': 'content/posts/a.md', 'deleted': False, 'sha256': 'bad'}],
+            ]
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
+                current_dir.mkdir(parents=True)
+                for records in cases:
+                    manifest_path.write_text(json.dumps({**base, 'files': records}), encoding='utf-8')
+                    self.assertIsNone(publish_to_blog.reusable_generation_manifest(
+                        '2026-07-10', 'a' * 64, 'b' * 64, 'c' * 40,
+                    ))
+
+    def test_reviewed_hash_gate_and_receipt_reject_post_review_deletion_or_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10.md'
+            page.write_text('reviewed\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
+                manifest = publish_to_blog.save_generation_manifest('2026-07-10', [page])
+                reviewed = {
+                    str(page.resolve()): {
+                        'passed': True,
+                        'reviewedSha256': publish_to_blog._sha256_file(page),
+                    },
+                }
+                publish_to_blog.validate_reviewed_file_hashes(
+                    '2026-07-10', [page], manifest, reviewed,
+                )
+                page.write_text('changed after worker\n', encoding='utf-8')
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, 'review 后发生变化',
+                ):
+                    publish_to_blog.validate_reviewed_file_hashes(
+                        '2026-07-10', [page], manifest, reviewed,
+                    )
+                page.unlink()
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, 'review 期间消失',
+                ):
+                    publish_to_blog.save_review_receipt(
+                        '2026-07-10', [page], 'hugo',
+                        generation_manifest=manifest, reviewed_results=reviewed,
+                    )
+
+    def test_push_receipt_rejects_generation_manifest_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10.md'
+            page.write_text('reviewed\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
+                save_bound_review_receipt('2026-07-10', [page])
+                manifest_path = publish_to_blog.generation_manifest_path('2026-07-10')
+                manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+                manifest['generatedAt'] = 'tampered'
+                manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, 'manifest 缺失或已变化',
+                ):
+                    publish_to_blog.load_verified_review_receipt('2026-07-10')
+
+    def test_same_date_blog_transaction_lock_is_mutually_exclusive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            current_dir = Path(tmp) / 'current'
+            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
+                with publish_to_blog.blog_transaction_lock('2026-07-10'):
+                    with self.assertRaises(TimeoutError):
+                        with publish_to_blog.blog_transaction_lock(
+                            '2026-07-10', timeout_seconds=0.05,
+                        ):
+                            self.fail('same-date lock must not be acquired twice')
+                with publish_to_blog.blog_transaction_lock(
+                    '2026-07-11', timeout_seconds=0.05,
+                ):
+                    pass
+
+    def test_repository_lock_serializes_different_publication_dates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            current_dir = Path(tmp) / 'current'
+            repo = Path(tmp) / 'blog'
+            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir), \
+                    mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)):
+                with publish_to_blog.blog_publication_lock('2026-07-10'):
+                    with self.assertRaises(TimeoutError):
+                        with publish_to_blog.blog_publication_lock(
+                            '2026-07-11', timeout_seconds=0.05,
+                        ):
+                            self.fail('repository lock must serialize different dates')
+
+    def test_corrupt_review_failure_kind_falls_back_to_full_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10.md'
+            page.write_text('content\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
+                manifest = publish_to_blog.save_generation_manifest('2026-07-10', [page])
+                state_path = publish_to_blog.save_review_failure_state(
+                    '2026-07-10', [page], manifest, 'd' * 40, {
+                        str(page.resolve()): {
+                            'passed': False, 'completed': True, 'failureKind': 'content',
+                        },
+                    },
+                )
+                state = json.loads(state_path.read_text(encoding='utf-8'))
+                state['files'][0]['failureKind'] = 'unknown-kind'
+                state_path.write_text(json.dumps(state), encoding='utf-8')
+                plan = publish_to_blog.plan_incremental_review(
+                    '2026-07-10', [page], manifest, 'd' * 40,
+                )
+            self.assertEqual(plan['mode'], 'full')
+            self.assertIn('失败类型非法', plan['reason'])
+
+    def test_push_retries_exact_publication_commit_without_second_commit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            missing_remote = Path(tmp) / 'later-remote.git'
+            git(repo, 'remote', 'add', 'origin', str(missing_remote))
+            current_dir = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10.md'
+            page.write_text('generated\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir), \
+                    mock.patch.object(publish_to_blog, 'GITHUB_REMOTE', 'origin'):
+                save_bound_review_receipt('2026-07-10', [page])
+                self.assertFalse(publish_to_blog.git_push('2026-07-10', [page]))
+                publication_head = git(repo, 'rev-parse', 'HEAD').stdout.strip()
+                commit_count = git(repo, 'rev-list', '--count', 'HEAD').stdout.strip()
+                subprocess.run(
+                    ['git', 'init', '--bare', '--initial-branch=main', str(missing_remote)],
+                    check=True, capture_output=True, text=True,
+                )
+                self.assertTrue(publish_to_blog.git_push('2026-07-10', [page]))
+            self.assertEqual(git(repo, 'rev-parse', 'HEAD').stdout.strip(), publication_head)
+            self.assertEqual(git(repo, 'rev-list', '--count', 'HEAD').stdout.strip(), commit_count)
+            self.assertEqual(
+                git(missing_remote, 'rev-parse', 'refs/heads/main').stdout.strip(),
+                publication_head,
+            )
 
     def test_review_receipt_rejects_base_head_drift(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -698,8 +1065,8 @@ body
                         publish_to_blog.PublishDataValidationError,
                         '基线发生变化',
                     ):
-                publish_to_blog.save_review_receipt(
-                    '2026-07-10', [page], 'hugo', expected_base_head='f' * 40,
+                save_bound_review_receipt(
+                    '2026-07-10', [page], expected_base_head='f' * 40,
                 )
 
 

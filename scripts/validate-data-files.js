@@ -4,6 +4,7 @@ setupScriptLogging(__filename);
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const Config = require('./config.js');
 const {
     readJsonSafe,
@@ -17,12 +18,13 @@ const {
 
 const ALLOWED_DIGEST_STATUSES = new Set(['seen', 'pending_analysis', 'analyzed', 'analysis_failed']);
 const ALLOWED_ANALYSIS_ATTEMPT_STATUSES = new Set(['analyzed', 'analysis_failed']);
-const ALLOWED_FILTERED_STATUSES = new Set(['filtering', 'filter_complete', 'complete']);
+const ALLOWED_FILTERED_STATUSES = new Set(['filtering', 'filter_complete', 'complete', 'source_partial_failed']);
 const ALLOWED_RECOVERY_STAGE_STATUSES = new Set([
     'pending', 'complete', 'not_needed', 'skipped', 'no_candidates',
     'no_high_value_images', 'no_downloadable_images', 'transient_failure', 'invalid_output', 'contract_rejected'
 ]);
 const DEFAULT_FILTER_DECISIONS_FILE = Config.FILES.filterDecisions;
+const DEFAULT_FETCH_CHECKPOINT_FILE = Config.FILES.fetchCheckpoint;
 const ALLOWED_DOCUMENT_TYPES = new Set(DOCUMENT_TYPES);
 const SCORE_DIMENSIONS = Object.freeze({
     innovationScore: 2,
@@ -34,6 +36,9 @@ const SCORE_DIMENSIONS = Object.freeze({
     reproducibilityScore: 0.5,
     engineeringScore: 1.5
 });
+const FINGERPRINT_RE = /^[a-f0-9]{16}$/;
+const SHA256_RE = /^[a-f0-9]{64}$/;
+const BEIJING_ISO_RE = /^(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?\+08:00$/;
 
 function addIssue(issues, file, message) {
     issues.push(`${path.basename(file)}: ${message}`);
@@ -45,6 +50,63 @@ function numericScore(value) {
     }
     if (typeof value !== 'string' || !/^-?\d+(?:\.\d)?$/.test(value.trim())) return Number.NaN;
     return Number(value);
+}
+
+function stableContentSha256(value) {
+    const normalize = item => {
+        if (Array.isArray(item)) return item.map(normalize);
+        if (item && typeof item === 'object') {
+            return Object.fromEntries(Object.keys(item).sort().map(key => [key, normalize(item[key])]));
+        }
+        return item;
+    };
+    return crypto.createHash('sha256').update(JSON.stringify(normalize(value))).digest('hex');
+}
+
+function getBeijingBatchDate(timestamp) {
+    if (typeof timestamp !== 'string') return null;
+    const match = timestamp.match(BEIJING_ISO_RE);
+    if (!match || Number.isNaN(Date.parse(timestamp))) return null;
+    const [year, month, day] = match[1].split('-').map(Number);
+    const calendarDate = new Date(Date.UTC(year, month - 1, day));
+    if (calendarDate.getUTCFullYear() !== year
+            || calendarDate.getUTCMonth() !== month - 1
+            || calendarDate.getUTCDate() !== day) return null;
+    return match[1];
+}
+
+function validateBeijingTimestamp(filePath, timestamp, issues) {
+    if (!getBeijingBatchDate(timestamp)) {
+        addIssue(issues, filePath, 'timestamp 必须是合法的北京时间 ISO 时间（+08:00）');
+    }
+}
+
+function validateFingerprint(filePath, field, value, issues) {
+    if (typeof value !== 'string' || !FINGERPRINT_RE.test(value)) {
+        addIssue(issues, filePath, `${field} 必须是 16 位小写十六进制指纹`);
+    }
+}
+
+function validateCurrentArtifactMetadata(filePath, data, issues, { filterArtifact = false } = {}) {
+    validateBeijingTimestamp(filePath, data.timestamp, issues);
+    for (const field of ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint']) {
+        validateFingerprint(filePath, field, data[field], issues);
+    }
+    if (filterArtifact) validateFingerprint(filePath, 'filterConfigFingerprint', data.filterConfigFingerprint, issues);
+}
+
+function validateFetchSourceIntegrity(filePath, prefix, entry, issues) {
+    if (!Array.isArray(entry.papers)) return;
+    if (!Number.isInteger(entry.papersCount) || entry.papersCount < 0) {
+        addIssue(issues, filePath, `${prefix}.papersCount 必须是非负整数`);
+    } else if (entry.papersCount !== entry.papers.length) {
+        addIssue(issues, filePath, `${prefix}.papersCount 必须等于 papers 数量`);
+    }
+    if (typeof entry.papersSha256 !== 'string' || !SHA256_RE.test(entry.papersSha256)) {
+        addIssue(issues, filePath, `${prefix}.papersSha256 必须是 SHA-256`);
+    } else if (entry.papersSha256 !== stableContentSha256(entry.papers)) {
+        addIssue(issues, filePath, `${prefix}.papersSha256 与 papers 内容不一致`);
+    }
 }
 
 function ensurePaperId(paper, file, index, issues) {
@@ -102,6 +164,77 @@ function validateSourceHealth(filePath, sourceHealth, issues) {
     if (hfOk !== undefined && typeof hfOk !== 'boolean') {
         addIssue(issues, filePath, 'sourceHealth.huggingface.ok 必须是布尔值');
     }
+}
+
+function validateFetchCheckpointFile(filePath = DEFAULT_FETCH_CHECKPOINT_FILE) {
+    const issues = [];
+    if (!filePath || !fs.existsSync(filePath)) return issues;
+    const data = readJsonSafe(filePath, null);
+    if (!isPlainObject(data)) {
+        addIssue(issues, filePath, '根对象必须是抓取 checkpoint 对象');
+        return issues;
+    }
+    validateBeijingTimestamp(filePath, data.timestamp, issues);
+    for (const field of ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint']) {
+        validateFingerprint(filePath, field, data[field], issues);
+    }
+    const expectedIds = Config.ARXIV_CATEGORIES.map(category => category.id);
+    if (!Array.isArray(data.historicalDedupIds)
+            || data.historicalDedupIds.some(id => typeof id !== 'string' || !id)) {
+        addIssue(issues, filePath, 'historicalDedupIds 必须是非空字符串数组');
+    } else if (new Set(data.historicalDedupIds).size !== data.historicalDedupIds.length) {
+        addIssue(issues, filePath, 'historicalDedupIds 不得包含重复 ID');
+    }
+    if (!Array.isArray(data.categoryOrder)
+            || data.categoryOrder.length !== expectedIds.length
+            || new Set(data.categoryOrder).size !== expectedIds.length
+            || data.categoryOrder.some(id => !expectedIds.includes(id))) {
+        addIssue(issues, filePath, 'categoryOrder 必须完整且唯一覆盖当前 arXiv 类别');
+    }
+    if (!isPlainObject(data.arxiv)) {
+        addIssue(issues, filePath, 'arxiv 必须是按类别 ID 索引的对象');
+    } else {
+        const expectedIdSet = new Set(expectedIds);
+        for (const [categoryId, entry] of Object.entries(data.arxiv)) {
+            if (!expectedIdSet.has(categoryId)) {
+                addIssue(issues, filePath, `arxiv 包含当前配置之外的类别: ${categoryId}`);
+            }
+            if (!isPlainObject(entry) || !['complete', 'failed'].includes(entry.status)) {
+                addIssue(issues, filePath, `arxiv.${categoryId}.status 必须为 complete/failed`);
+                continue;
+            }
+            if (!Array.isArray(entry.papers)) addIssue(issues, filePath, `arxiv.${categoryId}.papers 必须是数组`);
+            validateFetchSourceIntegrity(filePath, `arxiv.${categoryId}`, entry, issues);
+            if (!isPlainObject(entry.health) || entry.health.id !== categoryId || typeof entry.health.ok !== 'boolean') {
+                addIssue(issues, filePath, `arxiv.${categoryId}.health 必须包含匹配 id 和布尔 ok`);
+            }
+            if (entry.status === 'complete' && entry.health?.ok !== true) {
+                addIssue(issues, filePath, `arxiv.${categoryId} complete 时 health.ok 必须为 true`);
+            }
+            if (entry.status === 'failed' && entry.health?.ok !== false) {
+                addIssue(issues, filePath, `arxiv.${categoryId} failed 时 health.ok 必须为 false`);
+            }
+        }
+    }
+    if (data.huggingface !== null && data.huggingface !== undefined) {
+        const entry = data.huggingface;
+        if (!isPlainObject(entry) || !['complete', 'failed'].includes(entry.status)) {
+            addIssue(issues, filePath, 'huggingface.status 必须为 complete/failed');
+        } else {
+            if (!Array.isArray(entry.papers)) addIssue(issues, filePath, 'huggingface.papers 必须是数组');
+            validateFetchSourceIntegrity(filePath, 'huggingface', entry, issues);
+            if (!isPlainObject(entry.health) || typeof entry.health.ok !== 'boolean') {
+                addIssue(issues, filePath, 'huggingface.health 必须包含布尔 ok');
+            }
+            if (entry.status === 'complete' && entry.health?.ok !== true) {
+                addIssue(issues, filePath, 'huggingface complete 时 health.ok 必须为 true');
+            }
+            if (entry.status === 'failed' && entry.health?.ok !== false) {
+                addIssue(issues, filePath, 'huggingface failed 时 health.ok 必须为 false');
+            }
+        }
+    }
+    return issues;
 }
 
 function isPlainObject(value) {
@@ -180,13 +313,15 @@ function validateAnalysisSourceProvenance(filePath, source, prefix, issues) {
 function validateFilteredMetadata(filePath, data, papers, issues) {
     if (Array.isArray(data)) return;
 
+    validateCurrentArtifactMetadata(filePath, data, issues, { filterArtifact: true });
+
     if (data.status === undefined) {
-        addIssue(issues, filePath, 'status 必须存在，且为 filtering/filter_complete/complete');
+        addIssue(issues, filePath, 'status 必须存在，且为 filtering/filter_complete/complete/source_partial_failed');
     } else if (!ALLOWED_FILTERED_STATUSES.has(data.status)) {
         addIssue(issues, filePath, `status 非法: ${data.status}`);
     }
 
-    for (const field of ['filterModel', 'filterPromptHash']) {
+    for (const field of ['filterModel', 'filterPromptHash', 'filterConfigFingerprint']) {
         if (data[field] === undefined || data[field] === '') {
             addIssue(issues, filePath, `${field} 必须存在，用于判断筛选结果是否可安全复用`);
         } else if (typeof data[field] !== 'string') {
@@ -237,6 +372,8 @@ function validateDeepAnalysisMetadata(filePath, data, papers, issues) {
 
 function validateRawCandidateMetadata(filePath, data, papers, issues) {
     if (Array.isArray(data)) return;
+
+    validateCurrentArtifactMetadata(filePath, data, issues);
 
     if (!isPlainObject(data.stats)) {
         addIssue(issues, filePath, 'raw-candidates stats 必须是对象');
@@ -409,8 +546,16 @@ function validateFilterDecisionsFile(filePath = DEFAULT_FILTER_DECISIONS_FILE) {
         return issues;
     }
 
+    validateCurrentArtifactMetadata(filePath, data, issues, { filterArtifact: true });
+
     if (data.stats !== undefined && !isPlainObject(data.stats)) {
         addIssue(issues, filePath, 'stats 必须是对象');
+    }
+
+    for (const field of ['filterModel', 'filterPromptHash', 'filterConfigFingerprint']) {
+        if (typeof data[field] !== 'string' || data[field] === '') {
+            addIssue(issues, filePath, `${field} 必须是非空字符串`);
+        }
     }
 
     if (!isPlainObject(data.decisions)) {
@@ -485,7 +630,7 @@ function validateFilterArtifactsConsistency(filteredPath, decisionsPath) {
     const decisionCount = Object.keys(decisionData.decisions).length;
     const relatedCount = decisions.filter(decision => decision.related === true).length;
 
-    for (const field of ['filterModel', 'filterPromptHash']) {
+    for (const field of ['filterModel', 'filterPromptHash', 'filterConfigFingerprint']) {
         if (filtered[field] !== undefined && decisionData[field] !== undefined && filtered[field] !== decisionData[field]) {
             addIssue(issues, filteredPath, `${field} (${filtered[field]}) 必须等于 filter-decisions.json ${field} (${decisionData[field]})`);
         }
@@ -550,6 +695,82 @@ function validateRawCandidateFilterConsistency(rawPath, decisionsPath) {
     return issues;
 }
 
+function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, filteredPath) {
+    const issues = [];
+    const artifacts = [rawPath, decisionsPath, filteredPath]
+        .filter(Boolean)
+        .filter(filePath => fs.existsSync(filePath))
+        .map(filePath => [filePath, readJsonSafe(filePath, null)])
+        .filter(([, data]) => isPlainObject(data));
+    if (artifacts.length === 0) return issues;
+
+    const fingerprintFields = ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint'];
+    for (const field of fingerprintFields) {
+        const values = artifacts
+            .filter(([, data]) => data[field] !== undefined)
+            .map(([filePath, data]) => [filePath, data[field]]);
+        if (values.length > 1) {
+            const expected = values[0][1];
+            for (const [filePath, value] of values.slice(1)) {
+                if (value !== expected) addIssue(issues, filePath, `${field} 必须与同批次抓取/筛选产物一致`);
+            }
+        }
+    }
+    const filterArtifacts = artifacts.filter(([filePath]) => filePath === decisionsPath || filePath === filteredPath);
+    if (filterArtifacts.length === 2
+            && filterArtifacts[0][1].filterConfigFingerprint !== filterArtifacts[1][1].filterConfigFingerprint) {
+        addIssue(issues, filteredPath, 'filterConfigFingerprint 必须与 filter-decisions.json 一致');
+    }
+
+    if (!fetchPath || !fs.existsSync(fetchPath)) {
+        addIssue(issues, fetchPath || DEFAULT_FETCH_CHECKPOINT_FILE, '当前抓取/筛选产物缺少同批次 fetch-checkpoint.json');
+        return issues;
+    }
+    const checkpoint = readJsonSafe(fetchPath, null);
+    if (!isPlainObject(checkpoint)) return issues;
+    for (const [artifactPath, artifact] of artifacts) {
+        for (const field of fingerprintFields) {
+            if (checkpoint[field] !== artifact[field]) {
+                addIssue(issues, artifactPath, `${field} 必须与 fetch-checkpoint.json 一致`);
+            }
+        }
+    }
+
+    const datedArtifacts = [[fetchPath, checkpoint], ...artifacts]
+        .map(([artifactPath, artifact]) => [artifactPath, getBeijingBatchDate(artifact.timestamp)])
+        .filter(([, date]) => date);
+    if (datedArtifacts.length > 1) {
+        const expectedDate = datedArtifacts[0][1];
+        for (const [artifactPath, date] of datedArtifacts.slice(1)) {
+            if (date !== expectedDate) addIssue(issues, artifactPath, `timestamp 日期必须与同批次 fetch-checkpoint.json 一致 (${expectedDate})`);
+        }
+    }
+
+    const raw = artifacts.find(([filePath]) => filePath === rawPath)?.[1];
+    if (!raw || !hasCompleteSourceHealthForValidation(raw.sourceHealth)) return issues;
+    const expectedIds = Config.ARXIV_CATEGORIES.map(category => category.id);
+    for (const id of expectedIds) {
+        const entry = checkpoint.arxiv?.[id];
+        if (entry?.status !== 'complete' || entry.health?.ok !== true || !Array.isArray(entry.papers)) {
+            addIssue(issues, fetchPath, `raw-candidates.json 来源完整时 arxiv.${id} 必须有可复用的 complete checkpoint`);
+        }
+    }
+    if (checkpoint.huggingface?.status !== 'complete' || checkpoint.huggingface?.health?.ok !== true || !Array.isArray(checkpoint.huggingface?.papers)) {
+        addIssue(issues, fetchPath, 'raw-candidates.json 来源完整时 huggingface 必须有可复用的 complete checkpoint');
+    }
+    return issues;
+}
+
+function hasCompleteSourceHealthForValidation(sourceHealth) {
+    const categories = sourceHealth?.arxiv?.categories;
+    if (!Array.isArray(categories)) return false;
+    const expectedIds = Config.ARXIV_CATEGORIES.map(category => category.id);
+    const byId = new Map(categories.map(category => [category?.id, category]));
+    return byId.size === expectedIds.length
+        && expectedIds.every(id => byId.get(id)?.ok === true)
+        && sourceHealth?.huggingface?.ok === true;
+}
+
 function validateRequiredCompanionFiles(files, filterDecisions) {
     const issues = [];
     if (!files.filteredPapers || !fs.existsSync(files.filteredPapers)) return issues;
@@ -574,14 +795,19 @@ function validateRequiredCompanionFiles(files, filterDecisions) {
 
 function validateCurrentDataFiles(files = Config.FILES) {
     const filterDecisions = resolveFilterDecisionsPath(files);
+    const fetchCheckpoint = files.fetchCheckpoint || (
+        files.rawCandidates ? path.join(path.dirname(files.rawCandidates), 'fetch-checkpoint.json') : DEFAULT_FETCH_CHECKPOINT_FILE
+    );
     return [
         ...validatePapersDatabase(files.papers),
+        ...validateFetchCheckpointFile(fetchCheckpoint),
         ...validatePaperListFile(files.rawCandidates, { rawCandidates: true }),
         ...validateFilterDecisionsFile(filterDecisions),
         ...validatePaperListFile(files.filteredPapers, { filtered: true }),
         ...validatePaperListFile(files.deepAnalysisResult, { deepAnalysis: true }),
         ...validateFilterArtifactsConsistency(files.filteredPapers, filterDecisions),
         ...validateRawCandidateFilterConsistency(files.rawCandidates, filterDecisions),
+        ...validateFetchArtifactConsistency(fetchCheckpoint, files.rawCandidates, filterDecisions, files.filteredPapers),
         ...validateRequiredCompanionFiles(files, filterDecisions)
     ];
 }
@@ -604,6 +830,7 @@ if (require.main === module) {
 
 module.exports = {
     validatePapersDatabase,
+    validateFetchCheckpointFile,
     validatePaperListFile,
     validateFilterDecisionsFile,
     validateCurrentDataFiles,

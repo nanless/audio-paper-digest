@@ -10,6 +10,8 @@
 
 Complete workflow entry point. Executes all steps in Section 3: auto-archive -> load dedup database (including blog-published IDs) -> arXiv fetch -> HF fetch -> merge and deduplicate -> filter blog-published papers -> LLM filter -> update deduplication database -> deep analysis -> incremental save.
 
+Fetching atomically checkpoints each arXiv category and HuggingFace with paper count and stable content SHA, so tampering refetches only that source. Checkpoint/raw/decisions/filtered artifacts must share candidate/source/blog fingerprints and a Beijing batch date. Filtering requires complete source coverage; healthy raw candidates can resume from zero decisions, while filter configuration changes refilter without refetching.
+
 All configurations are read from `scripts/config.js`, with project-root `.env` overrides:
 - `ANALYSIS_CONFIG.concurrency = 3` (`PD_ANALYSIS_CONCURRENCY`)
 - `ANALYSIS_CONFIG.maxRetries = 2` (`PD_ANALYSIS_MAX_RETRIES`)
@@ -246,6 +248,8 @@ Multimodal deep analyzer. The analysis flow is an **up-to-8-round progressive pr
 
 **Stage recovery**: `analysisManifest` persists each stage, `analysisCheckpoint` stores the intermediate body, and `analysisRecoveryImageManifest` stores figure recovery metadata. Failed merges validate an older body independently of the latest failed manifest, so repeated failures cannot erase usable content. Force-reanalyzing an older successful record clears primary and downstream completion markers because no checkpoint exists; a normal failed run resumes at the first incomplete stage.
 
+Stage fingerprints bind the actual truncated primary input, the pre-scoring structure-repair body, and image candidates/download hashes/pre-image body. A change invalidates only that stage and downstream work. Paper payloads are merged only under the shared per-paper lock; batch/final statistics never rewrite cumulative stale paper snapshots.
+
 **API Calls**:
 - `callModel(messages, maxTokens)`: retry-wrapped API call encapsulation (up to 3 inner retries, exponential backoff: first 10s, then double)
 - `_callModelOnce()`: single API call, each retry independently creates an AbortController and 20-minute timeout
@@ -371,6 +375,8 @@ Publish to Hugo blog (GitHub Pages).
 
 **Push boundary**: the review receipt binds the blog `main` baseline at review time and every file SHA-256. `push-blog.py` may create only this manifest's commit from that baseline, or retry the same receipt-recorded publication commit. Manual commits, worktree edits, or a shifted baseline block the push; generation also refuses to overwrite manual Git edits to same-date pages.
 
+All stages share both per-date and repository-global locks. Generation journals each page; review checkpoints the SHA actually read; push compares staged index blobs/deletions with the receipt after staging and before commit so different dates cannot contaminate shared Git state.
+
 **Parameters**: all three scripts accept `--date YYYY-MM-DD`. Only `generate-blog.py` accepts `--all`, `--category`, and a custom data path. `publish-to-blog.py --push` is rejected to prevent the combined workflow from returning.
 
 **Date Filtering**:
@@ -437,6 +443,8 @@ Shared path configuration for Python publish/maintenance scripts. It exposes con
 TOP-N one-liners are generated with bounded concurrency (default 5, configurable from 1 to 5 through `PD_XIAOHONGSHU_ONELINER_CONCURRENCY`). Results are restored to ranking order, and a failed request falls back locally for that paper only.
 
 Generate Xiaohongshu (Little Red Book) copy.
+
+Each successful one-liner is stored under a per-date lock and bound to analysis, prompt, model/endpoint configuration, and sanitation fingerprints. Corrupt cache files are quarantined and rebuilt; fallbacks or changed inputs rerun only that paper. `--date` is strict `YYYY-MM-DD`; this command generates copy only.
 
 - Default data source: `data/current/deep-analysis-result.json`
 - Supports `--top N` curated version (default TOP 5, commonly `--top 3`) and `--all` full summary version

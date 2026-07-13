@@ -82,14 +82,14 @@ async function reanalyzeAll() {
     // 保存中间结果的辅助函数
     const batchDate = inferBatchDate(data, papers);
     const attemptResults = [];
-    const doSave = () => {
+    const doSave = attempted => {
         updateJsonFileLocked(DATA_FILE, current => ({
             ...(!Array.isArray(current) && current ? current : {}),
             timestamp: getBeijingISOString(),
             batchDate,
-            papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), attemptResults, { preserveSuccessfulAnalysis: true })
+            papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), [attempted], { preserveSuccessfulAnalysis: true })
         }));
-        return updateAnalysisDigestStatuses(attemptResults, { batchDate });
+        return updateAnalysisDigestStatuses([attempted], { batchDate });
     };
 
     // 预先建立 ID -> 索引映射，避免并发时 findIndex 可能找到错误位置
@@ -112,6 +112,16 @@ async function reanalyzeAll() {
         maxRetries: 2,
         retryDelayMs: 2000,
         saveInterval: 0,
+        onPaperResultLocked: async (paper, result) => {
+            const attempted = result.result || {
+                ...paper,
+                analysis: null,
+                parsed: null,
+                error: result.error || '分析失败'
+            };
+            attemptResults.push(attempted);
+            doSave(attempted);
+        },
         onPaperStart: (idx, total, paper) => {
             if (CONCURRENCY === 1) {
                 console.log(`\n[reanalyze] ════════════════════════════════════════════`);
@@ -125,14 +135,6 @@ async function reanalyzeAll() {
                 if (targetIdx !== undefined) {
                     papers[targetIdx] = result.result;
                 }
-                attemptResults.push(result.result);
-            } else if (!result.skipped) {
-                attemptResults.push(result.result || {
-                    ...paper,
-                    analysis: null,
-                    parsed: null,
-                    error: result.error || '分析失败'
-                });
             }
             if (CONCURRENCY > 1) {
                 const status = result.success ? '✅' : '❌';
@@ -144,25 +146,24 @@ async function reanalyzeAll() {
                     console.log(`[reanalyze] ❌ 失败: ${paper.arxivId} - ${result.error}`);
                 }
             }
-            if (!result.skipped) {
-                const processed = attemptResults.length;
-                const digestStatus = doSave();
-                const statusNote = digestStatus.updated > 0 ? `，papers.json 状态 ${digestStatus.updated} 篇` : '';
-                console.log(`[reanalyze] 💾 单篇结果已保存 (${processed}/${papers.length})${statusNote}`);
-            }
+            if (!result.skipped) console.log(`[reanalyze] 💾 单篇结果已保存 (${attemptResults.length}/${papers.length})`);
         }
     });
 
-    const status = getAnalysisRunStatus(stats, stats.failed);
-    updateJsonFileLocked(DATA_FILE, current => {
+    const expectedIds = new Set(papers.map(normalizedId).filter(Boolean));
+    const finalPayload = updateJsonFileLocked(DATA_FILE, current => {
+        const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
+        const canonicalById = new Map(currentPapers.map(paper => [normalizedId(paper), paper]));
+        const remainingFailed = [...expectedIds].filter(id => !isSuccessfulAnalysisRecord(canonicalById.get(id))).length;
+        const status = getAnalysisRunStatus({ success: expectedIds.size - remainingFailed }, remainingFailed);
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             timestamp: getBeijingISOString(),
-            papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), attemptResults, { preserveSuccessfulAnalysis: true }),
+            papers: currentPapers,
             stats: {
                 ...(!Array.isArray(current) ? current?.stats : {}),
                 reanalyzed: stats.success,
-                reanalyzeFailed: stats.failed,
+                reanalyzeFailed: remainingFailed,
                 reanalyzeSourceCounts: stats.sourceCounts,
                 reanalyzeAt: getBeijingISOString(),
                 reanalyzeStatus: status
@@ -172,7 +173,8 @@ async function reanalyzeAll() {
         else delete payload.deepAnalysisCompletedAt;
         return payload;
     });
-    const digestStatus = updateAnalysisDigestStatuses(attemptResults, { batchDate });
+    const status = finalPayload.stats.reanalyzeStatus;
+    const digestStatus = { updated: 0 };
 
     console.log('');
     console.log(`[reanalyze] ════════════════════════════════════════════`);
@@ -186,7 +188,7 @@ async function reanalyzeAll() {
     console.log(`[reanalyze] 结束时间: ${getBeijingLocaleString()}`);
     console.log(`[reanalyze] 数据已保存至: ${DATA_FILE}`);
 
-    return { success: stats.success, failed: stats.failed, total: papers.length, status, exitCode: getAnalysisExitCode(status) };
+    return { success: stats.success, failed: finalPayload.stats.reanalyzeFailed, total: papers.length, status, exitCode: getAnalysisExitCode(status) };
 }
 
 if (require.main === module) {

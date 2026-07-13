@@ -105,6 +105,7 @@ Node 脚本通过 `scripts/env-loader.js` 加载当前项目根 `.env`：① `sc
 ```
 data/current/           # 工作数据（gitignored）
   papers.json           # 论文去重数据库，跨运行累积，永不归档
+  fetch-checkpoint.json # 按 arXiv 类别/HF 保存抓取断点、论文数量与内容 SHA；损坏时仅补对应来源
   raw-candidates.json   # 当日合并+博客去重后的筛选候选，便于排查筛选输入
   filter-decisions.json # 当日 LLM 筛选逐篇决策缓存（含 reason/rawResponse）；来源健康时续跑只重试未决论文，不重新抓取
   filtered-papers.json  # 当日筛选结果
@@ -129,7 +130,7 @@ prompts/                # LLM prompt 模板
 
 `papers.json` 同时支持 `data/current/papers.json` 和 `data/papers.json`（旧版路径），均被 `config.js` 引用。**`papers.json` 持久化去重数据库，永不归档**。`full-fetch.js` 每次运行自动备份 `papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天。条目可带 `digestStatus.status`：`pending_analysis` / `analysis_failed` 不参与强去重，便于中断后重跑；所有分析入口应通过 `scripts/digest-status.js` 将成功/失败同步为 `analyzed` / `analysis_failed`。若最新一次分析失败但旧成功分析仍可用，`status` 保持 `analyzed`，失败记录写入 `digestStatus.latestAttemptStatus` / `error`。
 
-`filtered-papers.json` 只有在全部必需来源健康且筛选决定完整时才能写为 `complete`。任一 arXiv 类别或 HuggingFace 来源失败时会写为 `source_partial_failed` 并停止在筛选阶段，禁止分析、写入去重库或在下一次运行中跳过抓取；必须先恢复缺失来源。若来源健康但仅有筛选输出格式异常/临时失败，保留 raw candidates 与决策 checkpoint；下次运行只重试未决论文，禁止重新抓取全部来源。模型输出缺少可解析结论而语义倾向明确时，仅允许一次受控“只输出结论”格式修复；修复响应仍须严格可解析。
+`filtered-papers.json` 只有在七个 arXiv 类别、HuggingFace 必需请求和筛选决定均覆盖完整时才能写为 `complete`。抓取按来源保存论文数量和稳定内容 SHA，篡改或截短只失效对应来源。checkpoint、raw、decisions、filtered 的候选/来源/博客去重指纹和北京时间批次日期必须一致。健康 raw 可从空决定续筛；模型/prompt/协议变化只重筛，不重新抓取。最终 filtered 集合必须精确对应 `related=true` 决定扣除显式归档排除项。
 
 ## 分支策略
 
@@ -148,12 +149,13 @@ prompts/                # LLM prompt 模板
 - **所有脚本必须沙箱外运行**：凡是直接执行项目脚本的抓取、分析、发布、测试、语法检查或数据校验命令，Agent 必须以沙箱外权限启动；沙箱无法访问 `127.0.0.1:7897` 时不得把该失败误判为目标站点或代理故障。仅可在沙箱内阅读文件或由测试框架导入模块，禁止直接运行脚本入口。
 - **`loadPrompt()` 从 markdown 文件内的第一个 fenced code block 提取 prompt**，并替换 `{变量名}` 占位符。内部示例代码块需使用比外层更短的 fence，修改 prompt 后需验证 `utils.js` 解析逻辑兼容。
 - **原子与并发写入**：使用 `writeFileAtomic()` 保存普通数据；分析结果和 `papers.json` 的读改写必须使用跨进程文件锁并校验 `generation`，防止多个入口后写覆盖先写。Python 侧复用 `path_config.py` 的原子写入和 `update_json_file_locked()`，锁目录/owner/generation 协议必须与 Node 一致。
-- **阶段恢复**：深度分析失败结果必须保留 `analysisManifest`、`analysisCheckpoint` 和 `analysisRecoveryImageManifest`，下一次从首个未完成阶段续跑；只有下载、主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计和插图阶段均处于终态时才算成功。失败合并判断旧正文是否可用时必须独立重解析正文，不得因最新失败 manifest 把旧成功正文判为不可用；连续多次失败也不能覆盖旧正文。强制重分析成功旧记录时因无 checkpoint 必须清空主分析及全部下游完成标记。
-- **同篇分析互斥**：所有经 `analysis-engine.js` 的单篇或批量分析都会按规范化 arXiv ID 取得共享运行锁；不得另写绕过此锁的分析入口，否则旧请求可能覆盖较新的强制重分析结果。单篇失败也必须合并 `r.result`，以保留 checkpoint。
+- **阶段恢复**：深度分析失败结果必须保留 `analysisManifest`、`analysisCheckpoint`、`analysisStageCheckpoints` 和 `analysisRecoveryImageManifest`。每个阶段绑定实际输入、模型/协议、prompt、温度和图像配置指纹；指纹变化时回退到上一阶段正文快照，只重跑当前及下游。`full-fetch`、`deep`、`batch`、单篇和重分析入口均须从 canonical deep result 合并失败 checkpoint，并逐论文持久化。只有下载、主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计和插图阶段均处于终态时才算成功。
+- **同篇分析互斥**：所有经 `analysis-engine.js` 的入口都必须按规范化 arXiv ID 取得异步共享运行锁，并在锁内完成“重读最新 canonical 记录 → 分析 → 写回结果和 digest 状态”；禁止在锁外用陈旧对象覆盖较新结果。单篇失败也必须合并 `r.result`，以保留 checkpoint。
 - **博客推送凭证**：严格 review 凭证绑定 review 时博客 `main` 的 `baseHead`；push 只能从该基线创建清单对应的发布提交，或重试凭证记录的同一发布提交。禁止借由空清单、已有本地提交或无关 HEAD 推送未审查内容；生成前必须拒绝覆盖目标日期文章的人工 Git 修改。
 - **arXiv 与 Demo 网络恢复**：深度分析的 arXiv HTML/图片发现默认超时 60 秒，PDF fallback 默认 180 秒且默认最大 50MB，分别支持 `PD_ARXIV_FETCH_TIMEOUT_MS` / `PD_ARXIV_PDF_TIMEOUT_MS` / `PD_ARXIV_PDF_MAX_BYTES`。arXiv 全文、PDF 和图片必须使用项目 HTTP CONNECT 代理 dispatcher；稳定 400/403/404 只尝试一轮；指定版本号不得静默回退到最新版。Demo 页面允许最多 3 次 HTTP 重定向，但每一跳都必须重新执行公网 DNS/IP 校验，严禁自动跟随到私网地址。
 - **北京时间时间戳**：运行数据中的 `timestamp` / `lastUpdated` / `fetchedAt` 应使用 `getBeijingISOString()` 或 Python 端 `now_bj_iso()`，避免 UTC 日期导致跨天归档或发布筛选错误。
-- **博客三阶段必须分离且必须沙箱外运行**：依次运行 `generate-blog.py` → `review-blog.py` → `push-blog.py`。三个入口及兼容 `publish-to-blog.py` 会检测 `CODEX_SANDBOX` 并拒绝在沙箱内运行；`CODEX_SANDBOX_NETWORK_DISABLED` 会被沙箱外权限包装保留，不能单独作为阻断依据。Agent 必须以沙箱外权限启动，禁止在沙箱内重试、跳过 LLM/图片审查或手写凭证。生成阶段禁止 review/push，并使旧 review 凭证及失败集状态失效；review 失败后只可在生成清单、博客 `main` 基线和已通过文件 SHA-256 全部不变时复用失败集，且只复审已修改的失败文件，否则退回全量。review 通过严格 LLM/图片 review 和全量 Hugo gate 后才写入凭证；push 阶段禁止重新生成或 review，只能验证凭证与工作树完全一致后精确 stage、中文详细 commit、`git push origin HEAD:main` 并核对远端 OID。仅用户明确要求发博客时才允许运行 `push-blog.py`。
+- **博客三阶段必须分离且必须沙箱外运行**：依次运行 `generate-blog.py` → `review-blog.py` → `push-blog.py`。生成阶段使用持久 journal；review 逐文件保存实际审查 SHA，内容失败只复审失败页，瞬时错误保持待重试。三个阶段同时使用日期级锁和博客仓库级全局锁；push 在 `git add` 后及 commit 前必须把 index blob/删除状态与 review 凭证逐项比较，防止不同日期共享 worktree/index/HEAD 时交叉提交或回滚。仅用户明确要求发博客时才允许运行 push。
+- **小红书文案续跑**：TOP N one-liner 成功项按 normalized arXiv ID 写入日期缓存，绑定 analysis、prompt、模型/endpoint/温度和清洗契约；日期级锁内逐篇原子保存。坏缓存原子隔离后重建，只重试缺失、失败或指纹失效项；`--date` 必须严格为 `YYYY-MM-DD`。小红书自动发布不属于论文速递必需流程。
 - **发布 review 不得删除合法表格续行**：Markdown 表格允许前导分组列为空，这通常表示沿用上一行模型/配置；不能把 `| | | | Filter2 ... |` 一类数据行当成子标题删除。普通模型名或技术术语未加反引号属于样式建议，不是格式问题。
 - **图片展示顺序与质量门禁**：候选图编号不是最终展示图号；无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 必须按图片在最终正文中的出现顺序归一化。副模型每篇最多插入 4 张图（可用 `PD_IMAGE_INSERTION_MAX` 覆写），必须选择代码生成的稳定段落 ID；非法 ID 和超限图片一律拒绝，不得回退堆到章节末尾。HTML 正文和图注必须同次解析复用，成功下载写入 `data/current/image-cache/`，永久 HTTP/MIME/大小错误不得反复重试。
 - **分析来源与发布门禁**：结果必须保存 `analysisSource`、全文/实际输入字符数、截断状态、来源 SHA-256、抓取告警和置信度。来源指纹变化时清除主分析及下游 checkpoint。仅摘要分析默认禁止发布；人工确认后必须显式设置 `allowAbstractAnalysisPublish: true`，博客同时显示醒目降级提示。最新一次重分析失败时禁止用陈旧正文发布。

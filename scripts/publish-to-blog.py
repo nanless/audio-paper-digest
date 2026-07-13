@@ -22,6 +22,7 @@ load_project_env()
 """
 import json, re, sys, os, subprocess, datetime, base64, concurrent.futures, hashlib
 import ipaddress, shutil, socket, tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -33,11 +34,11 @@ from publish_common import (
     truncate_base64_datauri, fix_yaml_double_commas, strip_raw_inline_html,
     fix_empty_markdown_links, dedupe_image_alts, fix_yaml_unbalanced_quotes,
     sanitize_markdown_for_publish, call_publish_llm_api, PublishLLMUnavailable,
-    PublishDataValidationError, count_blocking_review_issues,
+    PublishDataValidationError, count_blocking_review_issues, is_blocking_review_issue,
     normalize_publish_arxiv_id, review_protocol_failure,
     validate_papers_for_publish, validate_review_payload
 )
-from path_config import CURRENT_DIR, atomic_write_json, atomic_write_text
+from path_config import CURRENT_DIR, atomic_write_json, atomic_write_text, file_lock
 from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env, get_required_fetch_proxy
 from runtime_guard import require_external_runtime
 from utils import strip_md, parse_analysis
@@ -48,6 +49,35 @@ BLOG_REPO = os.path.expanduser(
 CONTENT_DIR = os.path.join(BLOG_REPO, "content", "posts")
 BASE_PATH = os.environ.get("PAPER_DIGEST_BLOG_BASE_PATH", "/audio-paper-digest-blog")
 GITHUB_REMOTE = os.environ.get("PAPER_DIGEST_GITHUB_REMOTE", "origin")
+
+
+def blog_transaction_lock(date_str, *, timeout_seconds=30):
+    """Serialize generation, review, and push for the same publication date."""
+    date_str = validate_publish_date(date_str)
+    return file_lock(
+        CURRENT_DIR / f'blog-publication-{date_str}.transaction',
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def blog_repository_lock(*, timeout_seconds=30):
+    """Serialize all operations that touch the shared blog worktree/index/HEAD."""
+    repo_key = hashlib.sha256(
+        str(Path(BLOG_REPO).expanduser().resolve()).encode('utf-8')
+    ).hexdigest()[:16]
+    return file_lock(
+        CURRENT_DIR / f'blog-repository-{repo_key}.transaction',
+        timeout_seconds=timeout_seconds,
+    )
+
+
+@contextmanager
+def blog_publication_lock(date_str, *, timeout_seconds=30):
+    """Acquire locks in one global order: repository first, publication date second."""
+    date_str = validate_publish_date(date_str)
+    with blog_repository_lock(timeout_seconds=timeout_seconds):
+        with blog_transaction_lock(date_str, timeout_seconds=timeout_seconds):
+            yield
 
 
 def get_blog_review_concurrency():
@@ -1412,6 +1442,24 @@ def review_and_fix_post(file_path):
     return fixed, issues
 
 
+def classify_review_failure(issues):
+    """Separate retryable review infrastructure/protocol failures from content defects."""
+    blocking = [issue for issue in (issues or []) if is_blocking_review_issue(issue)]
+    if not blocking:
+        return None
+    transient_markers = (
+        '连续失败', '调用失败', '返回非 json', '响应不完整', '协议',
+        '下载失败', '超时', 'timeout', 'unavailable',
+    )
+    if all(
+        isinstance(issue, dict)
+        and any(marker in str(issue.get('description', '')).lower() for marker in transient_markers)
+        for issue in blocking
+    ):
+        return 'transient'
+    return 'content'
+
+
 def _review_single_paper(args):
     """并发 review 单篇论文，返回路径、标题、计数和输出。"""
     arxiv_id, slug, date_str, title, require_llm, content_dir = args
@@ -1423,6 +1471,7 @@ def _review_single_paper(args):
     blocking_count = 0
     advisory_count = 0
     lines = []
+    blocking_details = []
 
     # 1. 代码检查
     fixed, issues = review_and_fix_post(paper_file)
@@ -1433,6 +1482,7 @@ def _review_single_paper(args):
     else:
         remaining_code_issues = issues
     blocking_count += len(remaining_code_issues)
+    blocking_details.extend({'severity': 'error', 'description': str(issue)} for issue in remaining_code_issues)
     for issue in issues:
         lines.append(f"    ⚠️  代码层: {issue}")
 
@@ -1463,6 +1513,7 @@ def _review_single_paper(args):
             llm_passed, llm_issues, _ = llm_review_post(content, title, required=require_llm)
         llm_blocking = count_blocking_review_issues(llm_issues)
         blocking_count += llm_blocking
+        blocking_details.extend(issue for issue in llm_issues if is_blocking_review_issue(issue))
         advisory_count += len(llm_issues) - llm_blocking
 
     # 3. 多模态图片审查
@@ -1470,6 +1521,7 @@ def _review_single_paper(args):
     if img_issues:
         img_blocking = count_blocking_review_issues(img_issues)
         blocking_count += img_blocking
+        blocking_details.extend(issue for issue in img_issues if is_blocking_review_issue(issue))
         advisory_count += len(img_issues) - img_blocking
         for issue in img_issues:
             sev = issue.get('severity', 'warning')
@@ -1482,7 +1534,12 @@ def _review_single_paper(args):
         else:
             lines.append(f"    ✅ 无阻断问题（保留 {advisory_count} 个 warning/info）")
 
-    return os.path.realpath(paper_file), title, fixed_count, blocking_count, advisory_count, lines
+    failure_kind = classify_review_failure(blocking_details) if blocking_count else None
+    reviewed_sha256 = _sha256_file(paper_file)
+    return (
+        os.path.realpath(paper_file), title, fixed_count, blocking_count,
+        advisory_count, lines, failure_kind, reviewed_sha256,
+    )
 
 
 def review_all_posts(
@@ -1493,6 +1550,7 @@ def review_all_posts(
     content_dir=None,
     review_paths=None,
     return_details=False,
+    result_callback=None,
 ):
     """三层 review：代码检查 → LLM 文本审查 → 多模态图片审查（论文独立页面并发执行）"""
     print("\n🔍 开始三层 review（代码检查 → LLM 审查 → 多模态图片审查）...")
@@ -1588,7 +1646,14 @@ def review_all_posts(
                 + count_blocking_review_issues(llm_issues)
                 + count_blocking_review_issues(img_issues)
             ),
+            'completed': True,
+            'failureKind': classify_review_failure(
+                list(remaining_code_issues) + list(llm_issues) + list(img_issues)
+            ),
+            'reviewedSha256': _sha256_file(index_file),
         }
+        if result_callback:
+            result_callback(os.path.realpath(index_file), file_results[os.path.realpath(index_file)])
 
     # Review 每篇论文独立页面（并发）
     paper_args = [
@@ -1603,12 +1668,37 @@ def review_all_posts(
         review_concurrency = min(get_blog_review_concurrency(), len(paper_args))
         print(f"\n  🔀 论文页 review 并发度: {review_concurrency}")
         with concurrent.futures.ThreadPoolExecutor(max_workers=review_concurrency) as executor:
-            futures = [executor.submit(_review_single_paper, args) for args in paper_args]
+            futures = {
+                executor.submit(_review_single_paper, args): args
+                for args in paper_args
+            }
             for future in concurrent.futures.as_completed(futures):
-                result = future.result()
+                args = futures[future]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    _arxiv_id, slug, _date, title, _required, worker_content_dir = args
+                    path = os.path.realpath(os.path.join(
+                        worker_content_dir, f'{date_str}-{slug}.md',
+                    ))
+                    print(f"\n  📄 {title[:50]}...")
+                    print(f'    ⚠️ review worker 基础设施异常（{type(exc).__name__}），保留为可重试失败')
+                    total_blocking_issues += 1
+                    file_results[path] = {
+                        'passed': False,
+                        'blockingCount': 1,
+                        'completed': True,
+                        'failureKind': 'transient',
+                    }
+                    if result_callback:
+                        result_callback(path, file_results[path])
+                    continue
                 if result is None:
                     continue
-                path, title, fixed_count, blocking_count, advisory_count, lines = result
+                (
+                    path, title, fixed_count, blocking_count, advisory_count,
+                    lines, failure_kind, reviewed_sha256,
+                ) = result
                 print(f"\n  📄 {title[:50]}...")
                 for line in lines:
                     print(line)
@@ -1618,7 +1708,12 @@ def review_all_posts(
                 file_results[path] = {
                     'passed': blocking_count == 0,
                     'blockingCount': blocking_count,
+                    'completed': True,
+                    'failureKind': failure_kind,
+                    'reviewedSha256': reviewed_sha256,
                 }
+                if result_callback:
+                    result_callback(path, file_results[path])
     elif selected_paths is not None:
         print("\n  ℹ️ 本轮没有需要复审的论文页")
 
@@ -1949,6 +2044,80 @@ def validate_git_index(paths):
         )
 
 
+def validate_git_index_against_review_receipt(receipt, paths):
+    """Verify staged blobs/deletions exactly match the signed review receipt."""
+    manifest = set(_git_relative_manifest(paths))
+    records = receipt.get('files') if isinstance(receipt, dict) else None
+    if not isinstance(records, list):
+        raise PublishDataValidationError('审查凭证缺少可校验的文件记录')
+    by_path = {
+        record.get('path'): record
+        for record in records
+        if isinstance(record, dict) and isinstance(record.get('path'), str)
+    }
+    if set(by_path) != manifest or len(by_path) != len(records):
+        raise PublishDataValidationError('审查凭证与待提交路径集合不一致')
+
+    for relative in sorted(manifest):
+        record = by_path[relative]
+        staged = subprocess.run(
+            ['git', 'show', f':{relative}'],
+            cwd=BLOG_REPO,
+            capture_output=True,
+            env=_git_env(),
+        )
+        if record.get('deleted') is True:
+            if staged.returncode == 0:
+                raise PublishDataValidationError(
+                    f'审查凭证要求删除，但 index 仍包含文件: {relative}'
+                )
+            continue
+        expected = str(record.get('sha256') or '')
+        if not re.fullmatch(r'[0-9a-f]{64}', expected):
+            raise PublishDataValidationError(f'审查凭证文件哈希非法: {relative}')
+        if staged.returncode != 0:
+            raise PublishDataValidationError(f'index 缺少已审查文件: {relative}')
+        actual = hashlib.sha256(staged.stdout).hexdigest()
+        if actual != expected:
+            raise PublishDataValidationError(
+                f'index 中的文件字节与 review 凭证不一致: {relative}'
+            )
+
+
+def validate_git_commit_against_review_receipt(receipt, paths, commit='HEAD'):
+    """Verify the immutable commit tree too, closing commit-hook/race windows."""
+    manifest = set(_git_relative_manifest(paths))
+    records = receipt.get('files') if isinstance(receipt, dict) else None
+    if not isinstance(records, list):
+        raise PublishDataValidationError('审查凭证缺少可校验的文件记录')
+    by_path = {
+        record.get('path'): record
+        for record in records
+        if isinstance(record, dict) and isinstance(record.get('path'), str)
+    }
+    if set(by_path) != manifest or len(by_path) != len(records):
+        raise PublishDataValidationError('审查凭证与待提交路径集合不一致')
+    for relative in sorted(manifest):
+        record = by_path[relative]
+        committed = subprocess.run(
+            ['git', 'show', f'{commit}:{relative}'],
+            cwd=BLOG_REPO,
+            capture_output=True,
+            env=_git_env(),
+        )
+        if record.get('deleted') is True:
+            if committed.returncode == 0:
+                raise PublishDataValidationError(
+                    f'审查凭证要求删除，但提交仍包含文件: {relative}'
+                )
+            continue
+        expected = str(record.get('sha256') or '')
+        if committed.returncode != 0 or hashlib.sha256(committed.stdout).hexdigest() != expected:
+            raise PublishDataValidationError(
+                f'提交中的文件字节与 review 凭证不一致: {relative}'
+            )
+
+
 def _remote_main_oid():
     result = subprocess.run(
         ['git', 'ls-remote', '--exit-code', GITHUB_REMOTE, 'refs/heads/main'],
@@ -1982,7 +2151,7 @@ def _load_push_receipt(date_str):
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PublishDataValidationError(f'无法读取推送审查凭证: {path}') from exc
     base_head = str(receipt.get('baseHead') or '').lower()
-    if receipt.get('schemaVersion') != 2 or not re.fullmatch(r'[0-9a-f]{40,64}', base_head):
+    if receipt.get('schemaVersion') != 3 or not re.fullmatch(r'[0-9a-f]{40,64}', base_head):
         raise PublishDataValidationError('审查凭证缺少受保护的博客基线提交；请重新 review')
     return receipt, path, base_head
 
@@ -1992,6 +2161,9 @@ def git_push(date_str, publish_paths, rollback_state=None):
     manifest = _git_relative_manifest(publish_paths)
     state = rollback_state
     try:
+        verified_paths, _verified_receipt_path = load_verified_review_receipt(date_str)
+        if _git_relative_manifest(verified_paths) != manifest:
+            raise PublishDataValidationError('git push 路径与已验证审查凭证不一致')
         receipt, receipt_path, base_head = _load_push_receipt(date_str)
         current_head = validate_git_publish_branch()
         validate_git_index(publish_paths)
@@ -2004,6 +2176,7 @@ def git_push(date_str, publish_paths, rollback_state=None):
             ).stdout.strip().lower()
             if parent != base_head:
                 raise PublishDataValidationError('待重试发布提交的父提交与 review 基线不一致，拒绝推送')
+            validate_git_commit_against_review_receipt(receipt, publish_paths, current_head)
         if not retrying_existing_commit and current_head != base_head:
             raise PublishDataValidationError('博客 HEAD 已偏离 review 时基线，拒绝推送未审查的本地提交；请重新生成并 review')
         if state is None:
@@ -2016,6 +2189,7 @@ def git_push(date_str, publish_paths, rollback_state=None):
                 env=_git_env(),
             )
             validate_git_index(publish_paths)
+            validate_git_index_against_review_receipt(receipt, publish_paths)
         staged = subprocess.run(
             ['git', 'diff', '--cached', '--quiet', '--', *manifest],
             cwd=BLOG_REPO,
@@ -2024,6 +2198,10 @@ def git_push(date_str, publish_paths, rollback_state=None):
         if retrying_existing_commit:
             local_head = current_head
         elif staged is not None and staged.returncode == 1:
+            # Keep this immediately adjacent to commit so a worktree/index race
+            # cannot turn an already-reviewed path set into unreviewed bytes.
+            validate_git_index(publish_paths)
+            validate_git_index_against_review_receipt(receipt, publish_paths)
             subprocess.run(
                 [
                     'git', 'commit',
@@ -2035,6 +2213,7 @@ def git_push(date_str, publish_paths, rollback_state=None):
                 env=_git_env()
             )
             local_head = validate_git_publish_branch()
+            validate_git_commit_against_review_receipt(receipt, publish_paths, local_head)
             receipt['publicationCommit'] = local_head
             atomic_write_json(receipt_path, receipt, ensure_ascii=False, indent=2)
         elif staged is not None and staged.returncode > 1:
@@ -2086,6 +2265,14 @@ def generation_manifest_path(date_str):
     return CURRENT_DIR / f'blog-generation-manifest-{validate_publish_date(date_str)}.json'
 
 
+def generation_journal_path(date_str):
+    return CURRENT_DIR / f'blog-generation-journal-{validate_publish_date(date_str)}.json'
+
+
+def generation_stage_path(date_str):
+    return CURRENT_DIR / f'blog-generation-stage-{validate_publish_date(date_str)}' / 'posts'
+
+
 def _sha256_file(path):
     digest = hashlib.sha256()
     with open(path, 'rb') as handle:
@@ -2102,6 +2289,191 @@ def _file_fingerprint(path):
     }
 
 
+def _stable_json_sha256(value):
+    encoded = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+    ).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def generation_input_fingerprint(papers, date_str, category, publish_all):
+    """Bind resumable generation to the exact publication inputs and options."""
+    return _stable_json_sha256({
+        'date': validate_publish_date(date_str),
+        'category': category,
+        'publishAll': bool(publish_all),
+        'papers': papers,
+    })
+
+
+def generation_template_fingerprint():
+    """Bind generated bytes to code dependencies, URL base, and persisted schemas."""
+    script_dir = Path(__file__).resolve().parent
+    dependencies = {}
+    for name in ('publish-to-blog.py', 'publish_common.py', 'utils.py', 'path_config.py'):
+        path = script_dir / name
+        dependencies[name] = _sha256_file(path)
+    return _stable_json_sha256({
+        'dependencies': dependencies,
+        'basePath': BASE_PATH,
+        'generationManifestSchema': 2,
+        'generationJournalSchema': 1,
+        'reviewFailureSchema': 2,
+        'reviewReceiptSchema': 3,
+    })
+
+
+def _load_json_object(path, label):
+    try:
+        value = json.loads(Path(path).read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PublishDataValidationError(f'{label}无法解析: {path}') from exc
+    if not isinstance(value, dict):
+        raise PublishDataValidationError(f'{label}格式非法: {path}')
+    return value
+
+
+def _save_generation_journal(path, journal):
+    atomic_write_json(path, journal, ensure_ascii=False, indent=2, mode=0o600)
+
+
+def prepare_generation_journal(
+    date_str, papers, category, publish_all, input_fingerprint,
+    template_fingerprint, base_head,
+):
+    """Create or validate a persistent per-page generation checkpoint."""
+    journal_path = generation_journal_path(date_str)
+    stage = generation_stage_path(date_str)
+    planned = []
+    seen = set()
+    for paper in papers:
+        arxiv_id = paper.get('arxivId', '')
+        slug = paper_slug(paper.get('title', ''), arxiv_id)
+        filename = f'{date_str}-{slug}.md'
+        if filename in seen:
+            raise PublishDataValidationError(f'重复论文会生成同一页面: {filename}')
+        seen.add(filename)
+        planned.append({
+            'arxivId': arxiv_id,
+            'filename': filename,
+            'status': 'pending',
+            'sha256': None,
+        })
+    expected_identity = [(item['arxivId'], item['filename']) for item in planned]
+
+    if journal_path.is_file():
+        journal = _load_json_object(journal_path, '生成续跑日志')
+        actual_identity = [
+            (item.get('arxivId'), item.get('filename'))
+            for item in journal.get('papers', []) if isinstance(item, dict)
+        ]
+        if (
+            journal.get('schemaVersion') != 1
+            or journal.get('date') != date_str
+            or journal.get('inputFingerprint') != input_fingerprint
+            or journal.get('templateFingerprint') != template_fingerprint
+            or journal.get('baseHead') != str(base_head).lower()
+            or actual_identity != expected_identity
+        ):
+            raise PublishDataValidationError(
+                f'未完成 generation 的输入、模板、博客基线或论文集合已变化；'
+                f'拒绝覆盖续跑状态: {journal_path}'
+            )
+        for record in journal['papers']:
+            if record.get('status') == 'generated':
+                staged = stage / record['filename']
+                if not staged.is_file() or _sha256_file(staged) != record.get('sha256'):
+                    raise PublishDataValidationError(
+                        f'已生成页面 checkpoint 损坏: {record["filename"]}'
+                    )
+        return journal, journal_path, stage
+
+    if stage.parent.exists():
+        shutil.rmtree(stage.parent)
+    stage.mkdir(parents=True, exist_ok=True)
+    journal = {
+        'schemaVersion': 1,
+        'date': date_str,
+        'inputFingerprint': input_fingerprint,
+        'templateFingerprint': template_fingerprint,
+        'baseHead': str(base_head).lower(),
+        'category': category,
+        'publishAll': bool(publish_all),
+        'papers': planned,
+        'index': {'filename': f'{date_str}.md', 'status': 'pending', 'sha256': None},
+        'installation': None,
+    }
+    _save_generation_journal(journal_path, journal)
+    return journal, journal_path, stage
+
+
+def prepare_generation_installation(journal, journal_path, staged_posts, content_dir, date_str):
+    """Snapshot the exact pre-install state before any target path is changed."""
+    if journal.get('installation') is not None:
+        return journal['installation']['files']
+    publish_paths = planned_publish_paths(staged_posts, content_dir, date_str)
+    validate_manifest_clean_against_head(publish_paths)
+    staged_names = {path.name for path in Path(staged_posts).glob('*.md')}
+    records = []
+    for target in publish_paths:
+        target = Path(target).resolve()
+        source = Path(staged_posts) / target.name
+        deleting = target.name not in staged_names
+        records.append({
+            'path': target.relative_to(Path(BLOG_REPO).expanduser().resolve()).as_posix(),
+            'delete': deleting,
+            'expectedSha256': None if deleting else _sha256_file(source),
+            'before': _file_fingerprint(target),
+            'installed': False,
+        })
+    journal['installation'] = {'files': records}
+    _save_generation_journal(journal_path, journal)
+    return records
+
+
+def resume_generation_installation(journal, journal_path, staged_posts):
+    """Idempotently finish a journalled install, including crash-after-replace cases."""
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    installed_paths = []
+    for record in journal.get('installation', {}).get('files', []):
+        target = (repo / record['path']).resolve()
+        _manifest_record(target, repo)
+        current = _file_fingerprint(target)
+        expected = {
+            'deleted': bool(record.get('delete')),
+            'sha256': record.get('expectedSha256'),
+        }
+        if record.get('installed'):
+            if current != expected:
+                raise PublishDataValidationError(
+                    f'generation 已安装页面后来发生变化，疑似人工修改: {record["path"]}'
+                )
+            installed_paths.append(target)
+            continue
+        if current == expected:
+            # The process may have died after os.replace/unlink but before the
+            # journal bit was flushed. Adopt only the exact expected bytes.
+            record['installed'] = True
+            _save_generation_journal(journal_path, journal)
+            installed_paths.append(target)
+            continue
+        if current != record.get('before'):
+            raise PublishDataValidationError(
+                f'generation 待安装路径已偏离续跑前快照，拒绝覆盖人工修改: {record["path"]}'
+            )
+        if record.get('delete'):
+            target.unlink(missing_ok=True)
+        else:
+            source = Path(staged_posts) / target.name
+            if not source.is_file() or _sha256_file(source) != record.get('expectedSha256'):
+                raise PublishDataValidationError(f'generation staging 页面缺失或损坏: {target.name}')
+            atomic_write_text(target, source.read_text(encoding='utf-8'))
+        record['installed'] = True
+        _save_generation_journal(journal_path, journal)
+        installed_paths.append(target)
+    return installed_paths
+
+
 def _manifest_record(path, repo):
     path = Path(path).expanduser().resolve()
     try:
@@ -2113,21 +2485,34 @@ def _manifest_record(path, repo):
     return path, relative.as_posix()
 
 
-def save_generation_manifest(date_str, publish_paths):
+def save_generation_manifest(
+    date_str, publish_paths, *, input_fingerprint=None,
+    template_fingerprint=None, base_head=None,
+):
     """Save the exact generated/removed path list for the separate review step."""
     repo = Path(BLOG_REPO).expanduser().resolve()
     records = []
     for item in sorted({Path(value).expanduser().resolve() for value in publish_paths}):
         path, relative = _manifest_record(item, repo)
-        records.append({'path': relative, 'deleted': not path.is_file()})
+        records.append({
+            'path': relative,
+            'deleted': not path.is_file(),
+            'sha256': _sha256_file(path) if path.is_file() else None,
+        })
     manifest = {
-        'schemaVersion': 1,
+        'schemaVersion': 2 if input_fingerprint else 1,
         'date': validate_publish_date(date_str),
         'generatedAt': datetime.datetime.now(
             datetime.timezone(datetime.timedelta(hours=8))
         ).isoformat(),
         'files': records,
     }
+    if input_fingerprint:
+        manifest.update({
+            'inputFingerprint': input_fingerprint,
+            'templateFingerprint': template_fingerprint,
+            'baseHead': str(base_head or '').lower(),
+        })
     path = generation_manifest_path(date_str)
     atomic_write_json(path, manifest, ensure_ascii=False, indent=2)
     # A new generation invalidates both successful review evidence and any
@@ -2149,7 +2534,7 @@ def load_generation_manifest(date_str):
         manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PublishDataValidationError(f'生成清单无法解析: {manifest_path}') from exc
-    if manifest.get('schemaVersion') != 1 or manifest.get('date') != date_str:
+    if manifest.get('schemaVersion') not in {1, 2} or manifest.get('date') != date_str:
         raise PublishDataValidationError('生成清单版本或日期不匹配')
     records = manifest.get('files')
     if not isinstance(records, list) or not records:
@@ -2158,8 +2543,19 @@ def load_generation_manifest(date_str):
     paths = []
     seen = set()
     for record in records:
-        if not isinstance(record, dict) or not isinstance(record.get('path'), str):
+        if (
+            not isinstance(record, dict)
+            or not isinstance(record.get('path'), str)
+            or not isinstance(record.get('deleted'), bool)
+        ):
             raise PublishDataValidationError('生成清单文件记录格式非法')
+        if manifest.get('schemaVersion') == 2:
+            expected_sha = record.get('sha256')
+            if record['deleted']:
+                if expected_sha is not None:
+                    raise PublishDataValidationError('生成清单删除记录不应包含 SHA-256')
+            elif not re.fullmatch(r'[0-9a-f]{64}', str(expected_sha or '')):
+                raise PublishDataValidationError('生成清单非删除记录缺少合法 SHA-256')
         relative = Path(record['path'])
         if relative.is_absolute():
             raise PublishDataValidationError(f'生成清单包含绝对路径: {relative}')
@@ -2168,7 +2564,7 @@ def load_generation_manifest(date_str):
         if normalized in seen:
             raise PublishDataValidationError(f'生成清单包含重复路径: {normalized}')
         seen.add(normalized)
-        if record.get('deleted') is True:
+        if record['deleted']:
             if target.exists():
                 raise PublishDataValidationError(f'生成清单标记删除但文件仍存在: {normalized}')
         elif not target.is_file():
@@ -2177,25 +2573,164 @@ def load_generation_manifest(date_str):
     return paths, manifest_path
 
 
-def save_review_receipt(date_str, publish_paths, hugo_gate, expected_base_head=None):
-    """Persist the exact reviewed blog manifest for a later push-only command."""
+def generation_manifest_expectations(manifest_path, date_str):
+    """Return strict path -> expected deletion state from the generation manifest."""
+    manifest = _load_json_object(manifest_path, '生成清单')
+    if manifest.get('schemaVersion') not in {1, 2} or manifest.get('date') != date_str:
+        raise PublishDataValidationError('生成清单版本或日期不匹配')
+    records = manifest.get('files')
+    if not isinstance(records, list) or not records:
+        raise PublishDataValidationError('生成清单中没有文件')
     repo = Path(BLOG_REPO).expanduser().resolve()
+    expectations = {}
+    for record in records:
+        if (
+            not isinstance(record, dict)
+            or not isinstance(record.get('path'), str)
+            or not isinstance(record.get('deleted'), bool)
+        ):
+            raise PublishDataValidationError('生成清单文件记录格式非法')
+        target = (repo / record['path']).resolve()
+        _target, relative = _manifest_record(target, repo)
+        if relative in expectations:
+            raise PublishDataValidationError(f'生成清单包含重复路径: {relative}')
+        expectations[relative] = record['deleted']
+    return expectations
+
+
+def validate_reviewed_file_hashes(date_str, publish_paths, manifest_path, file_results):
+    """Fail if any reviewed byte changes or an expected page disappears."""
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    expectations = generation_manifest_expectations(manifest_path, date_str)
+    actual_paths = set()
+    for item in publish_paths:
+        path, relative = _manifest_record(item, repo)
+        actual_paths.add(relative)
+        if relative not in expectations:
+            raise PublishDataValidationError(f'发布路径不在 generation manifest: {relative}')
+        expected_deleted = expectations[relative]
+        if expected_deleted:
+            if path.exists():
+                raise PublishDataValidationError(f'generation 预期删除的文件重新出现: {relative}')
+            continue
+        if not path.is_file():
+            raise PublishDataValidationError(f'generation 预期存在的页面在 review 期间消失: {relative}')
+        result = file_results.get(str(path.resolve()), {})
+        reviewed_sha = result.get('reviewedSha256')
+        if result.get('passed') is not True or not re.fullmatch(r'[0-9a-f]{64}', str(reviewed_sha or '')):
+            raise PublishDataValidationError(f'页面缺少已通过 review 的字节凭证: {relative}')
+        if _sha256_file(path) != reviewed_sha:
+            raise PublishDataValidationError(f'页面在 review 后发生变化，拒绝签发凭证: {relative}')
+    if actual_paths != set(expectations):
+        raise PublishDataValidationError('发布路径集合与 generation manifest 不一致')
+    return True
+
+
+def reusable_generation_manifest(
+    date_str, input_fingerprint, template_fingerprint, base_head,
+):
+    """Return an identical completed generation without invalidating review state."""
+    path = generation_manifest_path(date_str)
+    if not path.is_file():
+        return None
+    try:
+        manifest = _load_json_object(path, '生成清单')
+        if (
+            manifest.get('schemaVersion') != 2
+            or manifest.get('date') != date_str
+            or manifest.get('inputFingerprint') != input_fingerprint
+            or manifest.get('templateFingerprint') != template_fingerprint
+            or manifest.get('baseHead') != str(base_head).lower()
+        ):
+            return None
+        repo = Path(BLOG_REPO).expanduser().resolve()
+        paths = []
+        records = manifest.get('files')
+        if not isinstance(records, list) or not records:
+            return None
+        seen = set()
+        for record in records:
+            if (
+                not isinstance(record, dict)
+                or not isinstance(record.get('path'), str)
+                or not isinstance(record.get('deleted'), bool)
+            ):
+                return None
+            relative = Path(record['path'])
+            if relative.is_absolute():
+                return None
+            sha = record.get('sha256')
+            if record['deleted']:
+                if sha is not None:
+                    return None
+            elif not re.fullmatch(r'[0-9a-f]{64}', str(sha or '')):
+                return None
+            target = (repo / relative).resolve()
+            _target, normalized = _manifest_record(target, repo)
+            if normalized in seen:
+                return None
+            seen.add(normalized)
+            expected = {
+                'deleted': record['deleted'],
+                'sha256': sha,
+            }
+            if _file_fingerprint(target) != expected:
+                return None
+            paths.append(target)
+        return paths, path
+    except (KeyError, TypeError, PublishDataValidationError):
+        return None
+
+
+def save_review_receipt(
+    date_str, publish_paths, hugo_gate, expected_base_head=None,
+    generation_manifest=None, reviewed_results=None,
+):
+    """Persist the exact reviewed blog manifest for a later push-only command."""
+    if generation_manifest is None:
+        raise PublishDataValidationError('签发审查凭证必须绑定 generation manifest')
+    if reviewed_results is None:
+        raise PublishDataValidationError('签发审查凭证必须绑定逐文件 review 字节凭证')
+    validate_reviewed_file_hashes(
+        date_str, publish_paths, generation_manifest, reviewed_results,
+    )
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    expectations = (
+        generation_manifest_expectations(generation_manifest, date_str)
+        if generation_manifest is not None else None
+    )
     files = []
     for item in sorted({Path(value).expanduser().resolve() for value in publish_paths}):
         path, relative = _manifest_record(item, repo)
+        expected_deleted = expectations.get(relative) if expectations is not None else not path.is_file()
+        if expectations is not None and relative not in expectations:
+            raise PublishDataValidationError(f'审查路径不在 generation manifest: {relative}')
         exists = path.is_file()
+        if expected_deleted and exists:
+            raise PublishDataValidationError(f'generation 预期删除的文件重新出现: {relative}')
+        if not expected_deleted and not exists:
+            raise PublishDataValidationError(f'generation 预期存在的页面在 review 期间消失: {relative}')
+        reviewed_sha = (
+            None if expected_deleted
+            else reviewed_results.get(str(path.resolve()), {}).get('reviewedSha256')
+        )
+        actual_sha = _sha256_file(path) if exists else None
+        if not expected_deleted and actual_sha != reviewed_sha:
+            raise PublishDataValidationError(f'页面在 receipt 签发时发生变化: {relative}')
         files.append({
             'path': relative,
-            'deleted': not exists,
-            'sha256': _sha256_file(path) if exists else None,
+            'deleted': expected_deleted,
+            'sha256': reviewed_sha,
         })
+    if expectations is not None and {record['path'] for record in files} != set(expectations):
+        raise PublishDataValidationError('审查路径集合与 generation manifest 不一致')
     current_head = validate_git_publish_branch()
     if expected_base_head is not None and current_head != str(expected_base_head).lower():
         raise PublishDataValidationError(
             'review 期间博客 main 基线发生变化，拒绝签发审查凭证'
         )
     receipt = {
-        'schemaVersion': 2,
+        'schemaVersion': 3,
         'date': validate_publish_date(date_str),
         'reviewedAt': datetime.datetime.now(
             datetime.timezone(datetime.timedelta(hours=8))
@@ -2203,6 +2738,9 @@ def save_review_receipt(date_str, publish_paths, hugo_gate, expected_base_head=N
         'strictReview': True,
         'hugoGate': hugo_gate,
         'baseHead': current_head,
+        'generationManifestSha256': (
+            _sha256_file(generation_manifest) if generation_manifest is not None else None
+        ),
         'files': files,
     }
     path = review_receipt_path(date_str)
@@ -2224,13 +2762,27 @@ def save_review_failure_state(
         path, relative = _manifest_record(item, repo)
         result = file_results.get(str(path.resolve()), {})
         fingerprint = _file_fingerprint(path)
+        reviewed_sha = result.get('reviewedSha256')
+        result_passed = bool(result.get('passed', False))
+        if result_passed and (
+            fingerprint['deleted']
+            or not re.fullmatch(r'[0-9a-f]{64}', str(reviewed_sha or ''))
+            or fingerprint['sha256'] != reviewed_sha
+        ):
+            result_passed = False
         records.append({
             'path': relative,
             **fingerprint,
-            'passed': bool(result.get('passed', False)) if not fingerprint['deleted'] else True,
+            'passed': result_passed if not fingerprint['deleted'] else True,
+            'completed': bool(result.get('completed', False)) if not fingerprint['deleted'] else True,
+            'failureKind': (
+                None if result_passed or fingerprint['deleted']
+                else result.get('failureKind') or 'pending'
+            ),
+            'reviewedSha256': reviewed_sha if result_passed else None,
         })
     state = {
-        'schemaVersion': 1,
+        'schemaVersion': 2,
         'date': validate_publish_date(date_str),
         'baseHead': str(base_head).lower(),
         'generationManifestSha256': _sha256_file(manifest_path),
@@ -2260,7 +2812,7 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
     try:
         state = json.loads(state_path.read_text(encoding='utf-8'))
         if (
-            state.get('schemaVersion') != 1
+            state.get('schemaVersion') not in {1, 2}
             or state.get('date') != date_str
             or state.get('baseHead') != str(base_head).lower()
             or state.get('generationManifestSha256') != _sha256_file(manifest_path)
@@ -2283,6 +2835,11 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
         for record, item in zip(records, sorted({Path(value).expanduser().resolve() for value in publish_paths})):
             if not isinstance(record, dict) or not isinstance(record.get('passed'), bool):
                 raise ValueError('失败状态文件记录格式非法')
+            if state.get('schemaVersion') == 2 and (
+                not isinstance(record.get('completed'), bool)
+                or record.get('failureKind') not in {None, 'pending', 'content', 'transient'}
+            ):
+                raise ValueError('失败状态完成标记或失败类型非法')
             current = _file_fingerprint(item)
             recorded = {
                 'deleted': record.get('deleted') is True,
@@ -2292,13 +2849,21 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
             if record['passed']:
                 if current != recorded:
                     raise ValueError(f'已通过文件发生变化: {record.get("path")}')
-                prior_results[key] = {'passed': True}
+                prior_results[key] = {
+                    'passed': True, 'completed': True, 'failureKind': None,
+                    'reviewedSha256': record.get('reviewedSha256') or record.get('sha256'),
+                }
                 continue
             if current['deleted'] != recorded['deleted']:
                 raise ValueError(f'失败文件删除状态变化: {record.get("path")}')
-            if current == recorded:
+            failure_kind = record.get('failureKind') or (
+                'content' if record.get('completed', True) else 'pending'
+            )
+            if current == recorded and failure_kind == 'content':
                 unchanged_failed.append(item.resolve())
-                prior_results[key] = {'passed': False}
+                prior_results[key] = {
+                    'passed': False, 'completed': True, 'failureKind': 'content',
+                }
             else:
                 selected.append(item.resolve())
         return {
@@ -2324,12 +2889,21 @@ def load_verified_review_receipt(date_str):
         receipt = json.loads(path.read_text(encoding='utf-8'))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PublishDataValidationError(f'审查凭证无法解析: {path}') from exc
-    if receipt.get('schemaVersion') != 2 or receipt.get('date') != date_str:
+    if receipt.get('schemaVersion') != 3 or receipt.get('date') != date_str:
         raise PublishDataValidationError('审查凭证版本或日期不匹配')
     if receipt.get('strictReview') is not True:
         raise PublishDataValidationError('审查凭证不是严格 review 结果')
     if receipt.get('hugoGate') != 'hugo':
         raise PublishDataValidationError('审查凭证未通过 Hugo staging gate')
+    manifest_path = generation_manifest_path(date_str)
+    expected_manifest_sha = receipt.get('generationManifestSha256')
+    if (
+        not re.fullmatch(r'[0-9a-f]{64}', str(expected_manifest_sha or ''))
+        or not manifest_path.is_file()
+        or _sha256_file(manifest_path) != expected_manifest_sha
+    ):
+        raise PublishDataValidationError('审查凭证绑定的 generation manifest 缺失或已变化')
+    expectations = generation_manifest_expectations(manifest_path, date_str)
     records = receipt.get('files')
     if not isinstance(records, list) or not records:
         raise PublishDataValidationError('审查凭证没有发布文件清单')
@@ -2352,6 +2926,8 @@ def load_verified_review_receipt(date_str):
         if key in seen:
             raise PublishDataValidationError(f'审查凭证包含重复路径: {key}')
         seen.add(key)
+        if key not in expectations or expectations[key] != (record.get('deleted') is True):
+            raise PublishDataValidationError(f'审查凭证删除语义与 generation manifest 不一致: {key}')
         if record.get('deleted') is True:
             if target.exists():
                 raise PublishDataValidationError(f'review 后应删除的文件重新出现: {key}')
@@ -2363,6 +2939,8 @@ def load_verified_review_receipt(date_str):
             if actual != expected:
                 raise PublishDataValidationError(f'文件在 review 后已变更，拒绝推送: {key}')
         paths.append(target)
+    if seen != set(expectations):
+        raise PublishDataValidationError('审查凭证文件集合与 generation manifest 不一致')
     return paths, path
 
 
@@ -2430,37 +3008,73 @@ def generate_main():
     scored, unscored = score_and_sort(papers)
     print(f"✅ 发布数据预检通过: {len(papers)} 篇论文以 analysis 重解析结果为发布基线")
 
+    input_fingerprint = generation_input_fingerprint(
+        papers, today, category, publish_all,
+    )
+    template_fingerprint = generation_template_fingerprint()
+    base_head = validate_git_publish_branch()
+    reusable = reusable_generation_manifest(
+        today, input_fingerprint, template_fingerprint, base_head,
+    )
+    if reusable is not None:
+        publish_paths, manifest_path = reusable
+        generation_journal_path(today).unlink(missing_ok=True)
+        shutil.rmtree(generation_stage_path(today).parent, ignore_errors=True)
+        print(f'♻️ 相同 generation 已完整安装，复用生成清单且保留 review 状态: {manifest_path}')
+        return
+
     publish_paths = []
     try:
-        with tempfile.TemporaryDirectory(prefix='paper-digest-publish-') as transaction_dir:
-            staged_posts = Path(transaction_dir) / 'content' / 'posts'
-            staged_posts.mkdir(parents=True)
-
-            paper_slugs = {}
-            for paper in papers:
+        journal, journal_path, staged_posts = prepare_generation_journal(
+            today, papers, category, publish_all, input_fingerprint,
+            template_fingerprint, base_head,
+        )
+        paper_slugs = {}
+        for paper, record in zip(papers, journal['papers']):
+            slug = record['filename'][len(today) + 1:-3]
+            paper_slugs[paper.get('arxivId', '')] = slug
+            if record.get('status') != 'generated':
                 paper_md, slug = generate_paper_page(paper, today, category)
                 paper_md = sanitize_markdown_for_publish(paper_md)
-                paper_file = staged_posts / f"{today}-{slug}.md"
-                if paper_file.exists():
+                paper_file = staged_posts / record['filename']
+                if record['filename'] != f'{today}-{slug}.md':
                     raise PublishDataValidationError(
-                        f'重复论文会覆盖同一 staging 文件: {paper_file.name}'
+                        f'论文 slug 在 generation 内不稳定: {record["filename"]} != {today}-{slug}.md'
                     )
                 atomic_write_text(paper_file, paper_md)
-                paper_slugs[paper.get('arxivId', '')] = slug
+                record['sha256'] = _sha256_file(paper_file)
+                record['status'] = 'generated'
+                _save_generation_journal(journal_path, journal)
+                print(f'📄 generation checkpoint: {paper_file.name}')
+            else:
+                print(f'♻️ 跳过已生成论文页: {record["filename"]}')
 
-            print(f"📄 staging 生成 {len(paper_slugs)} 篇论文独立页面")
+        print(f"📄 staging 已具备 {len(paper_slugs)} 篇论文独立页面")
+        index_record = journal['index']
+        if index_record.get('status') != 'generated':
             index_md = generate_index_page(scored, unscored, today, paper_slugs, category)
             index_md = sanitize_markdown_for_publish(index_md)
-            index_file = staged_posts / f"{today}.md"
+            index_file = staged_posts / index_record['filename']
             atomic_write_text(index_file, index_md)
+            index_record['sha256'] = _sha256_file(index_file)
+            index_record['status'] = 'generated'
+            _save_generation_journal(journal_path, journal)
             print(f"📄 staging 汇总页面: {index_file.name} ({len(index_md)} chars)")
+        else:
+            index_file = staged_posts / index_record['filename']
+            if not index_file.is_file() or _sha256_file(index_file) != index_record.get('sha256'):
+                raise PublishDataValidationError('汇总页 generation checkpoint 损坏')
+            print(f'♻️ 跳过已生成汇总页: {index_file.name}')
 
-            validate_staged_posts(staged_posts, today)
-            # Refuse to overwrite/delete same-day posts carrying manual Git changes.
-            validate_manifest_clean_against_head(list(content_dir.glob(f'{today}*.md')))
-            publish_paths = install_staged_posts(staged_posts, content_dir, today)
+        validate_staged_posts(staged_posts, today)
+        prepare_generation_installation(
+            journal, journal_path, staged_posts, content_dir, today,
+        )
+        publish_paths = resume_generation_installation(
+            journal, journal_path, staged_posts,
+        )
     except PublishDataValidationError as exc:
-        print(f"\n❌ 生成事务已阻断，博客工作树未写入本次 staging 内容: {exc}")
+        print(f"\n❌ 生成事务已阻断；可在修复原因后使用同一输入安全续跑: {exc}")
         sys.exit(1)
     except (subprocess.CalledProcessError, OSError) as exc:
         print(f"\n❌ 生成事务失败，博客工作树未写入本次 staging 内容: {exc}")
@@ -2468,14 +3082,31 @@ def generate_main():
 
     deleted_count = sum(1 for path in publish_paths if not Path(path).exists())
     print(f"📦 已安装本次清单: {len(publish_paths) - deleted_count} 个更新，{deleted_count} 个旧页删除")
-    manifest_path = save_generation_manifest(today, publish_paths)
+    manifest_path = save_generation_manifest(
+        today, publish_paths,
+        input_fingerprint=input_fingerprint,
+        template_fingerprint=template_fingerprint,
+        base_head=base_head,
+    )
+    generation_journal_path(today).unlink(missing_ok=True)
+    shutil.rmtree(generation_stage_path(today).parent, ignore_errors=True)
     print(f"🧾 生成清单: {manifest_path}")
     print(f"\n✅ 博客文件生成完成；下一步: python3 scripts/review-blog.py --date {today}")
 
 
 def main():
     """Compatibility generation entry point; review and push live in separate scripts."""
-    return generate_main()
+    target_date = None
+    for index, arg in enumerate(sys.argv[1:]):
+        if arg == '--date' and index + 2 < len(sys.argv):
+            target_date = sys.argv[index + 2]
+    date_str = validate_publish_date(get_today_bj(target_date))
+    try:
+        with blog_publication_lock(date_str):
+            return generate_main()
+    except TimeoutError as exc:
+        print(f'\n❌ 同日期博客事务正在运行: {exc}')
+        sys.exit(1)
 
 
 if __name__ == '__main__':

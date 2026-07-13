@@ -111,18 +111,28 @@ describe('HuggingFace 抓取健康状态', () => {
         assert.strictEqual(papers._sourceHealth.successfulRequests, 2);
     });
 
-    it('一个 API 失败、另一个成功为空时保留部分失败诊断但不误报全失败', async () => {
-        const papers = await fetchHuggingFacePapers(new Set(), {
+    it('一个必需 API 失败时按部分来源失败阻断，不能把不完整候选标成健康', async () => {
+        await assert.rejects(() => fetchHuggingFacePapers(new Set(), {
             days: 7,
             minUpvotes: 0,
             fetchFn: url => url.includes('daily_papers')
                 ? { ok: false, data: null, error: 'daily unavailable' }
                 : { ok: true, data: [], error: null },
             sleepFn: async () => {}
-        });
+        }), error => error.code === 'SOURCE_FETCH_FAILED'
+            && error.sourceHealth.ok === false
+            && error.sourceHealth.allFailed === false
+            && error.sourceHealth.failures.length === 1);
+    });
 
-        assert.strictEqual(papers._sourceHealth.ok, true);
-        assert.strictEqual(papers._sourceHealth.allFailed, false);
-        assert.strictEqual(papers._sourceHealth.failures.length, 1);
+    it('非空数组却没有任何合法论文条目时拒绝假阳性成功', async () => {
+        await assert.rejects(() => fetchHuggingFacePapers(new Set(), {
+            days: 7,
+            minUpvotes: 0,
+            fetchFn: () => ({ ok: true, data: [{ id: 'missing-date' }], error: null }),
+            sleepFn: async () => {}
+        }), error => error.code === 'SOURCE_FETCH_FAILED'
+            && error.sourceHealth.ok === false
+            && error.sourceHealth.failures.some(item => /no legal paper items/.test(item.error)));
     });
 });

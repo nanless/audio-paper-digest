@@ -362,6 +362,9 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '') {
                 audit,
                 attempts: attempt,
                 model: DEEP_CONFIG.model,
+                protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
+                endpointSha256: crypto.createHash('sha256').update(DEEP_CONFIG.endpoint).digest('hex'),
+                maxTokens: 16000,
                 temperature: SCORING_AUDIT_TEMPERATURE,
                 promptTemplateSha256,
                 evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex')
@@ -393,6 +396,121 @@ const RECOVERY_STAGE_ORDER = Object.freeze([
     'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
 ]);
 
+const RECOVERY_PROMPT_FILES = Object.freeze({
+    primaryAnalysis: 'prompts/deep-analysis.md',
+    openSourceScan: 'prompts/opensource-scan.md',
+    revision: 'prompts/gap-fill.md',
+    tableRepair: 'prompts/table-fill.md',
+    methodRepair: 'prompts/method-fill.md',
+    structureRepair: 'prompts/structure-repair.md',
+    scoringAudit: 'prompts/scoring-audit.md',
+    imageSupplement: 'prompts/image-supplement.md'
+});
+
+function stableFingerprint(value) {
+    const normalize = item => {
+        if (Array.isArray(item)) return item.map(normalize);
+        if (!item || typeof item !== 'object') return item;
+        return Object.fromEntries(Object.keys(item).sort().map(key => [key, normalize(item[key])]));
+    };
+    return crypto.createHash('sha256').update(JSON.stringify(normalize(value))).digest('hex');
+}
+
+function promptTemplateSha256(relativePath) {
+    return crypto.createHash('sha256')
+        .update(fs.readFileSync(path.join(__dirname, '..', relativePath)))
+        .digest('hex');
+}
+
+function modelFingerprint(config, temperature = API_TEMPERATURE) {
+    return {
+        model: config.model || '',
+        endpoint: config.endpoint || '',
+        protocol: detectApiType(config.endpoint || '', config.model || ''),
+        temperature,
+        maxTokens: API_MAX_TOKENS
+    };
+}
+
+function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
+    const usedTextSha256 = crypto.createHash('sha256').update(textForAnalysis).digest('hex');
+    const primaryContext = {
+        ...modelFingerprint(DEEP_CONFIG),
+        promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.primaryAnalysis),
+        usedTextSha256,
+        arxivId,
+        title: paper.title || '',
+        authors: paper.authors || [],
+        categories: paper.categories || []
+    };
+    const textStage = stage => stableFingerprint({
+        ...modelFingerprint(DEEP_CONFIG),
+        promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES[stage]),
+        usedTextSha256
+    });
+    return {
+        primaryAnalysis: stableFingerprint(primaryContext),
+        openSourceScan: textStage('openSourceScan'),
+        demoLinkScan: stableFingerprint({ implementation: 'demo-link-scan-v1' }),
+        revision: textStage('revision'),
+        tableRepair: textStage('tableRepair'),
+        methodRepair: textStage('methodRepair'),
+        structureRepair: textStage('structureRepair'),
+        imageSupplement: stableFingerprint({
+            ...modelFingerprint(SECONDARY_CONFIG, IMAGE_PLAN_TEMPERATURE),
+            enabled: isDualModel,
+            promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.imageSupplement),
+            imageCandidateMax: IMAGE_CANDIDATE_MAX,
+            imageMaxCount: IMAGE_MAX_COUNT,
+            imageMaxBytes: IMAGE_MAX_BYTES,
+            imageMaxBase64Chars: IMAGE_MAX_BASE64_CHARS,
+            imageTotalBase64Chars: IMAGE_TOTAL_BASE64_CHARS,
+            imageInsertionMax: IMAGE_INSERTION_MAX
+        })
+    };
+}
+
+function buildImageSupplementFingerprint(baseFingerprint, candidateImageInfos, downloadedImages, preImageAnalysis) {
+    return stableFingerprint({
+        configurationFingerprint: baseFingerprint,
+        candidates: (candidateImageInfos || []).map(info => ({
+            url: info.url || '',
+            caption: info.caption || ''
+        })),
+        downloads: (downloadedImages || []).map(image => ({
+            url: image.url || '',
+            sha256: image.sha256 || ''
+        })),
+        preImageAnalysisSha256: crypto.createHash('sha256').update(String(preImageAnalysis || '')).digest('hex')
+    });
+}
+
+function hasActualAnalysisInputChanged(previousSource, currentSource) {
+    return previousSource?.usedTextSha256 !== currentSource?.usedTextSha256;
+}
+
+function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint) {
+    const current = manifest.stages?.[stage];
+    if (!current || !isRecoveryStageComplete(manifest, stage) || current.fingerprint === fingerprint) return false;
+    const index = RECOVERY_STAGE_ORDER.indexOf(stage);
+    const stagesToDelete = index >= 0 ? RECOVERY_STAGE_ORDER.slice(index) : [stage];
+    const checkpoints = paper.analysisStageCheckpoints || {};
+    const previousStage = index > 0 ? RECOVERY_STAGE_ORDER[index - 1] : null;
+    if (previousStage && typeof checkpoints[previousStage] === 'string') {
+        paper.analysisCheckpoint = checkpoints[previousStage];
+    } else {
+        delete paper.analysisCheckpoint;
+        for (const recoveryStage of RECOVERY_STAGE_ORDER) delete manifest.stages[recoveryStage];
+    }
+    for (const recoveryStage of stagesToDelete) {
+        delete manifest.stages[recoveryStage];
+        delete checkpoints[recoveryStage];
+    }
+    paper.analysisStageCheckpoints = checkpoints;
+    console.log(`    [deep] ⚠️  ${stage} 指纹变化，已失效该阶段及下游恢复状态`);
+    return true;
+}
+
 function createAnalysisRecoveryManifest(paper) {
     const existing = paper?.analysisManifest;
     const stages = existing && existing.version === RECOVERY_MANIFEST_VERSION && existing.stages && typeof existing.stages === 'object'
@@ -402,12 +520,16 @@ function createAnalysisRecoveryManifest(paper) {
         stages[stage] && !isRecoveryStageComplete({ stages }, stage)
     );
     if (firstFailedIndex >= 0) {
-        for (const stage of RECOVERY_STAGE_ORDER.slice(firstFailedIndex + 1)) delete stages[stage];
+        for (const stage of RECOVERY_STAGE_ORDER.slice(firstFailedIndex + 1)) {
+            delete stages[stage];
+            if (paper?.analysisStageCheckpoints) delete paper.analysisStageCheckpoints[stage];
+        }
     }
     // 成功结果不会长期保存正文 checkpoint。强制重分析这类记录时，必须同时
     // 清除主分析及全部下游阶段，否则新正文会错误复用旧轮次的审校/评分状态。
     if (isRecoveryStageComplete({ stages }, 'primaryAnalysis') && !paper?.analysisCheckpoint) {
         for (const stage of RECOVERY_STAGE_ORDER) delete stages[stage];
+        delete paper.analysisStageCheckpoints;
     }
     return {
         version: RECOVERY_MANIFEST_VERSION,
@@ -440,6 +562,13 @@ function saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest
     paper.analysisCheckpoint = String(analysis || '');
     paper.analysisManifest = analysisManifest;
     if (imageManifest) paper.imageManifest = imageManifest;
+    paper.analysisStageCheckpoints = paper.analysisStageCheckpoints || {};
+    for (const stage of RECOVERY_STAGE_ORDER) {
+        if (isRecoveryStageComplete(analysisManifest, stage)
+            && typeof paper.analysisStageCheckpoints[stage] !== 'string') {
+            paper.analysisStageCheckpoints[stage] = paper.analysisCheckpoint;
+        }
+    }
 }
 
 function getPreProvidedImageUrls(paper) {
@@ -1932,18 +2061,27 @@ async function analyzePaperDeep(paper) {
         fullTextAvailable: hasFullText,
         truncated: rawTextForAnalysis.length > textForAnalysis.length,
         sourceSha256: crypto.createHash('sha256').update(rawTextForAnalysis).digest('hex'),
+        usedTextSha256: crypto.createHash('sha256').update(textForAnalysis).digest('hex'),
         analysisConfidence: hasFullText ? 'full_text' : 'degraded_abstract',
         htmlAvailability: sourceDetails.htmlAvailability,
         htmlAttempts: sourceDetails.htmlAttempts,
         warnings: sourceWarnings
     };
     const previousSource = analysisManifest.sourceAcquisition;
-    if (paper.analysisCheckpoint && (!previousSource?.sourceSha256 || previousSource.sourceSha256 !== sourceProvenance.sourceSha256)) {
+    if (paper.analysisCheckpoint && hasActualAnalysisInputChanged(previousSource, sourceProvenance)) {
         for (const stage of RECOVERY_STAGE_ORDER) delete analysisManifest.stages[stage];
         delete paper.analysisCheckpoint;
-        console.log(`    [deep] ⚠️  checkpoint 文本来源指纹变化，已清除主分析及下游恢复状态`);
+        delete paper.analysisStageCheckpoints;
+        console.log(`    [deep] ⚠️  checkpoint 实际分析输入指纹变化，已清除主分析及下游恢复状态`);
     }
     analysisManifest.sourceAcquisition = sourceProvenance;
+    const recoveryFingerprints = buildRecoveryFingerprints(paper, textForAnalysis, arxivId);
+    for (const stage of [
+        'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
+        'tableRepair', 'methodRepair', 'structureRepair'
+    ]) {
+        invalidateRecoveryStageIfChanged(paper, analysisManifest, stage, recoveryFingerprints[stage]);
+    }
     console.log(`    [deep] 文本来源: ${analysisSource} | chars=${rawTextForAnalysis.length} | confidence=${sourceProvenance.analysisConfidence} | warnings=${sourceWarnings.length}`);
 
     if (!textForAnalysis || textForAnalysis.trim().length < 10) {
@@ -2039,10 +2177,21 @@ async function analyzePaperDeep(paper) {
                 : downloadOutcomes.some(item => item.status === 'transient_failure')
                     ? 'transient_failure'
                     : 'no_downloadable_images';
+    const imageDownloadFingerprint = stableFingerprint({
+        enabled: isDualModel,
+        secondary: modelFingerprint(SECONDARY_CONFIG, IMAGE_PLAN_TEMPERATURE),
+        candidates: candidateImageInfos.map(info => ({ url: info.url, caption: info.caption || '' })),
+        imageCandidateMax: IMAGE_CANDIDATE_MAX,
+        imageMaxCount: IMAGE_MAX_COUNT,
+        imageMaxBytes: IMAGE_MAX_BYTES,
+        imageMaxBase64Chars: IMAGE_MAX_BASE64_CHARS,
+        imageTotalBase64Chars: IMAGE_TOTAL_BASE64_CHARS
+    });
     markRecoveryStage(analysisManifest, 'imageDownload', downloadStatus, {
         attempted: candidateImageUrls.length,
         downloaded: downloadedImages.length,
-        outcomes: downloadOutcomes
+        outcomes: downloadOutcomes,
+        fingerprint: imageDownloadFingerprint
     });
 
     const prompt = loadPrompt('prompts/deep-analysis.md', {
@@ -2073,7 +2222,7 @@ async function analyzePaperDeep(paper) {
                 [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
                 API_MAX_TOKENS, 3, DEEP_CONFIG
             );
-            markRecoveryStage(analysisManifest, 'primaryAnalysis', 'complete');
+            markRecoveryStage(analysisManifest, 'primaryAnalysis', 'complete', { fingerprint: recoveryFingerprints.primaryAnalysis });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.log(`    [deep] ✅ 主模型文本分析完成 (${analysis.length} chars)`);
         } catch (err) {
@@ -2095,7 +2244,7 @@ async function analyzePaperDeep(paper) {
                 [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
                 API_MAX_TOKENS
             );
-            markRecoveryStage(analysisManifest, 'primaryAnalysis', 'complete');
+            markRecoveryStage(analysisManifest, 'primaryAnalysis', 'complete', { fingerprint: recoveryFingerprints.primaryAnalysis });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.log(`    [deep] ✅ 文本分析完成`);
         } catch (err) {
@@ -2117,7 +2266,9 @@ async function analyzePaperDeep(paper) {
                 analysis = syncResourceFieldsFromOpenSource(analysis, ossText);
                 console.log(`    [deep] ✅ 开源扫描完成`);
             }
-            markRecoveryStage(analysisManifest, 'openSourceScan', ossText ? 'complete' : 'invalid_output');
+            markRecoveryStage(analysisManifest, 'openSourceScan', ossText ? 'complete' : 'invalid_output', {
+                fingerprint: recoveryFingerprints.openSourceScan
+            });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             if (!ossText) {
                 const error = new Error('开源扫描输出为空');
@@ -2169,7 +2320,10 @@ async function analyzePaperDeep(paper) {
             }
         }
         if (!demoScanError) {
-            markRecoveryStage(analysisManifest, 'demoLinkScan', 'complete', { linksFound: demoFoundLinks.length });
+            markRecoveryStage(analysisManifest, 'demoLinkScan', 'complete', {
+                linksFound: demoFoundLinks.length,
+                fingerprint: recoveryFingerprints.demoLinkScan
+            });
         }
         saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
         if (demoScanError) throw demoScanError;
@@ -2192,7 +2346,7 @@ async function analyzePaperDeep(paper) {
                 analysis,
                 extractSectionByTitle(analysis, '开源详情')
             );
-            markRecoveryStage(analysisManifest, 'revision', 'complete');
+            markRecoveryStage(analysisManifest, 'revision', 'complete', { fingerprint: recoveryFingerprints.revision });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.log(`    [deep] ✅ 审校重写完成`);
         } catch (e) {
@@ -2211,7 +2365,9 @@ async function analyzePaperDeep(paper) {
                 analysis = removeUnapprovedMarkdownImages(fixed.trim(), []);
                 console.log(`    [deep] ✅ 表格补充完成`);
             }
-            markRecoveryStage(analysisManifest, 'tableRepair', changed ? 'complete' : 'not_needed');
+            markRecoveryStage(analysisManifest, 'tableRepair', changed ? 'complete' : 'not_needed', {
+                fingerprint: recoveryFingerprints.tableRepair
+            });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
         } catch (e) {
             markRecoveryStage(analysisManifest, 'tableRepair', 'transient_failure', { error: e.message });
@@ -2229,7 +2385,9 @@ async function analyzePaperDeep(paper) {
                 analysis = removeUnapprovedMarkdownImages(fixed.trim(), []);
                 console.log(`    [deep] ✅ 方法概述补充完成`);
             }
-            markRecoveryStage(analysisManifest, 'methodRepair', changed ? 'complete' : 'not_needed');
+            markRecoveryStage(analysisManifest, 'methodRepair', changed ? 'complete' : 'not_needed', {
+                fingerprint: recoveryFingerprints.methodRepair
+            });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
         } catch (e) {
             markRecoveryStage(analysisManifest, 'methodRepair', 'transient_failure', { error: e.message });
@@ -2263,7 +2421,8 @@ async function analyzePaperDeep(paper) {
             }
             markRecoveryStage(analysisManifest, 'structureRepair', structureIssues.length > 0 ? 'complete' : 'not_needed', {
                 deterministicNormalization: normalizedChanged,
-                normalizationIssues: preNormalizationIssues
+                normalizationIssues: preNormalizationIssues,
+                fingerprint: recoveryFingerprints.structureRepair
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
         } catch (error) {
@@ -2275,26 +2434,44 @@ async function analyzePaperDeep(paper) {
 
     // 第3.7轮：主模型只审计文档类型和八维评分，避免长文审校时发生重复扣分。
     const scoringStage = analysisManifest.stages.scoringAudit;
+    const scoringInputAnalysis = typeof paper.analysisStageCheckpoints?.structureRepair === 'string'
+        ? paper.analysisStageCheckpoints.structureRepair
+        : analysis;
+    const scoringInputSha256 = crypto.createHash('sha256').update(scoringInputAnalysis).digest('hex');
     if (isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
         const currentPromptTemplateSha256 = crypto.createHash('sha256')
             .update(fs.readFileSync(path.join(__dirname, '..', 'prompts', 'scoring-audit.md')))
             .digest('hex');
         const currentEvidenceSha256 = crypto.createHash('sha256')
-            .update(buildTypeAwareSourceContext(analysis, textForAnalysis))
+            .update(buildTypeAwareSourceContext(scoringInputAnalysis, textForAnalysis))
             .digest('hex');
         const fingerprintChanged = scoringStage.model !== DEEP_CONFIG.model
+            || scoringStage.protocol !== detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model)
+            || scoringStage.endpointSha256 !== crypto.createHash('sha256').update(DEEP_CONFIG.endpoint).digest('hex')
+            || scoringStage.maxTokens !== 16000
             || scoringStage.temperature !== SCORING_AUDIT_TEMPERATURE
             || scoringStage.promptTemplateSha256 !== currentPromptTemplateSha256
+            || scoringStage.scoringInputSha256 !== scoringInputSha256
             || scoringStage.evidenceSha256 !== currentEvidenceSha256;
         if (fingerprintChanged) {
+            if (typeof paper.analysisStageCheckpoints?.structureRepair === 'string') {
+                paper.analysisCheckpoint = paper.analysisStageCheckpoints.structureRepair;
+                analysis = paper.analysisCheckpoint;
+            } else {
+                analysis = scoringInputAnalysis;
+            }
             delete analysisManifest.stages.scoringAudit;
             delete analysisManifest.stages.imageSupplement;
+            if (paper.analysisStageCheckpoints) {
+                delete paper.analysisStageCheckpoints.scoringAudit;
+                delete paper.analysisStageCheckpoints.imageSupplement;
+            }
             console.log(`    [deep] ⚠️  评分审计指纹变化，已失效评分与插图恢复状态`);
         }
     }
     if (!isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
         try {
-            const scoringResult = await auditTypeAwareScoringDetailed(analysis, textForAnalysis);
+            const scoringResult = await auditTypeAwareScoringDetailed(scoringInputAnalysis, textForAnalysis);
             analysis = scoringResult.analysis;
             const auditedParsed = parseAnalysis(analysis);
             const auditedInvalidReason = getInvalidAnalysisReason(analysis, auditedParsed);
@@ -2314,8 +2491,12 @@ async function analyzePaperDeep(paper) {
             markRecoveryStage(analysisManifest, 'scoringAudit', 'complete', {
                 attempts: scoringResult.attempts,
                 model: scoringResult.model,
+                protocol: scoringResult.protocol,
+                endpointSha256: scoringResult.endpointSha256,
+                maxTokens: scoringResult.maxTokens,
                 temperature: scoringResult.temperature,
                 promptTemplateSha256: scoringResult.promptTemplateSha256,
+                scoringInputSha256,
                 evidenceSha256: scoringResult.evidenceSha256,
                 previousScore: Number.isFinite(previousScore) ? previousScore : null,
                 finalScore: Number.isFinite(finalScore) ? finalScore : null,
@@ -2334,6 +2515,24 @@ async function analyzePaperDeep(paper) {
 
     // 最后一轮：副模型基于最终文本筛选高价值图片，代码按 JSON 计划做受限局部插图合并。
     // 必须放在纯文本修复之后，否则 gap-fill / 表格补充 / 方法补充可能删掉图片。
+    const preImageAnalysis = isRecoveryStageComplete(analysisManifest, 'scoringAudit')
+        ? String(paper.analysisStageCheckpoints?.scoringAudit || paper.analysisCheckpoint || analysis)
+        : analysis;
+    const imageSupplementFingerprint = buildImageSupplementFingerprint(
+        recoveryFingerprints.imageSupplement,
+        candidateImageInfos,
+        downloadedImages,
+        preImageAnalysis
+    );
+    invalidateRecoveryStageIfChanged(
+        paper,
+        analysisManifest,
+        'imageSupplement',
+        imageSupplementFingerprint
+    );
+    if (isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
+        analysis = preImageAnalysis;
+    }
     if (isDualModel && downloadedImages.length > 0 && !isRecoveryStageComplete(analysisManifest, 'imageSupplement')) {
         try {
             const imageResult = await applyImageSupplement(paper, arxivId, analysis, imageInfos, downloadedImages);
@@ -2359,7 +2558,8 @@ async function analyzePaperDeep(paper) {
                 markRecoveryStage(analysisManifest, 'imageSupplement', imageStatus, {
                     parseStatus: imageResult.parseDiagnostics?.status || 'unknown',
                     selectedCount: selectedImageUrls.length,
-                    rejectedInsertions: (imageResult.insertionDiagnostics || []).filter(item => !item.inserted)
+                    rejectedInsertions: (imageResult.insertionDiagnostics || []).filter(item => !item.inserted),
+                    fingerprint: imageSupplementFingerprint
                 });
             }
         } catch (err) {
@@ -2377,7 +2577,8 @@ async function analyzePaperDeep(paper) {
         markRecoveryStage(analysisManifest, 'imageSupplement', status, {
             reason: status === 'transient_failure' ? 'candidate_downloads_failed'
                 : status === 'no_downloadable_images' ? 'all_candidates_permanently_rejected'
-                    : undefined
+                    : undefined,
+            fingerprint: imageSupplementFingerprint
         });
     }
 
@@ -2403,6 +2604,7 @@ async function analyzePaperDeep(paper) {
     }
     delete paper.analysisCheckpoint;
     delete paper.analysisRecoveryImageManifest;
+    delete paper.analysisStageCheckpoints;
 
     return {
         ...paper,
@@ -3263,7 +3465,13 @@ module.exports = {
     buildTypeAwareSourceContext,
     createAnalysisRecoveryManifest,
     markRecoveryStage,
-    isRecoveryStageComplete
+    isRecoveryStageComplete,
+    saveAnalysisCheckpoint,
+    stableFingerprint,
+    buildRecoveryFingerprints,
+    buildImageSupplementFingerprint,
+    hasActualAnalysisInputChanged,
+    invalidateRecoveryStageIfChanged
 };
 
 // 直接运行测试

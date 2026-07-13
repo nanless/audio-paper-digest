@@ -143,11 +143,12 @@ HF 特有字段（共 7 个）：
 
 筛选阶段会增量保存三类文件：
 - `data/current/raw-candidates.json`：合并和博客去重后的候选输入，并包含 arXiv/HF 的 `sourceHealth`、请求次数、成功次数和失败明细。抓取器区分真实成功空响应与全请求失败；所有尝试均失败时抛错并中止，禁止生成伪成功空批次
-- `data/current/filter-decisions.json`：逐篇 LLM 决策缓存，包含筛选模型、`prompts/filter.md` hash、`related`、`reason`、`rawResponse`、`parseSource`；API 错误或无法判断记为 `retryable`，不进入正式决定缓存。模型遗漏结构化结论但语义倾向明确时只允许一次受控格式修复，修复响应仍须严格解析
+- `data/current/fetch-checkpoint.json`：按 arXiv 类别和 HuggingFace 来源原子保存完整响应、健康状态、固定类别顺序与不可变历史去重基线。中断后只补跑失败来源；HTTP 200 但结构签名或解析覆盖异常也按来源失败处理
+- `data/current/filter-decisions.json`：逐篇 LLM 决策缓存，绑定实际 fenced prompt、模型端点/协议/温度/输出配置与解析契约；API 错误或无法判断记为 `retryable`。健康 raw 即使没有任何决定也可直接续跑，配置变化只重筛、不重抓
 - `data/current/filtered-papers.json`：阶段性/最终筛选输出；包含 `filterModel` 和 `filterPromptHash`。`status: "filter_complete"` 只表示逐篇筛选已完成但归档去重尚未完成，最终可跳过抓取/筛选的状态必须是 `status: "complete"`，且模型/hash 必须匹配当前配置
 
 若今天已经存在完整且模型/hash 匹配的 `filtered-papers.json`，再次运行 `node scripts/full-fetch.js` 会跳过抓取与筛选，直接进入深度分析续跑；若筛选尚未完成，但同日 `raw-candidates.json` 显示所有来源健康且模型/hash 匹配，则跳过抓取，只复用候选与明确决策、重试未决论文。来源失败时才禁止该续跑，必须恢复缺失来源。
-`npm run validate:data` 会交叉校验 `raw-candidates.json`、`filter-decisions.json` 与 `filtered-papers.json` 的候选统计、决策数量、相关数量和最终论文数量。
+`npm run validate:data` 会同时校验 fetch checkpoint 的来源结构/状态，以及 checkpoint、raw、decisions、filtered 的同批次指纹、候选统计和完整覆盖。
 
 ### 3.7 深度分析
 
@@ -215,7 +216,7 @@ HF 特有字段（共 7 个）：
 ### 3.8 增量保存与收尾
 
 - **每批分析完成后立即增量保存**到 `data/current/deep-analysis-result.json`；分析结果和 `papers.json` 在跨进程锁内重新读取合并并校验 `generation`，避免多个入口并发丢更新。失败结果不会覆盖已有成功 `analysis`，当前 JSON 损坏时会阻断而不是回退旧文件覆盖
-- `full-fetch.js` 用单实例运行锁覆盖归档、清理、筛选和最终合并，但不降低论文分析并发度；失败 checkpoint 也会增量保存，旧成功正文可继续发布，同时 `latestAttemptStatus` 明确记录本次失败
+- `full-fetch.js` 用单实例运行锁覆盖归档、清理、筛选和最终合并；每篇分析在共享论文锁内重新读取最新规范记录后保存。批次回调与收尾只更新顶层统计，禁止用累计旧快照二次覆盖论文正文；失败 checkpoint 仍逐篇保留
 - 增量保存和最终保存都会通过 `scripts/digest-status.js` 同步 `data/current/papers.json` 的 `digestStatus.status`，成功为 `analyzed`，失败为 `analysis_failed`
 - 全部论文分析完毕后，再次读取已有结果，按 `arxivId`/`paper_id` 去重合并，保留历史数据
 - 自动备份旧文件到 `data/archive/deep-analysis-result-<时间戳>.bak.json`，并清理旧备份（保留最近 10 个）

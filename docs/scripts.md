@@ -8,7 +8,9 @@
 
 #### `scripts/full-fetch.js`
 
-完整流程入口。执行自动归档 → 加载去重库（含博客已发布 ID）→ arXiv 抓取 → HF 抓取 → 合并去重 → 过滤博客已发布论文 → LLM 筛选 → 更新去重库 → 深度分析 → 增量保存。当天筛选若只剩未决项且 raw candidates 的来源健康，则直接续跑未决项，不重新抓取来源；格式异常只做一次严格的结论格式修复。
+完整流程入口。执行自动归档 → 加载去重库（含博客已发布 ID）→ arXiv 抓取 → HF 抓取 → 合并去重 → 过滤博客已发布论文 → LLM 筛选 → 更新去重库 → 深度分析 → 增量保存。
+
+抓取阶段按 arXiv 类别和 HuggingFace 来源原子保存 checkpoint；每个来源同时绑定论文数量和稳定内容 SHA，损坏时仅补抓该来源。checkpoint、raw、decisions、filtered 的候选/来源/博客去重指纹与北京时间批次日期必须一致。只有七个类别和 HF 必需请求覆盖完整时才能筛选；健康 raw 即使尚无 decisions 也可继续，筛选配置变化只重筛不重抓。
 
 所有配置从 `scripts/config.js` 读取，支持项目根 `.env` 覆写：
 - `ANALYSIS_CONFIG.concurrency = 3`（`PD_ANALYSIS_CONCURRENCY`）
@@ -254,6 +256,8 @@ HuggingFace Papers 抓取模块。
 
 **阶段恢复**：`analysisManifest` 逐阶段保存状态，失败正文写入 `analysisCheckpoint`，候选/下载/选图元数据写入 `analysisRecoveryImageManifest`。失败合并会独立按完整契约重解析旧正文，不受最新失败 manifest 影响，连续多次失败仍保留旧成功正文。强制重分析成功旧记录时因没有 checkpoint 会清空主分析及所有下游完成标记；普通失败续跑则从首个未完成阶段继续。
 
+每个分析阶段另有输入/输出快照和指纹：主分析绑定实际截断输入，评分绑定评分前结构修复正文，插图绑定候选集合、下载内容 SHA 与插图前正文。任何变化只失效当前及下游阶段。所有入口仅在同篇共享锁内合并论文内容；批次/最终统计不会再回写累计 paper payload。
+
 **API 调用**：
 - `callModel(messages, maxTokens)`：带重试的 API 调用封装（内层最多 3 次重试，指数退避：第一次 10 秒，之后翻倍）
 - `_callModelOnce()`：单次 API 调用共享 20 分钟活跃时间预算；每秒心跳检测系统睡眠/长时间挂起并排除墙钟跳变，唤醒后的请求错误仍可在剩余预算内重试
@@ -380,6 +384,8 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 
 **推送边界**：review 凭证绑定 review 时博客 `main` 的基线提交和逐文件 SHA-256。`push-blog.py` 只允许从该基线提交本次清单，或重试凭证中已记录的同一发布提交；发现人工提交、工作树改动或基线偏移会拒绝推送。生成阶段也会拒绝覆盖目标日期页面的人工 Git 修改。
 
+三个阶段共享日期级锁和博客仓库级全局锁。生成逐页 journal 后才写汇总页/严格清单；review 记录实际读取 SHA；push 在 stage 后及 commit 前把 index blob/删除状态与凭证逐项比较，防止不同日期并发污染共享 Git 状态。
+
 **参数**：三个脚本都支持 `--date YYYY-MM-DD`；只有 `generate-blog.py` 接受 `--all`、`--category` 和自定义数据文件。`publish-to-blog.py --push` 会直接拒绝，防止恢复合并流程。
 
 **日期过滤**：
@@ -446,6 +452,8 @@ Python 发布/维护脚本共享路径配置。集中提供 `PROJECT_ROOT`、`DA
 TOP N 精选版的一句话亮点使用受控并发生成，默认并发度为 5，可通过项目 `.env` 的 `PD_XIAOHONGSHU_ONELINER_CONCURRENCY` 设置为 1–5。结果始终按论文排名回填，单篇调用失败仅对该篇使用本地摘要回退。
 
 生成小红书文案。
+
+逐篇成功的一句话在日期级锁内写入缓存，绑定分析、prompt、模型端点配置和清洗契约；损坏缓存会原子隔离后重建，失败回退或指纹变化只重跑对应论文。`--date` 严格校验为 `YYYY-MM-DD`；该命令只产出文案。
 
 - 默认数据源：`data/current/deep-analysis-result.json`
 - 支持 `--top N` 精选版（默认 TOP 5，常用 `--top 3`）和 `--all` 完整汇总版

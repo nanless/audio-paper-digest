@@ -159,8 +159,8 @@ python3 scripts/publish-to-feishu.py --all
 # 或直接用 Node
 node scripts/full-fetch.js
 
-# 当天筛选只剩少量待重试项时，保留 data/current/raw-candidates.json
-# 与 filter-decisions.json 后直接重跑；会只重试未决论文，不会重新抓取来源
+# 抓取/筛选中断后直接重跑：fetch-checkpoint 按来源补抓，筛选只重试未决论文
+# 模型或 filter prompt 改变时复用健康候选，只重新筛选
 
 # 仅深度分析续跑（跳过已有 analysis；无分析结果时可从 filtered-papers.json 初始化）
 node scripts/deep-analysis-only.js
@@ -211,6 +211,7 @@ python3 scripts/publish-xiaohongshu.py --all
 
 # TOP N 一句话默认 5 并发，可在项目 .env 设置 1-5
 # PD_XIAOHONGSHU_ONELINER_CONCURRENCY=5
+# 成功 one-liner 会逐篇缓存；重跑只请求失败、缺失或指纹变化的论文
 
 # 小红书自动发布（需先登录）
 python3 scripts/xiaohongshu-publisher.py --login
@@ -237,7 +238,7 @@ node scripts/refilter-reanalyze-by-date.js 2026-07-01
 
 - [主流程详解](docs/workflow.md) — 自动归档、抓取、筛选、深度分析的完整流程
 - [脚本分工](docs/scripts.md) — 全部脚本的功能说明与用法
-- [数据格式](docs/data-format.md) — papers.json、raw-candidates.json、filter-decisions.json、filtered-papers.json、deep-analysis-result.json 结构
+- [数据格式](docs/data-format.md) — fetch checkpoint、筛选缓存、逐阶段分析 checkpoint、博客凭证和小红书文案缓存结构
 - [安装与配置](docs/setup.md) — 依赖安装、环境变量、模型配置、日志机制
 - [排错手册](docs/troubleshooting.md) — API 错误、代理问题、发布失败的排查方法
 - [维护约定](docs/maintenance.md) — 代码规范、评分标签口径、变更检查清单

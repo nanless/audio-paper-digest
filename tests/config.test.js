@@ -73,10 +73,12 @@ describe('config', () => {
         Config = require('../scripts/config.js');
         assert.ok(Config.FILES.papers.includes('current'));
         assert.ok(Config.FILES.rawCandidates.includes('current'));
+        assert.ok(Config.FILES.fetchCheckpoint.includes('current'));
         assert.ok(Config.FILES.filterDecisions.includes('current'));
         assert.ok(Config.FILES.filteredPapers.includes('current'));
         assert.ok(Config.FILES.deepAnalysisResult.includes('current'));
         assert.strictEqual(path.basename(Config.FILES.rawCandidates), 'raw-candidates.json');
+        assert.strictEqual(path.basename(Config.FILES.fetchCheckpoint), 'fetch-checkpoint.json');
         assert.strictEqual(path.basename(Config.FILES.filterDecisions), 'filter-decisions.json');
         assert.strictEqual(path.basename(Config.FILES.filteredPapers), 'filtered-papers.json');
         assert.strictEqual(path.basename(Config.FILES.deepAnalysisResult), 'deep-analysis-result.json');

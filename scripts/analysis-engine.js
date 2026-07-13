@@ -127,6 +127,56 @@ function acquireFileLockSync(filePath, options = {}) {
     }
 }
 
+async function acquireFileLock(filePath, options = {}) {
+    const timeoutMs = options.timeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
+    const staleMs = options.staleMs ?? DEFAULT_STALE_LOCK_MS;
+    const lockPath = `${filePath}.lock`;
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const startedAt = Date.now();
+    while (true) {
+        try {
+            fs.mkdirSync(lockPath);
+            const ownerToken = crypto.randomUUID();
+            try {
+                fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+                    pid: process.pid,
+                    hostname: os.hostname(),
+                    token: ownerToken,
+                    acquiredAt: new Date().toISOString()
+                }));
+            } catch (ownerError) {
+                fs.rmSync(lockPath, { recursive: true, force: true });
+                throw ownerError;
+            }
+            return () => {
+                try {
+                    const owner = JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8'));
+                    if (owner.token !== ownerToken) return false;
+                    fs.rmSync(lockPath, { recursive: true, force: true });
+                    return true;
+                } catch (error) {
+                    if (error.code === 'ENOENT') return false;
+                    console.warn(`[file-lock] 释放锁失败 ${lockPath}: ${error.message}`);
+                    return false;
+                }
+            };
+        } catch (error) {
+            if (error.code !== 'EEXIST') throw error;
+            try {
+                if (canReclaimFileLock(lockPath, staleMs)) {
+                    fs.rmSync(lockPath, { recursive: true, force: true });
+                    continue;
+                }
+            } catch (statError) {
+                if (statError.code === 'ENOENT') continue;
+                throw statError;
+            }
+            if (Date.now() - startedAt >= timeoutMs) throw new Error(`等待文件锁超时: ${lockPath}`);
+            await sleep(50);
+        }
+    }
+}
+
 function withFileLockSync(filePath, callback, options = {}) {
     const release = acquireFileLockSync(filePath, options);
     try {
@@ -137,7 +187,7 @@ function withFileLockSync(filePath, callback, options = {}) {
 }
 
 async function withFileLock(filePath, callback, options = {}) {
-    const release = acquireFileLockSync(filePath, options);
+    const release = await acquireFileLock(filePath, options);
     try {
         return await callback();
     } finally {
@@ -277,6 +327,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
                         fullTextAvailable: analyzed.fullTextAvailable ?? paper.fullTextAvailable ?? false,
                         truncated: analyzed.truncated ?? paper.truncated ?? false,
                         sourceSha256: analyzed.sourceSha256 || paper.sourceSha256 || '',
+                        usedTextSha256: analyzed.usedTextSha256 || paper.usedTextSha256 || '',
                         analysisConfidence: analyzed.analysisConfidence || paper.analysisConfidence || 'unknown',
                         htmlAvailability: analyzed.htmlAvailability || paper.htmlAvailability || 'unknown',
                         htmlAttempts: analyzed.htmlAttempts ?? paper.htmlAttempts ?? 0,
@@ -352,7 +403,9 @@ async function analyzeBatch(papers, options = {}) {
         onSave = null,
         shouldSkip = null,
         onAttempt = null,
-        analyzeFn = null
+        analyzeFn = null,
+        preparePaperLocked = null,
+        onPaperResultLocked = null
     } = options;
 
     if (!Number.isInteger(concurrency) || concurrency < 1) {
@@ -410,8 +463,15 @@ async function analyzeBatch(papers, options = {}) {
             }
 
             const startTime = Date.now();
-            const r = await withPaperAnalysisLock(paper, () =>
-                analyzePaperWithRetry(paper, {
+            const r = await withPaperAnalysisLock(paper, async () => {
+                const prepared = preparePaperLocked
+                    ? await preparePaperLocked(paper)
+                    : { paper, skip: false };
+                if (prepared?.skip) {
+                    return { skipped: true, paper: prepared.paper || paper, reason: prepared.reason || '已由其他进程完成' };
+                }
+                const paperForAnalysis = prepared?.paper || paper;
+                const result = await analyzePaperWithRetry(paperForAnalysis, {
                     maxRetries,
                     retryDelayMs,
                     analyzeFn,
@@ -420,9 +480,18 @@ async function analyzeBatch(papers, options = {}) {
                             try { onAttempt(att, max, paper); } catch (e) { /* ignore */ }
                         }
                     }
-                })
-            );
+                });
+                if (onPaperResultLocked) {
+                    await onPaperResultLocked(paperForAnalysis, result);
+                }
+                return result;
+            });
             const duration = Date.now() - startTime;
+            if (r.skipped) {
+                stats.skipped++;
+                if (onPaperDone) await onPaperDone(idx, papers.length, paper, r, duration);
+                return r;
+            }
             stats.durationTotal += duration;
 
             if (r.success) {
@@ -546,6 +615,7 @@ function mergePapersById(existingPapers, newPapers, options = {}) {
                         ...existing,
                         ...(p.analysisManifest ? { analysisManifest: p.analysisManifest } : {}),
                         ...(p.analysisCheckpoint ? { analysisCheckpoint: p.analysisCheckpoint } : {}),
+                        ...(p.analysisStageCheckpoints ? { analysisStageCheckpoints: p.analysisStageCheckpoints } : {}),
                         ...(p.imageManifest ? { analysisRecoveryImageManifest: p.imageManifest } : {}),
                         latestAnalysisAttemptError: p.error || '分析未完成',
                         latestAnalysisAttemptAt: getBeijingISOString()
@@ -574,6 +644,7 @@ module.exports = {
     mergePapersById,
     readJsonFileStrict,
     acquireFileLockSync,
+    acquireFileLock,
     canReclaimFileLock,
     withFileLockSync,
     withFileLock,

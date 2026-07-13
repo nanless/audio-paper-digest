@@ -397,6 +397,35 @@ describe('analyzePaperWithRetry', () => {
 });
 
 describe('analyzeBatch', () => {
+    it('同篇论文的锁覆盖最新状态重读、分析和写回，排队请求不会覆盖新结果', async () => {
+        let canonical = null;
+        let analyzeCalls = 0;
+        const suffix = String(10000 + Math.floor(Math.random() * 89999));
+        const paperId = `2607.${suffix}`;
+        const papers = [
+            { arxivId: paperId, title: 'same paper' },
+            { arxivId: `${paperId}v2`, title: 'same paper queued' }
+        ];
+        const { stats } = await analyzeBatch(papers, {
+            concurrency: 2,
+            maxRetries: 0,
+            preparePaperLocked: paper => canonical && isSuccessfulAnalysisRecord(canonical)
+                ? { paper: canonical, skip: true }
+                : { paper, skip: false },
+            analyzeFn: async () => {
+                analyzeCalls++;
+                return { analysis: validAnalysisText() };
+            },
+            onPaperResultLocked: async (_paper, result) => {
+                canonical = result.result;
+            }
+        });
+        assert.strictEqual(analyzeCalls, 1);
+        assert.strictEqual(stats.success, 1);
+        assert.strictEqual(stats.skipped, 1);
+        assert.strictEqual(isSuccessfulAnalysisRecord(canonical), true);
+    });
+
     it('拒绝零、负数和非整数并发，避免循环无法推进', async () => {
         for (const concurrency of [0, -1, 1.5, Number.NaN]) {
             await assert.rejects(analyzeBatch([], { concurrency }), /concurrency 必须是正整数/);

@@ -805,6 +805,113 @@ has_dataset: 否
         assert.strictEqual(manifest.stages.imageSupplement, undefined);
     });
 
+    it('阶段指纹变化时回退到前一阶段快照，只失效当前及下游', () => {
+        const {
+            invalidateRecoveryStageIfChanged,
+            saveAnalysisCheckpoint
+        } = require('../scripts/deep-analyzer.js');
+        const paper = {};
+        const manifest = { version: 1, stages: {} };
+        const stages = ['primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision', 'tableRepair'];
+        for (const stage of stages) {
+            manifest.stages[stage] = { status: 'complete', fingerprint: `old-${stage}` };
+            saveAnalysisCheckpoint(paper, `body-after-${stage}`, manifest);
+        }
+        // saveAnalysisCheckpoint 会在阶段首次达到终态时保留快照。
+        paper.analysisStageCheckpoints.demoLinkScan = 'body-after-demo';
+        paper.analysisStageCheckpoints.revision = 'body-after-revision';
+        const changed = invalidateRecoveryStageIfChanged(paper, manifest, 'revision', 'new-revision');
+        assert.strictEqual(changed, true);
+        assert.strictEqual(paper.analysisCheckpoint, 'body-after-demo');
+        assert.strictEqual(manifest.stages.demoLinkScan.status, 'complete');
+        assert.strictEqual(manifest.stages.revision, undefined);
+        assert.strictEqual(manifest.stages.tableRepair, undefined);
+        assert.strictEqual(paper.analysisStageCheckpoints.revision, undefined);
+    });
+
+    it('主分析指纹会绑定实际输入文本和论文元数据', () => {
+        const { buildRecoveryFingerprints } = require('../scripts/deep-analyzer.js');
+        const base = { title: 'A', authors: ['X'], categories: ['cs.SD'] };
+        const first = buildRecoveryFingerprints(base, 'actual input one', '2607.1');
+        const textChanged = buildRecoveryFingerprints(base, 'actual input two', '2607.1');
+        const metadataChanged = buildRecoveryFingerprints({ ...base, title: 'B' }, 'actual input one', '2607.1');
+        assert.notStrictEqual(first.primaryAnalysis, textChanged.primaryAnalysis);
+        assert.notStrictEqual(first.primaryAnalysis, metadataChanged.primaryAnalysis);
+        assert.notStrictEqual(first.openSourceScan, textChanged.openSourceScan);
+    });
+
+    it('raw 尾部变化但实际截断输入未变时不失效主链', () => {
+        const { hasActualAnalysisInputChanged } = require('../scripts/deep-analyzer.js');
+        const usedTextSha256 = 'used-input-sha';
+        assert.strictEqual(hasActualAnalysisInputChanged(
+            { sourceSha256: 'raw-v1', usedTextSha256 },
+            { sourceSha256: 'raw-v2', usedTextSha256 }
+        ), false);
+        assert.strictEqual(hasActualAnalysisInputChanged(
+            { sourceSha256: 'raw-v1', usedTextSha256 },
+            { sourceSha256: 'raw-v2', usedTextSha256: 'changed-input-sha' }
+        ), true);
+    });
+
+    it('插图指纹绑定候选、下载内容和评分后正文且只影响插图阶段', () => {
+        const {
+            buildImageSupplementFingerprint,
+            invalidateRecoveryStageIfChanged
+        } = require('../scripts/deep-analyzer.js');
+        const base = 'image-config';
+        const candidates = [{ url: 'https://example.com/a.png', caption: 'A' }];
+        const downloads = [{ url: candidates[0].url, sha256: 'download-v1' }];
+        const first = buildImageSupplementFingerprint(base, candidates, downloads, 'audited body');
+        assert.notStrictEqual(first, buildImageSupplementFingerprint(
+            base,
+            [{ url: 'https://example.com/b.png', caption: 'B' }],
+            downloads,
+            'audited body'
+        ));
+        assert.notStrictEqual(first, buildImageSupplementFingerprint(
+            base,
+            candidates,
+            [{ url: candidates[0].url, sha256: 'download-v2' }],
+            'audited body'
+        ));
+        assert.notStrictEqual(first, buildImageSupplementFingerprint(base, candidates, downloads, 'changed body'));
+
+        const paper = {
+            analysisCheckpoint: 'body with old images',
+            analysisStageCheckpoints: {
+                scoringAudit: 'audited body',
+                imageSupplement: 'body with old images'
+            }
+        };
+        const manifest = { version: 1, stages: {
+            scoringAudit: { status: 'complete', fingerprint: 'scoring' },
+            imageSupplement: { status: 'complete', fingerprint: first }
+        } };
+        assert.strictEqual(invalidateRecoveryStageIfChanged(paper, manifest, 'imageSupplement', 'new-image-fingerprint'), true);
+        assert.strictEqual(manifest.stages.scoringAudit.status, 'complete');
+        assert.strictEqual(manifest.stages.imageSupplement, undefined);
+        assert.strictEqual(paper.analysisCheckpoint, 'audited body');
+    });
+
+    it('评分证据使用 structureRepair 快照而不是评分后 checkpoint', () => {
+        const { buildTypeAwareSourceContext } = require('../scripts/deep-analyzer.js');
+        const crypto = require('node:crypto');
+        const structureBody = validAnalysisText();
+        const postScoringBody = structureBody.replace('这篇论文围绕语音识别鲁棒性提出完整方法', '评分后意外改变了核心摘要');
+        const source = 'source evidence';
+        const storedEvidence = crypto.createHash('sha256')
+            .update(buildTypeAwareSourceContext(structureBody, source))
+            .digest('hex');
+        const resumedEvidence = crypto.createHash('sha256')
+            .update(buildTypeAwareSourceContext(structureBody, source))
+            .digest('hex');
+        const wrongEvidence = crypto.createHash('sha256')
+            .update(buildTypeAwareSourceContext(postScoringBody, source))
+            .digest('hex');
+        assert.strictEqual(resumedEvidence, storedEvidence);
+        assert.notStrictEqual(wrongEvidence, storedEvidence);
+    });
+
     it('理论研究的开源分不会因缺少代码模型数据字段被强制归零', () => {
         const { validateScoringAuditAgainstAnalysis } = require('../scripts/deep-analyzer.js');
         const audit = {

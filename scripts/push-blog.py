@@ -26,15 +26,19 @@ def main():
     try:
         module.validate_publish_target()
         date_str = parse_date(module)
-        paths, receipt = module.load_verified_review_receipt(date_str)
-        module.validate_git_publish_branch()
-        module.validate_git_index(paths)
-        print(f'🧾 已验证审查凭证: {receipt}')
-        print(f'📦 直接提交推送 {len(paths)} 个已审查路径（不生成、不 review）')
-        if not module.git_push(date_str, paths):
-            raise module.PublishDataValidationError('Git 提交或推送未完成')
+        with module.blog_publication_lock(date_str):
+            paths, receipt = module.load_verified_review_receipt(date_str)
+            module.validate_git_publish_branch()
+            module.validate_git_index(paths)
+            print(f'🧾 已验证审查凭证: {receipt}')
+            print(f'📦 直接提交推送 {len(paths)} 个已审查路径（不生成、不 review）')
+            if not module.git_push(date_str, paths):
+                raise module.PublishDataValidationError('Git 提交或推送未完成')
     except module.PublishDataValidationError as exc:
         print(f'\n❌ 博客推送失败: {exc}')
+        sys.exit(1)
+    except TimeoutError as exc:
+        print(f'\n❌ 博客仓库或同日期事务正在运行: {exc}')
         sys.exit(1)
     print('\n🎉 博客推送完成！')
 

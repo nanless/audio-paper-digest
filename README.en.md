@@ -205,6 +205,7 @@ python3 scripts/publish-xiaohongshu.py --all
 
 # TOP-N one-liners default to concurrency 5; configurable from 1 to 5 in project .env
 # PD_XIAOHONGSHU_ONELINER_CONCURRENCY=5
+# Successful one-liners are checkpointed per paper; reruns only request failed, missing, or invalidated entries
 
 # Xiaohongshu auto-publish (login required first)
 python3 scripts/xiaohongshu-publisher.py --login
@@ -231,7 +232,7 @@ node scripts/refilter-reanalyze-by-date.js 2026-07-01
 
 - [Main Workflow](docs/workflow.md) — Complete flow of automatic archiving, crawling, filtering, and deep analysis
 - [Script Reference](docs/scripts.md) — Function descriptions and usage for all scripts
-- [Data Format](docs/data-format.md) — Structure of papers.json, raw-candidates.json, filter-decisions.json, filtered-papers.json, and deep-analysis-result.json
+- [Data Format](docs/en/data-format.md) — Fetch/filter checkpoints, staged analysis recovery, blog receipts, and Xiaohongshu copy cache
 - [Installation & Configuration](docs/setup.md) — Dependency installation, environment variables, model configuration, logging
 - [Troubleshooting](docs/troubleshooting.md) — Diagnosis for API errors, proxy issues, and publishing failures
 - [Maintenance Conventions](docs/maintenance.md) — Code standards, scoring and tag definitions, change checklist

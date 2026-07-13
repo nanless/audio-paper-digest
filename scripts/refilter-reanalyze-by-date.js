@@ -215,21 +215,30 @@ async function main(targetDate, options = {}) {
     });
     const batchResult = await analyzeBatchFn(filtered, {
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
+        onPaperResultLocked: async (paper, result) => {
+            const attempted = result.result || {
+                ...paper,
+                analysis: null,
+                parsed: null,
+                error: result.error || '分析失败'
+            };
+            attempts.push(attempted);
+            saveSuccessfulResultsById(resultFile, [attempted], {
+                date: targetDate,
+                expectedIds,
+                refilterStatus: 'running',
+                refilterSucceeded: attempts.filter(isSuccessfulAnalysisRecord).length,
+                refilterFailed: attempts.filter(item => !isSuccessfulAnalysisRecord(item)).length
+            });
+            digestStatusUpdater([attempted], { batchDate: targetDate });
+        },
         onBatchDone: (batchIndex, batchResults) => {
             const batchAttempts = batchResults
                 .filter(result => result && !result.skipped)
                 .map(result => result.result || result);
-            attempts.push(...batchAttempts);
+            const attemptedIds = new Set(attempts.map(normalizedId).filter(Boolean));
+            attempts.push(...batchAttempts.filter(item => !attemptedIds.has(normalizedId(item))));
             const successful = batchAttempts.filter(isSuccessfulAnalysisRecord);
-            saveSuccessfulResultsById(resultFile, batchAttempts, {
-                date: targetDate,
-                expectedIds,
-                refilterStatus: 'running',
-                refilterSavedBatches: batchIndex,
-                refilterSucceeded: attempts.filter(isSuccessfulAnalysisRecord).length,
-                refilterFailed: attempts.filter(result => !isSuccessfulAnalysisRecord(result)).length
-            });
-            digestStatusUpdater(batchAttempts, { batchDate: targetDate });
             console.log(`💾 第 ${batchIndex} 批已增量保存: 成功 ${successful.length} 篇`);
         }
     });
@@ -240,7 +249,7 @@ async function main(targetDate, options = {}) {
     const attemptStatus = getAnalysisRunStatus(batchResult.stats, batchResult.stats?.failed || 0);
     console.log(`${attemptStatus === 'complete' ? '✅' : '⚠️'} 分析状态: ${attemptStatus} | 成功 ${batchResult.stats?.success ?? allResults.length} | 失败 ${batchResult.stats?.failed || 0}`);
 
-    const payload = saveSuccessfulResultsById(resultFile, allResults, {
+    const payload = saveSuccessfulResultsById(resultFile, [], {
         date: targetDate,
         expectedIds,
         finalize: true,
@@ -251,8 +260,7 @@ async function main(targetDate, options = {}) {
     const status = payload.status;
     console.log(`💾 结果已保存: ${resultFile} (共 ${payload.papers.length} 篇，旧成功结果未被失败尝试覆盖)`);
 
-    const digestUpdate = digestStatusUpdater(attempts, { batchDate: targetDate });
-    console.log(`💾 papers.json digestStatus 已同步: ${digestUpdate.updated} 篇`);
+    console.log('💾 papers.json digestStatus 已在逐篇论文锁内同步');
     if (status !== 'complete') console.error(`❌ 重筛分析尚有 ${batchResult.stats?.failed || 0} 篇未恢复`);
     return {
         status,

@@ -8,7 +8,7 @@ setupScriptLogging(__filename);
  */
 
 const fs = require('fs');
-const { loadEnvFile, getBeijingISOString } = require('./utils.js');
+const { loadEnvFile, getBeijingISOString, normalizedId } = require('./utils.js');
 const {
     analyzeBatch,
     readJsonFileStrict,
@@ -67,6 +67,25 @@ async function main() {
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
         saveInterval: 1,
+        preparePaperLocked: paper => {
+            const current = readJsonFileStrict(RESULT_FILE);
+            const currentPapers = Array.isArray(current) ? current : (current.papers || []);
+            const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
+            if (isSuccessfulAnalysisRecord(latest)) return { paper: latest, skip: true };
+            return { paper: latest || paper, skip: false };
+        },
+        onPaperResultLocked: async (paper, result) => {
+            const attempted = result.result || { ...paper, analysis: null, parsed: null, error: result.error || '分析失败' };
+            updateJsonFileLocked(RESULT_FILE, current => ({
+                ...(!Array.isArray(current) && current ? current : {}),
+                lastUpdated: getBeijingISOString(),
+                papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), [attempted], { preserveSuccessfulAnalysis: true }),
+                stats: { ...(!Array.isArray(current) ? current?.stats : {}), analysisStatus: 'running' }
+            }));
+            updateAnalysisDigestStatuses([attempted], {
+                batchDate: (data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10)
+            });
+        },
         onPaperStart: (idx, total, paper) => {
             console.log(`\n--- [${idx + 1}/${total}] 分析: ${paper.arxivId} ---`);
             const titleStr = paper.title || '(无标题)';
@@ -85,8 +104,7 @@ async function main() {
                 console.log(`❌ 分析异常 (${durSec}s): ${result.error}`);
             }
         },
-        onSave: async (results, saveStats) => {
-            const attemptedResults = results.filter(Boolean);
+        onSave: async (_results, saveStats) => {
             const processed = saveStats.success + saveStats.failed;
             const progressStatus = processed < notAnalyzed.length
                 ? 'running'
@@ -94,7 +112,7 @@ async function main() {
             const output = updateJsonFileLocked(RESULT_FILE, current => ({
                 ...(!Array.isArray(current) && current ? current : {}),
                 lastUpdated: getBeijingISOString(),
-                papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), attemptedResults, { preserveSuccessfulAnalysis: true }),
+                papers: Array.isArray(current) ? current : (current?.papers || []),
                 stats: {
                     ...(!Array.isArray(current) ? current?.stats : {}),
                     ...saveStats,
@@ -102,11 +120,7 @@ async function main() {
                 }
             }));
             papers.splice(0, papers.length, ...(output.papers || []));
-            const digestStatus = updateAnalysisDigestStatuses(attemptedResults, {
-                batchDate: (data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10)
-            });
-            const statusNote = digestStatus.updated > 0 ? `，papers.json 状态 ${digestStatus.updated} 篇` : '';
-            console.log(`   已保存到 ${RESULT_FILE}${statusNote}`);
+            console.log(`   已更新批次统计到 ${RESULT_FILE}`);
         }
     });
 

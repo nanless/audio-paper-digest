@@ -202,6 +202,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
     console.log(`\n  📰 获取 daily_papers（精选每日论文）...`);
     let page = 0;
     let reachedCutoff = false;
+    let dailyComplete = false;
 
     while (!reachedCutoff && page < HUGGINGFACE_CONFIG.maxPages) {
         const offset = page * HUGGINGFACE_CONFIG.pageLimit;
@@ -221,18 +222,21 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
             break;
         }
         if (data.length === 0) {
+            dailyComplete = true;
             console.log(`  页${page + 1}: 无数据，停止`);
             break;
         }
 
         let newCount = 0;
         let oldestDate = null;
+        let legalItems = 0;
 
         for (const item of data) {
             if (typeof item !== 'object' || !item) continue;
 
             const paper = convertDailyPaper(item);
             if (!paper) continue;
+            legalItems++;
 
             // 记录最老日期
             const pubDate = paper.published.split('T')[0];
@@ -251,15 +255,25 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
             }
         }
 
+        if (data.length > 0 && legalItems === 0) {
+            health.failures.push({ name: `daily_papers:${page + 1}`, error: 'non-empty response contains no legal paper items' });
+            health.successfulRequests--;
+            health.requests[health.requests.length - 1].ok = false;
+            console.log(`  页${page + 1}: 非空响应没有任何合法论文条目，停止`);
+            break;
+        }
+
         console.log(`  页${page + 1}: ${data.length}篇, 新增${newCount}篇, 最早: ${oldestDate || '?'}`);
 
         // 如果最老日期已经超过截止线，停止分页
         if (oldestDate && oldestDate < cutoffStr) {
             reachedCutoff = true;
+            dailyComplete = true;
         }
 
         // 如果返回的数据不足 100 篇，说明没有更多了
         if (data.length < HUGGINGFACE_CONFIG.pageLimit) {
+            dailyComplete = true;
             break;
         }
 
@@ -277,11 +291,13 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
 
     if (papersResponse.ok && Array.isArray(papersData)) {
         let newCount = 0;
+        let legalItems = 0;
         for (const item of papersData) {
             if (typeof item !== 'object' || !item) continue;
 
             const paper = convertPaper(item);
             if (!paper) continue;
+            legalItems++;
 
             const pubDate = paper.published.split('T')[0];
             if (pubDate && pubDate < cutoffStr) continue;
@@ -298,6 +314,11 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
                 }
             }
         }
+        if (papersData.length > 0 && legalItems === 0) {
+            health.failures.push({ name: 'papers', error: 'non-empty response contains no legal paper items' });
+            health.successfulRequests--;
+            health.requests[health.requests.length - 1].ok = false;
+        }
         console.log(`  papers API 新增: ${newCount} 篇`);
     } else if (papersResponse.ok) {
         health.failures.push({ name: 'papers', error: 'response is not an array' });
@@ -305,11 +326,18 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         health.requests[health.requests.length - 1].ok = false;
     }
 
-    health.ok = health.successfulRequests > 0;
+    const papersComplete = papersResponse.ok && Array.isArray(papersData)
+        && !(papersData.length > 0 && health.failures.some(item => item.name === 'papers'));
+    health.coverage = { dailyComplete, papersComplete, reachedCutoff };
+    health.ok = dailyComplete && papersComplete && health.failures.length === 0;
     health.allFailed = health.attempts > 0 && health.successfulRequests === 0;
     if (health.allFailed) {
         const summary = health.failures.map(item => `${item.name}:${item.error}`).join('; ');
         throw makeSourceFetchError(`HuggingFace 所有抓取请求均失败${summary ? `: ${summary}` : ''}`, health);
+    }
+    if (!health.ok) {
+        const summary = health.failures.map(item => `${item.name}:${item.error}`).join('; ');
+        throw makeSourceFetchError(`HuggingFace 抓取覆盖不完整${summary ? `: ${summary}` : ''}`, health);
     }
 
     // ====== 3. 过滤和排序 ======

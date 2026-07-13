@@ -47,14 +47,8 @@ def read_generated_pages(module, date_str, paths):
     return paper_slugs, scored_papers
 
 
-def main():
-    require_external_runtime('review-blog.py')
-    from log_setup import setup_script_logging
-    setup_script_logging(__file__)
-    module = load_publish_to_blog()
-    try:
+def _run_review(module, date_str):
         blog_repo, content_dir = module.validate_publish_target()
-        date_str = parse_date(module)
         paths, manifest_path = module.load_generation_manifest(date_str)
         paper_slugs, scored_papers = read_generated_pages(module, date_str, paths)
         base_head = module.validate_git_publish_branch()
@@ -73,6 +67,28 @@ def main():
             if plan.get('reason'):
                 print(f'ℹ️ 续审证据不可复用，退回全量 review: {plan["reason"]}')
             print(f'🔍 开始严格全量 review: {len(paper_slugs)} 篇论文')
+        combined_results = dict(plan['priorResults'])
+        # Persist pending work before the first LLM call. A crash or API outage
+        # can then resume only unfinished/transient files on the next run.
+        module.save_review_failure_state(
+            date_str, paths, manifest_path, base_head, combined_results,
+        )
+
+        def checkpoint(path, result):
+            reviewed_sha = result.get('reviewedSha256')
+            resolved = Path(path).resolve()
+            if result.get('passed') and (
+                not resolved.is_file()
+                or module._sha256_file(resolved) != reviewed_sha
+            ):
+                raise module.PublishDataValidationError(
+                    f'review worker 返回后页面字节已变化: {resolved.name}'
+                )
+            combined_results[str(Path(path).resolve())] = result
+            module.save_review_failure_state(
+                date_str, paths, manifest_path, base_head, combined_results,
+            )
+
         fixed, blocking, current_results = module.review_all_posts(
             date_str,
             paper_slugs,
@@ -81,8 +97,8 @@ def main():
             content_dir=str(content_dir),
             review_paths=plan['paths'],
             return_details=True,
+            result_callback=checkpoint,
         )
-        combined_results = dict(plan['priorResults'])
         combined_results.update(current_results)
         blocking += len(plan['unchangedFailed'])
         if blocking:
@@ -98,8 +114,14 @@ def main():
         if fixed:
             print(f'✅ review 自动修复 {fixed} 个文件')
         try:
+            module.validate_reviewed_file_hashes(
+                date_str, paths, manifest_path, combined_results,
+            )
             module.validate_staged_posts(Path(content_dir), date_str, date_only=True)
             gate = module.run_hugo_gate(blog_repo, Path(content_dir), required=True)
+            module.validate_reviewed_file_hashes(
+                date_str, paths, manifest_path, combined_results,
+            )
         except Exception:
             # A site-wide deterministic/Hugo failure is not safely attributable
             # to a subset of pages; force the next attempt back to full review.
@@ -107,10 +129,27 @@ def main():
             raise
         receipt = module.save_review_receipt(
             date_str, paths, gate, expected_base_head=base_head,
+            generation_manifest=manifest_path,
+            reviewed_results=combined_results,
         )
         module.review_failure_path(date_str).unlink(missing_ok=True)
+        return receipt
+
+
+def main():
+    require_external_runtime('review-blog.py')
+    from log_setup import setup_script_logging
+    setup_script_logging(__file__)
+    module = load_publish_to_blog()
+    date_str = parse_date(module)
+    try:
+        with module.blog_publication_lock(date_str):
+            receipt = _run_review(module, date_str)
     except (module.PublishDataValidationError, module.PublishLLMUnavailable) as exc:
         print(f'\n❌ review 失败，未生成审查凭证: {exc}')
+        sys.exit(1)
+    except TimeoutError as exc:
+        print(f'\n❌ 博客仓库或同日期事务正在运行: {exc}')
         sys.exit(1)
     print(f'🧾 审查凭证: {receipt}')
     print(f'\n✅ review 完成；下一步: python3 scripts/push-blog.py --date {date_str}')

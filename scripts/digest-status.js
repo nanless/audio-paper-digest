@@ -20,6 +20,7 @@ const ANALYSIS_FIELDS = Object.freeze([
     'fullTextAvailable',
     'truncated',
     'sourceSha256',
+    'usedTextSha256',
     'analysisConfidence',
     'htmlAvailability',
     'htmlAttempts',
@@ -192,6 +193,8 @@ function mergeAnalysisDigestPaper(existing, paper) {
         preserveAnalysisFields(merged, existing);
     } else if (isSuccessfulAnalysisRecord(paper)) {
         delete merged.analysisRecoveryImageManifest;
+        delete merged.analysisCheckpoint;
+        delete merged.analysisStageCheckpoints;
         delete merged.latestAnalysisAttemptError;
         delete merged.latestAnalysisAttemptAt;
     }

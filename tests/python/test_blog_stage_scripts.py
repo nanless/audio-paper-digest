@@ -31,10 +31,10 @@ generate_blog = load_script('generate-blog.py')
 class BlogStageEntryTest(unittest.TestCase):
     def test_generate_entry_only_calls_generation(self):
         generate = mock.Mock()
-        module = SimpleNamespace(generate_main=generate)
+        module = SimpleNamespace(main=generate)
         with mock.patch.object(generate_blog, 'load_publish_to_blog', return_value=module):
             # The executable guard is not active on import; call the same entry target.
-            generate_blog.load_publish_to_blog().generate_main()
+            generate_blog.load_publish_to_blog().main()
         generate.assert_called_once_with()
 
     def test_review_entry_never_calls_git_push(self):
@@ -62,6 +62,7 @@ body
                 validate_publish_target=lambda: (repo, posts),
                 get_today_bj=lambda value=None: value or '2026-07-10',
                 validate_publish_date=lambda value: value,
+                blog_publication_lock=lambda _date: contextlib.nullcontext(),
                 load_generation_manifest=lambda _date: ([index, paper], Path('manifest.json')),
                 validate_git_publish_branch=mock.Mock(return_value='a' * 40),
                 review_receipt_path=mock.Mock(return_value=receipt_path),
@@ -78,6 +79,7 @@ body
                     str(paper.resolve()): {'passed': True},
                 })),
                 validate_staged_posts=mock.Mock(),
+                validate_reviewed_file_hashes=mock.Mock(),
                 run_hugo_gate=mock.Mock(return_value='hugo'),
                 save_review_receipt=mock.Mock(return_value=Path('receipt.json')),
                 save_review_failure_state=mock.Mock(),
@@ -99,6 +101,7 @@ body
             validate_publish_target=mock.Mock(),
             get_today_bj=lambda value=None: value or '2026-07-10',
             validate_publish_date=lambda value: value,
+            blog_publication_lock=lambda _date: contextlib.nullcontext(),
             load_verified_review_receipt=mock.Mock(return_value=([path], Path('receipt.json'))),
             validate_git_publish_branch=mock.Mock(),
             validate_git_index=mock.Mock(),

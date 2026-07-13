@@ -191,7 +191,9 @@ describe('抓取健康状态', () => {
     it('arXiv 成功空响应与全失败严格区分', async () => {
         const requestFn = async url => ({
             status: 200,
-            data: url.includes('/api/query') ? '<feed></feed>' : '<html></html>'
+            data: url.includes('/api/query')
+                ? '<feed></feed>'
+                : (url.includes('/search/') ? '<ol class="breathe-horizontal"></ol>' : '<dl></dl>')
         });
         const papers = await fetchCategoryPapers('cs.SD', 1, 1, new Set(), {
             requestFn,
@@ -204,6 +206,36 @@ describe('抓取健康状态', () => {
         assert.strictEqual(papers._sourceHealth.ok, true);
         assert.strictEqual(papers._sourceHealth.allFailed, false);
         assert.strictEqual(papers._sourceHealth.successfulRequests, 3);
+    });
+
+    it('arXiv 后续分页失败但 API 完整补偿时仅记录 warning', async () => {
+        const requestFn = async url => {
+            if (url.includes('/recent?skip=50')) throw new Error('page 2 timeout');
+            return {
+                status: 200,
+                data: url.includes('/api/query')
+                    ? '<feed></feed>'
+                    : (url.includes('/search/') ? '<ol class="breathe-horizontal"></ol>' : '<dl></dl>')
+            };
+        };
+        const papers = await fetchCategoryPapers('cs.SD', 100, 1, new Set(), {
+            requestFn,
+            sleepFn: async () => {},
+            maxRetries: 1,
+            abstractMaxRetries: 1
+        });
+        assert.strictEqual(papers._sourceHealth.ok, true);
+        assert.strictEqual(papers._sourceHealth.coverageComplete, true);
+        assert.ok(papers._sourceHealth.warnings.some(item => item.error === 'page 2 timeout'));
+    });
+
+    it('HTTP 200 错误页缺少来源结构签名时不能作为合法零结果', async () => {
+        await assert.rejects(fetchCategoryPapers('cs.SD', 1, 1, new Set(), {
+            requestFn: async () => ({ status: 200, data: '<html><title>Access denied</title></html>' }),
+            sleepFn: async () => {},
+            maxRetries: 1,
+            abstractMaxRetries: 1
+        }), error => error.code === 'SOURCE_FETCH_FAILED');
     });
 
     it('摘要仅在解析到非空内容时计成功，并记录最终失败 ID', async () => {
@@ -275,7 +307,7 @@ describe('arXiv parsers', () => {
         const papers = parseSearchPageHTML(html, 'cs.SD', existing);
 
         assert.strictEqual(papers.length, 0);
-        assert.deepStrictEqual(papers._meta, { totalFound: 1, skippedExisting: 1 });
+        assert.deepStrictEqual(papers._meta, { totalFound: 1, skippedExisting: 1, rawItems: 1 });
     });
 
     it('API 解析可关闭连续已知论文提前停止', () => {

@@ -11,7 +11,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { fetchCategoryPapers, filterPapersWithLLM } = require('./fetch-papers.js');
 const { fetchHuggingFacePapers, mergeAndDeduplicate } = require('./fetch-huggingface-papers.js');
-const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson, loadPublishedIdsFromBlog } = require('./utils.js');
+const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson, loadPublishedIdsFromBlog, loadPrompt, detectApiType } = require('./utils.js');
 const {
     analyzeBatch,
     mergeAndSaveResults,
@@ -47,6 +47,7 @@ const PAPERS_FILE = Config.FILES.papers;
 const ANALYZED_FILE = Config.FILES.analyzed;
 const RAW_CANDIDATES_FILE = Config.FILES.rawCandidates;
 const FILTER_DECISIONS_FILE = Config.FILES.filterDecisions;
+const FETCH_CHECKPOINT_FILE = Config.FILES.fetchCheckpoint;
 const FULL_FETCH_RUN_LOCK = path.join(Config.CURRENT_DIR, '.full-fetch-run');
 
 function shouldUsePaperForFetchDedup(paper) {
@@ -55,12 +56,142 @@ function shouldUsePaperForFetchDedup(paper) {
 }
 
 function getFilterPromptHash() {
-    const promptPath = path.join(Config.PROJECT_ROOT, 'prompts', 'filter.md');
     try {
-        return crypto.createHash('sha256').update(fs.readFileSync(promptPath)).digest('hex').slice(0, 16);
+        const prompt = loadPrompt('prompts/filter.md', {
+            title: '__TITLE__', abstract: '__ABSTRACT__', categories: '__CATEGORIES__'
+        });
+        return crypto.createHash('sha256').update(prompt).digest('hex').slice(0, 16);
     } catch (e) {
         return 'unknown';
     }
+}
+
+function getFilterConfigFingerprint(filterPromptHash = getFilterPromptHash()) {
+    const endpoint = process.env.PAPER_ANALYZER_ENDPOINT || '';
+    const model = process.env.PAPER_ANALYZER_MODEL || '';
+    return stableHash({
+        model,
+        endpoint,
+        protocol: detectApiType(endpoint, model),
+        temperature: Config.FILTER_CONFIG.temperature,
+        maxTokens: Config.FILTER_CONFIG.maxTokens,
+        promptHash: filterPromptHash,
+        decisionContractVersion: Config.FILTER_CONFIG.decisionContractVersion
+    });
+}
+
+function stableHash(value) {
+    const normalize = item => {
+        if (Array.isArray(item)) return item.map(normalize);
+        if (item && typeof item === 'object') {
+            return Object.fromEntries(Object.keys(item).sort().map(key => [key, normalize(item[key])]));
+        }
+        return item;
+    };
+    return crypto.createHash('sha256').update(JSON.stringify(normalize(value))).digest('hex').slice(0, 16);
+}
+
+function stableContentSha256(value) {
+    const normalize = item => {
+        if (Array.isArray(item)) return item.map(normalize);
+        if (item && typeof item === 'object') {
+            return Object.fromEntries(Object.keys(item).sort().map(key => [key, normalize(item[key])]));
+        }
+        return item;
+    };
+    return crypto.createHash('sha256').update(JSON.stringify(normalize(value))).digest('hex');
+}
+
+function applyFetchSourceIntegrity(entry) {
+    if (!entry || typeof entry !== 'object' || !Array.isArray(entry.papers)) return entry;
+    entry.papersCount = entry.papers.length;
+    entry.papersSha256 = stableContentSha256(entry.papers);
+    return entry;
+}
+
+function hasValidFetchSourceIntegrity(entry) {
+    return Boolean(entry)
+        && Array.isArray(entry.papers)
+        && Number.isInteger(entry.papersCount)
+        && entry.papersCount >= 0
+        && entry.papersCount === entry.papers.length
+        && typeof entry.papersSha256 === 'string'
+        && /^[a-f0-9]{64}$/.test(entry.papersSha256)
+        && entry.papersSha256 === stableContentSha256(entry.papers);
+}
+
+function getSourceConfigFingerprint() {
+    return stableHash({
+        arxivCategories: Config.ARXIV_CATEGORIES.map(({ id, priority }) => ({ id, priority })),
+        arxiv: {
+            maxResultsPerCategory: Config.ARXIV_CONFIG.maxResultsPerCategory,
+            consecutiveExistingThreshold: Config.ARXIV_CONFIG.consecutiveExistingThreshold
+        },
+        huggingface: {
+            days: Config.HUGGINGFACE_CONFIG.defaultDays,
+            minUpvotes: Config.HUGGINGFACE_CONFIG.defaultMinUpvotes,
+            maxPages: Config.HUGGINGFACE_CONFIG.maxPages,
+            pageLimit: Config.HUGGINGFACE_CONFIG.pageLimit
+        }
+    });
+}
+
+function buildCandidateFingerprints(historicalExistingIds, publishedIds) {
+    const sourceConfigFingerprint = getSourceConfigFingerprint();
+    const blogDedupFingerprint = stableHash(Array.from(publishedIds || []).sort());
+    const historyFingerprint = stableHash(Array.from(historicalExistingIds || []).sort());
+    return {
+        sourceConfigFingerprint,
+        blogDedupFingerprint,
+        candidateFingerprint: stableHash({ sourceConfigFingerprint, blogDedupFingerprint, historyFingerprint })
+    };
+}
+
+function buildHistoricalDedupBaseline(papersData, today, publishedIds) {
+    const ids = new Set(Object.entries(papersData?.papers || {})
+        .filter(([, paper]) => shouldUsePaperForFetchDedup(paper))
+        // fetchedAt 表示论文首次进入抓取批次，重分析只会更新 digestStatus.batchDate。
+        // 因此不能用可变的分析日期判断“是否为本轮自写”，否则今天重分析的历史论文
+        // 会从去重基线消失。旧记录缺 fetchedAt 时才退回 digestStatus.batchDate。
+        .filter(([, paper]) => String(paper.fetchedAt || paper.digestStatus?.batchDate || '').slice(0, 10) !== today)
+        .map(([id]) => normalizedId(id))
+        .filter(Boolean));
+    for (const id of publishedIds || []) ids.add(normalizedId(id));
+    return Array.from(ids).filter(Boolean).sort();
+}
+
+function loadFetchCheckpoint(today, candidateFingerprint, filePath = FETCH_CHECKPOINT_FILE) {
+    const data = loadTodayJsonFile(filePath, today);
+    if (!data || data.candidateFingerprint !== candidateFingerprint) return null;
+    if (!data.arxiv || typeof data.arxiv !== 'object') data.arxiv = {};
+    if (!Array.isArray(data.historicalDedupIds) || !Array.isArray(data.categoryOrder)) return null;
+    for (const [categoryId, entry] of Object.entries(data.arxiv)) {
+        if (!hasValidFetchSourceIntegrity(entry)) {
+            console.log(`  [fetch] arXiv ${categoryId} checkpoint 内容完整性校验失败，仅重抓该来源`);
+            delete data.arxiv[categoryId];
+        }
+    }
+    if (data.huggingface && !hasValidFetchSourceIntegrity(data.huggingface)) {
+        console.log('  [fetch] HuggingFace checkpoint 内容完整性校验失败，仅重抓该来源');
+        data.huggingface = null;
+    }
+    return data;
+}
+
+function saveFetchCheckpoint(checkpoint, filePath = FETCH_CHECKPOINT_FILE) {
+    for (const entry of Object.values(checkpoint.arxiv || {})) applyFetchSourceIntegrity(entry);
+    if (checkpoint.huggingface) applyFetchSourceIntegrity(checkpoint.huggingface);
+    checkpoint.timestamp = getBeijingISOString();
+    writeFileAtomic(filePath, JSON.stringify(checkpoint, null, 2));
+}
+
+function hasCompleteSourceHealth(sourceHealth, expectedCategoryIds = Config.ARXIV_CATEGORIES.map(c => c.id)) {
+    const categories = sourceHealth?.arxiv?.categories;
+    if (!Array.isArray(categories)) return false;
+    const byId = new Map(categories.map(item => [item?.id, item]));
+    if (byId.size !== expectedCategoryIds.length) return false;
+    if (expectedCategoryIds.some(id => byId.get(id)?.ok !== true)) return false;
+    return sourceHealth?.huggingface?.ok === true;
 }
 
 function isDefinitiveFilterDecision(decision) {
@@ -93,13 +224,16 @@ function validateFilterDecisionCoverage(papers, decisions) {
     };
 }
 
-function loadReusableFilterDecisions(today, filterModel, filterPromptHash) {
+function loadReusableFilterDecisions(today, filterModel, filterPromptHash, expected = {}) {
     if (!fs.existsSync(FILTER_DECISIONS_FILE)) return {};
     const data = readJsonSafe(FILTER_DECISIONS_FILE);
     if (!data || getRecordDate(data) !== today) return {};
     if (data.filterModel !== filterModel || data.filterPromptHash !== filterPromptHash) {
         console.log('  [filter] 已有筛选决策与当前模型/prompt 不一致，忽略旧缓存');
         return {};
+    }
+    for (const key of ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint', 'filterConfigFingerprint']) {
+        if (expected[key] !== undefined && data[key] !== expected[key]) return {};
     }
     if (!data.decisions || typeof data.decisions !== 'object') return {};
     return Object.fromEntries(Object.entries(data.decisions).filter(([, decision]) => isDefinitiveFilterDecision(decision)));
@@ -119,15 +253,25 @@ function loadResumableFilterForToday(today, expected = {}, files = {}) {
     const rawFile = files.rawCandidates || RAW_CANDIDATES_FILE;
     const decisionsFile = files.filterDecisions || FILTER_DECISIONS_FILE;
     const rawCandidates = loadTodayJsonFile(rawFile, today);
-    const decisionsData = loadTodayJsonFile(decisionsFile, today);
-    if (!rawCandidates || !Array.isArray(rawCandidates.papers) || !decisionsData) return null;
-    if (expected.filterModel !== undefined && decisionsData.filterModel !== expected.filterModel) return null;
-    if (expected.filterPromptHash !== undefined && decisionsData.filterPromptHash !== expected.filterPromptHash) return null;
-    if (!decisionsData.decisions || typeof decisionsData.decisions !== 'object') return null;
-    if (!rawCandidates.sourceHealth || hasRequiredSourceFailure(rawCandidates.sourceHealth)) return null;
+    let decisionsData = loadTodayJsonFile(decisionsFile, today);
+    if (!rawCandidates || !Array.isArray(rawCandidates.papers)) return null;
+    for (const key of ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint']) {
+        if (expected[key] !== undefined && rawCandidates[key] !== expected[key]) return null;
+    }
+    if (!hasCompleteSourceHealth(rawCandidates.sourceHealth)) return null;
+    const decisionsMatch = decisionsData
+        && decisionsData.filterModel === expected.filterModel
+        && decisionsData.filterPromptHash === expected.filterPromptHash
+        && decisionsData.candidateFingerprint === rawCandidates.candidateFingerprint
+        && decisionsData.sourceConfigFingerprint === rawCandidates.sourceConfigFingerprint
+        && decisionsData.blogDedupFingerprint === rawCandidates.blogDedupFingerprint
+        && decisionsData.filterConfigFingerprint === expected.filterConfigFingerprint
+        && decisionsData.decisions && typeof decisionsData.decisions === 'object';
+    if (!decisionsMatch) {
+        decisionsData = { decisions: {}, filterModel: expected.filterModel, filterPromptHash: expected.filterPromptHash };
+    }
 
     const coverage = validateFilterDecisionCoverage(rawCandidates.papers, decisionsData.decisions);
-    if (coverage.complete) return null;
     return { rawCandidates, decisionsData, coverage };
 }
 
@@ -136,6 +280,9 @@ function loadCompleteFilteredForToday(today, filePath = FILTERED_FILE, expected 
     if (!data || data.status !== 'complete' || !Array.isArray(data.papers)) return null;
     if (expected.filterModel !== undefined && data.filterModel !== expected.filterModel) return null;
     if (expected.filterPromptHash !== undefined && data.filterPromptHash !== expected.filterPromptHash) return null;
+    for (const key of ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint', 'filterConfigFingerprint']) {
+        if (expected[key] !== undefined && data[key] !== expected[key]) return null;
+    }
     if (expected.requireConsistentFilterArtifacts && !hasConsistentFilterArtifacts(today, data)) {
         console.log('  [filter] 今日筛选产物与逐篇决策缓存不一致，忽略 complete 缓存并重新筛选');
         return null;
@@ -156,6 +303,7 @@ function validateFilterArtifacts(filteredData, decisionsData, rawCandidates = nu
     if (decisionsData.stats?.complete !== true) return false;
     if (decisionsData.filterModel !== filteredData.filterModel) return false;
     if (decisionsData.filterPromptHash !== filteredData.filterPromptHash) return false;
+    if (!decisionsData.filterConfigFingerprint || decisionsData.filterConfigFingerprint !== filteredData.filterConfigFingerprint) return false;
 
     const decisionIds = new Set(Object.keys(decisionsData.decisions).map(id => normalizedId(id)).filter(Boolean));
     const decisionCount = decisionIds.size;
@@ -164,18 +312,26 @@ function validateFilterArtifacts(filteredData, decisionsData, rawCandidates = nu
         return false;
     }
 
-    const rawPapers = Array.isArray(rawCandidates?.papers) ? rawCandidates.papers : null;
-    if (rawPapers) {
-        const coverage = validateFilterDecisionCoverage(rawPapers, decisionsData.decisions);
-        if (!coverage.complete || coverage.decided !== decisionCount) return false;
-        if (decisionsData.stats.totalCandidates !== coverage.totalCandidates) return false;
-        if (decisionsData.stats.decided !== coverage.decided) return false;
+    if (!rawCandidates || !Array.isArray(rawCandidates.papers) || !hasCompleteSourceHealth(rawCandidates.sourceHealth)) return false;
+    for (const key of ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint']) {
+        if (!rawCandidates[key] || filteredData[key] !== rawCandidates[key] || decisionsData[key] !== rawCandidates[key]) return false;
     }
+    const coverage = validateFilterDecisionCoverage(rawCandidates.papers, decisionsData.decisions);
+    if (!coverage.complete || coverage.decided !== decisionCount) return false;
+    if (decisionsData.stats.totalCandidates !== coverage.totalCandidates) return false;
+    if (decisionsData.stats.decided !== coverage.decided) return false;
 
-    for (const paper of filteredData.papers || []) {
-        const id = normalizedId(paper);
-        if (!id || decisionsData.decisions[id]?.related !== true) return false;
-    }
+    const excluded = new Set((filteredData.excludedRelatedIds || []).map(normalizedId).filter(Boolean));
+    if (excluded.size !== (filteredData.stats?.skippedFromArchive || 0)) return false;
+    const rawById = new Map(rawCandidates.papers.map(paper => [normalizedId(paper), paper]));
+    if (Array.from(excluded).some(id => decisionsData.decisions[id]?.related !== true || !rawById.get(id)?.sources?.includes('huggingface'))) return false;
+    const expectedRelated = new Set(Object.entries(decisionsData.decisions)
+        .filter(([, decision]) => decision.related === true)
+        .map(([id]) => normalizedId(id))
+        .filter(id => id && !excluded.has(id)));
+    const filteredIds = (filteredData.papers || []).map(normalizedId).filter(Boolean);
+    if (filteredIds.length !== new Set(filteredIds).size) return false;
+    if (filteredIds.length !== expectedRelated.size || filteredIds.some(id => !expectedRelated.has(id))) return false;
 
     return true;
 }
@@ -199,6 +355,30 @@ function loadCurrentSuccessfulAnalysisIds(filePath = RESULT_FILE, today = null) 
         if (id) ids.add(id);
     }
     return ids;
+}
+
+const ANALYSIS_RECOVERY_FIELDS = Object.freeze([
+    'analysis', 'parsed', 'analysisManifest', 'analysisCheckpoint', 'analysisStageCheckpoints',
+    'analysisRecoveryImageManifest', 'imageManifest', 'selectedImageUrls', 'imageUrls', 'allImageUrls',
+    'analysisSource', 'sourceId', 'sourceTextChars', 'usedTextChars', 'fullTextChars',
+    'fullTextAvailable', 'truncated', 'sourceSha256', 'usedTextSha256', 'analysisConfidence', 'htmlAvailability',
+    'htmlAttempts', 'sourceWarnings', 'latestAnalysisAttemptError', 'latestAnalysisAttemptAt'
+]);
+
+function mergeCanonicalAnalysisState(paper, canonical) {
+    if (!canonical) return { ...paper };
+    const merged = { ...canonical, ...paper };
+    for (const field of ANALYSIS_RECOVERY_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(canonical, field)) merged[field] = canonical[field];
+    }
+    return merged;
+}
+
+function loadCanonicalAnalysisRecord(filePath, paper) {
+    const data = readJsonFileStrict(filePath, { allowMissing: true });
+    const papers = Array.isArray(data) ? data : (data?.papers || []);
+    const id = normalizedId(paper);
+    return papers.find(item => normalizedId(item) === id) || null;
 }
 
 function saveFinalAnalysisResults(filePath, newResults, expectedPapers, stats = {}) {
@@ -237,6 +417,10 @@ function saveFinalAnalysisResults(filePath, newResults, expectedPapers, stats = 
         else delete payload.deepAnalysisCompletedAt;
         return payload;
     });
+}
+
+function finalizeAnalysisResults(filePath, expectedPapers, stats = {}) {
+    return saveFinalAnalysisResults(filePath, [], expectedPapers, stats);
 }
 
 function loadTodayPapersFromDatabase(papersData, today) {
@@ -293,7 +477,7 @@ function getSourceFailures(sourceHealth) {
 }
 
 function hasRequiredSourceFailure(sourceHealth) {
-    return getSourceFailures(sourceHealth).length > 0;
+    return !hasCompleteSourceHealth(sourceHealth);
 }
 
 function getFatalEmptyCandidateSourceFailures(sourceHealth) {
@@ -341,6 +525,10 @@ function writeFilterArtifacts({
         timestamp,
         filterModel,
         filterPromptHash,
+        filterConfigFingerprint: stats.filterConfigFingerprint,
+        candidateFingerprint: stats.candidateFingerprint,
+        sourceConfigFingerprint: stats.sourceConfigFingerprint,
+        blogDedupFingerprint: stats.blogDedupFingerprint,
         stats: {
             totalCandidates: coverage.totalCandidates,
             decided: coverage.decided,
@@ -359,6 +547,10 @@ function writeFilterArtifacts({
         status: sourceFailure ? 'source_partial_failed' : 'filtering',
         filterModel,
         filterPromptHash,
+        filterConfigFingerprint: stats.filterConfigFingerprint,
+        candidateFingerprint: stats.candidateFingerprint,
+        sourceConfigFingerprint: stats.sourceConfigFingerprint,
+        blogDedupFingerprint: stats.blogDedupFingerprint,
         stats: {
             ...stats,
             afterFilter: filtered.length,
@@ -439,6 +631,7 @@ async function resumeFilterStage({
         filterDecisions,
         filterModel,
         filterPromptHash,
+        filterConfigFingerprint: baseFilterStats.filterConfigFingerprint,
         stats: baseFilterStats,
         complete: true,
         sourceHealth,
@@ -449,6 +642,10 @@ async function resumeFilterStage({
         status: 'complete',
         filterModel,
         filterPromptHash,
+        filterConfigFingerprint: baseFilterStats.filterConfigFingerprint,
+        candidateFingerprint: baseFilterStats.candidateFingerprint,
+        sourceConfigFingerprint: baseFilterStats.sourceConfigFingerprint,
+        blogDedupFingerprint: baseFilterStats.blogDedupFingerprint,
         stats: {
             ...baseFilterStats,
             afterBlogSkip: allPapersFiltered.length,
@@ -458,6 +655,7 @@ async function resumeFilterStage({
             decisionCount: Object.keys(filterDecisions).length
         },
         sourceHealth,
+        excludedRelatedIds: filtered.filter(paper => !filteredNew.some(item => normalizedId(item) === normalizedId(paper))).map(normalizedId),
         papers: filteredNew
     }, null, 2));
     return { filtered, filteredNew, filterDecisions, skippedCount };
@@ -624,19 +822,14 @@ async function runFullFetch() {
     const categories = Config.ARXIV_CATEGORIES;
 
     const papersData = loadPapersDatabase();
-    const existingIds = new Set(Object.entries(papersData.papers)
-        .filter(([, paper]) => shouldUsePaperForFetchDedup(paper))
-        .map(([id]) => normalizedId(id))
-        .filter(Boolean));
-    console.log(`已有 ${existingIds.size} 篇论文ID（已规范化），遇到重复将跳过\n`);
-
-    // 加载博客已发布论文 ID，加入去重集合
+    // 加载博客已发布论文 ID，加入不可变的当日历史去重基线。
     const blogRepo = Config.PUBLISH_CONFIG.blogRepo;
     const publishedIds = loadPublishedIdsFromBlog(blogRepo);
-    for (const pid of publishedIds) {
-        existingIds.add(pid);
-    }
-    const historicalExistingIds = new Set(existingIds);
+    const historicalDedupIds = buildHistoricalDedupBaseline(papersData, today, publishedIds);
+    const existingIds = new Set(historicalDedupIds);
+    const historicalExistingIds = new Set(historicalDedupIds);
+    console.log(`历史去重基线 ${existingIds.size} 篇（排除今日批次状态，保证同日续跑候选不缩水）\n`);
+    const candidateFingerprints = buildCandidateFingerprints(historicalExistingIds, publishedIds);
 
     let arxivPapers = [];
     let hfPapers = [];
@@ -657,15 +850,20 @@ async function runFullFetch() {
     let filterDecisions = {};
     const filterModel = process.env.PAPER_ANALYZER_MODEL || '';
     const filterPromptHash = getFilterPromptHash();
+    const filterConfigFingerprint = getFilterConfigFingerprint(filterPromptHash);
 
     const completedFiltered = loadCompleteFilteredForToday(today, FILTERED_FILE, {
         filterModel,
         filterPromptHash,
+        filterConfigFingerprint,
+        ...candidateFingerprints,
         requireConsistentFilterArtifacts: true
     });
     const resumableFilter = completedFiltered ? null : loadResumableFilterForToday(today, {
         filterModel,
-        filterPromptHash
+        filterPromptHash,
+        filterConfigFingerprint,
+        ...candidateFingerprints
     });
     if (completedFiltered) {
         console.log('⏭️ 检测到今日完整 filtered-papers.json，跳过抓取与筛选，直接续跑深度分析');
@@ -677,7 +875,9 @@ async function runFullFetch() {
             ? rawCandidates.papers
             : (databaseTodayPapers.length >= filteredNew.length ? databaseTodayPapers : filteredNew);
         allPapersFiltered = allPapers.filter(paper => !publishedIds.has(normalizedId(paper)));
-        const existingDecisions = loadReusableFilterDecisions(today, filterModel, filterPromptHash);
+        const existingDecisions = loadReusableFilterDecisions(today, filterModel, filterPromptHash, {
+            ...candidateFingerprints, filterConfigFingerprint
+        });
         filterDecisions = existingDecisions;
         const stats = completedFiltered.stats || rawCandidates?.stats || {};
         arxivOnly = stats.arxivOnly || allPapers.filter(p => p.sources?.includes('arxiv') && !p.sources?.includes('huggingface')).length;
@@ -686,6 +886,8 @@ async function runFullFetch() {
         blogSkippedCount = stats.skippedFromBlog || 0;
         skippedCount = stats.skippedFromArchive || 0;
         baseFilterStats = {
+            ...candidateFingerprints,
+            filterConfigFingerprint,
             beforeFilter: stats.beforeFilter || allPapers.length,
             beforeBlogSkip: stats.beforeBlogSkip || allPapers.length,
             afterBlogSkip: stats.afterBlogSkip || allPapersFiltered.length,
@@ -707,6 +909,8 @@ async function runFullFetch() {
         both = stats.both || allPapers.filter(p => p.sources?.includes('arxiv') && p.sources?.includes('huggingface')).length;
         blogSkippedCount = stats.skippedFromBlog || 0;
         baseFilterStats = {
+            ...candidateFingerprints,
+            filterConfigFingerprint,
             beforeFilter: stats.beforeFilter || allPapers.length,
             beforeBlogSkip: stats.beforeBlogSkip || allPapers.length,
             afterBlogSkip: allPapersFiltered.length,
@@ -720,7 +924,7 @@ async function runFullFetch() {
             allPapersFiltered,
             sourceHealth,
             baseFilterStats,
-            initialDecisions: loadReusableFilterDecisions(today, filterModel, filterPromptHash),
+            initialDecisions: resumableFilter.decisionsData.decisions,
             filterModel,
             filterPromptHash,
             today
@@ -731,29 +935,63 @@ async function runFullFetch() {
         skippedCount = resumed.skippedCount;
         console.log(`💾 筛选续跑完成，结果已保存到: ${FILTERED_FILE}`);
     } else {
-        // ========== 第一步：从 arxiv 抓取 ==========
-        console.log('📥 第一步：从 arxiv 抓取论文');
-
-        // 核心类别优先，补充类别随机打乱
+        // 核心类别优先，补充类别只在首次创建 checkpoint 时随机一次；续跑严格复用该顺序。
         const coreCategories = categories.filter(c => c.priority === 'core');
         const supplementCategories = categories.filter(c => c.priority !== 'core');
         for (let i = supplementCategories.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [supplementCategories[i], supplementCategories[j]] = [supplementCategories[j], supplementCategories[i]];
         }
-        const shuffledCategories = [...coreCategories, ...supplementCategories];
+        const initialCategoryOrder = [...coreCategories, ...supplementCategories].map(category => category.id);
+        let fetchCheckpoint = loadFetchCheckpoint(today, candidateFingerprints.candidateFingerprint) || {
+            timestamp: getBeijingISOString(),
+            ...candidateFingerprints,
+            historicalDedupIds,
+            categoryOrder: initialCategoryOrder,
+            arxiv: {},
+            huggingface: null
+        };
+        if (stableHash(fetchCheckpoint.historicalDedupIds) !== stableHash(historicalDedupIds)) {
+            throw new Error('抓取 checkpoint 的历史去重基线与当前候选指纹不一致，拒绝混用');
+        }
+        saveFetchCheckpoint(fetchCheckpoint);
+        // ========== 第一步：从 arxiv 抓取 ==========
+        console.log('📥 第一步：从 arxiv 抓取论文');
+
+        const categoryById = new Map(categories.map(category => [category.id, category]));
+        const shuffledCategories = fetchCheckpoint.categoryOrder.map(id => categoryById.get(id));
+        if (shuffledCategories.some(category => !category)
+                || fetchCheckpoint.categoryOrder.length !== categories.length
+                || new Set(fetchCheckpoint.categoryOrder).size !== categories.length) {
+            throw new Error('抓取 checkpoint 的 categoryOrder 与当前来源配置不一致');
+        }
         console.log(`  请求顺序: ${shuffledCategories.map(c => c.id).join(' → ')}\n`);
 
+        let fetchAttemptIndex = 0;
         for (let i = 0; i < shuffledCategories.length; i++) {
             const category = shuffledCategories[i];
+            const cachedCategory = fetchCheckpoint.arxiv[category.id];
+            if (cachedCategory?.status === 'complete' && cachedCategory.health?.ok === true && Array.isArray(cachedCategory.papers)) {
+                console.log(`  [${i+1}/${shuffledCategories.length}] 复用抓取 checkpoint: ${category.name} (${category.id}) ${cachedCategory.papers.length} 篇`);
+                sourceHealth.arxiv.categories.push(cachedCategory.health);
+                for (const p of cachedCategory.papers) {
+                    const id = normalizedId(p);
+                    if (id && !existingIds.has(id)) {
+                        existingIds.add(id);
+                        arxivPapers.push(p);
+                    }
+                }
+                continue;
+            }
             // 首次请求前加随机延迟
-            if (i === 0) {
+            if (fetchAttemptIndex === 0) {
                 const baseDelay = Config.ARXIV_CONFIG.firstRequestDelayMs;
                 const jitter = Math.floor(Math.random() * 10000);
                 const firstDelay = baseDelay + jitter;
                 console.log(`  首次请求前等待 ${(firstDelay/1000).toFixed(1)} 秒...`);
                 await new Promise(resolve => setTimeout(resolve, firstDelay));
             }
+            fetchAttemptIndex++;
             console.log(`  [${i+1}/${shuffledCategories.length}] 抓取 ${category.name} (${category.id})...`);
             const fetchStartTime = Date.now();
             let papers = [];
@@ -774,7 +1012,7 @@ async function runFullFetch() {
             }
             const fetchDuration = Date.now() - fetchStartTime;
             if (fetchError) {
-                sourceHealth.arxiv.categories.push({
+                const categoryHealth = {
                     id: category.id,
                     name: category.name,
                     priority: category.priority,
@@ -787,7 +1025,10 @@ async function runFullFetch() {
                     attempts: categoryFetchHealth?.attempts || 0,
                     successfulRequests: categoryFetchHealth?.successfulRequests || 0,
                     failures: categoryFetchHealth?.failures || []
-                });
+                };
+                sourceHealth.arxiv.categories.push(categoryHealth);
+                fetchCheckpoint.arxiv[category.id] = { status: 'failed', papers: [], health: categoryHealth };
+                saveFetchCheckpoint(fetchCheckpoint);
             }
 
             // 去重：将新论文 ID 加入 existingIds，避免下一类别重复抓取
@@ -803,7 +1044,7 @@ async function runFullFetch() {
                 }
             }
             if (!fetchError) {
-                sourceHealth.arxiv.categories.push({
+                const categoryHealth = {
                     id: category.id,
                     name: category.name,
                     priority: category.priority,
@@ -816,7 +1057,10 @@ async function runFullFetch() {
                     successfulRequests: categoryFetchHealth?.successfulRequests || 0,
                     failures: categoryFetchHealth?.failures || [],
                     abstractFailures: categoryFetchHealth?.abstracts?.failedIds || []
-                });
+                };
+                sourceHealth.arxiv.categories.push(categoryHealth);
+                fetchCheckpoint.arxiv[category.id] = { status: 'complete', papers, health: categoryHealth };
+                saveFetchCheckpoint(fetchCheckpoint);
             }
             console.log(`    ${category.id}: 获取 ${papers.length} 篇, 新增 ${newInCategory} 篇, 跨类别去重 ${dupInCategory} 篇`);
 
@@ -843,7 +1087,12 @@ async function runFullFetch() {
         console.log('\n📥 第二步：从 HuggingFace Papers 抓取论文');
 
         const hfStartTime = Date.now();
-        try {
+        const cachedHf = fetchCheckpoint.huggingface;
+        if (cachedHf?.status === 'complete' && cachedHf.health?.ok === true && Array.isArray(cachedHf.papers)) {
+            hfPapers = cachedHf.papers;
+            sourceHealth.huggingface = cachedHf.health;
+            console.log(`  复用 HuggingFace 抓取 checkpoint: ${hfPapers.length} 篇`);
+        } else try {
             hfPapers = await fetchHuggingFacePapers(historicalExistingIds, {
                 days: Config.HUGGINGFACE_CONFIG.defaultDays,
                 minUpvotes: Config.HUGGINGFACE_CONFIG.defaultMinUpvotes
@@ -856,6 +1105,8 @@ async function runFullFetch() {
                 minUpvotes: Config.HUGGINGFACE_CONFIG.defaultMinUpvotes,
                 durationMs: Date.now() - hfStartTime
             };
+            fetchCheckpoint.huggingface = { status: 'complete', papers: hfPapers, health: sourceHealth.huggingface };
+            saveFetchCheckpoint(fetchCheckpoint);
         } catch (e) {
             hfPapers = [];
             sourceHealth.huggingface = {
@@ -867,6 +1118,8 @@ async function runFullFetch() {
                 durationMs: Date.now() - hfStartTime,
                 error: e.message
             };
+            fetchCheckpoint.huggingface = { status: 'failed', papers: [], health: sourceHealth.huggingface };
+            saveFetchCheckpoint(fetchCheckpoint);
             console.log(`  ⚠️ HuggingFace Papers 抓取失败: ${e.message}`);
         }
 
@@ -899,6 +1152,7 @@ async function runFullFetch() {
 
         writeFileAtomic(RAW_CANDIDATES_FILE, JSON.stringify({
             timestamp: getBeijingISOString(),
+            ...candidateFingerprints,
             stats: {
                 beforeBlogSkip: allPapers.length,
                 afterBlogSkip: allPapersFiltered.length,
@@ -914,8 +1168,12 @@ async function runFullFetch() {
 
         // ========== 第四步：大模型筛选 ==========
         console.log('\n🤖 第四步：大模型筛选（判断是否语音/音频相关）');
-        filterDecisions = loadReusableFilterDecisions(today, filterModel, filterPromptHash);
+        filterDecisions = loadReusableFilterDecisions(today, filterModel, filterPromptHash, {
+            ...candidateFingerprints, filterConfigFingerprint
+        });
         baseFilterStats = {
+            ...candidateFingerprints,
+            filterConfigFingerprint,
             beforeFilter: allPapers.length,
             beforeBlogSkip: allPapers.length,
             afterBlogSkip: allPapersFiltered.length,
@@ -1007,6 +1265,8 @@ async function runFullFetch() {
             status: 'complete',
             filterModel,
             filterPromptHash,
+            filterConfigFingerprint,
+            ...candidateFingerprints,
             stats: {
                 ...baseFilterStats,
                 afterBlogSkip: allPapersFiltered.length,
@@ -1016,6 +1276,7 @@ async function runFullFetch() {
                 decisionCount: Object.keys(filterDecisions).length
             },
             sourceHealth,
+            excludedRelatedIds: filtered.filter(paper => !filteredNew.some(item => normalizedId(item) === normalizedId(paper))).map(normalizedId),
             papers: filteredNew
         }, null, 2));
         console.log(`💾 筛选结果已保存到: ${FILTERED_FILE}`);
@@ -1062,7 +1323,9 @@ async function runFullFetch() {
 
     // ========== 第五步：深度分析 ==========
     console.log('\n🔬 第五步：深度分析每篇论文');
-    const papersToAnalyze = filteredNew.filter(paper => !successfulAnalysisIds.has(normalizedId(paper)));
+    const papersToAnalyze = filteredNew
+        .filter(paper => !successfulAnalysisIds.has(normalizedId(paper)))
+        .map(paper => mergeCanonicalAnalysisState(paper, loadCanonicalAnalysisRecord(outputFile, paper)));
     const skippedAlreadyAnalyzed = filteredNew.length - papersToAnalyze.length;
     if (skippedAlreadyAnalyzed > 0) {
         console.log(`  ⏭️ 跳过 ${skippedAlreadyAnalyzed} 篇已有成功分析的论文，仅续跑剩余 ${papersToAnalyze.length} 篇`);
@@ -1073,6 +1336,23 @@ async function runFullFetch() {
         concurrency: ANALYSIS_CONCURRENCY,
         maxRetries: ANALYSIS_RETRY_MAX,
         retryDelayMs: ANALYSIS_RETRY_DELAY_MS,
+        preparePaperLocked: paper => {
+            const canonical = loadCanonicalAnalysisRecord(outputFile, paper);
+            if (isSuccessfulAnalysisRecord(canonical)) {
+                return { paper: canonical, skip: true, reason: '该论文已由其他进程完成' };
+            }
+            return { paper: mergeCanonicalAnalysisState(paper, canonical), skip: false };
+        },
+        onPaperResultLocked: async (paper, result) => {
+            if (result.skipped) return;
+            const attempted = result.result || { ...paper, analysis: null, parsed: null, error: result.error || '分析失败' };
+            analyzedPapers.push(attempted);
+            await mergeAndSaveResults([attempted], outputFile, {
+                timestamp: getBeijingISOString(),
+                status: 'running'
+            });
+            updateAnalysisDigestStatuses([attempted], { batchDate: today });
+        },
         onPaperStart: (idx, total, paper) => {
             console.log(`  [${idx + 1}/${total}] ▶ 开始: ${paper.title.substring(0, 50)}...`);
         },
@@ -1096,27 +1376,9 @@ async function runFullFetch() {
             const totalBatches = Math.ceil(papersToAnalyze.length / ANALYSIS_CONCURRENCY);
             console.log(`  ── 批次 ${batchNum}/${totalBatches} 完成: 成功 ${batchSuccess}/${batchResults.length}${batchScoreInfo}${batchFailed > 0 ? ` | 失败 ${batchFailed}` : ''}\n`);
 
-            // 收集成功结果到 analyzedPapers
-            for (const r of batchResults) {
-                if (r.success && r.result) {
-                    analyzedPapers.push(r.result);
-                } else if (!r.skipped) {
-                    analyzedPapers.push(r.result || r);
-                }
-            }
-
-            const snapshot = analyzedPapers.slice();
-            const { totalMerged } = await mergeAndSaveResults(snapshot, outputFile, {
-                timestamp: getBeijingISOString(),
-                status: 'running',
-                stats: {
-                    afterFilter: filteredNew.length,
-                    newlyAnalyzed: snapshot.filter(isSuccessfulAnalysisRecord).length
-                }
-            });
-            const { updated: statusUpdated } = updateAnalysisDigestStatuses(snapshot, { batchDate: today });
-            const statusNote = statusUpdated > 0 ? `，papers.json 状态 ${statusUpdated} 篇` : '';
-            console.log(`  💾 增量保存: ${snapshot.filter(isSuccessfulAnalysisRecord).length}/${snapshot.length} 篇已分析完成 (合并后 ${totalMerged} 篇${statusNote})`);
+            const snapshot = readJsonFileStrict(outputFile, { allowMissing: true });
+            const canonicalPapers = Array.isArray(snapshot) ? snapshot : (snapshot?.papers || []);
+            console.log(`  💾 批次状态已更新: 本批成功 ${batchSuccess} 篇（canonical 共 ${canonicalPapers.length} 篇）`);
         }
     });
 
@@ -1169,7 +1431,7 @@ async function runFullFetch() {
 
     let result;
     try {
-        result = saveFinalAnalysisResults(outputFile, analyzedPapers, filteredNew, {
+        result = finalizeAnalysisResults(outputFile, filteredNew, {
             analysisStatus,
             arxivFetched: arxivFetchedCount,
             hfFetched: hfFetchedCount,
@@ -1185,11 +1447,6 @@ async function runFullFetch() {
     } catch (e) {
         console.error(`\n❌ 保存结果失败: ${e.message}`);
         throw e;
-    }
-
-    const { updated: statusUpdated } = updateAnalysisDigestStatuses(analyzedPapers, { batchDate: today });
-    if (statusUpdated > 0) {
-        console.log(`  已更新 papers.json 分析状态: ${statusUpdated} 篇`);
     }
 
     const finalStatus = result.stats.analysisStatus;
@@ -1238,6 +1495,17 @@ module.exports = {
     shouldUsePaperForFetchDedup,
     markPaperDigestStatus,
     getFilterPromptHash,
+    getFilterConfigFingerprint,
+    stableHash,
+    stableContentSha256,
+    applyFetchSourceIntegrity,
+    hasValidFetchSourceIntegrity,
+    getSourceConfigFingerprint,
+    buildCandidateFingerprints,
+    buildHistoricalDedupBaseline,
+    loadFetchCheckpoint,
+    saveFetchCheckpoint,
+    hasCompleteSourceHealth,
     isDefinitiveFilterDecision,
     validateFilterDecisionCoverage,
     validateFilterArtifacts,
@@ -1251,7 +1519,10 @@ module.exports = {
     getFatalEmptyCandidateSourceFailures,
     loadCompleteFilteredForToday,
     loadCurrentSuccessfulAnalysisIds,
+    loadCanonicalAnalysisRecord,
+    mergeCanonicalAnalysisState,
     loadAnalyzedIdsFromArchive,
     loadTodayPapersFromDatabase,
-    saveFinalAnalysisResults
+    saveFinalAnalysisResults,
+    finalizeAnalysisResults
 };

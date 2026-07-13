@@ -68,59 +68,57 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
     });
 
     console.log('🔬 开始深度分析...');
-    const r = await withPaperAnalysisLock(targetPaper, () => analyzePaperWithRetry(targetPaper, {
-        maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
-        retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
-        onAttempt: (attempt, max) => {
-            if (attempt > 0) console.log(`    🔄 第 ${attempt + 1} 次尝试...`);
+    return withPaperAnalysisLock(targetPaper, async () => {
+        const latestData = readJsonFileStrict(resultPath, { allowMissing: true }) || { papers: [] };
+        const latestPapers = Array.isArray(latestData) ? latestData : (latestData.papers || []);
+        const canonical = latestPapers.find(p => normalizedId(p) === targetNormalizedId);
+        if (canonical && isSuccessfulAnalysisRecord(canonical) && !forceReanalyze) {
+            console.log('⚠️ 该论文已由其他进程完成，跳过');
+            return { status: 'skipped', exitCode: 0 };
         }
-    }));
-
-    if (r.success) {
-        const payload = updateJsonFileLocked(resultPath, current => {
-            const mergedPapers = mergePapersById(Array.isArray(current) ? current : (current?.papers || []), [r.result], { preserveSuccessfulAnalysis: true });
-            const next = {
-                ...(!Array.isArray(current) && current ? current : {}),
-                papers: mergedPapers,
-                lastUpdated: getBeijingISOString(),
-                stats: { ...(!Array.isArray(current) ? current?.stats : {}), singleAnalysisStatus: 'complete' }
-            };
-            if (mergedPapers.length > 0 && mergedPapers.every(isSuccessfulAnalysisRecord)) {
-                next.deepAnalysisCompletedAt = getBeijingISOString();
+        // deep-analysis-result.json 是恢复状态的权威来源；papers.json 只补充元数据。
+        const paperForAnalysis = canonical ? { ...targetPaper, ...canonical } : targetPaper;
+        const r = await analyzePaperWithRetry(paperForAnalysis, {
+            maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
+            retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
+            onAttempt: (attempt) => {
+                if (attempt > 0) console.log(`    🔄 第 ${attempt + 1} 次尝试...`);
             }
-            return next;
         });
-        const digestStatus = updateAnalysisDigestStatuses([r.result], {
-            batchDate: getBeijingISOString().slice(0, 10)
-        });
-        console.log(`    ✅ 成功！已合并到分析结果中`);
-        if (digestStatus.updated > 0) console.log(`    papers.json 状态已同步: ${digestStatus.updated} 篇`);
-        console.log(`    📊 当前总数: ${payload.papers.length} 篇`);
-        return { status: 'complete', exitCode: 0, result: r.result };
-    } else {
+        const attempted = r.result || { ...paperForAnalysis, analysis: null, parsed: null, error: r.error || '分析失败' };
         const payload = updateJsonFileLocked(resultPath, current => {
             const mergedPapers = mergePapersById(
                 Array.isArray(current) ? current : (current?.papers || []),
-                [r.result],
+                [attempted],
                 { preserveSuccessfulAnalysis: true }
             );
             const next = {
                 ...(!Array.isArray(current) && current ? current : {}),
                 papers: mergedPapers,
                 lastUpdated: getBeijingISOString(),
-                stats: { ...(!Array.isArray(current) ? current?.stats : {}), singleAnalysisStatus: 'failed' }
+                stats: { ...(!Array.isArray(current) ? current?.stats : {}), singleAnalysisStatus: r.success ? 'complete' : 'failed' }
             };
-            delete next.deepAnalysisCompletedAt;
+            if (r.success && mergedPapers.length > 0 && mergedPapers.every(isSuccessfulAnalysisRecord)) {
+                next.deepAnalysisCompletedAt = getBeijingISOString();
+            } else {
+                delete next.deepAnalysisCompletedAt;
+            }
             return next;
         });
-        const digestStatus = updateAnalysisDigestStatuses([r.result], {
+        const digestStatus = updateAnalysisDigestStatuses([attempted], {
             batchDate: getBeijingISOString().slice(0, 10)
         });
+        if (r.success) {
+            console.log(`    ✅ 成功！已合并到分析结果中`);
+            if (digestStatus.updated > 0) console.log(`    papers.json 状态已同步: ${digestStatus.updated} 篇`);
+            console.log(`    📊 当前总数: ${payload.papers.length} 篇`);
+            return { status: 'complete', exitCode: 0, result: attempted };
+        }
         console.log(`    ❌ 最终失败: ${r.error}`);
         if (digestStatus.updated > 0) console.log(`    papers.json 状态已同步: ${digestStatus.updated} 篇`);
         console.log(`    💾 已保留恢复 checkpoint（当前总数: ${payload.papers.length} 篇）`);
-        return { status: 'failed', exitCode: 1, error: r.error, result: r.result };
-    }
+        return { status: 'failed', exitCode: 1, error: r.error, result: attempted };
+    });
 }
 
 if (require.main === module) {

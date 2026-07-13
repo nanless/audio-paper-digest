@@ -247,6 +247,64 @@ describe('entry recovery contracts', () => {
         assert.strictEqual(saved.stats.remainingFailed, 0);
     });
 
+    it('refilter 批次与收尾不会用陈旧累计结果覆盖另一运行的较新锁内写入', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'refilter-stale-finalize-'));
+        const papersPath = path.join(dir, 'papers.json');
+        const archiveDir = path.join(dir, 'archive');
+        const resultFile = path.join(archiveDir, '2026-07-08', 'deep-analysis-result.json');
+        fs.writeFileSync(papersPath, JSON.stringify({
+            generation: 1,
+            papers: {
+                '2607.32': {
+                    arxivId: '2607.32',
+                    title: 'Concurrent paper',
+                    abstract: 'audio',
+                    fetchedAt: '2026-07-08T09:00:00+08:00'
+                }
+            }
+        }));
+        const filterFn = async papers => {
+            const filtered = papers.slice();
+            Object.defineProperty(filtered, '_filterStats', {
+                value: { complete: true, totalCandidates: 1, decided: 1, retryable: 0 }
+            });
+            return filtered;
+        };
+        const stale = validAnalysisRecord('2607.32', { title: 'run A stale result' });
+        const newer = validAnalysisRecord('2607.32v2', { title: 'run B newer result' });
+        const analyzeBatchFn = async (papers, callbacks) => {
+            await callbacks.onPaperResultLocked(papers[0], { success: true, result: stale });
+            saveSuccessfulResultsById(resultFile, [newer], {
+                date: '2026-07-08',
+                expectedIds: ['2607.32'],
+                refilterStatus: 'running'
+            });
+            callbacks.onBatchDone(1, [{ success: true, result: stale }]);
+            return {
+                results: [stale],
+                stats: { success: 1, failed: 0, skipped: 0, sourceCounts: {} }
+            };
+        };
+
+        const result = await refilterMain('2026-07-08', {
+            today: '2026-07-10',
+            papersPath,
+            archiveDir,
+            currentDir: path.join(dir, 'current'),
+            currentFile: path.join(dir, 'current', 'deep-analysis-result.json'),
+            legacyCurrentFile: path.join(dir, 'deep-analysis-result.json'),
+            filterFn,
+            analyzeBatchFn,
+            digestStatusUpdater: () => ({ updated: 0 })
+        });
+
+        const saved = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
+        assert.strictEqual(result.status, 'complete');
+        assert.strictEqual(saved.papers.length, 1);
+        assert.strictEqual(saved.papers[0].title, 'run B newer result');
+        assert.strictEqual(saved.papers[0].arxivId, '2607.32v2');
+    });
+
     it('refilter 筛选不完整时写 filter_failed 并返回非零', async () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'refilter-filter-failed-'));
         const papersPath = path.join(dir, 'papers.json');

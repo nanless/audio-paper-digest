@@ -33,7 +33,11 @@ Paper deduplication database. **This file is not archived; it accumulates contin
 
 `pending_analysis` and `analysis_failed` are not used for strong deduplication in the next `full-fetch`, so interrupted or failed analyses can naturally re-enter the pipeline. Successful analysis updates the status to `analyzed`. `full-fetch.js`, `deep-analysis-only.js`, `reanalyze.js`, `batch-analyze.js`, `reanalyze-selected.js`, `analyze-single-paper.js`, and `refilter-reanalyze-by-date.js` all sync this status through `scripts/digest-status.js` to avoid divergent write paths. If the latest attempt fails but an older successful analysis is still available, `status` remains `analyzed`, while `latestAttemptStatus: "analysis_failed"` and `error` record the failed attempt; failure writes do not overwrite existing successful `analysis` / `parsed` / image metadata with empty values.
 
-### 5.2 `data/current/raw-candidates.json`
+### 5.2 `data/current/fetch-checkpoint.json`
+
+Per-source crawl checkpoint. Each arXiv category and HuggingFace store status, paper array, `papersCount`, stable `papersSha256`, and health; tampering invalidates only that source. Fixed category order, immutable historical baseline, fingerprints, and Beijing batch date must match raw/decision/filtered artifacts. Filtering requires complete valid coverage.
+
+### 5.3 `data/current/raw-candidates.json`
 
 Candidate input after arXiv + HuggingFace merge and blog-published filtering. Used to debug why a paper did or did not enter filtering.
 
@@ -83,7 +87,7 @@ Fetchers record attempts, successful requests, and failure details in `sourceHea
 
 `npm run validate:data` checks the `papers` array, the basic `sourceHealth` shape, and candidate stats: `stats.afterBlogSkip` must equal the candidate paper count, `stats.skippedFromBlog` must equal the before/after blog-deduplication difference, and `stats.arxivOnly + stats.hfOnly + stats.both` must equal the pre-blog-deduplication candidate total.
 
-### 5.3 `data/current/filter-decisions.json`
+### 5.4 `data/current/filter-decisions.json`
 
 Per-paper LLM filtering decision cache. It is written after every batch; reruns only reuse definitive boolean decisions from the same `filterModel` and `filterPromptHash`. API failures and indeterminate outputs are stored separately as retryable diagnostics and prevent `stats.complete=true`.
 `npm run validate:data` checks that `stats.decided` equals the number of `decisions`, `stats.related` equals the number of decisions with `related: true`, each decision has a boolean `related`, and fields such as `reason` / `rawResponse` / `parseSource` are strings when present. When `stats.complete=true`, `decisions` must cover every candidate in `raw-candidates.json`.
@@ -116,7 +120,7 @@ Per-paper LLM filtering decision cache. It is written after every batch; reruns 
 }
 ```
 
-### 5.4 `data/current/filtered-papers.json`
+### 5.5 `data/current/filtered-papers.json`
 
 Filtering results (metadata only, no deep analysis). Structure:
 New-format allowed `status` values are `filtering`, `filter_complete`, and `complete`, and the file must include `filterModel` and `filterPromptHash`. `filter_complete` is a transient state after per-paper LLM filtering but before archive deduplication. Only `complete` with a model/hash matching the current configuration lets the main workflow skip crawling/filtering and resume deep analysis on same-day reruns. Older object-format files without `status` do not trigger the skip-crawl/filter resume path, and `npm run validate:data` reports them so they can be regenerated or migrated.
@@ -178,7 +182,7 @@ For `complete` output:
 
 `npm run validate:data` checks these constraints read-only so corrupted filter caches are not silently reused by resumed runs.
 
-### 5.5 `data/current/deep-analysis-result.json`
+### 5.6 `data/current/deep-analysis-result.json`
 
 Core analysis results. Structure:
 
@@ -314,20 +318,28 @@ Core analysis results. Structure:
 - `analysisManifest.stages.scoringAudit` retains model/options, prompt/evidence hashes, attempts, previous/final score and delta, the final audit JSON, and `stabilityWarning` when absolute drift exceeds 0.5
 - `selectedImageUrls` / `imageUrls` contain only high-value figures inserted through a stable `paragraph_id`, target-section, and four-image-limit gate, stored in final body order. Legacy exact anchors remain compatible. `imageManifest` also preserves per-URL outcomes, cache hits, model/options, hashes, and insertion diagnostics
 - Root `generation` increments on each locked object write so concurrent updates can be detected and merged. Every mandatory version-1 `analysisManifest` stage must be terminal (`complete`, `not_needed`, `skipped`, `no_candidates`, or `no_high_value_images`) before the paper is successful; only a strict empty insertion plan produces `no_high_value_images`
-- Failed records may retain `analysisCheckpoint` and `analysisRecoveryImageManifest`. When an older successful body is still valid, `analysis` / `parsed` stay intact while recovery fields and `digestStatus.latestAttemptStatus: analysis_failed` are overlaid; recovery checkpoint fields are removed after eventual success
+- `analysisStageCheckpoints` persists stage snapshots. Fingerprints cover the actual truncated input, model/protocol/endpoint, temperatures, extracted prompts, image candidates, and downloaded hashes; only the changed stage and downstream work are invalidated
+- Failed records retain recovery checkpoints, and every paper payload is merged from the latest canonical record under the shared paper lock. Batch finalization must not rewrite stale cumulative paper payloads
 - **`parsed.score` is not the raw total score from the LLM under `## 评分`**. It is recomputed only when all eight dimensions are complete and unique, denominators are correct, and values are finite and in range. Otherwise `scoreValidation` records a contract error and saving/publishing is blocked rather than treating missing dimensions as zero
 - `machineSummary` inside `parsed` is the parsed result of `## 机器摘要`; fields such as `rankBucket`, `innovationScore`, `technicalRigorScore`, etc. are also flattened to the top level of `parsed` for easier access
 - `npm run validate:data` checks document type, rubric version, all dimension ranges, and `parsed.score == min(sum of eight dimensions, 10)`
 - Before publishing, `analysis` is reparsed and compared with cached `parsed` data and the top-level rubric version. Mismatches block publishing; manual overrides require explicit type, source, reason, and allowed fields in `parsedOverride` and still must satisfy one-decimal values and fixed Open Source anchors
 
-### 5.6 `data/current/analyzed.json`
+### 5.7 `data/current/analyzed.json`
 
 Legacy analyzed records (leftover from the `fetch-papers.js` direct-run workflow). Not directly used by the current main workflow, but kept for compatibility and included in daily archiving.
 
 ---
 
-### 5.7 Blog Stage Manifest and Review Receipt
+### 5.8 Blog Journals, Manifests, and Review Receipts
 
-- `blog-generation-manifest-YYYY-MM-DD.json`: written by `generate-blog.py`; records the exact generated and deleted `content/posts` paths.
-- `blog-review-failure-YYYY-MM-DD.json`: written after a failed strict review; binds the generation-manifest SHA-256, blog `main` baseline, final per-file hashes, and pass/fail status for safe failed-page-only retries. It is not a push receipt.
+- Generation staging/install journals record each page's input, prior SHA, and expected SHA. Crash recovery adopts only an exact match; the index and strict manifest are created after every paper completes.
+- `blog-generation-manifest-YYYY-MM-DD.json` contains a non-empty, unique, schema-valid exact file set, input/generation-dependency fingerprints, base HEAD, and per-file hashes.
+- `blog-review-failure-YYYY-MM-DD.json` binds the SHA actually read by each worker. Content failures can be selectively re-reviewed, transient failures remain retryable, and missing expected pages or SHA changes across the Hugo gate block reuse.
 - `blog-review-receipt-YYYY-MM-DD.json`: written by `review-blog.py` only after strict LLM/image review and the Hugo gate pass; stores each reviewed file SHA-256 or deletion marker. `push-blog.py` only consumes this receipt and rejects any post-review file change.
+
+All three blog stages share both per-date and repository-global locks. Push verifies staged index blobs/deletions against the receipt after staging and again before commit.
+
+### 5.9 `data/current/xiaohongshu-oneliners-YYYY-MM-DD.json`
+
+Per-paper success cache used only to generate Xiaohongshu copy. Entries are saved under a per-date lock and bind analysis, prompt, model/endpoint configuration, and sanitation fingerprints. Corrupt caches are quarantined and rebuilt; fallbacks or changed inputs rerun only that paper. No automatic publication is involved.

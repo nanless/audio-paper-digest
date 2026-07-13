@@ -65,7 +65,9 @@ const FILTER_CONFIG = {
     maxRetries: 5,
     batchSize: 5,
     delayBetweenBatchesMs: 2000,
-    temperature: 0.3
+    temperature: 0.3,
+    maxTokens: 1000,
+    decisionContractVersion: 2
 };
 
 // ═══════════════════════════════════════════════════════
@@ -117,6 +119,7 @@ const FILES = {
     papers: path.join(CURRENT_DIR, 'papers.json'),
     papersLegacy: path.join(DATA_DIR, 'papers.json'),
     rawCandidates: path.join(CURRENT_DIR, 'raw-candidates.json'),
+    fetchCheckpoint: path.join(CURRENT_DIR, 'fetch-checkpoint.json'),
     filterDecisions: path.join(CURRENT_DIR, 'filter-decisions.json'),
     filteredPapers: path.join(CURRENT_DIR, 'filtered-papers.json'),
     deepAnalysisResult: path.join(CURRENT_DIR, 'deep-analysis-result.json'),

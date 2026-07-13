@@ -107,6 +107,23 @@ async function runDeepAnalysis() {
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
         saveInterval: Config.ANALYSIS_CONFIG.concurrency,
+        preparePaperLocked: paper => {
+            const current = readJsonFileStrict(resultPath);
+            const currentPapers = Array.isArray(current) ? current : (current.papers || []);
+            const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
+            if (isSuccessfulAnalysisRecord(latest)) return { paper: latest, skip: true };
+            return { paper: latest || paper, skip: false };
+        },
+        onPaperResultLocked: async (paper, result) => {
+            const attempted = result.result || { ...paper, analysis: null, parsed: null, error: result.error || '分析失败' };
+            updateJsonFileLocked(resultPath, current => ({
+                ...(!Array.isArray(current) && current ? current : {}),
+                lastUpdated: getBeijingISOString(),
+                papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), [attempted], { preserveSuccessfulAnalysis: true }),
+                stats: { ...(!Array.isArray(current) ? current?.stats : {}), analysisStatus: 'running' }
+            }));
+            updateAnalysisDigestStatuses([attempted], { batchDate: today });
+        },
         onPaperStart: (idx, total, paper) => {
             console.log(`  [${idx + 1}/${papers.length}] ${paper.title.substring(0, 50)}...`);
         },
@@ -119,7 +136,7 @@ async function runDeepAnalysis() {
                 console.log(`    ❌ 失败 | ${durSec}s | ${result.error}`);
             }
         },
-        onSave: async (results, saveStats) => {
+        onSave: async (_results, saveStats) => {
             const processed = saveStats.success + saveStats.failed;
             const progressStatus = processed < notAnalyzed.length
                 ? 'running'
@@ -127,15 +144,11 @@ async function runDeepAnalysis() {
             const output = updateJsonFileLocked(resultPath, current => ({
                 ...(!Array.isArray(current) && current ? current : {}),
                 lastUpdated: getBeijingISOString(),
-                papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), results.filter(Boolean), { preserveSuccessfulAnalysis: true }),
+                papers: Array.isArray(current) ? current : (current?.papers || []),
                 stats: { ...(!Array.isArray(current) ? current?.stats : {}), ...saveStats, analysisStatus: progressStatus }
             }));
             papers.splice(0, papers.length, ...(output.papers || []));
-            const digestStatus = updateAnalysisDigestStatuses(results, {
-                batchDate: today
-            });
-            const statusNote = digestStatus.updated > 0 ? `，papers.json 状态 ${digestStatus.updated} 篇` : '';
-            console.log(`  💾 已保存 (${saveStats.success + saveStats.failed}/${notAnalyzed.length})${statusNote}`);
+            console.log(`  💾 已更新批次统计 (${saveStats.success + saveStats.failed}/${notAnalyzed.length})`);
         }
     });
 

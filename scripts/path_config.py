@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 import shutil
 import socket
 import stat
@@ -10,6 +11,7 @@ import tempfile
 import time
 import uuid
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -35,8 +37,27 @@ def resolve_deep_analysis_result_path(current_path=DEEP_ANALYSIS_RESULT_FILE, le
     return legacy_path
 
 
+def validate_date_component(target_date):
+    value = str(target_date or '')
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+        raise ValueError(f'日期必须为 YYYY-MM-DD: {value!r}')
+    try:
+        datetime.strptime(value, '%Y-%m-%d')
+    except ValueError as exc:
+        raise ValueError(f'日期非法: {value!r}') from exc
+    return value
+
+
 def xiaohongshu_markdown_path(target_date, suffix):
+    target_date = validate_date_component(target_date)
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', str(suffix or '')):
+        raise ValueError(f'小红书输出后缀非法: {suffix!r}')
     return CURRENT_DIR / f"xiaohongshu-{target_date}-{suffix}.md"
+
+
+def xiaohongshu_oneliner_cache_path(target_date):
+    target_date = validate_date_component(target_date)
+    return CURRENT_DIR / f"xiaohongshu-oneliners-{target_date}.json"
 
 
 def wechat_preview_path(target_date):

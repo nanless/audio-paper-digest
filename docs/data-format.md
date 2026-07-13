@@ -37,7 +37,11 @@
 
 `pending_analysis` 和 `analysis_failed` 不参与下一次 `full-fetch` 的强去重，因此分析中断或失败后可自然重跑；成功分析后更新为 `analyzed`。`full-fetch.js`、`deep-analysis-only.js`、`reanalyze.js`、`batch-analyze.js`、`reanalyze-selected.js`、`analyze-single-paper.js` 和 `refilter-reanalyze-by-date.js` 都通过 `scripts/digest-status.js` 同步该状态，避免不同入口写法分叉。若最新一次尝试失败但已有旧的成功分析可用，`status` 保持 `analyzed`，并用 `latestAttemptStatus: "analysis_failed"` 与 `error` 记录这次失败；失败写回不会把已有成功 `analysis` / `parsed` / 图片元数据覆盖为空。
 
-### 5.2 `data/current/raw-candidates.json`
+### 5.2 `data/current/fetch-checkpoint.json`
+
+逐来源抓取 checkpoint。每个 arXiv 类别与 HuggingFace 保存 `status`、论文数组、`papersCount`、稳定 `papersSha256` 和 `health`；内容篡改或截短只使对应来源失效。固定类别顺序、不可变历史去重基线、候选指纹与北京时间批次日期必须和 raw/decisions/filtered 一致。只有全部必需来源结构和覆盖完整时才能进入筛选。
+
+### 5.3 `data/current/raw-candidates.json`
 
 当日 arXiv + HuggingFace 合并、博客已发布过滤后的筛选输入。用于排查“为什么某篇论文进/没进筛选”。结构：
 
@@ -87,7 +91,7 @@
 
 `npm run validate:data` 会检查 `papers` 数组、`sourceHealth` 基本形状，并要求 `stats.afterBlogSkip` 等于候选论文数量、`stats.skippedFromBlog` 等于博客去重前后差值、`stats.arxivOnly + stats.hfOnly + stats.both` 等于博客去重前候选总量。
 
-### 5.3 `data/current/filter-decisions.json`
+### 5.4 `data/current/filter-decisions.json`
 
 LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用同模型、同 prompt 的明确布尔决定。API 错误或无法判断的响应单独记为 `retryable` 诊断，不能进入正式决定缓存，也会阻止 `stats.complete=true`。
 `npm run validate:data` 会检查 `stats.decided` 是否等于 `decisions` 数量、`stats.related` 是否等于 `related: true` 数量，并要求每条决策的 `related` 为布尔值，`reason` / `rawResponse` / `parseSource` 等字段为字符串。若 `stats.complete=true`，还会要求 `decisions` 覆盖 `raw-candidates.json` 中的全部候选论文。
@@ -120,7 +124,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 }
 ```
 
-### 5.4 `data/current/filtered-papers.json`
+### 5.5 `data/current/filtered-papers.json`
 
 筛选结果（仅元数据，无深度分析）。结构：
 新格式 `status` 允许值为 `filtering`、`filter_complete`、`complete`，并必须包含 `filterModel` 与 `filterPromptHash`。其中 `filter_complete` 是逐篇 LLM 筛选完成但尚未完成归档去重的临时状态；只有 `complete` 且模型/hash 与当前配置一致时，主流程才会在当天重跑时跳过抓取/筛选并直接续跑深度分析。早期没有 `status` 的旧对象格式不会触发跳过抓取/筛选，`npm run validate:data` 会提示补齐或重生成。
@@ -182,7 +186,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 
 这些约束由 `npm run validate:data` 只读检查，避免筛选缓存损坏后被续跑流程误用。
 
-### 5.5 `data/current/deep-analysis-result.json`
+### 5.6 `data/current/deep-analysis-result.json`
 
 核心分析结果。结构：
 
@@ -329,20 +333,28 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 - `selectedImageUrls` / `imageUrls` 只保存通过稳定 `paragraph_id`、目标章节匹配和每篇默认 4 张上限门禁后实际插入正文的高价值图片，并按最终正文出现顺序保存；旧精确 anchor 仅用于兼容。`allImageUrls` 不能直接当作可发布图片使用
 - `generation` 每次锁内对象写入递增。恢复终态还包括 `no_downloadable_images`：候选均为永久不可下载；`invalid_output` 表示有插图计划但无法落地，必须只重试插图阶段
 - `analysisManifest.stages.scoringAudit` 保存模型、温度、prompt 模板哈希、证据哈希、尝试次数、前后总分/差值、稳定性告警和最终八维 JSON；分数变化超过 0.5 会写 `stabilityWarning: true`。`imageManifest.supplement` 保存副模型、温度、prompt/响应哈希及逐项插入诊断
-- 失败结果可暂存 `analysisCheckpoint` 与 `analysisRecoveryImageManifest` 供续跑；若旧成功正文仍有效，`analysis` / `parsed` 保持不变，恢复字段和 `digestStatus.latestAttemptStatus: analysis_failed` 叠加保存。下一次成功后恢复 checkpoint 字段会被删除
+- `analysisStageCheckpoints` 保存逐阶段快照；指纹绑定实际截断输入、模型/协议/端点、温度、实际 prompt、图片候选与下载 SHA。输入变化只回滚当前及下游阶段，续跑从首个未完成阶段开始
+- 失败结果保留恢复 checkpoint；每篇内容只能在共享论文锁内从最新规范记录合并写回，批次收尾不得用旧累计快照覆盖并发进程的新结果
 - **`parsed.score` 不是直接取 `## 评分` 下的 LLM 原始总分**。只有八个分项完整、唯一、分母正确、数值有限且位于合法范围时才重新计算并封顶为 10；否则 `scoreValidation` 记录契约错误并阻断保存/发布，不会把缺失维度当 0 覆盖原分数
 - `parsed` 中的 `machineSummary` 是 `## 机器摘要` 的解析结果；`rankBucket`、`innovationScore`、`technicalRigorScore` 等 8 个子项字段同时平铺到 `parsed` 顶层以便访问
 - `npm run validate:data` 会校验文档类型、rubric 版本、八个子项范围以及 `parsed.score == min(八项之和, 10)`
 - 发布前会从 `analysis` 重新解析并与 `parsed`、顶层评分版本比较；缓存不一致会阻断发布。人工覆盖必须通过 `parsedOverride` 明确声明类型、来源、原因和允许覆盖字段，并仍满足最多一位小数及开源固定锚点契约
 
-### 5.6 `data/current/analyzed.json`
+### 5.7 `data/current/analyzed.json`
 
 旧版已分析记录（`fetch-papers.js` 直跑流程遗留）。当前主流程不直接使用，但保留兼容，参与每日归档。
 
 ---
 
-### 5.7 博客阶段清单与审查凭证
+### 5.8 博客阶段 journal、清单与审查凭证
 
-- `blog-generation-manifest-YYYY-MM-DD.json`：由 `generate-blog.py` 写入，记录本次生成和删除的精确 `content/posts` 路径。
-- `blog-review-failure-YYYY-MM-DD.json`：严格 review 失败时写入，绑定生成清单 SHA-256、博客 `main` 基线、逐文件最终 SHA-256 和通过状态，用于只复审已修改的失败页面；它不是推送凭证。
+- generation staging/install journal：逐页记录输入指纹、安装前 SHA 和目标 SHA；崩溃后只收养内容完全匹配的页面，全部论文完成后才生成汇总页和严格 manifest。
+- `blog-generation-manifest-YYYY-MM-DD.json`：记录非空、唯一且结构合法的精确文件集合、输入/生成依赖指纹、博客基线与逐文件 SHA。
+- `blog-review-failure-YYYY-MM-DD.json`：绑定 worker 实际读取 SHA、生成清单和博客基线。内容失败修复后只复审失败页；瞬时失败保持可重试；应存在文件消失或 Hugo 前后 SHA 变化均阻断复用。
 - `blog-review-receipt-YYYY-MM-DD.json`：由 `review-blog.py` 在严格 LLM/图片 review 和 Hugo gate 通过后写入，包含每个已审查文件的 SHA-256 或删除标记。`push-blog.py` 只读取该凭证，任一文件在 review 后变更都会阻断推送。
+
+三个博客入口同时用日期级锁和博客仓库级全局锁串行化；push 在 stage 后及 commit 前校验 index blob 与凭证完全一致。
+
+### 5.9 `data/current/xiaohongshu-oneliners-YYYY-MM-DD.json`
+
+仅用于生成小红书文案的逐篇成功缓存。每条绑定分析、prompt、模型端点配置与清洗契约指纹；日期级锁内原子写入。损坏缓存会隔离改名后重建，失败回退或指纹变化只重跑对应论文，不会触发自动发布。

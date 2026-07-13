@@ -14,19 +14,27 @@ setup_script_logging(__file__)
     python3 publish-xiaohongshu.py --top 7        # 指定 TOP N
     python3 publish-xiaohongshu.py --date 2026-04-22
 """
-import json, re, sys, os, datetime, concurrent.futures
+import json, re, sys, os, datetime, concurrent.futures, hashlib
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from publish_common import (
     load_papers, get_today_bj, score_and_sort, extract_top_tags,
     score_emoji, format_medal, extract_one_liner, call_publish_llm_api,
-    validate_papers_for_publish,
+    validate_papers_for_publish, normalize_publish_arxiv_id,
 )
-from path_config import atomic_write_text, xiaohongshu_markdown_path
+from path_config import (
+    CURRENT_DIR, atomic_write_text, file_lock, read_json_strict, update_json_file_locked,
+    validate_date_component,
+    xiaohongshu_markdown_path, xiaohongshu_oneliner_cache_path,
+)
 
 
 _OSS_YES = {'是', 'yes', 'true', '有', '已开源', '已公开'}
 _OSS_NO = {'否', 'no', 'false', '无', '未开源', '未公开'}
+_ONELINER_CACHE_SCHEMA_VERSION = 1
+_ONELINER_TEMPERATURE = 0.7
+_ONELINER_RENDER_CONTRACT_VERSION = 1
 
 
 def get_oneliner_concurrency():
@@ -126,19 +134,24 @@ def build_oneliner_context(title, abstract, pa=None):
     return "\n".join(parts)
 
 
-def call_llm_for_oneliner(title, abstract, pa=None):
-    """调用 LLM 生成一句话论文介绍，自动检测协议。"""
+def build_oneliner_prompt(title, abstract, pa=None):
+    """构造稳定的 one-liner prompt，供调用和缓存指纹共同使用。"""
     context = build_oneliner_context(title, abstract, pa)
-    prompt = f"""用1-2句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书。总字数严格控制在70字以内，必须输出完整内容，不要省略。优先突出任务、方法、实验收益或开源价值，不要只复述标题。开源情况只能依据“结构化开源状态”，不得从其他文字推断：
+    return f"""用1-2句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书。总字数严格控制在70字以内，必须输出完整内容，不要省略。优先突出任务、方法、实验收益或开源价值，不要只复述标题。开源情况只能依据“结构化开源状态”，不得从其他文字推断：
 
 {context}
 
 只输出介绍文字，不要任何解释、格式标记、emoji或LaTeX公式。"""
 
+
+def call_llm_for_oneliner(title, abstract, pa=None):
+    """调用 LLM 生成一句话论文介绍，自动检测协议。"""
+    prompt = build_oneliner_prompt(title, abstract, pa)
+
     content = call_publish_llm_api(
         prompt,
         max_tokens=500,
-        temperature=0.7,
+        temperature=_ONELINER_TEMPERATURE,
         required=False,
         context="小红书 one-liner",
         timeout=180
@@ -146,41 +159,198 @@ def call_llm_for_oneliner(title, abstract, pa=None):
     return safe_oneliner((content or '').strip('"\''), pa, max_len=65)
 
 
-def generate_llm_oneliners(top_papers):
-    """为 TOP N 论文受控并行生成 LLM one-liner，结果按输入排名索引保存。"""
+def _sha256_text(value):
+    return hashlib.sha256(str(value or '').encode('utf-8')).hexdigest()
+
+
+def _paper_cache_identity(paper):
+    value = paper.get('normalizedArxivId') or paper.get('arxivId') or paper.get('paper_id') or paper.get('id')
+    try:
+        return normalize_publish_arxiv_id(value)
+    except Exception:
+        return ''
+
+
+def build_oneliner_fingerprint(paper, pa):
+    title = paper.get('title', '')
+    abstract = paper.get('abstract', '') or paper.get('summary', '')
+    prompt = build_oneliner_prompt(title, abstract, pa)
+    config = {
+        'model': os.environ.get('PAPER_ANALYZER_MODEL', ''),
+        'endpoint': os.environ.get('PAPER_ANALYZER_ENDPOINT', ''),
+        'temperature': _ONELINER_TEMPERATURE,
+    }
+    return {
+        'analysisSha256': _sha256_text(paper.get('analysis', '')),
+        'promptSha256': _sha256_text(prompt),
+        'configSha256': _sha256_text(json.dumps(config, ensure_ascii=False, sort_keys=True)),
+        'model': config['model'],
+        'renderContractVersion': _ONELINER_RENDER_CONTRACT_VERSION,
+    }
+
+
+def _load_oneliner_cache(cache_path, date_str):
+    cache_path = Path(cache_path)
+    try:
+        data = read_json_strict(cache_path, allow_missing=True)
+    except RuntimeError as exc:
+        _quarantine_oneliner_cache(cache_path, exc)
+        return {'schemaVersion': _ONELINER_CACHE_SCHEMA_VERSION, 'date': date_str, 'entries': {}}
+    if data is None:
+        return {'schemaVersion': _ONELINER_CACHE_SCHEMA_VERSION, 'date': date_str, 'entries': {}}
+    if not isinstance(data, dict) or data.get('schemaVersion') != _ONELINER_CACHE_SCHEMA_VERSION \
+            or data.get('date') != date_str or not isinstance(data.get('entries'), dict):
+        _quarantine_oneliner_cache(cache_path, '版本、日期或结构非法')
+        return {'schemaVersion': _ONELINER_CACHE_SCHEMA_VERSION, 'date': date_str, 'entries': {}}
+    return data
+
+
+def _quarantine_oneliner_cache(cache_path, reason):
+    """Atomically isolate a derived cache; generation may safely rebuild it."""
+    cache_path = Path(cache_path)
+    if not cache_path.exists():
+        return None
+    stamp = datetime.datetime.now().strftime('%Y%m%dT%H%M%S%f')
+    quarantine = cache_path.with_name(f'{cache_path.name}.corrupt-{stamp}-{os.getpid()}')
+    try:
+        os.replace(cache_path, quarantine)
+    except FileNotFoundError:
+        return None
+    print(f'⚠️ 小红书 one-liner 缓存已原子隔离并将重建: {quarantine} ({reason})')
+    return quarantine
+
+
+def _save_oneliner_cache_entry(
+    cache_path, date_str, paper_id, fingerprint, status, oneliner=None,
+    expected_entry=None,
+):
+    if not paper_id:
+        return
+
+    wrote = False
+
+    def update(current):
+        nonlocal wrote
+        if current is None:
+            current = {'schemaVersion': _ONELINER_CACHE_SCHEMA_VERSION, 'date': date_str, 'entries': {}}
+        if current.get('schemaVersion') != _ONELINER_CACHE_SCHEMA_VERSION \
+                or current.get('date') != date_str or not isinstance(current.get('entries'), dict):
+            raise RuntimeError(f'小红书 one-liner 缓存结构非法，拒绝覆盖: {cache_path}')
+        next_data = dict(current)
+        entries = dict(current['entries'])
+        current_entry = entries.get(paper_id)
+        # Optimistic checkpoint CAS: a worker based on an older snapshot may
+        # never replace a success written after that snapshot.
+        if current_entry != expected_entry and isinstance(current_entry, dict) \
+                and current_entry.get('status') == 'success':
+            return None
+        entries[paper_id] = {
+            **fingerprint,
+            'status': status,
+            'oneliner': oneliner if status == 'success' else None,
+            'updatedAt': datetime.datetime.now(
+                datetime.timezone(datetime.timedelta(hours=8)),
+            ).isoformat(),
+        }
+        next_data['entries'] = entries
+        wrote = True
+        return next_data
+
+    update_json_file_locked(cache_path, update)
+    return wrote
+
+
+def generate_llm_oneliners(top_papers, date_str=None, cache_path=None):
+    """并行生成 one-liner；跨运行复用成功项，只重试缺失或失败项。"""
     if not top_papers:
         return {}
-    workers = min(get_oneliner_concurrency(), max(1, len(top_papers)))
+
+    use_cache = bool(date_str)
+    cache_path = cache_path or (xiaohongshu_oneliner_cache_path(date_str) if use_cache else None)
+    cache = _load_oneliner_cache(cache_path, date_str) if use_cache else {'entries': {}}
+    results = {}
+    pending = []
+    for idx, item in enumerate(top_papers):
+        _score, paper, pa = item
+        paper_id = _paper_cache_identity(paper)
+        fingerprint = build_oneliner_fingerprint(paper, pa)
+        cached = cache['entries'].get(paper_id) if paper_id else None
+        reusable = (
+            isinstance(cached, dict)
+            and cached.get('status') == 'success'
+            and isinstance(cached.get('oneliner'), str)
+            and all(cached.get(key) == value for key, value in fingerprint.items())
+        )
+        if reusable:
+            sanitized = safe_oneliner(cached['oneliner'], pa, max_len=65)
+            if sanitized:
+                results[idx] = sanitized
+                if sanitized != cached['oneliner']:
+                    _save_oneliner_cache_entry(
+                        cache_path, date_str, paper_id, fingerprint, 'success', sanitized,
+                        expected_entry=cached,
+                    )
+                continue
+        pending.append((idx, item, paper_id, fingerprint, cached))
+
+    if results:
+        print(f"♻️ 复用小红书 one-liner 缓存 {len(results)} 篇，仅生成 {len(pending)} 篇")
+    if not pending:
+        return results
+
+    workers = min(get_oneliner_concurrency(), len(pending))
     print(f"🤖 正在并发生成论文一句话介绍（并发度: {workers}）...")
 
-    def worker(item):
+    def worker(pending_item):
+        idx, item, paper_id, fingerprint, expected_entry = pending_item
         score, p, pa = item
         title = p.get('title', '')
         abstract = p.get('abstract', '') or p.get('summary', '')
         result = call_llm_for_oneliner(title, abstract, pa)
-        return result
+        cache_saved = True
+        if use_cache:
+            try:
+                cache_saved = _save_oneliner_cache_entry(
+                    cache_path, date_str, paper_id, fingerprint,
+                    'success' if result else 'fallback', result,
+                    expected_entry=expected_entry,
+                )
+            except Exception:
+                cache_saved = False
+        return idx, result, cache_saved
 
-    results = {}
     statuses = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        future_to_idx = {executor.submit(worker, item): i for i, item in enumerate(top_papers)}
-        for future in concurrent.futures.as_completed(future_to_idx):
-            idx = future_to_idx[future]
+        future_to_pending = {executor.submit(worker, item): item for item in pending}
+        for future in concurrent.futures.as_completed(future_to_pending):
+            idx, _item, paper_id, fingerprint, expected_entry = future_to_pending[future]
             try:
-                result = future.result()
+                _returned_idx, result, cache_saved = future.result()
                 if result:
                     results[idx] = result
-                    statuses[idx] = 'success'
+                    statuses[idx] = 'success' if cache_saved else 'success_cache_failed'
                 else:
-                    statuses[idx] = 'fallback'
+                    statuses[idx] = 'fallback' if cache_saved else 'fallback_cache_failed'
             except Exception:
                 statuses[idx] = 'error'
+                if use_cache:
+                    try:
+                        _save_oneliner_cache_entry(
+                            cache_path, date_str, paper_id, fingerprint, 'error', None,
+                            expected_entry=expected_entry,
+                        )
+                    except Exception:
+                        pass
 
-    for idx in range(len(top_papers)):
+    for idx, _item, _paper_id, _fingerprint, _expected_entry in pending:
         if statuses.get(idx) == 'success':
             print(f"  ✓ 第 {idx + 1} 名：LLM one-liner 生成成功")
+        elif statuses.get(idx) == 'success_cache_failed':
+            print(f"  ⚠️  第 {idx + 1} 名：LLM 生成成功但 checkpoint 写入失败，本轮仍使用结果")
         elif statuses.get(idx) == 'error':
             print(f"  ⚠️  第 {idx + 1} 名：调用异常，将使用本地摘要")
+        elif statuses.get(idx) == 'fallback_cache_failed':
+            print(f"  ⚠️  第 {idx + 1} 名：无可用结果且 checkpoint 写入失败，将使用本地摘要")
         else:
             print(f"  ⚠️  第 {idx + 1} 名：LLM 无可用结果，将使用本地摘要")
 
@@ -217,7 +387,7 @@ def generate_top_n_post(scored, unscored, date_str, top_n=5):
     top = scored[:top_n]
 
     # 调用 LLM 生成一句话介绍
-    llm_oneliners = generate_llm_oneliners(top)
+    llm_oneliners = generate_llm_oneliners(top, date_str=date_str)
 
     total = len(scored) + len(unscored)
     repo_url = os.environ.get('PAPER_DIGEST_REPO_URL', 'github.com/nanless/audio-paper-digest')
@@ -312,10 +482,15 @@ def main():
             data_file = arg
         i += 1
 
+    today = validate_date_component(get_today_bj(target_date))
+    with file_lock(CURRENT_DIR / f'xiaohongshu-{today}.generation', timeout_seconds=30):
+        _generate_for_date(data_file, today, mode, top_n)
+
+
+def _generate_for_date(data_file, today, mode, top_n):
     papers = load_papers(data_file)
 
     # 按 fetchedAt 日期过滤，只保留目标日期的论文
-    today = get_today_bj(target_date)
     filtered = []
     for p in papers:
         fa = p.get('fetchedAt', '')

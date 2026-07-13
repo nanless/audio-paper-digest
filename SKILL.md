@@ -31,10 +31,10 @@ description: >
 
 1. **自动归档**：检查 `data/current/deep-analysis-result.json` / `filtered-papers.json` / `analyzed.json`，若时间戳早于今天（北京时间）且 `data/archive/<日期>/` 下不存在，则复制后删除原文件。**`papers.json` 不归档。**
 2. **加载去重库**：读取 `data/current/papers.json` 已有 ID；扫描 Hugo 博客仓库（`PAPER_DIGEST_BLOG_REPO`）中已发布论文的 arXiv ID，两者合并为统一去重集合
-3. **arXiv 抓取**：7 个分类，每类最多 100 篇（可通过 `PD_ARXIV_MAX_RESULTS` 调整），遇连续 20 篇已有 ID 提前停止（去重集合包含 papers.json + 博客已发布 ID）
-4. **HuggingFace 抓取**：`daily_papers` 分页（最多 20 页）+ `papers` API 补充，默认近 7 天，只排除历史去重集合/博客已发布 ID；同批 arXiv 重叠论文保留给合并阶段补齐 HF 元数据
+3. **arXiv 抓取**：7 个分类，每类最多 100 篇（可通过 `PD_ARXIV_MAX_RESULTS` 调整），每个分类完成后原子写入 `fetch-checkpoint.json`；中断后只补抓未完成分类，任一分页或摘要请求失败均不能标记该分类健康
+4. **HuggingFace 抓取**：`daily_papers` 分页（最多 20 页）+ `papers` API 补充，默认近 7 天；来源完成后独立 checkpoint，必需请求、分页覆盖或日期截断不完整时整体失败并等待下次续跑
 5. **合并去重**：arXiv 优先，HF 补充 7 个特有字段，标记 `sources`；过滤掉博客已发布论文
-6. **LLM 筛选**：按 `PAPER_ANALYZER_*` 配置逐篇判断语音/音乐/音频相关，`batchSize=5`（可通过 `PD_FILTER_BATCH_SIZE` 调整），单篇超时 60 秒，重试 5 次；每批写入 `data/current/filter-decisions.json`。模型缺少机器可读结论但文本有明确倾向时，额外只做一次“只输出结论”的格式修复，修复响应仍须严格解析；中断后若当日 `raw-candidates.json` 的来源健康且模型/prompt hash 一致，只重试未决论文，不重新抓取 arXiv/HuggingFace；每条决策保存 `related`、`reason`、`rawResponse`、`parseSource`
+6. **LLM 筛选**：按 `PAPER_ANALYZER_*` 配置逐篇判断相关性，每批写入 `filter-decisions.json`。`fetch-checkpoint`、raw、decisions、filtered 共同绑定来源配置、历史去重集合和博客已发布集合的指纹；健康 raw 即使尚无 decisions 也能从空集合续跑，模型/prompt 变化只重筛该批候选，不重复抓取；只有明确决定完整覆盖候选全集时才可完成
 7. **保存筛选结果**：`data/current/raw-candidates.json` 保存筛选输入，`data/current/filtered-papers.json` 保存筛选/归档去重后的输出
 8. **更新去重库**：追加所有爬取论文 ID 到 `data/current/papers.json`（不仅筛选通过的，提前保存防止后续中断丢失）
 9. **深度分析**：`deep-analyzer.js`。主模型完成纯文本分析、开源扫描、审校、表格/方法修复和最终类型感知评分审计；评分审计只输出 JSON，由代码更新文档类型、机器摘要分项、总分和评分理由，不改正文。双模型模式随后由副模型最终看图筛选高价值图片并只新增图片及图前/图后说明；单模型模式跳过图片。需要图文视觉摘要时，Codex 必须在分析契约通过后读取 `prompts/visual-summary.md`，直接使用内置 `image_gen` 为每篇论文分别生成研究概览、方法结构、实验与边界三张卡，再将选定资产复制到项目；禁止由 Node/Python 脚本调用图像 API 或要求用户提供图像 API key。并发 3 篇（可通过 `PD_ANALYSIS_CONCURRENCY` 调整），每篇最多重试 2 次（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整）
@@ -52,10 +52,12 @@ description: >
 | 文件 | 用途 | 归档行为 |
 |------|------|---------|
 | `data/current/papers.json` | 论文去重数据库（含 `digestStatus` 分析状态） | **不归档**，持续累积；`pending_analysis` / `analysis_failed` 不参与强去重，便于中断后重跑；所有分析入口通过 `scripts/digest-status.js` 同步状态；旧成功分析保留时用 `latestAttemptStatus` 记录最新失败尝试 |
+| `data/current/fetch-checkpoint.json` | 逐来源抓取 checkpoint，绑定候选指纹、论文数量和稳定内容 SHA-256 | 同日原子更新；篡改或截短只重抓对应来源 |
 | `data/current/raw-candidates.json` | 当日合并与博客去重后的筛选候选，含 `sourceHealth` | 每次全流程重写，用于排查筛选输入 |
 | `data/current/filter-decisions.json` | 当日逐篇 LLM 筛选决策缓存，含 reason/rawResponse | 每批增量写入，模型或 prompt hash 变化后自动失效 |
 | `data/current/filtered-papers.json` | 筛选后的论文元数据 | 每日归档移走后重新生成 |
-| `data/current/deep-analysis-result.json` | 核心分析结果（含 analysis / parsed / selectedImageUrls / imageManifest / sourceHealth） | 每日归档移走后重新生成 |
+| `data/current/deep-analysis-result.json` | 核心分析结果（含逐阶段 checkpoint、指纹、analysis / parsed / 图片与来源状态） | 每篇完成或失败后立即锁内保存；下次从首个未完成或指纹失效阶段续跑 |
+| `data/current/xiaohongshu-oneliners-YYYY-MM-DD.json` | 小红书逐篇一句话文案缓存，绑定分析、prompt、模型配置和清洗契约 | 每篇成功后原子保存；仅失败或输入变化的论文重跑 |
 | `data/current/analyzed.json` | 旧版已分析记录（兼容） | 每日归档移走后重新生成 |
 
 ### 3.2 兼容行为
@@ -306,6 +308,7 @@ npm run xiaohongshu -- --date 2026-04-22
 - 小红书单帖正文限制约 1000 字，精选模式默认 TOP 5（可用 `--top 3` 调整），正文约 800-950 字符，适合单帖直接发布
 - **每篇论文的一句话介绍调用发布阶段 LLM API 生成**（复用 `publish_common.py` 的协议路由并绕过代理），LLM 失败时回退到本地 `extract_one_liner()`（优先取 innovation 第一条，其次 summary 中含"提出了/解决了/旨在"的句子，最后 roast）
 - TOP N 一句话默认以 5 并发生成，可通过项目 `.env` 的 `PD_XIAOHONGSHU_ONELINER_CONCURRENCY` 调整为 1–5；完成顺序不会改变最终排名顺序，单篇异常只回退该篇
+- 每篇成功的一句话在日期级锁内立即写入缓存；坏缓存原子隔离后重建，只复用指纹完全一致的成功项；`--date` 严格校验为 `YYYY-MM-DD`。本流程只生成文案，不触发自动发布
 - LLM one-liner 优先使用深度分析的 `parsed.summary`、`parsed.results`、`parsed.limitations`、`parsed.opensource` 与主标签，再回退摘要，避免只复述标题
 - 脚本会自动清理 Markdown 格式（`**加粗**`、`` 代码 ``）和学术化前缀（"这篇论文旨在"、"本文针对"等），避免平台渲染异常
 - 文案自动附带 emoji 热度标识：🔥≥8 分、✅≥6 分、📝<6 分（与博客、微信统一）
@@ -332,9 +335,10 @@ npm run xiaohongshu -- --date 2026-04-22
 - 在 `~/code/github_repos/audio-paper-digest-blog/content/posts` 生成：
   - 汇总页：`YYYY-MM-DD.md`
   - 单篇页：`YYYY-MM-DD-<slug>.md`
-- `generate-blog.py` 只生成并安装 `.md`，写入 generation manifest，禁止 review/commit/push
-- `review-blog.py` 只审查 generation manifest 中的文件。首次失败会写入绑定 generation manifest SHA-256、博客 `main` 基线和逐文件最终 SHA-256 的失败集状态；修复后仅复审已修改的失败文件，任何已通过文件、清单或基线变化都会退回全量 review。全部内容仍须通过确定性校验与全量 Hugo gate，之后才写入逐文件 SHA-256 凭证；禁止 commit/push
-- `push-blog.py` 只验证审查凭证和当前文件哈希，精确 stage 后使用中文详细提交信息 commit，再 `git push origin HEAD:main` 并验证远端 OID；禁止重新生成或 review
+- `generate-blog.py` 在日期级跨进程锁内逐页生成、安装并写 journal；崩溃后可收养已完成的同 SHA 页面，全部论文完成后才生成汇总页和严格 generation manifest，禁止 review/commit/push
+- `review-blog.py` 在同一日期锁内逐文件审查，checkpoint 绑定 worker 实际读取的 SHA；内容失败修复后只复审失败页，瞬时 LLM/网络错误保持待重试，任何已通过文件变化、应存在页面消失、清单/基线变化或 Hugo 前后 SHA 变化都会阻断凭证；禁止 commit/push
+- `push-blog.py` 验证审查凭证和当前文件哈希，精确 stage 后及 commit 前再逐项校验 index blob SHA/删除状态，随后提交、推送并核对远端 OID；禁止重新生成或 review
+- 三阶段除日期锁外还共享博客仓库级全局锁，防止不同日期并发污染共同的 worktree、index、HEAD 或回滚状态
 - **三个阶段及兼容 `publish-to-blog.py` 必须在沙箱外运行**：入口检测到可靠沙箱标志 `CODEX_SANDBOX` 会立即拒绝执行；沙箱外权限包装会保留网络禁用环境标志，不能据此误拒绝。原因是 review 会直连 LLM、下载图片并运行 Hugo，push 需要真实 Git 网络；不得在沙箱内跳过 review、伪造凭证或改用无网络降级路径。
 - 若需发布全部论文（不过滤），显式传 `--all`
 
@@ -353,9 +357,9 @@ Agent 执行约束：
 
 若当天结果需要清空重跑：
 
-1. 若 `data/current/filtered-papers.json` 是今天且 `status: complete`，并且其中 `filterModel` / `filterPromptHash` 与当前 `.env` 和 `prompts/filter.md` 一致：不要删筛选结果，直接运行 `node scripts/full-fetch.js`，主流程会跳过抓取/筛选并续跑深度分析；若模型或 prompt 已变更，会重新抓取/筛选。
+1. 若 `data/current/filtered-papers.json` 是今天且 `status: complete`，并且筛选指纹与当前配置一致：不要删筛选结果，直接运行 `node scripts/full-fetch.js`，主流程会跳过抓取/筛选并续跑深度分析；若仅筛选模型/prompt/协议参数变化且健康 raw 候选仍匹配，只重新筛选，不重复抓取。
 2. 若筛选未完成且 `data/current/raw-candidates.json` / `filter-decisions.json` 是今天、来源健康且模型/prompt hash 一致：直接运行 `node scripts/full-fetch.js`，主流程跳过抓取，只重试未决论文；不能删除这两个 checkpoint。
-3. 若要彻底重抓重筛，再删除 `data/current/raw-candidates.json`、`data/current/filter-decisions.json`、`data/current/filtered-papers.json`、`data/current/deep-analysis-result.json`
+3. 若要彻底重抓重筛，再删除 `data/current/fetch-checkpoint.json`、`data/current/raw-candidates.json`、`data/current/filter-decisions.json`、`data/current/filtered-papers.json`、`data/current/deep-analysis-result.json`
 4. **必要时恢复 `papers.json` 到昨天状态**（推荐，比个删 ID 更可靠）：
    ```bash
    # 用昨天备份替换去重库（backupPapersJson 生成，格式为 papers-YYYY-MM-DD.json）

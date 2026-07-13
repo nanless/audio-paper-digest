@@ -31,10 +31,10 @@ Main entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fe
 
 1. **Auto-archive**: Checks `data/current/deep-analysis-result.json` / `filtered-papers.json` / `analyzed.json`; if their timestamps are earlier than today (Beijing time) and `data/archive/<date>/` does not exist, copies them and deletes the originals. **`papers.json` is NOT archived.**
 2. **Load dedup DB**: Reads existing IDs from `data/current/papers.json`; scans the Hugo blog repository (`PAPER_DIGEST_BLOG_REPO`) for published paper arXiv IDs, merging both into a unified deduplication set
-3. **arXiv fetch**: 7 categories, up to 100 papers each (adjustable via `PD_ARXIV_MAX_RESULTS`), stops early if 20 consecutive existing IDs are encountered (dedup set includes papers.json + blog-published IDs)
-4. **HuggingFace fetch**: `daily_papers` pagination (up to 20 pages) + `papers` API supplement, defaulting to the last 7 days, excluding IDs in the dedup set
+3. **arXiv fetch**: 7 categories, checkpointed atomically per category; a resumed run fetches only incomplete categories, and any page or abstract failure keeps that category unhealthy
+4. **HuggingFace fetch**: `daily_papers` pagination plus the `papers` supplement, checkpointed independently; incomplete required requests, pagination, or date coverage fail the source for retry
 5. **Merge & deduplicate**: arXiv takes priority, HF supplements 7 unique fields, marks `sources`; filters out blog-published papers
-6. **LLM filtering**: Uses `PAPER_ANALYZER_*` config to judge speech/music/audio relevance paper by paper, `batchSize=5` (adjustable via `PD_FILTER_BATCH_SIZE`), 60s timeout per paper, 5 retries
+6. **LLM filtering**: Checkpoints each definitive per-paper decision. Fetch, raw, decision, and filtered artifacts share fingerprints for source config, historical dedup IDs, and blog-published IDs; healthy raw candidates can resume from zero decisions, while model/prompt changes refilter without refetching
 7. **Save filter results**: `data/current/raw-candidates.json` stores filtering input, and `data/current/filtered-papers.json` stores filtered/archive-deduplicated output
 8. **Update dedup DB**: Appends all crawled paper IDs to `data/current/papers.json` (not just filtered ones; save early to prevent data loss if interrupted later)
 9. **Deep analysis**: `deep-analyzer.js`. Dual-model mode (when `PAPER_ANALYZER_SECONDARY_MODEL` is configured): primary model text-only analysis + secondary model JSON image insertion plan; Single-model mode (no secondary model): text-only analysis. Concurrency of 3 (adjustable via `PD_ANALYSIS_CONCURRENCY`), up to 2 retries per paper (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
@@ -52,10 +52,12 @@ Main entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fe
 | File | Purpose | Archive Behavior |
 |------|---------|------------------|
 | `data/current/papers.json` | Paper deduplication database with `digestStatus` | **Not archived**, accumulates continuously; `pending_analysis` / `analysis_failed` are not used for strong deduplication; all analysis entry points sync status through `scripts/digest-status.js`; when an older successful analysis is preserved, `latestAttemptStatus` records a later failed attempt |
+| `data/current/fetch-checkpoint.json` | Per-source crawl checkpoints bound to candidate fingerprints, paper count, and stable content SHA-256 | Tampering invalidates and refetches only that source |
 | `data/current/raw-candidates.json` | Candidate input after merge and blog deduplication, including `sourceHealth` | Rewritten by each full run, useful for debugging filter input |
 | `data/current/filter-decisions.json` | Per-paper LLM filter decision cache with reason/rawResponse | Incrementally written after each batch; invalidated when model or prompt hash changes |
 | `data/current/filtered-papers.json` | Filtered paper metadata | Archived daily and regenerated |
-| `data/current/deep-analysis-result.json` | Core analysis results (includes analysis / parsed / selectedImageUrls / imageManifest / sourceHealth) | Archived daily and regenerated |
+| `data/current/deep-analysis-result.json` | Core analysis results, including per-stage checkpoints and fingerprints | Persisted after each paper; resumes from the first incomplete or invalidated stage |
+| `data/current/xiaohongshu-oneliners-YYYY-MM-DD.json` | Per-paper Xiaohongshu one-liner cache bound to analysis, prompt, model config, and sanitation contract | Saves each success atomically; only failed or changed papers rerun |
 | `data/current/analyzed.json` | Legacy analyzed records (for compatibility) | Archived daily and regenerated |
 
 ### 3.2 Compatibility Behavior
@@ -306,6 +308,7 @@ npm run xiaohongshu -- --date 2026-04-22
 
 - Xiaohongshu single post body limit is approximately 1000 characters; curated mode defaults to TOP 5 (use `--top 3` to adjust), with roughly 800-950 characters, suitable for direct single-post publishing
 - TOP-N one-liners default to concurrency 5 and can be configured from 1 to 5 with `PD_XIAOHONGSHU_ONELINER_CONCURRENCY`; completion order never changes ranking order, and failures fall back per paper
+- Each success is checkpointed under a per-date lock. Corrupt caches are atomically quarantined and rebuilt; only exact fingerprint matches are reused, and `--date` must be strict `YYYY-MM-DD`. This workflow generates copy only
 - **The one-sentence introduction for each paper is generated by the publishing-stage LLM API** (via `publish_common.py` protocol routing, bypassing proxy); falls back to local `extract_one_liner()` on LLM failure (prioritizes the first innovation item, then a sentence in summary containing "proposes/solves/aims to", then roast)
 - The script automatically cleans Markdown formatting (`**bold**`, `` `code` ``) and academic prefixes ("This paper aims to", "This paper addresses", etc.) to avoid platform rendering issues
 - Copy automatically includes emoji heat indicators: 🔥≥8 pts, ✅≥6 pts, 📝<6 pts (consistent with blog and WeChat)
@@ -331,7 +334,7 @@ Current behavior:
 - Generates in `~/code/github_repos/audio-paper-digest-blog/content/posts`:
   - Summary page: `YYYY-MM-DD.md`
   - Single paper page: `YYYY-MM-DD-<slug>.md`
-- Generation, review, and push are separate commands. Generation writes a manifest; review writes a strict per-file SHA-256 receipt after LLM/image review and the Hugo gate; push only verifies that receipt and never regenerates or re-reviews.
+- Generation, review, and push are separate and share both date-level and repository-global locks. Generation journals each page; review checkpoints the SHA actually read and blocks changes across the Hugo gate. Push compares every staged index blob/deletion against the receipt after `git add` and again before commit, preventing cross-date worktree/index/HEAD contamination.
 - **All three stages and compatibility `publish-to-blog.py` must run outside the sandbox**. The entry points reject the reliable sandbox marker `CODEX_SANDBOX`; the elevation wrapper preserves the network-disabled marker, so it cannot independently reject an external runtime. Review directly reaches the LLM, downloads images, and runs Hugo, while push requires real Git networking. Do not bypass review, fabricate a receipt, or use a no-network fallback inside a sandbox.
 - To publish all papers (no filtering), pass `--all` explicitly
 
@@ -350,9 +353,9 @@ Pre-publish safeguards:
 
 If the day's results need to be resumed or re-run:
 
-1. If `data/current/filtered-papers.json` is from today, has `status: complete`, and its `filterModel` / `filterPromptHash` match the current `.env` and `prompts/filter.md`, keep it and run `node scripts/full-fetch.js` to skip crawling/filtering and resume deep analysis. If the model or prompt changed, the main workflow will crawl/filter again.
+1. If today's complete filtered artifact matches the current filter fingerprint, keep it and run `node scripts/full-fetch.js` to resume deep analysis. If only the filter model, prompt, or protocol settings changed while healthy raw candidates still match, the workflow refilters without refetching.
 2. If filtering is incomplete but `data/current/filter-decisions.json` is from today and matches the current model/prompt hash, run `node scripts/full-fetch.js` to reuse existing per-paper decisions.
-3. To force a full refetch/refilter, delete `data/current/raw-candidates.json`, `data/current/filter-decisions.json`, `data/current/filtered-papers.json`, and `data/current/deep-analysis-result.json`.
+3. To force a full refetch/refilter, also delete `data/current/fetch-checkpoint.json` together with raw candidates, decisions, filtered papers, and deep-analysis results.
 4. **Restore `papers.json` to yesterday's state only when necessary** (recommended over deleting IDs one by one):
    ```bash
    # Replace dedup DB with yesterday's backup (generated by backupPapersJson, format is papers-YYYY-MM-DD.json)

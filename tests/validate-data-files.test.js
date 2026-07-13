@@ -3,15 +3,163 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
+const Config = require('../scripts/config.js');
 
 const {
     validatePapersDatabase,
+    validateFetchCheckpointFile,
     validatePaperListFile,
     validateFilterDecisionsFile,
     validateCurrentDataFiles
 } = require('../scripts/validate-data-files.js');
 
+const TIMESTAMP = '2026-07-13T10:00:00.000+08:00';
+const CANDIDATE_FP = 'a'.repeat(16);
+const SOURCE_FP = 'b'.repeat(16);
+const BLOG_FP = 'c'.repeat(16);
+const FILTER_FP = 'd'.repeat(16);
+
+function papersSha256(papers) {
+    return crypto.createHash('sha256').update(JSON.stringify(papers)).digest('hex');
+}
+
+function checkpointEntry(papers, health, status = 'complete') {
+    return { status, papers, papersCount: papers.length, papersSha256: papersSha256(papers), health };
+}
+
+function writeCompleteCheckpoint(filePath) {
+    const categoryOrder = Config.ARXIV_CATEGORIES.map(category => category.id);
+    fs.writeFileSync(filePath, JSON.stringify({
+        timestamp: TIMESTAMP,
+        candidateFingerprint: CANDIDATE_FP,
+        sourceConfigFingerprint: SOURCE_FP,
+        blogDedupFingerprint: BLOG_FP,
+        historicalDedupIds: [],
+        categoryOrder,
+        arxiv: Object.fromEntries(categoryOrder.map(id => [id, checkpointEntry([], { id, ok: true })])),
+        huggingface: checkpointEntry([], { ok: true })
+    }));
+}
+
+function writeMinimalCurrentBatch(dir) {
+    const fetchCheckpoint = path.join(dir, 'fetch-checkpoint.json');
+    const rawCandidates = path.join(dir, 'raw-candidates.json');
+    const filterDecisions = path.join(dir, 'filter-decisions.json');
+    const filteredPapers = path.join(dir, 'filtered-papers.json');
+    writeCompleteCheckpoint(fetchCheckpoint);
+    const fingerprints = {
+        candidateFingerprint: CANDIDATE_FP,
+        sourceConfigFingerprint: SOURCE_FP,
+        blogDedupFingerprint: BLOG_FP
+    };
+    fs.writeFileSync(rawCandidates, JSON.stringify({
+        timestamp: TIMESTAMP, ...fingerprints,
+        stats: { beforeBlogSkip: 1, afterBlogSkip: 1, skippedFromBlog: 0, arxivOnly: 1, hfOnly: 0, both: 0 },
+        sourceHealth: {
+            arxiv: { categories: Config.ARXIV_CATEGORIES.map(({ id }) => ({ id, ok: true })) },
+            huggingface: { ok: true }
+        },
+        papers: [{ arxivId: '2607.00001' }]
+    }));
+    fs.writeFileSync(filterDecisions, JSON.stringify({
+        timestamp: TIMESTAMP, ...fingerprints, filterModel: 'model-a', filterPromptHash: 'hash-a',
+        filterConfigFingerprint: FILTER_FP,
+        stats: { totalCandidates: 1, decided: 1, related: 1, complete: true },
+        decisions: { '2607.00001': { related: true } }
+    }));
+    fs.writeFileSync(filteredPapers, JSON.stringify({
+        timestamp: TIMESTAMP, ...fingerprints, filterModel: 'model-a', filterPromptHash: 'hash-a',
+        filterConfigFingerprint: FILTER_FP, status: 'complete',
+        stats: { afterBlogSkip: 1, afterFilter: 1, afterArchiveSkip: 1, decisionCount: 1 },
+        papers: [{ arxivId: '2607.00001' }]
+    }));
+    return { fetchCheckpoint, rawCandidates, filterDecisions, filteredPapers };
+}
+
 describe('validate-data-files', () => {
+    it('校验抓取 checkpoint 的来源状态和同批次指纹', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-'));
+        const checkpointFile = path.join(dir, 'fetch-checkpoint.json');
+        fs.writeFileSync(checkpointFile, JSON.stringify({
+            timestamp: '2026-07-13T10:00:00+08:00',
+            candidateFingerprint: 'candidate-a',
+            sourceConfigFingerprint: 'source-a',
+            blogDedupFingerprint: 'blog-a',
+            arxiv: {
+                'cs.SD': {
+                    status: 'complete',
+                    papers: [],
+                    health: { id: 'cs.SD', ok: false }
+                }
+            },
+            huggingface: {
+                status: 'failed',
+                papers: [],
+                health: { ok: true }
+            }
+        }));
+        const issues = validateFetchCheckpointFile(checkpointFile).join('\n');
+        assert.match(issues, /complete 时 health\.ok 必须为 true/);
+        assert.match(issues, /failed 时 health\.ok 必须为 false/);
+    });
+
+    it('校验 checkpoint 论文数量和稳定内容 SHA，识别内容篡改与缺字段', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-tamper-'));
+        const checkpointFile = path.join(dir, 'fetch-checkpoint.json');
+        writeCompleteCheckpoint(checkpointFile);
+        const checkpoint = JSON.parse(fs.readFileSync(checkpointFile));
+        const categoryId = Config.ARXIV_CATEGORIES[0].id;
+        checkpoint.arxiv[categoryId].papers.push({ arxivId: '2607.00001' });
+        delete checkpoint.huggingface.papersCount;
+        fs.writeFileSync(checkpointFile, JSON.stringify(checkpoint));
+
+        const issues = validateFetchCheckpointFile(checkpointFile).join('\n');
+        assert.match(issues, new RegExp(`arxiv\\.${categoryId}\\.papersCount`));
+        assert.match(issues, new RegExp(`arxiv\\.${categoryId}\\.papersSha256 与 papers 内容不一致`));
+        assert.match(issues, /huggingface\.papersCount/);
+    });
+
+    it('当前抓取筛选产物强制完整合法指纹并与 checkpoint 对齐', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-fingerprint-'));
+        const files = writeMinimalCurrentBatch(dir);
+        const raw = JSON.parse(fs.readFileSync(files.rawCandidates));
+        delete raw.candidateFingerprint;
+        fs.writeFileSync(files.rawCandidates, JSON.stringify(raw));
+        const decisions = JSON.parse(fs.readFileSync(files.filterDecisions));
+        decisions.sourceConfigFingerprint = 'not-a-fingerprint';
+        delete decisions.filterConfigFingerprint;
+        fs.writeFileSync(files.filterDecisions, JSON.stringify(decisions));
+        const filtered = JSON.parse(fs.readFileSync(files.filteredPapers));
+        filtered.blogDedupFingerprint = 'e'.repeat(16);
+        fs.writeFileSync(files.filteredPapers, JSON.stringify(filtered));
+
+        const issues = validateCurrentDataFiles({
+            ...files, papers: path.join(dir, 'missing-papers.json'), deepAnalysisResult: path.join(dir, 'missing-analysis.json')
+        }).join('\n');
+        assert.match(issues, /candidateFingerprint 必须是 16 位/);
+        assert.match(issues, /sourceConfigFingerprint 必须是 16 位/);
+        assert.match(issues, /filterConfigFingerprint 必须是 16 位/);
+        assert.match(issues, /blogDedupFingerprint 必须与 fetch-checkpoint\.json 一致/);
+    });
+
+    it('当前抓取筛选产物必须使用北京时间 ISO 且同批日期一致', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-date-'));
+        const files = writeMinimalCurrentBatch(dir);
+        const raw = JSON.parse(fs.readFileSync(files.rawCandidates));
+        raw.timestamp = '2026-07-13T02:00:00.000Z';
+        fs.writeFileSync(files.rawCandidates, JSON.stringify(raw));
+        const filtered = JSON.parse(fs.readFileSync(files.filteredPapers));
+        filtered.timestamp = '2026-07-14T10:00:00.000+08:00';
+        fs.writeFileSync(files.filteredPapers, JSON.stringify(filtered));
+
+        const issues = validateCurrentDataFiles({
+            ...files, papers: path.join(dir, 'missing-papers.json'), deepAnalysisResult: path.join(dir, 'missing-analysis.json')
+        }).join('\n');
+        assert.match(issues, /raw-candidates\.json: timestamp 必须是合法的北京时间 ISO/);
+        assert.match(issues, /filtered-papers\.json: timestamp 日期必须与同批次 fetch-checkpoint\.json 一致/);
+    });
+
     it('接受合法 papers.json 和 deep-analysis-result.json', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-'));
         const papersFile = path.join(dir, 'papers.json');
@@ -236,8 +384,14 @@ describe('validate-data-files', () => {
         const rawCandidatesFile = path.join(dir, 'raw-candidates.json');
         const filteredFile = path.join(dir, 'filtered-papers.json');
         const decisionsFile = path.join(dir, 'filter-decisions.json');
+        const checkpointFile = path.join(dir, 'fetch-checkpoint.json');
+        writeCompleteCheckpoint(checkpointFile);
 
         fs.writeFileSync(rawCandidatesFile, JSON.stringify({
+            timestamp: TIMESTAMP,
+            candidateFingerprint: CANDIDATE_FP,
+            sourceConfigFingerprint: SOURCE_FP,
+            blogDedupFingerprint: BLOG_FP,
             stats: {
                 beforeBlogSkip: 3,
                 afterBlogSkip: 3,
@@ -247,7 +401,7 @@ describe('validate-data-files', () => {
                 both: 1
             },
             sourceHealth: {
-                arxiv: { categories: [{ id: 'cs.SD', ok: true }] },
+                arxiv: { categories: Config.ARXIV_CATEGORIES.map(({ id }) => ({ id, ok: true })) },
                 huggingface: { ok: true }
             },
             papers: [
@@ -257,9 +411,14 @@ describe('validate-data-files', () => {
             ]
         }));
         fs.writeFileSync(filteredFile, JSON.stringify({
+            timestamp: TIMESTAMP,
+            candidateFingerprint: CANDIDATE_FP,
+            sourceConfigFingerprint: SOURCE_FP,
+            blogDedupFingerprint: BLOG_FP,
             status: 'complete',
             filterModel: 'model-a',
             filterPromptHash: 'hash-a',
+            filterConfigFingerprint: FILTER_FP,
             stats: {
                 afterBlogSkip: 3,
                 afterFilter: 2,
@@ -269,6 +428,13 @@ describe('validate-data-files', () => {
             papers: [{ arxivId: '2607.00001' }]
         }));
         fs.writeFileSync(decisionsFile, JSON.stringify({
+            timestamp: TIMESTAMP,
+            candidateFingerprint: CANDIDATE_FP,
+            sourceConfigFingerprint: SOURCE_FP,
+            blogDedupFingerprint: BLOG_FP,
+            filterModel: 'model-a',
+            filterPromptHash: 'hash-a',
+            filterConfigFingerprint: FILTER_FP,
             stats: {
                 totalCandidates: 3,
                 decided: 3,
@@ -290,6 +456,7 @@ describe('validate-data-files', () => {
             rawCandidates: rawCandidatesFile,
             filteredPapers: filteredFile,
             filterDecisions: decisionsFile,
+            fetchCheckpoint: checkpointFile,
             deepAnalysisResult: path.join(dir, 'missing-analysis.json')
         }), []);
     });
