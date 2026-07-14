@@ -63,9 +63,9 @@ describe('post-publication visual orchestration', () => {
         try {
             Config.CURRENT_DIR = dir;
             Config.FILES.visualSummaryManifestDir = path.join(dir, 'visual-summary-manifests');
-            Config.FILES.visualSummaryAssetDir = path.join(dir, 'visual-summaries');
+            Config.FILES.visualSummaryAssetDir = path.join(dir, 'archive');
             Config.FILES.digestCoverManifestDir = path.join(dir, 'digest-cover-manifests');
-            Config.FILES.digestCoverAssetDir = path.join(dir, 'digest-covers');
+            Config.FILES.digestCoverAssetDir = path.join(dir, 'archive');
             const papers = Array.from({ length: 12 }, (_, index) =>
                 publishedPaper(`2607.${String(index + 1).padStart(5, '0')}`, 9 - index / 10));
             papers[0].fetchedAt = '2026-07-01T10:00:00.000+08:00';

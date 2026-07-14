@@ -16,6 +16,7 @@ const {
     pendingVisualSummaryCards,
     validatePngAsset,
     extractGeneratedImagePathFromHint,
+    archiveLegacyVisualManifestAssets,
     assertPublishedBlogReceipt,
     assertVisualManifestCurrent,
     main
@@ -75,7 +76,7 @@ const PNG = makePng();
 function patchVisualDirs(currentDir) {
     Config.CURRENT_DIR = currentDir;
     Config.FILES.visualSummaryManifestDir = path.join(currentDir, 'visual-summary-manifests');
-    Config.FILES.visualSummaryAssetDir = path.join(currentDir, 'visual-summaries');
+    Config.FILES.visualSummaryAssetDir = path.join(path.dirname(currentDir), 'archive');
 }
 
 function paper(id = '2607.12345', extra = {}) {
@@ -265,16 +266,78 @@ describe('visual summary state', () => {
             const card = recorded.papers['2607.12345'].cards.infographic;
             assert.strictEqual(card.status, 'complete');
             assert.ok(fs.existsSync(path.resolve(Config.PROJECT_ROOT, card.assetPath)));
+            assert.match(card.assetPath, /archive\/2026-07-13\/visual-summaries\/01-2607\.12345\/infographic\.png$/);
             assert.strictEqual(pendingVisualSummaryCards(recorded).length, 0);
+
+            // 兼容旧版 current 资产：plan 校验 PNG/SHA 后迁移回带排名编号的日期归档。
+            const archivedPath = path.resolve(Config.PROJECT_ROOT, card.assetPath);
+            const legacyPath = path.join(
+                Config.CURRENT_DIR, 'visual-summaries', '2026-07-13', '2607.12345', 'infographic.png'
+            );
+            fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+            fs.renameSync(archivedPath, legacyPath);
+            recorded.papers['2607.12345'].cards.infographic.assetPath = path
+                .relative(Config.PROJECT_ROOT, legacyPath).split(path.sep).join('/');
+            fs.writeFileSync(manifestPath, JSON.stringify(recorded));
 
             const replanned = planVisualSummaries({
                 targetDate: '2026-07-13', papers: [paper()], manifestPath, promptPath
             });
             assert.strictEqual(replanned.papers['2607.12345'].cards.infographic.status, 'complete');
+            assert.ok(fs.existsSync(archivedPath));
+            assert.ok(!fs.existsSync(legacyPath));
+            assert.ok(replanned.papers['2607.12345'].cards.infographic.archivedAt);
         } finally {
             Config.CURRENT_DIR = originalCurrentDir;
             Config.FILES.visualSummaryManifestDir = originalManifestDir;
             Config.FILES.visualSummaryAssetDir = originalAssetDir;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('历史归档命令按已发布排行榜编号并更新旧 manifest 资产路径', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-legacy-archive-'));
+        const current = path.join(dir, 'current');
+        const archive = path.join(dir, 'archive');
+        const manifestPath = path.join(current, 'visual-summary-manifests', '2026-07-13.json');
+        const generationPath = path.join(current, 'blog-generation-manifest-2026-07-13.json');
+        const source = path.join(current, 'visual-summaries', '2026-07-13', '2607.12345', 'infographic.png');
+        fs.mkdirSync(path.dirname(source), { recursive: true });
+        fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+        fs.writeFileSync(source, PNG);
+        fs.writeFileSync(generationPath, JSON.stringify({
+            date: '2026-07-13', publishedPapers: [paper()]
+        }));
+        fs.writeFileSync(manifestPath, JSON.stringify({
+            version: 2, batchDate: '2026-07-13', papers: {
+                '2607.12345': {
+                    cards: { infographic: {
+                        status: 'complete', assetPath: path.relative(Config.PROJECT_ROOT, source),
+                        assetSha256: crypto.createHash('sha256').update(PNG).digest('hex')
+                    } }
+                }
+            }
+        }));
+        const originals = {
+            current: Config.CURRENT_DIR,
+            manifest: Config.FILES.visualSummaryManifestDir,
+            asset: Config.FILES.visualSummaryAssetDir
+        };
+        try {
+            Config.CURRENT_DIR = current;
+            Config.FILES.visualSummaryManifestDir = path.join(current, 'visual-summary-manifests');
+            Config.FILES.visualSummaryAssetDir = archive;
+            const result = archiveLegacyVisualManifestAssets({
+                targetDate: '2026-07-13', manifestPath, generationManifestPath: generationPath
+            });
+            const card = result.manifest.papers['2607.12345'].cards.infographic;
+            assert.match(card.assetPath, /archive\/2026-07-13\/visual-summaries\/01-2607\.12345\/infographic\.png$/);
+            assert.ok(fs.existsSync(path.resolve(Config.PROJECT_ROOT, card.assetPath)));
+            assert.ok(!fs.existsSync(source));
+        } finally {
+            Config.CURRENT_DIR = originals.current;
+            Config.FILES.visualSummaryManifestDir = originals.manifest;
+            Config.FILES.visualSummaryAssetDir = originals.asset;
             fs.rmSync(dir, { recursive: true, force: true });
         }
     });

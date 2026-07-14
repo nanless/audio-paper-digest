@@ -376,7 +376,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
           "status": "complete",
           "label": "论文长图摘要",
           "taskToken": "<64位十六进制>",
-          "assetPath": "data/current/visual-summaries/2026-07-13/2607.12345/infographic.png",
+          "assetPath": "data/archive/2026-07-13/visual-summaries/01-2607.12345/infographic.png",
           "assetSha256": "<64位十六进制>",
           "analysisSha256": "<64位十六进制>",
           "promptSha256": "<64位十六进制>",
@@ -390,7 +390,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 
 - `papers` 必须与目标批次最终评分 TOP 10 精确一致；不足十篇时包含全部成功论文。
 - 每篇 `cards` 必须恰好包含 `infographic`；只有它为 `complete` 且通过资产验证才算该论文视觉摘要完成。
-- 完成项同时绑定当前分析 SHA、`prompts/visual-summary.md` SHA、task token 和 PNG 资产 SHA。分析、prompt 或资产变化后只使对应论文长图失效并回到待生成。
+- 完成项同时绑定最终 `rank`、当前分析 SHA、`prompts/visual-summary.md` SHA、task token 和 PNG 资产 SHA。归档目录使用两位 rank 前缀，保证文件系统排序与排行榜一致；分析、prompt、排名或资产变化后只使对应论文长图失效并回到待生成。
 - 任意 `pending` / `failed`、资产缺失/损坏或 SHA 不匹配只影响发布后视觉阶段，不影响已经完成的博客发布。
 - PNG 必须不超过 8 MiB，至少 768×1024 且高宽比不低于 1.25；顶部使用完整英文标题，图内解释使用中文。PNG 由 Codex 内置图像生成能力产生；项目脚本只管理状态和资产，不调用图像 API。
 
@@ -415,7 +415,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
     "status": "complete",
     "label": "汇总页封面",
     "taskToken": "<64位十六进制>",
-    "assetPath": "data/current/digest-covers/2026-07-13/cover.png",
+    "assetPath": "data/archive/2026-07-13/digest-cover/cover.png",
     "assetSha256": "<64位十六进制>"
   },
   "overallStatus": "complete"
@@ -425,7 +425,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 - `dataSha256` 绑定标题、论文数量、热门方向及排名上下文，`promptSha256` 绑定 `prompts/digest-cover.md`；任一变化只使封面失效，不影响论文长图。
 - 会议流程的 category 自动取自 generation manifest；它会改变标题并进入 `dataSha256`，避免会议汇总图与博客标题不一致，无需给 status 另传参数。
 - manifest 可保存 `arxivId` 以稳定指纹和排序，但 prompt 明确禁止把论文 ID 渲染到封面；排名展示完整英文标题、分数和主方向。
-- 汇总图使用与论文长图相同的 PNG 尺寸、纵横比、大小和 SHA 门禁；缺失、失败、损坏或过期不回滚博客发布。
+- 论文长图和汇总封面生成后直接进入 `data/archive/<日期>/`；旧版 current 资产仅在 PNG/SHA 校验通过且归档目标无冲突时迁移。历史批次中不属于最终 TOP10 的旧卡片使用 `unranked-<paper>` 目录，避免虚构排行榜编号。汇总图使用与论文长图相同的 PNG 尺寸、纵横比、大小和 SHA 门禁；缺失、失败、损坏或过期不回滚博客发布。
 
 ### 5.9 `data/current/analyzed.json`
 

@@ -361,7 +361,7 @@ This manifest is created only after every blog page is remotely verified as publ
           "status": "complete",
           "label": "Paper infographic",
           "taskToken": "<64 lowercase hex characters>",
-          "assetPath": "data/current/visual-summaries/2026-07-13/2607.12345/infographic.png",
+          "assetPath": "data/archive/2026-07-13/visual-summaries/01-2607.12345/infographic.png",
           "assetSha256": "<64 lowercase hex characters>",
           "analysisSha256": "<64 lowercase hex characters>",
           "promptSha256": "<64 lowercase hex characters>",
@@ -375,7 +375,7 @@ This manifest is created only after every blog page is remotely verified as publ
 
 - `papers` must exactly match the target batch's final-score TOP 10, or all successful papers when fewer than ten exist.
 - Each `cards` object must contain exactly `infographic`; it completes only after the asset passes validation.
-- A completed infographic binds the current analysis SHA, `prompts/visual-summary.md` SHA, task token, and PNG asset SHA. Analysis, prompt, or asset changes invalidate only that paper's infographic.
+- A completed infographic binds final `rank`, the current analysis SHA, `prompts/visual-summary.md` SHA, task token, and PNG asset SHA. Its two-digit rank prefix keeps filesystem order identical to leaderboard order; analysis, prompt, rank, or asset changes invalidate only that paper's infographic.
 - Pending/failed or damaged assets affect only the post-publication visual stage and never roll back the completed blog publication.
 - PNGs are at most 8 MiB, at least 768×1024, and have a height/width ratio of at least 1.25. The complete English title is at the top and explanations are in Chinese. Codex built-in image generation creates the PNGs; project scripts never call an image API.
 
@@ -400,7 +400,7 @@ After all blogs publish, every batch produces one digest image. Its context is d
     "status": "complete",
     "label": "Digest cover",
     "taskToken": "<64 lowercase hex characters>",
-    "assetPath": "data/current/digest-covers/2026-07-13/cover.png",
+    "assetPath": "data/archive/2026-07-13/digest-cover/cover.png",
     "assetSha256": "<64 lowercase hex characters>"
   },
   "overallStatus": "complete"
@@ -410,7 +410,7 @@ After all blogs publish, every batch produces one digest image. Its context is d
 - `dataSha256` binds title, paper count, hot directions, and ranking; `promptSha256` binds `prompts/digest-cover.md`. Either change invalidates only the cover.
 - Conference category is read automatically from the generation manifest. It changes the title and therefore `dataSha256`, preventing a digest-image/blog-title mismatch without a separate status argument.
 - The manifest keeps `arxivId` for stable sorting and fingerprinting, but the prompt forbids rendering paper IDs. Ranking entries display the complete English title, score, and primary direction.
-- The digest image uses the same PNG dimension, ratio, size, and SHA gates as paper infographics. Missing, failed, damaged, or stale images do not block or roll back blog publication.
+- Paper infographics and the digest cover are archived directly under `data/archive/<date>/`; legacy current assets migrate only after PNG/SHA verification and conflict checks. Historical cards outside the final TOP 10 use `unranked-<paper>` directories so no leaderboard rank is fabricated. The digest image uses the same PNG dimension, ratio, size, and SHA gates as paper infographics. Missing, failed, damaged, or stale images do not block or roll back blog publication.
 
 ### 5.9 `data/current/analyzed.json`
 

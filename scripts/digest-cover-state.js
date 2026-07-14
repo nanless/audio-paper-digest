@@ -108,7 +108,7 @@ function coverTaskToken(dataSha256, expectedPromptSha, publication = null) {
 function validateCompletedCover(cover, dataSha256, expectedPromptSha, expectedToken) {
     if (!cover || cover.status !== 'complete') return false;
     if (cover.dataSha256 !== dataSha256 || cover.promptSha256 !== expectedPromptSha || cover.taskToken !== expectedToken) return false;
-    const expected = path.resolve(Config.FILES.digestCoverAssetDir, cover.batchDate || '', 'cover.png');
+    const expected = digestCoverAssetPath(cover.batchDate || '');
     const actual = path.resolve(Config.PROJECT_ROOT, String(cover.assetPath || ''));
     if (actual !== expected) return false;
     try {
@@ -118,6 +118,95 @@ function validateCompletedCover(cover, dataSha256, expectedPromptSha, expectedTo
     } catch (_error) {
         return false;
     }
+}
+
+function digestCoverAssetPath(targetDate) {
+    const date = validateDate(targetDate);
+    return path.resolve(Config.FILES.digestCoverAssetDir, date, 'digest-cover', 'cover.png');
+}
+
+function migrateLegacyCompletedCover(cover, dataSha256, expectedPromptSha, expectedToken, legacyToken, targetDate) {
+    if (!cover || cover.status !== 'complete'
+        || cover.dataSha256 !== dataSha256
+        || cover.promptSha256 !== expectedPromptSha
+        || ![expectedToken, legacyToken].includes(cover.taskToken)
+        || !/^[0-9a-f]{64}$/.test(String(cover.assetSha256 || ''))) {
+        return cover;
+    }
+    const target = digestCoverAssetPath(targetDate);
+    if (validateCompletedCover(cover, dataSha256, expectedPromptSha, expectedToken)) return cover;
+    const legacy = path.resolve(Config.CURRENT_DIR, 'digest-covers', targetDate, 'cover.png');
+    const recorded = path.resolve(Config.PROJECT_ROOT, String(cover.assetPath || ''));
+    if (recorded !== legacy && recorded !== target) return cover;
+    const source = fs.existsSync(legacy) ? legacy : (fs.existsSync(target) ? target : null);
+    if (!source) return cover;
+    const raw = fs.readFileSync(source);
+    validatePngBuffer(raw);
+    if (sha256Buffer(raw) !== cover.assetSha256) return cover;
+
+    assertSafeAssetTarget(target, Config.FILES.digestCoverAssetDir);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    if (source !== target) {
+        if (fs.existsSync(target)) {
+            const existing = fs.readFileSync(target);
+            validatePngBuffer(existing);
+            if (sha256Buffer(existing) !== cover.assetSha256) {
+                throw new Error(`汇总封面归档目标已存在但内容不一致: ${target}`);
+            }
+            fs.unlinkSync(source);
+        } else {
+            fs.renameSync(source, target);
+        }
+    }
+    return {
+        ...cover,
+        taskToken: expectedToken,
+        assetPath: path.relative(Config.PROJECT_ROOT, target).split(path.sep).join('/'),
+        archivedAt: cover.archivedAt || getBeijingISOString()
+    };
+}
+
+function archiveLegacyDigestCover({ targetDate, manifestPath } = {}) {
+    targetDate = validateDate(targetDate);
+    manifestPath = manifestPath || digestCoverManifestPath(targetDate);
+    return updateJsonFileLocked(manifestPath, current => {
+        const cover = current?.cover;
+        if (!current || current.batchDate !== targetDate || cover?.status !== 'complete'
+            || !/^[0-9a-f]{64}$/.test(String(cover.assetSha256 || ''))) {
+            throw new Error(`汇总封面 manifest 未完成或日期不匹配: ${manifestPath}`);
+        }
+        const legacy = path.resolve(Config.CURRENT_DIR, 'digest-covers', targetDate, 'cover.png');
+        const target = digestCoverAssetPath(targetDate);
+        const recorded = path.resolve(Config.PROJECT_ROOT, String(cover.assetPath || ''));
+        if (![legacy, target].includes(recorded)) throw new Error(`历史汇总封面路径不受控: ${cover.assetPath}`);
+        const source = fs.existsSync(legacy) ? legacy : (fs.existsSync(target) ? target : null);
+        if (!source || !fs.statSync(source).isFile()) throw new Error(`历史汇总封面缺失: ${targetDate}`);
+        const raw = fs.readFileSync(source);
+        validatePngBuffer(raw);
+        if (sha256Buffer(raw) !== cover.assetSha256) throw new Error(`历史汇总封面 SHA 不匹配: ${targetDate}`);
+        assertSafeAssetTarget(target, Config.FILES.digestCoverAssetDir);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        if (source !== target) {
+            if (fs.existsSync(target)) {
+                const existing = fs.readFileSync(target);
+                validatePngBuffer(existing);
+                if (sha256Buffer(existing) !== cover.assetSha256) throw new Error(`历史汇总封面归档目标冲突: ${target}`);
+                fs.unlinkSync(source);
+            } else {
+                fs.renameSync(source, target);
+            }
+        }
+        const now = getBeijingISOString();
+        return {
+            ...current,
+            updatedAt: now,
+            cover: {
+                ...cover,
+                assetPath: path.relative(Config.PROJECT_ROOT, target).split(path.sep).join('/'),
+                archivedAt: cover.archivedAt || now
+            }
+        };
+    }, { allowMissing: false });
 }
 
 function assertDigestCoverManifestCurrent(manifest, publication, targetDate, promptPath = null) {
@@ -169,8 +258,12 @@ function planDigestCover({ targetDate, papers, manifestPath, promptPath, categor
             throw new Error(`不支持的汇总封面 manifest 版本: ${current.version}`);
         }
         let cover;
-        if (validateCompletedCover(current?.cover, dataSha, currentPromptSha, token)) {
-            cover = current.cover;
+        const archivedCover = migrateLegacyCompletedCover(
+            current?.cover, dataSha, currentPromptSha, token,
+            coverTaskToken(dataSha, currentPromptSha, null), targetDate
+        );
+        if (validateCompletedCover(archivedCover, dataSha, currentPromptSha, token)) {
+            cover = archivedCover;
         } else if (
             current?.cover
             && ['pending', 'failed'].includes(current.cover.status)
@@ -216,7 +309,7 @@ function recordDigestCover({ sourcePath, taskToken, targetDate, manifestPath }) 
         if (!taskToken || current.cover.taskToken !== taskToken) throw new Error('汇总封面任务令牌已失效');
         if (current.cover.status === 'complete') throw new Error('汇总封面已完成，拒绝旧任务覆盖');
         const target = assertSafeAssetTarget(
-            path.resolve(Config.FILES.digestCoverAssetDir, current.batchDate, 'cover.png'),
+            digestCoverAssetPath(current.batchDate),
             Config.FILES.digestCoverAssetDir
         );
         fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -308,6 +401,11 @@ function main(argv = process.argv.slice(2)) {
         }));
         return;
     }
+    if (command === 'archive-legacy') {
+        archiveLegacyDigestCover({ targetDate: options.date, manifestPath: options.manifest });
+        console.log('历史汇总封面已按日期归档');
+        return;
+    }
     if (command === 'status') {
         const publication = assertPublishedBlogReceipt(options.date, options.receipt);
         const manifest = readJsonFileStrict(options.manifest || digestCoverManifestPath(options.date));
@@ -340,7 +438,7 @@ function main(argv = process.argv.slice(2)) {
         console.log('已记录汇总页封面失败');
         return;
     }
-    throw new Error('用法: digest-cover-state.js plan|status --date YYYY-MM-DD | record --date YYYY-MM-DD (--file PNG|--output-hint HINT) --token TOKEN | fail --date YYYY-MM-DD --error MESSAGE --token TOKEN');
+    throw new Error('用法: digest-cover-state.js plan|status|archive-legacy --date YYYY-MM-DD | record --date YYYY-MM-DD (--file PNG|--output-hint HINT) --token TOKEN | fail --date YYYY-MM-DD --error MESSAGE --token TOKEN');
 }
 
 if (require.main === module) main();
@@ -356,6 +454,9 @@ module.exports = {
     recordDigestCover,
     markDigestCoverFailed,
     validateCompletedCover,
+    digestCoverAssetPath,
+    migrateLegacyCompletedCover,
+    archiveLegacyDigestCover,
     assertDigestCoverManifestCurrent,
     main
 };

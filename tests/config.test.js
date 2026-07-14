@@ -83,9 +83,9 @@ describe('config', () => {
         assert.strictEqual(path.basename(Config.FILES.filteredPapers), 'filtered-papers.json');
         assert.strictEqual(path.basename(Config.FILES.deepAnalysisResult), 'deep-analysis-result.json');
         assert.strictEqual(path.basename(Config.FILES.visualSummaryManifestDir), 'visual-summary-manifests');
-        assert.strictEqual(path.basename(Config.FILES.visualSummaryAssetDir), 'visual-summaries');
+        assert.strictEqual(Config.FILES.visualSummaryAssetDir, Config.ARCHIVE_DIR);
         assert.strictEqual(path.basename(Config.FILES.digestCoverManifestDir), 'digest-cover-manifests');
-        assert.strictEqual(path.basename(Config.FILES.digestCoverAssetDir), 'digest-covers');
+        assert.strictEqual(Config.FILES.digestCoverAssetDir, Config.ARCHIVE_DIR);
         assert.strictEqual(path.basename(Config.FILES.visualSummaryManifest), 'visual-summary-manifest.json');
     });
 

@@ -1381,7 +1381,7 @@ def load_visual_summary_cards(papers, date_str, manifest_path=None):
         raise PublishDataValidationError('视觉摘要 manifest 论文集合与博客发布集合不一致')
 
     project_root = Path(__file__).resolve().parent.parent
-    allowed_root = VISUAL_SUMMARY_ASSET_DIR.resolve()
+    allowed_root = (VISUAL_SUMMARY_ASSET_DIR / date_str / 'visual-summaries').resolve()
     enriched = []
     assets = []
     for paper in papers:
@@ -1392,6 +1392,8 @@ def load_visual_summary_cards(papers, date_str, manifest_path=None):
             not isinstance(record, dict)
             or record.get('normalizedArxivId') != paper_id
             or record.get('batchDate') != date_str
+            or not isinstance(record.get('rank'), int)
+            or not 1 <= record.get('rank') <= 10
             or record.get('analysisSha256') != expected_analysis_sha
             or record.get('promptSha256') != prompt_sha
         ):
@@ -1414,7 +1416,8 @@ def load_visual_summary_cards(papers, date_str, manifest_path=None):
             if not isinstance(asset_path, str) or not asset_path:
                 raise PublishDataValidationError(f'{paper_id}/{kind} 缺少资产路径')
             source = (project_root / asset_path).resolve()
-            expected_source = (allowed_root / date_str / paper_id / f'{kind}.png').resolve()
+            ranked_dir = f'{record["rank"]:02d}-{paper_id}'
+            expected_source = (allowed_root / ranked_dir / f'{kind}.png').resolve()
             if source != expected_source:
                 raise PublishDataValidationError(f'{paper_id}/{kind} 视觉摘要资产路径不受控')
             try:
@@ -1515,7 +1518,7 @@ def load_digest_cover(papers, date_str, manifest_path=None, category='论文速�
     ):
         raise PublishDataValidationError('汇总页封面未完成或数据/prompt 指纹已失效')
     source = (Path(__file__).resolve().parent.parent / str(cover.get('assetPath') or '')).resolve()
-    expected = (DIGEST_COVER_ASSET_DIR / date_str / 'cover.png').resolve()
+    expected = (DIGEST_COVER_ASSET_DIR / date_str / 'digest-cover' / 'cover.png').resolve()
     if source != expected:
         raise PublishDataValidationError('汇总页封面资产路径不受控')
     try:

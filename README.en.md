@@ -32,6 +32,8 @@ Visual generation is a post-publication stage. First finish deep analysis for ev
 | `prompts/visual-summary.md` | Post-publication prompt for one tall infographic per TOP 10 paper | Maintainers |
 | `prompts/digest-cover.md` | Post-publication digest-image prompt for title, hot directions, and TOP 5 | Maintainers |
 
+Generated infographics and digest covers are archived by batch date under `data/archive/<date>/visual-summaries/` and `data/archive/<date>/digest-cover/`; infographic directories use manifest-rank prefixes `01-` through `10-`, not completion order. Only their resumable manifests remain in `data/current/`.
+
 > **Iron Rule**: The actual behavior in `scripts/*.js` / `scripts/*.py` is the single source of truth. If documentation conflicts with code, trust the code and fix the documentation.
 
 ---

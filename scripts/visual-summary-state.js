@@ -56,7 +56,7 @@ function crc32(buffer) {
     return (value ^ 0xffffffff) >>> 0;
 }
 
-function validatePngBuffer(raw) {
+function validatePngBuffer(raw, { requirePortrait = true } = {}) {
     if (!Buffer.isBuffer(raw) || raw.length <= PNG_SIGNATURE.length || raw.length > MAX_ASSET_BYTES) {
         throw new Error(`视觉摘要 PNG 大小非法: ${raw?.length || 0} bytes`);
     }
@@ -82,7 +82,7 @@ function validatePngBuffer(raw) {
             const width = payload.readUInt32BE(0);
             const height = payload.readUInt32BE(4);
             if (width < 1 || height < 1 || width > 8192 || height > 8192) throw new Error(`视觉摘要 PNG 尺寸非法: ${width}x${height}`);
-            if (width < MIN_ASSET_WIDTH || height < MIN_ASSET_HEIGHT || height / width < MIN_PORTRAIT_RATIO) {
+            if (requirePortrait && (width < MIN_ASSET_WIDTH || height < MIN_ASSET_HEIGHT || height / width < MIN_PORTRAIT_RATIO)) {
                 throw new Error(`视觉摘要必须是至少 ${MIN_ASSET_WIDTH}x${MIN_ASSET_HEIGHT} 且高宽比不低于 ${MIN_PORTRAIT_RATIO} 的纵向长图: ${width}x${height}`);
             }
             first = false;
@@ -206,9 +206,22 @@ function analysisSha256(paper) {
     });
 }
 
-function cardTaskToken(id, kind, expectedAnalysisSha, expectedPromptSha, publication = null) {
+function cardTaskToken(id, kind, expectedAnalysisSha, expectedPromptSha, rank, publication = null) {
     return stableSha256({
         manifestVersion: MANIFEST_VERSION,
+        arxivId: id,
+        kind,
+        rank,
+        analysisSha256: expectedAnalysisSha,
+        promptSha256: expectedPromptSha,
+        publicationCommit: publication?.publicationCommit || null,
+        generationManifestSha256: publication?.generationManifestSha256 || null
+    });
+}
+
+function legacyCardTaskToken(id, kind, expectedAnalysisSha, expectedPromptSha, publication = null, manifestVersion = MANIFEST_VERSION) {
+    return stableSha256({
+        manifestVersion,
         arxivId: id,
         kind,
         analysisSha256: expectedAnalysisSha,
@@ -218,11 +231,11 @@ function cardTaskToken(id, kind, expectedAnalysisSha, expectedPromptSha, publica
     });
 }
 
-function pendingCard(id, kind, expectedAnalysisSha, expectedPromptSha, publication = null) {
+function pendingCard(id, kind, expectedAnalysisSha, expectedPromptSha, rank, publication = null) {
     return {
         status: 'pending',
         label: CARD_LABELS[kind],
-        taskToken: cardTaskToken(id, kind, expectedAnalysisSha, expectedPromptSha, publication),
+        taskToken: cardTaskToken(id, kind, expectedAnalysisSha, expectedPromptSha, rank, publication),
         analysisSha256: expectedAnalysisSha,
         promptSha256: expectedPromptSha
     };
@@ -244,6 +257,205 @@ function validateCompletedCard(card, expectedAnalysisSha, expectedPromptSha, exp
     } catch (_error) {
         return false;
     }
+}
+
+function visualSummaryAssetPath(targetDate, arxivId, kind, rank) {
+    const date = validateDate(targetDate);
+    const id = normalizedId(arxivId);
+    if (!id || !CARD_KINDS.includes(kind) || !Number.isInteger(rank) || rank < 1 || rank > DEFAULT_SELECTION_LIMIT) {
+        throw new Error('视觉摘要归档路径参数非法');
+    }
+    return path.resolve(
+        Config.FILES.visualSummaryAssetDir,
+        date,
+        'visual-summaries',
+        `${String(rank).padStart(2, '0')}-${id}`,
+        `${kind}.png`
+    );
+}
+
+function migrateLegacyCompletedCard(card, expectedAnalysisSha, expectedPromptSha, expectedTaskToken, legacyTaskTokens, targetDate, id, kind, rank) {
+    if (!card || card.status !== 'complete'
+        || card.analysisSha256 !== expectedAnalysisSha
+        || card.promptSha256 !== expectedPromptSha
+        || ![expectedTaskToken, ...legacyTaskTokens].includes(card.taskToken)
+        || !/^[0-9a-f]{64}$/.test(String(card.assetSha256 || ''))) {
+        return card;
+    }
+    const target = visualSummaryAssetPath(targetDate, id, kind, rank);
+    if (validateCompletedCard(card, expectedAnalysisSha, expectedPromptSha, expectedTaskToken, target)) return card;
+
+    const legacy = path.resolve(Config.CURRENT_DIR, 'visual-summaries', targetDate, id, `${kind}.png`);
+    const unnumberedArchive = path.resolve(
+        Config.FILES.visualSummaryAssetDir, targetDate, 'visual-summaries', id, `${kind}.png`
+    );
+    const recorded = path.resolve(Config.PROJECT_ROOT, String(card.assetPath || ''));
+    if (![legacy, unnumberedArchive, target].includes(recorded)) return card;
+    const source = [legacy, unnumberedArchive, target].find(candidate => fs.existsSync(candidate)) || null;
+    if (!source) return card;
+    const raw = fs.readFileSync(source);
+    validatePngBuffer(raw);
+    if (sha256Buffer(raw) !== card.assetSha256) return card;
+
+    assertSafeAssetTarget(target, Config.FILES.visualSummaryAssetDir);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    if (source !== target) {
+        if (fs.existsSync(target)) {
+            const existing = fs.readFileSync(target);
+            validatePngBuffer(existing);
+            if (sha256Buffer(existing) !== card.assetSha256) {
+                throw new Error(`视觉摘要归档目标已存在但内容不一致: ${target}`);
+            }
+            fs.unlinkSync(source);
+        } else {
+            fs.renameSync(source, target);
+        }
+    }
+    return {
+        ...card,
+        taskToken: expectedTaskToken,
+        assetPath: path.relative(Config.PROJECT_ROOT, target).split(path.sep).join('/'),
+        archivedAt: card.archivedAt || getBeijingISOString()
+    };
+}
+
+function archiveRemainingLegacyVisualAssets(targetDate, manifest) {
+    const legacyRoot = path.resolve(Config.CURRENT_DIR, 'visual-summaries', validateDate(targetDate));
+    if (!fs.existsSync(legacyRoot)) return 0;
+    if (fs.lstatSync(legacyRoot).isSymbolicLink()) throw new Error(`旧视觉资产目录不得是符号链接: ${legacyRoot}`);
+    let moved = 0;
+    for (const entry of fs.readdirSync(legacyRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+        const id = normalizedId(entry.name);
+        if (!id) continue;
+        const rank = manifest?.papers?.[id]?.rank;
+        const targetDirectoryName = Number.isInteger(rank)
+            ? `${String(rank).padStart(2, '0')}-${id}`
+            : `unranked-${id}`;
+        const sourceDir = path.join(legacyRoot, entry.name);
+        const targetDir = path.resolve(
+            Config.FILES.visualSummaryAssetDir, targetDate, 'visual-summaries', targetDirectoryName
+        );
+        for (const file of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+            if (!file.isFile() || file.isSymbolicLink() || !/^[A-Za-z0-9_-]+\.png$/.test(file.name)) continue;
+            const source = path.join(sourceDir, file.name);
+            const target = assertSafeAssetTarget(path.join(targetDir, file.name), Config.FILES.visualSummaryAssetDir);
+            const raw = fs.readFileSync(source);
+            validatePngBuffer(raw, { requirePortrait: false });
+            fs.mkdirSync(path.dirname(target), { recursive: true });
+            if (fs.existsSync(target)) {
+                const existing = fs.readFileSync(target);
+                validatePngBuffer(existing, { requirePortrait: false });
+                if (sha256Buffer(existing) !== sha256Buffer(raw)) {
+                    throw new Error(`旧视觉资产归档目标已存在但内容不一致: ${target}`);
+                }
+                fs.unlinkSync(source);
+            } else {
+                fs.renameSync(source, target);
+            }
+            moved += 1;
+        }
+        if (fs.readdirSync(sourceDir).length === 0) fs.rmdirSync(sourceDir);
+    }
+    if (fs.existsSync(legacyRoot) && fs.readdirSync(legacyRoot).length === 0) fs.rmdirSync(legacyRoot);
+    return moved;
+}
+
+function archiveLegacyVisualManifestAssets({ targetDate, manifestPath, generationManifestPath } = {}) {
+    targetDate = validateDate(targetDate);
+    manifestPath = manifestPath || visualSummaryManifestPath(targetDate);
+    generationManifestPath = generationManifestPath || path.join(
+        Config.CURRENT_DIR, `blog-generation-manifest-${targetDate}.json`
+    );
+    const generation = readJsonFileStrict(generationManifestPath);
+    if (generation.date !== targetDate) {
+        throw new Error(`博客 generation manifest 与归档日期不匹配: ${generationManifestPath}`);
+    }
+    let publishedPapers = generation.publishedPapers;
+    if (!Array.isArray(publishedPapers)) {
+        const publishedIds = new Set((generation.files || []).flatMap(record => {
+            const match = String(record?.path || '').match(/(\d{4})-(\d{4,5})(?=\.md$)/);
+            return match ? [`${match[1]}.${match[2]}`] : [];
+        }));
+        const archivedAnalysisPath = path.join(Config.ARCHIVE_DIR, targetDate, 'deep-analysis-result.json');
+        const archivedAnalysis = readJsonFileStrict(archivedAnalysisPath);
+        const papers = Array.isArray(archivedAnalysis) ? archivedAnalysis : archivedAnalysis.papers;
+        if (publishedIds.size === 0 || !Array.isArray(papers)) {
+            throw new Error(`旧版 generation manifest 缺少论文快照且无法绑定归档分析: ${generationManifestPath}`);
+        }
+        publishedPapers = papers.filter(paper => publishedIds.has(normalizedId(paper)));
+        if (publishedPapers.length !== publishedIds.size) {
+            throw new Error(`旧版 generation manifest 与归档分析论文集合不一致: ${targetDate}`);
+        }
+    }
+    const ranked = selectTopRankedPapers(publishedPapers, targetDate, DEFAULT_SELECTION_LIMIT);
+    const rankById = new Map(ranked.map((paper, index) => [normalizedId(paper), index + 1]));
+    const migrated = updateJsonFileLocked(manifestPath, current => {
+        if (!current || current.batchDate !== targetDate || !current.papers || typeof current.papers !== 'object') {
+            throw new Error(`视觉摘要 manifest 与归档日期不匹配: ${manifestPath}`);
+        }
+        const next = structuredClone(current);
+        for (const [id, paper] of Object.entries(next.papers)) {
+            const rank = rankById.get(id) || null;
+            paper.rank = rank;
+            const directoryName = rank ? `${String(rank).padStart(2, '0')}-${id}` : `unranked-${id}`;
+            for (const [kind, card] of Object.entries(paper.cards || {})) {
+                if (card?.status !== 'complete' || !/^[A-Za-z0-9_-]+$/.test(kind)
+                    || !/^[0-9a-f]{64}$/.test(String(card.assetSha256 || ''))) continue;
+                const legacy = path.resolve(Config.CURRENT_DIR, 'visual-summaries', targetDate, id, `${kind}.png`);
+                const target = assertSafeAssetTarget(path.resolve(
+                    Config.FILES.visualSummaryAssetDir, targetDate, 'visual-summaries', directoryName, `${kind}.png`
+                ), Config.FILES.visualSummaryAssetDir);
+                const recorded = path.resolve(Config.PROJECT_ROOT, String(card.assetPath || ''));
+                if (![legacy, target].includes(recorded)) {
+                    throw new Error(`历史视觉资产路径不受控: ${card.assetPath}`);
+                }
+                let source = fs.existsSync(legacy) ? legacy : (fs.existsSync(target) ? target : null);
+                if (!source) {
+                    const archiveRoot = path.resolve(
+                        Config.FILES.visualSummaryAssetDir, targetDate, 'visual-summaries'
+                    );
+                    const recovered = fs.existsSync(archiveRoot)
+                        ? fs.readdirSync(archiveRoot, { withFileTypes: true })
+                            .filter(entry => entry.isDirectory() && !entry.isSymbolicLink()
+                                && entry.name.endsWith(`-${id}`))
+                            .map(entry => path.join(archiveRoot, entry.name, `${kind}.png`))
+                            .filter(candidate => fs.existsSync(candidate))
+                        : [];
+                    if (recovered.length > 1) throw new Error(`历史视觉资产存在多个归档候选: ${id}/${kind}`);
+                    source = recovered[0] || null;
+                }
+                if (!source || !fs.statSync(source).isFile()) throw new Error(`历史视觉资产缺失: ${id}/${kind}`);
+                const raw = fs.readFileSync(source);
+                validatePngBuffer(raw, { requirePortrait: kind === 'infographic' });
+                if (sha256Buffer(raw) !== card.assetSha256) throw new Error(`历史视觉资产 SHA 不匹配: ${id}/${kind}`);
+                fs.mkdirSync(path.dirname(target), { recursive: true });
+                if (source !== target) {
+                    const oldParent = path.dirname(source);
+                    if (fs.existsSync(target)) {
+                        const existing = fs.readFileSync(target);
+                        validatePngBuffer(existing, { requirePortrait: kind === 'infographic' });
+                        if (sha256Buffer(existing) !== card.assetSha256) {
+                            throw new Error(`历史视觉资产归档目标冲突: ${target}`);
+                        }
+                        fs.unlinkSync(source);
+                    } else {
+                        fs.renameSync(source, target);
+                    }
+                    if (oldParent !== path.dirname(target) && fs.existsSync(oldParent)
+                        && fs.readdirSync(oldParent).length === 0) {
+                        fs.rmdirSync(oldParent);
+                    }
+                }
+                card.assetPath = path.relative(Config.PROJECT_ROOT, target).split(path.sep).join('/');
+                card.archivedAt = card.archivedAt || getBeijingISOString();
+            }
+        }
+        next.updatedAt = getBeijingISOString();
+        return next;
+    }, { allowMissing: false });
+    const extraCount = archiveRemainingLegacyVisualAssets(targetDate, migrated);
+    return { manifest: migrated, rankedCount: ranked.length, extraCount };
 }
 
 function buildGenerationContext(paper) {
@@ -321,7 +533,9 @@ function assertVisualManifestCurrent(manifest, publication, targetDate, promptPa
         const id = expectedIds[index];
         const record = manifest.papers[id];
         const expectedAnalysisSha = analysisSha256(paper);
-        const expectedToken = cardTaskToken(id, 'infographic', expectedAnalysisSha, currentPromptSha, publication);
+        const expectedToken = cardTaskToken(
+            id, 'infographic', expectedAnalysisSha, currentPromptSha, index + 1, publication
+        );
         const card = record?.cards?.infographic;
         if (!record || record.rank !== index + 1 || record.score !== Number(paper.parsed.score)
             || record.title !== String(paper.title || '')
@@ -368,7 +582,7 @@ function withManifestSummary(manifest) {
     };
 }
 
-function buildPaperPlan(paper, existing, targetDate, currentPromptSha, publication = null) {
+function buildPaperPlan(paper, existing, targetDate, currentPromptSha, publication = null, rank = null) {
     const id = normalizedId(paper);
     if (!id) throw new Error('视觉摘要论文缺少可规范化的 arXiv ID');
     if (!isSuccessfulAnalysisRecord(paper)) {
@@ -387,10 +601,20 @@ function buildPaperPlan(paper, existing, targetDate, currentPromptSha, publicati
     const cards = {};
     for (const kind of CARD_KINDS) {
         const previous = previousCards[kind];
-        const expectedTaskToken = cardTaskToken(id, kind, currentAnalysisSha, currentPromptSha, publication);
-        const expectedAssetPath = path.resolve(Config.FILES.visualSummaryAssetDir, targetDate, id, `${kind}.png`);
-        if (validateCompletedCard(previous, currentAnalysisSha, currentPromptSha, expectedTaskToken, expectedAssetPath)) {
-            cards[kind] = previous;
+        const expectedTaskToken = cardTaskToken(
+            id, kind, currentAnalysisSha, currentPromptSha, rank, publication
+        );
+        const previousTaskTokens = [MANIFEST_VERSION, 2].flatMap(version => [
+            legacyCardTaskToken(id, kind, currentAnalysisSha, currentPromptSha, publication, version),
+            legacyCardTaskToken(id, kind, currentAnalysisSha, currentPromptSha, null, version)
+        ]);
+        const expectedAssetPath = visualSummaryAssetPath(targetDate, id, kind, rank);
+        const archivedPrevious = migrateLegacyCompletedCard(
+            previous, currentAnalysisSha, currentPromptSha, expectedTaskToken, previousTaskTokens,
+            targetDate, id, kind, rank
+        );
+        if (validateCompletedCard(archivedPrevious, currentAnalysisSha, currentPromptSha, expectedTaskToken, expectedAssetPath)) {
+            cards[kind] = archivedPrevious;
         } else if (
             previous
             && ['pending', 'failed'].includes(previous.status)
@@ -400,7 +624,7 @@ function buildPaperPlan(paper, existing, targetDate, currentPromptSha, publicati
         ) {
             cards[kind] = previous;
         } else {
-            cards[kind] = pendingCard(id, kind, currentAnalysisSha, currentPromptSha, publication);
+            cards[kind] = pendingCard(id, kind, currentAnalysisSha, currentPromptSha, rank, publication);
         }
     }
     return {
@@ -450,7 +674,7 @@ function planVisualSummaries({
     const batchPapers = papers.filter(paper => paperBatchDate(paper) === targetDate);
     const selected = selectTopRankedPapers(papers, targetDate, selectionLimit);
 
-    return updateJsonFileLocked(manifestPath, current => {
+    const plannedManifest = updateJsonFileLocked(manifestPath, current => {
         if (current && ![1, 2, MANIFEST_VERSION].includes(current.version)) {
             throw new Error(`不支持的视觉摘要 manifest 版本: ${current.version}`);
         }
@@ -470,11 +694,12 @@ function planVisualSummaries({
                     ? `最新一次分析失败: ${paper.latestAnalysisAttemptError}`
                     : '深度分析未通过完整契约'
             }));
-        for (const paper of selected) {
+        for (const [index, paper] of selected.entries()) {
             const id = normalizedId(paper);
+            const rank = index + 1;
             planned[id] = {
-                ...buildPaperPlan(paper, previousPapers[id], targetDate, currentPromptSha, publication),
-                rank: selected.indexOf(paper) + 1,
+                ...buildPaperPlan(paper, previousPapers[id], targetDate, currentPromptSha, publication, rank),
+                rank,
                 score: Number(paper.parsed.score)
             };
         }
@@ -492,6 +717,10 @@ function planVisualSummaries({
             skippedPapers
         });
     });
+    if (path.resolve(manifestPath) === path.resolve(defaultManifestPath)) {
+        archiveRemainingLegacyVisualAssets(targetDate, plannedManifest);
+    }
+    return plannedManifest;
 }
 
 function validatePngAsset(sourcePath) {
@@ -569,7 +798,7 @@ function recordVisualSummaryCard({
         }
 
         const target = assertSafeAssetTarget(
-            path.resolve(Config.FILES.visualSummaryAssetDir, current.batchDate, id, `${kind}.png`),
+            visualSummaryAssetPath(current.batchDate, id, kind, paper.rank),
             Config.FILES.visualSummaryAssetDir
         );
         const relative = path.relative(Config.PROJECT_ROOT, target);
@@ -630,9 +859,7 @@ function pendingVisualSummaryCards(manifest) {
     const pending = [];
     for (const [id, paper] of Object.entries(manifest?.papers || {})) {
         for (const kind of CARD_KINDS) {
-            const expectedPath = path.resolve(
-                Config.FILES.visualSummaryAssetDir, manifest.batchDate, id, `${kind}.png`
-            );
+            const expectedPath = visualSummaryAssetPath(manifest.batchDate, id, kind, paper.rank);
             if (!validateCompletedCard(
                 paper.cards?.[kind], paper.analysisSha256, paper.promptSha256,
                 paper.cards?.[kind]?.taskToken, expectedPath
@@ -679,6 +906,15 @@ function main(argv = process.argv.slice(2)) {
         for (const item of pending) console.log(JSON.stringify(item));
         return;
     }
+    if (command === 'archive-legacy') {
+        const result = archiveLegacyVisualManifestAssets({
+            targetDate: options.date,
+            manifestPath: options.manifest,
+            generationManifestPath: options.generation
+        });
+        console.log(`历史视觉资产已按日期归档：排行榜 ${result.rankedCount} 篇，额外图片 ${result.extraCount} 张`);
+        return;
+    }
     if (command === 'record') {
         const publication = assertPublishedBlogReceipt(options.date, options.receipt);
         const current = readJsonFileStrict(options.manifest || visualSummaryManifestPath(options.date));
@@ -715,7 +951,7 @@ function main(argv = process.argv.slice(2)) {
         if (pending.length !== 0) process.exitCode = 1;
         return;
     }
-    throw new Error('用法: visual-summary-state.js plan --date YYYY-MM-DD | record --date YYYY-MM-DD --paper ID --kind infographic (--file PNG | --output-hint HINT) --token TOKEN | fail --date YYYY-MM-DD --paper ID --kind infographic --error MESSAGE --token TOKEN | status --date YYYY-MM-DD');
+    throw new Error('用法: visual-summary-state.js plan --date YYYY-MM-DD | archive-legacy --date YYYY-MM-DD | record --date YYYY-MM-DD --paper ID --kind infographic (--file PNG | --output-hint HINT) --token TOKEN | fail --date YYYY-MM-DD --paper ID --kind infographic --error MESSAGE --token TOKEN | status --date YYYY-MM-DD');
 }
 
 if (require.main === module) main();
@@ -731,6 +967,7 @@ module.exports = {
     bindPublishedPapersToDate,
     assertVisualManifestCurrent,
     cardTaskToken,
+    legacyCardTaskToken,
     promptSha256,
     planVisualSummaries,
     recordVisualSummaryCard,
@@ -738,6 +975,10 @@ module.exports = {
     pendingVisualSummaryCards,
     validateCompletedCard,
     validatePngAsset,
+    visualSummaryAssetPath,
+    migrateLegacyCompletedCard,
+    archiveRemainingLegacyVisualAssets,
+    archiveLegacyVisualManifestAssets,
     assertSafeAssetTarget,
     validatePngBuffer,
     extractGeneratedImagePathFromHint,

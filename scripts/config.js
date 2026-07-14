@@ -125,9 +125,11 @@ const FILES = {
     deepAnalysisResult: path.join(CURRENT_DIR, 'deep-analysis-result.json'),
     deepAnalysisResultLegacy: path.join(DATA_DIR, 'deep-analysis-result.json'),
     visualSummaryManifestDir: path.join(CURRENT_DIR, 'visual-summary-manifests'),
-    visualSummaryAssetDir: path.join(CURRENT_DIR, 'visual-summaries'),
+    // 发布后生成的图片属于已完成批次，直接写入
+    // data/archive/<date>/visual-summaries/...，不再滞留在 current。
+    visualSummaryAssetDir: ARCHIVE_DIR,
     digestCoverManifestDir: path.join(CURRENT_DIR, 'digest-cover-manifests'),
-    digestCoverAssetDir: path.join(CURRENT_DIR, 'digest-covers'),
+    digestCoverAssetDir: ARCHIVE_DIR,
     // Legacy single-file location retained only for callers migrating old state.
     visualSummaryManifest: path.join(CURRENT_DIR, 'visual-summary-manifest.json'),
     analyzed: path.join(CURRENT_DIR, 'analyzed.json'),

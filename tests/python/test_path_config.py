@@ -14,6 +14,7 @@ sys.path.insert(0, SCRIPTS)
 
 from path_config import (  # noqa: E402
     CURRENT_DIR,
+    ARCHIVE_DIR,
     DIGEST_COVER_ASSET_DIR,
     DIGEST_COVER_MANIFEST_DIR,
     DEEP_ANALYSIS_RESULT_FILE,
@@ -52,9 +53,9 @@ class PathConfigTest(unittest.TestCase):
         self.assertEqual(PAPERS_FILE.parent, CURRENT_DIR)
         self.assertEqual(DEEP_ANALYSIS_RESULT_FILE.parent, CURRENT_DIR)
         self.assertEqual(VISUAL_SUMMARY_MANIFEST_DIR, CURRENT_DIR / 'visual-summary-manifests')
-        self.assertEqual(VISUAL_SUMMARY_ASSET_DIR, CURRENT_DIR / 'visual-summaries')
+        self.assertEqual(VISUAL_SUMMARY_ASSET_DIR, ARCHIVE_DIR)
         self.assertEqual(DIGEST_COVER_MANIFEST_DIR, CURRENT_DIR / 'digest-cover-manifests')
-        self.assertEqual(DIGEST_COVER_ASSET_DIR, CURRENT_DIR / 'digest-covers')
+        self.assertEqual(DIGEST_COVER_ASSET_DIR, ARCHIVE_DIR)
 
     def test_publish_output_helpers(self):
         self.assertEqual(

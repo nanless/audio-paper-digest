@@ -1141,7 +1141,8 @@ body
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
             current = Path(tmp) / 'data' / 'current'
-            source_root = current / 'visual-summaries' / '2026-07-10' / '2607.00001'
+            archive = Path(tmp) / 'data' / 'archive'
+            source_root = archive / '2026-07-10' / 'visual-summaries' / '01-2607.00001'
             source_root.mkdir(parents=True)
             paper = {'arxivId': '2607.00001', 'analysis': 'audited', 'parsed': {'score': '8'}}
             analysis_sha = publish_to_blog._visual_summary_analysis_sha256(paper)
@@ -1162,6 +1163,7 @@ body
                 'version': 2, 'batchDate': '2026-07-10', 'promptSha256': prompt_sha,
                 'papers': {'2607.00001': {
                     'normalizedArxivId': '2607.00001', 'batchDate': '2026-07-10',
+                    'rank': 1,
                     'analysisSha256': analysis_sha, 'promptSha256': prompt_sha,
                     'cards': cards,
                 }},
@@ -1170,7 +1172,7 @@ body
             stage_posts.mkdir(parents=True)
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
-                    mock.patch.object(publish_to_blog, 'VISUAL_SUMMARY_ASSET_DIR', current / 'visual-summaries'):
+                    mock.patch.object(publish_to_blog, 'VISUAL_SUMMARY_ASSET_DIR', archive):
                 enriched, assets = publish_to_blog.load_visual_summary_cards(
                     [paper], '2026-07-10', manifest,
                 )
@@ -1237,7 +1239,8 @@ body
     def test_digest_cover_manifest_binds_summary_context_and_asset(self):
         with tempfile.TemporaryDirectory() as tmp:
             current = Path(tmp) / 'data' / 'current'
-            source = current / 'digest-covers' / '2026-07-10' / 'cover.png'
+            archive = Path(tmp) / 'data' / 'archive'
+            source = archive / '2026-07-10' / 'digest-cover' / 'cover.png'
             source.parent.mkdir(parents=True)
             source.write_bytes(valid_png())
             papers = [{
@@ -1266,7 +1269,7 @@ body
                 },
             }), encoding='utf-8')
             with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
-                    mock.patch.object(publish_to_blog, 'DIGEST_COVER_ASSET_DIR', current / 'digest-covers'):
+                    mock.patch.object(publish_to_blog, 'DIGEST_COVER_ASSET_DIR', archive):
                 loaded = publish_to_blog.load_digest_cover(papers, '2026-07-10', manifest)
                 self.assertEqual(loaded['kind'], 'digest-cover')
                 self.assertTrue(loaded['url'].endswith('/images/digest-covers/2026-07-10/cover.png'))
@@ -1275,7 +1278,7 @@ body
             stale['dataSha256'] = '0' * 64
             manifest.write_text(json.dumps(stale), encoding='utf-8')
             with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
-                    mock.patch.object(publish_to_blog, 'DIGEST_COVER_ASSET_DIR', current / 'digest-covers'), \
+                    mock.patch.object(publish_to_blog, 'DIGEST_COVER_ASSET_DIR', archive), \
                     self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '指纹'):
                 publish_to_blog.load_digest_cover(papers, '2026-07-10', manifest)
 

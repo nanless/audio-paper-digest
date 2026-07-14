@@ -27,6 +27,8 @@ npm run blog:review      # 只 review 已生成文件并保存 SHA-256 凭证
 npm run blog:push        # 只验证凭证并 commit/push，不生成、不 review
 npm run wechat           # 生成微信公众号草稿
 npm run xiaohongshu      # 生成小红书文案
+npm run visual:archive -- --date YYYY-MM-DD # 仅迁移旧版论文图片到日期/排行榜归档，不创建任务
+npm run cover:archive -- --date YYYY-MM-DD  # 仅迁移旧版汇总封面到日期归档
 npm run xhs-login        # 小红书登录（获取 Cookie）
 npm run xhs-publish      # 小红书自动发布单篇
 npm run xhs-publish-all  # 小红书自动发布全部
@@ -114,11 +116,11 @@ data/current/           # 工作数据（gitignored）
   filtered-papers.json  # 当日筛选结果
   deep-analysis-result.json  # 当日分析结果
   visual-summary-manifests/<date>.json # 发布后评分 TOP 10 纵向长图的状态、排名、指纹和资产 SHA
-  visual-summaries/<date>/<paper>/infographic.png # 论文长图资产
   digest-cover-manifests/<date>.json # 发布后汇总图状态、上下文和指纹
-  digest-covers/<date>/cover.png # 发布后汇总图资产
   analyzed.json         # 分析状态（兼容）
 data/archive/<date>/    # 每日快照（自动创建）
+  visual-summaries/<两位排名>-<paper>/infographic.png # 发布后 TOP 10 论文长图，按排行榜编号归档
+  digest-cover/cover.png # 发布后汇总封面，生成后直接按批次日期归档
 logs/                   # 默认生成文件日志（gitignored；可用 PD_DISABLE_FILE_LOGS=1 强制关闭）
 prompts/                # LLM prompt 模板
   filter.md             # 筛选阶段

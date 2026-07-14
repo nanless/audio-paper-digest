@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const zlib = require('node:zlib');
+const crypto = require('node:crypto');
 
 const Config = require('../scripts/config.js');
 const { validAnalysisPaper } = require('./valid-analysis-fixture.js');
@@ -12,6 +13,7 @@ const {
     planDigestCover: planDigestCoverImpl,
     recordDigestCover,
     markDigestCoverFailed,
+    archiveLegacyDigestCover,
     assertDigestCoverManifestCurrent
 } = require('../scripts/digest-cover-state.js');
 
@@ -163,7 +165,7 @@ describe('digest cover state', () => {
         try {
             Config.CURRENT_DIR = path.join(dir, 'current');
             Config.FILES.digestCoverManifestDir = path.join(Config.CURRENT_DIR, 'digest-cover-manifests');
-            Config.FILES.digestCoverAssetDir = path.join(Config.CURRENT_DIR, 'digest-covers');
+            Config.FILES.digestCoverAssetDir = path.join(dir, 'archive');
             const papers = [paper('2607.1', 8.0, '#语音识别', 'Paper')];
             const planned = planDigestCover({ targetDate: '2026-07-13', papers, manifestPath, promptPath });
             assert.strictEqual(planned.cover.status, 'pending');
@@ -172,8 +174,18 @@ describe('digest cover state', () => {
             });
             assert.strictEqual(completed.overallStatus, 'complete');
             assert.ok(fs.existsSync(path.resolve(Config.PROJECT_ROOT, completed.cover.assetPath)));
+            assert.match(completed.cover.assetPath, /archive\/2026-07-13\/digest-cover\/cover\.png$/);
+            const archivedPath = path.resolve(Config.PROJECT_ROOT, completed.cover.assetPath);
+            const legacyPath = path.join(Config.CURRENT_DIR, 'digest-covers', '2026-07-13', 'cover.png');
+            fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+            fs.renameSync(archivedPath, legacyPath);
+            completed.cover.assetPath = path.relative(Config.PROJECT_ROOT, legacyPath).split(path.sep).join('/');
+            fs.writeFileSync(manifestPath, JSON.stringify(completed));
             const reused = planDigestCover({ targetDate: '2026-07-13', papers, manifestPath, promptPath });
             assert.strictEqual(reused.cover.status, 'complete');
+            assert.ok(fs.existsSync(archivedPath));
+            assert.ok(!fs.existsSync(legacyPath));
+            assert.ok(reused.cover.archivedAt);
 
             const changed = [paper('2607.1', 8.1, '#语音识别', 'Paper')];
             const replanned = planDigestCover({ targetDate: '2026-07-13', papers: changed, manifestPath, promptPath });
@@ -186,6 +198,43 @@ describe('digest cover state', () => {
             Config.CURRENT_DIR = originalCurrent;
             Config.FILES.digestCoverManifestDir = originalManifestDir;
             Config.FILES.digestCoverAssetDir = originalAssetDir;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('历史封面归档命令校验 SHA 后迁移并更新 manifest', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-cover-legacy-archive-'));
+        const current = path.join(dir, 'current');
+        const archive = path.join(dir, 'archive');
+        const manifestPath = path.join(current, 'digest-cover-manifests', '2026-07-13.json');
+        const source = path.join(current, 'digest-covers', '2026-07-13', 'cover.png');
+        const png = portraitPng();
+        fs.mkdirSync(path.dirname(source), { recursive: true });
+        fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+        fs.writeFileSync(source, png);
+        fs.writeFileSync(manifestPath, JSON.stringify({
+            version: 1, batchDate: '2026-07-13', cover: {
+                status: 'complete', assetPath: path.relative(Config.PROJECT_ROOT, source),
+                assetSha256: crypto.createHash('sha256').update(png).digest('hex')
+            }
+        }));
+        const originals = {
+            current: Config.CURRENT_DIR,
+            manifest: Config.FILES.digestCoverManifestDir,
+            asset: Config.FILES.digestCoverAssetDir
+        };
+        try {
+            Config.CURRENT_DIR = current;
+            Config.FILES.digestCoverManifestDir = path.join(current, 'digest-cover-manifests');
+            Config.FILES.digestCoverAssetDir = archive;
+            const result = archiveLegacyDigestCover({ targetDate: '2026-07-13', manifestPath });
+            assert.match(result.cover.assetPath, /archive\/2026-07-13\/digest-cover\/cover\.png$/);
+            assert.ok(fs.existsSync(path.resolve(Config.PROJECT_ROOT, result.cover.assetPath)));
+            assert.ok(!fs.existsSync(source));
+        } finally {
+            Config.CURRENT_DIR = originals.current;
+            Config.FILES.digestCoverManifestDir = originals.manifest;
+            Config.FILES.digestCoverAssetDir = originals.asset;
             fs.rmSync(dir, { recursive: true, force: true });
         }
     });
