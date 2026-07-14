@@ -36,6 +36,7 @@ const MAX_ASSET_BYTES = 8 * 1024 * 1024;
 const MIN_ASSET_WIDTH = 768;
 const MIN_ASSET_HEIGHT = 1024;
 const MIN_PORTRAIT_RATIO = 1.25;
+const MAX_REFERENCE_IMAGES = 2;
 const CRC32_TABLE = (() => {
     const table = new Uint32Array(256);
     for (let n = 0; n < 256; n += 1) {
@@ -195,6 +196,76 @@ function promptSha256(promptPath = path.join(Config.PROJECT_ROOT, 'prompts', 'vi
     return sha256Buffer(fs.readFileSync(promptPath));
 }
 
+function referenceFigureRole(caption) {
+    const text = String(caption || '').toLowerCase();
+    // Result captions such as "per-method EER" also contain the word "method".
+    // Classify explicit evaluation language first so they cannot outrank a real architecture figure.
+    if (/result|experiment|comparison|ablation|benchmark|\beer\b|\bwer\b|\bf1\b|accuracy|score|结果|实验|对比|消融|基准|准确率|错误率/.test(text)) {
+        return { role: 'result_reference', priority: 1 };
+    }
+    if (/overview|architecture|framework|pipeline|method|model|system|架构|结构|流程|框架|方法/.test(text)) {
+        return { role: 'method_reference', priority: 0 };
+    }
+    return { role: 'paper_figure', priority: 2 };
+}
+
+function visualReferenceCachePaths(url) {
+    const key = sha256Buffer(Buffer.from(String(url), 'utf8'));
+    const root = path.join(Config.CURRENT_DIR, 'image-cache');
+    return { data: path.join(root, `${key}.bin`), meta: path.join(root, `${key}.json`) };
+}
+
+function selectVisualReferenceImages(paper, limit = MAX_REFERENCE_IMAGES) {
+    if (!Number.isInteger(limit) || limit < 0 || limit > MAX_REFERENCE_IMAGES) {
+        throw new Error(`论文视觉参考图数量非法: ${limit}`);
+    }
+    const manifest = paper?.imageManifest || {};
+    const selected = [...new Set([
+        ...(Array.isArray(paper?.selectedImageUrls) ? paper.selectedImageUrls : []),
+        ...(Array.isArray(manifest.selected) ? manifest.selected : [])
+    ].map(value => String(value || '').trim()).filter(Boolean))];
+    const candidates = new Map((Array.isArray(manifest.candidates) ? manifest.candidates : [])
+        .filter(item => item && typeof item.url === 'string')
+        .map(item => [item.url, item]));
+    const downloads = new Map((Array.isArray(manifest.downloaded) ? manifest.downloaded : [])
+        .filter(item => item && typeof item.url === 'string')
+        .map(item => [item.url, item]));
+
+    return selected.map((url, sourceOrder) => {
+        const candidate = candidates.get(url) || {};
+        const downloaded = downloads.get(url) || {};
+        const caption = String(candidate.caption || '');
+        const role = referenceFigureRole(caption);
+        return { url, sourceOrder, caption, ...role, downloaded };
+    }).sort((a, b) => a.priority - b.priority || a.sourceOrder - b.sourceOrder)
+        .flatMap(item => {
+            const cache = visualReferenceCachePaths(item.url);
+            try {
+                const raw = fs.readFileSync(cache.data);
+                const meta = JSON.parse(fs.readFileSync(cache.meta, 'utf8'));
+                const actualSha = sha256Buffer(raw);
+                if (
+                    meta.url !== item.url
+                    || meta.sha256 !== actualSha
+                    || item.downloaded.sha256 !== actualSha
+                    || meta.mime !== item.downloaded.mime
+                    || meta.bytes !== raw.length
+                ) return [];
+                return [{
+                    role: item.role,
+                    url: item.url,
+                    caption: item.caption,
+                    mime: meta.mime,
+                    bytes: raw.length,
+                    sha256: actualSha,
+                    cachePath: path.relative(Config.PROJECT_ROOT, cache.data).split(path.sep).join('/')
+                }];
+            } catch (error) {
+                return [];
+            }
+        }).slice(0, limit);
+}
+
 function analysisSha256(paper) {
     return stableSha256({
         arxivId: normalizedId(paper),
@@ -202,7 +273,15 @@ function analysisSha256(paper) {
         parsed: paper.parsed || null,
         analysisSource: paper.analysisSource || null,
         analysisSourceSha256: paper.analysisSourceSha256 || paper.sourceSha256 || null,
-        scoringAudit: paper.analysisManifest?.stages?.scoringAudit || null
+        scoringAudit: paper.analysisManifest?.stages?.scoringAudit || null,
+        visualReferenceImages: selectVisualReferenceImages(paper).map(item => ({
+            role: item.role,
+            url: item.url,
+            caption: item.caption,
+            mime: item.mime,
+            bytes: item.bytes,
+            sha256: item.sha256
+        }))
     });
 }
 
@@ -468,7 +547,8 @@ function buildGenerationContext(paper) {
         summary: String(parsed.summary || ''),
         method: String(parsed.architecture || parsed.details || ''),
         experiments: String(parsed.results || ''),
-        limitations: String(parsed.limitations || '')
+        limitations: String(parsed.limitations || ''),
+        referenceImages: selectVisualReferenceImages(paper)
     };
 }
 
@@ -982,6 +1062,7 @@ module.exports = {
     assertSafeAssetTarget,
     validatePngBuffer,
     extractGeneratedImagePathFromHint,
+    selectVisualReferenceImages,
     validateDate,
     visualSummaryManifestPath,
     assertPublishedBlogReceipt,

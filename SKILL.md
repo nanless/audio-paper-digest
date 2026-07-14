@@ -40,7 +40,7 @@ description: >
 9. **深度分析**：`deep-analyzer.js` 完成全部论文的文本分析与评分审计；该阶段不建立或等待视觉任务。
 10. **增量保存**：每批分析后立即保存到 `data/current/deep-analysis-result.json`，自带失败结果保护（已有成功 analysis 的论文不会被无 analysis 的失败结果覆盖）；同时通过 `scripts/digest-status.js` 回写 `papers.json.digestStatus`。分析结果和论文库写入使用跨进程锁与 `generation` 校验，部分失败状态为 `partial_failed` 并返回非零退出码
 11. **收尾合并**：去重合并历史结果，自动备份 bak 文件（保留最近 10 个）
-12. **全部博客发布后生成视觉摘要**：依次完成博客 generate、review 和 push；远端 `main` OID 验证成功后，`push-blog.py` 自动建立最终评分 TOP 10 论文长图和一张批次汇总图任务。图片不进入或阻断本轮博客发布。Codex 使用内置 `image_gen` 处理 pending/failed 项，脚本只做规划、验证、复制和 checkpoint。
+12. **全部博客发布后生成视觉摘要**：依次完成博客 generate、review 和 push；远端 `main` OID 验证成功后，`push-blog.py` 自动建立最终评分 TOP 10 论文长图和一张批次汇总图任务。图片不进入或阻断本轮博客发布。Codex 使用内置 `image_gen` 处理 pending/failed 项，脚本只做规划、验证、复制和 checkpoint。论文长图使用约 220–360 个中文字符，不得退化为口号式概念海报；若深度分析已选中并完整缓存论文关键图，任务按“方法总览/架构/流程优先，关键实验其次”绑定最多两张参考图、caption、MIME、缓存路径和 SHA，生图时保留原图真实模块关系再统一风格重绘。两类图片使用暖白底、低饱和色、扁平矢量插画与大留白的统一清新科学杂志风；禁止深蓝霓虹、赛博 HUD、金属边框和拥挤仪表盘风格。
 
 `full-fetch.js` **不会自动发布博客/微信**，发布需单独运行 Python 脚本。
 

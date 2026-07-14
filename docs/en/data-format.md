@@ -354,7 +354,16 @@ This manifest is created only after every blog page is remotely verified as publ
         "summary": "...",
         "method": "...",
         "experiments": "...",
-        "limitations": "..."
+        "limitations": "...",
+        "referenceImages": [{
+          "role": "method_reference",
+          "url": "https://arxiv.org/html/2607.12345v1/figure/method.png",
+          "caption": "Figure 1: Method overview.",
+          "mime": "image/png",
+          "bytes": 123456,
+          "sha256": "<64 lowercase hex characters>",
+          "cachePath": "data/current/image-cache/<URL-SHA>.bin"
+        }]
       },
       "cards": {
         "infographic": {
@@ -375,9 +384,10 @@ This manifest is created only after every blog page is remotely verified as publ
 
 - `papers` must exactly match the target batch's final-score TOP 10, or all successful papers when fewer than ten exist.
 - Each `cards` object must contain exactly `infographic`; it completes only after the asset passes validation.
-- A completed infographic binds final `rank`, the current analysis SHA, `prompts/visual-summary.md` SHA, task token, and PNG asset SHA. Its two-digit rank prefix keeps filesystem order identical to leaderboard order; analysis, prompt, rank, or asset changes invalidate only that paper's infographic.
+- `referenceImages` contains at most two figures that deep analysis selected and whose cached URL, MIME, byte count, and SHA all match. Method overviews, architectures, frameworks, and pipelines outrank experiment figures. Their verified summaries enter the analysis/task fingerprint, so a missing, damaged, or changed source invalidates only that paper's infographic. Before built-in generation, `cachePath` may be copied to a temporary filename with the extension indicated by `mime`.
+- A completed infographic binds final `rank`, the current analysis SHA, `prompts/visual-summary.md` SHA, task token, and PNG asset SHA. Its two-digit rank prefix keeps filesystem order identical to leaderboard order; analysis, prompt, reference-figure, rank, or asset changes invalidate only that paper's infographic.
 - Pending/failed or damaged assets affect only the post-publication visual stage and never roll back the completed blog publication.
-- PNGs are at most 8 MiB, at least 768×1024, and have a height/width ratio of at least 1.25. The complete English title is at the top and explanations are in Chinese. Codex built-in image generation creates the PNGs; project scripts never call an image API.
+- PNGs are at most 8 MiB, at least 768×1024, and have a height/width ratio of at least 1.25. The complete English title is at the top, while roughly 220–360 Chinese characters substantively explain the problem, method, experiments, conclusion, and limitations. References preserve real structural relationships for a unified redraw; unreadable screenshots must not be pasted into the poster. Codex built-in image generation creates the PNGs; project scripts never call an image API.
 
 ### 5.8 `data/current/digest-cover-manifests/YYYY-MM-DD.json`
 

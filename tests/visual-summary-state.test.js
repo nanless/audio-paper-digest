@@ -19,6 +19,7 @@ const {
     archiveLegacyVisualManifestAssets,
     assertPublishedBlogReceipt,
     assertVisualManifestCurrent,
+    selectVisualReferenceImages,
     main
 } = require('../scripts/visual-summary-state.js');
 
@@ -109,7 +110,91 @@ function writePublishedReceipt(currentDir, targetDate, publishedPapers, override
     return receiptPath;
 }
 
+function writeImageCache(currentDir, url, raw, mime = 'image/png') {
+    const key = crypto.createHash('sha256').update(url).digest('hex');
+    const cacheDir = path.join(currentDir, 'image-cache');
+    const sha256 = crypto.createHash('sha256').update(raw).digest('hex');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(cacheDir, `${key}.bin`), raw);
+    fs.writeFileSync(path.join(cacheDir, `${key}.json`), JSON.stringify({
+        url, mime, bytes: raw.length, sha256
+    }));
+    return sha256;
+}
+
 describe('visual summary state', () => {
+    it('只把已选中且缓存 SHA 完整匹配的论文关键图绑定到生图任务', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-reference-'));
+        const current = path.join(dir, 'current');
+        const url = 'https://arxiv.org/html/2607.12345v1/figure/method.png';
+        const raw = Buffer.from('verified-paper-figure');
+        const originals = {
+            current: Config.CURRENT_DIR,
+            manifest: Config.FILES.visualSummaryManifestDir,
+            asset: Config.FILES.visualSummaryAssetDir
+        };
+        try {
+            patchVisualDirs(current);
+            const sha256 = writeImageCache(current, url, raw);
+            const input = paper('2607.12345', {
+                selectedImageUrls: [url],
+                imageManifest: {
+                    selected: [url],
+                    candidates: [{ url, caption: 'Figure 1: Method architecture overview.' }],
+                    downloaded: [{ url, mime: 'image/png', sha256 }]
+                }
+            });
+            const references = selectVisualReferenceImages(input);
+            assert.strictEqual(references.length, 1);
+            assert.strictEqual(references[0].role, 'method_reference');
+            assert.strictEqual(references[0].sha256, sha256);
+            assert.match(references[0].cachePath, /image-cache\/.*\.bin$/);
+
+            const promptPath = path.join(dir, 'prompt.md');
+            const manifestPath = path.join(dir, 'manifest.json');
+            fs.writeFileSync(promptPath, 'fresh visual prompt');
+            const first = planVisualSummaries({
+                targetDate: '2026-07-13', papers: [input], manifestPath, promptPath
+            });
+            assert.deepStrictEqual(first.papers['2607.12345'].generationContext.referenceImages, references);
+            const firstToken = first.papers['2607.12345'].cards.infographic.taskToken;
+
+            fs.writeFileSync(path.join(current, 'image-cache', `${crypto.createHash('sha256').update(url).digest('hex')}.bin`), Buffer.from('changed'));
+            const second = planVisualSummaries({
+                targetDate: '2026-07-13', papers: [input], manifestPath, promptPath
+            });
+            assert.deepStrictEqual(second.papers['2607.12345'].generationContext.referenceImages, []);
+            assert.notStrictEqual(second.papers['2607.12345'].cards.infographic.taskToken, firstToken);
+        } finally {
+            Config.CURRENT_DIR = originals.current;
+            Config.FILES.visualSummaryManifestDir = originals.manifest;
+            Config.FILES.visualSummaryAssetDir = originals.asset;
+        }
+    });
+
+    it('含 per-method EER 的图归为实验参考，不被 method 子串误判为方法图', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-result-reference-'));
+        const current = path.join(dir, 'current');
+        const url = 'https://arxiv.org/html/2607.12345v1/figure/eer.png';
+        const raw = Buffer.from('verified-result-figure');
+        const originalCurrent = Config.CURRENT_DIR;
+        try {
+            Config.CURRENT_DIR = current;
+            const sha256 = writeImageCache(current, url, raw);
+            const input = paper('2607.12345', {
+                selectedImageUrls: [url],
+                imageManifest: {
+                    selected: [url],
+                    candidates: [{ url, caption: 'Figure 3: Per-method EER on Original Samples' }],
+                    downloaded: [{ url, mime: 'image/png', sha256 }]
+                }
+            });
+            assert.strictEqual(selectVisualReferenceImages(input)[0].role, 'result_reference');
+        } finally {
+            Config.CURRENT_DIR = originalCurrent;
+        }
+    });
+
     it('核心规划 API 也拒绝绕过远端发布绑定', () => {
         assert.throws(() => planVisualSummariesImpl({
             targetDate: '2026-07-13', papers: [paper()],
