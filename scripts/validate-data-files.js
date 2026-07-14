@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const Config = require('./config.js');
+const { buildFilterInputSha256 } = require('./lib/filter-input-contract.js');
 const {
     readJsonSafe,
     normalizedId,
@@ -93,6 +94,21 @@ function validateCurrentArtifactMetadata(filePath, data, issues, { filterArtifac
         validateFingerprint(filePath, field, data[field], issues);
     }
     if (filterArtifact) validateFingerprint(filePath, 'filterConfigFingerprint', data.filterConfigFingerprint, issues);
+    if (typeof data.batchDate !== 'string' || data.batchDate !== getBeijingBatchDate(data.timestamp)) {
+        addIssue(issues, filePath, 'batchDate 必须等于不可变 timestamp 的北京时间日期');
+    }
+    validateFingerprint(filePath, 'batchId', data.batchId, issues);
+    for (const field of ['rawPapersSha256', 'fetchSourcesSha256']) {
+        if (typeof data[field] !== 'string' || !SHA256_RE.test(data[field])) addIssue(issues, filePath, `${field} 必须是 SHA-256`);
+    }
+}
+
+function getFetchSourcesSha256(checkpoint) {
+    return stableContentSha256({
+        arxiv: Object.fromEntries(Object.entries(checkpoint?.arxiv || {}).sort(([a], [b]) => a.localeCompare(b))
+            .map(([id, entry]) => [id, { status: entry?.status, papersCount: entry?.papersCount, papersSha256: entry?.papersSha256 }])),
+        huggingface: checkpoint?.huggingface ? { status: checkpoint.huggingface.status, papersCount: checkpoint.huggingface.papersCount, papersSha256: checkpoint.huggingface.papersSha256 } : null
+    });
 }
 
 function validateFetchSourceIntegrity(filePath, prefix, entry, issues) {
@@ -178,6 +194,10 @@ function validateFetchCheckpointFile(filePath = DEFAULT_FETCH_CHECKPOINT_FILE) {
     for (const field of ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint']) {
         validateFingerprint(filePath, field, data[field], issues);
     }
+    if (typeof data.batchDate !== 'string' || data.batchDate !== getBeijingBatchDate(data.timestamp)) {
+        addIssue(issues, filePath, 'batchDate 必须等于不可变 timestamp 的北京时间日期');
+    }
+    validateFingerprint(filePath, 'batchId', data.batchId, issues);
     const expectedIds = Config.ARXIV_CATEGORIES.map(category => category.id);
     if (!Array.isArray(data.historicalDedupIds)
             || data.historicalDedupIds.some(id => typeof id !== 'string' || !id)) {
@@ -233,6 +253,9 @@ function validateFetchCheckpointFile(filePath = DEFAULT_FETCH_CHECKPOINT_FILE) {
                 addIssue(issues, filePath, 'huggingface failed 时 health.ok 必须为 false');
             }
         }
+    }
+    if (data.fetchSourcesSha256 !== getFetchSourcesSha256(data)) {
+        addIssue(issues, filePath, 'fetchSourcesSha256 与来源 checkpoint 内容不一致');
     }
     return issues;
 }
@@ -374,6 +397,7 @@ function validateRawCandidateMetadata(filePath, data, papers, issues) {
     if (Array.isArray(data)) return;
 
     validateCurrentArtifactMetadata(filePath, data, issues);
+    if (data.rawPapersSha256 !== stableContentSha256(papers)) addIssue(issues, filePath, 'rawPapersSha256 与 papers 内容不一致');
 
     if (!isPlainObject(data.stats)) {
         addIssue(issues, filePath, 'raw-candidates stats 必须是对象');
@@ -587,6 +611,12 @@ function validateFilterDecisionsFile(filePath = DEFAULT_FILTER_DECISIONS_FILE) {
                 addIssue(issues, filePath, `decisions.${key}.${field} 必须是字符串`);
             }
         }
+        if (typeof decision.inputSha256 !== 'string' || !SHA256_RE.test(decision.inputSha256)) {
+            addIssue(issues, filePath, `decisions.${key}.inputSha256 必须是 SHA-256`);
+        }
+        if (decision.retryable || decision.fallback) {
+            addIssue(issues, filePath, `decisions.${key} 不能保存 retryable/fallback 决定`);
+        }
     }
 
     const stats = isPlainObject(data.stats) ? data.stats : {};
@@ -655,7 +685,7 @@ function validateFilterArtifactsConsistency(filteredPath, decisionsPath) {
     return issues;
 }
 
-function validateRawCandidateFilterConsistency(rawPath, decisionsPath) {
+function validateRawCandidateFilterConsistency(rawPath, decisionsPath, filteredPath = null) {
     const issues = [];
     if (!rawPath || !decisionsPath) return issues;
     if (!fs.existsSync(rawPath) || !fs.existsSync(decisionsPath)) return issues;
@@ -670,6 +700,19 @@ function validateRawCandidateFilterConsistency(rawPath, decisionsPath) {
     const rawStats = isPlainObject(raw.stats) ? raw.stats : {};
     const decisionStats = isPlainObject(decisionData.stats) ? decisionData.stats : {};
     const decisionCount = Object.keys(decisionData.decisions).length;
+    if (decisionData.rawPapersSha256 !== raw.rawPapersSha256) {
+        addIssue(issues, decisionsPath, 'rawPapersSha256 必须与 raw-candidates.json 一致');
+    }
+    const rawById = new Map(rawPapers.map(paper => [normalizedId(paper), paper]));
+    for (const [key, decision] of Object.entries(decisionData.decisions)) {
+        const paper = rawById.get(normalizedId(key));
+        if (!paper || decision.inputSha256 !== buildFilterInputSha256(paper)) {
+            addIssue(issues, decisionsPath, `decisions.${key}.inputSha256 与当前筛选输入不一致`);
+        }
+    }
+    if (decisionStats.complete === true && Object.keys(decisionData.retryableDecisions || {}).length > 0) {
+        addIssue(issues, decisionsPath, 'complete=true 时 retryableDecisions 必须为空');
+    }
 
     if (
         Number.isInteger(rawStats.afterBlogSkip)
@@ -688,6 +731,28 @@ function validateRawCandidateFilterConsistency(rawPath, decisionsPath) {
             const id = normalizedId(paper);
             if (id && !decisionIds.has(id)) {
                 addIssue(issues, decisionsPath, `complete=true 但缺少 raw-candidates.json papers[${index}] (${id}) 的筛选决策`);
+            }
+        }
+        if (filteredPath && fs.existsSync(filteredPath)) {
+            const filtered = readJsonSafe(filteredPath, null);
+            if (isPlainObject(filtered) && filtered.status === 'complete' && Array.isArray(filtered.papers)) {
+                const excluded = new Set((filtered.excludedRelatedIds || []).map(normalizedId).filter(Boolean));
+                for (const id of excluded) {
+                    if (!rawById.has(id) || decisionData.decisions[id]?.related !== true) {
+                        addIssue(issues, filteredPath, `excludedRelatedIds.${id} 必须对应 raw 中 related=true 的论文`);
+                    }
+                }
+                if (Number.isInteger(filtered.stats?.skippedFromArchive) && filtered.stats.skippedFromArchive !== excluded.size) {
+                    addIssue(issues, filteredPath, 'stats.skippedFromArchive 必须等于 excludedRelatedIds 数量');
+                }
+                const expected = new Set(Object.entries(decisionData.decisions)
+                    .filter(([, decision]) => decision.related === true)
+                    .map(([id]) => normalizedId(id))
+                    .filter(id => id && !excluded.has(id)));
+                const actual = filtered.papers.map(normalizedId).filter(Boolean);
+                if (actual.length !== new Set(actual).size || actual.length !== expected.size || actual.some(id => !expected.has(id))) {
+                    addIssue(issues, filteredPath, '最终 papers ID 集合必须精确等于 related=true 决定扣除 excludedRelatedIds');
+                }
             }
         }
     }
@@ -734,6 +799,12 @@ function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, fil
                 addIssue(issues, artifactPath, `${field} 必须与 fetch-checkpoint.json 一致`);
             }
         }
+        for (const field of ['batchDate', 'batchId', 'fetchSourcesSha256']) {
+            if (checkpoint[field] !== artifact[field]) addIssue(issues, artifactPath, `${field} 必须与 fetch-checkpoint.json 一致`);
+        }
+    }
+    if (checkpoint.fetchSourcesSha256 !== getFetchSourcesSha256(checkpoint)) {
+        addIssue(issues, fetchPath, 'fetchSourcesSha256 与来源 checkpoint 内容不一致');
     }
 
     const datedArtifacts = [[fetchPath, checkpoint], ...artifacts]
@@ -806,7 +877,7 @@ function validateCurrentDataFiles(files = Config.FILES) {
         ...validatePaperListFile(files.filteredPapers, { filtered: true }),
         ...validatePaperListFile(files.deepAnalysisResult, { deepAnalysis: true }),
         ...validateFilterArtifactsConsistency(files.filteredPapers, filterDecisions),
-        ...validateRawCandidateFilterConsistency(files.rawCandidates, filterDecisions),
+        ...validateRawCandidateFilterConsistency(files.rawCandidates, filterDecisions, files.filteredPapers),
         ...validateFetchArtifactConsistency(fetchCheckpoint, files.rawCandidates, filterDecisions, files.filteredPapers),
         ...validateRequiredCompanionFiles(files, filterDecisions)
     ];

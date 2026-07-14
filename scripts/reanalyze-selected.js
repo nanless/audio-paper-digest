@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const { setupScriptLogging } = require('./log-setup');
 setupScriptLogging(__filename);
+const fs = require('fs');
 
 /**
  * 重新分析指定论文
@@ -58,6 +59,14 @@ function updateReanalysisStats(data, analyzedResults, previousCurrentRubricIds, 
 
 async function reanalyzeSelected(ids) {
     console.log(`=== 重新分析 ${ids.length} 篇论文 ===\n`);
+
+    if (!fs.existsSync(RESULT_FILE) && fs.existsSync(Config.FILES.deepAnalysisResultLegacy)) {
+        const legacyData = readJsonFileStrict(Config.FILES.deepAnalysisResultLegacy);
+        updateJsonFileLocked(RESULT_FILE, () => Array.isArray(legacyData)
+            ? { timestamp: getBeijingISOString(), source: Config.FILES.deepAnalysisResultLegacy, papers: legacyData }
+            : legacyData);
+        console.log(`📦 已将 legacy 分析结果迁移到权威路径: ${RESULT_FILE}`);
+    }
 
     const data = readJsonFileStrict(RESULT_FILE);
 
@@ -122,6 +131,18 @@ async function reanalyzeSelected(ids) {
     const analyzedResults = [];
     const attemptResults = [];
     const { stats } = await analyzeBatch(toReanalyze, {
+        checkpointFilePath: RESULT_FILE,
+        preparePaperLocked: paper => {
+            const current = readJsonFileStrict(RESULT_FILE);
+            const currentPapers = Array.isArray(current) ? current : (current.papers || []);
+            const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
+            if (!latest) return { paper, skip: false };
+            const latestForReanalysis = { ...paper, ...latest };
+            delete latestForReanalysis.analysis;
+            delete latestForReanalysis.parsed;
+            delete latestForReanalysis.error;
+            return { paper: latestForReanalysis, skip: false };
+        },
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,

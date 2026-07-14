@@ -2,7 +2,7 @@
 
 ## Main Workflow Explained
 
-Main entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fetch`)
+Core data-pipeline entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fetch`). Deep analysis produces stable final scores; all digest and paper blog pages publish first, and TOP 10 infographics plus the batch digest image are generated only after remote OID verification.
 
 ### 3.1 Auto-Archive
 
@@ -189,7 +189,13 @@ Single-issue-single-dimension ownership is enforced in code. A cross-dimension r
 
 Text acquisition persists source type, original/used/full-text lengths, truncation, SHA-256, HTML availability, and warnings. Stable HTML misses do not retry; versioned IDs never silently upgrade; PDFs are size/header/MIME checked. Abstract fallback is marked `degraded_abstract` and is blocked from publishing unless `allowAbstractAnalysisPublish: true` is explicitly approved. Source, model, temperature, prompt, or evidence fingerprint changes invalidate only the affected checkpoint stages.
 
-### 3.8 Incremental Save and Wrap-up
+### 3.8 Mandatory Codex visual assets
+
+After all scoring audits pass, run `generate-blog.py`, `review-blog.py`, and `push-blog.py` to publish the digest index and every paper page. Push records remote verification only when remote `main` exactly matches `publicationCommit`, then automatically invokes the post-publication planner. It selects the final-score TOP 10 with normalized-arXiv-ID tie breaking. Codex creates one tall infographic per selected paper with the exact English title at the top and a Chinese body, then records it with the task token.
+
+The same post-publication stage creates one digest-image task using the category saved by blog generation and deterministic title, hot directions, and TOP 5 ranking. The two manifests resume independently. These images neither enter nor block the completed blog transaction. Project scripts never call an image API; generated graphics remain editorial summaries, not original paper figures, and must not invent facts or display arXiv IDs on the digest image.
+
+### 3.9 Incremental Save and Wrap-up
 
 - **Incremental save to `data/current/deep-analysis-result.json` immediately after each batch completes**. Result and paper-database updates re-read and merge under a cross-process lock with `generation` checks. Failed placeholders never overwrite successful analyses, and corrupt current JSON blocks writes instead of silently falling back to legacy data
 - Incremental and final saves sync `data/current/papers.json` `digestStatus.status` through `scripts/digest-status.js`: successful analyses become `analyzed`, failures become `analysis_failed`

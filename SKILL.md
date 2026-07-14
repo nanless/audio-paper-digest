@@ -37,9 +37,10 @@ description: >
 6. **LLM 筛选**：按 `PAPER_ANALYZER_*` 配置逐篇判断相关性，每批写入 `filter-decisions.json`。`fetch-checkpoint`、raw、decisions、filtered 共同绑定来源配置、历史去重集合和博客已发布集合的指纹；健康 raw 即使尚无 decisions 也能从空集合续跑，模型/prompt 变化只重筛该批候选，不重复抓取；只有明确决定完整覆盖候选全集时才可完成
 7. **保存筛选结果**：`data/current/raw-candidates.json` 保存筛选输入，`data/current/filtered-papers.json` 保存筛选/归档去重后的输出
 8. **更新去重库**：追加所有爬取论文 ID 到 `data/current/papers.json`（不仅筛选通过的，提前保存防止后续中断丢失）
-9. **深度分析**：`deep-analyzer.js`。主模型完成纯文本分析、开源扫描、审校、表格/方法修复和最终类型感知评分审计；评分审计只输出 JSON，由代码更新文档类型、机器摘要分项、总分和评分理由，不改正文。双模型模式随后由副模型最终看图筛选高价值图片并只新增图片及图前/图后说明；单模型模式跳过图片。需要图文视觉摘要时，Codex 必须在分析契约通过后读取 `prompts/visual-summary.md`，直接使用内置 `image_gen` 为每篇论文分别生成研究概览、方法结构、实验与边界三张卡，再将选定资产复制到项目；禁止由 Node/Python 脚本调用图像 API 或要求用户提供图像 API key。并发 3 篇（可通过 `PD_ANALYSIS_CONCURRENCY` 调整），每篇最多重试 2 次（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整）
+9. **深度分析**：`deep-analyzer.js` 完成全部论文的文本分析与评分审计；该阶段不建立或等待视觉任务。
 10. **增量保存**：每批分析后立即保存到 `data/current/deep-analysis-result.json`，自带失败结果保护（已有成功 analysis 的论文不会被无 analysis 的失败结果覆盖）；同时通过 `scripts/digest-status.js` 回写 `papers.json.digestStatus`。分析结果和论文库写入使用跨进程锁与 `generation` 校验，部分失败状态为 `partial_failed` 并返回非零退出码
 11. **收尾合并**：去重合并历史结果，自动备份 bak 文件（保留最近 10 个）
+12. **全部博客发布后生成视觉摘要**：依次完成博客 generate、review 和 push；远端 `main` OID 验证成功后，`push-blog.py` 自动建立最终评分 TOP 10 论文长图和一张批次汇总图任务。图片不进入或阻断本轮博客发布。Codex 使用内置 `image_gen` 处理 pending/failed 项，脚本只做规划、验证、复制和 checkpoint。
 
 `full-fetch.js` **不会自动发布博客/微信**，发布需单独运行 Python 脚本。
 
@@ -57,6 +58,8 @@ description: >
 | `data/current/filter-decisions.json` | 当日逐篇 LLM 筛选决策缓存，含 reason/rawResponse | 每批增量写入，模型或 prompt hash 变化后自动失效 |
 | `data/current/filtered-papers.json` | 筛选后的论文元数据 | 每日归档移走后重新生成 |
 | `data/current/deep-analysis-result.json` | 核心分析结果（含逐阶段 checkpoint、指纹、analysis / parsed / 图片与来源状态） | 每篇完成或失败后立即锁内保存；下次从首个未完成或指纹失效阶段续跑 |
+| `data/current/visual-summary-manifests/YYYY-MM-DD.json` | 全部博客发布后评分 TOP 10 的纵向长图状态，绑定排名、分析/prompt SHA 和资产 SHA | 仅失败、缺失或指纹变化的长图回到 pending |
+| `data/current/digest-cover-manifests/YYYY-MM-DD.json` | 全部博客发布后的批次汇总图状态 | 绑定论文集合、热门方向、排行榜和 prompt SHA |
 | `data/current/xiaohongshu-oneliners-YYYY-MM-DD.json` | 小红书逐篇一句话文案缓存，绑定分析、prompt、模型配置和清洗契约 | 每篇成功后原子保存；仅失败或输入变化的论文重跑 |
 | `data/current/analyzed.json` | 旧版已分析记录（兼容） | 每日归档移走后重新生成 |
 
@@ -290,6 +293,11 @@ npm run blog:generate -- --date YYYY-MM-DD
 npm run blog:review -- --date YYYY-MM-DD
 npm run blog:push -- --date YYYY-MM-DD
 
+# push 验证远端 main OID 后会自动建立发布后视觉任务；可幂等重跑
+npm run visual:post-publish -- --date YYYY-MM-DD
+npm run visual:status -- --date YYYY-MM-DD
+npm run cover:status -- --date YYYY-MM-DD
+
 # 使用自定义数据文件发布
 npm run blog:generate -- --date YYYY-MM-DD data/current/deep-analysis-result.json
 
@@ -413,7 +421,7 @@ PY
 - 文件日志不做数量、总量或单文件大小限制，也不会自动清理旧日志；`PAPER_DIGEST_DISABLE_FILE_LOGS=1` 或 `PD_DISABLE_FILE_LOGS=1` 可强制禁用文件日志
 - `backfill_papers.py` 复用统一的每次运行日志，不再额外追加 `logs/backfill.log`
 - 日志均为 UTF-8 纯文本并使用 `0600` 权限；每个非空物理日志行均以毫秒级北京时间戳（`[YYYY-MM-DD HH:mm:ss.SSS+08:00]`）开头。日志层统一脱敏 `Authorization`、`x-api-key`、Cookie、token、secret、password、任意已配置密钥实际值和 URL userinfo，并同步落盘，避免 `process.exit()` 丢失尾部日志
-- `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` 采用重试、增量保存、跨进程锁和 `generation` 校验；损坏的 current JSON 会阻断写入，不会回退 legacy 后覆盖
+- `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` 采用重试、逐阶段锁内 checkpoint、跨进程锁和 `generation` 校验；损坏的 current JSON 会阻断写入，不会回退 legacy 后覆盖。长时间单篇锁使用 heartbeat 续租，远程主机遗留锁只在租约超龄后回收
 - `full-fetch.js` 另有覆盖归档、清理、筛选和最终合并的单实例运行锁，内部论文分析仍保持配置的并发度；锁 owner 使用随机 token，旧 owner 不能释放后来者的同路径新锁
 - `reanalyze.js` 每 5 篇保存一次中间结果（并发模式下自动调整保存间隔）
 - 可运行 `npm run validate:data` 只读校验当前 `papers.json`、`raw-candidates.json`、`filter-decisions.json`、`filtered-papers.json`、`deep-analysis-result.json` 的结构、候选统计、筛选计数一致性，以及完整筛选决策对候选全集的覆盖；该命令不修复数据，发现问题会非零退出
@@ -443,7 +451,7 @@ PY
 15. **变更后运行单元测试**：修改 `scripts/utils.js`、`scripts/config.js` 或分析引擎核心逻辑后，必须运行 `npm test` 确保测试通过。
 16. **MiMo API 请求必须禁用代理连接复用**：所有 Node LLM 调用（包括 `test-api-key.js`）的 `options.agent` 必须为 `false`（不是 `undefined`）。任何重构或修改 HTTP 请求逻辑时，禁止将 `agent: false` 改回 `agent: proxyAgent` 或 `agent: undefined`，否则 MiMo Token Plan 会在有系统代理的环境中返回 403。
 17. **新增 LLM 端点必须接入 API 协议自动路由**：任何新增 Node 脚本调用 LLM 时，统一使用 `scripts/utils.js` 中的 `detectApiType()`、`buildApiUrl()`、`buildHeaders()`、`buildRequestBody()`、`parseResponseText()`；Python 发布阶段 LLM 调用必须复用 `publish_common.py` 的 `call_publish_llm_api()`，禁止硬编码特定协议的 URL/Header/Body。
-17.1 **视觉摘要由 Codex 内置图像工具生成**：绝不在项目脚本中调用图像 API，也不读取或要求 `OPENAI_API_KEY`。Agent 先读取已审计分析和 `prompts/visual-summary.md`，再对每种卡片单独调用内置 `image_gen`；项目引用的最终资产必须从 Codex 的默认生成目录复制到工作区，且不得伪装成论文原图、编造实验数字、论文结论或作者信息。
+17.1 **视觉资产由 Codex 内置图像工具在发布后生成**：绝不在项目脚本中调用图像 API，也不读取或要求 `OPENAI_API_KEY`。全部博客页通过 review、push 且远端 OID 验证后，发布凭证才写入 `remoteVerifiedOid`；视觉 CLI 必须校验该凭证。Agent 读取已审计分析和 `prompts/visual-summary.md`，仅对最终评分 TOP 10 各调用一次内置 `image_gen`；再按 `prompts/digest-cover.md` 生成一张标题、热门方向与 TOP 5 排行榜汇总图。登记前必须目视核对英文标题逐字一致、正文为简体中文、论文数字和排行榜没有虚构或错位。两类任务用 token 登记并独立续跑。图片不回写本轮博客，不参与博客 generation/review/push 清单。
 18. **修改 API 协议路由逻辑时同步全链路**：修改 `detectApiType()` 的判定规则或 `buildApiUrl()`/`buildHeaders()` 等函数时，必须同步检查 `fetch-papers.js`、`deep-analyzer.js` 以及所有使用 `analysis-engine.js` 的脚本（`full-fetch.js`、`reanalyze.js`、`batch-analyze.js`、`deep-analysis-only.js`、`analyze-single-paper.js`），确保全链路行为一致。
 19. **禁止将敏感文件提交到版本控制**：`data/`、`logs/`、`*.env`、`*.backup*`、缓存文件、含密钥的日志归档等严禁进入 git；提交前必须确认 `.gitignore` 已正确配置，且仓库中不存在历史遗留的敏感文件。
 20. **CI 自动检查**：CI 会通过 `npm test`、`npm run validate:data`、`find scripts tests -name '*.js'`、`find scripts -name '*.py'`、`python3 -m unittest discover -s tests/python` 和全仓库 `.sh` 语法检查覆盖新增 JS/Python/shell 文件；新增特殊文件类型时再更新 `.github/workflows/ci.yml`。

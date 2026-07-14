@@ -9,7 +9,8 @@
 | [filter.md](filter.md) | 筛选阶段：判断单篇论文是否与语音/音乐/音频相关 | `fetch-papers.js` |
 | [deep-analysis.md](deep-analysis.md) | 深度分析阶段（第一轮）：纯文本阅读后输出结构化报告 | `deep-analyzer.js` |
 | [image-supplement.md](image-supplement.md) | 深度分析阶段（双模型模式）：副模型只输出严格 JSON 插图计划，代码只新增图片及相邻说明，不替换主模型原文 | `deep-analyzer.js` |
-| [visual-summary.md](visual-summary.md) | 评分审计后的 Codex 视觉摘要：生成研究概览、方法结构、实验与边界卡片，禁止伪造论文原图或数值 | Codex 内置 `image_gen`（按需调用） |
+| [visual-summary.md](visual-summary.md) | 全部博客发布后，对最终评分 TOP 10 各生成一张覆盖问题、方法、实验、结论与局限的纵向长图 | Codex 内置 `image_gen`（发布后 Agent 阶段） |
+| [digest-cover.md](digest-cover.md) | 全部博客发布后的汇总图：展示批次标题、热门方向和 TOP 5 排行榜 | Codex 内置 `image_gen`（发布后 Agent 阶段） |
 | [opensource-scan.md](opensource-scan.md) | 开源扫描阶段（第二轮）：专门提取开源链接和复现信息 | `deep-analyzer.js` |
 | [gap-fill.md](gap-fill.md) | 深度分析阶段（第三轮）：对照原文审校重写前两轮结果 | `deep-analyzer.js` |
 | [method-fill.md](method-fill.md) | 深度分析后处理：方法章节过短或空泛时补写结构化方法说明 | `deep-analyzer.js` |

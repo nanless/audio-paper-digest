@@ -22,6 +22,7 @@ from publish_common import (
     load_papers, get_today_bj, score_and_sort, extract_top_tags,
     score_emoji, format_medal, extract_one_liner, call_publish_llm_api,
     validate_papers_for_publish, normalize_publish_arxiv_id,
+    PublishDataValidationError,
 )
 from path_config import (
     CURRENT_DIR, atomic_write_text, file_lock, read_json_strict, update_json_file_locked,
@@ -35,6 +36,22 @@ _OSS_NO = {'否', 'no', 'false', '无', '未开源', '未公开'}
 _ONELINER_CACHE_SCHEMA_VERSION = 1
 _ONELINER_TEMPERATURE = 0.7
 _ONELINER_RENDER_CONTRACT_VERSION = 1
+MAX_TOP_N = 20
+BEIJING_TIMESTAMP_RE = re.compile(
+    r'^(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?\+08:00$'
+)
+
+
+def paper_batch_date(paper):
+    explicit = paper.get('fetchBatchDate') or paper.get('batchDate')
+    if explicit:
+        return validate_date_component(explicit)
+    fetched_at = paper.get('fetchedAt')
+    match = BEIJING_TIMESTAMP_RE.fullmatch(fetched_at) if isinstance(fetched_at, str) else None
+    if not match:
+        label = paper.get('arxivId') or paper.get('title') or '<unknown>'
+        raise PublishDataValidationError(f'{label} fetchedAt 不是严格北京时间戳')
+    return validate_date_component(match.group(1))
 
 
 def get_oneliner_concurrency():
@@ -469,11 +486,12 @@ def main():
         elif arg == '--top' and i + 1 < len(sys.argv):
             try:
                 top_n = int(sys.argv[i + 1])
-                if top_n < 1:
-                    top_n = 1
+                if not 1 <= top_n <= MAX_TOP_N:
+                    raise ValueError
             except ValueError:
-                print(f"⚠️  忽略无效 --top 值: {sys.argv[i + 1]}，使用默认 5")
-                top_n = 5
+                raise PublishDataValidationError(
+                    f'--top 必须是 1-{MAX_TOP_N} 之间的整数: {sys.argv[i + 1]!r}'
+                )
             i += 1
         elif arg == '--date' and i + 1 < len(sys.argv):
             target_date = sys.argv[i + 1]
@@ -490,11 +508,10 @@ def main():
 def _generate_for_date(data_file, today, mode, top_n):
     papers = load_papers(data_file)
 
-    # 按 fetchedAt 日期过滤，只保留目标日期的论文
+    # 优先按不可变 fetchBatchDate 过滤，旧数据才回退严格北京 fetchedAt。
     filtered = []
     for p in papers:
-        fa = p.get('fetchedAt', '')
-        if fa and isinstance(fa, str) and fa[:10] == today:
+        if paper_batch_date(p) == today:
             filtered.append(p)
     if filtered:
         papers = filtered

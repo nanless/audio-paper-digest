@@ -8,12 +8,14 @@ setupScriptLogging(__filename);
  * 用法: node scripts/analyze-single-paper.js <arxiv_id> [--force]
  */
 
+const fs = require('fs');
 const { getBeijingISOString, normalizedId } = require('./utils.js');
 const {
     analyzePaperWithRetry,
     readJsonFileStrict,
     updateJsonFileLocked,
     mergePapersById,
+    persistAnalysisCheckpoint,
     isSuccessfulAnalysisRecord,
     withPaperAnalysisLock
 } = require('./analysis-engine.js');
@@ -44,11 +46,22 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
     console.log(`📄 找到论文: ${targetPaper.title || '(无标题)'}\n`);
 
     const resultPath = Config.FILES.deepAnalysisResult;
+    const legacyResultPath = Config.FILES.deepAnalysisResultLegacy;
+    if (!fs.existsSync(resultPath) && fs.existsSync(legacyResultPath)) {
+        const legacyData = readJsonFileStrict(legacyResultPath);
+        updateJsonFileLocked(resultPath, () => Array.isArray(legacyData)
+            ? { timestamp: getBeijingISOString(), source: legacyResultPath, papers: legacyData }
+            : legacyData);
+        console.log(`📦 已将 legacy 分析结果迁移到权威路径: ${resultPath}`);
+    }
     const existingData = readJsonFileStrict(resultPath, { allowMissing: true }) || { papers: [], stats: {} };
 
     const papersList = Array.isArray(existingData) ? existingData : (existingData.papers || []);
     const existingIndex = papersList.findIndex(p => normalizedId(p) === targetNormalizedId);
     if (existingIndex >= 0 && isSuccessfulAnalysisRecord(papersList[existingIndex]) && !forceReanalyze) {
+        updateAnalysisDigestStatuses([papersList[existingIndex]], {
+            batchDate: String(papersList[existingIndex].fetchedAt || getBeijingISOString()).slice(0, 10)
+        });
         console.log('⚠️ 该论文已在分析结果中，跳过（使用 --force 可强制重分析）');
         return { status: 'skipped', exitCode: 0 };
     }
@@ -68,7 +81,7 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
     });
 
     console.log('🔬 开始深度分析...');
-    return withPaperAnalysisLock(targetPaper, async () => {
+    const analysisResult = await withPaperAnalysisLock(targetPaper, async () => {
         const latestData = readJsonFileStrict(resultPath, { allowMissing: true }) || { papers: [] };
         const latestPapers = Array.isArray(latestData) ? latestData : (latestData.papers || []);
         const canonical = latestPapers.find(p => normalizedId(p) === targetNormalizedId);
@@ -81,6 +94,7 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
         const r = await analyzePaperWithRetry(paperForAnalysis, {
             maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
             retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
+            onCheckpoint: checkpoint => persistAnalysisCheckpoint(resultPath, checkpoint),
             onAttempt: (attempt) => {
                 if (attempt > 0) console.log(`    🔄 第 ${attempt + 1} 次尝试...`);
             }
@@ -119,6 +133,7 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
         console.log(`    💾 已保留恢复 checkpoint（当前总数: ${payload.papers.length} 篇）`);
         return { status: 'failed', exitCode: 1, error: r.error, result: attempted };
     });
+    return analysisResult;
 }
 
 if (require.main === module) {

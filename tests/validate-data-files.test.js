@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const Config = require('../scripts/config.js');
+const { buildFilterInputSha256 } = require('../scripts/lib/filter-input-contract.js');
 
 const {
     validatePapersDatabase,
@@ -19,9 +20,27 @@ const CANDIDATE_FP = 'a'.repeat(16);
 const SOURCE_FP = 'b'.repeat(16);
 const BLOG_FP = 'c'.repeat(16);
 const FILTER_FP = 'd'.repeat(16);
+const BATCH_ID = 'e'.repeat(16);
 
 function papersSha256(papers) {
-    return crypto.createHash('sha256').update(JSON.stringify(papers)).digest('hex');
+    const normalize = value => Array.isArray(value) ? value.map(normalize)
+        : (value && typeof value === 'object'
+            ? Object.fromEntries(Object.keys(value).sort().map(key => [key, normalize(value[key])]))
+            : value);
+    return crypto.createHash('sha256').update(JSON.stringify(normalize(papers))).digest('hex');
+}
+
+function filterInputSha256(paper) {
+    return buildFilterInputSha256(paper);
+}
+
+function fetchSourcesSha256(checkpoint) {
+    const value = {
+        arxiv: Object.fromEntries(Object.entries(checkpoint.arxiv || {}).sort(([a], [b]) => a.localeCompare(b))
+            .map(([id, entry]) => [id, { status: entry.status, papersCount: entry.papersCount, papersSha256: entry.papersSha256 }])),
+        huggingface: checkpoint.huggingface ? { status: checkpoint.huggingface.status, papersCount: checkpoint.huggingface.papersCount, papersSha256: checkpoint.huggingface.papersSha256 } : null
+    };
+    return papersSha256(value);
 }
 
 function checkpointEntry(papers, health, status = 'complete') {
@@ -30,8 +49,10 @@ function checkpointEntry(papers, health, status = 'complete') {
 
 function writeCompleteCheckpoint(filePath) {
     const categoryOrder = Config.ARXIV_CATEGORIES.map(category => category.id);
-    fs.writeFileSync(filePath, JSON.stringify({
+    const checkpoint = {
         timestamp: TIMESTAMP,
+        batchDate: '2026-07-13',
+        batchId: BATCH_ID,
         candidateFingerprint: CANDIDATE_FP,
         sourceConfigFingerprint: SOURCE_FP,
         blogDedupFingerprint: BLOG_FP,
@@ -39,7 +60,9 @@ function writeCompleteCheckpoint(filePath) {
         categoryOrder,
         arxiv: Object.fromEntries(categoryOrder.map(id => [id, checkpointEntry([], { id, ok: true })])),
         huggingface: checkpointEntry([], { ok: true })
-    }));
+    };
+    checkpoint.fetchSourcesSha256 = fetchSourcesSha256(checkpoint);
+    fs.writeFileSync(filePath, JSON.stringify(checkpoint));
 }
 
 function writeMinimalCurrentBatch(dir) {
@@ -48,28 +71,34 @@ function writeMinimalCurrentBatch(dir) {
     const filterDecisions = path.join(dir, 'filter-decisions.json');
     const filteredPapers = path.join(dir, 'filtered-papers.json');
     writeCompleteCheckpoint(fetchCheckpoint);
+    const checkpoint = JSON.parse(fs.readFileSync(fetchCheckpoint));
+    const rawPapers = [{ arxivId: '2607.00001' }];
+    const integrity = {
+        batchDate: '2026-07-13', batchId: BATCH_ID,
+        rawPapersSha256: papersSha256(rawPapers), fetchSourcesSha256: checkpoint.fetchSourcesSha256
+    };
     const fingerprints = {
         candidateFingerprint: CANDIDATE_FP,
         sourceConfigFingerprint: SOURCE_FP,
         blogDedupFingerprint: BLOG_FP
     };
     fs.writeFileSync(rawCandidates, JSON.stringify({
-        timestamp: TIMESTAMP, ...fingerprints,
+        timestamp: TIMESTAMP, ...fingerprints, ...integrity,
         stats: { beforeBlogSkip: 1, afterBlogSkip: 1, skippedFromBlog: 0, arxivOnly: 1, hfOnly: 0, both: 0 },
         sourceHealth: {
             arxiv: { categories: Config.ARXIV_CATEGORIES.map(({ id }) => ({ id, ok: true })) },
             huggingface: { ok: true }
         },
-        papers: [{ arxivId: '2607.00001' }]
+        papers: rawPapers
     }));
     fs.writeFileSync(filterDecisions, JSON.stringify({
-        timestamp: TIMESTAMP, ...fingerprints, filterModel: 'model-a', filterPromptHash: 'hash-a',
+        timestamp: TIMESTAMP, ...fingerprints, ...integrity, filterModel: 'model-a', filterPromptHash: 'hash-a',
         filterConfigFingerprint: FILTER_FP,
         stats: { totalCandidates: 1, decided: 1, related: 1, complete: true },
-        decisions: { '2607.00001': { related: true } }
+        decisions: { '2607.00001': { related: true, inputSha256: filterInputSha256(rawPapers[0]) } }
     }));
     fs.writeFileSync(filteredPapers, JSON.stringify({
-        timestamp: TIMESTAMP, ...fingerprints, filterModel: 'model-a', filterPromptHash: 'hash-a',
+        timestamp: TIMESTAMP, ...fingerprints, ...integrity, filterModel: 'model-a', filterPromptHash: 'hash-a',
         filterConfigFingerprint: FILTER_FP, status: 'complete',
         stats: { afterBlogSkip: 1, afterFilter: 1, afterArchiveSkip: 1, decisionCount: 1 },
         papers: [{ arxivId: '2607.00001' }]
@@ -386,9 +415,20 @@ describe('validate-data-files', () => {
         const decisionsFile = path.join(dir, 'filter-decisions.json');
         const checkpointFile = path.join(dir, 'fetch-checkpoint.json');
         writeCompleteCheckpoint(checkpointFile);
+        const checkpoint = JSON.parse(fs.readFileSync(checkpointFile));
+        const rawPapers = [
+            { arxivId: '2607.00001' },
+            { arxivId: '2607.00002' },
+            { arxivId: '2607.00003' }
+        ];
+        const integrity = {
+            batchDate: '2026-07-13', batchId: BATCH_ID,
+            rawPapersSha256: papersSha256(rawPapers), fetchSourcesSha256: checkpoint.fetchSourcesSha256
+        };
 
         fs.writeFileSync(rawCandidatesFile, JSON.stringify({
             timestamp: TIMESTAMP,
+            ...integrity,
             candidateFingerprint: CANDIDATE_FP,
             sourceConfigFingerprint: SOURCE_FP,
             blogDedupFingerprint: BLOG_FP,
@@ -404,14 +444,11 @@ describe('validate-data-files', () => {
                 arxiv: { categories: Config.ARXIV_CATEGORIES.map(({ id }) => ({ id, ok: true })) },
                 huggingface: { ok: true }
             },
-            papers: [
-                { arxivId: '2607.00001' },
-                { arxivId: '2607.00002' },
-                { arxivId: '2607.00003' }
-            ]
+            papers: rawPapers
         }));
         fs.writeFileSync(filteredFile, JSON.stringify({
             timestamp: TIMESTAMP,
+            ...integrity,
             candidateFingerprint: CANDIDATE_FP,
             sourceConfigFingerprint: SOURCE_FP,
             blogDedupFingerprint: BLOG_FP,
@@ -423,12 +460,15 @@ describe('validate-data-files', () => {
                 afterBlogSkip: 3,
                 afterFilter: 2,
                 afterArchiveSkip: 1,
+                skippedFromArchive: 1,
                 decisionCount: 3
             },
+            excludedRelatedIds: ['2607.00002'],
             papers: [{ arxivId: '2607.00001' }]
         }));
         fs.writeFileSync(decisionsFile, JSON.stringify({
             timestamp: TIMESTAMP,
+            ...integrity,
             candidateFingerprint: CANDIDATE_FP,
             sourceConfigFingerprint: SOURCE_FP,
             blogDedupFingerprint: BLOG_FP,
@@ -442,9 +482,9 @@ describe('validate-data-files', () => {
                 complete: true
             },
             decisions: {
-                '2607.00001': { id: '2607.00001', related: true, reason: 'audio', parseSource: 'conclusion_line' },
-                '2607.00002': { id: '2607.00002', related: true, reason: 'audio', parseSource: 'conclusion_line' },
-                '2607.00003': { id: '2607.00003', related: false, reason: 'irrelevant', parseSource: 'conclusion_line' }
+                '2607.00001': { id: '2607.00001', related: true, reason: 'audio', parseSource: 'conclusion_line', inputSha256: filterInputSha256(rawPapers[0]) },
+                '2607.00002': { id: '2607.00002', related: true, reason: 'audio', parseSource: 'conclusion_line', inputSha256: filterInputSha256(rawPapers[1]) },
+                '2607.00003': { id: '2607.00003', related: false, reason: 'irrelevant', parseSource: 'conclusion_line', inputSha256: filterInputSha256(rawPapers[2]) }
             }
         }));
 

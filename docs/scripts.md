@@ -8,7 +8,7 @@
 
 #### `scripts/full-fetch.js`
 
-完整流程入口。执行自动归档 → 加载去重库（含博客已发布 ID）→ arXiv 抓取 → HF 抓取 → 合并去重 → 过滤博客已发布论文 → LLM 筛选 → 更新去重库 → 深度分析 → 增量保存。
+核心数据流程入口。执行自动归档 → 加载去重库（含博客已发布 ID）→ arXiv 抓取 → HF 抓取 → 合并去重 → 过滤博客已发布论文 → LLM 筛选 → 更新去重库 → 深度分析 → 增量保存。该入口不建立视觉任务；先发布汇总页和全部论文页，远端 OID 验证成功后再建立 TOP 10 论文长图和汇总图。
 
 抓取阶段按 arXiv 类别和 HuggingFace 来源原子保存 checkpoint；每个来源同时绑定论文数量和稳定内容 SHA，损坏时仅补抓该来源。checkpoint、raw、decisions、filtered 的候选/来源/博客去重指纹与北京时间批次日期必须一致。只有七个类别和 HF 必需请求覆盖完整时才能筛选；健康 raw 即使尚无 decisions 也可继续，筛选配置变化只重筛不重抓。
 
@@ -250,9 +250,13 @@ HuggingFace Papers 抓取模块。
 - 无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 按最终正文出现顺序归一化，避免候选编号在重排插入后成为倒序展示图号
 - 只有严格 JSON 对象中的 `insertions: []` 才标记 `no_high_value_images`；schema 错误、非法 JSON、全图下载失败或契约破坏会写入非终态恢复状态，不能伪装成成功分析
 
-**Codex 视觉摘要（按需后处理）**
-- Agent 在论文的深度分析和评分审计通过后，读取 `prompts/visual-summary.md`，用 Codex 内置 `image_gen` 分三次生成研究概览、方法结构、实验与边界卡片；这不是可由项目脚本自行运行的 API 阶段
-- 每张只以经过评分审计的章节内容构造提示词，禁止把生成内容当论文原始图、编造数值或插入作者/论文编号。选定图片必须复制到工作区，供博客或社媒发布流程显式消费
+**Codex 视觉资产（全部博客发布后的后处理阶段）**
+- `push-blog.py` 在汇总页和全部论文页推送成功且远端 OID 验证后，自动运行 `visual-summary-integration.js`。它只为最终评分 TOP 10 建立 `infographic` 任务，同分按规范化 arXiv ID 排序
+- 使用 `visual-summary-state.js record --date YYYY-MM-DD --paper ID --kind infographic --file PNG --token TOKEN` 登记。脚本验证 PNG、最小尺寸、纵横比、大小、SHA 和 task token 后原子复制到 `data/current/visual-summaries/<date>/<paper>/infographic.png`
+- 汇总图从同批次审计论文确定性计算标题、热门方向计数和 TOP 5 排名，并复用博客 generation manifest 的 category；用 `digest-cover-state.js record` 登记
+- 两类状态互相独立：论文分析/prompt 变化只失效对应长图，论文集合、分数、主任务标签或封面 prompt 变化只失效封面。`visual:status` / `cover:status` 非零时，下一轮仅补 pending/failed、损坏或指纹失效的资产
+- 项目脚本只负责计划、验证、复制和 checkpoint，不调用图像 API。不得把生成内容称为论文原始图，不得编造数值、作者、结论或排行榜；封面不得渲染 arXiv ID
+- 图片状态不进入博客 generation/review/push 清单，不阻断已经发布的博客；无远端验证凭证时所有 plan/status 命令拒绝启动
 
 **阶段恢复**：`analysisManifest` 逐阶段保存状态，失败正文写入 `analysisCheckpoint`，候选/下载/选图元数据写入 `analysisRecoveryImageManifest`。失败合并会独立按完整契约重解析旧正文，不受最新失败 manifest 影响，连续多次失败仍保留旧成功正文。强制重分析成功旧记录时因没有 checkpoint 会清空主分析及所有下游完成标记；普通失败续跑则从首个未完成阶段继续。
 

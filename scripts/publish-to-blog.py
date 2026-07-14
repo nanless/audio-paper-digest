@@ -21,7 +21,7 @@ load_project_env()
     python3 publish-to-blog.py --date YYYY-MM-DD
 """
 import json, re, sys, os, subprocess, datetime, base64, concurrent.futures, hashlib
-import ipaddress, shutil, socket, tempfile
+import ipaddress, shutil, socket, tempfile, stat, struct, zlib
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
@@ -38,7 +38,17 @@ from publish_common import (
     normalize_publish_arxiv_id, review_protocol_failure,
     validate_papers_for_publish, validate_review_payload
 )
-from path_config import CURRENT_DIR, atomic_write_json, atomic_write_text, file_lock
+from path_config import (
+    PROJECT_ROOT,
+    CURRENT_DIR,
+    DIGEST_COVER_ASSET_DIR,
+    DIGEST_COVER_MANIFEST_DIR,
+    VISUAL_SUMMARY_ASSET_DIR,
+    VISUAL_SUMMARY_MANIFEST_DIR,
+    atomic_write_json,
+    atomic_write_text,
+    file_lock,
+)
 from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env, get_required_fetch_proxy
 from runtime_guard import require_external_runtime
 from utils import strip_md, parse_analysis
@@ -49,6 +59,16 @@ BLOG_REPO = os.path.expanduser(
 CONTENT_DIR = os.path.join(BLOG_REPO, "content", "posts")
 BASE_PATH = os.environ.get("PAPER_DIGEST_BLOG_BASE_PATH", "/audio-paper-digest-blog")
 GITHUB_REMOTE = os.environ.get("PAPER_DIGEST_GITHUB_REMOTE", "origin")
+BEIJING_TIMESTAMP_RE = re.compile(
+    r'^(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?\+08:00$'
+)
+VISUAL_SUMMARY_KINDS = ('infographic',)
+VISUAL_SUMMARY_LABELS = {
+    'infographic': '论文长图摘要',
+}
+PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
+VISUAL_SUMMARY_MAX_BYTES = 8 * 1024 * 1024
+_REVIEW_PROTOCOL_CACHE = {}
 
 
 def blog_transaction_lock(date_str, *, timeout_seconds=30):
@@ -125,6 +145,18 @@ def validate_publish_date(value):
     return value
 
 
+def paper_batch_date(paper):
+    explicit = paper.get('fetchBatchDate') or paper.get('batchDate')
+    if explicit:
+        return validate_publish_date(explicit)
+    fetched_at = paper.get('fetchedAt')
+    match = BEIJING_TIMESTAMP_RE.fullmatch(fetched_at) if isinstance(fetched_at, str) else None
+    if not match:
+        label = paper.get('arxivId') or paper.get('title') or '<unknown>'
+        raise PublishDataValidationError(f'{label} fetchedAt 不是严格北京时间戳')
+    return validate_publish_date(match.group(1))
+
+
 def validate_publish_target(blog_repo=None, content_dir=None):
     """Constrain publication writes to <blog repo>/content/posts."""
     blog_repo = BLOG_REPO if blog_repo is None else blog_repo
@@ -146,33 +178,72 @@ def validate_publish_target(blog_repo=None, content_dir=None):
 
 
 def split_review_content(content, limit=4000):
-    """Split the complete body into bounded chunks without dropping any text."""
+    """Split at Markdown block boundaries without cutting fences/tables/links."""
     if not content:
         return ['']
+    lines = content.splitlines(keepends=True)
+    blocks = []
+    block = []
+    fence = None
+    in_table = False
+    for line in lines:
+        fence_match = re.match(r'^\s*(`{3,}|~{3,})', line)
+        if fence:
+            block.append(line)
+            if fence_match and fence_match.group(1)[0] == fence[0] and len(fence_match.group(1)) >= len(fence):
+                blocks.append(('protected', ''.join(block)))
+                block, fence = [], None
+            continue
+        if fence_match:
+            if block:
+                blocks.append(('plain', ''.join(block)))
+            block = [line]
+            fence = fence_match.group(1)
+            in_table = False
+            continue
+        is_table = line.lstrip().startswith('|')
+        if is_table:
+            if block and not in_table:
+                blocks.append(('plain', ''.join(block)))
+                block = []
+            block.append(line)
+            in_table = True
+            continue
+        if in_table:
+            blocks.append(('protected', ''.join(block)))
+            block, in_table = [], False
+        block.append(line)
+        if not line.strip():
+            blocks.append(('plain', ''.join(block)))
+            block = []
+    if block:
+        blocks.append(('protected' if fence or in_table else 'plain', ''.join(block)))
+
     chunks = []
     current = ''
-    for line in content.splitlines(keepends=True):
-        while len(line) > limit:
-            if current:
-                chunks.append(current)
-                current = ''
-            chunks.append(line[:limit])
-            line = line[limit:]
-        if current and len(current) + len(line) > limit:
-            if line.lstrip().startswith('|'):
-                current_lines = current.splitlines(keepends=True)
-                table_start = len(current_lines)
-                while table_start > 0 and current_lines[table_start - 1].lstrip().startswith('|'):
-                    table_start -= 1
-                if 0 < table_start < len(current_lines):
-                    chunks.append(''.join(current_lines[:table_start]))
-                    current = ''.join(current_lines[table_start:])
-            if current and len(current) + len(line) <= limit:
-                current += line
-                continue
+    for block_kind, block in blocks:
+        if current and len(current) + len(block) > limit:
             chunks.append(current)
             current = ''
-        current += line
+        # A single semantic block may exceed the soft limit. Keeping it intact
+        # is safer than manufacturing an unclosed fence/table/link context.
+        if not current and len(block) > limit and block_kind == 'protected':
+            chunks.append(block)
+        elif not current and len(block) > limit:
+            # Long plain paragraphs have no Markdown block state to preserve.
+            # Prefer a line boundary so short semantic tokens are not split.
+            remaining = block
+            while len(remaining) > limit:
+                boundary = remaining.rfind('\n', 0, limit + 1)
+                if boundary >= 0:
+                    boundary += 1
+                if boundary <= 0:
+                    boundary = limit
+                chunks.append(remaining[:boundary])
+                remaining = remaining[boundary:]
+            current = remaining
+        else:
+            current += block
     if current or not chunks:
         chunks.append(current)
     return chunks
@@ -665,15 +736,99 @@ def _load_review_image(url):
         return {'media_type': media_type, 'data': base64.b64encode(raw).decode('ascii')}
     if url.startswith('https://'):
         return _download_review_image(url)
-    raise PublishDataValidationError('图片 review 不允许相对路径或非 HTTPS URL')
+    base = BASE_PATH.rstrip('/')
+    allowed_prefixes = (
+        f'{base}/images/visual-summaries/',
+        f'{base}/images/digest-covers/',
+    )
+    if url.startswith(allowed_prefixes):
+        parsed = urlparse(url)
+        if parsed.query or parsed.fragment or parsed.netloc or parsed.scheme:
+            raise PublishDataValidationError('本地视觉摘要 URL 不允许参数、片段或 authority')
+        relative_public = parsed.path[len(base) + 1:]
+        repo = Path(BLOG_REPO).expanduser().resolve()
+        target = (repo / 'static' / relative_public).resolve()
+        _path, relative = _manifest_record(target, repo)
+        if not relative.startswith(('static/images/visual-summaries/', 'static/images/digest-covers/')):
+            raise PublishDataValidationError('本地图片不属于受控视觉资产目录')
+        try:
+            raw = target.read_bytes()
+        except OSError as exc:
+            raise PublishDataValidationError('本地视觉摘要图片不可读') from exc
+        if len(raw) > REVIEW_IMAGE_MAX_BYTES:
+            raise PublishDataValidationError('本地视觉摘要图片超过 8 MiB review 上限')
+        _validate_image_signature('image/png', raw)
+        return {'media_type': 'image/png', 'data': base64.b64encode(raw).decode('ascii')}
+    raise PublishDataValidationError('图片 review 只允许 data URI、HTTPS 或受控视觉资产 URL')
+
+
+def _digest_cover_review_expectation(url):
+    base = re.escape(BASE_PATH.rstrip('/'))
+    match = re.fullmatch(rf'{base}/images/digest-covers/(\d{{4}}-\d{{2}}-\d{{2}})/cover\.png', url)
+    if not match:
+        return ''
+    date_str = validate_publish_date(match.group(1))
+    manifest = _load_json_object(
+        DIGEST_COVER_MANIFEST_DIR / f'{date_str}.json', '汇总页封面 manifest'
+    )
+    context = manifest.get('generationContext')
+    if not isinstance(context, dict):
+        raise PublishDataValidationError('汇总页封面缺少可审查的确定性上下文')
+    return (
+        '\n  汇总封面必须逐字段匹配以下确定性上下文；标题、热门方向标签/计数、'
+        'TOP 5 的顺序/完整英文标题/分数/中文任务标签任一错误或缺失都必须报 error：\n'
+        f'```json\n{json.dumps(context, ensure_ascii=False, sort_keys=True)}\n```'
+    )
+
+
+def parse_markdown_images(content):
+    """Parse inline Markdown images while preserving balanced URL parentheses."""
+    images = []
+    cursor = 0
+    while True:
+        start = content.find('![', cursor)
+        if start < 0:
+            break
+        alt_end = content.find('](', start + 2)
+        if alt_end < 0:
+            break
+        depth = 1
+        escaped = False
+        end = alt_end + 2
+        while end < len(content):
+            char = content[end]
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+                if depth == 0:
+                    break
+            end += 1
+        if depth != 0:
+            cursor = alt_end + 2
+            continue
+        destination = content[alt_end + 2:end].strip()
+        title_match = re.match(r'^(.*?)(?:\s+["\'].*["\'])$', destination)
+        url = (title_match.group(1) if title_match else destination).strip()
+        if url.startswith('<') and url.endswith('>'):
+            url = url[1:-1].strip()
+        raw = content[start:end + 1]
+        images.append({
+            'alt': content[start + 2:alt_end], 'url': url,
+            'start': start, 'end': end + 1, 'raw': raw,
+        })
+        cursor = end + 1
+    return images
 
 
 def multimodal_review_images(content, title="", required=False):
     """Send actual image bytes to the routed multimodal publish API."""
     title = plain_title_for_publish(title) if title else title
-    # 提取所有图片引用
-    img_pattern = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
-    image_matches = list(img_pattern.finditer(content))
+    image_matches = parse_markdown_images(content)
 
     if not image_matches:
         return True, []
@@ -682,9 +837,9 @@ def multimodal_review_images(content, title="", required=False):
     image_payloads = []
     load_issues = []
     for match in image_matches:
-        alt, url = match.groups()
-        nearby = content[max(0, match.start() - 600):min(len(content), match.end() + 600)]
-        nearby = nearby.replace(match.group(0), f'图片（alt：{alt}）').strip()
+        alt, url = match['alt'], match['url']
+        nearby = content[max(0, match['start'] - 600):min(len(content), match['end'] + 600)]
+        nearby = nearby.replace(match['raw'], f'图片（alt：{alt}）').strip()
         try:
             image_payload = _load_review_image(url)
         except PublishDataValidationError as exc:
@@ -696,9 +851,10 @@ def multimodal_review_images(content, title="", required=False):
         # Keep prompt metadata and attached bytes in the same append path.
         # A failed download must not shift later images onto earlier contexts.
         image_payloads.append(image_payload)
+        cover_expectation = _digest_cover_review_expectation(url)
         img_summary.append(
             f"- 图片 {len(img_summary) + 1} | alt: `{alt}` | 来源: {url[:500]}\n"
-            f"  正文附近上下文：\n```markdown\n{nearby}\n```"
+            f"  正文附近上下文：\n```markdown\n{nearby}\n```{cover_expectation}"
         )
 
     if load_issues and required:
@@ -724,6 +880,7 @@ def multimodal_review_images(content, title="", required=False):
 1. 图片内容是否可解码、清晰且与 alt 和论文正文语义一致
 2. 图片是否包含明显错误、空白、损坏、无关内容或隐私信息
 3. 图片 alt 文本是否为空、重复或与实际内容冲突
+4. 若图片是汇总封面，必须逐字段核对所附确定性上下文；标题、热门方向、计数、TOP 5 顺序、完整英文标题、分数和任务标签不一致均为 error
 
 【禁止事项】不要报告以下伪问题：
 - 摘要格式（如"外部图片: url | alt: ..."）不是 Markdown 格式 → 这是正常的元数据摘要
@@ -801,7 +958,7 @@ def multimodal_review_images(content, title="", required=False):
 
 
 def apply_llm_fixes(content, issues):
-    """根据 LLM 审查结果，自动应用可修复的问题。"""
+    """只应用唯一、有边界的精确替换，拒绝 LLM 自由全文改写。"""
     if not issues:
         return content
 
@@ -824,8 +981,16 @@ def apply_llm_fixes(content, issues):
             match = re.match(pattern, instruction, re.IGNORECASE)
             if match:
                 old, new = match.group(1), match.group(2)
-                if old in fixed:
-                    fixed = fixed.replace(old, new)
+                # 自动修复必须是唯一 span；常见词、标点或大段改写一律留给下轮 review。
+                if (
+                    old != new
+                    and len(old) >= 4
+                    and len(old) <= 500
+                    and len(new) <= 1000
+                    and '\n---\n' not in old
+                    and fixed.count(old) == 1
+                ):
+                    fixed = fixed.replace(old, new, 1)
                     fix_count += 1
                     break
 
@@ -1092,21 +1257,8 @@ def extract_repo_urls(text):
     return sorted(urls)
 
 
-def fetch_arxiv_html_urls(arxiv_id):
-    """从 arxiv HTML 页面抓取开源链接"""
-    if not arxiv_id:
-        return []
-    url = f'https://arxiv.org/html/{arxiv_id}'
-    try:
-        with urllib.request.urlopen(url, timeout=15) as resp:
-            html = resp.read().decode('utf-8', errors='ignore')
-        return extract_repo_urls(html)
-    except Exception:
-        return []
-
-
 def enrich_opensource(pa, paper):
-    """如果 LLM 生成的 opensource 文本缺少具体链接，从论文原始文本或 arxiv HTML 中补充。"""
+    """仅从已审计的本地输入提取开源链接，生成阶段不联网。"""
     oss = pa.get('opensource', '')
     if not oss:
         return ''
@@ -1118,9 +1270,6 @@ def enrich_opensource(pa, paper):
             sources.append(val)
 
     urls = extract_repo_urls('\n'.join(sources))
-    # 本地文本找不到时，尝试从 arxiv HTML 抓取
-    if not urls:
-        urls = fetch_arxiv_html_urls(paper.get('arxivId', ''))
     if not urls:
         return oss
 
@@ -1139,6 +1288,295 @@ def enrich_opensource(pa, paper):
         else:
             oss += f'\n  - 相关链接：{url}'
     return oss
+
+
+def _visual_summary_analysis_sha256(paper):
+    """Mirror visual-summary-state.js analysisSha256 exactly."""
+    manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
+    stages = manifest.get('stages') if isinstance(manifest.get('stages'), dict) else {}
+    payload = {
+        'arxivId': normalize_publish_arxiv_id(paper.get('arxivId')),
+        'analysis': paper.get('analysis'),
+        'parsed': paper.get('parsed') or None,
+        'analysisSource': paper.get('analysisSource') or None,
+        'analysisSourceSha256': paper.get('analysisSourceSha256') or paper.get('sourceSha256') or None,
+        'scoringAudit': stages.get('scoringAudit') or None,
+    }
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+    ).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_png_bytes(raw, label):
+    if not raw or len(raw) > VISUAL_SUMMARY_MAX_BYTES:
+        raise PublishDataValidationError(f'{label} PNG 为空或超过 8 MiB')
+    if not raw.startswith(PNG_SIGNATURE):
+        raise PublishDataValidationError(f'{label} 不是有效 PNG 文件头')
+    offset = len(PNG_SIGNATURE)
+    chunks = []
+    width = height = None
+    saw_idat = False
+    saw_iend = False
+    while offset < len(raw):
+        if offset + 12 > len(raw):
+            raise PublishDataValidationError(f'{label} PNG chunk 被截断')
+        length = struct.unpack('>I', raw[offset:offset + 4])[0]
+        chunk_type = raw[offset + 4:offset + 8]
+        end = offset + 12 + length
+        if end > len(raw):
+            raise PublishDataValidationError(f'{label} PNG chunk 长度越界')
+        payload = raw[offset + 8:offset + 8 + length]
+        expected_crc = struct.unpack('>I', raw[offset + 8 + length:end])[0]
+        actual_crc = zlib.crc32(chunk_type + payload) & 0xffffffff
+        if expected_crc != actual_crc:
+            raise PublishDataValidationError(f'{label} PNG chunk CRC 错误')
+        chunks.append(chunk_type)
+        if chunk_type == b'IHDR':
+            if len(chunks) != 1 or length != 13:
+                raise PublishDataValidationError(f'{label} PNG IHDR 非法')
+            width, height = struct.unpack('>II', payload[:8])
+            if not (1 <= width <= 8192 and 1 <= height <= 8192):
+                raise PublishDataValidationError(f'{label} PNG 尺寸非法: {width}x{height}')
+            if width < 768 or height < 1024 or height / width < 1.25:
+                raise PublishDataValidationError(
+                    f'{label} 必须是至少 768x1024 且高宽比不低于 1.25 '
+                    f'的纵向长图: {width}x{height}'
+                )
+        elif chunk_type == b'IDAT':
+            saw_idat = True
+        elif chunk_type == b'IEND':
+            if length != 0 or end != len(raw):
+                raise PublishDataValidationError(f'{label} PNG IEND 非法或尾部有多余数据')
+            saw_iend = True
+            offset = end
+            break
+        offset = end
+    if not chunks or chunks[0] != b'IHDR' or not saw_idat or not saw_iend:
+        raise PublishDataValidationError(f'{label} PNG 缺少 IHDR/IDAT/IEND 必需 chunk')
+    return hashlib.sha256(raw).hexdigest()
+
+
+def load_visual_summary_cards(papers, date_str, manifest_path=None):
+    """Legacy verifier retained for data forensics; the blog pipeline never calls it."""
+    manifest_path = Path(manifest_path or (VISUAL_SUMMARY_MANIFEST_DIR / f'{date_str}.json'))
+    if not manifest_path.is_file():
+        raise PublishDataValidationError(
+            f'缺少强制视觉摘要 manifest: {manifest_path}；'
+            '每篇论文必须先完成一张 infographic 纵向长图'
+        )
+    manifest = _load_json_object(manifest_path, '视觉摘要 manifest')
+    if manifest.get('version') != 2 or manifest.get('batchDate') != date_str:
+        raise PublishDataValidationError('视觉摘要 manifest 版本或批次日期不匹配')
+    prompt_path = Path(__file__).resolve().parent.parent / 'prompts' / 'visual-summary.md'
+    prompt_sha = _sha256_file(prompt_path)
+    if manifest.get('promptSha256') != prompt_sha:
+        raise PublishDataValidationError('视觉摘要 manifest 的 prompt SHA 已失效，请重新 plan')
+    records = manifest.get('papers')
+    if not isinstance(records, dict):
+        raise PublishDataValidationError('视觉摘要 manifest.papers 必须是对象')
+
+    expected_ids = {normalize_publish_arxiv_id(paper.get('arxivId')) for paper in papers}
+    if set(records) != expected_ids:
+        raise PublishDataValidationError('视觉摘要 manifest 论文集合与博客发布集合不一致')
+
+    project_root = Path(__file__).resolve().parent.parent
+    allowed_root = VISUAL_SUMMARY_ASSET_DIR.resolve()
+    enriched = []
+    assets = []
+    for paper in papers:
+        paper_id = normalize_publish_arxiv_id(paper.get('arxivId'))
+        record = records.get(paper_id)
+        expected_analysis_sha = _visual_summary_analysis_sha256(paper)
+        if (
+            not isinstance(record, dict)
+            or record.get('normalizedArxivId') != paper_id
+            or record.get('batchDate') != date_str
+            or record.get('analysisSha256') != expected_analysis_sha
+            or record.get('promptSha256') != prompt_sha
+        ):
+            raise PublishDataValidationError(f'{paper_id} 视觉摘要论文指纹已失效')
+        cards = record.get('cards')
+        if not isinstance(cards, dict) or set(cards) != set(VISUAL_SUMMARY_KINDS):
+            raise PublishDataValidationError(f'{paper_id} 必须恰好包含一张视觉摘要长图')
+        publish_cards = []
+        for kind in VISUAL_SUMMARY_KINDS:
+            card = cards[kind]
+            if (
+                not isinstance(card, dict)
+                or card.get('status') != 'complete'
+                or card.get('analysisSha256') != expected_analysis_sha
+                or card.get('promptSha256') != prompt_sha
+                or not re.fullmatch(r'[0-9a-f]{64}', str(card.get('assetSha256') or ''))
+            ):
+                raise PublishDataValidationError(f'{paper_id}/{kind} 视觉摘要未完成或指纹非法')
+            asset_path = card.get('assetPath')
+            if not isinstance(asset_path, str) or not asset_path:
+                raise PublishDataValidationError(f'{paper_id}/{kind} 缺少资产路径')
+            source = (project_root / asset_path).resolve()
+            expected_source = (allowed_root / date_str / paper_id / f'{kind}.png').resolve()
+            if source != expected_source:
+                raise PublishDataValidationError(f'{paper_id}/{kind} 视觉摘要资产路径不受控')
+            try:
+                raw = source.read_bytes()
+            except OSError as exc:
+                raise PublishDataValidationError(f'{paper_id}/{kind} 视觉摘要资产不可读') from exc
+            actual_sha = _validate_png_bytes(raw, f'{paper_id}/{kind}')
+            if actual_sha != card['assetSha256']:
+                raise PublishDataValidationError(f'{paper_id}/{kind} 视觉摘要资产 SHA 不匹配')
+            public_relative = f'images/visual-summaries/{date_str}/{paper_id}/{kind}.png'
+            repo_relative = f'static/{public_relative}'
+            url = f'{BASE_PATH.rstrip("/")}/{public_relative}'
+            item = {
+                'kind': kind,
+                'label': VISUAL_SUMMARY_LABELS[kind],
+                'assetSha256': actual_sha,
+                'sourcePath': str(source),
+                'repoRelativePath': repo_relative,
+                'url': url,
+            }
+            publish_cards.append({
+                key: value for key, value in item.items() if key != 'sourcePath'
+            })
+            assets.append(item)
+        next_paper = dict(paper)
+        next_paper['visualSummaryCards'] = publish_cards
+        enriched.append(next_paper)
+    return enriched, assets
+
+
+def _digest_title(date_str, category='论文速递'):
+    return 'ICML 2026 论文速递' if category == 'icml-2026' else f'语音/音乐/音频论文速递 {date_str}'
+
+
+def _digest_cover_context(papers, date_str, category='论文速递'):
+    tag_counts = {}
+    scored = []
+    for paper in papers:
+        parsed = paper.get('parsed') or {}
+        tags = parsed.get('tags') or []
+        tag = str(parsed.get('primaryTaskTag') or (tags[0] if tags else '')).strip()
+        if tag:
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+        try:
+            score = float(parsed.get('score'))
+        except (TypeError, ValueError):
+            continue
+        scored.append({
+            'arxivId': normalize_publish_arxiv_id(paper.get('arxivId')),
+            'title': str(paper.get('title') or ''),
+            'score': str(parsed.get('score')),
+            'primaryTask': tag or '-',
+            '_numericScore': score,
+        })
+    hot_directions = [
+        {'tag': tag, 'count': count}
+        for tag, count in sorted(tag_counts.items(), key=lambda item: (-item[1], item[0]))[:8]
+    ]
+    ranking = []
+    for index, item in enumerate(sorted(
+        scored, key=lambda value: (-value['_numericScore'], value['arxivId'])
+    )[:5]):
+        clean = {key: value for key, value in item.items() if key != '_numericScore'}
+        ranking.append({'rank': index + 1, **clean})
+    return {
+        'title': _digest_title(date_str, category),
+        'batchDate': date_str,
+        'paperCount': len(papers),
+        'hotDirections': hot_directions,
+        'ranking': ranking,
+    }
+
+
+def load_digest_cover(papers, date_str, manifest_path=None, category='论文速递'):
+    """Legacy verifier retained for data forensics; the blog pipeline never calls it."""
+    manifest_path = Path(manifest_path or (DIGEST_COVER_MANIFEST_DIR / f'{date_str}.json'))
+    if not manifest_path.is_file():
+        raise PublishDataValidationError(f'缺少强制汇总页封面 manifest: {manifest_path}')
+    manifest = _load_json_object(manifest_path, '汇总页封面 manifest')
+    prompt_path = Path(__file__).resolve().parent.parent / 'prompts' / 'digest-cover.md'
+    prompt_sha = _sha256_file(prompt_path)
+    context = _digest_cover_context(papers, date_str, category)
+    data_sha = hashlib.sha256(json.dumps(
+        context, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+    ).encode('utf-8')).hexdigest()
+    cover = manifest.get('cover')
+    if (
+        manifest.get('version') != 1
+        or manifest.get('batchDate') != date_str
+        or manifest.get('dataSha256') != data_sha
+        or manifest.get('promptSha256') != prompt_sha
+        or manifest.get('generationContext') != context
+        or not isinstance(cover, dict)
+        or cover.get('status') != 'complete'
+        or cover.get('dataSha256') != data_sha
+        or cover.get('promptSha256') != prompt_sha
+        or not re.fullmatch(r'[0-9a-f]{64}', str(cover.get('assetSha256') or ''))
+    ):
+        raise PublishDataValidationError('汇总页封面未完成或数据/prompt 指纹已失效')
+    source = (Path(__file__).resolve().parent.parent / str(cover.get('assetPath') or '')).resolve()
+    expected = (DIGEST_COVER_ASSET_DIR / date_str / 'cover.png').resolve()
+    if source != expected:
+        raise PublishDataValidationError('汇总页封面资产路径不受控')
+    try:
+        raw = source.read_bytes()
+    except OSError as exc:
+        raise PublishDataValidationError('汇总页封面资产不可读') from exc
+    actual_sha = _validate_png_bytes(raw, '汇总页封面')
+    if actual_sha != cover['assetSha256']:
+        raise PublishDataValidationError('汇总页封面资产 SHA 不匹配')
+    public_relative = f'images/digest-covers/{date_str}/cover.png'
+    return {
+        'kind': 'digest-cover',
+        'label': '汇总页封面',
+        'assetSha256': actual_sha,
+        'dataSha256': data_sha,
+        'promptSha256': prompt_sha,
+        'generationContext': context,
+        'sourcePath': str(source),
+        'repoRelativePath': f'static/{public_relative}',
+        'url': f'{BASE_PATH.rstrip("/")}/{public_relative}',
+    }
+
+
+def _atomic_write_bytes(path, content, mode=None):
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    existing_mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
+    final_mode = mode if mode is not None else existing_mode
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=f'.{target.name}.', suffix='.tmp', delete=False) as handle:
+            temp_path = Path(handle.name)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if final_mode is not None:
+            os.chmod(temp_path, final_mode)
+        os.replace(temp_path, target)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
+def stage_visual_summary_assets(assets, staged_posts):
+    """Legacy staging helper; production generation always passes an empty asset list."""
+    stage_root = Path(staged_posts).parent
+    staged = []
+    for asset in assets:
+        source = Path(asset['sourcePath'])
+        raw = source.read_bytes()
+        if _validate_png_bytes(raw, asset['repoRelativePath']) != asset['assetSha256']:
+            raise PublishDataValidationError(f'视觉摘要资产在 staging 前发生变化: {source}')
+        destination = (stage_root / asset['repoRelativePath']).resolve()
+        try:
+            destination.relative_to(stage_root.resolve())
+        except ValueError as exc:
+            raise PublishDataValidationError('视觉摘要 staging 路径逃逸') from exc
+        _atomic_write_bytes(destination, raw, mode=0o600)
+        staged.append(destination)
+    return staged
 
 
 def generate_paper_page(paper, date_str, category='论文速递'):
@@ -1259,62 +1697,6 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
     else:
         md += '> ⚠️ 该论文分析失败\n'
 
-    # 自动补足已筛选图片（按 URL 去重，保留 analysis 中已有图片）。
-    # 不使用 allImageUrls，避免把未经过副模型筛选的无关图片兜底发布出去。
-    image_urls = paper.get('selectedImageUrls', [])
-    if image_urls:
-        existing_image_urls = set(re.findall(r'!\[[^\]]*\]\(([^)]+)\)', md))
-        image_urls = [url for url in image_urls if url not in existing_image_urls]
-
-    if image_urls:
-        # 将图片智能插入到对应章节，而非全部堆在最后
-        def insert_images_into_sections(markdown, urls):
-            if not urls:
-                return markdown
-            
-            # 定义可能插入图片的章节标题（按优先级）
-            # 使用 ### 匹配三级标题（博客中 analysis 的一级标题被转换为三级）
-            # [^#\n]* 匹配标题名称前的任意内容（包括 emoji）
-            section_patterns = [
-                (r'(###[^#\n]*方法概述和架构[\s\S]*?)(?=\n###\s|\Z)', '方法概述'),   # 方法概述部分后
-                (r'(###[^#\n]*实验结果[\s\S]*?)(?=\n###\s|\Z)', '实验结果'),       # 实验结果部分后
-            ]
-            
-            inserted = 0
-            urls_list = list(urls)
-            
-            for pattern, section_name in section_patterns:
-                match = re.search(pattern, markdown)
-                if match and inserted < len(urls_list):
-                    # 每个章节最多插入2张图片
-                    imgs_to_insert = urls_list[inserted:inserted+2]
-                    if imgs_to_insert:
-                        img_md = '\n'
-                        for j, img_url in enumerate(imgs_to_insert, inserted+1):
-                            img_md += f'![图{j}]({img_url})\n\n'
-                        
-                        # 在章节内容结束后插入图片
-                        end_pos = match.end(1)
-                        markdown = markdown[:end_pos] + img_md + markdown[end_pos:]
-                        inserted += len(imgs_to_insert)
-            
-            # 如果还有剩余图片未插入，放在最后
-            if inserted < len(urls_list):
-                remaining = urls_list[inserted:]
-                img_md = '\n### 📷 论文图片\n\n'
-                for j, img_url in enumerate(remaining, inserted+1):
-                    img_md += f'![图{j}]({img_url})\n\n'
-                # 插入到返回链接之前
-                return_link = f'\n---\n\n[← 返回'
-                if return_link in markdown:
-                    markdown = markdown.replace(return_link, img_md + return_link)
-                else:
-                    markdown += img_md
-            
-            return markdown
-        
-        md = insert_images_into_sections(md, image_urls[:5])
-
     md += f'\n---\n\n[← 返回 {date_str} 语音/音乐/音频论文速递]({BASE_PATH}/posts/{date_str}/)\n'
 
     return md, slug
@@ -1371,12 +1753,11 @@ def review_and_fix_post(file_path):
         issues.append("发现非标准图片引用格式，尝试自动修复")
         content = fix_image_markdown(content)
 
-    # 5. 检查并截断过长的 base64 data URI
+    # 5. 过长 data URI 不能截成伪造图片；必须显式阻断并转存合法资产。
     base64_matches = re.findall(r'data:image/[^;]+;base64,([A-Za-z0-9+/=]+)', content)
     long_base64 = [m for m in base64_matches if len(m) > 50000]
     if long_base64:
-        issues.append(f"发现 {len(long_base64)} 个过长的 base64 data URI，已截断")
-        content = truncate_base64_datauri(content)
+        issues.append(f"发现 {len(long_base64)} 个过长的 base64 data URI，已阻断；请转存为受控图片资产")
 
     # 6. 修复 YAML frontmatter 双逗号
     if ',,' in content.split('---\n')[1] if len(content.split('---\n')) >= 3 else False:
@@ -1591,7 +1972,7 @@ def review_all_posts(
         # 2. LLM 文本审查
         with open(index_file, 'r', encoding='utf-8') as f:
             content = f.read()
-        llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, "汇总页面", required=require_llm)
+        llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, "汇总页", required=require_llm)
         if llm_issues:
             for issue in llm_issues:
                 sev = issue.get('severity', 'warning')
@@ -1611,7 +1992,7 @@ def review_all_posts(
                     print(f"    ⚠️  LLM 后代码层: {issue}")
                 with open(index_file, 'r', encoding='utf-8') as f:
                     content = f.read()
-                llm_passed, llm_issues, _ = llm_review_post(content, "汇总页面", required=require_llm)
+                llm_passed, llm_issues, _ = llm_review_post(content, "汇总页", required=require_llm)
         llm_blocking = count_blocking_review_issues(llm_issues)
         total_blocking_issues += llm_blocking
         total_advisory_issues += len(llm_issues) - llm_blocking
@@ -1856,12 +2237,33 @@ def planned_publish_paths(staged_posts_dir, content_dir, date_str):
     return changed
 
 
-def publish_manifest_paths(staged_posts_dir, content_dir, date_str):
+def publish_manifest_paths(staged_posts_dir, content_dir, date_str, staged_assets=None):
     """Return every generated path plus explicitly owned stale deletion candidate."""
     staged = Path(staged_posts_dir)
     target = Path(content_dir)
     generated_names = {path.name for path in staged.glob('*.md')}
     manifest = {target / name for name in generated_names}
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    stage_root = staged.resolve().parent
+    for source in staged_assets or []:
+        source = Path(source).resolve()
+        try:
+            relative = source.relative_to(stage_root)
+        except ValueError as exc:
+            raise PublishDataValidationError(f'视觉摘要 staging 路径逃逸: {source}') from exc
+        destination = (repo / relative).resolve()
+        _manifest_record(destination, repo)
+        manifest.add(destination)
+    generated_assets = {
+        (repo / Path(source).resolve().relative_to(stage_root)).resolve()
+        for source in (staged_assets or [])
+    }
+    existing_asset_root = repo / 'static' / 'images' / 'visual-summaries' / date_str
+    if existing_asset_root.is_dir():
+        for old_asset in existing_asset_root.rglob('*.png'):
+            old_asset = old_asset.resolve()
+            if old_asset not in generated_assets and is_visual_summary_asset_path(old_asset, date_str):
+                manifest.add(old_asset)
     for old_page in sorted(target.glob(f'{date_str}-*.md')) if target.exists() else []:
         if old_page.name not in generated_names and _is_pipeline_owned_paper(old_page, date_str):
             manifest.add(old_page)
@@ -1896,15 +2298,9 @@ def install_staged_posts(staged_posts_dir, content_dir, date_str):
 
 def _git_relative_manifest(paths):
     repo = Path(BLOG_REPO).expanduser().resolve()
-    allowed_root = (repo / 'content' / 'posts').resolve()
     relative = []
     for path in paths:
-        resolved = Path(path).expanduser().resolve()
-        try:
-            resolved.relative_to(allowed_root)
-            item = resolved.relative_to(repo).as_posix()
-        except ValueError as exc:
-            raise PublishDataValidationError(f'git 清单包含 content/posts 外路径: {path}') from exc
+        _resolved, item = _manifest_record(path, repo)
         relative.append(item)
     return sorted(set(relative))
 
@@ -2020,11 +2416,7 @@ def restore_git_publish_state(state):
         if snapshot is None:
             path.unlink(missing_ok=True)
         else:
-            atomic_write_text(
-                path,
-                snapshot['content'].decode('utf-8'),
-                mode=snapshot['mode'],
-            )
+            _atomic_write_bytes(path, snapshot['content'], mode=snapshot['mode'])
 
 
 def validate_git_index(paths):
@@ -2084,8 +2476,28 @@ def validate_git_index_against_review_receipt(receipt, paths):
             )
 
 
+def _expected_commit_delta_paths(receipt, base_head):
+    """Derive the exact reviewed delta against the immutable review baseline."""
+    expected = set()
+    for record in receipt.get('files') or []:
+        relative = record['path']
+        baseline = subprocess.run(
+            ['git', 'show', f'{base_head}:{relative}'],
+            cwd=BLOG_REPO, capture_output=True, env=_git_env(),
+        )
+        if record.get('deleted') is True:
+            if baseline.returncode == 0:
+                expected.add(relative)
+            continue
+        reviewed_sha = str(record.get('sha256') or '')
+        baseline_sha = hashlib.sha256(baseline.stdout).hexdigest() if baseline.returncode == 0 else None
+        if baseline_sha != reviewed_sha:
+            expected.add(relative)
+    return expected
+
+
 def validate_git_commit_against_review_receipt(receipt, paths, commit='HEAD'):
-    """Verify the immutable commit tree too, closing commit-hook/race windows."""
+    """Verify parent, exact delta and immutable blobs, closing all hook/race windows."""
     manifest = set(_git_relative_manifest(paths))
     records = receipt.get('files') if isinstance(receipt, dict) else None
     if not isinstance(records, list):
@@ -2097,6 +2509,24 @@ def validate_git_commit_against_review_receipt(receipt, paths, commit='HEAD'):
     }
     if set(by_path) != manifest or len(by_path) != len(records):
         raise PublishDataValidationError('审查凭证与待提交路径集合不一致')
+    base_head = str(receipt.get('baseHead') or '').lower()
+    parents = subprocess.run(
+        ['git', 'rev-list', '--parents', '-n', '1', commit],
+        cwd=BLOG_REPO, capture_output=True, text=True, check=True, env=_git_env(),
+    ).stdout.strip().lower().split()
+    if len(parents) != 2 or parents[1] != base_head:
+        raise PublishDataValidationError('发布提交必须是 review 基线的唯一单父提交')
+    actual_delta = set(filter(None, subprocess.run(
+        ['git', 'diff-tree', '--no-commit-id', '--name-only', '-r', commit],
+        cwd=BLOG_REPO, capture_output=True, text=True, check=True, env=_git_env(),
+    ).stdout.splitlines()))
+    expected_delta = _expected_commit_delta_paths(receipt, base_head)
+    if actual_delta != expected_delta:
+        unexpected = sorted(actual_delta - expected_delta)
+        missing = sorted(expected_delta - actual_delta)
+        raise PublishDataValidationError(
+            f'发布提交完整变更集与审查凭证不一致；额外={unexpected}，缺失={missing}'
+        )
     for relative in sorted(manifest):
         record = by_path[relative]
         committed = subprocess.run(
@@ -2177,6 +2607,14 @@ def git_push(date_str, publish_paths, rollback_state=None):
             if parent != base_head:
                 raise PublishDataValidationError('待重试发布提交的父提交与 review 基线不一致，拒绝推送')
             validate_git_commit_against_review_receipt(receipt, publish_paths, current_head)
+        # 恢复 commit 成功、receipt 原子写入前崩溃的窗口。只有单父、
+        # exact delta 和所有 blob 都严格匹配旧 receipt 时才收养该提交。
+        if not retrying_existing_commit and not publication_commit and current_head != base_head:
+            validate_git_commit_against_review_receipt(receipt, publish_paths, current_head)
+            receipt['publicationCommit'] = current_head
+            atomic_write_json(receipt_path, receipt, ensure_ascii=False, indent=2)
+            publication_commit = current_head
+            retrying_existing_commit = True
         if not retrying_existing_commit and current_head != base_head:
             raise PublishDataValidationError('博客 HEAD 已偏离 review 时基线，拒绝推送未审查的本地提交；请重新生成并 review')
         if state is None:
@@ -2238,6 +2676,11 @@ def git_push(date_str, publish_paths, rollback_state=None):
         if result.returncode != 0:
             print('  ℹ️ git push 返回非零，但远端 main 已与本地 HEAD 一致，以 OID 验证结果为准')
         print(f"  ✅ 已推送并验证远端 main={remote_oid}，自动部署中...")
+        receipt['remoteVerifiedOid'] = remote_oid
+        receipt['remoteVerifiedAt'] = datetime.datetime.now(
+            datetime.timezone(datetime.timedelta(hours=8))
+        ).isoformat()
+        atomic_write_json(receipt_path, receipt, ensure_ascii=False, indent=2)
         blog_url = os.environ.get('PAPER_DIGEST_BLOG_URL', 'https://nanless.github.io/audio-paper-digest-blog/posts')
         if blog_url:
             print(f"  🌐 {blog_url}/{date_str}/")
@@ -2316,11 +2759,61 @@ def generation_template_fingerprint():
     return _stable_json_sha256({
         'dependencies': dependencies,
         'basePath': BASE_PATH,
-        'generationManifestSchema': 2,
+        'generationManifestSchema': 3,
         'generationJournalSchema': 1,
         'reviewFailureSchema': 2,
         'reviewReceiptSchema': 3,
     })
+
+
+def review_protocol_fingerprint():
+    """Bind reusable review evidence to code, prompts/models and Hugo runtime."""
+    script_dir = Path(__file__).resolve().parent
+    dependencies = {
+        name: _sha256_file(script_dir / name)
+        for name in ('publish-to-blog.py', 'review-blog.py', 'publish_common.py', 'utils.py')
+    }
+    hugo_path = shutil.which('hugo')
+    try:
+        hugo_stat = Path(hugo_path).stat() if hugo_path else None
+        hugo_identity = (
+            hugo_path,
+            hugo_stat.st_mtime_ns if hugo_stat else None,
+            hugo_stat.st_size if hugo_stat else None,
+        )
+    except OSError:
+        hugo_identity = (hugo_path, None, None)
+    cache_key = _stable_json_sha256({
+        'dependencies': dependencies,
+        'primaryModel': os.environ.get('PAPER_ANALYZER_MODEL', ''),
+        'primaryEndpoint': os.environ.get('PAPER_ANALYZER_ENDPOINT', ''),
+        'secondaryModel': os.environ.get('PAPER_ANALYZER_SECONDARY_MODEL', ''),
+        'secondaryEndpoint': os.environ.get('PAPER_ANALYZER_SECONDARY_ENDPOINT', ''),
+        'hugoIdentity': hugo_identity,
+    })
+    if cache_key in _REVIEW_PROTOCOL_CACHE:
+        return _REVIEW_PROTOCOL_CACHE[cache_key]
+    try:
+        hugo_version = subprocess.run(
+            [hugo_path or 'hugo', 'version'], capture_output=True, text=True, timeout=10,
+            env=build_child_process_env(),
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        hugo_version = 'unavailable'
+    fingerprint = _stable_json_sha256({
+        'contractVersion': 2,
+        'dependencies': dependencies,
+        'primaryModel': os.environ.get('PAPER_ANALYZER_MODEL', ''),
+        'primaryEndpoint': os.environ.get('PAPER_ANALYZER_ENDPOINT', ''),
+        'secondaryModel': os.environ.get('PAPER_ANALYZER_SECONDARY_MODEL', ''),
+        'secondaryEndpoint': os.environ.get('PAPER_ANALYZER_SECONDARY_ENDPOINT', ''),
+        'textTemperature': 0.1,
+        'imageTemperature': 0.1,
+        'hugoVersion': hugo_version,
+    })
+    _REVIEW_PROTOCOL_CACHE.clear()
+    _REVIEW_PROTOCOL_CACHE[cache_key] = fingerprint
+    return fingerprint
 
 
 def _load_json_object(path, label):
@@ -2407,22 +2900,40 @@ def prepare_generation_journal(
     return journal, journal_path, stage
 
 
-def prepare_generation_installation(journal, journal_path, staged_posts, content_dir, date_str):
+def prepare_generation_installation(
+    journal, journal_path, staged_posts, content_dir, date_str, staged_assets=None,
+):
     """Snapshot the exact pre-install state before any target path is changed."""
     if journal.get('installation') is not None:
         return journal['installation']['files']
-    publish_paths = planned_publish_paths(staged_posts, content_dir, date_str)
+    # Review/receipt 必须覆盖本批所有生成页和受控删除，而不只是当前有字节差异的页面。
+    # 真正的 commit delta 在 push 阶段再相对 baseHead 精确推导。
+    publish_paths = publish_manifest_paths(
+        staged_posts, content_dir, date_str, staged_assets=staged_assets,
+    )
     validate_manifest_clean_against_head(publish_paths)
-    staged_names = {path.name for path in Path(staged_posts).glob('*.md')}
+    stage_root = Path(staged_posts).resolve().parent
+    staged_by_target = {}
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    for source in Path(staged_posts).glob('*.md'):
+        source = source.resolve()
+        relative = source.relative_to(stage_root)
+        staged_by_target[(repo / 'content' / 'posts' / source.name).resolve()] = relative.as_posix()
+    for source in [Path(item) for item in (staged_assets or [])]:
+        source = source.resolve()
+        relative = source.relative_to(stage_root)
+        staged_by_target[(repo / relative).resolve()] = relative.as_posix()
     records = []
     for target in publish_paths:
         target = Path(target).resolve()
-        source = Path(staged_posts) / target.name
-        deleting = target.name not in staged_names
+        staged_relative = staged_by_target.get(target)
+        source = stage_root / staged_relative if staged_relative else None
+        deleting = staged_relative is None
         records.append({
             'path': target.relative_to(Path(BLOG_REPO).expanduser().resolve()).as_posix(),
             'delete': deleting,
             'expectedSha256': None if deleting else _sha256_file(source),
+            'stagedRelativePath': None if deleting else staged_relative,
             'before': _file_fingerprint(target),
             'installed': False,
         })
@@ -2464,10 +2975,18 @@ def resume_generation_installation(journal, journal_path, staged_posts):
         if record.get('delete'):
             target.unlink(missing_ok=True)
         else:
-            source = Path(staged_posts) / target.name
+            staged_relative = record.get('stagedRelativePath')
+            if not isinstance(staged_relative, str) or not staged_relative:
+                raise PublishDataValidationError(f'generation staging 路径缺失: {target.name}')
+            stage_root = Path(staged_posts).resolve().parent
+            source = (stage_root / staged_relative).resolve()
+            try:
+                source.relative_to(stage_root)
+            except ValueError as exc:
+                raise PublishDataValidationError(f'generation staging 路径逃逸: {staged_relative}') from exc
             if not source.is_file() or _sha256_file(source) != record.get('expectedSha256'):
                 raise PublishDataValidationError(f'generation staging 页面缺失或损坏: {target.name}')
-            atomic_write_text(target, source.read_text(encoding='utf-8'))
+            _atomic_write_bytes(target, source.read_bytes())
         record['installed'] = True
         _save_generation_journal(journal_path, journal)
         installed_paths.append(target)
@@ -2480,38 +2999,89 @@ def _manifest_record(path, repo):
         relative = path.relative_to(repo)
     except ValueError as exc:
         raise PublishDataValidationError(f'博客清单路径逃逸仓库: {path}') from exc
-    if relative.parts[:2] != ('content', 'posts'):
-        raise PublishDataValidationError(f'博客清单只允许 content/posts 路径: {relative}')
+    is_post = relative.parts[:2] == ('content', 'posts') and len(relative.parts) == 3
+    is_visual_asset = (
+        relative.parts[:3] == ('static', 'images', 'visual-summaries')
+        and len(relative.parts) >= 6
+        and re.fullmatch(r'\d{4}-\d{2}-\d{2}', relative.parts[3] or '')
+        and relative.suffix.lower() == '.png'
+        and relative.stem in VISUAL_SUMMARY_KINDS
+    )
+    is_digest_cover = (
+        relative.parts[:3] == ('static', 'images', 'digest-covers')
+        and len(relative.parts) == 5
+        and re.fullmatch(r'\d{4}-\d{2}-\d{2}', relative.parts[3] or '')
+        and relative.name == 'cover.png'
+    )
+    if not (is_post or is_visual_asset or is_digest_cover):
+        raise PublishDataValidationError(f'博客清单包含非受控路径: {relative}')
     return path, relative.as_posix()
+
+
+def is_visual_summary_asset_path(path, date_str=None):
+    """Return whether a path is a controlled visual-summary asset for this batch."""
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    try:
+        _target, relative = _manifest_record(path, repo)
+    except PublishDataValidationError:
+        return False
+    parts = Path(relative).parts
+    if parts[:3] not in (('static', 'images', 'visual-summaries'), ('static', 'images', 'digest-covers')):
+        return False
+    return date_str is None or parts[3] == validate_publish_date(date_str)
+
+
+def _validate_manifest_path_date(target, repo, date_str):
+    _target, relative = _manifest_record(target, repo)
+    if relative.startswith('static/images/visual-summaries/'):
+        asset_date = Path(relative).parts[3]
+        if asset_date != validate_publish_date(date_str):
+            raise PublishDataValidationError(
+                f'视觉摘要资产批次日期不匹配: {relative}'
+            )
+    if relative.startswith('static/images/digest-covers/'):
+        asset_date = Path(relative).parts[3]
+        if asset_date != validate_publish_date(date_str):
+            raise PublishDataValidationError(f'汇总页封面批次日期不匹配: {relative}')
+    return relative
 
 
 def save_generation_manifest(
     date_str, publish_paths, *, input_fingerprint=None,
-    template_fingerprint=None, base_head=None,
+    template_fingerprint=None, base_head=None, category='论文速递',
+    published_papers=None,
 ):
     """Save the exact generated/removed path list for the separate review step."""
     repo = Path(BLOG_REPO).expanduser().resolve()
     records = []
     for item in sorted({Path(value).expanduser().resolve() for value in publish_paths}):
-        path, relative = _manifest_record(item, repo)
+        path = Path(item).expanduser().resolve()
+        relative = _validate_manifest_path_date(path, repo, date_str)
         records.append({
             'path': relative,
             'deleted': not path.is_file(),
             'sha256': _sha256_file(path) if path.is_file() else None,
         })
     manifest = {
-        'schemaVersion': 2 if input_fingerprint else 1,
+        'schemaVersion': 3 if input_fingerprint else 1,
         'date': validate_publish_date(date_str),
         'generatedAt': datetime.datetime.now(
             datetime.timezone(datetime.timedelta(hours=8))
         ).isoformat(),
         'files': records,
+        'category': str(category or '论文速递'),
+        # 视觉摘要属于远端发布成功后的独立阶段，不进入本次博客清单。
+        'visualSummaryRequired': False,
+        'digestCoverRequired': False,
     }
     if input_fingerprint:
+        if not isinstance(published_papers, list) or not published_papers:
+            raise PublishDataValidationError('正式 generation manifest 缺少已发布论文权威快照')
         manifest.update({
             'inputFingerprint': input_fingerprint,
             'templateFingerprint': template_fingerprint,
             'baseHead': str(base_head or '').lower(),
+            'publishedPapers': published_papers,
         })
     path = generation_manifest_path(date_str)
     atomic_write_json(path, manifest, ensure_ascii=False, indent=2)
@@ -2521,6 +3091,93 @@ def save_generation_manifest(
     review_receipt_path(date_str).unlink(missing_ok=True)
     review_failure_path(date_str).unlink(missing_ok=True)
     return path
+
+
+def plan_post_publish_visual_assets(date_str):
+    """After remote publication succeeds, create TOP 10 infographic and digest-image tasks."""
+    date_str = validate_publish_date(date_str)
+    manifest = _load_json_object(generation_manifest_path(date_str), '生成清单')
+    category = str(manifest.get('category') or '论文速递')
+    command = [
+        'node', str(PROJECT_ROOT / 'scripts' / 'visual-summary-integration.js'),
+        '--date', date_str,
+        '--category', category,
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=PROJECT_ROOT,
+            text=True,
+            env=build_child_process_env(),
+        )
+    except OSError as exc:
+        print(f'⚠️ 全部博客已经发布，但无法启动发布后视觉规划器: {exc}')
+        print(f'   可重试: npm run visual:post-publish -- --date {date_str}')
+        return False
+    if completed.returncode != 0:
+        print('⚠️ 全部博客已经发布，但发布后视觉任务建立失败；图片不回滚博客发布')
+        print(f'   可重试: npm run visual:post-publish -- --date {date_str}')
+        return False
+    return True
+
+
+def validate_generation_visual_contract(manifest, date_str, repo=None):
+    """Ensure post-publication visuals cannot leak into the blog publication commit."""
+    if manifest.get('visualSummaryRequired') is not False:
+        raise PublishDataValidationError('生成清单仍使用旧版发布前视觉摘要契约，请重新运行 generate-blog.py')
+    if manifest.get('digestCoverRequired') is not False:
+        raise PublishDataValidationError('生成清单仍使用旧版发布前汇总封面契约，请重新运行 generate-blog.py')
+    repo = Path(repo or BLOG_REPO).expanduser().resolve()
+    paper_ids = set()
+    for record in manifest.get('files') or []:
+        if not isinstance(record, dict) or record.get('deleted') is True:
+            continue
+        relative = Path(str(record.get('path') or ''))
+        parts = relative.parts
+        if parts[:3] in (('static', 'images', 'visual-summaries'), ('static', 'images', 'digest-covers')):
+            raise PublishDataValidationError(f'发布后视觉资产不得进入博客 generation manifest: {relative}')
+        if parts[:2] == ('content', 'posts') and relative.suffix == '.md':
+            target = (repo / relative).resolve()
+            if not target.is_file():
+                continue
+            content = target.read_text(encoding='utf-8')
+            controlled_prefixes = (
+                f'{BASE_PATH.rstrip("/")}/images/visual-summaries/{date_str}/',
+                f'{BASE_PATH.rstrip("/")}/images/digest-covers/{date_str}/',
+            )
+            if any(image['url'].startswith(controlled_prefixes) for image in parse_markdown_images(content)):
+                raise PublishDataValidationError(f'博客页面提前引用发布后视觉资产: {relative}')
+            if re.search(r'^paper_digest_page_type:\s*index\s*$', content, re.MULTILINE):
+                continue
+            if not re.search(r'^paper_digest_page_type:\s*paper\s*$', content, re.MULTILINE):
+                continue
+            match = re.search(r'^paper_digest_arxiv_id:\s*"?([^"\s]+)"?\s*$', content, re.MULTILINE)
+            if not match:
+                raise PublishDataValidationError(f'论文页缺少 arXiv ID: {relative}')
+            paper_id = normalize_publish_arxiv_id(match.group(1))
+            paper_ids.add(paper_id)
+    if not paper_ids:
+        raise PublishDataValidationError('生成清单中没有可绑定视觉摘要的论文页')
+    if manifest.get('schemaVersion') == 3:
+        published_papers = manifest.get('publishedPapers')
+        if (
+            not re.fullmatch(r'[0-9a-f]{64}', str(manifest.get('inputFingerprint') or ''))
+            or not isinstance(manifest.get('category'), str)
+            or not manifest['category'].strip()
+            or not isinstance(published_papers, list)
+            or not published_papers
+        ):
+            raise PublishDataValidationError('正式生成清单缺少输入指纹、category 或已发布论文权威快照')
+        snapshot_ids = []
+        for paper in published_papers:
+            if not isinstance(paper, dict):
+                raise PublishDataValidationError('已发布论文权威快照包含非法记录')
+            snapshot_ids.append(normalize_publish_arxiv_id(paper.get('arxivId')))
+        if len(snapshot_ids) != len(set(snapshot_ids)):
+            raise PublishDataValidationError('已发布论文权威快照包含重复 arXiv ID')
+        if set(snapshot_ids) != paper_ids:
+            raise PublishDataValidationError('已发布论文权威快照与实际生成论文页集合不一致')
+    return True
 
 
 def load_generation_manifest(date_str):
@@ -2534,7 +3191,7 @@ def load_generation_manifest(date_str):
         manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PublishDataValidationError(f'生成清单无法解析: {manifest_path}') from exc
-    if manifest.get('schemaVersion') not in {1, 2} or manifest.get('date') != date_str:
+    if manifest.get('schemaVersion') not in {1, 2, 3} or manifest.get('date') != date_str:
         raise PublishDataValidationError('生成清单版本或日期不匹配')
     records = manifest.get('files')
     if not isinstance(records, list) or not records:
@@ -2549,7 +3206,7 @@ def load_generation_manifest(date_str):
             or not isinstance(record.get('deleted'), bool)
         ):
             raise PublishDataValidationError('生成清单文件记录格式非法')
-        if manifest.get('schemaVersion') == 2:
+        if manifest.get('schemaVersion') in {2, 3}:
             expected_sha = record.get('sha256')
             if record['deleted']:
                 if expected_sha is not None:
@@ -2560,7 +3217,7 @@ def load_generation_manifest(date_str):
         if relative.is_absolute():
             raise PublishDataValidationError(f'生成清单包含绝对路径: {relative}')
         target = (repo / relative).resolve()
-        _target, normalized = _manifest_record(target, repo)
+        normalized = _validate_manifest_path_date(target, repo, date_str)
         if normalized in seen:
             raise PublishDataValidationError(f'生成清单包含重复路径: {normalized}')
         seen.add(normalized)
@@ -2570,13 +3227,14 @@ def load_generation_manifest(date_str):
         elif not target.is_file():
             raise PublishDataValidationError(f'生成文件缺失: {normalized}')
         paths.append(target)
+    validate_generation_visual_contract(manifest, date_str, repo)
     return paths, manifest_path
 
 
 def generation_manifest_expectations(manifest_path, date_str):
     """Return strict path -> expected deletion state from the generation manifest."""
     manifest = _load_json_object(manifest_path, '生成清单')
-    if manifest.get('schemaVersion') not in {1, 2} or manifest.get('date') != date_str:
+    if manifest.get('schemaVersion') not in {1, 2, 3} or manifest.get('date') != date_str:
         raise PublishDataValidationError('生成清单版本或日期不匹配')
     records = manifest.get('files')
     if not isinstance(records, list) or not records:
@@ -2591,11 +3249,82 @@ def generation_manifest_expectations(manifest_path, date_str):
         ):
             raise PublishDataValidationError('生成清单文件记录格式非法')
         target = (repo / record['path']).resolve()
-        _target, relative = _manifest_record(target, repo)
+        relative = _validate_manifest_path_date(target, repo, date_str)
         if relative in expectations:
             raise PublishDataValidationError(f'生成清单包含重复路径: {relative}')
         expectations[relative] = record['deleted']
     return expectations
+
+
+def attest_visual_summary_assets(date_str, publish_paths, manifest_path, file_results):
+    """Legacy attestation helper; review-blog no longer admits post-publication assets."""
+    manifest = _load_json_object(manifest_path, '生成清单')
+    records = manifest.get('files')
+    if not isinstance(records, list):
+        raise PublishDataValidationError('生成清单中没有文件记录')
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    manifest_by_path = {
+        record.get('path'): record for record in records if isinstance(record, dict)
+    }
+    pages = [
+        Path(path).resolve() for path in publish_paths
+        if Path(path).is_file() and not is_visual_summary_asset_path(path)
+    ]
+    page_urls = {}
+    for page in pages:
+        content = page.read_text(encoding='utf-8')
+        page_urls[page] = {item['url'] for item in parse_markdown_images(content)}
+
+    blocking = 0
+    for item in publish_paths:
+        asset = Path(item).resolve()
+        if not is_visual_summary_asset_path(asset, date_str):
+            continue
+        relative = asset.relative_to(repo).as_posix()
+        record = manifest_by_path.get(relative)
+        if isinstance(record, dict) and record.get('deleted') is True and not asset.exists():
+            continue
+        result = {
+            'passed': False, 'completed': True, 'failureKind': 'content',
+            'blockingCount': 1, 'reviewedSha256': None,
+        }
+        expected_sha = record.get('sha256') if isinstance(record, dict) else None
+        if (
+            not isinstance(record, dict)
+            or record.get('deleted') is not False
+            or not re.fullmatch(r'[0-9a-f]{64}', str(expected_sha or ''))
+            or not asset.is_file()
+            or _sha256_file(asset) != expected_sha
+        ):
+            blocking += 1
+            file_results[str(asset)] = result
+            continue
+        public_relative = relative[len('static/'):]
+        expected_url = f'{BASE_PATH.rstrip("/")}/{public_relative}'
+        references = [page for page, urls in page_urls.items() if expected_url in urls]
+        if not references:
+            blocking += 1
+            file_results[str(asset)] = result
+            continue
+        reviewed = False
+        for page in references:
+            page_result = file_results.get(str(page), {})
+            if (
+                page_result.get('passed') is True
+                and page_result.get('reviewedSha256') == _sha256_file(page)
+            ):
+                reviewed = True
+                break
+        if reviewed:
+            result.update({
+                'passed': True, 'failureKind': None, 'blockingCount': 0,
+                'reviewedSha256': expected_sha,
+            })
+        else:
+            # The referencing page already accounts for the blocking failure.
+            result.update({'failureKind': 'transient'})
+        file_results[str(asset)] = result
+    return blocking
 
 
 def validate_reviewed_file_hashes(date_str, publish_paths, manifest_path, file_results):
@@ -2636,7 +3365,7 @@ def reusable_generation_manifest(
     try:
         manifest = _load_json_object(path, '生成清单')
         if (
-            manifest.get('schemaVersion') != 2
+            manifest.get('schemaVersion') != 3
             or manifest.get('date') != date_str
             or manifest.get('inputFingerprint') != input_fingerprint
             or manifest.get('templateFingerprint') != template_fingerprint
@@ -2666,7 +3395,7 @@ def reusable_generation_manifest(
             elif not re.fullmatch(r'[0-9a-f]{64}', str(sha or '')):
                 return None
             target = (repo / relative).resolve()
-            _target, normalized = _manifest_record(target, repo)
+            normalized = _validate_manifest_path_date(target, repo, date_str)
             if normalized in seen:
                 return None
             seen.add(normalized)
@@ -2738,6 +3467,7 @@ def save_review_receipt(
         'strictReview': True,
         'hugoGate': hugo_gate,
         'baseHead': current_head,
+        'reviewProtocolFingerprint': review_protocol_fingerprint(),
         'generationManifestSha256': (
             _sha256_file(generation_manifest) if generation_manifest is not None else None
         ),
@@ -2786,6 +3516,7 @@ def save_review_failure_state(
         'date': validate_publish_date(date_str),
         'baseHead': str(base_head).lower(),
         'generationManifestSha256': _sha256_file(manifest_path),
+        'reviewProtocolFingerprint': review_protocol_fingerprint(),
         'savedAt': datetime.datetime.now(
             datetime.timezone(datetime.timedelta(hours=8))
         ).isoformat(),
@@ -2816,6 +3547,7 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
             or state.get('date') != date_str
             or state.get('baseHead') != str(base_head).lower()
             or state.get('generationManifestSha256') != _sha256_file(manifest_path)
+            or state.get('reviewProtocolFingerprint') != review_protocol_fingerprint()
         ):
             raise ValueError('审查基线或生成清单已变化')
         records = state.get('files')
@@ -2895,6 +3627,8 @@ def load_verified_review_receipt(date_str):
         raise PublishDataValidationError('审查凭证不是严格 review 结果')
     if receipt.get('hugoGate') != 'hugo':
         raise PublishDataValidationError('审查凭证未通过 Hugo staging gate')
+    if receipt.get('reviewProtocolFingerprint') != review_protocol_fingerprint():
+        raise PublishDataValidationError('审查代码、模型或 Hugo 协议指纹已变化，请重新 review')
     manifest_path = generation_manifest_path(date_str)
     expected_manifest_sha = receipt.get('generationManifestSha256')
     if (
@@ -2903,6 +3637,11 @@ def load_verified_review_receipt(date_str):
         or _sha256_file(manifest_path) != expected_manifest_sha
     ):
         raise PublishDataValidationError('审查凭证绑定的 generation manifest 缺失或已变化')
+    try:
+        generation_manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PublishDataValidationError('generation manifest 无法解析') from exc
+    validate_generation_visual_contract(generation_manifest, date_str)
     expectations = generation_manifest_expectations(manifest_path, date_str)
     records = receipt.get('files')
     if not isinstance(records, list) or not records:
@@ -2915,14 +3654,10 @@ def load_verified_review_receipt(date_str):
         if not isinstance(record, dict) or not isinstance(record.get('path'), str):
             raise PublishDataValidationError('审查凭证文件记录格式非法')
         relative = Path(record['path'])
-        if relative.is_absolute() or relative.parts[:2] != ('content', 'posts'):
+        if relative.is_absolute():
             raise PublishDataValidationError(f'审查凭证包含非法路径: {relative}')
         target = (repo / relative).resolve()
-        try:
-            target.relative_to(repo / 'content' / 'posts')
-        except ValueError as exc:
-            raise PublishDataValidationError(f'审查凭证路径逃逸 content/posts: {relative}') from exc
-        key = relative.as_posix()
+        key = _validate_manifest_path_date(target, repo, date_str)
         if key in seen:
             raise PublishDataValidationError(f'审查凭证包含重复路径: {key}')
         seen.add(key)
@@ -2981,19 +3716,12 @@ def generate_main():
     papers = load_papers(data_file)
     print(f"📅 博客日期: {today}")
 
-    # 只发布 fetchedAt 日期等于目标日期的论文（按抓取日期而非 arXiv 发布日期）
+    # 优先使用抓取器写入的不可变 fetchBatchDate，旧数据才回退严格北京 fetchedAt。
     if not publish_all:
-        filtered_papers = []
-        for p in papers:
-            fa = p.get('fetchedAt', '')
-            if fa and isinstance(fa, str):
-                fa_date = fa[:10]
-                if fa_date == today:
-                    filtered_papers.append(p)
-        papers = filtered_papers
+        papers = [p for p in papers if paper_batch_date(p) == today]
     else:
         print("📦 --all: 跳过 fetchedAt 日期过滤，发布输入文件中的全部论文")
-    filter_note = '全部论文' if publish_all else f'fetchedAt={today}'
+    filter_note = '全部论文' if publish_all else f'fetchBatchDate={today}'
     print(f"📄 过滤后: {len(papers)} 篇论文 ({filter_note})")
 
     if not papers:
@@ -3008,9 +3736,7 @@ def generate_main():
     scored, unscored = score_and_sort(papers)
     print(f"✅ 发布数据预检通过: {len(papers)} 篇论文以 analysis 重解析结果为发布基线")
 
-    input_fingerprint = generation_input_fingerprint(
-        papers, today, category, publish_all,
-    )
+    input_fingerprint = generation_input_fingerprint(papers, today, category, publish_all)
     template_fingerprint = generation_template_fingerprint()
     base_head = validate_git_publish_branch()
     reusable = reusable_generation_manifest(
@@ -3029,6 +3755,9 @@ def generate_main():
             today, papers, category, publish_all, input_fingerprint,
             template_fingerprint, base_head,
         )
+        # 论文长图和批次汇总图严格属于远端发布验证后的独立阶段，
+        # 博客 generation 事务只安装 Markdown 页面。
+        staged_assets = []
         paper_slugs = {}
         for paper, record in zip(papers, journal['papers']):
             slug = record['filename'][len(today) + 1:-3]
@@ -3069,6 +3798,7 @@ def generate_main():
         validate_staged_posts(staged_posts, today)
         prepare_generation_installation(
             journal, journal_path, staged_posts, content_dir, today,
+            staged_assets=staged_assets,
         )
         publish_paths = resume_generation_installation(
             journal, journal_path, staged_posts,
@@ -3087,6 +3817,8 @@ def generate_main():
         input_fingerprint=input_fingerprint,
         template_fingerprint=template_fingerprint,
         base_head=base_head,
+        category=category,
+        published_papers=papers,
     )
     generation_journal_path(today).unlink(missing_ok=True)
     shutil.rmtree(generation_stage_path(today).parent, ignore_errors=True)

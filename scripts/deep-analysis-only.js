@@ -58,7 +58,15 @@ async function runDeepAnalysis() {
     const today = getBeijingDateString();
     const filteredData = validateCompleteFilteredForToday(readJsonFileStrict(filteredPath), today);
 
-    const resultPath = fs.existsSync(currentPath) || !fs.existsSync(legacyPath) ? currentPath : legacyPath;
+    const resultPath = currentPath;
+
+    if (!fs.existsSync(currentPath) && fs.existsSync(legacyPath)) {
+        const legacyData = validateDeepAnalysisInput(readJsonFileStrict(legacyPath), filteredData, today);
+        updateJsonFileLocked(currentPath, () => Array.isArray(legacyData)
+            ? { timestamp: getBeijingISOString(), source: legacyPath, papers: legacyData }
+            : legacyData);
+        console.log(`📦 已将 legacy 分析结果迁移到权威路径: ${currentPath}`);
+    }
 
     let existingData = null;
     if (fs.existsSync(resultPath)) {
@@ -81,6 +89,7 @@ async function runDeepAnalysis() {
 
     const notAnalyzed = papers.filter(p => !isSuccessfulAnalysisRecord(p));
     if (notAnalyzed.length === 0) {
+        updateAnalysisDigestStatuses(papers, { batchDate: today });
         updateJsonFileLocked(resultPath, current => ({
             ...(!Array.isArray(current) && current ? current : {}),
             papers: Array.isArray(current) ? current : (current?.papers || []),
@@ -103,6 +112,7 @@ async function runDeepAnalysis() {
     });
 
     const { stats } = await analyzeBatch(notAnalyzed, {
+        checkpointFilePath: resultPath,
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,

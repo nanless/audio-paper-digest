@@ -24,11 +24,16 @@ const Config = require('./config.js');
 loadEnvFile();
 
 const LEGACY_RESULT_FILE = Config.FILES.deepAnalysisResultLegacy;
-const RESULT_FILE = fs.existsSync(Config.FILES.deepAnalysisResult) || !fs.existsSync(LEGACY_RESULT_FILE)
-    ? Config.FILES.deepAnalysisResult
-    : LEGACY_RESULT_FILE;
+const RESULT_FILE = Config.FILES.deepAnalysisResult;
 
 async function main() {
+    if (!fs.existsSync(RESULT_FILE) && fs.existsSync(LEGACY_RESULT_FILE)) {
+        const legacyData = readJsonFileStrict(LEGACY_RESULT_FILE);
+        updateJsonFileLocked(RESULT_FILE, () => Array.isArray(legacyData)
+            ? { timestamp: getBeijingISOString(), source: LEGACY_RESULT_FILE, papers: legacyData }
+            : legacyData);
+        console.log(`📦 已将 legacy 分析结果迁移到权威路径: ${RESULT_FILE}`);
+    }
     console.log('=== 批量论文分析 ===');
     console.log(`数据文件: ${RESULT_FILE}`);
 
@@ -41,6 +46,9 @@ async function main() {
     console.log(`未分析论文: ${notAnalyzed.length}`);
 
     if (notAnalyzed.length === 0) {
+        updateAnalysisDigestStatuses(papers, {
+            batchDate: String(data.batchDate || data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10)
+        });
         updateJsonFileLocked(RESULT_FILE, current => ({
             ...(!Array.isArray(current) && current ? current : {}),
             papers: Array.isArray(current) ? current : (current?.papers || []),
@@ -63,6 +71,7 @@ async function main() {
     });
 
     const { stats } = await analyzeBatch(notAnalyzed, {
+        checkpointFilePath: RESULT_FILE,
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,

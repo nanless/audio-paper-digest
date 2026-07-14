@@ -853,6 +853,35 @@ has_dataset: 否
         ), true);
     });
 
+    it('已有全文 checkpoint 时临时抓取失败不会降级清空', () => {
+        const { shouldRetainFullTextCheckpoint } = require('../scripts/deep-analyzer.js');
+        assert.strictEqual(shouldRetainFullTextCheckpoint(
+            { analysisCheckpoint: 'full-text body' },
+            { fullTextAvailable: true, usedTextSha256: 'full' },
+            false,
+            new Error('temporary 503')
+        ), true);
+        assert.strictEqual(shouldRetainFullTextCheckpoint(
+            { analysisCheckpoint: 'abstract body' },
+            { fullTextAvailable: false },
+            false,
+            new Error('temporary 503')
+        ), false);
+    });
+
+    it('首次评分审计以审计输入正文计算前后分差', () => {
+        const { calculateScoringDelta } = require('../scripts/deep-analyzer.js');
+        const input = validAnalysisText();
+        const result = calculateScoringDelta(undefined, input, '7.8');
+        assert.strictEqual(result.previousScore, 6.9);
+        assert.strictEqual(result.finalScore, 7.8);
+        assert.strictEqual(result.scoreDelta, 0.9);
+        const rerun = calculateScoringDelta('5.0', input, '7.8');
+        assert.strictEqual(rerun.previousRunScore, 5.0);
+        assert.strictEqual(rerun.previousScore, 6.9);
+        assert.strictEqual(rerun.scoreDelta, 0.9);
+    });
+
     it('插图指纹绑定候选、下载内容和评分后正文且只影响插图阶段', () => {
         const {
             buildImageSupplementFingerprint,

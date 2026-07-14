@@ -63,6 +63,7 @@ body
                 get_today_bj=lambda value=None: value or '2026-07-10',
                 validate_publish_date=lambda value: value,
                 blog_publication_lock=lambda _date: contextlib.nullcontext(),
+                is_visual_summary_asset_path=lambda _path, _date: False,
                 load_generation_manifest=lambda _date: ([index, paper], Path('manifest.json')),
                 validate_git_publish_branch=mock.Mock(return_value='a' * 40),
                 review_receipt_path=mock.Mock(return_value=receipt_path),
@@ -106,6 +107,7 @@ body
             validate_git_publish_branch=mock.Mock(),
             validate_git_index=mock.Mock(),
             git_push=mock.Mock(return_value=True),
+            plan_post_publish_visual_assets=mock.Mock(return_value=True),
             review_all_posts=mock.Mock(side_effect=AssertionError('push must not review')),
             load_papers=mock.Mock(side_effect=AssertionError('push must not load papers')),
         )
@@ -116,8 +118,31 @@ body
             push_blog.main()
         module.load_verified_review_receipt.assert_called_once_with('2026-07-10')
         module.git_push.assert_called_once_with('2026-07-10', [path])
+        module.plan_post_publish_visual_assets.assert_called_once_with('2026-07-10')
         module.review_all_posts.assert_not_called()
         module.load_papers.assert_not_called()
+
+    def test_visual_planning_failure_does_not_turn_verified_blog_push_into_failure(self):
+        path = Path('/tmp/content/posts/2026-07-10.md')
+        module = SimpleNamespace(
+            PublishDataValidationError=ValueError,
+            validate_publish_target=mock.Mock(),
+            get_today_bj=lambda value=None: value or '2026-07-10',
+            validate_publish_date=lambda value: value,
+            blog_publication_lock=lambda _date: contextlib.nullcontext(),
+            load_verified_review_receipt=mock.Mock(return_value=([path], Path('receipt.json'))),
+            validate_git_publish_branch=mock.Mock(),
+            validate_git_index=mock.Mock(),
+            git_push=mock.Mock(return_value=True),
+            plan_post_publish_visual_assets=mock.Mock(return_value=False),
+        )
+        output = io.StringIO()
+        with mock.patch.object(push_blog, 'require_external_runtime'), \
+                mock.patch.object(push_blog, 'load_publish_to_blog', return_value=module), \
+                mock.patch.object(sys, 'argv', ['push-blog.py', '--date', '2026-07-10']), \
+                contextlib.redirect_stdout(output):
+            push_blog.main()
+        self.assertIn('全部博客推送完成；发布后视觉任务尚待重试', output.getvalue())
 
 
 if __name__ == '__main__':

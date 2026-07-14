@@ -325,21 +325,108 @@ Core analysis results. Structure:
 - `npm run validate:data` checks document type, rubric version, all dimension ranges, and `parsed.score == min(sum of eight dimensions, 10)`
 - Before publishing, `analysis` is reparsed and compared with cached `parsed` data and the top-level rubric version. Mismatches block publishing; manual overrides require explicit type, source, reason, and allowed fields in `parsedOverride` and still must satisfy one-decimal values and fixed Open Source anchors
 
-### 5.7 `data/current/analyzed.json`
+### 5.7 `data/current/visual-summary-manifests/YYYY-MM-DD.json`
+
+This manifest is created only after every blog page is remotely verified as published. Its paper set is the final-score TOP 10 with normalized-arXiv-ID tie breaking, and it is not a blog-publication input. Legacy v1/v2 manifests migrate to the v3 TOP 10 contract.
+
+```json
+{
+  "version": 3,
+  "batchDate": "2026-07-13",
+  "selection": {"type": "top_score", "limit": 10, "sourcePaperCount": 14},
+  "promptSha256": "<64 lowercase hex characters>",
+  "updatedAt": "2026-07-13T18:00:00.000+08:00",
+  "papers": {
+    "2607.12345": {
+      "arxivId": "2607.12345v1",
+      "normalizedArxivId": "2607.12345",
+      "title": "Paper title",
+      "batchDate": "2026-07-13",
+      "rank": 1,
+      "score": 9.1,
+      "analysisSha256": "<64 lowercase hex characters>",
+      "promptSha256": "<64 lowercase hex characters>",
+      "generationContext": {
+        "title": "Paper title",
+        "documentType": "方法研究",
+        "primaryTask": "语音识别",
+        "primaryMethod": "自监督学习",
+        "summary": "...",
+        "method": "...",
+        "experiments": "...",
+        "limitations": "..."
+      },
+      "cards": {
+        "infographic": {
+          "status": "complete",
+          "label": "Paper infographic",
+          "taskToken": "<64 lowercase hex characters>",
+          "assetPath": "data/current/visual-summaries/2026-07-13/2607.12345/infographic.png",
+          "assetSha256": "<64 lowercase hex characters>",
+          "analysisSha256": "<64 lowercase hex characters>",
+          "promptSha256": "<64 lowercase hex characters>",
+          "completedAt": "2026-07-13T18:00:00.000+08:00"
+        }
+      }
+    }
+  }
+}
+```
+
+- `papers` must exactly match the target batch's final-score TOP 10, or all successful papers when fewer than ten exist.
+- Each `cards` object must contain exactly `infographic`; it completes only after the asset passes validation.
+- A completed infographic binds the current analysis SHA, `prompts/visual-summary.md` SHA, task token, and PNG asset SHA. Analysis, prompt, or asset changes invalidate only that paper's infographic.
+- Pending/failed or damaged assets affect only the post-publication visual stage and never roll back the completed blog publication.
+- PNGs are at most 8 MiB, at least 768×1024, and have a height/width ratio of at least 1.25. The complete English title is at the top and explanations are in Chinese. Codex built-in image generation creates the PNGs; project scripts never call an image API.
+
+### 5.8 `data/current/digest-cover-manifests/YYYY-MM-DD.json`
+
+After all blogs publish, every batch produces one digest image. Its context is deterministically derived only from contract-valid papers in the target batch whose latest attempt did not fail.
+
+```json
+{
+  "version": 1,
+  "batchDate": "2026-07-13",
+  "dataSha256": "<64 lowercase hex characters>",
+  "promptSha256": "<64 lowercase hex characters>",
+  "generationContext": {
+    "title": "语音/音乐/音频论文速递 2026-07-13",
+    "batchDate": "2026-07-13",
+    "paperCount": 14,
+    "hotDirections": [{"tag": "#语音识别", "count": 4}],
+    "ranking": [{"rank": 1, "arxivId": "2607.12345", "title": "Paper title", "score": "9.1", "primaryTask": "#语音识别"}]
+  },
+  "cover": {
+    "status": "complete",
+    "label": "Digest cover",
+    "taskToken": "<64 lowercase hex characters>",
+    "assetPath": "data/current/digest-covers/2026-07-13/cover.png",
+    "assetSha256": "<64 lowercase hex characters>"
+  },
+  "overallStatus": "complete"
+}
+```
+
+- `dataSha256` binds title, paper count, hot directions, and ranking; `promptSha256` binds `prompts/digest-cover.md`. Either change invalidates only the cover.
+- Conference category is read automatically from the generation manifest. It changes the title and therefore `dataSha256`, preventing a digest-image/blog-title mismatch without a separate status argument.
+- The manifest keeps `arxivId` for stable sorting and fingerprinting, but the prompt forbids rendering paper IDs. Ranking entries display the complete English title, score, and primary direction.
+- The digest image uses the same PNG dimension, ratio, size, and SHA gates as paper infographics. Missing, failed, damaged, or stale images do not block or roll back blog publication.
+
+### 5.9 `data/current/analyzed.json`
 
 Legacy analyzed records (leftover from the `fetch-papers.js` direct-run workflow). Not directly used by the current main workflow, but kept for compatibility and included in daily archiving.
 
 ---
 
-### 5.8 Blog Journals, Manifests, and Review Receipts
+### 5.10 Blog Journals, Manifests, and Review Receipts
 
 - Generation staging/install journals record each page's input, prior SHA, and expected SHA. Crash recovery adopts only an exact match; the index and strict manifest are created after every paper completes.
-- `blog-generation-manifest-YYYY-MM-DD.json` contains a non-empty, unique, schema-valid exact file set, input/generation-dependency fingerprints, base HEAD, and per-file hashes.
+- `blog-generation-manifest-YYYY-MM-DD.json`: the formal schema-v3 manifest contains the exact non-empty, unique Markdown file set, input/dependency fingerprints, base HEAD, category, per-file hashes, and the validated `publishedPapers` snapshot actually rendered to the blog. `visualSummaryRequired` and `digestCoverRequired` must both be `false`; post-publication images never enter this manifest.
 - `blog-review-failure-YYYY-MM-DD.json` binds the SHA actually read by each worker. Content failures can be selectively re-reviewed, transient failures remain retryable, and missing expected pages or SHA changes across the Hugo gate block reuse.
-- `blog-review-receipt-YYYY-MM-DD.json`: written by `review-blog.py` only after strict LLM/image review and the Hugo gate pass; stores each reviewed file SHA-256 or deletion marker. `push-blog.py` only consumes this receipt and rejects any post-review file change.
+- `blog-review-receipt-YYYY-MM-DD.json`: review stores file hashes and binds the generation-manifest SHA-256, strict-review protocol fingerprint, and Hugo gate. After remote OID verification, push adds `publicationCommit`, matching `remoteVerifiedOid`, and Beijing-time `remoteVerifiedAt`. Visual planning reads the actual published set from generation `publishedPapers` and binds both the publication commit and generation SHA into every task token.
 
 All three blog stages share both per-date and repository-global locks. Push verifies staged index blobs/deletions against the receipt after staging and again before commit.
 
-### 5.9 `data/current/xiaohongshu-oneliners-YYYY-MM-DD.json`
+### 5.11 `data/current/xiaohongshu-oneliners-YYYY-MM-DD.json`
 
 Per-paper success cache used only to generate Xiaohongshu copy. Entries are saved under a per-date lock and bind analysis, prompt, model/endpoint configuration, and sanitation fingerprints. Corrupt caches are quarantined and rebuilt; fallbacks or changed inputs rerun only that paper. No automatic publication is involved.

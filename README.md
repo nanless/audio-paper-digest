@@ -6,7 +6,9 @@
 
 深度分析采用 `type-aware-v1` 类型感知评分：先将文档归类为方法研究、系统技术报告、模型报告、数据集与基准、综述、理论研究或应用研究，再按对应证据标准评审。八维权重、满分 11 和总分封顶 10 保持统一；分项与总分最多一位小数，开源分使用固定锚点。文档类型不提供固定加分，同一个缺陷只能在一个主要维度扣分；理论工作的完整证明材料可作为核心公开产物，不会因没有代码/模型/数据而被机械归零。
 
-需要图文视觉摘要时，Codex 可在每篇论文通过深度分析与评分审计后，直接调用内置图像生成能力，产出“研究概览、方法结构、实验与边界”三张本地 PNG 信息卡。它们基于已审计的正文，不伪造论文原图或实验数值；这不是项目脚本的 API 功能，不要求配置图像 API key。
+视觉摘要位于发布流程之后：先完成全部论文深度分析，再生成、review 并 push 全部博客（汇总页和所有论文页）。`push-blog.py` 验证远端 `main` OID 后自动建立可恢复视觉任务，只为最终评分 TOP 10 的论文各生成一张纵向 PNG 长图；同分按规范化 arXiv ID 稳定排序。长图顶部逐字显示英文论文标题，正文用简体中文串联研究问题、方法、实验、结论与局限。
+
+发布后还生成一张批次汇总图，标题、热门方向和 TOP 5 排行榜均从已发布批次对应的审计数据确定性计算。论文长图与汇总图独立绑定数据、prompt、任务 token 和资产 SHA；重跑只补失败、缺失、损坏或指纹失效项。它们不进入已经发布的博客清单，也不构成博客 generate/review/push 的前置门禁。
 
 ---
 
@@ -25,7 +27,8 @@
 | `prompts/filter.md` | 筛选阶段 LLM prompt | 维护者 |
 | `prompts/deep-analysis.md` | 深度分析主 prompt（Round 1，纯文本） | 维护者 |
 | `prompts/image-supplement.md` | 图像筛选与插图计划 prompt（双模型模式；默认最多 4 张并使用稳定段落 ID，只新增图前/图后说明） | 维护者 |
-| `prompts/visual-summary.md` | GPT Image 2 视觉摘要 prompt（可选；生成研究概览、方法结构、实验与边界卡片） | 维护者 |
+| `prompts/visual-summary.md` | 发布后 TOP 10 论文纵向长图 prompt | 维护者 |
+| `prompts/digest-cover.md` | 发布后汇总图 prompt（标题 + 热门方向 + TOP 5 排行榜） | 维护者 |
 | `prompts/opensource-scan.md` | 开源链接扫描 prompt（Round 2） | 维护者 |
 | `prompts/gap-fill.md` | 审校重写 prompt（Round 3） | 维护者 |
 | `prompts/structure-repair.md` | 缺失必要章节时的主模型局部结构修复 prompt | 维护者 |
@@ -77,13 +80,17 @@ npm install
 # 所有项目脚本必须在沙箱外运行；脚本入口会拒绝 Codex 沙箱
 ./run-full-fetch.sh
 
-# 4. 博客三阶段：生成、审查、推送
+# 4. 博客三阶段：生成、审查、推送全部博客
 # 必须在沙箱外运行；入口检测到 Codex 沙箱会拒绝执行
 python3 scripts/generate-blog.py --date 2026-05-08
 python3 scripts/review-blog.py --date 2026-05-08
 python3 scripts/push-blog.py --date 2026-05-08
 
-# 5. 生成小红书文案
+# 5. push 验证远端 OID 后已自动建立 TOP 10 长图和汇总图任务
+npm run visual:status -- --date 2026-05-08
+npm run cover:status -- --date 2026-05-08
+
+# 6. 生成小红书文案
 python3 scripts/publish-xiaohongshu.py
 ```
 
@@ -110,6 +117,11 @@ npm run batch
 
 # 只读校验当前 JSON 数据结构（含筛选决策缓存一致性）
 npm run validate:data
+
+# 全部博客发布后，幂等建立/续跑 TOP 10 论文长图与汇总图任务
+npm run visual:post-publish -- --date 2026-04-21
+npm run visual:status -- --date 2026-04-21
+npm run cover:status -- --date 2026-04-21
 
 # 运行单元测试
 npm test
@@ -163,6 +175,7 @@ node scripts/full-fetch.js
 # 模型或 filter prompt 改变时复用健康候选，只重新筛选
 
 # 仅深度分析续跑（跳过已有 analysis；无分析结果时可从 filtered-papers.json 初始化）
+# 每个分析阶段都在单篇锁内即时落盘，崩溃后只从首个未完成阶段续跑
 node scripts/deep-analysis-only.js
 
 # 全量重分析

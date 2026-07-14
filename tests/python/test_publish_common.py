@@ -360,6 +360,24 @@ confidence: 中
         with self.assertRaisesRegex(PublishDataValidationError, '最新一次深度分析失败'):
             validate_papers_for_publish([paper])
 
+    def test_publish_preflight_rejects_present_but_incomplete_analysis_manifest(self):
+        paper = complete_paper()
+        complete_statuses = {
+            'imageDownload': 'complete', 'primaryAnalysis': 'complete',
+            'openSourceScan': 'complete', 'demoLinkScan': 'not_needed',
+            'revision': 'complete', 'tableRepair': 'not_needed',
+            'methodRepair': 'not_needed', 'structureRepair': 'not_needed',
+            'scoringAudit': 'complete', 'imageSupplement': 'no_candidates',
+        }
+        paper['analysisManifest'] = {
+            'version': 1,
+            'stages': {name: {'status': status} for name, status in complete_statuses.items()},
+        }
+        self.assertEqual(len(validate_papers_for_publish([paper])), 1)
+        paper['analysisManifest']['stages']['scoringAudit']['status'] = 'transient_failure'
+        with self.assertRaisesRegex(PublishDataValidationError, 'scoringAudit'):
+            validate_papers_for_publish([paper])
+
     def test_required_review_payload_fails_closed_on_malformed_contract(self):
         for payload in (
             [],

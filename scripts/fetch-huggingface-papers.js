@@ -68,7 +68,7 @@ function makeSourceFetchError(message, sourceHealth) {
 /**
  * 将 daily_papers 格式转为标准格式
  */
-function convertDailyPaper(hfPaper) {
+function convertDailyPaper(hfPaper, options = {}) {
     if (!hfPaper || typeof hfPaper !== 'object') return null;
     const paper = (hfPaper.paper !== undefined && hfPaper.paper !== null) ? hfPaper.paper : hfPaper;
     if (!paper || typeof paper !== 'object') return null;
@@ -78,6 +78,9 @@ function convertDailyPaper(hfPaper) {
     const authors = (paper.authors || []).map(a => a.name).filter(Boolean);
 
     const publishedAt = normalizeToBeijingISOString(paper.publishedAt || hfPaper.publishedAt || '');
+    const selectedAt = normalizeToBeijingISOString(
+        hfPaper.publishedAt || hfPaper.date || hfPaper.createdAt || paper.publishedAt || ''
+    );
     if (!publishedAt) {
         console.warn(`  ⚠️  跳过 HuggingFace 论文 ${arxivId}: 缺少有效 publishedAt`);
         return null;
@@ -90,6 +93,7 @@ function convertDailyPaper(hfPaper) {
         summary: paper.summary || hfPaper.summary || '',
         abstract: paper.summary || hfPaper.summary || '',
         published: publishedAt,
+        hfSelectedAt: selectedAt || publishedAt,
         updatedDate: publishedAt.split('T')[0] || '',
         categories: [],
         primaryCategory: '',
@@ -107,7 +111,7 @@ function convertDailyPaper(hfPaper) {
         hf_github_stars: paper.githubStars || 0,
         hf_discussion_id: paper.discussionId || '',
         fetchedFrom: 'huggingface',
-        fetchedAt: getBeijingISOString(),
+        fetchedAt: options.fetchedAt || getBeijingISOString(),
         source: 'huggingface'
     };
 }
@@ -115,7 +119,7 @@ function convertDailyPaper(hfPaper) {
 /**
  * 将 papers API 格式转为标准格式
  */
-function convertPaper(paper) {
+function convertPaper(paper, options = {}) {
     const arxivId = paper.id;
     if (!arxivId) return null;
 
@@ -151,7 +155,7 @@ function convertPaper(paper) {
         hf_github_stars: 0,
         hf_discussion_id: '',
         fetchedFrom: 'huggingface',
-        fetchedAt: getBeijingISOString(),
+        fetchedAt: options.fetchedAt || getBeijingISOString(),
         source: 'huggingface'
     };
 }
@@ -164,7 +168,8 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         days = HUGGINGFACE_CONFIG.defaultDays,
         minUpvotes = HUGGINGFACE_CONFIG.defaultMinUpvotes,
         fetchFn = fetchWithCurl,
-        sleepFn = ms => new Promise(resolve => setTimeout(resolve, ms))
+        sleepFn = ms => new Promise(resolve => setTimeout(resolve, ms)),
+        fetchedAt = getBeijingISOString()
     } = options;
 
     if (fetchFn === fetchWithCurl && !detectProxyUrl()) {
@@ -234,12 +239,13 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         for (const item of data) {
             if (typeof item !== 'object' || !item) continue;
 
-            const paper = convertDailyPaper(item);
+            const paper = convertDailyPaper(item, { fetchedAt });
             if (!paper) continue;
             legalItems++;
 
             // 记录最老日期
-            const pubDate = paper.published.split('T')[0];
+            // daily_papers 的分页顺序按 HuggingFace 入选日期，而非 arXiv 原始发布日期。
+            const pubDate = (paper.hfSelectedAt || paper.published).split('T')[0];
             if (pubDate && (!oldestDate || pubDate < oldestDate)) {
                 oldestDate = pubDate;
             }
@@ -255,11 +261,11 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
             }
         }
 
-        if (data.length > 0 && legalItems === 0) {
-            health.failures.push({ name: `daily_papers:${page + 1}`, error: 'non-empty response contains no legal paper items' });
+        if (legalItems !== data.length) {
+            health.failures.push({ name: `daily_papers:${page + 1}`, error: `response contains invalid paper items (${legalItems}/${data.length})` });
             health.successfulRequests--;
             health.requests[health.requests.length - 1].ok = false;
-            console.log(`  页${page + 1}: 非空响应没有任何合法论文条目，停止`);
+            console.log(`  页${page + 1}: 响应包含非法论文条目，停止`);
             break;
         }
 
@@ -286,20 +292,49 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
 
     // ====== 2. 获取 papers API（补充最近1-2天的新论文）======
     console.log(`\n  📰 获取 papers API（最新论文补充）...`);
-    const papersResponse = fetchTracked('papers', `https://huggingface.co/api/papers?limit=${HUGGINGFACE_CONFIG.pageLimit}`);
-    const papersData = papersResponse.data;
-
-    if (papersResponse.ok && Array.isArray(papersData)) {
+    let papersPage = 0;
+    let papersComplete = false;
+    const seenPapersPageSignatures = new Set();
+    while (!papersComplete && papersPage < HUGGINGFACE_CONFIG.maxPages) {
+        const offset = papersPage * HUGGINGFACE_CONFIG.pageLimit;
+        const papersResponse = fetchTracked(`papers:${papersPage + 1}`, `https://huggingface.co/api/papers?limit=${HUGGINGFACE_CONFIG.pageLimit}&offset=${offset}`);
+        const papersData = papersResponse.data;
+        if (!papersResponse.ok || !Array.isArray(papersData)) {
+            if (papersResponse.ok) {
+                health.failures.push({ name: `papers:${papersPage + 1}`, error: 'response is not an array' });
+                health.successfulRequests--;
+                health.requests[health.requests.length - 1].ok = false;
+            }
+            break;
+        }
+        if (papersData.length === 0) {
+            papersComplete = true;
+            break;
+        }
+        const pageSignature = papersData
+            .map(item => String(item?.id || ''))
+            .join('\n');
+        if (seenPapersPageSignatures.has(pageSignature)) {
+            // HuggingFace /api/papers currently may ignore offset and repeat page 1.
+            // A byte-equivalent ordered ID page is an endpoint exhaustion signal;
+            // daily_papers remains the authoritative seven-day coverage source.
+            papersComplete = true;
+            console.log(`  papers API 页${papersPage + 1}: 与前页完全重复，判定分页已穷尽`);
+            break;
+        }
+        seenPapersPageSignatures.add(pageSignature);
         let newCount = 0;
         let legalItems = 0;
+        let oldestDate = null;
         for (const item of papersData) {
             if (typeof item !== 'object' || !item) continue;
 
-            const paper = convertPaper(item);
+            const paper = convertPaper(item, { fetchedAt });
             if (!paper) continue;
             legalItems++;
 
             const pubDate = paper.published.split('T')[0];
+            if (!oldestDate || pubDate < oldestDate) oldestDate = pubDate;
             if (pubDate && pubDate < cutoffStr) continue;
 
             const key = normalizedId(paper);
@@ -314,20 +349,20 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
                 }
             }
         }
-        if (papersData.length > 0 && legalItems === 0) {
-            health.failures.push({ name: 'papers', error: 'non-empty response contains no legal paper items' });
+        if (legalItems !== papersData.length) {
+            health.failures.push({ name: `papers:${papersPage + 1}`, error: `response contains invalid paper items (${legalItems}/${papersData.length})` });
             health.successfulRequests--;
             health.requests[health.requests.length - 1].ok = false;
+            break;
         }
-        console.log(`  papers API 新增: ${newCount} 篇`);
-    } else if (papersResponse.ok) {
-        health.failures.push({ name: 'papers', error: 'response is not an array' });
-        health.successfulRequests--;
-        health.requests[health.requests.length - 1].ok = false;
+        console.log(`  papers API 页${papersPage + 1}: ${papersData.length}篇，新增 ${newCount} 篇`);
+        if (papersData.length < HUGGINGFACE_CONFIG.pageLimit || (oldestDate && oldestDate < cutoffStr)) {
+            papersComplete = true;
+            break;
+        }
+        papersPage++;
+        await sleepFn(HUGGINGFACE_CONFIG.pageDelayMs);
     }
-
-    const papersComplete = papersResponse.ok && Array.isArray(papersData)
-        && !(papersData.length > 0 && health.failures.some(item => item.name === 'papers'));
     health.coverage = { dailyComplete, papersComplete, reachedCutoff };
     health.ok = dailyComplete && papersComplete && health.failures.length === 0;
     health.allFailed = health.attempts > 0 && health.successfulRequests === 0;

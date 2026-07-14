@@ -2,7 +2,7 @@
 
 ## 主流程详解
 
-主入口：`./run-full-fetch.sh`（或 `node scripts/full-fetch.js` / `npm run fetch`）
+核心数据流程入口：`./run-full-fetch.sh`（或 `node scripts/full-fetch.js` / `npm run fetch`）。深度分析只负责产出稳定评分；随后先发布全部博客页面，远端 OID 验证成功后才进入 TOP 10 论文长图和批次汇总图阶段。
 
 ### 3.1 自动归档
 
@@ -205,7 +205,9 @@ HF 特有字段（共 7 个）：
 | Round 7 | 类型感知评分审计 | `prompts/scoring-audit.md` | 主模型只输出 JSON；代码把校验错误反馈给下一次局部审计，并按资源状态确定性归一化无产物论文的开源分 |
 | Round 8 | 图像筛选与插图计划（仅双模型模式） | `prompts/image-supplement.md` | 副模型只输出 JSON 插图计划；合并后再次校验完整契约，不合格时只丢弃插图计划并保留主模型正文 |
 
-评分审计和上述插图阶段均通过后，如需要图文视觉摘要，Codex Agent 可读取 `prompts/visual-summary.md` 并直接使用内置 `image_gen` 生成研究概览、方法结构、实验与边界三张编辑性解释图。该步骤属于 Agent 工作流，不是 Node/Python 脚本或 API 阶段：不得要求图像 API key，不得把生成图当论文原始 Figure，也不得让提示词编造数值或结论。选中的项目资产必须从 Codex 默认生成目录复制到工作区后再被发布流程引用。
+评分审计全部通过后，先依次运行 `generate-blog.py`、`review-blog.py` 和 `push-blog.py`，发布汇总页及全部论文页。`push-blog.py` 只有在远端 `main` OID 与 `publicationCommit` 完全一致后才写入远端验证字段，并自动调用 `visual-summary-integration.js`。规划器按最终评分降序、同分规范化 arXiv ID 升序选取 TOP 10；Codex 读取 `prompts/visual-summary.md`，为每篇生成一张顶部英文标题、正文中文的纵向长图，并用 task token 登记。
+
+同一发布后阶段还会按博客 generation manifest 保存的 category 建立一张批次汇总图任务，内容为标题、热门方向和 TOP 5 排名。两类 manifest 分别保存发布提交、数据 SHA、prompt SHA、task token 与资产 SHA，中断后只补缺失、失败、损坏或失效项。图片不进入已经发布的博客清单，也不阻断博客流程；项目脚本不得调用图像 API，生成图不得冒充论文原始 Figure 或虚构事实，汇总图不得显示 arXiv ID。
 
 > **单模型 vs 双模型**：主模型始终负责正文和最终评分审计。评分审计默认使用独立低温 0.1。设置 `PAPER_ANALYZER_SECONDARY_MODEL` 后，副模型只从候选图片中筛选高价值图、丢弃低信息图并输出章节、稳定段落 ID、图前和图后说明；代码不会接受副模型替换主模型原文。未设置副模型时图片 URL 只保存在候选元数据中。
 

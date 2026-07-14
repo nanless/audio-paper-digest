@@ -124,6 +124,12 @@ const FILES = {
     filteredPapers: path.join(CURRENT_DIR, 'filtered-papers.json'),
     deepAnalysisResult: path.join(CURRENT_DIR, 'deep-analysis-result.json'),
     deepAnalysisResultLegacy: path.join(DATA_DIR, 'deep-analysis-result.json'),
+    visualSummaryManifestDir: path.join(CURRENT_DIR, 'visual-summary-manifests'),
+    visualSummaryAssetDir: path.join(CURRENT_DIR, 'visual-summaries'),
+    digestCoverManifestDir: path.join(CURRENT_DIR, 'digest-cover-manifests'),
+    digestCoverAssetDir: path.join(CURRENT_DIR, 'digest-covers'),
+    // Legacy single-file location retained only for callers migrating old state.
+    visualSummaryManifest: path.join(CURRENT_DIR, 'visual-summary-manifest.json'),
     analyzed: path.join(CURRENT_DIR, 'analyzed.json'),
     analyzedLegacy: path.join(DATA_DIR, 'analyzed.json')
 };

@@ -7,7 +7,10 @@ const {
     repairMalformedFilterDecision,
     filterPapersByKeywords,
     filterPapersWithLLM,
+    buildFilterInputSha256,
     fetchCategoryPapers,
+    fetchCategoryFromSearchPage,
+    fetchCategoryFromRecentPage,
     fetchAbstracts,
     redactProxyUrl,
     parseRecentPageHTML,
@@ -92,9 +95,9 @@ describe('filterPapersWithLLM resume decisions', () => {
         const filtered = await filterPapersWithLLM(papers, {
             batchSize: 1,
             initialDecisions: {
-                '2604.00001': { related: true },
-                '2604.00002': { related: false },
-                '2604.00003': { related: true }
+                '2604.00001': { related: true, inputSha256: buildFilterInputSha256(papers[0]) },
+                '2604.00002': { related: false, inputSha256: buildFilterInputSha256(papers[1]) },
+                '2604.00003': { related: true, inputSha256: buildFilterInputSha256(papers[2]) }
             }
         });
 
@@ -111,7 +114,7 @@ describe('filterPapersWithLLM resume decisions', () => {
         const filtered = await filterPapersWithLLM(papers, {
             batchSize: 1,
             initialDecisions: {
-                '2604.00001': { related: true },
+                '2604.00001': { related: true, inputSha256: buildFilterInputSha256(papers[0]) },
                 '2604.99999': { related: true }
             },
             decisionFn: async () => ({
@@ -151,6 +154,36 @@ describe('filterPapersWithLLM resume decisions', () => {
         assert.deepStrictEqual(checkpoint.decisions, {});
         assert.strictEqual(checkpoint.retryableDecisions['2604.00001'].retryable, true);
         assert.strictEqual(checkpoint.stats.complete, false);
+    });
+
+    it('候选标题摘要变化后不复用旧输入指纹', async () => {
+        const paper = { arxivId: '2604.00001', title: 'Changed', abstract: 'new abstract', categories: ['cs.SD'] };
+        let calls = 0;
+        const filtered = await filterPapersWithLLM([paper], {
+            batchSize: 1,
+            initialDecisions: { '2604.00001': { related: false, inputSha256: '0'.repeat(64) } },
+            decisionFn: async () => { calls++; return { related: true, reason: 'audio', parseSource: 'test' }; }
+        });
+        assert.strictEqual(calls, 1);
+        assert.deepStrictEqual(filtered.map(item => item.arxivId), ['2604.00001']);
+    });
+
+    it('同批一个调用抛错时仍保存其他成功决定', async () => {
+        const papers = [
+            { arxivId: '2604.00001', title: 'A', abstract: 'audio' },
+            { arxivId: '2604.00002', title: 'B', abstract: 'audio' }
+        ];
+        let checkpoint;
+        await assert.rejects(() => filterPapersWithLLM(papers, {
+            batchSize: 2,
+            decisionFn: async paper => {
+                if (paper.arxivId.endsWith('2')) throw new Error('temporary');
+                return { related: true, reason: 'audio', parseSource: 'test' };
+            },
+            onBatchComplete: async value => { checkpoint = value; }
+        }), /同批成功决定已保存/);
+        assert.deepStrictEqual(Object.keys(checkpoint.decisions), ['2604.00001']);
+        assert.strictEqual(checkpoint.retryableDecisions['2604.00002'].retryable, true);
     });
 });
 
@@ -208,25 +241,33 @@ describe('抓取健康状态', () => {
         assert.strictEqual(papers._sourceHealth.successfulRequests, 3);
     });
 
-    it('arXiv 后续分页失败但 API 完整补偿时仅记录 warning', async () => {
-        const requestFn = async url => {
-            if (url.includes('/recent?skip=50')) throw new Error('page 2 timeout');
-            return {
-                status: 200,
-                data: url.includes('/api/query')
-                    ? '<feed></feed>'
-                    : (url.includes('/search/') ? '<ol class="breathe-horizontal"></ol>' : '<dl></dl>')
-            };
-        };
-        const papers = await fetchCategoryPapers('cs.SD', 100, 1, new Set(), {
-            requestFn,
+    it('arXiv recent 首页显式声明 skip=0/show=50，短页不再跳到错误 offset', async () => {
+        const urls = [];
+        const papers = await fetchCategoryFromRecentPage('cs.SD', new Set(), 100, {
+            requestFn: async url => { urls.push(url); return { status: 200, data: '<dl></dl>' }; },
             sleepFn: async () => {},
-            maxRetries: 1,
-            abstractMaxRetries: 1
+            maxRetries: 1
         });
-        assert.strictEqual(papers._sourceHealth.ok, true);
+        assert.deepStrictEqual(papers, []);
+        assert.match(urls[0], /recent\?skip=0&show=50$/);
+        assert.strictEqual(urls.length, 1);
         assert.strictEqual(papers._sourceHealth.coverageComplete, true);
-        assert.ok(papers._sourceHealth.warnings.some(item => item.error === 'page 2 timeout'));
+    });
+
+    it('arXiv 搜索页使用严格分类查询，不使用会混入全文结果的裸分类名', async () => {
+        const urls = [];
+        await fetchCategoryFromSearchPage('cs.SD', new Set(), 50, {
+            requestFn: async url => {
+                urls.push(url);
+                return { status: 200, data: '<ol class="breathe-horizontal"></ol>' };
+            },
+            sleepFn: async () => {},
+            maxRetries: 1
+        });
+
+        assert.strictEqual(urls.length, 1);
+        assert.match(urls[0], /query=cat%3Acs\.SD/);
+        assert.doesNotMatch(urls[0], /query=cs\.SD(?:&|$)/);
     });
 
     it('HTTP 200 错误页缺少来源结构签名时不能作为合法零结果', async () => {

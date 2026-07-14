@@ -14,10 +14,14 @@ sys.path.insert(0, SCRIPTS)
 
 from path_config import (  # noqa: E402
     CURRENT_DIR,
+    DIGEST_COVER_ASSET_DIR,
+    DIGEST_COVER_MANIFEST_DIR,
     DEEP_ANALYSIS_RESULT_FILE,
     FILTER_DECISIONS_FILE,
     PAPERS_FILE,
     PROJECT_ROOT,
+    VISUAL_SUMMARY_ASSET_DIR,
+    VISUAL_SUMMARY_MANIFEST_DIR,
     atomic_write_json,
     atomic_write_text,
     backfill_result_path,
@@ -28,6 +32,7 @@ from path_config import (  # noqa: E402
     xiaohongshu_markdown_path,
     xiaohongshu_oneliner_cache_path,
     validate_date_component,
+    _lock_reclaimable,
 )
 
 
@@ -46,6 +51,10 @@ class PathConfigTest(unittest.TestCase):
         self.assertEqual(DEEP_ANALYSIS_RESULT_FILE.name, 'deep-analysis-result.json')
         self.assertEqual(PAPERS_FILE.parent, CURRENT_DIR)
         self.assertEqual(DEEP_ANALYSIS_RESULT_FILE.parent, CURRENT_DIR)
+        self.assertEqual(VISUAL_SUMMARY_MANIFEST_DIR, CURRENT_DIR / 'visual-summary-manifests')
+        self.assertEqual(VISUAL_SUMMARY_ASSET_DIR, CURRENT_DIR / 'visual-summaries')
+        self.assertEqual(DIGEST_COVER_MANIFEST_DIR, CURRENT_DIR / 'digest-cover-manifests')
+        self.assertEqual(DIGEST_COVER_ASSET_DIR, CURRENT_DIR / 'digest-covers')
 
     def test_publish_output_helpers(self):
         self.assertEqual(
@@ -141,6 +150,37 @@ class PathConfigTest(unittest.TestCase):
             context.__exit__(None, None, None)
             self.assertTrue(lock_path.exists())
             shutil.rmtree(lock_path)
+
+    def test_stale_remote_lock_is_reclaimed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'remote.json'
+            lock_path = Path(f'{target}.lock')
+            lock_path.mkdir()
+            owner = lock_path / 'owner.json'
+            owner.write_text(json.dumps({
+                'pid': 12345, 'hostname': 'remote-host', 'token': 'abandoned',
+            }), encoding='utf-8')
+            old = __import__('time').time() - 10
+            os.utime(owner, (old, old))
+            os.utime(lock_path, (old, old))
+            with file_lock(target, timeout_seconds=1, stale_seconds=0.1):
+                current = json.loads((lock_path / 'owner.json').read_text(encoding='utf-8'))
+                self.assertNotEqual(current['token'], 'abandoned')
+            self.assertFalse(lock_path.exists())
+
+    def test_heartbeat_keeps_remote_lease_fresh(self):
+        import time
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'active.json'
+            with mock.patch('path_config.socket.gethostname', return_value='owner-host'):
+                with file_lock(target, timeout_seconds=1, stale_seconds=0.15):
+                    lock_path = Path(f'{target}.lock')
+                    first = json.loads((lock_path / 'owner.json').read_text(encoding='utf-8'))
+                    time.sleep(0.35)
+                    second = json.loads((lock_path / 'owner.json').read_text(encoding='utf-8'))
+                    self.assertNotEqual(first['heartbeatAt'], second['heartbeatAt'])
+                    with mock.patch('path_config.socket.gethostname', return_value='observer-host'):
+                        self.assertFalse(_lock_reclaimable(lock_path, 0.15))
 
 
 def read_json_strict_for_test(path):

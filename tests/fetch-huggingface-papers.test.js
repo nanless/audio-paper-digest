@@ -133,6 +133,63 @@ describe('HuggingFace 抓取健康状态', () => {
             sleepFn: async () => {}
         }), error => error.code === 'SOURCE_FETCH_FAILED'
             && error.sourceHealth.ok === false
-            && error.sourceHealth.failures.some(item => /no legal paper items/.test(item.error)));
+            && error.sourceHealth.failures.some(item => /invalid paper items/.test(item.error)));
+    });
+
+    it('daily_papers 使用 HF 入选日期分页，不被旧 arXiv 日期提前截断', async () => {
+        const firstPage = Array.from({ length: 100 }, (_, index) => ({
+            publishedAt: '2026-07-13T01:00:00Z',
+            paper: { id: `2607.${String(index).padStart(5, '0')}`, title: 'old but selected today', authors: [], publishedAt: '2020-01-01T00:00:00Z' }
+        }));
+        const urls = [];
+        await fetchHuggingFacePapers(new Set(), {
+            days: 7,
+            minUpvotes: 0,
+            fetchFn: url => {
+                urls.push(url);
+                if (url.includes('daily_papers') && url.includes('offset=0')) return { ok: true, data: firstPage };
+                return { ok: true, data: [] };
+            },
+            sleepFn: async () => {}
+        });
+        assert.ok(urls.some(url => url.includes('daily_papers') && url.includes('offset=100')));
+    });
+
+    it('papers API 满页时继续分页，直到短页或日期截止线', async () => {
+        const firstPage = Array.from({ length: 100 }, (_, index) => ({
+            id: `2607.${String(index).padStart(5, '0')}`, title: 'new', authors: [], publishedAt: '2026-07-13T00:00:00Z'
+        }));
+        const urls = [];
+        await fetchHuggingFacePapers(new Set(), {
+            days: 7,
+            minUpvotes: 0,
+            fetchFn: url => {
+                urls.push(url);
+                if (url.includes('daily_papers')) return { ok: true, data: [] };
+                if (url.includes('offset=0')) return { ok: true, data: firstPage };
+                return { ok: true, data: [] };
+            },
+            sleepFn: async () => {}
+        });
+        assert.ok(urls.some(url => url.includes('/api/papers') && url.includes('offset=100')));
+    });
+
+    it('papers API 忽略 offset 并重复同一满页时视为分页穷尽', async () => {
+        const repeatedPage = Array.from({ length: 100 }, (_, index) => ({
+            id: `2607.${String(index).padStart(5, '0')}`,
+            title: 'new', authors: [], publishedAt: '2026-07-13T00:00:00Z'
+        }));
+        const urls = [];
+        const result = await fetchHuggingFacePapers(new Set(), {
+            days: 7,
+            fetchFn: url => {
+                urls.push(url);
+                if (url.includes('daily_papers')) return { ok: true, data: [] };
+                return { ok: true, data: repeatedPage };
+            },
+            sleepFn: async () => {}
+        });
+        assert.strictEqual(result._sourceHealth.coverage.papersComplete, true);
+        assert.strictEqual(urls.filter(url => url.includes('/api/papers')).length, 2);
     });
 });

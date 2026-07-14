@@ -59,6 +59,14 @@ ls -lt content/posts | head -20
 - 数据文件为空或论文分析失败
 - 目标日期文件已存在且内容相同
 
+### 12.4.1 全部博客发布后未建立视觉任务
+
+- 先检查 `blog-review-receipt-YYYY-MM-DD.json` 是否同时包含相同的 `publicationCommit`、`remoteVerifiedOid` 和 `remoteVerifiedAt`；缺少时说明远端发布尚未验证，不能生图
+- 远端验证完成后运行 `npm run visual:post-publish -- --date YYYY-MM-DD`；完整输出只列出 TOP 10 pending/failed 长图和一张汇总图
+- manifest 缺失或发布版本/分析/prompt/热门方向/排名/category 变化时，重新运行 `visual:post-publish`；`status` 只读报告过期、缺失、失败、PNG 损坏或 SHA 不符，不会修改任务
+- 使用 Codex 内置 `image_gen` 生成待处理项，目视核对英文标题、中文正文、论文数字和排行榜无误后，再通过 `visual:record` 或 `cover:record` 登记；旧 token 被拒绝时必须重新读取最新规划，禁止覆盖新任务
+- 两个 status 都返回 0 即表示发布后图片完成；图片独立于已经完成的博客事务，无需也不得因此重新 generate/review
+
 ### 12.5 路径混淆
 
 - **优先使用** `data/current/deep-analysis-result.json`

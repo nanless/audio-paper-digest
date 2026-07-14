@@ -8,6 +8,7 @@ import shutil
 import socket
 import stat
 import tempfile
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -27,6 +28,10 @@ FILTER_DECISIONS_FILE = CURRENT_DIR / "filter-decisions.json"
 FILTERED_PAPERS_FILE = CURRENT_DIR / "filtered-papers.json"
 DEEP_ANALYSIS_RESULT_FILE = CURRENT_DIR / "deep-analysis-result.json"
 DEEP_ANALYSIS_RESULT_LEGACY_FILE = DATA_DIR / "deep-analysis-result.json"
+VISUAL_SUMMARY_MANIFEST_DIR = CURRENT_DIR / "visual-summary-manifests"
+VISUAL_SUMMARY_ASSET_DIR = CURRENT_DIR / "visual-summaries"
+DIGEST_COVER_MANIFEST_DIR = CURRENT_DIR / "digest-cover-manifests"
+DIGEST_COVER_ASSET_DIR = CURRENT_DIR / "digest-covers"
 ANALYZED_FILE = CURRENT_DIR / "analyzed.json"
 ANALYZED_LEGACY_FILE = DATA_DIR / "analyzed.json"
 
@@ -130,7 +135,11 @@ def read_json_strict(path, *, allow_missing=False):
 
 def _lock_reclaimable(lock_path, stale_seconds):
     try:
-        age = time.time() - lock_path.stat().st_mtime
+        owner_path = lock_path / "owner.json"
+        mtimes = [lock_path.stat().st_mtime]
+        if owner_path.exists():
+            mtimes.append(owner_path.stat().st_mtime)
+        age = time.time() - max(mtimes)
     except FileNotFoundError:
         return True
     try:
@@ -144,8 +153,8 @@ def _lock_reclaimable(lock_path, stale_seconds):
                 return False
             return False
         if owner.get("hostname"):
-            # 共享目录上的远端 PID 无法由本机可靠判活，不按时间擅自删除。
-            return False
+            # 远端 PID 无法判活；以持续续期的 lease 为准，避免永久死锁。
+            return age > stale_seconds
     except (FileNotFoundError, OSError, json.JSONDecodeError):
         pass
     return age > stale_seconds
@@ -157,6 +166,9 @@ def file_lock(path, *, timeout_seconds=30, stale_seconds=2 * 60 * 60):
     target.parent.mkdir(parents=True, exist_ok=True)
     lock_path = Path(f"{target}.lock")
     owner_token = uuid.uuid4().hex
+    acquired_at = datetime_now_iso()
+    heartbeat_stop = threading.Event()
+    heartbeat_thread = None
     started = time.monotonic()
     while True:
         try:
@@ -165,7 +177,9 @@ def file_lock(path, *, timeout_seconds=30, stale_seconds=2 * 60 * 60):
                 "pid": os.getpid(),
                 "hostname": socket.gethostname(),
                 "token": owner_token,
-                "acquiredAt": datetime_now_iso(),
+                "acquiredAt": acquired_at,
+                "heartbeatAt": acquired_at,
+                "leaseSeconds": stale_seconds,
             }, mode=0o600)
             break
         except FileExistsError:
@@ -178,9 +192,32 @@ def file_lock(path, *, timeout_seconds=30, stale_seconds=2 * 60 * 60):
         except Exception:
             shutil.rmtree(lock_path, ignore_errors=True)
             raise
+
+    heartbeat_interval = max(0.05, min(30.0, stale_seconds / 3.0))
+
+    def renew_lease():
+        while not heartbeat_stop.wait(heartbeat_interval):
+            try:
+                owner_path = lock_path / "owner.json"
+                owner = json.loads(owner_path.read_text(encoding="utf-8"))
+                if owner.get("token") != owner_token:
+                    return
+                owner["heartbeatAt"] = datetime_now_iso()
+                atomic_write_json(owner_path, owner, mode=0o600)
+            except (FileNotFoundError, OSError, json.JSONDecodeError):
+                return
+
+    heartbeat_thread = threading.Thread(
+        target=renew_lease,
+        name=f"file-lock-heartbeat-{owner_token[:8]}",
+        daemon=True,
+    )
+    heartbeat_thread.start()
     try:
         yield
     finally:
+        heartbeat_stop.set()
+        heartbeat_thread.join(timeout=max(1.0, heartbeat_interval * 2))
         try:
             owner = json.loads((lock_path / "owner.json").read_text(encoding="utf-8"))
             if owner.get("token") == owner_token:

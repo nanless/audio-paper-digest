@@ -18,6 +18,9 @@ npm run deep             # 仅深度分析续跑（跳过已有 analysis；无�
 npm run reanalyze        # 强制全量重分析（支持 --concurrency N）
 npm run batch            # 批量分析未分析论文
 npm run validate:data    # 只读校验候选/筛选/分析 JSON 数据、筛选决策缓存一致性和完整候选覆盖
+npm run visual:post-publish -- --date YYYY-MM-DD # 在博客锁内建立 TOP 10 长图和汇总图任务
+npm run visual:status -- --date YYYY-MM-DD # 只读校验 TOP 10 论文长图，不影响已经完成的博客发布
+npm run cover:status -- --date YYYY-MM-DD  # 只读校验发布后的汇总图
 npm run backfill         # 补录历史 paper ID（Python 脚本，不分析）
 npm run blog:generate    # 只生成并安装 Hugo 博客文件
 npm run blog:review      # 只 review 已生成文件并保存 SHA-256 凭证
@@ -62,7 +65,7 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 
 **双模型（可选，多模态）**：设置 `PAPER_ANALYZER_SECONDARY_MODEL` 即启用副模型做图像筛选与插图计划（主模型仅做纯文本分析）；副模型只输出 JSON 计划，包含目标章节、代码提供的稳定 `paragraph_id`、图前 `lead` 和图后 `explanation`。代码只新增插图及相邻说明，忽略旧 `replacement` / `rewrite` 字段，禁止副模型替换主模型原文；每篇默认最多插入 4 张，非法段落 ID 直接丢弃，旧 `anchor` 格式仅保留兼容。不设置则跳过图片、退回单模型纯文本。`PAPER_ANALYZER_SECONDARY_ENDPOINT` / `PAPER_ANALYZER_SECONDARY_API_KEY` 未设置时默认复用主模型对应值。
 
-**Codex 视觉摘要（按需）**：深度分析与评分审计通过后，Agent 可直接使用 Codex 内置 `image_gen` 为每篇论文生成三张本地 PNG 信息卡：研究概览、方法结构、实验与边界。输入只可来自已审计的分析和 `prompts/visual-summary.md`；不得在项目脚本中调用图像 API、读取 `OPENAI_API_KEY` 或把生成图描述为论文原始 Figure。项目引用的图必须复制进工作区，不能只保留在 Codex 的默认生成目录。
+**Codex 发布后视觉资产**：必须先完成全部论文深度分析，再依次完成博客 generate、全量/失败集 review、push，并由 `push-blog.py` 验证远端 `main` OID。只有发布凭证同时记录 `publicationCommit`、相同的 `remoteVerifiedOid` 和验证时间后，才可建立视觉任务。`push-blog.py` 会自动运行发布后规划器；论文长图只选择最终评分 TOP 10（同分按规范化 arXiv ID），每篇一张纵向 PNG，顶部为完整英文标题、正文为简体中文；另生成一张包含批次标题、热门方向和 TOP 5 排行榜的汇总图。Agent 必须目视核对标题、中文正文、论文数字与排行榜后才能执行 record。两类 manifest 按日期隔离并支持失败项续跑，但图片不进入本轮博客 generation/review/push，也不阻断已经完成的发布。项目脚本不得调用图像 API或读取 `OPENAI_API_KEY`，实际绘图只能由 Codex 内置 `image_gen` 完成。
 
 Node 脚本通过 `scripts/env-loader.js` 加载当前项目根 `.env`：① `scripts/config.js` 模块级最先执行（任何 `require('config')` 即触发）；② `scripts/utils.js` 的 `loadEnvFile()` 二次兜底补漏。Python 脚本通过 `scripts/project_env.py` 加载同一个 `.env`。两端都会先清理继承自 Trae/Codex/shell 的项目同名变量（`PAPER_ANALYZER_*`、`PAPER_DIGEST_*`、`PD_*`、`WECHAT_*`、`FEISHU_*`、`XIAOHONGSHU_*`、`KIMI_API_KEY`）以及大小写代理变量，再写入项目 `.env`；代理不再回退 macOS `scutil`，加载器会把 `.env` 权限收紧为 `0600`。外部命令必须使用最小子进程环境，禁止把 LLM/发布凭据传给 curl、CLI、Git hook 或浏览器进程。
 
@@ -110,6 +113,10 @@ data/current/           # 工作数据（gitignored）
   filter-decisions.json # 当日 LLM 筛选逐篇决策缓存（含 reason/rawResponse）；来源健康时续跑只重试未决论文，不重新抓取
   filtered-papers.json  # 当日筛选结果
   deep-analysis-result.json  # 当日分析结果
+  visual-summary-manifests/<date>.json # 发布后评分 TOP 10 纵向长图的状态、排名、指纹和资产 SHA
+  visual-summaries/<date>/<paper>/infographic.png # 论文长图资产
+  digest-cover-manifests/<date>.json # 发布后汇总图状态、上下文和指纹
+  digest-covers/<date>/cover.png # 发布后汇总图资产
   analyzed.json         # 分析状态（兼容）
 data/archive/<date>/    # 每日快照（自动创建）
 logs/                   # 默认生成文件日志（gitignored；可用 PD_DISABLE_FILE_LOGS=1 强制关闭）
@@ -117,7 +124,8 @@ prompts/                # LLM prompt 模板
   filter.md             # 筛选阶段
   deep-analysis.md      # 深度分析主 prompt（Round 1，纯文本）
   image-supplement.md   # 图像筛选与插图计划（双模型模式副模型用）
-  visual-summary.md     # GPT Image 2 编辑性论文视觉摘要（可选）
+  visual-summary.md     # GPT Image 2 编辑性论文视觉摘要（评分 TOP 10 各一张纵向长图）
+  digest-cover.md       # 发布后汇总图（标题、热门方向、TOP 5 排行榜）
   opensource-scan.md    # 开源链接扫描（Round 2）
   gap-fill.md           # 审校重写（Round 3）
   method-fill.md        # 方法章节补充（后处理）

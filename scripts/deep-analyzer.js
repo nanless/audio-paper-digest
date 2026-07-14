@@ -422,13 +422,13 @@ function promptTemplateSha256(relativePath) {
         .digest('hex');
 }
 
-function modelFingerprint(config, temperature = API_TEMPERATURE) {
+function modelFingerprint(config, temperature = API_TEMPERATURE, maxTokens = API_MAX_TOKENS) {
     return {
         model: config.model || '',
         endpoint: config.endpoint || '',
         protocol: detectApiType(config.endpoint || '', config.model || ''),
         temperature,
-        maxTokens: API_MAX_TOKENS
+        maxTokens
     };
 }
 
@@ -443,8 +443,15 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
         authors: paper.authors || [],
         categories: paper.categories || []
     };
+    const stageMaxTokens = {
+        openSourceScan: 8000,
+        revision: API_MAX_TOKENS,
+        tableRepair: API_MAX_TOKENS,
+        methodRepair: API_MAX_TOKENS,
+        structureRepair: API_MAX_TOKENS
+    };
     const textStage = stage => stableFingerprint({
-        ...modelFingerprint(DEEP_CONFIG),
+        ...modelFingerprint(DEEP_CONFIG, API_TEMPERATURE, stageMaxTokens[stage]),
         promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES[stage]),
         usedTextSha256
     });
@@ -457,7 +464,7 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
         methodRepair: textStage('methodRepair'),
         structureRepair: textStage('structureRepair'),
         imageSupplement: stableFingerprint({
-            ...modelFingerprint(SECONDARY_CONFIG, IMAGE_PLAN_TEMPERATURE),
+            ...modelFingerprint(SECONDARY_CONFIG, IMAGE_PLAN_TEMPERATURE, API_MAX_TOKENS),
             enabled: isDualModel,
             promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.imageSupplement),
             imageCandidateMax: IMAGE_CANDIDATE_MAX,
@@ -487,6 +494,28 @@ function buildImageSupplementFingerprint(baseFingerprint, candidateImageInfos, d
 
 function hasActualAnalysisInputChanged(previousSource, currentSource) {
     return previousSource?.usedTextSha256 !== currentSource?.usedTextSha256;
+}
+
+function shouldRetainFullTextCheckpoint(paper, previousSource, hasFullText, sourceFetchError) {
+    return Boolean(paper?.analysisCheckpoint
+        && previousSource?.fullTextAvailable
+        && !hasFullText
+        && sourceFetchError);
+}
+
+function calculateScoringDelta(previousParsedScore, scoringInputAnalysis, finalParsedScore) {
+    const previousScore = Number.parseFloat(previousParsedScore);
+    const scoringInputScore = Number.parseFloat(parseAnalysis(scoringInputAnalysis)?.score);
+    const finalScore = Number.parseFloat(finalParsedScore);
+    const scoreBeforeAudit = Number.isFinite(scoringInputScore) ? scoringInputScore : previousScore;
+    return {
+        previousRunScore: Number.isFinite(previousScore) ? previousScore : null,
+        previousScore: Number.isFinite(scoreBeforeAudit) ? scoreBeforeAudit : null,
+        finalScore: Number.isFinite(finalScore) ? finalScore : null,
+        scoreDelta: Number.isFinite(scoreBeforeAudit) && Number.isFinite(finalScore)
+            ? Number((finalScore - scoreBeforeAudit).toFixed(1))
+            : null
+    };
 }
 
 function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint) {
@@ -569,6 +598,8 @@ function saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest
             paper.analysisStageCheckpoints[stage] = paper.analysisCheckpoint;
         }
     }
+    const persist = paper[Symbol.for('audio-paper-digest.analysisCheckpointCallback')];
+    if (typeof persist === 'function') persist(paper);
 }
 
 function getPreProvidedImageUrls(paper) {
@@ -2024,12 +2055,14 @@ async function analyzePaperDeep(paper) {
         htmlAttempts: 0,
         warnings: []
     };
+    let sourceFetchError = null;
     if (!fullText && /^\d+\.\d+/.test(arxivId)) {
         try {
             sourceDetails = await fetchArxivTextDetailed(arxivId);
             fullText = sourceDetails.text;
             console.log(`    [deep] 全文长度: ${fullText.length} 字符`);
         } catch (e) {
+            sourceFetchError = e;
             sourceDetails.warnings.push(`全文抓取异常: ${e.message}`);
             console.log(`    [deep] 获取全文失败: ${e.message}，使用摘要`);
         }
@@ -2068,6 +2101,31 @@ async function analyzePaperDeep(paper) {
         warnings: sourceWarnings
     };
     const previousSource = analysisManifest.sourceAcquisition;
+    if (shouldRetainFullTextCheckpoint(paper, previousSource, hasFullText, sourceFetchError)) {
+        const error = `全文临时不可用，已保留全文 checkpoint: ${sourceFetchError.message}`;
+        console.log(`    [deep] ⚠️  ${error}`);
+        analysisManifest.sourceAcquisitionLatestFailure = {
+            attemptedAt: getBeijingISOString(),
+            error: sourceFetchError.message,
+            retainedSource: previousSource
+        };
+        saveAnalysisCheckpoint(
+            paper,
+            paper.analysisCheckpoint,
+            analysisManifest,
+            paper.analysisRecoveryImageManifest || paper.imageManifest || null
+        );
+        return {
+            ...paper,
+            analysis: null,
+            parsed: null,
+            analysisManifest,
+            analysisCheckpoint: paper.analysisCheckpoint,
+            sourceWarnings: [...(paper.sourceWarnings || []), error],
+            error
+        };
+    }
+    Object.assign(paper, sourceProvenance, { sourceWarnings });
     if (paper.analysisCheckpoint && hasActualAnalysisInputChanged(previousSource, sourceProvenance)) {
         for (const stage of RECOVERY_STAGE_ORDER) delete analysisManifest.stages[stage];
         delete paper.analysisCheckpoint;
@@ -2193,6 +2251,7 @@ async function analyzePaperDeep(paper) {
         outcomes: downloadOutcomes,
         fingerprint: imageDownloadFingerprint
     });
+    saveAnalysisCheckpoint(paper, paper.analysisCheckpoint || '', analysisManifest, imageManifest);
 
     const prompt = loadPrompt('prompts/deep-analysis.md', {
         hasFullText: hasFullTextIntro,
@@ -2480,13 +2539,13 @@ async function analyzePaperDeep(paper) {
                 error.code = 'CONTRACT_REJECTED';
                 throw error;
             }
-            const finalScore = Number.parseFloat(auditedParsed?.score);
-            const scoreDelta = Number.isFinite(previousScore) && Number.isFinite(finalScore)
-                ? Number((finalScore - previousScore).toFixed(1))
-                : null;
+            const scoringDelta = calculateScoringDelta(previousScore, scoringInputAnalysis, auditedParsed?.score);
+            const finalScore = scoringDelta.finalScore;
+            const scoreBeforeAudit = scoringDelta.previousScore;
+            const scoreDelta = scoringDelta.scoreDelta;
             const stabilityWarning = scoreDelta !== null && Math.abs(scoreDelta) > 0.5;
             if (stabilityWarning) {
-                console.log(`    [deep] ⚠️  评分稳定性告警: previous=${previousScore.toFixed(1)} | final=${finalScore.toFixed(1)} | delta=${scoreDelta > 0 ? '+' : ''}${scoreDelta.toFixed(1)}`);
+                console.log(`    [deep] ⚠️  评分稳定性告警: previous=${scoreBeforeAudit.toFixed(1)} | final=${finalScore.toFixed(1)} | delta=${scoreDelta > 0 ? '+' : ''}${scoreDelta.toFixed(1)}`);
             }
             markRecoveryStage(analysisManifest, 'scoringAudit', 'complete', {
                 attempts: scoringResult.attempts,
@@ -2498,7 +2557,8 @@ async function analyzePaperDeep(paper) {
                 promptTemplateSha256: scoringResult.promptTemplateSha256,
                 scoringInputSha256,
                 evidenceSha256: scoringResult.evidenceSha256,
-                previousScore: Number.isFinite(previousScore) ? previousScore : null,
+                previousScore: Number.isFinite(scoreBeforeAudit) ? scoreBeforeAudit : null,
+                previousRunScore: scoringDelta.previousRunScore,
                 finalScore: Number.isFinite(finalScore) ? finalScore : null,
                 scoreDelta,
                 stabilityWarning,
@@ -3467,6 +3527,8 @@ module.exports = {
     markRecoveryStage,
     isRecoveryStageComplete,
     saveAnalysisCheckpoint,
+    shouldRetainFullTextCheckpoint,
+    calculateScoringDelta,
     stableFingerprint,
     buildRecoveryFingerprints,
     buildImageSupplementFingerprint,

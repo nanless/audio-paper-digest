@@ -20,6 +20,8 @@ English | **[中文](SKILL.md)**
 - `prompts/opensource-scan.md`: Open source scan prompt (Round 2)
 - `prompts/structure-repair.md`: primary-model structural repair used only when required sections are missing
 - `prompts/scoring-audit.md`: final type-aware JSON scoring audit after text repair; executed by the primary model only
+- `prompts/visual-summary.md`: post-publication Codex prompt for one tall infographic per final-score TOP 10 paper
+- `prompts/digest-cover.md`: post-publication prompt for the batch title, hot directions, and TOP 5 digest image
 
 When documents conflict with code, **the current implementation in `scripts/*` prevails; update documents accordingly**.
 
@@ -40,6 +42,7 @@ Main entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fe
 9. **Deep analysis**: `deep-analyzer.js`. Dual-model mode (when `PAPER_ANALYZER_SECONDARY_MODEL` is configured): primary model text-only analysis + secondary model JSON image insertion plan; Single-model mode (no secondary model): text-only analysis. Concurrency of 3 (adjustable via `PD_ANALYSIS_CONCURRENCY`), up to 2 retries per paper (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
 10. **Incremental save**: Saves to `data/current/deep-analysis-result.json` immediately after each batch, with failure-result protection (papers with a successful analysis will not be overwritten by a failure result with no analysis); also writes `papers.json.digestStatus` back through `scripts/digest-status.js`
 11. **Final merge**: Deduplicates and merges historical results, auto-backing up bak files (retaining the last 10)
+12. **Post-publication visual assets**: finish deep analysis for every paper, then generate, review, push, and remotely verify all blog pages. Only after remote `main` matches the publication commit does `push-blog.py` plan one tall infographic for each final-score TOP 10 paper and one batch digest image. Before record, visually verify the exact English title, Simplified-Chinese body, paper numbers, and leaderboard. These assets are independently resumable but do not enter or block the completed blog publication transaction
 
 `full-fetch.js` **does NOT auto-publish blog/WeChat**; publishing requires running Python scripts separately.
 
@@ -57,6 +60,8 @@ Main entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fe
 | `data/current/filter-decisions.json` | Per-paper LLM filter decision cache with reason/rawResponse | Incrementally written after each batch; invalidated when model or prompt hash changes |
 | `data/current/filtered-papers.json` | Filtered paper metadata | Archived daily and regenerated |
 | `data/current/deep-analysis-result.json` | Core analysis results, including per-stage checkpoints and fingerprints | Persisted after each paper; resumes from the first incomplete or invalidated stage |
+| `data/current/visual-summary-manifests/YYYY-MM-DD.json` | Date-isolated final-score TOP 10 infographic state, bound to rank, analysis, prompt, and asset SHA-256 | Only missing, failed, damaged, or invalidated infographics return to pending |
+| `data/current/digest-cover-manifests/YYYY-MM-DD.json` | Post-publication digest-image state with deterministic hot-direction and ranking context | Data and prompt fingerprints invalidate only the digest image |
 | `data/current/xiaohongshu-oneliners-YYYY-MM-DD.json` | Per-paper Xiaohongshu one-liner cache bound to analysis, prompt, model config, and sanitation contract | Saves each success atomically; only failed or changed papers rerun |
 | `data/current/analyzed.json` | Legacy analyzed records (for compatibility) | Archived daily and regenerated |
 
@@ -257,6 +262,11 @@ cd /Users/francis7999/code/github_repos/audio-paper-digest
 npm run fetch
 # or ./run-full-fetch.sh
 
+# Run only after every blog page is published and the remote OID is verified.
+npm run visual:post-publish -- --date YYYY-MM-DD
+npm run visual:status -- --date YYYY-MM-DD
+npm run cover:status -- --date YYYY-MM-DD
+
 # Deep analysis resume only (skips papers with existing analysis)
 npm run deep
 
@@ -287,7 +297,7 @@ npm run backfill
 # Publish blog (explicitly specifying date is recommended)
 npm run blog:generate -- --date YYYY-MM-DD
 
-# Generate markdown only, do not push
+# Strictly review generated Markdown, then verify the receipt and push it
 npm run blog:review -- --date YYYY-MM-DD
 npm run blog:push -- --date YYYY-MM-DD
 

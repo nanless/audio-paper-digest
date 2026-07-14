@@ -452,6 +452,32 @@ describe('analyzeBatch', () => {
         assert.strictEqual(results[0].error, null);
     });
 
+    it('阶段 checkpoint 在单篇运行锁内立即原子写入 canonical 结果', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-stage-checkpoint-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        updateJsonFileLocked(file, () => ({ papers: [{ arxivId: '2604.00033', title: 'Checkpoint' }] }));
+
+        await analyzeBatch([{ arxivId: '2604.00033', title: 'Checkpoint' }], {
+            concurrency: 1,
+            maxRetries: 0,
+            checkpointFilePath: file,
+            analyzeFn: async paper => {
+                paper.analysisCheckpoint = validAnalysisText();
+                paper.analysisManifest = {
+                    version: 1,
+                    stages: { primaryAnalysis: { status: 'complete' } }
+                };
+                paper[Symbol.for('audio-paper-digest.analysisCheckpointCallback')](paper);
+                throw new Error('simulated crash after primary analysis');
+            }
+        });
+
+        const saved = readJsonFileStrict(file).papers[0];
+        assert.strictEqual(saved.analysisCheckpoint, validAnalysisText());
+        assert.strictEqual(saved.analysisManifest.stages.primaryAnalysis.status, 'complete');
+        assert.strictEqual(saved.analysis, null);
+    });
+
     it('shouldSkip 决策只对每篇论文计算一次', async () => {
         const calls = new Map();
         const papers = [
@@ -532,7 +558,7 @@ describe('analysis run status', () => {
         assert.strictEqual(canReclaimFileLock(lockPath, 1), false);
     });
 
-    it('无法判活的远端主机锁不会按超龄擅自回收', () => {
+    it('远端主机锁只有租约超龄后才可回收', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-lock-remote-'));
         const lockPath = path.join(dir, 'result.json.lock');
         fs.mkdirSync(lockPath);
@@ -544,7 +570,7 @@ describe('analysis run status', () => {
         const old = new Date(Date.now() - 24 * 60 * 60 * 1000);
         fs.utimesSync(lockPath, old, old);
 
-        assert.strictEqual(canReclaimFileLock(lockPath, 1), false);
+        assert.strictEqual(canReclaimFileLock(lockPath, 1), true);
     });
 
     it('旧 owner 的 release 不会删除同路径的新锁', () => {

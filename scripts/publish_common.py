@@ -283,6 +283,29 @@ def validate_papers_for_publish(papers):
                 raise PublishDataValidationError(
                     f'{paper_label} 最新一次深度分析失败，禁止使用陈旧成功正文发布'
                 )
+            manifest = paper.get('analysisManifest')
+            if manifest is not None:
+                complete_statuses = {
+                    'complete', 'not_needed', 'skipped', 'no_candidates',
+                    'no_high_value_images', 'no_downloadable_images',
+                }
+                required_stages = (
+                    'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan',
+                    'revision', 'tableRepair', 'methodRepair', 'structureRepair',
+                    'scoringAudit', 'imageSupplement',
+                )
+                stages = manifest.get('stages') if isinstance(manifest, dict) else None
+                incomplete = [
+                    stage for stage in required_stages
+                    if not isinstance(stages, dict)
+                    or not isinstance(stages.get(stage), dict)
+                    or stages[stage].get('status') not in complete_statuses
+                ]
+                if manifest.get('version') != 1 or incomplete:
+                    detail = ', '.join(incomplete) if incomplete else 'manifest version'
+                    raise PublishDataValidationError(
+                        f'{paper_label} 深度分析阶段尚未全部完成: {detail}'
+                    )
             if (paper.get('analysisSource') == 'abstract'
                     and paper.get('allowAbstractAnalysisPublish') is not True):
                 raise PublishDataValidationError(
@@ -836,7 +859,10 @@ def score_and_sort(papers):
                 unscored.append(normalized_paper)
         else:
             unscored.append(normalized_paper)
-    scored.sort(key=lambda x: -x[0])
+    scored.sort(key=lambda x: (
+        -x[0],
+        normalize_publish_arxiv_id(x[1].get('arxivId') or x[1].get('paper_id')),
+    ))
     return scored, unscored
 
 
@@ -854,7 +880,7 @@ def extract_top_tags(papers, limit=8):
         hot_tag = pa.get('primaryTaskTag') or (pa['tags'][0] if pa.get('tags') else '')
         if hot_tag:
             tag_count[hot_tag] = tag_count.get(hot_tag, 0) + 1
-    return sorted(tag_count.items(), key=lambda x: -x[1])[:limit]
+    return sorted(tag_count.items(), key=lambda x: (-x[1], x[0]))[:limit]
 
 
 def extract_all_tags(papers, limit=10):

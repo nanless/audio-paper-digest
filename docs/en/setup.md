@@ -262,11 +262,18 @@ FEISHU_APP_SECRET=your-full-app-secret
    ```
 
 3. **When the user explicitly says "do not touch a certain day", deleting/overwriting content for that date is prohibited**
-   - `generate-blog.py` fully rewrites the summary page for the target date and records a generation manifest
+   - Blog generation/review/push does not depend on visual assets; `generate-blog.py` installs only the digest index and every paper page
+   - `push-blog.py` plans TOP 10 infographics and the digest image only after remote OID verification
    - If the data file contains papers from multiple dates, split the data or confirm intent before publishing
 
 4. **Do not publish the same day repeatedly**
    - Re-running `generate-blog.py --date 2026-04-21` overwrites that day's files and requires a new `review-blog.py` run. `push-blog.py` accepts only an unchanged SHA-256 review receipt.
    - To append papers, regenerate the complete data first, then publish
+
+5. **Resume visual assets; do not redraw everything**
+   - A remotely verified publication receipt is mandatory; `npm run visual:post-publish -- --date YYYY-MM-DD` plans only the final-score TOP 10
+   - `visual:post-publish` plans both image types while holding the blog transaction lock; only missing, failed, damaged, publication/analysis/prompt-invalidated, or newly TOP-10 infographics return to pending
+   - the digest image is replanned only when the published-paper snapshot, hot directions, ranking, category, publication commit, or prompt changes
+   - Register assets with their own `record` commands, then rerun both status gates. Never hand-edit manifests or bypass SHA/task-token checks
 
 ---

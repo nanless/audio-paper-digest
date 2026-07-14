@@ -6,6 +6,8 @@ This project automatically generates "Speech / Music / Audio Paper Digests," cov
 
 Deep analysis uses the `type-aware-v1` rubric: it first classifies a document as method research, system technical report, model report, dataset/benchmark, survey, theory, or applied research, then evaluates it with the matching evidence standard. The common eight dimensions, 11-point subtotal, and 10-point cap remain unchanged; values use at most one decimal and Open Source uses fixed anchors. Type grants no fixed bonus, and complete proof material may count as a theory paper's public core artifact instead of being forced to zero merely because code/model/data flags are absent.
 
+Visual generation is a post-publication stage. First finish deep analysis for every paper, then generate, review, push, and remotely verify all blog pages (the digest index plus every paper page). Only then does `push-blog.py` create resumable image tasks: one tall Chinese-body infographic for each final-score TOP 10 paper, with stable normalized-arXiv-ID tie breaking, plus one batch digest image containing the title, hot directions, and TOP 5 ranking. These assets do not enter or block the already completed blog generation/review/push transaction.
+
 ---
 
 ## Documentation Guide
@@ -27,6 +29,8 @@ Deep analysis uses the `type-aware-v1` rubric: it first classifies a document as
 | `prompts/gap-fill.md` | Review and rewrite prompt (Round 3) | Maintainers |
 | `prompts/structure-repair.md` | Primary-model structural repair used only when required sections are missing | Maintainers |
 | `prompts/scoring-audit.md` | Final type-aware scoring audit by the primary model; scoring fields only | Maintainers |
+| `prompts/visual-summary.md` | Post-publication prompt for one tall infographic per TOP 10 paper | Maintainers |
+| `prompts/digest-cover.md` | Post-publication digest-image prompt for title, hot directions, and TOP 5 | Maintainers |
 
 > **Iron Rule**: The actual behavior in `scripts/*.js` / `scripts/*.py` is the single source of truth. If documentation conflicts with code, trust the code and fix the documentation.
 
@@ -74,12 +78,16 @@ npm install
 # Every project script must run outside the sandbox; entrypoints reject Codex sandbox execution.
 ./run-full-fetch.sh
 
-# 4. Generate, review, then push the blog (all stages must run outside the sandbox)
+# 4. Generate, review, then push every blog page (all stages must run outside the sandbox)
 python3 scripts/generate-blog.py --date 2026-05-08
 python3 scripts/review-blog.py --date 2026-05-08
 python3 scripts/push-blog.py --date 2026-05-08
 
-# 5. Generate Xiaohongshu copy
+# 5. Push verifies the remote OID and automatically creates post-publication image tasks.
+npm run visual:status -- --date 2026-05-08
+npm run cover:status -- --date 2026-05-08
+
+# 6. Generate Xiaohongshu copy
 python3 scripts/publish-xiaohongshu.py
 ```
 
@@ -106,6 +114,11 @@ npm run batch
 
 # Read-only validation for current JSON data files, including filter-decision cache consistency
 npm run validate:data
+
+# Idempotently plan/resume TOP 10 infographics and the digest image after all blogs publish.
+npm run visual:post-publish -- --date 2026-04-21
+npm run visual:status -- --date 2026-04-21
+npm run cover:status -- --date 2026-04-21
 
 # Run unit tests
 npm test

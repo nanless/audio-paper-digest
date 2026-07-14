@@ -266,11 +266,18 @@ FEISHU_APP_SECRET=your-full-app-secret
    ```
 
 3. **用户明确"不要动某天"时，禁止删除/覆盖该日期内容**
-   - `generate-blog.py` 会全量重写目标日期的汇总页并写生成清单
+   - 博客 generation/review/push 不依赖视觉图；`generate-blog.py` 只安装目标日期的汇总页和全部单篇页
+   - `push-blog.py` 验证远端 OID 后才自动建立 TOP 10 论文长图和汇总图任务
    - 若数据文件包含多日期论文，请拆分数据或确认意图后再发布
 
 4. **不要重复发布同一天**
    - 重复运行 `generate-blog.py --date 2026-04-21` 会覆盖该日期的博客文件；随后必须重新运行 `review-blog.py`。`push-blog.py` 只接受未变更的 SHA-256 审查凭证。
    - 如需追加论文，应重新生成完整数据后再发布
+
+5. **发布后视觉资产必须断点续跑，不要全量重画**
+   - 必须先存在远端验证成功的博客发布凭证；`npm run visual:post-publish -- --date YYYY-MM-DD` 只规划最终评分 TOP 10
+   - `visual:post-publish` 在博客事务锁内统一规划两类图片；只把缺失、失败、损坏、发布版本/分析/prompt 指纹失效或进入 TOP 10 的论文长图置为 pending
+   - 批次汇总图只在已发布论文快照、热门方向、排名、category、发布提交或 prompt 变化时重建任务
+   - 用各自 `record` 命令登记后重新运行两个 `status`；不得手写 manifest 或跳过 SHA/task token 校验
 
 ---

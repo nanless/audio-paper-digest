@@ -1,12 +1,15 @@
 import importlib.util
 import contextlib
+import hashlib
 import io
 import json
 import os
 import subprocess
+import struct
 import sys
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -18,6 +21,23 @@ sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 SPEC = importlib.util.spec_from_file_location('publish_to_blog', MODULE_PATH)
 publish_to_blog = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(publish_to_blog)
+
+
+def valid_png(payload_suffix=b'', width=768, height=1200):
+    def chunk(kind, payload):
+        return (
+            struct.pack('>I', len(payload)) + kind + payload
+            + struct.pack('>I', zlib.crc32(kind + payload) & 0xffffffff)
+        )
+    ihdr = struct.pack('>IIBBBBB', width, height, 8, 0, 0, 0, 0)
+    # Valid 8-bit grayscale rows. Change the final pixel to produce a distinct
+    # but still structurally valid PNG when callers request a suffix.
+    scanline = bytearray((width + 1) * height)
+    if payload_suffix:
+        scanline[-1] = zlib.crc32(payload_suffix) & 0xff
+    return publish_to_blog.PNG_SIGNATURE + chunk(b'IHDR', ihdr) + chunk(
+        b'IDAT', zlib.compress(bytes(scanline))
+    ) + chunk(b'IEND', b'')
 
 
 def git(repo, *args, check=True):
@@ -48,6 +68,21 @@ def init_blog_repo(root, with_remote=False):
 
 
 def save_bound_review_receipt(date_str, paths, hugo_gate='hugo', expected_base_head=None):
+    repo = Path(publish_to_blog.BLOG_REPO).resolve()
+    paper_id = '2607.99999'
+    paper_page = repo / 'content' / 'posts' / f'{date_str}-visual-gate-paper.md'
+    paper_page.parent.mkdir(parents=True, exist_ok=True)
+    paper_page.write_text(
+        '---\npaper_digest_page_type: paper\n'
+        f'paper_digest_arxiv_id: "{paper_id}"\n---\n'
+        'body\n', encoding='utf-8',
+    )
+    index_page = repo / 'content' / 'posts' / f'{date_str}-visual-gate-index.md'
+    index_page.write_text(
+        '---\npaper_digest_page_type: index\n---\n'
+        'index\n', encoding='utf-8',
+    )
+    paths.extend([paper_page, index_page])
     manifest = publish_to_blog.save_generation_manifest(date_str, paths)
     results = {}
     for path in paths:
@@ -249,6 +284,10 @@ title: "Table"
             'title': 'No tags',
             'arxivId': '2607.00001',
             'parsed': {'score': '1'},
+            'visualSummaryCards': [
+                {'kind': kind, 'label': kind, 'url': f'/card/{kind}.png'}
+                for kind in publish_to_blog.VISUAL_SUMMARY_KINDS
+            ],
         }, '2026-07-10')
         self.assertEqual(slug, 'no-tags-2607-00001')
         self.assertIn('tags: []', markdown)
@@ -503,10 +542,15 @@ body
                     mock.patch.object(publish_to_blog, 'GITHUB_REMOTE', 'origin'), \
                     mock.patch.object(publish_to_blog, 'CURRENT_DIR', Path(tmp) / 'data' / 'current'), \
                     mock.patch.object(publish_to_blog, 'build_child_process_env', side_effect=original_env) as env:
-                save_bound_review_receipt('2026-07-10', [path])
-                self.assertTrue(publish_to_blog.git_push('2026-07-10', [path]))
+                paths = [path]
+                save_bound_review_receipt('2026-07-10', paths)
+                self.assertTrue(publish_to_blog.git_push('2026-07-10', paths))
             changed_paths = git(repo, 'show', '--pretty=format:', '--name-only', 'HEAD').stdout.splitlines()
-            self.assertEqual(changed_paths, ['content/posts/2026-07-10.md'])
+            self.assertEqual(set(changed_paths), {
+                'content/posts/2026-07-10.md',
+                'content/posts/2026-07-10-visual-gate-index.md',
+                'content/posts/2026-07-10-visual-gate-paper.md',
+            })
             self.assertEqual(
                 git(remote, 'rev-parse', 'refs/heads/main').stdout.strip(),
                 git(repo, 'rev-parse', 'HEAD').stdout.strip(),
@@ -586,8 +630,9 @@ body
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'CURRENT_DIR', Path(tmp) / 'data' / 'current'), \
                     contextlib.redirect_stdout(io.StringIO()) as output:
-                save_bound_review_receipt('2026-07-10', [path])
-                self.assertFalse(publish_to_blog.git_push('2026-07-10', [path]))
+                paths = [path]
+                save_bound_review_receipt('2026-07-10', paths)
+                self.assertFalse(publish_to_blog.git_push('2026-07-10', paths))
             local_head = git(repo, 'rev-parse', 'HEAD').stdout.strip()
             self.assertEqual(git(repo, 'show', '--format=%H', '-s', 'HEAD').stdout.strip(), local_head)
             self.assertEqual(git(repo, 'status', '--porcelain', '--', 'content/posts').stdout, '')
@@ -631,8 +676,6 @@ body
             review.assert_not_called()
             push.assert_not_called()
             self.assertTrue((current_dir / 'blog-generation-manifest-2026-07-10.json').is_file())
-            self.assertTrue(old_page.exists())
-            self.assertEqual(old_page.read_text(encoding='utf-8'), 'original')
             self.assertTrue((content_dir / '2026-07-10.md').is_file())
 
     def test_review_receipt_detects_any_post_review_file_change(self):
@@ -643,9 +686,10 @@ body
             page.write_text('reviewed\n', encoding='utf-8')
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
-                save_bound_review_receipt('2026-07-10', [page])
+                publish_paths = [page]
+                save_bound_review_receipt('2026-07-10', publish_paths)
                 paths, _receipt = publish_to_blog.load_verified_review_receipt('2026-07-10')
-                self.assertEqual(paths, [page.resolve()])
+                self.assertEqual(set(paths), {path.resolve() for path in publish_paths})
                 page.write_text('changed after review\n', encoding='utf-8')
                 with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, 'review 后已变更'):
                     publish_to_blog.load_verified_review_receipt('2026-07-10')
@@ -658,14 +702,16 @@ body
             page.write_text('reviewed\n', encoding='utf-8')
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
-                save_bound_review_receipt('2026-07-10', [page])
+                publish_paths = [page]
+                save_bound_review_receipt('2026-07-10', publish_paths)
                 receipt, _path, _head = publish_to_blog._load_push_receipt('2026-07-10')
+                git(repo, 'add', '--', *publish_to_blog._git_relative_manifest(publish_paths))
                 page.write_text('unreviewed race\n', encoding='utf-8')
                 git(repo, 'add', '--', 'content/posts/2026-07-10.md')
                 with self.assertRaisesRegex(
                     publish_to_blog.PublishDataValidationError, 'index.*review',
                 ):
-                    publish_to_blog.validate_git_index_against_review_receipt(receipt, [page])
+                    publish_to_blog.validate_git_index_against_review_receipt(receipt, publish_paths)
 
     def test_index_deletion_semantics_must_match_review_receipt(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -678,15 +724,16 @@ body
             page.unlink()
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
-                save_bound_review_receipt('2026-07-10', [page])
+                publish_paths = [page]
+                save_bound_review_receipt('2026-07-10', publish_paths)
                 receipt, _path, _head = publish_to_blog._load_push_receipt('2026-07-10')
                 # Not staged yet: index still contains the supposedly deleted page.
                 with self.assertRaisesRegex(
                     publish_to_blog.PublishDataValidationError, 'index.*仍包含',
                 ):
-                    publish_to_blog.validate_git_index_against_review_receipt(receipt, [page])
-                git(repo, 'add', '--', 'content/posts/2026-07-10-old.md')
-                publish_to_blog.validate_git_index_against_review_receipt(receipt, [page])
+                    publish_to_blog.validate_git_index_against_review_receipt(receipt, publish_paths)
+                git(repo, 'add', '--', *publish_to_blog._git_relative_manifest(publish_paths))
+                publish_to_blog.validate_git_index_against_review_receipt(receipt, publish_paths)
 
     def test_committed_blob_must_match_review_receipt(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -696,15 +743,16 @@ body
             page.write_text('reviewed\n', encoding='utf-8')
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
-                save_bound_review_receipt('2026-07-10', [page])
+                publish_paths = [page]
+                save_bound_review_receipt('2026-07-10', publish_paths)
                 receipt, _path, _head = publish_to_blog._load_push_receipt('2026-07-10')
                 page.write_text('changed by hook\n', encoding='utf-8')
-                git(repo, 'add', '--', 'content/posts/2026-07-10.md')
+                git(repo, 'add', '--', *publish_to_blog._git_relative_manifest(publish_paths))
                 git(repo, 'commit', '-m', 'tampered commit')
                 with self.assertRaisesRegex(
                     publish_to_blog.PublishDataValidationError, '提交.*review',
                 ):
-                    publish_to_blog.validate_git_commit_against_review_receipt(receipt, [page])
+                    publish_to_blog.validate_git_commit_against_review_receipt(receipt, publish_paths)
 
     def test_incremental_review_selects_only_modified_failed_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -872,6 +920,7 @@ body
                 manifest = publish_to_blog.save_generation_manifest(
                     '2026-07-10', [page], input_fingerprint='a' * 64,
                     template_fingerprint='b' * 64, base_head=base_head,
+                    published_papers=[{'arxivId': '2607.00001'}],
                 )
                 reused = publish_to_blog.reusable_generation_manifest(
                     '2026-07-10', 'a' * 64, 'b' * 64, base_head,
@@ -891,6 +940,23 @@ body
         with mock.patch.object(publish_to_blog, '_sha256_file', return_value='f' * 64):
             dependency_changed = publish_to_blog.generation_template_fingerprint()
         self.assertNotEqual(first, dependency_changed)
+
+    def test_review_protocol_fingerprint_binds_model_code_hugo_and_is_cached(self):
+        completed = SimpleNamespace(stdout='hugo v0.test', stderr='', returncode=0)
+        publish_to_blog._REVIEW_PROTOCOL_CACHE.clear()
+        with mock.patch.object(publish_to_blog, '_sha256_file', return_value='a' * 64), \
+                mock.patch.object(publish_to_blog.shutil, 'which', return_value='/missing/hugo'), \
+                mock.patch.object(publish_to_blog.subprocess, 'run', return_value=completed) as run, \
+                mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'model-a'}):
+            first = publish_to_blog.review_protocol_fingerprint()
+            self.assertEqual(first, publish_to_blog.review_protocol_fingerprint())
+            self.assertEqual(run.call_count, 1)
+        with mock.patch.object(publish_to_blog, '_sha256_file', return_value='a' * 64), \
+                mock.patch.object(publish_to_blog.shutil, 'which', return_value='/missing/hugo'), \
+                mock.patch.object(publish_to_blog.subprocess, 'run', return_value=completed), \
+                mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'model-b'}):
+            second = publish_to_blog.review_protocol_fingerprint()
+        self.assertNotEqual(first, second)
 
     def test_reusable_generation_manifest_rejects_empty_duplicate_and_bad_sha_records(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1037,15 +1103,16 @@ body
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir), \
                     mock.patch.object(publish_to_blog, 'GITHUB_REMOTE', 'origin'):
-                save_bound_review_receipt('2026-07-10', [page])
-                self.assertFalse(publish_to_blog.git_push('2026-07-10', [page]))
+                publish_paths = [page]
+                save_bound_review_receipt('2026-07-10', publish_paths)
+                self.assertFalse(publish_to_blog.git_push('2026-07-10', publish_paths))
                 publication_head = git(repo, 'rev-parse', 'HEAD').stdout.strip()
                 commit_count = git(repo, 'rev-list', '--count', 'HEAD').stdout.strip()
                 subprocess.run(
                     ['git', 'init', '--bare', '--initial-branch=main', str(missing_remote)],
                     check=True, capture_output=True, text=True,
                 )
-                self.assertTrue(publish_to_blog.git_push('2026-07-10', [page]))
+                self.assertTrue(publish_to_blog.git_push('2026-07-10', publish_paths))
             self.assertEqual(git(repo, 'rev-parse', 'HEAD').stdout.strip(), publication_head)
             self.assertEqual(git(repo, 'rev-list', '--count', 'HEAD').stdout.strip(), commit_count)
             self.assertEqual(
@@ -1068,6 +1135,364 @@ body
                 save_bound_review_receipt(
                     '2026-07-10', [page], expected_base_head='f' * 40,
                 )
+
+    def test_visual_summary_manifest_stages_single_infographic_and_attests_review(self):
+        png = valid_png()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current = Path(tmp) / 'data' / 'current'
+            source_root = current / 'visual-summaries' / '2026-07-10' / '2607.00001'
+            source_root.mkdir(parents=True)
+            paper = {'arxivId': '2607.00001', 'analysis': 'audited', 'parsed': {'score': '8'}}
+            analysis_sha = publish_to_blog._visual_summary_analysis_sha256(paper)
+            prompt_sha = publish_to_blog._sha256_file(Path(ROOT) / 'prompts' / 'visual-summary.md')
+            cards = {}
+            for kind in publish_to_blog.VISUAL_SUMMARY_KINDS:
+                source = source_root / f'{kind}.png'
+                source.write_bytes(png)
+                cards[kind] = {
+                    'status': 'complete', 'analysisSha256': analysis_sha,
+                    'promptSha256': prompt_sha,
+                    'assetSha256': publish_to_blog._sha256_file(source),
+                    'assetPath': str(source),
+                }
+            manifest = current / 'visual-summary-manifest.json'
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text(json.dumps({
+                'version': 2, 'batchDate': '2026-07-10', 'promptSha256': prompt_sha,
+                'papers': {'2607.00001': {
+                    'normalizedArxivId': '2607.00001', 'batchDate': '2026-07-10',
+                    'analysisSha256': analysis_sha, 'promptSha256': prompt_sha,
+                    'cards': cards,
+                }},
+            }), encoding='utf-8')
+            stage_posts = current / 'blog-generation-stage-2026-07-10' / 'posts'
+            stage_posts.mkdir(parents=True)
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    mock.patch.object(publish_to_blog, 'VISUAL_SUMMARY_ASSET_DIR', current / 'visual-summaries'):
+                enriched, assets = publish_to_blog.load_visual_summary_cards(
+                    [paper], '2026-07-10', manifest,
+                )
+                self.assertEqual(len(enriched[0]['visualSummaryCards']), 1)
+                self.assertNotIn('sourcePath', enriched[0]['visualSummaryCards'][0])
+                staged_assets = publish_to_blog.stage_visual_summary_assets(assets, stage_posts)
+                for source in staged_assets:
+                    target = repo.resolve() / source.resolve().relative_to(stage_posts.parent.resolve())
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(source.read_bytes())
+                page = posts / '2026-07-10-paper.md'
+                page.write_text(
+                    '---\npaper_digest_page_type: paper\n'
+                    'paper_digest_arxiv_id: "2607.00001"\n---\n'
+                    + '\n'.join(f'![card]({asset["url"]})' for asset in assets),
+                    encoding='utf-8',
+                )
+                paths = [page, *(repo / asset['repoRelativePath'] for asset in assets)]
+                generation = publish_to_blog.save_generation_manifest('2026-07-10', paths)
+                page_sha = publish_to_blog._sha256_file(page)
+                results = {str(page.resolve()): {
+                    'passed': True, 'completed': True, 'failureKind': None,
+                    'reviewedSha256': page_sha,
+                }}
+                self.assertEqual(publish_to_blog.attest_visual_summary_assets(
+                    '2026-07-10', paths, generation, results,
+                ), 0)
+                self.assertTrue(all(
+                    results[str(Path(path).resolve())]['passed'] for path in paths
+                ))
+                publish_to_blog.validate_reviewed_file_hashes(
+                    '2026-07-10', paths, generation, results,
+                )
+                loaded = publish_to_blog._load_review_image(assets[0]['url'])
+                self.assertEqual(loaded['media_type'], 'image/png')
+
+                original_manifest = json.loads(manifest.read_text(encoding='utf-8'))
+                incomplete = json.loads(json.dumps(original_manifest))
+                incomplete['papers']['2607.00001']['cards']['infographic']['status'] = 'pending'
+                manifest.write_text(json.dumps(incomplete), encoding='utf-8')
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, '未完成',
+                ):
+                    publish_to_blog.load_visual_summary_cards([paper], '2026-07-10', manifest)
+
+                stale = json.loads(json.dumps(original_manifest))
+                stale['papers']['2607.00001']['analysisSha256'] = '0' * 64
+                manifest.write_text(json.dumps(stale), encoding='utf-8')
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, '指纹已失效',
+                ):
+                    publish_to_blog.load_visual_summary_cards([paper], '2026-07-10', manifest)
+
+    def test_generate_rejects_missing_visual_summary_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / 'missing.json'
+            with self.assertRaisesRegex(
+                publish_to_blog.PublishDataValidationError, '缺少强制视觉摘要',
+            ):
+                publish_to_blog.load_visual_summary_cards(
+                    [{'arxivId': '2607.00001'}], '2026-07-10', missing,
+                )
+
+    def test_digest_cover_manifest_binds_summary_context_and_asset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            current = Path(tmp) / 'data' / 'current'
+            source = current / 'digest-covers' / '2026-07-10' / 'cover.png'
+            source.parent.mkdir(parents=True)
+            source.write_bytes(valid_png())
+            papers = [{
+                'arxivId': '2607.00001', 'title': 'Top Paper',
+                'parsed': {
+                    'score': '9.0', 'primaryTaskTag': '#语音识别',
+                    'tags': ['#语音识别'],
+                },
+            }]
+            context = publish_to_blog._digest_cover_context(papers, '2026-07-10')
+            data_sha = hashlib.sha256(json.dumps(
+                context, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+            ).encode('utf-8')).hexdigest()
+            prompt_sha = publish_to_blog._sha256_file(Path(ROOT) / 'prompts' / 'digest-cover.md')
+            manifest = current / 'digest-cover-manifests' / '2026-07-10.json'
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(json.dumps({
+                'version': 1, 'batchDate': '2026-07-10',
+                'dataSha256': data_sha, 'promptSha256': prompt_sha,
+                'generationContext': context,
+                'cover': {
+                    'status': 'complete', 'dataSha256': data_sha,
+                    'promptSha256': prompt_sha,
+                    'assetPath': str(source),
+                    'assetSha256': publish_to_blog._sha256_file(source),
+                },
+            }), encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    mock.patch.object(publish_to_blog, 'DIGEST_COVER_ASSET_DIR', current / 'digest-covers'):
+                loaded = publish_to_blog.load_digest_cover(papers, '2026-07-10', manifest)
+                self.assertEqual(loaded['kind'], 'digest-cover')
+                self.assertTrue(loaded['url'].endswith('/images/digest-covers/2026-07-10/cover.png'))
+
+            stale = json.loads(manifest.read_text(encoding='utf-8'))
+            stale['dataSha256'] = '0' * 64
+            manifest.write_text(json.dumps(stale), encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    mock.patch.object(publish_to_blog, 'DIGEST_COVER_ASSET_DIR', current / 'digest-covers'), \
+                    self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '指纹'):
+                publish_to_blog.load_digest_cover(papers, '2026-07-10', manifest)
+
+    def test_post_publish_visuals_do_not_enter_generation_fingerprint(self):
+        papers = [{'arxivId': '2607.1', 'title': 'Paper'}]
+        self.assertEqual(
+            publish_to_blog.generation_input_fingerprint(
+                papers, '2026-07-10', '论文速递', False,
+            ),
+            publish_to_blog.generation_input_fingerprint(
+                papers, '2026-07-10', '论文速递', False,
+            ),
+        )
+
+    def test_post_publish_planner_start_failure_does_not_undo_blog_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            current = Path(tmp)
+            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                manifest = publish_to_blog.generation_manifest_path('2026-07-10')
+                manifest.parent.mkdir(parents=True, exist_ok=True)
+                manifest.write_text(json.dumps({'category': '论文速递'}), encoding='utf-8')
+                with mock.patch.object(
+                    publish_to_blog.subprocess, 'run', side_effect=OSError('node missing'),
+                ):
+                    self.assertFalse(
+                        publish_to_blog.plan_post_publish_visual_assets('2026-07-10')
+                    )
+
+    def test_digest_cover_local_bytes_are_allowed_for_required_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'blog'
+            current = Path(tmp) / 'current'
+            cover = repo / 'static/images/digest-covers/2026-07-10/cover.png'
+            cover.parent.mkdir(parents=True)
+            cover.write_bytes(valid_png())
+            manifest_dir = current / 'digest-cover-manifests'
+            manifest_dir.mkdir(parents=True)
+            context = {
+                'title': '语音/音乐/音频论文速递 2026-07-10',
+                'batchDate': '2026-07-10', 'paperCount': 1,
+                'hotDirections': [{'tag': '#语音识别', 'count': 1}],
+                'ranking': [{'rank': 1, 'title': 'Paper', 'score': '8.0', 'primaryTask': '#语音识别'}],
+            }
+            (manifest_dir / '2026-07-10.json').write_text(json.dumps({
+                'generationContext': context,
+            }), encoding='utf-8')
+            url = f'{publish_to_blog.BASE_PATH}/images/digest-covers/2026-07-10/cover.png'
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'DIGEST_COVER_MANIFEST_DIR', manifest_dir), \
+                    mock.patch.object(
+                        publish_to_blog, 'call_llm_api',
+                        return_value='{"passed": true, "issues": []}',
+                    ) as call:
+                loaded = publish_to_blog._load_review_image(url)
+                passed, issues = publish_to_blog.multimodal_review_images(
+                    f'![cover]({url})', '汇总页', required=True,
+                )
+            self.assertEqual(loaded['media_type'], 'image/png')
+            self.assertTrue(passed)
+            self.assertEqual(issues, [])
+            self.assertIn('TOP 5', call.call_args.args[0])
+            self.assertIn('语音识别', call.call_args.args[0])
+
+    def test_review_and_push_allow_generation_without_infographic(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10-paper.md'
+            page.write_text('''---
+paper_digest_page_type: paper
+paper_digest_arxiv_id: "2607.00001"
+---
+body
+''', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                publish_to_blog.save_generation_manifest('2026-07-10', [page])
+                loaded, _ = publish_to_blog.load_generation_manifest('2026-07-10')
+                self.assertEqual(loaded, [page.resolve()])
+                manifest_path = publish_to_blog.generation_manifest_path('2026-07-10')
+                reviewed = {str(page.resolve()): {
+                    'passed': True,
+                    'reviewedSha256': publish_to_blog._sha256_file(page),
+                }}
+                publish_to_blog.save_review_receipt(
+                    '2026-07-10', [page], 'hugo',
+                    generation_manifest=manifest_path, reviewed_results=reviewed,
+                )
+                verified, _ = publish_to_blog.load_verified_review_receipt('2026-07-10')
+                self.assertEqual(verified, [page.resolve()])
+
+    def test_generation_rejects_duplicate_digest_cover_reference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, _posts, _remote = init_blog_repo(tmp)
+            current = Path(tmp) / 'data' / 'current'
+            paths = []
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                save_bound_review_receipt('2026-07-10', paths)
+                index = next(
+                    Path(item) for item in paths
+                    if Path(item).name.endswith('visual-gate-index.md')
+                )
+                cover_url = f'{publish_to_blog.BASE_PATH}/images/digest-covers/2026-07-10/cover.png'
+                index.write_text(
+                    index.read_text(encoding='utf-8') + f'![duplicate]({cover_url})\n',
+                    encoding='utf-8',
+                )
+                publish_to_blog.save_generation_manifest('2026-07-10', paths)
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, '提前引用',
+                ):
+                    publish_to_blog.load_generation_manifest('2026-07-10')
+
+    def test_review_and_push_reject_any_post_publish_visual_asset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current = Path(tmp) / 'data' / 'current'
+            index = posts / '2026-07-10.md'
+            index.write_text('index\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                publish_paths = [index]
+                save_bound_review_receipt('2026-07-10', publish_paths)
+                asset = repo / 'static/images/visual-summaries/2026-07-10/2607.99999/infographic.png'
+                asset.parent.mkdir(parents=True, exist_ok=True)
+                asset.write_bytes(publish_to_blog.PNG_SIGNATURE)
+                publish_paths.append(asset)
+                manifest = publish_to_blog.save_generation_manifest(
+                    '2026-07-10', publish_paths,
+                )
+                reviewed = {
+                    str(path.resolve()): {
+                        'passed': True,
+                        'reviewedSha256': publish_to_blog._sha256_file(path),
+                    }
+                    for path in publish_paths if path.is_file()
+                }
+                publish_to_blog.save_review_receipt(
+                    '2026-07-10', publish_paths, 'hugo',
+                    generation_manifest=manifest, reviewed_results=reviewed,
+                )
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, '发布后视觉资产',
+                ):
+                    publish_to_blog.load_generation_manifest('2026-07-10')
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, '发布后视觉资产',
+                ):
+                    publish_to_blog.load_verified_review_receipt('2026-07-10')
+
+    def test_generation_install_crash_adopts_binary_visual_asset(self):
+        png = valid_png()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current = Path(tmp) / 'data' / 'current'
+            stage_posts = current / 'blog-generation-stage-2026-07-10' / 'posts'
+            stage_posts.mkdir(parents=True)
+            (stage_posts / '2026-07-10.md').write_text('index\n', encoding='utf-8')
+            staged_asset = stage_posts.parent / 'static/images/visual-summaries/2026-07-10/2607.1/infographic.png'
+            staged_asset.parent.mkdir(parents=True)
+            staged_asset.write_bytes(png)
+            journal_path = current / 'journal.json'
+            journal = {'installation': None}
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)):
+                publish_to_blog.prepare_generation_installation(
+                    journal, journal_path, stage_posts, posts, '2026-07-10',
+                    staged_assets=[staged_asset],
+                )
+                record = next(item for item in journal['installation']['files'] if item['path'].endswith('.png'))
+                target = repo / record['path']
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(png)
+                installed = publish_to_blog.resume_generation_installation(
+                    journal, journal_path, stage_posts,
+                )
+                self.assertIn(target.resolve(), installed)
+                self.assertEqual(target.read_bytes(), png)
+
+    def test_precommit_hook_cannot_smuggle_unreviewed_commit_delta(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10.md'
+            page.write_text('reviewed\n', encoding='utf-8')
+            hook = repo / '.git/hooks/pre-commit'
+            hook.write_text('#!/bin/sh\necho injected > injected.txt\ngit add injected.txt\n', encoding='utf-8')
+            hook.chmod(0o755)
+            base = git(repo, 'rev-parse', 'HEAD').stdout.strip()
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                publish_paths = [page]
+                save_bound_review_receipt('2026-07-10', publish_paths)
+                self.assertFalse(publish_to_blog.git_push('2026-07-10', publish_paths))
+            self.assertEqual(git(repo, 'rev-parse', 'HEAD').stdout.strip(), base)
+            self.assertEqual(git(repo, 'diff', '--cached', '--name-only').stdout, '')
+
+    def test_push_adopts_exact_commit_after_receipt_write_crash_window(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, remote = init_blog_repo(tmp, with_remote=True)
+            current = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10.md'
+            page.write_text('reviewed\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    mock.patch.object(publish_to_blog, 'GITHUB_REMOTE', 'origin'):
+                publish_paths = [page]
+                receipt_path = save_bound_review_receipt('2026-07-10', publish_paths)
+                git(repo, 'add', '--', *publish_to_blog._git_relative_manifest(publish_paths))
+                git(repo, 'commit', '-m', 'simulated commit before receipt persistence')
+                committed = git(repo, 'rev-parse', 'HEAD').stdout.strip()
+                receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
+                self.assertNotIn('publicationCommit', receipt)
+                self.assertTrue(publish_to_blog.git_push('2026-07-10', publish_paths))
+                adopted = json.loads(receipt_path.read_text(encoding='utf-8'))
+                self.assertEqual(adopted['publicationCommit'], committed)
+            self.assertEqual(git(remote, 'rev-parse', 'refs/heads/main').stdout.strip(), committed)
 
 
 if __name__ == '__main__':

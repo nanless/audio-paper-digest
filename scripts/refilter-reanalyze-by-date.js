@@ -214,7 +214,19 @@ async function main(targetDate, options = {}) {
         refilterAt: getBeijingISOString()
     });
     const batchResult = await analyzeBatchFn(filtered, {
+        checkpointFilePath: resultFile,
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
+        preparePaperLocked: paper => {
+            const current = readJsonFileStrict(resultFile, { allowMissing: true });
+            const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
+            const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
+            if (!latest) return { paper, skip: false };
+            const latestForReanalysis = { ...paper, ...latest };
+            delete latestForReanalysis.analysis;
+            delete latestForReanalysis.parsed;
+            delete latestForReanalysis.error;
+            return { paper: latestForReanalysis, skip: false };
+        },
         onPaperResultLocked: async (paper, result) => {
             const attempted = result.result || {
                 ...paper,

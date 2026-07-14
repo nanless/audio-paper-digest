@@ -47,7 +47,7 @@ for (let i = 0; i < args.length; i++) {
 
 const DEFAULT_CURRENT_FILE = Config.FILES.deepAnalysisResult;
 const DEFAULT_LEGACY_FILE = Config.FILES.deepAnalysisResultLegacy;
-const DATA_FILE = dataFileArg || (fs.existsSync(DEFAULT_CURRENT_FILE) || !fs.existsSync(DEFAULT_LEGACY_FILE) ? DEFAULT_CURRENT_FILE : DEFAULT_LEGACY_FILE);
+const DATA_FILE = dataFileArg || DEFAULT_CURRENT_FILE;
 
 // 并发度：命令行 > 环境变量 > 配置默认值
 const CONCURRENCY = concurrencyArg ?? (parseInt(process.env.PD_REANALYZE_CONCURRENCY, 10) || Config.ANALYSIS_CONFIG.concurrency);
@@ -63,6 +63,13 @@ function inferBatchDate(data, papers) {
 }
 
 async function reanalyzeAll() {
+    if (!dataFileArg && !fs.existsSync(DEFAULT_CURRENT_FILE) && fs.existsSync(DEFAULT_LEGACY_FILE)) {
+        const legacyData = readJsonFileStrict(DEFAULT_LEGACY_FILE);
+        updateJsonFileLocked(DEFAULT_CURRENT_FILE, () => Array.isArray(legacyData)
+            ? { timestamp: getBeijingISOString(), source: DEFAULT_LEGACY_FILE, papers: legacyData }
+            : legacyData);
+        console.log(`[reanalyze] 📦 已将 legacy 分析结果迁移到权威路径: ${DEFAULT_CURRENT_FILE}`);
+    }
     console.log(`[reanalyze] 读取数据文件: ${DATA_FILE}`);
 
     if (!fs.existsSync(DATA_FILE)) {
@@ -108,6 +115,13 @@ async function reanalyzeAll() {
     });
 
     const { stats } = await analyzeBatch(papers, {
+        checkpointFilePath: DATA_FILE,
+        preparePaperLocked: paper => {
+            const current = readJsonFileStrict(DATA_FILE);
+            const currentPapers = Array.isArray(current) ? current : (current.papers || []);
+            const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
+            return { paper: latest ? { ...paper, ...latest } : paper, skip: false };
+        },
         concurrency: CONCURRENCY,
         maxRetries: 2,
         retryDelayMs: 2000,
@@ -187,14 +201,13 @@ async function reanalyzeAll() {
     if (digestStatus.updated > 0) console.log(`[reanalyze] papers.json 状态已同步: ${digestStatus.updated} 篇`);
     console.log(`[reanalyze] 结束时间: ${getBeijingLocaleString()}`);
     console.log(`[reanalyze] 数据已保存至: ${DATA_FILE}`);
-
     return { success: stats.success, failed: finalPayload.stats.reanalyzeFailed, total: papers.length, status, exitCode: getAnalysisExitCode(status) };
 }
 
 if (require.main === module) {
     reanalyzeAll().then(result => {
         if (result.status === 'complete') {
-            console.log('\n[reanalyze] 重新分析完成，请运行 publish-to-blog.py 更新博客');
+            console.log('\n[reanalyze] 文本重分析完成；可继续生成、review 并发布全部博客');
         } else {
             console.error(`\n[reanalyze] 尚有 ${result.failed} 篇未恢复，禁止视为完整批次`);
         }

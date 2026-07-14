@@ -6,6 +6,7 @@ const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { validAnalysisPaper: validAnalysisRecord } = require('./valid-analysis-fixture.js');
+const { buildFilterInputSha256 } = require('../scripts/fetch-papers.js');
 
 const execFileAsync = promisify(execFile);
 const EXPECTED_CATEGORIES = ['eess.AS', 'cs.SD', 'eess.SP', 'cs.CL', 'cs.LG', 'cs.AI', 'cs.MM'];
@@ -13,6 +14,25 @@ const completeSourceHealth = () => ({
     arxiv: { categories: EXPECTED_CATEGORIES.map(id => ({ id, ok: true })) },
     huggingface: { ok: true }
 });
+
+function writeResumeCheckpoint(dir, common) {
+    const { saveFetchCheckpoint } = require('../scripts/full-fetch.js');
+    const file = path.join(dir, 'fetch-checkpoint.json');
+    saveFetchCheckpoint({
+        timestamp: common.timestamp,
+        batchStartedAt: common.timestamp,
+        batchDate: common.timestamp.slice(0, 10),
+        batchId: common.batchId,
+        candidateFingerprint: common.candidateFingerprint,
+        sourceConfigFingerprint: common.sourceConfigFingerprint,
+        blogDedupFingerprint: common.blogDedupFingerprint,
+        historicalDedupIds: [],
+        categoryOrder: EXPECTED_CATEGORIES,
+        arxiv: Object.fromEntries(EXPECTED_CATEGORIES.map(id => [id, { status: 'complete', papers: [], health: { id, ok: true } }])),
+        huggingface: { status: 'complete', papers: [], health: { ok: true } }
+    }, file);
+    return { file, checkpoint: JSON.parse(fs.readFileSync(file)) };
+}
 
 describe('full-fetch helpers', () => {
     it('模块可安全导入且不会自动启动长流程', () => {
@@ -43,6 +63,23 @@ describe('full-fetch helpers', () => {
         assert.strictEqual(getSourceFetchedCount({ arxiv: { totalFetched: 12 } }, 'arxiv', 0), 12);
         assert.strictEqual(getSourceFetchedCount({ huggingface: { fetched: 3 } }, 'huggingface', 0), 3);
         assert.strictEqual(getSourceFetchedCount({}, 'arxiv', 7), 7);
+    });
+
+    it('同批次跨 arXiv 类别重复论文会合并全部 categories', () => {
+        const { mergePaperCategories } = require('../scripts/full-fetch.js');
+        const target = { arxivId: '2607.1', categories: ['cs.SD'] };
+        mergePaperCategories(target, { arxivId: '2607.1', categories: ['eess.AS', 'cs.SD'] });
+        assert.deepStrictEqual(target.categories, ['cs.SD', 'eess.AS']);
+    });
+
+    it('跨午夜运行仍把所有候选固定到启动时批次时间', () => {
+        const { pinPapersToBatch } = require('../scripts/full-fetch.js');
+        const papers = [{ fetchedAt: '2026-07-14T00:01:00+08:00' }, {}];
+        pinPapersToBatch(papers, '2026-07-13T23:59:00.000+08:00');
+        assert.deepStrictEqual(papers.map(paper => paper.fetchedAt), [
+            '2026-07-13T23:59:00.000+08:00',
+            '2026-07-13T23:59:00.000+08:00'
+        ]);
     });
 
     it('sourceHealth 可提取抓取失败原因', () => {
@@ -81,14 +118,14 @@ describe('full-fetch helpers', () => {
         const papers = [{ arxivId: '2607.00001' }, { arxivId: '2607.00002' }];
 
         const complete = validateFilterDecisionCoverage(papers, {
-            '2607.00001': { related: true },
-            '2607.00002': { related: false }
+            '2607.00001': { related: true, inputSha256: buildFilterInputSha256(papers[0]) },
+            '2607.00002': { related: false, inputSha256: buildFilterInputSha256(papers[1]) }
         });
         assert.strictEqual(complete.complete, true);
         assert.strictEqual(complete.decided, 2);
 
         const incomplete = validateFilterDecisionCoverage(papers, {
-            '2607.00001': { related: true },
+            '2607.00001': { related: true, inputSha256: buildFilterInputSha256(papers[0]) },
             '2607.00002': { related: null, retryable: true, fallback: true }
         });
         assert.strictEqual(incomplete.complete, false);
@@ -97,7 +134,9 @@ describe('full-fetch helpers', () => {
     });
 
     it('筛选产物一致性同时校验 stats.complete、候选覆盖和相关结果', () => {
-        const { validateFilterArtifacts } = require('../scripts/full-fetch.js');
+        const { validateFilterArtifacts, stableContentSha256 } = require('../scripts/full-fetch.js');
+        const rawPapers = [{ arxivId: '2607.00001' }, { arxivId: '2607.00002' }];
+        const rawPapersSha256 = stableContentSha256(rawPapers);
         const decisions = {
             timestamp: '2026-07-10T10:00:00+08:00',
             filterModel: 'model-a',
@@ -106,10 +145,11 @@ describe('full-fetch helpers', () => {
             candidateFingerprint: 'candidate-a',
             sourceConfigFingerprint: 'source-a',
             blogDedupFingerprint: 'blog-a',
+            rawPapersSha256,
             stats: { complete: true, totalCandidates: 2, decided: 2 },
             decisions: {
-                '2607.00001': { related: true },
-                '2607.00002': { related: false }
+                '2607.00001': { related: true, inputSha256: buildFilterInputSha256(rawPapers[0]) },
+                '2607.00002': { related: false, inputSha256: buildFilterInputSha256(rawPapers[1]) }
             }
         };
         const filtered = {
@@ -119,6 +159,7 @@ describe('full-fetch helpers', () => {
             candidateFingerprint: 'candidate-a',
             sourceConfigFingerprint: 'source-a',
             blogDedupFingerprint: 'blog-a',
+            rawPapersSha256,
             stats: { decisionCount: 2, skippedFromArchive: 0 },
             papers: [{ arxivId: '2607.00001' }]
         };
@@ -126,8 +167,9 @@ describe('full-fetch helpers', () => {
             candidateFingerprint: 'candidate-a',
             sourceConfigFingerprint: 'source-a',
             blogDedupFingerprint: 'blog-a',
+            rawPapersSha256,
             sourceHealth: completeSourceHealth(),
-            papers: [{ arxivId: '2607.00001' }, { arxivId: '2607.00002' }]
+            papers: rawPapers
         };
 
         assert.strictEqual(validateFilterArtifacts(filtered, decisions, raw), true);
@@ -215,28 +257,26 @@ describe('full-fetch helpers', () => {
     });
 
     it('来源健康的当日未完成筛选会直接续跑，不重新抓取候选', () => {
-        const { loadResumableFilterForToday } = require('../scripts/full-fetch.js');
+        const { loadResumableFilterForToday, stableContentSha256 } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-resume-filter-'));
         const rawFile = path.join(dir, 'raw-candidates.json');
         const decisionsFile = path.join(dir, 'filter-decisions.json');
         const timestamp = '2026-07-13T10:00:00+08:00';
+        const papers = [{ arxivId: '2607.00001' }, { arxivId: '2607.00002' }];
+        const common = { timestamp, batchId: 'batch-a', candidateFingerprint: 'candidate-a', sourceConfigFingerprint: 'source-a', blogDedupFingerprint: 'blog-a' };
+        const { file: fetchCheckpoint, checkpoint } = writeResumeCheckpoint(dir, common);
+        const rawPapersSha256 = stableContentSha256(papers);
         fs.writeFileSync(rawFile, JSON.stringify({
-            timestamp,
-            candidateFingerprint: 'candidate-a',
-            sourceConfigFingerprint: 'source-a',
-            blogDedupFingerprint: 'blog-a',
+            ...common, batchDate: '2026-07-13', rawPapersSha256, fetchSourcesSha256: checkpoint.fetchSourcesSha256,
             sourceHealth: completeSourceHealth(),
-            papers: [{ arxivId: '2607.00001' }, { arxivId: '2607.00002' }]
+            papers
         }));
         fs.writeFileSync(decisionsFile, JSON.stringify({
-            timestamp,
+            ...common, batchDate: '2026-07-13', rawPapersSha256, fetchSourcesSha256: checkpoint.fetchSourcesSha256,
             filterModel: 'model-a',
             filterPromptHash: 'hash-a',
-            candidateFingerprint: 'candidate-a',
-            sourceConfigFingerprint: 'source-a',
-            blogDedupFingerprint: 'blog-a',
             decisions: {
-                '2607.00001': { related: true },
+                '2607.00001': { related: true, inputSha256: buildFilterInputSha256(papers[0]) },
                 '2607.00002': { related: null, retryable: true, fallback: true }
             }
         }));
@@ -246,22 +286,22 @@ describe('full-fetch helpers', () => {
             candidateFingerprint: 'candidate-a',
             sourceConfigFingerprint: 'source-a',
             blogDedupFingerprint: 'blog-a'
-        }, { rawCandidates: rawFile, filterDecisions: decisionsFile });
+        }, { rawCandidates: rawFile, filterDecisions: decisionsFile, fetchCheckpoint });
         assert.ok(resumed);
         assert.deepStrictEqual(resumed.coverage.missingIds, ['2607.00002']);
     });
 
     it('raw 已原子写入但 decisions 尚未创建时，从空决定继续筛选而不重新抓取', () => {
-        const { loadResumableFilterForToday } = require('../scripts/full-fetch.js');
+        const { loadResumableFilterForToday, stableContentSha256 } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-raw-only-'));
         const rawFile = path.join(dir, 'raw-candidates.json');
+        const papers = [{ arxivId: '2607.00001' }];
+        const common = { timestamp: '2026-07-13T10:00:00+08:00', batchId: 'batch-a', candidateFingerprint: 'candidate-a', sourceConfigFingerprint: 'source-a', blogDedupFingerprint: 'blog-a' };
+        const { file: fetchCheckpoint, checkpoint } = writeResumeCheckpoint(dir, common);
         fs.writeFileSync(rawFile, JSON.stringify({
-            timestamp: '2026-07-13T10:00:00+08:00',
-            candidateFingerprint: 'candidate-a',
-            sourceConfigFingerprint: 'source-a',
-            blogDedupFingerprint: 'blog-a',
+            ...common, batchDate: '2026-07-13', rawPapersSha256: stableContentSha256(papers), fetchSourcesSha256: checkpoint.fetchSourcesSha256,
             sourceHealth: completeSourceHealth(),
-            papers: [{ arxivId: '2607.00001' }]
+            papers
         }));
         const resumed = loadResumableFilterForToday('2026-07-13', {
             filterModel: 'new-model',
@@ -269,29 +309,33 @@ describe('full-fetch helpers', () => {
             candidateFingerprint: 'candidate-a',
             sourceConfigFingerprint: 'source-a',
             blogDedupFingerprint: 'blog-a'
-        }, { rawCandidates: rawFile, filterDecisions: path.join(dir, 'missing.json') });
+        }, { rawCandidates: rawFile, filterDecisions: path.join(dir, 'missing.json'), fetchCheckpoint });
         assert.ok(resumed);
         assert.deepStrictEqual(resumed.decisionsData.decisions, {});
         assert.deepStrictEqual(resumed.coverage.missingIds, ['2607.00001']);
     });
 
     it('模型或 prompt 变化只清空筛选决定，健康 raw 候选仍可复用', () => {
-        const { loadResumableFilterForToday } = require('../scripts/full-fetch.js');
+        const { loadResumableFilterForToday, stableContentSha256 } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-new-filter-'));
         const rawFile = path.join(dir, 'raw-candidates.json');
         const decisionsFile = path.join(dir, 'filter-decisions.json');
         const common = {
             timestamp: '2026-07-13T10:00:00+08:00',
+            batchId: 'batch-a',
             candidateFingerprint: 'candidate-a',
             sourceConfigFingerprint: 'source-a',
             blogDedupFingerprint: 'blog-a'
         };
-        fs.writeFileSync(rawFile, JSON.stringify({ ...common, sourceHealth: completeSourceHealth(), papers: [{ arxivId: '2607.00001' }] }));
-        fs.writeFileSync(decisionsFile, JSON.stringify({ ...common, filterModel: 'old', filterPromptHash: 'old', decisions: { '2607.00001': { related: true } } }));
+        const papers = [{ arxivId: '2607.00001' }];
+        const { file: fetchCheckpoint, checkpoint } = writeResumeCheckpoint(dir, common);
+        const integrity = { batchDate: '2026-07-13', rawPapersSha256: stableContentSha256(papers), fetchSourcesSha256: checkpoint.fetchSourcesSha256 };
+        fs.writeFileSync(rawFile, JSON.stringify({ ...common, ...integrity, sourceHealth: completeSourceHealth(), papers }));
+        fs.writeFileSync(decisionsFile, JSON.stringify({ ...common, ...integrity, filterModel: 'old', filterPromptHash: 'old', decisions: { '2607.00001': { related: true, inputSha256: buildFilterInputSha256(papers[0]) } } }));
         const resumed = loadResumableFilterForToday('2026-07-13', {
             filterModel: 'new', filterPromptHash: 'new',
             candidateFingerprint: 'candidate-a', sourceConfigFingerprint: 'source-a', blogDedupFingerprint: 'blog-a'
-        }, { rawCandidates: rawFile, filterDecisions: decisionsFile });
+        }, { rawCandidates: rawFile, filterDecisions: decisionsFile, fetchCheckpoint });
         assert.ok(resumed);
         assert.deepStrictEqual(resumed.decisionsData.decisions, {});
     });
@@ -311,6 +355,19 @@ describe('full-fetch helpers', () => {
         assert.ok(loadFetchCheckpoint(today, 'candidate-a', file));
         assert.strictEqual(loadFetchCheckpoint(today, 'candidate-b', file), null);
         assert.deepStrictEqual(loadFetchCheckpoint(today, 'candidate-a', file).categoryOrder, EXPECTED_CATEGORIES);
+    });
+
+    it('跨进程续跑不复用 arXiv 空结果，避免新批次分阶段上线后永久漏抓', () => {
+        const { isReusableArxivCheckpoint } = require('../scripts/full-fetch.js');
+        assert.strictEqual(isReusableArxivCheckpoint({
+            status: 'complete', papers: [], health: { ok: true }
+        }), false);
+        assert.strictEqual(isReusableArxivCheckpoint({
+            status: 'complete', papers: [{ arxivId: '2607.10001' }], health: { ok: true }
+        }), true);
+        assert.strictEqual(isReusableArxivCheckpoint({
+            status: 'failed', papers: [{ arxivId: '2607.10001' }], health: { ok: false }
+        }), false);
     });
 
     it('抓取 checkpoint 内容被篡改时只丢弃损坏来源', () => {
@@ -454,6 +511,29 @@ describe('full-fetch helpers', () => {
         fs.writeFileSync(file, '{broken');
         assert.throws(() => saveFinalAnalysisResults(file, [], []), /JSON 文件损坏或不可读/);
         assert.strictEqual(fs.readFileSync(file, 'utf8'), '{broken');
+    });
+
+    it('分析流水线状态在锁内写回结果文件且不改写论文正文', () => {
+        const { persistPipelineStats } = require('../scripts/full-fetch.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-pipeline-stats-'));
+        const file = path.join(dir, 'result.json');
+        const originalPaper = validAnalysisRecord('2607.29999');
+        fs.writeFileSync(file, JSON.stringify({
+            generation: 3,
+            status: 'complete',
+            stats: { analysisStatus: 'complete' },
+            papers: [originalPaper]
+        }));
+
+        const saved = persistPipelineStats(file, {
+            visualSummaryStatus: 'pending',
+            digestCoverStatus: 'pending',
+            pipelineStatus: 'analysis_complete'
+        });
+        assert.strictEqual(saved.generation, 4);
+        assert.strictEqual(saved.stats.pipelineStatus, 'analysis_complete');
+        assert.deepStrictEqual(saved.papers, [originalPaper]);
+        fs.rmSync(dir, { recursive: true, force: true });
     });
 
     it('最终保存全失败时写 failed', () => {

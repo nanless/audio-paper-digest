@@ -8,7 +8,7 @@
 
 #### `scripts/full-fetch.js`
 
-Complete workflow entry point. Executes all steps in Section 3: auto-archive -> load dedup database (including blog-published IDs) -> arXiv fetch -> HF fetch -> merge and deduplicate -> filter blog-published papers -> LLM filter -> update deduplication database -> deep analysis -> incremental save.
+Core data-workflow entry point. Executes auto-archive -> dedup -> fetch -> filter -> deep analysis -> incremental save. It does not create visual tasks. Publish the digest index and every paper page first; post-publication TOP 10 and digest-image tasks start only after remote OID verification.
 
 Fetching atomically checkpoints each arXiv category and HuggingFace with paper count and stable content SHA, so tampering refetches only that source. Checkpoint/raw/decisions/filtered artifacts must share candidate/source/blog fingerprints and a Beijing batch date. Filtering requires complete source coverage; healthy raw candidates can resume from zero decisions, while filter configuration changes refilter without refetching.
 
@@ -247,6 +247,14 @@ Multimodal deep analyzer. The analysis flow is an **up-to-8-round progressive pr
 - Only an object with strict `insertions: []` becomes `no_high_value_images`. Schema errors, malformed JSON, total image-download failure, and contract damage remain non-terminal recovery states instead of masquerading as success
 
 **Stage recovery**: `analysisManifest` persists each stage, `analysisCheckpoint` stores the intermediate body, and `analysisRecoveryImageManifest` stores figure recovery metadata. Failed merges validate an older body independently of the latest failed manifest, so repeated failures cannot erase usable content. Force-reanalyzing an older successful record clears primary and downstream completion markers because no checkpoint exists; a normal failed run resumes at the first incomplete stage.
+
+**Mandatory Codex visual-asset stage**
+- After every blog page is pushed and remote `main` is verified, `visual-summary-integration.js` creates one `infographic` task for each final-score TOP 10 paper, with normalized-ID tie breaking
+- Register it with `record --paper ID --kind infographic --file PNG --token TOKEN`. The tool validates the PNG, minimum dimensions, portrait ratio, size, SHA, and task token before atomically copying it under `data/current/visual-summaries/<date>/<paper>/infographic.png`
+- `digest-cover-state.js plan --date YYYY-MM-DD [--category CATEGORY]` deterministically derives the batch title, hot-direction counts, and TOP 5 ranking; conference flows must pass the same category used for blog generation. Codex uses `prompts/digest-cover.md` to create one cover and registers it with the cover `record` command under `data/current/digest-covers/<date>/cover.png`
+- The manifests invalidate independently. Paper-analysis or visual-prompt changes rerun only affected infographics; paper-set, score, primary-task, or cover-prompt changes rerun only the cover. Nonzero `visual:status` or `cover:status` resumes only pending, failed, damaged, or stale assets
+- Project scripts plan, validate, copy, and checkpoint assets but never call an image API. Editorial images must not be presented as original paper figures or invent authors, claims, measurements, or ranking entries; the cover must not render arXiv IDs
+- Images do not enter or block the completed blog generation/review/push transaction; plan/status refuses to run without the remotely verified publication receipt
 
 Stage fingerprints bind the actual truncated primary input, the pre-scoring structure-repair body, and image candidates/download hashes/pre-image body. A change invalidates only that stage and downstream work. Paper payloads are merged only under the shared per-paper lock; batch/final statistics never rewrite cumulative stale paper snapshots.
 

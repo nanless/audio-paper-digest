@@ -340,21 +340,108 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 - `npm run validate:data` 会校验文档类型、rubric 版本、八个子项范围以及 `parsed.score == min(八项之和, 10)`
 - 发布前会从 `analysis` 重新解析并与 `parsed`、顶层评分版本比较；缓存不一致会阻断发布。人工覆盖必须通过 `parsedOverride` 明确声明类型、来源、原因和允许覆盖字段，并仍满足最多一位小数及开源固定锚点契约
 
-### 5.7 `data/current/analyzed.json`
+### 5.7 `data/current/visual-summary-manifests/YYYY-MM-DD.json`
+
+该 manifest 只在全部博客远端发布验证成功后建立，论文集合为最终评分 TOP 10；同分按规范化 arXiv ID 稳定排序。它不是博客发布输入；旧版 v1/v2 清单会迁移为 v3 TOP 10 单长图任务。
+
+```json
+{
+  "version": 3,
+  "batchDate": "2026-07-13",
+  "selection": {"type": "top_score", "limit": 10, "sourcePaperCount": 14},
+  "promptSha256": "<64位十六进制>",
+  "updatedAt": "2026-07-13T18:00:00.000+08:00",
+  "papers": {
+    "2607.12345": {
+      "arxivId": "2607.12345v1",
+      "normalizedArxivId": "2607.12345",
+      "title": "Paper title",
+      "batchDate": "2026-07-13",
+      "rank": 1,
+      "score": 9.1,
+      "analysisSha256": "<64位十六进制>",
+      "promptSha256": "<64位十六进制>",
+      "generationContext": {
+        "title": "Paper title",
+        "documentType": "方法研究",
+        "primaryTask": "语音识别",
+        "primaryMethod": "自监督学习",
+        "summary": "...",
+        "method": "...",
+        "experiments": "...",
+        "limitations": "..."
+      },
+      "cards": {
+        "infographic": {
+          "status": "complete",
+          "label": "论文长图摘要",
+          "taskToken": "<64位十六进制>",
+          "assetPath": "data/current/visual-summaries/2026-07-13/2607.12345/infographic.png",
+          "assetSha256": "<64位十六进制>",
+          "analysisSha256": "<64位十六进制>",
+          "promptSha256": "<64位十六进制>",
+          "completedAt": "2026-07-13T18:00:00.000+08:00"
+        }
+      }
+    }
+  }
+}
+```
+
+- `papers` 必须与目标批次最终评分 TOP 10 精确一致；不足十篇时包含全部成功论文。
+- 每篇 `cards` 必须恰好包含 `infographic`；只有它为 `complete` 且通过资产验证才算该论文视觉摘要完成。
+- 完成项同时绑定当前分析 SHA、`prompts/visual-summary.md` SHA、task token 和 PNG 资产 SHA。分析、prompt 或资产变化后只使对应论文长图失效并回到待生成。
+- 任意 `pending` / `failed`、资产缺失/损坏或 SHA 不匹配只影响发布后视觉阶段，不影响已经完成的博客发布。
+- PNG 必须不超过 8 MiB，至少 768×1024 且高宽比不低于 1.25；顶部使用完整英文标题，图内解释使用中文。PNG 由 Codex 内置图像生成能力产生；项目脚本只管理状态和资产，不调用图像 API。
+
+### 5.8 `data/current/digest-cover-manifests/YYYY-MM-DD.json`
+
+全部博客发布后，每个批次生成一张汇总图。上下文只从同批次通过完整契约且最新尝试未失败的论文确定性计算；热门方向按主任务标签计数排序，排行榜按分数降序取 TOP 5（同分用规范化 ID 稳定排序）。
+
+```json
+{
+  "version": 1,
+  "batchDate": "2026-07-13",
+  "dataSha256": "<64位十六进制>",
+  "promptSha256": "<64位十六进制>",
+  "generationContext": {
+    "title": "语音/音乐/音频论文速递 2026-07-13",
+    "batchDate": "2026-07-13",
+    "paperCount": 14,
+    "hotDirections": [{"tag": "#语音识别", "count": 4}],
+    "ranking": [{"rank": 1, "arxivId": "2607.12345", "title": "Paper title", "score": "9.1", "primaryTask": "#语音识别"}]
+  },
+  "cover": {
+    "status": "complete",
+    "label": "汇总页封面",
+    "taskToken": "<64位十六进制>",
+    "assetPath": "data/current/digest-covers/2026-07-13/cover.png",
+    "assetSha256": "<64位十六进制>"
+  },
+  "overallStatus": "complete"
+}
+```
+
+- `dataSha256` 绑定标题、论文数量、热门方向及排名上下文，`promptSha256` 绑定 `prompts/digest-cover.md`；任一变化只使封面失效，不影响论文长图。
+- 会议流程的 category 自动取自 generation manifest；它会改变标题并进入 `dataSha256`，避免会议汇总图与博客标题不一致，无需给 status 另传参数。
+- manifest 可保存 `arxivId` 以稳定指纹和排序，但 prompt 明确禁止把论文 ID 渲染到封面；排名展示完整英文标题、分数和主方向。
+- 汇总图使用与论文长图相同的 PNG 尺寸、纵横比、大小和 SHA 门禁；缺失、失败、损坏或过期不回滚博客发布。
+
+### 5.9 `data/current/analyzed.json`
 
 旧版已分析记录（`fetch-papers.js` 直跑流程遗留）。当前主流程不直接使用，但保留兼容，参与每日归档。
 
 ---
 
-### 5.8 博客阶段 journal、清单与审查凭证
+### 5.10 博客阶段 journal、清单与审查凭证
 
 - generation staging/install journal：逐页记录输入指纹、安装前 SHA 和目标 SHA；崩溃后只收养内容完全匹配的页面，全部论文完成后才生成汇总页和严格 manifest。
-- `blog-generation-manifest-YYYY-MM-DD.json`：记录非空、唯一且结构合法的精确文件集合、输入/生成依赖指纹、博客基线与逐文件 SHA。
+- `blog-generation-manifest-YYYY-MM-DD.json`：正式清单为 schema v3，记录非空、唯一且结构合法的精确 Markdown 文件集合、输入/生成依赖指纹、博客基线、category、逐文件 SHA，以及经过发布预检后实际写入博客的 `publishedPapers` 权威快照；`visualSummaryRequired` 与 `digestCoverRequired` 必须为 `false`，发布后图片不得进入清单。
 - `blog-review-failure-YYYY-MM-DD.json`：绑定 worker 实际读取 SHA、生成清单和博客基线。内容失败修复后只复审失败页；瞬时失败保持可重试；应存在文件消失或 Hugo 前后 SHA 变化均阻断复用。
-- `blog-review-receipt-YYYY-MM-DD.json`：由 `review-blog.py` 在严格 LLM/图片 review 和 Hugo gate 通过后写入，包含每个已审查文件的 SHA-256 或删除标记。`push-blog.py` 只读取该凭证，任一文件在 review 后变更都会阻断推送。
+- `blog-review-receipt-YYYY-MM-DD.json`：review 阶段记录文件 SHA，并绑定 generation manifest 的 SHA-256、严格 review 协议指纹和 Hugo gate；push 远端 OID 验证成功后追加 `publicationCommit`、相同的 `remoteVerifiedOid` 和北京时间 `remoteVerifiedAt`。发布后视觉规划从 generation 的 `publishedPapers` 读取实际发布集合，并把发布提交与 generation SHA 写入任务 token。
 
 三个博客入口同时用日期级锁和博客仓库级全局锁串行化；push 在 stage 后及 commit 前校验 index blob 与凭证完全一致。
 
-### 5.9 `data/current/xiaohongshu-oneliners-YYYY-MM-DD.json`
+### 5.11 `data/current/xiaohongshu-oneliners-YYYY-MM-DD.json`
 
 仅用于生成小红书文案的逐篇成功缓存。每条绑定分析、prompt、模型端点配置与清洗契约指纹；日期级锁内原子写入。损坏缓存会隔离改名后重建，失败回退或指纹变化只重跑对应论文，不会触发自动发布。

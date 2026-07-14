@@ -26,6 +26,8 @@ def read_generated_pages(module, date_str, paths):
     prefix = f'{date_str}-'
     for path in paths:
         path = Path(path)
+        if module.is_visual_summary_asset_path(path, date_str):
+            continue
         if not path.is_file() or path.name == f'{date_str}.md':
             continue
         if not path.name.startswith(prefix) or path.suffix != '.md':

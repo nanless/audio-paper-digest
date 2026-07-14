@@ -13,6 +13,7 @@ setupScriptLogging(__filename);
 const fs = require('fs');
 const path = require('path');
 const cheerio = require('cheerio');
+const { buildFilterInputSha256 } = require('./lib/filter-input-contract.js');
 const {
     writeFileAtomic,
     getBeijingISOString,
@@ -314,7 +315,10 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
 
     for (let page = 0; page < pagesToFetch; page++) {
         const start = page * pageSize;
-        const searchUrl = `https://arxiv.org/search/?searchtype=all&query=${categoryId}&order=-announced_date_first&start=${start}`;
+        // 必须使用 arXiv 的严格分类查询。裸 query=cs.SD 属于全文搜索，会把
+        // 无关论文混入前 100 条并可能将真正的分类新论文挤出抓取窗口。
+        const categoryQuery = encodeURIComponent(`cat:${categoryId}`);
+        const searchUrl = `https://arxiv.org/search/?searchtype=all&query=${categoryQuery}&order=-announced_date_first&start=${start}&size=${pageSize}`;
         let pageSuccess = false;
         let shouldStopPaging = false;
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -335,7 +339,7 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
                 if (!hasSearchResponseSignature(html)) throw new Error('响应缺少 arXiv 搜索页结构签名');
                 const papers = parseSearchPageHTML(html, categoryId, existingIds);
                 const meta = papers._meta || {};
-                if (meta.rawItems > 0 && meta.totalFound === 0) throw new Error('搜索页包含结果节点但无合法论文条目');
+                if (meta.rawItems !== meta.totalFound) throw new Error(`搜索页条目解析不完整 (${meta.totalFound}/${meta.rawItems})`);
                 health.successfulRequests++;
 
                 if (papers.length === 0) {
@@ -360,6 +364,10 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
                     shouldStopPaging = true;
                     health.coverageComplete = true;
                     break;
+                }
+                if (meta.rawItems < pageSize) {
+                    shouldStopPaging = true;
+                    health.coverageComplete = true;
                 }
                 break; // 成功，跳出重试循环
             } catch (err) {
@@ -419,10 +427,9 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
 
     for (let page = 0; page < pagesToFetch; page++) {
         const skip = page * pageSize;
-        const url = skip === 0
-            ? `https://arxiv.org/list/${categoryId}/recent`
-            : `https://arxiv.org/list/${categoryId}/recent?skip=${skip}&show=${pageSize}`;
+        const url = `https://arxiv.org/list/${categoryId}/recent?skip=${skip}&show=${pageSize}`;
         let pageSuccess = false;
+        let shouldStopPaging = false;
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
@@ -441,12 +448,16 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
                 if (!hasRecentResponseSignature(html)) throw new Error('响应缺少 arXiv recent 页结构签名');
                 const papers = parseRecentPageHTML(html, categoryId, existingIds);
                 const meta = papers._meta || {};
-                if (meta.rawItems > 0 && meta.validItems === 0) throw new Error('recent 页包含结果节点但无合法论文条目');
+                if (meta.rawItems !== meta.validItems) throw new Error(`recent 页条目解析不完整 (${meta.validItems}/${meta.rawItems})`);
                 health.successfulRequests++;
 
                 allPapers.push(...papers);
                 console.log(`[fetch-recent] ${categoryId} 第 ${page + 1} 页获取 ${papers.length} 篇`);
                 pageSuccess = true;
+                if (meta.rawItems < pageSize) {
+                    shouldStopPaging = true;
+                    health.coverageComplete = true;
+                }
                 break;
             } catch (err) {
                 const is429 = err.message.includes('429');
@@ -463,7 +474,7 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
             }
         }
 
-        if (!pageSuccess) break;
+        if (!pageSuccess || shouldStopPaging) break;
 
         // 页间延迟
         if (page < pagesToFetch - 1) {
@@ -481,7 +492,7 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
 
     console.log(`[fetch-recent] ${categoryId} 共获取 ${unique.length} 篇论文`);
     health.ok = health.successfulRequests > 0;
-    health.coverageComplete = health.successfulRequests === pagesToFetch;
+    health.coverageComplete = health.coverageComplete || health.successfulRequests === pagesToFetch;
     health.allFailed = health.attempts > 0 && health.successfulRequests === 0;
     return attachHealth(unique.slice(0, maxResults), health);
 }
@@ -837,8 +848,8 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
                 if (!hasApiResponseSignature(xml)) throw new Error('响应缺少 arXiv Atom feed 结构签名');
                 const apiPapers = parseArxivXML(xml, categoryId, seenIds, { stopAtConsecutiveExisting: false });
                 const apiMeta = apiPapers._meta || {};
-                if (apiMeta.entryCount > 0 && apiMeta.legalEntryCount === 0) {
-                    throw new Error('Atom feed 非空但没有任何合法论文条目');
+                if (apiMeta.entryCount !== apiMeta.legalEntryCount) {
+                    throw new Error(`Atom feed 条目解析不完整 (${apiMeta.legalEntryCount}/${apiMeta.entryCount})`);
                 }
                 apiHealth.successfulRequests++;
                 apiHealth.coverageComplete = true;
@@ -1183,10 +1194,12 @@ async function filterPapersWithLLM(papers, options = {}) {
     const currentPaperIds = new Set(papersToCheck
         .map(paper => normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '')
         .filter(Boolean));
+    const paperById = new Map(papersToCheck.map(paper => [normalizedId(paper), paper]));
     const loadDecision = (id, decision) => {
         const key = normalizedId(id);
         if (!key || !decision || typeof decision.related !== 'boolean' || decision.retryable || decision.fallback) return;
         if (!currentPaperIds.has(key)) return;
+        if (decision.inputSha256 !== buildFilterInputSha256(paperById.get(key))) return;
         decisions.set(key, decision);
     };
     if (initialDecisions instanceof Map) {
@@ -1230,7 +1243,7 @@ async function filterPapersWithLLM(papers, options = {}) {
         const batch = batches[batchIndex];
         console.log(`[filter] 处理批次 ${batchIndex + 1}/${batches.length}...`);
 
-        const batchResults = await Promise.all(batch.map(async (paper) => {
+        const settled = await Promise.allSettled(batch.map(async (paper) => {
             const modelDecision = await decisionFn(paper);
             const isDefinitive = typeof modelDecision.related === 'boolean'
                 && !modelDecision.retryable
@@ -1249,6 +1262,7 @@ async function filterPapersWithLLM(papers, options = {}) {
                 fallback: Boolean(modelDecision.fallback),
                 retryable: !isDefinitive,
                 decidedAt: getBeijingISOString(),
+                inputSha256: buildFilterInputSha256(paper),
                 ...decisionMetadata
             };
             if (isDefinitive) {
@@ -1267,6 +1281,29 @@ async function filterPapersWithLLM(papers, options = {}) {
             }
             return decision;
         }));
+        const batchResults = settled.map((result, index) => {
+            if (result.status === 'fulfilled') return result.value;
+            const paper = batch[index];
+            const paperId = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
+            const decision = {
+                id: paperId,
+                paper_id: paper.paper_id || paper.arxivId || paper.id || paperId,
+                title: paper.title || '',
+                related: null,
+                reason: `筛选调用异常，等待重试: ${result.reason?.message || result.reason}`,
+                rawResponse: '',
+                parseSource: 'batch_exception_retryable',
+                error: result.reason?.message || String(result.reason),
+                fallback: true,
+                retryable: true,
+                decidedAt: getBeijingISOString(),
+                inputSha256: buildFilterInputSha256(paper),
+                ...decisionMetadata
+            };
+            retryableDecisions.set(paperId, decision);
+            console.error(`[filter] ↻ ${paperId} 调用抛出异常，已保留同批其他决定并标记待重试: ${decision.error}`);
+            return decision;
+        });
 
         if (typeof onBatchComplete === 'function') {
             await onBatchComplete({
@@ -1283,6 +1320,11 @@ async function filterPapersWithLLM(papers, options = {}) {
                     complete: decisions.size === papersToCheck.length && retryableDecisions.size === 0
                 }
             });
+        }
+
+        const rejected = settled.find(result => result.status === 'rejected');
+        if (rejected) {
+            throw new Error(`筛选批次存在未处理异常；同批成功决定已保存，停止后续调用: ${rejected.reason?.message || rejected.reason}`);
         }
 
         if (batchIndex < batches.length - 1) {
@@ -1379,6 +1421,7 @@ module.exports = {
     isSpeechAudioRelated,
     getSpeechAudioDecision,
     filterPapersByKeywords,
+    buildFilterInputSha256,
     loadPapers,
     savePapers,
     loadAnalyzed,

@@ -24,6 +24,8 @@ const DEFAULT_LOCK_TIMEOUT_MS = 30000;
 const DEFAULT_STALE_LOCK_MS = 2 * 60 * 60 * 1000;
 const PAPER_ANALYSIS_LOCK_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 const PAPER_ANALYSIS_LOCK_STALE_MS = 6 * 60 * 60 * 1000;
+const LOCK_HEARTBEAT_MS = 30 * 1000;
+const ANALYSIS_CHECKPOINT_CALLBACK = Symbol.for('audio-paper-digest.analysisCheckpointCallback');
 const COMPLETE_RECOVERY_STATUSES = new Set([
     'complete', 'not_needed', 'skipped', 'no_candidates', 'no_high_value_images', 'no_downloadable_images'
 ]);
@@ -67,11 +69,42 @@ function canReclaimFileLock(lockPath, staleMs) {
                 throw error;
             }
         }
-        if (owner.hostname) return false;
+        if (owner.hostname) return ageMs > staleMs;
     } catch (error) {
         if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
     }
     return ageMs > staleMs;
+}
+
+function createLockRelease(lockPath, ownerToken) {
+    const heartbeat = setInterval(() => {
+        try {
+            const ownerPath = path.join(lockPath, 'owner.json');
+            const owner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
+            if (owner.token !== ownerToken) {
+                clearInterval(heartbeat);
+                return;
+            }
+            const now = new Date();
+            fs.utimesSync(lockPath, now, now);
+        } catch (error) {
+            if (error.code === 'ENOENT') clearInterval(heartbeat);
+        }
+    }, LOCK_HEARTBEAT_MS);
+    heartbeat.unref?.();
+    return () => {
+        clearInterval(heartbeat);
+        try {
+            const owner = JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8'));
+            if (owner.token !== ownerToken) return false;
+            fs.rmSync(lockPath, { recursive: true, force: true });
+            return true;
+        } catch (error) {
+            if (error.code === 'ENOENT') return false;
+            console.warn(`[file-lock] 释放锁失败 ${lockPath}: ${error.message}`);
+            return false;
+        }
+    };
 }
 
 function acquireFileLockSync(filePath, options = {}) {
@@ -96,18 +129,7 @@ function acquireFileLockSync(filePath, options = {}) {
                 fs.rmSync(lockPath, { recursive: true, force: true });
                 throw ownerError;
             }
-            return () => {
-                try {
-                    const owner = JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8'));
-                    if (owner.token !== ownerToken) return false;
-                    fs.rmSync(lockPath, { recursive: true, force: true });
-                    return true;
-                } catch (error) {
-                    if (error.code === 'ENOENT') return false;
-                    console.warn(`[file-lock] 释放锁失败 ${lockPath}: ${error.message}`);
-                    return false;
-                }
-            };
+            return createLockRelease(lockPath, ownerToken);
         } catch (error) {
             if (error.code !== 'EEXIST') throw error;
             try {
@@ -148,18 +170,7 @@ async function acquireFileLock(filePath, options = {}) {
                 fs.rmSync(lockPath, { recursive: true, force: true });
                 throw ownerError;
             }
-            return () => {
-                try {
-                    const owner = JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8'));
-                    if (owner.token !== ownerToken) return false;
-                    fs.rmSync(lockPath, { recursive: true, force: true });
-                    return true;
-                } catch (error) {
-                    if (error.code === 'ENOENT') return false;
-                    console.warn(`[file-lock] 释放锁失败 ${lockPath}: ${error.message}`);
-                    return false;
-                }
-            };
+            return createLockRelease(lockPath, ownerToken);
         } catch (error) {
             if (error.code !== 'EEXIST') throw error;
             try {
@@ -283,7 +294,8 @@ async function analyzePaperWithRetry(paper, options = {}) {
         retryDelayMs = DEFAULT_RETRY_DELAY_MS,
         onAttempt = null,
         onRetry = null,
-        analyzeFn = null
+        analyzeFn = null,
+        onCheckpoint = null
     } = options;
 
     let lastError = null;
@@ -295,7 +307,19 @@ async function analyzePaperWithRetry(paper, options = {}) {
 
         try {
             const analyzePaperDeep = analyzeFn || require('./deep-analyzer.js').analyzePaperDeep;
-            const analyzed = await analyzePaperDeep(paper);
+            if (onCheckpoint) {
+                Object.defineProperty(paper, ANALYSIS_CHECKPOINT_CALLBACK, {
+                    value: onCheckpoint,
+                    configurable: true,
+                    enumerable: false
+                });
+            }
+            let analyzed;
+            try {
+                analyzed = await analyzePaperDeep(paper);
+            } finally {
+                delete paper[ANALYSIS_CHECKPOINT_CALLBACK];
+            }
 
             if (analyzed && analyzed.analysis) {
                 const parsed = parseAnalysis(analyzed.analysis);
@@ -405,7 +429,9 @@ async function analyzeBatch(papers, options = {}) {
         onAttempt = null,
         analyzeFn = null,
         preparePaperLocked = null,
-        onPaperResultLocked = null
+        onPaperResultLocked = null,
+        onPaperCheckpointLocked = null,
+        checkpointFilePath = null
     } = options;
 
     if (!Number.isInteger(concurrency) || concurrency < 1) {
@@ -475,6 +501,16 @@ async function analyzeBatch(papers, options = {}) {
                     maxRetries,
                     retryDelayMs,
                     analyzeFn,
+                    onCheckpoint: checkpoint => {
+                        if (onPaperCheckpointLocked) {
+                            const returned = onPaperCheckpointLocked(checkpoint);
+                            if (returned && typeof returned.then === 'function') {
+                                throw new Error('onPaperCheckpointLocked 必须同步完成，以保证崩溃前 checkpoint 已落盘');
+                            }
+                        } else if (checkpointFilePath) {
+                            persistAnalysisCheckpoint(checkpointFilePath, checkpoint);
+                        }
+                    },
                     onAttempt: (att, max) => {
                         if (onAttempt) {
                             try { onAttempt(att, max, paper); } catch (e) { /* ignore */ }
@@ -539,6 +575,26 @@ async function analyzeBatch(papers, options = {}) {
     }
 
     return { results, stats };
+}
+
+function persistAnalysisCheckpoint(filePath, paper) {
+    const checkpoint = {
+        ...paper,
+        analysis: null,
+        parsed: null,
+        error: paper.analysisManifest
+            ? '深度分析阶段执行中，已保存 checkpoint'
+            : (paper.error || '深度分析未完成')
+    };
+    return updateJsonFileLocked(filePath, current => ({
+        ...(!Array.isArray(current) && current ? current : {}),
+        lastUpdated: getBeijingISOString(),
+        papers: mergePapersById(
+            Array.isArray(current) ? current : (current?.papers || []),
+            [checkpoint],
+            { preserveSuccessfulAnalysis: true }
+        )
+    }));
 }
 
 // ═══════════════════════════════════════════════════════
@@ -651,6 +707,7 @@ module.exports = {
     withPaperAnalysisLock,
     getPaperAnalysisLockPath,
     updateJsonFileLocked,
+    persistAnalysisCheckpoint,
     isSuccessfulAnalysisRecord,
     getAnalysisRunStatus,
     getAnalysisExitCode,
