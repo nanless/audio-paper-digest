@@ -78,6 +78,13 @@ describe('post-publication visual orchestration', () => {
             assert.strictEqual(result.pendingCards.length, 10);
             assert.strictEqual(result.pendingCover.length, 1);
             assert.strictEqual(result.coverManifest.generationContext.paperCount, 12);
+            assert.strictEqual(result.coverManifest.generationContext.rankingCount, 10);
+            assert.strictEqual(result.coverManifest.generationContext.ranking.length, 10);
+            assert.strictEqual(result.coverManifest.generationContext.rendering.mode, 'full_image_generation_v2');
+            assert.strictEqual(result.coverManifest.generationContext.rendering.renderer, 'built-in image_gen');
+            assert.strictEqual(result.coverManifest.generationContext.rendering.resolutionPolicy, 'highest_available_portrait');
+            assert.ok(!Object.hasOwn(result.coverManifest.generationContext.rendering, 'width'));
+            assert.ok(!Object.hasOwn(result.coverManifest.generationContext.rendering, 'height'));
             assert.strictEqual(result.manifest.publication.publicationCommit, 'a'.repeat(40));
         } finally {
             Config.CURRENT_DIR = originals.current;

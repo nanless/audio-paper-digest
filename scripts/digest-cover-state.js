@@ -16,10 +16,12 @@ const { getBeijingISOString, normalizedId } = require('./utils.js');
 const { updateJsonFileLocked, readJsonFileStrict, isSuccessfulAnalysisRecord } = require('./analysis-engine.js');
 const {
     validatePngBuffer, extractGeneratedImagePathFromHint, paperBatchDate, validateDate,
-    assertPublishedBlogReceipt, bindPublishedPapersToDate, assertSafeAssetTarget
+    assertPublishedBlogReceipt, bindPublishedPapersToDate, assertSafeAssetTarget,
+    RENDERING_CONTRACT, DEFAULT_SELECTION_LIMIT
 } = require('./visual-summary-state.js');
 
 const COVER_MANIFEST_VERSION = 1;
+const COVER_RANKING_LIMIT = DEFAULT_SELECTION_LIMIT;
 
 function sha256Buffer(value) {
     return crypto.createHash('sha256').update(value).digest('hex');
@@ -79,14 +81,17 @@ function buildCoverContext(papers, targetDate, category = '论文速递') {
     const ranking = scored
         .sort((a, b) => b.score - a.score
             || (a.arxivId < b.arxivId ? -1 : a.arxivId > b.arxivId ? 1 : 0))
-        .slice(0, 5)
+        .slice(0, COVER_RANKING_LIMIT)
         .map((item, index) => ({ rank: index + 1, ...item }));
     return {
         title: digestTitle(targetDate, category),
         batchDate: targetDate,
         paperCount: papers.length,
         hotDirections,
-        ranking
+        rankingCount: ranking.length,
+        rankingLimit: COVER_RANKING_LIMIT,
+        ranking,
+        rendering: RENDERING_CONTRACT
     };
 }
 
@@ -445,6 +450,7 @@ if (require.main === module) main();
 
 module.exports = {
     COVER_MANIFEST_VERSION,
+    COVER_RANKING_LIMIT,
     digestTitle,
     buildCoverContext,
     coverDataSha256,

@@ -67,7 +67,7 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 
 **双模型（可选，多模态）**：设置 `PAPER_ANALYZER_SECONDARY_MODEL` 即启用副模型做图像筛选与插图计划（主模型仅做纯文本分析）；副模型只输出 JSON 计划，包含目标章节、代码提供的稳定 `paragraph_id`、图前 `lead` 和图后 `explanation`。代码只新增插图及相邻说明，忽略旧 `replacement` / `rewrite` 字段，禁止副模型替换主模型原文；每篇默认最多插入 4 张，非法段落 ID 直接丢弃，旧 `anchor` 格式仅保留兼容。不设置则跳过图片、退回单模型纯文本。`PAPER_ANALYZER_SECONDARY_ENDPOINT` / `PAPER_ANALYZER_SECONDARY_API_KEY` 未设置时默认复用主模型对应值。
 
-**Codex 发布后视觉资产**：必须先完成全部论文深度分析，再依次完成博客 generate、全量/失败集 review、push，并由 `push-blog.py` 验证远端 `main` OID。只有发布凭证同时记录 `publicationCommit`、相同的 `remoteVerifiedOid` 和验证时间后，才可建立视觉任务。`push-blog.py` 会自动运行发布后规划器；论文长图只选择最终评分 TOP 10（同分按规范化 arXiv ID），每篇一张纵向 PNG，顶部为完整英文标题、正文为简体中文；另生成一张包含批次标题、热门方向和 TOP 5 排行榜的汇总图。Agent 必须目视核对标题、中文正文、论文数字与排行榜后才能执行 record。两类 manifest 按日期隔离并支持失败项续跑，但图片不进入本轮博客 generation/review/push，也不阻断已经完成的发布。项目脚本不得调用图像 API或读取 `OPENAI_API_KEY`，实际绘图只能由 Codex 内置 `image_gen` 完成。
+**Codex 发布后视觉资产**：必须先完成全部论文深度分析，再依次完成博客 generate、全量/失败集 review、push，并由 `push-blog.py` 验证远端 `main` OID。只有发布凭证同时记录 `publicationCommit`、相同的 `remoteVerifiedOid` 和验证时间后，才可建立视觉任务。`push-blog.py` 会自动运行发布后规划器；论文长图只选择最终评分 TOP 10（同分按规范化 arXiv ID），每篇一张纵向 PNG，顶部为完整英文标题、正文为简体中文；另生成一张包含批次标题、热门方向和 TOP 10 排行榜的汇总图。默认成品必须由 Codex 内置 `image_gen` 一次性生成完整带字构图，让标题、中文说明、结构关系、实验数字、论文关键图与纸张拼贴视觉自然配合；禁止再经过确定性文字卡片合成器。Agent 必须逐图目视核对标题、中文正文、箭头/并行分支、指标方向、论文数字与排行榜后才能执行 record，不可读或存在实质错误时必须重生成。两类 manifest 按日期隔离并支持失败项续跑，但图片不进入本轮博客 generation/review/push，也不阻断已经完成的发布。项目脚本不得调用图像 API或读取 `OPENAI_API_KEY`，实际绘图只能由 Codex 内置 `image_gen` 完成；`render-visual-summary.py` 仅用于本地调试和离线兜底。
 
 Node 脚本通过 `scripts/env-loader.js` 加载当前项目根 `.env`：① `scripts/config.js` 模块级最先执行（任何 `require('config')` 即触发）；② `scripts/utils.js` 的 `loadEnvFile()` 二次兜底补漏。Python 脚本通过 `scripts/project_env.py` 加载同一个 `.env`。两端都会先清理继承自 Trae/Codex/shell 的项目同名变量（`PAPER_ANALYZER_*`、`PAPER_DIGEST_*`、`PD_*`、`WECHAT_*`、`FEISHU_*`、`XIAOHONGSHU_*`、`KIMI_API_KEY`）以及大小写代理变量，再写入项目 `.env`；代理不再回退 macOS `scutil`，加载器会把 `.env` 权限收紧为 `0600`。外部命令必须使用最小子进程环境，禁止把 LLM/发布凭据传给 curl、CLI、Git hook 或浏览器进程。
 
@@ -127,7 +127,7 @@ prompts/                # LLM prompt 模板
   deep-analysis.md      # 深度分析主 prompt（Round 1，纯文本）
   image-supplement.md   # 图像筛选与插图计划（双模型模式副模型用）
   visual-summary.md     # GPT Image 2 编辑性论文视觉摘要（评分 TOP 10 各一张纵向长图）
-  digest-cover.md       # 发布后汇总图（标题、热门方向、TOP 5 排行榜）
+  digest-cover.md       # 发布后汇总图（标题、热门方向、TOP 10 排行榜）
   opensource-scan.md    # 开源链接扫描（Round 2）
   gap-fill.md           # 审校重写（Round 3）
   method-fill.md        # 方法章节补充（后处理）

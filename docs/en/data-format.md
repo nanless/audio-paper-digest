@@ -363,7 +363,8 @@ This manifest is created only after every blog page is remotely verified as publ
           "bytes": 123456,
           "sha256": "<64 lowercase hex characters>",
           "cachePath": "data/current/image-cache/<URL-SHA>.bin"
-        }]
+        }],
+        "rendering": {"mode": "full_image_generation_v2", "renderer": "built-in image_gen", "resolutionPolicy": "highest_available_portrait", "orientation": "portrait", "preferredAspectRatio": "1:2", "minimumWidth": 768, "minimumHeight": 1024, "maxPngBytes": 8388608}
       },
       "cards": {
         "infographic": {
@@ -404,7 +405,10 @@ After all blogs publish, every batch produces one digest image. Its context is d
     "batchDate": "2026-07-13",
     "paperCount": 14,
     "hotDirections": [{"tag": "#语音识别", "count": 4}],
-    "ranking": [{"rank": 1, "arxivId": "2607.12345", "title": "Paper title", "score": "9.1", "primaryTask": "#语音识别"}]
+    "ranking": [{"rank": 1, "arxivId": "2607.12345", "title": "Paper title", "score": "9.1", "primaryTask": "#语音识别"}],
+    "rankingCount": 1,
+    "rankingLimit": 10,
+    "rendering": {"mode": "full_image_generation_v2", "renderer": "built-in image_gen", "resolutionPolicy": "highest_available_portrait", "orientation": "portrait", "preferredAspectRatio": "1:2", "minimumWidth": 768, "minimumHeight": 1024, "maxPngBytes": 8388608}
   },
   "cover": {
     "status": "complete",
@@ -420,7 +424,7 @@ After all blogs publish, every batch produces one digest image. Its context is d
 - `dataSha256` binds title, paper count, hot directions, and ranking; `promptSha256` binds `prompts/digest-cover.md`. Either change invalidates only the cover.
 - Conference category is read automatically from the generation manifest. It changes the title and therefore `dataSha256`, preventing a digest-image/blog-title mismatch without a separate status argument.
 - The manifest keeps `arxivId` for stable sorting and fingerprinting, but the prompt forbids rendering paper IDs. Ranking entries display the complete English title, score, and primary direction.
-- Paper infographics and the digest cover are archived directly under `data/archive/<date>/`; legacy current assets migrate only after PNG/SHA verification and conflict checks. Historical cards outside the final TOP 10 use `unranked-<paper>` directories so no leaderboard rank is fabricated. The digest image uses the same PNG dimension, ratio, size, and SHA gates as paper infographics. Missing, failed, damaged, or stale images do not block or roll back blog publication.
+- Paper infographics and the digest cover are archived directly under `data/archive/<date>/`; legacy current assets migrate only after PNG/SHA verification and conflict checks. Historical cards outside the final TOP 10 use `unranked-<paper>` directories so no leaderboard rank is fabricated. Both asset types share minimum-dimension, portrait-ratio, size, and SHA gates; actual generated pixel dimensions are not fixed. Missing, failed, damaged, or stale images do not block or roll back blog publication.
 
 ### 5.9 `data/current/analyzed.json`
 

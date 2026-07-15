@@ -1293,6 +1293,24 @@ body
             ),
         )
 
+    def test_legacy_digest_cover_verifier_uses_same_top10_context(self):
+        papers = [
+            {
+                'arxivId': f'2607.{index:05d}',
+                'title': f'Paper {index}',
+                'parsed': {
+                    'score': f'{10 - index / 10:.1f}',
+                    'primaryTaskTag': '#语音识别',
+                    'tags': ['#语音识别'],
+                },
+            }
+            for index in range(1, 13)
+        ]
+        context = publish_to_blog._digest_cover_context(papers, '2026-07-10')
+        self.assertEqual(len(context['ranking']), 10)
+        self.assertEqual([item['rank'] for item in context['ranking']], list(range(1, 11)))
+        self.assertEqual(context['ranking'][-1]['title'], 'Paper 10')
+
     def test_post_publish_planner_start_failure_does_not_undo_blog_success(self):
         with tempfile.TemporaryDirectory() as tmp:
             current = Path(tmp)
@@ -1339,7 +1357,7 @@ body
             self.assertEqual(loaded['media_type'], 'image/png')
             self.assertTrue(passed)
             self.assertEqual(issues, [])
-            self.assertIn('TOP 5', call.call_args.args[0])
+            self.assertIn('TOP 10', call.call_args.args[0])
             self.assertIn('语音识别', call.call_args.args[0])
 
     def test_review_and_push_allow_generation_without_infographic(self):

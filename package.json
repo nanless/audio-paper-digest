@@ -11,6 +11,7 @@
     "batch": "node scripts/batch-analyze.js",
     "validate:data": "node scripts/validate-data-files.js",
     "visual:post-publish": "python3 scripts/plan-post-publish-visuals.py",
+    "visual:render:debug": "python3 scripts/render-visual-summary.py",
     "visual:status": "node scripts/visual-summary-state.js status",
     "visual:archive": "node scripts/visual-summary-state.js archive-legacy",
     "visual:record": "node scripts/visual-summary-state.js record",

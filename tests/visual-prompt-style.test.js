@@ -21,7 +21,11 @@ describe('post-publication visual prompt style contract', () => {
             '220–360 Simplified-Chinese characters',
             '2–4 complete explanatory statements',
             'Reference figures supplied with the task',
-            'Preserve its real module relationships',
+            'Preserve real parallel branches',
+            'full image generation',
+            'complete final poster',
+            'visually verify every title',
+            'no illegible pseudo-text',
             'no cyberpunk or sci-fi HUD',
             'no neon glow',
             'no dense grid of equal-sized boxes',
@@ -39,7 +43,12 @@ describe('post-publication visual prompt style contract', () => {
             'low-saturation palette',
             'flat-vector editorial illustration',
             'generous negative space',
-            'five calm stacked editorial rows',
+            'up to ten compact, calm editorial rows',
+            'full image generation',
+            'complete final cover',
+            'highest available portrait resolution',
+            'visually verify every supplied title',
+            'no illegible pseudo-text',
             'no cyberpunk or sci-fi HUD',
             'no neon glow',
             'no podium, medal, laurel, trophy',
@@ -48,5 +57,11 @@ describe('post-publication visual prompt style contract', () => {
         }
         assert.doesNotMatch(prompt, /deep midnight-blue background/i);
         assert.doesNotMatch(prompt, /luminous cyan/i);
+    });
+
+    it('确定性渲染器只暴露调试命令，不伪装成默认生图流程', () => {
+        const pkg = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf8'));
+        assert.strictEqual(pkg.scripts['visual:render:debug'], 'python3 scripts/render-visual-summary.py');
+        assert.ok(!Object.hasOwn(pkg.scripts, 'visual:render'));
     });
 });

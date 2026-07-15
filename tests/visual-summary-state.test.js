@@ -157,6 +157,18 @@ describe('visual summary state', () => {
                 targetDate: '2026-07-13', papers: [input], manifestPath, promptPath
             });
             assert.deepStrictEqual(first.papers['2607.12345'].generationContext.referenceImages, references);
+            assert.deepStrictEqual(first.papers['2607.12345'].generationContext.rendering, {
+                mode: 'full_image_generation_v2',
+                renderer: 'built-in image_gen',
+                resolutionPolicy: 'highest_available_portrait',
+                orientation: 'portrait',
+                preferredAspectRatio: '1:2',
+                minimumWidth: 768,
+                minimumHeight: 1024,
+                maxPngBytes: 8 * 1024 * 1024
+            });
+            assert.ok(!Object.hasOwn(first.papers['2607.12345'].generationContext.rendering, 'width'));
+            assert.ok(!Object.hasOwn(first.papers['2607.12345'].generationContext.rendering, 'height'));
             const firstToken = first.papers['2607.12345'].cards.infographic.taskToken;
 
             fs.writeFileSync(path.join(current, 'image-cache', `${crypto.createHash('sha256').update(url).digest('hex')}.bin`), Buffer.from('changed'));

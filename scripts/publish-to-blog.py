@@ -68,6 +68,17 @@ VISUAL_SUMMARY_LABELS = {
 }
 PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
 VISUAL_SUMMARY_MAX_BYTES = 8 * 1024 * 1024
+DIGEST_COVER_RANKING_LIMIT = 10
+DIGEST_COVER_RENDERING_CONTRACT = {
+    'mode': 'full_image_generation_v2',
+    'renderer': 'built-in image_gen',
+    'resolutionPolicy': 'highest_available_portrait',
+    'orientation': 'portrait',
+    'preferredAspectRatio': '1:2',
+    'minimumWidth': 768,
+    'minimumHeight': 1024,
+    'maxPngBytes': VISUAL_SUMMARY_MAX_BYTES,
+}
 _REVIEW_PROTOCOL_CACHE = {}
 
 
@@ -776,7 +787,7 @@ def _digest_cover_review_expectation(url):
         raise PublishDataValidationError('汇总页封面缺少可审查的确定性上下文')
     return (
         '\n  汇总封面必须逐字段匹配以下确定性上下文；标题、热门方向标签/计数、'
-        'TOP 5 的顺序/完整英文标题/分数/中文任务标签任一错误或缺失都必须报 error：\n'
+        'TOP 10 的顺序/完整英文标题/分数/中文任务标签任一错误或缺失都必须报 error：\n'
         f'```json\n{json.dumps(context, ensure_ascii=False, sort_keys=True)}\n```'
     )
 
@@ -880,7 +891,7 @@ def multimodal_review_images(content, title="", required=False):
 1. 图片内容是否可解码、清晰且与 alt 和论文正文语义一致
 2. 图片是否包含明显错误、空白、损坏、无关内容或隐私信息
 3. 图片 alt 文本是否为空、重复或与实际内容冲突
-4. 若图片是汇总封面，必须逐字段核对所附确定性上下文；标题、热门方向、计数、TOP 5 顺序、完整英文标题、分数和任务标签不一致均为 error
+4. 若图片是汇总封面，必须逐字段核对所附确定性上下文；标题、热门方向、计数、TOP 10 顺序、完整英文标题、分数和任务标签不一致均为 error
 
 【禁止事项】不要报告以下伪问题：
 - 摘要格式（如"外部图片: url | alt: ..."）不是 Markdown 格式 → 这是正常的元数据摘要
@@ -1479,7 +1490,7 @@ def _digest_cover_context(papers, date_str, category='论文速递'):
     ranking = []
     for index, item in enumerate(sorted(
         scored, key=lambda value: (-value['_numericScore'], value['arxivId'])
-    )[:5]):
+    )[:DIGEST_COVER_RANKING_LIMIT]):
         clean = {key: value for key, value in item.items() if key != '_numericScore'}
         ranking.append({'rank': index + 1, **clean})
     return {
@@ -1487,7 +1498,10 @@ def _digest_cover_context(papers, date_str, category='论文速递'):
         'batchDate': date_str,
         'paperCount': len(papers),
         'hotDirections': hot_directions,
+        'rankingCount': len(ranking),
+        'rankingLimit': DIGEST_COVER_RANKING_LIMIT,
         'ranking': ranking,
+        'rendering': DIGEST_COVER_RENDERING_CONTRACT,
     }
 
 

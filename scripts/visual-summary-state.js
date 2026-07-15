@@ -37,6 +37,16 @@ const MIN_ASSET_WIDTH = 768;
 const MIN_ASSET_HEIGHT = 1024;
 const MIN_PORTRAIT_RATIO = 1.25;
 const MAX_REFERENCE_IMAGES = 2;
+const RENDERING_CONTRACT = Object.freeze({
+    mode: 'full_image_generation_v2',
+    renderer: 'built-in image_gen',
+    resolutionPolicy: 'highest_available_portrait',
+    orientation: 'portrait',
+    preferredAspectRatio: '1:2',
+    minimumWidth: MIN_ASSET_WIDTH,
+    minimumHeight: MIN_ASSET_HEIGHT,
+    maxPngBytes: MAX_ASSET_BYTES
+});
 const CRC32_TABLE = (() => {
     const table = new Uint32Array(256);
     for (let n = 0; n < 256; n += 1) {
@@ -274,6 +284,7 @@ function analysisSha256(paper) {
         analysisSource: paper.analysisSource || null,
         analysisSourceSha256: paper.analysisSourceSha256 || paper.sourceSha256 || null,
         scoringAudit: paper.analysisManifest?.stages?.scoringAudit || null,
+        renderingContract: RENDERING_CONTRACT,
         visualReferenceImages: selectVisualReferenceImages(paper).map(item => ({
             role: item.role,
             url: item.url,
@@ -548,7 +559,8 @@ function buildGenerationContext(paper) {
         method: String(parsed.architecture || parsed.details || ''),
         experiments: String(parsed.results || ''),
         limitations: String(parsed.limitations || ''),
-        referenceImages: selectVisualReferenceImages(paper)
+        referenceImages: selectVisualReferenceImages(paper),
+        rendering: RENDERING_CONTRACT
     };
 }
 
@@ -1042,6 +1054,7 @@ module.exports = {
     CARD_KINDS,
     CARD_LABELS,
     CARD_DIRECTIONS,
+    RENDERING_CONTRACT,
     analysisSha256,
     selectTopRankedPapers,
     bindPublishedPapersToDate,

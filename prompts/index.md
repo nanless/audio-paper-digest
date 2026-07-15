@@ -10,7 +10,7 @@
 | [deep-analysis.md](deep-analysis.md) | 深度分析阶段（第一轮）：纯文本阅读后输出结构化报告 | `deep-analyzer.js` |
 | [image-supplement.md](image-supplement.md) | 深度分析阶段（双模型模式）：副模型只输出严格 JSON 插图计划，代码只新增图片及相邻说明，不替换主模型原文 | `deep-analyzer.js` |
 | [visual-summary.md](visual-summary.md) | 全部博客发布后，对最终评分 TOP 10 各生成一张覆盖问题、方法、实验、结论与局限的纵向长图 | Codex 内置 `image_gen`（发布后 Agent 阶段） |
-| [digest-cover.md](digest-cover.md) | 全部博客发布后的汇总图：展示批次标题、热门方向和 TOP 5 排行榜 | Codex 内置 `image_gen`（发布后 Agent 阶段） |
+| [digest-cover.md](digest-cover.md) | 全部博客发布后的汇总图：展示批次标题、热门方向和 TOP 10 排行榜 | Codex 内置 `image_gen`（发布后 Agent 阶段） |
 | [opensource-scan.md](opensource-scan.md) | 开源扫描阶段（第二轮）：专门提取开源链接和复现信息 | `deep-analyzer.js` |
 | [gap-fill.md](gap-fill.md) | 深度分析阶段（第三轮）：对照原文审校重写前两轮结果 | `deep-analyzer.js` |
 | [method-fill.md](method-fill.md) | 深度分析后处理：方法章节过短或空泛时补写结构化方法说明 | `deep-analyzer.js` |
@@ -36,6 +36,6 @@
 - `image-supplement.md` 的顶层只能包含 `insertions` 数组；只有严格 `{"insertions":[]}` 表示确认没有高价值图片，schema 错误保持可重试。
 - `image-supplement.md` 额外使用 `{anchorCatalog}`；副模型必须从目录中选择稳定 `paragraph_id`，旧自由文本 `anchor` 仅用于兼容历史响应。
 - `scoring-audit.md` 的 `{validationFeedback}` 用于把代码校验错误反馈给下一次局部审计；`structure-repair.md` 仅在共享结构契约发现缺失标题时调用。
-- `visual-summary.md` 仅使用已审计的摘要、方法和实验章节构造编辑性说明图；必须保持为单一第一个 fenced code block，且不能要求模型在图内输出无法可靠校验的长文本或精确数字。
+- `visual-summary.md` 仅使用已审计的摘要、方法和实验章节构造编辑性说明图；必须保持为单一第一个 fenced code block。论文长图与封面均由内置 `image_gen` 整张生成，优先使用当前最高可用纵向分辨率；真实关键图只作结构/数值依据，无法可靠校验的长文本或精确数字不得进入图中。确定性渲染器只用于本地调试或离线兜底。
 - 保持占位符名称与代码中的替换逻辑一致。
 - 修改 prompt 后建议运行一次单篇分析或 `quick-test.js` 验证效果。

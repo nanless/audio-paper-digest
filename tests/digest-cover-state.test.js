@@ -10,6 +10,7 @@ const Config = require('../scripts/config.js');
 const { validAnalysisPaper } = require('./valid-analysis-fixture.js');
 const {
     buildCoverContext,
+    COVER_RANKING_LIMIT,
     planDigestCover: planDigestCoverImpl,
     recordDigestCover,
     markDigestCoverFailed,
@@ -113,7 +114,7 @@ describe('digest cover state', () => {
         fs.rmSync(dir, { recursive: true, force: true });
     });
 
-    it('从汇总页同源字段生成热门方向和降序 TOP 5', () => {
+    it('从汇总页同源字段生成热门方向和动态 TOP N 排行榜', () => {
         const papers = [
             paper('2607.1', 7.5, '#语音识别', 'First'),
             paper('2607.2', 9.1, '#音乐生成', 'Second'),
@@ -121,9 +122,42 @@ describe('digest cover state', () => {
         ];
         const context = buildCoverContext(papers, '2026-07-13');
         assert.strictEqual(context.paperCount, 3);
+        assert.strictEqual(context.rankingCount, 3);
+        assert.strictEqual(context.rankingLimit, 10);
         assert.deepStrictEqual(context.hotDirections[0], { tag: '#语音识别', count: 2 });
         assert.deepStrictEqual(context.ranking.map(item => item.title), ['Second', 'Third', 'First']);
         assert.deepStrictEqual(context.ranking.map(item => item.rank), [1, 2, 3]);
+    });
+
+    it('汇总排行榜与论文长图统一最多 TOP 10，不再静默截断为 TOP 5', () => {
+        const papers = Array.from({ length: 12 }, (_, index) => paper(
+            `2607.${String(index + 1).padStart(5, '0')}`,
+            10 - index / 10,
+            '#语音识别',
+            `Paper ${index + 1}`
+        ));
+        const context = buildCoverContext(papers, '2026-07-13');
+        assert.strictEqual(COVER_RANKING_LIMIT, 10);
+        assert.strictEqual(context.rankingCount, 10);
+        assert.strictEqual(context.ranking.length, 10);
+        assert.deepStrictEqual(context.ranking.map(item => item.rank), [1,2,3,4,5,6,7,8,9,10]);
+        assert.strictEqual(context.ranking[9].title, 'Paper 10');
+    });
+
+    it('汇总封面声明全图 image_gen 与最高可用纵向分辨率，不携带旧固定画布', () => {
+        const context = buildCoverContext([paper('2607.1', 8, '#语音识别', 'Paper')], '2026-07-13');
+        assert.deepStrictEqual(context.rendering, {
+            mode: 'full_image_generation_v2',
+            renderer: 'built-in image_gen',
+            resolutionPolicy: 'highest_available_portrait',
+            orientation: 'portrait',
+            preferredAspectRatio: '1:2',
+            minimumWidth: 768,
+            minimumHeight: 1024,
+            maxPngBytes: 8 * 1024 * 1024
+        });
+        assert.ok(!Object.hasOwn(context.rendering, 'width'));
+        assert.ok(!Object.hasOwn(context.rendering, 'height'));
     });
 
     it('热门方向同票按标签稳定排序，会议 category 使用对应标题', () => {

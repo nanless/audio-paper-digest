@@ -378,7 +378,8 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
           "bytes": 123456,
           "sha256": "<64位十六进制>",
           "cachePath": "data/current/image-cache/<URL-SHA>.bin"
-        }]
+        }],
+        "rendering": {"mode": "full_image_generation_v2", "renderer": "built-in image_gen", "resolutionPolicy": "highest_available_portrait", "orientation": "portrait", "preferredAspectRatio": "1:2", "minimumWidth": 768, "minimumHeight": 1024, "maxPngBytes": 8388608}
       },
       "cards": {
         "infographic": {
@@ -406,7 +407,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 
 ### 5.8 `data/current/digest-cover-manifests/YYYY-MM-DD.json`
 
-全部博客发布后，每个批次生成一张汇总图。上下文只从同批次通过完整契约且最新尝试未失败的论文确定性计算；热门方向按主任务标签计数排序，排行榜按分数降序取 TOP 5（同分用规范化 ID 稳定排序）。
+全部博客发布后，每个批次生成一张汇总图。上下文只从同批次通过完整契约且最新尝试未失败的论文确定性计算；热门方向按主任务标签计数排序，排行榜按分数降序取 TOP 10（不足十篇时全部纳入；同分用规范化 ID 稳定排序）。
 
 ```json
 {
@@ -419,7 +420,10 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
     "batchDate": "2026-07-13",
     "paperCount": 14,
     "hotDirections": [{"tag": "#语音识别", "count": 4}],
-    "ranking": [{"rank": 1, "arxivId": "2607.12345", "title": "Paper title", "score": "9.1", "primaryTask": "#语音识别"}]
+    "ranking": [{"rank": 1, "arxivId": "2607.12345", "title": "Paper title", "score": "9.1", "primaryTask": "#语音识别"}],
+    "rankingCount": 1,
+    "rankingLimit": 10,
+    "rendering": {"mode": "full_image_generation_v2", "renderer": "built-in image_gen", "resolutionPolicy": "highest_available_portrait", "orientation": "portrait", "preferredAspectRatio": "1:2", "minimumWidth": 768, "minimumHeight": 1024, "maxPngBytes": 8388608}
   },
   "cover": {
     "status": "complete",
@@ -435,7 +439,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 - `dataSha256` 绑定标题、论文数量、热门方向及排名上下文，`promptSha256` 绑定 `prompts/digest-cover.md`；任一变化只使封面失效，不影响论文长图。
 - 会议流程的 category 自动取自 generation manifest；它会改变标题并进入 `dataSha256`，避免会议汇总图与博客标题不一致，无需给 status 另传参数。
 - manifest 可保存 `arxivId` 以稳定指纹和排序，但 prompt 明确禁止把论文 ID 渲染到封面；排名展示完整英文标题、分数和主方向。
-- 论文长图和汇总封面生成后直接进入 `data/archive/<日期>/`；旧版 current 资产仅在 PNG/SHA 校验通过且归档目标无冲突时迁移。历史批次中不属于最终 TOP10 的旧卡片使用 `unranked-<paper>` 目录，避免虚构排行榜编号。汇总图使用与论文长图相同的 PNG 尺寸、纵横比、大小和 SHA 门禁；缺失、失败、损坏或过期不回滚博客发布。
+- 论文长图和汇总封面生成后直接进入 `data/archive/<日期>/`；旧版 current 资产仅在 PNG/SHA 校验通过且归档目标无冲突时迁移。历史批次中不属于最终 TOP10 的旧卡片使用 `unranked-<paper>` 目录，避免虚构排行榜编号。两类图片共享最小尺寸、纵横比、大小和 SHA 门禁，实际生成像素不写死；缺失、失败、损坏或过期不回滚博客发布。
 
 ### 5.9 `data/current/analyzed.json`
 

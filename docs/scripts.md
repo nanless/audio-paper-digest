@@ -252,8 +252,9 @@ HuggingFace Papers 抓取模块。
 
 **Codex 视觉资产（全部博客发布后的后处理阶段）**
 - `push-blog.py` 在汇总页和全部论文页推送成功且远端 OID 验证后，自动运行 `visual-summary-integration.js`。它只为最终评分 TOP 10 建立 `infographic` 任务，同分按规范化 arXiv ID 排序
+- `npm run visual:render:debug -- --spec SPEC.json --output OUTPUT.png [--illustration 无字插画] [--reference 方法/架构原图] [--result-reference 关键实验原图]` 是保留的本地确定性调试/回退渲染器，不再用于默认最终视觉资产。默认流程由内置 `image_gen` 一次性生成完整带字构图，并在登记前人工目检准确性。回退渲染器仍可使用 Pillow 合成约 `2160x4552` 的论文长图或汇总封面，支持结构化 `diagram.columns/nodes/edges` 中文重绘、参考图图注、简单柱状图/指标卡和 8 MiB 输出门禁
 - 使用 `visual-summary-state.js record --date YYYY-MM-DD --paper ID --kind infographic --file PNG --token TOKEN` 登记。脚本验证 PNG、最小尺寸、纵横比、大小、SHA 和 task token 后，按 manifest 最终排名原子保存到 `data/archive/<date>/visual-summaries/01-<paper>/infographic.png` 至 `10-<paper>/infographic.png`；并发完成顺序不会影响编号
-- 汇总图从同批次审计论文确定性计算标题、热门方向计数和 TOP 5 排名，并复用博客 generation manifest 的 category；用 `digest-cover-state.js record` 登记到 `data/archive/<date>/digest-cover/cover.png`
+- 汇总图从同批次审计论文确定性计算标题、热门方向计数和 TOP 10 排名，并复用博客 generation manifest 的 category；用 `digest-cover-state.js record` 登记到 `data/archive/<date>/digest-cover/cover.png`
 - 旧版 `data/current/visual-summaries/` 和 `data/current/digest-covers/` 资产会在下一次 plan 时校验 PNG 与 SHA，确认归档目标无冲突后迁移
 - 对缺少新版远端 OID 字段、不能重新 plan 的历史批次，使用 `npm run visual:archive -- --date YYYY-MM-DD` 和 `npm run cover:archive -- --date YYYY-MM-DD`；命令只迁移已有资产并更新 manifest，不创建任务或伪造发布凭证。旧 generation manifest 会与同日归档分析论文集合交叉校验后计算排名，非 TOP10 旧卡片归入 `unranked-<paper>`
 - 两类状态互相独立：论文分析/prompt 变化只失效对应长图，论文集合、分数、主任务标签或封面 prompt 变化只失效封面。`visual:status` / `cover:status` 非零时，下一轮仅补 pending/failed、损坏或指纹失效的资产
