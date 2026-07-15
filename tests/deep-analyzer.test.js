@@ -346,7 +346,27 @@ primary_task_tag: #音视频生成
                 engineering: { score: 1.2, reason }
             }
         };
-        assert.throws(() => parseScoringAuditResult(JSON.stringify(payload)), /其他维度/);
+        assert.throws(
+            () => parseScoringAuditResult(JSON.stringify(payload)),
+            /其他维度.*违规分句.*训练超参数没有披露/
+        );
+    });
+
+    it('最终评分审计输入移除旧评分理由但保留正文证据', () => {
+        const { prepareScoringAuditAnalysis } = require('../scripts/deep-analyzer.js');
+        const analysis = `## 核心摘要
+核心方法与结果证据。
+
+## 评分理由
+影响力因模型未开源而受限。
+
+## 局限与问题
+论文缺少跨数据集验证。`;
+        const prepared = prepareScoringAuditAnalysis(analysis);
+        assert.match(prepared, /核心方法与结果证据/);
+        assert.match(prepared, /论文缺少跨数据集验证/);
+        assert.match(prepared, /旧评分理由已由代码移除/);
+        assert.doesNotMatch(prepared, /影响力因模型未开源而受限/);
     });
 
     it('跨维度检查覆盖创新和工程，但不误杀正向或非扣分证据', () => {

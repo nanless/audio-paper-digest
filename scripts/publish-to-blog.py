@@ -3696,6 +3696,30 @@ def load_verified_review_receipt(date_str):
     return paths, path
 
 
+def exclude_papers_for_publish(papers, excluded_ids):
+    """Exclude explicitly named papers while failing closed on typos or stale IDs."""
+    normalized_excluded = {
+        normalize_publish_arxiv_id(value) for value in (excluded_ids or [])
+    }
+    if not normalized_excluded:
+        return list(papers), []
+    available = {
+        normalize_publish_arxiv_id(paper.get('arxivId') or paper.get('paper_id'))
+        for paper in papers
+    }
+    missing = sorted(normalized_excluded - available)
+    if missing:
+        raise PublishDataValidationError(
+            f'--exclude-id 未命中当前发布批次: {", ".join(missing)}'
+        )
+    kept = [
+        paper for paper in papers
+        if normalize_publish_arxiv_id(paper.get('arxivId') or paper.get('paper_id'))
+        not in normalized_excluded
+    ]
+    return kept, sorted(normalized_excluded)
+
+
 def generate_main():
     from log_setup import setup_script_logging
     setup_script_logging(__file__)
@@ -3703,6 +3727,7 @@ def generate_main():
     target_date = None
     category = '论文速递'
     publish_all = False
+    excluded_ids = []
 
     i = 1
     while i < len(sys.argv):
@@ -3714,6 +3739,9 @@ def generate_main():
             sys.exit(2)
         elif arg == '--all':
             publish_all = True
+        elif arg == '--exclude-id' and i + 1 < len(sys.argv):
+            excluded_ids.append(sys.argv[i + 1])
+            i += 1
         elif arg == '--date' and i + 1 < len(sys.argv):
             target_date = sys.argv[i + 1]
             i += 1
@@ -3740,6 +3768,17 @@ def generate_main():
         print("📦 --all: 跳过 fetchedAt 日期过滤，发布输入文件中的全部论文")
     filter_note = '全部论文' if publish_all else f'fetchBatchDate={today}'
     print(f"📄 过滤后: {len(papers)} 篇论文 ({filter_note})")
+
+    try:
+        papers, normalized_excluded = exclude_papers_for_publish(papers, excluded_ids)
+    except PublishDataValidationError as exc:
+        print(f"\n❌ 发布排除项校验失败，未生成任何博客文件：{exc}")
+        sys.exit(1)
+    if normalized_excluded:
+        print(
+            f"🚫 本次明确排除 {len(normalized_excluded)} 篇: "
+            f"{', '.join(normalized_excluded)}；实际发布 {len(papers)} 篇"
+        )
 
     if not papers:
         print("⚠️ 没有论文需要发布")

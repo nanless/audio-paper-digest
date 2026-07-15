@@ -169,14 +169,28 @@ const FORBIDDEN_SCORING_REASON_PATTERNS = Object.freeze({
 
 const EXPLICIT_NON_DEDUCTION = /(?:不应|不会|不该|不能|未被用来|并未用来)(?:据此)?(?:影响|降低|扣分|失分)|(?:不影响|不损害|无损于)|(?:不能|不应|不可)作为[^。；;]{0,20}扣分/;
 
-function reasonUsesForbiddenDeduction(reason, patterns) {
-    return String(reason || '').split(/[。！？；;\n]/).some(clause => {
+function findForbiddenDeductionClauses(reason, patterns) {
+    return String(reason || '').split(/[。！？；;\n]/).map(clause => clause.trim()).filter(clause => {
+        if (!clause) return false;
         if (EXPLICIT_NON_DEDUCTION.test(clause)) return false;
         return patterns.some(pattern => {
             pattern.lastIndex = 0;
             return pattern.test(clause);
         });
     });
+}
+
+function reasonUsesForbiddenDeduction(reason, patterns) {
+    return findForbiddenDeductionClauses(reason, patterns).length > 0;
+}
+
+function prepareScoringAuditAnalysis(analysis) {
+    if (!findSectionBounds(analysis, '评分理由')) return analysis;
+    return mergeSectionByTitle(
+        analysis,
+        '评分理由',
+        '旧评分理由已由代码移除，禁止复用。请仅依据确定性评分证据账本重新建立八维理由。'
+    );
 }
 
 function assertExactObjectKeys(value, expectedKeys, context) {
@@ -235,8 +249,13 @@ function parseScoringAuditResult(raw) {
         const reason = item.reason.trim();
         if (reason.length < 20) throw new Error(`评分审计维度 ${spec.key} 理由过短`);
         const forbiddenPatterns = FORBIDDEN_SCORING_REASON_PATTERNS[spec.key] || [];
-        if (reasonUsesForbiddenDeduction(reason, forbiddenPatterns)) {
-            throw new Error(`评分审计维度 ${spec.key} 使用了属于其他维度的扣分事实`);
+        const forbiddenClauses = findForbiddenDeductionClauses(reason, forbiddenPatterns);
+        if (forbiddenClauses.length > 0) {
+            throw new Error(
+                `评分审计维度 ${spec.key} 使用了属于其他维度的扣分事实；` +
+                `违规分句：${forbiddenClauses.map(clause => `「${clause}」`).join('、')}；` +
+                '请删除这些分句，并只使用该维度负责的证据重写理由'
+            );
         }
         dimensions[spec.key] = { score, reason };
     }
@@ -344,9 +363,10 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '') {
     const promptTemplateSha256 = crypto.createHash('sha256')
         .update(fs.readFileSync(path.join(__dirname, '..', 'prompts', 'scoring-audit.md')))
         .digest('hex');
+    const auditInputAnalysis = prepareScoringAuditAnalysis(analysis);
     for (let attempt = 1; attempt <= 3; attempt++) {
         const prompt = loadPrompt('prompts/scoring-audit.md', {
-            existingAnalysis: analysis,
+            existingAnalysis: auditInputAnalysis,
             sourceEvidence: evidenceContext,
             validationFeedback
         });
@@ -3514,6 +3534,8 @@ module.exports = {
     hasAffirmativeReleasePromise,
     hasAffirmativeDemoEvidence,
     reasonUsesForbiddenDeduction,
+    findForbiddenDeductionClauses,
+    prepareScoringAuditAnalysis,
     updateOpensourceFromDemoLinks,
     auditTypeAwareScoring,
     auditTypeAwareScoringDetailed,

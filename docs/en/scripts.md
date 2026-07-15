@@ -388,7 +388,7 @@ Publish to Hugo blog (GitHub Pages).
 
 All stages share both per-date and repository-global locks. Generation journals each page; review checkpoints the SHA actually read; push compares staged index blobs/deletions with the receipt after staging and before commit so different dates cannot contaminate shared Git state.
 
-**Parameters**: all three scripts accept `--date YYYY-MM-DD`. Only `generate-blog.py` accepts `--all`, `--category`, and a custom data path. `publish-to-blog.py --push` is rejected to prevent the combined workflow from returning.
+**Parameters**: all three scripts accept `--date YYYY-MM-DD`. Only `generate-blog.py` accepts `--all`, `--category`, repeatable `--exclude-id <arXiv ID>`, and a custom data path. Every excluded ID must match the date-filtered batch; exclusions affect only the generation snapshot and never mutate analysis data. `publish-to-blog.py --push` is rejected to prevent the combined workflow from returning.
 
 **Date Filtering**:
 - The script filters by the `fetchedAt` field by default, only publishing papers matching the `--date` specified date (default today)

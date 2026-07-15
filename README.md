@@ -32,7 +32,7 @@
 | `prompts/opensource-scan.md` | 开源链接扫描 prompt（Round 2） | 维护者 |
 | `prompts/gap-fill.md` | 审校重写 prompt（Round 3） | 维护者 |
 | `prompts/structure-repair.md` | 缺失必要章节时的主模型局部结构修复 prompt | 维护者 |
-| `prompts/scoring-audit.md` | 主模型最终类型感知评分审计（仅修订评分字段与理由） | 维护者 |
+| `prompts/scoring-audit.md` | 主模型最终类型感知评分审计（送审前移除旧评分理由，仅依据正文与证据账本重建评分字段与理由） | 维护者 |
 
 > **铁律**：真实行为以 `scripts/*.js` / `scripts/*.py` 当前实现为最终准绳。若文档与代码冲突，以代码为准并修正文档。
 
@@ -134,6 +134,7 @@ npm run backfill
 
 # 博客三阶段：生成 → 审查 → 推送（三个入口不会互相重复执行）
 npm run blog:generate -- --date 2026-04-21
+npm run blog:generate -- --date 2026-04-21 --exclude-id 2607.12345  # 可重复传入，仅排除本次发布
 npm run blog:review -- --date 2026-04-21
 npm run blog:push -- --date 2026-04-21
 

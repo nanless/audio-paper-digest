@@ -23,6 +23,7 @@ npm run visual:status -- --date YYYY-MM-DD # 只读校验 TOP 10 论文长图，
 npm run cover:status -- --date YYYY-MM-DD  # 只读校验发布后的汇总图
 npm run backfill         # 补录历史 paper ID（Python 脚本，不分析）
 npm run blog:generate    # 只生成并安装 Hugo 博客文件
+npm run blog:generate -- --date YYYY-MM-DD --exclude-id <arXiv ID>  # 明确排除单篇，可重复传入
 npm run blog:review      # 只 review 已生成文件并保存 SHA-256 凭证
 npm run blog:push        # 只验证凭证并 commit/push，不生成、不 review
 npm run wechat           # 生成微信公众号草稿
@@ -169,7 +170,7 @@ prompts/                # LLM prompt 模板
 - **发布 review 不得删除合法表格续行**：Markdown 表格允许前导分组列为空，这通常表示沿用上一行模型/配置；不能把 `| | | | Filter2 ... |` 一类数据行当成子标题删除。普通模型名或技术术语未加反引号属于样式建议，不是格式问题。
 - **图片展示顺序与质量门禁**：候选图编号不是最终展示图号；无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 必须按图片在最终正文中的出现顺序归一化。副模型每篇最多插入 4 张图（可用 `PD_IMAGE_INSERTION_MAX` 覆写），必须选择代码生成的稳定段落 ID；非法 ID 和超限图片一律拒绝，不得回退堆到章节末尾。HTML 正文和图注必须同次解析复用，成功下载写入 `data/current/image-cache/`，永久 HTTP/MIME/大小错误不得反复重试。
 - **分析来源与发布门禁**：结果必须保存 `analysisSource`、全文/实际输入字符数、截断状态、来源 SHA-256、抓取告警和置信度。来源指纹变化时清除主分析及下游 checkpoint。仅摘要分析默认禁止发布；人工确认后必须显式设置 `allowAbstractAnalysisPublish: true`，博客同时显示醒目降级提示。最新一次重分析失败时禁止用陈旧正文发布。
-- **评分稳定性**：最终评分审计默认低温 `0.1`（`PD_SCORING_AUDIT_TEMPERATURE`），副模型图片计划默认 `0.2`（`PD_IMAGE_PLAN_TEMPERATURE`）。评分 manifest 必须保留模型、温度、prompt 模板哈希、证据哈希、尝试次数、前后总分/差值和最终八维 JSON；变化超过 0.5 分必须打印稳定性告警，指纹变化时只失效评分及插图阶段。
+- **评分稳定性**：最终评分审计默认低温 `0.1`（`PD_SCORING_AUDIT_TEMPERATURE`），副模型图片计划默认 `0.2`（`PD_IMAGE_PLAN_TEMPERATURE`）。送审输入必须移除旧“评分理由”段但保留正文和证据账本，禁止模型照抄待纠正理由；跨维度校验失败须反馈具体违规分句。评分 manifest 必须保留模型、温度、prompt 模板哈希、证据哈希、尝试次数、前后总分/差值和最终八维 JSON；变化超过 0.5 分必须打印稳定性告警，指纹变化时只失效评分及插图阶段。
 - **副模型日志**：插图筛选必须记录 `[secondary]` 详细输入/输出摘要（模型、协议、endpoint/key 来源、候选和下载数量、图片安全标签/MIME/负载、Prompt/响应长度、活跃请求时长、计划解析状态、anchor 实际命中、拒绝原因和最终选图），只能记录 key 来源，严禁记录 API key 内容。统一日志必须是 UTF-8 纯文本、唯一文件名和 `0600` 权限；每个非空物理行均须以毫秒级北京时间戳（`[YYYY-MM-DD HH:mm:ss.SSS+08:00]`）开头，并脱敏认证头、Cookie、token、secret、password、任意已配置密钥实际值和 URL userinfo；不得轮转、限量或自动清理。
 - **睡眠恢复**：LLM 的 20 分钟整体超时按进程活跃时间记账；检测到超过 30 秒的事件循环跳变时视为系统睡眠/长时间挂起，排除睡眠时长并记录 `[api]` 日志。唤醒后底层请求超时必须保留剩余预算进入正常重试，不能把睡眠墙钟时间算成 API 已用时间。
 - **评分数值契约**：八个分项与总分最多一位小数；开源分仅允许 `0/0.2/0.5/1.0/1.2/1.5`。理论研究的完整证明、推导和附录可作为核心公开产物，不能因 `hasCode/hasModel/hasDataset` 均为否而被代码强制归零。Python 发布预检与人工覆盖也必须执行同一契约。

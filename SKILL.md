@@ -144,7 +144,7 @@ API 调用特性：
 - 使用声明—证据匹配和“单一问题单一主维度扣分”：开源产物缺失、复现细节缺失、实验/证明证据不足、表达问题、技术逻辑错误分别归入对应维度；无法验证时降低 `confidence`
 - 系统/模型报告按端到端质量、延迟、吞吐、成本、规模、压力测试、竞品公平性与失败案例评估；数据集/基准、综述、理论和应用研究按各自证据标准评估，不机械要求传统方法消融
 - 正文修复后先按共享结构契约检查 13 个必要章节；缺失时使用 `prompts/structure-repair.md` 只修复当前论文结构，避免外层整篇重跑
-- 主模型使用 `prompts/scoring-audit.md` 做最终 JSON 评分审计；校验失败会把精确错误反馈给下一次局部审计。无核心产物时，代码按“肯定语境承诺开放 0.5 / 明确 URL 或肯定结构化 Demo 0.2 / 否定或未提及 0”确定性归一化开源分和理由；理论研究按公开证明、推导和附录判断核心产物，不因代码/模型/数据标记为空而强制归零。代码只替换评分相关字段，副模型不参与评分
+- 主模型使用 `prompts/scoring-audit.md` 做最终 JSON 评分审计；送审前由代码移除旧“评分理由”段，避免模型照抄待纠正的跨维度扣分，正文与原文证据账本保持不变；校验失败会把精确错误及违规分句反馈给下一次局部审计。无核心产物时，代码按“肯定语境承诺开放 0.5 / 明确 URL 或肯定结构化 Demo 0.2 / 否定或未提及 0”确定性归一化开源分和理由；理论研究按公开证明、推导和附录判断核心产物，不因代码/模型/数据标记为空而强制归零。代码只替换评分相关字段，副模型不参与评分
 - 插图合并后再次执行完整分析契约；若插图计划破坏章节或解析结果，只丢弃该篇插图计划并保留已审计的主模型正文
 - 候选编号不能直接作为展示图号；代码将无真实 caption 的通用 alt 和 `selectedImageUrls` 按最终正文顺序归一化。发布 review 必须保留 Markdown 表格中前导分组列为空的合法续行
 - 副模型最多按价值顺序选择 4 张图（`PD_IMAGE_INSERTION_MAX` 可覆写），每张必须从代码生成的段落目录中选择稳定 `paragraph_id`；非法 ID、定位失败和超限图片由代码拒绝，不回退到章节末尾。旧自由文本 `anchor` 仅兼容历史响应。`[secondary]` 日志记录模型/协议/endpoint 与 key 来源、候选和下载数量、caption、缓存、段落 ID、JSON 解析状态、拒绝原因和最终选图；禁止打印 API key 内容
@@ -290,6 +290,7 @@ npm run backfill
 
 # 博客必须分三阶段执行
 npm run blog:generate -- --date YYYY-MM-DD
+npm run blog:generate -- --date YYYY-MM-DD --exclude-id 2607.12345  # 明确排除单篇，可重复传入
 npm run blog:review -- --date YYYY-MM-DD
 npm run blog:push -- --date YYYY-MM-DD
 
@@ -339,6 +340,7 @@ npm run xiaohongshu -- --date 2026-04-22
 
 - 默认读 `data/current/deep-analysis-result.json`
 - **按 `fetchedAt` 日期过滤**：只发布 `fetchedAt` 匹配 `--date` 指定日期的论文（默认今天），避免历史数据被重复发布
+- 生成阶段可重复传入 `--exclude-id <arXiv ID>`，只从本次 generation 权威快照排除明确命中的论文；ID 未命中会阻断，分析数据本身不变
 - 微信公众号和飞书同样默认按 `fetchedAt` 日期过滤；如需发布输入文件全部论文，显式传 `--all`
 - 在 `~/code/github_repos/audio-paper-digest-blog/content/posts` 生成：
   - 汇总页：`YYYY-MM-DD.md`

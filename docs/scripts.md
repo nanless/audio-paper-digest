@@ -393,7 +393,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 
 三个阶段共享日期级锁和博客仓库级全局锁。生成逐页 journal 后才写汇总页/严格清单；review 记录实际读取 SHA；push 在 stage 后及 commit 前把 index blob/删除状态与凭证逐项比较，防止不同日期并发污染共享 Git 状态。
 
-**参数**：三个脚本都支持 `--date YYYY-MM-DD`；只有 `generate-blog.py` 接受 `--all`、`--category` 和自定义数据文件。`publish-to-blog.py --push` 会直接拒绝，防止恢复合并流程。
+**参数**：三个脚本都支持 `--date YYYY-MM-DD`；只有 `generate-blog.py` 接受 `--all`、`--category`、可重复的 `--exclude-id <arXiv ID>` 和自定义数据文件。排除 ID 必须命中日期过滤后的当前批次，否则生成失败；它只改变本次 generation 权威快照，不修改分析数据。`publish-to-blog.py --push` 会直接拒绝，防止恢复合并流程。
 
 **日期过滤**：
 - 脚本默认按 `fetchedAt` 字段过滤，只发布匹配 `--date` 指定日期（默认今天）的论文

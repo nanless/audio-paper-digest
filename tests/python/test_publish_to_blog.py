@@ -678,6 +678,21 @@ body
             self.assertTrue((current_dir / 'blog-generation-manifest-2026-07-10.json').is_file())
             self.assertTrue((content_dir / '2026-07-10.md').is_file())
 
+    def test_generation_explicit_exclusion_is_exact_and_fails_on_unknown_id(self):
+        papers = [
+            {'arxivId': '2607.00001v2', 'title': 'keep'},
+            {'arxivId': '2607.00002', 'title': 'exclude'},
+        ]
+        kept, excluded = publish_to_blog.exclude_papers_for_publish(
+            papers, ['arXiv:2607.00002v1']
+        )
+        self.assertEqual([paper['title'] for paper in kept], ['keep'])
+        self.assertEqual(excluded, ['2607.00002'])
+        with self.assertRaisesRegex(
+            publish_to_blog.PublishDataValidationError, '未命中当前发布批次'
+        ):
+            publish_to_blog.exclude_papers_for_publish(papers, ['2607.99999'])
+
     def test_review_receipt_detects_any_post_review_file_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
