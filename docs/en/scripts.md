@@ -107,7 +107,7 @@ Unified configuration center. All hardcoded parameters are centrally managed and
 | API overall timeout | 20 active minutes | -- | Excludes system-sleep and long-suspension wall-clock jumps |
 | API inner retries | 3 | -- | Retries per inner deep-analyzer call |
 | API inner backoff base | 5000ms | -- | Exponential backoff: first 5s, then double |
-| max_tokens | 64000 | -- | LLM output length limit |
+| Primary-analysis max_tokens | 64000 | -- | Primary-analysis output limit; local repair stages default to `repairMaxTokens=16000` |
 | temperature | 0.7 | -- | LLM sampling temperature |
 | Image download timeout | 60s | `PD_IMAGE_DOWNLOAD_TIMEOUT_MS` | Per-image timeout; failures still use the configured retry loop |
 | Single-image raw-size limit | 6MB | `PD_IMAGE_MAX_BYTES` | Byte-size guard after download |
@@ -252,6 +252,7 @@ Multimodal deep analyzer. The analysis flow is an **up-to-8-round progressive pr
 - After every blog page is pushed and remote `main` is verified, `visual-summary-integration.js` creates one `infographic` task for each final-score TOP 10 paper, with normalized-ID tie breaking
 - `npm run visual:render:debug -- --spec SPEC.json --output OUTPUT.png [--illustration text-free-art] [--reference method/architecture-figure] [--result-reference key-result-figure]` is the retained deterministic local debug/fallback renderer, not the default final-asset path. The default flow uses built-in `image_gen` to create the complete text-bearing composition and requires visual accuracy review before record. The Pillow fallback can still compose an approximately `2160x4552` paper infographic or digest cover, supports structured `diagram.columns/nodes/edges` Chinese redraws, reference captions, basic charts/metrics, and the 8 MiB gate
 - Register it with `record --paper ID --kind infographic --file PNG --token TOKEN`. The tool validates the PNG, minimum dimensions, portrait ratio, size, SHA, and task token before archiving it under manifest-ranked directories `data/archive/<date>/visual-summaries/01-<paper>/` through `10-<paper>/`; concurrent completion order never affects numbering
+- Before calling built-in image generation, run `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]`. This command never calls an image API: it validates the controlled `.bin` cache path, SHA, byte count, MIME, and magic bytes, then emits `referencedImagePaths` with real `.png/.jpg/.webp` extensions so the image service never receives raw `.bin` paths
 - `digest-cover-state.js plan --date YYYY-MM-DD [--category CATEGORY]` deterministically derives the batch title, hot-direction counts, and TOP 10 ranking; conference flows must pass the same category used for blog generation. Codex uses `prompts/digest-cover.md` to create one cover and registers it under `data/archive/<date>/digest-cover/cover.png`
 - A later plan validates PNG bytes and SHA before migrating legacy assets from `data/current/`; conflicting archive content is rejected
 - For historical batches whose old receipt lacks the modern remote-OID field, run `npm run visual:archive -- --date YYYY-MM-DD` and `npm run cover:archive -- --date YYYY-MM-DD`. These maintenance commands only move verified existing assets and update manifests; they never create tasks or forge publication receipts. Non-TOP10 legacy cards use `unranked-<paper>` directories

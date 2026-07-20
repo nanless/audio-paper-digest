@@ -82,6 +82,8 @@ const ANALYSIS_CONFIG = {
     apiMaxRetries: 3,
     apiRetryBaseDelayMs: 5000,
     apiMaxTokens: 64000,
+    // 局部审校/修复通常只需重写既有分析；限制输出预算可避免推理模型在网关超时前持续思考。
+    repairMaxTokens: 16000,
     apiTemperature: 0.7,
     scoringAuditTemperature: 0.1,
     imagePlanTemperature: 0.2,
@@ -195,6 +197,10 @@ function applyEnvOverrides() {
         if (!Number.isNaN(val) && val >= 0) {
             ANALYSIS_CONFIG.maxRetries = val;
         }
+    }
+    const repairMaxTokens = readPositiveInt('PD_ANALYSIS_REPAIR_MAX_TOKENS');
+    if (repairMaxTokens) {
+        ANALYSIS_CONFIG.repairMaxTokens = repairMaxTokens;
     }
     // 筛选批次大小
     const filterBatchSize = readPositiveInt('PD_FILTER_BATCH_SIZE');

@@ -13,7 +13,7 @@
 
 2. **Check that the correct protocol is being used**
    - Look for `[filter] API 类型: xxx` or `[api] → model | xxx` in terminal output or `logs/*.log` to confirm whether it shows `anthropic` or `openai`
-   - If you are using MiMo/Kimi Token Plan but it shows `openai`, check whether the endpoint contains `token-plan` or `coding`, and whether the model name contains `mimo` or `kimi`
+   - If MiMo Token Plan shows `openai`, check its `token-plan` endpoint and MiMo domain/model. Kimi Coding should use `kimi.com/coding`; models such as `k3` do not need `kimi` in the model name
 
 3. **Anthropic protocol checks** (when output shows `anthropic`)
    - Confirm the request header includes `User-Agent: claude-cli/<version> (external, cli)` (this won't appear directly in terminal output, but can be verified with tcpdump or a proxy tool)
@@ -65,6 +65,7 @@ Possible causes:
 - After verification, run `npm run visual:post-publish -- --date YYYY-MM-DD`; output lists only TOP 10 pending/failed infographics and the one digest image
 - If a manifest is missing or its publication/analysis/prompt/hot-direction/ranking/category binding changed, rerun `visual:post-publish`. Status commands are read-only: they report stale, missing, failed, damaged, or SHA-mismatched assets without rewriting tasks
 - Generate pending work with Codex built-in `image_gen`. Visually verify the exact English title, Chinese body, paper numbers, and leaderboard before registering with `visual:record` or `cover:record`. If an old token is rejected, read the latest plan; never overwrite the newer task
+- Do not upload `.bin` cache paths directly or rename them by hand. Run `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]` and pass its `referencedImagePaths` to built-in `image_gen`; cache-path, SHA, byte-count, MIME, or magic-byte mismatches fail before upload instead of surfacing as misleading network errors
 - Once both status commands return zero, post-publication images are complete. They are independent of the already completed blog transaction; do not regenerate or re-review the blog because of image changes
 
 ### 12.5 Path Confusion
@@ -117,7 +118,7 @@ const options = {
 
 ### 12.9 API Protocol Routing Verification
 
-Run `node scripts/test-api-key.js` to test whether the API configuration is correct — it prints the detected protocol type (`openai` / `anthropic`), the actual request URL, and the model response. If you use MiMo/Kimi Token Plan but the output shows `openai`, check whether the endpoint contains `token-plan` or `coding` and whether the model name contains `mimo` or `kimi`.
+Run `node scripts/test-api-key.js` to test whether the API configuration is correct — it prints the detected protocol type (`openai` / `anthropic`), the actual request URL, and the model response. If MiMo Token Plan shows `openai`, check its `token-plan` endpoint and MiMo domain/model. Kimi Coding should use `kimi.com/coding` and supports names such as `k3`.
 
 ### 12.10 `npm run fetch` killed by SIGTERM (exit code 143) when running in background
 

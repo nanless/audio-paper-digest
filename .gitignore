@@ -29,6 +29,7 @@ __pycache__/
 *.pyo
 
 # Temporary / backup files
+tmp/
 *.backup*
 *.bak
 *.tmp

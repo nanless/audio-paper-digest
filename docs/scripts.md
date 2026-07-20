@@ -110,7 +110,7 @@ arXiv 抓取与 LLM 筛选模块。
 | API 整体超时 | 20 分钟活跃时间 | — | 排除系统睡眠/长时间挂起的墙钟跳变 |
 | API 内层重试次数 | 3 | — | deep-analyzer 内层每次调用重试次数 |
 | API 内层退避基数 | 5000ms | — | 指数退避：第一次 5s，之后翻倍 |
-| max_tokens | 64000 | — | LLM 输出长度上限 |
+| 主分析 max_tokens | 64000 | — | 主分析 LLM 输出长度上限；局部修复默认使用 `repairMaxTokens=16000` |
 | temperature | 0.7 | — | LLM 采样温度 |
 | 图片下载超时 | 60s | `PD_IMAGE_DOWNLOAD_TIMEOUT_MS` | 单张图片下载超时，失败后仍按既定次数重试 |
 | 单张图片原始大小上限 | 6MB | `PD_IMAGE_MAX_BYTES` | 下载后按字节数校验 |
@@ -254,6 +254,7 @@ HuggingFace Papers 抓取模块。
 - `push-blog.py` 在汇总页和全部论文页推送成功且远端 OID 验证后，自动运行 `visual-summary-integration.js`。它只为最终评分 TOP 10 建立 `infographic` 任务，同分按规范化 arXiv ID 排序
 - `npm run visual:render:debug -- --spec SPEC.json --output OUTPUT.png [--illustration 无字插画] [--reference 方法/架构原图] [--result-reference 关键实验原图]` 是保留的本地确定性调试/回退渲染器，不再用于默认最终视觉资产。默认流程由内置 `image_gen` 一次性生成完整带字构图，并在登记前人工目检准确性。回退渲染器仍可使用 Pillow 合成约 `2160x4552` 的论文长图或汇总封面，支持结构化 `diagram.columns/nodes/edges` 中文重绘、参考图图注、简单柱状图/指标卡和 8 MiB 输出门禁
 - 使用 `visual-summary-state.js record --date YYYY-MM-DD --paper ID --kind infographic --file PNG --token TOKEN` 登记。脚本验证 PNG、最小尺寸、纵横比、大小、SHA 和 task token 后，按 manifest 最终排名原子保存到 `data/archive/<date>/visual-summaries/01-<paper>/infographic.png` 至 `10-<paper>/infographic.png`；并发完成顺序不会影响编号
+- 调用内置生图前运行 `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]`。命令只物化输入，不调用图像 API；它校验 `.bin` 缓存受控路径、SHA、字节数、MIME 与文件头，再输出具有正确 `.png/.jpg/.webp` 扩展名的 `referencedImagePaths`，避免直接上传 `.bin` 触发图片服务错误
 - 汇总图从同批次审计论文确定性计算标题、热门方向计数和 TOP 10 排名，并复用博客 generation manifest 的 category；用 `digest-cover-state.js record` 登记到 `data/archive/<date>/digest-cover/cover.png`
 - 旧版 `data/current/visual-summaries/` 和 `data/current/digest-covers/` 资产会在下一次 plan 时校验 PNG 与 SHA，确认归档目标无冲突后迁移
 - 对缺少新版远端 OID 字段、不能重新 plan 的历史批次，使用 `npm run visual:archive -- --date YYYY-MM-DD` 和 `npm run cover:archive -- --date YYYY-MM-DD`；命令只迁移已有资产并更新 manifest，不创建任务或伪造发布凭证。旧 generation manifest 会与同日归档分析论文集合交叉校验后计算排名，非 TOP10 旧卡片归入 `unranked-<paper>`

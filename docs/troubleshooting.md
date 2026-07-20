@@ -13,7 +13,7 @@
 
 2. **检查是否走对了协议**
    - 查看终端输出或 `logs/*.log` 中的 `[filter] API 类型: xxx` / `[api] → model | xxx` 行，确认显示 `anthropic` 还是 `openai`
-   - 若使用 MiMo/Kimi Token Plan 却显示 `openai`，检查端点是否含 `token-plan` 或 `coding`，模型是否含 `mimo` 或 `kimi`
+   - 若 MiMo Token Plan 显示 `openai`，检查 `token-plan` 端点和 MiMo 域名/模型；Kimi Coding 应使用 `kimi.com/coding`，`k3` 无需在模型名中含 `kimi`
 
 3. **Anthropic 协议专项检查**（输出显示 `anthropic` 时）
    - 确认请求头中包含 `User-Agent: claude-cli/<version> (external, cli)`（终端输出中不会直接显示，但可以用 tcpdump 或代理工具验证）
@@ -65,6 +65,7 @@ ls -lt content/posts | head -20
 - 远端验证完成后运行 `npm run visual:post-publish -- --date YYYY-MM-DD`；完整输出只列出 TOP 10 pending/failed 长图和一张汇总图
 - manifest 缺失或发布版本/分析/prompt/热门方向/排名/category 变化时，重新运行 `visual:post-publish`；`status` 只读报告过期、缺失、失败、PNG 损坏或 SHA 不符，不会修改任务
 - 使用 Codex 内置 `image_gen` 生成待处理项，目视核对英文标题、中文正文、论文数字和排行榜无误后，再通过 `visual:record` 或 `cover:record` 登记；旧 token 被拒绝时必须重新读取最新规划，禁止覆盖新任务
+- 若参考图缓存路径以 `.bin` 结尾，不要直接上传或手工改名；先运行 `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]`，再把输出的 `referencedImagePaths` 交给内置 `image_gen`。命令会阻断缓存 SHA、字节数、MIME、文件头或路径不一致，避免上传阶段出现误导性的 network error
 - 两个 status 都返回 0 即表示发布后图片完成；图片独立于已经完成的博客事务，无需也不得因此重新 generate/review
 
 ### 12.5 路径混淆
@@ -117,7 +118,7 @@ const options = {
 
 ### 12.9 API 协议路由验证
 
-运行 `node scripts/test-api-key.js` 测试 API 配置是否正确——会输出检测到的协议类型（`openai` / `anthropic`）、实际请求的 URL 和模型响应。Anthropic 协议输出类似 `[test-api-key] 协议: anthropic`，OpenAI 类似 `[test-api-key] 协议: openai`。若你使用 MiMo/Kimi Token Plan 但输出显示 `openai`，检查端点是否含 `token-plan` 或 `coding`。
+运行 `node scripts/test-api-key.js` 测试 API 配置是否正确——会输出检测到的协议类型（`openai` / `anthropic`）、实际请求的 URL 和模型响应。Anthropic 协议输出类似 `[test-api-key] 协议: anthropic`，OpenAI 类似 `[test-api-key] 协议: openai`。若 MiMo Token Plan 显示 `openai`，检查 `token-plan` 端点和 MiMo 域名/模型；Kimi Coding 应使用 `kimi.com/coding`，并兼容 `k3`。
 
 ### 12.10 后台运行时 `npm run fetch` 被 SIGTERM 终止（exit code 143）
 

@@ -37,6 +37,11 @@ const MIN_ASSET_WIDTH = 768;
 const MIN_ASSET_HEIGHT = 1024;
 const MIN_PORTRAIT_RATIO = 1.25;
 const MAX_REFERENCE_IMAGES = 2;
+const REFERENCE_MIME_EXTENSIONS = Object.freeze({
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/webp': '.webp'
+});
 const RENDERING_CONTRACT = Object.freeze({
     mode: 'full_image_generation_v2',
     renderer: 'built-in image_gen',
@@ -274,6 +279,84 @@ function selectVisualReferenceImages(paper, limit = MAX_REFERENCE_IMAGES) {
                 return [];
             }
         }).slice(0, limit);
+}
+
+function validateReferenceImageBytes(raw, mime) {
+    const extension = REFERENCE_MIME_EXTENSIONS[String(mime || '').toLowerCase()];
+    if (!extension) throw new Error(`视觉参考图 MIME 不受支持: ${JSON.stringify(mime)}`);
+    const isPng = raw.length >= PNG_SIGNATURE.length
+        && raw.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE);
+    const isJpeg = raw.length >= 3 && raw[0] === 0xff && raw[1] === 0xd8 && raw[2] === 0xff;
+    const isWebp = raw.length >= 12
+        && raw.subarray(0, 4).toString('ascii') === 'RIFF'
+        && raw.subarray(8, 12).toString('ascii') === 'WEBP';
+    if ((extension === '.png' && !isPng)
+        || (extension === '.jpg' && !isJpeg)
+        || (extension === '.webp' && !isWebp)) {
+        throw new Error(`视觉参考图文件头与 MIME 不匹配: ${mime}`);
+    }
+    return extension;
+}
+
+function prepareVisualReferenceInputs(manifest, {
+    targetDate,
+    paperId = null,
+    outputRoot = path.join(Config.CURRENT_DIR, 'visual-reference-inputs')
+} = {}) {
+    targetDate = validateDate(targetDate || manifest?.batchDate);
+    if (manifest?.batchDate !== targetDate || typeof manifest?.papers !== 'object') {
+        throw new Error('视觉摘要 manifest 与参考图准备日期不一致');
+    }
+    const requestedId = paperId ? normalizedId(paperId) : null;
+    if (paperId && !requestedId) throw new Error(`论文 ID 非法: ${JSON.stringify(paperId)}`);
+    if (requestedId && !manifest.papers[requestedId]) {
+        throw new Error(`manifest 中不存在论文: ${requestedId}`);
+    }
+
+    return Object.values(manifest.papers)
+        .filter(paper => !requestedId || normalizedId(paper.normalizedArxivId || paper.arxivId) === requestedId)
+        .sort((a, b) => a.rank - b.rank)
+        .map(paper => {
+            const id = normalizedId(paper.normalizedArxivId || paper.arxivId);
+            const safeRoot = path.resolve(outputRoot);
+            const directory = path.resolve(safeRoot, targetDate, `${String(paper.rank).padStart(2, '0')}-${id}`);
+            if (directory !== safeRoot && !directory.startsWith(`${safeRoot}${path.sep}`)) {
+                throw new Error(`视觉参考图准备路径逃逸: ${directory}`);
+            }
+            const references = (paper.generationContext?.referenceImages || []).map((reference, index) => {
+                const expectedCache = path.resolve(visualReferenceCachePaths(reference.url).data);
+                const recordedCache = path.resolve(Config.PROJECT_ROOT, String(reference.cachePath || ''));
+                if (recordedCache !== expectedCache) {
+                    throw new Error(`${id} 视觉参考图缓存路径不受控: ${reference.cachePath}`);
+                }
+                const raw = fs.readFileSync(recordedCache);
+                const actualSha = sha256Buffer(raw);
+                if (actualSha !== reference.sha256 || raw.length !== reference.bytes) {
+                    throw new Error(`${id} 视觉参考图缓存 SHA/字节数不匹配: ${reference.cachePath}`);
+                }
+                const extension = validateReferenceImageBytes(raw, reference.mime);
+                const role = String(reference.role || 'paper_figure').replace(/[^a-z0-9_-]/gi, '_');
+                const target = path.join(directory, `${String(index + 1).padStart(2, '0')}-${role}${extension}`);
+                fs.mkdirSync(directory, { recursive: true });
+                const existing = fs.existsSync(target) ? fs.readFileSync(target) : null;
+                if (!existing || sha256Buffer(existing) !== actualSha) writeFileAtomic(target, raw);
+                return {
+                    role: reference.role,
+                    caption: reference.caption,
+                    mime: reference.mime,
+                    sha256: actualSha,
+                    preparedPath: path.relative(Config.PROJECT_ROOT, target).split(path.sep).join('/')
+                };
+            });
+            return {
+                rank: paper.rank,
+                arxivId: id,
+                title: paper.title,
+                taskToken: paper.cards?.infographic?.taskToken,
+                referencedImagePaths: references.map(reference => reference.preparedPath),
+                referenceImages: references
+            };
+        });
 }
 
 function analysisSha256(paper) {
@@ -1007,6 +1090,20 @@ function main(argv = process.argv.slice(2)) {
         console.log(`历史视觉资产已按日期归档：排行榜 ${result.rankedCount} 篇，额外图片 ${result.extraCount} 张`);
         return;
     }
+    if (command === 'prepare') {
+        const targetDate = options.date;
+        if (!targetDate) throw new Error('prepare 必须传 --date YYYY-MM-DD');
+        const publication = assertPublishedBlogReceipt(targetDate, options.receipt);
+        const manifest = readJsonFileStrict(options.manifest || visualSummaryManifestPath(targetDate));
+        assertVisualManifestCurrent(manifest, publication, targetDate);
+        const prepared = prepareVisualReferenceInputs(manifest, {
+            targetDate,
+            paperId: options.paper
+        });
+        console.log(`已准备视觉参考图输入：${prepared.length} 篇`);
+        for (const item of prepared) console.log(JSON.stringify(item));
+        return;
+    }
     if (command === 'record') {
         const publication = assertPublishedBlogReceipt(options.date, options.receipt);
         const current = readJsonFileStrict(options.manifest || visualSummaryManifestPath(options.date));
@@ -1043,7 +1140,7 @@ function main(argv = process.argv.slice(2)) {
         if (pending.length !== 0) process.exitCode = 1;
         return;
     }
-    throw new Error('用法: visual-summary-state.js plan --date YYYY-MM-DD | archive-legacy --date YYYY-MM-DD | record --date YYYY-MM-DD --paper ID --kind infographic (--file PNG | --output-hint HINT) --token TOKEN | fail --date YYYY-MM-DD --paper ID --kind infographic --error MESSAGE --token TOKEN | status --date YYYY-MM-DD');
+    throw new Error('用法: visual-summary-state.js plan --date YYYY-MM-DD | prepare --date YYYY-MM-DD [--paper ID] | archive-legacy --date YYYY-MM-DD | record --date YYYY-MM-DD --paper ID --kind infographic (--file PNG | --output-hint HINT) --token TOKEN | fail --date YYYY-MM-DD --paper ID --kind infographic --error MESSAGE --token TOKEN | status --date YYYY-MM-DD');
 }
 
 if (require.main === module) main();
@@ -1076,6 +1173,8 @@ module.exports = {
     validatePngBuffer,
     extractGeneratedImagePathFromHint,
     selectVisualReferenceImages,
+    validateReferenceImageBytes,
+    prepareVisualReferenceInputs,
     validateDate,
     visualSummaryManifestPath,
     assertPublishedBlogReceipt,

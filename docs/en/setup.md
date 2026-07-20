@@ -26,6 +26,7 @@ Benefits of this design:
 | `PAPER_ANALYZER_SECONDARY_API_KEY` | Secondary model API key; falls back to the primary key when unset | Optional |
 | `PD_ANALYSIS_CONCURRENCY` | Deep analysis concurrency | 3 |
 | `PD_ANALYSIS_MAX_RETRIES` | Per-paper retry count for deep analysis | 2 |
+| `PD_ANALYSIS_REPAIR_MAX_TOKENS` | Output-token cap for revision, table, method, and structure repair stages | 16000 |
 | `PD_REANALYZE_CONCURRENCY` | Re-analysis concurrency | 3 (matches `ANALYSIS_CONFIG.concurrency`) |
 | `PD_FILTER_BATCH_SIZE` | LLM filtering batch size | 5 |
 | `PD_ARXIV_MAX_RESULTS` | Number of papers to fetch per arXiv category | 100 |
@@ -44,7 +45,7 @@ Benefits of this design:
 **API Protocol Auto-Routing**: `detectApiType()` in `scripts/utils.js` automatically selects OpenAI or Anthropic protocol based on endpoint and model, in this priority order:
 - **DeepSeek**: endpoints containing `deepseek.com` or models containing `deepseek` are forced to OpenAI; `/anthropic` paths are converted to `/v1/chat/completions`
 - **MiMo Token Plan**: endpoint contains `token-plan` and model contains `mimo`, using Anthropic; `https://token-plan-cn.xiaomimimo.com/v1` -> `https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages`
-- **Kimi Coding Plan**: endpoint contains `coding` and model contains `kimi`, using Anthropic; `https://api.kimi.com/coding/v1` -> `https://api.kimi.com/coding/v1/messages` with no `/anthropic` intermediate path
+- **Kimi Coding Plan**: the `coding` endpoint on `api.kimi.com` uses Anthropic, including model names such as `k3` that do not contain `kimi`; both `https://api.kimi.com/coding` and `https://api.kimi.com/coding/v1` normalize to `https://api.kimi.com/coding/v1/messages` with no `/anthropic` intermediate path
 - **Generic `/anthropic` endpoint**: non-DeepSeek endpoints containing `/anthropic` use Anthropic and append `/messages`
 - **Other endpoints/models**: use OpenAI and append `/v1/chat/completions`
 
@@ -272,6 +273,7 @@ FEISHU_APP_SECRET=your-full-app-secret
 
 5. **Resume visual assets; do not redraw everything**
    - A remotely verified publication receipt is mandatory; `npm run visual:post-publish -- --date YYYY-MM-DD` plans only the final-score TOP 10
+   - Then run `npm run visual:prepare -- --date YYYY-MM-DD` to validate `.bin` reference caches and emit upload-ready `referencedImagePaths` for built-in generation
    - `visual:post-publish` plans both image types while holding the blog transaction lock; only missing, failed, damaged, publication/analysis/prompt-invalidated, or newly TOP-10 infographics return to pending
    - the digest image is replanned only when the published-paper snapshot, hot directions, ranking, category, publication commit, or prompt changes
    - Register assets with their own `record` commands, then rerun both status gates. Never hand-edit manifests or bypass SHA/task-token checks

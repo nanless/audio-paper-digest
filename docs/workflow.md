@@ -116,9 +116,9 @@ HF 特有字段（共 7 个）：
 使用 `项目根目录的 `.env` 文件` 中的 `PAPER_ANALYZER_*` 配置逐篇判断是否为语音/音乐/音频相关。
 
 **API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动切换 OpenAI / Anthropic 协议
-- **MiMo/Kimi Token Plan / Coding Plan**（端点含 `token-plan` 或 `coding`，模型含 `mimo`/`kimi`）→ 自动切换为 **Anthropic 协议**，伪装成 Claude Code 调用
+- **MiMo/Kimi Token Plan / Coding Plan**（MiMo 由 `token-plan` + MiMo 域名/模型识别；Kimi 由 `coding` + `kimi.com` 域名或 Kimi 模型识别）→ 自动切换为 **Anthropic 协议**，兼容 `k3`，并伪装成 Claude Code 调用
   - **MiMo**: `https://token-plan-cn.xiaomimimo.com/v1` → `/anthropic/v1/messages`
-  - **Kimi**: `https://api.kimi.com/coding/v1` → `https://api.kimi.com/coding/v1/messages`（无需 `/anthropic` 中间路径）
+  - **Kimi**: `https://api.kimi.com/coding` 或 `https://api.kimi.com/coding/v1` → `https://api.kimi.com/coding/v1/messages`（自动补齐 `/v1`，无需 `/anthropic` 中间路径；兼容 `k3` 等模型名）
   - Headers: `x-api-key` + `anthropic-version: 2023-06-01` + `User-Agent: claude-cli/<version> (external, cli)`（版本号动态获取自本地 `claude --version`，失败回退到 `2.1.108`）
   - system message 自动提取为请求体顶级字段
 - **其他情况**（包括 MiMo 按量付费 `api.xiaomimimo.com` 、通用 OpenAI 端点）→ 使用标准 **OpenAI 协议**
@@ -185,7 +185,7 @@ HF 特有字段（共 7 个）：
 - **并发度：3 篇并行**（可通过项目 `.env` 中的 `PD_ANALYSIS_CONCURRENCY` 调整）
 - 每篇最多重试 **2 次**（外层 `analysis-engine.js`），每次外层重试内部 API 调用还有 **3 次** 重试（`deep-analyzer.js` 内层，指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5000ms`），外层重试间隔 3 秒（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整外层）
 - API 整体超时为 **20 分钟活跃时间**；每秒心跳识别超过 30 秒的系统睡眠/事件循环挂起并排除该墙钟跳变，唤醒后的请求超时仍按剩余预算重试
-- `max_tokens=64000`（config.js 中 `apiMaxTokens`），`temperature=0.7`
+- 主分析 `max_tokens=64000`（config.js 中 `apiMaxTokens`）；审校/表格/方法/结构局部修复默认 `max_tokens=16000`（`repairMaxTokens`，可由 `PD_ANALYSIS_REPAIR_MAX_TOKENS` 覆写）；`temperature=0.7`
 - 代理只从项目根 `.env` 中显式配置的大小写代理变量读取；不继承 shell/IDE 代理，也不读取 macOS `scutil`。`HTTPS_PROXY` / `HTTP_PROXY` 是 arXiv 抓取必填的 HTTP CONNECT 地址，HuggingFace `curl` 可额外使用 SOCKS `ALL_PROXY`
 - LLM 请求与抓取请求完全隔离：全部 LLM 调用固定 `agent: false` 直连，绝不复用抓取 dispatcher；使用本机代理的网络命令必须在沙箱外运行
 - 抓取阶段只要任一 arXiv 类别或 HuggingFace 来源失败，即写入 `source_partial_failed` 并终止在筛选阶段；此状态不能复用为 `filter_complete`，也不能进入深度分析或更新持久化去重库。
@@ -208,6 +208,8 @@ HF 特有字段（共 7 个）：
 评分审计全部通过后，先依次运行 `generate-blog.py`、`review-blog.py` 和 `push-blog.py`，发布汇总页及全部论文页。`push-blog.py` 只有在远端 `main` OID 与 `publicationCommit` 完全一致后才写入远端验证字段，并自动调用 `visual-summary-integration.js`。规划器按最终评分降序、同分规范化 arXiv ID 升序选取 TOP 10；Codex 读取 `prompts/visual-summary.md`，为每篇生成一张顶部英文标题、正文中文的纵向长图，并用 task token 登记。
 
 同一发布后阶段还会按博客 generation manifest 保存的 category 建立一张批次汇总图任务，内容为标题、热门方向和 TOP 10 排名。两类 manifest 分别保存发布提交、数据 SHA、prompt SHA、task token 与资产 SHA，中断后只补缺失、失败、损坏或失效项。论文长图任务还会从深度分析的 `selectedImageUrls` / `imageManifest` 中选择最多两张已下载且 URL、MIME、字节数和 SHA 全部匹配的关键原图，优先方法总览、架构和流程图，再考虑关键实验图；参考图指纹变化只失效对应论文。内置生图必须把参考图作为结构事实来源重新绘制，不得粘贴不可读截图或补造原图中没有的数据。论文长图按 manifest 最终排名直接归档到 `data/archive/<日期>/visual-summaries/01-<论文>/infographic.png` 至 `10-<论文>/infographic.png`，并发生成完成顺序不参与编号；封面归档到 `data/archive/<日期>/digest-cover/cover.png`。旧版 current 资产会在 plan 时经 PNG/SHA 校验后迁移。图片不进入已经发布的博客清单，也不阻断博客流程；项目脚本不得调用图像 API，生成图不得冒充论文原始 Figure 或虚构事实，汇总图不得显示 arXiv ID。
+
+调用内置生图前必须运行 `npm run visual:prepare -- --date <日期>`。该命令不会调用图像 API，也不会改变任务 token；它重新校验 `.bin` 原始缓存的受控路径、SHA、长度、MIME 与文件头，随后把参考图原子物化为 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 中带正确扩展名的文件。生图时使用命令输出的 `referencedImagePaths`，不要把 `.bin` 直接传给图片服务。可用 `--paper <ID>` 只准备单篇，重复运行会校验并修复被改写的物化文件。
 
 > **单模型 vs 双模型**：主模型始终负责正文和最终评分审计。评分审计默认使用独立低温 0.1。设置 `PAPER_ANALYZER_SECONDARY_MODEL` 后，副模型只从候选图片中筛选高价值图、丢弃低信息图并输出章节、稳定段落 ID、图前和图后说明；代码不会接受副模型替换主模型原文。未设置副模型时图片 URL 只保存在候选元数据中。
 

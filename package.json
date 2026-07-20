@@ -12,6 +12,7 @@
     "validate:data": "node scripts/validate-data-files.js",
     "visual:post-publish": "python3 scripts/plan-post-publish-visuals.py",
     "visual:render:debug": "python3 scripts/render-visual-summary.py",
+    "visual:prepare": "node scripts/visual-summary-state.js prepare",
     "visual:status": "node scripts/visual-summary-state.js status",
     "visual:archive": "node scripts/visual-summary-state.js archive-legacy",
     "visual:record": "node scripts/visual-summary-state.js record",
@@ -49,6 +50,7 @@
   },
   "homepage": "https://github.com/nanless/audio-paper-digest#readme",
   "dependencies": {
+    "@napi-rs/canvas": "^0.1.80",
     "cheerio": "^1.2.0",
     "pdf-parse": "^2.4.5"
   },

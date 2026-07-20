@@ -422,6 +422,7 @@ function getAnthropicEndpoint(openaiEndpoint) {
 /**
  * 构建 API URL
  * MiMo: /v1 → /anthropic/v1/messages
+ * Kimi: /coding 或 /coding/v1 → /coding/v1/messages
  * 其他 Anthropic: {base}/messages
  * OpenAI: 端点路径含 /anthropic 时自动修正为 /v1/chat/completions
  */
@@ -433,7 +434,12 @@ function buildApiUrl(apiType, endpoint) {
             const anthropicBase = getAnthropicEndpoint(base);
             return `${anthropicBase}/v1/messages`;
         }
-        // Kimi / 其他 Anthropic 兼容端点
+        if (base.includes('kimi.com')) {
+            // Kimi Coding Plan 同时兼容用户配置的 /coding 与 /coding/v1。
+            const kimiBase = base.replace(/\/coding(?:\/v1)?$/i, '/coding/v1');
+            return `${kimiBase}/messages`;
+        }
+        // 其他 Anthropic 兼容端点
         return `${base}/messages`;
     }
     // OpenAI: 标准化路径（如 /anthropic → /v1）

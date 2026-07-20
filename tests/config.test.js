@@ -33,6 +33,7 @@ describe('config', () => {
         assert.strictEqual(Config.ANALYSIS_CONFIG.concurrency, 3);
         assert.strictEqual(Config.ANALYSIS_CONFIG.maxRetries, 2);
         assert.strictEqual(Config.ANALYSIS_CONFIG.apiMaxTokens, 64000);
+        assert.strictEqual(Config.ANALYSIS_CONFIG.repairMaxTokens, 16000);
         assert.strictEqual(Config.ANALYSIS_CONFIG.scoringAuditTemperature, 0.1);
         assert.strictEqual(Config.ANALYSIS_CONFIG.imagePlanTemperature, 0.2);
         assert.strictEqual(Config.ANALYSIS_CONFIG.arxivPdfMaxBytes, 50 * 1024 * 1024);
@@ -98,6 +99,12 @@ describe('config', () => {
     it('项目 .env 覆写 PD_ANALYSIS_MAX_RETRIES', () => {
         withProjectEnv('PD_ANALYSIS_MAX_RETRIES=5', (Config) => {
             assert.strictEqual(Config.ANALYSIS_CONFIG.maxRetries, 5);
+        });
+    });
+
+    it('项目 .env 覆写 PD_ANALYSIS_REPAIR_MAX_TOKENS', () => {
+        withProjectEnv('PD_ANALYSIS_REPAIR_MAX_TOKENS=12000', (Config) => {
+            assert.strictEqual(Config.ANALYSIS_CONFIG.repairMaxTokens, 12000);
         });
     });
 

@@ -87,6 +87,7 @@ python3 scripts/review-blog.py --date 2026-05-08
 python3 scripts/push-blog.py --date 2026-05-08
 
 # 5. push 验证远端 OID 后已自动建立 TOP 10 长图和汇总图任务
+npm run visual:prepare -- --date 2026-05-08
 npm run visual:status -- --date 2026-05-08
 npm run cover:status -- --date 2026-05-08
 
@@ -120,6 +121,7 @@ npm run validate:data
 
 # 全部博客发布后，幂等建立/续跑 TOP 10 论文长图与汇总图任务
 npm run visual:post-publish -- --date 2026-04-21
+npm run visual:prepare -- --date 2026-04-21
 npm run visual:status -- --date 2026-04-21
 npm run cover:status -- --date 2026-04-21
 

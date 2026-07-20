@@ -95,9 +95,9 @@ HF-specific fields (7 total):
 Using the `PAPER_ANALYZER_*` configuration in `the `.env` file in the project root`, each paper is evaluated to determine whether it is speech / music / audio related.
 
 **API Protocol Auto-Routing**: `detectApiType()` in `scripts/utils.js` automatically switches between OpenAI / Anthropic protocols based on the endpoint and model name
-- **MiMo / Kimi Token Plan / Coding Plan** (endpoint contains `token-plan` or `coding`, model contains `mimo`/`kimi`) -> automatically switches to **Anthropic protocol**, masquerading as a Claude Code call
+- **MiMo / Kimi Token Plan / Coding Plan** (MiMo is recognized by `token-plan` plus its domain/model; Kimi by `coding` plus the `kimi.com` domain or Kimi model) -> automatically switches to **Anthropic protocol**, supports names such as `k3`, and masquerades as a Claude Code call
   - **MiMo**: `https://token-plan-cn.xiaomimimo.com/v1` -> `/anthropic/v1/messages`
-  - **Kimi**: `https://api.kimi.com/coding/v1` -> `https://api.kimi.com/coding/v1/messages` (no `/anthropic` intermediate path needed)
+  - **Kimi**: `https://api.kimi.com/coding` or `https://api.kimi.com/coding/v1` -> `https://api.kimi.com/coding/v1/messages` (automatically adds `/v1`; supports model names such as `k3`; no `/anthropic` intermediate path needed)
   - Headers: `x-api-key` + `anthropic-version: 2023-06-01` + `User-Agent: claude-cli/<version> (external, cli)` (version dynamically obtained from local `claude --version`, fallback to `2.1.108` on failure)
   - system message is automatically extracted as a top-level request body field
 - **Other cases** (including MiMo pay-as-you-go `api.xiaomimimo.com`, generic OpenAI endpoints) -> standard **OpenAI protocol**
@@ -163,7 +163,7 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 - **Concurrency: 3 papers in parallel** (adjustable via `PD_ANALYSIS_CONCURRENCY` in the project `.env`)
 - Up to **2 retries** per paper (outer `analysis-engine.js`), with each outer retry having **3 retries** for internal API calls (`deep-analyzer.js` inner layer, exponential backoff: first 10s, then double, `2^attempt * 5000ms`), outer retry interval 3s (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
 - API overall timeout is **20 minutes of active process time**. A heartbeat excludes system-sleep or long-suspension wall-clock jumps, so a socket timeout after wake can retry with the remaining budget
-- `max_tokens=64000` (`apiMaxTokens` in config.js), `temperature=0.7`
+- Primary analysis uses `max_tokens=64000` (`apiMaxTokens`); revision, table, method, and structure repair default to `max_tokens=16000` (`repairMaxTokens`, overridable with `PD_ANALYSIS_REPAIR_MAX_TOKENS`); `temperature=0.7`
 - Proxy settings come only from case-insensitive proxy variables explicitly configured in the project-root `.env`; inherited shell/IDE proxies and macOS `scutil` are not used. `HTTPS_PROXY` / `HTTP_PROXY` are required HTTP CONNECT addresses for arXiv; HuggingFace `curl` may additionally use SOCKS `ALL_PROXY`
 - LLM and fetch transport are isolated: every LLM call is direct with `agent: false` and never reuses a fetch dispatcher; commands using a local proxy must run outside the sandbox
 - If any arXiv category or HuggingFace source fails, the run records `source_partial_failed` and stops after filtering. That state is never reusable as `filter_complete` and cannot enter deep analysis or update the persistent deduplication database.
@@ -196,6 +196,8 @@ Generated TOP 10 infographics are archived under manifest-ranked paths `data/arc
 After all scoring audits pass, run `generate-blog.py`, `review-blog.py`, and `push-blog.py` to publish the digest index and every paper page. Push records remote verification only when remote `main` exactly matches `publicationCommit`, then automatically invokes the post-publication planner. It selects the final-score TOP 10 with normalized-arXiv-ID tie breaking. Codex creates one tall infographic per selected paper with the exact English title at the top and a Chinese body, then records it with the task token.
 
 The same post-publication stage creates one digest-image task using the category saved by blog generation and deterministic title, hot directions, and TOP 10 ranking. A paper task also selects at most two deep-analysis-approved figures whose cached URL, MIME, byte count, and SHA all match, prioritizing method overviews, architectures, and pipelines before key result figures. Reference fingerprints invalidate only the affected paper. Built-in image generation treats these figures as structural sources of truth and redraws them in the common editorial style; it must not paste an unreadable screenshot or invent missing data. The two manifests resume independently. These images neither enter nor block the completed blog transaction. Project scripts never call an image API; generated graphics remain editorial summaries, not original paper figures, and must not invent facts or display arXiv IDs on the digest image.
+
+Before built-in image generation, run `npm run visual:prepare -- --date <date>` (optionally `--paper <ID>`). It keeps task tokens unchanged, revalidates each controlled `.bin` cache path, SHA, byte count, MIME, and magic bytes, and atomically materializes upload-ready `.png/.jpg/.webp` files under `data/current/visual-reference-inputs/<date>/<rank-paper>/`. Pass the emitted `referencedImagePaths` to the image tool instead of raw `.bin` paths; repeated runs repair altered materialized files.
 
 ### 3.9 Incremental Save and Wrap-up
 

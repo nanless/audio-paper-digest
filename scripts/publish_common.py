@@ -374,6 +374,9 @@ def build_publish_api_url(api_type, endpoint):
         if 'xiaomimimo.com' in base:
             base = re.sub(r'/v1/?$', '/anthropic', base)
             return f'{base}/v1/messages'
+        if 'kimi.com' in base:
+            base = re.sub(r'/coding(?:/v1)?$', '/coding/v1', base, flags=re.IGNORECASE)
+            return f'{base}/messages'
         return f'{base}/messages'
     base = re.sub(r'/anthropic/?$', '/v1', base)
     return f'{base}/chat/completions'

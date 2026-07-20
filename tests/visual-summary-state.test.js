@@ -20,6 +20,8 @@ const {
     assertPublishedBlogReceipt,
     assertVisualManifestCurrent,
     selectVisualReferenceImages,
+    validateReferenceImageBytes,
+    prepareVisualReferenceInputs,
     main
 } = require('../scripts/visual-summary-state.js');
 
@@ -204,6 +206,56 @@ describe('visual summary state', () => {
             assert.strictEqual(selectVisualReferenceImages(input)[0].role, 'result_reference');
         } finally {
             Config.CURRENT_DIR = originalCurrent;
+        }
+    });
+
+    it('把校验通过的 .bin 缓存物化为内置生图可直接上传的规范扩展名', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-prepare-'));
+        const current = path.join(dir, 'current');
+        const output = path.join(current, 'visual-reference-inputs');
+        const url = 'https://arxiv.org/html/2607.12345v1/figure/method.png';
+        const originals = {
+            current: Config.CURRENT_DIR,
+            manifest: Config.FILES.visualSummaryManifestDir,
+            asset: Config.FILES.visualSummaryAssetDir
+        };
+        try {
+            patchVisualDirs(current);
+            const sha256 = writeImageCache(current, url, PNG);
+            const input = paper('2607.12345', {
+                selectedImageUrls: [url],
+                imageManifest: {
+                    selected: [url],
+                    candidates: [{ url, caption: 'Figure 1: Method architecture overview.' }],
+                    downloaded: [{ url, mime: 'image/png', sha256 }]
+                }
+            });
+            const promptPath = path.join(dir, 'prompt.md');
+            const manifestPath = path.join(dir, 'manifest.json');
+            fs.writeFileSync(promptPath, 'fresh visual prompt');
+            const manifest = planVisualSummaries({
+                targetDate: '2026-07-13', papers: [input], manifestPath, promptPath
+            });
+            const prepared = prepareVisualReferenceInputs(manifest, {
+                targetDate: '2026-07-13', outputRoot: output
+            });
+            const expected = path.join(output, '2026-07-13', '01-2607.12345', '01-method_reference.png');
+            assert.strictEqual(prepared.length, 1);
+            assert.deepStrictEqual(prepared[0].referencedImagePaths, [
+                path.relative(Config.PROJECT_ROOT, expected).split(path.sep).join('/')
+            ]);
+            assert.deepStrictEqual(fs.readFileSync(expected), PNG);
+            assert.strictEqual(validateReferenceImageBytes(PNG, 'image/png'), '.png');
+            assert.throws(() => validateReferenceImageBytes(Buffer.from('not-png'), 'image/png'), /文件头/);
+
+            fs.writeFileSync(expected, Buffer.from('stale'));
+            prepareVisualReferenceInputs(manifest, { targetDate: '2026-07-13', outputRoot: output });
+            assert.deepStrictEqual(fs.readFileSync(expected), PNG);
+        } finally {
+            Config.CURRENT_DIR = originals.current;
+            Config.FILES.visualSummaryManifestDir = originals.manifest;
+            Config.FILES.visualSummaryAssetDir = originals.asset;
+            fs.rmSync(dir, { recursive: true, force: true });
         }
     });
 

@@ -124,6 +124,30 @@ describe('deep-analyzer section helpers', () => {
         assert.strictEqual(safeImageLabel('data:image/svg+xml;base64,' + 'x'.repeat(1000)), 'image/svg+xml;base64,<omitted>');
     });
 
+    it('将模型拒绝的透明 PNG 载荷标准化为 RGB JPEG', async () => {
+        const { createCanvas } = require('@napi-rs/canvas');
+        const {
+            normalizeModelImagePayload,
+            isCorruptedMultimodalError
+        } = require('../scripts/deep-analyzer.js');
+        const canvas = createCanvas(4, 3);
+        const context = canvas.getContext('2d');
+        context.fillStyle = 'rgba(255, 0, 0, 0.5)';
+        context.fillRect(0, 0, 4, 3);
+
+        const normalized = await normalizeModelImagePayload({
+            url: 'https://example.com/alpha.png',
+            mime: 'image/png',
+            base64: canvas.toBuffer('image/png').toString('base64')
+        });
+
+        assert.strictEqual(normalized.mime, 'image/jpeg');
+        assert.strictEqual(normalized.modelPayloadNormalized, true);
+        assert.ok(Buffer.from(normalized.base64, 'base64').subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])));
+        assert.strictEqual(isCorruptedMultimodalError(new Error('Multimodal data is corrupted or cannot be processed.')), true);
+        assert.strictEqual(isCorruptedMultimodalError(new Error('HTTP 429')), false);
+    });
+
     it('arXiv figure 内多张图片会全部提取并按 URL 去重', () => {
         const { parseArxivImageInfosFromHtml } = require('../scripts/deep-analyzer.js');
         const html = `

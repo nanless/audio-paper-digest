@@ -53,6 +53,7 @@ const {
     apiMaxRetries: API_MAX_RETRIES,
     apiRetryBaseDelayMs: API_RETRY_BASE_DELAY_MS,
     apiMaxTokens: API_MAX_TOKENS,
+    repairMaxTokens: REPAIR_MAX_TOKENS = 16000,
     apiTemperature: API_TEMPERATURE,
     scoringAuditTemperature: SCORING_AUDIT_TEMPERATURE = 0.1,
     imagePlanTemperature: IMAGE_PLAN_TEMPERATURE = 0.2,
@@ -465,10 +466,10 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
     };
     const stageMaxTokens = {
         openSourceScan: 8000,
-        revision: API_MAX_TOKENS,
-        tableRepair: API_MAX_TOKENS,
-        methodRepair: API_MAX_TOKENS,
-        structureRepair: API_MAX_TOKENS
+        revision: REPAIR_MAX_TOKENS,
+        tableRepair: REPAIR_MAX_TOKENS,
+        methodRepair: REPAIR_MAX_TOKENS,
+        structureRepair: REPAIR_MAX_TOKENS
     };
     const textStage = stage => stableFingerprint({
         ...modelFingerprint(DEEP_CONFIG, API_TEMPERATURE, stageMaxTokens[stage]),
@@ -1618,6 +1619,35 @@ function buildImageContent(imageUrl, base64, detectedMime = '') {
     };
 }
 
+/**
+ * 部分兼容 Anthropic 协议的多模态端点会拒绝浏览器可正常解码的 PNG
+ * （常见于带透明通道或非常规 PNG chunk）。只在端点明确报告图片损坏后，
+ * 将请求载荷铺白底并转为标准 RGB JPEG；原始缓存、URL 和正文引用保持不变。
+ */
+async function normalizeModelImagePayload(image) {
+    const { createCanvas, loadImage } = require('@napi-rs/canvas');
+    const source = Buffer.from(String(image?.base64 || ''), 'base64');
+    if (source.length === 0) throw new Error('图片 base64 为空');
+    const decoded = await loadImage(source);
+    if (!decoded.width || !decoded.height) throw new Error('图片尺寸无效');
+    const canvas = createCanvas(decoded.width, decoded.height);
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, decoded.width, decoded.height);
+    context.drawImage(decoded, 0, 0, decoded.width, decoded.height);
+    const encoded = canvas.toBuffer('image/jpeg', 90);
+    return {
+        ...image,
+        base64: encoded.toString('base64'),
+        mime: 'image/jpeg',
+        modelPayloadNormalized: true
+    };
+}
+
+function isCorruptedMultimodalError(error) {
+    return /multimodal data is corrupted|image.*(?:corrupt|cannot be processed)/i.test(String(error?.message || error || ''));
+}
+
 function removeUnapprovedMarkdownImages(text, allowedUrls) {
     if (!text) return text;
     const allowed = new Set(allowedUrls || []);
@@ -1985,19 +2015,36 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
     });
     const promptSha256 = crypto.createHash('sha256').update(supplementPrompt).digest('hex');
 
-    const supplementContent = [{ type: 'text', text: supplementPrompt }];
-    for (const img of downloadedImages) {
-        supplementContent.push(buildImageContent(img.url, img.base64, img.mime));
-    }
+    const buildSupplementContent = images => [
+        { type: 'text', text: supplementPrompt },
+        ...images.map(img => buildImageContent(img.url, img.base64, img.mime))
+    ];
+    let requestImages = downloadedImages;
+    let supplementContent = buildSupplementContent(requestImages);
 
     console.log(`    [secondary]    request_content_blocks=${supplementContent.length} | text_chars=${supplementPrompt.length}`);
     const secondaryBudget = createActiveTimeBudget(Number.MAX_SAFE_INTEGER);
     let planText;
+    let normalizedInputCount = 0;
     try {
-        planText = await callModelWithConfig(
-            [{ role: 'user', content: supplementContent }],
-            API_MAX_TOKENS, 3, { ...SECONDARY_CONFIG, temperature: IMAGE_PLAN_TEMPERATURE }
-        );
+        try {
+            planText = await callModelWithConfig(
+                [{ role: 'user', content: supplementContent }],
+                API_MAX_TOKENS, 3, { ...SECONDARY_CONFIG, temperature: IMAGE_PLAN_TEMPERATURE }
+            );
+        } catch (error) {
+            if (!isCorruptedMultimodalError(error)) throw error;
+            console.log(`    [secondary] ⚠️  端点拒绝原始图片载荷，标准化为 RGB JPEG 后重试`);
+            requestImages = await Promise.all(downloadedImages.map(normalizeModelImagePayload));
+            normalizedInputCount = requestImages.length;
+            supplementContent = buildSupplementContent(requestImages);
+            const normalizedBase64Chars = requestImages.reduce((sum, img) => sum + img.base64.length, 0);
+            console.log(`    [secondary]    normalized_images=${normalizedInputCount} | mime=image/jpeg | base64_chars=${normalizedBase64Chars}`);
+            planText = await callModelWithConfig(
+                [{ role: 'user', content: supplementContent }],
+                API_MAX_TOKENS, 3, { ...SECONDARY_CONFIG, temperature: IMAGE_PLAN_TEMPERATURE }
+            );
+        }
     } finally {
         secondaryBudget.stop();
     }
@@ -2027,6 +2074,7 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
             supplementDiagnostics: {
                 model: SECONDARY_CONFIG.model,
                 temperature: IMAGE_PLAN_TEMPERATURE,
+                normalizedInputCount,
                 promptSha256,
                 responseSha256,
                 insertionDiagnostics: []
@@ -2049,6 +2097,7 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
         supplementDiagnostics: {
             model: SECONDARY_CONFIG.model,
             temperature: IMAGE_PLAN_TEMPERATURE,
+            normalizedInputCount,
             promptSha256,
             responseSha256,
             insertionDiagnostics
@@ -2939,7 +2988,7 @@ async function reviseAnalysis(paper, existingAnalysis, textForAnalysis) {
         existingAnalysis: existingAnalysis,
         textForAnalysis: textForAnalysis
     });
-    return await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
+    return await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS);
 }
 
 function replaceOrInsertRequiredSection(analysis, title, content) {
@@ -3120,7 +3169,7 @@ async function repairMissingAnalysisSections(paper, existingAnalysis, textForAna
             existingAnalysis: currentAnalysis,
             textForAnalysis: buildTypeAwareSourceContext(currentAnalysis, textForAnalysis)
         });
-        const repairedText = await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
+        const repairedText = await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS);
         const cleaned = cleanGapFillPrefix(repairedText.trim());
         if (cleaned) currentAnalysis = normalizeAnalysisStructure(removeUnapprovedMarkdownImages(cleaned, []));
 
@@ -3240,7 +3289,7 @@ async function checkAndFixMethodSection(paper, analysis, textForAnalysis) {
         textForAnalysis: buildTypeAwareSourceContext(analysis, textForAnalysis, 80000)
     });
 
-    const fixedSection = await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
+    const fixedSection = await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS);
     if (!fixedSection || fixedSection.length < 200) {
         return analysis;
     }
@@ -3313,7 +3362,7 @@ async function checkAndFixTables(paper, analysis, textForAnalysis) {
         textForAnalysis: buildTypeAwareSourceContext(analysis, textForAnalysis, 80000)
     });
 
-    const fixedSection = await callModel([{ role: 'user', content: prompt }], API_MAX_TOKENS);
+    const fixedSection = await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS);
     if (!fixedSection || fixedSection.length < 200) {
         return analysis;
     }
@@ -3509,6 +3558,8 @@ module.exports = {
     getArxivHtmlIds,
     isSupportedImageUrl,
     safeImageLabel,
+    normalizeModelImagePayload,
+    isCorruptedMultimodalError,
     downloadImageBase64,
     fetchPublicImageResponse,
     sanitizeMarkdownImageAlt,

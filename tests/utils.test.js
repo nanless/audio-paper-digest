@@ -449,6 +449,10 @@ describe('detectApiType', () => {
         assert.strictEqual(detectApiType('https://api.kimi.com/coding/v1', 'kimi-for-coding'), 'anthropic');
     });
 
+    it('Kimi Coding 通过域名识别 k3 模型并走 anthropic', () => {
+        assert.strictEqual(detectApiType('https://api.kimi.com/coding/', 'k3'), 'anthropic');
+    });
+
     it('通用 OpenAI -> openai', () => {
         assert.strictEqual(detectApiType('https://api.openai.com/v1', 'gpt-4o'), 'openai');
     });
@@ -471,6 +475,11 @@ describe('buildApiUrl', () => {
 
     it('Kimi 端点尾随斜杠仍保持 /coding/v1/messages', () => {
         const url = buildApiUrl('anthropic', 'https://api.kimi.com/coding/v1/');
+        assert.strictEqual(url, 'https://api.kimi.com/coding/v1/messages');
+    });
+
+    it('Kimi 省略 /v1 的 Coding 端点会自动补齐 /coding/v1/messages', () => {
+        const url = buildApiUrl('anthropic', 'https://api.kimi.com/coding/');
         assert.strictEqual(url, 'https://api.kimi.com/coding/v1/messages');
     });
 

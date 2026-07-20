@@ -26,6 +26,7 @@
 | `PAPER_ANALYZER_SECONDARY_API_KEY` | 副模型 API Key；未设置时复用主模型 key | 可选 |
 | `PD_ANALYSIS_CONCURRENCY` | 深度分析并发度 | 3 |
 | `PD_ANALYSIS_MAX_RETRIES` | 深度分析单篇重试次数 | 2 |
+| `PD_ANALYSIS_REPAIR_MAX_TOKENS` | 审校、表格、方法与结构局部修复的输出 token 上限 | 16000 |
 | `PD_REANALYZE_CONCURRENCY` | 重分析并发度 | 3（与 `ANALYSIS_CONFIG.concurrency` 一致） |
 | `PD_FILTER_BATCH_SIZE` | LLM 筛选每批篇数 | 5 |
 | `PD_ARXIV_MAX_RESULTS` | arXiv 每类抓取数量 | 100 |
@@ -45,7 +46,7 @@
 **API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动判断使用 OpenAI 还是 Anthropic 协议，优先级如下：
 - **DeepSeek**：端点含 `deepseek.com` 或模型含 `deepseek` 时强制 OpenAI 协议，`/anthropic` 路径也会转为 `/v1/chat/completions`
 - **MiMo Token Plan**：端点含 `token-plan` 且模型含 `mimo` 时走 Anthropic 协议，`https://token-plan-cn.xiaomimimo.com/v1` → `https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages`
-- **Kimi Coding Plan**：端点含 `coding` 且模型含 `kimi` 时走 Anthropic 协议，`https://api.kimi.com/coding/v1` → `https://api.kimi.com/coding/v1/messages`，不需要 `/anthropic` 中间路径
+- **Kimi Coding Plan**：`api.kimi.com` 的 `coding` 端点（包括 `k3` 等不含 `kimi` 字样的模型名）走 Anthropic 协议；`https://api.kimi.com/coding` 与 `https://api.kimi.com/coding/v1` 都会归一化为 `https://api.kimi.com/coding/v1/messages`，不需要 `/anthropic` 中间路径
 - **普通 `/anthropic` 端点**：非 DeepSeek endpoint 中含 `/anthropic` 时走 Anthropic 协议并拼接 `/messages`
 - **其他端点/模型**：走 OpenAI 协议并拼接 `/v1/chat/completions`
 
@@ -276,6 +277,7 @@ FEISHU_APP_SECRET=your-full-app-secret
 
 5. **发布后视觉资产必须断点续跑，不要全量重画**
    - 必须先存在远端验证成功的博客发布凭证；`npm run visual:post-publish -- --date YYYY-MM-DD` 只规划最终评分 TOP 10
+   - 规划后运行 `npm run visual:prepare -- --date YYYY-MM-DD`，校验 `.bin` 参考缓存并输出内置生图可直接上传的 `referencedImagePaths`
    - `visual:post-publish` 在博客事务锁内统一规划两类图片；只把缺失、失败、损坏、发布版本/分析/prompt 指纹失效或进入 TOP 10 的论文长图置为 pending
    - 批次汇总图只在已发布论文快照、热门方向、排名、category、发布提交或 prompt 变化时重建任务
    - 用各自 `record` 命令登记后重新运行两个 `status`；不得手写 manifest 或跳过 SHA/task token 校验

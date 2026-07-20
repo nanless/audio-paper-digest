@@ -129,7 +129,15 @@ confidence: 中
             'anthropic'
         )
         self.assertEqual(
+            detect_publish_api_type('https://api.kimi.com/coding/', 'k3'),
+            'anthropic'
+        )
+        self.assertEqual(
             build_publish_api_url('anthropic', 'https://api.kimi.com/coding/v1'),
+            'https://api.kimi.com/coding/v1/messages'
+        )
+        self.assertEqual(
+            build_publish_api_url('anthropic', 'https://api.kimi.com/coding/'),
             'https://api.kimi.com/coding/v1/messages'
         )
         self.assertEqual(

@@ -91,10 +91,10 @@ description: >
 - endpoint: `PAPER_ANALYZER_ENDPOINT`（必填）
 - key: `PAPER_ANALYZER_API_KEY`（必填）
 - model: `PAPER_ANALYZER_MODEL`（必填）
-- **API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动判断使用 OpenAI 还是 Anthropic 协议；完整优先级见第 4.2 节，DeepSeek 强制 OpenAI，`token-plan+mimo` / `coding+kimi` / 非 DeepSeek 的 `/anthropic` 走 Anthropic
-  - **MiMo/Kimi Token Plan / Coding Plan**（端点含 `token-plan` 或 `coding`，模型含 `mimo`/`kimi`）→ 自动切换为 **Anthropic 协议**，伪装成 Claude Code 调用
+- **API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动判断使用 OpenAI 还是 Anthropic 协议；完整优先级见第 4.2 节，DeepSeek 强制 OpenAI，MiMo Token Plan、Kimi Coding Plan（含 `k3`）及非 DeepSeek 的 `/anthropic` 走 Anthropic
+  - **MiMo/Kimi Token Plan / Coding Plan**（MiMo 由 `token-plan` + MiMo 域名/模型识别；Kimi 由 `coding` + `kimi.com` 域名或 Kimi 模型识别）→ 自动切换为 **Anthropic 协议**，伪装成 Claude Code 调用
     - **MiMo**: `https://token-plan-cn.xiaomimimo.com/v1` → `https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages`（替换 `/v1` 为 `/anthropic`）
-    - **Kimi**: `https://api.kimi.com/coding/v1` → `https://api.kimi.com/coding/v1/messages`（直接加 `/messages`，无需 `/anthropic` 中间路径）
+    - **Kimi**: `https://api.kimi.com/coding` 或 `https://api.kimi.com/coding/v1` → `https://api.kimi.com/coding/v1/messages`（自动补齐 `/v1`，无需 `/anthropic` 中间路径）
     - Headers: `x-api-key` + `anthropic-version: 2023-06-01` + `User-Agent: claude-cli/<version> (external, cli)`（版本号动态获取自本地 `claude --version`，失败回退到 `2.1.108`）
     - system message 自动提取为请求体顶级字段（Anthropic 要求）
   - **其他非 DeepSeek 的 `/anthropic` 端点** → 使用 Anthropic 协议并拼接 `/messages`
@@ -117,11 +117,11 @@ description: >
 - model: `PAPER_ANALYZER_MODEL`（必填）
 - `detectApiType()` 自动判断协议类型，行为与 4.2 节一致
   - **MiMo**: `/v1` → `/anthropic/v1/messages`
-  - **Kimi**: `/coding/v1` → `/coding/v1/messages`
+  - **Kimi**: `/coding` 或 `/coding/v1` → `/coding/v1/messages`
 
 API 调用特性：
 - 整体超时 20 分钟，按进程活跃时间记账；系统睡眠/长时间挂起从预算中排除，唤醒后的底层超时继续使用剩余预算重试
-- max_tokens=64000，temperature=0.7
+- 主分析 max_tokens=64000，审校/表格/方法/结构局部修复默认 max_tokens=16000（`PD_ANALYSIS_REPAIR_MAX_TOKENS` 可覆写），temperature=0.7
 - **双层重试**：analysis-engine.js 层面每篇最多重试 2 次（总共最多 3 次尝试）；deep-analyzer.js 内部每次 API 调用再重试最多 3 次（指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5s`）
 - **抓取代理为强制项**：LLM API 固定 `agent: false` 直连，不得注入代理 agent/dispatcher；arXiv/HuggingFace 抓取缺少项目 `.env` 代理必须失败，禁止直接回退。Node arXiv 仅使用 `HTTPS_PROXY` / `HTTP_PROXY` 的 HTTP CONNECT 地址，HuggingFace curl 可额外使用 SOCKS `ALL_PROXY`；访问本机代理的网络命令必须在沙箱外运行。
 - arXiv HTML 解析使用 **cheerio** 结构化选择器，移除 script/style/nav/header/footer 等噪音元素
@@ -224,6 +224,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 # 配置覆写（可选）
 # PD_ANALYSIS_CONCURRENCY=3       # 深度分析并发度
 # PD_ANALYSIS_MAX_RETRIES=2       # 深度分析重试次数
+# PD_ANALYSIS_REPAIR_MAX_TOKENS=16000 # 审校/表格/方法/结构局部修复输出上限
 # PD_REANALYZE_CONCURRENCY=3      # 重分析并发度（默认与 ANALYSIS_CONFIG.concurrency 一致）
 # PD_FILTER_BATCH_SIZE=5          # LLM 筛选每批篇数
 # PD_ARXIV_MAX_RESULTS=100        # arXiv 每类抓取数量
@@ -244,7 +245,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 |----------|----------|----------|----------|
 | 含 `deepseek.com` 或模型含 `deepseek` | — | OpenAI | `/anthropic` → `/v1/chat/completions`（优先级最高） |
 | 含 `token-plan` | 含 `mimo` | Anthropic | `/v1` → `/anthropic/v1/messages` |
-| 含 `coding` | 含 `kimi` | Anthropic | `/coding/v1` → `/coding/v1/messages` |
+| 含 `coding` 且端点含 `kimi.com`，或模型含 `kimi` | — | Anthropic | `/coding` 或 `/coding/v1` → `/coding/v1/messages`；兼容 `k3` |
 | 含 `/anthropic` | — | Anthropic | `{base}/messages` |
 | 其他 | 其他 | OpenAI | `/v1/chat/completions` |
 
@@ -296,6 +297,7 @@ npm run blog:push -- --date YYYY-MM-DD
 
 # push 验证远端 main OID 后会自动建立发布后视觉任务；可幂等重跑
 npm run visual:post-publish -- --date YYYY-MM-DD
+npm run visual:prepare -- --date YYYY-MM-DD
 npm run visual:status -- --date YYYY-MM-DD
 npm run cover:status -- --date YYYY-MM-DD
 
@@ -454,6 +456,8 @@ PY
 16. **MiMo API 请求必须禁用代理连接复用**：所有 Node LLM 调用（包括 `test-api-key.js`）的 `options.agent` 必须为 `false`（不是 `undefined`）。任何重构或修改 HTTP 请求逻辑时，禁止将 `agent: false` 改回 `agent: proxyAgent` 或 `agent: undefined`，否则 MiMo Token Plan 会在有系统代理的环境中返回 403。
 17. **新增 LLM 端点必须接入 API 协议自动路由**：任何新增 Node 脚本调用 LLM 时，统一使用 `scripts/utils.js` 中的 `detectApiType()`、`buildApiUrl()`、`buildHeaders()`、`buildRequestBody()`、`parseResponseText()`；Python 发布阶段 LLM 调用必须复用 `publish_common.py` 的 `call_publish_llm_api()`，禁止硬编码特定协议的 URL/Header/Body。
 17.1 **视觉资产由 Codex 内置图像工具在发布后生成**：绝不在项目脚本中调用图像 API，也不读取或要求 `OPENAI_API_KEY`。全部博客页通过 review、push 且远端 OID 验证后，发布凭证才写入 `remoteVerifiedOid`；视觉 CLI 必须校验该凭证。Agent 读取已审计分析和 `prompts/visual-summary.md`，仅对最终评分 TOP 10 各调用一次内置 `image_gen`；再按 `prompts/digest-cover.md` 生成一张标题、热门方向与 TOP 10 排行榜汇总图。登记前必须目视核对英文标题逐字一致、正文为简体中文、论文数字和排行榜没有虚构或错位。两类任务用 token 登记并独立续跑；长图按 manifest 的最终 `rank` 保存到 `data/archive/<date>/visual-summaries/01-<paper>/` 至 `10-<paper>/`，禁止按生成完成顺序编号；封面保存到 `data/archive/<date>/digest-cover/`，旧版 current 资产校验后迁移。图片不回写本轮博客，不参与博客 generation/review/push 清单。
+
+17.2 **参考图必须先规范化输入路径**：深度分析缓存使用 `.bin` 保存原始字节，不能直接作为内置生图的上传路径。每轮视觉生成前运行 `npm run visual:prepare -- --date YYYY-MM-DD`（可加 `--paper ID`）；命令在远端发布凭证和当前 manifest 校验通过后，逐图复核受控缓存路径、SHA-256、字节数、MIME 与魔数，并原子物化为 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 下的 `.png/.jpg/.webp`，输出 `referencedImagePaths`。内置 `image_gen` 只接收这些规范路径；缓存损坏、MIME 不一致或路径逃逸必须失败，不得手工复制或伪造扩展名绕过。
 18. **修改 API 协议路由逻辑时同步全链路**：修改 `detectApiType()` 的判定规则或 `buildApiUrl()`/`buildHeaders()` 等函数时，必须同步检查 `fetch-papers.js`、`deep-analyzer.js` 以及所有使用 `analysis-engine.js` 的脚本（`full-fetch.js`、`reanalyze.js`、`batch-analyze.js`、`deep-analysis-only.js`、`analyze-single-paper.js`），确保全链路行为一致。
 19. **禁止将敏感文件提交到版本控制**：`data/`、`logs/`、`*.env`、`*.backup*`、缓存文件、含密钥的日志归档等严禁进入 git；提交前必须确认 `.gitignore` 已正确配置，且仓库中不存在历史遗留的敏感文件。
 20. **CI 自动检查**：CI 会通过 `npm test`、`npm run validate:data`、`find scripts tests -name '*.js'`、`find scripts -name '*.py'`、`python3 -m unittest discover -s tests/python` 和全仓库 `.sh` 语法检查覆盖新增 JS/Python/shell 文件；新增特殊文件类型时再更新 `.github/workflows/ci.yml`。
