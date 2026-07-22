@@ -253,9 +253,9 @@ HuggingFace Papers 抓取模块。
 **Codex 视觉资产（全部博客发布后的后处理阶段）**
 - `push-blog.py` 在汇总页和全部论文页推送成功且远端 OID 验证后，自动运行 `visual-summary-integration.js`。它只为最终评分 TOP 10 建立 `infographic` 任务，同分按规范化 arXiv ID 排序
 - `npm run visual:render:debug -- --spec SPEC.json --output OUTPUT.png [--illustration 无字插画] [--reference 方法/架构原图] [--result-reference 关键实验原图]` 是保留的本地确定性调试/回退渲染器，不再用于默认最终视觉资产。默认流程由内置 `image_gen` 一次性生成完整带字构图，并在登记前人工目检准确性。回退渲染器仍可使用 Pillow 合成约 `2160x4552` 的论文长图或汇总封面，支持结构化 `diagram.columns/nodes/edges` 中文重绘、参考图图注、简单柱状图/指标卡和 8 MiB 输出门禁
-- 使用 `visual-summary-state.js record --date YYYY-MM-DD --paper ID --kind infographic --file PNG --token TOKEN` 登记。脚本验证 PNG、最小尺寸、纵横比、大小、SHA 和 task token 后，按 manifest 最终排名原子保存到 `data/archive/<date>/visual-summaries/01-<paper>/infographic.png` 至 `10-<paper>/infographic.png`；并发完成顺序不会影响编号
+- 使用 `visual-summary-state.js record --date YYYY-MM-DD --paper ID --kind infographic --file PNG --token TOKEN` 登记。脚本验证 PNG、最小尺寸、纵横比、大小、SHA 和 task token 后，按 manifest 最终排名原子保存到同一个 `data/archive/<date>/visual-summaries/`，文件名为 `<两位排名>-<paper-id>-<title-slug>.png`；并发完成顺序不会影响编号
 - 调用内置生图前运行 `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]`。命令只物化输入，不调用图像 API；它校验 `.bin` 缓存受控路径、SHA、字节数、MIME 与文件头，再输出具有正确 `.png/.jpg/.webp` 扩展名的 `referencedImagePaths`，避免直接上传 `.bin` 触发图片服务错误
-- 汇总图从同批次审计论文确定性计算标题、热门方向计数和 TOP 10 排名，并复用博客 generation manifest 的 category；用 `digest-cover-state.js record` 登记到 `data/archive/<date>/digest-cover/cover.png`
+- 汇总图从同批次审计论文确定性计算标题、热门方向计数和 TOP 10 排名，并复用博客 generation manifest 的 category；用 `digest-cover-state.js record` 登记到同一目录的 `data/archive/<date>/visual-summaries/00-digest-cover-<date>.png`
 - 旧版 `data/current/visual-summaries/` 和 `data/current/digest-covers/` 资产会在下一次 plan 时校验 PNG 与 SHA，确认归档目标无冲突后迁移
 - 对缺少新版远端 OID 字段、不能重新 plan 的历史批次，使用 `npm run visual:archive -- --date YYYY-MM-DD` 和 `npm run cover:archive -- --date YYYY-MM-DD`；命令只迁移已有资产并更新 manifest，不创建任务或伪造发布凭证。旧 generation manifest 会与同日归档分析论文集合交叉校验后计算排名，非 TOP10 旧卡片归入 `unranked-<paper>`
 - 两类状态互相独立：论文分析/prompt 变化只失效对应长图，论文集合、分数、主任务标签或封面 prompt 变化只失效封面。`visual:status` / `cover:status` 非零时，下一轮仅补 pending/failed、损坏或指纹失效的资产
@@ -460,6 +460,8 @@ Python 发布/维护脚本共享路径配置。集中提供 `PROJECT_ROOT`、`DA
 TOP N 精选版的一句话亮点使用受控并发生成，默认并发度为 5，可通过项目 `.env` 的 `PD_XIAOHONGSHU_ONELINER_CONCURRENCY` 设置为 1–5。结果始终按论文排名回填，单篇调用失败仅对该篇使用本地摘要回退。
 
 生成小红书文案。
+
+使用默认分析数据且同日正式博客 generation manifest（schema v3）存在时，脚本会先验证 review receipt 对清单 SHA、严格审查、发布提交和远端 OID 的绑定，再在发布预检前读取 `publishedPapers` 权威快照，只为博客实际发布的论文集合生成文案；明确排除或未发布的分析记录不会再次阻断整个小红书批次。凭证/清单缺失或损坏、日期不匹配、ID 重复、远端未验证或快照论文不在当日分析数据中都会显式失败，禁止静默回退。显式传入自定义数据文件时保持独立生成语义，不绑定博客清单。
 
 逐篇成功的一句话在日期级锁内写入缓存，绑定分析、prompt、模型端点配置和清洗契约；损坏缓存会原子隔离后重建，失败回退或指纹变化只重跑对应论文。`--date` 严格校验为 `YYYY-MM-DD`；该命令只产出文案。
 

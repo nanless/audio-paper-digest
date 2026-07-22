@@ -191,7 +191,7 @@ Text acquisition persists source type, original/used/full-text lengths, truncati
 
 ### 3.8 Mandatory Codex visual assets
 
-Generated TOP 10 infographics are archived under manifest-ranked paths `data/archive/<date>/visual-summaries/01-<paper>/infographic.png` through `10-<paper>/infographic.png`, never by completion order, and the digest cover under `data/archive/<date>/digest-cover/cover.png`. Only resumable manifests stay in `data/current/`; a later plan migrates legacy current assets after PNG/SHA verification.
+All generated images for a batch are archived flat under `data/archive/<date>/visual-summaries/`: the digest cover is `00-digest-cover-<date>.png`, and TOP 10 paper images are `<two-digit-rank>-<paper-id>-<title-slug>.png`, never numbered by completion order. Only resumable manifests stay in `data/current/`; a later plan migrates legacy current and archive layouts after PNG/SHA verification.
 
 After all scoring audits pass, run `generate-blog.py`, `review-blog.py`, and `push-blog.py` to publish the digest index and every paper page. Push records remote verification only when remote `main` exactly matches `publicationCommit`, then automatically invokes the post-publication planner. It selects the final-score TOP 10 with normalized-arXiv-ID tie breaking. Codex creates one tall infographic per selected paper with the exact English title at the top and a Chinese body, then records it with the task token.
 

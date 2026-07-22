@@ -69,7 +69,7 @@ description: >
 
 ### 3.3 归档目录
 
-`data/archive/<YYYY-MM-DD>/` 按日期子目录存放当日归档文件。发布后生成的 TOP 10 论文长图按最终排行榜编号保存到 `visual-summaries/01-<paper>/infographic.png` 至 `10-<paper>/infographic.png`，汇总封面保存到 `digest-cover/cover.png`，不滞留在 `data/current/`。旧版 current 图片在下一次视觉 plan 时校验 SHA 后原子迁移。`deep-analysis-result-<时间戳>.bak.json` 备份文件也存放在归档目录，自动清理保留最近 10 个。
+`data/archive/<YYYY-MM-DD>/` 按日期子目录存放当日归档文件。发布后生成的全部图片扁平保存到同一个 `visual-summaries/` 目录：汇总封面名为 `00-digest-cover-<date>.png`，TOP 10 论文长图按最终排行榜编号命名为 `<rank>-<paper-id>-<title-slug>.png`。文件名同时包含排名、论文 ID 和英文标题短名，禁止再为每篇论文建立只含 `infographic.png` 的子目录。旧版 current/归档图片在下一次视觉 plan 时校验 SHA 后原子迁移。`deep-analysis-result-<时间戳>.bak.json` 备份文件也存放在归档目录，自动清理保留最近 10 个。
 
 ---
 
@@ -455,7 +455,7 @@ PY
 15. **变更后运行单元测试**：修改 `scripts/utils.js`、`scripts/config.js` 或分析引擎核心逻辑后，必须运行 `npm test` 确保测试通过。
 16. **MiMo API 请求必须禁用代理连接复用**：所有 Node LLM 调用（包括 `test-api-key.js`）的 `options.agent` 必须为 `false`（不是 `undefined`）。任何重构或修改 HTTP 请求逻辑时，禁止将 `agent: false` 改回 `agent: proxyAgent` 或 `agent: undefined`，否则 MiMo Token Plan 会在有系统代理的环境中返回 403。
 17. **新增 LLM 端点必须接入 API 协议自动路由**：任何新增 Node 脚本调用 LLM 时，统一使用 `scripts/utils.js` 中的 `detectApiType()`、`buildApiUrl()`、`buildHeaders()`、`buildRequestBody()`、`parseResponseText()`；Python 发布阶段 LLM 调用必须复用 `publish_common.py` 的 `call_publish_llm_api()`，禁止硬编码特定协议的 URL/Header/Body。
-17.1 **视觉资产由 Codex 内置图像工具在发布后生成**：绝不在项目脚本中调用图像 API，也不读取或要求 `OPENAI_API_KEY`。全部博客页通过 review、push 且远端 OID 验证后，发布凭证才写入 `remoteVerifiedOid`；视觉 CLI 必须校验该凭证。Agent 读取已审计分析和 `prompts/visual-summary.md`，仅对最终评分 TOP 10 各调用一次内置 `image_gen`；再按 `prompts/digest-cover.md` 生成一张标题、热门方向与 TOP 10 排行榜汇总图。登记前必须目视核对英文标题逐字一致、正文为简体中文、论文数字和排行榜没有虚构或错位。两类任务用 token 登记并独立续跑；长图按 manifest 的最终 `rank` 保存到 `data/archive/<date>/visual-summaries/01-<paper>/` 至 `10-<paper>/`，禁止按生成完成顺序编号；封面保存到 `data/archive/<date>/digest-cover/`，旧版 current 资产校验后迁移。图片不回写本轮博客，不参与博客 generation/review/push 清单。
+17.1 **视觉资产由 Codex 内置图像工具在发布后生成**：绝不在项目脚本中调用图像 API，也不读取或要求 `OPENAI_API_KEY`。全部博客页通过 review、push 且远端 OID 验证后，发布凭证才写入 `remoteVerifiedOid`；视觉 CLI 必须校验该凭证。Agent 读取已审计分析和 `prompts/visual-summary.md`，仅对最终评分 TOP 10 各调用一次内置 `image_gen`；再按 `prompts/digest-cover.md` 生成一张标题、热门方向与 TOP 10 排行榜汇总图。登记前必须目视核对英文标题逐字一致、正文为简体中文、论文数字和排行榜没有虚构或错位。两类任务用 token 登记并独立续跑；同批次全部图片扁平保存到 `data/archive/<date>/visual-summaries/`，封面为 `00-digest-cover-<date>.png`，论文图为 `<rank>-<paper-id>-<title-slug>.png`，排名取 manifest 最终 `rank`，禁止按完成顺序编号。旧版 current/归档资产校验后迁移。图片不回写本轮博客，不参与博客 generation/review/push 清单。
 
 17.2 **参考图必须先规范化输入路径**：深度分析缓存使用 `.bin` 保存原始字节，不能直接作为内置生图的上传路径。每轮视觉生成前运行 `npm run visual:prepare -- --date YYYY-MM-DD`（可加 `--paper ID`）；命令在远端发布凭证和当前 manifest 校验通过后，逐图复核受控缓存路径、SHA-256、字节数、MIME 与魔数，并原子物化为 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 下的 `.png/.jpg/.webp`，输出 `referencedImagePaths`。内置 `image_gen` 只接收这些规范路径；缓存损坏、MIME 不一致或路径逃逸必须失败，不得手工复制或伪造扩展名绕过。
 18. **修改 API 协议路由逻辑时同步全链路**：修改 `detectApiType()` 的判定规则或 `buildApiUrl()`/`buildHeaders()` 等函数时，必须同步检查 `fetch-papers.js`、`deep-analyzer.js` 以及所有使用 `analysis-engine.js` 的脚本（`full-fetch.js`、`reanalyze.js`、`batch-analyze.js`、`deep-analysis-only.js`、`analyze-single-paper.js`），确保全链路行为一致。

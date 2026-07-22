@@ -54,6 +54,83 @@ def paper_batch_date(paper):
     return validate_date_component(match.group(1))
 
 
+def select_blog_published_snapshot(
+    papers, date_str, manifest_path=None, receipt_path=None,
+):
+    """若同日博客清单存在，只保留博客实际生成的权威论文快照。"""
+    date_str = validate_date_component(date_str)
+    path = Path(manifest_path) if manifest_path is not None else (
+        CURRENT_DIR / f'blog-generation-manifest-{date_str}.json'
+    )
+    if not path.is_file():
+        return papers
+    try:
+        manifest = read_json_strict(path)
+    except (OSError, RuntimeError) as exc:
+        raise PublishDataValidationError(f'博客生成清单无法读取: {path}') from exc
+    if not isinstance(manifest, dict) or manifest.get('schemaVersion') != 3:
+        raise PublishDataValidationError(f'博客生成清单不是正式 schema v3: {path}')
+    if manifest.get('date') != date_str:
+        raise PublishDataValidationError(f'博客生成清单日期不匹配: {path}')
+
+    receipt_target = Path(receipt_path) if receipt_path is not None else (
+        CURRENT_DIR / f'blog-review-receipt-{date_str}.json'
+    )
+    try:
+        receipt = read_json_strict(receipt_target)
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
+        raise PublishDataValidationError(
+            f'博客尚无可验证的发布凭证: {receipt_target}'
+        ) from exc
+    if not isinstance(receipt, dict):
+        raise PublishDataValidationError('博客发布凭证顶层不是对象')
+    manifest_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    publication_commit = str(receipt.get('publicationCommit') or '').lower()
+    remote_oid = str(receipt.get('remoteVerifiedOid') or '').lower()
+    remote_verified_at = str(receipt.get('remoteVerifiedAt') or '')
+    if (
+        receipt.get('schemaVersion') != 3
+        or receipt.get('date') != date_str
+        or receipt.get('strictReview') is not True
+        or receipt.get('generationManifestSha256') != manifest_sha256
+        or not re.fullmatch(r'[0-9a-f]{40}', publication_commit)
+        or remote_oid != publication_commit
+        or not re.fullmatch(
+            r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?\+08:00',
+            remote_verified_at,
+        )
+    ):
+        raise PublishDataValidationError('博客发布凭证未通过远端发布绑定校验')
+
+    published = manifest.get('publishedPapers')
+    if not isinstance(published, list) or not published:
+        raise PublishDataValidationError('博客生成清单缺少已发布论文权威快照')
+
+    available = {}
+    for paper in papers:
+        paper_id = normalize_publish_arxiv_id(paper.get('arxivId'))
+        if paper_id in available:
+            raise PublishDataValidationError(f'当前批次包含重复 arXiv ID: {paper_id}')
+        available[paper_id] = paper
+
+    selected = []
+    seen = set()
+    for paper in published:
+        if not isinstance(paper, dict):
+            raise PublishDataValidationError('博客已发布论文权威快照包含非法记录')
+        paper_id = normalize_publish_arxiv_id(paper.get('arxivId'))
+        if paper_id in seen:
+            raise PublishDataValidationError(f'博客已发布论文权威快照包含重复 arXiv ID: {paper_id}')
+        seen.add(paper_id)
+        if paper_id not in available:
+            raise PublishDataValidationError(f'博客已发布论文不在当前日期分析数据中: {paper_id}')
+        if paper_batch_date(paper) != date_str:
+            raise PublishDataValidationError(f'博客已发布论文快照批次日期不匹配: {paper_id}')
+        selected.append(paper)
+    print(f"🧾 根据博客发布清单选择: {len(selected)}/{len(papers)} 篇论文")
+    return selected
+
+
 def get_oneliner_concurrency():
     """返回项目 .env 配置的 one-liner 并发度，限制在安全范围内。"""
     raw = os.environ.get('PD_XIAOHONGSHU_ONELINER_CONCURRENCY', '5')
@@ -520,6 +597,10 @@ def _generate_for_date(data_file, today, mode, top_n):
         print(f"⚠️  没有 fetchedAt={today} 的论文，停止生成，避免跨日混入历史论文")
         return
 
+    # 默认数据源应与同日博客实际生成集合严格一致，避免明确排除的失败/无关论文
+    # 在小红书预检前再次阻断整个批次。自定义数据文件仍保持独立生成语义。
+    if data_file is None:
+        papers = select_blog_published_snapshot(papers, today)
     papers = validate_papers_for_publish(papers)
     scored, unscored = score_and_sort(papers)
 

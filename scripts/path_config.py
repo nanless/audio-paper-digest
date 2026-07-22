@@ -30,7 +30,7 @@ DEEP_ANALYSIS_RESULT_FILE = CURRENT_DIR / "deep-analysis-result.json"
 DEEP_ANALYSIS_RESULT_LEGACY_FILE = DATA_DIR / "deep-analysis-result.json"
 VISUAL_SUMMARY_MANIFEST_DIR = CURRENT_DIR / "visual-summary-manifests"
 # 发布后视觉资产按批次日期直接归档。调用方必须继续拼接
-# <date>/visual-summaries/... 或 <date>/digest-cover/cover.png。
+# <date>/visual-summaries/*.png，论文长图与汇总封面扁平归档。
 VISUAL_SUMMARY_ASSET_DIR = ARCHIVE_DIR
 DIGEST_COVER_MANIFEST_DIR = CURRENT_DIR / "digest-cover-manifests"
 DIGEST_COVER_ASSET_DIR = ARCHIVE_DIR

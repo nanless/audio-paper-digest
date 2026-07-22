@@ -137,8 +137,9 @@ describe('HuggingFace 抓取健康状态', () => {
     });
 
     it('daily_papers 使用 HF 入选日期分页，不被旧 arXiv 日期提前截断', async () => {
+        const selectedAt = new Date().toISOString();
         const firstPage = Array.from({ length: 100 }, (_, index) => ({
-            publishedAt: '2026-07-13T01:00:00Z',
+            publishedAt: selectedAt,
             paper: { id: `2607.${String(index).padStart(5, '0')}`, title: 'old but selected today', authors: [], publishedAt: '2020-01-01T00:00:00Z' }
         }));
         const urls = [];
@@ -156,8 +157,9 @@ describe('HuggingFace 抓取健康状态', () => {
     });
 
     it('papers API 满页时继续分页，直到短页或日期截止线', async () => {
+        const publishedAt = new Date().toISOString();
         const firstPage = Array.from({ length: 100 }, (_, index) => ({
-            id: `2607.${String(index).padStart(5, '0')}`, title: 'new', authors: [], publishedAt: '2026-07-13T00:00:00Z'
+            id: `2607.${String(index).padStart(5, '0')}`, title: 'new', authors: [], publishedAt
         }));
         const urls = [];
         await fetchHuggingFacePapers(new Set(), {
@@ -175,9 +177,10 @@ describe('HuggingFace 抓取健康状态', () => {
     });
 
     it('papers API 忽略 offset 并重复同一满页时视为分页穷尽', async () => {
+        const publishedAt = new Date().toISOString();
         const repeatedPage = Array.from({ length: 100 }, (_, index) => ({
             id: `2607.${String(index).padStart(5, '0')}`,
-            title: 'new', authors: [], publishedAt: '2026-07-13T00:00:00Z'
+            title: 'new', authors: [], publishedAt
         }));
         const urls = [];
         const result = await fetchHuggingFacePapers(new Set(), {

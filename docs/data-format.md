@@ -386,7 +386,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
           "status": "complete",
           "label": "论文长图摘要",
           "taskToken": "<64位十六进制>",
-          "assetPath": "data/archive/2026-07-13/visual-summaries/01-2607.12345/infographic.png",
+          "assetPath": "data/archive/2026-07-13/visual-summaries/01-2607.12345-example-paper-title.png",
           "assetSha256": "<64位十六进制>",
           "analysisSha256": "<64位十六进制>",
           "promptSha256": "<64位十六进制>",
@@ -429,7 +429,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
     "status": "complete",
     "label": "汇总页封面",
     "taskToken": "<64位十六进制>",
-    "assetPath": "data/archive/2026-07-13/digest-cover/cover.png",
+    "assetPath": "data/archive/2026-07-13/visual-summaries/00-digest-cover-2026-07-13.png",
     "assetSha256": "<64位十六进制>"
   },
   "overallStatus": "complete"
@@ -459,3 +459,5 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 ### 5.11 `data/current/xiaohongshu-oneliners-YYYY-MM-DD.json`
 
 仅用于生成小红书文案的逐篇成功缓存。每条绑定分析、prompt、模型端点配置与清洗契约指纹；日期级锁内原子写入。损坏缓存会隔离改名后重建，失败回退或指纹变化只重跑对应论文，不会触发自动发布。
+
+默认数据源生成文案时，若同日 `blog-generation-manifest-YYYY-MM-DD.json` 存在，小红书脚本先验证 review receipt 已绑定清单 SHA、严格 review、发布提交与相同远端 OID，再以 schema v3 `publishedPapers` 为权威集合，并在发布预检前排除未进入博客的分析记录。这样博客明确排除项不会导致后续文案全批次失败，同时未审查或未完成远端验证的清单不能冒充已发布集合；自定义数据文件不受该绑定影响。

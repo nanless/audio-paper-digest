@@ -123,8 +123,8 @@ data/current/           # 工作数据（gitignored）
   digest-cover-manifests/<date>.json # 发布后汇总图状态、上下文和指纹
   analyzed.json         # 分析状态（兼容）
 data/archive/<date>/    # 每日快照（自动创建）
-  visual-summaries/<两位排名>-<paper>/infographic.png # 发布后 TOP 10 论文长图，按排行榜编号归档
-  digest-cover/cover.png # 发布后汇总封面，生成后直接按批次日期归档
+  visual-summaries/00-digest-cover-<date>.png # 发布后汇总封面
+  visual-summaries/<两位排名>-<paper-id>-<title-slug>.png # 发布后 TOP 10 论文长图，同目录扁平归档
 logs/                   # 默认生成文件日志（gitignored；可用 PD_DISABLE_FILE_LOGS=1 强制关闭）
 prompts/                # LLM prompt 模板
   filter.md             # 筛选阶段

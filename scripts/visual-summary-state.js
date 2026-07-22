@@ -139,6 +139,18 @@ function validateDate(value) {
     return value;
 }
 
+function visualAssetTitleSlug(title, maxLength = 64) {
+    const slug = String(title || '')
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, maxLength)
+        .replace(/-+$/g, '');
+    return slug || 'paper';
+}
+
 function visualSummaryManifestPath(targetDate) {
     return path.join(Config.FILES.visualSummaryManifestDir, `${validateDate(targetDate)}.json`);
 }
@@ -432,7 +444,7 @@ function validateCompletedCard(card, expectedAnalysisSha, expectedPromptSha, exp
     }
 }
 
-function visualSummaryAssetPath(targetDate, arxivId, kind, rank) {
+function visualSummaryAssetPath(targetDate, arxivId, kind, rank, title = '') {
     const date = validateDate(targetDate);
     const id = normalizedId(arxivId);
     if (!id || !CARD_KINDS.includes(kind) || !Number.isInteger(rank) || rank < 1 || rank > DEFAULT_SELECTION_LIMIT) {
@@ -442,12 +454,33 @@ function visualSummaryAssetPath(targetDate, arxivId, kind, rank) {
         Config.FILES.visualSummaryAssetDir,
         date,
         'visual-summaries',
-        `${String(rank).padStart(2, '0')}-${id}`,
-        `${kind}.png`
+        `${String(rank).padStart(2, '0')}-${id}-${visualAssetTitleSlug(title)}.png`
     );
 }
 
-function migrateLegacyCompletedCard(card, expectedAnalysisSha, expectedPromptSha, expectedTaskToken, legacyTaskTokens, targetDate, id, kind, rank) {
+function removeEmptyDirectory(directory) {
+    if (!fs.existsSync(directory)) return;
+    const stat = fs.lstatSync(directory);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return;
+    if (fs.readdirSync(directory).length === 0) fs.rmdirSync(directory);
+}
+
+function cleanupEmptyLegacyVisualDirectories(targetDate) {
+    const root = path.resolve(
+        Config.FILES.visualSummaryAssetDir, validateDate(targetDate), 'visual-summaries'
+    );
+    if (!fs.existsSync(root) || fs.lstatSync(root).isSymbolicLink()) return;
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+        if (entry.isDirectory() && !entry.isSymbolicLink()) {
+            removeEmptyDirectory(path.join(root, entry.name));
+        }
+    }
+}
+
+function migrateLegacyCompletedCard(
+    card, expectedAnalysisSha, expectedPromptSha, expectedTaskToken, legacyTaskTokens,
+    targetDate, id, kind, rank, title = ''
+) {
     if (!card || card.status !== 'complete'
         || card.analysisSha256 !== expectedAnalysisSha
         || card.promptSha256 !== expectedPromptSha
@@ -455,16 +488,24 @@ function migrateLegacyCompletedCard(card, expectedAnalysisSha, expectedPromptSha
         || !/^[0-9a-f]{64}$/.test(String(card.assetSha256 || ''))) {
         return card;
     }
-    const target = visualSummaryAssetPath(targetDate, id, kind, rank);
+    const target = visualSummaryAssetPath(targetDate, id, kind, rank, title);
     if (validateCompletedCard(card, expectedAnalysisSha, expectedPromptSha, expectedTaskToken, target)) return card;
 
     const legacy = path.resolve(Config.CURRENT_DIR, 'visual-summaries', targetDate, id, `${kind}.png`);
     const unnumberedArchive = path.resolve(
         Config.FILES.visualSummaryAssetDir, targetDate, 'visual-summaries', id, `${kind}.png`
     );
+    const rankedArchive = path.resolve(
+        Config.FILES.visualSummaryAssetDir, targetDate, 'visual-summaries',
+        `${String(rank).padStart(2, '0')}-${id}`, `${kind}.png`
+    );
+    removeEmptyDirectory(path.dirname(legacy));
+    removeEmptyDirectory(path.dirname(unnumberedArchive));
+    removeEmptyDirectory(path.dirname(rankedArchive));
     const recorded = path.resolve(Config.PROJECT_ROOT, String(card.assetPath || ''));
-    if (![legacy, unnumberedArchive, target].includes(recorded)) return card;
-    const source = [legacy, unnumberedArchive, target].find(candidate => fs.existsSync(candidate)) || null;
+    if (![legacy, unnumberedArchive, rankedArchive, target].includes(recorded)) return card;
+    const source = [legacy, unnumberedArchive, rankedArchive, target]
+        .find(candidate => fs.existsSync(candidate)) || null;
     if (!source) return card;
     const raw = fs.readFileSync(source);
     validatePngBuffer(raw);
@@ -473,6 +514,7 @@ function migrateLegacyCompletedCard(card, expectedAnalysisSha, expectedPromptSha
     assertSafeAssetTarget(target, Config.FILES.visualSummaryAssetDir);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     if (source !== target) {
+        const oldParent = path.dirname(source);
         if (fs.existsSync(target)) {
             const existing = fs.readFileSync(target);
             validatePngBuffer(existing);
@@ -483,6 +525,7 @@ function migrateLegacyCompletedCard(card, expectedAnalysisSha, expectedPromptSha
         } else {
             fs.renameSync(source, target);
         }
+        removeEmptyDirectory(oldParent);
     }
     return {
         ...card,
@@ -502,17 +545,19 @@ function archiveRemainingLegacyVisualAssets(targetDate, manifest) {
         const id = normalizedId(entry.name);
         if (!id) continue;
         const rank = manifest?.papers?.[id]?.rank;
-        const targetDirectoryName = Number.isInteger(rank)
-            ? `${String(rank).padStart(2, '0')}-${id}`
-            : `unranked-${id}`;
         const sourceDir = path.join(legacyRoot, entry.name);
-        const targetDir = path.resolve(
-            Config.FILES.visualSummaryAssetDir, targetDate, 'visual-summaries', targetDirectoryName
-        );
         for (const file of fs.readdirSync(sourceDir, { withFileTypes: true })) {
             if (!file.isFile() || file.isSymbolicLink() || !/^[A-Za-z0-9_-]+\.png$/.test(file.name)) continue;
             const source = path.join(sourceDir, file.name);
-            const target = assertSafeAssetTarget(path.join(targetDir, file.name), Config.FILES.visualSummaryAssetDir);
+            const kind = path.basename(file.name, '.png');
+            const paper = manifest?.papers?.[id];
+            const target = Number.isInteger(rank) && CARD_KINDS.includes(kind)
+                ? visualSummaryAssetPath(targetDate, id, kind, rank, paper?.title || '')
+                : path.resolve(
+                    Config.FILES.visualSummaryAssetDir, targetDate, 'visual-summaries',
+                    `unranked-${id}-${kind}.png`
+                );
+            assertSafeAssetTarget(target, Config.FILES.visualSummaryAssetDir);
             const raw = fs.readFileSync(source);
             validatePngBuffer(raw, { requirePortrait: false });
             fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -563,6 +608,7 @@ function archiveLegacyVisualManifestAssets({ targetDate, manifestPath, generatio
     }
     const ranked = selectTopRankedPapers(publishedPapers, targetDate, DEFAULT_SELECTION_LIMIT);
     const rankById = new Map(ranked.map((paper, index) => [normalizedId(paper), index + 1]));
+    const publishedById = new Map(publishedPapers.map(paper => [normalizedId(paper), paper]));
     const migrated = updateJsonFileLocked(manifestPath, current => {
         if (!current || current.batchDate !== targetDate || !current.papers || typeof current.papers !== 'object') {
             throw new Error(`视觉摘要 manifest 与归档日期不匹配: ${manifestPath}`);
@@ -570,17 +616,26 @@ function archiveLegacyVisualManifestAssets({ targetDate, manifestPath, generatio
         const next = structuredClone(current);
         for (const [id, paper] of Object.entries(next.papers)) {
             const rank = rankById.get(id) || null;
+            const authoritativePaper = publishedById.get(id) || {};
             paper.rank = rank;
-            const directoryName = rank ? `${String(rank).padStart(2, '0')}-${id}` : `unranked-${id}`;
+            paper.title = paper.title || authoritativePaper.title || '';
             for (const [kind, card] of Object.entries(paper.cards || {})) {
                 if (card?.status !== 'complete' || !/^[A-Za-z0-9_-]+$/.test(kind)
                     || !/^[0-9a-f]{64}$/.test(String(card.assetSha256 || ''))) continue;
                 const legacy = path.resolve(Config.CURRENT_DIR, 'visual-summaries', targetDate, id, `${kind}.png`);
-                const target = assertSafeAssetTarget(path.resolve(
-                    Config.FILES.visualSummaryAssetDir, targetDate, 'visual-summaries', directoryName, `${kind}.png`
-                ), Config.FILES.visualSummaryAssetDir);
+                const oldRanked = rank ? path.resolve(
+                    Config.FILES.visualSummaryAssetDir, targetDate, 'visual-summaries',
+                    `${String(rank).padStart(2, '0')}-${id}`, `${kind}.png`
+                ) : null;
+                const target = rank
+                    ? visualSummaryAssetPath(targetDate, id, kind, rank, paper.title || '')
+                    : path.resolve(
+                        Config.FILES.visualSummaryAssetDir, targetDate, 'visual-summaries',
+                        `unranked-${id}-${kind}.png`
+                    );
+                assertSafeAssetTarget(target, Config.FILES.visualSummaryAssetDir);
                 const recorded = path.resolve(Config.PROJECT_ROOT, String(card.assetPath || ''));
-                if (![legacy, target].includes(recorded)) {
+                if (![legacy, oldRanked, target].filter(Boolean).includes(recorded)) {
                     throw new Error(`历史视觉资产路径不受控: ${card.assetPath}`);
                 }
                 let source = fs.existsSync(legacy) ? legacy : (fs.existsSync(target) ? target : null);
@@ -783,10 +838,10 @@ function buildPaperPlan(paper, existing, targetDate, currentPromptSha, publicati
             legacyCardTaskToken(id, kind, currentAnalysisSha, currentPromptSha, publication, version),
             legacyCardTaskToken(id, kind, currentAnalysisSha, currentPromptSha, null, version)
         ]);
-        const expectedAssetPath = visualSummaryAssetPath(targetDate, id, kind, rank);
+        const expectedAssetPath = visualSummaryAssetPath(targetDate, id, kind, rank, paper.title || '');
         const archivedPrevious = migrateLegacyCompletedCard(
             previous, currentAnalysisSha, currentPromptSha, expectedTaskToken, previousTaskTokens,
-            targetDate, id, kind, rank
+            targetDate, id, kind, rank, paper.title || ''
         );
         if (validateCompletedCard(archivedPrevious, currentAnalysisSha, currentPromptSha, expectedTaskToken, expectedAssetPath)) {
             cards[kind] = archivedPrevious;
@@ -894,6 +949,7 @@ function planVisualSummaries({
     });
     if (path.resolve(manifestPath) === path.resolve(defaultManifestPath)) {
         archiveRemainingLegacyVisualAssets(targetDate, plannedManifest);
+        cleanupEmptyLegacyVisualDirectories(targetDate);
     }
     return plannedManifest;
 }
@@ -973,7 +1029,7 @@ function recordVisualSummaryCard({
         }
 
         const target = assertSafeAssetTarget(
-            visualSummaryAssetPath(current.batchDate, id, kind, paper.rank),
+            visualSummaryAssetPath(current.batchDate, id, kind, paper.rank, paper.title || ''),
             Config.FILES.visualSummaryAssetDir
         );
         const relative = path.relative(Config.PROJECT_ROOT, target);
@@ -1034,7 +1090,9 @@ function pendingVisualSummaryCards(manifest) {
     const pending = [];
     for (const [id, paper] of Object.entries(manifest?.papers || {})) {
         for (const kind of CARD_KINDS) {
-            const expectedPath = visualSummaryAssetPath(manifest.batchDate, id, kind, paper.rank);
+            const expectedPath = visualSummaryAssetPath(
+                manifest.batchDate, id, kind, paper.rank, paper.title || ''
+            );
             if (!validateCompletedCard(
                 paper.cards?.[kind], paper.analysisSha256, paper.promptSha256,
                 paper.cards?.[kind]?.taskToken, expectedPath
@@ -1166,6 +1224,7 @@ module.exports = {
     validateCompletedCard,
     validatePngAsset,
     visualSummaryAssetPath,
+    visualAssetTitleSlug,
     migrateLegacyCompletedCard,
     archiveRemainingLegacyVisualAssets,
     archiveLegacyVisualManifestAssets,

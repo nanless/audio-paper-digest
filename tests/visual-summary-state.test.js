@@ -415,7 +415,7 @@ describe('visual summary state', () => {
             const card = recorded.papers['2607.12345'].cards.infographic;
             assert.strictEqual(card.status, 'complete');
             assert.ok(fs.existsSync(path.resolve(Config.PROJECT_ROOT, card.assetPath)));
-            assert.match(card.assetPath, /archive\/2026-07-13\/visual-summaries\/01-2607\.12345\/infographic\.png$/);
+            assert.match(card.assetPath, /archive\/2026-07-13\/visual-summaries\/01-2607\.12345-visual-summary-paper\.png$/);
             assert.strictEqual(pendingVisualSummaryCards(recorded).length, 0);
 
             // 兼容旧版 current 资产：plan 校验 PNG/SHA 后迁移回带排名编号的日期归档。
@@ -480,7 +480,7 @@ describe('visual summary state', () => {
                 targetDate: '2026-07-13', manifestPath, generationManifestPath: generationPath
             });
             const card = result.manifest.papers['2607.12345'].cards.infographic;
-            assert.match(card.assetPath, /archive\/2026-07-13\/visual-summaries\/01-2607\.12345\/infographic\.png$/);
+            assert.match(card.assetPath, /archive\/2026-07-13\/visual-summaries\/01-2607\.12345-visual-summary-paper\.png$/);
             assert.ok(fs.existsSync(path.resolve(Config.PROJECT_ROOT, card.assetPath)));
             assert.ok(!fs.existsSync(source));
         } finally {

@@ -21,7 +21,7 @@ load_project_env()
     python3 publish-to-blog.py --date YYYY-MM-DD
 """
 import json, re, sys, os, subprocess, datetime, base64, concurrent.futures, hashlib
-import ipaddress, shutil, socket, tempfile, stat, struct, zlib
+import ipaddress, shutil, socket, tempfile, stat, struct, zlib, unicodedata
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
@@ -1427,8 +1427,12 @@ def load_visual_summary_cards(papers, date_str, manifest_path=None):
             if not isinstance(asset_path, str) or not asset_path:
                 raise PublishDataValidationError(f'{paper_id}/{kind} 缺少资产路径')
             source = (project_root / asset_path).resolve()
-            ranked_dir = f'{record["rank"]:02d}-{paper_id}'
-            expected_source = (allowed_root / ranked_dir / f'{kind}.png').resolve()
+            normalized_title = unicodedata.normalize('NFKD', str(paper.get('title') or ''))
+            ascii_title = ''.join(char for char in normalized_title if not unicodedata.combining(char))
+            title_slug = re.sub(r'[^a-z0-9]+', '-', ascii_title.lower()).strip('-')[:64].rstrip('-') or 'paper'
+            expected_source = (
+                allowed_root / f'{record["rank"]:02d}-{paper_id}-{title_slug}.png'
+            ).resolve()
             if source != expected_source:
                 raise PublishDataValidationError(f'{paper_id}/{kind} 视觉摘要资产路径不受控')
             try:
@@ -1532,7 +1536,10 @@ def load_digest_cover(papers, date_str, manifest_path=None, category='论文速�
     ):
         raise PublishDataValidationError('汇总页封面未完成或数据/prompt 指纹已失效')
     source = (Path(__file__).resolve().parent.parent / str(cover.get('assetPath') or '')).resolve()
-    expected = (DIGEST_COVER_ASSET_DIR / date_str / 'digest-cover' / 'cover.png').resolve()
+    expected = (
+        DIGEST_COVER_ASSET_DIR / date_str / 'visual-summaries'
+        / f'00-digest-cover-{date_str}.png'
+    ).resolve()
     if source != expected:
         raise PublishDataValidationError('汇总页封面资产路径不受控')
     try:

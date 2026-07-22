@@ -101,7 +101,7 @@ def save_bound_review_receipt(date_str, paths, hugo_gate='hugo', expected_base_h
 
 
 class PublishToBlogReviewTest(unittest.TestCase):
-    def test_blog_review_concurrency_defaults_to_eight_and_reads_project_env(self):
+    def test_blog_review_concurrency_defaults_to_five_and_reads_project_env(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop('PD_BLOG_REVIEW_CONCURRENCY', None)
             self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 5)
@@ -1157,14 +1157,14 @@ body
             repo, posts, _remote = init_blog_repo(tmp)
             current = Path(tmp) / 'data' / 'current'
             archive = Path(tmp) / 'data' / 'archive'
-            source_root = archive / '2026-07-10' / 'visual-summaries' / '01-2607.00001'
+            source_root = archive / '2026-07-10' / 'visual-summaries'
             source_root.mkdir(parents=True)
             paper = {'arxivId': '2607.00001', 'analysis': 'audited', 'parsed': {'score': '8'}}
             analysis_sha = publish_to_blog._visual_summary_analysis_sha256(paper)
             prompt_sha = publish_to_blog._sha256_file(Path(ROOT) / 'prompts' / 'visual-summary.md')
             cards = {}
             for kind in publish_to_blog.VISUAL_SUMMARY_KINDS:
-                source = source_root / f'{kind}.png'
+                source = source_root / '01-2607.00001-paper.png'
                 source.write_bytes(png)
                 cards[kind] = {
                     'status': 'complete', 'analysisSha256': analysis_sha,
@@ -1255,7 +1255,7 @@ body
         with tempfile.TemporaryDirectory() as tmp:
             current = Path(tmp) / 'data' / 'current'
             archive = Path(tmp) / 'data' / 'archive'
-            source = archive / '2026-07-10' / 'digest-cover' / 'cover.png'
+            source = archive / '2026-07-10' / 'visual-summaries' / '00-digest-cover-2026-07-10.png'
             source.parent.mkdir(parents=True)
             source.write_bytes(valid_png())
             papers = [{

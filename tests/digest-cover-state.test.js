@@ -208,7 +208,7 @@ describe('digest cover state', () => {
             });
             assert.strictEqual(completed.overallStatus, 'complete');
             assert.ok(fs.existsSync(path.resolve(Config.PROJECT_ROOT, completed.cover.assetPath)));
-            assert.match(completed.cover.assetPath, /archive\/2026-07-13\/digest-cover\/cover\.png$/);
+            assert.match(completed.cover.assetPath, /archive\/2026-07-13\/visual-summaries\/00-digest-cover-2026-07-13\.png$/);
             const archivedPath = path.resolve(Config.PROJECT_ROOT, completed.cover.assetPath);
             const legacyPath = path.join(Config.CURRENT_DIR, 'digest-covers', '2026-07-13', 'cover.png');
             fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
@@ -262,7 +262,7 @@ describe('digest cover state', () => {
             Config.FILES.digestCoverManifestDir = path.join(current, 'digest-cover-manifests');
             Config.FILES.digestCoverAssetDir = archive;
             const result = archiveLegacyDigestCover({ targetDate: '2026-07-13', manifestPath });
-            assert.match(result.cover.assetPath, /archive\/2026-07-13\/digest-cover\/cover\.png$/);
+            assert.match(result.cover.assetPath, /archive\/2026-07-13\/visual-summaries\/00-digest-cover-2026-07-13\.png$/);
             assert.ok(fs.existsSync(path.resolve(Config.PROJECT_ROOT, result.cover.assetPath)));
             assert.ok(!fs.existsSync(source));
         } finally {

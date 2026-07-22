@@ -128,7 +128,7 @@ const FILES = {
     deepAnalysisResultLegacy: path.join(DATA_DIR, 'deep-analysis-result.json'),
     visualSummaryManifestDir: path.join(CURRENT_DIR, 'visual-summary-manifests'),
     // 发布后生成的图片属于已完成批次，直接写入
-    // data/archive/<date>/visual-summaries/...，不再滞留在 current。
+    // data/archive/<date>/visual-summaries/*.png，论文长图与汇总封面扁平归档。
     visualSummaryAssetDir: ARCHIVE_DIR,
     digestCoverManifestDir: path.join(CURRENT_DIR, 'digest-cover-manifests'),
     digestCoverAssetDir: ARCHIVE_DIR,

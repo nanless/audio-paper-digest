@@ -1,5 +1,6 @@
 import importlib.util
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -373,6 +374,7 @@ class PublishXiaohongshuConcurrencyTest(unittest.TestCase):
         validated = dict(paper, parsed={'score': 8.0})
         with mock.patch.object(sys, 'argv', ['publish-xiaohongshu.py', '--date', '2026-07-13']), \
                 mock.patch.object(publish_xiaohongshu, 'load_papers', return_value=[paper]), \
+                mock.patch.object(publish_xiaohongshu, 'select_blog_published_snapshot', return_value=[paper]) as select, \
                 mock.patch.object(publish_xiaohongshu, 'validate_papers_for_publish', return_value=[validated]) as validate, \
                 mock.patch.object(publish_xiaohongshu, 'score_and_sort', return_value=([], [])) as score, \
                 mock.patch.object(publish_xiaohongshu, 'generate_top_n_post', return_value='文案'), \
@@ -382,9 +384,109 @@ class PublishXiaohongshuConcurrencyTest(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             publish_xiaohongshu.main()
 
+        select.assert_called_once_with([paper], '2026-07-13')
         validate.assert_called_once_with([paper])
         score.assert_called_once_with([validated])
         atomic.assert_called_once_with(Path('/tmp/xhs.md'), '文案')
+
+    def test_blog_manifest_snapshot_excludes_unpublished_before_preflight(self):
+        papers = [
+            {'arxivId': '2607.00001v1', 'fetchedAt': '2026-07-13T08:00:00+08:00'},
+            {'arxivId': '2607.00002v1', 'fetchedAt': '2026-07-13T08:01:00+08:00'},
+        ]
+        published = dict(papers[0], title='已发布论文')
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / 'blog-generation-manifest-2026-07-13.json'
+            manifest.write_text(json.dumps({
+                'schemaVersion': 3,
+                'date': '2026-07-13',
+                'publishedPapers': [published],
+            }), encoding='utf-8')
+            receipt = Path(tmp) / 'blog-review-receipt-2026-07-13.json'
+            receipt.write_text(json.dumps({
+                'schemaVersion': 3,
+                'date': '2026-07-13',
+                'strictReview': True,
+                'generationManifestSha256': hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                'publicationCommit': 'a' * 40,
+                'remoteVerifiedOid': 'a' * 40,
+                'remoteVerifiedAt': '2026-07-13T12:00:00.123456+08:00',
+            }), encoding='utf-8')
+            selected = publish_xiaohongshu.select_blog_published_snapshot(
+                papers, '2026-07-13', manifest, receipt,
+            )
+        self.assertEqual(selected, [published])
+
+    def test_blog_manifest_snapshot_rejects_unknown_or_duplicate_ids(self):
+        papers = [
+            {'arxivId': '2607.00001v1', 'fetchedAt': '2026-07-13T08:00:00+08:00'},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / 'manifest.json'
+            base = {
+                'schemaVersion': 3,
+                'date': '2026-07-13',
+            }
+            receipt = Path(tmp) / 'receipt.json'
+
+            def write_receipt():
+                receipt.write_text(json.dumps({
+                    'schemaVersion': 3,
+                    'date': '2026-07-13',
+                    'strictReview': True,
+                    'generationManifestSha256': hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                    'publicationCommit': 'a' * 40,
+                    'remoteVerifiedOid': 'a' * 40,
+                    'remoteVerifiedAt': '2026-07-13T12:00:00+08:00',
+                }), encoding='utf-8')
+
+            unknown = {'arxivId': '2607.99999v1', 'fetchedAt': '2026-07-13T08:00:00+08:00'}
+            manifest.write_text(json.dumps({**base, 'publishedPapers': [unknown]}), encoding='utf-8')
+            write_receipt()
+            with self.assertRaisesRegex(
+                publish_xiaohongshu.PublishDataValidationError, '不在当前日期分析数据中'
+            ):
+                publish_xiaohongshu.select_blog_published_snapshot(
+                    papers, '2026-07-13', manifest, receipt,
+                )
+
+            manifest.write_text(json.dumps({
+                **base,
+                'publishedPapers': [papers[0], papers[0]],
+            }), encoding='utf-8')
+            write_receipt()
+            with self.assertRaisesRegex(
+                publish_xiaohongshu.PublishDataValidationError, '重复 arXiv ID'
+            ):
+                publish_xiaohongshu.select_blog_published_snapshot(
+                    papers, '2026-07-13', manifest, receipt,
+                )
+
+    def test_blog_manifest_snapshot_rejects_unverified_publication_receipt(self):
+        paper = {'arxivId': '2607.00001v1', 'fetchedAt': '2026-07-13T08:00:00+08:00'}
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / 'manifest.json'
+            manifest.write_text(json.dumps({
+                'schemaVersion': 3,
+                'date': '2026-07-13',
+                'publishedPapers': [paper],
+            }), encoding='utf-8')
+            receipt = Path(tmp) / 'receipt.json'
+            receipt.write_text(json.dumps({
+                'schemaVersion': 3,
+                'date': '2026-07-13',
+                'strictReview': True,
+                'generationManifestSha256': hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                'publicationCommit': 'a' * 40,
+                'remoteVerifiedOid': 'b' * 40,
+                'remoteVerifiedAt': '2026-07-13T12:00:00+08:00',
+            }), encoding='utf-8')
+            with self.assertRaisesRegex(
+                publish_xiaohongshu.PublishDataValidationError, '远端发布绑定校验'
+            ):
+                publish_xiaohongshu.select_blog_published_snapshot(
+                    [paper], '2026-07-13', manifest, receipt,
+                )
 
 
 if __name__ == '__main__':

@@ -127,7 +127,19 @@ function validateCompletedCover(cover, dataSha256, expectedPromptSha, expectedTo
 
 function digestCoverAssetPath(targetDate) {
     const date = validateDate(targetDate);
-    return path.resolve(Config.FILES.digestCoverAssetDir, date, 'digest-cover', 'cover.png');
+    return path.resolve(
+        Config.FILES.digestCoverAssetDir,
+        date,
+        'visual-summaries',
+        `00-digest-cover-${date}.png`
+    );
+}
+
+function removeEmptyDirectory(directory) {
+    if (!fs.existsSync(directory)) return;
+    const stat = fs.lstatSync(directory);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return;
+    if (fs.readdirSync(directory).length === 0) fs.rmdirSync(directory);
 }
 
 function migrateLegacyCompletedCover(cover, dataSha256, expectedPromptSha, expectedToken, legacyToken, targetDate) {
@@ -139,11 +151,16 @@ function migrateLegacyCompletedCover(cover, dataSha256, expectedPromptSha, expec
         return cover;
     }
     const target = digestCoverAssetPath(targetDate);
-    if (validateCompletedCover(cover, dataSha256, expectedPromptSha, expectedToken)) return cover;
     const legacy = path.resolve(Config.CURRENT_DIR, 'digest-covers', targetDate, 'cover.png');
+    const oldArchive = path.resolve(
+        Config.FILES.digestCoverAssetDir, targetDate, 'digest-cover', 'cover.png'
+    );
+    removeEmptyDirectory(path.dirname(legacy));
+    removeEmptyDirectory(path.dirname(oldArchive));
+    if (validateCompletedCover(cover, dataSha256, expectedPromptSha, expectedToken)) return cover;
     const recorded = path.resolve(Config.PROJECT_ROOT, String(cover.assetPath || ''));
-    if (recorded !== legacy && recorded !== target) return cover;
-    const source = fs.existsSync(legacy) ? legacy : (fs.existsSync(target) ? target : null);
+    if (![legacy, oldArchive, target].includes(recorded)) return cover;
+    const source = [legacy, oldArchive, target].find(candidate => fs.existsSync(candidate)) || null;
     if (!source) return cover;
     const raw = fs.readFileSync(source);
     validatePngBuffer(raw);
@@ -152,6 +169,7 @@ function migrateLegacyCompletedCover(cover, dataSha256, expectedPromptSha, expec
     assertSafeAssetTarget(target, Config.FILES.digestCoverAssetDir);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     if (source !== target) {
+        const oldParent = path.dirname(source);
         if (fs.existsSync(target)) {
             const existing = fs.readFileSync(target);
             validatePngBuffer(existing);
@@ -162,6 +180,7 @@ function migrateLegacyCompletedCover(cover, dataSha256, expectedPromptSha, expec
         } else {
             fs.renameSync(source, target);
         }
+        removeEmptyDirectory(oldParent);
     }
     return {
         ...cover,
@@ -181,10 +200,13 @@ function archiveLegacyDigestCover({ targetDate, manifestPath } = {}) {
             throw new Error(`汇总封面 manifest 未完成或日期不匹配: ${manifestPath}`);
         }
         const legacy = path.resolve(Config.CURRENT_DIR, 'digest-covers', targetDate, 'cover.png');
+        const oldArchive = path.resolve(
+            Config.FILES.digestCoverAssetDir, targetDate, 'digest-cover', 'cover.png'
+        );
         const target = digestCoverAssetPath(targetDate);
         const recorded = path.resolve(Config.PROJECT_ROOT, String(cover.assetPath || ''));
-        if (![legacy, target].includes(recorded)) throw new Error(`历史汇总封面路径不受控: ${cover.assetPath}`);
-        const source = fs.existsSync(legacy) ? legacy : (fs.existsSync(target) ? target : null);
+        if (![legacy, oldArchive, target].includes(recorded)) throw new Error(`历史汇总封面路径不受控: ${cover.assetPath}`);
+        const source = [legacy, oldArchive, target].find(candidate => fs.existsSync(candidate)) || null;
         if (!source || !fs.statSync(source).isFile()) throw new Error(`历史汇总封面缺失: ${targetDate}`);
         const raw = fs.readFileSync(source);
         validatePngBuffer(raw);

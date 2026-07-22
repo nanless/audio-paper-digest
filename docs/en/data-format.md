@@ -371,7 +371,7 @@ This manifest is created only after every blog page is remotely verified as publ
           "status": "complete",
           "label": "Paper infographic",
           "taskToken": "<64 lowercase hex characters>",
-          "assetPath": "data/archive/2026-07-13/visual-summaries/01-2607.12345/infographic.png",
+          "assetPath": "data/archive/2026-07-13/visual-summaries/01-2607.12345-example-paper-title.png",
           "assetSha256": "<64 lowercase hex characters>",
           "analysisSha256": "<64 lowercase hex characters>",
           "promptSha256": "<64 lowercase hex characters>",
@@ -414,7 +414,7 @@ After all blogs publish, every batch produces one digest image. Its context is d
     "status": "complete",
     "label": "Digest cover",
     "taskToken": "<64 lowercase hex characters>",
-    "assetPath": "data/archive/2026-07-13/digest-cover/cover.png",
+    "assetPath": "data/archive/2026-07-13/visual-summaries/00-digest-cover-2026-07-13.png",
     "assetSha256": "<64 lowercase hex characters>"
   },
   "overallStatus": "complete"
@@ -444,3 +444,5 @@ All three blog stages share both per-date and repository-global locks. Push veri
 ### 5.11 `data/current/xiaohongshu-oneliners-YYYY-MM-DD.json`
 
 Per-paper success cache used only to generate Xiaohongshu copy. Entries are saved under a per-date lock and bind analysis, prompt, model/endpoint configuration, and sanitation fingerprints. Corrupt caches are quarantined and rebuilt; fallbacks or changed inputs rerun only that paper. No automatic publication is involved.
+
+With the default data source, if a same-date `blog-generation-manifest-YYYY-MM-DD.json` exists, copy generation first verifies that its review receipt binds the manifest SHA, strict review, publication commit, and the same remotely verified OID. The schema-v3 `publishedPapers` snapshot then becomes the authoritative set before publish preflight, excluding analysis records that never entered the blog while preventing an unreviewed or remotely unverified manifest from masquerading as published content. Custom input files are not bound to this snapshot.
