@@ -4,6 +4,8 @@ English | **[中文](README.md)**
 
 This project automatically generates "Speech / Music / Audio Paper Digests," covering the complete pipeline from arXiv and HuggingFace Papers crawling, LLM-based filtering, multimodal deep analysis, to publishing Hugo blog posts, WeChat Official Account drafts, Xiaohongshu (Little Red Book) copy, and Feishu (Lark) documents. Node-side tunable parameters and current runtime data-file paths are centralized in `scripts/config.js`; shared Python publish/maintenance paths are centralized in `scripts/path_config.py`.
 
+When a user tells Codex to run the paper digest for a given date, the default intent is the complete standard workflow: fetch, filter, deep analysis, blog generation, review and fixes, blog publication, TOP 10 paper infographics, the digest cover, and final status gates. This phrase itself authorizes the blog push; WeChat, Feishu, and Xiaohongshu auto-publishing remain outside the default scope.
+
 Deep analysis uses the `type-aware-v1` rubric: it first classifies a document as method research, system technical report, model report, dataset/benchmark, survey, theory, or applied research, then evaluates it with the matching evidence standard. The common eight dimensions, 11-point subtotal, and 10-point cap remain unchanged; values use at most one decimal and Open Source uses fixed anchors. Type grants no fixed bonus, and complete proof material may count as a theory paper's public core artifact instead of being forced to zero merely because code/model/data flags are absent.
 
 Visual generation is a post-publication stage. First finish deep analysis for every paper, then generate, review, push, and remotely verify all blog pages (the digest index plus every paper page). Only then does `push-blog.py` create resumable image tasks: one tall Chinese-body infographic for each final-score TOP 10 paper, with stable normalized-arXiv-ID tie breaking, plus one batch digest image containing the title, hot directions, and TOP 10 ranking. Each paper poster targets roughly 220–360 Chinese characters of substantive explanation. When deep analysis selected and cached a trustworthy method overview, architecture, pipeline, or key-result figure, the task binds up to two references and their SHA values. Built-in image generation now creates the complete final composition—title, Chinese copy, verified numbers, diagrams, captions, and paper-collage artwork—without passing through the legacy deterministic text-card compositor. Before record, every title, statement, arrow relationship, metric direction, and value must be visually verified; unreadable or materially incorrect assets are regenerated. Paper infographics and the digest cover use a fresh paper-editorial system with warm light backgrounds, restrained low-saturation colors, subtle paper grain, layered sheets, limited deckled edges and tape accents, soft shadows, and generous whitespace. Dirty vintage paper, crowded scrapbook styling, dark neon, cyberpunk HUDs, and dashboard layouts are explicitly prohibited. These assets do not enter or block the already completed blog generation/review/push transaction.
@@ -51,7 +53,8 @@ audio-paper-digest/
 ├── prompts/              # LLM prompt files
 ├── docs/                 # Detailed documentation
 ├── package.json          # npm scripts
-├── run-full-fetch.sh     # Full pipeline entry point
+├── run-daily-digest.sh   # Default Codex daily orchestrator; built-in image generation follows its script stages
+├── run-full-fetch.sh     # Data pipeline only: fetch, filter, and deep analysis
 └── README.md / SKILL.md
 ```
 
@@ -76,20 +79,18 @@ npm install
 #    PAPER_ANALYZER_SECONDARY_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
 #    PAPER_ANALYZER_SECONDARY_API_KEY=tp-your-key
 
-# 3. Run the full pipeline (crawl + filter + deep analysis)
+# 3. Run deterministic daily stages: data pipeline + blog generate/review/push + visual preparation.
 # Every project script must run outside the sandbox; entrypoints reject Codex sandbox execution.
-./run-full-fetch.sh
+./run-daily-digest.sh 2026-05-08
 
-# 4. Generate, review, then push every blog page (all stages must run outside the sandbox)
-python3 scripts/generate-blog.py --date 2026-05-08
-python3 scripts/review-blog.py --date 2026-05-08
-python3 scripts/push-blog.py --date 2026-05-08
+# After fixing review blockers, resume from review without rerunning fetch/analysis.
+./run-daily-digest.sh 2026-05-08 --from review
 
-# 5. Push verifies the remote OID and automatically creates post-publication image tasks.
+# 4. Codex uses built-in image_gen to generate and record every visual, then verifies both gates.
 npm run visual:status -- --date 2026-05-08
 npm run cover:status -- --date 2026-05-08
 
-# 6. Generate Xiaohongshu copy
+# 5. Optional: generate Xiaohongshu copy
 python3 scripts/publish-xiaohongshu.py
 ```
 
@@ -102,7 +103,10 @@ For the complete installation guide, see [`docs/setup.md`](docs/setup.md).
 ### npm scripts
 
 ```bash
-# Full pipeline (crawl + filter + deep analysis)
+# Default daily script stages; Codex then continues with built-in image generation.
+npm run digest:prepare -- 2026-04-21
+
+# Data pipeline only (crawl + filter + deep analysis)
 npm run fetch
 
 # Resume deep analysis only (skip existing analysis; can initialize from filtered-papers.json)
@@ -168,7 +172,10 @@ python3 scripts/publish-to-feishu.py --all
 
 ```bash
 # ========== Core Pipeline ==========
-# Full pipeline (recommended entry point)
+# Default daily script stages; Codex then continues with built-in image generation.
+./run-daily-digest.sh 2026-04-21
+
+# Data pipeline only
 ./run-full-fetch.sh
 
 # Or use Node directly

@@ -2,7 +2,9 @@
 
 ## 主流程详解
 
-核心数据流程入口：`./run-full-fetch.sh`（或 `node scripts/full-fetch.js` / `npm run fetch`）。深度分析只负责产出稳定评分；随后先发布全部博客页面，远端 OID 验证成功后才进入 TOP 10 论文长图和批次汇总图阶段。
+默认日更入口是 `./run-daily-digest.sh YYYY-MM-DD`。它依次执行核心数据流程、博客 generate/review/push、发布后视觉任务规划和参考图准备；若 review 报告内容问题，Agent 修正后用 `--from review` 只从失败阶段续跑。脚本不能也不会调用图像 API，结束后 Codex 必须使用内置 `image_gen` 完成 TOP 10 论文长图与批次汇总封面，并通过两个状态门禁。仅数据流程入口仍是 `./run-full-fetch.sh`（或 `node scripts/full-fetch.js` / `npm run fetch`）。
+
+用户说“运行/进行某日论文速递”时，默认已经授权博客 push，并要求完成上述全部阶段；不能在抓取、深度分析、review 或发布后提前停止。微信、飞书、小红书自动发布不在默认范围。
 
 ### 3.1 自动归档
 

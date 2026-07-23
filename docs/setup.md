@@ -92,7 +92,7 @@ Node/Python 加载器会先清除外层进程中的同名项目变量，再加�
 
 #### 执行环境
 
-**所有项目脚本必须在沙箱外运行**，包括直接执行的 `scripts/*.js`、`scripts/*.py`、`run-full-fetch.sh` 和 `scripts/*.sh`。Node 的 `env-loader.js`、Python 的 `project_env.py` 与 shell 入口会在检测到 `CODEX_SANDBOX` 时，在日志、网络请求、文件写入和业务逻辑前拒绝执行；模块被单元测试导入不触发该守卫。沙箱外权限包装可能保留网络禁用标志，不能单独据此判定仍在沙箱内。
+**所有项目脚本必须在沙箱外运行**，包括直接执行的 `scripts/*.js`、`scripts/*.py`、`run-daily-digest.sh`、`run-full-fetch.sh` 和 `scripts/*.sh`。Node 的 `env-loader.js`、Python 的 `project_env.py` 与 shell 入口会在检测到 `CODEX_SANDBOX` 时，在日志、网络请求、文件写入和业务逻辑前拒绝执行；模块被单元测试导入不触发该守卫。沙箱外权限包装可能保留网络禁用标志，不能单独据此判定仍在沙箱内。
 
 #### 代理
 

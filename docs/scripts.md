@@ -2,9 +2,15 @@
 
 ## 脚本分工（全部脚本详解）
 
-> **运行前置条件**：所有本项目脚本必须在沙箱外执行。直接启动的 Node/Python 脚本会由公共环境加载器检测 `CODEX_SANDBOX` 并在任何业务操作前拒绝执行；`run-full-fetch.sh` 和 `scripts/backup-data.sh` 也有同样的入口检查。单元测试导入模块不会触发该检查。
+> **运行前置条件**：所有本项目脚本必须在沙箱外执行。直接启动的 Node/Python 脚本会由公共环境加载器检测 `CODEX_SANDBOX` 并在任何业务操作前拒绝执行；`run-daily-digest.sh`、`run-full-fetch.sh` 和 `scripts/backup-data.sh` 也有同样的入口检查。单元测试导入模块不会触发该检查。
 
 ### 4.1 主链路脚本
+
+#### `run-daily-digest.sh`
+
+Codex 对“运行/进行某日论文速递”请求使用的默认脚本编排入口。日期参数必填，依次启动 `full-fetch.js`、博客 generate、review、push、发布后视觉规划和 `visual:prepare`。支持 `--from fetch|generate|review|push|visual`，便于 review 修正或瞬时失败后从对应阶段续跑，不重复已经成功的长耗时阶段。
+
+该脚本保持博客三阶段为独立进程，并在任一阶段非零退出时立即停止。它不调用任何图像 API；脚本成功后，Codex 仍必须使用内置 `image_gen` 生成、目检、登记 TOP 10 论文长图和汇总封面，再运行 `visual:status` 与 `cover:status`，两者均完成才算整轮论文速递完成。npm 入口：`npm run digest:prepare -- YYYY-MM-DD`。
 
 #### `scripts/full-fetch.js`
 

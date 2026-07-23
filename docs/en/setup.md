@@ -88,7 +88,7 @@ The Node/Python loaders clear same-name inherited project variables before loadi
 
 #### Execution Environment
 
-**Every project script must run outside the sandbox**, including direct `scripts/*.js`, `scripts/*.py`, `run-full-fetch.sh`, and `scripts/*.sh` invocations. Node `env-loader.js`, Python `project_env.py`, and shell entry points reject `CODEX_SANDBOX` before logging, network requests, file writes, or business logic. Unit-test module imports do not trigger the guard. The external-runtime wrapper may preserve a network-disabled marker, so that marker alone cannot identify a sandbox.
+**Every project script must run outside the sandbox**, including direct `scripts/*.js`, `scripts/*.py`, `run-daily-digest.sh`, `run-full-fetch.sh`, and `scripts/*.sh` invocations. Node `env-loader.js`, Python `project_env.py`, and shell entry points reject `CODEX_SANDBOX` before logging, network requests, file writes, or business logic. Unit-test module imports do not trigger the guard. The external-runtime wrapper may preserve a network-disabled marker, so that marker alone cannot identify a sandbox.
 
 #### Proxy
 

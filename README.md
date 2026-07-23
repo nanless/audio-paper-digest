@@ -4,6 +4,8 @@
 
 本项目用于自动生成"语音/音乐/音频论文速递"，覆盖从 arXiv 和 HuggingFace Papers 抓取、LLM 筛选、多模态深度分析，到发布 Hugo 博客、微信公众号草稿、小红书文案和飞书文档的完整链路。Node 端可调参数和当前运行数据文件路径集中在 `scripts/config.js`；Python 发布/维护脚本的共享路径集中在 `scripts/path_config.py`。
 
+对 Codex 说“运行/进行某一天的论文速递”，默认含义是完成抓取、筛选、深度分析、博客生成、review 与修正、博客发布、TOP 10 论文长图、汇总封面和最终状态验收。博客发布无需再次确认；微信公众号、飞书和小红书自动发布不包含在这个默认范围内。
+
 深度分析采用 `type-aware-v1` 类型感知评分：先将文档归类为方法研究、系统技术报告、模型报告、数据集与基准、综述、理论研究或应用研究，再按对应证据标准评审。八维权重、满分 11 和总分封顶 10 保持统一；分项与总分最多一位小数，开源分使用固定锚点。文档类型不提供固定加分，同一个缺陷只能在一个主要维度扣分；理论工作的完整证明材料可作为核心公开产物，不会因没有代码/模型/数据而被机械归零。
 
 视觉摘要位于发布流程之后：先完成全部论文深度分析，再生成、review 并 push 全部博客（汇总页和所有论文页）。`push-blog.py` 验证远端 `main` OID 后自动建立可恢复视觉任务，只为最终评分 TOP 10 的论文各生成一张纵向 PNG 长图；同分按规范化 arXiv ID 稳定排序。长图顶部逐字显示英文论文标题，正文用约 220–360 个简体中文字符完整串联研究问题、方法、实验、结论与局限。若深度分析已筛选并缓存可靠的论文方法总览图、架构图或关键结果图，任务会绑定最多两张参考图及其 SHA。最终图片由内置生图直接完成标题、中文说明、结构图、实验数据和纸张拼贴艺术的一体化构图，不再经过旧的确定性文字卡片合成器；登记前必须逐项目检标题、文字、箭头关系、指标方向和数值，存在不可读或实质错误时重新生成。论文长图和汇总封面统一采用暖白底、低饱和配色和充足留白的清新纸张编辑风，通过细微纸纹、纸片叠层、局部毛边、少量胶带和柔和投影建立设计层次；明确禁止脏旧复古、拥挤手账、深色霓虹、赛博 HUD 和仪表盘式排版。
@@ -51,7 +53,8 @@ audio-paper-digest/
 ├── prompts/              # LLM prompt 文件
 ├── docs/                 # 详细文档
 ├── package.json          # npm scripts
-├── run-full-fetch.sh     # 全流程入口
+├── run-daily-digest.sh   # Codex 默认日更编排入口（脚本阶段完成后接续内置生图）
+├── run-full-fetch.sh     # 仅数据流程入口（抓取、筛选、深度分析）
 └── README.md / SKILL.md
 ```
 
@@ -76,22 +79,18 @@ npm install
 #    PAPER_ANALYZER_SECONDARY_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
 #    PAPER_ANALYZER_SECONDARY_API_KEY=tp-your-key
 
-# 3. 运行全流程（抓取 + 筛选 + 深度分析）
+# 3. 默认日更脚本阶段：数据流程 + 博客三阶段 + 视觉输入准备
 # 所有项目脚本必须在沙箱外运行；脚本入口会拒绝 Codex 沙箱
-./run-full-fetch.sh
+./run-daily-digest.sh 2026-05-08
 
-# 4. 博客三阶段：生成、审查、推送全部博客
-# 必须在沙箱外运行；入口检测到 Codex 沙箱会拒绝执行
-python3 scripts/generate-blog.py --date 2026-05-08
-python3 scripts/review-blog.py --date 2026-05-08
-python3 scripts/push-blog.py --date 2026-05-08
+# review 若发现内容问题，修正后从 review 阶段续跑
+./run-daily-digest.sh 2026-05-08 --from review
 
-# 5. push 验证远端 OID 后已自动建立 TOP 10 长图和汇总图任务
-npm run visual:prepare -- --date 2026-05-08
+# 4. Codex 使用内置 image_gen 生成并登记全部视觉任务，最后验收
 npm run visual:status -- --date 2026-05-08
 npm run cover:status -- --date 2026-05-08
 
-# 6. 生成小红书文案
+# 5. 可选：生成小红书文案
 python3 scripts/publish-xiaohongshu.py
 ```
 
@@ -104,7 +103,10 @@ python3 scripts/publish-xiaohongshu.py
 ### npm scripts
 
 ```bash
-# 全流程（抓取 + 筛选 + 深度分析）
+# 默认日更脚本阶段（随后由 Codex 接续内置生图）
+npm run digest:prepare -- 2026-04-21
+
+# 仅数据流程（抓取 + 筛选 + 深度分析）
 npm run fetch
 
 # 仅深度分析续跑（跳过已有 analysis；无分析结果时可从 filtered-papers.json 初始化）
@@ -168,7 +170,10 @@ python3 scripts/publish-to-feishu.py --all
 
 ```bash
 # ========== 核心流程 ==========
-# 全流程（推荐入口）
+# 默认日更脚本阶段（之后由 Codex 接续内置生图）
+./run-daily-digest.sh 2026-04-21
+
+# 仅数据流程
 ./run-full-fetch.sh
 
 # 或直接用 Node

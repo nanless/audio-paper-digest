@@ -27,7 +27,7 @@ description: >
 
 ## 2. 当前真实流程
 
-主入口：`./run-full-fetch.sh`（或 `node scripts/full-fetch.js` / `npm run fetch`）
+默认日更入口：`./run-daily-digest.sh YYYY-MM-DD`（Codex 接续内置生图）；仅数据流程入口：`./run-full-fetch.sh`（或 `node scripts/full-fetch.js` / `npm run fetch`）
 
 1. **自动归档**：检查 `data/current/deep-analysis-result.json` / `filtered-papers.json` / `analyzed.json`，若时间戳早于今天（北京时间）且 `data/archive/<日期>/` 下不存在，则复制后删除原文件。**`papers.json` 不归档。**
 2. **加载去重库**：读取 `data/current/papers.json` 已有 ID；扫描 Hugo 博客仓库（`PAPER_DIGEST_BLOG_REPO`）中已发布论文的 arXiv ID，两者合并为统一去重集合
@@ -42,7 +42,7 @@ description: >
 11. **收尾合并**：去重合并历史结果，自动备份 bak 文件（保留最近 10 个）
 12. **全部博客发布后生成视觉摘要**：依次完成博客 generate、review 和 push；远端 `main` OID 验证成功后，`push-blog.py` 自动建立最终评分 TOP 10 论文长图和一张批次汇总图任务。图片不进入或阻断本轮博客发布。Codex 使用内置 `image_gen` 处理 pending/failed 项，项目脚本只管理规划、验证、复制和 checkpoint，禁止调用图像 API。论文长图使用约 220–360 个中文字符，不得退化为口号式概念海报；若深度分析已选中并完整缓存论文关键图，任务按“方法总览/架构/流程优先，关键实验其次”绑定最多两张参考图、caption、MIME、缓存路径和 SHA。内置生图直接完成英文标题、中文说明、结构图、实验数据和纸张拼贴艺术的一体化最终构图，禁止再经过旧的确定性文字卡片合成器；登记前逐项目检标题、文字、箭头关系、指标方向和数值，不可读或存在实质错误必须重生成。两类图片统一采用暖白底与低饱和色的清新纸张编辑风，通过细微纸纹、纸片叠层、局部毛边、少量胶带和柔和投影建立层次；禁止脏旧复古、拥挤手账、深蓝霓虹、赛博 HUD、金属边框和仪表盘风格。
 
-`full-fetch.js` **不会自动发布博客/微信**，发布需单独运行 Python 脚本。
+`full-fetch.js` **不会自动发布博客/微信**。但当用户说“运行/进行某日论文速递”时，默认语义是完成本节整条链路；Agent 先运行 `run-daily-digest.sh` 或等价的分阶段命令，处理 review 问题并完成 push，再使用内置 `image_gen` 完成所有 pending 论文长图和汇总封面，直到两个视觉状态均为 `complete`。微信公众号、飞书和小红书自动发布不属于默认链路。
 
 ---
 
@@ -258,7 +258,12 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 ```bash
 cd /path/to/audio-paper-digest
 
-# 全流程（抓取 + 筛选 + 深度分析）
+# 默认日更脚本阶段（数据流程 + 博客生成/review/push + 视觉输入准备）
+npm run digest:prepare -- YYYY-MM-DD
+# review 失败并修正后可从指定阶段续跑
+./run-daily-digest.sh YYYY-MM-DD --from review
+
+# 仅数据流程（抓取 + 筛选 + 深度分析）
 npm run fetch
 # 或 ./run-full-fetch.sh
 
@@ -439,15 +444,15 @@ PY
 1. **先查再改**：先读取相关脚本确认当前行为，再更新文档或执行命令。
 2. **发布需确认日期**：未明确日期时，先问用户；默认不要依赖"今天"。
 3. **禁止危险操作**：未获明确授权，禁止 `git reset --hard`、`git push -f`、批量删除历史文章。
-4. **不自动扩展流程**：运行 `full-fetch.js` 后，不要擅自追加博客/微信发布，除非用户明确要求。
+4. **默认日更意图必须跑完整链路**：用户说“运行/进行某日论文速递”即明确授权博客发布，并要求抓取、筛选、深度分析、博客生成、review/修正、push、TOP 10 论文长图、汇总封面和最终状态验收；不得在中间阶段提前结束。若用户只要求运行 `full-fetch.js`、仅分析、诊断、预览或检查，则不得擅自扩展到发布。微信、飞书、小红书自动发布不在默认范围。
 5. **改动留痕**：流程、参数、路径变化后，同步更新 `SKILL.md`、`README.md`、`AGENTS.md` 和相关 `docs/` 文档。
 6. **禁止硬编码密钥**：不要在任何脚本或文档中写入真实 API key；所有凭证（LLM、微信公众号、飞书）统一放在 `项目根目录的 `.env` 文件`，由脚本通过项目 env loader 加载。
 7. **修改脚本时防止安全机制破坏**：本环境会静默替换 `API_KEY` 等敏感字符为 `***`。修改含有这类字符的脚本时，修改后必须重新读取文件验证关键行未被破坏。同时定期检查 `data/`、`logs/` 目录是否残留含密钥的备份文件或日志快照，发现立即清理。
 8. **环境变量统一管理**：新增脚本需要读取 LLM 配置时，统一使用项目 `.env` 中的 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT`，并复用 Node `scripts/env-loader.js` 或 Python `scripts/project_env.py`；禁止引入别名回退链、硬编码、base64 编码变量名 hack，或读取外层 shell/Codex/Trae 继承变量作为项目配置。
-8.1 **所有脚本必须沙箱外执行**：直接运行任意 `scripts/*.js`、`scripts/*.py`、`run-full-fetch.sh` 或 `scripts/*.sh` 时，必须使用沙箱外权限。Node/Python 公共环境加载器和两个 shell 入口会在检测到 `CODEX_SANDBOX` 后、任何业务逻辑/日志/网络/写入之前失败退出；不得在沙箱内换命令、手动取消检查或伪造结果。单元测试导入模块不会触发该守卫。
+8.1 **所有脚本必须沙箱外执行**：直接运行任意 `scripts/*.js`、`scripts/*.py`、`run-daily-digest.sh`、`run-full-fetch.sh` 或 `scripts/*.sh` 时，必须使用沙箱外权限。Node/Python 公共环境加载器和 shell 入口会在检测到 `CODEX_SANDBOX` 后、任何业务逻辑/日志/网络/写入之前失败退出；不得在沙箱内换命令、手动取消检查或伪造结果。单元测试导入模块不会触发该守卫。
 9. **新增可配置参数和运行数据路径放入统一配置**：新增 Node 脚本涉及可调整参数（并发度、超时、批次大小等）或 `data/current/*.json` 运行数据文件时，统一放入/复用 `scripts/config.js`（运行数据路径使用 `Config.FILES`），参数项按需添加项目 `.env` 覆写支持；新增 Python 发布/维护脚本涉及共享路径时，复用 `scripts/path_config.py`，禁止再次手写 `data/current/*.json` 默认路径。
 10. **新增分析脚本复用 analysis-engine.js**：新增论文分析相关脚本时，优先复用 `analysis-engine.js` 的 `analyzeBatch()` / `analyzePaperWithRetry()`，避免重复实现重试、解析、保存逻辑；保存结果后必须通过 `scripts/digest-status.js` 同步 `papers.json.digestStatus`。
-11. **博客三阶段不得合并**：`generate-blog.py` 只生成并写 generation manifest；`review-blog.py` 只执行严格 LLM/图片 review 和 Hugo gate，通过后写入逐文件 SHA-256 凭证；`push-blog.py` 只验证凭证后 commit/push，禁止调用生成或 review。未获用户明确授权时禁止运行 push 阶段。
+11. **博客三阶段不得合并**：`generate-blog.py` 只生成并写 generation manifest；`review-blog.py` 只执行严格 LLM/图片 review 和 Hugo gate，通过后写入逐文件 SHA-256 凭证；`push-blog.py` 只验证凭证后 commit/push，禁止调用生成或 review。“运行/进行某日论文速递”视为明确 push 授权；其他请求未获明确授权时禁止运行 push 阶段。
 11.1 **博客发布必须沙箱外执行**：运行 `generate-blog.py`、`review-blog.py`、`push-blog.py` 或兼容 `publish-to-blog.py` 时，Agent 必须使用沙箱外权限。脚本检测到 Codex 沙箱标志会失败退出；该失败不是内容问题，不得在沙箱内重复执行或绕过 LLM/图片/Hugo/Git 检查。
 12. **输出契约改动要同步 parser**：若修改 `prompts/deep-analysis.md` 中的 `## 机器摘要` 键名、章节顺序或标签输出格式，必须同步检查 `scripts/utils.js` 与 `scripts/utils.py` 的解析逻辑。
 13. **变更后必须做产物级验证**：至少抽样检查一份 `data/current/deep-analysis-result.json`，确认 `analysis` 文本的机器摘要包含 `document_type`、`rank_bucket`、`primary_task_tag`、`primary_method_tag`，且 `parsed` 缓存包含 `documentType`、`scoringRubricVersion`、`rankBucket`、`primaryTaskTag`、`primaryMethodTag` 等字段，再运行博客/社媒脚本验证最终产物。

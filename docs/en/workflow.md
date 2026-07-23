@@ -2,7 +2,9 @@
 
 ## Main Workflow Explained
 
-Core data-pipeline entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fetch`). Deep analysis produces stable final scores; all digest and paper blog pages publish first, and TOP 10 infographics plus the batch digest image are generated only after remote OID verification.
+The default daily entry is `./run-daily-digest.sh YYYY-MM-DD`. It runs the core data pipeline, the separate blog generate/review/push stages, post-publication visual planning, and reference preparation. If review reports content blockers, the Agent fixes them and resumes with `--from review`. The script never calls an image API; after it succeeds, Codex must use built-in `image_gen` to complete the TOP 10 paper infographics and digest cover, then pass both visual status gates. The data-only entry remains `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fetch`).
+
+When the user asks to run a dated paper digest, that request already authorizes the blog push and requires every stage above. Do not stop after fetch, analysis, review, or publication. WeChat, Feishu, and Xiaohongshu auto-publishing are outside the default scope.
 
 ### 3.1 Auto-Archive
 

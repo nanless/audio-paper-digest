@@ -29,7 +29,7 @@ When documents conflict with code, **the current implementation in `scripts/*` p
 
 ## 2. Actual Workflow
 
-Main entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fetch`)
+Default daily entry: `./run-daily-digest.sh YYYY-MM-DD`, followed by Codex built-in image generation. Data-only entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fetch`).
 
 1. **Auto-archive**: Checks `data/current/deep-analysis-result.json` / `filtered-papers.json` / `analyzed.json`; if their timestamps are earlier than today (Beijing time) and `data/archive/<date>/` does not exist, copies them and deletes the originals. **`papers.json` is NOT archived.**
 2. **Load dedup DB**: Reads existing IDs from `data/current/papers.json`; scans the Hugo blog repository (`PAPER_DIGEST_BLOG_REPO`) for published paper arXiv IDs, merging both into a unified deduplication set
@@ -44,7 +44,7 @@ Main entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fe
 11. **Final merge**: Deduplicates and merges historical results, auto-backing up bak files (retaining the last 10)
 12. **Post-publication visual assets**: finish deep analysis for every paper, then generate, review, push, and remotely verify all blog pages. Only after remote `main` matches the publication commit does `push-blog.py` plan one tall infographic for each final-score TOP 10 paper and one batch digest image. Paper posters target roughly 220–360 Chinese characters and must not collapse into slogan-only concept art. If deep analysis selected and fully cached trustworthy paper figures, each task binds at most two references—method overview/architecture/pipeline first, key experiments second—together with caption, MIME, cache path, and SHA. Built-in image generation creates the complete final composition—English title, Chinese explanations, verified numbers, diagrams, captions, and paper-collage artwork—and the result must not be passed through the legacy deterministic text-card compositor. Before record, visually verify every title, statement, arrow relationship, metric direction, and value; regenerate unreadable or materially incorrect assets. Both asset types use a fresh paper-editorial system with warm light backgrounds, restrained low-saturation colors, subtle grain, layered sheets, limited deckled edges and tape accents, soft shadows, and generous whitespace. Dirty vintage paper, crowded scrapbook styling, dark neon, cyberpunk HUDs, metallic frames, and dashboards are prohibited. All generated images for one batch are stored flat in `data/archive/<date>/visual-summaries/`: the cover is `00-digest-cover-<date>.png`, and paper images are `<rank>-<paper-id>-<title-slug>.png`, ordered by manifest rank rather than completion order. A later plan verifies and migrates legacy current/archive layouts. These assets are independently resumable but do not enter or block the completed blog publication transaction
 
-`full-fetch.js` **does NOT auto-publish blog/WeChat**; publishing requires running Python scripts separately.
+`full-fetch.js` **does NOT auto-publish blog/WeChat**. However, when the user asks to run a dated paper digest, the default intent is the complete workflow in this section. The Agent runs `run-daily-digest.sh` or equivalent separate stages, fixes review blockers, completes push, then uses built-in `image_gen` for every pending paper infographic and digest cover until both visual status gates are complete. WeChat, Feishu, and Xiaohongshu auto-publishing are not part of this default.
 
 ---
 
@@ -258,7 +258,12 @@ Endpoint configuration format is uniformly `protocol://domain/v1`, regardless of
 ```bash
 cd /Users/francis7999/code/github_repos/audio-paper-digest
 
-# Full pipeline (fetch + filter + deep analysis)
+# Default deterministic daily stages; Codex continues with built-in image generation
+npm run digest:prepare -- YYYY-MM-DD
+# Resume after fixing review blockers
+./run-daily-digest.sh YYYY-MM-DD --from review
+
+# Data pipeline only (fetch + filter + deep analysis)
 npm run fetch
 # or ./run-full-fetch.sh
 
@@ -351,7 +356,7 @@ Current behavior:
 Agent execution constraints:
 
 - By default only run the separate generation and review stages.
-- Only when the user explicitly requests "official publish / push blog" may `push-blog.py` run. It requires an unchanged strict review receipt, the blog repository on `main`, manifest-only staging, an explicit `HEAD:main` push, and remote OID verification.
+- A request to run a dated paper digest is itself explicit authorization for `push-blog.py`; otherwise only an explicit "official publish / push blog" request authorizes it. Push requires an unchanged strict review receipt, the blog repository on `main`, manifest-only staging, an explicit `HEAD:main` push, and remote OID verification.
 - If only checking format, verifying new fields, or previewing artifacts, triggering a real `git push` is prohibited
 
 Pre-publish safeguards:
@@ -434,15 +439,15 @@ PY
 1. **Check before modifying**: Read relevant scripts to confirm current behavior before updating documents or executing commands.
 2. **Confirm date for publishing**: Ask the user when the date is not explicitly specified; do not default to "today".
 3. **Prohibit dangerous operations**: Do not execute `git reset --hard`, `git push -f`, or batch deletion of historical articles without explicit authorization.
-4. **Do not auto-extend workflow**: After running `full-fetch.js`, do not arbitrarily append blog/WeChat publishing unless explicitly requested by the user.
+4. **Complete the default dated-digest intent**: "Run the paper digest for a given date" explicitly authorizes blog publication and requires fetch, filter, deep analysis, blog generation, review/fixes, push, TOP 10 paper infographics, the digest cover, and final status gates. Do not stop at an intermediate stage. A request limited to `full-fetch.js`, analysis, diagnosis, preview, or inspection does not authorize publishing. WeChat, Feishu, and Xiaohongshu auto-publishing remain outside the default.
 5. **Leave a trace after changes**: After process, parameter, or path changes, synchronously update `SKILL.md`, `SKILL.en.md`, `README.md`, `AGENTS.md`, and relevant `docs/` files.
 6. **Prohibit hard-coded keys**: Do not write real API keys in any script or document; all credentials (LLM, WeChat Official Account, Feishu) live in `the `.env` file in the project root` and are loaded through the project env loader.
 7. **Prevent security mechanism breakage when modifying scripts**: This environment silently replaces sensitive characters such as `API_KEY` with `***`. When modifying scripts containing such characters, you must re-read the file after modification to verify that key lines were not corrupted. Also periodically check whether `data/`, `logs/` directories contain residual backup files or log snapshots with keys, and clean them immediately if found.
 8. **Unified environment variable management**: When new scripts need to read LLM configuration, uniformly use `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, and `PAPER_ANALYZER_ENDPOINT` from the project `.env`, and reuse Node `scripts/env-loader.js` or Python `scripts/project_env.py`; alias fallback chains, hard-coding, base64-encoded variable name hacks, or inherited shell/Codex/Trae variables as project configuration are prohibited.
-8.1 **Run every script outside the sandbox**: Every direct `scripts/*.js`, `scripts/*.py`, `run-full-fetch.sh`, and `scripts/*.sh` invocation requires external runtime permissions. The Node/Python shared environment loaders and both shell entries fail before business logic, logging, networking, or writes when they detect `CODEX_SANDBOX`; do not substitute a sandbox command, disable the check, or fabricate results. Unit-test module imports do not trigger this guard.
+8.1 **Run every script outside the sandbox**: Every direct `scripts/*.js`, `scripts/*.py`, `run-daily-digest.sh`, `run-full-fetch.sh`, and `scripts/*.sh` invocation requires external runtime permissions. The Node/Python shared environment loaders and shell entries fail before business logic, logging, networking, or writes when they detect `CODEX_SANDBOX`; do not substitute a sandbox command, disable the check, or fabricate results. Unit-test module imports do not trigger this guard.
 9. **New configurable parameters and runtime data paths go in shared config**: New Node scripts with adjustable parameters (concurrency, timeout, batch size, etc.) or `data/current/*.json` runtime data files must place/reuse them in `scripts/config.js` (runtime data paths via `Config.FILES`) and add project `.env` overrides for parameters when needed; new Python publish/maintenance scripts with shared paths must reuse `scripts/path_config.py` instead of hand-writing default `data/current/*.json` paths again.
 10. **New analysis scripts reuse analysis-engine.js**: When adding paper analysis-related scripts, prioritize reusing `analyzeBatch()` / `analyzePaperWithRetry()` from `analysis-engine.js` to avoid re-implementing retry, parsing, and saving logic; after saving results, sync `papers.json.digestStatus` through `scripts/digest-status.js`.
-11. **Never merge the three blog stages**: `generate-blog.py` only generates and records a manifest; `review-blog.py` only performs strict LLM/image review plus the Hugo gate and writes a per-file SHA-256 receipt; `push-blog.py` only validates that receipt and commits/pushes. Push must never regenerate or re-run review.
+11. **Never merge the three blog stages**: `generate-blog.py` only generates and records a manifest; `review-blog.py` only performs strict LLM/image review plus the Hugo gate and writes a per-file SHA-256 receipt; `push-blog.py` only validates that receipt and commits/pushes. Push must never regenerate or re-run review. A request to run a dated paper digest is explicit push authorization; other requests still require explicit publication authorization.
 11.1 **Run blog publishing outside the sandbox**: Agents must use external runtime permissions for `generate-blog.py`, `review-blog.py`, `push-blog.py`, and compatibility `publish-to-blog.py`. A Codex sandbox rejection is an execution-environment failure, not a content failure; do not retry there or bypass LLM/image/Hugo/Git checks.
 12. **Output contract changes must sync parser**: If modifying `## 机器摘要` key names, section order, or tag output format in `prompts/deep-analysis.md`, you must synchronously check the parsing logic in `scripts/utils.js` and `scripts/utils.py`.
 13. **Artifact-level verification required after changes**: At minimum, spot-check one `data/current/deep-analysis-result.json` to confirm the `analysis` machine summary contains `document_type`, `rank_bucket`, `primary_task_tag`, and `primary_method_tag`, and the `parsed` cache contains `documentType`, `scoringRubricVersion`, `rankBucket`, `primaryTaskTag`, and `primaryMethodTag`; then run blog/social media scripts to verify final artifacts.

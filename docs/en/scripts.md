@@ -2,9 +2,15 @@
 
 ## Script Responsibilities (Complete Script Reference)
 
-> **Runtime precondition**: every project script must run outside the sandbox. Direct Node/Python scripts use their shared environment loaders to reject `CODEX_SANDBOX` before business operations; `run-full-fetch.sh` and `scripts/backup-data.sh` have the same entry check. Unit-test module imports do not trigger it.
+> **Runtime precondition**: every project script must run outside the sandbox. Direct Node/Python scripts use their shared environment loaders to reject `CODEX_SANDBOX` before business operations; `run-daily-digest.sh`, `run-full-fetch.sh`, and `scripts/backup-data.sh` have the same entry check. Unit-test module imports do not trigger it.
 
 ### 4.1 Main Pipeline Scripts
+
+#### `run-daily-digest.sh`
+
+Default Codex orchestrator for a request to run a dated paper digest. The required date is passed to `full-fetch.js`, blog generate, review, push, post-publication visual planning, and `visual:prepare` in order. `--from fetch|generate|review|push|visual` supports resuming from the failed or corrected stage without repeating successful long-running work.
+
+The three blog stages remain separate processes, and any nonzero stage stops the script. The script never calls an image API. After it succeeds, Codex must still generate, inspect, and record every TOP 10 paper infographic and the digest cover with built-in `image_gen`, then require both `visual:status` and `cover:status` to be complete. npm entry: `npm run digest:prepare -- YYYY-MM-DD`.
 
 #### `scripts/full-fetch.js`
 
