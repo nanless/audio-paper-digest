@@ -347,6 +347,21 @@ function recordDigestCover({ sourcePath, taskToken, targetDate, manifestPath }) 
         } finally {
             if (fs.existsSync(temp)) fs.unlinkSync(temp);
         }
+        // 与论文长图相同：若调用方先把结果复制到归档目录，清理
+        // canonical 封面之外留下的同批次临时别名，避免目录出现两张封面。
+        const source = path.resolve(sourcePath);
+        const coverRoot = path.resolve(Config.FILES.digestCoverAssetDir, current.batchDate, 'visual-summaries');
+        const relative = path.relative(coverRoot, source);
+        if (source !== path.resolve(target) && relative && !relative.startsWith('..')
+            && !path.isAbsolute(relative) && path.basename(source).startsWith('00-digest-cover-')
+            && path.extname(source).toLowerCase() === '.png') {
+            try {
+                const sourceStat = fs.lstatSync(source);
+                if (sourceStat.isFile() && !sourceStat.isSymbolicLink()) fs.unlinkSync(source);
+            } catch (_error) {
+                // 临时源文件可能已由调用方清理，不影响已完成的 canonical 登记。
+            }
+        }
         const now = getBeijingISOString();
         return {
             ...current,

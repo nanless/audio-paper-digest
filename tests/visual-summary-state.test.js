@@ -444,6 +444,36 @@ describe('visual summary state', () => {
         }
     });
 
+    it('record 后清理同一归档目录中由调用方留下的非 canonical 临时副本', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-cleanup-'));
+        const manifestPath = path.join(dir, 'manifest.json');
+        const promptPath = path.join(dir, 'prompt.md');
+        fs.writeFileSync(promptPath, 'prompt');
+        const originalCurrentDir = Config.CURRENT_DIR;
+        const originalManifestDir = Config.FILES.visualSummaryManifestDir;
+        const originalAssetDir = Config.FILES.visualSummaryAssetDir;
+        try {
+            patchVisualDirs(path.join(dir, 'current'));
+            const planned = planVisualSummaries({
+                targetDate: '2026-07-13', papers: [paper()], manifestPath, promptPath
+            });
+            const root = path.join(Config.FILES.visualSummaryAssetDir, '2026-07-13', 'visual-summaries');
+            const sourcePath = path.join(root, '01-2607.12345-visual-summary-paper-extra.png');
+            fs.mkdirSync(root, { recursive: true });
+            fs.writeFileSync(sourcePath, PNG);
+            recordVisualSummaryCard({
+                arxivId: '2607.12345', kind: 'infographic', sourcePath,
+                taskToken: planned.papers['2607.12345'].cards.infographic.taskToken, manifestPath
+            });
+            assert.ok(!fs.existsSync(sourcePath));
+        } finally {
+            Config.CURRENT_DIR = originalCurrentDir;
+            Config.FILES.visualSummaryManifestDir = originalManifestDir;
+            Config.FILES.visualSummaryAssetDir = originalAssetDir;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
     it('历史归档命令按已发布排行榜编号并更新旧 manifest 资产路径', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-legacy-archive-'));
         const current = path.join(dir, 'current');

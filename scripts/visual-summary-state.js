@@ -458,6 +458,27 @@ function visualSummaryAssetPath(targetDate, arxivId, kind, rank, title = '') {
     );
 }
 
+/**
+ * Codex 可能先把生成结果复制到日期归档目录，再调用 record。
+ * record 会按统一 slug 计算 canonical 文件名；若两者不一致，必须
+ * 删除调用方留下的临时副本，否则同一论文会出现两张图。
+ */
+function cleanupGeneratedArchiveSource(sourcePath, target, { targetDate, rank, arxivId } = {}) {
+    if (!sourcePath || !target || !targetDate || !Number.isInteger(rank) || !arxivId) return;
+    const source = path.resolve(String(sourcePath));
+    const canonical = path.resolve(String(target));
+    if (source === canonical || !fs.existsSync(source)) return;
+    let stat;
+    try { stat = fs.lstatSync(source); } catch (_error) { return; }
+    if (!stat.isFile() || stat.isSymbolicLink() || path.extname(source).toLowerCase() !== '.png') return;
+    const root = path.resolve(Config.FILES.visualSummaryAssetDir, validateDate(targetDate), 'visual-summaries');
+    const relative = path.relative(root, source);
+    const prefix = `${String(rank).padStart(2, '0')}-${normalizedId(arxivId)}-`;
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)
+        || !path.basename(source).startsWith(prefix)) return;
+    fs.unlinkSync(source);
+}
+
 function removeEmptyDirectory(directory) {
     if (!fs.existsSync(directory)) return;
     const stat = fs.lstatSync(directory);
@@ -1041,6 +1062,11 @@ function recordVisualSummaryCard({
         } finally {
             if (fs.existsSync(temp)) fs.unlinkSync(temp);
         }
+        cleanupGeneratedArchiveSource(sourcePath, target, {
+            targetDate: current.batchDate,
+            rank: paper.rank,
+            arxivId: id
+        });
 
         const next = structuredClone(current);
         next.updatedAt = getBeijingISOString();
@@ -1225,6 +1251,7 @@ module.exports = {
     validatePngAsset,
     visualSummaryAssetPath,
     visualAssetTitleSlug,
+    cleanupGeneratedArchiveSource,
     migrateLegacyCompletedCard,
     archiveRemainingLegacyVisualAssets,
     archiveLegacyVisualManifestAssets,

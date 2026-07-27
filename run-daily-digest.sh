@@ -73,7 +73,11 @@ run_stage() {
   shift 2
   if [ "$start_index" -le "$stage_index" ]; then
     echo "==> 论文速递阶段: ${stage_name}"
-    "$@"
+    "$@" || {
+      status=$?
+      echo "❌ 阶段失败: ${stage_name}（退出码 ${status}），停止后续阶段。" >&2
+      return "$status"
+    }
   fi
 }
 
