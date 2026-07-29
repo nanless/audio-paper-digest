@@ -8,6 +8,7 @@ Paper Digest 发布公共模块 (Python)
 import json
 import math
 import os
+import random
 import re
 import subprocess
 import sys
@@ -529,7 +530,18 @@ def call_publish_llm_api(
             )
 
         if attempt < max_retries - 1:
-            time.sleep(2 ** attempt)
+            retry_after = None
+            if isinstance(last_error, urllib.error.HTTPError):
+                raw_retry_after = last_error.headers.get('Retry-After')
+                try:
+                    retry_after = float(raw_retry_after)
+                except (TypeError, ValueError):
+                    retry_after = None
+            # A malformed or extremely large Retry-After must not stall the
+            # whole review batch indefinitely. Formal review retries remain
+            # bounded while still respecting normal provider guidance.
+            base_delay = min(retry_after if retry_after is not None else 2 ** attempt, 60.0)
+            time.sleep(max(0.0, base_delay) + random.uniform(0.0, 0.5))
 
     if required:
         raise PublishLLMUnavailable(f'{context} 连续失败: {last_error}')
@@ -590,7 +602,10 @@ def validate_review_payload(review, *, required=False, context='LLM review', iss
                 'description': str(issue),
             })
             continue
-        missing = sorted(field for field in required_issue_fields if field not in issue)
+        issue_required_fields = set(required_issue_fields)
+        if issue.get('auto_fixable') is False:
+            issue_required_fields.discard('fix_instruction')
+        missing = sorted(field for field in issue_required_fields if field not in issue)
         if missing and required:
             return review_protocol_failure(
                 context,
@@ -631,7 +646,10 @@ def validate_review_payload(review, *, required=False, context='LLM review', iss
                 context,
                 f'issues[{index}].auto_fixable 必须是布尔值',
             )
-        if required and 'fix_instruction' in issue_fields and not isinstance(issue.get('fix_instruction'), str):
+        if required and 'fix_instruction' in issue_fields and (
+            issue.get('auto_fixable') is not False
+            and not isinstance(issue.get('fix_instruction'), str)
+        ):
             return review_protocol_failure(
                 context,
                 f'issues[{index}].fix_instruction 必须是字符串',
@@ -639,6 +657,8 @@ def validate_review_payload(review, *, required=False, context='LLM review', iss
         normalized = dict(issue)
         normalized['severity'] = severity
         normalized['description'] = str(description or '')
+        if 'fix_instruction' in issue_fields and issue.get('auto_fixable') is False:
+            normalized.setdefault('fix_instruction', '')
         normalized_issues.append(normalized)
 
     has_error = any(issue['severity'] == 'error' for issue in normalized_issues)

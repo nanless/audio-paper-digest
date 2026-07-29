@@ -15,6 +15,11 @@ const path = require('path');
 const cheerio = require('cheerio');
 const { buildFilterInputSha256 } = require('./lib/filter-input-contract.js');
 const {
+    KEYWORD_PREFILTER_VERSION,
+    evaluateKeywordPrefilter,
+    filterPapersByKeywords
+} = require('./lib/keyword-prefilter.js');
+const {
     writeFileAtomic,
     getBeijingISOString,
     normalizeToBeijingISOString,
@@ -1172,29 +1177,56 @@ async function filterPapersWithLLM(papers, options = {}) {
     const {
         batchSize = 5,
         delayBetweenBatches = 2000,
-        useKeywordPreFilter = false,
+        useKeywordPreFilter = FILTER_CFG.keywordPrefilterEnabled,
         initialDecisions = null,
         onBatchComplete = null,
         decisionFn = getSpeechAudioDecision,
         decisionMetadata = {}
     } = options;
 
-    console.log(`[filter] 开始筛选 ${papers.length} 篇论文（全部使用大模型）...`);
+    console.log(`[filter] 开始筛选 ${papers.length} 篇论文（关键词预筛 → 大模型复筛）...`);
 
     let papersToCheck = papers;
+    const keywordDecisions = new Map();
 
     if (useKeywordPreFilter) {
-        const keywordFiltered = filterPapersByKeywords(papers);
-        console.log(`[filter] 关键词预筛选：${papers.length} → ${keywordFiltered.length} 篇`);
-        papersToCheck = keywordFiltered;
+        const evaluated = papers.map(paper => ({ paper, result: evaluateKeywordPrefilter(paper) }));
+        papersToCheck = evaluated.filter(item => item.result.pass).map(item => item.paper);
+        for (const { paper, result } of evaluated) {
+            if (result.pass) continue;
+            const paperId = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
+            keywordDecisions.set(paperId, {
+                id: paperId,
+                paper_id: paper.paper_id || paper.arxivId || paper.id || paperId,
+                title: paper.title || '',
+                related: false,
+                reason: result.reason,
+                rawResponse: '',
+                parseSource: 'keyword_prefilter',
+                error: null,
+                fallback: false,
+                retryable: false,
+                decidedAt: getBeijingISOString(),
+                inputSha256: buildFilterInputSha256(paper),
+                keywordPrefilterVersion: result.version,
+                keywordMatchedGroups: result.matchedGroups,
+                keywordMatchedKeywords: result.matchedKeywords,
+                keywordCategoryFallback: result.categoryFallback,
+                keywordFailOpen: result.failOpen,
+                ...decisionMetadata
+            });
+        }
+        console.log(`[filter] 关键词预筛 v${KEYWORD_PREFILTER_VERSION}：${papers.length} 篇 → ${papersToCheck.length} 篇交给 LLM，确定性排除 ${keywordDecisions.size} 篇`);
+    } else {
+        console.log('[filter] 关键词预筛已禁用：全部候选交给 LLM');
     }
 
     const decisions = new Map();
     const retryableDecisions = new Map();
-    const currentPaperIds = new Set(papersToCheck
+    const currentPaperIds = new Set(papers
         .map(paper => normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '')
         .filter(Boolean));
-    const paperById = new Map(papersToCheck.map(paper => [normalizedId(paper), paper]));
+    const paperById = new Map(papers.map(paper => [normalizedId(paper), paper]));
     const loadDecision = (id, decision) => {
         const key = normalizedId(id);
         if (!key || !decision || typeof decision.related !== 'boolean' || decision.retryable || decision.fallback) return;
@@ -1211,8 +1243,11 @@ async function filterPapersWithLLM(papers, options = {}) {
             loadDecision(id, decision);
         }
     }
+    // 关键词排除是当前词表下的正式决定；它覆盖旧的 LLM 决定。词表/开关变化
+    // 由上层 filterConfigFingerprint 负责使整批缓存失效。
+    for (const [id, decision] of keywordDecisions) decisions.set(id, decision);
 
-    const getFilteredFromDecisions = () => papersToCheck.filter(paper => {
+    const getFilteredFromDecisions = () => papers.filter(paper => {
         const id = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
         return decisions.get(id)?.related === true;
     });
@@ -1238,6 +1273,25 @@ async function filterPapersWithLLM(papers, options = {}) {
     }
 
     console.log(`[filter] 分成 ${batches.length} 批处理，每批 ${batchSize} 篇`);
+
+    if (batches.length === 0 && typeof onBatchComplete === 'function') {
+        await onBatchComplete({
+            batchIndex: -1,
+            totalBatches: 0,
+            batchResults: [],
+            results: getFilteredFromDecisions(),
+            decisions: Object.fromEntries(decisions),
+            retryableDecisions: {},
+            stats: {
+                totalCandidates: papers.length,
+                llmCandidates: papersToCheck.length,
+                keywordRejected: keywordDecisions.size,
+                decided: decisions.size,
+                retryable: 0,
+                complete: decisions.size === papers.length
+            }
+        });
+    }
 
     for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
         const batch = batches[batchIndex];
@@ -1314,10 +1368,12 @@ async function filterPapersWithLLM(papers, options = {}) {
                 decisions: Object.fromEntries(decisions),
                 retryableDecisions: Object.fromEntries(retryableDecisions),
                 stats: {
-                    totalCandidates: papersToCheck.length,
+                    totalCandidates: papers.length,
+                    llmCandidates: papersToCheck.length,
+                    keywordRejected: keywordDecisions.size,
                     decided: decisions.size,
                     retryable: retryableDecisions.size,
-                    complete: decisions.size === papersToCheck.length && retryableDecisions.size === 0
+                    complete: decisions.size === papers.length && retryableDecisions.size === 0
                 }
             });
         }
@@ -1334,67 +1390,16 @@ async function filterPapersWithLLM(papers, options = {}) {
 
     const results = getFilteredFromDecisions();
     const filterStats = {
-        totalCandidates: papersToCheck.length,
+        totalCandidates: papers.length,
+        llmCandidates: papersToCheck.length,
+        keywordRejected: keywordDecisions.size,
         decided: decisions.size,
         retryable: retryableDecisions.size,
         retryableIds: Array.from(retryableDecisions.keys()),
-        complete: decisions.size === papersToCheck.length && retryableDecisions.size === 0
+        complete: decisions.size === papers.length && retryableDecisions.size === 0
     };
-    console.log(`[filter] 筛选阶段结束：${papers.length} 篇候选，明确决定 ${decisions.size} 篇，待重试 ${retryableDecisions.size} 篇，相关 ${results.length} 篇`);
+    console.log(`[filter] 筛选阶段结束：${papers.length} 篇候选，关键词排除 ${keywordDecisions.size} 篇，LLM 候选 ${papersToCheck.length} 篇，明确决定 ${decisions.size} 篇，待重试 ${retryableDecisions.size} 篇，相关 ${results.length} 篇`);
     return attachHealth(results, filterStats, '_filterStats');
-}
-
-/**
- * 基于关键词的预筛选（快速过滤明显不相关的论文）
- */
-function filterPapersByKeywords(papers) {
-    const speechAudioKeywords = [
-        'speech', 'audio', 'voice', 'acoustic', 'sound', 'speaker', 'tts', 'asr',
-        'vocoder', 'mel-spectrogram', 'waveform', 'spectrogram',
-        'text-to-speech', 'speech-to-text', 'speech synthesis', 'speech recognition',
-        'voice cloning', 'voice conversion', 'voice synthesis', 'voice generation',
-        'speech enhancement', 'speech separation', 'speech translation',
-        'speaker verification', 'speaker identification', 'speaker diarization',
-        'audio generation', 'audio synthesis', 'audio processing', 'audio understanding',
-        'music generation', 'music synthesis', 'audio deepfake', 'voice deepfake',
-        'keyword spotting', 'wake word', 'hotword',
-        'audio captioning', 'audio tagging', 'sound event detection',
-        'audio-visual speech', 'lip reading', 'lip sync',
-        'wav2vec', 'wav2vec2', 'hubert', 'whisper', 'vall-e', 'vall-e 2',
-        'tacotron', 'fastspeech', 'parallel wavegan', 'hifigan', 'bigvgan',
-        'diffusion model', 'flow matching', 'score-based',
-        'speech quality', 'mos prediction', 'pesq', 'stoi',
-        'noise suppression', 'echo cancellation', 'beamforming',
-        'microphone array', 'room acoustics', 'reverberation',
-        'end-to-end speech', 'self-supervised speech', 'speech representation',
-        '语音', '音频', '声音', '声学', '说话人', '语音合成', '语音识别',
-        '语音克隆', '语音转换', '语音增强', '语音分离', '语音翻译',
-        '音频生成', '音频理解', '音乐生成', '语音情感', '语音质量',
-        '端到端语音', '自监督语音', '语音表示', '语音模型'
-    ];
-
-    const coreCategories = ['eess.AS', 'cs.SD', 'eess.SP'];
-
-    return papers.filter(paper => {
-        const abstractText = paper.abstract || paper.summary || '';
-        if (abstractText.toLowerCase().includes('withdrawn') ||
-            abstractText.toLowerCase().includes('retracted')) {
-            return false;
-        }
-
-        const categories = Array.isArray(paper.categories) ? paper.categories : [];
-        const hasCoreCategory = categories.some(cat => coreCategories.includes(cat));
-        if (hasCoreCategory) {
-            return true;
-        }
-
-        const textToCheck = `${paper.title} ${abstractText}`.toLowerCase();
-        const hasKeyword = speechAudioKeywords.some(keyword =>
-            textToCheck.includes(keyword.toLowerCase())
-        );
-
-        return hasKeyword;
-    });
 }
 
 const filterPapers = filterPapersWithLLM;
@@ -1420,6 +1425,7 @@ module.exports = {
     redactProxyUrl,
     isSpeechAudioRelated,
     getSpeechAudioDecision,
+    evaluateKeywordPrefilter,
     filterPapersByKeywords,
     buildFilterInputSha256,
     loadPapers,

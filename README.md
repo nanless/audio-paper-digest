@@ -12,6 +12,10 @@
 
 发布后还生成一张批次汇总图，标题、热门方向和 TOP 10 排行榜均从已发布批次对应的审计数据确定性计算。论文长图与汇总图独立绑定数据、prompt、任务 token 和资产 SHA；重跑只补失败、缺失、损坏或指纹失效项。同一天全部生成图片扁平归档到 `data/archive/<日期>/visual-summaries/`：封面为 `00-digest-cover-<日期>.png`，论文长图为 `<两位排名>-<paper-id>-<title-slug>.png`，严格按最终 rank 而非生成完成顺序编号；图片不滞留在 current。它们不进入已经发布的博客清单，也不构成博客 generate/review/push 的前置门禁。
 
+LLM 筛选前默认执行高召回关键词预筛，核心音频类别提供兜底，明显无关论文不会消耗 LLM 配额。`npm run keyword:recall` 同时校验人工正负金标与历史有效正样本；已确认的历史 LLM 误筛必须显式记录理由，不计入有效正样本分母。日更结束后运行 `npm run digest:status -- --date YYYY-MM-DD`，统一验收抓取、筛选、分析、博客远端发布和两类视觉资产，并保存机器可读报告。
+
+深度分析采用分阶段证据预算控制 token：主分析仍覆盖全文，超长论文按全文位置和任务关键词均衡取样；开源扫描、审校重写、评分审计、方法/表格和结构修复只接收各自相关的证据切片，不再重复发送整篇论文。博客文本 review 默认由 4000 字提高到 8000 字一块，以减少每块重复的固定审查说明；所有预算都可在项目 `.env` 覆写并绑定恢复指纹。
+
 ---
 
 ## 文档说明
@@ -120,6 +124,8 @@ npm run batch
 
 # 只读校验当前 JSON 数据结构（含筛选决策缓存一致性）
 npm run validate:data
+npm run keyword:recall
+npm run digest:status -- --date YYYY-MM-DD
 
 # 全部博客发布后，幂等建立/续跑 TOP 10 论文长图与汇总图任务
 npm run visual:post-publish -- --date 2026-04-21

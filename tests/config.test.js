@@ -39,6 +39,8 @@ describe('config', () => {
         assert.strictEqual(Config.ANALYSIS_CONFIG.arxivPdfMaxBytes, 50 * 1024 * 1024);
         assert.strictEqual(Config.FILTER_CONFIG.batchSize, 5);
         assert.strictEqual(Config.FILTER_CONFIG.temperature, 0.3);
+        assert.strictEqual(Config.FILTER_CONFIG.keywordPrefilterEnabled, true);
+        assert.strictEqual(Config.FILTER_CONFIG.decisionContractVersion, 3);
         assert.strictEqual(Config.ARXIV_CONFIG.maxResultsPerCategory, 100);
         assert.strictEqual(Config.ARXIV_CONFIG.categoryDelayMs, 60000);
         assert.strictEqual(Config.HUGGINGFACE_CONFIG.maxPages, 20);
@@ -46,6 +48,13 @@ describe('config', () => {
         assert.strictEqual(Config.ARCHIVE_CONFIG.maxBackups, 10);
         assert.strictEqual(Config.ANALYSIS_CONFIG.imageMaxBytes, 6 * 1024 * 1024);
         assert.strictEqual(Config.ANALYSIS_CONFIG.imageTotalBase64Chars, 20 * 1024 * 1024);
+        assert.strictEqual(Config.ANALYSIS_CONFIG.fullTextMaxChars, 200000);
+        assert.strictEqual(Config.ANALYSIS_CONFIG.openSourceEvidenceMaxChars, 16000);
+        assert.strictEqual(Config.ANALYSIS_CONFIG.revisionEvidenceMaxChars, 60000);
+        assert.strictEqual(Config.ANALYSIS_CONFIG.scoringEvidenceMaxChars, 40000);
+        assert.strictEqual(Config.ANALYSIS_CONFIG.repairEvidenceMaxChars, 30000);
+        assert.strictEqual(Config.ANALYSIS_CONFIG.structureEvidenceMaxChars, 40000);
+        assert.strictEqual(Config.ANALYSIS_CONFIG.fullTextMinCharsForFull, 5000);
     });
 
     it('arXiv 分类包含核心和补充类别', () => {
@@ -108,9 +117,36 @@ describe('config', () => {
         });
     });
 
+    it('项目 .env 覆写各阶段证据字符预算', () => {
+        withProjectEnv(
+            [
+                'PD_ANALYSIS_FULL_TEXT_MAX_CHARS=180000',
+                'PD_OPENSOURCE_EVIDENCE_MAX_CHARS=18000',
+                'PD_REVISION_EVIDENCE_MAX_CHARS=70000',
+                'PD_SCORING_EVIDENCE_MAX_CHARS=50000',
+                'PD_REPAIR_EVIDENCE_MAX_CHARS=30000',
+                'PD_STRUCTURE_EVIDENCE_MAX_CHARS=35000'
+            ].join('\n'),
+            (Config) => {
+                assert.strictEqual(Config.ANALYSIS_CONFIG.fullTextMaxChars, 180000);
+                assert.strictEqual(Config.ANALYSIS_CONFIG.openSourceEvidenceMaxChars, 18000);
+                assert.strictEqual(Config.ANALYSIS_CONFIG.revisionEvidenceMaxChars, 70000);
+                assert.strictEqual(Config.ANALYSIS_CONFIG.scoringEvidenceMaxChars, 50000);
+                assert.strictEqual(Config.ANALYSIS_CONFIG.repairEvidenceMaxChars, 30000);
+                assert.strictEqual(Config.ANALYSIS_CONFIG.structureEvidenceMaxChars, 35000);
+            }
+        );
+    });
+
     it('项目 .env 覆写 PD_FILTER_BATCH_SIZE', () => {
         withProjectEnv('PD_FILTER_BATCH_SIZE=10', (Config) => {
             assert.strictEqual(Config.FILTER_CONFIG.batchSize, 10);
+        });
+    });
+
+    it('项目 .env 可显式禁用关键词预筛', () => {
+        withProjectEnv('PD_KEYWORD_PREFILTER_ENABLED=0', (Config) => {
+            assert.strictEqual(Config.FILTER_CONFIG.keywordPrefilterEnabled, false);
         });
     });
 

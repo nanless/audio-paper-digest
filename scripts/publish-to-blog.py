@@ -120,6 +120,17 @@ def get_blog_review_concurrency():
         value = 5
     return max(1, value)
 
+
+def get_blog_review_chunk_chars():
+    """Bound text-review chunks to reduce repeated prompt overhead safely."""
+    raw = os.environ.get("PD_BLOG_REVIEW_CHUNK_CHARS", "8000").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 8000
+    return min(16000, max(4000, value))
+
+
 def call_llm_api(
     prompt,
     max_tokens=800,
@@ -129,6 +140,7 @@ def call_llm_api(
     timeout=120,
     images=None,
     use_secondary=False,
+    max_retries=5,
 ):
     """调用发布阶段公共 LLM API client。"""
     return call_publish_llm_api(
@@ -138,6 +150,7 @@ def call_llm_api(
         required=required,
         context=context,
         timeout=timeout,
+        max_retries=max_retries,
         images=images,
         use_secondary=use_secondary,
     )
@@ -344,6 +357,7 @@ def repair_review_payload(
                 context=f'{context} 协议重试',
                 images=retry_images,
                 use_secondary=use_secondary,
+                max_retries=2,
             )
             review = parse_review_json(retried)
             return validate_review_payload(
@@ -385,6 +399,7 @@ def repair_review_payload(
             required=True,
             context=f'{context} 格式修复',
             use_secondary=use_secondary,
+            max_retries=1,
         )
         review = parse_review_json(repaired)
         return validate_review_payload(
@@ -409,6 +424,7 @@ def repair_review_payload(
                 context=f'{context} 协议重试',
                 images=retry_images,
                 use_secondary=use_secondary,
+                max_retries=2,
             )
             review = parse_review_json(retried)
             return validate_review_payload(
@@ -536,7 +552,7 @@ def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1')
 
 def llm_review_post(content, title="", required=False):
     """Review every chunk of a post and return merged issues and fixes."""
-    chunks = split_review_content(content, 4000)
+    chunks = split_review_content(content, get_blog_review_chunk_chars())
     all_issues = []
     passed = True
     chunk_results = [None] * len(chunks)
@@ -1734,6 +1750,38 @@ def review_and_fix_post(file_path):
     original = content
     issues = []
 
+    # Exact long-prose duplication is deterministic and safe to remove before
+    # spending LLM review calls. Tables, lists, headings, code and images are
+    # excluded so grouped table continuation rows remain untouched.
+    frontmatter_match = re.match(r'^---\n.*?\n---\n', content, flags=re.DOTALL)
+    prose_prefix = frontmatter_match.group(0) if frontmatter_match else ''
+    prose_body = content[len(prose_prefix):]
+    blocks = re.split(r'(\n{2,})', prose_body)
+    seen_prose = set()
+    duplicate_count = 0
+    for index in range(0, len(blocks), 2):
+        block = blocks[index]
+        normalized = re.sub(r'\s+', ' ', block).strip()
+        protected = (
+            len(normalized) < 80
+            or normalized.startswith(('---', '#', '|', '-', '*', '>', '```', '~~~', '!['))
+            or '\n|' in block
+            or re.search(r'!\[[^\]]*\]\([^)]+\)', block)
+        )
+        if protected:
+            continue
+        fingerprint = unicodedata.normalize('NFKC', normalized).casefold()
+        if fingerprint in seen_prose:
+            blocks[index] = ''
+            if index + 1 < len(blocks):
+                blocks[index + 1] = ''
+            duplicate_count += 1
+        else:
+            seen_prose.add(fingerprint)
+    if duplicate_count:
+        content = prose_prefix + ''.join(blocks)
+        issues.append(f"发现并删除 {duplicate_count} 个完全重复的长正文段落")
+
     # 0. 修复 UTF-8 乱码字符（U+FFFD），从上下文推断正确汉字
     # 先统一检测，再统一修复，避免逐词替换时的顺序问题
     garbled_count = content.count('\ufffd')
@@ -1818,6 +1866,38 @@ def review_and_fix_post(file_path):
     if broken_links:
         issues.append(f"发现 {len(broken_links)} 个空链接，已修复")
         content = fix_empty_markdown_links(content)
+
+    # Deterministic Markdown table shape validation. This only checks tables
+    # with an explicit separator row and never treats an empty leading group
+    # cell as a heading or removes legal continuation rows.
+    table_lines = content.splitlines()
+    for index, line in enumerate(table_lines):
+        if not re.match(r'^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$', line):
+            continue
+        expected_columns = len(re.findall(r'(?<!\\)\|', line)) - 1
+        start = index - 1
+        end = index + 1
+        while start >= 0 and table_lines[start].lstrip().startswith('|'):
+            start -= 1
+        while end < len(table_lines) and table_lines[end].lstrip().startswith('|'):
+            end += 1
+        malformed = []
+        for row_index in range(start + 1, end):
+            row = table_lines[row_index]
+            columns = len(re.findall(r'(?<!\\)\|', row)) - 1
+            if columns != expected_columns:
+                malformed.append((row_index + 1, columns))
+        if malformed:
+            detail = ', '.join(f'第{row}行={columns}列' for row, columns in malformed)
+            issues.append(f"Markdown 表格列数不一致：期望 {expected_columns} 列，{detail}")
+
+    # Very long captions cut at a fixed character budget commonly end in the
+    # middle of a word. Flag them before multimodal review instead of asking a
+    # vision model to infer missing caption text.
+    for alt in re.findall(r'!\[([^\]]*)\]\([^)]+\)', content):
+        stripped = alt.strip()
+        if len(stripped) >= 180 and re.search(r'[A-Za-z]{2,}$', stripped):
+            issues.append(f"图片 alt/caption 疑似被截断：{stripped[:80]}…")
 
     # 11.5 检查并修复空/重复图片 alt
     deduped_content = dedupe_image_alts(content)
@@ -2813,6 +2893,7 @@ def review_protocol_fingerprint():
         'primaryEndpoint': os.environ.get('PAPER_ANALYZER_ENDPOINT', ''),
         'secondaryModel': os.environ.get('PAPER_ANALYZER_SECONDARY_MODEL', ''),
         'secondaryEndpoint': os.environ.get('PAPER_ANALYZER_SECONDARY_ENDPOINT', ''),
+        'reviewChunkChars': get_blog_review_chunk_chars(),
         'hugoIdentity': hugo_identity,
     })
     if cache_key in _REVIEW_PROTOCOL_CACHE:
@@ -2833,6 +2914,7 @@ def review_protocol_fingerprint():
         'secondaryEndpoint': os.environ.get('PAPER_ANALYZER_SECONDARY_ENDPOINT', ''),
         'textTemperature': 0.1,
         'imageTemperature': 0.1,
+        'reviewChunkChars': get_blog_review_chunk_chars(),
         'hugoVersion': hugo_version,
     })
     _REVIEW_PROTOCOL_CACHE.clear()

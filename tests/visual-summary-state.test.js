@@ -159,6 +159,14 @@ describe('visual summary state', () => {
                 targetDate: '2026-07-13', papers: [input], manifestPath, promptPath
             });
             assert.deepStrictEqual(first.papers['2607.12345'].generationContext.referenceImages, references);
+            assert.strictEqual(
+                first.papers['2607.12345'].generationContext.qaClaims.exactEnglishTitle,
+                'Visual summary paper'
+            );
+            assert.deepStrictEqual(
+                first.papers['2607.12345'].generationContext.qaClaims.requiredSections,
+                ['研究问题与核心贡献', '方法模块与信号流', '关键实验发现', '结论与局限']
+            );
             assert.deepStrictEqual(first.papers['2607.12345'].generationContext.rendering, {
                 mode: 'full_image_generation_v2',
                 renderer: 'built-in image_gen',

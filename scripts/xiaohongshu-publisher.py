@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 from project_env import BROWSER_CHILD_ENV_KEYS, TRANSPORT_ENV_KEYS, build_child_process_env, load_project_env
 load_project_env()
 

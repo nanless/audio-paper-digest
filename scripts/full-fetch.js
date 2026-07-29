@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { fetchCategoryPapers, filterPapersWithLLM, buildFilterInputSha256 } = require('./fetch-papers.js');
+const { KEYWORD_PREFILTER_VERSION } = require('./lib/keyword-prefilter.js');
 const { fetchHuggingFacePapers, mergeAndDeduplicate } = require('./fetch-huggingface-papers.js');
 const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson, loadPublishedIdsFromBlog, loadPrompt, detectApiType } = require('./utils.js');
 const {
@@ -72,7 +73,9 @@ function getFilterConfigFingerprint(filterPromptHash = getFilterPromptHash()) {
         temperature: Config.FILTER_CONFIG.temperature,
         maxTokens: Config.FILTER_CONFIG.maxTokens,
         promptHash: filterPromptHash,
-        decisionContractVersion: Config.FILTER_CONFIG.decisionContractVersion
+        decisionContractVersion: Config.FILTER_CONFIG.decisionContractVersion,
+        keywordPrefilterEnabled: Config.FILTER_CONFIG.keywordPrefilterEnabled,
+        keywordPrefilterVersion: KEYWORD_PREFILTER_VERSION
     });
 }
 
@@ -600,6 +603,15 @@ function writeFilterArtifacts({
 }) {
     const timestamp = stats.batchStartedAt || getBeijingISOString();
     const coverage = validateFilterDecisionCoverage(allPapersFiltered, filterDecisions);
+    const keywordRejected = Object.values(filterDecisions || {})
+        .filter(decision => decision?.parseSource === 'keyword_prefilter').length;
+    const keywordStats = {
+        keywordPrefilterEnabled: Config.FILTER_CONFIG.keywordPrefilterEnabled,
+        keywordPrefilterVersion: KEYWORD_PREFILTER_VERSION,
+        keywordRejected,
+        llmCandidates: Math.max(0, coverage.totalCandidates - keywordRejected),
+        llmDecided: Math.max(0, coverage.decided - keywordRejected)
+    };
     if (complete && !coverage.complete) {
         throw new Error(`筛选决策覆盖不完整，禁止标记 complete：明确决定 ${coverage.decided}/${coverage.totalCandidates}，待重试/缺失 ${coverage.missingIds.join(', ') || '无'}`);
     }
@@ -622,7 +634,8 @@ function writeFilterArtifacts({
             decided: coverage.decided,
             related: filtered.length,
             retryable: Object.keys(retryableDecisions).length,
-            complete: artifactComplete
+            complete: artifactComplete,
+            ...keywordStats
         },
         decisions: filterDecisions,
         retryableDecisions
@@ -645,6 +658,7 @@ function writeFilterArtifacts({
         fetchSourcesSha256: stats.fetchSourcesSha256,
         stats: {
             ...stats,
+            ...keywordStats,
             afterFilter: filtered.length,
             decisionCount: Object.keys(filterDecisions).length
         },
@@ -668,7 +682,7 @@ async function resumeFilterStage({
     const filtered = await filterPapersWithLLM(allPapersFiltered, {
         batchSize: Config.FILTER_CONFIG.batchSize,
         delayBetweenBatches: Config.FILTER_CONFIG.delayBetweenBatchesMs,
-        useKeywordPreFilter: false,
+        useKeywordPreFilter: Config.FILTER_CONFIG.keywordPrefilterEnabled,
         initialDecisions: filterDecisions,
         decisionMetadata: { filterModel, filterPromptHash },
         onBatchComplete: async ({ results, decisions, retryableDecisions }) => {
@@ -744,6 +758,11 @@ async function resumeFilterStage({
         blogDedupFingerprint: baseFilterStats.blogDedupFingerprint,
         stats: {
             ...baseFilterStats,
+            keywordPrefilterEnabled: Config.FILTER_CONFIG.keywordPrefilterEnabled,
+            keywordPrefilterVersion: KEYWORD_PREFILTER_VERSION,
+            keywordRejected: Object.values(filterDecisions).filter(decision => decision?.parseSource === 'keyword_prefilter').length,
+            llmCandidates: allPapersFiltered.length - Object.values(filterDecisions).filter(decision => decision?.parseSource === 'keyword_prefilter').length,
+            llmDecided: Object.values(filterDecisions).filter(decision => decision?.parseSource !== 'keyword_prefilter').length,
             afterBlogSkip: allPapersFiltered.length,
             afterFilter: filtered.length,
             afterArchiveSkip: filteredNew.length,
@@ -1322,7 +1341,7 @@ async function runFullFetch() {
         filtered = await filterPapersWithLLM(allPapersFiltered, {
             batchSize: Config.FILTER_CONFIG.batchSize,
             delayBetweenBatches: Config.FILTER_CONFIG.delayBetweenBatchesMs,
-            useKeywordPreFilter: false,
+            useKeywordPreFilter: Config.FILTER_CONFIG.keywordPrefilterEnabled,
             initialDecisions: filterDecisions,
             decisionMetadata: {
                 filterModel,
@@ -1409,6 +1428,11 @@ async function runFullFetch() {
             ...candidateFingerprints,
             stats: {
                 ...baseFilterStats,
+                keywordPrefilterEnabled: Config.FILTER_CONFIG.keywordPrefilterEnabled,
+                keywordPrefilterVersion: KEYWORD_PREFILTER_VERSION,
+                keywordRejected: Object.values(filterDecisions).filter(decision => decision?.parseSource === 'keyword_prefilter').length,
+                llmCandidates: allPapersFiltered.length - Object.values(filterDecisions).filter(decision => decision?.parseSource === 'keyword_prefilter').length,
+                llmDecided: Object.values(filterDecisions).filter(decision => decision?.parseSource !== 'keyword_prefilter').length,
                 afterBlogSkip: allPapersFiltered.length,
                 afterFilter: filtered.length,
                 afterArchiveSkip: filteredNew.length,

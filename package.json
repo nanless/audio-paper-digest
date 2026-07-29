@@ -11,6 +11,8 @@
     "reanalyze": "node scripts/reanalyze.js",
     "batch": "node scripts/batch-analyze.js",
     "validate:data": "node scripts/validate-data-files.js",
+    "keyword:recall": "node scripts/evaluate-keyword-prefilter.js",
+    "digest:status": "node scripts/digest-run-report.js",
     "visual:post-publish": "python3 scripts/plan-post-publish-visuals.py",
     "visual:render:debug": "python3 scripts/render-visual-summary.py",
     "visual:prepare": "node scripts/visual-summary-state.js prepare",

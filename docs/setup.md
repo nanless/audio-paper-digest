@@ -27,6 +27,12 @@
 | `PD_ANALYSIS_CONCURRENCY` | 深度分析并发度 | 3 |
 | `PD_ANALYSIS_MAX_RETRIES` | 深度分析单篇重试次数 | 2 |
 | `PD_ANALYSIS_REPAIR_MAX_TOKENS` | 审校、表格、方法与结构局部修复的输出 token 上限 | 16000 |
+| `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` | 主分析超长全文的跨文档取样字符预算 | 200000 |
+| `PD_OPENSOURCE_EVIDENCE_MAX_CHARS` | 开源扫描的任务相关证据字符预算 | 16000 |
+| `PD_REVISION_EVIDENCE_MAX_CHARS` | 审校重写的任务相关证据字符预算 | 60000 |
+| `PD_SCORING_EVIDENCE_MAX_CHARS` | 最终评分审计的任务相关证据字符预算 | 40000 |
+| `PD_REPAIR_EVIDENCE_MAX_CHARS` | 方法与表格局部修复的任务相关证据字符预算 | 30000 |
+| `PD_STRUCTURE_EVIDENCE_MAX_CHARS` | 最终结构修复的任务相关证据字符预算 | 40000 |
 | `PD_REANALYZE_CONCURRENCY` | 重分析并发度 | 3（与 `ANALYSIS_CONFIG.concurrency` 一致） |
 | `PD_FILTER_BATCH_SIZE` | LLM 筛选每批篇数 | 5 |
 | `PD_ARXIV_MAX_RESULTS` | arXiv 每类抓取数量 | 100 |
@@ -60,6 +66,7 @@
 | `PAPER_DIGEST_REPO_URL` | 小红书等文案中附带的项目仓库地址 | `github.com/nanless/audio-paper-digest` |
 | `PAPER_DIGEST_GITHUB_REMOTE` | Git 远程仓库名称 | `origin` |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 独立论文页三层 review 并发度（汇总页仍先串行审查） | `5` |
+| `PD_BLOG_REVIEW_CHUNK_CHARS` | 文本 review 分块字符数；限制为 4000–16000，值变化会使 review 协议凭证失效 | `8000` |
 
 发布阶段的 LLM 调用会记录请求开始、响应/异常、单次耗时、prompt 长度和图片数；日志不会输出 API key、认证头或正文内容。若日志只出现 `→` 而没有 `✓` 或失败行，表示进程在 HTTP 请求尚未返回时被外部终止，不能据此签发审查凭证或推送。
 

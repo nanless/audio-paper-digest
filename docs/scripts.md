@@ -95,7 +95,8 @@ arXiv 抓取与 LLM 筛选模块。
   - `fetchCategoryPapers()`：自动三级降级，每步获取足够即跳过后续
   - `fetchAbstracts()`：从 arXiv abs 页面批量抓取摘要（并发 5）
 - 筛选阶段统一使用 `PAPER_ANALYZER_*` 环境变量；LLM 请求强制 `agent: false` 直连，HTTP CONNECT 代理仅用于抓取侧请求
-- 关键词预筛选函数 `filterPapersByKeywords` 保留但当前主流程未启用
+- LLM 前默认启用高召回关键词预筛：明确命中音频任务/模态/方法词族，或命中核心音频 arXiv 类别时进入 LLM；明显无关论文在本地淘汰。筛选决定仍以 LLM 为准
+- `npm run keyword:recall` 同时运行人工正负金标门禁与历史回放。历史 LLM 入选中的已知误筛必须在 `tests/fixtures/keyword-prefilter-gold.json` 留下 ID 和理由；退出码只接受金标零漏召回、零误放且裁决后历史有效正样本零漏召回
 - XML 解析为 regex 实现（arXiv API 格式稳定）
 
 #### `scripts/config.js`
@@ -104,7 +105,7 @@ arXiv 抓取与 LLM 筛选模块。
 
 **运行数据路径（`FILES`）**
 
-`Config.FILES` 统一登记当前流程会读写的核心 JSON 文件：`papers` / `rawCandidates` / `filterDecisions` / `filteredPapers` / `deepAnalysisResult` / `analyzed`，以及仍需兼容的 legacy 路径。新增脚本不要手写 `data/current/*.json` 路径，优先复用这里的常量。
+`Config.FILES` 统一登记当前流程会读写的核心 JSON 文件：`papers` / `rawCandidates` / `filterDecisions` / `filteredPapers` / `deepAnalysisResult` / `analyzed`、`digestRunReportDir`，以及仍需兼容的 legacy 路径。新增脚本不要手写 `data/current/*.json` 路径，优先复用这里的常量。
 
 **分析配置（`ANALYSIS_CONFIG`）**
 
@@ -123,7 +124,12 @@ arXiv 抓取与 LLM 筛选模块。
 | 单张 base64 上限 | 8M 字符 | `PD_IMAGE_MAX_BASE64_CHARS` | 单张图片转 base64 上限 |
 | 单篇图片 base64 总上限 | 20M 字符 | `PD_IMAGE_TOTAL_BASE64_CHARS` | 防止多图请求体过大 |
 | 每篇实际插图上限 | 4 张 | `PD_IMAGE_INSERTION_MAX` | 按副模型价值顺序截断，且只接受精确 anchor |
-| 全文上限 | 500K 字符 | — | arXiv HTML 正文截取上限 |
+| 主分析全文预算 | 200K 字符 | `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` | 超长 arXiv HTML/PDF 正文按全文位置和任务关键词确定性取样 |
+| 开源扫描证据预算 | 16K 字符 | `PD_OPENSOURCE_EVIDENCE_MAX_CHARS` | 优先保留 URL、仓库、权重、数据集和发布承诺 |
+| 审校重写证据预算 | 60K 字符 | `PD_REVISION_EVIDENCE_MAX_CHARS` | 跨全文保留方法、实验、限制和关键数字 |
+| 评分审计证据预算 | 40K 字符 | `PD_SCORING_EVIDENCE_MAX_CHARS` | 与已有分析证据账本共同送审 |
+| 方法/表格修复证据预算 | 30K 字符 | `PD_REPAIR_EVIDENCE_MAX_CHARS` | 分别按方法词和实验/指标词选取 |
+| 结构修复证据预算 | 40K 字符 | `PD_STRUCTURE_EVIDENCE_MAX_CHARS` | 为缺失章节提供跨文档证据 |
 | arXiv HTML/图片发现超时 | 60s | `PD_ARXIV_FETCH_TIMEOUT_MS` | HTML 正文与图片列表请求超时 |
 | arXiv PDF fallback 超时 | 180s | `PD_ARXIV_PDF_TIMEOUT_MS` | HTML 不可用时的单次 PDF 下载超时 |
 
@@ -211,38 +217,38 @@ HuggingFace Papers 抓取模块。
 多模态深度分析器。分析流程为 **最多 8 轮递进式处理**，不是单次调用：
 
 **Round 1 — 主深度分析**
-- `analyzePaperDeep(paper)`：获取 arXiv HTML 全文（最多 500K 字符）+ 预筛候选图片；双模型模式才串行下载候选图片并由副模型最终筛选高价值图片插入正文，单模型模式只保存候选图元数据；`allImageUrls` 保存候选图，`selectedImageUrls` / `imageUrls` 保存已选图
+- `analyzePaperDeep(paper)`：获取 arXiv HTML/PDF 全文；主分析默认最多使用 200K 字符，超长来源按开头、四分位、中部、尾部和任务关键词跨全文取样，而不是只截取前缀。随后预筛候选图片；双模型模式才串行下载候选图片并由副模型最终筛选高价值图片插入正文，单模型模式只保存候选图元数据；`allImageUrls` 保存候选图，`selectedImageUrls` / `imageUrls` 保存已选图
 - 加载 `prompts/deep-analysis.md`，替换占位符后调用 LLM
 - 输出包含：文档类型、评分、机器摘要、标签、作者与机构、毒舌点评、核心摘要、方法概述和架构、核心创新点、实验结果、细节详述、评分理由、局限与问题、开源详情
 - `parseAnalysis(analysis)`：将分析文本解析为结构化对象，归一化 `document_type` 并为新结果写入 `type-aware-v1` 版本。只有八个分项完整、唯一、分母正确且分值合法时才重算 `score` 并封顶为 10；其余情况返回 `scoreValidation` 错误并阻断保存/发布
 
 **Round 2 — 开源扫描（`scanOpensource`）**
 - 加载 `prompts/opensource-scan.md`
-- 从论文文本中提取 GitHub / HuggingFace / ModelScope 等开源链接
+- 从默认 16K 的开源任务证据中提取 GitHub / HuggingFace / ModelScope 等开源链接，不重复发送完整全文
 - 补充到 `## 开源详情` 章节
 
 **Round 3 — 审校重写（`reviseAnalysis`）**
 - 加载 `prompts/gap-fill.md`
-- 对比原始论文与 Round 1 输出，检查缺失、错误、过度推断
+- 使用默认 60K 的跨全文任务证据对比 Round 1 输出，检查缺失、错误、过度推断
 - 生成修订版分析文本，覆盖原有内容
 
 **Round 4 — 表格修复（`checkAndFixTables`）**
 - 加载 `prompts/table-fill.md`
 - 检测 `## 实验结果` 中缺失的 Markdown 表格
-- 若发现表格被省略或截断，触发 LLM 补充完整表格
+- 若发现表格被省略或截断，使用默认 30K 的实验/数字相关证据触发 LLM 补充完整表格
 
 **Round 5 — 方法章节修复（`checkAndFixMethodSection`）**
 - 加载 `prompts/method-fill.md`
 - 检测 `## 方法概述和架构` 是否过于简略（少于 600 中文字符、表述模糊、不足 3 段）
-- 若满足条件，触发 LLM 扩展至 600+ 字符的详细描述
+- 若满足条件，使用默认 30K 的方法/架构相关证据触发 LLM 扩展至 600+ 字符的详细描述
 
 **Round 6 — 最终结构修复（`repairMissingAnalysisSections`，按需）**
 - 通过 `scripts/analysis-contract.js` 检查 13 个必要章节
-- 缺失时加载 `prompts/structure-repair.md`，把缺失标题和上次校验反馈交给主模型；完整结果不调用本轮
+- 缺失时加载 `prompts/structure-repair.md`，把缺失标题、上次校验反馈和默认 40K 的跨文档证据交给主模型；完整结果不调用本轮
 
 **Round 7 — 类型感知评分审计（`auditTypeAwareScoring`）**
 - 加载 `prompts/scoring-audit.md`，由主模型只输出 JSON
-- 重新审计文档类型、置信度和八维评分；跨维度理由失败时把精确错误反馈给下一次局部审计
+- 使用默认 40K 的评分相关证据账本重新审计文档类型、置信度和八维评分；跨维度理由失败时把精确错误反馈给下一次局部审计
 - 非理论论文无核心产物时按肯定语境承诺开放 0.5、带 URL/肯定结构化状态的 Demo 0.2、否定或未提及 0 确定性归一化；理论研究保留基于公开证明材料的文类判断
 - 代码只更新评分章节、机器摘要评分字段和评分理由，正文保持不变
 
@@ -262,6 +268,7 @@ HuggingFace Papers 抓取模块。
 - 使用 `visual-summary-state.js record --date YYYY-MM-DD --paper ID --kind infographic --file PNG --token TOKEN` 登记。脚本验证 PNG、最小尺寸、纵横比、大小、SHA 和 task token 后，按 manifest 最终排名原子保存到同一个 `data/archive/<date>/visual-summaries/`，文件名为 `<两位排名>-<paper-id>-<title-slug>.png`；并发完成顺序不会影响编号
 - 调用内置生图前运行 `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]`。命令只物化输入，不调用图像 API；它校验 `.bin` 缓存受控路径、SHA、字节数、MIME 与文件头，再输出具有正确 `.png/.jpg/.webp` 扩展名的 `referencedImagePaths`，避免直接上传 `.bin` 触发图片服务错误
 - 汇总图从同批次审计论文确定性计算标题、热门方向计数和 TOP 10 排名，并复用博客 generation manifest 的 category；用 `digest-cover-state.js record` 登记到同一目录的 `data/archive/<date>/visual-summaries/00-digest-cover-<date>.png`
+- 每篇视觉任务的 `generationContext.qaClaims` 提供完整英文标题、四个必要内容区、方法声明、带数字实验声明、局限和参考图 caption；提示词和登记前目检必须逐项核对
 - 旧版 `data/current/visual-summaries/` 和 `data/current/digest-covers/` 资产会在下一次 plan 时校验 PNG 与 SHA，确认归档目标无冲突后迁移
 - 对缺少新版远端 OID 字段、不能重新 plan 的历史批次，使用 `npm run visual:archive -- --date YYYY-MM-DD` 和 `npm run cover:archive -- --date YYYY-MM-DD`；命令只迁移已有资产并更新 manifest，不创建任务或伪造发布凭证。旧 generation manifest 会与同日归档分析论文集合交叉校验后计算排名，非 TOP10 旧卡片归入 `unranked-<paper>`
 - 两类状态互相独立：论文分析/prompt 变化只失效对应长图，论文集合、分数、主任务标签或封面 prompt 变化只失效封面。`visual:status` / `cover:status` 非零时，下一轮仅补 pending/failed、损坏或指纹失效的资产
@@ -390,7 +397,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 
 **发布流程**：
 1. `generate-blog.py` 只生成并安装 `.md`，然后写入 `blog-generation-manifest-YYYY-MM-DD.json`；不调用 LLM，不提交、不推送。
-2. `review-blog.py` 只读取 generation manifest 对已生成文件执行代码、LLM 和多模态图片三层 review 以及 Hugo gate；首次失败写入 `blog-review-failure-YYYY-MM-DD.json`。修复后在清单、博客 `main` 基线和已通过文件 SHA-256 均不变时只复审已修改的失败页面，否则自动退回全量；通过后写入带逐文件 SHA-256 的 `blog-review-receipt-YYYY-MM-DD.json`，不执行 Git 发布。
+2. `review-blog.py` 只读取 generation manifest 对已生成文件执行代码、LLM 和多模态图片三层 review 以及 Hugo gate；首次失败写入 `blog-review-failure-YYYY-MM-DD.json`。修复后在清单、博客 `main` 基线和已通过文件 SHA-256 均不变时只复审已修改的失败页面，否则自动退回全量；通过后写入带逐文件 SHA-256 的 `blog-review-receipt-YYYY-MM-DD.json`，不执行 Git 发布。HTTP 重试优先服从 `Retry-After`，否则指数退避并加入短随机抖动；协议格式修复和完整协议重试使用更小预算，避免错误响应形成长时间重试风暴。
 3. `push-blog.py` 只验证审查凭证与工作树文件哈希完全一致，再精确 stage → 中文详细 commit → `git push origin HEAD:main` → 验证远端 OID；该脚本不生成也不 review。
 4. GitHub Actions 自动构建并部署到 Pages。
 
@@ -408,7 +415,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 - 若需发布全部论文（不过滤），显式传 `--all`
 
 **Review 环节**：
-生成阶段先从 `analysis` 重解析评分，并与缓存 `parsed`、顶层评分版本比较。review 阶段执行代码正则、LLM 文本和多模态图片三层 review；汇总页文本分块与独立论文页默认以 5 并发执行，可用 `PD_BLOG_REVIEW_CONCURRENCY` 调整。任何不确定 review 都按错误阻断，未生成严格审查凭证时 push 阶段必须失败。
+生成阶段先从 `analysis` 重解析评分，并与缓存 `parsed`、顶层评分版本比较。review 阶段执行代码正则、LLM 文本和多模态图片三层 review；文本默认按 8000 字符分块，可用 `PD_BLOG_REVIEW_CHUNK_CHARS` 在 4000–16000 范围内调整，分块值进入 review 协议指纹。汇总页先审查，独立论文页默认以 5 并发执行，可用 `PD_BLOG_REVIEW_CONCURRENCY` 调整。任何不确定 review 都按错误阻断，未生成严格审查凭证时 push 阶段必须失败。
 
 代码层自动修复覆盖以下问题：
 三层 review 分块会保持连续 Markdown 表格行的完整性，避免将表头与分隔行分到不同请求后产生伪误报。多模态 review 只对成功加载的图片同步追加上下文与 payload，个别图片下载失败不会使后续图片错配到前一张图的正文。
@@ -421,10 +428,17 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 6. 未闭合的 LaTeX `$ \mathcal{L}_D \(` → 转为 `\(\mathcal{L}_D\)`
 7. 错乱的 LaTeX 括号（`\)\mathcal{L}_X\(`）→ 统一修正为 `\(\mathcal{L}_X\)`
 8. 双反斜杠 LaTeX（`\(\\mathcal{L}_X\)`）→ 修正为 `\(\mathcal{L}_X\)`
+9. 正文中完全重复的长段落 → 在 LLM 前确定性去重
+10. Markdown 表格列数不一致 → 直接阻断；前导分组列为空且列数一致的合法续行保持不变
+11. 疑似在英文单词中途截断的超长图片说明 → 直接阻断
 
 Markdown 表格允许前导分组列为空；代码层不得把这类合法阶段续行当作子标题删除。LLM 提出的“普通模型名/技术术语必须加反引号”属于样式伪问题，会被过滤。
 
-LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，按 `fix_instruction` 执行简单文本替换。博客 review 与小红书 one-liner 共用 `publish_common.py` 中的 `call_publish_llm_api()`，协议路由与 Node 端保持一致；客户端使用标准库的显式空代理处理器强制 LLM 直连，避免受 `requests` 版本兼容性和抓取代理污染影响；Anthropic 兼容请求会动态读取本地 `claude --version` 生成 `User-Agent`，失败时回退默认版本。
+LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，必须带 `fix_instruction` 并按其执行简单文本替换；`auto_fixable: false` 的阻断问题允许省略修复指令。博客 review 与小红书 one-liner 共用 `publish_common.py` 中的 `call_publish_llm_api()`，协议路由与 Node 端保持一致；客户端使用标准库的显式空代理处理器强制 LLM 直连，避免受 `requests` 版本兼容性和抓取代理污染影响；Anthropic 兼容请求会动态读取本地 `claude --version` 生成 `User-Agent`，失败时回退默认版本。
+
+#### `scripts/digest-run-report.js`
+
+按 `--date YYYY-MM-DD` 汇总抓取、筛选、深度分析、博客 review/远端发布、TOP 10 长图和汇总封面状态，原子写入 `data/current/digest-run-reports/<date>.json`。只有所有必需阶段完整才返回 0；用于日更结束后的统一机器门禁，不会修改任一业务阶段状态。
 
 **重要限制**：`fetchedAt` 是抓取时间，不是论文在 arXiv 上的 `published` 日期。跨天运行时请显式指定 `--date`。
 

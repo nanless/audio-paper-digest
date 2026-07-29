@@ -67,7 +67,8 @@ const FILTER_CONFIG = {
     delayBetweenBatchesMs: 2000,
     temperature: 0.3,
     maxTokens: 1000,
-    decisionContractVersion: 2
+    decisionContractVersion: 3,
+    keywordPrefilterEnabled: true
 };
 
 // ═══════════════════════════════════════════════════════
@@ -97,8 +98,17 @@ const ANALYSIS_CONFIG = {
     imageMaxCount: 20,
     imageCandidateMax: 20,
     imageInsertionMax: 4,
-    fullTextMaxChars: 500000,
-    fullTextMinCharsForFull: 500
+    // 主分析保留较大的全文上下文；超长论文使用跨全文均衡取样，而不是只截取开头。
+    fullTextMaxChars: 200000,
+    // 后处理阶段只读取任务相关证据切片，避免同一全文被重复发送 4-6 次。
+    openSourceEvidenceMaxChars: 16000,
+    revisionEvidenceMaxChars: 60000,
+    scoringEvidenceMaxChars: 40000,
+    repairEvidenceMaxChars: 30000,
+    structureEvidenceMaxChars: 40000,
+    // arXiv HTML 偶尔只返回标题、作者和资助方等空壳内容（通常约 1k 字符）。
+    // 低于该门槛必须继续尝试 PDF，不能把元数据页误判为可发布的完整正文。
+    fullTextMinCharsForFull: 5000
 };
 
 // ═══════════════════════════════════════════════════════
@@ -131,6 +141,7 @@ const FILES = {
     // data/archive/<date>/visual-summaries/*.png，论文长图与汇总封面扁平归档。
     visualSummaryAssetDir: ARCHIVE_DIR,
     digestCoverManifestDir: path.join(CURRENT_DIR, 'digest-cover-manifests'),
+    digestRunReportDir: path.join(CURRENT_DIR, 'digest-run-reports'),
     digestCoverAssetDir: ARCHIVE_DIR,
     // Legacy single-file location retained only for callers migrating old state.
     visualSummaryManifest: path.join(CURRENT_DIR, 'visual-summary-manifest.json'),
@@ -202,10 +213,26 @@ function applyEnvOverrides() {
     if (repairMaxTokens) {
         ANALYSIS_CONFIG.repairMaxTokens = repairMaxTokens;
     }
+    const evidenceCharOverrides = {
+        PD_ANALYSIS_FULL_TEXT_MAX_CHARS: 'fullTextMaxChars',
+        PD_OPENSOURCE_EVIDENCE_MAX_CHARS: 'openSourceEvidenceMaxChars',
+        PD_REVISION_EVIDENCE_MAX_CHARS: 'revisionEvidenceMaxChars',
+        PD_SCORING_EVIDENCE_MAX_CHARS: 'scoringEvidenceMaxChars',
+        PD_REPAIR_EVIDENCE_MAX_CHARS: 'repairEvidenceMaxChars',
+        PD_STRUCTURE_EVIDENCE_MAX_CHARS: 'structureEvidenceMaxChars'
+    };
+    for (const [envName, configKey] of Object.entries(evidenceCharOverrides)) {
+        const value = readPositiveInt(envName);
+        if (value) ANALYSIS_CONFIG[configKey] = value;
+    }
     // 筛选批次大小
     const filterBatchSize = readPositiveInt('PD_FILTER_BATCH_SIZE');
     if (filterBatchSize) {
         FILTER_CONFIG.batchSize = filterBatchSize;
+    }
+    if (process.env.PD_KEYWORD_PREFILTER_ENABLED !== undefined) {
+        FILTER_CONFIG.keywordPrefilterEnabled = !['0', 'false', 'no', 'off']
+            .includes(String(process.env.PD_KEYWORD_PREFILTER_ENABLED).trim().toLowerCase());
     }
     // arXiv 每类抓取数量
     const arxivMaxResults = readPositiveInt('PD_ARXIV_MAX_RESULTS');

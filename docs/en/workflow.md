@@ -118,7 +118,7 @@ The filtering prompt is read from `prompts/filter.md`, with `{title}`, `{abstrac
 Runtime parameters:
 - `batchSize = 5` (parallel LLM calls within a batch)
 - `delayBetweenBatches = 2000` (2-second delay between batches)
-- `useKeywordPreFilter = false` (keyword pre-filtering is currently not used in the main workflow)
+- `useKeywordPreFilter = true` (high-recall local prefiltering runs before the LLM, with core audio categories as fallback)
 - Per-paper timeout **60 seconds**, **5 retries** (backoff `2^attempt * 1s`)
 - Each retry independently creates an `AbortController` and `setTimeout`, avoiding reuse of an already-aborted controller
 
@@ -129,6 +129,8 @@ The filtering stage writes three files incrementally:
 
 If today's complete `filtered-papers.json` already exists and its model/hash match the current configuration, rerunning `node scripts/full-fetch.js` skips crawling/filtering and resumes deep analysis directly. If filtering is incomplete, existing decisions in `filter-decisions.json` are reused only when the model and prompt hash match.
 `npm run validate:data` cross-checks candidate stats, decision counts, related counts, and final paper counts across `raw-candidates.json`, `filter-decisions.json`, and `filtered-papers.json`.
+
+A high-recall keyword gate runs before LLM filtering by default, with core audio categories as a fallback. `npm run keyword:recall` evaluates curated positive/negative gold cases and historical replay; known historical LLM false positives require explicit ID/reason adjudication, and the report separates raw hit rate from recall over adjudicated effective positives.
 
 ### 3.7 Deep Analysis
 
@@ -157,7 +159,7 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 
 **Technical Features**:
 - **API Protocol Auto-Routing**: shares the same `detectApiType()` logic as the filtering stage, automatically switching between OpenAI / Anthropic protocols based on `PAPER_ANALYZER_ENDPOINT` and `PAPER_ANALYZER_MODEL`
-- Fetches arXiv HTML full text (up to 500K characters), trying `v1`, `v2`, and no-suffix versions in order; all HTML/PDF/image requests use the HTTP CONNECT proxy dispatcher from project `.env` and fail when it is absent; uses **cheerio** for structured HTML parsing, removing noise elements such as script/style/nav/header/footer
+- Fetches arXiv HTML/PDF full text. Primary analysis uses at most 200K characters by default; `task-focused-v1` samples very long sources deterministically across the head, quartiles, middle, tail, and task-relevant chunks instead of taking a prefix only. It tries `v1`, `v2`, and no-suffix versions in order; all HTML/PDF/image requests use the HTTP CONNECT proxy dispatcher from project `.env` and fail when it is absent; uses **cheerio** for structured HTML parsing, removing noise elements such as script/style/nav/header/footer
 - Extracts image URLs and filters out logo/favicon; the download layer validates Content-Type, Content-Length, and PNG/JPEG/WebP magic bytes before sending images to the model
 - **Image Analysis**: HTML body text and figure captions are parsed from the same response, and captions enrich preprovided URLs by exact URL or unique basename. Successful downloads use `data/current/image-cache/`; permanent HTTP/MIME/size/security failures are not retried. The secondary model selects a code-generated stable `paragraph_id` instead of copying free-form anchors; legacy anchors remain read-compatible. Invalid IDs and over-limit plans are rejected without section-end fallback
 - Each result stores candidate scores, per-URL download/cache outcomes, secondary model/options, prompt/response hashes, insertion diagnostics, and final URLs in `imageManifest`. `no_downloadable_images` is a successful permanent terminal state; a non-empty plan with zero insertions is `invalid_output` and retries only the image stage
@@ -166,10 +168,12 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 - Up to **2 retries** per paper (outer `analysis-engine.js`), with each outer retry having **3 retries** for internal API calls (`deep-analyzer.js` inner layer, exponential backoff: first 10s, then double, `2^attempt * 5000ms`), outer retry interval 3s (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
 - API overall timeout is **20 minutes of active process time**. A heartbeat excludes system-sleep or long-suspension wall-clock jumps, so a socket timeout after wake can retry with the remaining budget
 - Primary analysis uses `max_tokens=64000` (`apiMaxTokens`); revision, table, method, and structure repair default to `max_tokens=16000` (`repairMaxTokens`, overridable with `PD_ANALYSIS_REPAIR_MAX_TOKENS`); `temperature=0.7`
+- Post-processing stages no longer resend the complete source. Default evidence budgets are 16K for open-source scanning, 60K for revision, 40K for scoring audit, 30K for method/table repair, and 40K for structure repair. They are controlled by `PD_OPENSOURCE_EVIDENCE_MAX_CHARS`, `PD_REVISION_EVIDENCE_MAX_CHARS`, `PD_SCORING_EVIDENCE_MAX_CHARS`, `PD_REPAIR_EVIDENCE_MAX_CHARS`, and `PD_STRUCTURE_EVIDENCE_MAX_CHARS`; `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` controls primary analysis. The selector version and budgets are part of recovery fingerprints, so only the affected stage and downstream work rerun
+- Every model-call log includes text characters, estimated text tokens, and image count; image base64 is neither counted nor printed as text
 - Proxy settings come only from case-insensitive proxy variables explicitly configured in the project-root `.env`; inherited shell/IDE proxies and macOS `scutil` are not used. `HTTPS_PROXY` / `HTTP_PROXY` are required HTTP CONNECT addresses for arXiv; HuggingFace `curl` may additionally use SOCKS `ALL_PROXY`
 - LLM and fetch transport are isolated: every LLM call is direct with `agent: false` and never reuses a fetch dispatcher; commands using a local proxy must run outside the sandbox
 - If any arXiv category or HuggingFace source fails, the run records `source_partial_failed` and stops after filtering. That state is never reusable as `filter_complete` and cannot enter deep analysis or update the persistent deduplication database.
-- All analysis configurations are centrally managed in `scripts/config.js`, with project `.env` overrides (`PD_ANALYSIS_CONCURRENCY`, `PD_ANALYSIS_MAX_RETRIES`, `PD_FILTER_BATCH_SIZE`, `PD_ARXIV_MAX_RESULTS`)
+- All analysis configurations are centrally managed in `scripts/config.js`, with project `.env` overrides for concurrency, retries, fetch limits, stage evidence budgets, scoring/image temperatures, and image payload limits
 
 **Deep analysis is not a single call, but a multi-round progressive process**:
 
@@ -191,11 +195,13 @@ Single-issue-single-dimension ownership is enforced in code. A cross-dimension r
 
 Text acquisition persists source type, original/used/full-text lengths, truncation, SHA-256, HTML availability, and warnings. Stable HTML misses do not retry; versioned IDs never silently upgrade; PDFs are size/header/MIME checked. Abstract fallback is marked `degraded_abstract` and is blocked from publishing unless `allowAbstractAnalysisPublish: true` is explicitly approved. Source, model, temperature, prompt, or evidence fingerprint changes invalidate only the affected checkpoint stages.
 
+An arXiv HTML response is accepted as full text only when it passes both length and document-structure checks: enough substantive paragraphs plus section or academic markers. `too_short`, `metadata_shell`, and `missing_paper_structure` continue to PDF fallback and preserve structural counters in warnings.
+
 ### 3.8 Mandatory Codex visual assets
 
 All generated images for a batch are archived flat under `data/archive/<date>/visual-summaries/`: the digest cover is `00-digest-cover-<date>.png`, and TOP 10 paper images are `<two-digit-rank>-<paper-id>-<title-slug>.png`, never numbered by completion order. Only resumable manifests stay in `data/current/`; a later plan migrates legacy current and archive layouts after PNG/SHA verification.
 
-After all scoring audits pass, run `generate-blog.py`, `review-blog.py`, and `push-blog.py` to publish the digest index and every paper page. Push records remote verification only when remote `main` exactly matches `publicationCommit`, then automatically invokes the post-publication planner. It selects the final-score TOP 10 with normalized-arXiv-ID tie breaking. Codex creates one tall infographic per selected paper with the exact English title at the top and a Chinese body, then records it with the task token.
+After all scoring audits pass, run `generate-blog.py`, `review-blog.py`, and `push-blog.py` to publish the digest index and every paper page. Blog text review uses 8,000-character chunks by default (`PD_BLOG_REVIEW_CHUNK_CHARS`, bounded to 4,000–16,000), reducing repeated fixed instructions while preserving Markdown block boundaries; the value is bound into the review receipt fingerprint. Push records remote verification only when remote `main` exactly matches `publicationCommit`, then automatically invokes the post-publication planner. It selects the final-score TOP 10 with normalized-arXiv-ID tie breaking. Codex creates one tall infographic per selected paper with the exact English title at the top and a Chinese body, then records it with the task token.
 
 The same post-publication stage creates one digest-image task using the category saved by blog generation and deterministic title, hot directions, and TOP 10 ranking. A paper task also selects at most two deep-analysis-approved figures whose cached URL, MIME, byte count, and SHA all match, prioritizing method overviews, architectures, and pipelines before key result figures. Reference fingerprints invalidate only the affected paper. Built-in image generation treats these figures as structural sources of truth and redraws them in the common editorial style; it must not paste an unreadable screenshot or invent missing data. The two manifests resume independently. These images neither enter nor block the completed blog transaction. Project scripts never call an image API; generated graphics remain editorial summaries, not original paper figures, and must not invent facts or display arXiv IDs on the digest image.
 

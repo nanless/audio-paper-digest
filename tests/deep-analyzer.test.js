@@ -1,11 +1,39 @@
 const { describe, it, before } = require('node:test');
 const assert = require('node:assert');
+const cheerio = require('cheerio');
 const { validAnalysisText } = require('./valid-analysis-fixture.js');
 
 before(() => {
     process.env.PAPER_ANALYZER_ENDPOINT = process.env.PAPER_ANALYZER_ENDPOINT || 'https://api.openai.com/v1';
     process.env.PAPER_ANALYZER_API_KEY = process.env.PAPER_ANALYZER_API_KEY || 'test-key';
     process.env.PAPER_ANALYZER_MODEL = process.env.PAPER_ANALYZER_MODEL || 'gpt-4o-mini';
+});
+
+describe('arXiv HTML full-text health gate', () => {
+    it('拒绝字符数很长但没有论文段落和章节的元数据空壳', () => {
+        const { assessArxivHtmlFullText } = require('../scripts/deep-analyzer.js');
+        const shell = `<html><body><div>${'Sponsor author navigation '.repeat(400)}</div></body></html>`;
+        const $ = cheerio.load(shell);
+        const result = assessArxivHtmlFullText($, $('body').text());
+        assert.strictEqual(result.valid, false);
+        assert.strictEqual(result.reason, 'metadata_shell');
+    });
+
+    it('接受包含多个正文段落和论文结构标记的完整 HTML', () => {
+        const { assessArxivHtmlFullText } = require('../scripts/deep-analyzer.js');
+        const paragraph = 'This paragraph explains the speech model, training evidence, evaluation protocol, and measured results in sufficient technical detail. ';
+        const html = `<html><body><article>
+          <section><h2>Abstract</h2>${`<p>${paragraph.repeat(12)}</p>`.repeat(2)}</section>
+          <section><h2>Introduction</h2><p>${paragraph.repeat(12)}</p></section>
+          <section><h2>Method</h2><p>${paragraph.repeat(12)}</p></section>
+          <section><h2>Experiments and Results</h2><p>${paragraph.repeat(12)}</p></section>
+        </article></body></html>`;
+        const $ = cheerio.load(html);
+        const result = assessArxivHtmlFullText($, $('article').text());
+        assert.strictEqual(result.valid, true);
+        assert.ok(result.paragraphCount >= 4);
+        assert.ok(result.markerCount >= 2);
+    });
 });
 
 describe('deep-analyzer section helpers', () => {
@@ -467,12 +495,70 @@ primary_task_tag: #音视频生成
         const { buildTypeAwareSourceContext } = require('../scripts/deep-analyzer.js');
         const source = `HEAD_MARKER${'x'.repeat(9000)}MIDDLE_MARKER${'y'.repeat(9000)}TAIL_MARKER`;
         const context = buildTypeAwareSourceContext(validAnalysisText(), source, 12000);
-        assert.match(context, /\[S_HEAD\]/);
-        assert.match(context, /\[S_MIDDLE\]/);
-        assert.match(context, /\[S_TAIL\]/);
+        assert.match(context, /\[SCORING_SOURCE_/);
         assert.match(context, /HEAD_MARKER/);
         assert.match(context, /MIDDLE_MARKER/);
         assert.match(context, /TAIL_MARKER/);
+    });
+
+    it('任务证据切片遵守字符预算并优先保留稀疏相关证据', () => {
+        const { buildTaskEvidenceContext } = require('../scripts/deep-analyzer.js');
+        const source = [
+            'HEAD_MARKER ',
+            '普通背景。'.repeat(8000),
+            '关键开源证据：code and weights will be released at https://github.com/example/audio-model 。',
+            '普通附录。'.repeat(8000),
+            'TAIL_MARKER'
+        ].join('');
+        const context = buildTaskEvidenceContext(
+            source,
+            12000,
+            [/github\.com/i, /will be released/i],
+            'OPEN_SOURCE'
+        );
+        assert.ok(context.length <= 12000);
+        assert.match(context, /HEAD_MARKER/);
+        assert.match(context, /github\.com\/example\/audio-model/);
+        assert.match(context, /TAIL_MARKER/);
+    });
+
+    it('低字符预算仍覆盖全文开头、中部和结尾', () => {
+        const { buildTaskEvidenceContext } = require('../scripts/deep-analyzer.js');
+        const source = `HEAD${'a'.repeat(4500)}MIDDLE${'b'.repeat(4500)}TAIL`;
+        const context = buildTaskEvidenceContext(source, 1200, [], 'LOW_BUDGET');
+        assert.ok(context.length <= 1200);
+        assert.match(context, /HEAD/);
+        assert.match(context, /MIDDLE/);
+        assert.match(context, /TAIL/);
+    });
+
+    it('局部修复上下文只携带该任务需要的分析章节且不冒充评分账本', () => {
+        const { buildTypeAwareSourceContext } = require('../scripts/deep-analyzer.js');
+        const context = buildTypeAwareSourceContext(
+            validAnalysisText(),
+            `METHOD_SOURCE ${'方法架构与训练流程。'.repeat(3000)}`,
+            30000,
+            [/方法|架构|训练/],
+            'METHOD'
+        );
+        assert.match(context, /METHOD 阶段的确定性任务证据/);
+        assert.match(context, /\[A_METHOD\]/);
+        assert.doesNotMatch(context, /\[A_RESULTS\]/);
+        assert.doesNotMatch(context, /确定性评分证据账本/);
+    });
+
+    it('输入规模摘要不把图片 base64 计入文本 token 估算', () => {
+        const { summarizeModelInput } = require('../scripts/deep-analyzer.js');
+        const summary = summarizeModelInput([{
+            role: 'user',
+            content: [
+                { type: 'text', text: '一段文本' },
+                { type: 'image', source: { data: 'x'.repeat(10000) } }
+            ]
+        }]);
+        assert.strictEqual(summary.textChars, 4);
+        assert.strictEqual(summary.images, 1);
+        assert.strictEqual(summary.estimatedTextTokens, 2);
     });
 
     it('demo 发现的资源链接追加到开源详情且同步资源字段', () => {

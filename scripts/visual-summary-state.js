@@ -709,6 +709,20 @@ function archiveLegacyVisualManifestAssets({ targetDate, manifestPath, generatio
 
 function buildGenerationContext(paper) {
     const parsed = paper.parsed || {};
+    const cleanLines = value => String(value || '')
+        .split(/\n+/)
+        .map(line => line.replace(/!\[[^\]]*\]\([^)]+\)/g, '')
+            .replace(/^[\s>*#-]+/, '')
+            .replace(/[*_`|]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim())
+        .filter(line => line.length >= 16);
+    const methodClaims = cleanLines(parsed.architecture || parsed.details).slice(0, 4);
+    const metricClaims = cleanLines(parsed.results)
+        .filter(line => /\d/.test(line))
+        .slice(0, 8);
+    const limitationClaims = cleanLines(parsed.limitations).slice(0, 4);
+    const referenceImages = selectVisualReferenceImages(paper);
     return {
         title: String(paper.title || ''),
         documentType: String(parsed.documentType || ''),
@@ -718,7 +732,16 @@ function buildGenerationContext(paper) {
         method: String(parsed.architecture || parsed.details || ''),
         experiments: String(parsed.results || ''),
         limitations: String(parsed.limitations || ''),
-        referenceImages: selectVisualReferenceImages(paper),
+        referenceImages,
+        qaClaims: {
+            exactEnglishTitle: String(paper.title || ''),
+            bodyLanguage: '简体中文',
+            requiredSections: ['研究问题与核心贡献', '方法模块与信号流', '关键实验发现', '结论与局限'],
+            methodClaims,
+            metricClaims,
+            limitationClaims,
+            referenceCaptions: referenceImages.map(item => item.caption)
+        },
         rendering: RENDERING_CONTRACT
     };
 }

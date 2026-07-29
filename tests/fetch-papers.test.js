@@ -5,6 +5,7 @@ const {
     parseFilterDecision,
     parseFilterDecisionDetails,
     repairMalformedFilterDecision,
+    evaluateKeywordPrefilter,
     filterPapersByKeywords,
     filterPapersWithLLM,
     buildFilterInputSha256,
@@ -75,13 +76,77 @@ describe('parseFilterDecision', () => {
 });
 
 describe('filterPapersByKeywords', () => {
+    it('人工金标准正样本零漏召回且负样本零误放', () => {
+        const { evaluateGoldSet } = require('../scripts/evaluate-keyword-prefilter.js');
+        const report = evaluateGoldSet();
+        assert.strictEqual(report.positiveMisses.length, 0);
+        assert.strictEqual(report.negativeLeaks.length, 0);
+    });
+
     it('缺少 categories 时不会抛错', () => {
         const result = filterPapersByKeywords([
             { title: 'A Speech Recognition Model', abstract: 'speech recognition benchmark' },
-            { title: 'A Text Classifier', abstract: 'text only' }
+            { title: 'A Text Classifier', abstract: 'We present a purely textual classification benchmark for written documents, with extensive evaluation on several natural language corpora and no additional modalities.' }
         ]);
         assert.strictEqual(result.length, 1);
         assert.strictEqual(result[0].title, 'A Speech Recognition Model');
+    });
+
+    it('覆盖语音、音乐、生物声学、听觉健康、空间音频和常用数据集词族', () => {
+        const papers = [
+            { title: 'Robust Speaker Diarization', abstract: 'A new diarization method.' },
+            { title: 'Symbolic Music Generation', abstract: 'Generation from musical scores.' },
+            { title: 'Passive Monitoring of Birdsong', abstract: 'An ecoacoustic benchmark.' },
+            { title: 'Cochlear Implant Fitting', abstract: 'Improving auditory perception.' },
+            { title: 'Neural HRTF Estimation', abstract: 'Personalized spatial rendering.' },
+            { title: 'Learning from FSD50K', abstract: 'A benchmark study.' }
+        ];
+        assert.deepStrictEqual(filterPapersByKeywords(papers).map(paper => paper.title), papers.map(paper => paper.title));
+    });
+
+    it('不再把通用扩散模型或流匹配论文误当成音频论文', () => {
+        const papers = [
+            { title: 'Flow Matching for Molecular Generation', abstract: 'We introduce a diffusion-based molecular generator for proteins and small molecules, evaluated on chemical validity, structural diversity, and binding affinity benchmarks.', categories: ['cs.LG'] },
+            { title: 'Score-based Image Synthesis', abstract: 'We study a computer-vision image synthesis method and evaluate visual fidelity, object consistency, and rendering quality across several photographic datasets.', categories: ['cs.AI'] }
+        ];
+        assert.deepStrictEqual(filterPapersByKeywords(papers), []);
+    });
+
+    it('核心音频类别即使摘要术语稀少也保留给 LLM，eess.SP 不做无条件兜底', () => {
+        assert.strictEqual(evaluateKeywordPrefilter({
+            title: 'A New Benchmark',
+            abstract: 'We study a difficult problem.',
+            categories: ['eess.AS']
+        }).pass, true);
+        assert.strictEqual(evaluateKeywordPrefilter({
+            title: 'Power Grid State Estimation',
+            abstract: 'We estimate voltage states in large electrical networks using topology-aware optimization and evaluate prediction accuracy, convergence, and robustness across several power-grid benchmarks.',
+            categories: ['eess.SP']
+        }).pass, false);
+    });
+
+    it('缩写必须作为独立大写 token，避免普通单词子串误命中', () => {
+        assert.strictEqual(evaluateKeywordPrefilter({
+            title: 'An asr-like lowercase fragment',
+            abstract: 'We conduct a text-only study of written-document classification and evaluate lexical representations, semantic features, and label efficiency on multiple corpora.',
+            categories: ['cs.CL']
+        }).pass, false);
+        assert.strictEqual(evaluateKeywordPrefilter({
+            title: 'Improving ASR with Context',
+            abstract: 'A benchmark.',
+            categories: ['cs.CL']
+        }).pass, true);
+    });
+
+    it('摘要缺失或过短时安全放行给 LLM，不做无证据关键词排除', () => {
+        const result = evaluateKeywordPrefilter({
+            title: 'A New General Framework',
+            abstract: '',
+            categories: ['cs.LG']
+        });
+        assert.strictEqual(result.pass, true);
+        assert.strictEqual(result.failOpen, true);
+        assert.match(result.reason, /摘要不足/);
     });
 });
 
@@ -138,6 +203,7 @@ describe('filterPapersWithLLM resume decisions', () => {
         const filtered = await filterPapersWithLLM([paper], {
             batchSize: 1,
             delayBetweenBatches: 0,
+            useKeywordPreFilter: false,
             decisionFn: async () => ({
                 related: null,
                 retryable: true,
@@ -154,6 +220,32 @@ describe('filterPapersWithLLM resume decisions', () => {
         assert.deepStrictEqual(checkpoint.decisions, {});
         assert.strictEqual(checkpoint.retryableDecisions['2604.00001'].retryable, true);
         assert.strictEqual(checkpoint.stats.complete, false);
+    });
+
+    it('关键词排除项写入正式决定且不调用 LLM，候选覆盖仍保持完整', async () => {
+        const papers = [
+            { arxivId: '2604.00011', title: 'Speech Recognition', abstract: 'An ASR benchmark.', categories: ['cs.CL'] },
+            { arxivId: '2604.00012', title: 'Graph Coloring', abstract: 'We propose a combinatorial optimization algorithm for large graph coloring instances and evaluate runtime, approximation quality, and scalability on standard graph benchmarks.', categories: ['cs.LG'] }
+        ];
+        let calls = 0;
+        let checkpoint;
+        const filtered = await filterPapersWithLLM(papers, {
+            batchSize: 1,
+            delayBetweenBatches: 0,
+            decisionFn: async () => {
+                calls += 1;
+                return { related: true, reason: 'speech', parseSource: 'test' };
+            },
+            onBatchComplete: async value => { checkpoint = value; }
+        });
+        assert.strictEqual(calls, 1);
+        assert.deepStrictEqual(filtered.map(paper => paper.arxivId), ['2604.00011']);
+        assert.strictEqual(checkpoint.decisions['2604.00012'].related, false);
+        assert.strictEqual(checkpoint.decisions['2604.00012'].parseSource, 'keyword_prefilter');
+        assert.strictEqual(checkpoint.stats.totalCandidates, 2);
+        assert.strictEqual(checkpoint.stats.llmCandidates, 1);
+        assert.strictEqual(checkpoint.stats.keywordRejected, 1);
+        assert.strictEqual(checkpoint.stats.complete, true);
     });
 
     it('候选标题摘要变化后不复用旧输入指纹', async () => {

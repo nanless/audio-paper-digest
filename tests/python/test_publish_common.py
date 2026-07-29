@@ -407,6 +407,19 @@ confidence: 中
         self.assertTrue(passed)
         self.assertEqual(count_blocking_review_issues(issues), 0)
 
+    def test_non_auto_fixable_issue_may_omit_empty_fix_instruction(self):
+        passed, issues = validate_review_payload({
+            'passed': False,
+            'issues': [{
+                'severity': 'error',
+                'type': 'content',
+                'description': '图片与正文论点不匹配',
+                'auto_fixable': False,
+            }],
+        }, required=True, context='test', issue_fields=('type', 'auto_fixable', 'fix_instruction'))
+        self.assertFalse(passed)
+        self.assertEqual(issues[0]['fix_instruction'], '')
+
     def test_publish_score_keeps_one_decimal_place(self):
         paper = complete_paper()
         paper['analysis'] = paper['analysis'].replace('7.0/10', '6.0/10').replace(

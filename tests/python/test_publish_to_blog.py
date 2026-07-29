@@ -130,6 +130,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
             return True, [{'severity': 'info', 'description': label}], _chunk
 
         with mock.patch.object(publish_to_blog, 'get_blog_review_concurrency', return_value=3), \
+                mock.patch.object(publish_to_blog, 'get_blog_review_chunk_chars', return_value=4000), \
                 mock.patch.object(publish_to_blog, '_llm_review_post_chunk', side_effect=review_chunk):
             passed, issues, _ = publish_to_blog.llm_review_post('A' * 9000, '汇总页')
 
@@ -158,6 +159,48 @@ title: "Table"
             self.assertEqual(issues, [])
             self.assertIn('| | | | Filter1 (GEVD) | 9.4/6.7 |', reviewed)
             self.assertIn('| | | | MN-DNN | 13.0/7.8 |', reviewed)
+        finally:
+            os.unlink(path)
+
+    def test_review_removes_exact_duplicate_long_prose(self):
+        paragraph = '训练数据依赖冻结的预训练模型，并使用人工标注档案完成验证。' * 5
+        content = f'''---
+title: "Duplicate"
+---
+{paragraph}
+
+中间段落用于分隔两处内容，并保留正常结构。
+
+{paragraph}
+'''
+        with tempfile.NamedTemporaryFile('w+', suffix='.md', encoding='utf-8', delete=False) as handle:
+            handle.write(content)
+            path = handle.name
+        try:
+            fixed, issues = publish_to_blog.review_and_fix_post(path)
+            with open(path, encoding='utf-8') as reviewed_file:
+                reviewed = reviewed_file.read()
+            self.assertTrue(fixed)
+            self.assertEqual(reviewed.count(paragraph), 1)
+            self.assertTrue(any('完全重复' in issue for issue in issues))
+        finally:
+            os.unlink(path)
+
+    def test_review_blocks_inconsistent_markdown_table_shape(self):
+        content = '''---
+title: "Bad table"
+---
+| 方法 | 指标 | 速度 |
+| --- | --- | --- |
+| Baseline | 1.0 |
+'''
+        with tempfile.NamedTemporaryFile('w+', suffix='.md', encoding='utf-8', delete=False) as handle:
+            handle.write(content)
+            path = handle.name
+        try:
+            fixed, issues = publish_to_blog.review_and_fix_post(path)
+            self.assertFalse(fixed)
+            self.assertTrue(any('表格列数不一致' in issue for issue in issues))
         finally:
             os.unlink(path)
 
@@ -299,9 +342,10 @@ title: "Table"
         self.assertEqual(second, 'same-title-2607-00002')
 
     def test_text_review_covers_every_chunk(self):
-        content = 'A' * 3990 + '\nSECOND-CHUNK-MARKER\n' + 'B' * 100
+        content = 'A' * 7990 + '\nSECOND-CHUNK-MARKER\n' + 'B' * 100
         valid = '{"passed": true, "issues": []}'
-        with mock.patch.object(publish_to_blog, 'call_llm_api', return_value=valid) as call:
+        with mock.patch.dict(os.environ, {'PD_BLOG_REVIEW_CHUNK_CHARS': '8000'}), \
+                mock.patch.object(publish_to_blog, 'call_llm_api', return_value=valid) as call:
             passed, issues, reviewed = publish_to_blog.llm_review_post(content, '标题', required=True)
         self.assertTrue(passed)
         self.assertEqual(issues, [])
@@ -310,6 +354,14 @@ title: "Table"
         prompts = ''.join(item.args[0] for item in call.call_args_list)
         self.assertIn('SECOND-CHUNK-MARKER', prompts)
         self.assertIn('AAAA', prompts)
+
+    def test_review_chunk_budget_defaults_to_8000_and_is_bounded(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(publish_to_blog.get_blog_review_chunk_chars(), 8000)
+        with mock.patch.dict(os.environ, {'PD_BLOG_REVIEW_CHUNK_CHARS': '100'}):
+            self.assertEqual(publish_to_blog.get_blog_review_chunk_chars(), 4000)
+        with mock.patch.dict(os.environ, {'PD_BLOG_REVIEW_CHUNK_CHARS': '99999'}):
+            self.assertEqual(publish_to_blog.get_blog_review_chunk_chars(), 16000)
 
     def test_review_split_keeps_table_header_with_separator(self):
         content = 'A' * 20 + '\n| 方法 | 得分 |\n| --- | --- |\n| A | 1 |\n'

@@ -329,11 +329,11 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 - `parsed` 是 `analysis` 文本的解析缓存，由 `scripts/utils.js` 的 `parseAnalysis()` 或 `scripts/utils.py` 的 `parse_analysis()` 生成
 - `documentType` 来自机器摘要的 `document_type`，受控值为方法研究、系统技术报告、模型报告、数据集与基准、综述、理论研究、应用研究；常见中英文别名会归一化，未知类型会被拒绝
 - 只有包含合法 `document_type` 的新分析才写入 `scoringRubricVersion: type-aware-v1`；历史结果不补写版本，以免误标
-- `analysisSource` 为 `html` / `pdf` / `provided_full_text` / `provided_pdf_text` / `abstract`；字符数、截断状态、来源哈希和告警用于识别摘要降级及 checkpoint 证据变化。`abstract` 默认阻断发布，人工批准需设置 `allowAbstractAnalysisPublish: true`
+- `analysisSource` 为 `html` / `pdf` / `provided_full_text` / `provided_pdf_text` / `abstract`；`sourceTextChars` 记录取得的原文长度，`usedTextChars` 记录主分析实际输入长度。超长来源会按全文位置和任务关键词确定性取样，因此 `usedTextChars` 不等同于简单前缀截断。字符数、截断状态、来源哈希和告警用于识别摘要降级及 checkpoint 证据变化。`abstract` 默认阻断发布，人工批准需设置 `allowAbstractAnalysisPublish: true`
 - `selectedImageUrls` / `imageUrls` 只保存通过稳定 `paragraph_id`、目标章节匹配和每篇默认 4 张上限门禁后实际插入正文的高价值图片，并按最终正文出现顺序保存；旧精确 anchor 仅用于兼容。`allImageUrls` 不能直接当作可发布图片使用
 - `generation` 每次锁内对象写入递增。恢复终态还包括 `no_downloadable_images`：候选均为永久不可下载；`invalid_output` 表示有插图计划但无法落地，必须只重试插图阶段
 - `analysisManifest.stages.scoringAudit` 保存模型、温度、prompt 模板哈希、证据哈希、尝试次数、前后总分/差值、稳定性告警和最终八维 JSON；分数变化超过 0.5 会写 `stabilityWarning: true`。`imageManifest.supplement` 保存副模型、温度、prompt/响应哈希及逐项插入诊断
-- `analysisStageCheckpoints` 保存逐阶段快照；指纹绑定实际截断输入、模型/协议/端点、温度、实际 prompt、图片候选与下载 SHA。输入变化只回滚当前及下游阶段，续跑从首个未完成阶段开始
+- `analysisStageCheckpoints` 保存逐阶段快照；指纹绑定主分析实际取样输入、`task-focused-v1` 证据选择版本、各阶段字符预算、模型/协议/端点、温度、实际 prompt、图片候选与下载 SHA。预算或输入变化只回滚受影响阶段及下游，续跑从首个未完成阶段开始
 - 失败结果保留恢复 checkpoint；每篇内容只能在共享论文锁内从最新规范记录合并写回，批次收尾不得用旧累计快照覆盖并发进程的新结果
 - **`parsed.score` 不是直接取 `## 评分` 下的 LLM 原始总分**。只有八个分项完整、唯一、分母正确、数值有限且位于合法范围时才重新计算并封顶为 10；否则 `scoreValidation` 记录契约错误并阻断保存/发布，不会把缺失维度当 0 覆盖原分数
 - `parsed` 中的 `machineSummary` 是 `## 机器摘要` 的解析结果；`rankBucket`、`innovationScore`、`technicalRigorScore` 等 8 个子项字段同时平铺到 `parsed` 顶层以便访问
@@ -370,6 +370,15 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
         "method": "...",
         "experiments": "...",
         "limitations": "...",
+        "qaClaims": {
+          "exactEnglishTitle": "Paper title",
+          "bodyLanguage": "简体中文",
+          "requiredSections": ["研究问题", "方法与结构", "实验与数字", "结论与局限"],
+          "methodClaims": ["..."],
+          "metricClaims": ["..."],
+          "limitationClaims": ["..."],
+          "referenceCaptions": ["Figure 1: Method overview."]
+        },
         "referenceImages": [{
           "role": "method_reference",
           "url": "https://arxiv.org/html/2607.12345v1/figure/method.png",
@@ -400,6 +409,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 
 - `papers` 必须与目标批次最终评分 TOP 10 精确一致；不足十篇时包含全部成功论文。
 - 每篇 `cards` 必须恰好包含 `infographic`；只有它为 `complete` 且通过资产验证才算该论文视觉摘要完成。
+- `qaClaims` 是登记前逐图事实核对清单：标题必须逐字一致，正文必须为简体中文，四个必要内容区均需覆盖，方法、数字、局限和参考图说明不得被自由改写成相反含义。
 - `referenceImages` 最多两张，只接纳深度分析已选中且本地缓存 URL、MIME、字节数和 SHA 全部匹配的论文原图；方法总览、架构、框架和流程图优先于实验图。参考图摘要进入分析/任务指纹，原图缺失、损坏或变化时只使对应论文长图失效。`cachePath` 指向只读语义的 `.bin` 原始缓存，不能直接传给内置生图；运行 `visual:prepare` 后使用输出的 `referencedImagePaths`，对应文件位于 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 且具有经 MIME/文件头共同确认的 `.png/.jpg/.webp` 扩展名。
 - 完成项同时绑定最终 `rank`、当前分析 SHA、`prompts/visual-summary.md` SHA、task token 和 PNG 资产 SHA。归档目录使用两位 rank 前缀，保证文件系统排序与排行榜一致；分析、prompt、参考图、排名或资产变化后只使对应论文长图失效并回到待生成。
 - 任意 `pending` / `failed`、资产缺失/损坏或 SHA 不匹配只影响发布后视觉阶段，不影响已经完成的博客发布。
@@ -440,6 +450,10 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 - 会议流程的 category 自动取自 generation manifest；它会改变标题并进入 `dataSha256`，避免会议汇总图与博客标题不一致，无需给 status 另传参数。
 - manifest 可保存 `arxivId` 以稳定指纹和排序，但 prompt 明确禁止把论文 ID 渲染到封面；排名展示完整英文标题、分数和主方向。
 - 论文长图和汇总封面生成后直接进入 `data/archive/<日期>/`；旧版 current 资产仅在 PNG/SHA 校验通过且归档目标无冲突时迁移。历史批次中不属于最终 TOP10 的旧卡片使用 `unranked-<paper>` 目录，避免虚构排行榜编号。两类图片共享最小尺寸、纵横比、大小和 SHA 门禁，实际生成像素不写死；缺失、失败、损坏或过期不回滚博客发布。
+
+### 5.8.1 `data/current/digest-run-reports/YYYY-MM-DD.json`
+
+`npm run digest:status -- --date YYYY-MM-DD` 生成的统一只读验收快照。它汇总候选抓取、筛选决定覆盖、成功深度分析、博客严格 review 与远端 OID、论文长图和汇总封面的完成数量及错误列表。只有全部必需阶段均为 `complete` 时顶层 `overallComplete` 才为 `true` 且命令返回 0；报告不替代各阶段原始 manifest 或凭证。
 
 ### 5.9 `data/current/analyzed.json`
 

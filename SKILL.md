@@ -34,7 +34,7 @@ description: >
 3. **arXiv 抓取**：7 个分类，每类最多 100 篇（可通过 `PD_ARXIV_MAX_RESULTS` 调整），每个分类完成后原子写入 `fetch-checkpoint.json`；中断后只补抓未完成分类，任一分页或摘要请求失败均不能标记该分类健康
 4. **HuggingFace 抓取**：`daily_papers` 分页（最多 20 页）+ `papers` API 补充，默认近 7 天；来源完成后独立 checkpoint，必需请求、分页覆盖或日期截断不完整时整体失败并等待下次续跑
 5. **合并去重**：arXiv 优先，HF 补充 7 个特有字段，标记 `sources`；过滤掉博客已发布论文
-6. **LLM 筛选**：按 `PAPER_ANALYZER_*` 配置逐篇判断相关性，每批写入 `filter-decisions.json`。`fetch-checkpoint`、raw、decisions、filtered 共同绑定来源配置、历史去重集合和博客已发布集合的指纹；健康 raw 即使尚无 decisions 也能从空集合续跑，模型/prompt 变化只重筛该批候选，不重复抓取；只有明确决定完整覆盖候选全集时才可完成
+6. **关键词预筛 + LLM 筛选**：先用版本化高召回词表检查标题、摘要和类别；eess.AS/cs.SD、摘要不足 80 字符的证据不足项，以及命中语音、音频、音乐、声学信号、情感与副语言、生物声学、听觉健康、视听语音、常见模型/数据集词族的论文进入 LLM，只有摘要完整且未命中的补充类别论文才保存 `keyword_prefilter` 否定决定。随后按 `PAPER_ANALYZER_*` 配置逐篇判断余下论文相关性，每批写入 `filter-decisions.json`。`fetch-checkpoint`、raw、decisions、filtered 共同绑定来源配置、历史去重集合、博客已发布集合、关键词词表版本/开关的指纹；健康 raw 即使尚无 decisions 也能从空集合续跑，模型/prompt/关键词契约变化只重筛该批候选，不重复抓取；只有关键词与 LLM 的明确决定共同完整覆盖候选全集时才可完成
 7. **保存筛选结果**：`data/current/raw-candidates.json` 保存筛选输入，`data/current/filtered-papers.json` 保存筛选/归档去重后的输出
 8. **更新去重库**：追加所有爬取论文 ID 到 `data/current/papers.json`（不仅筛选通过的，提前保存防止后续中断丢失）
 9. **深度分析**：`deep-analyzer.js` 完成全部论文的文本分析与评分审计；该阶段不建立或等待视觉任务。
@@ -122,13 +122,15 @@ description: >
 API 调用特性：
 - 整体超时 20 分钟，按进程活跃时间记账；系统睡眠/长时间挂起从预算中排除，唤醒后的底层超时继续使用剩余预算重试
 - 主分析 max_tokens=64000，审校/表格/方法/结构局部修复默认 max_tokens=16000（`PD_ANALYSIS_REPAIR_MAX_TOKENS` 可覆写），temperature=0.7
+- 主分析输入默认上限 200K 字符；超过时使用 `task-focused-v1` 跨全文均衡取样，不再只保留开头。开源/审校/评分/表格与方法/结构后处理证据默认上限分别为 16K/60K/40K/30K/40K 字符，且使用任务关键词优先的证据块，避免重复发送完整全文。对应 `PD_*_EVIDENCE_MAX_CHARS` 和 `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` 会进入阶段指纹
 - **双层重试**：analysis-engine.js 层面每篇最多重试 2 次（总共最多 3 次尝试）；deep-analyzer.js 内部每次 API 调用再重试最多 3 次（指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5s`）
 - **抓取代理为强制项**：LLM API 固定 `agent: false` 直连，不得注入代理 agent/dispatcher；arXiv/HuggingFace 抓取缺少项目 `.env` 代理必须失败，禁止直接回退。Node arXiv 仅使用 `HTTPS_PROXY` / `HTTP_PROXY` 的 HTTP CONNECT 地址，HuggingFace curl 可额外使用 SOCKS `ALL_PROXY`；访问本机代理的网络命令必须在沙箱外运行。
 - arXiv HTML 解析使用 **cheerio** 结构化选择器，移除 script/style/nav/header/footer 等噪音元素
+- HTML 全文不能只靠字符数判定：还要满足有效长段落数及论文章节/结构标记；`too_short`、`metadata_shell`、`missing_paper_structure` 都继续 PDF fallback，并记录结构计数
 - 图片先按 caption/文件名/顺序启发式预筛（默认 `imageCandidateMax=20`）；HTML 正文与图注在同一次响应中解析并复用，预提供 URL 会按完整 URL或唯一文件名补全 caption。只有配置副模型的双模型模式才**串行下载**最多 `imageMaxCount=20` 张候选图片并送入副模型；成功内容写入 `data/current/image-cache/`，恢复时校验 MIME/文件头后复用。仅 408/425/429/5xx 和网络异常重试，404、非法 MIME、超限与安全拒绝立即终止
 - 每篇分析结果写入 `imageManifest`，记录图片发现数、候选评分、逐 URL 下载结果、缓存命中、插图计划哈希、拒绝原因和最终选图，便于复盘图像筛选
 - 每个分析阶段写入 `analysisManifest`；失败尝试保留 `analysisCheckpoint` 和独立的 `analysisRecoveryImageManifest`。失败合并会独立按完整契约重解析旧正文，不受最新失败 manifest 影响，连续多次失败也不能覆盖旧成功正文。arXiv HTML/图片发现默认单次 60 秒，PDF fallback 默认 180 秒；Demo 页面最多跟随 3 次重定向并逐跳重验公网 DNS/IP。只有严格的 `{"insertions":[]}` 才是有效空插图计划，缺字段、错误类型或非法 JSON 都保持为可重试失败
-- 全文上限约 500K 字符（config.js 中 `fullTextMaxChars`）
+- 主分析全文输入上限约 200K 字符（config.js 中 `fullTextMaxChars`）；来源原始长度与实际取样长度分别保存
 - 所有分析配置集中管理于 `scripts/config.js`，支持在项目根 `.env` 中覆写
 
 输出约束：
@@ -225,6 +227,13 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 # PD_ANALYSIS_CONCURRENCY=3       # 深度分析并发度
 # PD_ANALYSIS_MAX_RETRIES=2       # 深度分析重试次数
 # PD_ANALYSIS_REPAIR_MAX_TOKENS=16000 # 审校/表格/方法/结构局部修复输出上限
+# PD_ANALYSIS_FULL_TEXT_MAX_CHARS=200000
+# PD_OPENSOURCE_EVIDENCE_MAX_CHARS=16000
+# PD_REVISION_EVIDENCE_MAX_CHARS=60000
+# PD_SCORING_EVIDENCE_MAX_CHARS=40000
+# PD_REPAIR_EVIDENCE_MAX_CHARS=30000
+# PD_STRUCTURE_EVIDENCE_MAX_CHARS=40000
+# PD_BLOG_REVIEW_CHUNK_CHARS=8000 # 博客文本 review 分块，范围 4000-16000
 # PD_REANALYZE_CONCURRENCY=3      # 重分析并发度（默认与 ANALYSIS_CONFIG.concurrency 一致）
 # PD_FILTER_BATCH_SIZE=5          # LLM 筛选每批篇数
 # PD_ARXIV_MAX_RESULTS=100        # arXiv 每类抓取数量
@@ -305,6 +314,7 @@ npm run visual:post-publish -- --date YYYY-MM-DD
 npm run visual:prepare -- --date YYYY-MM-DD
 npm run visual:status -- --date YYYY-MM-DD
 npm run cover:status -- --date YYYY-MM-DD
+npm run digest:status -- --date YYYY-MM-DD
 
 # 使用自定义数据文件发布
 npm run blog:generate -- --date YYYY-MM-DD data/current/deep-analysis-result.json
@@ -354,6 +364,7 @@ npm run xiaohongshu -- --date 2026-04-22
   - 单篇页：`YYYY-MM-DD-<slug>.md`
 - `generate-blog.py` 在日期级跨进程锁内逐页生成、安装并写 journal；崩溃后可收养已完成的同 SHA 页面，全部论文完成后才生成汇总页和严格 generation manifest，禁止 review/commit/push
 - `review-blog.py` 在同一日期锁内逐文件审查，checkpoint 绑定 worker 实际读取的 SHA；内容失败修复后只复审失败页，瞬时 LLM/网络错误保持待重试，任何已通过文件变化、应存在页面消失、清单/基线变化或 Hugo 前后 SHA 变化都会阻断凭证；禁止 commit/push
+- review 的 HTTP 重试优先使用 `Retry-After`，否则指数退避并加短抖动；协议格式修复和完整协议重试使用收紧的独立预算。代码预检先去除完全重复长段落，并阻断表格列数不一致和疑似在单词中途截断的超长图片说明；合法空分组列续行不得删除
 - `push-blog.py` 验证审查凭证和当前文件哈希，精确 stage 后及 commit 前再逐项校验 index blob SHA/删除状态，随后提交、推送并核对远端 OID；禁止重新生成或 review
 - 三阶段除日期锁外还共享博客仓库级全局锁，防止不同日期并发污染共同的 worktree、index、HEAD 或回滚状态
 - **三个阶段及兼容 `publish-to-blog.py` 必须在沙箱外运行**：入口检测到可靠沙箱标志 `CODEX_SANDBOX` 会立即拒绝执行；沙箱外权限包装会保留网络禁用环境标志，不能据此误拒绝。原因是 review 会直连 LLM、下载图片并运行 Hugo，push 需要真实 Git 网络；不得在沙箱内跳过 review、伪造凭证或改用无网络降级路径。

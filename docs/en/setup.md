@@ -27,6 +27,12 @@ Benefits of this design:
 | `PD_ANALYSIS_CONCURRENCY` | Deep analysis concurrency | 3 |
 | `PD_ANALYSIS_MAX_RETRIES` | Per-paper retry count for deep analysis | 2 |
 | `PD_ANALYSIS_REPAIR_MAX_TOKENS` | Output-token cap for revision, table, method, and structure repair stages | 16000 |
+| `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` | Cross-document sampling budget for very long primary-analysis inputs | 200000 |
+| `PD_OPENSOURCE_EVIDENCE_MAX_CHARS` | Task-focused evidence budget for open-source scanning | 16000 |
+| `PD_REVISION_EVIDENCE_MAX_CHARS` | Task-focused evidence budget for revision | 60000 |
+| `PD_SCORING_EVIDENCE_MAX_CHARS` | Task-focused evidence budget for final scoring audit | 40000 |
+| `PD_REPAIR_EVIDENCE_MAX_CHARS` | Task-focused evidence budget for method and table repair | 30000 |
+| `PD_STRUCTURE_EVIDENCE_MAX_CHARS` | Task-focused evidence budget for final structure repair | 40000 |
 | `PD_REANALYZE_CONCURRENCY` | Re-analysis concurrency | 3 (matches `ANALYSIS_CONFIG.concurrency`) |
 | `PD_FILTER_BATCH_SIZE` | LLM filtering batch size | 5 |
 | `PD_ARXIV_MAX_RESULTS` | Number of papers to fetch per arXiv category | 100 |
@@ -58,6 +64,8 @@ Benefits of this design:
 | `PAPER_DIGEST_BLOG_URL` | Deployed blog URL (e.g. `https://nanless.github.io/audio-paper-digest-blog/posts`) | `https://nanless.github.io/audio-paper-digest-blog/posts` |
 | `PAPER_DIGEST_REPO_URL` | Project repository URL appended to Xiaohongshu and related copy | `github.com/nanless/audio-paper-digest` |
 | `PAPER_DIGEST_GITHUB_REMOTE` | Git remote name | `origin` |
+| `PD_BLOG_REVIEW_CONCURRENCY` | Concurrent three-layer reviews for independent paper pages; the digest page remains first and serial | `5` |
+| `PD_BLOG_REVIEW_CHUNK_CHARS` | Text-review chunk size, bounded to 4000–16000; changes invalidate the review-protocol receipt | `8000` |
 
 #### WeChat Official Account
 

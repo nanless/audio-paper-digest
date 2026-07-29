@@ -19,6 +19,8 @@ npm run deep             # 仅深度分析续跑（跳过已有 analysis；无�
 npm run reanalyze        # 强制全量重分析（支持 --concurrency N）
 npm run batch            # 批量分析未分析论文
 npm run validate:data    # 只读校验候选/筛选/分析 JSON 数据、筛选决策缓存一致性和完整候选覆盖
+npm run keyword:recall   # 用历史 filtered 正样本回放关键词预筛，报告召回率与漏召回明细
+npm run digest:status -- --date YYYY-MM-DD # 汇总筛选、分析、review、远端发布和视觉最终状态
 npm run visual:post-publish -- --date YYYY-MM-DD # 在博客锁内建立 TOP 10 长图和汇总图任务
 npm run visual:prepare -- --date YYYY-MM-DD # 校验 .bin 参考缓存并物化为带正确扩展名的内置生图输入
 npm run visual:status -- --date YYYY-MM-DD # 只读校验 TOP 10 论文长图，不影响已经完成的博客发布
@@ -65,9 +67,11 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 **抓取/筛选/分析必需变量**：`PAPER_ANALYZER_API_KEY` / `PAPER_ANALYZER_MODEL` / `PAPER_ANALYZER_ENDPOINT`
 
 `PD_ANALYSIS_REPAIR_MAX_TOKENS` 控制审校重写、表格补充、方法补充与结构修复的输出上限，默认 16000；主分析仍保留 64000 上限，避免局部修复在推理模型上长期思考并撞到供应商网关超时。
+为降低重复输入 token，主分析输入默认最多 200000 字符，超长论文按开头/中段/末尾和任务关键词跨全文取样；开源扫描、审校重写、评分审计、表格/方法修复、结构修复的默认证据预算分别为 16000/60000/40000/30000/40000 字符，可用 `PD_ANALYSIS_FULL_TEXT_MAX_CHARS`、`PD_OPENSOURCE_EVIDENCE_MAX_CHARS`、`PD_REVISION_EVIDENCE_MAX_CHARS`、`PD_SCORING_EVIDENCE_MAX_CHARS`、`PD_REPAIR_EVIDENCE_MAX_CHARS`、`PD_STRUCTURE_EVIDENCE_MAX_CHARS` 覆写。证据选择算法版本和预算属于阶段指纹，变化时只失效对应阶段及下游。
 
 **博客相关变量**：`PAPER_DIGEST_BLOG_REPO` 可覆写 Hugo 博客仓库路径；未设置时使用默认路径，目录不存在会跳过博客已发布去重，真实博客发布仍需要本地仓库存在。
 `PD_BLOG_REVIEW_CONCURRENCY` 控制博客独立论文页的三层 review 并发度，默认为 5；汇总页仍先完成审查。首次 review 失败会保存绑定生成清单、博客 `main` 基线和逐文件 SHA-256 的失败集状态；修复后仅复审已修改的失败文件，已通过文件或基线发生变化时自动退回全量 review。
+`PD_BLOG_REVIEW_CHUNK_CHARS` 控制博客文本 review 分块，默认 8000，限制为 4000–16000；增大分块减少重复审查说明，但仍保持代码块、表格和 Markdown 块边界完整。该值进入 review 协议指纹。
 `PD_XIAOHONGSHU_ONELINER_CONCURRENCY` 控制小红书 TOP N 一句话亮点的 LLM 并发度，默认 5，限制为 1–5；结果必须按原排名回填，单篇失败独立使用本地摘要回退。
 
 **双模型（可选，多模态）**：设置 `PAPER_ANALYZER_SECONDARY_MODEL` 即启用副模型做图像筛选与插图计划（主模型仅做纯文本分析）；副模型只输出 JSON 计划，包含目标章节、代码提供的稳定 `paragraph_id`、图前 `lead` 和图后 `explanation`。代码只新增插图及相邻说明，忽略旧 `replacement` / `rewrite` 字段，禁止副模型替换主模型原文；每篇默认最多插入 4 张，非法段落 ID 直接丢弃，旧 `anchor` 格式仅保留兼容。不设置则跳过图片、退回单模型纯文本。`PAPER_ANALYZER_SECONDARY_ENDPOINT` / `PAPER_ANALYZER_SECONDARY_API_KEY` 未设置时默认复用主模型对应值。
@@ -148,7 +152,7 @@ prompts/                # LLM prompt 模板
 
 `papers.json` 同时支持 `data/current/papers.json` 和 `data/papers.json`（旧版路径），均被 `config.js` 引用。**`papers.json` 持久化去重数据库，永不归档**。`full-fetch.js` 每次运行自动备份 `papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天。条目可带 `digestStatus.status`：`pending_analysis` / `analysis_failed` 不参与强去重，便于中断后重跑；所有分析入口应通过 `scripts/digest-status.js` 将成功/失败同步为 `analyzed` / `analysis_failed`。若最新一次分析失败但旧成功分析仍可用，`status` 保持 `analyzed`，失败记录写入 `digestStatus.latestAttemptStatus` / `error`。
 
-`filtered-papers.json` 只有在七个 arXiv 类别、HuggingFace 必需请求和筛选决定均覆盖完整时才能写为 `complete`。抓取按来源保存论文数量和稳定内容 SHA，篡改或截短只失效对应来源。checkpoint、raw、decisions、filtered 的候选/来源/博客去重指纹和北京时间批次日期必须一致。健康 raw 可从空决定续筛；模型/prompt/协议变化只重筛，不重新抓取。最终 filtered 集合必须精确对应 `related=true` 决定扣除显式归档排除项。
+`filtered-papers.json` 只有在七个 arXiv 类别、HuggingFace 必需请求和筛选决定均覆盖完整时才能写为 `complete`。LLM 前默认运行版本化高召回关键词预筛：eess.AS/cs.SD 核心类别、摘要不足 80 字符的证据不足项，以及命中语音、音频、音乐、声学信号、情感与副语言、生物声学、听觉健康、视听语音、常见模型/数据集词族的论文进入 LLM；只有摘要完整且未命中词表的补充类别论文才写入 `parseSource=keyword_prefilter` 的正式否定决定，不能从候选覆盖中消失。`tests/fixtures/keyword-prefilter-gold.json` 是人工裁决的 CI 真值，要求正样本零漏召回、负样本零误放；历史 `filtered` 仅作诊断并扣除显式登记的历史误筛，禁止再把全部历史入选项当成绝对正样本。`PD_KEYWORD_PREFILTER_ENABLED=0` 可临时禁用；开关、词表版本与决定契约进入筛选配置指纹，变化时只重筛、不重抓。抓取按来源保存论文数量和稳定内容 SHA，篡改或截短只失效对应来源。checkpoint、raw、decisions、filtered 的候选/来源/博客去重指纹和北京时间批次日期必须一致。健康 raw 可从空决定续筛；模型/prompt/协议/关键词契约变化只重筛，不重新抓取。最终 filtered 集合必须精确对应 `related=true` 决定扣除显式归档排除项。
 
 ## 分支策略
 
@@ -168,15 +172,19 @@ prompts/                # LLM prompt 模板
 - **`loadPrompt()` 从 markdown 文件内的第一个 fenced code block 提取 prompt**，并替换 `{变量名}` 占位符。内部示例代码块需使用比外层更短的 fence，修改 prompt 后需验证 `utils.js` 解析逻辑兼容。
 - **原子与并发写入**：使用 `writeFileAtomic()` 保存普通数据；分析结果和 `papers.json` 的读改写必须使用跨进程文件锁并校验 `generation`，防止多个入口后写覆盖先写。Python 侧复用 `path_config.py` 的原子写入和 `update_json_file_locked()`，锁目录/owner/generation 协议必须与 Node 一致。
 - **阶段恢复**：深度分析失败结果必须保留 `analysisManifest`、`analysisCheckpoint`、`analysisStageCheckpoints` 和 `analysisRecoveryImageManifest`。每个阶段绑定实际输入、模型/协议、prompt、温度和图像配置指纹；指纹变化时回退到上一阶段正文快照，只重跑当前及下游。`full-fetch`、`deep`、`batch`、单篇和重分析入口均须从 canonical deep result 合并失败 checkpoint，并逐论文持久化。只有下载、主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计和插图阶段均处于终态时才算成功。
+- **Token 证据切片**：不得把同一份完整全文无差别重复发送给所有后处理阶段。`task-focused-v1` 必须保留全文头部、四分位、中部、尾部覆盖，并按开源/方法/实验/评分关键词优先补充高价值块；日志记录每次 LLM 的文本字符数、估算文本 token 和图片数，禁止记录图片 base64。
 - **同篇分析互斥**：所有经 `analysis-engine.js` 的入口都必须按规范化 arXiv ID 取得异步共享运行锁，并在锁内完成“重读最新 canonical 记录 → 分析 → 写回结果和 digest 状态”；禁止在锁外用陈旧对象覆盖较新结果。单篇失败也必须合并 `r.result`，以保留 checkpoint。
 - **博客推送凭证**：严格 review 凭证绑定 review 时博客 `main` 的 `baseHead`；push 只能从该基线创建清单对应的发布提交，或重试凭证记录的同一发布提交。禁止借由空清单、已有本地提交或无关 HEAD 推送未审查内容；生成前必须拒绝覆盖目标日期文章的人工 Git 修改。
 - **arXiv 与 Demo 网络恢复**：深度分析的 arXiv HTML/图片发现默认超时 60 秒，PDF fallback 默认 180 秒且默认最大 50MB，分别支持 `PD_ARXIV_FETCH_TIMEOUT_MS` / `PD_ARXIV_PDF_TIMEOUT_MS` / `PD_ARXIV_PDF_MAX_BYTES`。arXiv 全文、PDF 和图片必须使用项目 HTTP CONNECT 代理 dispatcher；稳定 400/403/404 只尝试一轮；指定版本号不得静默回退到最新版。Demo 页面允许最多 3 次 HTTP 重定向，但每一跳都必须重新执行公网 DNS/IP 校验，严禁自动跟随到私网地址。
+- **arXiv HTML 正文健康门禁**：不能只按字符数认定全文；还必须满足有效长段落数和论文章节/结构标记。`too_short`、`metadata_shell`、`missing_paper_structure` 均继续 PDF fallback，并在来源 warning 中保存段落、章节和标记计数。
 - **北京时间时间戳**：运行数据中的 `timestamp` / `lastUpdated` / `fetchedAt` 应使用 `getBeijingISOString()` 或 Python 端 `now_bj_iso()`，避免 UTC 日期导致跨天归档或发布筛选错误。
 - **博客三阶段必须分离且必须沙箱外运行**：依次运行 `generate-blog.py` → `review-blog.py` → `push-blog.py`。生成阶段使用持久 journal；review 逐文件保存实际审查 SHA，内容失败只复审失败页，瞬时错误保持待重试。三个阶段同时使用日期级锁和博客仓库级全局锁；push 在 `git add` 后及 commit 前必须把 index blob/删除状态与 review 凭证逐项比较，防止不同日期共享 worktree/index/HEAD 时交叉提交或回滚。用户要求“运行/进行某日论文速递”本身即构成博客发布授权；其他仅分析、检查、预览或诊断请求不得触发 push。
+- **Review 收敛与前置检查**：正式原始审查仍保留 5 次可用性重试；格式修复最多调用一次，完整协议重试最多 2 次，并尊重 `Retry-After` 加随机抖动。`auto_fixable=false` 的问题可省略空 `fix_instruction`。LLM 前确定性去除完全重复的长正文段落，并校验 Markdown 表格列数与明显截断的长图注；合法空分组列续行必须保留。
 - **小红书文案续跑**：TOP N one-liner 成功项按 normalized arXiv ID 写入日期缓存，绑定 analysis、prompt、模型/endpoint/温度和清洗契约；日期级锁内逐篇原子保存。坏缓存原子隔离后重建，只重试缺失、失败或指纹失效项；`--date` 必须严格为 `YYYY-MM-DD`。小红书自动发布不属于论文速递必需流程。
 - **发布 review 不得删除合法表格续行**：Markdown 表格允许前导分组列为空，这通常表示沿用上一行模型/配置；不能把 `| | | | Filter2 ... |` 一类数据行当成子标题删除。普通模型名或技术术语未加反引号属于样式建议，不是格式问题。
 - **图片展示顺序与质量门禁**：候选图编号不是最终展示图号；无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 必须按图片在最终正文中的出现顺序归一化。副模型每篇最多插入 4 张图（可用 `PD_IMAGE_INSERTION_MAX` 覆写），必须选择代码生成的稳定段落 ID；非法 ID 和超限图片一律拒绝，不得回退堆到章节末尾。HTML 正文和图注必须同次解析复用，成功下载写入 `data/current/image-cache/`，永久 HTTP/MIME/大小错误不得反复重试。
 - **内置生图参考文件**：视觉 manifest 中的 `cachePath` 保留原始 `.bin` 缓存路径；调用内置 `image_gen` 前必须运行 `npm run visual:prepare -- --date YYYY-MM-DD`，由脚本重新校验受控路径、SHA、字节数、MIME 与文件头，并物化为 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 下的 `.png/.jpg/.webp`。必须把命令输出的 `referencedImagePaths` 传给生图工具，禁止直接上传 `.bin` 或手工改后缀。
+- **视觉事实清单**：论文视觉任务的 `generationContext.qaClaims` 固定包含完整英文标题、四个必要内容区、方法证据、带数字实验声明、局限和参考图 caption。提示词与逐图目检都必须逐项核对这些事实，不能只依赖自由文本摘要。
 - **视觉成品唯一归档**：Agent 若先把内置 `image_gen` 输出复制到 `data/archive/<日期>/visual-summaries/`，必须仍通过 `visual-summary-state.js record` 登记；`record` 会按 manifest 的排名、论文 ID 和标题 slug 写入唯一 canonical 文件名，并自动删除同目录中由本次调用留下的同排名/同论文 ID 临时 PNG。不得手工保留另一份别名文件；完成后 `npm run visual:status -- --date YYYY-MM-DD` 必须显示 `10/10`，目录中每篇论文只能有一个 PNG，另加一张 `00-digest-cover-<日期>.png`。
 - **分析来源与发布门禁**：结果必须保存 `analysisSource`、全文/实际输入字符数、截断状态、来源 SHA-256、抓取告警和置信度。来源指纹变化时清除主分析及下游 checkpoint。仅摘要分析默认禁止发布；人工确认后必须显式设置 `allowAbstractAnalysisPublish: true`，博客同时显示醒目降级提示。最新一次重分析失败时禁止用陈旧正文发布。
 - **评分稳定性**：最终评分审计默认低温 `0.1`（`PD_SCORING_AUDIT_TEMPERATURE`），副模型图片计划默认 `0.2`（`PD_IMAGE_PLAN_TEMPERATURE`）。送审输入必须移除旧“评分理由”段但保留正文和证据账本，禁止模型照抄待纠正理由；跨维度校验失败须反馈具体违规分句。评分 manifest 必须保留模型、温度、prompt 模板哈希、证据哈希、尝试次数、前后总分/差值和最终八维 JSON；变化超过 0.5 分必须打印稳定性告警，指纹变化时只失效评分及插图阶段。

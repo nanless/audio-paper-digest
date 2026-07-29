@@ -68,6 +68,11 @@ const {
     imageCandidateMax: IMAGE_CANDIDATE_MAX = IMAGE_MAX_COUNT,
     imageInsertionMax: IMAGE_INSERTION_MAX = 4,
     fullTextMaxChars: FULL_TEXT_MAX_CHARS,
+    openSourceEvidenceMaxChars: OPEN_SOURCE_EVIDENCE_MAX_CHARS = 16000,
+    revisionEvidenceMaxChars: REVISION_EVIDENCE_MAX_CHARS = 60000,
+    scoringEvidenceMaxChars: SCORING_EVIDENCE_MAX_CHARS = 40000,
+    repairEvidenceMaxChars: REPAIR_EVIDENCE_MAX_CHARS = 30000,
+    structureEvidenceMaxChars: STRUCTURE_EVIDENCE_MAX_CHARS = 40000,
     fullTextMinCharsForFull: FULL_TEXT_MIN_CHARS_FOR_FULL
 } = ANALYSIS_CONFIG;
 const IMAGE_CACHE_DIR = path.join(CURRENT_DIR, 'image-cache');
@@ -122,33 +127,126 @@ function getTypeAwareEvidenceGuide(documentType) {
         || '先依据主要贡献形态确定文档类型，再使用对应证据标准；不得机械套用方法论文的消融要求。';
 }
 
-function buildTypeAwareSourceContext(analysis, sourceText, maxChars = 120000) {
+const EVIDENCE_SELECTION_VERSION = 'task-focused-v1';
+const BROAD_EVIDENCE_PATTERNS = Object.freeze([
+    /\b(?:abstract|introduction|method|approach|architecture|experiment|evaluation|result|conclusion|limitation|appendix)\b/i,
+    /摘要|引言|方法|架构|实验|评测|结果|结论|局限|附录/,
+    /\b(?:WER|CER|EER|F1|accuracy|precision|recall|MOS|PESQ|STOI|SDR|SNR|latency|throughput)\b/i,
+    /https?:\/\/|github|huggingface|code|dataset|checkpoint|release|open[- ]source/i
+]);
+const OPEN_SOURCE_EVIDENCE_PATTERNS = Object.freeze([
+    /https?:\/\//i,
+    /\b(?:github|gitlab|huggingface|modelscope|repository|repo|code|checkpoint|weights?|dataset|license|demo|artifact)\b/i,
+    /\b(?:release|released|available|open[- ]source|publicly available|will be released)\b/i,
+    /开源|代码|仓库|权重|模型|数据集|许可证|演示|项目主页|未来公开|后续开放/
+]);
+const METHOD_EVIDENCE_PATTERNS = Object.freeze([
+    /\b(?:method|methodology|approach|architecture|framework|pipeline|algorithm|module|component|training|inference|objective|loss)\b/i,
+    /方法|架构|框架|流程|算法|模块|组件|训练|推理|目标函数|损失函数/
+]);
+const RESULT_EVIDENCE_PATTERNS = Object.freeze([
+    /\b(?:experiment|evaluation|result|benchmark|baseline|ablation|metric|table|figure|significance|error analysis)\b/i,
+    /\b(?:WER|CER|EER|F1|accuracy|precision|recall|MOS|PESQ|STOI|SDR|SNR|latency|throughput)\b/i,
+    /实验|评测|结果|基准|基线|消融|指标|表格|显著性|误差分析/
+]);
+const SCORING_EVIDENCE_PATTERNS = Object.freeze([
+    ...BROAD_EVIDENCE_PATTERNS,
+    /\b(?:novel|contribution|state of the art|SOTA|reproduc|hyperparameter|hardware|failure case|proof|theorem|assumption)\b/i,
+    /创新|贡献|复现|超参数|硬件|失败案例|证明|定理|假设|边界条件/
+]);
+
+function buildTaskEvidenceContext(sourceText, maxChars, patterns = BROAD_EVIDENCE_PATTERNS, taskLabel = '通用') {
+    const source = String(sourceText || '');
+    const limit = Math.max(1000, Number.parseInt(maxChars, 10) || source.length);
+    if (source.length <= limit) return source;
+
+    // 让五个强制位置块在最小允许预算下也能同时容纳，避免用户把预算调低后
+    // 意外丢掉中段或结尾证据；较大预算仍以 4K 块控制遍历成本。
+    const chunkSize = Math.min(4000, Math.max(100, Math.floor(limit / 16)));
+    const chunks = [];
+    for (let start = 0; start < source.length; start += chunkSize) {
+        const text = source.slice(start, Math.min(source.length, start + chunkSize));
+        let score = 0;
+        for (const pattern of patterns) {
+            if (pattern.test(text)) score += 5;
+        }
+        score += Math.min(5, (text.match(/https?:\/\//gi) || []).length * 2);
+        score += Math.min(4, (text.match(/\b\d+(?:\.\d+)?%?\b/g) || []).length / 8);
+        chunks.push({ index: chunks.length, start, text, score });
+    }
+
+    const mandatoryIndexes = new Set([
+        0,
+        Math.floor((chunks.length - 1) * 0.25),
+        Math.floor((chunks.length - 1) * 0.5),
+        Math.floor((chunks.length - 1) * 0.75),
+        chunks.length - 1
+    ]);
+    const selected = new Map();
+    let used = 0;
+    const add = chunk => {
+        if (!chunk || selected.has(chunk.index)) return;
+        const cost = chunk.text.length + 80;
+        if (used + cost > limit) return;
+        selected.set(chunk.index, chunk);
+        used += cost;
+    };
+    for (const index of mandatoryIndexes) add(chunks[index]);
+    for (const chunk of [...chunks].sort((left, right) => right.score - left.score || left.index - right.index)) {
+        add(chunk);
+    }
+    const rendered = [...selected.values()]
+        .sort((left, right) => left.index - right.index)
+        .map(chunk => `[${taskLabel}_SOURCE_${chunk.index + 1}/${chunks.length}]\n${chunk.text}`)
+        .join('\n\n');
+    return rendered.slice(0, limit);
+}
+
+function buildTypeAwareSourceContext(
+    analysis,
+    sourceText,
+    maxChars = SCORING_EVIDENCE_MAX_CHARS,
+    patterns = SCORING_EVIDENCE_PATTERNS,
+    taskLabel = 'SCORING'
+) {
     const documentType = parseAnalysis(analysis)?.documentType || '待最终确认';
     const source = String(sourceText || '');
-    const analysisSections = [
+    const analysisBudget = Math.min(30000, Math.floor(maxChars * 0.45));
+    const sectionDefinitions = [
         ['A_SUMMARY', '核心摘要'],
         ['A_METHOD', '方法概述和架构'],
         ['A_RESULTS', '实验结果'],
         ['A_LIMITS', '局限与问题'],
         ['A_OPEN', '开源详情']
-    ].map(([id, title]) => {
-        const content = extractSectionByTitle(analysis, title);
-        return content ? `[${id}] ${title}\n${content.slice(0, 12000)}` : '';
-    }).filter(Boolean);
-    const sourceBudget = Math.max(12000, maxChars - analysisSections.join('\n\n').length);
-    const chunkSize = Math.floor(sourceBudget / 3);
-    const middleStart = Math.max(0, Math.floor((source.length - chunkSize) / 2));
-    const sourceChunks = [
-        `[S_HEAD] 原文开头\n${source.slice(0, chunkSize)}`,
-        `[S_MIDDLE] 原文中段\n${source.slice(middleStart, middleStart + chunkSize)}`,
-        `[S_TAIL] 原文末尾/附录\n${source.slice(Math.max(0, source.length - chunkSize))}`
     ];
+    const sectionTitlesByTask = {
+        METHOD: new Set(['核心摘要', '方法概述和架构']),
+        RESULT: new Set(['核心摘要', '方法概述和架构', '实验结果']),
+        STRUCTURE: new Set(sectionDefinitions.map(([, title]) => title)),
+        SCORING: new Set(sectionDefinitions.map(([, title]) => title))
+    };
+    const selectedTitles = sectionTitlesByTask[taskLabel] || sectionTitlesByTask.SCORING;
+    const selectedDefinitions = sectionDefinitions.filter(([, title]) => selectedTitles.has(title));
+    const perSectionBudget = Math.max(1200, Math.floor(analysisBudget / selectedDefinitions.length));
+    const analysisSections = selectedDefinitions.map(([id, title]) => {
+        const content = extractSectionByTitle(analysis, title);
+        return content ? `[${id}] ${title}\n${content.slice(0, perSectionBudget)}` : '';
+    }).filter(Boolean);
+    const sourceBudget = Math.max(12000, maxChars - analysisSections.join('\n\n').length - 500);
+    const sourceEvidence = buildTaskEvidenceContext(source, sourceBudget, patterns, taskLabel);
+    const taskHeader = taskLabel === 'SCORING'
+        ? [
+            `当前文档类型：${documentType}`,
+            `适用证据标准：${getTypeAwareEvidenceGuide(documentType)}`,
+            '以下是确定性评分证据账本。评分理由只能使用这些带 ID 的内容；不得补充账本外事实。'
+        ]
+        : [
+            `以下是 ${taskLabel} 阶段的确定性任务证据。只能使用这些带 ID 的内容；不得补充证据外事实。`
+        ];
     return [
-        `当前文档类型：${documentType}`,
-        `适用证据标准：${getTypeAwareEvidenceGuide(documentType)}`,
-        '以下是确定性评分证据账本。评分理由只能使用这些带 ID 的内容；不得补充账本外事实。',
+        ...taskHeader,
         ...analysisSections,
-        ...sourceChunks
+        sourceEvidence
     ].join('\n\n');
 }
 
@@ -459,6 +557,8 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
         ...modelFingerprint(DEEP_CONFIG),
         promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.primaryAnalysis),
         usedTextSha256,
+        evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
+        fullTextMaxChars: FULL_TEXT_MAX_CHARS,
         arxivId,
         title: paper.title || '',
         authors: paper.authors || [],
@@ -474,7 +574,15 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
     const textStage = stage => stableFingerprint({
         ...modelFingerprint(DEEP_CONFIG, API_TEMPERATURE, stageMaxTokens[stage]),
         promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES[stage]),
-        usedTextSha256
+        usedTextSha256,
+        evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
+        evidenceMaxChars: {
+            openSourceScan: OPEN_SOURCE_EVIDENCE_MAX_CHARS,
+            revision: REVISION_EVIDENCE_MAX_CHARS,
+            tableRepair: REPAIR_EVIDENCE_MAX_CHARS,
+            methodRepair: REPAIR_EVIDENCE_MAX_CHARS,
+            structureRepair: STRUCTURE_EVIDENCE_MAX_CHARS
+        }[stage]
     });
     return {
         primaryAnalysis: stableFingerprint(primaryContext),
@@ -661,6 +769,24 @@ if (missingDeepEnv.length > 0) {
 /**
  * 调用大模型（支持多模态消息）— 带重试机制
  */
+function summarizeModelInput(messages) {
+    let textChars = 0;
+    let images = 0;
+    for (const message of messages || []) {
+        const content = message?.content;
+        if (typeof content === 'string') {
+            textChars += content.length;
+            continue;
+        }
+        if (!Array.isArray(content)) continue;
+        for (const block of content) {
+            if (block?.type === 'text') textChars += String(block.text || '').length;
+            else if (block?.type === 'image' || block?.type === 'image_url') images += 1;
+        }
+    }
+    return { textChars, estimatedTextTokens: Math.ceil(textChars / 3), images };
+}
+
 async function callModelWithConfig(messages, maxTokens, maxRetries = 3, config = null) {
     const cfg = config || DEEP_CONFIG;
     const budget = createActiveTimeBudget(API_OVERALL_TIMEOUT_MS);
@@ -668,7 +794,8 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = 3, config =
     const modelUrl = buildApiUrl(apiType, cfg.endpoint);
     const url = new URL(modelUrl);
     const temperature = Number.isFinite(cfg.temperature) ? cfg.temperature : API_TEMPERATURE;
-    console.log(`    [api] → ${cfg.model} | ${apiType} | ${url.hostname}${url.pathname} | max_tokens=${maxTokens} | max_retries=${maxRetries} | temperature=${temperature}`);
+    const input = summarizeModelInput(messages);
+    console.log(`    [api] → ${cfg.model} | ${apiType} | ${url.hostname}${url.pathname} | input_chars=${input.textChars} | estimated_text_tokens≈${input.estimatedTextTokens} | images=${input.images} | max_tokens=${maxTokens} | max_retries=${maxRetries} | temperature=${temperature}`);
 
     let lastError = null;
     let reportedSuspendedMs = 0;
@@ -948,6 +1075,40 @@ function isStableArxivHtmlMiss(status) {
     return status === 400 || status === 403 || status === 404;
 }
 
+function assessArxivHtmlFullText($, content) {
+    const normalized = String(content || '').replace(/\s+/g, ' ').trim();
+    const headingText = $('h1, h2, h3, .ltx_title')
+        .map((_, element) => $(element).text().replace(/\s+/g, ' ').trim())
+        .get()
+        .join(' ');
+    const structureText = `${headingText} ${normalized}`;
+    const paragraphCount = $('.ltx_para, article p, .ltx_page_content p, .ltx_page_main p, body p')
+        .filter((_, element) => $(element).text().replace(/\s+/g, ' ').trim().length >= 40)
+        .length;
+    const sectionCount = $('.ltx_section, article section, .ltx_page_content section, h1, h2, h3')
+        .filter((_, element) => $(element).text().replace(/\s+/g, ' ').trim().length >= 3)
+        .length;
+    const markerCount = [
+        /\babstract\b/i,
+        /\bintroduction\b/i,
+        /\b(?:method|methodology|approach)\b/i,
+        /\b(?:experiment|evaluation|result)s?\b/i,
+        /\b(?:conclusion|discussion)\b/i
+    ].filter(pattern => pattern.test(structureText)).length;
+    let reason = 'ok';
+    if (normalized.length <= FULL_TEXT_MIN_CHARS_FOR_FULL) reason = 'too_short';
+    else if (paragraphCount < 4) reason = 'metadata_shell';
+    else if (sectionCount < 2 && markerCount < 2) reason = 'missing_paper_structure';
+    return {
+        valid: reason === 'ok',
+        reason,
+        chars: normalized.length,
+        paragraphCount,
+        sectionCount,
+        markerCount
+    };
+}
+
 /**
  * 从 arxiv HTML 获取全文文本（使用 cheerio 结构化解析）
  * 带重试机制，避免因并发限流偶发失败
@@ -1016,9 +1177,19 @@ async function fetchArxivTextDetailed(arxivId) {
                         .replace(/[ \t]+/g, ' ')       // 合并多余空格
                         .trim();
 
-                    if (content.length <= FULL_TEXT_MIN_CHARS_FOR_FULL) {
-                        warnings.push(`HTML ${htmlId}: 提取正文过短 (${content.length} chars)`);
-                        console.log(`    [deep] fetchArxivText ${htmlId} 提取正文过短 (${content.length} chars)，继续 fallback`);
+                    const assessment = assessArxivHtmlFullText($, content);
+                    if (!assessment.valid) {
+                        warnings.push(
+                            `HTML ${htmlId}: ${assessment.reason} `
+                            + `(chars=${assessment.chars}, paragraphs=${assessment.paragraphCount}, `
+                            + `sections=${assessment.sectionCount}, markers=${assessment.markerCount})`
+                        );
+                        console.log(
+                            `    [deep] fetchArxivText ${htmlId} 正文健康检查失败 `
+                            + `| reason=${assessment.reason} | chars=${assessment.chars} `
+                            + `| paragraphs=${assessment.paragraphCount} | sections=${assessment.sectionCount} `
+                            + `| markers=${assessment.markerCount}，继续 fallback`
+                        );
                         continue;
                     }
                     return {
@@ -2142,12 +2313,15 @@ async function analyzePaperDeep(paper) {
     const hasFullText = fullText.length > FULL_TEXT_MIN_CHARS_FOR_FULL;
     const abstractText = paper.abstract || paper.summary || '';
     const rawTextForAnalysis = hasFullText ? fullText : (abstractText || fullText);
-    const textForAnalysis = rawTextForAnalysis.length > FULL_TEXT_MAX_CHARS
-        ? rawTextForAnalysis.slice(0, FULL_TEXT_MAX_CHARS)
-        : rawTextForAnalysis;
+    const textForAnalysis = buildTaskEvidenceContext(
+        rawTextForAnalysis,
+        FULL_TEXT_MAX_CHARS,
+        BROAD_EVIDENCE_PATTERNS,
+        'PRIMARY'
+    );
     if (rawTextForAnalysis.length > textForAnalysis.length) {
-        sourceDetails.warnings.push(`输入文本由 ${rawTextForAnalysis.length} 字符截断为 ${textForAnalysis.length} 字符`);
-        console.log(`    [deep] 全文过长，截断到 ${textForAnalysis.length}/${rawTextForAnalysis.length} 字符`);
+        sourceDetails.warnings.push(`输入文本由 ${rawTextForAnalysis.length} 字符按跨全文任务证据取样为 ${textForAnalysis.length} 字符`);
+        console.log(`    [deep] 全文过长，跨开头/中段/末尾和高价值证据取样到 ${textForAnalysis.length}/${rawTextForAnalysis.length} 字符`);
     }
     const analysisSource = hasFullText ? sourceDetails.source : 'abstract';
     const sourceWarnings = [...sourceDetails.warnings];
@@ -2580,6 +2754,8 @@ async function analyzePaperDeep(paper) {
             || scoringStage.temperature !== SCORING_AUDIT_TEMPERATURE
             || scoringStage.promptTemplateSha256 !== currentPromptTemplateSha256
             || scoringStage.scoringInputSha256 !== scoringInputSha256
+            || scoringStage.evidenceSelectionVersion !== EVIDENCE_SELECTION_VERSION
+            || scoringStage.evidenceMaxChars !== SCORING_EVIDENCE_MAX_CHARS
             || scoringStage.evidenceSha256 !== currentEvidenceSha256;
         if (fingerprintChanged) {
             if (typeof paper.analysisStageCheckpoints?.structureRepair === 'string') {
@@ -2625,6 +2801,8 @@ async function analyzePaperDeep(paper) {
                 temperature: scoringResult.temperature,
                 promptTemplateSha256: scoringResult.promptTemplateSha256,
                 scoringInputSha256,
+                evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
+                evidenceMaxChars: SCORING_EVIDENCE_MAX_CHARS,
                 evidenceSha256: scoringResult.evidenceSha256,
                 previousScore: Number.isFinite(scoreBeforeAudit) ? scoreBeforeAudit : null,
                 previousRunScore: scoringDelta.previousRunScore,
@@ -2750,10 +2928,16 @@ async function analyzePaperDeep(paper) {
 }
 
 async function scanOpensource(paper, textForAnalysis) {
+    const evidence = buildTaskEvidenceContext(
+        textForAnalysis,
+        OPEN_SOURCE_EVIDENCE_MAX_CHARS,
+        OPEN_SOURCE_EVIDENCE_PATTERNS,
+        'OPEN_SOURCE'
+    );
     const prompt = loadPrompt('prompts/opensource-scan.md', {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
-        textForAnalysis: textForAnalysis
+        textForAnalysis: evidence
     });
     return await callModel([{ role: 'user', content: prompt }], 8000);
 }
@@ -2982,11 +3166,17 @@ function hasOpenSourceLinks(analysis) {
 }
 
 async function reviseAnalysis(paper, existingAnalysis, textForAnalysis) {
+    const evidence = buildTaskEvidenceContext(
+        textForAnalysis,
+        REVISION_EVIDENCE_MAX_CHARS,
+        BROAD_EVIDENCE_PATTERNS,
+        'REVISION'
+    );
     const prompt = loadPrompt('prompts/gap-fill.md', {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
         existingAnalysis: existingAnalysis,
-        textForAnalysis: textForAnalysis
+        textForAnalysis: evidence
     });
     return await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS);
 }
@@ -3167,7 +3357,13 @@ async function repairMissingAnalysisSections(paper, existingAnalysis, textForAna
             missingSections: structureIssues.join('、'),
             validationFeedback,
             existingAnalysis: currentAnalysis,
-            textForAnalysis: buildTypeAwareSourceContext(currentAnalysis, textForAnalysis)
+            textForAnalysis: buildTypeAwareSourceContext(
+                currentAnalysis,
+                textForAnalysis,
+                STRUCTURE_EVIDENCE_MAX_CHARS,
+                BROAD_EVIDENCE_PATTERNS,
+                'STRUCTURE'
+            )
         });
         const repairedText = await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS);
         const cleaned = cleanGapFillPrefix(repairedText.trim());
@@ -3286,7 +3482,13 @@ async function checkAndFixMethodSection(paper, analysis, textForAnalysis) {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
         methodSection,
-        textForAnalysis: buildTypeAwareSourceContext(analysis, textForAnalysis, 80000)
+        textForAnalysis: buildTypeAwareSourceContext(
+            analysis,
+            textForAnalysis,
+            REPAIR_EVIDENCE_MAX_CHARS,
+            METHOD_EVIDENCE_PATTERNS,
+            'METHOD'
+        )
     });
 
     const fixedSection = await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS);
@@ -3359,7 +3561,13 @@ async function checkAndFixTables(paper, analysis, textForAnalysis) {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
         resultsSection,
-        textForAnalysis: buildTypeAwareSourceContext(analysis, textForAnalysis, 80000)
+        textForAnalysis: buildTypeAwareSourceContext(
+            analysis,
+            textForAnalysis,
+            REPAIR_EVIDENCE_MAX_CHARS,
+            RESULT_EVIDENCE_PATTERNS,
+            'RESULT'
+        )
     });
 
     const fixedSection = await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS);
@@ -3547,6 +3755,7 @@ module.exports = {
     fetchArxivTextDetailed,
     fetchArxivImageUrls,
     parseArxivImageInfosFromHtml,
+    assessArxivHtmlFullText,
     removeUnapprovedMarkdownImages,
     selectImageCandidates,
     scoreImageCandidate,
@@ -3596,6 +3805,8 @@ module.exports = {
     getRemainingTimeoutMs,
     getTypeAwareEvidenceGuide,
     buildTypeAwareSourceContext,
+    buildTaskEvidenceContext,
+    summarizeModelInput,
     createAnalysisRecoveryManifest,
     markRecoveryStage,
     isRecoveryStageComplete,

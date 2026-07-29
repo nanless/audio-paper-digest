@@ -94,6 +94,7 @@ arXiv fetch and LLM filter module.
   - `fetchCategoryPapers()`: auto 3-level fallback, stops at whichever level yields sufficient papers
   - `fetchAbstracts()`: batch fetches abstracts from arXiv abs pages (concurrency 5)
 - Filtering uses `PAPER_ANALYZER_*`; LLM requests force `agent: false` direct connections, while HTTP CONNECT proxy support applies to fetch-side requests
+- A high-recall local keyword gate now runs before the LLM. Explicit audio task/modality/method families or a core audio arXiv category pass through; clearly unrelated papers are discarded locally. `npm run keyword:recall` requires zero misses/leaks on the curated positive/negative gold set and zero misses on adjudicated historical positives.
 
 #### `scripts/config.js`
 
@@ -101,7 +102,7 @@ Unified configuration center. All hardcoded parameters are centrally managed and
 
 **Runtime Data Paths (`FILES`)**
 
-`Config.FILES` centrally registers the core JSON files read/written by the current workflow: `papers` / `rawCandidates` / `filterDecisions` / `filteredPapers` / `deepAnalysisResult` / `analyzed`, plus the legacy paths that still need compatibility. New scripts should reuse these constants instead of hand-writing `data/current/*.json` paths.
+`Config.FILES` centrally registers the core JSON files read/written by the current workflow: `papers` / `rawCandidates` / `filterDecisions` / `filteredPapers` / `deepAnalysisResult` / `analyzed` / `digestRunReportDir`, plus the legacy paths that still need compatibility. New scripts should reuse these constants instead of hand-writing `data/current/*.json` paths.
 
 **Analysis Configuration (`ANALYSIS_CONFIG`)**
 
@@ -119,7 +120,12 @@ Unified configuration center. All hardcoded parameters are centrally managed and
 | Single-image raw-size limit | 6MB | `PD_IMAGE_MAX_BYTES` | Byte-size guard after download |
 | Single-image base64 limit | 8M chars | `PD_IMAGE_MAX_BASE64_CHARS` | Base64 conversion limit per image |
 | Per-paper total image base64 limit | 20M chars | `PD_IMAGE_TOTAL_BASE64_CHARS` | Prevents oversized multi-image model payloads |
-| Full-text limit | 500K chars | -- | arXiv HTML body truncation limit |
+| Primary-analysis source budget | 200K chars | `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` | Deterministic whole-document sampling for very long arXiv HTML/PDF sources |
+| Open-source evidence budget | 16K chars | `PD_OPENSOURCE_EVIDENCE_MAX_CHARS` | Prioritizes URLs, repositories, weights, datasets, and release promises |
+| Revision evidence budget | 60K chars | `PD_REVISION_EVIDENCE_MAX_CHARS` | Retains methods, experiments, limitations, and important values across the source |
+| Scoring-audit evidence budget | 40K chars | `PD_SCORING_EVIDENCE_MAX_CHARS` | Sent with the existing-analysis evidence ledger |
+| Method/table repair evidence budget | 30K chars | `PD_REPAIR_EVIDENCE_MAX_CHARS` | Selected with method or result/metric terms |
+| Structure-repair evidence budget | 40K chars | `PD_STRUCTURE_EVIDENCE_MAX_CHARS` | Cross-document evidence for missing sections |
 | arXiv HTML/image discovery timeout | 60s | `PD_ARXIV_FETCH_TIMEOUT_MS` | HTML body and image-list request timeout |
 | arXiv PDF fallback timeout | 180s | `PD_ARXIV_PDF_TIMEOUT_MS` | Per-PDF timeout when HTML is unavailable |
 
@@ -207,38 +213,38 @@ HuggingFace Papers fetch module.
 Multimodal deep analyzer. The analysis flow is an **up-to-8-round progressive process**, not a single call:
 
 **Round 1 -- Main Deep Analysis**
-- `analyzePaperDeep(paper)`: fetches arXiv HTML full text (up to 500K characters) and preselects candidate images. Dual-model mode downloads candidate images serially and lets the secondary model output a JSON insertion plan for high-value figures; single-model mode only stores candidate image metadata. `allImageUrls` stores candidates, while `selectedImageUrls` / `imageUrls` store selected figures
+- `analyzePaperDeep(paper)`: fetches arXiv HTML/PDF full text. Primary analysis uses at most 200K characters by default; very long sources are sampled across the head, quartiles, middle, tail, and task-relevant chunks instead of keeping only a prefix. It then preselects candidate images. Dual-model mode downloads candidate images serially and lets the secondary model output a JSON insertion plan for high-value figures; single-model mode only stores candidate image metadata. `allImageUrls` stores candidates, while `selectedImageUrls` / `imageUrls` store selected figures
 - Loads `prompts/deep-analysis.md`, replaces placeholders, and calls the LLM
 - Output includes: document type, score, machine summary, tags, authors and affiliations, snarky review, core summary, method overview and architecture, core innovations, experimental results, detailed description, score rationale, limitations and issues, open source details
 - `parseAnalysis(analysis)`: parses the analysis, normalizes `document_type`, and marks new results with `type-aware-v1`. `score` is recalculated only when all eight dimensions are complete, unique, use the correct denominators, and contain finite in-range values; otherwise a contract error blocks saving and publishing
 
 **Round 2 -- Open Source Scan (`scanOpensource`)**
 - Loads `prompts/opensource-scan.md`
-- Extracts GitHub / HuggingFace / ModelScope etc. open source links from paper text
+- Extracts GitHub / HuggingFace / ModelScope links from a default 16K open-source evidence slice instead of resending the complete source
 - Supplements the runtime `## 开源详情` section
 
 **Round 3 -- Review and Rewrite (`reviseAnalysis`)**
 - Loads `prompts/gap-fill.md`
-- Compares original paper with Round 1 output, checking for omissions, errors, over-inferences
+- Uses a default 60K whole-document evidence slice to compare against Round 1 output for omissions, errors, and over-inferences
 - Generates a revised analysis text, overwriting the original content
 
 **Round 4 -- Table Fix (`checkAndFixTables`)**
 - Loads `prompts/table-fill.md`
 - Detects missing Markdown tables in the runtime `## 实验结果` section
-- If tables are found to be omitted or truncated, triggers LLM supplementation of the complete table
+- If a table is omitted or truncated, uses a default 30K result/number-focused evidence slice for LLM supplementation
 
 **Round 5 -- Method Section Fix (`checkAndFixMethodSection`)**
 - Loads `prompts/method-fill.md`
 - Detects if the runtime `## 方法概述和架构` section is too brief (fewer than 600 Chinese characters, vague expression, fewer than 3 paragraphs)
-- If conditions are met, triggers LLM expansion to a 600+ character detailed description
+- If conditions are met, uses a default 30K method/architecture-focused evidence slice to expand the section
 
 **Round 6 -- Final Structural Repair (`repairMissingAnalysisSections`, conditional)**
 - Uses `scripts/analysis-contract.js` to check all 13 required sections
-- When sections are missing, loads `prompts/structure-repair.md` with exact missing titles and prior validation feedback; complete reports skip this round
+- When sections are missing, loads `prompts/structure-repair.md` with exact missing titles, prior validation feedback, and a default 40K cross-document evidence slice; complete reports skip this round
 
 **Round 7 -- Type-aware Scoring Audit (`auditTypeAwareScoring`)**
 - Loads `prompts/scoring-audit.md`; the primary model returns JSON only
-- Re-audits document type, confidence, eight scores, and unique deduction ownership; cross-dimension failures are fed into the next local attempt
+- Re-audits document type, confidence, eight scores, and unique deduction ownership from a default 40K scoring evidence ledger; cross-dimension failures are fed into the next local attempt
 - Non-theory papers with no released core artifact are normalized to 0.5 for an explicit promise, 0.2 for demo-only, or 0 otherwise; theory retains the judgment based on public proof material
 - Code updates scoring sections and machine-summary score fields without rewriting body text
 
@@ -259,6 +265,7 @@ Multimodal deep analyzer. The analysis flow is an **up-to-8-round progressive pr
 - `npm run visual:render:debug -- --spec SPEC.json --output OUTPUT.png [--illustration text-free-art] [--reference method/architecture-figure] [--result-reference key-result-figure]` is the retained deterministic local debug/fallback renderer, not the default final-asset path. The default flow uses built-in `image_gen` to create the complete text-bearing composition and requires visual accuracy review before record. The Pillow fallback can still compose an approximately `2160x4552` paper infographic or digest cover, supports structured `diagram.columns/nodes/edges` Chinese redraws, reference captions, basic charts/metrics, and the 8 MiB gate
 - Register it with `record --paper ID --kind infographic --file PNG --token TOKEN`. The tool validates the PNG, minimum dimensions, portrait ratio, size, SHA, and task token before archiving it flat under `data/archive/<date>/visual-summaries/` as `<two-digit-rank>-<paper-id>-<title-slug>.png`; concurrent completion order never affects numbering
 - Before calling built-in image generation, run `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]`. This command never calls an image API: it validates the controlled `.bin` cache path, SHA, byte count, MIME, and magic bytes, then emits `referencedImagePaths` with real `.png/.jpg/.webp` extensions so the image service never receives raw `.bin` paths
+- Each task exposes `generationContext.qaClaims`: the exact English title, four mandatory content regions, method claims, numeric result claims, limitations, and reference captions. Prompting and pre-record visual review must check every item.
 - `digest-cover-state.js plan --date YYYY-MM-DD [--category CATEGORY]` deterministically derives the batch title, hot-direction counts, and TOP 10 ranking; conference flows must pass the same category used for blog generation. Codex uses `prompts/digest-cover.md` to create one cover and registers it in the same directory as `data/archive/<date>/visual-summaries/00-digest-cover-<date>.png`
 - A later plan validates PNG bytes and SHA before migrating legacy assets from `data/current/`; conflicting archive content is rejected
 - For historical batches whose old receipt lacks the modern remote-OID field, run `npm run visual:archive -- --date YYYY-MM-DD` and `npm run cover:archive -- --date YYYY-MM-DD`. These maintenance commands only move verified existing assets and update manifests; they never create tasks or forge publication receipts. Non-TOP10 legacy cards use `unranked-<paper>` directories
@@ -386,7 +393,7 @@ Publish to Hugo blog (GitHub Pages).
 
 **Publish Flow**:
 1. `generate-blog.py` only generates and installs Markdown, then writes a generation manifest. It never calls an LLM, commits, or pushes.
-2. `review-blog.py` reviews that manifest with code, strict LLM, multimodal image, and Hugo gates. A failed first pass stores a manifest/base-HEAD/per-file-hash-bound failure set; a retry reviews only modified failed pages when all reuse invariants still hold, otherwise it falls back to a full review. Success writes a per-file SHA-256 review receipt; it never commits or pushes.
+2. `review-blog.py` reviews that manifest with code, strict LLM, multimodal image, and Hugo gates. A failed first pass stores a manifest/base-HEAD/per-file-hash-bound failure set; a retry reviews only modified failed pages when all reuse invariants still hold, otherwise it falls back to a full review. Success writes a per-file SHA-256 review receipt; it never commits or pushes. HTTP retries honor `Retry-After` first, otherwise use exponential backoff with short jitter; format and full-protocol repair retries have tighter independent budgets.
 3. `push-blog.py` only verifies that receipt against the current files, then stages the exact manifest, commits with a detailed Chinese message, pushes `origin HEAD:main`, and verifies the remote OID. It never regenerates or re-reviews.
 
 **Runtime requirement**: the three entry points and compatibility `publish-to-blog.py` require an external runtime. They reject the reliable `CODEX_SANDBOX` marker; the elevation wrapper preserves the network-disabled marker, so it cannot independently identify a sandbox. Re-run the same stage outside the sandbox; never skip review or fabricate a receipt.
@@ -403,7 +410,7 @@ All stages share both per-date and repository-global locks. Generation journals 
 - To publish all papers (no filtering), pass `--all` explicitly
 
 **Review Step**:
-Generation reparses scoring from `analysis` and compares it with cached `parsed` data and the rubric version. The separate review step uses 5 workers by default, configurable through `PD_BLOG_REVIEW_CONCURRENCY`, and validates image payload/context alignment plus HTTPS peers. Any indeterminate strict review blocks receipt creation. Push fails closed when the receipt is absent or any reviewed file hash changed.
+Generation reparses scoring from `analysis` and compares it with cached `parsed` data and the rubric version. Text review uses 8,000-character chunks by default; `PD_BLOG_REVIEW_CHUNK_CHARS` adjusts the size within 4,000–16,000 and is bound into the review-protocol fingerprint. The digest page is reviewed first, then independent paper pages use 5 workers by default, configurable through `PD_BLOG_REVIEW_CONCURRENCY`. Review also validates image payload/context alignment plus HTTPS peers. Any indeterminate strict review blocks receipt creation. Push fails closed when the receipt is absent or any reviewed file hash changed.
 
 The shared publish LLM client uses a standard-library explicit empty proxy handler, keeping LLM calls direct and avoiding `requests` compatibility issues or fetch-proxy contamination.
 
@@ -416,10 +423,17 @@ Code-level auto-fix covers:
 6. Unclosed LaTeX `$ \mathcal{L}_D \(` → convert to `\(\mathcal{L}_D\)`
 7. Malformed LaTeX brackets (`\)\mathcal{L}_X\(`) → unify to `\(\mathcal{L}_X\)`
 8. Double-backslash LaTeX (`\(\\mathcal{L}_X\)` → fix to `\(\mathcal{L}_X\)`)
+9. Exact duplicate long prose blocks → deterministically remove before LLM review
+10. Inconsistent Markdown table column counts → block, while preserving valid empty leading grouping cells
+11. Suspicious long image captions truncated inside an English word → block
 
 Markdown tables may legitimately use empty leading group cells for continuation rows. Code review preserves those rows instead of treating them as removable subheaders. LLM advice that ordinary model names or technical terms require backticks is filtered as a style false positive.
 
-LLM-level fix: Issues where LLM review returns `auto_fixable: true` are fixed via simple text replacement per `fix_instruction`. Blog review and Xiaohongshu one-liners share `call_publish_llm_api()` in `publish_common.py`, keeping protocol routing aligned with the Node side; Anthropic-compatible requests dynamically read local `claude --version` for `User-Agent`, falling back to the default version if unavailable.
+LLM-level fix: Issues where LLM review returns `auto_fixable: true` require `fix_instruction` and are fixed via simple text replacement. Blocking `auto_fixable: false` issues may omit that field. Blog review and Xiaohongshu one-liners share `call_publish_llm_api()` in `publish_common.py`, keeping protocol routing aligned with the Node side; Anthropic-compatible requests dynamically read local `claude --version` for `User-Agent`, falling back to the default version if unavailable.
+
+#### `scripts/digest-run-report.js`
+
+`npm run digest:status -- --date YYYY-MM-DD` writes an atomic machine-readable final report covering fetch, filter, analysis, strict review, remote publication, TOP 10 infographics, and the digest cover. It exits zero only when every required stage is complete and never mutates business-stage state.
 
 **Important Limitation**: `fetchedAt` is the fetch time, not the paper's `published` date on arXiv. Please explicitly specify `--date` when running across midnight.
 

@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "positive-asr",
+      "expectedPass": true,
+      "paper": {
+        "title": "Robust Recognition under Conversational Noise",
+        "abstract": "We improve automatic speech recognition for spontaneous utterances and report WER on multilingual speech corpora.",
+        "categories": ["cs.CL"]
+      }
+    },
+    {
+      "id": "positive-music",
+      "expectedPass": true,
+      "paper": {
+        "title": "Graph Models of Musical Expectation",
+        "abstract": "A graph-native model predicts pitch and rhythm in symbolic music.",
+        "categories": ["cs.AI"]
+      }
+    },
+    {
+      "id": "positive-bioacoustics",
+      "expectedPass": true,
+      "paper": {
+        "title": "Passive Monitoring of Bird Populations",
+        "abstract": "We build an ecoacoustic benchmark from long-form birdsong recordings.",
+        "categories": ["cs.CV"]
+      }
+    },
+    {
+      "id": "positive-hearing",
+      "expectedPass": true,
+      "paper": {
+        "title": "Personalized Cochlear Implant Fitting",
+        "abstract": "The system optimizes auditory perception for listeners with hearing loss.",
+        "categories": ["eess.SP"]
+      }
+    },
+    {
+      "id": "positive-doa",
+      "expectedPass": true,
+      "paper": {
+        "title": "Direction of Arrival Estimation with Sparse Microphone Arrays",
+        "abstract": "We localize acoustic sources from multichannel recordings in reverberant rooms.",
+        "categories": ["eess.SP"]
+      }
+    },
+    {
+      "id": "positive-short-fail-open",
+      "expectedPass": true,
+      "paper": {
+        "title": "A New Multimodal Benchmark",
+        "abstract": "",
+        "categories": ["cs.MM"]
+      }
+    },
+    {
+      "id": "negative-text",
+      "expectedPass": false,
+      "paper": {
+        "title": "Sparse Attention for Long Documents",
+        "abstract": "We accelerate written-document classification and retrieval with block-sparse attention, evaluating latency and accuracy on text corpora.",
+        "categories": ["cs.CL"]
+      }
+    },
+    {
+      "id": "negative-image-diffusion",
+      "expectedPass": false,
+      "paper": {
+        "title": "Flow Matching for Image Generation",
+        "abstract": "A diffusion transformer generates photographs and is evaluated with visual fidelity and object consistency benchmarks.",
+        "categories": ["cs.CV"]
+      }
+    },
+    {
+      "id": "negative-power-grid",
+      "expectedPass": false,
+      "paper": {
+        "title": "Topology-Aware Power Grid State Estimation",
+        "abstract": "We estimate bus voltage states in electrical transmission networks and study convergence under line failures.",
+        "categories": ["eess.SP"]
+      }
+    },
+    {
+      "id": "negative-tactile-noise",
+      "expectedPass": false,
+      "paper": {
+        "title": "Noise Robustness for Tactile Sensors",
+        "abstract": "The method removes measurement noise from pressure arrays used by robotic grippers and evaluates contact reconstruction.",
+        "categories": ["eess.SP"]
+      }
+    }
+  ],
+  "historicalFalsePositives": [
+    {"arxivId": "2604.18109", "reason": "通用多模态句向量，历史记录没有语音/音频任务证据"},
+    {"arxivId": "2604.21905", "reason": "通用大模型低秩适配"},
+    {"arxivId": "2605.09348", "reason": "家庭活动知识图谱问答"},
+    {"arxivId": "2605.16275", "reason": "教育场景生成媒体感知调查"},
+    {"arxivId": "2606.04599", "reason": "工业异常检测"},
+    {"arxivId": "2606.04351", "reason": "纯视觉模型内部化"},
+    {"arxivId": "2606.05620", "reason": "语言学 ERP 研究，不处理语音或音频信号"},
+    {"arxivId": "2606.06453", "reason": "通用稀疏注意力服务"},
+    {"arxivId": "2606.11432", "reason": "通用信号变换理论"},
+    {"arxivId": "2606.13392", "reason": "通用稀疏注意力"},
+    {"arxivId": "2606.16184", "reason": "纯视频生成"},
+    {"arxivId": "2606.16003", "reason": "科学公式生成"},
+    {"arxivId": "2606.17331", "reason": "地质导向决策优化"},
+    {"arxivId": "2606.18506", "reason": "睡眠恢复因果分析，不处理音频"},
+    {"arxivId": "2606.20323", "reason": "工业故障诊断"},
+    {"arxivId": "2606.19534", "reason": "视觉区域感知模型"},
+    {"arxivId": "2606.23092", "reason": "人际关系多模态推理，无音频任务证据"},
+    {"arxivId": "2606.29737", "reason": "联合信源信道编码理论"},
+    {"arxivId": "2607.02971", "reason": "分布式设备 DOA，历史元数据没有声学来源证据"},
+    {"arxivId": "2607.08360", "reason": "光子计算"},
+    {"arxivId": "2607.10129", "reason": "通用最小阵列 TDoA 定位，无声学来源证据"},
+    {"arxivId": "2607.14682", "reason": "文档问答"}
+  ]
+}

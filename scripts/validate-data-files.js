@@ -7,6 +7,7 @@ const path = require('path');
 const crypto = require('crypto');
 const Config = require('./config.js');
 const { buildFilterInputSha256 } = require('./lib/filter-input-contract.js');
+const { KEYWORD_PREFILTER_VERSION } = require('./lib/keyword-prefilter.js');
 const {
     readJsonSafe,
     normalizedId,
@@ -589,6 +590,7 @@ function validateFilterDecisionsFile(filePath = DEFAULT_FILTER_DECISIONS_FILE) {
 
     const entries = Object.entries(data.decisions);
     let relatedCount = 0;
+    let keywordRejectedCount = 0;
     for (const [key, decision] of entries) {
         if (!isPlainObject(decision)) {
             addIssue(issues, filePath, `decisions.${key} 不是对象`);
@@ -617,12 +619,29 @@ function validateFilterDecisionsFile(filePath = DEFAULT_FILTER_DECISIONS_FILE) {
         if (decision.retryable || decision.fallback) {
             addIssue(issues, filePath, `decisions.${key} 不能保存 retryable/fallback 决定`);
         }
+        if (decision.parseSource === 'keyword_prefilter') {
+            keywordRejectedCount += 1;
+            if (decision.related !== false) {
+                addIssue(issues, filePath, `decisions.${key} 的 keyword_prefilter 决定只能是 related=false`);
+            }
+            if (decision.keywordPrefilterVersion !== KEYWORD_PREFILTER_VERSION) {
+                addIssue(issues, filePath, `decisions.${key}.keywordPrefilterVersion 必须为当前版本 ${KEYWORD_PREFILTER_VERSION}`);
+            }
+            for (const field of ['keywordMatchedGroups', 'keywordMatchedKeywords']) {
+                if (!Array.isArray(decision[field]) || decision[field].some(item => typeof item !== 'string')) {
+                    addIssue(issues, filePath, `decisions.${key}.${field} 必须是字符串数组`);
+                }
+            }
+        }
     }
 
     const stats = isPlainObject(data.stats) ? data.stats : {};
     validateNonNegativeInteger(filePath, 'stats.totalCandidates', stats.totalCandidates, issues);
     validateNonNegativeInteger(filePath, 'stats.decided', stats.decided, issues);
     validateNonNegativeInteger(filePath, 'stats.related', stats.related, issues);
+    for (const field of ['keywordRejected', 'llmCandidates', 'llmDecided']) {
+        if (stats[field] !== undefined) validateNonNegativeInteger(filePath, `stats.${field}`, stats[field], issues);
+    }
     if (stats.complete !== undefined && typeof stats.complete !== 'boolean') {
         addIssue(issues, filePath, 'stats.complete 必须是布尔值');
     }
@@ -631,6 +650,17 @@ function validateFilterDecisionsFile(filePath = DEFAULT_FILTER_DECISIONS_FILE) {
     }
     if (stats.related !== undefined && stats.related !== relatedCount) {
         addIssue(issues, filePath, `stats.related (${stats.related}) 必须等于 related=true 数量 (${relatedCount})`);
+    }
+    if (stats.keywordRejected !== undefined && stats.keywordRejected !== keywordRejectedCount) {
+        addIssue(issues, filePath, `stats.keywordRejected (${stats.keywordRejected}) 必须等于 keyword_prefilter 决定数量 (${keywordRejectedCount})`);
+    }
+    if (stats.llmCandidates !== undefined && stats.totalCandidates !== undefined
+        && stats.llmCandidates !== stats.totalCandidates - keywordRejectedCount) {
+        addIssue(issues, filePath, 'stats.llmCandidates 必须等于 totalCandidates - keywordRejected');
+    }
+    if (stats.llmDecided !== undefined && stats.decided !== undefined
+        && stats.llmDecided !== stats.decided - keywordRejectedCount) {
+        addIssue(issues, filePath, 'stats.llmDecided 必须等于 decided - keywordRejected');
     }
 
     return issues;
