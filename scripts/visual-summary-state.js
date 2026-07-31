@@ -18,6 +18,7 @@ const {
 const {
     isSuccessfulAnalysisRecord,
     updateJsonFileLocked,
+    withFileLockSync,
     readJsonFileStrict
 } = require('./analysis-engine.js');
 
@@ -357,7 +358,10 @@ function prepareVisualReferenceInputs(manifest, {
                     caption: reference.caption,
                     mime: reference.mime,
                     sha256: actualSha,
-                    preparedPath: path.relative(Config.PROJECT_ROOT, target).split(path.sep).join('/')
+                    // image_gen accepts only absolute normalized local paths.
+                    // Keep a relative field solely for compact logs and manifests.
+                    preparedPath: path.resolve(target),
+                    relativePath: path.relative(Config.PROJECT_ROOT, target).split(path.sep).join('/')
                 };
             });
             return {
@@ -456,6 +460,156 @@ function visualSummaryAssetPath(targetDate, arxivId, kind, rank, title = '') {
         'visual-summaries',
         `${String(rank).padStart(2, '0')}-${id}-${visualAssetTitleSlug(title)}.png`
     );
+}
+
+function visualSummaryArchiveRoot(targetDate) {
+    return path.resolve(
+        Config.FILES.visualSummaryAssetDir, validateDate(targetDate), 'visual-summaries'
+    );
+}
+
+function regexEscape(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isControlledRankedPaperAsset(assetPath, targetDate, arxivId) {
+    const id = normalizedId(arxivId);
+    if (!id) return false;
+    const root = visualSummaryArchiveRoot(targetDate);
+    const absolute = path.resolve(String(assetPath || ''));
+    if (path.dirname(absolute) !== root) return false;
+    return new RegExp(`^\\d{2}-${regexEscape(id)}-.+\\.png$`, 'i')
+        .test(path.basename(absolute));
+}
+
+function assertVisualCleanupRootSafe(targetDate) {
+    const assetRoot = path.resolve(Config.FILES.visualSummaryAssetDir);
+    const archiveRoot = visualSummaryArchiveRoot(targetDate);
+    const relative = path.relative(assetRoot, archiveRoot);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+        throw new Error(`视觉摘要清理目录逃逸资产根目录: ${archiveRoot}`);
+    }
+    const assertDirectoryComponent = current => {
+        let stat;
+        try {
+            stat = fs.lstatSync(current);
+        } catch (error) {
+            if (error.code === 'ENOENT') return;
+            throw error;
+        }
+        if (stat.isSymbolicLink()) throw new Error(`视觉摘要清理路径不得包含符号链接: ${current}`);
+        if (!stat.isDirectory()) throw new Error(`视觉摘要清理路径不是目录: ${current}`);
+    };
+    let current = assetRoot;
+    for (const part of relative.split(path.sep).filter(Boolean)) {
+        assertDirectoryComponent(current);
+        current = path.join(current, part);
+    }
+    assertDirectoryComponent(current);
+    return archiveRoot;
+}
+
+function collectObsoleteCompletedVisualAssets(previousManifest, plannedManifest) {
+    if (!previousManifest || previousManifest.batchDate !== plannedManifest.batchDate) return [];
+    const retained = new Set();
+    for (const paper of Object.values(plannedManifest.papers || {})) {
+        for (const card of Object.values(paper.cards || {})) {
+            if (card?.status === 'complete' && card.assetPath) {
+                retained.add(path.resolve(Config.PROJECT_ROOT, card.assetPath));
+            }
+        }
+    }
+    const candidates = new Map();
+    for (const item of previousManifest.obsoleteVisualAssets || []) {
+        const source = path.resolve(Config.PROJECT_ROOT, String(item?.assetPath || ''));
+        if (!retained.has(source)
+            && /^[0-9a-f]{64}$/i.test(String(item?.assetSha256 || ''))
+            && isControlledRankedPaperAsset(source, plannedManifest.batchDate, item?.arxivId)) {
+            candidates.set(source, {
+                arxivId: normalizedId(item.arxivId),
+                assetPath: path.relative(Config.PROJECT_ROOT, source).split(path.sep).join('/'),
+                assetSha256: String(item.assetSha256).toLowerCase()
+            });
+        }
+    }
+    for (const [id, paper] of Object.entries(previousManifest.papers || {})) {
+        for (const card of Object.values(paper?.cards || {})) {
+            if (card?.status !== 'complete' || !/^[0-9a-f]{64}$/i.test(String(card.assetSha256 || ''))) continue;
+            const source = path.resolve(Config.PROJECT_ROOT, String(card.assetPath || ''));
+            if (retained.has(source)
+                || !isControlledRankedPaperAsset(source, plannedManifest.batchDate, id)) continue;
+            candidates.set(source, {
+                arxivId: normalizedId(id),
+                assetPath: path.relative(Config.PROJECT_ROOT, source).split(path.sep).join('/'),
+                assetSha256: String(card.assetSha256).toLowerCase()
+            });
+        }
+    }
+    return [...candidates.values()].sort((a, b) => a.assetPath.localeCompare(b.assetPath));
+}
+
+function cleanupObsoleteCompletedVisualAssets(previousManifest, plannedManifest) {
+    const candidates = Array.isArray(plannedManifest?.obsoleteVisualAssets)
+        ? plannedManifest.obsoleteVisualAssets
+        : collectObsoleteCompletedVisualAssets(previousManifest, plannedManifest);
+    if (candidates.length === 0) return 0;
+    assertVisualCleanupRootSafe(plannedManifest.batchDate);
+    let removed = 0;
+    for (const item of candidates) {
+        const source = path.resolve(Config.PROJECT_ROOT, String(item.assetPath || ''));
+        if (!isControlledRankedPaperAsset(source, plannedManifest.batchDate, item.arxivId)) {
+            throw new Error(`待清理的旧视觉摘要路径不受控: ${source}`);
+        }
+        if (!fs.existsSync(source)) continue;
+        const stat = fs.lstatSync(source);
+        if (!stat.isFile() || stat.isSymbolicLink()) {
+            throw new Error(`待清理的旧视觉摘要不是受控普通文件: ${source}`);
+        }
+        const raw = fs.readFileSync(source);
+        validatePngBuffer(raw);
+        if (sha256Buffer(raw) !== item.assetSha256) {
+            throw new Error(`待清理的旧视觉摘要 SHA 不匹配，拒绝静默删除: ${source}`);
+        }
+        fs.unlinkSync(source);
+        removed += 1;
+    }
+    return removed;
+}
+
+function assertVisualArchiveUniqueness(manifest) {
+    const targetDate = validateDate(manifest?.batchDate);
+    const root = visualSummaryArchiveRoot(targetDate);
+    const expected = new Set();
+    const knownIds = Object.keys(manifest?.papers || {});
+    for (const [id, paper] of Object.entries(manifest?.papers || {})) {
+        for (const [kind, card] of Object.entries(paper.cards || {})) {
+            if (card?.status !== 'complete') continue;
+            expected.add(path.resolve(
+                visualSummaryAssetPath(targetDate, id, kind, paper.rank, paper.title || '')
+            ));
+        }
+    }
+    if (!fs.existsSync(root)) {
+        if (expected.size > 0) throw new Error(`视觉摘要归档目录缺失: ${root}`);
+        return true;
+    }
+    if (fs.lstatSync(root).isSymbolicLink()) throw new Error(`视觉摘要归档目录不得是符号链接: ${root}`);
+    const extras = [];
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+        if (!entry.isFile() || entry.isSymbolicLink() || path.extname(entry.name).toLowerCase() !== '.png') continue;
+        if (entry.name === `00-digest-cover-${targetDate}.png`) continue;
+        const isKnownPaperAsset = knownIds.some(id => (
+            new RegExp(`^\\d{2}-${regexEscape(id)}-.+\\.png$`, 'i').test(entry.name)
+        ));
+        const looksRanked = /^\d{2}-\d{4}\.\d{4,5}-.+\.png$/i.test(entry.name);
+        if ((isKnownPaperAsset || looksRanked) && !expected.has(path.resolve(root, entry.name))) {
+            extras.push(entry.name);
+        }
+    }
+    if (extras.length) {
+        throw new Error(`视觉摘要归档存在未登记或重复的排行榜 PNG: ${extras.sort().join(', ')}`);
+    }
+    return true;
 }
 
 /**
@@ -948,7 +1102,8 @@ function planVisualSummaries({
     const batchPapers = papers.filter(paper => paperBatchDate(paper) === targetDate);
     const selected = selectTopRankedPapers(papers, targetDate, selectionLimit);
 
-    const plannedManifest = updateJsonFileLocked(manifestPath, current => {
+    const plannedManifest = withFileLockSync(manifestPath, () => {
+        const current = readJsonFileStrict(manifestPath, { allowMissing: true });
         if (current && ![1, 2, MANIFEST_VERSION].includes(current.version)) {
             throw new Error(`不支持的视觉摘要 manifest 版本: ${current.version}`);
         }
@@ -977,7 +1132,7 @@ function planVisualSummaries({
                 score: Number(paper.parsed.score)
             };
         }
-        return withManifestSummary({
+        const nextManifest = withManifestSummary({
             version: MANIFEST_VERSION,
             batchDate: targetDate,
             selection: { type: 'top_score', limit: selectionLimit, sourcePaperCount: batchPapers.length },
@@ -990,6 +1145,19 @@ function planVisualSummaries({
             papers: planned,
             skippedPapers
         });
+        const obsoleteVisualAssets = collectObsoleteCompletedVisualAssets(current, nextManifest);
+        if (obsoleteVisualAssets.length > 0) nextManifest.obsoleteVisualAssets = obsoleteVisualAssets;
+        nextManifest.generation = (Number.isInteger(current?.generation) ? current.generation : 0) + 1;
+        // Persist the invalidated/pending manifest before deleting any old
+        // canonical asset. A crash can therefore leave only a safe, resumable
+        // cleanup list, never an old complete manifest pointing at a removed file.
+        writeFileAtomic(manifestPath, JSON.stringify(nextManifest, null, 2));
+        cleanupObsoleteCompletedVisualAssets(current, nextManifest);
+        if (Object.prototype.hasOwnProperty.call(nextManifest, 'obsoleteVisualAssets')) {
+            delete nextManifest.obsoleteVisualAssets;
+            writeFileAtomic(manifestPath, JSON.stringify(nextManifest, null, 2));
+        }
+        return nextManifest;
     });
     if (path.resolve(manifestPath) === path.resolve(defaultManifestPath)) {
         archiveRemainingLegacyVisualAssets(targetDate, plannedManifest);
@@ -1170,10 +1338,21 @@ function pendingVisualSummaryCards(manifest) {
 function parseArgs(argv) {
     const [command, ...rest] = argv;
     const options = {};
+    const allowed = new Set([
+        'date', 'receipt', 'manifest', 'generation', 'paper', 'kind',
+        'file', 'output-hint', 'token', 'error'
+    ]);
     for (let i = 0; i < rest.length; i += 1) {
         const arg = rest[i];
-        if (!arg.startsWith('--') || i + 1 >= rest.length) throw new Error(`无效参数: ${arg}`);
-        options[arg.slice(2)] = rest[++i];
+        if (!arg.startsWith('--') || i + 1 >= rest.length || rest[i + 1].startsWith('--')) {
+            throw new Error(`无效参数: ${arg}`);
+        }
+        const key = arg.slice(2);
+        if (!allowed.has(key)) throw new Error(`未知参数: ${arg}`);
+        if (Object.prototype.hasOwnProperty.call(options, key)) {
+            throw new Error(`参数只能指定一次: ${arg}`);
+        }
+        options[key] = rest[++i];
     }
     return { command, options };
 }
@@ -1241,6 +1420,7 @@ function main(argv = process.argv.slice(2)) {
         const manifest = readJsonFileStrict(options.manifest || visualSummaryManifestPath(targetDate));
         assertVisualManifestCurrent(manifest, publication, targetDate);
         const pending = pendingVisualSummaryCards(manifest);
+        assertVisualArchiveUniqueness(manifest);
         const total = Object.keys(manifest.papers || {}).length * CARD_KINDS.length;
         console.log(`视觉摘要：TOP ${manifest.selection.limit} 中选出 ${Object.keys(manifest.papers || {}).length} 篇，完成 ${total - pending.length}/${total} 张，待生成 ${pending.length} 张`);
         for (const item of pending) console.log(JSON.stringify(item));
@@ -1273,7 +1453,11 @@ module.exports = {
     validateCompletedCard,
     validatePngAsset,
     visualSummaryAssetPath,
+    visualSummaryArchiveRoot,
     visualAssetTitleSlug,
+    isControlledRankedPaperAsset,
+    cleanupObsoleteCompletedVisualAssets,
+    assertVisualArchiveUniqueness,
     cleanupGeneratedArchiveSource,
     migrateLegacyCompletedCard,
     archiveRemainingLegacyVisualAssets,
@@ -1284,6 +1468,7 @@ module.exports = {
     selectVisualReferenceImages,
     validateReferenceImageBytes,
     prepareVisualReferenceInputs,
+    parseArgs,
     validateDate,
     visualSummaryManifestPath,
     assertPublishedBlogReceipt,

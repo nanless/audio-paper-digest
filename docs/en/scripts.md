@@ -8,7 +8,7 @@
 
 #### `run-daily-digest.sh`
 
-Default Codex orchestrator for a request to run a dated paper digest. The required date is passed to `full-fetch.js`, blog generate, review, push, post-publication visual planning, and `visual:prepare` in order. `--from fetch|generate|review|push|visual` supports resuming from the failed or corrected stage without repeating successful long-running work.
+Default Codex orchestrator for a request to run a dated paper digest. The date must be a real Gregorian date. Starting from `fetch` additionally requires Beijing today because `full-fetch.js` binds its own Beijing start date and receives no historical-date argument. Historical batches may resume existing data only with `--from generate|review|push|visual`; this entrypoint cannot backfill an old crawl. Generate first uses a matching current analysis and otherwise falls back to the controlled `data/archive/<date>/deep-analysis-result.json`. The script then runs blog generate, review, push, post-publication visual planning, and `visual:prepare`. `--from fetch|generate|review|push|visual` supports safe stage resumption.
 
 The three blog stages remain separate processes, and any nonzero stage stops the script. The script never calls an image API. After it succeeds, Codex must still generate, inspect, and record every TOP 10 paper infographic and the digest cover with built-in `image_gen`, then require both `visual:status` and `cover:status` to be complete. npm entry: `npm run digest:prepare -- YYYY-MM-DD`.
 
@@ -94,7 +94,7 @@ arXiv fetch and LLM filter module.
   - `fetchCategoryPapers()`: auto 3-level fallback, stops at whichever level yields sufficient papers
   - `fetchAbstracts()`: batch fetches abstracts from arXiv abs pages (concurrency 5)
 - Filtering uses `PAPER_ANALYZER_*`; LLM requests force `agent: false` direct connections, while HTTP CONNECT proxy support applies to fetch-side requests
-- A high-recall local keyword gate now runs before the LLM. Explicit audio task/modality/method families or a core audio arXiv category pass through; clearly unrelated papers are discarded locally. `npm run keyword:recall` requires zero misses/leaks on the curated positive/negative gold set and zero misses on adjudicated historical positives.
+- A high-recall local keyword gate now runs before the LLM. Explicit audio task/modality/method families or a core audio arXiv category pass through; clearly unrelated papers are discarded locally. Date-based refiltering checkpoints definitive decisions per batch and retries only unresolved papers. At finalization, the canonical deep-analysis file is narrowed to the current selected IDs: recovery checkpoints for selected failures are retained, while stale results now explicitly rejected are removed. `npm run keyword:recall` requires zero misses/leaks on the curated positive/negative gold set and zero misses on adjudicated historical positives.
 
 #### `scripts/config.js`
 
@@ -216,7 +216,7 @@ Multimodal deep analyzer. The analysis flow is an **up-to-8-round progressive pr
 - `analyzePaperDeep(paper)`: fetches arXiv HTML/PDF full text. Primary analysis uses at most 200K characters by default; very long sources are sampled across the head, quartiles, middle, tail, and task-relevant chunks instead of keeping only a prefix. It then preselects candidate images. Dual-model mode downloads candidate images serially and lets the secondary model output a JSON insertion plan for high-value figures; single-model mode only stores candidate image metadata. `allImageUrls` stores candidates, while `selectedImageUrls` / `imageUrls` store selected figures
 - Loads `prompts/deep-analysis.md`, replaces placeholders, and calls the LLM
 - Output includes: document type, score, machine summary, tags, authors and affiliations, snarky review, core summary, method overview and architecture, core innovations, experimental results, detailed description, score rationale, limitations and issues, open source details
-- `parseAnalysis(analysis)`: parses the analysis, normalizes `document_type`, and marks new results with `type-aware-v1`. `score` is recalculated only when all eight dimensions are complete, unique, use the correct denominators, and contain finite in-range values; otherwise a contract error blocks saving and publishing
+- `parseAnalysis(analysis)`: parses the analysis, normalizes `document_type`, and marks new results with `type-aware-v1`. `score` is recalculated only when all eight dimensions are complete, unique, include a concrete per-dimension reason, use the correct denominators, and contain finite in-range values; otherwise a contract error blocks saving and publishing
 
 **Round 2 -- Open Source Scan (`scanOpensource`)**
 - Loads `prompts/opensource-scan.md`
@@ -251,9 +251,9 @@ Multimodal deep analyzer. The analysis flow is an **up-to-8-round progressive pr
 **Round 8 -- Image Selection and Insertion Plan (`applyImageSupplement`, dual-model mode)**
 - Loads `prompts/image-supplement.md`
 - The secondary model uses the final text and candidate images to select high-value figures, drop low-information figures, and output JSON only
-- `[secondary]` logs record paper ID, model, protocol, endpoint/key source, candidate/download counts, safe image labels and payloads, active request duration, response parse status, exact anchor matches, rejection reasons, and inserted figures; secrets are never printed
-- The insertion plan accepts only `anchor`, lead, and explanation. Legacy `replacement` / `rewrite` fields are ignored
-- Code inserts at most four figures in secondary-model priority order. Every plan needs a non-empty anchor that exactly matches the target section; empty, unmatched, and over-limit plans are rejected instead of falling back to the section end. Primary-model sentences are never replaced, and candidate numbers are not treated as source Figure numbers
+- `[secondary]` logs record paper ID, model, protocol, endpoint/key source, candidate/download counts, safe image labels and payloads, active request duration, response parse status, `paragraph_id` matches, rejection reasons, and inserted figures; secrets are never printed
+- The insertion plan accepts a code-provided stable `paragraph_id`, lead, and explanation. Legacy `anchor` is read-compatible only; `replacement` / `rewrite` fields are ignored
+- Code inserts at most four figures in secondary-model priority order. Every plan must resolve to a valid `paragraph_id` in the target section; empty, invalid, misplaced, and over-limit plans are rejected instead of falling back to the section end. Primary-model sentences are never replaced, and candidate numbers are not treated as source Figure numbers
 - The shared complete contract runs again after merging. An invalid plan is discarded while the audited primary-model text is retained
 - Generic `图N` alts without real captions and `selectedImageUrls` are normalized to final body order, preventing candidate numbers from becoming out-of-order display numbers
 - Only an object with strict `insertions: []` becomes `no_high_value_images`. Schema errors, malformed JSON, total image-download failure, and contract damage remain non-terminal recovery states instead of masquerading as success
@@ -264,11 +264,11 @@ Multimodal deep analyzer. The analysis flow is an **up-to-8-round progressive pr
 - After every blog page is pushed and remote `main` is verified, `visual-summary-integration.js` creates one `infographic` task for each final-score TOP 10 paper, with normalized-ID tie breaking
 - `npm run visual:render:debug -- --spec SPEC.json --output OUTPUT.png [--illustration text-free-art] [--reference method/architecture-figure] [--result-reference key-result-figure]` is the retained deterministic local debug/fallback renderer, not the default final-asset path. The default flow uses built-in `image_gen` to create the complete text-bearing composition and requires visual accuracy review before record. The Pillow fallback can still compose an approximately `2160x4552` paper infographic or digest cover, supports structured `diagram.columns/nodes/edges` Chinese redraws, reference captions, basic charts/metrics, and the 8 MiB gate
 - Register it with `record --paper ID --kind infographic --file PNG --token TOKEN`. The tool validates the PNG, minimum dimensions, portrait ratio, size, SHA, and task token before archiving it flat under `data/archive/<date>/visual-summaries/` as `<two-digit-rank>-<paper-id>-<title-slug>.png`; concurrent completion order never affects numbering
-- Before calling built-in image generation, run `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]`. This command never calls an image API: it validates the controlled `.bin` cache path, SHA, byte count, MIME, and magic bytes, then emits `referencedImagePaths` with real `.png/.jpg/.webp` extensions so the image service never receives raw `.bin` paths
+- Before calling built-in image generation, run `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]`. This command never calls an image API: it validates the controlled `.bin` cache path, SHA, byte count, MIME, and magic bytes, then emits absolute `referencedImagePaths` with real `.png/.jpg/.webp` extensions (plus relative paths for display) so working-directory changes and raw `.bin` uploads cannot break the call
 - Each task exposes `generationContext.qaClaims`: the exact English title, four mandatory content regions, method claims, numeric result claims, limitations, and reference captions. Prompting and pre-record visual review must check every item.
 - `digest-cover-state.js plan --date YYYY-MM-DD [--category CATEGORY]` deterministically derives the batch title, hot-direction counts, and TOP 10 ranking; conference flows must pass the same category used for blog generation. Codex uses `prompts/digest-cover.md` to create one cover and registers it in the same directory as `data/archive/<date>/visual-summaries/00-digest-cover-<date>.png`
 - A later plan validates PNG bytes and SHA before migrating legacy assets from `data/current/`; conflicting archive content is rejected
-- For historical batches whose old receipt lacks the modern remote-OID field, run `npm run visual:archive -- --date YYYY-MM-DD` and `npm run cover:archive -- --date YYYY-MM-DD`. These maintenance commands only move verified existing assets and update manifests; they never create tasks or forge publication receipts. Non-TOP10 legacy cards use `unranked-<paper>` directories
+- For historical batches whose old receipt lacks the modern remote-OID field, run `npm run visual:archive -- --date YYYY-MM-DD` and `npm run cover:archive -- --date YYYY-MM-DD`. These maintenance commands only move verified existing assets and update manifests; they never create tasks or forge publication receipts. Non-TOP10 legacy cards are stored flat as `unranked-<paper-id>-<kind>.png`
 - The manifests invalidate independently. Paper-analysis or visual-prompt changes rerun only affected infographics; paper-set, score, primary-task, or cover-prompt changes rerun only the cover. Nonzero `visual:status` or `cover:status` resumes only pending, failed, damaged, or stale assets
 - Project scripts plan, validate, copy, and checkpoint assets but never call an image API. Editorial images must not be presented as original paper figures or invent authors, claims, measurements, or ranking entries; the cover must not render arXiv IDs
 - Images do not enter or block the completed blog generation/review/push transaction; plan/status refuses to run without the remotely verified publication receipt
@@ -305,7 +305,7 @@ Node.js common utility module. Referenced by almost all scripts:
 - `parseAnalysis(analysis)`: parse full analysis text into a structured object (score, tags, sections, etc.)
 
 **API Protocol Auto-Routing** (core infrastructure):
-- `detectApiType(endpoint, model)`: automatically determine OpenAI / Anthropic protocol based on endpoint and model
+- `detectApiType(endpoint, model)`: automatically determine OpenAI / Anthropic protocol based on endpoint and model; Kimi model names require a Coding Plan endpoint to select Anthropic
 - `getAnthropicEndpoint(endpoint)`: convert OpenAI-style endpoint to Anthropic-style path
 - `buildApiUrl(apiType, endpoint)`: build complete request URL
 - `buildRequestBody(apiType, model, messages, maxTokens)`: build request body

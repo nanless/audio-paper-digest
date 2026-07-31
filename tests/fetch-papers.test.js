@@ -16,7 +16,8 @@ const {
     redactProxyUrl,
     parseRecentPageHTML,
     parseSearchPageHTML,
-    parseArxivXML
+    parseArxivXML,
+    hasRecentResponseSignature
 } = require('../scripts/fetch-papers.js');
 
 describe('parseFilterDecision', () => {
@@ -147,6 +148,19 @@ describe('filterPapersByKeywords', () => {
         assert.strictEqual(result.pass, true);
         assert.strictEqual(result.failOpen, true);
         assert.match(result.reason, /摘要不足/);
+    });
+
+    it('withdrawn/retracted 不得绕过核心类别与短摘要 fail-open 契约', () => {
+        assert.strictEqual(evaluateKeywordPrefilter({
+            title: 'Withdrawn submission',
+            abstract: 'Withdrawn by the authors.',
+            categories: ['eess.AS']
+        }).pass, true);
+        assert.strictEqual(evaluateKeywordPrefilter({
+            title: 'Retracted submission',
+            abstract: 'Retracted.',
+            categories: ['cs.LG']
+        }).pass, true);
     });
 });
 
@@ -318,7 +332,9 @@ describe('抓取健康状态', () => {
             status: 200,
             data: url.includes('/api/query')
                 ? '<feed></feed>'
-                : (url.includes('/search/') ? '<ol class="breathe-horizontal"></ol>' : '<dl></dl>')
+                : (url.includes('/search/')
+                    ? '<ol class="breathe-horizontal"></ol>'
+                    : '<div id="dlpage"><h1>Recent submissions</h1><p>No submissions</p></div>')
         });
         const papers = await fetchCategoryPapers('cs.SD', 1, 1, new Set(), {
             requestFn,
@@ -336,7 +352,13 @@ describe('抓取健康状态', () => {
     it('arXiv recent 首页显式声明 skip=0/show=50，短页不再跳到错误 offset', async () => {
         const urls = [];
         const papers = await fetchCategoryFromRecentPage('cs.SD', new Set(), 100, {
-            requestFn: async url => { urls.push(url); return { status: 200, data: '<dl></dl>' }; },
+            requestFn: async url => {
+                urls.push(url);
+                return {
+                    status: 200,
+                    data: '<div id="dlpage"><h1>Recent submissions</h1><p>No submissions</p></div>'
+                };
+            },
             sleepFn: async () => {},
             maxRetries: 1
         });
@@ -402,6 +424,23 @@ describe('抓取健康状态', () => {
 });
 
 describe('arXiv parsers', () => {
+    it('recent 健康签名拒绝通用 dl 错误页并接受 arXiv 条目/明确空页', () => {
+        assert.strictEqual(hasRecentResponseSignature('<html><dl><dt>Error</dt></dl></html>'), false);
+        assert.strictEqual(hasRecentResponseSignature(`
+            <div id="dlpage"><dl>
+              <dt><a href="/abs/2607.00001">abs</a></dt>
+              <dd><div class="list-title">Title: Audio</div></dd>
+            </dl></div>
+        `), true);
+        assert.strictEqual(hasRecentResponseSignature(`
+            <div id="dlpage"><h1>Recent submissions</h1><p>No submissions</p></div>
+        `), true);
+        assert.strictEqual(
+            hasRecentResponseSignature('<html>request /list/cs.SD/recent failed: no results</html>'),
+            false
+        );
+    });
+
     it('recent 页按 dt/dd 条目绑定 ID、标题和作者，避免跨数组错配', () => {
         const html = `
         <dl>
@@ -470,5 +509,25 @@ describe('arXiv parsers', () => {
         assert.strictEqual(stopped._meta.stoppedAtConsecutive, true);
         assert.strictEqual(notStopped.length, 1);
         assert.strictEqual(notStopped[0].arxivId, '2604.99999v1');
+    });
+});
+
+describe('arXiv proxy preflight', () => {
+    it('仅配置 SOCKS ALL_PROXY 时在网络调用前拒绝执行', async () => {
+        const keys = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'];
+        const original = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+        try {
+            for (const key of keys) delete process.env[key];
+            process.env.ALL_PROXY = 'socks5h://127.0.0.1:7897';
+            await assert.rejects(
+                () => fetchCategoryPapers('cs.SD', 1, 1),
+                /HTTP\(S\) CONNECT|仅 SOCKS/
+            );
+        } finally {
+            for (const key of keys) {
+                if (original[key] === undefined) delete process.env[key];
+                else process.env[key] = original[key];
+            }
+        }
     });
 });

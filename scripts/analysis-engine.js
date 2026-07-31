@@ -33,6 +33,14 @@ const REQUIRED_RECOVERY_STAGES = Object.freeze([
     'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
     'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
 ]);
+const ANALYSIS_RECOVERY_FIELDS = Object.freeze([
+    'analysis', 'parsed', 'analysisManifest', 'analysisCheckpoint', 'analysisStageCheckpoints',
+    'analysisRecoveryImageManifest', 'imageManifest', 'selectedImageUrls', 'imageUrls', 'allImageUrls',
+    'analysisSource', 'sourceId', 'sourceTextChars', 'usedTextChars', 'fullTextChars',
+    'fullTextAvailable', 'truncated', 'sourceSha256', 'usedTextSha256', 'analysisConfidence',
+    'htmlAvailability', 'htmlAttempts', 'sourceWarnings', 'latestAnalysisAttemptError',
+    'latestAnalysisAttemptAt'
+]);
 
 function readJsonFileStrict(filePath, options = {}) {
     const { allowMissing = false } = options;
@@ -237,7 +245,13 @@ function updateJsonFileLocked(filePath, updater, options = {}) {
     }, options);
 }
 
-function isSuccessfulAnalysisRecord(paper) {
+function initializeJsonFileLocked(filePath, fallbackValue, options = {}) {
+    return updateJsonFileLocked(filePath, current => (
+        current === null ? fallbackValue : undefined
+    ), options);
+}
+
+function isCompleteAnalysisContent(paper) {
     if (!hasValidAnalysisBody(paper)) return false;
     if (paper.analysisManifest?.version === 1) {
         const stages = paper.analysisManifest.stages;
@@ -247,6 +261,14 @@ function isSuccessfulAnalysisRecord(paper) {
         }
     }
     return true;
+}
+
+function isSuccessfulAnalysisRecord(paper) {
+    if (paper?.latestAnalysisAttemptError
+        || paper?.digestStatus?.latestAttemptStatus === 'analysis_failed') {
+        return false;
+    }
+    return isCompleteAnalysisContent(paper);
 }
 
 function hasValidAnalysisBody(paper) {
@@ -320,6 +342,9 @@ async function analyzePaperWithRetry(paper, options = {}) {
             } finally {
                 delete paper[ANALYSIS_CHECKPOINT_CALLBACK];
             }
+            if (analyzed && typeof analyzed === 'object') {
+                Object.assign(paper, analyzed);
+            }
 
             if (analyzed && analyzed.analysis) {
                 const parsed = parseAnalysis(analyzed.analysis);
@@ -332,7 +357,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
                     }
                     continue;
                 }
-                return {
+                const successfulResult = {
                     success: true,
                     result: {
                         ...paper,
@@ -361,6 +386,16 @@ async function analyzePaperWithRetry(paper, options = {}) {
                     },
                     parsed: parsed
                 };
+                delete successfulResult.result.latestAnalysisAttemptError;
+                delete successfulResult.result.latestAnalysisAttemptAt;
+                if (successfulResult.result.digestStatus?.latestAttemptStatus === 'analysis_failed') {
+                    successfulResult.result.digestStatus = {
+                        ...successfulResult.result.digestStatus,
+                        latestAttemptStatus: 'analyzed',
+                        error: null
+                    };
+                }
+                return successfulResult;
             } else if (analyzed && analyzed.error) {
                 lastError = analyzed.error;
                 if (attempt < maxRetries) {
@@ -390,7 +425,9 @@ async function analyzePaperWithRetry(paper, options = {}) {
             ...paper,
             analysis: null,
             parsed: null,
-            error: lastError || '分析失败'
+            error: lastError || '分析失败',
+            latestAnalysisAttemptError: lastError || '分析失败',
+            latestAnalysisAttemptAt: getBeijingISOString()
         }
     };
 }
@@ -665,26 +702,45 @@ function mergePapersById(existingPapers, newPapers, options = {}) {
             const existing = map.get(key);
             if (options.preserveSuccessfulAnalysis
                 && hasValidAnalysisBody(existing)
-                && !isSuccessfulAnalysisRecord(p)) {
-                if (p.analysisManifest || p.analysisCheckpoint || p.imageManifest) {
-                    map.set(key, {
-                        ...existing,
-                        ...(p.analysisManifest ? { analysisManifest: p.analysisManifest } : {}),
-                        ...(p.analysisCheckpoint ? { analysisCheckpoint: p.analysisCheckpoint } : {}),
-                        ...(p.analysisStageCheckpoints ? { analysisStageCheckpoints: p.analysisStageCheckpoints } : {}),
-                        ...(p.imageManifest ? { analysisRecoveryImageManifest: p.imageManifest } : {}),
-                        latestAnalysisAttemptError: p.error || '分析未完成',
-                        latestAnalysisAttemptAt: getBeijingISOString()
-                    });
-                }
+                && !isCompleteAnalysisContent(p)) {
+                map.set(key, {
+                    ...existing,
+                    ...(p.analysisManifest ? { analysisManifest: p.analysisManifest } : {}),
+                    ...(typeof p.analysisCheckpoint === 'string' ? { analysisCheckpoint: p.analysisCheckpoint } : {}),
+                    ...(p.analysisStageCheckpoints ? { analysisStageCheckpoints: p.analysisStageCheckpoints } : {}),
+                    ...(p.imageManifest ? { analysisRecoveryImageManifest: p.imageManifest } : {}),
+                    latestAnalysisAttemptError: p.error || '分析未完成',
+                    latestAnalysisAttemptAt: getBeijingISOString()
+                });
                 continue;
             }
-            map.set(key, p);
+            const next = { ...p };
+            if (isCompleteAnalysisContent(next)) {
+                delete next.latestAnalysisAttemptError;
+                delete next.latestAnalysisAttemptAt;
+                if (next.digestStatus?.latestAttemptStatus === 'analysis_failed') {
+                    next.digestStatus = {
+                        ...next.digestStatus,
+                        latestAttemptStatus: 'analyzed',
+                        error: null
+                    };
+                }
+            }
+            map.set(key, next);
         } else {
             console.warn(`[mergePapersById] 跳过无法识别 ID 的论文: ${p.title || '(无标题)'}`);
         }
     }
     return Array.from(map.values());
+}
+
+function mergeCanonicalAnalysisState(paper, canonical) {
+    if (!canonical) return { ...paper };
+    const merged = { ...canonical, ...paper };
+    for (const field of ANALYSIS_RECOVERY_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(canonical, field)) merged[field] = canonical[field];
+    }
+    return merged;
 }
 
 function sleep(ms) {
@@ -698,7 +754,9 @@ module.exports = {
     hasValidAnalysisBody,
     createFileSaver,
     mergePapersById,
+    mergeCanonicalAnalysisState,
     readJsonFileStrict,
+    initializeJsonFileLocked,
     acquireFileLockSync,
     acquireFileLock,
     canReclaimFileLock,

@@ -101,6 +101,124 @@ def save_bound_review_receipt(date_str, paths, hugo_gate='hugo', expected_base_h
 
 
 class PublishToBlogReviewTest(unittest.TestCase):
+    def test_generation_cli_rejects_missing_unknown_and_duplicate_flags(self):
+        for argv in (
+            ['--date'],
+            ['--unknown', 'value'],
+            ['--cat', '论文速递'],
+            ['--date', '2026-07-10', '--date', '2026-07-11'],
+            ['--push'],
+        ):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as caught:
+                    publish_to_blog.parse_generation_args(argv)
+                self.assertEqual(caught.exception.code, 2)
+        parsed = publish_to_blog.parse_generation_args([
+            '--date', '2026-07-10',
+            '--exclude-id', '2607.00001',
+            '--exclude-id', '2607.00002',
+        ])
+        self.assertEqual(parsed['excluded_ids'], ['2607.00001', '2607.00002'])
+
+    def test_empty_generation_invalidates_same_date_stale_stage_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            current = Path(tmp) / 'current'
+            current.mkdir()
+            names = (
+                'blog-generation-manifest-2026-07-10.json',
+                'blog-review-receipt-2026-07-10.json',
+                'blog-review-failure-2026-07-10.json',
+                'blog-generation-journal-2026-07-10.json',
+            )
+            for name in names:
+                (current / name).write_text('{}', encoding='utf-8')
+            stage = current / 'blog-generation-stage-2026-07-10'
+            stage.mkdir()
+            (stage / 'stale.md').write_text('stale', encoding='utf-8')
+            options = {
+                'data_file': None,
+                'target_date': '2026-07-10',
+                'category': '论文速递',
+                'publish_all': False,
+                'excluded_ids': [],
+            }
+            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    mock.patch.object(
+                        publish_to_blog, 'validate_publish_target',
+                        return_value=(Path(tmp), Path(tmp) / 'posts'),
+                    ), \
+                    mock.patch.object(publish_to_blog, 'load_papers', return_value=[]), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError,
+                    '没有论文可生成',
+                ):
+                    publish_to_blog.generate_main(options)
+            for name in names:
+                self.assertFalse((current / name).exists(), name)
+            self.assertFalse(stage.exists())
+
+    def test_empty_generation_preserves_remote_verified_publication_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            current = Path(tmp) / 'current'
+            current.mkdir()
+            date_str = '2026-07-10'
+            generation = current / f'blog-generation-manifest-{date_str}.json'
+            receipt = current / f'blog-review-receipt-{date_str}.json'
+            generation.write_text('{"schemaVersion":3}', encoding='utf-8')
+            receipt.write_text(json.dumps({
+                'schemaVersion': 3,
+                'date': date_str,
+                'publicationCommit': 'a' * 40,
+                'remoteVerifiedOid': 'a' * 40,
+                'remoteVerifiedAt': '2026-07-10T12:00:00+08:00',
+            }), encoding='utf-8')
+            options = {
+                'data_file': None,
+                'target_date': date_str,
+                'category': '论文速递',
+                'publish_all': False,
+                'excluded_ids': [],
+            }
+            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    mock.patch.object(
+                        publish_to_blog, 'validate_publish_target',
+                        return_value=(Path(tmp), Path(tmp) / 'posts'),
+                    ), \
+                    mock.patch.object(publish_to_blog, 'load_papers', return_value=[]), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError,
+                    '已保留既有 generation/review/push 证据',
+                ):
+                    publish_to_blog.generate_main(options)
+            self.assertTrue(generation.is_file())
+            self.assertTrue(receipt.is_file())
+
+    def test_historical_generation_prefers_exact_controlled_archive_when_current_is_newer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            current = root / 'current-deep.json'
+            current.write_text(json.dumps({
+                'papers': [{'arxivId': '2607.00002', 'fetchBatchDate': '2026-07-11'}],
+            }), encoding='utf-8')
+            archive = root / 'archive'
+            archived = archive / '2026-07-10' / 'deep-analysis-result.json'
+            archived.parent.mkdir(parents=True)
+            archived.write_text(json.dumps({
+                'papers': [{'arxivId': '2607.00001', 'fetchBatchDate': '2026-07-10'}],
+            }), encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'ARCHIVE_DIR', archive), \
+                    mock.patch.object(
+                        publish_to_blog, 'resolve_deep_analysis_result_path',
+                        return_value=current,
+                    ), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                selected = publish_to_blog.select_generation_data_file(
+                    None, '2026-07-10', publish_all=False,
+                )
+            self.assertEqual(Path(selected), archived)
+
     def test_blog_review_concurrency_defaults_to_five_and_reads_project_env(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop('PD_BLOG_REVIEW_CONCURRENCY', None)
@@ -563,7 +681,7 @@ body
         with mock.patch.object(sys, 'argv', ['publish-to-blog.py', '--push']), \
                 mock.patch.object(publish_to_blog, 'review_all_posts') as review, \
                 mock.patch.object(publish_to_blog, 'git_push') as push, \
-                contextlib.redirect_stdout(io.StringIO()) as output:
+                contextlib.redirect_stderr(io.StringIO()) as output:
             with self.assertRaises(SystemExit) as raised:
                 publish_to_blog.main()
         self.assertEqual(raised.exception.code, 2)

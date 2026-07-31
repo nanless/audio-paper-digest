@@ -13,6 +13,7 @@ const {
     analyzeBatch,
     readJsonFileStrict,
     updateJsonFileLocked,
+    initializeJsonFileLocked,
     mergePapersById,
     isSuccessfulAnalysisRecord,
     getAnalysisRunStatus,
@@ -29,7 +30,7 @@ const RESULT_FILE = Config.FILES.deepAnalysisResult;
 async function main() {
     if (!fs.existsSync(RESULT_FILE) && fs.existsSync(LEGACY_RESULT_FILE)) {
         const legacyData = readJsonFileStrict(LEGACY_RESULT_FILE);
-        updateJsonFileLocked(RESULT_FILE, () => Array.isArray(legacyData)
+        initializeJsonFileLocked(RESULT_FILE, Array.isArray(legacyData)
             ? { timestamp: getBeijingISOString(), source: LEGACY_RESULT_FILE, papers: legacyData }
             : legacyData);
         console.log(`📦 已将 legacy 分析结果迁移到权威路径: ${RESULT_FILE}`);

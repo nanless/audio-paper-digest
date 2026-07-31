@@ -15,9 +15,11 @@ const {
     getInvalidAnalysisReason,
     readJsonFileStrict,
     updateJsonFileLocked,
+    initializeJsonFileLocked,
     acquireFileLockSync,
     canReclaimFileLock,
     withFileLock,
+    mergeCanonicalAnalysisState,
     isSuccessfulAnalysisRecord,
     getAnalysisRunStatus,
     getAnalysisExitCode
@@ -345,15 +347,19 @@ describe('analyzePaperWithRetry', () => {
         const paper = { arxivId: '2604.00023', title: 'Recoverable' };
         const attempt = await analyzePaperWithRetry(paper, {
             maxRetries: 0,
-            analyzeFn: async current => {
-                current.analysisManifest = manifest;
-                current.analysisCheckpoint = validAnalysisText();
-                return { analysis: null, error: 'stage timeout' };
-            }
+            analyzeFn: async () => ({
+                analysis: null,
+                parsed: null,
+                analysisManifest: manifest,
+                analysisCheckpoint: validAnalysisText(),
+                error: 'stage timeout'
+            })
         });
         assert.strictEqual(attempt.success, false);
         assert.strictEqual(attempt.result.analysisCheckpoint, validAnalysisText());
         assert.strictEqual(attempt.result.analysisManifest, manifest);
+        assert.strictEqual(attempt.result.latestAnalysisAttemptError, 'stage timeout');
+        assert.match(attempt.result.latestAnalysisAttemptAt, /\+08:00$/);
     });
 
     it('失败重试不覆盖旧成功正文，但合并恢复元数据供下次续跑', () => {
@@ -386,6 +392,53 @@ describe('analyzePaperWithRetry', () => {
         }], { preserveSuccessfulAnalysis: true });
         assert.strictEqual(mergedAgain.analysis, complete.analysis);
         assert.strictEqual(mergedAgain.latestAnalysisAttemptError, 'secondary timeout again');
+    });
+
+    it('新鲜论文元数据优先，canonical 只恢复分析状态字段', () => {
+        const merged = mergeCanonicalAnalysisState(
+            { arxivId: '2604.00025v2', title: 'Fresh title', abstract: 'Fresh abstract', authors: ['New'] },
+            {
+                arxivId: '2604.00025',
+                title: 'Stale title',
+                abstract: 'Stale abstract',
+                authors: ['Old'],
+                analysis: validAnalysisText(),
+                analysisCheckpoint: 'checkpoint'
+            }
+        );
+        assert.strictEqual(merged.title, 'Fresh title');
+        assert.strictEqual(merged.abstract, 'Fresh abstract');
+        assert.deepStrictEqual(merged.authors, ['New']);
+        assert.strictEqual(merged.analysis, validAnalysisText());
+        assert.strictEqual(merged.analysisCheckpoint, 'checkpoint');
+    });
+
+    it('原子初始化不会覆盖并发进程已创建的 current 文件', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'analysis-init-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        updateJsonFileLocked(file, () => ({ papers: [{ arxivId: '2604.00026', title: 'current' }] }));
+        const result = initializeJsonFileLocked(file, {
+            papers: [{ arxivId: '2604.00027', title: 'legacy' }]
+        });
+        assert.strictEqual(result.papers[0].title, 'current');
+        assert.strictEqual(readJsonFileStrict(file).papers[0].title, 'current');
+    });
+
+    it('成功重试会清理最新失败标记', async () => {
+        const result = await analyzePaperWithRetry({
+            arxivId: '2604.00028',
+            latestAnalysisAttemptError: 'old timeout',
+            latestAnalysisAttemptAt: '2026-07-31T10:00:00.000+08:00',
+            digestStatus: { latestAttemptStatus: 'analysis_failed', error: 'old timeout' }
+        }, {
+            maxRetries: 0,
+            analyzeFn: async () => ({ analysis: validAnalysisText() })
+        });
+        assert.strictEqual(result.success, true);
+        assert.strictEqual(result.result.latestAnalysisAttemptError, undefined);
+        assert.strictEqual(result.result.latestAnalysisAttemptAt, undefined);
+        assert.strictEqual(result.result.digestStatus.latestAttemptStatus, 'analyzed');
+        assert.strictEqual(result.result.digestStatus.error, null);
     });
 
     it('最终契约拒绝展示总分或分档与八维重算结果不一致', () => {

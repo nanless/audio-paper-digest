@@ -17,6 +17,7 @@ const {
     analyzeBatch,
     readJsonFileStrict,
     updateJsonFileLocked,
+    initializeJsonFileLocked,
     mergePapersById,
     isSuccessfulAnalysisRecord,
     getAnalysisRunStatus,
@@ -62,7 +63,7 @@ async function reanalyzeSelected(ids) {
 
     if (!fs.existsSync(RESULT_FILE) && fs.existsSync(Config.FILES.deepAnalysisResultLegacy)) {
         const legacyData = readJsonFileStrict(Config.FILES.deepAnalysisResultLegacy);
-        updateJsonFileLocked(RESULT_FILE, () => Array.isArray(legacyData)
+        initializeJsonFileLocked(RESULT_FILE, Array.isArray(legacyData)
             ? { timestamp: getBeijingISOString(), source: Config.FILES.deepAnalysisResultLegacy, papers: legacyData }
             : legacyData);
         console.log(`📦 已将 legacy 分析结果迁移到权威路径: ${RESULT_FILE}`);

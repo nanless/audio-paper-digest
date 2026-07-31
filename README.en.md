@@ -71,6 +71,7 @@ See [`docs/scripts.md`](docs/scripts.md) for each script's functionality, and [`
 ```bash
 # 1. Install dependencies
 npm install
+pip3 install -r requirements.txt
 
 # 2. Configure API Key (write to `.env`)
 #    Primary model (text analysis, required)
@@ -85,7 +86,8 @@ npm install
 
 # 3. Run deterministic daily stages: data pipeline + blog generate/review/push + visual preparation.
 # Every project script must run outside the sandbox; entrypoints reject Codex sandbox execution.
-./run-daily-digest.sh 2026-05-08
+today="$(TZ=Asia/Shanghai date +%F)"
+./run-daily-digest.sh "$today"
 
 # After fixing review blockers, resume from review without rerunning fetch/analysis.
 ./run-daily-digest.sh 2026-05-08 --from review
@@ -108,7 +110,7 @@ For the complete installation guide, see [`docs/setup.md`](docs/setup.md).
 
 ```bash
 # Default daily script stages; Codex then continues with built-in image generation.
-npm run digest:prepare -- 2026-04-21
+npm run digest:prepare -- "$(TZ=Asia/Shanghai date +%F)"
 
 # Data pipeline only (crawl + filter + deep analysis)
 npm run fetch
@@ -177,7 +179,7 @@ python3 scripts/publish-to-feishu.py --all
 ```bash
 # ========== Core Pipeline ==========
 # Default daily script stages; Codex then continues with built-in image generation.
-./run-daily-digest.sh 2026-04-21
+./run-daily-digest.sh "$(TZ=Asia/Shanghai date +%F)"
 
 # Data pipeline only
 ./run-full-fetch.sh

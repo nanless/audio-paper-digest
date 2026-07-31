@@ -26,9 +26,43 @@ def load_script(name):
 review_blog = load_script('review-blog.py')
 push_blog = load_script('push-blog.py')
 generate_blog = load_script('generate-blog.py')
+plan_visuals = load_script('plan-post-publish-visuals.py')
 
 
 class BlogStageEntryTest(unittest.TestCase):
+    def test_blog_stage_date_parsers_reject_missing_unknown_and_duplicate_flags(self):
+        module = SimpleNamespace(
+            get_today_bj=lambda value=None: value or '2026-07-10',
+            validate_publish_date=lambda value: value,
+        )
+        for entry, parser in (
+            ('review-blog.py', review_blog.parse_date),
+            ('push-blog.py', push_blog.parse_date),
+        ):
+            for argv in (
+                [entry, '--date'],
+                [entry, '--unknown', 'value'],
+                [entry, '--d', '2026-07-10'],
+                [entry, '--date', '2026-07-10', '--date', '2026-07-11'],
+            ):
+                with self.subTest(entry=entry, argv=argv), \
+                        mock.patch.object(sys, 'argv', argv), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as caught:
+                        parser(module)
+                    self.assertEqual(caught.exception.code, 2)
+        for argv in (
+            ['--date'],
+            ['--unknown', 'value'],
+            ['--d', '2026-07-10'],
+            ['--date', '2026-07-10', '--date', '2026-07-11'],
+        ):
+            with self.subTest(entry='plan-post-publish-visuals.py', argv=argv), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as caught:
+                    plan_visuals.parse_date(module, argv)
+                self.assertEqual(caught.exception.code, 2)
+
     def test_generate_entry_only_calls_generation(self):
         generate = mock.Mock()
         module = SimpleNamespace(main=generate)

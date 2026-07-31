@@ -6,6 +6,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const Config = require('../scripts/config.js');
 const { buildFilterInputSha256 } = require('../scripts/lib/filter-input-contract.js');
+const { parseAnalysis } = require('../scripts/utils.js');
+const { validAnalysisText } = require('./valid-analysis-fixture.js');
 
 const {
     validatePapersDatabase,
@@ -202,6 +204,11 @@ describe('validate-data-files', () => {
                 }
             }
         }));
+        const analysis = validAnalysisText();
+        const terminalStages = Object.fromEntries([
+            'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
+            'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
+        ].map(stage => [stage, { status: stage === 'imageSupplement' ? 'no_candidates' : 'complete' }]));
         fs.writeFileSync(resultFile, JSON.stringify({
             stats: {
                 totalAfterMerge: 1
@@ -212,26 +219,12 @@ describe('validate-data-files', () => {
             },
             papers: [{
                 arxivId: '2607.00001',
-                analysis: 'ok',
+                analysis,
                 scoringRubricVersion: 'type-aware-v1',
-                parsed: {
-                    score: 8.5,
-                    documentType: '系统技术报告',
-                    scoringRubricVersion: 'type-aware-v1',
-                    innovationScore: 1.5,
-                    technicalRigorScore: 1.2,
-                    experimentalSufficiencyScore: 1.1,
-                    clarityScore: 0.8,
-                    impactScore: 1.0,
-                    openSourceScore: 1.2,
-                    reproducibilityScore: 0.3,
-                    engineeringScore: 1.4,
-                    hasCode: '是',
-                    hasModel: '否',
-                    hasDataset: '否'
-                },
+                parsed: parseAnalysis(analysis),
                 selectedImageUrls: [],
-                imageManifest: { selected: [] }
+                imageManifest: { selected: [] },
+                analysisManifest: { version: 1, stages: terminalStages }
             }]
         }));
 
@@ -379,6 +372,65 @@ describe('validate-data-files', () => {
         const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
         assert.match(issues, /updatedAt 必须是字符串/);
         assert.match(issues, /status 非法: empty_plan/);
+    });
+
+    it('重解析分析正文并拒绝陈旧缓存、未完成阶段和最新失败标记', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-analysis-contract-'));
+        const resultFile = path.join(dir, 'deep-analysis-result.json');
+        const analysis = validAnalysisText();
+        const staleParsed = { ...parseAnalysis(analysis), score: '9.9' };
+        fs.writeFileSync(resultFile, JSON.stringify({
+            papers: [{
+                arxivId: '2607.00003',
+                analysis,
+                parsed: staleParsed,
+                latestAnalysisAttemptError: 'latest retry timed out',
+                analysisManifest: {
+                    version: 1,
+                    stages: {
+                        imageDownload: { status: 'complete' },
+                        primaryAnalysis: { status: 'complete' }
+                    }
+                }
+            }]
+        }));
+
+        const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
+        assert.match(issues, /parsed 缓存与 analysis 重解析不一致: score/);
+        assert.match(issues, /缺少完成态阶段 openSourceScan/);
+        assert.match(issues, /最新分析尝试仍为失败/);
+    });
+
+    it('接受字段集合精确匹配且来源完整的人工 parsed 覆盖', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-manual-override-'));
+        const resultFile = path.join(dir, 'deep-analysis-result.json');
+        const analysis = validAnalysisText();
+        const parsed = {
+            ...parseAnalysis(analysis),
+            innovationScore: '1.4',
+            score: '6.8'
+        };
+        const stages = Object.fromEntries([
+            'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
+            'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
+        ].map(stage => [stage, { status: 'complete' }]));
+        fs.writeFileSync(resultFile, JSON.stringify({
+            papers: [{
+                arxivId: '2607.00004',
+                analysis,
+                parsed,
+                scoringRubricVersion: 'type-aware-v1',
+                parsedOverride: {
+                    type: 'manual',
+                    source: 'editor:review-2026-07-31',
+                    reason: '人工复核创新性证据后调整',
+                    fields: ['innovationScore', 'score']
+                },
+                analysisManifest: { version: 1, stages }
+            }]
+        }));
+
+        assert.deepStrictEqual(validatePaperListFile(resultFile, { deepAnalysis: true }), []);
     });
 
     it('理论研究公开证明材料不会被资源字段矛盾检查误报', () => {

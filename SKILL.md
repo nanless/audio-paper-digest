@@ -27,7 +27,7 @@ description: >
 
 ## 2. 当前真实流程
 
-默认日更入口：`./run-daily-digest.sh YYYY-MM-DD`（Codex 接续内置生图）；仅数据流程入口：`./run-full-fetch.sh`（或 `node scripts/full-fetch.js` / `npm run fetch`）
+默认日更入口：`./run-daily-digest.sh YYYY-MM-DD`（Codex 接续内置生图）；从 fetch 开始时目标日期必须是北京时间当天，因为 `full-fetch.js` 按启动日绑定批次且不接受历史日期。历史批次仅可从 generate/review/push/visual 续跑已有数据；generate 在 current 不匹配时自动读取受控的同日归档分析。仅数据流程入口：`./run-full-fetch.sh`（或 `node scripts/full-fetch.js` / `npm run fetch`）
 
 1. **自动归档**：检查 `data/current/deep-analysis-result.json` / `filtered-papers.json` / `analyzed.json`，若时间戳早于今天（北京时间）且 `data/archive/<日期>/` 下不存在，则复制后删除原文件。**`papers.json` 不归档。**
 2. **加载去重库**：读取 `data/current/papers.json` 已有 ID；扫描 Hugo 博客仓库（`PAPER_DIGEST_BLOG_REPO`）中已发布论文的 arXiv ID，两者合并为统一去重集合
@@ -129,7 +129,7 @@ API 调用特性：
 - HTML 全文不能只靠字符数判定：还要满足有效长段落数及论文章节/结构标记；`too_short`、`metadata_shell`、`missing_paper_structure` 都继续 PDF fallback，并记录结构计数
 - 图片先按 caption/文件名/顺序启发式预筛（默认 `imageCandidateMax=20`）；HTML 正文与图注在同一次响应中解析并复用，预提供 URL 会按完整 URL或唯一文件名补全 caption。只有配置副模型的双模型模式才**串行下载**最多 `imageMaxCount=20` 张候选图片并送入副模型；成功内容写入 `data/current/image-cache/`，恢复时校验 MIME/文件头后复用。仅 408/425/429/5xx 和网络异常重试，404、非法 MIME、超限与安全拒绝立即终止
 - 每篇分析结果写入 `imageManifest`，记录图片发现数、候选评分、逐 URL 下载结果、缓存命中、插图计划哈希、拒绝原因和最终选图，便于复盘图像筛选
-- 每个分析阶段写入 `analysisManifest`；失败尝试保留 `analysisCheckpoint` 和独立的 `analysisRecoveryImageManifest`。失败合并会独立按完整契约重解析旧正文，不受最新失败 manifest 影响，连续多次失败也不能覆盖旧成功正文。arXiv HTML/图片发现默认单次 60 秒，PDF fallback 默认 180 秒；Demo 页面最多跟随 3 次重定向并逐跳重验公网 DNS/IP。只有严格的 `{"insertions":[]}` 才是有效空插图计划，缺字段、错误类型或非法 JSON 都保持为可重试失败
+- 每个分析阶段写入 `analysisManifest`；失败尝试保留 `analysisCheckpoint` 和独立的 `analysisRecoveryImageManifest`。失败合并会独立按完整契约重解析旧正文，不受最新失败 manifest 影响，连续多次失败也不能覆盖旧成功正文，但最新失败标记会强制下一轮继续重试，成功后才清理。arXiv HTML/图片发现默认单次 60 秒，PDF fallback 默认 180 秒；瞬时全文失败不得降级成摘要成功，Demo 的 408/425/429/5xx 与网络错误保持可重试。Demo 页面最多跟随 3 次重定向并逐跳重验公网 DNS/IP。插图输出若破坏正文契约，整份插图计划作废并保留审计后的纯文本正文
 - 主分析全文输入上限约 200K 字符（config.js 中 `fullTextMaxChars`）；来源原始长度与实际取样长度分别保存
 - 所有分析配置集中管理于 `scripts/config.js`，支持在项目根 `.env` 中覆写
 
@@ -139,7 +139,7 @@ API 调用特性：
 - checkpoint 的来源 SHA-256 变化时清除主分析及全部下游状态，避免旧全文正文被新一轮摘要审校。评分审计另保存模型、低温、prompt 模板哈希、证据哈希、尝试次数和最终 JSON；这些指纹变化只失效评分与插图阶段
 - 固定一级标题：`## 评分`、`## 机器摘要`、`## 标签`、`## 作者与机构`、`## 毒舌点评`、`## 核心摘要`、`## 方法概述和架构`、`## 核心创新点`、`## 实验结果`、`## 细节详述`、`## 评分理由`、`## 局限与问题`、`## 开源详情`
 - `## 评分` 下先输出总分（X.X/10）
-- **代码后处理**：`parseAnalysis`/`parse_analysis` 仅在 `## 评分理由` 的八个分项完整、唯一、分母正确、数值有限且位于各自范围时重新计算总分；合计上限为 10，四舍五入到 0.1，覆盖 LLM 原始总分。缺失、重复、错误分母、负数、越界或非有限值会产生契约错误并阻断保存/发布，不存在最低 1 分保底
+- **代码后处理**：`parseAnalysis`/`parse_analysis` 仅在 `## 评分理由` 的八个分项完整、唯一、各自带具体理由、分母正确、数值有限且位于各自范围时重新计算总分；合计上限为 10，四舍五入到 0.1，覆盖 LLM 原始总分。缺失、重复、缺少理由、错误分母、负数、越界或非有限值会产生契约错误并阻断保存/发布，不存在最低 1 分保底
 - `## 机器摘要` 包含 `document_type`、`rank_bucket`（带顶会映射）、`innovation`（创新性 0-2）、`technical_rigor`（技术严谨性 0-1.5）、`experimental_sufficiency`（实验充分性 0-1.5）、`clarity`（清晰度 0-1）、`impact`（影响力 0-1.5）、`open_source`（开源 0-1.5）、`reproducibility`（可复现性 0-0.5）、`engineering_score`（工程/实践价值 0-1.5）、`confidence`、`primary_task_tag`、`primary_method_tag` 等固定键
 - 评分采用八维审稿人体系：创新性（0-2）+ 技术严谨性（0-1.5）+ 实验充分性（0-1.5）+ 清晰度（0-1）+ 影响力（0-1.5）+ 开源（0-1.5）+ 可复现性（0-0.5）+ 工程/实践价值（0-1.5），满分 11 分，总分上限 10
 - 当前评分版本为 `type-aware-v1`：`document_type` 只能取方法研究、系统技术报告、模型报告、数据集与基准、综述、理论研究、应用研究。类型只决定适用证据，不改变八维权重，也不提供固定加分、保底或豁免
@@ -254,7 +254,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 |----------|----------|----------|----------|
 | 含 `deepseek.com` 或模型含 `deepseek` | — | OpenAI | `/anthropic` → `/v1/chat/completions`（优先级最高） |
 | 含 `token-plan` | 含 `mimo` | Anthropic | `/v1` → `/anthropic/v1/messages` |
-| 含 `coding` 且端点含 `kimi.com`，或模型含 `kimi` | — | Anthropic | `/coding` 或 `/coding/v1` → `/coding/v1/messages`；兼容 `k3` |
+| 含 `coding` | 端点含 `kimi.com` 或模型含 `kimi` | Anthropic | `/coding` 或 `/coding/v1` → `/coding/v1/messages`；兼容 `k3` |
 | 含 `/anthropic` | — | Anthropic | `{base}/messages` |
 | 其他 | 其他 | OpenAI | `/v1/chat/completions` |
 
@@ -287,6 +287,12 @@ node scripts/reanalyze.js --concurrency 3 data/current/deep-analysis-result.json
 
 # 按日期重新筛选 + 重新分析
 node scripts/refilter-reanalyze-by-date.js 2026-07-01
+
+# 该入口逐批保存目标目录下的 refilter-filter-decisions.json；
+# 日期、模型/端点/协议、prompt、温度、输出上限、决定契约、关键词版本或
+# 单篇筛选输入变化时自动失效，续跑只调用尚无确定性决定的论文
+# 收尾时 canonical 结果按本轮入选 ID 收敛：入选失败项保留恢复 checkpoint，
+# 本轮明确落选的旧分析从该批次 deep-analysis-result.json 移除
 
 # 运行单元测试
 npm test
@@ -473,7 +479,7 @@ PY
 17. **新增 LLM 端点必须接入 API 协议自动路由**：任何新增 Node 脚本调用 LLM 时，统一使用 `scripts/utils.js` 中的 `detectApiType()`、`buildApiUrl()`、`buildHeaders()`、`buildRequestBody()`、`parseResponseText()`；Python 发布阶段 LLM 调用必须复用 `publish_common.py` 的 `call_publish_llm_api()`，禁止硬编码特定协议的 URL/Header/Body。
 17.1 **视觉资产由 Codex 内置图像工具在发布后生成**：绝不在项目脚本中调用图像 API，也不读取或要求 `OPENAI_API_KEY`。全部博客页通过 review、push 且远端 OID 验证后，发布凭证才写入 `remoteVerifiedOid`；视觉 CLI 必须校验该凭证。Agent 读取已审计分析和 `prompts/visual-summary.md`，仅对最终评分 TOP 10 各调用一次内置 `image_gen`；再按 `prompts/digest-cover.md` 生成一张标题、热门方向与 TOP 10 排行榜汇总图。登记前必须目视核对英文标题逐字一致、正文为简体中文、论文数字和排行榜没有虚构或错位。两类任务用 token 登记并独立续跑；同批次全部图片扁平保存到 `data/archive/<date>/visual-summaries/`，封面为 `00-digest-cover-<date>.png`，论文图为 `<rank>-<paper-id>-<title-slug>.png`，排名取 manifest 最终 `rank`，禁止按完成顺序编号。若 Agent 先复制输出到该目录，`record` 会清理同排名/同论文 ID 的临时别名，只保留 manifest 指定的 canonical 文件；每篇论文最终只能有一张图。旧版 current/归档资产校验后迁移。图片不回写本轮博客，不参与博客 generation/review/push 清单。
 
-17.2 **参考图必须先规范化输入路径**：深度分析缓存使用 `.bin` 保存原始字节，不能直接作为内置生图的上传路径。每轮视觉生成前运行 `npm run visual:prepare -- --date YYYY-MM-DD`（可加 `--paper ID`）；命令在远端发布凭证和当前 manifest 校验通过后，逐图复核受控缓存路径、SHA-256、字节数、MIME 与魔数，并原子物化为 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 下的 `.png/.jpg/.webp`，输出 `referencedImagePaths`。内置 `image_gen` 只接收这些规范路径；缓存损坏、MIME 不一致或路径逃逸必须失败，不得手工复制或伪造扩展名绕过。
+17.2 **参考图必须先规范化输入路径**：深度分析缓存使用 `.bin` 保存原始字节，不能直接作为内置生图的上传路径。每轮视觉生成前运行 `npm run visual:prepare -- --date YYYY-MM-DD`（可加 `--paper ID`）；命令在远端发布凭证和当前 manifest 校验通过后，逐图复核受控缓存路径、SHA-256、字节数、MIME 与魔数，并原子物化为 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 下的 `.png/.jpg/.webp`，输出绝对 `referencedImagePaths` 和仅供展示的 `relativePath`。内置 `image_gen` 只接收这些绝对规范路径；缓存损坏、MIME 不一致或路径逃逸必须失败，不得手工复制或伪造扩展名绕过。
 18. **修改 API 协议路由逻辑时同步全链路**：修改 `detectApiType()` 的判定规则或 `buildApiUrl()`/`buildHeaders()` 等函数时，必须同步检查 `fetch-papers.js`、`deep-analyzer.js` 以及所有使用 `analysis-engine.js` 的脚本（`full-fetch.js`、`reanalyze.js`、`batch-analyze.js`、`deep-analysis-only.js`、`analyze-single-paper.js`），确保全链路行为一致。
 19. **禁止将敏感文件提交到版本控制**：`data/`、`logs/`、`*.env`、`*.backup*`、缓存文件、含密钥的日志归档等严禁进入 git；提交前必须确认 `.gitignore` 已正确配置，且仓库中不存在历史遗留的敏感文件。
 20. **CI 自动检查**：CI 会通过 `npm test`、`npm run validate:data`、`find scripts tests -name '*.js'`、`find scripts -name '*.py'`、`python3 -m unittest discover -s tests/python` 和全仓库 `.sh` 语法检查覆盖新增 JS/Python/shell 文件；新增特殊文件类型时再更新 `.github/workflows/ci.yml`。

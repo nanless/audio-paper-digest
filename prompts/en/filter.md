@@ -65,6 +65,7 @@ The model must output "Conclusion: related" or "Conclusion: not related". The co
 1. JSON fields `decision` / `related` / `conclusion` (`related` / `not_related`)
 2. Structured conclusion lines: `Conclusion/Judgment/Related: related|not related|yes|no`
 3. Match whether the last line is "related" / "not related" / "yes" / "no"
-4. Text contains explicit phrases "not related" / "unrelated" → not related
-5. Text contains explicit phrase "related" → related
-6. If still undetermined, default to keeping the paper (better to keep a false positive than to drop a true positive)
+4. If none of the structured forms can be parsed, phrase matches are only hints for the controlled format-repair pass and do not become definitive decisions
+5. If format repair still cannot produce a fixed conclusion, mark the paper retryable; the filter artifact cannot be complete until every candidate has a definitive decision
+
+The keyword prefilter follows a high-recall contract: core audio categories, abstracts shorter than 80 characters, and papers matching an audio term family must reach the LLM. Even when an abstract contains withdrawn/retracted, core-category and short-abstract papers cannot bypass those fail-open rules. Only supplemental-category papers with a complete abstract and no term match may receive a deterministic negative decision.

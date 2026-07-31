@@ -15,8 +15,10 @@ const {
     SCORING_RUBRIC_VERSION,
     normalizeScoreToOneDecimal,
     isOpenSourceScoreAnchor,
-    OPEN_SOURCE_SCORE_ANCHORS
+    OPEN_SOURCE_SCORE_ANCHORS,
+    parseAnalysis
 } = require('./utils.js');
+const { getInvalidAnalysisReason } = require('./analysis-contract.js');
 
 const ALLOWED_DIGEST_STATUSES = new Set(['seen', 'pending_analysis', 'analyzed', 'analysis_failed']);
 const ALLOWED_ANALYSIS_ATTEMPT_STATUSES = new Set(['analyzed', 'analysis_failed']);
@@ -24,6 +26,14 @@ const ALLOWED_FILTERED_STATUSES = new Set(['filtering', 'filter_complete', 'comp
 const ALLOWED_RECOVERY_STAGE_STATUSES = new Set([
     'pending', 'complete', 'not_needed', 'skipped', 'no_candidates',
     'no_high_value_images', 'no_downloadable_images', 'transient_failure', 'invalid_output', 'contract_rejected'
+]);
+const REQUIRED_RECOVERY_STAGES = Object.freeze([
+    'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
+    'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
+]);
+const TERMINAL_RECOVERY_STAGE_STATUSES = new Set([
+    'complete', 'not_needed', 'skipped', 'no_candidates',
+    'no_high_value_images', 'no_downloadable_images'
 ]);
 const DEFAULT_FILTER_DECISIONS_FILE = Config.FILES.filterDecisions;
 const DEFAULT_FETCH_CHECKPOINT_FILE = Config.FILES.fetchCheckpoint;
@@ -271,7 +281,23 @@ function validateNonNegativeInteger(filePath, fieldName, value, issues) {
     }
 }
 
-function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analysisCheckpoint) {
+function hasMatchingManualParsedOverride(paper, mismatchedFields) {
+    const override = paper?.parsedOverride;
+    if (!isPlainObject(override)
+        || override.type !== 'manual'
+        || typeof override.source !== 'string' || !override.source.trim()
+        || typeof override.reason !== 'string' || !override.reason.trim()
+        || !Array.isArray(override.fields)
+        || override.fields.some(field => typeof field !== 'string')) {
+        return false;
+    }
+    const declared = [...new Set(override.fields)].sort();
+    const actual = [...new Set(mismatchedFields)].sort();
+    return declared.length === actual.length
+        && declared.every((field, index) => field === actual[index]);
+}
+
+function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analysisCheckpoint, options = {}) {
     const prefix = `papers[${paperIndex}].analysisManifest`;
     if (!isPlainObject(manifest)) {
         addIssue(issues, filePath, `${prefix} 必须是对象`);
@@ -302,6 +328,16 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
         }
         if (state.error !== undefined && typeof state.error !== 'string') {
             addIssue(issues, filePath, `${prefix}.stages.${stage}.error 必须是字符串`);
+        }
+    }
+    if (options.requireComplete) {
+        for (const stage of REQUIRED_RECOVERY_STAGES) {
+            const state = manifest.stages[stage];
+            if (!state) {
+                addIssue(issues, filePath, `${prefix}.stages 缺少完成态阶段 ${stage}`);
+            } else if (!TERMINAL_RECOVERY_STAGE_STATUSES.has(state.status)) {
+                addIssue(issues, filePath, `${prefix}.stages.${stage} 尚未完成: ${state.status}`);
+            }
         }
     }
     if (hasRecoverableFailure && typeof analysisCheckpoint !== 'string') {
@@ -476,6 +512,15 @@ function validatePaperListFile(filePath, options = {}) {
         }
         ensurePaperId(paper, filePath, index, issues);
         if (options.deepAnalysis) {
+            const hasAnalysisBody = typeof paper.analysis === 'string' && paper.analysis.trim().length > 0;
+            let reparsed = null;
+            if (hasAnalysisBody) {
+                reparsed = parseAnalysis(paper.analysis);
+                const invalidReason = getInvalidAnalysisReason(paper.analysis, reparsed);
+                if (invalidReason) {
+                    addIssue(issues, filePath, `papers[${index}] analysis 正文契约非法: ${invalidReason}`);
+                }
+            }
             const parsed = paper.parsed;
             if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
                 addIssue(issues, filePath, `papers[${index}] 缺少有效 parsed 评分缓存`);
@@ -524,9 +569,39 @@ function validatePaperListFile(filePath, options = {}) {
                     && Number.isFinite(openSourceScore) && openSourceScore >= 1 && !hasResource) {
                     addIssue(issues, filePath, `papers[${index}] parsed.openSourceScore=${openSourceScore} 但无代码、模型或数据资源`);
                 }
+                if (reparsed) {
+                    const cacheFields = [
+                        'score', 'documentType', 'scoringRubricVersion', 'rankBucket',
+                        'confidence', 'primaryTaskTag', 'primaryMethodTag', 'sotaClaim',
+                        'hasCode', 'hasModel', 'hasDataset', 'tags',
+                        ...Object.keys(SCORE_DIMENSIONS)
+                    ];
+                    const comparable = value => (
+                        value && typeof value === 'object'
+                            ? JSON.stringify(value)
+                            : String(value ?? '')
+                    );
+                    const mismatched = cacheFields.filter(field => (
+                        comparable(parsed[field]) !== comparable(reparsed[field])
+                    ));
+                    if (mismatched.length > 0 && !hasMatchingManualParsedOverride(paper, mismatched)) {
+                        addIssue(
+                            issues,
+                            filePath,
+                            `papers[${index}] parsed 缓存与 analysis 重解析不一致: ${mismatched.join(', ')}`
+                        );
+                    }
+                }
             }
             if (paper.scoringRubricVersion && paper.scoringRubricVersion !== SCORING_RUBRIC_VERSION) {
                 addIssue(issues, filePath, `papers[${index}] scoringRubricVersion 非法: ${paper.scoringRubricVersion}`);
+            }
+            if (reparsed && paper.scoringRubricVersion !== reparsed.scoringRubricVersion) {
+                addIssue(
+                    issues,
+                    filePath,
+                    `papers[${index}] 顶层 scoringRubricVersion 与 analysis 重解析结果不一致`
+                );
             }
             for (const key of ['selectedImageUrls', 'imageUrls', 'allImageUrls']) {
                 if (paper[key] !== undefined && !Array.isArray(paper[key])) {
@@ -537,7 +612,20 @@ function validatePaperListFile(filePath, options = {}) {
                 addIssue(issues, filePath, `papers[${index}].imageManifest 必须是对象或 null`);
             }
             if (paper.analysisManifest !== undefined) {
-                validateAnalysisManifest(filePath, paper.analysisManifest, index, issues, paper.analysisCheckpoint);
+                validateAnalysisManifest(
+                    filePath,
+                    paper.analysisManifest,
+                    index,
+                    issues,
+                    paper.analysisCheckpoint,
+                    { requireComplete: hasAnalysisBody }
+                );
+            } else if (hasAnalysisBody) {
+                addIssue(issues, filePath, `papers[${index}] 有 analysis 正文但缺少 analysisManifest`);
+            }
+            if (paper.latestAnalysisAttemptError
+                || paper.digestStatus?.latestAttemptStatus === 'analysis_failed') {
+                addIssue(issues, filePath, `papers[${index}] 最新分析尝试仍为失败，不能视为有效完成结果`);
             }
             if (paper.analysisSource !== undefined) {
                 validateAnalysisSourceProvenance(filePath, {

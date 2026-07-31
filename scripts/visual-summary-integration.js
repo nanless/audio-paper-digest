@@ -75,10 +75,16 @@ function reconcileVisualSummaryTasks({
 
 function parseArgs(argv) {
     const options = {};
+    const allowed = new Set(['date', 'category', 'receipt']);
     for (let i = 0; i < argv.length; i += 1) {
         const arg = argv[i];
-        if (!arg.startsWith('--') || i + 1 >= argv.length) throw new Error(`无效参数: ${arg}`);
-        options[arg.slice(2)] = argv[++i];
+        if (!arg.startsWith('--') || i + 1 >= argv.length || argv[i + 1].startsWith('--')) {
+            throw new Error(`无效参数: ${arg}`);
+        }
+        const key = arg.slice(2);
+        if (!allowed.has(key)) throw new Error(`未知参数: ${arg}`);
+        if (Object.prototype.hasOwnProperty.call(options, key)) throw new Error(`参数只能指定一次: ${arg}`);
+        options[key] = argv[++i];
     }
     return options;
 }
@@ -98,4 +104,4 @@ function main(argv = process.argv.slice(2)) {
 
 if (require.main === module) main();
 
-module.exports = { assertPublishedBlogReceipt, reconcileVisualSummaryTasks, main };
+module.exports = { assertPublishedBlogReceipt, reconcileVisualSummaryTasks, parseArgs, main };

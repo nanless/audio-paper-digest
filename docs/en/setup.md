@@ -107,7 +107,7 @@ The Node/Python loaders clear same-name inherited project variables before loadi
 | `ALL_PROXY` | Optional SOCKS/global proxy for HuggingFace `curl`, for example `socks5h://127.0.0.1:7897` |
 | `NO_PROXY` | Local-address allow list, for example `localhost,127.0.0.1,::1` |
 
-Fetch proxy configuration is mandatory: arXiv metadata, HTML/PDF/images, HuggingFace Papers, historical backfill, and WeChat's arXiv image downloads reject direct fallback when it is missing. Node and Python HTTP fetches only support HTTP CONNECT, so `HTTPS_PROXY` / `HTTP_PROXY` cannot be SOCKS URLs; HuggingFace `curl` may additionally use `ALL_PROXY=socks5h://...`. LLM requests always use direct connections and never use the fetch proxy. Proxy values are loaded only from the project-root `.env`; same-name shell/IDE values are cleared and macOS `scutil` is not consulted. Commands that need a local proxy must run outside the sandbox, because sandbox loopback cannot reach `127.0.0.1`.
+Fetch proxy configuration is mandatory: arXiv metadata, HTML/PDF/images, HuggingFace Papers, historical backfill, and WeChat's arXiv image downloads reject direct fallback when it is missing. Node and Python HTTP fetches only support HTTP CONNECT, so `HTTPS_PROXY` / `HTTP_PROXY` cannot be SOCKS URLs; HuggingFace `curl` may additionally use `ALL_PROXY=socks5h://...`, which is passed explicitly while clearing `NO_PROXY` bypasses. LLM requests always use direct connections and never use the fetch proxy. Proxy values are loaded only from the project-root `.env`; same-name shell/IDE values are cleared and macOS `scutil` is not consulted. Commands that need a local proxy must run outside the sandbox, because sandbox loopback cannot reach `127.0.0.1`.
 
 Blog generation, review, and push must also run outside the sandbox, including the generation-only stage. `generate-blog.py`, `review-blog.py`, `push-blog.py`, and compatibility `publish-to-blog.py` reject the reliable `CODEX_SANDBOX` marker; the elevation wrapper may preserve the network-disabled marker, so it cannot independently reject an external runtime.
 
@@ -185,7 +185,7 @@ All main scripts write to both the terminal and `logs/*.log` by default. To disa
 - **Node.js** >= 18.0.0 (`node` / `npm`)
 - **Python** 3.x (`python3` / `pip3`)
 - Node.js dependency: `cheerio` (arXiv HTML structured parsing)
-- Python third-party libraries: see the root `requirements.txt` (`requests`, `playwright`)
+- Python third-party libraries: see the root `requirements.txt` (`requests`, `playwright`, `PyYAML`). `PyYAML` is required by the deterministic blog-frontmatter gate, which fails closed when it is unavailable
 
 ### 9.2 Initialization
 
@@ -195,7 +195,7 @@ cd /path/to/audio-paper-digest
 # Install Node.js dependencies
 npm install
 
-# Install Python dependencies (if needed)
+# Install Python dependencies (also required by blog publication)
 pip3 install -r requirements.txt
 
 # Create required directories
@@ -281,7 +281,7 @@ FEISHU_APP_SECRET=your-full-app-secret
 
 5. **Resume visual assets; do not redraw everything**
    - A remotely verified publication receipt is mandatory; `npm run visual:post-publish -- --date YYYY-MM-DD` plans only the final-score TOP 10
-   - Then run `npm run visual:prepare -- --date YYYY-MM-DD` to validate `.bin` reference caches and emit upload-ready `referencedImagePaths` for built-in generation
+   - Then run `npm run visual:prepare -- --date YYYY-MM-DD` to validate `.bin` reference caches and emit absolute, upload-ready `referencedImagePaths` for built-in generation
    - `visual:post-publish` plans both image types while holding the blog transaction lock; only missing, failed, damaged, publication/analysis/prompt-invalidated, or newly TOP-10 infographics return to pending
    - the digest image is replanned only when the published-paper snapshot, hot directions, ranking, category, publication commit, or prompt changes
    - Register assets with their own `record` commands, then rerun both status gates. Never hand-edit manifests or bypass SHA/task-token checks

@@ -450,7 +450,7 @@ function buildApiUrl(apiType, endpoint) {
 /**
  * 构建请求体
  * OpenAI: {model, messages, max_tokens, temperature}
- * Anthropic: {model, messages, max_tokens, system?} (system 是顶级字段)
+ * Anthropic: {model, messages, max_tokens, temperature?, system?} (system 是顶级字段)
  */
 function normalizeAnthropicContent(content) {
     if (!Array.isArray(content)) return content;
@@ -511,6 +511,7 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature) {
         }
         const body = { model, max_tokens: maxTokens, messages: anthropicMessages };
         if (system) body.system = system;
+        if (Number.isFinite(temperature)) body.temperature = temperature;
         return body;
     }
     // OpenAI: 标准格式
@@ -728,10 +729,12 @@ function parseScoringDimensions(scoringText) {
             let denominator;
             let declaredMaximum;
             let matchedFormat = false;
+            let matchedToken = '';
             for (let index = 0; index < patterns.length; index++) {
                 const match = rest.match(patterns[index]);
                 if (!match) continue;
                 matchedFormat = true;
+                matchedToken = match[0];
                 if (index <= 1) {
                     score = Number(match[1]);
                     denominator = Number(match[2]);
@@ -750,7 +753,10 @@ function parseScoringDimensions(scoringText) {
                 break;
             }
 
-            occurrences[field].push({ score, denominator, declaredMaximum, matchedFormat });
+            const reason = matchedToken
+                ? rest.slice(matchedToken.length).replace(/^[\s:：—–-]+/, '').trim()
+                : '';
+            occurrences[field].push({ score, denominator, declaredMaximum, matchedFormat, reason });
             break;
         }
     }
@@ -779,6 +785,11 @@ function parseScoringDimensions(scoringText) {
         }
         if (item.score < 0 || item.score > definition.max) {
             errors.push(`评分维度“${definition.label}”得分 ${item.score} 超出 0-${definition.max}`);
+            continue;
+        }
+        const meaningfulReasonChars = item.reason.match(/[A-Za-z0-9\u4e00-\u9fff]/g) || [];
+        if (meaningfulReasonChars.length < 4) {
+            errors.push(`评分维度“${definition.label}”缺少具体评分理由`);
             continue;
         }
         const normalizedScore = normalizeScoreToOneDecimal(item.score);
@@ -1124,6 +1135,7 @@ function escapeRegExp(string) {
 // ═══════════════════════════════════════════════════════
 
 const PROXY_ENV_VARS = ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY'];
+const HTTP_CONNECT_PROXY_ENV_VARS = ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY'];
 const proxyDispatcherCache = new Map();
 
 /**
@@ -1138,6 +1150,32 @@ function detectProxyUrl() {
     }
 
     return null;
+}
+
+/**
+ * 仅返回 Node arXiv 抓取可使用的 HTTP(S) CONNECT 代理。
+ * ALL_PROXY 可能是 SOCKS，仅供 curl 等原生支持 SOCKS 的调用使用。
+ */
+function detectHttpConnectProxyUrl() {
+    for (const envVar of HTTP_CONNECT_PROXY_ENV_VARS) {
+        const value = process.env[envVar];
+        if (!value) continue;
+        try {
+            const protocol = new URL(value).protocol;
+            if (protocol === 'http:' || protocol === 'https:') return value;
+        } catch (_) {
+            // 继续检查下一项；调用方会在没有兼容代理时前置失败。
+        }
+    }
+    return null;
+}
+
+function buildProxyAuthorizationHeader(proxy) {
+    const parsed = proxy instanceof URL ? proxy : new URL(proxy);
+    if (!parsed.username && !parsed.password) return null;
+    const username = decodeURIComponent(parsed.username);
+    const password = decodeURIComponent(parsed.password);
+    return `Basic ${Buffer.from(`${username}:${password}`, 'utf8').toString('base64')}`;
 }
 
 /**
@@ -1163,7 +1201,9 @@ function createProxyAgent(proxyUrl, targetHost, targetPort = 443) {
                 : net.connect({ host: proxy.hostname, port: proxyPort });
 
             socket.once(proxy.protocol === 'https:' ? 'secureConnect' : 'connect', () => {
-                const connectReq = `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\nConnection: close\r\n\r\n`;
+                const proxyAuthorization = buildProxyAuthorizationHeader(proxy);
+                const authHeader = proxyAuthorization ? `Proxy-Authorization: ${proxyAuthorization}\r\n` : '';
+                const connectReq = `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\n${authHeader}Connection: close\r\n\r\n`;
                 socket.write(connectReq);
 
                 let buffer = '';
@@ -1266,11 +1306,13 @@ function backupPapersJson(papersFilePath, archiveDir) {
  * 从 Hugo 博客仓库中扫描已发布论文的 arXiv ID 集合
  * 博客文章中的 arXiv 链接格式：[arxiv](https://arxiv.org/abs/XXXX.XXXXX)
  * @param {string} blogRepo - 博客仓库根目录路径
+ * @param {Object} options - 测试/诊断注入项
  * @returns {Set<string>} 已发布的规范化 arXiv ID 集合
  */
-function loadPublishedIdsFromBlog(blogRepo) {
+function loadPublishedIdsFromBlog(blogRepo, options = {}) {
     const publishedIds = new Set();
     if (!blogRepo) return publishedIds;
+    const readFileSync = options.readFileSync || fs.readFileSync;
 
     const postsDir = path.join(blogRepo, 'content', 'posts');
     if (!fs.existsSync(postsDir)) {
@@ -1295,20 +1337,19 @@ function loadPublishedIdsFromBlog(blogRepo) {
         const arxivUrlRegex = /arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})(?:v\d+)?/g;
 
         for (const file of files) {
-            try {
-                const content = fs.readFileSync(file, 'utf8');
-                let match;
-                while ((match = arxivUrlRegex.exec(content)) !== null) {
-                    publishedIds.add(normalizedId(match[1]));
-                }
-            } catch (e) {
-                // 忽略单个文件读取错误
+            const content = readFileSync(file, 'utf8');
+            let match;
+            while ((match = arxivUrlRegex.exec(content)) !== null) {
+                publishedIds.add(normalizedId(match[1]));
             }
         }
 
         console.log(`[blog-dedup] 从博客扫描到 ${publishedIds.size} 篇已发布论文`);
     } catch (e) {
-        console.log(`[blog-dedup] 扫描博客目录失败: ${e.message}，跳过博客去重`);
+        const error = new Error(`[blog-dedup] 已存在的博客目录扫描失败，拒绝使用不完整去重基线: ${e.message}`);
+        error.code = 'BLOG_DEDUP_SCAN_FAILED';
+        error.cause = e;
+        throw error;
     }
 
     return publishedIds;
@@ -1403,6 +1444,8 @@ module.exports = {
     requestJson,
     // 代理
     detectProxyUrl,
+    detectHttpConnectProxyUrl,
+    buildProxyAuthorizationHeader,
     createProxyAgent,
     createProxyDispatcher,
     // 备份

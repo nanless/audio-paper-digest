@@ -3,21 +3,97 @@ const { setupScriptLogging } = require('./log-setup');
 setupScriptLogging(__filename);
 
 const path = require('path');
-const { loadEnvFile, getBeijingISOString, getBeijingDateString, normalizedId } = require('./utils.js');
+const crypto = require('crypto');
+const {
+    loadEnvFile,
+    getBeijingISOString,
+    getBeijingDateString,
+    normalizedId,
+    loadPrompt,
+    detectApiType
+} = require('./utils.js');
 loadEnvFile();
 
 const { filterPapersWithLLM } = require('./fetch-papers.js');
+const { KEYWORD_PREFILTER_VERSION } = require('./lib/keyword-prefilter.js');
 const {
     analyzeBatch,
     readJsonFileStrict,
     updateJsonFileLocked,
     mergePapersById,
+    mergeCanonicalAnalysisState,
     isSuccessfulAnalysisRecord,
     getAnalysisRunStatus,
     getAnalysisExitCode
 } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses, validatePapersDatabaseSchema } = require('./digest-status.js');
 const Config = require('./config.js');
+
+function getRefilterFilterFingerprint() {
+    const endpoint = process.env.PAPER_ANALYZER_ENDPOINT || '';
+    const model = process.env.PAPER_ANALYZER_MODEL || '';
+    const prompt = loadPrompt('prompts/filter.md', {
+        title: '__TITLE__',
+        abstract: '__ABSTRACT__',
+        categories: '__CATEGORIES__'
+    });
+    const contract = {
+        endpoint,
+        model,
+        protocol: detectApiType(endpoint, model),
+        promptSha256: crypto.createHash('sha256').update(prompt).digest('hex'),
+        temperature: Config.FILTER_CONFIG.temperature,
+        maxTokens: Config.FILTER_CONFIG.maxTokens,
+        decisionContractVersion: Config.FILTER_CONFIG.decisionContractVersion,
+        keywordPrefilterEnabled: Config.FILTER_CONFIG.keywordPrefilterEnabled,
+        keywordPrefilterVersion: KEYWORD_PREFILTER_VERSION
+    };
+    return crypto.createHash('sha256').update(JSON.stringify(contract)).digest('hex');
+}
+
+function resolveRefilterCheckpointFile(resultFile, options = {}) {
+    const defaultPath = path.join(path.dirname(resultFile), 'refilter-filter-decisions.json');
+    const checkpointFile = path.resolve(options.filterCheckpointFile || defaultPath);
+    if (!isPathInside(path.dirname(resultFile), checkpointFile)) {
+        throw new Error(`refilter 筛选 checkpoint 必须与结果文件位于同一受控目录: ${checkpointFile}`);
+    }
+    return checkpointFile;
+}
+
+function loadRefilterDecisions(checkpointFile, targetDate, filterConfigFingerprint) {
+    const checkpoint = readJsonFileStrict(checkpointFile, { allowMissing: true });
+    if (!checkpoint
+        || checkpoint.batchDate !== targetDate
+        || checkpoint.filterConfigFingerprint !== filterConfigFingerprint
+        || !checkpoint.decisions
+        || typeof checkpoint.decisions !== 'object') {
+        return {};
+    }
+    return checkpoint.decisions;
+}
+
+function saveRefilterDecisions(checkpointFile, targetDate, filterConfigFingerprint, state = {}) {
+    return updateJsonFileLocked(checkpointFile, current => {
+        const reusableCurrent = current?.batchDate === targetDate
+            && current?.filterConfigFingerprint === filterConfigFingerprint
+            ? current
+            : {};
+        return {
+            ...reusableCurrent,
+            version: 1,
+            batchDate: targetDate,
+            updatedAt: getBeijingISOString(),
+            filterConfigFingerprint,
+            complete: state.stats?.complete === true,
+            stats: state.stats || null,
+            decisions: {
+                ...(reusableCurrent.decisions || {}),
+                ...(state.decisions || {}),
+                ...(state.retryableDecisions || {})
+            }
+        };
+    });
+}
 
 function validateTargetDate(targetDate) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate || '')) {
@@ -89,7 +165,16 @@ function saveSuccessfulResultsById(resultFile, attemptResults, metadata = {}) {
         const expectedIds = new Set(expectedItems
             .map(item => normalizedId(item))
             .filter(Boolean));
-        const mergedPapers = mergePapersById(existingPapers, validatedResults, { preserveSuccessfulAnalysis: true });
+        const allMergedPapers = mergePapersById(existingPapers, validatedResults, { preserveSuccessfulAnalysis: true });
+        // resultFile 是本次重筛批次的 canonical 集合。逐篇运行期间先保留旧
+        // 结果用于失败恢复；只有收尾时才按本轮明确入选的 expectedIds 收敛，
+        // 防止已被重新判为不相关的旧成功论文继续进入博客发布。
+        const mergedPapers = shouldFinalize
+            ? allMergedPapers.filter(paper => expectedIds.has(normalizedId(paper)))
+            : allMergedPapers;
+        const removedByRefilter = shouldFinalize
+            ? allMergedPapers.length - mergedPapers.length
+            : 0;
         const mergedById = new Map(mergedPapers.map(paper => [normalizedId(paper), paper]));
         let successfulExpected = 0;
         for (const id of expectedIds) {
@@ -113,7 +198,8 @@ function saveSuccessfulResultsById(resultFile, attemptResults, metadata = {}) {
                     refilterStatus: finalStatus,
                     expected: expectedIds.size,
                     successfulExpected,
-                    remainingFailed
+                    remainingFailed,
+                    removedByRefilter
                 } : {})
             }
         };
@@ -133,6 +219,13 @@ async function main(targetDate, options = {}) {
     const filterFn = options.filterFn || filterPapersWithLLM;
     const analyzeBatchFn = options.analyzeBatchFn || analyzeBatch;
     const digestStatusUpdater = options.digestStatusUpdater || updateAnalysisDigestStatuses;
+    const filterConfigFingerprint = options.filterConfigFingerprint || getRefilterFilterFingerprint();
+    const filterCheckpointFile = resolveRefilterCheckpointFile(resultFile, options);
+    const initialDecisions = loadRefilterDecisions(
+        filterCheckpointFile,
+        targetDate,
+        filterConfigFingerprint
+    );
 
     // 1. 从 papers.json 提取目标日期的论文
     const papersPath = options.papersPath || Config.FILES.papers;
@@ -175,7 +268,17 @@ async function main(targetDate, options = {}) {
     console.log('🔍 开始 LLM 筛选...');
     const filtered = await filterFn(targetPapers, {
         batchSize: 3,
-        delayBetweenBatches: 3000
+        delayBetweenBatches: 3000,
+        initialDecisions,
+        decisionMetadata: { filterConfigFingerprint },
+        onBatchComplete: async state => {
+            saveRefilterDecisions(
+                filterCheckpointFile,
+                targetDate,
+                filterConfigFingerprint,
+                state
+            );
+        }
     });
     const filterStats = filtered?._filterStats;
     if (filterStats?.complete !== true) {
@@ -221,7 +324,7 @@ async function main(targetDate, options = {}) {
             const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
             if (!latest) return { paper, skip: false };
-            const latestForReanalysis = { ...paper, ...latest };
+            const latestForReanalysis = mergeCanonicalAnalysisState(paper, latest);
             delete latestForReanalysis.analysis;
             delete latestForReanalysis.parsed;
             delete latestForReanalysis.error;
@@ -308,5 +411,9 @@ module.exports = {
     saveSuccessfulResultsById,
     validateTargetDate,
     resolveResultFileForTargetDate,
-    parseCliArgs
+    parseCliArgs,
+    getRefilterFilterFingerprint,
+    resolveRefilterCheckpointFile,
+    loadRefilterDecisions,
+    saveRefilterDecisions
 };

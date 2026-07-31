@@ -291,30 +291,23 @@ Please write like a top-tier conference reviewer, scoring and providing specific
 - Open Source must match the type-specific core artifact status in `## 开源详情`; code/model/data flags apply to model, dataset, and tool papers, while theory also depends on whether core proofs, derivations, assumptions, and boundaries are fully public in the paper or appendix
 - Each defect may be used as a deduction in only one primary dimension
 - Apply the evidence standard for `document_type`; the type itself is never a scoring reason
+- Emit every dimension exactly once as a single list line in the shown `* 中文标签 (score/maximum)：concrete reason` format; an empty or detached reason is rejected by code
 
-**创新性 (X/2)**
-Write specific review comments: novelty of problem / method / insight, key differences from SOTA, whether there is "old wine in new bottles" or incremental improvement, whether the claimed innovation holds up.
+* 创新性 (X/2)：Write specific review comments about novelty of the problem / method / insight, key differences from SOTA, whether there is "old wine in new bottles" or incremental improvement, and whether the claimed innovation holds up.
 
-**技术严谨性 (X/1.5)**
-Write specific review comments: correctness of derivation / proof / algorithm, whether there are flaws, undiscussed boundary conditions, over-simplification, or false assumptions, whether mathematical formulation is rigorous.
+* 技术严谨性 (X/1.5)：Write specific review comments about correctness of derivation / proof / algorithm, flaws, undiscussed boundary conditions, over-simplification or false assumptions, and whether the mathematical formulation is rigorous.
 
-**实验充分性 (X/1.5)**
-Write specific review comments: whether baselines, ablations, and dataset coverage are sufficient, whether results truly support the conclusions, whether there is over-interpretation of data, whether there is insufficient statistical significance.
+* 实验充分性 (X/1.5)：Write specific review comments about whether baselines, ablations, and dataset coverage are sufficient, whether results truly support the conclusions, over-interpretation of data, and statistical significance.
 
-**清晰度 (X/1)**
-Write specific review comments: writing quality, organization, symbol definitions, figure clarity, whether key details are missing making reproduction impossible, whether the paper is easy to read.
+* 清晰度 (X/1)：Write specific review comments about writing quality, organization, symbol definitions, figure clarity, missing details, and whether the paper is easy to read.
 
-**影响力 (X/1.5)**
-Write specific review comments: domain-driving effect, follow-up potential, **relevance to speech / music / audio domain readers**. If the paper achieves SOTA on important benchmarks, releases large-scale datasets / tools, or solves long-standing practical problems in the domain, it should receive a high score — but only if these contributions **directly serve the speech / music / audio domain**. If the paper's core contribution is in computer vision, natural language processing, law / policy, or general machine learning, impact must be low (typically ≤ 0.5), because speech / music / audio readers cannot directly benefit. Narrowly applicable minor improvements or non-audio-core work can only receive low scores.
+* 影响力 (X/1.5)：Write specific review comments about domain-driving effect, follow-up potential, and **relevance to speech / music / audio domain readers**. If the paper achieves SOTA on important benchmarks, releases large-scale datasets / tools, or solves long-standing practical problems in the domain, it should receive a high score — but only if these contributions **directly serve the speech / music / audio domain**. If the paper's core contribution is in computer vision, natural language processing, law / policy, or general machine learning, impact must be low (typically ≤ 0.5), because speech / music / audio readers cannot directly benefit. Narrowly applicable minor improvements or non-audio-core work can only receive low scores.
 
-**开源 (X/1.5)**
-Write specific review comments: whether code repository, model weights, dataset, and checkpoints are publicly available. Evaluation dimensions: presence of GitHub link, whether README is provided, whether pre-trained model downloads are available, whether dataset is accessible. Deduct points if only a link is given with no README or documentation.
+* 开源 (X/1.5)：Write specific review comments about whether the type-specific core artifacts are publicly available, including code repositories, model weights, datasets, checkpoints, or complete proofs for theory papers. Evaluate whether links and documentation are actually accessible.
 
-**可复现性 (X/0.5)**
-Write specific review comments: documentation sufficiency beyond open source — training details (learning rate, batch size, optimizer, scheduling strategy), hyperparameter settings, hardware environment, reproduction steps — are they sufficient for others to reproduce without relying on the authors? Deduct points for vague information or missing key details.
+* 可复现性 (X/0.5)：Write specific review comments about documentation sufficiency beyond open source — training details, hyperparameters, hardware, and reproduction steps — and whether others can reproduce the work without relying on the authors.
 
-**工程/实践价值 (X/1.5)**
-Write specific review comments: engineering落地能力, pipeline completeness, practical reference value, industrial reusability. Must be strictly scored for engineering papers (tech reports, system reports, benchmark construction); pure theory research can score 0.
+* 工程/实践价值 (X/1.5)：Write specific review comments about engineering feasibility, pipeline completeness, practical reference value, and industrial reusability. Score this strictly for engineering papers; pure theory research can score 0.
 
 ## 局限与问题
 Please list the paper's limitations and potential issues like a top-tier conference reviewer. Divide into two parts:

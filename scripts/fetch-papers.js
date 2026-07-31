@@ -32,6 +32,7 @@ const {
     parseResponseText,
     requestJson,
     detectProxyUrl,
+    detectHttpConnectProxyUrl,
     createProxyAgent,
     loadPrompt,
     normalizedId
@@ -132,7 +133,16 @@ function makeSourceFetchError(message, sourceHealth) {
 }
 
 function hasRecentResponseSignature(html) {
-    return /<dl(?:\s|>)/i.test(String(html || ''));
+    const text = String(html || '');
+    const hasArxivListContainer = /id=["']dlpage["']/i.test(text)
+        || /<dl\b[^>]*id=["']articles["']/i.test(text);
+    const hasArxivEntryIdentity = hasArxivListContainer
+        || /class=["'][^"']*list-title[^"']*["']/i.test(text);
+    const hasPaperEntries = /<dt\b[^>]*>[\s\S]*?\/abs\/(?:\d{4}\.\d{4,5}|[a-z-]+\/\d{7})/i.test(text)
+        && /<dd\b/i.test(text);
+    const hasExplicitEmptyState = /(?:no submissions|no articles|no results)\b/i.test(text);
+    return (hasArxivEntryIdentity && hasPaperEntries)
+        || (hasArxivListContainer && hasExplicitEmptyState);
 }
 
 function hasSearchResponseSignature(html) {
@@ -264,7 +274,7 @@ function httpsRequestWithProxy(url, headers, proxyUrl, timeoutMs = 90000) {
         const urlObj = new URL(url);
 
         if (!proxyUrl) {
-            reject(new Error(`arXiv 抓取必须配置当前项目代理（HTTPS_PROXY/HTTP_PROXY/ALL_PROXY），拒绝直连: ${urlObj.hostname}`));
+            reject(new Error(`arXiv 抓取必须配置 HTTPS_PROXY/HTTP_PROXY 的 HTTP(S) CONNECT 代理，拒绝直连或仅使用 SOCKS ALL_PROXY: ${urlObj.hostname}`));
             return;
         }
 
@@ -310,7 +320,7 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
     const pageSize = 50;
     const pagesToFetch = Math.ceil(maxResults / pageSize);
     const allPapers = [];
-    const proxyUrl = detectProxyUrl();
+    const proxyUrl = detectHttpConnectProxyUrl();
     const requestFn = options.requestFn || httpsRequestWithProxy;
     const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     const maxRetries = options.maxRetries || 5;
@@ -421,7 +431,7 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
  * 翻页：/list/{category}/recent?skip=50&show=50
  */
 async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxResults = 100, options = {}) {
-    const proxyUrl = detectProxyUrl();
+    const proxyUrl = detectHttpConnectProxyUrl();
     const pageSize = 50;
     const pagesToFetch = Math.min(Math.ceil(maxResults / pageSize), 2); // 最多2页100篇
     const allPapers = [];
@@ -562,7 +572,7 @@ function parseRecentPageHTML(html, categoryId, existingIds = null) {
  * @returns {Array} 补充了摘要的论文列表
  */
 async function fetchAbstracts(papers, concurrency = 1, options = {}) {
-    const proxyUrl = detectProxyUrl();
+    const proxyUrl = detectHttpConnectProxyUrl();
     const needFetch = papers.filter(p => !p.abstract && p.arxivId);
     const requestFn = options.requestFn || httpsRequestWithProxy;
     const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
@@ -735,8 +745,8 @@ function parseSearchPageHTML(html, categoryId, existingIds = null) {
  */
 async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResultsPerCategory, retryCount = ARXIV_CONFIG.fetchMaxRetries, existingIds = null, options = {}) {
     console.log(`[fetch] 正在抓取 ${categoryId} 类别的 ${maxResults} 篇论文...`);
-    if (!options.requestFn && !detectProxyUrl()) {
-        throw new Error('arXiv 抓取必须通过当前项目 .env 中的 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY，拒绝在无代理配置时直连');
+    if (!options.requestFn && !detectHttpConnectProxyUrl()) {
+        throw new Error('arXiv 抓取必须通过当前项目 .env 中 HTTPS_PROXY/HTTP_PROXY 配置的 HTTP(S) CONNECT 代理，拒绝直连或使用仅 SOCKS 的 ALL_PROXY');
     }
     const merged = new Map();
     const seenIds = new Set(existingIds ? Array.from(existingIds) : []);
@@ -836,7 +846,7 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
         'max_results': maxResults.toString()
     });
     const url = `https://export.arxiv.org/api/query?${params.toString()}`;
-    const proxyUrl = detectProxyUrl();
+    const proxyUrl = detectHttpConnectProxyUrl();
     const apiHealth = { source: 'arxiv-api', attempts: 0, successfulRequests: 0, failures: [], coverageComplete: false };
     let apiLastError = null;
 

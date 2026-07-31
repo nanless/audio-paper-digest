@@ -13,6 +13,7 @@ const {
     analyzeBatch,
     readJsonFileStrict,
     updateJsonFileLocked,
+    initializeJsonFileLocked,
     mergePapersById,
     isSuccessfulAnalysisRecord,
     getAnalysisRunStatus,
@@ -65,7 +66,7 @@ function inferBatchDate(data, papers) {
 async function reanalyzeAll() {
     if (!dataFileArg && !fs.existsSync(DEFAULT_CURRENT_FILE) && fs.existsSync(DEFAULT_LEGACY_FILE)) {
         const legacyData = readJsonFileStrict(DEFAULT_LEGACY_FILE);
-        updateJsonFileLocked(DEFAULT_CURRENT_FILE, () => Array.isArray(legacyData)
+        initializeJsonFileLocked(DEFAULT_CURRENT_FILE, Array.isArray(legacyData)
             ? { timestamp: getBeijingISOString(), source: DEFAULT_LEGACY_FILE, papers: legacyData }
             : legacyData);
         console.log(`[reanalyze] 📦 已将 legacy 分析结果迁移到权威路径: ${DEFAULT_CURRENT_FILE}`);

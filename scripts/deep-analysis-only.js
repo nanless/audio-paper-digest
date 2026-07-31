@@ -13,7 +13,9 @@ const {
     analyzeBatch,
     readJsonFileStrict,
     updateJsonFileLocked,
+    initializeJsonFileLocked,
     mergePapersById,
+    mergeCanonicalAnalysisState,
     isSuccessfulAnalysisRecord,
     getAnalysisRunStatus,
     getAnalysisExitCode
@@ -62,7 +64,7 @@ async function runDeepAnalysis() {
 
     if (!fs.existsSync(currentPath) && fs.existsSync(legacyPath)) {
         const legacyData = validateDeepAnalysisInput(readJsonFileStrict(legacyPath), filteredData, today);
-        updateJsonFileLocked(currentPath, () => Array.isArray(legacyData)
+        initializeJsonFileLocked(currentPath, Array.isArray(legacyData)
             ? { timestamp: getBeijingISOString(), source: legacyPath, papers: legacyData }
             : legacyData);
         console.log(`📦 已将 legacy 分析结果迁移到权威路径: ${currentPath}`);
@@ -79,7 +81,7 @@ async function runDeepAnalysis() {
             stats: filteredData.stats || {},
             papers: filteredPapers
         };
-        existingData = updateJsonFileLocked(resultPath, () => existingData);
+        existingData = initializeJsonFileLocked(resultPath, existingData);
         console.log(`📄 未找到分析结果，已从筛选结果初始化: ${filteredPath}`);
     }
 
@@ -87,7 +89,13 @@ async function runDeepAnalysis() {
     const analyzedCount = papers.filter(isSuccessfulAnalysisRecord).length;
     console.log(`📊 读取到 ${papers.length} 篇筛选后的论文 (已分析: ${analyzedCount})\n`);
 
-    const notAnalyzed = papers.filter(p => !isSuccessfulAnalysisRecord(p));
+    const freshById = new Map(filteredData.papers.map(paper => [normalizedId(paper), paper]));
+    const notAnalyzed = papers
+        .filter(p => !isSuccessfulAnalysisRecord(p))
+        .map(canonical => mergeCanonicalAnalysisState(
+            freshById.get(normalizedId(canonical)) || canonical,
+            canonical
+        ));
     if (notAnalyzed.length === 0) {
         updateAnalysisDigestStatuses(papers, { batchDate: today });
         updateJsonFileLocked(resultPath, current => ({
@@ -122,7 +130,10 @@ async function runDeepAnalysis() {
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
             if (isSuccessfulAnalysisRecord(latest)) return { paper: latest, skip: true };
-            return { paper: latest || paper, skip: false };
+            return {
+                paper: latest ? mergeCanonicalAnalysisState(paper, latest) : paper,
+                skip: false
+            };
         },
         onPaperResultLocked: async (paper, result) => {
             const attempted = result.result || { ...paper, analysis: null, parsed: null, error: result.error || '分析失败' };

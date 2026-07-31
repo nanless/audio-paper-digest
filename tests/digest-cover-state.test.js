@@ -15,7 +15,8 @@ const {
     recordDigestCover,
     markDigestCoverFailed,
     archiveLegacyDigestCover,
-    assertDigestCoverManifestCurrent
+    assertDigestCoverManifestCurrent,
+    parseArgs
 } = require('../scripts/digest-cover-state.js');
 
 const TEST_PUBLICATION = Object.freeze({
@@ -27,6 +28,17 @@ const TEST_PUBLICATION = Object.freeze({
 function planDigestCover(options) {
     return planDigestCoverImpl({ publication: TEST_PUBLICATION, ...options });
 }
+
+describe('digest cover CLI', () => {
+    it('拒绝未知、缺值和重复参数', () => {
+        assert.throws(() => parseArgs(['status', '--unknown', 'value']), /未知参数/);
+        assert.throws(() => parseArgs(['status', '--date']), /无效参数/);
+        assert.throws(
+            () => parseArgs(['status', '--date', '2026-07-13', '--date', '2026-07-14']),
+            /只能指定一次/
+        );
+    });
+});
 
 const CRC32_TABLE = (() => {
     const table = new Uint32Array(256);

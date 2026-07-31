@@ -11,7 +11,9 @@ const { isSuccessfulAnalysisRecord } = require('./analysis-engine.js');
 const { setupScriptLogging } = require('./log-setup.js');
 const {
     cardTaskToken,
-    validateCompletedCard
+    validateCompletedCard,
+    assertVisualArchiveUniqueness,
+    visualSummaryAssetPath
 } = require('./visual-summary-state.js');
 const {
     coverTaskToken,
@@ -78,6 +80,37 @@ function samePaperIds(left, right) {
     );
 }
 
+function visualAssetsAreValid(visual) {
+    const visualCards = Object.entries(visual?.papers || {})
+        .flatMap(([id, paper]) => Object.entries(paper?.cards || {})
+            .map(([kind, card]) => ({ id, paper, kind, card })));
+    const assetsValid = visualCards.length > 0 && visualCards.every(({ id, paper, kind, card }) => (
+        validateCompletedCard(
+            card,
+            paper.analysisSha256,
+            paper.promptSha256,
+            cardTaskToken(
+                paper.normalizedArxivId || normalizedId(id),
+                kind,
+                paper.analysisSha256,
+                paper.promptSha256,
+                paper.rank,
+                visual?.publication
+            ),
+            visualSummaryAssetPath(
+                visual.batchDate, id, kind, paper.rank, paper.title || ''
+            )
+        )
+    ));
+    let archiveUnique = false;
+    try {
+        archiveUnique = Boolean(visual && assertVisualArchiveUniqueness(visual));
+    } catch (_error) {
+        archiveUnique = false;
+    }
+    return { visualCards, assetsValid, archiveUnique };
+}
+
 function buildDigestRunReport(targetDate) {
     const raw = readJson(Config.FILES.rawCandidates);
     const filtered = readJson(Config.FILES.filteredPapers);
@@ -105,30 +138,19 @@ function buildDigestRunReport(targetDate) {
         && review.remoteVerifiedOid === review.publicationCommit
         && review.remoteVerifiedAt
     );
-    const visualCards = Object.values(visual?.papers || {})
-        .flatMap(paper => Object.entries(paper?.cards || {}).map(([kind, card]) => ({ paper, kind, card })));
-    const visualAssetsValid = visualCards.length > 0 && visualCards.every(({ paper, kind, card }) => (
-        validateCompletedCard(
-            card,
-            paper.analysisSha256,
-            paper.promptSha256,
-            cardTaskToken(
-                paper.normalizedArxivId || normalizedId(paper),
-                kind,
-                paper.analysisSha256,
-                paper.promptSha256,
-                paper.rank,
-                visual?.publication
-            )
-        )
-    ));
+    const {
+        visualCards,
+        assetsValid: visualAssetsValid,
+        archiveUnique: visualArchiveUnique
+    } = visualAssetsAreValid(visual);
     const visualComplete = visual?.batchDate === targetDate
         && visual?.overallStatus === 'complete'
         && visual?.counts?.completeCards === visual?.counts?.totalCards
         && visualCards.length === visual?.counts?.totalCards
         && visual?.counts?.pendingCards === 0
         && visual?.counts?.failedCards === 0
-        && visualAssetsValid;
+        && visualAssetsValid
+        && visualArchiveUnique;
     const expectedCoverToken = coverTaskToken(
         cover?.dataSha256,
         cover?.promptSha256,
@@ -204,7 +226,8 @@ function buildDigestRunReport(targetDate) {
             total: visual?.counts?.totalCards || 0,
             pending: visual?.counts?.pendingCards || 0,
             failed: visual?.counts?.failedCards || 0,
-            assetsValid: visualAssetsValid
+            assetsValid: visualAssetsValid,
+            archiveUnique: visualArchiveUnique
         },
         cover: {
             status: cover?.cover?.status || 'missing',
@@ -231,5 +254,6 @@ module.exports = {
     parseDate,
     sourceHealthComplete,
     samePaperIds,
+    visualAssetsAreValid,
     buildDigestRunReport
 };

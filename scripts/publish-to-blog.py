@@ -20,6 +20,7 @@ load_project_env()
     python3 publish-to-blog.py                 # 兼容生成入口
     python3 publish-to-blog.py --date YYYY-MM-DD
 """
+import argparse
 import json, re, sys, os, subprocess, datetime, base64, concurrent.futures, hashlib
 import ipaddress, shutil, socket, tempfile, stat, struct, zlib, unicodedata
 from contextlib import contextmanager
@@ -40,7 +41,9 @@ from publish_common import (
 )
 from path_config import (
     PROJECT_ROOT,
+    ARCHIVE_DIR,
     CURRENT_DIR,
+    resolve_deep_analysis_result_path,
     DIGEST_COVER_ASSET_DIR,
     DIGEST_COVER_MANIFEST_DIR,
     VISUAL_SUMMARY_ASSET_DIR,
@@ -3809,37 +3812,99 @@ def exclude_papers_for_publish(papers, excluded_ids):
     return kept, sorted(normalized_excluded)
 
 
-def generate_main():
+def parse_generation_args(argv=None):
+    """Strictly parse generation-only CLI arguments.
+
+    Single-value flags use ``append`` so duplicate values cannot silently let
+    the last spelling win. ``--exclude-id`` is intentionally repeatable.
+    """
+    parser = argparse.ArgumentParser(
+        prog=Path(sys.argv[0]).name,
+        description='只生成并安装博客页面及 generation manifest；不 review、不推送。',
+        allow_abbrev=False,
+    )
+    parser.add_argument('data_file', nargs='?', help='可选的深度分析 JSON 文件')
+    parser.add_argument('--date', action='append', metavar='YYYY-MM-DD')
+    parser.add_argument('--category', action='append')
+    parser.add_argument('--exclude-id', action='append', default=[], metavar='ARXIV_ID')
+    parser.add_argument('--all', action='count', default=0)
+    parser.add_argument('--skip-push', action='count', default=0,
+                        help='兼容旧调用；生成入口本身从不 push')
+    parser.add_argument('--push', action='count', default=0,
+                        help=argparse.SUPPRESS)
+    args = parser.parse_args(argv)
+
+    for values, label in ((args.date, '--date'), (args.category, '--category')):
+        if values and len(values) > 1:
+            parser.error(f'{label} 只能指定一次')
+    if args.all > 1:
+        parser.error('--all 只能指定一次')
+    if args.skip_push > 1:
+        parser.error('--skip-push 只能指定一次')
+    if args.push:
+        parser.error('生成、review 和推送已分离；请依次使用 generate-blog.py、review-blog.py、push-blog.py')
+    return {
+        'data_file': args.data_file,
+        'target_date': args.date[0] if args.date else None,
+        'category': args.category[0] if args.category else '论文速递',
+        'publish_all': bool(args.all),
+        'excluded_ids': list(args.exclude_id),
+    }
+
+
+def select_generation_data_file(data_file, target_date, publish_all=False):
+    """Resolve the default generation input without confusing current and archived batches."""
+    if data_file is not None or publish_all or not target_date:
+        return data_file
+    current = Path(resolve_deep_analysis_result_path())
+    if current.is_file():
+        try:
+            raw = json.loads(current.read_text(encoding='utf-8'))
+            papers = raw.get('papers') if isinstance(raw, dict) else raw
+            paper_dates = {
+                paper_batch_date(paper)
+                for paper in papers if isinstance(paper, dict)
+            } if isinstance(papers, list) else set()
+            if papers and paper_dates == {target_date}:
+                return str(current)
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            # Preserve the existing loader's fail-closed error when no exact
+            # archived batch is available.
+            pass
+    archived = ARCHIVE_DIR / validate_publish_date(target_date) / 'deep-analysis-result.json'
+    if archived.is_file():
+        print(f'♻️ 当前分析文件不属于目标批次，改用受控归档: {archived}')
+        return str(archived)
+    return str(current)
+
+
+def has_verified_publication_receipt(date_str):
+    """Return true only for a receipt already verified against remote main."""
+    path = review_receipt_path(date_str)
+    try:
+        receipt = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    publication_commit = str(receipt.get('publicationCommit') or '').lower()
+    remote_oid = str(receipt.get('remoteVerifiedOid') or '').lower()
+    return bool(
+        receipt.get('schemaVersion') == 3
+        and receipt.get('date') == validate_publish_date(date_str)
+        and re.fullmatch(r'[0-9a-f]{40,64}', publication_commit)
+        and remote_oid == publication_commit
+        and receipt.get('remoteVerifiedAt')
+    )
+
+
+def generate_main(options=None):
     from log_setup import setup_script_logging
     setup_script_logging(__file__)
-    data_file = None
-    target_date = None
-    category = '论文速递'
-    publish_all = False
-    excluded_ids = []
-
-    i = 1
-    while i < len(sys.argv):
-        arg = sys.argv[i]
-        if arg == '--skip-push':
-            pass
-        elif arg == '--push':
-            print('❌ 生成、review 和推送已分离；请依次使用 generate-blog.py、review-blog.py、push-blog.py')
-            sys.exit(2)
-        elif arg == '--all':
-            publish_all = True
-        elif arg == '--exclude-id' and i + 1 < len(sys.argv):
-            excluded_ids.append(sys.argv[i + 1])
-            i += 1
-        elif arg == '--date' and i + 1 < len(sys.argv):
-            target_date = sys.argv[i + 1]
-            i += 1
-        elif arg == '--category' and i + 1 < len(sys.argv):
-            category = sys.argv[i + 1]
-            i += 1
-        elif not arg.startswith('--'):
-            data_file = arg
-        i += 1
+    options = options or parse_generation_args()
+    data_file = options['data_file']
+    target_date = options['target_date']
+    category = options['category']
+    publish_all = options['publish_all']
+    excluded_ids = options['excluded_ids']
 
     try:
         blog_repo, content_dir = validate_publish_target()
@@ -3847,6 +3912,7 @@ def generate_main():
     except PublishDataValidationError as exc:
         print(f"\n❌ 发布目标校验失败: {exc}")
         sys.exit(1)
+    data_file = select_generation_data_file(data_file, today, publish_all)
     papers = load_papers(data_file)
     print(f"📅 博客日期: {today}")
 
@@ -3870,8 +3936,22 @@ def generate_main():
         )
 
     if not papers:
-        print("⚠️ 没有论文需要发布")
-        return
+        if has_verified_publication_receipt(today):
+            raise PublishDataValidationError(
+                f'目标批次 {today} 已有远端验证发布凭证，但当前输入没有论文；'
+                '已保留既有 generation/review/push 证据'
+            )
+        # A failed empty generation must not leave a same-date manifest or
+        # review/publication receipt that a separately invoked later stage
+        # could mistake for this run's output.
+        generation_manifest_path(today).unlink(missing_ok=True)
+        review_receipt_path(today).unlink(missing_ok=True)
+        review_failure_path(today).unlink(missing_ok=True)
+        generation_journal_path(today).unlink(missing_ok=True)
+        shutil.rmtree(generation_stage_path(today).parent, ignore_errors=True)
+        raise PublishDataValidationError(
+            f'目标批次 {today} 没有论文可生成；已阻止复用该日期的旧 generation/review/push 证据'
+        )
 
     try:
         papers = validate_papers_for_publish(papers)
@@ -3973,14 +4053,14 @@ def generate_main():
 
 def main():
     """Compatibility generation entry point; review and push live in separate scripts."""
-    target_date = None
-    for index, arg in enumerate(sys.argv[1:]):
-        if arg == '--date' and index + 2 < len(sys.argv):
-            target_date = sys.argv[index + 2]
-    date_str = validate_publish_date(get_today_bj(target_date))
+    options = parse_generation_args()
     try:
+        date_str = validate_publish_date(get_today_bj(options['target_date']))
         with blog_publication_lock(date_str):
-            return generate_main()
+            return generate_main(options)
+    except PublishDataValidationError as exc:
+        print(f'\n❌ 博客生成失败: {exc}')
+        sys.exit(1)
     except TimeoutError as exc:
         print(f'\n❌ 同日期博客事务正在运行: {exc}')
         sys.exit(1)

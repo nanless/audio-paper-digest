@@ -103,7 +103,16 @@ describe('digest status helpers', () => {
         };
 
         const updated = applyAnalysisDigestStatuses(papersData, [
-            { arxivId: '2607.00001', analysis: null, error: 'timeout' }
+            {
+                arxivId: '2607.00001',
+                analysis: null,
+                error: 'timeout',
+                analysisCheckpoint: 'partial checkpoint',
+                analysisManifest: {
+                    version: 1,
+                    stages: { revision: { status: 'transient_failure' } }
+                }
+            }
         ], {
             batchDate: '2026-07-08',
             updatedAt: '2026-07-08T12:00:00+08:00'
@@ -114,6 +123,12 @@ describe('digest status helpers', () => {
         assert.strictEqual(papersData.papers['2607.00001'].digestStatus.status, 'analyzed');
         assert.strictEqual(papersData.papers['2607.00001'].digestStatus.latestAttemptStatus, 'analysis_failed');
         assert.strictEqual(papersData.papers['2607.00001'].digestStatus.error, 'timeout');
+        assert.strictEqual(papersData.papers['2607.00001'].analysisCheckpoint, 'partial checkpoint');
+        assert.strictEqual(
+            papersData.papers['2607.00001'].analysisManifest.stages.revision.status,
+            'transient_failure'
+        );
+        assert.strictEqual(papersData.papers['2607.00001'].latestAnalysisAttemptError, 'timeout');
     });
 
     it('旧的损坏 analysis 不会让失败尝试被标记 analyzed', () => {

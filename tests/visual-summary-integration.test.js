@@ -7,7 +7,10 @@ const path = require('node:path');
 
 const Config = require('../scripts/config.js');
 const { validAnalysisPaper } = require('./valid-analysis-fixture.js');
-const { reconcileVisualSummaryTasks } = require('../scripts/visual-summary-integration.js');
+const {
+    reconcileVisualSummaryTasks,
+    parseArgs
+} = require('../scripts/visual-summary-integration.js');
 
 function publishedPaper(id, score) {
     return validAnalysisPaper(id, {
@@ -51,6 +54,15 @@ function writePublication(currentDir, papers, commit = 'a'.repeat(40)) {
 }
 
 describe('post-publication visual orchestration', () => {
+    it('视觉规划 CLI 拒绝未知、缺值和重复参数', () => {
+        assert.throws(() => parseArgs(['--unknown', 'value']), /未知参数/);
+        assert.throws(() => parseArgs(['--date']), /无效参数/);
+        assert.throws(
+            () => parseArgs(['--date', '2026-07-13', '--date', '2026-07-14']),
+            /只能指定一次/
+        );
+    });
+
     it('只使用 generation 中实际发布快照，并同时规划 TOP 10 长图与汇总图', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-integration-'));
         const originals = {

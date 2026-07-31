@@ -110,7 +110,7 @@ Node/Python 加载器会先清除外层进程中的同名项目变量，再加�
 | `ALL_PROXY` | 可选。HuggingFace `curl` 可使用的 SOCKS/全局代理，例如 `socks5h://127.0.0.1:7897` |
 | `NO_PROXY` | 本地地址白名单，例如 `localhost,127.0.0.1,::1` |
 
-抓取代理是必需项：arXiv 元数据、HTML/PDF/图片和 HuggingFace Papers 都会拒绝无代理直连；历史补录与微信的 arXiv 图片下载也使用同一项目代理。Node/Python 的 HTTP 请求只支持 HTTP CONNECT，因此 `HTTPS_PROXY` / `HTTP_PROXY` 不可填 SOCKS URL；HuggingFace 的 Node `curl` 可以额外使用 `ALL_PROXY=socks5h://...`。LLM 请求始终直连，不会走抓取代理。代理变量只从项目根 `.env` 加载；脚本会清除 shell/IDE 继承的同名代理变量，不再读取 macOS `scutil` 系统代理。使用本机代理时，抓取、深度分析和重分析命令必须在沙箱外运行，沙箱内无法连接 `127.0.0.1` 不能作为网络故障依据。
+抓取代理是必需项：arXiv 元数据、HTML/PDF/图片和 HuggingFace Papers 都会拒绝无代理直连；历史补录与微信的 arXiv 图片下载也使用同一项目代理。Node/Python 的 HTTP 请求只支持 HTTP CONNECT，因此 `HTTPS_PROXY` / `HTTP_PROXY` 不可填 SOCKS URL；HuggingFace 的 Node `curl` 可以额外使用 `ALL_PROXY=socks5h://...`，调用时会显式指定代理并清空 `NO_PROXY` 绕过列表。LLM 请求始终直连，不会走抓取代理。代理变量只从项目根 `.env` 加载；脚本会清除 shell/IDE 继承的同名代理变量，不再读取 macOS `scutil` 系统代理。使用本机代理时，抓取、深度分析和重分析命令必须在沙箱外运行，沙箱内无法连接 `127.0.0.1` 不能作为网络故障依据。
 
 博客的生成、审查和推送同样必须在沙箱外运行，即使生成阶段没有直接调用 LLM。`generate-blog.py`、`review-blog.py`、`push-blog.py` 与兼容 `publish-to-blog.py` 会拒绝可靠沙箱标志 `CODEX_SANDBOX`；沙箱外权限包装可能保留网络禁用标志，不能单独据此拒绝执行。这样可确保后续 LLM 审查、图片下载、Hugo 和 Git 网络操作不会因沙箱受限而产生误判。
 
@@ -188,7 +188,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 - **Node.js** ≥ 18.0.0（`node` / `npm`）
 - **Python** 3.x（`python3` / `pip3`）
 - Node.js 依赖：`cheerio`（arXiv HTML 结构化解析）
-- Python 第三方库：见根目录 `requirements.txt`（`requests`、`playwright`）
+- Python 第三方库：见根目录 `requirements.txt`（`requests`、`playwright`、`PyYAML`）。`PyYAML` 是博客 frontmatter 确定性门禁的必需依赖，缺失时生成/review 必须失败关闭
 
 ### 9.2 初始化
 
@@ -198,7 +198,7 @@ cd /path/to/audio-paper-digest
 # 安装 Node.js 依赖
 npm install
 
-# 安装 Python 依赖（如有需要）
+# 安装 Python 依赖（博客发布流程也必需）
 pip3 install -r requirements.txt
 
 # 创建必要目录
@@ -284,7 +284,7 @@ FEISHU_APP_SECRET=your-full-app-secret
 
 5. **发布后视觉资产必须断点续跑，不要全量重画**
    - 必须先存在远端验证成功的博客发布凭证；`npm run visual:post-publish -- --date YYYY-MM-DD` 只规划最终评分 TOP 10
-   - 规划后运行 `npm run visual:prepare -- --date YYYY-MM-DD`，校验 `.bin` 参考缓存并输出内置生图可直接上传的 `referencedImagePaths`
+   - 规划后运行 `npm run visual:prepare -- --date YYYY-MM-DD`，校验 `.bin` 参考缓存并输出内置生图可直接上传的绝对 `referencedImagePaths`
    - `visual:post-publish` 在博客事务锁内统一规划两类图片；只把缺失、失败、损坏、发布版本/分析/prompt 指纹失效或进入 TOP 10 的论文长图置为 pending
    - 批次汇总图只在已发布论文快照、热门方向、排名、category、发布提交或 prompt 变化时重建任务
    - 用各自 `record` 命令登记后重新运行两个 `status`；不得手写 manifest 或跳过 SHA/task token 校验

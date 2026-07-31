@@ -36,6 +36,34 @@ if ! [[ "$target_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
   usage >&2
   exit 2
 fi
+
+validate_calendar_date() {
+  local value="$1"
+  local year month day max_day
+  year="${value:0:4}"
+  month=$((10#${value:5:2}))
+  day=$((10#${value:8:2}))
+  if [ $((10#$year)) -lt 1 ] || [ "$month" -lt 1 ] || [ "$month" -gt 12 ] || [ "$day" -lt 1 ]; then
+    return 1
+  fi
+  case "$month" in
+    1|3|5|7|8|10|12) max_day=31 ;;
+    4|6|9|11) max_day=30 ;;
+    2)
+      max_day=28
+      if { [ $((10#$year % 4)) -eq 0 ] && [ $((10#$year % 100)) -ne 0 ]; } \
+          || [ $((10#$year % 400)) -eq 0 ]; then
+        max_day=29
+      fi
+      ;;
+  esac
+  [ "$day" -le "$max_day" ]
+}
+
+if ! validate_calendar_date "$target_date"; then
+  echo "非法日期: ${target_date}" >&2
+  exit 2
+fi
 shift
 
 start_stage="fetch"
@@ -64,6 +92,19 @@ case "$start_stage" in
     exit 2
     ;;
 esac
+
+# full-fetch.js deliberately binds a fresh crawl to its Beijing start date and
+# has no historical-date override. Reject a mismatched fetch before it can
+# archive or overwrite current runtime data. Historical batches may still
+# resume safely from generate/review/push/visual.
+if [ "$start_index" -eq 1 ]; then
+  beijing_today="$(TZ=Asia/Shanghai date +%Y-%m-%d)"
+  if [ "$target_date" != "$beijing_today" ]; then
+    echo "抓取阶段只允许北京时间当天（今天 ${beijing_today}，请求 ${target_date}）。" >&2
+    echo "历史批次只能使用 --from generate|review|push|visual 续跑。" >&2
+    exit 2
+  fi
+fi
 
 cd "$(dirname "$0")"
 

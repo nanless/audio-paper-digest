@@ -375,12 +375,19 @@ def parse_scoring_dimensions(scoring_text):
                 re.compile(r'^[(（]\s*/\s*(-?\d+(?:\.\d)?)\s*[)）]\s*[:：]\s*(-?\d+(?:\.\d)?)(?:\s*/\s*(-?\d+(?:\.\d)?))?'),
             ]
 
-            item = {'score': None, 'denominator': None, 'declaredMaximum': None, 'matchedFormat': False}
+            item = {
+                'score': None,
+                'denominator': None,
+                'declaredMaximum': None,
+                'matchedFormat': False,
+                'reason': '',
+            }
             for index, pattern in enumerate(patterns):
                 match = pattern.search(rest)
                 if not match:
                     continue
                 item['matchedFormat'] = True
+                item['reason'] = re.sub(r'^[\s:：—–-]+', '', rest[match.end():]).strip()
                 if index <= 1:
                     item['score'] = float(match.group(1))
                     item['denominator'] = float(match.group(2))
@@ -424,6 +431,10 @@ def parse_scoring_dimensions(scoring_text):
             continue
         if score < 0 or score > maximum:
             errors.append(f'评分维度“{label}”得分 {score:g} 超出 0-{maximum}')
+            continue
+        meaningful_reason_chars = re.findall(r'[A-Za-z0-9\u4e00-\u9fff]', item['reason'])
+        if len(meaningful_reason_chars) < 4:
+            errors.append(f'评分维度“{label}”缺少具体评分理由')
             continue
         normalized_score = normalize_score_to_one_decimal(score)
         if field == 'openSourceScore' and not is_open_source_score_anchor(normalized_score):

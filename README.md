@@ -71,6 +71,7 @@ audio-paper-digest/
 ```bash
 # 1. 安装依赖
 npm install
+pip3 install -r requirements.txt
 
 # 2. 配置 API Key（写入 `.env`）
 #    主模型（文本分析，必填）
@@ -85,7 +86,8 @@ npm install
 
 # 3. 默认日更脚本阶段：数据流程 + 博客三阶段 + 视觉输入准备
 # 所有项目脚本必须在沙箱外运行；脚本入口会拒绝 Codex 沙箱
-./run-daily-digest.sh 2026-05-08
+today="$(TZ=Asia/Shanghai date +%F)"
+./run-daily-digest.sh "$today"
 
 # review 若发现内容问题，修正后从 review 阶段续跑
 ./run-daily-digest.sh 2026-05-08 --from review
@@ -108,7 +110,7 @@ python3 scripts/publish-xiaohongshu.py
 
 ```bash
 # 默认日更脚本阶段（随后由 Codex 接续内置生图）
-npm run digest:prepare -- 2026-04-21
+npm run digest:prepare -- "$(TZ=Asia/Shanghai date +%F)"
 
 # 仅数据流程（抓取 + 筛选 + 深度分析）
 npm run fetch
@@ -177,7 +179,7 @@ python3 scripts/publish-to-feishu.py --all
 ```bash
 # ========== 核心流程 ==========
 # 默认日更脚本阶段（之后由 Codex 接续内置生图）
-./run-daily-digest.sh 2026-04-21
+./run-daily-digest.sh "$(TZ=Asia/Shanghai date +%F)"
 
 # 仅数据流程
 ./run-full-fetch.sh

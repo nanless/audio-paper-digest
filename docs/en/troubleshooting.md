@@ -65,7 +65,7 @@ Possible causes:
 - After verification, run `npm run visual:post-publish -- --date YYYY-MM-DD`; output lists only TOP 10 pending/failed infographics and the one digest image
 - If a manifest is missing or its publication/analysis/prompt/hot-direction/ranking/category binding changed, rerun `visual:post-publish`. Status commands are read-only: they report stale, missing, failed, damaged, or SHA-mismatched assets without rewriting tasks
 - Generate pending work with Codex built-in `image_gen`. Visually verify the exact English title, Chinese body, paper numbers, and leaderboard before registering with `visual:record` or `cover:record`. If an old token is rejected, read the latest plan; never overwrite the newer task
-- Do not upload `.bin` cache paths directly or rename them by hand. Run `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]` and pass its `referencedImagePaths` to built-in `image_gen`; cache-path, SHA, byte-count, MIME, or magic-byte mismatches fail before upload instead of surfacing as misleading network errors
+- Do not upload `.bin` cache paths directly or rename them by hand. Run `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]` and pass its absolute `referencedImagePaths` to built-in `image_gen` (`relativePath` is display-only); cache-path, SHA, byte-count, MIME, or magic-byte mismatches fail before upload instead of surfacing as misleading network errors
 - Once both status commands return zero, post-publication images are complete. They are independent of the already completed blog transaction; do not regenerate or re-review the blog because of image changes
 
 ### 12.5 Path Confusion

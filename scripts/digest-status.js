@@ -1,7 +1,12 @@
 const Config = require('./config.js');
 const fs = require('fs');
 const { getBeijingISOString, writeFileAtomic, normalizedId } = require('./utils.js');
-const { readJsonFileStrict, withFileLockSync, isSuccessfulAnalysisRecord } = require('./analysis-engine.js');
+const {
+    readJsonFileStrict,
+    withFileLockSync,
+    isSuccessfulAnalysisRecord,
+    hasValidAnalysisBody
+} = require('./analysis-engine.js');
 
 const ANALYSIS_FIELDS = Object.freeze([
     'analysis',
@@ -153,7 +158,7 @@ function mergePapersDatabases(currentData, incomingData) {
             && ['pending_analysis', 'seen'].includes(incomingPaper.digestStatus?.status);
         if (wouldDowngradeAnalyzed || currentUpdatedAt > incomingUpdatedAt) {
             nextPaper.digestStatus = currentPaper.digestStatus;
-            if (isSuccessfulAnalysisRecord(currentPaper)) preserveAnalysisFields(nextPaper, currentPaper);
+            if (hasValidAnalysisBody(currentPaper)) preserveAnalysisFields(nextPaper, currentPaper);
         }
         merged.papers[key] = nextPaper;
     }
@@ -188,9 +193,14 @@ function markPaperDigestStatus(paper, status, extra = {}) {
 
 function mergeAnalysisDigestPaper(existing, paper) {
     const merged = { ...existing, ...paper };
-    if (isSuccessfulAnalysisRecord(existing) && !isSuccessfulAnalysisRecord(paper)) {
-        if (paper.imageManifest) merged.analysisRecoveryImageManifest = paper.imageManifest;
+    if (hasValidAnalysisBody(existing) && !isSuccessfulAnalysisRecord(paper)) {
         preserveAnalysisFields(merged, existing);
+        if (paper.analysisManifest) merged.analysisManifest = paper.analysisManifest;
+        if (typeof paper.analysisCheckpoint === 'string') merged.analysisCheckpoint = paper.analysisCheckpoint;
+        if (paper.analysisStageCheckpoints) merged.analysisStageCheckpoints = paper.analysisStageCheckpoints;
+        if (paper.imageManifest) merged.analysisRecoveryImageManifest = paper.imageManifest;
+        merged.latestAnalysisAttemptError = paper.error || '分析未完成';
+        merged.latestAnalysisAttemptAt = getBeijingISOString();
     } else if (isSuccessfulAnalysisRecord(paper)) {
         delete merged.analysisRecoveryImageManifest;
         delete merged.analysisCheckpoint;
@@ -210,7 +220,7 @@ function applyAnalysisDigestStatuses(papersData, analyzedPapers, options = {}) {
         const key = normalizedId(paper);
         if (!key) continue;
         const existing = papersData.papers[key] || {};
-        const hadUsableAnalysis = isSuccessfulAnalysisRecord(existing);
+        const hadUsableAnalysis = hasValidAnalysisBody(existing);
         const mergedPaper = mergeAnalysisDigestPaper(existing, paper);
         const latestAttemptStatus = isSuccessfulAnalysisRecord(paper) ? 'analyzed' : 'analysis_failed';
         const status = (isSuccessfulAnalysisRecord(paper) || hadUsableAnalysis) ? 'analyzed' : 'analysis_failed';

@@ -632,6 +632,35 @@ function shouldRetainFullTextCheckpoint(paper, previousSource, hasFullText, sour
         && sourceFetchError);
 }
 
+function invalidateSourceBoundImageRecovery(paper) {
+    delete paper.analysisRecoveryImageManifest;
+    delete paper.imageManifest;
+    delete paper.selectedImageUrls;
+    delete paper.imageUrls;
+    delete paper.allImageUrls;
+}
+
+function classifyArxivSourceFailure(htmlAvailability, pdfHadTransientFailure) {
+    return htmlAvailability === 'transient_failure' || pdfHadTransientFailure
+        ? 'transient'
+        : 'permanent';
+}
+
+function isTransientDemoHttpStatus(status) {
+    return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function discardInvalidImageSupplement(preImageAnalysis, imageManifest, imageResult, reason) {
+    imageManifest.selected = [];
+    imageManifest.supplement = {
+        ...imageResult.supplementDiagnostics,
+        parseDiagnostics: imageResult.parseDiagnostics,
+        discardedInvalidPlan: true,
+        discardedReason: reason
+    };
+    return { analysis: preImageAnalysis, selectedImageUrls: [] };
+}
+
 function calculateScoringDelta(previousParsedScore, scoringInputAnalysis, finalParsedScore) {
     const previousScore = Number.parseFloat(previousParsedScore);
     const scoringInputScore = Number.parseFloat(parseAnalysis(scoringInputAnalysis)?.score);
@@ -693,6 +722,9 @@ function createAnalysisRecoveryManifest(paper) {
         version: RECOVERY_MANIFEST_VERSION,
         stages,
         ...(existing?.sourceAcquisition ? { sourceAcquisition: { ...existing.sourceAcquisition } } : {}),
+        ...(existing?.sourceAcquisitionLatestFailure
+            ? { sourceAcquisitionLatestFailure: { ...existing.sourceAcquisitionLatestFailure } }
+            : {}),
         updatedAt: getBeijingISOString()
     };
 }
@@ -1208,6 +1240,7 @@ async function fetchArxivTextDetailed(arxivId) {
                     shouldRetryHtml = true;
                 }
             } catch (e) {
+                if (/必须通过当前项目 .*代理|拒绝直连/.test(e.message)) throw e;
                 shouldRetryHtml = true;
                 attemptStatuses.push(`${htmlId}:${e.name || 'error'}`);
                 console.log(`    [deep] fetchArxivText ${htmlId} error: ${e.message}`);
@@ -1231,6 +1264,8 @@ async function fetchArxivTextDetailed(arxivId) {
     console.log(`    [deep] fetchArxivText ${arxivId} 转入 PDF fallback | html_status=${htmlAvailability} | attempts=${htmlAttempts}`);
 
     // PDF fallback: download PDF and extract text
+    let pdfHadTransientFailure = false;
+    let lastTransientFailure = '';
     for (const pdfId of getArxivHtmlIds(arxivId)) {
         const pdfUrl = `https://arxiv.org/pdf/${pdfId}.pdf`;
         try {
@@ -1242,6 +1277,10 @@ async function fetchArxivTextDetailed(arxivId) {
             if (!pdfResponse.ok) {
                 console.log(`    [deep] PDF ${pdfUrl} HTTP ${pdfResponse.status}`);
                 warnings.push(`PDF ${pdfId}: HTTP ${pdfResponse.status}`);
+                if (isRetryableImageStatus(pdfResponse.status)) {
+                    pdfHadTransientFailure = true;
+                    lastTransientFailure = `PDF ${pdfId}: HTTP ${pdfResponse.status}`;
+                }
                 continue;
             }
             const contentType = String(pdfResponse.headers.get('content-type') || '').toLowerCase();
@@ -1282,11 +1321,15 @@ async function fetchArxivTextDetailed(arxivId) {
                 };
             }
         } catch (e) {
+            if (/必须通过当前项目 .*代理|拒绝直连/.test(e.message)) throw e;
+            pdfHadTransientFailure = true;
+            lastTransientFailure = `PDF ${pdfId}: ${e.message}`;
             console.log(`    [deep] PDF fallback ${pdfUrl} error: ${e.message}`);
             warnings.push(`PDF ${pdfId}: ${e.message}`);
         }
     }
     console.log(`    [deep] fetchArxivText ${arxivId} PDF fallback also failed`);
+    const failureClass = classifyArxivSourceFailure(htmlAvailability, pdfHadTransientFailure);
     return {
         text: '',
         source: 'unavailable',
@@ -1294,7 +1337,11 @@ async function fetchArxivTextDetailed(arxivId) {
         imageInfos: [],
         htmlAvailability,
         htmlAttempts,
-        warnings
+        warnings,
+        failureClass,
+        failureError: failureClass === 'transient'
+            ? (lastTransientFailure || `arXiv ${arxivId} 全文抓取瞬时失败`)
+            : ''
     };
 }
 
@@ -2300,6 +2347,10 @@ async function analyzePaperDeep(paper) {
         try {
             sourceDetails = await fetchArxivTextDetailed(arxivId);
             fullText = sourceDetails.text;
+            if (!fullText && sourceDetails.failureClass === 'transient') {
+                sourceFetchError = new Error(sourceDetails.failureError || 'arXiv 全文抓取瞬时失败');
+                sourceFetchError.code = 'ARXIV_SOURCE_TRANSIENT_FAILURE';
+            }
             console.log(`    [deep] 全文长度: ${fullText.length} 字符`);
         } catch (e) {
             sourceFetchError = e;
@@ -2364,12 +2415,35 @@ async function analyzePaperDeep(paper) {
             parsed: null,
             analysisManifest,
             analysisCheckpoint: paper.analysisCheckpoint,
+            imageManifest: paper.analysisRecoveryImageManifest || null,
+            sourceWarnings: [...(paper.sourceWarnings || []), error],
+            error
+        };
+    }
+    if (sourceFetchError) {
+        const error = `全文瞬时不可用，等待正常重试: ${sourceFetchError.message}`;
+        analysisManifest.sourceAcquisitionLatestFailure = {
+            attemptedAt: getBeijingISOString(),
+            error: sourceFetchError.message,
+            retainedSource: previousSource || null
+        };
+        return {
+            ...paper,
+            analysis: null,
+            parsed: null,
+            analysisManifest,
+            imageManifest: paper.analysisRecoveryImageManifest || null,
             sourceWarnings: [...(paper.sourceWarnings || []), error],
             error
         };
     }
     Object.assign(paper, sourceProvenance, { sourceWarnings });
-    if (paper.analysisCheckpoint && hasActualAnalysisInputChanged(previousSource, sourceProvenance)) {
+    delete analysisManifest.sourceAcquisitionLatestFailure;
+    const actualAnalysisInputChanged = hasActualAnalysisInputChanged(previousSource, sourceProvenance);
+    if (actualAnalysisInputChanged) {
+        invalidateSourceBoundImageRecovery(paper);
+    }
+    if (paper.analysisCheckpoint && actualAnalysisInputChanged) {
         for (const stage of RECOVERY_STAGE_ORDER) delete analysisManifest.stages[stage];
         delete paper.analysisCheckpoint;
         delete paper.analysisStageCheckpoints;
@@ -2845,7 +2919,21 @@ async function analyzePaperDeep(paper) {
             const imageResult = await applyImageSupplement(paper, arxivId, analysis, imageInfos, downloadedImages);
             const imageInvalidReason = getInvalidAnalysisReason(imageResult.analysis, parseAnalysis(imageResult.analysis));
             if (imageInvalidReason) {
-                markRecoveryStage(analysisManifest, 'imageSupplement', 'contract_rejected', { error: imageInvalidReason });
+                const fallback = discardInvalidImageSupplement(
+                    preImageAnalysis,
+                    imageManifest,
+                    imageResult,
+                    imageInvalidReason
+                );
+                analysis = fallback.analysis;
+                selectedImageUrls = fallback.selectedImageUrls;
+                markRecoveryStage(analysisManifest, 'imageSupplement', 'no_high_value_images', {
+                    parseStatus: imageResult.parseDiagnostics?.status || 'unknown',
+                    selectedCount: 0,
+                    discardedInvalidPlan: true,
+                    error: imageInvalidReason,
+                    fingerprint: imageSupplementFingerprint
+                });
                 console.log(`    [deep] ⚠️  插图结果破坏最终契约，丢弃本篇插图计划: ${imageInvalidReason}`);
             } else {
                 analysis = imageResult.analysis;
@@ -2912,6 +3000,8 @@ async function analyzePaperDeep(paper) {
     delete paper.analysisCheckpoint;
     delete paper.analysisRecoveryImageManifest;
     delete paper.analysisStageCheckpoints;
+    delete paper.latestAnalysisAttemptError;
+    delete paper.latestAnalysisAttemptAt;
 
     return {
         ...paper,
@@ -3058,6 +3148,11 @@ async function checkDemoPageForOpensource(demoUrl) {
         }
         if (response.status !== 200) {
             console.log(`    [deep] ⚠️  Demo 页面返回 ${response.status}`);
+            if (isTransientDemoHttpStatus(response.status)) {
+                const transientError = new Error(`Demo 页面瞬时 HTTP ${response.status}`);
+                transientError.code = 'DEMO_TRANSIENT_FAILURE';
+                throw transientError;
+            }
             return [];
         }
         
@@ -3074,7 +3169,14 @@ async function checkDemoPageForOpensource(demoUrl) {
         return [...new Set(foundLinks)];
     } catch (err) {
         console.log(`    [deep] ⚠️  访问 demo 页面失败: ${err.message}`);
-        return [];
+        if (err.code === 'DEMO_TRANSIENT_FAILURE') throw err;
+        if (/非公网|localhost|不支持的公网 URL 协议|用户名或密码|重定向超过/.test(err.message)) {
+            return [];
+        }
+        const transientError = new Error(`Demo 页面瞬时访问失败: ${err.message}`);
+        transientError.code = 'DEMO_TRANSIENT_FAILURE';
+        transientError.cause = err;
+        throw transientError;
     }
 }
 
@@ -3775,6 +3877,10 @@ module.exports = {
     sanitizeLogField,
     cleanGapFillPrefix,
     checkDemoPageForOpensource,
+    invalidateSourceBoundImageRecovery,
+    discardInvalidImageSupplement,
+    classifyArxivSourceFailure,
+    isTransientDemoHttpStatus,
     isPrivateIpAddress,
     validatePublicHttpUrl,
     extractSectionByTitle,

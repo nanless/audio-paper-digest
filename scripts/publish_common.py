@@ -98,6 +98,12 @@ def validate_publish_parsed(
 
     dimension_total = 0.0
     scoring_reason = normalized.get('scoringReason', '')
+    if require_reason_dimensions:
+        score_validation = normalized.get('scoreValidation')
+        if not isinstance(score_validation, dict) or score_validation.get('valid') is not True:
+            validation_errors = score_validation.get('errors', []) if isinstance(score_validation, dict) else []
+            details = '；'.join(str(error) for error in validation_errors[:3]) or '八维评分格式非法'
+            raise PublishDataValidationError(f'{source} 的评分理由契约无效: {details}')
     for field, label, maximum in SCORING_DIMENSIONS:
         if field not in normalized or normalized.get(field) in (None, ''):
             raise PublishDataValidationError(f'{source} 缺少评分维度 {field}')

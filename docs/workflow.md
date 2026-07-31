@@ -2,7 +2,7 @@
 
 ## 主流程详解
 
-默认日更入口是 `./run-daily-digest.sh YYYY-MM-DD`。它依次执行核心数据流程、博客 generate/review/push、发布后视觉任务规划和参考图准备；若 review 报告内容问题，Agent 修正后用 `--from review` 只从失败阶段续跑。脚本不能也不会调用图像 API，结束后 Codex 必须使用内置 `image_gen` 完成 TOP 10 论文长图与批次汇总封面，并通过两个状态门禁。仅数据流程入口仍是 `./run-full-fetch.sh`（或 `node scripts/full-fetch.js` / `npm run fetch`）。
+默认日更入口是 `./run-daily-digest.sh YYYY-MM-DD`。从抓取开始时日期必须是北京时间当天，因为核心抓取器按进程启动日绑定批次且不支持历史日期注入；历史批次只能从 generate/review/push/visual 续跑既有数据，generate 在 current 不匹配时会自动读取同日受控归档分析。它依次执行核心数据流程、博客 generate/review/push、发布后视觉任务规划和参考图准备；若 review 报告内容问题，Agent 修正后用 `--from review` 只从失败阶段续跑。脚本不能也不会调用图像 API，结束后 Codex 必须使用内置 `image_gen` 完成 TOP 10 论文长图与批次汇总封面，并通过两个状态门禁。仅数据流程入口仍是 `./run-full-fetch.sh`（或 `node scripts/full-fetch.js` / `npm run fetch`）。
 
 用户说“运行/进行某日论文速递”时，默认已经授权博客 push，并要求完成上述全部阶段；不能在抓取、深度分析、review 或发布后提前停止。微信、飞书、小红书自动发布不在默认范围。
 
@@ -215,7 +215,7 @@ HF 特有字段（共 7 个）：
 
 同一发布后阶段还会按博客 generation manifest 保存的 category 建立一张批次汇总图任务，内容为标题、热门方向和 TOP 10 排名。两类 manifest 分别保存发布提交、数据 SHA、prompt SHA、task token 与资产 SHA，中断后只补缺失、失败、损坏或失效项。论文长图任务还会从深度分析的 `selectedImageUrls` / `imageManifest` 中选择最多两张已下载且 URL、MIME、字节数和 SHA 全部匹配的关键原图，优先方法总览、架构和流程图，再考虑关键实验图；参考图指纹变化只失效对应论文。内置生图必须把参考图作为结构事实来源重新绘制，不得粘贴不可读截图或补造原图中没有的数据。同批次全部图片扁平归档到 `data/archive/<日期>/visual-summaries/`：封面为 `00-digest-cover-<日期>.png`，论文长图按 manifest 最终排名命名为 `<两位排名>-<paper-id>-<title-slug>.png`，并发完成顺序不参与编号。旧版 current 与旧归档目录结构会在 plan 时经 PNG/SHA 校验后迁移。图片不进入已经发布的博客清单，也不阻断博客流程；项目脚本不得调用图像 API，生成图不得冒充论文原始 Figure 或虚构事实，汇总图不得显示 arXiv ID。
 
-调用内置生图前必须运行 `npm run visual:prepare -- --date <日期>`。该命令不会调用图像 API，也不会改变任务 token；它重新校验 `.bin` 原始缓存的受控路径、SHA、长度、MIME 与文件头，随后把参考图原子物化为 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 中带正确扩展名的文件。生图时使用命令输出的 `referencedImagePaths`，不要把 `.bin` 直接传给图片服务。可用 `--paper <ID>` 只准备单篇，重复运行会校验并修复被改写的物化文件。
+调用内置生图前必须运行 `npm run visual:prepare -- --date <日期>`。该命令不会调用图像 API，也不会改变任务 token；它重新校验 `.bin` 原始缓存的受控路径、SHA、长度、MIME 与文件头，随后把参考图原子物化为 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 中带正确扩展名的文件。生图时使用命令输出的绝对 `referencedImagePaths`，不要把 `.bin` 或仅供展示的 `relativePath` 直接传给图片服务。可用 `--paper <ID>` 只准备单篇，重复运行会校验并修复被改写的物化文件。
 
 > **单模型 vs 双模型**：主模型始终负责正文和最终评分审计。评分审计默认使用独立低温 0.1。设置 `PAPER_ANALYZER_SECONDARY_MODEL` 后，副模型只从候选图片中筛选高价值图、丢弃低信息图并输出章节、稳定段落 ID、图前和图后说明；代码不会接受副模型替换主模型原文。未设置副模型时图片 URL 只保存在候选元数据中。
 

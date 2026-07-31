@@ -25,7 +25,9 @@ const {
     loadPublishedIdsFromBlog,
     requestJson,
     loadPrompt,
-    createProxyDispatcher
+    createProxyDispatcher,
+    detectHttpConnectProxyUrl,
+    buildProxyAuthorizationHeader
 } = require('../scripts/utils.js');
 const { validateAndFix } = require('../scripts/validate-scores.js');
 const { getInvalidAnalysisReason } = require('../scripts/analysis-contract.js');
@@ -88,6 +90,31 @@ describe('fetch proxy dispatcher', () => {
 
     it('接受 HTTP CONNECT dispatcher', () => {
         assert.ok(createProxyDispatcher('http://127.0.0.1:7897'));
+    });
+
+    it('arXiv 前置检测忽略仅 SOCKS 的 ALL_PROXY', () => {
+        const keys = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'];
+        const original = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+        try {
+            for (const key of keys) delete process.env[key];
+            process.env.ALL_PROXY = 'socks5h://127.0.0.1:7897';
+            assert.strictEqual(detectHttpConnectProxyUrl(), null);
+            process.env.HTTP_PROXY = 'http://127.0.0.1:7897';
+            assert.strictEqual(detectHttpConnectProxyUrl(), 'http://127.0.0.1:7897');
+        } finally {
+            for (const key of keys) {
+                if (original[key] === undefined) delete process.env[key];
+                else process.env[key] = original[key];
+            }
+        }
+    });
+
+    it('CONNECT 代理认证生成 Basic 头并正确解码 URL userinfo', () => {
+        assert.strictEqual(
+            buildProxyAuthorizationHeader('http://alice:p%40ss@proxy.example:8080'),
+            `Basic ${Buffer.from('alice:p@ss').toString('base64')}`
+        );
+        assert.strictEqual(buildProxyAuthorizationHeader('http://proxy.example:8080'), null);
     });
 });
 
@@ -243,14 +270,14 @@ has_dataset: 否
 #语音识别 #语音大模型
 
 ## 评分理由
-创新性：2/2
-技术严谨性：1.5/1.5
-实验充分性：1.5/1.5
-清晰度：1/1
-影响力：1.5/1.5
-开源：1.2/1.5
-可复现性：0.5/0.5
-工程/实践价值：1.5/1.5
+创新性：2/2，具体理由充分。
+技术严谨性：1.5/1.5，具体理由充分。
+实验充分性：1.5/1.5，具体理由充分。
+清晰度：1/1，具体理由充分。
+影响力：1.5/1.5，具体理由充分。
+开源：1.2/1.5，具体理由充分。
+可复现性：0.5/0.5，具体理由充分。
+工程/实践价值：1.5/1.5，具体理由充分。
 
 ## 局限与问题
 未说明
@@ -375,18 +402,35 @@ ${'实验内容'.repeat(20)}
 
     it('八维全零时总分保持 0，不设置未约定的最低分', () => {
         const parsed = parseAnalysis(scoringAnalysis({ dimensions: [
-            '创新性：0/2',
-            '技术严谨性：0/1.5',
-            '实验充分性：0/1.5',
-            '清晰度：0/1',
-            '影响力：0/1.5',
-            '开源：0/1.5',
-            '可复现性：0/0.5',
-            '工程/实践价值：0/1.5'
+            '创新性：0/2，未发现实质创新证据。',
+            '技术严谨性：0/1.5，关键推导存在根本缺陷。',
+            '实验充分性：0/1.5，没有提供实验验证。',
+            '清晰度：0/1，正文表达无法理解。',
+            '影响力：0/1.5，未展示潜在影响。',
+            '开源：0/1.5，未提供开源产物。',
+            '可复现性：0/0.5，缺少复现细节。',
+            '工程/实践价值：0/1.5，没有工程价值证据。'
         ] }));
         assert.strictEqual(parsed.scoreValidation.valid, true);
         assert.strictEqual(parsed.score, '0.0');
         assert.strictEqual(parsed.rankBucket, '后50%');
+    });
+
+    it('每个评分维度都必须给出具体理由', () => {
+        const parsed = parseAnalysis(scoringAnalysis({
+            dimensions: [
+                '创新性：1.5/2',
+                '技术严谨性：1.2/1.5，方法推导较完整。',
+                '实验充分性：1.1/1.5，覆盖主要基线。',
+                '清晰度：0.8/1，结构较为清楚。',
+                '影响力：1.0/1.5，应用范围较广。',
+                '开源：0/1.5，未提供开源产物。',
+                '可复现性：0.3/0.5，报告主要配置。',
+                '工程/实践价值：1.0/1.5，部署路径明确。'
+            ]
+        }));
+        assert.strictEqual(parsed.scoreValidation.valid, false);
+        assert.ok(parsed.scoreValidation.errors.some(error => /创新性.*缺少具体评分理由/.test(error)));
     });
 
     it('validate-scores 从 analysis 修复陈旧、NaN 和负数缓存', () => {
@@ -424,9 +468,14 @@ ${'实验内容'.repeat(20)}
 
     it('validate-scores 接受理论研究公开证明对应的高开源锚点', () => {
         const analysis = scoringAnalysis({ dimensions: [
-            '创新性：1.5/2', '技术严谨性：1.2/1.5', '实验充分性：1.1/1.5',
-            '清晰度：0.8/1', '影响力：1.0/1.5', '开源：1.2/1.5',
-            '可复现性：0.3/0.5', '工程/实践价值：0/1.5'
+            '创新性：1.5/2，理论问题具有明确新意。',
+            '技术严谨性：1.2/1.5，主要证明链条较完整。',
+            '实验充分性：1.1/1.5，理论验证覆盖核心命题。',
+            '清晰度：0.8/1，符号与推导结构清楚。',
+            '影响力：1.0/1.5，对后续理论研究有价值。',
+            '开源：1.2/1.5，正文公开完整证明材料。',
+            '可复现性：0.3/0.5，推导步骤基本可复核。',
+            '工程/实践价值：0/1.5，属于纯理论研究。'
         ] }).replace('document_type: 方法研究', 'document_type: 理论研究');
         const paper = { arxivId: '2607.99992', analysis, parsed: parseAnalysis(analysis) };
 
@@ -451,6 +500,10 @@ describe('detectApiType', () => {
 
     it('Kimi Coding 通过域名识别 k3 模型并走 anthropic', () => {
         assert.strictEqual(detectApiType('https://api.kimi.com/coding/', 'k3'), 'anthropic');
+    });
+
+    it('仅模型名含 kimi、但端点不是 Coding Plan 时仍走 OpenAI', () => {
+        assert.strictEqual(detectApiType('https://gateway.example.com/v1', 'kimi-compatible'), 'openai');
     });
 
     it('通用 OpenAI -> openai', () => {
@@ -521,6 +574,7 @@ describe('buildRequestBody', () => {
         assert.strictEqual(body.system, 'sys');
         assert.strictEqual(body.messages.length, 1);
         assert.strictEqual(body.messages[0].role, 'user');
+        assert.strictEqual(body.temperature, 0.5);
     });
 
     it('Anthropic 多模态消息转换为 image source 格式', () => {
@@ -653,6 +707,22 @@ describe('loadPublishedIdsFromBlog', () => {
 
         const ids = loadPublishedIdsFromBlog(root);
         assert.strictEqual(ids.has('2604.12345'), true);
+    });
+
+    it('目录存在但 Markdown 读取失败时 fail-closed', () => {
+        const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'paper-blog-fail-'));
+        const post = path.join(root, 'content', 'posts', 'post.md');
+        fs.mkdirSync(path.dirname(post), { recursive: true });
+        fs.writeFileSync(post, 'content');
+        assert.throws(
+            () => loadPublishedIdsFromBlog(root, {
+                readFileSync: () => {
+                    throw new Error('simulated EACCES');
+                }
+            }),
+            error => error.code === 'BLOG_DEDUP_SCAN_FAILED'
+                && /不完整去重基线/.test(error.message)
+        );
     });
 });
 

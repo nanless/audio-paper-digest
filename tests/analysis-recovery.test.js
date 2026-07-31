@@ -19,7 +19,9 @@ const {
     main: refilterMain,
     saveSuccessfulResultsById,
     resolveResultFileForTargetDate,
-    validateTargetDate
+    validateTargetDate,
+    loadRefilterDecisions,
+    saveRefilterDecisions
 } = require('../scripts/refilter-reanalyze-by-date.js');
 const { validateCompleteFilteredForToday, validateDeepAnalysisInput } = require('../scripts/deep-analysis-only.js');
 const { isSuccessfulAnalysisRecord } = require('../scripts/analysis-engine.js');
@@ -127,6 +129,30 @@ describe('papers database recovery safety', () => {
 });
 
 describe('entry recovery contracts', () => {
+    it('refilter 按篇保存决定，并仅在日期和筛选配置指纹一致时复用', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'refilter-decisions-'));
+        const checkpoint = path.join(dir, 'refilter-filter-decisions.json');
+        const definitive = {
+            related: true,
+            inputSha256: 'a'.repeat(64),
+            retryable: false,
+            fallback: false
+        };
+        saveRefilterDecisions(checkpoint, '2026-07-08', 'config-a', {
+            decisions: { '2607.1': definitive },
+            retryableDecisions: {
+                '2607.2': { related: null, retryable: true, inputSha256: 'b'.repeat(64) }
+            },
+            stats: { complete: false, decided: 1, retryable: 1 }
+        });
+
+        const reused = loadRefilterDecisions(checkpoint, '2026-07-08', 'config-a');
+        assert.deepStrictEqual(reused['2607.1'], definitive);
+        assert.strictEqual(reused['2607.2'].retryable, true);
+        assert.deepStrictEqual(loadRefilterDecisions(checkpoint, '2026-07-09', 'config-a'), {});
+        assert.deepStrictEqual(loadRefilterDecisions(checkpoint, '2026-07-08', 'config-b'), {});
+    });
+
     it('按日期重筛只替换成功 ID，失败不会删除旧成功', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'refilter-save-'));
         const file = path.join(dir, 'deep-analysis-result.json');
@@ -245,6 +271,65 @@ describe('entry recovery contracts', () => {
         assert.strictEqual(saved.status, 'complete');
         assert.strictEqual(saved.stats.successfulExpected, 1);
         assert.strictEqual(saved.stats.remainingFailed, 0);
+        assert.strictEqual(saved.stats.removedByRefilter, 1);
+        assert.deepStrictEqual(saved.papers.map(paper => paper.arxivId), ['2607.31']);
+    });
+
+    it('refilter 完成态移除明确落选项，同时保留入选失败项的恢复状态', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'refilter-prune-failed-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(file, JSON.stringify({
+            papers: [
+                validAnalysisRecord('2607.61', { title: 'still selected' }),
+                validAnalysisRecord('2607.62', { title: 'now rejected' })
+            ]
+        }));
+        saveSuccessfulResultsById(file, [{
+            arxivId: '2607.61',
+            analysis: null,
+            parsed: null,
+            error: 'temporary failure',
+            latestAnalysisAttemptError: 'temporary failure',
+            analysisCheckpoint: 'recoverable body',
+            analysisManifest: {
+                version: 1,
+                stages: { scoringAudit: { status: 'transient_failure' } }
+            }
+        }], {
+            date: '2026-07-08',
+            expectedIds: ['2607.61'],
+            refilterStatus: 'running'
+        });
+
+        const finalized = saveSuccessfulResultsById(file, [], {
+            date: '2026-07-08',
+            expectedIds: ['2607.61'],
+            finalize: true
+        });
+        assert.strictEqual(finalized.status, 'failed');
+        assert.strictEqual(finalized.papers.length, 1);
+        assert.strictEqual(finalized.papers[0].arxivId, '2607.61');
+        assert.strictEqual(finalized.papers[0].analysis, validAnalysisText());
+        assert.strictEqual(finalized.papers[0].analysisCheckpoint, 'recoverable body');
+        assert.strictEqual(finalized.papers[0].latestAnalysisAttemptError, 'temporary failure');
+        assert.strictEqual(finalized.stats.removedByRefilter, 1);
+    });
+
+    it('refilter 空入选集会清空旧 canonical 论文', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'refilter-prune-empty-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(file, JSON.stringify({
+            papers: [validAnalysisRecord('2607.71')]
+        }));
+
+        const finalized = saveSuccessfulResultsById(file, [], {
+            date: '2026-07-08',
+            expectedIds: [],
+            finalize: true
+        });
+        assert.strictEqual(finalized.status, 'complete');
+        assert.deepStrictEqual(finalized.papers, []);
+        assert.strictEqual(finalized.stats.removedByRefilter, 1);
     });
 
     it('refilter 批次与收尾不会用陈旧累计结果覆盖另一运行的较新锁内写入', async () => {

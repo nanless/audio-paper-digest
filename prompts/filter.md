@@ -65,6 +65,7 @@ arXiv 类别：{categories}
 1. JSON 中的 `decision` / `related` / `conclusion` 字段（兼容 `related` / `not_related`）
 2. 结构化结论行："结论/判断/是否相关/Conclusion/Judgment/Related：相关|不相关|related|not related"
 3. 最后一行是否为 "相关" / "不相关" / "是" / "否" / "related" / "not related"
-4. 文本中包含明确短语 "不相关" / "无关" / "not related" / "unrelated" → 不相关
-5. 文本中包含明确短语 "相关" / "related" → 相关
-6. 仍无法判断时，默认保留（宁可错留不可错杀）
+4. 若以上结构化格式均无法解析，短语命中只作为格式修复的提示，不会直接形成正式决定
+5. 格式修复仍无法得到固定结论时，标记为待重试；完整筛选决定未覆盖全部候选前不得把结果标记为 complete
+
+关键词预筛遵守高召回契约：核心音频类别、摘要少于 80 字符的证据不足项，以及命中音频词族的论文必须交给 LLM。即使摘要包含 withdrawn/retracted，核心类别与短摘要也不得绕过上述放行规则；只有摘要完整且未命中词表的补充类别论文可形成确定性否定决定。

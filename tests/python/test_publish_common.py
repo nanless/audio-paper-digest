@@ -48,14 +48,14 @@ confidence: 高
 #语音识别 #Transformer
 
 ## 评分理由
-* 创新性 (1/2)：理由
-* 技术严谨性 (1/1.5)：理由
-* 实验充分性 (1/1.5)：理由
-* 清晰度 (1/1)：理由
-* 影响力 (1/1.5)：理由
-* 开源 (0/1.5)：理由
-* 可复现性 (0.5/0.5)：理由
-* 工程/实践价值 (1.5/1.5)：理由
+* 创新性 (1/2)：具体理由充分
+* 技术严谨性 (1/1.5)：具体理由充分
+* 实验充分性 (1/1.5)：具体理由充分
+* 清晰度 (1/1)：具体理由充分
+* 影响力 (1/1.5)：具体理由充分
+* 开源 (0/1.5)：具体理由充分
+* 可复现性 (0.5/0.5)：具体理由充分
+* 工程/实践价值 (1.5/1.5)：具体理由充分
 '''
 
 
@@ -285,8 +285,14 @@ confidence: 中
 
     def test_publish_preflight_rejects_partial_scoring_reason(self):
         paper = complete_paper()
-        paper['analysis'] = paper['analysis'].replace('* 工程/实践价值 (1.5/1.5)：理由\n', '')
+        paper['analysis'] = paper['analysis'].replace('* 工程/实践价值 (1.5/1.5)：具体理由充分\n', '')
         with self.assertRaisesRegex(PublishDataValidationError, '评分维度|工程/实践价值'):
+            resolve_publish_parsed(paper)
+
+    def test_publish_preflight_rejects_dimension_without_reason(self):
+        paper = complete_paper()
+        paper['analysis'] = paper['analysis'].replace('* 创新性 (1/2)：具体理由充分', '* 创新性 (1/2)')
+        with self.assertRaisesRegex(PublishDataValidationError, '创新性.*缺少具体评分理由'):
             resolve_publish_parsed(paper)
 
     def test_publish_preflight_requires_explicit_manual_override_provenance(self):

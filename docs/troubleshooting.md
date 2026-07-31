@@ -65,7 +65,7 @@ ls -lt content/posts | head -20
 - 远端验证完成后运行 `npm run visual:post-publish -- --date YYYY-MM-DD`；完整输出只列出 TOP 10 pending/failed 长图和一张汇总图
 - manifest 缺失或发布版本/分析/prompt/热门方向/排名/category 变化时，重新运行 `visual:post-publish`；`status` 只读报告过期、缺失、失败、PNG 损坏或 SHA 不符，不会修改任务
 - 使用 Codex 内置 `image_gen` 生成待处理项，目视核对英文标题、中文正文、论文数字和排行榜无误后，再通过 `visual:record` 或 `cover:record` 登记；旧 token 被拒绝时必须重新读取最新规划，禁止覆盖新任务
-- 若参考图缓存路径以 `.bin` 结尾，不要直接上传或手工改名；先运行 `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]`，再把输出的 `referencedImagePaths` 交给内置 `image_gen`。命令会阻断缓存 SHA、字节数、MIME、文件头或路径不一致，避免上传阶段出现误导性的 network error
+- 若参考图缓存路径以 `.bin` 结尾，不要直接上传或手工改名；先运行 `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]`，再把输出的绝对 `referencedImagePaths` 交给内置 `image_gen`（`relativePath` 仅供日志展示）。命令会阻断缓存 SHA、字节数、MIME、文件头或路径不一致，避免上传阶段出现误导性的 network error
 - 两个 status 都返回 0 即表示发布后图片完成；图片独立于已经完成的博客事务，无需也不得因此重新 generate/review
 
 ### 12.5 路径混淆

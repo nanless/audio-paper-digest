@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Strictly review an existing generated blog manifest and save a hash receipt."""
 
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -13,11 +14,17 @@ from runtime_guard import require_external_runtime
 
 
 def parse_date(module):
-    target = None
-    for index, arg in enumerate(sys.argv[1:]):
-        if arg == '--date' and index + 2 < len(sys.argv):
-            target = sys.argv[index + 2]
-    return module.validate_publish_date(module.get_today_bj(target))
+    parser = argparse.ArgumentParser(
+        prog='review-blog.py',
+        description='严格审查既有博客 generation manifest；不提交、不推送。',
+        allow_abbrev=False,
+    )
+    parser.add_argument('--date', action='append',
+                        help='博客批次日期（YYYY-MM-DD；省略时为北京时间今天）')
+    args = parser.parse_args()
+    if args.date and len(args.date) > 1:
+        parser.error('--date 只能指定一次')
+    return module.validate_publish_date(module.get_today_bj(args.date[0] if args.date else None))
 
 
 def read_generated_pages(module, date_str, paths):
@@ -143,8 +150,8 @@ def main():
     from log_setup import setup_script_logging
     setup_script_logging(__file__)
     module = load_publish_to_blog()
-    date_str = parse_date(module)
     try:
+        date_str = parse_date(module)
         with module.blog_publication_lock(date_str):
             receipt = _run_review(module, date_str)
     except (module.PublishDataValidationError, module.PublishLLMUnavailable) as exc:

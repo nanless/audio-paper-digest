@@ -334,10 +334,10 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 - `generation` 每次锁内对象写入递增。恢复终态还包括 `no_downloadable_images`：候选均为永久不可下载；`invalid_output` 表示有插图计划但无法落地，必须只重试插图阶段
 - `analysisManifest.stages.scoringAudit` 保存模型、温度、prompt 模板哈希、证据哈希、尝试次数、前后总分/差值、稳定性告警和最终八维 JSON；分数变化超过 0.5 会写 `stabilityWarning: true`。`imageManifest.supplement` 保存副模型、温度、prompt/响应哈希及逐项插入诊断
 - `analysisStageCheckpoints` 保存逐阶段快照；指纹绑定主分析实际取样输入、`task-focused-v1` 证据选择版本、各阶段字符预算、模型/协议/端点、温度、实际 prompt、图片候选与下载 SHA。预算或输入变化只回滚受影响阶段及下游，续跑从首个未完成阶段开始
-- 失败结果保留恢复 checkpoint；每篇内容只能在共享论文锁内从最新规范记录合并写回，批次收尾不得用旧累计快照覆盖并发进程的新结果
-- **`parsed.score` 不是直接取 `## 评分` 下的 LLM 原始总分**。只有八个分项完整、唯一、分母正确、数值有限且位于合法范围时才重新计算并封顶为 10；否则 `scoreValidation` 记录契约错误并阻断保存/发布，不会把缺失维度当 0 覆盖原分数
+- 失败结果保留恢复 checkpoint；若旧成功正文仍可用，`latestAnalysisAttemptError` 与 `digestStatus.latestAttemptStatus=analysis_failed` 会明确标记最新失败，下一轮继续重试而不会把旧正文误当成最新成功。成功重试会清理这些标记。每篇内容只能在共享论文锁内从最新规范记录合并写回，批次收尾不得用旧累计快照覆盖并发进程的新结果
+- **`parsed.score` 不是直接取 `## 评分` 下的 LLM 原始总分**。只有八个分项完整、唯一、各自带具体理由、分母正确、数值有限且位于合法范围时才重新计算并封顶为 10；否则 `scoreValidation` 记录契约错误并阻断保存/发布，不会把缺失维度当 0 覆盖原分数
 - `parsed` 中的 `machineSummary` 是 `## 机器摘要` 的解析结果；`rankBucket`、`innovationScore`、`technicalRigorScore` 等 8 个子项字段同时平铺到 `parsed` 顶层以便访问
-- `npm run validate:data` 会校验文档类型、rubric 版本、八个子项范围以及 `parsed.score == min(八项之和, 10)`
+- `npm run validate:data` 会从 `analysis` 重解析完整正文，校验全部必需恢复阶段已进入终态，并逐字段核对 `parsed` 缓存、文档类型、rubric 版本、八个子项范围以及 `parsed.score == min(八项之和, 10)`；只有字段集合精确匹配且来源、原因完整的 `parsedOverride.type=manual` 可以解释缓存差异，最新失败标记仍存在时校验失败
 - 发布前会从 `analysis` 重新解析并与 `parsed`、顶层评分版本比较；缓存不一致会阻断发布。人工覆盖必须通过 `parsedOverride` 明确声明类型、来源、原因和允许覆盖字段，并仍满足最多一位小数及开源固定锚点契约
 
 ### 5.7 `data/current/visual-summary-manifests/YYYY-MM-DD.json`
@@ -410,7 +410,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 - `papers` 必须与目标批次最终评分 TOP 10 精确一致；不足十篇时包含全部成功论文。
 - 每篇 `cards` 必须恰好包含 `infographic`；只有它为 `complete` 且通过资产验证才算该论文视觉摘要完成。
 - `qaClaims` 是登记前逐图事实核对清单：标题必须逐字一致，正文必须为简体中文，四个必要内容区均需覆盖，方法、数字、局限和参考图说明不得被自由改写成相反含义。
-- `referenceImages` 最多两张，只接纳深度分析已选中且本地缓存 URL、MIME、字节数和 SHA 全部匹配的论文原图；方法总览、架构、框架和流程图优先于实验图。参考图摘要进入分析/任务指纹，原图缺失、损坏或变化时只使对应论文长图失效。`cachePath` 指向只读语义的 `.bin` 原始缓存，不能直接传给内置生图；运行 `visual:prepare` 后使用输出的 `referencedImagePaths`，对应文件位于 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 且具有经 MIME/文件头共同确认的 `.png/.jpg/.webp` 扩展名。
+- `referenceImages` 最多两张，只接纳深度分析已选中且本地缓存 URL、MIME、字节数和 SHA 全部匹配的论文原图；方法总览、架构、框架和流程图优先于实验图。参考图摘要进入分析/任务指纹，原图缺失、损坏或变化时只使对应论文长图失效。`cachePath` 指向只读语义的 `.bin` 原始缓存，不能直接传给内置生图；运行 `visual:prepare` 后使用输出的绝对 `referencedImagePaths`，`relativePath` 仅供日志展示。对应文件位于 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 且具有经 MIME/文件头共同确认的 `.png/.jpg/.webp` 扩展名。
 - 完成项同时绑定最终 `rank`、当前分析 SHA、`prompts/visual-summary.md` SHA、task token 和 PNG 资产 SHA。归档目录使用两位 rank 前缀，保证文件系统排序与排行榜一致；分析、prompt、参考图、排名或资产变化后只使对应论文长图失效并回到待生成。
 - 任意 `pending` / `failed`、资产缺失/损坏或 SHA 不匹配只影响发布后视觉阶段，不影响已经完成的博客发布。
 - PNG 必须不超过 8 MiB，至少 768×1024 且高宽比不低于 1.25；顶部使用完整英文标题，图内使用约 220–360 个中文字符完整说明问题、方法、实验、结论与局限。参考图用于保留真实结构关系并统一风格重绘，不得直接贴入不可读截图。PNG 由 Codex 内置图像生成能力产生；项目脚本只管理状态和资产，不调用图像 API。
@@ -449,11 +449,11 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 - `dataSha256` 绑定标题、论文数量、热门方向及排名上下文，`promptSha256` 绑定 `prompts/digest-cover.md`；任一变化只使封面失效，不影响论文长图。
 - 会议流程的 category 自动取自 generation manifest；它会改变标题并进入 `dataSha256`，避免会议汇总图与博客标题不一致，无需给 status 另传参数。
 - manifest 可保存 `arxivId` 以稳定指纹和排序，但 prompt 明确禁止把论文 ID 渲染到封面；排名展示完整英文标题、分数和主方向。
-- 论文长图和汇总封面生成后直接进入 `data/archive/<日期>/`；旧版 current 资产仅在 PNG/SHA 校验通过且归档目标无冲突时迁移。历史批次中不属于最终 TOP10 的旧卡片使用 `unranked-<paper>` 目录，避免虚构排行榜编号。两类图片共享最小尺寸、纵横比、大小和 SHA 门禁，实际生成像素不写死；缺失、失败、损坏或过期不回滚博客发布。
+- 论文长图和汇总封面生成后直接进入 `data/archive/<日期>/visual-summaries/`；旧版 current 资产仅在 PNG/SHA 校验通过且归档目标无冲突时迁移。历史批次中不属于最终 TOP10 的旧卡片在同一目录平铺命名为 `unranked-<paper-id>-<kind>.png`，避免虚构排行榜编号。两类图片共享最小尺寸、纵横比、大小和 SHA 门禁，实际生成像素不写死；缺失、失败、损坏、过期或存在重复排行榜 PNG 时状态门禁失败，但不回滚博客发布。
 
 ### 5.8.1 `data/current/digest-run-reports/YYYY-MM-DD.json`
 
-`npm run digest:status -- --date YYYY-MM-DD` 生成的统一只读验收快照。它汇总候选抓取、筛选决定覆盖、成功深度分析、博客严格 review 与远端 OID、论文长图和汇总封面的完成数量及错误列表。只有全部必需阶段均为 `complete` 时顶层 `overallComplete` 才为 `true` 且命令返回 0；报告不替代各阶段原始 manifest 或凭证。
+`npm run digest:status -- --date YYYY-MM-DD` 生成的统一只读验收快照。它汇总候选抓取、筛选决定覆盖、成功深度分析、博客严格 review 与远端 OID、论文长图和汇总封面的完成数量及错误列表。只有全部必需阶段均为 `complete` 时顶层 `overallStatus` 才为 `complete` 且命令返回 0；报告不替代各阶段原始 manifest 或凭证。
 
 ### 5.9 `data/current/analyzed.json`
 

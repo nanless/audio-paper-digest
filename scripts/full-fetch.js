@@ -12,7 +12,7 @@ const crypto = require('crypto');
 const { fetchCategoryPapers, filterPapersWithLLM, buildFilterInputSha256 } = require('./fetch-papers.js');
 const { KEYWORD_PREFILTER_VERSION } = require('./lib/keyword-prefilter.js');
 const { fetchHuggingFacePapers, mergeAndDeduplicate } = require('./fetch-huggingface-papers.js');
-const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson, loadPublishedIdsFromBlog, loadPrompt, detectApiType } = require('./utils.js');
+const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, normalizeToBeijingISOString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson, loadPublishedIdsFromBlog, loadPrompt, detectApiType } = require('./utils.js');
 const {
     analyzeBatch,
     mergeAndSaveResults,
@@ -23,7 +23,8 @@ const {
     withFileLockSync,
     isSuccessfulAnalysisRecord,
     getAnalysisRunStatus,
-    getAnalysisExitCode
+    getAnalysisExitCode,
+    mergeCanonicalAnalysisState
 } = require('./analysis-engine.js');
 const {
     markPaperDigestStatus,
@@ -418,23 +419,6 @@ function loadCurrentSuccessfulAnalysisIds(filePath = RESULT_FILE, today = null) 
         if (id) ids.add(id);
     }
     return ids;
-}
-
-const ANALYSIS_RECOVERY_FIELDS = Object.freeze([
-    'analysis', 'parsed', 'analysisManifest', 'analysisCheckpoint', 'analysisStageCheckpoints',
-    'analysisRecoveryImageManifest', 'imageManifest', 'selectedImageUrls', 'imageUrls', 'allImageUrls',
-    'analysisSource', 'sourceId', 'sourceTextChars', 'usedTextChars', 'fullTextChars',
-    'fullTextAvailable', 'truncated', 'sourceSha256', 'usedTextSha256', 'analysisConfidence', 'htmlAvailability',
-    'htmlAttempts', 'sourceWarnings', 'latestAnalysisAttemptError', 'latestAnalysisAttemptAt'
-]);
-
-function mergeCanonicalAnalysisState(paper, canonical) {
-    if (!canonical) return { ...paper };
-    const merged = { ...canonical, ...paper };
-    for (const field of ANALYSIS_RECOVERY_FIELDS) {
-        if (Object.prototype.hasOwnProperty.call(canonical, field)) merged[field] = canonical[field];
-    }
-    return merged;
 }
 
 function loadCanonicalAnalysisRecord(filePath, paper) {
@@ -845,6 +829,91 @@ function autoArchiveCurrentData(batchDate = getBeijingDateString()) {
 }
 
 /**
+ * 一次性把旧版 data/deep-analysis-result.json 迁移到 current 权威路径。
+ * 仅在 current 不存在时迁移；写入成功且可重新读取后才删除 legacy。
+ */
+function inferLegacyAnalysisArrayBatchDate(papers) {
+    if (!Array.isArray(papers) || papers.length === 0) {
+        throw new Error('legacy 顶层数组为空，无法可靠推断批次日期');
+    }
+    const inferredDates = [];
+    for (const paper of papers) {
+        if (!paper || typeof paper !== 'object' || Array.isArray(paper)) {
+            throw new Error('legacy 顶层数组包含非法论文条目，无法可靠推断批次日期');
+        }
+        const explicitBatchDate = String(paper.digestStatus?.batchDate || paper.batchDate || '');
+        const dateMatch = explicitBatchDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        const explicitDate = dateMatch
+            ? new Date(Date.UTC(Number(dateMatch[1]), Number(dateMatch[2]) - 1, Number(dateMatch[3])))
+            : null;
+        let inferredDate = explicitDate
+            && explicitDate.getUTCFullYear() === Number(dateMatch[1])
+            && explicitDate.getUTCMonth() === Number(dateMatch[2]) - 1
+            && explicitDate.getUTCDate() === Number(dateMatch[3])
+            ? explicitBatchDate
+            : '';
+        if (!inferredDate) {
+            const timestamp = paper.fetchedAt
+                || paper.timestamp
+                || paper.lastUpdated
+                || paper.deepAnalysisCompletedAt;
+            const normalizedTimestamp = normalizeToBeijingISOString(timestamp);
+            inferredDate = String(normalizedTimestamp || '').match(/^(\d{4}-\d{2}-\d{2})/)?.[1] || '';
+        }
+        if (!inferredDate) {
+            throw new Error(`legacy 论文 ${normalizedId(paper) || '(缺少 ID)'} 缺少可验证的批次日期`);
+        }
+        inferredDates.push(inferredDate);
+    }
+    const uniqueDates = [...new Set(inferredDates)];
+    if (uniqueDates.length !== 1) {
+        throw new Error(`legacy 顶层数组包含多个批次日期，拒绝迁移: ${uniqueDates.join(', ')}`);
+    }
+    return uniqueDates[0];
+}
+
+function withOrderedFileLocksSync(filePaths, callback) {
+    const ordered = [...new Set(filePaths.map(filePath => path.resolve(filePath)))].sort();
+    const acquire = index => {
+        if (index >= ordered.length) return callback();
+        return withFileLockSync(ordered[index], () => acquire(index + 1));
+    };
+    return acquire(0);
+}
+
+function migrateLegacyAnalysisResultToCurrent(
+    currentFile = RESULT_FILE,
+    legacyFile = LEGACY_RESULT_FILE
+) {
+    if (fs.existsSync(currentFile) || !fs.existsSync(legacyFile)) return false;
+    return withOrderedFileLocksSync([currentFile, legacyFile], () => {
+        if (fs.existsSync(currentFile) || !fs.existsSync(legacyFile)) return false;
+        const legacy = readJsonFileStrict(legacyFile);
+        let payload = legacy;
+        if (Array.isArray(legacy)) {
+            const batchDate = inferLegacyAnalysisArrayBatchDate(legacy);
+            payload = {
+                timestamp: `${batchDate}T00:00:00+08:00`,
+                batchDate,
+                source: legacyFile,
+                papers: legacy
+            };
+        }
+        if (!payload || !Array.isArray(payload.papers)) {
+            throw new Error(`legacy 分析结果 schema 非法，拒绝迁移: ${legacyFile}`);
+        }
+        writeFileAtomic(currentFile, JSON.stringify(payload, null, 2));
+        const verified = readJsonFileStrict(currentFile);
+        if (!verified || !Array.isArray(verified.papers)) {
+            throw new Error(`legacy 分析结果迁移后校验失败: ${currentFile}`);
+        }
+        fs.unlinkSync(legacyFile);
+        console.log(`📦 已将 legacy 分析结果迁移到权威路径并移除旧文件: ${currentFile}`);
+        return true;
+    });
+}
+
+/**
  * 清理非今日数据（归档后残留的旧数据）
  * 归档函数只在文件日期早于今天时触发，但文件可能在当天被修改导致未归档
  */
@@ -923,6 +992,7 @@ async function runFullFetch() {
     let batchId = stableHash({ batchStartedAt, pid: process.pid, nonce: crypto.randomBytes(8).toString('hex') });
     console.log('=== 论文抓取 + 深度分析（arxiv + HuggingFace Papers）===');
     console.log('');
+    migrateLegacyAnalysisResultToCurrent();
     autoArchiveCurrentData(batchDate);
     console.log('');
 
@@ -1446,7 +1516,7 @@ async function runFullFetch() {
         console.log(`💾 筛选结果已保存到: ${FILTERED_FILE}`);
     }
 
-    const outputFile = fs.existsSync(RESULT_FILE) || !fs.existsSync(LEGACY_RESULT_FILE) ? RESULT_FILE : LEGACY_RESULT_FILE;
+    const outputFile = RESULT_FILE;
     const successfulAnalysisIds = loadCurrentSuccessfulAnalysisIds(outputFile, today);
 
     // ========== 第4.8步：保存所有爬到论文到 papers.json（提前保存，防止后续中断丢失）==========
@@ -1663,6 +1733,8 @@ module.exports = {
     fullFetch,
     runFullFetch,
     autoArchiveCurrentData,
+    inferLegacyAnalysisArrayBatchDate,
+    migrateLegacyAnalysisResultToCurrent,
     cleanOldData,
     shouldUsePaperForFetchDedup,
     markPaperDigestStatus,

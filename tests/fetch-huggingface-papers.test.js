@@ -5,8 +5,24 @@ const {
     fetchHuggingFacePapers,
     mergeAndDeduplicate,
     convertDailyPaper,
-    convertPaper
+    convertPaper,
+    buildCurlArgs
 } = require('../scripts/fetch-huggingface-papers.js');
+
+describe('HuggingFace curl proxy isolation', () => {
+    it('显式指定项目代理并清空 curl noproxy 绕过列表', () => {
+        assert.deepStrictEqual(
+            buildCurlArgs('socks5h://127.0.0.1:7897', 'https://huggingface.co/api/papers', 60),
+            [
+                '-s', '-f', '-L',
+                '--proxy', 'socks5h://127.0.0.1:7897',
+                '--noproxy', '',
+                '--max-time', '60',
+                'https://huggingface.co/api/papers'
+            ]
+        );
+    });
+});
 
 describe('mergeAndDeduplicate', () => {
     it('按 normalizedId 合并 arXiv 与 HuggingFace 版本号差异', () => {

@@ -14,7 +14,9 @@ const {
     analyzePaperWithRetry,
     readJsonFileStrict,
     updateJsonFileLocked,
+    initializeJsonFileLocked,
     mergePapersById,
+    mergeCanonicalAnalysisState,
     persistAnalysisCheckpoint,
     isSuccessfulAnalysisRecord,
     withPaperAnalysisLock
@@ -49,7 +51,7 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
     const legacyResultPath = Config.FILES.deepAnalysisResultLegacy;
     if (!fs.existsSync(resultPath) && fs.existsSync(legacyResultPath)) {
         const legacyData = readJsonFileStrict(legacyResultPath);
-        updateJsonFileLocked(resultPath, () => Array.isArray(legacyData)
+        initializeJsonFileLocked(resultPath, Array.isArray(legacyData)
             ? { timestamp: getBeijingISOString(), source: legacyResultPath, papers: legacyData }
             : legacyData);
         console.log(`📦 已将 legacy 分析结果迁移到权威路径: ${resultPath}`);
@@ -90,7 +92,9 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
             return { status: 'skipped', exitCode: 0 };
         }
         // deep-analysis-result.json 是恢复状态的权威来源；papers.json 只补充元数据。
-        const paperForAnalysis = canonical ? { ...targetPaper, ...canonical } : targetPaper;
+        const paperForAnalysis = canonical
+            ? mergeCanonicalAnalysisState(targetPaper, canonical)
+            : targetPaper;
         const r = await analyzePaperWithRetry(paperForAnalysis, {
             maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
             retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,

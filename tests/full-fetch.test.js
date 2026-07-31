@@ -649,4 +649,104 @@ describe('full-fetch helpers', () => {
         assert.deepStrictEqual(merged.analysisManifest, canonical.analysisManifest);
         assert.deepStrictEqual(merged.analysisRecoveryImageManifest, canonical.analysisRecoveryImageManifest);
     });
+
+    it('legacy 分析结果只迁移一次到 current，校验成功后移除旧文件', () => {
+        const { migrateLegacyAnalysisResultToCurrent } = require('../scripts/full-fetch.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-legacy-migrate-'));
+        const current = path.join(dir, 'current', 'deep-analysis-result.json');
+        const legacy = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(legacy, JSON.stringify({
+            timestamp: '2026-07-30T09:00:00+08:00',
+            papers: [{ arxivId: '2607.99999' }]
+        }));
+
+        assert.strictEqual(migrateLegacyAnalysisResultToCurrent(current, legacy), true);
+        assert.strictEqual(fs.existsSync(legacy), false);
+        assert.strictEqual(JSON.parse(fs.readFileSync(current, 'utf8')).papers[0].arxivId, '2607.99999');
+        assert.strictEqual(migrateLegacyAnalysisResultToCurrent(current, legacy), false);
+    });
+
+    it('legacy 顶层数组从论文时间推断北京时间批次，不会伪装成迁移当天', () => {
+        const {
+            inferLegacyAnalysisArrayBatchDate,
+            migrateLegacyAnalysisResultToCurrent
+        } = require('../scripts/full-fetch.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-legacy-array-'));
+        const current = path.join(dir, 'current', 'deep-analysis-result.json');
+        const legacy = path.join(dir, 'deep-analysis-result.json');
+        const papers = [
+            { arxivId: '2607.80001', fetchedAt: '2026-07-29T16:30:00.000Z' },
+            { arxivId: '2607.80002', digestStatus: { batchDate: '2026-07-30' } }
+        ];
+        fs.writeFileSync(legacy, JSON.stringify(papers));
+
+        assert.strictEqual(inferLegacyAnalysisArrayBatchDate(papers), '2026-07-30');
+        assert.strictEqual(migrateLegacyAnalysisResultToCurrent(current, legacy), true);
+        const migrated = JSON.parse(fs.readFileSync(current, 'utf8'));
+        assert.strictEqual(migrated.batchDate, '2026-07-30');
+        assert.match(migrated.timestamp, /^2026-07-30T/);
+        assert.strictEqual(fs.existsSync(legacy), false);
+    });
+
+    it('legacy 顶层数组无法可靠推断单一批次时 fail-closed 且不删除原文件', () => {
+        const { migrateLegacyAnalysisResultToCurrent } = require('../scripts/full-fetch.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-legacy-array-invalid-'));
+        const current = path.join(dir, 'current', 'deep-analysis-result.json');
+        const legacy = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(legacy, JSON.stringify([
+            { arxivId: '2607.81001', fetchedAt: '2026-07-29T09:00:00+08:00' },
+            { arxivId: '2607.81002' }
+        ]));
+
+        assert.throws(
+            () => migrateLegacyAnalysisResultToCurrent(current, legacy),
+            /缺少可验证的批次日期/
+        );
+        assert.strictEqual(fs.existsSync(current), false);
+        assert.strictEqual(fs.existsSync(legacy), true);
+    });
+
+    it('legacy 迁移同时持有源和目标锁，不会误删并发写入的新源结果', async () => {
+        const { acquireFileLockSync } = require('../scripts/analysis-engine.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-legacy-lock-'));
+        const current = path.join(dir, 'current', 'deep-analysis-result.json');
+        const legacy = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(legacy, JSON.stringify({
+            timestamp: '2026-07-29T09:00:00+08:00',
+            papers: [{ arxivId: '2607.82001', title: 'old source' }]
+        }));
+        const releaseLegacy = acquireFileLockSync(legacy);
+        const worker = `
+            const { migrateLegacyAnalysisResultToCurrent } = require(process.argv[1]);
+            migrateLegacyAnalysisResultToCurrent(process.argv[2], process.argv[3]);
+        `;
+        const migration = execFileAsync(process.execPath, [
+            '-e',
+            worker,
+            path.resolve(__dirname, '../scripts/full-fetch.js'),
+            current,
+            legacy
+        ]);
+        try {
+            const currentLock = `${current}.lock`;
+            const startedAt = Date.now();
+            while (!fs.existsSync(currentLock) && Date.now() - startedAt < 3000) {
+                await new Promise(resolve => setTimeout(resolve, 20));
+            }
+            assert.strictEqual(fs.existsSync(currentLock), true, '迁移进程应先取得目标锁并等待 legacy 锁');
+            const replacement = `${legacy}.replacement`;
+            fs.writeFileSync(replacement, JSON.stringify({
+                timestamp: '2026-07-30T09:00:00+08:00',
+                papers: [{ arxivId: '2607.82002', title: 'new source' }]
+            }));
+            fs.renameSync(replacement, legacy);
+        } finally {
+            releaseLegacy();
+        }
+
+        await migration;
+        const migrated = JSON.parse(fs.readFileSync(current, 'utf8'));
+        assert.strictEqual(migrated.papers[0].arxivId, '2607.82002');
+        assert.strictEqual(fs.existsSync(legacy), false);
+    });
 });

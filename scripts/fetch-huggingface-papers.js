@@ -23,12 +23,26 @@ const { HUGGINGFACE_CONFIG } = require('./config.js');
 /**
  * 使用 curl 获取数据
  */
+function buildCurlArgs(proxyUrl, url, timeout) {
+    return [
+        '-s', '-f', '-L',
+        '--proxy', proxyUrl,
+        '--noproxy', '',
+        '--max-time', String(timeout),
+        url
+    ];
+}
+
 function fetchWithCurl(url, timeout = 60) {
     try {
-        const result = execFileSync('curl', ['-s', '-f', '-L', '--max-time', String(timeout), url], {
+        const proxyUrl = detectProxyUrl();
+        if (!proxyUrl) {
+            return { ok: false, data: null, error: 'missing project proxy' };
+        }
+        const result = execFileSync('curl', buildCurlArgs(proxyUrl, url, timeout), {
             encoding: 'utf8',
             maxBuffer: 10 * 1024 * 1024,
-            env: buildChildProcessEnv({}, TRANSPORT_ENV_KEYS)
+            env: buildChildProcessEnv({ NO_PROXY: '', no_proxy: '' }, TRANSPORT_ENV_KEYS)
         });
 
         if (!result || result.trim() === '') {
@@ -485,6 +499,7 @@ function mergeAndDeduplicate(arxivPapers, hfPapers) {
 module.exports = {
     fetchHuggingFacePapers,
     fetchWithCurl,
+    buildCurlArgs,
     mergeAndDeduplicate,
     convertDailyPaper,
     convertPaper

@@ -411,9 +411,21 @@ function loadPapers(filePath = Config.FILES.deepAnalysisResult) {
 function parseArgs(argv) {
     const [command, ...rest] = argv;
     const options = {};
+    const allowed = new Set([
+        'date', 'receipt', 'category', 'manifest', 'file',
+        'output-hint', 'token', 'error'
+    ]);
     for (let i = 0; i < rest.length; i += 1) {
-        if (!rest[i].startsWith('--') || i + 1 >= rest.length) throw new Error(`无效参数: ${rest[i]}`);
-        options[rest[i].slice(2)] = rest[++i];
+        const arg = rest[i];
+        if (!arg.startsWith('--') || i + 1 >= rest.length || rest[i + 1].startsWith('--')) {
+            throw new Error(`无效参数: ${arg}`);
+        }
+        const key = arg.slice(2);
+        if (!allowed.has(key)) throw new Error(`未知参数: ${arg}`);
+        if (Object.prototype.hasOwnProperty.call(options, key)) {
+            throw new Error(`参数只能指定一次: ${arg}`);
+        }
+        options[key] = rest[++i];
     }
     return { command, options };
 }
@@ -501,5 +513,6 @@ module.exports = {
     migrateLegacyCompletedCover,
     archiveLegacyDigestCover,
     assertDigestCoverManifestCurrent,
+    parseArgs,
     main
 };

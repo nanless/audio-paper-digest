@@ -7,7 +7,7 @@
  * 失效筛选决定，不会触发重新抓取。
  */
 
-const KEYWORD_PREFILTER_VERSION = 'speech-audio-music-v3';
+const KEYWORD_PREFILTER_VERSION = 'speech-audio-music-v4';
 const MIN_ABSTRACT_CHARS_FOR_REJECTION = 80;
 const CORE_AUDIO_CATEGORIES = new Set(['eess.AS', 'cs.SD']);
 
@@ -168,18 +168,6 @@ function evaluateKeywordPrefilter(paper) {
     const text = `${title} ${abstract}`.trim();
     const textLower = text.toLowerCase();
     const categories = getPaperCategories(paper);
-
-    if (/\b(withdrawn|retracted)\b/i.test(abstract)) {
-        return {
-            pass: false,
-            reason: '摘要标记为 withdrawn/retracted',
-            matchedGroups: [],
-            matchedKeywords: [],
-            categoryFallback: false,
-            failOpen: false,
-            version: KEYWORD_PREFILTER_VERSION
-        };
-    }
 
     const matchedGroups = [];
     const matchedKeywords = [];

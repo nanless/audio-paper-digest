@@ -22,6 +22,8 @@ const {
     selectVisualReferenceImages,
     validateReferenceImageBytes,
     prepareVisualReferenceInputs,
+    assertVisualArchiveUniqueness,
+    parseArgs,
     main
 } = require('../scripts/visual-summary-state.js');
 
@@ -125,6 +127,15 @@ function writeImageCache(currentDir, url, raw, mime = 'image/png') {
 }
 
 describe('visual summary state', () => {
+    it('视觉状态 CLI 拒绝未知、缺值和重复参数', () => {
+        assert.throws(() => parseArgs(['status', '--unknown', 'value']), /未知参数/);
+        assert.throws(() => parseArgs(['status', '--date']), /无效参数/);
+        assert.throws(
+            () => parseArgs(['status', '--date', '2026-07-13', '--date', '2026-07-14']),
+            /只能指定一次/
+        );
+    });
+
     it('只把已选中且缓存 SHA 完整匹配的论文关键图绑定到生图任务', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-reference-'));
         const current = path.join(dir, 'current');
@@ -249,9 +260,11 @@ describe('visual summary state', () => {
             });
             const expected = path.join(output, '2026-07-13', '01-2607.12345', '01-method_reference.png');
             assert.strictEqual(prepared.length, 1);
-            assert.deepStrictEqual(prepared[0].referencedImagePaths, [
+            assert.deepStrictEqual(prepared[0].referencedImagePaths, [path.resolve(expected)]);
+            assert.strictEqual(
+                prepared[0].referenceImages[0].relativePath,
                 path.relative(Config.PROJECT_ROOT, expected).split(path.sep).join('/')
-            ]);
+            );
             assert.deepStrictEqual(fs.readFileSync(expected), PNG);
             assert.strictEqual(validateReferenceImageBytes(PNG, 'image/png'), '.png');
             assert.throws(() => validateReferenceImageBytes(Buffer.from('not-png'), 'image/png'), /文件头/);
@@ -482,6 +495,127 @@ describe('visual summary state', () => {
         }
     });
 
+    it('重排或标题变化时删除旧 canonical 成品，并拒绝归档中的重复排行榜图', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-replan-cleanup-'));
+        const manifestPath = path.join(dir, 'manifest.json');
+        const promptPath = path.join(dir, 'prompt.md');
+        const sourcePath = path.join(dir, 'generated.png');
+        fs.writeFileSync(promptPath, 'prompt');
+        fs.writeFileSync(sourcePath, PNG);
+        const originals = {
+            current: Config.CURRENT_DIR,
+            manifest: Config.FILES.visualSummaryManifestDir,
+            asset: Config.FILES.visualSummaryAssetDir
+        };
+        try {
+            patchVisualDirs(path.join(dir, 'current'));
+            const planned = planVisualSummaries({
+                targetDate: '2026-07-13', papers: [paper()], manifestPath, promptPath
+            });
+            const recorded = recordVisualSummaryCard({
+                arxivId: '2607.12345',
+                kind: 'infographic',
+                sourcePath,
+                taskToken: planned.papers['2607.12345'].cards.infographic.taskToken,
+                manifestPath
+            });
+            const oldPath = path.resolve(
+                Config.PROJECT_ROOT,
+                recorded.papers['2607.12345'].cards.infographic.assetPath
+            );
+            assert.ok(fs.existsSync(oldPath));
+
+            const replanned = planVisualSummaries({
+                targetDate: '2026-07-13',
+                papers: [paper('2607.12345', { title: 'Renamed visual summary paper' })],
+                manifestPath,
+                promptPath
+            });
+            assert.strictEqual(replanned.papers['2607.12345'].cards.infographic.status, 'pending');
+            assert.ok(!fs.existsSync(oldPath));
+
+            const root = path.dirname(oldPath);
+            fs.writeFileSync(path.join(root, '00-digest-cover-2026-07-13.png'), PNG);
+            fs.writeFileSync(path.join(root, 'unranked-2607.99999-infographic.png'), PNG);
+            assert.strictEqual(assertVisualArchiveUniqueness(replanned), true);
+            fs.writeFileSync(path.join(root, '02-2607.12345-duplicate.png'), PNG);
+            assert.throws(
+                () => assertVisualArchiveUniqueness(replanned),
+                /未登记或重复/
+            );
+        } finally {
+            Config.CURRENT_DIR = originals.current;
+            Config.FILES.visualSummaryManifestDir = originals.manifest;
+            Config.FILES.visualSummaryAssetDir = originals.asset;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('旧 canonical 清理先保存可续跑清单，并拒绝通过父目录符号链接删除', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-safe-cleanup-'));
+        const manifestPath = path.join(dir, 'manifest.json');
+        const promptPath = path.join(dir, 'prompt.md');
+        const sourcePath = path.join(dir, 'generated.png');
+        fs.writeFileSync(promptPath, 'prompt');
+        fs.writeFileSync(sourcePath, PNG);
+        const originals = {
+            current: Config.CURRENT_DIR,
+            manifest: Config.FILES.visualSummaryManifestDir,
+            asset: Config.FILES.visualSummaryAssetDir
+        };
+        try {
+            patchVisualDirs(path.join(dir, 'current'));
+            const planned = planVisualSummaries({
+                targetDate: '2026-07-13', papers: [paper()], manifestPath, promptPath
+            });
+            const recorded = recordVisualSummaryCard({
+                arxivId: '2607.12345',
+                kind: 'infographic',
+                sourcePath,
+                taskToken: planned.papers['2607.12345'].cards.infographic.taskToken,
+                manifestPath
+            });
+            const oldPath = path.resolve(
+                Config.PROJECT_ROOT,
+                recorded.papers['2607.12345'].cards.infographic.assetPath
+            );
+            const archiveRoot = path.dirname(oldPath);
+            const realRoot = `${archiveRoot}-real`;
+            fs.renameSync(archiveRoot, realRoot);
+            fs.symlinkSync(realRoot, archiveRoot, 'dir');
+
+            assert.throws(
+                () => planVisualSummaries({
+                    targetDate: '2026-07-13',
+                    papers: [paper('2607.12345', { title: 'Renamed after symlink' })],
+                    manifestPath,
+                    promptPath
+                }),
+                /符号链接/
+            );
+            const interrupted = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            assert.strictEqual(interrupted.papers['2607.12345'].cards.infographic.status, 'pending');
+            assert.strictEqual(interrupted.obsoleteVisualAssets.length, 1);
+            assert.ok(fs.existsSync(path.join(realRoot, path.basename(oldPath))));
+
+            fs.unlinkSync(archiveRoot);
+            fs.renameSync(realRoot, archiveRoot);
+            const resumed = planVisualSummaries({
+                targetDate: '2026-07-13',
+                papers: [paper('2607.12345', { title: 'Renamed after symlink' })],
+                manifestPath,
+                promptPath
+            });
+            assert.ok(!Object.prototype.hasOwnProperty.call(resumed, 'obsoleteVisualAssets'));
+            assert.ok(!fs.existsSync(oldPath));
+        } finally {
+            Config.CURRENT_DIR = originals.current;
+            Config.FILES.visualSummaryManifestDir = originals.manifest;
+            Config.FILES.visualSummaryAssetDir = originals.asset;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
     it('历史归档命令按已发布排行榜编号并更新旧 manifest 资产路径', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-legacy-archive-'));
         const current = path.join(dir, 'current');
@@ -688,7 +822,7 @@ describe('visual summary state', () => {
             fs.writeFileSync(analysisPath, JSON.stringify({ papers: [changed] }));
             const previousExitCode = process.exitCode;
             process.exitCode = 0;
-            main(['status', '--date', '2026-07-13', '--data', analysisPath, '--manifest', manifestPath, '--receipt', receiptPath]);
+            main(['status', '--date', '2026-07-13', '--manifest', manifestPath, '--receipt', receiptPath]);
             const reconciled = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
             assert.strictEqual(reconciled.papers['2607.12345'].cards.infographic.taskToken, staleToken);
             assert.strictEqual(reconciled.overallStatus, 'pending');

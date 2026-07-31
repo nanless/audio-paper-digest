@@ -8,7 +8,7 @@
 
 #### `run-daily-digest.sh`
 
-Codex 对“运行/进行某日论文速递”请求使用的默认脚本编排入口。日期参数必填，依次启动 `full-fetch.js`、博客 generate、review、push、发布后视觉规划和 `visual:prepare`。支持 `--from fetch|generate|review|push|visual`，便于 review 修正或瞬时失败后从对应阶段续跑，不重复已经成功的长耗时阶段。
+Codex 对“运行/进行某日论文速递”请求使用的默认脚本编排入口。日期参数必须是真实公历日期；从 `fetch` 开始时还必须等于北京时间当天，因为 `full-fetch.js` 自己绑定启动时的北京时间日期、并不接收历史日期参数。脚本随后启动博客 generate、review、push、发布后视觉规划和 `visual:prepare`。历史批次只能用 `--from generate|review|push|visual` 续跑已有数据，不能借该入口补抓历史日；generate 会先使用批次匹配的 current 分析，否则自动回退 `data/archive/<日期>/deep-analysis-result.json`。支持 `--from fetch|generate|review|push|visual`，便于 review 修正或瞬时失败后从对应阶段续跑，不重复已经成功的长耗时阶段。
 
 该脚本保持博客三阶段为独立进程，并在任一阶段非零退出时立即停止。它不调用任何图像 API；脚本成功后，Codex 仍必须使用内置 `image_gen` 生成、目检、登记 TOP 10 论文长图和汇总封面，再运行 `visual:status` 与 `cover:status`，两者均完成才算整轮论文速递完成。npm 入口：`npm run digest:prepare -- YYYY-MM-DD`。
 
@@ -95,7 +95,7 @@ arXiv 抓取与 LLM 筛选模块。
   - `fetchCategoryPapers()`：自动三级降级，每步获取足够即跳过后续
   - `fetchAbstracts()`：从 arXiv abs 页面批量抓取摘要（并发 5）
 - 筛选阶段统一使用 `PAPER_ANALYZER_*` 环境变量；LLM 请求强制 `agent: false` 直连，HTTP CONNECT 代理仅用于抓取侧请求
-- LLM 前默认启用高召回关键词预筛：明确命中音频任务/模态/方法词族，或命中核心音频 arXiv 类别时进入 LLM；明显无关论文在本地淘汰。筛选决定仍以 LLM 为准
+- LLM 前默认启用高召回关键词预筛：明确命中音频任务/模态/方法词族、命中核心音频 arXiv 类别或摘要不足 80 字符时进入 LLM；只有摘要完整且未命中的补充类别论文才形成 `keyword_prefilter` 确定性否定决定。按日期重筛逐批保存 `refilter-filter-decisions.json`，续跑只重试未决论文；重筛收尾时 `deep-analysis-result.json` 会按本轮明确入选 ID 收敛，保留入选失败项的恢复 checkpoint，并移除本轮已明确落选的旧结果
 - `npm run keyword:recall` 同时运行人工正负金标门禁与历史回放。历史 LLM 入选中的已知误筛必须在 `tests/fixtures/keyword-prefilter-gold.json` 留下 ID 和理由；退出码只接受金标零漏召回、零误放且裁决后历史有效正样本零漏召回
 - XML 解析为 regex 实现（arXiv API 格式稳定）
 
@@ -123,7 +123,7 @@ arXiv 抓取与 LLM 筛选模块。
 | 单张图片原始大小上限 | 6MB | `PD_IMAGE_MAX_BYTES` | 下载后按字节数校验 |
 | 单张 base64 上限 | 8M 字符 | `PD_IMAGE_MAX_BASE64_CHARS` | 单张图片转 base64 上限 |
 | 单篇图片 base64 总上限 | 20M 字符 | `PD_IMAGE_TOTAL_BASE64_CHARS` | 防止多图请求体过大 |
-| 每篇实际插图上限 | 4 张 | `PD_IMAGE_INSERTION_MAX` | 按副模型价值顺序截断，且只接受精确 anchor |
+| 每篇实际插图上限 | 4 张 | `PD_IMAGE_INSERTION_MAX` | 按副模型价值顺序截断，且只接受代码提供的稳定 `paragraph_id`；旧 anchor 仅兼容历史响应 |
 | 主分析全文预算 | 200K 字符 | `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` | 超长 arXiv HTML/PDF 正文按全文位置和任务关键词确定性取样 |
 | 开源扫描证据预算 | 16K 字符 | `PD_OPENSOURCE_EVIDENCE_MAX_CHARS` | 优先保留 URL、仓库、权重、数据集和发布承诺 |
 | 审校重写证据预算 | 60K 字符 | `PD_REVISION_EVIDENCE_MAX_CHARS` | 跨全文保留方法、实验、限制和关键数字 |
@@ -193,7 +193,7 @@ arXiv 抓取与 LLM 筛选模块。
 - `analyzePaperWithRetry(paper, options)`：单篇分析（带重试 + 自动解析）
 - `analyzeBatch(papers, options)`：批量分析（支持并发控制 + 增量保存回调）；关键回调异常会向入口传播，不能被当作分析成功吞掉
 - `mergeAndSaveResults(newResults, filePath, extraData)`：按 ID 去重合并并保存，**自带失败结果保护**；跨进程锁内重新读取并校验 `generation`，拒绝陈旧快照覆盖或损坏 current JSON
-- 成功判定要求 `analysisManifest` 版本 1 的全部必需阶段进入终态；失败合并保留旧成功正文，同时叠加新的 checkpoint、恢复图片清单与最近尝试错误
+- 成功判定要求 `analysisManifest` 版本 1 的全部必需阶段进入终态，且不存在最新失败标记；失败合并保留旧成功正文，同时叠加新的 checkpoint、恢复图片清单与最近尝试错误，成功重试后再清理失败标记
 - 文件锁 owner 带随机 token 并检查本机 PID；旧 owner 不能删除替代锁，存活进程持有的锁不会因时间过长被回收
 
 #### `scripts/validate-scores.js`
@@ -255,9 +255,9 @@ HuggingFace Papers 抓取模块。
 **Round 8 — 图像筛选与插图计划（`applyImageSupplement`，双模型模式）**
 - 加载 `prompts/image-supplement.md`
 - 副模型基于最终文本和候选图片筛选高价值图，丢弃低信息图，并只输出 JSON 插图计划
-- `[secondary]` 日志会记录论文 ID、模型、协议、endpoint/key 来源、候选与下载数量、图片安全标签/MIME/负载、活跃请求时长、请求/响应长度、JSON 解析状态、anchor 实际命中、拒绝原因和实际插入数量；不会打印 API key
-- 插图计划只接受 `anchor`、图前 `lead` 和图后 `explanation`；旧 `replacement` / `rewrite` 字段会被忽略
-- 代码按价值顺序最多插入 4 张图片；每张必须带有能在目标章节逐字匹配的非空 anchor，空值、错位或超限计划会被拒绝，不再回退到章节末尾。插入只新增图片和相邻说明，不替换主模型任何原句；候选编号不会被当成论文原始 Figure 编号
+- `[secondary]` 日志会记录论文 ID、模型、协议、endpoint/key 来源、候选与下载数量、图片安全标签/MIME/负载、活跃请求时长、请求/响应长度、JSON 解析状态、`paragraph_id` 命中、拒绝原因和实际插入数量；不会打印 API key
+- 插图计划接受代码提供的稳定 `paragraph_id`、图前 `lead` 和图后 `explanation`；旧 `anchor` 只保留历史响应兼容，`replacement` / `rewrite` 字段会被忽略
+- 代码按价值顺序最多插入 4 张图片；每张必须命中目标章节中的有效 `paragraph_id`，空值、非法 ID、错位或超限计划会被拒绝，不再回退到章节末尾。插入只新增图片和相邻说明，不替换主模型任何原句；候选编号不会被当成论文原始 Figure 编号
 - 合并后再次执行共享完整契约；若计划破坏章节、评分或解析结果，只丢弃该计划并保留已审计正文
 - 无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 按最终正文出现顺序归一化，避免候选编号在重排插入后成为倒序展示图号
 - 只有严格 JSON 对象中的 `insertions: []` 才标记 `no_high_value_images`；schema 错误、非法 JSON、全图下载失败或契约破坏会写入非终态恢复状态，不能伪装成成功分析
@@ -266,16 +266,16 @@ HuggingFace Papers 抓取模块。
 - `push-blog.py` 在汇总页和全部论文页推送成功且远端 OID 验证后，自动运行 `visual-summary-integration.js`。它只为最终评分 TOP 10 建立 `infographic` 任务，同分按规范化 arXiv ID 排序
 - `npm run visual:render:debug -- --spec SPEC.json --output OUTPUT.png [--illustration 无字插画] [--reference 方法/架构原图] [--result-reference 关键实验原图]` 是保留的本地确定性调试/回退渲染器，不再用于默认最终视觉资产。默认流程由内置 `image_gen` 一次性生成完整带字构图，并在登记前人工目检准确性。回退渲染器仍可使用 Pillow 合成约 `2160x4552` 的论文长图或汇总封面，支持结构化 `diagram.columns/nodes/edges` 中文重绘、参考图图注、简单柱状图/指标卡和 8 MiB 输出门禁
 - 使用 `visual-summary-state.js record --date YYYY-MM-DD --paper ID --kind infographic --file PNG --token TOKEN` 登记。脚本验证 PNG、最小尺寸、纵横比、大小、SHA 和 task token 后，按 manifest 最终排名原子保存到同一个 `data/archive/<date>/visual-summaries/`，文件名为 `<两位排名>-<paper-id>-<title-slug>.png`；并发完成顺序不会影响编号
-- 调用内置生图前运行 `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]`。命令只物化输入，不调用图像 API；它校验 `.bin` 缓存受控路径、SHA、字节数、MIME 与文件头，再输出具有正确 `.png/.jpg/.webp` 扩展名的 `referencedImagePaths`，避免直接上传 `.bin` 触发图片服务错误
+- 调用内置生图前运行 `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]`。命令只物化输入，不调用图像 API；它校验 `.bin` 缓存受控路径、SHA、字节数、MIME 与文件头，再输出具有正确 `.png/.jpg/.webp` 扩展名的绝对 `referencedImagePaths`（另保留相对路径供日志展示），避免工作目录变化或直接上传 `.bin` 触发图片服务错误
 - 汇总图从同批次审计论文确定性计算标题、热门方向计数和 TOP 10 排名，并复用博客 generation manifest 的 category；用 `digest-cover-state.js record` 登记到同一目录的 `data/archive/<date>/visual-summaries/00-digest-cover-<date>.png`
 - 每篇视觉任务的 `generationContext.qaClaims` 提供完整英文标题、四个必要内容区、方法声明、带数字实验声明、局限和参考图 caption；提示词和登记前目检必须逐项核对
 - 旧版 `data/current/visual-summaries/` 和 `data/current/digest-covers/` 资产会在下一次 plan 时校验 PNG 与 SHA，确认归档目标无冲突后迁移
-- 对缺少新版远端 OID 字段、不能重新 plan 的历史批次，使用 `npm run visual:archive -- --date YYYY-MM-DD` 和 `npm run cover:archive -- --date YYYY-MM-DD`；命令只迁移已有资产并更新 manifest，不创建任务或伪造发布凭证。旧 generation manifest 会与同日归档分析论文集合交叉校验后计算排名，非 TOP10 旧卡片归入 `unranked-<paper>`
+- 对缺少新版远端 OID 字段、不能重新 plan 的历史批次，使用 `npm run visual:archive -- --date YYYY-MM-DD` 和 `npm run cover:archive -- --date YYYY-MM-DD`；命令只迁移已有资产并更新 manifest，不创建任务或伪造发布凭证。旧 generation manifest 会与同日归档分析论文集合交叉校验后计算排名，非 TOP10 旧卡片平铺命名为 `unranked-<paper-id>-<kind>.png`
 - 两类状态互相独立：论文分析/prompt 变化只失效对应长图，论文集合、分数、主任务标签或封面 prompt 变化只失效封面。`visual:status` / `cover:status` 非零时，下一轮仅补 pending/failed、损坏或指纹失效的资产
 - 项目脚本只负责计划、验证、复制和 checkpoint，不调用图像 API。不得把生成内容称为论文原始图，不得编造数值、作者、结论或排行榜；封面不得渲染 arXiv ID
 - 图片状态不进入博客 generation/review/push 清单，不阻断已经发布的博客；无远端验证凭证时所有 plan/status 命令拒绝启动
 
-**阶段恢复**：`analysisManifest` 逐阶段保存状态，失败正文写入 `analysisCheckpoint`，候选/下载/选图元数据写入 `analysisRecoveryImageManifest`。失败合并会独立按完整契约重解析旧正文，不受最新失败 manifest 影响，连续多次失败仍保留旧成功正文。强制重分析成功旧记录时因没有 checkpoint 会清空主分析及所有下游完成标记；普通失败续跑则从首个未完成阶段继续。
+**阶段恢复**：`analysisManifest` 逐阶段保存状态，失败正文写入 `analysisCheckpoint`，候选/下载/选图元数据写入 `analysisRecoveryImageManifest`。失败合并会独立按完整契约重解析旧正文，不受最新失败 manifest 影响，连续多次失败仍保留旧成功正文，但 `latestAnalysisAttemptError` 会强制下一轮继续重试。全文或实际取样输入变化时，同时清除绑定旧来源的图片恢复清单。强制重分析成功旧记录时因没有 checkpoint 会清空主分析及所有下游完成标记；普通失败续跑则从首个未完成阶段继续。
 
 每个分析阶段另有输入/输出快照和指纹：主分析绑定实际截断输入，评分绑定评分前结构修复正文，插图绑定候选集合、下载内容 SHA 与插图前正文。任何变化只失效当前及下游阶段。所有入口仅在同篇共享锁内合并论文内容；批次/最终统计不会再回写累计 paper payload。
 
@@ -543,7 +543,7 @@ TOP N 精选版的一句话亮点使用受控并发生成，默认并发度为 5
 - 额外输出 `data/backfill-result.json`
 - 复用统一的每次运行日志，不再重复追加 `logs/backfill.log`
 - 对 `papers.json` 使用与 Node 端相同的 `.lock` 目录和 `generation` 协议，锁内重读合并，避免长时间抓取后的陈旧快照覆盖并发分析状态
-- 依赖：见根目录 `requirements.txt`（`requests`、`playwright`）
+- 依赖：见根目录 `requirements.txt`（`requests`、`playwright`、`PyYAML`）；`PyYAML` 用于确定性解析并校验博客 frontmatter，缺失时发布门禁会失败关闭
 
 #### `scripts/backup-data.sh`
 

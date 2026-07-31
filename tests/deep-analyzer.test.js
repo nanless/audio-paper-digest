@@ -999,6 +999,55 @@ has_dataset: 否
         ), false);
     });
 
+    it('区分 arXiv 永久缺失与瞬时失败，并把 Demo 5xx/限流标为可重试', () => {
+        const {
+            classifyArxivSourceFailure,
+            isTransientDemoHttpStatus
+        } = require('../scripts/deep-analyzer.js');
+        assert.strictEqual(classifyArxivSourceFailure('permanent_miss', false), 'permanent');
+        assert.strictEqual(classifyArxivSourceFailure('transient_failure', false), 'transient');
+        assert.strictEqual(classifyArxivSourceFailure('permanent_miss', true), 'transient');
+        assert.strictEqual(isTransientDemoHttpStatus(429), true);
+        assert.strictEqual(isTransientDemoHttpStatus(503), true);
+        assert.strictEqual(isTransientDemoHttpStatus(404), false);
+    });
+
+    it('正文来源变化会清除绑定旧来源的图片恢复状态', () => {
+        const { invalidateSourceBoundImageRecovery } = require('../scripts/deep-analyzer.js');
+        const paper = {
+            analysisRecoveryImageManifest: { downloaded: [{ url: 'https://old.example/a.png' }] },
+            imageManifest: { selected: ['https://old.example/a.png'] },
+            selectedImageUrls: ['https://old.example/a.png'],
+            imageUrls: ['https://old.example/a.png'],
+            allImageUrls: ['https://old.example/a.png']
+        };
+        invalidateSourceBoundImageRecovery(paper);
+        assert.strictEqual(paper.analysisRecoveryImageManifest, undefined);
+        assert.strictEqual(paper.imageManifest, undefined);
+        assert.strictEqual(paper.selectedImageUrls, undefined);
+        assert.strictEqual(paper.imageUrls, undefined);
+        assert.strictEqual(paper.allImageUrls, undefined);
+    });
+
+    it('插图补充破坏正文契约时保留审计后的纯文本并丢弃整份插图计划', () => {
+        const { discardInvalidImageSupplement } = require('../scripts/deep-analyzer.js');
+        const manifest = { selected: ['https://old.example/a.png'] };
+        const fallback = discardInvalidImageSupplement(
+            validAnalysisText(),
+            manifest,
+            {
+                supplementDiagnostics: { model: 'secondary' },
+                parseDiagnostics: { status: 'ok' }
+            },
+            '评分契约无效'
+        );
+        assert.strictEqual(fallback.analysis, validAnalysisText());
+        assert.deepStrictEqual(fallback.selectedImageUrls, []);
+        assert.deepStrictEqual(manifest.selected, []);
+        assert.strictEqual(manifest.supplement.discardedInvalidPlan, true);
+        assert.strictEqual(manifest.supplement.discardedReason, '评分契约无效');
+    });
+
     it('首次评分审计以审计输入正文计算前后分差', () => {
         const { calculateScoringDelta } = require('../scripts/deep-analyzer.js');
         const input = validAnalysisText();
