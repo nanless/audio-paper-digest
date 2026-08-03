@@ -202,6 +202,44 @@ function buildTaskEvidenceContext(sourceText, maxChars, patterns = BROAD_EVIDENC
     return rendered.slice(0, limit);
 }
 
+/**
+ * 将论文原文中的 LaTeX 反斜杠替换为可读的 Unicode 符号。
+ *
+ * 部分 OpenAI 兼容网关会对 JSON 请求体中的文本做二次反序列化，
+ * 使诸如 `\\underline` 这样的 LaTeX 命令被误当作 JSON 的非法转义，
+ * 从而在请求到达模型前返回 400。开源扫描只需要判断代码/仓库证据，
+ * 不依赖 LaTeX 语法，因此在该任务边界内做无损语义的显示层替换。
+ */
+function sanitizeOpenSourceEvidence(text) {
+    return String(text || '')
+        .replace(/\\/g, '⧵')
+        // arXiv HTML 转文本偶尔会留下孤立 UTF-16 代理字符；JSON.stringify
+        // 会把它们编码成 `\\uXXXX`，部分网关会将其误判为截断的 Unicode 转义。
+        .replace(/[\uD800-\uDFFF]/g, '�')
+        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ');
+}
+
+function sanitizeModelMessages(messages) {
+    const sanitizeText = value => String(value || '')
+        .replace(/\\/g, '⧵')
+        .replace(/[\uD800-\uDFFF]/g, '�')
+        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ');
+    return (messages || []).map(message => {
+        if (!message || typeof message !== 'object') return message;
+        if (typeof message.content === 'string') {
+            return { ...message, content: sanitizeText(message.content) };
+        }
+        if (!Array.isArray(message.content)) return message;
+        return {
+            ...message,
+            content: message.content.map(block => {
+                if (!block || typeof block !== 'object' || block.type !== 'text') return block;
+                return { ...block, text: sanitizeText(block.text) };
+            })
+        };
+    });
+}
+
 function buildTypeAwareSourceContext(
     analysis,
     sourceText,
@@ -821,12 +859,13 @@ function summarizeModelInput(messages) {
 
 async function callModelWithConfig(messages, maxTokens, maxRetries = 3, config = null) {
     const cfg = config || DEEP_CONFIG;
+    const safeMessages = sanitizeModelMessages(messages);
     const budget = createActiveTimeBudget(API_OVERALL_TIMEOUT_MS);
     const apiType = detectApiType(cfg.endpoint, cfg.model);
     const modelUrl = buildApiUrl(apiType, cfg.endpoint);
     const url = new URL(modelUrl);
     const temperature = Number.isFinite(cfg.temperature) ? cfg.temperature : API_TEMPERATURE;
-    const input = summarizeModelInput(messages);
+    const input = summarizeModelInput(safeMessages);
     console.log(`    [api] → ${cfg.model} | ${apiType} | ${url.hostname}${url.pathname} | input_chars=${input.textChars} | estimated_text_tokens≈${input.estimatedTextTokens} | images=${input.images} | max_tokens=${maxTokens} | max_retries=${maxRetries} | temperature=${temperature}`);
 
     let lastError = null;
@@ -836,7 +875,7 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = 3, config =
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 const timeoutMs = getActiveRemainingTimeoutMs(API_OVERALL_TIMEOUT_MS, budget.elapsedMs());
-                return await _callModelOnce(messages, maxTokens, cfg, budget, apiType, timeoutMs);
+                return await _callModelOnce(safeMessages, maxTokens, cfg, budget, apiType, timeoutMs);
             } catch (err) {
                 lastError = err;
                 const duration = (budget.elapsedMs() / 1000).toFixed(1);
@@ -3018,12 +3057,12 @@ async function analyzePaperDeep(paper) {
 }
 
 async function scanOpensource(paper, textForAnalysis) {
-    const evidence = buildTaskEvidenceContext(
+    const evidence = sanitizeOpenSourceEvidence(buildTaskEvidenceContext(
         textForAnalysis,
         OPEN_SOURCE_EVIDENCE_MAX_CHARS,
         OPEN_SOURCE_EVIDENCE_PATTERNS,
         'OPEN_SOURCE'
-    );
+    ));
     const prompt = loadPrompt('prompts/opensource-scan.md', {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
@@ -3912,6 +3951,8 @@ module.exports = {
     getTypeAwareEvidenceGuide,
     buildTypeAwareSourceContext,
     buildTaskEvidenceContext,
+    sanitizeOpenSourceEvidence,
+    sanitizeModelMessages,
     summarizeModelInput,
     createAnalysisRecoveryManifest,
     markRecoveryStage,

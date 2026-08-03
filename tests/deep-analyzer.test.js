@@ -1280,3 +1280,25 @@ has_dataset: 否
         assert.deepStrictEqual(getArxivHtmlIds('2604.12345v2'), ['2604.12345v2']);
     });
 });
+
+describe('open-source evidence request safety', () => {
+    it('removes LaTeX backslashes that break double-decoding JSON gateways', () => {
+        const { sanitizeOpenSourceEvidence } = require('../scripts/deep-analyzer.js');
+        const source = String.raw`\underline{x} and \mathbf{G}` + '\uD835';
+        const sanitized = sanitizeOpenSourceEvidence(source);
+        assert.strictEqual(sanitized, '⧵underline{x} and ⧵mathbf{G}�');
+        assert.doesNotMatch(sanitized, /\\/);
+        assert.doesNotMatch(sanitized, /[\u0000-\u001F\u007F]/);
+    });
+
+    it('cleans all text blocks before model requests while preserving image payloads', () => {
+        const { sanitizeModelMessages } = require('../scripts/deep-analyzer.js');
+        const messages = sanitizeModelMessages([{ role: 'user', content: [
+            { type: 'text', text: String.raw`formula \underline{x}` + '\uD835' },
+            { type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } }
+        ] }]);
+        assert.strictEqual(messages[0].content[0].text, 'formula ⧵underline{x}�');
+        assert.strictEqual(messages[0].content[1].image_url.url, 'data:image/png;base64,abc');
+        assert.doesNotThrow(() => JSON.parse(JSON.stringify(messages)));
+    });
+});
