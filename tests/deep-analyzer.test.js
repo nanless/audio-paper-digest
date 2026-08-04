@@ -970,17 +970,21 @@ has_dataset: 否
         assert.notStrictEqual(first.openSourceScan, textChanged.openSourceScan);
     });
 
-    it('raw 尾部变化但实际截断输入未变时不失效主链', () => {
+    it('来源或实际截断输入变化时均失效主链', () => {
         const { hasActualAnalysisInputChanged } = require('../scripts/deep-analyzer.js');
         const usedTextSha256 = 'used-input-sha';
         assert.strictEqual(hasActualAnalysisInputChanged(
             { sourceSha256: 'raw-v1', usedTextSha256 },
             { sourceSha256: 'raw-v2', usedTextSha256 }
-        ), false);
+        ), true);
         assert.strictEqual(hasActualAnalysisInputChanged(
             { sourceSha256: 'raw-v1', usedTextSha256 },
             { sourceSha256: 'raw-v2', usedTextSha256: 'changed-input-sha' }
         ), true);
+        assert.strictEqual(hasActualAnalysisInputChanged(
+            { sourceSha256: 'raw-v1', usedTextSha256, sourceId: 'v1', analysisSource: 'html' },
+            { sourceSha256: 'raw-v1', usedTextSha256, sourceId: 'v1', analysisSource: 'html' }
+        ), false);
     });
 
     it('已有全文 checkpoint 时临时抓取失败不会降级清空', () => {

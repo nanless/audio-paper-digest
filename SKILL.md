@@ -124,7 +124,7 @@ API 调用特性：
 - 主分析 max_tokens=64000，审校/表格/方法/结构局部修复默认 max_tokens=16000（`PD_ANALYSIS_REPAIR_MAX_TOKENS` 可覆写），temperature=0.7
 - 主分析输入默认上限 200K 字符；超过时使用 `task-focused-v1` 跨全文均衡取样，不再只保留开头。开源/审校/评分/表格与方法/结构后处理证据默认上限分别为 16K/60K/40K/30K/40K 字符，且使用任务关键词优先的证据块，避免重复发送完整全文。对应 `PD_*_EVIDENCE_MAX_CHARS` 和 `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` 会进入阶段指纹
 - **双层重试**：analysis-engine.js 层面每篇最多重试 2 次（总共最多 3 次尝试）；deep-analyzer.js 内部每次 API 调用再重试最多 3 次（指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5s`）
-- **抓取代理为强制项**：LLM API 固定 `agent: false` 直连，不得注入代理 agent/dispatcher；arXiv/HuggingFace 抓取缺少项目 `.env` 代理必须失败，禁止直接回退。Node arXiv 仅使用 `HTTPS_PROXY` / `HTTP_PROXY` 的 HTTP CONNECT 地址，HuggingFace curl 可额外使用 SOCKS `ALL_PROXY`；访问本机代理的网络命令必须在沙箱外运行。
+- **抓取代理为强制项**：LLM API 固定 `agent: false` 直连，不得注入代理 agent/dispatcher；arXiv/HuggingFace 抓取缺少项目 `.env` 代理必须失败，禁止直接回退。Node arXiv 使用 `HTTPS_PROXY` 或 `HTTP_PROXY` 中至少一项 HTTP CONNECT 地址，HuggingFace curl 可额外使用 SOCKS `ALL_PROXY`；访问本机代理的网络命令必须在沙箱外运行。
 - arXiv HTML 解析使用 **cheerio** 结构化选择器，移除 script/style/nav/header/footer 等噪音元素
 - HTML 全文不能只靠字符数判定：还要满足有效长段落数及论文章节/结构标记；`too_short`、`metadata_shell`、`missing_paper_structure` 都继续 PDF fallback，并记录结构计数
 - 图片先按 caption/文件名/顺序启发式预筛（默认 `imageCandidateMax=20`）；HTML 正文与图注在同一次响应中解析并复用，预提供 URL 会按完整 URL或唯一文件名补全 caption。只有配置副模型的双模型模式才**串行下载**最多 `imageMaxCount=20` 张候选图片并送入副模型；成功内容写入 `data/current/image-cache/`，恢复时校验 MIME/文件头后复用。仅 408/425/429/5xx 和网络异常重试，404、非法 MIME、超限与安全拒绝立即终止
@@ -149,7 +149,7 @@ API 调用特性：
 - 主模型使用 `prompts/scoring-audit.md` 做最终 JSON 评分审计；送审前由代码移除旧“评分理由”段，避免模型照抄待纠正的跨维度扣分，正文与原文证据账本保持不变；校验失败会把精确错误及违规分句反馈给下一次局部审计。无核心产物时，代码按“肯定语境承诺开放 0.5 / 明确 URL 或肯定结构化 Demo 0.2 / 否定或未提及 0”确定性归一化开源分和理由；理论研究按公开证明、推导和附录判断核心产物，不因代码/模型/数据标记为空而强制归零。代码只替换评分相关字段，副模型不参与评分
 - 插图合并后再次执行完整分析契约；若插图计划破坏章节或解析结果，只丢弃该篇插图计划并保留已审计的主模型正文
 - 候选编号不能直接作为展示图号；代码将无真实 caption 的通用 alt 和 `selectedImageUrls` 按最终正文顺序归一化。发布 review 必须保留 Markdown 表格中前导分组列为空的合法续行
-- 副模型最多按价值顺序选择 4 张图（`PD_IMAGE_INSERTION_MAX` 可覆写），每张必须从代码生成的段落目录中选择稳定 `paragraph_id`；非法 ID、定位失败和超限图片由代码拒绝，不回退到章节末尾。旧自由文本 `anchor` 仅兼容历史响应。`[secondary]` 日志记录模型/协议/endpoint 与 key 来源、候选和下载数量、caption、缓存、段落 ID、JSON 解析状态、拒绝原因和最终选图；禁止打印 API key 内容
+- 副模型默认最多按价值顺序选择 4 张图（`PD_IMAGE_INSERTION_MAX` 可用正整数覆写），每张必须从代码生成的段落目录中选择稳定 `paragraph_id`；非法 ID、定位失败和超限图片由代码拒绝，不回退到章节末尾。旧自由文本 `anchor` 仅兼容历史响应。`[secondary]` 日志记录模型/协议/endpoint 与 key 来源、候选和下载数量、caption、缓存、段落 ID、JSON 解析状态、拒绝原因和最终选图；禁止打印 API key 内容
 - 标签输出必须同时包含最终标签串、`主任务标签`、`主方法标签`、`补充标签`
 - 缺失信息必须写"未说明/未提供/未提及"，禁止猜测作者机构、实验数字、开源状态或外部信息
 - 修改 `prompts/deep-analysis.md` 或 `prompts/filter.md` 时，需同步检查 `scripts/utils.js` 与 `scripts/utils.py` 的解析逻辑是否仍能匹配新输出格式
@@ -208,7 +208,8 @@ PAPER_ANALYZER_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
 # 微信公众号
 WECHAT_APP_ID=your-app-id
 WECHAT_APP_SECRET=your-app-secret
-# WECHAT_THUMB_MEDIA_ID=your-thumb-media-id  # 封面图永久素材 ID（可选，未设置时使用默认素材）
+# 封面图永久素材 ID（可选，未设置时使用默认素材）
+# WECHAT_THUMB_MEDIA_ID=your-thumb-media-id
 
 # 飞书文档
 FEISHU_APP_ID=your-feishu-app-id
@@ -224,26 +225,36 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 # PAPER_DIGEST_AUTHOR=your-name
 
 # 配置覆写（可选）
-# PD_ANALYSIS_CONCURRENCY=3       # 深度分析并发度
-# PD_ANALYSIS_MAX_RETRIES=2       # 深度分析重试次数
-# PD_ANALYSIS_REPAIR_MAX_TOKENS=16000 # 审校/表格/方法/结构局部修复输出上限
+# 深度分析并发度
+# PD_ANALYSIS_CONCURRENCY=3
+# 深度分析重试次数
+# PD_ANALYSIS_MAX_RETRIES=2
+# 审校/表格/方法/结构局部修复输出上限
+# PD_ANALYSIS_REPAIR_MAX_TOKENS=16000
 # PD_ANALYSIS_FULL_TEXT_MAX_CHARS=200000
 # PD_OPENSOURCE_EVIDENCE_MAX_CHARS=16000
 # PD_REVISION_EVIDENCE_MAX_CHARS=60000
 # PD_SCORING_EVIDENCE_MAX_CHARS=40000
 # PD_REPAIR_EVIDENCE_MAX_CHARS=30000
 # PD_STRUCTURE_EVIDENCE_MAX_CHARS=40000
-# PD_BLOG_REVIEW_CHUNK_CHARS=8000 # 博客文本 review 分块，范围 4000-16000
-# PD_BLOG_REVIEW_MAX_TOKENS=4000 # 单次博客 review 输出预算，空 length 响应会自适应加倍
-# PD_REANALYZE_CONCURRENCY=3      # 重分析并发度（默认与 ANALYSIS_CONFIG.concurrency 一致）
-# PD_FILTER_BATCH_SIZE=5          # LLM 筛选每批篇数
-# PD_ARXIV_MAX_RESULTS=100        # arXiv 每类抓取数量
-# PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS=120000 # 单类 HTTP 429 累计退避上限（毫秒）
-# PD_ARXIV_PDF_MAX_BYTES=52428800 # PDF fallback 最大字节数
+# 博客文本 review 分块，范围 4000-16000
+# PD_BLOG_REVIEW_CHUNK_CHARS=8000
+# 单次博客 review 输出预算，空 length 响应会自适应加倍
+# PD_BLOG_REVIEW_MAX_TOKENS=4000
+# 重分析并发度（默认与 ANALYSIS_CONFIG.concurrency 一致）
+# PD_REANALYZE_CONCURRENCY=3
+# LLM 筛选每批篇数
+# PD_FILTER_BATCH_SIZE=5
+# arXiv 每类抓取数量
+# PD_ARXIV_MAX_RESULTS=100
+# 单类 HTTP 429 累计退避上限（毫秒）
+# PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS=120000
+# PDF fallback 最大字节数
+# PD_ARXIV_PDF_MAX_BYTES=52428800
 # PD_SCORING_AUDIT_TEMPERATURE=0.1
 # PD_IMAGE_PLAN_TEMPERATURE=0.2
 
-# 抓取代理（必需）：arXiv 的 Node 请求必须使用 HTTP CONNECT 地址
+# 抓取代理（必需）：arXiv 的 Node 请求至少配置 HTTPS_PROXY 或 HTTP_PROXY，且必须是 HTTP CONNECT 地址
 # HTTPS_PROXY=http://127.0.0.1:7897
 # HTTP_PROXY=http://127.0.0.1:7897
 # HuggingFace 的 curl 可额外使用 SOCKS；LLM 请求固定 agent:false 直连
@@ -359,14 +370,14 @@ npm run xiaohongshu -- --date 2026-04-22
 
 - `published` 字段是论文在 arXiv 上的原始发布日期，可能早于今天
 - **博客的 `YYYY-MM-DD` 日期代表「今天爬取并分析」的批次**，不是论文原始发布日期
-- `deep-analysis-result.json` 可能包含当日新增分析和合并保留的既有结果；博客、微信、飞书默认按 `fetchedAt == --date` 过滤，只有匹配批次日期的论文会发布到当天内容下
+- `deep-analysis-result.json` 可能包含当日新增分析和合并保留的既有结果；博客、微信、飞书和小红书默认按不可变 `fetchBatchDate`/`batchDate` 过滤，旧数据才回退严格北京时间 `fetchedAt`，只有匹配批次日期的论文会发布到当天内容下
 
 当前行为：
 
 - 默认读 `data/current/deep-analysis-result.json`
-- **按 `fetchedAt` 日期过滤**：只发布 `fetchedAt` 匹配 `--date` 指定日期的论文（默认今天），避免历史数据被重复发布
+- **按批次日期过滤**：优先使用抓取阶段写入的 `fetchBatchDate` 或 `batchDate`，旧数据才使用严格北京时间 `fetchedAt` 的日期；只发布匹配 `--date` 指定日期的论文（默认今天），避免历史数据被重复发布
 - 生成阶段可重复传入 `--exclude-id <arXiv ID>`，只从本次 generation 权威快照排除明确命中的论文；ID 未命中会阻断，分析数据本身不变
-- 微信公众号和飞书同样默认按 `fetchedAt` 日期过滤；如需发布输入文件全部论文，显式传 `--all`
+- 微信公众号和飞书同样优先按 `fetchBatchDate`/`batchDate`、再回退 `fetchedAt` 日期过滤；如需发布输入文件全部论文，显式传 `--all`
 - 在 `~/code/github_repos/audio-paper-digest-blog/content/posts` 生成：
   - 汇总页：`YYYY-MM-DD.md`
   - 单篇页：`YYYY-MM-DD-<slug>.md`
@@ -380,14 +391,13 @@ npm run xiaohongshu -- --date 2026-04-22
 
 Agent 执行约束：
 
-- 默认只允许运行生成和 review 两个独立阶段
-- 只有用户明确要求"正式发布 / 推送博客"时，才允许运行 `push-blog.py`
+- 用户说“运行/进行某日论文速递”即授权完整标准链路，包括 `push-blog.py`；只有明确限定为生成、review、预览、检查或诊断时才停在相应阶段
 - 若只是检查格式、验证新字段或预览产物，禁止触发真实 `git push`
 
 发布前保障：
 
 - `full-fetch.js` 每天运行时会自动归档移走昨天的 `deep-analysis-result.json`、`filtered-papers.json` 和 `analyzed.json`，确保 `data/current/` 下只有当天新抓取的论文
-- 发布默认按 `fetchedAt == --date` 过滤；仍需保持 `data/current/` 干净，避免 review、校验和显式 `--all` 发布时混入不同批次
+- 发布默认优先按 `fetchBatchDate`/`batchDate`、旧数据回退严格北京时间 `fetchedAt` 的 `--date` 过滤；仍需保持 `data/current/` 干净，避免 review、校验和显式 `--all` 发布时混入不同批次
 
 ### 重跑/修复当天的正确姿势
 
@@ -452,7 +462,7 @@ PY
 - `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` 采用重试、逐阶段锁内 checkpoint、跨进程锁和 `generation` 校验；损坏的 current JSON 会阻断写入，不会回退 legacy 后覆盖。长时间单篇锁使用 heartbeat 续租，远程主机遗留锁只在租约超龄后回收
 - `full-fetch.js` 另有覆盖归档、清理、筛选和最终合并的单实例运行锁，内部论文分析仍保持配置的并发度；锁 owner 使用随机 token，旧 owner 不能释放后来者的同路径新锁
 - `reanalyze.js` 每 5 篇保存一次中间结果（并发模式下自动调整保存间隔）
-- 可运行 `npm run validate:data` 只读校验当前 `papers.json`、`raw-candidates.json`、`filter-decisions.json`、`filtered-papers.json`、`deep-analysis-result.json` 的结构、候选统计、筛选计数一致性，以及完整筛选决策对候选全集的覆盖；该命令不修复数据，发现问题会非零退出
+- 可运行 `npm run validate:data` 只读校验当前 `papers.json`、`raw-candidates.json`、`filter-decisions.json`、`filtered-papers.json`、`deep-analysis-result.json` 的结构、候选统计、筛选计数一致性，以及完整筛选决策对候选全集的覆盖；该命令不修复数据，发现问题会非零退出。没有运行数据的干净 checkout 仅可显式使用 `npm run validate:data -- --allow-empty`；CI 使用该空仓模式，实际数据校验由单测夹具覆盖
 - `full-fetch.js` 自动备份 bak 文件到 `data/archive/`，保留最近 10 个
 - `full-fetch.js` 自动备份 `papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天
 
@@ -484,7 +494,7 @@ PY
 17.2 **参考图必须先规范化输入路径**：深度分析缓存使用 `.bin` 保存原始字节，不能直接作为内置生图的上传路径。每轮视觉生成前运行 `npm run visual:prepare -- --date YYYY-MM-DD`（可加 `--paper ID`）；命令在远端发布凭证和当前 manifest 校验通过后，逐图复核受控缓存路径、SHA-256、字节数、MIME 与魔数，并原子物化为 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 下的 `.png/.jpg/.webp`，输出绝对 `referencedImagePaths` 和仅供展示的 `relativePath`。内置 `image_gen` 只接收这些绝对规范路径；缓存损坏、MIME 不一致或路径逃逸必须失败，不得手工复制或伪造扩展名绕过。
 18. **修改 API 协议路由逻辑时同步全链路**：修改 `detectApiType()` 的判定规则或 `buildApiUrl()`/`buildHeaders()` 等函数时，必须同步检查 `fetch-papers.js`、`deep-analyzer.js` 以及所有使用 `analysis-engine.js` 的脚本（`full-fetch.js`、`reanalyze.js`、`batch-analyze.js`、`deep-analysis-only.js`、`analyze-single-paper.js`），确保全链路行为一致。
 19. **禁止将敏感文件提交到版本控制**：`data/`、`logs/`、`*.env`、`*.backup*`、缓存文件、含密钥的日志归档等严禁进入 git；提交前必须确认 `.gitignore` 已正确配置，且仓库中不存在历史遗留的敏感文件。
-20. **CI 自动检查**：CI 会通过 `npm test`、`npm run validate:data`、`find scripts tests -name '*.js'`、`find scripts -name '*.py'`、`python3 -m unittest discover -s tests/python` 和全仓库 `.sh` 语法检查覆盖新增 JS/Python/shell 文件；新增特殊文件类型时再更新 `.github/workflows/ci.yml`。
+20. **CI 自动检查**：CI 会通过串行 `npm test`、`npm run validate:data -- --allow-empty`、`find scripts tests -name '*.js'`、`find scripts -name '*.py'`、`python3 -m unittest discover -s tests/python` 和全仓库 `.sh` 语法检查覆盖新增 JS/Python/shell 文件；新增特殊文件类型时再更新 `.github/workflows/ci.yml`。
 21. **运行数据使用北京时间**：写入 `timestamp` / `lastUpdated` / `fetchedAt` 时使用 `getBeijingISOString()`；Python 发布侧使用北京时间 helper（如 `get_today_bj()`），避免 UTC 日期造成跨天归档或发布筛选错误。
 22. **提交信息必须中文且详细**：提交信息必须用中文说明主要改动和影响范围；禁止只写“修复”“更新”这类无法追踪原因的短句。
 

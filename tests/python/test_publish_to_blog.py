@@ -427,14 +427,16 @@ title: "Bad table"
     def test_required_image_review_fails_closed_on_non_json_and_invalid_severity(self):
         content = '![结果图](https://arxiv.org/result.png)'
         image = {'media_type': 'image/png', 'data': 'cG5n'}
-        with mock.patch.object(publish_to_blog, '_load_review_image', return_value=image), \
+        with mock.patch.dict(os.environ, {'PAPER_ANALYZER_SECONDARY_MODEL': 'vision-model'}), \
+                mock.patch.object(publish_to_blog, '_load_review_image', return_value=image), \
                 mock.patch.object(publish_to_blog, 'call_llm_api', return_value='大概没问题'):
             passed, issues = publish_to_blog.multimodal_review_images(content, '标题', required=True)
         self.assertFalse(passed)
         self.assertEqual(issues[0]['severity'], 'error')
 
         malformed = '{"passed": true, "issues": [{"severity": "critical", "description": "x"}]}'
-        with mock.patch.object(publish_to_blog, '_load_review_image', return_value=image), \
+        with mock.patch.dict(os.environ, {'PAPER_ANALYZER_SECONDARY_MODEL': 'vision-model'}), \
+                mock.patch.object(publish_to_blog, '_load_review_image', return_value=image), \
                 mock.patch.object(publish_to_blog, 'call_llm_api', return_value=malformed):
             passed, issues = publish_to_blog.multimodal_review_images(content, '标题', required=True)
         self.assertFalse(passed)
@@ -491,7 +493,8 @@ title: "Bad table"
     def test_image_review_sends_actual_image_payload(self):
         image = {'media_type': 'image/png', 'data': 'cG5nLWJ5dGVz'}
         response = '{"passed": true, "issues": []}'
-        with mock.patch.object(publish_to_blog, '_load_review_image', return_value=image), \
+        with mock.patch.dict(os.environ, {'PAPER_ANALYZER_SECONDARY_MODEL': 'vision-model'}), \
+                mock.patch.object(publish_to_blog, '_load_review_image', return_value=image), \
                 mock.patch.object(publish_to_blog, 'call_llm_api', return_value=response) as call:
             passed, issues = publish_to_blog.multimodal_review_images(
                 '![实验曲线](https://arxiv.org/curve.png)', '标题', required=True
@@ -506,7 +509,8 @@ title: "Bad table"
         image = {'media_type': 'image/png', 'data': 'cG5n'}
         response = '{"passed": true, "issues": []}'
         content = '## 实验结果\n前文指标提升 12%。\n![消融曲线](https://example.com/a.png)\n后文解释低频误差。'
-        with mock.patch.object(publish_to_blog, '_load_review_image', return_value=image), \
+        with mock.patch.dict(os.environ, {'PAPER_ANALYZER_SECONDARY_MODEL': 'vision-model'}), \
+                mock.patch.object(publish_to_blog, '_load_review_image', return_value=image), \
                 mock.patch.object(publish_to_blog, 'call_llm_api', return_value=response) as call:
             publish_to_blog.multimodal_review_images(content, '标题', required=True)
         prompt = call.call_args.args[0]
@@ -525,7 +529,8 @@ title: "Bad table"
                 raise publish_to_blog.PublishDataValidationError('模拟超时')
             return image
 
-        with mock.patch.object(publish_to_blog, '_load_review_image', side_effect=load), \
+        with mock.patch.dict(os.environ, {'PAPER_ANALYZER_SECONDARY_MODEL': 'vision-model'}), \
+                mock.patch.object(publish_to_blog, '_load_review_image', side_effect=load), \
                 mock.patch.object(
                     publish_to_blog,
                     'call_llm_api',
@@ -539,6 +544,15 @@ title: "Bad table"
         self.assertIn('alt: `成功图`', prompt)
         self.assertNotIn('alt: `失败图`', prompt)
         self.assertEqual(issues[0]['severity'], 'warning')
+
+    def test_image_review_skips_secondary_call_when_secondary_model_is_unconfigured(self):
+        content = '![结果图](https://arxiv.org/result.png)'
+        with mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(publish_to_blog, 'call_llm_api') as call:
+            passed, issues = publish_to_blog.multimodal_review_images(content, '标题', required=True)
+        self.assertTrue(passed)
+        self.assertEqual(issues, [])
+        call.assert_not_called()
 
     def test_image_download_rejects_dns_rebinding_peer(self):
         sock = mock.Mock()
@@ -1536,7 +1550,8 @@ body
                 'generationContext': context,
             }), encoding='utf-8')
             url = f'{publish_to_blog.BASE_PATH}/images/digest-covers/2026-07-10/cover.png'
-            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+            with mock.patch.dict(os.environ, {'PAPER_ANALYZER_SECONDARY_MODEL': 'vision-model'}), \
+                    mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'DIGEST_COVER_MANIFEST_DIR', manifest_dir), \
                     mock.patch.object(
                         publish_to_blog, 'call_llm_api',

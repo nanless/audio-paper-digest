@@ -4,7 +4,7 @@
 
 自动化"语音/音乐/音频论文速递"流水线：arXiv + HuggingFace 抓取 → LLM 筛选 → 多模态深度分析 → 发布到 Hugo 博客 / 微信公众号 / 小红书 / 飞书。
 
-**技术栈**：Node.js（核心流水线）+ Python（发布脚本）。要求 Node ≥ 20.18.1（`cheerio` 与 `pdf-parse` 的当前锁定版本要求）。`scripts/config.js` 集中管理 Node 端主要可调参数和当前运行数据文件路径（部分高频参数支持在项目根 `.env` 中用 `PD_*` 覆写）；`scripts/path_config.py` 集中管理 Python 发布/维护脚本共享路径。
+**技术栈**：Node.js（核心流水线）+ Python（发布脚本）。要求 Node `>=20.18.1 <21 || >=22.3.0`（当前锁定依赖不支持 Node 21）。`scripts/config.js` 集中管理 Node 端主要可调参数和当前运行数据文件路径（部分高频参数支持在项目根 `.env` 中用 `PD_*` 覆写）；`scripts/path_config.py` 集中管理 Python 发布/维护脚本共享路径。
 
 详细执行规则见 `SKILL.md`，本文是紧凑版——只保留 Agent 不看代码就容易漏掉的要点。
 
@@ -12,13 +12,14 @@
 
 ```bash
 npm install              # 安装依赖（cheerio + pdf-parse）
-npm test                 # 运行单元测试（node --test tests/*.test.js）
+npm test                 # 串行运行单元测试（node --test --test-concurrency=1 tests/*.test.js）
 npm run digest:prepare -- YYYY-MM-DD # 默认论文速递入口：执行到博客发布并准备视觉输入；随后 Agent 必须用内置 image_gen 完成并登记图片
 npm run fetch            # 仅数据流程：抓取 + 筛选 + 深度分析
 npm run deep             # 仅深度分析续跑（跳过已有 analysis；无分析结果时可从 filtered-papers.json 初始化）
 npm run reanalyze        # 强制全量重分析（支持 --concurrency N）
 npm run batch            # 批量分析未分析论文
 npm run validate:data    # 只读校验候选/筛选/分析 JSON 数据、筛选决策缓存一致性和完整候选覆盖
+npm run validate:data -- --allow-empty # 仅供没有运行数据的干净 checkout 使用
 npm run keyword:recall   # 用历史 filtered 正样本回放关键词预筛，报告召回率与漏召回明细
 npm run digest:status -- --date YYYY-MM-DD # 汇总筛选、分析、review、远端发布和视觉最终状态
 npm run visual:post-publish -- --date YYYY-MM-DD # 在博客锁内建立 TOP 10 长图和汇总图任务
@@ -74,7 +75,7 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 `PD_BLOG_REVIEW_CHUNK_CHARS` 控制博客文本 review 分块，默认 8000，限制为 4000–16000；增大分块减少重复审查说明，但仍保持代码块、表格和 Markdown 块边界完整。该值进入 review 协议指纹。
 `PD_XIAOHONGSHU_ONELINER_CONCURRENCY` 控制小红书 TOP N 一句话亮点的 LLM 并发度，默认 5，限制为 1–5；结果必须按原排名回填，单篇失败独立使用本地摘要回退。
 
-**双模型（可选，多模态）**：设置 `PAPER_ANALYZER_SECONDARY_MODEL` 即启用副模型做图像筛选与插图计划（主模型仅做纯文本分析）；副模型只输出 JSON 计划，包含目标章节、代码提供的稳定 `paragraph_id`、图前 `lead` 和图后 `explanation`。代码只新增插图及相邻说明，忽略旧 `replacement` / `rewrite` 字段，禁止副模型替换主模型原文；每篇默认最多插入 4 张，非法段落 ID 直接丢弃，旧 `anchor` 格式仅保留兼容。不设置则跳过图片、退回单模型纯文本。`PAPER_ANALYZER_SECONDARY_ENDPOINT` / `PAPER_ANALYZER_SECONDARY_API_KEY` 未设置时默认复用主模型对应值。
+**双模型（可选，多模态）**：设置 `PAPER_ANALYZER_SECONDARY_MODEL` 即启用副模型做图像筛选与插图计划（主模型仅做纯文本分析）；副模型只输出 JSON 计划，包含目标章节、代码提供的稳定 `paragraph_id`、图前 `lead` 和图后 `explanation`。代码只新增插图及相邻说明，忽略旧 `replacement` / `rewrite` 字段，禁止副模型替换主模型原文；每篇默认最多插入 4 张（可用 `PD_IMAGE_INSERTION_MAX` 正整数覆写），非法段落 ID 直接丢弃，旧 `anchor` 格式仅保留兼容。不设置则跳过图片、退回单模型纯文本。`PAPER_ANALYZER_SECONDARY_ENDPOINT` / `PAPER_ANALYZER_SECONDARY_API_KEY` 未设置时默认复用主模型对应值。
 
 **Codex 发布后视觉资产**：必须先完成全部论文深度分析，再依次完成博客 generate、全量/失败集 review、push，并由 `push-blog.py` 验证远端 `main` OID。只有发布凭证同时记录 `publicationCommit`、相同的 `remoteVerifiedOid` 和验证时间后，才可建立视觉任务。`push-blog.py` 会自动运行发布后规划器；论文长图只选择最终评分 TOP 10（同分按规范化 arXiv ID），每篇一张纵向 PNG，顶部为完整英文标题、正文为简体中文；另生成一张包含批次标题、热门方向和 TOP 10 排行榜的汇总图。默认成品必须由 Codex 内置 `image_gen` 一次性生成完整带字构图，让标题、中文说明、结构关系、实验数字、论文关键图与纸张拼贴视觉自然配合；禁止再经过确定性文字卡片合成器。Agent 必须逐图目视核对标题、中文正文、箭头/并行分支、指标方向、论文数字与排行榜后才能执行 record，不可读或存在实质错误时必须重生成。两类 manifest 按日期隔离并支持失败项续跑，但图片不进入本轮博客 generation/review/push，也不阻断已经完成的发布。项目脚本不得调用图像 API或读取 `OPENAI_API_KEY`，实际绘图只能由 Codex 内置 `image_gen` 完成；`render-visual-summary.py` 仅用于本地调试和离线兜底。
 
@@ -182,10 +183,10 @@ prompts/                # LLM prompt 模板
 - **Review 收敛与前置检查**：正式原始审查仍保留 5 次可用性重试；格式修复最多调用一次，完整协议重试最多 2 次，并尊重 `Retry-After` 加随机抖动。`auto_fixable=false` 的问题可省略空 `fix_instruction`。LLM 前确定性去除完全重复的长正文段落，并校验 Markdown 表格列数与明显截断的长图注；合法空分组列续行必须保留。
 - **小红书文案续跑**：TOP N one-liner 成功项按 normalized arXiv ID 写入日期缓存，绑定 analysis、prompt、模型/endpoint/温度和清洗契约；日期级锁内逐篇原子保存。坏缓存原子隔离后重建，只重试缺失、失败或指纹失效项；`--date` 必须严格为 `YYYY-MM-DD`。小红书自动发布不属于论文速递必需流程。
 - **发布 review 不得删除合法表格续行**：Markdown 表格允许前导分组列为空，这通常表示沿用上一行模型/配置；不能把 `| | | | Filter2 ... |` 一类数据行当成子标题删除。普通模型名或技术术语未加反引号属于样式建议，不是格式问题。
-- **图片展示顺序与质量门禁**：候选图编号不是最终展示图号；无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 必须按图片在最终正文中的出现顺序归一化。副模型每篇最多插入 4 张图（可用 `PD_IMAGE_INSERTION_MAX` 覆写），必须选择代码生成的稳定段落 ID；非法 ID 和超限图片一律拒绝，不得回退堆到章节末尾。HTML 正文和图注必须同次解析复用，成功下载写入 `data/current/image-cache/`，永久 HTTP/MIME/大小错误不得反复重试。
+- **图片展示顺序与质量门禁**：候选图编号不是最终展示图号；无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 必须按图片在最终正文中的出现顺序归一化。副模型每篇默认最多插入 4 张图（可用 `PD_IMAGE_INSERTION_MAX` 正整数覆写），必须选择代码生成的稳定段落 ID；非法 ID 和超限图片一律拒绝，不得回退堆到章节末尾。HTML 正文和图注必须同次解析复用，成功下载写入 `data/current/image-cache/`，永久 HTTP/MIME/大小错误不得反复重试。
 - **内置生图参考文件**：视觉 manifest 中的 `cachePath` 保留原始 `.bin` 缓存路径；调用内置 `image_gen` 前必须运行 `npm run visual:prepare -- --date YYYY-MM-DD`，由脚本重新校验受控路径、SHA、字节数、MIME 与文件头，并物化为 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 下的 `.png/.jpg/.webp`。必须把命令输出的绝对 `referencedImagePaths` 传给生图工具，`relativePath` 仅供展示；禁止直接上传 `.bin` 或手工改后缀。
 - **视觉事实清单**：论文视觉任务的 `generationContext.qaClaims` 固定包含完整英文标题、四个必要内容区、方法证据、带数字实验声明、局限和参考图 caption。提示词与逐图目检都必须逐项核对这些事实，不能只依赖自由文本摘要。
-- **视觉成品唯一归档**：Agent 若先把内置 `image_gen` 输出复制到 `data/archive/<日期>/visual-summaries/`，必须仍通过 `visual-summary-state.js record` 登记；`record` 会按 manifest 的排名、论文 ID 和标题 slug 写入唯一 canonical 文件名，并自动删除同目录中由本次调用留下的同排名/同论文 ID 临时 PNG。不得手工保留另一份别名文件；完成后 `npm run visual:status -- --date YYYY-MM-DD` 必须显示 `10/10`，目录中每篇论文只能有一个 PNG，另加一张 `00-digest-cover-<日期>.png`。
+- **视觉成品唯一归档**：Agent 若先把内置 `image_gen` 输出复制到 `data/archive/<日期>/visual-summaries/`，必须仍通过 `visual-summary-state.js record` 登记；`record` 会按 manifest 的排名、论文 ID 和标题 slug 写入唯一 canonical 文件名，并自动删除同目录中由本次调用留下的同排名/同论文 ID 临时 PNG。不得手工保留另一份别名文件；完成后 `npm run visual:status -- --date YYYY-MM-DD` 必须显示实际完成数（最多 `10/10`），目录中每篇论文只能有一个 PNG，另加一张 `00-digest-cover-<日期>.png`。
 - **分析来源与发布门禁**：结果必须保存 `analysisSource`、全文/实际输入字符数、截断状态、来源 SHA-256、抓取告警和置信度。来源指纹变化时清除主分析及下游 checkpoint。仅摘要分析默认禁止发布；人工确认后必须显式设置 `allowAbstractAnalysisPublish: true`，博客同时显示醒目降级提示。最新一次重分析失败时禁止用陈旧正文发布。
 - **评分稳定性**：最终评分审计默认低温 `0.1`（`PD_SCORING_AUDIT_TEMPERATURE`），副模型图片计划默认 `0.2`（`PD_IMAGE_PLAN_TEMPERATURE`）。送审输入必须移除旧“评分理由”段但保留正文和证据账本，禁止模型照抄待纠正理由；跨维度校验失败须反馈具体违规分句。评分 manifest 必须保留模型、温度、prompt 模板哈希、证据哈希、尝试次数、前后总分/差值和最终八维 JSON；变化超过 0.5 分必须打印稳定性告警，指纹变化时只失效评分及插图阶段。
 - **副模型日志**：插图筛选必须记录 `[secondary]` 详细输入/输出摘要（模型、协议、endpoint/key 来源、候选和下载数量、图片安全标签/MIME/负载、Prompt/响应长度、活跃请求时长、计划解析状态、`paragraph_id` 实际命中、旧 anchor 兼容命中、拒绝原因和最终选图），只能记录 key 来源，严禁记录 API key 内容。统一日志必须是 UTF-8 纯文本、唯一文件名和 `0600` 权限；每个非空物理行均须以毫秒级北京时间戳（`[YYYY-MM-DD HH:mm:ss.SSS+08:00]`）开头，并脱敏认证头、Cookie、token、secret、password、任意已配置密钥实际值和 URL userinfo；不得轮转、限量或自动清理。

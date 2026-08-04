@@ -54,7 +54,7 @@ ls -lt content/posts | head -20
 ```
 
 Possible causes:
-- Only `generate-blog.py` or `review-blog.py` ran; an explicit `push-blog.py` invocation is required for remote publication
+- The request was explicitly limited to generation or review; a normal dated-digest run also authorizes the separate `push-blog.py` stage
 - `push-blog.py` cannot find a review receipt or a reviewed file SHA-256 changed; run `review-blog.py` again
 - Data file is empty or paper analysis failed
 - Target date file already exists with identical content
@@ -81,13 +81,13 @@ Possible causes:
 
 ### 12.6 HuggingFace Fetch Returns Empty
 
-- Check the project-root `.env` contains both `HTTPS_PROXY=http://127.0.0.1:7897` and `HTTP_PROXY=http://127.0.0.1:7897`; if the local proxy provides SOCKS, also set `ALL_PROXY=socks5h://127.0.0.1:7897`
+- Check the project-root `.env` contains at least one of `HTTPS_PROXY=http://127.0.0.1:7897` or `HTTP_PROXY=http://127.0.0.1:7897`; if the local proxy provides SOCKS, also set `ALL_PROXY=socks5h://127.0.0.1:7897`
 - Run `node scripts/fetch-huggingface-papers.js` **outside the sandbox**. A sandbox cannot reach the local `127.0.0.1:7897` proxy, so that result does not diagnose HuggingFace or the proxy
 - `fetch-huggingface-papers.js` uses `curl`; ensure it is available. The script deliberately errors without project proxy configuration to avoid pseudo-success empty output
 
 ### 12.6.1 arXiv Fetch or Full-Text Download Fails
 
-- arXiv metadata, HTML, PDF and images all require the project `.env` `HTTPS_PROXY` / `HTTP_PROXY`. Both must be `http://` or `https://` HTTP CONNECT URLs; SOCKS `ALL_PROXY` alone is insufficient
+- arXiv metadata, HTML, PDF and images all require at least one project `.env` `HTTPS_PROXY` or `HTTP_PROXY` value. The configured value must be an `http://` or `https://` HTTP CONNECT URL; SOCKS `ALL_PROXY` alone is insufficient
 - Verify outside the sandbox with `node scripts/quick-test.js` or the full workflow. Sandbox loopback failure is an environment limitation
 - LLM routing is independent: ensure every Node LLM request remains `agent: false` and never receives a proxy agent/dispatcher
 

@@ -72,6 +72,7 @@ audio-paper-digest/
 # 1. 安装依赖
 npm install
 pip3 install -r requirements.txt
+# Node 版本要求：>=20.18.1 <21 或 >=22.3.0；Python 依赖包含 Pillow
 
 # 2. 配置 API Key（写入 `.env`）
 #    主模型（文本分析，必填）
@@ -126,6 +127,8 @@ npm run batch
 
 # 只读校验当前 JSON 数据结构（含筛选决策缓存一致性）
 npm run validate:data
+# 没有运行数据的干净 checkout 才使用：
+# npm run validate:data -- --allow-empty
 npm run keyword:recall
 npm run digest:status -- --date YYYY-MM-DD
 

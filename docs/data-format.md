@@ -449,7 +449,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 - `dataSha256` 绑定标题、论文数量、热门方向及排名上下文，`promptSha256` 绑定 `prompts/digest-cover.md`；任一变化只使封面失效，不影响论文长图。
 - 会议流程的 category 自动取自 generation manifest；它会改变标题并进入 `dataSha256`，避免会议汇总图与博客标题不一致，无需给 status 另传参数。
 - manifest 可保存 `arxivId` 以稳定指纹和排序，但 prompt 明确禁止把论文 ID 渲染到封面；排名展示完整英文标题、分数和主方向。
-- 论文长图和汇总封面生成后直接进入 `data/archive/<日期>/visual-summaries/`；旧版 current 资产仅在 PNG/SHA 校验通过且归档目标无冲突时迁移。历史批次中不属于最终 TOP10 的旧卡片在同一目录平铺命名为 `unranked-<paper-id>-<kind>.png`，避免虚构排行榜编号。两类图片共享最小尺寸、纵横比、大小和 SHA 门禁，实际生成像素不写死；缺失、失败、损坏、过期或存在重复排行榜 PNG 时状态门禁失败，但不回滚博客发布。
+- 论文长图和汇总封面生成后直接进入 `data/archive/<日期>/visual-summaries/`；旧版 current 资产仅在 PNG/SHA 校验通过且归档目标无冲突时迁移。历史批次中不属于最终 TOP10 的旧卡片在同一目录平铺命名为 `unranked-<paper-id>-<kind>.png`，并写入视觉 manifest 的 `legacyUnrankedAssets` 路径/SHA 账本，避免虚构排行榜编号或留下未登记文件。两类图片共享最小尺寸、纵横比、大小和 SHA 门禁，实际生成像素不写死；缺失、失败、损坏、过期或存在重复/未登记 PNG 时状态门禁失败，但不回滚博客发布。
 
 ### 5.8.1 `data/current/digest-run-reports/YYYY-MM-DD.json`
 

@@ -1001,7 +1001,28 @@ function validateCurrentDataFiles(files = Config.FILES) {
     ];
 }
 
-function main() {
+function hasAnyCurrentDataFiles(files = Config.FILES) {
+    return [
+        files.papers,
+        files.fetchCheckpoint,
+        files.rawCandidates,
+        files.filterDecisions,
+        files.filteredPapers,
+        files.deepAnalysisResult
+    ].some(filePath => filePath && fs.existsSync(filePath));
+}
+
+function main(argv = process.argv.slice(2)) {
+    const allowEmpty = argv.includes('--allow-empty');
+    const unknown = argv.filter(arg => arg !== '--allow-empty');
+    if (unknown.length > 0) {
+        console.error(`未知参数: ${unknown.join(', ')}`);
+        process.exit(2);
+    }
+    if (!allowEmpty && !hasAnyCurrentDataFiles()) {
+        console.error('当前 data/current 没有可校验的运行数据；若这是没有运行数据的干净 checkout，请显式传 --allow-empty');
+        process.exit(1);
+    }
     const issues = validateCurrentDataFiles();
     if (issues.length > 0) {
         console.error('数据文件校验失败:');
@@ -1023,5 +1044,6 @@ module.exports = {
     validatePaperListFile,
     validateFilterDecisionsFile,
     validateCurrentDataFiles,
-    validateSourceHealth
+    validateSourceHealth,
+    hasAnyCurrentDataFiles
 };

@@ -314,7 +314,8 @@ function validateReferenceImageBytes(raw, mime) {
 function prepareVisualReferenceInputs(manifest, {
     targetDate,
     paperId = null,
-    outputRoot = path.join(Config.CURRENT_DIR, 'visual-reference-inputs')
+    outputRoot = path.join(Config.CURRENT_DIR, 'visual-reference-inputs'),
+    manifestPath = null
 } = {}) {
     targetDate = validateDate(targetDate || manifest?.batchDate);
     if (manifest?.batchDate !== targetDate || typeof manifest?.papers !== 'object') {
@@ -326,7 +327,7 @@ function prepareVisualReferenceInputs(manifest, {
         throw new Error(`manifest 中不存在论文: ${requestedId}`);
     }
 
-    return Object.values(manifest.papers)
+    const prepared = Object.values(manifest.papers)
         .filter(paper => !requestedId || normalizedId(paper.normalizedArxivId || paper.arxivId) === requestedId)
         .sort((a, b) => a.rank - b.rank)
         .map(paper => {
@@ -373,6 +374,71 @@ function prepareVisualReferenceInputs(manifest, {
                 referenceImages: references
             };
         });
+
+    const preparedWithReferences = prepared.filter(item => item.referenceImages.length > 0);
+    if (manifestPath && preparedWithReferences.length > 0) {
+        updateJsonFileLocked(manifestPath, current => {
+            if (!current || current.version !== MANIFEST_VERSION || current.batchDate !== targetDate) {
+                throw new Error('视觉摘要 manifest 在参考图准备期间发生变化，请重新执行 prepare');
+            }
+            const next = structuredClone(current);
+            for (const item of preparedWithReferences) {
+                const paper = next.papers?.[normalizedId(item.arxivId)];
+                if (!paper) throw new Error(`参考图准备记录缺少论文: ${item.arxivId}`);
+                const references = item.referenceImages.map(reference => ({
+                    mime: reference.mime,
+                    sha256: reference.sha256,
+                    preparedPath: reference.preparedPath,
+                    relativePath: reference.relativePath
+                }));
+                paper.preparedReferenceInputs = {
+                    batchDate: targetDate,
+                    manifestGeneration: Number.isInteger(current.generation) ? current.generation : 0,
+                    references,
+                    sha256: stableSha256({
+                        batchDate: targetDate,
+                        arxivId: normalizedId(item.arxivId),
+                        references
+                    }),
+                    preparedAt: getBeijingISOString()
+                };
+            }
+            next.updatedAt = getBeijingISOString();
+            return next;
+        }, { allowMissing: false });
+    }
+    return prepared;
+}
+
+function assertPreparedReferenceInputs(paper, targetDate, manifestGeneration) {
+    const expectedReferences = Array.isArray(paper?.generationContext?.referenceImages)
+        ? paper.generationContext.referenceImages
+        : [];
+    if (expectedReferences.length === 0) return;
+    const prepared = paper.preparedReferenceInputs;
+    if (!prepared || prepared.batchDate !== targetDate
+        || prepared.manifestGeneration !== (Number.isInteger(manifestGeneration) ? manifestGeneration : 0)
+        || !Array.isArray(prepared.references)) {
+        throw new Error(`视觉参考图尚未通过 prepare，禁止登记视觉摘要: ${normalizedId(paper)}`);
+    }
+    const references = prepared.references;
+    const expectedSha = stableSha256({
+        batchDate: targetDate,
+        arxivId: normalizedId(paper),
+        references
+    });
+    if (prepared.sha256 !== expectedSha || references.length !== expectedReferences.length) {
+        throw new Error(`视觉参考图 prepare 指纹不匹配，禁止登记视觉摘要: ${normalizedId(paper)}`);
+    }
+    for (const reference of references) {
+        const filePath = path.resolve(String(reference.preparedPath || ''));
+        if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+            throw new Error(`视觉参考图 prepared 文件缺失: ${reference.preparedPath}`);
+        }
+        if (sha256Buffer(fs.readFileSync(filePath)) !== reference.sha256) {
+            throw new Error(`视觉参考图 prepared 文件 SHA 不匹配: ${reference.preparedPath}`);
+        }
+    }
 }
 
 function analysisSha256(paper) {
@@ -594,6 +660,22 @@ function assertVisualArchiveUniqueness(manifest) {
         return true;
     }
     if (fs.lstatSync(root).isSymbolicLink()) throw new Error(`视觉摘要归档目录不得是符号链接: ${root}`);
+    for (const item of manifest?.legacyUnrankedAssets || []) {
+        const relative = typeof item === 'string' ? item : item?.assetPath;
+        const resolved = path.resolve(Config.PROJECT_ROOT, String(relative || ''));
+        const relativeToRoot = path.relative(root, resolved);
+        if (!String(relativeToRoot).startsWith('unranked-')
+            || path.extname(relativeToRoot).toLowerCase() !== '.png'
+            || path.dirname(resolved) !== path.resolve(root)
+            || !fs.existsSync(resolved)) {
+            throw new Error(`视觉摘要 legacy unranked 资产路径无效或缺失: ${relative}`);
+        }
+        if (typeof item === 'object' && item.assetSha256
+            && sha256Buffer(fs.readFileSync(resolved)) !== item.assetSha256) {
+            throw new Error(`视觉摘要 legacy unranked 资产 SHA 不匹配: ${relative}`);
+        }
+        expected.add(resolved);
+    }
     const extras = [];
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
         if (!entry.isFile() || entry.isSymbolicLink() || path.extname(entry.name).toLowerCase() !== '.png') continue;
@@ -602,7 +684,7 @@ function assertVisualArchiveUniqueness(manifest) {
             new RegExp(`^\\d{2}-${regexEscape(id)}-.+\\.png$`, 'i').test(entry.name)
         ));
         const looksRanked = /^\d{2}-\d{4}\.\d{4,5}-.+\.png$/i.test(entry.name);
-        if ((isKnownPaperAsset || looksRanked) && !expected.has(path.resolve(root, entry.name))) {
+        if (!expected.has(path.resolve(root, entry.name))) {
             extras.push(entry.name);
         }
     }
@@ -858,7 +940,25 @@ function archiveLegacyVisualManifestAssets({ targetDate, manifestPath, generatio
         return next;
     }, { allowMissing: false });
     const extraCount = archiveRemainingLegacyVisualAssets(targetDate, migrated);
-    return { manifest: migrated, rankedCount: ranked.length, extraCount };
+    const archiveRoot = path.resolve(Config.FILES.visualSummaryAssetDir, targetDate, 'visual-summaries');
+    const legacyUnrankedAssets = fs.existsSync(archiveRoot)
+        ? fs.readdirSync(archiveRoot, { withFileTypes: true })
+            .filter(entry => entry.isFile() && !entry.isSymbolicLink()
+                && entry.name.startsWith('unranked-')
+                && path.extname(entry.name).toLowerCase() === '.png')
+            .map(entry => {
+                const absolute = path.join(archiveRoot, entry.name);
+                return {
+                    assetPath: path.relative(Config.PROJECT_ROOT, absolute).split(path.sep).join('/'),
+                    assetSha256: sha256Buffer(fs.readFileSync(absolute))
+                };
+            })
+        : [];
+    const finalManifest = updateJsonFileLocked(manifestPath, current => ({
+        ...current,
+        legacyUnrankedAssets
+    }), { allowMissing: false });
+    return { manifest: finalManifest, rankedCount: ranked.length, extraCount };
 }
 
 function buildGenerationContext(paper) {
@@ -1143,6 +1243,9 @@ function planVisualSummaries({
             promptSha256: currentPromptSha,
             updatedAt: getBeijingISOString(),
             papers: planned,
+            legacyUnrankedAssets: Array.isArray(current?.legacyUnrankedAssets)
+                ? current.legacyUnrankedAssets
+                : [],
             skippedPapers
         });
         const obsoleteVisualAssets = collectObsoleteCompletedVisualAssets(current, nextManifest);
@@ -1239,6 +1342,7 @@ function recordVisualSummaryCard({
         if (currentCard.status === 'complete') {
             throw new Error(`视觉摘要已经完成，拒绝旧任务覆盖: ${id}/${kind}`);
         }
+        assertPreparedReferenceInputs(paper, current.batchDate, current.generation);
 
         const target = assertSafeAssetTarget(
             visualSummaryAssetPath(current.batchDate, id, kind, paper.rank, paper.title || ''),
@@ -1368,6 +1472,7 @@ function main(argv = process.argv.slice(2)) {
         return;
     }
     if (command === 'archive-legacy') {
+        assertPublishedBlogReceipt(options.date, options.receipt);
         const result = archiveLegacyVisualManifestAssets({
             targetDate: options.date,
             manifestPath: options.manifest,
@@ -1384,7 +1489,8 @@ function main(argv = process.argv.slice(2)) {
         assertVisualManifestCurrent(manifest, publication, targetDate);
         const prepared = prepareVisualReferenceInputs(manifest, {
             targetDate,
-            paperId: options.paper
+            paperId: options.paper,
+            manifestPath: options.manifest || visualSummaryManifestPath(targetDate)
         });
         console.log(`已准备视觉参考图输入：${prepared.length} 篇`);
         for (const item of prepared) console.log(JSON.stringify(item));

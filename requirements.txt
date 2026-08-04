@@ -1,3 +1,4 @@
 requests
 playwright
 PyYAML
+Pillow>=10.0,<12.0

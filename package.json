@@ -6,7 +6,7 @@
   "scripts": {
     "digest:prepare": "bash run-daily-digest.sh",
     "fetch": "node scripts/full-fetch.js",
-    "test": "node --test tests/*.test.js",
+    "test": "node --test --test-concurrency=1 tests/*.test.js",
     "deep": "node scripts/deep-analysis-only.js",
     "reanalyze": "node scripts/reanalyze.js",
     "batch": "node scripts/batch-analyze.js",
@@ -58,6 +58,6 @@
     "pdf-parse": "^2.4.5"
   },
   "engines": {
-    "node": ">=20.18.1"
+    "node": ">=20.18.1 <21 || >=22.3.0"
   }
 }

@@ -253,12 +253,11 @@ function initializeJsonFileLocked(filePath, fallbackValue, options = {}) {
 
 function isCompleteAnalysisContent(paper) {
     if (!hasValidAnalysisBody(paper)) return false;
-    if (paper.analysisManifest?.version === 1) {
-        const stages = paper.analysisManifest.stages;
-        if (!stages || typeof stages !== 'object' || REQUIRED_RECOVERY_STAGES.some(stage =>
-            !COMPLETE_RECOVERY_STATUSES.has(stages[stage]?.status))) {
-            return false;
-        }
+    if (!paper.analysisManifest || paper.analysisManifest.version !== 1) return false;
+    const stages = paper.analysisManifest.stages;
+    if (!stages || typeof stages !== 'object' || REQUIRED_RECOVERY_STAGES.some(stage =>
+        !COMPLETE_RECOVERY_STATUSES.has(stages[stage]?.status))) {
+        return false;
     }
     return true;
 }
@@ -368,6 +367,11 @@ async function analyzePaperWithRetry(paper, options = {}) {
                         imageUrls: analyzed.imageUrls || paper.imageUrls || [],
                         allImageUrls: analyzed.allImageUrls || paper.allImageUrls || [],
                         imageManifest: analyzed.imageManifest || paper.imageManifest || null,
+                        analysisRecoveryImageManifest: analyzed.analysisRecoveryImageManifest
+                            || paper.analysisRecoveryImageManifest
+                            || analyzed.imageManifest
+                            || paper.imageManifest
+                            || null,
                         analysisSource: analyzed.analysisSource || paper.analysisSource || 'unknown',
                         sourceId: analyzed.sourceId || paper.sourceId || '',
                         sourceTextChars: analyzed.sourceTextChars ?? paper.sourceTextChars ?? 0,
@@ -708,7 +712,9 @@ function mergePapersById(existingPapers, newPapers, options = {}) {
                     ...(p.analysisManifest ? { analysisManifest: p.analysisManifest } : {}),
                     ...(typeof p.analysisCheckpoint === 'string' ? { analysisCheckpoint: p.analysisCheckpoint } : {}),
                     ...(p.analysisStageCheckpoints ? { analysisStageCheckpoints: p.analysisStageCheckpoints } : {}),
-                    ...(p.imageManifest ? { analysisRecoveryImageManifest: p.imageManifest } : {}),
+                    ...(p.analysisRecoveryImageManifest || p.imageManifest
+                        ? { analysisRecoveryImageManifest: p.analysisRecoveryImageManifest || p.imageManifest }
+                        : {}),
                     latestAnalysisAttemptError: p.error || '分析未完成',
                     latestAnalysisAttemptAt: getBeijingISOString()
                 });

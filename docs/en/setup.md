@@ -36,8 +36,10 @@ Benefits of this design:
 | `PD_REANALYZE_CONCURRENCY` | Re-analysis concurrency | 3 (matches `ANALYSIS_CONFIG.concurrency`) |
 | `PD_FILTER_BATCH_SIZE` | LLM filtering batch size | 5 |
 | `PD_ARXIV_MAX_RESULTS` | Number of papers to fetch per arXiv category | 100 |
+| `PD_KEYWORD_PREFILTER_ENABLED` | Enable the high-recall keyword prefilter; set to `0` to disable temporarily | 1 |
 | `PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS` | Cumulative backoff budget per category for HTTP 429 responses, in milliseconds | 120000 |
 | `PD_IMAGE_MAX_BYTES` | Raw byte-size limit per image for deep analysis | 6291456 |
+| `PD_IMAGE_DOWNLOAD_TIMEOUT_MS` | Per-candidate-image download timeout in milliseconds | 60000 |
 | `PD_IMAGE_MAX_BASE64_CHARS` | Base64 character limit per image for deep analysis | 8388608 |
 | `PD_IMAGE_TOTAL_BASE64_CHARS` | Total image base64 character limit per paper | 20971520 |
 | `PD_ARXIV_FETCH_TIMEOUT_MS` | arXiv HTML/image discovery timeout in milliseconds | 60000 |
@@ -45,7 +47,8 @@ Benefits of this design:
 | `PD_ARXIV_PDF_MAX_BYTES` | Maximum arXiv PDF fallback size | 52428800 |
 | `PD_SCORING_AUDIT_TEMPERATURE` | Final scoring-audit temperature | 0.1 |
 | `PD_IMAGE_PLAN_TEMPERATURE` | Secondary image-plan temperature | 0.2 |
-| `PD_IMAGE_INSERTION_MAX` | Maximum inserted high-value figures per paper | 4 |
+| `PD_IMAGE_INSERTION_MAX` | Default maximum inserted high-value figures per paper; positive integers may override it | 4 |
+| `PD_VISUAL_CJK_FONT` | Absolute path to the CJK font used by the deterministic visual debug renderer | Auto-detected when unset |
 | `PAPER_DIGEST_ENABLE_FILE_LOGS` / `PD_ENABLE_FILE_LOGS` | Backward-compatible setting; file logs are now enabled by default | Enabled |
 | `PAPER_DIGEST_DISABLE_FILE_LOGS` / `PD_DISABLE_FILE_LOGS` | Set to `1` to force-disable file logs | Disabled |
 
@@ -104,12 +107,11 @@ The Node/Python loaders clear same-name inherited project variables before loadi
 
 | Variable | Description |
 |----------|-------------|
-| `HTTPS_PROXY` | **Required** HTTP CONNECT proxy for arXiv Node fetches, for example `http://127.0.0.1:7897` |
-| `HTTP_PROXY` | **Required** HTTP CONNECT proxy, normally the same as `HTTPS_PROXY` |
+| `HTTPS_PROXY` / `HTTP_PROXY` | **At least one required** HTTP CONNECT proxy for arXiv Node fetches, for example `http://127.0.0.1:7897` |
 | `ALL_PROXY` | Optional SOCKS/global proxy for HuggingFace `curl`, for example `socks5h://127.0.0.1:7897` |
 | `NO_PROXY` | Local-address allow list, for example `localhost,127.0.0.1,::1` |
 
-Fetch proxy configuration is mandatory: arXiv metadata, HTML/PDF/images, HuggingFace Papers, historical backfill, and WeChat's arXiv image downloads reject direct fallback when it is missing. Node and Python HTTP fetches only support HTTP CONNECT, so `HTTPS_PROXY` / `HTTP_PROXY` cannot be SOCKS URLs; HuggingFace `curl` may additionally use `ALL_PROXY=socks5h://...`, which is passed explicitly while clearing `NO_PROXY` bypasses. LLM requests always use direct connections and never use the fetch proxy. Proxy values are loaded only from the project-root `.env`; same-name shell/IDE values are cleared and macOS `scutil` is not consulted. Commands that need a local proxy must run outside the sandbox, because sandbox loopback cannot reach `127.0.0.1`.
+Fetch proxy configuration is mandatory: arXiv metadata, HTML/PDF/images, HuggingFace Papers, historical backfill, and WeChat's arXiv image downloads reject direct fallback when it is missing. At least one of `HTTPS_PROXY` or `HTTP_PROXY` must be an HTTP CONNECT URL; neither may be a SOCKS URL. HuggingFace `curl` may additionally use `ALL_PROXY=socks5h://...`, which is passed explicitly while clearing `NO_PROXY` bypasses. LLM requests always use direct connections and never use the fetch proxy. Proxy values are loaded only from the project-root `.env`; same-name shell/IDE values are cleared and macOS `scutil` is not consulted. Commands that need a local proxy must run outside the sandbox, because sandbox loopback cannot reach `127.0.0.1`.
 
 Blog generation, review, and push must also run outside the sandbox, including the generation-only stage. `generate-blog.py`, `review-blog.py`, `push-blog.py`, and compatibility `publish-to-blog.py` reject the reliable `CODEX_SANDBOX` marker; the elevation wrapper may preserve the network-disabled marker, so it cannot independently reject an external runtime.
 
@@ -184,10 +186,10 @@ All main scripts write to both the terminal and `logs/*.log` by default. To disa
 
 ### 9.1 Dependencies
 
-- **Node.js** >= 20.18.1 (`node` / `npm`)
+- **Node.js** `>=20.18.1 <21 || >=22.3.0` (`node` / `npm`; Node 21 is outside the locked dependency support range)
 - **Python** 3.x (`python3` / `pip3`)
 - Node.js dependency: `cheerio` (arXiv HTML structured parsing)
-- Python third-party libraries: see the root `requirements.txt` (`requests`, `playwright`, `PyYAML`). `PyYAML` is required by the deterministic blog-frontmatter gate, which fails closed when it is unavailable
+- Python third-party libraries: see the root `requirements.txt` (`requests`, `playwright`, `PyYAML`, `Pillow`). `PyYAML` is required by the deterministic blog-frontmatter gate, and `Pillow` is required by the visual debug renderer and its tests; relevant stages fail closed when unavailable
 
 ### 9.2 Initialization
 

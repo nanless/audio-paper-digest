@@ -36,6 +36,7 @@
 | `PD_REANALYZE_CONCURRENCY` | 重分析并发度 | 3（与 `ANALYSIS_CONFIG.concurrency` 一致） |
 | `PD_FILTER_BATCH_SIZE` | LLM 筛选每批篇数 | 5 |
 | `PD_ARXIV_MAX_RESULTS` | arXiv 每类抓取数量 | 100 |
+| `PD_KEYWORD_PREFILTER_ENABLED` | 是否启用高召回关键词预筛；设为 `0` 可临时禁用 | 1 |
 | `PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS` | 单类遇到 HTTP 429 时的累计退避上限（毫秒） | 120000 |
 | `PD_IMAGE_MAX_BYTES` | 深度分析单张图片原始字节上限 | 6291456 |
 | `PD_IMAGE_DOWNLOAD_TIMEOUT_MS` | 深度分析单张候选图片下载超时（毫秒） | 60000 |
@@ -46,7 +47,8 @@
 | `PD_IMAGE_PLAN_TEMPERATURE` | 副模型图片计划温度 | 0.2 |
 | `PD_IMAGE_MAX_BASE64_CHARS` | 深度分析单张图片 base64 字符上限 | 8388608 |
 | `PD_IMAGE_TOTAL_BASE64_CHARS` | 深度分析单篇论文所有图片 base64 总上限 | 20971520 |
-| `PD_IMAGE_INSERTION_MAX` | 副模型每篇最多实际插入的高价值图片数 | 4 |
+| `PD_IMAGE_INSERTION_MAX` | 副模型每篇默认最多实际插入的高价值图片数；可用正整数覆写 | 4 |
+| `PD_VISUAL_CJK_FONT` | 本地确定性视觉调试渲染器使用的 CJK 字体绝对路径 | 未设置时自动探测 |
 | `PAPER_DIGEST_ENABLE_FILE_LOGS` / `PD_ENABLE_FILE_LOGS` | 兼容旧配置；文件日志现在默认启用 | 已启用 |
 | `PAPER_DIGEST_DISABLE_FILE_LOGS` / `PD_DISABLE_FILE_LOGS` | 设为 `1` 时强制禁用文件日志 | 未启用 |
 
@@ -107,12 +109,11 @@ Node/Python 加载器会先清除外层进程中的同名项目变量，再加�
 
 | 变量 | 说明 |
 |------|------|
-| `HTTPS_PROXY` | **必填**。arXiv Node 抓取使用的 HTTP CONNECT 代理，例如 `http://127.0.0.1:7897` |
-| `HTTP_PROXY` | **必填**。与 `HTTPS_PROXY` 相同的 HTTP CONNECT 代理 |
+| `HTTPS_PROXY` / `HTTP_PROXY` | **至少配置一项**。arXiv Node 抓取使用的 HTTP CONNECT 代理，例如 `http://127.0.0.1:7897` |
 | `ALL_PROXY` | 可选。HuggingFace `curl` 可使用的 SOCKS/全局代理，例如 `socks5h://127.0.0.1:7897` |
 | `NO_PROXY` | 本地地址白名单，例如 `localhost,127.0.0.1,::1` |
 
-抓取代理是必需项：arXiv 元数据、HTML/PDF/图片和 HuggingFace Papers 都会拒绝无代理直连；历史补录与微信的 arXiv 图片下载也使用同一项目代理。Node/Python 的 HTTP 请求只支持 HTTP CONNECT，因此 `HTTPS_PROXY` / `HTTP_PROXY` 不可填 SOCKS URL；HuggingFace 的 Node `curl` 可以额外使用 `ALL_PROXY=socks5h://...`，调用时会显式指定代理并清空 `NO_PROXY` 绕过列表。LLM 请求始终直连，不会走抓取代理。代理变量只从项目根 `.env` 加载；脚本会清除 shell/IDE 继承的同名代理变量，不再读取 macOS `scutil` 系统代理。使用本机代理时，抓取、深度分析和重分析命令必须在沙箱外运行，沙箱内无法连接 `127.0.0.1` 不能作为网络故障依据。
+抓取代理是必需项：arXiv 元数据、HTML/PDF/图片和 HuggingFace Papers 都会拒绝无代理直连；历史补录与微信的 arXiv 图片下载也使用同一项目代理。`HTTPS_PROXY` 或 `HTTP_PROXY` 至少配置一项，且必须是 HTTP CONNECT 地址；HuggingFace 的 Node `curl` 可以额外使用 `ALL_PROXY=socks5h://...`，调用时会显式指定代理并清空 `NO_PROXY` 绕过列表。LLM 请求始终直连，不会走抓取代理。代理变量只从项目根 `.env` 加载；脚本会清除 shell/IDE 继承的同名代理变量，不再读取 macOS `scutil` 系统代理。使用本机代理时，抓取、深度分析和重分析命令必须在沙箱外运行，沙箱内无法连接 `127.0.0.1` 不能作为网络故障依据。
 
 博客的生成、审查和推送同样必须在沙箱外运行，即使生成阶段没有直接调用 LLM。`generate-blog.py`、`review-blog.py`、`push-blog.py` 与兼容 `publish-to-blog.py` 会拒绝可靠沙箱标志 `CODEX_SANDBOX`；沙箱外权限包装可能保留网络禁用标志，不能单独据此拒绝执行。这样可确保后续 LLM 审查、图片下载、Hugo 和 Git 网络操作不会因沙箱受限而产生误判。
 
@@ -187,10 +188,10 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 
 ### 9.1 依赖
 
-- **Node.js** ≥ 20.18.1（`node` / `npm`）
+- **Node.js** `>=20.18.1 <21 || >=22.3.0`（`node` / `npm`；Node 21 不在锁定依赖支持范围内）
 - **Python** 3.x（`python3` / `pip3`）
 - Node.js 依赖：`cheerio`（arXiv HTML 结构化解析）
-- Python 第三方库：见根目录 `requirements.txt`（`requests`、`playwright`、`PyYAML`）。`PyYAML` 是博客 frontmatter 确定性门禁的必需依赖，缺失时生成/review 必须失败关闭
+- Python 第三方库：见根目录 `requirements.txt`（`requests`、`playwright`、`PyYAML`、`Pillow`）。`PyYAML` 是博客 frontmatter 确定性门禁的必需依赖，`Pillow` 是视觉调试渲染器和对应测试的必需依赖，缺失时相关阶段必须失败关闭
 
 ### 9.2 初始化
 

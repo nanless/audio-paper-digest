@@ -456,6 +456,7 @@ function main(argv = process.argv.slice(2)) {
         return;
     }
     if (command === 'archive-legacy') {
+        assertPublishedBlogReceipt(options.date, options.receipt);
         archiveLegacyDigestCover({ targetDate: options.date, manifestPath: options.manifest });
         console.log('历史汇总封面已按日期归档');
         return;

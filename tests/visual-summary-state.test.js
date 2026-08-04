@@ -537,7 +537,11 @@ describe('visual summary state', () => {
             const root = path.dirname(oldPath);
             fs.writeFileSync(path.join(root, '00-digest-cover-2026-07-13.png'), PNG);
             fs.writeFileSync(path.join(root, 'unranked-2607.99999-infographic.png'), PNG);
-            assert.strictEqual(assertVisualArchiveUniqueness(replanned), true);
+            assert.throws(
+                () => assertVisualArchiveUniqueness(replanned),
+                /未登记或重复/
+            );
+            fs.unlinkSync(path.join(root, 'unranked-2607.99999-infographic.png'));
             fs.writeFileSync(path.join(root, '02-2607.12345-duplicate.png'), PNG);
             assert.throws(
                 () => assertVisualArchiveUniqueness(replanned),

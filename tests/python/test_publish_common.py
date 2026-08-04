@@ -24,6 +24,7 @@ from publish_common import (  # noqa: E402
     fix_empty_markdown_links,
     fix_yaml_unbalanced_quotes,
     load_papers,
+    paper_batch_date,
     call_publish_llm_api,
     count_blocking_review_issues,
     resolve_publish_parsed,
@@ -307,6 +308,22 @@ confidence: 中
             self.assertEqual(list_papers[0]['arxivId'], '2607.00002')
             with self.assertRaises(ValueError):
                 load_papers(bad_file)
+
+    def test_paper_batch_date_prefers_immutable_batch_and_validates_legacy_timestamp(self):
+        self.assertEqual(
+            paper_batch_date({
+                'arxivId': '2607.00001',
+                'fetchBatchDate': '2026-07-13',
+                'fetchedAt': '2026-07-14T00:00:00.000+08:00',
+            }),
+            '2026-07-13',
+        )
+        self.assertEqual(
+            paper_batch_date({'fetchedAt': '2026-07-13T10:00:00.000+08:00'}),
+            '2026-07-13',
+        )
+        with self.assertRaisesRegex(PublishDataValidationError, '严格北京时间戳'):
+            paper_batch_date({'arxivId': 'bad', 'fetchedAt': '2026-07-13T02:00:00.000Z'})
 
     def test_publish_preflight_requires_complete_consistent_scoring(self):
         paper = complete_paper()

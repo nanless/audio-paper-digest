@@ -37,7 +37,9 @@ jobs:
         run: npm test
 
       - name: Validate current data schema
-        run: npm run validate:data
+        # data/ is intentionally gitignored; the empty-checkout mode keeps CI
+        # useful while the unit tests exercise representative current files.
+        run: npm run validate:data -- --allow-empty
 
       - name: Check JavaScript syntax
         run: |

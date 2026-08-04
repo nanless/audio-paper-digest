@@ -20,7 +20,7 @@ const {
     normalizeScoreToOneDecimal,
     isOpenSourceScoreAnchor,
     OPEN_SOURCE_SCORE_ANCHORS,
-    detectProxyUrl,
+    detectHttpConnectProxyUrl,
     createProxyDispatcher,
     getBeijingISOString
 } = require('./utils.js');
@@ -78,11 +78,18 @@ const {
 const IMAGE_CACHE_DIR = path.join(CURRENT_DIR, 'image-cache');
 
 function getArxivFetchDispatcher() {
-    const proxyUrl = detectProxyUrl();
+    const proxyUrl = detectHttpConnectProxyUrl();
     if (!proxyUrl) {
-        throw new Error('arXiv 全文、PDF 与图片抓取必须通过当前项目 .env 中的 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY，拒绝直连');
+        const error = new Error('arXiv 全文、PDF 与图片抓取必须通过当前项目 .env 中 HTTPS_PROXY/HTTP_PROXY 配置 HTTP CONNECT 代理，拒绝直连或仅使用 SOCKS ALL_PROXY');
+        error.code = 'PROXY_CONFIG_ERROR';
+        throw error;
     }
-    return createProxyDispatcher(proxyUrl);
+    try {
+        return createProxyDispatcher(proxyUrl);
+    } catch (error) {
+        error.code = 'PROXY_CONFIG_ERROR';
+        throw error;
+    }
 }
 
 /**
@@ -667,7 +674,8 @@ function buildImageSupplementFingerprint(baseFingerprint, candidateImageInfos, d
 }
 
 function hasActualAnalysisInputChanged(previousSource, currentSource) {
-    return previousSource?.usedTextSha256 !== currentSource?.usedTextSha256;
+    return ['sourceSha256', 'usedTextSha256', 'sourceId', 'analysisSource']
+        .some(field => previousSource?.[field] !== currentSource?.[field]);
 }
 
 function shouldRetainFullTextCheckpoint(paper, previousSource, hasFullText, sourceFetchError) {
@@ -796,7 +804,10 @@ function hasIncompleteRecoveryStage(manifest) {
 function saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest = null) {
     paper.analysisCheckpoint = String(analysis || '');
     paper.analysisManifest = analysisManifest;
-    if (imageManifest) paper.imageManifest = imageManifest;
+    if (imageManifest) {
+        paper.imageManifest = imageManifest;
+        paper.analysisRecoveryImageManifest = imageManifest;
+    }
     paper.analysisStageCheckpoints = paper.analysisStageCheckpoints || {};
     for (const stage of RECOVERY_STAGE_ORDER) {
         if (isRecoveryStageComplete(analysisManifest, stage)
@@ -1492,6 +1503,7 @@ async function fetchArxivImageUrls(arxivId, options = {}) {
                 const html = await response.text();
                 return parseArxivImageInfosFromHtml(html, htmlId, arxivId);
             } catch (e) {
+                if (e.code === 'PROXY_CONFIG_ERROR') throw e;
                 shouldRetry = true;
                 statuses.push(`${htmlId}:${e.name || 'error'}`);
                 console.log(`    [deep] fetchArxivImageUrls ${htmlId} error: ${e.message}`);
@@ -1658,6 +1670,7 @@ async function downloadImageBase64Uncached(imageUrl, maxRetries = 5, maxBytes = 
                 cacheHit: false
             };
         } catch (e) {
+            if (e.code === 'PROXY_CONFIG_ERROR') throw e;
             lastError = e.message;
             if (/exceeds limit/i.test(e.message)) {
                 console.log(`    [deep] 跳过图片 ${fileName}: ${e.message}`);
@@ -1737,6 +1750,7 @@ async function downloadImagesSerial(imageUrls, maxCount, maxBase64Chars, maxTota
                 outcomes.push({ url, status: image?.failureType || 'transient_failure', reason: image?.reason || 'unknown_error' });
             }
         } catch (e) {
+            if (e.code === 'PROXY_CONFIG_ERROR') throw e;
             outcomes.push({ url, status: 'transient_failure', reason: e.message });
         }
     }

@@ -72,6 +72,7 @@ See [`docs/scripts.md`](docs/scripts.md) for each script's functionality, and [`
 # 1. Install dependencies
 npm install
 pip3 install -r requirements.txt
+# Node requirement: >=20.18.1 <21 or >=22.3.0; Python dependencies include Pillow
 
 # 2. Configure API Key (write to `.env`)
 #    Primary model (text analysis, required)
@@ -126,6 +127,8 @@ npm run batch
 
 # Read-only validation for current JSON data files, including filter-decision cache consistency
 npm run validate:data
+# Only for a clean checkout with no runtime data:
+# npm run validate:data -- --allow-empty
 
 # Idempotently plan/resume TOP 10 infographics and the digest image after all blogs publish.
 npm run visual:post-publish -- --date 2026-04-21

@@ -137,15 +137,23 @@ describe('full-fetch helpers', () => {
         const { validateFilterArtifacts, stableContentSha256 } = require('../scripts/full-fetch.js');
         const rawPapers = [{ arxivId: '2607.00001' }, { arxivId: '2607.00002' }];
         const rawPapersSha256 = stableContentSha256(rawPapers);
-        const decisions = {
+        const common = {
             timestamp: '2026-07-10T10:00:00+08:00',
+            batchDate: '2026-07-10',
+            batchId: 'batch-a',
+            candidateFingerprint: 'candidate-a',
+            sourceConfigFingerprint: 'source-a',
+            blogDedupFingerprint: 'blog-a'
+        };
+        const checkpointDir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-filter-consistency-'));
+        const { checkpoint } = writeResumeCheckpoint(checkpointDir, common);
+        const decisions = {
+            ...common,
             filterModel: 'model-a',
             filterPromptHash: 'hash-a',
             filterConfigFingerprint: 'filter-config-a',
-            candidateFingerprint: 'candidate-a',
-            sourceConfigFingerprint: 'source-a',
-            blogDedupFingerprint: 'blog-a',
             rawPapersSha256,
+            fetchSourcesSha256: checkpoint.fetchSourcesSha256,
             stats: { complete: true, totalCandidates: 2, decided: 2 },
             decisions: {
                 '2607.00001': { related: true, inputSha256: buildFilterInputSha256(rawPapers[0]) },
@@ -153,40 +161,38 @@ describe('full-fetch helpers', () => {
             }
         };
         const filtered = {
+            ...common,
             filterModel: 'model-a',
             filterPromptHash: 'hash-a',
             filterConfigFingerprint: 'filter-config-a',
-            candidateFingerprint: 'candidate-a',
-            sourceConfigFingerprint: 'source-a',
-            blogDedupFingerprint: 'blog-a',
             rawPapersSha256,
+            fetchSourcesSha256: checkpoint.fetchSourcesSha256,
             stats: { decisionCount: 2, skippedFromArchive: 0 },
             papers: [{ arxivId: '2607.00001' }]
         };
         const raw = {
-            candidateFingerprint: 'candidate-a',
-            sourceConfigFingerprint: 'source-a',
-            blogDedupFingerprint: 'blog-a',
+            ...common,
             rawPapersSha256,
+            fetchSourcesSha256: checkpoint.fetchSourcesSha256,
             sourceHealth: completeSourceHealth(),
             papers: rawPapers
         };
 
-        assert.strictEqual(validateFilterArtifacts(filtered, decisions, raw), true);
+        assert.strictEqual(validateFilterArtifacts(filtered, decisions, raw, checkpoint), true);
         assert.strictEqual(validateFilterArtifacts(filtered, {
             ...decisions,
             stats: { ...decisions.stats, complete: false }
-        }, raw), false);
-        assert.strictEqual(validateFilterArtifacts({ ...filtered, papers: [] }, decisions, raw), false);
+        }, raw, checkpoint), false);
+        assert.strictEqual(validateFilterArtifacts({ ...filtered, papers: [] }, decisions, raw, checkpoint), false);
         assert.strictEqual(validateFilterArtifacts(filtered, decisions, null), false);
         assert.strictEqual(validateFilterArtifacts({
             ...filtered,
             papers: [{ arxivId: '2607.00002' }]
-        }, decisions, raw), false);
+        }, decisions, raw, checkpoint), false);
         assert.strictEqual(validateFilterArtifacts(filtered, {
             ...decisions,
             decisions: { '2607.00001': { related: true } }
-        }, raw), false);
+        }, raw, checkpoint), false);
     });
 
     it('空候选只在核心来源致命失败时阻断', () => {

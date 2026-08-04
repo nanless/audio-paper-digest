@@ -13,11 +13,15 @@ const {
     cardTaskToken,
     validateCompletedCard,
     assertVisualArchiveUniqueness,
-    visualSummaryAssetPath
+    visualSummaryAssetPath,
+    assertPublishedBlogReceipt,
+    assertVisualManifestCurrent,
+    paperBatchDate
 } = require('./visual-summary-state.js');
 const {
     coverTaskToken,
-    validateCompletedCover
+    validateCompletedCover,
+    assertDigestCoverManifestCurrent
 } = require('./digest-cover-state.js');
 
 function parseDate(argv) {
@@ -45,7 +49,7 @@ function papersFrom(value) {
 }
 
 function paperDate(paper) {
-    return String(paper.fetchBatchDate || paper.batchDate || paper.fetchedAt || '').slice(0, 10);
+    return paperBatchDate(paper);
 }
 
 function sourceHealthComplete(raw, targetDate) {
@@ -132,17 +136,28 @@ function buildDigestRunReport(targetDate) {
         && decisionStats.decided === rawCount
         && decisionStats.retryable === 0
     );
-    const publicationVerified = Boolean(
-        review?.date === targetDate
-        && review?.publicationCommit
-        && review.remoteVerifiedOid === review.publicationCommit
-        && review.remoteVerifiedAt
-    );
+    let publication = null;
+    let publicationVerified = false;
+    try {
+        publication = assertPublishedBlogReceipt(targetDate);
+        publicationVerified = true;
+    } catch (_error) {
+        publicationVerified = false;
+    }
     const {
         visualCards,
         assetsValid: visualAssetsValid,
         archiveUnique: visualArchiveUnique
     } = visualAssetsAreValid(visual);
+    let visualManifestCurrent = false;
+    if (publication && visual) {
+        try {
+            assertVisualManifestCurrent(visual, publication, targetDate);
+            visualManifestCurrent = true;
+        } catch (_error) {
+            visualManifestCurrent = false;
+        }
+    }
     const visualComplete = visual?.batchDate === targetDate
         && visual?.overallStatus === 'complete'
         && visual?.counts?.completeCards === visual?.counts?.totalCards
@@ -150,15 +165,26 @@ function buildDigestRunReport(targetDate) {
         && visual?.counts?.pendingCards === 0
         && visual?.counts?.failedCards === 0
         && visualAssetsValid
-        && visualArchiveUnique;
+        && visualArchiveUnique
+        && visualManifestCurrent;
     const expectedCoverToken = coverTaskToken(
         cover?.dataSha256,
         cover?.promptSha256,
         cover?.publication
     );
+    let coverManifestCurrent = false;
+    if (publication && cover) {
+        try {
+            assertDigestCoverManifestCurrent(cover, publication, targetDate);
+            coverManifestCurrent = true;
+        } catch (_error) {
+            coverManifestCurrent = false;
+        }
+    }
     const coverComplete = cover?.batchDate === targetDate
         && cover?.overallStatus === 'complete'
-        && validateCompletedCover(cover?.cover, cover?.dataSha256, cover?.promptSha256, expectedCoverToken);
+        && validateCompletedCover(cover?.cover, cover?.dataSha256, cover?.promptSha256, expectedCoverToken)
+        && coverManifestCurrent;
     const filteredBatch = papersFrom(filtered).filter(paper => paperDate(paper) === targetDate);
     const filteredComplete = Boolean(
         filtered?.batchDate === targetDate

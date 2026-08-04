@@ -123,7 +123,7 @@ arXiv 抓取与 LLM 筛选模块。
 | 单张图片原始大小上限 | 6MB | `PD_IMAGE_MAX_BYTES` | 下载后按字节数校验 |
 | 单张 base64 上限 | 8M 字符 | `PD_IMAGE_MAX_BASE64_CHARS` | 单张图片转 base64 上限 |
 | 单篇图片 base64 总上限 | 20M 字符 | `PD_IMAGE_TOTAL_BASE64_CHARS` | 防止多图请求体过大 |
-| 每篇实际插图上限 | 4 张 | `PD_IMAGE_INSERTION_MAX` | 按副模型价值顺序截断，且只接受代码提供的稳定 `paragraph_id`；旧 anchor 仅兼容历史响应 |
+| 每篇默认实际插图上限 | 4 张（可用正整数覆写） | `PD_IMAGE_INSERTION_MAX` | 按副模型价值顺序截断，且只接受代码提供的稳定 `paragraph_id`；旧 anchor 仅兼容历史响应 |
 | 主分析全文预算 | 200K 字符 | `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` | 超长 arXiv HTML/PDF 正文按全文位置和任务关键词确定性取样 |
 | 开源扫描证据预算 | 16K 字符 | `PD_OPENSOURCE_EVIDENCE_MAX_CHARS` | 优先保留 URL、仓库、权重、数据集和发布承诺 |
 | 审校重写证据预算 | 60K 字符 | `PD_REVISION_EVIDENCE_MAX_CHARS` | 跨全文保留方法、实验、限制和关键数字 |
@@ -410,7 +410,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 **参数**：三个脚本都支持 `--date YYYY-MM-DD`；只有 `generate-blog.py` 接受 `--all`、`--category`、可重复的 `--exclude-id <arXiv ID>` 和自定义数据文件。排除 ID 必须命中日期过滤后的当前批次，否则生成失败；它只改变本次 generation 权威快照，不修改分析数据。`publish-to-blog.py --push` 会直接拒绝，防止恢复合并流程。
 
 **日期过滤**：
-- 脚本默认按 `fetchedAt` 字段过滤，只发布匹配 `--date` 指定日期（默认今天）的论文
+- 脚本默认优先按 `fetchBatchDate`/`batchDate` 过滤，旧数据才回退严格北京时间 `fetchedAt`，只发布匹配 `--date` 指定日期（默认今天）的论文
 - `deep-analysis-result.json` 会累积历史数据，日期过滤确保只发布当日抓取的新论文
 - 若需发布全部论文（不过滤），显式传 `--all`
 
@@ -447,7 +447,7 @@ LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，必须带 `fix
 生成微信公众号图文草稿。
 
 - 默认数据源：`data/current/deep-analysis-result.json`（支持命令行传入自定义路径）
-- 默认按 `fetchedAt == --date`（默认今天，北京时间）过滤；传 `--all` 才使用输入文件中的全部论文
+- 默认优先按 `fetchBatchDate`/`batchDate`、旧数据回退 `fetchedAt` 的批次日期过滤（默认今天，北京时间）；传 `--all` 才使用输入文件中的全部论文
 - 微信公众号 `APP_ID` / `APP_SECRET` 从项目 `.env` 读取
 - 支持 `--dry-run`：只生成本地预览 HTML，不获取 Token、不上传图片、不创建草稿
 - **图片上传**：仅上传正文 Markdown 图片和 `selectedImageUrls` 中的已选图片 → 上传到微信 CDN → 替换为微信 URL。缓存保存在 `/tmp/wechat-image-cache.json`，不会直接上传/发布 `allImageUrls` 候选图
@@ -488,7 +488,7 @@ TOP N 精选版的一句话亮点使用受控并发生成，默认并发度为 5
 - 默认数据源：`data/current/deep-analysis-result.json`
 - 支持 `--top N` 精选版（默认 TOP 5，常用 `--top 3`）和 `--all` 完整汇总版
 - 支持 `--date YYYY-MM-DD` 指定日期
-- 若没有匹配 `fetchedAt == --date` 的论文，脚本会停止生成，避免跨日混入历史论文
+- 若没有匹配批次日期的论文，脚本会停止生成，避免跨日混入历史论文
 - 输出到 `data/current/xiaohongshu-YYYY-MM-DD-<suffix>.md`
 - **每篇论文的一句话介绍调用发布阶段 LLM API 生成**（复用 `publish_common.py` 的协议路由和标准库显式无代理传输，强制绕过代理）；输入优先使用 `parsed.summary/results/limitations/opensource` 和主标签，再回退摘要；LLM 失败时回退到本地 `extract_one_liner()`
 - 自动清理 Markdown 格式和学术化前缀
@@ -500,7 +500,7 @@ TOP N 精选版的一句话亮点使用受控并发生成，默认并发度为 5
 小红书自动发布脚本（调用小红书 Web API，非官方接口）。
 
 - `--login`：扫码登录，保存 cookie 到本地缓存文件
-- `--publish`：发布当前日期 TOP 5 精选帖（默认读取 `top5` 文案；生成文案时可用 `--top 3` 产出 TOP 3）
+- 默认直接发布当前日期 TOP 5 精选帖（读取 `top5` 文案；生成文案时可用 `--top 3` 产出 TOP 3）
 - `--all`：发布当前日期完整汇总帖（读取一份 `all` 汇总文案并发布一次，不是逐篇多帖）
 - `--date YYYY-MM-DD`：指定日期
 - 默认日期使用北京时间；截图匹配 `~/Pictures/微信图片_YYYYMMDD*.png`
@@ -517,7 +517,7 @@ TOP N 精选版的一句话亮点使用受控并发生成，默认并发度为 5
 **数据输入**：
 - 统一读取 `data/current/deep-analysis-result.json`（与其他发布渠道一致）
 - 支持 `--date YYYY-MM-DD` 指定日期
-- 默认按 `fetchedAt == --date`（默认今天，北京时间）过滤；传 `--all` 才使用输入文件中的全部论文
+- 默认优先按 `fetchBatchDate`/`batchDate`、旧数据回退 `fetchedAt` 的批次日期过滤（默认今天，北京时间）；传 `--all` 才使用输入文件中的全部论文
 - 支持 `--dry-run`：只统计将生成的文档标题和块数量，不获取 Token、不创建飞书文档
 
 **实现特点**：

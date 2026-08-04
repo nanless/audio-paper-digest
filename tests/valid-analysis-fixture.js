@@ -69,7 +69,18 @@ ${results}${results}
 }
 
 function validAnalysisPaper(arxivId, extra = {}) {
-    return { arxivId, analysis: validAnalysisText(), ...extra };
+    const stages = Object.fromEntries([
+        'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
+        'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
+    ].map(stage => [stage, {
+        status: stage === 'imageSupplement' ? 'no_candidates' : 'complete'
+    }]));
+    return {
+        arxivId,
+        analysis: validAnalysisText(),
+        analysisManifest: { version: 1, stages },
+        ...extra
+    };
 }
 
 module.exports = { validAnalysisText, validAnalysisPaper };

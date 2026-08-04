@@ -18,7 +18,8 @@ import urllib.request, json, time, sys, re, datetime, hashlib, os, html, tempfil
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from publish_common import (
     load_papers, get_today_bj, score_and_sort, extract_top_tags,
-    score_emoji, format_medal, validate_papers_for_publish, PublishDataValidationError
+    score_emoji, format_medal, validate_papers_for_publish, PublishDataValidationError,
+    paper_batch_date
 )
 from path_config import wechat_preview_path
 from utils import parse_analysis
@@ -156,11 +157,11 @@ def main():
     if not publish_all:
         papers = [
             p for p in papers
-            if isinstance(p.get('fetchedAt', ''), str) and p.get('fetchedAt', '')[:10] == today
+            if paper_batch_date(p) == today
         ]
-        print(f"📅 过滤后: {len(papers)} 篇论文 (fetchedAt={today})")
+        print(f"📅 过滤后: {len(papers)} 篇论文 (fetchBatchDate={today})")
     else:
-        print("📦 --all: 跳过 fetchedAt 日期过滤，使用输入文件中的全部论文")
+        print("📦 --all: 跳过批次日期过滤，使用输入文件中的全部论文")
 
     if not papers:
         print("⚠️ 没有论文需要发布")

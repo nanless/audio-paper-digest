@@ -872,6 +872,11 @@ def multimodal_review_images(content, title="", required=False):
 
     if not image_matches:
         return True, []
+    # The secondary model is optional for the analysis pipeline. Keep blog
+    # review consistent with that contract: without it, deterministic image
+    # syntax checks still run, but no required multimodal API call is made.
+    if not os.environ.get('PAPER_ANALYZER_SECONDARY_MODEL', '').strip():
+        return True, []
 
     img_summary = []
     image_payloads = []
@@ -3932,7 +3937,7 @@ def generate_main(options=None):
     if not publish_all:
         papers = [p for p in papers if paper_batch_date(p) == today]
     else:
-        print("📦 --all: 跳过 fetchedAt 日期过滤，发布输入文件中的全部论文")
+        print("📦 --all: 跳过批次日期过滤，发布输入文件中的全部论文")
     filter_note = '全部论文' if publish_all else f'fetchBatchDate={today}'
     print(f"📄 过滤后: {len(papers)} 篇论文 ({filter_note})")
 

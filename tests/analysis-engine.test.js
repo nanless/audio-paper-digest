@@ -25,7 +25,7 @@ const {
     getAnalysisExitCode
 } = require('../scripts/analysis-engine.js');
 const { getMissingRequiredSections } = require('../scripts/analysis-contract.js');
-const { validAnalysisText } = require('./valid-analysis-fixture.js');
+const { validAnalysisText, validAnalysisPaper } = require('./valid-analysis-fixture.js');
 
 function legacyValidAnalysisText() {
     return `## 评分
@@ -326,7 +326,10 @@ describe('analyzePaperWithRetry', () => {
             arxivId: '2604.00021',
             analysis: validAnalysisText(),
             parsed: null
-        }), true);
+        }), false);
+        assert.strictEqual(isSuccessfulAnalysisRecord(validAnalysisPaper('2604.00021v2', {
+            parsed: null
+        })), true);
     });
 
     it('恢复 manifest 未完成时不视为成功，失败尝试会保留 checkpoint', async () => {
@@ -467,7 +470,10 @@ describe('analyzeBatch', () => {
                 : { paper, skip: false },
             analyzeFn: async () => {
                 analyzeCalls++;
-                return { analysis: validAnalysisText() };
+                return {
+                    analysis: validAnalysisText(),
+                    analysisManifest: validAnalysisPaper('fixture').analysisManifest
+                };
             },
             onPaperResultLocked: async (_paper, result) => {
                 canonical = result.result;

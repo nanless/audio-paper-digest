@@ -125,7 +125,7 @@ API call characteristics:
 - Overall timeout is 20 minutes of active process time. Heartbeat gaps over 30 seconds are treated as system sleep or long suspension and excluded, so wake-up socket errors can retry with the remaining budget.
 - max_tokens=64000, temperature=0.7
 - **Double-layer retry**: analysis-engine.js level retries up to 2 times per paper (max 3 total attempts); deep-analyzer.js internally retries each API call up to 3 times (exponential backoff: first 10s, then doubles, `2^attempt * 5s`)
-- **Fetch proxy is mandatory**: LLM APIs remain direct with `agent: false` and must never receive a proxy agent/dispatcher; arXiv/HuggingFace must fail when the project `.env` proxy is absent rather than falling back to direct access. Node arXiv requires HTTP CONNECT `HTTPS_PROXY` / `HTTP_PROXY`, while HuggingFace curl may additionally use SOCKS `ALL_PROXY`; network commands accessing a local proxy must run outside the sandbox.
+- **Fetch proxy is mandatory**: LLM APIs remain direct with `agent: false` and must never receive a proxy agent/dispatcher; arXiv/HuggingFace must fail when the project `.env` proxy is absent rather than falling back to direct access. Node arXiv requires at least one HTTP CONNECT value in `HTTPS_PROXY` or `HTTP_PROXY`, while HuggingFace curl may additionally use SOCKS `ALL_PROXY`; network commands accessing a local proxy must run outside the sandbox.
 - arXiv HTML parsing uses **cheerio** structured selectors, removing noise elements such as script/style/nav/header/footer
 - Images are first preselected by caption/filename/order heuristics (default `imageCandidateMax=20`); only dual-model mode with a configured secondary model downloads up to `imageMaxCount=20` candidate images serially and sends them to the secondary model. Single-model mode only keeps candidate URL/manifest metadata. Downloads validate Content-Type, Content-Length, and PNG/JPEG/WebP file signatures; defaults are a 60-second per-image timeout (`PD_IMAGE_DOWNLOAD_TIMEOUT_MS`), 6MB raw bytes per image, 8M base64 chars per image, and 20M total base64 chars per paper
 - Every analysis stage is recorded in `analysisManifest`. Failed attempts retain `analysisCheckpoint` and a separate `analysisRecoveryImageManifest`. Merge logic validates an older body independently of the latest failed manifest, so repeated failures cannot erase usable content. arXiv HTML/image discovery uses 60 seconds per request and PDF fallback uses 180 seconds; demo pages may follow at most three redirects while revalidating public DNS/IP on every hop. Only strict `{"insertions":[]}` is a valid empty image plan; missing fields, wrong types, and malformed JSON remain retryable failures
@@ -207,7 +207,8 @@ PAPER_ANALYZER_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
 # WeChat Official Account
 WECHAT_APP_ID=your-app-id
 WECHAT_APP_SECRET=your-app-secret
-# WECHAT_THUMB_MEDIA_ID=your-thumb-media-id  # Permanent cover image material ID (optional, uses default material if not set)
+# Permanent cover image material ID (optional, uses default material if not set)
+# WECHAT_THUMB_MEDIA_ID=your-thumb-media-id
 
 # Feishu (Lark) Docs
 FEISHU_APP_ID=your-feishu-app-id
@@ -223,16 +224,21 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 # PAPER_DIGEST_AUTHOR=your-name
 
 # Configuration overrides (optional)
-# PD_ANALYSIS_CONCURRENCY=3       # Deep analysis concurrency
-# PD_ANALYSIS_MAX_RETRIES=2       # Deep analysis retry count
-# PD_REANALYZE_CONCURRENCY=3      # Re-analysis concurrency (defaults to ANALYSIS_CONFIG.concurrency)
-# PD_FILTER_BATCH_SIZE=5          # LLM filtering batch size
-# PD_ARXIV_MAX_RESULTS=100        # arXiv fetch count per category
+# Deep analysis concurrency
+# PD_ANALYSIS_CONCURRENCY=3
+# Deep analysis retry count
+# PD_ANALYSIS_MAX_RETRIES=2
+# Re-analysis concurrency (defaults to ANALYSIS_CONFIG.concurrency)
+# PD_REANALYZE_CONCURRENCY=3
+# LLM filtering batch size
+# PD_FILTER_BATCH_SIZE=5
+# arXiv fetch count per category
+# PD_ARXIV_MAX_RESULTS=100
 # PD_ARXIV_PDF_MAX_BYTES=52428800
 # PD_SCORING_AUDIT_TEMPERATURE=0.1
 # PD_IMAGE_PLAN_TEMPERATURE=0.2
 
-# Fetch proxy (required): Node arXiv requests require an HTTP CONNECT URL
+# Fetch proxy (required): configure at least one of HTTPS_PROXY or HTTP_PROXY as an HTTP CONNECT URL
 # HTTPS_PROXY=http://127.0.0.1:7897
 # HTTP_PROXY=http://127.0.0.1:7897
 # HuggingFace curl may additionally use SOCKS; LLM requests stay direct with agent:false
@@ -340,12 +346,12 @@ Blog entry points: `scripts/generate-blog.py` → `scripts/review-blog.py` → `
 
 - The `published` field is the paper's original publication date on arXiv, which may be earlier than today
 - **The blog's `YYYY-MM-DD` date represents the "crawled and analyzed today" batch**, not the paper's original publication date
-- `deep-analysis-result.json` may contain both newly analyzed papers for the day and previously preserved merged results; blog, WeChat, and Feishu publishing filter by `fetchedAt == --date` by default, so only papers matching the batch date are published under that date
+- `deep-analysis-result.json` may contain both newly analyzed papers for the day and previously preserved merged results; blog, WeChat, Feishu, and Xiaohongshu publishing filter by immutable `fetchBatchDate`/`batchDate` first and strict Beijing `fetchedAt` only for legacy records, so only papers matching the batch date are published under that date
 
 Current behavior:
 
 - Defaults to reading `data/current/deep-analysis-result.json`
-- **Filters by `fetchedAt` date**: only publishes papers whose `fetchedAt` matches the `--date` specified date (defaults to today), preventing historical data from being republished
+- **Filters by batch date**: uses `fetchBatchDate`/`batchDate` first and falls back to strict Beijing `fetchedAt` only for legacy records; only papers matching the `--date` specified date (defaults to today) are published, preventing historical data from being republished
 - Generates in `~/code/github_repos/audio-paper-digest-blog/content/posts`:
   - Summary page: `YYYY-MM-DD.md`
   - Single paper page: `YYYY-MM-DD-<slug>.md`
@@ -355,14 +361,13 @@ Current behavior:
 
 Agent execution constraints:
 
-- By default only run the separate generation and review stages.
-- A request to run a dated paper digest is itself explicit authorization for `push-blog.py`; otherwise only an explicit "official publish / push blog" request authorizes it. Push requires an unchanged strict review receipt, the blog repository on `main`, manifest-only staging, an explicit `HEAD:main` push, and remote OID verification.
+- A request to run a dated paper digest is itself explicit authorization for the complete chain, including `push-blog.py`; only requests explicitly limited to generation, review, preview, checking, or diagnosis stop before push. Push requires an unchanged strict review receipt, the blog repository on `main`, manifest-only staging, an explicit `HEAD:main` push, and remote OID verification.
 - If only checking format, verifying new fields, or previewing artifacts, triggering a real `git push` is prohibited
 
 Pre-publish safeguards:
 
 - `full-fetch.js` automatically archives and moves yesterday's `deep-analysis-result.json`, `filtered-papers.json`, and `analyzed.json` when run daily, ensuring `data/current/` only contains newly fetched papers for the day
-- Publishing filters by `fetchedAt == --date` by default; still keep `data/current/` clean so validation, review, and `--all` publishing do not mix batches accidentally
+- Publishing filters by `fetchBatchDate`/`batchDate` first and legacy `fetchedAt` second; still keep `data/current/` clean so validation, review, and `--all` publishing do not mix batches accidentally
 
 ### Correct Procedure for Re-running / Fixing the Same Day
 
@@ -428,7 +433,7 @@ PY
 - `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` use retry and incremental saving to reduce data loss risk from interruptions
 - `full-fetch.js` also holds a single-run lock across archive, cleanup, filtering, and final merge while retaining configured paper-analysis concurrency; random owner tokens prevent an old owner from releasing a replacement lock
 - `reanalyze.js` saves intermediate results every 5 papers (save interval auto-adjusted in concurrent mode)
-- `npm run validate:data` performs read-only validation for current `papers.json`, `raw-candidates.json`, `filter-decisions.json`, `filtered-papers.json`, and `deep-analysis-result.json`, including candidate stats, filter-count consistency, and full candidate-set coverage when filter decisions are complete; it does not repair data and exits non-zero on problems
+- `npm run validate:data` performs read-only validation for current `papers.json`, `raw-candidates.json`, `filter-decisions.json`, `filtered-papers.json`, and `deep-analysis-result.json`, including candidate stats, filter-count consistency, and full candidate-set coverage when filter decisions are complete; it does not repair data and exits non-zero on problems. A clean checkout with no runtime data may use `npm run validate:data -- --allow-empty`; CI uses that explicit empty-data mode while unit fixtures cover non-empty validation
 - `full-fetch.js` auto-backs up bak files to `data/archive/`, retaining the last 10
 - `full-fetch.js` auto-backs up `papers.json` to `data/archive/papers-<date>.json`, retaining the last 7 days
 
@@ -457,7 +462,7 @@ PY
 17. **New LLM endpoints must integrate API protocol auto-routing**: Any new script calling an LLM must uniformly use `detectApiType()`, `buildApiUrl()`, `buildHeaders()`, `buildRequestBody()`, `parseResponseText()` from `scripts/utils.js`; hard-coding specific protocol URLs/Headers/Bodies is prohibited.
 18. **Sync the full pipeline when modifying API protocol routing logic**: When modifying `detectApiType()` judgment rules or `buildApiUrl()`/`buildHeaders()` and other functions, you must synchronously check `fetch-papers.js`, `deep-analyzer.js`, and all scripts using `analysis-engine.js` (`full-fetch.js`, `reanalyze.js`, `batch-analyze.js`, `deep-analysis-only.js`, `analyze-single-paper.js`) to ensure consistent behavior across the full pipeline.
 19. **Prohibit committing sensitive files to version control**: `data/`, `logs/`, `*.env`, `*.backup*`, cache files, log archives containing keys, etc. are strictly forbidden from entering git; before committing, confirm `.gitignore` is correctly configured and that no historically leftover sensitive files exist in the repository.
-20. **CI checks**: CI runs `npm test`, `npm run validate:data`, JS syntax checks, Python `py_compile`, Python unit tests, and shell syntax checks. When adding special file types, update `.github/workflows/ci.yml` accordingly.
+20. **CI checks**: CI runs serial `npm test`, `npm run validate:data -- --allow-empty`, JS syntax checks, Python `py_compile`, Python unit tests, and shell syntax checks. When adding special file types, update `.github/workflows/ci.yml` accordingly.
 21. **Use Beijing-time timestamps for runtime data**: Use `getBeijingISOString()` when writing `timestamp` / `lastUpdated` / `fetchedAt`; Python publishing code should use `now_bj_iso()` / `now_bj_date()` to avoid UTC dates causing cross-day archiving or publish filtering mistakes.
 22. **Commit messages must be detailed Chinese**: Commit messages must be written in Chinese and explain the main changes and impact scope; avoid vague one-liners such as "fix" or "update".
 
@@ -552,7 +557,7 @@ Prefer using `data/current/deep-analysis-result.json`; only read from old paths 
 
 ### 9.8 HuggingFace Fetch Empty
 
-- Check that project `.env` configures `HTTPS_PROXY` and `HTTP_PROXY` as HTTP CONNECT addresses; optionally configure `ALL_PROXY=socks5h://127.0.0.1:7897` for curl
+- Check that project `.env` configures at least one of `HTTPS_PROXY` or `HTTP_PROXY` as an HTTP CONNECT address; optionally configure `ALL_PROXY=socks5h://127.0.0.1:7897` for curl
 - Run the command outside the sandbox. Sandbox loopback cannot reach a local proxy and is not a HuggingFace diagnostic
 - `fetch-huggingface-papers.js` uses `curl`; missing project proxy configuration now fails explicitly instead of returning a pseudo-success empty batch
 

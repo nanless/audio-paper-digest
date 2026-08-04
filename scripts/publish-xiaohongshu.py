@@ -592,9 +592,9 @@ def _generate_for_date(data_file, today, mode, top_n):
             filtered.append(p)
     if filtered:
         papers = filtered
-        print(f"📅 过滤后: {len(papers)} 篇论文 (fetchedAt={today})")
+        print(f"📅 过滤后: {len(papers)} 篇论文 (fetchBatchDate={today})")
     else:
-        print(f"⚠️  没有 fetchedAt={today} 的论文，停止生成，避免跨日混入历史论文")
+        print(f"⚠️  没有批次日期为 {today} 的论文，停止生成，避免跨日混入历史论文")
         return
 
     # 默认数据源应与同日博客实际生成集合严格一致，避免明确排除的失败/无关论文

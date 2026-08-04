@@ -359,6 +359,14 @@ function validateFilterArtifacts(filteredData, decisionsData, rawCandidates = nu
     if (!filteredData || !decisionsData || !decisionsData.decisions || typeof decisionsData.decisions !== 'object') {
         return false;
     }
+    if (!checkpoint || !hasCompleteFetchCheckpoint(checkpoint)) return false;
+    const batchDates = [
+        checkpoint.batchDate,
+        rawCandidates?.batchDate,
+        decisionsData.batchDate,
+        filteredData.batchDate
+    ];
+    if (batchDates.some(date => typeof date !== 'string' || date !== batchDates[0])) return false;
     if (decisionsData.stats?.complete !== true) return false;
     if (decisionsData.filterModel !== filteredData.filterModel) return false;
     if (decisionsData.filterPromptHash !== filteredData.filterPromptHash) return false;
@@ -374,9 +382,9 @@ function validateFilterArtifacts(filteredData, decisionsData, rawCandidates = nu
     if (!rawCandidates || !Array.isArray(rawCandidates.papers) || !hasCompleteSourceHealth(rawCandidates.sourceHealth)) return false;
     if (rawCandidates.rawPapersSha256 !== stableContentSha256(rawCandidates.papers)) return false;
     if (decisionsData.rawPapersSha256 !== rawCandidates.rawPapersSha256 || filteredData.rawPapersSha256 !== rawCandidates.rawPapersSha256) return false;
-    if (checkpoint && (rawCandidates.fetchSourcesSha256 !== checkpoint.fetchSourcesSha256
+    if (rawCandidates.fetchSourcesSha256 !== checkpoint.fetchSourcesSha256
         || decisionsData.fetchSourcesSha256 !== checkpoint.fetchSourcesSha256
-        || filteredData.fetchSourcesSha256 !== checkpoint.fetchSourcesSha256)) return false;
+        || filteredData.fetchSourcesSha256 !== checkpoint.fetchSourcesSha256) return false;
     for (const key of ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint']) {
         if (!rawCandidates[key] || filteredData[key] !== rawCandidates[key] || decisionsData[key] !== rawCandidates[key]) return false;
     }

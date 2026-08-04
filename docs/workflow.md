@@ -192,7 +192,7 @@ HF 特有字段（共 7 个）：
 - 主分析 `max_tokens=64000`（config.js 中 `apiMaxTokens`）；审校/表格/方法/结构局部修复默认 `max_tokens=16000`（`repairMaxTokens`，可由 `PD_ANALYSIS_REPAIR_MAX_TOKENS` 覆写）；`temperature=0.7`
 - 各后处理阶段不再重复发送整篇论文：开源扫描、审校重写、评分审计、方法/表格修复和结构修复的默认证据预算依次为 16K、60K、40K、30K、40K 字符。对应 `.env` 变量为 `PD_OPENSOURCE_EVIDENCE_MAX_CHARS`、`PD_REVISION_EVIDENCE_MAX_CHARS`、`PD_SCORING_EVIDENCE_MAX_CHARS`、`PD_REPAIR_EVIDENCE_MAX_CHARS`、`PD_STRUCTURE_EVIDENCE_MAX_CHARS`；主分析预算由 `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` 控制。选择算法版本与预算进入恢复指纹，变化时只重跑受影响阶段及下游
 - 每次模型调用日志记录文本字符数、估算文本 token 数与图片数；图片 base64 不计入也不写入文本统计
-- 代理只从项目根 `.env` 中显式配置的大小写代理变量读取；不继承 shell/IDE 代理，也不读取 macOS `scutil`。`HTTPS_PROXY` / `HTTP_PROXY` 是 arXiv 抓取必填的 HTTP CONNECT 地址，HuggingFace `curl` 可额外使用 SOCKS `ALL_PROXY`
+- 代理只从项目根 `.env` 中显式配置的大小写代理变量读取；不继承 shell/IDE 代理，也不读取 macOS `scutil`。arXiv 抓取至少需要 `HTTPS_PROXY` 或 `HTTP_PROXY` 其中一项 HTTP CONNECT 地址，HuggingFace `curl` 可额外使用 SOCKS `ALL_PROXY`
 - LLM 请求与抓取请求完全隔离：全部 LLM 调用固定 `agent: false` 直连，绝不复用抓取 dispatcher；使用本机代理的网络命令必须在沙箱外运行
 - 抓取阶段只要任一 arXiv 类别或 HuggingFace 来源失败，即写入 `source_partial_failed` 并终止在筛选阶段；此状态不能复用为 `filter_complete`，也不能进入深度分析或更新持久化去重库。
 - 所有分析配置集中管理于 `scripts/config.js`，支持项目 `.env` 覆写（并发、重试、arXiv/PDF 超时与大小、各阶段证据字符预算、评分审计温度、插图计划温度及图片预算）
@@ -217,7 +217,7 @@ HF 特有字段（共 7 个）：
 
 调用内置生图前必须运行 `npm run visual:prepare -- --date <日期>`。该命令不会调用图像 API，也不会改变任务 token；它重新校验 `.bin` 原始缓存的受控路径、SHA、长度、MIME 与文件头，随后把参考图原子物化为 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 中带正确扩展名的文件。生图时使用命令输出的绝对 `referencedImagePaths`，不要把 `.bin` 或仅供展示的 `relativePath` 直接传给图片服务。可用 `--paper <ID>` 只准备单篇，重复运行会校验并修复被改写的物化文件。
 
-> **单模型 vs 双模型**：主模型始终负责正文和最终评分审计。评分审计默认使用独立低温 0.1。设置 `PAPER_ANALYZER_SECONDARY_MODEL` 后，副模型只从候选图片中筛选高价值图、丢弃低信息图并输出章节、稳定段落 ID、图前和图后说明；代码不会接受副模型替换主模型原文。未设置副模型时图片 URL 只保存在候选元数据中。
+> **单模型 vs 双模型**：主模型始终负责正文和最终评分审计。评分审计默认使用独立低温 0.1。设置 `PAPER_ANALYZER_SECONDARY_MODEL` 后，副模型只从候选图片中筛选高价值图、丢弃低信息图并输出章节、稳定段落 ID、图前和图后说明；代码不会接受副模型替换主模型原文。未设置副模型时图片 URL 只保存在候选元数据中，博客 review 的可选多模态 LLM 检查也会跳过，但确定性图片门禁仍执行。
 
 评分审计的“单一问题单一维度”规则是硬校验。跨维度理由会触发带精确错误反馈的局部重试，而不会立即重跑前面的全文分析。开源状态能由机器摘要与 `## 开源详情` 确定时，代码使用固定锚点：肯定语境明确承诺未来开放 0.5、带 URL 或肯定结构化状态的 Demo 0.2、否定/未提及且无承诺 0；理论研究根据公开证明、推导和附录判断核心产物，不机械要求代码/模型/数据链接。
 

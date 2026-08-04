@@ -81,13 +81,13 @@ ls -lt content/posts | head -20
 
 ### 12.6 HuggingFace 抓取为空
 
-- 检查项目根 `.env` 是否同时有 `HTTPS_PROXY=http://127.0.0.1:7897` 与 `HTTP_PROXY=http://127.0.0.1:7897`；若本机代理提供 SOCKS，可再设置 `ALL_PROXY=socks5h://127.0.0.1:7897`
+- 检查项目根 `.env` 是否至少有 `HTTPS_PROXY=http://127.0.0.1:7897` 或 `HTTP_PROXY=http://127.0.0.1:7897` 其中一项；若本机代理提供 SOCKS，可再设置 `ALL_PROXY=socks5h://127.0.0.1:7897`
 - 在**沙箱外**执行 `node scripts/fetch-huggingface-papers.js`。沙箱无法访问本机 `127.0.0.1:7897`，不能据此判断 HuggingFace 或代理失效
 - `fetch-huggingface-papers.js` 使用 `curl` 命令，确保系统 `curl` 可用；无项目代理时脚本会主动报错，避免写入伪成功空结果
 
 ### 12.6.1 arXiv 抓取或全文下载失败
 
-- arXiv 元数据、HTML、PDF 与图片均强制走项目 `.env` 的 `HTTPS_PROXY` / `HTTP_PROXY`。两项必须是 `http://` 或 `https://` 的 HTTP CONNECT 地址，不能只配置 SOCKS `ALL_PROXY`
+- arXiv 元数据、HTML、PDF 与图片均强制走项目 `.env` 的 `HTTPS_PROXY` 或 `HTTP_PROXY`。至少一项必须是 `http://` 或 `https://` 的 HTTP CONNECT 地址，不能只配置 SOCKS `ALL_PROXY`
 - 在沙箱外验证：`node scripts/quick-test.js` 或完整流程；沙箱内访问本机代理失败是运行环境限制
 - LLM 与抓取代理无关：检查 LLM 时应确认所有 Node LLM 请求仍为 `agent: false`，不得给 LLM 注入代理 agent/dispatcher
 

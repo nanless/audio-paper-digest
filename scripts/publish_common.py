@@ -23,6 +23,9 @@ from project_env import build_child_process_env
 from utils import parse_analysis
 
 BJ_TZ = timezone(timedelta(hours=8))
+BEIJING_TIMESTAMP_RE = re.compile(
+    r'^(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?\+08:00$'
+)
 
 
 class PublishLLMUnavailable(RuntimeError):
@@ -726,6 +729,28 @@ def load_papers(data_file=None):
 def get_today_bj(target_date=None):
     """返回北京时间日期字符串 YYYY-MM-DD"""
     return target_date or datetime.now(BJ_TZ).strftime('%Y-%m-%d')
+
+
+def paper_batch_date(paper):
+    """Use the immutable fetch batch date, with strict Beijing fetchedAt fallback."""
+    explicit = paper.get('fetchBatchDate') or paper.get('batchDate')
+    if explicit:
+        explicit = str(explicit)
+        try:
+            if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', explicit):
+                raise ValueError('invalid batch date format')
+            datetime.strptime(explicit, '%Y-%m-%d')
+        except ValueError:
+            raise PublishDataValidationError(
+                f"{paper.get('arxivId') or paper.get('title') or '<unknown paper>'} 批次日期无效: {explicit!r}"
+            )
+        return explicit
+    fetched_at = paper.get('fetchedAt')
+    match = BEIJING_TIMESTAMP_RE.fullmatch(fetched_at) if isinstance(fetched_at, str) else None
+    if not match:
+        label = paper.get('arxivId') or paper.get('title') or '<unknown paper>'
+        raise PublishDataValidationError(f'{label} fetchedAt 不是严格北京时间戳')
+    return match.group(1)
 
 
 def score_emoji(score):
