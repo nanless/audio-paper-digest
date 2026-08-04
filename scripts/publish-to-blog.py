@@ -134,6 +134,16 @@ def get_blog_review_chunk_chars():
     return min(16000, max(4000, value))
 
 
+def get_blog_review_max_tokens():
+    """Return the output budget for one strict blog review call."""
+    raw = os.environ.get("PD_BLOG_REVIEW_MAX_TOKENS", "4000").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 4000
+    return min(16000, max(1000, value))
+
+
 def call_llm_api(
     prompt,
     max_tokens=800,
@@ -354,7 +364,7 @@ def repair_review_payload(
         try:
             retried = call_llm_api(
                 retry_prompt + '\n\n上一次响应不完整。请重新完成审查，并且只输出符合上述契约的完整 JSON 对象。',
-                max_tokens=1500,
+                max_tokens=get_blog_review_max_tokens(),
                 temperature=0.1,
                 required=True,
                 context=f'{context} 协议重试',
@@ -397,7 +407,7 @@ def repair_review_payload(
     try:
         repaired = call_llm_api(
             prompt,
-            max_tokens=1000,
+            max_tokens=min(get_blog_review_max_tokens(), 4000),
             temperature=0.1,
             required=True,
             context=f'{context} 格式修复',
@@ -421,7 +431,7 @@ def repair_review_payload(
         try:
             retried = call_llm_api(
                 retry_prompt + '\n\n上一次响应及其格式修复均无效。请重新完成审查，并且只输出符合上述契约的完整 JSON 对象。',
-                max_tokens=1500,
+                max_tokens=get_blog_review_max_tokens(),
                 temperature=0.1,
                 required=True,
                 context=f'{context} 协议重试',
@@ -494,7 +504,7 @@ def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1')
 - `passed=false` 时必须给出至少一条具体、可执行的 `error` 级原因。
 """
 
-    result = call_llm_api(prompt, max_tokens=1500, temperature=0.1, required=required, context=f"LLM 文本 review: {title}")
+    result = call_llm_api(prompt, max_tokens=get_blog_review_max_tokens(), temperature=0.1, required=required, context=f"LLM 文本 review: {title}")
     if not result:
         if required:
             passed, issues = review_protocol_failure(f"LLM 文本 review: {title}", '响应为空')
@@ -935,7 +945,7 @@ def multimodal_review_images(content, title="", required=False):
 
     result = call_llm_api(
         prompt,
-        max_tokens=800,
+        max_tokens=get_blog_review_max_tokens(),
         temperature=0.1,
         required=required,
         context=f"多模态图片 review: {title}",
@@ -2897,6 +2907,7 @@ def review_protocol_fingerprint():
         'secondaryModel': os.environ.get('PAPER_ANALYZER_SECONDARY_MODEL', ''),
         'secondaryEndpoint': os.environ.get('PAPER_ANALYZER_SECONDARY_ENDPOINT', ''),
         'reviewChunkChars': get_blog_review_chunk_chars(),
+        'reviewMaxTokens': get_blog_review_max_tokens(),
         'hugoIdentity': hugo_identity,
     })
     if cache_key in _REVIEW_PROTOCOL_CACHE:
@@ -2918,6 +2929,7 @@ def review_protocol_fingerprint():
         'textTemperature': 0.1,
         'imageTemperature': 0.1,
         'reviewChunkChars': get_blog_review_chunk_chars(),
+        'reviewMaxTokens': get_blog_review_max_tokens(),
         'hugoVersion': hugo_version,
     })
     _REVIEW_PROTOCOL_CACHE.clear()

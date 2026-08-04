@@ -36,6 +36,7 @@
 | `PD_REANALYZE_CONCURRENCY` | 重分析并发度 | 3（与 `ANALYSIS_CONFIG.concurrency` 一致） |
 | `PD_FILTER_BATCH_SIZE` | LLM 筛选每批篇数 | 5 |
 | `PD_ARXIV_MAX_RESULTS` | arXiv 每类抓取数量 | 100 |
+| `PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS` | 单类遇到 HTTP 429 时的累计退避上限（毫秒） | 120000 |
 | `PD_IMAGE_MAX_BYTES` | 深度分析单张图片原始字节上限 | 6291456 |
 | `PD_IMAGE_DOWNLOAD_TIMEOUT_MS` | 深度分析单张候选图片下载超时（毫秒） | 60000 |
 | `PD_ARXIV_FETCH_TIMEOUT_MS` | arXiv HTML 与图片发现请求超时（毫秒） | 60000 |
@@ -67,6 +68,7 @@
 | `PAPER_DIGEST_GITHUB_REMOTE` | Git 远程仓库名称 | `origin` |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 独立论文页三层 review 并发度（汇总页仍先串行审查） | `5` |
 | `PD_BLOG_REVIEW_CHUNK_CHARS` | 文本 review 分块字符数；限制为 4000–16000，值变化会使 review 协议凭证失效 | `8000` |
+| `PD_BLOG_REVIEW_MAX_TOKENS` | 单次博客 LLM review 的输出预算；空响应因 `length` 截断时会自适应加倍 | `4000` |
 
 发布阶段的 LLM 调用会记录请求开始、响应/异常、单次耗时、prompt 长度和图片数；日志不会输出 API key、认证头或正文内容。若日志只出现 `→` 而没有 `✓` 或失败行，表示进程在 HTTP 请求尚未返回时被外部终止，不能据此签发审查凭证或推送。
 
@@ -185,7 +187,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 
 ### 9.1 依赖
 
-- **Node.js** ≥ 18.0.0（`node` / `npm`）
+- **Node.js** ≥ 20.18.1（`node` / `npm`）
 - **Python** 3.x（`python3` / `pip3`）
 - Node.js 依赖：`cheerio`（arXiv HTML 结构化解析）
 - Python 第三方库：见根目录 `requirements.txt`（`requests`、`playwright`、`PyYAML`）。`PyYAML` 是博客 frontmatter 确定性门禁的必需依赖，缺失时生成/review 必须失败关闭

@@ -1291,14 +1291,22 @@ describe('open-source evidence request safety', () => {
         assert.doesNotMatch(sanitized, /[\u0000-\u001F\u007F]/);
     });
 
-    it('cleans all text blocks before model requests while preserving image payloads', () => {
+    it('cleans invalid text characters while preserving prompt LaTeX and image payloads', () => {
         const { sanitizeModelMessages } = require('../scripts/deep-analyzer.js');
         const messages = sanitizeModelMessages([{ role: 'user', content: [
             { type: 'text', text: String.raw`formula \underline{x}` + '\uD835' },
             { type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } }
         ] }]);
-        assert.strictEqual(messages[0].content[0].text, 'formula ⧵underline{x}�');
+        assert.strictEqual(messages[0].content[0].text, String.raw`formula \underline{x}` + '�');
         assert.strictEqual(messages[0].content[1].image_url.url, 'data:image/png;base64,abc');
         assert.doesNotThrow(() => JSON.parse(JSON.stringify(messages)));
+    });
+
+    it('can opt into backslash sanitization for isolated evidence blocks', () => {
+        const { sanitizeModelMessages } = require('../scripts/deep-analyzer.js');
+        const messages = sanitizeModelMessages([
+            { role: 'user', content: String.raw`evidence \underline{x}` }
+        ], { replaceBackslashes: true });
+        assert.strictEqual(messages[0].content, 'evidence ⧵underline{x}');
     });
 });

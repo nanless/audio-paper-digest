@@ -499,13 +499,19 @@ def call_publish_llm_api(
     )
 
     last_error = None
+    current_max_tokens = max(1, int(max_tokens))
+    adaptive_max_tokens = 16000
     for attempt in range(max_retries):
         started_at = time.monotonic()
         try:
             print(
                 f'  [publish-api] → {context} '
                 f'(尝试 {attempt + 1}/{max_retries}, timeout={timeout}s, '
-                f'prompt_chars={len(prompt)}, images={len(images or [])})'
+                f'prompt_chars={len(prompt)}, images={len(images or [])}, '
+                f'max_tokens={current_max_tokens})'
+            )
+            payload = build_publish_payload(
+                api_type, model, prompt, current_max_tokens, temperature, images=images
             )
             request = urllib.request.Request(
                 api_url,
@@ -524,10 +530,35 @@ def call_publish_llm_api(
             if content:
                 print(
                     f'  [publish-api] ✓ {context} | HTTP {status} | '
-                    f'{time.monotonic() - started_at:.1f}s | response_chars={len(content)}'
+                    f'{time.monotonic() - started_at:.1f}s | response_chars={len(content)} '
+                    f'| max_tokens={current_max_tokens}'
                 )
                 return content
-            last_error = RuntimeError('LLM 返回内容为空')
+            if api_type == 'anthropic':
+                finish_reason = data.get('stop_reason')
+                content_blocks = data.get('content') if isinstance(data.get('content'), list) else []
+                reasoning_chars = sum(
+                    len(str(block.get('thinking') or ''))
+                    for block in content_blocks
+                    if isinstance(block, dict)
+                )
+            else:
+                choice = (data.get('choices') or [{}])[0] or {}
+                finish_reason = choice.get('finish_reason')
+                message = choice.get('message') or {}
+                reasoning_chars = len(str(message.get('reasoning_content') or ''))
+            finish_label = finish_reason or 'unknown'
+            last_error = RuntimeError(
+                f'LLM 返回内容为空 (finish_reason={finish_label}, '
+                f'reasoning_chars={reasoning_chars})'
+            )
+            if finish_reason in {'length', 'max_tokens'} and current_max_tokens < adaptive_max_tokens:
+                next_max_tokens = min(current_max_tokens * 2, adaptive_max_tokens)
+                print(
+                    f'  [publish-api] ↗ {context} 检测到输出被截断，'
+                    f'max_tokens {current_max_tokens} → {next_max_tokens}'
+                )
+                current_max_tokens = next_max_tokens
         except Exception as exc:
             last_error = exc
             print(

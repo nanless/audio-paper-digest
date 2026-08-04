@@ -42,6 +42,7 @@ describe('config', () => {
         assert.strictEqual(Config.FILTER_CONFIG.keywordPrefilterEnabled, true);
         assert.strictEqual(Config.FILTER_CONFIG.decisionContractVersion, 3);
         assert.strictEqual(Config.ARXIV_CONFIG.maxResultsPerCategory, 100);
+        assert.strictEqual(Config.ARXIV_CONFIG.fetchRateLimitMaxWaitMs, 120000);
         assert.strictEqual(Config.ARXIV_CONFIG.categoryDelayMs, 60000);
         assert.strictEqual(Config.HUGGINGFACE_CONFIG.maxPages, 20);
         assert.strictEqual(Config.HUGGINGFACE_CONFIG.pageLimit, 100);
@@ -153,6 +154,12 @@ describe('config', () => {
     it('项目 .env 覆写 PD_ARXIV_MAX_RESULTS', () => {
         withProjectEnv('PD_ARXIV_MAX_RESULTS=50', (Config) => {
             assert.strictEqual(Config.ARXIV_CONFIG.maxResultsPerCategory, 50);
+        });
+    });
+
+    it('项目 .env 覆写 arXiv 429 累计退避上限', () => {
+        withProjectEnv('PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS=45000', (Config) => {
+            assert.strictEqual(Config.ARXIV_CONFIG.fetchRateLimitMaxWaitMs, 45000);
         });
     });
 

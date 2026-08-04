@@ -1237,6 +1237,7 @@ async function runFullFetch() {
                     error: fetchError.message,
                     attempts: categoryFetchHealth?.attempts || 0,
                     successfulRequests: categoryFetchHealth?.successfulRequests || 0,
+                    rateLimitWaitMs: categoryFetchHealth?.rateLimitWaitMs || 0,
                     failures: categoryFetchHealth?.failures || []
                 };
                 sourceHealth.arxiv.categories.push(categoryHealth);
@@ -1270,6 +1271,7 @@ async function runFullFetch() {
                     ok: true,
                     attempts: categoryFetchHealth?.attempts || 0,
                     successfulRequests: categoryFetchHealth?.successfulRequests || 0,
+                    rateLimitWaitMs: categoryFetchHealth?.rateLimitWaitMs || 0,
                     failures: categoryFetchHealth?.failures || [],
                     abstractFailures: categoryFetchHealth?.abstracts?.failedIds || []
                 };

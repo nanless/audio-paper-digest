@@ -36,6 +36,7 @@ Benefits of this design:
 | `PD_REANALYZE_CONCURRENCY` | Re-analysis concurrency | 3 (matches `ANALYSIS_CONFIG.concurrency`) |
 | `PD_FILTER_BATCH_SIZE` | LLM filtering batch size | 5 |
 | `PD_ARXIV_MAX_RESULTS` | Number of papers to fetch per arXiv category | 100 |
+| `PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS` | Cumulative backoff budget per category for HTTP 429 responses, in milliseconds | 120000 |
 | `PD_IMAGE_MAX_BYTES` | Raw byte-size limit per image for deep analysis | 6291456 |
 | `PD_IMAGE_MAX_BASE64_CHARS` | Base64 character limit per image for deep analysis | 8388608 |
 | `PD_IMAGE_TOTAL_BASE64_CHARS` | Total image base64 character limit per paper | 20971520 |
@@ -66,6 +67,7 @@ Benefits of this design:
 | `PAPER_DIGEST_GITHUB_REMOTE` | Git remote name | `origin` |
 | `PD_BLOG_REVIEW_CONCURRENCY` | Concurrent three-layer reviews for independent paper pages; the digest page remains first and serial | `5` |
 | `PD_BLOG_REVIEW_CHUNK_CHARS` | Text-review chunk size, bounded to 4000–16000; changes invalidate the review-protocol receipt | `8000` |
+| `PD_BLOG_REVIEW_MAX_TOKENS` | Output budget for one blog LLM review; empty `length`-truncated responses trigger adaptive doubling | `4000` |
 
 #### WeChat Official Account
 
@@ -182,7 +184,7 @@ All main scripts write to both the terminal and `logs/*.log` by default. To disa
 
 ### 9.1 Dependencies
 
-- **Node.js** >= 18.0.0 (`node` / `npm`)
+- **Node.js** >= 20.18.1 (`node` / `npm`)
 - **Python** 3.x (`python3` / `pip3`)
 - Node.js dependency: `cheerio` (arXiv HTML structured parsing)
 - Python third-party libraries: see the root `requirements.txt` (`requests`, `playwright`, `PyYAML`). `PyYAML` is required by the deterministic blog-frontmatter gate, which fails closed when it is unavailable

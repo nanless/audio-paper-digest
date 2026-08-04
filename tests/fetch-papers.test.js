@@ -384,6 +384,21 @@ describe('抓取健康状态', () => {
         assert.doesNotMatch(urls[0], /query=cs\.SD(?:&|$)/);
     });
 
+    it('HTTP 429 的搜索页退避受单页累计预算限制', async () => {
+        const sleeps = [];
+        const papers = await fetchCategoryFromSearchPage('cs.SD', new Set(), 50, {
+            requestFn: async () => { throw new Error('HTTP 429'); },
+            sleepFn: async ms => { sleeps.push(ms); },
+            maxRetries: 5,
+            rateLimitMaxWaitMs: 1000
+        });
+
+        assert.deepStrictEqual(papers, []);
+        assert.strictEqual(papers._sourceHealth.rateLimitWaitMs, 1000);
+        assert.ok(sleeps.reduce((sum, value) => sum + value, 0) <= 1000);
+        assert.strictEqual(papers._sourceHealth.attempts, 2);
+    });
+
     it('HTTP 200 错误页缺少来源结构签名时不能作为合法零结果', async () => {
         await assert.rejects(fetchCategoryPapers('cs.SD', 1, 1, new Set(), {
             requestFn: async () => ({ status: 200, data: '<html><title>Access denied</title></html>' }),

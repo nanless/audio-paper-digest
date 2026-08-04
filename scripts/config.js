@@ -49,6 +49,7 @@ const ARXIV_CONFIG = {
     fetchMaxRetries: 30,
     fetchRetryBaseDelayMs: 5000,
     fetchRateLimitBaseDelayMs: 30000,
+    fetchRateLimitMaxWaitMs: 120000,
     fetchMaxWaitMs: 600000,
     categoryDelayMs: 60000,
     firstRequestDelayMs: 30000,
@@ -238,6 +239,10 @@ function applyEnvOverrides() {
     const arxivMaxResults = readPositiveInt('PD_ARXIV_MAX_RESULTS');
     if (arxivMaxResults) {
         ARXIV_CONFIG.maxResultsPerCategory = arxivMaxResults;
+    }
+    const arxivRateLimitMaxWait = readPositiveInt('PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS');
+    if (arxivRateLimitMaxWait) {
+        ARXIV_CONFIG.fetchRateLimitMaxWaitMs = arxivRateLimitMaxWait;
     }
     const imageMaxBytes = readPositiveInt('PD_IMAGE_MAX_BYTES');
     if (imageMaxBytes) {

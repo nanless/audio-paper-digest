@@ -125,6 +125,31 @@ function getHealth(items, property = '_sourceHealth') {
         : null;
 }
 
+function createRateLimitBudget(options = {}) {
+    if (options.rateLimitBudget && typeof options.rateLimitBudget.nextDelay === 'function') {
+        return options.rateLimitBudget;
+    }
+    const configured = Number.isFinite(options.rateLimitMaxWaitMs)
+        ? options.rateLimitMaxWaitMs
+        : ARXIV_CONFIG.fetchRateLimitMaxWaitMs;
+    const maxWaitMs = Math.max(0, configured);
+    let waitedMs = 0;
+    return {
+        nextDelay(baseDelay, jitter, is429) {
+            const requested = baseDelay + jitter;
+            if (!is429) return { allowed: true, delay: requested };
+            const remaining = Math.max(0, maxWaitMs - waitedMs);
+            if (remaining <= 0) return { allowed: false, delay: 0 };
+            const delay = Math.min(requested, remaining);
+            waitedMs += delay;
+            return { allowed: true, delay };
+        },
+        get waitedMs() {
+            return waitedMs;
+        }
+    };
+}
+
 function makeSourceFetchError(message, sourceHealth) {
     const error = new Error(message);
     error.code = 'SOURCE_FETCH_FAILED';
@@ -324,7 +349,8 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
     const requestFn = options.requestFn || httpsRequestWithProxy;
     const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     const maxRetries = options.maxRetries || 5;
-    const health = { source: 'arxiv-search', attempts: 0, successfulRequests: 0, failures: [], coverageComplete: false };
+    const rateLimitBudget = createRateLimitBudget(options);
+    const health = { source: 'arxiv-search', attempts: 0, successfulRequests: 0, failures: [], coverageComplete: false, rateLimitWaitMs: 0 };
 
     console.log(`[fetch-web] 尝试从搜索页面获取 ${categoryId}（最多 ${maxResults} 篇）...`);
 
@@ -391,7 +417,13 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
                     // 429 指数退避：60s, 120s, 240s, 480s
                     const baseDelay = is429 ? 60000 * Math.pow(2, attempt - 1) : 5000 * attempt;
                     const jitter = Math.floor(Math.random() * 15000);
-                    const delay = baseDelay + jitter;
+                    const retry = rateLimitBudget.nextDelay(baseDelay, jitter, is429);
+                    if (!retry.allowed) {
+                        console.log(`[fetch-web] ${categoryId} 429 退避预算已耗尽，停止本页重试`);
+                        health.failures.push({ page: page + 1, error: `${err.message} (rate-limit wait budget exhausted)` });
+                        break;
+                    }
+                    const delay = retry.delay;
                     console.log(`[fetch-web] 第 ${page + 1} 页第 ${attempt} 次失败: ${err.message}，${(delay/1000).toFixed(1)}s 后重试...`);
                     await sleepFn(delay);
                 } else {
@@ -420,6 +452,7 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
 
     console.log(`[fetch-web] ${categoryId} 共获取 ${allPapers.length} 篇论文`);
     health.ok = health.successfulRequests > 0;
+    health.rateLimitWaitMs = rateLimitBudget.waitedMs;
     if (health.successfulRequests === pagesToFetch) health.coverageComplete = true;
     health.allFailed = health.attempts > 0 && health.successfulRequests === 0;
     return attachHealth(allPapers.slice(0, maxResults), health);
@@ -438,7 +471,8 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
     const requestFn = options.requestFn || httpsRequestWithProxy;
     const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     const maxRetries = options.maxRetries || 5;
-    const health = { source: 'arxiv-recent', attempts: 0, successfulRequests: 0, failures: [], coverageComplete: false };
+    const rateLimitBudget = createRateLimitBudget(options);
+    const health = { source: 'arxiv-recent', attempts: 0, successfulRequests: 0, failures: [], coverageComplete: false, rateLimitWaitMs: 0 };
 
     for (let page = 0; page < pagesToFetch; page++) {
         const skip = page * pageSize;
@@ -479,7 +513,13 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
                 if (attempt < maxRetries) {
                     const baseDelay = is429 ? 60000 * Math.pow(2, attempt - 1) : 5000 * attempt;
                     const jitter = Math.floor(Math.random() * 10000);
-                    const delay = baseDelay + jitter;
+                    const retry = rateLimitBudget.nextDelay(baseDelay, jitter, is429);
+                    if (!retry.allowed) {
+                        console.log(`[fetch-recent] ${categoryId} 429 退避预算已耗尽，停止本页重试`);
+                        health.failures.push({ page: page + 1, error: `${err.message} (rate-limit wait budget exhausted)` });
+                        break;
+                    }
+                    const delay = retry.delay;
                     console.log(`[fetch-recent] ${categoryId} 第 ${page + 1} 页第 ${attempt} 次失败: ${err.message}，${(delay/1000).toFixed(1)}s 后重试...`);
                     await sleepFn(delay);
                 } else {
@@ -507,6 +547,7 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
 
     console.log(`[fetch-recent] ${categoryId} 共获取 ${unique.length} 篇论文`);
     health.ok = health.successfulRequests > 0;
+    health.rateLimitWaitMs = rateLimitBudget.waitedMs;
     health.coverageComplete = health.coverageComplete || health.successfulRequests === pagesToFetch;
     health.allFailed = health.attempts > 0 && health.successfulRequests === 0;
     return attachHealth(unique.slice(0, maxResults), health);
@@ -577,7 +618,8 @@ async function fetchAbstracts(papers, concurrency = 1, options = {}) {
     const requestFn = options.requestFn || httpsRequestWithProxy;
     const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     const maxRetries = options.maxRetries || 3;
-    const health = { attempted: needFetch.length, fetched: 0, failedIds: [], failures: [] };
+    const rateLimitBudget = createRateLimitBudget(options);
+    const health = { attempted: needFetch.length, fetched: 0, failedIds: [], failures: [], rateLimitWaitMs: 0 };
     if (needFetch.length === 0) return attachHealth(papers, health, '_abstractHealth');
 
     console.log(`[fetch-abstract] 需要补充 ${needFetch.length} 篇论文摘要...`);
@@ -611,7 +653,13 @@ async function fetchAbstracts(papers, concurrency = 1, options = {}) {
                     lastError = err;
                     const is429 = err.message.includes('429');
                     if (attempt < maxRetries) {
-                        const delay = is429 ? 60000 * attempt : 3000 * attempt;
+                        const retry = rateLimitBudget.nextDelay(
+                            is429 ? 60000 * attempt : 3000 * attempt,
+                            0,
+                            is429
+                        );
+                        if (!retry.allowed) break;
+                        const delay = retry.delay;
                         await sleepFn(delay);
                     }
                 }
@@ -638,6 +686,7 @@ async function fetchAbstracts(papers, concurrency = 1, options = {}) {
     if (health.failedIds.length > 0) {
         console.log(`[fetch-abstract] 最终失败 ID: ${health.failedIds.join(', ')}`);
     }
+    health.rateLimitWaitMs = rateLimitBudget.waitedMs;
     return attachHealth(papers, health, '_abstractHealth');
 }
 
@@ -752,8 +801,15 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
     const seenIds = new Set(existingIds ? Array.from(existingIds) : []);
     const requestFn = options.requestFn || httpsRequestWithProxy;
     const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
-    const perSourceOptions = { requestFn, sleepFn, maxRetries: options.maxRetries };
-        const health = {
+    const categoryRateLimitBudget = createRateLimitBudget(options);
+    const perSourceOptions = {
+        requestFn,
+        sleepFn,
+        maxRetries: options.maxRetries,
+        rateLimitMaxWaitMs: options.rateLimitMaxWaitMs,
+        rateLimitBudget: categoryRateLimitBudget
+    };
+    const health = {
         categoryId,
         attempts: 0,
         successfulRequests: 0,
@@ -802,7 +858,12 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
 
     // 补充摘要（recent 页面不包含摘要）
     if (recentPapers.length > 0) {
-        recentPapers = await fetchAbstracts(recentPapers, 5, { requestFn, sleepFn, maxRetries: options.abstractMaxRetries });
+        recentPapers = await fetchAbstracts(recentPapers, 5, {
+            requestFn,
+            sleepFn,
+            maxRetries: options.abstractMaxRetries,
+            rateLimitBudget: categoryRateLimitBudget
+        });
         health.abstracts = getHealth(recentPapers, '_abstractHealth');
         for (const p of recentPapers) {
             const key = normalizedId(p);
@@ -849,6 +910,7 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
     const proxyUrl = detectHttpConnectProxyUrl();
     const apiHealth = { source: 'arxiv-api', attempts: 0, successfulRequests: 0, failures: [], coverageComplete: false };
     let apiLastError = null;
+    const rateLimitBudget = categoryRateLimitBudget;
 
     for (let attempt = 1; attempt <= Math.min(retryCount, 5); attempt++) {
         const headers = getBrowserHeaders();
@@ -887,7 +949,12 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
             const is429 = err.message.includes('429');
             const baseDelay = is429 ? 60000 * Math.pow(2, attempt - 1) : 5000 * attempt;
             const jitter = Math.floor(Math.random() * 10000);
-            const delay = baseDelay + jitter;
+            const retry = rateLimitBudget.nextDelay(baseDelay, jitter, is429);
+            if (!retry.allowed) {
+                console.log(`[fetch] ${categoryId} API 429 退避预算已耗尽，停止重试`);
+                break;
+            }
+            const delay = retry.delay;
             console.log(`[fetch] ${categoryId} API 第 ${attempt} 次失败: ${err.message}，${(delay/1000).toFixed(0)}s 后重试...`);
             await sleepFn(delay);
         }
@@ -896,6 +963,7 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
         apiHealth.failures.push({ error: apiLastError.message });
     }
     apiHealth.ok = apiHealth.successfulRequests > 0;
+    apiHealth.rateLimitWaitMs = rateLimitBudget.waitedMs;
     apiHealth.allFailed = apiHealth.attempts > 0 && apiHealth.successfulRequests === 0;
     absorbHealth('api', apiHealth);
 

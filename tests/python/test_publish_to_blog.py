@@ -1142,6 +1142,13 @@ body
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'model-b'}):
             second = publish_to_blog.review_protocol_fingerprint()
         self.assertNotEqual(first, second)
+        publish_to_blog._REVIEW_PROTOCOL_CACHE.clear()
+        with mock.patch.object(publish_to_blog, '_sha256_file', return_value='a' * 64), \
+                mock.patch.object(publish_to_blog.shutil, 'which', return_value='/missing/hugo'), \
+                mock.patch.object(publish_to_blog.subprocess, 'run', return_value=completed), \
+                mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'model-a', 'PD_BLOG_REVIEW_MAX_TOKENS': '8000'}):
+            third = publish_to_blog.review_protocol_fingerprint()
+        self.assertNotEqual(first, third)
 
     def test_reusable_generation_manifest_rejects_empty_duplicate_and_bad_sha_records(self):
         with tempfile.TemporaryDirectory() as tmp:

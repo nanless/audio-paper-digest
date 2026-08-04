@@ -219,11 +219,18 @@ function sanitizeOpenSourceEvidence(text) {
         .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ');
 }
 
-function sanitizeModelMessages(messages) {
-    const sanitizeText = value => String(value || '')
-        .replace(/\\/g, '⧵')
-        .replace(/[\uD800-\uDFFF]/g, '�')
-        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ');
+function sanitizeModelMessages(messages, options = {}) {
+    const replaceBackslashes = options.replaceBackslashes === true;
+    const sanitizeText = value => {
+        let text = String(value || '')
+            .replace(/[\uD800-\uDFFF]/g, '�')
+            .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ');
+        // Only task-specific evidence sanitizers should opt into this lossy
+        // conversion. Keeping prompt instructions and prior model output intact
+        // preserves LaTeX semantics for the main analysis and repair stages.
+        if (replaceBackslashes) text = text.replace(/\\/g, '⧵');
+        return text;
+    };
     return (messages || []).map(message => {
         if (!message || typeof message !== 'object') return message;
         if (typeof message.content === 'string') {

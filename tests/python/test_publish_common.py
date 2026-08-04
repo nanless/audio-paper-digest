@@ -198,6 +198,42 @@ confidence: 中
         self.assertEqual(request.get_header('Authorization'), 'Bearer primary-key')
         self.assertEqual(payload['model'], 'vision-model')
 
+    def test_empty_length_response_adapts_output_budget_before_retry(self):
+        first = mock.Mock()
+        first.status = 200
+        first.read.return_value = (
+            b'{"choices":[{"message":{"content":"",'
+            b'"reasoning_content":"hidden reasoning"},"finish_reason":"length"}]}'
+        )
+        first.__enter__ = mock.Mock(return_value=first)
+        first.__exit__ = mock.Mock(return_value=False)
+
+        second = mock.Mock()
+        second.status = 200
+        second.read.return_value = b'{"choices":[{"message":{"content":"{\\"passed\\":true}"}}]}'
+        second.__enter__ = mock.Mock(return_value=second)
+        second.__exit__ = mock.Mock(return_value=False)
+
+        opener = mock.Mock()
+        opener.open.side_effect = [first, second]
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://api.example.com/v1',
+            'PAPER_ANALYZER_MODEL': 'reasoning-model',
+        }
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('urllib.request.build_opener', return_value=opener), \
+                mock.patch('publish_common.time.sleep'):
+            result = call_publish_llm_api(
+                'inspect', required=True, max_tokens=4000, max_retries=2,
+            )
+
+        self.assertEqual(result, '{"passed":true}')
+        requests = [call.args[0] for call in opener.open.call_args_list]
+        payloads = [json.loads(request.data.decode('utf-8')) for request in requests]
+        self.assertEqual(payloads[0]['max_tokens'], 4000)
+        self.assertEqual(payloads[1]['max_tokens'], 8000)
+
     def test_required_secondary_publish_llm_does_not_fallback_to_primary_model(self):
         env = {
             'PAPER_ANALYZER_API_KEY': 'primary-key',
