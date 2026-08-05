@@ -393,11 +393,16 @@ function prepareVisualReferenceInputs(manifest, {
                 }));
                 paper.preparedReferenceInputs = {
                     batchDate: targetDate,
-                    manifestGeneration: Number.isInteger(current.generation) ? current.generation : 0,
+                    // updateJsonFileLocked() increments the manifest generation after
+                    // this updater returns. Keep the resulting generation only as an
+                    // audit field; taskToken is the stable per-paper validity binding.
+                    manifestGeneration: (Number.isInteger(current.generation) ? current.generation : 0) + 1,
+                    taskToken: paper.cards?.infographic?.taskToken,
                     references,
                     sha256: stableSha256({
                         batchDate: targetDate,
                         arxivId: normalizedId(item.arxivId),
+                        taskToken: paper.cards?.infographic?.taskToken,
                         references
                     }),
                     preparedAt: getBeijingISOString()
@@ -410,14 +415,14 @@ function prepareVisualReferenceInputs(manifest, {
     return prepared;
 }
 
-function assertPreparedReferenceInputs(paper, targetDate, manifestGeneration) {
+function assertPreparedReferenceInputs(paper, targetDate) {
     const expectedReferences = Array.isArray(paper?.generationContext?.referenceImages)
         ? paper.generationContext.referenceImages
         : [];
     if (expectedReferences.length === 0) return;
     const prepared = paper.preparedReferenceInputs;
     if (!prepared || prepared.batchDate !== targetDate
-        || prepared.manifestGeneration !== (Number.isInteger(manifestGeneration) ? manifestGeneration : 0)
+        || prepared.taskToken !== paper.cards?.infographic?.taskToken
         || !Array.isArray(prepared.references)) {
         throw new Error(`视觉参考图尚未通过 prepare，禁止登记视觉摘要: ${normalizedId(paper)}`);
     }
@@ -425,6 +430,7 @@ function assertPreparedReferenceInputs(paper, targetDate, manifestGeneration) {
     const expectedSha = stableSha256({
         batchDate: targetDate,
         arxivId: normalizedId(paper),
+        taskToken: paper.cards?.infographic?.taskToken,
         references
     });
     if (prepared.sha256 !== expectedSha || references.length !== expectedReferences.length) {
@@ -1342,7 +1348,7 @@ function recordVisualSummaryCard({
         if (currentCard.status === 'complete') {
             throw new Error(`视觉摘要已经完成，拒绝旧任务覆盖: ${id}/${kind}`);
         }
-        assertPreparedReferenceInputs(paper, current.batchDate, current.generation);
+        assertPreparedReferenceInputs(paper, current.batchDate);
 
         const target = assertSafeAssetTarget(
             visualSummaryAssetPath(current.batchDate, id, kind, paper.rank, paper.title || ''),

@@ -109,12 +109,14 @@ confidence: 中
         self.assertIn('title: "Bad title"', fixed)
 
     def test_sanitize_markdown_for_publish_combines_rules(self):
-        text = '---\ntitle: "Bad\n---\n<u>x</u>\n![same](a.png)\n![same](b.png)\n[empty]()'
+        text = '---\ntitle: "Bad\n---\n<u>x</u>\n![same](a.png)\n![same](b.png)\n[empty]()\n配�置'
         fixed = sanitize_markdown_for_publish(text)
         self.assertNotIn('<u>', fixed)
         self.assertIn('![same - 图2](b.png)', fixed)
         self.assertNotIn('[empty]()', fixed)
         self.assertIn('title: "Bad"', fixed)
+        self.assertIn('配置', fixed)
+        self.assertNotIn('�', fixed)
 
     def test_publish_llm_api_routing(self):
         self.assertEqual(

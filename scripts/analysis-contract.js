@@ -46,6 +46,7 @@ const MACHINE_SCORE_MAXIMA = Object.freeze({
 });
 const OPEN_SOURCE_SCORE_ANCHORS = Object.freeze([0, 0.2, 0.5, 1, 1.2, 1.5]);
 const DOCUMENT_TYPES = new Set(['方法研究', '系统技术报告', '模型报告', '数据集与基准', '综述', '理论研究', '应用研究']);
+const NON_EMPIRICAL_DOCUMENT_TYPES = new Set(['综述', '理论研究']);
 
 function escapeRegExp(value) {
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -224,7 +225,12 @@ function getInvalidAnalysisReason(analysis, parsed) {
     if (!parsed.scoringReason || parsed.scoringReason.trim().length < 80) return '分析结果缺少有效评分理由';
     if (!parsed.summary || parsed.summary.trim().length < 80) return '分析结果缺少有效核心摘要';
     if (!parsed.architecture || parsed.architecture.trim().length < 80) return '分析结果缺少有效方法概述';
-    if (!parsed.results || parsed.results.trim().length < 50) return '分析结果缺少有效实验结果';
+    const resultMinimumChars = NON_EMPIRICAL_DOCUMENT_TYPES.has(parsed.documentType) ? 20 : 50;
+    if (!parsed.results || parsed.results.trim().length < resultMinimumChars) {
+        return NON_EMPIRICAL_DOCUMENT_TYPES.has(parsed.documentType)
+            ? '分析结果缺少适用验证证据'
+            : '分析结果缺少有效实验结果';
+    }
     return null;
 }
 

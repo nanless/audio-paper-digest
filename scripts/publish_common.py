@@ -562,6 +562,27 @@ def call_publish_llm_api(
                     f'max_tokens {current_max_tokens} → {next_max_tokens}'
                 )
                 current_max_tokens = next_max_tokens
+        except urllib.error.HTTPError as exc:
+            detail = ''
+            try:
+                raw_detail = exc.read(4096).decode('utf-8', errors='replace').strip()
+                if raw_detail:
+                    parsed_detail = json.loads(raw_detail)
+                    error_detail = parsed_detail.get('error') if isinstance(parsed_detail, dict) else None
+                    if isinstance(error_detail, dict):
+                        detail = str(error_detail.get('message') or error_detail.get('type') or '')
+                    elif isinstance(error_detail, str):
+                        detail = error_detail
+                    else:
+                        detail = raw_detail[:300]
+            except (OSError, UnicodeError, ValueError, AttributeError):
+                detail = ''
+            last_error = exc
+            suffix = f' | provider={detail[:300]}' if detail else ''
+            print(
+                f'  ⚠️  {context} 调用失败 (尝试 {attempt + 1}/{max_retries}, '
+                f'{time.monotonic() - started_at:.1f}s): HTTP {exc.code}{suffix}'
+            )
         except Exception as exc:
             last_error = exc
             print(
@@ -913,6 +934,11 @@ def fix_yaml_unbalanced_quotes(text):
 
 def sanitize_markdown_for_publish(text):
     """发布前通用 Markdown 清洗。"""
+    # LLM 输出偶尔会携带 UTF-8 替换字符；先清理后再进入 staging，
+    # 避免最终 Markdown 门禁才发现不可逆的乱码字节。
+    text = text.replace('\ufffd\ufffd\ufffd', '。')
+    text = text.replace('\ufffd\ufffd', '。')
+    text = text.replace('\ufffd', '')
     text = fix_latex_delimiters(text)
     text = escape_html_like_tags(text)
     text = strip_raw_inline_html(text)

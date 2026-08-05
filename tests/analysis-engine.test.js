@@ -316,6 +316,15 @@ describe('analyzePaperWithRetry', () => {
         assert.strictEqual(getInvalidAnalysisReason(text, parsed), null);
     });
 
+    it('理论研究允许用明确的非实验证据说明替代实验结果', () => {
+        const text = validAnalysisText()
+            .replace('document_type: 方法研究', 'document_type: 理论研究')
+            .replace('实验内容'.repeat(20), '理论论文未提供实验，验证依据为正文中的证明、假设与边界条件。');
+        const parsed = require('../scripts/utils.js').parseAnalysis(text);
+        assert.strictEqual(parsed.documentType, '理论研究');
+        assert.strictEqual(getInvalidAnalysisReason(text, parsed), null);
+    });
+
     it('成功判断会重解析正文，不信任陈旧 parsed 缓存', () => {
         assert.strictEqual(isSuccessfulAnalysisRecord({
             arxivId: '2604.00020',

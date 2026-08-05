@@ -1909,13 +1909,34 @@ def review_and_fix_post(file_path):
             detail = ', '.join(f'第{row}行={columns}列' for row, columns in malformed)
             issues.append(f"Markdown 表格列数不一致：期望 {expected_columns} 列，{detail}")
 
-    # Very long captions cut at a fixed character budget commonly end in the
-    # middle of a word. Flag them before multimodal review instead of asking a
-    # vision model to infer missing caption text.
-    for alt in re.findall(r'!\[([^\]]*)\]\([^)]+\)', content):
+    # Long captions can be cut by the upstream model at a word boundary. Keep
+    # a concise, sentence-aligned alt so the page remains accessible and the
+    # vision reviewer does not receive a misleading half-sentence.
+    def shorten_truncated_alt(match):
+        alt, url = match.group(1), match.group(2)
         stripped = alt.strip()
-        if len(stripped) >= 180 and re.search(r'[A-Za-z]{2,}$', stripped):
-            issues.append(f"图片 alt/caption 疑似被截断：{stripped[:80]}…")
+        if len(stripped) < 180 or not re.search(r'[A-Za-z]{2,}$', stripped):
+            return match.group(0)
+        prefix = stripped[:160]
+        boundaries = [
+            prefix.rfind('。'), prefix.rfind('；'), prefix.rfind('; '),
+            prefix.rfind('. '), prefix.rfind(', '), prefix.rfind('，'),
+        ]
+        boundary = max(boundaries)
+        if boundary >= 80:
+            concise = prefix[:boundary + 1].strip()
+        else:
+            concise = prefix.rsplit(' ', 1)[0].strip() + '…'
+        return f'![{concise}]({url})'
+
+    shortened = re.sub(
+        r'!\[([^\]]*)\]\(([^)\n]+)\)',
+        shorten_truncated_alt,
+        content,
+    )
+    if shortened != content:
+        issues.append('发现并缩短了被截断的长图片 alt/caption')
+        content = shortened
 
     # 11.5 检查并修复空/重复图片 alt
     deduped_content = dedupe_image_alts(content)

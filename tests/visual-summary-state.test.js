@@ -256,7 +256,7 @@ describe('visual summary state', () => {
                 targetDate: '2026-07-13', papers: [input], manifestPath, promptPath
             });
             const prepared = prepareVisualReferenceInputs(manifest, {
-                targetDate: '2026-07-13', outputRoot: output
+                targetDate: '2026-07-13', outputRoot: output, manifestPath
             });
             const expected = path.join(output, '2026-07-13', '01-2607.12345', '01-method_reference.png');
             assert.strictEqual(prepared.length, 1);
@@ -270,8 +270,37 @@ describe('visual summary state', () => {
             assert.throws(() => validateReferenceImageBytes(Buffer.from('not-png'), 'image/png'), /文件头/);
 
             fs.writeFileSync(expected, Buffer.from('stale'));
-            prepareVisualReferenceInputs(manifest, { targetDate: '2026-07-13', outputRoot: output });
+            const currentManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            prepareVisualReferenceInputs(currentManifest, {
+                targetDate: '2026-07-13', outputRoot: output, manifestPath
+            });
             assert.deepStrictEqual(fs.readFileSync(expected), PNG);
+
+            const preparedManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            const preparedRecord = preparedManifest.papers['2607.12345'].preparedReferenceInputs;
+            assert.strictEqual(preparedRecord.manifestGeneration, preparedManifest.generation);
+            assert.strictEqual(
+                preparedRecord.taskToken,
+                preparedManifest.papers['2607.12345'].cards.infographic.taskToken
+            );
+
+            // An unrelated manifest generation increment must not invalidate a
+            // per-paper prepared input whose task token and image hashes match.
+            const unrelatedUpdate = structuredClone(preparedManifest);
+            unrelatedUpdate.updatedAt = '2026-07-13T12:00:00+08:00';
+            unrelatedUpdate.generation += 1;
+            fs.writeFileSync(manifestPath, JSON.stringify(unrelatedUpdate, null, 2));
+            const sourcePath = path.join(dir, 'generated.png');
+            fs.writeFileSync(sourcePath, PNG);
+            const recorded = recordVisualSummaryCard({
+                arxivId: '2607.12345',
+                kind: 'infographic',
+                sourcePath,
+                taskToken: preparedRecord.taskToken,
+                targetDate: '2026-07-13',
+                manifestPath
+            });
+            assert.strictEqual(recorded.papers['2607.12345'].cards.infographic.status, 'complete');
         } finally {
             Config.CURRENT_DIR = originals.current;
             Config.FILES.visualSummaryManifestDir = originals.manifest;

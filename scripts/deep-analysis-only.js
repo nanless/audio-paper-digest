@@ -51,6 +51,27 @@ function validateDeepAnalysisInput(existingData, filteredData, today) {
     return existingData;
 }
 
+function repairMissingAnalysisRecords(resultPath, existingData, filteredData) {
+    const existingPapers = Array.isArray(existingData) ? existingData : (existingData?.papers || []);
+    const existingIds = new Set(existingPapers.map(normalizedId).filter(Boolean));
+    const missingPapers = filteredData.papers.filter(paper => !existingIds.has(normalizedId(paper)));
+    if (missingPapers.length === 0) return existingData;
+
+    const repaired = updateJsonFileLocked(resultPath, current => {
+        const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
+        const currentIds = new Set(currentPapers.map(normalizedId).filter(Boolean));
+        const additions = filteredData.papers.filter(paper => !currentIds.has(normalizedId(paper)));
+        if (additions.length === 0) return current;
+        return {
+            ...(!Array.isArray(current) && current ? current : {}),
+            papers: mergePapersById(currentPapers, additions),
+            lastUpdated: getBeijingISOString()
+        };
+    });
+    console.log(`🔧 已按当日筛选基线补回 ${missingPapers.length} 篇中断前未写入的论文记录，保留为待分析状态`);
+    return repaired;
+}
+
 async function runDeepAnalysis() {
     console.log('=== 仅运行深度分析 ===\n');
 
@@ -72,7 +93,9 @@ async function runDeepAnalysis() {
 
     let existingData = null;
     if (fs.existsSync(resultPath)) {
-        existingData = validateDeepAnalysisInput(readJsonFileStrict(resultPath), filteredData, today);
+        existingData = readJsonFileStrict(resultPath);
+        existingData = repairMissingAnalysisRecords(resultPath, existingData, filteredData);
+        existingData = validateDeepAnalysisInput(existingData, filteredData, today);
     } else {
         const filteredPapers = filteredData.papers;
         existingData = {
