@@ -984,7 +984,7 @@ body
             self.assertEqual(plan['unchangedFailed'], [])
             self.assertTrue(plan['priorResults'][str(passed.resolve())]['passed'])
 
-    def test_incremental_review_falls_back_to_full_if_passed_file_changes(self):
+    def test_incremental_review_rechecks_only_changed_passed_and_failed_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
             current_dir = Path(tmp) / 'data' / 'current'
@@ -1010,9 +1010,86 @@ body
                 plan = publish_to_blog.plan_incremental_review(
                     '2026-07-10', [passed, failed], manifest, 'b' * 40,
                 )
-            self.assertEqual(plan['mode'], 'full')
-            self.assertIn('已通过文件发生变化', plan['reason'])
+            self.assertEqual(plan['mode'], 'incremental')
+            self.assertIsNone(plan['reason'])
             self.assertEqual(set(plan['paths']), {passed.resolve(), failed.resolve()})
+
+    def test_incremental_review_reuses_passes_across_manifest_base_and_protocol_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            passed = posts / '2026-07-10-passed.md'
+            pending = posts / '2026-07-10-pending.md'
+            passed.write_text('passed\n', encoding='utf-8')
+            pending.write_text('pending\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir), \
+                    mock.patch.object(publish_to_blog, 'review_protocol_fingerprint', return_value='1' * 64):
+                manifest = publish_to_blog.save_generation_manifest(
+                    '2026-07-10', [passed, pending],
+                )
+                publish_to_blog.save_review_failure_state(
+                    '2026-07-10', [passed, pending], manifest, 'a' * 40, {
+                        str(passed.resolve()): {
+                            'passed': True,
+                            'reviewedSha256': publish_to_blog._sha256_file(passed),
+                        },
+                        str(pending.resolve()): {
+                            'passed': False, 'completed': False, 'failureKind': 'pending',
+                        },
+                    },
+                )
+            manifest_data = json.loads(manifest.read_text(encoding='utf-8'))
+            manifest_data['generatedAt'] = 'changed-without-changing-pages'
+            manifest.write_text(json.dumps(manifest_data), encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir), \
+                    mock.patch.object(publish_to_blog, 'review_protocol_fingerprint', return_value='2' * 64):
+                plan = publish_to_blog.plan_incremental_review(
+                    '2026-07-10', [passed, pending], manifest, 'b' * 40,
+                )
+            self.assertEqual(plan['mode'], 'incremental')
+            self.assertEqual(plan['paths'], [pending.resolve()])
+            self.assertEqual(plan['reusedPassed'], 1)
+            self.assertTrue(plan['priorResults'][str(passed.resolve())]['passed'])
+            self.assertEqual(
+                plan['priorResults'][str(passed.resolve())]['reviewProtocolFingerprint'],
+                '1' * 64,
+            )
+
+    def test_successful_receipt_passes_survive_new_generation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10.md'
+            page.write_text('reviewed\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir), \
+                    mock.patch.object(publish_to_blog, 'review_protocol_fingerprint', return_value='3' * 64):
+                manifest = publish_to_blog.save_generation_manifest('2026-07-10', [page])
+                reviewed = {
+                    str(page.resolve()): {
+                        'passed': True,
+                        'reviewedSha256': publish_to_blog._sha256_file(page),
+                    },
+                }
+                publish_to_blog.save_review_receipt(
+                    '2026-07-10', [page], 'hugo',
+                    generation_manifest=manifest, reviewed_results=reviewed,
+                )
+                cache_path = publish_to_blog.review_pass_cache_path('2026-07-10')
+                self.assertTrue(cache_path.is_file())
+                manifest = publish_to_blog.save_generation_manifest('2026-07-10', [page])
+                self.assertFalse(publish_to_blog.review_receipt_path('2026-07-10').exists())
+                plan = publish_to_blog.plan_incremental_review(
+                    '2026-07-10', [page], manifest, 'f' * 40,
+                )
+            self.assertEqual(plan['mode'], 'incremental')
+            self.assertEqual(plan['paths'], [])
+            self.assertEqual(plan['reusedPassed'], 1)
+            cache = json.loads(cache_path.read_text(encoding='utf-8'))
+            self.assertEqual(cache['schemaVersion'], 1)
+            self.assertEqual(cache['files'][0]['sha256'], publish_to_blog._sha256_file(page))
 
     def test_incremental_review_retries_unchanged_transient_but_blocks_unchanged_content_failure(self):
         with tempfile.TemporaryDirectory() as tmp:

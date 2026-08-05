@@ -55,7 +55,7 @@ ls -lt content/posts | head -20
 
 可能原因：
 - 只运行了 `generate-blog.py` 或 `review-blog.py`；正式推送必须显式运行 `push-blog.py`
-- `push-blog.py` 找不到审查凭证，或 review 后文件 SHA-256 已变更：需重新运行 `review-blog.py`
+- `push-blog.py` 找不到审查凭证，或 review 后文件 SHA-256 已变更：需重新运行 `review-blog.py`；脚本会复用 `blog-review-passes-YYYY-MM-DD.json` 中路径和 SHA 均匹配的通过项，只审查新增、变化或失败文件
 - 数据文件为空或论文分析失败
 - 目标日期文件已存在且内容相同
 

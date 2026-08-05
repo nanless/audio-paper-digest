@@ -465,8 +465,9 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 
 - generation staging/install journal：逐页记录输入指纹、安装前 SHA 和目标 SHA；崩溃后只收养内容完全匹配的页面，全部论文完成后才生成汇总页和严格 manifest。
 - `blog-generation-manifest-YYYY-MM-DD.json`：正式清单为 schema v3，记录非空、唯一且结构合法的精确 Markdown 文件集合、输入/生成依赖指纹、博客基线、category、逐文件 SHA，以及经过发布预检后实际写入博客的 `publishedPapers` 权威快照；`visualSummaryRequired` 与 `digestCoverRequired` 必须为 `false`，发布后图片不得进入清单。
-- `blog-review-failure-YYYY-MM-DD.json`：绑定 worker 实际读取 SHA、生成清单和博客基线。内容失败修复后只复审失败页；瞬时失败保持可重试；应存在文件消失或 Hugo 前后 SHA 变化均阻断复用。
-- `blog-review-receipt-YYYY-MM-DD.json`：review 阶段记录文件 SHA，并绑定 generation manifest 的 SHA-256、严格 review 协议指纹和 Hugo gate；push 远端 OID 验证成功后追加 `publicationCommit`、相同的 `remoteVerifiedOid` 和北京时间 `remoteVerifiedAt`。发布后视觉规划从 generation 的 `publishedPapers` 读取实际发布集合，并把发布提交与 generation SHA 写入任务 token。
+- `blog-review-passes-YYYY-MM-DD.json`：持久保存已通过页面的博客仓库相对路径、实际读取 SHA-256、通过时间和当时的 review 协议指纹。复用只依赖路径 + SHA；代码、脚本、文档、模型、协议、generation manifest 或博客基线变化不会删除记录，页面内容变化时只让该页面重新进入 review。
+- `blog-review-failure-YYYY-MM-DD.json`：schema v3 绑定 worker 实际读取 SHA，并保留当次生成清单、博客基线和协议元数据供审计；这些批次元数据变化不再让未改的已通过页面全量复审。内容失败修复后只复审失败页，瞬时失败保持可重试；应存在文件消失或 Hugo 前后 SHA 变化均阻断签发整批凭证。
+- `blog-review-receipt-YYYY-MM-DD.json`：review 阶段记录文件 SHA 和各文件实际通过时的协议指纹，并重新绑定当前 generation manifest 的 SHA-256、当前 review 协议和 Hugo gate；push 远端 OID 验证成功后追加 `publicationCommit`、相同的 `remoteVerifiedOid` 和北京时间 `remoteVerifiedAt`。发布后视觉规划从 generation 的 `publishedPapers` 读取实际发布集合，并把发布提交与 generation SHA 写入任务 token。
 
 三个博客入口同时用日期级锁和博客仓库级全局锁串行化；push 在 stage 后及 commit 前校验 index blob 与凭证完全一致。
 

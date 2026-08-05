@@ -69,7 +69,7 @@ Benefits of this design:
 | `PAPER_DIGEST_REPO_URL` | Project repository URL appended to Xiaohongshu and related copy | `github.com/nanless/audio-paper-digest` |
 | `PAPER_DIGEST_GITHUB_REMOTE` | Git remote name | `origin` |
 | `PD_BLOG_REVIEW_CONCURRENCY` | Concurrent three-layer reviews for independent paper pages; the digest page remains first and serial | `5` |
-| `PD_BLOG_REVIEW_CHUNK_CHARS` | Text-review chunk size, bounded to 4000–16000; changes invalidate the review-protocol receipt | `8000` |
+| `PD_BLOG_REVIEW_CHUNK_CHARS` | Text-review chunk size, bounded to 4000–16000; changes refresh the batch protocol receipt while unchanged per-file SHA passes remain reusable | `8000` |
 | `PD_BLOG_REVIEW_MAX_TOKENS` | Output budget for one blog LLM review; empty `length`-truncated responses trigger adaptive doubling | `4000` |
 
 #### WeChat Official Account
@@ -280,7 +280,7 @@ FEISHU_APP_SECRET=your-full-app-secret
    - If the data file contains papers from multiple dates, split the data or confirm intent before publishing
 
 4. **Do not publish the same day repeatedly**
-   - Re-running `generate-blog.py --date 2026-04-21` overwrites that day's files and requires a new `review-blog.py` run. `push-blog.py` accepts only an unchanged SHA-256 review receipt.
+   - Re-running `generate-blog.py --date 2026-04-21` overwrites that day's files and requires `review-blog.py` to refresh the batch receipt, but pages whose path and SHA-256 still match a saved pass do not re-enter three-layer review. `push-blog.py` accepts only a receipt whose SHA-256 values exactly match the current files.
    - To append papers, regenerate the complete data first, then publish
 
 5. **Resume visual assets; do not redraw everything**

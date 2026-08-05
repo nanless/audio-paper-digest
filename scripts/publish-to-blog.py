@@ -2847,6 +2847,10 @@ def review_failure_path(date_str):
     return CURRENT_DIR / f'blog-review-failure-{validate_publish_date(date_str)}.json'
 
 
+def review_pass_cache_path(date_str):
+    return CURRENT_DIR / f'blog-review-passes-{validate_publish_date(date_str)}.json'
+
+
 def generation_manifest_path(date_str):
     return CURRENT_DIR / f'blog-generation-manifest-{validate_publish_date(date_str)}.json'
 
@@ -2904,7 +2908,8 @@ def generation_template_fingerprint():
         'basePath': BASE_PATH,
         'generationManifestSchema': 3,
         'generationJournalSchema': 1,
-        'reviewFailureSchema': 2,
+        'reviewFailureSchema': 3,
+        'reviewPassCacheSchema': 1,
         'reviewReceiptSchema': 3,
     })
 
@@ -3199,6 +3204,10 @@ def save_generation_manifest(
     published_papers=None,
 ):
     """Save the exact generated/removed path list for the separate review step."""
+    # Migrate every historical per-file pass before replacing batch-level
+    # evidence. Reuse remains safe because the durable cache is keyed by the
+    # exact repository-relative path and reviewed SHA-256, not by this manifest.
+    save_review_pass_cache(date_str)
     repo = Path(BLOG_REPO).expanduser().resolve()
     records = []
     for item in sorted({Path(value).expanduser().resolve() for value in publish_paths}):
@@ -3232,9 +3241,8 @@ def save_generation_manifest(
         })
     path = generation_manifest_path(date_str)
     atomic_write_json(path, manifest, ensure_ascii=False, indent=2)
-    # A new generation invalidates both successful review evidence and any
-    # partial-review checkpoint from an older manifest, even if bytes happen
-    # to be identical.
+    # A new generation invalidates only batch-level evidence. Exact per-file
+    # pass evidence survives in review_pass_cache_path(date_str).
     review_receipt_path(date_str).unlink(missing_ok=True)
     review_failure_path(date_str).unlink(missing_ok=True)
     return path
@@ -3567,6 +3575,8 @@ def save_review_receipt(
         raise PublishDataValidationError('签发审查凭证必须绑定 generation manifest')
     if reviewed_results is None:
         raise PublishDataValidationError('签发审查凭证必须绑定逐文件 review 字节凭证')
+    save_review_pass_cache(date_str, publish_paths, reviewed_results)
+    pass_records = _collect_review_pass_records(date_str)
     validate_reviewed_file_hashes(
         date_str, publish_paths, generation_manifest, reviewed_results,
     )
@@ -3597,6 +3607,11 @@ def save_review_receipt(
             'path': relative,
             'deleted': expected_deleted,
             'sha256': reviewed_sha,
+            'reviewProtocolFingerprint': (
+                None if expected_deleted else pass_records.get(
+                    (relative, reviewed_sha), {}
+                ).get('reviewProtocolFingerprint')
+            ),
         })
     if expectations is not None and {record['path'] for record in files} != set(expectations):
         raise PublishDataValidationError('审查路径集合与 generation manifest 不一致')
@@ -3625,6 +3640,120 @@ def save_review_receipt(
     return path
 
 
+def _valid_review_pass_record(record, repo, date_str, default_protocol=None, default_time=None):
+    """Normalize one historical file-level pass without trusting batch metadata."""
+    if not isinstance(record, dict) or not isinstance(record.get('path'), str):
+        return None
+    sha256 = record.get('reviewedSha256') or record.get('sha256')
+    if record.get('deleted') is True or not re.fullmatch(r'[0-9a-f]{64}', str(sha256 or '')):
+        return None
+    relative = Path(record['path'])
+    if relative.is_absolute():
+        return None
+    try:
+        target = (repo / relative).resolve()
+        normalized = _validate_manifest_path_date(target, repo, date_str)
+    except (OSError, ValueError, PublishDataValidationError):
+        return None
+    protocol = record.get('reviewProtocolFingerprint') or default_protocol
+    if protocol is not None and not re.fullmatch(r'[0-9a-f]{64}', str(protocol)):
+        protocol = None
+    reviewed_at = record.get('reviewedAt') or default_time
+    return {
+        'path': normalized,
+        'sha256': str(sha256),
+        'reviewedAt': reviewed_at if isinstance(reviewed_at, str) else None,
+        'reviewProtocolFingerprint': protocol,
+    }
+
+
+def _collect_review_pass_records(date_str):
+    """Collect durable and legacy pass evidence keyed by path plus exact bytes."""
+    date_str = validate_publish_date(date_str)
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    collected = {}
+    sources = (
+        (review_pass_cache_path(date_str), {1}, None),
+        (review_receipt_path(date_str), {3}, 'reviewedAt'),
+        (review_failure_path(date_str), {1, 2, 3}, 'savedAt'),
+    )
+    for source_path, schemas, time_field in sources:
+        try:
+            payload = json.loads(source_path.read_text(encoding='utf-8'))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if (
+            not isinstance(payload, dict)
+            or payload.get('schemaVersion') not in schemas
+            or payload.get('date') != date_str
+            or not isinstance(payload.get('files'), list)
+        ):
+            continue
+        if source_path == review_receipt_path(date_str) and payload.get('strictReview') is not True:
+            continue
+        default_protocol = payload.get('reviewProtocolFingerprint')
+        default_time = payload.get(time_field) if time_field else payload.get('updatedAt')
+        for raw_record in payload['files']:
+            if not isinstance(raw_record, dict):
+                continue
+            if source_path == review_failure_path(date_str) and raw_record.get('passed') is not True:
+                continue
+            record = _valid_review_pass_record(
+                raw_record, repo, date_str,
+                default_protocol=default_protocol,
+                default_time=default_time,
+            )
+            if record is not None:
+                collected[(record['path'], record['sha256'])] = record
+    return collected
+
+
+def save_review_pass_cache(date_str, publish_paths=(), file_results=None):
+    """Persist successful per-file review evidence independently of batch changes."""
+    date_str = validate_publish_date(date_str)
+    records = _collect_review_pass_records(date_str)
+    file_results = file_results or {}
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    now = datetime.datetime.now(
+        datetime.timezone(datetime.timedelta(hours=8))
+    ).isoformat()
+    current_protocol = None
+    for item in {Path(value).expanduser().resolve() for value in publish_paths}:
+        result = file_results.get(str(item), {})
+        if result.get('passed') is not True or not item.is_file():
+            continue
+        reviewed_sha = result.get('reviewedSha256')
+        if (
+            not re.fullmatch(r'[0-9a-f]{64}', str(reviewed_sha or ''))
+            or _sha256_file(item) != reviewed_sha
+        ):
+            continue
+        _path, relative = _manifest_record(item, repo)
+        protocol = result.get('reviewProtocolFingerprint')
+        if not re.fullmatch(r'[0-9a-f]{64}', str(protocol or '')):
+            if current_protocol is None:
+                current_protocol = review_protocol_fingerprint()
+            protocol = current_protocol
+        record = {
+            'path': relative,
+            'sha256': reviewed_sha,
+            'reviewedAt': now,
+            'reviewProtocolFingerprint': protocol,
+        }
+        records[(relative, reviewed_sha)] = record
+    if not records:
+        return None
+    payload = {
+        'schemaVersion': 1,
+        'date': date_str,
+        'updatedAt': now,
+        'files': sorted(records.values(), key=lambda value: (value['path'], value['sha256'])),
+    }
+    path = review_pass_cache_path(date_str)
+    atomic_write_json(path, payload, ensure_ascii=False, indent=2, mode=0o600)
+    return path
+
+
 def save_review_failure_state(
     date_str,
     publish_paths,
@@ -3633,6 +3762,7 @@ def save_review_failure_state(
     file_results,
 ):
     """Persist per-file failed-review evidence for a safe incremental retry."""
+    save_review_pass_cache(date_str, publish_paths, file_results)
     repo = Path(BLOG_REPO).expanduser().resolve()
     records = []
     for item in sorted({Path(value).expanduser().resolve() for value in publish_paths}):
@@ -3659,7 +3789,7 @@ def save_review_failure_state(
             'reviewedSha256': reviewed_sha if result_passed else None,
         })
     state = {
-        'schemaVersion': 2,
+        'schemaVersion': 3,
         'date': validate_publish_date(date_str),
         'baseHead': str(base_head).lower(),
         'generationManifestSha256': _sha256_file(manifest_path),
@@ -3676,65 +3806,87 @@ def save_review_failure_state(
 
 
 def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
-    """Return a fail-closed full/incremental review plan from prior evidence."""
+    """Reuse exact passed bytes and select only new, changed, or failed pages."""
     state_path = review_failure_path(date_str)
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    ordered_paths = sorted({Path(value).expanduser().resolve() for value in publish_paths})
     full = {
         'mode': 'full',
-        'paths': [Path(path).resolve() for path in publish_paths if Path(path).is_file()],
+        'paths': [path for path in ordered_paths if path.is_file()],
         'priorResults': {},
         'unchangedFailed': [],
+        'reusedPassed': 0,
         'reason': None,
     }
-    if not state_path.is_file():
-        return full
+    pass_records = _collect_review_pass_records(date_str)
+    failed_records = {}
+    evidence_exists = bool(pass_records)
+    state_error = None
     try:
-        state = json.loads(state_path.read_text(encoding='utf-8'))
-        if (
-            state.get('schemaVersion') not in {1, 2}
-            or state.get('date') != date_str
-            or state.get('baseHead') != str(base_head).lower()
-            or state.get('generationManifestSha256') != _sha256_file(manifest_path)
-            or state.get('reviewProtocolFingerprint') != review_protocol_fingerprint()
-        ):
-            raise ValueError('审查基线或生成清单已变化')
-        records = state.get('files')
-        if not isinstance(records, list):
-            raise ValueError('失败状态缺少文件记录')
-        repo = Path(BLOG_REPO).expanduser().resolve()
-        expected = []
-        for item in sorted({Path(value).expanduser().resolve() for value in publish_paths}):
-            _path, relative = _manifest_record(item, repo)
-            expected.append(relative)
-        if [record.get('path') for record in records] != expected:
-            raise ValueError('失败状态与生成文件集合不一致')
+        if state_path.is_file():
+            state = json.loads(state_path.read_text(encoding='utf-8'))
+            if state.get('schemaVersion') not in {1, 2, 3} or state.get('date') != date_str:
+                raise ValueError('失败状态版本或日期不匹配')
+            records = state.get('files')
+            if not isinstance(records, list):
+                raise ValueError('失败状态缺少文件记录')
+            for record in records:
+                if not isinstance(record, dict) or not isinstance(record.get('path'), str):
+                    raise ValueError('失败状态文件记录格式非法')
+                if record.get('passed') is True:
+                    continue
+                relative = Path(record['path'])
+                if relative.is_absolute():
+                    raise ValueError('失败状态包含非法绝对路径')
+                target = (repo / relative).resolve()
+                normalized = _validate_manifest_path_date(target, repo, date_str)
+                if state.get('schemaVersion') in {2, 3} and (
+                    not isinstance(record.get('completed'), bool)
+                    or record.get('failureKind') not in {None, 'pending', 'content', 'transient'}
+                ):
+                    raise ValueError('失败状态完成标记或失败类型非法')
+                failed_records[normalized] = record
+            evidence_exists = True
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError) as exc:
+        state_error = str(exc)
+        failed_records = {}
 
+    try:
+        expectations = generation_manifest_expectations(manifest_path, date_str)
+        current_relatives = {
+            _manifest_record(item, repo)[1] for item in ordered_paths
+        }
+        if current_relatives != set(expectations):
+            raise ValueError('发布路径集合与 generation manifest 不一致')
         selected = []
         unchanged_failed = []
         prior_results = {}
-        for record, item in zip(records, sorted({Path(value).expanduser().resolve() for value in publish_paths})):
+        reused_passed = 0
+        for item in ordered_paths:
+            _path, relative = _manifest_record(item, repo)
+            current = _file_fingerprint(item)
+            if current['deleted']:
+                continue
+            cached = pass_records.get((relative, current['sha256']))
+            key = str(item.resolve())
+            if cached is not None:
+                prior_results[key] = {
+                    'passed': True, 'completed': True, 'failureKind': None,
+                    'reviewedSha256': current['sha256'],
+                    'reviewProtocolFingerprint': cached.get('reviewProtocolFingerprint'),
+                }
+                reused_passed += 1
+                continue
+            record = failed_records.get(relative)
+            if record is None:
+                selected.append(item.resolve())
+                continue
             if not isinstance(record, dict) or not isinstance(record.get('passed'), bool):
                 raise ValueError('失败状态文件记录格式非法')
-            if state.get('schemaVersion') == 2 and (
-                not isinstance(record.get('completed'), bool)
-                or record.get('failureKind') not in {None, 'pending', 'content', 'transient'}
-            ):
-                raise ValueError('失败状态完成标记或失败类型非法')
-            current = _file_fingerprint(item)
             recorded = {
                 'deleted': record.get('deleted') is True,
                 'sha256': record.get('sha256'),
             }
-            key = str(item.resolve())
-            if record['passed']:
-                if current != recorded:
-                    raise ValueError(f'已通过文件发生变化: {record.get("path")}')
-                prior_results[key] = {
-                    'passed': True, 'completed': True, 'failureKind': None,
-                    'reviewedSha256': record.get('reviewedSha256') or record.get('sha256'),
-                }
-                continue
-            if current['deleted'] != recorded['deleted']:
-                raise ValueError(f'失败文件删除状态变化: {record.get("path")}')
             failure_kind = record.get('failureKind') or (
                 'content' if record.get('completed', True) else 'pending'
             )
@@ -3746,11 +3898,12 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
             else:
                 selected.append(item.resolve())
         return {
-            'mode': 'incremental',
+            'mode': 'incremental' if evidence_exists else 'full',
             'paths': selected,
             'priorResults': prior_results,
             'unchangedFailed': unchanged_failed,
-            'reason': None,
+            'reusedPassed': reused_passed,
+            'reason': state_error,
         }
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError) as exc:
         full['reason'] = str(exc)
@@ -3817,6 +3970,11 @@ def load_verified_review_receipt(date_str):
             expected = record.get('sha256')
             if not target.is_file() or not re.fullmatch(r'[0-9a-f]{64}', str(expected or '')):
                 raise PublishDataValidationError(f'已审查文件缺失或哈希非法: {key}')
+            evidence_protocol = record.get('reviewProtocolFingerprint')
+            if evidence_protocol is not None and not re.fullmatch(
+                r'[0-9a-f]{64}', str(evidence_protocol)
+            ):
+                raise PublishDataValidationError(f'已审查文件协议指纹非法: {key}')
             actual = _sha256_file(target)
             if actual != expected:
                 raise PublishDataValidationError(f'文件在 review 后已变更，拒绝推送: {key}')

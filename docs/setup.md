@@ -69,7 +69,7 @@
 | `PAPER_DIGEST_REPO_URL` | 小红书等文案中附带的项目仓库地址 | `github.com/nanless/audio-paper-digest` |
 | `PAPER_DIGEST_GITHUB_REMOTE` | Git 远程仓库名称 | `origin` |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 独立论文页三层 review 并发度（汇总页仍先串行审查） | `5` |
-| `PD_BLOG_REVIEW_CHUNK_CHARS` | 文本 review 分块字符数；限制为 4000–16000，值变化会使 review 协议凭证失效 | `8000` |
+| `PD_BLOG_REVIEW_CHUNK_CHARS` | 文本 review 分块字符数；限制为 4000–16000，值变化会刷新整批协议凭证，但 SHA 未变页面的逐文件通过记录仍可复用 | `8000` |
 | `PD_BLOG_REVIEW_MAX_TOKENS` | 单次博客 LLM review 的输出预算；空响应因 `length` 截断时会自适应加倍 | `4000` |
 
 发布阶段的 LLM 调用会记录请求开始、响应/异常、单次耗时、prompt 长度和图片数；日志不会输出 API key、认证头或正文内容。若日志只出现 `→` 而没有 `✓` 或失败行，表示进程在 HTTP 请求尚未返回时被外部终止，不能据此签发审查凭证或推送。
@@ -282,7 +282,7 @@ FEISHU_APP_SECRET=your-full-app-secret
    - 若数据文件包含多日期论文，请拆分数据或确认意图后再发布
 
 4. **不要重复发布同一天**
-   - 重复运行 `generate-blog.py --date 2026-04-21` 会覆盖该日期的博客文件；随后必须重新运行 `review-blog.py`。`push-blog.py` 只接受未变更的 SHA-256 审查凭证。
+   - 重复运行 `generate-blog.py --date 2026-04-21` 会覆盖该日期的博客文件；随后必须重新运行 `review-blog.py` 以刷新整批凭证，但路径与 SHA-256 均未变化的已通过页面不会再次调用三层 review。`push-blog.py` 只接受与当前文件完全一致的 SHA-256 审查凭证。
    - 如需追加论文，应重新生成完整数据后再发布
 
 5. **发布后视觉资产必须断点续跑，不要全量重画**

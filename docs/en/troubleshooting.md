@@ -55,7 +55,7 @@ ls -lt content/posts | head -20
 
 Possible causes:
 - The request was explicitly limited to generation or review; a normal dated-digest run also authorizes the separate `push-blog.py` stage
-- `push-blog.py` cannot find a review receipt or a reviewed file SHA-256 changed; run `review-blog.py` again
+- `push-blog.py` cannot find a review receipt or a reviewed file SHA-256 changed; run `review-blog.py` again. It reuses matching path-plus-SHA entries from `blog-review-passes-YYYY-MM-DD.json` and reviews only new, changed, or failed files
 - Data file is empty or paper analysis failed
 - Target date file already exists with identical content
 

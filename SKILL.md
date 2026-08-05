@@ -382,7 +382,7 @@ npm run xiaohongshu -- --date 2026-04-22
   - 汇总页：`YYYY-MM-DD.md`
   - 单篇页：`YYYY-MM-DD-<slug>.md`
 - `generate-blog.py` 在日期级跨进程锁内逐页生成、安装并写 journal；崩溃后可收养已完成的同 SHA 页面，全部论文完成后才生成汇总页和严格 generation manifest，禁止 review/commit/push
-- `review-blog.py` 在同一日期锁内逐文件审查，checkpoint 绑定 worker 实际读取的 SHA；内容失败修复后只复审失败页，瞬时 LLM/网络错误保持待重试，任何已通过文件变化、应存在页面消失、清单/基线变化或 Hugo 前后 SHA 变化都会阻断凭证；禁止 commit/push
+- `review-blog.py` 在同一日期锁内逐文件审查，checkpoint 绑定 worker 实际读取的 SHA；每个通过项立即写入按日期隔离的持久账本，以博客仓库相对路径 + SHA-256 复用。代码、脚本、文档、模型、协议、generation manifest 或博客基线变化只要求重建整批 receipt，不得重审 SHA 未变的页面；只审查新增、字节变化、瞬时失败或内容失败修复后的文件。应存在页面消失或 Hugo 前后 SHA 变化仍阻断凭证；禁止 commit/push
 - review 的 HTTP 重试优先使用 `Retry-After`，否则指数退避并加短抖动；协议格式修复和完整协议重试使用收紧的独立预算。代码预检先去除完全重复长段落，并阻断表格列数不一致和疑似在单词中途截断的超长图片说明；合法空分组列续行不得删除
 - `push-blog.py` 验证审查凭证和当前文件哈希，精确 stage 后及 commit 前再逐项校验 index blob SHA/删除状态，随后提交、推送并核对远端 OID；禁止重新生成或 review
 - 三阶段除日期锁外还共享博客仓库级全局锁，防止不同日期并发污染共同的 worktree、index、HEAD 或回滚状态

@@ -12,7 +12,7 @@ Visual generation is a post-publication stage. First finish deep analysis for ev
 
 A high-recall keyword gate runs before LLM filtering, with core audio categories as a fallback so clearly unrelated papers do not consume LLM quota. `npm run keyword:recall` checks curated positive/negative gold cases and adjudicated historical positives. At the end of a daily run, `npm run digest:status -- --date YYYY-MM-DD` produces the unified machine-readable completion report for fetch, filter, analysis, remote blog publication, and both visual asset types.
 
-Deep analysis now uses stage-specific evidence budgets. Primary analysis still covers the paper, with balanced whole-document sampling for very long sources; open-source scanning, revision, scoring, method/table repair, and structure repair receive task-focused evidence slices instead of repeatedly resending the complete paper. Blog text review uses 8,000-character chunks by default, halving repeated instruction overhead versus the former 4,000-character default. All budgets are project `.env` overrides and are bound into recovery fingerprints.
+Deep analysis now uses stage-specific evidence budgets. Primary analysis still covers the paper, with balanced whole-document sampling for very long sources; open-source scanning, revision, scoring, method/table repair, and structure repair receive task-focused evidence slices instead of repeatedly resending the complete paper. Blog text review uses 8,000-character chunks by default, halving repeated instruction overhead versus the former 4,000-character default. All budgets are project `.env` overrides and are bound into recovery fingerprints. Every passed blog page is also retained as durable repository-relative-path plus file-SHA-256 evidence. Code, script, documentation, model, protocol, generation-manifest, or blog-baseline changes refresh the batch receipt without re-reviewing unchanged page bytes; only new or content-changed pages re-enter the three-layer review.
 
 ---
 
@@ -216,6 +216,8 @@ node scripts/validate-data-files.js
 python3 scripts/generate-blog.py --date 2026-04-21
 python3 scripts/review-blog.py --date 2026-04-21
 python3 scripts/push-blog.py --date 2026-04-21
+
+# Passed pages with unchanged SHA-256 are reused permanently; retries review only new/changed/failed pages.
 
 # Publish with custom data
 python3 scripts/publish-to-blog.py --date 2026-04-21 data/current/deep-analysis-result.json

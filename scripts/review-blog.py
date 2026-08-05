@@ -61,16 +61,18 @@ def _run_review(module, date_str):
         paths, manifest_path = module.load_generation_manifest(date_str)
         paper_slugs, scored_papers = read_generated_pages(module, date_str, paths)
         base_head = module.validate_git_publish_branch()
-        # A review attempt invalidates any older success receipt immediately.
-        module.review_receipt_path(date_str).unlink(missing_ok=True)
         plan = module.plan_incremental_review(
             date_str, paths, manifest_path, base_head,
         )
+        # Planning may migrate exact per-file passes from the older receipt.
+        # The batch-level receipt itself is invalid once this attempt starts.
+        module.review_receipt_path(date_str).unlink(missing_ok=True)
         print(f'📋 读取生成清单: {manifest_path}')
         if plan['mode'] == 'incremental':
             print(
-                f'♻️ 失败集续审: {len(plan["paths"])} 个已修改失败文件；'
-                f'{len(plan["unchangedFailed"])} 个失败文件尚未修改'
+                f'♻️ 按文件 SHA 续审: 复用 {plan.get("reusedPassed", 0)} 个已通过文件；'
+                f'本轮审查 {len(plan["paths"])} 个文件；'
+                f'{len(plan["unchangedFailed"])} 个内容失败文件尚未修改'
             )
         else:
             if plan.get('reason'):
@@ -132,8 +134,8 @@ def _run_review(module, date_str):
                 date_str, paths, manifest_path, combined_results,
             )
         except Exception:
-            # A site-wide deterministic/Hugo failure is not safely attributable
-            # to a subset of pages; force the next attempt back to full review.
+            # A site-wide deterministic/Hugo failure invalidates the batch
+            # checkpoint, while exact per-file passes remain durably reusable.
             module.review_failure_path(date_str).unlink(missing_ok=True)
             raise
         receipt = module.save_review_receipt(
