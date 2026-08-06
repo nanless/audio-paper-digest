@@ -21,6 +21,8 @@ from publish_common import (  # noqa: E402
     build_paper_meta,
     dedupe_image_alts,
     detect_publish_api_type,
+    EXPERIMENT_TABLE_CONTRACT_VERSION,
+    extract_markdown_tables,
     fix_empty_markdown_links,
     fix_yaml_unbalanced_quotes,
     load_papers,
@@ -31,6 +33,7 @@ from publish_common import (  # noqa: E402
     sanitize_markdown_for_publish,
     strip_raw_inline_html,
     validate_papers_for_publish,
+    validate_experiment_table_contract,
     validate_review_payload,
 )
 from utils import parse_analysis  # noqa: E402
@@ -274,6 +277,50 @@ confidence: 中
         self.assertIn('立即停止展开推理', payloads[1]['messages'][0]['content'])
         sleep.assert_not_called()
 
+    def test_kimi_anthropic_reasoning_response_uses_same_bounded_json_retry(self):
+        first = mock.Mock()
+        first.status = 200
+        first.read.return_value = (
+            b'{"content":[{"type":"thinking","thinking":"hidden reasoning"}],'
+            b'"stop_reason":"max_tokens"}'
+        )
+        first.__enter__ = mock.Mock(return_value=first)
+        first.__exit__ = mock.Mock(return_value=False)
+
+        second = mock.Mock()
+        second.status = 200
+        second.read.return_value = (
+            b'{"content":[{"type":"text","text":"{\\"passed\\":true,\\"issues\\":[]}"}],'
+            b'"stop_reason":"end_turn"}'
+        )
+        second.__enter__ = mock.Mock(return_value=second)
+        second.__exit__ = mock.Mock(return_value=False)
+
+        opener = mock.Mock()
+        opener.open.side_effect = [first, second]
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://api.kimi.com/coding/v1',
+            'PAPER_ANALYZER_MODEL': 'kimi-k2',
+        }
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('urllib.request.build_opener', return_value=opener), \
+                mock.patch('publish_common.get_claude_code_version', return_value='9.8.7'), \
+                mock.patch('publish_common.time.sleep') as sleep:
+            result = call_publish_llm_api(
+                'inspect', required=True, max_tokens=4000, max_retries=5,
+                structured_output=True,
+            )
+
+        self.assertEqual(result, '{"passed":true,"issues":[]}')
+        self.assertEqual(opener.open.call_count, 2)
+        requests = [call.args[0] for call in opener.open.call_args_list]
+        self.assertEqual(requests[0].full_url, 'https://api.kimi.com/coding/v1/messages')
+        payloads = [json.loads(request.data.decode('utf-8')) for request in requests]
+        self.assertEqual([payload['max_tokens'] for payload in payloads], [4000, 8000])
+        self.assertIn('立即停止展开推理', payloads[1]['messages'][0]['content'])
+        sleep.assert_not_called()
+
     def test_required_secondary_publish_llm_does_not_fallback_to_primary_model(self):
         env = {
             'PAPER_ANALYZER_API_KEY': 'primary-key',
@@ -483,6 +530,42 @@ confidence: 中
         paper['analysisManifest']['stages']['scoringAudit']['status'] = 'transient_failure'
         with self.assertRaisesRegex(PublishDataValidationError, 'scoringAudit'):
             validate_papers_for_publish([paper])
+
+    def test_versioned_publish_preflight_enforces_bounded_experiment_tables(self):
+        headers = ['方法', '数据集'] + [f'M{i}' for i in range(1, 9)]
+        separator = ['---'] * len(headers)
+        rows = [
+            [f'Model {i}', 'test'] + [str(i + j) for j in range(8)]
+            for i in range(13)
+        ]
+        table = '\n'.join(
+            f"| {' | '.join(row)} |" for row in [headers, separator, *rows]
+        )
+        paper = complete_paper()
+        paper['analysis'] += f'\n\n## 实验结果\n{table}\n'
+        paper['parsed'] = parse_analysis(paper['analysis'])
+        statuses = {
+            'imageDownload': 'complete', 'primaryAnalysis': 'complete',
+            'openSourceScan': 'complete', 'demoLinkScan': 'not_needed',
+            'revision': 'complete', 'tableRepair': 'not_needed',
+            'methodRepair': 'not_needed', 'structureRepair': 'not_needed',
+            'scoringAudit': 'complete', 'imageSupplement': 'no_candidates',
+        }
+        paper['analysisManifest'] = {
+            'version': 1,
+            'contracts': {'experimentTables': EXPERIMENT_TABLE_CONTRACT_VERSION},
+            'stages': {name: {'status': status} for name, status in statuses.items()},
+        }
+
+        self.assertEqual(len(extract_markdown_tables(table)), 1)
+        self.assertEqual(len(extract_markdown_tables(f'```markdown\n{table}\n```')), 0)
+        self.assertRegex(validate_experiment_table_contract(paper['analysis']), '13 个数据行')
+        with self.assertRaisesRegex(PublishDataValidationError, '表格契约无效'):
+            validate_papers_for_publish([paper])
+
+        legacy = copy.deepcopy(paper)
+        del legacy['analysisManifest']['contracts']
+        self.assertEqual(len(validate_papers_for_publish([legacy])), 1)
 
     def test_required_review_payload_fails_closed_on_malformed_contract(self):
         for payload in (

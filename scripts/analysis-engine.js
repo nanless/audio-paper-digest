@@ -11,7 +11,11 @@ const os = require('os');
 const crypto = require('crypto');
 const { parseAnalysis, writeFileAtomic, getBeijingISOString, normalizedId } = require('./utils.js');
 const { ANALYSIS_CONFIG } = require('./config.js');
-const { getInvalidAnalysisReason, hasRequiredSections } = require('./analysis-contract.js');
+const {
+    getInvalidAnalysisReason,
+    hasRequiredSections,
+    analysisManifestRequiresExperimentTableContract
+} = require('./analysis-contract.js');
 
 // ═══════════════════════════════════════════════════════
 // 默认配置常量（从 config.js 读取）
@@ -276,7 +280,11 @@ function hasValidAnalysisBody(paper) {
     // Re-parse the body independently so repeated failed saves cannot erase valid content.
     try {
         const parsed = parseAnalysis(paper.analysis);
-        return !getInvalidAnalysisReason(paper.analysis, parsed);
+        return !getInvalidAnalysisReason(paper.analysis, parsed, {
+            enforceExperimentTableContract: analysisManifestRequiresExperimentTableContract(
+                paper.analysisManifest
+            )
+        });
     } catch (error) {
         return false;
     }
@@ -347,7 +355,11 @@ async function analyzePaperWithRetry(paper, options = {}) {
 
             if (analyzed && analyzed.analysis) {
                 const parsed = parseAnalysis(analyzed.analysis);
-                const invalidReason = getInvalidAnalysisReason(analyzed.analysis, parsed);
+                const invalidReason = getInvalidAnalysisReason(analyzed.analysis, parsed, {
+                    enforceExperimentTableContract: analysisManifestRequiresExperimentTableContract(
+                        analyzed.analysisManifest || paper.analysisManifest
+                    )
+                });
                 if (invalidReason) {
                     lastError = invalidReason;
                     if (attempt < maxRetries) {

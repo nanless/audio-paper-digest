@@ -632,6 +632,20 @@ has_dataset: 否
         );
     });
 
+    it('结构预修复会在评分前收敛超限实验表格', () => {
+        const { getRepairableAnalysisStructureIssues } = require('../scripts/deep-analyzer.js');
+        const rows = Array.from({ length: 13 }, (_, index) => `| Model ${index + 1} | ${index} |`).join('\n');
+        const oversized = validAnalysisText().replace(
+            '\n## 细节详述',
+            `\n\n| 方法 | WER |\n| --- | --- |\n${rows}\n\n## 细节详述`
+        );
+        assert.deepStrictEqual(
+            getRepairableAnalysisStructureIssues(oversized)
+                .filter(issue => issue.startsWith('实验表格:')),
+            ['实验表格: 实验结果第 1 张表包含 13 个数据行，最多允许 12 行']
+        );
+    });
+
     it('确定性规范化额外标题、机器摘要杂项和破损标签', () => {
         const {
             normalizeAnalysisStructure,
@@ -1273,6 +1287,7 @@ has_dataset: 否
         } = require('../scripts/deep-analyzer.js');
 
         assert.strictEqual(sourceTextLikelyHasTables('Table 1: WER comparison'), true);
+        assert.strictEqual(sourceTextLikelyHasTables('Tbl. IV reports the ablation'), true);
         assert.strictEqual(sourceTextLikelyHasTables('表2 展示不同模型结果'), true);
         assert.strictEqual(sourceTextLikelyHasTables('\\begin{tabular}{lll}'), true);
         assert.strictEqual(sourceTextLikelyHasTables('No quantitative table is provided.'), false);
@@ -1302,6 +1317,21 @@ has_dataset: 否
             analysisNeedsExperimentTableRepair(citedMissing, 'Table 1: WER comparison'),
             true
         );
+
+        for (const reference of ['Table 1', 'Table IV', 'Tbl. S2', '表（3）']) {
+            const englishOrChineseCitation = proseOnly.replace(
+                '主方法 WER 为 5.1，最强基线为 5.6。',
+                `As shown in ${reference}, the proposed method is better.`
+            );
+            assert.strictEqual(
+                analysisNeedsExperimentTableRepair(
+                    englishOrChineseCitation,
+                    `${reference}: WER comparison`
+                ),
+                true,
+                `${reference} should trigger table repair`
+            );
+        }
 
         const compactTable = proseOnly.replace(
             '主方法 WER 为 5.1，最强基线为 5.6。',

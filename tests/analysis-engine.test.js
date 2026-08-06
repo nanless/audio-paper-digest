@@ -24,7 +24,11 @@ const {
     getAnalysisRunStatus,
     getAnalysisExitCode
 } = require('../scripts/analysis-engine.js');
-const { getMissingRequiredSections } = require('../scripts/analysis-contract.js');
+const {
+    getMissingRequiredSections,
+    validateExperimentTableContract,
+    EXPERIMENT_TABLE_CONTRACT_VERSION
+} = require('../scripts/analysis-contract.js');
 const { validAnalysisText, validAnalysisPaper } = require('./valid-analysis-fixture.js');
 
 function legacyValidAnalysisText() {
@@ -281,6 +285,48 @@ describe('analyzePaperWithRetry', () => {
     it('校验会拒绝缺少核心字段的分析', () => {
         assert.strictEqual(getInvalidAnalysisReason(validAnalysisText(), require('../scripts/utils.js').parseAnalysis(validAnalysisText())), null);
         assert.match(getInvalidAnalysisReason('## 评分\n8.0/10', {}), /缺少必要章节/);
+    });
+
+    it('bounded-v1 硬契约限制实验表格数量、数据行和指标列', () => {
+        const table = (rows = 12, metrics = 8, label = 'A') => {
+            const headers = ['方法', '数据集', ...Array.from({ length: metrics }, (_, i) => `M${i + 1}`)];
+            const separator = headers.map(() => '---');
+            const data = Array.from({ length: rows }, (_, i) => [
+                `${label}${i + 1}`,
+                i % 2 ? 'dev' : 'test',
+                ...Array.from({ length: metrics }, (_value, j) => `${i + j}`)
+            ]);
+            return [headers, separator, ...data].map(row => `| ${row.join(' | ')} |`).join('\n');
+        };
+        const withTables = (...tables) => validAnalysisText().replace(
+            '\n## 细节详述',
+            `\n\n${tables.join('\n\n')}\n\n## 细节详述`
+        );
+
+        assert.strictEqual(validateExperimentTableContract(withTables(table(), table(2, 8, 'B'))), null);
+        assert.match(validateExperimentTableContract(withTables(table(), table(), table())), /3 张/);
+        assert.match(validateExperimentTableContract(withTables(table(13))), /13 个数据行/);
+        assert.match(validateExperimentTableContract(withTables(table(2, 9))), /9 个指标列/);
+        assert.strictEqual(
+            validateExperimentTableContract(withTables(`\`\`\`markdown\n${table(13)}\n\`\`\``)),
+            null,
+            'fenced examples are not rendered Markdown tables'
+        );
+
+        const oversized = withTables(table(13));
+        const parsed = require('../scripts/utils.js').parseAnalysis(oversized);
+        assert.strictEqual(getInvalidAnalysisReason(oversized, parsed), null, 'legacy records stay compatible');
+        assert.match(getInvalidAnalysisReason(oversized, parsed, {
+            enforceExperimentTableContract: true
+        }), /表格契约无效/);
+
+        const versioned = validAnalysisPaper('2604.00999', {
+            analysis: oversized
+        });
+        versioned.analysisManifest.contracts = {
+            experimentTables: EXPERIMENT_TABLE_CONTRACT_VERSION
+        };
+        assert.strictEqual(isSuccessfulAnalysisRecord(versioned), false);
     });
 
     it('结构契约会返回精确缺失章节供局部修复', () => {

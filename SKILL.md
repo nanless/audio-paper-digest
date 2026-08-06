@@ -123,7 +123,7 @@ API 调用特性：
 - 整体超时 20 分钟，按进程活跃时间记账；系统睡眠/长时间挂起从预算中排除，唤醒后的底层超时继续使用剩余预算重试
 - 主分析 max_tokens=64000，审校/表格/方法/结构局部修复默认 max_tokens=16000（`PD_ANALYSIS_REPAIR_MAX_TOKENS` 可覆写），temperature=0.7
 - 主分析输入默认上限 200K 字符；超过时使用 `task-focused-v1` 跨全文均衡取样，不再只保留开头。开源/审校/评分/表格与方法/结构后处理证据默认上限分别为 16K/60K/40K/30K/40K 字符，且使用任务关键词优先的证据块，避免重复发送完整全文。对应 `PD_*_EVIDENCE_MAX_CHARS` 和 `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` 会进入阶段指纹
-- 主分析与审校只保留支撑结论的关键表格：每篇最多 2 张、每张最多 12 个数据行和 8 个指标列。表格修复只在实验章节明确引用原文表格但缺少 Markdown 表格，或出现非法省略标记时调用；原文仅“存在表格”不足以触发额外 LLM 请求
+- 主分析与审校只保留支撑结论的关键表格。新分析/重分析必须写入 `analysisManifest.contracts.experimentTables=bounded-v1` 并通过 Node/Python 双端硬校验：每篇最多 2 张、每张最多 12 个数据行和 8 个指标列，超限在评分前进入局部结构修复；无该标记的历史成功记录保持兼容，不触发全量重跑。表格修复只在实验章节以 `Table` / `Tbl.` / `表` 明确引用原文表格但缺少 Markdown 表格，或出现非法省略标记时调用；原文仅“存在表格”不足以触发额外 LLM 请求
 - **双层重试**：analysis-engine.js 层面每篇最多重试 2 次（总共最多 3 次尝试）；deep-analyzer.js 内部每次 API 调用再重试最多 3 次（指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5s`）
 - **抓取代理为强制项**：LLM API 固定 `agent: false` 直连，不得注入代理 agent/dispatcher；arXiv/HuggingFace 抓取缺少项目 `.env` 代理必须失败，禁止直接回退。Node arXiv 使用 `HTTPS_PROXY` 或 `HTTP_PROXY` 中至少一项 HTTP CONNECT 地址，HuggingFace curl 可额外使用 SOCKS `ALL_PROXY`；访问本机代理的网络命令必须在沙箱外运行。
 - arXiv HTML 解析使用 **cheerio** 结构化选择器，移除 script/style/nav/header/footer 等噪音元素

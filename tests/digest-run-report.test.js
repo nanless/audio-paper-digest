@@ -107,13 +107,38 @@ describe('digest run report', () => {
             filter: { complete: true, selectedCount: 6, totalCandidates: 42, pendingDecisions: 0 },
             analysis: { complete: true, successful: 6, total: 6, failed: 0 },
             blog: { complete: true, strictReview: true, publicationVerified: true },
-            visuals: { complete: 8, total: 10, pending: 2, failed: 0 },
+            visuals: { gateComplete: false, complete: 8, total: 10, pending: 2, failed: 0 },
             cover: { complete: true, status: 'complete' }
         });
         assert.match(summary, /candidates=42/);
         assert.match(summary, /complete=8\/10/);
         assert.match(summary, /错误: 长图未完成/);
         assert.doesNotMatch(summary, /sourceHealth|huge/);
+    });
+
+    it('长图计数满额但资产门禁失败时终端不得误报 complete', () => {
+        const summary = formatDigestRunSummary({
+            batchDate: '2026-07-29',
+            overallStatus: 'incomplete',
+            errors: ['TOP 10 论文长图状态或资产校验未完成'],
+            fetch: { complete: true, rawCandidateCount: 10 },
+            filter: { complete: true, selectedCount: 10, totalCandidates: 10, pendingDecisions: 0 },
+            analysis: { complete: true, successful: 10, total: 10, failed: 0 },
+            blog: { complete: true, strictReview: true, publicationVerified: true },
+            visuals: {
+                gateComplete: false,
+                status: 'complete',
+                complete: 10,
+                total: 10,
+                pending: 0,
+                failed: 0,
+                assetsValid: false,
+                archiveUnique: true
+            },
+            cover: { complete: true, status: 'complete' }
+        });
+        assert.match(summary, /长图 incomplete \| complete=10\/10/);
+        assert.doesNotMatch(summary, /长图 complete \|/);
     });
 
     it('统一状态门禁与 visual:status 一样严格绑定 canonical 长图路径', () => {

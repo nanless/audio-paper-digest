@@ -289,6 +289,7 @@ Core analysis results. Structure:
       },
       "analysisManifest": {
         "version": 1,
+        "contracts": {"experimentTables": "bounded-v1"},
         "stages": {
           "imageDownload": {"status": "complete"},
           "primaryAnalysis": {"status": "complete"},
@@ -316,6 +317,7 @@ Core analysis results. Structure:
 - `scoringRubricVersion: type-aware-v1` is written only for new analyses containing a valid `document_type`; historical results are not mislabeled
 - `analysisSource`, source lengths, truncation, SHA-256, confidence, and warnings distinguish HTML/PDF/full-text input from abstract fallback. `sourceTextChars` is the acquired source length and `usedTextChars` is the actual primary-analysis input; very long sources use deterministic cross-document, task-aware sampling rather than prefix-only truncation. Abstract-only results require explicit `allowAbstractAnalysisPublish: true` approval before publishing
 - `analysisManifest.stages.scoringAudit` retains model/options, prompt/evidence hashes, attempts, previous/final score and delta, the final audit JSON, and `stabilityWarning` when absolute drift exceeds 0.5
+- New analyses and reanalyses write `analysisManifest.contracts.experimentTables=bounded-v1` after structure repair. The marker means the experimental section passed the hard limit of two tables, 12 data rows and 8 metric columns per table. `npm run validate:data` and Python publication preflight revalidate marked bodies; existing successful records without the marker remain compatible instead of being invalidated in bulk
 - `selectedImageUrls` / `imageUrls` contain only high-value figures inserted through a stable `paragraph_id`, target-section, and four-image-limit gate, stored in final body order. Legacy exact anchors remain compatible. `imageManifest` also preserves per-URL outcomes, cache hits, model/options, hashes, and insertion diagnostics
 - Root `generation` increments on each locked object write so concurrent updates can be detected and merged. Every mandatory version-1 `analysisManifest` stage must be terminal (`complete`, `not_needed`, `skipped`, `no_candidates`, or `no_high_value_images`) before the paper is successful; only a strict empty insertion plan produces `no_high_value_images`
 - `analysisStageCheckpoints` persists stage snapshots. Fingerprints cover the actual sampled primary input, the `task-focused-v1` evidence-selector version, per-stage character budgets, model/protocol/endpoint, temperatures, extracted prompts, image candidates, and downloaded hashes; a budget or input change invalidates only the affected stage and downstream work
@@ -438,7 +440,7 @@ After all blogs publish, every batch produces one digest image. Its context is d
 
 ### 5.8.1 `data/current/digest-run-reports/YYYY-MM-DD.json`
 
-The unified read-only completion snapshot written by `npm run digest:status -- --date YYYY-MM-DD`. It summarizes candidate fetch, filtering-decision coverage, successful deep analyses, strict blog review and remote OID verification, paper infographics, the digest cover, and their error lists. The terminal prints only compact stage counts and errors, while full diagnostics such as `fetch.sourceHealth` remain in JSON. `overallStatus` is `complete` and the command exits zero only when every required stage is complete; this report never replaces the source manifests or receipts.
+The unified read-only completion snapshot written by `npm run digest:status -- --date YYYY-MM-DD`. It summarizes candidate fetch, filtering-decision coverage, successful deep analyses, strict blog review and remote OID verification, paper infographics, the digest cover, and their error lists. The terminal prints only compact stage counts and errors, while full diagnostics such as `fetch.sourceHealth` remain in JSON. `visuals.gateComplete` is the final infographic gate combining status, counts, canonical asset validation, archive uniqueness, and publication binding, so the terminal never infers completion from counts alone. `overallStatus` is `complete` and the command exits zero only when every required stage is complete; this report never replaces the source manifests or receipts.
 
 ### 5.9 `data/current/analyzed.json`
 

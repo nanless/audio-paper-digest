@@ -47,6 +47,13 @@ const MACHINE_SCORE_MAXIMA = Object.freeze({
 const OPEN_SOURCE_SCORE_ANCHORS = Object.freeze([0, 0.2, 0.5, 1, 1.2, 1.5]);
 const DOCUMENT_TYPES = new Set(['方法研究', '系统技术报告', '模型报告', '数据集与基准', '综述', '理论研究', '应用研究']);
 const NON_EMPIRICAL_DOCUMENT_TYPES = new Set(['综述', '理论研究']);
+const EXPERIMENT_TABLE_CONTRACT_VERSION = 'bounded-v1';
+const EXPERIMENT_TABLE_LIMITS = Object.freeze({
+    maxTables: 2,
+    maxDataRows: 12,
+    maxMetricColumns: 8
+});
+const TABLE_IDENTIFIER_HEADER_RE = /(?:^|\b)(?:method|model|system|config(?:uration)?|dataset|corpus|benchmark|task|language|scenario|condition|setting|split|category|type|modality|version)(?:\b|$)|方法|模型|系统|配置|数据集|语料|基准|任务|语言|场景|条件|设置|划分|类别|类型|模态|版本/i;
 
 function escapeRegExp(value) {
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -75,6 +82,116 @@ function extractSection(text, title) {
         ''
     );
     return heading.exec(String(text || ''))?.[2]?.trim() || '';
+}
+
+function splitMarkdownTableRow(row) {
+    const text = String(row || '').trim();
+    if (!text.includes('|')) return [];
+    const cells = [];
+    let current = '';
+    let inCode = false;
+    for (let index = 0; index < text.length; index += 1) {
+        const char = text[index];
+        if (char === '\\' && index + 1 < text.length) {
+            current += char + text[index + 1];
+            index += 1;
+            continue;
+        }
+        if (char === '`') {
+            inCode = !inCode;
+            current += char;
+            continue;
+        }
+        if (char === '|' && !inCode) {
+            cells.push(current.trim());
+            current = '';
+            continue;
+        }
+        current += char;
+    }
+    cells.push(current.trim());
+    if (text.startsWith('|') && cells[0] === '') cells.shift();
+    if (text.endsWith('|') && cells[cells.length - 1] === '') cells.pop();
+    return cells;
+}
+
+function isMarkdownTableSeparator(row) {
+    const cells = splitMarkdownTableRow(row);
+    return cells.length >= 2 && cells.every(cell => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, '')));
+}
+
+function stripFencedCodeBlocks(text) {
+    let fence = null;
+    return String(text || '').split('\n').map(line => {
+        const match = line.match(/^\s*(`{3,}|~{3,})/);
+        if (!fence) {
+            if (match) {
+                fence = { char: match[1][0], length: match[1].length };
+                return '';
+            }
+            return line;
+        }
+        if (match && match[1][0] === fence.char && match[1].length >= fence.length) {
+            fence = null;
+        }
+        return '';
+    }).join('\n');
+}
+
+function extractMarkdownTables(text) {
+    const lines = stripFencedCodeBlocks(text).split('\n');
+    const tables = [];
+    for (let index = 0; index + 1 < lines.length;) {
+        const header = splitMarkdownTableRow(lines[index]);
+        if (header.length < 2 || !isMarkdownTableSeparator(lines[index + 1])) {
+            index += 1;
+            continue;
+        }
+        let end = index + 2;
+        let dataRows = 0;
+        while (end < lines.length) {
+            const line = lines[end];
+            if (!line.trim() || splitMarkdownTableRow(line).length < 2) break;
+            dataRows += 1;
+            end += 1;
+        }
+        const identifierColumns = header.filter(cell => {
+            const normalized = cell
+                .replace(/<br\s*\/?>/gi, ' ')
+                .replace(/[*_`]/g, '')
+                .trim();
+            return !normalized || TABLE_IDENTIFIER_HEADER_RE.test(normalized);
+        }).length;
+        tables.push({
+            header,
+            dataRows,
+            metricColumns: Math.max(0, header.length - identifierColumns)
+        });
+        index = Math.max(end, index + 2);
+    }
+    return tables;
+}
+
+function validateExperimentTableContract(analysis) {
+    const results = extractSection(analysis, '实验结果');
+    if (!results) return null;
+    const tables = extractMarkdownTables(results);
+    if (tables.length > EXPERIMENT_TABLE_LIMITS.maxTables) {
+        return `实验结果包含 ${tables.length} 张 Markdown 表格，最多允许 ${EXPERIMENT_TABLE_LIMITS.maxTables} 张`;
+    }
+    for (const [index, table] of tables.entries()) {
+        if (table.dataRows > EXPERIMENT_TABLE_LIMITS.maxDataRows) {
+            return `实验结果第 ${index + 1} 张表包含 ${table.dataRows} 个数据行，最多允许 ${EXPERIMENT_TABLE_LIMITS.maxDataRows} 行`;
+        }
+        if (table.metricColumns > EXPERIMENT_TABLE_LIMITS.maxMetricColumns) {
+            return `实验结果第 ${index + 1} 张表包含 ${table.metricColumns} 个指标列，最多允许 ${EXPERIMENT_TABLE_LIMITS.maxMetricColumns} 列（方法/数据集识别列不计）`;
+        }
+    }
+    return null;
+}
+
+function analysisManifestRequiresExperimentTableContract(manifest) {
+    return manifest?.contracts?.experimentTables === EXPERIMENT_TABLE_CONTRACT_VERSION;
 }
 
 function validateTopLevelSectionContract(analysis) {
@@ -196,7 +313,7 @@ function hasRequiredSections(text) {
     return getMissingRequiredSections(text).length === 0;
 }
 
-function getInvalidAnalysisReason(analysis, parsed) {
+function getInvalidAnalysisReason(analysis, parsed, options = {}) {
     const missingSections = getMissingRequiredSections(analysis);
     if (missingSections.length > 0) {
         return `分析结果缺少必要章节: ${missingSections.join('、')}`;
@@ -212,6 +329,10 @@ function getInvalidAnalysisReason(analysis, parsed) {
     if (machineSummaryIssue) return `分析结果机器摘要契约无效: ${machineSummaryIssue}`;
     const tagIssue = validateTagSectionContract(analysis, parsed);
     if (tagIssue) return `分析结果标签契约无效: ${tagIssue}`;
+    if (options.enforceExperimentTableContract === true) {
+        const tableIssue = validateExperimentTableContract(analysis);
+        if (tableIssue) return `分析结果表格契约无效: ${tableIssue}`;
+    }
     if (!parsed.documentType) return '分析结果缺少有效文档类型';
     if (!parsed.scoreValidation?.valid) {
         const details = Array.isArray(parsed.scoreValidation?.errors)
@@ -243,6 +364,12 @@ module.exports = {
     validateMachineSummaryContract,
     validateTagSectionContract,
     validateTopLevelSectionContract,
+    EXPERIMENT_TABLE_CONTRACT_VERSION,
+    EXPERIMENT_TABLE_LIMITS,
+    splitMarkdownTableRow,
+    extractMarkdownTables,
+    validateExperimentTableContract,
+    analysisManifestRequiresExperimentTableContract,
     getInvalidAnalysisReason
 };
 

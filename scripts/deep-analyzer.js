@@ -32,6 +32,8 @@ const {
     validateTopLevelSectionContract,
     validateMachineSummaryContract,
     validateTagSectionContract,
+    EXPERIMENT_TABLE_CONTRACT_VERSION,
+    validateExperimentTableContract,
     getInvalidAnalysisReason
 } = require('./analysis-contract.js');
 loadEnvFile();
@@ -628,6 +630,9 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
         promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES[stage]),
         usedTextSha256,
         evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
+        ...(stage === 'structureRepair'
+            ? { experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION }
+            : {}),
         evidenceMaxChars: {
             openSourceScan: OPEN_SOURCE_EVIDENCE_MAX_CHARS,
             revision: REVISION_EVIDENCE_MAX_CHARS,
@@ -746,6 +751,10 @@ function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint) {
         delete manifest.stages[recoveryStage];
         delete checkpoints[recoveryStage];
     }
+    if (stagesToDelete.includes('structureRepair') && manifest.contracts) {
+        delete manifest.contracts.experimentTables;
+        if (Object.keys(manifest.contracts).length === 0) delete manifest.contracts;
+    }
     paper.analysisStageCheckpoints = checkpoints;
     console.log(`    [deep] ⚠️  ${stage} 指纹变化，已失效该阶段及下游恢复状态`);
     return true;
@@ -771,9 +780,17 @@ function createAnalysisRecoveryManifest(paper) {
         for (const stage of RECOVERY_STAGE_ORDER) delete stages[stage];
         delete paper.analysisStageCheckpoints;
     }
+    const keepTableContract = isRecoveryStageComplete({ stages }, 'structureRepair')
+        && existing?.contracts?.experimentTables === EXPERIMENT_TABLE_CONTRACT_VERSION;
+    const contracts = existing?.contracts && typeof existing.contracts === 'object'
+        ? { ...existing.contracts }
+        : {};
+    if (keepTableContract) contracts.experimentTables = EXPERIMENT_TABLE_CONTRACT_VERSION;
+    else delete contracts.experimentTables;
     return {
         version: RECOVERY_MANIFEST_VERSION,
         stages,
+        ...(Object.keys(contracts).length > 0 ? { contracts } : {}),
         ...(existing?.sourceAcquisition ? { sourceAcquisition: { ...existing.sourceAcquisition } } : {}),
         ...(existing?.sourceAcquisitionLatestFailure
             ? { sourceAcquisitionLatestFailure: { ...existing.sourceAcquisitionLatestFailure } }
@@ -2855,6 +2872,16 @@ async function analyzePaperDeep(paper) {
                 }
                 console.log(`    [deep] ✅ 最终结构修复完成`);
             }
+            const tableContractIssue = validateExperimentTableContract(analysis);
+            if (tableContractIssue) {
+                const error = new Error(`最终结构修复后的表格仍未通过 bounded-v1 契约: ${tableContractIssue}`);
+                error.code = 'CONTRACT_REJECTED';
+                throw error;
+            }
+            analysisManifest.contracts = {
+                ...(analysisManifest.contracts || {}),
+                experimentTables: EXPERIMENT_TABLE_CONTRACT_VERSION
+            };
             markRecoveryStage(analysisManifest, 'structureRepair', structureIssues.length > 0 ? 'complete' : 'not_needed', {
                 deterministicNormalization: normalizedChanged,
                 normalizationIssues: preNormalizationIssues,
@@ -2862,7 +2889,12 @@ async function analyzePaperDeep(paper) {
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
         } catch (error) {
-            markRecoveryStage(analysisManifest, 'structureRepair', 'transient_failure', { error: error.message });
+            markRecoveryStage(
+                analysisManifest,
+                'structureRepair',
+                error.code === 'CONTRACT_REJECTED' ? 'contract_rejected' : 'transient_failure',
+                { error: error.message }
+            );
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             throw error;
         }
@@ -2912,7 +2944,9 @@ async function analyzePaperDeep(paper) {
             const scoringResult = await auditTypeAwareScoringDetailed(scoringInputAnalysis, textForAnalysis);
             analysis = scoringResult.analysis;
             const auditedParsed = parseAnalysis(analysis);
-            const auditedInvalidReason = getInvalidAnalysisReason(analysis, auditedParsed);
+            const auditedInvalidReason = getInvalidAnalysisReason(analysis, auditedParsed, {
+                enforceExperimentTableContract: true
+            });
             if (auditedInvalidReason) {
                 const error = new Error(`评分审计后的分析未通过最终契约: ${auditedInvalidReason}`);
                 error.code = 'CONTRACT_REJECTED';
@@ -2977,7 +3011,11 @@ async function analyzePaperDeep(paper) {
     if (isDualModel && downloadedImages.length > 0 && !isRecoveryStageComplete(analysisManifest, 'imageSupplement')) {
         try {
             const imageResult = await applyImageSupplement(paper, arxivId, analysis, imageInfos, downloadedImages);
-            const imageInvalidReason = getInvalidAnalysisReason(imageResult.analysis, parseAnalysis(imageResult.analysis));
+            const imageInvalidReason = getInvalidAnalysisReason(
+                imageResult.analysis,
+                parseAnalysis(imageResult.analysis),
+                { enforceExperimentTableContract: true }
+            );
             if (imageInvalidReason) {
                 const fallback = discardInvalidImageSupplement(
                     preImageAnalysis,
@@ -3554,6 +3592,8 @@ function getRepairableAnalysisStructureIssues(analysis) {
     if (machineIssue) issues.push(`机器摘要: ${machineIssue}`);
     const tagIssue = validateTagSectionContract(analysis, parsed);
     if (tagIssue) issues.push(`标签: ${tagIssue}`);
+    const tableIssue = validateExperimentTableContract(analysis);
+    if (tableIssue) issues.push(`实验表格: ${tableIssue}`);
     // 结构修复必须在评分审计之前兜住最终契约要求的叙事正文长度。
     // 否则标题齐全但正文仍是 `TD` / 编辑指令等占位内容时，评分审计只会
     // 反复改写评分，永远无法修复真正位于上游的核心摘要或方法/结果章节。
@@ -3704,9 +3744,14 @@ function extractResultsSection(analysis) {
 
 function sourceTextLikelyHasTables(text) {
     if (!text) return false;
-    return /(?:^|\n)\s*(?:Table|表)\s*[\dIVX一二三四五六七八九十]+/i.test(text)
+    return hasExplicitTableReference(text)
         || /\\begin\{tabular\}|<table[\s>]/i.test(text)
         || /\n\s*\|[^\n]+\|\s*\n\s*\|[\-\s:|]+\|/.test(text);
+}
+
+function hasExplicitTableReference(text) {
+    if (!text) return false;
+    return /\b(?:table|tbl)\.?\s*(?:[a-z]?\d+|[ivxlcdm]+)\b|表\s*[（(]?\s*(?:\d+|[一二三四五六七八九十百零]+)\s*[)）]?/i.test(text);
 }
 
 function analysisNeedsExperimentTableRepair(analysis, textForAnalysis) {
@@ -3714,7 +3759,7 @@ function analysisNeedsExperimentTableRepair(analysis, textForAnalysis) {
     if (!resultsSection) return false;
     const hasTable = hasMarkdownTable(resultsSection);
     const hasOmission = hasOmissionMarkers(resultsSection);
-    const hasTableReference = /[（(]表\d+[)）]|表[一二三四五六七八九十\d]+/.test(resultsSection);
+    const hasTableReference = hasExplicitTableReference(resultsSection);
     const sourceHasTables = sourceTextLikelyHasTables(textForAnalysis);
 
     // Explicit omission language is always repaired. Merely detecting any

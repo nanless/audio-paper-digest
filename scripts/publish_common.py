@@ -58,6 +58,138 @@ SCORING_COMPARE_FIELDS = (
 )
 MANUAL_OVERRIDE_ALLOWED_FIELDS = frozenset(SCORING_COMPARE_FIELDS)
 MANUAL_OVERRIDE_KEYS = frozenset({'type', 'source', 'reason', 'fields'})
+EXPERIMENT_TABLE_CONTRACT_VERSION = 'bounded-v1'
+EXPERIMENT_TABLE_LIMITS = {
+    'max_tables': 2,
+    'max_data_rows': 12,
+    'max_metric_columns': 8,
+}
+TABLE_IDENTIFIER_HEADER_RE = re.compile(
+    r'(?:^|\b)(?:method|model|system|config(?:uration)?|dataset|corpus|benchmark|task|'
+    r'language|scenario|condition|setting|split|category|type|modality|version)(?:\b|$)'
+    r'|方法|模型|系统|配置|数据集|语料|基准|任务|语言|场景|条件|设置|划分|类别|类型|模态|版本',
+    flags=re.IGNORECASE,
+)
+
+
+def _extract_analysis_section(text, title):
+    match = re.search(
+        rf'(?:^|\n)##(?!#)\s*{re.escape(title)}[：:\s]*\n([\s\S]*?)(?=\n##(?!#)\s|$)',
+        str(text or ''),
+    )
+    return match.group(1).strip() if match else ''
+
+
+def split_markdown_table_row(row):
+    text = str(row or '').strip()
+    if '|' not in text:
+        return []
+    cells = []
+    current = []
+    in_code = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == '\\' and index + 1 < len(text):
+            current.extend((char, text[index + 1]))
+            index += 2
+            continue
+        if char == '`':
+            in_code = not in_code
+            current.append(char)
+        elif char == '|' and not in_code:
+            cells.append(''.join(current).strip())
+            current = []
+        else:
+            current.append(char)
+        index += 1
+    cells.append(''.join(current).strip())
+    if text.startswith('|') and cells and cells[0] == '':
+        cells.pop(0)
+    if text.endswith('|') and cells and cells[-1] == '':
+        cells.pop()
+    return cells
+
+
+def _is_markdown_table_separator(row):
+    cells = split_markdown_table_row(row)
+    return len(cells) >= 2 and all(
+        re.fullmatch(r':?-{3,}:?', re.sub(r'\s+', '', cell)) for cell in cells
+    )
+
+
+def _strip_fenced_code_blocks(text):
+    fence = None
+    kept = []
+    for line in str(text or '').splitlines():
+        match = re.match(r'^\s*(`{3,}|~{3,})', line)
+        if fence is None:
+            if match:
+                fence = (match.group(1)[0], len(match.group(1)))
+                kept.append('')
+            else:
+                kept.append(line)
+            continue
+        if (match and match.group(1)[0] == fence[0]
+                and len(match.group(1)) >= fence[1]):
+            fence = None
+        kept.append('')
+    return '\n'.join(kept)
+
+
+def extract_markdown_tables(text):
+    lines = _strip_fenced_code_blocks(text).splitlines()
+    tables = []
+    index = 0
+    while index + 1 < len(lines):
+        header = split_markdown_table_row(lines[index])
+        if len(header) < 2 or not _is_markdown_table_separator(lines[index + 1]):
+            index += 1
+            continue
+        end = index + 2
+        data_rows = 0
+        while end < len(lines):
+            if not lines[end].strip() or len(split_markdown_table_row(lines[end])) < 2:
+                break
+            data_rows += 1
+            end += 1
+        identifier_columns = 0
+        for cell in header:
+            normalized = re.sub(r'<br\s*/?>', ' ', cell, flags=re.IGNORECASE)
+            normalized = re.sub(r'[*_`]', '', normalized).strip()
+            if not normalized or TABLE_IDENTIFIER_HEADER_RE.search(normalized):
+                identifier_columns += 1
+        tables.append({
+            'header': header,
+            'data_rows': data_rows,
+            'metric_columns': max(0, len(header) - identifier_columns),
+        })
+        index = max(end, index + 2)
+    return tables
+
+
+def validate_experiment_table_contract(analysis):
+    results = _extract_analysis_section(analysis, '实验结果')
+    if not results:
+        return None
+    tables = extract_markdown_tables(results)
+    if len(tables) > EXPERIMENT_TABLE_LIMITS['max_tables']:
+        return (
+            f"实验结果包含 {len(tables)} 张 Markdown 表格，最多允许 "
+            f"{EXPERIMENT_TABLE_LIMITS['max_tables']} 张"
+        )
+    for index, table in enumerate(tables, start=1):
+        if table['data_rows'] > EXPERIMENT_TABLE_LIMITS['max_data_rows']:
+            return (
+                f"实验结果第 {index} 张表包含 {table['data_rows']} 个数据行，最多允许 "
+                f"{EXPERIMENT_TABLE_LIMITS['max_data_rows']} 行"
+            )
+        if table['metric_columns'] > EXPERIMENT_TABLE_LIMITS['max_metric_columns']:
+            return (
+                f"实验结果第 {index} 张表包含 {table['metric_columns']} 个指标列，最多允许 "
+                f"{EXPERIMENT_TABLE_LIMITS['max_metric_columns']} 列（方法/数据集识别列不计）"
+            )
+    return None
 
 
 def _finite_score(value, field, source):
@@ -316,6 +448,25 @@ def validate_papers_for_publish(papers):
                     raise PublishDataValidationError(
                         f'{paper_label} 深度分析阶段尚未全部完成: {detail}'
                     )
+                contracts = manifest.get('contracts')
+                if contracts is not None and not isinstance(contracts, dict):
+                    raise PublishDataValidationError(
+                        f'{paper_label} analysisManifest.contracts 必须是对象'
+                    )
+                table_contract = (
+                    contracts.get('experimentTables') if isinstance(contracts, dict) else None
+                )
+                if table_contract is not None and table_contract != EXPERIMENT_TABLE_CONTRACT_VERSION:
+                    raise PublishDataValidationError(
+                        f'{paper_label} analysisManifest.contracts.experimentTables 非法: '
+                        f'{table_contract}'
+                    )
+                if table_contract == EXPERIMENT_TABLE_CONTRACT_VERSION:
+                    table_issue = validate_experiment_table_contract(paper.get('analysis'))
+                    if table_issue:
+                        raise PublishDataValidationError(
+                            f'{paper_label} 分析正文表格契约无效: {table_issue}'
+                        )
             if (paper.get('analysisSource') == 'abstract'
                     and paper.get('allowAbstractAnalysisPublish') is not True):
                 raise PublishDataValidationError(

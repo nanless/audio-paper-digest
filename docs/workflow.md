@@ -210,7 +210,7 @@ HF 特有字段（共 7 个）：
 | Round 6 | 最终结构修复（按需） | `prompts/structure-repair.md` | 共享契约发现 13 个必要章节有缺失时，主模型只补齐当前报告结构；完整时不调用 |
 | Round 7 | 类型感知评分审计 | `prompts/scoring-audit.md` | 主模型只输出 JSON；代码把校验错误反馈给下一次局部审计，并按资源状态确定性归一化无产物论文的开源分 |
 
-表格后处理只在“实验章节明确引用原文表格但没有 Markdown 表格”或出现“此处省略/详见原文”等非法占位语时调用。原文仅检测到其他表格不再触发额外 LLM 请求。主分析与审校的表格统一限制为每篇最多 2 张、每张最多 12 个数据行和 8 个指标列。
+表格后处理只在实验章节以 `Table` / `Tbl.` / `表` 明确引用原文表格但没有 Markdown 表格，或出现“此处省略/详见原文”等非法占位语时调用。原文仅检测到其他表格不再触发额外 LLM 请求。新分析和重分析必须写入 `analysisManifest.contracts.experimentTables=bounded-v1`：代码在评分前强制每篇最多 2 张表、每张最多 12 个数据行和 8 个指标列，超限交给局部结构修复；Node 数据校验和 Python 发布预检都会再次阻断带标记但超限的正文。无该标记的历史成功记录保持兼容，不触发全量重跑。
 | Round 8 | 图像筛选与插图计划（仅双模型模式） | `prompts/image-supplement.md` | 副模型只输出 JSON 插图计划；合并后再次校验完整契约，不合格时只丢弃插图计划并保留主模型正文 |
 
 评分审计全部通过后，先依次运行 `generate-blog.py`、`review-blog.py` 和 `push-blog.py`，发布汇总页及全部论文页。博客文本 review 默认按 8000 字符分块（`PD_BLOG_REVIEW_CHUNK_CHARS`，范围 4000–16000），减少每块重复的固定说明；分块仍保持 Markdown 块边界，且值进入整批审查凭证指纹。已通过页面另以博客仓库相对路径 + SHA-256 持久保存，因此分块、review 代码或其他协议元数据变化只刷新整批凭证，不会重审字节未变的页面。`push-blog.py` 只有在远端 `main` OID 与 `publicationCommit` 完全一致后才写入远端验证字段，并自动调用 `visual-summary-integration.js`。规划器按最终评分降序、同分规范化 arXiv ID 升序选取 TOP 10；Codex 读取 `prompts/visual-summary.md`，为每篇生成一张顶部英文标题、正文中文的纵向长图，并用 task token 登记。

@@ -18,7 +18,11 @@ const {
     OPEN_SOURCE_SCORE_ANCHORS,
     parseAnalysis
 } = require('./utils.js');
-const { getInvalidAnalysisReason } = require('./analysis-contract.js');
+const {
+    getInvalidAnalysisReason,
+    EXPERIMENT_TABLE_CONTRACT_VERSION,
+    analysisManifestRequiresExperimentTableContract
+} = require('./analysis-contract.js');
 
 const ALLOWED_DIGEST_STATUSES = new Set(['seen', 'pending_analysis', 'analyzed', 'analysis_failed']);
 const ALLOWED_ANALYSIS_ATTEMPT_STATUSES = new Set(['analyzed', 'analysis_failed']);
@@ -311,6 +315,18 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
     if (manifest.sourceAcquisition !== undefined) {
         validateAnalysisSourceProvenance(filePath, manifest.sourceAcquisition, `${prefix}.sourceAcquisition`, issues);
     }
+    if (manifest.contracts !== undefined) {
+        if (!isPlainObject(manifest.contracts)) {
+            addIssue(issues, filePath, `${prefix}.contracts 必须是对象`);
+        } else if (manifest.contracts.experimentTables !== undefined
+                && manifest.contracts.experimentTables !== EXPERIMENT_TABLE_CONTRACT_VERSION) {
+            addIssue(
+                issues,
+                filePath,
+                `${prefix}.contracts.experimentTables 非法: ${manifest.contracts.experimentTables}`
+            );
+        }
+    }
     let hasRecoverableFailure = false;
     for (const [stage, state] of Object.entries(manifest.stages)) {
         if (!isPlainObject(state)) {
@@ -516,7 +532,11 @@ function validatePaperListFile(filePath, options = {}) {
             let reparsed = null;
             if (hasAnalysisBody) {
                 reparsed = parseAnalysis(paper.analysis);
-                const invalidReason = getInvalidAnalysisReason(paper.analysis, reparsed);
+                const invalidReason = getInvalidAnalysisReason(paper.analysis, reparsed, {
+                    enforceExperimentTableContract: analysisManifestRequiresExperimentTableContract(
+                        paper.analysisManifest
+                    )
+                });
                 if (invalidReason) {
                     addIssue(issues, filePath, `papers[${index}] analysis 正文契约非法: ${invalidReason}`);
                 }

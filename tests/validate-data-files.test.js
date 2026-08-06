@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const Config = require('../scripts/config.js');
 const { buildFilterInputSha256 } = require('../scripts/lib/filter-input-contract.js');
 const { parseAnalysis } = require('../scripts/utils.js');
+const { EXPERIMENT_TABLE_CONTRACT_VERSION } = require('../scripts/analysis-contract.js');
 const { validAnalysisText } = require('./valid-analysis-fixture.js');
 
 const {
@@ -399,6 +400,42 @@ describe('validate-data-files', () => {
         assert.match(issues, /parsed 缓存与 analysis 重解析不一致: score/);
         assert.match(issues, /缺少完成态阶段 openSourceScan/);
         assert.match(issues, /最新分析尝试仍为失败/);
+    });
+
+    it('只对带 bounded-v1 标记的新结果强制实验表格硬契约', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-table-contract-'));
+        const resultFile = path.join(dir, 'deep-analysis-result.json');
+        const rows = Array.from({ length: 13 }, (_, index) => `| Model ${index + 1} | ${index} |`).join('\n');
+        const analysis = validAnalysisText().replace(
+            '\n## 细节详述',
+            `\n\n| 方法 | WER |\n| --- | --- |\n${rows}\n\n## 细节详述`
+        );
+        const stages = Object.fromEntries([
+            'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
+            'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
+        ].map(stage => [stage, {
+            status: stage === 'imageSupplement' ? 'no_candidates' : 'complete'
+        }]));
+        const paper = {
+            arxivId: '2607.00004',
+            analysis,
+            parsed: parseAnalysis(analysis),
+            scoringRubricVersion: 'type-aware-v1',
+            analysisManifest: {
+                version: 1,
+                contracts: { experimentTables: EXPERIMENT_TABLE_CONTRACT_VERSION },
+                stages
+            }
+        };
+        fs.writeFileSync(resultFile, JSON.stringify({ papers: [paper] }));
+        assert.match(
+            validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n'),
+            /表格契约无效.*13 个数据行/
+        );
+
+        delete paper.analysisManifest.contracts;
+        fs.writeFileSync(resultFile, JSON.stringify({ papers: [paper] }));
+        assert.deepStrictEqual(validatePaperListFile(resultFile, { deepAnalysis: true }), []);
     });
 
     it('接受字段集合精确匹配且来源完整的人工 parsed 覆盖', () => {

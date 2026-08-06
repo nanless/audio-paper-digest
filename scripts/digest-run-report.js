@@ -247,6 +247,7 @@ function buildDigestRunReport(targetDate) {
             remoteVerifiedOid: review?.remoteVerifiedOid || null
         },
         visuals: {
+            gateComplete: visualComplete,
             status: visual?.overallStatus || 'missing',
             complete: visual?.counts?.completeCards || 0,
             total: visual?.counts?.totalCards || 0,
@@ -270,7 +271,7 @@ function formatDigestRunSummary(report) {
         `  筛选 ${state(report.filter.complete)} | selected=${report.filter.selectedCount} | candidates=${report.filter.totalCandidates ?? '?'} | pending=${report.filter.pendingDecisions ?? '?'}`,
         `  分析 ${state(report.analysis.complete)} | success=${report.analysis.successful}/${report.analysis.total} | failed=${report.analysis.failed}`,
         `  博客 ${state(report.blog.complete)} | strictReview=${report.blog.strictReview} | remoteVerified=${report.blog.publicationVerified}`,
-        `  长图 ${state(report.visuals.complete === report.visuals.total && report.visuals.total > 0 && report.visuals.failed === 0)} | complete=${report.visuals.complete}/${report.visuals.total} | pending=${report.visuals.pending} | failed=${report.visuals.failed}`,
+        `  长图 ${state(report.visuals.gateComplete === true)} | complete=${report.visuals.complete}/${report.visuals.total} | pending=${report.visuals.pending} | failed=${report.visuals.failed}`,
         `  封面 ${state(report.cover.complete)} | status=${report.cover.status}`
     ];
     for (const error of report.errors) lines.push(`  错误: ${error}`);
