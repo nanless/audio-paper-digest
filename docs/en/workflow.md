@@ -207,6 +207,8 @@ The same post-publication stage creates one digest-image task using the category
 
 Before built-in image generation, run `npm run visual:prepare -- --date <date>` (optionally `--paper <ID>`). It keeps task tokens unchanged, revalidates each controlled `.bin` cache path, SHA, byte count, MIME, and magic bytes, and atomically materializes upload-ready `.png/.jpg/.webp` files under `data/current/visual-reference-inputs/<date>/<rank-paper>/`. Pass the emitted absolute `referencedImagePaths` to the image tool instead of raw `.bin` paths or display-only `relativePath` values; repeated runs repair altered materialized files.
 
+Visual plan/status commands print compact task indexes by default: rank, paper ID, title, task token, reference-image count, and the absolute manifest path. `visual:prepare` additionally retains the absolute `referencedImagePaths` required by image generation. Full `generationContext.qaClaims` and cover rankings remain in their manifests. `digest:status` prints only stage counts and errors to the terminal while preserving full `sourceHealth` in the report JSON. Experiment-table repair runs only for an explicit missing cited table or an illegal omission marker; merely detecting any table in the source no longer triggers another LLM call. Analysis and revision prompts cap tables at two per paper, 12 data rows and 8 metric columns each.
+
 ### 3.9 Incremental Save and Wrap-up
 
 - **Incremental save to `data/current/deep-analysis-result.json` immediately after each batch completes**. Result and paper-database updates re-read and merge under a cross-process lock with `generation` checks. Failed placeholders never overwrite successful analyses, and corrupt current JSON blocks writes instead of silently falling back to legacy data

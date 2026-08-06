@@ -461,6 +461,7 @@ def call_publish_llm_api(
     max_retries=5,
     images=None,
     use_secondary=False,
+    structured_output=False,
 ):
     """调用发布阶段 LLM API。required=True 时，缺配置或连续失败会抛错。"""
     primary_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
@@ -497,24 +498,31 @@ def call_publish_llm_api(
     api_type = detect_publish_api_type(endpoint, model)
     api_url = build_publish_api_url(api_type, endpoint)
     headers = build_publish_headers(api_type, api_key)
-    payload = build_publish_payload(
-        api_type, model, prompt, max_tokens, temperature, images=images
-    )
-
     last_error = None
     current_max_tokens = max(1, int(max_tokens))
-    adaptive_max_tokens = 16000
+    # Strict review responses are tiny JSON objects. Reasoning models may spend
+    # the whole budget in hidden reasoning and return no final text; allowing
+    # those calls to grow to 16K repeatedly wastes quota without improving the
+    # protocol response. Keep generic publishing calls backward compatible,
+    # while one structured recovery is capped at 8K unless the caller
+    # explicitly configured a larger initial budget.
+    adaptive_max_tokens = (
+        max(current_max_tokens, 8000) if structured_output else 16000
+    )
+    request_prompt = prompt
+    structured_recovery_used = False
     for attempt in range(max_retries):
         started_at = time.monotonic()
+        retry_immediately = False
         try:
             print(
                 f'  [publish-api] → {context} '
                 f'(尝试 {attempt + 1}/{max_retries}, timeout={timeout}s, '
-                f'prompt_chars={len(prompt)}, images={len(images or [])}, '
+                f'prompt_chars={len(request_prompt)}, images={len(images or [])}, '
                 f'max_tokens={current_max_tokens})'
             )
             payload = build_publish_payload(
-                api_type, model, prompt, current_max_tokens, temperature, images=images
+                api_type, model, request_prompt, current_max_tokens, temperature, images=images
             )
             request = urllib.request.Request(
                 api_url,
@@ -555,13 +563,34 @@ def call_publish_llm_api(
                 f'LLM 返回内容为空 (finish_reason={finish_label}, '
                 f'reasoning_chars={reasoning_chars})'
             )
-            if finish_reason in {'length', 'max_tokens'} and current_max_tokens < adaptive_max_tokens:
-                next_max_tokens = min(current_max_tokens * 2, adaptive_max_tokens)
-                print(
-                    f'  [publish-api] ↗ {context} 检测到输出被截断，'
-                    f'max_tokens {current_max_tokens} → {next_max_tokens}'
-                )
-                current_max_tokens = next_max_tokens
+            if finish_reason in {'length', 'max_tokens'}:
+                if structured_output and reasoning_chars > 0:
+                    if structured_recovery_used:
+                        print(
+                            f'  [publish-api] ⛔ {context} 结构化响应再次被隐藏推理耗尽，'
+                            f'停止继续扩大输出预算 (max_tokens={current_max_tokens})'
+                        )
+                        break
+                    structured_recovery_used = True
+                    request_prompt = (
+                        prompt
+                        + '\n\n上一次请求将输出预算全部用于隐藏推理。'
+                        + '请立即停止展开推理，只输出最终 JSON 对象，不得输出分析过程。'
+                    )
+                    next_max_tokens = min(current_max_tokens * 2, adaptive_max_tokens)
+                    print(
+                        f'  [publish-api] ↻ {context} 收紧为纯 JSON 后有界重试，'
+                        f'max_tokens {current_max_tokens} → {next_max_tokens}'
+                    )
+                    current_max_tokens = next_max_tokens
+                    retry_immediately = True
+                elif current_max_tokens < adaptive_max_tokens:
+                    next_max_tokens = min(current_max_tokens * 2, adaptive_max_tokens)
+                    print(
+                        f'  [publish-api] ↗ {context} 检测到输出被截断，'
+                        f'max_tokens {current_max_tokens} → {next_max_tokens}'
+                    )
+                    current_max_tokens = next_max_tokens
         except urllib.error.HTTPError as exc:
             detail = ''
             try:
@@ -590,7 +619,7 @@ def call_publish_llm_api(
                 f'{time.monotonic() - started_at:.1f}s): {exc}'
             )
 
-        if attempt < max_retries - 1:
+        if attempt < max_retries - 1 and not retry_immediately:
             retry_after = None
             if isinstance(last_error, urllib.error.HTTPError):
                 raw_retry_after = last_error.headers.get('Retry-After')

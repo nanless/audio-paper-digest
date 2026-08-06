@@ -224,7 +224,7 @@ Summarize the paper in 5–8 sentences, must cover:
 1. What problem it aims to solve
 2. What the core method is
 3. What is new compared to existing methods
-4. What the main experimental results are (include numbers if available; otherwise write "未提供"). If the paper contains experimental result tables, they must be listed in full Markdown table format; if there are experimental result figures, describe the figure content
+4. What the main experimental results are (include numbers if available; otherwise write "未提供"). Put compact evidence tables in the later Experimental Results section; here, quote only the numbers needed for the conclusion. If there are experimental result figures, describe the figure content
 5. What the practical significance is
 6. What the main limitations are
 
@@ -268,7 +268,8 @@ Evidence must be written first; do not just write conclusions. Requirements:
 - Write细分 results under different conditions, languages, or scenarios (if any)
 - If there are only figures without text descriptions, still try to convert key numbers into text
 - If specific numbers are unavailable, explicitly write "论文未给出具体数值"
-- **Experimental result tables must be listed in full using standard Markdown tables** (there may be multiple comparison tables); each table must include headers, model/method names, datasets, metrics, and values; do not omit any rows or columns
+- Include only the key Markdown tables that directly support the main conclusions: at most 2 tables per paper, with at most 12 data rows and 8 metric columns per table (excluding method/dataset identifier columns)
+- For a large source table, retain the proposed method, strongest baselines, representative traditional/open-source baselines, aggregate rows, and rows/columns needed for key ablation claims. Introduce it with a factual sentence such as "The table retains the proposed method, strongest baselines, and key ablations"; do not use empty placeholders such as "omitted here" or "see the original paper"
 - Experimental result figures are not inserted in this primary text prompt. In dual-model mode, `image-supplement.md` selects useful result figures later through a JSON insertion plan, and code merges selected figures plus local lead/explanation text back into the primary analysis.
 
 ## 细节详述

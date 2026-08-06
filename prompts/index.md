@@ -14,7 +14,7 @@
 | [opensource-scan.md](opensource-scan.md) | 开源扫描阶段（第二轮）：专门提取开源链接和复现信息 | `deep-analyzer.js` |
 | [gap-fill.md](gap-fill.md) | 深度分析阶段（第三轮）：对照原文审校重写前两轮结果 | `deep-analyzer.js` |
 | [method-fill.md](method-fill.md) | 深度分析后处理：方法章节过短或空泛时补写结构化方法说明 | `deep-analyzer.js` |
-| [table-fill.md](table-fill.md) | 深度分析后处理：实验结果缺少可见表格或出现省略标记时补表 | `deep-analyzer.js` |
+| [table-fill.md](table-fill.md) | 深度分析后处理：正文明确引用原文表格却缺表，或出现非法省略标记时，补充有行列上限的关键证据表 | `deep-analyzer.js` |
 | [structure-repair.md](structure-repair.md) | 审校结果缺少必要章节时，由主模型只修复完整报告结构 | `deep-analyzer.js` |
 | [scoring-audit.md](scoring-audit.md) | 正文修复完成后由主模型最终审计文档类型、八维评分与扣分归属，只输出 JSON | `deep-analyzer.js` |
 

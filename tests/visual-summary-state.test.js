@@ -14,6 +14,8 @@ const {
     recordVisualSummaryCard,
     markVisualSummaryCardFailed,
     pendingVisualSummaryCards,
+    compactPendingVisualTask,
+    compactPreparedVisualTask,
     validatePngAsset,
     extractGeneratedImagePathFromHint,
     archiveLegacyVisualManifestAssets,
@@ -30,6 +32,43 @@ const {
 const TEST_PUBLICATION = Object.freeze({
     publicationCommit: 'd'.repeat(40),
     generationManifestSha256: 'e'.repeat(64)
+});
+
+describe('视觉任务紧凑输出', () => {
+    it('待生成任务不再把完整 generationContext 打印到终端', () => {
+        const item = {
+            arxivId: '2607.12345',
+            kind: 'infographic',
+            label: '论文长图',
+            title: 'Paper title',
+            taskToken: 'token',
+            generationContext: {
+                qaClaims: { huge: 'payload' },
+                referenceImages: [{ caption: 'figure' }]
+            }
+        };
+        const compact = compactPendingVisualTask(item, {
+            batchDate: '2026-07-13',
+            papers: { '2607.12345': { rank: 2 } }
+        }, '/tmp/visual-manifest.json');
+        assert.strictEqual(compact.rank, 2);
+        assert.strictEqual(compact.referenceImageCount, 1);
+        assert.strictEqual(compact.manifestPath, '/tmp/visual-manifest.json');
+        assert.strictEqual(Object.hasOwn(compact, 'generationContext'), false);
+    });
+
+    it('prepare 紧凑输出仍保留 image_gen 必需的绝对路径', () => {
+        const compact = compactPreparedVisualTask({
+            rank: 1,
+            arxivId: '2607.12345',
+            title: 'Paper title',
+            taskToken: 'token',
+            referencedImagePaths: ['/tmp/reference.png'],
+            referenceImages: [{ caption: 'large metadata' }]
+        }, '/tmp/visual-manifest.json');
+        assert.deepStrictEqual(compact.referencedImagePaths, ['/tmp/reference.png']);
+        assert.strictEqual(Object.hasOwn(compact, 'referenceImages'), false);
+    });
 });
 
 function planVisualSummaries(options) {

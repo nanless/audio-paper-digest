@@ -16,6 +16,7 @@ const {
     markDigestCoverFailed,
     archiveLegacyDigestCover,
     assertDigestCoverManifestCurrent,
+    compactDigestCoverTask,
     parseArgs
 } = require('../scripts/digest-cover-state.js');
 
@@ -30,6 +31,23 @@ function planDigestCover(options) {
 }
 
 describe('digest cover CLI', () => {
+    it('紧凑任务只打印排行数量和 manifest 路径', () => {
+        const compact = compactDigestCoverTask({
+            batchDate: '2026-07-13',
+            cover: { label: '汇总封面', taskToken: 'token' },
+            generationContext: {
+                title: '2026-07-13 论文速递',
+                paperCount: 20,
+                rankingCount: 10,
+                ranking: [{ title: 'large payload' }]
+            }
+        }, '/tmp/cover-manifest.json');
+        assert.strictEqual(compact.rankingCount, 10);
+        assert.strictEqual(compact.manifestPath, '/tmp/cover-manifest.json');
+        assert.strictEqual(Object.hasOwn(compact, 'generationContext'), false);
+        assert.strictEqual(Object.hasOwn(compact, 'ranking'), false);
+    });
+
     it('拒绝未知、缺值和重复参数', () => {
         assert.throws(() => parseArgs(['status', '--unknown', 'value']), /未知参数/);
         assert.throws(() => parseArgs(['status', '--date']), /无效参数/);

@@ -9,9 +9,15 @@
 const {
     planVisualSummaries,
     pendingVisualSummaryCards,
+    compactPendingVisualTask,
+    visualSummaryManifestPath,
     assertPublishedBlogReceipt
 } = require('./visual-summary-state.js');
-const { planDigestCover } = require('./digest-cover-state.js');
+const {
+    planDigestCover,
+    compactDigestCoverTask,
+    digestCoverManifestPath
+} = require('./digest-cover-state.js');
 
 function reconcileVisualSummaryTasks({
     targetDate = null,
@@ -39,10 +45,12 @@ function reconcileVisualSummaryTasks({
         fetchBatchDate: targetDate,
         batchDate: targetDate
     }));
+    manifestPath = manifestPath || visualSummaryManifestPath(targetDate);
+    coverManifestPath = coverManifestPath || digestCoverManifestPath(targetDate);
     const manifest = planVisualSummaries({
         targetDate,
         papers: normalizedPapers,
-        ...(manifestPath ? { manifestPath } : {}),
+        manifestPath,
         ...(promptPath ? { promptPath } : {}),
         publication
     });
@@ -52,7 +60,7 @@ function reconcileVisualSummaryTasks({
         papers: normalizedPapers,
         category,
         publication,
-        ...(coverManifestPath ? { manifestPath: coverManifestPath } : {}),
+        manifestPath: coverManifestPath,
         ...(coverPromptPath ? { promptPath: coverPromptPath } : {})
     });
     const pendingCover = coverManifest.overallStatus === 'complete' ? [] : [{
@@ -64,8 +72,10 @@ function reconcileVisualSummaryTasks({
         targetDate,
         publication,
         manifest,
+        manifestPath,
         pendingCards,
         coverManifest,
+        coverManifestPath,
         pendingCover,
         pipelineStatus: manifest.overallStatus === 'complete' && coverManifest.overallStatus === 'complete'
             ? 'post_publish_visuals_complete'
@@ -97,8 +107,12 @@ function main(argv = process.argv.slice(2)) {
         publicationReceiptPath: options.receipt
     });
     console.log(`发布后视觉任务：TOP 10 长图待生成 ${result.pendingCards.length} 张，汇总封面待生成 ${result.pendingCover.length} 张`);
-    for (const item of result.pendingCards) console.log(JSON.stringify(item));
-    for (const item of result.pendingCover) console.log(JSON.stringify(item));
+    for (const item of result.pendingCards) {
+        console.log(JSON.stringify(compactPendingVisualTask(item, result.manifest, result.manifestPath)));
+    }
+    for (const _item of result.pendingCover) {
+        console.log(JSON.stringify(compactDigestCoverTask(result.coverManifest, result.coverManifestPath)));
+    }
     return result;
 }
 

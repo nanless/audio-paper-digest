@@ -154,6 +154,7 @@ def call_llm_api(
     images=None,
     use_secondary=False,
     max_retries=5,
+    structured_output=False,
 ):
     """调用发布阶段公共 LLM API client。"""
     return call_publish_llm_api(
@@ -166,6 +167,7 @@ def call_llm_api(
         max_retries=max_retries,
         images=images,
         use_secondary=use_secondary,
+        structured_output=structured_output,
     )
 
 
@@ -371,6 +373,7 @@ def repair_review_payload(
                 images=retry_images,
                 use_secondary=use_secondary,
                 max_retries=2,
+                structured_output=True,
             )
             review = parse_review_json(retried)
             return validate_review_payload(
@@ -413,6 +416,7 @@ def repair_review_payload(
             context=f'{context} 格式修复',
             use_secondary=use_secondary,
             max_retries=1,
+            structured_output=True,
         )
         review = parse_review_json(repaired)
         return validate_review_payload(
@@ -438,6 +442,7 @@ def repair_review_payload(
                 images=retry_images,
                 use_secondary=use_secondary,
                 max_retries=2,
+                structured_output=True,
             )
             review = parse_review_json(retried)
             return validate_review_payload(
@@ -504,7 +509,14 @@ def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1')
 - `passed=false` 时必须给出至少一条具体、可执行的 `error` 级原因。
 """
 
-    result = call_llm_api(prompt, max_tokens=get_blog_review_max_tokens(), temperature=0.1, required=required, context=f"LLM 文本 review: {title}")
+    result = call_llm_api(
+        prompt,
+        max_tokens=get_blog_review_max_tokens(),
+        temperature=0.1,
+        required=required,
+        context=f"LLM 文本 review: {title}",
+        structured_output=True,
+    )
     if not result:
         if required:
             passed, issues = review_protocol_failure(f"LLM 文本 review: {title}", '响应为空')
@@ -956,6 +968,7 @@ def multimodal_review_images(content, title="", required=False):
         context=f"多模态图片 review: {title}",
         images=image_payloads,
         use_secondary=True,
+        structured_output=True,
     )
     if not result:
         if required:

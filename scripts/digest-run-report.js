@@ -262,6 +262,21 @@ function buildDigestRunReport(targetDate) {
     };
 }
 
+function formatDigestRunSummary(report) {
+    const state = value => value ? 'complete' : 'incomplete';
+    const lines = [
+        `[digest-status] ${report.batchDate} overall=${report.overallStatus} errors=${report.errors.length}`,
+        `  抓取 ${state(report.fetch.complete)} | candidates=${report.fetch.rawCandidateCount}`,
+        `  筛选 ${state(report.filter.complete)} | selected=${report.filter.selectedCount} | candidates=${report.filter.totalCandidates ?? '?'} | pending=${report.filter.pendingDecisions ?? '?'}`,
+        `  分析 ${state(report.analysis.complete)} | success=${report.analysis.successful}/${report.analysis.total} | failed=${report.analysis.failed}`,
+        `  博客 ${state(report.blog.complete)} | strictReview=${report.blog.strictReview} | remoteVerified=${report.blog.publicationVerified}`,
+        `  长图 ${state(report.visuals.complete === report.visuals.total && report.visuals.total > 0 && report.visuals.failed === 0)} | complete=${report.visuals.complete}/${report.visuals.total} | pending=${report.visuals.pending} | failed=${report.visuals.failed}`,
+        `  封面 ${state(report.cover.complete)} | status=${report.cover.status}`
+    ];
+    for (const error of report.errors) lines.push(`  错误: ${error}`);
+    return lines.join('\n');
+}
+
 function main(argv = process.argv.slice(2)) {
     setupScriptLogging(__filename);
     const targetDate = parseDate(argv);
@@ -269,7 +284,7 @@ function main(argv = process.argv.slice(2)) {
     const output = path.join(Config.FILES.digestRunReportDir, `${targetDate}.json`);
     fs.mkdirSync(path.dirname(output), { recursive: true });
     writeFileAtomic(output, JSON.stringify(report, null, 2));
-    console.log(JSON.stringify(report, null, 2));
+    console.log(formatDigestRunSummary(report));
     console.log(`[digest-status] 报告: ${output}`);
     if (report.overallStatus !== 'complete') process.exitCode = 1;
 }
@@ -281,5 +296,6 @@ module.exports = {
     sourceHealthComplete,
     samePaperIds,
     visualAssetsAreValid,
-    buildDigestRunReport
+    buildDigestRunReport,
+    formatDigestRunSummary
 };

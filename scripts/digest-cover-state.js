@@ -430,6 +430,19 @@ function parseArgs(argv) {
     return { command, options };
 }
 
+function compactDigestCoverTask(manifest, manifestPath = null) {
+    return {
+        kind: 'digest-cover',
+        label: manifest.cover.label,
+        title: manifest.generationContext?.title || '',
+        batchDate: manifest.batchDate,
+        paperCount: manifest.generationContext?.paperCount || 0,
+        rankingCount: manifest.generationContext?.rankingCount || 0,
+        taskToken: manifest.cover.taskToken,
+        manifestPath: path.resolve(manifestPath || digestCoverManifestPath(manifest.batchDate))
+    };
+}
+
 function main(argv = process.argv.slice(2)) {
     const { command, options } = parseArgs(argv);
     if (command === 'plan') {
@@ -437,22 +450,18 @@ function main(argv = process.argv.slice(2)) {
         if (options.category && options.category !== publication.category) {
             throw new Error(`汇总图 category 与已发布博客不一致: ${options.category} != ${publication.category}`);
         }
+        const manifestPath = options.manifest || digestCoverManifestPath(options.date);
         const manifest = planDigestCover({
             targetDate: options.date,
             papers: bindPublishedPapersToDate(publication, options.date),
-            manifestPath: options.manifest,
+            manifestPath,
             category: publication.category,
             publication
         });
         console.log(`汇总封面: ${manifest.cover.status}`);
-        if (manifest.cover.status !== 'complete') console.log(JSON.stringify({
-            kind: 'digest-cover',
-            label: manifest.cover.label,
-            taskToken: manifest.cover.taskToken,
-            dataSha256: manifest.dataSha256,
-            promptSha256: manifest.promptSha256,
-            generationContext: manifest.generationContext
-        }));
+        if (manifest.cover.status !== 'complete') {
+            console.log(JSON.stringify(compactDigestCoverTask(manifest, manifestPath)));
+        }
         return;
     }
     if (command === 'archive-legacy') {
@@ -514,6 +523,7 @@ module.exports = {
     migrateLegacyCompletedCover,
     archiveLegacyDigestCover,
     assertDigestCoverManifestCurrent,
+    compactDigestCoverTask,
     parseArgs,
     main
 };

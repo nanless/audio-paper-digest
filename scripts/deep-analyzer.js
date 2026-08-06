@@ -3709,26 +3709,31 @@ function sourceTextLikelyHasTables(text) {
         || /\n\s*\|[^\n]+\|\s*\n\s*\|[\-\s:|]+\|/.test(text);
 }
 
-/**
- * 检查并修复实验结果中缺失的表格。
- * 如果检测到省略标记或缺少 Markdown 表格，触发补充调用。
- */
-async function checkAndFixTables(paper, analysis, textForAnalysis) {
+function analysisNeedsExperimentTableRepair(analysis, textForAnalysis) {
     const resultsSection = extractResultsSection(analysis);
-    if (!resultsSection) return analysis;
-
+    if (!resultsSection) return false;
     const hasTable = hasMarkdownTable(resultsSection);
     const hasOmission = hasOmissionMarkers(resultsSection);
     const hasTableReference = /[（(]表\d+[)）]|表[一二三四五六七八九十\d]+/.test(resultsSection);
     const sourceHasTables = sourceTextLikelyHasTables(textForAnalysis);
 
-    // 如果有省略标记，或引用了表格但没有实际 Markdown 表格
-    if (!hasOmission && hasTable) {
-        return analysis;
-    }
-    if (!hasOmission && !hasTableReference && !sourceHasTables) {
-        return analysis;
-    }
+    // Explicit omission language is always repaired. Merely detecting any
+    // table somewhere in the source is not enough: the primary analysis may
+    // already present the relevant numeric evidence in prose, and forcing a
+    // second LLM call to reproduce unrelated source tables wastes substantial
+    // input/output tokens. A missing-table repair is otherwise justified only
+    // when the analysis itself cites a table and the source confirms one.
+    return hasOmission || (!hasTable && hasTableReference && sourceHasTables);
+}
+
+/**
+ * 检查并修复实验结果中缺失的表格。
+ * 只在存在省略标记，或正文明确引用原文表格却缺少 Markdown 表格时调用。
+ */
+async function checkAndFixTables(paper, analysis, textForAnalysis) {
+    const resultsSection = extractResultsSection(analysis);
+    if (!resultsSection) return analysis;
+    if (!analysisNeedsExperimentTableRepair(analysis, textForAnalysis)) return analysis;
 
     console.log(`    [deep] 🔍 检测到实验结果可能缺少表格，触发补充...`);
 
@@ -3937,6 +3942,7 @@ module.exports = {
     normalizeImageInfos,
     mergeImageInfoMetadata,
     sourceTextLikelyHasTables,
+    analysisNeedsExperimentTableRepair,
     getPaperArxivId,
     getPreProvidedImageUrls,
     getArxivHtmlIds,

@@ -70,7 +70,7 @@ Benefits of this design:
 | `PAPER_DIGEST_GITHUB_REMOTE` | Git remote name | `origin` |
 | `PD_BLOG_REVIEW_CONCURRENCY` | Concurrent three-layer reviews for independent paper pages; the digest page remains first and serial | `5` |
 | `PD_BLOG_REVIEW_CHUNK_CHARS` | Text-review chunk size, bounded to 4000–16000; changes refresh the batch protocol receipt while unchanged per-file SHA passes remain reusable | `8000` |
-| `PD_BLOG_REVIEW_MAX_TOKENS` | Output budget for one blog LLM review; empty `length`-truncated responses trigger adaptive doubling | `4000` |
+| `PD_BLOG_REVIEW_MAX_TOKENS` | Output budget for one blog LLM review; a reasoning-only response gets one JSON-only recovery, capped at 8000 by default | `4000` |
 
 #### WeChat Official Account
 

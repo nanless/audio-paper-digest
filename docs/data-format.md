@@ -453,7 +453,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 
 ### 5.8.1 `data/current/digest-run-reports/YYYY-MM-DD.json`
 
-`npm run digest:status -- --date YYYY-MM-DD` 生成的统一只读验收快照。它汇总候选抓取、筛选决定覆盖、成功深度分析、博客严格 review 与远端 OID、论文长图和汇总封面的完成数量及错误列表。只有全部必需阶段均为 `complete` 时顶层 `overallStatus` 才为 `complete` 且命令返回 0；报告不替代各阶段原始 manifest 或凭证。
+`npm run digest:status -- --date YYYY-MM-DD` 生成的统一只读验收快照。它汇总候选抓取、筛选决定覆盖、成功深度分析、博客严格 review 与远端 OID、论文长图和汇总封面的完成数量及错误列表。终端只打印紧凑的阶段数量和错误摘要，`fetch.sourceHealth` 等完整诊断仍保存在 JSON。只有全部必需阶段均为 `complete` 时顶层 `overallStatus` 才为 `complete` 且命令返回 0；报告不替代各阶段原始 manifest 或凭证。
 
 ### 5.9 `data/current/analyzed.json`
 

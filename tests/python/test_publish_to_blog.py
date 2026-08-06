@@ -474,6 +474,7 @@ title: "Bad table"
         prompts = ''.join(item.args[0] for item in call.call_args_list)
         self.assertIn('SECOND-CHUNK-MARKER', prompts)
         self.assertIn('AAAA', prompts)
+        self.assertTrue(all(item.kwargs['structured_output'] for item in call.call_args_list))
 
     def test_review_chunk_budget_defaults_to_8000_and_is_bounded(self):
         with mock.patch.dict(os.environ, {}, clear=True):
@@ -503,6 +504,7 @@ title: "Bad table"
         self.assertEqual(issues, [])
         self.assertEqual(call.call_args.kwargs['images'], [image])
         self.assertTrue(call.call_args.kwargs['use_secondary'])
+        self.assertTrue(call.call_args.kwargs['structured_output'])
         self.assertIn('正文附近上下文', call.call_args.args[0])
 
     def test_image_review_prompt_contains_nearby_body_context(self):

@@ -1445,6 +1445,31 @@ function pendingVisualSummaryCards(manifest) {
     return pending;
 }
 
+function compactPendingVisualTask(item, manifest, manifestPath = null) {
+    const paper = manifest?.papers?.[item.arxivId] || {};
+    return {
+        rank: paper.rank ?? null,
+        arxivId: item.arxivId,
+        kind: item.kind,
+        label: item.label,
+        title: item.title,
+        taskToken: item.taskToken,
+        referenceImageCount: item.generationContext?.referenceImages?.length || 0,
+        manifestPath: path.resolve(manifestPath || visualSummaryManifestPath(manifest.batchDate))
+    };
+}
+
+function compactPreparedVisualTask(item, manifestPath) {
+    return {
+        rank: item.rank,
+        arxivId: item.arxivId,
+        title: item.title,
+        taskToken: item.taskToken,
+        referencedImagePaths: item.referencedImagePaths,
+        manifestPath: path.resolve(manifestPath)
+    };
+}
+
 function parseArgs(argv) {
     const [command, ...rest] = argv;
     const options = {};
@@ -1471,10 +1496,13 @@ function main(argv = process.argv.slice(2)) {
     const { command, options } = parseArgs(argv);
     if (command === 'plan') {
         const publication = assertPublishedBlogReceipt(options.date, options.receipt);
-        const manifest = planVisualSummaries({ targetDate: options.date, papers: bindPublishedPapersToDate(publication, options.date), manifestPath: options.manifest, publication });
+        const manifestPath = options.manifest || visualSummaryManifestPath(options.date);
+        const manifest = planVisualSummaries({ targetDate: options.date, papers: bindPublishedPapersToDate(publication, options.date), manifestPath, publication });
         const pending = pendingVisualSummaryCards(manifest);
         console.log(`视觉摘要计划已更新：TOP ${manifest.selection.limit} 中选出 ${Object.keys(manifest.papers).length} 篇，待生成 ${pending.length} 张`);
-        for (const item of pending) console.log(JSON.stringify(item));
+        for (const item of pending) {
+            console.log(JSON.stringify(compactPendingVisualTask(item, manifest, manifestPath)));
+        }
         return;
     }
     if (command === 'archive-legacy') {
@@ -1491,15 +1519,18 @@ function main(argv = process.argv.slice(2)) {
         const targetDate = options.date;
         if (!targetDate) throw new Error('prepare 必须传 --date YYYY-MM-DD');
         const publication = assertPublishedBlogReceipt(targetDate, options.receipt);
-        const manifest = readJsonFileStrict(options.manifest || visualSummaryManifestPath(targetDate));
+        const manifestPath = options.manifest || visualSummaryManifestPath(targetDate);
+        const manifest = readJsonFileStrict(manifestPath);
         assertVisualManifestCurrent(manifest, publication, targetDate);
         const prepared = prepareVisualReferenceInputs(manifest, {
             targetDate,
             paperId: options.paper,
-            manifestPath: options.manifest || visualSummaryManifestPath(targetDate)
+            manifestPath
         });
         console.log(`已准备视觉参考图输入：${prepared.length} 篇`);
-        for (const item of prepared) console.log(JSON.stringify(item));
+        for (const item of prepared) {
+            console.log(JSON.stringify(compactPreparedVisualTask(item, manifestPath)));
+        }
         return;
     }
     if (command === 'record') {
@@ -1529,13 +1560,16 @@ function main(argv = process.argv.slice(2)) {
         const targetDate = options.date;
         if (!targetDate) throw new Error('status 必须传 --date YYYY-MM-DD');
         const publication = assertPublishedBlogReceipt(targetDate, options.receipt);
-        const manifest = readJsonFileStrict(options.manifest || visualSummaryManifestPath(targetDate));
+        const manifestPath = options.manifest || visualSummaryManifestPath(targetDate);
+        const manifest = readJsonFileStrict(manifestPath);
         assertVisualManifestCurrent(manifest, publication, targetDate);
         const pending = pendingVisualSummaryCards(manifest);
         assertVisualArchiveUniqueness(manifest);
         const total = Object.keys(manifest.papers || {}).length * CARD_KINDS.length;
         console.log(`视觉摘要：TOP ${manifest.selection.limit} 中选出 ${Object.keys(manifest.papers || {}).length} 篇，完成 ${total - pending.length}/${total} 张，待生成 ${pending.length} 张`);
-        for (const item of pending) console.log(JSON.stringify(item));
+        for (const item of pending) {
+            console.log(JSON.stringify(compactPendingVisualTask(item, manifest, manifestPath)));
+        }
         if (pending.length !== 0) process.exitCode = 1;
         return;
     }
@@ -1562,6 +1596,8 @@ module.exports = {
     recordVisualSummaryCard,
     markVisualSummaryCardFailed,
     pendingVisualSummaryCards,
+    compactPendingVisualTask,
+    compactPreparedVisualTask,
     validateCompletedCard,
     validatePngAsset,
     visualSummaryAssetPath,

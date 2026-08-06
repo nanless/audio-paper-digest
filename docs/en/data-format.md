@@ -438,7 +438,7 @@ After all blogs publish, every batch produces one digest image. Its context is d
 
 ### 5.8.1 `data/current/digest-run-reports/YYYY-MM-DD.json`
 
-The unified read-only completion snapshot written by `npm run digest:status -- --date YYYY-MM-DD`. It summarizes candidate fetch, filtering-decision coverage, successful deep analyses, strict blog review and remote OID verification, paper infographics, the digest cover, and their error lists. `overallStatus` is `complete` and the command exits zero only when every required stage is complete; this report never replaces the source manifests or receipts.
+The unified read-only completion snapshot written by `npm run digest:status -- --date YYYY-MM-DD`. It summarizes candidate fetch, filtering-decision coverage, successful deep analyses, strict blog review and remote OID verification, paper infographics, the digest cover, and their error lists. The terminal prints only compact stage counts and errors, while full diagnostics such as `fetch.sourceHealth` remain in JSON. `overallStatus` is `complete` and the command exits zero only when every required stage is complete; this report never replaces the source manifests or receipts.
 
 ### 5.9 `data/current/analyzed.json`
 

@@ -42,7 +42,7 @@ description: >
 11. **收尾合并**：去重合并历史结果，自动备份 bak 文件（保留最近 10 个）
 12. **全部博客发布后生成视觉摘要**：依次完成博客 generate、review 和 push；远端 `main` OID 验证成功后，`push-blog.py` 自动建立最终评分 TOP 10 论文长图和一张批次汇总图任务。图片不进入或阻断本轮博客发布。Codex 使用内置 `image_gen` 处理 pending/failed 项，项目脚本只管理规划、验证、复制和 checkpoint，禁止调用图像 API。论文长图使用约 220–360 个中文字符，不得退化为口号式概念海报；若深度分析已选中并完整缓存论文关键图，任务按“方法总览/架构/流程优先，关键实验其次”绑定最多两张参考图、caption、MIME、缓存路径和 SHA。内置生图直接完成英文标题、中文说明、结构图、实验数据和纸张拼贴艺术的一体化最终构图，禁止再经过旧的确定性文字卡片合成器；登记前逐项目检标题、文字、箭头关系、指标方向和数值，不可读或存在实质错误必须重生成。两类图片统一采用暖白底与低饱和色的清新纸张编辑风，通过细微纸纹、纸片叠层、局部毛边、少量胶带和柔和投影建立层次；禁止脏旧复古、拥挤手账、深蓝霓虹、赛博 HUD、金属边框和仪表盘风格。
 
-`full-fetch.js` **不会自动发布博客/微信**。但当用户说“运行/进行某日论文速递”时，默认语义是完成本节整条链路；Agent 先运行 `run-daily-digest.sh` 或等价的分阶段命令，处理 review 问题并完成 push，再使用内置 `image_gen` 完成所有 pending 论文长图和汇总封面，直到两个视觉状态均为 `complete`。微信公众号、飞书和小红书自动发布不属于默认链路。
+`full-fetch.js` **不会自动发布博客/微信**。但当用户说“运行/进行某日论文速递”时，默认语义是完成本节整条链路；Agent 先运行 `run-daily-digest.sh` 或等价的分阶段命令，处理 review 问题并完成 push，再使用内置 `image_gen` 完成所有 pending 论文长图和汇总封面，直到两个视觉状态均为 `complete`。视觉 plan/status 默认只输出排名、论文 ID、标题、task token、参考图数和 manifest 路径，`visual:prepare` 保留必需的绝对 `referencedImagePaths`；完整事实仍在 manifest。`digest:status` 默认打印紧凑门禁摘要，完整来源健康明细在报告 JSON。微信公众号、飞书和小红书自动发布不属于默认链路。
 
 ---
 
@@ -123,6 +123,7 @@ API 调用特性：
 - 整体超时 20 分钟，按进程活跃时间记账；系统睡眠/长时间挂起从预算中排除，唤醒后的底层超时继续使用剩余预算重试
 - 主分析 max_tokens=64000，审校/表格/方法/结构局部修复默认 max_tokens=16000（`PD_ANALYSIS_REPAIR_MAX_TOKENS` 可覆写），temperature=0.7
 - 主分析输入默认上限 200K 字符；超过时使用 `task-focused-v1` 跨全文均衡取样，不再只保留开头。开源/审校/评分/表格与方法/结构后处理证据默认上限分别为 16K/60K/40K/30K/40K 字符，且使用任务关键词优先的证据块，避免重复发送完整全文。对应 `PD_*_EVIDENCE_MAX_CHARS` 和 `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` 会进入阶段指纹
+- 主分析与审校只保留支撑结论的关键表格：每篇最多 2 张、每张最多 12 个数据行和 8 个指标列。表格修复只在实验章节明确引用原文表格但缺少 Markdown 表格，或出现非法省略标记时调用；原文仅“存在表格”不足以触发额外 LLM 请求
 - **双层重试**：analysis-engine.js 层面每篇最多重试 2 次（总共最多 3 次尝试）；deep-analyzer.js 内部每次 API 调用再重试最多 3 次（指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5s`）
 - **抓取代理为强制项**：LLM API 固定 `agent: false` 直连，不得注入代理 agent/dispatcher；arXiv/HuggingFace 抓取缺少项目 `.env` 代理必须失败，禁止直接回退。Node arXiv 使用 `HTTPS_PROXY` 或 `HTTP_PROXY` 中至少一项 HTTP CONNECT 地址，HuggingFace curl 可额外使用 SOCKS `ALL_PROXY`；访问本机代理的网络命令必须在沙箱外运行。
 - arXiv HTML 解析使用 **cheerio** 结构化选择器，移除 script/style/nav/header/footer 等噪音元素
@@ -239,7 +240,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 # PD_STRUCTURE_EVIDENCE_MAX_CHARS=40000
 # 博客文本 review 分块，范围 4000-16000
 # PD_BLOG_REVIEW_CHUNK_CHARS=8000
-# 单次博客 review 输出预算，空 length 响应会自适应加倍
+# 单次博客 review 输出预算；隐藏推理耗尽时只做一次纯 JSON 恢复，默认最高 8000
 # PD_BLOG_REVIEW_MAX_TOKENS=4000
 # 重分析并发度（默认与 ANALYSIS_CONFIG.concurrency 一致）
 # PD_REANALYZE_CONCURRENCY=3
@@ -383,7 +384,7 @@ npm run xiaohongshu -- --date 2026-04-22
   - 单篇页：`YYYY-MM-DD-<slug>.md`
 - `generate-blog.py` 在日期级跨进程锁内逐页生成、安装并写 journal；崩溃后可收养已完成的同 SHA 页面，全部论文完成后才生成汇总页和严格 generation manifest，禁止 review/commit/push
 - `review-blog.py` 在同一日期锁内逐文件审查，checkpoint 绑定 worker 实际读取的 SHA；每个通过项立即写入按日期隔离的持久账本，以博客仓库相对路径 + SHA-256 复用。代码、脚本、文档、模型、协议、generation manifest 或博客基线变化只要求重建整批 receipt，不得重审 SHA 未变的页面；只审查新增、字节变化、瞬时失败或内容失败修复后的文件。应存在页面消失或 Hugo 前后 SHA 变化仍阻断凭证；禁止 commit/push
-- review 的 HTTP 重试优先使用 `Retry-After`，否则指数退避并加短抖动；协议格式修复和完整协议重试使用收紧的独立预算。代码预检先去除完全重复长段落，并阻断表格列数不一致和疑似在单词中途截断的超长图片说明；合法空分组列续行不得删除
+- review 的 HTTP 重试优先使用 `Retry-After`，否则指数退避并加短抖动；协议格式修复和完整协议重试使用收紧的独立预算。对仅有隐藏推理、没有最终 JSON 的 `length/max_tokens` 响应，仅追加纯 JSON 指令并恢复一次，默认从 4000 提到最多 8000，再失败不继续翻倍。代码预检先去除完全重复长段落，并阻断表格列数不一致和疑似在单词中途截断的超长图片说明；合法空分组列续行不得删除
 - `push-blog.py` 验证审查凭证和当前文件哈希，精确 stage 后及 commit 前再逐项校验 index blob SHA/删除状态，随后提交、推送并核对远端 OID；禁止重新生成或 review
 - 三阶段除日期锁外还共享博客仓库级全局锁，防止不同日期并发污染共同的 worktree、index、HEAD 或回滚状态
 - **三个阶段及兼容 `publish-to-blog.py` 必须在沙箱外运行**：入口检测到可靠沙箱标志 `CODEX_SANDBOX` 会立即拒绝执行；沙箱外权限包装会保留网络禁用环境标志，不能据此误拒绝。原因是 review 会直连 LLM、下载图片并运行 Hugo，push 需要真实 Git 网络；不得在沙箱内跳过 review、伪造凭证或改用无网络降级路径。

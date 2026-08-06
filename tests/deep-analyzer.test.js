@@ -1278,6 +1278,50 @@ has_dataset: 否
         assert.strictEqual(sourceTextLikelyHasTables('No quantitative table is provided.'), false);
     });
 
+    it('只在分析明确缺表或使用省略标记时触发表格补写', () => {
+        const {
+            analysisNeedsExperimentTableRepair
+        } = require('../scripts/deep-analyzer.js');
+        const proseOnly = [
+            '## 实验结果',
+            '主方法 WER 为 5.1，最强基线为 5.6。',
+            '',
+            '## 细节详述',
+            '细节。'
+        ].join('\n');
+        assert.strictEqual(
+            analysisNeedsExperimentTableRepair(proseOnly, 'Table 1: WER comparison'),
+            false
+        );
+
+        const citedMissing = proseOnly.replace(
+            '主方法 WER 为 5.1，最强基线为 5.6。',
+            '如表1所示，主方法更好。'
+        );
+        assert.strictEqual(
+            analysisNeedsExperimentTableRepair(citedMissing, 'Table 1: WER comparison'),
+            true
+        );
+
+        const compactTable = proseOnly.replace(
+            '主方法 WER 为 5.1，最强基线为 5.6。',
+            '表中保留主方法与最强基线。\n\n| 方法 | WER |\n| --- | --- |\n| Ours | 5.1 |'
+        );
+        assert.strictEqual(
+            analysisNeedsExperimentTableRepair(compactTable, 'Table 1: WER comparison'),
+            false
+        );
+
+        const omission = proseOnly.replace(
+            '主方法 WER 为 5.1，最强基线为 5.6。',
+            '表格详见原文。'
+        );
+        assert.strictEqual(
+            analysisNeedsExperimentTableRepair(omission, 'Table 1: WER comparison'),
+            true
+        );
+    });
+
     it('统一识别论文 ID 字段', () => {
         const {
             getPaperArxivId

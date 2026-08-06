@@ -70,7 +70,7 @@
 | `PAPER_DIGEST_GITHUB_REMOTE` | Git 远程仓库名称 | `origin` |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 独立论文页三层 review 并发度（汇总页仍先串行审查） | `5` |
 | `PD_BLOG_REVIEW_CHUNK_CHARS` | 文本 review 分块字符数；限制为 4000–16000，值变化会刷新整批协议凭证，但 SHA 未变页面的逐文件通过记录仍可复用 | `8000` |
-| `PD_BLOG_REVIEW_MAX_TOKENS` | 单次博客 LLM review 的输出预算；空响应因 `length` 截断时会自适应加倍 | `4000` |
+| `PD_BLOG_REVIEW_MAX_TOKENS` | 单次博客 LLM review 输出预算；隐藏推理耗尽且无最终 JSON 时只执行一次纯 JSON 恢复，默认最高 8000 | `4000` |
 
 发布阶段的 LLM 调用会记录请求开始、响应/异常、单次耗时、prompt 长度和图片数；日志不会输出 API key、认证头或正文内容。若日志只出现 `→` 而没有 `✓` 或失败行，表示进程在 HTTP 请求尚未返回时被外部终止，不能据此签发审查凭证或推送。
 

@@ -267,6 +267,7 @@ HuggingFace Papers 抓取模块。
 - `npm run visual:render:debug -- --spec SPEC.json --output OUTPUT.png [--illustration 无字插画] [--reference 方法/架构原图] [--result-reference 关键实验原图]` 是保留的本地确定性调试/回退渲染器，不再用于默认最终视觉资产。默认流程由内置 `image_gen` 一次性生成完整带字构图，并在登记前人工目检准确性。回退渲染器仍可使用 Pillow 合成约 `2160x4552` 的论文长图或汇总封面，支持结构化 `diagram.columns/nodes/edges` 中文重绘、参考图图注、简单柱状图/指标卡和 8 MiB 输出门禁
 - 使用 `visual-summary-state.js record --date YYYY-MM-DD --paper ID --kind infographic --file PNG --token TOKEN` 登记。脚本验证 PNG、最小尺寸、纵横比、大小、SHA 和 task token 后，按 manifest 最终排名原子保存到同一个 `data/archive/<date>/visual-summaries/`，文件名为 `<两位排名>-<paper-id>-<title-slug>.png`；并发完成顺序不会影响编号
 - 调用内置生图前运行 `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]`。命令只物化输入，不调用图像 API；它校验 `.bin` 缓存受控路径、SHA、字节数、MIME 与文件头，再输出具有正确 `.png/.jpg/.webp` 扩展名的绝对 `referencedImagePaths`（另保留相对路径供日志展示），避免工作目录变化或直接上传 `.bin` 触发图片服务错误
+- 视觉 plan/status 默认仅输出排名、论文 ID、标题、task token、参考图数和 manifest 绝对路径；`visual:prepare` 额外保留内置生图必需的绝对 `referencedImagePaths`。完整 `generationContext.qaClaims` 和封面排行仍保存在 manifest，终端不再重复打印大对象
 - 汇总图从同批次审计论文确定性计算标题、热门方向计数和 TOP 10 排名，并复用博客 generation manifest 的 category；用 `digest-cover-state.js record` 登记到同一目录的 `data/archive/<date>/visual-summaries/00-digest-cover-<date>.png`
 - 每篇视觉任务的 `generationContext.qaClaims` 提供完整英文标题、四个必要内容区、方法声明、带数字实验声明、局限和参考图 caption；提示词和登记前目检必须逐项核对
 - 旧版 `data/current/visual-summaries/` 和 `data/current/digest-covers/` 资产会在下一次 plan 时校验 PNG 与 SHA，确认归档目标无冲突后迁移
@@ -276,6 +277,8 @@ HuggingFace Papers 抓取模块。
 - 图片状态不进入博客 generation/review/push 清单，不阻断已经发布的博客；无远端验证凭证时所有 plan/status 命令拒绝启动
 
 **阶段恢复**：`analysisManifest` 逐阶段保存状态，失败正文写入 `analysisCheckpoint`，候选/下载/选图元数据写入 `analysisRecoveryImageManifest`。失败合并会独立按完整契约重解析旧正文，不受最新失败 manifest 影响，连续多次失败仍保留旧成功正文，但 `latestAnalysisAttemptError` 会强制下一轮继续重试。全文或实际取样输入变化时，同时清除绑定旧来源的图片恢复清单。强制重分析成功旧记录时因没有 checkpoint 会清空主分析及所有下游完成标记；普通失败续跑则从首个未完成阶段继续。
+
+**表格 token 门禁**：主分析与审校每篇最多输出 2 张关键表，每张最多 12 个数据行和 8 个指标列。表格修复不再因原文的任意表格存在而触发；只有实验正文明确引用但缺表，或存在非法省略标记时才执行。
 
 每个分析阶段另有输入/输出快照和指纹：主分析绑定实际截断输入，评分绑定评分前结构修复正文，插图绑定候选集合、下载内容 SHA 与插图前正文。任何变化只失效当前及下游阶段。所有入口仅在同篇共享锁内合并论文内容；批次/最终统计不会再回写累计 paper payload。
 
@@ -397,7 +400,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 
 **发布流程**：
 1. `generate-blog.py` 只生成并安装 `.md`，然后写入 `blog-generation-manifest-YYYY-MM-DD.json`；不调用 LLM，不提交、不推送。
-2. `review-blog.py` 只读取 generation manifest，对需要审查的文件执行代码、LLM 和多模态图片三层 review，并对完整批次执行确定性校验与 Hugo gate。每个通过项立即写入 `blog-review-passes-YYYY-MM-DD.json`，以博客仓库相对路径 + 实际读取 SHA-256 为永久复用键；失败状态写入 `blog-review-failure-YYYY-MM-DD.json`。代码、脚本、文档、模型、协议、generation manifest 或博客 `main` 基线变化不会清空未改页面的通过项，只会让新增、SHA 变化、瞬时失败或内容失败修复后的文件进入 review；通过后重新签发绑定当前清单、基线、协议和 Hugo gate 的 `blog-review-receipt-YYYY-MM-DD.json`，不执行 Git 发布。HTTP 重试优先服从 `Retry-After`，否则指数退避并加入短随机抖动；协议格式修复和完整协议重试使用更小预算，避免错误响应形成长时间重试风暴。
+2. `review-blog.py` 只读取 generation manifest，对需要审查的文件执行代码、LLM 和多模态图片三层 review，并对完整批次执行确定性校验与 Hugo gate。每个通过项立即写入 `blog-review-passes-YYYY-MM-DD.json`，以博客仓库相对路径 + 实际读取 SHA-256 为永久复用键；失败状态写入 `blog-review-failure-YYYY-MM-DD.json`。代码、脚本、文档、模型、协议、generation manifest 或博客 `main` 基线变化不会清空未改页面的通过项，只会让新增、SHA 变化、瞬时失败或内容失败修复后的文件进入 review；通过后重新签发绑定当前清单、基线、协议和 Hugo gate 的 `blog-review-receipt-YYYY-MM-DD.json`，不执行 Git 发布。HTTP 重试优先服从 `Retry-After`，否则指数退避并加入短随机抖动；协议格式修复和完整协议重试使用更小预算。若推理模型将输出预算全部用于隐藏推理、未返回最终 JSON，客户端只追加纯 JSON 指令恢复一次，默认从 4000 最多增到 8000，不再盲目翻倍到 16000。
 3. `push-blog.py` 只验证审查凭证与工作树文件哈希完全一致，再精确 stage → 中文详细 commit → `git push origin HEAD:main` → 验证远端 OID；该脚本不生成也不 review。
 4. GitHub Actions 自动构建并部署到 Pages。
 
@@ -438,7 +441,7 @@ LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，必须带 `fix
 
 #### `scripts/digest-run-report.js`
 
-按 `--date YYYY-MM-DD` 汇总抓取、筛选、深度分析、博客 review/远端发布、TOP 10 长图和汇总封面状态，原子写入 `data/current/digest-run-reports/<date>.json`。只有所有必需阶段完整才返回 0；用于日更结束后的统一机器门禁，不会修改任一业务阶段状态。
+按 `--date YYYY-MM-DD` 汇总抓取、筛选、深度分析、博客 review/远端发布、TOP 10 长图和汇总封面状态，原子写入 `data/current/digest-run-reports/<date>.json`。终端默认只打印阶段完成数、待处理数与错误摘要；完整 `sourceHealth` 仍保存在 JSON 报告。只有所有必需阶段完整才返回 0；用于日更结束后的统一机器门禁，不会修改任一业务阶段状态。
 
 **重要限制**：`fetchedAt` 是抓取时间，不是论文在 arXiv 上的 `published` 日期。跨天运行时请显式指定 `--date`。
 

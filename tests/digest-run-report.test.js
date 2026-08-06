@@ -9,7 +9,8 @@ const {
     parseDate,
     sourceHealthComplete,
     samePaperIds,
-    visualAssetsAreValid
+    visualAssetsAreValid,
+    formatDigestRunSummary
 } = require('../scripts/digest-run-report.js');
 const Config = require('../scripts/config.js');
 const {
@@ -95,6 +96,24 @@ describe('digest run report', () => {
             samePaperIds([{ arxivId: '2607.1' }, { arxivId: '2607.1v2' }], [{ arxivId: '2607.1' }]),
             false
         );
+    });
+
+    it('默认终端摘要保留门禁数字但不展开来源健康大对象', () => {
+        const summary = formatDigestRunSummary({
+            batchDate: '2026-07-29',
+            overallStatus: 'incomplete',
+            errors: ['长图未完成'],
+            fetch: { complete: true, rawCandidateCount: 42, sourceHealth: { huge: true } },
+            filter: { complete: true, selectedCount: 6, totalCandidates: 42, pendingDecisions: 0 },
+            analysis: { complete: true, successful: 6, total: 6, failed: 0 },
+            blog: { complete: true, strictReview: true, publicationVerified: true },
+            visuals: { complete: 8, total: 10, pending: 2, failed: 0 },
+            cover: { complete: true, status: 'complete' }
+        });
+        assert.match(summary, /candidates=42/);
+        assert.match(summary, /complete=8\/10/);
+        assert.match(summary, /错误: 长图未完成/);
+        assert.doesNotMatch(summary, /sourceHealth|huge/);
     });
 
     it('统一状态门禁与 visual:status 一样严格绑定 canonical 长图路径', () => {
