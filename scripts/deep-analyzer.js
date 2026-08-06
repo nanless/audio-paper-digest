@@ -3554,6 +3554,19 @@ function getRepairableAnalysisStructureIssues(analysis) {
     if (machineIssue) issues.push(`机器摘要: ${machineIssue}`);
     const tagIssue = validateTagSectionContract(analysis, parsed);
     if (tagIssue) issues.push(`标签: ${tagIssue}`);
+    // 结构修复必须在评分审计之前兜住最终契约要求的叙事正文长度。
+    // 否则标题齐全但正文仍是 `TD` / 编辑指令等占位内容时，评分审计只会
+    // 反复改写评分，永远无法修复真正位于上游的核心摘要或方法/结果章节。
+    if (!parsed?.summary || parsed.summary.trim().length < 80) {
+        issues.push(`核心摘要内容不足: ${parsed?.summary?.trim().length || 0}/80 字符`);
+    }
+    if (!parsed?.architecture || parsed.architecture.trim().length < 80) {
+        issues.push(`方法概述内容不足: ${parsed?.architecture?.trim().length || 0}/80 字符`);
+    }
+    const resultMinimumChars = ['综述', '理论研究'].includes(parsed?.documentType) ? 20 : 50;
+    if (!parsed?.results || parsed.results.trim().length < resultMinimumChars) {
+        issues.push(`实验或验证内容不足: ${parsed?.results?.trim().length || 0}/${resultMinimumChars} 字符`);
+    }
     return issues;
 }
 

@@ -619,6 +619,19 @@ has_dataset: 否
         assert.deepStrictEqual(getRepairableAnalysisStructureIssues(mismatched), []);
     });
 
+    it('结构预修复会在评分前拒绝核心摘要占位符和过短正文', () => {
+        const { getRepairableAnalysisStructureIssues } = require('../scripts/deep-analyzer.js');
+        const placeholder = validAnalysisText().replace(
+            /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
+            '## 核心摘要\nTD\n'
+        );
+
+        assert.deepStrictEqual(
+            getRepairableAnalysisStructureIssues(placeholder).filter(issue => issue.startsWith('核心摘要内容不足')),
+            ['核心摘要内容不足: 2/80 字符']
+        );
+    });
+
     it('确定性规范化额外标题、机器摘要杂项和破损标签', () => {
         const {
             normalizeAnalysisStructure,
