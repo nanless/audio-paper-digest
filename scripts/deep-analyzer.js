@@ -39,8 +39,6 @@ const {
 loadEnvFile();
 
 // 解决 stdout 缓冲问题：后台运行时强制立即 flush
-const http = require('http');
-const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -3181,50 +3179,26 @@ async function checkDemoPageForOpensource(demoUrl) {
             const parsedUrl = await validatePublicHttpUrl(currentUrl);
         const requestHostname = parsedUrl.validatedAddress || parsedUrl.hostname;
         
-        // 使用 http/https 请求获取页面内容；不自动跟随重定向，避免被跳到内网地址。
-            response = await new Promise((resolve, reject) => {
-            const transport = parsedUrl.protocol === 'http:' ? http : https;
-            const options = {
-                hostname: requestHostname,
-                port: parsedUrl.port || (parsedUrl.protocol === 'http:' ? 80 : 443),
-                path: parsedUrl.pathname + parsedUrl.search,
-                method: 'GET',
-                servername: parsedUrl.hostname,
+            // 复用项目 HTTP CONNECT 代理；手动处理重定向以便每一跳重新校验公网地址。
+            response = await fetch(currentUrl, {
                 headers: {
-                    'Host': parsedUrl.host,
                     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 },
-                timeout: 15000,
-            };
-            
-            const req = transport.request(options, (res) => {
-                const contentType = String(res.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+                signal: AbortSignal.timeout(15000),
+                dispatcher: getArxivFetchDispatcher(),
+                redirect: 'manual'
+            }).then(async res => {
+                const contentType = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
                 if (contentType && !['text/html', 'application/xhtml+xml', 'application/xml', 'text/plain'].includes(contentType)) {
-                    res.resume();
-                    resolve({ status: res.statusCode, data: '', location: res.headers.location, skipped: `Content-Type=${contentType}` });
-                    return;
+                    return { status: res.status, data: '', location: res.headers.get('location'), skipped: `Content-Type=${contentType}` };
                 }
-                const chunks = [];
-                let total = 0;
+                const data = await res.text();
                 const maxBytes = 1024 * 1024;
-                res.on('data', chunk => {
-                    total += chunk.length;
-                    if (total > maxBytes) {
-                        req.destroy(new Error(`Demo page exceeds ${maxBytes} bytes`));
-                        return;
-                    }
-                    chunks.push(chunk);
-                });
-                res.on('end', () => resolve({ status: res.statusCode, data: Buffer.concat(chunks).toString('utf8'), location: res.headers.location }));
-            });
-            
-            req.on('error', reject);
-            req.on('timeout', () => {
-                req.destroy();
-                reject(new Error('Timeout'));
-            });
-            req.end();
+                if (Buffer.byteLength(data, 'utf8') > maxBytes) {
+                    throw new Error(`Demo page exceeds ${maxBytes} bytes`);
+                }
+                return { status: res.status, data, location: res.headers.get('location') };
             });
 
             if (response.status >= 300 && response.status < 400 && response.location) {
