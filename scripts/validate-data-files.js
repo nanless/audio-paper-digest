@@ -159,13 +159,24 @@ function validatePapersDatabase(filePath = Config.FILES.papers) {
         return issues;
     }
 
+    const seenIds = new Map();
     for (const [key, paper] of Object.entries(data.papers)) {
         if (!paper || typeof paper !== 'object' || Array.isArray(paper)) {
             addIssue(issues, filePath, `${key} 不是论文对象`);
             continue;
         }
-        const id = normalizedId(paper) || normalizedId(key);
+        const paperId = normalizedId(paper);
+        const keyId = normalizedId(key);
+        if (paperId && keyId && paperId !== keyId) {
+            addIssue(issues, filePath, `${key} 的对象 key 与论文 ID 冲突: ${paperId}`);
+        }
+        const id = paperId || keyId;
         if (!id) addIssue(issues, filePath, `${key} 缺少可识别 ID`);
+        if (id && seenIds.has(id)) {
+            addIssue(issues, filePath, `${key} 与 ${seenIds.get(id)} 归一化为重复 ID: ${id}`);
+        } else if (id) {
+            seenIds.set(id, key);
+        }
         const status = paper.digestStatus?.status;
         if (status && !ALLOWED_DIGEST_STATUSES.has(status)) {
             addIssue(issues, filePath, `${key} digestStatus.status 非法: ${status}`);
@@ -438,17 +449,17 @@ function validateFilteredMetadata(filePath, data, papers, issues) {
 }
 
 function validateDeepAnalysisMetadata(filePath, data, papers, issues) {
-    if (Array.isArray(data) || data.stats === undefined) return;
+    if (Array.isArray(data)) return;
     const allowedStatuses = new Set(['running', 'complete', 'partial_failed', 'failed', 'filter_failed']);
     if (data.status !== undefined && !allowedStatuses.has(data.status)) {
         addIssue(issues, filePath, `status 非法: ${data.status}`);
     }
-    if (!isPlainObject(data.stats)) {
+    if (data.stats !== undefined && !isPlainObject(data.stats)) {
         addIssue(issues, filePath, 'stats 必须是对象');
         return;
     }
 
-    const stats = data.stats;
+    const stats = data.stats || {};
     if (stats.analysisStatus !== undefined) {
         if (!allowedStatuses.has(stats.analysisStatus)) {
             addIssue(issues, filePath, `stats.analysisStatus 非法: ${stats.analysisStatus}`);
@@ -563,12 +574,22 @@ function validatePaperListFile(filePath, options = {}) {
         }
     }
 
+    const seenPaperIds = new Map();
     papers.forEach((paper, index) => {
         if (!paper || typeof paper !== 'object' || Array.isArray(paper)) {
             addIssue(issues, filePath, `papers[${index}] 不是论文对象`);
             return;
         }
-        ensurePaperId(paper, filePath, index, issues);
+        const paperId = ensurePaperId(paper, filePath, index, issues);
+        if (paperId && seenPaperIds.has(paperId)) {
+            addIssue(
+                issues,
+                filePath,
+                `papers[${index}] 与 papers[${seenPaperIds.get(paperId)}] 归一化为重复 ID: ${paperId}`
+            );
+        } else if (paperId) {
+            seenPaperIds.set(paperId, index);
+        }
         if (options.deepAnalysis) {
             const hasAnalysisBody = typeof paper.analysis === 'string' && paper.analysis.trim().length > 0;
             let reparsed = null;
@@ -742,6 +763,7 @@ function validateFilterDecisionsFile(filePath = DEFAULT_FILTER_DECISIONS_FILE) {
     }
 
     const entries = Object.entries(data.decisions);
+    const seenDecisionIds = new Map();
     let relatedCount = 0;
     let keywordRejectedCount = 0;
     for (const [key, decision] of entries) {
@@ -750,9 +772,22 @@ function validateFilterDecisionsFile(filePath = DEFAULT_FILTER_DECISIONS_FILE) {
             continue;
         }
 
-        const id = normalizedId(decision) || normalizedId(key);
+        const decisionId = normalizedId(decision);
+        const keyId = normalizedId(key);
+        if (decisionId && keyId && decisionId !== keyId) {
+            addIssue(issues, filePath, `decisions.${key} 的对象 key 与决定 ID 冲突: ${decisionId}`);
+        }
+        const id = decisionId || keyId;
         if (!id) {
             addIssue(issues, filePath, `decisions.${key} 缺少可识别 ID`);
+        } else if (seenDecisionIds.has(id)) {
+            addIssue(
+                issues,
+                filePath,
+                `decisions.${key} 与 decisions.${seenDecisionIds.get(id)} 归一化为重复 ID: ${id}`
+            );
+        } else {
+            seenDecisionIds.set(id, key);
         }
 
         if (typeof decision.related !== 'boolean') {
@@ -1047,6 +1082,126 @@ function validateRequiredCompanionFiles(files, filterDecisions) {
     return issues;
 }
 
+function artifactBatchDate(data) {
+    if (!isPlainObject(data)) return null;
+    return typeof data.batchDate === 'string' && data.batchDate
+        ? data.batchDate
+        : getBeijingBatchDate(data.timestamp);
+}
+
+function paperBatchDate(paper) {
+    const value = paper?.digestStatus?.batchDate || paper?.batchDate || paper?.fetchBatchDate
+        || paper?.fetchedAt || paper?.timestamp || '';
+    return typeof value === 'string' ? value.slice(0, 10) : '';
+}
+
+function normalizedPaperMap(rawPapers) {
+    const result = new Map();
+    if (!rawPapers || typeof rawPapers !== 'object') return result;
+    for (const [key, paper] of Object.entries(rawPapers)) {
+        if (!isPlainObject(paper)) continue;
+        const id = normalizedId(paper) || normalizedId(key);
+        if (id && !result.has(id)) result.set(id, paper);
+    }
+    return result;
+}
+
+function validateFilteredDeepPapersConsistency(files = Config.FILES) {
+    const issues = [];
+    const filteredPath = files.filteredPapers;
+    const deepPath = files.deepAnalysisResult;
+    if (!filteredPath || !deepPath || !fs.existsSync(filteredPath) || !fs.existsSync(deepPath)) {
+        return issues;
+    }
+
+    const filtered = readJsonSafe(filteredPath, null);
+    const deep = readJsonSafe(deepPath, null);
+    if (!isPlainObject(filtered) || !isPlainObject(deep)
+        || !Array.isArray(filtered.papers) || !Array.isArray(deep.papers)) {
+        return issues;
+    }
+
+    const filteredBatchDate = artifactBatchDate(filtered);
+    const deepBatchDate = artifactBatchDate(deep);
+    if (filteredBatchDate && deepBatchDate && filteredBatchDate !== deepBatchDate) {
+        addIssue(
+            issues,
+            deepPath,
+            `batchDate (${deepBatchDate}) 必须与 filtered-papers.json (${filteredBatchDate}) 一致`
+        );
+    }
+
+    if (filtered.status === 'complete') {
+        const filteredIds = filtered.papers.map(normalizedId).filter(Boolean);
+        const deepIds = deep.papers.map(normalizedId).filter(Boolean);
+        const filteredIdSet = new Set(filteredIds);
+        const deepIdSet = new Set(deepIds);
+        const missing = [...filteredIdSet].filter(id => !deepIdSet.has(id));
+        const unexpected = [...deepIdSet].filter(id => !filteredIdSet.has(id));
+        if (missing.length > 0 || unexpected.length > 0) {
+            addIssue(
+                issues,
+                deepPath,
+                `papers ID 集合必须精确匹配 complete filtered-papers.json: 缺少 ${missing.join(', ') || '无'}；多出 ${unexpected.join(', ') || '无'}`
+            );
+        }
+
+        if (files.papers && fs.existsSync(files.papers)) {
+            const papersData = readJsonSafe(files.papers, null);
+            const papersById = normalizedPaperMap(papersData?.papers);
+            const deepById = new Map(deep.papers
+                .map(paper => [normalizedId(paper), paper])
+                .filter(([id]) => Boolean(id)));
+            for (const id of filteredIdSet) {
+                const databasePaper = papersById.get(id);
+                if (!databasePaper) {
+                    addIssue(issues, files.papers, `缺少 filtered-papers.json 论文 ID: ${id}`);
+                    continue;
+                }
+                const databaseBatchDate = paperBatchDate(databasePaper);
+                if (filteredBatchDate && !databaseBatchDate) {
+                    addIssue(issues, files.papers, `${id} 缺少与 filtered-papers.json 对齐的批次日期`);
+                } else if (filteredBatchDate && databaseBatchDate !== filteredBatchDate) {
+                    addIssue(
+                        issues,
+                        files.papers,
+                        `${id} 的批次日期 (${databaseBatchDate}) 必须与 filtered-papers.json (${filteredBatchDate}) 一致`
+                    );
+                }
+
+                const deepPaper = deepById.get(id);
+                if (!deepPaper) continue;
+                const deepSucceeded = getCanonicalAnalysisRunSummary([deepPaper]).success === 1;
+                const digestStatus = databasePaper.digestStatus?.status;
+                const latestAttemptStatus = databasePaper.digestStatus?.latestAttemptStatus;
+                if (deepSucceeded) {
+                    if (digestStatus !== 'analyzed') {
+                        addIssue(issues, files.papers, `${id} 深度分析成功，但 digestStatus.status 不是 analyzed`);
+                    }
+                    if (latestAttemptStatus !== undefined && latestAttemptStatus !== 'analyzed') {
+                        addIssue(issues, files.papers, `${id} 深度分析成功，但 digestStatus.latestAttemptStatus 不是 analyzed`);
+                    }
+                } else {
+                    const preservesOlderSuccess = digestStatus === 'analyzed'
+                        && latestAttemptStatus === 'analysis_failed';
+                    if (digestStatus !== 'analysis_failed' && !preservesOlderSuccess) {
+                        addIssue(
+                            issues,
+                            files.papers,
+                            `${id} 深度分析未完成，但 digestStatus 未标记 analysis_failed 最新尝试`
+                        );
+                    }
+                    if (latestAttemptStatus !== undefined && latestAttemptStatus !== 'analysis_failed') {
+                        addIssue(issues, files.papers, `${id} 深度分析未完成，但 digestStatus.latestAttemptStatus 不是 analysis_failed`);
+                    }
+                }
+            }
+        }
+    }
+
+    return issues;
+}
+
 function validateCurrentDataFiles(files = Config.FILES) {
     const filterDecisions = resolveFilterDecisionsPath(files);
     const fetchCheckpoint = files.fetchCheckpoint || (
@@ -1062,7 +1217,8 @@ function validateCurrentDataFiles(files = Config.FILES) {
         ...validateFilterArtifactsConsistency(files.filteredPapers, filterDecisions),
         ...validateRawCandidateFilterConsistency(files.rawCandidates, filterDecisions, files.filteredPapers),
         ...validateFetchArtifactConsistency(fetchCheckpoint, files.rawCandidates, filterDecisions, files.filteredPapers),
-        ...validateRequiredCompanionFiles(files, filterDecisions)
+        ...validateRequiredCompanionFiles(files, filterDecisions),
+        ...validateFilteredDeepPapersConsistency(files)
     ];
 }
 
@@ -1109,6 +1265,7 @@ module.exports = {
     validatePaperListFile,
     validateFilterDecisionsFile,
     validateCurrentDataFiles,
+    validateFilteredDeepPapersConsistency,
     validateSourceHealth,
     hasAnyCurrentDataFiles
 };

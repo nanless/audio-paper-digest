@@ -1217,6 +1217,10 @@ function buildProxyAuthorizationHeader(proxy) {
     return `Basic ${Buffer.from(`${username}:${password}`, 'utf8').toString('base64')}`;
 }
 
+function normalizeTlsServername(value) {
+    return String(value || '').trim().replace(/^\[|\]$/g, '');
+}
+
 /**
  * 创建 HTTP CONNECT 代理 Agent（纯 Node 内置模块，无需外部依赖）
  * @param {string} proxyUrl - 代理 URL，如 http://127.0.0.1:7897
@@ -1288,7 +1292,7 @@ function createProxyAgent(proxyUrl, targetHost, targetPort = 443, tlsServername 
                     }
                     const tlsSocket = tls.connect({
                         socket,
-                        servername: tlsServername,
+                        servername: normalizeTlsServername(tlsServername),
                         rejectUnauthorized: true
                     }, () => done(null, tlsSocket));
                     pendingSockets.delete(socket);
@@ -1518,6 +1522,7 @@ module.exports = {
     detectProxyUrl,
     detectHttpConnectProxyUrl,
     buildProxyAuthorizationHeader,
+    normalizeTlsServername,
     createProxyAgent,
     createProxyDispatcher,
     // 备份

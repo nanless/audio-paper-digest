@@ -101,6 +101,53 @@ def save_bound_review_receipt(date_str, paths, hugo_gate='hugo', expected_base_h
 
 
 class PublishToBlogReviewTest(unittest.TestCase):
+    def test_visual_capability_preflight_rejects_legacy_before_daily_push(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(publish_to_blog, 'CURRENT_DIR', Path(tmp)):
+            manifest = publish_to_blog.generation_manifest_path('2026-07-10')
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text(json.dumps({
+                'schemaVersion': 1,
+                'date': '2026-07-10',
+                'files': [{'path': 'content/posts/2026-07-10.md', 'deleted': False}],
+                'category': '论文速递',
+                'visualSummaryRequired': False,
+                'digestCoverRequired': False,
+            }), encoding='utf-8')
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertFalse(publish_to_blog.preflight_post_publish_visual_capability(
+                    '2026-07-10', require_visual_plan=False,
+                ))
+            with self.assertRaisesRegex(
+                publish_to_blog.PublishDataValidationError, '仅支持历史维护发布'
+            ):
+                publish_to_blog.preflight_post_publish_visual_capability(
+                    '2026-07-10', require_visual_plan=True,
+                )
+
+    def test_schema_v3_visual_capability_preflight_accepts_bound_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current = Path(tmp) / 'current'
+            page = posts / '2026-07-10-paper.md'
+            page.write_text(
+                '---\npaper_digest_page_type: paper\n'
+                'paper_digest_arxiv_id: "2607.00001"\n---\nbody\n',
+                encoding='utf-8',
+            )
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                publish_to_blog.save_generation_manifest(
+                    '2026-07-10', [page],
+                    input_fingerprint='a' * 64,
+                    template_fingerprint='b' * 64,
+                    base_head='c' * 40,
+                    published_papers=[{'arxivId': '2607.00001'}],
+                )
+                self.assertTrue(publish_to_blog.preflight_post_publish_visual_capability(
+                    '2026-07-10', require_visual_plan=True,
+                ))
+
     def test_receipt_reports_actual_per_file_image_review_coverage(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
@@ -130,6 +177,9 @@ class PublishToBlogReviewTest(unittest.TestCase):
                 )
                 receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
             self.assertEqual(receipt['imageReview']['mode'], 'mixed')
+            self.assertEqual(
+                receipt['postPublishVisuals'], 'not_applicable_legacy_maintenance'
+            )
             self.assertEqual(
                 {item['imageReviewMode'] for item in receipt['files']},
                 {'deterministic_only', 'multimodal'},

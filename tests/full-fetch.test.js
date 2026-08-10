@@ -15,7 +15,7 @@ const completeSourceHealth = () => ({
     huggingface: { ok: true }
 });
 
-function writeResumeCheckpoint(dir, common) {
+function writeResumeCheckpoint(dir, common, options = {}) {
     const { saveFetchCheckpoint } = require('../scripts/full-fetch.js');
     const file = path.join(dir, 'fetch-checkpoint.json');
     saveFetchCheckpoint({
@@ -28,7 +28,11 @@ function writeResumeCheckpoint(dir, common) {
         blogDedupFingerprint: common.blogDedupFingerprint,
         historicalDedupIds: [],
         categoryOrder: EXPECTED_CATEGORIES,
-        arxiv: Object.fromEntries(EXPECTED_CATEGORIES.map(id => [id, { status: 'complete', papers: [], health: { id, ok: true } }])),
+        arxiv: Object.fromEntries(EXPECTED_CATEGORIES.map((id, index) => [id, {
+            status: 'complete',
+            papers: id === options.emptyCategoryId ? [] : [{ arxivId: `2607.${String(90000 + index)}` }],
+            health: { id, ok: true }
+        }])),
         huggingface: { status: 'complete', papers: [], health: { ok: true } }
     }, file);
     return { file, checkpoint: JSON.parse(fs.readFileSync(file)) };
@@ -193,6 +197,18 @@ describe('full-fetch helpers', () => {
             ...decisions,
             decisions: { '2607.00001': { related: true } }
         }, raw, checkpoint), false);
+        const { checkpoint: emptyCheckpoint } = writeResumeCheckpoint(checkpointDir, common, {
+            emptyCategoryId: 'eess.AS'
+        });
+        const emptyIntegrityRaw = { ...raw, fetchSourcesSha256: emptyCheckpoint.fetchSourcesSha256 };
+        const emptyIntegrityDecisions = { ...decisions, fetchSourcesSha256: emptyCheckpoint.fetchSourcesSha256 };
+        const emptyIntegrityFiltered = { ...filtered, fetchSourcesSha256: emptyCheckpoint.fetchSourcesSha256 };
+        assert.strictEqual(validateFilterArtifacts(
+            emptyIntegrityFiltered,
+            emptyIntegrityDecisions,
+            emptyIntegrityRaw,
+            emptyCheckpoint
+        ), false);
     });
 
     it('空候选只在核心来源致命失败时阻断', () => {
@@ -346,6 +362,43 @@ describe('full-fetch helpers', () => {
         assert.deepStrictEqual(resumed.decisionsData.decisions, {});
     });
 
+    it('筛选恢复路径遇到任一空 arXiv 来源时拒绝跨进程复用', () => {
+        const { loadResumableFilterForToday, stableContentSha256 } = require('../scripts/full-fetch.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-empty-source-resume-'));
+        const rawFile = path.join(dir, 'raw-candidates.json');
+        const common = {
+            timestamp: '2026-07-13T10:00:00+08:00',
+            batchId: 'batch-a',
+            candidateFingerprint: 'candidate-a',
+            sourceConfigFingerprint: 'source-a',
+            blogDedupFingerprint: 'blog-a'
+        };
+        const papers = [{ arxivId: '2607.00001' }];
+        const { file: fetchCheckpoint, checkpoint } = writeResumeCheckpoint(dir, common, {
+            emptyCategoryId: 'cs.SD'
+        });
+        fs.writeFileSync(rawFile, JSON.stringify({
+            ...common,
+            batchDate: '2026-07-13',
+            rawPapersSha256: stableContentSha256(papers),
+            fetchSourcesSha256: checkpoint.fetchSourcesSha256,
+            sourceHealth: completeSourceHealth(),
+            papers
+        }));
+
+        assert.strictEqual(loadResumableFilterForToday('2026-07-13', {
+            filterModel: 'model-a',
+            filterPromptHash: 'hash-a',
+            candidateFingerprint: 'candidate-a',
+            sourceConfigFingerprint: 'source-a',
+            blogDedupFingerprint: 'blog-a'
+        }, {
+            rawCandidates: rawFile,
+            filterDecisions: path.join(dir, 'missing-decisions.json'),
+            fetchCheckpoint
+        }), null);
+    });
+
     it('抓取 checkpoint 只复用同日且候选指纹一致的来源结果', () => {
         const { loadFetchCheckpoint, saveFetchCheckpoint } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-fetch-checkpoint-'));
@@ -488,7 +541,7 @@ describe('full-fetch helpers', () => {
         assert.deepStrictEqual(Array.from(loadCurrentSuccessfulAnalysisIds(file)), []);
     });
 
-    it('最终保存锁内重读合并并递增 generation，部分失败写入 partial_failed', () => {
+    it('最终保存锁内按 expected 集合收敛并递增 generation，部分失败写入 partial_failed', () => {
         const { saveFinalAnalysisResults } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-final-save-'));
         const file = path.join(dir, 'deep-analysis-result.json');
@@ -506,7 +559,8 @@ describe('full-fetch helpers', () => {
         assert.strictEqual(saved.status, 'partial_failed');
         assert.strictEqual(saved.stats.analysisStatus, 'partial_failed');
         assert.strictEqual(saved.stats.remainingFailed, 1);
-        assert.ok(saved.papers.some(paper => paper.arxivId === 'concurrent'));
+        assert.deepStrictEqual(saved.papers.map(paper => paper.arxivId), ['2607.10001', '2607.10002']);
+        assert.strictEqual(saved.stats.removedUnexpected, 1);
         assert.strictEqual(saved.deepAnalysisCompletedAt, undefined);
     });
 
@@ -569,6 +623,29 @@ describe('full-fetch helpers', () => {
         assert.strictEqual(saved.stats.analysisStatus, 'complete');
         assert.strictEqual(saved.stats.successfulExpected, 1);
         assert.strictEqual(saved.stats.remainingFailed, 0);
+        assert.deepStrictEqual(saved.papers.map(paper => paper.arxivId), ['2607.21001']);
+        assert.strictEqual(saved.stats.removedUnexpected, 1);
+    });
+
+    it('最终保存优先采用 expected 批次并清除旧批次完成态', () => {
+        const { saveFinalAnalysisResults } = require('../scripts/full-fetch.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-final-batch-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(file, JSON.stringify({
+            batchDate: '2026-07-12',
+            status: 'complete',
+            deepAnalysisCompletedAt: '2026-07-12T18:00:00+08:00',
+            stats: { analysisStatus: 'complete', expected: 1, totalAfterMerge: 1 },
+            papers: [validAnalysisRecord('2607.21999')]
+        }));
+
+        const saved = saveFinalAnalysisResults(file, [
+            { arxivId: '2607.22000', batchDate: '2026-07-13', analysis: null, error: 'timeout' }
+        ], [{ arxivId: '2607.22000', batchDate: '2026-07-13' }]);
+        assert.strictEqual(saved.batchDate, '2026-07-13');
+        assert.strictEqual(saved.status, 'failed');
+        assert.strictEqual(saved.deepAnalysisCompletedAt, undefined);
+        assert.deepStrictEqual(saved.papers.map(paper => paper.arxivId), ['2607.22000']);
     });
 
     it('full-fetch 收尾只更新统计，不会把旧累计正文覆盖 canonical 新结果', () => {
@@ -599,7 +676,10 @@ describe('full-fetch helpers', () => {
             const { validAnalysisPaper } = require(process.argv[2]);
             const file = process.argv[3];
             const id = process.argv[4];
-            saveFinalAnalysisResults(file, [validAnalysisPaper(id)], [{ arxivId: id }]);
+            saveFinalAnalysisResults(file, [validAnalysisPaper(id)], [
+                { arxivId: '2607.30001' },
+                { arxivId: '2607.30002' }
+            ]);
         `;
 
         await Promise.all(['2607.30001', '2607.30002'].map(id => execFileAsync(
@@ -611,8 +691,82 @@ describe('full-fetch helpers', () => {
         assert.strictEqual(saved.generation, 6);
         assert.deepStrictEqual(
             new Set(saved.papers.map(paper => paper.arxivId)),
-            new Set(['seed', '2607.30001', '2607.30002'])
+            new Set(['2607.30001', '2607.30002'])
         );
+    });
+
+    it('归档冲突时 current 成为固定 canonical，旧 canonical 留作冲突备份', () => {
+        const { autoArchiveCurrentData } = require('../scripts/full-fetch.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-archive-conflict-'));
+        const current = path.join(dir, 'current', 'deep-analysis-result.json');
+        const archiveDir = path.join(dir, 'archive');
+        const archiveDay = path.join(archiveDir, '2026-07-12');
+        const canonical = path.join(archiveDay, 'deep-analysis-result.json');
+        fs.mkdirSync(path.dirname(current), { recursive: true });
+        fs.mkdirSync(archiveDay, { recursive: true });
+        fs.writeFileSync(current, JSON.stringify({
+            timestamp: '2026-07-12T18:00:00+08:00',
+            papers: [{ arxivId: '2607.70002', title: 'latest current' }]
+        }));
+        fs.writeFileSync(canonical, JSON.stringify({
+            timestamp: '2026-07-12T09:00:00+08:00',
+            papers: [{ arxivId: '2607.70001', title: 'old canonical' }]
+        }));
+
+        autoArchiveCurrentData('2026-07-13', { targets: [current], archiveDir });
+
+        assert.strictEqual(fs.existsSync(current), false);
+        assert.strictEqual(JSON.parse(fs.readFileSync(canonical, 'utf8')).papers[0].title, 'latest current');
+        const conflicts = fs.readdirSync(archiveDay).filter(name => name.includes('-conflict-'));
+        assert.strictEqual(conflicts.length, 1);
+        assert.strictEqual(
+            JSON.parse(fs.readFileSync(path.join(archiveDay, conflicts[0]), 'utf8')).papers[0].title,
+            'old canonical'
+        );
+    });
+
+    it('归档 canonical 替换或校验失败时保留 current', () => {
+        const { autoArchiveCurrentData } = require('../scripts/full-fetch.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-archive-failure-'));
+        const current = path.join(dir, 'current', 'deep-analysis-result.json');
+        const archiveDir = path.join(dir, 'archive');
+        const canonical = path.join(archiveDir, '2026-07-12', 'deep-analysis-result.json');
+        fs.mkdirSync(path.dirname(current), { recursive: true });
+        fs.mkdirSync(canonical, { recursive: true });
+        fs.writeFileSync(current, JSON.stringify({
+            timestamp: '2026-07-12T18:00:00+08:00',
+            papers: [{ arxivId: '2607.70003' }]
+        }));
+
+        autoArchiveCurrentData('2026-07-13', { targets: [current], archiveDir });
+
+        assert.strictEqual(fs.existsSync(current), true);
+        assert.strictEqual(fs.statSync(canonical).isDirectory(), true);
+    });
+
+    it('清理旧分析记录后锁内重算 canonical 聚合状态和批次', () => {
+        const { cleanOldData } = require('../scripts/full-fetch.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-clean-canonical-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(file, JSON.stringify({
+            timestamp: '2026-07-13T08:00:00+08:00',
+            status: 'complete',
+            deepAnalysisCompletedAt: '2026-07-13T08:00:00+08:00',
+            stats: { analysisStatus: 'complete', remainingFailed: 0, totalAfterMerge: 2 },
+            papers: [
+                validAnalysisRecord('2607.71001', { batchDate: '2026-07-13' }),
+                { arxivId: '2607.71002', batchDate: '2026-07-12', analysis: null, error: 'old failure' }
+            ]
+        }));
+
+        cleanOldData(file, 'deep-analysis-result', '2026-07-13', { archiveDir: path.join(dir, 'archive') });
+        const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+        assert.deepStrictEqual(saved.papers.map(paper => paper.arxivId), ['2607.71001']);
+        assert.strictEqual(saved.batchDate, '2026-07-13');
+        assert.strictEqual(saved.status, 'complete');
+        assert.strictEqual(saved.stats.analysisStatus, 'complete');
+        assert.strictEqual(saved.stats.remainingFailed, 0);
+        assert.strictEqual(saved.stats.totalAfterMerge, 1);
     });
 
     it('从 papers.json 恢复当天候选论文', () => {

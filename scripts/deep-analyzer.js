@@ -170,7 +170,8 @@ const SCORING_EVIDENCE_PATTERNS = Object.freeze([
 function buildTaskEvidenceContext(sourceText, maxChars, patterns = BROAD_EVIDENCE_PATTERNS, taskLabel = '通用') {
     const source = String(sourceText || '');
     const limit = Math.max(1000, Number.parseInt(maxChars, 10) || source.length);
-    if (source.length <= limit) return source;
+    if (!source) return '';
+    if (source.length <= limit) return `[${taskLabel}_SOURCE_1/1]\n${source}`;
 
     // 让五个强制位置块在最小允许预算下也能同时容纳，避免用户把预算调低后
     // 意外丢掉中段或结尾证据；较大预算仍以 4K 块控制遍历成本。
@@ -266,7 +267,8 @@ function buildTypeAwareSourceContext(
     patterns = SCORING_EVIDENCE_PATTERNS,
     taskLabel = 'SCORING'
 ) {
-    const documentType = parseAnalysis(analysis)?.documentType || '待最终确认';
+    const parsedAnalysis = parseAnalysis(analysis) || {};
+    const documentType = parsedAnalysis.documentType || '待最终确认';
     const source = String(sourceText || '');
     const analysisBudget = Math.min(30000, Math.floor(maxChars * 0.45));
     const sectionDefinitions = [
@@ -287,7 +289,15 @@ function buildTypeAwareSourceContext(
     const perSectionBudget = Math.max(1200, Math.floor(analysisBudget / selectedDefinitions.length));
     const analysisSections = selectedDefinitions.map(([id, title]) => {
         const content = extractSectionByTitle(analysis, title);
-        return content ? `[${id}] ${title}\n${content.slice(0, perSectionBudget)}` : '';
+        if (content) return `[${id}] ${title}\n${content.slice(0, perSectionBudget)}`;
+        if (id === 'A_OPEN') {
+            return [
+                `[${id}] ${title}`,
+                `该章节正文为空；机器摘要资源状态：has_code=${parsedAnalysis.hasCode || '未记录'}, ` +
+                    `has_model=${parsedAnalysis.hasModel || '未记录'}, has_dataset=${parsedAnalysis.hasDataset || '未记录'}。`
+            ].join('\n');
+        }
+        return '';
     }).filter(Boolean);
     const sourceBudget = Math.max(12000, maxChars - analysisSections.join('\n\n').length - 500);
     const sourceEvidence = buildTaskEvidenceContext(source, sourceBudget, patterns, taskLabel);
@@ -748,6 +758,34 @@ function discardInvalidImageSupplement(preImageAnalysis, imageManifest, imageRes
         discardedReason: reason
     };
     return { analysis: preImageAnalysis, selectedImageUrls: [] };
+}
+
+function classifyImageDiscoveryStatus(imageInfos, error = null) {
+    if (error) return 'transient_failure';
+    return Array.isArray(imageInfos) && imageInfos.length > 0 ? 'complete' : 'no_candidates';
+}
+
+function persistImageDiscoveryFailure(
+    paper,
+    sourceProvenance,
+    sourceWarnings,
+    analysisManifest,
+    imageManifest,
+    discoveryError
+) {
+    saveAnalysisCheckpoint(paper, paper.analysisCheckpoint || '', analysisManifest, imageManifest);
+    const error = `图片发现瞬时失败，等待正常重试: ${discoveryError.message}`;
+    return {
+        ...paper,
+        ...sourceProvenance,
+        sourceWarnings: [...sourceWarnings, error],
+        analysis: null,
+        parsed: null,
+        imageManifest,
+        analysisManifest,
+        analysisCheckpoint: paper.analysisCheckpoint,
+        error
+    };
 }
 
 function calculateScoringDelta(previousParsedScore, scoringInputAnalysis, finalParsedScore) {
@@ -1531,17 +1569,24 @@ async function fetchArxivImageUrls(arxivId, options = {}) {
         console.log(`    [deep] fetchArxivImageUrls ${arxivId} 跳过 | reason=html_permanent_miss`);
         return [];
     }
-    const maxRetries = 6;
+    const maxRetries = Number.isInteger(options.maxRetries) && options.maxRetries > 0
+        ? options.maxRetries
+        : 6;
+    const fetchImpl = options.fetchImpl || fetch;
+    const dispatcher = Object.prototype.hasOwnProperty.call(options, 'dispatcher')
+        ? options.dispatcher
+        : getArxivFetchDispatcher();
+    let lastFailure = '';
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         let shouldRetry = false;
         const statuses = [];
         for (const htmlId of getArxivHtmlIds(arxivId)) {
             const url = `https://arxiv.org/html/${htmlId}`;
             try {
-                const response = await fetch(url, {
+                const response = await fetchImpl(url, {
                     headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
                     signal: AbortSignal.timeout(ARXIV_FETCH_TIMEOUT_MS),
-                    dispatcher: getArxivFetchDispatcher()
+                    dispatcher
                 });
 
                 if (response.status === 429) {
@@ -1567,6 +1612,7 @@ async function fetchArxivImageUrls(arxivId, options = {}) {
                 if (e.code === 'PROXY_CONFIG_ERROR') throw e;
                 shouldRetry = true;
                 statuses.push(`${htmlId}:${e.name || 'error'}`);
+                lastFailure = e.message;
                 console.log(`    [deep] fetchArxivImageUrls ${htmlId} error: ${e.message}`);
                 continue;
             }
@@ -1584,7 +1630,9 @@ async function fetchArxivImageUrls(arxivId, options = {}) {
         }
     }
     console.log(`    [deep] fetchArxivImageUrls ${arxivId} failed after ${maxRetries} retries`);
-    return [];
+    const error = new Error(`arXiv 图片发现在 ${maxRetries} 次尝试后仍失败${lastFailure ? `: ${lastFailure}` : ''}`);
+    error.code = 'ARXIV_IMAGE_DISCOVERY_TRANSIENT_FAILURE';
+    throw error;
 }
 
 /**
@@ -1621,7 +1669,7 @@ async function requestPinnedPublicHttps(rawUrl, options = {}) {
         proxyUrl,
         parsedUrl.validatedAddress,
         port,
-        parsedUrl.hostname
+        parsedUrl.validatedHostname
     );
 
     return new Promise((resolve, reject) => {
@@ -1637,7 +1685,7 @@ async function requestPinnedPublicHttps(rawUrl, options = {}) {
             handler(value);
         };
         const request = https.request({
-            hostname: parsedUrl.hostname,
+            hostname: parsedUrl.validatedHostname,
             port,
             path: `${parsedUrl.pathname}${parsedUrl.search}`,
             method: 'GET',
@@ -2685,6 +2733,7 @@ async function analyzePaperDeep(paper) {
 
     // 优先使用预提供的图片 URL（ICML/会议场景），否则从 arXiv 抓取
     let imageInfos = [];
+    let imageDiscoveryError = null;
     const preProvidedUrls = getPreProvidedImageUrls(paper);
     if (preProvidedUrls.length > 0) {
         imageInfos = mergeImageInfoMetadata(preProvidedUrls, sourceDetails.imageInfos);
@@ -2699,6 +2748,7 @@ async function analyzePaperDeep(paper) {
             });
             console.log(`    [deep] 找到 ${imageInfos.length} 张图片`);
         } catch (e) {
+            imageDiscoveryError = e;
             console.log(`    [deep] 获取图片失败: ${e.message}`);
         }
     }
@@ -2734,8 +2784,12 @@ async function analyzePaperDeep(paper) {
     markRecoveryStage(
         analysisManifest,
         'imageDiscovery',
-        imageInfos.length > 0 ? 'complete' : 'no_candidates',
-        { totalFound: imageInfos.length, candidateCount: candidateImageInfos.length }
+        classifyImageDiscoveryStatus(imageInfos, imageDiscoveryError),
+        {
+            totalFound: imageInfos.length,
+            candidateCount: candidateImageInfos.length,
+            ...(imageDiscoveryError ? { error: imageDiscoveryError.message, errorCode: imageDiscoveryError.code || '' } : {})
+        }
     );
     if (imageInfos.length > candidateImageInfos.length) {
         console.log(`    [deep] 图片候选预筛: ${imageInfos.length} → ${candidateImageInfos.length} 张`);
@@ -2762,7 +2816,9 @@ async function analyzePaperDeep(paper) {
     } else if (candidateImageUrls.length > 0) {
         console.log(`    [deep] 单模型模式：跳过 ${candidateImageUrls.length} 张候选图片下载，仅保存候选元数据`);
     }
-    const downloadStatus = !isDualModel
+    const downloadStatus = imageDiscoveryError
+        ? 'transient_failure'
+        : !isDualModel
         ? 'skipped'
         : candidateImageUrls.length === 0
             ? 'no_candidates'
@@ -2787,6 +2843,16 @@ async function analyzePaperDeep(paper) {
         outcomes: downloadOutcomes,
         fingerprint: imageDownloadFingerprint
     });
+    if (imageDiscoveryError) {
+        return persistImageDiscoveryFailure(
+            paper,
+            sourceProvenance,
+            sourceWarnings,
+            analysisManifest,
+            imageManifest,
+            imageDiscoveryError
+        );
+    }
     saveAnalysisCheckpoint(paper, paper.analysisCheckpoint || '', analysisManifest, imageManifest);
 
     const prompt = loadPrompt('prompts/deep-analysis.md', {
@@ -3405,48 +3471,66 @@ async function checkDemoPageForOpensource(demoUrl) {
     }
 }
 
-function isPrivateIpAddress(address) {
+const NON_GLOBAL_IPV4_CIDRS = Object.freeze([
+    ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
+    ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24],
+    ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24],
+    ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]
+]);
+const NON_GLOBAL_IPV6_CIDRS = Object.freeze([
+    ['2001::', 23],
+    ['2001:db8::', 32],
+    ['2002::', 16],
+    ['3fff::', 20]
+]);
+
+function ipv4ToBigInt(address) {
+    return address.split('.').reduce((value, part) => (value << 8n) | BigInt(Number(part)), 0n);
+}
+
+function ipv6ToBigInt(address) {
+    let normalized = String(address || '').toLowerCase();
+    const dottedTail = normalized.match(/(?:^|:)(\d+\.\d+\.\d+\.\d+)$/)?.[1];
+    if (dottedTail) {
+        const ipv4 = Number(ipv4ToBigInt(dottedTail));
+        normalized = normalized.slice(0, -dottedTail.length) +
+            `${((ipv4 >>> 16) & 0xffff).toString(16)}:${(ipv4 & 0xffff).toString(16)}`;
+    }
+    const halves = normalized.split('::');
+    const head = halves[0] ? halves[0].split(':').filter(Boolean) : [];
+    const tail = halves.length > 1 && halves[1] ? halves[1].split(':').filter(Boolean) : [];
+    const fillCount = 8 - head.length - tail.length;
+    const parts = halves.length > 1
+        ? [...head, ...Array(fillCount).fill('0'), ...tail]
+        : head;
+    return parts.reduce((value, part) => (value << 16n) | BigInt(Number.parseInt(part, 16)), 0n);
+}
+
+function addressInCidr(value, network, prefixLength, totalBits) {
+    const shift = BigInt(totalBits - prefixLength);
+    return (value >> shift) === (network >> shift);
+}
+
+function isGloballyRoutableIpAddress(address) {
     const ipType = net.isIP(address);
     if (ipType === 4) {
-        const parts = address.split('.').map(n => Number.parseInt(n, 10));
-        const [a, b] = parts;
-        return (
-            a === 0 ||
-            a === 10 ||
-            a === 127 ||
-            (a === 100 && b >= 64 && b <= 127) ||
-            (a === 169 && b === 254) ||
-            (a === 172 && b >= 16 && b <= 31) ||
-            (a === 192 && b === 0) ||
-            (a === 192 && b === 168) ||
-            (a === 198 && (b === 18 || b === 19)) ||
-            (a === 198 && b === 51) ||
-            (a === 203 && b === 0) ||
-            (a >= 224)
+        const value = ipv4ToBigInt(address);
+        return !NON_GLOBAL_IPV4_CIDRS.some(([network, prefix]) =>
+            addressInCidr(value, ipv4ToBigInt(network), prefix, 32)
         );
     }
     if (ipType === 6) {
-        const lower = address.toLowerCase();
-        const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-        if (mapped) return isPrivateIpAddress(mapped[1]);
-        const mappedHex = lower.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-        if (mappedHex) {
-            const hi = Number.parseInt(mappedHex[1], 16);
-            const lo = Number.parseInt(mappedHex[2], 16);
-            return isPrivateIpAddress(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
-        }
-        return (
-            lower === '::1' ||
-            lower === '::' ||
-            lower.startsWith('fc') ||
-            lower.startsWith('fd') ||
-            /^fe[89ab]/.test(lower) ||
-            lower.startsWith('ff') ||
-            lower === '2001:db8' ||
-            lower.startsWith('2001:db8:')
+        const value = ipv6ToBigInt(address);
+        if (!addressInCidr(value, ipv6ToBigInt('2000::'), 3, 128)) return false;
+        return !NON_GLOBAL_IPV6_CIDRS.some(([network, prefix]) =>
+            addressInCidr(value, ipv6ToBigInt(network), prefix, 128)
         );
     }
-    return true;
+    return false;
+}
+
+function isPrivateIpAddress(address) {
+    return !isGloballyRoutableIpAddress(address);
 }
 
 async function validatePublicHttpUrl(rawUrl) {
@@ -3463,6 +3547,7 @@ async function validatePublicHttpUrl(rawUrl) {
     }
     if (net.isIP(hostname)) {
         if (isPrivateIpAddress(hostname)) throw new Error(`URL 指向非公网 IP: ${hostname}`);
+        url.validatedHostname = hostname;
         url.validatedAddress = hostname;
         return url;
     }
@@ -3475,6 +3560,7 @@ async function validatePublicHttpUrl(rawUrl) {
             throw new Error(`公网 URL DNS 解析到非公网 IP: ${record.address}`);
         }
     }
+    url.validatedHostname = hostname;
     url.validatedAddress = records[0].address;
     return url;
 }
@@ -4184,8 +4270,11 @@ module.exports = {
     checkDemoPageForOpensource,
     invalidateSourceBoundImageRecovery,
     discardInvalidImageSupplement,
+    classifyImageDiscoveryStatus,
+    persistImageDiscoveryFailure,
     classifyArxivSourceFailure,
     isTransientDemoHttpStatus,
+    isGloballyRoutableIpAddress,
     isPrivateIpAddress,
     validatePublicHttpUrl,
     extractSectionByTitle,

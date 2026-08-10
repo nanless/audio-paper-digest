@@ -11,14 +11,15 @@ const {
     EXPERIMENT_TABLE_CONTRACT_VERSION,
     METHOD_DETAIL_CONTRACT_VERSION
 } = require('../scripts/analysis-contract.js');
-const { validAnalysisText } = require('./valid-analysis-fixture.js');
+const { validAnalysisText, validAnalysisPaper } = require('./valid-analysis-fixture.js');
 
 const {
     validatePapersDatabase,
     validateFetchCheckpointFile,
     validatePaperListFile,
     validateFilterDecisionsFile,
-    validateCurrentDataFiles
+    validateCurrentDataFiles,
+    validateFilteredDeepPapersConsistency
 } = require('../scripts/validate-data-files.js');
 
 const TIMESTAMP = '2026-07-13T10:00:00.000+08:00';
@@ -38,6 +39,16 @@ function papersSha256(papers) {
 
 function filterInputSha256(paper) {
     return buildFilterInputSha256(paper);
+}
+
+function completeAnalysisPaper(id, extra = {}) {
+    const analysis = validAnalysisText();
+    return {
+        ...validAnalysisPaper(id),
+        parsed: parseAnalysis(analysis),
+        scoringRubricVersion: 'type-aware-v1',
+        ...extra
+    };
 }
 
 function fetchSourcesSha256(checkpoint) {
@@ -234,6 +245,142 @@ describe('validate-data-files', () => {
 
         assert.deepStrictEqual(validatePapersDatabase(papersFile), []);
         assert.deepStrictEqual(validatePaperListFile(resultFile, { deepAnalysis: true }), []);
+    });
+
+    it('papers.json 拒绝 key-ID 冲突和规范化重复映射', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-paper-map-'));
+        const papersFile = path.join(dir, 'papers.json');
+        fs.writeFileSync(papersFile, JSON.stringify({
+            papers: {
+                '2607.10001': { arxivId: '2607.10002' },
+                '2607.20001v1': { arxivId: '2607.20001v1' },
+                '2607.20001v2': { arxivId: '2607.20001v2' }
+            }
+        }));
+
+        const issues = validatePapersDatabase(papersFile).join('\n');
+        assert.match(issues, /对象 key 与论文 ID 冲突/);
+        assert.match(issues, /归一化为重复 ID: 2607\.20001/);
+    });
+
+    it('论文列表拒绝版本号差异造成的规范化重复 ID', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-paper-list-'));
+        const resultFile = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(resultFile, JSON.stringify({
+            papers: [
+                completeAnalysisPaper('2607.30001v1'),
+                completeAnalysisPaper('2607.30001v2')
+            ]
+        }));
+
+        assert.match(
+            validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n'),
+            /归一化为重复 ID: 2607\.30001/
+        );
+    });
+
+    it('无 stats 的深度分析对象仍校验 terminal 状态与完成时间', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-deep-metadata-'));
+        const resultFile = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(resultFile, JSON.stringify({
+            status: 'complete',
+            deepAnalysisCompletedAt: '2026-07-13T10:00:00.000+08:00',
+            papers: [{ arxivId: '2607.31001', analysis: null, error: 'failed' }]
+        }));
+
+        assert.match(
+            validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n'),
+            /status \(complete\) 与 canonical 论文状态 \(failed\) 不一致/
+        );
+    });
+
+    it('跨文件校验 complete filtered 与 deep 的批次和 ID 精确一致', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-cross-ids-'));
+        const filteredPapers = path.join(dir, 'filtered-papers.json');
+        const deepAnalysisResult = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(filteredPapers, JSON.stringify({
+            batchDate: '2026-07-13',
+            status: 'complete',
+            papers: [{ arxivId: '2607.32001' }, { arxivId: '2607.32002' }]
+        }));
+        fs.writeFileSync(deepAnalysisResult, JSON.stringify({
+            batchDate: '2026-07-12',
+            papers: [completeAnalysisPaper('2607.32001'), completeAnalysisPaper('2607.32999')]
+        }));
+
+        const issues = validateFilteredDeepPapersConsistency({
+            filteredPapers,
+            deepAnalysisResult,
+            papers: path.join(dir, 'missing-papers.json')
+        }).join('\n');
+        assert.match(issues, /batchDate \(2026-07-12\).*2026-07-13/);
+        assert.match(issues, /缺少 2607\.32002；多出 2607\.32999/);
+    });
+
+    it('跨文件校验 papers 数据库批次和深度分析最新状态，并兼容旧成功正文', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-cross-status-'));
+        const filteredPapers = path.join(dir, 'filtered-papers.json');
+        const deepAnalysisResult = path.join(dir, 'deep-analysis-result.json');
+        const papers = path.join(dir, 'papers.json');
+        fs.writeFileSync(filteredPapers, JSON.stringify({
+            batchDate: '2026-07-13',
+            status: 'complete',
+            papers: [{ arxivId: '2607.33001' }, { arxivId: '2607.33002' }]
+        }));
+        fs.writeFileSync(deepAnalysisResult, JSON.stringify({
+            batchDate: '2026-07-13',
+            papers: [
+                completeAnalysisPaper('2607.33001'),
+                { arxivId: '2607.33002', analysis: null, error: 'temporary failure' }
+            ]
+        }));
+        fs.writeFileSync(papers, JSON.stringify({
+            papers: {
+                '2607.33001': {
+                    arxivId: '2607.33001',
+                    digestStatus: { status: 'analysis_failed', batchDate: '2026-07-12' }
+                },
+                '2607.33002': {
+                    arxivId: '2607.33002',
+                    digestStatus: {
+                        status: 'analyzed',
+                        latestAttemptStatus: 'analysis_failed',
+                        batchDate: '2026-07-13'
+                    }
+                }
+            }
+        }));
+
+        const issues = validateFilteredDeepPapersConsistency({
+            filteredPapers,
+            deepAnalysisResult,
+            papers
+        }).join('\n');
+        assert.match(issues, /2607\.33001 的批次日期 \(2026-07-12\)/);
+        assert.match(issues, /2607\.33001 深度分析成功，但 digestStatus\.status 不是 analyzed/);
+        assert.doesNotMatch(issues, /2607\.33002/);
+    });
+
+    it('跨文件校验 papers 数据库不能缺少 filtered 论文', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-cross-missing-'));
+        const filteredPapers = path.join(dir, 'filtered-papers.json');
+        const deepAnalysisResult = path.join(dir, 'deep-analysis-result.json');
+        const papers = path.join(dir, 'papers.json');
+        fs.writeFileSync(filteredPapers, JSON.stringify({
+            batchDate: '2026-07-13',
+            status: 'complete',
+            papers: [{ arxivId: '2607.34001' }]
+        }));
+        fs.writeFileSync(deepAnalysisResult, JSON.stringify({
+            batchDate: '2026-07-13',
+            papers: [completeAnalysisPaper('2607.34001')]
+        }));
+        fs.writeFileSync(papers, JSON.stringify({ papers: {} }));
+
+        assert.match(
+            validateFilteredDeepPapersConsistency({ filteredPapers, deepAnalysisResult, papers }).join('\n'),
+            /缺少 filtered-papers\.json 论文 ID: 2607\.34001/
+        );
     });
 
     it('报告非法 digestStatus 和图片字段', () => {

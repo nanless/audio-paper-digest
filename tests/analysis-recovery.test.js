@@ -23,7 +23,12 @@ const {
     loadRefilterDecisions,
     saveRefilterDecisions
 } = require('../scripts/refilter-reanalyze-by-date.js');
-const { validateCompleteFilteredForToday, validateDeepAnalysisInput } = require('../scripts/deep-analysis-only.js');
+const {
+    validateCompleteFilteredForToday,
+    validateDeepAnalysisInput,
+    finalizeDeepZeroWorkState
+} = require('../scripts/deep-analysis-only.js');
+const { finalizeBatchZeroWorkState } = require('../scripts/batch-analyze.js');
 const { isSuccessfulAnalysisRecord } = require('../scripts/analysis-engine.js');
 
 const execFileAsync = promisify(execFile);
@@ -486,5 +491,60 @@ describe('entry recovery contracts', () => {
             timestamp: `${today}T10:00:00+08:00`,
             papers: [{ arxivId: '2607.1' }]
         }, filtered, today), /与当日筛选结果不一致/);
+    });
+
+    it('batch zero-work 收尾锁内重读 canonical，不会把新失败硬写成 complete', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-zero-work-reread-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(file, JSON.stringify({
+            batchDate: '2026-07-10',
+            status: 'complete',
+            deepAnalysisCompletedAt: '2026-07-10T09:00:00+08:00',
+            papers: [
+                validAnalysisRecord('2607.81'),
+                { arxivId: '2607.82', analysis: null, error: 'concurrent failure' }
+            ]
+        }));
+
+        const saved = finalizeBatchZeroWorkState(file, '2026-07-10');
+        assert.strictEqual(saved.status, 'partial_failed');
+        assert.strictEqual(saved.stats.analysisStatus, 'partial_failed');
+        assert.strictEqual(saved.stats.remainingFailed, 1);
+        assert.strictEqual(saved.stats.totalAfterMerge, 2);
+        assert.strictEqual(saved.deepAnalysisCompletedAt, undefined);
+    });
+
+    it('deep-only zero-work 收尾在同一锁内重验 expected 集合和 canonical 状态', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-zero-work-reread-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        const today = '2026-07-10';
+        const filtered = {
+            batchDate: today,
+            status: 'complete',
+            papers: [{ arxivId: '2607.91' }, { arxivId: '2607.92' }]
+        };
+        fs.writeFileSync(file, JSON.stringify({
+            batchDate: today,
+            status: 'complete',
+            deepAnalysisCompletedAt: `${today}T09:00:00+08:00`,
+            papers: [
+                validAnalysisRecord('2607.91'),
+                { arxivId: '2607.92', analysis: null, error: 'concurrent failure' }
+            ]
+        }));
+
+        const saved = finalizeDeepZeroWorkState(file, filtered, today);
+        assert.strictEqual(saved.status, 'partial_failed');
+        assert.strictEqual(saved.stats.remainingFailed, 1);
+        assert.strictEqual(saved.deepAnalysisCompletedAt, undefined);
+
+        fs.writeFileSync(file, JSON.stringify({
+            batchDate: today,
+            papers: [validAnalysisRecord('2607.91'), validAnalysisRecord('2607.99')]
+        }));
+        assert.throws(
+            () => finalizeDeepZeroWorkState(file, filtered, today),
+            /与当日筛选结果不一致/
+        );
     });
 });

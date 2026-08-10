@@ -44,6 +44,50 @@ def resolve_deep_analysis_result_path(current_path=DEEP_ANALYSIS_RESULT_FILE, le
     return legacy_path
 
 
+def resolve_deep_analysis_result_for_date(
+    target_date,
+    current_path=DEEP_ANALYSIS_RESULT_FILE,
+    legacy_path=DEEP_ANALYSIS_RESULT_LEGACY_FILE,
+    archive_dir=ARCHIVE_DIR,
+):
+    """Resolve a default publish input while preferring an exact dated archive.
+
+    Current/legacy data is used when it is an exact single-date batch.  When it
+    has already rolled to another or mixed batch, the controlled dated archive
+    is preferred.  If no archive exists, the normal current/legacy path is
+    returned so the caller can fail closed with its ordinary data validation.
+    """
+    target_date = validate_date_component(target_date)
+    current = Path(resolve_deep_analysis_result_path(Path(current_path), Path(legacy_path)))
+    if current.is_file():
+        try:
+            raw = json.loads(current.read_text(encoding="utf-8"))
+            papers = raw.get("papers") if isinstance(raw, dict) else raw
+            dates = set()
+            if isinstance(papers, list):
+                for paper in papers:
+                    if not isinstance(paper, dict):
+                        continue
+                    value = paper.get("fetchBatchDate") or paper.get("batchDate")
+                    if value is None and isinstance(paper.get("fetchedAt"), str):
+                        match = re.fullmatch(
+                            r"(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d"
+                            r"(?:\.\d{3})?\+08:00",
+                            paper["fetchedAt"],
+                        )
+                        value = match.group(1) if match else None
+                    if value is not None:
+                        dates.add(validate_date_component(value))
+            if papers and dates == {target_date}:
+                return current
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+            pass
+    archived = Path(archive_dir) / target_date / "deep-analysis-result.json"
+    if archived.is_file():
+        return archived
+    return current
+
+
 def validate_date_component(target_date):
     value = str(target_date or '')
     if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):

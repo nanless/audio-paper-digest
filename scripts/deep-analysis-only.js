@@ -29,7 +29,7 @@ function validateCompleteFilteredForToday(filteredData, today) {
     if (!filteredData || filteredData.status !== 'complete' || !Array.isArray(filteredData.papers)) {
         throw new Error('筛选结果未完成或 papers 字段无效，拒绝启动深度分析');
     }
-    const recordDate = getRecordDate(filteredData);
+    const recordDate = filteredData.batchDate || getRecordDate(filteredData);
     if (recordDate !== today) {
         throw new Error(`筛选结果不是当日批次: 期望 ${today}，实际 ${recordDate || '未知'}`);
     }
@@ -37,8 +37,9 @@ function validateCompleteFilteredForToday(filteredData, today) {
 }
 
 function validateDeepAnalysisInput(existingData, filteredData, today) {
-    if (getRecordDate(existingData) !== today) {
-        throw new Error(`分析结果不是当日批次: 期望 ${today}，实际 ${getRecordDate(existingData) || '未知'}`);
+    const recordDate = existingData?.batchDate || getRecordDate(existingData);
+    if (recordDate !== today) {
+        throw new Error(`分析结果不是当日批次: 期望 ${today}，实际 ${recordDate || '未知'}`);
     }
     const existingPapers = Array.isArray(existingData) ? existingData : (existingData?.papers || []);
     const expectedIds = new Set(filteredData.papers.map(normalizedId).filter(Boolean));
@@ -70,6 +71,33 @@ function repairMissingAnalysisRecords(resultPath, existingData, filteredData) {
     });
     console.log(`🔧 已按当日筛选基线补回 ${missingPapers.length} 篇中断前未写入的论文记录，保留为待分析状态`);
     return repaired;
+}
+
+function finalizeDeepZeroWorkState(resultPath, filteredData, today) {
+    return updateJsonFileLocked(resultPath, current => {
+        validateDeepAnalysisInput(current, filteredData, today);
+        const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
+        const { remaining, success, status } = getCanonicalAnalysisRunSummary(currentPapers);
+        const now = getBeijingISOString();
+        const payload = {
+            ...(!Array.isArray(current) && current ? current : {}),
+            papers: currentPapers,
+            batchDate: today,
+            status,
+            deepAnalysisLastAttemptAt: now,
+            stats: {
+                ...(!Array.isArray(current) ? current?.stats : {}),
+                analyzedSuccess: success,
+                analyzedFailed: remaining,
+                remainingFailed: remaining,
+                totalAfterMerge: currentPapers.length,
+                analysisStatus: status
+            }
+        };
+        if (status === 'complete') payload.deepAnalysisCompletedAt = now;
+        else delete payload.deepAnalysisCompletedAt;
+        return payload;
+    });
 }
 
 async function runDeepAnalysis() {
@@ -120,16 +148,18 @@ async function runDeepAnalysis() {
             canonical
         ));
     if (notAnalyzed.length === 0) {
-        updateAnalysisDigestStatuses(papers, { batchDate: today });
-        updateJsonFileLocked(resultPath, current => ({
-            ...(!Array.isArray(current) && current ? current : {}),
-            papers: Array.isArray(current) ? current : (current?.papers || []),
-            status: 'complete',
-            deepAnalysisCompletedAt: getBeijingISOString(),
-            stats: { ...(!Array.isArray(current) ? current?.stats : {}), analysisStatus: 'complete', remainingFailed: 0 }
-        }));
-        console.log('✅ 所有论文已分析完成！');
-        return { status: 'complete', exitCode: 0, stats: { success: 0, failed: 0, skipped: papers.length } };
+        const finalPayload = finalizeDeepZeroWorkState(resultPath, filteredData, today);
+        updateAnalysisDigestStatuses(finalPayload.papers, { batchDate: today });
+        const summary = getCanonicalAnalysisRunSummary(finalPayload.papers);
+        console.log(summary.status === 'complete'
+            ? '✅ 所有论文已分析完成！'
+            : `⚠️ 检测到并发更新，仍有 ${summary.remaining} 篇未完成`);
+        return {
+            status: summary.status,
+            exitCode: getAnalysisExitCode(summary.status),
+            stats: { success: 0, failed: summary.remaining, skipped: finalPayload.papers.length - summary.remaining },
+            remaining: summary.remaining
+        };
     }
 
     updateJsonFileLocked(resultPath, current => {
@@ -261,4 +291,9 @@ if (require.main === module) {
     });
 }
 
-module.exports = { runDeepAnalysis, validateCompleteFilteredForToday, validateDeepAnalysisInput };
+module.exports = {
+    runDeepAnalysis,
+    validateCompleteFilteredForToday,
+    validateDeepAnalysisInput,
+    finalizeDeepZeroWorkState
+};

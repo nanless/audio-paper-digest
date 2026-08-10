@@ -18,7 +18,8 @@ const {
     archiveLegacyDigestCover,
     assertDigestCoverManifestCurrent,
     compactDigestCoverTask,
-    parseArgs
+    parseArgs,
+    main
 } = require('../scripts/digest-cover-state.js');
 
 const recordDigestCover = options => recordDigestCoverImpl({
@@ -331,7 +332,24 @@ describe('digest cover state', () => {
             Config.CURRENT_DIR = current;
             Config.FILES.digestCoverManifestDir = path.join(current, 'digest-cover-manifests');
             Config.FILES.digestCoverAssetDir = archive;
-            const result = archiveLegacyDigestCover({ targetDate: '2026-07-13', manifestPath });
+            const realSource = `${source}.real`;
+            fs.renameSync(source, realSource);
+            fs.symlinkSync(realSource, source);
+            assert.throws(() => main([
+                'archive-legacy', '--date', '2026-07-13', '--manifest', manifestPath
+            ]), /符号链接/);
+            fs.unlinkSync(source);
+            fs.renameSync(realSource, source);
+            let output = '';
+            const originalWrite = process.stdout.write;
+            process.stdout.write = chunk => { output += String(chunk); return true; };
+            try {
+                main(['archive-legacy', '--date', '2026-07-13', '--manifest', manifestPath]);
+            } finally {
+                process.stdout.write = originalWrite;
+            }
+            const result = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            assert.match(output, /历史汇总封面已按日期归档/);
             assert.match(result.cover.assetPath, /archive\/2026-07-13\/visual-summaries\/00-digest-cover-2026-07-13\.png$/);
             assert.ok(fs.existsSync(path.resolve(Config.PROJECT_ROOT, result.cover.assetPath)));
             assert.ok(!fs.existsSync(source));

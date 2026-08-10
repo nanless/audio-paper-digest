@@ -80,6 +80,8 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 
 **Codex 发布后视觉资产**：必须先完成全部论文深度分析，再依次完成博客 generate、全量/失败集 review、push，并由 `push-blog.py` 验证远端 `main` OID。只有发布凭证同时记录 `publicationCommit`、相同的 `remoteVerifiedOid` 和验证时间后，才可建立视觉任务。`push-blog.py` 会自动运行发布后规划器；论文长图只选择最终评分 TOP 10（同分按规范化 arXiv ID），每篇一张纵向 PNG，顶部为完整英文标题、正文为简体中文；另生成一张包含批次标题、热门方向和 TOP 10 排行榜的汇总图。默认成品必须由 Codex 内置 `image_gen` 一次性生成完整带字构图，让标题、中文说明、结构关系、实验数字、论文关键图与纸张拼贴视觉自然配合；禁止再经过确定性文字卡片合成器。Agent 必须逐图目视核对标题、中文正文、箭头/并行分支、指标方向、论文数字与排行榜后才能执行 record，不可读或存在实质错误时必须重生成。两类 manifest 按日期隔离并支持失败项续跑，但图片不进入本轮博客 generation/review/push，也不阻断已经完成的发布。项目脚本不得调用图像 API或读取 `OPENAI_API_KEY`，实际绘图只能由 Codex 内置 `image_gen` 完成；`render-visual-summary.py` 仅用于本地调试和离线兜底。
 
+**发布/视觉兼容边界**：标准日更必须在任何 Git 变更前验证 generation schema v3 和 `publishedPapers`；schema v1/v2 仅允许显式历史维护 push，receipt 将发布后视觉标记为 N/A。渠道默认按目标博客发布日期绑定远端验证的 `publishedPapers`，论文原始抓取批次可更早；current 滚动后使用日期归档，自定义输入也不得隐式绕过快照。
+
 **默认用户意图**：用户只要说“运行/进行 YYYY-MM-DD（或中文日期）的论文速递”，就视为明确要求并授权完成整条标准链路：抓取、筛选、深度分析、博客生成、反复 review 与修正、博客 push、TOP 10 论文长图、汇总封面，以及最终状态验收。无需再次询问是否发布博客，也不能在深度分析、review 或 push 后提前结束。微信公众号、飞书、小红书自动发布不在默认范围；小红书文案仅在用户明确要求时生成。
 
 Node 脚本通过 `scripts/env-loader.js` 加载当前项目根 `.env`：① `scripts/config.js` 模块级最先执行（任何 `require('config')` 即触发）；② `scripts/utils.js` 的 `loadEnvFile()` 二次兜底补漏。Python 脚本通过 `scripts/project_env.py` 加载同一个 `.env`。两端都会先清理继承自 Trae/Codex/shell 的项目同名变量（`PAPER_ANALYZER_*`、`PAPER_DIGEST_*`、`PD_*`、`WECHAT_*`、`FEISHU_*`、`XIAOHONGSHU_*`、`KIMI_API_KEY`）以及大小写代理变量，再写入项目 `.env`；代理不再回退 macOS `scutil`，加载器会把 `.env` 权限收紧为 `0600`。外部命令必须使用最小子进程环境，禁止把 LLM/发布凭据传给 curl、CLI、Git hook 或浏览器进程。

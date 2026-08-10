@@ -327,13 +327,21 @@ function prepareVisualReferenceInputs(manifest, {
     if (requestedId && !manifest.papers[requestedId]) {
         throw new Error(`manifest 中不存在论文: ${requestedId}`);
     }
+    const canonicalOutputRoot = path.resolve(Config.CURRENT_DIR, 'visual-reference-inputs');
+    if (path.resolve(outputRoot) !== canonicalOutputRoot) {
+        throw new Error(`视觉参考图只能物化到受控目录: ${canonicalOutputRoot}`);
+    }
+    if (fs.existsSync(path.resolve(Config.CURRENT_DIR))
+        && fs.lstatSync(path.resolve(Config.CURRENT_DIR)).isSymbolicLink()) {
+        throw new Error(`视觉参考图 current 根目录不得是符号链接: ${Config.CURRENT_DIR}`);
+    }
 
     const prepared = Object.values(manifest.papers)
         .filter(paper => !requestedId || normalizedId(paper.normalizedArxivId || paper.arxivId) === requestedId)
         .sort((a, b) => a.rank - b.rank)
         .map(paper => {
             const id = normalizedId(paper.normalizedArxivId || paper.arxivId);
-            const safeRoot = path.resolve(outputRoot);
+            const safeRoot = canonicalOutputRoot;
             const directory = path.resolve(safeRoot, targetDate, `${String(paper.rank).padStart(2, '0')}-${id}`);
             if (directory !== safeRoot && !directory.startsWith(`${safeRoot}${path.sep}`)) {
                 throw new Error(`视觉参考图准备路径逃逸: ${directory}`);
@@ -351,7 +359,10 @@ function prepareVisualReferenceInputs(manifest, {
                 }
                 const extension = validateReferenceImageBytes(raw, reference.mime);
                 const role = String(reference.role || 'paper_figure').replace(/[^a-z0-9_-]/gi, '_');
-                const target = path.join(directory, `${String(index + 1).padStart(2, '0')}-${role}${extension}`);
+                const target = assertSafeAssetTarget(
+                    path.join(directory, `${String(index + 1).padStart(2, '0')}-${role}${extension}`),
+                    safeRoot
+                );
                 fs.mkdirSync(directory, { recursive: true });
                 const existing = fs.existsSync(target) ? fs.readFileSync(target) : null;
                 if (!existing || sha256Buffer(existing) !== actualSha) writeFileAtomic(target, raw);
@@ -387,6 +398,7 @@ function prepareVisualReferenceInputs(manifest, {
                 const paper = next.papers?.[normalizedId(item.arxivId)];
                 if (!paper) throw new Error(`参考图准备记录缺少论文: ${item.arxivId}`);
                 const references = item.referenceImages.map(reference => ({
+                    role: reference.role,
                     mime: reference.mime,
                     sha256: reference.sha256,
                     preparedPath: reference.preparedPath,
@@ -437,9 +449,32 @@ function assertPreparedReferenceInputs(paper, targetDate) {
     if (prepared.sha256 !== expectedSha || references.length !== expectedReferences.length) {
         throw new Error(`视觉参考图 prepare 指纹不匹配，禁止登记视觉摘要: ${normalizedId(paper)}`);
     }
-    for (const reference of references) {
+    const safeRoot = path.resolve(Config.CURRENT_DIR, 'visual-reference-inputs');
+    for (const [index, reference] of references.entries()) {
+        const expectedReference = expectedReferences[index];
+        if (!expectedReference || reference.role !== expectedReference.role
+            || reference.mime !== expectedReference.mime
+            || reference.sha256 !== expectedReference.sha256) {
+            throw new Error(`视觉参考图 prepared 元数据不匹配: ${normalizedId(paper)}`);
+        }
+        const extension = REFERENCE_MIME_EXTENSIONS[String(expectedReference.mime || '').toLowerCase()];
+        if (!extension) {
+            throw new Error(`视觉参考图 prepared MIME 不受支持: ${expectedReference.mime}`);
+        }
+        const role = String(expectedReference.role || 'paper_figure').replace(/[^a-z0-9_-]/gi, '_');
+        const expectedPath = assertSafeAssetTarget(path.join(
+            safeRoot,
+            targetDate,
+            `${String(paper.rank).padStart(2, '0')}-${normalizedId(paper)}`,
+            `${String(index + 1).padStart(2, '0')}-${role}${extension}`
+        ), safeRoot);
         const filePath = path.resolve(String(reference.preparedPath || ''));
-        if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        const expectedRelative = path.relative(Config.PROJECT_ROOT, expectedPath).split(path.sep).join('/');
+        if (filePath !== expectedPath || reference.relativePath !== expectedRelative) {
+            throw new Error(`视觉参考图 prepared 路径不受控: ${reference.preparedPath}`);
+        }
+        if (!filePath || !fs.existsSync(filePath) || fs.lstatSync(filePath).isSymbolicLink()
+            || !fs.statSync(filePath).isFile()) {
             throw new Error(`视觉参考图 prepared 文件缺失: ${reference.preparedPath}`);
         }
         if (sha256Buffer(fs.readFileSync(filePath)) !== reference.sha256) {
@@ -922,7 +957,10 @@ function archiveLegacyVisualManifestAssets({ targetDate, manifestPath, generatio
                     if (recovered.length > 1) throw new Error(`历史视觉资产存在多个归档候选: ${id}/${kind}`);
                     source = recovered[0] || null;
                 }
-                if (!source || !fs.statSync(source).isFile()) throw new Error(`历史视觉资产缺失: ${id}/${kind}`);
+                if (!source || fs.lstatSync(source).isSymbolicLink()
+                    || !fs.statSync(source).isFile()) {
+                    throw new Error(`历史视觉资产缺失或为符号链接: ${id}/${kind}`);
+                }
                 const raw = fs.readFileSync(source);
                 validatePngBuffer(raw, { requirePortrait: kind === 'infographic' });
                 if (sha256Buffer(raw) !== card.assetSha256) throw new Error(`历史视觉资产 SHA 不匹配: ${id}/${kind}`);
@@ -943,6 +981,10 @@ function archiveLegacyVisualManifestAssets({ targetDate, manifestPath, generatio
                         && fs.readdirSync(oldParent).length === 0) {
                         fs.rmdirSync(oldParent);
                     }
+                }
+                if (fs.lstatSync(target).isSymbolicLink() || !fs.statSync(target).isFile()
+                    || sha256Buffer(fs.readFileSync(target)) !== card.assetSha256) {
+                    throw new Error(`历史视觉资产归档后校验失败: ${id}/${kind}`);
                 }
                 card.assetPath = path.relative(Config.PROJECT_ROOT, target).split(path.sep).join('/');
                 card.archivedAt = card.archivedAt || getBeijingISOString();
@@ -1307,6 +1349,9 @@ function assertSafeAssetTarget(targetPath, allowedRootPath) {
             throw new Error(`视觉资产目标父目录不得是符号链接: ${current}`);
         }
     }
+    if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) {
+        throw new Error(`视觉资产目标不得是符号链接: ${target}`);
+    }
     return target;
 }
 
@@ -1519,7 +1564,10 @@ function main(argv = process.argv.slice(2)) {
         return;
     }
     if (command === 'archive-legacy') {
-        assertPublishedBlogReceipt(options.date, options.receipt);
+        // This command only migrates already completed local assets after
+        // validating their manifest, SHA, PNG bytes and controlled paths. It
+        // deliberately does not mint or require a modern remote publication
+        // attestation: legacy batches may predate remoteVerifiedOid/schema v3.
         const result = archiveLegacyVisualManifestAssets({
             targetDate: options.date,
             manifestPath: options.manifest,

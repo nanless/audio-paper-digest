@@ -44,18 +44,24 @@ def main():
         date_str, require_visual_plan = parse_options(module)
         with module.blog_publication_lock(date_str):
             paths, receipt = module.load_verified_review_receipt(date_str)
+            visual_capable = module.preflight_post_publish_visual_capability(
+                date_str, require_visual_plan=require_visual_plan,
+            )
             module.validate_git_publish_branch()
             module.validate_git_index(paths)
             print(f'🧾 已验证审查凭证: {receipt}')
             print(f'📦 直接提交推送 {len(paths)} 个已审查路径（不生成、不 review）')
             if not module.git_push(date_str, paths):
                 raise module.PublishDataValidationError('Git 提交或推送未完成')
-            print('🎨 全部博客已发布并通过远端 OID 校验，开始建立发布后视觉任务')
-            visual_planned = module.plan_post_publish_visual_assets(date_str)
-            if require_visual_plan and not visual_planned:
-                print('\n❌ 博客已发布并验证远端 OID，但发布后视觉任务规划失败')
-                print(f'   可重试: npm run visual:post-publish -- --date {date_str}')
-                sys.exit(2)
+            if visual_capable:
+                print('🎨 全部博客已发布并通过远端 OID 校验，开始建立发布后视觉任务')
+                visual_planned = module.plan_post_publish_visual_assets(date_str)
+                if require_visual_plan and not visual_planned:
+                    print('\n❌ 博客已发布并验证远端 OID，但发布后视觉任务规划失败')
+                    print(f'   可重试: npm run visual:post-publish -- --date {date_str}')
+                    sys.exit(2)
+            else:
+                visual_planned = None
     except module.PublishDataValidationError as exc:
         print(f'\n❌ 博客推送失败: {exc}')
         sys.exit(1)
@@ -64,8 +70,10 @@ def main():
         sys.exit(1)
     if visual_planned:
         print('\n🎉 全部博客推送完成；TOP 10 论文长图与汇总图任务已建立！')
-    else:
+    elif visual_planned is False:
         print('\n🎉 全部博客推送完成；发布后视觉任务尚待重试。')
+    else:
+        print('\n🎉 历史维护博客推送完成；该 generation schema 不适用发布后视觉任务。')
 
 
 if __name__ == '__main__':

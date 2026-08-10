@@ -20,7 +20,12 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from path_config import CURRENT_DIR, read_json_strict, resolve_deep_analysis_result_path
+from path_config import (
+    CURRENT_DIR,
+    read_json_strict,
+    resolve_deep_analysis_result_for_date,
+    resolve_deep_analysis_result_path,
+)
 from project_env import build_child_process_env
 from utils import parse_analysis
 
@@ -998,6 +1003,14 @@ def load_papers(data_file=None):
     return papers
 
 
+def load_papers_for_publication_date(date_str, data_file=None):
+    """Load a channel input with controlled historical archive fallback."""
+    selected = Path(data_file) if data_file is not None else resolve_deep_analysis_result_for_date(date_str)
+    if data_file is None and selected != Path(resolve_deep_analysis_result_path()):
+        print(f'♻️ 当前分析文件不属于目标批次，改用受控归档: {selected}')
+    return load_papers(selected)
+
+
 def get_today_bj(target_date=None):
     """返回北京时间日期字符串 YYYY-MM-DD"""
     if target_date is None:
@@ -1108,9 +1121,7 @@ def select_blog_published_snapshot(papers, date_str, manifest_path=None, receipt
             raise PublishDataValidationError(f'博客已发布论文权威快照包含重复 arXiv ID: {paper_id}')
         seen.add(paper_id)
         if paper_id not in available:
-            raise PublishDataValidationError(f'博客已发布论文不在当前日期分析数据中: {paper_id}')
-        if paper_batch_date(paper) != date_str:
-            raise PublishDataValidationError(f'博客已发布论文快照批次日期不匹配: {paper_id}')
+            raise PublishDataValidationError(f'博客已发布论文不在受控分析数据中: {paper_id}')
         selected.append(paper)
     print(f'🧾 根据博客发布清单选择: {len(selected)}/{len(papers)} 篇论文')
     return selected

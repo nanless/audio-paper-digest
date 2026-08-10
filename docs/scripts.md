@@ -271,7 +271,7 @@ HuggingFace Papers 抓取模块。
 - 汇总图从同批次审计论文确定性计算标题、热门方向计数和 TOP 10 排名，并复用博客 generation manifest 的 category；目检排行榜后用 `digest-cover-state.js record ... --qa-attested true` 登记到同一目录
 - 每篇视觉任务的 `generationContext.qaClaims` 提供完整英文标题、四个必要内容区、方法声明、带数字实验声明、局限和参考图 caption；提示词和登记前目检必须逐项核对
 - 旧版 `data/current/visual-summaries/` 和 `data/current/digest-covers/` 资产会在下一次 plan 时校验 PNG 与 SHA，确认归档目标无冲突后迁移
-- 对缺少新版远端 OID 字段、不能重新 plan 的历史批次，使用 `npm run visual:archive -- --date YYYY-MM-DD` 和 `npm run cover:archive -- --date YYYY-MM-DD`；命令只迁移已有资产并更新 manifest，不创建任务或伪造发布凭证。旧 generation manifest 会与同日归档分析论文集合交叉校验后计算排名，非 TOP10 旧卡片平铺命名为 `unranked-<paper-id>-<kind>.png`
+- 对缺少新版远端 OID 字段、不能重新 plan 的历史批次，使用 `npm run visual:archive -- --date YYYY-MM-DD` 和 `npm run cover:archive -- --date YYYY-MM-DD`；legacy archive 不要求现代远端 receipt，也绝不创建任务或伪造发布凭证，而是校验 manifest、PNG 字节、SHA、受控源/目标路径并拒绝符号链接后，仅迁移已有资产。旧 generation manifest 会与同日归档分析论文集合交叉校验后计算排名，非 TOP10 旧卡片平铺命名为 `unranked-<paper-id>-<kind>.png`
 - 两类状态互相独立：论文分析/prompt 变化只失效对应长图，论文集合、分数、主任务标签或封面 prompt 变化只失效封面。`visual:status` / `cover:status` 非零时，下一轮仅补 pending/failed、损坏或指纹失效的资产
 - 项目脚本只负责计划、验证、复制和 checkpoint，不调用图像 API。不得把生成内容称为论文原始图，不得编造数值、作者、结论或排行榜；封面不得渲染 arXiv ID
 - 图片状态不进入博客 generation/review/push 清单，不阻断已经发布的博客；无远端验证凭证时所有 plan/status 命令拒绝启动
@@ -401,7 +401,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 **发布流程**：
 1. `generate-blog.py` 只生成并安装 `.md`，然后写入 `blog-generation-manifest-YYYY-MM-DD.json`；不调用 LLM，不提交、不推送。
 2. `review-blog.py` 只读取 generation manifest，对需要审查的文件执行代码、LLM 和多模态图片三层 review，并对完整批次执行确定性校验与 Hugo gate。每个通过项立即写入 `blog-review-passes-YYYY-MM-DD.json`，以博客仓库相对路径 + 实际读取 SHA-256 为永久复用键；失败状态写入 `blog-review-failure-YYYY-MM-DD.json`。代码、脚本、文档、模型、协议、generation manifest 或博客 `main` 基线变化不会清空未改页面的通过项，只会让新增、SHA 变化、瞬时失败或内容失败修复后的文件进入 review；通过后重新签发绑定当前清单、基线、协议和 Hugo gate 的 `blog-review-receipt-YYYY-MM-DD.json`，不执行 Git 发布。HTTP 重试优先服从 `Retry-After`，否则指数退避并加入短随机抖动；协议格式修复和完整协议重试使用更小预算。若推理模型将输出预算全部用于隐藏推理、未返回最终 JSON，客户端只追加纯 JSON 指令恢复一次，默认从 4000 最多增到 8000，不再盲目翻倍到 16000。
-3. `push-blog.py` 只验证审查凭证与工作树文件哈希完全一致，再精确 stage → 中文详细 commit → `git push origin HEAD:main` → 验证远端 OID；该脚本不生成也不 review。
+3. `push-blog.py` 先验证审查凭证与工作树文件哈希，并在任何 Git 变更前执行视觉能力 preflight。标准日更 `--require-visual-plan` 只接受 schema v3；schema v1/v2 仅允许显式维护 push，receipt 记录 `postPublishVisuals=not_applicable_legacy_maintenance` 并跳过视觉。通过后再精确 stage → 中文详细 commit → `git push origin HEAD:main` → 验证远端 OID；该脚本不生成也不 review。
 4. GitHub Actions 自动构建并部署到 Pages。
 
 **运行环境**：上述三个入口和兼容 `publish-to-blog.py` 都强制要求沙箱外运行。它们检测到可靠沙箱标志 `CODEX_SANDBOX` 即拒绝开始；沙箱外权限包装会保留网络禁用环境标志，不能将其单独视为仍在沙箱内。此时应从沙箱外重新运行原阶段，不得跳过审查或伪造凭证。
@@ -449,9 +449,8 @@ LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，必须带 `fix
 
 生成微信公众号图文草稿。
 
-- 默认数据源：`data/current/deep-analysis-result.json`（支持命令行传入自定义路径）
-- 默认优先按 `fetchBatchDate`/`batchDate`、旧数据回退 `fetchedAt` 的批次日期过滤（默认今天，北京时间）；传 `--all` 才使用输入文件中的全部论文
-- 默认数据源要求同日已远端验证的博客快照；独立发布须显式传 `--ignore-blog-snapshot`
+- 默认数据源：优先读取 `data/current/deep-analysis-result.json`；current 已滚动时按目标博客发布日期回退受控日期归档（支持命令行传入自定义路径）
+- 默认按目标博客发布日期绑定已远端验证的 `publishedPapers` 快照，论文原始抓取批次可以更早，自定义路径也仍绑定快照。独立发布须显式传 `--ignore-blog-snapshot`；仅在独立模式下按 `fetchBatchDate`/`batchDate`（旧数据回退严格北京时间 `fetchedAt`）过滤，`--all` 才使用全部输入
 - 微信公众号 `APP_ID` / `APP_SECRET` 从项目 `.env` 读取
 - 支持 `--dry-run`：只生成本地预览 HTML，不获取 Token、不上传图片、不创建草稿
 - **图片上传**：仅上传正文 Markdown 图片和 `selectedImageUrls` 中的已选图片 → 上传到微信 CDN → 替换为微信 URL。缓存保存在 `/tmp/wechat-image-cache.json`，不会直接上传/发布 `allImageUrls` 候选图
@@ -485,7 +484,7 @@ TOP N 精选版的一句话亮点使用受控并发生成，默认并发度为 5
 
 生成小红书文案。
 
-使用默认分析数据时，脚本要求同日正式博客 generation manifest（schema v3）及远端验证 receipt，验证清单 SHA、Hugo gate、review 协议、发布提交和远端 OID 后读取 `publishedPapers` 权威快照。清单缺失也会 fail closed；明确要在博客发布前独立生成时须传 `--ignore-blog-snapshot`，显式自定义数据文件仍保持独立语义。
+默认要求目标发布日期的正式博客 generation manifest（schema v3）及远端验证 receipt，验证清单 SHA、Hugo gate、review 协议、发布提交和远端 OID 后读取 `publishedPapers` 权威快照。论文原始抓取批次可以早于博客发布日期；current 已滚动时回退受控日期归档。清单缺失会 fail closed，显式自定义数据文件也仍绑定快照；只有 `--ignore-blog-snapshot` 才进入独立语义。
 
 逐篇成功的一句话在日期级锁内写入缓存，绑定分析、prompt、模型端点配置和清洗契约；损坏缓存会原子隔离后重建，失败回退或指纹变化只重跑对应论文。`--date` 严格校验为 `YYYY-MM-DD`；该命令只产出文案。
 
@@ -520,10 +519,9 @@ TOP N 精选版的一句话亮点使用受控并发生成，默认并发度为 5
 - `FEISHU_APP_ID` / `FEISHU_APP_SECRET` 从项目 `.env` 读取（与其他发布渠道一致，统一放在 `项目根目录的 `.env` 文件`）
 
 **数据输入**：
-- 统一读取 `data/current/deep-analysis-result.json`（与其他发布渠道一致）
+- 默认优先读取 `data/current/deep-analysis-result.json`，current 已滚动时按目标博客发布日期回退受控日期归档（与其他发布渠道一致）
 - 支持 `--date YYYY-MM-DD` 指定日期
-- 默认优先按 `fetchBatchDate`/`batchDate`、旧数据回退 `fetchedAt` 的批次日期过滤（默认今天，北京时间）；传 `--all` 才使用输入文件中的全部论文
-- 默认数据源要求同日已远端验证的博客快照；独立发布须显式传 `--ignore-blog-snapshot`
+- 默认按目标博客发布日期绑定已远端验证的 `publishedPapers` 快照，论文原始抓取批次可以更早，自定义路径也仍绑定快照。独立发布须显式传 `--ignore-blog-snapshot`；仅在独立模式下按 `fetchBatchDate`/`batchDate`（旧数据回退严格北京时间 `fetchedAt`）过滤，`--all` 才使用全部输入
 - 支持 `--dry-run`：只统计将生成的文档标题和块数量，不获取 Token、不创建飞书文档
 
 **实现特点**：

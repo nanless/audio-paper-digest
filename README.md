@@ -18,6 +18,8 @@ LLM 筛选前默认执行高召回关键词预筛，核心音频类别提供兜�
 
 ---
 
+标准日更会在任何 Git 变更前检查 generation schema v3 与 `publishedPapers` 视觉能力；schema v1/v2 仅用于显式历史维护，review receipt 标记视觉 N/A。渠道发布按目标博客发布日期绑定远端已验证的 `publishedPapers`，保留论文原始抓取批次；current 已滚动时回退日期归档，自定义输入也只有显式 `--ignore-blog-snapshot` 才能绕过快照。
+
 ## 文档说明
 
 | 文件 | 用途 | 读者 |

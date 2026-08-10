@@ -213,7 +213,9 @@ function archiveLegacyDigestCover({ targetDate, manifestPath } = {}) {
         const recorded = path.resolve(Config.PROJECT_ROOT, String(cover.assetPath || ''));
         if (![legacy, oldArchive, target].includes(recorded)) throw new Error(`历史汇总封面路径不受控: ${cover.assetPath}`);
         const source = [legacy, oldArchive, target].find(candidate => fs.existsSync(candidate)) || null;
-        if (!source || !fs.statSync(source).isFile()) throw new Error(`历史汇总封面缺失: ${targetDate}`);
+        if (!source || fs.lstatSync(source).isSymbolicLink() || !fs.statSync(source).isFile()) {
+            throw new Error(`历史汇总封面缺失或为符号链接: ${targetDate}`);
+        }
         const raw = fs.readFileSync(source);
         validatePngBuffer(raw);
         if (sha256Buffer(raw) !== cover.assetSha256) throw new Error(`历史汇总封面 SHA 不匹配: ${targetDate}`);
@@ -228,6 +230,10 @@ function archiveLegacyDigestCover({ targetDate, manifestPath } = {}) {
             } else {
                 fs.renameSync(source, target);
             }
+        }
+        if (fs.lstatSync(target).isSymbolicLink() || !fs.statSync(target).isFile()
+            || sha256Buffer(fs.readFileSync(target)) !== cover.assetSha256) {
+            throw new Error(`历史汇总封面归档后校验失败: ${targetDate}`);
         }
         const now = getBeijingISOString();
         return {
@@ -477,7 +483,8 @@ function main(argv = process.argv.slice(2)) {
         return;
     }
     if (command === 'archive-legacy') {
-        assertPublishedBlogReceipt(options.date, options.receipt);
+        // Legacy archival validates the completed local asset and its SHA. It
+        // must remain usable for batches created before modern remote receipts.
         archiveLegacyDigestCover({ targetDate: options.date, manifestPath: options.manifest });
         console.log('历史汇总封面已按日期归档');
         return;

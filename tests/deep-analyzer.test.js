@@ -236,6 +236,81 @@ describe('deep-analyzer section helpers', () => {
         }
     });
 
+    it('图片发现的瞬时错误不会降级成空候选终态', async () => {
+        const {
+            fetchArxivImageUrls,
+            classifyImageDiscoveryStatus
+        } = require('../scripts/deep-analyzer.js');
+        const transient = new Error('simulated timeout');
+        transient.code = 'ETIMEDOUT';
+
+        await assert.rejects(
+            () => fetchArxivImageUrls('2607.99998', {
+                maxRetries: 1,
+                dispatcher: {},
+                fetchImpl: async () => { throw transient; }
+            }),
+            error => error.code === 'ARXIV_IMAGE_DISCOVERY_TRANSIENT_FAILURE'
+        );
+        assert.strictEqual(classifyImageDiscoveryStatus([], transient), 'transient_failure');
+        assert.strictEqual(classifyImageDiscoveryStatus([], null), 'no_candidates');
+        assert.strictEqual(classifyImageDiscoveryStatus([{ url: 'https://example.com/a.png' }], null), 'complete');
+    });
+
+    it('图片发现失败会持久化并保留已有正文 checkpoint 供下轮恢复', () => {
+        const {
+            createAnalysisRecoveryManifest,
+            classifyImageDiscoveryStatus,
+            isRecoveryStageComplete,
+            markRecoveryStage,
+            persistImageDiscoveryFailure
+        } = require('../scripts/deep-analyzer.js');
+        const checkpointEvents = [];
+        const paper = {
+            arxivId: '2607.99997',
+            analysisCheckpoint: 'existing analyzed body',
+            analysisManifest: {
+                version: 1,
+                stages: { primaryAnalysis: { status: 'complete', fingerprint: 'primary-v1' } }
+            }
+        };
+        Object.defineProperty(paper, Symbol.for('audio-paper-digest.analysisCheckpointCallback'), {
+            value: checkpoint => checkpointEvents.push(checkpoint.analysisCheckpoint),
+            configurable: true
+        });
+        const manifest = createAnalysisRecoveryManifest(paper);
+        const transient = new Error('simulated discovery timeout');
+        transient.code = 'ARXIV_IMAGE_DISCOVERY_TRANSIENT_FAILURE';
+        markRecoveryStage(manifest, 'imageDiscovery', 'transient_failure', { error: transient.message });
+        markRecoveryStage(manifest, 'imageDownload', 'transient_failure', { reason: 'discovery_failed' });
+
+        const failed = persistImageDiscoveryFailure(
+            paper,
+            { analysisSource: 'provided_full_text' },
+            [],
+            manifest,
+            { candidates: [], downloaded: [] },
+            transient
+        );
+        assert.strictEqual(failed.analysis, null);
+        assert.strictEqual(failed.analysisCheckpoint, 'existing analyzed body');
+        assert.strictEqual(failed.analysisManifest.stages.imageDiscovery.status, 'transient_failure');
+        assert.strictEqual(failed.analysisManifest.stages.imageDownload.status, 'transient_failure');
+        assert.deepStrictEqual(checkpointEvents, ['existing analyzed body']);
+
+        const nextManifest = createAnalysisRecoveryManifest(failed);
+        assert.strictEqual(nextManifest.stages.primaryAnalysis.status, 'complete');
+        assert.strictEqual(failed.analysisCheckpoint, 'existing analyzed body');
+        markRecoveryStage(
+            nextManifest,
+            'imageDiscovery',
+            classifyImageDiscoveryStatus([{ url: 'https://example.com/recovered.png' }], null)
+        );
+        markRecoveryStage(nextManifest, 'imageDownload', 'complete', { downloaded: 1 });
+        assert.strictEqual(isRecoveryStageComplete(nextManifest, 'imageDiscovery'), true);
+        assert.strictEqual(isRecoveryStageComplete(nextManifest, 'imageDownload'), true);
+    });
+
     it('图片 HTTP 404 是永久失败且不会重试', async () => {
         const { downloadImageBase64 } = require('../scripts/deep-analyzer.js');
         let calls = 0;
@@ -542,6 +617,15 @@ primary_task_tag: #音视频生成
         assert.match(context, /系统技术报告/);
         assert.match(context, /延迟、吞吐、成本/);
         assert.match(context, /latency throughput evidence/);
+    });
+
+    it('未截断的短原文也使用稳定证据账本 ID', () => {
+        const { buildTaskEvidenceContext } = require('../scripts/deep-analyzer.js');
+        assert.strictEqual(
+            buildTaskEvidenceContext('short evidence', 12000, [], 'SCORING'),
+            '[SCORING_SOURCE_1/1]\nshort evidence'
+        );
+        assert.strictEqual(buildTaskEvidenceContext('', 12000, [], 'SCORING'), '');
     });
 
     it('评分证据账本覆盖原文开头、中段和末尾', () => {
@@ -865,6 +949,50 @@ has_dataset: 否
         assert.strictEqual(negativeNormalized.total, 5.6);
     });
 
+    it('空开源章节仍生成 A_OPEN 账本并通过归一化后的二次校验', () => {
+        const {
+            buildTypeAwareSourceContext,
+            validateScoringAuditAgainstAnalysis,
+            revalidateScoringAudit
+        } = require('../scripts/deep-analyzer.js');
+        const analysis = `## 机器摘要
+document_type: 系统技术报告
+has_code: 否
+has_model: 否
+has_dataset: 否
+
+## 方法概述和架构
+论文使用多阶段声学编码与语义融合流程。
+
+## 开源详情
+`;
+        const context = buildTypeAwareSourceContext(analysis, 'short source evidence');
+        const allowed = new Set([...context.matchAll(/^\[([A-Z][A-Z0-9_/-]*)\]/gm)].map(match => match[1]));
+        assert.match(context, /\[A_OPEN\]/);
+        assert.match(context, /has_code=否/);
+        assert.ok(allowed.has('A_OPEN'));
+        assert.doesNotMatch(context, /\[A_SUMMARY\]/);
+
+        const reason = '[A_METHOD] 该维度仅根据带编号的方法证据账本进行独立判断。';
+        const audit = {
+            documentType: '系统技术报告',
+            confidence: '中',
+            dimensions: {
+                innovation: { score: 1.0, reason },
+                technicalRigor: { score: 1.0, reason },
+                experimentalSufficiency: { score: 1.0, reason },
+                clarity: { score: 0.8, reason },
+                impact: { score: 1.0, reason },
+                openSource: { score: 0.5, reason },
+                reproducibility: { score: 0.3, reason },
+                engineering: { score: 1.0, reason }
+            }
+        };
+        const normalized = validateScoringAuditAgainstAnalysis(analysis, audit);
+        assert.strictEqual(normalized.dimensions.openSource.score, 0);
+        assert.doesNotThrow(() => revalidateScoringAudit(normalized, allowed));
+    });
+
     it('开源状态不会把否定语境误判为 Demo 或未来开源承诺', () => {
         const {
             hasAffirmativeDemoEvidence,
@@ -896,12 +1024,30 @@ has_dataset: 否
         assert.strictEqual(isPrivateIpAddress('172.16.1.1'), true);
         assert.strictEqual(isPrivateIpAddress('192.168.1.1'), true);
         assert.strictEqual(isPrivateIpAddress('::ffff:7f00:1'), true);
+        assert.strictEqual(isPrivateIpAddress('::ffff:127.0.0.1'), true);
         assert.strictEqual(isPrivateIpAddress('fe90::1'), true);
         assert.strictEqual(isPrivateIpAddress('ff02::1'), true);
         assert.strictEqual(isPrivateIpAddress('2001:db8::1'), true);
+        assert.strictEqual(isPrivateIpAddress('fec0::1'), true);
+        assert.strictEqual(isPrivateIpAddress('::7f00:1'), true);
+        assert.strictEqual(isPrivateIpAddress('::127.0.0.1'), true);
+        assert.strictEqual(isPrivateIpAddress('::ffff:8.8.8.8'), true);
+        assert.strictEqual(isPrivateIpAddress('64:ff9b::7f00:1'), true);
+        assert.strictEqual(isPrivateIpAddress('2002:7f00:1::'), true);
+        assert.strictEqual(isPrivateIpAddress('2001:2::1'), true);
+        assert.strictEqual(isPrivateIpAddress('3fff::1'), true);
+        assert.strictEqual(isPrivateIpAddress('2001:4860:4860::8888'), false);
+        assert.strictEqual(isPrivateIpAddress('2606:4700:4700::1111'), false);
+        assert.strictEqual(isPrivateIpAddress('198.18.0.1'), true);
+        assert.strictEqual(isPrivateIpAddress('192.0.2.1'), true);
+        assert.strictEqual(isPrivateIpAddress('203.0.113.1'), true);
         assert.strictEqual(isPrivateIpAddress('8.8.8.8'), false);
         const publicIpUrl = await validatePublicHttpUrl('https://8.8.8.8/demo');
         assert.strictEqual(publicIpUrl.validatedAddress, '8.8.8.8');
+        const publicIpv6Url = await validatePublicHttpUrl('https://[2001:4860:4860::8888]/demo');
+        assert.strictEqual(publicIpv6Url.validatedAddress, '2001:4860:4860::8888');
+        assert.strictEqual(publicIpv6Url.validatedHostname, '2001:4860:4860::8888');
+        await assert.rejects(() => validatePublicHttpUrl('https://[fec0::1]/demo'), /非公网/);
         await assert.rejects(() => validatePublicHttpUrl('http://127.0.0.1/demo'), /非公网|localhost/);
         await assert.rejects(() => validatePublicHttpUrl('file:///tmp/demo.html'), /协议/);
         await assert.rejects(() => validatePublicHttpUrl('https://user:pass@example.com'), /用户名/);

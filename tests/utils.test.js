@@ -29,6 +29,7 @@ const {
     loadPrompt,
     createProxyDispatcher,
     createProxyAgent,
+    normalizeTlsServername,
     detectHttpConnectProxyUrl,
     buildProxyAuthorizationHeader
 } = require('../scripts/utils.js');
@@ -779,6 +780,11 @@ describe('requestJson', () => {
 });
 
 describe('createProxyAgent', () => {
+    it('TLS SNI 主机名会移除 IPv6 URL 方括号', () => {
+        assert.strictEqual(normalizeTlsServername('[2606:4700:4700::1111]'), '2606:4700:4700::1111');
+        assert.strictEqual(normalizeTlsServername('example.com'), 'example.com');
+    });
+
     it('https.request 会真正通过自定义 CONNECT 通道', async (t) => {
         let connectRequest = '';
         const proxy = net.createServer(socket => {

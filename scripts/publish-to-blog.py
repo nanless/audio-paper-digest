@@ -3299,6 +3299,35 @@ def plan_post_publish_visual_assets(date_str):
     return True
 
 
+def preflight_post_publish_visual_capability(date_str, *, require_visual_plan=False):
+    """Decide whether this reviewed generation can enter the modern visual stage.
+
+    Historical schema v1/v2 manifests remain publishable for explicit maintenance,
+    but they do not contain the authoritative paper snapshot needed by the modern
+    post-publication visual contract.  Daily mode must reject them before Git is
+    mutated instead of discovering the incompatibility after a remote push.
+    """
+    date_str = validate_publish_date(date_str)
+    manifest_path = generation_manifest_path(date_str)
+    manifest = _load_json_object(manifest_path, '生成清单')
+    schema_version = manifest.get('schemaVersion')
+    if manifest.get('date') != date_str or schema_version not in {1, 2, 3}:
+        raise PublishDataValidationError('生成清单版本或日期不匹配')
+    if schema_version == 3:
+        validate_generation_visual_contract(manifest, date_str)
+        return True
+    if require_visual_plan:
+        raise PublishDataValidationError(
+            f'标准日更要求发布后视觉任务，但 generation manifest schema v{schema_version} '
+            '仅支持历史维护发布；请重新运行 generate-blog.py 生成 schema v3 清单'
+        )
+    print(
+        f'🧰 generation manifest schema v{schema_version} 进入历史维护模式：'
+        '允许博客推送，但发布后视觉任务明确标记为不适用'
+    )
+    return False
+
+
 def validate_generation_visual_contract(manifest, date_str, repo=None):
     """Ensure post-publication visuals cannot leak into the blog publication commit."""
     if manifest.get('visualSummaryRequired') is not False:
@@ -3655,6 +3684,11 @@ def save_review_receipt(
         next(iter(file_image_modes)) if len(file_image_modes) == 1
         else ('mixed' if file_image_modes else 'deterministic_only')
     )
+    generation_payload = _load_json_object(generation_manifest, '生成清单')
+    generation_schema = generation_payload.get('schemaVersion')
+    post_publish_visuals = (
+        'required' if generation_schema == 3 else 'not_applicable_legacy_maintenance'
+    )
     receipt = {
         'schemaVersion': 3,
         'date': validate_publish_date(date_str),
@@ -3672,6 +3706,11 @@ def save_review_receipt(
         'generationManifestSha256': (
             _sha256_file(generation_manifest) if generation_manifest is not None else None
         ),
+        # Explicitly bind whether this reviewed generation can enter the modern
+        # post-publication visual state machine. The generation SHA remains the
+        # cryptographic source of truth; this field makes maintenance intent
+        # visible to push/status tooling.
+        'postPublishVisuals': post_publish_visuals,
         'files': files,
     }
     path = review_receipt_path(date_str)
@@ -3996,6 +4035,16 @@ def load_verified_review_receipt(date_str):
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PublishDataValidationError('generation manifest 无法解析') from exc
     validate_generation_visual_contract(generation_manifest, date_str)
+    expected_visual_capability = (
+        'required' if generation_manifest.get('schemaVersion') == 3
+        else 'not_applicable_legacy_maintenance'
+    )
+    receipt_visual_capability = receipt.get('postPublishVisuals')
+    if (
+        receipt_visual_capability is not None
+        and receipt_visual_capability != expected_visual_capability
+    ):
+        raise PublishDataValidationError('审查凭证的发布后视觉能力与 generation manifest 不一致')
     expectations = generation_manifest_expectations(manifest_path, date_str)
     records = receipt.get('files')
     if not isinstance(records, list) or not records:

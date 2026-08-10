@@ -386,6 +386,20 @@ describe('visual summary state', () => {
             fs.writeFileSync(manifestPath, JSON.stringify(unrelatedUpdate, null, 2));
             const sourcePath = path.join(dir, 'generated.png');
             fs.writeFileSync(sourcePath, PNG);
+            const externalReference = path.join(dir, 'external-reference.png');
+            fs.writeFileSync(externalReference, PNG);
+            fs.unlinkSync(expected);
+            fs.symlinkSync(externalReference, expected);
+            assert.throws(() => recordVisualSummaryCard({
+                arxivId: '2607.12345',
+                kind: 'infographic',
+                sourcePath,
+                taskToken: preparedRecord.taskToken,
+                targetDate: '2026-07-13',
+                manifestPath
+            }), /符号链接/);
+            fs.unlinkSync(expected);
+            fs.writeFileSync(expected, PNG);
             const recorded = recordVisualSummaryCard({
                 arxivId: '2607.12345',
                 kind: 'infographic',
@@ -395,6 +409,55 @@ describe('visual summary state', () => {
                 manifestPath
             });
             assert.strictEqual(recorded.papers['2607.12345'].cards.infographic.status, 'complete');
+        } finally {
+            Config.CURRENT_DIR = originals.current;
+            Config.FILES.visualSummaryManifestDir = originals.manifest;
+            Config.FILES.visualSummaryAssetDir = originals.asset;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('prepare 拒绝视觉参考输出根目录和批次父目录符号链接', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-prepare-symlink-'));
+        const current = path.join(dir, 'current');
+        const url = 'https://arxiv.org/html/2607.12345v1/figure/method.png';
+        const originals = {
+            current: Config.CURRENT_DIR,
+            manifest: Config.FILES.visualSummaryManifestDir,
+            asset: Config.FILES.visualSummaryAssetDir
+        };
+        try {
+            patchVisualDirs(current);
+            const sha256 = writeImageCache(current, url, PNG);
+            const input = paper('2607.12345', {
+                selectedImageUrls: [url],
+                imageManifest: {
+                    selected: [url],
+                    candidates: [{ url, caption: 'Figure 1: Method architecture overview.' }],
+                    downloaded: [{ url, mime: 'image/png', sha256 }]
+                }
+            });
+            const promptPath = path.join(dir, 'prompt.md');
+            const manifestPath = path.join(dir, 'manifest.json');
+            fs.writeFileSync(promptPath, 'fresh visual prompt');
+            const manifest = planVisualSummaries({
+                targetDate: '2026-07-13', papers: [input], manifestPath, promptPath
+            });
+            const output = path.join(current, 'visual-reference-inputs');
+            const external = path.join(dir, 'external-output');
+            fs.mkdirSync(external, { recursive: true });
+            fs.symlinkSync(external, output, 'dir');
+            assert.throws(() => prepareVisualReferenceInputs(manifest, {
+                targetDate: '2026-07-13', outputRoot: output, manifestPath
+            }), /根目录不得是符号链接/);
+            fs.unlinkSync(output);
+            fs.mkdirSync(output, { recursive: true });
+            const externalDate = path.join(dir, 'external-date');
+            fs.mkdirSync(externalDate, { recursive: true });
+            fs.symlinkSync(externalDate, path.join(output, '2026-07-13'), 'dir');
+            assert.throws(() => prepareVisualReferenceInputs(manifest, {
+                targetDate: '2026-07-13', outputRoot: output, manifestPath
+            }), /父目录不得是符号链接/);
         } finally {
             Config.CURRENT_DIR = originals.current;
             Config.FILES.visualSummaryManifestDir = originals.manifest;
@@ -775,10 +838,29 @@ describe('visual summary state', () => {
             Config.CURRENT_DIR = current;
             Config.FILES.visualSummaryManifestDir = path.join(current, 'visual-summary-manifests');
             Config.FILES.visualSummaryAssetDir = archive;
-            const result = archiveLegacyVisualManifestAssets({
-                targetDate: '2026-07-13', manifestPath, generationManifestPath: generationPath
-            });
-            const card = result.manifest.papers['2607.12345'].cards.infographic;
+            const realSource = `${source}.real`;
+            fs.renameSync(source, realSource);
+            fs.symlinkSync(realSource, source);
+            assert.throws(() => main([
+                'archive-legacy', '--date', '2026-07-13',
+                '--manifest', manifestPath, '--generation', generationPath
+            ]), /符号链接/);
+            fs.unlinkSync(source);
+            fs.renameSync(realSource, source);
+            let output = '';
+            const originalWrite = process.stdout.write;
+            process.stdout.write = chunk => { output += String(chunk); return true; };
+            try {
+                main([
+                    'archive-legacy', '--date', '2026-07-13',
+                    '--manifest', manifestPath, '--generation', generationPath
+                ]);
+            } finally {
+                process.stdout.write = originalWrite;
+            }
+            const migrated = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            const card = migrated.papers['2607.12345'].cards.infographic;
+            assert.match(output, /历史视觉资产已按日期归档/);
             assert.match(card.assetPath, /archive\/2026-07-13\/visual-summaries\/01-2607\.12345-visual-summary-paper\.png$/);
             assert.ok(fs.existsSync(path.resolve(Config.PROJECT_ROOT, card.assetPath)));
             assert.ok(!fs.existsSync(source));

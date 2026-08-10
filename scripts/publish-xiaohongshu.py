@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from publish_common import (
-    load_papers, get_today_bj, score_and_sort, extract_top_tags,
+    load_papers_for_publication_date, get_today_bj, score_and_sort, extract_top_tags,
     score_emoji, format_medal, extract_one_liner, call_publish_llm_api,
     validate_papers_for_publish, normalize_publish_arxiv_id,
     PublishDataValidationError,
@@ -499,24 +499,17 @@ def main():
 
 
 def _generate_for_date(data_file, today, mode, top_n, ignore_blog_snapshot=False):
-    papers = load_papers(data_file)
+    papers = load_papers_for_publication_date(today, data_file)
 
-    # 优先按不可变 fetchBatchDate 过滤，旧数据才回退严格北京 fetchedAt。
-    filtered = []
-    for p in papers:
-        if paper_batch_date(p) == today:
-            filtered.append(p)
-    if filtered:
-        papers = filtered
-        print(f"📅 过滤后: {len(papers)} 篇论文 (fetchBatchDate={today})")
-    else:
-        print(f"⚠️  没有批次日期为 {today} 的论文，停止生成，避免跨日混入历史论文")
-        return
-
-    # 默认数据源应与同日博客实际生成集合严格一致，避免明确排除的失败/无关论文
-    # 在小红书预检前再次阻断整个批次。自定义数据文件仍保持独立生成语义。
-    if data_file is None and not ignore_blog_snapshot:
+    # 博客 publication date 与论文原始抓取批次是两个维度。默认严格使用
+    # 远端已验证 generation 的 publishedPapers；只有显式独立模式才按批次过滤。
+    if not ignore_blog_snapshot:
         papers = select_blog_published_snapshot(papers, today)
+    else:
+        papers = [p for p in papers if paper_batch_date(p) == today]
+        print(f"📅 独立生成过滤后: {len(papers)} 篇论文 (fetchBatchDate={today})")
+    if not papers:
+        raise PublishDataValidationError(f'没有批次日期为 {today} 的论文可生成')
     papers = validate_papers_for_publish(papers)
     scored, unscored = score_and_sort(papers)
 

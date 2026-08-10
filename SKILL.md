@@ -42,6 +42,8 @@ description: >
 11. **收尾合并**：去重合并历史结果，自动备份 bak 文件（保留最近 10 个）
 12. **全部博客发布后生成视觉摘要**：依次完成博客 generate、review 和 push；远端 `main` OID 验证成功后，`push-blog.py` 自动建立最终评分 TOP 10 论文长图和一张批次汇总图任务。图片不进入或阻断本轮博客发布。Codex 使用内置 `image_gen` 处理 pending/failed 项，项目脚本只管理规划、验证、复制和 checkpoint，禁止调用图像 API。论文长图使用约 220–360 个中文字符，不得退化为口号式概念海报；若深度分析已选中并完整缓存论文关键图，任务按“方法总览/架构/流程优先，关键实验其次”绑定最多两张参考图、caption、MIME、缓存路径和 SHA。内置生图直接完成英文标题、中文说明、结构图、实验数据和纸张拼贴艺术的一体化最终构图，禁止再经过旧的确定性文字卡片合成器；登记前逐项目检标题、文字、箭头关系、指标方向和数值，不可读或存在实质错误必须重生成。两类图片统一采用暖白底与低饱和色的清新纸张编辑风，通过细微纸纹、纸片叠层、局部毛边、少量胶带和柔和投影建立层次；禁止脏旧复古、拥挤手账、深蓝霓虹、赛博 HUD、金属边框和仪表盘风格。
 
+**视觉能力兼容边界**：标准日更在任何 Git 变更前要求 generation schema v3 及 `publishedPapers` 权威快照。schema v1/v2 只允许不带 `--require-visual-plan` 的显式历史维护 push，receipt 将视觉能力标记为 `not_applicable_legacy_maintenance`；不能等远端发布成功后才发现版本不兼容。
+
 `full-fetch.js` **不会自动发布博客/微信**。但当用户说“运行/进行某日论文速递”时，默认语义是完成本节整条链路；Agent 先运行 `run-daily-digest.sh` 或等价的分阶段命令，处理 review 问题并完成 push，再使用内置 `image_gen` 完成所有 pending 论文长图和汇总封面，直到两个视觉状态均为 `complete`。视觉 plan/status 默认只输出排名、论文 ID、标题、task token、参考图数和 manifest 路径，`visual:prepare` 保留必需的绝对 `referencedImagePaths`；完整事实仍在 manifest。`digest:status` 默认打印紧凑门禁摘要，完整来源健康明细在报告 JSON。微信公众号、飞书和小红书自动发布不属于默认链路。
 
 ---
@@ -378,14 +380,14 @@ npm run xiaohongshu -- --date 2026-04-22
 - 默认读 `data/current/deep-analysis-result.json`
 - **按批次日期过滤**：优先使用抓取阶段写入的 `fetchBatchDate` 或 `batchDate`，旧数据才使用严格北京时间 `fetchedAt` 的日期；只发布匹配 `--date` 指定日期的论文（默认今天），避免历史数据被重复发布
 - 生成阶段可重复传入 `--exclude-id <arXiv ID>`，只从本次 generation 权威快照排除明确命中的论文；ID 未命中会阻断，分析数据本身不变
-- 微信公众号、飞书和小红书默认还绑定同日博客 generation manifest 与远端验证 receipt 的 `publishedPapers` 权威快照；清单缺失也会 fail closed。若明确需要在博客发布前独立运行，传 `--ignore-blog-snapshot`。微信/飞书的 `--all` 另表示使用全部输入；小红书的 `--all` 仅表示生成完整汇总文案，不能当作快照绕过开关
+- 微信公众号、飞书和小红书默认绑定目标博客发布日期的 generation manifest 与远端验证 receipt，并严格按 `publishedPapers` 的 ID、内容和顺序发布；论文自身 `fetchBatchDate` 可以早于博客发布日期。current 已滚动时自动回退 `data/archive/<日期>/deep-analysis-result.json`，显式自定义数据文件也不会隐式绕过快照。只有明确独立运行时才传 `--ignore-blog-snapshot`。微信/飞书的 `--all` 在独立模式表示使用全部输入；小红书的 `--all` 仅表示生成完整汇总文案
 - 在 `~/code/github_repos/audio-paper-digest-blog/content/posts` 生成：
   - 汇总页：`YYYY-MM-DD.md`
   - 单篇页：`YYYY-MM-DD-<slug>.md`
 - `generate-blog.py` 在日期级跨进程锁内逐页生成、安装并写 journal；崩溃后可收养已完成的同 SHA 页面，全部论文完成后才生成汇总页和严格 generation manifest，禁止 review/commit/push
 - `review-blog.py` 在同一日期锁内逐文件审查，checkpoint 绑定 worker 实际读取的 SHA；每个通过项立即写入按日期隔离的持久账本，以博客仓库相对路径 + SHA-256 复用。代码、脚本、文档、模型、协议、generation manifest 或博客基线变化只要求重建整批 receipt，不得重审 SHA 未变的页面；只审查新增、字节变化、瞬时失败或内容失败修复后的文件。应存在页面消失或 Hugo 前后 SHA 变化仍阻断凭证；禁止 commit/push
 - review 的 HTTP 重试优先使用 `Retry-After`，否则指数退避并加短抖动；协议格式修复和完整协议重试使用收紧的独立预算。对仅有隐藏推理、没有最终 JSON 的 `length/max_tokens` 响应，仅追加纯 JSON 指令并恢复一次，默认从 4000 提到最多 8000，再失败不继续翻倍。代码预检先去除完全重复长段落，并阻断表格列数不一致和疑似在单词中途截断的超长图片说明；合法空分组列续行不得删除
-- `push-blog.py` 验证审查凭证和当前文件哈希，精确 stage 后及 commit 前再逐项校验 index blob SHA/删除状态，随后提交、推送并核对远端 OID；禁止重新生成或 review
+- `push-blog.py` 验证审查凭证和当前文件哈希，并在 Git 变更前完成视觉能力 preflight；标准日更拒绝 schema v1/v2，显式历史维护 push 跳过视觉并报告 N/A。随后精确 stage，并在 commit 前逐项校验 index blob SHA/删除状态，再提交、推送并核对远端 OID；禁止重新生成或 review
 - 三阶段除日期锁外还共享博客仓库级全局锁，防止不同日期并发污染共同的 worktree、index、HEAD 或回滚状态
 - **三个阶段及兼容 `publish-to-blog.py` 必须在沙箱外运行**：入口检测到可靠沙箱标志 `CODEX_SANDBOX` 会立即拒绝执行；沙箱外权限包装会保留网络禁用环境标志，不能据此误拒绝。原因是 review 会直连 LLM、下载图片并运行 Hugo，push 需要真实 Git 网络；不得在沙箱内跳过 review、伪造凭证或改用无网络降级路径。
 - 若需发布全部论文（不过滤），显式传 `--all`

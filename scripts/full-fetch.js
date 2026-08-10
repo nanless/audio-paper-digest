@@ -23,6 +23,7 @@ const {
     withFileLockSync,
     isSuccessfulAnalysisRecord,
     getAnalysisRunStatus,
+    getCanonicalAnalysisRunSummary,
     getAnalysisExitCode,
     mergeCanonicalAnalysisState
 } = require('./analysis-engine.js');
@@ -243,6 +244,14 @@ function hasCompleteFetchCheckpoint(checkpoint, expectedCategoryIds = Config.ARX
         && checkpoint.fetchSourcesSha256 === getFetchSourcesSha256(checkpoint);
 }
 
+function hasCrossProcessReusableFetchCheckpoint(
+    checkpoint,
+    expectedCategoryIds = Config.ARXIV_CATEGORIES.map(c => c.id)
+) {
+    return hasCompleteFetchCheckpoint(checkpoint, expectedCategoryIds)
+        && expectedCategoryIds.every(id => isReusableArxivCheckpoint(checkpoint.arxiv?.[id]));
+}
+
 function isDefinitiveFilterDecision(decision) {
     return Boolean(decision)
         && typeof decision.related === 'boolean'
@@ -314,7 +323,8 @@ function loadResumableFilterForToday(today, expected = {}, files = {}) {
     if (!hasCompleteSourceHealth(rawCandidates.sourceHealth)) return null;
     const fetchFile = files.fetchCheckpoint || FETCH_CHECKPOINT_FILE;
     const checkpoint = loadFetchCheckpoint(today, rawCandidates.candidateFingerprint, fetchFile);
-    if (!hasCompleteFetchCheckpoint(checkpoint) || rawCandidates.fetchSourcesSha256 !== checkpoint.fetchSourcesSha256) return null;
+    if (!hasCrossProcessReusableFetchCheckpoint(checkpoint)
+        || rawCandidates.fetchSourcesSha256 !== checkpoint.fetchSourcesSha256) return null;
     const decisionsMatch = decisionsData
         && decisionsData.filterModel === expected.filterModel
         && decisionsData.filterPromptHash === expected.filterPromptHash
@@ -359,7 +369,7 @@ function validateFilterArtifacts(filteredData, decisionsData, rawCandidates = nu
     if (!filteredData || !decisionsData || !decisionsData.decisions || typeof decisionsData.decisions !== 'object') {
         return false;
     }
-    if (!checkpoint || !hasCompleteFetchCheckpoint(checkpoint)) return false;
+    if (!checkpoint || !hasCrossProcessReusableFetchCheckpoint(checkpoint)) return false;
     const batchDates = [
         checkpoint.batchDate,
         rawCandidates?.batchDate,
@@ -439,11 +449,14 @@ function loadCanonicalAnalysisRecord(filePath, paper) {
 function saveFinalAnalysisResults(filePath, newResults, expectedPapers, stats = {}) {
     return updateJsonFileLocked(filePath, current => {
         const existingPapers = Array.isArray(current) ? current : (current?.papers || []);
-        const mergedPapers = mergePapersById(existingPapers, newResults, {
+        const allMergedPapers = mergePapersById(existingPapers, newResults, {
             preserveSuccessfulAnalysis: true
         });
-        const mergedById = new Map(mergedPapers.map(paper => [normalizedId(paper), paper]));
+        const mergedById = new Map(allMergedPapers.map(paper => [normalizedId(paper), paper]));
         const expectedIds = new Set((expectedPapers || []).map(normalizedId).filter(Boolean));
+        const mergedPapers = Array.from(expectedIds)
+            .map(id => mergedById.get(id))
+            .filter(Boolean);
         let successful = 0;
         for (const id of expectedIds) {
             if (isSuccessfulAnalysisRecord(mergedById.get(id))) successful++;
@@ -452,9 +465,15 @@ function saveFinalAnalysisResults(filePath, newResults, expectedPapers, stats = 
         const inferredStatus = getAnalysisRunStatus({ success: successful }, remainingFailed);
         const analysisStatus = inferredStatus;
         const now = getBeijingISOString();
+        const expectedBatchDate = (expectedPapers || [])
+            .map(paper => paper?.digestStatus?.batchDate || paper?.batchDate || String(paper?.fetchedAt || '').slice(0, 10))
+            .find(Boolean);
+        const batchDate = stats.batchDate || expectedBatchDate
+            || (!Array.isArray(current) && current?.batchDate) || now.slice(0, 10);
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             timestamp: now,
+            batchDate,
             previousTimestamp: !Array.isArray(current) ? current?.timestamp || null : null,
             status: analysisStatus,
             stats: {
@@ -463,7 +482,9 @@ function saveFinalAnalysisResults(filePath, newResults, expectedPapers, stats = 
                 analysisStatus,
                 remainingFailed,
                 successfulExpected: successful,
-                preservedExisting: existingPapers.length,
+                expected: expectedIds.size,
+                removedUnexpected: allMergedPapers.length - mergedPapers.length,
+                preservedExisting: mergedPapers.filter(paper => existingPapers.some(existing => normalizedId(existing) === normalizedId(paper))).length,
                 totalAfterMerge: mergedPapers.length
             },
             papers: mergedPapers
@@ -768,9 +789,24 @@ async function resumeFilterStage({
     return { filtered, filteredNew, filterDecisions, skippedCount };
 }
 
-function autoArchiveCurrentData(batchDate = getBeijingDateString()) {
+function nextArchiveConflictPath(archiveDayDir, basename) {
+    const stem = path.basename(basename, '.json');
+    const timestamp = getBeijingCompactTimestamp();
+    let suffix = 0;
+    while (true) {
+        const candidate = path.join(
+            archiveDayDir,
+            `${stem}-conflict-${timestamp}${suffix > 0 ? `-${suffix}` : ''}.json`
+        );
+        if (!fs.existsSync(candidate)) return candidate;
+        suffix++;
+    }
+}
+
+function autoArchiveCurrentData(batchDate = getBeijingDateString(), options = {}) {
     const today = batchDate;
-    const targets = [RESULT_FILE, FILTERED_FILE, ANALYZED_FILE];
+    const archiveDir = options.archiveDir || ARCHIVE_DIR;
+    const targets = options.targets || [RESULT_FILE, FILTERED_FILE, ANALYZED_FILE];
     let archived = 0;
     let removed = 0;
 
@@ -786,7 +822,7 @@ function autoArchiveCurrentData(batchDate = getBeijingDateString()) {
             }
             if (recordDate >= today) return;
 
-            const archiveDayDir = path.join(ARCHIVE_DIR, recordDate);
+            const archiveDayDir = path.join(archiveDir, recordDate);
             const archivePath = path.join(archiveDayDir, path.basename(filePath));
             if (fs.existsSync(archivePath)) {
                 try {
@@ -795,13 +831,14 @@ function autoArchiveCurrentData(batchDate = getBeijingDateString()) {
                     if (currentContent === archivedContent) {
                         console.log(`  [归档] 已存在且内容一致，跳过 ${recordDate}/${path.basename(filePath)}`);
                     } else {
-                        const backupPath = path.join(
-                            archiveDayDir,
-                            `${path.basename(filePath, '.json')}-${getBeijingCompactTimestamp()}.json`
-                        );
-                        fs.copyFileSync(filePath, backupPath);
+                        const backupPath = nextArchiveConflictPath(archiveDayDir, path.basename(filePath));
+                        fs.copyFileSync(archivePath, backupPath);
+                        writeFileAtomic(archivePath, currentContent);
+                        if (fs.readFileSync(archivePath, 'utf8') !== currentContent) {
+                            throw new Error('替换 canonical 归档后的内容校验失败');
+                        }
                         archived++;
-                        console.log(`  [归档] 已存在但内容不同，另存为 ${path.basename(backupPath)}`);
+                        console.log(`  [归档] current 已成为 canonical，旧归档另存为 ${path.basename(backupPath)}`);
                     }
                 } catch (e) {
                     console.log(`  [归档] 校验已有归档失败 ${path.basename(filePath)}: ${e.message}`);
@@ -925,7 +962,7 @@ function migrateLegacyAnalysisResultToCurrent(
  * 清理非今日数据（归档后残留的旧数据）
  * 归档函数只在文件日期早于今天时触发，但文件可能在当天被修改导致未归档
  */
-function cleanOldData(filePath, name, today) {
+function cleanOldData(filePath, name, today, options = {}) {
     return withFileLockSync(filePath, () => {
         if (!fs.existsSync(filePath)) return;
         const data = readJsonSafe(filePath);
@@ -933,7 +970,10 @@ function cleanOldData(filePath, name, today) {
 
         const before = data.papers.length;
         data.papers = data.papers.filter(p => {
-            const date = (p.fetchedAt || p.timestamp || '').substring(0, 10);
+            const date = String(
+                p.digestStatus?.batchDate || p.batchDate || p.fetchBatchDate
+                || p.fetchedAt || p.timestamp || ''
+            ).substring(0, 10);
             // 无日期字段的论文可能是从旧格式迁移的，保留它们
             return !date || date === today;
         });
@@ -941,7 +981,7 @@ function cleanOldData(filePath, name, today) {
 
         if (removed > 0) {
             try {
-                const cleanupDir = path.join(ARCHIVE_DIR, 'cleanup');
+                const cleanupDir = path.join(options.archiveDir || ARCHIVE_DIR, 'cleanup');
                 fs.mkdirSync(cleanupDir, { recursive: true });
                 const backupPath = path.join(cleanupDir, `${name}-${getBeijingCompactTimestamp()}.json`);
                 fs.copyFileSync(filePath, backupPath);
@@ -950,7 +990,23 @@ function cleanOldData(filePath, name, today) {
                 console.log(`  [清理] ${name}: 清理前备份失败，跳过清理（${e.message}）`);
                 return;
             }
-            data.timestamp = getBeijingISOString();
+            const now = getBeijingISOString();
+            data.timestamp = now;
+            data.batchDate = today;
+            data.stats = data.stats && typeof data.stats === 'object' ? data.stats : {};
+            if (name === 'deep-analysis-result') {
+                const summary = getCanonicalAnalysisRunSummary(data.papers);
+                data.status = summary.status;
+                data.stats.analysisStatus = summary.status;
+                data.stats.remainingFailed = summary.remaining;
+                data.stats.successfulExpected = summary.success;
+                data.stats.expected = data.papers.length;
+                data.stats.totalAfterMerge = data.papers.length;
+                if (summary.status === 'complete') data.deepAnalysisCompletedAt = now;
+                else delete data.deepAnalysisCompletedAt;
+            } else if (name === 'filtered-papers') {
+                data.stats.afterArchiveSkip = data.papers.length;
+            }
             writeFileAtomic(filePath, JSON.stringify(data, null, 2));
             console.log(`  [清理] ${name}: 移除 ${removed} 篇旧数据，保留 ${data.papers.length} 篇今日数据`);
         } else {
@@ -1692,6 +1748,7 @@ async function runFullFetch() {
     let result;
     try {
         result = finalizeAnalysisResults(outputFile, filteredNew, {
+            batchDate: today,
             analysisStatus,
             arxivFetched: arxivFetchedCount,
             hfFetched: hfFetchedCount,
@@ -1779,6 +1836,7 @@ module.exports = {
     saveFetchCheckpoint,
     hasCompleteSourceHealth,
     hasCompleteFetchCheckpoint,
+    hasCrossProcessReusableFetchCheckpoint,
     isDefinitiveFilterDecision,
     validateFilterDecisionCoverage,
     validateFilterArtifacts,

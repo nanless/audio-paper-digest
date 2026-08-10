@@ -27,6 +27,36 @@ loadEnvFile();
 const LEGACY_RESULT_FILE = Config.FILES.deepAnalysisResultLegacy;
 const RESULT_FILE = Config.FILES.deepAnalysisResult;
 
+function finalizeBatchZeroWorkState(resultPath, fallbackBatchDate) {
+    return updateJsonFileLocked(resultPath, current => {
+        const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
+        const { remaining, success, status } = getCanonicalAnalysisRunSummary(currentPapers);
+        const now = getBeijingISOString();
+        const batchDate = String(
+            (!Array.isArray(current) && (current?.batchDate || current?.timestamp || current?.lastUpdated))
+            || fallbackBatchDate || now
+        ).slice(0, 10);
+        const payload = {
+            ...(!Array.isArray(current) && current ? current : {}),
+            papers: currentPapers,
+            batchDate,
+            status,
+            lastUpdated: now,
+            stats: {
+                ...(!Array.isArray(current) ? current?.stats : {}),
+                analyzedSuccess: success,
+                analyzedFailed: remaining,
+                remainingFailed: remaining,
+                totalAfterMerge: currentPapers.length,
+                analysisStatus: status
+            }
+        };
+        if (status === 'complete') payload.deepAnalysisCompletedAt = now;
+        else delete payload.deepAnalysisCompletedAt;
+        return payload;
+    });
+}
+
 async function main() {
     if (!fs.existsSync(RESULT_FILE) && fs.existsSync(LEGACY_RESULT_FILE)) {
         const legacyData = readJsonFileStrict(LEGACY_RESULT_FILE);
@@ -51,18 +81,18 @@ async function main() {
     console.log(`未分析论文: ${notAnalyzed.length}`);
 
     if (notAnalyzed.length === 0) {
-        updateAnalysisDigestStatuses(papers, {
-            batchDate
+        const finalPayload = finalizeBatchZeroWorkState(RESULT_FILE, batchDate);
+        updateAnalysisDigestStatuses(finalPayload.papers, {
+            batchDate: finalPayload.batchDate
         });
-        updateJsonFileLocked(RESULT_FILE, current => ({
-            ...(!Array.isArray(current) && current ? current : {}),
-            papers: Array.isArray(current) ? current : (current?.papers || []),
-            status: 'complete',
-            deepAnalysisCompletedAt: getBeijingISOString(),
-            stats: { ...(!Array.isArray(current) ? current?.stats : {}), analysisStatus: 'complete', remainingFailed: 0 }
-        }));
-        console.log('所有论文已分析完成！');
-        return { status: 'complete', exitCode: 0, stats: { success: 0, failed: 0, skipped: papers.length } };
+        const summary = getCanonicalAnalysisRunSummary(finalPayload.papers);
+        console.log(summary.status === 'complete' ? '所有论文已分析完成！' : `检测到并发更新，仍有 ${summary.remaining} 篇未完成`);
+        return {
+            status: summary.status,
+            exitCode: getAnalysisExitCode(summary.status),
+            stats: { success: 0, failed: summary.remaining, skipped: finalPayload.papers.length - summary.remaining },
+            remaining: summary.remaining
+        };
     }
 
     updateJsonFileLocked(RESULT_FILE, current => {
@@ -195,4 +225,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { main };
+module.exports = { main, finalizeBatchZeroWorkState };

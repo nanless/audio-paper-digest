@@ -27,6 +27,7 @@ from path_config import (  # noqa: E402
     atomic_write_text,
     backfill_result_path,
     file_lock,
+    resolve_deep_analysis_result_for_date,
     resolve_deep_analysis_result_path,
     update_json_file_locked,
     wechat_preview_path,
@@ -84,6 +85,27 @@ class PathConfigTest(unittest.TestCase):
 
             current.write_text('[]', encoding='utf-8')
             self.assertEqual(resolve_deep_analysis_result_path(current, legacy), current)
+
+    def test_resolve_publish_input_uses_controlled_archive_after_current_rolls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            current = root / 'current.json'
+            legacy = root / 'legacy.json'
+            archive = root / 'archive'
+            archived = archive / '2026-07-13' / 'deep-analysis-result.json'
+            current.write_text(json.dumps({'papers': [{
+                'arxivId': '2607.00002', 'fetchBatchDate': '2026-07-14',
+            }]}), encoding='utf-8')
+            archived.parent.mkdir(parents=True)
+            archived.write_text(json.dumps({'papers': [{
+                'arxivId': '2607.00001', 'fetchBatchDate': '2026-07-13',
+            }]}), encoding='utf-8')
+            self.assertEqual(resolve_deep_analysis_result_for_date(
+                '2026-07-13', current, legacy, archive,
+            ), archived)
+            self.assertEqual(resolve_deep_analysis_result_for_date(
+                '2026-07-14', current, legacy, archive,
+            ), current)
 
     def test_atomic_write_replaces_content_and_preserves_mode(self):
         with tempfile.TemporaryDirectory() as tmp:

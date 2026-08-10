@@ -17,7 +17,7 @@ import argparse, urllib.request, json, time, sys, re, datetime, hashlib, os, htm
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from publish_common import (
-    load_papers, get_today_bj, score_and_sort, extract_top_tags,
+    load_papers_for_publication_date, get_today_bj, score_and_sort, extract_top_tags,
     score_emoji, format_medal, validate_papers_for_publish, PublishDataValidationError,
     paper_batch_date, select_blog_published_snapshot
 )
@@ -142,23 +142,18 @@ def main():
         print("❌ 错误: 非 dry-run 必须设置 WECHAT_APP_ID、WECHAT_APP_SECRET 和 WECHAT_THUMB_MEDIA_ID")
         sys.exit(1)
 
-    papers = load_papers(data_file)
     today = get_today_bj(target_date)
-    if not publish_all:
-        papers = [
-            p for p in papers
-            if paper_batch_date(p) == today
-        ]
-        print(f"📅 过滤后: {len(papers)} 篇论文 (fetchBatchDate={today})")
-    else:
-        print("📦 --all: 跳过批次日期过滤，使用输入文件中的全部论文")
-
     try:
-        if data_file is None and not publish_all and not ignore_blog_snapshot:
+        papers = load_papers_for_publication_date(today, data_file)
+        if not ignore_blog_snapshot:
             papers = select_blog_published_snapshot(papers, today)
+        elif not publish_all:
+            papers = [p for p in papers if paper_batch_date(p) == today]
+            print(f"📅 独立发布过滤后: {len(papers)} 篇论文 (fetchBatchDate={today})")
+        else:
+            print("📦 独立发布 --all: 使用输入文件中的全部论文")
         if not papers:
-            print("⚠️ 没有论文需要发布")
-            return True
+            raise PublishDataValidationError('没有论文需要发布')
         papers = validate_papers_for_publish(papers)
     except PublishDataValidationError as exc:
         print(f"❌ 发布数据预检失败: {exc}")

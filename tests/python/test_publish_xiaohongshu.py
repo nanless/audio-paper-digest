@@ -330,7 +330,7 @@ class PublishXiaohongshuConcurrencyTest(unittest.TestCase):
 
     def test_main_rejects_invalid_date_before_loading_data(self):
         with mock.patch.object(sys, 'argv', ['publish-xiaohongshu.py', '--date', '/../../escape']), \
-                mock.patch.object(publish_xiaohongshu, 'load_papers') as load:
+                mock.patch.object(publish_xiaohongshu, 'load_papers_for_publication_date') as load:
             with self.assertRaises(ValueError):
                 publish_xiaohongshu.main()
         load.assert_not_called()
@@ -372,8 +372,11 @@ class PublishXiaohongshuConcurrencyTest(unittest.TestCase):
     def test_main_validates_before_scoring_and_uses_atomic_write(self):
         paper = {'arxivId': '2607.00001', 'fetchedAt': '2026-07-13T08:00:00+08:00'}
         validated = dict(paper, parsed={'score': 8.0})
-        with mock.patch.object(sys, 'argv', ['publish-xiaohongshu.py', '--date', '2026-07-13']), \
-                mock.patch.object(publish_xiaohongshu, 'load_papers', return_value=[paper]), \
+        custom_path = '/tmp/custom-analysis.json'
+        with mock.patch.object(sys, 'argv', [
+                    'publish-xiaohongshu.py', custom_path, '--date', '2026-07-13',
+                ]), \
+                mock.patch.object(publish_xiaohongshu, 'load_papers_for_publication_date', return_value=[paper]) as load, \
                 mock.patch.object(publish_xiaohongshu, 'select_blog_published_snapshot', return_value=[paper]) as select, \
                 mock.patch.object(publish_xiaohongshu, 'validate_papers_for_publish', return_value=[validated]) as validate, \
                 mock.patch.object(publish_xiaohongshu, 'score_and_sort', return_value=([], [])) as score, \
@@ -385,6 +388,7 @@ class PublishXiaohongshuConcurrencyTest(unittest.TestCase):
             publish_xiaohongshu.main()
 
         select.assert_called_once_with([paper], '2026-07-13')
+        load.assert_called_once_with('2026-07-13', custom_path)
         validate.assert_called_once_with([paper])
         score.assert_called_once_with([validated])
         atomic.assert_called_once_with(Path('/tmp/xhs.md'), '文案')
@@ -394,7 +398,11 @@ class PublishXiaohongshuConcurrencyTest(unittest.TestCase):
             {'arxivId': '2607.00001v1', 'fetchedAt': '2026-07-13T08:00:00+08:00'},
             {'arxivId': '2607.00002v1', 'fetchedAt': '2026-07-13T08:01:00+08:00'},
         ]
-        published = dict(papers[0], title='已发布论文')
+        published = dict(
+            papers[0], title='已发布论文',
+            fetchBatchDate='2026-07-12',
+            fetchedAt='2026-07-12T08:00:00+08:00',
+        )
         with tempfile.TemporaryDirectory() as tmp:
             manifest = Path(tmp) / 'blog-generation-manifest-2026-07-13.json'
             manifest.write_text(json.dumps({
@@ -456,7 +464,7 @@ class PublishXiaohongshuConcurrencyTest(unittest.TestCase):
             manifest.write_text(json.dumps({**base, 'publishedPapers': [unknown]}), encoding='utf-8')
             write_receipt()
             with self.assertRaisesRegex(
-                publish_xiaohongshu.PublishDataValidationError, '不在当前日期分析数据中'
+                publish_xiaohongshu.PublishDataValidationError, '不在受控分析数据中'
             ):
                 publish_xiaohongshu.select_blog_published_snapshot(
                     papers, '2026-07-13', manifest, receipt,
