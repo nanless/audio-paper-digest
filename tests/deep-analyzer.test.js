@@ -728,6 +728,60 @@ has_dataset: 否
         assert.doesNotMatch(normalized, /total_score:/);
     });
 
+    it('确定性规范化为双标签补足白名单补充标签', () => {
+        const {
+            normalizeAnalysisStructure,
+            getRepairableAnalysisStructureIssues,
+            parseAnalysis
+        } = require('../scripts/deep-analyzer.js');
+        const { validateTagSectionContract } = require('../scripts/analysis-contract.js');
+        const malformed = validAnalysisText()
+            .replace('primary_task_tag: #语音识别', 'primary_task_tag: #音频伪造检测')
+            .replace('primary_method_tag: #Transformer', 'primary_method_tag: #CNN')
+            .replace(
+                /## 标签\n[\s\S]*?(?=\n## 作者与机构)/,
+                '## 标签\n#音频伪造检测 #CNN\n主任务标签: #音频伪造检测\n主方法标签: #CNN\n补充标签:\n'
+            );
+
+        const normalized = normalizeAnalysisStructure(malformed);
+        const parsed = parseAnalysis(normalized);
+        assert.match(normalized, /#音频伪造检测 #CNN #模型评估/);
+        assert.strictEqual(validateTagSectionContract(normalized, parsed), null);
+        assert.deepStrictEqual(getRepairableAnalysisStructureIssues(normalized), []);
+    });
+
+    it('确定性规范化为空文档类型和空标签推断安全兜底', () => {
+        const {
+            normalizeAnalysisStructure,
+            getRepairableAnalysisStructureIssues,
+            parseAnalysis
+        } = require('../scripts/deep-analyzer.js');
+        const {
+            validateMachineSummaryContract,
+            validateTagSectionContract
+        } = require('../scripts/analysis-contract.js');
+        const malformed = validAnalysisText()
+            .replaceAll('Transformer', '音频语言模型')
+            .replace('document_type: 方法研究', 'document_type: ')
+            .replace('primary_task_tag: #语音识别', 'primary_task_tag: ')
+            .replace('primary_method_tag: #Transformer', 'primary_method_tag: ')
+            .replace(
+                /## 标签\n[\s\S]*?(?=\n## 作者与机构)/,
+                '## 标签\n主任务标签:\n主方法标签:\n补充标签:\n'
+            )
+            .replace('## 核心摘要\n', '## 核心摘要\n本文审计音频语言模型是否使用副语言情感证据。\n');
+
+        const normalized = normalizeAnalysisStructure(malformed);
+        const parsed = parseAnalysis(normalized);
+        assert.match(normalized, /document_type: (?:方法研究|数据集与基准|理论研究|综述|模型报告|系统技术报告)/);
+        assert.notStrictEqual(parsed.documentType, '');
+        assert.match(normalized, /primary_task_tag: #语音情感识别/);
+        assert.match(normalized, /primary_method_tag: #大语言模型/);
+        assert.strictEqual(validateMachineSummaryContract(normalized, parsed, { checkScoringConsistency: false }), null);
+        assert.strictEqual(validateTagSectionContract(normalized, parsed), null);
+        assert.deepStrictEqual(getRepairableAnalysisStructureIssues(normalized), []);
+    });
+
     it('确定性规范化用评分理由覆盖非法的机器摘要开源分', () => {
         const {
             normalizeAnalysisStructure,

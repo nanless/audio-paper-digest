@@ -3543,6 +3543,64 @@ function normalizeMachineEnum(value, allowed, fallback) {
     return fallback;
 }
 
+function inferDocumentTypeFromAnalysis(analysis) {
+    const text = String(analysis || '');
+    if (/(?:综述|survey|systematic review|literature review)/i.test(text)) return '综述';
+    if (/(?:技术报告|technical report|系统报告)/i.test(text)) return '系统技术报告';
+    if (/(?:模型报告|model report|model card)/i.test(text)) return '模型报告';
+    if (/(?:提出|发布|构建|介绍|创建|开源).{0,24}(?:数据集|基准)|\b(?:new|novel|release[sd]?|introduc(?:e[sd]?|ing)|construct(?:ed|ion)?)[ -]+(?:dataset|benchmark)\b|\b(?:dataset|benchmark)[ -]+(?:release|construction|introduction)\b/i.test(text)) {
+        return '数据集与基准';
+    }
+    if (/(?:理论研究|定理|证明|theorem|proof)/i.test(text)) return '理论研究';
+    return '方法研究';
+}
+
+function inferTaskTagFromAnalysis(analysis) {
+    const text = String(analysis || '');
+    const candidates = [
+        [/(?:副语言|情感识别|情绪识别|paralinguistic|emotion recognition)/i, '#语音情感识别'],
+        [/(?:音视频|流式视频|video stream|audio-visual|audiovisual)/i, '#音视频理解'],
+        [/(?:音乐生成|text-to-midi|MIDI generation)/i, '#音乐生成'],
+        [/(?:音乐|music)/i, '#音乐理解'],
+        [/(?:语音识别|speech recognition|ASR)/i, '#语音识别'],
+        [/(?:语音增强|speech enhancement)/i, '#语音增强'],
+        [/(?:语音合成|text-to-speech|TTS)/i, '#语音合成'],
+        [/(?:音频伪造|AI[- ]generated audio|deepfake audio)/i, '#音频伪造检测'],
+        [/(?:音频语言模型|audio language model|\bALM\b)/i, '#音频理解'],
+        [/(?:语音|speech)/i, '#语音属性识别'],
+        [/(?:音频|audio)/i, '#音频理解']
+    ];
+    return candidates.find(([pattern]) => pattern.test(text))?.[1] || '#音频理解';
+}
+
+function inferMethodTagFromAnalysis(analysis, taskTag, documentType) {
+    const text = String(analysis || '');
+    const candidates = [
+        [/(?:扩散模型|diffusion)/i, '#扩散模型'],
+        [/(?:流匹配|flow matching)/i, '#流匹配'],
+        [/(?:Transformer)/i, '#Transformer'],
+        [/(?:\bCNN\b|卷积神经网络)/i, '#CNN'],
+        [/(?:\bRNN\b|循环神经网络)/i, '#RNN'],
+        [/(?:图神经网络|graph neural network|\bGNN\b)/i, '#图神经网络'],
+        [/(?:变分自编码器|variational autoencoder|\bVAE\b)/i, '#变分自编码器'],
+        [/(?:大语言模型|音频语言模型|language model|\bLLM\b|\bALM\b)/i, '#大语言模型'],
+        [/(?:多模态模型|multimodal model|vision-language)/i, '#多模态模型'],
+        [/(?:端到端|end-to-end)/i, '#端到端']
+    ];
+    const inferred = candidates.find(([pattern, tag]) => tag !== taskTag && pattern.test(text))?.[1];
+    if (inferred) return inferred;
+    if (documentType === '数据集与基准' && taskTag !== '#基准测试') return '#基准测试';
+    if (documentType === '理论研究' && taskTag !== '#理论分析') return '#理论分析';
+    return taskTag === '#模型评估' ? '#端到端' : '#模型评估';
+}
+
+function getSupplementalTagFallbacks(documentType) {
+    if (documentType === '数据集与基准') return ['#基准测试', '#数据集', '#模型评估'];
+    if (documentType === '理论研究') return ['#理论分析', '#模型评估', '#鲁棒性'];
+    if (documentType === '综述') return ['#模型比较', '#模型评估', '#数据集'];
+    return ['#模型评估', '#基准测试', '#鲁棒性'];
+}
+
 function normalizeAnalysisStructure(analysis) {
     let updated = normalizeUnexpectedTopLevelHeadings(analysis);
     const originalMachine = extractSectionByTitle(updated, '机器摘要');
@@ -3594,7 +3652,9 @@ function normalizeAnalysisStructure(analysis) {
     const documentCandidate = documentAliases[values.document_type] || values.document_type;
     values.document_type = documentTypes.includes(documentCandidate)
         ? documentCandidate
-        : (documentTypes.includes(parsedBefore.documentType) ? parsedBefore.documentType : '');
+        : (documentTypes.includes(parsedBefore.documentType)
+            ? parsedBefore.documentType
+            : inferDocumentTypeFromAnalysis(updated));
     values.rank_bucket = normalizeMachineEnum(
         parsedBefore.rankBucket || values.rank_bucket,
         ['前10%', '前25%', '前50%', '后50%'],
@@ -3634,16 +3694,20 @@ function normalizeAnalysisStructure(analysis) {
     );
     const parsedTags = parseAnalysis(provisional) || {};
     const tags = [...new Set(parsedTags.tags || [])].slice(0, 5);
-    const taskTag = parsedTags.primaryTaskTag && tags.includes(parsedTags.primaryTaskTag)
+    let taskTag = parsedTags.primaryTaskTag && tags.includes(parsedTags.primaryTaskTag)
         ? parsedTags.primaryTaskTag
         : (tags.find(tag => /^#(?:语音|音频|音乐|说话人|声源|歌唱|音视频)/.test(tag)) || '');
-    const methodTag = parsedTags.primaryMethodTag && tags.includes(parsedTags.primaryMethodTag) && parsedTags.primaryMethodTag !== taskTag
+    if (!taskTag) taskTag = inferTaskTagFromAnalysis(updated);
+    let methodTag = parsedTags.primaryMethodTag && tags.includes(parsedTags.primaryMethodTag) && parsedTags.primaryMethodTag !== taskTag
         ? parsedTags.primaryMethodTag
         : (tags.find(tag => tag !== taskTag) || '');
-    for (const requiredTag of [taskTag, methodTag]) {
-        if (requiredTag && !tags.includes(requiredTag)) tags.unshift(requiredTag);
+    if (!methodTag) methodTag = inferMethodTagFromAnalysis(updated, taskTag, values.document_type);
+    const finalTags = [...new Set([taskTag, methodTag, ...tags].filter(Boolean))];
+    for (const fallbackTag of getSupplementalTagFallbacks(values.document_type)) {
+        if (finalTags.length >= 3) break;
+        if (!finalTags.includes(fallbackTag)) finalTags.push(fallbackTag);
     }
-    const finalTags = [...new Set(tags)].slice(0, 5);
+    finalTags.splice(5);
     const supplemental = finalTags.filter(tag => tag !== taskTag && tag !== methodTag);
     updated = replaceOrInsertRequiredSection(updated, '标签', [
         finalTags.join(' '),
