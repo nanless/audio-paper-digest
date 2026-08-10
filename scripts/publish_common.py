@@ -621,6 +621,10 @@ def build_publish_headers(api_type, api_key, claude_version=None):
         }
     return {
         'Authorization': f'Bearer {api_key}',
+        # urllib's default Python-urllib/* identifier is rejected by some
+        # OpenAI-compatible gateways (including OpenCode Go). Use an honest,
+        # stable project identifier instead of impersonating a vendor SDK.
+        'User-Agent': 'audio-paper-digest/1.0',
         'Content-Type': 'application/json'
     }
 

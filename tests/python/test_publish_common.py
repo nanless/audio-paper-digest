@@ -180,6 +180,11 @@ confidence: 中
         headers = build_publish_headers('anthropic', 'key', claude_version='9.8.7')
         self.assertEqual(headers['User-Agent'], 'claude-cli/9.8.7 (external, cli)')
 
+    def test_publish_openai_headers_override_urllib_user_agent(self):
+        headers = build_publish_headers('openai', 'key')
+        self.assertEqual(headers['User-Agent'], 'audio-paper-digest/1.0')
+        self.assertEqual(headers['Authorization'], 'Bearer key')
+
     def test_publish_multimodal_payload_preserves_protocol_routing(self):
         image = {'media_type': 'image/png', 'data': 'cG5n'}
         anthropic = build_publish_payload(
