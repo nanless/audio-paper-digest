@@ -16,7 +16,7 @@ const {
     initializeJsonFileLocked,
     mergePapersById,
     isSuccessfulAnalysisRecord,
-    getAnalysisRunStatus,
+    getCanonicalAnalysisRunSummary,
     getAnalysisExitCode
 } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses } = require('./digest-status.js');
@@ -109,7 +109,12 @@ async function reanalyzeAll() {
             papers: Array.isArray(current) ? current : (current?.papers || []),
             timestamp: getBeijingISOString(),
             batchDate,
-            stats: { ...(!Array.isArray(current) ? current?.stats : {}), reanalyzeStatus: 'running' }
+            status: 'running',
+            stats: {
+                ...(!Array.isArray(current) ? current?.stats : {}),
+                analysisStatus: 'running',
+                reanalyzeStatus: 'running'
+            }
         };
         delete payload.deepAnalysisCompletedAt;
         return payload;
@@ -165,18 +170,18 @@ async function reanalyzeAll() {
         }
     });
 
-    const expectedIds = new Set(papers.map(normalizedId).filter(Boolean));
     const finalPayload = updateJsonFileLocked(DATA_FILE, current => {
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
-        const canonicalById = new Map(currentPapers.map(paper => [normalizedId(paper), paper]));
-        const remainingFailed = [...expectedIds].filter(id => !isSuccessfulAnalysisRecord(canonicalById.get(id))).length;
-        const status = getAnalysisRunStatus({ success: expectedIds.size - remainingFailed }, remainingFailed);
+        const { remaining: remainingFailed, status } = getCanonicalAnalysisRunSummary(currentPapers);
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             timestamp: getBeijingISOString(),
+            status,
             papers: currentPapers,
             stats: {
                 ...(!Array.isArray(current) ? current?.stats : {}),
+                analysisStatus: status,
+                remainingFailed,
                 reanalyzed: stats.success,
                 reanalyzeFailed: remainingFailed,
                 reanalyzeSourceCounts: stats.sourceCounts,

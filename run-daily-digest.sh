@@ -125,8 +125,11 @@ run_stage() {
 run_stage 1 "抓取、筛选、深度分析" node scripts/full-fetch.js
 run_stage 2 "生成博客" python3 scripts/generate-blog.py --date "$target_date"
 run_stage 3 "Review 博客" python3 scripts/review-blog.py --date "$target_date"
-run_stage 4 "发布博客" python3 scripts/push-blog.py --date "$target_date"
-run_stage 5 "规划发布后视觉任务" python3 scripts/plan-post-publish-visuals.py --date "$target_date"
+if [ "$start_index" -le 4 ]; then
+  run_stage 4 "发布博客并规划视觉任务" python3 scripts/push-blog.py --date "$target_date" --require-visual-plan
+else
+  run_stage 5 "规划发布后视觉任务" python3 scripts/plan-post-publish-visuals.py --date "$target_date"
+fi
 run_stage 5 "准备论文关键图输入" node scripts/visual-summary-state.js prepare --date "$target_date"
 
 echo "==> 脚本阶段完成。Codex 现在必须继续生成、目检并登记 TOP 10 论文长图和汇总封面。"

@@ -238,19 +238,19 @@ describe('deep-analyzer section helpers', () => {
 
     it('图片 HTTP 404 是永久失败且不会重试', async () => {
         const { downloadImageBase64 } = require('../scripts/deep-analyzer.js');
-        const originalFetch = global.fetch;
         let calls = 0;
-        global.fetch = async () => {
+        const requestImpl = async () => {
             calls++;
             return { ok: false, status: 404, headers: new Headers(), body: null };
         };
-        try {
-            const result = await downloadImageBase64(`https://8.8.8.8/not-found-${Date.now()}.png`, 5);
-            assert.strictEqual(result, null);
-            assert.strictEqual(calls, 1);
-        } finally {
-            global.fetch = originalFetch;
-        }
+        const result = await downloadImageBase64(
+            `https://8.8.8.8/not-found-${Date.now()}.png`,
+            5,
+            undefined,
+            requestImpl
+        );
+        assert.strictEqual(result, null);
+        assert.strictEqual(calls, 1);
     });
 
     it('候选图按信息得分决定下载优先级并保留原始顺序', () => {
@@ -268,20 +268,15 @@ describe('deep-analyzer section helpers', () => {
 
     it('图片下载会拒绝重定向到本机或私网地址', async () => {
         const { fetchPublicImageResponse } = require('../scripts/deep-analyzer.js');
-        const originalFetch = global.fetch;
-        global.fetch = async () => ({
+        const requestImpl = async () => ({
             status: 302,
             headers: new Headers({ location: 'http://127.0.0.1/private.png' }),
             body: { cancel: async () => {} }
         });
-        try {
-            await assert.rejects(
-                () => fetchPublicImageResponse('https://8.8.8.8/image.png'),
-                /非公网|localhost/
-            );
-        } finally {
-            global.fetch = originalFetch;
-        }
+        await assert.rejects(
+            () => fetchPublicImageResponse('https://8.8.8.8/image.png', 5, requestImpl),
+            /非公网|localhost/
+        );
     });
 
     it('gap-fill 前缀清理不会误命中评分理由标题', () => {
@@ -402,6 +397,64 @@ primary_task_tag: #音视频生成
             () => parseScoringAuditResult(JSON.stringify(payload)),
             /其他维度.*违规分句.*训练超参数没有披露/
         );
+    });
+
+    it('最终评分审计在运行时要求每个理由引用账本内证据 ID', () => {
+        const { parseScoringAuditResult } = require('../scripts/deep-analyzer.js');
+        const reason = '[A_METHOD] 该维度依据方法章节中的具体流程和组件证据独立完成判断。';
+        const payload = {
+            documentType: '系统技术报告',
+            confidence: '中',
+            dimensions: {
+                innovation: { score: 1.0, reason },
+                technicalRigor: { score: 1.0, reason },
+                experimentalSufficiency: { score: 1.0, reason: '[A_RESULTS] 实验章节提供了可核对的指标和对照结果。' },
+                clarity: { score: 0.8, reason },
+                impact: { score: 1.0, reason },
+                openSource: { score: 0.5, reason: '[A_OPEN] 开源章节明确记录了当前公开产物状态。' },
+                reproducibility: { score: 0.3, reason },
+                engineering: { score: 1.0, reason }
+            }
+        };
+        const allowed = new Set(['A_METHOD', 'A_RESULTS', 'A_OPEN']);
+        assert.doesNotThrow(() => parseScoringAuditResult(JSON.stringify(payload), allowed));
+        payload.dimensions.impact.reason = '该理由虽然足够长，但没有引用任何证据账本中的标识。';
+        assert.throws(
+            () => parseScoringAuditResult(JSON.stringify(payload), allowed),
+            /缺少证据账本 ID/
+        );
+        payload.dimensions.impact.reason = '[A_UNKNOWN] 该理由引用了不存在的账本标识，必须被代码拒绝。';
+        assert.throws(
+            () => parseScoringAuditResult(JSON.stringify(payload), allowed),
+            /账本外 ID: A_UNKNOWN/
+        );
+    });
+
+    it('归一化后的评分审计二次校验会剥离内部派生字段', () => {
+        const {
+            parseScoringAuditResult,
+            revalidateScoringAudit
+        } = require('../scripts/deep-analyzer.js');
+        const reason = '[A_METHOD] 该维度依据分析正文中的具体方法、结果和限制证据独立完成判断。';
+        const payload = {
+            documentType: '方法研究',
+            confidence: '高',
+            dimensions: Object.fromEntries([
+                ['innovation', 1.0],
+                ['technicalRigor', 1.0],
+                ['experimentalSufficiency', 1.0],
+                ['clarity', 0.8],
+                ['impact', 1.0],
+                ['openSource', 0.5],
+                ['reproducibility', 0.3],
+                ['engineering', 1.0]
+            ].map(([key, score]) => [key, { score, reason }]))
+        };
+        const allowed = new Set(['A_METHOD']);
+        const parsed = parseScoringAuditResult(JSON.stringify(payload), allowed);
+        assert.ok(Object.hasOwn(parsed, 'total'));
+        assert.ok(Object.hasOwn(parsed, 'rankBucket'));
+        assert.doesNotThrow(() => revalidateScoringAudit(parsed, allowed));
     });
 
     it('最终评分审计输入移除旧评分理由但保留正文证据', () => {
@@ -711,14 +764,17 @@ has_dataset: 否
         const normalized = normalizeAnalysisStructure(malformed);
         const parsed = parseAnalysis(normalized);
         assert.match(normalized, /document_type: 系统技术报告/);
-        assert.match(normalized, /confidence: 低/);
+        assert.match(normalized, /confidence:\s*$/m);
         assert.match(normalized, /sota_claim: 未说明/);
         assert.match(normalized, /has_code: 未说明/);
         assert.match(normalized, /has_model: 未说明/);
         assert.match(normalized, /has_dataset: 是/);
         assert.match(normalized, /open_source: 0\.0/);
-        assert.strictEqual(validateMachineSummaryContract(normalized, parsed, { checkScoringConsistency: false }), null);
-        assert.deepStrictEqual(getRepairableAnalysisStructureIssues(normalized), []);
+        assert.match(
+            validateMachineSummaryContract(normalized, parsed, { checkScoringConsistency: false }),
+            /confidence/
+        );
+        assert.ok(getRepairableAnalysisStructureIssues(normalized).length > 0);
     });
 
     it('最终评分审计会按已有资源状态确定性归一化开源分和总分', () => {
@@ -776,7 +832,8 @@ has_dataset: 否
     it('demo 页面安全检查会拒绝本机和私网地址', async () => {
         const {
             isPrivateIpAddress,
-            validatePublicHttpUrl
+            validatePublicHttpUrl,
+            requestPinnedPublicHttps
         } = require('../scripts/deep-analyzer.js');
 
         assert.strictEqual(isPrivateIpAddress('127.0.0.1'), true);
@@ -785,12 +842,16 @@ has_dataset: 否
         assert.strictEqual(isPrivateIpAddress('172.16.1.1'), true);
         assert.strictEqual(isPrivateIpAddress('192.168.1.1'), true);
         assert.strictEqual(isPrivateIpAddress('::ffff:7f00:1'), true);
+        assert.strictEqual(isPrivateIpAddress('fe90::1'), true);
+        assert.strictEqual(isPrivateIpAddress('ff02::1'), true);
+        assert.strictEqual(isPrivateIpAddress('2001:db8::1'), true);
         assert.strictEqual(isPrivateIpAddress('8.8.8.8'), false);
         const publicIpUrl = await validatePublicHttpUrl('https://8.8.8.8/demo');
         assert.strictEqual(publicIpUrl.validatedAddress, '8.8.8.8');
         await assert.rejects(() => validatePublicHttpUrl('http://127.0.0.1/demo'), /非公网|localhost/);
         await assert.rejects(() => validatePublicHttpUrl('file:///tmp/demo.html'), /协议/);
         await assert.rejects(() => validatePublicHttpUrl('https://user:pass@example.com'), /用户名/);
+        await assert.rejects(() => requestPinnedPublicHttps('http://8.8.8.8/demo'), /只允许 HTTPS/);
     });
 
     it('副模型的 replacement 被代码忽略，主模型原文和评分不被重写', () => {

@@ -6,6 +6,7 @@ import io
 import json
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -22,18 +23,22 @@ from publish_common import (  # noqa: E402
     dedupe_image_alts,
     detect_publish_api_type,
     EXPERIMENT_TABLE_CONTRACT_VERSION,
+    METHOD_DETAIL_CONTRACT_VERSION,
     extract_markdown_tables,
     fix_empty_markdown_links,
     fix_yaml_unbalanced_quotes,
+    get_today_bj,
     load_papers,
     paper_batch_date,
     call_publish_llm_api,
     count_blocking_review_issues,
     resolve_publish_parsed,
     sanitize_markdown_for_publish,
+    select_blog_published_snapshot,
     strip_raw_inline_html,
     validate_papers_for_publish,
     validate_experiment_table_contract,
+    validate_method_detail_contract,
     validate_review_payload,
 )
 from utils import parse_analysis  # noqa: E402
@@ -74,6 +79,22 @@ def complete_paper():
 
 
 class PublishCommonSanitizerTest(unittest.TestCase):
+    def test_shared_publish_date_validation_rejects_impossible_dates(self):
+        self.assertEqual(get_today_bj('2026-07-13'), '2026-07-13')
+        for value in ('2026-02-30', '2026-7-3', 'not-a-date'):
+            with self.subTest(value=value), self.assertRaises(PublishDataValidationError):
+                get_today_bj(value)
+
+    def test_default_channel_snapshot_missing_manifest_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / 'missing-generation.json'
+            with self.assertRaisesRegex(PublishDataValidationError, '缺少同日博客 generation manifest'):
+                select_blog_published_snapshot(
+                    [{'arxivId': '2607.00001'}],
+                    '2026-07-13',
+                    manifest_path=missing,
+                )
+
     def test_type_aware_analysis_and_publish_meta(self):
         analysis = '''## 评分
 6.0/10
@@ -566,6 +587,33 @@ confidence: 中
         legacy = copy.deepcopy(paper)
         del legacy['analysisManifest']['contracts']
         self.assertEqual(len(validate_papers_for_publish([legacy])), 1)
+
+        mismatch = '| 方法 | 指标 |\n| --- | --- |\n| A | 1 | 多余 |'
+        self.assertRegex(validate_experiment_table_contract(
+            paper['analysis'].replace(table, mismatch)
+        ), '数据行有 3 列')
+        one_cell = '| 方法 | 指标 |\n| --- | --- |\n| only |'
+        self.assertRegex(validate_experiment_table_contract(
+            paper['analysis'].replace(table, one_cell)
+        ), '数据行有 1 列')
+
+    def test_versioned_publish_preflight_enforces_detailed_method_contract(self):
+        paper = complete_paper()
+        self.assertRegex(validate_method_detail_contract(paper['analysis']), '中文字符不足')
+        statuses = {
+            'imageDownload': 'complete', 'primaryAnalysis': 'complete',
+            'openSourceScan': 'complete', 'demoLinkScan': 'not_needed',
+            'revision': 'complete', 'tableRepair': 'not_needed',
+            'methodRepair': 'not_needed', 'structureRepair': 'not_needed',
+            'scoringAudit': 'complete', 'imageSupplement': 'no_candidates',
+        }
+        paper['analysisManifest'] = {
+            'version': 1,
+            'contracts': {'methodDetail': METHOD_DETAIL_CONTRACT_VERSION},
+            'stages': {name: {'status': status} for name, status in statuses.items()},
+        }
+        with self.assertRaisesRegex(PublishDataValidationError, '方法契约无效'):
+            validate_papers_for_publish([paper])
 
     def test_required_review_payload_fails_closed_on_malformed_contract(self):
         for payload in (

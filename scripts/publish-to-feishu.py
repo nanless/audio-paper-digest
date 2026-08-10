@@ -17,10 +17,14 @@ setup_script_logging(__file__)
     python3 publish-to-feishu.py --date YYYY-MM-DD
     python3 publish-to-feishu.py --dry-run [data_file]
 """
-import json, os, sys, re, html
+import argparse, json, os, sys, re, html
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from publish_common import load_papers, get_today_bj, score_and_sort, extract_top_tags, paper_batch_date
+from publish_common import (
+    PublishDataValidationError, extract_top_tags, get_today_bj, load_papers,
+    paper_batch_date, score_and_sort, select_blog_published_snapshot,
+    validate_papers_for_publish,
+)
 from utils import parse_analysis
 
 # ─── Feishu Config ────────────────────────────────────────────
@@ -278,24 +282,19 @@ def generate_overview_md(scored, unscored, date_str):
 
 
 def main():
-    data_file = None
-    target_date = None
-    dry_run = False
-    publish_all = False
-
-    i = 1
-    while i < len(sys.argv):
-        arg = sys.argv[i]
-        if arg == '--dry-run':
-            dry_run = True
-        elif arg == '--all':
-            publish_all = True
-        elif arg == '--date' and i + 1 < len(sys.argv):
-            target_date = sys.argv[i + 1]
-            i += 1
-        elif not arg.startswith('--'):
-            data_file = arg
-        i += 1
+    parser = argparse.ArgumentParser(prog='publish-to-feishu.py', allow_abbrev=False)
+    parser.add_argument('data_file', nargs='?')
+    parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--all', action='store_true')
+    parser.add_argument('--date')
+    parser.add_argument('--ignore-blog-snapshot', action='store_true',
+                        help='显式允许在同日博客尚未远端验证时独立发布')
+    args = parser.parse_args()
+    data_file = args.data_file
+    target_date = args.date
+    dry_run = args.dry_run
+    publish_all = args.all
+    ignore_blog_snapshot = args.ignore_blog_snapshot
 
     papers = load_papers(data_file)
     today = get_today_bj(target_date)
@@ -308,11 +307,19 @@ def main():
     else:
         print("📦 --all: 跳过批次日期过滤，使用输入文件中的全部论文")
 
-    scored, unscored = score_and_sort(papers)
-
     if not papers:
         print("⚠️ 没有论文需要发布")
         return
+
+    try:
+        if data_file is None and not publish_all and not ignore_blog_snapshot:
+            papers = select_blog_published_snapshot(papers, today)
+        papers = validate_papers_for_publish(papers)
+    except PublishDataValidationError as exc:
+        print(f"❌ 发布数据预检失败: {exc}")
+        return False
+
+    scored, unscored = score_and_sort(papers)
 
     if dry_run:
         total = len(scored) + len(unscored)
@@ -384,4 +391,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(0 if main() is not False else 1)

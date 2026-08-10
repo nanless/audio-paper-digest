@@ -31,6 +31,8 @@ Paper deduplication database. **This file is not archived; it accumulates contin
 }
 ```
 
+When both are present, top-level `status` and `stats.analysisStatus` must match. Allowed values are `running`, `complete`, `partial_failed`, and `failed` (historical refiltering may also use `filter_failed`). `deepAnalysisCompletedAt` is valid only for `complete` and must be a Beijing ISO timestamp. Resume status is recomputed from all canonical successful papers, not only successes added in the current attempt.
+
 `pending_analysis` and `analysis_failed` are not used for strong deduplication in the next `full-fetch`, so interrupted or failed analyses can naturally re-enter the pipeline. Successful analysis updates the status to `analyzed`. `full-fetch.js`, `deep-analysis-only.js`, `reanalyze.js`, `batch-analyze.js`, `reanalyze-selected.js`, `analyze-single-paper.js`, and `refilter-reanalyze-by-date.js` all sync this status through `scripts/digest-status.js` to avoid divergent write paths. If the latest attempt fails but an older successful analysis is still available, `status` remains `analyzed`, while `latestAttemptStatus: "analysis_failed"` and `error` record the failed attempt; failure writes do not overwrite existing successful `analysis` / `parsed` / image metadata with empty values.
 
 ### 5.2 `data/current/fetch-checkpoint.json`
@@ -191,7 +193,11 @@ Core analysis results. Structure:
   "generation": 12,
   "timestamp": "2026-04-21T10:00:00+08:00",
   "previousTimestamp": "2026-04-20T10:00:00+08:00",
+  "status": "complete",
+  "deepAnalysisCompletedAt": "2026-04-21T12:30:00+08:00",
   "stats": {
+    "analysisStatus": "complete",
+    "remainingFailed": 0,
     "arxivFetched": 200,
     "hfFetched": 50,
     "totalMerged": 230,
@@ -436,7 +442,7 @@ After all blogs publish, every batch produces one digest image. Its context is d
 - `dataSha256` binds title, paper count, hot directions, and ranking; `promptSha256` binds `prompts/digest-cover.md`. Either change invalidates only the cover.
 - Conference category is read automatically from the generation manifest. It changes the title and therefore `dataSha256`, preventing a digest-image/blog-title mismatch without a separate status argument.
 - The manifest keeps `arxivId` for stable sorting and fingerprinting, but the prompt forbids rendering paper IDs. Ranking entries display the complete English title, score, and primary direction.
-- Paper infographics and the digest cover are archived flat under `data/archive/<date>/visual-summaries/`; legacy current assets migrate only after PNG/SHA verification and conflict checks. Historical cards outside the final TOP 10 use `unranked-<paper-id>-<kind>.png` and are recorded in the visual manifest's `legacyUnrankedAssets` path/SHA ledger, so no leaderboard rank or untracked file is fabricated. Both asset types share minimum-dimension, portrait-ratio, size, and SHA gates; actual generated pixel dimensions are not fixed. Missing, failed, damaged, stale, or duplicate/unregistered PNGs fail the visual status gate without rolling back blog publication.
+- Paper infographics and the digest cover are archived flat under `data/archive/<date>/visual-summaries/`; legacy current assets migrate only after PNG/SHA verification and conflict checks. Newly recorded assets include a `qaAttestation` with checklist version and Beijing timestamp. The CLI accepts `record` only with `--qa-attested true`, proving that title, body, diagram relations, numeric claims, and ranking semantics were visually checked.
 
 ### 5.8.1 `data/current/digest-run-reports/YYYY-MM-DD.json`
 

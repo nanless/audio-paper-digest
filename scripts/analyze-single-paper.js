@@ -19,6 +19,7 @@ const {
     mergeCanonicalAnalysisState,
     persistAnalysisCheckpoint,
     isSuccessfulAnalysisRecord,
+    getCanonicalAnalysisRunSummary,
     withPaperAnalysisLock
 } = require('./analysis-engine.js');
 const { loadPapersDatabase, updateAnalysisDigestStatuses } = require('./digest-status.js');
@@ -76,7 +77,12 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
             ...(!Array.isArray(current) && current ? current : {}),
             papers: Array.isArray(current) ? current : (current?.papers || []),
             lastUpdated: getBeijingISOString(),
-            stats: { ...(!Array.isArray(current) ? current?.stats : {}), singleAnalysisStatus: 'running' }
+            status: 'running',
+            stats: {
+                ...(!Array.isArray(current) ? current?.stats : {}),
+                analysisStatus: 'running',
+                singleAnalysisStatus: 'running'
+            }
         };
         delete payload.deepAnalysisCompletedAt;
         return payload;
@@ -89,6 +95,28 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
         const canonical = latestPapers.find(p => normalizedId(p) === targetNormalizedId);
         if (canonical && isSuccessfulAnalysisRecord(canonical) && !forceReanalyze) {
             console.log('⚠️ 该论文已由其他进程完成，跳过');
+            updateJsonFileLocked(resultPath, current => {
+                const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
+                const canonicalSummary = getCanonicalAnalysisRunSummary(currentPapers);
+                const payload = {
+                    ...(!Array.isArray(current) && current ? current : {}),
+                    papers: currentPapers,
+                    status: canonicalSummary.status,
+                    lastUpdated: getBeijingISOString(),
+                    stats: {
+                        ...(!Array.isArray(current) ? current?.stats : {}),
+                        analysisStatus: canonicalSummary.status,
+                        remainingFailed: canonicalSummary.remaining,
+                        singleAnalysisStatus: 'skipped'
+                    }
+                };
+                if (canonicalSummary.status === 'complete') {
+                    payload.deepAnalysisCompletedAt = getBeijingISOString();
+                } else {
+                    delete payload.deepAnalysisCompletedAt;
+                }
+                return payload;
+            });
             return { status: 'skipped', exitCode: 0 };
         }
         // deep-analysis-result.json 是恢复状态的权威来源；papers.json 只补充元数据。
@@ -110,13 +138,20 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
                 [attempted],
                 { preserveSuccessfulAnalysis: true }
             );
+            const canonicalSummary = getCanonicalAnalysisRunSummary(mergedPapers);
             const next = {
                 ...(!Array.isArray(current) && current ? current : {}),
                 papers: mergedPapers,
                 lastUpdated: getBeijingISOString(),
-                stats: { ...(!Array.isArray(current) ? current?.stats : {}), singleAnalysisStatus: r.success ? 'complete' : 'failed' }
+                status: canonicalSummary.status,
+                stats: {
+                    ...(!Array.isArray(current) ? current?.stats : {}),
+                    analysisStatus: canonicalSummary.status,
+                    remainingFailed: canonicalSummary.remaining,
+                    singleAnalysisStatus: r.success ? 'complete' : 'failed'
+                }
             };
-            if (r.success && mergedPapers.length > 0 && mergedPapers.every(isSuccessfulAnalysisRecord)) {
+            if (canonicalSummary.status === 'complete') {
                 next.deepAnalysisCompletedAt = getBeijingISOString();
             } else {
                 delete next.deepAnalysisCompletedAt;

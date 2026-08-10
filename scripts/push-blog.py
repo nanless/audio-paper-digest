@@ -11,7 +11,7 @@ from blog_entry_loader import load_publish_to_blog
 from runtime_guard import require_external_runtime
 
 
-def parse_date(module):
+def parse_options(module, argv=None):
     parser = argparse.ArgumentParser(
         prog='push-blog.py',
         description='只提交并推送已经取得严格 review 凭证的博客文件。',
@@ -19,10 +19,19 @@ def parse_date(module):
     )
     parser.add_argument('--date', action='append',
                         help='博客批次日期（YYYY-MM-DD；省略时为北京时间今天）')
-    args = parser.parse_args()
+    parser.add_argument('--require-visual-plan', action='store_true',
+                        help='视觉规划失败时以非零状态退出（默认日更编排使用）')
+    args = parser.parse_args(argv)
     if args.date and len(args.date) > 1:
         parser.error('--date 只能指定一次')
-    return module.validate_publish_date(module.get_today_bj(args.date[0] if args.date else None))
+    return (
+        module.validate_publish_date(module.get_today_bj(args.date[0] if args.date else None)),
+        args.require_visual_plan,
+    )
+
+
+def parse_date(module, argv=None):
+    return parse_options(module, argv)[0]
 
 
 def main():
@@ -32,7 +41,7 @@ def main():
     module = load_publish_to_blog()
     try:
         module.validate_publish_target()
-        date_str = parse_date(module)
+        date_str, require_visual_plan = parse_options(module)
         with module.blog_publication_lock(date_str):
             paths, receipt = module.load_verified_review_receipt(date_str)
             module.validate_git_publish_branch()
@@ -43,6 +52,10 @@ def main():
                 raise module.PublishDataValidationError('Git 提交或推送未完成')
             print('🎨 全部博客已发布并通过远端 OID 校验，开始建立发布后视觉任务')
             visual_planned = module.plan_post_publish_visual_assets(date_str)
+            if require_visual_plan and not visual_planned:
+                print('\n❌ 博客已发布并验证远端 OID，但发布后视觉任务规划失败')
+                print(f'   可重试: npm run visual:post-publish -- --date {date_str}')
+                sys.exit(2)
     except module.PublishDataValidationError as exc:
         print(f'\n❌ 博客推送失败: {exc}')
         sys.exit(1)

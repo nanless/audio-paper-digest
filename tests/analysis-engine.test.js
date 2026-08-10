@@ -22,14 +22,25 @@ const {
     mergeCanonicalAnalysisState,
     isSuccessfulAnalysisRecord,
     getAnalysisRunStatus,
+    getCanonicalAnalysisRunSummary,
     getAnalysisExitCode
 } = require('../scripts/analysis-engine.js');
 const {
     getMissingRequiredSections,
     validateExperimentTableContract,
-    EXPERIMENT_TABLE_CONTRACT_VERSION
+    validateMethodDetailContract,
+    EXPERIMENT_TABLE_CONTRACT_VERSION,
+    METHOD_DETAIL_CONTRACT_VERSION
 } = require('../scripts/analysis-contract.js');
 const { validAnalysisText, validAnalysisPaper } = require('./valid-analysis-fixture.js');
+
+function validAnalyzedResult(extra = {}) {
+    return {
+        analysis: validAnalysisText(),
+        analysisManifest: validAnalysisPaper('fixture').analysisManifest,
+        ...extra
+    };
+}
 
 function legacyValidAnalysisText() {
     return `## 评分
@@ -187,6 +198,25 @@ describe('mergeAndSaveResults', () => {
         assert.strictEqual(readJsonFileStrict(file).generation, 1);
         assert.strictEqual(fs.existsSync(lockDir), false);
     });
+
+    it('增量写入 running 状态时同步分析状态并清除旧完成时间', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-running-state-'));
+        const file = path.join(dir, 'result.json');
+        fs.writeFileSync(file, JSON.stringify({
+            status: 'complete',
+            deepAnalysisCompletedAt: '2026-08-01T10:00:00.000+08:00',
+            stats: { analysisStatus: 'complete', preserved: 1 },
+            papers: []
+        }));
+
+        await mergeAndSaveResults([], file, { status: 'running' });
+
+        const saved = readJsonFileStrict(file);
+        assert.strictEqual(saved.status, 'running');
+        assert.strictEqual(saved.stats.analysisStatus, 'running');
+        assert.strictEqual(saved.stats.preserved, 1);
+        assert.strictEqual(saved.deepAnalysisCompletedAt, undefined);
+    });
 });
 
 describe('analyzePaperWithRetry', () => {
@@ -195,7 +225,7 @@ describe('analyzePaperWithRetry', () => {
             { arxivId: '2604.00001', title: 'Valid' },
             {
                 maxRetries: 0,
-                analyzeFn: async () => ({ analysis: validAnalysisText() })
+                analyzeFn: async () => validAnalyzedResult()
             }
         );
 
@@ -218,8 +248,7 @@ describe('analyzePaperWithRetry', () => {
             { arxivId: '2604.00010', title: 'Valid with images' },
             {
                 maxRetries: 0,
-                analyzeFn: async () => ({
-                    analysis: validAnalysisText(),
+                analyzeFn: async () => validAnalyzedResult({
                     selectedImageUrls: imageManifest.selected,
                     allImageUrls: imageManifest.candidates.map(x => x.url),
                     imageManifest
@@ -234,14 +263,12 @@ describe('analyzePaperWithRetry', () => {
     it('显式保留深度分析的来源与恢复 manifest，不依赖输入对象被修改', async () => {
         const sourceSha256 = 'a'.repeat(64);
         const analysisManifest = {
-            version: 1,
-            stages: {},
+            ...validAnalysisPaper('fixture').analysisManifest,
             sourceAcquisition: { analysisSource: 'abstract', sourceSha256 }
         };
         const result = await analyzePaperWithRetry({ arxivId: '2607.12345' }, {
             maxRetries: 0,
-            analyzeFn: async () => ({
-                analysis: validAnalysisText(),
+            analyzeFn: async () => validAnalyzedResult({
                 analysisSource: 'abstract',
                 sourceTextChars: 800,
                 usedTextChars: 800,
@@ -307,6 +334,18 @@ describe('analyzePaperWithRetry', () => {
         assert.match(validateExperimentTableContract(withTables(table(), table(), table())), /3 张/);
         assert.match(validateExperimentTableContract(withTables(table(13))), /13 个数据行/);
         assert.match(validateExperimentTableContract(withTables(table(2, 9))), /9 个指标列/);
+        assert.match(
+            validateExperimentTableContract(withTables('| 方法 | 指标 |\n| --- | --- |\n| A | 1 | 多余 |')),
+            /数据行有 3 列，表头有 2 列/
+        );
+        assert.match(
+            validateExperimentTableContract(withTables('| 方法 | 指标 |\n| --- | --- |\n| only |')),
+            /数据行有 1 列，表头有 2 列/
+        );
+        assert.match(
+            validateExperimentTableContract(withTables('| 方法 | 数据集 | 指标 |\n| --- | --- |\n| A | test | 1 |')),
+            /分隔行有 2 列，表头有 3 列/
+        );
         assert.strictEqual(
             validateExperimentTableContract(withTables(`\`\`\`markdown\n${table(13)}\n\`\`\``)),
             null,
@@ -327,6 +366,22 @@ describe('analyzePaperWithRetry', () => {
             experimentTables: EXPERIMENT_TABLE_CONTRACT_VERSION
         };
         assert.strictEqual(isSuccessfulAnalysisRecord(versioned), false);
+    });
+
+    it('detailed-v1 方法硬契约要求 600 中文字符、结构词和三个段落', () => {
+        const short = validAnalysisText();
+        assert.match(validateMethodDetailContract(short), /中文字符不足/);
+        const paragraph = `输入首先经过模型模块与网络结构处理，随后沿流程进入多个阶段并产生输出。${'方法细节用于说明组件连接关系。'.repeat(12)}`;
+        const detailed = short.replace(
+            /## 方法概述和架构\n[\s\S]*?\n\n## 核心创新点/,
+            `## 方法概述和架构\n${paragraph}\n\n${paragraph}\n\n${paragraph}\n\n## 核心创新点`
+        );
+        assert.strictEqual(validateMethodDetailContract(detailed), null);
+        const versioned = validAnalysisPaper('2604.00888', { analysis: detailed });
+        versioned.analysisManifest.contracts = {
+            methodDetail: METHOD_DETAIL_CONTRACT_VERSION
+        };
+        assert.strictEqual(isSuccessfulAnalysisRecord(versioned), true);
     });
 
     it('结构契约会返回精确缺失章节供局部修复', () => {
@@ -401,6 +456,16 @@ describe('analyzePaperWithRetry', () => {
             analysis: validAnalysisText(),
             analysisManifest: manifest
         }), false);
+
+        const wrongStage = validAnalysisPaper('2604.00022v2');
+        wrongStage.analysisManifest.stages.primaryAnalysis.status = 'skipped';
+        assert.strictEqual(isSuccessfulAnalysisRecord(wrongStage), false);
+        const rejected = await analyzePaperWithRetry({ arxivId: '2604.00022v2' }, {
+            maxRetries: 0,
+            analyzeFn: async () => wrongStage
+        });
+        assert.strictEqual(rejected.success, false);
+        assert.match(rejected.error, /恢复阶段未全部进入/);
 
         const paper = { arxivId: '2604.00023', title: 'Recoverable' };
         const attempt = await analyzePaperWithRetry(paper, {
@@ -490,7 +555,7 @@ describe('analyzePaperWithRetry', () => {
             digestStatus: { latestAttemptStatus: 'analysis_failed', error: 'old timeout' }
         }, {
             maxRetries: 0,
-            analyzeFn: async () => ({ analysis: validAnalysisText() })
+            analyzeFn: async () => validAnalyzedResult()
         });
         assert.strictEqual(result.success, true);
         assert.strictEqual(result.result.latestAnalysisAttemptError, undefined);
@@ -555,7 +620,7 @@ describe('analyzeBatch', () => {
                 maxRetries: 0,
                 analyzeFn: async (paper) => {
                     calls.push(paper.arxivId);
-                    return { analysis: validAnalysisText() };
+                    return validAnalyzedResult();
                 }
             }
         );
@@ -645,6 +710,16 @@ describe('analysis run status', () => {
         assert.strictEqual(getAnalysisExitCode('complete'), 0);
         assert.strictEqual(getAnalysisExitCode('partial_failed'), 2);
         assert.strictEqual(getAnalysisExitCode('failed'), 1);
+    });
+
+    it('续跑状态按 canonical 全量成功数计算，不把已有成功漏算为 failed', () => {
+        const papers = Array.from({ length: 9 }, (_, index) => validAnalysisPaper(`2604.${String(index + 1).padStart(5, '0')}`));
+        papers.push({ arxivId: '2604.99999', error: 'latest attempt failed' });
+        assert.deepStrictEqual(getCanonicalAnalysisRunSummary(papers), {
+            success: 9,
+            remaining: 1,
+            status: 'partial_failed'
+        });
     });
 
     it('锁内更新为对象结果自动递增 generation', () => {

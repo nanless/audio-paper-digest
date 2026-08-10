@@ -168,7 +168,7 @@ API 调用特性：
 ### 4.4 微信公众号（`publish-wechat-full.py`）
 
 - `WECHAT_APP_ID` 和 `WECHAT_APP_SECRET` 从 `os.environ` 读取
-- `WECHAT_THUMB_MEDIA_ID`（可选）：封面图永久素材 ID，未设置时使用内置默认素材
+- `WECHAT_THUMB_MEDIA_ID`：封面图永久素材 ID；真实草稿发布必填，`--dry-run` 可不配置，项目不再内置可能过期的素材 ID
 - 图片上传：下载 arXiv 图片 → 上传到微信 CDN → 替换为微信 URL。缓存保存在系统临时目录下的 `wechat-image-cache.json`
 - 该脚本会访问真实微信接口；除非用户明确要求生成或上传公众号草稿，否则不要执行
 - **注意**：所有发布脚本统一从环境变量读取凭证，禁止硬编码
@@ -378,7 +378,7 @@ npm run xiaohongshu -- --date 2026-04-22
 - 默认读 `data/current/deep-analysis-result.json`
 - **按批次日期过滤**：优先使用抓取阶段写入的 `fetchBatchDate` 或 `batchDate`，旧数据才使用严格北京时间 `fetchedAt` 的日期；只发布匹配 `--date` 指定日期的论文（默认今天），避免历史数据被重复发布
 - 生成阶段可重复传入 `--exclude-id <arXiv ID>`，只从本次 generation 权威快照排除明确命中的论文；ID 未命中会阻断，分析数据本身不变
-- 微信公众号和飞书同样优先按 `fetchBatchDate`/`batchDate`、再回退 `fetchedAt` 日期过滤；如需发布输入文件全部论文，显式传 `--all`
+- 微信公众号、飞书和小红书默认还绑定同日博客 generation manifest 与远端验证 receipt 的 `publishedPapers` 权威快照；清单缺失也会 fail closed。若明确需要在博客发布前独立运行，传 `--ignore-blog-snapshot`。微信/飞书的 `--all` 另表示使用全部输入；小红书的 `--all` 仅表示生成完整汇总文案，不能当作快照绕过开关
 - 在 `~/code/github_repos/audio-paper-digest-blog/content/posts` 生成：
   - 汇总页：`YYYY-MM-DD.md`
   - 单篇页：`YYYY-MM-DD-<slug>.md`
@@ -490,7 +490,7 @@ PY
 15. **变更后运行单元测试**：修改 `scripts/utils.js`、`scripts/config.js` 或分析引擎核心逻辑后，必须运行 `npm test` 确保测试通过。
 16. **MiMo API 请求必须禁用代理连接复用**：所有 Node LLM 调用（包括 `test-api-key.js`）的 `options.agent` 必须为 `false`（不是 `undefined`）。任何重构或修改 HTTP 请求逻辑时，禁止将 `agent: false` 改回 `agent: proxyAgent` 或 `agent: undefined`，否则 MiMo Token Plan 会在有系统代理的环境中返回 403。
 17. **新增 LLM 端点必须接入 API 协议自动路由**：任何新增 Node 脚本调用 LLM 时，统一使用 `scripts/utils.js` 中的 `detectApiType()`、`buildApiUrl()`、`buildHeaders()`、`buildRequestBody()`、`parseResponseText()`；Python 发布阶段 LLM 调用必须复用 `publish_common.py` 的 `call_publish_llm_api()`，禁止硬编码特定协议的 URL/Header/Body。
-17.1 **视觉资产由 Codex 内置图像工具在发布后生成**：绝不在项目脚本中调用图像 API，也不读取或要求 `OPENAI_API_KEY`。全部博客页通过 review、push 且远端 OID 验证后，发布凭证才写入 `remoteVerifiedOid`；视觉 CLI 必须校验该凭证。Agent 读取已审计分析和 `prompts/visual-summary.md`，仅对最终评分 TOP 10 各调用一次内置 `image_gen`；再按 `prompts/digest-cover.md` 生成一张标题、热门方向与 TOP 10 排行榜汇总图。登记前必须目视核对英文标题逐字一致、正文为简体中文、论文数字和排行榜没有虚构或错位。两类任务用 token 登记并独立续跑；同批次全部图片扁平保存到 `data/archive/<date>/visual-summaries/`，封面为 `00-digest-cover-<date>.png`，论文图为 `<rank>-<paper-id>-<title-slug>.png`，排名取 manifest 最终 `rank`，禁止按完成顺序编号。若 Agent 先复制输出到该目录，`record` 会清理同排名/同论文 ID 的临时别名，只保留 manifest 指定的 canonical 文件；每篇论文最终只能有一张图。旧版 current/归档资产校验后迁移。图片不回写本轮博客，不参与博客 generation/review/push 清单。
+17.1 **视觉资产由 Codex 内置图像工具在发布后生成**：绝不在项目脚本中调用图像 API，也不读取或要求 `OPENAI_API_KEY`。全部博客页通过 review、push 且远端 OID 验证后，视觉 CLI 才可启动。登记前必须逐项核对 `generationContext.qaClaims`、标题、中文正文、数字和排行榜；论文图与封面 `record` 都必须传 `--qa-attested true`，该声明会写入 manifest。两类任务用 token 登记并独立续跑；同批次图片扁平保存到 `data/archive/<date>/visual-summaries/`，只保留 canonical 文件。
 
 17.2 **参考图必须先规范化输入路径**：深度分析缓存使用 `.bin` 保存原始字节，不能直接作为内置生图的上传路径。每轮视觉生成前运行 `npm run visual:prepare -- --date YYYY-MM-DD`（可加 `--paper ID`）；命令在远端发布凭证和当前 manifest 校验通过后，逐图复核受控缓存路径、SHA-256、字节数、MIME 与魔数，并原子物化为 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 下的 `.png/.jpg/.webp`，输出绝对 `referencedImagePaths` 和仅供展示的 `relativePath`。内置 `image_gen` 只接收这些绝对规范路径；缓存损坏、MIME 不一致或路径逃逸必须失败，不得手工复制或伪造扩展名绕过。
 18. **修改 API 协议路由逻辑时同步全链路**：修改 `detectApiType()` 的判定规则或 `buildApiUrl()`/`buildHeaders()` 等函数时，必须同步检查 `fetch-papers.js`、`deep-analyzer.js` 以及所有使用 `analysis-engine.js` 的脚本（`full-fetch.js`、`reanalyze.js`、`batch-analyze.js`、`deep-analysis-only.js`、`analyze-single-paper.js`），确保全链路行为一致。

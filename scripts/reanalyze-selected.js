@@ -21,6 +21,7 @@ const {
     mergePapersById,
     isSuccessfulAnalysisRecord,
     getAnalysisRunStatus,
+    getCanonicalAnalysisRunSummary,
     getAnalysisExitCode
 } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses } = require('./digest-status.js');
@@ -122,7 +123,12 @@ async function reanalyzeSelected(ids) {
             papers: Array.isArray(current) ? current : (current?.papers || []),
             lastUpdated: getBeijingISOString(),
             batchDate,
-            stats: { ...(!Array.isArray(current) ? current?.stats : {}), selectedReanalyzeStatus: 'running' }
+            status: 'running',
+            stats: {
+                ...(!Array.isArray(current) ? current?.stats : {}),
+                analysisStatus: 'running',
+                selectedReanalyzeStatus: 'running'
+            }
         };
         delete payload.deepAnalysisCompletedAt;
         return payload;
@@ -208,19 +214,23 @@ async function reanalyzeSelected(ids) {
         const remainingFailed = missingIds.length
             + [...foundIds].filter(id => !isSuccessfulAnalysisRecord(canonicalById.get(id))).length;
         const status = getAnalysisRunStatus({ success: idSet.size - remainingFailed }, remainingFailed);
+        const canonicalSummary = getCanonicalAnalysisRunSummary(currentPapers);
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             timestamp: updatedAt,
             batchDate,
+            status: canonicalSummary.status,
             papers: currentPapers,
             stats: {
                 ...(!Array.isArray(current) ? current?.stats : {}),
                 ...data.stats,
+                analysisStatus: canonicalSummary.status,
+                remainingFailed: canonicalSummary.remaining,
                 selectedReanalyzeStatus: status,
                 selectedReanalyzeRemainingFailed: remainingFailed
             }
         };
-        if (status === 'complete' && payload.papers.every(isSuccessfulAnalysisRecord)) {
+        if (canonicalSummary.status === 'complete') {
             payload.deepAnalysisCompletedAt = getBeijingISOString();
         } else {
             delete payload.deepAnalysisCompletedAt;

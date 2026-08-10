@@ -178,6 +178,32 @@ body
             push_blog.main()
         self.assertIn('全部博客推送完成；发布后视觉任务尚待重试', output.getvalue())
 
+    def test_daily_push_mode_requires_visual_planning_success(self):
+        path = Path('/tmp/content/posts/2026-07-10.md')
+        module = SimpleNamespace(
+            PublishDataValidationError=ValueError,
+            validate_publish_target=mock.Mock(),
+            get_today_bj=lambda value=None: value or '2026-07-10',
+            validate_publish_date=lambda value: value,
+            blog_publication_lock=lambda _date: contextlib.nullcontext(),
+            load_verified_review_receipt=mock.Mock(return_value=([path], Path('receipt.json'))),
+            validate_git_publish_branch=mock.Mock(),
+            validate_git_index=mock.Mock(),
+            git_push=mock.Mock(return_value=True),
+            plan_post_publish_visual_assets=mock.Mock(return_value=False),
+        )
+        output = io.StringIO()
+        with mock.patch.object(push_blog, 'require_external_runtime'), \
+                mock.patch.object(push_blog, 'load_publish_to_blog', return_value=module), \
+                mock.patch.object(sys, 'argv', [
+                    'push-blog.py', '--date', '2026-07-10', '--require-visual-plan',
+                ]), \
+                contextlib.redirect_stdout(output), \
+                self.assertRaises(SystemExit) as caught:
+            push_blog.main()
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn('博客已发布并验证远端 OID，但发布后视觉任务规划失败', output.getvalue())
+
 
 if __name__ == '__main__':
     unittest.main()

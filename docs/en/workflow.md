@@ -17,9 +17,9 @@ At startup, the script checks the following files under `data/current/`:
 
 Archive rules (evaluated per file):
 1. Read the timestamp field from the file (supports `timestamp` / `lastUpdated` / `deepAnalysisCompletedAt` / `previousTimestamp`)
-2. If the date is **earlier than today (Beijing Time)** and the file does not yet exist under `data/archive/<date>/`, **copy** it to the archive directory
-3. After a successful copy, **delete** the original file to ensure a fresh start each day
-4. If an identically named file already exists in the archive directory, skip it (do not overwrite)
+2. If the date is **earlier than today (Beijing Time)**, copy it under `data/archive/<date>/`
+3. Reuse an identical canonical archive; if the canonical file differs, preserve the current data as a timestamped conflict snapshot without overwriting the canonical file
+4. Delete the current file only after equality is confirmed or the archive copy succeeds; keep it when verification/copying fails
 
 Additionally, before final saving of a new deep-analysis result, if an existing `deep-analysis-result.json` contains data, it is backed up to `data/archive/deep-analysis-result-<timestamp>.bak.json`, and old backups are cleaned up automatically (keeping the most recent 10). This happens during the final save after analysis, not during startup archive.
 
@@ -62,7 +62,7 @@ Dual-source fetching via `fetch-huggingface-papers.js`:
 2. **`/api/papers`**: Latest papers supplement, covering the last 1-2 days, used to backfill papers not included in daily_papers.
 
 Filtering:
-- Only keep papers from the last 7 days (`published >= today-7 days`)
+- Keep the inclusive cutoff window (`published >= today-7 days`, including both the cutoff date and today)
 - Exclude historical already-known IDs (completed/published IDs from papers.json and blog-published IDs)
 - Do **not** exclude arXiv IDs fetched in the same run; same-batch overlaps are kept so the merge stage can enrich arXiv papers with HF upvotes, AI summaries, and project links
 - Sort by `upvotes` descending
@@ -120,7 +120,7 @@ Runtime parameters:
 - `delayBetweenBatches = 2000` (2-second delay between batches)
 - `useKeywordPreFilter = true` (high-recall local prefiltering runs before the LLM, with core audio categories as fallback)
 - Per-paper timeout **60 seconds**, **5 retries** (backoff `2^attempt * 1s`)
-- Each retry independently creates an `AbortController` and `setTimeout`, avoiding reuse of an already-aborted controller
+- Each request combines a socket-idle timeout, an absolute deadline, a bounded response body, and request destruction; the deep-analysis 20-minute budget counts active process time and excludes detected system sleep
 
 The filtering stage writes three files incrementally:
 - `data/current/raw-candidates.json`: candidate input after merge and blog deduplication, including request attempts, successful requests, and failure details in arXiv/HF `sourceHealth`. Fetchers distinguish a successful empty response from every request failing; all-failed sources throw and cannot produce a false-success empty batch

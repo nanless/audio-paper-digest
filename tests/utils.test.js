@@ -3,6 +3,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
+const https = require('node:https');
+const net = require('node:net');
 
 const {
     stripMd,
@@ -26,6 +28,7 @@ const {
     requestJson,
     loadPrompt,
     createProxyDispatcher,
+    createProxyAgent,
     detectHttpConnectProxyUrl,
     buildProxyAuthorizationHeader
 } = require('../scripts/utils.js');
@@ -513,6 +516,12 @@ describe('detectApiType', () => {
     it('DeepSeek /anthropic 路径 -> openai', () => {
         assert.strictEqual(detectApiType('https://api.deepseek.com/anthropic', 'deepseek-v4-pro'), 'openai');
     });
+
+    it('OpenCode Go 的 DeepSeek 与 MiMo 都走 OpenAI 兼容协议', () => {
+        const endpoint = 'https://opencode.ai/zen/go/v1';
+        assert.strictEqual(detectApiType(endpoint, 'deepseek-v4-flash'), 'openai');
+        assert.strictEqual(detectApiType(endpoint, 'mimo-v2.5'), 'openai');
+    });
 });
 
 describe('buildApiUrl', () => {
@@ -544,6 +553,11 @@ describe('buildApiUrl', () => {
     it('DeepSeek /anthropic 端点 -> /v1/chat/completions', () => {
         const url = buildApiUrl('openai', 'https://api.deepseek.com/anthropic');
         assert.strictEqual(url, 'https://api.deepseek.com/v1/chat/completions');
+    });
+
+    it('OpenCode Go 基础端点 -> 官方 chat completions URL', () => {
+        const url = buildApiUrl('openai', 'https://opencode.ai/zen/go/v1');
+        assert.strictEqual(url, 'https://opencode.ai/zen/go/v1/chat/completions');
     });
 });
 
@@ -694,6 +708,112 @@ describe('requestJson', () => {
             assert.deepStrictEqual(response.body, { ok: true, echo: 'hello' });
         } finally {
             await new Promise(resolve => server.close(resolve));
+        }
+    });
+
+    it('超过响应字节上限时立即失败', async (t) => {
+        const server = http.createServer((_req, res) => {
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ payload: 'x'.repeat(2048) }));
+        });
+        try {
+            await new Promise((resolve, reject) => {
+                server.once('error', reject);
+                server.listen(0, '127.0.0.1', resolve);
+            });
+        } catch (err) {
+            if (err.code === 'EPERM' || err.code === 'EACCES') {
+                t.skip(`当前环境不允许监听本地端口: ${err.code}`);
+                return;
+            }
+            throw err;
+        }
+        try {
+            const { port } = server.address();
+            await assert.rejects(
+                requestJson(`http://127.0.0.1:${port}/`, {}, {}, {
+                    timeoutMs: 1000,
+                    maxResponseBytes: 128,
+                    agent: false
+                }),
+                error => error.code === 'RESPONSE_TOO_LARGE'
+            );
+        } finally {
+            await new Promise(resolve => server.close(resolve));
+        }
+    });
+
+    it('慢速持续响应也受绝对截止时间约束', async (t) => {
+        const server = http.createServer((_req, res) => {
+            res.write('{"chunks":[');
+            const timer = setInterval(() => res.write('0,'), 10);
+            res.once('close', () => clearInterval(timer));
+        });
+        try {
+            await new Promise((resolve, reject) => {
+                server.once('error', reject);
+                server.listen(0, '127.0.0.1', resolve);
+            });
+        } catch (err) {
+            if (err.code === 'EPERM' || err.code === 'EACCES') {
+                t.skip(`当前环境不允许监听本地端口: ${err.code}`);
+                return;
+            }
+            throw err;
+        }
+        try {
+            const { port } = server.address();
+            await assert.rejects(
+                requestJson(`http://127.0.0.1:${port}/`, {}, {}, {
+                    timeoutMs: 80,
+                    maxResponseBytes: 4096,
+                    agent: false
+                }),
+                error => error.code === 'REQUEST_DEADLINE_EXCEEDED'
+            );
+        } finally {
+            server.closeAllConnections?.();
+            await new Promise(resolve => server.close(resolve));
+        }
+    });
+});
+
+describe('createProxyAgent', () => {
+    it('https.request 会真正通过自定义 CONNECT 通道', async (t) => {
+        let connectRequest = '';
+        const proxy = net.createServer(socket => {
+            socket.once('data', chunk => {
+                connectRequest = chunk.toString('utf8');
+                socket.end('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n');
+            });
+        });
+        try {
+            await new Promise((resolve, reject) => {
+                proxy.once('error', reject);
+                proxy.listen(0, '127.0.0.1', resolve);
+            });
+        } catch (err) {
+            if (err.code === 'EPERM' || err.code === 'EACCES') {
+                t.skip(`当前环境不允许监听本地端口: ${err.code}`);
+                return;
+            }
+            throw err;
+        }
+        try {
+            const { port } = proxy.address();
+            const agent = createProxyAgent(`http://127.0.0.1:${port}`, '203.0.113.7', 443, 'example.com');
+            await assert.rejects(new Promise((resolve, reject) => {
+                const request = https.request({
+                    hostname: 'example.com',
+                    path: '/',
+                    agent
+                }, resolve);
+                request.once('error', reject);
+                request.end();
+            }), /Proxy CONNECT failed/);
+            assert.match(connectRequest, /^CONNECT 203\.0\.113\.7:443 HTTP\/1\.1\r\n/);
+        } finally {
+            await new Promise(resolve => proxy.close(resolve));
         }
     });
 });

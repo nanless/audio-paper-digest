@@ -7,7 +7,10 @@ const crypto = require('node:crypto');
 const Config = require('../scripts/config.js');
 const { buildFilterInputSha256 } = require('../scripts/lib/filter-input-contract.js');
 const { parseAnalysis } = require('../scripts/utils.js');
-const { EXPERIMENT_TABLE_CONTRACT_VERSION } = require('../scripts/analysis-contract.js');
+const {
+    EXPERIMENT_TABLE_CONTRACT_VERSION,
+    METHOD_DETAIL_CONTRACT_VERSION
+} = require('../scripts/analysis-contract.js');
 const { validAnalysisText } = require('./valid-analysis-fixture.js');
 
 const {
@@ -436,6 +439,53 @@ describe('validate-data-files', () => {
         delete paper.analysisManifest.contracts;
         fs.writeFileSync(resultFile, JSON.stringify({ papers: [paper] }));
         assert.deepStrictEqual(validatePaperListFile(resultFile, { deepAnalysis: true }), []);
+    });
+
+    it('校验阶段专属终态、detailed-v1 方法契约和顶层状态一致性', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-method-status-'));
+        const resultFile = path.join(dir, 'deep-analysis-result.json');
+        const analysis = validAnalysisText();
+        const stages = Object.fromEntries([
+            'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
+            'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
+        ].map(stage => [stage, { status: 'complete' }]));
+        stages.primaryAnalysis.status = 'skipped';
+        fs.writeFileSync(resultFile, JSON.stringify({
+            status: 'partial_failed',
+            deepAnalysisCompletedAt: TIMESTAMP,
+            stats: { analysisStatus: 'complete' },
+            papers: [{
+                arxivId: '2607.00005', analysis, parsed: parseAnalysis(analysis),
+                scoringRubricVersion: 'type-aware-v1',
+                analysisManifest: {
+                    version: 1,
+                    contracts: { methodDetail: METHOD_DETAIL_CONTRACT_VERSION },
+                    stages
+                }
+            }]
+        }));
+        const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
+        assert.match(issues, /primaryAnalysis 尚未完成: skipped/);
+        assert.match(issues, /方法契约无效.*中文字符不足/);
+        assert.match(issues, /status \(partial_failed\) 与 stats\.analysisStatus \(complete\) 不一致/);
+        assert.match(issues, /非 complete 状态不得保留 deepAnalysisCompletedAt/);
+        assert.match(issues, /status \(partial_failed\) 与 canonical 论文状态 \(failed\) 不一致/);
+
+        stages.primaryAnalysis.status = 'complete';
+        fs.writeFileSync(resultFile, JSON.stringify({
+            status: 'complete',
+            stats: { analysisStatus: 'complete', remainingFailed: 1 },
+            papers: [{
+                arxivId: '2607.00005', analysis, parsed: parseAnalysis(analysis),
+                scoringRubricVersion: 'type-aware-v1',
+                analysisManifest: { version: 1, stages }
+            }]
+        }));
+        const remainingIssues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
+        assert.match(
+            remainingIssues,
+            /stats\.remainingFailed \(1\) 与 canonical 未完成数 \(0\) 不一致/
+        );
     });
 
     it('接受字段集合精确匹配且来源完整的人工 parsed 覆盖', () => {

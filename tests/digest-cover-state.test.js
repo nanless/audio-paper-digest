@@ -12,13 +12,19 @@ const {
     buildCoverContext,
     COVER_RANKING_LIMIT,
     planDigestCover: planDigestCoverImpl,
-    recordDigestCover,
+    recordDigestCover: recordDigestCoverImpl,
     markDigestCoverFailed,
+    validateCompletedCover,
     archiveLegacyDigestCover,
     assertDigestCoverManifestCurrent,
     compactDigestCoverTask,
     parseArgs
 } = require('../scripts/digest-cover-state.js');
+
+const recordDigestCover = options => recordDigestCoverImpl({
+    ...options,
+    qaAttested: options.qaAttested ?? true
+});
 
 const TEST_PUBLICATION = Object.freeze({
     publicationCommit: 'd'.repeat(40),
@@ -113,6 +119,40 @@ function paper(id, score, task, title) {
 }
 
 describe('digest cover state', () => {
+    it('封面完成态必须保留合法排行榜 QA 声明', () => {
+        const original = Config.FILES.digestCoverAssetDir;
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cover-qa-state-'));
+        try {
+            Config.FILES.digestCoverAssetDir = path.join(dir, 'archive');
+            const asset = path.join(Config.FILES.digestCoverAssetDir, '2026-07-13', 'visual-summaries', '00-digest-cover-2026-07-13.png');
+            const raw = portraitPng();
+            fs.mkdirSync(path.dirname(asset), { recursive: true });
+            fs.writeFileSync(asset, raw);
+            const base = {
+                status: 'complete', batchDate: '2026-07-13', dataSha256: 'a',
+                promptSha256: 'b', taskToken: 'c',
+                assetPath: path.relative(Config.PROJECT_ROOT, asset),
+                assetSha256: crypto.createHash('sha256').update(raw).digest('hex')
+            };
+            assert.strictEqual(validateCompletedCover(base, 'a', 'b', 'c'), false);
+            assert.strictEqual(validateCompletedCover({
+                ...base,
+                qaAttestation: {
+                    attested: true,
+                    checklistVersion: 'digest-cover-semantic-v1',
+                    attestedAt: '2026-07-13T12:00:00+08:00'
+                }
+            }, 'a', 'b', 'c'), true);
+        } finally {
+            Config.FILES.digestCoverAssetDir = original;
+        }
+    });
+    it('record 核心 API 要求显式排行榜 QA 声明', () => {
+        assert.throws(
+            () => recordDigestCoverImpl({ manifestPath: path.join(os.tmpdir(), 'qa-required-cover.json') }),
+            /qaAttested=true/
+        );
+    });
     it('核心规划 API 也拒绝绕过远端发布绑定', () => {
         assert.throws(() => planDigestCoverImpl({
             targetDate: '2026-07-13', papers: [paper('2607.1', 8, '#语音识别', 'Paper')],

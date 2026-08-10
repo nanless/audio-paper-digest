@@ -121,7 +121,15 @@ def get_blog_review_concurrency():
         value = int(raw)
     except ValueError:
         value = 5
-    return max(1, value)
+    return min(5, max(1, value))
+
+
+def current_image_review_mode():
+    return (
+        'multimodal'
+        if os.environ.get('PAPER_ANALYZER_SECONDARY_MODEL', '').strip()
+        else 'deterministic_only'
+    )
 
 
 def get_blog_review_chunk_chars():
@@ -2188,6 +2196,7 @@ def review_all_posts(
                 list(remaining_code_issues) + list(llm_issues) + list(img_issues)
             ),
             'reviewedSha256': _sha256_file(index_file),
+            'imageReviewMode': current_image_review_mode(),
         }
         if result_callback:
             result_callback(os.path.realpath(index_file), file_results[os.path.realpath(index_file)])
@@ -2248,6 +2257,7 @@ def review_all_posts(
                     'completed': True,
                     'failureKind': failure_kind,
                     'reviewedSha256': reviewed_sha256,
+                    'imageReviewMode': current_image_review_mode(),
                 }
                 if result_callback:
                     result_callback(path, file_results[path])
@@ -3625,6 +3635,11 @@ def save_review_receipt(
                     (relative, reviewed_sha), {}
                 ).get('reviewProtocolFingerprint')
             ),
+            'imageReviewMode': (
+                None if expected_deleted else pass_records.get(
+                    (relative, reviewed_sha), {}
+                ).get('imageReviewMode', 'deterministic_only')
+            ),
         })
     if expectations is not None and {record['path'] for record in files} != set(expectations):
         raise PublishDataValidationError('审查路径集合与 generation manifest 不一致')
@@ -3633,6 +3648,13 @@ def save_review_receipt(
         raise PublishDataValidationError(
             'review 期间博客 main 基线发生变化，拒绝签发审查凭证'
         )
+    file_image_modes = {
+        record['imageReviewMode'] for record in files if not record['deleted']
+    }
+    aggregate_image_mode = (
+        next(iter(file_image_modes)) if len(file_image_modes) == 1
+        else ('mixed' if file_image_modes else 'deterministic_only')
+    )
     receipt = {
         'schemaVersion': 3,
         'date': validate_publish_date(date_str),
@@ -3640,6 +3662,10 @@ def save_review_receipt(
             datetime.timezone(datetime.timedelta(hours=8))
         ).isoformat(),
         'strictReview': True,
+        'imageReview': {
+            'mode': aggregate_image_mode,
+            'secondaryModelConfigured': current_image_review_mode() == 'multimodal',
+        },
         'hugoGate': hugo_gate,
         'baseHead': current_head,
         'reviewProtocolFingerprint': review_protocol_fingerprint(),
@@ -3672,11 +3698,15 @@ def _valid_review_pass_record(record, repo, date_str, default_protocol=None, def
     if protocol is not None and not re.fullmatch(r'[0-9a-f]{64}', str(protocol)):
         protocol = None
     reviewed_at = record.get('reviewedAt') or default_time
+    image_review_mode = record.get('imageReviewMode')
+    if image_review_mode not in {'multimodal', 'deterministic_only'}:
+        image_review_mode = 'deterministic_only'
     return {
         'path': normalized,
         'sha256': str(sha256),
         'reviewedAt': reviewed_at if isinstance(reviewed_at, str) else None,
         'reviewProtocolFingerprint': protocol,
+        'imageReviewMode': image_review_mode,
     }
 
 
@@ -3752,6 +3782,11 @@ def save_review_pass_cache(date_str, publish_paths=(), file_results=None):
             'sha256': reviewed_sha,
             'reviewedAt': now,
             'reviewProtocolFingerprint': protocol,
+            'imageReviewMode': (
+                result.get('imageReviewMode')
+                if result.get('imageReviewMode') in {'multimodal', 'deterministic_only'}
+                else current_image_review_mode()
+            ),
         }
         records[(relative, reviewed_sha)] = record
     if not records:
@@ -3800,6 +3835,11 @@ def save_review_failure_state(
                 else result.get('failureKind') or 'pending'
             ),
             'reviewedSha256': reviewed_sha if result_passed else None,
+            'imageReviewMode': (
+                result.get('imageReviewMode')
+                if result.get('imageReviewMode') in {'multimodal', 'deterministic_only'}
+                else current_image_review_mode()
+            ),
         })
     state = {
         'schemaVersion': 3,
@@ -3887,6 +3927,7 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
                     'passed': True, 'completed': True, 'failureKind': None,
                     'reviewedSha256': current['sha256'],
                     'reviewProtocolFingerprint': cached.get('reviewProtocolFingerprint'),
+                    'imageReviewMode': cached.get('imageReviewMode', 'deterministic_only'),
                 }
                 reused_passed += 1
                 continue
@@ -3959,6 +4000,22 @@ def load_verified_review_receipt(date_str):
     records = receipt.get('files')
     if not isinstance(records, list) or not records:
         raise PublishDataValidationError('审查凭证没有发布文件清单')
+    file_image_modes = {
+        record.get('imageReviewMode') for record in records
+        if isinstance(record, dict) and record.get('deleted') is not True
+    }
+    if not file_image_modes or not file_image_modes.issubset({'multimodal', 'deterministic_only'}):
+        raise PublishDataValidationError('审查凭证逐文件图片 review 模式非法')
+    expected_image_mode = (
+        next(iter(file_image_modes)) if len(file_image_modes) == 1 else 'mixed'
+    )
+    image_review = receipt.get('imageReview')
+    if (
+        not isinstance(image_review, dict)
+        or image_review.get('mode') != expected_image_mode
+        or not isinstance(image_review.get('secondaryModelConfigured'), bool)
+    ):
+        raise PublishDataValidationError('审查凭证图片 review 汇总与逐文件证据不一致')
 
     repo = Path(BLOG_REPO).expanduser().resolve()
     paths = []

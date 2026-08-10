@@ -23,6 +23,7 @@ const {
 } = require('./analysis-engine.js');
 
 const MANIFEST_VERSION = 3;
+const VISUAL_QA_CHECKLIST_VERSION = 'visual-semantic-v1';
 const DEFAULT_SELECTION_LIMIT = 10;
 const CARD_KINDS = Object.freeze(['infographic']);
 const CARD_LABELS = Object.freeze({
@@ -504,6 +505,11 @@ function pendingCard(id, kind, expectedAnalysisSha, expectedPromptSha, rank, pub
 
 function validateCompletedCard(card, expectedAnalysisSha, expectedPromptSha, expectedTaskToken = null, expectedPath = null) {
     if (!card || card.status !== 'complete') return false;
+    if (card.qaAttestation?.attested !== true
+        || card.qaAttestation?.checklistVersion !== VISUAL_QA_CHECKLIST_VERSION
+        || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?\+08:00$/.test(
+            String(card.qaAttestation?.attestedAt || '')
+        )) return false;
     if (card.analysisSha256 !== expectedAnalysisSha || card.promptSha256 !== expectedPromptSha) return false;
     if (expectedTaskToken && card.taskToken !== expectedTaskToken) return false;
     if (typeof card.assetPath !== 'string' || !card.assetPath) return false;
@@ -1330,8 +1336,10 @@ function recordVisualSummaryCard({
     sourcePath,
     taskToken,
     targetDate,
-    manifestPath
+    manifestPath,
+    qaAttested = false
 }) {
+    if (qaAttested !== true) throw new Error('登记视觉摘要前必须完成逐图语义 QA，并传入 qaAttested=true');
     manifestPath = manifestPath || visualSummaryManifestPath(targetDate);
     const id = normalizedId(arxivId);
     if (!CARD_KINDS.includes(kind)) throw new Error(`未知视觉摘要类型: ${kind}`);
@@ -1379,6 +1387,11 @@ function recordVisualSummaryCard({
             analysisSha256: paper.analysisSha256,
             promptSha256: paper.promptSha256,
             taskToken,
+            qaAttestation: {
+                attested: true,
+                checklistVersion: VISUAL_QA_CHECKLIST_VERSION,
+                attestedAt: getBeijingISOString()
+            },
             completedAt: getBeijingISOString()
         };
         return withManifestSummary(next);
@@ -1475,7 +1488,7 @@ function parseArgs(argv) {
     const options = {};
     const allowed = new Set([
         'date', 'receipt', 'manifest', 'generation', 'paper', 'kind',
-        'file', 'output-hint', 'token', 'error'
+        'file', 'output-hint', 'token', 'error', 'qa-attested'
     ]);
     for (let i = 0; i < rest.length; i += 1) {
         const arg = rest[i];
@@ -1543,7 +1556,8 @@ function main(argv = process.argv.slice(2)) {
             sourcePath: options.file || extractGeneratedImagePathFromHint(options['output-hint']),
             taskToken: options.token,
             targetDate: options.date,
-            manifestPath: options.manifest
+            manifestPath: options.manifest,
+            qaAttested: options['qa-attested'] === 'true'
         });
         console.log(`已登记视觉摘要: ${options.paper} ${options.kind}`);
         return;

@@ -48,6 +48,24 @@ const OPEN_SOURCE_SCORE_ANCHORS = Object.freeze([0, 0.2, 0.5, 1, 1.2, 1.5]);
 const DOCUMENT_TYPES = new Set(['方法研究', '系统技术报告', '模型报告', '数据集与基准', '综述', '理论研究', '应用研究']);
 const NON_EMPIRICAL_DOCUMENT_TYPES = new Set(['综述', '理论研究']);
 const EXPERIMENT_TABLE_CONTRACT_VERSION = 'bounded-v1';
+const METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1';
+const REQUIRED_RECOVERY_STAGES = Object.freeze([
+    'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
+    'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
+]);
+const RECOVERY_STAGE_TERMINAL_STATUSES = Object.freeze({
+    imageDiscovery: Object.freeze(['complete', 'no_candidates']),
+    imageDownload: Object.freeze(['complete', 'skipped', 'no_candidates', 'no_downloadable_images']),
+    primaryAnalysis: Object.freeze(['complete']),
+    openSourceScan: Object.freeze(['complete']),
+    demoLinkScan: Object.freeze(['complete', 'not_needed']),
+    revision: Object.freeze(['complete']),
+    tableRepair: Object.freeze(['complete', 'not_needed']),
+    methodRepair: Object.freeze(['complete', 'not_needed']),
+    structureRepair: Object.freeze(['complete', 'not_needed']),
+    scoringAudit: Object.freeze(['complete']),
+    imageSupplement: Object.freeze(['complete', 'skipped', 'no_candidates', 'no_high_value_images', 'no_downloadable_images'])
+});
 const EXPERIMENT_TABLE_LIMITS = Object.freeze({
     maxTables: 2,
     maxDataRows: 12,
@@ -149,10 +167,17 @@ function extractMarkdownTables(text) {
         }
         let end = index + 2;
         let dataRows = 0;
+        const invalidColumnCounts = [];
+        const separatorColumns = splitMarkdownTableRow(lines[index + 1]).length;
         while (end < lines.length) {
             const line = lines[end];
-            if (!line.trim() || splitMarkdownTableRow(line).length < 2) break;
+            const cells = splitMarkdownTableRow(line);
+            if (!line.trim()) break;
+            if (cells.length < 2 && !/^\s*\|.*\|\s*$/.test(line)) break;
             dataRows += 1;
+            if (cells.length !== header.length) {
+                invalidColumnCounts.push({ row: dataRows, columns: cells.length });
+            }
             end += 1;
         }
         const identifierColumns = header.filter(cell => {
@@ -165,6 +190,8 @@ function extractMarkdownTables(text) {
         tables.push({
             header,
             dataRows,
+            separatorColumns,
+            invalidColumnCounts,
             metricColumns: Math.max(0, header.length - identifierColumns)
         });
         index = Math.max(end, index + 2);
@@ -180,6 +207,13 @@ function validateExperimentTableContract(analysis) {
         return `实验结果包含 ${tables.length} 张 Markdown 表格，最多允许 ${EXPERIMENT_TABLE_LIMITS.maxTables} 张`;
     }
     for (const [index, table] of tables.entries()) {
+        if (table.separatorColumns !== table.header.length) {
+            return `实验结果第 ${index + 1} 张表分隔行有 ${table.separatorColumns} 列，表头有 ${table.header.length} 列`;
+        }
+        if (table.invalidColumnCounts.length > 0) {
+            const invalid = table.invalidColumnCounts[0];
+            return `实验结果第 ${index + 1} 张表第 ${invalid.row} 个数据行有 ${invalid.columns} 列，表头有 ${table.header.length} 列`;
+        }
         if (table.dataRows > EXPERIMENT_TABLE_LIMITS.maxDataRows) {
             return `实验结果第 ${index + 1} 张表包含 ${table.dataRows} 个数据行，最多允许 ${EXPERIMENT_TABLE_LIMITS.maxDataRows} 行`;
         }
@@ -192,6 +226,28 @@ function validateExperimentTableContract(analysis) {
 
 function analysisManifestRequiresExperimentTableContract(manifest) {
     return manifest?.contracts?.experimentTables === EXPERIMENT_TABLE_CONTRACT_VERSION;
+}
+
+function validateMethodDetailContract(analysis) {
+    const method = extractSection(analysis, '方法概述和架构');
+    const chineseCount = (method.match(/[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]/g) || []).length;
+    if (chineseCount < 600) return `方法概述中文字符不足: ${chineseCount}/600`;
+    if ([/详见原文/, /论文描述了详细架构/, /详细方法见/, /具体实现请参考/].some(pattern => pattern.test(method))) {
+        return '方法概述包含空泛占位表述';
+    }
+    const structuralKeywords = ['输入', '输出', '流程', '组件', '模块', '阶段', '结构', '网络', '模型'];
+    if (!structuralKeywords.some(keyword => method.includes(keyword))) return '方法概述缺少结构性描述';
+    const paragraphs = method.split(/\n\s*\n/).filter(paragraph => paragraph.trim().length > 20);
+    if (paragraphs.length < 3) return `方法概述有效段落不足: ${paragraphs.length}/3`;
+    return null;
+}
+
+function analysisManifestRequiresMethodDetailContract(manifest) {
+    return manifest?.contracts?.methodDetail === METHOD_DETAIL_CONTRACT_VERSION;
+}
+
+function isRecoveryStageTerminal(stage, status) {
+    return Boolean(RECOVERY_STAGE_TERMINAL_STATUSES[stage]?.includes(status));
 }
 
 function validateTopLevelSectionContract(analysis) {
@@ -333,6 +389,10 @@ function getInvalidAnalysisReason(analysis, parsed, options = {}) {
         const tableIssue = validateExperimentTableContract(analysis);
         if (tableIssue) return `分析结果表格契约无效: ${tableIssue}`;
     }
+    if (options.enforceMethodDetailContract === true) {
+        const methodIssue = validateMethodDetailContract(analysis);
+        if (methodIssue) return `分析结果方法契约无效: ${methodIssue}`;
+    }
     if (!parsed.documentType) return '分析结果缺少有效文档类型';
     if (!parsed.scoreValidation?.valid) {
         const details = Array.isArray(parsed.scoreValidation?.errors)
@@ -365,11 +425,17 @@ module.exports = {
     validateTagSectionContract,
     validateTopLevelSectionContract,
     EXPERIMENT_TABLE_CONTRACT_VERSION,
+    METHOD_DETAIL_CONTRACT_VERSION,
+    REQUIRED_RECOVERY_STAGES,
+    RECOVERY_STAGE_TERMINAL_STATUSES,
     EXPERIMENT_TABLE_LIMITS,
     splitMarkdownTableRow,
     extractMarkdownTables,
     validateExperimentTableContract,
     analysisManifestRequiresExperimentTableContract,
+    validateMethodDetailContract,
+    analysisManifestRequiresMethodDetailContract,
+    isRecoveryStageTerminal,
     getInvalidAnalysisReason
 };
 

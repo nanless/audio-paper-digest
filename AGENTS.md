@@ -45,7 +45,7 @@ node scripts/analyze-single-paper.js <arxiv-id> [--force]  # 单独分析一篇�
 node scripts/reanalyze-selected.js <arxivId1> [arxivId2] ...  # 重分析指定论文
 node scripts/refilter-reanalyze-by-date.js <date>  # 按日期重新筛选+分析
 node scripts/validate-scores.js         # 验证并修复评分
-node scripts/test-api-key.js            # 测试 LLM API key 可用性
+node scripts/test-api-key.js [--secondary] # 测试主模型或副模型 LLM API key 可用性
 python3 scripts/publish-to-feishu.py    # 生成飞书文档
 
 # ICML 2026 专属流程（仅 icml-2026-analysis 分支可用）
@@ -71,7 +71,7 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 为降低重复输入 token，主分析输入默认最多 200000 字符，超长论文按开头/中段/末尾和任务关键词跨全文取样；开源扫描、审校重写、评分审计、表格/方法修复、结构修复的默认证据预算分别为 16000/60000/40000/30000/40000 字符，可用 `PD_ANALYSIS_FULL_TEXT_MAX_CHARS`、`PD_OPENSOURCE_EVIDENCE_MAX_CHARS`、`PD_REVISION_EVIDENCE_MAX_CHARS`、`PD_SCORING_EVIDENCE_MAX_CHARS`、`PD_REPAIR_EVIDENCE_MAX_CHARS`、`PD_STRUCTURE_EVIDENCE_MAX_CHARS` 覆写。证据选择算法版本和预算属于阶段指纹，变化时只失效对应阶段及下游。
 
 **博客相关变量**：`PAPER_DIGEST_BLOG_REPO` 可覆写 Hugo 博客仓库路径；未设置时使用默认路径，目录不存在会跳过博客已发布去重，真实博客发布仍需要本地仓库存在。
-`PD_BLOG_REVIEW_CONCURRENCY` 控制博客独立论文页的三层 review 并发度，默认为 5；汇总页仍先完成审查。review 通过项必须立即保存到按日期隔离的逐文件持久账本，以博客仓库相对路径和实际读取 SHA-256 为复用键；代码、脚本、文档、模型、协议、generation manifest 或博客 `main` 基线变化不得清空未改文件的通过记录。后续只审查新增、SHA 变化、瞬时失败或内容失败修复后的文件；最终 receipt 仍须重新绑定当前清单、当前基线、当前协议和 Hugo gate。
+`PD_BLOG_REVIEW_CONCURRENCY` 控制博客独立论文页的三层 review 并发度，默认为 5 且限制为 1–5；汇总页仍先完成审查。review 通过项必须立即保存到按日期隔离的逐文件持久账本，以博客仓库相对路径和实际读取 SHA-256 为复用键；代码、脚本、文档、模型、协议、generation manifest 或博客 `main` 基线变化不得清空未改文件的通过记录。后续只审查新增、SHA 变化、瞬时失败或内容失败修复后的文件；最终 receipt 仍须重新绑定当前清单、当前基线、当前协议和 Hugo gate。
 `PD_BLOG_REVIEW_CHUNK_CHARS` 控制博客文本 review 分块，默认 8000，限制为 4000–16000；增大分块减少重复审查说明，但仍保持代码块、表格和 Markdown 块边界完整。该值进入 review 协议指纹。
 `PD_BLOG_REVIEW_MAX_TOKENS` 默认 4000。结构化 review 若因隐藏推理耗尽预算而没有最终 JSON，只追加纯 JSON 指令并恢复一次，默认最高 8000；再失败不得继续翻倍到 16000。
 `PD_XIAOHONGSHU_ONELINER_CONCURRENCY` 控制小红书 TOP N 一句话亮点的 LLM 并发度，默认 5，限制为 1–5；结果必须按原排名回填，单篇失败独立使用本地摘要回退。
@@ -99,6 +99,7 @@ Node 脚本通过 `scripts/env-loader.js` 加载当前项目根 `.env`：① `sc
 | 其他 | 其他 | OpenAI | `/v1/chat/completions` |
 
 **网络职责必须隔离**：LLM API 请求中 `options.agent` 必须显式设为 `false`（禁用连接复用且强制直连），否则在有系统代理时 MiMo Token Plan 返回 403。适用于 `fetch-papers.js`、`deep-analyzer.js`、`test-api-key.js` 以及后续新增的所有 Node LLM API 调用。arXiv 元数据、HTML、PDF、图片及 HuggingFace Papers 则必须通过当前项目 `.env` 的代理访问，缺少代理配置时必须报错，严禁静默直连；Node 的 arXiv 请求只接受 `HTTPS_PROXY` / `HTTP_PROXY` 中的 HTTP CONNECT 代理，HuggingFace 的 curl 可额外使用 SOCKS `ALL_PROXY`。
+任意论文图片和 Demo URL 只允许 HTTPS；每一跳先解析并拒绝所有私网/保留地址，再把 CONNECT 目标固定为本次校验得到的公网 IP，同时保留原域名作为 Host 与 TLS SNI，防止 DNS 重绑定。响应必须同时受绝对截止时间与字节上限约束。
 
 ## 架构
 
@@ -188,7 +189,7 @@ prompts/                # LLM prompt 模板
 - **内置生图参考文件**：视觉 manifest 中的 `cachePath` 保留原始 `.bin` 缓存路径；调用内置 `image_gen` 前必须运行 `npm run visual:prepare -- --date YYYY-MM-DD`，由脚本重新校验受控路径、SHA、字节数、MIME 与文件头，并物化为 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 下的 `.png/.jpg/.webp`。必须把命令输出的绝对 `referencedImagePaths` 传给生图工具，`relativePath` 仅供展示；禁止直接上传 `.bin` 或手工改后缀。
 - **紧凑 CLI 输出**：视觉 plan/status 默认只打印排名、论文 ID、标题、任务 token、参考图数与 manifest 绝对路径；`visual:prepare` 额外打印必需的绝对 `referencedImagePaths`。`generationContext` / `qaClaims` / 排行全文仍完整保存在 manifest，不得为了减少终端 token 而删除。`digest:status` 默认打印紧凑门禁摘要，完整 `sourceHealth` 仍写入报告 JSON。
 - **视觉事实清单**：论文视觉任务的 `generationContext.qaClaims` 固定包含完整英文标题、四个必要内容区、方法证据、带数字实验声明、局限和参考图 caption。提示词与逐图目检都必须逐项核对这些事实，不能只依赖自由文本摘要。
-- **视觉成品唯一归档**：Agent 若先把内置 `image_gen` 输出复制到 `data/archive/<日期>/visual-summaries/`，必须仍通过 `visual-summary-state.js record` 登记；`record` 会按 manifest 的排名、论文 ID 和标题 slug 写入唯一 canonical 文件名，并自动删除同目录中由本次调用留下的同排名/同论文 ID 临时 PNG。不得手工保留另一份别名文件；完成后 `npm run visual:status -- --date YYYY-MM-DD` 必须显示实际完成数（最多 `10/10`），目录中每篇论文只能有一个 PNG，另加一张 `00-digest-cover-<日期>.png`。
+- **视觉成品唯一归档**：Agent 若先把内置 `image_gen` 输出复制到 `data/archive/<日期>/visual-summaries/`，必须逐项完成语义目检并通过 `visual-summary-state.js record ... --qa-attested true` 登记；封面同样要求 `digest-cover-state.js record ... --qa-attested true`。QA 声明写入 manifest；`record` 会按排名、论文 ID 和标题 slug 写入唯一 canonical 文件名，并自动删除同排名/同论文 ID 临时 PNG。完成后两个视觉状态门禁必须通过。
 - **分析来源与发布门禁**：结果必须保存 `analysisSource`、全文/实际输入字符数、截断状态、来源 SHA-256、抓取告警和置信度。来源指纹变化时清除主分析及下游 checkpoint。仅摘要分析默认禁止发布；人工确认后必须显式设置 `allowAbstractAnalysisPublish: true`，博客同时显示醒目降级提示。最新一次重分析失败时禁止用陈旧正文发布。
 - **评分稳定性**：最终评分审计默认低温 `0.1`（`PD_SCORING_AUDIT_TEMPERATURE`），副模型图片计划默认 `0.2`（`PD_IMAGE_PLAN_TEMPERATURE`）。送审输入必须移除旧“评分理由”段但保留正文和证据账本，禁止模型照抄待纠正理由；跨维度校验失败须反馈具体违规分句。评分 manifest 必须保留模型、温度、prompt 模板哈希、证据哈希、尝试次数、前后总分/差值和最终八维 JSON；变化超过 0.5 分必须打印稳定性告警，指纹变化时只失效评分及插图阶段。
 - **副模型日志**：插图筛选必须记录 `[secondary]` 详细输入/输出摘要（模型、协议、endpoint/key 来源、候选和下载数量、图片安全标签/MIME/负载、Prompt/响应长度、活跃请求时长、计划解析状态、`paragraph_id` 实际命中、旧 anchor 兼容命中、拒绝原因和最终选图），只能记录 key 来源，严禁记录 API key 内容。统一日志必须是 UTF-8 纯文本、唯一文件名和 `0600` 权限；每个非空物理行均须以毫秒级北京时间戳（`[YYYY-MM-DD HH:mm:ss.SSS+08:00]`）开头，并脱敏认证头、Cookie、token、secret、password、任意已配置密钥实际值和 URL userinfo；不得轮转、限量或自动清理。

@@ -11,12 +11,13 @@ const { validAnalysisPaper } = require('./valid-analysis-fixture.js');
 const {
     CARD_KINDS,
     planVisualSummaries: planVisualSummariesImpl,
-    recordVisualSummaryCard,
+    recordVisualSummaryCard: recordVisualSummaryCardImpl,
     markVisualSummaryCardFailed,
     pendingVisualSummaryCards,
     compactPendingVisualTask,
     compactPreparedVisualTask,
     validatePngAsset,
+    validateCompletedCard,
     extractGeneratedImagePathFromHint,
     archiveLegacyVisualManifestAssets,
     assertPublishedBlogReceipt,
@@ -28,6 +29,11 @@ const {
     parseArgs,
     main
 } = require('../scripts/visual-summary-state.js');
+
+const recordVisualSummaryCard = options => recordVisualSummaryCardImpl({
+    ...options,
+    qaAttested: options.qaAttested ?? true
+});
 
 const TEST_PUBLICATION = Object.freeze({
     publicationCommit: 'd'.repeat(40),
@@ -166,6 +172,55 @@ function writeImageCache(currentDir, url, raw, mime = 'image/png') {
 }
 
 describe('visual summary state', () => {
+    it('完成态必须保留合法语义 QA 声明，缺失或损坏时重新进入待生成', () => {
+        const originals = {
+            current: Config.CURRENT_DIR,
+            manifests: Config.FILES.visualSummaryManifestDir,
+            assets: Config.FILES.visualSummaryAssetDir
+        };
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'visual-qa-state-'));
+        try {
+            patchVisualDirs(path.join(dir, 'current'));
+            const asset = path.join(Config.FILES.visualSummaryAssetDir, '2026-07-13', 'visual-summaries', '01-paper.png');
+            fs.mkdirSync(path.dirname(asset), { recursive: true });
+            fs.writeFileSync(asset, PNG);
+            const base = {
+                status: 'complete', analysisSha256: 'a', promptSha256: 'b', taskToken: 'c',
+                assetPath: path.relative(Config.PROJECT_ROOT, asset),
+                assetSha256: crypto.createHash('sha256').update(PNG).digest('hex')
+            };
+            assert.strictEqual(validateCompletedCard(base, 'a', 'b', 'c', asset), false);
+            assert.strictEqual(validateCompletedCard({
+                ...base,
+                qaAttestation: {
+                    attested: true,
+                    checklistVersion: 'visual-semantic-v1',
+                    attestedAt: '2026-07-13T12:00:00.123+08:00'
+                }
+            }, 'a', 'b', 'c', asset), true);
+            assert.strictEqual(validateCompletedCard({
+                ...base,
+                qaAttestation: {
+                    attested: true,
+                    checklistVersion: 'wrong-version',
+                    attestedAt: '2026-07-13T12:00:00.123+08:00'
+                }
+            }, 'a', 'b', 'c', asset), false);
+        } finally {
+            Config.CURRENT_DIR = originals.current;
+            Config.FILES.visualSummaryManifestDir = originals.manifests;
+            Config.FILES.visualSummaryAssetDir = originals.assets;
+        }
+    });
+    it('record 核心 API 要求显式语义 QA 声明', () => {
+        assert.throws(
+            () => recordVisualSummaryCardImpl({
+                kind: 'infographic',
+                manifestPath: path.join(os.tmpdir(), 'qa-required-visual.json')
+            }),
+            /qaAttested=true/
+        );
+    });
     it('视觉状态 CLI 拒绝未知、缺值和重复参数', () => {
         assert.throws(() => parseArgs(['status', '--unknown', 'value']), /未知参数/);
         assert.throws(() => parseArgs(['status', '--date']), /无效参数/);

@@ -14,7 +14,10 @@ const { ANALYSIS_CONFIG } = require('./config.js');
 const {
     getInvalidAnalysisReason,
     hasRequiredSections,
-    analysisManifestRequiresExperimentTableContract
+    analysisManifestRequiresExperimentTableContract,
+    analysisManifestRequiresMethodDetailContract,
+    REQUIRED_RECOVERY_STAGES,
+    isRecoveryStageTerminal
 } = require('./analysis-contract.js');
 
 // ═══════════════════════════════════════════════════════
@@ -30,13 +33,6 @@ const PAPER_ANALYSIS_LOCK_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 const PAPER_ANALYSIS_LOCK_STALE_MS = 6 * 60 * 60 * 1000;
 const LOCK_HEARTBEAT_MS = 30 * 1000;
 const ANALYSIS_CHECKPOINT_CALLBACK = Symbol.for('audio-paper-digest.analysisCheckpointCallback');
-const COMPLETE_RECOVERY_STATUSES = new Set([
-    'complete', 'not_needed', 'skipped', 'no_candidates', 'no_high_value_images', 'no_downloadable_images'
-]);
-const REQUIRED_RECOVERY_STAGES = Object.freeze([
-    'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
-    'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
-]);
 const ANALYSIS_RECOVERY_FIELDS = Object.freeze([
     'analysis', 'parsed', 'analysisManifest', 'analysisCheckpoint', 'analysisStageCheckpoints',
     'analysisRecoveryImageManifest', 'imageManifest', 'selectedImageUrls', 'imageUrls', 'allImageUrls',
@@ -260,7 +256,7 @@ function isCompleteAnalysisContent(paper) {
     if (!paper.analysisManifest || paper.analysisManifest.version !== 1) return false;
     const stages = paper.analysisManifest.stages;
     if (!stages || typeof stages !== 'object' || REQUIRED_RECOVERY_STAGES.some(stage =>
-        !COMPLETE_RECOVERY_STATUSES.has(stages[stage]?.status))) {
+        !isRecoveryStageTerminal(stage, stages[stage]?.status))) {
         return false;
     }
     return true;
@@ -283,6 +279,9 @@ function hasValidAnalysisBody(paper) {
         return !getInvalidAnalysisReason(paper.analysis, parsed, {
             enforceExperimentTableContract: analysisManifestRequiresExperimentTableContract(
                 paper.analysisManifest
+            ),
+            enforceMethodDetailContract: analysisManifestRequiresMethodDetailContract(
+                paper.analysisManifest
             )
         });
     } catch (error) {
@@ -295,6 +294,13 @@ function getAnalysisRunStatus(stats = {}, remainingFailures = stats.failed || 0)
     const success = Number(stats.success) || 0;
     if (failed <= 0) return 'complete';
     return success > 0 ? 'partial_failed' : 'failed';
+}
+
+function getCanonicalAnalysisRunSummary(papers) {
+    const records = Array.isArray(papers) ? papers : [];
+    const remaining = records.filter(paper => !isSuccessfulAnalysisRecord(paper)).length;
+    const success = records.length - remaining;
+    return { success, remaining, status: getAnalysisRunStatus({ success }, remaining) };
 }
 
 function getAnalysisExitCode(status) {
@@ -358,12 +364,19 @@ async function analyzePaperWithRetry(paper, options = {}) {
                 const invalidReason = getInvalidAnalysisReason(analyzed.analysis, parsed, {
                     enforceExperimentTableContract: analysisManifestRequiresExperimentTableContract(
                         analyzed.analysisManifest || paper.analysisManifest
+                    ),
+                    enforceMethodDetailContract: analysisManifestRequiresMethodDetailContract(
+                        analyzed.analysisManifest || paper.analysisManifest
                     )
                 });
-                if (invalidReason) {
-                    lastError = invalidReason;
+                const recoveryReason = isCompleteAnalysisContent(analyzed)
+                    ? null
+                    : '分析恢复阶段未全部进入各自允许的终态';
+                const rejectionReason = invalidReason || recoveryReason;
+                if (rejectionReason) {
+                    lastError = rejectionReason;
                     if (attempt < maxRetries) {
-                        if (onRetry) onRetry(attempt + 1, new Error(invalidReason), paper);
+                        if (onRetry) onRetry(attempt + 1, new Error(rejectionReason), paper);
                         await sleep(retryDelayMs);
                     }
                     continue;
@@ -639,15 +652,24 @@ function persistAnalysisCheckpoint(filePath, paper) {
             ? '深度分析阶段执行中，已保存 checkpoint'
             : (paper.error || '深度分析未完成')
     };
-    return updateJsonFileLocked(filePath, current => ({
-        ...(!Array.isArray(current) && current ? current : {}),
-        lastUpdated: getBeijingISOString(),
-        papers: mergePapersById(
-            Array.isArray(current) ? current : (current?.papers || []),
-            [checkpoint],
-            { preserveSuccessfulAnalysis: true }
-        )
-    }));
+    return updateJsonFileLocked(filePath, current => {
+        const payload = {
+            ...(!Array.isArray(current) && current ? current : {}),
+            lastUpdated: getBeijingISOString(),
+            status: 'running',
+            stats: {
+                ...(!Array.isArray(current) ? current?.stats : {}),
+                analysisStatus: 'running'
+            },
+            papers: mergePapersById(
+                Array.isArray(current) ? current : (current?.papers || []),
+                [checkpoint],
+                { preserveSuccessfulAnalysis: true }
+            )
+        };
+        delete payload.deepAnalysisCompletedAt;
+        return payload;
+    });
 }
 
 // ═══════════════════════════════════════════════════════
@@ -666,12 +688,21 @@ async function mergeAndSaveResults(newResults, filePath, extraData = {}) {
         const existingPapers = Array.isArray(existingData) ? existingData : (existingData?.papers || []);
         const mergedPapers = mergePapersById(existingPapers, newResults, { preserveSuccessfulAnalysis: true });
         counts = { totalMerged: mergedPapers.length, existingCount: existingPapers.length, newCount: newResults.length };
-        return {
+        const payload = {
             ...(existingData && !Array.isArray(existingData) ? existingData : {}),
             timestamp: getBeijingISOString(),
             ...extraData,
             papers: mergedPapers
         };
+        if (typeof extraData.status === 'string') {
+            payload.stats = {
+                ...(existingData && !Array.isArray(existingData) ? existingData.stats : {}),
+                ...(extraData.stats || {}),
+                analysisStatus: extraData.status
+            };
+            if (extraData.status !== 'complete') delete payload.deepAnalysisCompletedAt;
+        }
+        return payload;
     });
     return counts;
 }
@@ -786,6 +817,7 @@ module.exports = {
     persistAnalysisCheckpoint,
     isSuccessfulAnalysisRecord,
     getAnalysisRunStatus,
+    getCanonicalAnalysisRunSummary,
     getAnalysisExitCode,
     getInvalidAnalysisReason,
     hasRequiredSections,

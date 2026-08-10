@@ -67,6 +67,17 @@ class AtomicPublishWritesTest(unittest.TestCase):
         self.assertEqual(raised.exception.code, 0)
         find_images.assert_called_once_with('2026-07-13')
 
+    def test_auto_publisher_rejects_unknown_and_invalid_date_arguments(self):
+        for argv in (
+            ['xiaohongshu-publisher.py', '--unknown'],
+            ['xiaohongshu-publisher.py', '--date', '2026-02-30'],
+            ['xiaohongshu-publisher.py', '--login', '--text', '不应接受'],
+        ):
+            with self.subTest(argv=argv), mock.patch.object(sys, 'argv', argv), \
+                    self.assertRaises(SystemExit) as raised:
+                xhs_publisher.main()
+            self.assertEqual(raised.exception.code, 2)
+
     def test_publish_rejects_oversized_body_without_starting_browser(self):
         with mock.patch.object(xhs_publisher, 'async_playwright') as playwright:
             result = asyncio.run(xhs_publisher.publish_note('标题', '长' * 1001))

@@ -68,7 +68,7 @@ Benefits of this design:
 | `PAPER_DIGEST_BLOG_URL` | Deployed blog URL (e.g. `https://nanless.github.io/audio-paper-digest-blog/posts`) | `https://nanless.github.io/audio-paper-digest-blog/posts` |
 | `PAPER_DIGEST_REPO_URL` | Project repository URL appended to Xiaohongshu and related copy | `github.com/nanless/audio-paper-digest` |
 | `PAPER_DIGEST_GITHUB_REMOTE` | Git remote name | `origin` |
-| `PD_BLOG_REVIEW_CONCURRENCY` | Concurrent three-layer reviews for independent paper pages; the digest page remains first and serial | `5` |
+| `PD_BLOG_REVIEW_CONCURRENCY` | Concurrent three-layer reviews for independent paper pages, bounded to 1–5; the digest page remains first and serial | `5` |
 | `PD_BLOG_REVIEW_CHUNK_CHARS` | Text-review chunk size, bounded to 4000–16000; changes refresh the batch protocol receipt while unchanged per-file SHA passes remain reusable | `8000` |
 | `PD_BLOG_REVIEW_MAX_TOKENS` | Output budget for one blog LLM review; a reasoning-only response gets one JSON-only recovery, capped at 8000 by default | `4000` |
 
@@ -78,7 +78,7 @@ Benefits of this design:
 |----------|-------------|
 | `WECHAT_APP_ID` | WeChat Official Account AppID |
 | `WECHAT_APP_SECRET` | WeChat Official Account AppSecret |
-| `WECHAT_THUMB_MEDIA_ID` | Permanent cover image media ID (optional; default material is used if not set) |
+| `WECHAT_THUMB_MEDIA_ID` | Permanent cover media ID (required for a real draft; optional only for `--dry-run`) |
 | `PAPER_DIGEST_AUTHOR` | Article author name for WeChat Official Account (optional) |
 
 #### Xiaohongshu

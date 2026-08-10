@@ -35,6 +35,8 @@
 }
 ```
 
+顶层 `status` 与 `stats.analysisStatus` 在两者同时存在时必须一致，允许 `running` / `complete` / `partial_failed` / `failed`（历史重筛还可出现 `filter_failed`）。`deepAnalysisCompletedAt` 只允许出现在 `complete`，并必须是北京时间 ISO 时间戳。续跑状态按 canonical 全量成功论文重新计算，不只看本轮新增成功数。
+
 `pending_analysis` 和 `analysis_failed` 不参与下一次 `full-fetch` 的强去重，因此分析中断或失败后可自然重跑；成功分析后更新为 `analyzed`。`full-fetch.js`、`deep-analysis-only.js`、`reanalyze.js`、`batch-analyze.js`、`reanalyze-selected.js`、`analyze-single-paper.js` 和 `refilter-reanalyze-by-date.js` 都通过 `scripts/digest-status.js` 同步该状态，避免不同入口写法分叉。若最新一次尝试失败但已有旧的成功分析可用，`status` 保持 `analyzed`，并用 `latestAttemptStatus: "analysis_failed"` 与 `error` 记录这次失败；失败写回不会把已有成功 `analysis` / `parsed` / 图片元数据覆盖为空。
 
 ### 5.2 `data/current/fetch-checkpoint.json`
@@ -195,7 +197,11 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
   "generation": 12,
   "timestamp": "2026-04-21T10:00:00+08:00",
   "previousTimestamp": "2026-04-20T10:00:00+08:00",
+  "status": "complete",
+  "deepAnalysisCompletedAt": "2026-04-21T12:30:00+08:00",
   "stats": {
+    "analysisStatus": "complete",
+    "remainingFailed": 0,
     "arxivFetched": 200,
     "hfFetched": 50,
     "totalMerged": 230,
@@ -451,7 +457,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 - `dataSha256` 绑定标题、论文数量、热门方向及排名上下文，`promptSha256` 绑定 `prompts/digest-cover.md`；任一变化只使封面失效，不影响论文长图。
 - 会议流程的 category 自动取自 generation manifest；它会改变标题并进入 `dataSha256`，避免会议汇总图与博客标题不一致，无需给 status 另传参数。
 - manifest 可保存 `arxivId` 以稳定指纹和排序，但 prompt 明确禁止把论文 ID 渲染到封面；排名展示完整英文标题、分数和主方向。
-- 论文长图和汇总封面生成后直接进入 `data/archive/<日期>/visual-summaries/`；旧版 current 资产仅在 PNG/SHA 校验通过且归档目标无冲突时迁移。历史批次中不属于最终 TOP10 的旧卡片在同一目录平铺命名为 `unranked-<paper-id>-<kind>.png`，并写入视觉 manifest 的 `legacyUnrankedAssets` 路径/SHA 账本，避免虚构排行榜编号或留下未登记文件。两类图片共享最小尺寸、纵横比、大小和 SHA 门禁，实际生成像素不写死；缺失、失败、损坏、过期或存在重复/未登记 PNG 时状态门禁失败，但不回滚博客发布。
+- 论文长图和汇总封面生成后直接进入 `data/archive/<日期>/visual-summaries/`；旧版 current 资产仅在 PNG/SHA 校验通过且归档目标无冲突时迁移。历史批次中不属于最终 TOP10 的旧卡片在同一目录平铺命名为 `unranked-<paper-id>-<kind>.png`，并写入视觉 manifest 的 `legacyUnrankedAssets` 路径/SHA 账本。新登记成品还包含 `qaAttestation`（清单版本与北京时间）；CLI 只有收到 `--qa-attested true` 才接受 `record`，证明 Agent 已逐项核对标题、正文、结构箭头、数字与排行榜语义。
 
 ### 5.8.1 `data/current/digest-run-reports/YYYY-MM-DD.json`
 

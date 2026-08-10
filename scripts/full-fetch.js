@@ -1576,6 +1576,21 @@ async function runFullFetch() {
     }
     const analyzedPapers = [];
 
+    updateJsonFileLocked(outputFile, current => {
+        const payload = {
+            ...(!Array.isArray(current) && current ? current : {}),
+            papers: Array.isArray(current) ? current : (current?.papers || []),
+            status: 'running',
+            lastUpdated: getBeijingISOString(),
+            stats: {
+                ...(!Array.isArray(current) ? current?.stats : {}),
+                analysisStatus: 'running'
+            }
+        };
+        delete payload.deepAnalysisCompletedAt;
+        return payload;
+    });
+
     const { stats: analysisStats } = await analyzeBatch(papersToAnalyze, {
         checkpointFilePath: outputFile,
         concurrency: ANALYSIS_CONCURRENCY,

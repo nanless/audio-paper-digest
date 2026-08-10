@@ -400,6 +400,10 @@ class PublishXiaohongshuConcurrencyTest(unittest.TestCase):
             manifest.write_text(json.dumps({
                 'schemaVersion': 3,
                 'date': '2026-07-13',
+                'inputFingerprint': 'f' * 64,
+                'category': '论文速递',
+                'visualSummaryRequired': False,
+                'digestCoverRequired': False,
                 'publishedPapers': [published],
             }), encoding='utf-8')
             receipt = Path(tmp) / 'blog-review-receipt-2026-07-13.json'
@@ -407,6 +411,8 @@ class PublishXiaohongshuConcurrencyTest(unittest.TestCase):
                 'schemaVersion': 3,
                 'date': '2026-07-13',
                 'strictReview': True,
+                'hugoGate': 'hugo',
+                'reviewProtocolFingerprint': 'e' * 64,
                 'generationManifestSha256': hashlib.sha256(manifest.read_bytes()).hexdigest(),
                 'publicationCommit': 'a' * 40,
                 'remoteVerifiedOid': 'a' * 40,
@@ -426,6 +432,10 @@ class PublishXiaohongshuConcurrencyTest(unittest.TestCase):
             base = {
                 'schemaVersion': 3,
                 'date': '2026-07-13',
+                'inputFingerprint': 'f' * 64,
+                'category': '论文速递',
+                'visualSummaryRequired': False,
+                'digestCoverRequired': False,
             }
             receipt = Path(tmp) / 'receipt.json'
 
@@ -434,6 +444,8 @@ class PublishXiaohongshuConcurrencyTest(unittest.TestCase):
                     'schemaVersion': 3,
                     'date': '2026-07-13',
                     'strictReview': True,
+                    'hugoGate': 'hugo',
+                    'reviewProtocolFingerprint': 'e' * 64,
                     'generationManifestSha256': hashlib.sha256(manifest.read_bytes()).hexdigest(),
                     'publicationCommit': 'a' * 40,
                     'remoteVerifiedOid': 'a' * 40,
@@ -469,6 +481,10 @@ class PublishXiaohongshuConcurrencyTest(unittest.TestCase):
             manifest.write_text(json.dumps({
                 'schemaVersion': 3,
                 'date': '2026-07-13',
+                'inputFingerprint': 'f' * 64,
+                'category': '论文速递',
+                'visualSummaryRequired': False,
+                'digestCoverRequired': False,
                 'publishedPapers': [paper],
             }), encoding='utf-8')
             receipt = Path(tmp) / 'receipt.json'
@@ -476,6 +492,8 @@ class PublishXiaohongshuConcurrencyTest(unittest.TestCase):
                 'schemaVersion': 3,
                 'date': '2026-07-13',
                 'strictReview': True,
+                'hugoGate': 'hugo',
+                'reviewProtocolFingerprint': 'e' * 64,
                 'generationManifestSha256': hashlib.sha256(manifest.read_bytes()).hexdigest(),
                 'publicationCommit': 'a' * 40,
                 'remoteVerifiedOid': 'b' * 40,

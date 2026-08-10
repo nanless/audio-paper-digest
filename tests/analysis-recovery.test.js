@@ -173,6 +173,7 @@ describe('entry recovery contracts', () => {
         assert.strictEqual(saved.papers.find(p => p.arxivId === '2607.1v2').analysis, validAnalysisText());
         assert.strictEqual(saved.papers.find(p => p.arxivId === '2607.2').analysis, validAnalysisText());
         assert.strictEqual(saved.stats.refilterStatus, 'partial_failed');
+        assert.strictEqual(saved.stats.analysisStatus, 'partial_failed');
         assert.strictEqual(saved.status, 'partial_failed');
         assert.strictEqual(saved.deepAnalysisCompletedAt, undefined);
     });
@@ -247,6 +248,7 @@ describe('entry recovery contracts', () => {
 
         assert.strictEqual(saved.batchDate, '2026-07-08');
         assert.strictEqual(saved.status, 'complete');
+        assert.strictEqual(saved.stats.analysisStatus, 'complete');
         assert.match(saved.timestamp, /^2026-07-08T/);
         assert.ok(saved.lastUpdated >= '2026-07-10');
         assert.strictEqual(saved.deepAnalysisCompletedAt !== undefined, true);

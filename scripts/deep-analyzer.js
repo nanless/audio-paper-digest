@@ -21,6 +21,7 @@ const {
     isOpenSourceScoreAnchor,
     OPEN_SOURCE_SCORE_ANCHORS,
     detectHttpConnectProxyUrl,
+    createProxyAgent,
     createProxyDispatcher,
     getBeijingISOString
 } = require('./utils.js');
@@ -33,7 +34,10 @@ const {
     validateMachineSummaryContract,
     validateTagSectionContract,
     EXPERIMENT_TABLE_CONTRACT_VERSION,
+    METHOD_DETAIL_CONTRACT_VERSION,
     validateExperimentTableContract,
+    validateMethodDetailContract,
+    isRecoveryStageTerminal,
     getInvalidAnalysisReason
 } = require('./analysis-contract.js');
 loadEnvFile();
@@ -44,6 +48,7 @@ const path = require('path');
 const crypto = require('crypto');
 const dns = require('dns').promises;
 const net = require('net');
+const https = require('https');
 const { PDFParse } = require('pdf-parse');
 const { ANALYSIS_CONFIG, ARXIV_CONFIG, SECONDARY_MODEL_CONFIG, CURRENT_DIR } = require('./config.js');
 
@@ -355,7 +360,7 @@ function assertExactObjectKeys(value, expectedKeys, context) {
     if (extra.length > 0) throw new Error(`${context} 包含额外字段: ${extra.join(', ')}`);
 }
 
-function parseScoringAuditResult(raw) {
+function parseScoringAuditResult(raw, allowedEvidenceIds = null) {
     let parsed;
     try {
         parsed = JSON.parse(extractJsonObjectText(raw));
@@ -399,6 +404,16 @@ function parseScoringAuditResult(raw) {
         }
         const reason = item.reason.trim();
         if (reason.length < 20) throw new Error(`评分审计维度 ${spec.key} 理由过短`);
+        if (allowedEvidenceIds instanceof Set) {
+            const citedIds = [...reason.matchAll(/\[([A-Z][A-Z0-9_/-]*)\]/g)].map(match => match[1]);
+            if (citedIds.length === 0) {
+                throw new Error(`评分审计维度 ${spec.key} 理由缺少证据账本 ID`);
+            }
+            const unknownIds = citedIds.filter(id => !allowedEvidenceIds.has(id));
+            if (unknownIds.length > 0) {
+                throw new Error(`评分审计维度 ${spec.key} 引用了账本外 ID: ${[...new Set(unknownIds)].join(', ')}`);
+            }
+        }
         const forbiddenPatterns = FORBIDDEN_SCORING_REASON_PATTERNS[spec.key] || [];
         const forbiddenClauses = findForbiddenDeductionClauses(reason, forbiddenPatterns);
         if (forbiddenClauses.length > 0) {
@@ -464,10 +479,10 @@ function validateScoringAuditAgainstAnalysis(analysis, audit) {
         const hasDemo = hasAffirmativeDemoEvidence(sourceText);
         const normalizedScore = promisesRelease ? 0.5 : hasDemo ? 0.2 : 0;
         const normalizedReason = promisesRelease
-            ? '论文明确承诺未来开放核心产物，但当前尚未发布可用代码、模型权重或数据资源。'
+            ? '[A_OPEN] 论文明确承诺未来开放核心产物，但当前尚未发布可用代码、模型权重或数据资源。'
             : hasDemo
-                ? '论文目前只提供可访问的在线演示页面，未发布核心代码、模型权重或训练数据。'
-                : '论文未发布核心代码、模型权重或数据资源，也未给出明确的后续开源承诺。';
+                ? '[A_OPEN] 论文目前只提供可访问的在线演示页面，未发布核心代码、模型权重或训练数据。'
+                : '[A_OPEN] 论文未发布核心代码、模型权重或数据资源，也未给出明确的后续开源承诺。';
         if (audit.dimensions.openSource.score !== normalizedScore) {
             console.log(`    [deep] ℹ️  开源分按资源状态归一化: ${audit.dimensions.openSource.score} → ${normalizedScore}`);
         }
@@ -481,6 +496,14 @@ function validateScoringAuditAgainstAnalysis(analysis, audit) {
         return recalculateScoringAudit(normalizedAudit);
     }
     return audit;
+}
+
+function revalidateScoringAudit(audit, allowedEvidenceIds) {
+    return parseScoringAuditResult(JSON.stringify({
+        documentType: audit.documentType,
+        confidence: audit.confidence,
+        dimensions: audit.dimensions
+    }), allowedEvidenceIds);
 }
 
 function hasAffirmativeReleasePromise(sourceText) {
@@ -508,13 +531,16 @@ function hasAffirmativeDemoEvidence(sourceText) {
 async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '') {
     let lastError = null;
     let validationFeedback = '这是第一次输出，没有上一次校验错误。';
-    const evidenceContext = sourceEvidence
-        ? buildTypeAwareSourceContext(analysis, sourceEvidence)
-        : '未提供额外原文证据，只能根据已有分析审计。';
+    // 即使没有额外原文，也要把已有分析的带 ID 章节构造成可引用账本；
+    // 否则空 ID 集会让“每个理由必须引用合法 ID”的硬契约无解。
+    const evidenceContext = buildTypeAwareSourceContext(analysis, sourceEvidence);
     const promptTemplateSha256 = crypto.createHash('sha256')
         .update(fs.readFileSync(path.join(__dirname, '..', 'prompts', 'scoring-audit.md')))
         .digest('hex');
     const auditInputAnalysis = prepareScoringAuditAnalysis(analysis);
+    const allowedEvidenceIds = new Set(
+        [...evidenceContext.matchAll(/^\[([A-Z][A-Z0-9_/-]*)\]/gm)].map(match => match[1])
+    );
     for (let attempt = 1; attempt <= 3; attempt++) {
         const prompt = loadPrompt('prompts/scoring-audit.md', {
             existingAnalysis: auditInputAnalysis,
@@ -527,7 +553,11 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '') {
             { temperature: SCORING_AUDIT_TEMPERATURE }
         );
         try {
-            const audit = validateScoringAuditAgainstAnalysis(analysis, parseScoringAuditResult(raw));
+            const normalizedAudit = validateScoringAuditAgainstAnalysis(
+                analysis,
+                parseScoringAuditResult(raw, allowedEvidenceIds)
+            );
+            const audit = revalidateScoringAudit(normalizedAudit, allowedEvidenceIds);
             return {
                 analysis: applyScoringAuditResult(analysis, audit),
                 audit,
@@ -630,6 +660,9 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
         evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
         ...(stage === 'structureRepair'
             ? { experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION }
+            : {}),
+        ...(stage === 'methodRepair'
+            ? { methodDetailContractVersion: METHOD_DETAIL_CONTRACT_VERSION }
             : {}),
         evidenceMaxChars: {
             openSourceScan: OPEN_SOURCE_EVIDENCE_MAX_CHARS,
@@ -751,6 +784,7 @@ function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint) {
     }
     if (stagesToDelete.includes('structureRepair') && manifest.contracts) {
         delete manifest.contracts.experimentTables;
+        delete manifest.contracts.methodDetail;
         if (Object.keys(manifest.contracts).length === 0) delete manifest.contracts;
     }
     paper.analysisStageCheckpoints = checkpoints;
@@ -780,11 +814,15 @@ function createAnalysisRecoveryManifest(paper) {
     }
     const keepTableContract = isRecoveryStageComplete({ stages }, 'structureRepair')
         && existing?.contracts?.experimentTables === EXPERIMENT_TABLE_CONTRACT_VERSION;
+    const keepMethodContract = isRecoveryStageComplete({ stages }, 'structureRepair')
+        && existing?.contracts?.methodDetail === METHOD_DETAIL_CONTRACT_VERSION;
     const contracts = existing?.contracts && typeof existing.contracts === 'object'
         ? { ...existing.contracts }
         : {};
     if (keepTableContract) contracts.experimentTables = EXPERIMENT_TABLE_CONTRACT_VERSION;
     else delete contracts.experimentTables;
+    if (keepMethodContract) contracts.methodDetail = METHOD_DETAIL_CONTRACT_VERSION;
+    else delete contracts.methodDetail;
     return {
         version: RECOVERY_MANIFEST_VERSION,
         stages,
@@ -806,13 +844,12 @@ function markRecoveryStage(manifest, stage, status, details = {}) {
 }
 
 function isRecoveryStageComplete(manifest, stage) {
-    return ['complete', 'not_needed', 'skipped', 'no_candidates', 'no_high_value_images', 'no_downloadable_images']
-        .includes(manifest?.stages?.[stage]?.status);
+    return isRecoveryStageTerminal(stage, manifest?.stages?.[stage]?.status);
 }
 
 function hasIncompleteRecoveryStage(manifest) {
-    return Object.values(manifest?.stages || {}).some(stage =>
-        stage && !['complete', 'not_needed', 'skipped', 'no_candidates', 'no_high_value_images', 'no_downloadable_images'].includes(stage.status)
+    return Object.entries(manifest?.stages || {}).some(([stage, details]) =>
+        details && !isRecoveryStageTerminal(stage, details.status)
     );
 }
 
@@ -906,18 +943,27 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = 3, config =
 
     try {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            const attemptSuspendedMs = budget.suspendedMs();
             try {
                 const timeoutMs = getActiveRemainingTimeoutMs(API_OVERALL_TIMEOUT_MS, budget.elapsedMs());
                 return await _callModelOnce(safeMessages, maxTokens, cfg, budget, apiType, timeoutMs);
             } catch (err) {
                 lastError = err;
                 const duration = (budget.elapsedMs() / 1000).toFixed(1);
+                const suspendedBeforeAttempt = attemptSuspendedMs;
                 const suspendedMs = budget.suspendedMs();
                 if (suspendedMs - reportedSuspendedMs >= 1000) {
                     console.log(`    [api] 💤 检测到系统睡眠/长时间挂起，已从超时预算排除 ${((suspendedMs - reportedSuspendedMs) / 1000).toFixed(1)}s`);
                     reportedSuspendedMs = suspendedMs;
                 }
                 console.log(`    [api] ⚠️  模型调用失败 (尝试 ${attempt}/${maxRetries}) | active=${duration}s | ${err.message}`);
+
+                if (suspendedMs - suspendedBeforeAttempt >= 1000
+                        && ['REQUEST_DEADLINE_EXCEEDED', 'REQUEST_SOCKET_TIMEOUT'].includes(err.code)) {
+                    console.log('    [api] ↻ 本次失败由系统睡眠触发，不消耗重试次数，立即恢复请求');
+                    attempt -= 1;
+                    continue;
+                }
 
                 if (attempt < maxRetries) {
                     const delay = Math.pow(2, attempt) * API_RETRY_BASE_DELAY_MS;
@@ -1544,15 +1590,113 @@ async function fetchArxivImageUrls(arxivId, options = {}) {
 /**
  * 下载图片并转为 base64
  */
-async function fetchPublicImageResponse(imageUrl, maxRedirects = 5) {
+function nodeHeadersView(headers) {
+    return {
+        get(name) {
+            const value = headers[String(name).toLowerCase()];
+            if (Array.isArray(value)) return value.join(', ');
+            return value === undefined ? null : String(value);
+        }
+    };
+}
+
+async function requestPinnedPublicHttps(rawUrl, options = {}) {
+    const {
+        headers = {},
+        timeoutMs = 15000,
+        maxBytes = 1024 * 1024
+    } = options;
+    const parsedUrl = await validatePublicHttpUrl(rawUrl);
+    if (parsedUrl.protocol !== 'https:') {
+        throw new Error(`任意公网资源只允许 HTTPS，收到: ${parsedUrl.protocol}`);
+    }
+    const proxyUrl = detectHttpConnectProxyUrl();
+    if (!proxyUrl) {
+        const error = new Error('公网图片与 Demo 页面必须通过当前项目 .env 中 HTTPS_PROXY/HTTP_PROXY 配置 HTTP CONNECT 代理');
+        error.code = 'PROXY_CONFIG_ERROR';
+        throw error;
+    }
+    const port = Number.parseInt(parsedUrl.port, 10) || 443;
+    const agent = createProxyAgent(
+        proxyUrl,
+        parsedUrl.validatedAddress,
+        port,
+        parsedUrl.hostname
+    );
+
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        let total = 0;
+        let deadline = null;
+        const chunks = [];
+        const finish = (handler, value) => {
+            if (settled) return;
+            settled = true;
+            if (deadline) clearTimeout(deadline);
+            agent.destroy();
+            handler(value);
+        };
+        const request = https.request({
+            hostname: parsedUrl.hostname,
+            port,
+            path: `${parsedUrl.pathname}${parsedUrl.search}`,
+            method: 'GET',
+            headers: {
+                ...headers,
+                Host: parsedUrl.host
+            },
+            agent
+        }, response => {
+            response.on('data', chunk => {
+                total += chunk.length;
+                if (maxBytes > 0 && total > maxBytes) {
+                    const error = new Error(`response body ${(total / 1024 / 1024).toFixed(1)}MB exceeds limit`);
+                    error.code = 'RESPONSE_TOO_LARGE';
+                    response.destroy(error);
+                    request.destroy(error);
+                    finish(reject, error);
+                    return;
+                }
+                chunks.push(chunk);
+            });
+            response.on('end', () => {
+                const buffer = Buffer.concat(chunks);
+                finish(resolve, {
+                    status: response.statusCode || 0,
+                    ok: response.statusCode >= 200 && response.statusCode < 300,
+                    headers: nodeHeadersView(response.headers),
+                    body: null,
+                    arrayBuffer: async () => buffer
+                });
+            });
+            response.on('error', error => finish(reject, error));
+        });
+        deadline = setTimeout(() => {
+            const error = new Error(`公网资源请求超过绝对截止时间 ${timeoutMs}ms`);
+            error.code = 'PUBLIC_RESOURCE_DEADLINE_EXCEEDED';
+            request.destroy(error);
+            finish(reject, error);
+        }, timeoutMs);
+        deadline.unref?.();
+        request.setTimeout(timeoutMs, () => {
+            const error = new Error(`公网资源连接空闲超时 ${timeoutMs}ms`);
+            error.code = 'PUBLIC_RESOURCE_SOCKET_TIMEOUT';
+            request.destroy(error);
+            finish(reject, error);
+        });
+        request.on('error', error => finish(reject, error));
+        request.end();
+    });
+}
+
+async function fetchPublicImageResponse(imageUrl, maxRedirects = 5, requestImpl = requestPinnedPublicHttps) {
     let currentUrl = String(imageUrl || '');
     for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount++) {
         await validatePublicHttpUrl(currentUrl);
-        const response = await fetch(currentUrl, {
+        const response = await requestImpl(currentUrl, {
             headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaperDigest/1.0)' },
-            signal: AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS),
-            redirect: 'manual',
-            dispatcher: getArxivFetchDispatcher()
+            timeoutMs: IMAGE_DOWNLOAD_TIMEOUT_MS,
+            maxBytes: IMAGE_MAX_BYTES
         });
         if (![301, 302, 303, 307, 308].includes(response.status)) return response;
         const location = response.headers.get('location');
@@ -1626,7 +1770,7 @@ function isRetryableImageStatus(status) {
 
 const imageDownloadPromises = new Map();
 
-async function downloadImageBase64Uncached(imageUrl, maxRetries = 5, maxBytes = IMAGE_MAX_BYTES) {
+async function downloadImageBase64Uncached(imageUrl, maxRetries = 5, maxBytes = IMAGE_MAX_BYTES, requestImpl = requestPinnedPublicHttps) {
     if (!isSupportedImageUrl(imageUrl)) {
         console.log(`    [deep] 跳过不支持的图片: ${safeImageLabel(imageUrl)}`);
         return { failureType: 'permanent_reject', reason: 'unsupported_url' };
@@ -1642,7 +1786,7 @@ async function downloadImageBase64Uncached(imageUrl, maxRetries = 5, maxBytes = 
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
-            const response = await fetchPublicImageResponse(imageUrl);
+            const response = await fetchPublicImageResponse(imageUrl, 5, requestImpl);
             if (!response.ok) {
                 if (!isRetryableImageStatus(response.status)) {
                     console.log(`    [deep] 下载图片 ${fileName} 永久失败: HTTP ${response.status}，不重试`);
@@ -1691,7 +1835,7 @@ async function downloadImageBase64Uncached(imageUrl, maxRetries = 5, maxBytes = 
                 console.log(`    [deep] 跳过图片 ${fileName}: ${e.message}`);
                 return { failureType: 'permanent_reject', reason: 'body_size_exceeded' };
             }
-            if (/非公网|localhost|不支持的公网 URL 协议|用户名或密码|重定向超过|重定向.*缺少 Location/i.test(e.message)) {
+            if (/非公网|localhost|不支持的公网 URL 协议|任意公网资源只允许 HTTPS|用户名或密码|重定向超过|重定向.*缺少 Location/i.test(e.message)) {
                 console.log(`    [deep] 跳过图片 ${fileName}: ${e.message}`);
                 return { failureType: 'permanent_reject', reason: e.message };
             }
@@ -1705,18 +1849,18 @@ async function downloadImageBase64Uncached(imageUrl, maxRetries = 5, maxBytes = 
     return { failureType: 'transient_failure', reason: lastError || 'unknown_error' };
 }
 
-async function downloadImageBase64Detailed(imageUrl, maxRetries = 5, maxBytes = IMAGE_MAX_BYTES) {
+async function downloadImageBase64Detailed(imageUrl, maxRetries = 5, maxBytes = IMAGE_MAX_BYTES, requestImpl = requestPinnedPublicHttps) {
     const key = `${imageUrl}\n${maxBytes}`;
     if (!imageDownloadPromises.has(key)) {
-        const promise = downloadImageBase64Uncached(imageUrl, maxRetries, maxBytes)
+        const promise = downloadImageBase64Uncached(imageUrl, maxRetries, maxBytes, requestImpl)
             .finally(() => imageDownloadPromises.delete(key));
         imageDownloadPromises.set(key, promise);
     }
     return imageDownloadPromises.get(key);
 }
 
-async function downloadImageBase64(imageUrl, maxRetries = 5, maxBytes = IMAGE_MAX_BYTES) {
-    const result = await downloadImageBase64Detailed(imageUrl, maxRetries, maxBytes);
+async function downloadImageBase64(imageUrl, maxRetries = 5, maxBytes = IMAGE_MAX_BYTES, requestImpl = requestPinnedPublicHttps) {
+    const result = await downloadImageBase64Detailed(imageUrl, maxRetries, maxBytes, requestImpl);
     return result?.base64 ? result : null;
 }
 
@@ -2622,10 +2766,10 @@ async function analyzePaperDeep(paper) {
         ? 'skipped'
         : candidateImageUrls.length === 0
             ? 'no_candidates'
-            : downloadedImages.length > 0
-                ? 'complete'
-                : downloadOutcomes.some(item => item.status === 'transient_failure')
-                    ? 'transient_failure'
+            : downloadOutcomes.some(item => item.status === 'transient_failure')
+                ? 'transient_failure'
+                : downloadedImages.length > 0
+                    ? 'complete'
                     : 'no_downloadable_images';
     const imageDownloadFingerprint = stableFingerprint({
         enabled: isDualModel,
@@ -2841,7 +2985,12 @@ async function analyzePaperDeep(paper) {
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
         } catch (e) {
-            markRecoveryStage(analysisManifest, 'methodRepair', 'transient_failure', { error: e.message });
+            markRecoveryStage(
+                analysisManifest,
+                'methodRepair',
+                e.code === 'CONTRACT_REJECTED' ? 'contract_rejected' : 'transient_failure',
+                { error: e.message }
+            );
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             throw e;
         }
@@ -2876,9 +3025,16 @@ async function analyzePaperDeep(paper) {
                 error.code = 'CONTRACT_REJECTED';
                 throw error;
             }
+            const methodContractIssue = validateMethodDetailContract(analysis);
+            if (methodContractIssue) {
+                const error = new Error(`最终结构修复后的方法仍未通过 detailed-v1 契约: ${methodContractIssue}`);
+                error.code = 'CONTRACT_REJECTED';
+                throw error;
+            }
             analysisManifest.contracts = {
                 ...(analysisManifest.contracts || {}),
-                experimentTables: EXPERIMENT_TABLE_CONTRACT_VERSION
+                experimentTables: EXPERIMENT_TABLE_CONTRACT_VERSION,
+                methodDetail: METHOD_DETAIL_CONTRACT_VERSION
             };
             markRecoveryStage(analysisManifest, 'structureRepair', structureIssues.length > 0 ? 'complete' : 'not_needed', {
                 deterministicNormalization: normalizedChanged,
@@ -2943,7 +3099,8 @@ async function analyzePaperDeep(paper) {
             analysis = scoringResult.analysis;
             const auditedParsed = parseAnalysis(analysis);
             const auditedInvalidReason = getInvalidAnalysisReason(analysis, auditedParsed, {
-                enforceExperimentTableContract: true
+                enforceExperimentTableContract: true,
+                enforceMethodDetailContract: true
             });
             if (auditedInvalidReason) {
                 const error = new Error(`评分审计后的分析未通过最终契约: ${auditedInvalidReason}`);
@@ -3012,7 +3169,7 @@ async function analyzePaperDeep(paper) {
             const imageInvalidReason = getInvalidAnalysisReason(
                 imageResult.analysis,
                 parseAnalysis(imageResult.analysis),
-                { enforceExperimentTableContract: true }
+                { enforceExperimentTableContract: true, enforceMethodDetailContract: true }
             );
             if (imageInvalidReason) {
                 const fallback = discardInvalidImageSupplement(
@@ -3076,7 +3233,7 @@ async function analyzePaperDeep(paper) {
     saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
     if (hasIncompleteRecoveryStage(analysisManifest)) {
         const incompleteStages = Object.entries(analysisManifest.stages)
-            .filter(([, stage]) => !isRecoveryStageComplete({ stages: { current: stage } }, 'current'))
+            .filter(([stage, details]) => !isRecoveryStageTerminal(stage, details?.status))
             .map(([stage, details]) => `${stage}:${details.status}`);
         return {
             ...paper,
@@ -3177,29 +3334,21 @@ async function checkDemoPageForOpensource(demoUrl) {
         let response;
         for (let redirectCount = 0; redirectCount <= 3; redirectCount++) {
             const parsedUrl = await validatePublicHttpUrl(currentUrl);
-        const requestHostname = parsedUrl.validatedAddress || parsedUrl.hostname;
-        
-            // 复用项目 HTTP CONNECT 代理；手动处理重定向以便每一跳重新校验公网地址。
-            response = await fetch(currentUrl, {
+
+            // CONNECT 固定到本次校验得到的公网 IP；Host 与 TLS SNI 仍使用原始域名。
+            const pageResponse = await requestPinnedPublicHttps(currentUrl, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 },
-                signal: AbortSignal.timeout(15000),
-                dispatcher: getArxivFetchDispatcher(),
-                redirect: 'manual'
-            }).then(async res => {
-                const contentType = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-                if (contentType && !['text/html', 'application/xhtml+xml', 'application/xml', 'text/plain'].includes(contentType)) {
-                    return { status: res.status, data: '', location: res.headers.get('location'), skipped: `Content-Type=${contentType}` };
-                }
-                const data = await res.text();
-                const maxBytes = 1024 * 1024;
-                if (Buffer.byteLength(data, 'utf8') > maxBytes) {
-                    throw new Error(`Demo page exceeds ${maxBytes} bytes`);
-                }
-                return { status: res.status, data, location: res.headers.get('location') };
+                timeoutMs: 15000,
+                maxBytes: 1024 * 1024
             });
+            const contentType = String(pageResponse.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+            const data = Buffer.from(await pageResponse.arrayBuffer()).toString('utf8');
+            response = contentType && !['text/html', 'application/xhtml+xml', 'application/xml', 'text/plain'].includes(contentType)
+                ? { status: pageResponse.status, data: '', location: pageResponse.headers.get('location'), skipped: `Content-Type=${contentType}` }
+                : { status: pageResponse.status, data, location: pageResponse.headers.get('location') };
 
             if (response.status >= 300 && response.status < 400 && response.location) {
                 if (redirectCount >= 3) {
@@ -3242,7 +3391,11 @@ async function checkDemoPageForOpensource(demoUrl) {
     } catch (err) {
         console.log(`    [deep] ⚠️  访问 demo 页面失败: ${err.message}`);
         if (err.code === 'DEMO_TRANSIENT_FAILURE') throw err;
-        if (/非公网|localhost|不支持的公网 URL 协议|用户名或密码|重定向超过/.test(err.message)) {
+        if (err.code === 'RESPONSE_TOO_LARGE') {
+            console.log('    [deep] ℹ️  Demo 页面超过 1MB 安全上限，按确定性跳过处理');
+            return [];
+        }
+        if (/非公网|localhost|不支持的公网 URL 协议|任意公网资源只允许 HTTPS|用户名或密码|重定向超过/.test(err.message)) {
             return [];
         }
         const transientError = new Error(`Demo 页面瞬时访问失败: ${err.message}`);
@@ -3287,7 +3440,10 @@ function isPrivateIpAddress(address) {
             lower === '::' ||
             lower.startsWith('fc') ||
             lower.startsWith('fd') ||
-            lower.startsWith('fe80')
+            /^fe[89ab]/.test(lower) ||
+            lower.startsWith('ff') ||
+            lower === '2001:db8' ||
+            lower.startsWith('2001:db8:')
         );
     }
     return true;
@@ -3387,16 +3543,6 @@ function normalizeMachineEnum(value, allowed, fallback) {
     return fallback;
 }
 
-function normalizeMachineScore(value, maximum, anchors) {
-    const numeric = Number(value);
-    const bounded = Number.isFinite(numeric) ? Math.min(maximum, Math.max(0, numeric)) : 0;
-    const normalized = Math.round((bounded + Number.EPSILON) * 10) / 10;
-    if (!anchors) return normalized.toFixed(1);
-    const nearest = anchors.reduce((best, anchor) =>
-        Math.abs(anchor - normalized) < Math.abs(best - normalized) ? anchor : best, anchors[0]);
-    return nearest.toFixed(1);
-}
-
 function normalizeAnalysisStructure(analysis) {
     let updated = normalizeUnexpectedTopLevelHeadings(analysis);
     const originalMachine = extractSectionByTitle(updated, '机器摘要');
@@ -3448,27 +3594,29 @@ function normalizeAnalysisStructure(analysis) {
     const documentCandidate = documentAliases[values.document_type] || values.document_type;
     values.document_type = documentTypes.includes(documentCandidate)
         ? documentCandidate
-        : (documentTypes.includes(parsedBefore.documentType) ? parsedBefore.documentType : '方法研究');
+        : (documentTypes.includes(parsedBefore.documentType) ? parsedBefore.documentType : '');
     values.rank_bucket = normalizeMachineEnum(
         parsedBefore.rankBucket || values.rank_bucket,
         ['前10%', '前25%', '前50%', '后50%'],
-        '后50%'
+        ''
     );
     values.confidence = normalizeMachineEnum(
         values.confidence || parsedBefore.confidence,
         ['高', '中', '低'],
-        '低'
+        ''
     );
     const scoreMaxima = {
         innovation: 2, technical_rigor: 1.5, experimental_sufficiency: 1.5, clarity: 1,
         impact: 1.5, open_source: 1.5, reproducibility: 0.5, engineering_score: 1.5
     };
     for (const [key, maximum] of Object.entries(scoreMaxima)) {
-        values[key] = normalizeMachineScore(
-            values[key],
-            maximum,
-            key === 'open_source' ? [0, 0.2, 0.5, 1, 1.2, 1.5] : null
-        );
+        const rawValue = values[key];
+        const numeric = Number(rawValue);
+        const anchors = key === 'open_source' ? [0, 0.2, 0.5, 1, 1.2, 1.5] : null;
+        values[key] = rawValue !== '' && Number.isFinite(numeric) && numeric >= 0 && numeric <= maximum
+            && (!anchors || anchors.includes(numeric))
+            ? numeric.toFixed(1)
+            : '';
     }
     values.sota_claim = normalizeMachineEnum(values.sota_claim || parsedBefore.sotaClaim, ['是', '否', '未说明'], '未说明');
     values.has_code = normalizeMachineEnum(values.has_code || parsedBefore.hasCode, ['是', '否', '未说明'], '未说明');
@@ -3479,31 +3627,23 @@ function normalizeAnalysisStructure(analysis) {
     discoveredTags.push(...(oldTagSection.match(/#[^\s#，,;；、]+/g) || []));
     discoveredTags.push(values.primary_task_tag, values.primary_method_tag);
     const candidateTags = [...new Set(discoveredTags.filter(Boolean))];
-    for (const fallback of ['#音频理解', '#Transformer', '#模型评估']) {
-        if (!candidateTags.includes(fallback)) candidateTags.push(fallback);
-    }
     const provisional = replaceOrInsertRequiredSection(
         updated,
         '标签',
-        `${candidateTags.slice(0, 5).join(' ')}\n主任务标签: ${values.primary_task_tag || candidateTags[0]}\n主方法标签: ${values.primary_method_tag || '#Transformer'}\n补充标签: ${candidateTags[2] || '#模型评估'}`
+        `${candidateTags.slice(0, 5).join(' ')}\n主任务标签: ${values.primary_task_tag || candidateTags[0] || ''}\n主方法标签: ${values.primary_method_tag || candidateTags[1] || ''}\n补充标签: ${candidateTags.slice(2, 5).join(' ')}`
     );
     const parsedTags = parseAnalysis(provisional) || {};
-    const tags = [...new Set([...(parsedTags.tags || []), '#音频理解', '#Transformer', '#模型评估'])].slice(0, 5);
+    const tags = [...new Set(parsedTags.tags || [])].slice(0, 5);
     const taskTag = parsedTags.primaryTaskTag && tags.includes(parsedTags.primaryTaskTag)
         ? parsedTags.primaryTaskTag
-        : (tags.find(tag => /^#(?:语音|音频|音乐|说话人|声源|歌唱|音视频)/.test(tag)) || '#音频理解');
+        : (tags.find(tag => /^#(?:语音|音频|音乐|说话人|声源|歌唱|音视频)/.test(tag)) || '');
     const methodTag = parsedTags.primaryMethodTag && tags.includes(parsedTags.primaryMethodTag) && parsedTags.primaryMethodTag !== taskTag
         ? parsedTags.primaryMethodTag
-        : (tags.find(tag => tag !== taskTag && tag === '#Transformer') || '#Transformer');
+        : (tags.find(tag => tag !== taskTag) || '');
     for (const requiredTag of [taskTag, methodTag]) {
-        if (!tags.includes(requiredTag)) tags.unshift(requiredTag);
+        if (requiredTag && !tags.includes(requiredTag)) tags.unshift(requiredTag);
     }
     const finalTags = [...new Set(tags)].slice(0, 5);
-    while (finalTags.length < 3) {
-        const fallback = ['#音频理解', '#Transformer', '#模型评估'].find(tag => !finalTags.includes(tag));
-        if (!fallback) break;
-        finalTags.push(fallback);
-    }
     const supplemental = finalTags.filter(tag => tag !== taskTag && tag !== methodTag);
     updated = replaceOrInsertRequiredSection(updated, '标签', [
         finalTags.join(' '),
@@ -3681,8 +3821,10 @@ async function checkAndFixMethodSection(paper, analysis, textForAnalysis) {
     });
 
     const fixedSection = await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS);
-    if (!fixedSection || fixedSection.length < 200) {
-        return analysis;
+    if (!fixedSection || !isMethodSectionDetailed(fixedSection)) {
+        const error = new Error('方法补充输出未达到 600 中文字符、三段结构化说明的 detailed-v1 契约');
+        error.code = 'CONTRACT_REJECTED';
+        throw error;
     }
 
     // 将补充的方法概述合并回原分析
@@ -3971,6 +4113,7 @@ module.exports = {
     isCorruptedMultimodalError,
     downloadImageBase64,
     fetchPublicImageResponse,
+    requestPinnedPublicHttps,
     sanitizeMarkdownImageAlt,
     sanitizeLogField,
     cleanGapFillPrefix,
@@ -3993,6 +4136,7 @@ module.exports = {
     formatImageAnchorCatalog,
     normalizeGenericImageOrder,
     parseScoringAuditResult,
+    revalidateScoringAudit,
     applyScoringAuditResult,
     validateScoringAuditAgainstAnalysis,
     hasAffirmativeReleasePromise,

@@ -13,15 +13,15 @@ setup_script_logging(__file__)
     python3 publish-wechat-full.py [data_file]
     python3 publish-wechat-full.py --dry-run [data_file]  # 只生成本地预览，不调用微信接口
 """
-import urllib.request, json, time, sys, re, datetime, hashlib, os, html, tempfile
+import argparse, urllib.request, json, time, sys, re, datetime, hashlib, os, html, tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from publish_common import (
     load_papers, get_today_bj, score_and_sort, extract_top_tags,
     score_emoji, format_medal, validate_papers_for_publish, PublishDataValidationError,
-    paper_batch_date
+    paper_batch_date, select_blog_published_snapshot
 )
-from path_config import wechat_preview_path
+from path_config import atomic_write_json, atomic_write_text, wechat_preview_path
 from utils import parse_analysis
 from project_env import build_fetch_url_opener
 
@@ -30,10 +30,6 @@ APP_SECRET = os.environ.get('WECHAT_APP_SECRET', '')
 
 # 封面图素材 ID（永久素材），支持项目 .env 覆写
 THUMB_MEDIA_ID = os.environ.get('WECHAT_THUMB_MEDIA_ID', '')
-if not THUMB_MEDIA_ID:
-    # 兜底默认值（硬编码素材 ID，若过期请设置 WECHAT_THUMB_MEDIA_ID 环境变量）
-    THUMB_MEDIA_ID = "rOjE_rkui9ky0SAz7IMNE1l3FFjYGxFZ80cR0nTGBGqNCJBM_w0S3EBP7DbJR9yd"
-    print("⚠️ 警告: 未设置 WECHAT_THUMB_MEDIA_ID，使用默认素材 ID。若上传失败请检查素材是否过期。")
 
 BJ_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
@@ -120,8 +116,7 @@ def get_wechat_image_url(token, arxiv_url):
     if cdn_url:
         _image_cache[arxiv_url] = cdn_url
         try:
-            with open(_cache_file, 'w') as f:
-                json.dump(_image_cache, f)
+            atomic_write_json(_cache_file, _image_cache, mode=0o600)
         except Exception as e:
             print(f"  ⚠️ 缓存写入失败: {e}")
 
@@ -129,27 +124,22 @@ def get_wechat_image_url(token, arxiv_url):
 
 
 def main():
-    data_file = None
-    dry_run = False
-    target_date = None
-    publish_all = False
+    parser = argparse.ArgumentParser(prog='publish-wechat-full.py', allow_abbrev=False)
+    parser.add_argument('data_file', nargs='?')
+    parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--all', action='store_true')
+    parser.add_argument('--date')
+    parser.add_argument('--ignore-blog-snapshot', action='store_true',
+                        help='显式允许在同日博客尚未远端验证时独立发布')
+    args = parser.parse_args()
+    data_file = args.data_file
+    dry_run = args.dry_run
+    target_date = args.date
+    publish_all = args.all
+    ignore_blog_snapshot = args.ignore_blog_snapshot
 
-    i = 1
-    while i < len(sys.argv):
-        arg = sys.argv[i]
-        if arg == '--dry-run':
-            dry_run = True
-        elif arg == '--all':
-            publish_all = True
-        elif arg == '--date' and i + 1 < len(sys.argv):
-            target_date = sys.argv[i + 1]
-            i += 1
-        elif not arg.startswith('--'):
-            data_file = arg
-        i += 1
-
-    if not dry_run and (not APP_ID or not APP_SECRET):
-        print("❌ 错误: 未设置 WECHAT_APP_ID 或 WECHAT_APP_SECRET 环境变量")
+    if not dry_run and (not APP_ID or not APP_SECRET or not THUMB_MEDIA_ID):
+        print("❌ 错误: 非 dry-run 必须设置 WECHAT_APP_ID、WECHAT_APP_SECRET 和 WECHAT_THUMB_MEDIA_ID")
         sys.exit(1)
 
     papers = load_papers(data_file)
@@ -163,11 +153,12 @@ def main():
     else:
         print("📦 --all: 跳过批次日期过滤，使用输入文件中的全部论文")
 
-    if not papers:
-        print("⚠️ 没有论文需要发布")
-        return True
-
     try:
+        if data_file is None and not publish_all and not ignore_blog_snapshot:
+            papers = select_blog_published_snapshot(papers, today)
+        if not papers:
+            print("⚠️ 没有论文需要发布")
+            return True
         papers = validate_papers_for_publish(papers)
     except PublishDataValidationError as exc:
         print(f"❌ 发布数据预检失败: {exc}")
@@ -444,8 +435,7 @@ def main():
     for ph, _ in paper_htmls:
         first_part_html += ph + SEPARATOR
     first_part_html += footer
-    with open(preview_path, 'w') as f:
-        f.write(first_part_html)
+    atomic_write_text(preview_path, first_part_html)
 
     if dry_run:
         print(f"\n🎉 dry-run 完成！本地预览已生成，未创建微信草稿")

@@ -16,7 +16,7 @@ const {
     initializeJsonFileLocked,
     mergePapersById,
     isSuccessfulAnalysisRecord,
-    getAnalysisRunStatus,
+    getCanonicalAnalysisRunSummary,
     getAnalysisExitCode
 } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses } = require('./digest-status.js');
@@ -41,6 +41,10 @@ async function main() {
     const data = readJsonFileStrict(RESULT_FILE);
 
     const papers = Array.isArray(data) ? data : (data.papers || []);
+    const batchDate = String(
+        (!Array.isArray(data) && (data.batchDate || data.timestamp || data.lastUpdated))
+        || getBeijingISOString()
+    ).slice(0, 10);
     console.log(`总论文数: ${papers.length}`);
 
     const notAnalyzed = papers.filter(p => !isSuccessfulAnalysisRecord(p));
@@ -48,11 +52,12 @@ async function main() {
 
     if (notAnalyzed.length === 0) {
         updateAnalysisDigestStatuses(papers, {
-            batchDate: String(data.batchDate || data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10)
+            batchDate
         });
         updateJsonFileLocked(RESULT_FILE, current => ({
             ...(!Array.isArray(current) && current ? current : {}),
             papers: Array.isArray(current) ? current : (current?.papers || []),
+            status: 'complete',
             deepAnalysisCompletedAt: getBeijingISOString(),
             stats: { ...(!Array.isArray(current) ? current?.stats : {}), analysisStatus: 'complete', remainingFailed: 0 }
         }));
@@ -64,6 +69,7 @@ async function main() {
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             papers: Array.isArray(current) ? current : (current?.papers || []),
+            status: 'running',
             lastUpdated: getBeijingISOString(),
             stats: { ...(!Array.isArray(current) ? current?.stats : {}), analysisStatus: 'running' }
         };
@@ -90,10 +96,11 @@ async function main() {
                 ...(!Array.isArray(current) && current ? current : {}),
                 lastUpdated: getBeijingISOString(),
                 papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), [attempted], { preserveSuccessfulAnalysis: true }),
+                status: 'running',
                 stats: { ...(!Array.isArray(current) ? current?.stats : {}), analysisStatus: 'running' }
             }));
             updateAnalysisDigestStatuses([attempted], {
-                batchDate: (data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10)
+                batchDate
             });
         },
         onPaperStart: (idx, total, paper) => {
@@ -116,19 +123,34 @@ async function main() {
         },
         onSave: async (_results, saveStats) => {
             const processed = saveStats.success + saveStats.failed;
-            const progressStatus = processed < notAnalyzed.length
-                ? 'running'
-                : getAnalysisRunStatus(saveStats);
-            const output = updateJsonFileLocked(RESULT_FILE, current => ({
-                ...(!Array.isArray(current) && current ? current : {}),
-                lastUpdated: getBeijingISOString(),
-                papers: Array.isArray(current) ? current : (current?.papers || []),
-                stats: {
-                    ...(!Array.isArray(current) ? current?.stats : {}),
-                    ...saveStats,
-                    analysisStatus: progressStatus
-                }
-            }));
+            const output = updateJsonFileLocked(RESULT_FILE, current => {
+                const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
+                const {
+                    remaining,
+                    success: canonicalSuccess,
+                    status: canonicalStatus
+                } = getCanonicalAnalysisRunSummary(currentPapers);
+                const progressStatus = processed < notAnalyzed.length
+                    ? 'running'
+                    : canonicalStatus;
+                const payload = {
+                    ...(!Array.isArray(current) && current ? current : {}),
+                    lastUpdated: getBeijingISOString(),
+                    papers: currentPapers,
+                    status: progressStatus,
+                    stats: {
+                        ...(!Array.isArray(current) ? current?.stats : {}),
+                        ...saveStats,
+                        analyzedSuccess: canonicalSuccess,
+                        analyzedFailed: remaining,
+                        remainingFailed: remaining,
+                        analysisStatus: progressStatus
+                    }
+                };
+                if (progressStatus === 'complete') payload.deepAnalysisCompletedAt = getBeijingISOString();
+                else delete payload.deepAnalysisCompletedAt;
+                return payload;
+            });
             papers.splice(0, papers.length, ...(output.papers || []));
             console.log(`   已更新批次统计到 ${RESULT_FILE}`);
         }
@@ -140,16 +162,16 @@ async function main() {
     if (sourceSummary) console.log(`文本来源: ${sourceSummary}`);
     const finalPayload = updateJsonFileLocked(RESULT_FILE, current => {
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
-        const remaining = currentPapers.filter(p => !isSuccessfulAnalysisRecord(p)).length;
-        const status = getAnalysisRunStatus(stats, remaining);
+        const { remaining, success: canonicalSuccess, status } = getCanonicalAnalysisRunSummary(currentPapers);
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             papers: currentPapers,
+            status,
             lastUpdated: getBeijingISOString(),
             stats: {
                 ...(!Array.isArray(current) ? current?.stats : {}),
-                analyzedSuccess: stats.success,
-                analyzedFailed: stats.failed,
+                analyzedSuccess: canonicalSuccess,
+                analyzedFailed: remaining,
                 remainingFailed: remaining,
                 analysisStatus: status
             }
@@ -158,8 +180,7 @@ async function main() {
         else delete payload.deepAnalysisCompletedAt;
         return payload;
     });
-    const remaining = finalPayload.papers.filter(p => !isSuccessfulAnalysisRecord(p)).length;
-    const status = getAnalysisRunStatus(stats, remaining);
+    const { remaining, status } = getCanonicalAnalysisRunSummary(finalPayload.papers);
     console.log(`剩余未分析: ${remaining}`);
     console.log(`运行状态: ${status}`);
     return { status, exitCode: getAnalysisExitCode(status), stats, remaining };

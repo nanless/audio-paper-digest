@@ -597,9 +597,16 @@ function parseResponseText(apiType, response) {
 function requestJson(urlString, bodyObj, headers, options = {}) {
     const {
         timeoutMs = 60000,
+        maxResponseBytes = 16 * 1024 * 1024,
         agent = false,
         method = 'POST'
     } = options;
+    if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+        throw new Error(`timeoutMs 必须是正整数，收到: ${timeoutMs}`);
+    }
+    if (!Number.isInteger(maxResponseBytes) || maxResponseBytes <= 0) {
+        throw new Error(`maxResponseBytes 必须是正整数，收到: ${maxResponseBytes}`);
+    }
     const url = new URL(urlString);
     const transport = url.protocol === 'http:' ? http : https;
     const postData = JSON.stringify(bodyObj);
@@ -609,6 +616,14 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
     };
 
     return new Promise((resolve, reject) => {
+        let settled = false;
+        let deadlineTimer = null;
+        const finish = (handler, value) => {
+            if (settled) return;
+            settled = true;
+            if (deadlineTimer) clearTimeout(deadlineTimer);
+            handler(value);
+        };
         const req = transport.request({
             hostname: url.hostname,
             port: url.port || (url.protocol === 'http:' ? 80 : 443),
@@ -619,22 +634,46 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
             agent
         }, (res) => {
             const chunks = [];
-            res.on('data', chunk => chunks.push(chunk));
+            let responseBytes = 0;
+            res.on('data', chunk => {
+                responseBytes += chunk.length;
+                if (responseBytes > maxResponseBytes) {
+                    const error = new Error(`Response exceeds ${maxResponseBytes} byte limit`);
+                    error.code = 'RESPONSE_TOO_LARGE';
+                    res.destroy(error);
+                    req.destroy(error);
+                    finish(reject, error);
+                    return;
+                }
+                chunks.push(chunk);
+            });
             res.on('end', () => {
+                if (settled) return;
                 const raw = Buffer.concat(chunks).toString('utf8');
                 try {
                     const json = JSON.parse(raw);
-                    resolve({ statusCode: res.statusCode, headers: res.headers, body: json, raw });
+                    finish(resolve, { statusCode: res.statusCode, headers: res.headers, body: json, raw });
                 } catch (err) {
-                    reject(new Error(`JSON parse error (HTTP ${res.statusCode}): ${err.message}; body=${raw.substring(0, 300)}`));
+                    finish(reject, new Error(`JSON parse error (HTTP ${res.statusCode}): ${err.message}; body=${raw.substring(0, 300)}`));
                 }
             });
+            res.on('error', error => finish(reject, error));
         });
 
-        req.on('error', reject);
+        deadlineTimer = setTimeout(() => {
+            const error = new Error(`Request deadline exceeded after ${timeoutMs}ms`);
+            error.code = 'REQUEST_DEADLINE_EXCEEDED';
+            req.destroy(error);
+            finish(reject, error);
+        }, timeoutMs);
+        deadlineTimer.unref?.();
+
+        req.on('error', error => finish(reject, error));
         req.on('timeout', () => {
-            req.destroy();
-            reject(new Error('Request timeout'));
+            const error = new Error(`Request socket timeout after ${timeoutMs}ms`);
+            error.code = 'REQUEST_SOCKET_TIMEOUT';
+            req.destroy(error);
+            finish(reject, error);
         });
         req.write(postData);
         req.end();
@@ -1181,10 +1220,11 @@ function buildProxyAuthorizationHeader(proxy) {
 /**
  * 创建 HTTP CONNECT 代理 Agent（纯 Node 内置模块，无需外部依赖）
  * @param {string} proxyUrl - 代理 URL，如 http://127.0.0.1:7897
- * @param {string} targetHost - 目标主机名（用于 CONNECT 请求和 TLS SNI）
+ * @param {string} targetHost - CONNECT 目标主机名或已验证 IP
  * @param {number} targetPort - 目标端口（默认 443）
+ * @param {string} tlsServername - TLS SNI/证书校验主机名（默认与 targetHost 相同）
  */
-function createProxyAgent(proxyUrl, targetHost, targetPort = 443) {
+function createProxyAgent(proxyUrl, targetHost, targetPort = 443, tlsServername = targetHost) {
     const proxy = new URL(proxyUrl);
     if (!['http:', 'https:'].includes(proxy.protocol)) {
         throw new Error(`当前 Node arXiv 抓取只支持 HTTP CONNECT 代理，收到不兼容协议: ${proxy.protocol}`);
@@ -1194,43 +1234,75 @@ function createProxyAgent(proxyUrl, targetHost, targetPort = 443) {
     const net = require('net');
     const tls = require('tls');
 
-    return new https.Agent({
-        createConnection: (opts, callback) => {
-            const socket = proxy.protocol === 'https:'
-                ? tls.connect({ host: proxy.hostname, port: proxyPort, servername: proxy.hostname, rejectUnauthorized: true })
-                : net.connect({ host: proxy.hostname, port: proxyPort });
+    const agent = new https.Agent({ keepAlive: false });
+    const pendingSockets = new Set();
+    const destroyAgent = agent.destroy.bind(agent);
+    agent.destroy = () => {
+        for (const pendingSocket of pendingSockets) pendingSocket.destroy();
+        pendingSockets.clear();
+        destroyAgent();
+    };
+    // https.Agent 不会采用构造参数 options.createConnection；必须覆盖实例方法。
+    agent.createConnection = (_opts, callback) => {
+        let callbackCalled = false;
+        let socket = null;
+        let connectTimer = null;
+        const done = (error, connectedSocket) => {
+            if (callbackCalled) return;
+            callbackCalled = true;
+            if (connectTimer) clearTimeout(connectTimer);
+            if (socket) pendingSockets.delete(socket);
+            callback(error, connectedSocket);
+        };
+        connectTimer = setTimeout(() => {
+            const error = new Error('Proxy CONNECT/TLS handshake timeout after 60000ms');
+            error.code = 'PROXY_CONNECT_TIMEOUT';
+            socket?.destroy(error);
+            done(error);
+        }, 60000);
+        connectTimer.unref?.();
+        socket = proxy.protocol === 'https:'
+            ? tls.connect({ host: proxy.hostname, port: proxyPort, servername: proxy.hostname, rejectUnauthorized: true })
+            : net.connect({ host: proxy.hostname, port: proxyPort });
+        pendingSockets.add(socket);
 
-            socket.once(proxy.protocol === 'https:' ? 'secureConnect' : 'connect', () => {
-                const proxyAuthorization = buildProxyAuthorizationHeader(proxy);
-                const authHeader = proxyAuthorization ? `Proxy-Authorization: ${proxyAuthorization}\r\n` : '';
-                const connectReq = `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\n${authHeader}Connection: close\r\n\r\n`;
-                socket.write(connectReq);
+        socket.once(proxy.protocol === 'https:' ? 'secureConnect' : 'connect', () => {
+            const proxyAuthorization = buildProxyAuthorizationHeader(proxy);
+            const authHeader = proxyAuthorization ? `Proxy-Authorization: ${proxyAuthorization}\r\n` : '';
+            const connectHost = targetHost.includes(':') ? `[${targetHost}]` : targetHost;
+            const connectAuthority = `${connectHost}:${targetPort}`;
+            const connectReq = `CONNECT ${connectAuthority} HTTP/1.1\r\nHost: ${connectAuthority}\r\n${authHeader}Connection: close\r\n\r\n`;
+            socket.write(connectReq);
 
-                let buffer = '';
-                const onData = (chunk) => {
-                    buffer += chunk.toString('binary');
-                    const headerEnd = buffer.indexOf('\r\n\r\n');
-                    if (headerEnd !== -1) {
-                        socket.removeListener('data', onData);
-                        const statusLine = buffer.slice(0, buffer.indexOf('\r\n'));
-                        if (!statusLine.includes('200')) {
-                            callback(new Error(`Proxy CONNECT failed: ${statusLine}`));
-                            return;
-                        }
-                        const tlsSocket = tls.connect({
-                            socket: socket,
-                            servername: targetHost,
-                            rejectUnauthorized: true
-                        }, () => callback(null, tlsSocket));
-                        tlsSocket.on('error', callback);
+            let buffer = '';
+            const onData = (chunk) => {
+                buffer += chunk.toString('binary');
+                const headerEnd = buffer.indexOf('\r\n\r\n');
+                if (headerEnd !== -1) {
+                    socket.removeListener('data', onData);
+                    const statusLine = buffer.slice(0, buffer.indexOf('\r\n'));
+                    if (!/^HTTP\/1\.[01]\s+200(?:\s|$)/.test(statusLine)) {
+                        socket.destroy();
+                        done(new Error(`Proxy CONNECT failed: ${statusLine}`));
+                        return;
                     }
-                };
-                socket.on('data', onData);
-            });
+                    const tlsSocket = tls.connect({
+                        socket,
+                        servername: tlsServername,
+                        rejectUnauthorized: true
+                    }, () => done(null, tlsSocket));
+                    pendingSockets.delete(socket);
+                    socket = tlsSocket;
+                    pendingSockets.add(socket);
+                    tlsSocket.once('error', done);
+                }
+            };
+            socket.on('data', onData);
+        });
 
-            socket.on('error', callback);
-        }
-    });
+        socket.once('error', done);
+    };
+    return agent;
 }
 
 /**

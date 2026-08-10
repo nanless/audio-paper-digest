@@ -150,7 +150,7 @@ Unified configuration center. All hardcoded parameters are centrally managed and
 | Max wait time | 600000ms | -- | `fetchMaxWaitMs`, max 10 minutes wait per category |
 | Category delay | 60000ms | -- | `categoryDelayMs`, delay between categories (full-fetch adds jitter + rate-limit penalty) |
 | First request delay | 30000ms | -- | `firstRequestDelayMs`, extra wait for the first category |
-| Consecutive known threshold | 20 | -- | Early stop after 20 consecutive known IDs |
+| Consecutive known threshold | 20 | -- | Parser option only; production pagination/API coverage explicitly disables this shortcut |
 
 > Note: the actual retry limit hard-coded in each `fetch-papers.js` path (recent/search/API) is 5; the 429 backoff is `60s * 2^(attempt-1)` (60s/120s/240s/480s), other errors `5s * attempt`. The table above lists the `ARXIV_CONFIG` values registered in `config.js`.
 
@@ -264,7 +264,7 @@ Multimodal deep analyzer. The analysis flow is an **up-to-8-round progressive pr
 **Mandatory Codex visual-asset stage**
 - After every blog page is pushed and remote `main` is verified, `visual-summary-integration.js` creates one `infographic` task for each final-score TOP 10 paper, with normalized-ID tie breaking
 - `npm run visual:render:debug -- --spec SPEC.json --output OUTPUT.png [--illustration text-free-art] [--reference method/architecture-figure] [--result-reference key-result-figure]` is the retained deterministic local debug/fallback renderer, not the default final-asset path. The default flow uses built-in `image_gen` to create the complete text-bearing composition and requires visual accuracy review before record. The Pillow fallback can still compose an approximately `2160x4552` paper infographic or digest cover, supports structured `diagram.columns/nodes/edges` Chinese redraws, reference captions, basic charts/metrics, and the 8 MiB gate
-- Register it with `record --paper ID --kind infographic --file PNG --token TOKEN`. The tool validates the PNG, minimum dimensions, portrait ratio, size, SHA, and task token before archiving it flat under `data/archive/<date>/visual-summaries/` as `<two-digit-rank>-<paper-id>-<title-slug>.png`; concurrent completion order never affects numbering
+- After checking every `generationContext.qaClaims` item, register it with `record --paper ID --kind infographic --file PNG --token TOKEN --qa-attested true`. The explicit attestation is stored with the asset; PNG, dimensions, portrait ratio, size, SHA, and task token are also validated before canonical archival
 - Before calling built-in image generation, run `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]`. This command never calls an image API: it validates the controlled `.bin` cache path, SHA, byte count, MIME, and magic bytes, then emits absolute `referencedImagePaths` with real `.png/.jpg/.webp` extensions (plus relative paths for display) so working-directory changes and raw `.bin` uploads cannot break the call
 - Visual plan/status prints only rank, paper ID, title, task token, reference-image count, and the absolute manifest path by default. `visual:prepare` additionally retains the absolute `referencedImagePaths` required by built-in generation. Full `generationContext.qaClaims` and cover rankings remain in the manifests instead of being repeated in terminal output
 - Each task exposes `generationContext.qaClaims`: the exact English title, four mandatory content regions, method claims, numeric result claims, limitations, and reference captions. Prompting and pre-record visual review must check every item.
@@ -279,7 +279,7 @@ Stage fingerprints bind the actual truncated primary input, the pre-scoring stru
 
 **API Calls**:
 - `callModel(messages, maxTokens)`: retry-wrapped API call encapsulation (up to 3 inner retries, exponential backoff: first 10s, then double)
-- `_callModelOnce()`: single API call, each retry independently creates an AbortController and 20-minute timeout
+- `_callModelOnce()`: one bounded API call with an active-time overall budget; the underlying request has an absolute deadline, socket timeout, response-size limit, and explicit request destruction
 - LLM API requests forcibly set `agent: false`, disabling connection reuse to bypass proxy pollution (avoiding MiMo 403)
 
 **Other Features**:
@@ -412,7 +412,7 @@ All stages share both per-date and repository-global locks. Generation journals 
 - To publish all papers (no filtering), pass `--all` explicitly
 
 **Review Step**:
-Generation reparses scoring from `analysis` and compares it with cached `parsed` data and the rubric version. Text review uses 8,000-character chunks by default; `PD_BLOG_REVIEW_CHUNK_CHARS` adjusts the size within 4,000–16,000 and is bound into the review-protocol fingerprint. The digest page is reviewed first, then independent paper pages use 5 workers by default, configurable through `PD_BLOG_REVIEW_CONCURRENCY`. Review also validates image payload/context alignment plus HTTPS peers. Any indeterminate strict review blocks receipt creation. Push fails closed when the receipt is absent or any reviewed file hash changed.
+Generation reparses scoring from `analysis` and compares it with cached `parsed` data and the rubric version. Text review uses 8,000-character chunks by default. The digest page is reviewed first; paper-page concurrency is bounded to 1–5. Each file-level pass records its actual `imageReviewMode`; the receipt aggregates coverage as `multimodal`, `deterministic_only`, or `mixed`, so reused pages are never overstated. Any indeterminate strict review blocks receipt creation, and push fails closed on a missing or stale receipt.
 
 The shared publish LLM client uses a standard-library explicit empty proxy handler, keeping LLM calls direct and avoiding `requests` compatibility issues or fetch-proxy contamination.
 
@@ -445,6 +445,7 @@ Generate WeChat Official Account article drafts.
 
 - Default data source: `data/current/deep-analysis-result.json` (supports custom path via command line)
 - Filters by `fetchBatchDate`/`batchDate` first and legacy `fetchedAt` second (default date is today in Beijing time); pass `--all` to use all papers in the input file
+- The default source requires a same-date remotely verified blog snapshot; pass `--ignore-blog-snapshot` only for an explicit independent run
 - WeChat Official Account `APP_ID` / `APP_SECRET` are read from the project `.env`
 - Supports `--dry-run`: only generates the local preview HTML; does not fetch a token, upload images, or create drafts
 - **Image Upload**: upload only in-body Markdown images and figures listed in `selectedImageUrls` -> upload to WeChat CDN -> replace with WeChat URLs. Cache stored in `/tmp/wechat-image-cache.json`; raw `allImageUrls` candidates are not uploaded or published directly
@@ -478,13 +479,14 @@ TOP-N one-liners are generated with bounded concurrency (default 5, configurable
 
 Generate Xiaohongshu (Little Red Book) copy.
 
-When the default analysis source is used and a formal same-date schema-v3 blog generation manifest exists, the script first verifies that the review receipt binds the manifest SHA, strict review, publication commit, and matching remotely verified OID. It then selects the manifest's authoritative `publishedPapers` snapshot before publish preflight, so explicitly excluded or unpublished analysis records cannot block the whole copy batch. Missing or corrupt evidence, date mismatches, duplicate IDs, unverified remote publication, or snapshot papers absent from that date's analysis data fail closed. An explicitly supplied custom data file remains independent from the blog manifest.
+With the default analysis source, the script requires a formal same-date schema-v3 blog generation manifest and remotely verified receipt. It validates the manifest SHA, Hugo gate, review protocol, publication commit, and remote OID before selecting `publishedPapers`. A missing manifest fails closed. Use `--ignore-blog-snapshot` only for an explicitly independent pre-blog run; an explicit custom data file also remains independent.
 
 Each successful one-liner is stored under a per-date lock and bound to analysis, prompt, model/endpoint configuration, and sanitation fingerprints. Corrupt cache files are quarantined and rebuilt; fallbacks or changed inputs rerun only that paper. `--date` is strict `YYYY-MM-DD`; this command generates copy only.
 
 - Default data source: `data/current/deep-analysis-result.json`
 - Supports `--top N` curated version (default TOP 5, commonly `--top 3`) and `--all` full summary version
 - Supports `--date YYYY-MM-DD` to specify date
+- `--all` selects the full-copy format only; `--ignore-blog-snapshot` is the explicit snapshot bypass
 - If no paper matches the batch date, the script stops instead of falling back to historical papers
 - Outputs to `data/current/xiaohongshu-YYYY-MM-DD-<suffix>.md`
 - **One-sentence introduction per paper is generated by the publishing-stage LLM API** (via `publish_common.py` protocol routing and standard-library explicit no-proxy transport); input prioritizes `parsed.summary/results/limitations/opensource` plus primary tags, then falls back to abstracts; local `extract_one_liner()` is used when LLM generation fails
@@ -515,6 +517,7 @@ Generate Feishu (Lark) documents.
 - Uniformly reads `data/current/deep-analysis-result.json` (consistent with other publish channels)
 - Supports `--date YYYY-MM-DD` to specify date
 - Filters by `fetchBatchDate`/`batchDate` first and legacy `fetchedAt` second (default date is today in Beijing time); pass `--all` to use all papers in the input file
+- The default source requires a same-date remotely verified blog snapshot; pass `--ignore-blog-snapshot` only for an explicit independent run
 - Supports `--dry-run`: only reports the document title and block counts; does not fetch a token or create a Feishu document
 
 **Implementation Characteristics**:

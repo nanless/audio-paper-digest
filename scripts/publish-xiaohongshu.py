@@ -14,7 +14,7 @@ setup_script_logging(__file__)
     python3 publish-xiaohongshu.py --top 7        # 指定 TOP N
     python3 publish-xiaohongshu.py --date 2026-04-22
 """
-import json, re, sys, os, datetime, concurrent.futures, hashlib
+import argparse, json, re, sys, os, datetime, concurrent.futures, hashlib
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -23,6 +23,7 @@ from publish_common import (
     score_emoji, format_medal, extract_one_liner, call_publish_llm_api,
     validate_papers_for_publish, normalize_publish_arxiv_id,
     PublishDataValidationError,
+    select_blog_published_snapshot as select_verified_blog_published_snapshot,
 )
 from path_config import (
     CURRENT_DIR, atomic_write_text, file_lock, read_json_strict, update_json_file_locked,
@@ -57,78 +58,9 @@ def paper_batch_date(paper):
 def select_blog_published_snapshot(
     papers, date_str, manifest_path=None, receipt_path=None,
 ):
-    """若同日博客清单存在，只保留博客实际生成的权威论文快照。"""
-    date_str = validate_date_component(date_str)
-    path = Path(manifest_path) if manifest_path is not None else (
-        CURRENT_DIR / f'blog-generation-manifest-{date_str}.json'
+    return select_verified_blog_published_snapshot(
+        papers, validate_date_component(date_str), manifest_path, receipt_path,
     )
-    if not path.is_file():
-        return papers
-    try:
-        manifest = read_json_strict(path)
-    except (OSError, RuntimeError) as exc:
-        raise PublishDataValidationError(f'博客生成清单无法读取: {path}') from exc
-    if not isinstance(manifest, dict) or manifest.get('schemaVersion') != 3:
-        raise PublishDataValidationError(f'博客生成清单不是正式 schema v3: {path}')
-    if manifest.get('date') != date_str:
-        raise PublishDataValidationError(f'博客生成清单日期不匹配: {path}')
-
-    receipt_target = Path(receipt_path) if receipt_path is not None else (
-        CURRENT_DIR / f'blog-review-receipt-{date_str}.json'
-    )
-    try:
-        receipt = read_json_strict(receipt_target)
-    except (FileNotFoundError, OSError, RuntimeError) as exc:
-        raise PublishDataValidationError(
-            f'博客尚无可验证的发布凭证: {receipt_target}'
-        ) from exc
-    if not isinstance(receipt, dict):
-        raise PublishDataValidationError('博客发布凭证顶层不是对象')
-    manifest_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
-    publication_commit = str(receipt.get('publicationCommit') or '').lower()
-    remote_oid = str(receipt.get('remoteVerifiedOid') or '').lower()
-    remote_verified_at = str(receipt.get('remoteVerifiedAt') or '')
-    if (
-        receipt.get('schemaVersion') != 3
-        or receipt.get('date') != date_str
-        or receipt.get('strictReview') is not True
-        or receipt.get('generationManifestSha256') != manifest_sha256
-        or not re.fullmatch(r'[0-9a-f]{40}', publication_commit)
-        or remote_oid != publication_commit
-        or not re.fullmatch(
-            r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?\+08:00',
-            remote_verified_at,
-        )
-    ):
-        raise PublishDataValidationError('博客发布凭证未通过远端发布绑定校验')
-
-    published = manifest.get('publishedPapers')
-    if not isinstance(published, list) or not published:
-        raise PublishDataValidationError('博客生成清单缺少已发布论文权威快照')
-
-    available = {}
-    for paper in papers:
-        paper_id = normalize_publish_arxiv_id(paper.get('arxivId'))
-        if paper_id in available:
-            raise PublishDataValidationError(f'当前批次包含重复 arXiv ID: {paper_id}')
-        available[paper_id] = paper
-
-    selected = []
-    seen = set()
-    for paper in published:
-        if not isinstance(paper, dict):
-            raise PublishDataValidationError('博客已发布论文权威快照包含非法记录')
-        paper_id = normalize_publish_arxiv_id(paper.get('arxivId'))
-        if paper_id in seen:
-            raise PublishDataValidationError(f'博客已发布论文权威快照包含重复 arXiv ID: {paper_id}')
-        seen.add(paper_id)
-        if paper_id not in available:
-            raise PublishDataValidationError(f'博客已发布论文不在当前日期分析数据中: {paper_id}')
-        if paper_batch_date(paper) != date_str:
-            raise PublishDataValidationError(f'博客已发布论文快照批次日期不匹配: {paper_id}')
-        selected.append(paper)
-    print(f"🧾 根据博客发布清单选择: {len(selected)}/{len(papers)} 篇论文")
-    return selected
 
 
 def get_oneliner_concurrency():
@@ -550,39 +482,23 @@ def generate_all_summary_post(scored, unscored, date_str):
 
 
 def main():
-    data_file = None
-    top_n = 5
-    mode = 'top'
-    target_date = None
-
-    i = 1
-    while i < len(sys.argv):
-        arg = sys.argv[i]
-        if arg == '--all':
-            mode = 'all'
-        elif arg == '--top' and i + 1 < len(sys.argv):
-            try:
-                top_n = int(sys.argv[i + 1])
-                if not 1 <= top_n <= MAX_TOP_N:
-                    raise ValueError
-            except ValueError:
-                raise PublishDataValidationError(
-                    f'--top 必须是 1-{MAX_TOP_N} 之间的整数: {sys.argv[i + 1]!r}'
-                )
-            i += 1
-        elif arg == '--date' and i + 1 < len(sys.argv):
-            target_date = sys.argv[i + 1]
-            i += 1
-        elif not arg.startswith('--'):
-            data_file = arg
-        i += 1
-
-    today = validate_date_component(get_today_bj(target_date))
+    parser = argparse.ArgumentParser(prog='publish-xiaohongshu.py', allow_abbrev=False)
+    parser.add_argument('data_file', nargs='?')
+    parser.add_argument('--all', action='store_true')
+    parser.add_argument('--top', type=int, default=5)
+    parser.add_argument('--date')
+    parser.add_argument('--ignore-blog-snapshot', action='store_true',
+                        help='显式允许在同日博客尚未远端验证时独立生成文案')
+    args = parser.parse_args()
+    if not 1 <= args.top <= MAX_TOP_N:
+        parser.error(f'--top 必须是 1-{MAX_TOP_N} 之间的整数')
+    mode = 'all' if args.all else 'top'
+    today = validate_date_component(get_today_bj(args.date))
     with file_lock(CURRENT_DIR / f'xiaohongshu-{today}.generation', timeout_seconds=30):
-        _generate_for_date(data_file, today, mode, top_n)
+        _generate_for_date(args.data_file, today, mode, args.top, args.ignore_blog_snapshot)
 
 
-def _generate_for_date(data_file, today, mode, top_n):
+def _generate_for_date(data_file, today, mode, top_n, ignore_blog_snapshot=False):
     papers = load_papers(data_file)
 
     # 优先按不可变 fetchBatchDate 过滤，旧数据才回退严格北京 fetchedAt。
@@ -599,7 +515,7 @@ def _generate_for_date(data_file, today, mode, top_n):
 
     # 默认数据源应与同日博客实际生成集合严格一致，避免明确排除的失败/无关论文
     # 在小红书预检前再次阻断整个批次。自定义数据文件仍保持独立生成语义。
-    if data_file is None:
+    if data_file is None and not ignore_blog_snapshot:
         papers = select_blog_published_snapshot(papers, today)
     papers = validate_papers_for_publish(papers)
     scored, unscored = score_and_sort(papers)

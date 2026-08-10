@@ -178,7 +178,12 @@ describe('digest run report', () => {
                                     id, 'infographic', analysisSha, promptSha, 1, publication
                                 ),
                                 assetPath: path.relative(Config.PROJECT_ROOT, canonical),
-                                assetSha256: crypto.createHash('sha256').update(raw).digest('hex')
+                                assetSha256: crypto.createHash('sha256').update(raw).digest('hex'),
+                                qaAttestation: {
+                                    attested: true,
+                                    checklistVersion: 'visual-semantic-v1',
+                                    attestedAt: '2026-07-29T12:00:00.000+08:00'
+                                }
                             }
                         }
                     }

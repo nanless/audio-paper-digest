@@ -52,7 +52,7 @@
 11. 可复现性只看论文披露的架构、训练、超参数、硬件、评测与复现步骤：全部充分为0.5，大部分充分但有少量缺失为0.3，关键配置大量缺失为0.1，核心方法和配置几乎都缺失为0。不能因为有Demo或开源仓库就自动提高。
 12. 原文证据优先于已有分析的转述。每个维度的理由都必须落到原文或已有分析中可核对的具体证据，不得仅因文档类型给分。
 13. 如果“代码校验反馈”指出上一次输出的具体错误，必须针对该错误修正；禁止原样重复上一次的违规理由。代码会对非理论论文的确定资源状态执行固定锚点归一化；理论研究保留基于公开证明材料的判断。不要用开源状态影响其他维度。
-14. 每个评分理由必须能够对应证据账本中的一个或多个 ID；不得使用账本未包含的论文事实。`S_HEAD` / `S_MIDDLE` / `S_TAIL` 覆盖原文不同位置，不能只依据摘要或开头忽略实验、局限和附录。
+14. 每个评分理由必须显式引用证据账本中的一个或多个 ID；不得使用账本未包含的论文事实。分析章节 ID 形如 `A_METHOD` / `A_RESULTS`，原文切片 ID 形如 `SCORING_SOURCE_3/20`，它们覆盖全文不同位置；不能只依据摘要或开头忽略实验、局限和附录。
 15. “已有完整分析”中的旧评分理由已由代码移除。占位提示不是论文证据；必须根据证据账本从零重建八维理由，不得猜测或恢复旧理由。
 
 只输出一个合法 JSON 对象，不要输出 Markdown fence、解释、前言或结尾。键名和结构必须完全如下，任何层级都不得增加额外键；八个维度必须各出现且仅出现一次；每个维度的 `score` 必须是 JSON 数字，不得是字符串、`null`、布尔值或空值，且最多一位小数。开源分只允许 `0.0/0.2/0.5/1.0/1.2/1.5`。
@@ -62,14 +62,14 @@
   "documentType": "系统技术报告",
   "confidence": "高",
   "dimensions": {
-    "innovation": {"score": 1.2, "reason": "不少于20字的具体理由"},
-    "technicalRigor": {"score": 1.0, "reason": "不少于20字的具体理由"},
-    "experimentalSufficiency": {"score": 1.0, "reason": "不少于20字的具体理由"},
-    "clarity": {"score": 0.8, "reason": "不少于20字的具体理由"},
-    "impact": {"score": 1.0, "reason": "不少于20字的具体理由"},
-    "openSource": {"score": 0.5, "reason": "不少于20字的具体理由"},
-    "reproducibility": {"score": 0.3, "reason": "不少于20字的具体理由"},
-    "engineering": {"score": 1.2, "reason": "不少于20字的具体理由"}
+    "innovation": {"score": 1.2, "reason": "[A_METHOD] 不少于20字的具体理由"},
+    "technicalRigor": {"score": 1.0, "reason": "[A_METHOD] 不少于20字的具体理由"},
+    "experimentalSufficiency": {"score": 1.0, "reason": "[A_RESULTS] 不少于20字的具体理由"},
+    "clarity": {"score": 0.8, "reason": "[A_SUMMARY] 不少于20字的具体理由"},
+    "impact": {"score": 1.0, "reason": "[A_SUMMARY] 不少于20字的具体理由"},
+    "openSource": {"score": 0.5, "reason": "[A_OPEN] 不少于20字的具体理由"},
+    "reproducibility": {"score": 0.3, "reason": "[A_METHOD] 不少于20字的具体理由"},
+    "engineering": {"score": 1.2, "reason": "[A_METHOD] 不少于20字的具体理由"}
   }
 }
 ```

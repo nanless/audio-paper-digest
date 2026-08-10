@@ -2,6 +2,7 @@ import atexit
 import os
 import re
 import sys
+import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -53,33 +54,54 @@ def format_log_timestamp(now=None):
 
 
 class _Tee:
-    def __init__(self, file_handle, original_stream):
+    def __init__(self, file_handle, original_stream, write_lock):
         self.file_handle = file_handle
         self.original_stream = original_stream
-        self.at_line_start = True
+        self.write_lock = write_lock
+        self.pending = ''
 
-    def _timestamp_lines(self, text):
-        output = []
-        for char in text:
-            if self.at_line_start and char not in ('\n', '\r'):
-                output.append(f'[{format_log_timestamp()}] ')
-                self.at_line_start = False
-            output.append(char)
-            if char == '\n':
-                self.at_line_start = True
-        return ''.join(output)
+    @staticmethod
+    def _format_complete_line(line):
+        if line in ('\n', '\r\n'):
+            return line
+        ending = '\r\n' if line.endswith('\r\n') else '\n'
+        content = line[:-len(ending)]
+        return f'[{format_log_timestamp()}] {redact_log_text(content)}{ending}'
+
+    def _write_output(self, text):
+        if not text:
+            return 0
+        if self.file_handle is not None:
+            self.file_handle.write(text)
+            self.file_handle.flush()
+        return self.original_stream.write(text)
 
     def write(self, data):
-        sanitized = self._timestamp_lines(redact_log_text(data))
-        if self.file_handle is not None:
-            self.file_handle.write(sanitized)
-            self.file_handle.flush()
-        return self.original_stream.write(sanitized)
+        text = str(data if data is not None else '')
+        with self.write_lock:
+            self.pending += text
+            complete = self.pending.splitlines(keepends=True)
+            if complete and not complete[-1].endswith(('\n', '\r')):
+                self.pending = complete.pop()
+            else:
+                self.pending = ''
+            rendered = ''.join(self._format_complete_line(line) for line in complete)
+            self._write_output(rendered)
+        return len(text)
+
+    def drain(self):
+        with self.write_lock:
+            if not self.pending:
+                return
+            text = f'[{format_log_timestamp()}] {redact_log_text(self.pending)}'
+            self.pending = ''
+            self._write_output(text)
 
     def flush(self):
-        if self.file_handle is not None:
-            self.file_handle.flush()
-        return self.original_stream.flush()
+        with self.write_lock:
+            if self.file_handle is not None:
+                self.file_handle.flush()
+            return self.original_stream.flush()
 
     def isatty(self):
         return self.original_stream.isatty()
@@ -100,6 +122,10 @@ class _Logger:
         if self.closed:
             return
         self.closed = True
+        if isinstance(sys.stdout, _Tee) and sys.stdout.file_handle is self.file_handle:
+            sys.stdout.drain()
+        if isinstance(sys.stderr, _Tee) and sys.stderr.file_handle is self.file_handle:
+            sys.stderr.drain()
         if isinstance(sys.stdout, _Tee) and sys.stdout.file_handle is self.file_handle:
             sys.stdout = self.stdout
         if isinstance(sys.stderr, _Tee) and sys.stderr.file_handle is self.file_handle:
@@ -160,8 +186,9 @@ def setup_script_logging(script_path=None):
 
     original_stdout = sys.stdout
     original_stderr = sys.stderr
-    sys.stdout = _Tee(fh, original_stdout)
-    sys.stderr = _Tee(fh, original_stderr)
+    write_lock = threading.RLock()
+    sys.stdout = _Tee(fh, original_stdout, write_lock)
+    sys.stderr = _Tee(fh, original_stderr, write_lock)
     _ACTIVE_LOGGER = _Logger(fh, log_file, original_stdout, original_stderr)
     atexit.register(_ACTIVE_LOGGER.close)
     if log_file:

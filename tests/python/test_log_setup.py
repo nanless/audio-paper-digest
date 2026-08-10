@@ -56,6 +56,8 @@ class LogSetupTest(unittest.TestCase):
                         "from log_setup import setup_script_logging; "
                         "setup_script_logging('scripts/default-log-test.py'); "
                         "print('api_key=sk-secret-value'); "
+                        "sys.stdout.write('provider echoed tp-provider-'); "
+                        "sys.stdout.write('secret across writes\\n'); "
                         "print('provider echoed tp-provider-secret without a field'); "
                         "print('ok')"
                     ),
@@ -79,6 +81,7 @@ class LogSetupTest(unittest.TestCase):
         self.assertRegex(result.stdout, r'\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\+08:00\]')
         self.assertNotIn('sk-secret-value', result.stdout)
         self.assertNotIn('tp-provider-secret', result.stdout)
+        self.assertIn('provider echoed [REDACTED] across writes', result.stdout)
         self.assertRegex(created[0], r'^default-log-test-\d{8}-\d{6}-\d+-\d+\.log$')
         with open(os.path.join(LOGS_DIR, created[0]), encoding='utf-8') as log_handle:
             log_text = log_handle.read()

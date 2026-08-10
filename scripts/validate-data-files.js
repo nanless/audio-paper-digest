@@ -21,8 +21,13 @@ const {
 const {
     getInvalidAnalysisReason,
     EXPERIMENT_TABLE_CONTRACT_VERSION,
-    analysisManifestRequiresExperimentTableContract
+    METHOD_DETAIL_CONTRACT_VERSION,
+    analysisManifestRequiresExperimentTableContract,
+    analysisManifestRequiresMethodDetailContract,
+    REQUIRED_RECOVERY_STAGES,
+    isRecoveryStageTerminal
 } = require('./analysis-contract.js');
+const { getCanonicalAnalysisRunSummary } = require('./analysis-engine.js');
 
 const ALLOWED_DIGEST_STATUSES = new Set(['seen', 'pending_analysis', 'analyzed', 'analysis_failed']);
 const ALLOWED_ANALYSIS_ATTEMPT_STATUSES = new Set(['analyzed', 'analysis_failed']);
@@ -30,14 +35,6 @@ const ALLOWED_FILTERED_STATUSES = new Set(['filtering', 'filter_complete', 'comp
 const ALLOWED_RECOVERY_STAGE_STATUSES = new Set([
     'pending', 'complete', 'not_needed', 'skipped', 'no_candidates',
     'no_high_value_images', 'no_downloadable_images', 'transient_failure', 'invalid_output', 'contract_rejected'
-]);
-const REQUIRED_RECOVERY_STAGES = Object.freeze([
-    'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
-    'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
-]);
-const TERMINAL_RECOVERY_STAGE_STATUSES = new Set([
-    'complete', 'not_needed', 'skipped', 'no_candidates',
-    'no_high_value_images', 'no_downloadable_images'
 ]);
 const DEFAULT_FILTER_DECISIONS_FILE = Config.FILES.filterDecisions;
 const DEFAULT_FETCH_CHECKPOINT_FILE = Config.FILES.fetchCheckpoint;
@@ -318,13 +315,23 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
     if (manifest.contracts !== undefined) {
         if (!isPlainObject(manifest.contracts)) {
             addIssue(issues, filePath, `${prefix}.contracts 必须是对象`);
-        } else if (manifest.contracts.experimentTables !== undefined
-                && manifest.contracts.experimentTables !== EXPERIMENT_TABLE_CONTRACT_VERSION) {
-            addIssue(
-                issues,
-                filePath,
-                `${prefix}.contracts.experimentTables 非法: ${manifest.contracts.experimentTables}`
-            );
+        } else {
+            if (manifest.contracts.experimentTables !== undefined
+                    && manifest.contracts.experimentTables !== EXPERIMENT_TABLE_CONTRACT_VERSION) {
+                addIssue(
+                    issues,
+                    filePath,
+                    `${prefix}.contracts.experimentTables 非法: ${manifest.contracts.experimentTables}`
+                );
+            }
+            if (manifest.contracts.methodDetail !== undefined
+                    && manifest.contracts.methodDetail !== METHOD_DETAIL_CONTRACT_VERSION) {
+                addIssue(
+                    issues,
+                    filePath,
+                    `${prefix}.contracts.methodDetail 非法: ${manifest.contracts.methodDetail}`
+                );
+            }
         }
     }
     let hasRecoverableFailure = false;
@@ -351,7 +358,7 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
             const state = manifest.stages[stage];
             if (!state) {
                 addIssue(issues, filePath, `${prefix}.stages 缺少完成态阶段 ${stage}`);
-            } else if (!TERMINAL_RECOVERY_STAGE_STATUSES.has(state.status)) {
+            } else if (!isRecoveryStageTerminal(stage, state.status)) {
                 addIssue(issues, filePath, `${prefix}.stages.${stage} 尚未完成: ${state.status}`);
             }
         }
@@ -432,12 +439,47 @@ function validateFilteredMetadata(filePath, data, papers, issues) {
 
 function validateDeepAnalysisMetadata(filePath, data, papers, issues) {
     if (Array.isArray(data) || data.stats === undefined) return;
+    const allowedStatuses = new Set(['running', 'complete', 'partial_failed', 'failed', 'filter_failed']);
+    if (data.status !== undefined && !allowedStatuses.has(data.status)) {
+        addIssue(issues, filePath, `status 非法: ${data.status}`);
+    }
     if (!isPlainObject(data.stats)) {
         addIssue(issues, filePath, 'stats 必须是对象');
         return;
     }
 
     const stats = data.stats;
+    if (stats.analysisStatus !== undefined) {
+        if (!allowedStatuses.has(stats.analysisStatus)) {
+            addIssue(issues, filePath, `stats.analysisStatus 非法: ${stats.analysisStatus}`);
+        } else if (data.status !== undefined && stats.analysisStatus !== data.status) {
+            addIssue(issues, filePath, `status (${data.status}) 与 stats.analysisStatus (${stats.analysisStatus}) 不一致`);
+        }
+    }
+    if (data.deepAnalysisCompletedAt !== undefined && data.status !== 'complete') {
+        addIssue(issues, filePath, '非 complete 状态不得保留 deepAnalysisCompletedAt');
+    }
+    if (data.deepAnalysisCompletedAt !== undefined && !BEIJING_ISO_RE.test(data.deepAnalysisCompletedAt)) {
+        addIssue(issues, filePath, 'deepAnalysisCompletedAt 必须是北京时间 ISO 时间戳');
+    }
+    if (['complete', 'partial_failed', 'failed'].includes(data.status)) {
+        const canonicalSummary = getCanonicalAnalysisRunSummary(papers);
+        if (canonicalSummary.status !== data.status) {
+            addIssue(
+                issues,
+                filePath,
+                `status (${data.status}) 与 canonical 论文状态 (${canonicalSummary.status}) 不一致`
+            );
+        }
+        if (stats.remainingFailed !== undefined
+            && stats.remainingFailed !== canonicalSummary.remaining) {
+            addIssue(
+                issues,
+                filePath,
+                `stats.remainingFailed (${stats.remainingFailed}) 与 canonical 未完成数 (${canonicalSummary.remaining}) 不一致`
+            );
+        }
+    }
     for (const field of ['arxivFetched', 'hfFetched', 'totalMerged', 'afterFilter', 'newlyAnalyzed', 'preservedExisting', 'totalAfterMerge']) {
         validateNonNegativeInteger(filePath, `stats.${field}`, stats[field], issues);
     }
@@ -534,6 +576,9 @@ function validatePaperListFile(filePath, options = {}) {
                 reparsed = parseAnalysis(paper.analysis);
                 const invalidReason = getInvalidAnalysisReason(paper.analysis, reparsed, {
                     enforceExperimentTableContract: analysisManifestRequiresExperimentTableContract(
+                        paper.analysisManifest
+                    ),
+                    enforceMethodDetailContract: analysisManifestRequiresMethodDetailContract(
                         paper.analysisManifest
                     )
                 });

@@ -21,6 +21,7 @@ const {
 } = require('./visual-summary-state.js');
 
 const COVER_MANIFEST_VERSION = 1;
+const COVER_QA_CHECKLIST_VERSION = 'digest-cover-semantic-v1';
 const COVER_RANKING_LIMIT = DEFAULT_SELECTION_LIMIT;
 
 function sha256Buffer(value) {
@@ -112,6 +113,11 @@ function coverTaskToken(dataSha256, expectedPromptSha, publication = null) {
 
 function validateCompletedCover(cover, dataSha256, expectedPromptSha, expectedToken) {
     if (!cover || cover.status !== 'complete') return false;
+    if (cover.qaAttestation?.attested !== true
+        || cover.qaAttestation?.checklistVersion !== COVER_QA_CHECKLIST_VERSION
+        || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?\+08:00$/.test(
+            String(cover.qaAttestation?.attestedAt || '')
+        )) return false;
     if (cover.dataSha256 !== dataSha256 || cover.promptSha256 !== expectedPromptSha || cover.taskToken !== expectedToken) return false;
     const expected = digestCoverAssetPath(cover.batchDate || '');
     const actual = path.resolve(Config.PROJECT_ROOT, String(cover.assetPath || ''));
@@ -326,7 +332,8 @@ function planDigestCover({ targetDate, papers, manifestPath, promptPath, categor
     });
 }
 
-function recordDigestCover({ sourcePath, taskToken, targetDate, manifestPath }) {
+function recordDigestCover({ sourcePath, taskToken, targetDate, manifestPath, qaAttested = false }) {
+    if (qaAttested !== true) throw new Error('登记汇总封面前必须完成排行榜语义 QA，并传入 qaAttested=true');
     manifestPath = manifestPath || digestCoverManifestPath(targetDate);
     const raw = fs.readFileSync(path.resolve(sourcePath));
     validatePngBuffer(raw);
@@ -373,6 +380,11 @@ function recordDigestCover({ sourcePath, taskToken, targetDate, manifestPath }) 
                 status: 'complete',
                 assetPath: path.relative(Config.PROJECT_ROOT, target).split(path.sep).join('/'),
                 assetSha256,
+                qaAttestation: {
+                    attested: true,
+                    checklistVersion: COVER_QA_CHECKLIST_VERSION,
+                    attestedAt: now
+                },
                 completedAt: now
             }
         };
@@ -413,7 +425,7 @@ function parseArgs(argv) {
     const options = {};
     const allowed = new Set([
         'date', 'receipt', 'category', 'manifest', 'file',
-        'output-hint', 'token', 'error'
+        'output-hint', 'token', 'error', 'qa-attested'
     ]);
     for (let i = 0; i < rest.length; i += 1) {
         const arg = rest[i];
@@ -489,7 +501,8 @@ function main(argv = process.argv.slice(2)) {
             sourcePath: options.file || extractGeneratedImagePathFromHint(options['output-hint']),
             taskToken: options.token,
             targetDate: options.date,
-            manifestPath: options.manifest
+            manifestPath: options.manifest,
+            qaAttested: options['qa-attested'] === 'true'
         });
         console.log('已登记汇总页封面');
         return;

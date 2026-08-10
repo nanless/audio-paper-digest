@@ -68,7 +68,7 @@
 | `PAPER_DIGEST_BLOG_URL` | 博客部署后的访问地址（如 `https://nanless.github.io/audio-paper-digest-blog/posts`） | `https://nanless.github.io/audio-paper-digest-blog/posts` |
 | `PAPER_DIGEST_REPO_URL` | 小红书等文案中附带的项目仓库地址 | `github.com/nanless/audio-paper-digest` |
 | `PAPER_DIGEST_GITHUB_REMOTE` | Git 远程仓库名称 | `origin` |
-| `PD_BLOG_REVIEW_CONCURRENCY` | 独立论文页三层 review 并发度（汇总页仍先串行审查） | `5` |
+| `PD_BLOG_REVIEW_CONCURRENCY` | 独立论文页三层 review 并发度，限制 1–5（汇总页仍先串行审查） | `5` |
 | `PD_BLOG_REVIEW_CHUNK_CHARS` | 文本 review 分块字符数；限制为 4000–16000，值变化会刷新整批协议凭证，但 SHA 未变页面的逐文件通过记录仍可复用 | `8000` |
 | `PD_BLOG_REVIEW_MAX_TOKENS` | 单次博客 LLM review 输出预算；隐藏推理耗尽且无最终 JSON 时只执行一次纯 JSON 恢复，默认最高 8000 | `4000` |
 
@@ -80,7 +80,7 @@
 |------|------|
 | `WECHAT_APP_ID` | 微信公众号 AppID |
 | `WECHAT_APP_SECRET` | 微信公众号 AppSecret |
-| `WECHAT_THUMB_MEDIA_ID` | 封面图永久素材 ID（可选，未设置时使用默认素材） |
+| `WECHAT_THUMB_MEDIA_ID` | 封面图永久素材 ID（真实发布必填；`--dry-run` 可省略） |
 | `PAPER_DIGEST_AUTHOR` | 微信公众号文章作者名（可选） |
 
 #### 小红书

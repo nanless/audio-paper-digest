@@ -265,10 +265,10 @@ HuggingFace Papers 抓取模块。
 **Codex 视觉资产（全部博客发布后的后处理阶段）**
 - `push-blog.py` 在汇总页和全部论文页推送成功且远端 OID 验证后，自动运行 `visual-summary-integration.js`。它只为最终评分 TOP 10 建立 `infographic` 任务，同分按规范化 arXiv ID 排序
 - `npm run visual:render:debug -- --spec SPEC.json --output OUTPUT.png [--illustration 无字插画] [--reference 方法/架构原图] [--result-reference 关键实验原图]` 是保留的本地确定性调试/回退渲染器，不再用于默认最终视觉资产。默认流程由内置 `image_gen` 一次性生成完整带字构图，并在登记前人工目检准确性。回退渲染器仍可使用 Pillow 合成约 `2160x4552` 的论文长图或汇总封面，支持结构化 `diagram.columns/nodes/edges` 中文重绘、参考图图注、简单柱状图/指标卡和 8 MiB 输出门禁
-- 使用 `visual-summary-state.js record --date YYYY-MM-DD --paper ID --kind infographic --file PNG --token TOKEN` 登记。脚本验证 PNG、最小尺寸、纵横比、大小、SHA 和 task token 后，按 manifest 最终排名原子保存到同一个 `data/archive/<date>/visual-summaries/`，文件名为 `<两位排名>-<paper-id>-<title-slug>.png`；并发完成顺序不会影响编号
+- 逐项核对 `generationContext.qaClaims` 后，使用 `visual-summary-state.js record --date YYYY-MM-DD --paper ID --kind infographic --file PNG --token TOKEN --qa-attested true` 登记。显式 QA 声明会随资产保存；脚本同时验证 PNG、最小尺寸、纵横比、大小、SHA 和 task token
 - 调用内置生图前运行 `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]`。命令只物化输入，不调用图像 API；它校验 `.bin` 缓存受控路径、SHA、字节数、MIME 与文件头，再输出具有正确 `.png/.jpg/.webp` 扩展名的绝对 `referencedImagePaths`（另保留相对路径供日志展示），避免工作目录变化或直接上传 `.bin` 触发图片服务错误
 - 视觉 plan/status 默认仅输出排名、论文 ID、标题、task token、参考图数和 manifest 绝对路径；`visual:prepare` 额外保留内置生图必需的绝对 `referencedImagePaths`。完整 `generationContext.qaClaims` 和封面排行仍保存在 manifest，终端不再重复打印大对象
-- 汇总图从同批次审计论文确定性计算标题、热门方向计数和 TOP 10 排名，并复用博客 generation manifest 的 category；用 `digest-cover-state.js record` 登记到同一目录的 `data/archive/<date>/visual-summaries/00-digest-cover-<date>.png`
+- 汇总图从同批次审计论文确定性计算标题、热门方向计数和 TOP 10 排名，并复用博客 generation manifest 的 category；目检排行榜后用 `digest-cover-state.js record ... --qa-attested true` 登记到同一目录
 - 每篇视觉任务的 `generationContext.qaClaims` 提供完整英文标题、四个必要内容区、方法声明、带数字实验声明、局限和参考图 caption；提示词和登记前目检必须逐项核对
 - 旧版 `data/current/visual-summaries/` 和 `data/current/digest-covers/` 资产会在下一次 plan 时校验 PNG 与 SHA，确认归档目标无冲突后迁移
 - 对缺少新版远端 OID 字段、不能重新 plan 的历史批次，使用 `npm run visual:archive -- --date YYYY-MM-DD` 和 `npm run cover:archive -- --date YYYY-MM-DD`；命令只迁移已有资产并更新 manifest，不创建任务或伪造发布凭证。旧 generation manifest 会与同日归档分析论文集合交叉校验后计算排名，非 TOP10 旧卡片平铺命名为 `unranked-<paper-id>-<kind>.png`
@@ -418,7 +418,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 - 若需发布全部论文（不过滤），显式传 `--all`
 
 **Review 环节**：
-生成阶段先从 `analysis` 重解析评分，并与缓存 `parsed`、顶层评分版本比较。review 阶段执行代码正则、LLM 文本和多模态图片三层 review；文本默认按 8000 字符分块，可用 `PD_BLOG_REVIEW_CHUNK_CHARS` 在 4000–16000 范围内调整，分块值进入 review 协议指纹。汇总页先审查，独立论文页默认以 5 并发执行，可用 `PD_BLOG_REVIEW_CONCURRENCY` 调整。任何不确定 review 都按错误阻断，未生成严格审查凭证时 push 阶段必须失败。
+生成阶段先从 `analysis` 重解析评分，并与缓存 `parsed`、顶层评分版本比较。review 阶段执行代码正则、LLM 文本和图片审查；文本默认按 8000 字符分块。汇总页先审查，独立论文页并发度由 `PD_BLOG_REVIEW_CONCURRENCY` 控制且限制为 1–5。逐文件通过账本记录实际 `imageReviewMode`；receipt 汇总为 `multimodal`、`deterministic_only` 或 `mixed`，不会因当前启用副模型而把复用的旧页面误标成多模态。任何不确定 review 都按错误阻断。
 
 代码层自动修复覆盖以下问题：
 三层 review 分块会保持连续 Markdown 表格行的完整性，避免将表头与分隔行分到不同请求后产生伪误报。多模态 review 只对成功加载的图片同步追加上下文与 payload，个别图片下载失败不会使后续图片错配到前一张图的正文。
@@ -451,6 +451,7 @@ LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，必须带 `fix
 
 - 默认数据源：`data/current/deep-analysis-result.json`（支持命令行传入自定义路径）
 - 默认优先按 `fetchBatchDate`/`batchDate`、旧数据回退 `fetchedAt` 的批次日期过滤（默认今天，北京时间）；传 `--all` 才使用输入文件中的全部论文
+- 默认数据源要求同日已远端验证的博客快照；独立发布须显式传 `--ignore-blog-snapshot`
 - 微信公众号 `APP_ID` / `APP_SECRET` 从项目 `.env` 读取
 - 支持 `--dry-run`：只生成本地预览 HTML，不获取 Token、不上传图片、不创建草稿
 - **图片上传**：仅上传正文 Markdown 图片和 `selectedImageUrls` 中的已选图片 → 上传到微信 CDN → 替换为微信 URL。缓存保存在 `/tmp/wechat-image-cache.json`，不会直接上传/发布 `allImageUrls` 候选图
@@ -484,13 +485,14 @@ TOP N 精选版的一句话亮点使用受控并发生成，默认并发度为 5
 
 生成小红书文案。
 
-使用默认分析数据且同日正式博客 generation manifest（schema v3）存在时，脚本会先验证 review receipt 对清单 SHA、严格审查、发布提交和远端 OID 的绑定，再在发布预检前读取 `publishedPapers` 权威快照，只为博客实际发布的论文集合生成文案；明确排除或未发布的分析记录不会再次阻断整个小红书批次。凭证/清单缺失或损坏、日期不匹配、ID 重复、远端未验证或快照论文不在当日分析数据中都会显式失败，禁止静默回退。显式传入自定义数据文件时保持独立生成语义，不绑定博客清单。
+使用默认分析数据时，脚本要求同日正式博客 generation manifest（schema v3）及远端验证 receipt，验证清单 SHA、Hugo gate、review 协议、发布提交和远端 OID 后读取 `publishedPapers` 权威快照。清单缺失也会 fail closed；明确要在博客发布前独立生成时须传 `--ignore-blog-snapshot`，显式自定义数据文件仍保持独立语义。
 
 逐篇成功的一句话在日期级锁内写入缓存，绑定分析、prompt、模型端点配置和清洗契约；损坏缓存会原子隔离后重建，失败回退或指纹变化只重跑对应论文。`--date` 严格校验为 `YYYY-MM-DD`；该命令只产出文案。
 
 - 默认数据源：`data/current/deep-analysis-result.json`
 - 支持 `--top N` 精选版（默认 TOP 5，常用 `--top 3`）和 `--all` 完整汇总版
 - 支持 `--date YYYY-MM-DD` 指定日期
+- `--all` 只切换为完整汇总文案；`--ignore-blog-snapshot` 才显式绕过博客快照
 - 若没有匹配批次日期的论文，脚本会停止生成，避免跨日混入历史论文
 - 输出到 `data/current/xiaohongshu-YYYY-MM-DD-<suffix>.md`
 - **每篇论文的一句话介绍调用发布阶段 LLM API 生成**（复用 `publish_common.py` 的协议路由和标准库显式无代理传输，强制绕过代理）；输入优先使用 `parsed.summary/results/limitations/opensource` 和主标签，再回退摘要；LLM 失败时回退到本地 `extract_one_liner()`
@@ -521,6 +523,7 @@ TOP N 精选版的一句话亮点使用受控并发生成，默认并发度为 5
 - 统一读取 `data/current/deep-analysis-result.json`（与其他发布渠道一致）
 - 支持 `--date YYYY-MM-DD` 指定日期
 - 默认优先按 `fetchBatchDate`/`batchDate`、旧数据回退 `fetchedAt` 的批次日期过滤（默认今天，北京时间）；传 `--all` 才使用输入文件中的全部论文
+- 默认数据源要求同日已远端验证的博客快照；独立发布须显式传 `--ignore-blog-snapshot`
 - 支持 `--dry-run`：只统计将生成的文档标题和块数量，不获取 Token、不创建飞书文档
 
 **实现特点**：

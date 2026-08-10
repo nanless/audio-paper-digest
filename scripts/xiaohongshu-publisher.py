@@ -27,7 +27,7 @@ setup_script_logging(__file__)
   playwright install chromium
 """
 
-import base64, json, os, sys, re, asyncio
+import argparse, base64, json, os, sys, re, asyncio
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
@@ -656,28 +656,28 @@ def parse_xiaohongshu_md(md_path: Path) -> tuple[str, str]:
 # ═══════════════════════════════════════════════════════
 
 def main():
-    args = sys.argv[1:]
-    mode = "publish"
-    target_date = None
-    custom_text = None
-    headless = False
+    parser = argparse.ArgumentParser(prog='xiaohongshu-publisher.py', allow_abbrev=False)
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument('--login', action='store_true')
+    mode_group.add_argument('--all', action='store_true')
+    parser.add_argument('--date')
+    parser.add_argument('--text')
+    parser.add_argument('--headless', action='store_true')
+    args = parser.parse_args()
+    if args.login and (args.date or args.text or args.headless):
+        parser.error('--login 不能与 --date、--text 或 --headless 同时使用')
+    if args.all and args.text:
+        parser.error('--all 不能与 --text 同时使用')
+    if args.date:
+        try:
+            datetime.strptime(args.date, '%Y-%m-%d')
+        except ValueError:
+            parser.error(f'--date 必须是有效的 YYYY-MM-DD 日期: {args.date!r}')
 
-    i = 0
-    while i < len(args):
-        arg = args[i]
-        if arg == "--login":
-            mode = "login"
-        elif arg == "--date" and i + 1 < len(args):
-            target_date = args[i + 1]
-            i += 1
-        elif arg == "--text" and i + 1 < len(args):
-            custom_text = args[i + 1]
-            i += 1
-        elif arg == "--headless":
-            headless = True
-        elif arg == "--all":
-            mode = "publish_all"
-        i += 1
+    mode = 'login' if args.login else ('publish_all' if args.all else 'publish')
+    target_date = args.date
+    custom_text = args.text
+    headless = args.headless
 
     if mode == "login":
         result = asyncio.run(do_login(headless=False))

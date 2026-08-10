@@ -194,6 +194,7 @@ function saveSuccessfulResultsById(resultFile, attemptResults, metadata = {}) {
             stats: {
                 ...(!Array.isArray(current) ? current?.stats : {}),
                 ...metadata,
+                ...(finalStatus ? { analysisStatus: finalStatus } : {}),
                 ...(shouldFinalize ? {
                     refilterStatus: finalStatus,
                     expected: expectedIds.size,

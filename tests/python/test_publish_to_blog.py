@@ -101,6 +101,40 @@ def save_bound_review_receipt(date_str, paths, hugo_gate='hugo', expected_base_h
 
 
 class PublishToBlogReviewTest(unittest.TestCase):
+    def test_receipt_reports_actual_per_file_image_review_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            first = posts / '2026-07-10-first.md'
+            second = posts / '2026-07-10-second.md'
+            first.write_text('first\n', encoding='utf-8')
+            second.write_text('second\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
+                manifest = publish_to_blog.save_generation_manifest('2026-07-10', [first, second])
+                results = {
+                    str(first.resolve()): {
+                        'passed': True,
+                        'reviewedSha256': publish_to_blog._sha256_file(first),
+                        'imageReviewMode': 'deterministic_only',
+                    },
+                    str(second.resolve()): {
+                        'passed': True,
+                        'reviewedSha256': publish_to_blog._sha256_file(second),
+                        'imageReviewMode': 'multimodal',
+                    },
+                }
+                receipt_path = publish_to_blog.save_review_receipt(
+                    '2026-07-10', [first, second], 'hugo',
+                    generation_manifest=manifest, reviewed_results=results,
+                )
+                receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
+            self.assertEqual(receipt['imageReview']['mode'], 'mixed')
+            self.assertEqual(
+                {item['imageReviewMode'] for item in receipt['files']},
+                {'deterministic_only', 'multimodal'},
+            )
+
     def test_generation_cli_rejects_missing_unknown_and_duplicate_flags(self):
         for argv in (
             ['--date'],
@@ -224,7 +258,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
             os.environ.pop('PD_BLOG_REVIEW_CONCURRENCY', None)
             self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 5)
         with mock.patch.dict(os.environ, {'PD_BLOG_REVIEW_CONCURRENCY': '12'}):
-            self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 12)
+            self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 5)
         with mock.patch.dict(os.environ, {'PD_BLOG_REVIEW_CONCURRENCY': 'invalid'}):
             self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 5)
 

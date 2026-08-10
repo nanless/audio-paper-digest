@@ -6,6 +6,7 @@ Paper Digest 发布公共模块 (Python)
 """
 
 import json
+import hashlib
 import math
 import os
 import random
@@ -16,9 +17,10 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from path_config import resolve_deep_analysis_result_path
+from path_config import CURRENT_DIR, read_json_strict, resolve_deep_analysis_result_path
 from project_env import build_child_process_env
 from utils import parse_analysis
 
@@ -59,6 +61,7 @@ SCORING_COMPARE_FIELDS = (
 MANUAL_OVERRIDE_ALLOWED_FIELDS = frozenset(SCORING_COMPARE_FIELDS)
 MANUAL_OVERRIDE_KEYS = frozenset({'type', 'source', 'reason', 'fields'})
 EXPERIMENT_TABLE_CONTRACT_VERSION = 'bounded-v1'
+METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1'
 EXPERIMENT_TABLE_LIMITS = {
     'max_tables': 2,
     'max_data_rows': 12,
@@ -148,10 +151,17 @@ def extract_markdown_tables(text):
             continue
         end = index + 2
         data_rows = 0
+        invalid_column_counts = []
+        separator_columns = len(split_markdown_table_row(lines[index + 1]))
         while end < len(lines):
-            if not lines[end].strip() or len(split_markdown_table_row(lines[end])) < 2:
+            cells = split_markdown_table_row(lines[end])
+            if not lines[end].strip():
+                break
+            if len(cells) < 2 and not re.fullmatch(r'\s*\|.*\|\s*', lines[end]):
                 break
             data_rows += 1
+            if len(cells) != len(header):
+                invalid_column_counts.append((data_rows, len(cells)))
             end += 1
         identifier_columns = 0
         for cell in header:
@@ -162,6 +172,8 @@ def extract_markdown_tables(text):
         tables.append({
             'header': header,
             'data_rows': data_rows,
+            'separator_columns': separator_columns,
+            'invalid_column_counts': invalid_column_counts,
             'metric_columns': max(0, len(header) - identifier_columns),
         })
         index = max(end, index + 2)
@@ -179,6 +191,17 @@ def validate_experiment_table_contract(analysis):
             f"{EXPERIMENT_TABLE_LIMITS['max_tables']} 张"
         )
     for index, table in enumerate(tables, start=1):
+        if table['separator_columns'] != len(table['header']):
+            return (
+                f"实验结果第 {index} 张表分隔行有 {table['separator_columns']} 列，"
+                f"表头有 {len(table['header'])} 列"
+            )
+        if table['invalid_column_counts']:
+            row, columns = table['invalid_column_counts'][0]
+            return (
+                f"实验结果第 {index} 张表第 {row} 个数据行有 {columns} 列，"
+                f"表头有 {len(table['header'])} 列"
+            )
         if table['data_rows'] > EXPERIMENT_TABLE_LIMITS['max_data_rows']:
             return (
                 f"实验结果第 {index} 张表包含 {table['data_rows']} 个数据行，最多允许 "
@@ -189,6 +212,25 @@ def validate_experiment_table_contract(analysis):
                 f"实验结果第 {index} 张表包含 {table['metric_columns']} 个指标列，最多允许 "
                 f"{EXPERIMENT_TABLE_LIMITS['max_metric_columns']} 列（方法/数据集识别列不计）"
             )
+    return None
+
+
+def validate_method_detail_contract(analysis):
+    method = _extract_analysis_section(analysis, '方法概述和架构')
+    chinese_count = len(re.findall(r'[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]', method))
+    if chinese_count < 600:
+        return f'方法概述中文字符不足: {chinese_count}/600'
+    if any(re.search(pattern, method) for pattern in (
+        r'详见原文', r'论文描述了详细架构', r'详细方法见', r'具体实现请参考',
+    )):
+        return '方法概述包含空泛占位表述'
+    if not any(keyword in method for keyword in (
+        '输入', '输出', '流程', '组件', '模块', '阶段', '结构', '网络', '模型',
+    )):
+        return '方法概述缺少结构性描述'
+    paragraphs = [item for item in re.split(r'\n\s*\n', method) if len(item.strip()) > 20]
+    if len(paragraphs) < 3:
+        return f'方法概述有效段落不足: {len(paragraphs)}/3'
     return None
 
 
@@ -427,21 +469,32 @@ def validate_papers_for_publish(papers):
                 )
             manifest = paper.get('analysisManifest')
             if manifest is not None:
-                complete_statuses = {
-                    'complete', 'not_needed', 'skipped', 'no_candidates',
-                    'no_high_value_images', 'no_downloadable_images',
-                }
                 required_stages = (
                     'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan',
                     'revision', 'tableRepair', 'methodRepair', 'structureRepair',
                     'scoringAudit', 'imageSupplement',
                 )
+                terminal_statuses = {
+                    'imageDownload': {'complete', 'skipped', 'no_candidates', 'no_downloadable_images'},
+                    'primaryAnalysis': {'complete'},
+                    'openSourceScan': {'complete'},
+                    'demoLinkScan': {'complete', 'not_needed'},
+                    'revision': {'complete'},
+                    'tableRepair': {'complete', 'not_needed'},
+                    'methodRepair': {'complete', 'not_needed'},
+                    'structureRepair': {'complete', 'not_needed'},
+                    'scoringAudit': {'complete'},
+                    'imageSupplement': {
+                        'complete', 'skipped', 'no_candidates',
+                        'no_high_value_images', 'no_downloadable_images',
+                    },
+                }
                 stages = manifest.get('stages') if isinstance(manifest, dict) else None
                 incomplete = [
                     stage for stage in required_stages
                     if not isinstance(stages, dict)
                     or not isinstance(stages.get(stage), dict)
-                    or stages[stage].get('status') not in complete_statuses
+                    or stages[stage].get('status') not in terminal_statuses[stage]
                 ]
                 if manifest.get('version') != 1 or incomplete:
                     detail = ', '.join(incomplete) if incomplete else 'manifest version'
@@ -466,6 +519,20 @@ def validate_papers_for_publish(papers):
                     if table_issue:
                         raise PublishDataValidationError(
                             f'{paper_label} 分析正文表格契约无效: {table_issue}'
+                        )
+                method_contract = (
+                    contracts.get('methodDetail') if isinstance(contracts, dict) else None
+                )
+                if method_contract is not None and method_contract != METHOD_DETAIL_CONTRACT_VERSION:
+                    raise PublishDataValidationError(
+                        f'{paper_label} analysisManifest.contracts.methodDetail 非法: '
+                        f'{method_contract}'
+                    )
+                if method_contract == METHOD_DETAIL_CONTRACT_VERSION:
+                    method_issue = validate_method_detail_contract(paper.get('analysis'))
+                    if method_issue:
+                        raise PublishDataValidationError(
+                            f'{paper_label} 分析正文方法契约无效: {method_issue}'
                         )
             if (paper.get('analysisSource') == 'abstract'
                     and paper.get('allowAbstractAnalysisPublish') is not True):
@@ -929,7 +996,16 @@ def load_papers(data_file=None):
 
 def get_today_bj(target_date=None):
     """返回北京时间日期字符串 YYYY-MM-DD"""
-    return target_date or datetime.now(BJ_TZ).strftime('%Y-%m-%d')
+    if target_date is None:
+        return datetime.now(BJ_TZ).strftime('%Y-%m-%d')
+    value = str(target_date)
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+        raise PublishDataValidationError(f'无效发布日期: {target_date!r}')
+    try:
+        datetime.strptime(value, '%Y-%m-%d')
+    except ValueError as exc:
+        raise PublishDataValidationError(f'无效发布日期: {target_date!r}') from exc
+    return value
 
 
 def paper_batch_date(paper):
@@ -952,6 +1028,88 @@ def paper_batch_date(paper):
         label = paper.get('arxivId') or paper.get('title') or '<unknown paper>'
         raise PublishDataValidationError(f'{label} fetchedAt 不是严格北京时间戳')
     return match.group(1)
+
+
+def select_blog_published_snapshot(papers, date_str, manifest_path=None, receipt_path=None):
+    """Bind downstream channel content to the exact remotely verified blog snapshot."""
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', str(date_str or '')):
+        raise PublishDataValidationError(f'无效发布日期: {date_str!r}')
+    try:
+        datetime.strptime(date_str, '%Y-%m-%d')
+    except ValueError as exc:
+        raise PublishDataValidationError(f'无效发布日期: {date_str!r}') from exc
+    path = Path(manifest_path) if manifest_path is not None else (
+        CURRENT_DIR / f'blog-generation-manifest-{date_str}.json'
+    )
+    if not path.is_file():
+        raise PublishDataValidationError(f'默认渠道发布缺少同日博客 generation manifest: {path}')
+    try:
+        manifest = read_json_strict(path)
+    except (OSError, RuntimeError) as exc:
+        raise PublishDataValidationError(f'博客生成清单无法读取: {path}') from exc
+    if not isinstance(manifest, dict) or manifest.get('schemaVersion') != 3:
+        raise PublishDataValidationError(f'博客生成清单不是正式 schema v3: {path}')
+    if manifest.get('date') != date_str:
+        raise PublishDataValidationError(f'博客生成清单日期不匹配: {path}')
+    if (
+        not re.fullmatch(r'[0-9a-f]{64}', str(manifest.get('inputFingerprint') or ''))
+        or not isinstance(manifest.get('category'), str)
+        or not manifest.get('category').strip()
+        or manifest.get('visualSummaryRequired') is not False
+        or manifest.get('digestCoverRequired') is not False
+    ):
+        raise PublishDataValidationError('博客 generation manifest 缺少正式发布契约字段')
+
+    receipt_target = Path(receipt_path) if receipt_path is not None else (
+        CURRENT_DIR / f'blog-review-receipt-{date_str}.json'
+    )
+    try:
+        receipt = read_json_strict(receipt_target)
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
+        raise PublishDataValidationError(f'博客尚无可验证的发布凭证: {receipt_target}') from exc
+    manifest_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    publication_commit = str(receipt.get('publicationCommit') or '').lower() if isinstance(receipt, dict) else ''
+    remote_oid = str(receipt.get('remoteVerifiedOid') or '').lower() if isinstance(receipt, dict) else ''
+    remote_verified_at = str(receipt.get('remoteVerifiedAt') or '') if isinstance(receipt, dict) else ''
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get('schemaVersion') != 3
+        or receipt.get('date') != date_str
+        or receipt.get('strictReview') is not True
+        or receipt.get('hugoGate') != 'hugo'
+        or not re.fullmatch(r'[0-9a-f]{64}', str(receipt.get('reviewProtocolFingerprint') or ''))
+        or receipt.get('generationManifestSha256') != manifest_sha256
+        or not re.fullmatch(r'[0-9a-f]{40,64}', publication_commit)
+        or remote_oid != publication_commit
+        or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?\+08:00', remote_verified_at)
+    ):
+        raise PublishDataValidationError('博客发布凭证未通过远端发布绑定校验')
+
+    published = manifest.get('publishedPapers')
+    if not isinstance(published, list) or not published:
+        raise PublishDataValidationError('博客生成清单缺少已发布论文权威快照')
+    available = {}
+    for paper in papers:
+        paper_id = normalize_publish_arxiv_id(paper.get('arxivId'))
+        if paper_id in available:
+            raise PublishDataValidationError(f'当前批次包含重复 arXiv ID: {paper_id}')
+        available[paper_id] = paper
+    selected = []
+    seen = set()
+    for paper in published:
+        if not isinstance(paper, dict):
+            raise PublishDataValidationError('博客已发布论文权威快照包含非法记录')
+        paper_id = normalize_publish_arxiv_id(paper.get('arxivId'))
+        if paper_id in seen:
+            raise PublishDataValidationError(f'博客已发布论文权威快照包含重复 arXiv ID: {paper_id}')
+        seen.add(paper_id)
+        if paper_id not in available:
+            raise PublishDataValidationError(f'博客已发布论文不在当前日期分析数据中: {paper_id}')
+        if paper_batch_date(paper) != date_str:
+            raise PublishDataValidationError(f'博客已发布论文快照批次日期不匹配: {paper_id}')
+        selected.append(paper)
+    print(f'🧾 根据博客发布清单选择: {len(selected)}/{len(papers)} 篇论文')
+    return selected
 
 
 def score_emoji(score):
