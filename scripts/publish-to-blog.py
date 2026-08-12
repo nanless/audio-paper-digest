@@ -517,14 +517,37 @@ def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1')
 - `passed=false` 时必须给出至少一条具体、可执行的 `error` 级原因。
 """
 
-    result = call_llm_api(
-        prompt,
-        max_tokens=get_blog_review_max_tokens(),
-        temperature=0.1,
-        required=required,
-        context=f"LLM 文本 review: {title}",
-        structured_output=True,
-    )
+    review_context = f"LLM 文本 review: {title}"
+    try:
+        result = call_llm_api(
+            prompt,
+            max_tokens=get_blog_review_max_tokens(),
+            temperature=0.1,
+            required=required,
+            context=review_context,
+            structured_output=True,
+        )
+    except PublishLLMUnavailable as primary_error:
+        # DeepSeek 偶尔把严格 JSON review 的预算全部消耗在隐藏推理上。
+        # 发布审查仍必须经过同一 JSON 契约；在主模型基础设施失败时，
+        # 仅切换到已配置的副模型重做本次文本审查，不降低门禁或伪造通过。
+        secondary_model = os.environ.get('PAPER_ANALYZER_SECONDARY_MODEL', '').strip()
+        if not required or not secondary_model:
+            raise
+        print(
+            f"  ⚠️ {review_context} 主模型不可用，使用副模型 {secondary_model} 重试："
+            f"{str(primary_error)[:240]}"
+        )
+        result = call_llm_api(
+            prompt,
+            max_tokens=get_blog_review_max_tokens(),
+            temperature=0.1,
+            required=True,
+            context=f"{review_context} 副模型 fallback",
+            use_secondary=True,
+            max_retries=3,
+            structured_output=True,
+        )
     if not result:
         if required:
             passed, issues = review_protocol_failure(f"LLM 文本 review: {title}", '响应为空')
