@@ -39,6 +39,12 @@ function writeResumeCheckpoint(dir, common, options = {}) {
 }
 
 describe('full-fetch helpers', () => {
+    it('来源配置指纹包含强制 recent 翻页契约版本', () => {
+        const { getSourceConfigFingerprint } = require('../scripts/full-fetch.js');
+        const fingerprint = getSourceConfigFingerprint();
+        assert.match(fingerprint, /^[a-f0-9]{16}$/);
+    });
+
     it('模块可安全导入且不会自动启动长流程', () => {
         const mod = require('../scripts/full-fetch.js');
         assert.strictEqual(typeof mod.fullFetch, 'function');

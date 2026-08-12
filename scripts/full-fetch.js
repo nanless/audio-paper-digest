@@ -153,7 +153,9 @@ function hasValidFetchSourceIntegrity(entry) {
 
 function getSourceConfigFingerprint() {
     return stableHash({
-        sourceContractVersion: 2,
+        // v3: recent 抓取即使短页也必须请求配置范围内的后续 offset；
+        // 升级来源契约以淘汰旧版可能只检查第一页的当天 checkpoint。
+        sourceContractVersion: 3,
         arxivCategories: Config.ARXIV_CATEGORIES.map(({ id, priority }) => ({ id, priority })),
         arxiv: {
             maxResultsPerCategory: Config.ARXIV_CONFIG.maxResultsPerCategory,
