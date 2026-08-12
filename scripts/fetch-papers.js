@@ -503,10 +503,10 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
                 allPapers.push(...papers);
                 console.log(`[fetch-recent] ${categoryId} 第 ${page + 1} 页获取 ${papers.length} 篇`);
                 pageSuccess = true;
-                if (meta.rawItems < pageSize) {
-                    shouldStopPaging = true;
-                    health.coverageComplete = true;
-                }
+                // recent 页的条目数可能因 arXiv 的日期窗口、历史去重或页面
+                // 生成方式而少于 pageSize。不能把短页误判为“没有下一页”：
+                // 在达到本次配置的页数前，必须继续请求下一个 skip offset，
+                // 否则 eess.AS 等类别会永远只检查第一页。
                 break;
             } catch (err) {
                 const is429 = err.message.includes('429');

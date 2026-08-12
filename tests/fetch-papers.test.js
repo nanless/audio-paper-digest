@@ -349,7 +349,7 @@ describe('抓取健康状态', () => {
         assert.strictEqual(papers._sourceHealth.successfulRequests, 3);
     });
 
-    it('arXiv recent 首页显式声明 skip=0/show=50，短页不再跳到错误 offset', async () => {
+    it('arXiv recent 即使首页是短页也必须继续请求下一页 offset', async () => {
         const urls = [];
         const papers = await fetchCategoryFromRecentPage('cs.SD', new Set(), 100, {
             requestFn: async url => {
@@ -364,7 +364,8 @@ describe('抓取健康状态', () => {
         });
         assert.deepStrictEqual(papers, []);
         assert.match(urls[0], /recent\?skip=0&show=50$/);
-        assert.strictEqual(urls.length, 1);
+        assert.match(urls[1], /recent\?skip=50&show=50$/);
+        assert.strictEqual(urls.length, 2);
         assert.strictEqual(papers._sourceHealth.coverageComplete, true);
     });
 
