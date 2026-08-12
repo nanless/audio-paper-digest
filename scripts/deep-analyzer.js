@@ -3091,7 +3091,14 @@ async function analyzePaperDeep(paper) {
                 error.code = 'CONTRACT_REJECTED';
                 throw error;
             }
-            const methodContractIssue = validateMethodDetailContract(analysis);
+            // 结构修复模型会重写完整正文，偶尔把前一阶段已达标的方法章节
+            // 压缩回短摘要。这里在最终拒绝前重新走一次方法补充，避免让
+            // 一个下游修复阶段破坏已满足 detailed-v1 的上游契约。
+            let methodContractIssue = validateMethodDetailContract(analysis);
+            if (methodContractIssue) {
+                analysis = await checkAndFixMethodSection(paper, analysis, textForAnalysis);
+                methodContractIssue = validateMethodDetailContract(analysis);
+            }
             if (methodContractIssue) {
                 const error = new Error(`最终结构修复后的方法仍未通过 detailed-v1 契约: ${methodContractIssue}`);
                 error.code = 'CONTRACT_REJECTED';
@@ -3771,6 +3778,12 @@ function normalizeAnalysisStructure(analysis) {
             && (!anchors || anchors.includes(numeric))
             ? numeric.toFixed(1)
             : '';
+    }
+    // 结构修复模型偶尔会遗漏 open_source 行。评分理由或已解析的资源状态
+    // 能提供更具体证据时优先复用；完全没有证据时使用最保守的 0.0 锚点，
+    // 让确定性契约修复收敛，同时不凭空给论文增加开源分。
+    if (!values.open_source) {
+        values.open_source = '0.0';
     }
     values.sota_claim = normalizeMachineEnum(values.sota_claim || parsedBefore.sotaClaim, ['是', '否', '未说明'], '未说明');
     values.has_code = normalizeMachineEnum(values.has_code || parsedBefore.hasCode, ['是', '否', '未说明'], '未说明');

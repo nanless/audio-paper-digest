@@ -883,6 +883,21 @@ has_dataset: 否
         assert.deepStrictEqual(getRepairableAnalysisStructureIssues(normalized), []);
     });
 
+    it('确定性规范化为缺失的机器摘要开源分补安全零值', () => {
+        const {
+            normalizeAnalysisStructure,
+            getRepairableAnalysisStructureIssues,
+            parseAnalysis
+        } = require('../scripts/deep-analyzer.js');
+        const { validateMachineSummaryContract } = require('../scripts/analysis-contract.js');
+        const malformed = validAnalysisText().replace(/^open_source: 0\.2\n/m, '');
+        const normalized = normalizeAnalysisStructure(malformed);
+        const parsed = parseAnalysis(normalized);
+        assert.match(normalized, /open_source: 0\.0/);
+        assert.strictEqual(validateMachineSummaryContract(normalized, parsed, { checkScoringConsistency: false }), null);
+        assert.deepStrictEqual(getRepairableAnalysisStructureIssues(normalized), []);
+    });
+
     it('确定性规范化机器摘要中的受限枚举和越界数值', () => {
         const {
             normalizeAnalysisStructure,
