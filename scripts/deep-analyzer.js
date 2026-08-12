@@ -3356,20 +3356,28 @@ async function scanOpensource(paper, textForAnalysis) {
  */
 function extractDemoUrls(analysis) {
     const urls = [];
+    // LLM 输出常把链接后面的中文说明直接接在 URL 后面，例如
+    // `https://example.github.io（提供音频示例）`。如果只排除半角空格/右括号，
+    // WHATWG URL 会把全角括号和说明文字当成主机名的一部分并转换为 punycode，
+    // 随后在 DNS 安全校验阶段表现为一个完全误导性的 ENOTFOUND。这里在提取阶段
+    // 就截断常见的中英文句末/闭合标点，同时保留 URL 路径中的合法字符。
+    // 点号、冒号和逗号可能是 URL 的合法字符，不能在正则层排除；
+    // 只把空白及说明文字常用的开闭括号作为 URL 边界，末尾标点再统一清理。
+    const urlSuffix = '[^\\s\\u3000\\uff08\\uff09\\u3010\\u3011\\u300c\\u300d\\u300e\\u300f]+';
     // 匹配各种可能的 demo/项目页面链接
     const patterns = [
-        /Demo[：:]\s*(https?:\/\/[^\s\)]+)/gi,
-        /项目主页[：:]\s*(https?:\/\/[^\s\)]+)/gi,
-        /在线演示[：:]\s*(https?:\/\/[^\s\)]+)/gi,
-        /Homepage[：:]\s*(https?:\/\/[^\s\)]+)/gi,
-        /Project[：:]\s*(https?:\/\/[^\s\)]+)/gi,
-        /页面[：:]\s*(https?:\/\/[^\s\)]+)/gi,
+        new RegExp(`Demo[：:]\\s*(https?:\\/\\/${urlSuffix})`, 'gi'),
+        new RegExp(`项目主页[：:]\\s*(https?:\\/\\/${urlSuffix})`, 'gi'),
+        new RegExp(`在线演示[：:]\\s*(https?:\\/\\/${urlSuffix})`, 'gi'),
+        new RegExp(`Homepage[：:]\\s*(https?:\\/\\/${urlSuffix})`, 'gi'),
+        new RegExp(`Project[：:]\\s*(https?:\\/\\/${urlSuffix})`, 'gi'),
+        new RegExp(`页面[：:]\\s*(https?:\\/\\/${urlSuffix})`, 'gi'),
     ];
     
     for (const pattern of patterns) {
         let match;
         while ((match = pattern.exec(analysis)) !== null) {
-            const url = match[1].trim();
+            const url = match[1].trim().replace(/[),.;:!?，。；：！？、）》】》」』]+$/u, '');
             // 排除 arxiv、github、huggingface 等已知链接
             if (!url.includes('arxiv.org') && 
                 !url.includes('github.com') && 
@@ -4277,6 +4285,7 @@ module.exports = {
     isGloballyRoutableIpAddress,
     isPrivateIpAddress,
     validatePublicHttpUrl,
+    extractDemoUrls,
     extractSectionByTitle,
     mergeSectionByTitle,
     appendSectionByTitle,

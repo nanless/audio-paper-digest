@@ -1054,6 +1054,12 @@ has_dataset: 否
         await assert.rejects(() => requestPinnedPublicHttps('http://8.8.8.8/demo'), /只允许 HTTPS/);
     });
 
+    it('提取 Demo URL 时截断全角括号后的中文说明，避免生成伪 punycode 主机名', () => {
+        const { extractDemoUrls } = require('../scripts/deep-analyzer.js');
+        const urls = extractDemoUrls('Demo：https://relative-fx.github.io（提供音频示例）');
+        assert.deepStrictEqual(urls, ['https://relative-fx.github.io']);
+    });
+
     it('副模型的 replacement 被代码忽略，主模型原文和评分不被重写', () => {
         const {
             parseImageInsertionPlan,
