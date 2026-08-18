@@ -13,7 +13,9 @@ const {
 const {
     loadPapersDatabase,
     savePapersDatabase,
-    updateAnalysisDigestStatuses
+    updateAnalysisDigestStatuses,
+    normalizeCompatibleBatchDate,
+    inferAnalysisBatchDate
 } = require('../scripts/digest-status.js');
 const {
     main: refilterMain,
@@ -34,6 +36,42 @@ const { isSuccessfulAnalysisRecord } = require('../scripts/analysis-engine.js');
 const execFileAsync = promisify(execFile);
 
 describe('papers database recovery safety', () => {
+    it('单篇历史重分析优先保留论文批次日期并兼容旧 fetchedAt', () => {
+        assert.strictEqual(inferAnalysisBatchDate([{
+            fetchBatchDate: '2026-07-08',
+            digestStatus: { batchDate: '2026-08-17' },
+            fetchedAt: '2026-07-07T23:30:00+08:00'
+        }], { batchDate: '2026-08-17' }, '2026-08-17T12:00:00+08:00'), '2026-07-08');
+
+        assert.strictEqual(inferAnalysisBatchDate([{
+            fetchedAt: '2026-07-09 09:00:00+08:00'
+        }], {}, '2026-08-17T12:00:00+08:00'), '2026-07-09');
+    });
+
+    it('单篇重分析忽略非法兼容日期并回退结果文件批次', () => {
+        assert.strictEqual(inferAnalysisBatchDate([{
+            batchDate: '2026-02-30',
+            digestStatus: { batchDate: 'not-a-date' }
+        }], { batchDate: '2026-07-10' }, '2026-08-17T12:00:00+08:00'), '2026-07-10');
+    });
+
+    it('带时区批次时间戳按真实瞬时转换到北京时间日期', () => {
+        assert.strictEqual(normalizeCompatibleBatchDate('2026-07-08T16:30:00Z'), '2026-07-09');
+        assert.strictEqual(normalizeCompatibleBatchDate('2026-07-09T00:30:00+09:00'), '2026-07-08');
+        assert.strictEqual(normalizeCompatibleBatchDate('2026-07-09 00:30:00-0400'), '2026-07-09');
+        assert.strictEqual(inferAnalysisBatchDate([{
+            fetchedAt: '2026-07-08T16:30:00Z'
+        }], {}, '2026-08-17T12:00:00+08:00'), '2026-07-09');
+    });
+
+    it('batch/reanalyze 入口统一接线北京时间批次日期 helper', () => {
+        for (const fileName of ['batch-analyze.js', 'reanalyze.js', 'reanalyze-selected.js']) {
+            const source = fs.readFileSync(path.join(__dirname, '..', 'scripts', fileName), 'utf8');
+            assert.match(source, /inferAnalysisBatchDate\s*\(/, `${fileName} 未调用统一日期 helper`);
+            assert.doesNotMatch(source, /function\s+inferBatchDate\s*\(/, `${fileName} 仍保留重复日期实现`);
+        }
+    });
+
     it('current JSON 损坏时不会静默回退 legacy', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-db-corrupt-'));
         const current = path.join(dir, 'current.json');
@@ -512,6 +550,19 @@ describe('entry recovery contracts', () => {
         assert.strictEqual(saved.stats.remainingFailed, 1);
         assert.strictEqual(saved.stats.totalAfterMerge, 2);
         assert.strictEqual(saved.deepAnalysisCompletedAt, undefined);
+    });
+
+    it('batch zero-work 收尾把 UTC 跨日时间戳归入北京时间批次', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-zero-work-timezone-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(file, JSON.stringify({
+            timestamp: '2026-07-08T16:30:00Z',
+            papers: [validAnalysisRecord('2607.83')]
+        }));
+
+        const saved = finalizeBatchZeroWorkState(file, '2026-08-17');
+        assert.strictEqual(saved.batchDate, '2026-07-09');
+        assert.strictEqual(saved.status, 'complete');
     });
 
     it('deep-only zero-work 收尾在同一锁内重验 expected 集合和 canonical 状态', () => {

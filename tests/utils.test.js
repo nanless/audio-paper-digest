@@ -15,6 +15,7 @@ const {
     SCORING_RUBRIC_VERSION,
     detectApiType,
     getAnthropicEndpoint,
+    validateApiEndpointUrl,
     buildApiUrl,
     buildRequestBody,
     buildHeaders,
@@ -559,6 +560,27 @@ describe('buildApiUrl', () => {
     it('OpenCode Go 基础端点 -> 官方 chat completions URL', () => {
         const url = buildApiUrl('openai', 'https://opencode.ai/zen/go/v1');
         assert.strictEqual(url, 'https://opencode.ai/zen/go/v1/chat/completions');
+    });
+
+    it('拒绝公网明文 HTTP LLM endpoint', () => {
+        assert.throws(
+            () => buildApiUrl('openai', 'http://api.example.com/v1'),
+            /禁止使用公网明文/
+        );
+        assert.throws(
+            () => validateApiEndpointUrl('ftp://127.0.0.1/model'),
+            /请改用 HTTPS/
+        );
+    });
+
+    it('本地测试 HTTP 只允许 loopback 地址', () => {
+        assert.strictEqual(
+            buildApiUrl('openai', 'http://127.0.0.1:8080/v1'),
+            'http://127.0.0.1:8080/v1/chat/completions'
+        );
+        assert.strictEqual(validateApiEndpointUrl('http://localhost:8080/v1').hostname, 'localhost');
+        assert.strictEqual(validateApiEndpointUrl('http://[::1]:8080/v1').hostname, '[::1]');
+        assert.throws(() => validateApiEndpointUrl('http://0.0.0.0:8080/v1'), /仅允许 loopback/);
     });
 });
 

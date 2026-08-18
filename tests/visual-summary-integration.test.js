@@ -11,6 +11,7 @@ const {
     reconcileVisualSummaryTasks,
     parseArgs
 } = require('../scripts/visual-summary-integration.js');
+const { publishedPapersFingerprint } = require('../scripts/visual-summary-state.js');
 
 function publishedPaper(id, score) {
     return validAnalysisPaper(id, {
@@ -27,11 +28,15 @@ function publishedPaper(id, score) {
 
 function writePublication(currentDir, papers, commit = 'a'.repeat(40)) {
     const date = '2026-07-13';
+    const snapshotFingerprint = publishedPapersFingerprint(papers);
     const generation = {
         schemaVersion: 3,
         date,
         category: '论文速递',
         inputFingerprint: 'c'.repeat(64),
+        publishAll: false,
+        publishedPapersFingerprintContract: 'typed-json-f64-utf16-v1',
+        publishedPapersFingerprint: snapshotFingerprint,
         visualSummaryRequired: false,
         digestCoverRequired: false,
         publishedPapers: papers
@@ -46,6 +51,9 @@ function writePublication(currentDir, papers, commit = 'a'.repeat(40)) {
         hugoGate: 'hugo',
         reviewProtocolFingerprint: 'b'.repeat(64),
         generationManifestSha256: crypto.createHash('sha256').update(raw).digest('hex'),
+        generationInputIntegrity: 'typed-json-f64-utf16-v1',
+        generationInputFingerprint: generation.inputFingerprint,
+        publishedPapersFingerprint: snapshotFingerprint,
         publicationCommit: commit,
         remoteVerifiedOid: commit,
         remoteVerifiedAt: '2026-07-14T03:00:00+08:00'

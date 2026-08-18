@@ -100,6 +100,9 @@ body
                 is_visual_summary_asset_path=lambda _path, _date: False,
                 load_generation_manifest=lambda _date: ([index, paper], Path('manifest.json')),
                 validate_git_publish_branch=mock.Mock(return_value='a' * 40),
+                reusable_verified_publication_review=mock.Mock(return_value=None),
+                has_publication_evidence_for_generation=mock.Mock(return_value=False),
+                _git_relative_manifest=mock.Mock(return_value=[]),
                 review_receipt_path=mock.Mock(return_value=receipt_path),
                 review_failure_path=mock.Mock(return_value=failure_path),
                 plan_incremental_review=mock.Mock(return_value={

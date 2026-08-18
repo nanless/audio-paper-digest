@@ -50,7 +50,7 @@ Fetch strategy: 3-level (recent → search → API):
 
 1. **Recent page (primary)**: `arxiv.org/list/{category}/recent`, paginated (`?skip=50&show=50`, max 100 per category). Abstracts fetched afterward via `fetchAbstracts`. If recent returns fewer than the target count, the flow continues to the search/API fallbacks to fill the candidate pool.
 2. **Search page (fallback)**: `arxiv.org/search/` with User-Agent rotation, page delay 10-25s.
-3. **API (last resort)**: `export.arxiv.org/api/query`. 429 rate-limit: exponential backoff 60s, 120s, 240s, 480s, max 5 retries.
+3. **API (last resort)**: `export.arxiv.org/api/query`. 429 rate-limit: exponential backoff 60s, 120s, 240s, 480s, max 5 retries. Recent/search/abstract/Atom requests share a 60-second absolute deadline, an 8 MiB response cap, and `ARXIV_CONFIG`/`PD_ARXIV_*`-driven retry, backoff, and User-Agent settings.
 
 Deduplication logic: `deduplicatePapers()` deduplicates by `arxivId`, with core categories (eess.AS / cs.SD / eess.SP) taking precedence over supplement categories.
 
@@ -97,6 +97,8 @@ HF-specific fields (7 total):
 Using the `PAPER_ANALYZER_*` configuration in `the `.env` file in the project root`, each paper is evaluated to determine whether it is speech / music / audio related.
 
 **API Protocol Auto-Routing**: `detectApiType()` in `scripts/utils.js` automatically switches between OpenAI / Anthropic protocols based on the endpoint and model name
+
+LLM endpoints must use HTTPS. Plain HTTP is allowed only for loopback local test services, so API keys cannot be sent over public cleartext connections.
 - **MiMo / Kimi Token Plan / Coding Plan** (MiMo is recognized by `token-plan` plus its domain/model; Kimi by `coding` plus the `kimi.com` domain or Kimi model) -> automatically switches to **Anthropic protocol**, supports names such as `k3`, and masquerades as a Claude Code call
   - **MiMo**: `https://token-plan-cn.xiaomimimo.com/v1` -> `/anthropic/v1/messages`
   - **Kimi**: `https://api.kimi.com/coding` or `https://api.kimi.com/coding/v1` -> `https://api.kimi.com/coding/v1/messages` (automatically adds `/v1`; supports model names such as `k3`; no `/anthropic` intermediate path needed)

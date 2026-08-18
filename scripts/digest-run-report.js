@@ -52,6 +52,44 @@ function paperDate(paper) {
     return paperBatchDate(paper);
 }
 
+function snapshotMatchesDate(value, targetDate, kind) {
+    if (!value || typeof value !== 'object') return false;
+    if (kind === 'decisions') return value.batchDate === targetDate;
+    if (kind !== 'deep' && value.batchDate !== targetDate) return false;
+    if (kind === 'deep' && value.batchDate && value.batchDate !== targetDate) return false;
+    const papers = papersFrom(value);
+    try {
+        return papers.every(paper => paperDate(paper) === targetDate);
+    } catch (_error) {
+        return false;
+    }
+}
+
+function resolveDigestRuntimeSnapshot(
+    currentPath, targetDate, kind,
+    { archiveDir = Config.ARCHIVE_DIR, today = getBeijingISOString().slice(0, 10) } = {}
+) {
+    const current = readJson(currentPath);
+    if (snapshotMatchesDate(current, targetDate, kind)) {
+        return { value: current, source: 'current', path: currentPath };
+    }
+    // Today's status must describe today's mutable runtime state. Falling back
+    // to a stale archive would conceal a missing, corrupt, or rolled-forward
+    // current file. Future dates are equally ineligible for historical reuse.
+    if (targetDate >= today) {
+        return { value: null, source: 'missing', path: currentPath };
+    }
+    const archivedPath = path.join(archiveDir, targetDate, path.basename(currentPath));
+    if (!fs.existsSync(archivedPath)) {
+        return { value: null, source: 'missing', path: archivedPath };
+    }
+    const archived = readJson(archivedPath);
+    if (!snapshotMatchesDate(archived, targetDate, kind)) {
+        return { value: null, source: 'invalid', path: archivedPath };
+    }
+    return { value: archived, source: 'archive', path: archivedPath };
+}
+
 function sourceHealthComplete(raw, targetDate) {
     const categories = raw?.sourceHealth?.arxiv?.categories;
     const expectedIds = new Set(Config.ARXIV_CATEGORIES.map(item => item.id));
@@ -82,6 +120,91 @@ function samePaperIds(left, right) {
         && leftIds.size === rightIds.size
         && [...leftIds].every(id => rightIds.has(id))
     );
+}
+
+function uniquePaperIds(papers) {
+    const values = papers.map(normalizedId).filter(Boolean);
+    if (values.length !== papers.length || new Set(values).size !== values.length) return null;
+    return new Set(values);
+}
+
+function filterSnapshotsAreConsistent(raw, decisions, filtered, targetDate) {
+    if (
+        !snapshotMatchesDate(raw, targetDate, 'raw')
+        || !snapshotMatchesDate(decisions, targetDate, 'decisions')
+        || !snapshotMatchesDate(filtered, targetDate, 'filtered')
+        || filtered?.status !== 'complete'
+        || !decisions?.decisions
+        || typeof decisions.decisions !== 'object'
+        || Array.isArray(decisions.decisions)
+    ) return false;
+
+    const rawPapers = papersFrom(raw);
+    const filteredPapers = papersFrom(filtered);
+    const rawIds = uniquePaperIds(rawPapers);
+    const filteredIds = uniquePaperIds(filteredPapers);
+    if (!rawIds || !filteredIds || rawIds.size === 0) return false;
+
+    const normalizedDecisions = new Map();
+    for (const [key, decision] of Object.entries(decisions.decisions)) {
+        if (!decision || typeof decision !== 'object' || Array.isArray(decision)) return false;
+        const keyId = normalizedId(key);
+        const recordId = normalizedId(decision);
+        const id = recordId || keyId;
+        if (
+            !id
+            || (recordId && keyId && recordId !== keyId)
+            || normalizedDecisions.has(id)
+            || typeof decision.related !== 'boolean'
+            || decision.retryable === true
+            || decision.fallback === true
+        ) return false;
+        normalizedDecisions.set(id, decision);
+    }
+    if (
+        normalizedDecisions.size !== rawIds.size
+        || [...rawIds].some(id => !normalizedDecisions.has(id))
+        || [...normalizedDecisions].some(([id]) => !rawIds.has(id))
+    ) return false;
+
+    const excludedValues = Array.isArray(filtered.excludedRelatedIds)
+        ? filtered.excludedRelatedIds.map(normalizedId).filter(Boolean)
+        : [];
+    const excluded = new Set(excludedValues);
+    if (excluded.size !== excludedValues.length) return false;
+    for (const id of excluded) {
+        if (!rawIds.has(id) || normalizedDecisions.get(id)?.related !== true) return false;
+    }
+    const related = new Set(
+        [...normalizedDecisions]
+            .filter(([, decision]) => decision.related === true)
+            .map(([id]) => id)
+    );
+    const expectedFiltered = new Set([...related].filter(id => !excluded.has(id)));
+    if (
+        expectedFiltered.size !== filteredIds.size
+        || [...expectedFiltered].some(id => !filteredIds.has(id))
+    ) return false;
+
+    const decisionStats = decisions.stats || {};
+    const filteredStats = filtered.stats || {};
+    if (
+        decisionStats.complete !== true
+        || decisionStats.retryable !== 0
+        || decisionStats.totalCandidates !== rawIds.size
+        || decisionStats.decided !== rawIds.size
+        || decisionStats.related !== related.size
+        || filteredStats.afterBlogSkip !== rawIds.size
+        || filteredStats.decisionCount !== rawIds.size
+        || filteredStats.afterFilter !== related.size
+        || filteredStats.afterArchiveSkip !== filteredIds.size
+        || filteredStats.skippedFromArchive !== excluded.size
+    ) return false;
+    if (
+        Number.isInteger(raw?.stats?.afterBlogSkip)
+        && raw.stats.afterBlogSkip !== rawIds.size
+    ) return false;
+    return true;
 }
 
 function visualAssetsAreValid(visual) {
@@ -115,26 +238,39 @@ function visualAssetsAreValid(visual) {
     return { visualCards, assetsValid, archiveUnique };
 }
 
-function buildDigestRunReport(targetDate) {
-    const raw = readJson(Config.FILES.rawCandidates);
-    const filtered = readJson(Config.FILES.filteredPapers);
-    const decisions = readJson(Config.FILES.filterDecisions);
-    const deep = readJson(Config.FILES.deepAnalysisResult);
+function buildDigestRunReport(targetDate, options = {}) {
+    const today = options.today || getBeijingISOString().slice(0, 10);
+    const snapshotOptions = {
+        archiveDir: options.archiveDir || Config.ARCHIVE_DIR,
+        today
+    };
+    const rawSnapshot = resolveDigestRuntimeSnapshot(
+        Config.FILES.rawCandidates, targetDate, 'raw', snapshotOptions
+    );
+    const filteredSnapshot = resolveDigestRuntimeSnapshot(
+        Config.FILES.filteredPapers, targetDate, 'filtered', snapshotOptions
+    );
+    const decisionsSnapshot = resolveDigestRuntimeSnapshot(
+        Config.FILES.filterDecisions, targetDate, 'decisions', snapshotOptions
+    );
+    const deepSnapshot = resolveDigestRuntimeSnapshot(
+        Config.FILES.deepAnalysisResult, targetDate, 'deep', snapshotOptions
+    );
+    const raw = rawSnapshot.value;
+    const filtered = filteredSnapshot.value;
+    const decisions = decisionsSnapshot.value;
+    const deep = deepSnapshot.value;
     const review = readJson(path.join(Config.CURRENT_DIR, `blog-review-receipt-${targetDate}.json`));
     const visual = readJson(path.join(Config.FILES.visualSummaryManifestDir, `${targetDate}.json`));
     const cover = readJson(path.join(Config.FILES.digestCoverManifestDir, `${targetDate}.json`));
-    const deepBatch = papersFrom(deep).filter(paper => paperDate(paper) === targetDate);
+    const deepBatch = papersFrom(deep);
     const successful = deepBatch.filter(isSuccessfulAnalysisRecord);
     const failed = deepBatch.filter(paper => !isSuccessfulAnalysisRecord(paper));
     const rawCount = papersFrom(raw).length;
     const fetchComplete = sourceHealthComplete(raw, targetDate);
     const decisionStats = decisions?.stats || {};
-    const decisionsComplete = Boolean(
-        decisions?.batchDate === targetDate
-        && decisionStats.complete === true
-        && decisionStats.totalCandidates === rawCount
-        && decisionStats.decided === rawCount
-        && decisionStats.retryable === 0
+    const filterSnapshotsComplete = filterSnapshotsAreConsistent(
+        raw, decisions, filtered, targetDate
     );
     let publication = null;
     let publicationVerified = false;
@@ -185,13 +321,13 @@ function buildDigestRunReport(targetDate) {
         && cover?.overallStatus === 'complete'
         && validateCompletedCover(cover?.cover, cover?.dataSha256, cover?.promptSha256, expectedCoverToken)
         && coverManifestCurrent;
-    const filteredBatch = papersFrom(filtered).filter(paper => paperDate(paper) === targetDate);
+    const filteredBatch = papersFrom(filtered);
     const filteredComplete = Boolean(
         filtered?.batchDate === targetDate
         && filtered?.status === 'complete'
-        && decisionsComplete
+        && filterSnapshotsComplete
     );
-    const analysisComplete = (
+    const analysisComplete = Boolean(deep && filtered) && (
         failed.length === 0
         && successful.length === filteredBatch.length
         && samePaperIds(successful, filteredBatch)
@@ -218,6 +354,12 @@ function buildDigestRunReport(targetDate) {
         generatedAt: getBeijingISOString(),
         overallStatus: overallComplete ? 'complete' : 'incomplete',
         errors,
+        dataSources: {
+            rawCandidates: rawSnapshot.source,
+            filteredPapers: filteredSnapshot.source,
+            filterDecisions: decisionsSnapshot.source,
+            deepAnalysisResult: deepSnapshot.source
+        },
         fetch: {
             complete: fetchComplete,
             rawCandidateCount: rawCount,
@@ -294,8 +436,11 @@ if (require.main === module) main();
 
 module.exports = {
     parseDate,
+    snapshotMatchesDate,
+    resolveDigestRuntimeSnapshot,
     sourceHealthComplete,
     samePaperIds,
+    filterSnapshotsAreConsistent,
     visualAssetsAreValid,
     buildDigestRunReport,
     formatDigestRunSummary

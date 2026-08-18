@@ -1,0 +1,14 @@
+[
+  {
+    "arxivId": "2608.00001v1",
+    "probe": {
+      "A": "ASCII key",
+      "": "BMP private-use key",
+      "𐀀": "non-BMP Linear B key",
+      "😀": "emoji key and emoji value 🔊"
+    },
+    "parsed": {
+      "score": 6.0
+    }
+  }
+]

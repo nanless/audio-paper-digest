@@ -419,6 +419,33 @@ function getAnthropicEndpoint(openaiEndpoint) {
     return (openaiEndpoint || '').replace(/\/v1\/?$/, '/anthropic');
 }
 
+function isLoopbackHostname(hostname) {
+    const normalized = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+    if (normalized === 'localhost' || normalized.endsWith('.localhost') || normalized === '::1') return true;
+    const match = normalized.match(/^(\d{1,3})(?:\.(\d{1,3})){3}$/);
+    if (!match) return false;
+    const octets = normalized.split('.').map(Number);
+    return octets.every(octet => octet >= 0 && octet <= 255) && octets[0] === 127;
+}
+
+/**
+ * LLM 凭据只允许发送到 HTTPS；明文 HTTP 仅供 loopback 上的本地测试服务。
+ */
+function validateApiEndpointUrl(endpoint) {
+    let url;
+    try {
+        url = new URL(endpoint);
+    } catch {
+        throw new Error('LLM endpoint 必须是完整的 HTTPS URL（本地测试可用 loopback HTTP）');
+    }
+    if (url.username || url.password) {
+        throw new Error('LLM endpoint 禁止包含 URL userinfo 凭据');
+    }
+    if (url.protocol === 'https:') return url;
+    if (url.protocol === 'http:' && isLoopbackHostname(url.hostname)) return url;
+    throw new Error(`LLM endpoint 禁止使用公网明文 ${url.protocol || '协议'}；请改用 HTTPS，本地 HTTP 仅允许 loopback 地址`);
+}
+
 /**
  * 构建 API URL
  * MiMo: /v1 → /anthropic/v1/messages
@@ -427,6 +454,7 @@ function getAnthropicEndpoint(openaiEndpoint) {
  * OpenAI: 端点路径含 /anthropic 时自动修正为 /v1/chat/completions
  */
 function buildApiUrl(apiType, endpoint) {
+    validateApiEndpointUrl(endpoint);
     const base = (endpoint || '').replace(/\/+$/, '');
     if (apiType === 'anthropic') {
         if (base.includes('xiaomimimo.com')) {
@@ -607,7 +635,7 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
     if (!Number.isInteger(maxResponseBytes) || maxResponseBytes <= 0) {
         throw new Error(`maxResponseBytes 必须是正整数，收到: ${maxResponseBytes}`);
     }
-    const url = new URL(urlString);
+    const url = validateApiEndpointUrl(urlString);
     const transport = url.protocol === 'http:' ? http : https;
     const postData = JSON.stringify(bodyObj);
     const requestHeaders = {
@@ -1512,6 +1540,7 @@ module.exports = {
     // API 路由
     detectApiType,
     getAnthropicEndpoint,
+    validateApiEndpointUrl,
     buildApiUrl,
     buildRequestBody,
     buildHeaders,

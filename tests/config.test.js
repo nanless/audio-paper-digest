@@ -42,7 +42,14 @@ describe('config', () => {
         assert.strictEqual(Config.FILTER_CONFIG.keywordPrefilterEnabled, true);
         assert.strictEqual(Config.FILTER_CONFIG.decisionContractVersion, 3);
         assert.strictEqual(Config.ARXIV_CONFIG.maxResultsPerCategory, 100);
+        assert.strictEqual(Config.ARXIV_CONFIG.fetchMaxRetries, 5);
+        assert.strictEqual(Config.ARXIV_CONFIG.fetchRetryBaseDelayMs, 5000);
+        assert.strictEqual(Config.ARXIV_CONFIG.fetchRateLimitBaseDelayMs, 60000);
         assert.strictEqual(Config.ARXIV_CONFIG.fetchRateLimitMaxWaitMs, 120000);
+        assert.strictEqual(Config.ARXIV_CONFIG.fetchMaxWaitMs, 600000);
+        assert.strictEqual(Config.ARXIV_CONFIG.fetchTimeoutMs, 60000);
+        assert.strictEqual(Config.ARXIV_CONFIG.fetchMaxResponseBytes, 8 * 1024 * 1024);
+        assert.ok(Config.ARXIV_CONFIG.userAgents.includes(Config.ARXIV_CONFIG.userAgent));
         assert.strictEqual(Config.ARXIV_CONFIG.categoryDelayMs, 60000);
         assert.strictEqual(Config.HUGGINGFACE_CONFIG.maxPages, 20);
         assert.strictEqual(Config.HUGGINGFACE_CONFIG.pageLimit, 100);
@@ -160,6 +167,27 @@ describe('config', () => {
     it('项目 .env 覆写 arXiv 429 累计退避上限', () => {
         withProjectEnv('PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS=45000', (Config) => {
             assert.strictEqual(Config.ARXIV_CONFIG.fetchRateLimitMaxWaitMs, 45000);
+        });
+    });
+
+    it('项目 .env 覆写 arXiv 元数据抓取重试、等待、响应和 User-Agent 边界', () => {
+        withProjectEnv([
+            'PD_ARXIV_FETCH_MAX_RETRIES=7',
+            'PD_ARXIV_FETCH_RETRY_BASE_DELAY_MS=1200',
+            'PD_ARXIV_RATE_LIMIT_BASE_DELAY_MS=3400',
+            'PD_ARXIV_FETCH_MAX_WAIT_MS=5600',
+            'PD_ARXIV_METADATA_TIMEOUT_MS=7800',
+            'PD_ARXIV_METADATA_MAX_BYTES=9100',
+            'PD_ARXIV_USER_AGENT=paper-digest-test/1.0'
+        ].join('\n'), (Config) => {
+            assert.strictEqual(Config.ARXIV_CONFIG.fetchMaxRetries, 7);
+            assert.strictEqual(Config.ARXIV_CONFIG.fetchRetryBaseDelayMs, 1200);
+            assert.strictEqual(Config.ARXIV_CONFIG.fetchRateLimitBaseDelayMs, 3400);
+            assert.strictEqual(Config.ARXIV_CONFIG.fetchMaxWaitMs, 5600);
+            assert.strictEqual(Config.ARXIV_CONFIG.fetchTimeoutMs, 7800);
+            assert.strictEqual(Config.ARXIV_CONFIG.fetchMaxResponseBytes, 9100);
+            assert.strictEqual(Config.ARXIV_CONFIG.userAgent, 'paper-digest-test/1.0');
+            assert.deepStrictEqual(Config.ARXIV_CONFIG.userAgents, ['paper-digest-test/1.0']);
         });
     });
 

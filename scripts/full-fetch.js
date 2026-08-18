@@ -550,6 +550,39 @@ function buildSourceHealth(sourceHealth, arxivPapers, hfPapers) {
     };
 }
 
+function buildArxivCategoryHealth(category, options = {}) {
+    const papers = Array.isArray(options.papers) ? options.papers : [];
+    const fetchHealth = options.fetchHealth && typeof options.fetchHealth === 'object'
+        ? options.fetchHealth
+        : {};
+    const error = options.error || null;
+    const failed = Boolean(error);
+    const numericOrZero = value => Number.isFinite(value) && value >= 0 ? value : 0;
+    const health = {
+        id: category.id,
+        name: category.name,
+        priority: category.priority,
+        fetched: failed ? 0 : papers.length,
+        newInCategory: failed ? 0 : numericOrZero(options.newInCategory),
+        duplicateInCategory: failed ? 0 : numericOrZero(options.duplicateInCategory),
+        durationMs: numericOrZero(options.durationMs),
+        ok: !failed,
+        attempts: numericOrZero(fetchHealth.attempts),
+        successfulRequests: numericOrZero(fetchHealth.successfulRequests),
+        rateLimitWaitMs: numericOrZero(fetchHealth.rateLimitWaitMs),
+        totalRetryWaitMs: numericOrZero(fetchHealth.totalRetryWaitMs),
+        failures: Array.isArray(fetchHealth.failures) ? fetchHealth.failures : []
+    };
+    if (failed) {
+        health.error = error?.message || String(error);
+    } else {
+        health.abstractFailures = Array.isArray(fetchHealth.abstracts?.failedIds)
+            ? fetchHealth.abstracts.failedIds
+            : [];
+    }
+    return health;
+}
+
 function getSourceFetchedCount(sourceHealth, sourceName, fallbackCount = 0) {
     const source = sourceHealth?.[sourceName] || {};
     const value = Number.isFinite(source.totalFetched) ? source.totalFetched : source.fetched;
@@ -808,7 +841,17 @@ function nextArchiveConflictPath(archiveDayDir, basename) {
 function autoArchiveCurrentData(batchDate = getBeijingDateString(), options = {}) {
     const today = batchDate;
     const archiveDir = options.archiveDir || ARCHIVE_DIR;
-    const targets = options.targets || [RESULT_FILE, FILTERED_FILE, ANALYZED_FILE];
+    // Resolve the default set at call time. Besides keeping all fetch/filter
+    // companion snapshots together, this lets callers that temporarily bind
+    // Config.FILES to another current directory exercise the real default
+    // archive path without falling back to module-load-time constants.
+    const targets = options.targets || [
+        Config.FILES.deepAnalysisResult,
+        Config.FILES.filteredPapers,
+        Config.FILES.analyzed,
+        Config.FILES.rawCandidates,
+        Config.FILES.filterDecisions
+    ];
     let archived = 0;
     let removed = 0;
 
@@ -1291,21 +1334,11 @@ async function runFullFetch() {
             }
             const fetchDuration = Date.now() - fetchStartTime;
             if (fetchError) {
-                const categoryHealth = {
-                    id: category.id,
-                    name: category.name,
-                    priority: category.priority,
-                    fetched: 0,
-                    newInCategory: 0,
-                    duplicateInCategory: 0,
+                const categoryHealth = buildArxivCategoryHealth(category, {
+                    fetchHealth: categoryFetchHealth,
                     durationMs: fetchDuration,
-                    ok: false,
-                    error: fetchError.message,
-                    attempts: categoryFetchHealth?.attempts || 0,
-                    successfulRequests: categoryFetchHealth?.successfulRequests || 0,
-                    rateLimitWaitMs: categoryFetchHealth?.rateLimitWaitMs || 0,
-                    failures: categoryFetchHealth?.failures || []
-                };
+                    error: fetchError
+                });
                 sourceHealth.arxiv.categories.push(categoryHealth);
                 fetchCheckpoint.arxiv[category.id] = { status: 'failed', papers: [], health: categoryHealth };
                 saveFetchCheckpoint(fetchCheckpoint);
@@ -1326,21 +1359,13 @@ async function runFullFetch() {
                 }
             }
             if (!fetchError) {
-                const categoryHealth = {
-                    id: category.id,
-                    name: category.name,
-                    priority: category.priority,
-                    fetched: papers.length,
-                    newInCategory,
-                    duplicateInCategory: dupInCategory,
+                const categoryHealth = buildArxivCategoryHealth(category, {
+                    papers,
+                    fetchHealth: categoryFetchHealth,
                     durationMs: fetchDuration,
-                    ok: true,
-                    attempts: categoryFetchHealth?.attempts || 0,
-                    successfulRequests: categoryFetchHealth?.successfulRequests || 0,
-                    rateLimitWaitMs: categoryFetchHealth?.rateLimitWaitMs || 0,
-                    failures: categoryFetchHealth?.failures || [],
-                    abstractFailures: categoryFetchHealth?.abstracts?.failedIds || []
-                };
+                    newInCategory,
+                    duplicateInCategory: dupInCategory
+                });
                 sourceHealth.arxiv.categories.push(categoryHealth);
                 fetchCheckpoint.arxiv[category.id] = { status: 'complete', papers, health: categoryHealth };
                 saveFetchCheckpoint(fetchCheckpoint);
@@ -1846,6 +1871,7 @@ module.exports = {
     loadResumableFilterForToday,
     resumeFilterStage,
     buildSourceHealth,
+    buildArxivCategoryHealth,
     getSourceFetchedCount,
     isReusableArxivCheckpoint,
     getSourceFailures,

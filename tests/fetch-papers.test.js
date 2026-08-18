@@ -1,5 +1,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
+const { EventEmitter } = require('node:events');
+const Config = require('../scripts/config.js');
 
 const {
     parseFilterDecision,
@@ -10,6 +12,7 @@ const {
     filterPapersWithLLM,
     buildFilterInputSha256,
     fetchCategoryPapers,
+    httpsRequestWithProxy,
     fetchCategoryFromSearchPage,
     fetchCategoryFromRecentPage,
     fetchAbstracts,
@@ -17,7 +20,9 @@ const {
     parseRecentPageHTML,
     parseSearchPageHTML,
     parseArxivXML,
-    hasRecentResponseSignature
+    hasRecentResponseSignature,
+    getBrowserHeaders,
+    getFetchRetryDelayMs
 } = require('../scripts/fetch-papers.js');
 
 describe('parseFilterDecision', () => {
@@ -398,6 +403,106 @@ describe('抓取健康状态', () => {
         assert.strictEqual(papers._sourceHealth.rateLimitWaitMs, 1000);
         assert.ok(sleeps.reduce((sum, value) => sum + value, 0) <= 1000);
         assert.strictEqual(papers._sourceHealth.attempts, 2);
+    });
+
+    it('非 429 重试也受单类累计等待上限约束', async () => {
+        const sleeps = [];
+        const papers = await fetchCategoryFromSearchPage('cs.SD', new Set(), 50, {
+            requestFn: async () => { throw new Error('network down'); },
+            sleepFn: async ms => { sleeps.push(ms); },
+            maxRetries: 5,
+            maxWaitMs: 1000
+        });
+
+        assert.deepStrictEqual(papers, []);
+        assert.deepStrictEqual(sleeps, [1000]);
+        assert.strictEqual(papers._sourceHealth.totalRetryWaitMs, 1000);
+        assert.strictEqual(papers._sourceHealth.attempts, 2);
+    });
+
+    it('recent、search 与 API 回退阶段共享同一个累计等待预算', async () => {
+        const sleeps = [];
+        let thrown;
+        try {
+            await fetchCategoryPapers('cs.SD', 50, 3, new Set(), {
+                requestFn: async () => { throw new Error('network down'); },
+                sleepFn: async ms => { sleeps.push(ms); },
+                maxWaitMs: 1000
+            });
+        } catch (error) {
+            thrown = error;
+        }
+
+        assert.strictEqual(thrown?.code, 'SOURCE_FETCH_FAILED');
+        assert.deepStrictEqual(sleeps, [1000]);
+        assert.strictEqual(thrown.sourceHealth.totalRetryWaitMs, 1000);
+        assert.strictEqual(thrown.sourceHealth.methods.recent.totalRetryWaitMs, 1000);
+        assert.strictEqual(thrown.sourceHealth.methods.search.totalRetryWaitMs, 0);
+        assert.strictEqual(thrown.sourceHealth.methods.api.totalRetryWaitMs, 0);
+    });
+
+    it('元数据请求参数和 User-Agent 均来自 ARXIV_CONFIG', async () => {
+        const calls = [];
+        await fetchCategoryFromSearchPage('cs.SD', new Set(), 50, {
+            requestFn: async (...args) => {
+                calls.push(args);
+                return { status: 200, data: '<ol class="breathe-horizontal"></ol>' };
+            },
+            sleepFn: async () => {},
+            maxRetries: 1
+        });
+
+        assert.strictEqual(calls[0][3], Config.ARXIV_CONFIG.fetchTimeoutMs);
+        assert.strictEqual(calls[0][4], Config.ARXIV_CONFIG.fetchMaxResponseBytes);
+        assert.ok(Config.ARXIV_CONFIG.userAgents.includes(calls[0][1]['User-Agent']));
+        assert.strictEqual(getFetchRetryDelayMs(2, false), Config.ARXIV_CONFIG.fetchRetryBaseDelayMs * 2);
+        assert.strictEqual(getFetchRetryDelayMs(2, true), Config.ARXIV_CONFIG.fetchRateLimitBaseDelayMs * 2);
+        assert.ok(Config.ARXIV_CONFIG.userAgents.includes(getBrowserHeaders()['User-Agent']));
+    });
+
+    it('arXiv 元数据响应超过字节上限时立即中止', async () => {
+        const httpsModule = {
+            request(_options, onResponse) {
+                const req = new EventEmitter();
+                req.destroy = error => req.emit('error', error);
+                req.end = () => {
+                    const res = new EventEmitter();
+                    res.statusCode = 200;
+                    res.destroy = error => res.emit('error', error);
+                    onResponse(res);
+                    res.emit('data', Buffer.alloc(33));
+                    res.emit('end');
+                };
+                return req;
+            }
+        };
+
+        await assert.rejects(
+            httpsRequestWithProxy('https://arxiv.org/list/cs.SD/recent', {}, 'http://127.0.0.1:1', 1000, 32, {
+                httpsModule,
+                proxyAgentFactory: () => false
+            }),
+            error => error.code === 'ARXIV_RESPONSE_TOO_LARGE'
+        );
+    });
+
+    it('arXiv 元数据慢速/悬挂响应受绝对截止时间约束', async () => {
+        const httpsModule = {
+            request() {
+                const req = new EventEmitter();
+                req.destroy = error => req.emit('error', error);
+                req.end = () => {};
+                return req;
+            }
+        };
+
+        await assert.rejects(
+            httpsRequestWithProxy('https://export.arxiv.org/api/query', {}, 'http://127.0.0.1:1', 20, 1024, {
+                httpsModule,
+                proxyAgentFactory: () => false
+            }),
+            error => error.code === 'ARXIV_REQUEST_DEADLINE_EXCEEDED'
+        );
     });
 
     it('HTTP 200 错误页缺少来源结构签名时不能作为合法零结果', async () => {

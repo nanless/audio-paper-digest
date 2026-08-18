@@ -24,16 +24,10 @@ const {
     getCanonicalAnalysisRunSummary,
     getAnalysisExitCode
 } = require('./analysis-engine.js');
-const { updateAnalysisDigestStatuses } = require('./digest-status.js');
+const { updateAnalysisDigestStatuses, inferAnalysisBatchDate } = require('./digest-status.js');
 const Config = require('./config.js');
 
 const RESULT_FILE = Config.FILES.deepAnalysisResult;
-
-function inferBatchDate(data, papers) {
-    return data.batchDate
-        || papers.map(p => p.digestStatus?.batchDate || String(p.fetchedAt || '').slice(0, 10)).find(Boolean)
-        || String(data.timestamp || data.lastUpdated || getBeijingISOString()).slice(0, 10);
-}
 
 function updateReanalysisStats(data, analyzedResults, previousCurrentRubricIds, runStats, updatedAt) {
     const recoveredCount = analyzedResults.filter(result => {
@@ -73,7 +67,11 @@ async function reanalyzeSelected(ids) {
     const data = readJsonFileStrict(RESULT_FILE);
 
     const papers = data.papers || [];
-    const batchDate = inferBatchDate(data, papers);
+    const batchDate = inferAnalysisBatchDate(
+        papers,
+        Array.isArray(data) ? {} : data,
+        getBeijingISOString()
+    );
     const previousCurrentRubricIds = new Set(papers
         .filter(p => p.parsed?.scoringRubricVersion === SCORING_RUBRIC_VERSION
             || p.scoringRubricVersion === SCORING_RUBRIC_VERSION)
@@ -137,6 +135,7 @@ async function reanalyzeSelected(ids) {
     // 重新分析
     const analyzedResults = [];
     const attemptResults = [];
+    let digestStatusUpdated = 0;
     const { stats } = await analyzeBatch(toReanalyze, {
         checkpointFilePath: RESULT_FILE,
         preparePaperLocked: paper => {
@@ -169,7 +168,8 @@ async function reanalyzeSelected(ids) {
                 batchDate,
                 papers: mergePapersById(Array.isArray(current) ? current : (current?.papers || []), [attempted], { preserveSuccessfulAnalysis: true })
             }));
-            updateAnalysisDigestStatuses([attempted], { batchDate });
+            const digestStatus = updateAnalysisDigestStatuses([attempted], { batchDate });
+            digestStatusUpdated += Number(digestStatus.updated) || 0;
         },
         onPaperStart: (idx, total, paper) => {
             console.log(`  [${idx + 1}/${total}] ▶ 开始: ${paper.title?.substring(0, 50)}...`);
@@ -238,15 +238,20 @@ async function reanalyzeSelected(ids) {
         return payload;
     });
     const status = finalPayload.stats.selectedReanalyzeStatus;
-    const digestStatus = { updated: 0 };
-
     console.log(`\n${status === 'complete' ? '✅' : '⚠️'} 重分析状态 ${status}: 成功 ${stats.success} | 失败 ${effectiveStats.failed}`);
     const sourceSummary = Object.entries(stats.sourceCounts || {}).map(([key, count]) => `${key}=${count}`).join(' | ');
     if (sourceSummary) console.log(`文本来源: ${sourceSummary}`);
     if (recoveredCount > 0) console.log(`历史失败恢复: ${recoveredCount} 篇`);
-    if (digestStatus.updated > 0) console.log(`papers.json 状态已同步: ${digestStatus.updated} 篇`);
+    if (digestStatusUpdated > 0) console.log(`papers.json 状态已同步: ${digestStatusUpdated} 篇`);
     console.log(`💾 结果已保存到: ${RESULT_FILE}`);
-    return { status, exitCode: getAnalysisExitCode(status), success: stats.success, failed: effectiveStats.failed, recoveredCount };
+    return {
+        status,
+        exitCode: getAnalysisExitCode(status),
+        success: stats.success,
+        failed: effectiveStats.failed,
+        recoveredCount,
+        digestStatusUpdated
+    };
 }
 
 if (require.main === module) {

@@ -62,6 +62,7 @@
 3. **API 补充（最后兜底）**：
    - 上两步均不足时，使用 `export.arxiv.org/api/query`
    - 429 限流指数退避：60s, 120s, 240s, 480s，最多 5 次重试
+   - recent/search/摘要/Atom 请求统一具有 60 秒绝对截止时间和 8 MiB 响应上限；重试、退避和 User-Agent 全部由 `ARXIV_CONFIG` / `PD_ARXIV_*` 配置驱动
 
 3. **抓取参数**：
    - `parseArxivXML()` 保留“连续 20 篇已知 ID”解析选项，但正式分页/API 补全路径为保证来源覆盖会显式关闭该提前停止，不把它当作当前抓取上限
@@ -118,6 +119,8 @@ HF 特有字段（共 7 个）：
 使用 `项目根目录的 `.env` 文件` 中的 `PAPER_ANALYZER_*` 配置逐篇判断是否为语音/音乐/音频相关。
 
 **API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动切换 OpenAI / Anthropic 协议
+
+LLM endpoint 只允许 HTTPS；仅 loopback 本地测试服务可以使用 HTTP，避免把 API key 发送到公网明文连接。
 - **MiMo/Kimi Token Plan / Coding Plan**（MiMo 由 `token-plan` + MiMo 域名/模型识别；Kimi 由 `coding` + `kimi.com` 域名或 Kimi 模型识别）→ 自动切换为 **Anthropic 协议**，兼容 `k3`，并伪装成 Claude Code 调用
   - **MiMo**: `https://token-plan-cn.xiaomimimo.com/v1` → `/anthropic/v1/messages`
   - **Kimi**: `https://api.kimi.com/coding` 或 `https://api.kimi.com/coding/v1` → `https://api.kimi.com/coding/v1/messages`（自动补齐 `/v1`，无需 `/anthropic` 中间路径；兼容 `k3` 等模型名）
@@ -213,13 +216,13 @@ HF 特有字段（共 7 个）：
 表格后处理只在实验章节以 `Table` / `Tbl.` / `表` 明确引用原文表格但没有 Markdown 表格，或出现“此处省略/详见原文”等非法占位语时调用。原文仅检测到其他表格不再触发额外 LLM 请求。新分析和重分析必须写入 `analysisManifest.contracts.experimentTables=bounded-v1`：代码在评分前强制每篇最多 2 张表、每张最多 12 个数据行和 8 个指标列，超限交给局部结构修复；Node 数据校验和 Python 发布预检都会再次阻断带标记但超限的正文。无该标记的历史成功记录保持兼容，不触发全量重跑。
 | Round 8 | 图像筛选与插图计划（仅双模型模式） | `prompts/image-supplement.md` | 副模型只输出 JSON 插图计划；合并后再次校验完整契约，不合格时只丢弃插图计划并保留主模型正文 |
 
-评分审计全部通过后，先依次运行 `generate-blog.py`、`review-blog.py` 和 `push-blog.py`，发布汇总页及全部论文页。博客文本 review 默认按 8000 字符分块（`PD_BLOG_REVIEW_CHUNK_CHARS`，范围 4000–16000），减少每块重复的固定说明；分块仍保持 Markdown 块边界，且值进入整批审查凭证指纹。已通过页面另以博客仓库相对路径 + SHA-256 持久保存，因此分块、review 代码或其他协议元数据变化只刷新整批凭证，不会重审字节未变的页面。`push-blog.py` 只有在远端 `main` OID 与 `publicationCommit` 完全一致后才写入远端验证字段，并自动调用 `visual-summary-integration.js`。规划器按最终评分降序、同分规范化 arXiv ID 升序选取 TOP 10；Codex 读取 `prompts/visual-summary.md`，为每篇生成一张顶部英文标题、正文中文的纵向长图，并用 task token 登记。
+评分审计全部通过后，先依次运行 `generate-blog.py`、`review-blog.py` 和 `push-blog.py`，发布汇总页及全部论文页。博客文本 review 默认按 8000 字符分块（`PD_BLOG_REVIEW_CHUNK_CHARS`，范围 4000–16000），减少每块重复的固定说明；分块仍保持 Markdown 块边界，且值进入整批审查凭证指纹。已通过页面另以博客仓库相对路径 + SHA-256 持久保存，因此分块、review 代码或其他协议元数据变化只刷新整批凭证，不会重审字节未变的页面。完全相同的非空 generation 可安全重跑三阶段：review 仅在当前协议、页面字节、发布提交、remote 名称/push URL 哈希和实时远端 `main` OID 全部仍匹配时保留已发布 receipt；push 再次验真，不创建无差异提交。网络故障、远端分支漂移或 `origin` 换仓均拒绝复用。`push-blog.py` 只有在远端 `main` OID 与 `publicationCommit` 完全一致后才写入远端验证字段，并自动调用 `visual-summary-integration.js`。规划器按最终评分降序、同分规范化 arXiv ID 升序选取 TOP 10；Codex 读取 `prompts/visual-summary.md`，为每篇生成一张顶部英文标题、正文中文的纵向长图，并用 task token 登记。
 
 同一发布后阶段还会按博客 generation manifest 保存的 category 建立一张批次汇总图任务，内容为标题、热门方向和 TOP 10 排名。两类 manifest 分别保存发布提交、数据 SHA、prompt SHA、task token 与资产 SHA，中断后只补缺失、失败、损坏或失效项。论文长图任务还会从深度分析的 `selectedImageUrls` / `imageManifest` 中选择最多两张已下载且 URL、MIME、字节数和 SHA 全部匹配的关键原图，优先方法总览、架构和流程图，再考虑关键实验图；参考图指纹变化只失效对应论文。内置生图必须把参考图作为结构事实来源重新绘制，不得粘贴不可读截图或补造原图中没有的数据。同批次全部图片扁平归档到 `data/archive/<日期>/visual-summaries/`：封面为 `00-digest-cover-<日期>.png`，论文长图按 manifest 最终排名命名为 `<两位排名>-<paper-id>-<title-slug>.png`，并发完成顺序不参与编号。旧版 current 与旧归档目录结构会在 plan 时经 PNG/SHA 校验后迁移。图片不进入已经发布的博客清单，也不阻断博客流程；项目脚本不得调用图像 API，生成图不得冒充论文原始 Figure 或虚构事实，汇总图不得显示 arXiv ID。
 
 调用内置生图前必须运行 `npm run visual:prepare -- --date <日期>`。该命令不会调用图像 API，也不会改变任务 token；它重新校验 `.bin` 原始缓存的受控路径、SHA、长度、MIME 与文件头，随后把参考图原子物化为 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 中带正确扩展名的文件。生图时使用命令输出的绝对 `referencedImagePaths`，不要把 `.bin` 或仅供展示的 `relativePath` 直接传给图片服务。可用 `--paper <ID>` 只准备单篇，重复运行会校验并修复被改写的物化文件。
 
-视觉 plan/status 默认只输出每个任务的排名、论文 ID、标题、task token、参考图数和 manifest 绝对路径；`visual:prepare` 保留生图必需的绝对 `referencedImagePaths`。完整 `generationContext.qaClaims` 与封面排行仍在 manifest 内。`digest:status` 终端只打印各阶段数量摘要，完整 `sourceHealth` 仍写入 `digest-run-reports/<date>.json`。
+视觉 plan/status 默认只输出每个任务的排名、论文 ID、标题、task token、参考图数和 manifest 绝对路径；`visual:prepare` 保留生图必需的绝对 `referencedImagePaths`。完整 `generationContext.qaClaims` 与封面排行仍在 manifest 内。`digest:status` 终端只打印各阶段数量摘要，完整 `sourceHealth` 仍写入 `digest-run-reports/<date>.json`。历史日期可从同日 archive 读取 raw/decisions/filtered/deep，但 decisions 必须完整覆盖 raw、filtered 必须精确等于相关决定扣除显式排除项、全部论文必须属于目标批次且 deep 不得混批；缺失或语义损坏保持 incomplete。当前日期严格只认 current。
 
 > **单模型 vs 双模型**：主模型始终负责正文和最终评分审计。评分审计默认使用独立低温 0.1。设置 `PAPER_ANALYZER_SECONDARY_MODEL` 后，副模型只从候选图片中筛选高价值图、丢弃低信息图并输出章节、稳定段落 ID、图前和图后说明；代码不会接受副模型替换主模型原文。未设置副模型时图片 URL 只保存在候选元数据中，博客 review 的可选多模态 LLM 检查也会跳过，但确定性图片门禁仍执行。
 

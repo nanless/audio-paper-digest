@@ -46,15 +46,27 @@ const ARXIV_CATEGORIES = [
 
 const ARXIV_CONFIG = {
     maxResultsPerCategory: 100,
-    fetchMaxRetries: 30,
+    fetchMaxRetries: 5,
     fetchRetryBaseDelayMs: 5000,
-    fetchRateLimitBaseDelayMs: 30000,
+    fetchRateLimitBaseDelayMs: 60000,
     fetchRateLimitMaxWaitMs: 120000,
     fetchMaxWaitMs: 600000,
+    fetchTimeoutMs: 60000,
+    fetchMaxResponseBytes: 8 * 1024 * 1024,
     categoryDelayMs: 60000,
     firstRequestDelayMs: 30000,
     consecutiveExistingThreshold: 20,
-    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    userAgents: [
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0',
+        'Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0'
+    ]
 };
 
 // ═══════════════════════════════════════════════════════
@@ -240,9 +252,37 @@ function applyEnvOverrides() {
     if (arxivMaxResults) {
         ARXIV_CONFIG.maxResultsPerCategory = arxivMaxResults;
     }
+    const arxivFetchMaxRetries = readPositiveInt('PD_ARXIV_FETCH_MAX_RETRIES');
+    if (arxivFetchMaxRetries) {
+        ARXIV_CONFIG.fetchMaxRetries = arxivFetchMaxRetries;
+    }
+    const arxivFetchRetryBaseDelayMs = readPositiveInt('PD_ARXIV_FETCH_RETRY_BASE_DELAY_MS');
+    if (arxivFetchRetryBaseDelayMs) {
+        ARXIV_CONFIG.fetchRetryBaseDelayMs = arxivFetchRetryBaseDelayMs;
+    }
+    const arxivRateLimitBaseDelayMs = readPositiveInt('PD_ARXIV_RATE_LIMIT_BASE_DELAY_MS');
+    if (arxivRateLimitBaseDelayMs) {
+        ARXIV_CONFIG.fetchRateLimitBaseDelayMs = arxivRateLimitBaseDelayMs;
+    }
     const arxivRateLimitMaxWait = readPositiveInt('PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS');
     if (arxivRateLimitMaxWait) {
         ARXIV_CONFIG.fetchRateLimitMaxWaitMs = arxivRateLimitMaxWait;
+    }
+    const arxivFetchMaxWaitMs = readPositiveInt('PD_ARXIV_FETCH_MAX_WAIT_MS');
+    if (arxivFetchMaxWaitMs) {
+        ARXIV_CONFIG.fetchMaxWaitMs = arxivFetchMaxWaitMs;
+    }
+    const arxivMetadataTimeoutMs = readPositiveInt('PD_ARXIV_METADATA_TIMEOUT_MS');
+    if (arxivMetadataTimeoutMs) {
+        ARXIV_CONFIG.fetchTimeoutMs = arxivMetadataTimeoutMs;
+    }
+    const arxivMetadataMaxBytes = readPositiveInt('PD_ARXIV_METADATA_MAX_BYTES');
+    if (arxivMetadataMaxBytes) {
+        ARXIV_CONFIG.fetchMaxResponseBytes = arxivMetadataMaxBytes;
+    }
+    if (process.env.PD_ARXIV_USER_AGENT?.trim()) {
+        ARXIV_CONFIG.userAgent = process.env.PD_ARXIV_USER_AGENT.trim();
+        ARXIV_CONFIG.userAgents = [ARXIV_CONFIG.userAgent];
     }
     const imageMaxBytes = readPositiveInt('PD_IMAGE_MAX_BYTES');
     if (imageMaxBytes) {

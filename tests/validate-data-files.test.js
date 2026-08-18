@@ -75,7 +75,10 @@ function writeCompleteCheckpoint(filePath) {
         blogDedupFingerprint: BLOG_FP,
         historicalDedupIds: [],
         categoryOrder,
-        arxiv: Object.fromEntries(categoryOrder.map(id => [id, checkpointEntry([], { id, ok: true })])),
+        arxiv: Object.fromEntries(categoryOrder.map((id, index) => [id, checkpointEntry(
+            [{ arxivId: `2607.${String(91000 + index)}` }],
+            { id, ok: true }
+        )])),
         huggingface: checkpointEntry([], { ok: true })
     };
     checkpoint.fetchSourcesSha256 = fetchSourcesSha256(checkpoint);
@@ -703,9 +706,9 @@ describe('validate-data-files', () => {
         writeCompleteCheckpoint(checkpointFile);
         const checkpoint = JSON.parse(fs.readFileSync(checkpointFile));
         const rawPapers = [
-            { arxivId: '2607.00001' },
-            { arxivId: '2607.00002' },
-            { arxivId: '2607.00003' }
+            { arxivId: '2607.00001', sources: ['arxiv'] },
+            { arxivId: '2607.00002', sources: ['huggingface'] },
+            { arxivId: '2607.00003', sources: ['arxiv'] }
         ];
         const integrity = {
             batchDate: '2026-07-13', batchId: BATCH_ID,
@@ -785,6 +788,69 @@ describe('validate-data-files', () => {
             fetchCheckpoint: checkpointFile,
             deepAnalysisResult: path.join(dir, 'missing-analysis.json')
         }), []);
+    });
+
+    it('filtered 标记 complete 时来源不完整仍会被四件套门禁拒绝', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-incomplete-source-'));
+        const files = writeMinimalCurrentBatch(dir);
+        const raw = JSON.parse(fs.readFileSync(files.rawCandidates));
+        raw.sourceHealth.arxiv.categories = raw.sourceHealth.arxiv.categories.slice(0, -1);
+        raw.sourceHealth.huggingface.ok = false;
+        fs.writeFileSync(files.rawCandidates, JSON.stringify(raw));
+
+        const issues = validateCurrentDataFiles({
+            papers: path.join(dir, 'missing-papers.json'),
+            rawCandidates: files.rawCandidates,
+            filteredPapers: files.filteredPapers,
+            filterDecisions: files.filterDecisions,
+            fetchCheckpoint: files.fetchCheckpoint,
+            deepAnalysisResult: path.join(dir, 'missing-analysis.json')
+        }).join('\n');
+
+        assert.match(issues, /七个 arXiv 类别和 HuggingFace sourceHealth 全部 ok=true/);
+    });
+
+    it('健康空 arXiv checkpoint 可满足 complete 产物契约但不承诺跨进程复用', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-empty-source-'));
+        const files = writeMinimalCurrentBatch(dir);
+        const checkpoint = JSON.parse(fs.readFileSync(files.fetchCheckpoint));
+        const emptyCategory = Config.ARXIV_CATEGORIES[0].id;
+        checkpoint.arxiv[emptyCategory] = checkpointEntry([], { id: emptyCategory, ok: true });
+        checkpoint.fetchSourcesSha256 = fetchSourcesSha256(checkpoint);
+        fs.writeFileSync(files.fetchCheckpoint, JSON.stringify(checkpoint));
+        for (const artifactPath of [files.rawCandidates, files.filterDecisions, files.filteredPapers]) {
+            const artifact = JSON.parse(fs.readFileSync(artifactPath));
+            artifact.fetchSourcesSha256 = checkpoint.fetchSourcesSha256;
+            fs.writeFileSync(artifactPath, JSON.stringify(artifact));
+        }
+
+        assert.deepStrictEqual(validateCurrentDataFiles({
+            papers: path.join(dir, 'missing-papers.json'),
+            rawCandidates: files.rawCandidates,
+            filteredPapers: files.filteredPapers,
+            filterDecisions: files.filterDecisions,
+            fetchCheckpoint: files.fetchCheckpoint,
+            deepAnalysisResult: path.join(dir, 'missing-analysis.json')
+        }), []);
+    });
+
+    it('filtered 标记 complete 时缺少 raw/decisions companion 会失败', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-missing-companion-'));
+        const files = writeMinimalCurrentBatch(dir);
+        fs.unlinkSync(files.rawCandidates);
+        fs.unlinkSync(files.filterDecisions);
+
+        const issues = validateCurrentDataFiles({
+            papers: path.join(dir, 'missing-papers.json'),
+            rawCandidates: files.rawCandidates,
+            filteredPapers: files.filteredPapers,
+            filterDecisions: files.filterDecisions,
+            fetchCheckpoint: files.fetchCheckpoint,
+            deepAnalysisResult: path.join(dir, 'missing-analysis.json')
+        }).join('\n');
+
+        assert.match(issues, /complete filtered-papers\.json 必须有同批次 raw-candidates\.json/);
+        assert.match(issues, /complete filtered-papers\.json 必须有同批次 filter-decisions\.json/);
     });
 
     it('报告候选输入统计和来源健康问题', () => {

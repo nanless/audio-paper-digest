@@ -21,6 +21,11 @@ sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 SPEC = importlib.util.spec_from_file_location('publish_to_blog', MODULE_PATH)
 publish_to_blog = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(publish_to_blog)
+REVIEW_SPEC = importlib.util.spec_from_file_location(
+    'review_blog_for_publish_test', os.path.join(ROOT, 'scripts', 'review-blog.py'),
+)
+review_blog = importlib.util.module_from_spec(REVIEW_SPEC)
+REVIEW_SPEC.loader.exec_module(review_blog)
 
 
 def valid_png(payload_suffix=b'', width=768, height=1200):
@@ -100,6 +105,57 @@ def save_bound_review_receipt(date_str, paths, hugo_gate='hugo', expected_base_h
     )
 
 
+def create_verified_schema_v3_publication(date_str, posts, paper):
+    paper_page = posts / f'{date_str}-published-paper.md'
+    paper_page.write_text(
+        '---\npaper_digest_page_type: paper\n'
+        f'paper_digest_arxiv_id: "{paper["arxivId"]}"\n---\n'
+        'reviewed body\n',
+        encoding='utf-8',
+    )
+    index_page = posts / f'{date_str}.md'
+    index_page.write_text(
+        '---\npaper_digest_page_type: index\n---\nreviewed index\n',
+        encoding='utf-8',
+    )
+    paths = [paper_page, index_page]
+    base_head = publish_to_blog.validate_git_publish_branch()
+    input_fingerprint = publish_to_blog.generation_input_fingerprint(
+        [paper], date_str, '论文速递', False,
+    )
+    template_fingerprint = publish_to_blog.generation_template_fingerprint()
+    manifest = publish_to_blog.save_generation_manifest(
+        date_str, paths,
+        input_fingerprint=input_fingerprint,
+        template_fingerprint=template_fingerprint,
+        base_head=base_head,
+        published_papers=[paper],
+    )
+    reviewed_results = {
+        str(path.resolve()): {
+            'passed': True,
+            'reviewedSha256': publish_to_blog._sha256_file(path),
+            'imageReviewMode': 'deterministic_only',
+        }
+        for path in paths
+    }
+    receipt = publish_to_blog.save_review_receipt(
+        date_str, paths, 'hugo',
+        expected_base_head=base_head,
+        generation_manifest=manifest,
+        reviewed_results=reviewed_results,
+    )
+    if not publish_to_blog.git_push(date_str, paths):
+        raise AssertionError('test publication failed remote verification')
+    return {
+        'paths': paths,
+        'manifest': manifest,
+        'receipt': receipt,
+        'inputFingerprint': input_fingerprint,
+        'templateFingerprint': template_fingerprint,
+    }
+
+
 class PublishToBlogReviewTest(unittest.TestCase):
     def test_visual_capability_preflight_rejects_legacy_before_daily_push(self):
         with tempfile.TemporaryDirectory() as tmp, \
@@ -135,14 +191,18 @@ class PublishToBlogReviewTest(unittest.TestCase):
                 'paper_digest_arxiv_id: "2607.00001"\n---\nbody\n',
                 encoding='utf-8',
             )
+            published_papers = [{'arxivId': '2607.00001'}]
+            input_fingerprint = publish_to_blog.generation_input_fingerprint(
+                published_papers, '2026-07-10', '论文速递', False,
+            )
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
                 publish_to_blog.save_generation_manifest(
                     '2026-07-10', [page],
-                    input_fingerprint='a' * 64,
+                    input_fingerprint=input_fingerprint,
                     template_fingerprint='b' * 64,
                     base_head='c' * 40,
-                    published_papers=[{'arxivId': '2607.00001'}],
+                    published_papers=published_papers,
                 )
                 self.assertTrue(publish_to_blog.preflight_post_publish_visual_capability(
                     '2026-07-10', require_visual_plan=True,
@@ -538,6 +598,182 @@ title: "Bad table"
         }, '2026-07-10')
         self.assertEqual(slug, 'no-tags-2607-00001')
         self.assertIn('tags: []', markdown)
+
+    def test_publish_image_exclusion_contract_rejects_broad_or_unexplained_entries(self):
+        configured = publish_to_blog.load_publish_image_exclusions()
+        self.assertEqual(configured, [{
+            'normalizedArxivId': '2608.13610',
+            'url': 'https://arxiv.org/html/2608.13610v1/Fig/intro_1.jpg',
+            'reason': '图片内含 “Manul debugging” 拼写错误',
+        }])
+        invalid_entries = (
+            {
+                'normalizedArxivId': '2608.13610v1',
+                'url': 'https://arxiv.org/html/2608.13610v1/Fig/intro_1.jpg',
+                'reason': 'bad id',
+            },
+            {
+                'normalizedArxivId': '2608.13610',
+                'url': 'http://arxiv.org/html/2608.13610v1/Fig/intro_1.jpg',
+                'reason': 'insecure url',
+            },
+            {
+                'normalizedArxivId': '2608.13610',
+                'url': 'https://arxiv.org/html/2608.13610v1/Fig/intro_1.jpg',
+                'reason': '   ',
+            },
+        )
+        for index, entry in enumerate(invalid_entries):
+            with self.subTest(index=index), tempfile.TemporaryDirectory() as tmp:
+                config = Path(tmp) / 'exclusions.json'
+                config.write_text(json.dumps({
+                    'schemaVersion': 1,
+                    'exclusions': [entry],
+                }), encoding='utf-8')
+                with self.assertRaises(publish_to_blog.PublishDataValidationError):
+                    publish_to_blog.load_publish_image_exclusions(config)
+
+    def test_generation_removes_only_exact_overridden_image_block_and_records_manifest(self):
+        date_str = '2026-08-17'
+        excluded_url = 'https://arxiv.org/html/2608.13610v1/Fig/intro_1.jpg'
+        retained_url = 'https://arxiv.org/html/2608.13610v1/Fig/2_framework.jpg'
+        intro_lead = '传统手动维护需要工程师跨多个VSR阶段追踪故障，如下图所示。'
+        intro_explanation = (
+            '下图对比了人工调试与AI修复流程，显示LoopVSR如何通过定义修复目标、'
+            '运行时证据和评估规则来指导编码代理进行验证修复。'
+        )
+        framework_lead = '架构包含五个关键组件，如下图所示。'
+        framework_explanation = '下图展示了 LoopVSR 的总体架构与闭环修复流程。'
+        summary = (
+            f'{intro_lead}\n\n![错误动机图]({excluded_url})\n\n'
+            f'{intro_explanation}\n\n保留的核心摘要。\n\n'
+            f'{framework_lead}\n\n![合法框架图]({retained_url})\n\n'
+            f'{framework_explanation}'
+        )
+        analysis = f'''## 评分
+6.6/10
+
+## 机器摘要
+document_type: 方法研究
+rank_bucket: 前50%
+confidence: 中
+
+## 标签
+#音视频语音识别 #大语言模型
+
+## 核心摘要
+{summary}
+
+## 方法概述和架构
+{summary}
+
+## 评分理由
+* 创新性 (1/2)：具体理由充分
+* 技术严谨性 (1/1.5)：具体理由充分
+* 实验充分性 (0.8/1.5)：具体理由充分
+* 清晰度 (0.8/1)：具体理由充分
+* 影响力 (0.5/1.5)：具体理由充分
+* 开源 (1.2/1.5)：具体理由充分
+* 可复现性 (0.3/0.5)：具体理由充分
+* 工程/实践价值 (1/1.5)：具体理由充分
+'''
+        source_paper = {
+            'arxivId': '2608.13610v1',
+            'title': 'LoopVSR',
+            'fetchBatchDate': date_str,
+            'analysis': analysis,
+            'parsed': publish_to_blog.parse_analysis(analysis),
+            'scoringRubricVersion': 'type-aware-v1',
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current = Path(tmp) / 'data' / 'current'
+            options = {
+                'data_file': 'unused-test-input.json',
+                'target_date': date_str,
+                'category': '论文速递',
+                'publish_all': False,
+                'excluded_ids': [],
+            }
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CONTENT_DIR', str(posts)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    mock.patch.object(
+                        publish_to_blog, 'validate_publish_target',
+                        return_value=(repo, posts),
+                    ), mock.patch.object(
+                        publish_to_blog, 'load_papers', return_value=[source_paper],
+                    ), contextlib.redirect_stdout(io.StringIO()):
+                publish_to_blog.generate_main(options)
+
+                paper_page = next(posts.glob(f'{date_str}-loopvsr-*.md'))
+                index_page = posts / f'{date_str}.md'
+                for generated in (paper_page, index_page):
+                    markdown = generated.read_text(encoding='utf-8')
+                    self.assertEqual(markdown.count(excluded_url), 0)
+                    self.assertNotIn(intro_lead, markdown)
+                    self.assertNotIn(intro_explanation, markdown)
+                    self.assertIn(retained_url, markdown)
+                    self.assertIn(framework_lead, markdown)
+                    self.assertIn(framework_explanation, markdown)
+
+                manifest = json.loads(
+                    publish_to_blog.generation_manifest_path(date_str).read_text(encoding='utf-8')
+                )
+                snapshot = manifest['publishedPapers'][0]
+                self.assertEqual(snapshot['publishImageExclusions'], [{
+                    'normalizedArxivId': '2608.13610',
+                    'url': excluded_url,
+                    'reason': '图片内含 “Manul debugging” 拼写错误',
+                }])
+                self.assertNotIn(excluded_url, snapshot['parsed']['summary'])
+                self.assertIn(retained_url, snapshot['parsed']['summary'])
+                self.assertNotIn(excluded_url, snapshot['analysis'])
+                self.assertIn(retained_url, snapshot['analysis'])
+                self.assertEqual(
+                    manifest['inputFingerprint'],
+                    publish_to_blog.generation_input_fingerprint(
+                        manifest['publishedPapers'], date_str, '论文速递', False,
+                    ),
+                )
+
+                tampered = json.loads(
+                    publish_to_blog.generation_manifest_path(date_str).read_text(encoding='utf-8')
+                )
+                tampered['publishedPapers'][0]['publishImageExclusions'][0]['reason'] = (
+                    'tampered without changing inputFingerprint'
+                )
+                publish_to_blog.generation_manifest_path(date_str).write_text(
+                    json.dumps(tampered, ensure_ascii=False), encoding='utf-8',
+                )
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, '反向重算',
+                ):
+                    publish_to_blog.load_generation_manifest(date_str)
+
+        self.assertIn(excluded_url, source_paper['parsed']['summary'])
+        self.assertIn(excluded_url, source_paper['analysis'])
+
+    def test_publish_image_exclusion_preserves_unrelated_adjacent_prose(self):
+        excluded_url = 'https://arxiv.org/html/2608.13610v1/Fig/intro_1.jpg'
+        before = '该方法在多种输入条件下均保持稳定。'
+        after = '消融实验进一步验证了闭环反馈的贡献。'
+        cleaned = publish_to_blog._remove_publish_image_block(
+            f'{before}\n\n![待排除图片]({excluded_url})\n\n{after}', excluded_url,
+        )
+        self.assertEqual(cleaned, f'{before}\n\n{after}')
+
+    def test_published_papers_fingerprint_matches_node_utf16_key_order_probe(self):
+        probe = json.loads(
+            (Path(ROOT) / 'tests' / 'fixtures' / 'published-papers-fingerprint-probe.json')
+            .read_text(encoding='utf-8')
+        )
+        # Shared with the Node-side probe. U+E000 sorts before non-BMP keys by
+        # Unicode code point, but after their leading surrogate by JS UTF-16.
+        self.assertEqual(
+            publish_to_blog.published_papers_fingerprint(probe),
+            '3ee65da42ed04aa221d4429d960f7b60ed86fb5bee62f428ec67d2f8d2171882',
+        )
 
     def test_same_title_slug_is_disambiguated_by_normalized_arxiv_id(self):
         first = publish_to_blog.paper_slug('Same title', '2607.00001v2')
@@ -1277,21 +1513,232 @@ body
             page = posts / '2026-07-10.md'
             page.write_text('generated\n', encoding='utf-8')
             base_head = git(repo, 'rev-parse', 'HEAD').stdout.strip()
+            published_papers = [{'arxivId': '2607.00001'}]
+            input_fingerprint = publish_to_blog.generation_input_fingerprint(
+                published_papers, '2026-07-10', '论文速递', False,
+            )
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir):
                 manifest = publish_to_blog.save_generation_manifest(
-                    '2026-07-10', [page], input_fingerprint='a' * 64,
+                    '2026-07-10', [page], input_fingerprint=input_fingerprint,
                     template_fingerprint='b' * 64, base_head=base_head,
-                    published_papers=[{'arxivId': '2607.00001'}],
+                    published_papers=published_papers,
                 )
                 reused = publish_to_blog.reusable_generation_manifest(
-                    '2026-07-10', 'a' * 64, 'b' * 64, base_head,
+                    '2026-07-10', input_fingerprint, 'b' * 64, base_head,
                 )
                 self.assertEqual(reused, ([page.resolve()], manifest))
                 page.write_text('manual review edit\n', encoding='utf-8')
                 self.assertIsNone(publish_to_blog.reusable_generation_manifest(
-                    '2026-07-10', 'a' * 64, 'b' * 64, base_head,
+                    '2026-07-10', input_fingerprint, 'b' * 64, base_head,
                 ))
+
+    def test_identical_nonempty_generate_review_push_chain_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp, with_remote=True)
+            current_dir = Path(tmp) / 'data' / 'current'
+            date_str = '2026-07-10'
+            paper = {
+                'arxivId': '2607.00001',
+                'title': 'Published paper',
+                'fetchBatchDate': date_str,
+                'parsed': {'score': 8.0},
+            }
+            options = {
+                'data_file': 'unused-test-input.json',
+                'target_date': date_str,
+                'category': '论文速递',
+                'publish_all': False,
+                'excluded_ids': [],
+            }
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CONTENT_DIR', str(posts)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir), \
+                    mock.patch.object(publish_to_blog, 'GITHUB_REMOTE', 'origin'), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                publication = create_verified_schema_v3_publication(
+                    date_str, posts, paper,
+                )
+                manifest_before = publication['manifest'].read_bytes()
+                receipt_before = publication['receipt'].read_bytes()
+                head_before = git(repo, 'rev-parse', 'HEAD').stdout.strip()
+                with mock.patch.object(
+                        publish_to_blog, 'validate_publish_target',
+                        return_value=(repo, posts),
+                    ), mock.patch.object(
+                        publish_to_blog, 'load_papers', return_value=[paper],
+                    ), mock.patch.object(
+                        publish_to_blog, 'validate_papers_for_publish', return_value=[paper],
+                    ), mock.patch.object(
+                        publish_to_blog, 'score_and_sort', return_value=([], []),
+                    ), mock.patch.object(
+                        publish_to_blog, 'generate_paper_page',
+                        side_effect=AssertionError('identical published batch must not regenerate'),
+                    ), mock.patch.object(
+                        publish_to_blog, 'generate_index_page',
+                        side_effect=AssertionError('identical published batch must not regenerate'),
+                    ):
+                    publish_to_blog.generate_main(options)
+
+                with mock.patch.object(
+                        publish_to_blog, 'review_all_posts',
+                        side_effect=AssertionError('verified publication must not rerun LLM review'),
+                    ):
+                    reused_receipt = review_blog._run_review(
+                        publish_to_blog, date_str,
+                    )
+                self.assertEqual(Path(reused_receipt), publication['receipt'])
+                self.assertTrue(publish_to_blog.git_push(
+                    date_str, publication['paths'],
+                ))
+
+                self.assertEqual(publication['manifest'].read_bytes(), manifest_before)
+                self.assertEqual(git(repo, 'rev-parse', 'HEAD').stdout.strip(), head_before)
+                self.assertIn('保留唯一发布凭证', output.getvalue())
+                receipt_after = json.loads(publication['receipt'].read_text(encoding='utf-8'))
+                receipt_before_payload = json.loads(receipt_before)
+                self.assertEqual(receipt_after['publicationCommit'], head_before)
+                self.assertEqual(receipt_after['baseHead'], receipt_before_payload['baseHead'])
+                self.assertEqual(receipt_after['remoteVerifiedOid'], head_before)
+                self.assertRegex(receipt_after['remoteIdentitySha256'], r'^[0-9a-f]{64}$')
+
+    def test_published_generation_reuse_fails_closed_on_file_remote_or_origin_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp, with_remote=True)
+            current_dir = Path(tmp) / 'data' / 'current'
+            date_str = '2026-07-10'
+            paper = {
+                'arxivId': '2607.00001',
+                'title': 'Published paper',
+                'fetchBatchDate': date_str,
+            }
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CONTENT_DIR', str(posts)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir), \
+                    mock.patch.object(publish_to_blog, 'GITHUB_REMOTE', 'origin'), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                publication = create_verified_schema_v3_publication(
+                    date_str, posts, paper,
+                )
+                current_head = git(repo, 'rev-parse', 'HEAD').stdout.strip()
+                expected_args = (
+                    date_str,
+                    publication['inputFingerprint'],
+                    publication['templateFingerprint'],
+                    current_head,
+                )
+                self.assertIsNotNone(
+                    publish_to_blog.reusable_verified_publication_generation(*expected_args)
+                )
+                self.assertIsNone(
+                    publish_to_blog.reusable_verified_publication_generation(
+                        date_str, '0' * 64, publication['templateFingerprint'], current_head,
+                    )
+                )
+
+                page = publication['paths'][0]
+                reviewed_bytes = page.read_bytes()
+                page.write_text('manual drift\n', encoding='utf-8')
+                self.assertIsNone(
+                    publish_to_blog.reusable_verified_publication_generation(*expected_args)
+                )
+                page.write_bytes(reviewed_bytes)
+
+                receipt = json.loads(publication['receipt'].read_text(encoding='utf-8'))
+                receipt['remoteVerifiedOid'] = 'f' * 40
+                publication['receipt'].write_text(json.dumps(receipt), encoding='utf-8')
+                self.assertIsNone(
+                    publish_to_blog.reusable_verified_publication_generation(*expected_args)
+                )
+
+    def test_published_generation_reuse_rejects_changed_origin_even_with_same_oid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, original_remote = init_blog_repo(tmp, with_remote=True)
+            current_dir = Path(tmp) / 'data' / 'current'
+            date_str = '2026-07-10'
+            paper = {
+                'arxivId': '2607.00001',
+                'title': 'Published paper',
+                'fetchBatchDate': date_str,
+            }
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CONTENT_DIR', str(posts)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir), \
+                    mock.patch.object(publish_to_blog, 'GITHUB_REMOTE', 'origin'), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                publication = create_verified_schema_v3_publication(
+                    date_str, posts, paper,
+                )
+                current_head = git(repo, 'rev-parse', 'HEAD').stdout.strip()
+                expected_args = (
+                    date_str,
+                    publication['inputFingerprint'],
+                    publication['templateFingerprint'],
+                    current_head,
+                )
+                self.assertIsNotNone(
+                    publish_to_blog.reusable_verified_publication_generation(*expected_args)
+                )
+
+                replacement_remote = Path(tmp) / 'replacement.git'
+                git(tmp, 'init', '--bare', str(replacement_remote))
+                git(repo, 'remote', 'add', 'replacement', str(replacement_remote))
+                git(repo, 'push', 'replacement', 'HEAD:main')
+                self.assertEqual(
+                    git(replacement_remote, 'rev-parse', 'refs/heads/main').stdout.strip(),
+                    current_head,
+                )
+                git(repo, 'remote', 'set-url', 'origin', str(replacement_remote))
+                self.assertIsNone(
+                    publish_to_blog.reusable_verified_publication_generation(*expected_args)
+                )
+                self.assertFalse(publish_to_blog.git_push(
+                    date_str, publication['paths'],
+                ))
+
+                git(repo, 'remote', 'set-url', 'origin', str(original_remote))
+                self.assertIsNotNone(
+                    publish_to_blog.reusable_verified_publication_generation(*expected_args)
+                )
+                self.assertTrue(publish_to_blog.git_push(
+                    date_str, publication['paths'],
+                ))
+                offline_remote = Path(tmp) / 'remote-offline.git'
+                original_remote.rename(offline_remote)
+                try:
+                    self.assertIsNone(
+                        publish_to_blog.reusable_verified_publication_generation(*expected_args)
+                    )
+                    receipt_before = publication['receipt'].read_bytes()
+                    options = {
+                        'data_file': 'unused-test-input.json',
+                        'target_date': date_str,
+                        'category': '论文速递',
+                        'publish_all': False,
+                        'excluded_ids': [],
+                    }
+                    with mock.patch.object(
+                            publish_to_blog, 'validate_publish_target',
+                            return_value=(repo, posts),
+                        ), mock.patch.object(
+                            publish_to_blog, 'load_papers', return_value=[paper],
+                        ), mock.patch.object(
+                            publish_to_blog, 'validate_papers_for_publish', return_value=[paper],
+                        ), mock.patch.object(
+                            publish_to_blog, 'score_and_sort', return_value=([], []),
+                        ), self.assertRaisesRegex(
+                            publish_to_blog.PublishDataValidationError,
+                            '已保留既有 generation/receipt',
+                        ):
+                        publish_to_blog.generate_main(options)
+                    with self.assertRaisesRegex(
+                        publish_to_blog.PublishDataValidationError,
+                        '已保留既有 receipt',
+                    ):
+                        review_blog._run_review(publish_to_blog, date_str)
+                    self.assertEqual(publication['receipt'].read_bytes(), receipt_before)
+                finally:
+                    offline_remote.rename(original_remote)
 
     def test_template_fingerprint_includes_base_path_and_dependency_hashes(self):
         with mock.patch.object(publish_to_blog, 'BASE_PATH', '/one'):

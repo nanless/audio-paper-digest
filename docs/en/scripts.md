@@ -144,15 +144,19 @@ Unified configuration center. All hardcoded parameters are centrally managed and
 | Config Item | Default | Env Override | Description |
 |--------|--------|-------------|------|
 | Per-category fetch count | 100 | `PD_ARXIV_MAX_RESULTS` | Max results per category |
-| Max retries | 30 | -- | `fetchMaxRetries`, per-category fetch retry limit |
-| Retry backoff base | 5000ms | -- | `fetchRetryBaseDelayMs` |
-| Rate-limit backoff base | 30000ms | -- | `fetchRateLimitBaseDelayMs`, 429 extra wait |
-| Max wait time | 600000ms | -- | `fetchMaxWaitMs`, max 10 minutes wait per category |
+| Maximum attempts | 5 | `PD_ARXIV_FETCH_MAX_RETRIES` | Shared by recent/search/abstract/API paths |
+| Ordinary-error backoff base | 5000ms | `PD_ARXIV_FETCH_RETRY_BASE_DELAY_MS` | Linear by attempt number |
+| Rate-limit backoff base | 60000ms | `PD_ARXIV_RATE_LIMIT_BASE_DELAY_MS` | `base*2^(attempt-1)` for HTTP 429 |
+| Cumulative 429 wait limit | 120000ms | `PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS` | Shared per-category rate-limit budget |
+| Cumulative total retry wait | 600000ms | `PD_ARXIV_FETCH_MAX_WAIT_MS` | Shared by all metadata paths in one category |
+| Absolute request deadline | 60000ms | `PD_ARXIV_METADATA_TIMEOUT_MS` | Applied alongside the socket timeout |
+| Response byte limit | 8388608 | `PD_ARXIV_METADATA_MAX_BYTES` | Destroys an oversized response immediately |
+| User-Agent | Built-in rotation pool | `PD_ARXIV_USER_AGENT` | Override pins a single value |
 | Category delay | 60000ms | -- | `categoryDelayMs`, delay between categories (full-fetch adds jitter + rate-limit penalty) |
 | First request delay | 30000ms | -- | `firstRequestDelayMs`, extra wait for the first category |
 | Consecutive known threshold | 20 | -- | Parser option only; production pagination/API coverage explicitly disables this shortcut |
 
-> Note: the actual retry limit hard-coded in each `fetch-papers.js` path (recent/search/API) is 5; the 429 backoff is `60s * 2^(attempt-1)` (60s/120s/240s/480s), other errors `5s * attempt`. The table above lists the `ARXIV_CONFIG` values registered in `config.js`.
+`fetch-papers.js` reads these fields directly; there is no separate hard-coded retry policy.
 
 **HuggingFace Configuration (`HUGGINGFACE_CONFIG`)**
 

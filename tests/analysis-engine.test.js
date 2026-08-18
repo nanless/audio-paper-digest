@@ -27,6 +27,8 @@ const {
 } = require('../scripts/analysis-engine.js');
 const {
     getMissingRequiredSections,
+    findAnalysisEditorialLeakages,
+    validateAnalysisEditorialLeakageContract,
     validateExperimentTableContract,
     validateMethodDetailContract,
     EXPERIMENT_TABLE_CONTRACT_VERSION,
@@ -312,6 +314,95 @@ describe('analyzePaperWithRetry', () => {
     it('校验会拒绝缺少核心字段的分析', () => {
         assert.strictEqual(getInvalidAnalysisReason(validAnalysisText(), require('../scripts/utils.js').parseAnalysis(validAnalysisText())), null);
         assert.match(getInvalidAnalysisReason('## 评分\n8.0/10', {}), /缺少必要章节/);
+    });
+
+    it('终态契约拒绝高置信度模型编辑和自检批注泄漏', () => {
+        const leakages = [
+            '这里保持原样。注意原文只有一个作者，已有分析去掉括号但可接受。',
+            '注意修正拼写。',
+            '这里我补充了协议不一致，并加入了严格限定。',
+            '以上方法概述已超过600字。我加入了公式格式正确。',
+            '这里第4点加括号说明协议差异，避免过度声明。其余保留。',
+            '现在需要生成最终文本。但直接输出所有章节，可能比较长。',
+            '实验结论与原文证据一致。现在需要生成最终文本。',
+            '实验结论与原文证据一致。**现在需要生成最终文本。**',
+            '开源资源状态已经核对。需要检查细节：原分析中仓库链接正确。',
+            '注意：用户可能期望在机器摘要中不要用中文逗号分隔。',
+            '**注意：** 用户可能期望在机器摘要中不要用中文逗号分隔。',
+            '这里补充了 MLAAD bonafide zero-shot。注意训练数据条目中“MLAAD”可能指 MLAAD-EN，但原文中用 MLAAD。可以。',
+            '- 原文标题：测试标题，已有分析没提，但无需在分析中重复。'
+        ];
+
+        for (const leakage of leakages) {
+            const contaminated = validAnalysisText().replace(
+                '工作的问题定义清楚，但方法增量和工程证据仍有提升空间。',
+                `工作的问题定义清楚，但方法增量和工程证据仍有提升空间。\n\n${leakage}`
+            );
+            assert.ok(findAnalysisEditorialLeakages(contaminated).length > 0, leakage);
+            assert.match(validateAnalysisEditorialLeakageContract(contaminated), /编辑\/自检批注泄漏/);
+            assert.match(
+                getInvalidAnalysisReason(contaminated, require('../scripts/utils.js').parseAnalysis(contaminated)),
+                /叙事契约无效.*编辑\/自检批注泄漏/
+            );
+        }
+
+        assert.deepStrictEqual(
+            findAnalysisEditorialLeakages('实验结论与原文证据一致。**现在需要生成最终文本。**'),
+            ['现在需要生成最终文本']
+        );
+        const normalizedBoldLabel = findAnalysisEditorialLeakages(
+            '**注意：** 用户可能期望在机器摘要中不要用中文逗号分隔。'
+        );
+        assert.deepStrictEqual(normalizedBoldLabel, [
+            '注意： 用户可能期望在机器摘要中不要用中文逗号分隔。'
+        ]);
+        assert.doesNotMatch(normalizedBoldLabel[0], /[：:]\s*[：:]/);
+    });
+
+    it('编辑泄漏检测不误伤正常论文论述、引用和围栏示例', () => {
+        const legitimate = validAnalysisText().replace(
+            '工作的问题定义清楚，但方法增量和工程证据仍有提升空间。',
+            `工作的问题定义清楚，但方法增量和工程证据仍有提升空间。
+
+这里的 score 不是对单一帧质量的判断，而是衡量完整序列的一致性。需注意 one-class 严格限于封闭集合设定。作者在附录中修正了拼写错误并补充实验。已有分析方法通常依赖静态特征，本文则建模动态轨迹。
+
+需要检查细节变化对跨域性能的影响。在 HCI 研究中，用户可能期望输出格式与辅助技术保持一致。注意：用户可能期望输出格式支持屏幕阅读器。
+
+这里调整隐藏状态维度并补充跨模态投影层，以获得统一文本表示。这里补充输入声学特征，随后由门控网络完成融合。这里补充了对齐损失的温度消融，这一点尤其需要注意。现在需要生成最终文本表示，再由自回归解码器还原字符序列。Now I need to produce the final text representation before decoding.
+
+> 注意：用户可能期望模型直接输出最终文本。
+
+\`\`\`text
+现在需要生成最终文本。
+\`\`\``
+        );
+
+        assert.deepStrictEqual(findAnalysisEditorialLeakages(legitimate), []);
+        assert.strictEqual(validateAnalysisEditorialLeakageContract(legitimate), null);
+        assert.strictEqual(
+            getInvalidAnalysisReason(legitimate, require('../scripts/utils.js').parseAnalysis(legitimate)),
+            null
+        );
+    });
+
+    it('模型批注泄漏会进入标准重试并在持续泄漏时失败', async () => {
+        let calls = 0;
+        const contaminated = validAnalysisText().replace(
+            '工作的问题定义清楚，但方法增量和工程证据仍有提升空间。',
+            '工作的问题定义清楚，但方法增量和工程证据仍有提升空间。\n\n现在需要生成最终文本。'
+        );
+        const result = await analyzePaperWithRetry({ arxivId: '2608.13817', title: 'Leaked' }, {
+            maxRetries: 1,
+            retryDelayMs: 0,
+            analyzeFn: async () => {
+                calls += 1;
+                return validAnalyzedResult({ analysis: contaminated });
+            }
+        });
+
+        assert.strictEqual(calls, 2);
+        assert.strictEqual(result.success, false);
+        assert.match(result.error, /叙事契约无效.*编辑\/自检批注泄漏/);
     });
 
     it('bounded-v1 硬契约限制实验表格数量、数据行和指标列', () => {

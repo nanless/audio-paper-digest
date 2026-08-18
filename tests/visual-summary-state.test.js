@@ -23,6 +23,7 @@ const {
     assertPublishedBlogReceipt,
     assertVisualManifestCurrent,
     selectVisualReferenceImages,
+    publishedPapersFingerprint,
     validateReferenceImageBytes,
     prepareVisualReferenceInputs,
     assertVisualArchiveUniqueness,
@@ -141,10 +142,13 @@ function paper(id = '2607.12345', extra = {}) {
 function writePublishedReceipt(currentDir, targetDate, publishedPapers, overrides = {}) {
     fs.mkdirSync(currentDir, { recursive: true });
     const generationPath = path.join(currentDir, `blog-generation-manifest-${targetDate}.json`);
+    const snapshotFingerprint = publishedPapersFingerprint(publishedPapers);
     const generation = {
         schemaVersion: 3, date: targetDate, category: '论文速递',
         visualSummaryRequired: false, digestCoverRequired: false,
-        inputFingerprint: 'c'.repeat(64), publishedPapers
+        inputFingerprint: 'c'.repeat(64), publishAll: false, publishedPapers,
+        publishedPapersFingerprintContract: 'typed-json-f64-utf16-v1',
+        publishedPapersFingerprint: snapshotFingerprint
     };
     const raw = Buffer.from(JSON.stringify(generation));
     fs.writeFileSync(generationPath, raw);
@@ -153,6 +157,9 @@ function writePublishedReceipt(currentDir, targetDate, publishedPapers, override
         schemaVersion: 3, date: targetDate, strictReview: true, hugoGate: 'hugo',
         reviewProtocolFingerprint: 'b'.repeat(64),
         generationManifestSha256: crypto.createHash('sha256').update(raw).digest('hex'),
+        generationInputIntegrity: 'typed-json-f64-utf16-v1',
+        generationInputFingerprint: generation.inputFingerprint,
+        publishedPapersFingerprint: snapshotFingerprint,
         publicationCommit: 'a'.repeat(40), remoteVerifiedOid: 'a'.repeat(40),
         remoteVerifiedAt: '2026-07-14T02:00:00+08:00', ...overrides
     }));
@@ -172,6 +179,17 @@ function writeImageCache(currentDir, url, raw, mime = 'image/png') {
 }
 
 describe('visual summary state', () => {
+    it('publishedPapers 指纹按 UTF-16 code unit 排序 BMP 与非 BMP 对象键', () => {
+        const probe = JSON.parse(fs.readFileSync(
+            path.join(__dirname, 'fixtures', 'published-papers-fingerprint-probe.json'),
+            'utf8'
+        ));
+        assert.strictEqual(
+            publishedPapersFingerprint(probe),
+            '3ee65da42ed04aa221d4429d960f7b60ed86fb5bee62f428ec67d2f8d2171882'
+        );
+    });
+
     it('完成态必须保留合法语义 QA 声明，缺失或损坏时重新进入待生成', () => {
         const originals = {
             current: Config.CURRENT_DIR,
@@ -292,6 +310,72 @@ describe('visual summary state', () => {
             });
             assert.deepStrictEqual(second.papers['2607.12345'].generationContext.referenceImages, []);
             assert.notStrictEqual(second.papers['2607.12345'].cards.infographic.taskToken, firstToken);
+        } finally {
+            Config.CURRENT_DIR = originals.current;
+            Config.FILES.visualSummaryManifestDir = originals.manifest;
+            Config.FILES.visualSummaryAssetDir = originals.asset;
+        }
+    });
+
+    it('发布快照的精确图片排除项会过滤视觉参考，同时保留同论文合法图片', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-publish-exclusion-'));
+        const current = path.join(dir, 'current');
+        const excludedUrl = 'https://arxiv.org/html/2608.13610v1/Fig/intro_1.jpg';
+        const retainedUrl = 'https://arxiv.org/html/2608.13610v1/Fig/2_framework.jpg';
+        const originals = {
+            current: Config.CURRENT_DIR,
+            manifest: Config.FILES.visualSummaryManifestDir,
+            asset: Config.FILES.visualSummaryAssetDir
+        };
+        try {
+            patchVisualDirs(current);
+            const excludedSha = writeImageCache(current, excludedUrl, Buffer.from('bad-figure'));
+            const retainedSha = writeImageCache(current, retainedUrl, Buffer.from('valid-framework'));
+            const input = paper('2608.13610v1', {
+                selectedImageUrls: [excludedUrl, retainedUrl],
+                publishImageExclusions: [{
+                    normalizedArxivId: '2608.13610',
+                    url: excludedUrl,
+                    reason: '图片内含 Manul debugging 拼写错误'
+                }],
+                imageManifest: {
+                    selected: [excludedUrl, retainedUrl],
+                    candidates: [
+                        { url: excludedUrl, caption: 'Figure 1: Motivation.' },
+                        { url: retainedUrl, caption: 'Figure 2: Framework architecture.' }
+                    ],
+                    downloaded: [
+                        { url: excludedUrl, mime: 'image/png', sha256: excludedSha },
+                        { url: retainedUrl, mime: 'image/png', sha256: retainedSha }
+                    ]
+                }
+            });
+            const references = selectVisualReferenceImages(input);
+            assert.deepStrictEqual(references.map(item => item.url), [retainedUrl]);
+
+            const promptPath = path.join(dir, 'prompt.md');
+            const manifestPath = path.join(dir, 'manifest.json');
+            fs.writeFileSync(promptPath, 'fresh visual prompt');
+            const manifest = planVisualSummaries({
+                targetDate: '2026-07-13', papers: [input], manifestPath, promptPath
+            });
+            assert.deepStrictEqual(
+                manifest.papers['2608.13610'].generationContext.referenceImages.map(item => item.url),
+                [retainedUrl]
+            );
+
+            assert.throws(() => selectVisualReferenceImages({
+                ...input,
+                publishImageExclusions: [{
+                    normalizedArxivId: '2608.13610', url: excludedUrl, reason: '   '
+                }]
+            }), /reason 必须是非空字符串/);
+            assert.throws(() => selectVisualReferenceImages({
+                ...input,
+                publishImageExclusions: [{
+                    normalizedArxivId: '2608.13611', url: excludedUrl, reason: 'wrong paper'
+                }]
+            }), /当前论文的规范化 arXiv ID/);
         } finally {
             Config.CURRENT_DIR = originals.current;
             Config.FILES.visualSummaryManifestDir = originals.manifest;
@@ -482,6 +566,31 @@ describe('visual summary state', () => {
             assert.throws(() => assertPublishedBlogReceipt('2026-07-13', receipt), /远端 OID/);
             writePublishedReceipt(dir, '2026-07-13', [paper()]);
             assert.strictEqual(assertPublishedBlogReceipt('2026-07-13', receipt).publicationCommit, 'a'.repeat(40));
+        } finally {
+            Config.CURRENT_DIR = originalCurrent;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('视觉入口拒绝 publishedPapers 被篡改但 inputFingerprint 未变化的凭证', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-snapshot-tamper-'));
+        const originalCurrent = Config.CURRENT_DIR;
+        try {
+            Config.CURRENT_DIR = dir;
+            const receiptPath = writePublishedReceipt(dir, '2026-07-13', [paper()]);
+            const generationPath = path.join(dir, 'blog-generation-manifest-2026-07-13.json');
+            const generation = JSON.parse(fs.readFileSync(generationPath, 'utf8'));
+            generation.publishedPapers[0].title = 'tampered after generation';
+            const generationRaw = Buffer.from(JSON.stringify(generation));
+            fs.writeFileSync(generationPath, generationRaw);
+            const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+            receipt.generationManifestSha256 = crypto.createHash('sha256')
+                .update(generationRaw).digest('hex');
+            fs.writeFileSync(receiptPath, JSON.stringify(receipt));
+            assert.throws(
+                () => assertPublishedBlogReceipt('2026-07-13', receiptPath),
+                /可反向验证的已发布论文权威快照/
+            );
         } finally {
             Config.CURRENT_DIR = originalCurrent;
             fs.rmSync(dir, { recursive: true, force: true });

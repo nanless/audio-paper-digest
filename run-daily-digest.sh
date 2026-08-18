@@ -132,6 +132,7 @@ else
 fi
 run_stage 5 "准备论文关键图输入" node scripts/visual-summary-state.js prepare --date "$target_date"
 
-echo "==> 脚本阶段完成。Codex 现在必须继续生成、目检并登记 TOP 10 论文长图和汇总封面。"
+echo "==> digest:prepare 仅完成博客发布与视觉输入准备；退出成功不代表整条论文速递完成。"
+echo "==> Codex 现在必须继续生成、目检并登记 TOP 10 论文长图和汇总封面。"
 echo "==> 最终门禁: npm run visual:status -- --date ${target_date}"
 echo "==> 最终门禁: npm run cover:status -- --date ${target_date}"

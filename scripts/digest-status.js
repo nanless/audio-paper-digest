@@ -1,6 +1,11 @@
 const Config = require('./config.js');
 const fs = require('fs');
-const { getBeijingISOString, writeFileAtomic, normalizedId } = require('./utils.js');
+const {
+    getBeijingISOString,
+    normalizeToBeijingISOString,
+    writeFileAtomic,
+    normalizedId
+} = require('./utils.js');
 const {
     readJsonFileStrict,
     withFileLockSync,
@@ -31,6 +36,52 @@ const ANALYSIS_FIELDS = Object.freeze([
     'htmlAttempts',
     'sourceWarnings'
 ]);
+
+function normalizeCompatibleBatchDate(value) {
+    const rawValue = String(value || '').trim();
+    const match = rawValue.match(/^(\d{4})-(\d{2})-(\d{2})(?=$|T|\s)/);
+    if (!match) return '';
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const candidate = new Date(Date.UTC(year, month - 1, day));
+    if (candidate.getUTCFullYear() !== year
+        || candidate.getUTCMonth() !== month - 1
+        || candidate.getUTCDate() !== day) return '';
+    const datePrefix = match[0].slice(0, 10);
+    if (rawValue === datePrefix) return datePrefix;
+
+    // 旧数据中既有 ISO `T`，也有空格分隔的时间戳。只要末尾明确带时区，
+    // 就必须先按真实瞬时时间换算到北京时间，不能直接截取原始日期前缀。
+    if (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(rawValue)) {
+        const timestamp = rawValue.replace(/^(\d{4}-\d{2}-\d{2})\s+/, '$1T');
+        const parsed = new Date(timestamp);
+        if (Number.isNaN(parsed.getTime())) return '';
+        return normalizeToBeijingISOString(parsed.toISOString()).slice(0, 10);
+    }
+
+    // 无显式时区的旧时间戳按历史本地（北京时间）语义兼容。
+    return datePrefix;
+}
+
+function inferAnalysisBatchDate(papers, envelope = {}, fallbackTimestamp = getBeijingISOString()) {
+    const records = (Array.isArray(papers) ? papers : [papers]).filter(Boolean);
+    const candidateGroups = [
+        records.map(paper => paper.fetchBatchDate),
+        records.map(paper => paper.batchDate),
+        records.map(paper => paper.digestStatus?.batchDate),
+        [envelope?.batchDate],
+        records.map(paper => paper.fetchedAt),
+        [envelope?.timestamp, envelope?.lastUpdated, fallbackTimestamp]
+    ];
+    for (const candidates of candidateGroups) {
+        for (const candidate of candidates) {
+            const normalized = normalizeCompatibleBatchDate(candidate);
+            if (normalized) return normalized;
+        }
+    }
+    return normalizeCompatibleBatchDate(fallbackTimestamp) || getBeijingISOString().slice(0, 10);
+}
 
 function paperVersion(record, rawKey = '') {
     const rawId = record?.arxivId || record?.paper_id || rawKey;
@@ -213,7 +264,9 @@ function mergeAnalysisDigestPaper(existing, paper) {
 
 function applyAnalysisDigestStatuses(papersData, analyzedPapers, options = {}) {
     const now = options.updatedAt || getBeijingISOString();
-    const batchDate = options.batchDate || now.slice(0, 10);
+    const batchDate = normalizeCompatibleBatchDate(options.batchDate)
+        || normalizeCompatibleBatchDate(now)
+        || getBeijingISOString().slice(0, 10);
     let updated = 0;
 
     for (const paper of analyzedPapers || []) {
@@ -261,6 +314,8 @@ function updateAnalysisDigestStatuses(analyzedPapers, options = {}) {
 }
 
 module.exports = {
+    normalizeCompatibleBatchDate,
+    inferAnalysisBatchDate,
     loadPapersDatabase,
     normalizePapersMap,
     normalizePapersDatabase,

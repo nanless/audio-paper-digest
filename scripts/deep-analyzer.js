@@ -31,10 +31,12 @@ const {
     getMissingRequiredSections,
     getDuplicateRequiredSections,
     validateTopLevelSectionContract,
+    validateAnalysisEditorialLeakageContract,
     validateMachineSummaryContract,
     validateTagSectionContract,
     EXPERIMENT_TABLE_CONTRACT_VERSION,
     METHOD_DETAIL_CONTRACT_VERSION,
+    ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION,
     validateExperimentTableContract,
     validateMethodDetailContract,
     isRecoveryStageTerminal,
@@ -538,12 +540,14 @@ function hasAffirmativeDemoEvidence(sourceText) {
     });
 }
 
-async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '') {
+async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', options = {}) {
     let lastError = null;
     let validationFeedback = '这是第一次输出，没有上一次校验错误。';
     // 即使没有额外原文，也要把已有分析的带 ID 章节构造成可引用账本；
     // 否则空 ID 集会让“每个理由必须引用合法 ID”的硬契约无解。
-    const evidenceContext = buildTypeAwareSourceContext(analysis, sourceEvidence);
+    const evidenceContext = typeof options.evidenceContext === 'string'
+        ? options.evidenceContext
+        : buildTypeAwareSourceContext(analysis, sourceEvidence);
     const promptTemplateSha256 = crypto.createHash('sha256')
         .update(fs.readFileSync(path.join(__dirname, '..', 'prompts', 'scoring-audit.md')))
         .digest('hex');
@@ -589,8 +593,8 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '') {
     throw lastError || new Error('评分审计失败');
 }
 
-async function auditTypeAwareScoring(analysis, sourceEvidence = '') {
-    return (await auditTypeAwareScoringDetailed(analysis, sourceEvidence)).analysis;
+async function auditTypeAwareScoring(analysis, sourceEvidence = '', options = {}) {
+    return (await auditTypeAwareScoringDetailed(analysis, sourceEvidence, options)).analysis;
 }
 
 function getPaperArxivId(paper) {
@@ -643,6 +647,128 @@ function modelFingerprint(config, temperature = API_TEMPERATURE, maxTokens = API
     };
 }
 
+const TEXT_RECOVERY_STAGE_CONFIG = Object.freeze({
+    openSourceScan: {
+        maxTokens: 8000,
+        evidenceMaxChars: OPEN_SOURCE_EVIDENCE_MAX_CHARS,
+        patterns: OPEN_SOURCE_EVIDENCE_PATTERNS,
+        taskLabel: 'OPEN_SOURCE',
+        typeAware: false,
+        sanitize: true
+    },
+    revision: {
+        maxTokens: REPAIR_MAX_TOKENS,
+        evidenceMaxChars: REVISION_EVIDENCE_MAX_CHARS,
+        patterns: BROAD_EVIDENCE_PATTERNS,
+        taskLabel: 'REVISION',
+        typeAware: false
+    },
+    tableRepair: {
+        maxTokens: REPAIR_MAX_TOKENS,
+        evidenceMaxChars: REPAIR_EVIDENCE_MAX_CHARS,
+        patterns: RESULT_EVIDENCE_PATTERNS,
+        taskLabel: 'RESULT',
+        typeAware: true
+    },
+    methodRepair: {
+        maxTokens: REPAIR_MAX_TOKENS,
+        evidenceMaxChars: REPAIR_EVIDENCE_MAX_CHARS,
+        patterns: METHOD_EVIDENCE_PATTERNS,
+        taskLabel: 'METHOD',
+        typeAware: true
+    },
+    structureRepair: {
+        maxTokens: REPAIR_MAX_TOKENS,
+        evidenceMaxChars: STRUCTURE_EVIDENCE_MAX_CHARS,
+        patterns: BROAD_EVIDENCE_PATTERNS,
+        taskLabel: 'STRUCTURE',
+        typeAware: true
+    }
+});
+
+function buildStageEvidenceContext(stage, analysis, sourceText) {
+    if (stage === 'scoringAudit') {
+        return buildTypeAwareSourceContext(
+            analysis,
+            sourceText,
+            SCORING_EVIDENCE_MAX_CHARS,
+            SCORING_EVIDENCE_PATTERNS,
+            'SCORING'
+        );
+    }
+    const config = TEXT_RECOVERY_STAGE_CONFIG[stage];
+    if (!config) throw new Error(`未知的文本恢复阶段: ${stage}`);
+    const evidence = config.typeAware
+        ? buildTypeAwareSourceContext(
+            analysis,
+            sourceText,
+            config.evidenceMaxChars,
+            config.patterns,
+            config.taskLabel
+        )
+        : buildTaskEvidenceContext(
+            sourceText,
+            config.evidenceMaxChars,
+            config.patterns,
+            config.taskLabel
+        );
+    return config.sanitize ? sanitizeOpenSourceEvidence(evidence) : evidence;
+}
+
+function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext) {
+    const config = TEXT_RECOVERY_STAGE_CONFIG[stage];
+    if (!config) throw new Error(`未知的文本恢复阶段: ${stage}`);
+    return stableFingerprint({
+        ...modelFingerprint(DEEP_CONFIG, API_TEMPERATURE, config.maxTokens),
+        promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES[stage]),
+        evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
+        evidenceMaxChars: config.evidenceMaxChars,
+        evidenceSha256: crypto.createHash('sha256').update(String(evidenceContext || '')).digest('hex'),
+        inputAnalysisSha256: crypto.createHash('sha256').update(String(inputAnalysis || '')).digest('hex'),
+        ...(stage === 'structureRepair'
+            ? {
+                experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+                editorialLeakageContractVersion: ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION
+            }
+            : {}),
+        ...(stage === 'methodRepair'
+            ? { methodDetailContractVersion: METHOD_DETAIL_CONTRACT_VERSION }
+            : {})
+    });
+}
+
+function getTextStageInputAnalysis(paper, stage, currentAnalysis) {
+    const index = RECOVERY_STAGE_ORDER.indexOf(stage);
+    const previousStage = index > 0 ? RECOVERY_STAGE_ORDER[index - 1] : null;
+    const previousCheckpoint = previousStage
+        ? paper.analysisStageCheckpoints?.[previousStage]
+        : null;
+    return typeof previousCheckpoint === 'string'
+        ? previousCheckpoint
+        : String(currentAnalysis || '');
+}
+
+function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourceText) {
+    const inputAnalysis = getTextStageInputAnalysis(paper, stage, currentAnalysis);
+    const evidenceContext = buildStageEvidenceContext(stage, inputAnalysis, sourceText);
+    const fingerprint = buildTextStageFingerprint(stage, inputAnalysis, evidenceContext);
+    const evidenceSha256 = crypto.createHash('sha256').update(evidenceContext).digest('hex');
+    const inputAnalysisSha256 = crypto.createHash('sha256').update(inputAnalysis).digest('hex');
+    const invalidated = invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint);
+    return {
+        analysis: invalidated && typeof paper.analysisCheckpoint === 'string'
+            ? paper.analysisCheckpoint
+            : currentAnalysis,
+        inputAnalysis,
+        evidenceContext,
+        evidenceChars: evidenceContext.length,
+        evidenceSha256,
+        inputAnalysisSha256,
+        fingerprint,
+        invalidated
+    };
+}
+
 function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
     const usedTextSha256 = crypto.createHash('sha256').update(textForAnalysis).digest('hex');
     const primaryContext = {
@@ -656,40 +782,9 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
         authors: paper.authors || [],
         categories: paper.categories || []
     };
-    const stageMaxTokens = {
-        openSourceScan: 8000,
-        revision: REPAIR_MAX_TOKENS,
-        tableRepair: REPAIR_MAX_TOKENS,
-        methodRepair: REPAIR_MAX_TOKENS,
-        structureRepair: REPAIR_MAX_TOKENS
-    };
-    const textStage = stage => stableFingerprint({
-        ...modelFingerprint(DEEP_CONFIG, API_TEMPERATURE, stageMaxTokens[stage]),
-        promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES[stage]),
-        usedTextSha256,
-        evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
-        ...(stage === 'structureRepair'
-            ? { experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION }
-            : {}),
-        ...(stage === 'methodRepair'
-            ? { methodDetailContractVersion: METHOD_DETAIL_CONTRACT_VERSION }
-            : {}),
-        evidenceMaxChars: {
-            openSourceScan: OPEN_SOURCE_EVIDENCE_MAX_CHARS,
-            revision: REVISION_EVIDENCE_MAX_CHARS,
-            tableRepair: REPAIR_EVIDENCE_MAX_CHARS,
-            methodRepair: REPAIR_EVIDENCE_MAX_CHARS,
-            structureRepair: STRUCTURE_EVIDENCE_MAX_CHARS
-        }[stage]
-    });
     return {
         primaryAnalysis: stableFingerprint(primaryContext),
-        openSourceScan: textStage('openSourceScan'),
         demoLinkScan: stableFingerprint({ implementation: 'demo-link-scan-v1' }),
-        revision: textStage('revision'),
-        tableRepair: textStage('tableRepair'),
-        methodRepair: textStage('methodRepair'),
-        structureRepair: textStage('structureRepair'),
         imageSupplement: stableFingerprint({
             ...modelFingerprint(SECONDARY_CONFIG, IMAGE_PLAN_TEMPERATURE, API_MAX_TOKENS),
             enabled: isDualModel,
@@ -823,6 +918,7 @@ function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint) {
     if (stagesToDelete.includes('structureRepair') && manifest.contracts) {
         delete manifest.contracts.experimentTables;
         delete manifest.contracts.methodDetail;
+        delete manifest.contracts.editorialLeakage;
         if (Object.keys(manifest.contracts).length === 0) delete manifest.contracts;
     }
     paper.analysisStageCheckpoints = checkpoints;
@@ -854,6 +950,8 @@ function createAnalysisRecoveryManifest(paper) {
         && existing?.contracts?.experimentTables === EXPERIMENT_TABLE_CONTRACT_VERSION;
     const keepMethodContract = isRecoveryStageComplete({ stages }, 'structureRepair')
         && existing?.contracts?.methodDetail === METHOD_DETAIL_CONTRACT_VERSION;
+    const keepEditorialLeakageContract = isRecoveryStageComplete({ stages }, 'structureRepair')
+        && existing?.contracts?.editorialLeakage === ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION;
     const contracts = existing?.contracts && typeof existing.contracts === 'object'
         ? { ...existing.contracts }
         : {};
@@ -861,6 +959,11 @@ function createAnalysisRecoveryManifest(paper) {
     else delete contracts.experimentTables;
     if (keepMethodContract) contracts.methodDetail = METHOD_DETAIL_CONTRACT_VERSION;
     else delete contracts.methodDetail;
+    if (keepEditorialLeakageContract) {
+        contracts.editorialLeakage = ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION;
+    } else {
+        delete contracts.editorialLeakage;
+    }
     return {
         version: RECOVERY_MANIFEST_VERSION,
         stages,
@@ -895,8 +998,9 @@ function saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest
     paper.analysisCheckpoint = String(analysis || '');
     paper.analysisManifest = analysisManifest;
     if (imageManifest) {
-        paper.imageManifest = imageManifest;
-        paper.analysisRecoveryImageManifest = imageManifest;
+        const sanitizedImageManifest = sanitizeImageManifestInPlace(imageManifest);
+        paper.imageManifest = sanitizedImageManifest;
+        paper.analysisRecoveryImageManifest = sanitizedImageManifest;
     }
     paper.analysisStageCheckpoints = paper.analysisStageCheckpoints || {};
     for (const stage of RECOVERY_STAGE_ORDER) {
@@ -1159,7 +1263,7 @@ function safeImageLabel(url) {
 
 function isSupportedImageUrl(url) {
     const value = String(url || '').trim();
-    if (!/^https?:\/\//i.test(value)) return false;
+    if (!/^https:\/\//i.test(value)) return false;
     let path = '';
     try {
         path = new URL(value).pathname.toLowerCase();
@@ -2020,15 +2124,19 @@ function normalizeImageInfos(input) {
     if (!Array.isArray(input)) return [];
     return input.map(item => {
         if (!item) return null;
-        if (typeof item === 'string') return { url: item, caption: '' };
+        if (typeof item === 'string') return { url: item.trim(), caption: '' };
         if (typeof item === 'object' && item.url) {
             const normalized = {
-                url: item.url,
+                url: String(item.url).trim(),
                 caption: item.caption || item.alt || item.description || ''
             };
             for (const key of ['figureNumber', 'sourceSection', 'sourceType']) {
                 if (item[key]) normalized[key] = String(item[key]);
             }
+            for (const key of ['cachePath', 'mime', 'sha256']) {
+                if (item[key]) normalized[key] = String(item[key]);
+            }
+            if (typeof item.cacheHit === 'boolean') normalized.cacheHit = item.cacheHit;
             if (Number.isInteger(item.sourceOrder)) normalized.sourceOrder = item.sourceOrder;
             if (Number.isFinite(item.candidateScore)) normalized.candidateScore = item.candidateScore;
             else if (Number.isFinite(item.score)) normalized.candidateScore = item.score;
@@ -2036,6 +2144,82 @@ function normalizeImageInfos(input) {
         }
         return null;
     }).filter(info => info && info.url && isSupportedImageUrl(info.url));
+}
+
+function sanitizeImageManifestRecords(input) {
+    if (!Array.isArray(input)) return [];
+    const recordsByUrl = new Map();
+    for (const item of input) {
+        if (!item) continue;
+        const rawUrl = typeof item === 'string' ? item : item.url;
+        const url = String(rawUrl || '').trim();
+        if (!isSupportedImageUrl(url)) continue;
+        const record = typeof item === 'string' ? { url } : { ...item, url };
+        const existing = recordsByUrl.get(url);
+        if (!existing) {
+            recordsByUrl.set(url, record);
+            continue;
+        }
+        const merged = { ...existing, ...record, url };
+        for (const key of ['caption', 'alt', 'description', 'cachePath', 'mime', 'sha256']) {
+            if (!record[key] && existing[key]) merged[key] = existing[key];
+        }
+        recordsByUrl.set(url, merged);
+    }
+    return [...recordsByUrl.values()];
+}
+
+function sanitizeSelectedImageUrls(input) {
+    if (!Array.isArray(input)) return [];
+    return [...new Set(input
+        .map(item => String(typeof item === 'string' ? item : item?.url || '').trim())
+        .filter(isSupportedImageUrl))];
+}
+
+function sanitizeImageManifestHttpsOnly(manifest) {
+    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) return null;
+    const selectedEntries = Array.isArray(manifest.selected) ? manifest.selected : [];
+    const candidates = sanitizeImageManifestRecords([
+        ...(Array.isArray(manifest.candidates) ? manifest.candidates : []),
+        ...selectedEntries
+    ]);
+    return {
+        ...manifest,
+        candidates,
+        downloaded: sanitizeImageManifestRecords(manifest.downloaded),
+        downloadOutcomes: sanitizeImageManifestRecords(manifest.downloadOutcomes),
+        selected: sanitizeSelectedImageUrls(selectedEntries)
+    };
+}
+
+function sanitizeImageManifestInPlace(manifest) {
+    const sanitized = sanitizeImageManifestHttpsOnly(manifest);
+    if (!sanitized) return null;
+    for (const key of Object.keys(manifest)) delete manifest[key];
+    Object.assign(manifest, sanitized);
+    return manifest;
+}
+
+function sanitizePaperImageRecovery(paper) {
+    if (!paper || typeof paper !== 'object') return paper;
+    for (const key of ['analysisRecoveryImageManifest', 'imageManifest']) {
+        if (!paper[key]) continue;
+        const sanitized = sanitizeImageManifestHttpsOnly(paper[key]);
+        if (sanitized) paper[key] = sanitized;
+        else delete paper[key];
+    }
+    for (const key of ['imageUrls', 'allImageUrls']) {
+        if (!Array.isArray(paper[key])) continue;
+        paper[key] = paper[key].flatMap(item => {
+            const sanitized = sanitizeImageManifestRecords([item]);
+            if (sanitized.length === 0) return [];
+            return [typeof item === 'string' ? sanitized[0].url : sanitized[0]];
+        });
+    }
+    if (Array.isArray(paper.selectedImageUrls)) {
+        paper.selectedImageUrls = sanitizeSelectedImageUrls(paper.selectedImageUrls);
+    }
+    return paper;
 }
 
 function imageUrlBasename(value) {
@@ -2594,6 +2778,7 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
  * 深度分析单篇论文（全文 + 图片）
  */
 async function analyzePaperDeep(paper) {
+    sanitizePaperImageRecovery(paper);
     const arxivId = getPaperArxivId(paper);
     const previousScore = Number.parseFloat(paper?.parsed?.score);
     const analysisManifest = createAnalysisRecoveryManifest(paper);
@@ -2718,11 +2903,21 @@ async function analyzePaperDeep(paper) {
     }
     analysisManifest.sourceAcquisition = sourceProvenance;
     const recoveryFingerprints = buildRecoveryFingerprints(paper, textForAnalysis, arxivId);
-    for (const stage of [
-        'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
-        'tableRepair', 'methodRepair', 'structureRepair'
-    ]) {
+    for (const stage of ['primaryAnalysis', 'demoLinkScan']) {
         invalidateRecoveryStageIfChanged(paper, analysisManifest, stage, recoveryFingerprints[stage]);
+    }
+    // 已完成的后处理阶段必须用当时上游 checkpoint 和完整正文重新构造
+    // 实际有界证据后再校验指纹。这里在恢复主分析正文之前完成失效传播，
+    // 避免缺少前序快照的异常 manifest 在本轮中继续使用陈旧下游正文。
+    for (const stage of Object.keys(TEXT_RECOVERY_STAGE_CONFIG)) {
+        if (!isRecoveryStageComplete(analysisManifest, stage)) continue;
+        prepareTextRecoveryStage(
+            paper,
+            analysisManifest,
+            stage,
+            paper.analysisCheckpoint || '',
+            rawTextForAnalysis
+        );
     }
     console.log(`    [deep] 文本来源: ${analysisSource} | chars=${rawTextForAnalysis.length} | confidence=${sourceProvenance.analysisConfidence} | warnings=${sourceWarnings.length}`);
 
@@ -2769,6 +2964,10 @@ async function analyzePaperDeep(paper) {
         candidates: imageInfos.map((info, index) => ({
             url: info.url,
             caption: info.caption || '',
+            ...(info.cachePath ? { cachePath: info.cachePath } : {}),
+            ...(info.mime ? { mime: info.mime } : {}),
+            ...(info.sha256 ? { sha256: info.sha256 } : {}),
+            ...(typeof info.cacheHit === 'boolean' ? { cacheHit: info.cacheHit } : {}),
             sourceOrder: Number.isInteger(info.sourceOrder) ? info.sourceOrder : index,
             score: Number.isFinite(info.candidateScore)
                 ? info.candidateScore
@@ -2777,9 +2976,9 @@ async function analyzePaperDeep(paper) {
             selectedForDownload: candidateUrlSet.has(info.url)
         })),
         downloaded: [],
-        selected: Array.isArray((paper?.analysisRecoveryImageManifest || paper?.imageManifest)?.selected)
-            ? [...(paper.analysisRecoveryImageManifest || paper.imageManifest).selected]
-            : []
+        selected: sanitizeSelectedImageUrls(
+            (paper?.analysisRecoveryImageManifest || paper?.imageManifest)?.selected
+        )
     };
     markRecoveryStage(
         analysisManifest,
@@ -2919,16 +3118,31 @@ async function analyzePaperDeep(paper) {
     let selectedImageUrls = [...imageManifest.selected];
 
     // 第2轮：开源扫描
+    const openSourceStage = prepareTextRecoveryStage(
+        paper,
+        analysisManifest,
+        'openSourceScan',
+        analysis,
+        rawTextForAnalysis
+    );
+    analysis = openSourceStage.analysis;
     if (!isRecoveryStageComplete(analysisManifest, 'openSourceScan')) {
         try {
-            const ossText = await scanOpensource(paper, textForAnalysis);
+            const ossText = await scanOpensource(
+                paper,
+                rawTextForAnalysis,
+                openSourceStage.evidenceContext
+            );
             if (ossText) {
                 analysis = mergeSectionByTitle(analysis, '开源详情', ossText);
                 analysis = syncResourceFieldsFromOpenSource(analysis, ossText);
                 console.log(`    [deep] ✅ 开源扫描完成`);
             }
             markRecoveryStage(analysisManifest, 'openSourceScan', ossText ? 'complete' : 'invalid_output', {
-                fingerprint: recoveryFingerprints.openSourceScan
+                evidenceChars: openSourceStage.evidenceChars,
+                evidenceSha256: openSourceStage.evidenceSha256,
+                inputAnalysisSha256: openSourceStage.inputAnalysisSha256,
+                fingerprint: openSourceStage.fingerprint
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             if (!ossText) {
@@ -2991,9 +3205,22 @@ async function analyzePaperDeep(paper) {
     }
 
     // 第3轮：审校重写（对照原文修正、补充、删减，完全重写前两轮输出）
+    const revisionStage = prepareTextRecoveryStage(
+        paper,
+        analysisManifest,
+        'revision',
+        analysis,
+        rawTextForAnalysis
+    );
+    analysis = revisionStage.analysis;
     if (!isRecoveryStageComplete(analysisManifest, 'revision')) {
         try {
-            const revisedText = await reviseAnalysis(paper, analysis, textForAnalysis);
+            const revisedText = await reviseAnalysis(
+                paper,
+                analysis,
+                rawTextForAnalysis,
+                revisionStage.evidenceContext
+            );
             const cleaned = revisedText && revisedText.length > 100
                 ? cleanGapFillPrefix(revisedText.trim())
                 : null;
@@ -3007,7 +3234,12 @@ async function analyzePaperDeep(paper) {
                 analysis,
                 extractSectionByTitle(analysis, '开源详情')
             );
-            markRecoveryStage(analysisManifest, 'revision', 'complete', { fingerprint: recoveryFingerprints.revision });
+            markRecoveryStage(analysisManifest, 'revision', 'complete', {
+                evidenceChars: revisionStage.evidenceChars,
+                evidenceSha256: revisionStage.evidenceSha256,
+                inputAnalysisSha256: revisionStage.inputAnalysisSha256,
+                fingerprint: revisionStage.fingerprint
+            });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.log(`    [deep] ✅ 审校重写完成`);
         } catch (e) {
@@ -3018,16 +3250,32 @@ async function analyzePaperDeep(paper) {
     }
 
     // 第3.5轮：检查并修复实验结果中缺失的表格
+    const tableRepairStage = prepareTextRecoveryStage(
+        paper,
+        analysisManifest,
+        'tableRepair',
+        analysis,
+        rawTextForAnalysis
+    );
+    analysis = tableRepairStage.analysis;
     if (!isRecoveryStageComplete(analysisManifest, 'tableRepair')) {
         try {
-            const fixed = await checkAndFixTables(paper, analysis, textForAnalysis);
+            const fixed = await checkAndFixTables(
+                paper,
+                analysis,
+                rawTextForAnalysis,
+                tableRepairStage.evidenceContext
+            );
             const changed = Boolean(fixed && fixed !== analysis);
             if (changed) {
                 analysis = removeUnapprovedMarkdownImages(fixed.trim(), []);
                 console.log(`    [deep] ✅ 表格补充完成`);
             }
             markRecoveryStage(analysisManifest, 'tableRepair', changed ? 'complete' : 'not_needed', {
-                fingerprint: recoveryFingerprints.tableRepair
+                evidenceChars: tableRepairStage.evidenceChars,
+                evidenceSha256: tableRepairStage.evidenceSha256,
+                inputAnalysisSha256: tableRepairStage.inputAnalysisSha256,
+                fingerprint: tableRepairStage.fingerprint
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
         } catch (e) {
@@ -3038,16 +3286,32 @@ async function analyzePaperDeep(paper) {
     }
 
     // 第3.6轮：检查并修复方法概述部分不够详细的问题
+    const methodRepairStage = prepareTextRecoveryStage(
+        paper,
+        analysisManifest,
+        'methodRepair',
+        analysis,
+        rawTextForAnalysis
+    );
+    analysis = methodRepairStage.analysis;
     if (!isRecoveryStageComplete(analysisManifest, 'methodRepair')) {
         try {
-            const fixed = await checkAndFixMethodSection(paper, analysis, textForAnalysis);
+            const fixed = await checkAndFixMethodSection(
+                paper,
+                analysis,
+                rawTextForAnalysis,
+                methodRepairStage.evidenceContext
+            );
             const changed = Boolean(fixed && fixed !== analysis);
             if (changed) {
                 analysis = removeUnapprovedMarkdownImages(fixed.trim(), []);
                 console.log(`    [deep] ✅ 方法概述补充完成`);
             }
             markRecoveryStage(analysisManifest, 'methodRepair', changed ? 'complete' : 'not_needed', {
-                fingerprint: recoveryFingerprints.methodRepair
+                evidenceChars: methodRepairStage.evidenceChars,
+                evidenceSha256: methodRepairStage.evidenceSha256,
+                inputAnalysisSha256: methodRepairStage.inputAnalysisSha256,
+                fingerprint: methodRepairStage.fingerprint
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
         } catch (e) {
@@ -3063,6 +3327,14 @@ async function analyzePaperDeep(paper) {
     }
 
     // 第3.65轮：修复缺失/重复章节、机器摘要和标签契约。
+    const structureRepairStage = prepareTextRecoveryStage(
+        paper,
+        analysisManifest,
+        'structureRepair',
+        analysis,
+        rawTextForAnalysis
+    );
+    analysis = structureRepairStage.analysis;
     if (!isRecoveryStageComplete(analysisManifest, 'structureRepair')) {
         const preNormalizationIssues = getRepairableAnalysisStructureIssues(analysis);
         const normalizedStructure = normalizeAnalysisStructure(analysis);
@@ -3076,7 +3348,12 @@ async function analyzePaperDeep(paper) {
         try {
             if (structureIssues.length > 0) {
                 console.log(`    [deep] 🔧 检测到结构契约问题，执行最终结构修复: ${structureIssues.join('、')}`);
-                analysis = await repairMissingAnalysisSections(paper, analysis, textForAnalysis);
+                analysis = await repairMissingAnalysisSections(
+                    paper,
+                    analysis,
+                    rawTextForAnalysis,
+                    structureRepairStage.evidenceContext
+                );
                 const postRepairIssues = getRepairableAnalysisStructureIssues(analysis);
                 if (postRepairIssues.length > 0) {
                     const error = new Error(`最终结构修复后的分析仍未通过结构契约: ${postRepairIssues.join('、')}`);
@@ -3085,41 +3362,40 @@ async function analyzePaperDeep(paper) {
                 }
                 console.log(`    [deep] ✅ 最终结构修复完成`);
             }
-            const tableContractIssue = validateExperimentTableContract(analysis);
-            if (tableContractIssue) {
-                const error = new Error(`最终结构修复后的表格仍未通过 bounded-v1 契约: ${tableContractIssue}`);
-                error.code = 'CONTRACT_REJECTED';
-                throw error;
-            }
             // 结构修复模型会重写完整正文，偶尔把前一阶段已达标的方法章节
             // 压缩回短摘要。这里在最终拒绝前重新走一次方法补充，避免让
             // 一个下游修复阶段破坏已满足 detailed-v1 的上游契约。
-            let methodContractIssue = validateMethodDetailContract(analysis);
-            if (methodContractIssue) {
-                analysis = await checkAndFixMethodSection(paper, analysis, textForAnalysis);
-                methodContractIssue = validateMethodDetailContract(analysis);
-            }
-            if (methodContractIssue) {
-                const error = new Error(`最终结构修复后的方法仍未通过 detailed-v1 契约: ${methodContractIssue}`);
-                error.code = 'CONTRACT_REJECTED';
-                throw error;
-            }
+            const finalization = await finalizeStructureRepairOutput(
+                paper,
+                analysis,
+                rawTextForAnalysis
+            );
+            analysis = finalization.analysis;
             analysisManifest.contracts = {
                 ...(analysisManifest.contracts || {}),
                 experimentTables: EXPERIMENT_TABLE_CONTRACT_VERSION,
-                methodDetail: METHOD_DETAIL_CONTRACT_VERSION
+                methodDetail: METHOD_DETAIL_CONTRACT_VERSION,
+                editorialLeakage: ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION
             };
-            markRecoveryStage(analysisManifest, 'structureRepair', structureIssues.length > 0 ? 'complete' : 'not_needed', {
-                deterministicNormalization: normalizedChanged,
-                normalizationIssues: preNormalizationIssues,
-                fingerprint: recoveryFingerprints.structureRepair
-            });
+            markRecoveryStage(
+                analysisManifest,
+                'structureRepair',
+                structureIssues.length > 0 || finalization.methodRepaired ? 'complete' : 'not_needed',
+                {
+                    deterministicNormalization: normalizedChanged,
+                    normalizationIssues: preNormalizationIssues,
+                    evidenceChars: structureRepairStage.evidenceChars,
+                    evidenceSha256: structureRepairStage.evidenceSha256,
+                    inputAnalysisSha256: structureRepairStage.inputAnalysisSha256,
+                    fingerprint: structureRepairStage.fingerprint
+                }
+            );
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
         } catch (error) {
             markRecoveryStage(
                 analysisManifest,
                 'structureRepair',
-                error.code === 'CONTRACT_REJECTED' ? 'contract_rejected' : 'transient_failure',
+                recoveryFailureStatus(error),
                 { error: error.message }
             );
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
@@ -3133,12 +3409,17 @@ async function analyzePaperDeep(paper) {
         ? paper.analysisStageCheckpoints.structureRepair
         : analysis;
     const scoringInputSha256 = crypto.createHash('sha256').update(scoringInputAnalysis).digest('hex');
+    const scoringEvidenceContext = buildStageEvidenceContext(
+        'scoringAudit',
+        scoringInputAnalysis,
+        rawTextForAnalysis
+    );
     if (isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
         const currentPromptTemplateSha256 = crypto.createHash('sha256')
             .update(fs.readFileSync(path.join(__dirname, '..', 'prompts', 'scoring-audit.md')))
             .digest('hex');
         const currentEvidenceSha256 = crypto.createHash('sha256')
-            .update(buildTypeAwareSourceContext(scoringInputAnalysis, textForAnalysis))
+            .update(scoringEvidenceContext)
             .digest('hex');
         const fingerprintChanged = scoringStage.model !== DEEP_CONFIG.model
             || scoringStage.protocol !== detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model)
@@ -3168,7 +3449,11 @@ async function analyzePaperDeep(paper) {
     }
     if (!isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
         try {
-            const scoringResult = await auditTypeAwareScoringDetailed(scoringInputAnalysis, textForAnalysis);
+            const scoringResult = await auditTypeAwareScoringDetailed(
+                scoringInputAnalysis,
+                rawTextForAnalysis,
+                { evidenceContext: scoringEvidenceContext }
+            );
             analysis = scoringResult.analysis;
             const auditedParsed = parseAnalysis(analysis);
             const auditedInvalidReason = getInvalidAnalysisReason(analysis, auditedParsed, {
@@ -3263,7 +3548,7 @@ async function analyzePaperDeep(paper) {
                 console.log(`    [deep] ⚠️  插图结果破坏最终契约，丢弃本篇插图计划: ${imageInvalidReason}`);
             } else {
                 analysis = imageResult.analysis;
-                selectedImageUrls = imageResult.selectedImageUrls;
+                selectedImageUrls = sanitizeSelectedImageUrls(imageResult.selectedImageUrls);
                 imageManifest.selected = selectedImageUrls;
                 imageManifest.supplement = {
                     ...imageResult.supplementDiagnostics,
@@ -3343,13 +3628,10 @@ async function analyzePaperDeep(paper) {
     };
 }
 
-async function scanOpensource(paper, textForAnalysis) {
-    const evidence = sanitizeOpenSourceEvidence(buildTaskEvidenceContext(
-        textForAnalysis,
-        OPEN_SOURCE_EVIDENCE_MAX_CHARS,
-        OPEN_SOURCE_EVIDENCE_PATTERNS,
-        'OPEN_SOURCE'
-    ));
+async function scanOpensource(paper, sourceText, preparedEvidence = null) {
+    const evidence = typeof preparedEvidence === 'string'
+        ? preparedEvidence
+        : buildStageEvidenceContext('openSourceScan', '', sourceText);
     const prompt = loadPrompt('prompts/opensource-scan.md', {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
@@ -3596,13 +3878,10 @@ function hasOpenSourceLinks(analysis) {
     return false;
 }
 
-async function reviseAnalysis(paper, existingAnalysis, textForAnalysis) {
-    const evidence = buildTaskEvidenceContext(
-        textForAnalysis,
-        REVISION_EVIDENCE_MAX_CHARS,
-        BROAD_EVIDENCE_PATTERNS,
-        'REVISION'
-    );
+async function reviseAnalysis(paper, existingAnalysis, sourceText, preparedEvidence = null) {
+    const evidence = typeof preparedEvidence === 'string'
+        ? preparedEvidence
+        : buildStageEvidenceContext('revision', existingAnalysis, sourceText);
     const prompt = loadPrompt('prompts/gap-fill.md', {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
@@ -3830,10 +4109,15 @@ function normalizeAnalysisStructure(analysis) {
     return updated;
 }
 
-async function repairMissingAnalysisSections(paper, existingAnalysis, textForAnalysis) {
+async function repairMissingAnalysisSections(
+    paper, existingAnalysis, sourceText, preparedEvidence = null, options = {}
+) {
     let currentAnalysis = normalizeAnalysisStructure(existingAnalysis);
     let structureIssues = getRepairableAnalysisStructureIssues(currentAnalysis);
     let validationFeedback = '这是第一次结构修复，没有上一次校验错误。';
+    const evidenceContext = typeof preparedEvidence === 'string'
+        ? preparedEvidence
+        : buildStageEvidenceContext('structureRepair', existingAnalysis, sourceText);
 
     for (let attempt = 1; attempt <= 2 && structureIssues.length > 0; attempt++) {
         const prompt = loadPrompt('prompts/structure-repair.md', {
@@ -3842,15 +4126,10 @@ async function repairMissingAnalysisSections(paper, existingAnalysis, textForAna
             missingSections: structureIssues.join('、'),
             validationFeedback,
             existingAnalysis: currentAnalysis,
-            textForAnalysis: buildTypeAwareSourceContext(
-                currentAnalysis,
-                textForAnalysis,
-                STRUCTURE_EVIDENCE_MAX_CHARS,
-                BROAD_EVIDENCE_PATTERNS,
-                'STRUCTURE'
-            )
+            textForAnalysis: evidenceContext
         });
-        const repairedText = await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS);
+        const repairCallModel = options.callModelFn || callModel;
+        const repairedText = await repairCallModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS);
         const cleaned = cleanGapFillPrefix(repairedText.trim());
         if (cleaned) currentAnalysis = normalizeAnalysisStructure(removeUnapprovedMarkdownImages(cleaned, []));
 
@@ -3861,7 +4140,63 @@ async function repairMissingAnalysisSections(paper, existingAnalysis, textForAna
         console.log(`    [deep] ⚠️  最终结构修复未通过 (${attempt}/2): ${structureIssues.join('、')}`);
     }
 
-    throw new Error(`最终结构修复失败: ${structureIssues.join('、')}`);
+    throw contractRejectedError(`最终结构修复失败: ${structureIssues.join('、')}`);
+}
+
+function contractRejectedError(message) {
+    const error = new Error(message);
+    error.code = 'CONTRACT_REJECTED';
+    return error;
+}
+
+function recoveryFailureStatus(error) {
+    return error?.code === 'CONTRACT_REJECTED' ? 'contract_rejected' : 'transient_failure';
+}
+
+async function finalizeStructureRepairOutput(paper, inputAnalysis, sourceText, options = {}) {
+    let analysis = inputAnalysis;
+    const tableContractIssue = validateExperimentTableContract(analysis);
+    if (tableContractIssue) {
+        throw contractRejectedError(
+            `最终结构修复后的表格仍未通过 bounded-v1 契约: ${tableContractIssue}`
+        );
+    }
+
+    let methodContractIssue = validateMethodDetailContract(analysis);
+    let methodRepaired = false;
+    if (methodContractIssue) {
+        const finalMethodEvidence = buildStageEvidenceContext(
+            'methodRepair',
+            analysis,
+            sourceText
+        );
+        const fixMethodSection = options.fixMethodSection || checkAndFixMethodSection;
+        const fixed = await fixMethodSection(
+            paper,
+            analysis,
+            sourceText,
+            finalMethodEvidence
+        );
+        methodRepaired = Boolean(fixed && fixed !== analysis);
+        if (fixed) analysis = fixed;
+        methodContractIssue = validateMethodDetailContract(analysis);
+    }
+    if (methodContractIssue) {
+        throw contractRejectedError(
+            `最终结构修复后的方法仍未通过 detailed-v1 契约: ${methodContractIssue}`
+        );
+    }
+
+    // 方法兜底本身也是模型输出，必须再次接受完整结构/叙事契约审计。
+    // 否则它可在满足 600 字方法契约的同时新增编辑批注或破坏其他章节，
+    // 并被错误地保存为 structureRepair=complete 供后续运行复用。
+    const finalStructureIssues = getRepairableAnalysisStructureIssues(analysis);
+    if (finalStructureIssues.length > 0) {
+        throw contractRejectedError(
+            `最终方法兜底后的分析仍未通过结构契约: ${finalStructureIssues.join('、')}`
+        );
+    }
+    return { analysis, methodRepaired };
 }
 
 function getRepairableAnalysisStructureIssues(analysis) {
@@ -3872,6 +4207,8 @@ function getRepairableAnalysisStructureIssues(analysis) {
     if (duplicate.length > 0) issues.push(`必要章节重复: ${duplicate.join('/')}`);
     const topLevelIssue = validateTopLevelSectionContract(analysis);
     if (topLevelIssue) issues.push(`一级章节: ${topLevelIssue}`);
+    const editorialLeakageIssue = validateAnalysisEditorialLeakageContract(analysis);
+    if (editorialLeakageIssue) issues.push(`模型编辑/自检批注: ${editorialLeakageIssue}`);
     const parsed = parseAnalysis(analysis);
     const machineIssue = validateMachineSummaryContract(analysis, parsed, { checkScoringConsistency: false });
     if (machineIssue) issues.push(`机器摘要: ${machineIssue}`);
@@ -3967,7 +4304,7 @@ function hasMarkdownTable(text) {
  * 检查并修复方法概述部分不够详细的问题。
  * 如果检测到方法概述字数不足、过于空泛或缺少关键要素，触发补充调用。
  */
-async function checkAndFixMethodSection(paper, analysis, textForAnalysis) {
+async function checkAndFixMethodSection(paper, analysis, sourceText, preparedEvidence = null) {
     const methodSection = extractMethodSection(analysis);
     if (!methodSection) return analysis;
 
@@ -3982,13 +4319,9 @@ async function checkAndFixMethodSection(paper, analysis, textForAnalysis) {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
         methodSection,
-        textForAnalysis: buildTypeAwareSourceContext(
-            analysis,
-            textForAnalysis,
-            REPAIR_EVIDENCE_MAX_CHARS,
-            METHOD_EVIDENCE_PATTERNS,
-            'METHOD'
-        )
+        textForAnalysis: typeof preparedEvidence === 'string'
+            ? preparedEvidence
+            : buildStageEvidenceContext('methodRepair', analysis, sourceText)
     });
 
     const fixedSection = await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS);
@@ -4062,10 +4395,10 @@ function analysisNeedsExperimentTableRepair(analysis, textForAnalysis) {
  * 检查并修复实验结果中缺失的表格。
  * 只在存在省略标记，或正文明确引用原文表格却缺少 Markdown 表格时调用。
  */
-async function checkAndFixTables(paper, analysis, textForAnalysis) {
+async function checkAndFixTables(paper, analysis, sourceText, preparedEvidence = null) {
     const resultsSection = extractResultsSection(analysis);
     if (!resultsSection) return analysis;
-    if (!analysisNeedsExperimentTableRepair(analysis, textForAnalysis)) return analysis;
+    if (!analysisNeedsExperimentTableRepair(analysis, sourceText)) return analysis;
 
     console.log(`    [deep] 🔍 检测到实验结果可能缺少表格，触发补充...`);
 
@@ -4073,13 +4406,9 @@ async function checkAndFixTables(paper, analysis, textForAnalysis) {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
         resultsSection,
-        textForAnalysis: buildTypeAwareSourceContext(
-            analysis,
-            textForAnalysis,
-            REPAIR_EVIDENCE_MAX_CHARS,
-            RESULT_EVIDENCE_PATTERNS,
-            'RESULT'
-        )
+        textForAnalysis: typeof preparedEvidence === 'string'
+            ? preparedEvidence
+            : buildStageEvidenceContext('tableRepair', analysis, sourceText)
     });
 
     const fixedSection = await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS);
@@ -4273,6 +4602,9 @@ module.exports = {
     scoreImageCandidate,
     normalizeImageInfos,
     mergeImageInfoMetadata,
+    sanitizeImageManifestHttpsOnly,
+    sanitizePaperImageRecovery,
+    saveAnalysisCheckpoint,
     sourceTextLikelyHasTables,
     analysisNeedsExperimentTableRepair,
     getPaperArxivId,
@@ -4323,12 +4655,17 @@ module.exports = {
     auditTypeAwareScoring,
     auditTypeAwareScoringDetailed,
     repairMissingAnalysisSections,
+    finalizeStructureRepairOutput,
+    recoveryFailureStatus,
     getRepairableAnalysisStructureIssues,
     normalizeAnalysisStructure,
     getRemainingTimeoutMs,
     getTypeAwareEvidenceGuide,
     buildTypeAwareSourceContext,
     buildTaskEvidenceContext,
+    buildStageEvidenceContext,
+    buildTextStageFingerprint,
+    prepareTextRecoveryStage,
     sanitizeOpenSourceEvidence,
     sanitizeModelMessages,
     summarizeModelInput,

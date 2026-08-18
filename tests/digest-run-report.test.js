@@ -10,9 +10,12 @@ const {
     sourceHealthComplete,
     samePaperIds,
     visualAssetsAreValid,
+    buildDigestRunReport,
     formatDigestRunSummary
 } = require('../scripts/digest-run-report.js');
 const Config = require('../scripts/config.js');
+const { autoArchiveCurrentData } = require('../scripts/full-fetch.js');
+const { validAnalysisPaper } = require('./valid-analysis-fixture.js');
 const {
     cardTaskToken,
     visualSummaryAssetPath
@@ -57,6 +60,47 @@ function makePng() {
     ]);
 }
 
+function healthySourceHealth() {
+    return {
+        arxiv: {
+            ok: true,
+            categories: Config.ARXIV_CATEGORIES.map(item => ({ id: item.id, ok: true }))
+        },
+        huggingface: { ok: true }
+    };
+}
+
+function withDigestPaths(root, callback) {
+    const originals = {
+        currentDir: Config.CURRENT_DIR,
+        rawCandidates: Config.FILES.rawCandidates,
+        filterDecisions: Config.FILES.filterDecisions,
+        filteredPapers: Config.FILES.filteredPapers,
+        deepAnalysisResult: Config.FILES.deepAnalysisResult,
+        analyzed: Config.FILES.analyzed,
+        visualSummaryManifestDir: Config.FILES.visualSummaryManifestDir,
+        digestCoverManifestDir: Config.FILES.digestCoverManifestDir
+    };
+    const current = path.join(root, 'current');
+    fs.mkdirSync(current, { recursive: true });
+    Config.CURRENT_DIR = current;
+    Config.FILES.rawCandidates = path.join(current, 'raw-candidates.json');
+    Config.FILES.filterDecisions = path.join(current, 'filter-decisions.json');
+    Config.FILES.filteredPapers = path.join(current, 'filtered-papers.json');
+    Config.FILES.deepAnalysisResult = path.join(current, 'deep-analysis-result.json');
+    Config.FILES.analyzed = path.join(current, 'analyzed.json');
+    Config.FILES.visualSummaryManifestDir = path.join(current, 'visual-summary-manifests');
+    Config.FILES.digestCoverManifestDir = path.join(current, 'digest-cover-manifests');
+    try {
+        return callback({ current, archive: path.join(root, 'archive') });
+    } finally {
+        Config.CURRENT_DIR = originals.currentDir;
+        for (const [key, value] of Object.entries(originals)) {
+            if (key !== 'currentDir') Config.FILES[key] = value;
+        }
+    }
+}
+
 describe('digest run report', () => {
     it('严格解析批次日期', () => {
         assert.strictEqual(parseDate(['--date', '2026-07-29']), '2026-07-29');
@@ -96,6 +140,360 @@ describe('digest run report', () => {
             samePaperIds([{ arxivId: '2607.1' }, { arxivId: '2607.1v2' }], [{ arxivId: '2607.1' }]),
             false
         );
+    });
+
+    it('默认自动归档完整保存历史 fetch/filter/analysis companion 并可恢复报告', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-history-'));
+        try {
+            withDigestPaths(dir, ({ current, archive }) => {
+                const targetDate = '2026-07-29';
+                const newerDate = '2026-07-30';
+                const paper = { arxivId: '2607.00001', fetchBatchDate: targetDate };
+                const rejected = { arxivId: '2607.00002', fetchBatchDate: targetDate };
+                fs.writeFileSync(Config.FILES.rawCandidates, JSON.stringify({
+                    timestamp: `${targetDate}T08:00:00+08:00`,
+                    batchDate: targetDate,
+                    sourceHealth: healthySourceHealth(),
+                    stats: { afterBlogSkip: 2 },
+                    papers: [paper, rejected]
+                }));
+                fs.writeFileSync(Config.FILES.filterDecisions, JSON.stringify({
+                    timestamp: `${targetDate}T08:00:00+08:00`,
+                    batchDate: targetDate,
+                    stats: {
+                        complete: true,
+                        totalCandidates: 2,
+                        decided: 2,
+                        related: 1,
+                        retryable: 0,
+                        keywordRejected: 1,
+                        llmCandidates: 1
+                    },
+                    decisions: {
+                        '2607.00001': { related: true },
+                        '2607.00002': { related: false }
+                    }
+                }));
+                fs.writeFileSync(Config.FILES.filteredPapers, JSON.stringify({
+                    timestamp: `${targetDate}T08:00:00+08:00`,
+                    batchDate: targetDate,
+                    status: 'complete',
+                    sourceHealth: healthySourceHealth(),
+                    stats: {
+                        batchDate: targetDate,
+                        afterBlogSkip: 2,
+                        decisionCount: 2,
+                        afterFilter: 1,
+                        afterArchiveSkip: 1,
+                        skippedFromArchive: 0,
+                        keywordRejected: 1,
+                        llmCandidates: 1
+                    },
+                    papers: [paper]
+                }));
+                fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify({
+                    timestamp: `${targetDate}T08:00:00+08:00`,
+                    batchDate: targetDate,
+                    papers: [validAnalysisPaper('2607.00001', { fetchBatchDate: targetDate })]
+                }));
+
+                autoArchiveCurrentData(newerDate, { archiveDir: archive });
+
+                const archived = path.join(archive, targetDate);
+                for (const name of [
+                    'raw-candidates.json', 'filter-decisions.json',
+                    'filtered-papers.json', 'deep-analysis-result.json'
+                ]) {
+                    assert.strictEqual(fs.existsSync(path.join(current, name)), false);
+                    assert.strictEqual(fs.existsSync(path.join(archived, name)), true);
+                }
+
+                const report = buildDigestRunReport(targetDate, {
+                    today: newerDate,
+                    archiveDir: archive
+                });
+                assert.deepStrictEqual(report.dataSources, {
+                    rawCandidates: 'archive',
+                    filteredPapers: 'archive',
+                    filterDecisions: 'archive',
+                    deepAnalysisResult: 'archive'
+                });
+                assert.strictEqual(report.fetch.complete, true);
+                assert.strictEqual(report.fetch.rawCandidateCount, 2);
+                assert.strictEqual(report.filter.complete, true);
+                assert.strictEqual(report.filter.selectedCount, 1);
+                assert.strictEqual(report.analysis.complete, true);
+                assert.strictEqual(report.analysis.successful, 1);
+                assert.strictEqual(report.analysis.total, 1);
+            });
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('当前日期缺失或错批次时不得用同日 archive 掩盖 current 故障', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-current-'));
+        try {
+            withDigestPaths(dir, ({ archive }) => {
+                const targetDate = '2026-07-29';
+                const archived = path.join(archive, targetDate);
+                fs.mkdirSync(archived, { recursive: true });
+                fs.writeFileSync(path.join(archived, 'raw-candidates.json'), JSON.stringify({
+                    batchDate: targetDate,
+                    sourceHealth: healthySourceHealth(),
+                    papers: [{ arxivId: '2607.00001', fetchBatchDate: targetDate }]
+                }));
+                fs.writeFileSync(path.join(archived, 'filtered-papers.json'), JSON.stringify({
+                    batchDate: targetDate,
+                    status: 'complete',
+                    papers: [{ arxivId: '2607.00001', fetchBatchDate: targetDate }]
+                }));
+                fs.writeFileSync(path.join(archived, 'filter-decisions.json'), JSON.stringify({
+                    batchDate: targetDate,
+                    stats: { complete: true, totalCandidates: 1, decided: 1, retryable: 0 }
+                }));
+                fs.writeFileSync(path.join(archived, 'deep-analysis-result.json'), JSON.stringify({
+                    papers: [{ arxivId: '2607.00001', fetchBatchDate: targetDate }]
+                }));
+
+                const report = buildDigestRunReport(targetDate, {
+                    today: targetDate,
+                    archiveDir: archive
+                });
+                assert.deepStrictEqual(report.dataSources, {
+                    rawCandidates: 'missing',
+                    filteredPapers: 'missing',
+                    filterDecisions: 'missing',
+                    deepAnalysisResult: 'missing'
+                });
+                assert.strictEqual(report.fetch.complete, false);
+                assert.strictEqual(report.filter.complete, false);
+                assert.strictEqual(report.analysis.total, 0);
+            });
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('历史 archive 中存在但损坏的决定快照不得被 filtered 契约静默替代', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-corrupt-'));
+        try {
+            withDigestPaths(dir, ({ archive }) => {
+                const targetDate = '2026-07-29';
+                const archived = path.join(archive, targetDate);
+                fs.mkdirSync(archived, { recursive: true });
+                fs.writeFileSync(path.join(archived, 'filter-decisions.json'), '{broken');
+                fs.writeFileSync(path.join(archived, 'filtered-papers.json'), JSON.stringify({
+                    batchDate: targetDate,
+                    status: 'complete',
+                    sourceHealth: healthySourceHealth(),
+                    stats: { afterBlogSkip: 1, decisionCount: 1 },
+                    papers: [{ arxivId: '2607.00001', fetchBatchDate: targetDate }]
+                }));
+                fs.writeFileSync(path.join(archived, 'deep-analysis-result.json'), JSON.stringify({
+                    papers: [{ arxivId: '2607.00001', fetchBatchDate: targetDate }]
+                }));
+
+                const report = buildDigestRunReport(targetDate, {
+                    today: '2026-07-30', archiveDir: archive
+                });
+                assert.strictEqual(report.dataSources.filterDecisions, 'invalid');
+                assert.strictEqual(report.filter.complete, false);
+            });
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('旧归档缺少 raw/decisions companion 时保持 fail-closed', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-missing-companion-'));
+        try {
+            withDigestPaths(dir, ({ archive }) => {
+                const targetDate = '2026-07-29';
+                const archived = path.join(archive, targetDate);
+                const paper = { arxivId: '2607.00001', fetchBatchDate: targetDate };
+                fs.mkdirSync(archived, { recursive: true });
+                fs.writeFileSync(path.join(archived, 'filtered-papers.json'), JSON.stringify({
+                    batchDate: targetDate,
+                    status: 'complete',
+                    stats: {
+                        afterBlogSkip: 1,
+                        decisionCount: 1,
+                        afterFilter: 1,
+                        afterArchiveSkip: 1,
+                        skippedFromArchive: 0
+                    },
+                    papers: [paper]
+                }));
+                fs.writeFileSync(path.join(archived, 'deep-analysis-result.json'), JSON.stringify({
+                    batchDate: targetDate,
+                    papers: [validAnalysisPaper('2607.00001', { fetchBatchDate: targetDate })]
+                }));
+
+                const report = buildDigestRunReport(targetDate, {
+                    today: '2026-07-30', archiveDir: archive
+                });
+                assert.strictEqual(report.dataSources.rawCandidates, 'missing');
+                assert.strictEqual(report.dataSources.filterDecisions, 'missing');
+                assert.strictEqual(report.dataSources.filteredPapers, 'archive');
+                assert.strictEqual(report.dataSources.deepAnalysisResult, 'archive');
+                assert.strictEqual(report.fetch.complete, false);
+                assert.strictEqual(report.filter.complete, false);
+                assert.strictEqual(report.analysis.complete, true);
+                assert.strictEqual(report.overallStatus, 'incomplete');
+            });
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('历史 archive 的 decisions 未完整覆盖 raw 时筛选门禁保持 incomplete', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-coverage-'));
+        try {
+            withDigestPaths(dir, ({ archive }) => {
+                const targetDate = '2026-07-29';
+                const archived = path.join(archive, targetDate);
+                fs.mkdirSync(archived, { recursive: true });
+                const selected = { arxivId: '2607.00001', fetchBatchDate: targetDate };
+                const missing = { arxivId: '2607.00002', fetchBatchDate: targetDate };
+                fs.writeFileSync(path.join(archived, 'raw-candidates.json'), JSON.stringify({
+                    batchDate: targetDate,
+                    sourceHealth: healthySourceHealth(),
+                    stats: { afterBlogSkip: 2 },
+                    papers: [selected, missing]
+                }));
+                fs.writeFileSync(path.join(archived, 'filter-decisions.json'), JSON.stringify({
+                    batchDate: targetDate,
+                    stats: {
+                        complete: true, totalCandidates: 2, decided: 2,
+                        related: 1, retryable: 0
+                    },
+                    decisions: { '2607.00001': { related: true } }
+                }));
+                fs.writeFileSync(path.join(archived, 'filtered-papers.json'), JSON.stringify({
+                    batchDate: targetDate,
+                    status: 'complete',
+                    stats: {
+                        afterBlogSkip: 2, decisionCount: 2, afterFilter: 1,
+                        afterArchiveSkip: 1, skippedFromArchive: 0
+                    },
+                    papers: [selected]
+                }));
+                fs.writeFileSync(path.join(archived, 'deep-analysis-result.json'), JSON.stringify({
+                    papers: [selected]
+                }));
+
+                const report = buildDigestRunReport(targetDate, {
+                    today: '2026-07-30', archiveDir: archive
+                });
+                assert.strictEqual(report.fetch.complete, true);
+                assert.strictEqual(report.filter.complete, false);
+                assert.strictEqual(report.overallStatus, 'incomplete');
+            });
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('历史 archive 的 filtered 集合不等于 related 决定时筛选门禁保持 incomplete', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-filter-set-'));
+        try {
+            withDigestPaths(dir, ({ archive }) => {
+                const targetDate = '2026-07-29';
+                const archived = path.join(archive, targetDate);
+                fs.mkdirSync(archived, { recursive: true });
+                const related = { arxivId: '2607.00001', fetchBatchDate: targetDate };
+                const unrelated = { arxivId: '2607.00002', fetchBatchDate: targetDate };
+                fs.writeFileSync(path.join(archived, 'raw-candidates.json'), JSON.stringify({
+                    batchDate: targetDate,
+                    sourceHealth: healthySourceHealth(),
+                    stats: { afterBlogSkip: 2 },
+                    papers: [related, unrelated]
+                }));
+                fs.writeFileSync(path.join(archived, 'filter-decisions.json'), JSON.stringify({
+                    batchDate: targetDate,
+                    stats: {
+                        complete: true, totalCandidates: 2, decided: 2,
+                        related: 1, retryable: 0
+                    },
+                    decisions: {
+                        '2607.00001': { related: true },
+                        '2607.00002': { related: false }
+                    }
+                }));
+                fs.writeFileSync(path.join(archived, 'filtered-papers.json'), JSON.stringify({
+                    batchDate: targetDate,
+                    status: 'complete',
+                    stats: {
+                        afterBlogSkip: 2, decisionCount: 2, afterFilter: 1,
+                        afterArchiveSkip: 1, skippedFromArchive: 0
+                    },
+                    papers: [unrelated]
+                }));
+                fs.writeFileSync(path.join(archived, 'deep-analysis-result.json'), JSON.stringify({
+                    papers: [unrelated]
+                }));
+
+                const report = buildDigestRunReport(targetDate, {
+                    today: '2026-07-30', archiveDir: archive
+                });
+                assert.strictEqual(report.filter.complete, false);
+                assert.strictEqual(report.overallStatus, 'incomplete');
+            });
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('历史 archive 的 filtered 或 deep 混批时不得静默过滤错误论文', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-mixed-'));
+        try {
+            withDigestPaths(dir, ({ archive }) => {
+                const targetDate = '2026-07-29';
+                const otherDate = '2026-07-28';
+                const archived = path.join(archive, targetDate);
+                fs.mkdirSync(archived, { recursive: true });
+                const target = { arxivId: '2607.00001', fetchBatchDate: targetDate };
+                const mixed = { arxivId: '2607.99999', fetchBatchDate: otherDate };
+                fs.writeFileSync(path.join(archived, 'raw-candidates.json'), JSON.stringify({
+                    batchDate: targetDate,
+                    sourceHealth: healthySourceHealth(),
+                    stats: { afterBlogSkip: 1 },
+                    papers: [target]
+                }));
+                fs.writeFileSync(path.join(archived, 'filter-decisions.json'), JSON.stringify({
+                    batchDate: targetDate,
+                    stats: {
+                        complete: true, totalCandidates: 1, decided: 1,
+                        related: 1, retryable: 0
+                    },
+                    decisions: { '2607.00001': { related: true } }
+                }));
+                fs.writeFileSync(path.join(archived, 'filtered-papers.json'), JSON.stringify({
+                    batchDate: targetDate,
+                    status: 'complete',
+                    stats: {
+                        afterBlogSkip: 1, decisionCount: 1, afterFilter: 1,
+                        afterArchiveSkip: 2, skippedFromArchive: 0
+                    },
+                    papers: [target, mixed]
+                }));
+                fs.writeFileSync(path.join(archived, 'deep-analysis-result.json'), JSON.stringify({
+                    papers: [target, mixed]
+                }));
+
+                const report = buildDigestRunReport(targetDate, {
+                    today: '2026-07-30', archiveDir: archive
+                });
+                assert.strictEqual(report.dataSources.filteredPapers, 'invalid');
+                assert.strictEqual(report.dataSources.deepAnalysisResult, 'invalid');
+                assert.strictEqual(report.filter.complete, false);
+                assert.strictEqual(report.analysis.complete, false);
+                assert.strictEqual(report.analysis.total, 0);
+            });
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
     });
 
     it('默认终端摘要保留门禁数字但不展开来源健康大对象', () => {

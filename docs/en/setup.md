@@ -37,7 +37,14 @@ Benefits of this design:
 | `PD_FILTER_BATCH_SIZE` | LLM filtering batch size | 5 |
 | `PD_ARXIV_MAX_RESULTS` | Number of papers to fetch per arXiv category | 100 |
 | `PD_KEYWORD_PREFILTER_ENABLED` | Enable the high-recall keyword prefilter; set to `0` to disable temporarily | 1 |
+| `PD_ARXIV_FETCH_MAX_RETRIES` | Maximum attempts for recent/search/abstract/Atom metadata requests | 5 |
+| `PD_ARXIV_FETCH_RETRY_BASE_DELAY_MS` | Linear retry-backoff base for ordinary metadata failures, in milliseconds | 5000 |
+| `PD_ARXIV_RATE_LIMIT_BASE_DELAY_MS` | Exponential HTTP 429 backoff base, in milliseconds | 60000 |
 | `PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS` | Cumulative backoff budget per category for HTTP 429 responses, in milliseconds | 120000 |
+| `PD_ARXIV_FETCH_MAX_WAIT_MS` | Cumulative wait budget for all metadata retries in one category, in milliseconds | 600000 |
+| `PD_ARXIV_METADATA_TIMEOUT_MS` | Absolute deadline per recent/search/abstract/Atom request, in milliseconds | 60000 |
+| `PD_ARXIV_METADATA_MAX_BYTES` | Maximum bytes per recent/search/abstract/Atom response | 8388608 |
+| `PD_ARXIV_USER_AGENT` | Optional fixed arXiv User-Agent; otherwise use the built-in rotation pool | unset |
 | `PD_IMAGE_MAX_BYTES` | Raw byte-size limit per image for deep analysis | 6291456 |
 | `PD_IMAGE_DOWNLOAD_TIMEOUT_MS` | Per-candidate-image download timeout in milliseconds | 60000 |
 | `PD_IMAGE_MAX_BASE64_CHARS` | Base64 character limit per image for deep analysis | 8388608 |
@@ -53,6 +60,8 @@ Benefits of this design:
 | `PAPER_DIGEST_DISABLE_FILE_LOGS` / `PD_DISABLE_FILE_LOGS` | Set to `1` to force-disable file logs | Disabled |
 
 **API Protocol Auto-Routing**: `detectApiType()` in `scripts/utils.js` automatically selects OpenAI or Anthropic protocol based on endpoint and model, in this priority order:
+
+All LLM endpoints must use HTTPS. Plain HTTP is accepted only for local test services on `localhost`, `*.localhost`, `127.0.0.0/8`, or `::1`; public HTTP endpoints are rejected before authentication headers are attached. Both Node's `utils.js` and Python publishing's `publish_common.py` enforce this gate before constructing authentication headers.
 - **DeepSeek**: endpoints containing `deepseek.com` or models containing `deepseek` are forced to OpenAI; `/anthropic` paths are converted to `/v1/chat/completions`
 - **MiMo Token Plan**: endpoint contains `token-plan` and model contains `mimo`, using Anthropic; `https://token-plan-cn.xiaomimimo.com/v1` -> `https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages`
 - **Kimi Coding Plan**: the `coding` endpoint on `api.kimi.com` uses Anthropic, including model names such as `k3` that do not contain `kimi`; both `https://api.kimi.com/coding` and `https://api.kimi.com/coding/v1` normalize to `https://api.kimi.com/coding/v1/messages` with no `/anthropic` intermediate path

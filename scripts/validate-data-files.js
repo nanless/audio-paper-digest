@@ -137,6 +137,21 @@ function validateFetchSourceIntegrity(filePath, prefix, entry, issues) {
     }
 }
 
+function hasCompleteFetchSourceContract(entry, expectedCategoryId = null) {
+    return isPlainObject(entry)
+        && entry.status === 'complete'
+        && Array.isArray(entry.papers)
+        && Number.isInteger(entry.papersCount)
+        && entry.papersCount >= 0
+        && entry.papersCount === entry.papers.length
+        && typeof entry.papersSha256 === 'string'
+        && SHA256_RE.test(entry.papersSha256)
+        && entry.papersSha256 === stableContentSha256(entry.papers)
+        && isPlainObject(entry.health)
+        && entry.health.ok === true
+        && (expectedCategoryId === null || entry.health.id === expectedCategoryId);
+}
+
 function ensurePaperId(paper, file, index, issues) {
     const id = normalizedId(paper);
     if (!id) {
@@ -956,8 +971,10 @@ function validateRawCandidateFilterConsistency(rawPath, decisionsPath, filteredP
             if (isPlainObject(filtered) && filtered.status === 'complete' && Array.isArray(filtered.papers)) {
                 const excluded = new Set((filtered.excludedRelatedIds || []).map(normalizedId).filter(Boolean));
                 for (const id of excluded) {
-                    if (!rawById.has(id) || decisionData.decisions[id]?.related !== true) {
-                        addIssue(issues, filteredPath, `excludedRelatedIds.${id} 必须对应 raw 中 related=true 的论文`);
+                    if (!rawById.has(id)
+                            || decisionData.decisions[id]?.related !== true
+                            || !rawById.get(id)?.sources?.includes('huggingface')) {
+                        addIssue(issues, filteredPath, `excludedRelatedIds.${id} 必须对应 raw 中 related=true 且来自 HuggingFace 的论文`);
                     }
                 }
                 if (Number.isInteger(filtered.stats?.skippedFromArchive) && filtered.stats.skippedFromArchive !== excluded.size) {
@@ -1040,12 +1057,12 @@ function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, fil
     const expectedIds = Config.ARXIV_CATEGORIES.map(category => category.id);
     for (const id of expectedIds) {
         const entry = checkpoint.arxiv?.[id];
-        if (entry?.status !== 'complete' || entry.health?.ok !== true || !Array.isArray(entry.papers)) {
-            addIssue(issues, fetchPath, `raw-candidates.json 来源完整时 arxiv.${id} 必须有可复用的 complete checkpoint`);
+        if (!hasCompleteFetchSourceContract(entry, id)) {
+            addIssue(issues, fetchPath, `raw-candidates.json 来源完整时 arxiv.${id} 必须满足 complete/health/count/SHA checkpoint 契约`);
         }
     }
-    if (checkpoint.huggingface?.status !== 'complete' || checkpoint.huggingface?.health?.ok !== true || !Array.isArray(checkpoint.huggingface?.papers)) {
-        addIssue(issues, fetchPath, 'raw-candidates.json 来源完整时 huggingface 必须有可复用的 complete checkpoint');
+    if (!hasCompleteFetchSourceContract(checkpoint.huggingface)) {
+        addIssue(issues, fetchPath, 'raw-candidates.json 来源完整时 huggingface 必须满足 complete/health/count/SHA checkpoint 契约');
     }
     return issues;
 }
@@ -1055,9 +1072,62 @@ function hasCompleteSourceHealthForValidation(sourceHealth) {
     if (!Array.isArray(categories)) return false;
     const expectedIds = Config.ARXIV_CATEGORIES.map(category => category.id);
     const byId = new Map(categories.map(category => [category?.id, category]));
-    return byId.size === expectedIds.length
+    return categories.length === expectedIds.length
+        && byId.size === expectedIds.length
         && expectedIds.every(id => byId.get(id)?.ok === true)
         && sourceHealth?.huggingface?.ok === true;
+}
+
+function validateCompleteFilterCompanionContract(files, decisionsPath, fetchPath) {
+    const issues = [];
+    const filteredPath = files.filteredPapers;
+    if (!filteredPath || !fs.existsSync(filteredPath)) return issues;
+    const filtered = readJsonSafe(filteredPath, null);
+    if (!isPlainObject(filtered) || filtered.status !== 'complete') return issues;
+
+    const required = [
+        [fetchPath, 'fetch-checkpoint.json'],
+        [files.rawCandidates, 'raw-candidates.json'],
+        [decisionsPath, 'filter-decisions.json']
+    ];
+    let missing = false;
+    for (const [filePath, label] of required) {
+        if (!filePath || !fs.existsSync(filePath)) {
+            addIssue(issues, filePath || path.join(path.dirname(filteredPath), label), `complete filtered-papers.json 必须有同批次 ${label}`);
+            missing = true;
+        }
+    }
+    if (missing) return issues;
+
+    const checkpoint = readJsonSafe(fetchPath, null);
+    const raw = readJsonSafe(files.rawCandidates, null);
+    const decisions = readJsonSafe(decisionsPath, null);
+    if (!isPlainObject(checkpoint) || !isPlainObject(raw) || !isPlainObject(decisions)) {
+        addIssue(issues, filteredPath, 'complete 筛选四件套必须全部是可解析的对象');
+        return issues;
+    }
+    if (!Array.isArray(raw.papers)) {
+        addIssue(issues, files.rawCandidates, 'complete 筛选四件套要求 raw-candidates.json papers 为数组');
+    }
+    if (!hasCompleteSourceHealthForValidation(raw.sourceHealth)) {
+        addIssue(issues, files.rawCandidates, 'complete filtered-papers.json 要求七个 arXiv 类别和 HuggingFace sourceHealth 全部 ok=true');
+    }
+    if (decisions.stats?.complete !== true) {
+        addIssue(issues, decisionsPath, 'complete filtered-papers.json 要求 filter-decisions.json stats.complete=true');
+    }
+
+    const expectedIds = Config.ARXIV_CATEGORIES.map(category => category.id);
+    for (const id of expectedIds) {
+        const entry = checkpoint.arxiv?.[id];
+        if (!hasCompleteFetchSourceContract(entry, id)) {
+            addIssue(issues, fetchPath, `complete filtered-papers.json 要求 arxiv.${id} 满足 complete/health/count/SHA checkpoint 契约`);
+        }
+    }
+    const hf = checkpoint.huggingface;
+    if (!hasCompleteFetchSourceContract(hf)) {
+        addIssue(issues, fetchPath, 'complete filtered-papers.json 要求 huggingface 满足 complete/health/count/SHA checkpoint 契约');
+    }
+    return issues;
 }
 
 function validateRequiredCompanionFiles(files, filterDecisions) {
@@ -1217,6 +1287,7 @@ function validateCurrentDataFiles(files = Config.FILES) {
         ...validateFilterArtifactsConsistency(files.filteredPapers, filterDecisions),
         ...validateRawCandidateFilterConsistency(files.rawCandidates, filterDecisions, files.filteredPapers),
         ...validateFetchArtifactConsistency(fetchCheckpoint, files.rawCandidates, filterDecisions, files.filteredPapers),
+        ...validateCompleteFilterCompanionContract(files, filterDecisions, fetchCheckpoint),
         ...validateRequiredCompanionFiles(files, filterDecisions),
         ...validateFilteredDeepPapersConsistency(files)
     ];

@@ -49,6 +49,7 @@ const DOCUMENT_TYPES = new Set(['方法研究', '系统技术报告', '模型报
 const NON_EMPIRICAL_DOCUMENT_TYPES = new Set(['综述', '理论研究']);
 const EXPERIMENT_TABLE_CONTRACT_VERSION = 'bounded-v1';
 const METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1';
+const ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION = 'high-confidence-v1';
 const REQUIRED_RECOVERY_STAGES = Object.freeze([
     'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
     'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
@@ -72,6 +73,31 @@ const EXPERIMENT_TABLE_LIMITS = Object.freeze({
     maxMetricColumns: 8
 });
 const TABLE_IDENTIFIER_HEADER_RE = /(?:^|\b)(?:method|model|system|config(?:uration)?|dataset|corpus|benchmark|task|language|scenario|condition|setting|split|category|type|modality|version)(?:\b|$)|方法|模型|系统|配置|数据集|语料|基准|任务|语言|场景|条件|设置|划分|类别|类型|模态|版本/i;
+
+// 只匹配独立行/段落中高度明确的模型编辑、自检或对用户指令的复述。
+// 普通论文论述可以自然包含“这里”“注意”“已有分析”等词，因此不能用
+// 单个关键词作拒绝条件；每条模式都要求同时出现编辑动作、输出格式或用户语境。
+const ANALYSIS_EDITORIAL_LEAK_PATTERNS = Object.freeze([
+    /^(?:这里|此处|这一段)(?:保持|保留)原样(?:[。；，,！!]|$)/,
+    /^(?:这里|此处|这一段)我(?:已经|已)?(?:补充|加入|加上|修改|修正|更正|删除|删去|保留|调整)(?:了|过)?.{0,120}(?:[。；！!]|$)/,
+    /^(?:这里|此处|这一段)(?:已经|已)?(?:补充|加入|加上|修改|修正|更正|删除|删去|保留|调整)(?:了|过)?.{0,120}(?:原分析|已有分析|上述分析|机器摘要|评分理由|标签章节|协议(?:差异|不一致)|严格限定|字数|格式要求)/,
+    /^(?:这里|此处|这一段)(?:已经|已)?(?:补充|加入|加上|修改|修正|更正|删除|删去|保留|调整)(?:了|过)?.{0,160}(?:原文|原分析|已有分析|机器摘要|评分理由).{0,100}(?:可以|可接受|没问题)(?:[。；！!]|$)/,
+    /^(?:这里|此处)第\s*\d+\s*(?:点|条|项).{0,80}(?:加(?:入|上|个)?|修正|修改|补充|新增|保留|删除|调整)/,
+    /^注意(?:[：:]\s*)?(?:修正|更正)(?:拼写|错别字|格式|措辞|标点|编号|公式)(?:[。；，,！!]|$)/,
+    /^(?:现在|接下来)(?:我们)?(?:需要|将要)(?:开始)?(?:生成|输出|给出)(?:(?:最终|完整)(?:文本|分析|内容|答案)|答案)(?=$|[。！？!?，,；;：:]|\s+(?:但|请|直接|不要|必须|可能))/,
+    /^让我们(?:再)?检查一下是否有任何(?:遗漏|错误)/,
+    /^(?:以上|当前|这段)(?:方法概述|核心摘要|实验结果|评分理由|开源详情).{0,80}(?:\d+\s*(?:字|字符)|字数|长度要求|格式(?:书写)?正确|符合(?:格式|契约|要求))/,
+    /^(?:另外)?注意[：:]?\s*(?:机器摘要|评分理由|开源详情|输出格式|代码块|全文(?:必须|需要|从))/,
+    /^注意[：:]?\s*用户可能期望.{0,100}(?:机器摘要|评分理由|标签章节|##\s*(?:评分|机器摘要|标签))/,
+    /^(?:最后)?需(?:要)?确保全文(?:从|以).{0,40}##\s*评分/,
+    /^(?:机器摘要|评分理由|标签章节|输出)(?:中|部分)?(?:不允许|必须|要求).{0,80}(?:格式|列表符号|key|键|开头|代码块)/i,
+    /^(?:但)?需要检查(?:机器摘要(?:中|的)|输出格式|是否有任何遗漏)/,
+    /^需要检查细节[：:].{0,160}(?:原分析|已有分析|上述分析|最终输出|机器摘要|评分理由|开源详情)/,
+    /^(?:这里|此处)\s*`[^`]{1,80}`\s*(?:可能)?正确.{0,100}(?:用户要求|示例|格式|空格)/,
+    /^(?:原文标题|作者与机构|原文作者)[：:].{0,140}(?:已有分析|无需在分析中)/,
+    /^(?:now|next),?\s+i\s+(?:need to|will)\s+(?:produce|output|generate)\s+(?:the\s+)?(?:final\s+)?(?:answer|analysis|response|output|text)(?=$|[.:;,!?]|\s+(?:but|directly|for\s+the\s+user))/i,
+    /^(?:note|important)\s*:\s*(?:the user|output format|i (?:fixed|added|changed|kept|removed))\b/i
+]);
 
 function escapeRegExp(value) {
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -154,6 +180,68 @@ function stripFencedCodeBlocks(text) {
         }
         return '';
     }).join('\n');
+}
+
+function normalizeAnalysisEditorialFragment(fragment) {
+    let value = String(fragment || '').trim();
+    if (!value) return '';
+    // 句界切分可能把包裹整句的强调标记一分为二；先处理加粗标签，
+    // 再独立剥离 fragment 边缘标记，兼容 **注意：** 文本和
+    // **现在需要生成最终文本。**，且不会人为补冒号形成“注意：：”。
+    value = value.replace(/^\*\*([^*\n]{1,80})\*\*\s*/, '$1 ')
+        .replace(/^__([^_\n]{1,80})__\s*/, '$1 ')
+        .replace(/^(?:\*\*|__)+/, '')
+        .replace(/(?:\*\*|__)+$/, '')
+        .trim();
+    return value;
+}
+
+function analysisEditorialFragments(line) {
+    const value = normalizeAnalysisEditorialFragment(line);
+    if (!value) return [];
+    // 保留整行兼容既有规则，同时按明确句末标点切分，防止正常论述在同一
+    // Markdown 行开头时遮蔽后面的模型自检句。ASCII 句点仅在后面紧跟
+    // 高置信度自检开头时切分，避免把小数、缩写和 URL 拆碎。
+    const parts = value.split(
+        /[。！？!?；;]+\s*|\.\s+(?=(?:现在|接下来|让我们|注意|需要检查|now\b|next\b|note\b|important\b))/i
+    );
+    return [...new Set(
+        [value, ...parts]
+            .map(normalizeAnalysisEditorialFragment)
+            .filter(Boolean)
+    )];
+}
+
+function findAnalysisEditorialLeakages(analysis, options = {}) {
+    const limit = Number.isInteger(options.limit) && options.limit > 0 ? options.limit : 5;
+    const matches = [];
+    const seen = new Set();
+    for (const rawLine of stripFencedCodeBlocks(analysis).split('\n')) {
+        const trimmed = rawLine.trim();
+        // 论文可能把模型输出作为引用/代码/表格研究对象；这些不是分析作者
+        // 自己的叙事，因此不作为高置信度泄漏证据。
+        if (!trimmed
+            || /^(?:#{1,6}\s|>|\||!\[)/.test(trimmed)) continue;
+        const line = trimmed
+            .replace(/^(?:[-*+]\s+|\d+[.)、]\s*)/, '')
+            .trim();
+        const evidence = analysisEditorialFragments(line).find(fragment =>
+            ANALYSIS_EDITORIAL_LEAK_PATTERNS.some(pattern => pattern.test(fragment))
+        )?.slice(0, 180);
+        if (!evidence) continue;
+        if (seen.has(evidence)) continue;
+        seen.add(evidence);
+        matches.push(evidence);
+        if (matches.length >= limit) break;
+    }
+    return matches;
+}
+
+function validateAnalysisEditorialLeakageContract(analysis) {
+    const leakages = findAnalysisEditorialLeakages(analysis);
+    return leakages.length > 0
+        ? `检测到模型编辑/自检批注泄漏: ${leakages.join('；')}`
+        : null;
 }
 
 function extractMarkdownTables(text) {
@@ -380,6 +468,8 @@ function getInvalidAnalysisReason(analysis, parsed, options = {}) {
     }
     const topLevelIssue = validateTopLevelSectionContract(analysis);
     if (topLevelIssue) return `分析结果章节契约无效: ${topLevelIssue}`;
+    const editorialLeakageIssue = validateAnalysisEditorialLeakageContract(analysis);
+    if (editorialLeakageIssue) return `分析结果叙事契约无效: ${editorialLeakageIssue}`;
     if (!parsed) return '分析结果无法解析';
     const machineSummaryIssue = validateMachineSummaryContract(analysis, parsed);
     if (machineSummaryIssue) return `分析结果机器摘要契约无效: ${machineSummaryIssue}`;
@@ -424,8 +514,11 @@ module.exports = {
     validateMachineSummaryContract,
     validateTagSectionContract,
     validateTopLevelSectionContract,
+    findAnalysisEditorialLeakages,
+    validateAnalysisEditorialLeakageContract,
     EXPERIMENT_TABLE_CONTRACT_VERSION,
     METHOD_DETAIL_CONTRACT_VERSION,
+    ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION,
     REQUIRED_RECOVERY_STAGES,
     RECOVERY_STAGE_TERMINAL_STATUSES,
     EXPERIMENT_TABLE_LIMITS,

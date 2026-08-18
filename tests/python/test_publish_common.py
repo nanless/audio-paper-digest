@@ -36,6 +36,7 @@ from publish_common import (  # noqa: E402
     sanitize_markdown_for_publish,
     select_blog_published_snapshot,
     strip_raw_inline_html,
+    validate_publish_api_endpoint_url,
     validate_papers_for_publish,
     validate_experiment_table_contract,
     validate_method_detail_contract,
@@ -175,6 +176,68 @@ confidence: 中
             build_publish_api_url('openai', 'https://api.deepseek.com/anthropic'),
             'https://api.deepseek.com/v1/chat/completions'
         )
+
+    def test_publish_llm_endpoint_requires_https_except_explicit_loopback(self):
+        self.assertEqual(
+            validate_publish_api_endpoint_url('https://api.example.com/v1').hostname,
+            'api.example.com',
+        )
+        allowed_http = (
+            'http://localhost:8080/v1',
+            'http://worker.localhost:8080/v1',
+            'http://127.0.0.42:8080/v1',
+            'http://[::1]:8080/v1',
+        )
+        for endpoint in allowed_http:
+            with self.subTest(endpoint=endpoint):
+                self.assertEqual(
+                    build_publish_api_url('openai', endpoint),
+                    f'{endpoint}/chat/completions',
+                )
+
+        rejected = (
+            'http://api.example.com/v1',
+            'http://0.0.0.0:8080/v1',
+            'ftp://127.0.0.1/v1',
+            'https://user:password@api.example.com/v1',
+            'api.example.com/v1',
+        )
+        for endpoint in rejected:
+            with self.subTest(endpoint=endpoint), self.assertRaises(ValueError):
+                build_publish_api_url('openai', endpoint)
+
+    def test_primary_public_http_endpoint_is_rejected_before_credential_headers(self):
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'primary-key',
+            'PAPER_ANALYZER_ENDPOINT': 'http://api.example.com/v1',
+            'PAPER_ANALYZER_MODEL': 'text-model',
+        }
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('publish_common.build_publish_headers') as build_headers, \
+                mock.patch('urllib.request.Request') as request:
+            with self.assertRaisesRegex(PublishLLMUnavailable, 'endpoint 配置不安全'):
+                call_publish_llm_api('inspect', required=True, max_retries=1)
+        build_headers.assert_not_called()
+        request.assert_not_called()
+
+    def test_secondary_public_http_endpoint_is_rejected_before_credential_headers(self):
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'primary-key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://api.example.com/v1',
+            'PAPER_ANALYZER_MODEL': 'text-model',
+            'PAPER_ANALYZER_SECONDARY_API_KEY': 'secondary-key',
+            'PAPER_ANALYZER_SECONDARY_ENDPOINT': 'http://vision.example.com/v1',
+            'PAPER_ANALYZER_SECONDARY_MODEL': 'vision-model',
+        }
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('publish_common.build_publish_headers') as build_headers, \
+                mock.patch('urllib.request.Request') as request:
+            with self.assertRaisesRegex(PublishLLMUnavailable, 'endpoint 配置不安全'):
+                call_publish_llm_api(
+                    'inspect', required=True, use_secondary=True, max_retries=1,
+                )
+        build_headers.assert_not_called()
+        request.assert_not_called()
 
     def test_publish_anthropic_headers_include_claude_version(self):
         headers = build_publish_headers('anthropic', 'key', claude_version='9.8.7')

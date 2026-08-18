@@ -55,7 +55,7 @@ describe('full-fetch helpers', () => {
         const { buildSourceHealth } = require('../scripts/full-fetch.js');
         const health = buildSourceHealth(
             {
-                arxiv: { categories: [{ id: 'cs.SD', fetched: 2, ok: true }] },
+                arxiv: { categories: [{ id: 'cs.SD', fetched: 2, ok: true, totalRetryWaitMs: 4321 }] },
                 huggingface: { ok: true, fetched: 1 }
             },
             [{ arxivId: '1' }, { arxivId: '2' }],
@@ -65,7 +65,70 @@ describe('full-fetch helpers', () => {
         assert.strictEqual(health.arxiv.totalFetched, 2);
         assert.strictEqual(health.huggingface.totalFetched, 1);
         assert.strictEqual(health.arxiv.categories[0].id, 'cs.SD');
+        assert.strictEqual(health.arxiv.categories[0].totalRetryWaitMs, 4321);
         assert.match(health.generatedAt, /^\d{4}-\d{2}-\d{2}T/);
+    });
+
+    it('成功和失败类别都把累计重试等待写入 sourceHealth 与 checkpoint', () => {
+        const {
+            buildArxivCategoryHealth,
+            saveFetchCheckpoint
+        } = require('../scripts/full-fetch.js');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-retry-health-'));
+        try {
+            const successCategory = { id: 'cs.SD', name: '声音', priority: 'core' };
+            const failedCategory = { id: 'eess.AS', name: '音频语音', priority: 'core' };
+            const successPapers = [{ arxivId: '2607.00001' }];
+            const success = buildArxivCategoryHealth(successCategory, {
+                papers: successPapers,
+                fetchHealth: {
+                    attempts: 3,
+                    successfulRequests: 2,
+                    rateLimitWaitMs: 1000,
+                    totalRetryWaitMs: 6500,
+                    failures: [{ error: 'temporary' }]
+                },
+                durationMs: 9000,
+                newInCategory: 1,
+                duplicateInCategory: 0
+            });
+            const failed = buildArxivCategoryHealth(failedCategory, {
+                fetchHealth: {
+                    attempts: 4,
+                    successfulRequests: 0,
+                    rateLimitWaitMs: 2000,
+                    totalRetryWaitMs: 9000,
+                    failures: [{ error: 'network down' }]
+                },
+                durationMs: 12000,
+                error: new Error('coverage incomplete')
+            });
+            assert.strictEqual(success.totalRetryWaitMs, 6500);
+            assert.strictEqual(failed.totalRetryWaitMs, 9000);
+
+            const checkpointFile = path.join(dir, 'fetch-checkpoint.json');
+            saveFetchCheckpoint({
+                timestamp: '2026-08-17T10:00:00.000+08:00',
+                batchStartedAt: '2026-08-17T10:00:00.000+08:00',
+                batchDate: '2026-08-17',
+                batchId: 'batch-retry-health',
+                candidateFingerprint: 'candidate-retry-health',
+                sourceConfigFingerprint: 'source-retry-health',
+                blogDedupFingerprint: 'blog-retry-health',
+                historicalDedupIds: [],
+                categoryOrder: [successCategory.id, failedCategory.id],
+                arxiv: {
+                    [successCategory.id]: { status: 'complete', papers: successPapers, health: success },
+                    [failedCategory.id]: { status: 'failed', papers: [], health: failed }
+                },
+                huggingface: null
+            }, checkpointFile);
+            const persisted = JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
+            assert.strictEqual(persisted.arxiv['cs.SD'].health.totalRetryWaitMs, 6500);
+            assert.strictEqual(persisted.arxiv['eess.AS'].health.totalRetryWaitMs, 9000);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
     });
 
     it('续跑统计可从 sourceHealth 恢复抓取数量', () => {

@@ -22,7 +22,11 @@ const {
     getCanonicalAnalysisRunSummary,
     withPaperAnalysisLock
 } = require('./analysis-engine.js');
-const { loadPapersDatabase, updateAnalysisDigestStatuses } = require('./digest-status.js');
+const {
+    loadPapersDatabase,
+    updateAnalysisDigestStatuses,
+    inferAnalysisBatchDate
+} = require('./digest-status.js');
 const Config = require('./config.js');
 
 async function analyzeSinglePaper(targetArxivId, options = {}) {
@@ -61,9 +65,14 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
 
     const papersList = Array.isArray(existingData) ? existingData : (existingData.papers || []);
     const existingIndex = papersList.findIndex(p => normalizedId(p) === targetNormalizedId);
+    const existingPaper = existingIndex >= 0 ? papersList[existingIndex] : null;
+    const fallbackBatchDate = inferAnalysisBatchDate(
+        [existingPaper, targetPaper],
+        Array.isArray(existingData) ? {} : existingData
+    );
     if (existingIndex >= 0 && isSuccessfulAnalysisRecord(papersList[existingIndex]) && !forceReanalyze) {
         updateAnalysisDigestStatuses([papersList[existingIndex]], {
-            batchDate: String(papersList[existingIndex].fetchedAt || getBeijingISOString()).slice(0, 10)
+            batchDate: fallbackBatchDate
         });
         console.log('⚠️ 该论文已在分析结果中，跳过（使用 --force 可强制重分析）');
         return { status: 'skipped', exitCode: 0 };
@@ -93,6 +102,11 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
         const latestData = readJsonFileStrict(resultPath, { allowMissing: true }) || { papers: [] };
         const latestPapers = Array.isArray(latestData) ? latestData : (latestData.papers || []);
         const canonical = latestPapers.find(p => normalizedId(p) === targetNormalizedId);
+        const analysisBatchDate = inferAnalysisBatchDate(
+            [canonical, targetPaper],
+            Array.isArray(latestData) ? {} : latestData,
+            fallbackBatchDate
+        );
         if (canonical && isSuccessfulAnalysisRecord(canonical) && !forceReanalyze) {
             console.log('⚠️ 该论文已由其他进程完成，跳过');
             updateJsonFileLocked(resultPath, current => {
@@ -159,7 +173,7 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
             return next;
         });
         const digestStatus = updateAnalysisDigestStatuses([attempted], {
-            batchDate: getBeijingISOString().slice(0, 10)
+            batchDate: analysisBatchDate
         });
         if (r.success) {
             console.log(`    ✅ 成功！已合并到分析结果中`);

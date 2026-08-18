@@ -59,8 +59,29 @@ def read_generated_pages(module, date_str, paths):
 def _run_review(module, date_str):
         blog_repo, content_dir = module.validate_publish_target()
         paths, manifest_path = module.load_generation_manifest(date_str)
-        paper_slugs, scored_papers = read_generated_pages(module, date_str, paths)
         base_head = module.validate_git_publish_branch()
+        published_reusable = module.reusable_verified_publication_review(
+            date_str, base_head,
+        )
+        if published_reusable is not None:
+            reusable_paths, reusable_manifest, receipt_path = published_reusable
+            if module._git_relative_manifest(reusable_paths) != module._git_relative_manifest(paths):
+                raise module.PublishDataValidationError(
+                    '已发布凭证与当前 generation manifest 路径集合不一致'
+                )
+            if Path(reusable_manifest).resolve() != Path(manifest_path).resolve():
+                raise module.PublishDataValidationError('已发布凭证绑定了其他 generation manifest')
+            print(
+                '♻️ 当前 generation 已通过同一 review 协议发布，且实时远端 OID/remote 身份仍匹配；'
+                '保留严格发布凭证并跳过重复 LLM/Hugo review'
+            )
+            return receipt_path
+        if module.has_publication_evidence_for_generation(date_str):
+            raise module.PublishDataValidationError(
+                '当前 generation 已存在发布证据，但实时 remote/OID 或严格凭证复核失败；'
+                '已保留既有 receipt，拒绝开始新 review 覆盖唯一发布证据'
+            )
+        paper_slugs, scored_papers = read_generated_pages(module, date_str, paths)
         plan = module.plan_incremental_review(
             date_str, paths, manifest_path, base_head,
         )

@@ -138,6 +138,7 @@ describe('deep-analyzer section helpers', () => {
         } = require('../scripts/deep-analyzer.js');
 
         assert.strictEqual(isSupportedImageUrl('data:image/svg+xml;base64,PHN2Zy8+'), false);
+        assert.strictEqual(isSupportedImageUrl('http://example.com/figure.png'), false);
         assert.strictEqual(isSupportedImageUrl('https://example.com/figure.svg'), false);
         assert.strictEqual(isSupportedImageUrl('https://example.com/figure.png?download=1'), true);
         assert.strictEqual(isSupportedImageUrl('https://example.com/arxiv-figure?id=1'), true);
@@ -150,6 +151,86 @@ describe('deep-analyzer section helpers', () => {
             { url: 'https://example.com/figure.png', caption: '' }
         ]);
         assert.strictEqual(safeImageLabel('data:image/svg+xml;base64,' + 'x'.repeat(1000)), 'image/svg+xml;base64,<omitted>');
+    });
+
+    it('旧图片恢复 checkpoint 在载入与保存边界剔除 HTTP 且保留合法 caption/cache', () => {
+        const {
+            sanitizePaperImageRecovery,
+            saveAnalysisCheckpoint
+        } = require('../scripts/deep-analyzer.js');
+        const paper = {
+            analysisRecoveryImageManifest: {
+                candidates: [
+                    { url: 'http://legacy.example/unsafe.png', caption: 'unsafe', cachePath: 'cache/unsafe.bin' },
+                    { url: 'https://safe.example/architecture.png', caption: 'Architecture', cachePath: 'cache/architecture.bin' }
+                ],
+                selected: [
+                    'http://legacy.example/unsafe.png',
+                    'https://safe.example/architecture.png',
+                    { url: 'https://safe.example/results.webp', caption: 'Results', cachePath: 'cache/results.bin' }
+                ],
+                downloaded: [
+                    { url: 'http://legacy.example/unsafe.png', cachePath: 'cache/unsafe.bin' },
+                    { url: 'https://safe.example/results.webp', cachePath: 'cache/results.bin', cacheHit: true }
+                ],
+                downloadOutcomes: [
+                    { url: 'http://legacy.example/unsafe.png', status: 'downloaded' },
+                    { url: 'https://safe.example/results.webp', status: 'downloaded' }
+                ]
+            },
+            imageManifest: {
+                candidates: [{ url: 'http://legacy.example/stale.jpg', caption: 'stale' }],
+                selected: ['http://legacy.example/stale.jpg']
+            },
+            imageUrls: [
+                'http://legacy.example/unsafe.png',
+                { url: 'https://safe.example/results.webp', caption: 'Results', cachePath: 'cache/results.bin' }
+            ],
+            allImageUrls: ['http://legacy.example/unsafe.png', 'https://safe.example/architecture.png'],
+            selectedImageUrls: ['http://legacy.example/unsafe.png', 'https://safe.example/results.webp']
+        };
+
+        sanitizePaperImageRecovery(paper);
+        const recovery = paper.analysisRecoveryImageManifest;
+        assert.deepStrictEqual(recovery.selected, [
+            'https://safe.example/architecture.png',
+            'https://safe.example/results.webp'
+        ]);
+        assert.deepStrictEqual(
+            recovery.candidates.find(item => item.url.endsWith('/architecture.png')),
+            { url: 'https://safe.example/architecture.png', caption: 'Architecture', cachePath: 'cache/architecture.bin' }
+        );
+        assert.deepStrictEqual(
+            recovery.candidates.find(item => item.url.endsWith('/results.webp')),
+            { url: 'https://safe.example/results.webp', caption: 'Results', cachePath: 'cache/results.bin' }
+        );
+        assert.strictEqual(recovery.downloaded[0].cachePath, 'cache/results.bin');
+        assert.strictEqual(recovery.downloaded[0].cacheHit, true);
+        assert.deepStrictEqual(paper.selectedImageUrls, ['https://safe.example/results.webp']);
+        assert.strictEqual(paper.imageUrls[0].caption, 'Results');
+        assert.strictEqual(paper.imageUrls[0].cachePath, 'cache/results.bin');
+        assert.doesNotMatch(JSON.stringify(paper), /http:\/\//i);
+
+        const persisted = [];
+        const checkpointPaper = {
+            [Symbol.for('audio-paper-digest.analysisCheckpointCallback')]: value => {
+                persisted.push(JSON.parse(JSON.stringify(value)));
+            }
+        };
+        saveAnalysisCheckpoint(checkpointPaper, 'checkpoint', { stages: {} }, {
+            candidates: [{ url: 'http://legacy.example/unsafe.png' }],
+            selected: ['http://legacy.example/unsafe.png', 'https://safe.example/results.webp'],
+            downloaded: [{ url: 'https://safe.example/results.webp', cachePath: 'cache/results.bin' }]
+        });
+        assert.strictEqual(persisted.length, 1);
+        assert.doesNotMatch(JSON.stringify(persisted[0]), /http:\/\//i);
+        assert.deepStrictEqual(persisted[0].analysisRecoveryImageManifest.selected, [
+            'https://safe.example/results.webp'
+        ]);
+        assert.strictEqual(
+            persisted[0].analysisRecoveryImageManifest.downloaded[0].cachePath,
+            'cache/results.bin'
+        );
     });
 
     it('将模型拒绝的透明 PNG 载荷标准化为 RGB JPEG', async () => {
@@ -659,6 +740,31 @@ primary_task_tag: #音视频生成
         assert.match(context, /TAIL_MARKER/);
     });
 
+    it('后处理阶段从完整正文独立选证据而不是复用主分析截断文本', () => {
+        const {
+            buildTaskEvidenceContext,
+            buildStageEvidenceContext
+        } = require('../scripts/deep-analyzer.js');
+        const source = [
+            'PRIMARY_ONLY_HEAD ',
+            'neutral background '.repeat(2500),
+            'UNIQUE_OPEN_SOURCE_EVIDENCE artifact weights will be released after acceptance ',
+            'neutral appendix '.repeat(5000),
+            'FULL_SOURCE_TAIL'
+        ].join('');
+        const truncatedPrimary = buildTaskEvidenceContext(
+            source,
+            1200,
+            [/PRIMARY_ONLY_HEAD/],
+            'PRIMARY'
+        );
+        const stageEvidence = buildStageEvidenceContext('openSourceScan', '', source);
+
+        assert.doesNotMatch(truncatedPrimary, /UNIQUE_OPEN_SOURCE_EVIDENCE/);
+        assert.match(stageEvidence, /UNIQUE_OPEN_SOURCE_EVIDENCE/);
+        assert.match(stageEvidence, /weights will be released after acceptance/);
+    });
+
     it('低字符预算仍覆盖全文开头、中部和结尾', () => {
         const { buildTaskEvidenceContext } = require('../scripts/deep-analyzer.js');
         const source = `HEAD${'a'.repeat(4500)}MIDDLE${'b'.repeat(4500)}TAIL`;
@@ -767,6 +873,141 @@ has_dataset: 否
             getRepairableAnalysisStructureIssues(placeholder).filter(issue => issue.startsWith('核心摘要内容不足')),
             ['核心摘要内容不足: 2/80 字符']
         );
+    });
+
+    it('结构预修复会在评分前接管模型编辑和自检批注泄漏', () => {
+        const { getRepairableAnalysisStructureIssues } = require('../scripts/deep-analyzer.js');
+        const contaminated = validAnalysisText().replace(
+            '工作的问题定义清楚，但方法增量和工程证据仍有提升空间。',
+            '工作的问题定义清楚，但方法增量和工程证据仍有提升空间。\n\n这里我补充了协议不一致，并加入了严格限定。'
+        );
+
+        assert.match(
+            getRepairableAnalysisStructureIssues(contaminated)
+                .find(issue => issue.startsWith('模型编辑/自检批注:')),
+            /编辑\/自检批注泄漏/
+        );
+    });
+
+    it('结构预修复不把正常论文叙述当成模型自检批注', () => {
+        const { getRepairableAnalysisStructureIssues } = require('../scripts/deep-analyzer.js');
+        const legitimate = validAnalysisText().replace(
+            '工作的问题定义清楚，但方法增量和工程证据仍有提升空间。',
+            '工作的问题定义清楚，但方法增量和工程证据仍有提升空间。这里的 score 用于衡量完整序列一致性；作者在附录中修正了拼写错误并补充实验。已有分析方法依赖静态特征，本文则建模动态轨迹。'
+        );
+
+        assert.strictEqual(
+            getRepairableAnalysisStructureIssues(legitimate)
+                .some(issue => issue.startsWith('模型编辑/自检批注:')),
+            false
+        );
+    });
+
+    it('结构修复持续输出编辑批注时以 contract rejected 终止', async () => {
+        const {
+            repairMissingAnalysisSections,
+            recoveryFailureStatus
+        } = require('../scripts/deep-analyzer.js');
+        const contaminated = validAnalysisText().replace(
+            '工作的问题定义清楚，但方法增量和工程证据仍有提升空间。',
+            '工作的问题定义清楚，但方法增量和工程证据仍有提升空间。现在需要生成最终文本。'
+        );
+        let calls = 0;
+        let failure;
+        try {
+            await repairMissingAnalysisSections(
+                { arxivId: '2608.13817', title: 'Leaked analysis' },
+                contaminated,
+                '完整论文证据',
+                '结构修复证据',
+                {
+                    callModelFn: async () => {
+                        calls += 1;
+                        return contaminated;
+                    }
+                }
+            );
+        } catch (error) {
+            failure = error;
+        }
+
+        assert.strictEqual(calls, 2);
+        assert.strictEqual(failure?.code, 'CONTRACT_REJECTED');
+        assert.match(failure?.message || '', /最终结构修复失败.*编辑\/自检批注/);
+        assert.strictEqual(recoveryFailureStatus(failure), 'contract_rejected');
+    });
+
+    it('方法兜底新增同一行编辑批注时拒绝完成，并可从失败 checkpoint 跨次恢复', async () => {
+        const {
+            finalizeStructureRepairOutput,
+            recoveryFailureStatus,
+            saveAnalysisCheckpoint,
+            createAnalysisRecoveryManifest,
+            prepareTextRecoveryStage,
+            isRecoveryStageComplete,
+            getRepairableAnalysisStructureIssues
+        } = require('../scripts/deep-analyzer.js');
+        const paragraph = `输入首先经过模型模块与网络结构处理，随后沿流程进入多个阶段并产生输出。${'方法细节用于说明组件连接关系。'.repeat(12)}`;
+        const detailed = validAnalysisText().replace(
+            /## 方法概述和架构\n[\s\S]*?\n\n## 核心创新点/,
+            `## 方法概述和架构\n${paragraph}\n\n${paragraph}\n\n${paragraph}\n\n## 核心创新点`
+        );
+        const contaminated = detailed.replace(
+            '工作的问题定义清楚，但方法增量和工程证据仍有提升空间。',
+            '工作的问题定义清楚，但方法增量和工程证据仍有提升空间。现在需要生成最终文本。'
+        );
+        let failure;
+        try {
+            await finalizeStructureRepairOutput(
+                { arxivId: '2608.13817', title: 'Leaked fallback' },
+                validAnalysisText(),
+                '完整论文证据',
+                { fixMethodSection: async () => contaminated }
+            );
+        } catch (error) {
+            failure = error;
+        }
+        assert.strictEqual(failure?.code, 'CONTRACT_REJECTED');
+        assert.match(failure?.message || '', /最终方法兜底后的分析仍未通过结构契约.*编辑\/自检批注/);
+
+        const paper = {
+            analysisStageCheckpoints: { methodRepair: validAnalysisText() }
+        };
+        const manifest = {
+            version: 1,
+            stages: {
+                methodRepair: { status: 'not_needed', fingerprint: 'method-v1' },
+                structureRepair: {
+                    status: recoveryFailureStatus(failure),
+                    error: failure.message
+                },
+                scoringAudit: { status: 'complete', fingerprint: 'must-be-removed' }
+            }
+        };
+        // 与生产 catch 一致：Promise 拒绝时调用方仍持有方法兜底前正文，
+        // 但 structureRepair 必须保存为非终态，下一次才能重新执行兜底。
+        saveAnalysisCheckpoint(paper, validAnalysisText(), manifest);
+
+        const resumedManifest = createAnalysisRecoveryManifest(paper);
+        assert.strictEqual(isRecoveryStageComplete(resumedManifest, 'structureRepair'), false);
+        assert.strictEqual(resumedManifest.stages.scoringAudit, undefined);
+        const prepared = prepareTextRecoveryStage(
+            paper,
+            resumedManifest,
+            'structureRepair',
+            paper.analysisCheckpoint,
+            '完整论文证据'
+        );
+        assert.strictEqual(prepared.analysis, validAnalysisText());
+        const finalized = await finalizeStructureRepairOutput(
+            { arxivId: '2608.13817', title: 'Recovered analysis' },
+            prepared.analysis,
+            '完整论文证据',
+            { fixMethodSection: async () => detailed }
+        );
+        assert.doesNotMatch(finalized.analysis, /现在需要生成最终文本/);
+        assert.match(finalized.analysis, /方法细节用于说明组件连接关系/);
+        assert.deepStrictEqual(getRepairableAnalysisStructureIssues(finalized.analysis), []);
     });
 
     it('结构预修复会在评分前收敛超限实验表格', () => {
@@ -1276,7 +1517,100 @@ has_dataset: 否
         const metadataChanged = buildRecoveryFingerprints({ ...base, title: 'B' }, 'actual input one', '2607.1');
         assert.notStrictEqual(first.primaryAnalysis, textChanged.primaryAnalysis);
         assert.notStrictEqual(first.primaryAnalysis, metadataChanged.primaryAnalysis);
-        assert.notStrictEqual(first.openSourceScan, textChanged.openSourceScan);
+    });
+
+    it('后处理阶段指纹绑定实际证据并按恢复顺序回退到前序快照', () => {
+        const {
+            buildStageEvidenceContext,
+            buildTextStageFingerprint,
+            prepareTextRecoveryStage
+        } = require('../scripts/deep-analyzer.js');
+        const inputAnalysis = 'body-after-demo';
+        const oldEvidence = buildStageEvidenceContext('revision', inputAnalysis, 'old source evidence');
+        const oldFingerprint = buildTextStageFingerprint('revision', inputAnalysis, oldEvidence);
+        const paper = {
+            analysisCheckpoint: 'body-after-table',
+            analysisStageCheckpoints: {
+                demoLinkScan: inputAnalysis,
+                revision: 'body-after-revision',
+                tableRepair: 'body-after-table'
+            }
+        };
+        const manifest = { version: 1, stages: {
+            demoLinkScan: { status: 'complete', fingerprint: 'demo-v1' },
+            revision: { status: 'complete', fingerprint: oldFingerprint },
+            tableRepair: { status: 'complete', fingerprint: 'table-v1' }
+        } };
+
+        const prepared = prepareTextRecoveryStage(
+            paper,
+            manifest,
+            'revision',
+            paper.analysisCheckpoint,
+            'new source evidence with changed experiment facts'
+        );
+
+        assert.strictEqual(prepared.invalidated, true);
+        assert.strictEqual(prepared.analysis, inputAnalysis);
+        assert.strictEqual(paper.analysisCheckpoint, inputAnalysis);
+        assert.strictEqual(manifest.stages.demoLinkScan.status, 'complete');
+        assert.strictEqual(manifest.stages.revision, undefined);
+        assert.strictEqual(manifest.stages.tableRepair, undefined);
+        assert.notStrictEqual(prepared.fingerprint, oldFingerprint);
+        assert.strictEqual(
+            prepared.fingerprint,
+            buildTextStageFingerprint('revision', inputAnalysis, prepared.evidenceContext)
+        );
+    });
+
+    it('旧结构 checkpoint 会因新增编辑泄漏契约失效并回退到可修复正文', () => {
+        const {
+            prepareTextRecoveryStage,
+            getRepairableAnalysisStructureIssues
+        } = require('../scripts/deep-analyzer.js');
+        const contaminated = validAnalysisText().replace(
+            '工作的问题定义清楚，但方法增量和工程证据仍有提升空间。',
+            '工作的问题定义清楚，但方法增量和工程证据仍有提升空间。\n\n现在需要生成最终文本。'
+        );
+        const paper = {
+            analysisCheckpoint: 'body-after-scoring',
+            analysisStageCheckpoints: {
+                methodRepair: contaminated,
+                structureRepair: contaminated,
+                scoringAudit: 'body-after-scoring'
+            }
+        };
+        const manifest = {
+            version: 1,
+            contracts: {
+                experimentTables: 'bounded-v1',
+                methodDetail: 'detailed-v1'
+            },
+            stages: {
+                methodRepair: { status: 'not_needed', fingerprint: 'method-v1' },
+                structureRepair: { status: 'complete', fingerprint: 'legacy-without-editorial-contract' },
+                scoringAudit: { status: 'complete', fingerprint: 'scoring-v1' }
+            }
+        };
+
+        const prepared = prepareTextRecoveryStage(
+            paper,
+            manifest,
+            'structureRepair',
+            paper.analysisCheckpoint,
+            '完整论文证据'
+        );
+
+        assert.strictEqual(prepared.invalidated, true);
+        assert.strictEqual(prepared.analysis, contaminated);
+        assert.strictEqual(paper.analysisCheckpoint, contaminated);
+        assert.strictEqual(manifest.stages.structureRepair, undefined);
+        assert.strictEqual(manifest.stages.scoringAudit, undefined);
+        assert.strictEqual(manifest.contracts, undefined);
+        assert.ok(
+            getRepairableAnalysisStructureIssues(prepared.analysis)
+                .some(issue => issue.startsWith('模型编辑/自检批注:'))
+        );
     });
 
     it('来源或实际截断输入变化时均失效主链', () => {

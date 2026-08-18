@@ -148,15 +148,19 @@ arXiv 抓取与 LLM 筛选模块。
 | 配置项 | 默认值 | 项目 `.env` 覆写 | 说明 |
 |--------|--------|-------------|------|
 | 每类抓取数 | 100 | `PD_ARXIV_MAX_RESULTS` | 每分类最大返回数 |
-| 最大重试次数 | 30 | — | `fetchMaxRetries`，单分类抓取重试上限 |
-| 重退避基数 | 5000ms | — | `fetchRetryBaseDelayMs` |
-| 限流退避基数 | 30000ms | — | `fetchRateLimitBaseDelayMs`，429 限流额外等待 |
-| 最大等待时间 | 600000ms | — | `fetchMaxWaitMs`，单分类最长等待 10 分钟 |
+| 最大尝试次数 | 5 | `PD_ARXIV_FETCH_MAX_RETRIES` | recent/search/摘要/API 统一上限 |
+| 普通错误退避基数 | 5000ms | `PD_ARXIV_FETCH_RETRY_BASE_DELAY_MS` | 按尝试次数线性退避 |
+| 限流退避基数 | 60000ms | `PD_ARXIV_RATE_LIMIT_BASE_DELAY_MS` | 429 按 `base*2^(attempt-1)` 退避 |
+| 429 累计等待上限 | 120000ms | `PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS` | 单分类共享限流预算 |
+| 全部重试累计等待上限 | 600000ms | `PD_ARXIV_FETCH_MAX_WAIT_MS` | 单分类 recent/search/摘要/API 共享预算 |
+| 单次绝对截止时间 | 60000ms | `PD_ARXIV_METADATA_TIMEOUT_MS` | 同时保留 socket timeout |
+| 单次响应字节上限 | 8388608 | `PD_ARXIV_METADATA_MAX_BYTES` | 超限立即销毁请求 |
+| User-Agent | 内置轮换池 | `PD_ARXIV_USER_AGENT` | 覆写后固定使用指定值 |
 | 分类间延迟 | 60000ms | — | `categoryDelayMs`，不同分类请求间隔（full-fetch 另加抖动+限流惩罚） |
 | 首次请求延迟 | 30000ms | — | `firstRequestDelayMs`，首个分类额外等待 |
 | 连续已知阈值 | 20 | — | 连续 20 篇已有 ID 提前停止 |
 
-> 注：`fetch-papers.js` 中各抓取路径（recent/search/API）的实际重试上限硬编码为 5 次，429 退避为 `60s * 2^(attempt-1)`（60s/120s/240s/480s），其他错误 `5s * attempt`；上表为 `config.js` 中 `ARXIV_CONFIG` 的登记值。
+以上字段由 `fetch-papers.js` 直接读取，不再保留与运行行为不同的登记值。
 
 **HuggingFace 配置（`HUGGINGFACE_CONFIG`）**
 
@@ -401,12 +405,12 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 **发布流程**：
 1. `generate-blog.py` 只生成并安装 `.md`，然后写入 `blog-generation-manifest-YYYY-MM-DD.json`；不调用 LLM，不提交、不推送。
 2. `review-blog.py` 只读取 generation manifest，对需要审查的文件执行代码、LLM 和多模态图片三层 review，并对完整批次执行确定性校验与 Hugo gate。每个通过项立即写入 `blog-review-passes-YYYY-MM-DD.json`，以博客仓库相对路径 + 实际读取 SHA-256 为永久复用键；失败状态写入 `blog-review-failure-YYYY-MM-DD.json`。代码、脚本、文档、模型、协议、generation manifest 或博客 `main` 基线变化不会清空未改页面的通过项，只会让新增、SHA 变化、瞬时失败或内容失败修复后的文件进入 review；通过后重新签发绑定当前清单、基线、协议和 Hugo gate 的 `blog-review-receipt-YYYY-MM-DD.json`，不执行 Git 发布。HTTP 重试优先服从 `Retry-After`，否则指数退避并加入短随机抖动；协议格式修复和完整协议重试使用更小预算。若推理模型将输出预算全部用于隐藏推理、未返回最终 JSON，客户端只追加纯 JSON 指令恢复一次，默认从 4000 最多增到 8000，不再盲目翻倍到 16000。
-3. `push-blog.py` 先验证审查凭证与工作树文件哈希，并在任何 Git 变更前执行视觉能力 preflight。标准日更 `--require-visual-plan` 只接受 schema v3；schema v1/v2 仅允许显式维护 push，receipt 记录 `postPublishVisuals=not_applicable_legacy_maintenance` 并跳过视觉。通过后再精确 stage → 中文详细 commit → `git push origin HEAD:main` → 验证远端 OID；该脚本不生成也不 review。
+3. `push-blog.py` 先验证审查凭证与工作树文件哈希，并在任何 Git 变更前执行视觉能力 preflight。标准日更 `--require-visual-plan` 只接受 schema v3；schema v1/v2 仅允许显式维护 push，receipt 记录 `postPublishVisuals=not_applicable_legacy_maintenance` 并跳过视觉。通过后再精确 stage → 中文详细 commit → `git push origin HEAD:main` → 验证远端 OID，并把 remote 名称与 push URL 的 SHA-256 身份写入凭证；该脚本不生成也不 review。
 4. GitHub Actions 自动构建并部署到 Pages。
 
 **运行环境**：上述三个入口和兼容 `publish-to-blog.py` 都强制要求沙箱外运行。它们检测到可靠沙箱标志 `CODEX_SANDBOX` 即拒绝开始；沙箱外权限包装会保留网络禁用环境标志，不能将其单独视为仍在沙箱内。此时应从沙箱外重新运行原阶段，不得跳过审查或伪造凭证。
 
-**推送边界**：review 凭证绑定 review 时博客 `main` 的基线提交和逐文件 SHA-256。`push-blog.py` 只允许从该基线提交本次清单，或重试凭证中已记录的同一发布提交；发现人工提交、工作树改动或基线偏移会拒绝推送。生成阶段也会拒绝覆盖目标日期页面的人工 Git 修改。
+**推送边界**：review 凭证绑定 review 时博客 `main` 的基线提交和逐文件 SHA-256。`push-blog.py` 只允许从该基线提交本次清单，或重试凭证中已记录的同一发布提交；发现人工提交、工作树改动或基线偏移会拒绝推送。完全相同的已发布非空批次可三阶段幂等重跑，但复用前必须重新核对当前协议、文件、发布提交、remote 身份和实时 `main` OID；网络失败或 `origin` 换仓不信任旧凭证。生成阶段也会拒绝覆盖目标日期页面的人工 Git 修改。
 
 三个阶段共享日期级锁和博客仓库级全局锁。生成逐页 journal 后才写汇总页/严格清单；review 记录实际读取 SHA；push 在 stage 后及 commit 前把 index blob/删除状态与凭证逐项比较，防止不同日期并发污染共享 Git 状态。
 

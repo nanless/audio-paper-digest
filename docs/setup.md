@@ -37,7 +37,14 @@
 | `PD_FILTER_BATCH_SIZE` | LLM 筛选每批篇数 | 5 |
 | `PD_ARXIV_MAX_RESULTS` | arXiv 每类抓取数量 | 100 |
 | `PD_KEYWORD_PREFILTER_ENABLED` | 是否启用高召回关键词预筛；设为 `0` 可临时禁用 | 1 |
+| `PD_ARXIV_FETCH_MAX_RETRIES` | arXiv recent/search/摘要/Atom 元数据最多尝试次数 | 5 |
+| `PD_ARXIV_FETCH_RETRY_BASE_DELAY_MS` | 普通元数据错误线性退避基数（毫秒） | 5000 |
+| `PD_ARXIV_RATE_LIMIT_BASE_DELAY_MS` | HTTP 429 指数退避基数（毫秒） | 60000 |
 | `PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS` | 单类遇到 HTTP 429 时的累计退避上限（毫秒） | 120000 |
+| `PD_ARXIV_FETCH_MAX_WAIT_MS` | 单类全部元数据重试的累计等待上限（毫秒） | 600000 |
+| `PD_ARXIV_METADATA_TIMEOUT_MS` | recent/search/摘要/Atom 单次请求绝对截止时间（毫秒） | 60000 |
+| `PD_ARXIV_METADATA_MAX_BYTES` | recent/search/摘要/Atom 单次响应最大字节数 | 8388608 |
+| `PD_ARXIV_USER_AGENT` | 可选固定 arXiv User-Agent；未设置时使用内置轮换池 | 未设置 |
 | `PD_IMAGE_MAX_BYTES` | 深度分析单张图片原始字节上限 | 6291456 |
 | `PD_IMAGE_DOWNLOAD_TIMEOUT_MS` | 深度分析单张候选图片下载超时（毫秒） | 60000 |
 | `PD_ARXIV_FETCH_TIMEOUT_MS` | arXiv HTML 与图片发现请求超时（毫秒） | 60000 |
@@ -53,6 +60,8 @@
 | `PAPER_DIGEST_DISABLE_FILE_LOGS` / `PD_DISABLE_FILE_LOGS` | 设为 `1` 时强制禁用文件日志 | 未启用 |
 
 **API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动判断使用 OpenAI 还是 Anthropic 协议，优先级如下：
+
+所有 LLM endpoint 必须使用 HTTPS；只有 `localhost`、`*.localhost`、`127.0.0.0/8` 或 `::1` 上的本地测试服务允许 HTTP，公网明文 HTTP 会在附加认证头之前被拒绝。Node 的 `utils.js` 与 Python 发布侧的 `publish_common.py` 都在构造认证头之前执行该门禁。
 - **DeepSeek**：端点含 `deepseek.com` 或模型含 `deepseek` 时强制 OpenAI 协议，`/anthropic` 路径也会转为 `/v1/chat/completions`
 - **MiMo Token Plan**：端点含 `token-plan` 且模型含 `mimo` 时走 Anthropic 协议，`https://token-plan-cn.xiaomimimo.com/v1` → `https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages`
 - **Kimi Coding Plan**：`api.kimi.com` 的 `coding` 端点（包括 `k3` 等不含 `kimi` 字样的模型名）走 Anthropic 协议；`https://api.kimi.com/coding` 与 `https://api.kimi.com/coding/v1` 都会归一化为 `https://api.kimi.com/coding/v1/messages`，不需要 `/anthropic` 中间路径

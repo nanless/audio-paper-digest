@@ -21,7 +21,7 @@ load_project_env()
     python3 publish-to-blog.py --date YYYY-MM-DD
 """
 import argparse
-import json, re, sys, os, subprocess, datetime, base64, concurrent.futures, hashlib
+import json, re, sys, os, subprocess, datetime, base64, concurrent.futures, hashlib, math
 import ipaddress, shutil, socket, tempfile, stat, struct, zlib, unicodedata
 from contextlib import contextmanager
 from pathlib import Path
@@ -83,6 +83,10 @@ DIGEST_COVER_RENDERING_CONTRACT = {
     'maxPngBytes': VISUAL_SUMMARY_MAX_BYTES,
 }
 _REVIEW_PROTOCOL_CACHE = {}
+PUBLISH_IMAGE_EXCLUSIONS_SCHEMA_VERSION = 1
+PUBLISH_IMAGE_EXCLUSIONS_PATH = PROJECT_ROOT / 'config' / 'publish-image-exclusions.json'
+PUBLISH_IMAGE_EXCLUSIONS_FIELD = 'publishImageExclusions'
+PUBLISHED_PAPERS_FINGERPRINT_CONTRACT = 'typed-json-f64-utf16-v1'
 
 
 def blog_transaction_lock(date_str, *, timeout_seconds=30):
@@ -1103,6 +1107,206 @@ def slugify(text, max_length=50):
 def normalize_arxiv_id(arxiv_id):
     """Normalize an arXiv identifier for stable, traversal-safe filenames."""
     return normalize_publish_arxiv_id(arxiv_id)
+
+
+def _validate_publish_image_exclusion(entry, label='发布图片排除项'):
+    """Validate and canonicalize one publication-only image exclusion."""
+    if not isinstance(entry, dict) or set(entry) != {
+        'normalizedArxivId', 'url', 'reason',
+    }:
+        raise PublishDataValidationError(
+            f'{label}必须且只能包含 normalizedArxivId/url/reason'
+        )
+    raw_id = entry.get('normalizedArxivId')
+    normalized_id = normalize_publish_arxiv_id(raw_id)
+    if raw_id != normalized_id:
+        raise PublishDataValidationError(
+            f'{label}.normalizedArxivId 必须已规范化且不含版本号: {raw_id!r}'
+        )
+    url = entry.get('url')
+    if not isinstance(url, str) or not url or url != url.strip() or re.search(r'[\x00-\x20]', url):
+        raise PublishDataValidationError(f'{label}.url 必须是无空白的精确 HTTPS URL')
+    try:
+        parsed_url = urlparse(url)
+        _ = parsed_url.port
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise PublishDataValidationError(f'{label}.url 非法: {url!r}') from exc
+    if (
+        parsed_url.scheme != 'https'
+        or not parsed_url.hostname
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+    ):
+        raise PublishDataValidationError(
+            f'{label}.url 必须是无 userinfo 的精确 HTTPS URL: {url!r}'
+        )
+    reason = entry.get('reason')
+    if not isinstance(reason, str) or not reason.strip():
+        raise PublishDataValidationError(f'{label}.reason 必须是非空字符串')
+    return {
+        'normalizedArxivId': normalized_id,
+        'url': url,
+        'reason': reason.strip(),
+    }
+
+
+def load_publish_image_exclusions(config_path=None):
+    """Load the narrow, checked-in publication image override contract."""
+    path = Path(config_path or PUBLISH_IMAGE_EXCLUSIONS_PATH)
+    payload = _load_json_object(path, '发布图片排除配置')
+    if set(payload) != {'schemaVersion', 'exclusions'}:
+        raise PublishDataValidationError(
+            '发布图片排除配置必须且只能包含 schemaVersion/exclusions'
+        )
+    if payload.get('schemaVersion') != PUBLISH_IMAGE_EXCLUSIONS_SCHEMA_VERSION:
+        raise PublishDataValidationError('发布图片排除配置 schemaVersion 非法')
+    raw_entries = payload.get('exclusions')
+    if not isinstance(raw_entries, list):
+        raise PublishDataValidationError('发布图片排除配置 exclusions 必须是数组')
+    entries = [
+        _validate_publish_image_exclusion(item, f'发布图片排除项[{index}]')
+        for index, item in enumerate(raw_entries)
+    ]
+    keys = [(item['normalizedArxivId'], item['url']) for item in entries]
+    if len(keys) != len(set(keys)):
+        raise PublishDataValidationError('发布图片排除配置包含重复 normalizedArxivId + URL')
+    return sorted(entries, key=lambda item: (item['normalizedArxivId'], item['url']))
+
+
+def _is_plain_publish_image_paragraph(paragraph, max_length):
+    """Return a short prose paragraph only; never admit Markdown structure."""
+    value = str(paragraph or '').strip()
+    return bool(
+        value
+        and len(value) <= max_length
+        and not re.match(r'^(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|>|\||```|~~~|!\[)', value)
+    )
+
+
+def _is_publish_image_lead_paragraph(paragraph):
+    """Recognize only an explicit, sentence-final pointer to the following figure."""
+    value = str(paragraph or '').strip()
+    if not _is_plain_publish_image_paragraph(value, 500):
+        return False
+    return bool(re.search(
+        r'(?:如下图所示|(?:请)?参见下图|见下图|如下图|'
+        r'如图\s*(?:\d+(?:[.-]\d+)*|[一二三四五六七八九十]+)?\s*所示)'
+        r'[。！？.!?）)]*$',
+        value,
+    ))
+
+
+def _is_publish_image_explanation_paragraph(paragraph):
+    """Recognize only a deictic explanation that explicitly describes that figure."""
+    value = str(paragraph or '').strip()
+    if not _is_plain_publish_image_paragraph(value, 1000):
+        return False
+    return bool(re.match(
+        r'^(?:下图|上图|该图|此图|图中|图\s*(?:\d+(?:[.-]\d+)*|'
+        r'[一二三四五六七八九十]+))\s*(?:则|中|所)?\s*'
+        r'(?:展示|显示|说明|对比|呈现|描绘|概述|给出|总结|揭示|可视化)',
+        value,
+    ))
+
+
+def _strip_publish_image_lead_context(paragraph):
+    """Remove a bridge lead while preserving an immediately preceding heading."""
+    value = str(paragraph or '').strip()
+    if _is_publish_image_lead_paragraph(value):
+        return ''
+    heading_and_body = re.fullmatch(r'(#{1,6}\s+[^\n]+)\n+([\s\S]+)', value)
+    if (
+        heading_and_body
+        and _is_publish_image_lead_paragraph(heading_and_body.group(2))
+    ):
+        return heading_and_body.group(1).strip()
+    return None
+
+
+def _remove_publish_image_block(content, exact_url):
+    """Remove one exact image and only high-confidence adjacent bridge prose."""
+    if not isinstance(content, str) or exact_url not in content:
+        return content
+    paragraphs = re.split(r'\n(?:[ \t]*\n)+', content.strip())
+    image_pattern = re.compile(
+        rf'^[ \t]*!\[[^\n]*\]\({re.escape(exact_url)}\)[ \t]*$'
+    )
+    inline_pattern = re.compile(
+        rf'!\[[^\]\n]*\]\({re.escape(exact_url)}\)'
+    )
+    remove = set()
+    for index, paragraph in enumerate(paragraphs):
+        if image_pattern.fullmatch(paragraph):
+            remove.add(index)
+            if index > 0:
+                stripped_lead = _strip_publish_image_lead_context(paragraphs[index - 1])
+                if stripped_lead == '':
+                    remove.add(index - 1)
+                elif stripped_lead is not None:
+                    paragraphs[index - 1] = stripped_lead
+            if (
+                index + 1 < len(paragraphs)
+                and _is_publish_image_explanation_paragraph(paragraphs[index + 1])
+            ):
+                remove.add(index + 1)
+        elif inline_pattern.search(paragraph):
+            paragraphs[index] = inline_pattern.sub('', paragraph).strip()
+    return '\n\n'.join(
+        paragraph for index, paragraph in enumerate(paragraphs)
+        if index not in remove and paragraph
+    ).strip()
+
+
+def apply_publish_image_exclusions(papers, exclusions=None):
+    """Attach overrides and sanitize one derived analysis/parsed publication view.
+
+    ``score_and_sort()`` deliberately reparses ``analysis`` instead of trusting a
+    cached ``parsed`` object.  The publication-only analysis copy therefore has
+    to be cleaned together with its parsed projection; otherwise the summary
+    page reparses the original image back into the rendered output while the
+    single-paper page uses the cleaned cache.
+    """
+    exclusions = load_publish_image_exclusions() if exclusions is None else [
+        _validate_publish_image_exclusion(item)
+        for item in exclusions
+    ]
+    by_id = {}
+    seen = set()
+    for entry in exclusions:
+        key = (entry['normalizedArxivId'], entry['url'])
+        if key in seen:
+            raise PublishDataValidationError('发布图片排除项包含重复 normalizedArxivId + URL')
+        seen.add(key)
+        by_id.setdefault(key[0], []).append(entry)
+
+    prepared = []
+    for paper in papers:
+        normalized_id = normalize_publish_arxiv_id(paper.get('arxivId'))
+        next_paper = dict(paper)
+        active = [dict(item) for item in by_id.get(normalized_id, [])]
+        if active:
+            analysis = next_paper.get('analysis')
+            if not isinstance(analysis, str) or not analysis.strip():
+                raise PublishDataValidationError(
+                    f'{normalized_id} 缺少可派生发布快照的 analysis'
+                )
+            for exclusion in active:
+                analysis = _remove_publish_image_block(analysis, exclusion['url'])
+            next_paper['analysis'] = analysis
+
+            parsed = dict(next_paper.get('parsed') or {})
+            for key, value in list(parsed.items()):
+                if not isinstance(value, str):
+                    continue
+                for exclusion in active:
+                    value = _remove_publish_image_block(value, exclusion['url'])
+                parsed[key] = value
+            next_paper['parsed'] = parsed
+            next_paper[PUBLISH_IMAGE_EXCLUSIONS_FIELD] = active
+        else:
+            next_paper.pop(PUBLISH_IMAGE_EXCLUSIONS_FIELD, None)
+        prepared.append(next_paper)
+    return prepared
 
 
 def paper_slug(title, arxiv_id):
@@ -2754,6 +2958,34 @@ def _remote_main_oid():
     return oid, ''
 
 
+def _remote_identity_sha256():
+    """Bind a verified publication to the configured remote's exact push URL.
+
+    The URL itself is not persisted because it may contain credentials.  Hashing
+    the remote name and exact Git-resolved push URL still makes changing
+    ``origin`` to an unrelated repository invalidate old publication evidence.
+    """
+    result = subprocess.run(
+        ['git', 'remote', 'get-url', '--push', GITHUB_REMOTE],
+        cwd=BLOG_REPO,
+        capture_output=True,
+        text=True,
+        env=_git_env(),
+    )
+    if result.returncode != 0:
+        return None, f'无法解析当前 Git remote {GITHUB_REMOTE!r} 的 push URL'
+    push_url = (result.stdout or '').strip()
+    if not push_url or '\n' in push_url or '\x00' in push_url:
+        return None, f'当前 Git remote {GITHUB_REMOTE!r} 的 push URL 非法'
+    payload = json.dumps(
+        {'remote': GITHUB_REMOTE, 'pushUrl': push_url},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(',', ':'),
+    ).encode('utf-8')
+    return hashlib.sha256(payload).hexdigest(), ''
+
+
 def _report_push_retry(local_head, detail):
     print(f'  ❌ Push/远端验证失败，本地提交 {local_head} 已保留，远端发布尚未确认')
     if detail:
@@ -2787,6 +3019,46 @@ def git_push(date_str, publish_paths, rollback_state=None):
         current_head = validate_git_publish_branch()
         validate_git_index(publish_paths)
         publication_commit = str(receipt.get('publicationCommit') or '').lower()
+        verified_remote_oid = str(receipt.get('remoteVerifiedOid') or '').lower()
+        if verified_remote_oid:
+            if verified_remote_oid != publication_commit:
+                raise PublishDataValidationError(
+                    '已发布凭证的 remoteVerifiedOid 与 publicationCommit 不一致'
+                )
+            stored_remote_identity = str(
+                receipt.get('remoteIdentitySha256') or ''
+            ).lower()
+            if (
+                current_head != publication_commit
+                or receipt.get('remoteName') != GITHUB_REMOTE
+                or not re.fullmatch(r'[0-9a-f]{64}', stored_remote_identity)
+            ):
+                raise PublishDataValidationError(
+                    '已发布凭证与当前 HEAD 或 Git remote 身份不一致，拒绝向其他远端重放'
+                )
+            current_remote_identity, identity_error = _remote_identity_sha256()
+            current_remote_oid, _remote_error = _remote_main_oid()
+            if (
+                current_remote_identity != stored_remote_identity
+                or current_remote_oid != publication_commit
+            ):
+                detail = identity_error or (
+                    '无法实时查询当前远端 main OID'
+                    if current_remote_oid is None
+                    else f'当前远端 main={current_remote_oid}'
+                )
+                raise PublishDataValidationError(
+                    '已发布凭证实时远端复核失败，拒绝覆盖或重放：' + detail
+                )
+            validate_git_commit_against_review_receipt(
+                receipt, publish_paths, publication_commit,
+            )
+            validate_manifest_clean_against_head(publish_paths)
+            print(
+                f'  ✅ 已发布提交 {publication_commit} 的 remote 身份和远端 main OID '
+                '实时复核通过，无需再次 push'
+            )
+            return True
         retrying_existing_commit = publication_commit and current_head == publication_commit
         if retrying_existing_commit:
             parent = subprocess.run(
@@ -2855,13 +3127,22 @@ def git_push(date_str, publish_paths, rollback_state=None):
             print(f"  ❌ Git add/commit 失败，且自动恢复失败: {exc}; 恢复错误: {restore_exc}")
         return False
 
+    remote_identity_before, identity_error = _remote_identity_sha256()
+    if remote_identity_before is None:
+        _report_push_retry(local_head, identity_error)
+        return False
     result = subprocess.run(
         ['git', 'push', GITHUB_REMOTE, 'HEAD:main'],
         capture_output=True, text=True, cwd=BLOG_REPO,
         env=_git_env(),
     )
     remote_oid, verify_error = _remote_main_oid()
-    if remote_oid == local_head:
+    remote_identity_after, identity_error = _remote_identity_sha256()
+    if (
+        remote_oid == local_head
+        and remote_identity_after is not None
+        and remote_identity_after == remote_identity_before
+    ):
         if result.returncode != 0:
             print('  ℹ️ git push 返回非零，但远端 main 已与本地 HEAD 一致，以 OID 验证结果为准')
         print(f"  ✅ 已推送并验证远端 main={remote_oid}，自动部署中...")
@@ -2869,13 +3150,17 @@ def git_push(date_str, publish_paths, rollback_state=None):
         receipt['remoteVerifiedAt'] = datetime.datetime.now(
             datetime.timezone(datetime.timedelta(hours=8))
         ).isoformat()
+        receipt['remoteName'] = GITHUB_REMOTE
+        receipt['remoteIdentitySha256'] = remote_identity_after
         atomic_write_json(receipt_path, receipt, ensure_ascii=False, indent=2)
         blog_url = os.environ.get('PAPER_DIGEST_BLOG_URL', 'https://nanless.github.io/audio-paper-digest-blog/posts')
         if blog_url:
             print(f"  🌐 {blog_url}/{date_str}/")
         return True
 
-    detail = verify_error
+    detail = verify_error or identity_error
+    if remote_identity_after is not None and remote_identity_after != remote_identity_before:
+        detail = 'Git remote 在 push 与远端 OID 校验之间发生变化'
     push_detail = (result.stderr or result.stdout or '').strip()
     if push_detail:
         detail = f'{push_detail}; {detail}' if detail else push_detail
@@ -2932,14 +3217,128 @@ def _stable_json_sha256(value):
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _javascript_utf16_sort_key(value, label):
+    """Match JavaScript Array#sort string ordering by UTF-16 code units."""
+    try:
+        encoded = value.encode('utf-16-be')
+    except UnicodeEncodeError as exc:
+        raise PublishDataValidationError(f'{label} 对象键包含非法 Unicode 代理项') from exc
+    return struct.unpack(f'>{len(encoded) // 2}H', encoded)
+
+
+def _portable_fingerprint_value(value, label='publishedPapers'):
+    """Encode JSON data identically in Python and Node, including numeric values."""
+    if value is None:
+        return ['null']
+    if isinstance(value, bool):
+        return ['boolean', value]
+    if isinstance(value, str):
+        return ['string', value]
+    if isinstance(value, (int, float)):
+        if isinstance(value, int) and abs(value) > (2 ** 53 - 1):
+            raise PublishDataValidationError(f'{label} 包含超出 JSON 安全范围的整数')
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            raise PublishDataValidationError(f'{label} 包含非有限数值')
+        return ['number-f64', struct.pack('>d', numeric).hex()]
+    if isinstance(value, list):
+        return [
+            'array',
+            [
+                _portable_fingerprint_value(item, f'{label}[{index}]')
+                for index, item in enumerate(value)
+            ],
+        ]
+    if isinstance(value, dict):
+        if any(not isinstance(key, str) for key in value):
+            raise PublishDataValidationError(f'{label} 对象键必须是字符串')
+        return [
+            'object',
+            [
+                [key, _portable_fingerprint_value(value[key], f'{label}.{key}')]
+                for key in sorted(
+                    value,
+                    key=lambda item: _javascript_utf16_sort_key(item, label),
+                )
+            ],
+        ]
+    raise PublishDataValidationError(f'{label} 包含不可序列化类型: {type(value).__name__}')
+
+
+def published_papers_fingerprint(published_papers):
+    """Return the cross-runtime integrity fingerprint for the publication snapshot."""
+    if not isinstance(published_papers, list) or not published_papers:
+        raise PublishDataValidationError('正式 generation manifest 缺少已发布论文权威快照')
+    return _stable_json_sha256(_portable_fingerprint_value(published_papers))
+
+
 def generation_input_fingerprint(papers, date_str, category, publish_all):
     """Bind resumable generation to the exact publication inputs and options."""
+    image_exclusions = []
+    seen_exclusions = set()
+    for paper in papers:
+        paper_id = normalize_publish_arxiv_id(paper.get('arxivId'))
+        raw_entries = paper.get(PUBLISH_IMAGE_EXCLUSIONS_FIELD, [])
+        if not isinstance(raw_entries, list):
+            raise PublishDataValidationError(
+                f'{paper_id}.{PUBLISH_IMAGE_EXCLUSIONS_FIELD} 必须是数组'
+            )
+        for index, raw_entry in enumerate(raw_entries):
+            entry = _validate_publish_image_exclusion(
+                raw_entry, f'{paper_id}.{PUBLISH_IMAGE_EXCLUSIONS_FIELD}[{index}]',
+            )
+            if entry['normalizedArxivId'] != paper_id:
+                raise PublishDataValidationError(
+                    f'{paper_id} 发布图片排除项绑定了其他论文 '
+                    f'{entry["normalizedArxivId"]}'
+                )
+            key = (paper_id, entry['url'])
+            if key in seen_exclusions:
+                raise PublishDataValidationError(f'{paper_id} 发布图片排除项 URL 重复')
+            seen_exclusions.add(key)
+            image_exclusions.append(entry)
     return _stable_json_sha256({
         'date': validate_publish_date(date_str),
         'category': category,
         'publishAll': bool(publish_all),
         'papers': papers,
+        PUBLISH_IMAGE_EXCLUSIONS_FIELD: sorted(
+            image_exclusions,
+            key=lambda item: (item['normalizedArxivId'], item['url']),
+        ),
     })
+
+
+def _validate_generation_input_integrity(manifest, date_str):
+    """Recompute every schema-v3 input binding from its authoritative snapshot."""
+    published_papers = manifest.get('publishedPapers')
+    category = manifest.get('category')
+    publish_all = manifest.get('publishAll')
+    if (
+        not isinstance(category, str)
+        or not category.strip()
+        or not isinstance(publish_all, bool)
+        or not isinstance(published_papers, list)
+        or not published_papers
+    ):
+        raise PublishDataValidationError(
+            '正式生成清单缺少 category、publishAll 或已发布论文权威快照'
+        )
+    actual_input = str(manifest.get('inputFingerprint') or '')
+    expected_input = generation_input_fingerprint(
+        published_papers, date_str, category, publish_all,
+    )
+    if actual_input != expected_input:
+        raise PublishDataValidationError(
+            '正式生成清单 inputFingerprint 无法从 publishedPapers 反向重算'
+        )
+    if manifest.get('publishedPapersFingerprintContract') != PUBLISHED_PAPERS_FINGERPRINT_CONTRACT:
+        raise PublishDataValidationError('正式生成清单缺少已发布论文快照指纹契约')
+    actual_snapshot = str(manifest.get('publishedPapersFingerprint') or '')
+    expected_snapshot = published_papers_fingerprint(published_papers)
+    if actual_snapshot != expected_snapshot:
+        raise PublishDataValidationError('正式生成清单已发布论文权威快照指纹不匹配')
+    return expected_input, expected_snapshot
 
 
 def generation_template_fingerprint():
@@ -3247,7 +3646,7 @@ def _validate_manifest_path_date(target, repo, date_str):
 def save_generation_manifest(
     date_str, publish_paths, *, input_fingerprint=None,
     template_fingerprint=None, base_head=None, category='论文速递',
-    published_papers=None,
+    published_papers=None, publish_all=False,
 ):
     """Save the exact generated/removed path list for the separate review step."""
     # Migrate every historical per-file pass before replacing batch-level
@@ -3264,14 +3663,16 @@ def save_generation_manifest(
             'deleted': not path.is_file(),
             'sha256': _sha256_file(path) if path.is_file() else None,
         })
+    validated_date = validate_publish_date(date_str)
+    validated_category = str(category or '论文速递')
     manifest = {
         'schemaVersion': 3 if input_fingerprint else 1,
-        'date': validate_publish_date(date_str),
+        'date': validated_date,
         'generatedAt': datetime.datetime.now(
             datetime.timezone(datetime.timedelta(hours=8))
         ).isoformat(),
         'files': records,
-        'category': str(category or '论文速递'),
+        'category': validated_category,
         # 视觉摘要属于远端发布成功后的独立阶段，不进入本次博客清单。
         'visualSummaryRequired': False,
         'digestCoverRequired': False,
@@ -3279,11 +3680,23 @@ def save_generation_manifest(
     if input_fingerprint:
         if not isinstance(published_papers, list) or not published_papers:
             raise PublishDataValidationError('正式 generation manifest 缺少已发布论文权威快照')
+        if not isinstance(publish_all, bool):
+            raise PublishDataValidationError('正式 generation manifest publishAll 必须是布尔值')
+        expected_input = generation_input_fingerprint(
+            published_papers, validated_date, validated_category, publish_all,
+        )
+        if input_fingerprint != expected_input:
+            raise PublishDataValidationError(
+                '拒绝保存无法从 publishedPapers 反向重算的 inputFingerprint'
+            )
         manifest.update({
             'inputFingerprint': input_fingerprint,
             'templateFingerprint': template_fingerprint,
             'baseHead': str(base_head or '').lower(),
+            'publishAll': publish_all,
             'publishedPapers': published_papers,
+            'publishedPapersFingerprintContract': PUBLISHED_PAPERS_FINGERPRINT_CONTRACT,
+            'publishedPapersFingerprint': published_papers_fingerprint(published_papers),
         })
     path = generation_manifest_path(date_str)
     atomic_write_json(path, manifest, ensure_ascii=False, indent=2)
@@ -3357,6 +3770,8 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
         raise PublishDataValidationError('生成清单仍使用旧版发布前视觉摘要契约，请重新运行 generate-blog.py')
     if manifest.get('digestCoverRequired') is not False:
         raise PublishDataValidationError('生成清单仍使用旧版发布前汇总封面契约，请重新运行 generate-blog.py')
+    if manifest.get('schemaVersion') == 3:
+        _validate_generation_input_integrity(manifest, date_str)
     repo = Path(repo or BLOG_REPO).expanduser().resolve()
     paper_ids = set()
     for record in manifest.get('files') or []:
@@ -3392,12 +3807,10 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
         published_papers = manifest.get('publishedPapers')
         if (
             not re.fullmatch(r'[0-9a-f]{64}', str(manifest.get('inputFingerprint') or ''))
-            or not isinstance(manifest.get('category'), str)
-            or not manifest['category'].strip()
             or not isinstance(published_papers, list)
             or not published_papers
         ):
-            raise PublishDataValidationError('正式生成清单缺少输入指纹、category 或已发布论文权威快照')
+            raise PublishDataValidationError('正式生成清单缺少输入指纹或已发布论文权威快照')
         snapshot_ids = []
         for paper in published_papers:
             if not isinstance(paper, dict):
@@ -3602,6 +4015,7 @@ def reusable_generation_manifest(
             or manifest.get('baseHead') != str(base_head).lower()
         ):
             return None
+        _validate_generation_input_integrity(manifest, date_str)
         repo = Path(BLOG_REPO).expanduser().resolve()
         paths = []
         records = manifest.get('files')
@@ -3639,6 +4053,179 @@ def reusable_generation_manifest(
         return paths, path
     except (KeyError, TypeError, PublishDataValidationError):
         return None
+
+
+def reusable_verified_publication_generation(
+    date_str, input_fingerprint, template_fingerprint, current_head,
+):
+    """Reuse an exact already-published generation without destroying its receipt.
+
+    The generation manifest records pre-review bytes, while the remote-verified
+    receipt records the bytes that actually passed review and were committed.
+    Consequently this check intentionally validates current files against the
+    receipt, then validates the immutable publication commit against that same
+    receipt.  It does not accept a changed input/template, a dirty manifest path,
+    an unrelated commit, or a merely local/unverified review receipt.
+    """
+    manifest_path = generation_manifest_path(date_str)
+    receipt_path = review_receipt_path(date_str)
+    if not manifest_path.is_file() or not receipt_path.is_file():
+        return None
+    try:
+        manifest = _load_json_object(manifest_path, '生成清单')
+        if (
+            manifest.get('schemaVersion') != 3
+            or manifest.get('date') != date_str
+            or manifest.get('inputFingerprint') != input_fingerprint
+            or manifest.get('templateFingerprint') != template_fingerprint
+        ):
+            return None
+        repo = Path(BLOG_REPO).expanduser().resolve()
+        validate_generation_visual_contract(manifest, date_str, repo)
+
+        receipt = _load_json_object(receipt_path, '审查凭证')
+        publication_commit = str(receipt.get('publicationCommit') or '').lower()
+        remote_oid = str(receipt.get('remoteVerifiedOid') or '').lower()
+        base_head = str(receipt.get('baseHead') or '').lower()
+        protocol = str(receipt.get('reviewProtocolFingerprint') or '').lower()
+        remote_name = receipt.get('remoteName')
+        remote_identity = str(receipt.get('remoteIdentitySha256') or '').lower()
+        remote_verified_at = receipt.get('remoteVerifiedAt')
+        if not re.fullmatch(
+            r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?\+08:00',
+            str(remote_verified_at or ''),
+        ):
+            return None
+        try:
+            verified_time = datetime.datetime.fromisoformat(str(remote_verified_at))
+        except (TypeError, ValueError):
+            return None
+        if (
+            receipt.get('schemaVersion') != 3
+            or receipt.get('date') != date_str
+            or receipt.get('strictReview') is not True
+            or receipt.get('hugoGate') != 'hugo'
+            or receipt.get('postPublishVisuals') != 'required'
+            or not re.fullmatch(r'[0-9a-f]{40,64}', publication_commit)
+            or remote_oid != publication_commit
+            or verified_time.utcoffset() != datetime.timedelta(hours=8)
+            or not re.fullmatch(r'[0-9a-f]{40,64}', base_head)
+            or manifest.get('baseHead') != base_head
+            or protocol != review_protocol_fingerprint()
+            or remote_name != GITHUB_REMOTE
+            or not re.fullmatch(r'[0-9a-f]{64}', remote_identity)
+            or receipt.get('generationManifestSha256') != _sha256_file(manifest_path)
+            or receipt.get('generationInputIntegrity') != PUBLISHED_PAPERS_FINGERPRINT_CONTRACT
+            or receipt.get('generationInputFingerprint') != manifest.get('inputFingerprint')
+            or receipt.get('publishedPapersFingerprint')
+            != manifest.get('publishedPapersFingerprint')
+        ):
+            return None
+
+        expectations = generation_manifest_expectations(manifest_path, date_str)
+        records = receipt.get('files')
+        if not isinstance(records, list) or not records:
+            return None
+        paths = []
+        seen = set()
+        for record in records:
+            if (
+                not isinstance(record, dict)
+                or not isinstance(record.get('path'), str)
+                or not isinstance(record.get('deleted'), bool)
+            ):
+                return None
+            relative = Path(record['path'])
+            if relative.is_absolute():
+                return None
+            target = (repo / relative).resolve()
+            normalized = _validate_manifest_path_date(target, repo, date_str)
+            if normalized in seen or normalized not in expectations:
+                return None
+            seen.add(normalized)
+            deleted = record['deleted']
+            sha = record.get('sha256')
+            if expectations[normalized] != deleted:
+                return None
+            if deleted:
+                if sha is not None:
+                    return None
+            elif not re.fullmatch(r'[0-9a-f]{64}', str(sha or '')):
+                return None
+            if _file_fingerprint(target) != {'deleted': deleted, 'sha256': sha}:
+                return None
+            paths.append(target)
+        if seen != set(expectations):
+            return None
+
+        if current_head != publication_commit:
+            return None
+        current_remote_identity, _identity_error = _remote_identity_sha256()
+        if current_remote_identity != remote_identity:
+            return None
+        current_remote_oid, _remote_error = _remote_main_oid()
+        if current_remote_oid != publication_commit:
+            return None
+        validate_git_commit_against_review_receipt(receipt, paths, publication_commit)
+        validate_manifest_clean_against_head(paths)
+        return paths, manifest_path, receipt_path
+    except (
+        KeyError, TypeError, ValueError, OSError, UnicodeError,
+        subprocess.CalledProcessError, PublishDataValidationError,
+    ):
+        return None
+
+
+def reusable_verified_publication_review(date_str, current_head):
+    """Return a still-current remote publication receipt for review idempotence."""
+    manifest_path = generation_manifest_path(date_str)
+    try:
+        manifest = _load_json_object(manifest_path, '生成清单')
+        input_fingerprint = manifest.get('inputFingerprint')
+        template_fingerprint = manifest.get('templateFingerprint')
+        if not re.fullmatch(r'[0-9a-f]{64}', str(input_fingerprint or '')):
+            return None
+        if not re.fullmatch(r'[0-9a-f]{64}', str(template_fingerprint or '')):
+            return None
+    except (OSError, UnicodeError, PublishDataValidationError):
+        return None
+    return reusable_verified_publication_generation(
+        date_str, input_fingerprint, template_fingerprint, current_head,
+    )
+
+
+def has_publication_evidence_for_generation(
+    date_str, input_fingerprint=None, template_fingerprint=None,
+):
+    """Detect publication evidence that must never be silently overwritten.
+
+    This deliberately treats an unreadable same-date receipt as evidence when
+    the generation itself still matches.  A network outage, changed remote, or
+    damaged receipt must stop the stage and preserve the only possible remote
+    attestation for operator inspection.
+    """
+    manifest_path = generation_manifest_path(date_str)
+    receipt_path = review_receipt_path(date_str)
+    if not manifest_path.is_file() or not receipt_path.exists():
+        return False
+    try:
+        manifest = _load_json_object(manifest_path, '生成清单')
+    except (OSError, UnicodeError, PublishDataValidationError):
+        return True
+    if manifest.get('schemaVersion') != 3 or manifest.get('date') != date_str:
+        return False
+    if input_fingerprint is not None and manifest.get('inputFingerprint') != input_fingerprint:
+        return False
+    if template_fingerprint is not None and manifest.get('templateFingerprint') != template_fingerprint:
+        return False
+    try:
+        receipt = _load_json_object(receipt_path, '审查凭证')
+    except (OSError, UnicodeError, PublishDataValidationError):
+        return True
+    return any(receipt.get(field) for field in (
+        'publicationCommit', 'remoteVerifiedOid', 'remoteVerifiedAt',
+        'remoteIdentitySha256',
+    ))
 
 
 def save_review_receipt(
@@ -3709,6 +4296,14 @@ def save_review_receipt(
     )
     generation_payload = _load_json_object(generation_manifest, '生成清单')
     generation_schema = generation_payload.get('schemaVersion')
+    if generation_schema == 3:
+        validate_generation_visual_contract(generation_payload, date_str, repo)
+        generation_input_fingerprint_value, published_snapshot_fingerprint = (
+            _validate_generation_input_integrity(generation_payload, date_str)
+        )
+    else:
+        generation_input_fingerprint_value = None
+        published_snapshot_fingerprint = None
     post_publish_visuals = (
         'required' if generation_schema == 3 else 'not_applicable_legacy_maintenance'
     )
@@ -3729,6 +4324,11 @@ def save_review_receipt(
         'generationManifestSha256': (
             _sha256_file(generation_manifest) if generation_manifest is not None else None
         ),
+        'generationInputIntegrity': (
+            PUBLISHED_PAPERS_FINGERPRINT_CONTRACT if generation_schema == 3 else None
+        ),
+        'generationInputFingerprint': generation_input_fingerprint_value,
+        'publishedPapersFingerprint': published_snapshot_fingerprint,
         # Explicitly bind whether this reviewed generation can enter the modern
         # post-publication visual state machine. The generation SHA remains the
         # cryptographic source of truth; this field makes maintenance intent
@@ -4058,6 +4658,13 @@ def load_verified_review_receipt(date_str):
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PublishDataValidationError('generation manifest 无法解析') from exc
     validate_generation_visual_contract(generation_manifest, date_str)
+    if generation_manifest.get('schemaVersion') == 3 and (
+        receipt.get('generationInputIntegrity') != PUBLISHED_PAPERS_FINGERPRINT_CONTRACT
+        or receipt.get('generationInputFingerprint') != generation_manifest.get('inputFingerprint')
+        or receipt.get('publishedPapersFingerprint')
+        != generation_manifest.get('publishedPapersFingerprint')
+    ):
+        raise PublishDataValidationError('审查凭证未绑定已反向验证的 generation 输入快照')
     expected_visual_capability = (
         'required' if generation_manifest.get('schemaVersion') == 3
         else 'not_applicable_legacy_maintenance'
@@ -4293,6 +4900,7 @@ def generate_main(options=None):
 
     try:
         papers = validate_papers_for_publish(papers)
+        papers = apply_publish_image_exclusions(papers)
     except PublishDataValidationError as exc:
         print(f"\n❌ 发布数据预检失败，未生成任何博客文件：\n{exc}")
         sys.exit(1)
@@ -4302,6 +4910,27 @@ def generate_main(options=None):
     input_fingerprint = generation_input_fingerprint(papers, today, category, publish_all)
     template_fingerprint = generation_template_fingerprint()
     base_head = validate_git_publish_branch()
+    published_reusable = reusable_verified_publication_generation(
+        today, input_fingerprint, template_fingerprint, base_head,
+    )
+    if published_reusable is not None:
+        _publish_paths, manifest_path, receipt_path = published_reusable
+        generation_journal_path(today).unlink(missing_ok=True)
+        shutil.rmtree(generation_stage_path(today).parent, ignore_errors=True)
+        print(
+            '♻️ 相同非空批次已由远端验证发布，复用 generation 并保留唯一发布凭证: '
+            f'{receipt_path}'
+        )
+        print(f'🧾 生成清单保持不变: {manifest_path}')
+        return
+    if has_publication_evidence_for_generation(
+        today, input_fingerprint, template_fingerprint,
+    ):
+        raise PublishDataValidationError(
+            '相同 generation 已存在发布证据，但当前协议、文件、提交或实时 remote/OID '
+            '无法全部复核；已保留既有 generation/receipt，拒绝重新生成覆盖。'
+            '请先恢复网络与原 remote，或人工核查证据漂移'
+        )
     reusable = reusable_generation_manifest(
         today, input_fingerprint, template_fingerprint, base_head,
     )
@@ -4382,6 +5011,7 @@ def generate_main(options=None):
         base_head=base_head,
         category=category,
         published_papers=papers,
+        publish_all=publish_all,
     )
     generation_journal_path(today).unlink(missing_ok=True)
     shutil.rmtree(generation_stage_path(today).parent, ignore_errors=True)

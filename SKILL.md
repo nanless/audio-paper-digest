@@ -91,6 +91,7 @@ description: >
 筛选统一调用 `PAPER_ANALYZER_*` 指定的 LLM：
 
 - endpoint: `PAPER_ANALYZER_ENDPOINT`（必填）
+- endpoint 必须使用 HTTPS；HTTP 只允许 `localhost` / `*.localhost` / `127.0.0.0/8` / `::1` 上的本地测试服务，公网明文 HTTP 在附加认证头前即被拒绝；Python 发布阶段的 `publish_common.py` 执行同一门禁
 - key: `PAPER_ANALYZER_API_KEY`（必填）
 - model: `PAPER_ANALYZER_MODEL`（必填）
 - **API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动判断使用 OpenAI 还是 Anthropic 协议；完整优先级见第 4.2 节，DeepSeek 强制 OpenAI，MiMo Token Plan、Kimi Coding Plan（含 `k3`）及非 DeepSeek 的 `/anthropic` 走 Anthropic
@@ -250,8 +251,15 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 # PD_FILTER_BATCH_SIZE=5
 # arXiv 每类抓取数量
 # PD_ARXIV_MAX_RESULTS=100
+# PD_ARXIV_FETCH_MAX_RETRIES=5
+# PD_ARXIV_FETCH_RETRY_BASE_DELAY_MS=5000
+# PD_ARXIV_RATE_LIMIT_BASE_DELAY_MS=60000
+# PD_ARXIV_FETCH_MAX_WAIT_MS=600000
 # 单类 HTTP 429 累计退避上限（毫秒）
 # PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS=120000
+# PD_ARXIV_METADATA_TIMEOUT_MS=60000
+# PD_ARXIV_METADATA_MAX_BYTES=8388608
+# PD_ARXIV_USER_AGENT=paper-digest/1.0
 # PDF fallback 最大字节数
 # PD_ARXIV_PDF_MAX_BYTES=52428800
 # PD_SCORING_AUDIT_TEMPERATURE=0.1
@@ -386,8 +394,10 @@ npm run xiaohongshu -- --date 2026-04-22
   - 单篇页：`YYYY-MM-DD-<slug>.md`
 - `generate-blog.py` 在日期级跨进程锁内逐页生成、安装并写 journal；崩溃后可收养已完成的同 SHA 页面，全部论文完成后才生成汇总页和严格 generation manifest，禁止 review/commit/push
 - `review-blog.py` 在同一日期锁内逐文件审查，checkpoint 绑定 worker 实际读取的 SHA；每个通过项立即写入按日期隔离的持久账本，以博客仓库相对路径 + SHA-256 复用。代码、脚本、文档、模型、协议、generation manifest 或博客基线变化只要求重建整批 receipt，不得重审 SHA 未变的页面；只审查新增、字节变化、瞬时失败或内容失败修复后的文件。应存在页面消失或 Hugo 前后 SHA 变化仍阻断凭证；禁止 commit/push
+- 完全相同的非空 generation 只有在当前 review 协议、文件、发布提交、remote 名称/push URL 哈希身份及实时远端 `main` OID 全部仍匹配时才保留既有严格发布凭证；网络失败、远端漂移或 `origin` 换仓一律 fail closed
 - review 的 HTTP 重试优先使用 `Retry-After`，否则指数退避并加短抖动；协议格式修复和完整协议重试使用收紧的独立预算。对仅有隐藏推理、没有最终 JSON 的 `length/max_tokens` 响应，仅追加纯 JSON 指令并恢复一次，默认从 4000 提到最多 8000，再失败不继续翻倍。代码预检先去除完全重复长段落，并阻断表格列数不一致和疑似在单词中途截断的超长图片说明；合法空分组列续行不得删除
 - `push-blog.py` 验证审查凭证和当前文件哈希，并在 Git 变更前完成视觉能力 preflight；标准日更拒绝 schema v1/v2，显式历史维护 push 跳过视觉并报告 N/A。随后精确 stage，并在 commit 前逐项校验 index blob SHA/删除状态，再提交、推送并核对远端 OID；禁止重新生成或 review
+- push 成功后 receipt 同时保存当前 Git remote 名称和 push URL 的 SHA-256 身份，防止同名 remote 被换仓后继续信任旧发布证据
 - 三阶段除日期锁外还共享博客仓库级全局锁，防止不同日期并发污染共同的 worktree、index、HEAD 或回滚状态
 - **三个阶段及兼容 `publish-to-blog.py` 必须在沙箱外运行**：入口检测到可靠沙箱标志 `CODEX_SANDBOX` 会立即拒绝执行；沙箱外权限包装会保留网络禁用环境标志，不能据此误拒绝。原因是 review 会直连 LLM、下载图片并运行 Hugo，push 需要真实 Git 网络；不得在沙箱内跳过 review、伪造凭证或改用无网络降级路径。
 - 若需发布全部论文（不过滤），显式传 `--all`
@@ -400,6 +410,7 @@ Agent 执行约束：
 发布前保障：
 
 - `full-fetch.js` 每天运行时会自动归档移走昨天的 `deep-analysis-result.json`、`filtered-papers.json` 和 `analyzed.json`，确保 `data/current/` 下只有当天新抓取的论文
+- `digest:status --date` 对历史日期可回退同日 archive，但必须实际取得 raw/decisions/filtered/deep，并校验 decisions 精确覆盖 raw、filtered 精确等于 `related=true` 扣除显式排除项、全部论文属于目标批次且 deep 无混批；不得仅凭汇总统计推导完整状态。当前日期仍只认 current
 - 发布默认优先按 `fetchBatchDate`/`batchDate`、旧数据回退严格北京时间 `fetchedAt` 的 `--date` 过滤；仍需保持 `data/current/` 干净，避免 review、校验和显式 `--all` 发布时混入不同批次
 
 ### 重跑/修复当天的正确姿势

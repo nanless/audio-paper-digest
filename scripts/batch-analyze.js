@@ -19,7 +19,7 @@ const {
     getCanonicalAnalysisRunSummary,
     getAnalysisExitCode
 } = require('./analysis-engine.js');
-const { updateAnalysisDigestStatuses } = require('./digest-status.js');
+const { updateAnalysisDigestStatuses, inferAnalysisBatchDate } = require('./digest-status.js');
 const Config = require('./config.js');
 
 loadEnvFile();
@@ -32,10 +32,11 @@ function finalizeBatchZeroWorkState(resultPath, fallbackBatchDate) {
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
         const { remaining, success, status } = getCanonicalAnalysisRunSummary(currentPapers);
         const now = getBeijingISOString();
-        const batchDate = String(
-            (!Array.isArray(current) && (current?.batchDate || current?.timestamp || current?.lastUpdated))
-            || fallbackBatchDate || now
-        ).slice(0, 10);
+        const batchDate = inferAnalysisBatchDate(
+            currentPapers,
+            Array.isArray(current) ? {} : current,
+            fallbackBatchDate || now
+        );
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             papers: currentPapers,
@@ -71,10 +72,11 @@ async function main() {
     const data = readJsonFileStrict(RESULT_FILE);
 
     const papers = Array.isArray(data) ? data : (data.papers || []);
-    const batchDate = String(
-        (!Array.isArray(data) && (data.batchDate || data.timestamp || data.lastUpdated))
-        || getBeijingISOString()
-    ).slice(0, 10);
+    const batchDate = inferAnalysisBatchDate(
+        papers,
+        Array.isArray(data) ? {} : data,
+        getBeijingISOString()
+    );
     console.log(`总论文数: ${papers.length}`);
 
     const notAnalyzed = papers.filter(p => !isSuccessfulAnalysisRecord(p));

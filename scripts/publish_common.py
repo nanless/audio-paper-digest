@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -600,8 +601,49 @@ def detect_publish_api_type(endpoint, model):
     return 'openai'
 
 
+def _is_publish_loopback_hostname(hostname):
+    normalized = str(hostname or '').lower().strip('[]')
+    if normalized == 'localhost' or normalized.endswith('.localhost') or normalized == '::1':
+        return True
+    if not re.fullmatch(r'(?:\d{1,3}\.){3}\d{1,3}', normalized):
+        return False
+    octets = [int(part) for part in normalized.split('.')]
+    return all(0 <= octet <= 255 for octet in octets) and octets[0] == 127
+
+
+def validate_publish_api_endpoint_url(endpoint):
+    """只允许 HTTPS；明文 HTTP 仅供 loopback 本地测试服务。"""
+    try:
+        parsed = urllib.parse.urlsplit(endpoint)
+        # Accessing these properties also rejects malformed brackets and ports.
+        hostname = parsed.hostname
+        _ = parsed.port
+        username = parsed.username
+        password = parsed.password
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError(
+            'LLM endpoint 必须是完整的 HTTPS URL（本地测试可用 loopback HTTP）'
+        ) from exc
+
+    if not parsed.scheme or not hostname:
+        raise ValueError('LLM endpoint 必须是完整的 HTTPS URL（本地测试可用 loopback HTTP）')
+    if username is not None or password is not None:
+        raise ValueError('LLM endpoint 禁止包含 URL userinfo 凭据')
+
+    protocol = parsed.scheme.lower()
+    if protocol == 'https':
+        return parsed
+    if protocol == 'http' and _is_publish_loopback_hostname(hostname):
+        return parsed
+    raise ValueError(
+        f'LLM endpoint 禁止使用公网明文 {protocol or "协议"}；'
+        '请改用 HTTPS，本地 HTTP 仅允许 loopback 地址'
+    )
+
+
 def build_publish_api_url(api_type, endpoint):
     """根据协议构造最终 LLM 请求 URL。"""
+    validate_publish_api_endpoint_url(endpoint)
     base = (endpoint or '').rstrip('/')
     if api_type == 'anthropic':
         if 'xiaomimimo.com' in base:
@@ -723,7 +765,15 @@ def call_publish_llm_api(
         return None
 
     api_type = detect_publish_api_type(endpoint, model)
-    api_url = build_publish_api_url(api_type, endpoint)
+    try:
+        # 安全校验必须先于任何包含 API key 的 header 或 Request 构造。
+        api_url = build_publish_api_url(api_type, endpoint)
+    except ValueError as exc:
+        message = f'{context} 的 LLM endpoint 配置不安全: {exc}'
+        if required:
+            raise PublishLLMUnavailable(message) from exc
+        print(f'  ⚠️  {message}，跳过')
+        return None
     headers = build_publish_headers(api_type, api_key)
     last_error = None
     current_max_tokens = max(1, int(max_tokens))

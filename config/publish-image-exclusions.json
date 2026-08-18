@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "exclusions": [
+    {
+      "normalizedArxivId": "2608.13610",
+      "url": "https://arxiv.org/html/2608.13610v1/Fig/intro_1.jpg",
+      "reason": "图片内含 “Manul debugging” 拼写错误"
+    }
+  ]
+}

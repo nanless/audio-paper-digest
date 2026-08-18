@@ -39,6 +39,7 @@ const MIN_ASSET_WIDTH = 768;
 const MIN_ASSET_HEIGHT = 1024;
 const MIN_PORTRAIT_RATIO = 1.25;
 const MAX_REFERENCE_IMAGES = 2;
+const PUBLISHED_PAPERS_FINGERPRINT_CONTRACT = 'typed-json-f64-utf16-v1';
 const REFERENCE_MIME_EXTENSIONS = Object.freeze({
     'image/png': '.png',
     'image/jpeg': '.jpg',
@@ -129,6 +130,39 @@ function stableSha256(value) {
     return sha256Buffer(Buffer.from(JSON.stringify(stableJson(value)), 'utf8'));
 }
 
+function portableFingerprintValue(value, label = 'publishedPapers') {
+    if (value === null) return ['null'];
+    if (typeof value === 'boolean') return ['boolean', value];
+    if (typeof value === 'string') return ['string', value];
+    if (typeof value === 'number') {
+        if (!Number.isFinite(value)) throw new Error(`${label} 包含非有限数值`);
+        if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
+            throw new Error(`${label} 包含超出 JSON 安全范围的整数`);
+        }
+        const raw = Buffer.allocUnsafe(8);
+        raw.writeDoubleBE(value, 0);
+        return ['number-f64', raw.toString('hex')];
+    }
+    if (Array.isArray(value)) {
+        return ['array', value.map((item, index) => (
+            portableFingerprintValue(item, `${label}[${index}]`)
+        ))];
+    }
+    if (value && typeof value === 'object') {
+        return ['object', Object.keys(value).sort().map(key => [
+            key, portableFingerprintValue(value[key], `${label}.${key}`)
+        ])];
+    }
+    throw new Error(`${label} 包含不可序列化类型: ${typeof value}`);
+}
+
+function publishedPapersFingerprint(publishedPapers) {
+    if (!Array.isArray(publishedPapers) || publishedPapers.length === 0) {
+        throw new Error('generation manifest 缺少已发布论文权威快照');
+    }
+    return stableSha256(portableFingerprintValue(publishedPapers));
+}
+
 function validateDate(value) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) {
         throw new Error(`日期必须为 YYYY-MM-DD: ${JSON.stringify(value)}`);
@@ -191,6 +225,9 @@ function assertPublishedBlogReceipt(targetDate, receiptPath = null) {
         || generation.schemaVersion !== 3 || generation.date !== targetDate
         || generation.visualSummaryRequired !== false || generation.digestCoverRequired !== false
         || !/^[0-9a-f]{64}$/i.test(String(generation.inputFingerprint || ''))
+        || typeof generation.publishAll !== 'boolean'
+        || generation.publishedPapersFingerprintContract !== PUBLISHED_PAPERS_FINGERPRINT_CONTRACT
+        || !/^[0-9a-f]{64}$/i.test(String(generation.publishedPapersFingerprint || ''))
         || typeof generation.category !== 'string' || !generation.category
         || !Array.isArray(publishedPapers) || publishedPapers.length === 0) {
         throw new Error('博客发布凭证与 generation manifest 或已发布论文快照不一致');
@@ -198,6 +235,14 @@ function assertPublishedBlogReceipt(targetDate, receiptPath = null) {
     const ids = publishedPapers.map(normalizedId);
     if (ids.some(id => !id) || new Set(ids).size !== ids.length) {
         throw new Error('generation manifest 的已发布论文快照包含空或重复 ID');
+    }
+    publishedPapers.forEach(validatePublishImageExclusions);
+    const snapshotFingerprint = publishedPapersFingerprint(publishedPapers);
+    if (snapshotFingerprint !== generation.publishedPapersFingerprint
+        || receipt.generationInputIntegrity !== PUBLISHED_PAPERS_FINGERPRINT_CONTRACT
+        || receipt.generationInputFingerprint !== generation.inputFingerprint
+        || receipt.publishedPapersFingerprint !== snapshotFingerprint) {
+        throw new Error('博客发布凭证未绑定可反向验证的已发布论文权威快照');
     }
     return {
         path: resolved,
@@ -244,15 +289,62 @@ function visualReferenceCachePaths(url) {
     return { data: path.join(root, `${key}.bin`), meta: path.join(root, `${key}.json`) };
 }
 
+function validatePublishImageExclusions(paper) {
+    const paperId = normalizedId(paper);
+    const rawEntries = paper?.publishImageExclusions;
+    if (rawEntries === undefined) return [];
+    if (!Array.isArray(rawEntries)) {
+        throw new Error(`${paperId}.publishImageExclusions 必须是数组`);
+    }
+    const seen = new Set();
+    return rawEntries.map((entry, index) => {
+        const label = `${paperId}.publishImageExclusions[${index}]`;
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)
+            || Object.keys(entry).sort().join(',') !== 'normalizedArxivId,reason,url') {
+            throw new Error(`${label} 必须且只能包含 normalizedArxivId/url/reason`);
+        }
+        const entryId = entry.normalizedArxivId;
+        if (typeof entryId !== 'string' || entryId !== normalizedId(entryId) || entryId !== paperId) {
+            throw new Error(`${label}.normalizedArxivId 必须是当前论文的规范化 arXiv ID`);
+        }
+        const url = entry.url;
+        let parsed;
+        try {
+            parsed = new URL(url);
+        } catch (error) {
+            throw new Error(`${label}.url 非法`);
+        }
+        if (typeof url !== 'string' || url !== url.trim() || /[\u0000-\u0020]/.test(url)
+            || !url.startsWith('https://') || parsed.protocol !== 'https:'
+            || !parsed.hostname || parsed.username || parsed.password) {
+            throw new Error(`${label}.url 必须是无 userinfo 的精确 HTTPS URL`);
+        }
+        if (typeof entry.reason !== 'string' || !entry.reason.trim()) {
+            throw new Error(`${label}.reason 必须是非空字符串`);
+        }
+        if (seen.has(url)) throw new Error(`${paperId}.publishImageExclusions URL 重复`);
+        seen.add(url);
+        return {
+            normalizedArxivId: entryId,
+            url,
+            reason: entry.reason.trim()
+        };
+    });
+}
+
 function selectVisualReferenceImages(paper, limit = MAX_REFERENCE_IMAGES) {
     if (!Number.isInteger(limit) || limit < 0 || limit > MAX_REFERENCE_IMAGES) {
         throw new Error(`论文视觉参考图数量非法: ${limit}`);
     }
+    const excludedUrls = new Set(
+        validatePublishImageExclusions(paper).map(entry => entry.url)
+    );
     const manifest = paper?.imageManifest || {};
     const selected = [...new Set([
         ...(Array.isArray(paper?.selectedImageUrls) ? paper.selectedImageUrls : []),
         ...(Array.isArray(manifest.selected) ? manifest.selected : [])
-    ].map(value => String(value || '').trim()).filter(Boolean))];
+    ].map(value => String(value || '').trim()).filter(Boolean))]
+        .filter(url => !excludedUrls.has(url));
     const candidates = new Map((Array.isArray(manifest.candidates) ? manifest.candidates : [])
         .filter(item => item && typeof item.url === 'string')
         .map(item => [item.url, item]));
@@ -491,6 +583,7 @@ function analysisSha256(paper) {
         analysisSource: paper.analysisSource || null,
         analysisSourceSha256: paper.analysisSourceSha256 || paper.sourceSha256 || null,
         scoringAudit: paper.analysisManifest?.stages?.scoringAudit || null,
+        publishImageExclusions: validatePublishImageExclusions(paper),
         renderingContract: RENDERING_CONTRACT,
         visualReferenceImages: selectVisualReferenceImages(paper).map(item => ({
             role: item.role,
@@ -1675,6 +1768,8 @@ module.exports = {
     assertSafeAssetTarget,
     validatePngBuffer,
     extractGeneratedImagePathFromHint,
+    validatePublishImageExclusions,
+    publishedPapersFingerprint,
     selectVisualReferenceImages,
     validateReferenceImageBytes,
     prepareVisualReferenceInputs,
