@@ -25,7 +25,9 @@ const {
     analysisManifestRequiresExperimentTableContract,
     analysisManifestRequiresMethodDetailContract,
     REQUIRED_RECOVERY_STAGES,
-    isRecoveryStageTerminal
+    isRecoveryStageTerminal,
+    MANUAL_COMPLETE_STATUS,
+    validateManualTakeoverManifest
 } = require('./analysis-contract.js');
 const { getCanonicalAnalysisRunSummary } = require('./analysis-engine.js');
 
@@ -34,7 +36,8 @@ const ALLOWED_ANALYSIS_ATTEMPT_STATUSES = new Set(['analyzed', 'analysis_failed'
 const ALLOWED_FILTERED_STATUSES = new Set(['filtering', 'filter_complete', 'complete', 'source_partial_failed']);
 const ALLOWED_RECOVERY_STAGE_STATUSES = new Set([
     'pending', 'complete', 'not_needed', 'skipped', 'no_candidates',
-    'no_high_value_images', 'no_downloadable_images', 'transient_failure', 'invalid_output', 'contract_rejected'
+    'no_high_value_images', 'no_downloadable_images', 'transient_failure', 'invalid_output', 'contract_rejected',
+    MANUAL_COMPLETE_STATUS
 ]);
 const DEFAULT_FILTER_DECISIONS_FILE = Config.FILES.filterDecisions;
 const DEFAULT_FETCH_CHECKPOINT_FILE = Config.FILES.fetchCheckpoint;
@@ -338,6 +341,9 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
     if (manifest.sourceAcquisition !== undefined) {
         validateAnalysisSourceProvenance(filePath, manifest.sourceAcquisition, `${prefix}.sourceAcquisition`, issues);
     }
+    const sourceSha256 = manifest.sourceAcquisition?.sourceSha256 || '';
+    const manualTakeoverIssue = validateManualTakeoverManifest(manifest, sourceSha256);
+    if (manualTakeoverIssue) addIssue(issues, filePath, `${prefix} ${manualTakeoverIssue}`);
     if (manifest.contracts !== undefined) {
         if (!isPlainObject(manifest.contracts)) {
             addIssue(issues, filePath, `${prefix}.contracts 必须是对象`);
@@ -377,6 +383,9 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
         }
         if (state.error !== undefined && typeof state.error !== 'string') {
             addIssue(issues, filePath, `${prefix}.stages.${stage}.error 必须是字符串`);
+        }
+        if (state.status === MANUAL_COMPLETE_STATUS && !manifest.manualTakeover) {
+            addIssue(issues, filePath, `${prefix}.stages.${stage} 使用 manual_complete 但缺少 manifest.manualTakeover`);
         }
     }
     if (options.requireComplete) {

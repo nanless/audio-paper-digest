@@ -50,22 +50,23 @@ const NON_EMPIRICAL_DOCUMENT_TYPES = new Set(['综述', '理论研究']);
 const EXPERIMENT_TABLE_CONTRACT_VERSION = 'bounded-v1';
 const METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1';
 const ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION = 'high-confidence-v1';
+const MANUAL_COMPLETE_STATUS = 'manual_complete';
 const REQUIRED_RECOVERY_STAGES = Object.freeze([
     'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
     'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
 ]);
 const RECOVERY_STAGE_TERMINAL_STATUSES = Object.freeze({
-    imageDiscovery: Object.freeze(['complete', 'no_candidates']),
-    imageDownload: Object.freeze(['complete', 'skipped', 'no_candidates', 'no_downloadable_images']),
-    primaryAnalysis: Object.freeze(['complete']),
-    openSourceScan: Object.freeze(['complete']),
-    demoLinkScan: Object.freeze(['complete', 'not_needed']),
-    revision: Object.freeze(['complete']),
-    tableRepair: Object.freeze(['complete', 'not_needed']),
-    methodRepair: Object.freeze(['complete', 'not_needed']),
-    structureRepair: Object.freeze(['complete', 'not_needed']),
-    scoringAudit: Object.freeze(['complete']),
-    imageSupplement: Object.freeze(['complete', 'skipped', 'no_candidates', 'no_high_value_images', 'no_downloadable_images'])
+    imageDiscovery: Object.freeze(['complete', 'no_candidates', MANUAL_COMPLETE_STATUS]),
+    imageDownload: Object.freeze(['complete', 'skipped', 'no_candidates', 'no_downloadable_images', MANUAL_COMPLETE_STATUS]),
+    primaryAnalysis: Object.freeze(['complete', MANUAL_COMPLETE_STATUS]),
+    openSourceScan: Object.freeze(['complete', MANUAL_COMPLETE_STATUS]),
+    demoLinkScan: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
+    revision: Object.freeze(['complete', MANUAL_COMPLETE_STATUS]),
+    tableRepair: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
+    methodRepair: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
+    structureRepair: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
+    scoringAudit: Object.freeze(['complete', MANUAL_COMPLETE_STATUS]),
+    imageSupplement: Object.freeze(['complete', 'skipped', 'no_candidates', 'no_high_value_images', 'no_downloadable_images', MANUAL_COMPLETE_STATUS])
 });
 const EXPERIMENT_TABLE_LIMITS = Object.freeze({
     maxTables: 2,
@@ -338,6 +339,45 @@ function isRecoveryStageTerminal(stage, status) {
     return Boolean(RECOVERY_STAGE_TERMINAL_STATUSES[stage]?.includes(status));
 }
 
+function validateManualTakeoverManifest(manifest, sourceSha256 = '') {
+    const manualStatuses = Object.values(manifest?.stages || {})
+        .some(stage => stage?.status === MANUAL_COMPLETE_STATUS);
+    if (!manualStatuses && manifest?.manualTakeover === undefined) return null;
+    const takeover = manifest?.manualTakeover;
+    if (!takeover || typeof takeover !== 'object' || Array.isArray(takeover)) {
+        return 'manual_complete 阶段缺少 manualTakeover provenance';
+    }
+    if (takeover.version !== 1 || takeover.mode !== MANUAL_COMPLETE_STATUS) {
+        return 'manualTakeover.version/mode 非法';
+    }
+    if (typeof takeover.agent !== 'string' || !takeover.agent.trim()) {
+        return 'manualTakeover.agent 缺失';
+    }
+    if (takeover.basis !== 'full_text') {
+        return 'manualTakeover.basis 必须为 full_text';
+    }
+    if (!/^[a-f0-9]{64}$/.test(String(takeover.sourceSha256 || ''))) {
+        return 'manualTakeover.sourceSha256 必须是 SHA-256';
+    }
+    if (sourceSha256 && takeover.sourceSha256 !== sourceSha256) {
+        return 'manualTakeover.sourceSha256 与来源 SHA 不一致';
+    }
+    if (typeof takeover.completedAt !== 'string'
+        || !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?\+08:00$/.test(takeover.completedAt)) {
+        return 'manualTakeover.completedAt 必须是北京时间 ISO 时间';
+    }
+    if (typeof takeover.reason !== 'string' || takeover.reason.trim().length < 20) {
+        return 'manualTakeover.reason 过短';
+    }
+    const review = takeover.review;
+    if (!review || typeof review !== 'object' || review.sourceVerified !== true
+        || review.analysisContractVerified !== true || review.scoringVerified !== true
+        || review.stageEvidenceVerified !== true) {
+        return 'manualTakeover.review 必须确认来源、正文、评分和阶段证据';
+    }
+    return null;
+}
+
 function validateTopLevelSectionContract(analysis) {
     const headings = [...String(analysis || '').matchAll(/^##(?!#)\s*([^\n]+?)\s*$/gm)]
         .map(match => match[1].replace(/[：:]\s*$/, '').trim());
@@ -521,6 +561,7 @@ module.exports = {
     ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION,
     REQUIRED_RECOVERY_STAGES,
     RECOVERY_STAGE_TERMINAL_STATUSES,
+    MANUAL_COMPLETE_STATUS,
     EXPERIMENT_TABLE_LIMITS,
     splitMarkdownTableRow,
     extractMarkdownTables,
@@ -529,6 +570,7 @@ module.exports = {
     validateMethodDetailContract,
     analysisManifestRequiresMethodDetailContract,
     isRecoveryStageTerminal,
+    validateManualTakeoverManifest,
     getInvalidAnalysisReason
 };
 

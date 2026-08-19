@@ -68,6 +68,7 @@ MANUAL_OVERRIDE_ALLOWED_FIELDS = frozenset(SCORING_COMPARE_FIELDS)
 MANUAL_OVERRIDE_KEYS = frozenset({'type', 'source', 'reason', 'fields'})
 EXPERIMENT_TABLE_CONTRACT_VERSION = 'bounded-v1'
 METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1'
+MANUAL_COMPLETE_STATUS = 'manual_complete'
 EXPERIMENT_TABLE_LIMITS = {
     'max_tables': 2,
     'max_data_rows': 12,
@@ -87,6 +88,39 @@ def _extract_analysis_section(text, title):
         str(text or ''),
     )
     return match.group(1).strip() if match else ''
+
+
+def _validate_manual_takeover_manifest(paper, manifest, paper_label):
+    stages = manifest.get('stages') if isinstance(manifest, dict) else {}
+    uses_manual = any(
+        isinstance(stage, dict) and stage.get('status') == MANUAL_COMPLETE_STATUS
+        for stage in (stages or {}).values()
+    )
+    if not uses_manual and manifest.get('manualTakeover') is None:
+        return
+    takeover = manifest.get('manualTakeover')
+    if not isinstance(takeover, dict):
+        raise PublishDataValidationError(f'{paper_label} manual_complete 缺少 manualTakeover provenance')
+    if takeover.get('version') != 1 or takeover.get('mode') != MANUAL_COMPLETE_STATUS:
+        raise PublishDataValidationError(f'{paper_label} manualTakeover.version/mode 非法')
+    if not isinstance(takeover.get('agent'), str) or not takeover['agent'].strip():
+        raise PublishDataValidationError(f'{paper_label} manualTakeover.agent 缺失')
+    if takeover.get('basis') != 'full_text':
+        raise PublishDataValidationError(f'{paper_label} manualTakeover.basis 必须为 full_text')
+    source_sha = str(paper.get('sourceSha256') or manifest.get('sourceAcquisition', {}).get('sourceSha256') or '')
+    if not re.fullmatch(r'[a-f0-9]{64}', str(takeover.get('sourceSha256') or '')):
+        raise PublishDataValidationError(f'{paper_label} manualTakeover.sourceSha256 非法')
+    if source_sha and takeover['sourceSha256'] != source_sha:
+        raise PublishDataValidationError(f'{paper_label} manualTakeover.sourceSha256 与全文来源不一致')
+    completed_at = takeover.get('completedAt')
+    if not isinstance(completed_at, str) or not BEIJING_TIMESTAMP_RE.fullmatch(completed_at):
+        raise PublishDataValidationError(f'{paper_label} manualTakeover.completedAt 必须是北京时间 ISO 时间')
+    if not isinstance(takeover.get('reason'), str) or len(takeover['reason'].strip()) < 20:
+        raise PublishDataValidationError(f'{paper_label} manualTakeover.reason 过短')
+    review = takeover.get('review')
+    required_review = ('sourceVerified', 'analysisContractVerified', 'scoringVerified', 'stageEvidenceVerified')
+    if not isinstance(review, dict) or any(review.get(key) is not True for key in required_review):
+        raise PublishDataValidationError(f'{paper_label} manualTakeover.review 未确认来源、正文、评分和阶段证据')
 
 
 def split_markdown_table_row(row):
@@ -481,18 +515,18 @@ def validate_papers_for_publish(papers):
                     'scoringAudit', 'imageSupplement',
                 )
                 terminal_statuses = {
-                    'imageDownload': {'complete', 'skipped', 'no_candidates', 'no_downloadable_images'},
-                    'primaryAnalysis': {'complete'},
-                    'openSourceScan': {'complete'},
-                    'demoLinkScan': {'complete', 'not_needed'},
-                    'revision': {'complete'},
-                    'tableRepair': {'complete', 'not_needed'},
-                    'methodRepair': {'complete', 'not_needed'},
-                    'structureRepair': {'complete', 'not_needed'},
-                    'scoringAudit': {'complete'},
+                    'imageDownload': {'complete', 'skipped', 'no_candidates', 'no_downloadable_images', MANUAL_COMPLETE_STATUS},
+                    'primaryAnalysis': {'complete', MANUAL_COMPLETE_STATUS},
+                    'openSourceScan': {'complete', MANUAL_COMPLETE_STATUS},
+                    'demoLinkScan': {'complete', 'not_needed', MANUAL_COMPLETE_STATUS},
+                    'revision': {'complete', MANUAL_COMPLETE_STATUS},
+                    'tableRepair': {'complete', 'not_needed', MANUAL_COMPLETE_STATUS},
+                    'methodRepair': {'complete', 'not_needed', MANUAL_COMPLETE_STATUS},
+                    'structureRepair': {'complete', 'not_needed', MANUAL_COMPLETE_STATUS},
+                    'scoringAudit': {'complete', MANUAL_COMPLETE_STATUS},
                     'imageSupplement': {
                         'complete', 'skipped', 'no_candidates',
-                        'no_high_value_images', 'no_downloadable_images',
+                        'no_high_value_images', 'no_downloadable_images', MANUAL_COMPLETE_STATUS,
                     },
                 }
                 stages = manifest.get('stages') if isinstance(manifest, dict) else None
@@ -507,6 +541,7 @@ def validate_papers_for_publish(papers):
                     raise PublishDataValidationError(
                         f'{paper_label} 深度分析阶段尚未全部完成: {detail}'
                     )
+                _validate_manual_takeover_manifest(paper, manifest, paper_label)
                 contracts = manifest.get('contracts')
                 if contracts is not None and not isinstance(contracts, dict):
                     raise PublishDataValidationError(

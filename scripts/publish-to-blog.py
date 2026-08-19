@@ -87,6 +87,83 @@ PUBLISH_IMAGE_EXCLUSIONS_SCHEMA_VERSION = 1
 PUBLISH_IMAGE_EXCLUSIONS_PATH = PROJECT_ROOT / 'config' / 'publish-image-exclusions.json'
 PUBLISH_IMAGE_EXCLUSIONS_FIELD = 'publishImageExclusions'
 PUBLISHED_PAPERS_FINGERPRINT_CONTRACT = 'typed-json-f64-utf16-v1'
+MANUAL_REVIEW_MODE = 'manual_complete'
+
+
+def _reviewed_path_set_sha256(files):
+    """Hash the exact reviewed path/deletion/SHA set for provenance binding."""
+    entries = []
+    for record in files:
+        entries.append({
+            'path': record.get('path'),
+            'deleted': record.get('deleted') is True,
+            'sha256': None if record.get('deleted') is True else record.get('sha256'),
+        })
+    entries.sort(key=lambda item: (str(item.get('path')), bool(item.get('deleted'))))
+    payload = json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
+
+
+def _manual_review_provenance_error(receipt, *, date_str=None,
+                                    generation_manifest_sha256=None,
+                                    expected_base_head=None):
+    """Validate an explicitly human/agent-attested review receipt.
+
+    ``manual_complete`` is deliberately not an implicit fallback for an LLM
+    outage.  It is a separate, auditable mode whose attestation is bound to
+    the exact generation manifest and Git base used for the review.
+    """
+    mode = receipt.get('reviewMode')
+    if mode is None:
+        return None
+    if mode != MANUAL_REVIEW_MODE:
+        return f'审查凭证 reviewMode 非法: {mode}'
+    provenance = receipt.get('reviewProvenance')
+    if not isinstance(provenance, dict):
+        return 'manual_complete 审查缺少 reviewProvenance'
+    if provenance.get('version') != 1 or provenance.get('mode') != MANUAL_REVIEW_MODE:
+        return 'manual_complete reviewProvenance 版本或模式非法'
+    if not isinstance(provenance.get('agent'), str) or not provenance['agent'].strip():
+        return 'manual_complete reviewProvenance 缺少 agent'
+    if provenance.get('basis') != 'deterministic_and_manual_semantic_review':
+        return 'manual_complete reviewProvenance basis 必须为完整确定性+人工语义审查'
+    if not isinstance(provenance.get('reason'), str) or len(provenance['reason'].strip()) < 20:
+        return 'manual_complete reviewProvenance reason 过短'
+    completed_at = provenance.get('completedAt')
+    if not isinstance(completed_at, str) or not BEIJING_TIMESTAMP_RE.fullmatch(completed_at):
+        return 'manual_complete reviewProvenance completedAt 必须为北京时间戳'
+    checks = provenance.get('checks')
+    required_checks = {
+        'generationManifestVerified', 'baseHeadVerified', 'fileHashesVerified',
+        'frontmatterVerified', 'markdownVerified', 'contentSemanticsVerified',
+        'imageReferencesVerified', 'hugoGateVerified',
+    }
+    if (
+        not isinstance(checks, dict)
+        or set(checks) != required_checks
+        or any(checks.get(key) is not True for key in required_checks)
+    ):
+        return 'manual_complete reviewProvenance checks 必须完整且全部为 true'
+    manifest_sha = provenance.get('generationManifestSha256')
+    if not re.fullmatch(r'[0-9a-f]{64}', str(manifest_sha or '')):
+        return 'manual_complete provenance 缺少 generationManifestSha256'
+    if generation_manifest_sha256 is not None and manifest_sha != generation_manifest_sha256:
+        return 'manual_complete provenance 与 generation manifest SHA 不一致'
+    base_head = provenance.get('baseHead')
+    if not re.fullmatch(r'[0-9a-f]{40}', str(base_head or '').lower()):
+        return 'manual_complete provenance 缺少合法 baseHead'
+    if expected_base_head is not None and str(base_head).lower() != str(expected_base_head).lower():
+        return 'manual_complete provenance 与 review 基线不一致'
+    file_count = provenance.get('fileCount')
+    if not isinstance(file_count, int) or file_count <= 0:
+        return 'manual_complete provenance fileCount 非法'
+    path_set_sha = provenance.get('reviewedPathSetSha256')
+    if not re.fullmatch(r'[0-9a-f]{64}', str(path_set_sha or '')):
+        return 'manual_complete provenance 缺少 reviewedPathSetSha256'
+    protocol = provenance.get('reviewProtocolFingerprint')
+    if not re.fullmatch(r'[0-9a-f]{64}', str(protocol or '')):
+        return 'manual_complete provenance 缺少 reviewProtocolFingerprint'
+    return None
 
 
 def blog_transaction_lock(date_str, *, timeout_seconds=30):
@@ -4230,7 +4307,7 @@ def has_publication_evidence_for_generation(
 
 def save_review_receipt(
     date_str, publish_paths, hugo_gate, expected_base_head=None,
-    generation_manifest=None, reviewed_results=None,
+    generation_manifest=None, reviewed_results=None, review_provenance=None,
 ):
     """Persist the exact reviewed blog manifest for a later push-only command."""
     if generation_manifest is None:
@@ -4336,6 +4413,25 @@ def save_review_receipt(
         'postPublishVisuals': post_publish_visuals,
         'files': files,
     }
+    if review_provenance is not None:
+        if not isinstance(review_provenance, dict):
+            raise PublishDataValidationError('review_provenance 必须是对象')
+        provenance = dict(review_provenance)
+        provenance.setdefault('generationManifestSha256', receipt['generationManifestSha256'])
+        provenance.setdefault('baseHead', current_head)
+        provenance.setdefault('fileCount', len(files))
+        provenance.setdefault('reviewedPathSetSha256', _reviewed_path_set_sha256(files))
+        provenance.setdefault('reviewProtocolFingerprint', receipt['reviewProtocolFingerprint'])
+        receipt['reviewMode'] = MANUAL_REVIEW_MODE
+        receipt['reviewProvenance'] = provenance
+        provenance_error = _manual_review_provenance_error(
+            receipt,
+            date_str=date_str,
+            generation_manifest_sha256=receipt['generationManifestSha256'],
+            expected_base_head=current_head,
+        )
+        if provenance_error:
+            raise PublishDataValidationError(provenance_error)
     path = review_receipt_path(date_str)
     atomic_write_json(path, receipt, ensure_ascii=False, indent=2)
     return path
@@ -4653,6 +4749,14 @@ def load_verified_review_receipt(date_str):
         or _sha256_file(manifest_path) != expected_manifest_sha
     ):
         raise PublishDataValidationError('审查凭证绑定的 generation manifest 缺失或已变化')
+    provenance_error = _manual_review_provenance_error(
+        receipt,
+        date_str=date_str,
+        generation_manifest_sha256=expected_manifest_sha,
+        expected_base_head=receipt.get('baseHead'),
+    )
+    if provenance_error:
+        raise PublishDataValidationError(provenance_error)
     try:
         generation_manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -4730,6 +4834,14 @@ def load_verified_review_receipt(date_str):
         paths.append(target)
     if seen != set(expectations):
         raise PublishDataValidationError('审查凭证文件集合与 generation manifest 不一致')
+    if receipt.get('reviewMode') == MANUAL_REVIEW_MODE:
+        provenance = receipt['reviewProvenance']
+        if provenance.get('fileCount') != len(records):
+            raise PublishDataValidationError('manual_complete provenance fileCount 与凭证不一致')
+        if provenance.get('reviewedPathSetSha256') != _reviewed_path_set_sha256(records):
+            raise PublishDataValidationError('manual_complete provenance 文件集合哈希不一致')
+        if provenance.get('reviewProtocolFingerprint') != receipt.get('reviewProtocolFingerprint'):
+            raise PublishDataValidationError('manual_complete provenance 协议指纹不一致')
     return paths, path
 
 

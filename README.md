@@ -225,8 +225,14 @@ python3 scripts/generate-blog.py --date 2026-04-21
 python3 scripts/review-blog.py --date 2026-04-21
 python3 scripts/push-blog.py --date 2026-04-21
 
+# 仅当 LLM review 服务不可用时，使用完整 provenance 的人工接管审查
+# attestation 必须由人工/Codex 填写，八项 checks 全部为 true；不会伪造模型审查
+python3 scripts/manual-review-blog.py --date 2026-04-21 --attestation data/current/manual-review-attestation-2026-04-21.json
+
 # review 首次失败后，修复页面并重跑同一命令；已通过且 SHA 未变的页面永久复用
 # 只复审新增、内容变化、待重试或已修复的失败页；最终仍对完整批次执行确定性校验和 Hugo gate
+# manual-review-blog.py 是显式 manual_complete 模式：仍执行逐文件哈希、基线、协议、确定性检查和 Hugo gate，
+# 并把 attestation SHA、来源、检查清单和修复记录写入 receipt；不能把普通 LLM 故障静默视为通过。
 
 # 用自定义数据发布
 python3 scripts/generate-blog.py --date 2026-04-21 data/current/deep-analysis-result.json

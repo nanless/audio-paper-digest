@@ -17,7 +17,8 @@ const {
     analysisManifestRequiresExperimentTableContract,
     analysisManifestRequiresMethodDetailContract,
     REQUIRED_RECOVERY_STAGES,
-    isRecoveryStageTerminal
+    isRecoveryStageTerminal,
+    validateManualTakeoverManifest
 } = require('./analysis-contract.js');
 
 // ═══════════════════════════════════════════════════════
@@ -259,6 +260,10 @@ function isCompleteAnalysisContent(paper) {
         !isRecoveryStageTerminal(stage, stages[stage]?.status))) {
         return false;
     }
+    if (validateManualTakeoverManifest(
+        paper.analysisManifest,
+        paper.analysisManifest.sourceAcquisition?.sourceSha256 || paper.sourceSha256 || ''
+    )) return false;
     return true;
 }
 
