@@ -27,7 +27,22 @@ function detailedAnalysis() {
         '推理流程先完成特征抽取，再进行上下文融合，最后输出识别序列；各阶段的输入、输出和评价指标保持对应，消融结果只归因于实际移除的模块。'
     ];
     const method = Array.from({ length: 4 }, () => methodParagraphs.join('\n\n')).join('\n\n');
-    return text.replace(/## 方法概述和架构\n[\s\S]*?(?=\n## 核心创新点)/, `## 方法概述和架构\n${method}\n`);
+    const summary = Array.from({ length: 3 }, () => '论文研究带噪语音识别中的上下文声学建模。输入音频先经过特征提取和编码器，再由上下文模块融合局部与长程信息，最后输出识别序列。实验覆盖多个公开基准、噪声条件和消融设置，并报告了模型在不同条件下的误差变化。方法的价值来自输入、训练目标和评价指标之间的对应关系；局限是部分超参数、数据划分和部署成本没有完整披露。').join('\n\n');
+    const innovation = Array.from({ length: 7 }, (_, index) => `${index + 1}. 第${index + 1}项贡献对应可核对的模型结构、训练条件或评价设置；它明确说明了输入、模块、输出及其与基线的差异，并保留了实验条件和适用边界。`).join('\n\n');
+    const results = `实验在多个带噪语音基准上比较主方法与基线，并报告识别错误、噪声鲁棒性和消融变化。实验同时交代训练集、验证集、测试集、噪声类型、说话人划分和评价指标方向，结果需要结合这些条件解读。结果段还应说明每个基线采用的训练数据、相同的预处理和相同的解码设置，避免把数据规模差异误认为模型收益。测试结果还需要区分平均值、单次最好值和不同噪声条件下的变化，不能只引用一个最有利的数字。统计口径、重复次数和误差范围也会影响读者对结果稳定性的判断。\n\n| 实验 | 结果与条件 |\n|---|---|\n| 主方法 | 多个公开基准、带噪条件、识别输出 |\n| 消融 | 移除上下文模块后误差上升 |\n\n结果同时记录数据划分、基线和评价口径，不能把单一条件的改善外推到所有说话人或设备。论文没有报告的统计显著性、跨域测试和失败案例不在此处补写。`;
+    const details = Array.from({ length: 8 }, (_, index) => `- 细节${index + 1}：输入音频、声学特征、上下文编码、监督目标、验证集和解码设置之间的关系均需按正文保持一致；第${index + 1}项缺失信息不会由常见实现补写。`).join('\n\n');
+    const scoringMaxima = ['2', '1.5', '1.5', '1', '1.5', '1.5', '0.5', '1.5'];
+    const scoringValues = ['1.5', '1.2', '1.1', '0.8', '1.0', '0.0', '0.3', '1.0'];
+    const scoring = Array.from({ length: 8 }, (_, index) => `* ${['创新性','技术严谨性','实验充分性','清晰度','影响力','开源','可复现性','工程/实践价值'][index]} (${scoringValues[index]}/${scoringMaxima[index]})：该维度依据正文中可定位的方法、数据、基线、评价或资源信息单独判断，未报告部分明确保留边界。`).join('\n');
+    const limits = '论文没有完整披露部分训练超参数、硬件和随机种子；跨说话人、跨设备和长期部署仍缺少验证。带噪基准与公开数据可以支持方法比较，但不能代替真实场景的失败案例、统计显著性和成本测量。对于长尾噪声、数据分布变化和部署资源约束，现有实验也没有给出足够的稳定性证据。不同设备、不同说话人和不同噪声强度下的误差可能改变结论，因此需要更广泛的验证。模型在真实环境中的延迟、内存、功耗和维护成本也没有被充分量化，长期运行风险仍待评估。';
+    return text
+        .replace(/#{2,3} 核心摘要\n[\s\S]*?(?=\n#{2,3} 方法概述和架构)/, `## 核心摘要\n${summary}\n`)
+        .replace(/#{2,3} 方法概述和架构\n[\s\S]*?(?=\n#{2,3} 核心创新点)/, `## 方法概述和架构\n${method}\n`)
+        .replace(/#{2,3} 核心创新点\n[\s\S]*?(?=\n#{2,3} 实验结果)/, `## 核心创新点\n${innovation}\n`)
+        .replace(/#{2,3} 实验结果\n[\s\S]*?(?=\n#{2,3} 细节详述)/, `## 实验结果\n${results}\n`)
+        .replace(/#{2,3} 细节详述\n[\s\S]*?(?=\n#{2,3} 评分理由)/, `## 细节详述\n${details}\n`)
+        .replace(/#{2,3} 评分理由\n[\s\S]*?(?=\n#{2,3} 局限与问题)/, `## 评分理由\n${scoring}\n`)
+        .replace(/#{2,3} 局限与问题\n[\s\S]*?(?=\n#{2,3} 开源详情)/, `## 局限与问题\n${limits}\n`);
 }
 
 function baseSpec() {
@@ -65,9 +80,15 @@ function baseSpec() {
             finalContract: true
         }
     };
+    const claimHints = {
+        imageDownload: '图片图注下载', primaryAnalysis: '方法输入输出', openSourceScan: '开源代码权重数据集',
+        demoLinkScan: '演示链接部署', revision: '正文事实修订', tableRepair: '实验表格指标基线',
+        methodRepair: '方法架构训练推理', structureRepair: '章节结构摘要标签',
+        scoringAudit: '评分维度总分', imageSupplement: '插图caption段落'
+    };
     const reviewedClaimsByStage = Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => [
         stage,
-        [`${stage} 已按全文、正文和最终契约完成第二轮复核。`]
+        [`${stage} 专项复核${claimHints[stage]}，已对照全文输入、输出和最终正文。`]
     ]));
     const stageEvidence = Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => [stage, {
         status: 'manual_complete',
@@ -119,6 +140,16 @@ describe('manual_complete v2 deep-analysis contract', () => {
         assert.match(
             validateManualTakeoverManifest(fixture.manifest, fixture.sourceSha256, { analysis: fixture.analysis, sourceText: fixture.sourceText }),
             /提示词残留/
+        );
+    });
+
+    it('拒绝证据块编号和审计过程泄漏到博客正文', () => {
+        const fixture = baseSpec();
+        fixture.analysis = fixture.analysis.replace('论文研究带噪语音识别中的上下文声学建模', '第 1 个证据块：论文明确写到，论文研究带噪语音识别中的上下文声学建模');
+        fixture.manifest.manualTakeover.analysisSha256 = manualTextSha256(fixture.analysis);
+        assert.match(
+            validateManualTakeoverManifest(fixture.manifest, fixture.sourceSha256, { analysis: fixture.analysis, sourceText: fixture.sourceText }),
+            /提示词残留|正文包含流程\/审计元话语/
         );
     });
 

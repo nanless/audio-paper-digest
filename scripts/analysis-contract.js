@@ -74,6 +74,18 @@ const MANUAL_STAGE_EVIDENCE_STAGES = Object.freeze([
     'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
     'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
 ]);
+const MANUAL_STAGE_CLAIM_HINTS = Object.freeze({
+    imageDownload: /(?:图|图片|插图|image|caption|下载)/i,
+    primaryAnalysis: /(?:方法|架构|输入|输出|模块|全文|主分析)/i,
+    openSourceScan: /(?:开源|代码|权重|数据集|仓库|链接|复现)/i,
+    demoLinkScan: /(?:demo|演示|链接|部署|示例|未提及)/i,
+    revision: /(?:修订|事实|错误|一致|正文|局限|审校)/i,
+    tableRepair: /(?:表|指标|数值|实验|基线|消融)/i,
+    methodRepair: /(?:方法|架构|模块|训练|推理|数据流)/i,
+    structureRepair: /(?:章节|结构|标题|摘要|标签|格式)/i,
+    scoringAudit: /(?:评分|维度|总分|分数|严谨|实验充分)/i,
+    imageSupplement: /(?:图|图片|插图|caption|视觉|段落)/i
+});
 const MANUAL_BOILERPLATE_PATTERNS = Object.freeze([
     /从复现角度(?:看)?[，,:：]/,
     /这样的边界很重要/,
@@ -81,7 +93,15 @@ const MANUAL_BOILERPLATE_PATTERNS = Object.freeze([
     /对于未报告的参数、?硬件、?随机种子或服务版本/,
     /应按数据流逐项复核/,
     /不能把整条流水线的收益都归因/,
-    /对于多模态系统，还要区分/
+    /对于多模态系统，还要区分/,
+    /可执行的(?:音频|语音|音乐或多模态)处理流程/,
+    /对音频读者而言.{0,80}提供可复用的任务定义或工程证据/,
+    /全文(?:方法|实验)与训练段落给出的可复现设置如下/,
+    /结果证据\s*\d+：.{0,80}数字、比较方向和统计口径均按原文保留/,
+    /第\s*(?:\d+|[一二三四五六七八九十]+)\s*个证据块/,
+    /(?:证据块|结果证据|方法事实|实验事实|实现细节|实验\/部署细节)\s*\d+\s*[：:]/i,
+    /(?:该事实用于|这项结果对应|该信息用于)[^。！？\n]{0,120}(?:复现|限定|解释|边界)/,
+    /全文事实[：:]|专项复核|二次复核输入\/输出边界|manual[-_ ](?:complete|full-text)/i
 ]);
 const REQUIRED_RECOVERY_STAGES = Object.freeze([
     'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
@@ -364,20 +384,37 @@ function validateMethodDetailContract(analysis) {
 }
 
 function validateManualDepthContract(analysis, options = {}) {
+    // The old manual gate only checked that the method section was long.  A
+    // template could therefore pass with a short abstract, three generic
+    // innovation bullets and one two-column placeholder table.  The API path
+    // has an explicit full-paper review/repair chain; manual_complete must
+    // meet the same reader-visible quality floor even when no LLM is called.
     const method = extractSection(analysis, '方法概述和架构');
     const results = extractSection(analysis, '实验结果');
     const details = extractSection(analysis, '细节详述');
+    const summary = extractSection(analysis, '核心摘要');
+    const innovation = extractSection(analysis, '核心创新点');
+    const scoring = extractSection(analysis, '评分理由');
+    const limits = extractSection(analysis, '局限与问题');
     const chineseCount = value => (String(value || '').match(/[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]/g) || []).length;
     if (chineseCount(method) < 650) return `manual 全文方法证据不足: ${chineseCount(method)}/650 个中文字符`;
-    if (chineseCount(results) < 100) return `manual 全文实验证据不足: ${chineseCount(results)}/100 个中文字符`;
-    if (chineseCount(details) < 40) return `manual 全文细节证据不足: ${chineseCount(details)}/40 个中文字符`;
-    if (/(?:从复现角度|本分析|人工(?:审计|接管)|manual_complete|不能由本分析|不补造|实验数字只采用|按来源逐项核对)/i.test(analysis)) {
+    if (chineseCount(summary) < 360) return `manual 核心摘要过短: ${chineseCount(summary)}/360 个中文字符`;
+    if (chineseCount(innovation) < 380) return `manual 核心创新点过短: ${chineseCount(innovation)}/380 个中文字符`;
+    if (chineseCount(results) < 300) return `manual 全文实验证据不足: ${chineseCount(results)}/300 个中文字符`;
+    if (chineseCount(details) < 450) return `manual 全文细节证据不足: ${chineseCount(details)}/450 个中文字符`;
+    if (chineseCount(scoring) < 250) return `manual 评分理由过短: ${chineseCount(scoring)}/250 个中文字符`;
+    if (chineseCount(limits) < 200) return `manual 局限分析过短: ${chineseCount(limits)}/200 个中文字符`;
+    if (/(?:从复现角度|本分析|人工(?:审计|接管)|manual_complete|不能由本分析|不补造|实验数字只采用|按来源逐项核对|第\s*(?:\d+|[一二三四五六七八九十]+)\s*个证据块|证据块|结果证据\s*\d+|方法事实\s*\d+|实验事实\s*\d+|实现细节\s*\d+|实验\/部署细节\s*\d+)/i.test(analysis)) {
         return 'manual 正文包含流程/审计元话语，必须改写为论文事实';
     }
     const resultTables = extractMarkdownTables(results);
     const sourceText = String(options.sourceText || '');
     const paperHasTable = /(?:\btable\s*\d+\b|\btab\.\s*\d+\b|表\s*\d+)/i.test(sourceText);
     if (paperHasTable && resultTables.length === 0) return '全文包含实验表格，但实验结果没有可读 Markdown 表格';
+    if (paperHasTable && resultTables.length < 1) return '全文实验表格未被转写为读者可读证据';
+    const numericHits = (results.match(/(?<![A-Za-z])\d+(?:\.\d+)?(?:%|ms|s|Hz|kHz|M|B|GB|×)?/g) || []).length;
+    const sourceNumericHits = (sourceText.match(/(?<![A-Za-z])\d+(?:\.\d+)?(?:%|ms|s|Hz|kHz|M|B|GB|×)?/g) || []).length;
+    if (sourceNumericHits >= 8 && numericHits < 3) return `manual 实验结果缺少可核对数字: ${numericHits}/3`;
     return null;
 }
 
@@ -569,6 +606,10 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
         }
         if (!Array.isArray(item.reviewedClaims) || item.reviewedClaims.length === 0) {
             return `manualTakeover.stageEvidence.${stage}.reviewedClaims 不能为空`;
+        }
+        const hint = MANUAL_STAGE_CLAIM_HINTS[stage];
+        if (hint && !item.reviewedClaims.some(claim => hint.test(String(claim)))) {
+            return `manualTakeover.stageEvidence.${stage}.reviewedClaims 缺少该阶段专属事实范围`;
         }
     }
     return null;

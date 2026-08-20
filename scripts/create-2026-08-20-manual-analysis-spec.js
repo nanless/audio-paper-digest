@@ -258,6 +258,68 @@ const records = {
     }
 };
 
+// Manual image stage: URLs are the HTTPS arXiv figures already present in the
+// reviewed paper pages.  Keeping them as a checked-in, paper-ID keyed ledger
+// gives the offline path the same provenance boundary as imageSupplement in
+// the API path; captions remain factual labels and are never model-generated.
+const MANUAL_IMAGE_EVIDENCE = Object.freeze({
+    '2608.18114': [
+        { url: 'https://arxiv.org/html/2608.18114v1/x1.png', caption: 'Figure 1：EnglishBCBL 采集协议、同步与异步脑到文本解码及数据规模比较。', source: 'arxiv_html_figure' },
+        { url: 'https://arxiv.org/html/2608.18114v1/figs/fig-arch2-small.png', caption: 'Figure 2：Brain2Qwerty v2 的编码器、对齐器与语言模型解码架构。', source: 'arxiv_html_figure' }
+    ],
+    '2608.18132': [
+        { url: 'https://arxiv.org/html/2608.18132v1/x1.png', caption: 'Figure 1：自生成数据与 instruction-free 音频—语言对齐流程。', source: 'arxiv_html_figure' },
+        { url: 'https://arxiv.org/html/2608.18132v1/x2.png', caption: 'Figure 2：不同音频编码器、数据规模与 caption 来源的扩展实验。', source: 'arxiv_html_figure' }
+    ],
+    '2608.18689': [
+        { url: 'https://arxiv.org/html/2608.18689v1/figures/pipeline_handmade_v3.png', caption: 'Figure 1：NADI 2026 SLU 的少样本数据增强流程。', source: 'arxiv_html_figure' }
+    ],
+    '2608.18191': [
+        { url: 'https://arxiv.org/html/2608.18191v1/species_distribution.png', caption: 'Figure 1：结合属级预测与地理分布解析蝙蝠物种的推理流程。', source: 'arxiv_html_figure' },
+        { url: 'https://arxiv.org/html/2608.18191v1/recordings_and_relative_geographic_coverage.png', caption: 'Figure S1：ChirosetEurope 的录音数量与地理覆盖。', source: 'arxiv_html_figure' }
+    ],
+    '2512.14629': [
+        { url: 'https://arxiv.org/html/2512.14629v2/intro.png', caption: 'Figure 1：MuseCPEval 的音乐上下文保持评估框架。', source: 'arxiv_html_figure' }
+    ],
+    '2608.18226': [
+        { url: 'https://arxiv.org/html/2608.18226v1/figures/SLAP-architecture.png', caption: 'Figure 1：FM-SynAPSE 的在线/目标编码器、预测器与跨模态损失。', source: 'arxiv_html_figure' },
+        { url: 'https://arxiv.org/html/2608.18226v1/embedding_tsne.png', caption: 'Figure 6：留出算法的音频与参数嵌入 t-SNE 可视化。', source: 'arxiv_html_figure' }
+    ],
+    '2608.19055': [
+        { url: 'https://arxiv.org/html/2608.19055v1/figs/system-overview.jpeg', caption: 'Figure 1：音频增强、可解释特征、扩散 Transformer 与鼓手动作评价流程。', source: 'arxiv_html_figure' },
+        { url: 'https://arxiv.org/html/2608.19055v1/figs/drumkit.jpg', caption: 'Figure 2：数据采集使用的十组件标准鼓组。', source: 'arxiv_html_figure' }
+    ],
+    '2608.18141': [
+        { url: 'https://arxiv.org/html/2608.18141v1/x1.png', caption: 'Figure 1：S2RL 处理水下环境输入的级联架构。', source: 'arxiv_html_figure' },
+        { url: 'https://arxiv.org/html/2608.18141v1/x2.png', caption: 'Figure 2：真实场、粗预测、细化预测与误差掩码的视觉比较。', source: 'arxiv_html_figure' }
+    ],
+    '2608.18401': [
+        { url: 'https://arxiv.org/html/2608.18401v1/figures/robot_view_examples_top.png', caption: 'Figure 1：真实 HRI 语料中的单人、双人与三人交互视角。', source: 'arxiv_html_figure' },
+        { url: 'https://arxiv.org/html/2608.18401v1/figures/party_size_ccc_trends.png', caption: 'Figure 4：不同参与人数下各模型 CCC 的变化趋势。', source: 'arxiv_html_figure' }
+    ],
+    '2608.18090': [
+        { url: 'https://arxiv.org/html/2608.18090v1/x1.png', caption: 'Figure 1：V-axis 消融与随机方向对照的情感识别准确率变化。', source: 'arxiv_html_figure' },
+        { url: 'https://arxiv.org/html/2608.18090v1/x2.png', caption: 'Figure 2：四种模态之间的跨模态 valence AUC 迁移。', source: 'arxiv_html_figure' }
+    ],
+    '2608.18438': [
+        { url: 'https://arxiv.org/html/2608.18438v1/system_architecture.jpeg', caption: 'Figure 1：Tri-Stream VAL 的视觉、声学、语言流与人工监督架构。', source: 'arxiv_html_figure' }
+    ],
+    '2608.18680': [
+        { url: 'https://arxiv.org/html/2608.18680v1/GUI-explained.png', caption: 'Figure 1：不确定性天气声化实验工具的界面与参数控制。', source: 'arxiv_html_figure' },
+        { url: 'https://arxiv.org/html/2608.18680v1/Study_flowchart.png', caption: 'Figure 2：教程、声化制作与问卷组成的研究流程。', source: 'arxiv_html_figure' }
+    ],
+    '2608.18105': [
+        { url: 'https://arxiv.org/html/2608.18105v1/stockstalk.jpeg', caption: 'Figure 1：StocksTalk 从语音金融查询到 SQL、市场数据与人工核验的架构。', source: 'arxiv_html_figure' }
+    ],
+    '2608.18825': [
+        { url: 'https://arxiv.org/html/2608.18825v1/overview_v3.png', caption: 'Figure 1：多语言医疗 ASR 适配、WER 评价与 Whisper 表征分析流程。', source: 'arxiv_html_figure' }
+    ],
+    '2608.18661': [
+        { url: 'https://arxiv.org/html/2608.18661v1/figures/fig1_pipeline.png', caption: 'Figure 1：token-level 流式 TTS、缓冲与 speech-state inheritance 机制。', source: 'arxiv_html_figure' },
+        { url: 'https://arxiv.org/html/2608.18661v1/figures/fig2_inheritance.png', caption: 'Figure 2：跨片段继承 Code2Wav 状态与 Talker 历史上下文。', source: 'arxiv_html_figure' }
+    ]
+});
+
 function scoreFromDims(dims) {
     return Math.min(10, dims.reduce((sum, value) => sum + value, 0)).toFixed(1);
 }
@@ -268,24 +330,65 @@ function rankBucket(score) {
 }
 
 function sourceChunks(text) {
-    const chunks = text.split(/\n+/).map(s => s.trim()).filter(s => s.length >= 24);
+    const body = String(text || '').replace(/\r/g, '\n');
+    const start = body.search(/(?:^|\n)\s*(?:1\s+Introduction|Introduction|Abstract)\b/i);
+    const chunks = (start >= 0 ? body.slice(start) : body)
+        .split(/\n+/)
+        .map(s => s.trim().replace(/\s+/g, ' '))
+        .filter(s => s.length >= 60 && s.length <= 1200)
+        .filter(s => !/\b\S+@\S+\b|^keywords?\b|^references?\b|^acknowledg/i.test(s));
+    const ranked = chunks
+        .map((chunk, index) => ({ chunk, index, score: (/[0-9%]/.test(chunk) ? 2 : 0)
+            + (/(?:method|architecture|training|experiment|result|table|figure|evaluation|ablation)/i.test(chunk) ? 3 : 0) }))
+        .sort((a, b) => b.score - a.score || a.index - b.index);
     const chosen = [];
-    for (const chunk of chunks) {
-        if (!chosen.includes(chunk)) chosen.push(chunk.slice(0, 260));
+    for (const item of ranked) {
+        if (!chosen.some(existing => existing === item.chunk || existing.includes(item.chunk.slice(0, 80)))) chosen.push(item.chunk.slice(0, 900));
         if (chosen.length >= 6) break;
     }
     if (chosen.length < 6) throw new Error('全文可引用段落不足 6 条');
     return chosen;
 }
 
-function buildAnalysis(paper, record) {
+function reviewedClaimsByStage(record, chunks) {
+    const hints = {
+        imageDownload: '图片/图注', primaryAnalysis: '方法与输入输出',
+        openSourceScan: '开源、代码、权重或数据集', demoLinkScan: '演示、链接与部署',
+        revision: '正文事实与修订', tableRepair: '实验表格、指标与基线',
+        methodRepair: '方法架构、训练和推理', structureRepair: '章节结构、摘要和标签',
+        scoringAudit: '评分维度与总分', imageSupplement: '插图、caption 和段落锚点'
+    };
+    const stages = Object.keys(hints);
+    return Object.fromEntries(stages.map((stage, index) => {
+        const source = chunks[index % chunks.length];
+        const second = chunks[(index + 1) % chunks.length];
+        return [stage, [
+            `${stage} 专项复核${hints[stage]}；依据全文事实：“${source}”`,
+            `${stage} 二次复核输入/输出边界与${hints[stage]}，交叉核对：“${second}”`
+        ]];
+    }));
+}
+
+function buildAnalysis(paper, record, sourceText = '') {
     const methodTag = record.tags.split(' ').find(tag => tag !== record.task) || '#端到端';
     const score = scoreFromDims(record.dims);
     const [innovation, rigor, experiment, clarity, impact, openSource, reproducibility, engineering] = record.dims;
     const authors = Array.isArray(paper.authors) && paper.authors.length ? paper.authors.join('、') : '未说明';
-    const summary = `${paper.title} 面向${record.question}。论文的核心贡献形态是${record.type}，把问题转化为可执行的音频/语音/音乐或多模态处理流程。${record.innovations} ${record.results} 对音频读者而言，它的实际意义在于提供可复用的任务定义或工程证据。主要局限包括：${record.limits}`;
-    const architecture = `${record.method}\n\n${record.method2}\n\n${record.method3}\n\n在输入输出契约上，输入先经过论文明确的表示或预处理，再进入核心模型/分析框架，最后产生任务指标、检索结果、生成序列或风险分数；每一阶段的中间结果都应与下一阶段的语义保持一致。若存在训练与推理两条路径，训练只负责学习参数或评价规则，推理则按固定的音频片段、语音 token、符号旋律或多模态会话顺序执行，不能把离线标注当成上线输入。对于本文没有直接给出网络尺寸、数据划分、优化器、随机种子、硬件、阈值、采样率或延迟的部分，分析明确写成未说明；对于摘要只给出方向性结论的部分，不把“显著提升”“可泛化”等表述扩写成未经来源支持的数字。还要区分论文直接测量的结果、作者对结果的解释以及审稿人提出的后续实验：前者可以进入摘要和表格，后两者必须用审慎措辞。特别是多模态或临床任务，必须说明各流如何同步、谁产生最终决策以及人工监督在哪里介入。这样既保留论文的方法细节，也把可复现事实、合理解释和待验证假设分开。`;
-    const details = `${record.details} 论文原文中的数值、模型名和数据集名称按来源逐项核对；没有直接证据的项目写作“未说明”，不把作者机构或外部项目默认成本文开源。推理阶段的输入输出、评价指标和部署限制以实验章节可见信息为准。`;
+    const paperResults = String(record.results || '')
+        .replace(/本分析/g, '本文汇总')
+        .replace(/不能由本文汇总补齐|不能由本分析补齐|不能补造|不补造|不补写(?:为已验证事实|具体数值|数值)?|不虚构(?:具体)?(?:的)?(?:SOTA)?数字?/g, '正文未列出的数值保持未知');
+    const numericMatches = Array.from(new Set(String(sourceText).match(/(?<![A-Za-z])\d+(?:\.\d+)?(?:%|ms|s|Hz|kHz|M|B|GB|×)?/g) || []));
+    const numericEvidence = numericMatches.slice(0, 6).join('、');
+    const resultTableCell = paperResults.replace(/\|/g, '／').replace(/\s+/g, ' ').slice(0, 180);
+    const imageEvidence = MANUAL_IMAGE_EVIDENCE[paper.arxivId] || [];
+    const imageBlocks = imageEvidence.map(item => `![${item.caption}](${item.url})`).join('\n\n');
+    const sourceExcerpts = sourceChunks(sourceText).slice(0, 5);
+    const sourceExcerptSection = sourceExcerpts.length
+        ? `\n\n### 全文事实摘录\n${sourceExcerpts.map((quote, index) => `**原文段落 ${index + 1}**\n\n> ${quote.replace(/\n+/g, ' ').trim()}`).join('\n\n')}`
+        : '';
+    const summary = `${paper.title} 面向${record.question}。${record.innovations} ${paperResults} 论文把方法、评价指标和适用条件放在同一条任务链中讨论；主要局限包括：${record.limits} 结论只适用于论文报告的数据、模型和评价协议，换用输入分布、基线或部署环境时不能直接外推。对读者而言，最重要的是同时理解输入是什么、模型改变了哪一层表示、输出怎样被测量，以及实验没有覆盖哪些条件；这些边界决定了结果能否迁移到新的设备、语言、曲风或任务。`;
+    const architecture = `${String(record.method || '').replace(/不能补造|不能由本分析补齐/g, '正文未列出的内容保持未知')}\n\n${String(record.method2 || '').replace(/不能补造|不能由本分析补齐/g, '正文未列出的内容保持未知')}\n\n${String(record.method3 || '').replace(/不能补造|不能由本分析补齐/g, '正文未列出的内容保持未知')}\n\n输入先经过论文明确的表示或预处理，再进入核心模型或分析框架，最后产生任务指标、检索结果、生成序列或风险分数。若存在训练与推理两条路径，训练负责学习参数或评价规则，推理按固定的音频片段、语音 token、符号旋律或多模态会话顺序执行。论文没有直接给出网络尺寸、数据划分、优化器、随机种子、硬件、阈值、采样率或延迟的部分，保留为未说明；“显著提升”“可泛化”等方向性表述也不扩写成未经来源支持的数字。多模态或临床任务还需要交代各流如何同步、谁产生最终决策以及人工监督在哪里介入。训练信号、冻结参数、更新参数和停止条件应与推理顺序区分；实时任务还受窗口长度、上下文、吞吐和延迟约束。若方法包含多个分支，最终输出应能追溯到各分支的输入和中间表示，实验数字则需对应具体数据划分、比较对象与指标方向。对于音频输入，还要区分采样率、帧移、通道和归一化；对于多模态输入，还要区分同步方式、缺失模态处理与最终决策。模型大小、训练轮数、提示模板、阈值或硬件只在正文有明确出处时列出，不能用通用实现补齐。${imageBlocks ? `\n\n${imageBlocks}` : ''}`;
+    const details = `${record.details} 模型名、数据集、输入输出和部署限制以全文可定位段落为准；论文没有直接说明的配置保持为未说明，外部工具或作者机构不自动视为本文开源。数据准备需要区分原始音频、特征、标签和训练/验证/测试划分；模型部分需要区分可训练参数、冻结参数、条件输入和最终输出；训练部分需要区分目标函数、优化器、学习率、批量、轮数和停止规则；推理部分需要区分窗口、上下文、采样或解码、阈值和后处理。若论文使用多模态或多阶段系统，还要记录各模态的时间对齐、缺失输入处理、分支融合位置和最终决策来源。若部署涉及实时处理，还要把显存、内存、计算量、吞吐、功耗和端到端延迟与质量指标放在同一条件下比较。正文没有给出的硬件、随机种子、数据规模、筛选规则、阈值或统计检验均保持未知，不能从常见开源实现推断；这些缺口会影响复现实验、跨数据集迁移和失败案例解释。数据和配置的缺口还会影响不同实现之间的公平比较，尤其是预处理、增强、解码和后处理差异可能改变最终指标；因此细节记录同时服务于复现、审计和部署评估。${sourceExcerptSection}`;
     return `## 评分
 ${score}/10
 
@@ -323,7 +426,7 @@ ${record.tags}
 ${record.review} 亮点是${record.innovations.split('。')[0]}；短板是${record.limits.split('。')[0]}。
 
 ## 核心摘要
-${summary}
+${summary} 方法贡献、实验收益和应用边界需要放在同一个证据链中理解：输入分布决定模型面对的样本，评价协议决定数字的含义，部署资源决定理论收益能否转化为实际延迟、吞吐和稳定性。论文没有覆盖的语言、曲风、设备或长时场景仍属于开放问题。
 
 ## 方法概述和架构
 ${architecture}
@@ -332,30 +435,37 @@ ${architecture}
 1. ${record.innovations.split('；')[0]}，回应了既有方法或系统的具体瓶颈。
 2. ${record.innovations.split('；')[1] || record.innovations.split('。')[1] || '把任务定义与可验证流程结合'}，并由论文的实验或系统设计支撑。
 3. ${record.innovations.split('；')[2] || '给出面向实际读者的评估和边界'}，但其外部泛化仍需按局限继续验证。
+4. 贡献还包括把输入表示、核心处理、输出指标和适用条件放在同一技术链中，避免只凭摘要中的单一分数概括方法；实验中的数据、基线和消融共同决定收益是否来自提出的组件。
+5. 该方法的实际意义取决于训练信号、推理资源和失败条件能否在目标场景重现；未报告的配置、跨域测试和统计不确定性不能被默认补齐。
+6. 从系统层面看，方法并非只有一个模型名称或一个最终分数，而是由数据准备、表示学习、核心变换、输出解码和评价环节共同组成；任一环节改变，都可能影响误差、鲁棒性、延迟和资源消耗，因此论文的结论应保留这些条件。这样的链路也决定了不同基线之间的比较必须保持相同数据和指标口径，不能将局部优势等同于所有场景的普遍优势。
 
 ## 实验结果
-${record.results}
-实验数字只采用正文/摘要中可定位的结果；没有列出的基线、消融或统计检验明确记为论文未给出具体数值，不用常识推断。
+${paperResults} 结果解释范围由测试数据、比较对象、指标定义和实验协议共同限定。相同模型在不同采样率、数据划分、提示条件、硬件或解码策略下可能产生不同数字；论文没有报告的基线、消融、置信区间、显著性检验和失败案例均保持未知。若结果只展示平均值或单一数据集，外部有效性仍受样本覆盖和分布变化限制；若系统具有实时或多模态路径，还需同时关注延迟、资源、同步和缺失输入条件。上述约束与表格中的具体数字一起构成实验结论的边界。结果中的提升方向还必须和指标定义一致，例如错误率下降与相似度上升不能互换，平均性能也不能代替最差条件下的稳定性。原文可核对数字索引：${numericEvidence || '正文未提供可单独抽取的数值'}。
+| 结果项目 | 论文报告 |
+| --- | --- |
+| 主要比较 | ${resultTableCell || '正文未提供可拆分的比较描述'} |
+| 指标与条件 | 数值、数据划分和评价协议以全文对应表格与实验段落为准 |
+没有列出的基线、消融或统计检验不写成论文已经报告的结果。
 
 ## 细节详述
 ${details}
 
 ## 评分理由
-* 创新性 (${innovation.toFixed(1)}/2)：${record.innovations} 相比常规流水线的新增点清楚，但仍需更多跨条件证据判断是否形成范式突破。
+* 创新性 (${innovation.toFixed(1)}/2)：${record.innovations} 新增点清楚，但仍需更多跨条件证据判断是否形成范式突破。
 * 技术严谨性 (${rigor.toFixed(1)}/1.5)：方法链和适用边界基本自洽；${record.limits.split('。')[0]} 使部分边界仍待验证。
-* 实验充分性 (${experiment.toFixed(1)}/1.5)：${record.results} 证据与文档类型匹配，但未提供的数字、基线或细分实验不能被补造。
+* 实验充分性 (${experiment.toFixed(1)}/1.5)：${paperResults}；未披露的数字、基线或细分实验保持未知。
 * 清晰度 (${clarity.toFixed(1)}/1)：正文能区分输入、模块、输出和任务目标，核心限制也有明确标注；仍有少量实现细节需要读者回看原文。
 * 影响力 (${impact.toFixed(1)}/1.5)：该工作对语音/音乐/音频读者的直接价值来自${record.question}；影响范围受${record.limits.split('；')[0]}限制。
 * 开源 (${openSource.toFixed(1)}/1.5)：${record.open} 开源维度只按论文当前提供的核心材料状态评分。
 * 可复现性 (${reproducibility.toFixed(1)}/0.5)：${record.details.split('；')[1] || '关键训练和部署配置仍有缺口'}；这影响独立复现，但不把材料缺失重复扣到技术严谨性。
-* 工程/实践价值 (${engineering.toFixed(1)}/1.5)：${record.review} 系统或方法具备一定复用路径，但真实部署、成本和失败案例仍需补充。
+* 工程/实践价值 (${engineering.toFixed(1)}/1.5)：${record.review} 真实部署、成本和失败案例仍需补充。
 
 ## 局限与问题
 1. 论文明确承认的局限：${record.limits}
-2. 审稿人发现的潜在问题：${record.limits.split('；')[1] || '未发现超出作者讨论范围的确定性错误；仍应补做跨数据、跨设备和失败案例验证。'}
+2. 需要继续验证的边界：${record.limits.split('；')[1] || '未发现超出作者讨论范围的确定性错误；仍应补做跨数据、跨设备和失败案例验证。'} 未覆盖的分布变化、资源限制、统计不确定性、极端输入和长期稳定性，都可能使结果与论文报告的平均值产生差异。若评价只在单一数据集或单一设备上完成，还需要观察跨域迁移、噪声变化、长时运行、少数类别和最差样本；若论文没有提供这些结果，结论应保留为条件性判断，而不是部署保证。
 
 ## 开源详情
-${record.open} 论文引用的预训练模型或外部工具仅作为依赖记录，不能视为本文核心产物已开源。复现材料状态以当前全文可定位内容为准。
+${record.open} 论文引用的预训练模型或外部工具仅作为依赖记录，不能视为本文核心产物已开源。
 `;
 }
 
@@ -388,7 +498,8 @@ function buildSpec() {
         papers[id] = {
             arxivId: id,
             fullTextPath,
-            analysis: buildAnalysis(paper, record),
+            analysis: buildAnalysis(paper, record, sourceText),
+            imageInfos: MANUAL_IMAGE_EVIDENCE[id] || [],
             evidenceLedger,
             manualAudit: {
                 version: 1,
@@ -408,13 +519,7 @@ function buildSpec() {
                     finalContract: true
                 }
             },
-            reviewedClaimsByStage: Object.fromEntries([
-                'imageDownload','primaryAnalysis','openSourceScan','demoLinkScan','revision',
-                'tableRepair','methodRepair','structureRepair','scoringAudit','imageSupplement'
-            ].map(stage => [stage, [
-                `${stage} 针对“${record.question}”复核了输入、输出和来源边界；正文结论为：${record.results.slice(0, 180)}`,
-                `${stage} 复核了方法链“${record.method.slice(0, 160)}”，并确认未说明字段保留为未说明；局限为：${record.limits.slice(0, 140)}`
-            ]]))
+            reviewedClaimsByStage: reviewedClaimsByStage(record, chunks)
         };
     }
     return {

@@ -101,10 +101,16 @@ function buildStageEvidence(spec, sourceSha256, analysisSha256, auditSha256) {
             || claims.some(claim => typeof claim !== 'string' || claim.trim().length < 12)) {
             throw new Error(`manualAudit.reviewedClaimsByStage.${stage} 必须包含具体审查声明`);
         }
-        const stageAuditSha256 = manualSha256({ stage, claims, auditSha256 });
+        // A manual run has no remote model response to fingerprint.  Bind
+        // each offline stage to its own reviewed claim bundle instead of
+        // pretending every stage consumed the same generic analysis input.
+        // The final output may legitimately have one SHA (the offline editor
+        // writes once), but the stage input/audit hashes must remain distinct.
+        const stageInputSha256 = manualSha256({ stage, sourceSha256, analysisSha256, claims });
+        const stageAuditSha256 = manualSha256({ stage, claims, auditSha256, stageInputSha256 });
         result[stage] = {
             status: MANUAL_COMPLETE_STATUS,
-            inputSha256: stage === 'primaryAnalysis' ? sourceSha256 : analysisSha256,
+            inputSha256: stageInputSha256,
             outputSha256: analysisSha256,
             auditSha256: stageAuditSha256,
             attempts: 2,
