@@ -342,7 +342,9 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
         validateAnalysisSourceProvenance(filePath, manifest.sourceAcquisition, `${prefix}.sourceAcquisition`, issues);
     }
     const sourceSha256 = manifest.sourceAcquisition?.sourceSha256 || '';
-    const manualTakeoverIssue = validateManualTakeoverManifest(manifest, sourceSha256);
+    const manualTakeoverIssue = validateManualTakeoverManifest(manifest, sourceSha256, {
+        analysis: options.analysis
+    });
     if (manualTakeoverIssue) addIssue(issues, filePath, `${prefix} ${manualTakeoverIssue}`);
     if (manifest.contracts !== undefined) {
         if (!isPlainObject(manifest.contracts)) {
@@ -728,7 +730,7 @@ function validatePaperListFile(filePath, options = {}) {
                     index,
                     issues,
                     paper.analysisCheckpoint,
-                    { requireComplete: hasAnalysisBody }
+                    { requireComplete: hasAnalysisBody, analysis: paper.analysis }
                 );
             } else if (hasAnalysisBody) {
                 addIssue(issues, filePath, `papers[${index}] 有 analysis 正文但缺少 analysisManifest`);

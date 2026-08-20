@@ -229,6 +229,14 @@ python3 scripts/push-blog.py --date 2026-04-21
 # attestation 必须由人工/Codex 填写，八项 checks 全部为 true；不会伪造模型审查
 python3 scripts/manual-review-blog.py --date 2026-04-21 --attestation data/current/manual-review-attestation-2026-04-21.json
 
+# 完全离线的人工深度分析：spec 必须逐篇绑定全文、原文事实引用、二次审计和阶段证据
+# 此命令不调用任何 LLM/API；任何一篇失败都会拒绝写入整批 canonical 结果
+npm run manual:analyze -- --date 2026-04-21 --spec data/current/manual-analysis-spec-2026-04-21.json
+
+# 完全离线抓取与人工筛选：先生成带来源指纹的候选全集，再逐篇提交 related 决定
+node scripts/manual-fetch.js --date 2026-04-21 --raw
+node scripts/manual-fetch.js --date 2026-04-21 --select data/current/manual-filter-spec-2026-04-21.json
+
 # review 首次失败后，修复页面并重跑同一命令；已通过且 SHA 未变的页面永久复用
 # 只复审新增、内容变化、待重试或已修复的失败页；最终仍对完整批次执行确定性校验和 Hugo gate
 # manual-review-blog.py 是显式 manual_complete 模式：仍执行逐文件哈希、基线、协议、确定性检查和 Hugo gate，

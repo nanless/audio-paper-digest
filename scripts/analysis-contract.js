@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+
 const REQUIRED_ANALYSIS_SECTIONS = Object.freeze([
     '评分',
     '机器摘要',
@@ -51,6 +53,30 @@ const EXPERIMENT_TABLE_CONTRACT_VERSION = 'bounded-v1';
 const METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1';
 const ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION = 'high-confidence-v1';
 const MANUAL_COMPLETE_STATUS = 'manual_complete';
+const MANUAL_COMPLETE_PROVENANCE_VERSION = 2;
+const MANUAL_AUDIT_CHECKS = Object.freeze([
+    'sourceCoverage',
+    'promptConformance',
+    'factualClaimsLedger',
+    'scoreRecomputed',
+    'methodContract',
+    'tableContract',
+    'boilerplateScan',
+    'finalContract'
+]);
+const MANUAL_STAGE_EVIDENCE_STAGES = Object.freeze([
+    'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
+    'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
+]);
+const MANUAL_BOILERPLATE_PATTERNS = Object.freeze([
+    /从复现角度(?:看)?[，,:：]/,
+    /这样的边界很重要/,
+    /本文的实验和图示应/,
+    /对于未报告的参数、?硬件、?随机种子或服务版本/,
+    /应按数据流逐项复核/,
+    /不能把整条流水线的收益都归因/,
+    /对于多模态系统，还要区分/
+]);
 const REQUIRED_RECOVERY_STAGES = Object.freeze([
     'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
     'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
@@ -339,7 +365,192 @@ function isRecoveryStageTerminal(stage, status) {
     return Boolean(RECOVERY_STAGE_TERMINAL_STATUSES[stage]?.includes(status));
 }
 
-function validateManualTakeoverManifest(manifest, sourceSha256 = '') {
+function manualStableValue(value) {
+    if (Array.isArray(value)) return value.map(manualStableValue);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, manualStableValue(value[key])]));
+}
+
+function manualSha256(value) {
+    return crypto.createHash('sha256')
+        .update(JSON.stringify(manualStableValue(value)))
+        .digest('hex');
+}
+
+// Text evidence is hashed as its exact UTF-8 bytes (without JSON string
+// quoting) so Node and the Python publishing gate bind to the same value.
+function manualTextSha256(value) {
+    return crypto.createHash('sha256')
+        .update(String(value ?? ''), 'utf8')
+        .digest('hex');
+}
+
+function normalizeManualEvidenceText(value) {
+    return String(value || '')
+        .normalize('NFKC')
+        .replace(/[“”]/g, '"')
+        .replace(/[‘’]/g, "'")
+        .replace(/\s+/g, '')
+        .trim();
+}
+
+function findManualBoilerplate(analysis, options = {}) {
+    const limit = Number.isInteger(options.limit) && options.limit > 0 ? options.limit : 8;
+    const matches = [];
+    const seen = new Set();
+    for (const line of String(analysis || '').split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || /^```/.test(trimmed) || /^\s*[>|]/.test(trimmed)) continue;
+        for (const pattern of MANUAL_BOILERPLATE_PATTERNS) {
+            if (!pattern.test(trimmed)) continue;
+            const evidence = trimmed.slice(0, 220);
+            if (!seen.has(evidence)) {
+                seen.add(evidence);
+                matches.push(evidence);
+            }
+            break;
+        }
+        if (matches.length >= limit) break;
+    }
+    return matches;
+}
+
+function validateManualEvidenceLedger(ledger, sourceText = '') {
+    if (!Array.isArray(ledger) || ledger.length < 6) {
+        return 'manual evidenceLedger 至少需要 6 条可回溯事实';
+    }
+    const seen = new Set();
+    const sections = new Set();
+    const normalizedSource = normalizeManualEvidenceText(sourceText);
+    for (const [index, item] of ledger.entries()) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+            return `manual evidenceLedger 第 ${index + 1} 条不是对象`;
+        }
+        if (typeof item.id !== 'string' || !/^E\d{2,3}$/.test(item.id) || seen.has(item.id)) {
+            return `manual evidenceLedger 第 ${index + 1} 条 id 非法或重复`;
+        }
+        seen.add(item.id);
+        if (!REQUIRED_ANALYSIS_SECTIONS.includes(item.section)
+            || ['评分', '标签', '作者与机构'].includes(item.section)) {
+            return `manual evidenceLedger ${item.id} section 必须对应事实正文章节`;
+        }
+        sections.add(item.section);
+        if (typeof item.claim !== 'string' || item.claim.trim().length < 20) {
+            return `manual evidenceLedger ${item.id} claim 过短`;
+        }
+        if (typeof item.sourceQuote !== 'string' || item.sourceQuote.trim().length < 12) {
+            return `manual evidenceLedger ${item.id} 缺少原文引用`;
+        }
+        if (normalizedSource) {
+            const quote = normalizeManualEvidenceText(item.sourceQuote);
+            if (!quote || !normalizedSource.includes(quote)) {
+                return `manual evidenceLedger ${item.id} 的 sourceQuote 不存在于全文来源`;
+            }
+        }
+    }
+    const requiredSections = ['核心摘要', '方法概述和架构', '实验结果', '局限与问题', '开源详情'];
+    const missingSections = requiredSections.filter(section => !sections.has(section));
+    if (missingSections.length > 0) {
+        return `manual evidenceLedger 缺少章节覆盖: ${missingSections.join('、')}`;
+    }
+    return null;
+}
+
+function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options = {}) {
+    if (takeover.version !== MANUAL_COMPLETE_PROVENANCE_VERSION
+        || takeover.mode !== MANUAL_COMPLETE_STATUS) {
+        return 'manualTakeover.version/mode 必须为 manual_complete v2';
+    }
+    if (typeof takeover.agent !== 'string' || !takeover.agent.trim()) {
+        return 'manualTakeover.agent 缺失';
+    }
+    if (takeover.basis !== 'full_text') return 'manualTakeover.basis 必须为 full_text';
+    if (!/^[a-f0-9]{64}$/.test(String(takeover.sourceSha256 || ''))) {
+        return 'manualTakeover.sourceSha256 必须是 SHA-256';
+    }
+    if (sourceSha256 && takeover.sourceSha256 !== sourceSha256) {
+        return 'manualTakeover.sourceSha256 与来源 SHA 不一致';
+    }
+    if (!/^[a-f0-9]{64}$/.test(String(takeover.promptSha256 || ''))) {
+        return 'manualTakeover.promptSha256 必须是 SHA-256';
+    }
+    if (!/^[a-f0-9]{64}$/.test(String(takeover.analysisSha256 || ''))) {
+        return 'manualTakeover.analysisSha256 必须是 SHA-256';
+    }
+    if (options.analysis !== undefined && takeover.analysisSha256 !== manualTextSha256(options.analysis)) {
+        return 'manualTakeover.analysisSha256 与正文不一致';
+    }
+    if (typeof takeover.completedAt !== 'string'
+        || !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?\+08:00$/.test(takeover.completedAt)) {
+        return 'manualTakeover.completedAt 必须是北京时间 ISO 时间';
+    }
+    if (typeof takeover.reason !== 'string' || takeover.reason.trim().length < 20) {
+        return 'manualTakeover.reason 过短';
+    }
+    const review = takeover.review;
+    if (!review || typeof review !== 'object'
+        || review.sourceVerified !== true || review.analysisContractVerified !== true
+        || review.scoringVerified !== true || review.stageEvidenceVerified !== true) {
+        return 'manualTakeover.review 必须确认来源、正文、评分和阶段证据';
+    }
+
+    const audit = takeover.audit;
+    if (!audit || typeof audit !== 'object' || audit.version !== 1) {
+        return 'manualTakeover.audit 必须为 v1 对象';
+    }
+    if (!Number.isInteger(audit.attempts) || audit.attempts < 2) {
+        return 'manualTakeover.audit.attempts 至少为 2，必须存在复核/修订轮次';
+    }
+    if (!Array.isArray(audit.passes) || audit.passes.length < 2) {
+        return 'manualTakeover.audit.passes 至少需要初审和终审两轮';
+    }
+    const finalPass = audit.passes[audit.passes.length - 1];
+    if (!finalPass || finalPass.status !== 'pass'
+        || !Array.isArray(finalPass.issues) || finalPass.issues.length !== 0) {
+        return 'manualTakeover.audit 最后一轮必须为无问题 pass';
+    }
+    const checks = audit.checks;
+    if (!checks || typeof checks !== 'object'
+        || new Set(Object.keys(checks)).size !== MANUAL_AUDIT_CHECKS.length
+        || MANUAL_AUDIT_CHECKS.some(key => checks[key] !== true)) {
+        return 'manualTakeover.audit.checks 必须完整且全部为 true';
+    }
+    const boilerplate = findManualBoilerplate(options.analysis || takeover.analysis || '');
+    if (boilerplate.length > 0) {
+        return `manual 分析含通用提示词残留: ${boilerplate.join('；')}`;
+    }
+    const ledgerIssue = validateManualEvidenceLedger(takeover.evidenceLedger, options.sourceText || '');
+    if (ledgerIssue) return ledgerIssue;
+    if (!/^[a-f0-9]{64}$/.test(String(takeover.evidenceLedgerSha256 || ''))
+        || takeover.evidenceLedgerSha256 !== manualSha256(takeover.evidenceLedger)) {
+        return 'manualTakeover.evidenceLedgerSha256 不匹配';
+    }
+
+    const stages = manifest?.stages || {};
+    const evidence = takeover.stageEvidence;
+    if (!evidence || typeof evidence !== 'object') return 'manualTakeover.stageEvidence 缺失';
+    for (const stage of MANUAL_STAGE_EVIDENCE_STAGES) {
+        const item = evidence[stage];
+        const state = stages[stage];
+        if (!item || typeof item !== 'object' || !state || item.status !== state.status) {
+            return `manualTakeover.stageEvidence.${stage} 与阶段状态不一致`;
+        }
+        if (!Number.isInteger(item.attempts) || item.attempts < 2) {
+            return `manualTakeover.stageEvidence.${stage}.attempts 至少为 2`;
+        }
+        for (const key of ['inputSha256', 'outputSha256', 'auditSha256']) {
+            if (!/^[a-f0-9]{64}$/.test(String(item[key] || ''))) {
+                return `manualTakeover.stageEvidence.${stage}.${key} 必须是 SHA-256`;
+            }
+        }
+        if (!Array.isArray(item.reviewedClaims) || item.reviewedClaims.length === 0) {
+            return `manualTakeover.stageEvidence.${stage}.reviewedClaims 不能为空`;
+        }
+    }
+    return null;
+}
+
+function validateManualTakeoverManifest(manifest, sourceSha256 = '', options = {}) {
     const manualStatuses = Object.values(manifest?.stages || {})
         .some(stage => stage?.status === MANUAL_COMPLETE_STATUS);
     if (!manualStatuses && manifest?.manualTakeover === undefined) return null;
@@ -347,9 +558,10 @@ function validateManualTakeoverManifest(manifest, sourceSha256 = '') {
     if (!takeover || typeof takeover !== 'object' || Array.isArray(takeover)) {
         return 'manual_complete 阶段缺少 manualTakeover provenance';
     }
-    if (takeover.version !== 1 || takeover.mode !== MANUAL_COMPLETE_STATUS) {
-        return 'manualTakeover.version/mode 非法';
+    if (takeover.version === MANUAL_COMPLETE_PROVENANCE_VERSION) {
+        return validateManualV2Takeover(manifest, takeover, sourceSha256, options);
     }
+    if (takeover.version !== 1 || takeover.mode !== MANUAL_COMPLETE_STATUS) return 'manualTakeover.version/mode 非法';
     if (typeof takeover.agent !== 'string' || !takeover.agent.trim()) {
         return 'manualTakeover.agent 缺失';
     }
@@ -562,6 +774,8 @@ module.exports = {
     REQUIRED_RECOVERY_STAGES,
     RECOVERY_STAGE_TERMINAL_STATUSES,
     MANUAL_COMPLETE_STATUS,
+    MANUAL_COMPLETE_PROVENANCE_VERSION,
+    MANUAL_AUDIT_CHECKS,
     EXPERIMENT_TABLE_LIMITS,
     splitMarkdownTableRow,
     extractMarkdownTables,
@@ -570,6 +784,10 @@ module.exports = {
     validateMethodDetailContract,
     analysisManifestRequiresMethodDetailContract,
     isRecoveryStageTerminal,
+    manualSha256,
+    manualTextSha256,
+    findManualBoilerplate,
+    validateManualEvidenceLedger,
     validateManualTakeoverManifest,
     getInvalidAnalysisReason
 };

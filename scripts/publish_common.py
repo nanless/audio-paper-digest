@@ -69,6 +69,24 @@ MANUAL_OVERRIDE_KEYS = frozenset({'type', 'source', 'reason', 'fields'})
 EXPERIMENT_TABLE_CONTRACT_VERSION = 'bounded-v1'
 METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1'
 MANUAL_COMPLETE_STATUS = 'manual_complete'
+MANUAL_COMPLETE_PROVENANCE_VERSION = 2
+MANUAL_AUDIT_CHECKS = frozenset({
+    'sourceCoverage', 'promptConformance', 'factualClaimsLedger', 'scoreRecomputed',
+    'methodContract', 'tableContract', 'boilerplateScan', 'finalContract',
+})
+MANUAL_STAGE_EVIDENCE_STAGES = (
+    'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
+    'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement',
+)
+MANUAL_BOILERPLATE_PATTERNS = (
+    re.compile(r'从复现角度(?:看)?[，,:：]'),
+    re.compile(r'这样的边界很重要'),
+    re.compile(r'本文的实验和图示应'),
+    re.compile(r'对于未报告的参数、?硬件、?随机种子或服务版本'),
+    re.compile(r'应按数据流逐项复核'),
+    re.compile(r'不能把整条流水线的收益都归因'),
+    re.compile(r'对于多模态系统，还要区分'),
+)
 EXPERIMENT_TABLE_LIMITS = {
     'max_tables': 2,
     'max_data_rows': 12,
@@ -90,6 +108,15 @@ def _extract_analysis_section(text, title):
     return match.group(1).strip() if match else ''
 
 
+def _manual_hash(value):
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
+
+
+def _manual_boilerplate(analysis):
+    text = str(analysis or '')
+    return [line.strip() for line in text.splitlines() if any(pattern.search(line) for pattern in MANUAL_BOILERPLATE_PATTERNS)]
+
+
 def _validate_manual_takeover_manifest(paper, manifest, paper_label):
     stages = manifest.get('stages') if isinstance(manifest, dict) else {}
     uses_manual = any(
@@ -101,6 +128,53 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
     takeover = manifest.get('manualTakeover')
     if not isinstance(takeover, dict):
         raise PublishDataValidationError(f'{paper_label} manual_complete 缺少 manualTakeover provenance')
+    if takeover.get('version') == MANUAL_COMPLETE_PROVENANCE_VERSION:
+        if takeover.get('mode') != MANUAL_COMPLETE_STATUS:
+            raise PublishDataValidationError(f'{paper_label} manualTakeover.version/mode 必须为 manual_complete v2')
+        if takeover.get('basis') != 'full_text':
+            raise PublishDataValidationError(f'{paper_label} manualTakeover.basis 必须为 full_text')
+        if not re.fullmatch(r'[a-f0-9]{64}', str(takeover.get('promptSha256') or '')):
+            raise PublishDataValidationError(f'{paper_label} manualTakeover.promptSha256 非法')
+        analysis_sha = hashlib.sha256(str(paper.get('analysis') or '').encode('utf-8')).hexdigest()
+        if takeover.get('analysisSha256') != analysis_sha:
+            raise PublishDataValidationError(f'{paper_label} manualTakeover.analysisSha256 与正文不一致')
+        audit = takeover.get('audit')
+        if not isinstance(audit, dict) or audit.get('version') != 1:
+            raise PublishDataValidationError(f'{paper_label} manualTakeover.audit 必须为 v1')
+        if not isinstance(audit.get('attempts'), int) or audit['attempts'] < 2:
+            raise PublishDataValidationError(f'{paper_label} manualTakeover.audit 至少需要两轮尝试')
+        passes = audit.get('passes')
+        if not isinstance(passes, list) or len(passes) < 2 or not isinstance(passes[-1], dict) \
+                or passes[-1].get('status') != 'pass' or passes[-1].get('issues') != []:
+            raise PublishDataValidationError(f'{paper_label} manualTakeover.audit 最后一轮必须干净通过')
+        checks = audit.get('checks')
+        if not isinstance(checks, dict) or set(checks) != MANUAL_AUDIT_CHECKS \
+                or any(value is not True for value in checks.values()):
+            raise PublishDataValidationError(f'{paper_label} manualTakeover.audit.checks 不完整')
+        if _manual_boilerplate(paper.get('analysis')):
+            raise PublishDataValidationError(f'{paper_label} 正文包含通用 manual 提示词残留')
+        ledger = takeover.get('evidenceLedger')
+        if not isinstance(ledger, list) or len(ledger) < 6:
+            raise PublishDataValidationError(f'{paper_label} manual evidenceLedger 不完整')
+        if takeover.get('evidenceLedgerSha256') != _manual_hash(ledger):
+            raise PublishDataValidationError(f'{paper_label} manual evidenceLedger SHA 不一致')
+        evidence = takeover.get('stageEvidence')
+        stages = manifest.get('stages') or {}
+        if not isinstance(evidence, dict):
+            raise PublishDataValidationError(f'{paper_label} manual stageEvidence 缺失')
+        for stage in MANUAL_STAGE_EVIDENCE_STAGES:
+            item = evidence.get(stage)
+            state = stages.get(stage)
+            if not isinstance(item, dict) or not isinstance(state, dict) or item.get('status') != state.get('status'):
+                raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage} 与阶段状态不一致')
+            if not isinstance(item.get('attempts'), int) or item['attempts'] < 2:
+                raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage} 未记录两轮审计')
+            for key in ('inputSha256', 'outputSha256', 'auditSha256'):
+                if not re.fullmatch(r'[a-f0-9]{64}', str(item.get(key) or '')):
+                    raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage}.{key} 非法')
+            if not isinstance(item.get('reviewedClaims'), list) or not item['reviewedClaims']:
+                raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage}.reviewedClaims 不能为空')
+        return
     if takeover.get('version') != 1 or takeover.get('mode') != MANUAL_COMPLETE_STATUS:
         raise PublishDataValidationError(f'{paper_label} manualTakeover.version/mode 非法')
     if not isinstance(takeover.get('agent'), str) or not takeover['agent'].strip():

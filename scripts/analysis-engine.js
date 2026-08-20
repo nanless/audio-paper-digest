@@ -262,7 +262,8 @@ function isCompleteAnalysisContent(paper) {
     }
     if (validateManualTakeoverManifest(
         paper.analysisManifest,
-        paper.analysisManifest.sourceAcquisition?.sourceSha256 || paper.sourceSha256 || ''
+        paper.analysisManifest.sourceAcquisition?.sourceSha256 || paper.sourceSha256 || '',
+        { analysis: paper.analysis }
     )) return false;
     return true;
 }
