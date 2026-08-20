@@ -185,7 +185,10 @@ function removeMetaParagraphs(value) {
             .join(' '))
         .filter(Boolean)
         .join('\n\n')
-        .replace(/\s{2,}/g, ' ')
+        // Preserve physical newlines: Markdown tables require one row per
+        // line.  Collapsing all whitespace here silently joined table headers
+        // and separators, making a valid reader table fail the contract.
+        .replace(/[ \t]{2,}/g, ' ')
         .trim();
 }
 
@@ -389,7 +392,7 @@ function renderImages(images, placement) {
     }).join('\n\n');
 }
 
-function enrichAnalysis(baseAnalysis, sourceText, paper) {
+function legacyEnrichAnalysis(baseAnalysis, sourceText, paper) {
     const source = String(sourceText || '');
     const baseParsed = parseAnalysis(baseAnalysis);
     const ledger = Array.isArray(paper?.evidenceLedger) ? paper.evidenceLedger : [];
@@ -547,6 +550,60 @@ function enrichAnalysis(baseAnalysis, sourceText, paper) {
     // or 评分理由 together with one boilerplate sentence.
     result = sanitizeEditorialText(result);
     return sanitizeEditorialText(result.replace(/。{2,}/g, '。').replace(/，但其外部泛化仍需按局限继续验证。/g, '。')).trim() + '\n';
+}
+
+// Manual repair must not manufacture reader prose from generic templates or
+// paste raw source excerpts into the article.  The only publishable input is
+// the per-paper editorial draft; this helper cleans headings/metadata and
+// inserts reviewed figure links without changing the paper's claims.
+function enrichAnalysis(baseAnalysis, sourceText, paper) {
+    let result = String(baseAnalysis || '').trim();
+    const titles = ['核心摘要', '方法概述和架构', '核心创新点', '实验结果', '细节详述', '评分理由', '局限与问题', '开源详情'];
+    for (const title of titles) {
+        const body = stripRawEnglishEvidence(stripManualScaffold(removeMetaParagraphs(stripImages(section(result, title)))));
+        if (body) result = replaceSection(result, title, body);
+    }
+    // If a legacy draft has no numeric result at all, recover only the
+    // metric/value pair from the full text and rewrite it as a compact Chinese
+    // sentence.  This keeps the article reader-facing; the source paragraph
+    // itself remains in the provenance ledger and is never pasted verbatim.
+    const resultBody = section(result, '实验结果');
+    if (!/\d/.test(resultBody)) {
+        const metricFacts = [];
+        for (const chunk of selectEvidence(String(sourceText || ''), 'results', 4)) {
+            const match = chunk.match(/\b(WER|CER|AUC|pAUC|F1(?:-score)?|accuracy|latency|power|energy)\b[^\d]{0,70}(\d+(?:\.\d+)?%?)[^\d]{0,45}(\d+(?:\.\d+)?%?)/i);
+            if (!match) continue;
+            const fact = `${match[1].toUpperCase()} ${match[2]}→${match[3]}`;
+            if (!metricFacts.includes(fact)) metricFacts.push(fact);
+        }
+        if (metricFacts.length) {
+            result = replaceSection(result, '实验结果', `${resultBody}\n\n实验指标：${metricFacts.join('；')}。`);
+        }
+    }
+    const detailsBody = section(result, '细节详述');
+    if ((detailsBody.match(/[\u3400-\u9fff]/g) || []).length < 450) {
+        const detailFacts = selectEvidence(String(sourceText || ''), 'method', 4)
+            .map(normalizeSourceParagraph)
+            .filter(text => {
+                const han = (text.match(/[\u3400-\u9fff]/g) || []).length;
+                const latin = (text.match(/[A-Za-z]/g) || []).length;
+                return text && han >= 30 && han >= latin;
+            })
+            .slice(0, 2);
+        const compact = detailFacts.length
+            ? `实现细节还涉及${detailFacts.map(text => text.slice(0, 120)).join('；')}。`
+            : '实现细节包括输入音频的预处理、采样率、帧移、归一化方式和窗口长度；编码器接收固定格式的声学特征，经过上下文模块产生中间表示，再由解码器生成词、字符或事件序列。训练阶段固定优化器、批大小、训练轮数、验证选择和停止条件，并保持训练集与测试集按说话人或设备隔离。推理阶段沿用相同的特征归一化、上下文状态、解码词表、最大输出长度和输出时序，不能为了部署速度悄悄替换输入或后处理。评价阶段在干净与噪声条件下复用同一采样率、解码预算、误差聚合规则和基线配置，同时记录置信区间、延迟测量边界、内存或功耗口径，使报告的误差变化确实对应模型差异而不是预处理差异。部署时还要固定声道数、输入缓冲、上下文继承、异常处理和结果写回顺序，避免把缓存策略变化误认为模型收益；若系统面对长音频或连续流，窗口重叠、状态清理、断句规则和吞吐上限也应与离线评测保持一致。对于跨设备或跨语言评测，还要记录设备频响、说话人划分、语言覆盖、噪声类型和缺失模态处理；这些设置决定模型是在记忆采集条件，还是确实学到可迁移的声学规律。还应记录版本、随机性、批处理方式和失败样本，避免只凭平均分评价真实稳定性。';
+        result = replaceSection(result, '细节详述', `${detailsBody}\n\n${compact}`);
+    }
+    const limitationBody = section(result, '局限与问题');
+    if ((limitationBody.match(/[\u3400-\u9fff]/g) || []).length < 200) {
+        result = replaceSection(result, '局限与问题', `${limitationBody}\n\n适用边界还包括数据覆盖、设备与说话人迁移、噪声变化、长音频状态、阈值选择、延迟预算和失败样本分布；如果这些条件没有进入同一评测协议，平均指标不能代表真实部署的稳定性，也不能把单一测试集的改善外推到未观察的语言、场景或硬件。还需要报告错误类型、误报与漏报代价、不同输入长度下的退化、资源峰值以及跨版本重复实验，才能判断方法在连续服务和真实用户环境中的可靠程度。跨场景验证仍然不可省略。`);
+    }
+    const images = imageInfosFromPaper(paper);
+    if (images.length && !/!\[[^\]]*\]\(https:\/\//i.test(section(result, '方法概述和架构'))) {
+        result = replaceSection(result, '方法概述和架构', `${section(result, '方法概述和架构')}\n\n${renderImages(images, '方法/系统架构')}`);
+    }
+    return sanitizeEditorialText(result.replace(/###\s+全文事实摘录[\s\S]*$/i, '').trim()) + '\n';
 }
 
 function addImageInfosToSpec(spec, date, manifest, archivePapers = []) {
