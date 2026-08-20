@@ -26,6 +26,8 @@ const {
     manualSha256,
     manualTextSha256,
     validateManualTakeoverManifest,
+    validateManualDepthContract,
+    MANUAL_DEPTH_CONTRACT_VERSION,
     getInvalidAnalysisReason
 } = require('./analysis-contract.js');
 const {
@@ -134,9 +136,13 @@ function buildManualRecord(paper, spec, date, promptSha256) {
     const parsed = parseAnalysis(spec.analysis);
     const invalidReason = getInvalidAnalysisReason(spec.analysis, parsed, {
         enforceExperimentTableContract: true,
-        enforceMethodDetailContract: true
+        enforceMethodDetailContract: true,
+        enforceManualDepthContract: true,
+        sourceText
     });
     if (invalidReason) throw new Error(`${normalizedId(paper)} 分析契约失败: ${invalidReason}`);
+    const manualDepthIssue = validateManualDepthContract(spec.analysis, { sourceText });
+    if (manualDepthIssue) throw new Error(`${normalizedId(paper)} manual 深度契约失败: ${manualDepthIssue}`);
     const analysisSha256 = manualTextSha256(spec.analysis);
     const audit = spec.manualAudit;
     if (!audit || typeof audit !== 'object' || audit.version !== 1) {
@@ -172,7 +178,11 @@ function buildManualRecord(paper, spec, date, promptSha256) {
     }]));
     const analysisManifest = {
         version: 1,
-        contracts: { experimentTables: 'bounded-v1', methodDetail: 'detailed-v1' },
+        contracts: {
+            experimentTables: 'bounded-v1',
+            methodDetail: 'detailed-v1',
+            manualDepth: MANUAL_DEPTH_CONTRACT_VERSION
+        },
         sourceAcquisition: {
             analysisSource: 'provided_full_text',
             sourceId: normalizedId(paper),
@@ -192,6 +202,29 @@ function buildManualRecord(paper, spec, date, promptSha256) {
         sourceText
     });
     if (manifestIssue) throw new Error(`${normalizedId(paper)} manual provenance 失败: ${manifestIssue}`);
+    const imageInfos = Array.isArray(spec.imageInfos) ? spec.imageInfos : [];
+    const imageUrls = imageInfos
+        .filter(info => info && typeof info.url === 'string' && /^https:\/\/[^\s)]+/i.test(info.url)
+            && !/(?:\/static\/|funders?|sponsor|logo|icon|avatar|favicon)/i.test(info.url))
+        .map(info => info.url);
+    const usableImageInfos = imageInfos.filter(info => info && imageUrls.includes(info.url));
+    const imageManifest = {
+        version: 1,
+        source: imageInfos.length > 0 ? 'manual_full_text_html' : 'manual_no_image_metadata',
+        totalFound: usableImageInfos.length,
+        candidates: usableImageInfos.map((info, index) => ({
+            index: index + 1,
+            url: info.url,
+            caption: info.caption || info.alt || '',
+            source: info.source || 'arxiv_html'
+        })),
+        selected: usableImageInfos.slice(0, 4).map((info, index) => ({
+            index: index + 1,
+            url: info.url,
+            caption: info.caption || info.alt || '',
+            selectionReason: 'manual_full_text_figure_review'
+        }))
+    };
     return {
         ...paper,
         analysis: spec.analysis,
@@ -208,6 +241,10 @@ function buildManualRecord(paper, spec, date, promptSha256) {
         usedTextSha256: sourceSha256,
         analysisConfidence: 'manual_full_text',
         sourceWarnings: ['manual_offline_no_llm_api'],
+        imageManifest,
+        imageUrls,
+        allImageUrls: imageUrls,
+        selectedImageUrls: imageManifest.selected.map(item => item.url),
         analysisManifest,
         digestStatus: {
             ...(paper.digestStatus || {}),

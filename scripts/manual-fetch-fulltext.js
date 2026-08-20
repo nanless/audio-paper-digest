@@ -43,6 +43,12 @@ async function main() {
                 chars: result.text.length,
                 sourceSha256: result.sourceSha256,
                 warnings: result.warnings || [],
+                imageInfos: Array.isArray(result.imageInfos) ? result.imageInfos.map(info => ({
+                    url: info.url,
+                    caption: info.caption || '',
+                    alt: info.alt || '',
+                    source: info.source || 'arxiv_html'
+                })) : [],
                 fetchedAt: getBeijingISOString()
             };
             console.log(`[manual-full-text] ${id} 完成 ${result.source} ${result.text.length} chars`);

@@ -68,6 +68,7 @@ MANUAL_OVERRIDE_ALLOWED_FIELDS = frozenset(SCORING_COMPARE_FIELDS)
 MANUAL_OVERRIDE_KEYS = frozenset({'type', 'source', 'reason', 'fields'})
 EXPERIMENT_TABLE_CONTRACT_VERSION = 'bounded-v1'
 METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1'
+MANUAL_DEPTH_CONTRACT_VERSION = 'full-text-evidence-v1'
 MANUAL_COMPLETE_STATUS = 'manual_complete'
 MANUAL_COMPLETE_PROVENANCE_VERSION = 2
 MANUAL_AUDIT_CHECKS = frozenset({
@@ -345,6 +346,28 @@ def validate_method_detail_contract(analysis):
     paragraphs = [item for item in re.split(r'\n\s*\n', method) if len(item.strip()) > 20]
     if len(paragraphs) < 3:
         return f'方法概述有效段落不足: {len(paragraphs)}/3'
+    return None
+
+
+def validate_manual_depth_contract(analysis):
+    """Fail closed on newly ingested manual text that is only an abstract.
+
+    This mirrors the Node ingestion gate.  It deliberately applies only when
+    a manifest opts into ``full-text-evidence-v1`` so historical API records
+    and older manual receipts remain compatible.
+    """
+    method = _extract_analysis_section(analysis, '方法概述和架构')
+    results = _extract_analysis_section(analysis, '实验结果')
+    details = _extract_analysis_section(analysis, '细节详述')
+    chinese_count = lambda value: len(re.findall(r'[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]', str(value or '')))
+    if chinese_count(method) < 650:
+        return f'manual 全文方法证据不足: {chinese_count(method)}/650'
+    if chinese_count(results) < 100:
+        return f'manual 全文实验证据不足: {chinese_count(results)}/100'
+    if chinese_count(details) < 40:
+        return f'manual 全文细节证据不足: {chinese_count(details)}/40'
+    if re.search(r'从复现角度|本分析|人工(?:审计|接管)|manual_complete|不能由本分析|不补造|实验数字只采用|按来源逐项核对', str(analysis or ''), re.I):
+        return 'manual 正文包含流程/审计元话语，必须改写为论文事实'
     return None
 
 
@@ -648,6 +671,20 @@ def validate_papers_for_publish(papers):
                     if method_issue:
                         raise PublishDataValidationError(
                             f'{paper_label} 分析正文方法契约无效: {method_issue}'
+                        )
+                manual_depth_contract = (
+                    contracts.get('manualDepth') if isinstance(contracts, dict) else None
+                )
+                if manual_depth_contract is not None and manual_depth_contract != MANUAL_DEPTH_CONTRACT_VERSION:
+                    raise PublishDataValidationError(
+                        f'{paper_label} analysisManifest.contracts.manualDepth 非法: '
+                        f'{manual_depth_contract}'
+                    )
+                if manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION:
+                    manual_depth_issue = validate_manual_depth_contract(paper.get('analysis'))
+                    if manual_depth_issue:
+                        raise PublishDataValidationError(
+                            f'{paper_label} manual 全文深度契约无效: {manual_depth_issue}'
                         )
             if (paper.get('analysisSource') == 'abstract'
                     and paper.get('allowAbstractAnalysisPublish') is not True):

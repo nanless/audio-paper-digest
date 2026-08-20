@@ -51,6 +51,12 @@ const DOCUMENT_TYPES = new Set(['方法研究', '系统技术报告', '模型报
 const NON_EMPIRICAL_DOCUMENT_TYPES = new Set(['综述', '理论研究']);
 const EXPERIMENT_TABLE_CONTRACT_VERSION = 'bounded-v1';
 const METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1';
+// Manual/offline analyses must contain actual full-text evidence in addition
+// to the structural contract used by API analyses.  This is deliberately a
+// separate opt-in contract so old, valid API records remain backward
+// compatible while new manual records cannot silently collapse to an abstract
+// plus generic process commentary.
+const MANUAL_DEPTH_CONTRACT_VERSION = 'full-text-evidence-v1';
 const ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION = 'high-confidence-v1';
 const MANUAL_COMPLETE_STATUS = 'manual_complete';
 const MANUAL_COMPLETE_PROVENANCE_VERSION = 2;
@@ -354,6 +360,24 @@ function validateMethodDetailContract(analysis) {
     if (!structuralKeywords.some(keyword => method.includes(keyword))) return '方法概述缺少结构性描述';
     const paragraphs = method.split(/\n\s*\n/).filter(paragraph => paragraph.trim().length > 20);
     if (paragraphs.length < 3) return `方法概述有效段落不足: ${paragraphs.length}/3`;
+    return null;
+}
+
+function validateManualDepthContract(analysis, options = {}) {
+    const method = extractSection(analysis, '方法概述和架构');
+    const results = extractSection(analysis, '实验结果');
+    const details = extractSection(analysis, '细节详述');
+    const chineseCount = value => (String(value || '').match(/[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]/g) || []).length;
+    if (chineseCount(method) < 650) return `manual 全文方法证据不足: ${chineseCount(method)}/650 个中文字符`;
+    if (chineseCount(results) < 100) return `manual 全文实验证据不足: ${chineseCount(results)}/100 个中文字符`;
+    if (chineseCount(details) < 40) return `manual 全文细节证据不足: ${chineseCount(details)}/40 个中文字符`;
+    if (/(?:从复现角度|本分析|人工(?:审计|接管)|manual_complete|不能由本分析|不补造|实验数字只采用|按来源逐项核对)/i.test(analysis)) {
+        return 'manual 正文包含流程/审计元话语，必须改写为论文事实';
+    }
+    const resultTables = extractMarkdownTables(results);
+    const sourceText = String(options.sourceText || '');
+    const paperHasTable = /(?:\btable\s*\d+\b|\btab\.\s*\d+\b|表\s*\d+)/i.test(sourceText);
+    if (paperHasTable && resultTables.length === 0) return '全文包含实验表格，但实验结果没有可读 Markdown 表格';
     return null;
 }
 
@@ -735,6 +759,10 @@ function getInvalidAnalysisReason(analysis, parsed, options = {}) {
         const methodIssue = validateMethodDetailContract(analysis);
         if (methodIssue) return `分析结果方法契约无效: ${methodIssue}`;
     }
+    if (options.enforceManualDepthContract === true) {
+        const manualIssue = validateManualDepthContract(analysis, options);
+        if (manualIssue) return `分析结果 manual 深度契约无效: ${manualIssue}`;
+    }
     if (!parsed.documentType) return '分析结果缺少有效文档类型';
     if (!parsed.scoreValidation?.valid) {
         const details = Array.isArray(parsed.scoreValidation?.errors)
@@ -782,6 +810,8 @@ module.exports = {
     validateExperimentTableContract,
     analysisManifestRequiresExperimentTableContract,
     validateMethodDetailContract,
+    validateManualDepthContract,
+    MANUAL_DEPTH_CONTRACT_VERSION,
     analysisManifestRequiresMethodDetailContract,
     isRecoveryStageTerminal,
     manualSha256,
