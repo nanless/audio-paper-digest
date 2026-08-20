@@ -220,6 +220,11 @@ function stripRawEnglishEvidence(value) {
 
 function sanitizeEditorialText(value) {
     return String(value || '')
+        // 旧版人工评分曾把内部事实来源占位符写进读者正文；这些标记
+        // 只属于 provenance ledger，不能出现在文章里。
+        .replace(/\[A_[A-Z0-9_ -]+\]/g, '')
+        .replace(/论文明确承认(?:的)?局限[：:]?/g, '主要局限包括：')
+        .replace(/实验结果与数据划分、基线、指标方向及统计口径一并报告。/g, '')
         // 手工产物必须是论文解读，而不是审计日志；删除曾经描述“如何选证据”的流程句。
         .replace(/这些实现细节说明了论文怎样把方法落到可执行的实验协议：[^#]+(?=\n##|\n###|$)/g, '上述实现条件共同限定了结果的复现边界。')
         .replace(/在该设计中，/g, '')
@@ -628,14 +633,18 @@ function repairHistoricalArchive(date) {
     const manual = fs.existsSync(manualPath) ? readJson(manualPath) : {};
     for (const paper of deep.papers || []) {
         const item = manual[paper.arxivId];
-        if (!item?.sourceText) continue;
-        const sourceDir = path.join(Config.CURRENT_DIR, 'manual-full-text', date);
-        fs.mkdirSync(sourceDir, { recursive: true });
-        const sourcePath = path.join(sourceDir, `${paper.arxivId}.txt`);
-        if (!fs.existsSync(sourcePath)) writeFileAtomic(sourcePath, item.sourceText);
         const existingIsRich = String(paper.analysis || '').length >= 7000
             && ['核心摘要', '方法概述和架构', '核心创新点', '实验结果', '细节详述', '评分理由', '局限与问题']
                 .every(title => section(paper.analysis, title));
+        // 已有完整全文分析时，直接按最新读者契约清理即可；只有旧分析
+        // 不完整时才需要额外的人工全文稿来重建正文。
+        if (!item?.sourceText && !existingIsRich) continue;
+        const sourceDir = path.join(Config.CURRENT_DIR, 'manual-full-text', date);
+        if (item?.sourceText) {
+            fs.mkdirSync(sourceDir, { recursive: true });
+            const sourcePath = path.join(sourceDir, `${paper.arxivId}.txt`);
+            if (!fs.existsSync(sourcePath)) writeFileAtomic(sourcePath, item.sourceText);
+        }
         // 8 月 19 日归档本身已经是完整的 API 时代全文分析；不要再把
         // 原始英文句子重复拼到它后面，只清掉本轮手工修复留下的审计套话。
         paper.analysis = existingIsRich
