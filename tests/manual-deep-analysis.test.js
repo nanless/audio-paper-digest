@@ -153,6 +153,16 @@ describe('manual_complete v2 deep-analysis contract', () => {
         );
     });
 
+    it('拒绝“论文明确写到”式证据引导语', () => {
+        const fixture = baseSpec();
+        fixture.analysis = fixture.analysis.replace('论文研究带噪语音识别中的上下文声学建模', '论文明确写到，论文研究带噪语音识别中的上下文声学建模');
+        fixture.manifest.manualTakeover.analysisSha256 = manualTextSha256(fixture.analysis);
+        assert.match(
+            validateManualTakeoverManifest(fixture.manifest, fixture.sourceSha256, { analysis: fixture.analysis, sourceText: fixture.sourceText }),
+            /提示词残留|正文包含流程\/审计元话语/
+        );
+    });
+
     it('拒绝只有一次审查或缺阶段声明的人工结果', () => {
         const fixture = baseSpec();
         fixture.manifest.manualTakeover.audit.attempts = 1;
