@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -69,6 +70,11 @@ MANUAL_OVERRIDE_KEYS = frozenset({'type', 'source', 'reason', 'fields'})
 EXPERIMENT_TABLE_CONTRACT_VERSION = 'bounded-v1'
 METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1'
 MANUAL_DEPTH_CONTRACT_VERSION = 'full-text-evidence-v1'
+MANUAL_DEPTH_CONTRACT_VERSION_V2 = 'full-text-evidence-v2'
+MANUAL_DEPTH_CONTRACT_VERSIONS = frozenset({
+    MANUAL_DEPTH_CONTRACT_VERSION,
+    MANUAL_DEPTH_CONTRACT_VERSION_V2,
+})
 MANUAL_COMPLETE_STATUS = 'manual_complete'
 MANUAL_COMPLETE_PROVENANCE_VERSION = 2
 MANUAL_AUDIT_CHECKS = frozenset({
@@ -368,6 +374,82 @@ def validate_manual_depth_contract(analysis):
         return f'manual 全文细节证据不足: {chinese_count(details)}/40'
     if re.search(r'从复现角度|本分析|人工(?:审计|接管)|manual_complete|不能由本分析|不补造|实验数字只采用|按来源逐项核对', str(analysis or ''), re.I):
         return 'manual 正文包含流程/审计元话语，必须改写为论文事实'
+    return None
+
+
+MANUAL_DUP_CHECK_SECTIONS = (
+    '核心摘要', '方法概述和架构', '核心创新点', '实验结果',
+    '细节详述', '评分理由', '局限与问题', '开源详情',
+)
+MANUAL_DUP_MIN_SENTENCE_CHARS = 15
+MANUAL_DUP_MAX_SENTENCES = 2
+MANUAL_DUP_MAX_SECTION_SPREAD = 2
+MANUAL_EDITORIAL_TEMPLATE_RE = re.compile(
+    r'亮点[：:]?\s*一是|优点[：:]?\s*一是|短板是|不足[：:]?\s*一是[^。]{0,120}二是[^。]{0,120}三是'
+)
+MANUAL_SCORING_ANCHOR_TAG_MIN = 4
+MANUAL_SCORING_ANCHOR_TAG_RE = re.compile(r'\[A_[A-Z_]{2,}\]')
+
+
+def _normalize_manual_dup_sentence(value):
+    normalized = unicodedata.normalize('NFKC', str(value or '')).lower()
+    return re.sub(r'[\s\W_]+', '', normalized, flags=re.UNICODE)
+
+
+def find_cross_section_duplicate_sentences(analysis, limit=3):
+    sentence_sections = {}
+    for section in MANUAL_DUP_CHECK_SECTIONS:
+        body = _extract_analysis_section(analysis, section)
+        if not body:
+            continue
+        seen_in_section = set()
+        for raw_sentence in re.split(r'[。！？!?\n]', body):
+            normalized = _normalize_manual_dup_sentence(raw_sentence)
+            if len(normalized) < MANUAL_DUP_MIN_SENTENCE_CHARS:
+                continue
+            if normalized in seen_in_section:
+                continue
+            seen_in_section.add(normalized)
+            sentence_sections.setdefault(normalized, set()).add(section)
+    duplicates = [
+        {'sentence': sentence, 'sections': sorted(sections)}
+        for sentence, sections in sentence_sections.items()
+        if len(sections) >= 2
+    ]
+    duplicates.sort(key=lambda item: item['sentence'])
+    return duplicates[:limit]
+
+
+def validate_manual_depth_contract_v2(analysis):
+    """Mirror of the Node full-text-evidence-v2 quality gates.
+
+    The open-source URL gate needs the source full text, which is not part of
+    the canonical publish record; that gate is enforced at Node ingestion time
+    only.  Everything else is checked here as a publish-time fallback.
+    """
+    base_issue = validate_manual_depth_contract(analysis)
+    if base_issue:
+        return base_issue
+    duplicates = find_cross_section_duplicate_sentences(analysis)
+    worst_section_spread = max((len(item['sections']) for item in duplicates), default=0)
+    if len(duplicates) > MANUAL_DUP_MAX_SENTENCES or worst_section_spread > MANUAL_DUP_MAX_SECTION_SPREAD:
+        example = duplicates[0]
+        preview = example['sentence'][:24]
+        joined = '、'.join(example['sections'])
+        return (
+            f'manual 正文存在跨章节自我复制: {len(duplicates)} 个句子重复出现在多个章节'
+            f'（如「{preview}…」同时出现在{joined}），每个章节必须独立撰写'
+        )
+    editorial = _extract_analysis_section(analysis, '毒舌点评')
+    if MANUAL_EDITORIAL_TEMPLATE_RE.search(editorial or ''):
+        return 'manual 毒舌点评使用固定模板句式（亮点一是二是/短板是），必须改为针对本文的独立审稿人批评'
+    scoring_reason = _extract_analysis_section(analysis, '评分理由') or ''
+    anchor_tags = set(MANUAL_SCORING_ANCHOR_TAG_RE.findall(scoring_reason))
+    if len(anchor_tags) < MANUAL_SCORING_ANCHOR_TAG_MIN:
+        return (
+            f'manual 评分理由缺少证据锚点标签 [A_*]: 仅 {len(anchor_tags)}'
+            f'/{MANUAL_SCORING_ANCHOR_TAG_MIN} 个不同标签，每个维度必须引用可定位的证据组并说明锚点档位'
+        )
     return None
 
 
@@ -675,12 +757,18 @@ def validate_papers_for_publish(papers):
                 manual_depth_contract = (
                     contracts.get('manualDepth') if isinstance(contracts, dict) else None
                 )
-                if manual_depth_contract is not None and manual_depth_contract != MANUAL_DEPTH_CONTRACT_VERSION:
+                if manual_depth_contract is not None and manual_depth_contract not in MANUAL_DEPTH_CONTRACT_VERSIONS:
                     raise PublishDataValidationError(
                         f'{paper_label} analysisManifest.contracts.manualDepth 非法: '
                         f'{manual_depth_contract}'
                     )
-                if manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION:
+                if manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION_V2:
+                    manual_depth_issue = validate_manual_depth_contract_v2(paper.get('analysis'))
+                    if manual_depth_issue:
+                        raise PublishDataValidationError(
+                            f'{paper_label} manual 全文深度契约无效: {manual_depth_issue}'
+                        )
+                elif manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION:
                     manual_depth_issue = validate_manual_depth_contract(paper.get('analysis'))
                     if manual_depth_issue:
                         raise PublishDataValidationError(

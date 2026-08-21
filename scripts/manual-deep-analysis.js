@@ -27,7 +27,7 @@ const {
     manualTextSha256,
     validateManualTakeoverManifest,
     validateManualDepthContract,
-    MANUAL_DEPTH_CONTRACT_VERSION,
+    MANUAL_DEPTH_CONTRACT_VERSION_V2,
     getInvalidAnalysisReason
 } = require('./analysis-contract.js');
 const {
@@ -144,10 +144,14 @@ function buildManualRecord(paper, spec, date, promptSha256) {
         enforceExperimentTableContract: true,
         enforceMethodDetailContract: true,
         enforceManualDepthContract: true,
+        manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V2,
         sourceText
     });
     if (invalidReason) throw new Error(`${normalizedId(paper)} 分析契约失败: ${invalidReason}`);
-    const manualDepthIssue = validateManualDepthContract(spec.analysis, { sourceText });
+    const manualDepthIssue = validateManualDepthContract(spec.analysis, {
+        sourceText,
+        manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V2
+    });
     if (manualDepthIssue) throw new Error(`${normalizedId(paper)} manual 深度契约失败: ${manualDepthIssue}`);
     const analysisSha256 = manualTextSha256(spec.analysis);
     const audit = spec.manualAudit;
@@ -187,7 +191,7 @@ function buildManualRecord(paper, spec, date, promptSha256) {
         contracts: {
             experimentTables: 'bounded-v1',
             methodDetail: 'detailed-v1',
-            manualDepth: MANUAL_DEPTH_CONTRACT_VERSION
+            manualDepth: MANUAL_DEPTH_CONTRACT_VERSION_V2
         },
         sourceAcquisition: {
             analysisSource: 'provided_full_text',

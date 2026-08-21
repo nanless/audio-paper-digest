@@ -57,6 +57,14 @@ const METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1';
 // compatible while new manual records cannot silently collapse to an abstract
 // plus generic process commentary.
 const MANUAL_DEPTH_CONTRACT_VERSION = 'full-text-evidence-v1';
+// v2 adds the manual quality gates learned from the 2026-08-20 batch:
+// cross-section self-copying, editorial template sentences, missing
+// open-source URL extraction and anchor-less scoring justifications.
+const MANUAL_DEPTH_CONTRACT_VERSION_V2 = 'full-text-evidence-v2';
+const MANUAL_DEPTH_CONTRACT_VERSIONS = Object.freeze([
+    MANUAL_DEPTH_CONTRACT_VERSION,
+    MANUAL_DEPTH_CONTRACT_VERSION_V2
+]);
 const ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION = 'high-confidence-v1';
 const MANUAL_COMPLETE_STATUS = 'manual_complete';
 const MANUAL_COMPLETE_PROVENANCE_VERSION = 2;
@@ -415,6 +423,97 @@ function validateManualDepthContract(analysis, options = {}) {
     const numericHits = (results.match(/(?<![A-Za-z])\d+(?:\.\d+)?(?:%|ms|s|Hz|kHz|M|B|GB|×)?/g) || []).length;
     const sourceNumericHits = (sourceText.match(/(?<![A-Za-z])\d+(?:\.\d+)?(?:%|ms|s|Hz|kHz|M|B|GB|×)?/g) || []).length;
     if (sourceNumericHits >= 8 && numericHits < 3) return `manual 实验结果缺少可核对数字: ${numericHits}/3`;
+    if (options.manualDepthContractVersion === MANUAL_DEPTH_CONTRACT_VERSION_V2) {
+        const v2Issue = validateManualDepthContractV2(analysis, { sourceText });
+        if (v2Issue) return v2Issue;
+    }
+    return null;
+}
+
+// Sections that must carry independent prose.  Duplicate sentences across
+// these sections were the dominant 2026-08-20 manual defect: the same
+// motivation/trade-off paragraph was pasted into 4-5 sections and even into
+// the scoring rationale.
+const MANUAL_DUP_CHECK_SECTIONS = Object.freeze([
+    '核心摘要', '方法概述和架构', '核心创新点', '实验结果',
+    '细节详述', '评分理由', '局限与问题', '开源详情'
+]);
+const MANUAL_DUP_MIN_SENTENCE_CHARS = 15;
+const MANUAL_DUP_MAX_SENTENCES = 2;
+const MANUAL_DUP_MAX_SECTION_SPREAD = 2;
+
+function normalizeManualDupSentence(value) {
+    return String(value || '')
+        .normalize('NFKC')
+        .replace(/[\s\p{P}\p{S}]+/gu, '')
+        .toLowerCase();
+}
+
+function findCrossSectionDuplicateSentences(analysis, options = {}) {
+    const limit = Number.isInteger(options.limit) && options.limit > 0 ? options.limit : 3;
+    const sentenceSections = new Map();
+    for (const section of MANUAL_DUP_CHECK_SECTIONS) {
+        const body = extractSection(analysis, section);
+        if (!body) continue;
+        const seenInSection = new Set();
+        for (const rawSentence of body.split(/[。！？!?\n]/)) {
+            const normalized = normalizeManualDupSentence(rawSentence);
+            if (normalized.length < MANUAL_DUP_MIN_SENTENCE_CHARS) continue;
+            if (seenInSection.has(normalized)) continue;
+            seenInSection.add(normalized);
+            if (!sentenceSections.has(normalized)) sentenceSections.set(normalized, new Set());
+            sentenceSections.get(normalized).add(section);
+        }
+    }
+    const duplicates = [];
+    for (const [sentence, sections] of sentenceSections) {
+        if (sections.size >= 2) duplicates.push({ sentence, sections: [...sections] });
+    }
+    return duplicates.slice(0, limit);
+}
+
+// The 2026-08-20 batch used one fixed editorial template in all 20 papers:
+// "亮点是一是……二是……三是……短板是……" with the "shortboard" restating the
+// authors' own admitted limitations instead of an independent review finding.
+const MANUAL_EDITORIAL_TEMPLATE_PATTERNS = Object.freeze([
+    /亮点[：:]?\s*一是/,
+    /优点[：:]?\s*一是/,
+    /短板是/,
+    /不足[：:]?\s*一是[^。]{0,120}二是[^。]{0,120}三是/
+]);
+
+const MANUAL_SCORING_ANCHOR_TAG_MIN = 4;
+const MANUAL_SCORING_ANCHOR_TAG_RE = /\[A_[A-Z_]{2,}\]/g;
+
+function findManualOpensourceRepoUrls(sourceText) {
+    return String(sourceText || '').match(
+        /https?:\/\/(?:[a-z0-9-]+\.)*(?:github\.com|huggingface\.co|gitlab\.com|modelscope\.cn)\/[^\s)"'<>，。；]+/i
+    ) || [];
+}
+
+function validateManualDepthContractV2(analysis, options = {}) {
+    const sourceText = String(options.sourceText || '');
+    const duplicates = findCrossSectionDuplicateSentences(analysis);
+    const worstSectionSpread = duplicates.reduce((max, item) => Math.max(max, item.sections.length), 0);
+    if (duplicates.length > MANUAL_DUP_MAX_SENTENCES || worstSectionSpread > MANUAL_DUP_MAX_SECTION_SPREAD) {
+        const example = duplicates[0];
+        return `manual 正文存在跨章节自我复制: ${duplicates.length} 个句子重复出现在多个章节（如「${example.sentence.slice(0, 24)}…」同时出现在${example.sections.join('、')}），每个章节必须独立撰写`;
+    }
+    const editorial = extractSection(analysis, '毒舌点评');
+    for (const pattern of MANUAL_EDITORIAL_TEMPLATE_PATTERNS) {
+        if (pattern.test(editorial)) {
+            return 'manual 毒舌点评使用固定模板句式（亮点一是二是/短板是），必须改为针对本文的独立审稿人批评';
+        }
+    }
+    const scoringReason = extractSection(analysis, '评分理由');
+    const anchorTags = new Set((scoringReason.match(MANUAL_SCORING_ANCHOR_TAG_RE) || []));
+    if (anchorTags.size < MANUAL_SCORING_ANCHOR_TAG_MIN) {
+        return `manual 评分理由缺少证据锚点标签 [A_*]: 仅 ${anchorTags.size}/${MANUAL_SCORING_ANCHOR_TAG_MIN} 个不同标签，每个维度必须引用可定位的证据组并说明锚点档位`;
+    }
+    const opensource = extractSection(analysis, '开源详情');
+    if (findManualOpensourceRepoUrls(sourceText).length > 0 && !/https?:\/\//i.test(opensource)) {
+        return '全文提及 GitHub/HuggingFace 等开源仓库链接，但开源详情未提取任何具体 URL，必须逐项核对 availability statement 后列出';
+    }
     return null;
 }
 
@@ -853,6 +952,10 @@ module.exports = {
     validateMethodDetailContract,
     validateManualDepthContract,
     MANUAL_DEPTH_CONTRACT_VERSION,
+    MANUAL_DEPTH_CONTRACT_VERSION_V2,
+    MANUAL_DEPTH_CONTRACT_VERSIONS,
+    findCrossSectionDuplicateSentences,
+    validateManualDepthContractV2,
     analysisManifestRequiresMethodDetailContract,
     isRecoveryStageTerminal,
     manualSha256,

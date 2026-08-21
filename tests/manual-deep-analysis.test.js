@@ -11,6 +11,8 @@ const {
     manualSha256,
     manualTextSha256,
     validateManualTakeoverManifest,
+    validateManualDepthContract,
+    MANUAL_DEPTH_CONTRACT_VERSION_V2,
     findManualBoilerplate
 } = require('../scripts/analysis-contract.js');
 const { buildManualRecord } = require('../scripts/manual-deep-analysis.js');
@@ -33,7 +35,8 @@ function detailedAnalysis() {
     const details = Array.from({ length: 8 }, (_, index) => `- 细节${index + 1}：输入音频、声学特征、上下文编码、监督目标、验证集和解码设置之间的关系均需按正文保持一致；第${index + 1}项缺失信息不会由常见实现补写。`).join('\n\n');
     const scoringMaxima = ['2', '1.5', '1.5', '1', '1.5', '1.5', '0.5', '1.5'];
     const scoringValues = ['1.5', '1.2', '1.1', '0.8', '1.0', '0.0', '0.3', '1.0'];
-    const scoring = Array.from({ length: 8 }, (_, index) => `* ${['创新性','技术严谨性','实验充分性','清晰度','影响力','开源','可复现性','工程/实践价值'][index]} (${scoringValues[index]}/${scoringMaxima[index]})：该维度依据正文中可定位的方法、数据、基线、评价或资源信息单独判断，未报告部分明确保留边界。`).join('\n');
+    const scoringTags = ['A_METHOD', 'A_METHOD', 'A_RESULTS', 'A_CLARITY', 'A_IMPACT', 'A_OPEN', 'A_REPRO', 'A_ENGINEERING'];
+    const scoring = Array.from({ length: 8 }, (_, index) => `* ${['创新性','技术严谨性','实验充分性','清晰度','影响力','开源','可复现性','工程/实践价值'][index]} (${scoringValues[index]}/${scoringMaxima[index]})：[${scoringTags[index]}] 该维度依据正文中可定位的方法、数据、基线、评价或资源信息单独判断，未报告部分明确保留边界。`).join('\n');
     const limits = '论文没有完整披露部分训练超参数、硬件和随机种子；跨说话人、跨设备和长期部署仍缺少验证。带噪基准与公开数据可以支持方法比较，但不能代替真实场景的失败案例、统计显著性和成本测量。对于长尾噪声、数据分布变化和部署资源约束，现有实验也没有给出足够的稳定性证据。不同设备、不同说话人和不同噪声强度下的误差可能改变结论，因此需要更广泛的验证。模型在真实环境中的延迟、内存、功耗和维护成本也没有被充分量化，长期运行风险仍待评估。';
     return text
         .replace(/#{2,3} 核心摘要\n[\s\S]*?(?=\n#{2,3} 方法概述和架构)/, `## 核心摘要\n${summary}\n`)
@@ -207,5 +210,63 @@ describe('manual_complete v2 deep-analysis contract', () => {
         assert.equal(record.analysisSource, 'provided_full_text');
         assert.equal(record.analysisManifest.manualTakeover.version, 2);
         assert.equal(record.digestStatus.latestAttemptStatus, 'analyzed');
+    });
+});
+
+describe('manual full-text-evidence-v2 quality gates', () => {
+    const v2Options = sourceText => ({ sourceText, manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V2 });
+
+    it('合规正文同时通过 v1 与 v2 契约', () => {
+        const fixture = baseSpec();
+        assert.equal(validateManualDepthContract(fixture.analysis, { sourceText: fixture.sourceText }), null);
+        assert.equal(validateManualDepthContract(fixture.analysis, v2Options(fixture.sourceText)), null);
+    });
+
+    it('v2 拒绝跨章节自我复制', () => {
+        const fixture = baseSpec();
+        const duplicated = '这句话被人工复制到多个章节用于凑齐契约字数，属于典型的模板化素材复用行为。';
+        fixture.analysis = fixture.analysis
+            .replace(/(## 核心摘要\n)/, `$1${duplicated}\n`)
+            .replace(/(## 实验结果\n)/, `$1${duplicated}\n`)
+            .replace(/(## 细节详述\n)/, `$1${duplicated}\n`);
+        assert.match(
+            validateManualDepthContract(fixture.analysis, v2Options(fixture.sourceText)),
+            /跨章节自我复制/
+        );
+    });
+
+    it('v2 拒绝毒舌点评固定模板句式', () => {
+        const fixture = baseSpec();
+        fixture.analysis = fixture.analysis.replace(
+            '工作的问题定义清楚，但方法增量和工程证据仍有提升空间。',
+            '这项工作整体尚可。亮点是一是结构清晰，二是实验完整，三是结果稳定；短板是作者自己承认的噪声鲁棒性不足。'
+        );
+        assert.match(
+            validateManualDepthContract(fixture.analysis, v2Options(fixture.sourceText)),
+            /固定模板句式/
+        );
+    });
+
+    it('v2 拒绝缺少 [A_*] 证据锚点标签的评分理由', () => {
+        const fixture = baseSpec();
+        fixture.analysis = fixture.analysis.replace(/\[A_[A-Z_]+\]\s*/g, '');
+        assert.match(
+            validateManualDepthContract(fixture.analysis, v2Options(fixture.sourceText)),
+            /\[A_\*\]/
+        );
+    });
+
+    it('v2 要求全文含开源仓库链接时开源详情必须列出具体 URL', () => {
+        const fixture = baseSpec();
+        const sourceWithRepo = `${fixture.sourceText}\nCode is available at https://github.com/example/robust-asr and weights at https://huggingface.co/example/model.`;
+        assert.match(
+            validateManualDepthContract(fixture.analysis, v2Options(sourceWithRepo)),
+            /开源详情未提取任何具体 URL/
+        );
+        fixture.analysis = fixture.analysis.replace(
+            '未提及代码、模型或数据集开放地址。',
+            '代码：https://github.com/example/robust-asr；模型权重：https://huggingface.co/example/model。'
+        );
+        assert.equal(validateManualDepthContract(fixture.analysis, v2Options(sourceWithRepo)), null);
     });
 });
