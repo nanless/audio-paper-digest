@@ -84,7 +84,7 @@ def complete_paper():
     }
 
 
-def manual_v2_fixture(*, hardened=True, completed_at=None):
+def manual_v2_fixture(*, hardened=True, completed_at=None, v3=False):
     analysis = 'manual provenance body'
     analysis_sha = hashlib.sha256(analysis.encode('utf-8')).hexdigest()
     source_sha = hashlib.sha256(b'controlled full text').hexdigest()
@@ -104,12 +104,19 @@ def manual_v2_fixture(*, hardened=True, completed_at=None):
         for index in range(1, 7)
     ]
     image_manifest = {
+        'version': 2 if v3 else 1,
         'candidates': [],
         'downloadOutcomes': [],
         'selected': [],
         'downloadEvidenceSha256': _manual_hash({'candidates': [], 'outcomes': []}),
-        'selectionEvidenceSha256': _manual_hash([]),
+        'insertionPlan': [],
+        'insertionDiagnostics': [],
     }
+    image_manifest['selectionEvidenceSha256'] = _manual_hash({
+        'selected': [],
+        'insertionPlan': [],
+        'insertionDiagnostics': [],
+    }) if v3 else _manual_hash([])
     stages = {}
     evidence = {}
     for stage in MANUAL_STAGE_EVIDENCE_STAGES:
@@ -120,14 +127,17 @@ def manual_v2_fixture(*, hardened=True, completed_at=None):
             'imageSupplement': image_manifest['selectionEvidenceSha256'],
         }.get(stage)
         if hardened:
-            input_sha = _manual_hash({
+            input_payload = {
                 'stage': stage,
                 'sourceSha256': source_sha,
                 'analysisSha256': analysis_sha,
                 'claims': claims,
                 'stagePromptSha256': stage_prompt_sha,
                 'stageContextSha256': context_sha,
-            })
+            }
+            if v3:
+                input_payload['executionKind'] = 'manual_attestation'
+            input_sha = _manual_hash(input_payload)
         else:
             input_sha = _manual_hash({
                 'stage': stage,
@@ -162,6 +172,9 @@ def manual_v2_fixture(*, hardened=True, completed_at=None):
                 'promptSource': item['promptSource'],
                 'promptSha256': stage_prompt_sha,
             })
+            if v3:
+                item['executionKind'] = 'manual_attestation'
+                state['executionKind'] = 'manual_attestation'
         evidence[stage] = item
         stages[stage] = state
     takeover = {
@@ -185,8 +198,11 @@ def manual_v2_fixture(*, hardened=True, completed_at=None):
         'audit': audit,
         'stageEvidence': evidence,
     }
+    if v3:
+        takeover['manualAuthoringPromptSha256'] = hashlib.sha256(b'manual authoring prompt').hexdigest()
     manifest = {
         'version': 1,
+        'contracts': {'manualDepth': 'full-text-evidence-v3'} if v3 else {},
         'sourceAcquisition': {'sourceSha256': source_sha},
         'stages': stages,
         'manualTakeover': takeover,
@@ -260,6 +276,25 @@ class PublishCommonSanitizerTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(PublishDataValidationError, '逐阶段 prompt/context 绑定'):
             _validate_manual_takeover_manifest(newer_paper, newer_manifest, 'newer legacy fixture')
+
+    def test_manual_v3_publish_provenance_binds_authoring_images_and_execution_kind(self):
+        paper, manifest = manual_v2_fixture(hardened=True, v3=True)
+        _validate_manual_takeover_manifest(paper, manifest, 'v3 fixture')
+
+        candidate = copy.deepcopy((paper, manifest))
+        candidate[1]['manualTakeover']['manualAuthoringPromptSha256'] = None
+        with self.assertRaisesRegex(PublishDataValidationError, 'manualAuthoringPromptSha256'):
+            _validate_manual_takeover_manifest(*candidate, 'v3 fixture')
+
+        candidate = copy.deepcopy((paper, manifest))
+        candidate[1]['manualTakeover']['stageEvidence']['primaryAnalysis']['executionKind'] = 'llm_api'
+        with self.assertRaisesRegex(PublishDataValidationError, 'executionKind'):
+            _validate_manual_takeover_manifest(*candidate, 'v3 fixture')
+
+        candidate = copy.deepcopy((paper, manifest))
+        candidate[0]['imageManifest']['insertionDiagnostics'].append({'url': 'https://example.com/tampered.png'})
+        with self.assertRaisesRegex(PublishDataValidationError, 'selectionEvidenceSha256'):
+            _validate_manual_takeover_manifest(*candidate, 'v3 fixture')
 
     def test_shared_publish_date_validation_rejects_impossible_dates(self):
         self.assertEqual(get_today_bj('2026-07-13'), '2026-07-13')

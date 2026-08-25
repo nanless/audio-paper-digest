@@ -22,11 +22,12 @@ const {
 const {
     REQUIRED_RECOVERY_STAGES,
     MANUAL_COMPLETE_STATUS,
+    MANUAL_STAGE_EXECUTION_KIND,
     manualSha256,
     manualTextSha256,
     validateManualTakeoverManifest,
     validateManualDepthContract,
-    MANUAL_DEPTH_CONTRACT_VERSION_V2,
+    MANUAL_DEPTH_CONTRACT_VERSION_V3,
     getInvalidAnalysisReason
 } = require('./analysis-contract.js');
 const {
@@ -39,11 +40,14 @@ const {
 const {
     normalizeImageInfos,
     selectImageCandidates,
-    cachePublicImageDetailed
+    cachePublicImageDetailed,
+    applyImageInsertionPlan,
+    buildImageAnchorCatalog
 } = require('./deep-analyzer.js');
 const { updateAnalysisDigestStatuses } = require('./digest-status.js');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
+const MANUAL_AUTHORING_PROMPT_PATH = path.join(PROJECT_ROOT, 'prompts', 'manual-analysis-record.md');
 const STAGE_PROMPT_FILES = Object.freeze({
     primaryAnalysis: 'deep-analysis.md',
     openSourceScan: 'opensource-scan.md',
@@ -173,6 +177,7 @@ function manualCanonicalReuseFingerprint(record) {
         id: normalizedId(record),
         analysisSha256: manualTextSha256(record.analysis || ''),
         declaredAnalysisSha256: takeover.analysisSha256 || null,
+        manualAuthoringPromptSha256: takeover.manualAuthoringPromptSha256 || null,
         sourceSha256: record.sourceSha256 || null,
         manifestSourceSha256: manifest.sourceAcquisition?.sourceSha256 || null,
         takeoverSourceSha256: takeover.sourceSha256 || null,
@@ -278,6 +283,7 @@ function buildStageEvidence(
         }
         const stageInputSha256 = manualSha256({
             stage,
+            executionKind: MANUAL_STAGE_EXECUTION_KIND,
             sourceSha256,
             analysisSha256,
             claims,
@@ -287,6 +293,7 @@ function buildStageEvidence(
         const stageAuditSha256 = manualSha256({ stage, claims, auditSha256, stageInputSha256 });
         result[stage] = {
             status: MANUAL_COMPLETE_STATUS,
+            executionKind: MANUAL_STAGE_EXECUTION_KIND,
             protocol: 'manual-offline-review-v1',
             inputSha256: stageInputSha256,
             outputSha256: analysisSha256,
@@ -301,6 +308,86 @@ function buildStageEvidence(
         };
     }
     return result;
+}
+
+function manualImageSection(caption) {
+    const text = String(caption || '').toLowerCase();
+    if (/(?:result|comparison|ablation|accuracy|performance|metric|curve|plot|visualization|case study|confusion|similarity|correlation|heatmap|cka|wer|cer|mos|error rate)/.test(text)) {
+        return '实验结果';
+    }
+    if (/(?:architecture|framework|pipeline|overview|workflow|system|network|module|algorithm|signal flow)/.test(text)) {
+        return '方法概述和架构';
+    }
+    return '细节详述';
+}
+
+function conciseManualImageCaption(value, maxChars = 240) {
+    const text = String(value || '')
+        .replace(/^(?:fig(?:ure)?\.?\s*)\d+[a-z]?(?:\s*[:.\-–—]\s*|\s+)/i, '')
+        .replace(/[\u200b-\u200d\ufeff]/g, '')
+        .replace(/\s+/g, ' ')
+        .replace(/([A-Za-z]{1,12}\s*[=<>]\s*-?\d+(?:\.\d+)?%?)\s*\1/gi, '$1')
+        .trim();
+    if (!text) return '论文图示';
+    // Blog alt text must remain a complete semantic unit.  A previous hard
+    // character slice produced captions ending at half a clause (or even half
+    // a word), which looked materially worse than the API-authored pages and
+    // could hide the condition attached to a result.  Prefer a complete first
+    // sentence when a genuinely multi-sentence caption is long; otherwise keep
+    // the source caption intact.  Semicolons are deliberately not terminators.
+    if (text.length <= maxChars) return text;
+    const firstSentence = text.match(/^.{20,}?[.!?。！？](?=\s|$)/)?.[0];
+    if (firstSentence && firstSentence.length <= maxChars) return firstSentence;
+    // arXiv HTML occasionally exposes an already-truncated caption that is
+    // shorter than our own limit.  A long clause without terminal punctuation
+    // is not safe to publish verbatim; replace it with a complete semantic alt.
+    const section = manualImageSection(text);
+    if (section === '方法概述和架构') return '论文方法与系统结构总览图';
+    if (section === '实验结果') return '论文关键实验比较图';
+    if (/(?:setting|scenario|dataset|sample|example|condition|setup)/i.test(text)) {
+        return '论文实验设置与数据关系示意图';
+    }
+    return '论文实现细节示意图';
+}
+
+function buildAutomaticManualImagePlan(analysis, imageInfos, maxInsertions = 3) {
+    const anchors = buildImageAnchorCatalog(analysis);
+    const usedCaptions = new Set();
+    const usedAnchorIds = new Set();
+    const plans = [];
+    for (const [index, info] of imageInfos.entries()) {
+        if (plans.length >= maxInsertions) break;
+        const caption = String(info?.caption || '').replace(/\s+/g, ' ').trim();
+        if (caption.length < 20) continue;
+        const normalizedCaption = caption.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+        if (usedCaptions.has(normalizedCaption)) continue;
+        const section = manualImageSection(caption);
+        const anchor = anchors.find(item => item.section === section && !usedAnchorIds.has(item.id))
+            || anchors.find(item => item.section === '方法概述和架构' && !usedAnchorIds.has(item.id))
+            || anchors[0];
+        if (!anchor) continue;
+        usedCaptions.add(normalizedCaption);
+        usedAnchorIds.add(anchor.id);
+        const isResult = section === '实验结果';
+        const captionPreview = conciseManualImageCaption(caption);
+        const chineseCaption = /[\u4e00-\u9fff]/.test(captionPreview) ? `“${captionPreview}”` : null;
+        plans.push({
+            imageNumber: index + 1,
+            section: anchor.section,
+            paragraphId: anchor.id,
+            lead: isResult
+                ? `下图展示${chineseCaption || '论文的关键实验比较'}；读图时需同时保留正文列出的数据集、指标方向和实验条件。`
+                : (section === '方法概述和架构'
+                    ? `下图概括${chineseCaption || '论文的系统结构或处理流程'}，可与上文的组件职责和数据流逐项对照。`
+                    : `下图补充${chineseCaption || '论文的实现细节或数据示例'}，用于核对实现条件与适用边界。`),
+            explanation: isResult
+                ? '这项视觉证据只支持图注与正文对应设置下的比较，不能外推为未测试条件中的统一结论。'
+                : (section === '方法概述和架构'
+                    ? '图中的箭头和分支用于说明已披露的组件关系，不代表正文未声明的额外训练阶段。'
+                    : '图示用于补足实现语境，不替代论文未报告的配置、消融或部署测量。')
+        });
+    }
+    return plans;
 }
 
 function buildManualRecord(paper, spec, date, promptInput, options = {}) {
@@ -334,16 +421,46 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         enforceExperimentTableContract: true,
         enforceMethodDetailContract: true,
         enforceManualDepthContract: true,
-        manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V2,
+        manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V3,
         sourceText
     });
     if (invalidReason) throw new Error(`${normalizedId(paper)} 分析契约失败: ${invalidReason}`);
-    const manualDepthIssue = validateManualDepthContract(spec.analysis, {
+    const preparedImages = Array.isArray(options.preparedImages) ? options.preparedImages : [];
+    const hasConfiguredImageSelection = Array.isArray(spec.selectedImageUrls);
+    const configuredImageUrls = new Set(hasConfiguredImageSelection ? spec.selectedImageUrls : []);
+    const selectedPreparedImages = (hasConfiguredImageSelection
+        ? preparedImages.filter(info => configuredImageUrls.has(info.url))
+        : preparedImages).map(info => ({
+        ...info,
+        displayCaption: conciseManualImageCaption(info.caption || info.alt || '')
+    }));
+    const automaticImagePlan = buildAutomaticManualImagePlan(
+        spec.analysis,
+        selectedPreparedImages,
+        Math.min(3, Config.ANALYSIS_CONFIG.imageInsertionMax || 3)
+    );
+    const imageInsertion = applyImageInsertionPlan(
+        spec.analysis,
+        automaticImagePlan,
+        selectedPreparedImages,
+        Config.ANALYSIS_CONFIG.imageInsertionMax
+    );
+    const finalAnalysis = imageInsertion.analysis;
+    const finalParsed = parseAnalysis(finalAnalysis);
+    const finalInvalidReason = getInvalidAnalysisReason(finalAnalysis, finalParsed, {
+        enforceExperimentTableContract: true,
+        enforceMethodDetailContract: true,
+        enforceManualDepthContract: true,
+        manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V3,
+        sourceText
+    });
+    if (finalInvalidReason) throw new Error(`${normalizedId(paper)} 插图后分析契约失败: ${finalInvalidReason}`);
+    const manualDepthIssue = validateManualDepthContract(finalAnalysis, {
         sourceText,
-        manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V2
+        manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V3
     });
     if (manualDepthIssue) throw new Error(`${normalizedId(paper)} manual 深度契约失败: ${manualDepthIssue}`);
-    const analysisSha256 = manualTextSha256(spec.analysis);
+    const analysisSha256 = manualTextSha256(finalAnalysis);
     const audit = spec.manualAudit;
     if (!audit || typeof audit !== 'object' || audit.version !== 1) {
         throw new Error(`${normalizedId(paper)} 缺少 manualAudit v1`);
@@ -354,17 +471,14 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
     const auditSha256 = manualSha256(audit);
     const evidenceLedger = spec.evidenceLedger;
     const imageInfos = Array.isArray(spec.imageInfos) ? spec.imageInfos : [];
-    const preparedImages = Array.isArray(options.preparedImages) ? options.preparedImages : [];
     const imageUrls = preparedImages.map(info => info.url);
-    const hasExplicitImageSelection = Array.isArray(spec.selectedImageUrls);
-    const selectedRequested = new Set(hasExplicitImageSelection ? spec.selectedImageUrls : []);
+    const selectedRequested = configuredImageUrls;
     const unavailableRequested = [...selectedRequested].filter(url => !preparedImages.some(info => info.url === url));
-    if (unavailableRequested.length > 0) {
+    if (unavailableRequested.length > 0 && spec.imageSelectionMode === 'manual_explicit') {
         throw new Error(`${normalizedId(paper)} selectedImageUrls 含未通过安全下载校验的图片: ${unavailableRequested.join(', ')}`);
     }
-    const selectedImages = hasExplicitImageSelection
-        ? preparedImages.filter(info => selectedRequested.has(info.url)).slice(0, 4)
-        : preparedImages.slice(0, 4);
+    const insertedUrlSet = new Set(imageInsertion.selectedImageUrls);
+    const selectedImages = preparedImages.filter(info => insertedUrlSet.has(info.url));
     const imageDownloadEvidenceSha256 = manualSha256({
         candidates: preparedImages.map(info => ({
             url: info.url,
@@ -378,16 +492,16 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         })),
         outcomes: Array.isArray(options.imageDownloadOutcomes) ? options.imageDownloadOutcomes : []
     });
-    const imageSelectionEvidenceSha256 = manualSha256(selectedImages.map(info => ({
-        url: info.url,
-        caption: info.caption || '',
-        source: info.source || null,
-        sourceOrder: info.sourceOrder ?? null,
-        candidateScore: info.candidateScore ?? null,
-        mime: info.mime,
-        sha256: info.sha256,
-        bytes: info.bytes
-    })));
+    const normalizedSelectedEvidence = selectedImages.map(info => ({
+        url: info.url, caption: info.caption || '', source: info.source || null,
+        sourceOrder: info.sourceOrder ?? null, candidateScore: info.candidateScore ?? null,
+        mime: info.mime, sha256: info.sha256, bytes: info.bytes
+    }));
+    const imageSelectionEvidenceSha256 = manualSha256({
+        selected: normalizedSelectedEvidence,
+        insertionPlan: automaticImagePlan,
+        insertionDiagnostics: imageInsertion.insertionDiagnostics
+    });
     const stageContextSha256 = {
         imageDownload: imageDownloadEvidenceSha256,
         imageSupplement: imageSelectionEvidenceSha256
@@ -399,6 +513,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         basis: 'full_text',
         sourceSha256,
         promptSha256,
+        manualAuthoringPromptSha256: spec.manualAuthoringPromptSha256,
         analysisSha256,
         completedAt: getBeijingISOString().replace(/\.(\d{3})\d+/, '.$1'),
         reason: spec.reason || '无 API 离线人工分析；基于完整全文逐篇复核并完成二次审计。',
@@ -422,6 +537,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
     };
     const stages = Object.fromEntries(Object.entries(stageStatusMap()).map(([stage, status]) => [stage, {
         status,
+        executionKind: MANUAL_STAGE_EXECUTION_KIND,
         protocol: 'manual-offline-review-v1',
         updatedAt: takeover.completedAt,
         promptSource: promptBindings[stage].source,
@@ -430,6 +546,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
             date,
             id: normalizedId(paper),
             stage,
+            executionKind: MANUAL_STAGE_EXECUTION_KIND,
             stagePromptSha256: promptBindings[stage].sha256,
             stageContextSha256: stageContextSha256[stage] || null,
             sourceSha256,
@@ -441,7 +558,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         contracts: {
             experimentTables: 'bounded-v1',
             methodDetail: 'detailed-v1',
-            manualDepth: MANUAL_DEPTH_CONTRACT_VERSION_V2
+            manualDepth: MANUAL_DEPTH_CONTRACT_VERSION_V3
         },
         sourceAcquisition: {
             analysisSource: 'provided_full_text',
@@ -457,13 +574,8 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         stages,
         manualTakeover: takeover
     };
-    const manifestIssue = validateManualTakeoverManifest(analysisManifest, sourceSha256, {
-        analysis: spec.analysis,
-        sourceText
-    });
-    if (manifestIssue) throw new Error(`${normalizedId(paper)} manual provenance 失败: ${manifestIssue}`);
     const imageManifest = {
-        version: 1,
+        version: 2,
         source: imageInfos.length > 0 ? 'manual_full_text_html' : 'manual_no_image_metadata',
         totalFound: imageInfos.length,
         candidates: preparedImages.map((info, index) => ({
@@ -474,19 +586,27 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         downloadOutcomes: Array.isArray(options.imageDownloadOutcomes) ? options.imageDownloadOutcomes : [],
         downloadEvidenceSha256: imageDownloadEvidenceSha256,
         selectionEvidenceSha256: imageSelectionEvidenceSha256,
+        insertionPlan: automaticImagePlan,
+        insertionDiagnostics: imageInsertion.insertionDiagnostics,
         selected: selectedImages.map((info, index) => ({
             index: index + 1,
             ...info,
             selectionReason: selectedRequested.size > 0
-                ? 'manual_explicit_secure_figure_review'
-                : 'manual_secure_candidate_ranking'
+                ? 'manual_explicit_secure_figure_review_and_caption_plan'
+                : 'manual_secure_candidate_ranking_and_caption_plan'
         }))
     };
+    const manifestIssue = validateManualTakeoverManifest(analysisManifest, sourceSha256, {
+        analysis: finalAnalysis,
+        sourceText,
+        imageManifest
+    });
+    if (manifestIssue) throw new Error(`${normalizedId(paper)} manual provenance 失败: ${manifestIssue}`);
     return {
         ...paper,
-        analysis: spec.analysis,
-        parsed,
-        scoringRubricVersion: parsed.scoringRubricVersion,
+        analysis: finalAnalysis,
+        parsed: finalParsed,
+        scoringRubricVersion: finalParsed.scoringRubricVersion,
         analysisSource: 'provided_full_text',
         sourceId: normalizedId(paper),
         sourceTextChars: sourceText.length,
@@ -625,14 +745,18 @@ async function run() {
     const { date, spec: specPathArg, force } = parseArgs(process.argv.slice(2));
     const specPath = path.resolve(PROJECT_ROOT, specPathArg);
     const spec = readJson(specPath, 'manual spec');
-    if (spec.version !== 2 || spec.mode !== MANUAL_COMPLETE_STATUS) {
-        throw new Error('manual spec 必须是 version=2、mode=manual_complete');
+    if (spec.version !== 3 || spec.mode !== MANUAL_COMPLETE_STATUS) {
+        throw new Error('manual spec 必须是 version=3、mode=manual_complete');
     }
     if (spec.date !== date) throw new Error('manual spec.date 与 --date 不一致');
     const promptBindings = buildStagePromptBindings();
     const promptSha256 = promptBindings.primaryAnalysis.sha256;
     if (spec.promptSha256 && spec.promptSha256 !== promptSha256) {
         throw new Error('manual spec.promptSha256 与当前 deep-analysis prompt 不一致');
+    }
+    if (spec.manualAuthoringPromptPath !== 'prompts/manual-analysis-record.md'
+        || spec.manualAuthoringPromptSha256 !== sha256File(MANUAL_AUTHORING_PROMPT_PATH)) {
+        throw new Error('manual spec 的 Manual 成稿规范路径或 SHA 与当前 prompts/manual-analysis-record.md 不一致');
     }
     if (spec.stagePromptSha256 !== undefined) {
         if (!spec.stagePromptSha256 || typeof spec.stagePromptSha256 !== 'object' || Array.isArray(spec.stagePromptSha256)) {
@@ -756,6 +880,7 @@ module.exports = {
     buildManualFailureRecord,
     buildStageEvidence,
     buildStagePromptBindings,
+    conciseManualImageCaption,
     manualCanonicalReuseFingerprint,
     finalizeManualCanonicalState,
     prepareManualImages,

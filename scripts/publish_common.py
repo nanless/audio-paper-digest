@@ -71,13 +71,16 @@ EXPERIMENT_TABLE_CONTRACT_VERSION = 'bounded-v1'
 METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1'
 MANUAL_DEPTH_CONTRACT_VERSION = 'full-text-evidence-v1'
 MANUAL_DEPTH_CONTRACT_VERSION_V2 = 'full-text-evidence-v2'
+MANUAL_DEPTH_CONTRACT_VERSION_V3 = 'full-text-evidence-v3'
 MANUAL_DEPTH_CONTRACT_VERSIONS = frozenset({
     MANUAL_DEPTH_CONTRACT_VERSION,
     MANUAL_DEPTH_CONTRACT_VERSION_V2,
+    MANUAL_DEPTH_CONTRACT_VERSION_V3,
 })
 MANUAL_COMPLETE_STATUS = 'manual_complete'
 MANUAL_COMPLETE_PROVENANCE_VERSION = 2
 MANUAL_PROVENANCE_PROTOCOL = 'manual-offline-review-v1'
+MANUAL_STAGE_EXECUTION_KIND = 'manual_attestation'
 MANUAL_V2_HARDENED_CUTOFF_DATE = '2026-08-22'
 MANUAL_AUDIT_CHECKS = frozenset({
     'sourceCoverage', 'promptConformance', 'factualClaimsLedger', 'scoreRecomputed',
@@ -151,6 +154,10 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
             raise PublishDataValidationError(f'{paper_label} manualTakeover.sourceSha256 与全文来源不一致')
         if not re.fullmatch(r'[a-f0-9]{64}', str(takeover.get('promptSha256') or '')):
             raise PublishDataValidationError(f'{paper_label} manualTakeover.promptSha256 非法')
+        manual_depth = (manifest.get('contracts') or {}).get('manualDepth')
+        if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V3 \
+                and not re.fullmatch(r'[a-f0-9]{64}', str(takeover.get('manualAuthoringPromptSha256') or '')):
+            raise PublishDataValidationError(f'{paper_label} manual v3 缺少 manualAuthoringPromptSha256')
         analysis_sha = hashlib.sha256(str(paper.get('analysis') or '').encode('utf-8')).hexdigest()
         if takeover.get('analysisSha256') != analysis_sha:
             raise PublishDataValidationError(f'{paper_label} manualTakeover.analysisSha256 与正文不一致')
@@ -231,9 +238,17 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
                 raise PublishDataValidationError(
                     f'{paper_label} manual imageManifest.downloadEvidenceSha256 闭环校验失败'
                 )
-            expected_selection_context = _manual_hash([
+            normalized_selected = [
                 normalize_image_evidence(item) for item in image_manifest['selected']
-            ])
+            ]
+            if image_manifest.get('version', 1) >= 2:
+                expected_selection_context = _manual_hash({
+                    'selected': normalized_selected,
+                    'insertionPlan': image_manifest.get('insertionPlan') or [],
+                    'insertionDiagnostics': image_manifest.get('insertionDiagnostics') or [],
+                })
+            else:
+                expected_selection_context = _manual_hash(normalized_selected)
             if image_manifest.get('selectionEvidenceSha256') != expected_selection_context:
                 raise PublishDataValidationError(
                     f'{paper_label} manual imageManifest.selectionEvidenceSha256 闭环校验失败'
@@ -243,6 +258,13 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
             state = stages.get(stage)
             if not isinstance(item, dict) or not isinstance(state, dict) or item.get('status') != state.get('status'):
                 raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage} 与阶段状态不一致')
+            if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V3 \
+                    and (item.get('executionKind') != MANUAL_STAGE_EXECUTION_KIND
+                         or state.get('executionKind') != MANUAL_STAGE_EXECUTION_KIND):
+                raise PublishDataValidationError(
+                    f'{paper_label} manual stageEvidence.{stage}.executionKind 必须为 '
+                    f'{MANUAL_STAGE_EXECUTION_KIND}'
+                )
             if not isinstance(item.get('attempts'), int) or item['attempts'] < 2:
                 raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage} 未记录两轮审计')
             for key in ('inputSha256', 'outputSha256', 'auditSha256'):
@@ -276,14 +298,17 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
                         )
                 elif 'contextSha256' in item:
                     raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage}.contextSha256 不应存在')
-                expected_input_sha = _manual_hash({
+                expected_input_payload = {
                     'stage': stage,
                     'sourceSha256': takeover['sourceSha256'],
                     'analysisSha256': takeover['analysisSha256'],
                     'claims': claims,
                     'stagePromptSha256': item['promptSha256'],
                     'stageContextSha256': item.get('contextSha256'),
-                })
+                }
+                if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V3:
+                    expected_input_payload['executionKind'] = item.get('executionKind')
+                expected_input_sha = _manual_hash(expected_input_payload)
             else:
                 expected_input_sha = _manual_hash({
                     'stage': stage,
@@ -570,6 +595,122 @@ def validate_manual_depth_contract_v2(analysis):
             f'manual 评分理由缺少证据锚点标签 [A_*]: 仅 {len(anchor_tags)}'
             f'/{MANUAL_SCORING_ANCHOR_TAG_MIN} 个不同标签，每个维度必须引用可定位的证据组并说明锚点档位'
         )
+    return None
+
+
+def _manual_chinese_count(value):
+    return len(re.findall(r'[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]', str(value or '')))
+
+
+def _manual_prose_paragraphs(value):
+    return [
+        item.strip() for item in re.split(r'\n\s*\n', str(value or ''))
+        if len(item.strip()) > 20 and not item.lstrip().startswith(('|', '!['))
+    ]
+
+
+def validate_manual_depth_contract_v3(analysis):
+    """Publish-time mirror of the reader-visible Manual v3 quality floor.
+
+    Source-bound ledger and numeric-density checks already run during Node
+    ingestion.  Publishing repeats every check that can be recomputed from the
+    canonical article so a stale or hand-edited record cannot bypass v3.
+    """
+    v2_issue = validate_manual_depth_contract_v2(analysis)
+    if v2_issue:
+        return v2_issue
+
+    summary = _extract_analysis_section(analysis, '核心摘要')
+    method = _extract_analysis_section(analysis, '方法概述和架构')
+    innovations = _extract_analysis_section(analysis, '核心创新点')
+    results = _extract_analysis_section(analysis, '实验结果')
+    details = _extract_analysis_section(analysis, '细节详述')
+    scoring = _extract_analysis_section(analysis, '评分理由')
+    limits = _extract_analysis_section(analysis, '局限与问题')
+
+    length_gates = (
+        ('核心摘要', summary, 360),
+        ('方法证据', method, 650),
+        ('核心创新点', innovations, 380),
+        ('实验证据', results, 300),
+        ('细节证据', details, 450),
+        ('评分理由', scoring, 250),
+        ('局限分析', limits, 300),
+    )
+    for label, body, minimum in length_gates:
+        count = _manual_chinese_count(body)
+        if count < minimum:
+            return f'manual v3 {label}过短: {count}/{minimum} 个中文字符'
+
+    summary_sentences = [
+        item.strip() for item in re.split(r'[。！？!?]', summary)
+        if _manual_chinese_count(item) >= 8
+    ]
+    if len(summary_sentences) < 5:
+        return f'manual v3 核心摘要缺少论证推进: {len(summary_sentences)}/5 个有效句子'
+
+    method_paragraphs = _manual_prose_paragraphs(method)
+    if len(method_paragraphs) < 5:
+        return f'manual v3 方法段落不足: {len(method_paragraphs)}/5'
+    method_signals = (
+        r'输入|波形|特征|样本|数据',
+        r'模块|编码器|解码器|网络|组件|算子|阶段|结构',
+        r'训练|优化|损失|目标|监督|更新|拟合|求解|实验|控制|构造|标注|证明',
+        r'输出|推理|解码|预测|生成|检索|评估|结果|结论|决策',
+    )
+    missing_method_signals = sum(not re.search(pattern, method) for pattern in method_signals)
+    if missing_method_signals > 1:
+        return f'manual v3 方法缺少输入、组件、训练目标或输出边界中的 {missing_method_signals} 类'
+
+    innovation_items = [
+        item for item in _manual_prose_paragraphs(innovations)
+        if not re.match(r'引导|总的来说', item)
+    ]
+    if len(innovation_items) < 3:
+        return f'manual v3 创新论证不足: {len(innovation_items)}/3 个独立段落'
+    innovation_signals = (
+        r'相比|相较|比|既有|传统|标准|过去|不同于|不再|无需|而不|而非|避免|问题|限制|瓶颈|缺口|代价',
+        r'机制|通过|采用|引入|设计|改为|拆分|把|将|使用|以|定义|提出',
+        r'实验|评测|结果|消融|证据|数据|数值|观察|报告|达到|下降|提升|改善|验证',
+    )
+    if any(not re.search(pattern, innovations) for pattern in innovation_signals):
+        return 'manual v3 创新点必须同时说明既有缺口、新机制和实验证据，不能只列贡献名词'
+
+    if not re.search(
+        r'相比|相较|比较|配对|对照|基线|baseline|vs\.?|消融|移除|加入|主方法|提出方法|最强|高于|低于|超过|落后|优于|改善|差距|从[^。]{0,40}(?:升至|降至|到)',
+        results,
+        re.I,
+    ):
+        return 'manual v3 实验结果缺少明确比较对象或消融关系'
+    if not re.search(r'但是|但|不过|仅|尚未|不能|限制|边界|未报告|未说明', results):
+        return 'manual v3 实验结果缺少结论边界或负面结果'
+
+    reproducibility_signals = (
+        r'数据|语料|样本|划分|训练集|测试集',
+        r'损失|目标|优化器|学习率|训练|求解',
+        r'超参数|批量|轮|epoch|步数|阈值|维度|窗口',
+        r'硬件|GPU|CPU|显卡|内存|显存|未说明',
+        r'推理|解码|延迟|吞吐|部署|测试时|未说明',
+    )
+    reproducibility_text = f'{method}\n{details}'
+    details_coverage = sum(bool(re.search(pattern, reproducibility_text, re.I)) for pattern in reproducibility_signals)
+    if details_coverage < 3:
+        return f'manual v3 复现信息覆盖不足: {details_coverage}/5 类'
+
+    score_lines = [item.strip() for item in scoring.splitlines() if item.strip().startswith('*')]
+    if len(score_lines) != 8:
+        return f'manual v3 评分理由必须恰好 8 条: {len(score_lines)}/8'
+    for item in score_lines:
+        reason = re.sub(r'^\*[^：:]*[：:]\s*', '', item)
+        if _manual_chinese_count(reason) < 25:
+            return f'manual v3 评分理由过于概括: {item[:80]}'
+    if any(re.search(r'(?:创新|方法|实验|清晰度|实用|开源|可复现性|综合)维度(?:认可|体现|有|中)', item) for item in score_lines):
+        return 'manual v3 评分理由仍是“某维度认可/体现”模板，必须直接写论文证据与扣分边界'
+
+    if '论文证据直接支持的边界' not in limits or '进一步审视' not in limits:
+        return 'manual v3 局限必须分开标注论文证据支持的边界与进一步审视'
+    if _manual_chinese_count(limits) < 300:
+        return f'manual v3 局限分析过短: {_manual_chinese_count(limits)}/300'
     return None
 
 
@@ -882,7 +1023,13 @@ def validate_papers_for_publish(papers):
                         f'{paper_label} analysisManifest.contracts.manualDepth 非法: '
                         f'{manual_depth_contract}'
                     )
-                if manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION_V2:
+                if manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION_V3:
+                    manual_depth_issue = validate_manual_depth_contract_v3(paper.get('analysis'))
+                    if manual_depth_issue:
+                        raise PublishDataValidationError(
+                            f'{paper_label} manual 全文深度契约无效: {manual_depth_issue}'
+                        )
+                elif manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION_V2:
                     manual_depth_issue = validate_manual_depth_contract_v2(paper.get('analysis'))
                     if manual_depth_issue:
                         raise PublishDataValidationError(

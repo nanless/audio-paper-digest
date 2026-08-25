@@ -123,7 +123,7 @@ def _manual_review_provenance_error(receipt, *, date_str=None,
     provenance = receipt.get('reviewProvenance')
     if not isinstance(provenance, dict):
         return 'manual_complete 审查缺少 reviewProvenance'
-    if provenance.get('version') != 1 or provenance.get('mode') != MANUAL_REVIEW_MODE:
+    if provenance.get('version') != 2 or provenance.get('mode') != MANUAL_REVIEW_MODE:
         return 'manual_complete reviewProvenance 版本或模式非法'
     if not isinstance(provenance.get('agent'), str) or not provenance['agent'].strip():
         return 'manual_complete reviewProvenance 缺少 agent'
@@ -159,6 +159,43 @@ def _manual_review_provenance_error(receipt, *, date_str=None,
     file_count = provenance.get('fileCount')
     if not isinstance(file_count, int) or file_count <= 0:
         return 'manual_complete provenance fileCount 非法'
+    attested_files = provenance.get('files')
+    receipt_files = receipt.get('files')
+    required_file_checks = {
+        'titleAndMetadata', 'technicalNarrative', 'factualClaims',
+        'experimentComparisons', 'reproducibility', 'limitations',
+        'scoring', 'images',
+    }
+    if not isinstance(attested_files, list) or len(attested_files) != file_count:
+        return 'manual_complete provenance 必须保留逐文件语义审查明细'
+    if not isinstance(receipt_files, list) or len(receipt_files) != file_count:
+        return 'manual_complete provenance fileCount 与 receipt 文件数不一致'
+    receipt_by_path = {
+        item.get('path'): item for item in receipt_files
+        if isinstance(item, dict) and isinstance(item.get('path'), str)
+    }
+    seen_attested_paths = set()
+    for item in attested_files:
+        if not isinstance(item, dict) or set(item) != {'path', 'sha256', 'checks', 'notes'}:
+            return 'manual_complete provenance 逐文件字段必须恰好为 path/sha256/checks/notes'
+        path = item.get('path')
+        if not isinstance(path, str) or path in seen_attested_paths or path not in receipt_by_path:
+            return 'manual_complete provenance 逐文件路径非法、重复或不在 receipt'
+        seen_attested_paths.add(path)
+        receipt_item = receipt_by_path[path]
+        if receipt_item.get('deleted') is True or item.get('sha256') != receipt_item.get('sha256'):
+            return f'manual_complete provenance 逐文件 SHA/删除语义不一致: {path}'
+        item_checks = item.get('checks')
+        if (
+            not isinstance(item_checks, dict)
+            or set(item_checks) != required_file_checks
+            or any(item_checks.get(key) is not True for key in required_file_checks)
+        ):
+            return f'manual_complete provenance 逐文件检查不完整: {path}'
+        if not isinstance(item.get('notes'), str) or len(item['notes'].strip()) < 20:
+            return f'manual_complete provenance 逐文件 notes 过短: {path}'
+    if seen_attested_paths != set(receipt_by_path):
+        return 'manual_complete provenance 逐文件集合与 receipt 不一致'
     path_set_sha = provenance.get('reviewedPathSetSha256')
     if not re.fullmatch(r'[0-9a-f]{64}', str(path_set_sha or '')):
         return 'manual_complete provenance 缺少 reviewedPathSetSha256'
@@ -4564,7 +4601,7 @@ def _valid_review_pass_record(record, repo, date_str, default_protocol=None, def
         protocol = None
     reviewed_at = record.get('reviewedAt') or default_time
     image_review_mode = record.get('imageReviewMode')
-    if image_review_mode not in {'multimodal', 'deterministic_only'}:
+    if image_review_mode not in {'multimodal', 'deterministic_only', 'manual_semantic'}:
         image_review_mode = 'deterministic_only'
     return {
         'path': normalized,
@@ -4649,7 +4686,7 @@ def save_review_pass_cache(date_str, publish_paths=(), file_results=None):
             'reviewProtocolFingerprint': protocol,
             'imageReviewMode': (
                 result.get('imageReviewMode')
-                if result.get('imageReviewMode') in {'multimodal', 'deterministic_only'}
+                if result.get('imageReviewMode') in {'multimodal', 'deterministic_only', 'manual_semantic'}
                 else current_image_review_mode()
             ),
         }
@@ -4702,7 +4739,7 @@ def save_review_failure_state(
             'reviewedSha256': reviewed_sha if result_passed else None,
             'imageReviewMode': (
                 result.get('imageReviewMode')
-                if result.get('imageReviewMode') in {'multimodal', 'deterministic_only'}
+                if result.get('imageReviewMode') in {'multimodal', 'deterministic_only', 'manual_semantic'}
                 else current_image_review_mode()
             ),
         })
@@ -4894,7 +4931,7 @@ def load_verified_review_receipt(date_str):
         record.get('imageReviewMode') for record in records
         if isinstance(record, dict) and record.get('deleted') is not True
     }
-    if not file_image_modes or not file_image_modes.issubset({'multimodal', 'deterministic_only'}):
+    if not file_image_modes or not file_image_modes.issubset({'multimodal', 'deterministic_only', 'manual_semantic'}):
         raise PublishDataValidationError('审查凭证逐文件图片 review 模式非法')
     expected_image_mode = (
         next(iter(file_image_modes)) if len(file_image_modes) == 1 else 'mixed'

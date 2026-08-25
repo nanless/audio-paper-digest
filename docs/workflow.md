@@ -11,8 +11,8 @@
 常规路径使用关键词预筛 + LLM 筛选、多阶段 LLM 深度分析和三层博客 review。模型服务不可用时允许显式接管，但不会因 API 超时、配额或网络错误自动切换：
 
 - `manual-fetch.js --raw` 仍联网抓取 arXiv/HuggingFace，只是不调用筛选模型；`--select` 接收完整覆盖候选全集的 `manual_offline` v1 逐篇裁决，并把输入 SHA、reviewer 和协议指纹写入筛选四件套。
-- `manual-deep-analysis.js` 不调用 LLM/API；每篇 spec 必须绑定受控全文 SHA、当前 prompt、至少六条可在全文定位的证据、两轮审计和各恢复阶段的独立 reviewed claims。只有整批同时通过普通分析契约与 `manual_complete v2` provenance 契约才写 canonical deep result。
-- `manual-review-blog.py` 只在 LLM review 服务不可用时替代语义模型。它要求八项全真的人工 attestation，仍执行确定性复验、逐文件 SHA、generation manifest、Git 基线、review 协议和 Hugo gate 绑定，输出明确标记 `manual_complete` 的 receipt；push 与远端 OID 验证不变。
+- `manual-deep-analysis.js` 不调用 LLM/API；每篇 spec 必须绑定受控全文 SHA、`manual-analysis-record.md` 与各阶段 prompt、至少六条可在全文定位的证据、两轮审计和各恢复阶段的独立 reviewed claims。Manual v3 还要求读者可见正文具备论证型摘要、输入到输出的方法链、缺口—机制—证据—边界式创新、比较/消融与负面结果、复现条件和双层局限；完整 `editorial` 是最终正文，短方法/创新字段只参与审计，不能再前置拼接。兼容阶段标记 `executionKind=manual_attestation`，不能声称实际执行过 LLM 阶段。合格论文图由全文 manifest 安全排序后插入正文，而不是只留在状态字段；图注不得按字符数截成半句。只有整批同时通过普通分析契约与 `full-text-evidence-v3` 才写 canonical deep result。
+- `manual-review-blog.py` 只在 LLM review 服务不可用时替代语义模型。它要求 v2 attestation 对 generation 中每个文件绑定 SHA、独立 notes，并逐项确认标题、技术叙事、事实、实验、复现、局限、评分和图片；仍执行确定性复验、Git 基线、review 协议和 Hugo gate 绑定，若确定性层修改页面则旧 attestation 立即失效。输出图片审查模式为 `manual_semantic` 的 receipt，push 会重验逐文件 provenance 与远端 OID。
 
 三种人工模式分别只替代对应模型职责，不绕过来源健康、正文质量、发布或视觉门禁。
 

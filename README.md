@@ -226,16 +226,18 @@ python3 scripts/review-blog.py --date 2026-04-21
 python3 scripts/push-blog.py --date 2026-04-21
 
 # 仅当 LLM review 服务不可用时，使用完整 provenance 的人工接管审查
-# attestation 必须由人工/Codex 填写，八项 checks 全部为 true；不会伪造模型审查
+# attestation v2 必须逐文件绑定 path/SHA、独立 notes 和八类语义 checks；不会伪造模型审查
 python3 scripts/manual-review-blog.py --date 2026-04-21 --attestation data/current/manual-review-attestation-2026-04-21.json
 
 # 人工全文先逐篇安全抓取并 checkpoint；失败后重跑只补失败或损坏项
 npm run manual:fulltext -- 2026-04-21
 
-# 把一份或多份人工记录分片严格组装为 manual_complete v2 spec；不调用 API
+# 把一份或多份人工记录分片严格组装为 manual_complete v3 spec；不调用 API
 # 每份 records 必须是相同 date/agent/reviewProtocol 的 manual_analysis_records v1 envelope，
 # papers 需显式提供八维评分、实际 audit passes、绑定全文原句的 authorInfo
-# 和至少六条覆盖五个事实章节的 evidenceLedger
+# 和至少六条覆盖五个事实章节的 evidenceLedger；正文遵守 prompts/manual-analysis-record.md
+# v3 要求论证型摘要、完整方法流、缺口—机制—证据—边界创新、比较/消融实验、复现配置和双层局限
+# editorial 是最终读者正文；短 method/method2/method3/innovations 仅供审计，生成器不会再前置拼接
 npm run manual:spec -- --date 2026-04-21 \
   --records data/current/manual-analysis-records-2026-04-21.json
 # 并行撰写时可重复传入 --records；重复、缺失、跨日期或协议不一致都会阻断
@@ -250,8 +252,9 @@ npm run manual:analyze -- --date 2026-04-21 --spec data/current/manual-analysis-
 # 默认续跑复用已成功 canonical；仅在人工纠错或 spec/prompt 改变时显式覆盖
 npm run manual:analyze -- --date 2026-04-21 --spec data/current/manual-analysis-spec-2026-04-21.json --force
 
-# titleOverride 仅可修复元数据标题的空白粘连；selectedImageUrls: [] 明确表示不选图。
-# arXiv 页面 chrome、资助方 logo 和赞助素材不会进入人工图片候选。
+# titleOverride 仅可修复元数据标题的空白粘连。省略 selectedImageUrls 时安全自动选择最多3张并插入正文；
+# 若存在合格候选，空数组会被拒绝。arXiv 页面 chrome、资助方 logo、赞助素材和碎片图注不会进入候选；
+# 图注只在完整句号处收束，不能按字符数截成半句或半词。
 
 # 无筛选模型的人工接管：--raw 仍联网抓取并生成带来源指纹的候选全集，再逐篇提交 related 决定
 node scripts/manual-fetch.js --date 2026-04-21 --raw
@@ -261,7 +264,8 @@ node scripts/manual-fetch.js --date 2026-04-21 --select data/current/manual-filt
 # 只复审新增、内容变化、待重试或已修复的失败页；最终仍对完整批次执行确定性校验和 Hugo gate
 # 发布视图会剥离内部评分锚点；确定性层还检查近重复、半词图注、反引号公式与英文毒舌点评
 # manual-review-blog.py 是显式 manual_complete 模式：仍执行逐文件哈希、基线、协议、确定性检查和 Hugo gate，
-# 并把 attestation SHA、来源、检查清单和修复记录写入 receipt；不能把普通 LLM 故障静默视为通过。
+# 并把逐页技术叙事/事实/实验/复现/局限/评分/图片的人工语义声明写入 receipt，模式为 manual_semantic；
+# 确定性层若修改任一页面，旧声明立即失效；push 会重验逐文件集合和 SHA，不能把批次级勾选或普通 LLM 故障静默视为通过。
 
 # 用自定义数据发布
 python3 scripts/generate-blog.py --date 2026-04-21 data/current/deep-analysis-result.json

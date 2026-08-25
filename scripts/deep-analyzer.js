@@ -2546,8 +2546,7 @@ function sanitizeMarkdownImageAlt(caption, fallback) {
     const singleLine = String(caption || fallback || '')
         .replace(/[\u0000-\u001f\u007f]+/g, ' ')
         .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 240);
+        .trim();
     return singleLine
         .replace(/\\/g, '\\\\')
         .replace(/\[/g, '\\[')
@@ -2565,7 +2564,10 @@ function sanitizeLogField(value, maxChars = 180) {
 function buildImageInsertionBlock(plan, imageInfo) {
     const parts = [];
     if (plan.lead) parts.push(plan.lead);
-    const alt = sanitizeMarkdownImageAlt(imageInfo.caption, `图${plan.imageNumber}`);
+    const alt = sanitizeMarkdownImageAlt(
+        imageInfo.displayCaption || imageInfo.caption,
+        `图${plan.imageNumber}`
+    );
     parts.push(`![${alt}](${imageInfo.url})`);
     if (plan.explanation) parts.push(plan.explanation);
     return parts.join('\n\n');

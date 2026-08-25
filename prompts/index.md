@@ -8,6 +8,7 @@
 |------|------|----------|
 | [filter.md](filter.md) | 筛选阶段：判断单篇论文是否与语音/音乐/音频相关 | `fetch-papers.js` |
 | [deep-analysis.md](deep-analysis.md) | 深度分析阶段（第一轮）：纯文本阅读后输出结构化报告 | `deep-analyzer.js` |
+| [manual-analysis-record.md](manual-analysis-record.md) | Manual v3 人工全文写作规范：要求论证推进、完整方法流、比较实验、复现信息、双层局限和维度专属评分 | `create-manual-analysis-spec.js`（以模板 SHA 绑定，不调用 LLM） |
 | [image-supplement.md](image-supplement.md) | 深度分析阶段（双模型模式）：副模型只输出严格 JSON 插图计划，代码只新增图片及相邻说明，不替换主模型原文 | `deep-analyzer.js` |
 | [visual-summary.md](visual-summary.md) | 全部博客发布后，对最终评分 TOP 10 各生成一张覆盖问题、方法、实验、结论与局限的纵向长图 | Codex 内置 `image_gen`（发布后 Agent 阶段） |
 | [digest-cover.md](digest-cover.md) | 全部博客发布后的汇总图：展示批次标题、热门方向和 TOP 10 排行榜 | Codex 内置 `image_gen`（发布后 Agent 阶段） |

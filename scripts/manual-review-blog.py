@@ -61,8 +61,8 @@ def _load_attestation(path):
         raise ValueError(f'无法读取 attestation: {path}') from exc
     if not isinstance(payload, dict):
         raise ValueError('attestation 必须是 JSON 对象')
-    if payload.get('version') != 1 or payload.get('mode') != 'manual_complete':
-        raise ValueError('attestation version/mode 必须为 manual_complete v1')
+    if payload.get('version') != 2 or payload.get('mode') != 'manual_complete':
+        raise ValueError('attestation version/mode 必须为 manual_complete v2')
     if not isinstance(payload.get('agent'), str) or not payload['agent'].strip():
         raise ValueError('attestation 缺少 agent')
     if payload.get('basis') != 'deterministic_and_manual_semantic_review':
@@ -79,6 +79,31 @@ def _load_attestation(path):
         raise ValueError('attestation checks 必须完整列出八项门禁')
     if any(checks.get(key) is not True for key in required):
         raise ValueError('attestation checks 必须全部为 true')
+    files = payload.get('files')
+    file_checks = {
+        'titleAndMetadata', 'technicalNarrative', 'factualClaims',
+        'experimentComparisons', 'reproducibility', 'limitations',
+        'scoring', 'images',
+    }
+    if not isinstance(files, list) or not files:
+        raise ValueError('attestation.files 必须逐文件列出语义审查')
+    seen = set()
+    for index, item in enumerate(files):
+        if not isinstance(item, dict) or set(item) != {'path', 'sha256', 'checks', 'notes'}:
+            raise ValueError(f'attestation.files[{index}] 字段必须恰好为 path/sha256/checks/notes')
+        rel_path = item.get('path')
+        if (not isinstance(rel_path, str) or not rel_path.startswith('content/posts/')
+                or '..' in Path(rel_path).parts or rel_path in seen):
+            raise ValueError(f'attestation.files[{index}].path 非法或重复')
+        seen.add(rel_path)
+        if not re.fullmatch(r'[a-f0-9]{64}', str(item.get('sha256', ''))):
+            raise ValueError(f'attestation.files[{index}].sha256 非法')
+        item_checks = item.get('checks')
+        if not isinstance(item_checks, dict) or set(item_checks) != file_checks \
+                or any(item_checks.get(key) is not True for key in file_checks):
+            raise ValueError(f'attestation.files[{index}].checks 必须完整且全部为 true')
+        if not isinstance(item.get('notes'), str) or len(item['notes'].strip()) < 20:
+            raise ValueError(f'attestation.files[{index}].notes 至少需要 20 个字符')
     return payload, hashlib.sha256(raw).hexdigest()
 
 
@@ -113,6 +138,17 @@ def _semantic_checks(module, paths, date_str):
     return checked
 
 
+def _reject_deterministic_fixes(module, fixes):
+    if not fixes:
+        return
+    changed = ', '.join(Path(item['path']).name for item in fixes[:5])
+    suffix = '…' if len(fixes) > 5 else ''
+    raise module.PublishDataValidationError(
+        '确定性 review 修改了已人工审查的页面，旧 attestation 已失效；'
+        f'请重新审读最终文件并签发新声明: {changed}{suffix}'
+    )
+
+
 def _run(module, date_str, attestation_path):
     blog_repo, content_dir = module.validate_publish_target()
     paths, manifest_path = module.load_generation_manifest(date_str)
@@ -126,9 +162,31 @@ def _run(module, date_str, attestation_path):
             '当前 generation 已有发布证据但未能严格复核，拒绝覆盖 receipt'
         )
     attestation, attestation_sha = _load_attestation(attestation_path)
+    expected_attested = {}
+    for item in attestation['files']:
+        expected_attested[item['path']] = item
+    actual_paths = {}
+    for path in paths:
+        resolved = Path(path).resolve()
+        try:
+            relative = resolved.relative_to(Path(blog_repo).resolve()).as_posix()
+        except ValueError as exc:
+            raise module.PublishDataValidationError(f'generation 文件不在博客仓库内: {resolved}') from exc
+        actual_paths[relative] = resolved
+    if set(expected_attested) != set(actual_paths):
+        missing = sorted(set(actual_paths) - set(expected_attested))
+        extra = sorted(set(expected_attested) - set(actual_paths))
+        raise module.PublishDataValidationError(
+            f'attestation 逐文件集合与 generation 不一致: missing={missing or "-"} extra={extra or "-"}'
+        )
+    for relative, resolved in actual_paths.items():
+        if _sha256(resolved) != expected_attested[relative]['sha256']:
+            raise module.PublishDataValidationError(f'attestation 文件 SHA 已漂移: {relative}')
 
     # Apply only deterministic, idempotent repairs.  A second pass must be
-    # clean; unresolved defects are never hidden by manual provenance.
+    # clean; unresolved defects are never hidden by manual provenance.  Any
+    # first-pass mutation invalidates the already supplied file-level SHA and
+    # semantic judgment: the operator must inspect and attest the final bytes.
     fixes = []
     for path in paths:
         path = Path(path)
@@ -142,6 +200,7 @@ def _run(module, date_str, attestation_path):
             )
         if fixed:
             fixes.append({'path': str(path), 'issues': [str(item) for item in first_issues]})
+    _reject_deterministic_fixes(module, fixes)
 
     module.validate_staged_posts(content_dir, date_str, date_only=True)
     checked_files = _semantic_checks(module, paths, date_str)
@@ -160,7 +219,7 @@ def _run(module, date_str, attestation_path):
             'failureKind': None,
             'reviewedSha256': module._sha256_file(path),
             'reviewProtocolFingerprint': protocol,
-            'imageReviewMode': 'deterministic_only',
+            'imageReviewMode': 'manual_semantic',
         }
     if len(reviewed) != len([path for path in paths if Path(path).is_file()]):
         raise module.PublishDataValidationError('reviewed 文件数量在签发前发生变化')

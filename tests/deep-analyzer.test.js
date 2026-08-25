@@ -1818,6 +1818,11 @@ has_dataset: 否
         const result = applyImageInsertionPlan(analysis, plans, images);
 
         assert.strictEqual(sanitizeMarkdownImageAlt(caption, ''), String.raw`A \[B\] \\ C second line`);
+        const longCaption = `A complete source caption ${'with bounded evidence '.repeat(20)}.`;
+        assert.strictEqual(
+            sanitizeMarkdownImageAlt(longCaption, ''),
+            longCaption
+        );
         assert.match(result.analysis, /result\.png/);
         assert.deepStrictEqual(result.selectedImageUrls, ['https://example.com/result.png']);
         assert.strictEqual(sanitizeLogField('first\nsecond\u0000third', 100), 'first second third');

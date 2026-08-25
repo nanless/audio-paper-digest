@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Assemble a strict manual_complete v2 analysis spec from operator-authored
+ * Assemble a strict manual_complete v3 analysis spec from operator-authored
  * records and the fingerprinted manual-full-text manifest. No API is called.
  */
 const fs = require('fs');
@@ -19,10 +19,11 @@ const {
 } = require('./utils.js');
 const {
     REQUIRED_RECOVERY_STAGES,
-    MANUAL_DEPTH_CONTRACT_VERSION_V2,
+    MANUAL_DEPTH_CONTRACT_VERSION_V3,
     getInvalidAnalysisReason
 } = require('./analysis-contract.js');
 const { buildStagePromptBindings } = require('./manual-deep-analysis.js');
+const { selectImageCandidates } = require('./deep-analyzer.js');
 const {
     MANIFEST_VERSION,
     stableSha256,
@@ -32,7 +33,7 @@ const {
 
 const RECORDS_VERSION = 1;
 const RECORDS_MODE = 'manual_analysis_records';
-const SPEC_VERSION = 2;
+const SPEC_VERSION = 3;
 const SPEC_MODE = 'manual_complete';
 const FULLTEXT_MODE = 'manual_full_text_fetch';
 const DOCUMENT_TYPES = new Set(['方法研究', '系统技术报告', '模型报告', '数据集与基准', '综述', '理论研究', '应用研究']);
@@ -47,6 +48,7 @@ const EDITORIAL_FIELDS = Object.freeze([
     'summary', 'method', 'innovations', 'results', 'details', 'limits', 'open', 'review'
 ]);
 const TEMPLATE_SENTENCE_MIN_LENGTH = 48;
+const MANUAL_AUTHORING_PROMPT = path.join(Config.PROJECT_ROOT, 'prompts', 'manual-analysis-record.md');
 
 function sha256Buffer(value) {
     return crypto.createHash('sha256').update(value).digest('hex');
@@ -243,10 +245,12 @@ function validateRecord(record, id, label = `papers.${id}`) {
         manualAudit,
         `${label}.stageReviewAttemptsByStage`
     );
-    const selectedImageUrls = record.selectedImageUrls === undefined ? [] : record.selectedImageUrls;
-    if (!Array.isArray(selectedImageUrls) || selectedImageUrls.some(url => typeof url !== 'string' || !url.startsWith('https://'))
-        || new Set(selectedImageUrls).size !== selectedImageUrls.length || selectedImageUrls.length > 4) {
-        throw new Error(`${label}.selectedImageUrls 必须是至多 4 个互异 HTTPS URL`);
+    const selectedImageUrls = record.selectedImageUrls;
+    if (selectedImageUrls !== undefined
+        && (!Array.isArray(selectedImageUrls)
+            || selectedImageUrls.some(url => typeof url !== 'string' || !url.startsWith('https://'))
+            || new Set(selectedImageUrls).size !== selectedImageUrls.length || selectedImageUrls.length > 4)) {
+        throw new Error(`${label}.selectedImageUrls 必须省略或是至多 4 个互异 HTTPS URL`);
     }
     if (record.reason !== undefined) assertString(record.reason, `${label}.reason`, 20);
     if (record.scoringReasons !== undefined
@@ -292,7 +296,7 @@ function validateRecord(record, id, label = `papers.${id}`) {
         dims,
         manualAudit,
         stageReviewAttemptsByStage,
-        selectedImageUrls,
+        ...(selectedImageUrls !== undefined ? { selectedImageUrls } : {}),
         ...(titleOverride ? { titleOverride } : {})
     };
 }
@@ -478,6 +482,66 @@ function scoreFromDims(dims) {
     return Math.min(10, dims.reduce((sum, value) => sum + value, 0)).toFixed(1);
 }
 
+function distinctParagraphs(...values) {
+    const paragraphs = [];
+    const seen = new Set();
+    for (const value of values) {
+        for (const paragraph of String(value || '').split(/\n\s*\n/).map(item => item.trim()).filter(Boolean)) {
+            const normalized = normalizeTemplateText(paragraph);
+            if (!normalized || seen.has(normalized)) continue;
+            seen.add(normalized);
+            paragraphs.push(paragraph);
+        }
+    }
+    return paragraphs;
+}
+
+function rebalanceEditorialParagraphs(value, minimum = 5) {
+    const paragraphs = String(value || '').split(/\n\s*\n/).map(item => item.trim()).filter(Boolean);
+    while (paragraphs.length < minimum) {
+        let best = null;
+        paragraphs.forEach((paragraph, paragraphIndex) => {
+            const sentences = paragraph.match(/[^。！？!?]+[。！？!?]?/g) || [];
+            if (sentences.length < 2) return;
+            const total = sentences.reduce((sum, sentence) => sum + sentence.length, 0);
+            let consumed = 0;
+            for (let splitIndex = 1; splitIndex < sentences.length; splitIndex += 1) {
+                consumed += sentences[splitIndex - 1].length;
+                const left = sentences.slice(0, splitIndex).join('').trim();
+                const right = sentences.slice(splitIndex).join('').trim();
+                if (left.length < 80 || right.length < 80) continue;
+                const distance = Math.abs(total / 2 - consumed);
+                if (!best || distance < best.distance) {
+                    best = { paragraphIndex, left, right, distance };
+                }
+            }
+        });
+        if (!best) break;
+        paragraphs.splice(best.paragraphIndex, 1, best.left, best.right);
+    }
+    return paragraphs.join('\n\n');
+}
+
+function formatInnovationClaims(value) {
+    const paragraphs = distinctParagraphs(value);
+    return paragraphs.map((paragraph, index) => {
+        if (/^(?:\d+[.、]|[-*]\s|\*\*)/.test(paragraph)) return paragraph;
+        return `${index + 1}. ${paragraph}`;
+    }).join('\n\n');
+}
+
+function cleanScoringReason(value) {
+    return String(value || '').trim()
+        .replace(/^(?:创新|方法|实验|清晰度|实用|开源|可复现性|综合)维度(?:中[，,]?)?(?:认可|体现|有|包含|显示|说明)?/, '')
+        .replace(/^[，,：:]\s*/, '')
+        .trim();
+}
+
+function completeScoringReason(reason) {
+    const cleaned = cleanScoringReason(reason);
+    return cleaned;
+}
+
 function rankBucket(score) {
     const number = Number(score);
     return number >= 9 ? '前10%' : number >= 7.5 ? '前25%' : number >= 5.5 ? '前50%' : '后50%';
@@ -496,11 +560,27 @@ function buildAnalysis(paper, record) {
     const firstAuthor = authorInfo.firstAuthorName || authorNames[0] || '未说明';
     const editorial = record.editorial && typeof record.editorial === 'object' ? record.editorial : {};
     const summary = editorial.summary || `研究问题：${record.question}\n\n方法路线：${record.method}\n\n主要贡献与结果：${record.innovations} ${record.results}\n\n适用边界：${record.limits}`;
-    const methodBody = editorial.method || [record.method, record.method2, record.method3].join('\n\n');
-    const innovationBody = editorial.innovations || `${record.innovations}\n\n机制贡献与取舍：${record.method3}\n\n证据边界：${record.review}`;
+    // The compact fields remain independent audit/provenance inputs.  They
+    // are not prepended to a finished editorial section: doing so produced a
+    // visibly field-assembled article that restated the same method and
+    // contribution twice.  Legacy records without editorial prose keep the
+    // explicit route-map fallback.
+    const methodBody = editorial.method ? rebalanceEditorialParagraphs(editorial.method, 5) : distinctParagraphs(
+        `**路线概览。** ${record.method}`,
+        `**训练与组件关系。** ${record.method2}`,
+        `**实验或推理边界。** ${record.method3}`
+    ).join('\n\n');
+    const innovationBody = formatInnovationClaims(
+        editorial.innovations || `${record.innovations}\n\n${record.method3}\n\n${record.review}`
+    );
     const resultsBody = editorial.results || `${record.results}\n\n实验设置与复现条件：${record.details}`;
     const detailsBody = editorial.details || `${record.details}\n\n训练、推理与组件交互：${record.method2}`;
-    const limitsBody = editorial.limits || `${record.limits}\n\n工程与外推风险：${record.review}`;
+    const evidenceLimits = distinctParagraphs(record.limits).join('\n\n');
+    const reviewerLimits = distinctParagraphs(editorial.limits || record.review)
+        .filter(paragraph => !new Set(distinctParagraphs(record.limits).map(normalizeTemplateText)).has(normalizeTemplateText(paragraph)))
+        .join('\n\n');
+    const limitsBody = `1. **论文证据直接支持的边界**\n\n${evidenceLimits}\n\n`
+        + `2. **进一步审视**\n\n${reviewerLimits || record.review}`;
     const openBody = editorial.open || record.open;
     const roast = editorial.review || record.review;
     const scoreReasons = Array.isArray(record.scoringReasons) && record.scoringReasons.length === 8
@@ -517,7 +597,9 @@ function buildAnalysis(paper, record) {
         ['开源', openSource, 1.5, 'A_OPEN'],
         ['可复现性', reproducibility, 0.5, 'A_REPRO'],
         ['工程/实践价值', engineering, 1.5, 'A_ENGINEERING']
-    ].map(([label, value, max, anchor], index) => `* ${label} (${Number(value).toFixed(1)}/${max})：[${anchor}] ${scoreReasons[index]}`).join('\n\n');
+    ].map(([label, value, max, anchor], index) => (
+        `* ${label} (${Number(value).toFixed(1)}/${max})：[${anchor}] ${completeScoringReason(scoreReasons[index])}`
+    )).join('\n\n');
     const hasCode = record.hasCode || '未说明';
     const hasModel = record.hasModel || '未说明';
     const hasDataset = record.hasDataset || '未说明';
@@ -711,20 +793,32 @@ function buildSpec(options) {
             throw new Error(`${id} full-text manifest 含非 HTTPS imageInfos`);
         }
         const availableImageUrls = new Set(imageInfos.map(info => info.url));
-        const unknownSelected = record.selectedImageUrls.filter(url => !availableImageUrls.has(url));
+        const explicitSelection = Array.isArray(record.selectedImageUrls);
+        const unknownSelected = (record.selectedImageUrls || []).filter(url => !availableImageUrls.has(url));
         if (unknownSelected.length) throw new Error(`${id} selectedImageUrls 不属于 full-text manifest: ${unknownSelected.join(',')}`);
         const evidenceLedger = JSON.parse(JSON.stringify(record.evidenceLedger));
         validateEvidenceLedger(evidenceLedger, sourceText, id);
         const analysis = buildAnalysis(effectivePaper, record);
+        const eligibleImages = selectImageCandidates(imageInfos, Config.ANALYSIS_CONFIG.imageCandidateMax);
+        if (explicitSelection && record.selectedImageUrls.length === 0 && eligibleImages.length > 0) {
+            throw new Error(`${id} 存在 ${eligibleImages.length} 个合格论文图，禁止用空 selectedImageUrls 跳过图片审查；请省略该字段采用安全候选，或显式选择 1-4 张`);
+        }
+        const rankedReadableImages = eligibleImages.filter(info => {
+            const caption = String(info.caption || info.alt || '').replace(/\s+/g, ' ').trim();
+            return caption.length >= 20 && !(/^\([a-z]\)/i.test(caption) && caption.length < 80);
+        });
+        const selectedImageUrls = explicitSelection
+            ? record.selectedImageUrls
+            : rankedReadableImages.slice(0, Math.min(3, Config.ANALYSIS_CONFIG.imageInsertionMax || 3)).map(info => info.url);
         const parsed = parseAnalysis(analysis);
         const invalidReason = getInvalidAnalysisReason(analysis, parsed, {
             enforceExperimentTableContract: true,
             enforceMethodDetailContract: true,
             enforceManualDepthContract: true,
-            manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V2,
+            manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V3,
             sourceText
         });
-        if (invalidReason) throw new Error(`${id} 组装分析未通过 manual v2 正文契约: ${invalidReason}`);
+        if (invalidReason) throw new Error(`${id} 组装分析未通过 manual v3 正文契约: ${invalidReason}`);
         papers[id] = {
             arxivId: id,
             requestedArxivId: entry.requestedArxivId,
@@ -736,7 +830,9 @@ function buildSpec(options) {
             filteredBatchSha256: entry.filteredBatchSha256,
             analysis,
             imageInfos,
-            selectedImageUrls: record.selectedImageUrls,
+            selectedImageUrls,
+            imageSelectionMode: explicitSelection ? 'manual_explicit' : 'safe_ranked_default',
+            manualAuthoringPromptSha256: sha256Buffer(fs.readFileSync(MANUAL_AUTHORING_PROMPT)),
             evidenceLedger,
             manualAudit: record.manualAudit,
             stageReviewAttemptsByStage: record.stageReviewAttemptsByStage,
@@ -764,6 +860,8 @@ function buildSpec(options) {
         agent: mergedRecords.agent,
         promptPath: promptBindings.primaryAnalysis.source,
         promptSha256: promptBindings.primaryAnalysis.sha256,
+        manualAuthoringPromptPath: 'prompts/manual-analysis-record.md',
+        manualAuthoringPromptSha256: sha256Buffer(fs.readFileSync(MANUAL_AUTHORING_PROMPT)),
         stagePromptSha256: Object.fromEntries(Object.entries(promptBindings).map(([stage, binding]) => [stage, binding.sha256])),
         reviewProtocol: mergedRecords.reviewProtocol,
         generatedAt,
@@ -801,7 +899,7 @@ function run(argv = process.argv.slice(2)) {
     });
     const outputPath = path.join(Config.CURRENT_DIR, `manual-analysis-spec-${args.date}.json`);
     writeFileAtomic(outputPath, JSON.stringify(spec, null, 2));
-    console.log(`✅ 已原子写入 manual_complete v2 spec：${outputPath}（${Object.keys(spec.papers).length} 篇，API 调用 0）`);
+    console.log(`✅ 已原子写入 manual_complete v3 spec：${outputPath}（${Object.keys(spec.papers).length} 篇，API 调用 0）`);
     return { outputPath, spec };
 }
 
@@ -829,6 +927,7 @@ module.exports = {
     mergeRecordsEnvelopes,
     sourceChunks,
     reviewedClaimsByStage,
+    rebalanceEditorialParagraphs,
     buildAnalysis,
     buildEvidenceLedger,
     validateEvidenceLedger,

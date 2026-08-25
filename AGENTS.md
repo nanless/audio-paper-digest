@@ -49,8 +49,8 @@ node scripts/test-api-key.js [--secondary] # 测试主模型或副模型 LLM API
 node scripts/manual-fetch.js --date YYYY-MM-DD --raw # 无筛选模型抓取候选，仍访问 arXiv/HF
 node scripts/manual-fetch.js --date YYYY-MM-DD --select SPEC.json # 提交完整 manual_offline 逐篇裁决
 npm run manual:fulltext -- YYYY-MM-DD # 逐篇安全获取并 checkpoint 人工分析所需全文
-npm run manual:spec -- --date YYYY-MM-DD --records RECORDS.json # 校验全文 manifest/filtered/人工证据后原子组装 v2 spec；--records 可重复
-npm run manual:analyze -- --date YYYY-MM-DD --spec SPEC.json # 无 LLM/API 的 manual_complete v2 全文分析
+npm run manual:spec -- --date YYYY-MM-DD --records RECORDS.json # 校验全文/证据/写作质量后原子组装 v3 spec；--records 可重复
+npm run manual:analyze -- --date YYYY-MM-DD --spec SPEC.json # 无 LLM/API 的 manual_complete v3 全文分析
 npm run manual:analyze -- --date YYYY-MM-DD --spec SPEC.json --force # 显式用人工纠错/spec 覆盖已成功 canonical
 python3 scripts/manual-review-blog.py --date YYYY-MM-DD --attestation ATTESTATION.json # LLM review 不可用时的严格人工接管
 python3 scripts/publish-to-feishu.py    # 生成飞书文档
@@ -93,7 +93,7 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 
 **默认用户意图**：用户只要说“运行/进行 YYYY-MM-DD（或中文日期）的论文速递”，就视为明确要求并授权完成整条标准链路：抓取、筛选、深度分析、博客生成、反复 review 与修正、博客 push、TOP 10 论文长图、汇总封面，以及最终状态验收。无需再次询问是否发布博客，也不能在深度分析、review 或 push 后提前结束。微信公众号、飞书、小红书自动发布不在默认范围；小红书文案仅在用户明确要求时生成。
 
-**显式人工接管**：模型 API 不可用时可使用严格替代链路，但禁止由普通 API 错误自动触发。`manual-fetch.js --raw` 仍联网抓取并逐来源 checkpoint，`--select` 要求 `manual_offline` v1 规格逐篇完整覆盖候选并把人工否定项写入持久去重库；`manual:fulltext` 逐篇安全获取全文并支持失败项续跑；`manual-deep-analysis.js` 不调用 LLM API，但每篇必须绑定全文 SHA、证据账本、作者机构原文引用、实际审计次数、各阶段专属 prompt/契约 SHA 和独立证据，并通过标准正文契约和 `manual_complete v2` provenance。人工标题覆盖只能修复空白差异；显式空 `selectedImageUrls` 必须保持不选图，不得自动回填候选。每篇在运行锁内重读 canonical 后独立保存，失败保留 checkpoint；默认续跑复用已成功项，人工纠错或 spec/prompt 变化需显式 `--force` 才覆盖。人工图片也必须通过标准公网地址、MIME、大小与缓存 SHA 校验，arXiv 页面 chrome、资助方 logo 和赞助素材不得进入候选。`manual-review-blog.py` 仅替代博客 LLM 语义审查，仍绑定八项人工 attestation、逐文件 SHA、generation、Git 基线、review 协议和 Hugo gate。后续 push、远端 OID 与视觉门禁不变。
+**显式人工接管**：模型 API 不可用时可使用严格替代链路，但禁止由普通 API 错误自动触发。`manual-fetch.js --raw` 仍联网抓取并逐来源 checkpoint，`--select` 要求 `manual_offline` v1 规格逐篇完整覆盖候选并把人工否定项写入持久去重库；`manual:fulltext` 逐篇安全获取全文并支持失败项续跑。Manual v3 不是字段扩写：每篇必须按 `prompts/manual-analysis-record.md` 写成连贯技术文章，摘要形成论证推进，方法闭合输入—组件—训练/求解—输出，创新写缺口—机制—证据—边界，实验包含基线/消融/数字/负面结果，细节覆盖复现条件，局限区分原文证据与独立审视，八维理由不得错位或模板化。短 `method/method2/method3/innovations` 字段只用于审计，不能再与完整 editorial 机械拼接。`manual-deep-analysis.js` 不调用 LLM API，但必须绑定全文 SHA、人工写作 prompt、证据账本、作者机构原文、实际审计次数和各阶段专属 prompt/契约；兼容阶段统一标为 `executionKind=manual_attestation`，不得伪装 API 阶段执行。图片只信任全文 manifest；省略选择时安全排序后自动选最多 3 张并真正插入正文，存在合格候选时空数组阻断，页面 chrome/资助方 logo/赞助素材/碎片图注以及未通过公网地址、MIME、大小和缓存 SHA 校验的图片不得入选；图注只可在完整句号处收束，不能按字符数截成半句。每篇在运行锁内重读 canonical 后独立保存，失败保留 checkpoint；人工纠错或 spec/prompt 变化需显式 `--force`。`manual-review-blog.py` 仅替代博客 LLM 语义审查，attestation v2 必须逐文件绑定 SHA、独立 notes 和八类语义检查；确定性修复一旦改动页面，旧声明立即失效。receipt 标为 `manual_semantic`；后续 push 会复核逐文件 provenance，远端 OID 与视觉门禁不变。
 
 **微信公众号真实发布凭证**：非 `--dry-run` 必须同时配置 `WECHAT_APP_ID`、`WECHAT_APP_SECRET` 和 `WECHAT_THUMB_MEDIA_ID`；项目没有可回退的默认永久素材 ID。
 

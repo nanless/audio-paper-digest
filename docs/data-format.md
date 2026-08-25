@@ -338,6 +338,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 - 只有包含合法 `document_type` 的新分析才写入 `scoringRubricVersion: type-aware-v1`；历史结果不补写版本，以免误标
 - `analysisSource` 为 `html` / `pdf` / `provided_full_text` / `provided_pdf_text` / `abstract`；`sourceTextChars` 记录取得的原文长度，`usedTextChars` 记录主分析实际输入长度。超长来源会按全文位置和任务关键词确定性取样，因此 `usedTextChars` 不等同于简单前缀截断。字符数、截断状态、来源哈希和告警用于识别摘要降级及 checkpoint 证据变化。`abstract` 默认阻断发布，人工批准需设置 `allowAbstractAnalysisPublish: true`
 - `selectedImageUrls` / `imageUrls` 只保存通过稳定 `paragraph_id`、目标章节匹配和每篇默认 4 张上限门禁后实际插入正文的高价值图片，并按最终正文出现顺序保存；旧精确 anchor 仅用于兼容。`allImageUrls` 不能直接当作可发布图片使用
+- Manual v3 的 `analysisManifest.contracts.manualDepth=full-text-evidence-v3` 绑定 `manual-analysis-record.md` SHA；它要求论证型摘要、至少五段方法流、缺口—机制—证据—边界创新、比较/消融及负面实验、复现覆盖、八条维度专属评分和“论文证据直接支持的边界/进一步审视”双层局限。`manualTakeover.stageEvidence[*].executionKind` 与对应 stage 必须为 `manual_attestation`，不得解释为 LLM 阶段实际执行。Manual `imageManifest` v2 还绑定正文插图计划和插入诊断。
 - `generation` 每次锁内对象写入递增：写入者先取得跨进程锁、重读最新 canonical、合并后令版本加 1。它是提交后的版本记录，不是调用方携带 expected-generation 的锁外乐观 CAS。恢复终态还包括 `no_downloadable_images`：候选均为永久不可下载；`invalid_output` 表示有插图计划但无法落地，必须只重试插图阶段
 - `analysisManifest.stages.scoringAudit` 保存模型、温度、prompt 模板哈希、证据哈希、尝试次数、前后总分/差值、稳定性告警和最终八维 JSON；分数变化超过 0.5 会写 `stabilityWarning: true`。`imageManifest.supplement` 保存副模型、温度、prompt/响应哈希及逐项插入诊断
 - 新分析和重分析在结构修复通过后写入 `analysisManifest.contracts.experimentTables=bounded-v1`，表示实验章节已经通过“最多 2 张表、每张 12 个数据行和 8 个指标列”的代码硬契约。`npm run validate:data` 与 Python 发布预检都会重新验证带标记正文；无该标记的历史成功记录保持兼容，不会因启用新契约而全量失效

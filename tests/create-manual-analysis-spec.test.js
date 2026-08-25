@@ -9,6 +9,7 @@ const {
     validateRecord,
     validateRecordsEnvelope,
     assertNoCrossPaperTemplateReuse,
+    rebalanceEditorialParagraphs,
     mergeRecordsEnvelopes,
     buildSpec
 } = require('../scripts/create-manual-analysis-spec.js');
@@ -54,7 +55,20 @@ function methodProse() {
     return [
         prose('方法第一阶段', 5),
         prose('方法第二阶段', 5),
-        prose('方法第三阶段', 5)
+        prose('方法第三阶段', 5),
+        prose('方法第四阶段', 5),
+        prose('方法第五阶段', 5)
+    ].join('\n\n');
+}
+
+function innovationProse() {
+    return [
+        '既有系统在复杂噪声下只能使用固定上下文，本文通过自适应上下文模块改变信息融合路径；受控消融显示移除该模块后 WER 上升，但证据只覆盖当前数据划分。',
+        '传统训练把所有噪声条件混为一体，本文采用分条件增强与共享监督目标；主方法相对同预算基线把 WER 从 12.4 降至 10.8，不过尚未验证跨设备迁移。',
+        '过去的报告只给单一最好值，本文同时设计主实验和模块消融并报告 9.7 的最优结果；这些数值验证了组件作用，却不能替代统计显著性与长期部署测量。',
+        '标准解码流程没有区分表示误差与搜索误差，本文将编码输出和解码预算分别控制，并在同一测试集上比较对应基线；这种设计缩小了归因范围，但还没有覆盖流式延迟和内存开销。',
+        '既有评测容易被单一平均值主导，本文按噪声类型和说话人条件拆分错误，并报告主方法与同预算系统的差距；分组证据支持改善不是少数组别偶然造成，但论文仍缺少置信区间和更多随机种子。',
+        '传统系统只追求离线识别率，本文把模型输出、解码路径和资源条件同时列入比较，使准确率收益可以和部署代价共同核对；现有实验尚未覆盖移动处理器、持续流式输入与真实并发，因此工程结论仍有明确边界。'
     ].join('\n\n');
 }
 
@@ -97,9 +111,9 @@ function validRecord() {
         editorial: {
             summary: prose('摘要专属事实', 8),
             method: methodProse(),
-            innovations: prose('创新专属机制', 9),
+            innovations: innovationProse(),
             results: '结果专属指标包含 WER 12.4、10.8 与 9.7，数值越低表示识别错误越少。' + prose('结果专属比较', 8),
-            details: prose('细节专属配置', 10),
+            details: '数据按训练集、验证集和测试集固定划分；优化器、学习率、损失目标、批量大小与训练轮数均明确记录；GPU 硬件和显存条件已列出，推理解码阈值、窗口、延迟与部署边界分别说明。' + prose('细节专属配置', 10),
             limits: prose('局限专属边界', 6),
             open: prose('资源专属核验', 2),
             review: '方法的层级关系清楚，实验也给出可比较的错误率；真正薄弱之处是跨设备迁移和线上资源开销仍缺少直接测量。'
@@ -131,8 +145,9 @@ function distinctRecord(id, marker) {
     const record = JSON.parse(JSON.stringify(validRecord()));
     record.arxivId = id;
     for (const [field, value] of Object.entries(record.editorial)) {
-        record.editorial[field] = value.replace(/[。！？]/g, punctuation => `${marker}${punctuation}`);
+        record.editorial[field] = `${marker}专属条件下，${value.replace(/[。！？]/g, punctuation => `${marker}${punctuation}`)}`;
     }
+    record.editorial.innovations = record.editorial.innovations.replace(/本文/g, `本文${marker}`);
     record.scoringReasons = record.scoringReasons.map(reason => `${reason}${marker}`);
     return record;
 }
@@ -142,7 +157,7 @@ function writeJson(filePath, value) {
 }
 
 function fixture() {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-spec-v2-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-spec-v3-'));
     const outDir = path.join(root, 'manual-full-text', DATE);
     fs.mkdirSync(outDir, { recursive: true });
     const paper = {
@@ -192,7 +207,18 @@ function fixture() {
     return { root, filtered, manifest, manifestPath, recordsPath, mergedRecords, input, entry };
 }
 
-describe('strict reusable manual v2 spec assembler', () => {
+describe('strict reusable manual v3 spec assembler', () => {
+    it('splits an overlong editorial method at sentence boundaries without duplicating text', () => {
+        const source = Array.from({ length: 4 }, (_, paragraphIndex) => (
+            Array.from({ length: 6 }, (_, sentenceIndex) => (
+                `第${paragraphIndex + 1}段第${sentenceIndex + 1}句描述本篇论文的输入、组件、训练、输出和实验边界，并保留足够长度用于安全断段。`
+            )).join('')
+        )).join('\n\n');
+        const balanced = rebalanceEditorialParagraphs(source, 5);
+        assert.equal(balanced.split(/\n\s*\n/).length, 5);
+        assert.equal(balanced.replace(/\s+/g, ''), source.replace(/\s+/g, ''));
+    });
+
     it('parses repeated --records and rejects unknown flags', () => {
         assert.deepEqual(parseArgs([
             '--date', DATE,
@@ -315,14 +341,34 @@ describe('strict reusable manual v2 spec assembler', () => {
             mergedRecords: f.mergedRecords,
             generatedAt: '2026-08-25T12:30:00.000+08:00'
         });
-        assert.equal(spec.version, 2);
+        assert.equal(spec.version, 3);
         assert.equal(spec.mode, 'manual_complete');
+        assert.match(spec.manualAuthoringPromptSha256, /^[a-f0-9]{64}$/);
         assert.equal(spec.filteredBatchSha256, f.entry.filteredBatchSha256);
         assert.equal(spec.papers[ID].fullTextPath, f.input.filePath);
         assert.equal(spec.papers[ID].sourceSha256, f.entry.sourceSha256);
         assert.deepEqual(spec.papers[ID].imageInfos, f.entry.imageInfos);
+        assert.deepEqual(spec.papers[ID].selectedImageUrls, [f.entry.imageInfos[0].url]);
+        assert.equal(spec.papers[ID].imageSelectionMode, 'safe_ranked_default');
         assert.equal(spec.papers[ID].manualAudit.attempts, 3);
         assert.equal(Object.keys(spec.stagePromptSha256).length, 10);
+        assert.match(spec.papers[ID].analysis, /方法第一阶段/);
+        assert.doesNotMatch(spec.papers[ID].analysis, /人工记录方法主干/);
+        assert.match(spec.papers[ID].analysis, /既有系统在复杂噪声下/);
+        assert.doesNotMatch(spec.papers[ID].analysis, /人工记录创新机制/);
+
+        const optOutRecord = validRecord();
+        optOutRecord.selectedImageUrls = [];
+        const optOutPath = path.join(f.root, 'opt-out-records.json');
+        const optOutEnvelope = envelope({ [ID]: optOutRecord });
+        writeJson(optOutPath, optOutEnvelope);
+        assert.throws(() => buildSpec({
+            date: DATE,
+            filtered: f.filtered,
+            manifest: f.manifest,
+            manifestPath: f.manifestPath,
+            mergedRecords: mergeRecordsEnvelopes([{ path: optOutPath, document: optOutEnvelope }], DATE)
+        }), /禁止用空 selectedImageUrls 跳过图片审查/);
 
         const titleRecord = validRecord();
         titleRecord.titleOverride = 'Strictmanual spec fixture';

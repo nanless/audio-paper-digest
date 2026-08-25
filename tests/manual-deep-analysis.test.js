@@ -13,11 +13,13 @@ const {
     validateManualTakeoverManifest,
     validateManualDepthContract,
     MANUAL_DEPTH_CONTRACT_VERSION_V2,
+    MANUAL_DEPTH_CONTRACT_VERSION_V3,
     findManualBoilerplate
 } = require('../scripts/analysis-contract.js');
 const {
     buildManualRecord,
     buildStagePromptBindings,
+    conciseManualImageCaption,
     finalizeManualCanonicalState,
     manualCanonicalReuseFingerprint,
     parseArgs,
@@ -37,14 +39,28 @@ function detailedAnalysis() {
     ];
     const method = Array.from({ length: 4 }, () => methodParagraphs.join('\n\n')).join('\n\n');
     const summary = Array.from({ length: 3 }, () => '论文研究带噪语音识别中的上下文声学建模。输入音频先经过特征提取和编码器，再由上下文模块融合局部与长程信息，最后输出识别序列。实验覆盖多个公开基准、噪声条件和消融设置，并报告了模型在不同条件下的误差变化。方法的价值来自输入、训练目标和评价指标之间的对应关系；局限是部分超参数、数据划分和部署成本没有完整披露。').join('\n\n');
-    const innovation = Array.from({ length: 7 }, (_, index) => `${index + 1}. 第${index + 1}项贡献对应可核对的模型结构、训练条件或评价设置；它明确说明了输入、模块、输出及其与基线的差异，并保留了实验条件和适用边界。`).join('\n\n');
+    const innovation = [
+        '1. 既有带噪识别系统依赖固定上下文，本文通过可训练融合模块连接局部特征与长程信息；消融结果显示移除模块后错误率上升，但结论只覆盖受控噪声。该变化不是简单扩大网络，而是改变局部表征进入上下文模块的顺序，并用相同解码预算隔离组件作用；论文尚未证明这种收益能够延伸到完全不同的声学设备。',
+        '2. 传统增强没有区分噪声条件，本文采用分条件数据构造与共享监督目标；实验相对同预算基线改善识别结果，不过跨设备迁移仍未验证。训练集、验证集与测试集的职责被分开，因而模型选择不会直接读取测试结果；但公开材料没有给出全部随机种子和置信区间，稳定性证据仍有限。',
+        '3. 过去常只报告单次最好值，本文设计主实验与模块消融并保留指标方向；这些证据验证组件作用，却没有给出统计显著性与部署成本。结果按噪声条件和说话人划分解释，不把一个最有利数字外推为普遍改进；延迟、内存与功耗没有板端测量，工程结论只能保持在算法层。'
+    ].join('\n\n');
     const results = `实验在多个带噪语音基准上比较主方法与基线，并报告识别错误、噪声鲁棒性和消融变化。实验同时交代训练集、验证集、测试集、噪声类型、说话人划分和评价指标方向，结果需要结合这些条件解读。结果段还应说明每个基线采用的训练数据、相同的预处理和相同的解码设置，避免把数据规模差异误认为模型收益。测试结果还需要区分平均值、单次最好值和不同噪声条件下的变化，不能只引用一个最有利的数字。统计口径、重复次数和误差范围也会影响读者对结果稳定性的判断。\n\n| 实验 | 结果与条件 |\n|---|---|\n| 主方法 | 多个公开基准、带噪条件、识别输出 |\n| 消融 | 移除上下文模块后误差上升 |\n\n结果同时记录数据划分、基线和评价口径，不能把单一条件的改善外推到所有说话人或设备。论文没有报告的统计显著性、跨域测试和失败案例不在此处补写。`;
     const details = Array.from({ length: 8 }, (_, index) => `- 细节${index + 1}：输入音频、声学特征、上下文编码、监督目标、验证集和解码设置之间的关系均需按正文保持一致；第${index + 1}项缺失信息不会由常见实现补写。`).join('\n\n');
     const scoringMaxima = ['2', '1.5', '1.5', '1', '1.5', '1.5', '0.5', '1.5'];
     const scoringValues = ['1.5', '1.2', '1.1', '0.8', '1.0', '0.0', '0.3', '1.0'];
     const scoringTags = ['A_METHOD', 'A_METHOD', 'A_RESULTS', 'A_CLARITY', 'A_IMPACT', 'A_OPEN', 'A_REPRO', 'A_ENGINEERING'];
-    const scoring = Array.from({ length: 8 }, (_, index) => `* ${['创新性','技术严谨性','实验充分性','清晰度','影响力','开源','可复现性','工程/实践价值'][index]} (${scoringValues[index]}/${scoringMaxima[index]})：[${scoringTags[index]}] 该维度依据正文中可定位的方法、数据、基线、评价或资源信息单独判断，未报告部分明确保留边界。`).join('\n');
-    const limits = '论文没有完整披露部分训练超参数、硬件和随机种子；跨说话人、跨设备和长期部署仍缺少验证。带噪基准与公开数据可以支持方法比较，但不能代替真实场景的失败案例、统计显著性和成本测量。对于长尾噪声、数据分布变化和部署资源约束，现有实验也没有给出足够的稳定性证据。不同设备、不同说话人和不同噪声强度下的误差可能改变结论，因此需要更广泛的验证。模型在真实环境中的延迟、内存、功耗和维护成本也没有被充分量化，长期运行风险仍待评估。';
+    const scoreEvidence = [
+        '可训练上下文融合改变了固定窗口基线的数据流，并由移除模块后的误差上升提供直接消融证据；跨设备条件尚未覆盖。',
+        '输入、监督目标与解码输出有完整对应，主实验和消融使用相同评价方向；统计检验与随机种子没有披露。',
+        '多个公开带噪基准、统一划分和模块消融支撑主要结论，但没有跨域失败案例和显著性区间。',
+        '章节顺序能够从问题、模块、训练推进到结果，指标方向和表格含义清楚；少数实现参数仍只能标成未说明。',
+        '鲁棒语音识别具有跨场景价值，多个噪声条件说明方法不是单一示例；尚无真实设备或长期线上证据。',
+        '正文未给出本文代码、模型权重或数据产物的可访问地址，因此不把第三方公开基准计作本文开放。',
+        '数据划分、监督目标和解码顺序可以重建，但优化器细节、硬件、随机种子和完整超参数仍未报告。',
+        '推理链能够落到识别输出并讨论部署边界，不过延迟、内存、功耗和维护成本尚无板端测量。'
+    ];
+    const scoring = Array.from({ length: 8 }, (_, index) => `* ${['创新性','技术严谨性','实验充分性','清晰度','影响力','开源','可复现性','工程/实践价值'][index]} (${scoringValues[index]}/${scoringMaxima[index]})：[${scoringTags[index]}] ${scoreEvidence[index]}`).join('\n');
+    const limits = '1. **论文证据直接支持的边界**\n\n论文没有完整披露部分训练超参数、硬件和随机种子；跨说话人、跨设备和长期部署仍缺少验证。带噪基准与公开数据可以支持方法比较，但不能代替真实场景的失败案例、统计显著性和成本测量。对于长尾噪声、数据分布变化和部署资源约束，现有实验也没有给出足够的稳定性证据。当前表格只覆盖论文选定的噪声强度和公开语料，不能据此宣称所有真实声场都能得到相同收益。\n\n2. **进一步审视**\n\n不同设备、不同说话人和不同噪声强度下的误差可能改变结论，因此需要更广泛的验证。模型在真实环境中的延迟、内存、功耗和维护成本也没有被充分量化，长期运行风险仍待评估。若数据分布持续漂移，固定验证集上的平均改善不一定能保持，后续还应报告失败样本、置信区间和维护成本。部署测试还需要明确流式缓存、峰值内存与端到端实时率，否则算法精度无法直接换算成产品可用性。';
     return text
         .replace(/#{2,3} 核心摘要\n[\s\S]*?(?=\n#{2,3} 方法概述和架构)/, `## 核心摘要\n${summary}\n`)
         .replace(/#{2,3} 方法概述和架构\n[\s\S]*?(?=\n#{2,3} 核心创新点)/, `## 方法概述和架构\n${method}\n`)
@@ -163,6 +179,7 @@ function buildReusableRecord(options = {}) {
         reason: fixture.manifest.manualTakeover.reason,
         agent: 'Codex'
     };
+    spec.manualAuthoringPromptSha256 = directSha(fs.readFileSync(path.join(__dirname, '..', 'prompts', 'manual-analysis-record.md')));
     if (options.mutateSpec) options.mutateSpec(spec);
     const promptBindings = buildStagePromptBindings();
     if (options.mutatePrompts) options.mutatePrompts(promptBindings);
@@ -176,7 +193,38 @@ function buildReusableRecord(options = {}) {
     return { dir, sourcePath, sourceText, spec, promptBindings, paper, record };
 }
 
-describe('manual_complete v2 deep-analysis contract', () => {
+describe('manual_complete v3 deep-analysis contract', () => {
+    it('保留完整图注意义，不以字符数或分号制造半句截断', () => {
+        const longSingleSentence = `Fig. 1: ${'Illustration of the considered active sonar scenario '.repeat(5).trim()} in a time-varying multipath channel.`;
+        const normalized = conciseManualImageCaption(longSingleSentence, 80);
+        assert.equal(normalized, '论文实验设置与数据关系示意图');
+
+        const semicolonCaption = 'Fig. 2: First comparison branch; second comparison branch; final controlled conclusion.';
+        assert.equal(
+            conciseManualImageCaption(semicolonCaption, 45),
+            '论文关键实验比较图'
+        );
+
+        const multiSentence = 'Fig. 3: The first complete sentence explains the method. The second sentence adds implementation detail that is not required in the concise alt.';
+        assert.equal(
+            conciseManualImageCaption(multiSentence, 80),
+            'The first complete sentence explains the method.'
+        );
+
+        assert.equal(
+            conciseManualImageCaption('Overview of WnW architecture where fixed heads discard the unsele', 45),
+            '论文方法与系统结构总览图'
+        );
+        assert.equal(
+            conciseManualImageCaption('Different settings for decoding where the model is trained on all subjects simultaneously', 45),
+            '论文实验设置与数据关系示意图'
+        );
+        assert.equal(
+            conciseManualImageCaption('The correlation is corr=0.66corr=0.66, p<0.001p<0.001.'),
+            'The correlation is corr=0.66, p<0.001.'
+        );
+    });
+
     it('accepts explicit force takeover but rejects unknown or duplicate flags', () => {
         assert.deepEqual(
             parseArgs(['--date', '2026-08-20', '--spec', 'manual.json', '--force']),
@@ -285,6 +333,7 @@ describe('manual_complete v2 deep-analysis contract', () => {
             reason: fixture.manifest.manualTakeover.reason,
             agent: 'Codex'
         };
+        spec.manualAuthoringPromptSha256 = directSha(fs.readFileSync(path.join(__dirname, '..', 'prompts', 'manual-analysis-record.md')));
         spec.manualAudit = {
             ...spec.manualAudit,
             attempts: 3,
@@ -323,6 +372,8 @@ describe('manual_complete v2 deep-analysis contract', () => {
         assert.equal(record.digestStatus.latestAttemptStatus, 'analyzed');
         assert.equal(record.analysisManifest.manualTakeover.stageEvidence.primaryAnalysis.attempts, 3);
         assert.equal(record.analysisManifest.manualTakeover.stageEvidence.primaryAnalysis.protocol, 'manual-offline-review-v1');
+        assert.equal(record.analysisManifest.manualTakeover.stageEvidence.primaryAnalysis.executionKind, 'manual_attestation');
+        assert.equal(record.analysisManifest.stages.primaryAnalysis.executionKind, 'manual_attestation');
         assert.notEqual(
             record.analysisManifest.stages.primaryAnalysis.promptSha256,
             record.analysisManifest.stages.scoringAudit.promptSha256
@@ -338,6 +389,8 @@ describe('manual_complete v2 deep-analysis contract', () => {
         assert.equal(record.imageManifest.selected[0].mime, 'image/png');
         assert.equal(record.imageManifest.selected[0].sha256, 'b'.repeat(64));
         assert.equal(record.imageManifest.selected[0].bytes, 1234);
+        assert.match(record.analysis, /下图概括论文的系统结构或处理流程/);
+        assert.doesNotMatch(record.analysis, /原始图注为/);
 
         const noSelectionSpec = { ...spec, selectedImageUrls: [] };
         const noSelectionRecord = buildManualRecord(
@@ -409,6 +462,7 @@ describe('manual_complete v2 deep-analysis contract', () => {
         assert.equal(shouldReuseCanonical(record, changedImageRecord), false);
 
         spec.selectedImageUrls = ['https://example.com/unverified.png'];
+        spec.imageSelectionMode = 'manual_explicit';
         assert.throws(
             () => buildManualRecord(paper, spec, '2026-08-20', promptBindings, { preparedImages }),
             /未通过安全下载校验/
@@ -570,5 +624,32 @@ describe('manual full-text-evidence-v2 quality gates', () => {
             '代码：https://github.com/example/robust-asr；模型权重：https://huggingface.co/example/model。'
         );
         assert.equal(validateManualDepthContract(fixture.analysis, v2Options(sourceWithRepo)), null);
+    });
+});
+
+describe('manual full-text-evidence-v3 reader-visible quality gates', () => {
+    const v3Options = sourceText => ({ sourceText, manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V3 });
+
+    it('接受具有论证推进、比较实验、复现信息和双层局限的正文', () => {
+        const fixture = baseSpec();
+        assert.equal(validateManualDepthContract(fixture.analysis, v3Options(fixture.sourceText)), null);
+    });
+
+    it('拒绝贡献名词列表、通用评分理由和未分层局限', () => {
+        const fixture = baseSpec();
+        const shallowInnovation = fixture.analysis.replace(
+            /## 核心创新点\n[\s\S]*?(?=\n## 实验结果)/,
+            '## 核心创新点\n\n1. 新编码器。\n\n2. 新损失。\n\n3. 新数据集。\n'
+        );
+        assert.match(validateManualDepthContract(shallowInnovation, v3Options(fixture.sourceText)), /核心创新点过短|创新点必须|创新论证/);
+
+        const genericScoring = fixture.analysis.replace(
+            /\[A_METHOD\] 可训练上下文融合改变了/,
+            '[A_METHOD] 创新维度认可可训练上下文融合改变了'
+        );
+        assert.match(validateManualDepthContract(genericScoring, v3Options(fixture.sourceText)), /某维度认可/);
+
+        const flatLimits = fixture.analysis.replace('论文证据直接支持的边界', '局限汇总');
+        assert.match(validateManualDepthContract(flatLimits, v3Options(fixture.sourceText)), /局限必须分开标注/);
     });
 });

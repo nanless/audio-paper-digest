@@ -61,14 +61,23 @@ const MANUAL_DEPTH_CONTRACT_VERSION = 'full-text-evidence-v1';
 // cross-section self-copying, editorial template sentences, missing
 // open-source URL extraction and anchor-less scoring justifications.
 const MANUAL_DEPTH_CONTRACT_VERSION_V2 = 'full-text-evidence-v2';
+// v3 closes the reader-visible gap found when comparing the 2026-08-25
+// manual batch with the 2026-08-14 API batch.  Length alone is not enough:
+// the final article must read as a technical interpretation, with a real
+// argument in the summary, a multi-step data flow, distinct innovation
+// claims, comparative experiments, reproducibility coverage, dimension-
+// specific scoring reasons and separately labelled evidence/reviewer limits.
+const MANUAL_DEPTH_CONTRACT_VERSION_V3 = 'full-text-evidence-v3';
 const MANUAL_DEPTH_CONTRACT_VERSIONS = Object.freeze([
     MANUAL_DEPTH_CONTRACT_VERSION,
-    MANUAL_DEPTH_CONTRACT_VERSION_V2
+    MANUAL_DEPTH_CONTRACT_VERSION_V2,
+    MANUAL_DEPTH_CONTRACT_VERSION_V3
 ]);
 const ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION = 'high-confidence-v1';
 const MANUAL_COMPLETE_STATUS = 'manual_complete';
 const MANUAL_COMPLETE_PROVENANCE_VERSION = 2;
 const MANUAL_PROVENANCE_PROTOCOL = 'manual-offline-review-v1';
+const MANUAL_STAGE_EXECUTION_KIND = 'manual_attestation';
 // Records completed through 2026-08-21 predate per-stage prompt/context
 // bindings.  Keep that already-published batch readable, but do not allow a
 // newer record to strip hardened fields and fall back to the legacy profile.
@@ -428,9 +437,14 @@ function validateManualDepthContract(analysis, options = {}) {
     const numericHits = (results.match(/(?<![A-Za-z])\d+(?:\.\d+)?(?:%|ms|s|Hz|kHz|M|B|GB|×)?/g) || []).length;
     const sourceNumericHits = (sourceText.match(/(?<![A-Za-z])\d+(?:\.\d+)?(?:%|ms|s|Hz|kHz|M|B|GB|×)?/g) || []).length;
     if (sourceNumericHits >= 8 && numericHits < 3) return `manual 实验结果缺少可核对数字: ${numericHits}/3`;
-    if (options.manualDepthContractVersion === MANUAL_DEPTH_CONTRACT_VERSION_V2) {
+    if ([MANUAL_DEPTH_CONTRACT_VERSION_V2, MANUAL_DEPTH_CONTRACT_VERSION_V3]
+        .includes(options.manualDepthContractVersion)) {
         const v2Issue = validateManualDepthContractV2(analysis, { sourceText });
         if (v2Issue) return v2Issue;
+    }
+    if (options.manualDepthContractVersion === MANUAL_DEPTH_CONTRACT_VERSION_V3) {
+        const v3Issue = validateManualDepthContractV3(analysis, { sourceText });
+        if (v3Issue) return v3Issue;
     }
     return null;
 }
@@ -519,6 +533,86 @@ function validateManualDepthContractV2(analysis, options = {}) {
     if (findManualOpensourceRepoUrls(sourceText).length > 0 && !/https?:\/\//i.test(opensource)) {
         return '全文提及 GitHub/HuggingFace 等开源仓库链接，但开源详情未提取任何具体 URL，必须逐项核对 availability statement 后列出';
     }
+    return null;
+}
+
+function chineseCharacterCount(value) {
+    return (String(value || '').match(/[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]/g) || []).length;
+}
+
+function proseParagraphs(value) {
+    return String(value || '').split(/\n\s*\n/).map(item => item.trim()).filter(item => (
+        item.length > 20 && !/^\|/.test(item) && !/^!\[/.test(item)
+    ));
+}
+
+function validateManualDepthContractV3(analysis, options = {}) {
+    const summary = extractSection(analysis, '核心摘要');
+    const method = extractSection(analysis, '方法概述和架构');
+    const innovations = extractSection(analysis, '核心创新点');
+    const results = extractSection(analysis, '实验结果');
+    const details = extractSection(analysis, '细节详述');
+    const scoring = extractSection(analysis, '评分理由');
+    const limits = extractSection(analysis, '局限与问题');
+    const sourceText = String(options.sourceText || '');
+
+    const summarySentences = summary.split(/[。！？!?]/).map(item => item.trim()).filter(item => chineseCharacterCount(item) >= 8);
+    if (summarySentences.length < 5) return `manual v3 核心摘要缺少论证推进: ${summarySentences.length}/5 个有效句子`;
+
+    const methodParagraphs = proseParagraphs(method);
+    if (methodParagraphs.length < 5) return `manual v3 方法段落不足: ${methodParagraphs.length}/5`;
+    const methodSignals = [
+        /输入|波形|特征|样本|数据/,
+        /模块|编码器|解码器|网络|组件|算子|阶段|结构/,
+        /训练|优化|损失|目标|监督|更新|拟合|求解|实验|控制|构造|标注|证明/,
+        /输出|推理|解码|预测|生成|检索|评估|结果|结论|决策/
+    ];
+    const missingMethodSignals = methodSignals.filter(pattern => !pattern.test(method)).length;
+    if (missingMethodSignals > 1) return `manual v3 方法缺少输入、组件、训练目标或输出边界中的 ${missingMethodSignals} 类`;
+
+    const innovationItems = proseParagraphs(innovations).filter(item => !/^引导|^总的来说/.test(item));
+    if (innovationItems.length < 3) return `manual v3 创新论证不足: ${innovationItems.length}/3 个独立段落`;
+    if (!/(?:相比|相较|比|既有|传统|标准|过去|不同于|不再|无需|而不|而非|避免|问题|限制|瓶颈|缺口|代价)/.test(innovations)
+        || !/(?:机制|通过|采用|引入|设计|改为|拆分|把|将|使用|以|定义|提出)/.test(innovations)
+        || !/(?:实验|评测|结果|消融|证据|数据|数值|观察|报告|达到|下降|提升|改善|验证)/.test(innovations)) {
+        return 'manual v3 创新点必须同时说明既有缺口、新机制和实验证据，不能只列贡献名词';
+    }
+
+    if (!/(?:相比|相较|比较|配对|对照|基线|baseline|vs\.?|消融|移除|加入|主方法|提出方法|最强|高于|低于|超过|落后|优于|改善|差距|从[^。]{0,40}(?:升至|降至|到))/i.test(results)) {
+        return 'manual v3 实验结果缺少明确比较对象或消融关系';
+    }
+    if (!/(?:但是|但|不过|仅|尚未|不能|限制|边界|未报告|未说明)/.test(results)) {
+        return 'manual v3 实验结果缺少结论边界或负面结果';
+    }
+    const numericHits = results.match(/(?<![A-Za-z])\d+(?:\.\d+)?(?:%|ms|s|Hz|kHz|M|B|GB|×)?/g) || [];
+    const sourceNumericHits = sourceText.match(/(?<![A-Za-z])\d+(?:\.\d+)?(?:%|ms|s|Hz|kHz|M|B|GB|×)?/g) || [];
+    if (sourceNumericHits.length >= 12 && numericHits.length < 3) {
+        return `manual v3 实验数字密度不足: ${numericHits.length}/3`;
+    }
+
+    const reproducibilitySignals = [
+        /数据|语料|样本|划分|训练集|测试集/,
+        /损失|目标|优化器|学习率|训练|求解/,
+        /超参数|批量|轮|epoch|步数|阈值|维度|窗口/i,
+        /硬件|GPU|CPU|显卡|内存|显存|未说明/,
+        /推理|解码|延迟|吞吐|部署|测试时|未说明/
+    ];
+    const reproducibilityText = `${method}\n${details}`;
+    const detailsCoverage = reproducibilitySignals.filter(pattern => pattern.test(reproducibilityText)).length;
+    if (detailsCoverage < 3) return `manual v3 复现信息覆盖不足: ${detailsCoverage}/5 类`;
+
+    const scoreLines = scoring.split(/\n+/).map(item => item.trim()).filter(item => /^\*/.test(item));
+    if (scoreLines.length !== 8) return `manual v3 评分理由必须恰好 8 条: ${scoreLines.length}/8`;
+    const shallowScore = scoreLines.find(item => chineseCharacterCount(item.replace(/^\*[^：:]*[：:]\s*/, '')) < 25);
+    if (shallowScore) return `manual v3 评分理由过于概括: ${shallowScore.slice(0, 80)}`;
+    if (scoreLines.some(item => /(?:创新|方法|实验|清晰度|实用|开源|可复现性|综合)维度(?:认可|体现|有|中)/.test(item))) {
+        return 'manual v3 评分理由仍是“某维度认可/体现”模板，必须直接写论文证据与扣分边界';
+    }
+
+    if (!/论文证据直接支持的边界/.test(limits) || !/进一步审视/.test(limits)) {
+        return 'manual v3 局限必须分开标注论文证据支持的边界与进一步审视';
+    }
+    if (chineseCharacterCount(limits) < 300) return `manual v3 局限分析过短: ${chineseCharacterCount(limits)}/300`;
     return null;
 }
 
@@ -639,6 +733,10 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
     if (!/^[a-f0-9]{64}$/.test(String(takeover.promptSha256 || ''))) {
         return 'manualTakeover.promptSha256 必须是 SHA-256';
     }
+    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V3
+        && !/^[a-f0-9]{64}$/.test(String(takeover.manualAuthoringPromptSha256 || ''))) {
+        return 'manual v3 必须绑定 manualAuthoringPromptSha256';
+    }
     if (!/^[a-f0-9]{64}$/.test(String(takeover.analysisSha256 || ''))) {
         return 'manualTakeover.analysisSha256 必须是 SHA-256';
     }
@@ -733,9 +831,14 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
         if (imageManifest.downloadEvidenceSha256 !== expectedDownloadContext) {
             return 'manual imageManifest.downloadEvidenceSha256 闭环校验失败';
         }
-        const expectedSelectionContext = manualSha256(
-            imageManifest.selected.map(normalizeImageEvidence)
-        );
+        const normalizedSelected = imageManifest.selected.map(normalizeImageEvidence);
+        const expectedSelectionContext = imageManifest.version >= 2
+            ? manualSha256({
+                selected: normalizedSelected,
+                insertionPlan: imageManifest.insertionPlan || [],
+                insertionDiagnostics: imageManifest.insertionDiagnostics || []
+            })
+            : manualSha256(normalizedSelected);
         if (imageManifest.selectionEvidenceSha256 !== expectedSelectionContext) {
             return 'manual imageManifest.selectionEvidenceSha256 闭环校验失败';
         }
@@ -745,6 +848,11 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
         const state = stages[stage];
         if (!item || typeof item !== 'object' || !state || item.status !== state.status) {
             return `manualTakeover.stageEvidence.${stage} 与阶段状态不一致`;
+        }
+        if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V3
+            && (item.executionKind !== MANUAL_STAGE_EXECUTION_KIND
+                || state.executionKind !== MANUAL_STAGE_EXECUTION_KIND)) {
+            return `manualTakeover.stageEvidence.${stage}.executionKind 必须明确为 ${MANUAL_STAGE_EXECUTION_KIND}，不得把人工核验伪装成 LLM 阶段执行`;
         }
         if (!Number.isInteger(item.attempts) || item.attempts < 2) {
             return `manualTakeover.stageEvidence.${stage}.attempts 至少为 2`;
@@ -795,6 +903,9 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
             }
             expectedInputSha256 = manualSha256({
                 stage,
+                ...(manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V3
+                    ? { executionKind: item.executionKind || null }
+                    : {}),
                 sourceSha256: takeover.sourceSha256,
                 analysisSha256: takeover.analysisSha256,
                 claims: item.reviewedClaims,
@@ -1054,6 +1165,7 @@ module.exports = {
     RECOVERY_STAGE_TERMINAL_STATUSES,
     MANUAL_COMPLETE_STATUS,
     MANUAL_COMPLETE_PROVENANCE_VERSION,
+    MANUAL_STAGE_EXECUTION_KIND,
     MANUAL_AUDIT_CHECKS,
     EXPERIMENT_TABLE_LIMITS,
     splitMarkdownTableRow,
@@ -1064,9 +1176,11 @@ module.exports = {
     validateManualDepthContract,
     MANUAL_DEPTH_CONTRACT_VERSION,
     MANUAL_DEPTH_CONTRACT_VERSION_V2,
+    MANUAL_DEPTH_CONTRACT_VERSION_V3,
     MANUAL_DEPTH_CONTRACT_VERSIONS,
     findCrossSectionDuplicateSentences,
     validateManualDepthContractV2,
+    validateManualDepthContractV3,
     analysisManifestRequiresMethodDetailContract,
     isRecoveryStageTerminal,
     manualSha256,
