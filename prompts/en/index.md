@@ -13,6 +13,8 @@ This directory contains all LLM prompts for the audio-paper-digest skill, separa
 
 > Note: `image-supplement.md`, `method-fill.md`, `table-fill.md`, `structure-repair.md`, and `scoring-audit.md` have **no English versions**; the code always loads the Chinese files under `prompts/` for these final processing stages. Structural repair and scoring audit are executed by the primary model. See the Chinese [prompts/index.md](../index.md).
 
+The English directory is therefore a partial documentation/compatibility mirror, not a complete independently executable pipeline. Likewise, a manual artifact that satisfies the same output and provenance contracts must not be described as having executed the corresponding LLM stages.
+
 ## Placeholder Conventions
 
 Template placeholders in each prompt are denoted by `{variableName}`; the code injects actual values via string replacement after reading the file. See the "Invocation" section in each document for specific placeholders.
@@ -28,5 +30,6 @@ Template placeholders in each prompt are denoted by `{variableName}`; the code i
 - When adjusting the tag system, scoring criteria, or output format, synchronize `scripts/utils.js`, `scripts/utils.py`, analysis/publish validators, fixtures, and both language variants.
 - Type-aware scoring uses the controlled `document_type` field (方法研究 / 系统技术报告 / 模型报告 / 数据集与基准 / 综述 / 理论研究 / 应用研究). Keep `deep-analysis.md`, `gap-fill.md`, and both English variants synchronized.
 - Claim-evidence matching and single-issue-single-primary-dimension deduction must remain intact. `image-supplement.md` must never classify or score papers.
+- Evidence-ledger IDs, evidence-block numbers, scoring-source tags, stage-audit notes, prompt restatements, manual status names, and repair-template scaffolding are internal provenance only. They must never appear in public analysis prose; also remove duplicated boilerplate introduced by staged or manual repairs.
 - Keep placeholder names consistent with the replacement logic in the code.
 - After modifying a prompt, it is recommended to run a single-paper analysis or `quick-test.js` to verify the effect.

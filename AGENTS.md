@@ -48,7 +48,9 @@ node scripts/validate-scores.js         # 验证并修复评分
 node scripts/test-api-key.js [--secondary] # 测试主模型或副模型 LLM API key 可用性
 node scripts/manual-fetch.js --date YYYY-MM-DD --raw # 无筛选模型抓取候选，仍访问 arXiv/HF
 node scripts/manual-fetch.js --date YYYY-MM-DD --select SPEC.json # 提交完整 manual_offline 逐篇裁决
+npm run manual:fulltext -- YYYY-MM-DD # 逐篇安全获取并 checkpoint 人工分析所需全文
 npm run manual:analyze -- --date YYYY-MM-DD --spec SPEC.json # 无 LLM/API 的 manual_complete v2 全文分析
+npm run manual:analyze -- --date YYYY-MM-DD --spec SPEC.json --force # 显式用人工纠错/spec 覆盖已成功 canonical
 python3 scripts/manual-review-blog.py --date YYYY-MM-DD --attestation ATTESTATION.json # LLM review 不可用时的严格人工接管
 python3 scripts/publish-to-feishu.py    # 生成飞书文档
 
@@ -90,7 +92,7 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 
 **默认用户意图**：用户只要说“运行/进行 YYYY-MM-DD（或中文日期）的论文速递”，就视为明确要求并授权完成整条标准链路：抓取、筛选、深度分析、博客生成、反复 review 与修正、博客 push、TOP 10 论文长图、汇总封面，以及最终状态验收。无需再次询问是否发布博客，也不能在深度分析、review 或 push 后提前结束。微信公众号、飞书、小红书自动发布不在默认范围；小红书文案仅在用户明确要求时生成。
 
-**显式人工接管**：模型 API 不可用时可使用三段严格替代链路，但禁止由普通 API 错误自动触发。`manual-fetch.js --raw` 仍联网抓取并保存来源健康，`--select` 要求 `manual_offline` v1 规格逐篇完整覆盖候选；`manual-deep-analysis.js` 不调用 LLM/API，但每篇必须绑定全文 SHA、证据账本、两轮审计、全部阶段独立证据，并通过标准正文契约和 `manual_complete v2` provenance；`manual-review-blog.py` 仅替代博客 LLM 语义审查，仍绑定八项人工 attestation、逐文件 SHA、generation、Git 基线、review 协议和 Hugo gate。后续 push、远端 OID 与视觉门禁不变。
+**显式人工接管**：模型 API 不可用时可使用严格替代链路，但禁止由普通 API 错误自动触发。`manual-fetch.js --raw` 仍联网抓取并逐来源 checkpoint，`--select` 要求 `manual_offline` v1 规格逐篇完整覆盖候选并把人工否定项写入持久去重库；`manual:fulltext` 逐篇安全获取全文并支持失败项续跑；`manual-deep-analysis.js` 不调用 LLM API，但每篇必须绑定全文 SHA、证据账本、实际审计次数、各阶段专属 prompt/契约 SHA 和独立证据，并通过标准正文契约和 `manual_complete v2` provenance。每篇在运行锁内重读 canonical 后独立保存，失败保留 checkpoint；默认续跑复用已成功项，人工纠错或 spec/prompt 变化需显式 `--force` 才覆盖。人工图片也必须通过标准公网地址、MIME、大小与缓存 SHA 校验。`manual-review-blog.py` 仅替代博客 LLM 语义审查，仍绑定八项人工 attestation、逐文件 SHA、generation、Git 基线、review 协议和 Hugo gate。后续 push、远端 OID 与视觉门禁不变。
 
 **微信公众号真实发布凭证**：非 `--dry-run` 必须同时配置 `WECHAT_APP_ID`、`WECHAT_APP_SECRET` 和 `WECHAT_THUMB_MEDIA_ID`；项目没有可回退的默认永久素材 ID。
 
@@ -197,7 +199,7 @@ prompts/                # LLM prompt 模板
 - **arXiv HTML 正文健康门禁**：不能只按字符数认定全文；还必须满足有效长段落数和论文章节/结构标记。`too_short`、`metadata_shell`、`missing_paper_structure` 均继续 PDF fallback，并在来源 warning 中保存段落、章节和标记计数。
 - **北京时间时间戳**：运行数据中的 `timestamp` / `lastUpdated` / `fetchedAt` 应使用 `getBeijingISOString()` 或 Python 端 `now_bj_iso()`，避免 UTC 日期导致跨天归档或发布筛选错误。
 - **博客三阶段必须分离且必须沙箱外运行**：依次运行 `generate-blog.py` → `review-blog.py` → `push-blog.py`。生成阶段使用持久 journal；review 逐文件保存实际审查 SHA，内容失败只复审失败页，瞬时错误保持待重试。三个阶段同时使用日期级锁和博客仓库级全局锁；push 在 `git add` 后及 commit 前必须把 index blob/删除状态与 review 凭证逐项比较，防止不同日期共享 worktree/index/HEAD 时交叉提交或回滚。用户要求“运行/进行某日论文速递”本身即构成博客发布授权；其他仅分析、检查、预览或诊断请求不得触发 push。
-- **Review 收敛与前置检查**：正式原始审查仍保留 5 次可用性重试；格式修复最多调用一次，完整协议重试最多 2 次，并尊重 `Retry-After` 加随机抖动。`auto_fixable=false` 的问题可省略空 `fix_instruction`。LLM 前确定性去除完全重复的长正文段落，并校验 Markdown 表格列数与明显截断的长图注；合法空分组列续行必须保留。
+- **Review 收敛与前置检查**：正式原始审查仍保留 5 次可用性重试；格式修复最多调用一次，完整协议重试最多 2 次，并尊重 `Retry-After` 加随机抖动。`auto_fixable=false` 的问题可省略空 `fix_instruction`。生成发布视图时剥离 `[A_*]` / `[SCORING_SOURCE_*]` 内部评分锚点，但不得修改 canonical analysis。LLM 前确定性去除完全重复正文；近重复长段只有在数字、URL 与否定词事实签名一致时才可删除。代码同时修复反引号包裹的 LaTeX，处理 120 字以上疑似截在英文半词的图片说明，阻断英文占主导的“毒舌点评”，并校验 Markdown 表格列数；合法空分组列续行必须保留。
 - **小红书文案续跑**：TOP N one-liner 成功项按 normalized arXiv ID 写入日期缓存，绑定 analysis、prompt、模型/endpoint/温度和清洗契约；日期级锁内逐篇原子保存。坏缓存原子隔离后重建，只重试缺失、失败或指纹失效项；`--date` 必须严格为 `YYYY-MM-DD`。小红书自动发布不属于论文速递必需流程。
 - **发布 review 不得删除合法表格续行**：Markdown 表格允许前导分组列为空，这通常表示沿用上一行模型/配置；不能把 `| | | | Filter2 ... |` 一类数据行当成子标题删除。普通模型名或技术术语未加反引号属于样式建议，不是格式问题。
 - **图片展示顺序与质量门禁**：候选图编号不是最终展示图号；无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 必须按图片在最终正文中的出现顺序归一化。副模型每篇默认最多插入 4 张图（可用 `PD_IMAGE_INSERTION_MAX` 正整数覆写），必须选择代码生成的稳定段落 ID；非法 ID 和超限图片一律拒绝，不得回退堆到章节末尾。HTML 正文和图注必须同次解析复用，成功下载写入 `data/current/image-cache/`，永久 HTTP/MIME/大小错误不得反复重试。

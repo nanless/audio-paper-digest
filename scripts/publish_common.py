@@ -77,6 +77,8 @@ MANUAL_DEPTH_CONTRACT_VERSIONS = frozenset({
 })
 MANUAL_COMPLETE_STATUS = 'manual_complete'
 MANUAL_COMPLETE_PROVENANCE_VERSION = 2
+MANUAL_PROVENANCE_PROTOCOL = 'manual-offline-review-v1'
+MANUAL_V2_HARDENED_CUTOFF_DATE = '2026-08-22'
 MANUAL_AUDIT_CHECKS = frozenset({
     'sourceCoverage', 'promptConformance', 'factualClaimsLedger', 'scoreRecomputed',
     'methodContract', 'tableContract', 'boilerplateScan', 'finalContract',
@@ -138,13 +140,29 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
     if takeover.get('version') == MANUAL_COMPLETE_PROVENANCE_VERSION:
         if takeover.get('mode') != MANUAL_COMPLETE_STATUS:
             raise PublishDataValidationError(f'{paper_label} manualTakeover.version/mode 必须为 manual_complete v2')
+        if not isinstance(takeover.get('agent'), str) or not takeover['agent'].strip():
+            raise PublishDataValidationError(f'{paper_label} manualTakeover.agent 缺失')
         if takeover.get('basis') != 'full_text':
             raise PublishDataValidationError(f'{paper_label} manualTakeover.basis 必须为 full_text')
+        source_sha = str(paper.get('sourceSha256') or manifest.get('sourceAcquisition', {}).get('sourceSha256') or '')
+        if not re.fullmatch(r'[a-f0-9]{64}', str(takeover.get('sourceSha256') or '')):
+            raise PublishDataValidationError(f'{paper_label} manualTakeover.sourceSha256 非法')
+        if not source_sha or takeover['sourceSha256'] != source_sha:
+            raise PublishDataValidationError(f'{paper_label} manualTakeover.sourceSha256 与全文来源不一致')
         if not re.fullmatch(r'[a-f0-9]{64}', str(takeover.get('promptSha256') or '')):
             raise PublishDataValidationError(f'{paper_label} manualTakeover.promptSha256 非法')
         analysis_sha = hashlib.sha256(str(paper.get('analysis') or '').encode('utf-8')).hexdigest()
         if takeover.get('analysisSha256') != analysis_sha:
             raise PublishDataValidationError(f'{paper_label} manualTakeover.analysisSha256 与正文不一致')
+        completed_at = takeover.get('completedAt')
+        if not isinstance(completed_at, str) or not BEIJING_TIMESTAMP_RE.fullmatch(completed_at):
+            raise PublishDataValidationError(f'{paper_label} manualTakeover.completedAt 必须为北京时间 ISO 时间')
+        if not isinstance(takeover.get('reason'), str) or len(takeover['reason'].strip()) < 20:
+            raise PublishDataValidationError(f'{paper_label} manualTakeover.reason 过短')
+        review = takeover.get('review')
+        required_review = ('sourceVerified', 'analysisContractVerified', 'scoringVerified', 'stageEvidenceVerified')
+        if not isinstance(review, dict) or any(review.get(key) is not True for key in required_review):
+            raise PublishDataValidationError(f'{paper_label} manualTakeover.review 未确认来源、正文、评分和阶段证据')
         audit = takeover.get('audit')
         if not isinstance(audit, dict) or audit.get('version') != 1:
             raise PublishDataValidationError(f'{paper_label} manualTakeover.audit 必须为 v1')
@@ -169,6 +187,57 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
         stages = manifest.get('stages') or {}
         if not isinstance(evidence, dict):
             raise PublishDataValidationError(f'{paper_label} manual stageEvidence 缺失')
+        audit_sha = _manual_hash(audit)
+        hardened_fields = ('protocol', 'promptSource', 'promptSha256', 'contextSha256')
+        hardened = any(
+            any(key in (evidence.get(stage) or {}) or key in (stages.get(stage) or {}) for key in hardened_fields)
+            for stage in MANUAL_STAGE_EVIDENCE_STAGES
+        )
+        if not hardened and completed_at[:10] >= MANUAL_V2_HARDENED_CUTOFF_DATE:
+            raise PublishDataValidationError(
+                f'{paper_label} manual stageEvidence 缺少 {MANUAL_V2_HARDENED_CUTOFF_DATE} 起必需的逐阶段 prompt/context 绑定'
+            )
+        image_manifest = paper.get('imageManifest')
+        image_context_fields = {
+            'imageDownload': 'downloadEvidenceSha256',
+            'imageSupplement': 'selectionEvidenceSha256',
+        }
+        if hardened:
+            if not isinstance(image_manifest, dict) \
+                    or not isinstance(image_manifest.get('candidates'), list) \
+                    or not isinstance(image_manifest.get('downloadOutcomes'), list) \
+                    or not isinstance(image_manifest.get('selected'), list):
+                raise PublishDataValidationError(
+                    f'{paper_label} manual imageManifest 缺少可重算的 candidates/downloadOutcomes/selected'
+                )
+
+            def normalize_image_evidence(info):
+                return {
+                    'url': info.get('url'),
+                    'caption': info.get('caption') or '',
+                    'source': info.get('source') or None,
+                    'sourceOrder': info.get('sourceOrder'),
+                    'candidateScore': info.get('candidateScore'),
+                    'mime': info.get('mime'),
+                    'sha256': info.get('sha256'),
+                    'bytes': info.get('bytes'),
+                }
+
+            expected_download_context = _manual_hash({
+                'candidates': [normalize_image_evidence(item) for item in image_manifest['candidates']],
+                'outcomes': image_manifest['downloadOutcomes'],
+            })
+            if image_manifest.get('downloadEvidenceSha256') != expected_download_context:
+                raise PublishDataValidationError(
+                    f'{paper_label} manual imageManifest.downloadEvidenceSha256 闭环校验失败'
+                )
+            expected_selection_context = _manual_hash([
+                normalize_image_evidence(item) for item in image_manifest['selected']
+            ])
+            if image_manifest.get('selectionEvidenceSha256') != expected_selection_context:
+                raise PublishDataValidationError(
+                    f'{paper_label} manual imageManifest.selectionEvidenceSha256 闭环校验失败'
+                )
         for stage in MANUAL_STAGE_EVIDENCE_STAGES:
             item = evidence.get(stage)
             state = stages.get(stage)
@@ -179,8 +248,59 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
             for key in ('inputSha256', 'outputSha256', 'auditSha256'):
                 if not re.fullmatch(r'[a-f0-9]{64}', str(item.get(key) or '')):
                     raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage}.{key} 非法')
+            if item['outputSha256'] != takeover['analysisSha256']:
+                raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage}.outputSha256 与最终正文 SHA 不一致')
             if not isinstance(item.get('reviewedClaims'), list) or not item['reviewedClaims']:
                 raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage}.reviewedClaims 不能为空')
+            claims = item['reviewedClaims']
+            if hardened:
+                if item.get('protocol') != MANUAL_PROVENANCE_PROTOCOL \
+                        or state.get('protocol') != MANUAL_PROVENANCE_PROTOCOL:
+                    raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage}.protocol 与阶段协议不一致')
+                if not isinstance(item.get('promptSource'), str) or not item['promptSource'].strip() \
+                        or item['promptSource'] != state.get('promptSource'):
+                    raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage}.promptSource 与阶段 manifest 不一致')
+                if not re.fullmatch(r'[a-f0-9]{64}', str(item.get('promptSha256') or '')) \
+                        or item['promptSha256'] != state.get('promptSha256'):
+                    raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage}.promptSha256 与阶段 manifest 不一致')
+                if stage == 'primaryAnalysis' and item['promptSha256'] != takeover['promptSha256']:
+                    raise PublishDataValidationError(f'{paper_label} manualTakeover.promptSha256 与 primaryAnalysis 阶段不一致')
+                context_field = image_context_fields.get(stage)
+                if context_field:
+                    if not re.fullmatch(r'[a-f0-9]{64}', str(item.get('contextSha256') or '')):
+                        raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage}.contextSha256 缺失或非法')
+                    if not isinstance(image_manifest, dict) \
+                            or item['contextSha256'] != image_manifest.get(context_field):
+                        raise PublishDataValidationError(
+                            f'{paper_label} manual stageEvidence.{stage}.contextSha256 与 imageManifest.{context_field} 不一致'
+                        )
+                elif 'contextSha256' in item:
+                    raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage}.contextSha256 不应存在')
+                expected_input_sha = _manual_hash({
+                    'stage': stage,
+                    'sourceSha256': takeover['sourceSha256'],
+                    'analysisSha256': takeover['analysisSha256'],
+                    'claims': claims,
+                    'stagePromptSha256': item['promptSha256'],
+                    'stageContextSha256': item.get('contextSha256'),
+                })
+            else:
+                expected_input_sha = _manual_hash({
+                    'stage': stage,
+                    'sourceSha256': takeover['sourceSha256'],
+                    'analysisSha256': takeover['analysisSha256'],
+                    'claims': claims,
+                })
+            if item['inputSha256'] != expected_input_sha:
+                raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage}.inputSha256 闭环校验失败')
+            expected_audit_sha = _manual_hash({
+                'stage': stage,
+                'claims': claims,
+                'auditSha256': audit_sha,
+                'stageInputSha256': item['inputSha256'],
+            })
+            if item['auditSha256'] != expected_audit_sha:
+                raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage}.auditSha256 闭环校验失败')
         return
     if takeover.get('version') != 1 or takeover.get('mode') != MANUAL_COMPLETE_STATUS:
         raise PublishDataValidationError(f'{paper_label} manualTakeover.version/mode 非法')
@@ -1569,6 +1689,15 @@ def fix_yaml_unbalanced_quotes(text):
     return parts[0] + '---\n' + '\n'.join(fixed_lines) + '---\n' + parts[2]
 
 
+def strip_internal_scoring_anchors(text):
+    """Strip reader-facing scoring provenance tags from a derived text view."""
+    return re.sub(
+        r'\[(?:A|SCORING_SOURCE)_[A-Z0-9_]+\][ \t]*',
+        '',
+        str(text or ''),
+    )
+
+
 def sanitize_markdown_for_publish(text):
     """发布前通用 Markdown 清洗。"""
     # LLM 输出偶尔会携带 UTF-8 替换字符；先清理后再进入 staging，
@@ -1585,6 +1714,10 @@ def sanitize_markdown_for_publish(text):
     text = truncate_base64_datauri(text)
     text = fix_yaml_double_commas(text)
     text = fix_yaml_unbalanced_quotes(text)
+    # 评分审计和 manual evidence ledger 需要这些锚点来约束上游事实，
+    # 但它们是内部 provenance，不应泄漏到面向读者的博客正文。这里只
+    # 清理派生的发布视图，不修改 analysis / parsed canonical 数据。
+    text = strip_internal_scoring_anchors(text)
     return text
 
 

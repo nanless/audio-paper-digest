@@ -46,6 +46,16 @@ Default daily entry: `./run-daily-digest.sh YYYY-MM-DD`, followed by Codex built
 
 `full-fetch.js` **does NOT auto-publish blog/WeChat**. However, when the user asks to run a dated paper digest, the default intent is the complete workflow in this section. The Agent runs `run-daily-digest.sh` or equivalent separate stages, fixes review blockers, completes push, then uses built-in `image_gen` for every pending paper infographic and digest cover until both visual status gates are complete. WeChat, Feishu, and Xiaohongshu auto-publishing are not part of this default.
 
+### 2.1 Explicit Manual Takeover Without Model APIs
+
+When the automatic LLM is unavailable, the workflow may switch only through the explicit manual entry points and their normal source, content, publication, and remote-verification gates:
+
+1. `manual_offline` replaces only the filtering-model decision. It does not claim that the filtering API ran.
+2. `manual_complete v2` replaces only the deep-analysis model with controlled full-text editorial review. Compatible checkpoints, fingerprints, and provenance prove the manual artifact contract; they do not mean that the API analysis stages were executed or are execution-equivalent.
+3. Manual blog review replaces only the semantic review model. Deterministic checks, per-file hashes, the generation manifest, Git baseline, review protocol, Hugo gate, normal `push-blog.py`, and remote OID verification remain mandatory.
+
+Manual takeover is a quality- and provenance-compatible fallback, not an automatic degradation or a claim of identical execution. Public articles must not expose internal evidence IDs, evidence-block numbers, scoring-source markers, stage-audit prose, prompt restatements, manual status names, template scaffolding, or repeated boilerplate left by repair templates.
+
 ---
 
 ## 3. Data Path Conventions

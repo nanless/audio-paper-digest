@@ -2018,6 +2018,33 @@ async function downloadImageBase64Detailed(imageUrl, maxRetries = 5, maxBytes = 
     return imageDownloadPromises.get(key);
 }
 
+async function cachePublicImageDetailed(imageUrl, maxRetries = 5, maxBytes = IMAGE_MAX_BYTES) {
+    const result = await downloadImageBase64Detailed(imageUrl, maxRetries, maxBytes);
+    if (!result?.base64) return result || null;
+    const cache = imageCachePaths(imageUrl);
+    const decoded = Buffer.from(result.base64, 'base64');
+    let cachedBuffer;
+    try {
+        cachedBuffer = await fs.promises.readFile(cache.data);
+    } catch (_error) {
+        return { failureType: 'transient_failure', reason: 'cache_write_failed' };
+    }
+    const cachedSha256 = crypto.createHash('sha256').update(cachedBuffer).digest('hex');
+    if (cachedBuffer.length !== decoded.length
+        || cachedSha256 !== result.sha256
+        || sniffImageMime(cachedBuffer) !== result.mime) {
+        return { failureType: 'transient_failure', reason: 'cache_integrity_failed' };
+    }
+    return {
+        url: imageUrl,
+        cachePath: cache.data,
+        mime: result.mime,
+        sha256: result.sha256,
+        bytes: cachedBuffer.length,
+        cacheHit: Boolean(result.cacheHit)
+    };
+}
+
 async function downloadImageBase64(imageUrl, maxRetries = 5, maxBytes = IMAGE_MAX_BYTES, requestImpl = requestPinnedPublicHttps) {
     const result = await downloadImageBase64Detailed(imageUrl, maxRetries, maxBytes, requestImpl);
     return result?.base64 ? result : null;
@@ -4623,6 +4650,7 @@ module.exports = {
     normalizeModelImagePayload,
     isCorruptedMultimodalError,
     downloadImageBase64,
+    cachePublicImageDetailed,
     fetchPublicImageResponse,
     requestPinnedPublicHttps,
     sanitizeMarkdownImageAlt,

@@ -68,6 +68,11 @@ const MANUAL_DEPTH_CONTRACT_VERSIONS = Object.freeze([
 const ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION = 'high-confidence-v1';
 const MANUAL_COMPLETE_STATUS = 'manual_complete';
 const MANUAL_COMPLETE_PROVENANCE_VERSION = 2;
+const MANUAL_PROVENANCE_PROTOCOL = 'manual-offline-review-v1';
+// Records completed through 2026-08-21 predate per-stage prompt/context
+// bindings.  Keep that already-published batch readable, but do not allow a
+// newer record to strip hardened fields and fall back to the legacy profile.
+const MANUAL_V2_HARDENED_CUTOFF_DATE = '2026-08-22';
 const MANUAL_AUDIT_CHECKS = Object.freeze([
     'sourceCoverage',
     'promptConformance',
@@ -689,6 +694,52 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
     const stages = manifest?.stages || {};
     const evidence = takeover.stageEvidence;
     if (!evidence || typeof evidence !== 'object') return 'manualTakeover.stageEvidence 缺失';
+    const auditSha256 = manualSha256(audit);
+    const hardenedFields = ['protocol', 'promptSource', 'promptSha256', 'contextSha256'];
+    const hasHardenedBindings = MANUAL_STAGE_EVIDENCE_STAGES.some(stage => {
+        const item = evidence[stage] || {};
+        const state = stages[stage] || {};
+        return hardenedFields.some(key => Object.prototype.hasOwnProperty.call(item, key)
+            || Object.prototype.hasOwnProperty.call(state, key));
+    });
+    const completedDate = String(takeover.completedAt || '').slice(0, 10);
+    if (!hasHardenedBindings && completedDate >= MANUAL_V2_HARDENED_CUTOFF_DATE) {
+        return `manualTakeover.stageEvidence 缺少 ${MANUAL_V2_HARDENED_CUTOFF_DATE} 起必需的逐阶段 prompt/context 绑定`;
+    }
+    const imageManifest = options.imageManifest || manifest?.imageManifest;
+    const imageContextFields = {
+        imageDownload: 'downloadEvidenceSha256',
+        imageSupplement: 'selectionEvidenceSha256'
+    };
+    if (hasHardenedBindings && imageManifest !== undefined) {
+        const normalizeImageEvidence = info => ({
+            url: info?.url,
+            caption: info?.caption || '',
+            source: info?.source || null,
+            sourceOrder: info?.sourceOrder ?? null,
+            candidateScore: info?.candidateScore ?? null,
+            mime: info?.mime,
+            sha256: info?.sha256,
+            bytes: info?.bytes
+        });
+        if (!imageManifest || !Array.isArray(imageManifest.candidates)
+            || !Array.isArray(imageManifest.downloadOutcomes) || !Array.isArray(imageManifest.selected)) {
+            return 'manual imageManifest 缺少可重算的 candidates/downloadOutcomes/selected';
+        }
+        const expectedDownloadContext = manualSha256({
+            candidates: imageManifest.candidates.map(normalizeImageEvidence),
+            outcomes: imageManifest.downloadOutcomes
+        });
+        if (imageManifest.downloadEvidenceSha256 !== expectedDownloadContext) {
+            return 'manual imageManifest.downloadEvidenceSha256 闭环校验失败';
+        }
+        const expectedSelectionContext = manualSha256(
+            imageManifest.selected.map(normalizeImageEvidence)
+        );
+        if (imageManifest.selectionEvidenceSha256 !== expectedSelectionContext) {
+            return 'manual imageManifest.selectionEvidenceSha256 闭环校验失败';
+        }
+    }
     for (const stage of MANUAL_STAGE_EVIDENCE_STAGES) {
         const item = evidence[stage];
         const state = stages[stage];
@@ -703,12 +754,72 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
                 return `manualTakeover.stageEvidence.${stage}.${key} 必须是 SHA-256`;
             }
         }
+        if (item.outputSha256 !== takeover.analysisSha256) {
+            return `manualTakeover.stageEvidence.${stage}.outputSha256 与最终正文 SHA 不一致`;
+        }
         if (!Array.isArray(item.reviewedClaims) || item.reviewedClaims.length === 0) {
             return `manualTakeover.stageEvidence.${stage}.reviewedClaims 不能为空`;
         }
         const hint = MANUAL_STAGE_CLAIM_HINTS[stage];
         if (hint && !item.reviewedClaims.some(claim => hint.test(String(claim)))) {
             return `manualTakeover.stageEvidence.${stage}.reviewedClaims 缺少该阶段专属事实范围`;
+        }
+        let expectedInputSha256;
+        if (hasHardenedBindings) {
+            if (item.protocol !== MANUAL_PROVENANCE_PROTOCOL || state.protocol !== MANUAL_PROVENANCE_PROTOCOL) {
+                return `manualTakeover.stageEvidence.${stage}.protocol 与阶段协议不一致`;
+            }
+            if (typeof item.promptSource !== 'string' || !item.promptSource.trim()
+                || item.promptSource !== state.promptSource) {
+                return `manualTakeover.stageEvidence.${stage}.promptSource 与阶段 manifest 不一致`;
+            }
+            if (!/^[a-f0-9]{64}$/.test(String(item.promptSha256 || ''))
+                || item.promptSha256 !== state.promptSha256) {
+                return `manualTakeover.stageEvidence.${stage}.promptSha256 与阶段 manifest 不一致`;
+            }
+            if (stage === 'primaryAnalysis' && item.promptSha256 !== takeover.promptSha256) {
+                return 'manualTakeover.promptSha256 与 primaryAnalysis 阶段不一致';
+            }
+            const contextField = imageContextFields[stage];
+            if (contextField) {
+                if (!/^[a-f0-9]{64}$/.test(String(item.contextSha256 || ''))) {
+                    return `manualTakeover.stageEvidence.${stage}.contextSha256 缺失或非法`;
+                }
+                if (imageManifest !== undefined) {
+                    if (!imageManifest || item.contextSha256 !== imageManifest[contextField]) {
+                        return `manualTakeover.stageEvidence.${stage}.contextSha256 与 imageManifest.${contextField} 不一致`;
+                    }
+                }
+            } else if (item.contextSha256 !== undefined) {
+                return `manualTakeover.stageEvidence.${stage}.contextSha256 不应存在`;
+            }
+            expectedInputSha256 = manualSha256({
+                stage,
+                sourceSha256: takeover.sourceSha256,
+                analysisSha256: takeover.analysisSha256,
+                claims: item.reviewedClaims,
+                stagePromptSha256: item.promptSha256,
+                stageContextSha256: item.contextSha256 || null
+            });
+        } else {
+            expectedInputSha256 = manualSha256({
+                stage,
+                sourceSha256: takeover.sourceSha256,
+                analysisSha256: takeover.analysisSha256,
+                claims: item.reviewedClaims
+            });
+        }
+        if (item.inputSha256 !== expectedInputSha256) {
+            return `manualTakeover.stageEvidence.${stage}.inputSha256 闭环校验失败`;
+        }
+        const expectedAuditSha256 = manualSha256({
+            stage,
+            claims: item.reviewedClaims,
+            auditSha256,
+            stageInputSha256: item.inputSha256
+        });
+        if (item.auditSha256 !== expectedAuditSha256) {
+            return `manualTakeover.stageEvidence.${stage}.auditSha256 闭环校验失败`;
         }
     }
     return null;

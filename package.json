@@ -29,6 +29,7 @@
     "blog:review": "python3 scripts/review-blog.py",
     "blog:manual-review": "python3 scripts/manual-review-blog.py",
     "manual:fetch": "node scripts/manual-fetch.js",
+    "manual:fulltext": "node scripts/manual-fetch-fulltext.js",
     "manual:analyze": "node scripts/manual-deep-analysis.js",
     "blog:push": "python3 scripts/push-blog.py",
     "wechat": "python3 scripts/publish-wechat-full.py",

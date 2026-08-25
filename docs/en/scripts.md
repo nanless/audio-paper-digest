@@ -430,9 +430,12 @@ Code-level auto-fix covers:
 6. Unclosed LaTeX `$ \mathcal{L}_D \(` → convert to `\(\mathcal{L}_D\)`
 7. Malformed LaTeX brackets (`\)\mathcal{L}_X\(`) → unify to `\(\mathcal{L}_X\)`
 8. Double-backslash LaTeX (`\(\\mathcal{L}_X\)` → fix to `\(\mathcal{L}_X\)`)
-9. Exact duplicate long prose blocks → deterministically remove before LLM review
+9. Exact duplicate long prose blocks, plus highly similar blocks with identical numeric, URL, and negation signatures → deterministically remove before LLM review; factual differences are preserved
 10. Inconsistent Markdown table column counts → block, while preserving valid empty leading grouping cells
-11. Suspicious long image captions truncated inside an English word → block
+11. Image captions of 120 or more characters that appear cut inside an English word → shorten at a complete semantic boundary
+12. Backticked `\(...\)` / `\[...\]` math → remove the outer backticks while retaining math delimiters
+13. A predominantly English “毒舌点评” section → block until it is rewritten in Simplified Chinese from the original critique
+14. Internal `[A_*]` / `[SCORING_SOURCE_*]` scoring anchors → strip only from derived publication Markdown; retain canonical analysis evidence
 
 Markdown tables may legitimately use empty leading group cells for continuation rows. Code review preserves those rows instead of treating them as removable subheaders. LLM advice that ordinary model names or technical terms require backticks is filtered as a style false positive.
 

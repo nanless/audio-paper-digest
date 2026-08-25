@@ -15,7 +15,14 @@ const {
     MANUAL_DEPTH_CONTRACT_VERSION_V2,
     findManualBoilerplate
 } = require('../scripts/analysis-contract.js');
-const { buildManualRecord } = require('../scripts/manual-deep-analysis.js');
+const {
+    buildManualRecord,
+    buildStagePromptBindings,
+    finalizeManualCanonicalState,
+    manualCanonicalReuseFingerprint,
+    parseArgs,
+    shouldReuseCanonical
+} = require('../scripts/manual-deep-analysis.js');
 
 function directSha(value) {
     return crypto.createHash('sha256').update(value).digest('hex');
@@ -93,14 +100,19 @@ function baseSpec() {
         stage,
         [`${stage} 专项复核${claimHints[stage]}，已对照全文输入、输出和最终正文。`]
     ]));
-    const stageEvidence = Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => [stage, {
-        status: 'manual_complete',
-        inputSha256: stage === 'primaryAnalysis' ? sourceSha256 : analysisSha256,
-        outputSha256: analysisSha256,
-        auditSha256: manualSha256({ stage, claims: reviewedClaimsByStage[stage] }),
-        attempts: 2,
-        reviewedClaims: reviewedClaimsByStage[stage]
-    }]));
+    const auditSha256 = manualSha256(audit);
+    const stageEvidence = Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => {
+        const claims = reviewedClaimsByStage[stage];
+        const inputSha256 = manualSha256({ stage, sourceSha256, analysisSha256, claims });
+        return [stage, {
+            status: 'manual_complete',
+            inputSha256,
+            outputSha256: analysisSha256,
+            auditSha256: manualSha256({ stage, claims, auditSha256, stageInputSha256: inputSha256 }),
+            attempts: 2,
+            reviewedClaims: claims
+        }];
+    }));
     const manifest = {
         version: 1,
         contracts: { experimentTables: 'bounded-v1', methodDetail: 'detailed-v1' },
@@ -126,7 +138,60 @@ function baseSpec() {
     return { sourceText, sourceSha256, analysis, analysisSha256, manifest };
 }
 
+function buildReusableRecord(options = {}) {
+    const fixture = baseSpec();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-reuse-'));
+    const sourcePath = path.join(dir, 'paper.txt');
+    const sourceText = fixture.sourceText.repeat(20) + (options.sourceSuffix || '');
+    fs.writeFileSync(sourcePath, sourceText);
+    const audit = JSON.parse(JSON.stringify(fixture.manifest.manualTakeover.audit));
+    audit.attempts = 3;
+    audit.passes = [
+        audit.passes[0],
+        { status: 'revise', issues: ['二审复核阶段专属证据'] },
+        audit.passes[1]
+    ];
+    const spec = {
+        analysis: fixture.analysis,
+        fullTextPath: sourcePath,
+        sourceSha256: directSha(fs.readFileSync(sourcePath)),
+        evidenceLedger: JSON.parse(JSON.stringify(fixture.manifest.manualTakeover.evidenceLedger)),
+        manualAudit: audit,
+        reviewedClaimsByStage: Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => [
+            stage, fixture.manifest.manualTakeover.stageEvidence[stage].reviewedClaims
+        ])),
+        reason: fixture.manifest.manualTakeover.reason,
+        agent: 'Codex'
+    };
+    if (options.mutateSpec) options.mutateSpec(spec);
+    const promptBindings = buildStagePromptBindings();
+    if (options.mutatePrompts) options.mutatePrompts(promptBindings);
+    const paper = {
+        arxivId: options.id || '2608.21000',
+        title: 'Reusable fixture paper',
+        authors: [],
+        categories: []
+    };
+    const record = buildManualRecord(paper, spec, '2026-08-20', promptBindings);
+    return { dir, sourcePath, sourceText, spec, promptBindings, paper, record };
+}
+
 describe('manual_complete v2 deep-analysis contract', () => {
+    it('accepts explicit force takeover but rejects unknown or duplicate flags', () => {
+        assert.deepEqual(
+            parseArgs(['--date', '2026-08-20', '--spec', 'manual.json', '--force']),
+            { force: true, date: '2026-08-20', spec: 'manual.json' }
+        );
+        assert.throws(
+            () => parseArgs(['--date', '2026-08-20', '--spec', 'manual.json', '--unknown']),
+            /未知参数/
+        );
+        assert.throws(
+            () => parseArgs(['--date', '2026-08-20', '--spec', 'manual.json', '--force', '--force']),
+            /参数重复/
+        );
+    });
+
     it('接受全文事实账本、二次审计和逐阶段证据', () => {
         const fixture = baseSpec();
         assert.equal(findManualBoilerplate(fixture.analysis).length, 0);
@@ -134,6 +199,11 @@ describe('manual_complete v2 deep-analysis contract', () => {
             analysis: fixture.analysis,
             sourceText: fixture.sourceText
         }), null);
+        fixture.manifest.manualTakeover.completedAt = '2026-08-22T00:00:00.000+08:00';
+        assert.match(validateManualTakeoverManifest(fixture.manifest, fixture.sourceSha256, {
+            analysis: fixture.analysis,
+            sourceText: fixture.sourceText
+        }), /逐阶段 prompt\/context 绑定/);
     });
 
     it('拒绝通用提示词残留，即使结构和评分都完整', () => {
@@ -203,13 +273,222 @@ describe('manual_complete v2 deep-analysis contract', () => {
             reason: fixture.manifest.manualTakeover.reason,
             agent: 'Codex'
         };
+        spec.manualAudit = {
+            ...spec.manualAudit,
+            attempts: 3,
+            passes: [
+                spec.manualAudit.passes[0],
+                { status: 'revise', issues: ['二审复核阶段专属证据'] },
+                spec.manualAudit.passes[1]
+            ]
+        };
+        spec.imageInfos = [{ url: 'https://arxiv.org/html/2608.20000/figure1.png', caption: 'Architecture overview' }];
+        spec.selectedImageUrls = ['https://arxiv.org/html/2608.20000/figure1.png'];
         const paper = { arxivId: '2608.20000', title: 'Fixture paper', authors: [], categories: [] };
         // The fixture source is intentionally repeated so the bounded full-text gate passes;
         // source quotes remain exact substrings after normalization.
-        const record = buildManualRecord(paper, spec, '2026-08-20', directSha(fs.readFileSync('prompts/deep-analysis.md')));
+        const promptBindings = buildStagePromptBindings();
+        const preparedImages = [{
+            url: spec.imageInfos[0].url,
+            caption: spec.imageInfos[0].caption,
+            cachePath: path.join(dir, 'secure-image.bin'),
+            mime: 'image/png',
+            sha256: 'b'.repeat(64),
+            bytes: 1234,
+            cacheHit: true
+        }];
+        const record = buildManualRecord(
+            paper,
+            spec,
+            '2026-08-20',
+            promptBindings,
+            { preparedImages, imageDownloadOutcomes: [{ url: spec.imageInfos[0].url, status: 'complete' }] }
+        );
         assert.equal(record.analysisSource, 'provided_full_text');
+        assert.equal(shouldReuseCanonical(record, record, false), true);
+        assert.equal(shouldReuseCanonical(record, record, true), false);
         assert.equal(record.analysisManifest.manualTakeover.version, 2);
         assert.equal(record.digestStatus.latestAttemptStatus, 'analyzed');
+        assert.equal(record.analysisManifest.manualTakeover.stageEvidence.primaryAnalysis.attempts, 3);
+        assert.equal(record.analysisManifest.manualTakeover.stageEvidence.primaryAnalysis.protocol, 'manual-offline-review-v1');
+        assert.notEqual(
+            record.analysisManifest.stages.primaryAnalysis.promptSha256,
+            record.analysisManifest.stages.scoringAudit.promptSha256
+        );
+        assert.equal(
+            record.analysisManifest.manualTakeover.stageEvidence.imageDownload.contextSha256,
+            record.imageManifest.downloadEvidenceSha256
+        );
+        assert.equal(
+            record.analysisManifest.manualTakeover.stageEvidence.imageSupplement.contextSha256,
+            record.imageManifest.selectionEvidenceSha256
+        );
+        assert.equal(record.imageManifest.selected[0].mime, 'image/png');
+        assert.equal(record.imageManifest.selected[0].sha256, 'b'.repeat(64));
+        assert.equal(record.imageManifest.selected[0].bytes, 1234);
+
+        const validateRecord = candidate => validateManualTakeoverManifest(
+            candidate.analysisManifest,
+            candidate.sourceSha256,
+            {
+                analysis: candidate.analysis,
+                sourceText: fs.readFileSync(sourcePath, 'utf8'),
+                imageManifest: candidate.imageManifest
+            }
+        );
+        assert.equal(validateRecord(record), null);
+        const tamperCases = [
+            ['inputSha256', candidate => {
+                candidate.analysisManifest.manualTakeover.stageEvidence.primaryAnalysis.inputSha256 = 'c'.repeat(64);
+            }, /inputSha256 闭环校验失败/],
+            ['auditSha256', candidate => {
+                candidate.analysisManifest.manualTakeover.stageEvidence.primaryAnalysis.auditSha256 = 'c'.repeat(64);
+            }, /auditSha256 闭环校验失败/],
+            ['outputSha256', candidate => {
+                candidate.analysisManifest.manualTakeover.stageEvidence.primaryAnalysis.outputSha256 = 'c'.repeat(64);
+            }, /outputSha256 与最终正文 SHA 不一致/],
+            ['promptSource', candidate => {
+                candidate.analysisManifest.manualTakeover.stageEvidence.primaryAnalysis.promptSource = 'prompts/wrong.md';
+            }, /promptSource 与阶段 manifest 不一致/],
+            ['promptSha256', candidate => {
+                candidate.analysisManifest.manualTakeover.stageEvidence.primaryAnalysis.promptSha256 = 'c'.repeat(64);
+            }, /promptSha256 与阶段 manifest 不一致/],
+            ['protocol', candidate => {
+                candidate.analysisManifest.manualTakeover.stageEvidence.primaryAnalysis.protocol = 'manual-unknown';
+            }, /protocol 与阶段协议不一致/],
+            ['contextSha256', candidate => {
+                candidate.analysisManifest.manualTakeover.stageEvidence.imageDownload.contextSha256 = 'c'.repeat(64);
+            }, /contextSha256 与 imageManifest\.downloadEvidenceSha256 不一致/]
+        ];
+        for (const [label, mutate, expected] of tamperCases) {
+            const candidate = JSON.parse(JSON.stringify(record));
+            mutate(candidate);
+            assert.match(validateRecord(candidate), expected, label);
+        }
+        const damagedImageManifest = JSON.parse(JSON.stringify(record));
+        damagedImageManifest.imageManifest.downloadOutcomes.push({ url: 'https://example.com/tampered.png', status: 'complete' });
+        assert.match(validateRecord(damagedImageManifest), /imageManifest\.downloadEvidenceSha256 闭环校验失败/);
+
+        const changedImageRecord = buildManualRecord(
+            paper,
+            spec,
+            '2026-08-20',
+            promptBindings,
+            {
+                preparedImages: [{ ...preparedImages[0], sha256: 'd'.repeat(64), bytes: 2345 }],
+                imageDownloadOutcomes: [{ url: spec.imageInfos[0].url, status: 'complete' }]
+            }
+        );
+        assert.notEqual(
+            manualCanonicalReuseFingerprint(record),
+            manualCanonicalReuseFingerprint(changedImageRecord)
+        );
+        assert.equal(shouldReuseCanonical(record, changedImageRecord), false);
+
+        spec.selectedImageUrls = ['https://example.com/unverified.png'];
+        assert.throws(
+            () => buildManualRecord(paper, spec, '2026-08-20', promptBindings, { preparedImages }),
+            /未通过安全下载校验/
+        );
+    });
+
+    it('默认只复用 analysis、全文、证据、审计和逐阶段 prompt 均未过期的 canonical', () => {
+        const canonical = buildReusableRecord().record;
+        assert.equal(shouldReuseCanonical(canonical, canonical), true);
+
+        const staleAnalysis = buildReusableRecord({
+            mutateSpec: spec => {
+                spec.analysis = spec.analysis.replace(
+                    '论文研究带噪语音识别中的上下文声学建模',
+                    '论文聚焦带噪语音识别中的上下文声学建模'
+                );
+            }
+        }).record;
+        const staleSource = buildReusableRecord({
+            sourceSuffix: '\nThe revised source adds a deployment-cost discussion absent from the prior full text.'
+        }).record;
+        const staleEvidence = buildReusableRecord({
+            mutateSpec: spec => {
+                spec.evidenceLedger[0].claim += '该声明已由本轮人工审计重新表述。';
+            }
+        }).record;
+        const staleAudit = buildReusableRecord({
+            mutateSpec: spec => {
+                spec.manualAudit.passes[1].issues = ['二审重新核对了方法输入、输出和训练边界'];
+            }
+        }).record;
+        const stalePrompt = buildReusableRecord({
+            mutatePrompts: bindings => {
+                bindings.scoringAudit.sha256 = 'c'.repeat(64);
+            }
+        }).record;
+
+        for (const [label, candidate] of [
+            ['analysis', staleAnalysis],
+            ['full-text source', staleSource],
+            ['evidence ledger', staleEvidence],
+            ['manual audit', staleAudit],
+            ['stage prompt', stalePrompt]
+        ]) {
+            assert.notEqual(
+                manualCanonicalReuseFingerprint(canonical),
+                manualCanonicalReuseFingerprint(candidate),
+                `${label} 必须进入复用指纹`
+            );
+            assert.equal(shouldReuseCanonical(canonical, candidate), false, `${label} 变化必须重建`);
+        }
+    });
+
+    it('最终状态在文件锁内按最新 canonical expected IDs 重算，不接受本地旧 failures 计数', () => {
+        const first = buildReusableRecord({ id: '2608.21001' }).record;
+        const second = buildReusableRecord({ id: '2608.21002' }).record;
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-finalize-'));
+        const resultPath = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(resultPath, JSON.stringify({
+            generation: 3,
+            batchDate: '2026-08-20',
+            status: 'partial_failed',
+            stats: { success: 0, failed: 2 },
+            papers: [first, second]
+        }));
+
+        const completed = finalizeManualCanonicalState(resultPath, {
+            date: '2026-08-20',
+            expectedIds: ['2608.21001', '2608.21002'],
+            stats: { success: 0, failed: 99, failedIds: ['stale-local-failure'] }
+        });
+        assert.equal(completed.status, 'complete');
+        assert.equal(completed.stats.analysisStatus, 'complete');
+        assert.equal(completed.stats.success, 2);
+        assert.equal(completed.stats.failed, 0);
+        assert.deepEqual(completed.stats.failedIds, []);
+        assert.equal(completed.generation, 4);
+        assert.ok(completed.deepAnalysisCompletedAt);
+
+        const latestOnDisk = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+        latestOnDisk.papers[1] = {
+            ...latestOnDisk.papers[1],
+            latestAnalysisAttemptError: '另一个进程刚写入的失败尝试',
+            digestStatus: {
+                ...latestOnDisk.papers[1].digestStatus,
+                latestAttemptStatus: 'analysis_failed'
+            },
+            manualIngestionCheckpoint: { version: 1 }
+        };
+        fs.writeFileSync(resultPath, JSON.stringify(latestOnDisk));
+
+        const partial = finalizeManualCanonicalState(resultPath, {
+            date: '2026-08-20',
+            expectedIds: ['2608.21001', '2608.21002'],
+            stats: { success: 2, failed: 0 }
+        });
+        assert.equal(partial.status, 'partial_failed');
+        assert.equal(partial.stats.analysisStatus, 'partial_failed');
+        assert.equal(partial.stats.success, 1);
+        assert.equal(partial.stats.failed, 1);
+        assert.deepEqual(partial.stats.failedIds, ['2608.21002']);
+        assert.equal(partial.stats.failedCheckpoints, 1);
+        assert.equal(partial.deepAnalysisCompletedAt, undefined);
     });
 });
 

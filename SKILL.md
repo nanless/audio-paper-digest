@@ -50,8 +50,8 @@ description: >
 
 自动 LLM 不可用时只允许显式切换以下严格接管路径；任何普通网络、配额或模型错误都不能自动降级为“人工通过”：
 
-1. `node scripts/manual-fetch.js --date YYYY-MM-DD --raw` 仍通过网络抓取 arXiv/HuggingFace 并保存来源健康与候选指纹，但不调用筛选模型。人工逐篇提交 `{version:1, mode:"manual_offline", date, reviewer, decisions}` 后，用 `--select SPEC.json` 写入完整筛选四件套；缺失、未知、重复或理由不足的决定都会阻断。
-2. `npm run manual:analyze -- --date YYYY-MM-DD --spec SPEC.json` 不调用 LLM/API。每篇必须绑定受控全文及 SHA、当前分析 prompt、可回查的证据账本、两轮审计和全部恢复阶段的独立 reviewed claims，并同时通过标准正文契约与 `manual_complete v2` provenance 契约；整批预检全部通过后才写 canonical deep result。
+1. `node scripts/manual-fetch.js --date YYYY-MM-DD --raw` 仍通过网络抓取 arXiv/HuggingFace，并按来源保存可恢复 checkpoint、复用常规类别节流和来源完整性指纹，但不调用筛选模型。人工逐篇提交 `{version:1, mode:"manual_offline", date, reviewer, decisions}` 后，用 `--select SPEC.json` 写入完整筛选四件套，并把全部人工候选及否定项同步到 `papers.json`；缺失、未知、重复或理由不足的决定都会阻断。
+2. `npm run manual:fulltext -- YYYY-MM-DD` 使用常规 arXiv HTML/PDF 安全抓取链逐篇保存全文与 manifest checkpoint；失败后只补失败或损坏项。随后 `npm run manual:analyze -- --date YYYY-MM-DD --spec SPEC.json` 不调用 LLM API。每篇必须绑定受控全文及 SHA、主分析和各后处理阶段的专属 prompt/契约 SHA、可回查的证据账本、实际审计次数和全部恢复阶段的独立 reviewed claims，并同时通过标准正文契约与 `manual_complete v2` provenance 契约。canonical 写入在同篇运行锁内重读最新记录后逐篇保存；失败项保留 ingestion checkpoint。默认续跑会复用已成功 canonical；人工纠错或 spec/prompt 变化时必须显式加 `--force` 才可覆盖。人工图片必须经过与常规分析相同的公网 DNS/IP、HTTPS、重定向、MIME、字节上限和缓存 SHA 校验，未通过安全下载的图片不能进入 selected 集合。
 3. 仅当博客 LLM review 服务不可用时，可运行 `python3 scripts/manual-review-blog.py --date YYYY-MM-DD --attestation ATTESTATION.json`。attestation 的八项检查必须全部为真；脚本仍执行确定性修复/复验、逐文件 SHA、generation manifest、Git 基线、review 协议和 Hugo gate 绑定，并签发明确标记 `reviewMode=manual_complete` 的 receipt。后续仍由普通 `push-blog.py` 验证和发布。
 
 人工接管不是降低质量门槛：`manual_offline` 只替代筛选模型，`manual_complete v2` 只替代深度分析模型，manual blog review 只替代语义 review 模型；抓取来源健康、分析正文契约、发布凭证和远端 OID 门禁保持不变。
@@ -407,7 +407,7 @@ npm run xiaohongshu -- --date 2026-04-22
 - `generate-blog.py` 在日期级跨进程锁内逐页生成、安装并写 journal；崩溃后可收养已完成的同 SHA 页面，全部论文完成后才生成汇总页和严格 generation manifest，禁止 review/commit/push
 - `review-blog.py` 在同一日期锁内逐文件审查，checkpoint 绑定 worker 实际读取的 SHA；每个通过项立即写入按日期隔离的持久账本，以博客仓库相对路径 + SHA-256 复用。代码、脚本、文档、模型、协议、generation manifest 或博客基线变化只要求重建整批 receipt，不得重审 SHA 未变的页面；只审查新增、字节变化、瞬时失败或内容失败修复后的文件。应存在页面消失或 Hugo 前后 SHA 变化仍阻断凭证；禁止 commit/push
 - 完全相同的非空 generation 只有在当前 review 协议、文件、发布提交、remote 名称/push URL 哈希身份及实时远端 `main` OID 全部仍匹配时才保留既有严格发布凭证；网络失败、远端漂移或 `origin` 换仓一律 fail closed
-- review 的 HTTP 重试优先使用 `Retry-After`，否则指数退避并加短抖动；协议格式修复和完整协议重试使用收紧的独立预算。对仅有隐藏推理、没有最终 JSON 的 `length/max_tokens` 响应，仅追加纯 JSON 指令并恢复一次，默认从 4000 提到最多 8000，再失败不继续翻倍。代码预检先去除完全重复长段落，并阻断表格列数不一致和疑似在单词中途截断的超长图片说明；合法空分组列续行不得删除
+- review 的 HTTP 重试优先使用 `Retry-After`，否则指数退避并加短抖动；协议格式修复和完整协议重试使用收紧的独立预算。对仅有隐藏推理、没有最终 JSON 的 `length/max_tokens` 响应，仅追加纯 JSON 指令并恢复一次，默认从 4000 提到最多 8000，再失败不继续翻倍。发布派生 Markdown 必须剥离 `[A_*]` / `[SCORING_SOURCE_*]` 内部评分锚点而不改 canonical analysis。代码预检去除完全重复段落；近重复长段仅在数字、URL 和否定词签名一致时删除，并修复反引号包裹的 LaTeX、处理 120 字以上疑似截在英文半词的图片说明、阻断英文占主导的“毒舌点评”、校验表格列数；合法空分组列续行不得删除
 - `push-blog.py` 验证审查凭证和当前文件哈希，并在 Git 变更前完成视觉能力 preflight；标准日更拒绝 schema v1/v2，显式历史维护 push 跳过视觉并报告 N/A。随后精确 stage，并在 commit 前逐项校验 index blob SHA/删除状态，再提交、推送并核对远端 OID；禁止重新生成或 review
 - push 成功后 receipt 同时保存当前 Git remote 名称和 push URL 的 SHA-256 身份，防止同名 remote 被换仓后继续信任旧发布证据
 - 三阶段除日期锁外还共享博客仓库级全局锁，防止不同日期并发污染共同的 worktree、index、HEAD 或回滚状态

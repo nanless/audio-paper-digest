@@ -448,6 +448,142 @@ title: "Duplicate"
         finally:
             os.unlink(path)
 
+    def test_index_uses_selected_count_and_word_safe_ranking_title(self):
+        title = 'A deliberately long English paper title that would otherwise end inside a ranking word'
+        parsed = {
+            'rankBucket': '前25%',
+            'documentType': '方法研究',
+            'primaryTaskTag': '#语音识别',
+            'tags': ['#语音识别'],
+        }
+        paper = {'arxivId': '2608.00001', 'title': title, 'parsed': parsed}
+        markdown = publish_to_blog.generate_index_page(
+            [(8.0, paper, parsed)], [], '2026-08-25',
+            {'2608.00001': 'long-title-2608-00001'},
+        )
+        compact = publish_to_blog.compact_title_for_ranking(title)
+        self.assertIn('✅ 筛选入选 1 篇 → 🔬 深度分析完成', markdown)
+        self.assertNotIn('📥 抓取 1 篇', markdown)
+        self.assertLessEqual(len(compact), 55)
+        self.assertTrue(compact.endswith('…'))
+        self.assertIn(f'[{compact}](', markdown)
+        self.assertNotRegex(compact[:-1], r'\botherwis$')
+
+    def test_review_removes_only_high_similarity_prose_and_keeps_table_continuations(self):
+        first = (
+            '该系统依次执行声学编码、上下文融合、置信度校准和序列解码，'
+            '并在统一数据划分上报告错误率、实时率和跨域稳健性。'
+        ) * 3
+        near = first.replace('统一数据划分', '相同数据划分', 1)
+        content = f'''---
+title: "Near duplicate"
+---
+{first}
+
+保留这一段不同的实验解释，它说明硬件条件和随机种子会影响结果。
+
+{near}
+
+| 方法 | 阶段 | 指标 |
+| --- | --- | --- |
+| TANGO | SN-DNN | 3.1 |
+| | Filter1 | 9.4 |
+'''
+        with tempfile.NamedTemporaryFile('w+', suffix='.md', encoding='utf-8', delete=False) as handle:
+            handle.write(content)
+            path = handle.name
+        try:
+            fixed, issues = publish_to_blog.review_and_fix_post(path)
+            reviewed = Path(path).read_text(encoding='utf-8')
+            self.assertTrue(fixed)
+            self.assertIn(first, reviewed)
+            self.assertNotIn(near, reviewed)
+            self.assertIn('| | Filter1 | 9.4 |', reviewed)
+            self.assertTrue(any('近重复' in issue for issue in issues))
+        finally:
+            os.unlink(path)
+
+    def test_review_keeps_near_duplicate_paragraphs_with_different_numeric_claims(self):
+        first = (
+            '统一评测在相同数据划分、训练轮数和解码参数下比较所有系统，'
+            '主方法的错误率为 12.4%，并报告三次运行的均值。'
+        ) * 3
+        materially_different = first.replace('12.4%', '13.4%')
+        content = f'''---
+title: "Distinct evidence"
+---
+{first}
+
+{materially_different}
+'''
+        with tempfile.NamedTemporaryFile('w+', suffix='.md', encoding='utf-8', delete=False) as handle:
+            handle.write(content)
+            path = handle.name
+        try:
+            fixed, issues = publish_to_blog.review_and_fix_post(path)
+            reviewed = Path(path).read_text(encoding='utf-8')
+            self.assertFalse(fixed)
+            self.assertEqual(issues, [])
+            self.assertIn('12.4%', reviewed)
+            self.assertIn('13.4%', reviewed)
+        finally:
+            os.unlink(path)
+
+    def test_review_repairs_backticked_latex_and_short_truncated_caption(self):
+        caption = (
+            'Figure 2: The encoder maps waveform patches into a continuous latent sequence '
+            'before the decoder reconstructs the signal and the auxiliary branch predicts Spec'
+        )
+        content = f'''---
+title: "Math and caption"
+---
+目标函数是 `\\(\\mathcal{{L}}_D + \\lambda \\mathcal{{L}}_A\\)`。
+
+![{caption}](https://example.com/figure.png)
+'''
+        with tempfile.NamedTemporaryFile('w+', suffix='.md', encoding='utf-8', delete=False) as handle:
+            handle.write(content)
+            path = handle.name
+        try:
+            fixed, issues = publish_to_blog.review_and_fix_post(path)
+            reviewed = Path(path).read_text(encoding='utf-8')
+            self.assertTrue(fixed)
+            self.assertIn(r'\(\mathcal{L}_D + \lambda \mathcal{L}_A\)', reviewed)
+            self.assertNotIn(r'`\(\mathcal{L}_D', reviewed)
+            self.assertNotIn('predicts Spec]', reviewed)
+            self.assertTrue(any('反引号包裹' in issue for issue in issues))
+            self.assertTrue(any('截断' in issue for issue in issues))
+        finally:
+            os.unlink(path)
+
+    def test_review_blocks_english_dominant_roast_without_inventing_translation(self):
+        roast = (
+            'This review explains why the evaluation is too narrow and why the claimed '
+            'engineering benefit is not supported by latency, memory, or failure-case evidence. '
+        ) * 3
+        content = f'''---
+title: "English roast"
+---
+### 💡 毒舌点评
+
+{roast}
+
+### 📌 核心摘要
+
+这里是中文摘要。
+'''
+        with tempfile.NamedTemporaryFile('w+', suffix='.md', encoding='utf-8', delete=False) as handle:
+            handle.write(content)
+            path = handle.name
+        try:
+            fixed, issues = publish_to_blog.review_and_fix_post(path)
+            reviewed = Path(path).read_text(encoding='utf-8')
+            self.assertFalse(fixed)
+            self.assertIn(roast, reviewed)
+            self.assertTrue(any('必须改为简体中文' in issue for issue in issues))
+        finally:
+            os.unlink(path)
+
     def test_review_blocks_inconsistent_markdown_table_shape(self):
         content = '''---
 title: "Bad table"

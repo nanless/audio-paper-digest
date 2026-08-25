@@ -764,6 +764,9 @@ function mergePapersById(existingPapers, newPapers, options = {}) {
                     ...(p.analysisRecoveryImageManifest || p.imageManifest
                         ? { analysisRecoveryImageManifest: p.analysisRecoveryImageManifest || p.imageManifest }
                         : {}),
+                    ...(p.manualIngestionCheckpoint
+                        ? { manualIngestionCheckpoint: p.manualIngestionCheckpoint }
+                        : {}),
                     latestAnalysisAttemptError: p.error || '分析未完成',
                     latestAnalysisAttemptAt: getBeijingISOString()
                 });
@@ -798,6 +801,13 @@ function mergeCanonicalAnalysisState(paper, canonical) {
     return merged;
 }
 
+function loadCanonicalAnalysisRecord(filePath, paper) {
+    const data = readJsonFileStrict(filePath, { allowMissing: true });
+    const papers = Array.isArray(data) ? data : (data?.papers || []);
+    const id = normalizedId(paper);
+    return papers.find(item => normalizedId(item) === id) || null;
+}
+
 function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
 }
@@ -810,6 +820,7 @@ module.exports = {
     createFileSaver,
     mergePapersById,
     mergeCanonicalAnalysisState,
+    loadCanonicalAnalysisRecord,
     readJsonFileStrict,
     initializeJsonFileLocked,
     acquireFileLockSync,

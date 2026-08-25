@@ -21,6 +21,7 @@ load_project_env()
     python3 publish-to-blog.py --date YYYY-MM-DD
 """
 import argparse
+import difflib
 import json, re, sys, os, subprocess, datetime, base64, concurrent.futures, hashlib, math
 import ipaddress, shutil, socket, tempfile, stat, struct, zlib, unicodedata
 from contextlib import contextmanager
@@ -34,7 +35,8 @@ from publish_common import (
     fix_latex_delimiters, escape_html_like_tags, fix_image_markdown,
     truncate_base64_datauri, fix_yaml_double_commas, strip_raw_inline_html,
     fix_empty_markdown_links, dedupe_image_alts, fix_yaml_unbalanced_quotes,
-    sanitize_markdown_for_publish, call_publish_llm_api, PublishLLMUnavailable,
+    sanitize_markdown_for_publish, strip_internal_scoring_anchors,
+    call_publish_llm_api, PublishLLMUnavailable,
     PublishDataValidationError, count_blocking_review_issues, is_blocking_review_issue,
     normalize_publish_arxiv_id, review_protocol_failure,
     validate_papers_for_publish, validate_review_payload
@@ -562,6 +564,7 @@ def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1')
 4. **内容完整性**：是否有乱码、重复、段落错位。当前内容是完整正文的分块 {chunk_label}，不要因为分块边界报告内容不完整。
 5. **图片问题**：图片链接是否为空、格式是否正确（支持 base64 data URI 和普通 URL）
 6. **YAML frontmatter 问题**：标题、描述等字段是否有引号不匹配、特殊字符未转义
+7. **中文栏目语言**：`毒舌点评` 必须以简体中文为主；如果整段主要是英文，必须报告为 error，并要求依据原点评含义改写为中文，不能只删除内容
 
 【重要区分】以下情况**不要**作为错误报告：
 - 已经用反引号包裹的 HTML-like 标记（如 `` `<S>` ``）→ 这是正确格式
@@ -1412,6 +1415,22 @@ def plain_title_for_publish(title):
     return yaml_escape(title).replace('\\\\', '\\')
 
 
+def compact_title_for_ranking(title, max_length=55):
+    """按完整词截断排行榜标题，避免固定字符切片留下半个英文词。"""
+    title = re.sub(r'\s+', ' ', str(title or '')).strip()
+    if len(title) <= max_length:
+        return title
+    if max_length < 2:
+        return '…'[:max_length]
+    prefix = title[:max_length - 1]
+    # 只有切口两侧都是英文/数字时才回退到词边界；中文无需按空格截断。
+    if re.match(r'[A-Za-z0-9]', title[max_length - 1]) and re.search(r'[A-Za-z0-9]$', prefix):
+        boundary = max(prefix.rfind(' '), prefix.rfind('-'), prefix.rfind('/'))
+        if boundary >= max_length // 2:
+            prefix = prefix[:boundary]
+    return prefix.rstrip(' -/:;,.') + '…'
+
+
 def generate_index_page(scored, unscored, date_str, paper_slugs, category='论文速递'):
     """生成每日汇总页面（index.md），包含概览和每篇论文的链接"""
     total = len(scored) + len(unscored)
@@ -1439,7 +1458,7 @@ paper_digest_page_type: index
 
 ## ⚡ 今日概览
 
-📥 抓取 {total} 篇 → 🔬 深度分析完成
+✅ 筛选入选 {total} 篇 → 🔬 深度分析完成
 
 ### 🏷️ 热门方向
 
@@ -1461,17 +1480,19 @@ paper_digest_page_type: index
         rank_bucket = pa.get('rankBucket', '') or '-'
         document_type = pa.get('documentType', '') or '-'
         primary_task = pa.get('primaryTaskTag', '') or '-'
+        compact_title = compact_title_for_ranking(title)
         if slug:
-            md += f"| {m} | [{title[:55]}]({BASE_PATH}/posts/{date_str}-{slug}) | {score}分 | {rank_bucket} | {document_type} | {primary_task} |\n"
+            md += f"| {m} | [{compact_title}]({BASE_PATH}/posts/{date_str}-{slug}) | {score}分 | {rank_bucket} | {document_type} | {primary_task} |\n"
         else:
-            md += f"| {m} | {title[:55]} | {score}分 | {rank_bucket} | {document_type} | {primary_task} |\n"
+            md += f"| {m} | {compact_title} | {score}分 | {rank_bucket} | {document_type} | {primary_task} |\n"
     for i, p in enumerate(unscored):
         title = p.get('title', 'Unknown')
         slug = paper_slugs.get(p.get('arxivId', ''), '')
+        compact_title = compact_title_for_ranking(title)
         if slug:
-            md += f"| {len(scored)+i+1} | [{title[:55]}]({BASE_PATH}/posts/{date_str}-{slug}) | N/A | - | - | - |\n"
+            md += f"| {len(scored)+i+1} | [{compact_title}]({BASE_PATH}/posts/{date_str}-{slug}) | N/A | - | - | - |\n"
         else:
-            md += f"| {len(scored)+i+1} | {title[:55]} | N/A | - | - | - |\n"
+            md += f"| {len(scored)+i+1} | {compact_title} | N/A | - | - | - |\n"
 
     md += "\n---\n\n"
     md += "## 📋 论文列表\n\n"
@@ -2093,6 +2114,14 @@ def review_and_fix_post(file_path):
     original = content
     issues = []
 
+    cleaned_anchors = strip_internal_scoring_anchors(content)
+    if cleaned_anchors != content:
+        removed_count = len(re.findall(
+            r'\[(?:A|SCORING_SOURCE)_[A-Z0-9_]+\]', content,
+        ))
+        content = cleaned_anchors
+        issues.append(f"发现并清理 {removed_count} 个内部评分证据锚点")
+
     # Exact long-prose duplication is deterministic and safe to remove before
     # spending LLM review calls. Tables, lists, headings, code and images are
     # excluded so grouped table continuation rows remain untouched.
@@ -2125,6 +2154,57 @@ def review_and_fix_post(file_path):
         content = prose_prefix + ''.join(blocks)
         issues.append(f"发现并删除 {duplicate_count} 个完全重复的长正文段落")
 
+    # 捕获只有少量措辞差异的批量近重复段落。阈值刻意保持很高，且继续
+    # 排除标题、列表、表格、代码、引用与图片，避免删除合法表格续行或
+    # 不同实验条件下结构相似但事实不同的数据行。
+    prose_prefix = frontmatter_match.group(0) if frontmatter_match else ''
+    prose_body = content[len(prose_prefix):]
+    blocks = re.split(r'(\n{2,})', prose_body)
+    seen_near = []
+    near_duplicate_count = 0
+
+    def factual_guard_signature(text):
+        """Keep tiny but material factual differences out of fuzzy deletion."""
+        numbers = tuple(re.findall(r'(?<![A-Za-z])[-+]?\d+(?:\.\d+)?%?', text))
+        urls = tuple(re.findall(r'https?://\S+', text, flags=re.IGNORECASE))
+        negations = tuple(re.findall(
+            r'未|不|无|没有|并非|不能|not|no|without|never',
+            text,
+            flags=re.IGNORECASE,
+        ))
+        return numbers, urls, negations
+
+    for index in range(0, len(blocks), 2):
+        block = blocks[index]
+        normalized = re.sub(r'\s+', ' ', block).strip()
+        protected = (
+            len(normalized) < 100
+            or normalized.startswith(('---', '#', '|', '-', '*', '>', '```', '~~~', '!['))
+            or '\n|' in block
+            or re.search(r'!\[[^\]]*\]\([^)]+\)', block)
+        )
+        if protected:
+            continue
+        fingerprint = unicodedata.normalize('NFKC', normalized).casefold()
+        duplicate = any(
+            factual_guard_signature(fingerprint) == previous_signature
+            and min(len(fingerprint), len(previous)) / max(len(fingerprint), len(previous)) >= 0.9
+            and difflib.SequenceMatcher(
+                None, fingerprint, previous, autojunk=False,
+            ).ratio() >= 0.97
+            for previous, previous_signature in seen_near
+        )
+        if duplicate:
+            blocks[index] = ''
+            if index + 1 < len(blocks):
+                blocks[index + 1] = ''
+            near_duplicate_count += 1
+        else:
+            seen_near.append((fingerprint, factual_guard_signature(fingerprint)))
+    if near_duplicate_count:
+        content = prose_prefix + ''.join(blocks)
+        issues.append(f"发现并删除 {near_duplicate_count} 个近重复长正文段落")
+
     # 0. 修复 UTF-8 乱码字符（U+FFFD），从上下文推断正确汉字
     # 先统一检测，再统一修复，避免逐词替换时的顺序问题
     garbled_count = content.count('\ufffd')
@@ -2155,6 +2235,15 @@ def review_and_fix_post(file_path):
     if latex_matches:
         issues.append(f"发现 {len(latex_matches)} 个未转换的 LaTeX 行内公式")
         content = fix_latex_delimiters(content)
+
+    # Hugo 数学分隔符本身已经负责渲染；外围反引号会把公式重新变成代码。
+    backticked_math = re.compile(
+        r'(?<!`)`\s*(\\\([^`\n]+\\\)|\\\[[^`\n]+\\\])\s*`(?!`)'
+    )
+    backticked_math_count = len(backticked_math.findall(content))
+    if backticked_math_count:
+        content = backticked_math.sub(r'\1', content)
+        issues.append(f"发现并修复 {backticked_math_count} 个被反引号包裹的 LaTeX 公式")
 
     # 3. 检查是否有裸的 HTML 标签（如 <s>、<e> 等小写形式）
     raw_html_pattern = re.compile(r'<(s|e|b|i|u)(\s+[^>]*)?>([^<]*)</\1>', re.IGNORECASE)
@@ -2240,7 +2329,9 @@ def review_and_fix_post(file_path):
     def shorten_truncated_alt(match):
         alt, url = match.group(1), match.group(2)
         stripped = alt.strip()
-        if len(stripped) < 180 or not re.search(r'[A-Za-z]{2,}$', stripped):
+        # 上游常在 160/180 字符附近硬截 caption；120 字已经足以保留
+        # 一条可访问性描述，继续等待到 180 会漏掉 Spec/C/T 等半词结尾。
+        if len(stripped) < 120 or not re.search(r'[A-Za-z]+$', stripped):
             return match.group(0)
         prefix = stripped[:160]
         boundaries = [
@@ -2268,6 +2359,22 @@ def review_and_fix_post(file_path):
     if deduped_content != content:
         issues.append("发现空或重复图片 alt，已补齐/去重")
         content = deduped_content
+
+    # 面向中文读者的固定栏目不得整段退化为英文。确定性层只负责阻断，
+    # 不凭空翻译或生成观点；普通 LLM review 或 manual reviewer 必须据原文
+    # 给出真正的中文点评后才能签发凭证。
+    roast_pattern = re.compile(
+        r'(?:^|\n)(?:#{1,6}\s*)?💡\s*(?:\*\*)?毒舌点评(?:\*\*)?\s*\n+'
+        r'([\s\S]*?)(?=\n(?:#{1,6}\s+|(?:📌|🔗|🏗️|📊|🔬|⚖️|🚨|📎)\s*\*\*|---\s*$)|\Z)',
+        flags=re.MULTILINE,
+    )
+    for roast_match in roast_pattern.finditer(content):
+        roast = roast_match.group(1)
+        han_count = len(re.findall(r'[\u3400-\u9fff]', roast))
+        latin_count = len(re.findall(r'[A-Za-z]', roast))
+        if latin_count >= 120 and (han_count < 20 or latin_count > han_count * 3):
+            issues.append('毒舌点评以英文为主，必须改为简体中文后才能发布')
+            break
 
     # 12. 检查 YAML frontmatter 中是否有未闭合的双引号
     content_before_yaml_quote_fix = content

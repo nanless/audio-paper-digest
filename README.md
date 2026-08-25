@@ -229,9 +229,15 @@ python3 scripts/push-blog.py --date 2026-04-21
 # attestation 必须由人工/Codex 填写，八项 checks 全部为 true；不会伪造模型审查
 python3 scripts/manual-review-blog.py --date 2026-04-21 --attestation data/current/manual-review-attestation-2026-04-21.json
 
-# 完全离线的人工深度分析：spec 必须逐篇绑定全文、原文事实引用、二次审计和阶段证据
-# 此命令不调用任何 LLM/API；任何一篇失败都会拒绝写入整批 canonical 结果
+# 人工全文先逐篇安全抓取并 checkpoint；失败后重跑只补失败或损坏项
+npm run manual:fulltext -- 2026-04-21
+
+# 人工深度分析：spec 必须逐篇绑定全文、原文事实引用、实际审计次数和阶段专属 prompt/契约 SHA
+# 此命令不调用 LLM API；每篇在运行锁内重读并保存，失败项保留 ingestion checkpoint
 npm run manual:analyze -- --date 2026-04-21 --spec data/current/manual-analysis-spec-2026-04-21.json
+
+# 默认续跑复用已成功 canonical；仅在人工纠错或 spec/prompt 改变时显式覆盖
+npm run manual:analyze -- --date 2026-04-21 --spec data/current/manual-analysis-spec-2026-04-21.json --force
 
 # 无筛选模型的人工接管：--raw 仍联网抓取并生成带来源指纹的候选全集，再逐篇提交 related 决定
 node scripts/manual-fetch.js --date 2026-04-21 --raw
@@ -239,6 +245,7 @@ node scripts/manual-fetch.js --date 2026-04-21 --select data/current/manual-filt
 
 # review 首次失败后，修复页面并重跑同一命令；已通过且 SHA 未变的页面永久复用
 # 只复审新增、内容变化、待重试或已修复的失败页；最终仍对完整批次执行确定性校验和 Hugo gate
+# 发布视图会剥离内部评分锚点；确定性层还检查近重复、半词图注、反引号公式与英文毒舌点评
 # manual-review-blog.py 是显式 manual_complete 模式：仍执行逐文件哈希、基线、协议、确定性检查和 Hugo gate，
 # 并把 attestation SHA、来源、检查清单和修复记录写入 receipt；不能把普通 LLM 故障静默视为通过。
 

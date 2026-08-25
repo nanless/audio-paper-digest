@@ -19,11 +19,14 @@
 
 ## 已实施的对齐
 
+这里的“对齐”只指产物质量、结构契约和 provenance 可审计性，不表示执行步骤等价。`manual_offline` 只替代筛选模型，`manual_complete v2` 只替代深度分析模型，manual blog review 只替代语义 review 模型；即使人工路径生成了兼容 checkpoint、阶段指纹或 receipt，也不得据此声称对应 API/LLM 阶段实际执行过。
+
 - manual 现在从完整全文构造章节感知的句子单元：跳过作者/邮箱/参考文献和图示粘连，方法优先使用 Methods/Architecture/Training 的真实段落，实验优先使用 Results/Evaluation/Ablation 的数字、比较和表格段落。
 - 方法、核心创新、实验结果、细节、评分理由和局限都由论文事实组织；不再输出证据块编号、阶段审计过程、提示词复述或“可执行流程”模板。
 - 结果段保留可读 Markdown 表格，并把数字和数据集、基线、硬件、指标方向放在同一语境中；图片继续使用来源中的 HTTPS 图并由发布侧的图片门禁过滤。
 - manual 阶段 provenance 使用各阶段独立的输入/审计哈希和专属 claim hint；`analysis-contract.js` 的 manual 深度契约检查摘要、方法、创新、实验、细节、评分、局限长度、表格、结果数字和编辑痕迹。
-- 明确禁止以下正文表达：`第 1 个证据块`、`证据块`、`结果证据 1`、`方法事实 1`、`实验事实 1`、`实现细节 1`、`manual_complete`、提示词或人工审计过程。它们只能存在于 provenance/测试上下文，不能进入发布正文。
+- 明确禁止以下正文表达：`第 1 个证据块`、`证据块`、`结果证据 1`、`方法事实 1`、`实验事实 1`、`实现细节 1`、`manual_complete`、`[A_*]`、`[SCORING_SOURCE_*]`、提示词或人工审计过程。它们只能存在于 provenance/测试上下文，不能进入发布正文。
+- 发布前还必须清理模板修复遗留：同一事实被后置句重复评价、面向审稿流程的“审稿人发现/账本中”元话语、截断图注、损坏的公式或 Markdown，以及与中文正文不一致的孤立英文点评。清理只能删除包装和重复，不得改写论文事实或实验数字。
 
 ## 验证方式
 
@@ -34,4 +37,4 @@
 3. `npm run validate:data`，确认 canonical、filtered、raw 和 decisions 一致；
 4. 博客 generate → review → push 三阶段，以及发布后的逐页内容和图片 QA。
 
-没有通过任一门禁的论文不会写成 `manual_complete`，也不会进入博客生成或 push。manual 是“无 API 的全文编辑/审校流程”，不是把摘要或固定模板冒充深度分析。
+没有通过任一门禁的论文不会写成 `manual_complete`，也不会进入博客生成或 push。manual 是“无 API 的全文编辑/审校流程”，不是把摘要或固定模板冒充深度分析，也不是用兼容状态冒充 API 阶段已执行。

@@ -2,6 +2,7 @@ import os
 import sys
 import contextlib
 import copy
+import hashlib
 import io
 import json
 import tempfile
@@ -41,6 +42,10 @@ from publish_common import (  # noqa: E402
     validate_experiment_table_contract,
     validate_method_detail_contract,
     validate_review_payload,
+    MANUAL_AUDIT_CHECKS,
+    MANUAL_STAGE_EVIDENCE_STAGES,
+    _manual_hash,
+    _validate_manual_takeover_manifest,
 )
 from utils import parse_analysis  # noqa: E402
 
@@ -79,7 +84,183 @@ def complete_paper():
     }
 
 
+def manual_v2_fixture(*, hardened=True, completed_at=None):
+    analysis = 'manual provenance body'
+    analysis_sha = hashlib.sha256(analysis.encode('utf-8')).hexdigest()
+    source_sha = hashlib.sha256(b'controlled full text').hexdigest()
+    prompt_sha = hashlib.sha256(b'deep-analysis prompt').hexdigest()
+    audit = {
+        'version': 1,
+        'attempts': 2,
+        'passes': [
+            {'status': 'revise', 'issues': ['核对阶段证据']},
+            {'status': 'pass', 'issues': []},
+        ],
+        'checks': {key: True for key in MANUAL_AUDIT_CHECKS},
+    }
+    audit_sha = _manual_hash(audit)
+    ledger = [
+        {'id': f'E{index:02d}', 'section': '实验结果', 'claim': f'claim {index}', 'sourceQuote': f'quote {index}'}
+        for index in range(1, 7)
+    ]
+    image_manifest = {
+        'candidates': [],
+        'downloadOutcomes': [],
+        'selected': [],
+        'downloadEvidenceSha256': _manual_hash({'candidates': [], 'outcomes': []}),
+        'selectionEvidenceSha256': _manual_hash([]),
+    }
+    stages = {}
+    evidence = {}
+    for stage in MANUAL_STAGE_EVIDENCE_STAGES:
+        claims = [f'{stage} reviewed claim with concrete evidence']
+        stage_prompt_sha = prompt_sha if stage == 'primaryAnalysis' else hashlib.sha256(stage.encode('utf-8')).hexdigest()
+        context_sha = {
+            'imageDownload': image_manifest['downloadEvidenceSha256'],
+            'imageSupplement': image_manifest['selectionEvidenceSha256'],
+        }.get(stage)
+        if hardened:
+            input_sha = _manual_hash({
+                'stage': stage,
+                'sourceSha256': source_sha,
+                'analysisSha256': analysis_sha,
+                'claims': claims,
+                'stagePromptSha256': stage_prompt_sha,
+                'stageContextSha256': context_sha,
+            })
+        else:
+            input_sha = _manual_hash({
+                'stage': stage,
+                'sourceSha256': source_sha,
+                'analysisSha256': analysis_sha,
+                'claims': claims,
+            })
+        item = {
+            'status': 'manual_complete',
+            'inputSha256': input_sha,
+            'outputSha256': analysis_sha,
+            'auditSha256': _manual_hash({
+                'stage': stage,
+                'claims': claims,
+                'auditSha256': audit_sha,
+                'stageInputSha256': input_sha,
+            }),
+            'attempts': 2,
+            'reviewedClaims': claims,
+        }
+        state = {'status': 'manual_complete'}
+        if hardened:
+            item.update({
+                'protocol': 'manual-offline-review-v1',
+                'promptSource': f'prompts/{stage}.md',
+                'promptSha256': stage_prompt_sha,
+            })
+            if context_sha:
+                item['contextSha256'] = context_sha
+            state.update({
+                'protocol': 'manual-offline-review-v1',
+                'promptSource': item['promptSource'],
+                'promptSha256': stage_prompt_sha,
+            })
+        evidence[stage] = item
+        stages[stage] = state
+    takeover = {
+        'version': 2,
+        'mode': 'manual_complete',
+        'agent': 'Codex',
+        'basis': 'full_text',
+        'sourceSha256': source_sha,
+        'promptSha256': prompt_sha,
+        'analysisSha256': analysis_sha,
+        'completedAt': completed_at or ('2026-08-25T12:00:00.000+08:00' if hardened else '2026-08-21T12:00:00.000+08:00'),
+        'reason': '基于受控全文完成两轮人工审校并记录逐阶段证据。',
+        'review': {
+            'sourceVerified': True,
+            'analysisContractVerified': True,
+            'scoringVerified': True,
+            'stageEvidenceVerified': True,
+        },
+        'evidenceLedger': ledger,
+        'evidenceLedgerSha256': _manual_hash(ledger),
+        'audit': audit,
+        'stageEvidence': evidence,
+    }
+    manifest = {
+        'version': 1,
+        'sourceAcquisition': {'sourceSha256': source_sha},
+        'stages': stages,
+        'manualTakeover': takeover,
+    }
+    paper = {
+        'arxivId': '2608.99999',
+        'analysis': analysis,
+        'sourceSha256': source_sha,
+        'imageManifest': image_manifest,
+    }
+    return paper, manifest
+
+
 class PublishCommonSanitizerTest(unittest.TestCase):
+    def test_manual_v2_publish_provenance_is_cryptographically_closed(self):
+        paper, manifest = manual_v2_fixture(hardened=True)
+        _validate_manual_takeover_manifest(paper, manifest, 'fixture')
+
+        cases = []
+        candidate = copy.deepcopy((paper, manifest))
+        candidate[1]['manualTakeover']['agent'] = ''
+        cases.append(('agent', candidate, 'agent 缺失'))
+        candidate = copy.deepcopy((paper, manifest))
+        candidate[1]['manualTakeover']['sourceSha256'] = 'c' * 64
+        cases.append(('source', candidate, 'sourceSha256 与全文来源不一致'))
+        candidate = copy.deepcopy((paper, manifest))
+        candidate[1]['manualTakeover']['completedAt'] = '2026-08-25T12:00:00Z'
+        cases.append(('completedAt', candidate, 'completedAt 必须为北京时间'))
+        candidate = copy.deepcopy((paper, manifest))
+        candidate[1]['manualTakeover']['reason'] = '过短'
+        cases.append(('reason', candidate, 'reason 过短'))
+        candidate = copy.deepcopy((paper, manifest))
+        candidate[1]['manualTakeover']['review']['stageEvidenceVerified'] = False
+        cases.append(('review', candidate, 'review 未确认'))
+        candidate = copy.deepcopy((paper, manifest))
+        candidate[1]['manualTakeover']['stageEvidence']['primaryAnalysis']['inputSha256'] = 'c' * 64
+        cases.append(('input', candidate, 'inputSha256 闭环校验失败'))
+        candidate = copy.deepcopy((paper, manifest))
+        candidate[1]['manualTakeover']['stageEvidence']['primaryAnalysis']['auditSha256'] = 'c' * 64
+        cases.append(('audit', candidate, 'auditSha256 闭环校验失败'))
+        candidate = copy.deepcopy((paper, manifest))
+        candidate[1]['manualTakeover']['stageEvidence']['primaryAnalysis']['outputSha256'] = 'c' * 64
+        cases.append(('output', candidate, 'outputSha256 与最终正文 SHA 不一致'))
+        candidate = copy.deepcopy((paper, manifest))
+        candidate[1]['manualTakeover']['stageEvidence']['primaryAnalysis']['promptSource'] = 'prompts/wrong.md'
+        cases.append(('prompt source', candidate, 'promptSource 与阶段 manifest 不一致'))
+        candidate = copy.deepcopy((paper, manifest))
+        candidate[1]['manualTakeover']['stageEvidence']['primaryAnalysis']['promptSha256'] = 'c' * 64
+        cases.append(('prompt sha', candidate, 'promptSha256 与阶段 manifest 不一致'))
+        candidate = copy.deepcopy((paper, manifest))
+        candidate[1]['manualTakeover']['stageEvidence']['primaryAnalysis']['protocol'] = 'manual-unknown'
+        cases.append(('protocol', candidate, 'protocol 与阶段协议不一致'))
+        candidate = copy.deepcopy((paper, manifest))
+        candidate[1]['manualTakeover']['stageEvidence']['imageDownload']['contextSha256'] = 'c' * 64
+        cases.append(('context', candidate, 'contextSha256 与 imageManifest.downloadEvidenceSha256 不一致'))
+        candidate = copy.deepcopy((paper, manifest))
+        candidate[0]['imageManifest']['downloadOutcomes'].append({'url': 'https://example.com/tampered.png', 'status': 'complete'})
+        cases.append(('image context hash', candidate, 'imageManifest.downloadEvidenceSha256 闭环校验失败'))
+
+        for label, (candidate_paper, candidate_manifest), message in cases:
+            with self.subTest(label=label), self.assertRaisesRegex(PublishDataValidationError, message):
+                _validate_manual_takeover_manifest(candidate_paper, candidate_manifest, 'fixture')
+
+    def test_manual_v2_legacy_migration_boundary_keeps_2026_08_21_only(self):
+        paper, manifest = manual_v2_fixture(hardened=False)
+        _validate_manual_takeover_manifest(paper, manifest, 'legacy fixture')
+
+        newer_paper, newer_manifest = manual_v2_fixture(
+            hardened=False,
+            completed_at='2026-08-22T00:00:00.000+08:00',
+        )
+        with self.assertRaisesRegex(PublishDataValidationError, '逐阶段 prompt/context 绑定'):
+            _validate_manual_takeover_manifest(newer_paper, newer_manifest, 'newer legacy fixture')
+
     def test_shared_publish_date_validation_rejects_impossible_dates(self):
         self.assertEqual(get_today_bj('2026-07-13'), '2026-07-13')
         for value in ('2026-02-30', '2026-7-3', 'not-a-date'):
@@ -134,7 +315,11 @@ confidence: 中
         self.assertIn('title: "Bad title"', fixed)
 
     def test_sanitize_markdown_for_publish_combines_rules(self):
-        text = '---\ntitle: "Bad\n---\n<u>x</u>\n![same](a.png)\n![same](b.png)\n[empty]()\n配�置'
+        text = (
+            '---\ntitle: "Bad\n---\n<u>x</u>\n![same](a.png)\n![same](b.png)\n'
+            '[empty]()\n配�置\n[A_METHOD] 方法证据\n[SCORING_SOURCE_RESULTS] 实验证据'
+        )
+        upstream = text
         fixed = sanitize_markdown_for_publish(text)
         self.assertNotIn('<u>', fixed)
         self.assertIn('![same - 图2](b.png)', fixed)
@@ -142,6 +327,12 @@ confidence: 中
         self.assertIn('title: "Bad"', fixed)
         self.assertIn('配置', fixed)
         self.assertNotIn('�', fixed)
+        self.assertNotIn('[A_METHOD]', fixed)
+        self.assertNotIn('[SCORING_SOURCE_RESULTS]', fixed)
+        self.assertIn('方法证据', fixed)
+        self.assertIn('实验证据', fixed)
+        self.assertIn('[A_METHOD]', upstream)
+        self.assertIn('[SCORING_SOURCE_RESULTS]', upstream)
 
     def test_publish_llm_api_routing(self):
         self.assertEqual(

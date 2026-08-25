@@ -588,6 +588,7 @@ describe('analyzePaperWithRetry', () => {
             error: 'secondary timeout',
             imageManifest: { selected: [], downloaded: [] },
             analysisCheckpoint: validAnalysisText(),
+            manualIngestionCheckpoint: { version: 1, mode: 'manual_complete', analysisSha256: 'a'.repeat(64) },
             analysisManifest: { version: 1, stages: { imageDownload: { status: 'transient_failure' } } }
         };
         const { mergePapersById } = require('../scripts/analysis-engine.js');
@@ -596,6 +597,7 @@ describe('analyzePaperWithRetry', () => {
         assert.strictEqual(merged.analysisCheckpoint, failed.analysisCheckpoint);
         assert.deepStrictEqual(merged.imageManifest, complete.imageManifest);
         assert.deepStrictEqual(merged.analysisRecoveryImageManifest, failed.imageManifest);
+        assert.deepStrictEqual(merged.manualIngestionCheckpoint, failed.manualIngestionCheckpoint);
         assert.strictEqual(merged.latestAnalysisAttemptError, 'secondary timeout');
         assert.strictEqual(isSuccessfulAnalysisRecord(merged), false);
 
