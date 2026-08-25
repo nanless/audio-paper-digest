@@ -157,6 +157,14 @@ def create_verified_schema_v3_publication(date_str, posts, paper):
 
 
 class PublishToBlogReviewTest(unittest.TestCase):
+    def test_extract_repo_urls_stops_at_chinese_sentence_punctuation(self):
+        url = (
+            'https://github.com/NVIDIA-NeMo/Speech/blob/main/scripts/'
+            'asr_context_biasing/eval_greedy_decoding_with_context_biasing.py'
+        )
+        text = f'公开评测脚本为 {url}；正文未说明完整复现文档，按固定锚点计 1.2 分。'
+        self.assertEqual(publish_to_blog.extract_repo_urls(text), [url])
+
     def test_visual_capability_preflight_rejects_legacy_before_daily_push(self):
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.object(publish_to_blog, 'CURRENT_DIR', Path(tmp)):
