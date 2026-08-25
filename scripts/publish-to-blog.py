@@ -2510,10 +2510,56 @@ def review_and_fix_post(file_path, paper=None):
 
     # Long captions can be cut by the upstream model at a word boundary. Keep
     # a concise, sentence-aligned alt so the page remains accessible and the
-    # vision reviewer does not receive a misleading half-sentence.
+    # vision reviewer does not receive a misleading half-sentence.  A complete
+    # caption already bound to the authoritative image manifest must remain
+    # byte-stable: an English source caption may legitimately omit the final
+    # period and still end in a complete word such as ``respectively``.
+    authoritative_captions_by_url = {}
+    image_manifest = paper.get('imageManifest') if isinstance(paper, dict) else None
+    if isinstance(image_manifest, dict):
+        for collection_name in ('selected', 'downloaded', 'candidates'):
+            collection = image_manifest.get(collection_name)
+            if not isinstance(collection, list):
+                continue
+            for image in collection:
+                if not isinstance(image, dict):
+                    continue
+                image_url = str(image.get('url') or '').strip()
+                caption = str(image.get('caption') or image.get('alt') or '').strip()
+                if image_url and caption:
+                    authoritative_captions_by_url.setdefault(image_url, set()).add(caption)
+
+    def normalize_caption_binding(value):
+        text = unicodedata.normalize('NFKC', str(value or ''))
+        text = re.sub(r'[\u200b-\u200d\ufeff]', '', text)
+        text = re.sub(
+            r'^(?:fig(?:ure)?\.?\s*)\d+[a-z]?(?:\s*[:.\-–—]\s*|\s+)',
+            '', text, flags=re.IGNORECASE,
+        )
+        # The Node image assembler escapes backslashes and square brackets for
+        # Markdown alt text.  Undo only those deterministic escapes before the
+        # provenance comparison; do not otherwise rewrite the reader text.
+        while '\\\\' in text:
+            text = text.replace('\\\\', '\\')
+        text = text.replace('\\[', '[').replace('\\]', ']')
+        text = re.sub(r'\s+', ' ', text).strip()
+        text = re.sub(
+            r'([A-Za-z]{1,12}\s*[=<>]\s*-?\d+(?:\.\d+)?%?)\s*\1',
+            r'\1', text, flags=re.IGNORECASE,
+        )
+        return text
+
+    normalized_authoritative_captions_by_url = {
+        url: {normalize_caption_binding(caption) for caption in captions}
+        for url, captions in authoritative_captions_by_url.items()
+    }
+
     def shorten_truncated_alt(match):
         alt, url = match.group(1), match.group(2)
         stripped = alt.strip()
+        normalized_alt = normalize_caption_binding(stripped)
+        if normalized_alt and normalized_alt in normalized_authoritative_captions_by_url.get(url, set()):
+            return match.group(0)
         # 上游常在 160/180 字符附近硬截 caption；120 字已经足以保留
         # 一条可访问性描述，继续等待到 180 会漏掉 Spec/C/T 等半词结尾。
         if len(stripped) < 120 or not re.search(r'[A-Za-z]+$', stripped):

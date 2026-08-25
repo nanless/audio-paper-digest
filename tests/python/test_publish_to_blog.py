@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import struct
 import sys
@@ -568,6 +569,44 @@ title: "Math and caption"
             self.assertNotIn('predicts Spec]', reviewed)
             self.assertTrue(any('反引号包裹' in issue for issue in issues))
             self.assertTrue(any('截断' in issue for issue in issues))
+        finally:
+            os.unlink(path)
+
+    def test_review_preserves_complete_caption_bound_to_authoritative_image_manifest(self):
+        source_caption = (
+            r'Figure 5: Multi-stimulus listening test results for float32 (F) and '
+            r'int8-quantized (Q) µNetMSE{}_{\text{MSE}} models. Subscripts indicate '
+            r'algorithmic latencies; ”F” and ”Q” represent 32-bit floating-point and '
+            r'8-bit integer quantization, respectively'
+        )
+        url = 'https://arxiv.org/html/2608.21155v1/rating_boxplotQ.png'
+        rendered_alt = re.sub(
+            r'^(?:fig(?:ure)?\.?\s*)\d+[a-z]?(?:\s*[:.\-\u2013\u2014]\s*|\s+)',
+            '', source_caption, flags=re.IGNORECASE,
+        ).replace('\\', '\\\\')
+        content = f'''---
+title: "Bound caption"
+---
+![{rendered_alt}]({url})
+'''
+        paper = {
+            'imageManifest': {
+                'selected': [{'url': url, 'caption': source_caption}],
+            },
+        }
+        with tempfile.NamedTemporaryFile('w+', suffix='.md', encoding='utf-8', delete=False) as handle:
+            handle.write(content)
+            path = handle.name
+        try:
+            fixed, issues = publish_to_blog.review_and_fix_post(path, paper)
+            reviewed = Path(path).read_text(encoding='utf-8')
+            self.assertFalse(fixed)
+            self.assertEqual(issues, [])
+            self.assertEqual(reviewed, content)
+            self.assertIn(
+                '”F” and ”Q” represent 32-bit floating-point and 8-bit integer quantization, respectively',
+                reviewed,
+            )
         finally:
             os.unlink(path)
 
