@@ -14,10 +14,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 MODULE_PATH = os.path.join(ROOT, 'scripts', 'publish-to-blog.py')
 sys.path.insert(0, os.path.join(ROOT, 'scripts'))
+from publish_common import (  # noqa: E402
+    PublishDataValidationError,
+    _validate_publish_image_exclusion_view,
+    validate_image_narrative_contract,
+)
 SPEC = importlib.util.spec_from_file_location('publish_to_blog', MODULE_PATH)
 publish_to_blog = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(publish_to_blog)
@@ -471,10 +475,13 @@ title: "Duplicate"
         )
         compact = publish_to_blog.compact_title_for_ranking(title)
         self.assertIn('✅ 筛选入选 1 篇 → 🔬 深度分析完成', markdown)
+        self.assertIn('paper_digest_reader_quality: "reader-facing-v1"', markdown)
         self.assertNotIn('📥 抓取 1 篇', markdown)
         self.assertLessEqual(len(compact), 55)
         self.assertTrue(compact.endswith('…'))
         self.assertIn(f'[{compact}](', markdown)
+        self.assertIn('| 8.0 | 前25% |', markdown)
+        self.assertNotIn('| 8.0分 |', markdown)
         self.assertNotRegex(compact[:-1], r'\botherwis$')
 
     def test_review_removes_only_high_similarity_prose_and_keeps_table_continuations(self):
@@ -786,7 +793,7 @@ title: "Bad table"
             '下图对比了人工调试与AI修复流程，显示LoopVSR如何通过定义修复目标、'
             '运行时证据和评估规则来指导编码代理进行验证修复。'
         )
-        framework_lead = '架构包含五个关键组件，如下图所示。'
+        framework_lead = '架构包含 5 个关键组件，如下图所示。'
         framework_explanation = '下图展示了 LoopVSR 的总体架构与闭环修复流程。'
         summary = (
             f'{intro_lead}\n\n![错误动机图]({excluded_url})\n\n'
@@ -870,6 +877,14 @@ confidence: 中
                     'url': excluded_url,
                     'reason': '图片内含 “Manul debugging” 拼写错误',
                 }])
+                self.assertEqual(
+                    snapshot['publishImageExclusionView']['excludedUrls'],
+                    [excluded_url],
+                )
+                self.assertEqual(
+                    snapshot['publishImageExclusionView']['analysisSha256'],
+                    hashlib.sha256(snapshot['analysis'].encode('utf-8')).hexdigest(),
+                )
                 self.assertNotIn(excluded_url, snapshot['parsed']['summary'])
                 self.assertIn(retained_url, snapshot['parsed']['summary'])
                 self.assertNotIn(excluded_url, snapshot['analysis'])
@@ -906,6 +921,60 @@ confidence: 中
             f'{before}\n\n![待排除图片]({excluded_url})\n\n{after}', excluded_url,
         )
         self.assertEqual(cleaned, f'{before}\n\n{after}')
+
+    def test_publish_image_exclusion_synchronizes_selected_view_and_exact_plan_neighbors(self):
+        url = 'https://arxiv.org/html/2608.13610v1/Fig/intro_1.jpg'
+        lead = '承接 LoopVSR 的运行时证据，下图用于核对人工调试与代理修复两条分支。'
+        explanation = '图中箭头显示两条分支进入同一评估器；该结构仅限图示流程，不能证明未报告阶段。'
+        paper = {
+            'arxivId': '2608.13610',
+            'analysis': f'## 方法概述和架构\n正文。\n\n{lead}\n\n![流程]({url})\n\n{explanation}\n\n结论。',
+            'selectedImageUrls': [url],
+            'imageManifest': {
+                'selected': [{'index': 1, 'url': url}],
+                'insertionPlan': [{
+                    'imageNumber': 1, 'lead': lead, 'explanation': explanation,
+                }],
+                'insertionDiagnostics': [{'imageNumber': 1, 'inserted': True}],
+            },
+        }
+        derived = publish_to_blog.apply_publish_image_exclusions([paper], [{
+            'normalizedArxivId': '2608.13610',
+            'url': url,
+            'reason': '图内拼写错误，发布视图必须排除。',
+        }])[0]
+        self.assertEqual(derived['selectedImageUrls'], [])
+        self.assertNotIn(url, derived['analysis'])
+        self.assertNotIn(lead, derived['analysis'])
+        self.assertNotIn(explanation, derived['analysis'])
+        self.assertEqual(derived['publishImageExclusionView']['excludedUrls'], [url])
+        self.assertEqual(
+            derived['publishImageExclusionView']['analysisSha256'],
+            hashlib.sha256(derived['analysis'].encode('utf-8')).hexdigest(),
+        )
+        self.assertEqual(
+            derived['publishImageExclusionView']['effectiveSelectedImageUrls'], [],
+        )
+        _validate_publish_image_exclusion_view(derived, '2608.13610')
+        tampered = dict(derived)
+        tampered['publishImageExclusionView'] = dict(
+            derived['publishImageExclusionView'], analysisSha256='0' * 64,
+        )
+        with self.assertRaisesRegex(PublishDataValidationError, '当前 analysis 不一致'):
+            _validate_publish_image_exclusion_view(tampered, '2608.13610')
+        self.assertIsNone(validate_image_narrative_contract(derived))
+
+        manifest_selected_only = dict(paper)
+        manifest_selected_only.pop('selectedImageUrls')
+        fallback = publish_to_blog.apply_publish_image_exclusions(
+            [manifest_selected_only], [{
+                'normalizedArxivId': '2608.13610',
+                'url': url,
+                'reason': '图内拼写错误，发布视图必须排除。',
+            }],
+        )[0]
+        self.assertEqual(fallback['selectedImageUrls'], [])
+        _validate_publish_image_exclusion_view(fallback, '2608.13610')
 
     def test_published_papers_fingerprint_matches_node_utf16_key_order_probe(self):
         probe = json.loads(
@@ -1134,6 +1203,84 @@ body
                 publish_to_blog.validate_staged_posts(posts, '2026-07-10')
             with mock.patch.object(publish_to_blog.shutil, 'which', return_value=None):
                 self.assertEqual(publish_to_blog.run_hugo_gate(tmp, posts), 'fallback')
+
+    def test_staged_gate_rechecks_marked_index_reader_quality(self):
+        markdown = '''---
+title: "Test"
+date: 2026-07-10
+draft: false
+tags: []
+categories: [test]
+description: "test"
+paper_digest_pipeline_owned: true
+paper_digest_page_type: index
+paper_digest_reader_quality: "reader-facing-v1"
+---
+# 论文速递
+
+## ⚡ 今日概览
+
+共分析三篇论文。
+
+## 📋 论文列表
+
+### Paper A
+
+该论文讨论流式识别。
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            posts = Path(tmp) / 'content' / 'posts'
+            posts.mkdir(parents=True)
+            (posts / '2026-07-10.md').write_text(markdown, encoding='utf-8')
+            with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError,
+                    '汇总页读者质量门禁失败'):
+                publish_to_blog.validate_staged_posts(posts, '2026-07-10')
+
+    def test_manual_v4_marker_survives_render_and_final_staging_gate_blocks_bad_page(self):
+        paper = {
+            'arxivId': '2608.29999',
+            'title': 'Manual V4 Reader Contract',
+            'analysis': '',
+            'analysisManifest': {
+                'contracts': {'manualDepth': 'full-text-evidence-v4'},
+            },
+        }
+        rendered, _slug = publish_to_blog.generate_paper_page(
+            paper, '2026-07-10',
+        )
+        self.assertIn(
+            'paper_digest_manual_depth: "full-text-evidence-v4"', rendered,
+        )
+
+        markdown = '''---
+title: "Manual V4 Reader Contract"
+date: 2026-07-10
+draft: false
+tags: []
+categories: [test]
+description: "test"
+paper_digest_pipeline_owned: true
+paper_digest_page_type: paper
+paper_digest_arxiv_id: "2608.29999"
+paper_digest_manual_depth: "full-text-evidence-v4"
+---
+### 📌 核心摘要
+
+只有摘要，没有最终读者页的其余必要章节。
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            posts = Path(tmp) / 'content' / 'posts'
+            posts.mkdir(parents=True)
+            page = posts / '2026-07-10-manual-v4.md'
+            page.write_text(markdown, encoding='utf-8')
+            fixed, issues = publish_to_blog.review_and_fix_post(page)
+            self.assertFalse(fixed)
+            self.assertTrue(any('Manual v4 最终 Markdown 门禁失败' in issue for issue in issues))
+            with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError,
+                    'Manual v4 最终 Markdown 门禁失败'):
+                publish_to_blog.validate_staged_posts(posts, '2026-07-10')
 
     def test_hugo_gate_uses_staging_destination_without_blog_lock(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1917,6 +2064,113 @@ body
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'model-a', 'PD_BLOG_REVIEW_MAX_TOKENS': '8000'}):
             third = publish_to_blog.review_protocol_fingerprint()
         self.assertNotEqual(first, third)
+
+    def test_review_protocol_includes_manual_takeover_script_and_rejects_stale_generation_template(self):
+        completed = SimpleNamespace(stdout='hugo v0.test', stderr='', returncode=0)
+        publish_to_blog._REVIEW_PROTOCOL_CACHE.clear()
+        with mock.patch.object(
+                publish_to_blog, '_sha256_file', return_value='a' * 64,
+        ) as digest, mock.patch.object(
+                publish_to_blog.shutil, 'which', return_value='/missing/hugo',
+        ), mock.patch.object(
+                publish_to_blog.subprocess, 'run', return_value=completed,
+        ):
+            publish_to_blog.review_protocol_fingerprint()
+        dependency_names = {Path(call.args[0]).name for call in digest.call_args_list}
+        self.assertIn('manual-review-blog.py', dependency_names)
+
+        current = publish_to_blog.generation_template_fingerprint()
+        publish_to_blog.validate_current_generation_template({
+            'schemaVersion': 3, 'templateFingerprint': current,
+        })
+        with mock.patch.object(
+                publish_to_blog, 'generation_template_fingerprint', return_value='b' * 64,
+        ), self.assertRaisesRegex(
+                publish_to_blog.PublishDataValidationError, '重新运行 generate-blog.py',
+        ):
+            publish_to_blog.validate_current_generation_template({
+                'schemaVersion': 3, 'templateFingerprint': current,
+            })
+
+    def test_manual_review_provenance_accepts_generation_deletion_record(self):
+        date_str = '2026-08-25'
+        manifest_sha = 'a' * 64
+        base_head = 'b' * 40
+        file_checks = {
+            'titleAndMetadata': True, 'technicalNarrative': True,
+            'factualClaims': True, 'experimentComparisons': True,
+            'reproducibility': True, 'limitations': True,
+            'scoring': True, 'images': True,
+        }
+        batch_checks = {
+            'generationManifestVerified': True, 'baseHeadVerified': True,
+            'fileHashesVerified': True, 'frontmatterVerified': True,
+            'markdownVerified': True, 'contentSemanticsVerified': True,
+            'imageReferencesVerified': True, 'hugoGateVerified': True,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            page = repo / 'content/posts/2026-08-25-paper.md'
+            page.parent.mkdir(parents=True)
+            page.write_text(
+                '---\npaper_digest_arxiv_id: "2608.12345"\n---\n正文报告 WER 7.1%。\n',
+                encoding='utf-8',
+            )
+            existing_sha = publish_to_blog._sha256_file(page)
+            receipt = {
+                'reviewMode': 'manual_complete',
+                'files': [
+                    {'path': 'content/posts/2026-08-25-paper.md', 'deleted': False,
+                     'sha256': existing_sha},
+                    {'path': 'content/posts/2026-08-25-stale.md', 'deleted': True,
+                     'sha256': None},
+                ],
+                'reviewProvenance': {
+                    'version': 2, 'mode': 'manual_complete', 'agent': 'Codex',
+                    'basis': 'deterministic_and_manual_semantic_review',
+                    'reason': '逐页核对技术叙事、实验事实和受控删除语义后签发人工凭证。',
+                    'completedAt': '2026-08-25T12:00:00.000+08:00',
+                    'checks': batch_checks,
+                    'generationManifestSha256': manifest_sha,
+                    'baseHead': base_head,
+                    'fileCount': 2,
+                    'files': [
+                        {
+                            'path': 'content/posts/2026-08-25-paper.md',
+                            'sha256': existing_sha, 'checks': file_checks,
+                            'notes': '2608.12345：核对方法数据流、WER 7.1% 实验数字、开源范围与局限边界。',
+                        },
+                        {
+                            'path': 'content/posts/2026-08-25-stale.md',
+                            'deleted': True, 'sha256': None,
+                            'checks': {'deletionVerified': True},
+                            'notes': '确认删除旧页面 2026-08-25-stale，且工作树已不存在该过期条目。',
+                        },
+                    ],
+                    'reviewedPathSetSha256': 'c' * 64,
+                    'reviewProtocolFingerprint': 'd' * 64,
+                },
+            }
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)):
+                self.assertIsNone(publish_to_blog._manual_review_provenance_error(
+                    receipt, date_str=date_str,
+                    generation_manifest_sha256=manifest_sha,
+                    expected_base_head=base_head,
+                ))
+                escaped = json.loads(json.dumps(receipt))
+                escaped['files'][0]['path'] = '../escaped.md'
+                escaped['reviewProvenance']['files'][0]['path'] = '../escaped.md'
+                self.assertIn('路径越界', publish_to_blog._manual_review_provenance_error(
+                    escaped, date_str=date_str,
+                    generation_manifest_sha256=manifest_sha,
+                    expected_base_head=base_head,
+                ))
+                receipt['reviewProvenance']['files'][1]['deleted'] = False
+                self.assertIn('删除语义不一致', publish_to_blog._manual_review_provenance_error(
+                    receipt, date_str=date_str,
+                    generation_manifest_sha256=manifest_sha,
+                    expected_base_head=base_head,
+                ))
 
     def test_reusable_generation_manifest_rejects_empty_duplicate_and_bad_sha_records(self):
         with tempfile.TemporaryDirectory() as tmp:

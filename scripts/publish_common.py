@@ -67,15 +67,25 @@ SCORING_COMPARE_FIELDS = (
 )
 MANUAL_OVERRIDE_ALLOWED_FIELDS = frozenset(SCORING_COMPARE_FIELDS)
 MANUAL_OVERRIDE_KEYS = frozenset({'type', 'source', 'reason', 'fields'})
-EXPERIMENT_TABLE_CONTRACT_VERSION = 'bounded-v1'
+EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION = 'bounded-v1'
+EXPERIMENT_TABLE_CONTRACT_VERSION = 'evidence-rich-v2'
+EXPERIMENT_TABLE_CONTRACT_VERSIONS = frozenset({
+    EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION,
+    EXPERIMENT_TABLE_CONTRACT_VERSION,
+})
 METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1'
+IMAGE_NARRATIVE_CONTRACT_VERSION = 'context-bound-v1'
+EDITORIAL_QUALITY_CONTRACT_VERSION = 'reader-facing-v1'
+DIGEST_INDEX_READER_QUALITY_VERSION = 'reader-facing-v1'
 MANUAL_DEPTH_CONTRACT_VERSION = 'full-text-evidence-v1'
 MANUAL_DEPTH_CONTRACT_VERSION_V2 = 'full-text-evidence-v2'
 MANUAL_DEPTH_CONTRACT_VERSION_V3 = 'full-text-evidence-v3'
+MANUAL_DEPTH_CONTRACT_VERSION_V4 = 'full-text-evidence-v4'
 MANUAL_DEPTH_CONTRACT_VERSIONS = frozenset({
     MANUAL_DEPTH_CONTRACT_VERSION,
     MANUAL_DEPTH_CONTRACT_VERSION_V2,
     MANUAL_DEPTH_CONTRACT_VERSION_V3,
+    MANUAL_DEPTH_CONTRACT_VERSION_V4,
 })
 MANUAL_COMPLETE_STATUS = 'manual_complete'
 MANUAL_COMPLETE_PROVENANCE_VERSION = 2
@@ -99,15 +109,47 @@ MANUAL_BOILERPLATE_PATTERNS = (
     re.compile(r'不能把整条流水线的收益都归因'),
     re.compile(r'对于多模态系统，还要区分'),
 )
+GENERIC_IMAGE_NARRATIVE_PATTERNS = (
+    re.compile(r'论文的关键实验比较.*读图时需同时保留正文列出的数据集、指标方向和实验条件'),
+    re.compile(r'这项视觉证据只支持图注与正文对应设置下的比较，不能外推为未测试条件中的统一结论'),
+    re.compile(r'论文的系统结构或处理流程.*组件职责和数据流逐项对照'),
+    re.compile(r'图中的箭头和分支用于说明已披露的组件关系，不代表正文未声明的额外训练阶段'),
+    re.compile(r'论文的实现细节或数据示例.*核对实现条件与适用边界'),
+    re.compile(r'图示用于补足实现语境，不替代论文未报告的配置、消融或部署测量'),
+)
 EXPERIMENT_TABLE_LIMITS = {
     'max_tables': 2,
     'max_data_rows': 12,
     'max_metric_columns': 8,
+    'min_evidence_rows': 3,
+    'min_numeric_cells': 2,
 }
 TABLE_IDENTIFIER_HEADER_RE = re.compile(
     r'(?:^|\b)(?:method|model|system|config(?:uration)?|dataset|corpus|benchmark|task|'
-    r'language|scenario|condition|setting|split|category|type|modality|version)(?:\b|$)'
-    r'|方法|模型|系统|配置|数据集|语料|基准|任务|语言|场景|条件|设置|划分|类别|类型|模态|版本',
+    r'language|scenario|condition|setting|split|category|type|modality|version|'
+    r'stage|phase|step|round|epoch|decoder|decode|context|metric|measure|algorithm)(?:\b|$)'
+    r'|方法|模型|系统|配置|数据集|语料|基准|任务|语言|场景|条件|设置|划分|类别|类型|模态|版本|'
+    r'阶段|步骤|轮次|训练轮|解码|上下文|指标|度量|算法',
+    flags=re.IGNORECASE,
+)
+TABLE_VAGUE_METRIC_HEADER_RE = re.compile(
+    r'^(?:结果|数值|数值变化|观察|观察结果|实际观测|报告结果|主要观察|说明|解释|含义|方向|关键条件|结论|结论边界|证据边界|应如何解读|对照或说明|对照或变化|结果或结论)$',
+    flags=re.IGNORECASE,
+)
+TABLE_DIRECTION_MARK_RE = re.compile(
+    r'(?:↑|↓|越高越好|越低越好|higher\s+is\s+better|lower\s+is\s+better|max(?:imize)?|min(?:imize)?)',
+    flags=re.IGNORECASE,
+)
+TABLE_DIRECTIONAL_METRIC_RE = re.compile(
+    r'(?:accuracy|precision|recall|f[- ]?score|\bf1\b|\bwer\b|\bcer\b|\bder\b|\bauc\b|\bmap\b|\bmiou\b|\biou\b|\bpesq\b|\bstoi\b|\bsdr\b|\bsisdr\b|\bsnr\b|\bbleu\b|\brouge\b|\bmeteor\b|\bclap\b|\bfad\b|\brmse\b|\bmae\b|\berle\b|\bmos\b|准确率|精确率|召回率|错误率|误差|损失|延迟|耗时|速度|吞吐|内存|显存|功耗|能耗|复杂度|参数量|相关系数|相似度)',
+    flags=re.IGNORECASE,
+)
+TABLE_NON_DIRECTIONAL_MEASURE_RE = re.compile(
+    r'(?:置信区间|confidence interval|\bci\b|p[- ]?value|p值|显著性|样本数|数量|规模|时长|采样率|方差|标准差|系数|\bbeta\b|\bΔ?AIC\b|复杂度|参数|容量|内存|显存|耗时|延迟|速度|吞吐|功耗|能耗|bytes?|hours?|seconds?|milliseconds?)',
+    flags=re.IGNORECASE,
+)
+TABLE_NUMERIC_CELL_RE = re.compile(
+    r'(?:^|[^A-Za-z])[-+]?\d(?:[\d,]*)(?:\.\d+)?(?:\s*(?:%|pp|×|x|ms|s|h|Hz|kHz|MHz|GB|MB|KB|dB|mJ|W))?',
     flags=re.IGNORECASE,
 )
 
@@ -120,8 +162,582 @@ def _extract_analysis_section(text, title):
     return match.group(1).strip() if match else ''
 
 
+def _normalize_image_narrative_text(value):
+    return re.sub(r'\s+', ' ', str(value or '')).strip()
+
+
+def _validate_image_narrative_pair(lead, explanation):
+    lead = _normalize_image_narrative_text(lead)
+    explanation = _normalize_image_narrative_text(explanation)
+    if len(lead) < 18 or len(explanation) < 30:
+        return '图前阅读任务或图后解释过短'
+    if not re.search(r'(?:下图|如下图)', lead) \
+            or not re.search(r'(?:核对|观察|比较|追踪|辨认|判断|查看|阅读重点|验证)', lead):
+        return '图前文字没有提出针对该图的明确阅读任务'
+    if any(pattern.search(lead) or pattern.search(explanation)
+           for pattern in GENERIC_IMAGE_NARRATIVE_PATTERNS):
+        return '图片邻文命中跨论文通用模板'
+    if not re.search(r'(?:图中|曲线|热图|色块|箭头|分支|波形|语谱图|频谱|样例|柱状|散点|轨迹|矩阵|流程)', explanation):
+        return '图后文字没有指出图中实际可见的结构或对照'
+    if not re.search(r'(?:仅|只|不能|不等于|不直接|未|边界|条件|范围|限于|仍需)', explanation):
+        return '图后文字没有交代结论的条件或边界'
+    return None
+
+
+def validate_image_narrative_contract(paper):
+    """Validate exact plan-to-canonical adjacency for context-bound image prose."""
+    analysis = str(paper.get('analysis') or '')
+    image_manifest = paper.get('imageManifest') or {}
+    supplement = image_manifest.get('supplement') or {}
+    plans = image_manifest.get('insertionPlan') or supplement.get('plans') or []
+    diagnostics = image_manifest.get('insertionDiagnostics') or supplement.get('insertionDiagnostics') or []
+    exclusions = paper.get('publishImageExclusions') or []
+    excluded_urls = {
+        item.get('url') for item in exclusions
+        if isinstance(item, dict) and isinstance(item.get('url'), str)
+    }
+    excluded_numbers = {
+        item.get('index', position + 1)
+        for position, item in enumerate(image_manifest.get('selected') or [])
+        if isinstance(item, dict) and item.get('url') in excluded_urls
+    }
+    if excluded_numbers:
+        plans = [
+            item for item in plans
+            if not isinstance(item, dict) or item.get('imageNumber') not in excluded_numbers
+        ]
+        diagnostics = [
+            item for item in diagnostics
+            if not isinstance(item, dict) or item.get('imageNumber') not in excluded_numbers
+        ]
+    inserted_numbers = {
+        item.get('imageNumber') for item in diagnostics
+        if isinstance(item, dict) and item.get('inserted') is True
+    }
+    inserted_plans = [
+        item for item in plans
+        if isinstance(item, dict)
+        and (not inserted_numbers or item.get('imageNumber') in inserted_numbers)
+    ]
+    selected = paper.get('selectedImageUrls')
+    if not isinstance(selected, list):
+        selected = [
+            item.get('url') if isinstance(item, dict) else item
+            for item in image_manifest.get('selected', [])
+        ]
+    selected = [str(url) for url in selected if isinstance(url, str) and url]
+    if any(url in excluded_urls for url in selected):
+        return '发布图片排除项仍残留在 selectedImageUrls'
+    if len(inserted_plans) != len(selected):
+        return f'插图计划与最终选图数量不一致: {len(inserted_plans)}/{len(selected)}'
+    if not selected:
+        return None
+
+    blocks = [block.strip() for block in re.split(r'\n\s*\n', analysis) if block.strip()]
+    occurrences = []
+    for index, block in enumerate(blocks):
+        match = re.fullmatch(r'!\[(?:\\.|[^\]\\])*\]\((https://[^)]+)\)', block)
+        if match and match.group(1) in selected:
+            occurrences.append((index, match.group(1)))
+    occurrence_urls = [url for _index, url in occurrences]
+    if occurrence_urls != selected:
+        return '最终正文中的独立图片块 URL/顺序与 selectedImageUrls 不一致'
+
+    manifest_version = image_manifest.get('version', 1)
+    selected_manifest = image_manifest.get('selected') or []
+    downloaded_manifest = image_manifest.get('downloaded') or []
+
+    def manifest_item_url(item):
+        if isinstance(item, dict):
+            return item.get('url')
+        return item if isinstance(item, str) else None
+
+    def plan_url(plan):
+        image_number = plan.get('imageNumber') if isinstance(plan, dict) else None
+        if not isinstance(image_number, int) or image_number < 1:
+            return None
+        # Manual v2 manifests persist the final selected URL together with its
+        # canonical image index.  API manifests historically kept selected as
+        # strings, while imageNumber indexed the downloaded candidate array.
+        for position, item in enumerate(selected_manifest):
+            if not isinstance(item, dict):
+                continue
+            item_number = item.get('index', position + 1)
+            if item_number == image_number:
+                return manifest_item_url(item)
+        if image_number <= len(downloaded_manifest):
+            return manifest_item_url(downloaded_manifest[image_number - 1])
+        if manifest_version < 2 and len(inserted_plans) == len(selected_manifest):
+            ordered_numbers = [item.get('imageNumber') for item in inserted_plans]
+            if ordered_numbers == list(range(1, len(inserted_plans) + 1)):
+                return manifest_item_url(selected_manifest[image_number - 1])
+        return None
+
+    plans_by_url = {}
+    unresolved_plans = []
+    for plan in inserted_plans:
+        bound_url = plan_url(plan)
+        if bound_url and bound_url not in plans_by_url:
+            plans_by_url[bound_url] = plan
+        else:
+            unresolved_plans.append(plan)
+    strict_plan_binding = manifest_version >= 2 or not unresolved_plans
+
+    for index, url in occurrences:
+        if index == 0 or index + 1 >= len(blocks):
+            return f'{url} 缺少图前或图后相邻正文'
+        lead = _normalize_image_narrative_text(blocks[index - 1])
+        explanation = _normalize_image_narrative_text(blocks[index + 1])
+        issue = _validate_image_narrative_pair(lead, explanation)
+        if issue:
+            return f'{url} {issue}'
+        plan = plans_by_url.get(url)
+        if plan is None and not strict_plan_binding:
+            # Compatibility for old unversioned API manifests that did not
+            # retain the downloaded-candidate index needed to reconstruct the
+            # URL -> imageNumber mapping.  New/versioned manifests never use
+            # this prose-only fallback.
+            matched_index = next((position for position, candidate in enumerate(unresolved_plans)
+                                  if _normalize_image_narrative_text(candidate.get('lead')) == lead
+                                  and _normalize_image_narrative_text(candidate.get('explanation')) == explanation), None)
+            plan = unresolved_plans.pop(matched_index) if matched_index is not None else None
+        if plan is None:
+            return (
+                f'{url} 没有绑定同一 URL/索引的已审计插图计划，'
+                '相邻正文没有与已审计插图计划精确闭环'
+            )
+        if (_normalize_image_narrative_text(plan.get('lead')) != lead
+                or _normalize_image_narrative_text(plan.get('explanation')) != explanation):
+            return f'{url} 的相邻正文没有与已审计插图计划精确闭环'
+        plans_by_url.pop(url, None)
+    if plans_by_url or unresolved_plans:
+        return '存在没有落入最终正文的已审计插图计划'
+    return None
+
+
+def _validate_publish_image_exclusion_view(paper, paper_label):
+    """Validate the explicit reader-facing view derived from image exclusions."""
+    exclusions = paper.get('publishImageExclusions')
+    view = paper.get('publishImageExclusionView')
+    if not isinstance(exclusions, list) or not exclusions:
+        if view is not None:
+            raise PublishDataValidationError(
+                f'{paper_label} 无图片排除项却携带 publishImageExclusionView'
+            )
+        return
+    if not isinstance(view, dict) or set(view) != {
+            'version', 'sourceAnalysisSha256', 'analysisSha256', 'excludedUrls',
+            'effectiveSelectedImageUrls', 'imageNarrativeContract'}:
+        raise PublishDataValidationError(
+            f'{paper_label} 发布图片排除后的派生视图凭证缺失或字段非法'
+        )
+    if view.get('version') != 1 \
+            or view.get('imageNarrativeContract') != IMAGE_NARRATIVE_CONTRACT_VERSION:
+        raise PublishDataValidationError(
+            f'{paper_label} 发布图片排除后的派生视图版本或图片契约非法'
+        )
+    source_sha = view.get('sourceAnalysisSha256')
+    current_sha = view.get('analysisSha256')
+    if not re.fullmatch(r'[0-9a-f]{64}', str(source_sha or '')) \
+            or not re.fullmatch(r'[0-9a-f]{64}', str(current_sha or '')):
+        raise PublishDataValidationError(
+            f'{paper_label} 发布图片排除后的正文 SHA 非法'
+        )
+    analysis = str(paper.get('analysis') or '')
+    expected_current_sha = hashlib.sha256(analysis.encode('utf-8')).hexdigest()
+    if current_sha != expected_current_sha:
+        raise PublishDataValidationError(
+            f'{paper_label} 发布图片排除后的正文 SHA 与当前 analysis 不一致'
+        )
+    excluded_urls = [
+        item.get('url') for item in exclusions
+        if isinstance(item, dict) and isinstance(item.get('url'), str)
+    ]
+    if len(excluded_urls) != len(exclusions) or view.get('excludedUrls') != excluded_urls:
+        raise PublishDataValidationError(
+            f'{paper_label} 发布图片排除后的 URL 集合与排除声明不一致'
+        )
+    selected = paper.get('selectedImageUrls')
+    if not isinstance(selected, list) \
+            or view.get('effectiveSelectedImageUrls') != selected:
+        raise PublishDataValidationError(
+            f'{paper_label} 发布图片排除后的选图快照与 selectedImageUrls 不一致'
+        )
+    if any(url in analysis for url in excluded_urls):
+        raise PublishDataValidationError(
+            f'{paper_label} 发布图片排除 URL 仍残留在读者正文'
+        )
+    manifest = paper.get('analysisManifest')
+    takeover = manifest.get('manualTakeover') if isinstance(manifest, dict) else None
+    if isinstance(takeover, dict) and takeover.get('analysisSha256') != source_sha:
+        raise PublishDataValidationError(
+            f'{paper_label} 发布图片排除前正文 SHA 与 Manual canonical 不一致'
+        )
+
+
 def _manual_hash(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
+
+
+def _normalize_manual_evidence(value):
+    return re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(value or '')))
+
+
+def _manual_claim_field_text(value):
+    if isinstance(value, dict):
+        if value.get('notReported') is True:
+            return 'notReported'
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    if isinstance(value, list):
+        return ' / '.join(_manual_claim_field_text(item) for item in value)
+    return str(value or '').strip()
+
+
+def _manual_claim_not_reported(value):
+    if isinstance(value, dict):
+        return value.get('notReported') is True
+    return bool(re.fullmatch(r'(?:not[_ -]?reported|正文未报告|未报告)', str(value or '').strip(), re.I))
+
+
+MANUAL_RESULT_CLAIM_SEMANTIC_FIELDS = (
+    'datasetOrSetting', 'splitOrCondition', 'method', 'baseline',
+    'metric', 'value', 'unit', 'direction',
+)
+MANUAL_ENGLISH_NUMBER_WORDS = {
+    'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
+    'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9',
+    'ten': '10', 'eleven': '11', 'twelve': '12', 'thirteen': '13',
+    'fourteen': '14', 'fifteen': '15', 'sixteen': '16',
+    'seventeen': '17', 'eighteen': '18', 'nineteen': '19', 'twenty': '20',
+}
+MANUAL_RESULT_DIRECTION_PATTERNS = (
+    re.compile(
+        r'^(?:↑|(?:越)?高(?:越)?好|越大越好|'
+        r'higher(?:[\s_-]+\w+){0,3}[\s_-]+is[\s_-]+better|'
+        r'increase(?:[\s_-]+is)?[\s_-]+better)$', re.I,
+    ),
+    re.compile(
+        r'^(?:↓|(?:越)?低(?:越)?好|越小越好|'
+        r'lower(?:[\s_-]+\w+){0,3}[\s_-]+is[\s_-]+better|'
+        r'decrease(?:[\s_-]+is)?[\s_-]+better)$', re.I,
+    ),
+    re.compile(r'^(?:descriptive|描述性)$', re.I),
+    re.compile(
+        r'^(?:绝对值反映关联强度|'
+        r'larger\s+(?:absolute\s+)?magnitude\s+means\s+stronger\s+association)$',
+        re.I,
+    ),
+)
+
+
+def _manual_canonical_numeric_lexeme(value):
+    normalized = unicodedata.normalize('NFKC', str(value or '')).lower()
+    normalized = re.sub(r'[\u2212\u2012\u2013\u2014]', '-', normalized).replace(',', '')
+    if normalized in MANUAL_ENGLISH_NUMBER_WORDS:
+        return MANUAL_ENGLISH_NUMBER_WORDS[normalized]
+    try:
+        number = float(normalized)
+    except (TypeError, ValueError):
+        return normalized
+    if not math.isfinite(number):
+        return normalized
+    if number == 0:
+        return '0'
+    if number.is_integer():
+        return str(int(number))
+    return format(number, '.15g')
+
+
+def _manual_numeric_lexemes(value):
+    normalized = unicodedata.normalize('NFKC', _manual_claim_field_text(value))
+    normalized = re.sub(r'[\u2212\u2012\u2013\u2014]', '-', normalized)
+    number_words = '|'.join(MANUAL_ENGLISH_NUMBER_WORDS)
+    matches = re.findall(
+        rf'[-+]?(?:\d{{1,3}}(?:,\d{{3}})+|\d+)?(?:\.\d+)(?:[eE][-+]?\d+)?'
+        rf'|[-+]?(?:\d{{1,3}}(?:,\d{{3}})+|\d+)(?:[eE][-+]?\d+)?'
+        rf'|\b(?:{number_words})\b',
+        normalized,
+        flags=re.I,
+    )
+    return [_manual_canonical_numeric_lexeme(item) for item in matches]
+
+
+def _manual_normalized_semantic_text(value):
+    normalized = unicodedata.normalize('NFKC', _manual_claim_field_text(value)).lower()
+    normalized = re.sub(r'[\u2212\u2012\u2013\u2014]', '-', normalized)
+    return re.sub(r'[\s\W_]+', '', normalized, flags=re.UNICODE)
+
+
+def _manual_binding_reuse_key(value):
+    normalized = unicodedata.normalize('NFKC', str(value or '')).lower()
+    normalized = re.sub(r'https?://\S+', '', normalized)
+    return re.sub(r'[\s\W_]+', '', normalized, flags=re.UNICODE)
+
+
+def _manual_result_direction_supported(value):
+    if _manual_claim_not_reported(value):
+        return True
+    text = str(value or '').strip()
+    return any(pattern.fullmatch(text) for pattern in MANUAL_RESULT_DIRECTION_PATTERNS)
+
+
+def _manual_result_claim_signature(claim):
+    signature = []
+    for field in MANUAL_RESULT_CLAIM_SEMANTIC_FIELDS:
+        value = claim.get(field)
+        if _manual_claim_not_reported(value):
+            reason = value.get('reason') if isinstance(value, dict) else ''
+            signature.append(f'notReported:{_normalize_manual_evidence(reason)}')
+        else:
+            signature.append(
+                f'{_manual_normalized_semantic_text(value)}:'
+                f'{",".join(_manual_numeric_lexemes(value))}'
+            )
+    return json.dumps(signature, ensure_ascii=False, separators=(',', ':'))
+
+
+def _manual_reader_result_evidence_blocks(value):
+    blocks = []
+    table = []
+    prose = []
+
+    def flush_table():
+        if table:
+            blocks.append('\n'.join(table))
+            table.clear()
+
+    def flush_prose():
+        if not prose:
+            return
+        paragraph = ' '.join(prose).strip()
+        if paragraph:
+            blocks.append(paragraph)
+            blocks.extend(
+                item.strip() for item in re.split(r'(?<=[。！？!?;；])', paragraph)
+                if item.strip()
+            )
+        prose.clear()
+
+    for line in str(value or '').split('\n'):
+        if re.fullmatch(r'\s*\|.*\|\s*', line):
+            flush_prose()
+            table.append(line)
+        elif not line.strip():
+            flush_table()
+            flush_prose()
+        else:
+            flush_table()
+            prose.append(line.strip())
+    flush_table()
+    flush_prose()
+    return list(dict.fromkeys(blocks))
+
+
+def _validate_manual_result_claim_bindings(
+        claim, binding_field, evidence_text, prefix, *, require_membership=True):
+    bindings = claim.get(binding_field)
+    if not isinstance(bindings, dict):
+        return f'{prefix}.{binding_field} 必须是逐字段证据对象'
+    if set(bindings) != set(MANUAL_RESULT_CLAIM_SEMANTIC_FIELDS) \
+            or len(bindings) != len(MANUAL_RESULT_CLAIM_SEMANTIC_FIELDS):
+        return (
+            f'{prefix}.{binding_field} 必须且只能包含 '
+            f'{", ".join(MANUAL_RESULT_CLAIM_SEMANTIC_FIELDS)}'
+        )
+    normalized_evidence = _normalize_manual_evidence(evidence_text)
+    repeated = {}
+    for field in MANUAL_RESULT_CLAIM_SEMANTIC_FIELDS:
+        fragment = bindings.get(field)
+        normalized_fragment = _normalize_manual_evidence(fragment) \
+            if isinstance(fragment, str) else ''
+        if len(normalized_fragment) < 2:
+            return (
+                f'{prefix}.{binding_field}.{field} '
+                '必须是至少 2 个非空白字符的连续证据片段'
+            )
+        if require_membership and normalized_fragment not in normalized_evidence:
+            return f'{prefix}.{binding_field}.{field} 不存在于本条 sourceQuote'
+        reuse_key = _manual_binding_reuse_key(fragment) or normalized_fragment
+        repeated[reuse_key] = repeated.get(reuse_key, 0) + 1
+        if field == 'value' and not _manual_claim_not_reported(claim.get('value')):
+            binding_numbers = _manual_numeric_lexemes(fragment)
+            missing = [
+                number for number in _manual_numeric_lexemes(claim.get('value'))
+                if number not in binding_numbers
+            ]
+            if missing:
+                return (
+                    f'{prefix}.{binding_field}.value '
+                    f'未覆盖 claim.value 数值 {missing[0]}'
+                )
+        if _manual_claim_not_reported(claim.get(field)) and not re.search(
+                r'not\s+report|not\s+provide|without|unavailable|qualitative|'
+                r'degrad\w*|fail\w*|未报告|未给出|未提供|不可得|定性|退化|失败',
+                fragment, re.I):
+            return f'{prefix}.{binding_field}.{field} 未给出缺失、定性或负面证据片段'
+    if any(count > 3 for count in repeated.values()):
+        return f'{prefix}.{binding_field} 同一证据片段最多绑定 3 个字段'
+    return None
+
+
+def _manual_result_claim_bound_to_reader_block(claim, reader_blocks):
+    expected_numbers = [] if _manual_claim_not_reported(claim.get('value')) \
+        else _manual_numeric_lexemes(claim.get('value'))
+    bindings = claim.get('readerBindings') or {}
+    for block in reader_blocks:
+        block_numbers = _manual_numeric_lexemes(block)
+        if expected_numbers and any(number not in block_numbers for number in expected_numbers):
+            continue
+        normalized_block = _normalize_manual_evidence(block)
+        if all(
+                _normalize_manual_evidence(bindings.get(field)) in normalized_block
+                for field in MANUAL_RESULT_CLAIM_SEMANTIC_FIELDS):
+            return True
+    return False
+
+
+def _manual_result_claim_source_text(paper):
+    manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
+    takeover = manifest.get('manualTakeover') if isinstance(manifest, dict) else None
+    claims = takeover.get('resultClaims') if isinstance(takeover, dict) else None
+    if not isinstance(claims, list):
+        return ''
+    return '\n'.join(
+        str(claim.get('sourceQuote') or '')
+        for claim in claims
+        if isinstance(claim, dict)
+    )
+
+
+def _validate_manual_v4_result_claims(takeover, analysis, paper_label):
+    """Mirror the source-bound Manual v4 result-claim shape at publish time.
+
+    The controlled full text is intentionally not embedded in publication data,
+    so its original membership check remains an ingestion responsibility.  This
+    mirror still rejects weakened/self-consistent payloads: ordinary papers need
+    three unique claims, exceptions are type-gated, every semantic field binds
+    an exact local source and reader fragment, and empirical papers retain a
+    source-bound numeric claim in one reader-visible experiment evidence block.
+    """
+    claims = takeover.get('resultClaims')
+    exception = takeover.get('resultClaimsException')
+    document_type = str(takeover.get('documentType') or '')
+    minimum_claims = 3
+    if exception is not None:
+        if not isinstance(exception, dict):
+            raise PublishDataValidationError(
+                f'{paper_label} manual v4 resultClaimsException 必须是对象'
+            )
+        exception_type = str(exception.get('type') or '')
+        if not re.fullmatch(r'(?:theoretical|qualitative)', exception_type, re.I) \
+                or not re.search(r'(?:理论|定性|theor|qualitative)', document_type, re.I):
+            raise PublishDataValidationError(
+                f'{paper_label} manual v4 resultClaims 例外仅允许理论/定性文档'
+            )
+        if len(_normalize_manual_evidence(exception.get('reason'))) < 20 \
+                or not isinstance(exception.get('sourceQuote'), str) \
+                or len(_normalize_manual_evidence(exception.get('sourceQuote'))) < 8:
+            raise PublishDataValidationError(
+                f'{paper_label} manual v4 resultClaims 例外缺少充分理由或全文原句'
+            )
+        minimum_claims = 1
+    if not isinstance(claims, list) or len(claims) < minimum_claims:
+        raise PublishDataValidationError(
+            f'{paper_label} manual v4 resultClaims 至少需要 {minimum_claims} 条'
+        )
+    required_fields = (
+        'datasetOrSetting', 'splitOrCondition', 'method', 'baseline',
+        'metric', 'value', 'unit', 'direction', 'sourceQuote',
+    )
+    reader_results = _extract_analysis_section(analysis, '实验结果')
+    reader_blocks = _manual_reader_result_evidence_blocks(reader_results)
+    signatures = {}
+    numeric_claim_count = 0
+    for index, claim in enumerate(claims):
+        if not isinstance(claim, dict):
+            raise PublishDataValidationError(
+                f'{paper_label} manual v4 resultClaims[{index}] 必须是对象'
+            )
+        for field in required_fields:
+            if field not in claim or not _normalize_manual_evidence(
+                    _manual_claim_field_text(claim.get(field))):
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v4 resultClaims[{index}].{field} 缺失'
+                )
+            value = claim.get(field)
+            if field != 'sourceQuote' and re.search(
+                    r'not[_ -]?reported.*\d|\d.*not[_ -]?reported',
+                    _manual_claim_field_text(value), re.I):
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v4 resultClaims[{index}].{field} '
+                    '不得把 notReported 与数值混写'
+                )
+            if field != 'sourceQuote' and _manual_claim_not_reported(value) \
+                    and (not isinstance(value, dict)
+                         or value.get('notReported') is not True
+                         or len(_normalize_manual_evidence(value.get('reason'))) < 8):
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v4 resultClaims[{index}].{field} '
+                    'notReported 必须使用 {notReported:true, reason} 且附理由'
+                )
+        source_quote = claim.get('sourceQuote')
+        if not isinstance(source_quote, str) \
+                or len(_normalize_manual_evidence(source_quote)) < 8:
+            raise PublishDataValidationError(
+                f'{paper_label} manual v4 resultClaims[{index}].sourceQuote 过短'
+            )
+        prefix = f'{paper_label} manual v4 resultClaims[{index}]'
+        if not _manual_result_direction_supported(claim.get('direction')):
+            raise PublishDataValidationError(
+                f'{prefix}.direction 不是受支持的方向语义'
+            )
+        binding_issue = _validate_manual_result_claim_bindings(
+            claim, 'sourceBindings', source_quote, prefix,
+        )
+        if binding_issue:
+            raise PublishDataValidationError(binding_issue)
+        binding_issue = _validate_manual_result_claim_bindings(
+            claim, 'readerBindings', reader_results, prefix,
+            require_membership=False,
+        )
+        if binding_issue:
+            raise PublishDataValidationError(binding_issue)
+        if not _manual_claim_not_reported(claim.get('value')):
+            value_numbers = _manual_numeric_lexemes(claim.get('value'))
+            if not value_numbers:
+                raise PublishDataValidationError(
+                    f'{prefix}.value 必须包含可核对数字，'
+                    '缺失值应使用带理由的 notReported 对象'
+                )
+            numeric_claim_count += 1
+            quote_numbers = _manual_numeric_lexemes(source_quote)
+            missing_quote = [number for number in value_numbers if number not in quote_numbers]
+            if missing_quote:
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v4 resultClaims[{index}] 数值 '
+                    f'{missing_quote[0]} 未出现在 sourceQuote'
+                )
+        if not _manual_result_claim_bound_to_reader_block(claim, reader_blocks):
+            raise PublishDataValidationError(
+                f'{prefix}.readerBindings '
+                '未共同落在读者正文实验结果的同一局部证据块'
+            )
+        signature = _manual_result_claim_signature(claim)
+        if signature in signatures:
+            raise PublishDataValidationError(
+                f'{prefix} 与 resultClaims[{signatures[signature]}] 重复，'
+                '不能重复计入最低条数'
+            )
+        signatures[signature] = index
+    empirical = exception is None and not re.search(
+        r'(?:理论|定性|theor|qualitative)', document_type, re.I,
+    )
+    if empirical and claims and numeric_claim_count == 0:
+        raise PublishDataValidationError(
+            f'{paper_label} 实证论文的 resultClaims '
+            '至少需要 1 条包含可核对数字的声明'
+        )
+    return claims
 
 
 def _manual_boilerplate(analysis):
@@ -137,6 +753,19 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
     )
     if not uses_manual and manifest.get('manualTakeover') is None:
         return
+    contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
+    if contracts.get('manualDepth') == MANUAL_DEPTH_CONTRACT_VERSION_V4 \
+            and contracts.get('experimentTables') != EXPERIMENT_TABLE_CONTRACT_VERSION:
+        raise PublishDataValidationError(
+            f'{paper_label} manual v4 必须声明 '
+            f'experimentTables={EXPERIMENT_TABLE_CONTRACT_VERSION}'
+        )
+    if contracts.get('manualDepth') == MANUAL_DEPTH_CONTRACT_VERSION_V4 \
+            and contracts.get('editorialQuality') != EDITORIAL_QUALITY_CONTRACT_VERSION:
+        raise PublishDataValidationError(
+            f'{paper_label} manual v4 必须声明 '
+            f'editorialQuality={EDITORIAL_QUALITY_CONTRACT_VERSION}'
+        )
     takeover = manifest.get('manualTakeover')
     if not isinstance(takeover, dict):
         raise PublishDataValidationError(f'{paper_label} manual_complete 缺少 manualTakeover provenance')
@@ -155,9 +784,9 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
         if not re.fullmatch(r'[a-f0-9]{64}', str(takeover.get('promptSha256') or '')):
             raise PublishDataValidationError(f'{paper_label} manualTakeover.promptSha256 非法')
         manual_depth = (manifest.get('contracts') or {}).get('manualDepth')
-        if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V3 \
+        if manual_depth in {MANUAL_DEPTH_CONTRACT_VERSION_V3, MANUAL_DEPTH_CONTRACT_VERSION_V4} \
                 and not re.fullmatch(r'[a-f0-9]{64}', str(takeover.get('manualAuthoringPromptSha256') or '')):
-            raise PublishDataValidationError(f'{paper_label} manual v3 缺少 manualAuthoringPromptSha256')
+            raise PublishDataValidationError(f'{paper_label} manual v3/v4 缺少 manualAuthoringPromptSha256')
         analysis_sha = hashlib.sha256(str(paper.get('analysis') or '').encode('utf-8')).hexdigest()
         if takeover.get('analysisSha256') != analysis_sha:
             raise PublishDataValidationError(f'{paper_label} manualTakeover.analysisSha256 与正文不一致')
@@ -170,6 +799,11 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
         required_review = ('sourceVerified', 'analysisContractVerified', 'scoringVerified', 'stageEvidenceVerified')
         if not isinstance(review, dict) or any(review.get(key) is not True for key in required_review):
             raise PublishDataValidationError(f'{paper_label} manualTakeover.review 未确认来源、正文、评分和阶段证据')
+        if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V4 \
+                and review.get('readerQualityVerified') is not True:
+            raise PublishDataValidationError(
+                f'{paper_label} manual v4 review 未确认 readerQualityVerified'
+            )
         audit = takeover.get('audit')
         if not isinstance(audit, dict) or audit.get('version') != 1:
             raise PublishDataValidationError(f'{paper_label} manualTakeover.audit 必须为 v1')
@@ -190,6 +824,47 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
             raise PublishDataValidationError(f'{paper_label} manual evidenceLedger 不完整')
         if takeover.get('evidenceLedgerSha256') != _manual_hash(ledger):
             raise PublishDataValidationError(f'{paper_label} manual evidenceLedger SHA 不一致')
+        if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V4:
+            result_claims = _validate_manual_v4_result_claims(
+                takeover, paper.get('analysis'), paper_label,
+            )
+            expected_claims_sha = _manual_hash({
+                'claims': result_claims,
+                'exception': takeover.get('resultClaimsException'),
+            })
+            if takeover.get('resultClaimsSha256') != expected_claims_sha:
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v4 resultClaims SHA 不一致'
+                )
+            rubric = takeover.get('readabilityRubric')
+            dimensions = rubric.get('dimensions') if isinstance(rubric, dict) else None
+            required_dimensions = {
+                'paragraphLogic', 'interParagraphContinuity', 'sectionResponsibility',
+                'factLocality', 'terminologyAndPerspective', 'sentenceRhythm',
+                'antiTemplateOriginality',
+            }
+            if not isinstance(dimensions, dict) or set(dimensions) != required_dimensions:
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v4 readabilityRubric 维度不完整'
+                )
+            scores = []
+            for dimension, entry in dimensions.items():
+                if not isinstance(entry, dict) or not isinstance(entry.get('score'), int) \
+                        or entry['score'] < 0 or entry['score'] > 2 \
+                        or len(str(entry.get('reason') or '').strip()) < 12 \
+                        or not isinstance(entry.get('evidence'), list) or not entry['evidence']:
+                    raise PublishDataValidationError(
+                        f'{paper_label} manual v4 readabilityRubric.{dimension} 非法'
+                    )
+                scores.append(entry['score'])
+            if sum(scores) < 12 or 0 in scores:
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v4 readabilityRubric 未达到 12/14 且无 0 分'
+                )
+            if takeover.get('readabilityRubricSha256') != _manual_hash(rubric):
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v4 readabilityRubric SHA 不一致'
+                )
         evidence = takeover.get('stageEvidence')
         stages = manifest.get('stages') or {}
         if not isinstance(evidence, dict):
@@ -258,7 +933,7 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
             state = stages.get(stage)
             if not isinstance(item, dict) or not isinstance(state, dict) or item.get('status') != state.get('status'):
                 raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage} 与阶段状态不一致')
-            if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V3 \
+            if manual_depth in {MANUAL_DEPTH_CONTRACT_VERSION_V3, MANUAL_DEPTH_CONTRACT_VERSION_V4} \
                     and (item.get('executionKind') != MANUAL_STAGE_EXECUTION_KIND
                          or state.get('executionKind') != MANUAL_STAGE_EXECUTION_KIND):
                 raise PublishDataValidationError(
@@ -306,7 +981,7 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
                     'stagePromptSha256': item['promptSha256'],
                     'stageContextSha256': item.get('contextSha256'),
                 }
-                if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V3:
+                if manual_depth in {MANUAL_DEPTH_CONTRACT_VERSION_V3, MANUAL_DEPTH_CONTRACT_VERSION_V4}:
                     expected_input_payload['executionKind'] = item.get('executionKind')
                 expected_input_sha = _manual_hash(expected_input_payload)
             else:
@@ -417,6 +1092,7 @@ def extract_markdown_tables(text):
             continue
         end = index + 2
         data_rows = 0
+        rows = []
         invalid_column_counts = []
         separator_columns = len(split_markdown_table_row(lines[index + 1]))
         while end < len(lines):
@@ -426,6 +1102,7 @@ def extract_markdown_tables(text):
             if len(cells) < 2 and not re.fullmatch(r'\s*\|.*\|\s*', lines[end]):
                 break
             data_rows += 1
+            rows.append(cells)
             if len(cells) != len(header):
                 invalid_column_counts.append((data_rows, len(cells)))
             end += 1
@@ -437,16 +1114,143 @@ def extract_markdown_tables(text):
                 identifier_columns += 1
         tables.append({
             'header': header,
+            'rows': rows,
+            'start_line': index,
+            'end_line': end - 1,
             'data_rows': data_rows,
             'separator_columns': separator_columns,
             'invalid_column_counts': invalid_column_counts,
+            'identifier_columns': identifier_columns,
             'metric_columns': max(0, len(header) - identifier_columns),
         })
         index = max(end, index + 2)
     return tables
 
 
-def validate_experiment_table_contract(analysis):
+def _source_experiment_evidence(source_text):
+    """Mirror Node's bounded experiment-section evidence selection."""
+    source = str(source_text or '')
+    start = re.search(
+        r'(?:^|\n)\s*(?:\d+(?:\.\d+)*\s+)?'
+        r'(?:experiments?|experimental\s+(?:setup|results?)|evaluation|'
+        r'results?(?:\s+and\s+discussion)?)\s*(?:\n|$)',
+        source,
+        re.I,
+    )
+    if not start:
+        return source[:50000]
+    tail = source[start.start():start.start() + 60000]
+    end = re.search(
+        r'(?:^|\n)\s*(?:\d+(?:\.\d+)*\s+)?'
+        r'(?:conclusions?|limitations?|references?)\s*(?:\n|$)',
+        tail,
+        re.I,
+    )
+    return tail[:end.start()] if end and end.start() > 0 else tail
+
+
+def _validate_experiment_table_evidence_depth(
+        analysis, document_type='', source_text=''):
+    results = _extract_analysis_section(analysis, '实验结果')
+    tables = extract_markdown_tables(results)
+    empirical = document_type not in {'综述', '理论研究'}
+    source_text = _source_experiment_evidence(source_text)
+    source_has_table = re.search(
+        r'\b(?:table|tbl)\.?\s*(?:[a-z]?\d+|[ivxlcdm]+)\b|'
+        r'表\s*[（(]?\s*(?:\d+|[一二三四五六七八九十百零]+)|'
+        r'\\begin\{tabular\}|<table[\s>]',
+        source_text,
+        re.I,
+    )
+    if empirical and source_has_table and not tables:
+        return '实证论文的实验结果必须包含至少一张可读 Markdown 证据表'
+    total_rows = sum(table['data_rows'] for table in tables)
+    if empirical and tables and total_rows < EXPERIMENT_TABLE_LIMITS['min_evidence_rows']:
+        return f"实验表格合计只有 {total_rows} 个数据行，至少需要 {EXPERIMENT_TABLE_LIMITS['min_evidence_rows']} 行比较证据"
+    numeric_cells = 0
+    result_lines = results.splitlines()
+    for index, table in enumerate(tables, start=1):
+        if table['identifier_columns'] < 1:
+            return f'实验结果第 {index} 张表缺少方法、数据集或设置识别列'
+        for header in table['header']:
+            normalized = re.sub(r'[*_`]', '', header).strip()
+            if TABLE_VAGUE_METRIC_HEADER_RE.search(normalized):
+                return f'实验结果第 {index} 张表含叙述型伪指标列“{normalized}”，应改为可核对指标、设置或比较对象'
+            if (TABLE_DIRECTIONAL_METRIC_RE.search(normalized)
+                    and not TABLE_DIRECTION_MARK_RE.search(normalized)
+                    and not TABLE_NON_DIRECTIONAL_MEASURE_RE.search(normalized)):
+                return f'实验结果第 {index} 张表指标“{normalized}”缺少 ↑/↓ 方向'
+        for row in table['rows']:
+            for cell in row[min(table['identifier_columns'], len(row)):]:
+                normalized = re.sub(r'[*_`]', '', str(cell or '')).strip()
+                if TABLE_NUMERIC_CELL_RE.search(normalized):
+                    numeric_cells += 1
+                if re.search(r'−|％|(?:^|[<>=±+\-\[(,;/]\s*)\.\d|\d\s+%', normalized):
+                    return f'实验结果第 {index} 张表数字格式未规范化：“{normalized}”'
+        before = '\n'.join(result_lines[:table['start_line']]).strip()
+        before = re.split(r'\n\s*\n', before)[-1] if before else ''
+        after = '\n'.join(result_lines[table['end_line'] + 1:]).strip()
+        after = re.split(r'\n\s*\n', after)[0] if after else ''
+        if (len(re.sub(r'[*_`#>\s]', '', before)) < 20
+                or not re.search(r'比较|检验|考察|回答|关键问题|差异|收益|代价|是否|何种|多大|哪些', before)):
+            return f'实验结果第 {index} 张表前缺少与上下文衔接的具体比较问题'
+        if (len(re.sub(r'[*_`#>\s]', '', after)) < 50
+                or not re.search(r'相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化', after)):
+            return f'实验结果第 {index} 张表后缺少最关键差异、解释与证据边界'
+    if empirical and tables and numeric_cells < EXPERIMENT_TABLE_LIMITS['min_numeric_cells']:
+        return f"实验表格只有 {numeric_cells} 个可核对数字，至少需要 {EXPERIMENT_TABLE_LIMITS['min_numeric_cells']} 个；纯趋势或结论摘要不能替代结果表"
+    source_has_comparison = re.search(
+        r'\b(?:baseline|compared?\s+(?:to|with)|comparison|outperform(?:s|ed)?|versus|vs\.)\b|'
+        r'基线|对照|相比|优于|弱于',
+        source_text,
+        re.I,
+    )
+    result_has_comparison = re.search(
+        r'\b(?:baseline|compared?\s+(?:to|with)|comparison|versus|vs\.)\b|'
+        r'基线|对照|相比|相对|优于|弱于|'
+        r'比(?!较)[^。；\n]{0,30}(?:高|低|强|弱|好|差|大|小|提升|下降)',
+        results,
+        re.I,
+    )
+    if empirical and source_has_comparison and not result_has_comparison:
+        return '全文包含基线或对照比较，但实验结果没有保留比较对象'
+    source_has_ablation = re.search(
+        r'\bablation\b|\bw/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|'
+        r'消融|移除|去掉',
+        source_text,
+        re.I,
+    )
+    result_has_ablation = re.search(
+        r'\bablation\b|\bw/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|'
+        r'消融|移除|去掉|不含|排除',
+        results,
+        re.I,
+    )
+    if empirical and source_has_ablation and not result_has_ablation:
+        return '全文包含消融实验，但实验结果没有保留关键消融或组件对照'
+    source_has_negative = re.search(
+        r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
+        r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
+        r'未显著|不显著|退化|失败|更差|无效',
+        source_text,
+        re.I,
+    )
+    result_has_negative = re.search(
+        r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
+        r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
+        r'未显著|不显著|退化|恶化|失败|更差|比(?!较)[^。；\n]{0,30}差|'
+        r'未改善|没有改善|无效|负面|跨零|落后|损失',
+        results,
+        re.I,
+    )
+    if empirical and source_has_negative and not result_has_negative:
+        return '全文包含退化、不显著或失败结果，但实验结果没有保留负面证据'
+    return None
+
+
+def validate_experiment_table_contract(
+        analysis, contract_version=EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION,
+        document_type='', source_text=''):
     results = _extract_analysis_section(analysis, '实验结果')
     if not results:
         return None
@@ -478,6 +1282,12 @@ def validate_experiment_table_contract(analysis):
                 f"实验结果第 {index} 张表包含 {table['metric_columns']} 个指标列，最多允许 "
                 f"{EXPERIMENT_TABLE_LIMITS['max_metric_columns']} 列（方法/数据集识别列不计）"
             )
+    if contract_version == EXPERIMENT_TABLE_CONTRACT_VERSION:
+        return _validate_experiment_table_evidence_depth(
+            analysis, document_type, source_text,
+        )
+    if contract_version != EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION:
+        return f'未知实验表格契约版本: {contract_version}'
     return None
 
 
@@ -682,7 +1492,11 @@ def validate_manual_depth_contract_v3(analysis):
         re.I,
     ):
         return 'manual v3 实验结果缺少明确比较对象或消融关系'
-    if not re.search(r'但是|但|不过|仅|尚未|不能|限制|边界|未报告|未说明', results):
+    if not re.search(
+        r'但是|但|不过|仅|尚未|不能|限制|边界|未报告|未说明|'
+        r'而非|并非|不存在|退化|失败|更差|不显著|跨零',
+        results,
+    ):
         return 'manual v3 实验结果缺少结论边界或负面结果'
 
     reproducibility_signals = (
@@ -711,6 +1525,417 @@ def validate_manual_depth_contract_v3(analysis):
         return 'manual v3 局限必须分开标注论文证据支持的边界与进一步审视'
     if _manual_chinese_count(limits) < 300:
         return f'manual v3 局限分析过短: {_manual_chinese_count(limits)}/300'
+    return None
+
+
+def validate_manual_editorial_quality_v4(analysis):
+    """Publish-time high-confidence mirror of the Manual v4 reader gate.
+
+    The complete near-duplicate and result-source checks run in Node while the
+    controlled full text is available.  Python repeats reader-visible checks
+    that remain exactly recomputable from the canonical Markdown.
+    """
+    sections = {
+        name: _extract_analysis_section(analysis, heading)
+        for name, heading in (
+            ('authors', '作者与机构'), ('review', '毒舌点评'),
+            ('summary', '核心摘要'), ('method', '方法概述和架构'),
+            ('innovations', '核心创新点'), ('results', '实验结果'),
+            ('details', '细节详述'), ('limits', '局限与问题'),
+            ('scoring', '评分理由'), ('open_source', '开源详情'),
+        )
+    }
+    numeral_chars = '零〇一二两三四五六七八九十百千万亿'
+    simple_count_unit_items = (
+        'GPU 小时', 'GPU小时', 'GPU 秒', 'GPU秒',
+        '毫秒', '秒', '分钟', '小时', '天', '兆赫', '千赫', '赫兹', '分贝',
+        '百分点', '毫焦', '皮焦', '兆字节', '千字节', '字节',
+        'GB', 'MB', 'KB', 'mJ', 'dB', 'Hz', 'kHz', 'MHz', 'MAC', 'MACs',
+        'token', 'tokens', '像素', '采样', '自由度', '帧', '个随机种子', '随机种子',
+        '个', '对', '种', '条', '篇', '张', '段', '轮', '步', '次', '倍', '人', '名',
+        '例', '维', '层', '位', '核', '类', '组', '路', '级', '阶', '流',
+        '通道', '阶段', '分支', '模型', '基准', '数据集', '物种', '会话',
+        '目录', '艺人', '轨道', '模态', '套', '卡', '分制', '男', '女',
+        '个组件', '个任务', '个条件', '个类别', '个模型', '个数据集',
+        '个时间点', '个方向', '个卷积块', '个流', 'worker', 'workers',
+        'episode', 'episodes', 'epoch', 'epochs',
+    )
+    large_count_unit_items = simple_count_unit_items + (
+        '个动作', '个样本', '个片段', '个关键词', '个文件', '个条件',
+        '个刺激', '名参与者', '样本', '参数', '词', '批', '折', '参与者',
+        '题', '轨迹', '主干',
+    )
+    unit_pattern = lambda items: '|'.join(
+        re.escape(item) for item in sorted(set(items), key=len, reverse=True)
+    )
+    large_count_units = unit_pattern(large_count_unit_items)
+    simple_count_units = unit_pattern(simple_count_unit_items)
+    exact_quantity_patterns = (
+        re.compile(rf'百分之[{numeral_chars}]+(?:点[{numeral_chars}]+)?', re.I),
+        re.compile(rf'[负正]?[{numeral_chars}]+点[{numeral_chars}]+', re.I),
+        re.compile(
+            rf'(?<![第{numeral_chars}])[负正]?[{numeral_chars}]*[十百千万亿][{numeral_chars}]*\s*'
+            rf'(?:{large_count_units})', re.I,
+        ),
+        re.compile(rf'(?<![第{numeral_chars}])[一二两三四五六七八九]\s*(?:{simple_count_units})', re.I),
+        re.compile(rf'[负正]?[{numeral_chars}]+(?:到|至|–|—|-)[负正]?[{numeral_chars}]+(?=\s*(?:的)?(?:分数|评分|范围|区间|等级))', re.I),
+        re.compile(rf'[{numeral_chars}]+\s*(?:比|:|：)\s*[{numeral_chars}]+', re.I),
+        re.compile(rf'[{numeral_chars}]+\s*乘\s*[{numeral_chars}]+', re.I),
+        re.compile(rf'[{numeral_chars}]+点[{numeral_chars}]*\d+', re.I),
+        re.compile(rf'[{numeral_chars}]+\d+(?=\s*(?:{large_count_units}))', re.I),
+        re.compile(rf'[{numeral_chars}]+\s*(?:到|至|–|—|-)\s*\d+(?=\s*(?:{large_count_units}))', re.I),
+        re.compile(r'\d+(?:\.\d+)?\s*[万亿](?=\s*(?:更新|参数|样本|条|次|帧|token|tokens|MAC|MACs))', re.I),
+        re.compile(r'(?:至少)?一半|半宽|四分之一(?:宽)?|[一二两三四五六七八九]成(?=(?:左右|上下|或|以内|以上|比例|占比|水平|样本|数据|案例|[，,。；;、]|$))'),
+        re.compile(rf'(?:排名第[{numeral_chars}]+|第[{numeral_chars}]+名)'),
+        re.compile(r'(?:最高|满分|得分|评分|至少|超过|低于|高于|达到)\s*[一二两三四五六七八九]\s*分|[一二两三四五六七八九]\s*分(?:制|量表|以上|以下|满分)|[一二两三四五六七八九]\s*分(?=\s*(?:[，,。；;、]|$))'),
+        re.compile(r'[几数]\s*\d+(?=\s*(?:毫秒|秒|分钟|小时|天|Hz|kHz|MHz|MB|GB|KB|mJ|dB|帧|步|倍))', re.I),
+        re.compile(
+            rf'(?:LoRA\s*)?(?:秩|rank|alpha|缩放系数|阈值|beam|batch(?:\s*size)?|hop|'
+            rf'窗口|采样率|分辨率|上下文长度|时间步|通道数|层数|维度)'
+            rf'\s*(?:=|为|:)?\s*[{numeral_chars}]+', re.I,
+        ),
+    )
+    reader_template_patterns = (
+        re.compile(r'关键比较问题是[：:]'),
+        re.compile(r'下图用于核对'),
+        re.compile(r'证据边界在于'),
+        re.compile(r'下一段将(?:解释|说明|展示|讨论)'),
+        re.compile(r'^\s*\d+[.)、]\s*是(?=\S)', re.M),
+    )
+    reader_spaced_quantifiers = (
+        '个百分点', '个随机种子', '名参与者', '个文件', '个会话', '个模型', '个候选', '个组合',
+        '个病例', '段录音', '个场景', '个样本', '个片段', '个数据集', '个组件', '个任务',
+        '个条件', '个类别', '个时间点', '个方向', '个卷积块',
+        '个', '次', '名', '组', '套', '层', '种', '段', '轮', '步', '倍', '人', '例', '类',
+        '张', '篇', '条', '对', '位', '路', '维', '帧', '卡', '分制', '会话', '模型', '候选',
+        '组合', '病例', '录音', '文件', '场景', '样本', '片段', '数据集', '组件', '任务',
+        '条件', '类别', '时间点', '方向', '卷积块',
+        '毫秒', '秒', '分钟', '小时', '天', '兆赫', '千赫', '赫兹', '分贝', '毫焦', '皮焦',
+        '兆字节', '千字节', '字节', 'mW', 'mJ', 'ms', 'dB', 'Hz', 'kHz', 'MHz',
+        'KiB', 'KB', 'MB', 'GB', 'MAC', 'MACs', 'token', 'tokens', '像素', '采样', '自由度',
+    )
+    numeric_connector_prefixes = (
+        '分别为', '提高到', '提升至', '增加到', '下降到', '降低至', '降至', '升至',
+        '最多保留', '批量分别', '实际选', '每提示', '样本只', '单台',
+        '从', '由', '到', '至', '为', '达', '含', '有', '共', '约', '近', '超过', '低于', '高于',
+        '提高', '提升', '增加', '下降', '减少', '加入', '读取', '使用', '采用', '包含', '覆盖',
+        '处理', '训练', '测试', '运行', '观看', '留出', '选择', '固定', '生成', '组成', '形成',
+        '比较', '估算', '执行', '标注', '包括', '总计', '平均', '达到', '放入', '请求',
+        '上限', '阈值', '权重', '学习率', '综合分', '版本', '版',
+        '第', '在', '以', '把', '与', '和', '及', '或', '是', '只', '各', '选', '转', '加',
+        '对', '前', '后', '比', '按', '做', '属于',
+    )
+    numeric_connector_suffixes = (
+        '分别', '以及', '和', '与', '到', '至', '已', '仍', '又', '为', '是', '的', '后', '前',
+        '时', '中', '下', '上', '可', '能', '并', '而', '只是', '同时', '属于', '门控',
+        '首波', '状态', '地图', '审计', '完整', '主干', '因果', '协议', '声学', '权重',
+        '上限', '变化', '设置', '版本', '轨迹', '结果', '记忆',
+    )
+    reader_number = r'(?<![A-Za-z0-9_.-])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?'
+    numeric_typography_patterns = (
+        re.compile(r'[\u4e00-\u9fff][-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?'),
+        re.compile(rf'{reader_number}(?=[\u4e00-\u9fff])'),
+        re.compile(
+            rf'{reader_number}(?:{unit_pattern(reader_spaced_quantifiers)})', re.I,
+        ),
+        re.compile(
+            rf'(?:{unit_pattern(numeric_connector_prefixes)}){reader_number}',
+        ),
+        re.compile(
+            rf'{reader_number}(?:{unit_pattern(numeric_connector_suffixes)})',
+        ),
+        re.compile(
+            r'(?:下|上|这|另|哪)\s*1\s*(?:步|层|类|种|段|项|组|张|个)|'
+            r'(?:同|唯|统|单)\s*1\s*(?=[\u4e00-\u9fff])|归\s*1\s*(?=(?:化|后|组合|处理|权重))',
+        ),
+        re.compile(
+            r'[\u4e00-\u9fff][\t \u3000]+一次性|一次性[\t \u3000]+[\u4e00-\u9fff]',
+        ),
+        re.compile(
+            r'[\u4e00-\u9fff](?:T|F|K|N|SNR|IoU|batch|beta|top-k)\s*=\s*\d|'
+            r'\b(?:T|F|K|N|SNR|IoU|batch|beta|top-k)\s*=\s*\d+(?:\.\d+)?(?=[\u4e00-\u9fff])',
+            re.I,
+        ),
+        re.compile(r'(?:\d+(?:\.\d+)?(?:D|B|K|M|G|bit|DoF|FPS|Vpp|MHz|GB|TB))(?=[\u4e00-\u9fff])', re.I),
+    )
+    for section, body in sections.items():
+        body = unicodedata.normalize('NFKC', body)
+        # 百分号属于数值本身；“前10% / 提升19.5%”保留中文常用写法，
+        # 不交给连接词粘连规则。等长屏蔽避免改变其余诊断位置。
+        typography_body = re.sub(
+            r'(?:[\u4e00-\u9fff])?[-+]?\d+(?:\.\d+)?\s*%',
+            lambda match: ' ' * len(match.group(0)),
+            body,
+        )
+        quantity_body = re.sub(
+            r'(?:进一步|这一步|下一步|上一步|每一步|一次性)|(?:同一|统一|唯一|单一)(?=[\u4e00-\u9fff])',
+            lambda match: ' ' * len(match.group(0)),
+            body,
+        )
+        for pattern in exact_quantity_patterns:
+            match = pattern.search(quantity_body)
+            if match:
+                return f'manual v4 {section} 精确定量必须使用阿拉伯数字: {match.group(0)}'
+        for pattern in reader_template_patterns:
+            match = pattern.search(body)
+            if match:
+                return f'manual v4 {section} 仍使用批量模板句式: {match.group(0)}'
+        for paragraph in re.split(r'\n\s*\n', body):
+            if paragraph.strip().endswith(('；', ';')):
+                return f'manual v4 {section} 段落以分号中断，必须补成完整论述'
+        broken = re.search(
+            r'尚尚|只只|分别分别|只有仅有|单单个|能能(?!否|够)|具有有(?:吸引力|优势|价值|能力|作用|意义|效果|潜力|特点|必要性)|'
+            r'更接近区别于|存在也区别于其|无明显退化区别于|却区别于|提高现实性却区别于|2\s*次计算成本|'
+            r'[“"]?(?:听懂|理解)[^。！？!?]{0,12}[”"]?区别于(?:能|能够|可以|具备)|'
+            r'(?:参数|计算|内存)高效区别于(?:推理|训练|部署)(?:廉价|便宜|成本低)|'
+            r'(?:客服|模板|提示)文本区别于(?:自发|真实)(?:客服)?(?:通话|对话|语音)|'
+            r'(?:素材池|样本池|数据池)规模[^。！？!?]{0,24}区别于(?:最终)?(?:题量|样本量)|'
+            r'源(?:音频|语音|数据)[^。！？!?]{0,16}区别于真实(?:通话|设备|场景|分布)|'
+            r'但[^。！？!?]{0,80}[，,]但',
+            body,
+        )
+        if broken:
+            return f'manual v4 {section} 存在重复或断裂连接表达: {broken.group(0)}'
+        for pattern in numeric_typography_patterns:
+            match = pattern.search(typography_body)
+            if match:
+                return f'manual v4 {section} 数值排版或固定词损坏: {match.group(0)}'
+        if re.search(
+            r'^\s*\d+[.)、]\s*第\s*(?:\d+|[一二两三四五六七八九十百]+)\s*'
+            r'(?:项|个|点)(?=[\u4e00-\u9fff\s，,：:])',
+            body,
+            re.M,
+        ):
+            return f'manual v4 {section} 存在双重编号'
+        if section == 'innovations' and re.search(
+            r'(?:^|\n\s*\n)\s*第\s*(?:\d+|[一二两三四五六七八九十百]+)\s*'
+            r'(?:项|个)(?=[\u4e00-\u9fff\s，,：:])',
+            body,
+        ):
+            return 'manual v4 innovations 将自动渲染为列表，正文不得重复使用第 N 个/项序数'
+        for line in body.splitlines():
+            if line.strip() in {'论文证据直接支持的边界', '进一步审视'}:
+                return f'manual v4 {section} 暴露裸编辑字段标签'
+        visible = re.sub(r'`[^`]*`', '', body)
+        visible = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', visible)
+        visible = re.sub(r'https?://[^\s)]+|[*_~]+', '', visible)
+        adhesion = re.search(r'(?:[\u4e00-\u9fff][A-Za-z][A-Za-z0-9.+-]{1,}|[A-Za-z][A-Za-z0-9.+-]{1,}[\u4e00-\u9fff])', visible)
+        if adhesion:
+            return f'manual v4 {section} 中英文技术词边界缺少空格: {adhesion.group(0)}'
+        for paragraph in _manual_prose_paragraphs(body):
+            if _manual_chinese_count(paragraph) > 260 or len(re.findall(r'[。！？；!?;]', paragraph)) > 7:
+                return f'manual v4 {section} 段落过载，必须拆分并建立推进关系'
+    seen = {}
+    for section, body in sections.items():
+        for sentence in re.split(r'(?<=[。！？!?；;])', body):
+            normalized = re.sub(r'[\s\W_]+', '', sentence.lower())
+            if len(normalized) < 20:
+                continue
+            prior = seen.get(normalized)
+            if prior and prior != section:
+                return f'manual v4 {prior}/{section} 存在重复长句'
+            seen[normalized] = section
+    return None
+
+
+FINAL_MANUAL_SECTION_HEADINGS = (
+    '作者与机构', '毒舌点评', '核心摘要', '方法概述和架构',
+    '核心创新点', '实验结果', '细节详述', '评分理由',
+    '局限与问题', '开源详情', '补充信息',
+)
+
+
+def _manual_v4_reader_view(markdown):
+    """Turn rendered blog section headings back into the canonical heading view."""
+    text = str(markdown or '')
+    frontmatter = re.match(r'^---\n.*?\n---\n', text, flags=re.DOTALL)
+    if frontmatter:
+        text = text[frontmatter.end():]
+    headings = '|'.join(re.escape(item) for item in FINAL_MANUAL_SECTION_HEADINGS)
+    return re.sub(
+        rf'^[^\S\r\n]*#{{1,6}}[^\S\r\n]+'
+        rf'(?:[^\w\s#]\ufe0f?[^\S\r\n]*)*({headings})[^\S\r\n]*$',
+        lambda match: f'## {match.group(1)}',
+        text,
+        flags=re.MULTILINE,
+    )
+
+
+def _is_final_manual_v4(markdown, paper=None):
+    if isinstance(paper, dict):
+        manifest = paper.get('analysisManifest')
+        contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
+        if isinstance(contracts, dict):
+            return contracts.get('manualDepth') == MANUAL_DEPTH_CONTRACT_VERSION_V4
+    return bool(re.search(
+        rf'^paper_digest_manual_depth:\s*["\']?{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V4)}["\']?\s*$',
+        str(markdown or ''),
+        flags=re.MULTILINE,
+    ))
+
+
+def _final_markdown_image_occurrences(markdown):
+    blocks = [block.strip() for block in re.split(r'\n\s*\n', str(markdown or '')) if block.strip()]
+    occurrences = []
+    for index, block in enumerate(blocks):
+        match = re.fullmatch(r'!\[(?:\\.|[^\]\\])*\]\((https://[^)\s]+)(?:\s+["\'][^"\']*["\'])?\)', block)
+        if match:
+            occurrences.append((index, match.group(1), blocks))
+    return occurrences
+
+
+def validate_final_manual_v4_markdown(markdown, paper=None):
+    """Recheck Manual v4 contracts on the exact reader-facing Markdown.
+
+    This intentionally runs after publication sanitization/rendering.  It does
+    not trust that a valid canonical analysis stayed valid while headings,
+    anchors, images and surrounding prose were assembled into a blog page.
+    """
+    if not _is_final_manual_v4(markdown, paper):
+        return None
+    if isinstance(paper, dict):
+        manifest = paper.get('analysisManifest')
+        contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
+        if isinstance(contracts, dict) \
+                and contracts.get('manualDepth') == MANUAL_DEPTH_CONTRACT_VERSION_V4 \
+                and not re.search(
+                    rf'^paper_digest_manual_depth:\s*["\']?{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V4)}["\']?\s*$',
+                    str(markdown or ''), flags=re.MULTILINE,
+                ):
+            return '最终 Markdown 缺少 Manual v4 深度标记'
+
+    reader_view = _manual_v4_reader_view(markdown)
+    required = (
+        '核心摘要', '方法概述和架构', '核心创新点', '实验结果',
+        '细节详述', '局限与问题',
+    )
+    missing = [heading for heading in required if not _extract_analysis_section(reader_view, heading)]
+    if missing:
+        return f'最终 Markdown 缺少 Manual v4 读者章节: {"、".join(missing)}'
+
+    if isinstance(paper, dict):
+        manifest = paper.get('analysisManifest')
+        takeover = manifest.get('manualTakeover') if isinstance(manifest, dict) else None
+        if not isinstance(takeover, dict):
+            return '最终 Markdown 缺少 authoritative Manual v4 resultClaims'
+        try:
+            _validate_manual_v4_result_claims(
+                takeover,
+                reader_view,
+                str(paper.get('arxivId') or paper.get('id') or 'authoritative paper'),
+            )
+        except PublishDataValidationError as exc:
+            return f'最终 Markdown resultClaims 读者可见闭环无效: {exc}'
+
+    selected = None
+    if isinstance(paper, dict) and isinstance(paper.get('selectedImageUrls'), list):
+        excluded = {
+            item.get('url') for item in paper.get('publishImageExclusions', [])
+            if isinstance(item, dict) and isinstance(item.get('url'), str)
+        }
+        selected = [
+            str(url) for url in paper['selectedImageUrls']
+            if isinstance(url, str) and url.startswith('https://') and url not in excluded
+        ]
+    occurrences = _final_markdown_image_occurrences(reader_view)
+    occurrence_urls = [url for _index, url, _blocks in occurrences]
+    if selected is not None and occurrence_urls != selected:
+        return '最终 Markdown 图片 URL/顺序与 selectedImageUrls 不一致'
+    for index, url, blocks in occurrences:
+        if index == 0 or index + 1 >= len(blocks):
+            return f'{url} 在最终 Markdown 中缺少图前或图后相邻正文'
+        issue = _validate_image_narrative_pair(blocks[index - 1], blocks[index + 1])
+        if issue:
+            return f'{url} 最终 Markdown 图片叙事无效: {issue}'
+
+    document_type = ''
+    if isinstance(paper, dict):
+        document_type = str((paper.get('parsed') or {}).get('documentType') or '')
+    if not document_type:
+        match = re.search(r'(?:^|[|\n])\s*文档类型[：:]\s*([^|\n]+)', reader_view)
+        document_type = match.group(1).strip() if match else ''
+    canonical_results = ''
+    if isinstance(paper, dict):
+        canonical_results = _extract_analysis_section(
+            str(paper.get('analysis') or ''), '实验结果',
+        )
+    table_issue = validate_experiment_table_contract(
+        reader_view,
+        contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+        document_type=document_type,
+        # Node already binds the evidence-rich source gates to the controlled
+        # full-text experiment slice.  At final-page time only the canonical
+        # experiment section is authoritative: using the whole analysis here
+        # lets words such as "消融" or "退化" in methods/limits create false
+        # source obligations that never existed in the experiment evidence.
+        source_text=canonical_results,
+    )
+    if table_issue:
+        return f'最终 Markdown evidence-rich 表格无效: {table_issue}'
+
+    seen_paragraphs = set()
+    for block in re.split(r'\n\s*\n', reader_view):
+        stripped = block.strip()
+        if not stripped or stripped.startswith(('#', '|', '![', '-', '*', '>', '```', '~~~')):
+            continue
+        if _manual_chinese_count(stripped) < 30:
+            continue
+        normalized = re.sub(
+            r'[\s\W_]+', '', unicodedata.normalize('NFKC', stripped).casefold(),
+        )
+        if normalized in seen_paragraphs:
+            return '最终 Markdown 存在完全重复的长正文段落'
+        seen_paragraphs.add(normalized)
+
+    editorial_issue = validate_manual_editorial_quality_v4(reader_view)
+    if editorial_issue:
+        return f'最终 Markdown 读者文本质量无效: {editorial_issue}'
+    return None
+
+
+def validate_digest_index_reader_quality(markdown, required=False):
+    """Validate exact generated index prose while preserving old unmarked pages.
+
+    New generation explicitly marks the index protocol.  Historical indexes
+    predate this reader gate and remain readable unless a caller explicitly
+    requests the new contract.
+    """
+    text = str(markdown or '')
+    marker = re.search(
+        rf'^paper_digest_reader_quality:\s*["\']?'
+        rf'{re.escape(DIGEST_INDEX_READER_QUALITY_VERSION)}["\']?\s*$',
+        text,
+        flags=re.MULTILINE,
+    )
+    if not marker:
+        return '汇总页缺少读者质量协议标记' if required else None
+    if not re.search(r'^paper_digest_page_type:\s*index\s*$', text, re.MULTILINE):
+        return '汇总页读者质量协议只能用于 index 页面'
+    frontmatter = re.match(r'^---\n.*?\n---\n', text, flags=re.DOTALL)
+    body = text[frontmatter.end():] if frontmatter else text
+    if not re.search(r'^##\s+.*今日概览', body, re.MULTILINE) \
+            or not re.search(r'^##\s+.*论文列表', body, re.MULTILINE):
+        return '汇总页缺少今日概览或论文列表'
+    # Keep the complete page in one synthetic section: otherwise its own H2
+    # headings would make the generic Manual reader validator inspect only the
+    # title preamble.
+    synthetic = '## 核心摘要\n' + re.sub(r'^##\s+', '### ', body, flags=re.MULTILINE)
+    issue = validate_manual_editorial_quality_v4(synthetic)
+    if issue:
+        return f'汇总页读者文本质量无效: {issue}'
+    seen = set()
+    for block in re.split(r'\n\s*\n', body):
+        stripped = block.strip()
+        if not stripped or stripped.startswith(('#', '|', '---')):
+            continue
+        if _manual_chinese_count(stripped) < 30:
+            continue
+        normalized = re.sub(
+            r'[\s\W_]+', '', unicodedata.normalize('NFKC', stripped).casefold(),
+        )
+        if normalized in seen:
+            return '汇总页存在完全重复的长正文段落'
+        seen.add(normalized)
     return None
 
 
@@ -931,8 +2156,14 @@ def normalize_publish_arxiv_id(arxiv_id):
     return value
 
 
-def validate_papers_for_publish(papers):
-    """Validate every paper before creating any publish artifact."""
+def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
+    """Validate every paper before creating any publish artifact.
+
+    ``validate_manual_provenance=False`` is reserved for the derived
+    publication-image-exclusion view.  Its canonical provenance was validated
+    immediately before derivation; all reader-visible contracts are still
+    rerun against the modified analysis.
+    """
     if not isinstance(papers, list):
         raise PublishDataValidationError('待发布论文必须是数组')
     validated = []
@@ -943,6 +2174,8 @@ def validate_papers_for_publish(papers):
             if not isinstance(paper, dict):
                 raise PublishDataValidationError('论文记录必须是对象')
             paper_label = paper.get('arxivId') or paper.get('title') or '<unknown paper>'
+            if not validate_manual_provenance:
+                _validate_publish_image_exclusion_view(paper, paper_label)
             if paper.get('latestAnalysisAttemptError'):
                 raise PublishDataValidationError(
                     f'{paper_label} 最新一次深度分析失败，禁止使用陈旧成功正文发布'
@@ -981,7 +2214,8 @@ def validate_papers_for_publish(papers):
                     raise PublishDataValidationError(
                         f'{paper_label} 深度分析阶段尚未全部完成: {detail}'
                     )
-                _validate_manual_takeover_manifest(paper, manifest, paper_label)
+                if validate_manual_provenance:
+                    _validate_manual_takeover_manifest(paper, manifest, paper_label)
                 contracts = manifest.get('contracts')
                 if contracts is not None and not isinstance(contracts, dict):
                     raise PublishDataValidationError(
@@ -990,13 +2224,18 @@ def validate_papers_for_publish(papers):
                 table_contract = (
                     contracts.get('experimentTables') if isinstance(contracts, dict) else None
                 )
-                if table_contract is not None and table_contract != EXPERIMENT_TABLE_CONTRACT_VERSION:
+                if table_contract is not None and table_contract not in EXPERIMENT_TABLE_CONTRACT_VERSIONS:
                     raise PublishDataValidationError(
                         f'{paper_label} analysisManifest.contracts.experimentTables 非法: '
                         f'{table_contract}'
                     )
-                if table_contract == EXPERIMENT_TABLE_CONTRACT_VERSION:
-                    table_issue = validate_experiment_table_contract(paper.get('analysis'))
+                if table_contract in EXPERIMENT_TABLE_CONTRACT_VERSIONS:
+                    table_issue = validate_experiment_table_contract(
+                        paper.get('analysis'),
+                        contract_version=table_contract,
+                        document_type=(paper.get('parsed') or {}).get('documentType', ''),
+                        source_text=_manual_result_claim_source_text(paper),
+                    )
                     if table_issue:
                         raise PublishDataValidationError(
                             f'{paper_label} 分析正文表格契约无效: {table_issue}'
@@ -1023,12 +2262,25 @@ def validate_papers_for_publish(papers):
                         f'{paper_label} analysisManifest.contracts.manualDepth 非法: '
                         f'{manual_depth_contract}'
                     )
-                if manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION_V3:
+                if manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION_V4 \
+                        and table_contract != EXPERIMENT_TABLE_CONTRACT_VERSION:
+                    raise PublishDataValidationError(
+                        f'{paper_label} manual v4 必须声明 '
+                        f'experimentTables={EXPERIMENT_TABLE_CONTRACT_VERSION}'
+                    )
+                if manual_depth_contract in {
+                        MANUAL_DEPTH_CONTRACT_VERSION_V3, MANUAL_DEPTH_CONTRACT_VERSION_V4}:
                     manual_depth_issue = validate_manual_depth_contract_v3(paper.get('analysis'))
                     if manual_depth_issue:
                         raise PublishDataValidationError(
                             f'{paper_label} manual 全文深度契约无效: {manual_depth_issue}'
                         )
+                    if manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION_V4:
+                        editorial_issue = validate_manual_editorial_quality_v4(paper.get('analysis'))
+                        if editorial_issue:
+                            raise PublishDataValidationError(
+                                f'{paper_label} manual v4 读者文本质量无效: {editorial_issue}'
+                            )
                 elif manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION_V2:
                     manual_depth_issue = validate_manual_depth_contract_v2(paper.get('analysis'))
                     if manual_depth_issue:
@@ -1041,6 +2293,42 @@ def validate_papers_for_publish(papers):
                         raise PublishDataValidationError(
                             f'{paper_label} manual 全文深度契约无效: {manual_depth_issue}'
                         )
+                image_narrative_contract = (
+                    contracts.get('imageNarrative') if isinstance(contracts, dict) else None
+                )
+                if manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION_V4 \
+                        and image_narrative_contract != IMAGE_NARRATIVE_CONTRACT_VERSION:
+                    raise PublishDataValidationError(
+                        f'{paper_label} manual v4 必须声明 '
+                        f'imageNarrative={IMAGE_NARRATIVE_CONTRACT_VERSION}'
+                    )
+                if image_narrative_contract is not None \
+                        and image_narrative_contract != IMAGE_NARRATIVE_CONTRACT_VERSION:
+                    raise PublishDataValidationError(
+                        f'{paper_label} analysisManifest.contracts.imageNarrative 非法: '
+                        f'{image_narrative_contract}'
+                    )
+                if image_narrative_contract == IMAGE_NARRATIVE_CONTRACT_VERSION:
+                    image_narrative_issue = validate_image_narrative_contract(paper)
+                    if image_narrative_issue:
+                        raise PublishDataValidationError(
+                            f'{paper_label} 图片上下文契约无效: {image_narrative_issue}'
+                        )
+                editorial_quality_contract = (
+                    contracts.get('editorialQuality') if isinstance(contracts, dict) else None
+                )
+                if manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION_V4 \
+                        and editorial_quality_contract != EDITORIAL_QUALITY_CONTRACT_VERSION:
+                    raise PublishDataValidationError(
+                        f'{paper_label} manual v4 必须声明 '
+                        f'editorialQuality={EDITORIAL_QUALITY_CONTRACT_VERSION}'
+                    )
+                if editorial_quality_contract is not None \
+                        and editorial_quality_contract != EDITORIAL_QUALITY_CONTRACT_VERSION:
+                    raise PublishDataValidationError(
+                        f'{paper_label} analysisManifest.contracts.editorialQuality 非法: '
+                        f'{editorial_quality_contract}'
+                    )
             if (paper.get('analysisSource') == 'abstract'
                     and paper.get('allowAbstractAnalysisPublish') is not True):
                 raise PublishDataValidationError(

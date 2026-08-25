@@ -1,4 +1,9 @@
 const crypto = require('crypto');
+const {
+    validateEditorialQuality,
+    validateResultClaims,
+    validateReadabilityRubric
+} = require('./editorial-quality.js');
 
 const REQUIRED_ANALYSIS_SECTIONS = Object.freeze([
     '评分',
@@ -49,8 +54,14 @@ const MACHINE_SCORE_MAXIMA = Object.freeze({
 const OPEN_SOURCE_SCORE_ANCHORS = Object.freeze([0, 0.2, 0.5, 1, 1.2, 1.5]);
 const DOCUMENT_TYPES = new Set(['方法研究', '系统技术报告', '模型报告', '数据集与基准', '综述', '理论研究', '应用研究']);
 const NON_EMPIRICAL_DOCUMENT_TYPES = new Set(['综述', '理论研究']);
-const EXPERIMENT_TABLE_CONTRACT_VERSION = 'bounded-v1';
+const EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION = 'bounded-v1';
+const EXPERIMENT_TABLE_CONTRACT_VERSION = 'evidence-rich-v2';
+const EXPERIMENT_TABLE_CONTRACT_VERSIONS = Object.freeze([
+    EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION,
+    EXPERIMENT_TABLE_CONTRACT_VERSION
+]);
 const METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1';
+const EDITORIAL_QUALITY_CONTRACT_VERSION = 'reader-facing-v1';
 // Manual/offline analyses must contain actual full-text evidence in addition
 // to the structural contract used by API analyses.  This is deliberately a
 // separate opt-in contract so old, valid API records remain backward
@@ -68,10 +79,17 @@ const MANUAL_DEPTH_CONTRACT_VERSION_V2 = 'full-text-evidence-v2';
 // claims, comparative experiments, reproducibility coverage, dimension-
 // specific scoring reasons and separately labelled evidence/reviewer limits.
 const MANUAL_DEPTH_CONTRACT_VERSION_V3 = 'full-text-evidence-v3';
+// v4 keeps every v3 prose/evidence requirement and additionally binds the
+// richer experiment-table and context-bound image-narrative contracts. The
+// binding is intentionally versioned:
+// already-published v1-v3 manual records retain their historical table
+// semantics instead of being reinterpreted under a newer quality gate.
+const MANUAL_DEPTH_CONTRACT_VERSION_V4 = 'full-text-evidence-v4';
 const MANUAL_DEPTH_CONTRACT_VERSIONS = Object.freeze([
     MANUAL_DEPTH_CONTRACT_VERSION,
     MANUAL_DEPTH_CONTRACT_VERSION_V2,
-    MANUAL_DEPTH_CONTRACT_VERSION_V3
+    MANUAL_DEPTH_CONTRACT_VERSION_V3,
+    MANUAL_DEPTH_CONTRACT_VERSION_V4
 ]);
 const ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION = 'high-confidence-v1';
 const MANUAL_COMPLETE_STATUS = 'manual_complete';
@@ -145,9 +163,16 @@ const RECOVERY_STAGE_TERMINAL_STATUSES = Object.freeze({
 const EXPERIMENT_TABLE_LIMITS = Object.freeze({
     maxTables: 2,
     maxDataRows: 12,
-    maxMetricColumns: 8
+    maxMetricColumns: 8,
+    minEvidenceRows: 3,
+    minNumericCells: 2
 });
-const TABLE_IDENTIFIER_HEADER_RE = /(?:^|\b)(?:method|model|system|config(?:uration)?|dataset|corpus|benchmark|task|language|scenario|condition|setting|split|category|type|modality|version)(?:\b|$)|方法|模型|系统|配置|数据集|语料|基准|任务|语言|场景|条件|设置|划分|类别|类型|模态|版本/i;
+const TABLE_IDENTIFIER_HEADER_RE = /(?:^|\b)(?:method|algorithm|model|system|config(?:uration)?|dataset|corpus|benchmark|task|language|scenario|condition|setting|split|category|type|modality|version|stage|phase|step|round|epoch|decoder?|context|metric|measure)(?:\b|$)|方法|算法|模型|系统|配置|数据集|语料|基准|任务|语言|场景|条件|设置|划分|类别|类型|模态|版本|阶段|步骤|轮次|训练轮|解码|上下文|指标|度量/i;
+const TABLE_VAGUE_METRIC_HEADER_RE = /^(?:结果|数值|数值变化|观察|观察结果|实际观测|报告结果|主要观察|说明|解释|含义|方向|关键条件|结论|结论边界|证据边界|应如何解读|对照或说明|对照或变化|结果或结论)$/i;
+const TABLE_DIRECTION_MARK_RE = /(?:↑|↓|越高越好|越低越好|higher\s+is\s+better|lower\s+is\s+better|max(?:imize)?|min(?:imize)?)/i;
+const TABLE_DIRECTIONAL_METRIC_RE = /(?:accuracy|precision|recall|f[- ]?score|\bf1\b|\bwer\b|\bcer\b|\bder\b|\bauc\b|\bmap\b|\bmiou\b|\biou\b|\bpesq\b|\bstoi\b|\bsdr\b|\bsisdr\b|\bsnr\b|\bbleu\b|\brouge\b|\bmeteor\b|\bclap\b|\bfad\b|\brmse\b|\bmae\b|\berle\b|\bmos\b|准确率|精确率|召回率|错误率|误差|损失|延迟|耗时|速度|吞吐|内存|显存|功耗|能耗|复杂度|参数量|相关系数|相似度)/i;
+const TABLE_NON_DIRECTIONAL_MEASURE_RE = /(?:置信区间|confidence interval|\bci\b|p[- ]?value|p值|显著性|样本数|数量|规模|时长|采样率|方差|标准差|系数|\bbeta\b|\bΔ?AIC\b|复杂度|参数|容量|内存|显存|耗时|延迟|速度|吞吐|功耗|能耗|bytes?|hours?|seconds?|milliseconds?)/i;
+const TABLE_NUMERIC_CELL_RE = /(?:^|[^A-Za-z])[-+]?\d(?:[\d,]*)(?:\.\d+)?(?:\s*(?:%|pp|×|x|ms|s|h|Hz|kHz|MHz|GB|MB|KB|dB|mJ|W))?/i;
 
 // 只匹配独立行/段落中高度明确的模型编辑、自检或对用户指令的复述。
 // 普通论文论述可以自然包含“这里”“注意”“已有分析”等词，因此不能用
@@ -330,6 +355,7 @@ function extractMarkdownTables(text) {
         }
         let end = index + 2;
         let dataRows = 0;
+        const rows = [];
         const invalidColumnCounts = [];
         const separatorColumns = splitMarkdownTableRow(lines[index + 1]).length;
         while (end < lines.length) {
@@ -338,6 +364,7 @@ function extractMarkdownTables(text) {
             if (!line.trim()) break;
             if (cells.length < 2 && !/^\s*\|.*\|\s*$/.test(line)) break;
             dataRows += 1;
+            rows.push(cells);
             if (cells.length !== header.length) {
                 invalidColumnCounts.push({ row: dataRows, columns: cells.length });
             }
@@ -352,9 +379,13 @@ function extractMarkdownTables(text) {
         }).length;
         tables.push({
             header,
+            rows,
+            startLine: index,
+            endLine: end - 1,
             dataRows,
             separatorColumns,
             invalidColumnCounts,
+            identifierColumns,
             metricColumns: Math.max(0, header.length - identifierColumns)
         });
         index = Math.max(end, index + 2);
@@ -362,7 +393,119 @@ function extractMarkdownTables(text) {
     return tables;
 }
 
-function validateExperimentTableContract(analysis) {
+function normalizeExperimentTableNumericFormatting(analysis) {
+    const source = String(analysis || '');
+    const results = extractSection(source, '实验结果');
+    if (!results) return source;
+    const normalized = results.split('\n').map(line => {
+        if (!line.includes('|') || isMarkdownTableSeparator(line)) return line;
+        const leading = /^\s*\|/.test(line);
+        const trailing = /\|\s*$/.test(line);
+        const cells = splitMarkdownTableRow(line);
+        if (cells.length < 2) return line;
+        const cleaned = cells.map(cell => cell
+            .replace(/−/g, '-')
+            .replace(/％/g, '%')
+            .replace(/([<>=±+\-\[(,;/]|^)(\s*)\.(\d+)/g, '$1$20.$3')
+            .replace(/(\d)\s+%/g, '$1%')
+            .replace(/(\d)\s+pp\b/gi, '$1 pp')
+            .trim());
+        return `${leading ? '| ' : ''}${cleaned.join(' | ')}${trailing ? ' |' : ''}`;
+    }).join('\n');
+    if (normalized === results) return source;
+    const heading = /(^|\n)##(?!#)\s*实验结果[：:\s]*\n/;
+    const match = heading.exec(source);
+    if (!match) return source;
+    const contentStart = match.index + match[0].length;
+    const rest = source.slice(contentStart);
+    const next = /\n##(?!#)\s/.exec(rest);
+    const contentEnd = next ? contentStart + next.index : source.length;
+    return source.slice(0, contentStart) + normalized + source.slice(contentEnd);
+}
+
+function sourceExperimentEvidence(sourceText) {
+    const source = String(sourceText || '');
+    const start = source.search(/(?:^|\n)\s*(?:\d+(?:\.\d+)*\s+)?(?:experiments?|experimental\s+(?:setup|results?)|evaluation|results?(?:\s+and\s+discussion)?)\s*(?:\n|$)/i);
+    if (start < 0) return source.slice(0, 50000);
+    const tail = source.slice(start, start + 60000);
+    const end = tail.search(/(?:^|\n)\s*(?:\d+(?:\.\d+)*\s+)?(?:conclusions?|limitations?|references?)\s*(?:\n|$)/i);
+    return end > 0 ? tail.slice(0, end) : tail;
+}
+
+function validateExperimentTableEvidenceDepth(analysis, options = {}) {
+    const results = extractSection(analysis, '实验结果');
+    if (!results) return null;
+    const tables = extractMarkdownTables(results);
+    const documentType = String(options.documentType || '');
+    const empirical = !NON_EMPIRICAL_DOCUMENT_TYPES.has(documentType);
+    const sourceHasTable = /\b(?:table|tbl)\.?\s*(?:[a-z]?\d+|[ivxlcdm]+)\b|表\s*[（(]?\s*(?:\d+|[一二三四五六七八九十百零]+)|\\begin\{tabular\}|<table[\s>]/i.test(String(options.sourceText || ''));
+    if (empirical && sourceHasTable && tables.length === 0) {
+        return '实证论文的实验结果必须包含至少一张可读 Markdown 证据表';
+    }
+    const totalRows = tables.reduce((sum, table) => sum + table.dataRows, 0);
+    if (empirical && tables.length > 0 && totalRows < EXPERIMENT_TABLE_LIMITS.minEvidenceRows) {
+        return `实验表格合计只有 ${totalRows} 个数据行，至少需要 ${EXPERIMENT_TABLE_LIMITS.minEvidenceRows} 行比较证据`;
+    }
+    let numericCells = 0;
+    const resultLines = results.split('\n');
+    for (const [index, table] of tables.entries()) {
+        if (table.identifierColumns < 1) {
+            return `实验结果第 ${index + 1} 张表缺少方法、数据集或设置识别列`;
+        }
+        for (const header of table.header) {
+            const normalized = header.replace(/[*_`]/g, '').trim();
+            if (TABLE_VAGUE_METRIC_HEADER_RE.test(normalized)) {
+                return `实验结果第 ${index + 1} 张表含叙述型伪指标列“${normalized}”，应改为可核对指标、设置或比较对象`;
+            }
+            if (TABLE_DIRECTIONAL_METRIC_RE.test(normalized)
+                && !TABLE_DIRECTION_MARK_RE.test(normalized)
+                && !TABLE_NON_DIRECTIONAL_MEASURE_RE.test(normalized)) {
+                return `实验结果第 ${index + 1} 张表指标“${normalized}”缺少 ↑/↓ 方向`;
+            }
+        }
+        for (const row of table.rows) {
+            for (const cell of row.slice(Math.min(table.identifierColumns, row.length))) {
+                const normalized = String(cell || '').replace(/[*_`]/g, '').trim();
+                if (TABLE_NUMERIC_CELL_RE.test(normalized)) numericCells += 1;
+                if (/−|％|(?:^|[<>=±+\-\[(,;/]\s*)\.\d|\d\s+%/.test(normalized)) {
+                    return `实验结果第 ${index + 1} 张表数字格式未规范化：“${normalized}”`;
+                }
+            }
+        }
+        const before = resultLines.slice(0, table.startLine).join('\n').trim().split(/\n\s*\n/).pop() || '';
+        const after = resultLines.slice(table.endLine + 1).join('\n').trim().split(/\n\s*\n/)[0] || '';
+        if (before.replace(/[*_`#>\s]/g, '').length < 20
+            || !/(?:比较|检验|考察|回答|关键问题|差异|收益|代价|是否|何种|多大|哪些)/.test(before)) {
+            return `实验结果第 ${index + 1} 张表前缺少与上下文衔接的具体比较问题`;
+        }
+        if (after.replace(/[*_`#>\s]/g, '').length < 50
+            || !/(?:相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化)/.test(after)) {
+            return `实验结果第 ${index + 1} 张表后缺少最关键差异、解释与证据边界`;
+        }
+    }
+    if (empirical && tables.length > 0 && numericCells < EXPERIMENT_TABLE_LIMITS.minNumericCells) {
+        return `实验表格只有 ${numericCells} 个可核对数字，至少需要 ${EXPERIMENT_TABLE_LIMITS.minNumericCells} 个；纯趋势或结论摘要不能替代结果表`;
+    }
+    const sourceText = sourceExperimentEvidence(options.sourceText);
+    const sourceHasComparison = /\b(?:baseline|compared?\s+(?:to|with)|comparison|outperform(?:s|ed)?|versus|vs\.)\b|基线|对照|相比|优于|弱于/i.test(sourceText);
+    const resultHasComparison = /\b(?:baseline|compared?\s+(?:to|with)|comparison|versus|vs\.)\b|基线|对照|相比|相对|优于|弱于|比(?!较)[^。；\n]{0,30}(?:高|低|强|弱|好|差|大|小|提升|下降)/i.test(results);
+    if (empirical && sourceHasComparison && !resultHasComparison) {
+        return '全文包含基线或对照比较，但实验结果没有保留比较对象';
+    }
+    const sourceHasAblation = /\bablation\b|\bw\/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|消融|移除|去掉/i.test(sourceText);
+    const resultHasAblation = /\bablation\b|\bw\/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|消融|移除|去掉|不含|排除/i.test(results);
+    if (empirical && sourceHasAblation && !resultHasAblation) {
+        return '全文包含消融实验，但实验结果没有保留关键消融或组件对照';
+    }
+    const sourceHasNegative = /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|退化|失败|更差|无效/i.test(sourceText);
+    const resultHasNegative = /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|退化|恶化|失败|损失|更差|比(?!较)[^。；\n]{0,30}差|未改善|没有改善|无效|负面|跨零|落后/i.test(results);
+    if (empirical && sourceHasNegative && !resultHasNegative) {
+        return '全文包含退化、不显著或失败结果，但实验结果没有保留负面证据';
+    }
+    return null;
+}
+
+function validateExperimentTableContract(analysis, options = {}) {
     const results = extractSection(analysis, '实验结果');
     if (!results) return null;
     const tables = extractMarkdownTables(results);
@@ -384,11 +527,18 @@ function validateExperimentTableContract(analysis) {
             return `实验结果第 ${index + 1} 张表包含 ${table.metricColumns} 个指标列，最多允许 ${EXPERIMENT_TABLE_LIMITS.maxMetricColumns} 列（方法/数据集识别列不计）`;
         }
     }
+    const contractVersion = options.contractVersion || EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION;
+    if (contractVersion === EXPERIMENT_TABLE_CONTRACT_VERSION) {
+        return validateExperimentTableEvidenceDepth(analysis, options);
+    }
+    if (contractVersion !== EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION) {
+        return `未知实验表格契约版本: ${contractVersion}`;
+    }
     return null;
 }
 
 function analysisManifestRequiresExperimentTableContract(manifest) {
-    return manifest?.contracts?.experimentTables === EXPERIMENT_TABLE_CONTRACT_VERSION;
+    return EXPERIMENT_TABLE_CONTRACT_VERSIONS.includes(manifest?.contracts?.experimentTables);
 }
 
 function validateMethodDetailContract(analysis) {
@@ -437,14 +587,25 @@ function validateManualDepthContract(analysis, options = {}) {
     const numericHits = (results.match(/(?<![A-Za-z])\d+(?:\.\d+)?(?:%|ms|s|Hz|kHz|M|B|GB|×)?/g) || []).length;
     const sourceNumericHits = (sourceText.match(/(?<![A-Za-z])\d+(?:\.\d+)?(?:%|ms|s|Hz|kHz|M|B|GB|×)?/g) || []).length;
     if (sourceNumericHits >= 8 && numericHits < 3) return `manual 实验结果缺少可核对数字: ${numericHits}/3`;
-    if ([MANUAL_DEPTH_CONTRACT_VERSION_V2, MANUAL_DEPTH_CONTRACT_VERSION_V3]
+    if ([MANUAL_DEPTH_CONTRACT_VERSION_V2, MANUAL_DEPTH_CONTRACT_VERSION_V3,
+        MANUAL_DEPTH_CONTRACT_VERSION_V4]
         .includes(options.manualDepthContractVersion)) {
         const v2Issue = validateManualDepthContractV2(analysis, { sourceText });
         if (v2Issue) return v2Issue;
     }
-    if (options.manualDepthContractVersion === MANUAL_DEPTH_CONTRACT_VERSION_V3) {
+    if ([MANUAL_DEPTH_CONTRACT_VERSION_V3, MANUAL_DEPTH_CONTRACT_VERSION_V4]
+        .includes(options.manualDepthContractVersion)) {
         const v3Issue = validateManualDepthContractV3(analysis, { sourceText });
         if (v3Issue) return v3Issue;
+    }
+    if (options.manualDepthContractVersion === MANUAL_DEPTH_CONTRACT_VERSION_V4) {
+        const quality = validateEditorialQuality(analysis);
+        if (!quality.valid) {
+            const details = quality.issues.slice(0, 6)
+                .map(item => `${item.code}:${item.section || '-'}:${item.match || item.message}`)
+                .join('；');
+            return `manual v4 读者文本质量未通过: ${details}`;
+        }
     }
     return null;
 }
@@ -581,7 +742,7 @@ function validateManualDepthContractV3(analysis, options = {}) {
     if (!/(?:相比|相较|比较|配对|对照|基线|baseline|vs\.?|消融|移除|加入|主方法|提出方法|最强|高于|低于|超过|落后|优于|改善|差距|从[^。]{0,40}(?:升至|降至|到))/i.test(results)) {
         return 'manual v3 实验结果缺少明确比较对象或消融关系';
     }
-    if (!/(?:但是|但|不过|仅|尚未|不能|限制|边界|未报告|未说明)/.test(results)) {
+    if (!/(?:但是|但|不过|仅|尚未|不能|限制|边界|未报告|未说明|而非|并非|不存在|退化|失败|更差|不显著|跨零)/.test(results)) {
         return 'manual v3 实验结果缺少结论边界或负面结果';
     }
     const numericHits = results.match(/(?<![A-Za-z])\d+(?:\.\d+)?(?:%|ms|s|Hz|kHz|M|B|GB|×)?/g) || [];
@@ -733,9 +894,10 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
     if (!/^[a-f0-9]{64}$/.test(String(takeover.promptSha256 || ''))) {
         return 'manualTakeover.promptSha256 必须是 SHA-256';
     }
-    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V3
+    if ([MANUAL_DEPTH_CONTRACT_VERSION_V3, MANUAL_DEPTH_CONTRACT_VERSION_V4]
+        .includes(manifest?.contracts?.manualDepth)
         && !/^[a-f0-9]{64}$/.test(String(takeover.manualAuthoringPromptSha256 || ''))) {
-        return 'manual v3 必须绑定 manualAuthoringPromptSha256';
+        return 'manual v3/v4 必须绑定 manualAuthoringPromptSha256';
     }
     if (!/^[a-f0-9]{64}$/.test(String(takeover.analysisSha256 || ''))) {
         return 'manualTakeover.analysisSha256 必须是 SHA-256';
@@ -755,6 +917,10 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
         || review.sourceVerified !== true || review.analysisContractVerified !== true
         || review.scoringVerified !== true || review.stageEvidenceVerified !== true) {
         return 'manualTakeover.review 必须确认来源、正文、评分和阶段证据';
+    }
+    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V4
+        && review.readerQualityVerified !== true) {
+        return 'manual v4 manualTakeover.review 必须确认 readerQualityVerified';
     }
 
     const audit = takeover.audit;
@@ -787,6 +953,39 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
     if (!/^[a-f0-9]{64}$/.test(String(takeover.evidenceLedgerSha256 || ''))
         || takeover.evidenceLedgerSha256 !== manualSha256(takeover.evidenceLedger)) {
         return 'manualTakeover.evidenceLedgerSha256 不匹配';
+    }
+    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V4) {
+        const resultClaims = validateResultClaims(takeover.resultClaims, options.sourceText || '', {
+            documentType: takeover.documentType,
+            exception: takeover.resultClaimsException,
+            // In-memory reuse/status checks may intentionally omit the bound
+            // full text and only verify schema, claim-local numbers and hashes.
+            // Persistent canonical validators must explicitly reload and pass
+            // the SHA-bound sourceText; validate:data does so from the same-date
+            // manual-full-text manifest, while ingestion already owns the text.
+            requireSourceBinding: Boolean(options.sourceText),
+            readerResultsText: options.analysis === undefined
+                ? undefined
+                : extractSection(options.analysis, '实验结果')
+        });
+        if (!resultClaims.valid) {
+            return `manualTakeover.resultClaims 未闭环: ${resultClaims.errors.join('；')}`;
+        }
+        if (!/^[a-f0-9]{64}$/.test(String(takeover.resultClaimsSha256 || ''))
+            || takeover.resultClaimsSha256 !== manualSha256({
+                claims: takeover.resultClaims,
+                exception: takeover.resultClaimsException || null
+            })) {
+            return 'manualTakeover.resultClaimsSha256 不匹配';
+        }
+        const readability = validateReadabilityRubric(takeover.readabilityRubric);
+        if (!readability.valid || !readability.passing) {
+            return `manualTakeover.readabilityRubric 未通过: ${readability.errors.join('；') || `total=${readability.total}`}`;
+        }
+        if (!/^[a-f0-9]{64}$/.test(String(takeover.readabilityRubricSha256 || ''))
+            || takeover.readabilityRubricSha256 !== manualSha256(takeover.readabilityRubric)) {
+            return 'manualTakeover.readabilityRubricSha256 不匹配';
+        }
     }
 
     const stages = manifest?.stages || {};
@@ -849,7 +1048,8 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
         if (!item || typeof item !== 'object' || !state || item.status !== state.status) {
             return `manualTakeover.stageEvidence.${stage} 与阶段状态不一致`;
         }
-        if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V3
+        if ([MANUAL_DEPTH_CONTRACT_VERSION_V3, MANUAL_DEPTH_CONTRACT_VERSION_V4]
+            .includes(manifest?.contracts?.manualDepth)
             && (item.executionKind !== MANUAL_STAGE_EXECUTION_KIND
                 || state.executionKind !== MANUAL_STAGE_EXECUTION_KIND)) {
             return `manualTakeover.stageEvidence.${stage}.executionKind 必须明确为 ${MANUAL_STAGE_EXECUTION_KIND}，不得把人工核验伪装成 LLM 阶段执行`;
@@ -903,7 +1103,8 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
             }
             expectedInputSha256 = manualSha256({
                 stage,
-                ...(manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V3
+                ...([MANUAL_DEPTH_CONTRACT_VERSION_V3, MANUAL_DEPTH_CONTRACT_VERSION_V4]
+                    .includes(manifest?.contracts?.manualDepth)
                     ? { executionKind: item.executionKind || null }
                     : {}),
                 sourceSha256: takeover.sourceSha256,
@@ -940,6 +1141,18 @@ function validateManualTakeoverManifest(manifest, sourceSha256 = '', options = {
     const manualStatuses = Object.values(manifest?.stages || {})
         .some(stage => stage?.status === MANUAL_COMPLETE_STATUS);
     if (!manualStatuses && manifest?.manualTakeover === undefined) return null;
+    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V4
+        && manifest?.contracts?.experimentTables !== EXPERIMENT_TABLE_CONTRACT_VERSION) {
+        return `manual v4 必须绑定 experimentTables=${EXPERIMENT_TABLE_CONTRACT_VERSION}`;
+    }
+    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V4
+        && manifest?.contracts?.imageNarrative !== 'context-bound-v1') {
+        return 'manual v4 必须绑定 imageNarrative=context-bound-v1';
+    }
+    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V4
+        && manifest?.contracts?.editorialQuality !== EDITORIAL_QUALITY_CONTRACT_VERSION) {
+        return `manual v4 必须绑定 editorialQuality=${EDITORIAL_QUALITY_CONTRACT_VERSION}`;
+    }
     const takeover = manifest?.manualTakeover;
     if (!takeover || typeof takeover !== 'object' || Array.isArray(takeover)) {
         return 'manual_complete 阶段缺少 manualTakeover provenance';
@@ -1114,7 +1327,12 @@ function getInvalidAnalysisReason(analysis, parsed, options = {}) {
     const tagIssue = validateTagSectionContract(analysis, parsed);
     if (tagIssue) return `分析结果标签契约无效: ${tagIssue}`;
     if (options.enforceExperimentTableContract === true) {
-        const tableIssue = validateExperimentTableContract(analysis);
+        const tableIssue = validateExperimentTableContract(analysis, {
+            contractVersion: options.experimentTableContractVersion
+                || EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION,
+            documentType: parsed?.documentType,
+            sourceText: options.sourceText
+        });
         if (tableIssue) return `分析结果表格契约无效: ${tableIssue}`;
     }
     if (options.enforceMethodDetailContract === true) {
@@ -1159,7 +1377,10 @@ module.exports = {
     findAnalysisEditorialLeakages,
     validateAnalysisEditorialLeakageContract,
     EXPERIMENT_TABLE_CONTRACT_VERSION,
+    EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION,
+    EXPERIMENT_TABLE_CONTRACT_VERSIONS,
     METHOD_DETAIL_CONTRACT_VERSION,
+    EDITORIAL_QUALITY_CONTRACT_VERSION,
     ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION,
     REQUIRED_RECOVERY_STAGES,
     RECOVERY_STAGE_TERMINAL_STATUSES,
@@ -1170,6 +1391,8 @@ module.exports = {
     EXPERIMENT_TABLE_LIMITS,
     splitMarkdownTableRow,
     extractMarkdownTables,
+    normalizeExperimentTableNumericFormatting,
+    validateExperimentTableEvidenceDepth,
     validateExperimentTableContract,
     analysisManifestRequiresExperimentTableContract,
     validateMethodDetailContract,
@@ -1177,6 +1400,7 @@ module.exports = {
     MANUAL_DEPTH_CONTRACT_VERSION,
     MANUAL_DEPTH_CONTRACT_VERSION_V2,
     MANUAL_DEPTH_CONTRACT_VERSION_V3,
+    MANUAL_DEPTH_CONTRACT_VERSION_V4,
     MANUAL_DEPTH_CONTRACT_VERSIONS,
     findCrossSectionDuplicateSentences,
     validateManualDepthContractV2,

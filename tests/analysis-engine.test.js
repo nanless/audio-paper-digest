@@ -30,8 +30,10 @@ const {
     findAnalysisEditorialLeakages,
     validateAnalysisEditorialLeakageContract,
     validateExperimentTableContract,
+    normalizeExperimentTableNumericFormatting,
     validateMethodDetailContract,
     EXPERIMENT_TABLE_CONTRACT_VERSION,
+    EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION,
     METHOD_DETAIL_CONTRACT_VERSION
 } = require('../scripts/analysis-contract.js');
 const { validAnalysisText, validAnalysisPaper } = require('./valid-analysis-fixture.js');
@@ -457,6 +459,85 @@ describe('analyzePaperWithRetry', () => {
             experimentTables: EXPERIMENT_TABLE_CONTRACT_VERSION
         };
         assert.strictEqual(isSuccessfulAnalysisRecord(versioned), false);
+    });
+
+    it('evidence-rich-v2 拒绝结论卡并要求表前问题、指标方向、数字与表后边界', () => {
+        const withResults = body => validAnalysisText().replace(
+            /## 实验结果\n[\s\S]*?\n\n## 细节详述/,
+            `## 实验结果\n${body}\n\n## 细节详述`
+        );
+        const valid = withResults([
+            '关键比较问题是完整方法相对强基线能降低多少识别错误，以及该收益是否伴随效率代价。表中保留主方法、最强基线和关键消融。',
+            '',
+            '| 方法 / 设置 | LibriSpeech WER↓ | RTF↓ |',
+            '|---|---:|---:|',
+            '| 强基线 | 8.4% | 0.72 |',
+            '| 完整方法 | 7.1% | 0.81 |',
+            '| 去掉对齐损失（消融） | 7.9% | 0.79 |',
+            '',
+            '完整方法相比强基线把 WER 降低 1.3 个百分点，但 RTF 上升 0.09；消融只恢复部分收益，且这些差异仅适用于该测试划分，不能外推到未测语言。'
+        ].join('\n'));
+        assert.strictEqual(validateExperimentTableContract(valid, {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究',
+            sourceText: 'Experiments\nWe compare a baseline and include an ablation without the alignment loss.'
+        }), null);
+        const stageIdentifier = valid.replace('方法 / 设置', '训练阶段');
+        assert.strictEqual(validateExperimentTableContract(stageIdentifier, {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究'
+        }), null, '训练阶段是可核对的设置识别列，不应误判为纯指标表');
+
+        const neutralComparison = withResults([
+            '关键比较问题是三种配置在固定测试集上的 WER 差异多大，并核验配置改变是否影响结果方向。',
+            '',
+            '| 配置 | WER↓ |',
+            '|---|---:|',
+            '| A | 12.4% |',
+            '| B | 10.8% |',
+            '| C | 9.7% |',
+            '',
+            '配置 C 的报告值为 9.7%，其余条件保持一致；同时，这组数字只适用于固定测试划分和相同解码预算，跨语言结论仍需额外验证，论文也没有报告在线吞吐、长期稳定性或跨域置信区间。'
+        ].join('\n'));
+        assert.match(validateExperimentTableContract(neutralComparison, {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究',
+            sourceText: 'The paper compared with Naive RAG.'
+        }), /没有保留比较对象/, '“关键比较问题”中的“比”不能冒充真实结果比较');
+
+        const vague = withResults([
+            '关键比较问题是不同实验条件是否改善最终任务，表中保留论文列出的四项观察。',
+            '',
+            '| 条件 | 结果 | 含义 |',
+            '|---|---|---|',
+            '| A | 更好 | 有收益 |',
+            '| B | 更稳 | 可部署 |',
+            '| C | 退化 | 有边界 |',
+            '',
+            '不同条件相比默认方案方向不一，但当前证据仍只覆盖作者测试，不能外推。'
+        ].join('\n'));
+        assert.match(validateExperimentTableContract(vague, {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究'
+        }), /叙述型伪指标列/);
+
+        const missingDirection = valid.replace('LibriSpeech WER↓', 'LibriSpeech WER');
+        assert.match(validateExperimentTableContract(missingDirection, {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究'
+        }), /缺少 ↑\/↓ 方向/);
+
+        const dirty = valid.replace('8.4%', '8.4 %').replace('7.1%', '−.71%');
+        const normalized = normalizeExperimentTableNumericFormatting(dirty);
+        assert.match(normalized, /8\.4%/);
+        assert.match(normalized, /-0\.71%/);
+        assert.strictEqual(validateExperimentTableContract(normalized, {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究'
+        }), null);
+        assert.strictEqual(validateExperimentTableContract(vague, {
+            contractVersion: EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION
+        }), null, '旧 bounded-v1 只保留历史上限兼容，不追溯判坏');
     });
 
     it('detailed-v1 方法硬契约要求 600 中文字符、结构词和三个段落', () => {

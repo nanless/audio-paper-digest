@@ -14,17 +14,26 @@ const {
     validateManualDepthContract,
     MANUAL_DEPTH_CONTRACT_VERSION_V2,
     MANUAL_DEPTH_CONTRACT_VERSION_V3,
+    MANUAL_DEPTH_CONTRACT_VERSION_V4,
     findManualBoilerplate
 } = require('../scripts/analysis-contract.js');
+const { isSuccessfulAnalysisRecord } = require('../scripts/analysis-engine.js');
 const {
     buildManualRecord,
     buildStagePromptBindings,
     conciseManualImageCaption,
     finalizeManualCanonicalState,
     manualCanonicalReuseFingerprint,
+    manualCanonicalWriteDecision,
+    normalizeManualV4ImageArtifacts,
     parseArgs,
+    resolveManualSpecPromptBindings,
     shouldReuseCanonical
 } = require('../scripts/manual-deep-analysis.js');
+const {
+    applyImageInsertionPlan,
+    buildImageAnchorCatalog
+} = require('../scripts/deep-analyzer.js');
 
 function directSha(value) {
     return crypto.createHash('sha256').update(value).digest('hex');
@@ -44,7 +53,7 @@ function detailedAnalysis() {
         '2. 传统增强没有区分噪声条件，本文采用分条件数据构造与共享监督目标；实验相对同预算基线改善识别结果，不过跨设备迁移仍未验证。训练集、验证集与测试集的职责被分开，因而模型选择不会直接读取测试结果；但公开材料没有给出全部随机种子和置信区间，稳定性证据仍有限。',
         '3. 过去常只报告单次最好值，本文设计主实验与模块消融并保留指标方向；这些证据验证组件作用，却没有给出统计显著性与部署成本。结果按噪声条件和说话人划分解释，不把一个最有利数字外推为普遍改进；延迟、内存与功耗没有板端测量，工程结论只能保持在算法层。'
     ].join('\n\n');
-    const results = `实验在多个带噪语音基准上比较主方法与基线，并报告识别错误、噪声鲁棒性和消融变化。实验同时交代训练集、验证集、测试集、噪声类型、说话人划分和评价指标方向，结果需要结合这些条件解读。结果段还应说明每个基线采用的训练数据、相同的预处理和相同的解码设置，避免把数据规模差异误认为模型收益。测试结果还需要区分平均值、单次最好值和不同噪声条件下的变化，不能只引用一个最有利的数字。统计口径、重复次数和误差范围也会影响读者对结果稳定性的判断。\n\n| 实验 | 结果与条件 |\n|---|---|\n| 主方法 | 多个公开基准、带噪条件、识别输出 |\n| 消融 | 移除上下文模块后误差上升 |\n\n结果同时记录数据划分、基线和评价口径，不能把单一条件的改善外推到所有说话人或设备。论文没有报告的统计显著性、跨域测试和失败案例不在此处补写。`;
+    const results = `实验在多个带噪语音基准上比较主方法与基线，并报告识别错误、噪声鲁棒性和消融变化。实验同时交代训练集、验证集、测试集、噪声类型、说话人划分和评价指标方向，结果需要结合这些条件解读。结果段还应说明每个基线采用的训练数据、相同的预处理和相同的解码设置，避免把数据规模差异误认为模型收益。关键比较问题是完整方法相对同预算基线降低多少 WER，以及移除上下文模块会损失多少收益；表中保留主方法、强基线和关键消融。\n\n| 方法 / 设置 | 带噪 WER↓ | 干净 WER↓ |\n|---|---:|---:|\n| 同预算基线 | 12.4% | 7.2% |\n| 完整方法 | 10.8% | 6.8% |\n| 去掉上下文模块（消融） | 11.7% | 7.0% |\n\n完整方法相比基线在带噪条件下降低 1.6 个百分点，而移除上下文模块后只保留部分收益；但这些差异只覆盖当前数据划分，不能外推到所有说话人或设备。论文没有报告的统计显著性、跨域测试和失败案例不在此处补写。`;
     const details = Array.from({ length: 8 }, (_, index) => `- 细节${index + 1}：输入音频、声学特征、上下文编码、监督目标、验证集和解码设置之间的关系均需按正文保持一致；第${index + 1}项缺失信息不会由常见实现补写。`).join('\n\n');
     const scoringMaxima = ['2', '1.5', '1.5', '1', '1.5', '1.5', '0.5', '1.5'];
     const scoringValues = ['1.5', '1.2', '1.1', '0.8', '1.0', '0.0', '0.3', '1.0'];
@@ -189,8 +198,70 @@ function buildReusableRecord(options = {}) {
         authors: [],
         categories: []
     };
-    const record = buildManualRecord(paper, spec, '2026-08-20', promptBindings);
+    const record = buildManualRecord(paper, spec, '2026-08-20', promptBindings, {
+        manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V3
+    });
     return { dir, sourcePath, sourceText, spec, promptBindings, paper, record };
+}
+
+function promoteReusableRecordToV4(record) {
+    const promoted = JSON.parse(JSON.stringify(record));
+    const takeover = promoted.analysisManifest.manualTakeover;
+    promoted.analysisManifest.contracts = {
+        ...promoted.analysisManifest.contracts,
+        experimentTables: 'evidence-rich-v2',
+        manualDepth: MANUAL_DEPTH_CONTRACT_VERSION_V4,
+        imageNarrative: 'context-bound-v1',
+        editorialQuality: 'reader-facing-v1'
+    };
+    takeover.review.readerQualityVerified = true;
+    takeover.documentType = '方法研究';
+    takeover.resultClaims = [1, 2, 3].map(index => ({
+        datasetOrSetting: `fixture-${index}`,
+        splitOrCondition: `condition-${index}`,
+        method: '完整方法',
+        baseline: '同预算基线',
+        metric: 'WER',
+        value: `${10 + index}.0%`,
+        unit: '%',
+        direction: 'lower_is_better',
+        sourceQuote: `fixture-${index} condition-${index} 完整方法与同预算基线的 WER 为 ${10 + index}.0%，越低越好。`,
+        sourceBindings: {
+            datasetOrSetting: `fixture-${index}`,
+            splitOrCondition: `condition-${index}`,
+            method: '完整方法',
+            baseline: '同预算基线',
+            metric: 'WER',
+            value: `${10 + index}.0%`,
+            unit: `${10 + index}.0%`,
+            direction: '越低越好'
+        },
+        readerBindings: {
+            datasetOrSetting: '带噪条件',
+            splitOrCondition: '同预算',
+            method: '完整方法',
+            baseline: '同预算基线',
+            metric: 'WER↓',
+            value: `${10 + index}.0%`,
+            unit: `${10 + index}.0%`,
+            direction: 'WER↓'
+        }
+    }));
+    takeover.resultClaimsSha256 = manualSha256({ claims: takeover.resultClaims, exception: null });
+    const dimensions = [
+        'paragraphLogic', 'interParagraphContinuity', 'sectionResponsibility',
+        'factLocality', 'terminologyAndPerspective', 'sentenceRhythm', 'antiTemplateOriginality'
+    ];
+    takeover.readabilityRubric = {
+        dimensions: Object.fromEntries(dimensions.map(name => [name, {
+            score: 2,
+            reason: `${name} 已逐项复核并绑定正文。`,
+            evidence: [`${name}-evidence`]
+        }]))
+    };
+    takeover.readabilityRubricSha256 = manualSha256(takeover.readabilityRubric);
+    takeover.editorialQualityMetrics = { issueCount: 0, warningCount: 0 };
+    return promoted;
 }
 
 describe('manual_complete v3 deep-analysis contract', () => {
@@ -240,6 +311,35 @@ describe('manual_complete v3 deep-analysis contract', () => {
         );
     });
 
+    it('历史 v3 spec 保留自身 prompt SHA，v4 必须绑定当前 prompt', () => {
+        const current = buildStagePromptBindings();
+        const historicalStageSha = Object.fromEntries(REQUIRED_RECOVERY_STAGES.map((stage, index) => [
+            stage, String(index + 1).padStart(64, '0')
+        ]));
+        const historical = {
+            version: 3,
+            promptSha256: historicalStageSha.primaryAnalysis,
+            manualAuthoringPromptPath: 'prompts/manual-analysis-record.md',
+            manualAuthoringPromptSha256: 'f'.repeat(64),
+            stagePromptSha256: historicalStageSha
+        };
+        const replay = resolveManualSpecPromptBindings(historical, current);
+        assert.equal(replay.primaryAnalysis.sha256, historical.promptSha256);
+        assert.equal(replay.scoringAudit.sha256, historicalStageSha.scoringAudit);
+        assert.equal(replay.scoringAudit.source, current.scoringAudit.source);
+
+        assert.throws(
+            () => resolveManualSpecPromptBindings({ ...historical, version: 4 }, current),
+            /与当前 deep-analysis prompt 不一致/
+        );
+        const incomplete = { ...historical, stagePromptSha256: { ...historicalStageSha } };
+        delete incomplete.stagePromptSha256.imageSupplement;
+        assert.throws(
+            () => resolveManualSpecPromptBindings(incomplete, current),
+            /必须精确覆盖全部阶段/
+        );
+    });
+
     it('接受全文事实账本、二次审计和逐阶段证据', () => {
         const fixture = baseSpec();
         assert.equal(findManualBoilerplate(fixture.analysis).length, 0);
@@ -252,6 +352,94 @@ describe('manual_complete v3 deep-analysis contract', () => {
             analysis: fixture.analysis,
             sourceText: fixture.sourceText
         }), /逐阶段 prompt\/context 绑定/);
+    });
+
+    it('manual v4 必须绑定 evidence-rich-v2，历史记录不追溯升级', () => {
+        const historical = baseSpec();
+        assert.equal(validateManualTakeoverManifest(historical.manifest, historical.sourceSha256, {
+            analysis: historical.analysis,
+            sourceText: historical.sourceText
+        }), null);
+
+        const v4 = baseSpec();
+        v4.manifest.contracts.manualDepth = MANUAL_DEPTH_CONTRACT_VERSION_V4;
+        assert.match(validateManualTakeoverManifest(v4.manifest, v4.sourceSha256, {
+            analysis: v4.analysis,
+            sourceText: v4.sourceText
+        }), /manual v4 必须绑定 experimentTables=evidence-rich-v2/);
+    });
+
+    function contextBoundPlan(imageNumber, anchor, label) {
+        const context = anchor.text.slice(0, 48);
+        return {
+            imageNumber,
+            section: anchor.section,
+            paragraphId: anchor.id,
+            conclusionParagraphId: anchor.id,
+            lead: `承接“${context}”，下图用于观察${label}对应的信号流与比较位置。`,
+            explanation: `图中箭头用于追踪${label}；该图仅覆盖“${context}”所述条件，不能外推到未报告设置。`
+        };
+    }
+
+    function assertManualV4CanonicalImageOrder(configuredImageUrls, plans, expectedUrls) {
+        const imageInfos = configuredImageUrls.map((url, index) => ({
+            url,
+            caption: `Figure ${index + 1} for ordering regression`,
+            mime: 'image/png',
+            sha256: String(index + 1).repeat(64),
+            bytes: 1000 + index
+        }));
+        const insertion = applyImageInsertionPlan(detailedAnalysis(), plans, imageInfos, 4);
+        assert.deepStrictEqual(insertion.selectedImageUrls, expectedUrls);
+        const canonical = normalizeManualV4ImageArtifacts({
+            configuredImageUrls,
+            preparedImages: imageInfos,
+            insertionPlan: plans,
+            insertionDiagnostics: insertion.insertionDiagnostics,
+            orderedSelectedImageUrls: insertion.selectedImageUrls
+        });
+        assert.deepStrictEqual(canonical.selectedImages.map(item => item.url), expectedUrls);
+        assert.deepStrictEqual(canonical.insertionPlan.map(item => item.imageNumber), [1, 2]);
+        assert.deepStrictEqual(canonical.insertionDiagnostics.map(item => item.imageNumber), [1, 2]);
+        assert.deepStrictEqual(
+            canonical.insertionPlan.map(item => item.paragraphId),
+            expectedUrls.map(url => plans[configuredImageUrls.indexOf(url)].paragraphId)
+        );
+        const bodyOrder = [...insertion.analysis.matchAll(/!\[(?:\\.|[^\]\\])*\]\((https:\/\/[^)]+)\)/g)]
+            .map(match => match[1]);
+        assert.deepStrictEqual(bodyOrder, expectedUrls);
+    }
+
+    it('Manual v4 将跨章节逆序计划按最终正文图片顺序写入 canonical', () => {
+        const analysis = detailedAnalysis();
+        const anchors = buildImageAnchorCatalog(analysis);
+        const methodAnchor = anchors.find(item => item.section === '方法概述和架构');
+        const resultAnchor = anchors.find(item => item.section === '实验结果');
+        const resultUrl = 'https://arxiv.org/html/2608.20001/result.png';
+        const methodUrl = 'https://arxiv.org/html/2608.20001/method.png';
+        assertManualV4CanonicalImageOrder(
+            [resultUrl, methodUrl],
+            [
+                contextBoundPlan(1, resultAnchor, '带噪 WER 对照'),
+                contextBoundPlan(2, methodAnchor, '上下文编码器')
+            ],
+            [methodUrl, resultUrl]
+        );
+    });
+
+    it('Manual v4 将同节逆序计划按段落先后写入 canonical', () => {
+        const methodAnchors = buildImageAnchorCatalog(detailedAnalysis())
+            .filter(item => item.section === '方法概述和架构');
+        const laterUrl = 'https://arxiv.org/html/2608.20002/later.png';
+        const earlierUrl = 'https://arxiv.org/html/2608.20002/earlier.png';
+        assertManualV4CanonicalImageOrder(
+            [laterUrl, earlierUrl],
+            [
+                contextBoundPlan(1, methodAnchors[1], '训练阶段'),
+                contextBoundPlan(2, methodAnchors[0], '输入编码阶段')
+            ],
+            [earlierUrl, laterUrl]
+        );
     });
 
     it('显式空选图不会下载或回填任何候选', async () => {
@@ -345,6 +533,16 @@ describe('manual_complete v3 deep-analysis contract', () => {
         };
         spec.imageInfos = [{ url: 'https://arxiv.org/html/2608.20000/figure1.png', caption: 'Architecture overview' }];
         spec.selectedImageUrls = ['https://arxiv.org/html/2608.20000/figure1.png'];
+        const methodAnchors = buildImageAnchorCatalog(spec.analysis)
+            .filter(item => item.section === '方法概述和架构');
+        spec.imageInsertions = [{
+            url: spec.selectedImageUrls[0],
+            section: '方法概述和架构',
+            paragraphId: methodAnchors[0].id,
+            conclusionParagraphId: methodAnchors[1].id,
+            lead: '承接音频波形转换为声学特征的输入链，下图用于核对编码器与上下文融合模块的连接位置。',
+            explanation: '图中箭头从声学特征编码器进入上下文融合模块；该结构只回扣训练阶段使用公开数据的流程，不能说明未披露超参数。'
+        }];
         const paper = { arxivId: '2608.20000', title: 'Fixture paper', authors: [], categories: [] };
         // The fixture source is intentionally repeated so the bounded full-text gate passes;
         // source quotes remain exact substrings after normalization.
@@ -363,7 +561,11 @@ describe('manual_complete v3 deep-analysis contract', () => {
             spec,
             '2026-08-20',
             promptBindings,
-            { preparedImages, imageDownloadOutcomes: [{ url: spec.imageInfos[0].url, status: 'complete' }] }
+            {
+                preparedImages,
+                imageDownloadOutcomes: [{ url: spec.imageInfos[0].url, status: 'complete' }],
+                manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V3
+            }
         );
         assert.equal(record.analysisSource, 'provided_full_text');
         assert.equal(shouldReuseCanonical(record, record, false), true);
@@ -390,15 +592,20 @@ describe('manual_complete v3 deep-analysis contract', () => {
         assert.equal(record.imageManifest.selected[0].sha256, 'b'.repeat(64));
         assert.equal(record.imageManifest.selected[0].bytes, 1234);
         assert.match(record.analysis, /下图概括论文的系统结构或处理流程/);
+        assert.equal(record.analysisManifest.contracts.imageNarrative, undefined);
         assert.doesNotMatch(record.analysis, /原始图注为/);
 
-        const noSelectionSpec = { ...spec, selectedImageUrls: [] };
+        const noSelectionSpec = { ...spec, selectedImageUrls: [], imageInsertions: [] };
         const noSelectionRecord = buildManualRecord(
             paper,
             noSelectionSpec,
             '2026-08-20',
             promptBindings,
-            { preparedImages, imageDownloadOutcomes: [{ url: spec.imageInfos[0].url, status: 'complete' }] }
+            {
+                preparedImages,
+                imageDownloadOutcomes: [{ url: spec.imageInfos[0].url, status: 'complete' }],
+                manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V3
+            }
         );
         assert.deepStrictEqual(noSelectionRecord.selectedImageUrls, []);
         assert.deepStrictEqual(noSelectionRecord.imageManifest.selected, []);
@@ -413,6 +620,7 @@ describe('manual_complete v3 deep-analysis contract', () => {
             }
         );
         assert.equal(validateRecord(record), null);
+        assert.equal(isSuccessfulAnalysisRecord(record), true);
         const tamperCases = [
             ['inputSha256', candidate => {
                 candidate.analysisManifest.manualTakeover.stageEvidence.primaryAnalysis.inputSha256 = 'c'.repeat(64);
@@ -444,6 +652,7 @@ describe('manual_complete v3 deep-analysis contract', () => {
         const damagedImageManifest = JSON.parse(JSON.stringify(record));
         damagedImageManifest.imageManifest.downloadOutcomes.push({ url: 'https://example.com/tampered.png', status: 'complete' });
         assert.match(validateRecord(damagedImageManifest), /imageManifest\.downloadEvidenceSha256 闭环校验失败/);
+        assert.equal(isSuccessfulAnalysisRecord(damagedImageManifest), false);
 
         const changedImageRecord = buildManualRecord(
             paper,
@@ -452,7 +661,8 @@ describe('manual_complete v3 deep-analysis contract', () => {
             promptBindings,
             {
                 preparedImages: [{ ...preparedImages[0], sha256: 'd'.repeat(64), bytes: 2345 }],
-                imageDownloadOutcomes: [{ url: spec.imageInfos[0].url, status: 'complete' }]
+                imageDownloadOutcomes: [{ url: spec.imageInfos[0].url, status: 'complete' }],
+                manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V3
             }
         );
         assert.notEqual(
@@ -464,7 +674,10 @@ describe('manual_complete v3 deep-analysis contract', () => {
         spec.selectedImageUrls = ['https://example.com/unverified.png'];
         spec.imageSelectionMode = 'manual_explicit';
         assert.throws(
-            () => buildManualRecord(paper, spec, '2026-08-20', promptBindings, { preparedImages }),
+            () => buildManualRecord(paper, spec, '2026-08-20', promptBindings, {
+                preparedImages,
+                manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V3
+            }),
             /未通过安全下载校验/
         );
     });
@@ -514,6 +727,67 @@ describe('manual_complete v3 deep-analysis contract', () => {
             );
             assert.equal(shouldReuseCanonical(canonical, candidate), false, `${label} 变化必须重建`);
         }
+    });
+
+    it('成功 canonical 只有同指纹默认复用，差异必须显式 --force 才能写入', () => {
+        const canonical = buildReusableRecord().record;
+        const changed = buildReusableRecord({ sourceSuffix: '\nchanged source evidence' }).record;
+        assert.equal(manualCanonicalWriteDecision(canonical, canonical, false), 'reuse');
+        assert.throws(
+            () => manualCanonicalWriteDecision(canonical, changed, false),
+            /拒绝无 --force 覆盖/
+        );
+        assert.equal(manualCanonicalWriteDecision(canonical, changed, true), 'write');
+        assert.equal(manualCanonicalWriteDecision(null, changed, false), 'write');
+    });
+
+    it('resultClaims 只改逐字段 binding 也必须失效 canonical 复用指纹', () => {
+        const canonical = promoteReusableRecordToV4(buildReusableRecord().record);
+        const changed = JSON.parse(JSON.stringify(canonical));
+        changed.analysisManifest.manualTakeover.resultClaims[0].sourceBindings.method = '完整方法与同预算基线';
+        changed.analysisManifest.manualTakeover.resultClaimsSha256 = manualSha256({
+            claims: changed.analysisManifest.manualTakeover.resultClaims,
+            exception: null
+        });
+        assert.notEqual(
+            manualCanonicalReuseFingerprint(canonical),
+            manualCanonicalReuseFingerprint(changed)
+        );
+    });
+
+    it('resultClaimsException 或 readabilityRubric 变化必须失效 canonical 复用指纹', () => {
+        const canonical = promoteReusableRecordToV4(buildReusableRecord().record);
+        const changedException = JSON.parse(JSON.stringify(canonical));
+        changedException.analysisManifest.manualTakeover.resultClaimsException = {
+            type: 'qualitative',
+            reason: '仅用于确认例外字段确实进入复用指纹。',
+            sourceQuote: 'fixture exception evidence'
+        };
+        changedException.analysisManifest.manualTakeover.resultClaimsSha256 = manualSha256({
+            claims: changedException.analysisManifest.manualTakeover.resultClaims,
+            exception: changedException.analysisManifest.manualTakeover.resultClaimsException
+        });
+        const changedRubric = JSON.parse(JSON.stringify(canonical));
+        changedRubric.analysisManifest.manualTakeover.readabilityRubric
+            .dimensions.paragraphLogic.reason += '本轮重新审核。';
+        changedRubric.analysisManifest.manualTakeover.readabilityRubricSha256 = manualSha256(
+            changedRubric.analysisManifest.manualTakeover.readabilityRubric
+        );
+        for (const candidate of [changedException, changedRubric]) {
+            assert.notEqual(
+                manualCanonicalReuseFingerprint(canonical),
+                manualCanonicalReuseFingerprint(candidate)
+            );
+        }
+    });
+
+    it('v3 canonical 与 v4 expected 绝不共用复用指纹', () => {
+        const historicalV3 = buildReusableRecord().record;
+        const expectedV4 = promoteReusableRecordToV4(historicalV3);
+        assert.notEqual(
+            manualCanonicalReuseFingerprint(historicalV3),
+            manualCanonicalReuseFingerprint(expectedV4)
+        );
     });
 
     it('最终状态在文件锁内按最新 canonical expected IDs 重算，不接受本地旧 failures 计数', () => {

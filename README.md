@@ -16,7 +16,7 @@ LLM endpoint 必须使用 HTTPS（仅 loopback 本地测试允许 HTTP）。arXi
 
 LLM 筛选前默认执行高召回关键词预筛，核心音频类别提供兜底，明显无关论文不会消耗 LLM 配额。`npm run keyword:recall` 同时校验人工正负金标与历史有效正样本；已确认的历史 LLM 误筛必须显式记录理由，不计入有效正样本分母。日更结束后运行 `npm run digest:status -- --date YYYY-MM-DD`，统一验收抓取、筛选、分析、博客远端发布和两类视觉资产，并保存机器可读报告。报告只反映命令执行时刻；后续 push 或视觉 `record` 后必须重跑，不能把旧报告当作实时状态。历史日期在 current 滚动后读取同日 archive，但只有 raw/decisions/filtered/deep 的批次、逐篇决定覆盖和论文集合全部一致才会报告完整；当前日期不会回退 archive。
 
-深度分析采用分阶段证据预算控制 token：主分析仍覆盖全文，超长论文按全文位置和任务关键词均衡取样；开源扫描、审校重写、评分审计、方法/表格和结构修复只接收各自相关的证据切片。新分析和重分析必须通过版本化硬契约：`bounded-v1` 限制最多 2 张表、每表 12 个数据行、8 个指标列，并要求表头、分隔行和每个数据行列数一致；`detailed-v1` 要求方法章节至少 600 个中文字符、三个有效段落和明确结构描述。无对应版本标记的既有成功记录保持兼容。博客 review 独立论文页并发度限制为 1–5；微信、飞书和小红书在默认数据源下必须绑定同日博客 generation manifest 与远端验证 receipt 的 `publishedPapers` 权威快照，清单缺失也会失败；明确独立运行须传 `--ignore-blog-snapshot`。视觉登记必须在逐项核对 `qaClaims` 后显式传 `--qa-attested true`，声明随资产写入 manifest 且缺失或损坏时完成态失效。
+深度分析采用分阶段证据预算控制 token：主分析仍覆盖全文，超长论文按全文位置和任务关键词均衡取样；开源扫描、审校重写、评分审计、方法/表格和结构修复只接收各自相关的证据切片。新分析和重分析必须通过版本化硬契约：`evidence-rich-v2` 在 `bounded-v1` 的最多 2 张表、每表 12 个数据行、8 个指标列与列数一致性上，进一步要求设置/数据集/基线字段、至少 3 行证据和 2 个数字、指标方向、表前比较问题、表后关键差异与证据边界，并在全文提供时覆盖消融或负面结果；`detailed-v1` 要求方法章节至少 600 个中文字符、三个有效段落和明确结构描述。历史 `bounded-v1` 与无标记成功记录保持原语义兼容。博客 review 独立论文页并发度限制为 1–5；微信、飞书和小红书在默认数据源下必须绑定同日博客 generation manifest 与远端验证 receipt 的 `publishedPapers` 权威快照，清单缺失也会失败；明确独立运行须传 `--ignore-blog-snapshot`。视觉登记必须在逐项核对 `qaClaims` 后显式传 `--qa-attested true`，声明随资产写入 manifest 且缺失或损坏时完成态失效。
 
 ---
 
@@ -232,11 +232,14 @@ python3 scripts/manual-review-blog.py --date 2026-04-21 --attestation data/curre
 # 人工全文先逐篇安全抓取并 checkpoint；失败后重跑只补失败或损坏项
 npm run manual:fulltext -- 2026-04-21
 
-# 把一份或多份人工记录分片严格组装为 manual_complete v3 spec；不调用 API
-# 每份 records 必须是相同 date/agent/reviewProtocol 的 manual_analysis_records v1 envelope，
+# 把一份或多份人工记录分片严格组装为 manual_complete v4 spec；不调用 API
+# 每份 records 必须是相同 date/agent/reviewProtocol 的 manual_analysis_records v2 envelope，
 # papers 需显式提供八维评分、实际 audit passes、绑定全文原句的 authorInfo
 # 和至少六条覆盖五个事实章节的 evidenceLedger；正文遵守 prompts/manual-analysis-record.md
-# v3 要求论证型摘要、完整方法流、缺口—机制—证据—边界创新、比较/消融实验、复现配置和双层局限
+# 每篇至少 3 条 resultClaims，并用逐字段 sourceBindings/readerBindings 分别绑定全文原句与实验结果同一局部证据块；7 维 readabilityRubric 至少 12/14 且无 0 分
+# 精确数量（含技术计数、层数、轮数、设备型号与科学计数法）使用阿拉伯数字，并通过篇内/跨篇去重、禁用固定句首脚手架、段落节奏、术语间距和局部比较门禁
+# 最终页还会复检作者、毒舌点评、评分理由、开源详情和局限中的“进一步审视”；新汇总页以 `paper_digest_reader_quality: "reader-facing-v1"` 标记接入 generate/checkpoint/review/staged 同一读者质量门禁，旧汇总页无标记时兼容
+# v4 继承 v3 正文质量，并强制 evidence-rich-v2 表格与上下文绑定插图；旧 spec v3 仅作历史兼容读取
 # editorial 是最终读者正文；短 method/method2/method3/innovations 仅供审计，生成器不会再前置拼接
 npm run manual:spec -- --date 2026-04-21 \
   --records data/current/manual-analysis-records-2026-04-21.json
@@ -252,9 +255,9 @@ npm run manual:analyze -- --date 2026-04-21 --spec data/current/manual-analysis-
 # 默认续跑复用已成功 canonical；仅在人工纠错或 spec/prompt 改变时显式覆盖
 npm run manual:analyze -- --date 2026-04-21 --spec data/current/manual-analysis-spec-2026-04-21.json --force
 
-# titleOverride 仅可修复元数据标题的空白粘连。省略 selectedImageUrls 时安全自动选择最多3张并插入正文；
-# 若存在合格候选，空数组会被拒绝。arXiv 页面 chrome、资助方 logo、赞助素材和碎片图注不会进入候选；
-# 图注只在完整句号处收束，不能按字符数截成半句或半词。
+# titleOverride 仅可修复元数据标题的空白粘连。存在合格候选时必须显式给出 selectedImageUrls；
+# 每张选图还须给出同序 imageInsertions，以唯一 anchorQuote/conclusionQuote 绑定同节前后论证，
+# lead 提出具体读图任务，explanation 指出图中可见证据与结论边界。空数组、自动选择和通用免责声明均会被拒绝。
 
 # 无筛选模型的人工接管：--raw 仍联网抓取并生成带来源指纹的候选全集，再逐篇提交 related 决定
 node scripts/manual-fetch.js --date 2026-04-21 --raw

@@ -20,13 +20,15 @@ const {
 } = require('./utils.js');
 const {
     getInvalidAnalysisReason,
-    EXPERIMENT_TABLE_CONTRACT_VERSION,
+    EXPERIMENT_TABLE_CONTRACT_VERSIONS,
     METHOD_DETAIL_CONTRACT_VERSION,
     analysisManifestRequiresExperimentTableContract,
     analysisManifestRequiresMethodDetailContract,
     REQUIRED_RECOVERY_STAGES,
     isRecoveryStageTerminal,
     MANUAL_COMPLETE_STATUS,
+    MANUAL_DEPTH_CONTRACT_VERSION_V4,
+    MANUAL_DEPTH_CONTRACT_VERSIONS,
     validateManualTakeoverManifest
 } = require('./analysis-contract.js');
 const { getCanonicalAnalysisRunSummary } = require('./analysis-engine.js');
@@ -343,7 +345,9 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
     }
     const sourceSha256 = manifest.sourceAcquisition?.sourceSha256 || '';
     const manualTakeoverIssue = validateManualTakeoverManifest(manifest, sourceSha256, {
-        analysis: options.analysis
+        analysis: options.analysis,
+        sourceText: options.sourceText,
+        imageManifest: options.imageManifest
     });
     if (manualTakeoverIssue) addIssue(issues, filePath, `${prefix} ${manualTakeoverIssue}`);
     if (manifest.contracts !== undefined) {
@@ -351,7 +355,7 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
             addIssue(issues, filePath, `${prefix}.contracts 必须是对象`);
         } else {
             if (manifest.contracts.experimentTables !== undefined
-                    && manifest.contracts.experimentTables !== EXPERIMENT_TABLE_CONTRACT_VERSION) {
+                    && !EXPERIMENT_TABLE_CONTRACT_VERSIONS.includes(manifest.contracts.experimentTables)) {
                 addIssue(
                     issues,
                     filePath,
@@ -428,6 +432,97 @@ function validateAnalysisSourceProvenance(filePath, source, prefix, issues) {
     if (source.warnings !== undefined && !Array.isArray(source.warnings)) {
         addIssue(issues, filePath, `${prefix}.warnings 必须是数组`);
     }
+}
+
+function loadBoundManualV4SourceText(filePath, batchDate, paper, paperIndex) {
+    const manifest = paper?.analysisManifest;
+    if (manifest?.contracts?.manualDepth !== MANUAL_DEPTH_CONTRACT_VERSION_V4) {
+        return { required: false, sourceText: '' };
+    }
+    const prefix = `papers[${paperIndex}].analysisManifest.sourceAcquisition`;
+    if (typeof batchDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(batchDate)) {
+        return { required: true, error: `${prefix} 无法绑定全文：deep analysis 缺少合法 batchDate` };
+    }
+    const acquisition = manifest.sourceAcquisition;
+    if (!isPlainObject(acquisition)) {
+        return { required: true, error: `${prefix} 缺少受控全文来源` };
+    }
+    const paperId = normalizedId(paper);
+    const sourceId = normalizedId(acquisition.sourceId);
+    if (!paperId || !sourceId || sourceId !== paperId) {
+        return {
+            required: true,
+            error: `${prefix}.sourceId 与 canonical 论文 ID 不一致`
+        };
+    }
+    const sourceSha256 = String(acquisition.sourceSha256 || '');
+    if (!SHA256_RE.test(sourceSha256)) {
+        return { required: true, error: `${prefix}.sourceSha256 必须是 SHA-256` };
+    }
+
+    const dataRoot = path.dirname(filePath);
+    const sourceRoot = path.join(dataRoot, 'manual-full-text', batchDate);
+    let realDataRoot;
+    let realRoot;
+    try {
+        realDataRoot = fs.realpathSync(dataRoot);
+        realRoot = fs.realpathSync(sourceRoot);
+    } catch (error) {
+        return {
+            required: true,
+            error: `${prefix} 缺少同批次受控全文目录: ${error.message}`
+        };
+    }
+    const expectedRootRelative = path.join('manual-full-text', batchDate);
+    if (path.relative(realDataRoot, realRoot) !== expectedRootRelative) {
+        return { required: true, error: `${prefix} 的全文目录越出 canonical 同批次受控路径` };
+    }
+    const sourceManifestPath = path.join(realRoot, 'manifest.json');
+    if (!fs.existsSync(sourceManifestPath)) {
+        return {
+            required: true,
+            error: `${prefix} 缺少同批次受控全文 manifest: ${sourceManifestPath}`
+        };
+    }
+    const sourceManifest = readJsonSafe(sourceManifestPath, null);
+    if (!isPlainObject(sourceManifest)
+        || sourceManifest.date !== batchDate
+        || sourceManifest.mode !== 'manual_full_text_fetch'
+        || !isPlainObject(sourceManifest.papers)) {
+        return { required: true, error: `${prefix} 的受控全文 manifest 非法或批次不一致` };
+    }
+    const entry = sourceManifest.papers[sourceId];
+    if (!isPlainObject(entry) || entry.status !== 'complete' || typeof entry.path !== 'string') {
+        return { required: true, error: `${prefix} 在受控全文 manifest 中缺少 complete 路径` };
+    }
+    if (entry.sourceSha256 !== sourceSha256) {
+        return { required: true, error: `${prefix} 与受控全文 manifest 的 SHA 不一致` };
+    }
+
+    let realSourcePath;
+    try {
+        const declaredPath = path.isAbsolute(entry.path)
+            ? entry.path
+            : path.resolve(realRoot, entry.path);
+        realSourcePath = fs.realpathSync(declaredPath);
+    } catch (error) {
+        return { required: true, error: `${prefix} 的受控全文路径不可读: ${error.message}` };
+    }
+    const relativePath = path.relative(realRoot, realSourcePath);
+    if (!relativePath || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+        return { required: true, error: `${prefix} 的全文路径越出同批次受控目录` };
+    }
+    let sourceBuffer;
+    try {
+        sourceBuffer = fs.readFileSync(realSourcePath);
+    } catch (error) {
+        return { required: true, error: `${prefix} 的受控全文读取失败: ${error.message}` };
+    }
+    const actualSha256 = crypto.createHash('sha256').update(sourceBuffer).digest('hex');
+    if (actualSha256 !== sourceSha256) {
+        return { required: true, error: `${prefix} 的受控全文内容 SHA 不一致` };
+    }
+    return { required: true, sourceText: sourceBuffer.toString('utf8'), sourcePath: realSourcePath };
 }
 
 function validateFilteredMetadata(filePath, data, papers, issues) {
@@ -618,16 +713,31 @@ function validatePaperListFile(filePath, options = {}) {
         }
         if (options.deepAnalysis) {
             const hasAnalysisBody = typeof paper.analysis === 'string' && paper.analysis.trim().length > 0;
+            const manualSource = loadBoundManualV4SourceText(
+                filePath,
+                Array.isArray(data) ? undefined : data.batchDate,
+                paper,
+                index
+            );
+            if (manualSource.error) addIssue(issues, filePath, manualSource.error);
+            const sourceText = manualSource.sourceText || '';
             let reparsed = null;
             if (hasAnalysisBody) {
                 reparsed = parseAnalysis(paper.analysis);
+                const manualDepthContractVersion = paper.analysisManifest?.contracts?.manualDepth;
                 const invalidReason = getInvalidAnalysisReason(paper.analysis, reparsed, {
                     enforceExperimentTableContract: analysisManifestRequiresExperimentTableContract(
                         paper.analysisManifest
                     ),
+                    experimentTableContractVersion: paper.analysisManifest?.contracts?.experimentTables,
                     enforceMethodDetailContract: analysisManifestRequiresMethodDetailContract(
                         paper.analysisManifest
-                    )
+                    ),
+                    enforceManualDepthContract: MANUAL_DEPTH_CONTRACT_VERSIONS.includes(
+                        manualDepthContractVersion
+                    ),
+                    manualDepthContractVersion,
+                    sourceText
                 });
                 if (invalidReason) {
                     addIssue(issues, filePath, `papers[${index}] analysis 正文契约非法: ${invalidReason}`);
@@ -730,7 +840,12 @@ function validatePaperListFile(filePath, options = {}) {
                     index,
                     issues,
                     paper.analysisCheckpoint,
-                    { requireComplete: hasAnalysisBody, analysis: paper.analysis }
+                    {
+                        requireComplete: hasAnalysisBody,
+                        analysis: paper.analysis,
+                        sourceText,
+                        imageManifest: paper.imageManifest
+                    }
                 );
             } else if (hasAnalysisBody) {
                 addIssue(issues, filePath, `papers[${index}] 有 analysis 正文但缺少 analysisManifest`);
@@ -1349,5 +1464,6 @@ module.exports = {
     validateCurrentDataFiles,
     validateFilteredDeepPapersConsistency,
     validateSourceHealth,
+    loadBoundManualV4SourceText,
     hasAnyCurrentDataFiles
 };

@@ -101,6 +101,105 @@ class ManualReviewAttestationTest(unittest.TestCase):
                 {'path': '/tmp/content/posts/changed.md', 'issues': ['重复段落']},
             ])
 
+    def test_accepts_deleted_generation_entry_with_explicit_deletion_semantics(self):
+        payload = attestation()
+        payload['files'].append({
+            'path': 'content/posts/2026-08-25-stale-paper.md',
+            'deleted': True,
+            'sha256': None,
+            'checks': {'deletionVerified': True},
+            'notes': '已确认删除页面文件名 2026-08-25-stale-paper，且博客工作树中不再存在该旧页。',
+        })
+        with tempfile.TemporaryDirectory() as tmp:
+            parsed, _digest = manual_review_blog._load_attestation(
+                self.write_payload(tmp, payload),
+            )
+        self.assertTrue(parsed['files'][1]['deleted'])
+        self.assertIsNone(parsed['files'][1]['sha256'])
+
+    def test_rejects_reused_batch_template_notes(self):
+        payload = attestation()
+        duplicate_note = payload['files'][0]['notes']
+        payload['files'].append({
+            'path': 'content/posts/2026-08-25-second.md',
+            'sha256': 'b' * 64,
+            'checks': dict(FILE_CHECKS),
+            'notes': duplicate_note,
+        })
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, '逐文件独立'):
+                manual_review_blog._load_attestation(self.write_payload(tmp, payload))
+
+    def test_file_specific_notes_bind_paper_id_index_date_and_deleted_filename(self):
+        class Module:
+            class PublishDataValidationError(ValueError):
+                pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paper = root / 'content/posts/2026-08-25-paper.md'
+            paper.parent.mkdir(parents=True)
+            paper.write_text(
+                '---\npaper_digest_arxiv_id: "2608.12345"\n---\n正文报告 WER 7.1%。\n',
+                encoding='utf-8',
+            )
+            index = root / 'content/posts/2026-08-25.md'
+            index.write_text(
+                '---\npaper_digest_page_type: index\n---\n汇总列出 TOP 16。\n', encoding='utf-8',
+            )
+            deleted = root / 'content/posts/2026-08-25-stale.md'
+            paths = {
+                'content/posts/2026-08-25-paper.md': paper,
+                'content/posts/2026-08-25.md': index,
+                'content/posts/2026-08-25-stale.md': deleted,
+            }
+            items = {
+                'content/posts/2026-08-25-paper.md': {
+                    'notes': '2608.12345：逐段核对流式编码方法、7.1% WER 结果和测试集边界。',
+                },
+                'content/posts/2026-08-25.md': {
+                    'notes': '2026-08-25 汇总页已核对 TOP 16 的论文数量、排序、链接与批次标题。',
+                },
+                'content/posts/2026-08-25-stale.md': {
+                    'notes': '确认删除旧页面 2026-08-25-stale，避免过期条目继续出现在同日汇总中。',
+                },
+            }
+            manual_review_blog._validate_file_specific_notes(
+                Module, items, paths, {
+                    'content/posts/2026-08-25-paper.md': False,
+                    'content/posts/2026-08-25.md': False,
+                    'content/posts/2026-08-25-stale.md': True,
+                }, '2026-08-25',
+            )
+            paper_two = root / 'content/posts/2026-08-25-paper-two.md'
+            paper_two.write_text(
+                '---\npaper_digest_arxiv_id: "2608.54321"\n---\n正文报告 WER 7.1%。\n',
+                encoding='utf-8',
+            )
+            duplicate_paths = dict(paths)
+            duplicate_paths['content/posts/2026-08-25-paper-two.md'] = paper_two
+            duplicate_items = dict(items)
+            duplicate_items['content/posts/2026-08-25-paper-two.md'] = {
+                'notes': '2608.54321：逐段核对流式编码方法、7.1% WER 结果和测试集边界。',
+            }
+            duplicate_deletions = {
+                relative: relative.endswith('-stale.md') for relative in duplicate_paths
+            }
+            with self.assertRaisesRegex(Module.PublishDataValidationError, '去除页面 ID 后仍重复'):
+                manual_review_blog._validate_file_specific_notes(
+                    Module, duplicate_items, duplicate_paths,
+                    duplicate_deletions, '2026-08-25',
+                )
+            items['content/posts/2026-08-25-paper.md']['notes'] = '只写泛化审查结论，不绑定页面。'
+            with self.assertRaisesRegex(Module.PublishDataValidationError, 'arXiv ID'):
+                manual_review_blog._validate_file_specific_notes(
+                    Module, items, paths, {
+                        'content/posts/2026-08-25-paper.md': False,
+                        'content/posts/2026-08-25.md': False,
+                        'content/posts/2026-08-25-stale.md': True,
+                    }, '2026-08-25',
+                )
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -263,7 +263,7 @@ function isCompleteAnalysisContent(paper) {
     if (validateManualTakeoverManifest(
         paper.analysisManifest,
         paper.analysisManifest.sourceAcquisition?.sourceSha256 || paper.sourceSha256 || '',
-        { analysis: paper.analysis }
+        { analysis: paper.analysis, imageManifest: paper.imageManifest }
     )) return false;
     return true;
 }
@@ -286,6 +286,7 @@ function hasValidAnalysisBody(paper) {
             enforceExperimentTableContract: analysisManifestRequiresExperimentTableContract(
                 paper.analysisManifest
             ),
+            experimentTableContractVersion: paper.analysisManifest?.contracts?.experimentTables,
             enforceMethodDetailContract: analysisManifestRequiresMethodDetailContract(
                 paper.analysisManifest
             )
@@ -371,6 +372,9 @@ async function analyzePaperWithRetry(paper, options = {}) {
                     enforceExperimentTableContract: analysisManifestRequiresExperimentTableContract(
                         analyzed.analysisManifest || paper.analysisManifest
                     ),
+                    experimentTableContractVersion: (
+                        analyzed.analysisManifest || paper.analysisManifest
+                    )?.contracts?.experimentTables,
                     enforceMethodDetailContract: analysisManifestRequiresMethodDetailContract(
                         analyzed.analysisManifest || paper.analysisManifest
                     )

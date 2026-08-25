@@ -11,8 +11,10 @@
 常规路径使用关键词预筛 + LLM 筛选、多阶段 LLM 深度分析和三层博客 review。模型服务不可用时允许显式接管，但不会因 API 超时、配额或网络错误自动切换：
 
 - `manual-fetch.js --raw` 仍联网抓取 arXiv/HuggingFace，只是不调用筛选模型；`--select` 接收完整覆盖候选全集的 `manual_offline` v1 逐篇裁决，并把输入 SHA、reviewer 和协议指纹写入筛选四件套。
-- `manual-deep-analysis.js` 不调用 LLM/API；每篇 spec 必须绑定受控全文 SHA、`manual-analysis-record.md` 与各阶段 prompt、至少六条可在全文定位的证据、两轮审计和各恢复阶段的独立 reviewed claims。Manual v3 还要求读者可见正文具备论证型摘要、输入到输出的方法链、缺口—机制—证据—边界式创新、比较/消融与负面结果、复现条件和双层局限；完整 `editorial` 是最终正文，短方法/创新字段只参与审计，不能再前置拼接。兼容阶段标记 `executionKind=manual_attestation`，不能声称实际执行过 LLM 阶段。合格论文图由全文 manifest 安全排序后插入正文，而不是只留在状态字段；图注不得按字符数截成半句。只有整批同时通过普通分析契约与 `full-text-evidence-v3` 才写 canonical deep result。
-- `manual-review-blog.py` 只在 LLM review 服务不可用时替代语义模型。它要求 v2 attestation 对 generation 中每个文件绑定 SHA、独立 notes，并逐项确认标题、技术叙事、事实、实验、复现、局限、评分和图片；仍执行确定性复验、Git 基线、review 协议和 Hugo gate 绑定，若确定性层修改页面则旧 attestation 立即失效。输出图片审查模式为 `manual_semantic` 的 receipt，push 会重验逐文件 provenance 与远端 OID。
+- `manual-deep-analysis.js` 不调用 LLM/API；records v2 组装当前 spec v4，每篇绑定受控全文 SHA、`manual-analysis-record.md` 与各阶段 prompt、至少六条可定位证据、两轮审计和独立 reviewed claims。Manual v4 继承 v3 的论证型摘要、输入到输出的方法链、缺口—机制—证据—边界式创新、比较/消融与负面结果、复现条件和双层局限，并强制 `experimentTables=evidence-rich-v2` 与逐图上下文绑定；完整 `editorial` 是最终正文。兼容阶段标记 `executionKind=manual_attestation`。只有整批通过普通分析契约与 `full-text-evidence-v4` 才写 canonical；旧 spec v3 可读但继续产生 v3 + `bounded-v1`，不追溯套用 v4。
+- Manual v4 的读者质量不只靠字数：每篇至少 3 条 `resultClaims` 用连续原句绑定设置、方法、基线、指标、数值、单位和方向；7 维 `readabilityRubric` 总分至少 12/14 且无 0 分。精确数量用阿拉伯数字，确定性层同时阻断篇内/跨篇模板、术语粘连、过长段落和防御性否定过密。
+- 最终读者门禁覆盖作者与机构、毒舌点评、正文六章、评分理由和开源详情；“进一步审视”作为局限章节的一部分同样受检。新汇总页以 `paper_digest_reader_quality: "reader-facing-v1"` 显式启用相同的精确定量、术语间距、模板与病句检查，旧汇总页无标记时保持兼容。
+- `manual-review-blog.py` 只在 LLM review 服务不可用时替代语义模型。它要求 v2 attestation 对 generation 中每个现存文件绑定 SHA、批次内唯一且含页面标识的 notes，并逐项确认标题、技术叙事、事实、实验、复现、局限、评分和图片；唯一性比较会剥离页面 ID、日期或删除文件名，拒绝仅替换标识符的批量模板；受控删除项则显式绑定 `deleted:true`、空 SHA、`deletionVerified` 和包含文件名的删除说明。脚本仍执行确定性复验、Git 基线、review 协议和 Hugo gate 绑定，若确定性层修改页面则旧 attestation 立即失效。输出图片审查模式为 `manual_semantic` 的 receipt，push 会重验逐文件 provenance 与远端 OID。
 
 三种人工模式分别只替代对应模型职责，不绕过来源健康、正文质量、发布或视觉门禁。
 
@@ -225,7 +227,7 @@ LLM endpoint 只允许 HTTPS；仅 loopback 本地测试服务可以使用 HTTP�
 | Round 6 | 最终结构修复（按需） | `prompts/structure-repair.md` | 共享契约发现 13 个必要章节有缺失时，主模型只补齐当前报告结构；完整时不调用 |
 | Round 7 | 类型感知评分审计 | `prompts/scoring-audit.md` | 主模型只输出 JSON；代码把校验错误反馈给下一次局部审计，并按资源状态确定性归一化无产物论文的开源分 |
 
-表格后处理只在实验章节以 `Table` / `Tbl.` / `表` 明确引用原文表格但没有 Markdown 表格，或出现“此处省略/详见原文”等非法占位语时调用。原文仅检测到其他表格不再触发额外 LLM 请求。新分析和重分析必须写入 `analysisManifest.contracts.experimentTables=bounded-v1`：代码在评分前强制每篇最多 2 张表、每张最多 12 个数据行和 8 个指标列，超限交给局部结构修复；Node 数据校验和 Python 发布预检都会再次阻断带标记但超限的正文。无该标记的历史成功记录保持兼容，不触发全量重跑。
+表格后处理会在全文存在编号表但正文缺少可读表、已有表只有叙述型结论卡/证据过浅，或出现“此处省略/详见原文”等非法占位语时调用。新分析和重分析写入 `analysisManifest.contracts.experimentTables=evidence-rich-v2`：除每篇最多 2 张表、每表最多 12 行和 8 个指标列外，还要求标识列、至少 3 行与 2 个数字、指标方向、表前具体比较问题、表后关键差异与证据边界，并在来源提供时覆盖消融或负面证据。Node 与 Python 双端同构校验；历史 `bounded-v1` 仍只执行旧上限门禁。
 | Round 8 | 图像筛选与插图计划（仅双模型模式） | `prompts/image-supplement.md` | 副模型只输出 JSON 插图计划；合并后再次校验完整契约，不合格时只丢弃插图计划并保留主模型正文 |
 
 评分审计全部通过后，先依次运行 `generate-blog.py`、`review-blog.py` 和 `push-blog.py`，发布汇总页及全部论文页。博客文本 review 默认按 8000 字符分块（`PD_BLOG_REVIEW_CHUNK_CHARS`，范围 4000–16000），减少每块重复的固定说明；分块仍保持 Markdown 块边界，且值进入整批审查凭证指纹。已通过页面另以博客仓库相对路径 + SHA-256 持久保存，因此分块、review 代码或其他协议元数据变化只刷新整批凭证，不会重审字节未变的页面。完全相同的非空 generation 可安全重跑三阶段：review 仅在当前协议、页面字节、发布提交、remote 名称/push URL 哈希和实时远端 `main` OID 全部仍匹配时保留已发布 receipt；push 再次验真，不创建无差异提交。网络故障、远端分支漂移或 `origin` 换仓均拒绝复用。`push-blog.py` 只有在远端 `main` OID 与 `publicationCommit` 完全一致后才写入远端验证字段，并自动调用 `visual-summary-integration.js`。规划器按最终评分降序、同分规范化 arXiv ID 升序选取 TOP 10；Codex 读取 `prompts/visual-summary.md`，为每篇生成一张顶部英文标题、正文中文的纵向长图，并用 task token 登记。

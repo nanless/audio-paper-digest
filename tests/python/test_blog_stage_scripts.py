@@ -71,6 +71,38 @@ class BlogStageEntryTest(unittest.TestCase):
             generate_blog.load_publish_to_blog().main()
         generate.assert_called_once_with()
 
+    def test_review_page_loader_restores_manual_v4_canonical_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            page = Path(tmp) / '2026-07-10-paper.md'
+            page.write_text('''---
+title: "Rendered title"
+paper_digest_page_type: paper
+paper_digest_arxiv_id: "2607.00001"
+---
+body
+''', encoding='utf-8')
+            canonical = {
+                'arxivId': '2607.00001v1',
+                'title': 'Canonical title',
+                'analysisManifest': {
+                    'contracts': {'manualDepth': 'full-text-evidence-v4'},
+                },
+            }
+            module = SimpleNamespace(
+                is_visual_summary_asset_path=lambda _path, _date: False,
+                normalize_publish_arxiv_id=lambda value: str(value).removesuffix('v1'),
+                PublishDataValidationError=ValueError,
+            )
+            slugs, scored = review_blog.read_generated_pages(
+                module, '2026-07-10', [page], [canonical],
+            )
+            self.assertEqual(slugs, {'2607.00001': 'paper'})
+            self.assertEqual(scored[0][1]['title'], 'Canonical title')
+            self.assertEqual(
+                scored[0][1]['analysisManifest']['contracts']['manualDepth'],
+                'full-text-evidence-v4',
+            )
+
     def test_review_entry_never_calls_git_push(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / 'blog'

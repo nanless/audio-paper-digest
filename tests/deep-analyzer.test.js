@@ -1430,20 +1430,70 @@ has_dataset: 否
 
     it('副模型可用稳定 paragraph_id 定位，不依赖自由文本 anchor', () => {
         const { parseImageInsertionPlan, applyImageInsertionPlan, buildImageAnchorCatalog } = require('../scripts/deep-analyzer.js');
-        const analysis = `## 方法概述和架构\n第一段。\n\n第二段用于插图。\n\n## 实验结果\n结果段。`;
+        const analysis = `## 方法概述和架构\n第一段先定义声学特征输入。\n\n第二段把声学特征送入跨模态融合模块。\n\n## 实验结果\n结果段。`;
         const catalog = buildImageAnchorCatalog(analysis);
-        const target = catalog.find(item => item.text === '第二段用于插图。');
+        const target = catalog.find(item => item.text === '第二段把声学特征送入跨模态融合模块。');
         const images = [{ url: 'https://example.com/method.png', caption: 'Method overview' }];
         const plans = parseImageInsertionPlan(JSON.stringify({ insertions: [{
             image: 1,
             section: '方法概述和架构',
             paragraph_id: target.id,
-            lead: '下图展示方法流程。'
+            conclusion_paragraph_id: target.id,
+            lead: '承接声学特征进入跨模态融合模块的描述，下图用于核对输入与融合块的连接位置。',
+            explanation: '图中箭头把声学特征送入跨模态融合模块；该结构只说明本节画出的连接顺序，不能说明未展示的训练损失。'
         }] }), images);
         const result = applyImageInsertionPlan(analysis, plans, images);
         assert.strictEqual(result.insertionDiagnostics[0].paragraphId, target.id);
         assert.strictEqual(result.insertionDiagnostics[0].inserted, true);
-        assert.match(result.analysis, /第二段用于插图。\n\n下图展示方法流程。/);
+        assert.match(result.analysis, /第二段把声学特征送入跨模态融合模块。\n\n承接声学特征进入跨模态融合模块的描述/);
+    });
+
+    it('context-bound v1 拒绝通用套话、缺少结论定位和跨段失联', () => {
+        const {
+            parseImageInsertionPlanDetailed,
+            applyImageInsertionPlan,
+            buildImageAnchorCatalog,
+            validateImageNarrativeContext
+        } = require('../scripts/deep-analyzer.js');
+        const analysis = `## 实验结果
+在 LibriSpeech test-clean 上比较流式解码器的 WER 曲线。
+
+第二段结论是较小块长降低延迟，但 WER 变化只在 test-clean 上报告。`;
+        const catalog = buildImageAnchorCatalog(analysis);
+        const anchor = catalog[0];
+        const conclusion = catalog[1];
+        const images = [{ url: 'https://example.com/wer.png', caption: 'WER curves' }];
+
+        assert.strictEqual(validateImageNarrativeContext(
+            '下图展示论文的关键实验比较；读图时需同时保留正文列出的数据集、指标方向和实验条件。',
+            '这项视觉证据只支持图注与正文对应设置下的比较，不能外推为未测试条件中的统一结论。'
+        ), 'generic_boilerplate');
+
+        const missingConclusion = parseImageInsertionPlanDetailed(JSON.stringify({ insertions: [{
+            image: 1,
+            section: '实验结果',
+            paragraph_id: anchor.id,
+            lead: '承接 LibriSpeech test-clean 的流式解码比较，下图用于观察不同块长对应的 WER 曲线。',
+            explanation: '图中曲线显示不同块长的 WER 差异；该证据只覆盖 test-clean，不能说明其他语料的延迟。'
+        }] }), images);
+        assert.strictEqual(missingConclusion.diagnostics.status, 'ok');
+        assert.strictEqual(
+            applyImageInsertionPlan(analysis, missingConclusion.plans, images).insertionDiagnostics[0].rejectionReason,
+            'conclusion_paragraph_id_required'
+        );
+
+        const disconnected = parseImageInsertionPlanDetailed(JSON.stringify({ insertions: [{
+            image: 1,
+            section: '实验结果',
+            paragraph_id: anchor.id,
+            conclusion_paragraph_id: conclusion.id,
+            lead: '围绕完全无关的说话人聚类，下图用于观察散点颜色如何分组。',
+            explanation: '图中散点展示说话人聚类；该证据只覆盖未知语料，不能说明跨域识别性能。'
+        }] }), images);
+        assert.strictEqual(
+            applyImageInsertionPlan(analysis, disconnected.plans, images).insertionDiagnostics[0].rejectionReason,
+            'lead_not_bound_to_anchor'
+        );
     });
 
     it('单段章节找不到空行时会在段落末尾插图，不会截断句子', () => {
@@ -1875,7 +1925,7 @@ has_dataset: 否
         assert.strictEqual(result.selectedImageUrls.length, 4);
         assert.deepStrictEqual(
             result.insertionDiagnostics.map(item => item.rejectionReason || 'inserted'),
-            ['anchor_required', 'anchor_not_found', 'inserted', 'inserted', 'inserted', 'inserted', 'insertion_limit']
+            ['anchor_not_found', 'inserted', 'inserted', 'inserted', 'inserted', 'insertion_limit']
         );
         assert.doesNotMatch(result.analysis, /\/1\.png|\/2\.png|\/7\.png/);
     });
@@ -1928,7 +1978,7 @@ has_dataset: 否
         assert.strictEqual(sourceTextLikelyHasTables('No quantitative table is provided.'), false);
     });
 
-    it('只在分析明确缺表或使用省略标记时触发表格补写', () => {
+    it('来源有表时修复缺失或过粗表格，并保留已达深证据契约的表', () => {
         const {
             analysisNeedsExperimentTableRepair
         } = require('../scripts/deep-analyzer.js');
@@ -1941,7 +1991,7 @@ has_dataset: 否
         ].join('\n');
         assert.strictEqual(
             analysisNeedsExperimentTableRepair(proseOnly, 'Table 1: WER comparison'),
-            false
+            true
         );
 
         const citedMissing = proseOnly.replace(
@@ -1970,7 +2020,7 @@ has_dataset: 否
 
         const compactTable = proseOnly.replace(
             '主方法 WER 为 5.1，最强基线为 5.6。',
-            '表中保留主方法与最强基线。\n\n| 方法 | WER |\n| --- | --- |\n| Ours | 5.1 |'
+            '关键比较问题是主方法相对强基线降低多少 WER，以及简化配置会损失多少收益；表中保留主方法、强基线和关键变体。\n\n| 方法 / 设置 | WER↓ |\n| --- | ---: |\n| 强基线 | 5.6 |\n| 主方法 | 5.1 |\n| 简化变体 | 5.4 |\n\n主方法相比强基线降低 0.5，但简化变体只保留部分收益；该差异仅适用于当前测试集，不能外推到未测语言和设备。'
         );
         assert.strictEqual(
             analysisNeedsExperimentTableRepair(compactTable, 'Table 1: WER comparison'),

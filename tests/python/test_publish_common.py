@@ -24,6 +24,7 @@ from publish_common import (  # noqa: E402
     dedupe_image_alts,
     detect_publish_api_type,
     EXPERIMENT_TABLE_CONTRACT_VERSION,
+    EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION,
     METHOD_DETAIL_CONTRACT_VERSION,
     extract_markdown_tables,
     fix_empty_markdown_links,
@@ -41,10 +42,16 @@ from publish_common import (  # noqa: E402
     validate_papers_for_publish,
     validate_experiment_table_contract,
     validate_method_detail_contract,
+    validate_image_narrative_contract,
+    validate_final_manual_v4_markdown,
+    validate_manual_editorial_quality_v4,
+    validate_digest_index_reader_quality,
     validate_review_payload,
     MANUAL_AUDIT_CHECKS,
     MANUAL_STAGE_EVIDENCE_STAGES,
     _manual_hash,
+    _manual_v4_reader_view,
+    _validate_manual_v4_result_claims,
     _validate_manual_takeover_manifest,
 )
 from utils import parse_analysis  # noqa: E402
@@ -216,7 +223,630 @@ def manual_v2_fixture(*, hardened=True, completed_at=None, v3=False):
     return paper, manifest
 
 
+def manual_result_claim_fixture(
+        value, *, method='完整方法', source_method='full system',
+        baseline='强基线', source_baseline='strong baseline'):
+    source_quote = (
+        f'On LibriSpeech test-clean, {source_method} versus {source_baseline} '
+        f'reports WER {value} percent; lower is better.'
+    )
+    return {
+        'datasetOrSetting': 'LibriSpeech',
+        'splitOrCondition': 'test-clean',
+        'method': method,
+        'baseline': baseline,
+        'metric': 'WER',
+        'value': value,
+        'unit': '%',
+        'direction': '越低越好',
+        'sourceQuote': source_quote,
+        'sourceBindings': {
+            'datasetOrSetting': 'LibriSpeech',
+            'splitOrCondition': 'test-clean',
+            'method': source_method,
+            'baseline': source_baseline,
+            'metric': 'WER',
+            'value': str(value),
+            'unit': 'percent',
+            'direction': 'lower is better',
+        },
+        'readerBindings': {
+            'datasetOrSetting': 'LibriSpeech',
+            'splitOrCondition': 'test-clean',
+            'method': method,
+            'baseline': baseline,
+            'metric': 'WER',
+            'value': f'{value}%',
+            'unit': f'{value}%',
+            'direction': '越低越好',
+        },
+    }
+
+
 class PublishCommonSanitizerTest(unittest.TestCase):
+    def test_manual_v4_reader_lexical_boundaries_and_node_parity(self):
+        safe = '''## 核心摘要
+系统把标签统一成同一条件；唯一分层用于二分类。目标具有有界项与有限状态，功能能否启用取决于输入，性能能够稳定复现。
+模型真实运行 2 次，并分别记录每次运行的计算成本。
+'''
+        self.assertIsNone(validate_manual_editorial_quality_v4(safe))
+        blocked = {
+            '五成': '命中率达到五成。',
+            '三比二': '类别比例为三比二。',
+            '七十亿主干': '系统使用七十亿主干。',
+            'ＲＡＮＫ＝八': 'ＲＡＮＫ＝八。',
+            '三 GPU 小时': '系统训练三 GPU 小时。',
+            '三 mac': '计算开销为三 mac。',
+            '三 TOKEN': '输入长度为三 TOKEN。',
+            '三 gb': '显存占用为三 gb。',
+            '三至五': '评分范围为三至五等级。',
+        }
+        for token, sentence in blocked.items():
+            with self.subTest(token=token):
+                issue = validate_manual_editorial_quality_v4(f'## 核心摘要\n{sentence}\n')
+                self.assertIsNotNone(issue)
+                self.assertIn('精确定量', issue)
+        semantic_issue = validate_manual_editorial_quality_v4(
+            '## 核心摘要\n长度分组没有消除长上下文的 2 次计算成本。\n',
+        )
+        self.assertIn('重复或断裂连接表达', semantic_issue)
+
+        malformed_relations = (
+            '“听懂内容”区别于能辨别音频质量。',
+            '参数高效区别于推理廉价。',
+            '客服文本区别于自发客服通话。',
+            '素材池规模 5400/4800/4200 区别于题量。',
+            '源音频虽来自多数据集，仍区别于真实通话场景。',
+        )
+        for sentence in malformed_relations:
+            with self.subTest(sentence=sentence):
+                issue = validate_manual_editorial_quality_v4(
+                    f'## 核心摘要\n{sentence}\n',
+                )
+                self.assertIsNotNone(issue)
+                self.assertIn('断裂连接表达', issue)
+        legal_comparisons = '''## 核心摘要
+方案 A 区别于方案 B；slimmable 共享网络区别于 3 个独立网络。
+'''
+        self.assertIsNone(validate_manual_editorial_quality_v4(legal_comparisons))
+
+    def test_manual_v4_final_reader_gate_covers_non_core_sections(self):
+        cases = {
+            '作者与机构': '作者团队包含三人。',
+            '毒舌点评': '系统尚尚缺少真实部署证据。',
+            '开源详情': '提供Whisper权重。',
+        }
+        for heading, sentence in cases.items():
+            with self.subTest(heading=heading):
+                issue = validate_manual_editorial_quality_v4(
+                    f'## {heading}\n{sentence}\n',
+                )
+                self.assertIsNotNone(issue)
+
+    def test_manual_v4_blocks_numeric_spacing_and_fixed_word_damage(self):
+        blocked = (
+            '该实验包括5个场景。',
+            '模型训练50轮。',
+            '指标提升19.5个百分点。',
+            '误差从81.7降至81.0。',
+            '论文发现T=2已足够。',
+            '下1步比较同1组数据。',
+            '下1 步比较同1 张表。',
+            '另 1 个分支追踪哪1 层。',
+            '8个候选再归1组合。',
+            '芯片功耗约4.9mW。',
+            '模型从公开的T=4初始化。',
+            '方法与3 种基线比较。',
+            '第2 个消融在0.25 MHz执行5 次。',
+            '4B 和9B权重，阈值0.96门控并采用3D记忆。',
+            '女性256 次发射；官方158 例；模型在2026年完成。',
+            '系统根据注意力 一次性保留缓存。',
+            '系统一次性 删除全部缓存。',
+        )
+        for sentence in blocked:
+            with self.subTest(sentence=sentence):
+                issue = validate_manual_editorial_quality_v4(
+                    f'## 核心摘要\n{sentence}\n',
+                )
+                self.assertIsNotNone(issue)
+                self.assertIn('数值排版或固定词损坏', issue)
+        safe = (
+            '## 核心摘要\n'
+            'Qwen2 音频模型与 GPT-4o 比较；arXiv 2608.22072 报告 81.7%，小数为 0.2158。\n'
+            '该模型进入前10%，准确率提升19.5%。\n\n'
+            '该实验包括 5 个场景，训练 50 轮，提升 19.5 个百分点；误差从 81.7 降至 81.0。\n'
+            '第 1 个分支使用 1 张表；变量 T=2 的条件与 Qwen2 模型都写清楚。\n'
+            'Qwen2.5-7B-Instruct 与 6-DoF 控制均作为合法技术标识。\n'
+            '系统根据注意力一次性保留缓存。\n'
+        )
+        self.assertIsNone(validate_manual_editorial_quality_v4(safe))
+
+    def test_manual_v4_blocks_rendered_and_implicit_innovation_double_numbering(self):
+        rendered = '## 核心创新点\n1. 首要贡献说明机制。\n2. 第 2 个增量说明证据。\n'
+        self.assertIn('双重编号', validate_manual_editorial_quality_v4(rendered))
+
+        implicit = '## 核心创新点\n首要贡献说明机制。\n\n第 2 个增量说明证据。\n'
+        self.assertIn('自动渲染为列表', validate_manual_editorial_quality_v4(implicit))
+
+        legal_prose = '## 核心摘要\n正文比较第 2 个条件与基线，并说明该序数只用于定位实验条件。\n'
+        self.assertIsNone(validate_manual_editorial_quality_v4(legal_prose))
+
+    def test_digest_index_reader_quality_is_marked_and_historical_compatible(self):
+        valid = '''---
+paper_digest_page_type: index
+paper_digest_reader_quality: "reader-facing-v1"
+---
+# 论文速递
+
+## ⚡ 今日概览
+
+共分析 3 篇论文。
+
+## 📋 论文列表
+
+### Paper A
+
+该论文讨论流式识别的误差与延迟权衡。
+
+| 排名 | 论文 | 总分 | 分档 |
+| --- | --- | --- | --- |
+| 1 | Paper A | 10.0 | 前10% |
+'''
+        self.assertIsNone(validate_digest_index_reader_quality(valid, required=True))
+        glued_score = valid.replace('| 10.0 | 前10% |', '| 10.0分 | 前10% |')
+        self.assertIn('数值排版或固定词损坏', validate_digest_index_reader_quality(glued_score))
+        bad = valid.replace('共分析 3 篇', '共分析三篇')
+        self.assertIn('精确定量', validate_digest_index_reader_quality(bad))
+        historical = bad.replace(
+            'paper_digest_reader_quality: "reader-facing-v1"\n', '',
+        )
+        self.assertIsNone(validate_digest_index_reader_quality(historical))
+        self.assertIn('协议标记', validate_digest_index_reader_quality(historical, required=True))
+
+    def test_manual_v4_reader_view_preserves_blank_lines_before_headings(self):
+        markdown = '''---
+title: "Reader page"
+---
+
+上一节的收束段落。
+
+
+   ### 📊 实验结果
+
+这是实验段落。
+
+### 🚨 局限与问题
+
+这是局限段落。
+'''
+        reader_view = _manual_v4_reader_view(markdown)
+        self.assertIn('上一节的收束段落。\n\n\n## 实验结果\n', reader_view)
+        self.assertIn('这是实验段落。\n\n## 局限与问题\n', reader_view)
+
+    def test_final_manual_v4_markdown_rechecks_sanitized_reader_contracts(self):
+        url = 'https://arxiv.org/html/2608.29999/figure1.png'
+        valid = f'''---
+title: "Reader page"
+paper_digest_manual_depth: "full-text-evidence-v4"
+---
+
+### 📌 核心摘要
+
+本文检验流式识别在固定测试划分中的错误率与速度权衡，并把结论限制在论文实际报告的设置内。
+
+### 🏗️ 方法概述和架构
+
+编码器接收声学特征，经分块注意力与对齐目标产生逐帧表示，解码器再输出文字序列。
+
+承接分块注意力的信号流，下图用于观察编码器、对齐目标与解码器之间的箭头关系。
+
+![Streaming architecture]({url})
+
+图中箭头显示声学特征先进入编码器，再由对齐目标连接解码器；该结构仅说明已绘制的数据流，不能证明未报告的训练阶段。
+
+### 💡 核心创新点
+
+相较固定上下文基线，该方法把分块状态与对齐监督联合起来，并由测试集上的错误率变化提供直接证据。
+
+### 📊 实验结果
+
+在 LibriSpeech test-clean 上，WER 越低越好；关键比较问题是完整方法相对强基线能降低多少识别错误，以及收益是否带来速度代价。表中保留主方法、强基线、参考系统与关键消融。
+
+| 方法 / 设置 | LibriSpeech WER↓ | RTF↓ |
+|---|---:|---:|
+| 强基线 | 8.4% | 0.72 |
+| 完整方法 | 7.1% | 0.81 |
+| 去掉对齐损失（消融） | 7.9% | 0.79 |
+
+完整方法相比强基线把 WER 降低 1.3 个百分点，但 RTF 上升 0.09；消融只恢复部分收益，而且这些差异仅适用于该测试划分，不能外推到未测语言。
+
+### 🔬 细节详述
+
+训练采用论文披露的数据划分与优化目标；没有报告的硬件吞吐不能从准确率结果反推。
+
+### ⚖️ 评分理由
+
+清晰度理由只评价章节组织、符号和表格表达，可复现性理由只评价训练配置与缺失硬件信息。
+
+### 🚨 局限与问题
+
+证据覆盖单一测试划分，尚未报告跨语言迁移，因此当前数字不能说明其他语料上的统一收益。
+'''
+        sanitized = sanitize_markdown_for_publish(valid)
+        self.assertIsNone(validate_final_manual_v4_markdown(sanitized))
+        self.assertIsNone(validate_final_manual_v4_markdown(sanitized.replace(
+            '训练采用论文披露的数据划分与优化目标',
+            '这一步承接上一步，下一步逐项核对每一步；训练采用论文披露的数据划分与优化目标',
+            1,
+        )))
+
+        summary_sentence = '本文检验流式识别在固定测试划分中的错误率与速度权衡，并把结论限制在论文实际报告的设置内。'
+        innovation_sentence = '相较固定上下文基线，该方法把分块状态与对齐监督联合起来，并由测试集上的错误率变化提供直接证据。'
+        duplicate_paragraph = '这段复核文字完整说明固定测试划分、相同解码预算与未测语言边界，重复出现时必须由最终页面门禁直接阻断。'
+        duplicate_case = sanitized.replace(
+            '\n### ⚖️ 评分理由',
+            f'\n\n{duplicate_paragraph}\n\n{duplicate_paragraph}\n\n### ⚖️ 评分理由',
+            1,
+        )
+        self.assertEqual(duplicate_case.count(duplicate_paragraph), 2)
+        cases = {
+            '图片叙事': sanitized.replace('下图用于观察', '下图展示'),
+            '结论的条件或边界': sanitized.replace(
+                '；该结构仅说明已绘制的数据流，不能证明未报告的训练阶段。',
+                '，并完整展示编码器到解码器的数据流关系。',
+            ),
+            'evidence-rich 表格': sanitized.replace(
+                '| 方法 / 设置 | LibriSpeech WER↓ | RTF↓ |',
+                '| 方法 / 设置 | 结果 | 含义 |',
+            ),
+            '阿拉伯数字': sanitized.replace('固定测试划分', '百分之五的固定测试划分', 1),
+            '三十个': sanitized.replace('固定测试划分', '三十个固定测试划分', 1),
+            '十轮': sanitized.replace(
+                '清晰度理由只评价章节组织、符号和表格表达',
+                '清晰度理由只评价十轮训练、章节组织、符号和表格表达',
+                1,
+            ),
+            '一半': sanitized.replace('固定测试划分', '至少一半样本来自固定测试划分', 1),
+            '排名第三': sanitized.replace('强基线', '排名第三的强基线', 1),
+            '批量模板句式': sanitized.replace('下图用于观察', '下图用于核对', 1),
+            '段落以分号中断': sanitized.replace(
+                '训练采用论文披露的数据划分与优化目标；没有报告的硬件吞吐不能从准确率结果反推。',
+                '训练采用论文披露的数据划分与优化目标；\n\n没有报告的硬件吞吐不能从准确率结果反推。',
+            ),
+            '中英文技术词边界': sanitized.replace('编码器接收', '编码器使用Conformer接收', 1),
+            '能能': sanitized.replace('编码器接收', '编码器的功能能接收', 1),
+            '段落过载': sanitized.replace(
+                summary_sentence, '这段文字用于验证最终页面长段门禁是否仍然生效。' * 30,
+            ),
+            '完全重复': duplicate_case,
+            '重复长句': sanitized.replace(
+                innovation_sentence,
+                summary_sentence + ' 另一句再补充创新机制的局部说明。',
+            ),
+        }
+        for expected, candidate in cases.items():
+            with self.subTest(expected=expected):
+                self.assertIn(expected, validate_final_manual_v4_markdown(candidate))
+
+        v4_paper = {
+            'analysisManifest': {
+                'contracts': {'manualDepth': 'full-text-evidence-v4'},
+            },
+            'selectedImageUrls': [url],
+            'parsed': {'documentType': '方法研究'},
+        }
+        self.assertIn('缺少 Manual v4 深度标记', validate_final_manual_v4_markdown(
+            sanitized.replace(
+                'paper_digest_manual_depth: "full-text-evidence-v4"\n', '',
+            ),
+            v4_paper,
+        ))
+
+        self.assertIsNone(validate_final_manual_v4_markdown(
+            sanitized.replace(
+                'paper_digest_manual_depth: "full-text-evidence-v4"',
+                'paper_digest_manual_depth: "full-text-evidence-v3"',
+            ).replace('下图用于观察', '下图展示')
+        ))
+
+    def test_final_manual_v4_rechecks_authoritative_claims_after_image_exclusion(self):
+        url = 'https://arxiv.org/html/2608.29999/figure1.png'
+        excluded_url = 'https://arxiv.org/html/2608.29999/figure2.png'
+        markdown = f'''---
+title: "Reader page"
+paper_digest_manual_depth: "full-text-evidence-v4"
+---
+
+### 📌 核心摘要
+
+本文检验流式识别在固定测试划分中的错误率与速度权衡，并把结论限制在论文实际报告的设置内。
+
+### 🏗️ 方法概述和架构
+
+编码器接收声学特征，经分块注意力与对齐目标产生逐帧表示，解码器再输出文字序列。
+
+承接分块注意力的信号流，下图用于观察编码器、对齐目标与解码器之间的箭头关系。
+
+![Streaming architecture]({url})
+
+图中箭头显示声学特征先进入编码器，再由对齐目标连接解码器；该结构仅说明已绘制的数据流，不能证明未报告的训练阶段。
+
+### 💡 核心创新点
+
+相较固定上下文基线，该方法把分块状态与对齐监督联合起来，并由测试集上的错误率变化提供直接证据。
+
+### 📊 实验结果
+
+在 LibriSpeech test-clean 上，WER 越低越好；关键比较问题是完整方法相对强基线能降低多少识别错误，以及收益是否带来速度代价。表中保留主方法、强基线、参考系统与关键消融。
+
+| 方法 / 设置 | LibriSpeech WER↓ | RTF↓ |
+|---|---:|---:|
+| 强基线 | 8.4% | 0.72 |
+| 完整方法 | 7.1% | 0.81 |
+| 去掉对齐损失（消融） | 7.9% | 0.79 |
+
+完整方法相比强基线把 WER 降低 1.3 个百分点，但 RTF 上升 0.09；消融只恢复部分收益，而且这些差异仅适用于该测试划分，不能外推到未测语言。
+
+### 🔬 细节详述
+
+训练采用论文披露的数据划分与优化目标；没有报告的硬件吞吐不能从准确率结果反推。
+
+### 🚨 局限与问题
+
+证据覆盖单一测试划分，尚未报告跨语言迁移，因此当前数字不能说明其他语料上的统一收益。
+'''
+        def bind_to_result_table(claim):
+            value = str(claim['value'])
+            claim['readerBindings'] = {
+                'datasetOrSetting': 'LibriSpeech',
+                'splitOrCondition': 'LibriSpeech WER↓',
+                'method': claim['method'],
+                'baseline': claim['baseline'],
+                'metric': 'WER↓',
+                'value': f'{value}%',
+                'unit': f'{value}%',
+                'direction': 'LibriSpeech WER↓',
+            }
+            return claim
+
+        claims = [
+            bind_to_result_table(manual_result_claim_fixture(
+                value,
+                method=method,
+                source_method=source_method,
+                baseline=baseline,
+                source_baseline=source_baseline,
+            ))
+            for value, method, source_method, baseline, source_baseline in (
+                ('7.1', '完整方法', 'full system', '强基线', 'strong baseline'),
+                ('8.4', '强基线', 'strong baseline', '强基线', 'strong baseline'),
+                ('6.8', '完整方法', 'full system', '强基线', 'strong baseline'),
+            )
+        ]
+        paper = {
+            'arxivId': '2608.29999',
+            'analysisManifest': {
+                'contracts': {'manualDepth': 'full-text-evidence-v4'},
+                'manualTakeover': {
+                    'documentType': '方法研究',
+                    'resultClaims': claims,
+                },
+            },
+            'selectedImageUrls': [url],
+            'publishImageExclusions': [{'url': excluded_url}],
+            'parsed': {'documentType': '方法研究'},
+        }
+        issue = validate_final_manual_v4_markdown(markdown, paper)
+        self.assertIn('resultClaims 读者可见闭环无效', issue)
+        self.assertIn('readerBindings 未共同落在', issue)
+
+        passing = copy.deepcopy(paper)
+        passing['analysisManifest']['manualTakeover']['resultClaims'][2] = \
+            bind_to_result_table(manual_result_claim_fixture('7.9'))
+        self.assertIsNone(validate_final_manual_v4_markdown(markdown, passing))
+
+        no_ablation_markdown = markdown.replace(
+            '主方法、强基线、参考系统与关键消融',
+            '主方法、强基线与参考系统',
+        ).replace(
+            '去掉对齐损失（消融）', '参考系统',
+        ).replace(
+            '；消融只恢复部分收益', '；参考系统只恢复部分收益',
+        )
+        non_result_ablation = copy.deepcopy(paper)
+        non_result_ablation['analysisManifest']['manualTakeover']['resultClaims'][2] = \
+            bind_to_result_table(manual_result_claim_fixture(
+                '7.9', method='参考系统', source_method='reference system',
+            ))
+        non_result_ablation['analysis'] = _manual_v4_reader_view(
+            no_ablation_markdown,
+        ).replace(
+            '编码器接收声学特征，经分块注意力与对齐目标产生逐帧表示，解码器再输出文字序列。',
+            '编码器接收声学特征，经分块注意力与对齐目标产生逐帧表示，解码器再输出文字序列。论文没有提供逐组件消融。',
+            1,
+        )
+        self.assertIsNone(validate_final_manual_v4_markdown(
+            no_ablation_markdown, non_result_ablation,
+        ))
+
+
+    def test_context_bound_image_contract_matches_plan_and_adjacent_prose(self):
+        url = 'https://arxiv.org/html/2608.29999/figure1.png'
+        lead = '承接 LibriSpeech test-clean 的流式解码比较，下图用于观察不同块长对应的 WER 曲线。'
+        explanation = '图中曲线显示不同块长的 WER 差异；该证据只覆盖 test-clean，不能说明其他语料的流式延迟。'
+        paper = {
+            'analysis': f'''## 实验结果
+正文先提出 test-clean 上块长与流式解码误差的比较。
+
+{lead}
+
+![WER curves]({url})
+
+{explanation}
+
+下一段据此收束 test-clean 的结论，并保留延迟边界。''',
+            'selectedImageUrls': [url],
+            'imageManifest': {
+                'insertionPlan': [{
+                    'imageNumber': 1,
+                    'lead': lead,
+                    'explanation': explanation,
+                }],
+                'insertionDiagnostics': [{'imageNumber': 1, 'inserted': True}],
+            },
+        }
+        self.assertIsNone(validate_image_narrative_contract(paper))
+
+        generic = copy.deepcopy(paper)
+        generic_lead = '下图展示论文的关键实验比较；读图时需同时保留正文列出的数据集、指标方向和实验条件。'
+        generic_explanation = '这项视觉证据只支持图注与正文对应设置下的比较，不能外推为未测试条件中的统一结论。'
+        generic['analysis'] = generic['analysis'].replace(lead, generic_lead).replace(explanation, generic_explanation)
+        generic['imageManifest']['insertionPlan'][0]['lead'] = generic_lead
+        generic['imageManifest']['insertionPlan'][0]['explanation'] = generic_explanation
+        self.assertIn('通用模板', validate_image_narrative_contract(generic))
+
+        tampered = copy.deepcopy(paper)
+        tampered['analysis'] = tampered['analysis'].replace('不同块长的 WER 差异', '完全不同的图后说明')
+        self.assertIn('没有与已审计插图计划精确闭环', validate_image_narrative_contract(tampered))
+
+    def test_context_bound_image_contract_binds_order_and_each_url_to_its_plan(self):
+        first_url = 'https://arxiv.org/html/2608.29999/figure1.png'
+        second_url = 'https://arxiv.org/html/2608.29999/figure2.png'
+        first_lead = '承接编码器的数据流，下图用于观察输入特征如何进入第 1 个声学模块。'
+        first_explanation = '图中箭头显示特征进入第 1 个声学模块；该结构仅覆盖已画出的连接，不能证明其他训练分支。'
+        second_lead = '承接测试集上的比较，下图用于观察第 2 组 WER 曲线如何随噪声变化。'
+        second_explanation = '图中曲线显示第 2 组 WER 随噪声改变；该证据只覆盖当前测试集，不能外推到其他设备。'
+
+        def block(url, lead, explanation, alt):
+            return f'{lead}\n\n![{alt}]({url})\n\n{explanation}'
+
+        paper = {
+            'analysis': '\n\n'.join((
+                '## 方法概述和架构\n方法正文先说明输入、组件和输出之间的连接。',
+                block(first_url, first_lead, first_explanation, 'Architecture'),
+                '## 实验结果\n实验正文先说明数据集、基线和指标方向。',
+                block(second_url, second_lead, second_explanation, 'WER curves'),
+            )),
+            'selectedImageUrls': [first_url, second_url],
+            'imageManifest': {
+                'version': 2,
+                'selected': [
+                    {'index': 1, 'url': first_url},
+                    {'index': 2, 'url': second_url},
+                ],
+                'downloaded': [],
+                'insertionPlan': [
+                    {'imageNumber': 1, 'lead': first_lead, 'explanation': first_explanation},
+                    {'imageNumber': 2, 'lead': second_lead, 'explanation': second_explanation},
+                ],
+                'insertionDiagnostics': [
+                    {'imageNumber': 1, 'inserted': True},
+                    {'imageNumber': 2, 'inserted': True},
+                ],
+            },
+        }
+        self.assertIsNone(validate_image_narrative_contract(paper))
+
+        swapped_urls = copy.deepcopy(paper)
+        swapped_urls['analysis'] = swapped_urls['analysis'] \
+            .replace(first_url, '__FIRST__') \
+            .replace(second_url, first_url) \
+            .replace('__FIRST__', second_url)
+        self.assertIn('URL/顺序', validate_image_narrative_contract(swapped_urls))
+
+        swapped_prose = copy.deepcopy(paper)
+        swapped_prose['analysis'] = '\n\n'.join((
+            '## 方法概述和架构\n方法正文先说明输入、组件和输出之间的连接。',
+            block(first_url, second_lead, second_explanation, 'Architecture'),
+            '## 实验结果\n实验正文先说明数据集、基线和指标方向。',
+            block(second_url, first_lead, first_explanation, 'WER curves'),
+        ))
+        self.assertIn('相邻正文没有与已审计插图计划精确闭环',
+                      validate_image_narrative_contract(swapped_prose))
+
+    def test_manual_v4_publish_result_claims_require_three_nonempty_source_bound_numbers(self):
+        analysis = '''## 实验结果
+在 LibriSpeech test-clean 上，完整方法相对强基线的 WER 为 7.1%，指标越低越好。强基线相对参考系统的 WER 为 8.4%，指标越低越好。消融版本相对完整方法的 WER 为 7.9%，指标越低越好。'''
+        claims = [
+            manual_result_claim_fixture(
+                value,
+                method=method,
+                source_method=source_method,
+                baseline=baseline,
+                source_baseline=source_baseline,
+            )
+            for value, method, source_method, baseline, source_baseline in (
+                ('7.1', '完整方法', 'full system', '强基线', 'strong baseline'),
+                ('8.4', '强基线', 'strong baseline', '参考系统', 'reference system'),
+                ('7.9', '消融版本', 'ablated system', '完整方法', 'full system'),
+            )
+        ]
+        takeover = {'documentType': '方法研究', 'resultClaims': claims}
+        self.assertEqual(
+            _validate_manual_v4_result_claims(takeover, analysis, 'fixture'), claims,
+        )
+
+        too_few = copy.deepcopy(takeover)
+        too_few['resultClaims'] = too_few['resultClaims'][:2]
+        with self.assertRaisesRegex(PublishDataValidationError, '至少需要 3 条'):
+            _validate_manual_v4_result_claims(too_few, analysis, 'fixture')
+
+        empty = copy.deepcopy(takeover)
+        empty['resultClaims'][0]['baseline'] = ''
+        with self.assertRaisesRegex(PublishDataValidationError, 'baseline 缺失'):
+            _validate_manual_v4_result_claims(empty, analysis, 'fixture')
+
+        quote_drift = copy.deepcopy(takeover)
+        quote_drift['resultClaims'][0]['sourceQuote'] = 'The full system improves recognition.'
+        with self.assertRaisesRegex(PublishDataValidationError, 'sourceBindings'):
+            _validate_manual_v4_result_claims(quote_drift, analysis, 'fixture')
+
+        mixed_not_reported = copy.deepcopy(takeover)
+        mixed_not_reported['resultClaims'][0]['unit'] = 'notReported 7.1'
+        with self.assertRaisesRegex(PublishDataValidationError, '不得把 notReported 与数值混写'):
+            _validate_manual_v4_result_claims(mixed_not_reported, analysis, 'fixture')
+
+        body_drift = copy.deepcopy(takeover)
+        body_drift['resultClaims'][0]['value'] = '6.8'
+        body_drift['resultClaims'][0] = manual_result_claim_fixture('6.8')
+        with self.assertRaisesRegex(PublishDataValidationError, '未共同落在'):
+            _validate_manual_v4_result_claims(body_drift, analysis, 'fixture')
+
+        invalid_direction = copy.deepcopy(takeover)
+        invalid_direction['resultClaims'][0]['direction'] = '越快越好'
+        with self.assertRaisesRegex(PublishDataValidationError, '方向语义'):
+            _validate_manual_v4_result_claims(invalid_direction, analysis, 'fixture')
+
+        scalar_not_reported = copy.deepcopy(takeover)
+        scalar_not_reported['resultClaims'][0]['unit'] = '未报告'
+        with self.assertRaisesRegex(PublishDataValidationError, '必须使用.*notReported'):
+            _validate_manual_v4_result_claims(scalar_not_reported, analysis, 'fixture')
+
+        duplicate = copy.deepcopy(takeover)
+        duplicate['resultClaims'][1] = copy.deepcopy(duplicate['resultClaims'][0])
+        with self.assertRaisesRegex(PublishDataValidationError, '重复'):
+            _validate_manual_v4_result_claims(duplicate, analysis, 'fixture')
+
+        missing_binding_field = copy.deepcopy(takeover)
+        del missing_binding_field['resultClaims'][0]['readerBindings']['metric']
+        with self.assertRaisesRegex(PublishDataValidationError, '必须且只能包含'):
+            _validate_manual_v4_result_claims(missing_binding_field, analysis, 'fixture')
+
+        qualitative_claims = copy.deepcopy(takeover)
+        qualitative_analysis = analysis + ' 定性结果不可得，只保留论文报告的失败方向。'
+        for claim in qualitative_claims['resultClaims']:
+            claim['value'] = {
+                'notReported': True,
+                'reason': '正文仅给出定性失败方向，没有报告可核对标量',
+            }
+            claim['sourceQuote'] += ' The qualitative result is unavailable.'
+            claim['sourceBindings']['value'] = 'qualitative result'
+            claim['readerBindings']['value'] = '定性结果不可得'
+        with self.assertRaisesRegex(PublishDataValidationError, '实证论文.*至少需要 1 条'):
+            _validate_manual_v4_result_claims(
+                qualitative_claims, qualitative_analysis, 'fixture',
+            )
+
     def test_manual_v2_publish_provenance_is_cryptographically_closed(self):
         paper, manifest = manual_v2_fixture(hardened=True)
         _validate_manual_takeover_manifest(paper, manifest, 'fixture')
@@ -295,6 +925,17 @@ class PublishCommonSanitizerTest(unittest.TestCase):
         candidate[0]['imageManifest']['insertionDiagnostics'].append({'url': 'https://example.com/tampered.png'})
         with self.assertRaisesRegex(PublishDataValidationError, 'selectionEvidenceSha256'):
             _validate_manual_takeover_manifest(*candidate, 'v3 fixture')
+
+    def test_manual_v4_requires_evidence_rich_table_contract_without_retroactive_v3_change(self):
+        paper, manifest = manual_v2_fixture(hardened=True, v3=True)
+        _validate_manual_takeover_manifest(paper, manifest, 'historical v3 fixture')
+
+        manifest['contracts']['manualDepth'] = 'full-text-evidence-v4'
+        manifest['contracts']['experimentTables'] = EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION
+        with self.assertRaisesRegex(
+                PublishDataValidationError,
+                'manual v4 必须声明 experimentTables=evidence-rich-v2'):
+            _validate_manual_takeover_manifest(paper, manifest, 'v4 fixture')
 
     def test_shared_publish_date_validation_rejects_impossible_dates(self):
         self.assertEqual(get_today_bj('2026-07-13'), '2026-07-13')
@@ -892,6 +1533,131 @@ confidence: 中
         self.assertRegex(validate_experiment_table_contract(
             paper['analysis'].replace(table, one_cell)
         ), '数据行有 1 列')
+
+    def test_evidence_rich_table_contract_rejects_summary_cards_and_checks_narrative(self):
+        valid = '''## 实验结果
+关键比较问题是完整方法相对强基线能降低多少识别错误，以及收益是否带来速度代价。表中保留主方法、最强基线与关键消融。
+
+| 方法 / 设置 | LibriSpeech WER↓ | RTF↓ |
+|---|---:|---:|
+| 强基线 | 8.4% | 0.72 |
+| 完整方法 | 7.1% | 0.81 |
+| 去掉对齐损失（消融） | 7.9% | 0.79 |
+
+完整方法相比强基线把 WER 降低 1.3 个百分点，但 RTF 上升 0.09；消融只恢复部分收益，而且这些差异仅适用于该测试划分，不能外推到未测语言。
+'''
+        self.assertIsNone(validate_experiment_table_contract(
+            valid,
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type='方法研究',
+        ))
+        vague = valid.replace(
+            '| 方法 / 设置 | LibriSpeech WER↓ | RTF↓ |',
+            '| 方法 / 设置 | 结果 | 含义 |',
+        )
+        self.assertRegex(validate_experiment_table_contract(
+            vague,
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type='方法研究',
+        ), '叙述型伪指标列')
+        self.assertIsNone(validate_experiment_table_contract(
+            vague,
+            contract_version=EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION,
+        ))
+
+        no_table = '''## 实验结果
+完整方法在固定测试集上优于强基线，但正文没有保留可读的 Markdown 证据表。'''
+        self.assertRegex(validate_experiment_table_contract(
+            no_table,
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type='方法研究',
+            source_text='4 Experiments\nTable 2 reports the main comparison.\n5 Conclusion',
+        ), '至少一张可读 Markdown 证据表')
+        self.assertIsNone(validate_experiment_table_contract(
+            no_table,
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type='方法研究',
+            source_text='4 Experiments\nThe paper reports prose-only results.\n5 Conclusion',
+        ))
+
+    def test_evidence_rich_table_accepts_training_stage_identifier_column(self):
+        template = '''## 实验结果
+关键比较问题是不同训练阶段是否持续降低词错误率，以及后期联合训练的收益是否仍受固定测试条件约束。
+
+| {identifier} | WER↓ |
+|---|---:|
+| 预热 | 12.4% |
+| 对齐 | 10.8% |
+| 联合训练 | 9.7% |
+
+联合训练相比预热阶段把 WER 降低 2.7 个百分点，但该方向只由同一测试划分支持，不能外推到未测语言或设备；论文也没有报告跨域置信区间、在线吞吐或长期稳定性测量。
+'''
+        for identifier in (
+                '训练阶段', '解码', '上下文', '指标', '度量', '算法',
+                'decoder context', 'metric measure', 'algorithm'):
+            with self.subTest(identifier=identifier):
+                self.assertIsNone(validate_experiment_table_contract(
+                    template.format(identifier=identifier),
+                    contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+                    document_type='方法研究',
+                ))
+
+    def test_evidence_rich_source_gates_accept_natural_chinese_comparisons(self):
+        def analysis_with(conclusion):
+            return f'''## 实验结果
+关键比较问题是三种配置在固定测试集上的 WER 差异多大，并核验模型配置改变是否影响结果方向。
+
+| 配置 | WER↓ |
+|---|---:|
+| A | 12.4% |
+| B | 10.8% |
+| C | 9.7% |
+
+{conclusion}；同时，这组数字只适用于固定测试划分和相同解码预算，跨语言结论仍需额外验证，论文也没有报告在线吞吐、长期稳定性或跨域置信区间。
+'''
+
+        cases = (
+            ('The paper compared with Naive RAG.', '方案 C 比 Naive RAG 更强，却也更脆'),
+            ('消融实验比较含年龄信息与不含年龄信息的配置。', '配置 C 不含年龄信息，配置 B 排除说话人上下文'),
+        )
+        for source_text, conclusion in cases:
+            with self.subTest(conclusion=conclusion):
+                self.assertIsNone(validate_experiment_table_contract(
+                    analysis_with(conclusion),
+                    contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+                    document_type='方法研究',
+                    source_text=source_text,
+                ))
+        neutral = analysis_with('配置 C 的报告值为 9.7%，其余条件保持一致')
+        self.assertRegex(validate_experiment_table_contract(
+            neutral,
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type='方法研究',
+            source_text='The paper compared with Naive RAG.',
+        ), '没有保留比较对象')
+        self.assertRegex(validate_experiment_table_contract(
+            neutral,
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type='方法研究',
+            source_text='正文的消融实验去掉年龄特征。',
+        ), '没有保留关键消融')
+        self.assertRegex(validate_experiment_table_contract(
+            neutral,
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type='方法研究',
+            source_text='The third configuration fails on the hard subset.',
+        ), '没有保留负面证据')
+
+        for negative in (
+                '退化', '恶化', '失败', '更差', '比基准差', '未改善',
+                '没有改善', '无效', '负面结果', '置信区间跨零', '落后', '可测损失'):
+            with self.subTest(negative=negative):
+                self.assertIsNone(validate_experiment_table_contract(
+                    analysis_with(f'配置 C 出现{negative}'),
+                    contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+                    document_type='方法研究',
+                    source_text='The third configuration fails on the hard subset.',
+                ))
 
     def test_versioned_publish_preflight_enforces_detailed_method_contract(self):
         paper = complete_paper()

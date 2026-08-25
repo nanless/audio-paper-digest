@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Assemble a strict manual_complete v3 analysis spec from operator-authored
+ * Assemble a strict manual_complete v4 analysis spec from operator-authored
  * records and the fingerprinted manual-full-text manifest. No API is called.
  */
 const fs = require('fs');
@@ -19,11 +19,23 @@ const {
 } = require('./utils.js');
 const {
     REQUIRED_RECOVERY_STAGES,
-    MANUAL_DEPTH_CONTRACT_VERSION_V3,
+    EXPERIMENT_TABLE_CONTRACT_VERSION,
+    MANUAL_DEPTH_CONTRACT_VERSION_V4,
+    normalizeExperimentTableNumericFormatting,
     getInvalidAnalysisReason
 } = require('./analysis-contract.js');
 const { buildStagePromptBindings } = require('./manual-deep-analysis.js');
-const { selectImageCandidates } = require('./deep-analyzer.js');
+const {
+    selectImageCandidates,
+    buildImageAnchorCatalog,
+    validateImageNarrativeContext
+} = require('./deep-analyzer.js');
+const {
+    validateEditorialQuality,
+    validateResultClaims,
+    findBatchTemplateReuse,
+    validateReadabilityRubric
+} = require('./editorial-quality.js');
 const {
     MANIFEST_VERSION,
     stableSha256,
@@ -31,9 +43,9 @@ const {
     isReusableFullTextCheckpoint
 } = require('./manual-fetch-fulltext.js');
 
-const RECORDS_VERSION = 1;
+const RECORDS_VERSION = 2;
 const RECORDS_MODE = 'manual_analysis_records';
-const SPEC_VERSION = 3;
+const SPEC_VERSION = 4;
 const SPEC_MODE = 'manual_complete';
 const FULLTEXT_MODE = 'manual_full_text_fetch';
 const DOCUMENT_TYPES = new Set(['方法研究', '系统技术报告', '模型报告', '数据集与基准', '综述', '理论研究', '应用研究']);
@@ -46,6 +58,9 @@ const AUDIT_CHECKS = Object.freeze([
 const FACT_SECTIONS = Object.freeze(['核心摘要', '方法概述和架构', '实验结果', '局限与问题', '开源详情']);
 const EDITORIAL_FIELDS = Object.freeze([
     'summary', 'method', 'innovations', 'results', 'details', 'limits', 'open', 'review'
+]);
+const IMAGE_INSERTION_SECTIONS = new Set([
+    '核心摘要', '方法概述和架构', '核心创新点', '实验结果', '细节详述'
 ]);
 const TEMPLATE_SENTENCE_MIN_LENGTH = 48;
 const MANUAL_AUTHORING_PROMPT = path.join(Config.PROJECT_ROOT, 'prompts', 'manual-analysis-record.md');
@@ -252,6 +267,44 @@ function validateRecord(record, id, label = `papers.${id}`) {
             || new Set(selectedImageUrls).size !== selectedImageUrls.length || selectedImageUrls.length > 4)) {
         throw new Error(`${label}.selectedImageUrls 必须省略或是至多 4 个互异 HTTPS URL`);
     }
+    const imageInsertions = record.imageInsertions;
+    if (imageInsertions !== undefined) {
+        if (!Array.isArray(imageInsertions) || imageInsertions.length < 1 || imageInsertions.length > 4) {
+            throw new Error(`${label}.imageInsertions 必须是 1-4 个逐图叙事绑定`);
+        }
+        if (!Array.isArray(selectedImageUrls) || selectedImageUrls.length !== imageInsertions.length) {
+            throw new Error(`${label}.imageInsertions 必须与 selectedImageUrls 等长并逐项绑定`);
+        }
+        const insertionUrls = new Set();
+        imageInsertions.forEach((item, index) => {
+            const itemLabel = `${label}.imageInsertions[${index}]`;
+            if (!item || typeof item !== 'object' || Array.isArray(item)) {
+                throw new Error(`${itemLabel} 必须是对象`);
+            }
+            const url = assertString(item.url, `${itemLabel}.url`, 12);
+            if (!url.startsWith('https://') || insertionUrls.has(url)) {
+                throw new Error(`${itemLabel}.url 必须是互异 HTTPS URL`);
+            }
+            insertionUrls.add(url);
+            if (!IMAGE_INSERTION_SECTIONS.has(item.section)) {
+                throw new Error(`${itemLabel}.section 非法`);
+            }
+            assertString(item.anchorQuote, `${itemLabel}.anchorQuote`, 12);
+            assertString(item.conclusionQuote, `${itemLabel}.conclusionQuote`, 12);
+            const lead = assertString(item.lead, `${itemLabel}.lead`, 18);
+            const explanation = assertString(item.explanation, `${itemLabel}.explanation`, 30);
+            const issue = validateImageNarrativeContext(lead, explanation, {
+                anchorText: item.anchorQuote,
+                conclusionText: item.conclusionQuote
+            });
+            if (issue) throw new Error(`${itemLabel} 图文叙事不合格: ${issue}`);
+        });
+        if (selectedImageUrls.some((url, index) => imageInsertions[index].url !== url)) {
+            throw new Error(`${label}.imageInsertions 必须按 selectedImageUrls 顺序逐项绑定`);
+        }
+    } else if (Array.isArray(selectedImageUrls) && selectedImageUrls.length > 0) {
+        throw new Error(`${label}.selectedImageUrls 非空时必须提供 imageInsertions`);
+    }
     if (record.reason !== undefined) assertString(record.reason, `${label}.reason`, 20);
     if (record.scoringReasons !== undefined
         && (!Array.isArray(record.scoringReasons) || record.scoringReasons.length !== 8
@@ -286,6 +339,21 @@ function validateRecord(record, id, label = `papers.${id}`) {
     }
     if (record.evidenceLedger === undefined) throw new Error(`${label}.evidenceLedger 必须由人工显式提供`);
     validateEvidenceLedger(record.evidenceLedger, '', id);
+    if (!Array.isArray(record.resultClaims)) {
+        throw new Error(`${label}.resultClaims 必须由人工显式提供`);
+    }
+    const resultClaimSchema = validateResultClaims(record.resultClaims, '', {
+        documentType: record.type,
+        exception: record.resultClaimsException,
+        requireSourceBinding: false
+    });
+    if (!resultClaimSchema.valid) {
+        throw new Error(`${label}.resultClaims 结构无效: ${resultClaimSchema.errors.join('；')}`);
+    }
+    const readability = validateReadabilityRubric(record.readabilityRubric);
+    if (!readability.valid || !readability.passing) {
+        throw new Error(`${label}.readabilityRubric 未通过 12/14 且无 0 分门禁: ${readability.errors.join('；') || `total=${readability.total}`}`);
+    }
     return {
         ...record,
         ...fields,
@@ -297,13 +365,47 @@ function validateRecord(record, id, label = `papers.${id}`) {
         manualAudit,
         stageReviewAttemptsByStage,
         ...(selectedImageUrls !== undefined ? { selectedImageUrls } : {}),
+        ...(imageInsertions !== undefined ? { imageInsertions: JSON.parse(JSON.stringify(imageInsertions)) } : {}),
         ...(titleOverride ? { titleOverride } : {})
     };
 }
 
+function resolveManualImageInsertions(analysis, insertions, selectedImageUrls, label) {
+    const catalog = buildImageAnchorCatalog(analysis).map((entry, index) => ({ ...entry, order: index }));
+    return insertions.map((item, index) => {
+        const itemLabel = `${label}[${index}]`;
+        const anchorMatches = catalog.filter(entry => (
+            entry.section === item.section && entry.text.includes(item.anchorQuote)
+        ));
+        if (anchorMatches.length !== 1) {
+            throw new Error(`${itemLabel}.anchorQuote 必须唯一命中 ${item.section} 的一个完整段落`);
+        }
+        const conclusionMatches = catalog.filter(entry => (
+            entry.section === item.section && entry.text.includes(item.conclusionQuote)
+            && entry.order >= anchorMatches[0].order
+        ));
+        if (conclusionMatches.length !== 1) {
+            throw new Error(`${itemLabel}.conclusionQuote 必须唯一命中同节中不早于 anchor 的段落`);
+        }
+        const issue = validateImageNarrativeContext(item.lead, item.explanation, {
+            anchorText: anchorMatches[0].text,
+            conclusionText: conclusionMatches[0].text
+        });
+        if (issue) throw new Error(`${itemLabel} 未承接锚点并回扣本节结论: ${issue}`);
+        return {
+            url: selectedImageUrls[index],
+            section: item.section,
+            paragraphId: anchorMatches[0].id,
+            conclusionParagraphId: conclusionMatches[0].id,
+            lead: item.lead.trim(),
+            explanation: item.explanation.trim()
+        };
+    });
+}
+
 function validateRecordsEnvelope(document, filePath, expectedDate) {
     if (document.version !== RECORDS_VERSION || document.mode !== RECORDS_MODE) {
-        throw new Error(`${filePath} 必须是 version=1、mode=${RECORDS_MODE}`);
+        throw new Error(`${filePath} 必须是 version=${RECORDS_VERSION}、mode=${RECORDS_MODE}`);
     }
     if (document.date !== expectedDate) throw new Error(`${filePath} date 与 --date 不一致`);
     const agent = assertString(document.agent, `${filePath}.agent`, 2);
@@ -525,8 +627,12 @@ function rebalanceEditorialParagraphs(value, minimum = 5) {
 function formatInnovationClaims(value) {
     const paragraphs = distinctParagraphs(value);
     return paragraphs.map((paragraph, index) => {
-        if (/^(?:\d+[.、]|[-*]\s|\*\*)/.test(paragraph)) return paragraph;
-        return `${index + 1}. ${paragraph}`;
+        const cleaned = paragraph
+            .replace(/^第[一二两三四五六七八九十]+(?:项|点|个)(?:贡献|创新)?[：:、，.\s]*/u, '')
+            .replace(/^(?:第?[一二两三四五六七八九十]+|首先)[：:、，.\s]+/u, '')
+            .replace(/^\d+[.、)]\s*/u, '')
+            .trim();
+        return `${index + 1}. ${cleaned}`;
     }).join('\n\n');
 }
 
@@ -579,8 +685,8 @@ function buildAnalysis(paper, record) {
     const reviewerLimits = distinctParagraphs(editorial.limits || record.review)
         .filter(paragraph => !new Set(distinctParagraphs(record.limits).map(normalizeTemplateText)).has(normalizeTemplateText(paragraph)))
         .join('\n\n');
-    const limitsBody = `1. **论文证据直接支持的边界**\n\n${evidenceLimits}\n\n`
-        + `2. **进一步审视**\n\n${reviewerLimits || record.review}`;
+    const limitsBody = `### 论文证据直接支持的边界\n\n${evidenceLimits}\n\n`
+        + `### 进一步审视\n\n${reviewerLimits || record.review}`;
     const openBody = editorial.open || record.open;
     const roast = editorial.review || record.review;
     const scoreReasons = Array.isArray(record.scoringReasons) && record.scoringReasons.length === 8
@@ -798,27 +904,55 @@ function buildSpec(options) {
         if (unknownSelected.length) throw new Error(`${id} selectedImageUrls 不属于 full-text manifest: ${unknownSelected.join(',')}`);
         const evidenceLedger = JSON.parse(JSON.stringify(record.evidenceLedger));
         validateEvidenceLedger(evidenceLedger, sourceText, id);
-        const analysis = buildAnalysis(effectivePaper, record);
+        const analysis = normalizeExperimentTableNumericFormatting(
+            buildAnalysis(effectivePaper, record)
+        );
+        const assembledParsed = parseAnalysis(analysis);
+        const resultClaimValidation = validateResultClaims(record.resultClaims, sourceText, {
+            documentType: record.type,
+            exception: record.resultClaimsException,
+            readerResultsText: assembledParsed?.results || ''
+        });
+        if (!resultClaimValidation.valid) {
+            throw new Error(`${id} resultClaims 未与全文闭环: ${resultClaimValidation.errors.join('；')}`);
+        }
+        const editorialQuality = validateEditorialQuality(analysis);
+        if (!editorialQuality.valid) {
+            const details = editorialQuality.issues.slice(0, 8)
+                .map(item => `${item.code}:${item.section || '-'}:${item.match || item.message}`)
+                .join('；');
+            throw new Error(`${id} 未通过 Manual v4 读者文本质量门禁: ${details}`);
+        }
         const eligibleImages = selectImageCandidates(imageInfos, Config.ANALYSIS_CONFIG.imageCandidateMax);
         if (explicitSelection && record.selectedImageUrls.length === 0 && eligibleImages.length > 0) {
-            throw new Error(`${id} 存在 ${eligibleImages.length} 个合格论文图，禁止用空 selectedImageUrls 跳过图片审查；请省略该字段采用安全候选，或显式选择 1-4 张`);
+            throw new Error(`${id} 存在 ${eligibleImages.length} 个合格论文图，禁止用空 selectedImageUrls 跳过图片审查；请显式选择 1-4 张并逐图提供 imageInsertions`);
         }
         const rankedReadableImages = eligibleImages.filter(info => {
             const caption = String(info.caption || info.alt || '').replace(/\s+/g, ' ').trim();
             return caption.length >= 20 && !(/^\([a-z]\)/i.test(caption) && caption.length < 80);
         });
-        const selectedImageUrls = explicitSelection
-            ? record.selectedImageUrls
-            : rankedReadableImages.slice(0, Math.min(3, Config.ANALYSIS_CONFIG.imageInsertionMax || 3)).map(info => info.url);
-        const parsed = parseAnalysis(analysis);
+        if (!explicitSelection && rankedReadableImages.length > 0) {
+            throw new Error(`${id} 存在 ${rankedReadableImages.length} 个合格论文图；Manual 必须显式给出 selectedImageUrls 和逐图 imageInsertions，禁止自动套用通用邻文`);
+        }
+        const selectedImageUrls = explicitSelection ? record.selectedImageUrls : [];
+        const imageInsertions = selectedImageUrls.length > 0
+            ? resolveManualImageInsertions(
+                analysis,
+                record.imageInsertions,
+                selectedImageUrls,
+                `${id}.imageInsertions`
+            )
+            : [];
+        const parsed = assembledParsed;
         const invalidReason = getInvalidAnalysisReason(analysis, parsed, {
             enforceExperimentTableContract: true,
+            experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
             enforceMethodDetailContract: true,
             enforceManualDepthContract: true,
-            manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V3,
+            manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V4,
             sourceText
         });
-        if (invalidReason) throw new Error(`${id} 组装分析未通过 manual v3 正文契约: ${invalidReason}`);
+        if (invalidReason) throw new Error(`${id} 组装分析未通过 manual v4 正文契约: ${invalidReason}`);
         papers[id] = {
             arxivId: id,
             requestedArxivId: entry.requestedArxivId,
@@ -831,9 +965,16 @@ function buildSpec(options) {
             analysis,
             imageInfos,
             selectedImageUrls,
-            imageSelectionMode: explicitSelection ? 'manual_explicit' : 'safe_ranked_default',
+            imageInsertions,
+            imageSelectionMode: explicitSelection ? 'manual_explicit' : 'manual_no_eligible_images',
             manualAuthoringPromptSha256: sha256Buffer(fs.readFileSync(MANUAL_AUTHORING_PROMPT)),
             evidenceLedger,
+            resultClaims: JSON.parse(JSON.stringify(record.resultClaims)),
+            ...(record.resultClaimsException
+                ? { resultClaimsException: JSON.parse(JSON.stringify(record.resultClaimsException)) }
+                : {}),
+            readabilityRubric: JSON.parse(JSON.stringify(record.readabilityRubric)),
+            editorialQualityMetrics: editorialQuality.metrics,
             manualAudit: record.manualAudit,
             stageReviewAttemptsByStage: record.stageReviewAttemptsByStage,
             reviewedClaimsByStage: reviewedClaimsByStage(record, chunks, imageInfos),
@@ -841,6 +982,15 @@ function buildSpec(options) {
             reason: record.reason || '无 API 离线人工分析；基于完整全文逐篇核验、修订并完成终审。',
             ...(record.titleOverride ? { titleOverride: record.titleOverride } : {})
         };
+    }
+    const batchTemplates = findBatchTemplateReuse(
+        Object.entries(papers).map(([id, paper]) => ({ id, analysis: paper.analysis }))
+    );
+    if (batchTemplates.length > 0) {
+        const details = batchTemplates.slice(0, 8)
+            .map(item => `${item.paperCount}篇复用“${item.occurrences[0]?.text?.slice(0, 120) || item.sentence}”`)
+            .join('；');
+        throw new Error(`manual v4 成稿存在跨论文模板复用: ${details}`);
     }
     if (sha256Buffer(fs.readFileSync(manifestPath)) !== manifestSha256) {
         throw new Error('manual full-text manifest 在 spec 组装期间发生变化');
@@ -899,7 +1049,7 @@ function run(argv = process.argv.slice(2)) {
     });
     const outputPath = path.join(Config.CURRENT_DIR, `manual-analysis-spec-${args.date}.json`);
     writeFileAtomic(outputPath, JSON.stringify(spec, null, 2));
-    console.log(`✅ 已原子写入 manual_complete v3 spec：${outputPath}（${Object.keys(spec.papers).length} 篇，API 调用 0）`);
+    console.log(`✅ 已原子写入 manual_complete v4 spec：${outputPath}（${Object.keys(spec.papers).length} 篇，API 调用 0）`);
     return { outputPath, spec };
 }
 

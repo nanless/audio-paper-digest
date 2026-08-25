@@ -211,6 +211,23 @@ class ManualDepthContractV2Test(unittest.TestCase):
             ) or '',
         )
 
+    def test_v3_accepts_each_specific_result_boundary_signal(self):
+        analysis = valid_v3_analysis()
+        prefix, remainder = analysis.split('## 实验结果\n', 1)
+        results, suffix = remainder.split('\n\n## 细节详述', 1)
+        for legacy in ('未报告', '未说明', '但是', '不过', '尚未', '不能', '限制', '边界', '仅', '但'):
+            results = results.replace(legacy, '仍需复核')
+        for signal in ('而非', '并非', '不存在', '退化', '失败', '更差', '不显著', '跨零'):
+            candidate = (
+                f'{prefix}## 实验结果\n{results}\n\n'
+                f'补充的结果陈述为“{signal}”，用于明确负面证据。\n\n'
+                f'## 细节详述{suffix}'
+            )
+            self.assertIsNone(
+                validate_manual_depth_contract_v3(candidate),
+                msg=f'Python 发布镜像应接受 Manual v4/Node 已认可的结果边界词：{signal}',
+            )
+
 
 if __name__ == '__main__':
     unittest.main()

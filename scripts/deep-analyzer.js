@@ -38,6 +38,7 @@ const {
     METHOD_DETAIL_CONTRACT_VERSION,
     ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION,
     validateExperimentTableContract,
+    normalizeExperimentTableNumericFormatting,
     validateMethodDetailContract,
     isRecoveryStageTerminal,
     getInvalidAnalysisReason
@@ -921,6 +922,10 @@ function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint) {
         delete manifest.contracts.editorialLeakage;
         if (Object.keys(manifest.contracts).length === 0) delete manifest.contracts;
     }
+    if (stagesToDelete.includes('imageSupplement') && manifest.contracts) {
+        delete manifest.contracts.imageNarrative;
+        if (Object.keys(manifest.contracts).length === 0) delete manifest.contracts;
+    }
     paper.analysisStageCheckpoints = checkpoints;
     console.log(`    [deep] ⚠️  ${stage} 指纹变化，已失效该阶段及下游恢复状态`);
     return true;
@@ -952,6 +957,10 @@ function createAnalysisRecoveryManifest(paper) {
         && existing?.contracts?.methodDetail === METHOD_DETAIL_CONTRACT_VERSION;
     const keepEditorialLeakageContract = isRecoveryStageComplete({ stages }, 'structureRepair')
         && existing?.contracts?.editorialLeakage === ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION;
+    const keepImageNarrativeContract = isRecoveryStageTerminal(
+        'imageSupplement',
+        stages.imageSupplement?.status
+    ) && existing?.contracts?.imageNarrative === IMAGE_NARRATIVE_CONTRACT_VERSION;
     const contracts = existing?.contracts && typeof existing.contracts === 'object'
         ? { ...existing.contracts }
         : {};
@@ -964,6 +973,8 @@ function createAnalysisRecoveryManifest(paper) {
     } else {
         delete contracts.editorialLeakage;
     }
+    if (keepImageNarrativeContract) contracts.imageNarrative = IMAGE_NARRATIVE_CONTRACT_VERSION;
+    else delete contracts.imageNarrative;
     return {
         version: RECOVERY_MANIFEST_VERSION,
         stages,
@@ -2379,6 +2390,74 @@ const ALLOWED_IMAGE_INSERTION_SECTIONS = new Set([
     '实验结果',
     '细节详述'
 ]);
+const IMAGE_NARRATIVE_CONTRACT_VERSION = 'context-bound-v1';
+
+const GENERIC_IMAGE_NARRATIVE_PATTERNS = Object.freeze([
+    /论文的关键实验比较.*读图时需同时保留正文列出的数据集、指标方向和实验条件/,
+    /这项视觉证据只支持图注与正文对应设置下的比较，不能外推为未测试条件中的统一结论/,
+    /论文的系统结构或处理流程.*组件职责和数据流逐项对照/,
+    /图中的箭头和分支用于说明已披露的组件关系，不代表正文未声明的额外训练阶段/,
+    /论文的实现细节或数据示例.*核对实现条件与适用边界/,
+    /图示用于补足实现语境，不替代论文未报告的配置、消融或部署测量/
+]);
+
+const IMAGE_NARRATIVE_STOP_TERMS = new Set([
+    '下图', '图中', '论文', '方法', '结果', '实验', '模型', '系统', '数据', '说明', '展示',
+    '比较', '核对', '边界', '条件', '结论', '结构', '流程', '可见', '支持', '不能'
+]);
+
+function imageNarrativeTerms(text) {
+    const value = String(text || '').normalize('NFKC').toLowerCase();
+    const terms = new Set();
+    for (const match of value.matchAll(/[a-z][a-z0-9_.+-]{2,}|\d+(?:\.\d+)?%?/g)) {
+        if (!IMAGE_NARRATIVE_STOP_TERMS.has(match[0])) terms.add(match[0]);
+    }
+    for (const match of value.matchAll(/[\u4e00-\u9fff]{4,}/g)) {
+        const run = match[0];
+        for (let index = 0; index <= run.length - 4; index++) {
+            const term = run.slice(index, index + 4);
+            if (!IMAGE_NARRATIVE_STOP_TERMS.has(term)) terms.add(term);
+        }
+    }
+    return terms;
+}
+
+function imageNarrativeHasOverlap(source, narrative) {
+    const sourceTerms = imageNarrativeTerms(source);
+    const narrativeTerms = imageNarrativeTerms(narrative);
+    return [...sourceTerms].some(term => narrativeTerms.has(term));
+}
+
+function validateImageNarrativeContext(lead, explanation, context = {}) {
+    const normalizedLead = sanitizeImagePlanText(lead, 220);
+    const normalizedExplanation = sanitizeImagePlanText(explanation, 320);
+    if (!normalizedLead) return 'missing_lead';
+    if (!normalizedExplanation) return 'missing_explanation';
+    if (!/[\u4e00-\u9fff]/.test(normalizedLead)
+        || !/[\u4e00-\u9fff]/.test(normalizedExplanation)) return 'non_chinese_context';
+    if (normalizedLead.length < 18 || normalizedExplanation.length < 30) return 'context_too_short';
+    if (!/(?:下图|如下图)/.test(normalizedLead)
+        || !/(?:核对|观察|比较|追踪|辨认|判断|查看|阅读重点|验证)/.test(normalizedLead)) {
+        return 'lead_missing_reading_task';
+    }
+    if (GENERIC_IMAGE_NARRATIVE_PATTERNS.some(pattern => (
+        pattern.test(normalizedLead) || pattern.test(normalizedExplanation)
+    ))) return 'generic_boilerplate';
+    if (!/(?:图中|曲线|热图|色块|箭头|分支|波形|语谱图|频谱|样例|柱状|散点|轨迹|矩阵|流程)/.test(normalizedExplanation)) {
+        return 'explanation_missing_visible_evidence';
+    }
+    if (!/(?:仅|只|不能|不等于|不直接|未|边界|条件|范围|限于|仍需)/.test(normalizedExplanation)) {
+        return 'explanation_missing_conclusion_boundary';
+    }
+    if (context.anchorText && !imageNarrativeHasOverlap(context.anchorText, normalizedLead)) {
+        return 'lead_not_bound_to_anchor';
+    }
+    if (context.conclusionText
+        && !imageNarrativeHasOverlap(context.conclusionText, normalizedExplanation)) {
+        return 'explanation_not_bound_to_conclusion';
+    }
+    return null;
+}
 
 function sanitizeImagePlanText(text, maxChars = 260) {
     return String(text || '')
@@ -2466,12 +2545,20 @@ function parseImageInsertionPlanDetailed(raw, imageInfos = []) {
         }
 
         const paragraphId = sanitizeImagePlanText(item.paragraph_id || item.paragraphId, 40);
+        const conclusionParagraphId = sanitizeImagePlanText(
+            item.conclusion_paragraph_id || item.conclusionParagraphId,
+            40
+        );
         const anchor = sanitizeImagePlanText(item.anchor, 180);
         if (item.replacement || item.replaceAnchorWith || item.rewrite) diagnostics.replacementIgnored++;
         const lead = sanitizeImagePlanText(item.lead || item.before || item.intro, 220);
         const explanation = sanitizeImagePlanText(item.explanation || item.after || item.note, 320);
-        if (!lead && !explanation) {
-            reject(`item_${itemIndex + 1}:missing_context_text`);
+        const legacyNarrative = !paragraphId && Boolean(anchor);
+        const narrativeIssue = legacyNarrative
+            ? null
+            : validateImageNarrativeContext(lead, explanation);
+        if (narrativeIssue) {
+            reject(`item_${itemIndex + 1}:${narrativeIssue}`);
             continue;
         }
 
@@ -2480,7 +2567,9 @@ function parseImageInsertionPlanDetailed(raw, imageInfos = []) {
             imageNumber,
             section,
             paragraphId,
+            conclusionParagraphId,
             anchor,
+            legacyNarrative,
             lead,
             explanation
         });
@@ -2637,14 +2726,35 @@ function normalizeGenericImageOrder(analysis, selectedImageUrls) {
 
 function applyImageInsertionPlan(analysis, plans, imageInfos, maxInsertions = IMAGE_INSERTION_MAX) {
     let updated = analysis;
-    const anchorCatalog = new Map(buildImageAnchorCatalog(analysis).map(entry => [entry.id, entry]));
+    const anchorEntries = buildImageAnchorCatalog(analysis);
+    const anchorCatalog = new Map(anchorEntries.map((entry, index) => [entry.id, { ...entry, order: index }]));
     const resolvedPlans = plans.map(plan => {
         if (!plan.paragraphId) return plan;
         const entry = anchorCatalog.get(plan.paragraphId);
         if (!entry || entry.section !== plan.section) {
             return { ...plan, anchorResolutionError: 'paragraph_id_not_found' };
         }
-        return { ...plan, anchor: entry.text };
+        if (plan.legacyNarrative === true) {
+            return { ...plan, anchor: entry.text };
+        }
+        if (!plan.conclusionParagraphId) {
+            return { ...plan, anchorResolutionError: 'conclusion_paragraph_id_required' };
+        }
+        const conclusionEntry = anchorCatalog.get(plan.conclusionParagraphId);
+        if (!conclusionEntry || conclusionEntry.section !== plan.section
+            || conclusionEntry.order < entry.order) {
+            return { ...plan, anchorResolutionError: 'conclusion_paragraph_id_not_found' };
+        }
+        const narrativeIssue = validateImageNarrativeContext(plan.lead, plan.explanation, {
+            anchorText: entry.text,
+            conclusionText: conclusionEntry.text
+        });
+        if (narrativeIssue) return { ...plan, anchorResolutionError: narrativeIssue };
+        return {
+            ...plan,
+            anchor: entry.text,
+            conclusion: conclusionEntry.text
+        };
     });
     const selectedImageUrls = [];
     const insertionDiagnostics = [];
@@ -2767,9 +2877,17 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
         secondaryBudget.stop();
     }
 
-    const plans = parseImageInsertionPlan(planText, usableImageInfos);
+    const parsedPlans = parseImageInsertionPlan(planText, usableImageInfos);
+    const plans = parsedPlans.filter(plan => plan.legacyNarrative !== true);
+    if (plans.length !== parsedPlans.length) {
+        parsedPlans.diagnostics.rejectedItems += parsedPlans.length - plans.length;
+        parsedPlans.diagnostics.acceptedItems = plans.length;
+        parsedPlans.diagnostics.rejectionReasons.push('legacy_anchor_format_not_allowed');
+        parsedPlans.diagnostics.status = plans.length > 0 ? 'ok' : 'all_items_rejected';
+    }
     const responseSha256 = crypto.createHash('sha256').update(planText).digest('hex');
-    const parseDiagnostics = plans.diagnostics || { status: 'unknown', rejectedItems: 0, replacementIgnored: 0, rejectionReasons: [] };
+    const parseDiagnostics = parsedPlans.diagnostics
+        || { status: 'unknown', rejectedItems: 0, replacementIgnored: 0, rejectionReasons: [] };
     console.log(`    [secondary] ◀ 图片筛选返回 | active_duration_s=${(secondaryBudget.elapsedMs() / 1000).toFixed(1)} | response_chars=${planText.length} | parse_status=${parseDiagnostics.status} | valid_insertions=${plans.length} | rejected=${parseDiagnostics.rejectedItems} | replacement_ignored=${parseDiagnostics.replacementIgnored}`);
     if (parseDiagnostics.rejectionReasons?.length > 0) {
         console.log(`    [secondary]    rejected_reasons=${sanitizeLogField(parseDiagnostics.rejectionReasons.join(','), 300)}`);
@@ -2818,6 +2936,7 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
             normalizedInputCount,
             promptSha256,
             responseSha256,
+            plans: plans.map(plan => ({ ...plan })),
             insertionDiagnostics
         }
     };
@@ -3385,7 +3504,7 @@ async function analyzePaperDeep(paper) {
     );
     analysis = structureRepairStage.analysis;
     if (!isRecoveryStageComplete(analysisManifest, 'structureRepair')) {
-        const preNormalizationIssues = getRepairableAnalysisStructureIssues(analysis);
+        const preNormalizationIssues = getRepairableAnalysisStructureIssues(analysis, { sourceText: rawTextForAnalysis });
         const normalizedStructure = normalizeAnalysisStructure(analysis);
         const normalizedChanged = normalizedStructure !== analysis;
         if (normalizedChanged) {
@@ -3393,7 +3512,7 @@ async function analyzePaperDeep(paper) {
             console.log(`    [deep] ✅ 已确定性规范化结构 | categories=${sanitizeLogField(preNormalizationIssues.join('、') || '空白/数值表示', 500)}`);
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
         }
-        const structureIssues = getRepairableAnalysisStructureIssues(analysis);
+        const structureIssues = getRepairableAnalysisStructureIssues(analysis, { sourceText: rawTextForAnalysis });
         try {
             if (structureIssues.length > 0) {
                 console.log(`    [deep] 🔧 检测到结构契约问题，执行最终结构修复: ${structureIssues.join('、')}`);
@@ -3403,7 +3522,7 @@ async function analyzePaperDeep(paper) {
                     rawTextForAnalysis,
                     structureRepairStage.evidenceContext
                 );
-                const postRepairIssues = getRepairableAnalysisStructureIssues(analysis);
+                const postRepairIssues = getRepairableAnalysisStructureIssues(analysis, { sourceText: rawTextForAnalysis });
                 if (postRepairIssues.length > 0) {
                     const error = new Error(`最终结构修复后的分析仍未通过结构契约: ${postRepairIssues.join('、')}`);
                     error.code = 'CONTRACT_REJECTED';
@@ -3507,7 +3626,9 @@ async function analyzePaperDeep(paper) {
             const auditedParsed = parseAnalysis(analysis);
             const auditedInvalidReason = getInvalidAnalysisReason(analysis, auditedParsed, {
                 enforceExperimentTableContract: true,
-                enforceMethodDetailContract: true
+                experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+                enforceMethodDetailContract: true,
+                sourceText: rawTextForAnalysis
             });
             if (auditedInvalidReason) {
                 const error = new Error(`评分审计后的分析未通过最终契约: ${auditedInvalidReason}`);
@@ -3576,7 +3697,12 @@ async function analyzePaperDeep(paper) {
             const imageInvalidReason = getInvalidAnalysisReason(
                 imageResult.analysis,
                 parseAnalysis(imageResult.analysis),
-                { enforceExperimentTableContract: true, enforceMethodDetailContract: true }
+                {
+                    enforceExperimentTableContract: true,
+                    experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+                    enforceMethodDetailContract: true,
+                    sourceText: rawTextForAnalysis
+                }
             );
             if (imageInvalidReason) {
                 const fallback = discardInvalidImageSupplement(
@@ -3635,6 +3761,13 @@ async function analyzePaperDeep(paper) {
                     : undefined,
             fingerprint: imageSupplementFingerprint
         });
+    }
+
+    if (isRecoveryStageTerminal('imageSupplement', analysisManifest.stages.imageSupplement?.status)) {
+        analysisManifest.contracts = {
+            ...(analysisManifest.contracts || {}),
+            imageNarrative: IMAGE_NARRATIVE_CONTRACT_VERSION
+        };
     }
 
     saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
@@ -4031,7 +4164,9 @@ function getSupplementalTagFallbacks(documentType) {
 }
 
 function normalizeAnalysisStructure(analysis) {
-    let updated = normalizeUnexpectedTopLevelHeadings(analysis);
+    let updated = normalizeExperimentTableNumericFormatting(
+        normalizeUnexpectedTopLevelHeadings(analysis)
+    );
     const originalMachine = extractSectionByTitle(updated, '机器摘要');
     if (!originalMachine) return updated;
 
@@ -4162,7 +4297,7 @@ async function repairMissingAnalysisSections(
     paper, existingAnalysis, sourceText, preparedEvidence = null, options = {}
 ) {
     let currentAnalysis = normalizeAnalysisStructure(existingAnalysis);
-    let structureIssues = getRepairableAnalysisStructureIssues(currentAnalysis);
+    let structureIssues = getRepairableAnalysisStructureIssues(currentAnalysis, { sourceText });
     let validationFeedback = '这是第一次结构修复，没有上一次校验错误。';
     const evidenceContext = typeof preparedEvidence === 'string'
         ? preparedEvidence
@@ -4182,7 +4317,7 @@ async function repairMissingAnalysisSections(
         const cleaned = cleanGapFillPrefix(repairedText.trim());
         if (cleaned) currentAnalysis = normalizeAnalysisStructure(removeUnapprovedMarkdownImages(cleaned, []));
 
-        structureIssues = getRepairableAnalysisStructureIssues(currentAnalysis);
+        structureIssues = getRepairableAnalysisStructureIssues(currentAnalysis, { sourceText });
         if (structureIssues.length === 0) return currentAnalysis;
 
         validationFeedback = `上一次输出仍有结构契约问题：${structureIssues.join('、')}。必须输出完整分析并逐项修正。`;
@@ -4203,11 +4338,15 @@ function recoveryFailureStatus(error) {
 }
 
 async function finalizeStructureRepairOutput(paper, inputAnalysis, sourceText, options = {}) {
-    let analysis = inputAnalysis;
-    const tableContractIssue = validateExperimentTableContract(analysis);
+    let analysis = normalizeExperimentTableNumericFormatting(inputAnalysis);
+    const tableContractIssue = validateExperimentTableContract(analysis, {
+        contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+        documentType: parseAnalysis(analysis)?.documentType,
+        sourceText
+    });
     if (tableContractIssue) {
         throw contractRejectedError(
-            `最终结构修复后的表格仍未通过 bounded-v1 契约: ${tableContractIssue}`
+            `最终结构修复后的表格仍未通过 ${EXPERIMENT_TABLE_CONTRACT_VERSION} 契约: ${tableContractIssue}`
         );
     }
 
@@ -4239,7 +4378,7 @@ async function finalizeStructureRepairOutput(paper, inputAnalysis, sourceText, o
     // 方法兜底本身也是模型输出，必须再次接受完整结构/叙事契约审计。
     // 否则它可在满足 600 字方法契约的同时新增编辑批注或破坏其他章节，
     // 并被错误地保存为 structureRepair=complete 供后续运行复用。
-    const finalStructureIssues = getRepairableAnalysisStructureIssues(analysis);
+    const finalStructureIssues = getRepairableAnalysisStructureIssues(analysis, { sourceText });
     if (finalStructureIssues.length > 0) {
         throw contractRejectedError(
             `最终方法兜底后的分析仍未通过结构契约: ${finalStructureIssues.join('、')}`
@@ -4248,7 +4387,7 @@ async function finalizeStructureRepairOutput(paper, inputAnalysis, sourceText, o
     return { analysis, methodRepaired };
 }
 
-function getRepairableAnalysisStructureIssues(analysis) {
+function getRepairableAnalysisStructureIssues(analysis, options = {}) {
     const issues = [];
     const missing = getMissingRequiredSections(analysis);
     if (missing.length > 0) issues.push(`缺少必要章节: ${missing.join('/')}`);
@@ -4263,7 +4402,11 @@ function getRepairableAnalysisStructureIssues(analysis) {
     if (machineIssue) issues.push(`机器摘要: ${machineIssue}`);
     const tagIssue = validateTagSectionContract(analysis, parsed);
     if (tagIssue) issues.push(`标签: ${tagIssue}`);
-    const tableIssue = validateExperimentTableContract(analysis);
+    const tableIssue = validateExperimentTableContract(analysis, {
+        contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+        documentType: parsed?.documentType,
+        sourceText: options.sourceText
+    });
     if (tableIssue) issues.push(`实验表格: ${tableIssue}`);
     // 结构修复必须在评分审计之前兜住最终契约要求的叙事正文长度。
     // 否则标题齐全但正文仍是 `TD` / 编辑指令等占位内容时，评分审计只会
@@ -4437,7 +4580,12 @@ function analysisNeedsExperimentTableRepair(analysis, textForAnalysis) {
     // second LLM call to reproduce unrelated source tables wastes substantial
     // input/output tokens. A missing-table repair is otherwise justified only
     // when the analysis itself cites a table and the source confirms one.
-    return hasOmission || (!hasTable && hasTableReference && sourceHasTables);
+    const depthIssue = validateExperimentTableContract(analysis, {
+        contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+        documentType: parseAnalysis(analysis)?.documentType,
+        sourceText: textForAnalysis
+    });
+    return hasOmission || Boolean(depthIssue) || (!hasTable && hasTableReference && sourceHasTables);
 }
 
 /**
@@ -4466,7 +4614,9 @@ async function checkAndFixTables(paper, analysis, sourceText, preparedEvidence =
     }
 
     // 将补充的实验结果合并回原分析
-    return mergeSectionByTitle(analysis, '实验结果', fixedSection);
+    return normalizeExperimentTableNumericFormatting(
+        mergeSectionByTitle(analysis, '实验结果', fixedSection)
+    );
 }
 
 /**
@@ -4689,6 +4839,8 @@ module.exports = {
     inferResourceState,
     parseImageInsertionPlan,
     parseImageInsertionPlanDetailed,
+    validateImageNarrativeContext,
+    IMAGE_NARRATIVE_CONTRACT_VERSION,
     applyImageInsertionPlan,
     buildImageAnchorCatalog,
     formatImageAnchorCatalog,

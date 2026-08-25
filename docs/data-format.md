@@ -310,7 +310,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
       "analysisManifest": {
         "version": 1,
         "sourceAcquisition": {"analysisSource": "html", "sourceSha256": "<64位十六进制>"},
-        "contracts": {"experimentTables": "bounded-v1"},
+        "contracts": {"experimentTables": "evidence-rich-v2"},
         "stages": {
           "imageDownload": {"status": "complete"},
           "primaryAnalysis": {"status": "complete"},
@@ -338,10 +338,10 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 - 只有包含合法 `document_type` 的新分析才写入 `scoringRubricVersion: type-aware-v1`；历史结果不补写版本，以免误标
 - `analysisSource` 为 `html` / `pdf` / `provided_full_text` / `provided_pdf_text` / `abstract`；`sourceTextChars` 记录取得的原文长度，`usedTextChars` 记录主分析实际输入长度。超长来源会按全文位置和任务关键词确定性取样，因此 `usedTextChars` 不等同于简单前缀截断。字符数、截断状态、来源哈希和告警用于识别摘要降级及 checkpoint 证据变化。`abstract` 默认阻断发布，人工批准需设置 `allowAbstractAnalysisPublish: true`
 - `selectedImageUrls` / `imageUrls` 只保存通过稳定 `paragraph_id`、目标章节匹配和每篇默认 4 张上限门禁后实际插入正文的高价值图片，并按最终正文出现顺序保存；旧精确 anchor 仅用于兼容。`allImageUrls` 不能直接当作可发布图片使用
-- Manual v3 的 `analysisManifest.contracts.manualDepth=full-text-evidence-v3` 绑定 `manual-analysis-record.md` SHA；它要求论证型摘要、至少五段方法流、缺口—机制—证据—边界创新、比较/消融及负面实验、复现覆盖、八条维度专属评分和“论文证据直接支持的边界/进一步审视”双层局限。`manualTakeover.stageEvidence[*].executionKind` 与对应 stage 必须为 `manual_attestation`，不得解释为 LLM 阶段实际执行。Manual `imageManifest` v2 还绑定正文插图计划和插入诊断。
+- Manual v4 的 records envelope 为 v2、spec 为 v4，canonical `analysisManifest.contracts.manualDepth=full-text-evidence-v4`；它继承 v3 的论证、方法流、创新、实验、复现、评分和双层局限门禁，并强制 `experimentTables=evidence-rich-v2`、`editorialQuality=reader-facing-v1` 与上下文图片叙事。`manualTakeover` 还必须保存与全文原句闭环的 `resultClaims` 及 SHA、通过 12/14 无 0 分门槛的 `readabilityRubric` 及 SHA，`review.readerQualityVerified=true`。旧 spec v3 可读取但继续写 `full-text-evidence-v3` + `bounded-v1`，不会被 v4 追溯判坏。`manualTakeover.stageEvidence[*].executionKind` 与对应 stage 必须为 `manual_attestation`。
 - `generation` 每次锁内对象写入递增：写入者先取得跨进程锁、重读最新 canonical、合并后令版本加 1。它是提交后的版本记录，不是调用方携带 expected-generation 的锁外乐观 CAS。恢复终态还包括 `no_downloadable_images`：候选均为永久不可下载；`invalid_output` 表示有插图计划但无法落地，必须只重试插图阶段
 - `analysisManifest.stages.scoringAudit` 保存模型、温度、prompt 模板哈希、证据哈希、尝试次数、前后总分/差值、稳定性告警和最终八维 JSON；分数变化超过 0.5 会写 `stabilityWarning: true`。`imageManifest.supplement` 保存副模型、温度、prompt/响应哈希及逐项插入诊断
-- 新分析和重分析在结构修复通过后写入 `analysisManifest.contracts.experimentTables=bounded-v1`，表示实验章节已经通过“最多 2 张表、每张 12 个数据行和 8 个指标列”的代码硬契约。`npm run validate:data` 与 Python 发布预检都会重新验证带标记正文；无该标记的历史成功记录保持兼容，不会因启用新契约而全量失效
+- 新分析和重分析在结构修复通过后写入 `analysisManifest.contracts.experimentTables=evidence-rich-v2`：除旧上限外，至少需要标识列、3 行证据、2 个数字、指标方向、表前比较问题和表后差异/边界；来源明确包含消融或负面结果时必须覆盖。`npm run validate:data` 与 Python 发布预检执行同构校验；历史 `bounded-v1` 与无标记成功记录保持原语义兼容
 - `analysisStageCheckpoints` 保存逐阶段快照；指纹绑定主分析实际取样输入、`task-focused-v1` 证据选择版本、各阶段字符预算、模型/协议/端点、温度、实际 prompt、图片候选与下载 SHA。预算或输入变化只回滚受影响阶段及下游，续跑从首个未完成阶段开始
 - 失败结果保留恢复 checkpoint；若旧成功正文仍可用，`latestAnalysisAttemptError` 与 `digestStatus.latestAttemptStatus=analysis_failed` 会明确标记最新失败，下一轮继续重试而不会把旧正文误当成最新成功。成功重试会清理这些标记。每篇内容只能在共享论文锁内从最新规范记录合并写回，批次收尾不得用旧累计快照覆盖并发进程的新结果
 - **`parsed.score` 不是直接取 `## 评分` 下的 LLM 原始总分**。只有八个分项完整、唯一、各自带具体理由、分母正确、数值有限且位于合法范围时才重新计算并封顶为 10；否则 `scoreValidation` 记录契约错误并阻断保存/发布，不会把缺失维度当 0 覆盖原分数
@@ -473,10 +473,12 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 ### 5.10 博客阶段 journal、清单与审查凭证
 
 - generation staging/install journal：逐页记录输入指纹、安装前 SHA 和目标 SHA；崩溃后只收养内容完全匹配的页面，全部论文完成后才生成汇总页和严格 manifest。
-- `blog-generation-manifest-YYYY-MM-DD.json`：正式清单为 schema v3，记录非空、唯一且结构合法的精确 Markdown 文件集合、输入/生成依赖指纹、博客基线、category、逐文件 SHA，以及经过发布预检后实际写入博客的 `publishedPapers` 权威快照；`visualSummaryRequired` 与 `digestCoverRequired` 必须为 `false`，发布后图片不得进入清单。
+- `blog-generation-manifest-YYYY-MM-DD.json`：正式清单为 schema v3，记录非空、唯一且结构合法的精确 Markdown 文件集合、输入/生成依赖指纹、博客基线、category、逐文件 SHA，以及经过发布预检后实际写入博客的 `publishedPapers` 权威快照；review 与 push 都会把 `templateFingerprint` 与当前生成器重算值比较，旧模板产物必须重新 generate。`visualSummaryRequired` 与 `digestCoverRequired` 必须为 `false`，发布后图片不得进入清单。
+- 新生成的每日汇总页写入 `paper_digest_reader_quality: "reader-facing-v1"`，并在 generate、generation checkpoint 复用、review 确定性检查与 staged 安装前重跑阿拉伯精确定量、术语间距、病句、模板句和长段门禁；无该标记的历史汇总页按旧契约兼容读取。
+- 若配置了发布图片排除项，`publishedPapers` 中同时保存 `publishImageExclusions` 与 `publishImageExclusionView`：后者绑定排除前/后的 analysis SHA、精确 URL 顺序、有效 `selectedImageUrls` 和 `context-bound-v1` 契约。生成器会在排除后重跑读者可见正文、表格与图片邻文门禁，review/push 又通过 generation SHA 和输入指纹复核该派生视图，canonical 深度分析及其 Manual 来源 SHA 不被改写。
 - `blog-review-passes-YYYY-MM-DD.json`：持久保存已通过页面的博客仓库相对路径、实际读取 SHA-256、通过时间和当时的 review 协议指纹。复用只依赖路径 + SHA；代码、脚本、文档、模型、协议、generation manifest 或博客基线变化不会删除记录，页面内容变化时只让该页面重新进入 review。
 - `blog-review-failure-YYYY-MM-DD.json`：schema v3 绑定 worker 实际读取 SHA，并保留当次生成清单、博客基线和协议元数据供审计；这些批次元数据变化不再让未改的已通过页面全量复审。内容失败修复后只复审失败页，瞬时失败保持可重试；应存在文件消失或 Hugo 前后 SHA 变化均阻断签发整批凭证。
-- `blog-review-receipt-YYYY-MM-DD.json`：review 阶段记录文件 SHA 和各文件实际通过时的协议指纹，并重新绑定当前 generation manifest 的 SHA-256、当前 review 协议和 Hugo gate；push 远端 OID 验证成功后追加 `publicationCommit`、相同的 `remoteVerifiedOid` 和北京时间 `remoteVerifiedAt`。发布后视觉规划从 generation 的 `publishedPapers` 读取实际发布集合，并把发布提交与 generation SHA 写入任务 token。
+- `blog-review-receipt-YYYY-MM-DD.json`：review 阶段记录文件 SHA/受控删除语义和各文件实际通过时的协议指纹，并重新绑定当前 generation manifest 的 SHA-256、当前 review 协议和 Hugo gate；人工接管 provenance 对删除项使用空 SHA 与 `deletionVerified`，对现存页面使用唯一且含页面标识的 notes。push 远端 OID 验证成功后追加 `publicationCommit`、相同的 `remoteVerifiedOid` 和北京时间 `remoteVerifiedAt`。发布后视觉规划从 generation 的 `publishedPapers` 读取实际发布集合，并把发布提交与 generation SHA 写入任务 token。
 
 三个博客入口同时用日期级锁和博客仓库级全局锁串行化；push 在 stage 后及 commit 前校验 index blob 与凭证完全一致。
 

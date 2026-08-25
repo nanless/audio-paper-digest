@@ -39,7 +39,9 @@ from publish_common import (
     call_publish_llm_api, PublishLLMUnavailable,
     PublishDataValidationError, count_blocking_review_issues, is_blocking_review_issue,
     normalize_publish_arxiv_id, review_protocol_failure,
-    validate_papers_for_publish, validate_review_payload
+    validate_papers_for_publish, validate_review_payload,
+    validate_final_manual_v4_markdown, MANUAL_DEPTH_CONTRACT_VERSION_V4,
+    validate_digest_index_reader_quality, DIGEST_INDEX_READER_QUALITY_VERSION,
 )
 from path_config import (
     PROJECT_ROOT,
@@ -88,6 +90,7 @@ _REVIEW_PROTOCOL_CACHE = {}
 PUBLISH_IMAGE_EXCLUSIONS_SCHEMA_VERSION = 1
 PUBLISH_IMAGE_EXCLUSIONS_PATH = PROJECT_ROOT / 'config' / 'publish-image-exclusions.json'
 PUBLISH_IMAGE_EXCLUSIONS_FIELD = 'publishImageExclusions'
+PUBLISH_IMAGE_VIEW_FIELD = 'publishImageExclusionView'
 PUBLISHED_PAPERS_FINGERPRINT_CONTRACT = 'typed-json-f64-utf16-v1'
 MANUAL_REVIEW_MODE = 'manual_complete'
 
@@ -174,26 +177,106 @@ def _manual_review_provenance_error(receipt, *, date_str=None,
         item.get('path'): item for item in receipt_files
         if isinstance(item, dict) and isinstance(item.get('path'), str)
     }
+
+    def notes_bind_reader_fact(notes, content, ignored=()):
+        ignored_text = ' '.join(str(item) for item in ignored).casefold()
+        tokens = re.findall(
+            r'[A-Za-z][A-Za-z0-9.+-]{2,}|(?<!\d)\d+(?:\.\d+)?%?', notes,
+        )
+        return any(
+            token.casefold() not in ignored_text and token.casefold() in content.casefold()
+            for token in tokens
+        )
+
     seen_attested_paths = set()
+    seen_notes = set()
+    seen_semantic_notes = set()
+
+    def require_unique_note_semantics(notes, identifiers, path):
+        basis = notes
+        for identifier in identifiers:
+            if identifier:
+                basis = basis.replace(str(identifier), '<page>')
+        key = re.sub(r'[\W_]+', '', basis, flags=re.UNICODE).casefold()
+        if key in seen_semantic_notes:
+            return f'manual_complete provenance notes 去除页面 ID 后仍重复: {path}'
+        seen_semantic_notes.add(key)
+        return None
+
     for item in attested_files:
-        if not isinstance(item, dict) or set(item) != {'path', 'sha256', 'checks', 'notes'}:
-            return 'manual_complete provenance 逐文件字段必须恰好为 path/sha256/checks/notes'
+        if not isinstance(item, dict):
+            return 'manual_complete provenance 逐文件必须是对象'
+        allowed_fields = {'path', 'sha256', 'checks', 'notes', 'deleted'}
+        if not {'path', 'sha256', 'checks', 'notes'}.issubset(item) \
+                or not set(item).issubset(allowed_fields):
+            return 'manual_complete provenance 逐文件字段非法'
         path = item.get('path')
         if not isinstance(path, str) or path in seen_attested_paths or path not in receipt_by_path:
             return 'manual_complete provenance 逐文件路径非法、重复或不在 receipt'
+        relative_path = Path(path)
+        if relative_path.is_absolute() or '..' in relative_path.parts:
+            return f'manual_complete provenance 逐文件路径越界: {path}'
         seen_attested_paths.add(path)
         receipt_item = receipt_by_path[path]
-        if receipt_item.get('deleted') is True or item.get('sha256') != receipt_item.get('sha256'):
+        deleted = receipt_item.get('deleted') is True
+        if deleted != (item.get('deleted') is True) \
+                or item.get('sha256') != receipt_item.get('sha256'):
             return f'manual_complete provenance 逐文件 SHA/删除语义不一致: {path}'
         item_checks = item.get('checks')
-        if (
-            not isinstance(item_checks, dict)
-            or set(item_checks) != required_file_checks
-            or any(item_checks.get(key) is not True for key in required_file_checks)
-        ):
+        if deleted:
+            if item_checks != {'deletionVerified': True}:
+                return f'manual_complete provenance 删除项检查不完整: {path}'
+        elif (
+                not isinstance(item_checks, dict)
+                or set(item_checks) != required_file_checks
+                or any(item_checks.get(key) is not True for key in required_file_checks)):
             return f'manual_complete provenance 逐文件检查不完整: {path}'
         if not isinstance(item.get('notes'), str) or len(item['notes'].strip()) < 20:
             return f'manual_complete provenance 逐文件 notes 过短: {path}'
+        normalized_notes = re.sub(r'[\W_]+', '', item['notes'], flags=re.UNICODE).casefold()
+        if normalized_notes in seen_notes:
+            return 'manual_complete provenance 逐文件 notes 不独立'
+        seen_notes.add(normalized_notes)
+        if deleted:
+            if '删除' not in item['notes'] or Path(path).stem not in item['notes']:
+                return f'manual_complete provenance 删除项 notes 缺少页面特有事实: {path}'
+            semantic_error = require_unique_note_semantics(
+                item['notes'], (Path(path).stem, date_str), path,
+            )
+            if semantic_error:
+                return semantic_error
+        else:
+            repo_root = Path(BLOG_REPO).expanduser().resolve()
+            target = (repo_root / relative_path).resolve()
+            try:
+                target.relative_to(repo_root)
+            except ValueError:
+                return f'manual_complete provenance 逐文件路径越界: {path}'
+            try:
+                content = target.read_text(encoding='utf-8')
+            except (OSError, UnicodeError):
+                return f'manual_complete provenance 无法读取已审查页面: {path}'
+            arxiv_match = re.search(
+                r'^paper_digest_arxiv_id:\s*"?([^"\s]+)"?\s*$', content, re.MULTILINE,
+            )
+            if arxiv_match and arxiv_match.group(1) not in item['notes']:
+                return f'manual_complete provenance 论文页 notes 缺少 arXiv ID: {path}'
+            if arxiv_match and not notes_bind_reader_fact(
+                    item['notes'], content, (arxiv_match.group(1), date_str)):
+                return f'manual_complete provenance 论文页 notes 缺少正文技术词或实验数字: {path}'
+            if not arxiv_match and (
+                    not date_str or date_str not in item['notes'] or '汇总' not in item['notes']):
+                return f'manual_complete provenance 汇总页 notes 缺少日期与页面事实: {path}'
+            if not arxiv_match and not notes_bind_reader_fact(
+                    item['notes'], content, (date_str,)):
+                return f'manual_complete provenance 汇总页 notes 缺少正文排名、数量或论文术语: {path}'
+            semantic_error = require_unique_note_semantics(
+                item['notes'],
+                ((arxiv_match.group(1) if arxiv_match else None), date_str),
+                path,
+            )
+            if semantic_error:
+                return semantic_error
     if seen_attested_paths != set(receipt_by_path):
         return 'manual_complete provenance 逐文件集合与 receipt 不一致'
     path_set_sha = provenance.get('reviewedPathSetSha256')
@@ -1340,7 +1423,7 @@ def _strip_publish_image_lead_context(paragraph):
     return None
 
 
-def _remove_publish_image_block(content, exact_url):
+def _remove_publish_image_block(content, exact_url, insertion_plan=None):
     """Remove one exact image and only high-confidence adjacent bridge prose."""
     if not isinstance(content, str) or exact_url not in content:
         return content
@@ -1352,20 +1435,39 @@ def _remove_publish_image_block(content, exact_url):
         rf'!\[[^\]\n]*\]\({re.escape(exact_url)}\)'
     )
     remove = set()
+    exact_lead = re.sub(r'\s+', ' ', str((insertion_plan or {}).get('lead') or '')).strip()
+    exact_explanation = re.sub(
+        r'\s+', ' ', str((insertion_plan or {}).get('explanation') or ''),
+    ).strip()
     for index, paragraph in enumerate(paragraphs):
         if image_pattern.fullmatch(paragraph):
             remove.add(index)
             if index > 0:
+                normalized_previous = re.sub(r'\s+', ' ', paragraphs[index - 1]).strip()
                 stripped_lead = _strip_publish_image_lead_context(paragraphs[index - 1])
-                if stripped_lead == '':
+                if exact_lead and normalized_previous == exact_lead:
+                    remove.add(index - 1)
+                elif exact_lead:
+                    heading_and_body = re.fullmatch(
+                        r'(#{1,6}\s+[^\n]+)\n+([\s\S]+)', paragraphs[index - 1].strip(),
+                    )
+                    if heading_and_body and re.sub(
+                            r'\s+', ' ', heading_and_body.group(2),
+                    ).strip() == exact_lead:
+                        paragraphs[index - 1] = heading_and_body.group(1).strip()
+                    elif stripped_lead == '':
+                        remove.add(index - 1)
+                    elif stripped_lead is not None:
+                        paragraphs[index - 1] = stripped_lead
+                elif stripped_lead == '':
                     remove.add(index - 1)
                 elif stripped_lead is not None:
                     paragraphs[index - 1] = stripped_lead
-            if (
-                index + 1 < len(paragraphs)
-                and _is_publish_image_explanation_paragraph(paragraphs[index + 1])
-            ):
-                remove.add(index + 1)
+            if index + 1 < len(paragraphs):
+                normalized_next = re.sub(r'\s+', ' ', paragraphs[index + 1]).strip()
+                if (exact_explanation and normalized_next == exact_explanation) \
+                        or _is_publish_image_explanation_paragraph(paragraphs[index + 1]):
+                    remove.add(index + 1)
         elif inline_pattern.search(paragraph):
             paragraphs[index] = inline_pattern.sub('', paragraph).strip()
     return '\n\n'.join(
@@ -1407,8 +1509,23 @@ def apply_publish_image_exclusions(papers, exclusions=None):
                 raise PublishDataValidationError(
                     f'{normalized_id} 缺少可派生发布快照的 analysis'
                 )
+            source_analysis_sha256 = hashlib.sha256(analysis.encode('utf-8')).hexdigest()
+            image_manifest = next_paper.get('imageManifest') or {}
+            plans = image_manifest.get('insertionPlan') or []
+            selected_manifest = image_manifest.get('selected') or []
+            plan_by_url = {}
+            for position, selected in enumerate(selected_manifest):
+                if not isinstance(selected, dict) or not isinstance(selected.get('url'), str):
+                    continue
+                image_number = selected.get('index', position + 1)
+                plan_by_url[selected['url']] = next((
+                    plan for plan in plans
+                    if isinstance(plan, dict) and plan.get('imageNumber') == image_number
+                ), None)
             for exclusion in active:
-                analysis = _remove_publish_image_block(analysis, exclusion['url'])
+                analysis = _remove_publish_image_block(
+                    analysis, exclusion['url'], plan_by_url.get(exclusion['url']),
+                )
             next_paper['analysis'] = analysis
 
             parsed = dict(next_paper.get('parsed') or {})
@@ -1416,12 +1533,35 @@ def apply_publish_image_exclusions(papers, exclusions=None):
                 if not isinstance(value, str):
                     continue
                 for exclusion in active:
-                    value = _remove_publish_image_block(value, exclusion['url'])
+                    value = _remove_publish_image_block(
+                        value, exclusion['url'], plan_by_url.get(exclusion['url']),
+                    )
                 parsed[key] = value
             next_paper['parsed'] = parsed
+            selected_urls = next_paper.get('selectedImageUrls')
+            if not isinstance(selected_urls, list):
+                selected_urls = [
+                    item.get('url') for item in selected_manifest
+                    if isinstance(item, dict) and isinstance(item.get('url'), str)
+                ]
+            excluded_urls = {item['url'] for item in active}
+            next_paper['selectedImageUrls'] = [
+                url for url in selected_urls if url not in excluded_urls
+            ]
             next_paper[PUBLISH_IMAGE_EXCLUSIONS_FIELD] = active
+            next_paper[PUBLISH_IMAGE_VIEW_FIELD] = {
+                'version': 1,
+                'sourceAnalysisSha256': source_analysis_sha256,
+                'analysisSha256': hashlib.sha256(analysis.encode('utf-8')).hexdigest(),
+                'excludedUrls': [item['url'] for item in active],
+                'effectiveSelectedImageUrls': list(
+                    next_paper.get('selectedImageUrls') or []
+                ),
+                'imageNarrativeContract': 'context-bound-v1',
+            }
         else:
             next_paper.pop(PUBLISH_IMAGE_EXCLUSIONS_FIELD, None)
+            next_paper.pop(PUBLISH_IMAGE_VIEW_FIELD, None)
         prepared.append(next_paper)
     return prepared
 
@@ -1485,6 +1625,7 @@ description: "共分析 {total} 篇语音/AI 论文"
 layout: "posts"
 paper_digest_pipeline_owned: true
 paper_digest_page_type: index
+paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
 ---
 
 # {conference_title}
@@ -1503,7 +1644,7 @@ paper_digest_page_type: index
     md += "| 方向 | 数量 | 分布 |\n|------|------|------|\n"
     for tag, cnt in top_tags:
         bar = '█' * min(cnt, 15)
-        md += f"| {tag} | {cnt}篇 | {bar} |\n"
+        md += f"| {tag} | {cnt} 篇 | {bar} |\n"
 
     md += f"""
 ### 📊 论文评分排行榜（{len(scored)} 篇，按分数降序）
@@ -1519,9 +1660,9 @@ paper_digest_page_type: index
         primary_task = pa.get('primaryTaskTag', '') or '-'
         compact_title = compact_title_for_ranking(title)
         if slug:
-            md += f"| {m} | [{compact_title}]({BASE_PATH}/posts/{date_str}-{slug}) | {score}分 | {rank_bucket} | {document_type} | {primary_task} |\n"
+            md += f"| {m} | [{compact_title}]({BASE_PATH}/posts/{date_str}-{slug}) | {score} | {rank_bucket} | {document_type} | {primary_task} |\n"
         else:
-            md += f"| {m} | {compact_title} | {score}分 | {rank_bucket} | {document_type} | {primary_task} |\n"
+            md += f"| {m} | {compact_title} | {score} | {rank_bucket} | {document_type} | {primary_task} |\n"
     for i, p in enumerate(unscored):
         title = p.get('title', 'Unknown')
         slug = paper_slugs.get(p.get('arxivId', ''), '')
@@ -2037,6 +2178,13 @@ def generate_paper_page(paper, date_str, category='论文速递'):
     task_str = pa['primaryTaskTag'].replace('#', '') if pa and pa.get('primaryTaskTag') else ''
     desc = f"{task_str} | {score_str}/10" if score_str and task_str else display_title
     tags = pa.get('tags', []) if pa else []
+    manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
+    contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
+    manual_depth = contracts.get('manualDepth')
+    manual_depth_marker = (
+        f'paper_digest_manual_depth: "{MANUAL_DEPTH_CONTRACT_VERSION_V4}"\n'
+        if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V4 else ''
+    )
     md = f"""---
 title: "{yaml_escape(display_title)}"
 date: {date_str}
@@ -2048,7 +2196,7 @@ hiddenInHomeList: true
 paper_digest_pipeline_owned: true
 paper_digest_page_type: paper
 paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
----
+{manual_depth_marker}---
 
 # 📄 {display_title}
 
@@ -2143,7 +2291,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
     return md, slug
 
 
-def review_and_fix_post(file_path):
+def review_and_fix_post(file_path, paper=None):
     """Review 生成的博客文件，自动修复常见问题，返回 (是否修复, 问题列表)"""
     with open(file_path, 'r', encoding='utf-8') as f:
         content = f.read()
@@ -2432,6 +2580,13 @@ def review_and_fix_post(file_path):
     if fixed:
         atomic_write_text(file_path, content)
 
+    manual_v4_issue = validate_final_manual_v4_markdown(content, paper)
+    if manual_v4_issue:
+        issues.append(f'Manual v4 最终 Markdown 门禁失败: {manual_v4_issue}')
+    index_quality_issue = validate_digest_index_reader_quality(content)
+    if index_quality_issue:
+        issues.append(f'汇总页读者质量门禁失败: {index_quality_issue}')
+
     return fixed, issues
 
 
@@ -2455,7 +2610,7 @@ def classify_review_failure(issues):
 
 def _review_single_paper(args):
     """并发 review 单篇论文，返回路径、标题、计数和输出。"""
-    arxiv_id, slug, date_str, title, require_llm, content_dir = args
+    arxiv_id, slug, date_str, title, require_llm, content_dir, paper = args
     paper_file = os.path.join(content_dir, f"{date_str}-{slug}.md")
     if not os.path.exists(paper_file):
         return None
@@ -2467,11 +2622,11 @@ def _review_single_paper(args):
     blocking_details = []
 
     # 1. 代码检查
-    fixed, issues = review_and_fix_post(paper_file)
+    fixed, issues = review_and_fix_post(paper_file, paper)
     if fixed:
         fixed_count += 1
         lines.append("    🛠️  代码层自动修复")
-        _, remaining_code_issues = review_and_fix_post(paper_file)
+        _, remaining_code_issues = review_and_fix_post(paper_file, paper)
     else:
         remaining_code_issues = issues
     blocking_count += len(remaining_code_issues)
@@ -2493,11 +2648,11 @@ def _review_single_paper(args):
             fixed_count += 1
             lines.append("    🛠️  LLM 自动修复已应用")
             # LLM replacement can reintroduce deterministic Markdown/YAML defects.
-            code_fixed, code_issues = review_and_fix_post(paper_file)
+            code_fixed, code_issues = review_and_fix_post(paper_file, paper)
             if code_fixed:
                 fixed_count += 1
                 lines.append("    🛠️  LLM 后代码层自动修复")
-                _, code_issues = review_and_fix_post(paper_file)
+                _, code_issues = review_and_fix_post(paper_file, paper)
             blocking_count += len(code_issues)
             for issue in code_issues:
                 lines.append(f"    ⚠️  LLM 后代码层: {issue}")
@@ -2560,8 +2715,11 @@ def review_all_posts(
         selected_paths = {os.path.realpath(str(path)) for path in review_paths}
     # 构建 arxivId -> title 映射
     title_map = {}
+    paper_map = {}
     for score, p, pa in scored_papers:
-        title_map[p.get('arxivId', '')] = p.get('title', '')
+        paper_id = normalize_publish_arxiv_id(p.get('arxivId', ''))
+        title_map[paper_id] = p.get('title', '')
+        paper_map[paper_id] = p
 
     # Review 汇总页面（串行，只有1个）
     index_file = os.path.join(content_dir, f"{date_str}.md")
@@ -2651,7 +2809,9 @@ def review_all_posts(
 
     # Review 每篇论文独立页面（并发）
     paper_args = [
-        (arxiv_id, slug, date_str, title_map.get(arxiv_id, slug), require_llm, content_dir)
+        (arxiv_id, slug, date_str,
+         title_map.get(normalize_publish_arxiv_id(arxiv_id), slug), require_llm,
+         content_dir, paper_map.get(normalize_publish_arxiv_id(arxiv_id)))
         for arxiv_id, slug in paper_slugs.items()
         if selected_paths is None or os.path.realpath(
             os.path.join(content_dir, f"{date_str}-{slug}.md")
@@ -2671,7 +2831,8 @@ def review_all_posts(
                 try:
                     result = future.result()
                 except Exception as exc:
-                    _arxiv_id, slug, _date, title, _required, worker_content_dir = args
+                    (_arxiv_id, slug, _date, title, _required,
+                     worker_content_dir, _paper) = args
                     path = os.path.realpath(os.path.join(
                         worker_content_dir, f'{date_str}-{slug}.md',
                     ))
@@ -2784,6 +2945,20 @@ def validate_staged_posts(staged_posts_dir, date_str, date_only=False):
             raise PublishDataValidationError(f'{path.name} 正文包含 UTF-8 替换字符')
         if re.search(r'!?\[[^\]]*\]\(\s*\)', body):
             raise PublishDataValidationError(f'{path.name} 正文包含空 Markdown 链接')
+        manual_v4_issue = validate_final_manual_v4_markdown(
+            path.read_text(encoding='utf-8'),
+        )
+        if manual_v4_issue:
+            raise PublishDataValidationError(
+                f'{path.name} Manual v4 最终 Markdown 门禁失败: {manual_v4_issue}'
+            )
+        index_quality_issue = validate_digest_index_reader_quality(
+            path.read_text(encoding='utf-8'),
+        )
+        if index_quality_issue:
+            raise PublishDataValidationError(
+                f'{path.name} 汇总页读者质量门禁失败: {index_quality_issue}'
+            )
     return files
 
 
@@ -3580,12 +3755,28 @@ def generation_template_fingerprint():
     })
 
 
+def validate_current_generation_template(manifest):
+    """Reject schema-v3 pages generated by a different publication template."""
+    if manifest.get('schemaVersion') != 3:
+        return True
+    expected = generation_template_fingerprint()
+    actual = str(manifest.get('templateFingerprint') or '')
+    if not re.fullmatch(r'[0-9a-f]{64}', actual) or actual != expected:
+        raise PublishDataValidationError(
+            'generation 模板/发布契约指纹已变化，请重新运行 generate-blog.py'
+        )
+    return True
+
+
 def review_protocol_fingerprint():
     """Bind reusable review evidence to code, prompts/models and Hugo runtime."""
     script_dir = Path(__file__).resolve().parent
     dependencies = {
         name: _sha256_file(script_dir / name)
-        for name in ('publish-to-blog.py', 'review-blog.py', 'publish_common.py', 'utils.py')
+        for name in (
+            'publish-to-blog.py', 'review-blog.py', 'manual-review-blog.py',
+            'publish_common.py', 'utils.py',
+        )
     }
     hugo_path = shutil.which('hugo')
     try:
@@ -4057,6 +4248,7 @@ def load_generation_manifest(date_str):
         raise PublishDataValidationError(f'生成清单无法解析: {manifest_path}') from exc
     if manifest.get('schemaVersion') not in {1, 2, 3} or manifest.get('date') != date_str:
         raise PublishDataValidationError('生成清单版本或日期不匹配')
+    validate_current_generation_template(manifest)
     records = manifest.get('files')
     if not isinstance(records, list) or not records:
         raise PublishDataValidationError('生成清单中没有文件')
@@ -4905,6 +5097,7 @@ def load_verified_review_receipt(date_str):
         generation_manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PublishDataValidationError('generation manifest 无法解析') from exc
+    validate_current_generation_template(generation_manifest)
     validate_generation_visual_contract(generation_manifest, date_str)
     if generation_manifest.get('schemaVersion') == 3 and (
         receipt.get('generationInputIntegrity') != PUBLISHED_PAPERS_FINGERPRINT_CONTRACT
@@ -5157,6 +5350,9 @@ def generate_main(options=None):
     try:
         papers = validate_papers_for_publish(papers)
         papers = apply_publish_image_exclusions(papers)
+        papers = validate_papers_for_publish(
+            papers, validate_manual_provenance=False,
+        )
     except PublishDataValidationError as exc:
         print(f"\n❌ 发布数据预检失败，未生成任何博客文件：\n{exc}")
         sys.exit(1)
@@ -5213,6 +5409,12 @@ def generate_main(options=None):
             if record.get('status') != 'generated':
                 paper_md, slug = generate_paper_page(paper, today, category)
                 paper_md = sanitize_markdown_for_publish(paper_md)
+                manual_v4_issue = validate_final_manual_v4_markdown(paper_md, paper)
+                if manual_v4_issue:
+                    raise PublishDataValidationError(
+                        f'{paper.get("arxivId", "unknown")} sanitize/render 后 '
+                        f'Manual v4 最终 Markdown 无效: {manual_v4_issue}'
+                    )
                 paper_file = staged_posts / record['filename']
                 if record['filename'] != f'{today}-{slug}.md':
                     raise PublishDataValidationError(
@@ -5224,6 +5426,19 @@ def generate_main(options=None):
                 _save_generation_journal(journal_path, journal)
                 print(f'📄 generation checkpoint: {paper_file.name}')
             else:
+                paper_file = staged_posts / record['filename']
+                if not paper_file.is_file() or _sha256_file(paper_file) != record.get('sha256'):
+                    raise PublishDataValidationError(
+                        f'论文页 generation checkpoint 损坏: {record["filename"]}'
+                    )
+                manual_v4_issue = validate_final_manual_v4_markdown(
+                    paper_file.read_text(encoding='utf-8'), paper,
+                )
+                if manual_v4_issue:
+                    raise PublishDataValidationError(
+                        f'{paper.get("arxivId", "unknown")} 复用 generation checkpoint 前 '
+                        f'Manual v4 最终 Markdown 无效: {manual_v4_issue}'
+                    )
                 print(f'♻️ 跳过已生成论文页: {record["filename"]}')
 
         print(f"📄 staging 已具备 {len(paper_slugs)} 篇论文独立页面")
@@ -5231,6 +5446,11 @@ def generate_main(options=None):
         if index_record.get('status') != 'generated':
             index_md = generate_index_page(scored, unscored, today, paper_slugs, category)
             index_md = sanitize_markdown_for_publish(index_md)
+            index_quality_issue = validate_digest_index_reader_quality(index_md, required=True)
+            if index_quality_issue:
+                raise PublishDataValidationError(
+                    f'汇总页 sanitize/render 后读者质量无效: {index_quality_issue}'
+                )
             index_file = staged_posts / index_record['filename']
             atomic_write_text(index_file, index_md)
             index_record['sha256'] = _sha256_file(index_file)
@@ -5241,6 +5461,13 @@ def generate_main(options=None):
             index_file = staged_posts / index_record['filename']
             if not index_file.is_file() or _sha256_file(index_file) != index_record.get('sha256'):
                 raise PublishDataValidationError('汇总页 generation checkpoint 损坏')
+            index_quality_issue = validate_digest_index_reader_quality(
+                index_file.read_text(encoding='utf-8'), required=True,
+            )
+            if index_quality_issue:
+                raise PublishDataValidationError(
+                    f'复用汇总页 generation checkpoint 前读者质量无效: {index_quality_issue}'
+                )
             print(f'♻️ 跳过已生成汇总页: {index_file.name}')
 
         validate_staged_posts(staged_posts, today)

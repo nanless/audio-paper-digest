@@ -8,14 +8,14 @@
 |------|------|----------|
 | [filter.md](filter.md) | 筛选阶段：判断单篇论文是否与语音/音乐/音频相关 | `fetch-papers.js` |
 | [deep-analysis.md](deep-analysis.md) | 深度分析阶段（第一轮）：纯文本阅读后输出结构化报告 | `deep-analyzer.js` |
-| [manual-analysis-record.md](manual-analysis-record.md) | Manual v3 人工全文写作规范：要求论证推进、完整方法流、比较实验、复现信息、双层局限和维度专属评分 | `create-manual-analysis-spec.js`（以模板 SHA 绑定，不调用 LLM） |
+| [manual-analysis-record.md](manual-analysis-record.md) | Manual v4 人工全文写作规范：要求论证推进、完整方法流、证据丰富表格、复现信息、双层局限和维度专属评分 | `create-manual-analysis-spec.js`（以模板 SHA 绑定，不调用 LLM） |
 | [image-supplement.md](image-supplement.md) | 深度分析阶段（双模型模式）：副模型只输出严格 JSON 插图计划，代码只新增图片及相邻说明，不替换主模型原文 | `deep-analyzer.js` |
 | [visual-summary.md](visual-summary.md) | 全部博客发布后，对最终评分 TOP 10 各生成一张覆盖问题、方法、实验、结论与局限的纵向长图 | Codex 内置 `image_gen`（发布后 Agent 阶段） |
 | [digest-cover.md](digest-cover.md) | 全部博客发布后的汇总图：展示批次标题、热门方向和 TOP 10 排行榜 | Codex 内置 `image_gen`（发布后 Agent 阶段） |
 | [opensource-scan.md](opensource-scan.md) | 开源扫描阶段（第二轮）：专门提取开源链接和复现信息 | `deep-analyzer.js` |
 | [gap-fill.md](gap-fill.md) | 深度分析阶段（第三轮）：对照原文审校重写前两轮结果 | `deep-analyzer.js` |
 | [method-fill.md](method-fill.md) | 深度分析后处理：方法章节过短或空泛时补写结构化方法说明 | `deep-analyzer.js` |
-| [table-fill.md](table-fill.md) | 深度分析后处理：正文明确引用原文表格却缺表，或出现非法省略标记时，补充有行列上限的关键证据表 | `deep-analyzer.js` |
+| [table-fill.md](table-fill.md) | 深度分析后处理：全文编号表未进入正文、已有表格证据过浅或出现非法省略标记时，补充带设置/基线/方向、表前问题和表后边界的关键证据表 | `deep-analyzer.js` |
 | [structure-repair.md](structure-repair.md) | 审校结果缺少必要章节、正文不足或实验表格超限时，由主模型局部修复完整报告契约 | `deep-analyzer.js` |
 | [scoring-audit.md](scoring-audit.md) | 正文修复完成后由主模型最终审计文档类型、八维评分与扣分归属，只输出 JSON | `deep-analyzer.js` |
 

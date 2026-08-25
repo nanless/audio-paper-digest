@@ -2,6 +2,7 @@
 """Strictly review an existing generated blog manifest and save a hash receipt."""
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -27,9 +28,15 @@ def parse_date(module):
     return module.validate_publish_date(module.get_today_bj(args.date[0] if args.date else None))
 
 
-def read_generated_pages(module, date_str, paths):
+def read_generated_pages(module, date_str, paths, authoritative_papers=None):
     paper_slugs = {}
     scored_papers = []
+    normalize_id = getattr(module, 'normalize_publish_arxiv_id', lambda value: str(value or ''))
+    authoritative_by_id = {
+        normalize_id(paper.get('arxivId')): paper
+        for paper in (authoritative_papers or [])
+        if isinstance(paper, dict) and paper.get('arxivId')
+    }
     prefix = f'{date_str}-'
     for path in paths:
         path = Path(path)
@@ -49,7 +56,10 @@ def read_generated_pages(module, date_str, paths):
         arxiv_id = id_match.group(1)
         slug = path.stem[len(prefix):]
         paper_slugs[arxiv_id] = slug
-        paper = {'arxivId': arxiv_id, 'title': title_match.group(1)}
+        normalized_id = normalize_id(arxiv_id)
+        paper = dict(authoritative_by_id.get(normalized_id) or {
+            'arxivId': arxiv_id, 'title': title_match.group(1),
+        })
         scored_papers.append((0.0, paper, {}))
     if not paper_slugs:
         raise module.PublishDataValidationError('生成清单中没有可审查的论文页')
@@ -81,7 +91,16 @@ def _run_review(module, date_str):
                 '当前 generation 已存在发布证据，但实时 remote/OID 或严格凭证复核失败；'
                 '已保留既有 receipt，拒绝开始新 review 覆盖唯一发布证据'
             )
-        paper_slugs, scored_papers = read_generated_pages(module, date_str, paths)
+        authoritative_papers = []
+        try:
+            generation = json.loads(Path(manifest_path).read_text(encoding='utf-8'))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            generation = {}
+        if generation.get('schemaVersion') == 3:
+            authoritative_papers = generation.get('publishedPapers') or []
+        paper_slugs, scored_papers = read_generated_pages(
+            module, date_str, paths, authoritative_papers,
+        )
         plan = module.plan_incremental_review(
             date_str, paths, manifest_path, base_head,
         )

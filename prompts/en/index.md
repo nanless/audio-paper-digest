@@ -11,7 +11,7 @@ This directory contains all LLM prompts for the audio-paper-digest skill, separa
 | [opensource-scan.md](opensource-scan.md) | Open-source scan stage (round 2): specifically extract open-source links and reproduction information | `deep-analyzer.js` |
 | [gap-fill.md](gap-fill.md) | Deep analysis stage (round 3): review and rewrite the earlier rounds' results against the original text | `deep-analyzer.js` |
 
-> Note: `image-supplement.md`, `method-fill.md`, `table-fill.md`, `structure-repair.md`, `scoring-audit.md`, and the non-LLM Manual v3 authoring contract `manual-analysis-record.md` have **no English versions**. See the Chinese [prompts/index.md](../index.md).
+> Note: `image-supplement.md`, `method-fill.md`, `table-fill.md`, `structure-repair.md`, `scoring-audit.md`, and the non-LLM Manual v4 authoring contract `manual-analysis-record.md` have **no English versions**. See the Chinese [prompts/index.md](../index.md).
 
 The English directory is therefore a partial documentation/compatibility mirror, not a complete independently executable pipeline. Likewise, a manual artifact that satisfies the same output and provenance contracts must not be described as having executed the corresponding LLM stages.
 

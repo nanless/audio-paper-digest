@@ -88,23 +88,112 @@ def _load_attestation(path):
     if not isinstance(files, list) or not files:
         raise ValueError('attestation.files 必须逐文件列出语义审查')
     seen = set()
+    seen_notes = set()
     for index, item in enumerate(files):
-        if not isinstance(item, dict) or set(item) != {'path', 'sha256', 'checks', 'notes'}:
-            raise ValueError(f'attestation.files[{index}] 字段必须恰好为 path/sha256/checks/notes')
+        if not isinstance(item, dict):
+            raise ValueError(f'attestation.files[{index}] 必须是对象')
+        deleted = item.get('deleted') is True
+        allowed = {'path', 'sha256', 'checks', 'notes', 'deleted'}
+        required_fields = {'path', 'sha256', 'checks', 'notes'}
+        if not required_fields.issubset(item) or not set(item).issubset(allowed):
+            raise ValueError(
+                f'attestation.files[{index}] 字段必须为 path/sha256/checks/notes'
+                '，删除项另加 deleted=true'
+            )
         rel_path = item.get('path')
         if (not isinstance(rel_path, str) or not rel_path.startswith('content/posts/')
                 or '..' in Path(rel_path).parts or rel_path in seen):
             raise ValueError(f'attestation.files[{index}].path 非法或重复')
         seen.add(rel_path)
-        if not re.fullmatch(r'[a-f0-9]{64}', str(item.get('sha256', ''))):
-            raise ValueError(f'attestation.files[{index}].sha256 非法')
         item_checks = item.get('checks')
-        if not isinstance(item_checks, dict) or set(item_checks) != file_checks \
-                or any(item_checks.get(key) is not True for key in file_checks):
-            raise ValueError(f'attestation.files[{index}].checks 必须完整且全部为 true')
+        if deleted:
+            if item.get('sha256') is not None:
+                raise ValueError(f'attestation.files[{index}] 删除项 sha256 必须为 null')
+            if item_checks != {'deletionVerified': True}:
+                raise ValueError(
+                    f'attestation.files[{index}] 删除项 checks 必须仅含 deletionVerified=true'
+                )
+        else:
+            if item.get('deleted') not in (None, False):
+                raise ValueError(f'attestation.files[{index}].deleted 非法')
+            if not re.fullmatch(r'[a-f0-9]{64}', str(item.get('sha256', ''))):
+                raise ValueError(f'attestation.files[{index}].sha256 非法')
+            if not isinstance(item_checks, dict) or set(item_checks) != file_checks \
+                    or any(item_checks.get(key) is not True for key in file_checks):
+                raise ValueError(f'attestation.files[{index}].checks 必须完整且全部为 true')
         if not isinstance(item.get('notes'), str) or len(item['notes'].strip()) < 20:
             raise ValueError(f'attestation.files[{index}].notes 至少需要 20 个字符')
+        normalized_notes = re.sub(r'[\W_]+', '', item['notes'], flags=re.UNICODE).casefold()
+        if normalized_notes in seen_notes:
+            raise ValueError('attestation.files.notes 必须逐文件独立，禁止批量复用同一句')
+        seen_notes.add(normalized_notes)
     return payload, hashlib.sha256(raw).hexdigest()
+
+
+def _validate_file_specific_notes(module, attestation_by_path, actual_paths, deletions, date_str):
+    """Require each note to carry an identifier that can only belong to its page."""
+    seen_semantic_notes = set()
+
+    def has_reader_fact(notes, text, ignored=()):
+        ignored_text = ' '.join(str(item) for item in ignored).casefold()
+        tokens = re.findall(
+            r'[A-Za-z][A-Za-z0-9.+-]{2,}|(?<!\d)\d+(?:\.\d+)?%?', notes,
+        )
+        return any(
+            token.casefold() not in ignored_text and token.casefold() in text.casefold()
+            for token in tokens
+        )
+
+    def require_unique_semantics(notes, identifiers, relative):
+        basis = notes
+        for identifier in identifiers:
+            if identifier:
+                basis = basis.replace(str(identifier), '<page>')
+        key = re.sub(r'[\W_]+', '', basis, flags=re.UNICODE).casefold()
+        if key in seen_semantic_notes:
+            raise module.PublishDataValidationError(
+                f'attestation notes 去除页面 ID 后仍重复，必须逐页记录独立事实: {relative}'
+            )
+        seen_semantic_notes.add(key)
+
+    for relative, resolved in actual_paths.items():
+        item = attestation_by_path[relative]
+        notes = item['notes']
+        if deletions[relative]:
+            stem = Path(relative).stem
+            if '删除' not in notes or stem not in notes:
+                raise module.PublishDataValidationError(
+                    f'attestation 删除项 notes 必须包含“删除”和页面文件名 {stem}: {relative}'
+                )
+            require_unique_semantics(notes, (stem, date_str), relative)
+            continue
+        text = resolved.read_text(encoding='utf-8')
+        arxiv_match = re.search(
+            r'^paper_digest_arxiv_id:\s*"?([^"\s]+)"?\s*$', text, re.MULTILINE,
+        )
+        if arxiv_match:
+            if arxiv_match.group(1) not in notes:
+                raise module.PublishDataValidationError(
+                    f'attestation 论文页 notes 必须包含本页 arXiv ID '
+                    f'{arxiv_match.group(1)}: {relative}'
+                )
+            if not has_reader_fact(notes, text, (arxiv_match.group(1), date_str)):
+                raise module.PublishDataValidationError(
+                    f'attestation 论文页 notes 必须包含正文中可核对的技术词或实验数字: {relative}'
+                )
+            require_unique_semantics(
+                notes, (arxiv_match.group(1), date_str), relative,
+            )
+        elif date_str not in notes or '汇总' not in notes:
+            raise module.PublishDataValidationError(
+                f'attestation 汇总页 notes 必须包含批次日期 {date_str} 与“汇总”: {relative}'
+            )
+        elif not has_reader_fact(notes, text, (date_str,)):
+            raise module.PublishDataValidationError(
+                f'attestation 汇总页 notes 必须包含正文中可核对的排名、数量或论文术语: {relative}'
+            )
+        else:
+            require_unique_semantics(notes, (date_str,), relative)
 
 
 def _semantic_checks(module, paths, date_str):
@@ -162,9 +251,27 @@ def _run(module, date_str, attestation_path):
             '当前 generation 已有发布证据但未能严格复核，拒绝覆盖 receipt'
         )
     attestation, attestation_sha = _load_attestation(attestation_path)
+    try:
+        generation_payload = json.loads(Path(manifest_path).read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise module.PublishDataValidationError('generation manifest 无法解析') from exc
+    authoritative_by_id = {}
+    if generation_payload.get('schemaVersion') == 3:
+        for paper in generation_payload.get('publishedPapers') or []:
+            if not isinstance(paper, dict):
+                raise module.PublishDataValidationError(
+                    'generation publishedPapers 含非法论文快照'
+                )
+            paper_id = module.normalize_publish_arxiv_id(paper.get('arxivId'))
+            if paper_id in authoritative_by_id:
+                raise module.PublishDataValidationError(
+                    f'generation publishedPapers 含重复 arXiv ID: {paper_id}'
+                )
+            authoritative_by_id[paper_id] = paper
     expected_attested = {}
     for item in attestation['files']:
         expected_attested[item['path']] = item
+    deletion_expectations = module.generation_manifest_expectations(manifest_path, date_str)
     actual_paths = {}
     for path in paths:
         resolved = Path(path).resolve()
@@ -180,8 +287,27 @@ def _run(module, date_str, attestation_path):
             f'attestation 逐文件集合与 generation 不一致: missing={missing or "-"} extra={extra or "-"}'
         )
     for relative, resolved in actual_paths.items():
-        if _sha256(resolved) != expected_attested[relative]['sha256']:
+        deleted = deletion_expectations.get(relative)
+        if deleted is None:
+            raise module.PublishDataValidationError(
+                f'attestation 路径不在 generation 删除语义中: {relative}'
+            )
+        item = expected_attested[relative]
+        if deleted != (item.get('deleted') is True):
+            raise module.PublishDataValidationError(
+                f'attestation 删除语义与 generation 不一致: {relative}'
+            )
+        if deleted:
+            if resolved.exists():
+                raise module.PublishDataValidationError(
+                    f'attestation 声明删除但页面重新出现: {relative}'
+                )
+            continue
+        if _sha256(resolved) != item['sha256']:
             raise module.PublishDataValidationError(f'attestation 文件 SHA 已漂移: {relative}')
+    _validate_file_specific_notes(
+        module, expected_attested, actual_paths, deletion_expectations, date_str,
+    )
 
     # Apply only deterministic, idempotent repairs.  A second pass must be
     # clean; unresolved defects are never hidden by manual provenance.  Any
@@ -192,8 +318,21 @@ def _run(module, date_str, attestation_path):
         path = Path(path)
         if not path.is_file():
             continue
-        fixed, first_issues = module.review_and_fix_post(path)
-        _second_fixed, remaining = module.review_and_fix_post(path)
+        page_text = path.read_text(encoding='utf-8')
+        paper_match = re.search(
+            r'^paper_digest_arxiv_id:\s*"?([^"\s]+)"?\s*$',
+            page_text, re.MULTILINE,
+        )
+        paper = None
+        if paper_match:
+            paper_id = module.normalize_publish_arxiv_id(paper_match.group(1))
+            paper = authoritative_by_id.get(paper_id)
+            if generation_payload.get('schemaVersion') == 3 and paper is None:
+                raise module.PublishDataValidationError(
+                    f'论文页不在 generation publishedPapers 快照中: {paper_id}'
+                )
+        fixed, first_issues = module.review_and_fix_post(path, paper)
+        _second_fixed, remaining = module.review_and_fix_post(path, paper)
         if remaining:
             raise module.PublishDataValidationError(
                 f'确定性 review 仍有阻断问题 {path.name}: {remaining}'

@@ -9,7 +9,12 @@ const { buildFilterInputSha256 } = require('../scripts/lib/filter-input-contract
 const { parseAnalysis } = require('../scripts/utils.js');
 const {
     EXPERIMENT_TABLE_CONTRACT_VERSION,
-    METHOD_DETAIL_CONTRACT_VERSION
+    METHOD_DETAIL_CONTRACT_VERSION,
+    MANUAL_AUDIT_CHECKS,
+    MANUAL_COMPLETE_STATUS,
+    MANUAL_DEPTH_CONTRACT_VERSION_V4,
+    manualSha256,
+    manualTextSha256
 } = require('../scripts/analysis-contract.js');
 const { validAnalysisText, validAnalysisPaper } = require('./valid-analysis-fixture.js');
 
@@ -49,6 +54,232 @@ function completeAnalysisPaper(id, extra = {}) {
         scoringRubricVersion: 'type-aware-v1',
         ...extra
     };
+}
+
+function writeManualV4BindingFixture(dir, { invalidClaimQuote = true } = {}) {
+    const batchDate = '2026-07-13';
+    const paperId = '2607.77777';
+    const resultFile = path.join(dir, 'deep-analysis-result.json');
+    const sourceDir = path.join(dir, 'manual-full-text', batchDate);
+    const sourcePath = path.join(sourceDir, `${paperId}-fixture.txt`);
+    fs.mkdirSync(sourceDir, { recursive: true });
+    const sourceText = [
+        'Controlled full text evidence states that the proposed method improves recognition under matched conditions. Fixture setting 1 under condition 1: fixture method versus fixture baseline reports qualitative outcome 41.0 score, higher-is-better.',
+        'Additional evidence documents the evaluation setting and limitation boundary. Fixture setting 2 under condition 2: fixture method versus fixture baseline reports qualitative outcome 42.0 score, higher-is-better.',
+        'Open-source materials are released for reproducibility. Fixture setting 3 under condition 3: fixture method versus fixture baseline reports qualitative outcome 43.0 score, higher-is-better.'
+    ].join('\n');
+    fs.writeFileSync(sourcePath, sourceText);
+    const sourceSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
+    fs.writeFileSync(path.join(sourceDir, 'manifest.json'), JSON.stringify({
+        version: 2,
+        mode: 'manual_full_text_fetch',
+        date: batchDate,
+        papers: {
+            [paperId]: {
+                status: 'complete',
+                path: sourcePath,
+                sourceSha256
+            }
+        }
+    }));
+
+    const analysis = validAnalysisText().replace(
+        '## 实验结果\n',
+        `## 实验结果\n${sourceText}\n\n`
+    );
+    const ledgerSections = [
+        '核心摘要', '方法概述和架构', '实验结果',
+        '局限与问题', '开源详情', '细节详述'
+    ];
+    const ledger = ledgerSections.map((section, index) => ({
+        id: `E${String(index + 1).padStart(2, '0')}`,
+        section,
+        claim: `这是第 ${index + 1} 条长度足够且对应论文事实章节的人工证据声明。`,
+        sourceQuote: index === 4
+            ? 'Open-source materials are released for reproducibility.'
+            : 'Controlled full text evidence states that the proposed method improves recognition under matched conditions.'
+    }));
+    const validClaimQuotes = [
+        'Controlled full text evidence states that the proposed method improves recognition under matched conditions.',
+        'Additional evidence documents the evaluation setting and limitation boundary.',
+        'Open-source materials are released for reproducibility.'
+    ];
+    const claims = validClaimQuotes.map((_sourceQuote, index) => {
+        const value = `${41 + index}.0`;
+        const sourceQuote = sourceText.split('\n')[index];
+        return {
+        datasetOrSetting: `Fixture setting ${index + 1}`,
+        splitOrCondition: `condition ${index + 1}`,
+        method: 'fixture method',
+        baseline: 'fixture baseline',
+        metric: 'qualitative outcome',
+        value,
+        unit: 'score',
+        direction: 'higher_is_better',
+        sourceQuote: invalidClaimQuote && index === 1
+            ? 'This fabricated quote is not a continuous excerpt of the full text.'
+            : sourceQuote,
+        sourceBindings: {
+            datasetOrSetting: `Fixture setting ${index + 1}`,
+            splitOrCondition: `condition ${index + 1}`,
+            method: 'fixture method', baseline: 'fixture baseline',
+            metric: 'qualitative outcome', value: `${value} score`,
+            unit: 'score', direction: 'higher-is-better'
+        },
+        readerBindings: {
+            datasetOrSetting: `Fixture setting ${index + 1}`,
+            splitOrCondition: `condition ${index + 1}`,
+            method: 'fixture method', baseline: 'fixture baseline',
+            metric: 'qualitative outcome', value: `${value} score`,
+            unit: 'score', direction: 'higher-is-better'
+        }
+    };
+    });
+    const audit = {
+        version: 1,
+        attempts: 2,
+        passes: [{ status: 'revise', issues: ['补充连续全文证据绑定'] }, { status: 'pass', issues: [] }],
+        checks: Object.fromEntries(MANUAL_AUDIT_CHECKS.map(key => [key, true]))
+    };
+    const takeover = {
+        version: 2,
+        mode: MANUAL_COMPLETE_STATUS,
+        agent: 'fixture-agent',
+        basis: 'full_text',
+        sourceSha256,
+        promptSha256: 'a'.repeat(64),
+        manualAuthoringPromptSha256: 'b'.repeat(64),
+        analysisSha256: manualTextSha256(analysis),
+        completedAt: TIMESTAMP,
+        reason: '测试 validate:data 是否从受控全文执行连续原句绑定。',
+        review: {
+            sourceVerified: true,
+            analysisContractVerified: true,
+            scoringVerified: true,
+            stageEvidenceVerified: true,
+            readerQualityVerified: true
+        },
+        audit,
+        evidenceLedger: ledger,
+        evidenceLedgerSha256: manualSha256(ledger),
+        documentType: '方法研究',
+        resultClaims: claims,
+        resultClaimsSha256: manualSha256({ claims, exception: null })
+    };
+    const stages = Object.fromEntries([
+        'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
+        'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
+    ].map(stage => [stage, { status: MANUAL_COMPLETE_STATUS }]));
+    const paper = completeAnalysisPaper(paperId, {
+        analysis,
+        analysisManifest: {
+            version: 1,
+            contracts: {
+                experimentTables: EXPERIMENT_TABLE_CONTRACT_VERSION,
+                manualDepth: MANUAL_DEPTH_CONTRACT_VERSION_V4,
+                imageNarrative: 'context-bound-v1',
+                editorialQuality: 'reader-facing-v1'
+            },
+            sourceAcquisition: {
+                analysisSource: 'provided_full_text',
+                sourceId: paperId,
+                sourceSha256
+            },
+            stages,
+            manualTakeover: takeover
+        }
+    });
+    fs.writeFileSync(resultFile, JSON.stringify({ batchDate, papers: [paper] }));
+    return { resultFile, sourcePath, sourceText };
+}
+
+function hardenManualImageEvidence(paper) {
+    const takeover = paper.analysisManifest.manualTakeover;
+    takeover.completedAt = '2026-08-22T10:00:00.000+08:00';
+    const rubricDimensions = [
+        'paragraphLogic', 'interParagraphContinuity', 'sectionResponsibility',
+        'factLocality', 'terminologyAndPerspective', 'sentenceRhythm',
+        'antiTemplateOriginality'
+    ];
+    takeover.readabilityRubric = {
+        dimensions: Object.fromEntries(rubricDimensions.map(name => [name, {
+            score: 2,
+            reason: `${name} 已完成逐项复核并绑定当前正文证据。`,
+            evidence: [`${name}-fixture-evidence`]
+        }]))
+    };
+    takeover.readabilityRubricSha256 = manualSha256(takeover.readabilityRubric);
+    const imageManifest = {
+        version: 2,
+        candidates: [],
+        downloaded: [],
+        downloadOutcomes: [],
+        selected: [],
+        insertionPlan: [],
+        insertionDiagnostics: []
+    };
+    imageManifest.downloadEvidenceSha256 = manualSha256({ candidates: [], outcomes: [] });
+    imageManifest.selectionEvidenceSha256 = manualSha256({
+        selected: [], insertionPlan: [], insertionDiagnostics: []
+    });
+    paper.imageManifest = imageManifest;
+    const promptByStage = Object.fromEntries([
+        'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
+        'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
+    ].map(stage => [stage, {
+        source: `manual-stage-contract:${stage}:test`,
+        sha256: manualSha256({ stage, contract: 'test' })
+    }]));
+    const claimsByStage = {
+        imageDownload: '图片下载与图注证据已核对。',
+        primaryAnalysis: '主分析方法架构与输入输出已核对。',
+        openSourceScan: '开源代码与复现链接已核对。',
+        demoLinkScan: 'Demo 演示链接状态已核对。',
+        revision: '正文事实修订与局限一致性已核对。',
+        tableRepair: '实验表格、指标数值与基线已核对。',
+        methodRepair: '方法模块、训练和推理数据流已核对。',
+        structureRepair: '章节结构、标题与摘要格式已核对。',
+        scoringAudit: '评分维度、严谨性与实验充分性已核对。',
+        imageSupplement: '插图 caption 与段落视觉关系已核对。'
+    };
+    const auditSha256 = manualSha256(takeover.audit);
+    takeover.promptSha256 = promptByStage.primaryAnalysis.sha256;
+    takeover.stageEvidence = {};
+    for (const stage of Object.keys(promptByStage)) {
+        const claims = [claimsByStage[stage]];
+        const contextSha256 = stage === 'imageDownload'
+            ? imageManifest.downloadEvidenceSha256
+            : (stage === 'imageSupplement' ? imageManifest.selectionEvidenceSha256 : undefined);
+        const inputSha256 = manualSha256({
+            stage,
+            executionKind: 'manual_attestation',
+            sourceSha256: takeover.sourceSha256,
+            analysisSha256: takeover.analysisSha256,
+            claims,
+            stagePromptSha256: promptByStage[stage].sha256,
+            stageContextSha256: contextSha256 || null
+        });
+        const common = {
+            status: MANUAL_COMPLETE_STATUS,
+            executionKind: 'manual_attestation',
+            protocol: 'manual-offline-review-v1',
+            promptSource: promptByStage[stage].source,
+            promptSha256: promptByStage[stage].sha256
+        };
+        paper.analysisManifest.stages[stage] = { ...common };
+        takeover.stageEvidence[stage] = {
+            ...common,
+            attempts: 2,
+            inputSha256,
+            outputSha256: takeover.analysisSha256,
+            auditSha256: manualSha256({
+                stage, claims, auditSha256, stageInputSha256: inputSha256
+            }),
+            reviewedClaims: claims,
+            ...(contextSha256 ? { contextSha256 } : {})
+        };
+    }
+    return paper;
 }
 
 function fetchSourcesSha256(checkpoint) {
@@ -248,6 +479,49 @@ describe('validate-data-files', () => {
 
         assert.deepStrictEqual(validatePapersDatabase(papersFile), []);
         assert.deepStrictEqual(validatePaperListFile(resultFile, { deepAnalysis: true }), []);
+    });
+
+    it('Manual v4 canonical 从同批受控全文加载原文并拒绝非连续 resultClaims 引用', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-manual-v4-source-'));
+        const { resultFile } = writeManualV4BindingFixture(dir);
+        const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
+        assert.match(
+            issues,
+            /resultClaims\[1\]\.sourceQuote.*连续摘录存在于全文/
+        );
+        assert.doesNotMatch(issues, /缺少同批次受控全文 manifest|全文内容 SHA 不一致/);
+    });
+
+    it('Manual v4 canonical 拒绝受控全文内容与 sourceAcquisition SHA 脱钩', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-manual-v4-sha-'));
+        const { resultFile, sourcePath } = writeManualV4BindingFixture(dir, {
+            invalidClaimQuote: false
+        });
+        fs.appendFileSync(sourcePath, '\ntampered after manifest binding');
+        const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
+        assert.match(issues, /analysisManifest\.sourceAcquisition 的受控全文内容 SHA 不一致/);
+    });
+
+    it('validate:data 按 manualDepth 版本重跑 Manual v4 正文门禁', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-manual-v4-depth-'));
+        const { resultFile } = writeManualV4BindingFixture(dir, { invalidClaimQuote: false });
+        const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
+        assert.match(issues, /manual 深度契约无效/);
+    });
+
+    it('validate:data 重算顶层 Manual imageManifest 证据哈希并拒绝篡改', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-manual-image-sha-'));
+        const { resultFile } = writeManualV4BindingFixture(dir, { invalidClaimQuote: false });
+        const payload = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
+        hardenManualImageEvidence(payload.papers[0]);
+        payload.papers[0].imageManifest.insertionPlan.push({
+            imageNumber: 1,
+            lead: '被篡改的图前说明',
+            explanation: '被篡改的图后说明'
+        });
+        fs.writeFileSync(resultFile, JSON.stringify(payload));
+        const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
+        assert.match(issues, /imageManifest\.selectionEvidenceSha256 闭环校验失败/);
     });
 
     it('papers.json 拒绝 key-ID 冲突和规范化重复映射', () => {
