@@ -2117,7 +2117,7 @@ def review_and_fix_post(file_path):
     cleaned_anchors = strip_internal_scoring_anchors(content)
     if cleaned_anchors != content:
         removed_count = len(re.findall(
-            r'\[(?:A|SCORING_SOURCE)_[A-Z0-9_]+\]', content,
+            r'\[(?:A|SCORING_SOURCE)_[A-Z0-9_/-]+\]', content,
         ))
         content = cleaned_anchors
         issues.append(f"发现并清理 {removed_count} 个内部评分证据锚点")

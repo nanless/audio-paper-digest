@@ -1692,7 +1692,7 @@ def fix_yaml_unbalanced_quotes(text):
 def strip_internal_scoring_anchors(text):
     """Strip reader-facing scoring provenance tags from a derived text view."""
     return re.sub(
-        r'\[(?:A|SCORING_SOURCE)_[A-Z0-9_]+\][ \t]*',
+        r'\[(?:A|SCORING_SOURCE)_[A-Z0-9_/-]+\][ \t]*',
         '',
         str(text or ''),
     )

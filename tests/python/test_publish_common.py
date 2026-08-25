@@ -317,7 +317,8 @@ confidence: 中
     def test_sanitize_markdown_for_publish_combines_rules(self):
         text = (
             '---\ntitle: "Bad\n---\n<u>x</u>\n![same](a.png)\n![same](b.png)\n'
-            '[empty]()\n配�置\n[A_METHOD] 方法证据\n[SCORING_SOURCE_RESULTS] 实验证据'
+            '[empty]()\n配�置\n[A_METHOD] 方法证据\n[SCORING_SOURCE_RESULTS] 实验证据\n'
+            '[SCORING_SOURCE_13/28] 编号证据'
         )
         upstream = text
         fixed = sanitize_markdown_for_publish(text)
@@ -329,6 +330,7 @@ confidence: 中
         self.assertNotIn('�', fixed)
         self.assertNotIn('[A_METHOD]', fixed)
         self.assertNotIn('[SCORING_SOURCE_RESULTS]', fixed)
+        self.assertNotIn('[SCORING_SOURCE_13/28]', fixed)
         self.assertIn('方法证据', fixed)
         self.assertIn('实验证据', fixed)
         self.assertIn('[A_METHOD]', upstream)
