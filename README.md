@@ -232,12 +232,26 @@ python3 scripts/manual-review-blog.py --date 2026-04-21 --attestation data/curre
 # 人工全文先逐篇安全抓取并 checkpoint；失败后重跑只补失败或损坏项
 npm run manual:fulltext -- 2026-04-21
 
-# 人工深度分析：spec 必须逐篇绑定全文、原文事实引用、实际审计次数和阶段专属 prompt/契约 SHA
+# 把一份或多份人工记录分片严格组装为 manual_complete v2 spec；不调用 API
+# 每份 records 必须是相同 date/agent/reviewProtocol 的 manual_analysis_records v1 envelope，
+# papers 需显式提供八维评分、实际 audit passes、绑定全文原句的 authorInfo
+# 和至少六条覆盖五个事实章节的 evidenceLedger
+npm run manual:spec -- --date 2026-04-21 \
+  --records data/current/manual-analysis-records-2026-04-21.json
+# 并行撰写时可重复传入 --records；重复、缺失、跨日期或协议不一致都会阻断
+npm run manual:spec -- --date 2026-04-21 \
+  --records data/current/manual-analysis-records-2026-04-21-part-a.json \
+  --records data/current/manual-analysis-records-2026-04-21-part-b.json
+
+# 人工深度分析：spec 必须逐篇绑定全文、作者机构原文、事实引用、实际审计次数和阶段专属 prompt/契约 SHA
 # 此命令不调用 LLM API；每篇在运行锁内重读并保存，失败项保留 ingestion checkpoint
 npm run manual:analyze -- --date 2026-04-21 --spec data/current/manual-analysis-spec-2026-04-21.json
 
 # 默认续跑复用已成功 canonical；仅在人工纠错或 spec/prompt 改变时显式覆盖
 npm run manual:analyze -- --date 2026-04-21 --spec data/current/manual-analysis-spec-2026-04-21.json --force
+
+# titleOverride 仅可修复元数据标题的空白粘连；selectedImageUrls: [] 明确表示不选图。
+# arXiv 页面 chrome、资助方 logo 和赞助素材不会进入人工图片候选。
 
 # 无筛选模型的人工接管：--raw 仍联网抓取并生成带来源指纹的候选全集，再逐篇提交 related 决定
 node scripts/manual-fetch.js --date 2026-04-21 --raw

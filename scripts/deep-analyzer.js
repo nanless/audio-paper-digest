@@ -2141,6 +2141,19 @@ function selectImageCandidates(imageInfos, maxCount) {
     for (const [index, info] of imageInfos.entries()) {
         if (!info || !info.url || seen.has(info.url)) continue;
         if (!isSupportedImageUrl(info.url)) continue;
+        let parsedUrl;
+        try {
+            parsedUrl = new URL(info.url);
+        } catch (_error) {
+            continue;
+        }
+        const candidateText = `${info.caption || ''} ${info.alt || ''}`.toLowerCase();
+        const isArxivChrome = /(^|\.)arxiv\.org$/i.test(parsedUrl.hostname)
+            && (/^\/static\//i.test(parsedUrl.pathname) || /\/images\/funders\//i.test(parsedUrl.pathname));
+        const isFundingAsset = /\b(funder|funding|sponsor|sponsorship)\b/i.test(candidateText)
+            || /\bfoundation\s+(?:logo|mark)\b/i.test(candidateText)
+            || /\b(?:simons|schmidt)\s+foundation\b/i.test(candidateText);
+        if (isArxivChrome || isFundingAsset) continue;
         seen.add(info.url);
         const sourceOrder = Number.isInteger(info.sourceOrder) ? info.sourceOrder : index;
         unique.push({

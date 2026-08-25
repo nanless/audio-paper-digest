@@ -356,12 +356,13 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
     const imageInfos = Array.isArray(spec.imageInfos) ? spec.imageInfos : [];
     const preparedImages = Array.isArray(options.preparedImages) ? options.preparedImages : [];
     const imageUrls = preparedImages.map(info => info.url);
-    const selectedRequested = new Set(Array.isArray(spec.selectedImageUrls) ? spec.selectedImageUrls : []);
+    const hasExplicitImageSelection = Array.isArray(spec.selectedImageUrls);
+    const selectedRequested = new Set(hasExplicitImageSelection ? spec.selectedImageUrls : []);
     const unavailableRequested = [...selectedRequested].filter(url => !preparedImages.some(info => info.url === url));
     if (unavailableRequested.length > 0) {
         throw new Error(`${normalizedId(paper)} selectedImageUrls 含未通过安全下载校验的图片: ${unavailableRequested.join(', ')}`);
     }
-    const selectedImages = selectedRequested.size > 0
+    const selectedImages = hasExplicitImageSelection
         ? preparedImages.filter(info => selectedRequested.has(info.url)).slice(0, 4)
         : preparedImages.slice(0, 4);
     const imageDownloadEvidenceSha256 = manualSha256({
@@ -575,7 +576,17 @@ function buildManualFailureRecord(paper, paperSpec, date, error, promptBindings,
 }
 
 async function prepareManualImages(spec) {
-    const candidates = selectImageCandidates(normalizeImageInfos(spec.imageInfos), Config.ANALYSIS_CONFIG.imageCandidateMax);
+    const imageInfos = normalizeImageInfos(spec.imageInfos);
+    const requestedUrls = Array.isArray(spec.selectedImageUrls)
+        ? new Set(spec.selectedImageUrls)
+        : null;
+    const candidatePool = requestedUrls
+        ? imageInfos.filter(candidate => requestedUrls.has(candidate.url))
+        : imageInfos;
+    const candidates = selectImageCandidates(
+        candidatePool,
+        requestedUrls ? Math.min(4, requestedUrls.size) : Config.ANALYSIS_CONFIG.imageCandidateMax
+    );
     const preparedImages = [];
     const imageDownloadOutcomes = [];
     for (const candidate of candidates) {
@@ -656,13 +667,18 @@ async function run() {
         try {
             await withPaperAnalysisLock(paper, async () => {
                 const canonical = loadCanonicalAnalysisRecord(Config.FILES.deepAnalysisResult, paper);
+                const effectivePaper = {
+                    ...paper,
+                    ...(canonical || {}),
+                    ...(paperSpec.titleOverride ? { title: paperSpec.titleOverride } : {})
+                };
                 let record;
                 let success = false;
                 let imagePreparation = {};
                 try {
                     imagePreparation = await prepareManualImages(paperSpec);
                     const expectedRecord = buildManualRecord(
-                        { ...paper, ...(canonical || {}) },
+                        effectivePaper,
                         paperSpec,
                         date,
                         promptBindings,
@@ -677,7 +693,7 @@ async function run() {
                     success = true;
                 } catch (error) {
                     record = buildManualFailureRecord(
-                        { ...paper, ...(canonical || {}) },
+                        effectivePaper,
                         paperSpec,
                         date,
                         error,

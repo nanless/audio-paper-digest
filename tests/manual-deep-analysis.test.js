@@ -206,6 +206,18 @@ describe('manual_complete v2 deep-analysis contract', () => {
         }), /逐阶段 prompt\/context 绑定/);
     });
 
+    it('显式空选图不会下载或回填任何候选', async () => {
+        const { prepareManualImages } = require('../scripts/manual-deep-analysis.js');
+        const prepared = await prepareManualImages({
+            imageInfos: [{
+                url: 'https://arxiv.org/html/2608.20000/figure1.png',
+                caption: 'Architecture overview'
+            }],
+            selectedImageUrls: []
+        });
+        assert.deepStrictEqual(prepared, { preparedImages: [], imageDownloadOutcomes: [] });
+    });
+
     it('拒绝通用提示词残留，即使结构和评分都完整', () => {
         const fixture = baseSpec();
         fixture.analysis = fixture.analysis.replace('推理流程先完成', '从复现角度，方法章节需要记录。推理流程先完成');
@@ -326,6 +338,17 @@ describe('manual_complete v2 deep-analysis contract', () => {
         assert.equal(record.imageManifest.selected[0].mime, 'image/png');
         assert.equal(record.imageManifest.selected[0].sha256, 'b'.repeat(64));
         assert.equal(record.imageManifest.selected[0].bytes, 1234);
+
+        const noSelectionSpec = { ...spec, selectedImageUrls: [] };
+        const noSelectionRecord = buildManualRecord(
+            paper,
+            noSelectionSpec,
+            '2026-08-20',
+            promptBindings,
+            { preparedImages, imageDownloadOutcomes: [{ url: spec.imageInfos[0].url, status: 'complete' }] }
+        );
+        assert.deepStrictEqual(noSelectionRecord.selectedImageUrls, []);
+        assert.deepStrictEqual(noSelectionRecord.imageManifest.selected, []);
 
         const validateRecord = candidate => validateManualTakeoverManifest(
             candidate.analysisManifest,

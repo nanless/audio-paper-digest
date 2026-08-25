@@ -1530,6 +1530,7 @@ module.exports = {
     parseMachineSummary,
     parseAnalysis,
     parseScoringDimensions,
+    ALLOWED_TAGS,
     SCORE_DIMENSIONS,
     OPEN_SOURCE_SCORE_ANCHORS,
     normalizeScoreToOneDecimal,

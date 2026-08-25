@@ -129,7 +129,8 @@ describe('deep-analyzer section helpers', () => {
             { url: 'https://example.com/architecture.png', caption: 'Model architecture overview' },
             { url: 'https://example.com/spectrogram.png', caption: 'Speech spectrogram comparison' },
             { url: 'https://example.com/author.png', caption: 'author photo' },
-            { url: 'https://example.com/results.png', caption: 'Ablation results on benchmarks' }
+            { url: 'https://example.com/results.png', caption: 'Ablation results on benchmarks' },
+            { url: 'https://arxiv.org/static/base/1.0.1/images/funders/simons-foundation.png', caption: 'Simons Foundation' }
         ], 3);
 
         assert.deepStrictEqual(selected.map(x => x.url), [
@@ -137,6 +138,10 @@ describe('deep-analyzer section helpers', () => {
             'https://example.com/results.png',
             'https://example.com/spectrogram.png'
         ]);
+        assert.deepStrictEqual(selectImageCandidates([
+            { url: 'https://example.com/foundation-model.png', caption: 'Audio foundation model architecture' },
+            { url: 'https://arxiv.org/static/base/1.0.1/images/funders/schmidt-sciences.png', caption: 'Schmidt Sciences' }
+        ], 2).map(x => x.url), ['https://example.com/foundation-model.png']);
     });
 
     it('过滤副模型不稳定的内联图片和 SVG，并截断日志标签', () => {
