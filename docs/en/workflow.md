@@ -6,9 +6,21 @@ The default daily entry is `./run-daily-digest.sh YYYY-MM-DD`. Starting from fet
 
 When the user asks to run a dated paper digest, that request already authorizes the blog push and requires every stage above. Do not stop after fetch, analysis, review, or publication. WeChat, Feishu, and Xiaohongshu auto-publishing are outside the default scope.
 
+### 3.0 Automatic and Explicit Manual-Takeover Paths
+
+The normal path uses keyword prefiltering plus LLM filtering, staged LLM deep analysis, and three-layer blog review. Model-service failures never silently switch a paper or batch to manual success. Explicit takeover is available as follows:
+
+- `manual-fetch.js --raw` still accesses arXiv and HuggingFace, but does not call the filter model. `--select` accepts a `manual_offline` v1 decision for every candidate and binds input SHA, reviewer, and protocol fingerprint into the four filter artifacts.
+- `manual-deep-analysis.js` calls no LLM/API. Every spec binds controlled full text and SHA, the current prompt, source-locatable evidence, two audit passes, and distinct reviewed claims for every recovery stage. Canonical output is written only after the whole batch passes both the ordinary analysis contract and `manual_complete v2` provenance.
+- `manual-review-blog.py` replaces only the semantic LLM review when that service is unavailable. It requires an eight-check manual attestation and still binds deterministic checks, exact file SHA, generation manifest, Git baseline, review protocol, and the Hugo gate into an explicitly `manual_complete` receipt. Push and remote-OID verification remain unchanged.
+
+Each manual mode replaces one model responsibility only; source-health, content, publication, and visual gates remain mandatory.
+
 ### 3.1 Auto-Archive
 
 At startup, the script checks the following files under `data/current/`:
+- `raw-candidates.json`
+- `filter-decisions.json`
 - `deep-analysis-result.json`
 - `filtered-papers.json`
 - `analyzed.json`
@@ -18,8 +30,8 @@ At startup, the script checks the following files under `data/current/`:
 Archive rules (evaluated per file):
 1. Read the timestamp field from the file (supports `timestamp` / `lastUpdated` / `deepAnalysisCompletedAt` / `previousTimestamp`)
 2. If the date is **earlier than today (Beijing Time)**, copy it under `data/archive/<date>/`
-3. Reuse an identical canonical archive; if the canonical file differs, preserve the current data as a timestamped conflict snapshot without overwriting the canonical file
-4. Delete the current file only after equality is confirmed or the archive copy succeeds; keep it when verification/copying fails
+3. Reuse an identical canonical archive. If it differs, first preserve the old canonical file as a timestamped conflict snapshot, then replace canonical with the current bytes and read it back for verification
+4. Delete the current file only after equality is confirmed, or after the old version is preserved and the new canonical copy verifies; keep current on any failure
 
 Additionally, before final saving of a new deep-analysis result, if an existing `deep-analysis-result.json` contains data, it is backed up to `data/archive/deep-analysis-result-<timestamp>.bak.json`, and old backups are cleaned up automatically (keeping the most recent 10). This happens during the final save after analysis, not during startup archive.
 
@@ -48,7 +60,7 @@ Fetch the latest papers from 7 categories:
 
 Fetch strategy: 3-level (recent → search → API):
 
-1. **Recent page (primary)**: `arxiv.org/list/{category}/recent`, paginated (`?skip=50&show=50`, max 100 per category). Abstracts fetched afterward via `fetchAbstracts`. If recent returns fewer than the target count, the flow continues to the search/API fallbacks to fill the candidate pool.
+1. **Recent page (primary)**: `arxiv.org/list/{category}/recent`, paginated (`?skip=50&show=50`) with a fixed cap of two pages/100 papers. `PD_ARXIV_MAX_RESULTS` is the final per-category target, so strict-category search and Atom API fallbacks continue filling when recent is short or the configured target exceeds 100. Abstracts are fetched afterward via `fetchAbstracts`.
 2. **Search page (fallback)**: `arxiv.org/search/` with User-Agent rotation, page delay 10-25s.
 3. **API (last resort)**: `export.arxiv.org/api/query`. 429 rate-limit: exponential backoff 60s, 120s, 240s, 480s, max 5 retries. Recent/search/abstract/Atom requests share a 60-second absolute deadline, an 8 MiB response cap, and `ARXIV_CONFIG`/`PD_ARXIV_*`-driven retry, backoff, and User-Agent settings.
 
@@ -58,7 +70,7 @@ Deduplication logic: `deduplicatePapers()` deduplicates by `arxivId`, with core 
 
 Dual-source fetching via `fetch-huggingface-papers.js`:
 
-1. **`/api/daily_papers`**: Curated daily papers, including rich fields such as `ai_summary`, `githubRepo`, `upvotes`, `ai_keywords`, `projectPage`, `githubStars`, `discussionId`. Paginated (`limit=100`, up to 20 pages) until the last 7 days are covered.
+1. **`/api/daily_papers`**: Curated daily papers, including rich fields such as `ai_summary`, `githubRepo`, `upvotes`, `ai_keywords`, `projectPage`, `githubStars`, `discussionId`. Paginated (`limit=100`, up to 20 pages) until it passes the cutoff. The default `days=7` cutoff is Beijing today minus seven days and is inclusive, so it covers today plus the preceding seven calendar dates.
 2. **`/api/papers`**: Latest papers supplement, covering the last 1-2 days, used to backfill papers not included in daily_papers.
 
 Filtering:
@@ -167,7 +179,7 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 - Each result stores candidate scores, per-URL download/cache outcomes, secondary model/options, prompt/response hashes, insertion diagnostics, and final URLs in `imageManifest`. `no_downloadable_images` is a successful permanent terminal state; a non-empty plan with zero insertions is `invalid_output` and retries only the image stage
 - `analysisManifest` records image download, primary analysis, open-source scan, demo scan, revision, table/method/structure repair, scoring audit, and image supplementation. Failures retain `analysisCheckpoint` and `analysisRecoveryImageManifest`; reruns resume at the first incomplete stage and success requires every mandatory stage to reach a terminal status
 - **Concurrency: 3 papers in parallel** (adjustable via `PD_ANALYSIS_CONCURRENCY` in the project `.env`)
-- Up to **2 retries** per paper (outer `analysis-engine.js`), with each outer retry having **3 retries** for internal API calls (`deep-analyzer.js` inner layer, exponential backoff: first 10s, then double, `2^attempt * 5000ms`), outer retry interval 3s (adjustable via `PD_ANALYSIS_MAX_RETRIES`)
+- By default, up to **2 retries** per paper are allowed in the outer `analysis-engine.js` layer (`PD_ANALYSIS_MAX_RETRIES`). Within each outer attempt, every LLM API stage makes at most **3 attempts** by default in `deep-analyzer.js` (`PD_ANALYSIS_API_MAX_RETRIES`, exponential backoff: wait 10s after the first failure, then double with `2^attempt * 5000ms`); the outer retry interval is 3s.
 - API overall timeout is **20 minutes of active process time**. A heartbeat excludes system-sleep or long-suspension wall-clock jumps, so a socket timeout after wake can retry with the remaining budget
 - Primary analysis uses `max_tokens=64000` (`apiMaxTokens`); revision, table, method, and structure repair default to `max_tokens=16000` (`repairMaxTokens`, overridable with `PD_ANALYSIS_REPAIR_MAX_TOKENS`); `temperature=0.7`
 - Post-processing stages no longer resend the complete source. Default evidence budgets are 16K for open-source scanning, 60K for revision, 40K for scoring audit, 30K for method/table repair, and 40K for structure repair. They are controlled by `PD_OPENSOURCE_EVIDENCE_MAX_CHARS`, `PD_REVISION_EVIDENCE_MAX_CHARS`, `PD_SCORING_EVIDENCE_MAX_CHARS`, `PD_REPAIR_EVIDENCE_MAX_CHARS`, and `PD_STRUCTURE_EVIDENCE_MAX_CHARS`; `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` controls primary analysis. The selector version and budgets are part of recovery fingerprints, so only the affected stage and downstream work rerun
@@ -209,11 +221,11 @@ The same post-publication stage creates one digest-image task using the category
 
 Before built-in image generation, run `npm run visual:prepare -- --date <date>` (optionally `--paper <ID>`). It keeps task tokens unchanged, revalidates each controlled `.bin` cache path, SHA, byte count, MIME, and magic bytes, and atomically materializes upload-ready `.png/.jpg/.webp` files under `data/current/visual-reference-inputs/<date>/<rank-paper>/`. Pass the emitted absolute `referencedImagePaths` to the image tool instead of raw `.bin` paths or display-only `relativePath` values; repeated runs repair altered materialized files.
 
-Visual plan/status commands print compact task indexes by default: rank, paper ID, title, task token, reference-image count, and the absolute manifest path. `visual:prepare` additionally retains the absolute `referencedImagePaths` required by image generation. Full `generationContext.qaClaims` and cover rankings remain in their manifests. `digest:status` prints only stage counts and errors to the terminal while preserving full `sourceHealth` in the report JSON. Experiment-table repair runs only for an explicit `Table` / `Tbl.` / `表` citation with no Markdown table, or an illegal omission marker; merely detecting any table in the source no longer triggers another LLM call. New analyses and reanalyses write `analysisManifest.contracts.experimentTables=bounded-v1`; before scoring, code enforces at most two tables per paper, 12 data rows and 8 metric columns per table, and routes violations through local structure repair. Node data validation and Python publication preflight enforce the same marker. Existing successful records without the marker remain compatible and are not reprocessed in bulk.
+Visual plan/status commands print compact task indexes by default: rank, paper ID, title, task token, reference-image count, and the absolute manifest path. `visual:prepare` additionally retains the absolute `referencedImagePaths` required by image generation. Full `generationContext.qaClaims` and cover rankings remain in their manifests. `digest:status` prints only stage counts and errors to the terminal while preserving full `sourceHealth` in the report JSON. That JSON is a read-only snapshot of the command's execution time; later push, planning, or `record` operations do not update it, so rerun the command before treating it as current state. Experiment-table repair runs only for an explicit `Table` / `Tbl.` / `表` citation with no Markdown table, or an illegal omission marker; merely detecting any table in the source no longer triggers another LLM call. New analyses and reanalyses write `analysisManifest.contracts.experimentTables=bounded-v1`; before scoring, code enforces at most two tables per paper, 12 data rows and 8 metric columns per table, and routes violations through local structure repair. Node data validation and Python publication preflight enforce the same marker. Existing successful records without the marker remain compatible and are not reprocessed in bulk.
 
 ### 3.9 Incremental Save and Wrap-up
 
-- **Incremental save to `data/current/deep-analysis-result.json` immediately after each batch completes**. Result and paper-database updates re-read and merge under a cross-process lock with `generation` checks. Failed placeholders never overwrite successful analyses, and corrupt current JSON blocks writes instead of silently falling back to legacy data
+- **Incremental save to `data/current/deep-analysis-result.json` immediately after every paper succeeds or fails**. Result and paper-database updates re-read the latest canonical state, merge, and increment `generation` under a cross-process lock. `generation` is the committed version record, not a caller-supplied expected-generation optimistic CAS. Failed placeholders never overwrite successful analyses, and corrupt current JSON blocks writes instead of silently falling back to legacy data
 - Incremental and final saves sync `data/current/papers.json` `digestStatus.status` through `scripts/digest-status.js`: successful analyses become `analyzed`, failures become `analysis_failed`
 - `full-fetch.js` holds a single-run lock across archive, cleanup, filtering, and final merge without reducing paper-analysis concurrency. Failed checkpoints are persisted incrementally; an older valid body remains usable while `latestAttemptStatus` records the failed retry
 - After all papers are analyzed, existing results are read again, deduplicated and merged by `arxivId`/`paper_id`, preserving historical data

@@ -222,6 +222,11 @@ function applyEnvOverrides() {
             ANALYSIS_CONFIG.maxRetries = val;
         }
     }
+    // 单次 LLM 阶段内部的 HTTP 请求尝试次数（不同于整篇分析重试次数）
+    const analysisApiMaxRetries = readPositiveInt('PD_ANALYSIS_API_MAX_RETRIES');
+    if (analysisApiMaxRetries) {
+        ANALYSIS_CONFIG.apiMaxRetries = analysisApiMaxRetries;
+    }
     const repairMaxTokens = readPositiveInt('PD_ANALYSIS_REPAIR_MAX_TOKENS');
     if (repairMaxTokens) {
         ANALYSIS_CONFIG.repairMaxTokens = repairMaxTokens;

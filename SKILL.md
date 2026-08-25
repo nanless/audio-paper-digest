@@ -29,22 +29,32 @@ description: >
 
 默认日更入口：`./run-daily-digest.sh YYYY-MM-DD`（Codex 接续内置生图）；从 fetch 开始时目标日期必须是北京时间当天，因为 `full-fetch.js` 按启动日绑定批次且不接受历史日期。历史批次仅可从 generate/review/push/visual 续跑已有数据；generate 在 current 不匹配时自动读取受控的同日归档分析。仅数据流程入口：`./run-full-fetch.sh`（或 `node scripts/full-fetch.js` / `npm run fetch`）
 
-1. **自动归档**：检查 `data/current/deep-analysis-result.json` / `filtered-papers.json` / `analyzed.json`，若时间戳早于今天（北京时间）且 `data/archive/<日期>/` 下不存在，则复制后删除原文件。**`papers.json` 不归档。**
+1. **自动归档**：逐文件检查 `data/current/raw-candidates.json` / `filter-decisions.json` / `filtered-papers.json` / `deep-analysis-result.json` / `analyzed.json`；若记录日期早于今天（北京时间），则写入同日归档并在校验成功后移走 current 原文件。canonical 归档冲突时保留带时间戳的冲突副本，不能静默覆盖或丢弃任一版本。**`papers.json` 不归档。**
 2. **加载去重库**：读取 `data/current/papers.json` 已有 ID；扫描 Hugo 博客仓库（`PAPER_DIGEST_BLOG_REPO`）中已发布论文的 arXiv ID，两者合并为统一去重集合
-3. **arXiv 抓取**：7 个分类，每类最多 100 篇（可通过 `PD_ARXIV_MAX_RESULTS` 调整），每个分类完成后原子写入 `fetch-checkpoint.json`；中断后只补抓未完成分类，任一分页或摘要请求失败均不能标记该分类健康
-4. **HuggingFace 抓取**：`daily_papers` 分页（最多 20 页）+ `papers` API 补充，默认近 7 天；来源完成后独立 checkpoint，必需请求、分页覆盖或日期截断不完整时整体失败并等待下次续跑
+3. **arXiv 抓取**：7 个分类，目标返回数默认每类 100 篇（可通过 `PD_ARXIV_MAX_RESULTS` 调整）。recent HTML 固定最多读取两页、最多提供 100 篇；不足目标时继续由严格分类 search 页面和 Atom API 补足，因此把配置调高不会扩大 recent 的两页窗口。每个分类完成后原子写入 `fetch-checkpoint.json`；中断后只补抓未完成分类，任一必需分页或摘要请求失败均不能标记该分类健康
+4. **HuggingFace 抓取**：`daily_papers` 分页（最多 20 页）+ `papers` API 补充；默认 `days=7` 的实现以“北京时间今天减 7 天”为含端点截止线，实际覆盖今天及此前 7 个日历日期。来源完成后独立 checkpoint，必需请求、分页覆盖或日期截断不完整时整体失败并等待下次续跑
 5. **合并去重**：arXiv 优先，HF 补充 7 个特有字段，标记 `sources`；过滤掉博客已发布论文
 6. **关键词预筛 + LLM 筛选**：先用版本化高召回词表检查标题、摘要和类别；eess.AS/cs.SD、摘要不足 80 字符的证据不足项，以及命中语音、音频、音乐、声学信号、情感与副语言、生物声学、听觉健康、视听语音、常见模型/数据集词族的论文进入 LLM，只有摘要完整且未命中的补充类别论文才保存 `keyword_prefilter` 否定决定。随后按 `PAPER_ANALYZER_*` 配置逐篇判断余下论文相关性，每批写入 `filter-decisions.json`。`fetch-checkpoint`、raw、decisions、filtered 共同绑定来源配置、历史去重集合、博客已发布集合、关键词词表版本/开关的指纹；健康 raw 即使尚无 decisions 也能从空集合续跑，模型/prompt/关键词契约变化只重筛该批候选，不重复抓取；只有关键词与 LLM 的明确决定共同完整覆盖候选全集时才可完成
 7. **保存筛选结果**：`data/current/raw-candidates.json` 保存筛选输入，`data/current/filtered-papers.json` 保存筛选/归档去重后的输出
 8. **更新去重库**：追加所有爬取论文 ID 到 `data/current/papers.json`（不仅筛选通过的，提前保存防止后续中断丢失）
 9. **深度分析**：`deep-analyzer.js` 完成全部论文的文本分析与评分审计；该阶段不建立或等待视觉任务。
-10. **增量保存**：每批分析后立即保存到 `data/current/deep-analysis-result.json`，自带失败结果保护（已有成功 analysis 的论文不会被无 analysis 的失败结果覆盖）；同时通过 `scripts/digest-status.js` 回写 `papers.json.digestStatus`。分析结果和论文库写入使用跨进程锁与 `generation` 校验，部分失败状态为 `partial_failed` 并返回非零退出码
+10. **增量保存**：每篇分析完成或失败后立即保存到 `data/current/deep-analysis-result.json`，自带失败结果保护（已有成功 analysis 的论文不会被无 analysis 的失败结果覆盖）；同时通过 `scripts/digest-status.js` 回写 `papers.json.digestStatus`。写入在跨进程锁内重读最新 canonical 对象、合并本次结果并把 `generation` 递增 1；`generation` 是提交后的版本记录，不是锁外携带 expected-generation 做乐观 CAS。部分失败状态为 `partial_failed` 并返回非零退出码
 11. **收尾合并**：去重合并历史结果，自动备份 bak 文件（保留最近 10 个）
 12. **全部博客发布后生成视觉摘要**：依次完成博客 generate、review 和 push；远端 `main` OID 验证成功后，`push-blog.py` 自动建立最终评分 TOP 10 论文长图和一张批次汇总图任务。图片不进入或阻断本轮博客发布。Codex 使用内置 `image_gen` 处理 pending/failed 项，项目脚本只管理规划、验证、复制和 checkpoint，禁止调用图像 API。论文长图使用约 220–360 个中文字符，不得退化为口号式概念海报；若深度分析已选中并完整缓存论文关键图，任务按“方法总览/架构/流程优先，关键实验其次”绑定最多两张参考图、caption、MIME、缓存路径和 SHA。内置生图直接完成英文标题、中文说明、结构图、实验数据和纸张拼贴艺术的一体化最终构图，禁止再经过旧的确定性文字卡片合成器；登记前逐项目检标题、文字、箭头关系、指标方向和数值，不可读或存在实质错误必须重生成。两类图片统一采用暖白底与低饱和色的清新纸张编辑风，通过细微纸纹、纸片叠层、局部毛边、少量胶带和柔和投影建立层次；禁止脏旧复古、拥挤手账、深蓝霓虹、赛博 HUD、金属边框和仪表盘风格。
 
 **视觉能力兼容边界**：标准日更在任何 Git 变更前要求 generation schema v3 及 `publishedPapers` 权威快照。schema v1/v2 只允许不带 `--require-visual-plan` 的显式历史维护 push，receipt 将视觉能力标记为 `not_applicable_legacy_maintenance`；不能等远端发布成功后才发现版本不兼容。
 
 `full-fetch.js` **不会自动发布博客/微信**。但当用户说“运行/进行某日论文速递”时，默认语义是完成本节整条链路；Agent 先运行 `run-daily-digest.sh` 或等价的分阶段命令，处理 review 问题并完成 push，再使用内置 `image_gen` 完成所有 pending 论文长图和汇总封面，直到两个视觉状态均为 `complete`。视觉 plan/status 默认只输出排名、论文 ID、标题、task token、参考图数和 manifest 路径，`visual:prepare` 保留必需的绝对 `referencedImagePaths`；完整事实仍在 manifest。`digest:status` 默认打印紧凑门禁摘要，完整来源健康明细在报告 JSON。微信公众号、飞书和小红书自动发布不属于默认链路。
+
+### 2.1 无模型 API 的显式人工接管
+
+自动 LLM 不可用时只允许显式切换以下严格接管路径；任何普通网络、配额或模型错误都不能自动降级为“人工通过”：
+
+1. `node scripts/manual-fetch.js --date YYYY-MM-DD --raw` 仍通过网络抓取 arXiv/HuggingFace 并保存来源健康与候选指纹，但不调用筛选模型。人工逐篇提交 `{version:1, mode:"manual_offline", date, reviewer, decisions}` 后，用 `--select SPEC.json` 写入完整筛选四件套；缺失、未知、重复或理由不足的决定都会阻断。
+2. `npm run manual:analyze -- --date YYYY-MM-DD --spec SPEC.json` 不调用 LLM/API。每篇必须绑定受控全文及 SHA、当前分析 prompt、可回查的证据账本、两轮审计和全部恢复阶段的独立 reviewed claims，并同时通过标准正文契约与 `manual_complete v2` provenance 契约；整批预检全部通过后才写 canonical deep result。
+3. 仅当博客 LLM review 服务不可用时，可运行 `python3 scripts/manual-review-blog.py --date YYYY-MM-DD --attestation ATTESTATION.json`。attestation 的八项检查必须全部为真；脚本仍执行确定性修复/复验、逐文件 SHA、generation manifest、Git 基线、review 协议和 Hugo gate 绑定，并签发明确标记 `reviewMode=manual_complete` 的 receipt。后续仍由普通 `push-blog.py` 验证和发布。
+
+人工接管不是降低质量门槛：`manual_offline` 只替代筛选模型，`manual_complete v2` 只替代深度分析模型，manual blog review 只替代语义 review 模型；抓取来源健康、分析正文契约、发布凭证和远端 OID 门禁保持不变。
 
 ---
 
@@ -127,7 +137,7 @@ API 调用特性：
 - 主分析 max_tokens=64000，审校/表格/方法/结构局部修复默认 max_tokens=16000（`PD_ANALYSIS_REPAIR_MAX_TOKENS` 可覆写），temperature=0.7
 - 主分析输入默认上限 200K 字符；超过时使用 `task-focused-v1` 跨全文均衡取样，不再只保留开头。开源/审校/评分/表格与方法/结构后处理证据默认上限分别为 16K/60K/40K/30K/40K 字符，且使用任务关键词优先的证据块，避免重复发送完整全文。对应 `PD_*_EVIDENCE_MAX_CHARS` 和 `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` 会进入阶段指纹
 - 主分析与审校只保留支撑结论的关键表格。新分析/重分析必须写入 `analysisManifest.contracts.experimentTables=bounded-v1` 并通过 Node/Python 双端硬校验：每篇最多 2 张、每张最多 12 个数据行和 8 个指标列，超限在评分前进入局部结构修复；无该标记的历史成功记录保持兼容，不触发全量重跑。表格修复只在实验章节以 `Table` / `Tbl.` / `表` 明确引用原文表格但缺少 Markdown 表格，或出现非法省略标记时调用；原文仅“存在表格”不足以触发额外 LLM 请求
-- **双层重试**：analysis-engine.js 层面每篇最多重试 2 次（总共最多 3 次尝试）；deep-analyzer.js 内部每次 API 调用再重试最多 3 次（指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5s`）
+- **双层重试**：analysis-engine.js 层面每篇默认最多重试 2 次（总共最多 3 次尝试，`PD_ANALYSIS_MAX_RETRIES`）；deep-analyzer.js 内部每个 LLM API 阶段默认最多尝试 3 次（`PD_ANALYSIS_API_MAX_RETRIES`，指数退避：第一次等待 10 秒，之后翻倍，`2^attempt * 5s`）
 - **抓取代理为强制项**：LLM API 固定 `agent: false` 直连，不得注入代理 agent/dispatcher；arXiv/HuggingFace 抓取缺少项目 `.env` 代理必须失败，禁止直接回退。Node arXiv 使用 `HTTPS_PROXY` 或 `HTTP_PROXY` 中至少一项 HTTP CONNECT 地址，HuggingFace curl 可额外使用 SOCKS `ALL_PROXY`；访问本机代理的网络命令必须在沙箱外运行。
 - arXiv HTML 解析使用 **cheerio** 结构化选择器，移除 script/style/nav/header/footer 等噪音元素
 - HTML 全文不能只靠字符数判定：还要满足有效长段落数及论文章节/结构标记；`too_short`、`metadata_shell`、`missing_paper_structure` 都继续 PDF fallback，并记录结构计数
@@ -212,8 +222,8 @@ PAPER_ANALYZER_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
 # 微信公众号
 WECHAT_APP_ID=your-app-id
 WECHAT_APP_SECRET=your-app-secret
-# 封面图永久素材 ID（可选，未设置时使用默认素材）
-# WECHAT_THUMB_MEDIA_ID=your-thumb-media-id
+# 封面图永久素材 ID（真实草稿发布必填；只有 --dry-run 可省略）
+WECHAT_THUMB_MEDIA_ID=your-thumb-media-id
 
 # 飞书文档
 FEISHU_APP_ID=your-feishu-app-id
@@ -233,6 +243,8 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 # PD_ANALYSIS_CONCURRENCY=3
 # 深度分析重试次数
 # PD_ANALYSIS_MAX_RETRIES=2
+# 单次分析内部每个 LLM API 阶段的最大尝试次数
+# PD_ANALYSIS_API_MAX_RETRIES=3
 # 审校/表格/方法/结构局部修复输出上限
 # PD_ANALYSIS_REPAIR_MAX_TOKENS=16000
 # PD_ANALYSIS_FULL_TEXT_MAX_CHARS=200000
@@ -409,7 +421,7 @@ Agent 执行约束：
 
 发布前保障：
 
-- `full-fetch.js` 每天运行时会自动归档移走昨天的 `deep-analysis-result.json`、`filtered-papers.json` 和 `analyzed.json`，确保 `data/current/` 下只有当天新抓取的论文
+- `full-fetch.js` 每天运行时会逐文件自动归档移走昨日的 `raw-candidates.json`、`filter-decisions.json`、`filtered-papers.json`、`deep-analysis-result.json` 和 `analyzed.json`，确保 current 的批次伴随快照不会混日；`papers.json` 始终保留
 - `digest:status --date` 对历史日期可回退同日 archive，但必须实际取得 raw/decisions/filtered/deep，并校验 decisions 精确覆盖 raw、filtered 精确等于 `related=true` 扣除显式排除项、全部论文属于目标批次且 deep 无混批；不得仅凭汇总统计推导完整状态。当前日期仍只认 current
 - 发布默认优先按 `fetchBatchDate`/`batchDate`、旧数据回退严格北京时间 `fetchedAt` 的 `--date` 过滤；仍需保持 `data/current/` 干净，避免 review、校验和显式 `--all` 发布时混入不同批次
 
@@ -473,9 +485,9 @@ PY
 - 文件日志不做数量、总量或单文件大小限制，也不会自动清理旧日志；`PAPER_DIGEST_DISABLE_FILE_LOGS=1` 或 `PD_DISABLE_FILE_LOGS=1` 可强制禁用文件日志
 - `backfill_papers.py` 复用统一的每次运行日志，不再额外追加 `logs/backfill.log`
 - 日志均为 UTF-8 纯文本并使用 `0600` 权限；每个非空物理日志行均以毫秒级北京时间戳（`[YYYY-MM-DD HH:mm:ss.SSS+08:00]`）开头。日志层统一脱敏 `Authorization`、`x-api-key`、Cookie、token、secret、password、任意已配置密钥实际值和 URL userinfo，并同步落盘，避免 `process.exit()` 丢失尾部日志
-- `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` 采用重试、逐阶段锁内 checkpoint、跨进程锁和 `generation` 校验；损坏的 current JSON 会阻断写入，不会回退 legacy 后覆盖。长时间单篇锁使用 heartbeat 续租，远程主机遗留锁只在租约超龄后回收
+- `full-fetch.js` / `deep-analysis-only.js` / `batch-analyze.js` 采用重试、逐阶段锁内 checkpoint 和跨进程锁；每次写入在锁内重读 canonical、合并并递增 `generation`，不使用锁外 expected-generation 乐观比较。损坏的 current JSON 会阻断写入，不会回退 legacy 后覆盖。长时间单篇锁使用 heartbeat 续租，远程主机遗留锁只在租约超龄后回收
 - `full-fetch.js` 另有覆盖归档、清理、筛选和最终合并的单实例运行锁，内部论文分析仍保持配置的并发度；锁 owner 使用随机 token，旧 owner 不能释放后来者的同路径新锁
-- `reanalyze.js` 每 5 篇保存一次中间结果（并发模式下自动调整保存间隔）
+- `reanalyze.js` 在每篇成功或失败回调中立即锁内合并保存，并同步该篇 `papers.json.digestStatus`；最终汇总只更新顶层统计，不会把累计旧快照重新覆盖正文
 - 可运行 `npm run validate:data` 只读校验当前 `papers.json`、`raw-candidates.json`、`filter-decisions.json`、`filtered-papers.json`、`deep-analysis-result.json` 的结构、候选统计、筛选计数一致性，以及完整筛选决策对候选全集的覆盖；该命令不修复数据，发现问题会非零退出。没有运行数据的干净 checkout 仅可显式使用 `npm run validate:data -- --allow-empty`；CI 使用该空仓模式，实际数据校验由单测夹具覆盖
 - `full-fetch.js` 自动备份 bak 文件到 `data/archive/`，保留最近 10 个
 - `full-fetch.js` 自动备份 `papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天
@@ -573,7 +585,7 @@ const options = {
 
 - 查看 `logs/deep-analyzer-*.log`、`logs/full-fetch-*.log`，同时保留终端完整输出
 - 检查 key/endpoint/model 三元组是否匹配（见 9.1 节）
-- 若超时，脚本会自动降级为纯文本重试；若仍失败，检查代理或减小并发
+- 主分析从一开始就是纯文本，不存在“超时后降级为纯文本”的第二种主分析模式。超时按剩余活跃时间预算进入正常 API 重试；图片下载或副模型插图失败则保留已审计的纯文本 checkpoint，并只从未完成的图片/插图阶段续跑。持续失败时检查代理、模型服务和并发度
 - 可用 `node scripts/deep-analysis-only.js` 安全续跑
 
 ### 9.4 发布后无变更可推送

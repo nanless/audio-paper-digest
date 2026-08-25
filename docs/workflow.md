@@ -6,9 +6,21 @@
 
 用户说“运行/进行某日论文速递”时，默认已经授权博客 push，并要求完成上述全部阶段；不能在抓取、深度分析、review 或发布后提前停止。微信、飞书、小红书自动发布不在默认范围。
 
+### 3.0 自动链路与人工接管链路
+
+常规路径使用关键词预筛 + LLM 筛选、多阶段 LLM 深度分析和三层博客 review。模型服务不可用时允许显式接管，但不会因 API 超时、配额或网络错误自动切换：
+
+- `manual-fetch.js --raw` 仍联网抓取 arXiv/HuggingFace，只是不调用筛选模型；`--select` 接收完整覆盖候选全集的 `manual_offline` v1 逐篇裁决，并把输入 SHA、reviewer 和协议指纹写入筛选四件套。
+- `manual-deep-analysis.js` 不调用 LLM/API；每篇 spec 必须绑定受控全文 SHA、当前 prompt、至少六条可在全文定位的证据、两轮审计和各恢复阶段的独立 reviewed claims。只有整批同时通过普通分析契约与 `manual_complete v2` provenance 契约才写 canonical deep result。
+- `manual-review-blog.py` 只在 LLM review 服务不可用时替代语义模型。它要求八项全真的人工 attestation，仍执行确定性复验、逐文件 SHA、generation manifest、Git 基线、review 协议和 Hugo gate 绑定，输出明确标记 `manual_complete` 的 receipt；push 与远端 OID 验证不变。
+
+三种人工模式分别只替代对应模型职责，不绕过来源健康、正文质量、发布或视觉门禁。
+
 ### 3.1 自动归档
 
 运行开始时，脚本检查 `data/current/` 下的以下文件：
+- `raw-candidates.json`
+- `filter-decisions.json`
 - `deep-analysis-result.json`
 - `filtered-papers.json`
 - `analyzed.json`
@@ -16,10 +28,10 @@
 **注意：`papers.json` 是去重数据库，不参与归档移走，持续累积。**
 
 归档规则（逐文件判断）：
-1. 读取文件中的时间戳字段（支持 `timestamp` / `lastUpdated` / `deepAnalysisCompletedAt` / `previousTimestamp`）
+1. 读取文件中的时间戳字段（支持 `timestamp` / `lastUpdated` / `deepAnalysisCompletedAt` / `previousTimestamp`，筛选伴随文件也可由批次字段识别）
 2. 若日期 **早于今天（北京时间）**，则复制到 `data/archive/<日期>/`
-3. 若 canonical 归档已存在且内容一致，直接复用；若内容不同，另存带北京时间戳的冲突快照，绝不覆盖 canonical
-4. 归档已确认一致或冲突快照写入成功后，**删除** current 原文件；归档校验/复制失败则保留 current，避免数据丢失
+3. 若 canonical 归档已存在且内容一致，直接复用；若内容不同，先把旧 canonical 另存为带北京时间戳的冲突快照，再以 current 内容替换 canonical，并重新读取校验
+4. 归档已确认一致，或旧版本留存且新 canonical 校验成功后，**删除** current 原文件；任一步失败则保留 current，避免数据丢失
 
 此外，最终保存新的深度分析结果前，若已有 `deep-analysis-result.json` 且包含数据，会先备份到 `data/archive/deep-analysis-result-<时间戳>.bak.json`，并自动清理旧备份（保留最近 10 个）。这一步发生在分析完成后的最终保存阶段，不属于启动时的每日归档。
 
@@ -49,7 +61,7 @@
 **抓取策略：recent 页面 → 搜索页 → API 三级**
 
 1. **recent 页面（主要方式）**：
-   - 从 `arxiv.org/list/{category}/recent` 页面抓取，支持翻页（`?skip=50&show=50`，每类最多 100 篇）
+   - 从 `arxiv.org/list/{category}/recent` 页面抓取，支持翻页（`?skip=50&show=50`）；recent 路径固定最多两页/100 篇。`PD_ARXIV_MAX_RESULTS` 是最终每类目标数，目标高于 100 或 recent 不足时，严格分类 search 页面与 Atom API 继续补足
    - recent 页面限流策略宽松，优先使用
    - 抓取后自动补充摘要（`fetchAbstracts`）
    - 获取到足够论文后跳过后续步骤
@@ -80,7 +92,7 @@
 
 通过 `fetch-huggingface-papers.js` 双源抓取：
 
-1. **`/api/daily_papers`**：精选每日论文，含 `ai_summary`、`githubRepo`、`upvotes`、`ai_keywords`、`projectPage`、`githubStars`、`discussionId` 等丰富字段。分页获取（`limit=100`，最多 20 页），直到覆盖近 7 天。
+1. **`/api/daily_papers`**：精选每日论文，含 `ai_summary`、`githubRepo`、`upvotes`、`ai_keywords`、`projectPage`、`githubStars`、`discussionId` 等丰富字段。分页获取（`limit=100`，最多 20 页），直到越过截止日。默认 `days=7` 以“北京时间今天减 7 天”为含端点截止线，因此保留今天及此前 7 个日历日期，而不是只有 7 个日期。
 2. **`/api/papers`**：最新论文补充，覆盖最近 1-2 天，用于补充 daily_papers 未收录的新论文。
 
 过滤：
@@ -190,7 +202,7 @@ LLM endpoint 只允许 HTTPS；仅 loopback 本地测试服务可以使用 HTTP�
 - 每篇结果会保存 `imageManifest`：包含候选评分、逐 URL 下载结果、缓存命中、副模型/温度、prompt/响应哈希、插入与拒绝诊断及最终选图。严格空计划为 `no_high_value_images`；全部永久不可下载为 `no_downloadable_images`；有计划但零插入为 `invalid_output` 并只重试插图阶段
 - `analysisManifest` 记录图片下载、主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计和插图阶段；失败时保留 `analysisCheckpoint` 与 `analysisRecoveryImageManifest`。再次运行从首个未完成阶段继续，只有所有必需阶段进入完成/无需/跳过等终态才视为成功
 - **并发度：3 篇并行**（可通过项目 `.env` 中的 `PD_ANALYSIS_CONCURRENCY` 调整）
-- 每篇最多重试 **2 次**（外层 `analysis-engine.js`），每次外层重试内部 API 调用还有 **3 次** 重试（`deep-analyzer.js` 内层，指数退避：第一次 10 秒，之后翻倍，`2^attempt * 5000ms`），外层重试间隔 3 秒（可通过 `PD_ANALYSIS_MAX_RETRIES` 调整外层）
+- 每篇默认最多重试 **2 次**（外层 `analysis-engine.js`，由 `PD_ANALYSIS_MAX_RETRIES` 调整）；每次外层尝试中的每个 LLM API 阶段默认最多尝试 **3 次**（`deep-analyzer.js` 内层，由 `PD_ANALYSIS_API_MAX_RETRIES` 调整，指数退避：第一次等待 10 秒，之后翻倍，`2^attempt * 5000ms`），外层重试间隔 3 秒
 - API 整体超时为 **20 分钟活跃时间**；每秒心跳识别超过 30 秒的系统睡眠/事件循环挂起并排除该墙钟跳变，唤醒后的请求超时仍按剩余预算重试
 - 主分析 `max_tokens=64000`（config.js 中 `apiMaxTokens`）；审校/表格/方法/结构局部修复默认 `max_tokens=16000`（`repairMaxTokens`，可由 `PD_ANALYSIS_REPAIR_MAX_TOKENS` 覆写）；`temperature=0.7`
 - 各后处理阶段不再重复发送整篇论文：开源扫描、审校重写、评分审计、方法/表格修复和结构修复的默认证据预算依次为 16K、60K、40K、30K、40K 字符。对应 `.env` 变量为 `PD_OPENSOURCE_EVIDENCE_MAX_CHARS`、`PD_REVISION_EVIDENCE_MAX_CHARS`、`PD_SCORING_EVIDENCE_MAX_CHARS`、`PD_REPAIR_EVIDENCE_MAX_CHARS`、`PD_STRUCTURE_EVIDENCE_MAX_CHARS`；主分析预算由 `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` 控制。选择算法版本与预算进入恢复指纹，变化时只重跑受影响阶段及下游
@@ -222,7 +234,7 @@ LLM endpoint 只允许 HTTPS；仅 loopback 本地测试服务可以使用 HTTP�
 
 调用内置生图前必须运行 `npm run visual:prepare -- --date <日期>`。该命令不会调用图像 API，也不会改变任务 token；它重新校验 `.bin` 原始缓存的受控路径、SHA、长度、MIME 与文件头，随后把参考图原子物化为 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 中带正确扩展名的文件。生图时使用命令输出的绝对 `referencedImagePaths`，不要把 `.bin` 或仅供展示的 `relativePath` 直接传给图片服务。可用 `--paper <ID>` 只准备单篇，重复运行会校验并修复被改写的物化文件。
 
-视觉 plan/status 默认只输出每个任务的排名、论文 ID、标题、task token、参考图数和 manifest 绝对路径；`visual:prepare` 保留生图必需的绝对 `referencedImagePaths`。完整 `generationContext.qaClaims` 与封面排行仍在 manifest 内。`digest:status` 终端只打印各阶段数量摘要，完整 `sourceHealth` 仍写入 `digest-run-reports/<date>.json`。历史日期可从同日 archive 读取 raw/decisions/filtered/deep，但 decisions 必须完整覆盖 raw、filtered 必须精确等于相关决定扣除显式排除项、全部论文必须属于目标批次且 deep 不得混批；缺失或语义损坏保持 incomplete。当前日期严格只认 current。
+视觉 plan/status 默认只输出每个任务的排名、论文 ID、标题、task token、参考图数和 manifest 绝对路径；`visual:prepare` 保留生图必需的绝对 `referencedImagePaths`。完整 `generationContext.qaClaims` 与封面排行仍在 manifest 内。`digest:status` 终端只打印各阶段数量摘要，完整 `sourceHealth` 仍写入 `digest-run-reports/<date>.json`。该 JSON 是命令执行时的只读验收快照；后续 push、视觉规划或 `record` 不会反向更新旧报告，读取当前终态前必须重新运行命令。历史日期可从同日 archive 读取 raw/decisions/filtered/deep，但 decisions 必须完整覆盖 raw、filtered 必须精确等于相关决定扣除显式排除项、全部论文必须属于目标批次且 deep 不得混批；缺失或语义损坏保持 incomplete。当前日期严格只认 current。
 
 > **单模型 vs 双模型**：主模型始终负责正文和最终评分审计。评分审计默认使用独立低温 0.1。设置 `PAPER_ANALYZER_SECONDARY_MODEL` 后，副模型只从候选图片中筛选高价值图、丢弃低信息图并输出章节、稳定段落 ID、图前和图后说明；代码不会接受副模型替换主模型原文。未设置副模型时图片 URL 只保存在候选元数据中，博客 review 的可选多模态 LLM 检查也会跳过，但确定性图片门禁仍执行。
 
@@ -232,7 +244,7 @@ LLM endpoint 只允许 HTTPS；仅 loopback 本地测试服务可以使用 HTTP�
 
 ### 3.8 增量保存与收尾
 
-- **每批分析完成后立即增量保存**到 `data/current/deep-analysis-result.json`；分析结果和 `papers.json` 在跨进程锁内重新读取合并并校验 `generation`，避免多个入口并发丢更新。失败结果不会覆盖已有成功 `analysis`，当前 JSON 损坏时会阻断而不是回退旧文件覆盖
+- **每篇分析成功或失败后立即增量保存**到 `data/current/deep-analysis-result.json`；分析结果和 `papers.json` 在跨进程锁内重读最新 canonical、合并并把 `generation` 递增 1，避免多个入口并发丢更新。这里没有调用方携带 expected-generation 的锁外乐观比较。失败结果不会覆盖已有成功 `analysis`，当前 JSON 损坏时会阻断而不是回退旧文件覆盖
 - `full-fetch.js` 用单实例运行锁覆盖归档、清理、筛选和最终合并；每篇分析在共享论文锁内重新读取最新规范记录后保存。批次回调与收尾只更新顶层统计，禁止用累计旧快照二次覆盖论文正文；失败 checkpoint 仍逐篇保留
 - 增量保存和最终保存都会通过 `scripts/digest-status.js` 同步 `data/current/papers.json` 的 `digestStatus.status`，成功为 `analyzed`，失败为 `analysis_failed`
 - 全部论文分析完毕后，再次读取已有结果，按 `arxivId`/`paper_id` 去重合并，保留历史数据

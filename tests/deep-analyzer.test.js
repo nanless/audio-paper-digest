@@ -37,6 +37,15 @@ describe('arXiv HTML full-text health gate', () => {
 });
 
 describe('deep-analyzer section helpers', () => {
+    it('普通模型 HTTP 请求尝试次数默认服从分析配置并允许显式覆写', () => {
+        const { resolveApiMaxRetries } = require('../scripts/deep-analyzer.js');
+        const { ANALYSIS_CONFIG } = require('../scripts/config.js');
+
+        assert.strictEqual(resolveApiMaxRetries(), ANALYSIS_CONFIG.apiMaxRetries);
+        assert.strictEqual(resolveApiMaxRetries(1), 1);
+        assert.strictEqual(resolveApiMaxRetries(0), ANALYSIS_CONFIG.apiMaxRetries);
+    });
+
     it('提取当前 prompt 使用的 ## 方法和实验章节', () => {
         const {
             extractSectionByTitle

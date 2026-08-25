@@ -3,10 +3,10 @@ const { setupScriptLogging } = require('./log-setup');
 setupScriptLogging(__filename);
 
 /**
- * 用历史 filtered-papers.json 的正样本回放关键词预筛，评估召回率。
+ * 用历史 filtered-papers.json 的入选记录回放关键词预筛，评估召回率。
  *
- * 这是只读诊断工具：历史 LLM 最终保留的论文视为正样本；同一 arXiv ID
- * 跨日期只计一次，同时保留逐文件统计和所有漏召回明细。
+ * 这是只读诊断工具：历史 LLM 入选记录先扣除人工登记的历史误筛，其余才作为
+ * 有效正样本；同一 arXiv ID 跨日期只计一次，同时保留逐文件统计和漏召回明细。
  */
 
 const fs = require('fs');

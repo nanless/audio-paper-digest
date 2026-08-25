@@ -32,6 +32,7 @@ describe('config', () => {
         Config = require('../scripts/config.js');
         assert.strictEqual(Config.ANALYSIS_CONFIG.concurrency, 3);
         assert.strictEqual(Config.ANALYSIS_CONFIG.maxRetries, 2);
+        assert.strictEqual(Config.ANALYSIS_CONFIG.apiMaxRetries, 3);
         assert.strictEqual(Config.ANALYSIS_CONFIG.apiMaxTokens, 64000);
         assert.strictEqual(Config.ANALYSIS_CONFIG.repairMaxTokens, 16000);
         assert.strictEqual(Config.ANALYSIS_CONFIG.scoringAuditTemperature, 0.1);
@@ -116,6 +117,12 @@ describe('config', () => {
     it('项目 .env 覆写 PD_ANALYSIS_MAX_RETRIES', () => {
         withProjectEnv('PD_ANALYSIS_MAX_RETRIES=5', (Config) => {
             assert.strictEqual(Config.ANALYSIS_CONFIG.maxRetries, 5);
+        });
+    });
+
+    it('项目 .env 覆写 PD_ANALYSIS_API_MAX_RETRIES', () => {
+        withProjectEnv('PD_ANALYSIS_API_MAX_RETRIES=6', (Config) => {
+            assert.strictEqual(Config.ANALYSIS_CONFIG.apiMaxRetries, 6);
         });
     });
 

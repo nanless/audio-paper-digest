@@ -36,7 +36,7 @@
 - 若成功结果的 `analysisSource=abstract`，说明 HTML/PDF 全文均不可用；该结果默认被博客发布预检阻断。人工确认必须发布时显式设置 `allowAbstractAnalysisPublish: true`，不要删除来源字段伪装成全文结果
 - 图片成功缓存位于 `data/current/image-cache/`；查看 `imageManifest.downloadOutcomes` 区分永久拒绝与瞬时错误，查看 `imageManifest.supplement.insertionDiagnostics` 排查非法 `paragraph_id`。禁止恢复章节末尾兜底
 - 检查 key/endpoint/model 三元组是否匹配（见 12.1 节）
-- 若超时，脚本会自动降级为纯文本重试；若仍失败，检查代理或减小并发
+- 主分析本来就是纯文本，不存在超时后的“纯文本降级”。API 超时按剩余活跃时间预算正常重试；图片下载或副模型插图失败会保留纯文本 checkpoint，并在下次只续跑未完成阶段。持续失败时检查代理、模型服务、`PD_ANALYSIS_API_MAX_RETRIES` 和并发度
 - 可用 `node scripts/deep-analysis-only.js` 安全续跑
 
 ### 12.3 重分析启动即报 key 未配置

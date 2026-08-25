@@ -26,6 +26,7 @@
 | `PAPER_ANALYZER_SECONDARY_API_KEY` | 副模型 API Key；未设置时复用主模型 key | 可选 |
 | `PD_ANALYSIS_CONCURRENCY` | 深度分析并发度 | 3 |
 | `PD_ANALYSIS_MAX_RETRIES` | 深度分析单篇重试次数 | 2 |
+| `PD_ANALYSIS_API_MAX_RETRIES` | 单次分析内部每个 LLM API 阶段的最大尝试次数 | 3 |
 | `PD_ANALYSIS_REPAIR_MAX_TOKENS` | 审校、表格、方法与结构局部修复的输出 token 上限 | 16000 |
 | `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` | 主分析超长全文的跨文档取样字符预算 | 200000 |
 | `PD_OPENSOURCE_EVIDENCE_MAX_CHARS` | 开源扫描的任务相关证据字符预算 | 16000 |
@@ -35,7 +36,7 @@
 | `PD_STRUCTURE_EVIDENCE_MAX_CHARS` | 最终结构修复的任务相关证据字符预算 | 40000 |
 | `PD_REANALYZE_CONCURRENCY` | 重分析并发度 | 3（与 `ANALYSIS_CONFIG.concurrency` 一致） |
 | `PD_FILTER_BATCH_SIZE` | LLM 筛选每批篇数 | 5 |
-| `PD_ARXIV_MAX_RESULTS` | arXiv 每类抓取数量 | 100 |
+| `PD_ARXIV_MAX_RESULTS` | arXiv 每类最终目标数；recent 固定最多两页/100 篇，不足由 search/Atom API 补足 | 100 |
 | `PD_KEYWORD_PREFILTER_ENABLED` | 是否启用高召回关键词预筛；设为 `0` 可临时禁用 | 1 |
 | `PD_ARXIV_FETCH_MAX_RETRIES` | arXiv recent/search/摘要/Atom 元数据最多尝试次数 | 5 |
 | `PD_ARXIV_FETCH_RETRY_BASE_DELAY_MS` | 普通元数据错误线性退避基数（毫秒） | 5000 |

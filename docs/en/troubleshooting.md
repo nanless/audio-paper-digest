@@ -36,7 +36,7 @@
 - `analysisSource=abstract` means both HTML and PDF full text were unavailable. Publishing blocks it by default; explicit human approval requires `allowAbstractAnalysisPublish: true`. Never remove provenance fields to disguise an abstract-only result
 - Successful figures are cached under `data/current/image-cache/`. Use `imageManifest.downloadOutcomes` for permanent versus transient failures and `imageManifest.supplement.insertionDiagnostics` for invalid `paragraph_id` values; do not restore section-end fallback
 - Check whether the key/endpoint/model triplet is correct (see Section 12.1)
-- If a timeout occurs, the script will automatically fall back to plain-text retry; if it still fails, check the proxy or reduce concurrency
+- Primary analysis is already text-only; there is no timeout-triggered plain-text downgrade. API timeouts retry within the remaining active-time budget, while image/secondary-stage failures preserve the text checkpoint and resume only incomplete stages. For persistent failures, check the proxy, model service, `PD_ANALYSIS_API_MAX_RETRIES`, and concurrency
 - You can safely resume with `node scripts/deep-analysis-only.js`
 
 ### 12.3 Re-analysis Reports "Key Not Configured" on Startup

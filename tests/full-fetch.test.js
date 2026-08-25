@@ -7,6 +7,7 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { validAnalysisPaper: validAnalysisRecord } = require('./valid-analysis-fixture.js');
 const { buildFilterInputSha256 } = require('../scripts/fetch-papers.js');
+const Config = require('../scripts/config.js');
 
 const execFileAsync = promisify(execFile);
 const EXPECTED_CATEGORIES = ['eess.AS', 'cs.SD', 'eess.SP', 'cs.CL', 'cs.LG', 'cs.AI', 'cs.MM'];
@@ -39,6 +40,19 @@ function writeResumeCheckpoint(dir, common, options = {}) {
 }
 
 describe('full-fetch helpers', () => {
+    it('仅在尚有下一个 arXiv 类别时计算类别间延迟', () => {
+        const { getArxivInterCategoryDelayMs } = require('../scripts/full-fetch.js');
+        assert.strictEqual(getArxivInterCategoryDelayMs(6, 7, 0, () => 0), 0);
+        assert.strictEqual(
+            getArxivInterCategoryDelayMs(5, 7, 0, () => 0),
+            Config.ARXIV_CONFIG.categoryDelayMs + 10000
+        );
+        assert.strictEqual(
+            getArxivInterCategoryDelayMs(5, 7, 300001, () => 0),
+            Config.ARXIV_CONFIG.categoryDelayMs + 10000 + 120000
+        );
+    });
+
     it('来源配置指纹包含强制 recent 翻页契约版本', () => {
         const { getSourceConfigFingerprint } = require('../scripts/full-fetch.js');
         const fingerprint = getSourceConfigFingerprint();

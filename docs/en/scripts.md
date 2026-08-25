@@ -21,6 +21,7 @@ Fetching atomically checkpoints each arXiv category and HuggingFace with paper c
 All configurations are read from `scripts/config.js`, with project-root `.env` overrides:
 - `ANALYSIS_CONFIG.concurrency = 3` (`PD_ANALYSIS_CONCURRENCY`)
 - `ANALYSIS_CONFIG.maxRetries = 2` (`PD_ANALYSIS_MAX_RETRIES`)
+- `ANALYSIS_CONFIG.apiMaxRetries = 3` (`PD_ANALYSIS_API_MAX_RETRIES`, maximum attempts per internal LLM API stage)
 - `ANALYSIS_CONFIG.retryDelayMs = 3000`
 - `FILTER_CONFIG.delayBetweenBatchesMs = 2000`
 
@@ -40,7 +41,7 @@ Full reanalysis.
 - Default data source: `data/current/deep-analysis-result.json` (supports custom file path via command line, compatible with old-format pure arrays)
 - Calls `deep-analyzer.js` for **all** papers in the file
 - Default concurrency matches `ANALYSIS_CONFIG.concurrency` (default 3), adjustable via `--concurrency N` or `PD_REANALYZE_CONCURRENCY` in the project `.env`
-- **Saves intermediate results every 5 papers** (save interval auto-adjusted in concurrent mode), **only successful results overwrite old data**; saves also sync `papers.json.digestStatus` from the current persisted results
+- After every success or failure, re-reads canonical state and immediately merges recovery data while holding the per-paper run lock. A failed attempt preserves checkpoints without replacing an older successful body, and that paper's `papers.json.digestStatus` is synchronized immediately
 - On startup, checks whether `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, `PAPER_ANALYZER_ENDPOINT` are set; exits directly if any are missing
 
 #### `scripts/reanalyze-selected.js`
@@ -143,7 +144,7 @@ Unified configuration center. All hardcoded parameters are centrally managed and
 
 | Config Item | Default | Env Override | Description |
 |--------|--------|-------------|------|
-| Per-category fetch count | 100 | `PD_ARXIV_MAX_RESULTS` | Max results per category |
+| Per-category target | 100 | `PD_ARXIV_MAX_RESULTS` | Final target; recent is fixed at two pages/100 papers and search/Atom API fill any remainder |
 | Maximum attempts | 5 | `PD_ARXIV_FETCH_MAX_RETRIES` | Shared by recent/search/abstract/API paths |
 | Ordinary-error backoff base | 5000ms | `PD_ARXIV_FETCH_RETRY_BASE_DELAY_MS` | Linear by attempt number |
 | Rate-limit backoff base | 60000ms | `PD_ARXIV_RATE_LIMIT_BASE_DELAY_MS` | `base*2^(attempt-1)` for HTTP 429 |
@@ -162,7 +163,7 @@ Unified configuration center. All hardcoded parameters are centrally managed and
 
 | Config Item | Default | Description |
 |--------|--------|------|
-| Default days | 7 | Only keep papers from the last 7 days |
+| Default days | 7 | Inclusive cutoff is Beijing today minus 7 days: today plus the preceding seven calendar dates |
 | Max pages | 20 | daily_papers pagination limit |
 | Per-page count | 100 | Items per pagination page |
 | Page delay | 300ms | Delay between pagination requests |
@@ -282,7 +283,7 @@ Multimodal deep analyzer. The analysis flow is an **up-to-8-round progressive pr
 Stage fingerprints bind the actual truncated primary input, the pre-scoring structure-repair body, and image candidates/download hashes/pre-image body. A change invalidates only that stage and downstream work. Paper payloads are merged only under the shared per-paper lock; batch/final statistics never rewrite cumulative stale paper snapshots.
 
 **API Calls**:
-- `callModel(messages, maxTokens)`: retry-wrapped API call encapsulation (up to 3 inner retries, exponential backoff: first 10s, then double)
+- `callModel(messages, maxTokens)`: retry-wrapped API call encapsulation (each internal LLM API stage makes at most 3 attempts by default, configurable with `PD_ANALYSIS_API_MAX_RETRIES`; wait 10s after the first failure, then double exponentially)
 - `_callModelOnce()`: one bounded API call with an active-time overall budget; the underlying request has an absolute deadline, socket timeout, response-size limit, and explicit request destruction
 - LLM API requests forcibly set `agent: false`, disabling connection reuse to bypass proxy pollution (avoiding MiMo 403)
 
@@ -439,7 +440,7 @@ LLM-level fix: Issues where LLM review returns `auto_fixable: true` require `fix
 
 #### `scripts/digest-run-report.js`
 
-`npm run digest:status -- --date YYYY-MM-DD` writes an atomic machine-readable final report covering fetch, filter, analysis, strict review, remote publication, TOP 10 infographics, and the digest cover. Terminal output is a compact stage/count/error summary; full `sourceHealth` remains in the report JSON. It exits zero only when every required stage is complete and never mutates business-stage state.
+`npm run digest:status -- --date YYYY-MM-DD` writes an atomic machine-readable final report covering fetch, filter, analysis, strict review, remote publication, TOP 10 infographics, and the digest cover. Terminal output is a compact stage/count/error summary; full `sourceHealth` remains in the report JSON. It exits zero only when every required stage is complete and never mutates business-stage state. The report reflects only state read during that invocation; later stage progress does not update it, so rerun the command before treating it as current.
 
 **Important Limitation**: `fetchedAt` is the fetch time, not the paper's `published` date on arXiv. Please explicitly specify `--date` when running across midnight.
 
@@ -450,7 +451,7 @@ Generate WeChat Official Account article drafts.
 - Default data source: `data/current/deep-analysis-result.json` (supports custom path via command line)
 - Filters by `fetchBatchDate`/`batchDate` first and legacy `fetchedAt` second (default date is today in Beijing time); pass `--all` to use all papers in the input file
 - The default source requires a same-date remotely verified blog snapshot; pass `--ignore-blog-snapshot` only for an explicit independent run
-- WeChat Official Account `APP_ID` / `APP_SECRET` are read from the project `.env`
+- WeChat Official Account `APP_ID` / `APP_SECRET` are read from the project `.env`; a real draft also requires `WECHAT_THUMB_MEDIA_ID`, which only `--dry-run` may omit
 - Supports `--dry-run`: only generates the local preview HTML; does not fetch a token, upload images, or create drafts
 - **Image Upload**: upload only in-body Markdown images and figures listed in `selectedImageUrls` -> upload to WeChat CDN -> replace with WeChat URLs. Cache stored in `/tmp/wechat-image-cache.json`; raw `allImageUrls` candidates are not uploaded or published directly
 - **Auto Split into Parts**: single draft limit is approximately 48000 characters (HTML); automatically split into multiple drafts if exceeded
@@ -541,7 +542,7 @@ Generate Feishu (Lark) documents.
 #### `scripts/backfill_papers.py`
 
 Backfill paper IDs in the background (no analysis).
-- Fetch arXiv 7 categories (30 papers each) and HF Papers (last 7 days)
+- Fetch arXiv 7 categories (30 papers each) and HF Papers (by default, Beijing today plus the preceding seven calendar dates)
 - Rate-limit resilient design: request timeout 30s, exponential backoff on rate-limit, early stop after 20 consecutive known IDs
 - Writes to `data/current/papers.json`
 - Additional output: `data/backfill-result.json`

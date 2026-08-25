@@ -21,6 +21,7 @@ Codex 对“运行/进行某日论文速递”请求使用的默认脚本编排�
 所有配置从 `scripts/config.js` 读取，支持项目根 `.env` 覆写：
 - `ANALYSIS_CONFIG.concurrency = 3`（`PD_ANALYSIS_CONCURRENCY`）
 - `ANALYSIS_CONFIG.maxRetries = 2`（`PD_ANALYSIS_MAX_RETRIES`）
+- `ANALYSIS_CONFIG.apiMaxRetries = 3`（`PD_ANALYSIS_API_MAX_RETRIES`，单次分析内部每个 LLM API 阶段的最大尝试次数）
 - `ANALYSIS_CONFIG.retryDelayMs = 3000`
 - `FILTER_CONFIG.delayBetweenBatchesMs = 2000`
 
@@ -40,7 +41,7 @@ Codex 对“运行/进行某日论文速递”请求使用的默认脚本编排�
 - 默认数据源：`data/current/deep-analysis-result.json`（支持命令行传自定义文件路径，兼容旧格式纯数组）
 - 对文件中**全部**论文重新调用 `deep-analyzer.js`
 - 默认并发度与 `ANALYSIS_CONFIG.concurrency` 一致（默认 3），支持通过 `--concurrency N` 或项目 `.env` 中的 `PD_REANALYZE_CONCURRENCY` 调整
-- **每 5 篇保存一次中间结果**（并发模式下自动调整保存间隔），**仅成功结果覆盖旧数据**；保存时按当前结果同步 `papers.json.digestStatus`
+- 每篇成功或失败后都在单篇运行锁内立即重读 canonical、合并并保存恢复状态；失败尝试保留 checkpoint 且不会覆盖旧成功正文，同时立即同步该篇 `papers.json.digestStatus`
 - 启动时检查 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT` 是否已设置，缺失则直接退出
 
 #### `scripts/reanalyze-selected.js`
@@ -147,7 +148,7 @@ arXiv 抓取与 LLM 筛选模块。
 
 | 配置项 | 默认值 | 项目 `.env` 覆写 | 说明 |
 |--------|--------|-------------|------|
-| 每类抓取数 | 100 | `PD_ARXIV_MAX_RESULTS` | 每分类最大返回数 |
+| 每类抓取目标数 | 100 | `PD_ARXIV_MAX_RESULTS` | 最终目标；recent 固定最多两页/100 篇，不足部分由 search/Atom API 补足 |
 | 最大尝试次数 | 5 | `PD_ARXIV_FETCH_MAX_RETRIES` | recent/search/摘要/API 统一上限 |
 | 普通错误退避基数 | 5000ms | `PD_ARXIV_FETCH_RETRY_BASE_DELAY_MS` | 按尝试次数线性退避 |
 | 限流退避基数 | 60000ms | `PD_ARXIV_RATE_LIMIT_BASE_DELAY_MS` | 429 按 `base*2^(attempt-1)` 退避 |
@@ -166,7 +167,7 @@ arXiv 抓取与 LLM 筛选模块。
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| 默认天数 | 7 | 只保留近 7 天论文 |
+| 默认天数 | 7 | 含端点截止为北京时间今天减 7 天，即今天及此前 7 个日历日期 |
 | 最大页数 | 20 | daily_papers 分页上限 |
 | 每页数量 | 100 | 分页每页条数 |
 | 页间延迟 | 300ms | 分页请求间隔 |
@@ -196,7 +197,7 @@ arXiv 抓取与 LLM 筛选模块。
 
 - `analyzePaperWithRetry(paper, options)`：单篇分析（带重试 + 自动解析）
 - `analyzeBatch(papers, options)`：批量分析（支持并发控制 + 增量保存回调）；关键回调异常会向入口传播，不能被当作分析成功吞掉
-- `mergeAndSaveResults(newResults, filePath, extraData)`：按 ID 去重合并并保存，**自带失败结果保护**；跨进程锁内重新读取并校验 `generation`，拒绝陈旧快照覆盖或损坏 current JSON
+- `mergeAndSaveResults(newResults, filePath, extraData)`：按 ID 去重合并并保存，**自带失败结果保护**；跨进程锁内重读最新 canonical、合并并递增 `generation`，拒绝陈旧快照覆盖或损坏 current JSON；不使用调用方 expected-generation 乐观比较
 - 成功判定要求 `analysisManifest` 版本 1 的全部必需阶段进入终态，且不存在最新失败标记；失败合并保留旧成功正文，同时叠加新的 checkpoint、恢复图片清单与最近尝试错误，成功重试后再清理失败标记
 - 文件锁 owner 带随机 token 并检查本机 PID；旧 owner 不能删除替代锁，存活进程持有的锁不会因时间过长被回收
 
@@ -287,7 +288,7 @@ HuggingFace Papers 抓取模块。
 每个分析阶段另有输入/输出快照和指纹：主分析绑定实际截断输入，评分绑定评分前结构修复正文，插图绑定候选集合、下载内容 SHA 与插图前正文。任何变化只失效当前及下游阶段。所有入口仅在同篇共享锁内合并论文内容；批次/最终统计不会再回写累计 paper payload。
 
 **API 调用**：
-- `callModel(messages, maxTokens)`：带重试的 API 调用封装（内层最多 3 次重试，指数退避：第一次 10 秒，之后翻倍）
+- `callModel(messages, maxTokens)`：带重试的 API 调用封装（内层每个 LLM API 阶段默认最多尝试 3 次，可用 `PD_ANALYSIS_API_MAX_RETRIES` 调整；第一次失败后等待 10 秒，之后指数翻倍）
 - `_callModelOnce()`：单次 API 调用共享 20 分钟活跃时间预算；每秒心跳检测系统睡眠/长时间挂起并排除墙钟跳变，唤醒后的请求错误仍可在剩余预算内重试
 - LLM API 请求强制设置 `agent: false`，禁用连接复用以绕过代理污染（避免 MiMo 403）
 
@@ -448,7 +449,7 @@ LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，必须带 `fix
 
 #### `scripts/digest-run-report.js`
 
-按 `--date YYYY-MM-DD` 汇总抓取、筛选、深度分析、博客 review/远端发布、TOP 10 长图和汇总封面状态，原子写入 `data/current/digest-run-reports/<date>.json`。终端默认只打印阶段完成数、待处理数与错误摘要；完整 `sourceHealth` 仍保存在 JSON 报告。只有所有必需阶段完整才返回 0；用于日更结束后的统一机器门禁，不会修改任一业务阶段状态。
+按 `--date YYYY-MM-DD` 汇总抓取、筛选、深度分析、博客 review/远端发布、TOP 10 长图和汇总封面状态，原子写入 `data/current/digest-run-reports/<date>.json`。终端默认只打印阶段完成数、待处理数与错误摘要；完整 `sourceHealth` 仍保存在 JSON 报告。只有所有必需阶段完整才返回 0；用于日更结束后的统一机器门禁，不会修改任一业务阶段状态。报告只绑定生成时读取到的状态，后续阶段推进不会自动改写它，验收当前状态必须重跑命令。
 
 **重要限制**：`fetchedAt` 是抓取时间，不是论文在 arXiv 上的 `published` 日期。跨天运行时请显式指定 `--date`。
 
@@ -458,7 +459,7 @@ LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，必须带 `fix
 
 - 默认数据源：优先读取 `data/current/deep-analysis-result.json`；current 已滚动时按目标博客发布日期回退受控日期归档（支持命令行传入自定义路径）
 - 默认按目标博客发布日期绑定已远端验证的 `publishedPapers` 快照，论文原始抓取批次可以更早，自定义路径也仍绑定快照。独立发布须显式传 `--ignore-blog-snapshot`；仅在独立模式下按 `fetchBatchDate`/`batchDate`（旧数据回退严格北京时间 `fetchedAt`）过滤，`--all` 才使用全部输入
-- 微信公众号 `APP_ID` / `APP_SECRET` 从项目 `.env` 读取
+- 微信公众号 `APP_ID` / `APP_SECRET` 从项目 `.env` 读取；真实草稿还必须配置 `WECHAT_THUMB_MEDIA_ID`，只有 `--dry-run` 可省略
 - 支持 `--dry-run`：只生成本地预览 HTML，不获取 Token、不上传图片、不创建草稿
 - **图片上传**：仅上传正文 Markdown 图片和 `selectedImageUrls` 中的已选图片 → 上传到微信 CDN → 替换为微信 URL。缓存保存在 `/tmp/wechat-image-cache.json`，不会直接上传/发布 `allImageUrls` 候选图
 - **自动分 Part**：单篇草稿上限约 48000 字符（HTML），超过自动拆分为多个草稿
@@ -548,7 +549,7 @@ TOP N 精选版的一句话亮点使用受控并发生成，默认并发度为 5
 #### `scripts/backfill_papers.py`
 
 后台补录论文 ID（不分析）。
-- 抓取 arXiv 7 分类（每类 30 篇）和 HF Papers（近 7 天）
+- 抓取 arXiv 7 分类（每类 30 篇）和 HF Papers（默认含北京时间今天及此前 7 个日历日期）
 - 耐限流设计：请求超时 30 秒，限流时指数退避，连续 20 篇已知 ID 提前停止
 - 写入 `data/current/papers.json`
 - 额外输出 `data/backfill-result.json`

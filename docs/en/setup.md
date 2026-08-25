@@ -26,6 +26,7 @@ Benefits of this design:
 | `PAPER_ANALYZER_SECONDARY_API_KEY` | Secondary model API key; falls back to the primary key when unset | Optional |
 | `PD_ANALYSIS_CONCURRENCY` | Deep analysis concurrency | 3 |
 | `PD_ANALYSIS_MAX_RETRIES` | Per-paper retry count for deep analysis | 2 |
+| `PD_ANALYSIS_API_MAX_RETRIES` | Maximum attempts for each internal LLM API stage within one paper-analysis attempt | 3 |
 | `PD_ANALYSIS_REPAIR_MAX_TOKENS` | Output-token cap for revision, table, method, and structure repair stages | 16000 |
 | `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` | Cross-document sampling budget for very long primary-analysis inputs | 200000 |
 | `PD_OPENSOURCE_EVIDENCE_MAX_CHARS` | Task-focused evidence budget for open-source scanning | 16000 |
@@ -35,7 +36,7 @@ Benefits of this design:
 | `PD_STRUCTURE_EVIDENCE_MAX_CHARS` | Task-focused evidence budget for final structure repair | 40000 |
 | `PD_REANALYZE_CONCURRENCY` | Re-analysis concurrency | 3 (matches `ANALYSIS_CONFIG.concurrency`) |
 | `PD_FILTER_BATCH_SIZE` | LLM filtering batch size | 5 |
-| `PD_ARXIV_MAX_RESULTS` | Number of papers to fetch per arXiv category | 100 |
+| `PD_ARXIV_MAX_RESULTS` | Final per-category target; recent is capped at two pages/100 papers and search/Atom API fill the remainder | 100 |
 | `PD_KEYWORD_PREFILTER_ENABLED` | Enable the high-recall keyword prefilter; set to `0` to disable temporarily | 1 |
 | `PD_ARXIV_FETCH_MAX_RETRIES` | Maximum attempts for recent/search/abstract/Atom metadata requests | 5 |
 | `PD_ARXIV_FETCH_RETRY_BASE_DELAY_MS` | Linear retry-backoff base for ordinary metadata failures, in milliseconds | 5000 |

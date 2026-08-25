@@ -1069,7 +1069,14 @@ function summarizeModelInput(messages) {
     return { textChars, estimatedTextTokens: Math.ceil(textChars / 3), images };
 }
 
-async function callModelWithConfig(messages, maxTokens, maxRetries = 3, config = null) {
+function resolveApiMaxRetries(maxRetries) {
+    return Number.isInteger(maxRetries) && maxRetries > 0
+        ? maxRetries
+        : API_MAX_RETRIES;
+}
+
+async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RETRIES, config = null) {
+    maxRetries = resolveApiMaxRetries(maxRetries);
     const cfg = config || DEEP_CONFIG;
     const safeMessages = sanitizeModelMessages(messages);
     const budget = createActiveTimeBudget(API_OVERALL_TIMEOUT_MS);
@@ -1237,7 +1244,7 @@ async function callModel(messages, maxTokens = 8000, options = {}) {
     console.log(`    [analyzer] ╔═══════════════════════════════════════════════════╗`);
     console.log(`    [analyzer] ║  正在使用模型: ${modelName}`);
     console.log(`    [analyzer] ╚═══════════════════════════════════════════════════╜`);
-    return await callModelWithConfig(messages, maxTokens, options.maxRetries || 3, {
+    return await callModelWithConfig(messages, maxTokens, resolveApiMaxRetries(options.maxRetries), {
         ...DEEP_CONFIG,
         ...(Number.isFinite(options.temperature) ? { temperature: options.temperature } : {})
     });
@@ -2699,7 +2706,7 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
         try {
             planText = await callModelWithConfig(
                 [{ role: 'user', content: supplementContent }],
-                API_MAX_TOKENS, 3, { ...SECONDARY_CONFIG, temperature: IMAGE_PLAN_TEMPERATURE }
+                API_MAX_TOKENS, API_MAX_RETRIES, { ...SECONDARY_CONFIG, temperature: IMAGE_PLAN_TEMPERATURE }
             );
         } catch (error) {
             if (!isCorruptedMultimodalError(error)) throw error;
@@ -2711,7 +2718,7 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
             console.log(`    [secondary]    normalized_images=${normalizedInputCount} | mime=image/jpeg | base64_chars=${normalizedBase64Chars}`);
             planText = await callModelWithConfig(
                 [{ role: 'user', content: supplementContent }],
-                API_MAX_TOKENS, 3, { ...SECONDARY_CONFIG, temperature: IMAGE_PLAN_TEMPERATURE }
+                API_MAX_TOKENS, API_MAX_RETRIES, { ...SECONDARY_CONFIG, temperature: IMAGE_PLAN_TEMPERATURE }
             );
         }
     } finally {
@@ -3080,7 +3087,7 @@ async function analyzePaperDeep(paper) {
         try {
             analysis = await callModelWithConfig(
                 [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
-                API_MAX_TOKENS, 3, DEEP_CONFIG
+                API_MAX_TOKENS, API_MAX_RETRIES, DEEP_CONFIG
             );
             markRecoveryStage(analysisManifest, 'primaryAnalysis', 'complete', { fingerprint: recoveryFingerprints.primaryAnalysis });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
@@ -4589,6 +4596,7 @@ module.exports = {
     analyzePaperDeep,
     parseAnalysis,
     callModel,
+    resolveApiMaxRetries,
     createActiveTimeBudget,
     getActiveRemainingTimeoutMs,
     getRemainingTimeoutMs,

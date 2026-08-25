@@ -53,6 +53,15 @@ const FILTER_DECISIONS_FILE = Config.FILES.filterDecisions;
 const FETCH_CHECKPOINT_FILE = Config.FILES.fetchCheckpoint;
 const FULL_FETCH_RUN_LOCK = path.join(Config.CURRENT_DIR, '.full-fetch-run');
 
+function getArxivInterCategoryDelayMs(categoryIndex, categoryCount, fetchDurationMs, randomFn = Math.random) {
+    if (categoryIndex >= categoryCount - 1) return 0;
+    const baseJitter = Math.floor(randomFn() * 20000) + 10000;
+    const rateLimitPenalty = fetchDurationMs > 300000
+        ? 120000
+        : (fetchDurationMs > 120000 ? 60000 : (fetchDurationMs > 60000 ? 30000 : 0));
+    return FETCH_DELAY_MS + baseJitter + rateLimitPenalty;
+}
+
 function shouldUsePaperForFetchDedup(paper) {
     const status = paper?.digestStatus?.status;
     return status !== 'pending_analysis' && status !== 'analysis_failed';
@@ -1378,15 +1387,21 @@ async function runFullFetch() {
                 console.log(`   继续运行，尝试其他来源...`);
             }
 
-            // 类别间延迟：基础延迟 + 随机抖动 + 限流检测补偿
-            const baseJitter = Math.floor(Math.random() * 20000) + 10000; // 10-30秒随机
-            const rateLimitPenalty = fetchDuration > 300000 ? 120000 : (fetchDuration > 120000 ? 60000 : (fetchDuration > 60000 ? 30000 : 0));
-            const totalDelay = FETCH_DELAY_MS + baseJitter + rateLimitPenalty;
-            if (rateLimitPenalty > 0) {
-                console.log(`    检测到可能的限流，额外等待 ${(rateLimitPenalty/1000).toFixed(0)} 秒...`);
+            // 类别间延迟：基础延迟 + 随机抖动 + 限流检测补偿。
+            // 最后一个 arXiv 类别后已无“下一类别”，应立即进入 HuggingFace 抓取。
+            const totalDelay = getArxivInterCategoryDelayMs(
+                i,
+                shuffledCategories.length,
+                fetchDuration
+            );
+            if (totalDelay > 0) {
+                const rateLimitPenalty = fetchDuration > 300000 ? 120000 : (fetchDuration > 120000 ? 60000 : (fetchDuration > 60000 ? 30000 : 0));
+                if (rateLimitPenalty > 0) {
+                    console.log(`    检测到可能的限流，额外等待 ${(rateLimitPenalty/1000).toFixed(0)} 秒...`);
+                }
+                console.log(`    等待 ${(totalDelay/1000).toFixed(0)} 秒后继续下一类别...`);
+                await new Promise(resolve => setTimeout(resolve, totalDelay));
             }
-            console.log(`    等待 ${(totalDelay/1000).toFixed(0)} 秒后继续下一类别...`);
-            await new Promise(resolve => setTimeout(resolve, totalDelay));
         }
 
         console.log(`\narxiv 抓取完成: ${arxivPapers.length} 篇`);
@@ -1841,6 +1856,7 @@ if (require.main === module) {
 module.exports = {
     fullFetch,
     runFullFetch,
+    getArxivInterCategoryDelayMs,
     autoArchiveCurrentData,
     inferLegacyAnalysisArrayBatchDate,
     migrateLegacyAnalysisResultToCurrent,

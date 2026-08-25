@@ -14,7 +14,7 @@ LLM endpoint 必须使用 HTTPS（仅 loopback 本地测试允许 HTTP）。arXi
 
 发布后还生成一张批次汇总图，标题、热门方向和 TOP 10 排行榜均从已发布批次对应的审计数据确定性计算。论文长图与汇总图独立绑定数据、prompt、任务 token 和资产 SHA；重跑只补失败、缺失、损坏或指纹失效项。同一天全部生成图片扁平归档到 `data/archive/<日期>/visual-summaries/`：封面为 `00-digest-cover-<日期>.png`，论文长图为 `<两位排名>-<paper-id>-<title-slug>.png`，严格按最终 rank 而非生成完成顺序编号；图片不滞留在 current。它们不进入已经发布的博客清单，也不构成博客 generate/review/push 的前置门禁。
 
-LLM 筛选前默认执行高召回关键词预筛，核心音频类别提供兜底，明显无关论文不会消耗 LLM 配额。`npm run keyword:recall` 同时校验人工正负金标与历史有效正样本；已确认的历史 LLM 误筛必须显式记录理由，不计入有效正样本分母。日更结束后运行 `npm run digest:status -- --date YYYY-MM-DD`，统一验收抓取、筛选、分析、博客远端发布和两类视觉资产，并保存机器可读报告。历史日期在 current 滚动后读取同日 archive，但只有 raw/decisions/filtered/deep 的批次、逐篇决定覆盖和论文集合全部一致才会报告完整；当前日期不会回退 archive。
+LLM 筛选前默认执行高召回关键词预筛，核心音频类别提供兜底，明显无关论文不会消耗 LLM 配额。`npm run keyword:recall` 同时校验人工正负金标与历史有效正样本；已确认的历史 LLM 误筛必须显式记录理由，不计入有效正样本分母。日更结束后运行 `npm run digest:status -- --date YYYY-MM-DD`，统一验收抓取、筛选、分析、博客远端发布和两类视觉资产，并保存机器可读报告。报告只反映命令执行时刻；后续 push 或视觉 `record` 后必须重跑，不能把旧报告当作实时状态。历史日期在 current 滚动后读取同日 archive，但只有 raw/decisions/filtered/deep 的批次、逐篇决定覆盖和论文集合全部一致才会报告完整；当前日期不会回退 archive。
 
 深度分析采用分阶段证据预算控制 token：主分析仍覆盖全文，超长论文按全文位置和任务关键词均衡取样；开源扫描、审校重写、评分审计、方法/表格和结构修复只接收各自相关的证据切片。新分析和重分析必须通过版本化硬契约：`bounded-v1` 限制最多 2 张表、每表 12 个数据行、8 个指标列，并要求表头、分隔行和每个数据行列数一致；`detailed-v1` 要求方法章节至少 600 个中文字符、三个有效段落和明确结构描述。无对应版本标记的既有成功记录保持兼容。博客 review 独立论文页并发度限制为 1–5；微信、飞书和小红书在默认数据源下必须绑定同日博客 generation manifest 与远端验证 receipt 的 `publishedPapers` 权威快照，清单缺失也会失败；明确独立运行须传 `--ignore-blog-snapshot`。视觉登记必须在逐项核对 `qaClaims` 后显式传 `--qa-attested true`，声明随资产写入 manifest 且缺失或损坏时完成态失效。
 
@@ -233,7 +233,7 @@ python3 scripts/manual-review-blog.py --date 2026-04-21 --attestation data/curre
 # 此命令不调用任何 LLM/API；任何一篇失败都会拒绝写入整批 canonical 结果
 npm run manual:analyze -- --date 2026-04-21 --spec data/current/manual-analysis-spec-2026-04-21.json
 
-# 完全离线抓取与人工筛选：先生成带来源指纹的候选全集，再逐篇提交 related 决定
+# 无筛选模型的人工接管：--raw 仍联网抓取并生成带来源指纹的候选全集，再逐篇提交 related 决定
 node scripts/manual-fetch.js --date 2026-04-21 --raw
 node scripts/manual-fetch.js --date 2026-04-21 --select data/current/manual-filter-spec-2026-04-21.json
 
