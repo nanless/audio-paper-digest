@@ -27,7 +27,7 @@ describe('Manual v5 isolated paper template', () => {
         assert.equal(template.papers['2608.12345'].researchBrief.paperSubagent.singlePaperOnly, true);
         assert.equal(template.papers['2608.12345'].researchBrief.paperSubagent.model, 'gpt-5.6-terra');
         assert.equal(template.papers['2608.12345'].researchBrief.paperSubagent.reasoningEffort, 'high');
-        assert.equal(template.papers['2608.12345'].researchBrief.editorialPlan.version, 1);
+        assert.equal(template.papers['2608.12345'].researchBrief.editorialPlan.version, 2);
         assert.deepEqual(
             template.papers['2608.12345'].figureReview.decisions.map(item => item.url),
             ['https://arxiv.org/a.png', 'https://arxiv.org/b.png']

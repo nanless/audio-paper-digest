@@ -221,7 +221,7 @@ Multimodal deep analyzer. The analysis flow is an **up-to-8-round progressive pr
 - `analyzePaperDeep(paper)`: fetches arXiv HTML/PDF full text. Primary analysis uses at most 200K characters by default; very long sources are sampled across the head, quartiles, middle, tail, and task-relevant chunks instead of keeping only a prefix. It then preselects candidate images. Dual-model mode downloads candidate images serially and lets the secondary model output a JSON insertion plan for high-value figures; single-model mode only stores candidate image metadata. `allImageUrls` stores candidates, while `selectedImageUrls` / `imageUrls` store selected figures
 - New analyses and reanalyses write `analysisManifest.contracts.experimentTables=evidence-rich-v2`. It preserves the maximum of two tables, 12 data rows, and eight metric columns, while requiring an identifier field, at least three evidence rows and two numeric cells, metric directions, a concrete pre-table comparison question, and a post-table synthesis plus evidence boundary. Source-provided ablations or negative results must be represented. Missing, shallow, narrative-card, or illegally omitted tables enter local repair. Node validation and Python publication preflight are kept in parity; historical `bounded-v1` retains upper-bound-only semantics.
 - Loads `prompts/deep-analysis.md`, replaces placeholders, and calls the LLM
-- Output includes: document type, score, machine summary, tags, authors and affiliations, snarky review, core summary, method overview and architecture, core innovations, experimental results, detailed description, score rationale, limitations and issues, open source details
+- The automatic API route's canonical output includes document type, score, machine summary, tags, authors and affiliations, snarky review, core summary, method overview and architecture, core innovations, experimental results, detailed description, score rationale, limitations and issues, and open source details. Those fixed sections are the parsing and audit contract; Manual v5 does not publish them verbatim as the middle-page layout, but replaces that layout with SHA-verified `editorial.readerArticle`.
 - `parseAnalysis(analysis)`: parses the analysis, normalizes `document_type`, and marks new results with `type-aware-v1`. `score` is recalculated only when all eight dimensions are complete, unique, include a concrete per-dimension reason, use the correct denominators, and contain finite in-range values; otherwise a contract error blocks saving and publishing
 
 **Round 2 -- Open Source Scan (`scanOpensource`)**
@@ -386,7 +386,7 @@ Publish to Hugo blog (GitHub Pages).
 - Hugo frontmatter: `title` (date + paper digest), `date`, `tags` (TOP 10 tags), `categories: [Paper Digest]`, `description`, `layout: posts`
 - **Today's Overview**: total paper count, hot direction distribution (`█` character simulated bar chart), TOP 10 score leaderboard
 - **Leaderboard Table**: rank (medal), paper title (link to standalone page), score, tier (`rankBucket`), main task tag
-- **Paper List**: each paper's score emoji, title link, authors and affiliations, snarky review, core summary
+- **Paper List**: for each paper, Chinese title, English title/arXiv link, tags/score, snarky review, core summary, and open resources appear in that reader order. Author and affiliation metadata remain available without interrupting it.
 
 **Standalone Page (`YYYY-MM-DD-<slug>.md`)**:
 - Hugo frontmatter:
@@ -396,7 +396,7 @@ Publish to Hugo blog (GitHub Pages).
   - `categories: [Paper Digest]`
   - `description`: `main task tag | score/10`, falls back to title if absent
   - `hiddenInHomeList: true`
-- Body: tag string -> score/tier/tag meta info -> machine score details -> authors and affiliations -> each analysis section -> link back to summary page
+- Manual v5 body: Chinese reader title -> English original title/arXiv link -> tags/score -> snarky review -> core summary -> paper-specific `readerArticle` deep-reading sections -> open resources -> metadata and final per-dimension score evidence -> link back to summary page. Fixed canonical sections remain fact/image/score audit inputs, not reader-visible method/innovation/results/detail/limitation panels. Historical records without a valid `readerArticle` retain the legacy layout.
 
 **Publish Flow**:
 1. `generate-blog.py` only generates and installs Markdown, then writes a generation manifest. It never calls an LLM, commits, or pushes.

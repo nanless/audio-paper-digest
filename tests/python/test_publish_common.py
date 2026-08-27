@@ -53,9 +53,14 @@ from publish_common import (  # noqa: E402
     MANUAL_AUDIT_CHECKS,
     MANUAL_STAGE_EVIDENCE_STAGES,
     _manual_hash,
+    _manual_editorial_prose_paragraphs,
+    _manual_han_character_count,
+    _manual_numeric_lexemes,
     _manual_v4_reader_view,
+    _final_markdown_image_occurrences,
     _validate_manual_result_claim_bindings,
     _validate_manual_v4_result_claims,
+    _validate_manual_v5_all_rejected_images,
     _validate_manual_takeover_manifest,
 )
 from utils import parse_analysis  # noqa: E402
@@ -268,6 +273,102 @@ def manual_result_claim_fixture(
 
 
 class PublishCommonSanitizerTest(unittest.TestCase):
+    def test_manual_numeric_lexemes_collapse_only_adjacent_duplicate_decimals(self):
+        # PDF/HTML MathML fallbacks may duplicate the same rendered decimal
+        # without a separator.  Source quotes are intentionally retained as
+        # raw evidence; only numeric comparison sees the normalized token.
+        self.assertEqual(_manual_numeric_lexemes('raw 3.73.7'), ['3.7'])
+        self.assertEqual(_manual_numeric_lexemes('raw 4.644.64 / 1.751.75'), [
+            '4.64', '1.75',
+        ])
+
+        # Do not coalesce ordinary repeated values with a separator, or a
+        # different adjacent decimal sequence that merely looks similar.
+        self.assertEqual(_manual_numeric_lexemes('3.7 3.7'), ['3.7', '3.7'])
+        self.assertNotEqual(_manual_numeric_lexemes('4.644.65'), ['4.64'])
+
+    def test_manual_result_claim_accepts_raw_duplicate_decimal_source_quote(self):
+        claim = manual_result_claim_fixture('3.7')
+        claim['sourceQuote'] = claim['sourceQuote'].replace('3.7', '3.73.7')
+        claim['sourceBindings']['value'] = '3.73.7'
+
+        # The raw source quote must remain auditable, while binding and claim
+        # comparison recognize its duplicated rendering as the same 3.7.
+        self.assertIn('3.73.7', claim['sourceQuote'])
+        self.assertIsNone(_validate_manual_result_claim_bindings(
+            claim, 'sourceBindings', claim['sourceQuote'], 'fixture',
+        ))
+
+    def test_manual_v5_all_reject_images_requires_full_specific_coverage(self):
+        urls = [
+            'https://example.com/pipeline.png',
+            'https://example.com/curve.png',
+        ]
+        paper = {
+            'selectedImageUrls': [],
+            'imageManifest': {
+                'candidates': [{'url': url} for url in urls],
+                'selected': [],
+                'insertionPlan': [],
+            },
+        }
+        decisions = [
+            {
+                'url': urls[0], 'decision': 'reject',
+                'reason': '已核对受控缓存 PNG 为 1917×989；手机宽度下完整流程的细字缩小到无法辨认，不能为本篇基准构造的论证提供可独立核对的证据。',
+                'captionIdentity': 'Figure 2: pipeline overview',
+            },
+            {
+                'url': urls[1], 'decision': 'reject',
+                'reason': 'ResponseTokenCurve 缺少受控缓存，无法对像素或裁图作审计性声明；它不能为本篇关键结果比较提供可独立核对的论证证据。',
+                'captionIdentity': 'ResponseTokenCurve diagnostic panel',
+            },
+        ]
+        self.assertIsNone(_validate_manual_v5_all_rejected_images(
+            paper, decisions, 'fixture',
+        ))
+        with self.assertRaisesRegex(PublishDataValidationError, '未逐项覆盖'):
+            _validate_manual_v5_all_rejected_images(paper, decisions[:-1], 'fixture')
+        generic = copy.deepcopy(decisions)
+        generic[0]['reason'] = '图片在移动端不够清晰，因此不建议插入正文；它没有提供比文字更有价值的信息，也不适合在博客中展示。'
+        with self.assertRaisesRegex(PublishDataValidationError, '不是论文特有'):
+            _validate_manual_v5_all_rejected_images(paper, generic, 'fixture')
+        duplicated = copy.deepcopy(decisions)
+        duplicated[1]['reason'] = duplicated[0]['reason'].replace('1917×989', '1917 × 989')
+        with self.assertRaisesRegex(PublishDataValidationError, '不得跨图复用'):
+            _validate_manual_v5_all_rejected_images(paper, duplicated, 'fixture')
+        inconsistent = copy.deepcopy(paper)
+        inconsistent['imageManifest']['insertionPlan'] = [{'imageNumber': 1}]
+        with self.assertRaisesRegex(PublishDataValidationError, '空 insertionPlan'):
+            _validate_manual_v5_all_rejected_images(inconsistent, decisions, 'fixture')
+
+    def test_manual_v5_all_reject_images_accepts_js_specific_visual_anchors(self):
+        """Publish must accept the same specific anchors as the JS record/spec gate."""
+        anchors = ['系统总览', '矩阵', '分布', '公式', '箭头', '分桶']
+        urls = [f'https://example.com/{index}.png' for index in range(len(anchors))]
+        paper = {
+            'selectedImageUrls': [],
+            'imageManifest': {
+                'candidates': [{'url': url} for url in urls],
+                'selected': [],
+                'insertionPlan': [],
+            },
+        }
+        decisions = [
+            {
+                'url': url,
+                'decision': 'reject',
+                'reason': (
+                    f'该{anchor}图只服务于第 {index + 1} 个局部说明，'
+                    '与本篇跨条件比较的证据链不对应，因此正文以文字保留其限定关系而不单独插入。'
+                ),
+            }
+            for index, (url, anchor) in enumerate(zip(urls, anchors), start=1)
+        ]
+        self.assertIsNone(_validate_manual_v5_all_rejected_images(
+            paper, decisions, 'fixture',
+        ))
+
     def test_manual_binding_single_character_whitelist_matches_node(self):
         claim = manual_result_claim_fixture('7.1')
         claim['sourceQuote'] += ' unit % direction ↓'
@@ -329,6 +430,22 @@ class PublishCommonSanitizerTest(unittest.TestCase):
 方案 A 区别于方案 B；slimmable 共享网络区别于 3 个独立网络。
 '''
         self.assertIsNone(validate_manual_editorial_quality_v4(legal_comparisons))
+
+    def test_manual_v4_quantity_audit_ignores_headings_and_indefinite_one_phrases(self):
+        """Keep the Python publication mirror aligned with editorial-quality.js."""
+        safe_cases = (
+            '## 核心摘要\n一个好看的示意图不能替代真实实验，正文仍需给出可核对的比较。\n',
+            '## 方法概述和架构\n### 冻结之后仍有一段必须学习\n该段说明冻结模块与可训练模块的职责边界。\n',
+            '## 方法概述和架构\n### 从 306 通道到一个词标签\n该小节说明输入映射与输出标签之间的语义关系。\n',
+        )
+        for markdown in safe_cases:
+            with self.subTest(markdown=markdown):
+                self.assertIsNone(validate_manual_editorial_quality_v4(markdown))
+
+        issue = validate_manual_editorial_quality_v4(
+            '## 核心摘要\n系统使用三个公开数据集完成评测。\n',
+        )
+        self.assertIn('精确定量', issue)
 
     def test_manual_v4_final_reader_gate_covers_non_core_sections(self):
         cases = {
@@ -443,6 +560,70 @@ title: "Reader page"
         self.assertIn('上一节的收束段落。\n\n\n## 实验结果\n', reader_view)
         self.assertIn('这是实验段落。\n\n## 局限与问题\n', reader_view)
 
+    def test_final_manual_v5_reader_article_replaces_fixed_v4_sections(self):
+        """v5 pages publish a custom readerArticle, not the legacy six-column facade."""
+        v5_markdown = '''---
+title: "Reader-first page"
+paper_digest_manual_depth: "full-text-evidence-v5"
+---
+
+### 📌 核心摘要
+
+本文把实时语音系统中的候选压缩、检索延迟与长期记忆边界放进同一条可审计论证链。
+
+### 🧭 深度解读
+
+### 先解释论文特有的矛盾
+
+这段正文说明系统如何把输入、状态分工、比较证据与不能外推的边界串成连续叙事，而不是回退到固定方法栏目。
+'''
+        self.assertIsNone(validate_final_manual_v4_markdown(v5_markdown))
+
+        missing_article = v5_markdown.replace('### 🧭 深度解读\n\n', '')
+        self.assertIn(
+            'Manual v5 读者章节: 深度解读',
+            validate_final_manual_v4_markdown(missing_article),
+        )
+
+    def test_final_manual_image_occurrences_count_sanitized_self_link_once(self):
+        url = 'https://arxiv.org/html/2608.29999/figure1.png'
+        markdown = f'''---
+title: "Reader page"
+paper_digest_manual_depth: "full-text-evidence-v5"
+---
+
+### 📌 核心摘要
+
+本文把图示机制和公开证据放进同一条可审计的读者论证链。
+
+### 🧭 深度解读
+
+承接论文实际的数据流，下图用于核对模块关系与图中明示的连接边界。
+
+![Architecture]({url})
+
+图中箭头只支持已绘制的数据流关系，不能证明未报告的训练分支或部署结论。
+'''
+        paper = {
+            'analysisManifest': {'contracts': {'manualDepth': 'full-text-evidence-v5'}},
+            'selectedImageUrls': [url],
+        }
+        sanitized = sanitize_markdown_for_publish(markdown)
+        self.assertEqual(
+            [item[1] for item in _final_markdown_image_occurrences(
+                _manual_v4_reader_view(sanitized)
+            )],
+            [url],
+        )
+        # This compact fixture intentionally omits the authoritative v5
+        # result-claim payload.  The final gate may therefore reject it for
+        # that independent reason, but it must no longer reject the same
+        # self-linked image twice as a selectedImageUrls ordering mismatch.
+        self.assertNotIn(
+            '图片 URL/顺序',
+            validate_final_manual_v4_markdown(sanitized, paper) or '',
+        )
+
     def test_final_manual_v4_markdown_rechecks_sanitized_reader_contracts(self):
         url = 'https://arxiv.org/html/2608.29999/figure1.png'
         valid = f'''---
@@ -499,6 +680,20 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             '这一步承接上一步，下一步逐项核对每一步；训练采用论文披露的数据划分与优化目标',
             1,
         )))
+
+        # Keep the final Python publish gate isomorphic with the Node
+        # editorial gate: it counts Han characters, while sentence punctuation
+        # has an independent limit, and nested Markdown headings split prose.
+        # The old fallback counted the five Chinese full stops as characters,
+        # turning this 258-Han, five-sentence paragraph into a false >260
+        # hard failure.
+        punctuation_boundary = '\n'.join((
+            '### 这是一条嵌套标题，不应并入正文长度',
+            '甲' * 258 + '。' * 5,
+        ))
+        paragraphs = _manual_editorial_prose_paragraphs(punctuation_boundary)
+        self.assertEqual(paragraphs, ['甲' * 258 + '。' * 5])
+        self.assertEqual(_manual_han_character_count(paragraphs[0]), 258)
 
         summary_sentence = '本文检验流式识别在固定测试划分中的错误率与速度权衡，并把结论限制在论文实际报告的设置内。'
         innovation_sentence = '相较固定上下文基线，该方法把分块状态与对齐监督联合起来，并由测试集上的错误率变化提供直接证据。'

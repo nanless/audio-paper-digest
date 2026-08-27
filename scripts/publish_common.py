@@ -322,6 +322,69 @@ def validate_image_narrative_contract(paper):
     return None
 
 
+def _validate_manual_v5_all_rejected_images(paper, decisions, paper_label):
+    """Allow zero Manual v5 images only after a complete, specific all-reject review.
+
+    Keep this deliberately isomorphic with
+    ``validateManualAllRejectedImageException`` in manual-research-contract.js.
+    The record/spec gate has already established the researcher's figure review;
+    publish must not add a different (and narrower) requirement such as a
+    mobile-resolution defect or a caption token.  A paper-specific visual or
+    technical anchor plus its stated editorial consequence is enough.
+    """
+    image_manifest = paper.get('imageManifest') or {}
+    candidates = image_manifest.get('candidates') or []
+    if not candidates:
+        return
+    selected_top_level = paper.get('selectedImageUrls')
+    selected_manifest = image_manifest.get('selected') or []
+    insertion_plan = image_manifest.get('insertionPlan') or []
+    if (not isinstance(selected_top_level, list) or selected_top_level
+            or selected_manifest or insertion_plan):
+        raise PublishDataValidationError(
+            f'{paper_label} manual v5 空选图例外必须同时绑定显式空 selectedImageUrls、空 selected 与空 insertionPlan'
+        )
+    candidate_urls = [item.get('url') for item in candidates if isinstance(item, dict)]
+    decision_urls = [item.get('url') for item in decisions if isinstance(item, dict)]
+    if (not candidate_urls or len(candidate_urls) != len(set(candidate_urls))
+            or len(decision_urls) != len(candidate_urls)
+            or len(decision_urls) != len(set(decision_urls))
+            or set(decision_urls) != set(candidate_urls)):
+        raise PublishDataValidationError(
+            f'{paper_label} manual v5 空选图例外的 figureReview 未逐项覆盖全文候选图'
+        )
+    normalized_reasons = set()
+    specific_anchor = re.compile(
+        r'\b\d{2,}\s*[×x]\s*\d{2,}\b'
+        r'|[A-Za-z][A-Za-z0-9_-]{1,}'
+        r'|(?:流程图|热图|散点|谱图|曲线|坐标|标签|面板|图注|模型|分类器|特征|数据集|设备|录音机|基线图|示意图|系统总览|矩阵|分布|公式|箭头|分桶|点位|声码器)',
+        re.I,
+    )
+    generic_short_conclusion = re.compile(
+        r'^(?:该图)?(?:不适合|不需要|无价值|移动端不可读|与正文重复)[，。；;\s]*(?:故)?(?:不选|拒绝)?[。.]?$',
+    )
+    for index, decision in enumerate(decisions):
+        if not isinstance(decision, dict) or decision.get('decision') != 'reject':
+            raise PublishDataValidationError(
+                f'{paper_label} manual v5 空选图例外必须全部为 reject，不能夹带 select'
+            )
+        reason = str(decision.get('reason') or '').strip()
+        if len(reason) < 40:
+            raise PublishDataValidationError(
+                f'{paper_label} manual v5 空选图例外的 reject 理由不足 40 字'
+            )
+        normalized_reason = _normalize_manual_evidence(reason).lower()
+        if normalized_reason in normalized_reasons:
+            raise PublishDataValidationError(
+                f'{paper_label} manual v5 空选图例外的第 {index + 1} 条理由不得跨图复用同一拒绝模板'
+            )
+        normalized_reasons.add(normalized_reason)
+        if not specific_anchor.search(reason) or generic_short_conclusion.fullmatch(reason):
+            raise PublishDataValidationError(
+                f'{paper_label} manual v5 空选图例外的第 {index + 1} 条理由不是论文特有的像素/缓存/图注事实与论证影响'
+            )
+
+
 def _validate_publish_image_exclusion_view(paper, paper_label):
     """Validate the explicit reader-facing view derived from image exclusions."""
     exclusions = paper.get('publishImageExclusions')
@@ -458,6 +521,17 @@ def _manual_canonical_numeric_lexeme(value):
 def _manual_numeric_lexemes(value):
     normalized = unicodedata.normalize('NFKC', _manual_claim_field_text(value))
     normalized = re.sub(r'[\u2212\u2012\u2013\u2014]', '-', normalized)
+    # HTML/PDF extraction can concatenate a visible decimal and an identical
+    # MathML/LaTeX fallback (for example, ``3.73.7`` for ``3.7``).  Keep the
+    # source quote untouched, but mirror the Node editorial gate when reading
+    # numeric evidence: collapse exactly one immediately-adjacent, identical
+    # decimal pair.  The boundary checks deliberately leave normal adjacent
+    # numbers and non-identical decimal text alone.
+    normalized = re.sub(
+        r'(?<![\d.])(\d+\.\d+)\1(?!\d|\.\d)',
+        r'\1',
+        normalized,
+    )
     number_words = '|'.join(MANUAL_ENGLISH_NUMBER_WORDS)
     matches = re.findall(
         rf'[-+]?(?:\d{{1,3}}(?:,\d{{3}})+|\d+)?(?:\.\d+)(?:[eE][-+]?\d+)?'
@@ -624,7 +698,8 @@ def _manual_result_claim_source_text(paper):
     )
 
 
-def _validate_manual_v4_result_claims(takeover, analysis, paper_label):
+def _validate_manual_v4_result_claims(
+        takeover, analysis, paper_label, *, reader_section='实验结果'):
     """Mirror the source-bound Manual v4 result-claim shape at publish time.
 
     The controlled full text is intentionally not embedded in publication data,
@@ -664,7 +739,7 @@ def _validate_manual_v4_result_claims(takeover, analysis, paper_label):
         'datasetOrSetting', 'splitOrCondition', 'method', 'baseline',
         'metric', 'value', 'unit', 'direction', 'sourceQuote',
     )
-    reader_results = _extract_analysis_section(analysis, '实验结果')
+    reader_results = _extract_analysis_section(analysis, reader_section)
     reader_blocks = _manual_reader_result_evidence_blocks(reader_results)
     signatures = {}
     numeric_claim_count = 0
@@ -735,7 +810,7 @@ def _validate_manual_v4_result_claims(takeover, analysis, paper_label):
         if not _manual_result_claim_bound_to_reader_block(claim, reader_blocks):
             raise PublishDataValidationError(
                 f'{prefix}.readerBindings '
-                '未共同落在读者正文实验结果的同一局部证据块'
+                f'未共同落在读者正文{reader_section}的同一局部证据块'
             )
         signature = _manual_result_claim_signature(claim)
         if signature in signatures:
@@ -940,6 +1015,8 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
                 raise PublishDataValidationError(
                     f'{paper_label} manual v5 figureReview 与 selected 图片不一致'
                 )
+            if not selected_urls:
+                _validate_manual_v5_all_rejected_images(paper, decisions, paper_label)
             verification = takeover.get('externalResourceVerification')
             declared_urls = (takeover.get('openSourceEvidence') or {}).get('urls') or []
             outcomes = verification.get('outcomes', []) if isinstance(verification, dict) else []
@@ -1586,6 +1663,54 @@ def _manual_prose_paragraphs(value):
     ]
 
 
+def _manual_editorial_prose_paragraphs(value):
+    """Mirror editorial-quality.js/proseParagraphs for the v4 reader gate.
+
+    The older helper above intentionally serves several legacy depth checks and
+    counts a Markdown heading as part of its surrounding blank-line block.
+    The Node editorial gate instead treats headings, tables, images and return
+    links as paragraph boundaries, strips list markers, and evaluates only
+    reader prose.  Keep this narrow helper separate so the publish-time v4
+    mirror cannot reject a canonical article solely because it tokenizes a
+    paragraph differently from its ingestion-time counterpart.
+    """
+    paragraphs = []
+    pending = []
+
+    def flush():
+        if not pending:
+            return
+        paragraph = re.sub(r'\s+', ' ', ' '.join(pending)).strip()
+        if paragraph:
+            paragraphs.append(paragraph)
+        pending.clear()
+
+    for raw_line in str(value or '').splitlines():
+        line = raw_line.strip()
+        if not line:
+            flush()
+            continue
+        if re.match(r'^(?:#{1,6}\s|\||!\[|---+$|\[←)', line):
+            flush()
+            continue
+        line = re.sub(r'^[-*+]\s+', '', line)
+        line = re.sub(r'^\d+[.)、]\s+', '', line)
+        pending.append(line)
+    flush()
+    return paragraphs
+
+
+def _manual_han_character_count(value):
+    """Count Han script characters as editorial-quality.js does.
+
+    `_manual_chinese_count` is a legacy length heuristic that also counts CJK
+    punctuation.  Paragraph overload is a reader-prose parity gate, where
+    punctuation has its own sentence-mark threshold, so including it here
+    creates false hard failures near the 260-character boundary.
+    """
+    return len(re.findall(r'[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]', str(value or '')))
+
+
 def validate_manual_depth_contract_v3(analysis):
     """Publish-time mirror of the reader-visible Manual v3 quality floor.
 
@@ -1834,10 +1959,25 @@ def validate_manual_editorial_quality_v4(analysis):
             lambda match: ' ' * len(match.group(0)),
             body,
         )
+        # Keep this normalization isomorphic with
+        # editorial-quality.js/findQuantitativeChineseNumerals.  Markdown
+        # headings are reader-facing labels rather than empirical claims (for
+        # example, “从 306 通道到一个词标签”), and a small set of idiomatic
+        # “一个 + adjective” phrases is not a measured count.  Replace with
+        # equal-length blanks so later matching cannot drift into adjacent
+        # text.
         quantity_body = re.sub(
-            r'(?:进一步|这一步|下一步|上一步|每一步|一次性)|(?:同一|统一|唯一|单一)(?=[\u4e00-\u9fff])',
+            r'^#{1,6}\s+[^\n]*$',
             lambda match: ' ' * len(match.group(0)),
             body,
+            flags=re.M,
+        )
+        quantity_body = re.sub(
+            r'(?:进一步|这一步|下一步|上一步|每一步|一次性)|'
+            r'(?:同一|统一|唯一|单一)(?=[\u4e00-\u9fff])|'
+            r'一个(?=(?:好看|漂亮|笼统|粗糙|清晰|完整|简单|直接|孤立|统一))',
+            lambda match: ' ' * len(match.group(0)),
+            quantity_body,
         )
         for pattern in exact_quantity_patterns:
             match = pattern.search(quantity_body)
@@ -1889,8 +2029,8 @@ def validate_manual_editorial_quality_v4(analysis):
         adhesion = re.search(r'(?:[\u4e00-\u9fff][A-Za-z][A-Za-z0-9.+-]{1,}|[A-Za-z][A-Za-z0-9.+-]{1,}[\u4e00-\u9fff])', visible)
         if adhesion:
             return f'manual v4 {section} 中英文技术词边界缺少空格: {adhesion.group(0)}'
-        for paragraph in _manual_prose_paragraphs(body):
-            if _manual_chinese_count(paragraph) > 260 or len(re.findall(r'[。！？；!?;]', paragraph)) > 7:
+        for paragraph in _manual_editorial_prose_paragraphs(body):
+            if _manual_han_character_count(paragraph) > 260 or len(re.findall(r'[。！？；!?;]', paragraph)) > 7:
                 return f'manual v4 {section} 段落过载，必须拆分并建立推进关系'
     seen = {}
     for section, body in sections.items():
@@ -1909,6 +2049,11 @@ FINAL_MANUAL_SECTION_HEADINGS = (
     '作者与机构', '毒舌点评', '核心摘要', '方法概述和架构',
     '核心创新点', '实验结果', '细节详述', '评分理由',
     '局限与问题', '开源详情', '补充信息',
+    # Manual v5 reader-first pages replace the fixed v4 method/innovation/
+    # result/detail/limit facade with a single paper-specific reader article.
+    # Normalizing this generated H3 to the reader-view H2 is necessary for
+    # final-page evidence checks to address it deterministically.
+    '深度解读', '开源与复现资源', '评分依据与证据（展开查看）',
 )
 
 
@@ -1928,17 +2073,25 @@ def _manual_v4_reader_view(markdown):
     )
 
 
-def _is_final_manual_v4(markdown, paper=None):
+def _final_manual_depth_contract(markdown, paper=None):
     if isinstance(paper, dict):
         manifest = paper.get('analysisManifest')
         contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
         if isinstance(contracts, dict):
-            return contracts.get('manualDepth') in MANUAL_READER_QUALITY_VERSIONS
-    return bool(re.search(
-        rf'^paper_digest_manual_depth:\s*["\']?(?:{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V4)}|{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V5)})["\']?\s*$',
-        str(markdown or ''),
-        flags=re.MULTILINE,
-    ))
+            value = contracts.get('manualDepth')
+            if value in MANUAL_READER_QUALITY_VERSIONS:
+                return value
+    match = re.search(
+        rf'^paper_digest_manual_depth:\s*["\']?'
+        rf'({re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V4)}|{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V5)})["\']?\s*$',
+        str(markdown or ''), flags=re.MULTILINE,
+    )
+    return match.group(1) if match else None
+
+
+def _is_final_manual_v4(markdown, paper=None):
+    """Backward-compatible predicate for Manual reader-quality pages (v4/v5)."""
+    return _final_manual_depth_contract(markdown, paper) is not None
 
 
 def _final_markdown_image_occurrences(markdown):
@@ -1953,10 +2106,14 @@ def _final_markdown_image_occurrences(markdown):
             r'\[!\[(?:\\.|[^\]\\])*\]\((https://[^)\s]+)\)\]\((https://[^)\s]+)\)',
             block,
         )
-        if bare:
-            occurrences.append((index, bare.group(1), blocks))
-        elif linked and linked.group(1) == linked.group(2):
+        # Publication sanitization wraps remote images in a self-link.  Check
+        # that outer form first: its inner `![](...)` is also a valid prefix
+        # for the bare-image pattern, which otherwise counted the same image
+        # twice and broke selectedImageUrls ordering.
+        if linked and linked.group(1) == linked.group(2):
             occurrences.append((index, linked.group(1), blocks))
+        elif bare:
+            occurrences.append((index, bare.group(1), blocks))
     return occurrences
 
 
@@ -1967,7 +2124,8 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
     not trust that a valid canonical analysis stayed valid while headings,
     anchors, images and surrounding prose were assembled into a blog page.
     """
-    if not _is_final_manual_v4(markdown, paper):
+    manual_depth = _final_manual_depth_contract(markdown, paper)
+    if manual_depth is None:
         return None
     if isinstance(paper, dict):
         manifest = paper.get('analysisManifest')
@@ -1981,13 +2139,16 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
             return '最终 Markdown 缺少 Manual v4 深度标记'
 
     reader_view = _manual_v4_reader_view(markdown)
+    is_v5_reader_article = manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V5
     required = (
-        '核心摘要', '方法概述和架构', '核心创新点', '实验结果',
-        '细节详述', '局限与问题',
+        ('核心摘要', '深度解读') if is_v5_reader_article else
+        ('核心摘要', '方法概述和架构', '核心创新点', '实验结果',
+         '细节详述', '局限与问题')
     )
     missing = [heading for heading in required if not _extract_analysis_section(reader_view, heading)]
     if missing:
-        return f'最终 Markdown 缺少 Manual v4 读者章节: {"、".join(missing)}'
+        version = 'v5' if is_v5_reader_article else 'v4'
+        return f'最终 Markdown 缺少 Manual {version} 读者章节: {"、".join(missing)}'
 
     if isinstance(paper, dict):
         manifest = paper.get('analysisManifest')
@@ -1999,6 +2160,7 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
                 takeover,
                 reader_view,
                 str(paper.get('arxivId') or paper.get('id') or 'authoritative paper'),
+                reader_section='深度解读' if is_v5_reader_article else '实验结果',
             )
         except PublishDataValidationError as exc:
             return f'最终 Markdown resultClaims 读者可见闭环无效: {exc}'
@@ -2035,19 +2197,20 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
         canonical_results = _extract_analysis_section(
             str(paper.get('analysis') or ''), '实验结果',
         )
-    table_issue = validate_experiment_table_contract(
-        reader_view,
-        contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
-        document_type=document_type,
-        # Node already binds the evidence-rich source gates to the controlled
-        # full-text experiment slice.  At final-page time only the canonical
-        # experiment section is authoritative: using the whole analysis here
-        # lets words such as "消融" or "退化" in methods/limits create false
-        # source obligations that never existed in the experiment evidence.
-        source_text=canonical_results,
-    )
-    if table_issue:
-        return f'最终 Markdown evidence-rich 表格无效: {table_issue}'
+    if not is_v5_reader_article:
+        table_issue = validate_experiment_table_contract(
+            reader_view,
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type=document_type,
+            # Node already binds the evidence-rich source gates to the controlled
+            # full-text experiment slice.  At final-page time only the canonical
+            # experiment section is authoritative: using the whole analysis here
+            # lets words such as "消融" or "退化" in methods/limits create false
+            # source obligations that never existed in the experiment evidence.
+            source_text=canonical_results,
+        )
+        if table_issue:
+            return f'最终 Markdown evidence-rich 表格无效: {table_issue}'
 
     seen_paragraphs = set()
     for block in re.split(r'\n\s*\n', reader_view):

@@ -2593,7 +2593,7 @@ function parseImageInsertionPlan(raw, imageInfos = []) {
 
 function findSectionBounds(analysis, title) {
     const heading = new RegExp(
-        `(^|\\n)(#{2,3}\\s*(?:\\d+[.\\s]+)?${escapeRegExp(title)}[：:\\s]*\\n)`,
+        `(^|\\n)((#{2,3})\\s*(?:\\d+[.\\s]+)?${escapeRegExp(title)}[：:\\s]*\\n)`,
         'm'
     );
     const match = heading.exec(analysis);
@@ -2601,7 +2601,12 @@ function findSectionBounds(analysis, title) {
     const start = match.index + match[1].length;
     const contentStart = start + match[2].length;
     const rest = analysis.slice(contentStart);
-    const next = /\n#{2,3}\s/.exec(rest);
+    // A nested ### reader subsection belongs to its surrounding ## fixed
+    // section.  Stop only at a heading of the same or a higher level; the old
+    // #{2,3} boundary silently hid every paragraph after the first ### from
+    // the image-anchor catalog.
+    const level = match[3].length;
+    const next = new RegExp(`\\n#{2,${level}}\\s`).exec(rest);
     const end = next ? contentStart + next.index : analysis.length;
     return { start, contentStart, end };
 }

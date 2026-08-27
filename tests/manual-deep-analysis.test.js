@@ -484,6 +484,7 @@ describe('manual_complete v3 deep-analysis contract', () => {
         });
         assert.deepStrictEqual(canonical.selectedImages.map(item => item.url), expectedUrls);
         assert.deepStrictEqual(canonical.insertionPlan.map(item => item.imageNumber), [1, 2]);
+        assert.deepStrictEqual(canonical.insertionPlan.map(item => item.url), expectedUrls);
         assert.deepStrictEqual(canonical.insertionDiagnostics.map(item => item.imageNumber), [1, 2]);
         assert.deepStrictEqual(
             canonical.insertionPlan.map(item => item.paragraphId),
@@ -884,6 +885,7 @@ describe('manual_complete v3 deep-analysis contract', () => {
     it('最终状态在文件锁内按最新 canonical expected IDs 重算，不接受本地旧 failures 计数', () => {
         const first = buildReusableRecord({ id: '2608.21001' }).record;
         const second = buildReusableRecord({ id: '2608.21002' }).record;
+        const stalePriorBatch = buildReusableRecord({ id: '2608.19999' }).record;
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-finalize-'));
         const resultPath = path.join(dir, 'deep-analysis-result.json');
         fs.writeFileSync(resultPath, JSON.stringify({
@@ -898,7 +900,7 @@ describe('manual_complete v3 deep-analysis contract', () => {
                 successfulExpected: 0,
                 remainingFailed: 2
             },
-            papers: [first, second]
+            papers: [stalePriorBatch, first, second]
         }));
 
         const completed = finalizeManualCanonicalState(resultPath, {
@@ -912,6 +914,7 @@ describe('manual_complete v3 deep-analysis contract', () => {
         assert.equal(completed.stats.failed, 0);
         assert.deepEqual(completed.stats.failedIds, []);
         assert.equal(completed.stats.totalAfterMerge, 2);
+        assert.deepEqual(completed.papers.map(item => item.arxivId), ['2608.21001', '2608.21002']);
         assert.equal(completed.stats.expected, 2);
         assert.equal(completed.stats.successfulExpected, 2);
         assert.equal(completed.stats.remainingFailed, 0);

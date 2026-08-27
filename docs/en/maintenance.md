@@ -105,7 +105,7 @@ When `prompts/deep-analysis.md` or scoring/tag specifications change, at minimum
 4. **Verify that `score` is correctly computed from the eight sub-scores in `## 评分理由`**: sample-compare `parsed.score` against the sum of sub-scores in `## 评分理由`, confirming cap of 10 and rounding to 0.1
 5. Verify blog publishing script artifacts, confirming that leaderboards, single-post pages, and trending directions correctly display new fields
 6. Verify WeChat/Xiaohongshu/Feishu script artifacts, confirming that copy does not contain null values or formatting misalignment caused by missing fields
-7. Confirm that the new `## 局限与问题` section is correctly displayed in blog/social media (if applicable)
+7. Confirm the correct publication boundary: Manual v5 presents limitations/counterevidence in the relevant paper-specific `readerArticle` section and retains final score evidence; only legacy-compatible pages or the automatic API canonical layout display `## 局限与问题` directly
 
 ---
 

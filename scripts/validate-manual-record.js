@@ -27,9 +27,13 @@ const {
     validateResearchBrief,
     validateStageReviews,
     validateFigureReview,
+    validateManualAllRejectedImageException,
     validateOpenSourceEvidence,
     validateExactFactCoverage,
-    validateResultClaimCoverageV5
+    validateResultClaimCoverageV5,
+    validateEditorialPlanBindings,
+    validateReaderArticle,
+    validateEditorialReview
 } = require('./manual-research-contract.js');
 
 function parseArgs(argv) {
@@ -130,31 +134,35 @@ function validateOne(options) {
     });
     const claimResult = validateResultClaims(record.resultClaims, sourceText, {
         documentType: record.type, exception: record.resultClaimsException,
-        readerResultsText: parsed.results || ''
+        readerResultsText: parsed.results || '', requireReaderNarrative: true
     });
     if (!claimResult.valid) throw new Error(`resultClaims: ${claimResult.errors.join('；')}`);
     validateResultClaimCoverageV5(record.resultClaims, {
         documentType: record.type, evidenceProfile: record.researchBrief.evidenceProfile,
         label: `${options.paper}.resultClaims`
     });
-    validateFigureReview(record.figureReview, {
-        imageInfos: entry.imageInfos || [],
-        selectedImageUrls: record.selectedImageUrls || [], paperId: options.paper
-    });
-    const finalAnalysis = replayManualImageInsertions(
-        analysis, record, entry.imageInfos || [], `${options.paper}.imageInsertions`
-    );
-    const finalParsed = parseAnalysis(finalAnalysis);
-    validateExactFactCoverage(finalAnalysis, sourceText, {
-        label: `${options.paper}.analysis`,
-        externalEvidence: record.openSourceEvidence.sourceQuotes,
-        boundEvidence: [
-            ...record.resultClaims.map(claim => claim.sourceQuote),
-            ...record.evidenceLedger.map(item => item.sourceQuote)
-        ],
-        derivedFacts: record.researchBrief.derivedFacts
-    });
-    const invalid = getInvalidAnalysisReason(finalAnalysis, finalParsed, {
+    const selectedImageUrls = record.selectedImageUrls || [];
+    const explicitAllRejectedImageException = Array.isArray(record.selectedImageUrls)
+        && selectedImageUrls.length === 0
+        && Array.isArray(record.imageInsertions) && record.imageInsertions.length === 0;
+    if (explicitAllRejectedImageException) {
+        validateManualAllRejectedImageException({
+            figureReview: record.figureReview,
+            imageInfos: entry.imageInfos || [],
+            selectedImageUrls,
+            imageInsertions: record.imageInsertions,
+            paperId: options.paper
+        });
+    } else {
+        validateFigureReview(record.figureReview, {
+            imageInfos: entry.imageInfos || [], selectedImageUrls, paperId: options.paper
+        });
+        if (Array.isArray(record.selectedImageUrls) && selectedImageUrls.length === 0
+            && (entry.imageInfos || []).length > 0) {
+            throw new Error(`${options.paper} 存在全文 manifest 候选图时，空 selectedImageUrls 仅允许逐图明确 reject 且显式 imageInsertions=[]`);
+        }
+    }
+    const contractOptions = {
         enforceExperimentTableContract: true,
         experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
         enforceMethodDetailContract: true,
@@ -165,7 +173,50 @@ function validateOne(options) {
         openSourceEvidence: record.openSourceEvidence,
         resultClaims: record.resultClaims,
         evidenceLedger: record.evidenceLedger
+    };
+    const rawInvalid = getInvalidAnalysisReason(analysis, parsed, contractOptions);
+    if (rawInvalid) throw new Error(`插图前 canonical 无效: ${rawInvalid}`);
+    const finalAnalysis = replayManualImageInsertions(
+        analysis, record, entry.imageInfos || [], `${options.paper}.imageInsertions`
+    );
+    const finalParsed = parseAnalysis(finalAnalysis);
+    if (record.researchBrief?.editorialPlan?.version === 2) {
+        validateEditorialPlanBindings(
+            record.researchBrief.editorialPlan,
+            analysis,
+            record.evidenceLedger,
+            `${options.paper}.researchBrief.editorialPlan`
+        );
+        const readerArticle = validateReaderArticle(
+            record.researchBrief.editorialPlan,
+            record.editorial?.readerArticle,
+            record.evidenceLedger,
+            {
+                label: `${options.paper}.editorial.readerArticle`, sourceText,
+                externalEvidence: record.openSourceEvidence.sourceQuotes,
+                boundEvidence: [
+                    ...record.resultClaims.map(claim => claim.sourceQuote),
+                    ...record.evidenceLedger.map(item => item.sourceQuote)
+                ],
+                derivedFacts: record.researchBrief.derivedFacts,
+                readerNarratives: record.resultClaims.map(claim => claim.readerNarrative),
+                imageInsertions: record.imageInsertions || []
+            }
+        );
+        validateEditorialReview(record.editorial.review, readerArticle, {
+            label: `${options.paper}.editorial.review`
+        });
+    }
+    validateExactFactCoverage(finalAnalysis, sourceText, {
+        label: `${options.paper}.analysis`,
+        externalEvidence: record.openSourceEvidence.sourceQuotes,
+        boundEvidence: [
+            ...record.resultClaims.map(claim => claim.sourceQuote),
+            ...record.evidenceLedger.map(item => item.sourceQuote)
+        ],
+        derivedFacts: record.researchBrief.derivedFacts
     });
+    const invalid = getInvalidAnalysisReason(finalAnalysis, finalParsed, contractOptions);
     if (invalid) throw new Error(invalid);
     const editorial = validateEditorialQuality(finalAnalysis);
     if (!editorial.valid) throw new Error(`editorialQuality: ${editorial.issues.map(item => item.code).join(',')}`);

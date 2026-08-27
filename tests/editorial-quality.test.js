@@ -20,6 +20,7 @@ const {
     findMissingComparisonUnits,
     findBatchTemplateReuse,
     validateReadabilityRubric,
+    numericLexemes,
     validateResultClaims,
     validateEditorialQuality
 } = require('../scripts/editorial-quality.js');
@@ -37,6 +38,17 @@ function sixSections(overrides = {}) {
 }
 
 describe('Manual v4 editorial quality primitives', () => {
+    it('collapses only immediately duplicated decimal extraction tokens', () => {
+        assert.deepEqual(
+            numericLexemes('MRR rises by 3.73.7, 2.82.8, and 0.50.5.'),
+            ['3.7', '2.8', '0.5']
+        );
+        assert.deepEqual(
+            numericLexemes('Separate reported values are 3.7 and 3.7; the range also includes 2.8.'),
+            ['3.7', '3.7', '2.8']
+        );
+    });
+
     it('blocks precise Chinese quantitative forms but allows ordinals and vague non-numeric wording', () => {
         const findings = findQuantitativeChineseNumerals([
             '调用率为百分之二十五，准确率从七十二点五降到三十点四二。',
@@ -592,6 +604,16 @@ describe('Manual v4 aggregate gate', () => {
         assert.equal(result.issues.filter(item => item.code === 'quantitative_chinese_numeral').length, 2);
         assert.equal(result.issues.some(item => item.section === 'scoring' && /十轮/.test(item.match || '')), true);
         assert.equal(result.issues.some(item => item.section === 'method' && /实验结果/.test(item.match || '')), false);
+    });
+
+    it('does not force conceptual headings or indefinite prose into Arabic counters', () => {
+        const sections = sixSections({
+            summary: '这不是一个好看的总分，而是对错误来源的拆解。',
+            method: '### 两种视图如何给错误分账\n\n模型分别读取音高与节奏证据。'
+        });
+        const issues = validateEditorialQuality(sections).issues
+            .filter(item => item.code === 'quantitative_chinese_numeral');
+        assert.equal(issues.some(item => /一个|两种/.test(item.match || '')), false);
     });
 
     it('validates rendered level-three emoji headings instead of returning a false empty pass', () => {

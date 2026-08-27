@@ -11,11 +11,11 @@
 默认路径使用 Manual v5；只有用户明确要求 API/LLM 时才使用关键词预筛、模型筛选、多阶段 LLM 分析和普通三层 review。Manual 路线不会因 API 状态自动改变语义：
 
 - `manual-fetch.js --raw` 仍联网抓取 arXiv/HuggingFace，只是不调用筛选模型；`--select` 接收完整覆盖候选全集的 `manual_offline` v1 逐篇裁决，并把输入 SHA、reviewer 和协议指纹写入筛选四件套。
-- `manual-deep-analysis.js` 不调用 LLM/API；当前 records v3 组装 spec v5，并写 `full-text-evidence-v5` canonical。每篇由独立 subagent 提交研究者详略计划、全文图表/算法 inventory、显式逐阶段审计、独立评分与可读性复核、跨实验组 claims、精确数量来源和全部图片决策；ingestion 必须重放 official assembler。
-- Manual v5 的读者质量不只靠字数：系统/方法论文至少 4 条 `resultClaims` 且跨至少 2 个实验组，连续原句绑定设置、方法、基线、指标、数值、单位和方向；7 维 `readabilityRubric` 总分至少 12/14 且无 0 分。精确数量用阿拉伯数字，确定性层同时阻断篇内/跨篇模板、术语粘连、过长段落和防御性否定过密。
+- `manual-deep-analysis.js` 不调用 LLM/API；当前 records v3 组装 spec v5，并写 `full-text-evidence-v5` canonical。每篇由独立 subagent 提交研究者详略计划、全文图表/算法 inventory、显式逐阶段审计、独立评分与可读性复核、跨实验组 claims、精确数量来源和全部图片决策；新 `editorialPlan` v2 的 `readerArticle` 是受哈希绑定的完整博客深度解读，用论文特有 `###` 小节覆盖读者可见的固定方法/创新/实验/细节/局限栏目。发布顺序固定为中文题目、英文题目/arXiv 链接、标签/评分、毒舌点评、核心摘要、开源资源、深度解读、文末评分证据；ingestion 必须重放 official assembler。
+- Manual v5 的读者质量不只靠字数：系统/方法论文至少 4 条 `resultClaims` 且跨至少 2 个实验组，连续原句绑定设置、方法、基线、指标、数值、单位和方向，并提供实际写入实验正文的自然语言 `readerNarrative`，而非字段串；7 维 `readabilityRubric` 总分至少 12/14 且无 0 分。精确数量用阿拉伯数字，确定性层同时阻断篇内/跨篇模板、术语粘连、过长段落和防御性否定过密。
 - records v2/spec v4 与 spec v3 仅作历史兼容；新日更不得降级。v4 继续写 `full-text-evidence-v4`，v3 继续写 v3 + `bounded-v1`，均不追溯套用 v5。
-- 最终读者门禁覆盖作者与机构、毒舌点评、正文六章、评分理由和开源详情；“进一步审视”作为局限章节的一部分同样受检。新汇总页以 `paper_digest_reader_quality: "reader-facing-v1"` 显式启用相同的精确定量、术语间距、模板与病句检查，旧汇总页无标记时保持兼容。
-- `manual-review-blog.py` 只在 LLM review 服务不可用时替代语义模型。它要求 v2 attestation 对 generation 中每个现存文件绑定 SHA、批次内唯一且含页面标识的 notes，并逐项确认标题、技术叙事、事实、实验、复现、局限、评分和图片；唯一性比较会剥离页面 ID、日期或删除文件名，拒绝仅替换标识符的批量模板；受控删除项则显式绑定 `deleted:true`、空 SHA、`deletionVerified` 和包含文件名的删除说明。脚本仍执行确定性复验、Git 基线、review 协议和 Hugo gate 绑定，若确定性层修改页面则旧 attestation 立即失效。输出图片审查模式为 `manual_semantic` 的 receipt，push 会重验逐文件 provenance 与远端 OID。
+- 最终读者门禁覆盖作者与机构、毒舌点评、`readerArticle` 的叙事和图片邻接、评分理由和开源详情；canonical 六章仍供事实/评分/图片审计，不是 Manual v5 的发布版式。“进一步审视”仍受检。新汇总页以 `paper_digest_reader_quality: "reader-facing-v1"` 显式启用相同的精确定量、术语间距、模板与病句检查，旧汇总页无标记时保持兼容。
+- `manual-review-blog.py` 只在 LLM review 服务不可用时替代语义模型。新批次要求 v3 attestation（v2 仅历史兼容）；它要求对 generation 中每个现存文件绑定 SHA、批次内唯一且含页面标识的 notes，并逐项确认标题、技术叙事、事实、实验、复现、局限、评分和图片；唯一性比较会剥离页面 ID、日期或删除文件名，拒绝仅替换标识符的批量模板；受控删除项则显式绑定 `deleted:true`、空 SHA、`deletionVerified` 和包含文件名的删除说明。脚本仍执行确定性复验、Git 基线、review 协议和 Hugo gate 绑定，若确定性层修改页面则旧 attestation 立即失效。输出图片审查模式为 `manual_semantic` 的 receipt，push 会重验逐文件 provenance 与远端 OID。
 
 三种人工模式分别只替代对应模型职责，不绕过来源健康、正文质量、发布或视觉门禁。
 
@@ -178,14 +178,16 @@ LLM endpoint 只允许 HTTPS；仅 loopback 本地测试服务可以使用 HTTP�
 
 深度分析 prompt 从 `prompts/deep-analysis.md` 读取，运行时替换 `{hasFullText}`、`{title}`、`{authors}`、`{categories}`、`{arxivId}`、`{textForAnalysis}` 占位符。
 
-**分析内容（由 LLM 生成，中文输出）**：
+**自动 API 路线的 canonical 分析内容（由 LLM 生成，中文输出）**：
+
+> 这些固定标题是自动 API 输出和底层事实契约的解析锚点。它们不是 Manual v5 独立页的读者可见版式：当 `editorialPlan.version=2` 和 SHA 已验证的 `readerArticle` 存在时，博客只保留身份信息、毒舌点评、核心摘要、开源资源和文末评分证据，中段按该论文自己的小节连续叙述。历史记录与缺少有效 `readerArticle` 的页面仍按旧版式兼容渲染。
 
 | 章节 | 要求 |
 |------|------|
 | 评分 | `type-aware-v1`：先输出 `document_type`（方法研究/系统技术报告/模型报告/数据集与基准/综述/理论研究/应用研究），再按对应证据标准评分；机器摘要另含 `rank_bucket`、八维分项和 `confidence`。八维合计满分 11，总分封顶 10；只有八项完整、唯一、分母和范围合法时才从 `## 评分理由` 重算总分，否则契约失败。类型不固定加分，同一缺陷只能在一个主要维度扣分 |
 | 标签 | 3-5 个，必须含至少 1 个【任务】和 1 个【方法/模型】标签；除最终标签串外，还要求输出"主任务标签""主方法标签""补充标签" |
 | 作者与机构 | 第一作者、通讯作者、作者列表及所属机构；缺失信息必须写"未说明"，禁止猜测 |
-| 毒舌点评 | 2-3 句话犀利点评亮点和槽点，像资深审稿人的 final comment |
+| 毒舌点评 | 由深度解读的机制、实验与边界支撑的双向点评：先写最扎实的优点，再写最该泼冷水的不足；Manual v5 用两段约 180–700 字，尖锐但不情绪化 |
 | 核心摘要 | 5-8 句话，覆盖问题、方法、效果、局限性 |
 | 方法概述和架构 | 输入输出流程、组件结构、连接方式、设计理由；不少于 600 中文字符 |
 | 核心创新点 | 3-5 个，每个含定义、之前方法的不足、解决机制、实际效果 |
@@ -195,7 +197,7 @@ LLM endpoint 只允许 HTTPS；仅 loopback 本地测试服务可以使用 HTTP�
 | 局限与问题 | 分两部分：论文明确承认的局限 + 审稿人发现的潜在问题 |
 | 开源详情 | 只允许基于论文文本或当前输入链接总结，缺失时写"未提及"，禁止编造仓库/热度信息 |
 
-> **图片与表格放置规则**：图片和表格不再集中在一个单独 section 中，而是直接嵌入到对应位置——架构图贴在**方法概述和架构**部分，实验结果图/表贴在**实验结果**部分。严禁编造图片 URL；只有双模型 `image-supplement` 阶段提供的候选图片可被副模型选择并插入。
+> **图片与表格放置规则**：图片和表格不再集中在一个单独 section 中，而是直接嵌入对应论证节点。自动 API canonical 中，架构图通常贴在**方法概述和架构**、结果图/表通常贴在**实验结果**；Manual v5 则必须把已选图片、图前 `lead` 和图后 `explanation` 原样放入 `readerArticle` 的相关论文特有小节。严禁编造图片 URL；只有受控候选图片可被选择并插入。
 
 **技术特性**：
 - **API 协议自动路由**：与筛选阶段共用同一套 `detectApiType()` 逻辑，根据 `PAPER_ANALYZER_ENDPOINT` 和 `PAPER_ANALYZER_MODEL` 自动切换 OpenAI / Anthropic 协议

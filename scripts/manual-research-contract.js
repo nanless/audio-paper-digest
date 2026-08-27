@@ -88,8 +88,13 @@ function validatePaperSubagent(value, paperId, label = 'paperSubagent') {
 }
 
 function validateEditorialPlan(plan, label = 'editorialPlan') {
-    if (!plan || typeof plan !== 'object' || Array.isArray(plan) || plan.version !== 1) {
-        throw new Error(`${label} 必须是 version=1 对象`);
+    if (!plan || typeof plan !== 'object' || Array.isArray(plan) || ![1, 2].includes(plan.version)) {
+        throw new Error(`${label} 必须是 version=1 或 version=2 对象`);
+    }
+    const readerFirst = plan.version === 2;
+    if (readerFirst) {
+        assertText(plan.readerTitle, `${label}.readerTitle`, 12);
+        assertText(plan.oneSentenceThesis, `${label}.oneSentenceThesis`, 28);
     }
     const tension = plan.governingTension;
     if (!tension || typeof tension !== 'object' || Array.isArray(tension)) {
@@ -111,6 +116,7 @@ function validateEditorialPlan(plan, label = 'editorialPlan') {
         questionIds.add(id);
         assertText(item.question, `${itemLabel}.question`, 16);
         assertText(item.purpose, `${itemLabel}.purpose`, 16);
+        if (readerFirst) assertText(item.answerQuote, `${itemLabel}.answerQuote`, 16);
         assertUniqueTextArray(item.evidenceIds, `${itemLabel}.evidenceIds`, {
             minimumItems: 1, maximumItems: 12, minimumLength: 2
         });
@@ -128,6 +134,12 @@ function validateEditorialPlan(plan, label = 'editorialPlan') {
         for (const [key, minimum] of Object.entries({ claim: 20, strongestComparison: 16, boundary: 16 })) {
             assertText(item[key], `${itemLabel}.${key}`, minimum);
         }
+        if (readerFirst) {
+            assertUniqueTextArray(item.evidenceIds, `${itemLabel}.evidenceIds`, {
+                minimumItems: 1, maximumItems: 6, minimumLength: 2
+            });
+            assertText(item.readerQuote, `${itemLabel}.readerQuote`, 16);
+        }
     });
     if (!Array.isArray(plan.sectionPlan) || plan.sectionPlan.length < 4 || plan.sectionPlan.length > 8) {
         throw new Error(`${label}.sectionPlan 必须包含 4-8 个论文特有读者小节`);
@@ -140,8 +152,210 @@ function validateEditorialPlan(plan, label = 'editorialPlan') {
             minimumItems: 1, maximumItems: 4, minimumLength: 2
         });
         if (ids.some(id => !questionIds.has(id))) throw new Error(`${itemLabel} 引用未知 readerQuestionId`);
+        if (readerFirst) assertText(item.anchorQuote, `${itemLabel}.anchorQuote`, 16);
     });
     return plan;
+}
+
+/**
+ * v2 turns the editorial blueprint into a reader-visible contract.  v1 is
+ * deliberately retained for already-published Manual v5 batches: forcing
+ * historical records to invent headings would invalidate their receipts.
+ */
+function validateEditorialPlanBindings(plan, analysis, evidenceLedger = [], label = 'editorialPlan') {
+    if (!plan || plan.version !== 2) return;
+    const normalizedArticle = normalizeEvidence(analysis);
+    if (!normalizedArticle.includes(normalizeEvidence(plan.oneSentenceThesis))) {
+        throw new Error(`${label}.oneSentenceThesis 必须原样落在最终正文中`);
+    }
+    const ledgerIds = new Set((Array.isArray(evidenceLedger) ? evidenceLedger : []).map(item => item?.id));
+    const questions = new Map(plan.readerQuestions.map(item => [item.id, item]));
+    const sectionPlansByContainer = new Map();
+    for (const sectionPlan of plan.sectionPlan) {
+        const section = extractSection(analysis, sectionPlan.container);
+        const heading = String(sectionPlan.heading).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (!new RegExp(`(?:^|\\n)###\\s+${heading}\\s*(?:\\n|$)`).test(section)) {
+            throw new Error(`${label}.sectionPlan「${sectionPlan.heading}」必须作为 ${sectionPlan.container} 内的 ### 小节标题`);
+        }
+        if (!normalizeEvidence(section).includes(normalizeEvidence(sectionPlan.anchorQuote))) {
+            throw new Error(`${label}.sectionPlan「${sectionPlan.heading}」的 anchorQuote 未落在 ${sectionPlan.container}`);
+        }
+        const grouped = sectionPlansByContainer.get(sectionPlan.container) || [];
+        grouped.push(sectionPlan);
+        sectionPlansByContainer.set(sectionPlan.container, grouped);
+    }
+    const questionContainers = new Map();
+    const satisfiedQuestionIds = new Set();
+    for (const [container, sectionPlans] of sectionPlansByContainer.entries()) {
+        const section = extractSection(analysis, container);
+        for (const sectionPlan of sectionPlans) {
+            for (const questionId of sectionPlan.readerQuestionIds) {
+                const answerQuote = questions.get(questionId)?.answerQuote;
+                const containers = questionContainers.get(questionId) || new Set();
+                containers.add(container);
+                questionContainers.set(questionId, containers);
+                if (normalizeEvidence(section).includes(normalizeEvidence(answerQuote))) {
+                    satisfiedQuestionIds.add(questionId);
+                }
+            }
+        }
+    }
+    for (const [questionId, containers] of questionContainers.entries()) {
+        if (!satisfiedQuestionIds.has(questionId)) {
+            throw new Error(`${label}.readerQuestions.${questionId}.answerQuote 未落在其声明的 ${[...containers].join('、')} 小节`);
+        }
+    }
+    const results = extractSection(analysis, '实验结果');
+    for (const pillar of plan.evidencePillars) {
+        if (pillar.evidenceIds.some(id => !ledgerIds.has(id))) {
+            throw new Error(`${label}.evidencePillars.${pillar.id} 引用了不存在的 evidenceLedger ID`);
+        }
+        if (!normalizeEvidence(results).includes(normalizeEvidence(pillar.readerQuote))) {
+            throw new Error(`${label}.evidencePillars.${pillar.id}.readerQuote 未落在实验结果正文`);
+        }
+    }
+}
+
+/**
+ * The canonical analysis deliberately retains fixed machine-checkable sections.
+ * v2 additionally carries a separate reader article for the published page:
+ * it must be a real argument, not a relabelled copy of those fixed sections.
+ */
+function validateReaderArticle(plan, article, evidenceLedger = [], options = {}) {
+    if (!plan || plan.version !== 2) return null;
+    const label = options.label || 'readerArticle';
+    const text = assertText(article, label, 2400);
+    if (text.length > 24000) throw new Error(`${label} 超过 24000 字，不能用逐表翻译替代编辑取舍`);
+    if (/^##(?!#)\s/m.test(text)) {
+        throw new Error(`${label} 只能使用 ### 论文特有小节；页面层级由发布器提供`);
+    }
+    const headings = [...text.matchAll(/^###\s+([^\n#]+?)\s*$/gm)].map(match => match[1].trim());
+    const expectedHeadings = plan.sectionPlan.map(item => item.heading);
+    if (headings.length !== expectedHeadings.length
+        || headings.some((heading, index) => heading !== expectedHeadings[index])) {
+        throw new Error(`${label} 必须按 editorialPlan.sectionPlan 顺序使用全部论文特有 ### 小节`);
+    }
+    if (/^###\s*(?:方法概述和架构|核心创新点|实验结果|细节详述|局限与问题)\s*$/m.test(text)) {
+        throw new Error(`${label} 不得把固定栏目名伪装成读者小节标题`);
+    }
+    const paragraphs = text.split(/\n\s*\n/).filter(item => (
+        item.trim().length >= 80 && !/^###\s/m.test(item.trim())
+    ));
+    if (paragraphs.length < 8) throw new Error(`${label} 至少需要 8 个实质段落，不能只给小标题提纲`);
+
+    const normalized = normalizeEvidence(text);
+    const ledgerIds = new Set((Array.isArray(evidenceLedger) ? evidenceLedger : []).map(item => item?.id));
+    for (const sectionPlan of plan.sectionPlan) {
+        if (!normalized.includes(normalizeEvidence(sectionPlan.anchorQuote))) {
+            throw new Error(`${label} 未包含「${sectionPlan.heading}」的 anchorQuote`);
+        }
+        for (const questionId of sectionPlan.readerQuestionIds) {
+            const question = plan.readerQuestions.find(item => item.id === questionId);
+            if (!normalized.includes(normalizeEvidence(question?.answerQuote))) {
+                throw new Error(`${label} 未包含 readerQuestions.${questionId}.answerQuote`);
+            }
+        }
+    }
+    for (const pillar of plan.evidencePillars) {
+        if (pillar.evidenceIds.some(id => !ledgerIds.has(id))) {
+            throw new Error(`${label}.evidencePillars.${pillar.id} 引用了不存在的 evidenceLedger ID`);
+        }
+        if (!normalized.includes(normalizeEvidence(pillar.readerQuote))) {
+            throw new Error(`${label} 未包含 evidencePillars.${pillar.id}.readerQuote`);
+        }
+    }
+    for (const narrative of options.readerNarratives || []) {
+        if (!normalized.includes(normalizeEvidence(narrative))) {
+            throw new Error(`${label} 未包含已审计 resultClaims.readerNarrative，实验解释不能游离于正文之外`);
+        }
+    }
+    const imageInsertions = options.imageInsertions || [];
+    // The v5 reader article is the reader-facing source of truth.  It is not
+    // enough for an insertion URL to occur somewhere in prose: publication
+    // intentionally renders this article instead of the legacy analysis, so
+    // every approved image must remain a standalone Markdown image block in
+    // the same audited order.  This also prevents a bare URL from silently
+    // disappearing when Markdown is rendered.
+    const articleBlocks = text.split(/\n\s*\n/).map(block => block.trim()).filter(Boolean);
+    const markdownImageUrls = articleBlocks.map(block => {
+        const match = block.match(/^!\[(?:\\.|[^\]\\])*\]\((https:\/\/[^)\s]+)(?:\s+["'][^"']*["'])?\)$/);
+        return match ? match[1] : null;
+    }).filter(Boolean);
+    const expectedImageUrls = imageInsertions.map(insertion => String(insertion?.url || '').trim());
+    if (expectedImageUrls.some(url => !url.startsWith('https://'))
+        || markdownImageUrls.length !== expectedImageUrls.length
+        || markdownImageUrls.some((url, index) => url !== expectedImageUrls[index])) {
+        throw new Error(`${label} 图片必须以独立 ![](...) Markdown 图块按 imageInsertions 顺序出现，不能只保留裸 URL 或重排图片`);
+    }
+    for (const insertion of imageInsertions) {
+        const labelPrefix = `${label} 图片 ${insertion?.url || 'unknown'}`;
+        for (const [field, minimum] of Object.entries({ url: 12, lead: 18, explanation: 30 })) {
+            const value = String(insertion?.[field] || '').trim();
+            if (value.length < minimum || !normalized.includes(normalizeEvidence(value))) {
+                throw new Error(`${labelPrefix} 必须保留已审计的 ${field}，不能让图片脱离正文论证`);
+            }
+        }
+    }
+    if (options.sourceText) {
+        validateExactFactCoverage('', options.sourceText, {
+            ...options,
+            label,
+            readerText: text
+        });
+    }
+    return text;
+}
+
+/**
+ * The roast is a compact editorial judgment, not a second generic abstract.
+ * Keeping its two claims tied to phrases already used in the long-form article
+ * makes the published verdict auditable without forcing citation markup into
+ * the reader-facing copy.
+ */
+function validateEditorialReview(review, readerArticle, options = {}) {
+    const label = options.label || 'editorial.review';
+    const text = assertText(review, label, 180);
+    if (text.length > 700) throw new Error(`${label} 超过 700 字，应收束为摘要前可读的两段判断`);
+    if (/^#{1,6}\s/m.test(text)) throw new Error(`${label} 不得内嵌 Markdown 标题`);
+    const paragraphs = text.split(/\n\s*\n/).map(item => item.trim()).filter(Boolean);
+    if (paragraphs.length !== 2 || paragraphs.some(item => item.length < 70)) {
+        throw new Error(`${label} 必须恰好包含两段、且每段至少 70 字：先评优点，再评不足`);
+    }
+    const templatePatterns = [
+        /亮点[：:]?\s*一是/, /优点[：:]?\s*一是/, /短板是/,
+        /不足[：:]?\s*一是[^。]{0,120}二是[^。]{0,120}三是/
+    ];
+    if (templatePatterns.some(pattern => pattern.test(text))) {
+        throw new Error(`${label} 不得使用“亮点一是/短板是”式固定模板`);
+    }
+    if (!/(?:优点|价值|扎实|有效|亮点|贡献|可取|可信|成立|强项|优势|做对)/.test(paragraphs[0])) {
+        throw new Error(`${label} 第一段必须明确评价论文最扎实的优点`);
+    }
+    if (!/(?:但|不足|局限|边界|缺少|没有|未|仍|代价|风险|不能|欠缺|薄弱)/.test(paragraphs[1])) {
+        throw new Error(`${label} 第二段必须明确指出证据或适用边界上的不足`);
+    }
+    const article = String(readerArticle || '');
+    if (!article.trim()) throw new Error(`${label} 必须绑定非空 readerArticle`);
+    // A six-character shared phrase is long enough to be paper-specific in
+    // Chinese prose, yet does not force the review to quote whole sentences.
+    const hasArticleAnchor = paragraph => {
+        const candidates = paragraph.match(/[\u3400-\u9fff]{6,}|[A-Za-z][A-Za-z0-9_-]{7,}/g) || [];
+        return candidates.some(candidate => {
+            if (article.includes(candidate)) return true;
+            if (!/[\u3400-\u9fff]/.test(candidate)) return false;
+            const maximum = Math.min(candidate.length, 24);
+            for (let length = maximum; length >= 6; length--) {
+                for (let start = 0; start + length <= candidate.length; start++) {
+                    if (article.includes(candidate.slice(start, start + length))) return true;
+                }
+            }
+            return false;
+        });
+    };
+    if (!hasArticleAnchor(paragraphs[0]) || !hasArticleAnchor(paragraphs[1])) {
+        throw new Error(`${label} 的优点和不足各须复用 readerArticle 中至少一个论文特有机制、实验或边界短语`);
+    }
+    return text;
 }
 
 function validateResearchBrief(brief, options = {}) {
@@ -390,6 +604,44 @@ function validateFigureReview(figureReview, options = {}) {
     return figureReview;
 }
 
+function validateManualAllRejectedImageException(options = {}) {
+    const {
+        figureReview,
+        imageInfos = [],
+        selectedImageUrls,
+        imageInsertions,
+        paperId = ''
+    } = options;
+    const label = `${paperId || 'paper'}.allRejectedImages`;
+    if (!Array.isArray(selectedImageUrls) || selectedImageUrls.length !== 0
+        || !Array.isArray(imageInsertions) || imageInsertions.length !== 0) {
+        throw new Error(`${label} 只允许 selectedImageUrls 与 imageInsertions 都显式为空数组的例外`);
+    }
+    if (!Array.isArray(imageInfos) || imageInfos.length === 0) {
+        throw new Error(`${label} 仅适用于全文 manifest 确有候选图且逐项人工拒绝的情形`);
+    }
+    validateFigureReview(figureReview, { imageInfos, selectedImageUrls, paperId });
+    const normalizedReasons = new Set();
+    for (const [index, decision] of figureReview.decisions.entries()) {
+        const itemLabel = `${label}.decisions[${index}]`;
+        if (decision.decision !== 'reject') {
+            throw new Error(`${itemLabel} 必须全部为 reject，不能借空选图夹带 select`);
+        }
+        const reason = assertText(decision.reason, `${itemLabel}.reason`, 40);
+        const normalized = normalizeEvidence(reason).toLowerCase();
+        if (normalizedReasons.has(normalized)) {
+            throw new Error(`${itemLabel}.reason 不得跨图复用同一拒绝模板`);
+        }
+        normalizedReasons.add(normalized);
+        const hasSpecificAnchor = /\b\d{2,}\s*[×x]\s*\d{2,}\b|[A-Za-z][A-Za-z0-9_-]{1,}|(?:流程图|热图|散点|谱图|曲线|坐标|标签|面板|图注|模型|分类器|特征|数据集|设备|录音机|基线图|示意图|系统总览|矩阵|分布|公式|箭头|分桶|点位|声码器)/i.test(reason);
+        if (!hasSpecificAnchor
+            || /^(?:该图)?(?:不适合|不需要|无价值|移动端不可读|与正文重复)[，。；;\s]*(?:故)?(?:不选|拒绝)?[。.]?$/.test(reason)) {
+            throw new Error(`${itemLabel}.reason 必须给出论文特有的像素/缓存/图注事实及其对本篇论证的影响，不能使用通用拒图理由`);
+        }
+    }
+    return figureReview;
+}
+
 function validateScoringCalibration(calibration, options = {}) {
     const { evidenceLedger = [], paperSubagentTask = '', label = 'scoringCalibration' } = options;
     if (!calibration || typeof calibration !== 'object' || Array.isArray(calibration)
@@ -530,7 +782,9 @@ function validateExactFactCoverage(analysis, sourceText, options = {}) {
         '核心摘要', '方法概述和架构', '核心创新点', '实验结果',
         '细节详述', '局限与问题', '开源详情'
     ];
-    const readerText = sections.map(section => extractSection(analysis, section)).join('\n');
+    const readerText = typeof options.readerText === 'string'
+        ? options.readerText
+        : sections.map(section => extractSection(analysis, section)).join('\n');
     const source = normalizeEvidence(sourceText).toLowerCase().replace(/\^/g, '');
     const looseSource = source.replace(/[\p{P}\p{S}]+/gu, '');
     const external = normalizeEvidence((options.externalEvidence || []).join('\n')).toLowerCase().replace(/\^/g, '');
@@ -662,7 +916,7 @@ function validateResultClaimCoverageV5(claims, options = {}) {
         }
         for (const bindingName of ['sourceBindings', 'readerBindings']) {
             const binding = claim[bindingName] || {};
-            if (!/(?:↑|↓|higher|lower|better|worse|best|outperform|improv|reduc|decreas|increas|越高越好|越低越好|更高|更低|提升|下降|降低|增加|描述|absolute|绝对|相关)/i.test(String(binding.direction || ''))) {
+            if (!/(?:↑|↓|higher|lower|better|worse|best|outperform|improv|reduc|decreas|increas|ris(?:e|es|ing)|fall(?:s|ing)?|fewer|more\s+accurate|less\s+accurate|strong(?:er|ly)?|beat(?:s|ing)?|versus|restor(?:e|es|ed|ing)?|significant|越高越好|越低越好|越大越好|越小越好|更高|更低|更少|更准确|较准确|准确率更高|准确率更低|高于|低于|超过|优于|劣于|领先|落后|提升|上升|回落|下降|降低|增加|减少|描述|absolute|绝对|相关)/i.test(String(binding.direction || ''))) {
                 throw new Error(`${label}[${index}].${bindingName}.direction 必须绑定真实方向语义`);
             }
             if (/\n|\|/.test(String(binding.value || ''))) {
@@ -694,8 +948,12 @@ module.exports = {
     validatePaperSubagent,
     validateResearchBrief,
     validateEditorialPlan,
+    validateEditorialPlanBindings,
+    validateReaderArticle,
+    validateEditorialReview,
     validateStageReviews,
     validateFigureReview,
+    validateManualAllRejectedImageException,
     validateScoringCalibration,
     validateResearchScoringCaps,
     validateOpenSourceEvidence,

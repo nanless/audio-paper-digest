@@ -1728,14 +1728,24 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         slug = paper_slugs.get(p.get('arxivId', ''), '')
         m = format_medal(i)
 
-        if slug:
-            md += f"### {m} [{title}]({BASE_PATH}/posts/{date_str}-{slug})\n\n"
-        else:
-            md += f"### {m} {title}\n\n"
-
         pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
         aid = p.get('arxivId', '')
         aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
+        reader_plan = _manual_reader_editorial_plan(p)
+        reader_article = _manual_reader_article(p, reader_plan)
+        reader_title = reader_plan['readerTitle'].strip() if reader_article else title
+        if slug:
+            md += f"### {m} [{reader_title}]({BASE_PATH}/posts/{date_str}-{slug})\n\n"
+        else:
+            md += f"### {m} {reader_title}\n\n"
+        if reader_article:
+            english_title = f'[{title}]({aurl})' if aurl else title
+            md += f"> 英文题目：*{english_title}*\n\n"
+        tags = pa.get('tags') or []
+        if isinstance(tags, str):
+            tags = [tag for tag in tags.split() if tag]
+        if tags:
+            md += f"标签：{' '.join(tags)}\n\n"
         
         # 显示总分和所有子项得分（单开一行）
         score_line = []
@@ -1761,16 +1771,9 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         if sub_scores:
             score_line.append(' | '.join(sub_scores))
         if score_line:
-            md += f"{' | '.join(score_line)}\n\n"
+            md += f"评分：{' | '.join(score_line)}\n\n"
         
         meta = build_paper_meta(pa, aurl)
-        if meta:
-            md += f"{meta}\n\n"
-
-        if pa.get('authors'):
-            authors_clean = pa['authors'].replace('- **第一作者**', '第一作者').replace('- **通讯作者**', '通讯作者').replace('- **作者列表**', '作者列表')
-            md += f"👥 **作者与机构**\n\n{authors_clean}\n\n"
-
         if pa.get('roast'):
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
@@ -1792,7 +1795,15 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             if supp_match:
                 supplementary = supp_match.group(1).strip()
                 oss_text = oss_text[:supp_match.start()].strip()
-            md += f"🔗 **开源详情**\n\n{oss_text}\n\n"
+            md += f"🔗 **开源资源**\n\n{oss_text}\n\n"
+
+        # The reader-facing sequence ends at open resources.  Keep provenance
+        # and author details afterwards, so they do not interrupt the verdict.
+        if meta:
+            md += f"{meta}\n\n"
+        if pa.get('authors'):
+            authors_clean = pa['authors'].replace('- **第一作者**', '第一作者').replace('- **通讯作者**', '通讯作者').replace('- **作者列表**', '作者列表')
+            md += f"👥 **作者与机构**\n\n{authors_clean}\n\n"
 
         # 补充信息放到最后面
         if supplementary:
@@ -1804,22 +1815,27 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         title = p.get('title', 'Unknown')
         slug = paper_slugs.get(p.get('arxivId', ''), '')
 
-        if slug:
-            md += f"### {len(scored)+i+1}. [{title}]({BASE_PATH}/posts/{date_str}-{slug})\n\n"
-        else:
-            md += f"### {len(scored)+i+1}. {title}\n\n"
-
-        # unscored 论文也显示完整内容（作者、点评、摘要、开源详情）
+        # unscored 论文也使用与评分论文相同的读者顺序。
         pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
         aid = p.get('arxivId', '')
         aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
+        reader_plan = _manual_reader_editorial_plan(p)
+        reader_article = _manual_reader_article(p, reader_plan)
+        reader_title = reader_plan['readerTitle'].strip() if reader_article else title
+        if slug:
+            md += f"### {len(scored)+i+1}. [{reader_title}]({BASE_PATH}/posts/{date_str}-{slug})\n\n"
+        else:
+            md += f"### {len(scored)+i+1}. {reader_title}\n\n"
+        if reader_article:
+            english_title = f'[{title}]({aurl})' if aurl else title
+            md += f"> 英文题目：*{english_title}*\n\n"
+        tags = pa.get('tags') or []
+        if isinstance(tags, str):
+            tags = [tag for tag in tags.split() if tag]
+        if tags:
+            md += f"标签：{' '.join(tags)}\n\n"
+        md += '评分：N/A（分析未提供可验证的八维评分）\n\n'
         meta = build_paper_meta(pa, aurl)
-        if meta:
-            md += f"{meta}\n\n"
-
-        if pa.get('authors'):
-            authors_clean = pa['authors'].replace('- **第一作者**', '第一作者').replace('- **通讯作者**', '通讯作者').replace('- **作者列表**', '作者列表')
-            md += f"👥 **作者与机构**\n\n{authors_clean}\n\n"
 
         if pa.get('roast'):
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
@@ -1839,7 +1855,13 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             if supp_match:
                 supplementary = supp_match.group(1).strip()
                 oss_text = oss_text[:supp_match.start()].strip()
-            md += f"🔗 **开源详情**\n\n{oss_text}\n\n"
+            md += f"🔗 **开源资源**\n\n{oss_text}\n\n"
+
+        if meta:
+            md += f"{meta}\n\n"
+        if pa.get('authors'):
+            authors_clean = pa['authors'].replace('- **第一作者**', '第一作者').replace('- **通讯作者**', '通讯作者').replace('- **作者列表**', '作者列表')
+            md += f"👥 **作者与机构**\n\n{authors_clean}\n\n"
 
         if supplementary:
             md += f"📎 **补充信息**\n\n{supplementary}\n\n"
@@ -2209,6 +2231,98 @@ def stage_visual_summary_assets(assets, staged_posts):
     return staged
 
 
+def _manual_reader_editorial_plan(paper):
+    """Return the opt-in v2 reader facade without changing canonical analysis."""
+    manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
+    contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
+    takeover = manifest.get('manualTakeover') if isinstance(manifest.get('manualTakeover'), dict) else {}
+    brief = takeover.get('researchBrief') if isinstance(takeover.get('researchBrief'), dict) else {}
+    plan = brief.get('editorialPlan') if isinstance(brief.get('editorialPlan'), dict) else {}
+    if contracts.get('manualDepth') != MANUAL_DEPTH_CONTRACT_VERSION_V5 or plan.get('version') != 2:
+        return None
+    if not all(isinstance(plan.get(key), str) and plan[key].strip() for key in ('readerTitle', 'oneSentenceThesis')):
+        return None
+    return plan
+
+
+def _manual_reader_article(paper, plan):
+    """Read the separately attested reader article; never trust an unhashed draft."""
+    if not plan or plan.get('version') != 2:
+        return None
+    manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
+    takeover = manifest.get('manualTakeover') if isinstance(manifest.get('manualTakeover'), dict) else {}
+    article = takeover.get('readerArticle')
+    expected_sha = takeover.get('readerArticleSha256')
+    if not isinstance(article, str) or not article.strip() or not isinstance(expected_sha, str):
+        return None
+    actual_sha = hashlib.sha256(article.encode('utf-8')).hexdigest()
+    return article.strip() if actual_sha == expected_sha else None
+
+
+def _nest_reader_headings(content, minimum_level=4):
+    """Keep author-written reader subheads below the generated page section."""
+    def replace(match):
+        return '#' * max(len(match.group(1)), minimum_level) + match.group(2)
+    return re.sub(r'^(#{1,6})(\s+)', replace, content, flags=re.MULTILINE)
+
+
+def _reader_first_image_plans_by_url(paper):
+    """Resolve Manual insertion plans to their selected URL without guessing."""
+    manifest = paper.get('imageManifest') if isinstance(paper.get('imageManifest'), dict) else {}
+    selected = manifest.get('selected') if isinstance(manifest.get('selected'), list) else []
+    selected_by_number = {
+        item.get('index', position + 1): item.get('url')
+        for position, item in enumerate(selected)
+        if isinstance(item, dict) and isinstance(item.get('url'), str)
+    }
+    plans = {}
+    for plan in manifest.get('insertionPlan') or []:
+        if not isinstance(plan, dict):
+            continue
+        url = plan.get('url')
+        if not isinstance(url, str):
+            url = selected_by_number.get(plan.get('imageNumber'))
+        if isinstance(url, str) and url.startswith('https://'):
+            plans[url] = plan
+    return plans
+
+
+def _strip_non_reader_article_images(content, image_plans_by_url):
+    """Remove only a complete, exact legacy duplicate of a Manual v5 image group.
+
+    A reader-first page renders compact compatibility fields *and* the
+    separately attested reader article.  A selected figure may therefore still
+    be present in a legacy field.  Deleting only its image leaves orphaned
+    “如下图” / “图中” prose; guessing from those phrases is equally unsafe.
+    Remove the three-block group only when the canonical insertion plan proves
+    that the immediately adjacent blocks are the exact lead and explanation.
+    Any partial or unbound occurrence is deliberately retained so the final
+    image-order gate fails closed instead of damaging reader prose.
+    """
+    if not isinstance(content, str) or not image_plans_by_url:
+        return content
+    paragraphs = re.split(r'\n(?:[ \t]*\n)+', content.strip())
+    remove = set()
+    for index, paragraph in enumerate(paragraphs):
+        match = re.fullmatch(r'[ \t]*!\[[^\n]*\]\((https://[^)\s]+)\)[ \t]*', paragraph)
+        if not match:
+            continue
+        url = match.group(1)
+        plan = image_plans_by_url.get(url)
+        if not isinstance(plan, dict) or index == 0 or index + 1 >= len(paragraphs):
+            continue
+        lead = re.sub(r'\s+', ' ', str(plan.get('lead') or '')).strip()
+        explanation = re.sub(r'\s+', ' ', str(plan.get('explanation') or '')).strip()
+        previous = re.sub(r'\s+', ' ', paragraphs[index - 1]).strip()
+        following = re.sub(r'\s+', ' ', paragraphs[index + 1]).strip()
+        if lead and explanation and previous == lead and following == explanation:
+            remove.update((index - 1, index, index + 1))
+    return '\n\n'.join(
+        paragraph for index, paragraph in enumerate(paragraphs)
+        if index not in remove and paragraph.strip()
+    ).strip()
+
+
 def generate_paper_page(paper, date_str, category='论文速递'):
     """生成单篇论文的独立页面"""
     # main() replaces parsed with the validated analysis baseline before generation.
@@ -2236,6 +2350,13 @@ def generate_paper_page(paper, date_str, category='论文速递'):
             MANUAL_DEPTH_CONTRACT_VERSION_V5,
         } else ''
     )
+    reader_plan = _manual_reader_editorial_plan(paper)
+    reader_article = _manual_reader_article(paper, reader_plan)
+    # A partial or tampered v2 payload must fall back to the canonical layout;
+    # do not expose the reader-first facade unless its article hash attests it.
+    reader_first = reader_plan is not None and reader_article is not None
+    reader_first_image_plans = _reader_first_image_plans_by_url(paper) if reader_first else {}
+    reader_title = reader_plan['readerTitle'].strip() if reader_first else display_title
     md = f"""---
 title: "{yaml_escape(display_title)}"
 date: {date_str}
@@ -2249,16 +2370,26 @@ paper_digest_page_type: paper
 paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
 {manual_depth_marker}---
 
-# 📄 {display_title}
+# 📄 {reader_title}
 
 """
+    if reader_first:
+        paper_link = f'[{display_title}]({aurl})' if aurl else display_title
+        # Keep the Chinese reader title in the H1, then expose the paper's
+        # original English title and canonical link explicitly.  Calling this
+        # merely “论文” made the reader-first identity block ambiguous and
+        # broke the same title/link contract used by the daily index.
+        md += f'> 英文题目：*{paper_link}*\n>\n> 一句话：**{reader_plan["oneSentenceThesis"].strip()}**\n\n'
     if paper.get('analysisSource') == 'abstract':
         md += '> ⚠️ 本文仅基于论文摘要生成，未能取得可验证的全文，技术细节与评分置信度有限。\n\n'
     elif paper.get('analysisConfidence') == 'full_text' and paper.get('sourceTextChars', 0) > paper.get('usedTextChars', paper.get('sourceTextChars', 0)):
         md += '> ℹ️ 本文基于论文全文节选生成，超出分析上下文上限的内容未纳入。\n\n'
+    metadata_block = ''
     if pa:
+        reader_identity_lines = []
         if tags:
-            md += f"标签：{' '.join(tags)}\n\n"
+            metadata_block += f"标签：{' '.join(tags)}\n\n"
+            reader_identity_lines.append(f"标签：{' '.join(tags)}")
 
         # 得分单开一行：总分 + 所有子项
         score_line = []
@@ -2284,14 +2415,20 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
         if sub_scores:
             score_line.append(' | '.join(sub_scores))
         if score_line:
-            md += f"{' | '.join(score_line)}\n\n"
+            metadata_block += f"{' | '.join(score_line)}\n\n"
+            reader_identity_lines.append(f"评分：{' | '.join(score_line)}")
 
         meta = build_paper_meta(pa, aurl)
         if meta:
-            md += f"{meta}\n\n"
+            metadata_block += f"{meta}\n\n"
 
         if pa.get('authors'):
-            md += f"\n### 👥 作者与机构\n\n{pa['authors']}\n"
+            metadata_block += f"\n### 👥 作者与机构\n\n{pa['authors']}\n"
+
+        if reader_first and reader_identity_lines:
+            md += '> ' + '\n>\n> '.join(reader_identity_lines) + '\n\n'
+        elif not reader_first:
+            md += metadata_block
 
         # 分离补充信息（从 opensource 中提取）
         opensource_content = pa.get('opensource', '')
@@ -2302,17 +2439,29 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
                 supplementary = supp_match.group(1).strip()
                 opensource_content = opensource_content[:supp_match.start()].strip()
 
-        sections = [
-            ('📌 核心摘要', 'summary'),
-            ('🏗️ 方法概述和架构', 'architecture'),
-            ('💡 核心创新点', 'innovation'),
-            ('📊 实验结果', 'results'),
-            ('🔬 细节详述', 'details'),
-            ('🚨 局限与问题', 'limitations'),
-            ('🔗 开源与复现资源', 'opensource', opensource_content),
-            ('💡 研究者判断', 'roast'),
-            ('⚖️ 评分理由', 'scoringReason'),
-        ]
+        sections = (
+            [
+                ('💬 毒舌点评', 'roast'),
+                ('📌 核心摘要', 'summary'),
+                ('🔗 开源与复现资源', 'opensource', opensource_content),
+                # The decision-facing blocks come first.  The long reader
+                # article follows the resource status, then the score ledger
+                # closes the page as auditable evidence.
+                ('🧭 深度解读', 'readerArticle', reader_article),
+                ('⚖️ 评分理由', 'scoringReason'),
+            ] if reader_article else [
+                ('📌 核心摘要', 'summary'),
+                ('🏗️ 方法概述和架构', 'architecture'),
+                ('💡 核心创新点', 'innovation'),
+                ('📊 实验结果', 'results'),
+                ('🔬 细节详述', 'details'),
+                ('🚨 局限与问题', 'limitations'),
+                ('🔗 开源与复现资源', 'opensource', opensource_content),
+                ('💡 研究者判断', 'roast'),
+                ('⚖️ 评分理由', 'scoringReason'),
+            ]
+        )
+        scoring_evidence = ''
         for item in sections:
             if len(item) == 3:
                 label, key, content = item
@@ -2325,21 +2474,48 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
                     cutoff = re.search(r'\n##\s*详细分', content)
                     if cutoff:
                         content = content[:cutoff.start()].strip()
-                # 清理内容开头可能残留的 Markdown 标题（如 LLM 输出自带了 ## 开源详情）
-                content = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', content.strip(), count=1)
+                # 清理内容开头可能残留的 Markdown 标题（如 LLM 输出自带了 ## 开源详情）。
+                # Manual v5 reader-plan v2 deliberately owns its paper-specific
+                # headings, so preserve and nest them instead of flattening them.
+                if reader_first:
+                    if key != 'readerArticle':
+                        content = _strip_non_reader_article_images(
+                            content, reader_first_image_plans,
+                        )
+                    content = _nest_reader_headings(
+                        # The generated "深度解读" heading is level 3, so
+                        # reader-authored sections must start at level 4 to
+                        # remain true children rather than peer sections.
+                        content.strip(), minimum_level=4
+                    )
+                else:
+                    content = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', content.strip(), count=1)
                 content = re.sub(r'^###\s*\d+\.\s*[^\n]+\n', '', content, flags=re.MULTILINE)
                 content = re.sub(r'^\d+\.\s*\*\*([^*]+)\*\*\s*$', r'\1', content, flags=re.MULTILINE)
                 if key == 'scoringReason':
-                    md += (
-                        f'\n<details>\n<summary>{label}（展开查看）</summary>\n\n'
-                        f'{content}\n\n</details>\n'
-                    )
+                    if reader_first:
+                        # Reader-first pages show the score at the top, but leave
+                        # its evidence trail at the end, after the argument and limits.
+                        scoring_evidence = content
+                    else:
+                        md += (
+                            f'\n<details>\n<summary>{label}（展开查看）</summary>\n\n'
+                            f'{content}\n\n</details>\n'
+                        )
                 else:
                     md += f'\n### {label}\n\n{content}\n'
 
         # 补充信息放到最后面
         if supplementary:
             md += f'\n### 📎 补充信息\n\n{supplementary}\n'
+        if reader_first and metadata_block:
+            md += f'\n<details>\n<summary>📎 论文与评分元数据</summary>\n\n{metadata_block.strip()}\n\n</details>\n'
+        if reader_first and scoring_evidence:
+            md += (
+                '\n### ⚖️ 评分依据与证据（展开查看）\n\n'
+                f'<details>\n<summary>逐维得分、全文证据与扣分边界</summary>\n\n'
+                f'{scoring_evidence}\n\n</details>\n'
+            )
     else:
         md += '> ⚠️ 该论文分析失败\n'
 

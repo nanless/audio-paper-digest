@@ -11,7 +11,9 @@ const {
     validateFigureReview,
     validateScoringCalibration,
     validateExactFactCoverage,
-    validateResultClaimCoverageV5
+    validateResultClaimCoverageV5,
+    validateReaderArticle,
+    validateEditorialReview
 } = require('./manual-research-contract.js');
 
 const REQUIRED_ANALYSIS_SECTIONS = Object.freeze([
@@ -1066,6 +1068,33 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
                 selectedOrderFlexible: true,
                 paperId: manifest?.sourceAcquisition?.sourceId
             });
+            if (takeover.researchBrief?.editorialPlan?.version === 2) {
+                validateReaderArticle(takeover.researchBrief.editorialPlan, takeover.readerArticle, takeover.evidenceLedger, {
+                    label: 'manualTakeover.readerArticle', sourceText: options.sourceText || '',
+                    boundEvidence: [
+                        ...(takeover.resultClaims || []).map(claim => claim.sourceQuote),
+                        ...(takeover.evidenceLedger || []).map(item => item.sourceQuote)
+                    ],
+                    derivedFacts: takeover.researchBrief?.derivedFacts || [],
+                    readerNarratives: (takeover.resultClaims || []).map(claim => claim.readerNarrative),
+                    imageInsertions: options.imageManifest?.insertionPlan || []
+                });
+                if (!/^[a-f0-9]{64}$/.test(String(takeover.readerArticleSha256 || ''))
+                    || takeover.readerArticleSha256 !== manualTextSha256(takeover.readerArticle)) {
+                    return 'manualTakeover.readerArticleSha256 不匹配';
+                }
+                validateEditorialReview(takeover.editorialReview, takeover.readerArticle, {
+                    label: 'manualTakeover.editorialReview'
+                });
+                if (!/^[a-f0-9]{64}$/.test(String(takeover.editorialReviewSha256 || ''))
+                    || takeover.editorialReviewSha256 !== manualTextSha256(takeover.editorialReview)) {
+                    return 'manualTakeover.editorialReviewSha256 不匹配';
+                }
+                if (options.analysis
+                    && extractSection(options.analysis, '毒舌点评').trim() !== takeover.editorialReview.trim()) {
+                    return 'manualTakeover.editorialReview 未与 canonical 毒舌点评逐字绑定';
+                }
+            }
         } catch (error) {
             return `manual v5 研究者契约失败: ${error.message}`;
         }

@@ -1448,6 +1448,16 @@ has_dataset: 否
         assert.match(result.analysis, /第二段把声学特征送入跨模态融合模块。\n\n承接声学特征进入跨模态融合模块的描述/);
     });
 
+    it('## 固定章节内的 ### 读者小节不会截断图片锚点目录', () => {
+        const { buildImageAnchorCatalog } = require('../scripts/deep-analyzer.js');
+        const analysis = `## 方法概述和架构\n导语段定义流式输入。\n\n### 回声路径失控时先检查环路\n\n小节正文描述参考信号与回声消除器。\n\n## 实验结果\n结果段。`;
+        const catalog = buildImageAnchorCatalog(analysis);
+        const methodEntries = catalog.filter(item => item.section === '方法概述和架构');
+        assert.ok(methodEntries.some(item => item.section === '方法概述和架构'
+            && item.text === '小节正文描述参考信号与回声消除器。'));
+        assert.ok(methodEntries.every(item => item.text !== '结果段。'));
+    });
+
     it('context-bound v1 拒绝通用套话、缺少结论定位和跨段失联', () => {
         const {
             parseImageInsertionPlanDetailed,

@@ -478,12 +478,30 @@ title: "Duplicate"
     def test_index_uses_selected_count_and_word_safe_ranking_title(self):
         title = 'A deliberately long English paper title that would otherwise end inside a ranking word'
         parsed = {
+            'score': '8.0',
             'rankBucket': '前25%',
             'documentType': '方法研究',
             'primaryTaskTag': '#语音识别',
             'tags': ['#语音识别'],
+            'roast': '值得肯定的是它把关键比较做得足够直接；但缺少跨域验证，因此结论仍应收在当前设置内。',
+            'summary': '这篇论文用明确的实验设置回答了语音识别中的一个局部问题。',
+            'opensource': '代码：尚未公开。',
         }
-        paper = {'arxivId': '2608.00001', 'title': title, 'parsed': parsed}
+        reader_article = '### 先拆开关键矛盾\n\n' + '这里解释方法选择与实验边界。' * 8
+        paper = {
+            'arxivId': '2608.00001', 'title': title, 'parsed': parsed,
+            'analysisManifest': {
+                'contracts': {'manualDepth': 'full-text-evidence-v5'},
+                'manualTakeover': {
+                    'researchBrief': {'editorialPlan': {
+                        'version': 2, 'readerTitle': '先把语音识别的关键矛盾说清楚',
+                        'oneSentenceThesis': '以可验证的分工处理当前设置中的识别冲突，并把无法外推的边界明确留在结论中。',
+                    }},
+                    'readerArticle': reader_article,
+                    'readerArticleSha256': hashlib.sha256(reader_article.encode('utf-8')).hexdigest(),
+                },
+            },
+        }
         markdown = publish_to_blog.generate_index_page(
             [(8.0, paper, parsed)], [], '2026-08-25',
             {'2608.00001': 'long-title-2608-00001'},
@@ -498,6 +516,15 @@ title: "Duplicate"
         self.assertIn('| 8.0 | 前25% |', markdown)
         self.assertNotIn('| 8.0分 |', markdown)
         self.assertNotRegex(compact[:-1], r'\botherwis$')
+        self.assertIn('### 🥇 [先把语音识别的关键矛盾说清楚]', markdown)
+        self.assertIn('> 英文题目：*[A deliberately long English paper title', markdown)
+        for text in ('标签：#语音识别', '评分：**8.0/10**', '💡 **毒舌点评**', '📌 **核心摘要**', '🔗 **开源资源**'):
+            self.assertIn(text, markdown)
+        self.assertLess(markdown.index('> 英文题目：'), markdown.index('标签：#语音识别'))
+        self.assertLess(markdown.index('标签：#语音识别'), markdown.index('评分：**8.0/10**'))
+        self.assertLess(markdown.index('评分：**8.0/10**'), markdown.index('💡 **毒舌点评**'))
+        self.assertLess(markdown.index('💡 **毒舌点评**'), markdown.index('📌 **核心摘要**'))
+        self.assertLess(markdown.index('📌 **核心摘要**'), markdown.index('🔗 **开源资源**'))
 
     def test_review_removes_only_high_similarity_prose_and_keeps_table_continuations(self):
         first = (
@@ -822,6 +849,109 @@ title: "Bad table"
         self.assertIn('title: "EXAM²: Extending Audio Understanding"', markdown)
         self.assertIn('# 📄 EXAM²: Extending Audio Understanding', markdown)
         self.assertNotIn(r'\underline', markdown)
+
+    def test_manual_v5_reader_plan_uses_reader_first_header_and_preserves_custom_subheads(self):
+        reader_article = (
+            '### 先解释表示冲突\n\n'
+            '这里用完整段落解释理解与生成为何不能共享同一接口，并把论文的设计选择放回可检验的问题中。\n\n'
+            '### 再追踪两条通路\n\n'
+            '这里用完整段落追踪输入、共享推理与输出如何衔接，避免把模块名称直接堆给读者。'
+        )
+        markdown, _slug = publish_to_blog.generate_paper_page({
+            'title': 'A General Purpose Audio Model',
+            'arxivId': '2608.24168',
+            'parsed': {
+                'score': '8.7', 'tags': ['#音频理解'],
+                'summary': '这是一篇读者版摘要。',
+                'roast': '它把双路径的职责划分得很清楚，值得肯定；但没有组件消融，因而仍不足以证明每个分工都不可替代。',
+                'opensource': '代码：尚未公开；复现需要依照正文的训练设置自行实现。',
+                'architecture': '### 两条通路为何只在语言主干会合\n\n这里解释数据流。',
+                'results': '### 哪项比较真正支持主张\n\n这里解释实验。',
+                'scoringReason': '* 创新性 (1.7/2)：[E01] 机制与直接证据可追溯，但没有组件消融。',
+            },
+            'analysisManifest': {
+                'contracts': {'manualDepth': 'full-text-evidence-v5'},
+                'manualTakeover': {'researchBrief': {'editorialPlan': {
+                    'version': 2,
+                    'readerTitle': '两条表示如何统一听懂与生成音频',
+                    'oneSentenceThesis': '共享语言推理而分离音频表示，让理解压缩与生成还原不再争抢同一个接口。',
+                }}, 'readerArticle': reader_article,
+                'readerArticleSha256': hashlib.sha256(reader_article.encode('utf-8')).hexdigest()},
+            },
+        }, '2026-08-26')
+        self.assertIn('# 📄 两条表示如何统一听懂与生成音频', markdown)
+        self.assertIn('> 英文题目：*[A General Purpose Audio Model](https://arxiv.org/abs/2608.24168)*', markdown)
+        self.assertIn('> 一句话：**共享语言推理而分离音频表示', markdown)
+        self.assertIn('> 标签：#音频理解', markdown)
+        self.assertIn('> 评分：**8.7/10**', markdown)
+        self.assertIn('### 💬 毒舌点评', markdown)
+        self.assertIn('### 🔗 开源与复现资源', markdown)
+        self.assertLess(markdown.index('> 英文题目：'), markdown.index('> 标签：#音频理解'))
+        self.assertLess(markdown.index('> 标签：#音频理解'), markdown.index('> 评分：**8.7/10**'))
+        self.assertLess(markdown.index('> 评分：**8.7/10**'), markdown.index('### 💬 毒舌点评'))
+        self.assertLess(markdown.index('### 💬 毒舌点评'), markdown.index('### 📌 核心摘要'))
+        self.assertIn('#### 先解释表示冲突', markdown)
+        self.assertIn('#### 再追踪两条通路', markdown)
+        self.assertNotRegex(markdown, r'(?m)^### 先解释表示冲突$')
+        self.assertIn('## 🧭 深度解读', markdown)
+        self.assertLess(markdown.index('### 📌 核心摘要'), markdown.index('### 🔗 开源与复现资源'))
+        self.assertLess(markdown.index('### 🔗 开源与复现资源'), markdown.index('## 🧭 深度解读'))
+        self.assertLess(markdown.index('## 🧭 深度解读'), markdown.index('#### 先解释表示冲突'))
+        self.assertNotIn('### 🏗️ 方法概述和架构', markdown)
+        self.assertIn('<summary>📎 论文与评分元数据</summary>', markdown)
+        self.assertIn('### ⚖️ 评分依据与证据（展开查看）', markdown)
+        self.assertGreater(
+            markdown.index('### ⚖️ 评分依据与证据（展开查看）'),
+            markdown.index('<summary>📎 论文与评分元数据</summary>'),
+        )
+
+    def test_manual_v5_renders_selected_figure_only_from_reader_article(self):
+        url = 'https://arxiv.org/html/2608.29999/figure-1.png'
+        legacy_lead = '摘要先概括论文问题，并说明为什么这张图只应在权威读者长文中负责图文论证。'
+        legacy_explanation = '该图的解释应由读者长文独占，避免同一证据在摘要和正文重复出现。'
+        reader_article = (
+            '### 图只服务于长文论证\n\n'
+            '长文先说明这张结构图回答的具体问题，并保留其解释边界。\n\n'
+            f'![结构图]({url})\n\n'
+            '图中箭头只支持已经绘出的模块连接，不能推出没有测量的训练或部署结论。'
+        )
+        markdown, _slug = publish_to_blog.generate_paper_page({
+            'title': 'Reader-first Figure Ownership',
+            'arxivId': '2608.29999',
+            'selectedImageUrls': [url],
+            'parsed': {
+                'score': '8.0', 'tags': ['#音频理解'],
+                'summary': (
+                    f'{legacy_lead}\n\n'
+                    f'![旧摘要中的重复图]({url})\n\n'
+                    f'{legacy_explanation}'
+                ),
+                'roast': '优点是图文论证有明确机制；不足是没有额外的部署测量。',
+                'opensource': '代码：尚未公开。',
+                'scoringReason': '* 创新性 (1.6/2)：有明确机制与边界。',
+            },
+            'analysisManifest': {
+                'contracts': {'manualDepth': 'full-text-evidence-v5'},
+                'manualTakeover': {'researchBrief': {'editorialPlan': {
+                    'version': 2,
+                    'readerTitle': '由读者长文唯一持有图文证据',
+                    'oneSentenceThesis': '图应当只在绑定了问题、读法和边界的读者长文里出现一次。',
+                }}, 'readerArticle': reader_article,
+                'readerArticleSha256': hashlib.sha256(reader_article.encode('utf-8')).hexdigest()},
+            },
+            'imageManifest': {'selected': [{'index': 1, 'url': url}], 'insertionPlan': [{
+                'imageNumber': 1, 'lead': legacy_lead, 'explanation': legacy_explanation,
+            }]},
+        }, '2026-08-27')
+        self.assertEqual(markdown.count(url), 1)
+        self.assertIn(f'![结构图]({url})', markdown)
+        self.assertNotIn('旧摘要中的重复图', markdown)
+        summary = re.search(
+            r'### 📌 核心摘要\n\n([\s\S]*?)(?=\n### 🔗 开源与复现资源)', markdown,
+        )
+        self.assertIsNotNone(summary)
+        self.assertNotIn(legacy_lead, summary.group(1))
+        self.assertNotIn(legacy_explanation, summary.group(1))
 
     def test_publish_image_exclusion_contract_rejects_broad_or_unexplained_entries(self):
         configured = publish_to_blog.load_publish_image_exclusions()

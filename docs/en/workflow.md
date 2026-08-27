@@ -6,14 +6,14 @@ The default daily entry is `./run-daily-digest.sh YYYY-MM-DD`. Starting from fet
 
 When the user asks to run a dated paper digest, that request already authorizes the blog push and requires every stage above. Do not stop after fetch, analysis, review, or publication. WeChat, Feishu, and Xiaohongshu auto-publishing are outside the default scope.
 
-### 3.0 Automatic and Explicit Manual-Takeover Paths
+### 3.0 Default Manual v5 and Explicit API Path
 
-The normal path uses keyword prefiltering plus LLM filtering, staged LLM deep analysis, and three-layer blog review. Model-service failures never silently switch a paper or batch to manual success. Explicit takeover is available as follows:
+The normal path is Manual v5. Keyword prefiltering plus LLM filtering, staged LLM deep analysis, and ordinary three-layer blog review run only when the user explicitly requests the API/LLM path. Neither model-service failures nor a manual choice may silently change a paper or batch's provenance:
 
 - `manual-fetch.js --raw` still accesses arXiv and HuggingFace, but does not call the filter model. `--select` accepts a `manual_offline` v1 decision for every candidate and binds input SHA, reviewer, and protocol fingerprint into the four filter artifacts.
-- `manual-deep-analysis.js` calls no LLM/API. Records v2 assemble the current spec v4; every paper binds controlled full text and SHA, `manual-analysis-record.md`, stage prompt hashes, source-locatable evidence, two audit passes, and distinct reviewed claims. Manual v4 inherits v3's progressive summary, input-to-output method flow, gap–mechanism–evidence–boundary innovations, comparative/ablation and negative results, reproducibility details, and layered limitations, then requires `experimentTables=evidence-rich-v2` and context-bound image narratives. Canonical output is written only after `full-text-evidence-v4` passes. Historical spec v3 remains readable and retains v3 plus `bounded-v1` semantics.
-- Manual v4 reader quality is not a character-count proxy: every paper carries at least three `resultClaims` that bind setting, method, baseline, metric, value, unit, and direction to contiguous source quotations. Its seven-dimension `readabilityRubric` must score at least 12/14 with no zero. Exact quantities use Arabic numerals, while deterministic checks reject within-paper and batch templates, missing Han/ASCII spacing, overlong paragraphs, and dense defensive negation.
-- `manual-review-blog.py` replaces only the semantic LLM review when that service is unavailable. Its v2 attestation binds every generated file and SHA to independent notes and eight per-file semantic checks covering narrative, facts, experiments, reproducibility, limitations, scoring, and images. Any deterministic mutation invalidates the existing attestation and requires review of the final bytes. The receipt uses `manual_semantic`; push revalidates the per-file provenance, Git baseline, protocol, Hugo gate, and remote OID.
+- `manual-deep-analysis.js` calls no LLM/API. Records v3 assemble the current spec v5; every paper binds controlled full text and SHA, `manual-analysis-record.md`, explicit stage reviews, source-locatable evidence, and distinct scoring/readability reviews. New `editorialPlan` v2 binds a 2,400–24,000-character `readerArticle`: it is the SHA-attested, paper-specific continuous article published in place of fixed method/innovation/results/detail/limitation panels. The published order is Chinese title, English title/arXiv link, tags/score, snarky review, core summary, open resources, deep reading, and final score evidence. Canonical output is written only after `full-text-evidence-v5` passes. Historical records/specs remain readable under their original compatibility contracts.
+- Manual v5 reader quality is not a character-count proxy: every paper carries at least three `resultClaims` (four for systems/methods) that bind setting, method, baseline, metric, value, unit, and direction to contiguous source quotations. Each claim also has a natural-language `readerNarrative` that actually appears in the results prose rather than a schema-field list. Its seven-dimension `readabilityRubric` must score at least 12/14 with no zero. Exact quantities use Arabic numerals, while deterministic checks reject within-paper and batch templates, missing Han/ASCII spacing, overlong paragraphs, and dense defensive negation.
+- `manual-review-blog.py` replaces only the semantic LLM review when that service is unavailable. New batches require its v3 attestation (v2 is historical compatibility): it binds every generated file and SHA to independent notes and eight per-file semantic checks covering narrative, facts, experiments, reproducibility, limitations, scoring, and images, plus an independent `reviewSubagent` per page and ordered per-image `imageFindings` for caption, adjacent narrative, visible facts, and mobile readability. Any deterministic mutation invalidates the existing attestation and requires review of the final bytes. The receipt uses `manual_semantic`; push revalidates the per-file provenance, Git baseline, protocol, Hugo gate, and remote OID.
 
 Each manual mode replaces one model responsibility only; source-health, content, publication, and visual gates remain mandatory.
 
@@ -153,14 +153,16 @@ A high-recall keyword gate runs before LLM filtering by default, with core audio
 
 The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFullText}`, `{title}`, `{authors}`, `{categories}`, `{arxivId}`, `{textForAnalysis}` placeholders replaced at runtime.
 
-**Analysis content (generated by LLM, output in Chinese)**:
+**Automatic API canonical analysis content (generated by LLM, output in Chinese)**:
+
+> The fixed headings below are parser anchors and the fact/scoring/image audit contract for the automatic API route. They are not the reader-facing Manual v5 layout. With a SHA-verified `editorialPlan.version=2` `readerArticle`, publication keeps identity, the snarky review, core summary, open resources, and final score evidence, while the middle is the paper-specific continuous article. Historical pages and pages without a valid `readerArticle` retain the legacy rendering.
 
 | Section | Requirements |
 |------|------|
 | Score (`## 评分`) | `type-aware-v1`: first output `document_type` (方法研究 / 系统技术报告 / 模型报告 / 数据集与基准 / 综述 / 理论研究 / 应用研究), then use the matching evidence standard. Dimensions sum to 11 and the total is capped at 10; code recomputes it only when all eight dimensions are complete, unique, and valid. Invalid scoring fails the contract. Type grants no fixed bonus and one defect may reduce only one primary dimension |
 | Tags | 3-5, must include at least 1 [Task] and 1 [Method/Model] tag; in addition to the final tag string, also output "main task tag", "main method tag", and "supplementary tags" |
 | Authors and Affiliations | First author, corresponding author, author list and affiliations; missing information must be written as "not specified", no guessing allowed |
-| Snarky Review | 2-3 sentences of sharp commentary on highlights and flaws, like a senior reviewer's final comment |
+| Snarky Review | An evidence-bound two-sided review: state the strongest merit first, then the most consequential limitation. Manual v5 uses two roughly 180–700-character paragraphs grounded in mechanisms, experiments, and boundaries; sharp but not performative |
 | Core Summary | 5-8 sentences, covering problem, method, results, limitations |
 | Method Overview and Architecture | Input/output flow, component structure, connection methods, design rationale; no fewer than 600 Chinese characters |
 | Core Innovations | 3-5, each including definition, shortcomings of previous methods, solution mechanism, actual effect |
@@ -170,7 +172,7 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 | Limitations and Issues | Two parts: limitations explicitly acknowledged by the paper + potential issues identified by the reviewer |
 | Open Source Details | Only allowed to summarize based on paper text or current input links; write "not mentioned" when missing, strictly forbidden to fabricate repository / popularity information |
 
-> **Image and Table Placement Rules**: Images and tables are no longer gathered in a separate section, but embedded directly at the corresponding positions -- architecture diagrams go in the **方法概述和架构** section, experimental result figures/tables go in the **实验结果** section. Fabricating image URLs is strictly forbidden; only candidate figures provided in the dual-model `image-supplement` round may be selected and inserted.
+> **Image and Table Placement Rules**: Images and tables are embedded at the relevant argument node, not gathered in a separate section. In the automatic API canonical body, architecture diagrams normally go in **方法概述和架构** and result figures/tables in **实验结果**. In Manual v5, every selected image together with its validated `lead` and `explanation` must appear in the relevant paper-specific `readerArticle` section. Fabricating image URLs is strictly forbidden; only controlled candidate figures may be selected and inserted.
 
 **Technical Features**:
 - **API Protocol Auto-Routing**: shares the same `detectApiType()` logic as the filtering stage, automatically switching between OpenAI / Anthropic protocols based on `PAPER_ANALYZER_ENDPOINT` and `PAPER_ANALYZER_MODEL`

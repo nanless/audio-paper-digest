@@ -4,7 +4,7 @@
 
 本项目用于生成“语音/音乐/音频论文速递”。默认日更采用 Manual v5：联网抓取后，每篇论文由独立 subagent 在隔离上下文中完成筛选、全文研究者解读、评分和页面审查；LLM/API 自动筛选与分析保留为用户显式选择的可选路线。Node 端配置集中在 `scripts/config.js`，Python 发布路径集中在 `scripts/path_config.py`。
 
-逐论文筛选、理解、主要正文、评分、可读性复核和最终单页审查 subagent 统一使用 `gpt-5.6-terra`、reasoning `high`；Sol 主 Agent 只负责队列、代码、确定性门禁、组装和发布。正文先建立“中心技术矛盾—递进读者问题—证据柱—结论回收”的编辑蓝图，再按论文主张组织图表和实验，而不是按字段或论文目录机械扩写。
+逐论文筛选、理解、主要正文、评分、可读性复核和最终单页审查 subagent 统一使用 `gpt-5.6-terra`、reasoning `high`；Sol 主 Agent 只负责队列、代码、确定性门禁、组装和发布。正文先建立“中心技术矛盾—递进读者问题—证据柱—结论回收”的编辑蓝图，再按论文主张组织图表和实验，而不是按字段或论文目录机械扩写。新 records 使用 `editorialPlan` v2：读者标题、核心判断、问题回答、证据柱和每节锚句都必须可在最终正文中逐一定位；`editorial.readerArticle` 则是发布页唯一的连续深度解读，用论文特有小节替代“方法/创新/实验/细节/局限”模板栏目。每条实验结论还须提供可直接给读者看的自然语言解释，不能把方法/基线/指标/数值拼成字段串。独立页固定按“中文题目 → 英文题目/arXiv 链接 → 标签/八维评分 → 毒舌点评 → 核心摘要 → 开源资源 → 深度解读 → 文末评分证据”组织；每日汇总卡片保留前六项中的“中文题目 + 英文题目/链接 + 标签/评分 → 毒舌点评 → 核心摘要 → 开源资源”。毒舌点评必须同时给出最扎实的优点和最该泼冷水的不足，并由深度解读中的证据支撑。历史记录没有有效 `readerArticle` 时才兼容旧固定栏目；评分证据与扣分边界统一置于文末。
 
 用户明确取消发布后图片时，运行 `npm run digest:waive-visuals -- --date YYYY-MM-DD --reason "用户明确取消视觉资产"` 记录与远端发布 commit 及当前视觉任务 SHA 绑定的可审计豁免；它不会生成图片，也不会把 pending 资产伪装成 complete。
 
@@ -242,7 +242,7 @@ npm run manual:fulltext -- 2026-04-21
 # 每份 records 必须是相同 date/agent/reviewProtocol 的 manual_analysis_records v3 envelope，
 # papers 需显式提供八维评分、实际 audit passes、绑定全文原句的 authorInfo
 # 和至少六条覆盖五个事实章节的 evidenceLedger；正文遵守 prompts/manual-analysis-record.md
-# 每篇带 researchBrief、显式 stageReviews、独立评分/可读性 reviewer；系统/方法论文至少 4 条跨实验组 resultClaims
+# 每篇带 researchBrief、显式 stageReviews、独立评分/可读性 reviewer；新 records 以 editorialPlan v2 把读者标题、核心判断和段落锚句绑定最终正文；系统/方法论文至少 4 条跨实验组 resultClaims
 # 精确数量（含技术计数、层数、轮数、设备型号与科学计数法）使用阿拉伯数字，并通过篇内/跨篇去重、禁用固定句首脚手架、段落节奏、术语间距和局部比较门禁
 # 最终页还会复检作者、毒舌点评、评分理由、开源详情和局限中的“进一步审视”；新汇总页以 `paper_digest_reader_quality: "reader-facing-v1"` 标记接入 generate/checkpoint/review/staged 同一读者质量门禁，旧汇总页无标记时兼容
 # v5 强制精确数量来源、研究者详略取舍、全部图片 select/reject 和移动端裁图计划；records v2/spec v4 与 spec v3 仅作历史兼容

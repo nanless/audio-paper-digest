@@ -259,10 +259,15 @@ function collectRegexMatches(text, regex, reason) {
 function findQuantitativeChineseNumerals(text) {
     // 下列“一步”都是篇章连接或指代，不是精确的 1 个步骤；用等长空白
     // 屏蔽它们以保持后续 issue index/line 不漂移。
-    const value = normalizeNfkc(text).replace(
-        /(?:进一步|这一步|下一步|上一步|每一步|一次性)|(?:同一|统一|唯一|单一)(?=[\p{Script=Han}])/gu,
-        match => ' '.repeat(match.length)
-    );
+    const value = normalizeNfkc(text)
+        // Reader-facing Markdown headings are prose labels, not result-table
+        // quantities.  Auditing “两种视图如何分账” as if it were an
+        // experimental count produced unnatural titles such as “2 种视图”.
+        .replace(/^#{1,6}\s+[^\n]*$/gmu, match => ' '.repeat(match.length))
+        .replace(
+            /(?:进一步|这一步|下一步|上一步|每一步|一次性)|(?:同一|统一|唯一|单一)(?=[\p{Script=Han}])|一个(?=(?:好看|漂亮|笼统|粗糙|清晰|完整|简单|直接|孤立|统一))/gu,
+            match => ' '.repeat(match.length)
+        );
     const unitAlternation = EMPIRICAL_COUNT_UNITS
         .slice()
         .sort((a, b) => b.length - a.length)
@@ -812,7 +817,11 @@ function canonicalNumericLexeme(value) {
 
 function numericLexemes(value) {
     const normalized = normalizeNfkc(claimFieldText(value))
-        .replace(/[\u2212\u2012\u2013\u2014]/gu, '-');
+        .replace(/[\u2212\u2012\u2013\u2014]/gu, '-')
+        // HTML/PDF text extraction can concatenate the visible decimal with its
+        // duplicated MathML/LaTex fallback (for example, 3.73.7 for 3.7).
+        // Only collapse an immediately adjacent *identical* decimal token.
+        .replace(/(?<![\d.])(\d+\.\d+)\1(?!\d|\.\d)/gu, '$1');
     const numberWords = Object.keys(ENGLISH_NUMBER_WORDS).join('|');
     const matches = normalized.match(new RegExp(
         `[-+]?(?:\\d{1,3}(?:,\\d{3})+|\\d+)?(?:\\.\\d+)(?:[eE][-+]?\\d+)?|[-+]?(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:[eE][-+]?\\d+)?|\\b(?:${numberWords})\\b`,
@@ -940,6 +949,30 @@ function resultClaimBoundToReaderBlock(claim, readerBlocks) {
     });
 }
 
+function validateReaderNarrative(claim, readerBlocks, prefix) {
+    const narrative = String(claim?.readerNarrative || '').trim();
+    if (narrative.length < 40 || narrative.length > 360) {
+        return `${prefix}.readerNarrative 必须是 40-360 字的完整读者句，而非字段拼接`;
+    }
+    if (/^(?:[^。！？!?；;]*[，,、:：|]){4,}[^。！？!?；;]*[。！？!?；;]?$/u.test(narrative)) {
+        return `${prefix}.readerNarrative 不得用逗号/竖线罗列设置、方法、基线和数字`;
+    }
+    if (!/(?:高于|低于|优于|落后|相差|超过|提升|下降|改善|退化|从.{0,40}(?:到|降至|升至)|分别为|仍(?:高|低)于)/u.test(narrative)) {
+        return `${prefix}.readerNarrative 必须明确比较关系或负例，不能只报一个数值`;
+    }
+    const expected = RESULT_CLAIM_SEMANTIC_FIELDS.filter(field => field !== 'unit')
+        .map(field => normalizeEvidence(claim?.readerBindings?.[field] || ''))
+        .filter(Boolean);
+    const normalizedNarrative = normalizeEvidence(narrative);
+    if (!expected.every(fragment => normalizedNarrative.includes(fragment))) {
+        return `${prefix}.readerNarrative 必须包含同条 readerBindings 的设置、方法、基线、指标、数值和方向`;
+    }
+    if (readerBlocks && !readerBlocks.some(block => normalizeEvidence(block).includes(normalizedNarrative))) {
+        return `${prefix}.readerNarrative 必须原样落在实验结果的同一自然段或表格说明中`;
+    }
+    return null;
+}
+
 function validateResultClaims(claims, sourceText, options = {}) {
     const errors = [];
     const items = Array.isArray(claims) ? claims : [];
@@ -1017,6 +1050,24 @@ function validateResultClaims(claims, sourceText, options = {}) {
             prefix,
             { requireMembership: false, evidenceLabel: '读者正文实验结果' }
         ));
+        if (options.requireReaderNarrative) {
+            const narrativeIssue = validateReaderNarrative(claim, readerBlocks, prefix);
+            if (narrativeIssue) errors.push(narrativeIssue);
+        }
+        if (options.requireReaderNarrative) {
+            for (const field of ['method', 'baseline']) {
+                const sourceBinding = String(claim.sourceBindings?.[field] || '').trim();
+                if (/^[\d\s.,|↑↓%]+$/u.test(sourceBinding)) {
+                    errors.push(`${prefix}.sourceBindings.${field} 不得用表格数值碎片冒充方法或基线身份`);
+                }
+                if (!isNotReported(claim[field])
+                    && normalizedSemanticText(sourceBinding).length >= 3
+                    && !normalizedSemanticText(claim[field]).includes(normalizedSemanticText(sourceBinding))
+                    && !normalizedSemanticText(sourceBinding).includes(normalizedSemanticText(claim[field]))) {
+                    errors.push(`${prefix}.sourceBindings.${field} 必须与 claim.${field} 指向同一方法身份`);
+                }
+            }
+        }
         if (!isNotReported(claim.value)) {
             const expectedNumbers = numericLexemes(claim.value);
             if (expectedNumbers.length === 0) {
@@ -1176,6 +1227,7 @@ module.exports = {
     findMissingComparisonUnits,
     findBatchTemplateReuse,
     validateReadabilityRubric,
+    numericLexemes,
     validateResultClaims,
     validateEditorialQuality
 };

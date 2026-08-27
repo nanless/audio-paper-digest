@@ -70,16 +70,18 @@ function buildTemplate(date, paperId, options = {}) {
                 model: 'gpt-5.6-terra', reasoningEffort: 'high', completedAt: 'TODO:+08:00'
             },
             editorialPlan: {
-                version: 1,
+                version: 2,
+                readerTitle: 'TODO: 面向研究者的中文观点式标题，不得复述英文论文题目',
+                oneSentenceThesis: 'TODO: 40-120 字的一句话判断，必须原样写入核心摘要并说明论文如何化解中心矛盾。',
                 governingTension: {
                     conflict: 'TODO: 论文试图化解的可争辩技术矛盾',
                     sideA: 'TODO: 矛盾一端的需求与代价',
                     sideB: 'TODO: 另一端的需求与代价',
                     paperChoice: 'TODO: 论文把共享与分工分别放在哪里'
                 },
-                readerQuestions: [],
-                evidencePillars: [],
-                sectionPlan: []
+                readerQuestions: [], // 每项还需 answerQuote，原样落在声明的正文小节。
+                evidencePillars: [], // 每项还需 evidenceIds 与 readerQuote，后者原样落在实验结果。
+                sectionPlan: [] // 每项还需 anchorQuote，并在对应容器中以 ### 标题原样出现。
             },
             centralQuestion: { question: 'TODO', whyItMatters: 'TODO', sourceQuote: 'TODO', readerQuote: 'TODO' },
             mustExplain: [], compress: [], omit: [], takeaways: [], derivedFacts: [],
@@ -120,7 +122,9 @@ function buildTemplate(date, paperId, options = {}) {
         },
         editorial: {
             summary: 'TODO', method: 'TODO', innovations: 'TODO', results: 'TODO',
-            details: 'TODO', limits: 'TODO', open: 'TODO', review: 'TODO'
+            details: 'TODO', limits: 'TODO', open: 'TODO',
+            review: 'TODO: 发布开场的毒舌点评；总长 180-700 字且恰好两段，每段至少 70 字。第一段明确评价最扎实优点，第二段明确指出证据或适用边界不足；两段各复用 readerArticle 中至少一个论文特有机制、实验或边界短语。',
+            readerArticle: 'TODO: 2400-24000 字的发布正文；只用 editorialPlan.sectionPlan 中同序的 ### 论文特有小节，完整回答问题、嵌入 readerNarrative 与图文，不得使用方法概述/实验结果等固定栏目名。'
         }
     };
     return {

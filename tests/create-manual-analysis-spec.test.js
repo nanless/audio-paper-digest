@@ -168,7 +168,8 @@ function validRecord() {
                     datasetOrSetting: '受控设置', splitOrCondition: '另外3个受控设置',
                     method: '完整方法', baseline: '基线', metric: '测量结果',
                     value, unit: '测量结果', direction: '测量结果'
-                }
+                },
+                readerNarrative: `在受控设置的另外 3 个受控设置中，完整方法相对基线的测量结果为 ${value} score，higher is better，且高于受控基线；该比较只覆盖固定测试划分。`
             };
         }),
         readabilityRubric: readabilityRubric(),
@@ -291,7 +292,7 @@ function currentV3Record() {
         '依次为 10.1、11.1、12.1 和 13.1，这些测量结果均以 score 为单位并遵循 higher is better 的方向'
     );
     record.resultClaims.push(JSON.parse(JSON.stringify(record.resultClaims[0])));
-    record.resultClaims.forEach((claim, index) => {
+        record.resultClaims.forEach((claim, index) => {
         const value = `${10 + index}.1`;
         claim.datasetOrSetting = `受控测试设置 ${index + 1}`;
         claim.splitOrCondition = `来源实验段 ${index + 1}`;
@@ -307,12 +308,14 @@ function currentV3Record() {
             claim[binding].direction = binding === 'sourceBindings'
                 ? 'higher-is-better' : 'higher is better';
         }
-        claim.evidenceScope = index < 2 ? 'target_domain'
+            claim.evidenceScope = index < 2 ? 'target_domain'
             : index === 2 ? 'public_generalization' : 'ablation_negative';
         claim.sourceGroup = index < 2 ? 'Table 1' : 'Table 2';
-        claim.baselineType = index === 0 ? 'external_strong'
-            : index === 2 ? 'same_backbone' : 'chance_or_rule';
-    });
+            claim.baselineType = index === 0 ? 'external_strong'
+                : index === 2 ? 'same_backbone' : 'chance_or_rule';
+            claim.readerNarrative = `在受控设置的另外 3 个受控设置中，完整方法相对基线的测量结果为 ${value} score，higher is better，且高于受控基线；该比较只覆盖固定测试划分。`;
+        });
+    record.editorial.results += '\n\n' + record.resultClaims.map(claim => claim.readerNarrative).join('\n\n');
     return record;
 }
 
@@ -420,6 +423,18 @@ describe('strict reusable manual v4 spec assembler', () => {
         }, record);
         assert.match(analysis, /1\. 1\.3B URL 本身不等于训练集/);
         assert.doesNotMatch(analysis, /1\. 3B URL 本身不等于训练集/);
+    });
+
+    it('preserves Manual v5 subsection headings in the innovation container', () => {
+        const record = validRecord();
+        record.editorial.innovations = `### 先解释真正的创新\n\n${innovationProse()}`;
+        const analysis = buildAnalysis({
+            arxivId: ID,
+            title: 'Heading preservation',
+            authors: ['Test Author'],
+        }, record);
+        assert.match(analysis, /## 核心创新点\n### 先解释真正的创新\n\n1\. /);
+        assert.doesNotMatch(analysis, /1\. ### 先解释真正的创新/);
     });
 
     it('splits an overlong editorial method at sentence boundaries without duplicating text', () => {
@@ -738,6 +753,61 @@ describe('strict reusable manual v4 spec assembler', () => {
         assert.equal(spec.papers[ID].paperSubagent.singlePaperOnly, true);
         assert.equal(spec.papers[ID].stageReviews.scoringAudit.decision, 'manual_verified');
         assert.equal(spec.papers[ID].figureReview.decisions.length, 1);
+    });
+
+    it('allows the narrow Manual v5 all-reject image exception and rejects incomplete or generic variants', () => {
+        const f = fixture();
+        const makeRecord = () => {
+            const record = currentV3Record();
+            record.selectedImageUrls = [];
+            record.imageInsertions = [];
+            record.figureReview = {
+                version: 1,
+                decisions: [{
+                    url: f.entry.imageInfos[0].url,
+                    decision: 'reject',
+                    reason: '已核对受控缓存 PNG 为 1917×989；在手机宽度下流程标签会缩小到无法辨认，且图中只呈现通用框图，不能为本篇受控 WER 比较提供可独立核对的论证证据。',
+                    figureNumber: 'Figure 1',
+                    captionIdentity: 'Figure 1: architecture'
+                }]
+            };
+            return record;
+        };
+        let attempt = 0;
+        const buildCurrent = record => {
+            const document = currentEnvelope({ [ID]: record });
+            const recordsPath = path.join(f.root, `all-reject-${attempt++}.json`);
+            writeJson(recordsPath, document);
+            return buildSpec({
+                date: DATE,
+                filtered: f.filtered,
+                manifest: f.manifest,
+                manifestPath: f.manifestPath,
+                mergedRecords: mergeRecordsEnvelopes([{ path: recordsPath, document }], DATE)
+            });
+        };
+
+        const accepted = buildCurrent(makeRecord());
+        assert.deepEqual(accepted.papers[ID].selectedImageUrls, []);
+        assert.deepEqual(accepted.papers[ID].imageInsertions, []);
+
+        const generic = makeRecord();
+        generic.figureReview.decisions[0].reason = '这张图片在移动端不够清晰，也不能为正文提供足够证据，因此不建议在博客中使用这张图片。';
+        assert.throws(() => buildCurrent(generic), /论文特有的像素\/缓存\/图注事实/);
+
+        const missingDecision = makeRecord();
+        missingDecision.figureReview.decisions = [];
+        assert.throws(() => buildCurrent(missingDecision), /逐图精确覆盖/);
+
+        const mixedDecision = makeRecord();
+        mixedDecision.figureReview.decisions[0].decision = 'select';
+        mixedDecision.figureReview.decisions[0].visibleFacts = ['图中清楚显示输入特征模块', '图中清楚显示输出识别模块'];
+        mixedDecision.figureReview.decisions[0].renderPlan = { mode: 'full', mobileReadable: true };
+        assert.throws(() => buildCurrent(mixedDecision), /(select 项必须|必须全部为 reject)/);
+
+        const nonEmptyPlan = makeRecord();
+        nonEmptyPlan.imageInsertions = [JSON.parse(JSON.stringify(validRecord().imageInsertions[0]))];
+        assert.throws(() => validateRecord(nonEmptyPlan, ID, 'all-reject-nonempty-plan', { recordsVersion: 3 }), /等长并逐项绑定/);
     });
 
     it('ingestion replays the official assembler and rejects hand-written source/image bypasses', () => {

@@ -42,11 +42,15 @@ const {
     validateResearchBrief,
     validateStageReviews,
     validateFigureReview,
+    validateManualAllRejectedImageException,
     validateScoringCalibration,
     validateResearchScoringCaps,
     validateOpenSourceEvidence,
     validateExactFactCoverage,
-    validateResultClaimCoverageV5
+    validateResultClaimCoverageV5,
+    validateEditorialPlanBindings,
+    validateReaderArticle,
+    validateEditorialReview
 } = require('./manual-research-contract.js');
 const {
     MANIFEST_VERSION,
@@ -71,7 +75,7 @@ const AUDIT_CHECKS = Object.freeze([
 ]);
 const FACT_SECTIONS = Object.freeze(['核心摘要', '方法概述和架构', '实验结果', '局限与问题', '开源详情']);
 const EDITORIAL_FIELDS = Object.freeze([
-    'summary', 'method', 'innovations', 'results', 'details', 'limits', 'open', 'review'
+    'summary', 'method', 'innovations', 'results', 'details', 'limits', 'open', 'review', 'readerArticle'
 ]);
 const IMAGE_INSERTION_SECTIONS = new Set([
     '核心摘要', '方法概述和架构', '核心创新点', '实验结果', '细节详述'
@@ -331,8 +335,12 @@ function validateRecord(record, id, label = `papers.${id}`, options = {}) {
         throw new Error(`${label}.selectedImageUrls 必须省略或是至多 4 个互异 HTTPS URL`);
     }
     const imageInsertions = record.imageInsertions;
+    const explicitAllRejectedImageException = recordsVersion === RECORDS_VERSION
+        && Array.isArray(selectedImageUrls) && selectedImageUrls.length === 0
+        && Array.isArray(imageInsertions) && imageInsertions.length === 0;
     if (imageInsertions !== undefined) {
-        if (!Array.isArray(imageInsertions) || imageInsertions.length < 1 || imageInsertions.length > 4) {
+        if (!Array.isArray(imageInsertions)
+            || ((!explicitAllRejectedImageException) && (imageInsertions.length < 1 || imageInsertions.length > 4))) {
             throw new Error(`${label}.imageInsertions 必须是 1-4 个逐图叙事绑定`);
         }
         if (!Array.isArray(selectedImageUrls) || selectedImageUrls.length !== imageInsertions.length) {
@@ -400,6 +408,14 @@ function validateRecord(record, id, label = `papers.${id}`, options = {}) {
             }
         }
     }
+    if (recordsVersion === RECORDS_VERSION && record.researchBrief?.editorialPlan?.version === 2) {
+        assertString(record.editorial?.readerArticle, `${label}.editorial.readerArticle`, 2400);
+        validateEditorialReview(
+            record.editorial?.review,
+            record.editorial?.readerArticle,
+            { label: `${label}.editorial.review` }
+        );
+    }
     for (const key of ['hasCode', 'hasModel', 'hasDataset']) {
         if (record[key] !== undefined && !['是', '否', '未说明'].includes(record[key])) {
             throw new Error(`${label}.${key} 必须是 是/否/未说明`);
@@ -423,6 +439,7 @@ function validateRecord(record, id, label = `papers.${id}`, options = {}) {
     const resultClaimSchema = validateResultClaims(record.resultClaims, '', {
         documentType: record.type,
         exception: record.resultClaimsException,
+        requireReaderNarrative: recordsVersion === RECORDS_VERSION,
         requireSourceBinding: false
     });
     if (!resultClaimSchema.valid) {
@@ -790,7 +807,14 @@ function rebalanceEditorialParagraphs(value, minimum = 5) {
 
 function formatInnovationClaims(value) {
     const paragraphs = distinctParagraphs(value);
-    return paragraphs.map((paragraph, index) => {
+    let claimIndex = 0;
+    return paragraphs.map(paragraph => {
+        // Manual v5 editorialPlan may deliberately place reader-facing
+        // subsection headings inside the innovation container.  Numbering a
+        // Markdown heading (`1. ### ...`) turns it into a list item and makes
+        // the assembler's own section binding impossible to satisfy.
+        if (/^#{3,6}\s+\S/u.test(paragraph)) return paragraph;
+        claimIndex += 1;
         const cleaned = paragraph
             .replace(/^第[一二两三四五六七八九十]+(?:项|点|个)(?:贡献|创新)?[：:、，.\s]*/u, '')
             .replace(/^(?:第?[一二两三四五六七八九十]+|首先)[：:、，.\s]+/u, '')
@@ -798,7 +822,7 @@ function formatInnovationClaims(value) {
             // 整数部分误当列表序号吞掉。
             .replace(/^\d+(?:[、)]\s*|\.\s+)/u, '')
             .trim();
-        return `${index + 1}. ${cleaned}`;
+        return `${claimIndex}. ${cleaned}`;
     }).join('\n\n');
 }
 
@@ -1110,12 +1134,42 @@ function buildSpec(options) {
         const resultClaimValidation = validateResultClaims(record.resultClaims, sourceText, {
             documentType: record.type,
             exception: record.resultClaimsException,
-            readerResultsText: assembledParsed?.results || ''
+            readerResultsText: assembledParsed?.results || '',
+            requireReaderNarrative: isCurrentRecords
         });
         if (!resultClaimValidation.valid) {
             throw new Error(`${id} resultClaims 未与全文闭环: ${resultClaimValidation.errors.join('；')}`);
         }
         if (isCurrentRecords) {
+            validateEditorialPlanBindings(
+                record.researchBrief.editorialPlan,
+                analysis,
+                record.evidenceLedger,
+                `${id}.researchBrief.editorialPlan`
+            );
+            validateReaderArticle(
+                record.researchBrief.editorialPlan,
+                record.editorial?.readerArticle,
+                record.evidenceLedger,
+                {
+                    label: `${id}.editorial.readerArticle`, sourceText,
+                    externalEvidence: record.openSourceEvidence?.sourceQuotes || [],
+                    boundEvidence: [
+                        ...record.resultClaims.map(claim => claim.sourceQuote),
+                        ...record.evidenceLedger.map(item => item.sourceQuote)
+                    ],
+                    derivedFacts: record.researchBrief.derivedFacts || [],
+                    readerNarratives: record.resultClaims.map(claim => claim.readerNarrative),
+                    imageInsertions: record.imageInsertions || []
+                }
+            );
+            if (record.researchBrief.editorialPlan?.version === 2) {
+                validateEditorialReview(
+                    record.editorial.review,
+                    record.editorial.readerArticle,
+                    { label: `${id}.editorial.review` }
+                );
+            }
             validateResultClaimCoverageV5(record.resultClaims, {
                 documentType: record.type,
                 evidenceProfile: record.researchBrief.evidenceProfile,
@@ -1142,12 +1196,28 @@ function buildSpec(options) {
             throw new Error(`${id} 存在 ${rankedReadableImages.length} 个合格论文图；Manual 必须显式给出 selectedImageUrls 和逐图 imageInsertions，禁止自动套用通用邻文`);
         }
         const selectedImageUrls = explicitSelection ? record.selectedImageUrls : [];
+        const explicitAllRejectedImageException = isCurrentRecords
+            && explicitSelection && selectedImageUrls.length === 0
+            && Array.isArray(record.imageInsertions) && record.imageInsertions.length === 0;
         if (isCurrentRecords) {
-            validateFigureReview(record.figureReview, {
-                imageInfos,
-                selectedImageUrls,
-                paperId: id
-            });
+            if (explicitAllRejectedImageException) {
+                validateManualAllRejectedImageException({
+                    figureReview: record.figureReview,
+                    imageInfos,
+                    selectedImageUrls,
+                    imageInsertions: record.imageInsertions,
+                    paperId: id
+                });
+            } else {
+                validateFigureReview(record.figureReview, {
+                    imageInfos,
+                    selectedImageUrls,
+                    paperId: id
+                });
+                if (explicitSelection && selectedImageUrls.length === 0 && imageInfos.length > 0) {
+                    throw new Error(`${id} 存在全文 manifest 候选图时，空 selectedImageUrls 仅允许逐图明确 reject 且显式 imageInsertions=[]`);
+                }
+            }
         }
         const imageInsertions = selectedImageUrls.length > 0
             ? resolveManualImageInsertions(
@@ -1200,6 +1270,10 @@ function buildSpec(options) {
                 : reviewedClaimsByStage(record, chunks, imageInfos),
             ...(isCurrentRecords ? {
                 researchBrief: JSON.parse(JSON.stringify(record.researchBrief)),
+                ...(record.researchBrief.editorialPlan?.version === 2 ? {
+                    readerArticle: record.editorial.readerArticle.trim(),
+                    editorialReview: record.editorial.review.trim()
+                } : {}),
                 figureReview: JSON.parse(JSON.stringify(record.figureReview)),
                 stageReviews: JSON.parse(JSON.stringify(record.stageReviews)),
                 paperSubagent: JSON.parse(JSON.stringify(record.researchBrief.paperSubagent)),

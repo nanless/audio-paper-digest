@@ -58,7 +58,11 @@ const {
     IMAGE_NARRATIVE_CONTRACT_VERSION
 } = require('./deep-analyzer.js');
 const { updateAnalysisDigestStatuses } = require('./digest-status.js');
-const { MANUAL_RESEARCH_CONTRACT_VERSION } = require('./manual-research-contract.js');
+const {
+    MANUAL_RESEARCH_CONTRACT_VERSION,
+    validateReaderArticle,
+    validateEditorialReview
+} = require('./manual-research-contract.js');
 const MANUAL_DEPTH_CONTRACT_VERSION_V5 = require('./analysis-contract.js').MANUAL_DEPTH_CONTRACT_VERSION_V5
     || MANUAL_DEPTH_CONTRACT_VERSION_V4;
 
@@ -413,6 +417,10 @@ function manualCanonicalReuseFingerprint(record) {
         editorialQualityMetricsSha256: manualSha256(takeover.editorialQualityMetrics || null),
         researchBriefSha256: takeover.researchBriefSha256 || null,
         computedResearchBriefSha256: manualSha256(takeover.researchBrief || null),
+        readerArticleSha256: takeover.readerArticleSha256 || null,
+        computedReaderArticleSha256: manualTextSha256(takeover.readerArticle || ''),
+        editorialReviewSha256: takeover.editorialReviewSha256 || null,
+        computedEditorialReviewSha256: manualTextSha256(takeover.editorialReview || ''),
         stageReviewsSha256: takeover.stageReviewsSha256 || null,
         computedStageReviewsSha256: manualSha256(takeover.stageReviews || null),
         scoringCalibrationSha256: takeover.scoringCalibrationSha256 || null,
@@ -469,6 +477,7 @@ function finalizeManualCanonicalState(filePath, options) {
         const papers = Array.isArray(current) ? current : (currentObject.papers || []);
         const byId = new Map(papers.map(paper => [normalizedId(paper), paper]));
         const expectedRecords = expectedIds.map(id => byId.get(id) || null);
+        const currentBatchPapers = expectedRecords.filter(Boolean);
         const failedIds = expectedIds.filter((id, index) => !isSuccessfulAnalysisRecord(expectedRecords[index]));
         const success = expectedIds.length - failedIds.length;
         const status = failedIds.length === 0 ? 'complete' : 'partial_failed';
@@ -478,14 +487,17 @@ function finalizeManualCanonicalState(filePath, options) {
             timestamp: now,
             batchDate: date,
             status,
-            papers,
+            // data/current is a single-batch canonical snapshot.  Keeping
+            // papers from an older batch makes every source/full-text binding
+            // validate against the wrong manifest and breaks exact coverage.
+            papers: currentBatchPapers,
             stats: {
                 ...(currentObject.stats || {}),
                 ...(options.stats || {}),
                 analysisStatus: status,
                 pipelineStatus: status === 'complete' ? 'analysis_complete' : 'analysis_partial_failed',
                 total: expectedIds.length,
-                totalAfterMerge: papers.length,
+                totalAfterMerge: currentBatchPapers.length,
                 expected: expectedIds.length,
                 success,
                 successfulExpected: success,
@@ -675,7 +687,11 @@ function normalizeManualV4ImageArtifacts({
         }
         const imageNumber = index + 1;
         selectedImages.push(prepared);
-        orderedInsertionPlan.push({ ...plan, imageNumber });
+        // The canonical takeover validator replays the reader article from
+        // imageManifest.insertionPlan.  Keep the selected URL on each plan;
+        // dropping it here made every otherwise valid image appear as
+        // `unknown` during provenance validation.
+        orderedInsertionPlan.push({ ...plan, imageNumber, url });
         orderedInsertionDiagnostics.push({ ...diagnostic, imageNumber });
     }
     return {
@@ -814,6 +830,24 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
     if (isManualV4 && !resultClaimsValidation.valid) {
         throw new Error(`${normalizedId(paper)} Manual v4 resultClaims 失败: ${resultClaimsValidation.errors.join('；')}`);
     }
+    const readerArticle = isManualV5 && spec.researchBrief?.editorialPlan?.version === 2
+        ? validateReaderArticle(spec.researchBrief.editorialPlan, spec.readerArticle, spec.evidenceLedger, {
+            label: `${normalizedId(paper)}.readerArticle`, sourceText,
+            externalEvidence: spec.openSourceEvidence?.sourceQuotes || [],
+            boundEvidence: [
+                ...resultClaims.map(claim => claim.sourceQuote),
+                ...spec.evidenceLedger.map(item => item.sourceQuote)
+            ],
+            derivedFacts: spec.researchBrief.derivedFacts || [],
+            readerNarratives: resultClaims.map(claim => claim.readerNarrative),
+            imageInsertions: spec.imageInsertions || []
+        })
+        : null;
+    const editorialReview = readerArticle
+        ? validateEditorialReview(spec.editorialReview, readerArticle, {
+            label: `${normalizedId(paper)}.editorialReview`
+        })
+        : null;
     const readability = validateReadabilityRubric(spec.readabilityRubric);
     if (isManualV4 && (!readability.valid || !readability.passing)) {
         throw new Error(`${normalizedId(paper)} Manual v4 readabilityRubric 失败: ${readability.errors.join('；') || `total=${readability.total}`}`);
@@ -937,6 +971,12 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         ...(isManualV5 ? {
             researchBrief: spec.researchBrief,
             researchBriefSha256: manualSha256(spec.researchBrief),
+            ...(readerArticle ? {
+                readerArticle,
+                readerArticleSha256: manualTextSha256(readerArticle),
+                editorialReview,
+                editorialReviewSha256: manualTextSha256(editorialReview)
+            } : {}),
             stageReviews: { version: 2, stages: spec.stageReviews },
             stageReviewsSha256: manualSha256({ version: 2, stages: spec.stageReviews }),
             scoringCalibration: spec.scoringCalibration,
