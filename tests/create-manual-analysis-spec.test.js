@@ -11,12 +11,16 @@ const {
     assertNoCrossPaperTemplateReuse,
     rebalanceEditorialParagraphs,
     mergeRecordsEnvelopes,
+    buildAnalysis,
     buildSpec
 } = require('../scripts/create-manual-analysis-spec.js');
 const {
     buildManifestContext,
     buildCompleteEntry
 } = require('../scripts/manual-fetch-fulltext.js');
+const {
+    validateManualV4AssemblerProvenance
+} = require('../scripts/manual-deep-analysis.js');
 
 const DATE = '2026-08-25';
 const ID = '2608.29999';
@@ -185,11 +189,139 @@ function validRecord() {
     };
 }
 
+function currentV3Record() {
+    const record = JSON.parse(JSON.stringify(validRecord()));
+    const quotes = sourceText().split('\n');
+    const authoringTask = `paper-${ID}-authoring`;
+    record.confidence = '高';
+    record.stageReviewAttemptsByStage = Object.fromEntries(
+        require('../scripts/analysis-contract.js').REQUIRED_RECOVERY_STAGES.map(stage => [stage, 2])
+    );
+    record.researchBrief = {
+        version: 1,
+        contract: 'audio-researcher-v1',
+        audience: 'audio_researcher',
+        paperSubagent: {
+            version: 1, taskName: authoringTask, paperId: ID,
+            singlePaperOnly: true, isolatedContext: true,
+            completedAt: '2026-08-25T10:00:00.000+08:00'
+        },
+        centralQuestion: {
+            question: '复杂噪声条件下，如何让上下文声学建模同时保持识别精度、稳定性和可复现边界？',
+            whyItMatters: '音频研究者需要分清收益来自输入表示、上下文模块还是训练数据与解码预算。',
+            sourceQuote: quotes[0],
+            readerQuote: '摘要专属事实的第 1 段从读者需要理解的问题出发'
+        },
+        mustExplain: [
+            ['task_boundary', '核心摘要', '摘要专属事实的第 1 段从读者需要理解的问题出发'],
+            ['audio_path', '方法概述和架构', '方法第一阶段的第 1 段围绕输入表示、组件交互、训练条件'],
+            ['architecture', '方法概述和架构', '方法第二阶段的第 1 段围绕输入表示、组件交互、训练条件'],
+            ['training', '细节详述', '数据按训练集、验证集和测试集固定划分'],
+            ['evaluation', '实验结果', '完整方法的 WER 最低，移除上下文模块后只保留部分收益'],
+            ['reproduction', '细节详述', '优化器、学习率、损失目标、批量大小与训练轮数均明确记录'],
+            ['limitations', '局限与问题', '局限专属边界的第 1 段限定证据尚未覆盖的设备、人群或统计不确定性'],
+            ['ablation_or_negative', '核心创新点', '受控消融显示移除该模块后 WER 上升，但证据只覆盖当前数据划分']
+        ].map(([kind, section, readerQuote], index) => ({
+            kind, section, readerQuote,
+            topic: `${kind} 对应的本篇研究者必读技术主题`,
+            researcherNeed: `研究者需要用该项判断 ${kind} 的输入、证据、可迁移机制和外推边界。`,
+            sourceQuote: quotes[index % quotes.length]
+        })),
+        compress: [
+            { topic: '通用领域背景介绍', reason: '通用领域背景不是复现本篇方法所需的信息，应只保留一句定位。', readerQuote: '摘要专属事实的第 8 段从读者需要理解的问题出发' },
+            { topic: '资源状态免责声明', reason: '资源状态只需在开源章节集中说明一次，避免多个章节重复。', readerQuote: '资源专属核验的第 1 段逐项区分代码、模型、数据与演示' }
+        ],
+        omit: [{
+            topic: '跨论文模板结论', reason: '该固定句不承载本篇方法或实验事实，必须从成稿中删除。',
+            forbiddenReaderPhrase: '下一段将解释统一证据边界'
+        }],
+        takeaways: [
+            '输入表示、上下文模块和解码输出形成可追踪的数据流。',
+            '主结果与关键消融在同一数据划分和评价方向下比较。',
+            '跨设备迁移、部署资源和统计稳定性仍是主要证据边界。'
+        ],
+        derivedFacts: [],
+        evidenceProfile: {
+            version: 1, ablationStatus: 'direct', targetEvaluation: 'public',
+            sampleScaleReported: true, deploymentMeasured: false,
+            publicGeneralizationEvaluated: true,
+            evidenceBoundary: '公开测试和模块消融支持核心结论，但跨设备部署成本、更多随机种子和统计区间仍未报告。'
+        }
+    };
+    const stages = require('../scripts/analysis-contract.js').REQUIRED_RECOVERY_STAGES;
+    record.stageReviews = {
+        version: 2,
+        stages: Object.fromEntries(stages.map((stage, index) => [stage, {
+            decision: 'manual_verified', attempts: 2, evidenceIds: [`E0${index % 6 + 1}`],
+            sourceQuotes: [quotes[index % quotes.length]], issues: [],
+            conclusion: `${stage} 已由本篇独立 subagent 根据绑定原文和最终章节完成专项复核。`
+        }]))
+    };
+    record.scoringCalibration = {
+        version: 1, independentReview: true, reviewerTaskName: `paper-${ID}-scoring`,
+        crossDimensionChecked: true, batchScaleChecked: true,
+        calibrationNotes: '逐维核对方法、实验、资源和部署证据，并与同批论文统一评分尺度，未将同一缺陷跨维重复扣分。',
+        evidenceIdsByDimension: Object.fromEntries([
+            'innovation', 'technicalRigor', 'experimentalSufficiency', 'clarity',
+            'impact', 'openSource', 'reproducibility', 'engineering'
+        ].map((name, index) => [name, [`E0${index % 6 + 1}`]]))
+    };
+    record.openSourceEvidence = {
+        version: 1, state: 'none', urls: [], sourceQuotes: [quotes[5]]
+    };
+    record.readabilityRubric.independentReview = true;
+    record.readabilityRubric.reviewerTaskName = `paper-${ID}-reader-review`;
+    record.readabilityRubric.counterEvidence = [
+        '逐段查找可能重复的方法描述，确认每段承担不同数据流职责。',
+        '反查全部结果数字与本地证据块，确认没有相邻论文实体污染。',
+        '检查摘要、方法、实验和局限的章节边界，确认没有职责越权。'
+    ];
+    record.figureReview = {
+        version: 1,
+        decisions: [{
+            url: record.selectedImageUrls[0], decision: 'select',
+            reason: '架构图直接展示输入表示、组件交互和输出路径，是理解方法所需的核心视觉证据。',
+            figureNumber: 'Figure 1', captionIdentity: 'Architecture overview for the strict manual fixture',
+            visibleFacts: ['图中输入箭头进入上下文模块', '输出分支连接识别任务头'],
+            renderPlan: { mode: 'full', mobileReadable: true }
+        }]
+    };
+    record.editorial.results = record.editorial.results.replace(
+        '依次为 10.1、11.1 和 12.1',
+        '依次为 10.1、11.1、12.1 和 13.1，这些测量结果均以 score 为单位并遵循 higher is better 的方向'
+    );
+    record.resultClaims.push(JSON.parse(JSON.stringify(record.resultClaims[0])));
+    record.resultClaims.forEach((claim, index) => {
+        const value = `${10 + index}.1`;
+        claim.datasetOrSetting = `受控测试设置 ${index + 1}`;
+        claim.splitOrCondition = `来源实验段 ${index + 1}`;
+        claim.value = value;
+        claim.sourceQuote = quotes[index];
+        for (const binding of ['sourceBindings', 'readerBindings']) {
+            claim[binding].datasetOrSetting = binding === 'sourceBindings'
+                ? `受控测试设置 ${index + 1}` : '受控设置';
+            claim[binding].splitOrCondition = binding === 'sourceBindings'
+                ? `来源实验段 ${index + 1}` : '另外3个受控设置';
+            claim[binding].value = value;
+            claim[binding].unit = binding === 'sourceBindings' ? `${value} score` : 'score';
+            claim[binding].direction = binding === 'sourceBindings'
+                ? 'higher-is-better' : 'higher is better';
+        }
+        claim.evidenceScope = index < 2 ? 'target_domain'
+            : index === 2 ? 'public_generalization' : 'ablation_negative';
+        claim.sourceGroup = index < 2 ? 'Table 1' : 'Table 2';
+        claim.baselineType = index === 0 ? 'external_strong'
+            : index === 2 ? 'same_backbone' : 'chance_or_rule';
+    });
+    return record;
+}
+
 function sourceText() {
     return Array.from({ length: 8 }, (_, index) => (
         `来源实验段 ${index + 1} uses 测试方法 against 受控基线 in 受控测试设置 ${index + 1}; `
         + `测量结果 ${10 + index}.1 score is higher-is-better. Experiment section ${index + 1} describes the speech recognition architecture, `
         + `training inputs, evaluation results, and ablation evidence with measured values ${10 + index}.1 and ${9 + index}.2 under a controlled split. `
+        + 'The controlled WER comparison reports 12.4%, 10.8%, 11.7%, and a separate best score of 9.7. '
         + `The paragraph also records limitations, implementation conditions, and the reported resource availability statement.`
     )).join('\n');
 }
@@ -204,6 +336,10 @@ function envelope(papers = { [ID]: validRecord() }, overrides = {}) {
         papers,
         ...overrides
     };
+}
+
+function currentEnvelope(papers = { [ID]: currentV3Record() }, overrides = {}) {
+    return envelope(papers, { version: 3, reviewProtocol: 'manual-v5-isolated-paper-review-v1', ...overrides });
 }
 
 function distinctRecord(id, marker) {
@@ -273,6 +409,19 @@ function fixture() {
 }
 
 describe('strict reusable manual v4 spec assembler', () => {
+    it('does not strip the integer part of a decimal quantity at an innovation paragraph start', () => {
+        const record = validRecord();
+        record.editorial.innovations = `1.3B URL 本身不等于训练集。${'该段继续说明总池、子集和边界之间的区别。'.repeat(6)}\n\n`
+            + innovationProse();
+        const analysis = buildAnalysis({
+            arxivId: ID,
+            title: 'Decimal evidence',
+            authors: ['Test Author'],
+        }, record);
+        assert.match(analysis, /1\. 1\.3B URL 本身不等于训练集/);
+        assert.doesNotMatch(analysis, /1\. 3B URL 本身不等于训练集/);
+    });
+
     it('splits an overlong editorial method at sentence boundaries without duplicating text', () => {
         const source = Array.from({ length: 4 }, (_, paragraphIndex) => (
             Array.from({ length: 6 }, (_, sentenceIndex) => (
@@ -329,6 +478,19 @@ describe('strict reusable manual v4 spec assembler', () => {
         const missingLedger = validRecord();
         delete missingLedger.evidenceLedger;
         assert.throws(() => validateRecord(missingLedger, ID), /evidenceLedger 必须由人工显式提供/);
+
+        for (const [field, heading] of [
+            ['summary', '## 核心摘要'],
+            ['limits', '### 进一步审视'],
+            ['limits', '#### 论文证据直接支持的边界']
+        ]) {
+            const embeddedHeading = validRecord();
+            embeddedHeading.editorial[field] = `${heading}\n\n${embeddedHeading.editorial[field]}`;
+            assert.throws(
+                () => validateRecord(embeddedHeading, ID),
+                new RegExp(`editorial\\.${field} 不得内嵌 assembler 生成的 Markdown 标题`)
+            );
+        }
 
         const missingInsertion = validRecord();
         delete missingInsertion.imageInsertions;
@@ -552,6 +714,88 @@ describe('strict reusable manual v4 spec assembler', () => {
             manifestPath: f.manifestPath,
             mergedRecords: mergeRecordsEnvelopes([{ path: invalidAuthorPath, document: invalidAuthorEnvelope }], DATE)
         }), /authorInfo\.sourceQuote 不存在/);
+    });
+
+    it('records v3 assembles Manual v5 with isolated paper/reviewer provenance', () => {
+        const f = fixture();
+        const currentPath = path.join(f.root, 'manual-records-v3.json');
+        const current = currentEnvelope();
+        writeJson(currentPath, current);
+        const mergedRecords = mergeRecordsEnvelopes([
+            { path: currentPath, document: current }
+        ], DATE);
+        const spec = buildSpec({
+            date: DATE,
+            filtered: f.filtered,
+            manifest: f.manifest,
+            manifestPath: f.manifestPath,
+            mergedRecords
+        });
+        assert.equal(spec.version, 5);
+        assert.equal(spec.recordsVersion, 3);
+        assert.equal(spec.researchContract, 'audio-researcher-v1');
+        assert.equal(spec.perPaperSubagentRequired, true);
+        assert.equal(spec.papers[ID].paperSubagent.singlePaperOnly, true);
+        assert.equal(spec.papers[ID].stageReviews.scoringAudit.decision, 'manual_verified');
+        assert.equal(spec.papers[ID].figureReview.decisions.length, 1);
+    });
+
+    it('ingestion replays the official assembler and rejects hand-written source/image bypasses', () => {
+        const f = fixture();
+        const filteredPath = path.join(f.root, 'filtered-papers.json');
+        writeJson(filteredPath, f.filtered);
+        const spec = buildSpec({
+            date: DATE,
+            filtered: f.filtered,
+            filteredPath,
+            manifest: f.manifest,
+            manifestPath: f.manifestPath,
+            mergedRecords: f.mergedRecords,
+            generatedAt: '2026-08-25T12:30:00.000+08:00'
+        });
+        const options = {
+            date: DATE,
+            filtered: f.filtered,
+            filteredPath,
+            manifestPath: f.manifestPath
+        };
+        assert.doesNotThrow(() => validateManualV4AssemblerProvenance(spec, options));
+
+        const arbitraryTextPath = path.join(f.root, 'operator-substitute.txt');
+        fs.writeFileSync(arbitraryTextPath, sourceText());
+        const arbitraryText = JSON.parse(JSON.stringify(spec));
+        arbitraryText.papers[ID].fullTextPath = arbitraryTextPath;
+        arbitraryText.papers[ID].sourceSha256 = require('node:crypto')
+            .createHash('sha256').update(fs.readFileSync(arbitraryTextPath)).digest('hex');
+        assert.throws(
+            () => validateManualV4AssemblerProvenance(arbitraryText, options),
+            /未与同批 manifest 闭环/
+        );
+
+        const arbitraryImage = JSON.parse(JSON.stringify(spec));
+        arbitraryImage.papers[ID].imageInfos.push({
+            url: 'https://example.com/operator-injected.png',
+            caption: 'Operator supplied image outside the full-text manifest',
+            source: 'manual'
+        });
+        assert.throws(
+            () => validateManualV4AssemblerProvenance(arbitraryImage, options),
+            /imageInfos 未与同批 manifest 闭环/
+        );
+
+        const missingRecords = JSON.parse(JSON.stringify(spec));
+        missingRecords.recordsSources = [];
+        assert.throws(
+            () => validateManualV4AssemblerProvenance(missingRecords, options),
+            /缺少 recordsSources/
+        );
+
+        const downgraded = JSON.parse(JSON.stringify(spec));
+        downgraded.version = spec.version === 5 ? 4 : 5;
+        assert.throws(
+            () => validateManualV4AssemblerProvenance(downgraded, options),
+            /spec v[45] 与 records v[23] 版本映射不一致|版本降级\/升级非法/
+        );
     });
 
     it('rejects missing records, manifest v1, source tampering, and filtered batch drift', () => {

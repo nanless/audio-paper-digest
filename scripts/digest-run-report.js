@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const Config = require('./config.js');
 const {
     getBeijingISOString,
@@ -41,6 +42,30 @@ function readJson(filePath) {
     } catch (_error) {
         return null;
     }
+}
+
+function sha256File(filePath) {
+    try {
+        return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+    } catch (_error) {
+        return null;
+    }
+}
+
+function postPublishVisualWaiverIsValid(waiver, targetDate, publication, visualPath, coverPath) {
+    return Boolean(
+        waiver?.version === 1
+        && waiver?.batchDate === targetDate
+        && waiver?.status === 'waived'
+        && waiver?.requestedBy === 'user'
+        && typeof waiver?.reason === 'string' && waiver.reason.trim().length >= 10
+        && waiver?.publicationCommit === publication?.publicationCommit
+        && waiver?.remoteVerifiedOid === publication?.remoteVerifiedOid
+        && waiver?.remoteVerifiedOid === waiver?.publicationCommit
+        && waiver?.generationManifestSha256 === publication?.generationManifestSha256
+        && waiver?.visualManifestSha256 === sha256File(visualPath)
+        && waiver?.coverManifestSha256 === sha256File(coverPath)
+    );
 }
 
 function papersFrom(value) {
@@ -261,8 +286,13 @@ function buildDigestRunReport(targetDate, options = {}) {
     const decisions = decisionsSnapshot.value;
     const deep = deepSnapshot.value;
     const review = readJson(path.join(Config.CURRENT_DIR, `blog-review-receipt-${targetDate}.json`));
-    const visual = readJson(path.join(Config.FILES.visualSummaryManifestDir, `${targetDate}.json`));
-    const cover = readJson(path.join(Config.FILES.digestCoverManifestDir, `${targetDate}.json`));
+    const visualPath = path.join(Config.FILES.visualSummaryManifestDir, `${targetDate}.json`);
+    const coverPath = path.join(Config.FILES.digestCoverManifestDir, `${targetDate}.json`);
+    const visual = readJson(visualPath);
+    const cover = readJson(coverPath);
+    const visualWaiver = readJson(path.join(
+        Config.FILES.postPublishVisualWaiverDir, `${targetDate}.json`
+    ));
     const deepBatch = papersFrom(deep);
     const successful = deepBatch.filter(isSuccessfulAnalysisRecord);
     const failed = deepBatch.filter(paper => !isSuccessfulAnalysisRecord(paper));
@@ -321,6 +351,13 @@ function buildDigestRunReport(targetDate, options = {}) {
         && cover?.overallStatus === 'complete'
         && validateCompletedCover(cover?.cover, cover?.dataSha256, cover?.promptSha256, expectedCoverToken)
         && coverManifestCurrent;
+    const reviewComplete = review?.strictReview === true && publicationVerified;
+    const visualsWaived = reviewComplete
+        && postPublishVisualWaiverIsValid(
+            visualWaiver, targetDate, review, visualPath, coverPath
+        );
+    const visualGateComplete = visualComplete || visualsWaived;
+    const coverGateComplete = coverComplete || visualsWaived;
     const filteredBatch = papersFrom(filtered);
     const filteredComplete = Boolean(
         filtered?.batchDate === targetDate
@@ -332,21 +369,20 @@ function buildDigestRunReport(targetDate, options = {}) {
         && successful.length === filteredBatch.length
         && samePaperIds(successful, filteredBatch)
     );
-    const reviewComplete = review?.strictReview === true && publicationVerified;
     const errors = [];
     if (!fetchComplete) errors.push('抓取来源健康或批次绑定不完整');
     if (!filteredComplete) errors.push('筛选状态、决定覆盖或批次绑定不完整');
     if (!analysisComplete) errors.push('深度分析集合未精确覆盖筛选结果');
     if (!reviewComplete) errors.push('博客严格 review 或远端发布验证未完成');
-    if (!visualComplete) errors.push('TOP 10 论文长图状态或资产校验未完成');
-    if (!coverComplete) errors.push('汇总封面状态或资产校验未完成');
+    if (!visualGateComplete) errors.push('TOP 10 论文长图状态或资产校验未完成');
+    if (!coverGateComplete) errors.push('汇总封面状态或资产校验未完成');
     const overallComplete = (
         fetchComplete
         && filteredComplete
         && analysisComplete
         && reviewComplete
-        && visualComplete
-        && coverComplete
+        && visualGateComplete
+        && coverGateComplete
     );
     return {
         version: 1,
@@ -389,8 +425,9 @@ function buildDigestRunReport(targetDate, options = {}) {
             remoteVerifiedOid: review?.remoteVerifiedOid || null
         },
         visuals: {
-            gateComplete: visualComplete,
-            status: visual?.overallStatus || 'missing',
+            gateComplete: visualGateComplete,
+            status: visualsWaived ? 'waived' : (visual?.overallStatus || 'missing'),
+            waived: visualsWaived,
             complete: visual?.counts?.completeCards || 0,
             total: visual?.counts?.totalCards || 0,
             pending: visual?.counts?.pendingCards || 0,
@@ -399,8 +436,9 @@ function buildDigestRunReport(targetDate, options = {}) {
             archiveUnique: visualArchiveUnique
         },
         cover: {
-            status: cover?.cover?.status || 'missing',
-            complete: coverComplete
+            status: visualsWaived ? 'waived' : (cover?.cover?.status || 'missing'),
+            complete: coverGateComplete,
+            waived: visualsWaived
         }
     };
 }
@@ -413,8 +451,8 @@ function formatDigestRunSummary(report) {
         `  筛选 ${state(report.filter.complete)} | selected=${report.filter.selectedCount} | candidates=${report.filter.totalCandidates ?? '?'} | pending=${report.filter.pendingDecisions ?? '?'}`,
         `  分析 ${state(report.analysis.complete)} | success=${report.analysis.successful}/${report.analysis.total} | failed=${report.analysis.failed}`,
         `  博客 ${state(report.blog.complete)} | strictReview=${report.blog.strictReview} | remoteVerified=${report.blog.publicationVerified}`,
-        `  长图 ${state(report.visuals.gateComplete === true)} | complete=${report.visuals.complete}/${report.visuals.total} | pending=${report.visuals.pending} | failed=${report.visuals.failed}`,
-        `  封面 ${state(report.cover.complete)} | status=${report.cover.status}`
+        `  长图 ${report.visuals.waived ? 'waived' : state(report.visuals.gateComplete === true)} | complete=${report.visuals.complete}/${report.visuals.total} | pending=${report.visuals.pending} | failed=${report.visuals.failed}`,
+        `  封面 ${report.cover.waived ? 'waived' : state(report.cover.complete)} | status=${report.cover.status}`
     ];
     for (const error of report.errors) lines.push(`  错误: ${error}`);
     return lines.join('\n');
@@ -442,6 +480,7 @@ module.exports = {
     samePaperIds,
     filterSnapshotsAreConsistent,
     visualAssetsAreValid,
+    postPublishVisualWaiverIsValid,
     buildDigestRunReport,
     formatDigestRunSummary
 };

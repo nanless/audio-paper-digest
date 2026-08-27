@@ -41,6 +41,7 @@ from publish_common import (
     normalize_publish_arxiv_id, review_protocol_failure,
     validate_papers_for_publish, validate_review_payload,
     validate_final_manual_v4_markdown, MANUAL_DEPTH_CONTRACT_VERSION_V4,
+    MANUAL_DEPTH_CONTRACT_VERSION_V5,
     validate_digest_index_reader_quality, DIGEST_INDEX_READER_QUALITY_VERSION,
 )
 from path_config import (
@@ -126,8 +127,9 @@ def _manual_review_provenance_error(receipt, *, date_str=None,
     provenance = receipt.get('reviewProvenance')
     if not isinstance(provenance, dict):
         return 'manual_complete 审查缺少 reviewProvenance'
-    if provenance.get('version') != 2 or provenance.get('mode') != MANUAL_REVIEW_MODE:
+    if provenance.get('version') not in (2, 3) or provenance.get('mode') != MANUAL_REVIEW_MODE:
         return 'manual_complete reviewProvenance 版本或模式非法'
+    current_v3 = provenance.get('version') == 3
     if not isinstance(provenance.get('agent'), str) or not provenance['agent'].strip():
         return 'manual_complete reviewProvenance 缺少 agent'
     if provenance.get('basis') != 'deterministic_and_manual_semantic_review':
@@ -207,7 +209,11 @@ def _manual_review_provenance_error(receipt, *, date_str=None,
         if not isinstance(item, dict):
             return 'manual_complete provenance 逐文件必须是对象'
         allowed_fields = {'path', 'sha256', 'checks', 'notes', 'deleted'}
-        if not {'path', 'sha256', 'checks', 'notes'}.issubset(item) \
+        required_fields = {'path', 'sha256', 'checks', 'notes'}
+        if current_v3:
+            allowed_fields.update({'reviewSubagent', 'imageFindings'})
+            required_fields.update({'reviewSubagent', 'imageFindings'})
+        if not required_fields.issubset(item) \
                 or not set(item).issubset(allowed_fields):
             return 'manual_complete provenance 逐文件字段非法'
         path = item.get('path')
@@ -233,6 +239,15 @@ def _manual_review_provenance_error(receipt, *, date_str=None,
             return f'manual_complete provenance 逐文件检查不完整: {path}'
         if not isinstance(item.get('notes'), str) or len(item['notes'].strip()) < 20:
             return f'manual_complete provenance 逐文件 notes 过短: {path}'
+        subagent = item.get('reviewSubagent')
+        if current_v3 and (not isinstance(subagent, dict) or subagent.get('version') != 1
+                or not isinstance(subagent.get('taskName'), str)
+                or len(subagent['taskName'].strip()) < 4
+                or subagent.get('singleFileOnly') is not True
+                or subagent.get('isolatedContext') is not True):
+            return f'manual_complete provenance 缺少独立单页 reviewSubagent: {path}'
+        if current_v3 and not isinstance(item.get('imageFindings'), list):
+            return f'manual_complete provenance imageFindings 非法: {path}'
         normalized_notes = re.sub(r'[\W_]+', '', item['notes'], flags=re.UNICODE).casefold()
         if normalized_notes in seen_notes:
             return 'manual_complete provenance 逐文件 notes 不独立'
@@ -261,6 +276,30 @@ def _manual_review_provenance_error(receipt, *, date_str=None,
             )
             if arxiv_match and arxiv_match.group(1) not in item['notes']:
                 return f'manual_complete provenance 论文页 notes 缺少 arXiv ID: {path}'
+            if current_v3 and arxiv_match and subagent.get('paperId') is not None \
+                    and normalize_publish_arxiv_id(subagent.get('paperId')) != \
+                    normalize_publish_arxiv_id(arxiv_match.group(1)):
+                return f'manual_complete provenance reviewSubagent.paperId 与页面不一致: {path}'
+            image_urls = [image.get('url') for image in parse_markdown_images(content)]
+            findings = item.get('imageFindings')
+            if current_v3 and [finding.get('url') for finding in findings if isinstance(finding, dict)] != image_urls:
+                return f'manual_complete provenance imageFindings 未按正文顺序逐图覆盖: {path}'
+            for finding in findings if current_v3 else []:
+                if (not isinstance(finding, dict)
+                        or set(finding) != {
+                            'url', 'captionVerified', 'adjacentNarrativeVerified',
+                            'mobileReadable', 'visibleFacts', 'notes',
+                        }
+                        or any(finding.get(key) is not True for key in (
+                            'captionVerified', 'adjacentNarrativeVerified', 'mobileReadable',
+                        ))
+                        or not isinstance(finding.get('visibleFacts'), list)
+                        or len(finding['visibleFacts']) < 2
+                        or any(not isinstance(fact, str) or len(fact.strip()) < 10
+                               for fact in finding['visibleFacts'])
+                        or not isinstance(finding.get('notes'), str)
+                        or len(finding['notes'].strip()) < 20):
+                    return f'manual_complete provenance 逐图像素事实审查不完整: {path}'
             if arxiv_match and not notes_bind_reader_fact(
                     item['notes'], content, (arxiv_match.group(1), date_str)):
                 return f'manual_complete provenance 论文页 notes 缺少正文技术词或实验数字: {path}'
@@ -1589,6 +1628,15 @@ def yaml_escape(s):
 
 def plain_title_for_publish(title):
     """标题中的短数学标记转成普通文本，避免 Hugo/frontmatter 误解析。"""
+    title = str(title or '')
+    title = re.sub(r'\$?\s*\^\s*2\s*\$?', '²', title)
+    title = re.sub(r'\\underline\s*\{([^{}]+)\}', r'\1', title)
+    title = re.sub(
+        r'\$?\s*(\d+(?:\.\d+)?)\s*\^\s*\\circ\s*\$?',
+        lambda match: f'{match.group(1)}°',
+        title,
+    )
+    title = title.replace('$', '')
     return yaml_escape(title).replace('\\\\', '\\')
 
 
@@ -2182,8 +2230,11 @@ def generate_paper_page(paper, date_str, category='论文速递'):
     contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
     manual_depth = contracts.get('manualDepth')
     manual_depth_marker = (
-        f'paper_digest_manual_depth: "{MANUAL_DEPTH_CONTRACT_VERSION_V4}"\n'
-        if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V4 else ''
+        f'paper_digest_manual_depth: "{manual_depth}"\n'
+        if manual_depth in {
+            MANUAL_DEPTH_CONTRACT_VERSION_V4,
+            MANUAL_DEPTH_CONTRACT_VERSION_V5,
+        } else ''
     )
     md = f"""---
 title: "{yaml_escape(display_title)}"
@@ -2252,15 +2303,15 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
                 opensource_content = opensource_content[:supp_match.start()].strip()
 
         sections = [
-            ('💡 毒舌点评', 'roast'),
             ('📌 核心摘要', 'summary'),
-            ('🔗 开源详情', 'opensource', opensource_content),
             ('🏗️ 方法概述和架构', 'architecture'),
             ('💡 核心创新点', 'innovation'),
             ('📊 实验结果', 'results'),
             ('🔬 细节详述', 'details'),
-            ('⚖️ 评分理由', 'scoringReason'),
             ('🚨 局限与问题', 'limitations'),
+            ('🔗 开源与复现资源', 'opensource', opensource_content),
+            ('💡 研究者判断', 'roast'),
+            ('⚖️ 评分理由', 'scoringReason'),
         ]
         for item in sections:
             if len(item) == 3:
@@ -2278,7 +2329,13 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
                 content = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', content.strip(), count=1)
                 content = re.sub(r'^###\s*\d+\.\s*[^\n]+\n', '', content, flags=re.MULTILINE)
                 content = re.sub(r'^\d+\.\s*\*\*([^*]+)\*\*\s*$', r'\1', content, flags=re.MULTILINE)
-                md += f'\n### {label}\n\n{content}\n'
+                if key == 'scoringReason':
+                    md += (
+                        f'\n<details>\n<summary>{label}（展开查看）</summary>\n\n'
+                        f'{content}\n\n</details>\n'
+                    )
+                else:
+                    md += f'\n### {label}\n\n{content}\n'
 
         # 补充信息放到最后面
         if supplementary:
@@ -2291,7 +2348,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
     return md, slug
 
 
-def review_and_fix_post(file_path, paper=None):
+def review_and_fix_post(file_path, paper=None, *, dry_run=False):
     """Review 生成的博客文件，自动修复常见问题，返回 (是否修复, 问题列表)"""
     with open(file_path, 'r', encoding='utf-8') as f:
         content = f.read()
@@ -2623,7 +2680,7 @@ def review_and_fix_post(file_path, paper=None):
                     break
 
     fixed = content != original
-    if fixed:
+    if fixed and not dry_run:
         atomic_write_text(file_path, content)
 
     manual_v4_issue = validate_final_manual_v4_markdown(content, paper)
@@ -3171,8 +3228,16 @@ def validate_git_publish_branch():
     return head.lower()
 
 
-def validate_manifest_clean_against_head(paths):
-    """Reject any pre-existing staged, unstaged, or untracked manifest edits."""
+def validate_manifest_clean_against_head(paths, allow_exact_pipeline_untracked=None):
+    """Reject edits except exact bytes from the prior pipeline manifest.
+
+    A completed generation can legitimately leave tracked files modified but
+    not yet committed while a later content repair requires regeneration.  The
+    prior manifest is a byte-level ownership receipt for that state, so an
+    unstaged `` M`` entry is safe only when its current SHA and ownership marker
+    still match that receipt.  Staged entries remain forbidden because staging
+    is external state that generation must never adopt implicitly.
+    """
     manifest = _git_relative_manifest(paths)
     if not manifest:
         return
@@ -3186,8 +3251,30 @@ def validate_manifest_clean_against_head(paths):
         check=True,
         env=_git_env(),
     )
+    entries = []
     if result.stdout:
         entries = [item.decode('utf-8', errors='replace') for item in result.stdout.split(b'\0') if item]
+        allowed = allow_exact_pipeline_untracked or {}
+        unsafe = []
+        repo = Path(BLOG_REPO).expanduser().resolve()
+        for entry in entries:
+            status = entry[:3]
+            if status not in {'?? ', ' M '}:
+                unsafe.append(entry)
+                continue
+            relative = entry[3:]
+            target = repo / relative
+            expected_sha = allowed.get(relative)
+            try:
+                text = target.read_text(encoding='utf-8')
+            except (OSError, UnicodeError):
+                unsafe.append(entry)
+                continue
+            if (not expected_sha or _sha256_file(target) != expected_sha
+                    or 'paper_digest_pipeline_owned: true' not in text):
+                unsafe.append(entry)
+        entries = unsafe
+    if entries:
         raise PublishDataValidationError(
             '发布清单路径已有相对 HEAD 的人工 staged/unstaged/untracked 修改，拒绝覆盖或删除: '
             + ', '.join(entries)
@@ -3543,12 +3630,17 @@ def git_push(date_str, publish_paths, rollback_state=None):
             # cannot turn an already-reviewed path set into unreviewed bytes.
             validate_git_index(publish_paths)
             validate_git_index_against_review_receipt(receipt, publish_paths)
+            review_description = (
+                '提交已通过逐论文独立人工语义、逐图像素事实与 Hugo gate 审查；'
+                if receipt.get('reviewMode') == MANUAL_REVIEW_MODE
+                else '提交已通过严格 LLM、多模态图片与 Hugo gate 审查；'
+            )
             subprocess.run(
                 [
                     'git', 'commit',
                     '-m', f'content: 发布 {date_str} 论文速递并同步评分与审查结果',
-                    '-m', '提交已通过严格 LLM、多模态图片与 Hugo gate 的生成清单；'
-                          '推送前已逐文件校验审查凭证 SHA-256，本步不重新生成或 review。',
+                    '-m', review_description
+                          + '推送前已逐文件校验审查凭证 SHA-256，本步不重新生成或 review。',
                 ],
                 check=True, cwd=BLOG_REPO,
                 env=_git_env()
@@ -3915,26 +4007,35 @@ def prepare_generation_journal(
             (item.get('arxivId'), item.get('filename'))
             for item in journal.get('papers', []) if isinstance(item, dict)
         ]
-        if (
+        journal_mismatch = (
             journal.get('schemaVersion') != 1
             or journal.get('date') != date_str
             or journal.get('inputFingerprint') != input_fingerprint
             or journal.get('templateFingerprint') != template_fingerprint
             or journal.get('baseHead') != str(base_head).lower()
             or actual_identity != expected_identity
-        ):
-            raise PublishDataValidationError(
-                f'未完成 generation 的输入、模板、博客基线或论文集合已变化；'
-                f'拒绝覆盖续跑状态: {journal_path}'
-            )
-        for record in journal['papers']:
-            if record.get('status') == 'generated':
-                staged = stage / record['filename']
-                if not staged.is_file() or _sha256_file(staged) != record.get('sha256'):
-                    raise PublishDataValidationError(
-                        f'已生成页面 checkpoint 损坏: {record["filename"]}'
-                    )
-        return journal, journal_path, stage
+        )
+        if journal_mismatch:
+            # No target path has been snapshotted or installed yet, so this is
+            # only derived staging state.  A record/template repair may safely
+            # restart it from scratch.  Once installation begins we still fail
+            # closed because the journal is then the rollback authority.
+            if journal.get('installation') is not None:
+                raise PublishDataValidationError(
+                    f'未完成 generation 的输入、模板、博客基线或论文集合已变化；'
+                    f'安装已开始，拒绝覆盖续跑状态: {journal_path}'
+                )
+            if stage.parent.exists():
+                shutil.rmtree(stage.parent)
+        else:
+            for record in journal['papers']:
+                if record.get('status') == 'generated':
+                    staged = stage / record['filename']
+                    if not staged.is_file() or _sha256_file(staged) != record.get('sha256'):
+                        raise PublishDataValidationError(
+                            f'已生成页面 checkpoint 损坏: {record["filename"]}'
+                        )
+            return journal, journal_path, stage
 
     if stage.parent.exists():
         shutil.rmtree(stage.parent)
@@ -3966,7 +4067,21 @@ def prepare_generation_installation(
     publish_paths = publish_manifest_paths(
         staged_posts, content_dir, date_str, staged_assets=staged_assets,
     )
-    validate_manifest_clean_against_head(publish_paths)
+    prior_exact = {}
+    prior_manifest_path = generation_manifest_path(date_str)
+    if prior_manifest_path.is_file():
+        try:
+            prior_manifest = _load_json_object(prior_manifest_path, '既有 generation manifest')
+            for item in prior_manifest.get('files', []):
+                if (isinstance(item, dict) and item.get('deleted') is not True
+                        and isinstance(item.get('path'), str)
+                        and re.fullmatch(r'[a-f0-9]{64}', str(item.get('sha256') or ''))):
+                    prior_exact[item['path']] = item['sha256']
+        except PublishDataValidationError:
+            prior_exact = {}
+    validate_manifest_clean_against_head(
+        publish_paths, allow_exact_pipeline_untracked=prior_exact,
+    )
     stage_root = Path(staged_posts).resolve().parent
     staged_by_target = {}
     repo = Path(BLOG_REPO).expanduser().resolve()

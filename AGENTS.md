@@ -13,7 +13,8 @@
 ```bash
 npm install              # 安装依赖（cheerio + pdf-parse）
 npm test                 # 串行运行单元测试（node --test --test-concurrency=1 tests/*.test.js）
-npm run digest:prepare -- YYYY-MM-DD # 默认论文速递入口：执行到博客发布并准备视觉输入；随后 Agent 必须用内置 image_gen 完成并登记图片
+npm run digest:prepare -- YYYY-MM-DD # 默认 Manual 论文速递入口：先抓 raw 并在人工边界停下；Agent 必须逐篇分派独立 subagent，续完筛选/全文/records/发布/视觉
+npm run digest:api -- YYYY-MM-DD # 仅当用户显式要求 LLM/API 路线时使用旧自动筛选+分析+review 编排
 npm run fetch            # 仅数据流程：抓取 + 筛选 + 深度分析
 npm run deep             # 仅深度分析续跑（跳过已有 analysis；无分析结果时可从 filtered-papers.json 初始化）
 npm run reanalyze        # 强制全量重分析（支持 --concurrency N）
@@ -49,10 +50,11 @@ node scripts/test-api-key.js [--secondary] # 测试主模型或副模型 LLM API
 node scripts/manual-fetch.js --date YYYY-MM-DD --raw # 无筛选模型抓取候选，仍访问 arXiv/HF
 node scripts/manual-fetch.js --date YYYY-MM-DD --select SPEC.json # 提交完整 manual_offline 逐篇裁决
 npm run manual:fulltext -- YYYY-MM-DD # 逐篇安全获取并 checkpoint 人工分析所需全文
-npm run manual:spec -- --date YYYY-MM-DD --records RECORDS.json # 校验全文/证据/写作质量后原子组装 v4 spec；--records 可重复
-npm run manual:analyze -- --date YYYY-MM-DD --spec SPEC.json # 无 LLM/API 的 manual_complete v4 全文分析（可读历史 v3 spec）
+npm run manual:spec -- --date YYYY-MM-DD --records RECORDS.json # 校验全文/证据/写作质量后原子组装当前 v5 spec；--records 可重复
+npm run manual:analyze -- --date YYYY-MM-DD --spec SPEC.json # 无 LLM/API 的 manual_complete v5 全文分析（兼容历史 v4/v3 spec）
 npm run manual:analyze -- --date YYYY-MM-DD --spec SPEC.json --force # 显式用人工纠错/spec 覆盖已成功 canonical
 python3 scripts/manual-review-blog.py --date YYYY-MM-DD --attestation ATTESTATION.json # LLM review 不可用时的严格人工接管
+python3 scripts/assemble-manual-review-attestation.py --date YYYY-MM-DD # 汇总最终 SHA 的逐页 v3 shard；不执行第二轮内容审查
 python3 scripts/publish-to-feishu.py    # 生成飞书文档
 
 # ICML 2026 专属流程（仅 icml-2026-analysis 分支可用）
@@ -91,11 +93,19 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 
 **发布/视觉兼容边界**：标准日更必须在任何 Git 变更前验证 generation schema v3 和 `publishedPapers`；schema v1/v2 仅允许显式历史维护 push，receipt 将发布后视觉标记为 N/A。渠道默认按目标博客发布日期绑定远端验证的 `publishedPapers`，论文原始抓取批次可更早；current 滚动后使用日期归档，自定义输入也不得隐式绕过快照。
 
-**默认用户意图**：用户只要说“运行/进行 YYYY-MM-DD（或中文日期）的论文速递”，就视为明确要求并授权完成整条标准链路：抓取、筛选、深度分析、博客生成、反复 review 与修正、博客 push、TOP 10 论文长图、汇总封面，以及最终状态验收。无需再次询问是否发布博客，也不能在深度分析、review 或 push 后提前结束。微信公众号、飞书、小红书自动发布不在默认范围；小红书文案仅在用户明确要求时生成。
+**默认用户意图与默认模式**：用户只要说“运行/进行 YYYY-MM-DD（或中文日期）的论文速递”，就视为明确要求并授权完成整条链路：Manual 联网抓取、逐篇人工筛选、完整全文、Manual records/spec/canonical、博客生成、逐页 Manual review 与修正、博客 push、TOP 10 论文长图、汇总封面和最终状态验收。默认禁止调用项目筛选/分析/review LLM API；只有用户明确说“使用 API/LLM 自动流程”时才可运行 `digest:api`、`full-fetch.js` 或普通 `review-blog.py`。无需再次询问是否发布博客，也不能在人工边界、深度分析、review 或 push 后提前结束。微信公众号、飞书、小红书自动发布不在默认范围。
 
-**显式人工接管**：模型 API 不可用时可使用严格替代链路，但禁止由普通 API 错误自动触发。`manual-fetch.js --raw` 仍联网抓取并逐来源 checkpoint，`--select` 要求 `manual_offline` v1 规格逐篇完整覆盖候选；`manual:fulltext` 逐篇安全获取全文并支持失败项续跑。当前 `manual_analysis_records` v2 只组装 spec v4，canonical 必须写 `manualDepth=full-text-evidence-v4`、`experimentTables=evidence-rich-v2` 和上下文图片叙事契约；旧 spec v3 可读，但继续生成 v3 + `bounded-v1`，不得追溯套用 v4。Manual v4 不是字段扩写：正文必须形成论证推进，闭合输入—组件—训练/求解—输出，创新写缺口—机制—证据—边界，实验表包含设置/数据集/基线、指标方向、数字、消融或负面结果，表前提出比较问题，表后解释关键差异与边界。短字段只用于审计，不能与完整 editorial 机械拼接。图片只信任全文 manifest；存在合格候选时显式选择 1–4 张并逐图绑定锚点、后续结论与专属邻文，空数组或通用免责声明阻断。`manual-deep-analysis.js` 不调用 LLM API；每篇在运行锁内重读 canonical 后独立保存，失败保留 checkpoint，纠错需 `--force`。`manual-review-blog.py` 仍要求现存页面逐文件 SHA、批次唯一且含页面标识的 notes 和八类语义检查；notes 唯一性须剥离页面 ID/日期/删除文件名后再比较，禁止只换标识符复用模板。generation 的受控删除项必须显式写 `deleted:true`、空 SHA、`deletionVerified` 与含文件名的删除说明，后续 push、远端 OID 与视觉门禁不变。
+**显式视觉豁免**：用户明确说“不生图/不用生图”时，立即停止内置生图，不得把 pending 资产伪造成 complete。博客远端验证后运行 `npm run digest:waive-visuals -- --date YYYY-MM-DD --reason "用户明确理由"`，生成绑定 publication commit 与两类 manifest SHA 的 `waived` 凭证；任一 manifest 或远端绑定变化都会使豁免失效。`digest:status` 应显示 `waived` 而非视觉失败。
 
-Manual v4 的读者质量还必须有可审计输入：每篇至少 3 条 `resultClaims` 用全文连续原句绑定设置、方法、基线、指标、数值、单位和方向；每条的 `sourceBindings` / `readerBindings` 必须以 8 个精确字段分别指向 `sourceQuote` 与实验结果同一局部证据块，禁止用全章节散落数字或整句复用冒充闭环。`notReported` 只允许带原因对象，实证文档至少 1 条 claim 含数字。7 维 `readabilityRubric` 分别评估段内逻辑、段间承接、章节职责、事实就近、术语视角、句式节奏和去模板文学性，总分至少 12/14 且无 0 分。精确实验量、样本量、模型规模、超参数和置信区间一律使用阿拉伯数字，比较单位、数据集与条件必须就近绑定；技术计数、维度、层数、轮数、设备型号和科学计数法也属于精确数量。确定性门禁会阻断中文精确数量、中文/阿拉伯混拼、双重编号、跨章近重复、跨论文模板、过长段落、防御性否定过密与中英术语粘连；“关键比较问题是”“下图用于核对”“证据边界在于”“下一段将解释”和“1. 是……”不得作为跨论文固定脚手架。
+**论文 subagent 模型策略**：所有逐论文筛选、理解、正文撰写、评分、可读性复核和最终博客页审查 leaf subagent 必须显式使用 `model="gpt-5.6-terra"`、`reasoning_effort="high"`。不得让 Sol 代写逐篇主要内容；Sol 主 Agent 只负责队列、代码、确定性门禁、spec/canonical 组装、发布与状态验收。新 record 的 `paperSubagent` 应记录 `model=gpt-5.6-terra` 与 `reasoningEffort=high`。
+
+**逐论文独立 subagent**：Manual 批次中，每篇 filtered paper 必须单独创建一个只接收本篇 metadata、全文、图片与记录模板的 leaf paper subagent；一个 subagent task 不得撰写两篇论文。正文、评分/可读性复核和最终博客页审查必须记录独立 task provenance；受并发槽限制时分批排队，不得把多篇塞入同一上下文，也不得用占槽的 broker 转发任务。主 Agent 直接维护 pending 队列并补满可用 leaf 槽，只负责候选分发、跨批门禁、spec 组装、发布和视觉验收。
+
+**subagent 饱和调度**：平台最多 4 个并发槽且主 Agent 占 1 个，因此正文阶段必须持续保持 3 个 paper subagent 满载；任一任务结束后立即分派队列下一篇，不得等待批次凑齐。全部 records 完成前禁止启动普通独立二审、博客 review 或其他占槽任务。独立二审只对风险项触发：总分超过 9、内部评测且无直接消融、可读性全满分、来源/图片身份异常或单篇门禁给出高风险告警。其余论文由本篇隔离 subagent 完成自审，最终博客页仍各自使用单页 review subagent。
+
+**默认 Manual v5 链路**：`manual-fetch.js --raw` 仍联网抓取并逐来源 checkpoint，`--select` 要求 `manual_offline` v1 规格逐篇完整覆盖候选；`manual:fulltext` 逐篇安全获取全文并支持失败项续跑。当前 `manual_analysis_records` v3 组装 spec v5，canonical 必须写 `manualDepth=full-text-evidence-v5`、`experimentTables=evidence-rich-v2`、`researcherFocus=audio-researcher-v1` 和逐论文 subagent/上下文图片契约；records v2→spec v4 与旧 spec v3 仅作历史兼容。每篇独立 subagent 先交 researchBrief 和全文图/表/算法 inventory，再按音频研究者需要组织输入—音频路径—组件—训练—输出—实验—边界。`manual-deep-analysis.js` 必须重放 official assembler 并重新绑定 filtered、全文 manifest、records、source/input identity 与所有 imageInfos，禁止手写 spec 绕过。图片逐项 select/reject 并记录像素事实和移动端裁图计划；博客每页再由独立 review subagent 提供逐图 attestation。后续 push、远端 OID 与视觉门禁不变。
+
+Manual v5 的读者质量还必须有可审计输入：系统/方法论文至少 4 条、其他实证论文至少 3 条 `resultClaims`，且跨至少 2 个表/实验组，覆盖目标域、公开泛化和适用的消融/负结果；每条用全文连续原句绑定设置、方法、强基线、指标、数值、单位和方向。`sourceBindings` / `readerBindings` 必须指向同一局部证据块，方向与单位不得用表题或 Markdown 碎片冒充。7 维 `readabilityRubric` 必须由不同于正文作者的 review subagent 给出；全部满分时追加反证审计。核心正文每个精确数字、模型规模、帧数、时长、设备和科学计数法都必须存在于本篇全文、显式外部证据或 `derivedFacts`，防止相邻论文事实污染。确定性门禁继续阻断中文精确数量、双重编号、跨章近重复、跨论文模板、过长段落、防御性否定过密与中英术语粘连。
 
 **微信公众号真实发布凭证**：非 `--dry-run` 必须同时配置 `WECHAT_APP_ID`、`WECHAT_APP_SECRET` 和 `WECHAT_THUMB_MEDIA_ID`；项目没有可回退的默认永久素材 ID。
 
@@ -194,7 +204,7 @@ prompts/                # LLM prompt 模板
 - **`loadPrompt()` 从 markdown 文件内的第一个 fenced code block 提取 prompt**，并替换 `{变量名}` 占位符。内部示例代码块需使用比外层更短的 fence，修改 prompt 后需验证 `utils.js` 解析逻辑兼容。
 - **原子与并发写入**：使用 `writeFileAtomic()` 保存普通数据；分析结果和 `papers.json` 的读改写必须在跨进程文件锁内重读最新 canonical、合并变更并把 `generation` 递增 1，防止多个入口后写覆盖先写。当前协议不是调用方携带 expected-generation 的锁外乐观 CAS。Python 侧复用 `path_config.py` 的原子写入和 `update_json_file_locked()`，锁目录、owner 与锁内 generation 递增语义必须与 Node 一致。
 - **阶段恢复**：深度分析失败结果必须保留 `analysisManifest`、`analysisCheckpoint`、`analysisStageCheckpoints` 和 `analysisRecoveryImageManifest`。每个阶段绑定实际输入、模型/协议、prompt、温度和图像配置指纹；指纹变化时回退到上一阶段正文快照，只重跑当前及下游。`full-fetch`、`deep`、`batch`、单篇和重分析入口均须从 canonical deep result 合并失败 checkpoint，并逐论文持久化。旧成功正文存在时也必须保留最新失败标记并在下一轮重试；成功后才清理。只有下载、主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计和插图阶段均处于终态时才算成功。
-- **Token 证据切片**：不得把同一份完整全文无差别重复发送给所有后处理阶段。`task-focused-v1` 必须保留全文头部、四分位、中部、尾部覆盖，并按开源/方法/实验/评分关键词优先补充高价值块；日志记录每次 LLM 的文本字符数、估算文本 token 和图片数，禁止记录图片 base64。新分析/重分析的实验表格必须通过 `analysisManifest.contracts.experimentTables=evidence-rich-v2`：除每篇最多 2 张、每张最多 12 个数据行和 8 个指标列外，还要求设置/数据集/基线标识、至少 3 行和 2 个数字、指标方向、表前比较问题、表后关键差异与边界，并在全文提供时覆盖消融或负面结果。Manual v4 必须绑定该标记；历史 Manual v1-v3 的 `bounded-v1` 仍按旧上限语义兼容，不得追溯判坏。Node 数据校验和 Python 发布预检保持同构。
+- **Token 证据切片**：不得把同一份完整全文无差别重复发送给所有后处理阶段。`task-focused-v1` 必须保留全文头部、四分位、中部、尾部覆盖，并按开源/方法/实验/评分关键词优先补充高价值块；日志记录每次 LLM 的文本字符数、估算文本 token 和图片数，禁止记录图片 base64。新分析/重分析的实验表格必须通过 `analysisManifest.contracts.experimentTables=evidence-rich-v2`：除每篇最多 2 张、每张最多 12 个数据行和 8 个指标列外，还要求设置/数据集/基线标识、至少 3 行和 2 个数字、指标方向、表前比较问题、表后关键差异与边界，并在全文提供时覆盖消融或负面结果。当前 Manual v5 必须绑定该标记；历史 Manual v1-v3 的 `bounded-v1` 仍按旧上限语义兼容，不得追溯判坏。Node 数据校验和 Python 发布预检保持同构。
 - **同篇分析互斥**：所有经 `analysis-engine.js` 的入口都必须按规范化 arXiv ID 取得异步共享运行锁，并在锁内完成“重读最新 canonical 记录 → 分析 → 写回结果和 digest 状态”；禁止在锁外用陈旧对象覆盖较新结果。单篇失败也必须合并 `r.result`，以保留 checkpoint。
 - **博客推送凭证**：严格 review 凭证绑定 review 时博客 `main` 的 `baseHead`；push 只能从该基线创建清单对应的发布提交，或重试凭证记录的同一发布提交。成功远端验证还必须绑定当前 remote 名称和 push URL 的哈希身份。完全相同的非空批次仅在当前协议、文件、提交、remote 身份及实时远端 `main` OID 全部仍匹配时复用既有凭证；网络失败、远端分支变化或 `origin` 换仓均 fail closed。禁止借由空清单、已有本地提交或无关 HEAD 推送未审查内容；生成前必须拒绝覆盖目标日期文章的人工 Git 修改。
 - **arXiv 与 Demo 网络恢复**：深度分析的 arXiv HTML/图片发现默认超时 60 秒，PDF fallback 默认 180 秒且默认最大 50MB，分别支持 `PD_ARXIV_FETCH_TIMEOUT_MS` / `PD_ARXIV_PDF_TIMEOUT_MS` / `PD_ARXIV_PDF_MAX_BYTES`。arXiv 全文、PDF 和图片必须使用项目 HTTP CONNECT 代理 dispatcher；稳定 400/403/404 只尝试一轮；指定版本号不得静默回退到最新版。Demo 页面允许最多 3 次 HTTP 重定向，但每一跳都必须重新执行公网 DNS/IP 校验，严禁自动跟随到私网地址。
@@ -205,7 +215,7 @@ prompts/                # LLM prompt 模板
 - **Review 收敛与前置检查**：正式原始审查仍保留 5 次可用性重试；格式修复最多调用一次，完整协议重试最多 2 次，并尊重 `Retry-After` 加随机抖动。`auto_fixable=false` 的问题可省略空 `fix_instruction`。生成发布视图时剥离 `[A_*]` / `[SCORING_SOURCE_*]` 内部评分锚点，但不得修改 canonical analysis。LLM 前确定性去除完全重复正文；近重复长段只有在数字、URL 与否定词事实签名一致时才可删除。代码同时修复反引号包裹的 LaTeX，处理 120 字以上疑似截在英文半词的图片说明，阻断英文占主导的“毒舌点评”，并校验 Markdown 表格列数；合法空分组列续行必须保留。
 - **小红书文案续跑**：TOP N one-liner 成功项按 normalized arXiv ID 写入日期缓存，绑定 analysis、prompt、模型/endpoint/温度和清洗契约；日期级锁内逐篇原子保存。坏缓存原子隔离后重建，只重试缺失、失败或指纹失效项；`--date` 必须严格为 `YYYY-MM-DD`。小红书自动发布不属于论文速递必需流程。
 - **发布 review 不得删除合法表格续行**：Markdown 表格允许前导分组列为空，这通常表示沿用上一行模型/配置；不能把 `| | | | Filter2 ... |` 一类数据行当成子标题删除。普通模型名或技术术语未加反引号属于样式建议，不是格式问题。
-- **图片展示顺序与质量门禁**：候选图编号不是最终展示图号；无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 必须按图片在最终正文中的出现顺序归一化。副模型每篇默认最多插入 4 张图（可用 `PD_IMAGE_INSERTION_MAX` 正整数覆写），必须同时选择代码生成的稳定插入段落 ID 与同节、不早于插入点的结论段落 ID；图前必须承接锚点提出具体读图任务，图后必须指出图中可见结构/曲线并回扣结论边界。非法 ID、跨节结论、通用免责声明和超限图片一律拒绝，不得回退堆到章节末尾。Manual v4 还要求 `selectedImageUrls` 与逐图 `imageInsertions` 等长同序，禁止自动生成邻文。HTML 正文和图注必须同次解析复用，成功下载写入 `data/current/image-cache/`，永久 HTTP/MIME/大小错误不得反复重试。
+- **图片展示顺序与质量门禁**：候选图编号不是最终展示图号；无真实 caption 的通用 `图N` alt 与 `selectedImageUrls` 必须按图片在最终正文中的出现顺序归一化。副模型每篇默认最多插入 4 张图（可用 `PD_IMAGE_INSERTION_MAX` 正整数覆写），必须同时选择代码生成的稳定插入段落 ID 与同节、不早于插入点的结论段落 ID；图前必须承接锚点提出具体读图任务，图后必须指出图中可见结构/曲线并回扣结论边界。非法 ID、跨节结论、通用免责声明和超限图片一律拒绝，不得回退堆到章节末尾。当前 Manual v5 还要求 `selectedImageUrls` 与逐图 `imageInsertions` 等长同序，禁止自动生成邻文。HTML 正文和图注必须同次解析复用，成功下载写入 `data/current/image-cache/`，永久 HTTP/MIME/大小错误不得反复重试。
 - **内置生图参考文件**：视觉 manifest 中的 `cachePath` 保留原始 `.bin` 缓存路径；调用内置 `image_gen` 前必须运行 `npm run visual:prepare -- --date YYYY-MM-DD`，由脚本重新校验受控路径、SHA、字节数、MIME 与文件头，并物化为 `data/current/visual-reference-inputs/<日期>/<排名-论文>/` 下的 `.png/.jpg/.webp`。必须把命令输出的绝对 `referencedImagePaths` 传给生图工具，`relativePath` 仅供展示；禁止直接上传 `.bin` 或手工改后缀。
 - **紧凑 CLI 输出**：视觉 plan/status 默认只打印排名、论文 ID、标题、任务 token、参考图数与 manifest 绝对路径；`visual:prepare` 额外打印必需的绝对 `referencedImagePaths`。`generationContext` / `qaClaims` / 排行全文仍完整保存在 manifest，不得为了减少终端 token 而删除。`digest:status` 默认打印紧凑门禁摘要，完整 `sourceHealth` 仍写入报告 JSON。该报告是命令执行时的只读快照，后续 publish/record 会使旧报告过时，判断当前终态前必须重新运行，不能把历史报告当实时状态源。
 - **历史状态快照**：`digest:status --date` 仅对早于今天的日期回退 `data/archive/<date>/`；必须实际校验 raw、decisions、filtered、deep 的目标批次和集合契约，decisions 完整覆盖 raw，filtered 精确对应相关决定扣除显式排除项，deep 不得混批。损坏、缺失或只剩汇总统计时保持 incomplete；当前日期禁止用 archive 掩盖 current 故障。

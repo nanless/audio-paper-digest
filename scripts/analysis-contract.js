@@ -4,6 +4,15 @@ const {
     validateResultClaims,
     validateReadabilityRubric
 } = require('./editorial-quality.js');
+const {
+    MANUAL_RESEARCH_CONTRACT_VERSION,
+    validateResearchBrief,
+    validateStageReviews,
+    validateFigureReview,
+    validateScoringCalibration,
+    validateExactFactCoverage,
+    validateResultClaimCoverageV5
+} = require('./manual-research-contract.js');
 
 const REQUIRED_ANALYSIS_SECTIONS = Object.freeze([
     '评分',
@@ -85,11 +94,17 @@ const MANUAL_DEPTH_CONTRACT_VERSION_V3 = 'full-text-evidence-v3';
 // already-published v1-v3 manual records retain their historical table
 // semantics instead of being reinterpreted under a newer quality gate.
 const MANUAL_DEPTH_CONTRACT_VERSION_V4 = 'full-text-evidence-v4';
+const MANUAL_DEPTH_CONTRACT_VERSION_V5 = 'full-text-evidence-v5';
 const MANUAL_DEPTH_CONTRACT_VERSIONS = Object.freeze([
     MANUAL_DEPTH_CONTRACT_VERSION,
     MANUAL_DEPTH_CONTRACT_VERSION_V2,
     MANUAL_DEPTH_CONTRACT_VERSION_V3,
-    MANUAL_DEPTH_CONTRACT_VERSION_V4
+    MANUAL_DEPTH_CONTRACT_VERSION_V4,
+    MANUAL_DEPTH_CONTRACT_VERSION_V5
+]);
+const MANUAL_READER_QUALITY_VERSIONS = Object.freeze([
+    MANUAL_DEPTH_CONTRACT_VERSION_V4,
+    MANUAL_DEPTH_CONTRACT_VERSION_V5
 ]);
 const ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION = 'high-confidence-v1';
 const MANUAL_COMPLETE_STATUS = 'manual_complete';
@@ -472,14 +487,20 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
                 }
             }
         }
-        const before = resultLines.slice(0, table.startLine).join('\n').trim().split(/\n\s*\n/).pop() || '';
-        const after = resultLines.slice(table.endLine + 1).join('\n').trim().split(/\n\s*\n/)[0] || '';
-        if (before.replace(/[*_`#>\s]/g, '').length < 20
-            || !/(?:比较|检验|考察|回答|关键问题|差异|收益|代价|是否|何种|多大|哪些)/.test(before)) {
+        const comparisonPattern = /(?:比较|检验|考察|回答|关键问题|差异|收益|代价|是否|何种|多大|哪些)/;
+        const boundaryPattern = /(?:相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化)/;
+        const before = resultLines.slice(0, table.startLine).join('\n').trim()
+            .split(/\n\s*\n/).filter(Boolean).slice(-5).reverse()
+            .find(paragraph => paragraph.replace(/[*_`#>\s]/g, '').length >= 20
+                && comparisonPattern.test(paragraph)) || '';
+        const after = resultLines.slice(table.endLine + 1).join('\n').trim()
+            .split(/\n\s*\n/).filter(Boolean).slice(0, 5)
+            .find(paragraph => paragraph.replace(/[*_`#>\s]/g, '').length >= 50
+                && boundaryPattern.test(paragraph)) || '';
+        if (!before) {
             return `实验结果第 ${index + 1} 张表前缺少与上下文衔接的具体比较问题`;
         }
-        if (after.replace(/[*_`#>\s]/g, '').length < 50
-            || !/(?:相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化)/.test(after)) {
+        if (!after) {
             return `实验结果第 ${index + 1} 张表后缺少最关键差异、解释与证据边界`;
         }
     }
@@ -588,23 +609,38 @@ function validateManualDepthContract(analysis, options = {}) {
     const sourceNumericHits = (sourceText.match(/(?<![A-Za-z])\d+(?:\.\d+)?(?:%|ms|s|Hz|kHz|M|B|GB|×)?/g) || []).length;
     if (sourceNumericHits >= 8 && numericHits < 3) return `manual 实验结果缺少可核对数字: ${numericHits}/3`;
     if ([MANUAL_DEPTH_CONTRACT_VERSION_V2, MANUAL_DEPTH_CONTRACT_VERSION_V3,
-        MANUAL_DEPTH_CONTRACT_VERSION_V4]
+        ...MANUAL_READER_QUALITY_VERSIONS]
         .includes(options.manualDepthContractVersion)) {
         const v2Issue = validateManualDepthContractV2(analysis, { sourceText });
         if (v2Issue) return v2Issue;
     }
-    if ([MANUAL_DEPTH_CONTRACT_VERSION_V3, MANUAL_DEPTH_CONTRACT_VERSION_V4]
+    if ([MANUAL_DEPTH_CONTRACT_VERSION_V3, ...MANUAL_READER_QUALITY_VERSIONS]
         .includes(options.manualDepthContractVersion)) {
         const v3Issue = validateManualDepthContractV3(analysis, { sourceText });
         if (v3Issue) return v3Issue;
     }
-    if (options.manualDepthContractVersion === MANUAL_DEPTH_CONTRACT_VERSION_V4) {
+    if (MANUAL_READER_QUALITY_VERSIONS.includes(options.manualDepthContractVersion)) {
         const quality = validateEditorialQuality(analysis);
         if (!quality.valid) {
             const details = quality.issues.slice(0, 6)
                 .map(item => `${item.code}:${item.section || '-'}:${item.match || item.message}`)
                 .join('；');
             return `manual v4 读者文本质量未通过: ${details}`;
+        }
+    }
+    if (options.manualDepthContractVersion === MANUAL_DEPTH_CONTRACT_VERSION_V5) {
+        try {
+            validateExactFactCoverage(analysis, sourceText, {
+                label: 'manual v5 analysis',
+                derivedFacts: options.researchBrief?.derivedFacts || [],
+                externalEvidence: options.openSourceEvidence?.sourceQuotes || [],
+                boundEvidence: [
+                    ...(options.resultClaims || []).map(claim => claim.sourceQuote),
+                    ...(options.evidenceLedger || []).map(item => item.sourceQuote)
+                ]
+            });
+        } catch (error) {
+            return error.message;
         }
     }
     return null;
@@ -894,7 +930,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
     if (!/^[a-f0-9]{64}$/.test(String(takeover.promptSha256 || ''))) {
         return 'manualTakeover.promptSha256 必须是 SHA-256';
     }
-    if ([MANUAL_DEPTH_CONTRACT_VERSION_V3, MANUAL_DEPTH_CONTRACT_VERSION_V4]
+    if ([MANUAL_DEPTH_CONTRACT_VERSION_V3, ...MANUAL_READER_QUALITY_VERSIONS]
         .includes(manifest?.contracts?.manualDepth)
         && !/^[a-f0-9]{64}$/.test(String(takeover.manualAuthoringPromptSha256 || ''))) {
         return 'manual v3/v4 必须绑定 manualAuthoringPromptSha256';
@@ -918,7 +954,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
         || review.scoringVerified !== true || review.stageEvidenceVerified !== true) {
         return 'manualTakeover.review 必须确认来源、正文、评分和阶段证据';
     }
-    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V4
+    if (MANUAL_READER_QUALITY_VERSIONS.includes(manifest?.contracts?.manualDepth)
         && review.readerQualityVerified !== true) {
         return 'manual v4 manualTakeover.review 必须确认 readerQualityVerified';
     }
@@ -954,7 +990,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
         || takeover.evidenceLedgerSha256 !== manualSha256(takeover.evidenceLedger)) {
         return 'manualTakeover.evidenceLedgerSha256 不匹配';
     }
-    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V4) {
+    if (MANUAL_READER_QUALITY_VERSIONS.includes(manifest?.contracts?.manualDepth)) {
         const resultClaims = validateResultClaims(takeover.resultClaims, options.sourceText || '', {
             documentType: takeover.documentType,
             exception: takeover.resultClaimsException,
@@ -987,6 +1023,83 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
             return 'manualTakeover.readabilityRubricSha256 不匹配';
         }
     }
+    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V5) {
+        if (manifest?.contracts?.researcherFocus !== MANUAL_RESEARCH_CONTRACT_VERSION) {
+            return `manual v5 必须绑定 researcherFocus=${MANUAL_RESEARCH_CONTRACT_VERSION}`;
+        }
+        try {
+            validateResearchBrief(takeover.researchBrief, {
+                paperId: manifest?.sourceAcquisition?.sourceId,
+                documentType: takeover.documentType,
+                sourceText: options.sourceText || '',
+                analysis: options.analysis || '',
+                requireBindings: Boolean(options.sourceText && options.analysis)
+            });
+            validateStageReviews(takeover.stageReviews, {
+                stages: REQUIRED_RECOVERY_STAGES,
+                sourceText: options.sourceText || '',
+                evidenceLedger: takeover.evidenceLedger,
+                requireSourceBinding: Boolean(options.sourceText),
+                label: 'manualTakeover.stageReviews'
+            });
+            validateScoringCalibration(takeover.scoringCalibration, {
+                evidenceLedger: takeover.evidenceLedger,
+                paperSubagentTask: takeover.researchBrief?.paperSubagent?.taskName,
+                label: 'manualTakeover.scoringCalibration'
+            });
+            validateResultClaimCoverageV5(takeover.resultClaims, {
+                documentType: takeover.documentType,
+                evidenceProfile: takeover.researchBrief?.evidenceProfile || {},
+                label: 'manualTakeover.resultClaims'
+            });
+            if (takeover.readabilityRubric?.reviewerTaskName
+                === takeover.researchBrief?.paperSubagent?.taskName) {
+                throw new Error('readability reviewer 必须独立于 paper author subagent');
+            }
+            const imageCandidates = options.imageManifest?.candidates || [];
+            const selectedImageUrls = (options.imageManifest?.selected || [])
+                .map(item => typeof item === 'string' ? item : item?.url)
+                .filter(Boolean);
+            validateFigureReview(takeover.figureReview, {
+                imageInfos: imageCandidates,
+                selectedImageUrls,
+                selectedOrderFlexible: true,
+                paperId: manifest?.sourceAcquisition?.sourceId
+            });
+        } catch (error) {
+            return `manual v5 研究者契约失败: ${error.message}`;
+        }
+        for (const [field, value] of Object.entries({
+            researchBriefSha256: takeover.researchBrief,
+            stageReviewsSha256: takeover.stageReviews,
+            scoringCalibrationSha256: takeover.scoringCalibration,
+            openSourceEvidenceSha256: takeover.openSourceEvidence,
+            figureReviewSha256: takeover.figureReview,
+            externalResourceVerificationSha256: takeover.externalResourceVerification
+        })) {
+            if (!/^[a-f0-9]{64}$/.test(String(takeover[field] || ''))
+                || takeover[field] !== manualSha256(value)) {
+                return `manualTakeover.${field} 不匹配`;
+            }
+        }
+        const verification = takeover.externalResourceVerification;
+        const declaredUrls = takeover.openSourceEvidence?.urls || [];
+        const outcomesValid = Array.isArray(verification?.outcomes)
+            && verification.outcomes.every(item => item
+                && item.status === 'reachable_public_https'
+                && item.httpStatus === 200
+                && /^https:\/\//.test(String(item.finalUrl || ''))
+                && !Number.isNaN(Date.parse(String(item.verifiedAt || '')))
+                && Array.isArray(item.discoveredLinks)
+                && item.discoveredLinks.every(url => /^https:\/\//.test(String(url))));
+        if (!verification || verification.version !== 1
+            || verification.state !== takeover.openSourceEvidence?.state
+            || !Array.isArray(verification.outcomes)
+            || !outcomesValid
+            || verification.outcomes.map(item => item?.url).join('\n') !== declaredUrls.join('\n')) {
+            return 'manualTakeover.externalResourceVerification 未逐 URL 绑定 openSourceEvidence';
+        }
+    }
 
     const stages = manifest?.stages || {};
     const evidence = takeover.stageEvidence;
@@ -1017,7 +1130,14 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
             candidateScore: info?.candidateScore ?? null,
             mime: info?.mime,
             sha256: info?.sha256,
-            bytes: info?.bytes
+            bytes: info?.bytes,
+            ...(manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V5 ? {
+                reviewDecision: info?.reviewDecision || null,
+                reviewReason: info?.reviewReason || null,
+                figureNumber: info?.figureNumber || null,
+                visibleFacts: info?.visibleFacts || [],
+                renderPlan: info?.renderPlan || null
+            } : {})
         });
         if (!imageManifest || !Array.isArray(imageManifest.candidates)
             || !Array.isArray(imageManifest.downloadOutcomes) || !Array.isArray(imageManifest.selected)) {
@@ -1048,7 +1168,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
         if (!item || typeof item !== 'object' || !state || item.status !== state.status) {
             return `manualTakeover.stageEvidence.${stage} 与阶段状态不一致`;
         }
-        if ([MANUAL_DEPTH_CONTRACT_VERSION_V3, MANUAL_DEPTH_CONTRACT_VERSION_V4]
+        if ([MANUAL_DEPTH_CONTRACT_VERSION_V3, ...MANUAL_READER_QUALITY_VERSIONS]
             .includes(manifest?.contracts?.manualDepth)
             && (item.executionKind !== MANUAL_STAGE_EXECUTION_KIND
                 || state.executionKind !== MANUAL_STAGE_EXECUTION_KIND)) {
@@ -1069,7 +1189,8 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
             return `manualTakeover.stageEvidence.${stage}.reviewedClaims 不能为空`;
         }
         const hint = MANUAL_STAGE_CLAIM_HINTS[stage];
-        if (hint && !item.reviewedClaims.some(claim => hint.test(String(claim)))) {
+        if (manifest?.contracts?.manualDepth !== MANUAL_DEPTH_CONTRACT_VERSION_V5
+            && hint && !item.reviewedClaims.some(claim => hint.test(String(claim)))) {
             return `manualTakeover.stageEvidence.${stage}.reviewedClaims 缺少该阶段专属事实范围`;
         }
         let expectedInputSha256;
@@ -1103,7 +1224,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
             }
             expectedInputSha256 = manualSha256({
                 stage,
-                ...([MANUAL_DEPTH_CONTRACT_VERSION_V3, MANUAL_DEPTH_CONTRACT_VERSION_V4]
+                ...([MANUAL_DEPTH_CONTRACT_VERSION_V3, ...MANUAL_READER_QUALITY_VERSIONS]
                     .includes(manifest?.contracts?.manualDepth)
                     ? { executionKind: item.executionKind || null }
                     : {}),
@@ -1141,17 +1262,21 @@ function validateManualTakeoverManifest(manifest, sourceSha256 = '', options = {
     const manualStatuses = Object.values(manifest?.stages || {})
         .some(stage => stage?.status === MANUAL_COMPLETE_STATUS);
     if (!manualStatuses && manifest?.manualTakeover === undefined) return null;
-    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V4
+    if (MANUAL_READER_QUALITY_VERSIONS.includes(manifest?.contracts?.manualDepth)
         && manifest?.contracts?.experimentTables !== EXPERIMENT_TABLE_CONTRACT_VERSION) {
         return `manual v4 必须绑定 experimentTables=${EXPERIMENT_TABLE_CONTRACT_VERSION}`;
     }
-    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V4
+    if (MANUAL_READER_QUALITY_VERSIONS.includes(manifest?.contracts?.manualDepth)
         && manifest?.contracts?.imageNarrative !== 'context-bound-v1') {
         return 'manual v4 必须绑定 imageNarrative=context-bound-v1';
     }
-    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V4
+    if (MANUAL_READER_QUALITY_VERSIONS.includes(manifest?.contracts?.manualDepth)
         && manifest?.contracts?.editorialQuality !== EDITORIAL_QUALITY_CONTRACT_VERSION) {
         return `manual v4 必须绑定 editorialQuality=${EDITORIAL_QUALITY_CONTRACT_VERSION}`;
+    }
+    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V5
+        && manifest?.contracts?.researcherFocus !== MANUAL_RESEARCH_CONTRACT_VERSION) {
+        return `manual v5 必须绑定 researcherFocus=${MANUAL_RESEARCH_CONTRACT_VERSION}`;
     }
     const takeover = manifest?.manualTakeover;
     if (!takeover || typeof takeover !== 'object' || Array.isArray(takeover)) {
@@ -1401,7 +1526,9 @@ module.exports = {
     MANUAL_DEPTH_CONTRACT_VERSION_V2,
     MANUAL_DEPTH_CONTRACT_VERSION_V3,
     MANUAL_DEPTH_CONTRACT_VERSION_V4,
+    MANUAL_DEPTH_CONTRACT_VERSION_V5,
     MANUAL_DEPTH_CONTRACT_VERSIONS,
+    MANUAL_READER_QUALITY_VERSIONS,
     findCrossSectionDuplicateSentences,
     validateManualDepthContractV2,
     validateManualDepthContractV3,

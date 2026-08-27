@@ -461,6 +461,20 @@ title: "Duplicate"
         finally:
             os.unlink(path)
 
+    def test_review_dry_run_reports_fix_without_mutating_attested_bytes(self):
+        paragraph = '这是一段足够长的重复正文，用于证明人工审查后的确定性检查保持只读。' * 5
+        content = f'---\ntitle: "Dry run"\n---\n{paragraph}\n\n{paragraph}\n'
+        with tempfile.NamedTemporaryFile('w+', suffix='.md', encoding='utf-8', delete=False) as handle:
+            handle.write(content)
+            path = handle.name
+        try:
+            fixed, issues = publish_to_blog.review_and_fix_post(path, dry_run=True)
+            self.assertTrue(fixed)
+            self.assertTrue(any('完全重复' in issue for issue in issues))
+            self.assertEqual(Path(path).read_text(encoding='utf-8'), content)
+        finally:
+            os.unlink(path)
+
     def test_index_uses_selected_count_and_word_safe_ranking_title(self):
         title = 'A deliberately long English paper title that would otherwise end inside a ranking word'
         parsed = {
@@ -788,6 +802,26 @@ title: "Bad table"
         }, '2026-07-10')
         self.assertEqual(slug, 'no-tags-2607-00001')
         self.assertIn('tags: []', markdown)
+
+    def test_generate_page_renders_latex_degree_in_title_as_unicode(self):
+        markdown, _slug = publish_to_blog.generate_paper_page({
+            'title': r'Visually-Guided Spatial Audio for $360^\circ$ Scenes',
+            'arxivId': '2608.24579',
+            'parsed': {'score': '7.1', 'tags': []},
+        }, '2026-08-26')
+        self.assertIn('title: "Visually-Guided Spatial Audio for 360° Scenes"', markdown)
+        self.assertIn('# 📄 Visually-Guided Spatial Audio for 360° Scenes', markdown)
+        self.assertNotIn(r'360^\circ', markdown)
+
+    def test_generate_page_renders_superscript_and_underline_title_as_plain_text(self):
+        markdown, _slug = publish_to_blog.generate_paper_page({
+            'title': r'EXAM$^2$: $\underline{Ex}tending$ Audio Understanding',
+            'arxivId': '2608.23758',
+            'parsed': {'score': '8.7', 'tags': []},
+        }, '2026-08-26')
+        self.assertIn('title: "EXAM²: Extending Audio Understanding"', markdown)
+        self.assertIn('# 📄 EXAM²: Extending Audio Understanding', markdown)
+        self.assertNotIn(r'\underline', markdown)
 
     def test_publish_image_exclusion_contract_rejects_broad_or_unexplained_entries(self):
         configured = publish_to_blog.load_publish_image_exclusions()
@@ -1413,10 +1447,36 @@ paper_digest_manual_depth: "full-text-evidence-v4"
                     publish_to_blog.validate_manifest_clean_against_head([tracked])
                 git(repo, 'reset', '--quiet', 'HEAD', '--', 'content/posts/2026-07-10.md')
                 tracked.write_text('head\n', encoding='utf-8')
+                pipeline = '---\npaper_digest_pipeline_owned: true\n---\ngenerated\n'
+                tracked.write_text(pipeline, encoding='utf-8')
+                tracked_relative = 'content/posts/2026-07-10.md'
+                tracked_expected = publish_to_blog._sha256_file(tracked)
+                publish_to_blog.validate_manifest_clean_against_head(
+                    [tracked],
+                    allow_exact_pipeline_untracked={tracked_relative: tracked_expected},
+                )
+                tracked.write_text(pipeline + 'manual drift\n', encoding='utf-8')
+                with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '人工'):
+                    publish_to_blog.validate_manifest_clean_against_head(
+                        [tracked],
+                        allow_exact_pipeline_untracked={tracked_relative: tracked_expected},
+                    )
+                tracked.write_text('head\n', encoding='utf-8')
                 untracked = posts / '2026-07-10-new.md'
                 untracked.write_text('manual\n', encoding='utf-8')
                 with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '人工'):
                     publish_to_blog.validate_manifest_clean_against_head([untracked])
+                untracked.write_text(pipeline, encoding='utf-8')
+                relative = 'content/posts/2026-07-10-new.md'
+                expected = publish_to_blog._sha256_file(untracked)
+                publish_to_blog.validate_manifest_clean_against_head(
+                    [untracked], allow_exact_pipeline_untracked={relative: expected},
+                )
+                untracked.write_text(pipeline + 'drift\n', encoding='utf-8')
+                with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '人工'):
+                    publish_to_blog.validate_manifest_clean_against_head(
+                        [untracked], allow_exact_pipeline_untracked={relative: expected},
+                    )
 
     def test_git_commit_failure_restores_preinstall_index_and_worktree(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1836,6 +1896,44 @@ paper_digest_manual_depth: "full-text-evidence-v4"
                         journal, journal_path, stage,
                     )
 
+    def test_generation_journal_restarts_changed_derived_stage_before_install_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            journal_path = root / 'journal.json'
+            stage = root / 'stage' / 'posts'
+            papers = [{'arxivId': '2607.00001', 'title': 'Restartable Paper'}]
+            patches = (
+                mock.patch.object(
+                    publish_to_blog, 'generation_journal_path',
+                    return_value=journal_path,
+                ),
+                mock.patch.object(
+                    publish_to_blog, 'generation_stage_path',
+                    return_value=stage,
+                ),
+            )
+            with patches[0], patches[1]:
+                first, _, _ = publish_to_blog.prepare_generation_journal(
+                    '2026-07-10', papers, '论文速递', False,
+                    'input-a', 'template-a', 'a' * 40,
+                )
+                (stage / 'derived.md').write_text('derived', encoding='utf-8')
+                second, _, _ = publish_to_blog.prepare_generation_journal(
+                    '2026-07-10', papers, '论文速递', False,
+                    'input-b', 'template-b', 'a' * 40,
+                )
+                self.assertEqual(second['inputFingerprint'], 'input-b')
+                self.assertFalse((stage / 'derived.md').exists())
+                second['installation'] = {'files': []}
+                publish_to_blog._save_generation_journal(journal_path, second)
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, '安装已开始',
+                ):
+                    publish_to_blog.prepare_generation_journal(
+                        '2026-07-10', papers, '论文速递', False,
+                        'input-c', 'template-c', 'a' * 40,
+                    )
+
     def test_completed_generation_manifest_is_reusable_only_for_identical_hashes(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
@@ -2165,7 +2263,7 @@ paper_digest_manual_depth: "full-text-evidence-v4"
                      'sha256': None},
                 ],
                 'reviewProvenance': {
-                    'version': 2, 'mode': 'manual_complete', 'agent': 'Codex',
+                    'version': 3, 'mode': 'manual_complete', 'agent': 'Codex',
                     'basis': 'deterministic_and_manual_semantic_review',
                     'reason': '逐页核对技术叙事、实验事实和受控删除语义后签发人工凭证。',
                     'completedAt': '2026-08-25T12:00:00.000+08:00',
@@ -2178,12 +2276,23 @@ paper_digest_manual_depth: "full-text-evidence-v4"
                             'path': 'content/posts/2026-08-25-paper.md',
                             'sha256': existing_sha, 'checks': file_checks,
                             'notes': '2608.12345：核对方法数据流、WER 7.1% 实验数字、开源范围与局限边界。',
+                            'reviewSubagent': {
+                                'version': 1, 'taskName': 'review-2608-12345',
+                                'paperId': '2608.12345', 'singleFileOnly': True,
+                                'isolatedContext': True,
+                            },
+                            'imageFindings': [],
                         },
                         {
                             'path': 'content/posts/2026-08-25-stale.md',
                             'deleted': True, 'sha256': None,
                             'checks': {'deletionVerified': True},
                             'notes': '确认删除旧页面 2026-08-25-stale，且工作树已不存在该过期条目。',
+                            'reviewSubagent': {
+                                'version': 1, 'taskName': 'review-deleted-stale',
+                                'singleFileOnly': True, 'isolatedContext': True,
+                            },
+                            'imageFindings': [],
                         },
                     ],
                     'reviewedPathSetSha256': 'c' * 64,

@@ -61,8 +61,9 @@ def _load_attestation(path):
         raise ValueError(f'无法读取 attestation: {path}') from exc
     if not isinstance(payload, dict):
         raise ValueError('attestation 必须是 JSON 对象')
-    if payload.get('version') != 2 or payload.get('mode') != 'manual_complete':
-        raise ValueError('attestation version/mode 必须为 manual_complete v2')
+    if payload.get('version') not in (2, 3) or payload.get('mode') != 'manual_complete':
+        raise ValueError('attestation version/mode 必须为历史 v2 或当前 manual_complete v3')
+    current_v3 = payload.get('version') == 3
     if not isinstance(payload.get('agent'), str) or not payload['agent'].strip():
         raise ValueError('attestation 缺少 agent')
     if payload.get('basis') != 'deterministic_and_manual_semantic_review':
@@ -89,12 +90,16 @@ def _load_attestation(path):
         raise ValueError('attestation.files 必须逐文件列出语义审查')
     seen = set()
     seen_notes = set()
+    seen_subagent_tasks = set()
     for index, item in enumerate(files):
         if not isinstance(item, dict):
             raise ValueError(f'attestation.files[{index}] 必须是对象')
         deleted = item.get('deleted') is True
         allowed = {'path', 'sha256', 'checks', 'notes', 'deleted'}
         required_fields = {'path', 'sha256', 'checks', 'notes'}
+        if current_v3:
+            allowed.update({'reviewSubagent', 'imageFindings'})
+            required_fields.update({'reviewSubagent', 'imageFindings'})
         if not required_fields.issubset(item) or not set(item).issubset(allowed):
             raise ValueError(
                 f'attestation.files[{index}] 字段必须为 path/sha256/checks/notes'
@@ -123,6 +128,49 @@ def _load_attestation(path):
                 raise ValueError(f'attestation.files[{index}].checks 必须完整且全部为 true')
         if not isinstance(item.get('notes'), str) or len(item['notes'].strip()) < 20:
             raise ValueError(f'attestation.files[{index}].notes 至少需要 20 个字符')
+        subagent = item.get('reviewSubagent')
+        if current_v3 and (not isinstance(subagent, dict) or subagent.get('version') != 1
+                or not isinstance(subagent.get('taskName'), str)
+                or len(subagent['taskName'].strip()) < 4
+                or subagent.get('singleFileOnly') is not True
+                or subagent.get('isolatedContext') is not True):
+            raise ValueError(
+                f'attestation.files[{index}].reviewSubagent 必须证明独立单页 subagent 审查'
+            )
+        if current_v3:
+            task_name = subagent['taskName'].strip()
+            if task_name in seen_subagent_tasks:
+                raise ValueError('attestation reviewSubagent.taskName 必须逐页唯一，禁止跨页面复用')
+            seen_subagent_tasks.add(task_name)
+            is_index = bool(re.fullmatch(r'\d{4}-\d{2}-\d{2}\.md', Path(rel_path).name))
+            if not deleted and not is_index \
+                    and not re.fullmatch(r'\d{4}\.\d{5}', str(subagent.get('paperId') or '')):
+                raise ValueError(
+                    f'attestation.files[{index}].reviewSubagent.paperId 论文页必须提供规范 arXiv ID'
+                )
+        if current_v3 and not isinstance(item.get('imageFindings'), list):
+            raise ValueError(f'attestation.files[{index}].imageFindings 必须是数组')
+        for finding_index, finding in enumerate(item.get('imageFindings', [])):
+            if (not isinstance(finding, dict)
+                    or set(finding) != {
+                        'url', 'captionVerified', 'adjacentNarrativeVerified',
+                        'mobileReadable', 'visibleFacts', 'notes',
+                    }
+                    or not isinstance(finding.get('url'), str)
+                    or not finding['url'].startswith('https://')
+                    or any(finding.get(key) is not True for key in (
+                        'captionVerified', 'adjacentNarrativeVerified', 'mobileReadable',
+                    ))
+                    or not isinstance(finding.get('visibleFacts'), list)
+                    or len(finding['visibleFacts']) < 2
+                    or any(not isinstance(fact, str) or len(fact.strip()) < 10
+                           for fact in finding['visibleFacts'])
+                    or not isinstance(finding.get('notes'), str)
+                    or len(finding['notes'].strip()) < 20):
+                raise ValueError(
+                    f'attestation.files[{index}].imageFindings[{finding_index}] '
+                    '必须逐图记录像素事实、caption、邻文和移动端可读性'
+                )
         normalized_notes = re.sub(r'[\W_]+', '', item['notes'], flags=re.UNICODE).casefold()
         if normalized_notes in seen_notes:
             raise ValueError('attestation.files.notes 必须逐文件独立，禁止批量复用同一句')
@@ -130,7 +178,8 @@ def _load_attestation(path):
     return payload, hashlib.sha256(raw).hexdigest()
 
 
-def _validate_file_specific_notes(module, attestation_by_path, actual_paths, deletions, date_str):
+def _validate_file_specific_notes(module, attestation_by_path, actual_paths, deletions, date_str,
+                                  require_subagent_images=False):
     """Require each note to carry an identifier that can only belong to its page."""
     seen_semantic_notes = set()
 
@@ -168,6 +217,13 @@ def _validate_file_specific_notes(module, attestation_by_path, actual_paths, del
             require_unique_semantics(notes, (stem, date_str), relative)
             continue
         text = resolved.read_text(encoding='utf-8')
+        parse_images = getattr(module, 'parse_markdown_images', lambda _text: [])
+        image_urls = [image.get('url') for image in parse_images(text)]
+        finding_urls = [finding.get('url') for finding in item.get('imageFindings', [])]
+        if require_subagent_images and finding_urls != image_urls:
+            raise module.PublishDataValidationError(
+                f'attestation imageFindings 必须按正文顺序逐图精确覆盖: {relative}'
+            )
         arxiv_match = re.search(
             r'^paper_digest_arxiv_id:\s*"?([^"\s]+)"?\s*$', text, re.MULTILINE,
         )
@@ -184,6 +240,12 @@ def _validate_file_specific_notes(module, attestation_by_path, actual_paths, del
             require_unique_semantics(
                 notes, (arxiv_match.group(1), date_str), relative,
             )
+            if require_subagent_images and (subagent_id := item.get('reviewSubagent', {}).get('paperId')):
+                if module.normalize_publish_arxiv_id(subagent_id) != \
+                        module.normalize_publish_arxiv_id(arxiv_match.group(1)):
+                    raise module.PublishDataValidationError(
+                        f'attestation reviewSubagent.paperId 与页面不一致: {relative}'
+                    )
         elif date_str not in notes or '汇总' not in notes:
             raise module.PublishDataValidationError(
                 f'attestation 汇总页 notes 必须包含批次日期 {date_str} 与“汇总”: {relative}'
@@ -196,11 +258,30 @@ def _validate_file_specific_notes(module, attestation_by_path, actual_paths, del
             require_unique_semantics(notes, (date_str,), relative)
 
 
+def _require_current_attestation_version(module, generation_payload, attestation):
+    if generation_payload.get('schemaVersion') != 3:
+        return
+    requires_v3 = any(
+        isinstance(paper, dict)
+        and (((paper.get('analysisManifest') or {}).get('contracts') or {}).get('manualDepth')
+             == 'full-text-evidence-v5')
+        for paper in generation_payload.get('publishedPapers') or []
+    )
+    if requires_v3 and attestation.get('version') != 3:
+        raise module.PublishDataValidationError(
+            'Manual v5 新页面必须使用 attestation v3，历史 v2 不得绕过逐页 subagent 与逐图审查'
+        )
+
+
 def _semantic_checks(module, paths, date_str):
     """Run conservative, deterministic content checks before attestation."""
-    forbidden = (
-        '该论文分析失败', '分析失败', 'latestAnalysisAttemptError',
-        'TODO', '待补充', '模型自检', '这里需要生成最终文本',
+    hard_forbidden = (
+        '该论文分析失败', 'latestAnalysisAttemptError',
+        '模型自检', '这里需要生成最终文本',
+    )
+    editorial_placeholder = re.compile(
+        r'(?im)^\s*(?:[-*]\s*)?(?:TODO(?:\b|\s*[:：].*)|'
+        r'待补充(?:\s*[:：].*)?|【待补充】)\s*$'
     )
     checked = 0
     for path in paths:
@@ -210,7 +291,8 @@ def _semantic_checks(module, paths, date_str):
         text = path.read_text(encoding='utf-8')
         if not text.strip():
             raise module.PublishDataValidationError(f'页面为空: {path.name}')
-        if any(marker in text for marker in forbidden):
+        if any(marker in text for marker in hard_forbidden) \
+                or editorial_placeholder.search(text):
             raise module.PublishDataValidationError(f'页面含失败/编辑残留标记: {path.name}')
         if path.name != f'{date_str}.md':
             if not re.search(r'^paper_digest_page_type:\s*paper\s*$', text, re.MULTILINE):
@@ -257,6 +339,7 @@ def _run(module, date_str, attestation_path):
         raise module.PublishDataValidationError('generation manifest 无法解析') from exc
     authoritative_by_id = {}
     if generation_payload.get('schemaVersion') == 3:
+        _require_current_attestation_version(module, generation_payload, attestation)
         for paper in generation_payload.get('publishedPapers') or []:
             if not isinstance(paper, dict):
                 raise module.PublishDataValidationError(
@@ -307,12 +390,12 @@ def _run(module, date_str, attestation_path):
             raise module.PublishDataValidationError(f'attestation 文件 SHA 已漂移: {relative}')
     _validate_file_specific_notes(
         module, expected_attested, actual_paths, deletion_expectations, date_str,
+        require_subagent_images=attestation.get('version') == 3,
     )
 
-    # Apply only deterministic, idempotent repairs.  A second pass must be
-    # clean; unresolved defects are never hidden by manual provenance.  Any
-    # first-pass mutation invalidates the already supplied file-level SHA and
-    # semantic judgment: the operator must inspect and attest the final bytes.
+    # Manual attestation validates already-reviewed bytes and is strictly
+    # read-only.  Any deterministic repair that *would* be applied invalidates
+    # the supplied SHA and must be moved back to generation before re-review.
     fixes = []
     for path in paths:
         path = Path(path)
@@ -331,14 +414,14 @@ def _run(module, date_str, attestation_path):
                 raise module.PublishDataValidationError(
                     f'论文页不在 generation publishedPapers 快照中: {paper_id}'
                 )
-        fixed, first_issues = module.review_and_fix_post(path, paper)
-        _second_fixed, remaining = module.review_and_fix_post(path, paper)
-        if remaining:
-            raise module.PublishDataValidationError(
-                f'确定性 review 仍有阻断问题 {path.name}: {remaining}'
-            )
+        fixed, issues = module.review_and_fix_post(path, paper, dry_run=True)
         if fixed:
-            fixes.append({'path': str(path), 'issues': [str(item) for item in first_issues]})
+            fixes.append({'path': str(path), 'issues': [str(item) for item in issues]})
+            continue
+        if issues:
+            raise module.PublishDataValidationError(
+                f'确定性 review 仍有阻断问题 {path.name}: {issues}'
+            )
     _reject_deterministic_fixes(module, fixes)
 
     module.validate_staged_posts(content_dir, date_str, date_only=True)

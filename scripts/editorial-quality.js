@@ -49,6 +49,13 @@ const BARE_EDITORIAL_LABELS = Object.freeze([
     '进一步审视'
 ]);
 
+const ASSEMBLER_GENERATED_HEADINGS = Object.freeze([
+    '评分', '机器摘要', '标签', '作者与机构', '毒舌点评', '核心摘要',
+    '方法概述和架构', '核心创新点', '实验结果', '细节详述', '评分理由',
+    '局限与问题', '论文证据直接支持的边界', '进一步审视', '开源详情'
+]);
+const ASSEMBLER_GENERATED_HEADING_SET = new Set(ASSEMBLER_GENERATED_HEADINGS);
+
 const CHINESE_DIGITS = '零〇一二两三四五六七八九十百千万亿';
 const HARD_MEASUREMENT_UNITS = [
     'GPU 小时', 'GPU小时', 'GPU 秒', 'GPU秒',
@@ -405,6 +412,50 @@ function findBareEditorialLabels(text) {
     return findings;
 }
 
+function generatedHeadingTitle(rawTitle) {
+    return String(rawTitle || '')
+        .trim()
+        .replace(/\s+#+\s*$/u, '')
+        .replace(/^(?:[^\p{L}\p{N}#]+\s*)+/u, '')
+        .trim();
+}
+
+function findEmbeddedGeneratedHeadings(text) {
+    const value = String(text ?? '');
+    const findings = [];
+    const headingRe = /^\s*(#{1,6})\s+([^\n]+?)\s*$/gmu;
+    let match;
+    while ((match = headingRe.exec(value))) {
+        const title = generatedHeadingTitle(match[2]);
+        if (!ASSEMBLER_GENERATED_HEADING_SET.has(title)) continue;
+        findings.push({
+            match: match[0].trim(),
+            title,
+            level: match[1].length,
+            line: lineNumberAt(value, match.index),
+            reason: 'assembler_generated_heading_embedded'
+        });
+    }
+    return findings;
+}
+
+function findDuplicateGeneratedHeadings(markdown) {
+    const occurrences = new Map();
+    for (const finding of findEmbeddedGeneratedHeadings(markdown)) {
+        if (!occurrences.has(finding.title)) occurrences.set(finding.title, []);
+        occurrences.get(finding.title).push(finding);
+    }
+    return [...occurrences.entries()]
+        .filter(([_title, items]) => items.length > 1)
+        .map(([title, items]) => ({
+            title,
+            count: items.length,
+            occurrences: items,
+            match: title,
+            reason: 'assembler_generated_heading_duplicated'
+        }));
+}
+
 function findDuplicateLongSentences(input, options = {}) {
     const minimumChars = Number.isInteger(options.minimumChars) ? options.minimumChars : 20;
     const sections = typeof input === 'string' ? { body: input } : coerceCoreSections(input);
@@ -548,6 +599,10 @@ function findLongParagraphs(input, options = {}) {
     const findings = [];
     for (const [section, body] of Object.entries(sections)) {
         for (const paragraph of proseParagraphs(body)) {
+            if (section === 'authors'
+                && /^(?:第一作者|通讯作者|作者列表|机构)[：:]/.test(paragraph.text)) {
+                continue;
+            }
             const chars = chineseCharacterCount(paragraph.text);
             const sentenceMarks = (paragraph.text.match(/[。！？；!?;]/g) || []).length;
             if (chars <= warningChars && sentenceMarks <= 5) continue;
@@ -841,7 +896,9 @@ function validateResultClaimBindings(claim, bindingField, evidenceText, prefix, 
     for (const field of RESULT_CLAIM_SEMANTIC_FIELDS) {
         const fragment = bindings[field];
         const normalizedFragment = typeof fragment === 'string' ? normalizeEvidence(fragment) : '';
-        if (normalizedFragment.length < 2) {
+        const legitimateSingleCharacter = (field === 'unit' && /^(?:%|s|h|W|分|帧|人)$/i.test(normalizedFragment))
+            || (field === 'direction' && /^(?:↑|↓)$/u.test(normalizedFragment));
+        if (normalizedFragment.length < 2 && !legitimateSingleCharacter) {
             errors.push(`${prefix}.${bindingField}.${field} 必须是至少 2 个非空白字符的连续证据片段`);
             continue;
         }
@@ -1011,6 +1068,26 @@ function validateEditorialQuality(input, options = {}) {
     }
     const issues = [];
     const warnings = [];
+    if (typeof input === 'string') {
+        for (const finding of findDuplicateGeneratedHeadings(input)) {
+            issues.push(issue(
+                'duplicate_generated_heading',
+                'assembler 生成的 Markdown 标题不得在正文中重复出现',
+                finding
+            ));
+        }
+    } else if (input && typeof input === 'object') {
+        for (const [field, value] of Object.entries(input)) {
+            if (typeof value !== 'string') continue;
+            for (const finding of findEmbeddedGeneratedHeadings(value)) {
+                issues.push(issue(
+                    'embedded_generated_heading',
+                    'editorial 字段不得内嵌 assembler 生成的 Markdown 标题',
+                    { section: field, ...finding }
+                ));
+            }
+        }
+    }
     for (const section of QUALITY_SECTION_NAMES) {
         const body = sections[section];
         for (const finding of findQuantitativeChineseNumerals(body)) {
@@ -1088,6 +1165,8 @@ module.exports = {
     findNumericTypographyDefects,
     findDoubleNumbering,
     findBareEditorialLabels,
+    findEmbeddedGeneratedHeadings,
+    findDuplicateGeneratedHeadings,
     findDuplicateLongSentences,
     findCrossSectionNearDuplicates,
     findCrossSectionNumericFactReuse,

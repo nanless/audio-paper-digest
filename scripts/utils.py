@@ -225,6 +225,42 @@ ALLOWED_TAGS = {
     '可解释性',
 }
 
+# Primary task/method roles are stricter than general tag membership.  Keep
+# these sets aligned with the four task tables and two method tables in
+# prompts/deep-analysis.md and with Node ``parseAnalysis()``.  Publication must
+# not reinterpret a benchmark/property/architecture tag as the primary task
+# merely because a stale machine-summary line labels it that way.
+PRIMARY_TASK_TAGS = {
+    '语音交互', '语音合成', '语音识别', '语音增强', '语音分离',
+    '语音克隆', '语音转换', '语音翻译', '语音情感识别', '语音活动检测',
+    '说话人验证', '说话人日志', '语音伪造检测', '语音编辑', '语音质量评估',
+    '语音超分', '语音编码', '语音唤醒', '语音属性识别',
+    '音频交互', '音频生成', '音频分类', '音频事件检测', '音频理解', '音频检索',
+    '音频分离', '音频伪造检测', '空间音频', '声源定位', '音频编码', '音频修复',
+    '音频水印', '音频质量评估', '音频超分辨', '音频指纹', '主动降噪', '回声消除',
+    '音乐生成', '音乐检索', '音乐理解', '歌唱生成', '音乐转录', '音乐源分离',
+    '音乐推荐', '音乐超分辨',
+    '音视频理解', '音视频生成', '音视频交互', '音视频语音识别', '音视频语音合成',
+    '音视频语音分离', '音视频问答', '音视频声源分离', '音频字幕生成', '音乐文本检索',
+}
+
+PRIMARY_METHOD_TAGS = {
+    '自回归模型', '扩散模型', '流匹配', 'Transformer', 'CNN', 'RNN', '图神经网络',
+    '胶囊网络', '生成对抗网络', '变分自编码器', '音频大模型', '语音大模型',
+    '多模态模型', '统一音频模型', '大语言模型', '生成模型', '端到端',
+    '预训练', '后训练', 'SFT', '自监督学习', '无监督学习', '对比学习', '强化学习',
+    '知识蒸馏', '迁移学习', '领域适应', '测试时自适应', '元学习', '持续学习',
+    '课程学习', '对抗训练', '多任务学习', '模型压缩', '模型剪枝', '模型融合',
+    '模型集成', '集成学习', '参数高效微调', 'LoRA', 'Adapter', '前缀微调',
+    '提示学习', '指令微调', '联邦学习',
+}
+
+
+def _tag_in_role(tag, allowed_names):
+    normalized = _normalize_tag(tag)
+    name = normalized[1:] if normalized.startswith('#') else normalized
+    return name in allowed_names
+
 _BAD_TASK_TAG_PATTERNS = [
     r'^#[a-z]+_[a-z]+',           # snake_case
     r'^#cs\.[A-Z]{2}$',            # arXiv 类别
@@ -523,40 +559,46 @@ def parse_analysis(analysis):
     r['reproducibilityScore'] = machine_summary['reproducibility']
     r['engineeringScore'] = machine_summary['engineeringScore']
     r['confidence'] = machine_summary['confidence']
-    # 主任务/主方法标签：优先从 ## 标签 部分的"主任务标签"行提取，
-    # 其次从机器摘要获取，最后从 tags[0] fallback。
-    # 如果机器摘要的标签质量太差（snake_case/arXiv类别/过于宽泛），则优先使用 tags[0]。
+    # 主任务/主方法标签必须同时满足白名单与角色分类。顺序与 Node
+    # ``parseAnalysis()`` 一致：显式标签行 → 机器摘要 → 标签列表中的首个
+    # 合法角色；最后才保守回退到普通标签。
     ms_task = _normalize_tag(machine_summary['primaryTaskTag'])
     ms_method = _normalize_tag(machine_summary['primaryMethodTag'])
     first_tag = _normalize_tag(r['tags'][0]) if r['tags'] else ''
     second_tag = _normalize_tag(r['tags'][1]) if len(r['tags']) > 1 else first_tag
 
-    # 从 tags 列表中找到第一个非坏标签
-    good_tag = ''
-    for t in r['tags']:
-        nt = _normalize_tag(t)
-        if nt and not _is_bad_task_tag(nt):
-            good_tag = nt
-            break
+    first_task_tag = next((
+        _normalize_tag(tag) for tag in r['tags']
+        if _tag_in_role(tag, PRIMARY_TASK_TAGS)
+    ), '')
+    first_method_tag = next((
+        _normalize_tag(tag) for tag in r['tags']
+        if _tag_in_role(tag, PRIMARY_METHOD_TAGS)
+    ), '')
 
-    if extracted_task_tag:
+    if not _is_bad_task_tag(extracted_task_tag) \
+            and _tag_in_role(extracted_task_tag, PRIMARY_TASK_TAGS):
         r['primaryTaskTag'] = extracted_task_tag
-    elif not _is_bad_task_tag(ms_task):
+    elif not _is_bad_task_tag(ms_task) and _tag_in_role(ms_task, PRIMARY_TASK_TAGS):
         r['primaryTaskTag'] = ms_task
-    elif good_tag:
-        r['primaryTaskTag'] = good_tag
+    elif first_task_tag:
+        r['primaryTaskTag'] = first_task_tag
     else:
         r['primaryTaskTag'] = ms_task or first_tag
     r['primaryTaskTag'] = _fix_tag(r['primaryTaskTag'])
 
-    if extracted_method_tag:
+    if not _is_bad_task_tag(extracted_method_tag) \
+            and _tag_in_role(extracted_method_tag, PRIMARY_METHOD_TAGS):
         r['primaryMethodTag'] = extracted_method_tag
-    elif not _is_bad_task_tag(ms_method):
+    elif not _is_bad_task_tag(ms_method) and _tag_in_role(ms_method, PRIMARY_METHOD_TAGS):
         r['primaryMethodTag'] = ms_method
-    elif good_tag and good_tag != r['primaryTaskTag']:
-        r['primaryMethodTag'] = good_tag
+    elif first_method_tag:
+        r['primaryMethodTag'] = first_method_tag
     else:
-        r['primaryMethodTag'] = ms_method or second_tag
+        r['primaryMethodTag'] = next((
+            _normalize_tag(tag) for tag in r['tags']
+            if _normalize_tag(tag) != r['primaryTaskTag']
+        ), ms_method or second_tag)
     r['primaryMethodTag'] = _fix_tag(r['primaryMethodTag'])
 
     r['sotaClaim'] = machine_summary['sotaClaim']

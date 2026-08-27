@@ -748,6 +748,33 @@ const ALLOWED_TAGS = new Set([
     '#可解释性'
 ]);
 
+// Primary roles are exact prompt-table categories, not string-prefix guesses.
+// Prefix matching missed valid tasks such as #空间音频 and #声源定位, while
+// allowing general tags to become a split-brain publication baseline.
+const PRIMARY_TASK_TAGS = new Set([
+    '#语音交互','#语音合成','#语音识别','#语音增强','#语音分离',
+    '#语音克隆','#语音转换','#语音翻译','#语音情感识别','#语音活动检测',
+    '#说话人验证','#说话人日志','#语音伪造检测','#语音编辑','#语音质量评估',
+    '#语音超分','#语音编码','#语音唤醒','#语音属性识别',
+    '#音频交互','#音频生成','#音频分类','#音频事件检测','#音频理解','#音频检索',
+    '#音频分离','#音频伪造检测','#空间音频','#声源定位','#音频编码','#音频修复',
+    '#音频水印','#音频质量评估','#音频超分辨','#音频指纹','#主动降噪','#回声消除',
+    '#音乐生成','#音乐检索','#音乐理解','#歌唱生成','#音乐转录','#音乐源分离',
+    '#音乐推荐','#音乐超分辨',
+    '#音视频理解','#音视频生成','#音视频交互','#音视频语音识别','#音视频语音合成',
+    '#音视频语音分离','#音视频问答','#音视频声源分离','#音频字幕生成','#音乐文本检索'
+]);
+
+const PRIMARY_METHOD_TAGS = new Set([
+    '#自回归模型','#扩散模型','#流匹配','#Transformer','#CNN','#RNN','#图神经网络','#胶囊网络',
+    '#生成对抗网络','#变分自编码器','#音频大模型','#语音大模型','#多模态模型','#统一音频模型',
+    '#大语言模型','#生成模型','#端到端','#预训练','#后训练','#SFT','#自监督学习','#无监督学习',
+    '#对比学习','#强化学习','#知识蒸馏','#迁移学习','#领域适应','#测试时自适应','#元学习',
+    '#持续学习','#课程学习','#对抗训练','#多任务学习','#模型压缩','#模型剪枝','#模型融合',
+    '#模型集成','#集成学习','#参数高效微调','#LoRA','#Adapter','#前缀微调','#提示学习',
+    '#指令微调','#联邦学习'
+]);
+
 const SCORE_DIMENSIONS = Object.freeze({
     innovationScore: Object.freeze({ label: '创新性', max: 2 }),
     technicalRigorScore: Object.freeze({ label: '技术严谨性', max: 1.5 }),
@@ -1000,29 +1027,15 @@ function parseAnalysis(analysis) {
     // ═══════════════════════════════════════════════════════
 
     // 定义任务标签和方法标签的分类（用于验证）
-    const TASK_TAG_PREFIXES = [
-        '#语音', '#音频', '#音乐', '#说话人', '#声源', '#歌唱',
-        '#音视频', '#音频字幕', '#音乐文本'
-    ];
-    const METHOD_TAG_PREFIXES = [
-        '#自回归模型','#扩散模型','#流匹配','#Transformer','#CNN','#RNN','#图神经网络','#胶囊网络',
-        '#生成对抗网络','#变分自编码器',
-        '#音频大模型','#语音大模型','#多模态模型','#统一音频模型','#大语言模型','#生成模型','#端到端',
-        '#预训练','#后训练','#SFT','#自监督学习','#无监督学习','#对比学习','#强化学习','#知识蒸馏','#迁移学习',
-        '#领域适应','#测试时自适应','#元学习','#持续学习','#课程学习','#对抗训练','#多任务学习',
-        '#模型压缩','#模型剪枝','#模型融合','#模型集成','#集成学习','#参数高效微调',
-        '#LoRA','#Adapter','#前缀微调','#提示学习','#指令微调','#联邦学习'
-    ];
-
     function _isTaskTag(tag) {
         if (!tag) return false;
         if (_isMethodTag(tag)) return false;
-        return TASK_TAG_PREFIXES.some(prefix => tag.startsWith(prefix));
+        return PRIMARY_TASK_TAGS.has(tag);
     }
 
     function _isMethodTag(tag) {
         if (!tag) return false;
-        return METHOD_TAG_PREFIXES.some(prefix => tag.startsWith(prefix));
+        return PRIMARY_METHOD_TAGS.has(tag);
     }
 
     // 从已过滤的 tags 中找到第一个任务标签

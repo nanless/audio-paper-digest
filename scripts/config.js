@@ -148,12 +148,14 @@ const FILES = {
     filterDecisions: path.join(CURRENT_DIR, 'filter-decisions.json'),
     filteredPapers: path.join(CURRENT_DIR, 'filtered-papers.json'),
     deepAnalysisResult: path.join(CURRENT_DIR, 'deep-analysis-result.json'),
+    manualExternalResourceCache: path.join(CURRENT_DIR, 'manual-external-resource-cache.json'),
     deepAnalysisResultLegacy: path.join(DATA_DIR, 'deep-analysis-result.json'),
     visualSummaryManifestDir: path.join(CURRENT_DIR, 'visual-summary-manifests'),
     // 发布后生成的图片属于已完成批次，直接写入
     // data/archive/<date>/visual-summaries/*.png，论文长图与汇总封面扁平归档。
     visualSummaryAssetDir: ARCHIVE_DIR,
     digestCoverManifestDir: path.join(CURRENT_DIR, 'digest-cover-manifests'),
+    postPublishVisualWaiverDir: path.join(CURRENT_DIR, 'post-publish-visual-waivers'),
     digestRunReportDir: path.join(CURRENT_DIR, 'digest-run-reports'),
     digestCoverAssetDir: ARCHIVE_DIR,
     // Legacy single-file location retained only for callers migrating old state.

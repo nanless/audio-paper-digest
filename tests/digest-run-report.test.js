@@ -10,6 +10,7 @@ const {
     sourceHealthComplete,
     samePaperIds,
     visualAssetsAreValid,
+    postPublishVisualWaiverIsValid,
     buildDigestRunReport,
     formatDigestRunSummary
 } = require('../scripts/digest-run-report.js');
@@ -102,6 +103,38 @@ function withDigestPaths(root, callback) {
 }
 
 describe('digest run report', () => {
+    it('accepts only a user visual waiver bound to current publication and exact manifests', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'visual-waiver-'));
+        const visualPath = path.join(dir, 'visual.json');
+        const coverPath = path.join(dir, 'cover.json');
+        fs.writeFileSync(visualPath, '{"visual":1}');
+        fs.writeFileSync(coverPath, '{"cover":1}');
+        const digest = filePath => crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+        const publication = {
+            publicationCommit: 'a'.repeat(40), remoteVerifiedOid: 'a'.repeat(40),
+            generationManifestSha256: 'b'.repeat(64),
+        };
+        const waiver = {
+            version: 1, batchDate: '2026-08-26', status: 'waived', requestedBy: 'user',
+            reason: '用户明确取消本批次发布后视觉资产生成。',
+            publicationCommit: publication.publicationCommit,
+            remoteVerifiedOid: publication.remoteVerifiedOid,
+            generationManifestSha256: publication.generationManifestSha256,
+            visualManifestSha256: digest(visualPath), coverManifestSha256: digest(coverPath)
+        };
+        try {
+            assert.equal(postPublishVisualWaiverIsValid(
+                waiver, '2026-08-26', publication, visualPath, coverPath
+            ), true);
+            fs.appendFileSync(visualPath, 'drift');
+            assert.equal(postPublishVisualWaiverIsValid(
+                waiver, '2026-08-26', publication, visualPath, coverPath
+            ), false);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
     it('严格解析批次日期', () => {
         assert.strictEqual(parseDate(['--date', '2026-07-29']), '2026-07-29');
         assert.throws(() => parseDate(['--date', '2026-02-30']), /日期非法/);

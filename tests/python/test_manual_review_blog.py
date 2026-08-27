@@ -30,7 +30,7 @@ FILE_CHECKS = {
 
 def attestation():
     return {
-        'version': 2,
+        'version': 3,
         'mode': 'manual_complete',
         'agent': 'Codex',
         'basis': 'deterministic_and_manual_semantic_review',
@@ -50,6 +50,12 @@ def attestation():
             'sha256': 'a' * 64,
             'checks': dict(FILE_CHECKS),
             'notes': '已核对问题到方法、实验比较、复现条件和双层局限的论证链。',
+            'reviewSubagent': {
+                'version': 1, 'taskName': 'paper-review-2608-12345',
+                'paperId': '2608.12345', 'singleFileOnly': True,
+                'isolatedContext': True,
+            },
+            'imageFindings': [],
         }],
     }
 
@@ -60,14 +66,35 @@ class ManualReviewAttestationTest(unittest.TestCase):
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
         return path
 
-    def test_accepts_exact_v2_per_file_semantic_attestation(self):
+    def test_accepts_exact_v3_per_file_semantic_attestation(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = self.write_payload(tmp, attestation())
             expected_digest = hashlib.sha256(path.read_bytes()).hexdigest()
             payload, digest = manual_review_blog._load_attestation(path)
-        self.assertEqual(payload['version'], 2)
+        self.assertEqual(payload['version'], 3)
         self.assertEqual(payload['files'][0]['checks'], FILE_CHECKS)
         self.assertEqual(digest, expected_digest)
+
+    def test_fresh_manual_v5_generation_rejects_legacy_v2_attestation(self):
+        class Module:
+            class PublishDataValidationError(ValueError):
+                pass
+
+        generation = {
+            'schemaVersion': 3,
+            'publishedPapers': [{
+                'analysisManifest': {
+                    'contracts': {'manualDepth': 'full-text-evidence-v5'},
+                },
+            }],
+        }
+        with self.assertRaisesRegex(Module.PublishDataValidationError, '必须使用 attestation v3'):
+            manual_review_blog._require_current_attestation_version(
+                Module, generation, {'version': 2},
+            )
+        manual_review_blog._require_current_attestation_version(
+            Module, generation, {'version': 3},
+        )
 
     def test_rejects_legacy_batch_only_or_incomplete_file_checks(self):
         cases = []
@@ -101,6 +128,34 @@ class ManualReviewAttestationTest(unittest.TestCase):
                 {'path': '/tmp/content/posts/changed.md', 'issues': ['重复段落']},
             ])
 
+    def test_semantic_checks_allow_research_boundary_but_reject_placeholder_line(self):
+        class Module:
+            class PublishDataValidationError(ValueError):
+                pass
+
+            @staticmethod
+            def parse_markdown_images(_text):
+                return []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            page = Path(tmp) / '2026-08-25-paper.md'
+            page.write_text(
+                '---\npaper_digest_page_type: paper\n'
+                'paper_digest_arxiv_id: "2608.12345"\n---\n'
+                '资源与部署测量仍待补充；该边界不影响当前实验结论。\n',
+                encoding='utf-8',
+            )
+            self.assertEqual(
+                manual_review_blog._semantic_checks(Module, [page], '2026-08-25'),
+                1,
+            )
+            page.write_text(
+                page.read_text(encoding='utf-8') + '\n待补充：替换最终结论\n',
+                encoding='utf-8',
+            )
+            with self.assertRaisesRegex(Module.PublishDataValidationError, '编辑残留'):
+                manual_review_blog._semantic_checks(Module, [page], '2026-08-25')
+
     def test_accepts_deleted_generation_entry_with_explicit_deletion_semantics(self):
         payload = attestation()
         payload['files'].append({
@@ -109,6 +164,11 @@ class ManualReviewAttestationTest(unittest.TestCase):
             'sha256': None,
             'checks': {'deletionVerified': True},
             'notes': '已确认删除页面文件名 2026-08-25-stale-paper，且博客工作树中不再存在该旧页。',
+            'reviewSubagent': {
+                'version': 1, 'taskName': 'deleted-page-review',
+                'singleFileOnly': True, 'isolatedContext': True,
+            },
+            'imageFindings': [],
         })
         with tempfile.TemporaryDirectory() as tmp:
             parsed, _digest = manual_review_blog._load_attestation(
@@ -125,9 +185,33 @@ class ManualReviewAttestationTest(unittest.TestCase):
             'sha256': 'b' * 64,
             'checks': dict(FILE_CHECKS),
             'notes': duplicate_note,
+            'reviewSubagent': {
+                'version': 1, 'taskName': 'second-paper-review',
+                'paperId': '2608.54321',
+                'singleFileOnly': True, 'isolatedContext': True,
+            },
+            'imageFindings': [],
         })
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError, '逐文件独立'):
+                manual_review_blog._load_attestation(self.write_payload(tmp, payload))
+
+    def test_v3_requires_unique_page_tasks_and_paper_id(self):
+        payload = attestation()
+        second = dict(payload['files'][0])
+        second['path'] = 'content/posts/2026-08-25-second.md'
+        second['sha256'] = 'b' * 64
+        second['notes'] = '2608.54321：核对第二页 Conformer 方法、WER 8.2% 与实验边界。'
+        second['reviewSubagent'] = dict(second['reviewSubagent'])
+        second['reviewSubagent']['paperId'] = '2608.54321'
+        payload['files'].append(second)
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, 'taskName 必须逐页唯一'):
+                manual_review_blog._load_attestation(self.write_payload(tmp, payload))
+        payload['files'][1]['reviewSubagent']['taskName'] = 'paper-review-2608-54321'
+        del payload['files'][1]['reviewSubagent']['paperId']
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, 'paperId'):
                 manual_review_blog._load_attestation(self.write_payload(tmp, payload))
 
     def test_file_specific_notes_bind_paper_id_index_date_and_deleted_filename(self):

@@ -2,11 +2,17 @@
 
 **[English](README.en.md)** | 中文
 
-本项目用于自动生成"语音/音乐/音频论文速递"，覆盖从 arXiv 和 HuggingFace Papers 抓取、LLM 筛选、多模态深度分析，到发布 Hugo 博客、微信公众号草稿、小红书文案和飞书文档的完整链路。Node 端可调参数和当前运行数据文件路径集中在 `scripts/config.js`；Python 发布/维护脚本的共享路径集中在 `scripts/path_config.py`。
+本项目用于生成“语音/音乐/音频论文速递”。默认日更采用 Manual v5：联网抓取后，每篇论文由独立 subagent 在隔离上下文中完成筛选、全文研究者解读、评分和页面审查；LLM/API 自动筛选与分析保留为用户显式选择的可选路线。Node 端配置集中在 `scripts/config.js`，Python 发布路径集中在 `scripts/path_config.py`。
+
+逐论文筛选、理解、主要正文、评分、可读性复核和最终单页审查 subagent 统一使用 `gpt-5.6-terra`、reasoning `high`；Sol 主 Agent 只负责队列、代码、确定性门禁、组装和发布。正文先建立“中心技术矛盾—递进读者问题—证据柱—结论回收”的编辑蓝图，再按论文主张组织图表和实验，而不是按字段或论文目录机械扩写。
+
+用户明确取消发布后图片时，运行 `npm run digest:waive-visuals -- --date YYYY-MM-DD --reason "用户明确取消视觉资产"` 记录与远端发布 commit 及当前视觉任务 SHA 绑定的可审计豁免；它不会生成图片，也不会把 pending 资产伪装成 complete。
 
 LLM endpoint 必须使用 HTTPS（仅 loopback 本地测试允许 HTTP）。arXiv 元数据抓取的重试、退避、累计等待、绝对截止、响应字节上限与 User-Agent 均由 `ARXIV_CONFIG` 管理，覆写项见 [环境配置](docs/setup.md)。
 
-对 Codex 说“运行/进行某一天的论文速递”，默认含义是完成抓取、筛选、深度分析、博客生成、review 与修正、博客发布、TOP 10 论文长图、汇总封面和最终状态验收。博客发布无需再次确认；微信公众号、飞书和小红书自动发布不包含在这个默认范围内。
+对 Codex 说“运行/进行某一天的论文速递”，默认含义是用 Manual v5 完成抓取、逐篇独立 subagent 筛选和全文分析、博客生成、逐页人工语义/图片 review、博客发布、TOP 10 论文长图、汇总封面和最终状态验收。只有明确说“使用 API/LLM 自动流程”时才运行 `npm run digest:api -- YYYY-MM-DD`。博客发布无需再次确认；微信公众号、飞书和小红书自动发布不在默认范围。
+
+Manual 写作采用 3-worker 饱和队列：主 Agent 之外的 3 个并发槽持续各处理 1 篇论文，完成即补位。普通独立二审不会与正文争抢槽位；只有高分、内部无消融、满分自评或来源/图片异常的风险论文会提前触发二审。
 
 深度分析采用 `type-aware-v1` 类型感知评分：先将文档归类为方法研究、系统技术报告、模型报告、数据集与基准、综述、理论研究或应用研究，再按对应证据标准评审。八维权重、满分 11 和总分封顶 10 保持统一；分项与总分最多一位小数，开源分使用固定锚点。文档类型不提供固定加分，同一个缺陷只能在一个主要维度扣分；理论工作的完整证明材料可作为核心公开产物，不会因没有代码/模型/数据而被机械归零。
 
@@ -225,21 +231,21 @@ python3 scripts/generate-blog.py --date 2026-04-21
 python3 scripts/review-blog.py --date 2026-04-21
 python3 scripts/push-blog.py --date 2026-04-21
 
-# 仅当 LLM review 服务不可用时，使用完整 provenance 的人工接管审查
-# attestation v2 必须逐文件绑定 path/SHA、独立 notes 和八类语义 checks；不会伪造模型审查
+# 默认使用完整 provenance 的逐页 Manual 审查；每页必须由独立 review subagent 完成
+# 当前 attestation v3 逐文件绑定 path/SHA、subagent、独立 notes、八类 checks 和每张图的像素事实；v2 仅历史兼容
 python3 scripts/manual-review-blog.py --date 2026-04-21 --attestation data/current/manual-review-attestation-2026-04-21.json
 
 # 人工全文先逐篇安全抓取并 checkpoint；失败后重跑只补失败或损坏项
 npm run manual:fulltext -- 2026-04-21
 
-# 把一份或多份人工记录分片严格组装为 manual_complete v4 spec；不调用 API
-# 每份 records 必须是相同 date/agent/reviewProtocol 的 manual_analysis_records v2 envelope，
+# 把一份或多份逐论文 subagent 记录严格组装为 manual_complete v5 spec；不调用 API
+# 每份 records 必须是相同 date/agent/reviewProtocol 的 manual_analysis_records v3 envelope，
 # papers 需显式提供八维评分、实际 audit passes、绑定全文原句的 authorInfo
 # 和至少六条覆盖五个事实章节的 evidenceLedger；正文遵守 prompts/manual-analysis-record.md
-# 每篇至少 3 条 resultClaims，并用逐字段 sourceBindings/readerBindings 分别绑定全文原句与实验结果同一局部证据块；7 维 readabilityRubric 至少 12/14 且无 0 分
+# 每篇带 researchBrief、显式 stageReviews、独立评分/可读性 reviewer；系统/方法论文至少 4 条跨实验组 resultClaims
 # 精确数量（含技术计数、层数、轮数、设备型号与科学计数法）使用阿拉伯数字，并通过篇内/跨篇去重、禁用固定句首脚手架、段落节奏、术语间距和局部比较门禁
 # 最终页还会复检作者、毒舌点评、评分理由、开源详情和局限中的“进一步审视”；新汇总页以 `paper_digest_reader_quality: "reader-facing-v1"` 标记接入 generate/checkpoint/review/staged 同一读者质量门禁，旧汇总页无标记时兼容
-# v4 继承 v3 正文质量，并强制 evidence-rich-v2 表格与上下文绑定插图；旧 spec v3 仅作历史兼容读取
+# v5 强制精确数量来源、研究者详略取舍、全部图片 select/reject 和移动端裁图计划；records v2/spec v4 与 spec v3 仅作历史兼容
 # editorial 是最终读者正文；短 method/method2/method3/innovations 仅供审计，生成器不会再前置拼接
 npm run manual:spec -- --date 2026-04-21 \
   --records data/current/manual-analysis-records-2026-04-21.json

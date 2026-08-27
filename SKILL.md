@@ -27,7 +27,7 @@ description: >
 
 ## 2. 当前真实流程
 
-默认日更入口：`./run-daily-digest.sh YYYY-MM-DD`（Codex 接续内置生图）；从 fetch 开始时目标日期必须是北京时间当天，因为 `full-fetch.js` 按启动日绑定批次且不接受历史日期。历史批次仅可从 generate/review/push/visual 续跑已有数据；generate 在 current 不匹配时自动读取受控的同日归档分析。仅数据流程入口：`./run-full-fetch.sh`（或 `node scripts/full-fetch.js` / `npm run fetch`）
+默认日更入口：`./run-daily-digest.sh YYYY-MM-DD`，默认走 Manual v5，并在 raw 筛选、逐论文 records 和逐页 review 边界停下供 Agent 分批创建独立 subagent；Agent 必须继续完成全链路。只有用户明确要求 LLM/API 自动路线时才运行 `npm run digest:api -- YYYY-MM-DD` 或 `./run-daily-digest.sh YYYY-MM-DD --api`。从 fetch 开始时目标日期必须是北京时间当天；历史批次仅可从 generate/review/push/visual 续跑已有数据。
 
 1. **自动归档**：逐文件检查 `data/current/raw-candidates.json` / `filter-decisions.json` / `filtered-papers.json` / `deep-analysis-result.json` / `analyzed.json`；若记录日期早于今天（北京时间），则写入同日归档并在校验成功后移走 current 原文件。canonical 归档冲突时保留带时间戳的冲突副本，不能静默覆盖或丢弃任一版本。**`papers.json` 不归档。**
 2. **加载去重库**：读取 `data/current/papers.json` 已有 ID；扫描 Hugo 博客仓库（`PAPER_DIGEST_BLOG_REPO`）中已发布论文的 arXiv ID，两者合并为统一去重集合
@@ -44,21 +44,31 @@ description: >
 
 **视觉能力兼容边界**：标准日更在任何 Git 变更前要求 generation schema v3 及 `publishedPapers` 权威快照。schema v1/v2 只允许不带 `--require-visual-plan` 的显式历史维护 push，receipt 将视觉能力标记为 `not_applicable_legacy_maintenance`；不能等远端发布成功后才发现版本不兼容。
 
-`full-fetch.js` **不会自动发布博客/微信**。但当用户说“运行/进行某日论文速递”时，默认语义是完成本节整条链路；Agent 先运行 `run-daily-digest.sh` 或等价的分阶段命令，处理 review 问题并完成 push，再使用内置 `image_gen` 完成所有 pending 论文长图和汇总封面，直到两个视觉状态均为 `complete`。视觉 plan/status 默认只输出排名、论文 ID、标题、task token、参考图数和 manifest 路径，`visual:prepare` 保留必需的绝对 `referencedImagePaths`；完整事实仍在 manifest。`digest:status` 默认打印紧凑门禁摘要，完整来源健康明细在报告 JSON。微信公众号、飞书和小红书自动发布不属于默认链路。
+`full-fetch.js` **不会自动发布博客/微信，也不再是默认日更入口**。用户说“运行/进行某日论文速递”时，默认用 Manual v5 完成 raw、逐篇独立 subagent 筛选、全文、records/spec/canonical、逐页 Manual review、push 和发布后视觉；只有用户明确指定 API/LLM 时才使用 `full-fetch.js` 与普通 LLM review。Agent 必须跨越脚本的人工边界继续工作，直到论文长图与汇总封面均为 `complete`。微信公众号、飞书和小红书自动发布不属于默认链路。
 
-### 2.1 无模型 API 的显式人工接管
+### 2.1 默认无模型 API 的 Manual v5 主流程
 
-自动 LLM 不可用时只允许显式切换以下严格接管路径；任何普通网络、配额或模型错误都不能自动降级为“人工通过”：
+日更默认执行以下严格 Manual 路径；项目 LLM/API 自动流程只能由用户显式要求。任何普通网络、配额或模型错误都不能自动降级为“人工通过”：
+
+**当前版本边界**：新日更固定使用 records v3 → spec v5 → `full-text-evidence-v5`；下文涉及 records v2/spec v4 的要求只用于历史兼容，禁止新批次降级。
 
 1. `node scripts/manual-fetch.js --date YYYY-MM-DD --raw` 仍通过网络抓取 arXiv/HuggingFace，并按来源保存可恢复 checkpoint、复用常规类别节流和来源完整性指纹，但不调用筛选模型。人工逐篇提交 `{version:1, mode:"manual_offline", date, reviewer, decisions}` 后，用 `--select SPEC.json` 写入完整筛选四件套，并把全部人工候选及否定项同步到 `papers.json`；缺失、未知、重复或理由不足的决定都会阻断。
 2. `npm run manual:fulltext -- YYYY-MM-DD` 使用常规 arXiv HTML/PDF 安全抓取链逐篇保存全文与 manifest checkpoint；失败后只补失败或损坏项。人工记录完成后运行 `npm run manual:spec -- --date YYYY-MM-DD --records RECORDS.json`（并行分片可重复传 `--records`）：组装器要求 complete v2 全文 manifest 与完整 filtered 批次、论文集合、版本化来源和文件 SHA 精确一致，并要求每篇显式提供八维评分、实际审计轮次、绑定全文原句的作者机构信息及覆盖五个事实章节的 evidenceLedger，然后才原子写出 manual spec v4；旧 spec v3 只保留历史兼容读取。人工正文还必须遵守 `prompts/manual-analysis-record.md`：摘要形成问题—机制—证据—边界的论证推进；方法至少分别交代输入、组件数据流、训练/求解和输出；创新逐项包含既有缺口、本文机制、证据与适用边界；实验写清数据、基线、指标方向、数字、消融和负面结果；细节覆盖复现配置；局限分开写论文证据直接支持的边界与进一步审视；八维评分各自引用本维度证据。`editorial.method` / `editorial.innovations` 必须自身吸收已经核验的短字段事实并成为完整最终章节；`method/method2/method3/innovations` 只参与审计与 provenance，不再机械前置或与长文拼接，避免同一数据流重复两遍。随后 `npm run manual:analyze -- --date YYYY-MM-DD --spec SPEC.json` 不调用 LLM API。每篇必须绑定受控全文及 SHA、人工写作 prompt、各 API 阶段对应 prompt/契约 SHA、可回查的证据账本、实际审计次数和独立 reviewed claims，并同时通过标准正文契约与 `full-text-evidence-v4` provenance 契约；每个兼容阶段必须显式标记 `executionKind=manual_attestation`，不得暗示实际执行过 LLM 阶段。canonical 写入在同篇运行锁内重读最新记录后逐篇保存；失败项保留 ingestion checkpoint。默认续跑会复用已成功 canonical；人工纠错或 spec/prompt 变化时必须显式加 `--force` 才可覆盖。图片只信任全文 manifest：存在合格候选时必须显式选择 1–4 张，且为每张提供同序 `imageInsertions`；唯一 `anchorQuote` 绑定图前具体命题，唯一 `conclusionQuote` 绑定同节且不早于锚点的后续结论，图前提出阅读任务，图后说明可见结构/曲线与该图特有边界。空数组、自动选择和跨论文通用免责声明都会阻断。选中图片仍须通过公网 DNS/IP、HTTPS、重定向、MIME、字节上限和缓存 SHA 校验，并按稳定段落 ID 真正插入方法、实验或细节正文；完整图注只允许在完整句号处收束，禁止按字符数切成半句或半词；显式人工选择下载失败则阻断。
 3. 仅当博客 LLM review 服务不可用时，可运行 `python3 scripts/manual-review-blog.py --date YYYY-MM-DD --attestation ATTESTATION.json`。attestation 必须为 v2：除批次八项检查全部为真外，还要对 generation 中每个现存文件绑定 path、SHA、不少于 20 字且批次内唯一的 notes，并逐项确认标题元数据、技术叙事、事实、实验比较、复现、局限、评分和图片；论文页 notes 必须包含本页 arXiv ID 及正文中可核对的技术词或实验数字，汇总页 notes 必须包含批次日期、“汇总”及正文中的排名、数量或论文术语。唯一性比较会先剥离页面 ID、日期或删除文件名，禁止只替换标识符复用同一句模板。generation 的受控删除项改用 `deleted:true`、`sha256:null`、`checks:{"deletionVerified":true}`，notes 同时写明“删除”和页面文件名。脚本仍执行确定性修复/复验、generation manifest、Git 基线、review 协议和 Hugo gate 绑定；若确定性层修改任何页面，已有 attestation 立即失效，必须重新审读最终字节后签发。receipt 的逐文件图片模式明确为 `manual_semantic`，push 还会重新验证这份逐文件 provenance，不能用批次级勾选冒充语义审查。后续仍由普通 `push-blog.py` 验证和发布。
 
-Manual v4 的版本绑定不可省略：输入 records envelope 必须为 v2，canonical `manualDepth=full-text-evidence-v4` 必须同时绑定 `experimentTables=evidence-rich-v2`；旧 spec v3 只生成 v3 + `bounded-v1`，不得追溯套用 v4 深度表格语义。
+当前新批次使用 attestation v3：在历史 v2 的逐文件 SHA/notes/checks 之上，每个页面必须绑定独立 `reviewSubagent`，每张正文图片必须有同序 `imageFindings`，逐图确认 caption、邻文、像素可见事实和移动端可读性；v2 只用于复核既有历史 receipt。
 
-Manual v4 每篇还必须给出至少 3 条与全文连续原句闭环的 `resultClaims`，显式绑定设置、方法、基线、指标、数值、单位和方向；每条的 `sourceBindings` / `readerBindings` 必须以 8 个精确字段分别指向 `sourceQuote` 与实验结果同一局部证据块，禁止用全章节散落数字或整句复用冒充闭环。`notReported` 只允许带原因对象，实证文档至少 1 条 claim 含数字；理论/纯定性例外必须有全文证据。`readabilityRubric` 要逐项评估段内逻辑、段间承接、章节职责、事实就近、术语视角、句式节奏和去模板文学性，总分至少 12/14 且无 0 分。实验量、技术计数、维度、层数、轮数、设备型号、科学计数法和置信区间均使用阿拉伯数字；确定性门禁会阻断中文精确数量、中文/阿拉伯混拼、双重编号、中英术语粘连、长段落、防御性否定过密、篇内近重复和跨论文模板。“关键比较问题是”“下图用于核对”“证据边界在于”“下一段将解释”和“1. 是……”不得作为跨论文固定脚手架，段落不得以分号收尾。
+历史 Manual v4 的版本绑定不可省略：输入 records envelope 必须为 v2，canonical `manualDepth=full-text-evidence-v4` 必须同时绑定 `experimentTables=evidence-rich-v2`；旧 spec v3 只生成 v3 + `bounded-v1`，不得追溯套用 v4 深度表格语义。新日更只能使用下述 Manual v5。
 
-人工接管不是降低质量门槛：`manual_offline` 只替代筛选模型，`manual_complete` v2 provenance + v4 正文/表格/图片叙事契约只替代深度分析模型（v1-v3 只作历史兼容），manual blog review v2 只替代语义 review 模型；读者可见的技术叙事、图片、公式、事实密度与复现信息必须达到 API 路线同等门槛，抓取来源健康、发布凭证和远端 OID 门禁保持不变。
+**当前 Manual v5**：新批次必须使用 records v3 → spec v5 → `full-text-evidence-v5`。每篇由独立 paper subagent 在隔离上下文中产出 `researchBrief`，明确研究者必读、压缩和略过内容；另由不同 review/scoring subagent 复核。10 个阶段必须显式提交 `stageReviews`，禁止自动生成通用 claims 或复制 attempts。系统/方法论文至少 4 条 resultClaims，跨至少 2 个表/实验组并含强基线；核心精确数量必须绑定本篇来源。全部 manifest 图片逐项 select/reject，选图记录像素可见事实、图号/caption identity 和移动端裁图计划。ingestion 重放 official assembler，并在发布前再次核对受控全文 membership。records v2/spec v4 与 spec v3 仅作历史兼容，不得用于新日更。
+
+**论文 subagent 模型与隔离强规则**：所有逐论文筛选、理解、正文、评分、可读性复核和最终单页审查 leaf subagent 必须显式使用 `gpt-5.6-terra` + reasoning `high`；Sol 主 Agent 只做编排、代码、门禁、组装和发布。一个 subagent task 只能处理一个 arXiv ID，输入不得包含其他论文全文或 records；并发槽不足时逐批排队。主 Agent 不撰写批量正文，只汇总文件、运行门禁和发布。每个最终博客页再次由独立 Terra-high 单页 review subagent 审读，并逐图记录 caption、邻文、像素事实和移动端可读性。
+
+**三槽饱和与风险二审**：主 Agent 占用 1 个槽后最多并行 3 个 leaf paper/page subagent。禁止再开只负责转发的 broker 占用并发槽；主 Agent 直接维护 pending 队列，任一 leaf 完成即补位。records 未齐前不得让普通二审占槽。只有总分 >9、内部评测且无直接消融、readability 全满分、来源身份或图片语义异常等风险项才立即追加独立二审；普通页面在全部正文完成后进入逐页 review 阶段。进度必须从持久 shard/manifest 的最终 SHA 统计，不得靠手工计数。
+
+Manual v5 每篇还必须给出至少 3 条与全文连续原句闭环的 `resultClaims`；系统/方法论文提高为至少 4 条并跨至少 2 个实验组。每条显式绑定设置、方法、基线、指标、数值、单位和方向；`sourceBindings` / `readerBindings` 必须以 8 个精确字段分别指向 `sourceQuote` 与实验结果同一局部证据块，禁止用全章节散落数字或整句复用冒充闭环。`notReported` 只允许带原因对象，实证文档至少 1 条 claim 含数字；理论/纯定性例外必须有全文证据。`readabilityRubric` 要逐项评估段内逻辑、段间承接、章节职责、事实就近、术语视角、句式节奏和去模板文学性，总分至少 12/14 且无 0 分。实验量、技术计数、维度、层数、轮数、设备型号、科学计数法和置信区间均使用阿拉伯数字；确定性门禁会阻断中文精确数量、中文/阿拉伯混拼、双重编号、中英术语粘连、长段落、防御性否定过密、篇内近重复和跨论文模板。“关键比较问题是”“下图用于核对”“证据边界在于”“下一段将解释”和“1. 是……”不得作为跨论文固定脚手架，段落不得以分号收尾。
+
+人工接管不是降低质量门槛：`manual_offline` 只替代筛选模型，当前 `manual_complete` 使用 records v3/spec v5/`full-text-evidence-v5`，历史 v4/v3 只作兼容；当前 manual blog review 必须使用 attestation v3，v2 只兼容既有历史 receipt。读者可见的技术叙事、图片、公式、事实密度与复现信息必须达到 API 路线同等门槛，抓取来源健康、发布凭证和远端 OID 门禁保持不变。
 
 ---
 
@@ -420,7 +430,7 @@ npm run xiaohongshu -- --date 2026-04-22
 
 Agent 执行约束：
 
-- 用户说“运行/进行某日论文速递”即授权完整标准链路，包括 `push-blog.py`；只有明确限定为生成、review、预览、检查或诊断时才停在相应阶段
+- 用户说“运行/进行某日论文速递”即授权完整 Manual v5 标准链路，包括 `push-blog.py`；只有明确要求 API/LLM 才切换自动路线，只有明确限定为生成、review、预览、检查或诊断时才停在相应阶段
 - 若只是检查格式、验证新字段或预览产物，禁止触发真实 `git push`
 
 发布前保障：
@@ -503,7 +513,7 @@ PY
 1. **先查再改**：先读取相关脚本确认当前行为，再更新文档或执行命令。
 2. **发布需确认日期**：未明确日期时，先问用户；默认不要依赖"今天"。
 3. **禁止危险操作**：未获明确授权，禁止 `git reset --hard`、`git push -f`、批量删除历史文章。
-4. **默认日更意图必须跑完整链路**：用户说“运行/进行某日论文速递”即明确授权博客发布，并要求抓取、筛选、深度分析、博客生成、review/修正、push、TOP 10 论文长图、汇总封面和最终状态验收；不得在中间阶段提前结束。若用户只要求运行 `full-fetch.js`、仅分析、诊断、预览或检查，则不得擅自扩展到发布。微信、飞书、小红书自动发布不在默认范围。
+4. **默认日更必须用 Manual v5 跑完整链路**：用户说“运行/进行某日论文速递”即明确授权博客发布，并要求 Manual 抓取、逐篇独立 subagent 筛选与写作、spec/canonical、逐页 Manual review/修正、push、TOP 10 论文长图、汇总封面和最终状态验收；不得在人工边界提前结束。只有用户显式点名 API/LLM 才可改走自动路线。微信、飞书、小红书自动发布不在默认范围。
 5. **改动留痕**：流程、参数、路径变化后，同步更新 `SKILL.md`、`README.md`、`AGENTS.md` 和相关 `docs/` 文档。
 6. **禁止硬编码密钥**：不要在任何脚本或文档中写入真实 API key；所有凭证（LLM、微信公众号、飞书）统一放在 `项目根目录的 `.env` 文件`，由脚本通过项目 env loader 加载。
 7. **修改脚本时防止安全机制破坏**：本环境会静默替换 `API_KEY` 等敏感字符为 `***`。修改含有这类字符的脚本时，修改后必须重新读取文件验证关键行未被破坏。同时定期检查 `data/`、`logs/` 目录是否残留含密钥的备份文件或日志快照，发现立即清理。

@@ -10,7 +10,8 @@ const {
     initialCategoryOrder,
     validateManualRawCheckpoint,
     applyManualArchiveExclusion,
-    applyManualFilterStatuses
+    applyManualFilterStatuses,
+    assertUniqueNormalizedDecisionKeys
 } = require('../scripts/manual-fetch.js');
 const {
     buildManifestContext,
@@ -23,6 +24,17 @@ const {
 const { applyFetchSourceIntegrity, getFetchSourcesSha256 } = require('../scripts/full-fetch.js');
 
 describe('manual fetch data consistency helpers', () => {
+    it('rejects manual decision keys that collapse to the same normalized arXiv ID', () => {
+        assert.throws(() => assertUniqueNormalizedDecisionKeys({
+            '2608.00001': { related: true },
+            '2608.00001v2': { related: false }
+        }), /规范化重复 key/);
+        assert.doesNotThrow(() => assertUniqueNormalizedDecisionKeys({
+            '2608.00001': { related: true },
+            '2608.00002v1': { related: false }
+        }));
+    });
+
     it('records actual blog skip counts and keeps source totals from the pre-skip set', () => {
         const before = [
             { arxivId: '2608.00001', sources: ['arxiv'] },

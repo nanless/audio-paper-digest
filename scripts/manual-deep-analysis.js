@@ -51,10 +51,16 @@ const {
     normalizeImageInfos,
     selectImageCandidates,
     cachePublicImageDetailed,
+    checkDemoPageForOpensource,
+    requestPinnedPublicHttps,
+    validatePublicHttpUrl,
     applyImageInsertionPlan,
     IMAGE_NARRATIVE_CONTRACT_VERSION
 } = require('./deep-analyzer.js');
 const { updateAnalysisDigestStatuses } = require('./digest-status.js');
+const { MANUAL_RESEARCH_CONTRACT_VERSION } = require('./manual-research-contract.js');
+const MANUAL_DEPTH_CONTRACT_VERSION_V5 = require('./analysis-contract.js').MANUAL_DEPTH_CONTRACT_VERSION_V5
+    || MANUAL_DEPTH_CONTRACT_VERSION_V4;
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 const MANUAL_AUTHORING_PROMPT_PATH = path.join(PROJECT_ROOT, 'prompts', 'manual-analysis-record.md');
@@ -68,6 +74,11 @@ const STAGE_PROMPT_FILES = Object.freeze({
     scoringAudit: 'scoring-audit.md',
     imageSupplement: 'image-supplement.md'
 });
+const CURRENT_MANUAL_SPEC_VERSIONS = new Set([4, 5]);
+const MANUAL_CANONICAL_WORKER_COUNT = 3;
+const MANUAL_EXTERNAL_RESOURCE_CACHE_VERSION = 1;
+const MANUAL_EXTERNAL_RESOURCE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const externalResourceVerificationInFlight = new Map();
 
 function sha256Buffer(buffer) {
     return crypto.createHash('sha256').update(buffer).digest('hex');
@@ -109,17 +120,7 @@ function parseArgs(argv) {
 }
 
 function filteredPapersForDate(date) {
-    const data = readJson(Config.FILES.filteredPapers, 'filtered-papers');
-    if (data.batchDate !== date || data.status !== 'complete' || !Array.isArray(data.papers)) {
-        throw new Error(`filtered-papers.json 不是 ${date} 的 complete 批次`);
-    }
-    const ids = new Set();
-    for (const paper of data.papers) {
-        const id = normalizedId(paper);
-        if (!id || ids.has(id)) throw new Error(`filtered papers 含非法或重复 ID: ${id || '(missing)'}`);
-        ids.add(id);
-    }
-    return data.papers;
+    return loadFilteredBatchForDate(date).papers;
 }
 
 function stageStatusMap() {
@@ -143,14 +144,14 @@ function buildStagePromptBindings() {
 }
 
 function resolveManualSpecPromptBindings(spec, currentBindings = buildStagePromptBindings()) {
-    if (!spec || ![3, 4].includes(spec.version)) {
-        throw new Error('manual spec prompt 绑定只支持 version=3/4');
+    if (!spec || (spec.version !== 3 && !CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version))) {
+        throw new Error('manual spec prompt 绑定只支持历史 version=3 或当前 version=4/5');
     }
     if (spec.manualAuthoringPromptPath !== 'prompts/manual-analysis-record.md') {
         throw new Error('manual spec 的 Manual 成稿规范路径非法');
     }
     const currentAuthoringSha256 = sha256File(MANUAL_AUTHORING_PROMPT_PATH);
-    if (spec.version === 4) {
+    if (CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version)) {
         if (spec.promptSha256 && spec.promptSha256 !== currentBindings.primaryAnalysis.sha256) {
             throw new Error('manual spec.promptSha256 与当前 deep-analysis prompt 不一致');
         }
@@ -196,6 +197,155 @@ function resolveManualSpecPromptBindings(spec, currentBindings = buildStagePromp
         throw new Error('历史 manual v3 spec.promptSha256 与 primaryAnalysis 阶段不一致');
     }
     return historicalBindings;
+}
+
+function loadFilteredBatchForDate(date, filteredPath = Config.FILES.filteredPapers) {
+    const data = readJson(filteredPath, 'filtered-papers');
+    if (data.batchDate !== date || data.status !== 'complete' || !Array.isArray(data.papers)) {
+        throw new Error(`filtered-papers.json 不是 ${date} 的 complete 批次`);
+    }
+    const ids = new Set();
+    for (const paper of data.papers) {
+        const id = normalizedId(paper);
+        if (!id || ids.has(id)) throw new Error(`filtered papers 含非法或重复 ID: ${id || '(missing)'}`);
+        ids.add(id);
+    }
+    return data;
+}
+
+/**
+ * Replays the official assembler from its bound filtered batch, full-text
+ * manifest and records files.  Current specs must be byte-semantically equal
+ * to that replay.  Historical v4 keeps a narrower source/image closure so an
+ * immutable old artifact remains ingestible after the assembler advances.
+ */
+function validateManualV4AssemblerProvenance(spec, options = {}) {
+    if (!spec || !CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version)) {
+        throw new Error('assembler provenance 只适用于 Manual v4/v5 spec');
+    }
+    const date = options.date || spec.date;
+    const filteredPath = options.filteredPath || Config.FILES.filteredPapers;
+    const filtered = options.filtered || loadFilteredBatchForDate(date, filteredPath);
+    const expectedManifestPath = options.manifestPath
+        || path.join(Config.CURRENT_DIR, 'manual-full-text', date, 'manifest.json');
+    const declaredManifest = spec.fullTextManifest;
+    if (!declaredManifest || typeof declaredManifest !== 'object' || Array.isArray(declaredManifest)) {
+        throw new Error('Manual v4/v5 spec 缺少 fullTextManifest assembler provenance');
+    }
+    if (path.resolve(String(declaredManifest.path || '')) !== path.resolve(expectedManifestPath)) {
+        throw new Error('manual spec.fullTextManifest.path 不是当前日期的受控全文 manifest');
+    }
+    if (fs.lstatSync(expectedManifestPath).isSymbolicLink()) {
+        throw new Error('manual full-text manifest 不得通过符号链接替换');
+    }
+    const manifestBuffer = fs.readFileSync(expectedManifestPath);
+    if (sha256Buffer(manifestBuffer) !== declaredManifest.sha256) {
+        throw new Error('manual spec.fullTextManifest.sha256 与受控 manifest 不一致');
+    }
+    const manifest = readJson(expectedManifestPath, 'manual full-text manifest');
+    const {
+        stableSha256,
+        buildManifestContext,
+        isReusableFullTextCheckpoint
+    } = require('./manual-fetch-fulltext.js');
+    const context = buildManifestContext(filtered, date, path.dirname(expectedManifestPath));
+    if (manifest.version !== 2 || manifest.mode !== 'manual_full_text_fetch'
+        || manifest.date !== date || manifest.status !== 'complete' || manifest.failed !== 0
+        || manifest.count !== filtered.papers.length
+        || manifest.filteredBatchSha256 !== context.filteredBatchSha256
+        || manifest.filteredPapersSha256 !== context.filteredBatchSha256
+        || stableSha256(manifest.expectedPaperInputs) !== stableSha256(context.expectedPaperInputs)
+        || spec.filteredBatchSha256 !== context.filteredBatchSha256
+        || declaredManifest.filteredBatchSha256 !== context.filteredBatchSha256
+        || declaredManifest.paperCount !== filtered.papers.length) {
+        throw new Error('manual spec/full-text manifest 与当前 filtered 完整批次指纹不一致');
+    }
+    if (!manifest.papers || typeof manifest.papers !== 'object' || Array.isArray(manifest.papers)) {
+        throw new Error('manual full-text manifest.papers 非法');
+    }
+    const manifestIds = Object.keys(manifest.papers).map(normalizedId);
+    if (manifestIds.length !== context.inputs.length || new Set(manifestIds).size !== context.inputs.length) {
+        throw new Error('manual full-text manifest 论文集合与 filtered 不一致');
+    }
+    for (const input of context.inputs) {
+        const entry = manifest.papers[input.id];
+        if (!isReusableFullTextCheckpoint(entry, input.filePath, input)) {
+            throw new Error(`${input.id} full-text checkpoint 路径、版本、来源身份或内容指纹无效`);
+        }
+        const realEntryPath = fs.realpathSync(entry.path);
+        const realManifestDir = fs.realpathSync(path.dirname(expectedManifestPath));
+        const relativeEntryPath = path.relative(realManifestDir, realEntryPath);
+        if (fs.lstatSync(entry.path).isSymbolicLink()
+            || !relativeEntryPath || relativeEntryPath.startsWith(`..${path.sep}`)
+            || path.isAbsolute(relativeEntryPath)) {
+            throw new Error(`${input.id} full-text checkpoint 越出同批受控目录或使用符号链接`);
+        }
+        const paperSpec = spec.papers?.[input.id];
+        if (!paperSpec
+            || path.resolve(String(paperSpec.fullTextPath || '')) !== path.resolve(entry.path)
+            || paperSpec.sourceSha256 !== entry.sourceSha256
+            || paperSpec.sourceIdentitySha256 !== entry.sourceIdentitySha256
+            || paperSpec.paperMetadataSha256 !== input.paperMetadataSha256
+            || paperSpec.paperInputSha256 !== input.paperInputSha256
+            || paperSpec.filteredBatchSha256 !== context.filteredBatchSha256
+            || stableSha256(paperSpec.imageInfos || []) !== stableSha256(entry.imageInfos || [])) {
+            throw new Error(`${input.id} spec 全文、metadata、input/source identity 或 imageInfos 未与同批 manifest 闭环`);
+        }
+    }
+    if (!Array.isArray(spec.recordsSources) || spec.recordsSources.length === 0) {
+        throw new Error('manual spec 缺少 recordsSources assembler provenance');
+    }
+    const sourcePaths = new Set();
+    const recordInputs = spec.recordsSources.map((source, index) => {
+        if (!source || typeof source !== 'object' || Array.isArray(source)
+            || typeof source.path !== 'string' || !/^[a-f0-9]{64}$/.test(String(source.sha256 || ''))) {
+            throw new Error(`manual spec.recordsSources[${index}] 非法`);
+        }
+        const sourcePath = path.resolve(source.path);
+        if (sourcePaths.has(sourcePath)) throw new Error(`manual spec.recordsSources 含重复路径: ${sourcePath}`);
+        sourcePaths.add(sourcePath);
+        if (fs.lstatSync(sourcePath).isSymbolicLink()) {
+            throw new Error(`manual records source 不得使用符号链接: ${sourcePath}`);
+        }
+        const buffer = fs.readFileSync(sourcePath);
+        if (sha256Buffer(buffer) !== source.sha256) {
+            throw new Error(`manual records source SHA 不一致: ${sourcePath}`);
+        }
+        return { path: sourcePath, document: readJson(sourcePath, 'manual analysis records') };
+    });
+
+    // Lazy require avoids the intentional assembler -> ingestion prompt-binding
+    // dependency becoming an initialization cycle.
+    const assembler = require('./create-manual-analysis-spec.js');
+    const mergedRecords = assembler.mergeRecordsEnvelopes(recordInputs, date);
+    const expectedRecordsVersion = spec.version === 5
+        ? assembler.RECORDS_VERSION
+        : assembler.LEGACY_RECORDS_VERSION;
+    if (mergedRecords.recordsVersion !== expectedRecordsVersion
+        || spec.recordsVersion !== expectedRecordsVersion) {
+        throw new Error(
+            `manual spec v${spec.version} 与 records v${mergedRecords.recordsVersion} 版本映射不一致`
+        );
+    }
+    const rebuilt = assembler.buildSpec({
+        date,
+        filtered,
+        filteredPath,
+        manifest,
+        manifestPath: expectedManifestPath,
+        mergedRecords,
+        generatedAt: spec.generatedAt,
+        promptBindings: buildStagePromptBindings()
+    });
+    if (rebuilt.version !== spec.version) {
+        throw new Error(
+            `manual spec 版本降级/升级非法: supplied=v${spec.version}, rebuilt=v${rebuilt.version}`
+        );
+    }
+    if (stableSha256(rebuilt) !== stableSha256(spec)) {
+        throw new Error('manual spec 不是当前 official assembler 对已绑定 records/全文的原子输出');
+    }
+    return { filtered, manifest, context, rebuilt };
 }
 
 function manualCanonicalReuseFingerprint(record) {
@@ -249,6 +399,7 @@ function manualCanonicalReuseFingerprint(record) {
         manualAuthoringPromptSha256: takeover.manualAuthoringPromptSha256 || null,
         sourceSha256: record.sourceSha256 || null,
         manifestSourceSha256: manifest.sourceAcquisition?.sourceSha256 || null,
+        sourceAcquisitionSha256: manualSha256(manifest.sourceAcquisition || null),
         takeoverSourceSha256: takeover.sourceSha256 || null,
         evidenceLedgerSha256: takeover.evidenceLedgerSha256 || null,
         computedEvidenceLedgerSha256: manualSha256(takeover.evidenceLedger || null),
@@ -260,6 +411,18 @@ function manualCanonicalReuseFingerprint(record) {
         readabilityRubricSha256: takeover.readabilityRubricSha256 || null,
         computedReadabilityRubricSha256: manualSha256(takeover.readabilityRubric || null),
         editorialQualityMetricsSha256: manualSha256(takeover.editorialQualityMetrics || null),
+        researchBriefSha256: takeover.researchBriefSha256 || null,
+        computedResearchBriefSha256: manualSha256(takeover.researchBrief || null),
+        stageReviewsSha256: takeover.stageReviewsSha256 || null,
+        computedStageReviewsSha256: manualSha256(takeover.stageReviews || null),
+        scoringCalibrationSha256: takeover.scoringCalibrationSha256 || null,
+        computedScoringCalibrationSha256: manualSha256(takeover.scoringCalibration || null),
+        openSourceEvidenceSha256: takeover.openSourceEvidenceSha256 || null,
+        computedOpenSourceEvidenceSha256: manualSha256(takeover.openSourceEvidence || null),
+        figureReviewSha256: takeover.figureReviewSha256 || null,
+        computedFigureReviewSha256: manualSha256(takeover.figureReview || null),
+        externalResourceVerificationSha256: takeover.externalResourceVerificationSha256 || null,
+        computedExternalResourceVerificationSha256: manualSha256(takeover.externalResourceVerification || null),
         auditSha256: manualSha256(takeover.audit || null),
         stages,
         image: {
@@ -322,8 +485,12 @@ function finalizeManualCanonicalState(filePath, options) {
                 analysisStatus: status,
                 pipelineStatus: status === 'complete' ? 'analysis_complete' : 'analysis_partial_failed',
                 total: expectedIds.length,
+                totalAfterMerge: papers.length,
+                expected: expectedIds.length,
                 success,
+                successfulExpected: success,
                 failed: failedIds.length,
+                remainingFailed: failedIds.length,
                 failedIds,
                 manualComplete: expectedRecords.filter(record => (
                     isSuccessfulAnalysisRecord(record)
@@ -521,8 +688,10 @@ function normalizeManualV4ImageArtifacts({
 function buildManualRecord(paper, spec, date, promptInput, options = {}) {
     const manualDepthContractVersion = options.manualDepthContractVersion
         || MANUAL_DEPTH_CONTRACT_VERSION_V4;
-    const isManualV4 = manualDepthContractVersion === MANUAL_DEPTH_CONTRACT_VERSION_V4;
-    const experimentTableContractVersion = manualDepthContractVersion === MANUAL_DEPTH_CONTRACT_VERSION_V4
+    const isManualV4 = [MANUAL_DEPTH_CONTRACT_VERSION_V4, MANUAL_DEPTH_CONTRACT_VERSION_V5]
+        .includes(manualDepthContractVersion);
+    const isManualV5 = manualDepthContractVersion === MANUAL_DEPTH_CONTRACT_VERSION_V5;
+    const experimentTableContractVersion = isManualV4
         ? EXPERIMENT_TABLE_CONTRACT_VERSION
         : EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION;
     const promptBindings = typeof promptInput === 'string'
@@ -557,7 +726,11 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         enforceMethodDetailContract: true,
         enforceManualDepthContract: true,
         manualDepthContractVersion,
-        sourceText
+        sourceText,
+        researchBrief: spec.researchBrief,
+        openSourceEvidence: spec.openSourceEvidence,
+        resultClaims: spec.resultClaims,
+        evidenceLedger: spec.evidenceLedger
     });
     if (invalidReason) throw new Error(`${normalizedId(paper)} 分析契约失败: ${invalidReason}`);
     const preparedImages = Array.isArray(options.preparedImages) ? options.preparedImages : [];
@@ -614,12 +787,18 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         enforceMethodDetailContract: true,
         enforceManualDepthContract: true,
         manualDepthContractVersion,
-        sourceText
+        sourceText,
+        researchBrief: spec.researchBrief,
+        openSourceEvidence: spec.openSourceEvidence,
+        resultClaims: spec.resultClaims,
+        evidenceLedger: spec.evidenceLedger
     });
     if (finalInvalidReason) throw new Error(`${normalizedId(paper)} 插图后分析契约失败: ${finalInvalidReason}`);
     const manualDepthIssue = validateManualDepthContract(finalAnalysis, {
         sourceText,
-        manualDepthContractVersion
+        manualDepthContractVersion,
+        researchBrief: spec.researchBrief,
+        openSourceEvidence: spec.openSourceEvidence
     });
     if (manualDepthIssue) throw new Error(`${normalizedId(paper)} manual 深度契约失败: ${manualDepthIssue}`);
     const editorialQuality = validateEditorialQuality(finalAnalysis);
@@ -650,7 +829,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
     const auditSha256 = manualSha256(audit);
     const evidenceLedger = spec.evidenceLedger;
     const imageInfos = Array.isArray(spec.imageInfos) ? spec.imageInfos : [];
-    const imageUrls = preparedImages.map(info => info.url);
+    const imageUrls = imageInfos.map(info => info.url);
     const selectedRequested = configuredImageUrls;
     const insertedUrlSet = new Set(imageInsertion.selectedImageUrls);
     const legacySelectedImages = preparedImages.filter(info => insertedUrlSet.has(info.url));
@@ -670,24 +849,50 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
             insertionDiagnostics: imageInsertion.insertionDiagnostics
         };
     const selectedImages = canonicalImageArtifacts.selectedImages;
-    const imageDownloadEvidenceSha256 = manualSha256({
-        candidates: preparedImages.map(info => ({
+    const preparedByUrl = new Map(preparedImages.map(info => [info.url, info]));
+    const figureDecisionByUrl = new Map(
+        (spec.figureReview?.decisions || []).map(item => [item.url, item])
+    );
+    const allCandidateEvidence = imageInfos.map((info, index) => {
+        const prepared = preparedByUrl.get(info.url) || {};
+        const decision = figureDecisionByUrl.get(info.url);
+        return {
             url: info.url,
             caption: info.caption || '',
             source: info.source || null,
-            sourceOrder: info.sourceOrder ?? null,
+            sourceOrder: info.sourceOrder ?? index,
             candidateScore: info.candidateScore ?? null,
-            mime: info.mime,
-            sha256: info.sha256,
-            bytes: info.bytes
-        })),
+            mime: prepared.mime,
+            sha256: prepared.sha256,
+            bytes: prepared.bytes,
+            ...(decision ? {
+                reviewDecision: decision.decision,
+                reviewReason: decision.reason,
+                figureNumber: decision.figureNumber,
+                visibleFacts: decision.visibleFacts || [],
+                renderPlan: decision.renderPlan || null
+            } : {})
+        };
+    });
+    const imageDownloadEvidenceSha256 = manualSha256({
+        candidates: allCandidateEvidence,
         outcomes: Array.isArray(options.imageDownloadOutcomes) ? options.imageDownloadOutcomes : []
     });
-    const normalizedSelectedEvidence = selectedImages.map(info => ({
-        url: info.url, caption: info.caption || '', source: info.source || null,
-        sourceOrder: info.sourceOrder ?? null, candidateScore: info.candidateScore ?? null,
-        mime: info.mime, sha256: info.sha256, bytes: info.bytes
-    }));
+    const normalizedSelectedEvidence = selectedImages.map(info => {
+        const decision = figureDecisionByUrl.get(info.url);
+        return {
+            url: info.url, caption: info.caption || '', source: info.source || null,
+            sourceOrder: info.sourceOrder ?? null, candidateScore: info.candidateScore ?? null,
+            mime: info.mime, sha256: info.sha256, bytes: info.bytes,
+            ...(isManualV5 ? {
+                reviewDecision: decision?.decision || null,
+                reviewReason: decision?.reason || null,
+                figureNumber: decision?.figureNumber || null,
+                visibleFacts: decision?.visibleFacts || [],
+                renderPlan: decision?.renderPlan || null
+            } : {})
+        };
+    });
     const imageSelectionEvidenceSha256 = manualSha256({
         selected: normalizedSelectedEvidence,
         insertionPlan: canonicalImageArtifacts.insertionPlan,
@@ -729,6 +934,20 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
             readabilityRubricSha256: manualSha256(spec.readabilityRubric),
             editorialQualityMetrics: editorialQuality.metrics
         } : {}),
+        ...(isManualV5 ? {
+            researchBrief: spec.researchBrief,
+            researchBriefSha256: manualSha256(spec.researchBrief),
+            stageReviews: { version: 2, stages: spec.stageReviews },
+            stageReviewsSha256: manualSha256({ version: 2, stages: spec.stageReviews }),
+            scoringCalibration: spec.scoringCalibration,
+            scoringCalibrationSha256: manualSha256(spec.scoringCalibration),
+            openSourceEvidence: spec.openSourceEvidence,
+            openSourceEvidenceSha256: manualSha256(spec.openSourceEvidence),
+            figureReview: spec.figureReview,
+            figureReviewSha256: manualSha256(spec.figureReview),
+            externalResourceVerification: options.externalResourceVerification,
+            externalResourceVerificationSha256: manualSha256(options.externalResourceVerification)
+        } : {}),
         audit,
         stageEvidence: buildStageEvidence(
             spec,
@@ -766,6 +985,10 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
             ...(isManualV4 ? {
                 imageNarrative: IMAGE_NARRATIVE_CONTRACT_VERSION,
                 editorialQuality: EDITORIAL_QUALITY_CONTRACT_VERSION
+            } : {}),
+            ...(isManualV5 ? {
+                researcherFocus: MANUAL_RESEARCH_CONTRACT_VERSION,
+                perPaperSubagent: 'isolated-single-paper-v1'
             } : {})
         },
         sourceAcquisition: {
@@ -777,6 +1000,18 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
             fullTextAvailable: true,
             truncated: false,
             sourceSha256,
+            ...(isManualV4 ? {
+                manualSpecVersion: options.manualProvenance?.specVersion || null,
+                requestedArxivId: spec.requestedArxivId,
+                fullTextPath: resolvedSourcePath,
+                sourceIdentitySha256: spec.sourceIdentitySha256,
+                paperMetadataSha256: spec.paperMetadataSha256,
+                paperInputSha256: spec.paperInputSha256,
+                filteredBatchSha256: spec.filteredBatchSha256,
+                fullTextManifestSha256: options.manualProvenance?.fullTextManifestSha256 || null,
+                recordsSourcesSha256: options.manualProvenance?.recordsSourcesSha256 || null,
+                imageInfosSha256: manualSha256(spec.imageInfos || [])
+            } : {}),
             warnings: ['manual_offline_no_llm_api']
         },
         stages,
@@ -786,7 +1021,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         version: 2,
         source: imageInfos.length > 0 ? 'manual_full_text_html' : 'manual_no_image_metadata',
         totalFound: imageInfos.length,
-        candidates: preparedImages.map((info, index) => ({
+        candidates: allCandidateEvidence.map((info, index) => ({
             index: index + 1,
             ...info
         })),
@@ -799,6 +1034,16 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         selected: selectedImages.map((info, index) => ({
             index: index + 1,
             ...info,
+            ...(isManualV5 ? (() => {
+                const decision = figureDecisionByUrl.get(info.url);
+                return {
+                    reviewDecision: decision?.decision || null,
+                    reviewReason: decision?.reason || null,
+                    figureNumber: decision?.figureNumber || null,
+                    visibleFacts: decision?.visibleFacts || [],
+                    renderPlan: decision?.renderPlan || null
+                };
+            })() : {}),
             selectionReason: selectedRequested.length > 0
                 ? 'manual_explicit_secure_figure_review_and_context_bound_plan'
                 : 'manual_no_selected_images'
@@ -951,27 +1196,215 @@ async function prepareManualImages(spec) {
             imageDownloadOutcomes.push({ url: candidate.url, status: 'transient_failure', reason: error.message });
         }
     }
+    if (requestedUrls) {
+        const reviewByUrl = new Map(
+            (spec.figureReview?.decisions || []).map(item => [item.url, item])
+        );
+        for (const candidate of imageInfos) {
+            if (requestedUrls.has(candidate.url)) continue;
+            const review = reviewByUrl.get(candidate.url);
+            imageDownloadOutcomes.push({
+                url: candidate.url,
+                status: 'manual_rejected',
+                reason: review?.reason || 'not_selected_by_manual_figure_review'
+            });
+        }
+    }
     return { preparedImages, imageDownloadOutcomes };
+}
+
+async function verifyManualExternalResources(spec) {
+    const evidence = spec?.openSourceEvidence;
+    if (!evidence || typeof evidence !== 'object') {
+        return { version: 1, state: 'missing', checkedAt: getBeijingISOString(), outcomes: [] };
+    }
+    const urls = Array.isArray(evidence.urls) ? evidence.urls : [];
+    const outcomes = [];
+    for (const url of urls) {
+        const cached = readCachedExternalResourceOutcome(url);
+        if (cached) {
+            outcomes.push(cached);
+            continue;
+        }
+        let pending = externalResourceVerificationInFlight.get(url);
+        if (!pending) {
+            pending = verifyAndCacheExternalResource(url)
+                .finally(() => externalResourceVerificationInFlight.delete(url));
+            externalResourceVerificationInFlight.set(url, pending);
+        }
+        outcomes.push(await pending);
+    }
+    if (['released', 'demo_only'].includes(evidence.state)
+        && outcomes.length !== urls.length) {
+        throw new Error('Manual v5 已发布资源/Demo 未完成逐 URL 外部验证');
+    }
+    return {
+        version: 1,
+        state: evidence.state,
+        checkedAt: outcomes.map(item => item.verifiedAt).filter(Boolean).sort().at(-1)
+            || evidence.checkedAt
+            || null,
+        outcomes
+    };
+}
+
+function externalResourceCacheKey(url) {
+    return sha256Buffer(Buffer.from(String(url), 'utf8'));
+}
+
+function normalizeDiscoveredHttpsLinks(values) {
+    return [...new Set((Array.isArray(values) ? values : []).map(value => {
+        const text = String(value || '').trim();
+        if (/^https:\/\//i.test(text)) return text;
+        if (/^(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?:\/[^\s]*)?$/.test(text)) {
+            return `https://${text}`;
+        }
+        return null;
+    }).filter(Boolean))];
+}
+
+function readExternalResourceCache() {
+    const cachePath = Config.FILES.manualExternalResourceCache;
+    if (!cachePath || !fs.existsSync(cachePath)) {
+        return { version: MANUAL_EXTERNAL_RESOURCE_CACHE_VERSION, entries: {} };
+    }
+    try {
+        const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+        if (cache?.version !== MANUAL_EXTERNAL_RESOURCE_CACHE_VERSION
+            || !cache.entries || typeof cache.entries !== 'object' || Array.isArray(cache.entries)) {
+            return { version: MANUAL_EXTERNAL_RESOURCE_CACHE_VERSION, entries: {} };
+        }
+        return cache;
+    } catch (_error) {
+        return { version: MANUAL_EXTERNAL_RESOURCE_CACHE_VERSION, entries: {} };
+    }
+}
+
+function readCachedExternalResourceOutcome(url, nowMs = Date.now()) {
+    const entry = readExternalResourceCache().entries[externalResourceCacheKey(url)];
+    if (!entry || entry.url !== url || entry.status !== 'reachable_public_https') return null;
+    const checkedAtMs = Date.parse(entry.checkedAt || '');
+    if (!Number.isFinite(checkedAtMs)
+        || checkedAtMs > nowMs
+        || nowMs - checkedAtMs > MANUAL_EXTERNAL_RESOURCE_CACHE_TTL_MS) {
+        return null;
+    }
+    return {
+        url: entry.url,
+        status: entry.status,
+        finalUrl: entry.finalUrl,
+        httpStatus: entry.httpStatus,
+        discoveredLinks: normalizeDiscoveredHttpsLinks(entry.discoveredLinks),
+        verifiedAt: entry.checkedAt
+    };
+}
+
+function writeCachedExternalResourceOutcome(outcome, checkedAt = getBeijingISOString()) {
+    const cachePath = Config.FILES.manualExternalResourceCache;
+    const key = externalResourceCacheKey(outcome.url);
+    updateJsonFileLocked(cachePath, current => {
+        const entries = current?.version === MANUAL_EXTERNAL_RESOURCE_CACHE_VERSION
+            && current.entries && typeof current.entries === 'object' && !Array.isArray(current.entries)
+            ? current.entries
+            : {};
+        return {
+            version: MANUAL_EXTERNAL_RESOURCE_CACHE_VERSION,
+            entries: {
+                ...entries,
+                [key]: {
+                    url: outcome.url,
+                    status: outcome.status,
+                    finalUrl: outcome.finalUrl,
+                    httpStatus: outcome.httpStatus,
+                    discoveredLinks: normalizeDiscoveredHttpsLinks(outcome.discoveredLinks),
+                    checkedAt
+                }
+            }
+        };
+    });
+}
+
+async function verifyAndCacheExternalResource(url) {
+    let currentUrl = url;
+    let response = null;
+    for (let redirects = 0; redirects <= 3; redirects++) {
+        const parsed = await validatePublicHttpUrl(currentUrl);
+        response = await requestPinnedPublicHttps(currentUrl, {
+            headers: { 'User-Agent': 'paper-digest-manual-v5/1.0', Accept: 'text/html,text/plain,*/*' },
+            timeoutMs: 15000,
+            maxBytes: 1024 * 1024
+        });
+        const location = response.headers.get('location');
+        if (response.status >= 300 && response.status < 400 && location) {
+            if (redirects >= 3) throw new Error(`外部资源重定向超过 3 次: ${url}`);
+            currentUrl = new URL(location, parsed).href;
+            continue;
+        }
+        break;
+    }
+    if (!response || response.status !== 200) {
+        throw new Error(`外部资源不可达: ${url} (HTTP ${response?.status || 'unknown'})`);
+    }
+    const discoveredLinks = normalizeDiscoveredHttpsLinks(
+        await checkDemoPageForOpensource(url)
+    );
+    const checkedAt = getBeijingISOString();
+    const outcome = {
+        url,
+        status: 'reachable_public_https',
+        finalUrl: currentUrl,
+        httpStatus: response.status,
+        discoveredLinks,
+        verifiedAt: checkedAt
+    };
+    writeCachedExternalResourceOutcome(outcome, checkedAt);
+    return outcome;
+}
+
+async function runFixedWorkers(items, processItem, workerCount = MANUAL_CANONICAL_WORKER_COUNT) {
+    if (!Array.isArray(items)) throw new Error('worker items 必须是数组');
+    if (typeof processItem !== 'function') throw new Error('worker processItem 必须是函数');
+    if (!Number.isInteger(workerCount) || workerCount < 1) throw new Error('workerCount 必须是正整数');
+    let nextIndex = 0;
+    const workers = Array.from(
+        { length: Math.min(workerCount, items.length) },
+        async () => {
+            while (true) {
+                const index = nextIndex++;
+                if (index >= items.length) return;
+                await processItem(items[index], index);
+            }
+        }
+    );
+    await Promise.all(workers);
 }
 
 async function run() {
     const { date, spec: specPathArg, force } = parseArgs(process.argv.slice(2));
     const specPath = path.resolve(PROJECT_ROOT, specPathArg);
     const spec = readJson(specPath, 'manual spec');
-    if (![3, 4].includes(spec.version) || spec.mode !== MANUAL_COMPLETE_STATUS) {
-        throw new Error('manual spec 必须是历史 version=3 或当前 version=4，且 mode=manual_complete');
+    if ((spec.version !== 3 && !CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version))
+        || spec.mode !== MANUAL_COMPLETE_STATUS) {
+        throw new Error('manual spec 必须是历史 version=3 或当前 version=4/5，且 mode=manual_complete');
     }
     if (spec.date !== date) throw new Error('manual spec.date 与 --date 不一致');
+    const provenance = CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version)
+        ? validateManualV4AssemblerProvenance(spec, { date })
+        : null;
     const currentPromptBindings = buildStagePromptBindings();
     const promptBindings = resolveManualSpecPromptBindings(spec, currentPromptBindings);
     const promptSha256 = promptBindings.primaryAnalysis.sha256;
-    const papers = filteredPapersForDate(date);
+    const papers = provenance ? provenance.filtered.papers : filteredPapersForDate(date);
     const specPapers = spec.papers;
     if (!specPapers || typeof specPapers !== 'object' || Array.isArray(specPapers)) {
         throw new Error('manual spec.papers 必须是对象');
     }
     const expectedIds = new Set(papers.map(normalizedId));
-    const suppliedIds = new Set(Object.keys(specPapers).map(normalizedId));
+    const suppliedKeys = Object.keys(specPapers);
+    const suppliedIds = new Set(suppliedKeys.map(normalizedId));
+    if (suppliedIds.size !== suppliedKeys.length || suppliedKeys.some(key => !normalizedId(key))) {
+        throw new Error('manual spec.papers 含非法或规范化重复 ID');
+    }
     const missing = [...expectedIds].filter(id => !suppliedIds.has(id));
     const extra = [...suppliedIds].filter(id => !expectedIds.has(id));
     if (missing.length || extra.length) {
@@ -982,7 +1415,7 @@ async function run() {
     let failedPersisted = 0;
     let skipped = 0;
     let successfulAttempts = 0;
-    for (const paper of papers) {
+    await runFixedWorkers(papers, async paper => {
         const id = normalizedId(paper);
         const paperSpec = specPapers[id] || specPapers[paper.arxivId];
         try {
@@ -996,8 +1429,12 @@ async function run() {
                 let record;
                 let success = false;
                 let imagePreparation = {};
+                let externalResourceVerification = null;
                 try {
                     imagePreparation = await prepareManualImages(paperSpec);
+                    if (spec.version === 5) {
+                        externalResourceVerification = await verifyManualExternalResources(paperSpec);
+                    }
                     const expectedRecord = buildManualRecord(
                         effectivePaper,
                         paperSpec,
@@ -1005,9 +1442,19 @@ async function run() {
                         promptBindings,
                         {
                             ...imagePreparation,
-                            manualDepthContractVersion: spec.version === 4
-                                ? MANUAL_DEPTH_CONTRACT_VERSION_V4
-                                : MANUAL_DEPTH_CONTRACT_VERSION_V3
+                            externalResourceVerification,
+                            manualDepthContractVersion: spec.version === 5
+                                ? MANUAL_DEPTH_CONTRACT_VERSION_V5
+                                : (spec.version === 4
+                                    ? MANUAL_DEPTH_CONTRACT_VERSION_V4
+                                    : MANUAL_DEPTH_CONTRACT_VERSION_V3),
+                            ...(provenance ? {
+                                manualProvenance: {
+                                    specVersion: spec.version,
+                                    fullTextManifestSha256: spec.fullTextManifest.sha256,
+                                    recordsSourcesSha256: manualSha256(spec.recordsSources)
+                                }
+                            } : {})
                         }
                     );
                     const writeDecision = manualCanonicalWriteDecision(
@@ -1048,7 +1495,7 @@ async function run() {
         } catch (error) {
             failures.set(id, `锁内保存失败: ${error.message}`);
         }
-    }
+    });
     const saved = finalizeManualCanonicalState(Config.FILES.deepAnalysisResult, {
         date,
         expectedIds: papers.map(normalizedId),
@@ -1090,8 +1537,15 @@ module.exports = {
     manualCanonicalReuseFingerprint,
     manualCanonicalWriteDecision,
     resolveManualSpecPromptBindings,
+    loadFilteredBatchForDate,
+    validateManualV4AssemblerProvenance,
     finalizeManualCanonicalState,
     prepareManualImages,
+    verifyManualExternalResources,
+    readCachedExternalResourceOutcome,
+    writeCachedExternalResourceOutcome,
+    normalizeDiscoveredHttpsLinks,
+    runFixedWorkers,
     filteredPapersForDate,
     parseArgs,
     shouldReuseCanonical,

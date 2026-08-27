@@ -21,10 +21,10 @@ const {
     REQUIRED_RECOVERY_STAGES,
     EXPERIMENT_TABLE_CONTRACT_VERSION,
     MANUAL_DEPTH_CONTRACT_VERSION_V4,
+    MANUAL_DEPTH_CONTRACT_VERSION_V5,
     normalizeExperimentTableNumericFormatting,
     getInvalidAnalysisReason
 } = require('./analysis-contract.js');
-const { buildStagePromptBindings } = require('./manual-deep-analysis.js');
 const {
     selectImageCandidates,
     buildImageAnchorCatalog,
@@ -34,8 +34,20 @@ const {
     validateEditorialQuality,
     validateResultClaims,
     findBatchTemplateReuse,
+    findEmbeddedGeneratedHeadings,
     validateReadabilityRubric
 } = require('./editorial-quality.js');
+const {
+    MANUAL_RESEARCH_CONTRACT_VERSION,
+    validateResearchBrief,
+    validateStageReviews,
+    validateFigureReview,
+    validateScoringCalibration,
+    validateResearchScoringCaps,
+    validateOpenSourceEvidence,
+    validateExactFactCoverage,
+    validateResultClaimCoverageV5
+} = require('./manual-research-contract.js');
 const {
     MANIFEST_VERSION,
     stableSha256,
@@ -43,9 +55,11 @@ const {
     isReusableFullTextCheckpoint
 } = require('./manual-fetch-fulltext.js');
 
-const RECORDS_VERSION = 2;
+const RECORDS_VERSION = 3;
+const LEGACY_RECORDS_VERSION = 2;
 const RECORDS_MODE = 'manual_analysis_records';
-const SPEC_VERSION = 4;
+const SPEC_VERSION = 5;
+const LEGACY_SPEC_VERSION = 4;
 const SPEC_MODE = 'manual_complete';
 const FULLTEXT_MODE = 'manual_full_text_fetch';
 const DOCUMENT_TYPES = new Set(['方法研究', '系统技术报告', '模型报告', '数据集与基准', '综述', '理论研究', '应用研究']);
@@ -64,6 +78,14 @@ const IMAGE_INSERTION_SECTIONS = new Set([
 ]);
 const TEMPLATE_SENTENCE_MIN_LENGTH = 48;
 const MANUAL_AUTHORING_PROMPT = path.join(Config.PROJECT_ROOT, 'prompts', 'manual-analysis-record.md');
+
+function currentStagePromptBindings() {
+    // Lazy import prevents manual-deep-analysis -> assembler provenance replay
+    // from observing a half-initialized circular module.
+    const builder = require('./manual-deep-analysis.js').buildStagePromptBindings;
+    if (typeof builder !== 'function') throw new Error('Manual stage prompt binding helper 不可用');
+    return builder();
+}
 
 function sha256Buffer(value) {
     return crypto.createHash('sha256').update(value).digest('hex');
@@ -168,9 +190,12 @@ function validateManualAudit(audit, label = 'manualAudit') {
     return JSON.parse(JSON.stringify(audit));
 }
 
-function validateStageAttempts(value, audit, label = 'stageReviewAttemptsByStage') {
-    if (value === undefined) {
+function validateStageAttempts(value, audit, label = 'stageReviewAttemptsByStage', options = {}) {
+    if (value === undefined && options.allowLegacyDefault === true) {
         return Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => [stage, audit.attempts]));
+    }
+    if (value === undefined) {
+        throw new Error(`${label} 必须由每篇独立 paper subagent 显式逐阶段提供，禁止复制全局 audit.attempts`);
     }
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).length !== REQUIRED_RECOVERY_STAGES.length) {
@@ -185,7 +210,8 @@ function validateStageAttempts(value, audit, label = 'stageReviewAttemptsByStage
     }));
 }
 
-function validateRecord(record, id, label = `papers.${id}`) {
+function validateRecord(record, id, label = `papers.${id}`, options = {}) {
+    const recordsVersion = options.recordsVersion ?? LEGACY_RECORDS_VERSION;
     if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error(`${label} 必须是对象`);
     const recordId = normalizedId(record.arxivId || id);
     if (!recordId || recordId !== id) throw new Error(`${label}.arxivId 与对象键不一致`);
@@ -258,8 +284,45 @@ function validateRecord(record, id, label = `papers.${id}`) {
     const stageReviewAttemptsByStage = validateStageAttempts(
         record.stageReviewAttemptsByStage,
         manualAudit,
-        `${label}.stageReviewAttemptsByStage`
+        `${label}.stageReviewAttemptsByStage`,
+        { allowLegacyDefault: recordsVersion === LEGACY_RECORDS_VERSION }
     );
+    const researchBrief = recordsVersion === RECORDS_VERSION
+        ? (validateResearchBrief(record.researchBrief, {
+            paperId: id,
+            documentType: record.type,
+            requireBindings: false
+        }), JSON.parse(JSON.stringify(record.researchBrief)))
+        : undefined;
+    const stageReviews = recordsVersion === RECORDS_VERSION
+        ? validateStageReviews(record.stageReviews, {
+            stages: REQUIRED_RECOVERY_STAGES,
+            evidenceLedger: record.evidenceLedger,
+            requireSourceBinding: false,
+            label: `${label}.stageReviews`
+        })
+        : undefined;
+    const scoringCalibration = recordsVersion === RECORDS_VERSION
+        ? (validateScoringCalibration(record.scoringCalibration, {
+            evidenceLedger: record.evidenceLedger,
+            paperSubagentTask: record.researchBrief?.paperSubagent?.taskName,
+            label: `${label}.scoringCalibration`
+        }), JSON.parse(JSON.stringify(record.scoringCalibration)))
+        : undefined;
+    if (recordsVersion === RECORDS_VERSION) {
+        if (!['高', '中', '低'].includes(record.confidence)) {
+            throw new Error(`${label}.confidence 在 records v3 中必须显式给出`);
+        }
+        validateResearchScoringCaps(record, record.researchBrief, label);
+    }
+    const openSourceEvidence = recordsVersion === RECORDS_VERSION
+        ? (validateOpenSourceEvidence(record.openSourceEvidence, {
+            dims,
+            resourceFlags: record,
+            requireSourceBinding: false,
+            label: `${label}.openSourceEvidence`
+        }), JSON.parse(JSON.stringify(record.openSourceEvidence)))
+        : undefined;
     const selectedImageUrls = record.selectedImageUrls;
     if (selectedImageUrls !== undefined
         && (!Array.isArray(selectedImageUrls)
@@ -306,6 +369,9 @@ function validateRecord(record, id, label = `papers.${id}`) {
         throw new Error(`${label}.selectedImageUrls 非空时必须提供 imageInsertions`);
     }
     if (record.reason !== undefined) assertString(record.reason, `${label}.reason`, 20);
+    if (recordsVersion === RECORDS_VERSION && record.scoringReasons === undefined) {
+        throw new Error(`${label}.scoringReasons 在 records v3 中必须显式提供，禁止由其他字段拼接回退`);
+    }
     if (record.scoringReasons !== undefined
         && (!Array.isArray(record.scoringReasons) || record.scoringReasons.length !== 8
             || record.scoringReasons.some((reason, index) => {
@@ -321,6 +387,18 @@ function validateRecord(record, id, label = `papers.${id}`) {
     if (record.editorial !== undefined
         && (!record.editorial || typeof record.editorial !== 'object' || Array.isArray(record.editorial))) {
         throw new Error(`${label}.editorial 必须是对象`);
+    }
+    if (record.editorial && typeof record.editorial === 'object') {
+        for (const [field, value] of Object.entries(record.editorial)) {
+            if (typeof value !== 'string') continue;
+            const headings = findEmbeddedGeneratedHeadings(value);
+            if (headings.length > 0) {
+                throw new Error(
+                    `${label}.editorial.${field} 不得内嵌 assembler 生成的 Markdown 标题: `
+                    + headings.map(item => item.match).join(', ')
+                );
+            }
+        }
     }
     for (const key of ['hasCode', 'hasModel', 'hasDataset']) {
         if (record[key] !== undefined && !['是', '否', '未说明'].includes(record[key])) {
@@ -354,6 +432,22 @@ function validateRecord(record, id, label = `papers.${id}`) {
     if (!readability.valid || !readability.passing) {
         throw new Error(`${label}.readabilityRubric 未通过 12/14 且无 0 分门禁: ${readability.errors.join('；') || `total=${readability.total}`}`);
     }
+    if (recordsVersion === RECORDS_VERSION) {
+        if (record.readabilityRubric?.independentReview !== true
+            || typeof record.readabilityRubric?.reviewerTaskName !== 'string'
+            || record.readabilityRubric.reviewerTaskName.trim().length < 4
+            || record.readabilityRubric.reviewerTaskName === record.researchBrief?.paperSubagent?.taskName) {
+            throw new Error(`${label}.readabilityRubric 必须由不同于正文作者的独立 subagent 审查`);
+        }
+        const scores = Object.values(record.readabilityRubric.dimensions || {}).map(item => item?.score);
+        if (scores.length === 7 && scores.every(score => score === 2)) {
+            if (!Array.isArray(record.readabilityRubric.counterEvidence)
+                || record.readabilityRubric.counterEvidence.length < 3
+                || record.readabilityRubric.counterEvidence.some(item => typeof item !== 'string' || item.trim().length < 20)) {
+                throw new Error(`${label}.readabilityRubric 全部满分时必须提供至少 3 条反证审计`);
+            }
+        }
+    }
     return {
         ...record,
         ...fields,
@@ -364,6 +458,10 @@ function validateRecord(record, id, label = `papers.${id}`) {
         dims,
         manualAudit,
         stageReviewAttemptsByStage,
+        ...(researchBrief ? { researchBrief } : {}),
+        ...(stageReviews ? { stageReviews } : {}),
+        ...(scoringCalibration ? { scoringCalibration } : {}),
+        ...(openSourceEvidence ? { openSourceEvidence } : {}),
         ...(selectedImageUrls !== undefined ? { selectedImageUrls } : {}),
         ...(imageInsertions !== undefined ? { imageInsertions: JSON.parse(JSON.stringify(imageInsertions)) } : {}),
         ...(titleOverride ? { titleOverride } : {})
@@ -404,8 +502,9 @@ function resolveManualImageInsertions(analysis, insertions, selectedImageUrls, l
 }
 
 function validateRecordsEnvelope(document, filePath, expectedDate) {
-    if (document.version !== RECORDS_VERSION || document.mode !== RECORDS_MODE) {
-        throw new Error(`${filePath} 必须是 version=${RECORDS_VERSION}、mode=${RECORDS_MODE}`);
+    if (![LEGACY_RECORDS_VERSION, RECORDS_VERSION].includes(document.version)
+        || document.mode !== RECORDS_MODE) {
+        throw new Error(`${filePath} 必须是历史 version=${LEGACY_RECORDS_VERSION} 或当前 version=${RECORDS_VERSION}、mode=${RECORDS_MODE}`);
     }
     if (document.date !== expectedDate) throw new Error(`${filePath} date 与 --date 不一致`);
     const agent = assertString(document.agent, `${filePath}.agent`, 2);
@@ -419,9 +518,11 @@ function validateRecordsEnvelope(document, filePath, expectedDate) {
         const id = normalizedId(rawId);
         if (!id || id !== rawId) throw new Error(`${filePath}.papers 键必须是规范化 arXiv ID: ${rawId}`);
         if (papers[id]) throw new Error(`${filePath}.papers 含重复 ID: ${id}`);
-        papers[id] = validateRecord(record, id, `${filePath}.papers.${id}`);
+        papers[id] = validateRecord(record, id, `${filePath}.papers.${id}`, {
+            recordsVersion: document.version
+        });
     }
-    return { version: RECORDS_VERSION, mode: RECORDS_MODE, date: expectedDate, agent, reviewProtocol, papers };
+    return { version: document.version, mode: RECORDS_MODE, date: expectedDate, agent, reviewProtocol, papers };
 }
 
 function normalizeTemplateText(value) {
@@ -505,6 +606,9 @@ function mergeRecordsEnvelopes(inputs, expectedDate) {
     if (!Array.isArray(inputs) || inputs.length === 0) throw new Error('至少需要一份 records envelope');
     let agent;
     let reviewProtocol;
+    let recordsVersion;
+    const sourceAgents = new Set();
+    const sourceReviewProtocols = new Set();
     const papers = {};
     const sources = [];
     for (const input of inputs) {
@@ -514,20 +618,62 @@ function mergeRecordsEnvelopes(inputs, expectedDate) {
             throw new Error(`records 文件内容与已读取对象不一致: ${filePath}`);
         }
         const envelope = validateRecordsEnvelope(input.document, filePath, expectedDate);
-        if (agent !== undefined && envelope.agent !== agent) throw new Error(`records agent 不一致: ${filePath}`);
-        if (reviewProtocol !== undefined && envelope.reviewProtocol !== reviewProtocol) {
+        if (recordsVersion !== undefined && envelope.version !== recordsVersion) {
+            throw new Error(`records version 不一致，禁止把历史 v2 与当前 v3 shard 混成同一批: ${filePath}`);
+        }
+        if (agent !== undefined && envelope.agent !== agent
+            && envelope.version === LEGACY_RECORDS_VERSION) {
+            throw new Error(`历史 records agent 不一致: ${filePath}`);
+        }
+        if (reviewProtocol !== undefined && envelope.reviewProtocol !== reviewProtocol
+            && envelope.version === LEGACY_RECORDS_VERSION) {
             throw new Error(`records reviewProtocol 不一致: ${filePath}`);
         }
-        agent = envelope.agent;
-        reviewProtocol = envelope.reviewProtocol;
+        agent = agent || envelope.agent;
+        sourceAgents.add(envelope.agent);
+        reviewProtocol = reviewProtocol || envelope.reviewProtocol;
+        sourceReviewProtocols.add(envelope.reviewProtocol);
+        recordsVersion = envelope.version;
         for (const [id, record] of Object.entries(envelope.papers)) {
             if (papers[id]) throw new Error(`多个 records 文件重复提供论文: ${id}`);
             papers[id] = record;
         }
         sources.push({ path: filePath, sha256: sha256Buffer(fs.readFileSync(filePath)) });
     }
+    if (recordsVersion === RECORDS_VERSION) {
+        const taskOwners = new Map();
+        for (const [id, record] of Object.entries(papers)) {
+            const tasks = [
+                record.researchBrief?.paperSubagent?.taskName,
+                record.readabilityRubric?.reviewerTaskName,
+                record.scoringCalibration?.reviewerTaskName
+            ];
+            if (tasks.some(task => typeof task !== 'string' || !task.trim())
+                || new Set(tasks).size !== tasks.length) {
+                throw new Error(`${id} author/readability/scoring subagent task 必须完整且彼此独立`);
+            }
+            for (const task of tasks) {
+                const prior = taskOwners.get(task);
+                if (prior) throw new Error(`subagent taskName 跨论文复用: ${task} (${prior}, ${id})`);
+                taskOwners.set(task, id);
+            }
+        }
+    }
     assertNoCrossPaperTemplateReuse(papers);
-    return { date: expectedDate, agent, reviewProtocol, papers, sources };
+    return {
+        date: expectedDate,
+        agent: recordsVersion === RECORDS_VERSION && sourceAgents.size > 1
+            ? 'Codex-multi-paper-subagents'
+            : agent,
+        sourceAgents: [...sourceAgents].sort(),
+        reviewProtocol: recordsVersion === RECORDS_VERSION && sourceReviewProtocols.size > 1
+            ? 'manual-v5-multi-paper-review-v1'
+            : reviewProtocol,
+        sourceReviewProtocols: [...sourceReviewProtocols].sort(),
+        recordsVersion,
+        papers,
+        sources
+    };
 }
 
 function normalizeSourceText(value) {
@@ -580,6 +726,24 @@ function reviewedClaimsByStage(record, chunks, imageInfos = []) {
     ]));
 }
 
+function explicitReviewedClaimsByStage(record) {
+    const reviews = record.stageReviews;
+    if (!reviews || typeof reviews !== 'object') {
+        throw new Error(`${record.arxivId} records v3 缺少显式 stageReviews`);
+    }
+    return Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => {
+        const item = reviews[stage];
+        if (!item) throw new Error(`${record.arxivId} stageReviews.${stage} 缺失`);
+        const issueClaims = item.issues.map(issue => `已修复问题：${issue}`);
+        return [stage, [
+            `${stage} 人工结论（${item.decision}）：${item.conclusion}`,
+            `绑定 evidence IDs：${item.evidenceIds.join('、')}`,
+            ...issueClaims,
+            ...item.sourceQuotes
+        ]];
+    }));
+}
+
 function scoreFromDims(dims) {
     return Math.min(10, dims.reduce((sum, value) => sum + value, 0)).toFixed(1);
 }
@@ -630,7 +794,9 @@ function formatInnovationClaims(value) {
         const cleaned = paragraph
             .replace(/^第[一二两三四五六七八九十]+(?:项|点|个)(?:贡献|创新)?[：:、，.\s]*/u, '')
             .replace(/^(?:第?[一二两三四五六七八九十]+|首先)[：:、，.\s]+/u, '')
-            .replace(/^\d+[.、)]\s*/u, '')
+            // 点号编号必须后接空白；否则会把 1.3B、2.4M 等精确量的
+            // 整数部分误当列表序号吞掉。
+            .replace(/^\d+(?:[、)]\s*|\.\s+)/u, '')
             .trim();
         return `${index + 1}. ${cleaned}`;
     }).join('\n\n');
@@ -869,7 +1035,7 @@ function buildSpec(options) {
     const context = validateFullTextManifest(filtered, manifest, date, manifestPath);
     exactIdSet('records', filteredIds, Object.keys(mergedRecords.papers));
     assertNoCrossPaperTemplateReuse(mergedRecords.papers);
-    const promptBindings = buildStagePromptBindings();
+    const promptBindings = options.promptBindings || currentStagePromptBindings();
     const papers = {};
     for (const paper of filtered.papers) {
         const id = normalizedId(paper);
@@ -907,6 +1073,39 @@ function buildSpec(options) {
         const analysis = normalizeExperimentTableNumericFormatting(
             buildAnalysis(effectivePaper, record)
         );
+        const isCurrentRecords = mergedRecords.recordsVersion === RECORDS_VERSION;
+        if (isCurrentRecords) {
+            validateResearchBrief(record.researchBrief, {
+                paperId: id,
+                documentType: record.type,
+                sourceText,
+                analysis,
+                requireBindings: true
+            });
+            validateStageReviews({ version: 2, stages: record.stageReviews }, {
+                stages: REQUIRED_RECOVERY_STAGES,
+                sourceText,
+                evidenceLedger: record.evidenceLedger,
+                requireSourceBinding: true,
+                label: `${id}.stageReviews`
+            });
+            validateOpenSourceEvidence(record.openSourceEvidence, {
+                dims: record.dims,
+                resourceFlags: record,
+                sourceText,
+                requireSourceBinding: true,
+                label: `${id}.openSourceEvidence`
+            });
+            validateExactFactCoverage(analysis, sourceText, {
+                label: `${id}.analysis`,
+                externalEvidence: record.openSourceEvidence?.sourceQuotes || [],
+                boundEvidence: [
+                    ...record.resultClaims.map(claim => claim.sourceQuote),
+                    ...record.evidenceLedger.map(item => item.sourceQuote)
+                ],
+                derivedFacts: record.researchBrief?.derivedFacts || []
+            });
+        }
         const assembledParsed = parseAnalysis(analysis);
         const resultClaimValidation = validateResultClaims(record.resultClaims, sourceText, {
             documentType: record.type,
@@ -916,6 +1115,13 @@ function buildSpec(options) {
         if (!resultClaimValidation.valid) {
             throw new Error(`${id} resultClaims 未与全文闭环: ${resultClaimValidation.errors.join('；')}`);
         }
+        if (isCurrentRecords) {
+            validateResultClaimCoverageV5(record.resultClaims, {
+                documentType: record.type,
+                evidenceProfile: record.researchBrief.evidenceProfile,
+                label: `${id}.resultClaims`
+            });
+        }
         const editorialQuality = validateEditorialQuality(analysis);
         if (!editorialQuality.valid) {
             const details = editorialQuality.issues.slice(0, 8)
@@ -924,7 +1130,8 @@ function buildSpec(options) {
             throw new Error(`${id} 未通过 Manual v4 读者文本质量门禁: ${details}`);
         }
         const eligibleImages = selectImageCandidates(imageInfos, Config.ANALYSIS_CONFIG.imageCandidateMax);
-        if (explicitSelection && record.selectedImageUrls.length === 0 && eligibleImages.length > 0) {
+        if (!isCurrentRecords && explicitSelection
+            && record.selectedImageUrls.length === 0 && eligibleImages.length > 0) {
             throw new Error(`${id} 存在 ${eligibleImages.length} 个合格论文图，禁止用空 selectedImageUrls 跳过图片审查；请显式选择 1-4 张并逐图提供 imageInsertions`);
         }
         const rankedReadableImages = eligibleImages.filter(info => {
@@ -935,6 +1142,13 @@ function buildSpec(options) {
             throw new Error(`${id} 存在 ${rankedReadableImages.length} 个合格论文图；Manual 必须显式给出 selectedImageUrls 和逐图 imageInsertions，禁止自动套用通用邻文`);
         }
         const selectedImageUrls = explicitSelection ? record.selectedImageUrls : [];
+        if (isCurrentRecords) {
+            validateFigureReview(record.figureReview, {
+                imageInfos,
+                selectedImageUrls,
+                paperId: id
+            });
+        }
         const imageInsertions = selectedImageUrls.length > 0
             ? resolveManualImageInsertions(
                 analysis,
@@ -949,8 +1163,12 @@ function buildSpec(options) {
             experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
             enforceMethodDetailContract: true,
             enforceManualDepthContract: true,
-            manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V4,
-            sourceText
+            manualDepthContractVersion: isCurrentRecords
+                ? MANUAL_DEPTH_CONTRACT_VERSION_V5
+                : MANUAL_DEPTH_CONTRACT_VERSION_V4,
+            sourceText,
+            researchBrief: record.researchBrief,
+            openSourceEvidence: record.openSourceEvidence
         });
         if (invalidReason) throw new Error(`${id} 组装分析未通过 manual v4 正文契约: ${invalidReason}`);
         papers[id] = {
@@ -977,7 +1195,17 @@ function buildSpec(options) {
             editorialQualityMetrics: editorialQuality.metrics,
             manualAudit: record.manualAudit,
             stageReviewAttemptsByStage: record.stageReviewAttemptsByStage,
-            reviewedClaimsByStage: reviewedClaimsByStage(record, chunks, imageInfos),
+            reviewedClaimsByStage: isCurrentRecords
+                ? explicitReviewedClaimsByStage(record)
+                : reviewedClaimsByStage(record, chunks, imageInfos),
+            ...(isCurrentRecords ? {
+                researchBrief: JSON.parse(JSON.stringify(record.researchBrief)),
+                figureReview: JSON.parse(JSON.stringify(record.figureReview)),
+                stageReviews: JSON.parse(JSON.stringify(record.stageReviews)),
+                paperSubagent: JSON.parse(JSON.stringify(record.researchBrief.paperSubagent)),
+                scoringCalibration: JSON.parse(JSON.stringify(record.scoringCalibration)),
+                openSourceEvidence: JSON.parse(JSON.stringify(record.openSourceEvidence))
+            } : {}),
             agent: mergedRecords.agent,
             reason: record.reason || '无 API 离线人工分析；基于完整全文逐篇核验、修订并完成终审。',
             ...(record.titleOverride ? { titleOverride: record.titleOverride } : {})
@@ -1004,7 +1232,7 @@ function buildSpec(options) {
         }
     }
     return {
-        version: SPEC_VERSION,
+        version: mergedRecords.recordsVersion === RECORDS_VERSION ? SPEC_VERSION : LEGACY_SPEC_VERSION,
         mode: SPEC_MODE,
         date,
         agent: mergedRecords.agent,
@@ -1014,6 +1242,11 @@ function buildSpec(options) {
         manualAuthoringPromptSha256: sha256Buffer(fs.readFileSync(MANUAL_AUTHORING_PROMPT)),
         stagePromptSha256: Object.fromEntries(Object.entries(promptBindings).map(([stage, binding]) => [stage, binding.sha256])),
         reviewProtocol: mergedRecords.reviewProtocol,
+        recordsVersion: mergedRecords.recordsVersion,
+        ...(mergedRecords.recordsVersion === RECORDS_VERSION ? {
+            researchContract: MANUAL_RESEARCH_CONTRACT_VERSION,
+            perPaperSubagentRequired: true
+        } : {}),
         generatedAt,
         filteredBatchSha256: context.filteredBatchSha256,
         fullTextManifest: {
@@ -1049,7 +1282,7 @@ function run(argv = process.argv.slice(2)) {
     });
     const outputPath = path.join(Config.CURRENT_DIR, `manual-analysis-spec-${args.date}.json`);
     writeFileAtomic(outputPath, JSON.stringify(spec, null, 2));
-    console.log(`✅ 已原子写入 manual_complete v4 spec：${outputPath}（${Object.keys(spec.papers).length} 篇，API 调用 0）`);
+    console.log(`✅ 已原子写入 manual_complete v${spec.version} spec：${outputPath}（${Object.keys(spec.papers).length} 篇，API 调用 0）`);
     return { outputPath, spec };
 }
 
@@ -1064,15 +1297,19 @@ if (require.main === module) {
 
 module.exports = {
     RECORDS_VERSION,
+    LEGACY_RECORDS_VERSION,
     RECORDS_MODE,
     SPEC_VERSION,
+    LEGACY_SPEC_VERSION,
     parseArgs,
     validateScoreDimensions,
     validateManualAudit,
+    validateStageAttempts,
     validateRecord,
     validateRecordsEnvelope,
     normalizeTemplateText,
     reusableEditorialSentences,
+    explicitReviewedClaimsByStage,
     assertNoCrossPaperTemplateReuse,
     mergeRecordsEnvelopes,
     sourceChunks,
@@ -1082,6 +1319,7 @@ module.exports = {
     buildEvidenceLedger,
     validateEvidenceLedger,
     validateFullTextManifest,
+    resolveManualImageInsertions,
     buildSpec,
     run
 };

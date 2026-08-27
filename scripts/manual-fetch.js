@@ -367,6 +367,19 @@ function loadRaw(date) {
     return raw;
 }
 
+function assertUniqueNormalizedDecisionKeys(decisions) {
+    const seen = new Map();
+    for (const key of Object.keys(decisions || {})) {
+        const id = normalizedId(key);
+        if (!id) throw new Error(`manual filter decision key 无法规范化: ${key}`);
+        if (seen.has(id)) {
+            throw new Error(`manual filter decisions 含规范化重复 key: ${seen.get(id)} / ${key} -> ${id}`);
+        }
+        seen.set(id, key);
+    }
+    return seen;
+}
+
 function writeSelection(date, specPath) {
     const raw = loadRaw(date);
     const spec = readJson(path.resolve(specPath), 'manual filter spec');
@@ -378,6 +391,7 @@ function writeSelection(date, specPath) {
     }
     const decisions = spec.decisions;
     if (!decisions || typeof decisions !== 'object' || Array.isArray(decisions)) throw new Error('manual filter spec 缺少 decisions 对象');
+    assertUniqueNormalizedDecisionKeys(decisions);
     const rawById = new Map(raw.papers.map(paper => [normalizedId(paper), paper]));
     const decisionIds = new Set(Object.keys(decisions).map(normalizedId).filter(Boolean));
     if (decisionIds.size !== rawById.size) throw new Error(`manual filter 必须逐篇决定：收到 ${decisionIds.size}，候选 ${rawById.size}`);
@@ -504,6 +518,7 @@ module.exports = {
     validateManualRawCheckpoint,
     applyManualArchiveExclusion,
     applyManualFilterStatuses,
+    assertUniqueNormalizedDecisionKeys,
     fetchRaw,
     writeSelection,
     parseArgs

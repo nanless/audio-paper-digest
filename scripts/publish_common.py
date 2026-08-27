@@ -76,16 +76,23 @@ EXPERIMENT_TABLE_CONTRACT_VERSIONS = frozenset({
 METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1'
 IMAGE_NARRATIVE_CONTRACT_VERSION = 'context-bound-v1'
 EDITORIAL_QUALITY_CONTRACT_VERSION = 'reader-facing-v1'
+MANUAL_RESEARCH_CONTRACT_VERSION = 'audio-researcher-v1'
 DIGEST_INDEX_READER_QUALITY_VERSION = 'reader-facing-v1'
 MANUAL_DEPTH_CONTRACT_VERSION = 'full-text-evidence-v1'
 MANUAL_DEPTH_CONTRACT_VERSION_V2 = 'full-text-evidence-v2'
 MANUAL_DEPTH_CONTRACT_VERSION_V3 = 'full-text-evidence-v3'
 MANUAL_DEPTH_CONTRACT_VERSION_V4 = 'full-text-evidence-v4'
+MANUAL_DEPTH_CONTRACT_VERSION_V5 = 'full-text-evidence-v5'
 MANUAL_DEPTH_CONTRACT_VERSIONS = frozenset({
     MANUAL_DEPTH_CONTRACT_VERSION,
     MANUAL_DEPTH_CONTRACT_VERSION_V2,
     MANUAL_DEPTH_CONTRACT_VERSION_V3,
     MANUAL_DEPTH_CONTRACT_VERSION_V4,
+    MANUAL_DEPTH_CONTRACT_VERSION_V5,
+})
+MANUAL_READER_QUALITY_VERSIONS = frozenset({
+    MANUAL_DEPTH_CONTRACT_VERSION_V4,
+    MANUAL_DEPTH_CONTRACT_VERSION_V5,
 })
 MANUAL_COMPLETE_STATUS = 'manual_complete'
 MANUAL_COMPLETE_PROVENANCE_VERSION = 2
@@ -550,7 +557,15 @@ def _validate_manual_result_claim_bindings(
         fragment = bindings.get(field)
         normalized_fragment = _normalize_manual_evidence(fragment) \
             if isinstance(fragment, str) else ''
-        if len(normalized_fragment) < 2:
+        # 与 Node 门禁使用同一组完整单字符语义；其余任意单字符仍拒绝。
+        legitimate_single_character = (
+            field == 'unit'
+            and re.fullmatch(r'(?:%|s|h|W|分|帧|人)', normalized_fragment, re.I)
+        ) or (
+            field == 'direction'
+            and re.fullmatch(r'(?:↑|↓)', normalized_fragment)
+        )
+        if len(normalized_fragment) < 2 and not legitimate_single_character:
             return (
                 f'{prefix}.{binding_field}.{field} '
                 '必须是至少 2 个非空白字符的连续证据片段'
@@ -754,13 +769,13 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
     if not uses_manual and manifest.get('manualTakeover') is None:
         return
     contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
-    if contracts.get('manualDepth') == MANUAL_DEPTH_CONTRACT_VERSION_V4 \
+    if contracts.get('manualDepth') in MANUAL_READER_QUALITY_VERSIONS \
             and contracts.get('experimentTables') != EXPERIMENT_TABLE_CONTRACT_VERSION:
         raise PublishDataValidationError(
             f'{paper_label} manual v4 必须声明 '
             f'experimentTables={EXPERIMENT_TABLE_CONTRACT_VERSION}'
         )
-    if contracts.get('manualDepth') == MANUAL_DEPTH_CONTRACT_VERSION_V4 \
+    if contracts.get('manualDepth') in MANUAL_READER_QUALITY_VERSIONS \
             and contracts.get('editorialQuality') != EDITORIAL_QUALITY_CONTRACT_VERSION:
         raise PublishDataValidationError(
             f'{paper_label} manual v4 必须声明 '
@@ -784,7 +799,7 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
         if not re.fullmatch(r'[a-f0-9]{64}', str(takeover.get('promptSha256') or '')):
             raise PublishDataValidationError(f'{paper_label} manualTakeover.promptSha256 非法')
         manual_depth = (manifest.get('contracts') or {}).get('manualDepth')
-        if manual_depth in {MANUAL_DEPTH_CONTRACT_VERSION_V3, MANUAL_DEPTH_CONTRACT_VERSION_V4} \
+        if manual_depth in {MANUAL_DEPTH_CONTRACT_VERSION_V3, *MANUAL_READER_QUALITY_VERSIONS} \
                 and not re.fullmatch(r'[a-f0-9]{64}', str(takeover.get('manualAuthoringPromptSha256') or '')):
             raise PublishDataValidationError(f'{paper_label} manual v3/v4 缺少 manualAuthoringPromptSha256')
         analysis_sha = hashlib.sha256(str(paper.get('analysis') or '').encode('utf-8')).hexdigest()
@@ -799,7 +814,7 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
         required_review = ('sourceVerified', 'analysisContractVerified', 'scoringVerified', 'stageEvidenceVerified')
         if not isinstance(review, dict) or any(review.get(key) is not True for key in required_review):
             raise PublishDataValidationError(f'{paper_label} manualTakeover.review 未确认来源、正文、评分和阶段证据')
-        if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V4 \
+        if manual_depth in MANUAL_READER_QUALITY_VERSIONS \
                 and review.get('readerQualityVerified') is not True:
             raise PublishDataValidationError(
                 f'{paper_label} manual v4 review 未确认 readerQualityVerified'
@@ -824,7 +839,7 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
             raise PublishDataValidationError(f'{paper_label} manual evidenceLedger 不完整')
         if takeover.get('evidenceLedgerSha256') != _manual_hash(ledger):
             raise PublishDataValidationError(f'{paper_label} manual evidenceLedger SHA 不一致')
-        if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V4:
+        if manual_depth in MANUAL_READER_QUALITY_VERSIONS:
             result_claims = _validate_manual_v4_result_claims(
                 takeover, paper.get('analysis'), paper_label,
             )
@@ -865,6 +880,132 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
                 raise PublishDataValidationError(
                     f'{paper_label} manual v4 readabilityRubric SHA 不一致'
                 )
+        if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V5:
+            if contracts.get('researcherFocus') != MANUAL_RESEARCH_CONTRACT_VERSION \
+                    or contracts.get('perPaperSubagent') != 'isolated-single-paper-v1':
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v5 缺少 researcherFocus/perPaperSubagent 契约'
+                )
+            bound_fields = {
+                'researchBriefSha256': 'researchBrief',
+                'stageReviewsSha256': 'stageReviews',
+                'scoringCalibrationSha256': 'scoringCalibration',
+                'openSourceEvidenceSha256': 'openSourceEvidence',
+                'figureReviewSha256': 'figureReview',
+                'externalResourceVerificationSha256': 'externalResourceVerification',
+            }
+            for sha_field, value_field in bound_fields.items():
+                if takeover.get(sha_field) != _manual_hash(takeover.get(value_field)):
+                    raise PublishDataValidationError(
+                        f'{paper_label} manual v5 {sha_field} 不匹配'
+                    )
+            brief = takeover.get('researchBrief')
+            subagent = brief.get('paperSubagent') if isinstance(brief, dict) else None
+            if (not isinstance(brief, dict)
+                    or brief.get('contract') != MANUAL_RESEARCH_CONTRACT_VERSION
+                    or brief.get('audience') != 'audio_researcher'
+                    or not isinstance(subagent, dict)
+                    or subagent.get('singlePaperOnly') is not True
+                    or subagent.get('isolatedContext') is not True):
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v5 researchBrief/subagent provenance 非法'
+                )
+            stage_reviews = takeover.get('stageReviews')
+            review_stages = stage_reviews.get('stages') if isinstance(stage_reviews, dict) else None
+            if (not isinstance(stage_reviews, dict) or stage_reviews.get('version') != 2
+                    or not isinstance(review_stages, dict)
+                    or set(review_stages) != set(MANUAL_STAGE_EVIDENCE_STAGES)):
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v5 stageReviews 未精确覆盖全部阶段'
+                )
+            figure_review = takeover.get('figureReview')
+            decisions = figure_review.get('decisions') if isinstance(figure_review, dict) else None
+            if not isinstance(decisions, list):
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v5 figureReview 缺失'
+                )
+            selected_urls = [
+                item.get('url') for item in (paper.get('imageManifest') or {}).get('selected', [])
+                if isinstance(item, dict)
+            ]
+            reviewed_selected = [
+                item.get('url') for item in decisions
+                if isinstance(item, dict) and item.get('decision') == 'select'
+            ]
+            # canonical selected 按最终正文插入位置排序；figureReview 保留研究者
+            # 审图时的声明顺序。两者应校验同一组唯一 URL，而不是误把顺序当事实。
+            if (len(reviewed_selected) != len(set(reviewed_selected))
+                    or len(selected_urls) != len(set(selected_urls))
+                    or sorted(reviewed_selected) != sorted(selected_urls)):
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v5 figureReview 与 selected 图片不一致'
+                )
+            verification = takeover.get('externalResourceVerification')
+            declared_urls = (takeover.get('openSourceEvidence') or {}).get('urls') or []
+            outcomes = verification.get('outcomes', []) if isinstance(verification, dict) else []
+            outcomes_valid = isinstance(outcomes, list) and all(
+                isinstance(item, dict)
+                and item.get('status') == 'reachable_public_https'
+                and item.get('httpStatus') == 200
+                and str(item.get('finalUrl') or '').startswith('https://')
+                and isinstance(item.get('verifiedAt'), str)
+                and re.fullmatch(
+                    r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})',
+                    item['verifiedAt'],
+                )
+                and isinstance(item.get('discoveredLinks'), list)
+                and all(str(url).startswith('https://') for url in item['discoveredLinks'])
+                for item in outcomes
+            )
+            if (not isinstance(verification, dict) or verification.get('version') != 1
+                    or verification.get('state') != (takeover.get('openSourceEvidence') or {}).get('state')
+                    or not outcomes_valid
+                    or [item.get('url') for item in outcomes
+                        if isinstance(item, dict)] != declared_urls):
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v5 外部资源验证未逐 URL 闭环'
+                )
+            acquisition = manifest.get('sourceAcquisition')
+            if not isinstance(acquisition, dict):
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v5 缺少 sourceAcquisition'
+                )
+            try:
+                full_text_path = Path(acquisition.get('fullTextPath', '')).resolve(strict=True)
+                controlled_root = (Path(CURRENT_DIR) / 'manual-full-text').resolve(strict=True)
+                full_text_path.relative_to(controlled_root)
+                source_bytes = full_text_path.read_bytes()
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v5 全文路径未落在当前受控目录: {exc}'
+                ) from exc
+            if hashlib.sha256(source_bytes).hexdigest() != acquisition.get('sourceSha256'):
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v5 发布前全文 SHA 漂移'
+                )
+            source_manifest_path = full_text_path.parent / 'manifest.json'
+            try:
+                source_manifest_bytes = source_manifest_path.read_bytes()
+                source_manifest = json.loads(source_manifest_bytes.decode('utf-8'))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v5 发布前无法读取全文 manifest: {exc}'
+                ) from exc
+            if hashlib.sha256(source_manifest_bytes).hexdigest() != \
+                    acquisition.get('fullTextManifestSha256'):
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v5 发布前全文 manifest SHA 漂移'
+                )
+            source_id = normalize_publish_arxiv_id(acquisition.get('sourceId'))
+            source_entry = (source_manifest.get('papers') or {}).get(source_id)
+            if (not isinstance(source_entry, dict)
+                    or Path(source_entry.get('path', '')).resolve() != full_text_path
+                    or source_entry.get('sourceSha256') != acquisition.get('sourceSha256')
+                    or source_entry.get('paperInputSha256') != acquisition.get('paperInputSha256')
+                    or source_entry.get('sourceIdentitySha256') != acquisition.get('sourceIdentitySha256')):
+                raise PublishDataValidationError(
+                    f'{paper_label} manual v5 发布前全文 manifest membership 不一致'
+                )
         evidence = takeover.get('stageEvidence')
         stages = manifest.get('stages') or {}
         if not isinstance(evidence, dict):
@@ -894,16 +1035,28 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
                 )
 
             def normalize_image_evidence(info):
-                return {
+                normalized = {
                     'url': info.get('url'),
                     'caption': info.get('caption') or '',
                     'source': info.get('source') or None,
                     'sourceOrder': info.get('sourceOrder'),
                     'candidateScore': info.get('candidateScore'),
-                    'mime': info.get('mime'),
-                    'sha256': info.get('sha256'),
-                    'bytes': info.get('bytes'),
                 }
+                # JS 生成 downloadEvidenceSha256 时，未下载/人工拒绝候选的
+                # undefined 二进制字段会被 JSON.stringify 省略，而不是写成 null。
+                # Python 重算必须保持同一 JSON 语义。
+                for optional_key in ('mime', 'sha256', 'bytes'):
+                    if optional_key in info:
+                        normalized[optional_key] = info.get(optional_key)
+                if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V5:
+                    normalized.update({
+                        'reviewDecision': info.get('reviewDecision'),
+                        'reviewReason': info.get('reviewReason'),
+                        'figureNumber': info.get('figureNumber'),
+                        'visibleFacts': info.get('visibleFacts') or [],
+                        'renderPlan': info.get('renderPlan'),
+                    })
+                return normalized
 
             expected_download_context = _manual_hash({
                 'candidates': [normalize_image_evidence(item) for item in image_manifest['candidates']],
@@ -933,7 +1086,7 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
             state = stages.get(stage)
             if not isinstance(item, dict) or not isinstance(state, dict) or item.get('status') != state.get('status'):
                 raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage} 与阶段状态不一致')
-            if manual_depth in {MANUAL_DEPTH_CONTRACT_VERSION_V3, MANUAL_DEPTH_CONTRACT_VERSION_V4} \
+            if manual_depth in {MANUAL_DEPTH_CONTRACT_VERSION_V3, *MANUAL_READER_QUALITY_VERSIONS} \
                     and (item.get('executionKind') != MANUAL_STAGE_EXECUTION_KIND
                          or state.get('executionKind') != MANUAL_STAGE_EXECUTION_KIND):
                 raise PublishDataValidationError(
@@ -981,7 +1134,7 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
                     'stagePromptSha256': item['promptSha256'],
                     'stageContextSha256': item.get('contextSha256'),
                 }
-                if manual_depth in {MANUAL_DEPTH_CONTRACT_VERSION_V3, MANUAL_DEPTH_CONTRACT_VERSION_V4}:
+                if manual_depth in {MANUAL_DEPTH_CONTRACT_VERSION_V3, *MANUAL_READER_QUALITY_VERSIONS}:
                     expected_input_payload['executionKind'] = item.get('executionKind')
                 expected_input_sha = _manual_hash(expected_input_payload)
             else:
@@ -1188,14 +1341,28 @@ def _validate_experiment_table_evidence_depth(
                 if re.search(r'−|％|(?:^|[<>=±+\-\[(,;/]\s*)\.\d|\d\s+%', normalized):
                     return f'实验结果第 {index} 张表数字格式未规范化：“{normalized}”'
         before = '\n'.join(result_lines[:table['start_line']]).strip()
-        before = re.split(r'\n\s*\n', before)[-1] if before else ''
         after = '\n'.join(result_lines[table['end_line'] + 1:]).strip()
-        after = re.split(r'\n\s*\n', after)[0] if after else ''
-        if (len(re.sub(r'[*_`#>\s]', '', before)) < 20
-                or not re.search(r'比较|检验|考察|回答|关键问题|差异|收益|代价|是否|何种|多大|哪些', before)):
+        before_candidates = [
+            paragraph for paragraph in re.split(r'\n\s*\n', before)
+            if paragraph.strip()
+        ][-5:][::-1]
+        after_candidates = [
+            paragraph for paragraph in re.split(r'\n\s*\n', after)
+            if paragraph.strip()
+        ][:5]
+        before = next((
+            paragraph for paragraph in before_candidates
+            if len(re.sub(r'[*_`#>\s]', '', paragraph)) >= 20
+            and re.search(r'比较|检验|考察|回答|关键问题|差异|收益|代价|是否|何种|多大|哪些', paragraph)
+        ), '')
+        after = next((
+            paragraph for paragraph in after_candidates
+            if len(re.sub(r'[*_`#>\s]', '', paragraph)) >= 50
+            and re.search(r'相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化', paragraph)
+        ), '')
+        if not before:
             return f'实验结果第 {index} 张表前缺少与上下文衔接的具体比较问题'
-        if (len(re.sub(r'[*_`#>\s]', '', after)) < 50
-                or not re.search(r'相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化', after)):
+        if not after:
             return f'实验结果第 {index} 张表后缺少最关键差异、解释与证据边界'
     if empirical and tables and numeric_cells < EXPERIMENT_TABLE_LIMITS['min_numeric_cells']:
         return f"实验表格只有 {numeric_cells} 个可核对数字，至少需要 {EXPERIMENT_TABLE_LIMITS['min_numeric_cells']} 个；纯趋势或结论摘要不能替代结果表"
@@ -1766,9 +1933,9 @@ def _is_final_manual_v4(markdown, paper=None):
         manifest = paper.get('analysisManifest')
         contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
         if isinstance(contracts, dict):
-            return contracts.get('manualDepth') == MANUAL_DEPTH_CONTRACT_VERSION_V4
+            return contracts.get('manualDepth') in MANUAL_READER_QUALITY_VERSIONS
     return bool(re.search(
-        rf'^paper_digest_manual_depth:\s*["\']?{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V4)}["\']?\s*$',
+        rf'^paper_digest_manual_depth:\s*["\']?(?:{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V4)}|{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V5)})["\']?\s*$',
         str(markdown or ''),
         flags=re.MULTILINE,
     ))
@@ -1778,9 +1945,18 @@ def _final_markdown_image_occurrences(markdown):
     blocks = [block.strip() for block in re.split(r'\n\s*\n', str(markdown or '')) if block.strip()]
     occurrences = []
     for index, block in enumerate(blocks):
-        match = re.fullmatch(r'!\[(?:\\.|[^\]\\])*\]\((https://[^)\s]+)(?:\s+["\'][^"\']*["\'])?\)', block)
-        if match:
-            occurrences.append((index, match.group(1), blocks))
+        bare = re.fullmatch(
+            r'!\[(?:\\.|[^\]\\])*\]\((https://[^)\s]+)(?:\s+["\'][^"\']*["\'])?\)',
+            block,
+        )
+        linked = re.fullmatch(
+            r'\[!\[(?:\\.|[^\]\\])*\]\((https://[^)\s]+)\)\]\((https://[^)\s]+)\)',
+            block,
+        )
+        if bare:
+            occurrences.append((index, bare.group(1), blocks))
+        elif linked and linked.group(1) == linked.group(2):
+            occurrences.append((index, linked.group(1), blocks))
     return occurrences
 
 
@@ -1797,9 +1973,9 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
         manifest = paper.get('analysisManifest')
         contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
         if isinstance(contracts, dict) \
-                and contracts.get('manualDepth') == MANUAL_DEPTH_CONTRACT_VERSION_V4 \
+                and contracts.get('manualDepth') in MANUAL_READER_QUALITY_VERSIONS \
                 and not re.search(
-                    rf'^paper_digest_manual_depth:\s*["\']?{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V4)}["\']?\s*$',
+                    rf'^paper_digest_manual_depth:\s*["\']?(?:{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V4)}|{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V5)})["\']?\s*$',
                     str(markdown or ''), flags=re.MULTILINE,
                 ):
             return '最终 Markdown 缺少 Manual v4 深度标记'
@@ -2262,20 +2438,20 @@ def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
                         f'{paper_label} analysisManifest.contracts.manualDepth 非法: '
                         f'{manual_depth_contract}'
                     )
-                if manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION_V4 \
+                if manual_depth_contract in MANUAL_READER_QUALITY_VERSIONS \
                         and table_contract != EXPERIMENT_TABLE_CONTRACT_VERSION:
                     raise PublishDataValidationError(
                         f'{paper_label} manual v4 必须声明 '
                         f'experimentTables={EXPERIMENT_TABLE_CONTRACT_VERSION}'
                     )
                 if manual_depth_contract in {
-                        MANUAL_DEPTH_CONTRACT_VERSION_V3, MANUAL_DEPTH_CONTRACT_VERSION_V4}:
+                        MANUAL_DEPTH_CONTRACT_VERSION_V3, *MANUAL_READER_QUALITY_VERSIONS}:
                     manual_depth_issue = validate_manual_depth_contract_v3(paper.get('analysis'))
                     if manual_depth_issue:
                         raise PublishDataValidationError(
                             f'{paper_label} manual 全文深度契约无效: {manual_depth_issue}'
                         )
-                    if manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION_V4:
+                    if manual_depth_contract in MANUAL_READER_QUALITY_VERSIONS:
                         editorial_issue = validate_manual_editorial_quality_v4(paper.get('analysis'))
                         if editorial_issue:
                             raise PublishDataValidationError(
@@ -2296,7 +2472,7 @@ def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
                 image_narrative_contract = (
                     contracts.get('imageNarrative') if isinstance(contracts, dict) else None
                 )
-                if manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION_V4 \
+                if manual_depth_contract in MANUAL_READER_QUALITY_VERSIONS \
                         and image_narrative_contract != IMAGE_NARRATIVE_CONTRACT_VERSION:
                     raise PublishDataValidationError(
                         f'{paper_label} manual v4 必须声明 '
@@ -2317,7 +2493,7 @@ def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
                 editorial_quality_contract = (
                     contracts.get('editorialQuality') if isinstance(contracts, dict) else None
                 )
-                if manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION_V4 \
+                if manual_depth_contract in MANUAL_READER_QUALITY_VERSIONS \
                         and editorial_quality_contract != EDITORIAL_QUALITY_CONTRACT_VERSION:
                     raise PublishDataValidationError(
                         f'{paper_label} manual v4 必须声明 '
@@ -2996,6 +3172,24 @@ def escape_html_like_tags(text):
     r"""转义论文中可能被 Hugo 解析为 HTML 的标记。"""
     if not text:
         return text
+    # ``publish-to-blog.py`` deliberately emits these two exact, attribute-free
+    # container tags for the collapsible scoring section.  Protect them before
+    # the generic paper-token escaping below; otherwise the final catch-all
+    # turns our own UI markup into inline code (``<details>``) and the section
+    # no longer collapses.  Attribute-bearing/user-authored variants remain
+    # subject to the normal sanitizer.
+    safe_containers = []
+
+    def protect_safe_container(match):
+        safe_containers.append(match.group(0))
+        return f'PD_SAFE_HTML_CONTAINER_{len(safe_containers) - 1}'
+
+    text = re.sub(
+        r'</?(?:details|summary)>',
+        protect_safe_container,
+        text,
+        flags=re.IGNORECASE,
+    )
     text = re.sub(r'(?<![a-zA-Z])<(/?)([SEse])>(?![a-zA-Z0-9])', r'`<\1\2>`', text)
     text = re.sub(
         r'(?<![a-zA-Z0-9`])<(/?)(task|perception|comprehension|reasoning|agent|action|state|observation|reward|goal|intent|belief|plan|policy|environment|module|component|feature|input|output|label|class|category|type|mode|phase|stage|step|layer|block|unit|node|edge|graph|tree|path|loop|branch|condition|constraint|rule|fact|evidence|proof|hypothesis|assumption|premise|conclusion|result|finding|insight|implication|contribution|limitation|direction|extension|variant|version|update|fix|issue|error|warning|notice|info|trace|log|record|entry|item|element|object|subject|target|source|reference|cite|quote|note|comment|remark|annotation|caption|title|heading|paragraph|sentence|phrase|word|token|char|symbol|sign|mark|tag|badge|identifier|id|key|code|pin|secret|ticket|voucher|license|permit|certificate|credential|award|medal|prize|gift|bonus|benefit|advantage|edge|lead|margin|gap|difference|distance|range|scope|span|scale|size|length|width|height|depth|volume|area|surface|space|place|spot|location|site|position|point|dot|pixel|fragment|shard|piece|part|portion|section|segment|slice|chunk|block|lump|mass|body|entity|thing|article|product|goods|material|substance|matter|fabric|cloth|garment|clothing|wear|dress|costume|uniform|outfit|suit|wardrobe|closet|cabinet|cupboard|pantry|cellar|basement|attic|loft|tower|spire|dome|vault|arch|beam|column|pillar|post|pole|rod|bar|rail|track|path|way|road|route|course|direction|heading|bearing|azimuth|elevation|altitude|latitude|longitude|coordinate|interrupt|backchannel|response|free|BEsound)(?![a-zA-Z0-9`])>',
@@ -3008,6 +3202,8 @@ def escape_html_like_tags(text):
         r'`<\1\2>`',
         text
     )
+    for index, tag in enumerate(safe_containers):
+        text = text.replace(f'PD_SAFE_HTML_CONTAINER_{index}', tag)
     return text
 
 
@@ -3103,6 +3299,31 @@ def dedupe_image_alts(text):
     return re.sub(r'!\[([^\]]*)\]\(([^)\n]+)\)', repl, text)
 
 
+def link_remote_images_to_original(text):
+    """让博客中的远程论文图可点击打开原始分辨率，供手机缩放核对。"""
+    if not text:
+        return text
+    return re.sub(
+        # Alt text may contain escaped Markdown brackets (for example
+        # ``\[5\]`` from a paper caption).  Treat an escaped character as one
+        # alt-text atom instead of stopping at its closing bracket.
+        r'(?<!\[)(!\[(?:\\.|[^\]\\\n])*\]\((https://[^)\s]+)\))',
+        lambda match: f'[{match.group(1)}]({match.group(2)})',
+        text,
+    )
+
+
+def normalize_arxiv_math_double_extraction(text):
+    """折叠 arXiv HTML 将可见量与 TeX fallback 同时抽取造成的重复。"""
+    if not text:
+        return text
+    return re.sub(
+        r'(?P<value>\d+(?:\.\d+)?)∘(?P=value)\^\{\\+circ\}',
+        lambda match: f'{match.group("value")}°',
+        text,
+    )
+
+
 def fix_yaml_unbalanced_quotes(text):
     r"""修复 frontmatter 中未闭合双引号。"""
     if not text:
@@ -3140,12 +3361,14 @@ def sanitize_markdown_for_publish(text):
     text = text.replace('\ufffd\ufffd\ufffd', '。')
     text = text.replace('\ufffd\ufffd', '。')
     text = text.replace('\ufffd', '')
+    text = normalize_arxiv_math_double_extraction(text)
     text = fix_latex_delimiters(text)
     text = escape_html_like_tags(text)
     text = strip_raw_inline_html(text)
     text = fix_image_markdown(text)
     text = fix_empty_markdown_links(text)
     text = dedupe_image_alts(text)
+    text = link_remote_images_to_original(text)
     text = truncate_base64_datauri(text)
     text = fix_yaml_double_commas(text)
     text = fix_yaml_unbalanced_quotes(text)

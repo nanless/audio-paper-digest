@@ -9,6 +9,8 @@ const {
     findBrokenProse,
     findNumericTypographyDefects,
     findBareEditorialLabels,
+    findEmbeddedGeneratedHeadings,
+    findDuplicateGeneratedHeadings,
     findDuplicateLongSentences,
     findCrossSectionNearDuplicates,
     findCrossSectionNumericFactReuse,
@@ -171,6 +173,36 @@ describe('Manual v4 editorial quality primitives', () => {
             [2, 3]
         );
         assert.equal(findBareEditorialLabels('#### 论文证据直接支持的边界').length, 0);
+        assert.deepEqual(
+            findEmbeddedGeneratedHeadings('正文。\n#### 论文证据直接支持的边界\n### 进一步审视')
+                .map(item => item.title),
+            ['论文证据直接支持的边界', '进一步审视']
+        );
+        assert.deepEqual(findEmbeddedGeneratedHeadings('### 自定义实验分组'), []);
+        assert.deepEqual(
+            findDuplicateGeneratedHeadings('## 核心摘要\n正文。\n## 核心摘要\n重复。')
+                .map(item => item.title),
+            ['核心摘要']
+        );
+    });
+
+    it('blocks assembler-owned headings inside editorial fields and duplicated rendered headings', () => {
+        const embedded = validateEditorialQuality(sixSections({
+            limits: '### 论文证据直接支持的边界\n证据有限。\n\n### 进一步审视\n仍需开放域验证。'
+        }));
+        assert.ok(embedded.issues.some(item => (
+            item.code === 'embedded_generated_heading' && item.section === 'limits'
+        )));
+
+        const rendered = validateEditorialQuality([
+            '## 核心摘要', '正文。', '## 局限与问题',
+            '### 论文证据直接支持的边界', '证据有限。',
+            '### 进一步审视', '仍需开放域验证。',
+            '### 进一步审视', '重复标题下的正文。'
+        ].join('\n'));
+        assert.ok(rendered.issues.some(item => (
+            item.code === 'duplicate_generated_heading' && item.title === '进一步审视'
+        )));
     });
 
     it('finds exact long-sentence duplication without flagging short connective fragments', () => {
@@ -217,11 +249,12 @@ describe('Manual v4 editorial quality primitives', () => {
     });
 
     it('applies paragraph overload checks to reader-visible author and auxiliary sections', () => {
-        const authorBlock = `作者列表：甲${'；机构信息'.repeat(8)}`;
+        const authorBlock = `作者团队围绕实验设计展开说明${'；这段作者叙事仍在重复机构信息'.repeat(24)}`;
         const findings = findLongParagraphs({ ...sixSections(), authors: authorBlock, openSource: '代码状态清楚。' });
         assert.ok(findings.some(item => item.section === 'authors' && item.severity === 'error'));
         const validation = validateEditorialQuality({ ...sixSections(), authors: authorBlock });
         assert.ok(validation.issues.some(item => item.code === 'paragraph_too_long' && item.section === 'authors'));
+        assert.deepEqual(findLongParagraphs({ ...sixSections(), authors: `作者列表：甲${'；机构信息'.repeat(24)}` }), []);
     });
 
     it('detects Han/ASCII adhesions but ignores URLs and inline code', () => {

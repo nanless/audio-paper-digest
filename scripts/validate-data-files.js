@@ -28,6 +28,7 @@ const {
     isRecoveryStageTerminal,
     MANUAL_COMPLETE_STATUS,
     MANUAL_DEPTH_CONTRACT_VERSION_V4,
+    MANUAL_DEPTH_CONTRACT_VERSION_V5,
     MANUAL_DEPTH_CONTRACT_VERSIONS,
     validateManualTakeoverManifest
 } = require('./analysis-contract.js');
@@ -436,7 +437,8 @@ function validateAnalysisSourceProvenance(filePath, source, prefix, issues) {
 
 function loadBoundManualV4SourceText(filePath, batchDate, paper, paperIndex) {
     const manifest = paper?.analysisManifest;
-    if (manifest?.contracts?.manualDepth !== MANUAL_DEPTH_CONTRACT_VERSION_V4) {
+    if (![MANUAL_DEPTH_CONTRACT_VERSION_V4, MANUAL_DEPTH_CONTRACT_VERSION_V5]
+        .includes(manifest?.contracts?.manualDepth)) {
         return { required: false, sourceText: '' };
     }
     const prefix = `papers[${paperIndex}].analysisManifest.sourceAcquisition`;
@@ -497,6 +499,58 @@ function loadBoundManualV4SourceText(filePath, batchDate, paper, paperIndex) {
     }
     if (entry.sourceSha256 !== sourceSha256) {
         return { required: true, error: `${prefix} 与受控全文 manifest 的 SHA 不一致` };
+    }
+
+    const strictAssemblerClosure = [4, 5].includes(acquisition.manualSpecVersion);
+    if (strictAssemblerClosure) {
+        const filteredPath = path.join(dataRoot, 'filtered-papers.json');
+        const filtered = readJsonSafe(filteredPath, null);
+        if (!isPlainObject(filtered) || filtered.batchDate !== batchDate
+            || filtered.status !== 'complete' || !Array.isArray(filtered.papers)) {
+            return { required: true, error: `${prefix} 缺少同批 complete filtered-papers.json` };
+        }
+        const {
+            buildManifestContext,
+            isReusableFullTextCheckpoint,
+            stableSha256
+        } = require('./manual-fetch-fulltext.js');
+        let context;
+        try {
+            context = buildManifestContext(filtered, batchDate, realRoot);
+        } catch (error) {
+            return { required: true, error: `${prefix} 无法重建 filtered 输入身份: ${error.message}` };
+        }
+        const input = context.byId.get(paperId);
+        let sourceManifestSha256 = '';
+        try {
+            sourceManifestSha256 = crypto.createHash('sha256')
+                .update(fs.readFileSync(sourceManifestPath)).digest('hex');
+        } catch (error) {
+            return { required: true, error: `${prefix} 无法重算 full-text manifest SHA: ${error.message}` };
+        }
+        if (!input
+            || sourceManifest.version !== 2
+            || sourceManifest.status !== 'complete'
+            || sourceManifest.failed !== 0
+            || sourceManifest.count !== filtered.papers.length
+            || sourceManifest.filteredBatchSha256 !== context.filteredBatchSha256
+            || sourceManifest.filteredPapersSha256 !== context.filteredBatchSha256
+            || stableSha256(sourceManifest.expectedPaperInputs) !== stableSha256(context.expectedPaperInputs)
+            || !isReusableFullTextCheckpoint(entry, input.filePath, input)
+            || acquisition.requestedArxivId !== input.requestedArxivId
+            || path.resolve(String(acquisition.fullTextPath || '')) !== path.resolve(entry.path)
+            || acquisition.sourceIdentitySha256 !== entry.sourceIdentitySha256
+            || acquisition.paperMetadataSha256 !== input.paperMetadataSha256
+            || acquisition.paperInputSha256 !== input.paperInputSha256
+            || acquisition.filteredBatchSha256 !== context.filteredBatchSha256
+            || acquisition.fullTextManifestSha256 !== sourceManifestSha256
+            || !SHA256_RE.test(String(acquisition.recordsSourcesSha256 || ''))
+            || acquisition.imageInfosSha256 !== stableContentSha256(entry.imageInfos || [])) {
+            return {
+                required: true,
+                error: `${prefix} 未通过 filtered/full-text/metadata/input/source/image assembler 全文闭环`
+            };
+        }
     }
 
     let realSourcePath;
@@ -737,7 +791,9 @@ function validatePaperListFile(filePath, options = {}) {
                         manualDepthContractVersion
                     ),
                     manualDepthContractVersion,
-                    sourceText
+                    sourceText,
+                    researchBrief: paper.analysisManifest?.manualTakeover?.researchBrief,
+                    openSourceEvidence: paper.analysisManifest?.manualTakeover?.openSourceEvidence
                 });
                 if (invalidReason) {
                     addIssue(issues, filePath, `papers[${index}] analysis 正文契约非法: ${invalidReason}`);
@@ -1465,5 +1521,6 @@ module.exports = {
     validateFilteredDeepPapersConsistency,
     validateSourceHealth,
     loadBoundManualV4SourceText,
+    validateManualV4CanonicalSourceClosure: loadBoundManualV4SourceText,
     hasAnyCurrentDataFiles
 };

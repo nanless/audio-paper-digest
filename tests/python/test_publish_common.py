@@ -25,11 +25,14 @@ from publish_common import (  # noqa: E402
     detect_publish_api_type,
     EXPERIMENT_TABLE_CONTRACT_VERSION,
     EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION,
+    escape_html_like_tags,
     METHOD_DETAIL_CONTRACT_VERSION,
     extract_markdown_tables,
     fix_empty_markdown_links,
     fix_yaml_unbalanced_quotes,
     get_today_bj,
+    link_remote_images_to_original,
+    normalize_arxiv_math_double_extraction,
     load_papers,
     paper_batch_date,
     call_publish_llm_api,
@@ -51,6 +54,7 @@ from publish_common import (  # noqa: E402
     MANUAL_STAGE_EVIDENCE_STAGES,
     _manual_hash,
     _manual_v4_reader_view,
+    _validate_manual_result_claim_bindings,
     _validate_manual_v4_result_claims,
     _validate_manual_takeover_manifest,
 )
@@ -264,6 +268,22 @@ def manual_result_claim_fixture(
 
 
 class PublishCommonSanitizerTest(unittest.TestCase):
+    def test_manual_binding_single_character_whitelist_matches_node(self):
+        claim = manual_result_claim_fixture('7.1')
+        claim['sourceQuote'] += ' unit % direction ↓'
+        claim['sourceBindings']['unit'] = '%'
+        claim['sourceBindings']['direction'] = '↓'
+        self.assertIsNone(_validate_manual_result_claim_bindings(
+            claim, 'sourceBindings', claim['sourceQuote'], 'fixture',
+        ))
+        for field, fragment in (('unit', 'x'), ('direction', '→')):
+            invalid = copy.deepcopy(claim)
+            invalid['sourceQuote'] += f' {fragment}'
+            invalid['sourceBindings'][field] = fragment
+            self.assertIn('至少 2 个非空白字符', _validate_manual_result_claim_bindings(
+                invalid, 'sourceBindings', invalid['sourceQuote'], 'fixture',
+            ))
+
     def test_manual_v4_reader_lexical_boundaries_and_node_parity(self):
         safe = '''## 核心摘要
 系统把标签统一成同一条件；唯一分层用于二分类。目标具有有界项与有限状态，功能能否启用取决于输入，性能能够稳定复现。
@@ -972,6 +992,32 @@ confidence: 中
         self.assertIn('文档类型：系统技术报告', meta)
         self.assertIn('评分置信度：中', meta)
 
+    def test_python_tag_roles_match_node_primary_task_and_method_rules(self):
+        benchmark = '''## 评分
+6.0/10
+
+## 机器摘要
+document_type: benchmark
+primary_task_tag: #模型评估
+primary_method_tag: #基准测试
+
+## 标签
+#模型评估 #基准测试 #音频理解
+主任务标签：#模型评估
+主方法标签：#基准测试
+'''
+        parsed = parse_analysis(benchmark)
+        self.assertEqual(parsed['primaryTaskTag'], '#音频理解')
+        self.assertEqual(parsed['primaryMethodTag'], '#模型评估')
+
+        foundation = benchmark.replace(
+            '#模型评估 #基准测试 #音频理解',
+            '#统一音频模型 #音频大模型 #音频理解',
+        ).replace('primary_task_tag: #模型评估', 'primary_task_tag: #统一音频模型')
+        parsed = parse_analysis(foundation)
+        self.assertEqual(parsed['primaryTaskTag'], '#音频理解')
+        self.assertEqual(parsed['primaryMethodTag'], '#统一音频模型')
+
     def test_empty_links_and_duplicate_alts(self):
         text = '![图]()\n![same](a.png)\n![same](b.png)\n[空]()'
         fixed = dedupe_image_alts(fix_empty_markdown_links(text))
@@ -981,9 +1027,47 @@ confidence: 中
         self.assertIn('空', fixed)
         self.assertNotIn('[空]()', fixed)
 
+    def test_remote_paper_images_link_to_full_resolution_without_double_wrapping(self):
+        image = '![方法总览](https://arxiv.org/html/2608.00001v1/method.png)'
+        linked = link_remote_images_to_original(image)
+        self.assertEqual(
+            linked,
+            '[![方法总览](https://arxiv.org/html/2608.00001v1/method.png)]'
+            '(https://arxiv.org/html/2608.00001v1/method.png)',
+        )
+        self.assertEqual(link_remote_images_to_original(linked), linked)
+
+    def test_remote_paper_image_with_escaped_brackets_is_clickable(self):
+        image = (
+            r'![T-SNE from LLaMA-2-7B \[5\]]'
+            r'(https://arxiv.org/html/2608.24209v1/figures/T-sne.png)'
+        )
+        linked = link_remote_images_to_original(image)
+        self.assertEqual(linked, f'[{image}]'
+                         '(https://arxiv.org/html/2608.24209v1/figures/T-sne.png)')
+        self.assertEqual(link_remote_images_to_original(linked), linked)
+
+    def test_arxiv_visible_degree_and_tex_fallback_are_not_both_published(self):
+        for caption in (
+            r'prediction is overlaid on the 360∘360^{\circ} frames',
+            r'prediction is overlaid on the 360∘360^{\\circ} frames',
+        ):
+            self.assertEqual(
+                normalize_arxiv_math_double_extraction(caption),
+                'prediction is overlaid on the 360° frames',
+            )
+
     def test_strip_raw_inline_html(self):
         self.assertEqual(strip_raw_inline_html('A <u>under</u> B'), 'A under B')
         self.assertEqual(strip_raw_inline_html('A <b>x</b> B'), 'A x B')
+
+    def test_escape_html_like_tags_preserves_generated_scoring_containers(self):
+        text = '<details>\n<summary>评分理由</summary>\n<task>paper token</task>\n</details>'
+        fixed = escape_html_like_tags(text)
+        self.assertIn('<details>', fixed)
+        self.assertIn('<summary>评分理由</summary>', fixed)
+        self.assertIn('</details>', fixed)
+        self.assertIn('`<task>`paper token</task>', fixed)
 
     def test_yaml_unbalanced_quotes(self):
         text = '---\ntitle: "Bad title\n---\nbody'
@@ -1548,6 +1632,17 @@ confidence: 中
 '''
         self.assertIsNone(validate_experiment_table_contract(
             valid,
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type='方法研究',
+        ))
+        with_inserted_figure = valid.replace(
+            '表中保留主方法、最强基线与关键消融。\n\n| 方法 / 设置 |',
+            '表中保留主方法、最强基线与关键消融。\n\n'
+            '如下图用于解释方法结构。\n\n![方法图](https://example.com/method.png)\n\n'
+            '图后说明只负责结构，不替代表格数字。\n\n| 方法 / 设置 |',
+        )
+        self.assertIsNone(validate_experiment_table_contract(
+            with_inserted_figure,
             contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
             document_type='方法研究',
         ))

@@ -8,11 +8,12 @@
 
 ### 3.0 自动链路与人工接管链路
 
-常规路径使用关键词预筛 + LLM 筛选、多阶段 LLM 深度分析和三层博客 review。模型服务不可用时允许显式接管，但不会因 API 超时、配额或网络错误自动切换：
+默认路径使用 Manual v5；只有用户明确要求 API/LLM 时才使用关键词预筛、模型筛选、多阶段 LLM 分析和普通三层 review。Manual 路线不会因 API 状态自动改变语义：
 
 - `manual-fetch.js --raw` 仍联网抓取 arXiv/HuggingFace，只是不调用筛选模型；`--select` 接收完整覆盖候选全集的 `manual_offline` v1 逐篇裁决，并把输入 SHA、reviewer 和协议指纹写入筛选四件套。
-- `manual-deep-analysis.js` 不调用 LLM/API；records v2 组装当前 spec v4，每篇绑定受控全文 SHA、`manual-analysis-record.md` 与各阶段 prompt、至少六条可定位证据、两轮审计和独立 reviewed claims。Manual v4 继承 v3 的论证型摘要、输入到输出的方法链、缺口—机制—证据—边界式创新、比较/消融与负面结果、复现条件和双层局限，并强制 `experimentTables=evidence-rich-v2` 与逐图上下文绑定；完整 `editorial` 是最终正文。兼容阶段标记 `executionKind=manual_attestation`。只有整批通过普通分析契约与 `full-text-evidence-v4` 才写 canonical；旧 spec v3 可读但继续产生 v3 + `bounded-v1`，不追溯套用 v4。
-- Manual v4 的读者质量不只靠字数：每篇至少 3 条 `resultClaims` 用连续原句绑定设置、方法、基线、指标、数值、单位和方向；7 维 `readabilityRubric` 总分至少 12/14 且无 0 分。精确数量用阿拉伯数字，确定性层同时阻断篇内/跨篇模板、术语粘连、过长段落和防御性否定过密。
+- `manual-deep-analysis.js` 不调用 LLM/API；当前 records v3 组装 spec v5，并写 `full-text-evidence-v5` canonical。每篇由独立 subagent 提交研究者详略计划、全文图表/算法 inventory、显式逐阶段审计、独立评分与可读性复核、跨实验组 claims、精确数量来源和全部图片决策；ingestion 必须重放 official assembler。
+- Manual v5 的读者质量不只靠字数：系统/方法论文至少 4 条 `resultClaims` 且跨至少 2 个实验组，连续原句绑定设置、方法、基线、指标、数值、单位和方向；7 维 `readabilityRubric` 总分至少 12/14 且无 0 分。精确数量用阿拉伯数字，确定性层同时阻断篇内/跨篇模板、术语粘连、过长段落和防御性否定过密。
+- records v2/spec v4 与 spec v3 仅作历史兼容；新日更不得降级。v4 继续写 `full-text-evidence-v4`，v3 继续写 v3 + `bounded-v1`，均不追溯套用 v5。
 - 最终读者门禁覆盖作者与机构、毒舌点评、正文六章、评分理由和开源详情；“进一步审视”作为局限章节的一部分同样受检。新汇总页以 `paper_digest_reader_quality: "reader-facing-v1"` 显式启用相同的精确定量、术语间距、模板与病句检查，旧汇总页无标记时保持兼容。
 - `manual-review-blog.py` 只在 LLM review 服务不可用时替代语义模型。它要求 v2 attestation 对 generation 中每个现存文件绑定 SHA、批次内唯一且含页面标识的 notes，并逐项确认标题、技术叙事、事实、实验、复现、局限、评分和图片；唯一性比较会剥离页面 ID、日期或删除文件名，拒绝仅替换标识符的批量模板；受控删除项则显式绑定 `deleted:true`、空 SHA、`deletionVerified` 和包含文件名的删除说明。脚本仍执行确定性复验、Git 基线、review 协议和 Hugo gate 绑定，若确定性层修改页面则旧 attestation 立即失效。输出图片审查模式为 `manual_semantic` 的 receipt，push 会重验逐文件 provenance 与远端 OID。
 

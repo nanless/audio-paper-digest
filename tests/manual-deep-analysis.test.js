@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const Config = require('../scripts/config.js');
 
 const { validAnalysisText } = require('./valid-analysis-fixture.js');
 const {
@@ -25,10 +26,14 @@ const {
     finalizeManualCanonicalState,
     manualCanonicalReuseFingerprint,
     manualCanonicalWriteDecision,
+    normalizeDiscoveredHttpsLinks,
     normalizeManualV4ImageArtifacts,
     parseArgs,
+    readCachedExternalResourceOutcome,
     resolveManualSpecPromptBindings,
-    shouldReuseCanonical
+    runFixedWorkers,
+    shouldReuseCanonical,
+    writeCachedExternalResourceOutcome
 } = require('../scripts/manual-deep-analysis.js');
 const {
     applyImageInsertionPlan,
@@ -264,6 +269,70 @@ function promoteReusableRecordToV4(record) {
     return promoted;
 }
 
+describe('manual canonical runtime controls', () => {
+    it('normalizes discovered bare public domains to HTTPS before caching provenance', () => {
+        assert.deepStrictEqual(normalizeDiscoveredHttpsLinks([
+            'github.com/example/project',
+            'https://example.com/demo',
+            'javascript:alert(1)',
+            'github.com/example/project',
+        ]), [
+            'https://github.com/example/project',
+            'https://example.com/demo',
+        ]);
+    });
+
+    it('固定 worker 池最多并发处理 3 篇且不漏项', async () => {
+        let active = 0;
+        let maxActive = 0;
+        const seen = [];
+        await runFixedWorkers(Array.from({ length: 8 }, (_, index) => index), async item => {
+            active++;
+            maxActive = Math.max(maxActive, active);
+            await new Promise(resolve => setTimeout(resolve, 10));
+            seen.push(item);
+            active--;
+        });
+        assert.equal(maxActive, 3);
+        assert.deepStrictEqual(seen.sort((a, b) => a - b), Array.from({ length: 8 }, (_, index) => index));
+    });
+
+    it('外部资源成功结果在 24 小时内持久复用，过期后失效', () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-resource-cache-'));
+        const originalPath = Config.FILES.manualExternalResourceCache;
+        Config.FILES.manualExternalResourceCache = path.join(tempDir, 'cache.json');
+        const checkedAt = '2026-08-26T10:00:00+08:00';
+        const url = 'https://example.com/project';
+        try {
+            writeCachedExternalResourceOutcome({
+                url,
+                status: 'reachable_public_https',
+                finalUrl: `${url}/home`,
+                httpStatus: 200,
+                discoveredLinks: ['https://github.com/example/project']
+            }, checkedAt);
+            assert.deepStrictEqual(
+                readCachedExternalResourceOutcome(url, Date.parse(checkedAt) + 60_000),
+                {
+                    url,
+                    status: 'reachable_public_https',
+                    finalUrl: `${url}/home`,
+                    httpStatus: 200,
+                    discoveredLinks: ['https://github.com/example/project'],
+                    verifiedAt: checkedAt
+                }
+            );
+            assert.equal(
+                readCachedExternalResourceOutcome(url, Date.parse(checkedAt) + 24 * 60 * 60 * 1000 + 1),
+                null
+            );
+        } finally {
+            Config.FILES.manualExternalResourceCache = originalPath;
+            fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+    });
+});
+
 describe('manual_complete v3 deep-analysis contract', () => {
     it('保留完整图注意义，不以字符数或分号制造半句截断', () => {
         const longSingleSentence = `Fig. 1: ${'Illustration of the considered active sonar scenario '.repeat(5).trim()} in a time-varying multipath channel.`;
@@ -331,6 +400,21 @@ describe('manual_complete v3 deep-analysis contract', () => {
         assert.throws(
             () => resolveManualSpecPromptBindings({ ...historical, version: 4 }, current),
             /与当前 deep-analysis prompt 不一致/
+        );
+        const currentV5 = {
+            ...historical,
+            version: 5,
+            promptSha256: current.primaryAnalysis.sha256,
+            manualAuthoringPromptSha256: directSha(fs.readFileSync(
+                path.join(__dirname, '..', 'prompts', 'manual-analysis-record.md')
+            )),
+            stagePromptSha256: Object.fromEntries(
+                Object.entries(current).map(([stage, binding]) => [stage, binding.sha256])
+            )
+        };
+        assert.equal(
+            resolveManualSpecPromptBindings(currentV5, current).scoringAudit.sha256,
+            current.scoringAudit.sha256
         );
         const incomplete = { ...historical, stagePromptSha256: { ...historicalStageSha } };
         delete incomplete.stagePromptSha256.imageSupplement;
@@ -451,7 +535,14 @@ describe('manual_complete v3 deep-analysis contract', () => {
             }],
             selectedImageUrls: []
         });
-        assert.deepStrictEqual(prepared, { preparedImages: [], imageDownloadOutcomes: [] });
+        assert.deepStrictEqual(prepared, {
+            preparedImages: [],
+            imageDownloadOutcomes: [{
+                url: 'https://arxiv.org/html/2608.20000/figure1.png',
+                status: 'manual_rejected',
+                reason: 'not_selected_by_manual_figure_review'
+            }]
+        });
     });
 
     it('拒绝通用提示词残留，即使结构和评分都完整', () => {
@@ -799,7 +890,14 @@ describe('manual_complete v3 deep-analysis contract', () => {
             generation: 3,
             batchDate: '2026-08-20',
             status: 'partial_failed',
-            stats: { success: 0, failed: 2 },
+            stats: {
+                success: 0,
+                failed: 2,
+                totalAfterMerge: 0,
+                expected: 0,
+                successfulExpected: 0,
+                remainingFailed: 2
+            },
             papers: [first, second]
         }));
 
@@ -813,6 +911,10 @@ describe('manual_complete v3 deep-analysis contract', () => {
         assert.equal(completed.stats.success, 2);
         assert.equal(completed.stats.failed, 0);
         assert.deepEqual(completed.stats.failedIds, []);
+        assert.equal(completed.stats.totalAfterMerge, 2);
+        assert.equal(completed.stats.expected, 2);
+        assert.equal(completed.stats.successfulExpected, 2);
+        assert.equal(completed.stats.remainingFailed, 0);
         assert.equal(completed.generation, 4);
         assert.ok(completed.deepAnalysisCompletedAt);
 
@@ -838,6 +940,10 @@ describe('manual_complete v3 deep-analysis contract', () => {
         assert.equal(partial.stats.success, 1);
         assert.equal(partial.stats.failed, 1);
         assert.deepEqual(partial.stats.failedIds, ['2608.21002']);
+        assert.equal(partial.stats.totalAfterMerge, 2);
+        assert.equal(partial.stats.expected, 2);
+        assert.equal(partial.stats.successfulExpected, 1);
+        assert.equal(partial.stats.remainingFailed, 1);
         assert.equal(partial.stats.failedCheckpoints, 1);
         assert.equal(partial.deepAnalysisCompletedAt, undefined);
     });
