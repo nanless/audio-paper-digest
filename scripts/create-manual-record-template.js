@@ -5,6 +5,19 @@ const path = require('path');
 const Config = require('./config.js');
 const { normalizedId, writeFileAtomic } = require('./utils.js');
 const { REQUIRED_RECOVERY_STAGES } = require('./analysis-contract.js');
+const {
+    FRESH_AUTHORING_CONTRACT,
+    FRESH_AUTHORING_MODE,
+    FRESH_INPUT_KINDS,
+    AUTHORING_PROMPT_PATH,
+    EDITORIAL_CONTRACT_PATH,
+    BLANK_SCHEMA_PATH,
+    defaultArticlePath
+} = require('./manual-fresh-authoring-contract.js');
+const {
+    MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT,
+    defaultTutorialPayloadPaths
+} = require('./manual-v5-tutorial-payload.js');
 
 function parseArgs(argv) {
     const options = {};
@@ -38,6 +51,25 @@ function buildTemplate(date, paperId, options = {}) {
     const manifest = options.manifest || readJson(manifestPath, 'manual full-text manifest');
     const source = manifest.papers?.[paperId];
     if (!source || source.status !== 'complete') throw new Error(`${paperId} 缺少 complete 全文 checkpoint`);
+    const artifactManifestPath = path.join(
+        Config.CURRENT_DIR, 'manual-full-text', date, 'artifacts', 'manifest.json'
+    );
+    const artifactManifest = options.artifactManifest
+        || readJson(artifactManifestPath, 'ArtifactIndex manifest');
+    const artifact = artifactManifest.papers?.[paperId];
+    if (!artifact || artifact.status !== 'complete' || !artifact.path) {
+        throw new Error(`${paperId} 缺少 complete ArtifactIndex checkpoint`);
+    }
+    const articlePath = defaultArticlePath(Config.CURRENT_DIR, date, paperId);
+    const tutorialPaths = defaultTutorialPayloadPaths(Config.CURRENT_DIR, date, paperId);
+    const officialProjectEvidencePath = path.join(
+        Config.CURRENT_DIR, 'manual-full-text', date, 'external-evidence',
+        `${paperId}-official-project.json`
+    );
+    const freshKinds = [
+        ...FRESH_INPUT_KINDS,
+        ...(fs.existsSync(officialProjectEvidencePath) ? ['official_project_evidence'] : [])
+    ];
     const imageInfos = Array.isArray(source.imageInfos) ? source.imageInfos : [];
     const placeholderStage = stage => ({
         decision: 'manual_verified',
@@ -71,6 +103,7 @@ function buildTemplate(date, paperId, options = {}) {
             },
             editorialPlan: {
                 version: 2,
+                readerFormatContract: 'graduate-researcher-tutorial-quality-v2',
                 readerTitle: 'TODO: 面向研究者的中文观点式标题，不得复述英文论文题目',
                 oneSentenceThesis: 'TODO: 40-120 字的一句话判断，必须原样写入核心摘要并说明论文如何化解中心矛盾。',
                 governingTension: {
@@ -125,6 +158,51 @@ function buildTemplate(date, paperId, options = {}) {
             details: 'TODO', limits: 'TODO', open: 'TODO',
             review: 'TODO: 发布开场的毒舌点评；总长 180-700 字且恰好两段，每段至少 70 字。第一段明确评价最扎实优点，第二段明确指出证据或适用边界不足；两段各复用 readerArticle 中至少一个论文特有机制、实验或边界短语。',
             readerArticle: 'TODO: 2400-24000 字的发布正文；只用 editorialPlan.sectionPlan 中同序的 ### 论文特有小节，完整回答问题、嵌入 readerNarrative 与图文，不得使用方法概述/实验结果等固定栏目名。'
+        },
+        freshAuthoring: {
+            contract: FRESH_AUTHORING_CONTRACT,
+            mode: FRESH_AUTHORING_MODE,
+            authoringSessionId: 'TODO: 本次冷启动写作 subagent task/session ID',
+            articlePath,
+            articleSha256: 'TODO: article.md trim+NFKC 后 UTF-8 SHA-256',
+            articleFileSha256: 'TODO: article.md 原始文件字节 SHA-256',
+            receiptSha256: 'TODO: 可留空，由 official assembler 规范化生成；若填写必须一致',
+            prohibitedProseInputs: [],
+            inputs: freshKinds.map(kind => ({
+                kind,
+                path: {
+                    paper_metadata: Config.FILES.filteredPapers,
+                    source_snapshot: source.path,
+                    artifact_index: artifact.path,
+                    authoring_prompt: AUTHORING_PROMPT_PATH,
+                    editorial_contract: EDITORIAL_CONTRACT_PATH,
+                    blank_schema: BLANK_SCHEMA_PATH,
+                    official_project_evidence: officialProjectEvidencePath
+                }[kind],
+                sha256: 'TODO: 对应权威文件原始字节 SHA-256'
+            }))
+        },
+        tutorialPayload: {
+            contract: MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT,
+            paperId,
+            articleSha256: 'TODO: 必须等于 freshAuthoring.articleSha256',
+            freshAuthoringReceiptSha256: 'TODO: 必须等于 freshAuthoring.receiptSha256',
+            artifactIndexSha256: 'TODO: complete ArtifactIndex 的 output/artifact SHA',
+            qualityContract: 'graduate-researcher-tutorial-quality-v2',
+            qualityPath: tutorialPaths.qualityPath,
+            qualityFileSha256: 'TODO: quality.json 原始文件 SHA-256',
+            qualityPacketSha256: 'TODO: quality.json 稳定对象 SHA-256',
+            artifactPlanPath: tutorialPaths.artifactPlanPath,
+            artifactPlanFileSha256: 'TODO: artifact-plan.json 原始文件 SHA-256',
+            artifactPlanSha256: 'TODO: artifact-plan.json 稳定对象 SHA-256',
+            artifactPlanBindingSha256: 'TODO: quality.artifactPlan.sha256 使用的 JSON 绑定 SHA',
+            validation: {
+                contract: 'graduate-researcher-tutorial-quality-v2',
+                paperId,
+                articleSha256: 'TODO', articleCharacters: 0,
+                sectionCount: 0, tableCount: 0, figureCount: 0
+            },
+            receiptSha256: 'TODO: 可留空，由 official assembler 重放并规范化生成'
         }
     };
     return {
@@ -133,6 +211,7 @@ function buildTemplate(date, paperId, options = {}) {
         date,
         agent: 'Codex',
         reviewProtocol: 'manual-v5-isolated-paper-review-v1',
+        tutorialPayloadContract: MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT,
         source: { fullTextPath: source.path, sourceSha256: source.sourceSha256, imageCount: imageInfos.length },
         papers: { [paperId]: record }
     };

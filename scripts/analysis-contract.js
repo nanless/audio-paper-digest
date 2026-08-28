@@ -12,9 +12,18 @@ const {
     validateScoringCalibration,
     validateExactFactCoverage,
     validateResultClaimCoverageV5,
-    validateReaderArticle,
     validateEditorialReview
 } = require('./manual-research-contract.js');
+const {
+    validateManualTutorialReaderBundle
+} = require('./manual-tutorial-contract-orchestrator.js');
+const {
+    FRESH_AUTHORING_CONTRACT,
+    FRESH_AUTHORING_MODE
+} = require('./manual-fresh-authoring-contract.js');
+const {
+    MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT
+} = require('./manual-v5-tutorial-payload.js');
 
 const REQUIRED_ANALYSIS_SECTIONS = Object.freeze([
     '评分',
@@ -914,6 +923,45 @@ function validateManualEvidenceLedger(ledger, sourceText = '') {
     return null;
 }
 
+function validateFreshAuthoringCanonicalBinding(manifest, takeover) {
+    const marker = manifest?.contracts?.freshAuthoring;
+    // Historical v5 canonical records predate the file-backed fresh-authoring
+    // contract. Keep them readable for validation/migration, while every new
+    // v5 record emitted by manual-deep-analysis carries the explicit marker.
+    if (marker === undefined) return null;
+    if (marker !== FRESH_AUTHORING_CONTRACT) {
+        return `manual v5 freshAuthoring 契约标记非法: ${String(marker)}`;
+    }
+    if (!takeover?.freshAuthoring
+        || takeover.freshAuthoring.contract !== FRESH_AUTHORING_CONTRACT
+        || takeover.freshAuthoring.mode !== FRESH_AUTHORING_MODE
+        || takeover.freshAuthoring.prohibitedProseInputs?.length !== 0
+        || takeover.freshAuthoringSha256 !== manualSha256(takeover.freshAuthoring)) {
+        return 'manualTakeover.freshAuthoring 缺失、允许旧 prose 或 SHA 不闭环';
+    }
+    return null;
+}
+
+function validateTutorialPayloadCanonicalBinding(manifest, takeover) {
+    const marker = manifest?.contracts?.tutorialPayload;
+    // Historical v5 records without the marker remain readable only.  The
+    // publisher separately refuses to package them as a new tutorial page.
+    if (marker === undefined) return null;
+    if (marker !== MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT) {
+        return `manual v5 tutorialPayload 契约标记非法: ${String(marker)}`;
+    }
+    const payload = takeover?.tutorialPayload;
+    if (!payload || payload.contract !== MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT
+        || payload.paperId !== manifest?.sourceAcquisition?.sourceId
+        || payload.articleSha256 !== takeover?.freshAuthoring?.articleSha256
+        || payload.freshAuthoringReceiptSha256 !== takeover?.freshAuthoring?.receiptSha256
+        || takeover.tutorialPayloadSha256 !== manualSha256(payload)
+        || payload.receiptSha256 !== manualSha256((({ receiptSha256: _sha, ...rest }) => rest)(payload))) {
+        return 'manualTakeover.tutorialPayload 缺失或与 fresh/article/receipt SHA 不闭环';
+    }
+    return null;
+}
+
 function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options = {}) {
     if (takeover.version !== MANUAL_COMPLETE_PROVENANCE_VERSION
         || takeover.mode !== MANUAL_COMPLETE_STATUS) {
@@ -1029,6 +1077,10 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
         if (manifest?.contracts?.researcherFocus !== MANUAL_RESEARCH_CONTRACT_VERSION) {
             return `manual v5 必须绑定 researcherFocus=${MANUAL_RESEARCH_CONTRACT_VERSION}`;
         }
+        const freshAuthoringIssue = validateFreshAuthoringCanonicalBinding(manifest, takeover);
+        if (freshAuthoringIssue) return freshAuthoringIssue;
+        const tutorialPayloadIssue = validateTutorialPayloadCanonicalBinding(manifest, takeover);
+        if (tutorialPayloadIssue) return tutorialPayloadIssue;
         try {
             validateResearchBrief(takeover.researchBrief, {
                 paperId: manifest?.sourceAcquisition?.sourceId,
@@ -1069,7 +1121,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
                 paperId: manifest?.sourceAcquisition?.sourceId
             });
             if (takeover.researchBrief?.editorialPlan?.version === 2) {
-                validateReaderArticle(takeover.researchBrief.editorialPlan, takeover.readerArticle, takeover.evidenceLedger, {
+                validateManualTutorialReaderBundle(takeover.researchBrief.editorialPlan, takeover.readerArticle, takeover.evidenceLedger, {
                     label: 'manualTakeover.readerArticle', sourceText: options.sourceText || '',
                     boundEvidence: [
                         ...(takeover.resultClaims || []).map(claim => claim.sourceQuote),
@@ -1567,6 +1619,8 @@ module.exports = {
     manualTextSha256,
     findManualBoilerplate,
     validateManualEvidenceLedger,
+    validateFreshAuthoringCanonicalBinding,
+    validateTutorialPayloadCanonicalBinding,
     validateManualTakeoverManifest,
     getInvalidAnalysisReason
 };

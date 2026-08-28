@@ -1,6 +1,7 @@
 'use strict';
 
 const { normalizedId } = require('./utils.js');
+const { validateManualLongformBundle } = require('./manual-longform-contract.js');
 
 const MANUAL_RESEARCH_CONTRACT_VERSION = 'audio-researcher-v1';
 const MANUAL_STAGE_REVIEW_VERSION = 2;
@@ -22,6 +23,23 @@ const SCORING_DIMENSIONS = Object.freeze([
 const INSERTION_SECTIONS = new Set([
     '核心摘要', '方法概述和架构', '核心创新点', '实验结果', '细节详述', '局限与问题'
 ]);
+// v3 is deliberately a new opt-in record contract.  Published v1/v2
+// records remain readable, while a newly authored tutorial cannot pass by
+// merely being a 2,400-character prose expansion of the old fixed sections.
+const TUTORIAL_CONTRACT_VERSION = 'graduate-researcher-tutorial-v1';
+const READER_FORMAT_CONTRACT_VERSION = 'graduate-researcher-tutorial-quality-v2';
+const REQUIRED_TUTORIAL_KINDS = Object.freeze([
+    'problem_tension', 'related_routes', 'end_to_end_flow', 'training_reproduction',
+    'experimental_protocol', 'complete_results', 'negative_boundary', 'reader_takeaway'
+]);
+const OPTIONAL_TUTORIAL_KINDS = Object.freeze([
+    'prerequisites', 'architecture_detail', 'component', 'formula', 'ablation', 'reproduction'
+]);
+const TUTORIAL_KINDS = new Set([...REQUIRED_TUTORIAL_KINDS, ...OPTIONAL_TUTORIAL_KINDS]);
+const TUTORIAL_MIN_CHARS = 6000;
+const TUTORIAL_MIN_SECTIONS = 8;
+const TUTORIAL_MAX_SECTIONS = 18;
+const ARTIFACT_NUMBER_HEADING_RE = /(?:图|表)\s*(?:\d+|[一二三四五六七八九十]+)|(?:Figure|Table)\s*\d+/iu;
 const BEIJING_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?\+08:00$/;
 
 function normalizeEvidence(value) {
@@ -47,6 +65,37 @@ function assertUniqueTextArray(value, label, options = {}) {
         throw new Error(`${label} 不得包含重复项`);
     }
     return items;
+}
+
+function validateReaderMarkdownSyntax(value, label = 'readerArticle') {
+    const text = String(value || '').replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, '');
+    if (/(?<!\\)\$/.test(text)) {
+        throw new Error(`${label} 公式禁止使用裸 $/$$；行内统一用 \\(…\\)，块级统一用 \\[...\\]`);
+    }
+    for (const [open, close, kind] of [['\\(', '\\)', '行内公式'], ['\\[', '\\]', '块级公式']]) {
+        const openCount = text.split(open).length - 1;
+        const closeCount = text.split(close).length - 1;
+        if (openCount !== closeCount) {
+            throw new Error(`${label} ${kind}分隔符不成对: ${openCount}/${closeCount}`);
+        }
+    }
+    const proseOutsideMath = text
+        .replace(/\\\[[\s\S]*?\\\]/g, '')
+        .replace(/\\\([\s\S]*?\\\)/g, '');
+    const bareParenthesizedLatex = proseOutsideMath.match(/(?<!\\)\([^\n)]*\\(?:times|tau|lambda|ell|to|Delta|mathcal|mathbf|mathrm|mathbb|text|frac|tfrac|sqrt|sum|prod|hat|top|in)[^\n)]*\)/u)
+        || proseOutsideMath.match(/(?<!\\)\([^\n)]*\b(?:mathbf|mathrm|mathbb|mathcal|ell|tau|lambda|Delta|sigma|mu|alpha|beta|gamma)\b[^\n)]*(?:[_^=<>]|\d)[^\n)]*\)/u);
+    if (bareParenthesizedLatex) {
+        throw new Error(`${label} LaTeX 命令不能放在普通圆括号中，必须使用 \\(…\\)：${bareParenthesizedLatex[0]}`);
+    }
+    if ((text.match(/\*\*/g) || []).length % 2 !== 0) {
+        throw new Error(`${label} Markdown 加粗标记 ** 不成对`);
+    }
+    for (const match of text.matchAll(/\*\*[^*\n]+\*\*/g)) {
+        const next = text[match.index + match[0].length] || '';
+        if (/[\p{L}\p{N}]/u.test(next)) {
+            throw new Error(`${label} 加粗结束符后必须留空格或标点，避免 Hugo 粘连`);
+        }
+    }
 }
 
 function extractSection(analysis, title) {
@@ -88,13 +137,23 @@ function validatePaperSubagent(value, paperId, label = 'paperSubagent') {
 }
 
 function validateEditorialPlan(plan, label = 'editorialPlan') {
-    if (!plan || typeof plan !== 'object' || Array.isArray(plan) || ![1, 2].includes(plan.version)) {
-        throw new Error(`${label} 必须是 version=1 或 version=2 对象`);
+    if (!plan || typeof plan !== 'object' || Array.isArray(plan) || ![1, 2, 3].includes(plan.version)) {
+        throw new Error(`${label} 必须是 version=1、version=2 或 version=3 对象`);
     }
-    const readerFirst = plan.version === 2;
+    const readerFirst = plan.version >= 2;
+    const tutorial = plan.version === 3;
+    const strictReaderFormat = tutorial
+        || plan.readerFormatContract === READER_FORMAT_CONTRACT_VERSION;
     if (readerFirst) {
         assertText(plan.readerTitle, `${label}.readerTitle`, 12);
         assertText(plan.oneSentenceThesis, `${label}.oneSentenceThesis`, 28);
+        if (plan.readerFormatContract !== undefined
+            && plan.readerFormatContract !== READER_FORMAT_CONTRACT_VERSION) {
+            throw new Error(`${label}.readerFormatContract 必须是 ${READER_FORMAT_CONTRACT_VERSION}`);
+        }
+    }
+    if (tutorial && plan.tutorialContract !== TUTORIAL_CONTRACT_VERSION) {
+        throw new Error(`${label}.tutorialContract 必须是 ${TUTORIAL_CONTRACT_VERSION}`);
     }
     const tension = plan.governingTension;
     if (!tension || typeof tension !== 'object' || Array.isArray(tension)) {
@@ -141,20 +200,137 @@ function validateEditorialPlan(plan, label = 'editorialPlan') {
             assertText(item.readerQuote, `${itemLabel}.readerQuote`, 16);
         }
     });
-    if (!Array.isArray(plan.sectionPlan) || plan.sectionPlan.length < 4 || plan.sectionPlan.length > 8) {
-        throw new Error(`${label}.sectionPlan 必须包含 4-8 个论文特有读者小节`);
+    const minSections = tutorial ? TUTORIAL_MIN_SECTIONS : 4;
+    const maxSections = tutorial ? TUTORIAL_MAX_SECTIONS : 8;
+    if (!Array.isArray(plan.sectionPlan) || plan.sectionPlan.length < minSections || plan.sectionPlan.length > maxSections) {
+        throw new Error(`${label}.sectionPlan 必须包含 ${minSections}-${maxSections} 个论文特有读者小节`);
     }
+    const tutorialKinds = new Set();
     plan.sectionPlan.forEach((item, index) => {
         const itemLabel = `${label}.sectionPlan[${index}]`;
-        assertText(item?.heading, `${itemLabel}.heading`, 6);
+        const heading = assertText(item?.heading, `${itemLabel}.heading`, 6);
+        if (strictReaderFormat && ARTIFACT_NUMBER_HEADING_RE.test(heading)) {
+            throw new Error(`${itemLabel}.heading 不得用图号或表号组织章节；图表编号只留在 caption 和正文引用中`);
+        }
         if (!INSERTION_SECTIONS.has(item?.container)) throw new Error(`${itemLabel}.container 非法`);
         const ids = assertUniqueTextArray(item.readerQuestionIds, `${itemLabel}.readerQuestionIds`, {
             minimumItems: 1, maximumItems: 4, minimumLength: 2
         });
         if (ids.some(id => !questionIds.has(id))) throw new Error(`${itemLabel} 引用未知 readerQuestionId`);
         if (readerFirst) assertText(item.anchorQuote, `${itemLabel}.anchorQuote`, 16);
+        if (tutorial) {
+            const tutorialKind = assertText(item.tutorialKind, `${itemLabel}.tutorialKind`, 3);
+            if (!TUTORIAL_KINDS.has(tutorialKind)) {
+                throw new Error(`${itemLabel}.tutorialKind 非法: ${tutorialKind}`);
+            }
+            if (tutorialKinds.has(tutorialKind)) {
+                throw new Error(`${label}.sectionPlan.tutorialKind 不得重复: ${tutorialKind}`);
+            }
+            tutorialKinds.add(tutorialKind);
+        }
     });
+    if (tutorial) {
+        const missing = REQUIRED_TUTORIAL_KINDS.filter(kind => !tutorialKinds.has(kind));
+        if (missing.length) {
+            throw new Error(`${label}.sectionPlan 缺少研究生教程节点: ${missing.join('、')}`);
+        }
+        const positions = REQUIRED_TUTORIAL_KINDS.map(kind => (
+            plan.sectionPlan.findIndex(item => item.tutorialKind === kind)
+        ));
+        if (positions.some((position, index) => index > 0 && position <= positions[index - 1])) {
+            throw new Error(`${label}.sectionPlan 必须按问题→相关路线→数据流→训练→实验→完整结果→边界→读者启示递进`);
+        }
+    }
     return plan;
+}
+
+function readerArticleBlocks(text) {
+    const matches = [...String(text || '').matchAll(/^###\s+([^\n#]+?)\s*$/gm)];
+    return matches.map((match, index) => ({
+        heading: match[1].trim(),
+        content: String(text).slice(match.index + match[0].length, matches[index + 1]?.index).trim()
+    }));
+}
+
+function substantiveTextBlock(value, minimum = 40) {
+    const text = String(value || '').trim();
+    return text.length >= minimum && !/^#{1,6}\s/m.test(text)
+        && !/^!\[[^\]]*\]\(https:\/\//.test(text)
+        && !/^\|.*\|\s*\n\|\s*:?-{3,}/m.test(text);
+}
+
+function markdownTableBlocks(text) {
+    return String(text || '').split(/\n\s*\n/).map(item => item.trim()).filter(item => (
+        /^\|[^\n]+\|\s*\n\|\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)+\s*\|?/m.test(item)
+    ));
+}
+
+function tutorialAuditMetaFindings(text) {
+    const patterns = [
+        /(?:evidenceLedger|sourceBindings|readerBindings|resultClaims|manualTakeover|SHA-?256|provenance|schema|validator|manifest)/gi,
+        /(?:审计|回放|门禁|契约|字段串|绑定全文|内部证据账本)/g
+    ];
+    return patterns.flatMap(pattern => [...String(text || '').matchAll(pattern)].map(match => match[0]));
+}
+
+function normalizedOpening(value) {
+    return String(value || '').normalize('NFKC').replace(/[^\p{L}\p{N}]/gu, '').slice(0, 96);
+}
+
+function hasRepeatedOpening(summary, firstBody) {
+    const a = normalizedOpening(summary);
+    const b = normalizedOpening(firstBody);
+    if (a.length < 48 || b.length < 48) return false;
+    return a.slice(0, 48) === b.slice(0, 48)
+        || a.includes(b.slice(0, 64)) || b.includes(a.slice(0, 64));
+}
+
+function validateTutorialArticle(plan, text, options = {}) {
+    if (plan?.version !== 3) return;
+    if (text.length < TUTORIAL_MIN_CHARS) {
+        throw new Error(`${options.label || 'readerArticle'} 教程正文至少需要 ${TUTORIAL_MIN_CHARS} 字符`);
+    }
+    const sections = readerArticleBlocks(text);
+    if (sections.length < TUTORIAL_MIN_SECTIONS || sections.length > TUTORIAL_MAX_SECTIONS) {
+        throw new Error(`${options.label || 'readerArticle'} 教程正文必须包含 ${TUTORIAL_MIN_SECTIONS}-${TUTORIAL_MAX_SECTIONS} 个论文特有教学小节`);
+    }
+    const planByHeading = new Map(plan.sectionPlan.map(item => [item.heading, item]));
+    for (const section of sections) {
+        const planItem = planByHeading.get(section.heading);
+        if (!planItem) continue;
+        const paragraphs = section.content.split(/\n\s*\n/).filter(item => substantiveTextBlock(item, 120));
+        if (section.content.length < 220 || paragraphs.length < 1) {
+            throw new Error(`${options.label || 'readerArticle'} 教学小节「${section.heading}」必须包含至少 220 字的实质解释`);
+        }
+        if (planItem.tutorialKind === 'complete_results' && markdownTableBlocks(section.content).length < 1) {
+            throw new Error(`${options.label || 'readerArticle'} 的完整结果表小节必须实际包含 Markdown 结果表，不能只口头摘数字`);
+        }
+    }
+    const blocks = String(text || '').split(/\n\s*\n/).map(item => item.trim()).filter(Boolean);
+    blocks.forEach((block, index) => {
+        const isImage = /^!\[[^\]]*\]\(https:\/\//.test(block);
+        const isTable = /^\|[^\n]+\|\s*\n\|\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)+\s*\|?/m.test(block);
+        if ((isImage || isTable)
+            && (!substantiveTextBlock(blocks[index - 1]) || !substantiveTextBlock(blocks[index + 1]))) {
+            throw new Error(`${options.label || 'readerArticle'} 的${isImage ? '图片' : '结果表'}必须有相邻的图/表前解释和图/表后解读`);
+        }
+    });
+    const auditTerms = tutorialAuditMetaFindings(text);
+    if (auditTerms.length > 0) {
+        throw new Error(`${options.label || 'readerArticle'} 不得使用审计/门禁/schema 等内部元话语（命中：${auditTerms.slice(0, 3).join('、')}）`);
+    }
+    const firstBodies = sections.map(section => section.content.split(/\n\s*\n/).find(item => substantiveTextBlock(item, 40)) || '');
+    const openings = new Set();
+    for (const opening of firstBodies) {
+        const normalized = normalizedOpening(opening).slice(0, 48);
+        if (normalized.length >= 48 && openings.has(normalized)) {
+            throw new Error(`${options.label || 'readerArticle'} 的教学小节不得重复开场`);
+        }
+        if (normalized) openings.add(normalized);
+    }
+    if (hasRepeatedOpening(options.summary, firstBodies[0])) {
+        throw new Error(`${options.label || 'readerArticle'} 的深度解读开场不得复刻核心摘要`);
+    }
 }
 
 /**
@@ -225,11 +401,20 @@ function validateReaderArticle(plan, article, evidenceLedger = [], options = {})
     if (!plan || plan.version !== 2) return null;
     const label = options.label || 'readerArticle';
     const text = assertText(article, label, 2400);
+    const strictReaderFormat = plan.version === 3
+        || plan.readerFormatContract === READER_FORMAT_CONTRACT_VERSION;
+    if (strictReaderFormat) validateReaderMarkdownSyntax(text, label);
     if (text.length > 24000) throw new Error(`${label} 超过 24000 字，不能用逐表翻译替代编辑取舍`);
     if (/^##(?!#)\s/m.test(text)) {
         throw new Error(`${label} 只能使用 ### 论文特有小节；页面层级由发布器提供`);
     }
     const headings = [...text.matchAll(/^###\s+([^\n#]+?)\s*$/gm)].map(match => match[1].trim());
+    const numberedHeading = strictReaderFormat
+        ? headings.find(heading => ARTIFACT_NUMBER_HEADING_RE.test(heading))
+        : null;
+    if (numberedHeading) {
+        throw new Error(`${label} 章节标题不得包含图号或表号: ${numberedHeading}`);
+    }
     const expectedHeadings = plan.sectionPlan.map(item => item.heading);
     if (headings.length !== expectedHeadings.length
         || headings.some((heading, index) => heading !== expectedHeadings[index])) {
@@ -303,6 +488,16 @@ function validateReaderArticle(plan, article, evidenceLedger = [], options = {})
             readerText: text
         });
     }
+    if (options.longformBundle || options.artifactIndex) {
+        if (!options.longformBundle || !options.artifactIndex) {
+            throw new Error(`${label} 的 longformBundle 与 artifactIndex 必须同时提供`);
+        }
+        validateManualLongformBundle(options.longformBundle, text, options.artifactIndex, {
+            label: `${label}.longformBundle`,
+            paperId: options.paperId
+        });
+    }
+    validateTutorialArticle(plan, text, options);
     return text;
 }
 
@@ -916,7 +1111,7 @@ function validateResultClaimCoverageV5(claims, options = {}) {
         }
         for (const bindingName of ['sourceBindings', 'readerBindings']) {
             const binding = claim[bindingName] || {};
-            if (!/(?:↑|↓|higher|lower|better|worse|best|outperform|improv|reduc|decreas|increas|ris(?:e|es|ing)|fall(?:s|ing)?|fewer|more\s+accurate|less\s+accurate|strong(?:er|ly)?|beat(?:s|ing)?|versus|restor(?:e|es|ed|ing)?|significant|越高越好|越低越好|越大越好|越小越好|更高|更低|更少|更准确|较准确|准确率更高|准确率更低|高于|低于|超过|优于|劣于|领先|落后|提升|上升|回落|下降|降低|增加|减少|描述|absolute|绝对|相关)/i.test(String(binding.direction || ''))) {
+            if (!/(?:↑|↓|higher|lower|better|worse|best|outperform|improv|reduc|decreas|increas|ris(?:e|es|ing)|fall(?:s|ing)?|fewer|more\s+accurate|less\s+accurate|strong(?:er|ly)?|beat(?:s|ing)?|versus|restor(?:e|es|ed|ing)?|significant|suppress(?:ed|es|ion)?|stable|insufficient|false\s+pass|over[-\s]?mut(?:e|ed|ing)|ambiguous|onset|appear(?:ed|s|ing)?|howling.{0,40}after|越高越好|越低越好|越大越好|越小越好|更高|更低|更少|更准确|较准确|准确率更高|准确率更低|高于|低于|超过|优于|劣于|领先|落后|提升|上升|回落|下降|降低|增加|减少|抑制|稳定|不足|误放行|过度静音|模糊|出现|发生|起始|描述|absolute|绝对|相关)/i.test(String(binding.direction || ''))) {
                 throw new Error(`${label}[${index}].${bindingName}.direction 必须绑定真实方向语义`);
             }
             if (/\n|\|/.test(String(binding.value || ''))) {
@@ -948,6 +1143,11 @@ module.exports = {
     validatePaperSubagent,
     validateResearchBrief,
     validateEditorialPlan,
+    TUTORIAL_CONTRACT_VERSION,
+    READER_FORMAT_CONTRACT_VERSION,
+    REQUIRED_TUTORIAL_KINDS,
+    validateReaderMarkdownSyntax,
+    validateTutorialArticle,
     validateEditorialPlanBindings,
     validateReaderArticle,
     validateEditorialReview,

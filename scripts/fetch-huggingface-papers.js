@@ -14,7 +14,7 @@ setupScriptLogging(__filename);
  * 策略：分页获取 daily_papers 直到覆盖一周，再用 papers 补充最近 1-2 天
  */
 
-const { execFileSync } = require('child_process');
+const { execFile } = require('child_process');
 const { buildChildProcessEnv, TRANSPORT_ENV_KEYS } = require('./env-loader.js');
 
 const { getBeijingDateString, getBeijingISOString, normalizeToBeijingISOString, normalizedId, detectProxyUrl } = require('./utils.js');
@@ -33,16 +33,25 @@ function buildCurlArgs(proxyUrl, url, timeout) {
     ];
 }
 
-function fetchWithCurl(url, timeout = 60) {
+async function fetchWithCurl(url, timeout = 60, options = {}) {
+    const execFileFn = options.execFileFn || execFile;
+    const proxyUrl = options.proxyUrl || detectProxyUrl();
+    if (!proxyUrl) {
+        return { ok: false, data: null, error: 'missing project proxy' };
+    }
+
     try {
-        const proxyUrl = detectProxyUrl();
-        if (!proxyUrl) {
-            return { ok: false, data: null, error: 'missing project proxy' };
-        }
-        const result = execFileSync('curl', buildCurlArgs(proxyUrl, url, timeout), {
-            encoding: 'utf8',
-            maxBuffer: 10 * 1024 * 1024,
-            env: buildChildProcessEnv({ NO_PROXY: '', no_proxy: '' }, TRANSPORT_ENV_KEYS)
+        const result = await new Promise((resolve, reject) => {
+            execFileFn('curl', buildCurlArgs(proxyUrl, url, timeout), {
+                encoding: 'utf8',
+                maxBuffer: 10 * 1024 * 1024,
+                timeout: Math.max(1000, Math.ceil(timeout * 1000) + 5000),
+                killSignal: 'SIGKILL',
+                env: buildChildProcessEnv({ NO_PROXY: '', no_proxy: '' }, TRANSPORT_ENV_KEYS)
+            }, (error, stdout) => {
+                if (error) reject(error);
+                else resolve(stdout);
+            });
         });
 
         if (!result || result.trim() === '') {
@@ -51,7 +60,7 @@ function fetchWithCurl(url, timeout = 60) {
 
         return { ok: true, data: JSON.parse(result), error: null };
     } catch (e) {
-        if (e.status === 22) {
+        if (Number(e.code) === 22) {
             // curl --fail returns exit code 22 for HTTP errors (4xx, 5xx)
             console.error(`  HTTP 请求失败 (${url}): ${e.message.substring(0, 100)}`);
         } else if (e.message && e.message.includes('Unexpected token')) {
@@ -202,9 +211,14 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         failures: [],
         requests: []
     };
-    const fetchTracked = (name, url) => {
+    const fetchTracked = async (name, url) => {
         health.attempts++;
-        const rawResult = fetchFn(url);
+        let rawResult;
+        try {
+            rawResult = await fetchFn(url);
+        } catch (error) {
+            rawResult = { ok: false, data: null, error: error?.message || String(error) };
+        }
         const result = rawResult && typeof rawResult.ok === 'boolean'
             ? rawResult
             : { ok: rawResult !== null && rawResult !== undefined, data: rawResult, error: rawResult == null ? 'empty response' : null };
@@ -226,7 +240,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
     while (!reachedCutoff && page < HUGGINGFACE_CONFIG.maxPages) {
         const offset = page * HUGGINGFACE_CONFIG.pageLimit;
         const url = `https://huggingface.co/api/daily_papers?limit=${HUGGINGFACE_CONFIG.pageLimit}&offset=${offset}`;
-        const response = fetchTracked(`daily_papers:${page + 1}`, url);
+        const response = await fetchTracked(`daily_papers:${page + 1}`, url);
         const data = response.data;
 
         if (!response.ok) {
@@ -311,7 +325,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
     const seenPapersPageSignatures = new Set();
     while (!papersComplete && papersPage < HUGGINGFACE_CONFIG.maxPages) {
         const offset = papersPage * HUGGINGFACE_CONFIG.pageLimit;
-        const papersResponse = fetchTracked(`papers:${papersPage + 1}`, `https://huggingface.co/api/papers?limit=${HUGGINGFACE_CONFIG.pageLimit}&offset=${offset}`);
+        const papersResponse = await fetchTracked(`papers:${papersPage + 1}`, `https://huggingface.co/api/papers?limit=${HUGGINGFACE_CONFIG.pageLimit}&offset=${offset}`);
         const papersData = papersResponse.data;
         if (!papersResponse.ok || !Array.isArray(papersData)) {
             if (papersResponse.ok) {

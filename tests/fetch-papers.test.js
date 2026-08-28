@@ -374,6 +374,59 @@ describe('抓取健康状态', () => {
         assert.strictEqual(papers._sourceHealth.coverageComplete, true);
     });
 
+    it('recent 页确定性结构失败不重复退避，立即留给严格 fallback 补齐', async () => {
+        const urls = [];
+        const sleeps = [];
+        const papers = await fetchCategoryFromRecentPage('cs.SD', new Set(), 100, {
+            requestFn: async url => {
+                urls.push(url);
+                if (url.includes('skip=0')) {
+                    return { status: 200, data: '<div id="dlpage"><h1>Recent submissions</h1><p>No submissions</p></div>' };
+                }
+                return { status: 200, data: '<html><body>temporary incompatible layout</body></html>' };
+            },
+            sleepFn: async ms => { sleeps.push(ms); },
+            maxRetries: 5
+        });
+
+        assert.deepStrictEqual(papers, []);
+        assert.strictEqual(urls.length, 2);
+        assert.deepStrictEqual(sleeps, [5000]);
+        assert.strictEqual(papers._sourceHealth.coverageComplete, false);
+        assert.strictEqual(papers._sourceHealth.failures[0].failureKind, 'structural');
+        assert.strictEqual(papers._sourceHealth.failures[0].fastFallback, true);
+    });
+
+    it('recent 结构失败后仍由 search/API 完整覆盖并保持 fail-closed 健康判定', async () => {
+        const urls = [];
+        const result = await fetchCategoryPapers('cs.SD', 100, 5, new Set(), {
+            requestFn: async url => {
+                urls.push(url);
+                if (url.includes('/recent?skip=0')) {
+                    return { status: 200, data: '<div id="dlpage"><h1>Recent submissions</h1><p>No submissions</p></div>' };
+                }
+                if (url.includes('/recent?skip=50')) {
+                    return { status: 200, data: '<html><body>incompatible recent layout</body></html>' };
+                }
+                if (url.includes('/search/')) {
+                    return { status: 200, data: '<ol class="breathe-horizontal"></ol>' };
+                }
+                return { status: 200, data: '<feed></feed>' };
+            },
+            sleepFn: async () => {},
+            maxRetries: 5,
+            abstractMaxRetries: 1
+        });
+
+        assert.deepStrictEqual(result, []);
+        assert.strictEqual(result._sourceHealth.ok, true);
+        assert.strictEqual(result._sourceHealth.methods.recent.attempts, 2);
+        assert.strictEqual(result._sourceHealth.methods.recent.failures[0].fastFallback, true);
+        assert.strictEqual(urls.filter(url => url.includes('/recent?skip=50')).length, 1);
+        assert.ok(urls.some(url => url.includes('/search/')));
+        assert.ok(urls.some(url => url.includes('/api/query')));
+    });
+
     it('arXiv 搜索页使用严格分类查询，不使用会混入全文结果的裸分类名', async () => {
         const urls = [];
         await fetchCategoryFromSearchPage('cs.SD', new Set(), 50, {
@@ -535,6 +588,72 @@ describe('抓取健康状态', () => {
         assert.strictEqual(result[1].abstract, 'useful speech result');
         assert.strictEqual(result._abstractHealth.fetched, 1);
         assert.deepStrictEqual(result._abstractHealth.failedIds, ['2604.00001']);
+    });
+
+    it('摘要批量参数不会造成同 host 并发请求', async () => {
+        const papers = Array.from({ length: 6 }, (_, index) => ({
+            arxivId: `2604.${String(index + 10).padStart(5, '0')}`,
+            abstract: ''
+        }));
+        let active = 0;
+        let maxActive = 0;
+        const result = await fetchAbstracts(papers, 5, {
+            requestFn: async () => {
+                active++;
+                maxActive = Math.max(maxActive, active);
+                await new Promise(resolve => setImmediate(resolve));
+                active--;
+                return {
+                    status: 200,
+                    data: '<blockquote class="abstract mathjax"><span class="descriptor">Abstract:</span> cached audio abstract </blockquote>'
+                };
+            },
+            sleepFn: async () => {},
+            maxRetries: 1
+        });
+
+        assert.strictEqual(maxActive, 1);
+        assert.strictEqual(result._abstractHealth.fetched, 6);
+    });
+
+    it('host scheduler 已负责 pacing 时不再叠加摘要批间固定等待', async () => {
+        const sleeps = [];
+        const papers = Array.from({ length: 6 }, (_, index) => ({
+            arxivId: `2604.${String(index + 30).padStart(5, '0')}`,
+            abstract: ''
+        }));
+        await fetchAbstracts(papers, 5, {
+            requestFn: async () => ({
+                status: 200,
+                data: '<blockquote class="abstract mathjax"><span class="descriptor">Abstract:</span> paced audio abstract </blockquote>'
+            }),
+            sleepFn: async ms => { sleeps.push(ms); },
+            maxRetries: 1,
+            schedulerHandlesPacing: true
+        });
+        assert.deepStrictEqual(sleeps, []);
+    });
+
+    it('批次级 normalized ID 缓存使跨类别重复摘要只抓取一次', async () => {
+        const abstractCache = new Map();
+        let requests = 0;
+        const requestFn = async () => {
+            requests++;
+            return {
+                status: 200,
+                data: '<blockquote class="abstract mathjax"><span class="descriptor">Abstract:</span> shared speech abstract </blockquote>'
+            };
+        };
+        const first = [{ arxivId: '2604.12345v1', abstract: '' }];
+        const second = [{ arxivId: '2604.12345v3', abstract: '' }];
+
+        await fetchAbstracts(first, 5, { requestFn, sleepFn: async () => {}, maxRetries: 1, abstractCache });
+        const result = await fetchAbstracts(second, 5, { requestFn, sleepFn: async () => {}, maxRetries: 1, abstractCache });
+
+        assert.strictEqual(requests, 1);
+        assert.strictEqual(result[0].abstract, 'shared speech abstract');
+        assert.strictEqual(result._abstractHealth.cacheHits, 1);
+        assert.strictEqual(result._abstractHealth.attempted, 0);
     });
 
     it('代理日志地址会隐藏 userinfo', () => {

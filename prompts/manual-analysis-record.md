@@ -7,6 +7,8 @@
 
 零、执行隔离与研究者选题
 - 一篇论文只能由一个独立 paper subagent 撰写；所有论文理解、正文撰写、评分、可读性复核和最终单页审查 subagent 固定使用 `gpt-5.6-terra`、reasoning effort `high`，不得用 Sol 代写逐篇正文。主 Agent/Sol 只负责队列、代码、确定性门禁、组装和发布。该 subagent 的上下文只能包含本篇 metadata、全文、图片和本篇记录，禁止同时处理第二篇论文。每篇另由不同的 Terra-high 评分/review subagent 做终审；新 record 在 `paperSubagent` 中记录 `model` 与 `reasoningEffort`。
+- 新正文必须按 `fresh-authoring-v1` 从受控论文证据冷启动。author 只可读取本篇 metadata、全文 source snapshot、ArtifactIndex、原论文图表/公式、空白 record schema、固定写作 prompt 和编辑契约；禁止读取历史 analysis、旧 `readerArticle`、任何 `article.md` / `post.md`、博客 Markdown/HTML、已填写 quality、previous draft 或历史 review prose。旧正文不得进入生成、修订或质量回归，也不得改名伪装成 metadata/evidence。
+- review 要求修正时，revision subagent 只能读取同一份原始证据和结构化 findings（issue ID、证据引用、修改要求），从空白生成完整替换稿；禁止让 reviewer 提供可直接粘贴的替换段落，禁止在上一稿上移动、润色、扩写或补段。交稿须记录允许输入的 realpath、kind 与 SHA，并声明 `prohibitedProseInputs=[]`；缺失或多出输入即失败。
 - 开写前先站在音频研究者视角回答：这篇论文真正值得学的 3–6 件事是什么？读者要复现或判断贡献，必须知道哪些输入表示、音频路径、组件数据流、训练冻结策略、数据规模、评价协议、强基线、关键数字、消融/负结果和部署边界？
 - 每篇提交 `researchBrief`：中心问题、7–12 项 `mustExplain`、2–8 项 `compress`、1–8 项 `omit`、3–6 条 takeaways、证据画像和显式推导。每个 mustExplain 同时绑定全文原句和最终正文局部；低价值内容只能在 compress 对应短句中出现一次；omit 声明的模板或背景句不得进入成稿。
 - `mustExplain` 至少覆盖 task_boundary、audio_path、architecture、training、evaluation、reproduction、limitations；实证论文另覆盖 ablation_or_negative。系统/模型报告必须明确区分“继承组件、本文新增组件、训练系统、尚未验证的主张”。

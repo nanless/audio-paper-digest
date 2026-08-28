@@ -38,6 +38,7 @@ const {
     normalizedId
 } = require('./utils.js');
 const Config = require('./config.js');
+const { createHostTaskScheduler } = require('./lib/fetch-scheduler.js');
 
 loadEnvFile();
 
@@ -134,6 +135,8 @@ function createRateLimitBudget(options = {}) {
     const maxWaitMs = Math.max(0, configuredTotal);
     let waitedMs = 0;
     let totalWaitedMs = 0;
+    let retryCount = 0;
+    let rateLimitRetryCount = 0;
     return {
         nextDelay(baseDelay, jitter, is429) {
             const requested = Math.max(0, baseDelay + jitter);
@@ -144,7 +147,11 @@ function createRateLimitBudget(options = {}) {
             const delay = Math.min(requested, remainingTotal, remainingRateLimit);
             if (requested > 0 && delay <= 0) return { allowed: false, delay: 0 };
             totalWaitedMs += delay;
-            if (is429) waitedMs += delay;
+            retryCount++;
+            if (is429) {
+                waitedMs += delay;
+                rateLimitRetryCount++;
+            }
             return { allowed: true, delay };
         },
         get waitedMs() {
@@ -152,6 +159,12 @@ function createRateLimitBudget(options = {}) {
         },
         get totalWaitedMs() {
             return totalWaitedMs;
+        },
+        get retryCount() {
+            return retryCount;
+        },
+        get rateLimitRetryCount() {
+            return rateLimitRetryCount;
         }
     };
 }
@@ -191,6 +204,22 @@ function hasSearchResponseSignature(html) {
 
 function hasApiResponseSignature(xml) {
     return /<(?:[a-z]+:)?feed(?:\s|>)/i.test(String(xml || ''));
+}
+
+function isStructuralPageFailure(error) {
+    const message = String(error?.message || error || '');
+    if (/响应缺少 arXiv (?:recent\s*|搜索)页结构签名|(?:recent\s*|搜索)页条目解析不完整/i.test(message)) {
+        return true;
+    }
+    const match = message.match(/HTTP\s+(\d{3})/i);
+    if (!match) return false;
+    const status = Number(match[1]);
+    return status >= 400 && status < 500 && ![408, 409, 425, 429].includes(status);
+}
+
+async function runHostRequest(options, host, task) {
+    const scheduler = options?.requestScheduler;
+    return scheduler ? scheduler.run(host, task) : task();
 }
 
 /**
@@ -430,13 +459,13 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
                 headers['Accept-Language'] = 'en-US,en;q=0.9,zh-CN;q=0.8';
 
                 health.attempts++;
-                const response = await requestFn(
+                const response = await runHostRequest(options, 'arxiv.org', () => requestFn(
                     searchUrl,
                     headers,
                     proxyUrl,
                     ARXIV_CONFIG.fetchTimeoutMs,
                     ARXIV_CONFIG.fetchMaxResponseBytes
-                );
+                ));
 
                 if (response.status !== 200) {
                     throw new Error(`HTTP ${response.status}`);
@@ -478,6 +507,16 @@ async function fetchCategoryFromSearchPage(categoryId, existingIds = null, maxRe
                 }
                 break; // 成功，跳出重试循环
             } catch (err) {
+                if (isStructuralPageFailure(err)) {
+                    console.log(`[fetch-web] ${categoryId} 第 ${page + 1} 页结构不可用，立即转入 Atom API fallback: ${err.message}`);
+                    health.failures.push({
+                        page: page + 1,
+                        error: err.message,
+                        failureKind: 'structural',
+                        fastFallback: true
+                    });
+                    break;
+                }
                 const is429 = err.message.includes('429');
                 if (attempt < maxRetries) {
                     const baseDelay = getFetchRetryDelayMs(attempt, is429);
@@ -555,13 +594,13 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
                 headers['Referer'] = 'https://arxiv.org/';
 
                 health.attempts++;
-                const response = await requestFn(
+                const response = await runHostRequest(options, 'arxiv.org', () => requestFn(
                     url,
                     headers,
                     proxyUrl,
                     ARXIV_CONFIG.fetchTimeoutMs,
                     ARXIV_CONFIG.fetchMaxResponseBytes
-                );
+                ));
 
                 if (response.status !== 200) {
                     throw new Error(`HTTP ${response.status}`);
@@ -583,6 +622,16 @@ async function fetchCategoryFromRecentPage(categoryId, existingIds = null, maxRe
                 // 否则 eess.AS 等类别会永远只检查第一页。
                 break;
             } catch (err) {
+                if (isStructuralPageFailure(err)) {
+                    console.log(`[fetch-recent] ${categoryId} 第 ${page + 1} 页结构不可用，立即转入严格搜索/API fallback: ${err.message}`);
+                    health.failures.push({
+                        page: page + 1,
+                        error: err.message,
+                        failureKind: 'structural',
+                        fastFallback: true
+                    });
+                    break;
+                }
                 const is429 = err.message.includes('429');
                 if (attempt < maxRetries) {
                     const baseDelay = getFetchRetryDelayMs(attempt, is429);
@@ -693,10 +742,15 @@ async function fetchAbstracts(papers, concurrency = 1, options = {}) {
     const requestFn = options.requestFn || httpsRequestWithProxy;
     const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     const maxRetries = options.maxRetries ?? ARXIV_CONFIG.fetchMaxRetries;
+    const abstractCache = options.abstractCache instanceof Map ? options.abstractCache : new Map();
+    // A scheduler guards the real socket-opening operation. Keeping the public
+    // concurrency parameter only controls CPU/bookkeeping fan-out; arxiv.org
+    // itself never has more than one in-flight abstract request per batch.
+    const requestScheduler = options.requestScheduler || createHostTaskScheduler();
     const rateLimitBudget = createRateLimitBudget(options);
     const initialRateLimitWaitMs = rateLimitBudget.waitedMs;
     const initialTotalRetryWaitMs = rateLimitBudget.totalWaitedMs;
-    const health = { attempted: needFetch.length, fetched: 0, failedIds: [], failures: [], rateLimitWaitMs: 0 };
+    const health = { attempted: 0, fetched: 0, cacheHits: 0, failedIds: [], failures: [], rateLimitWaitMs: 0 };
     if (needFetch.length === 0) return attachHealth(papers, health, '_abstractHealth');
 
     console.log(`[fetch-abstract] 需要补充 ${needFetch.length} 篇论文摘要...`);
@@ -705,53 +759,78 @@ async function fetchAbstracts(papers, concurrency = 1, options = {}) {
     for (let i = 0; i < needFetch.length; i += concurrency) {
         const batch = needFetch.slice(i, i + concurrency);
         await Promise.all(batch.map(async (paper) => {
-            let lastError = null;
-            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            const paperId = normalizedId(paper) || paper.arxivId;
+            const cached = abstractCache.get(paperId);
+            if (cached) {
                 try {
-                    const url = `https://arxiv.org/abs/${paper.arxivId}`;
-                    const headers = getBrowserHeaders();
-                    headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
-                    headers['Referer'] = 'https://arxiv.org/';
-
-                    const response = await requestFn(
-                        url,
-                        headers,
-                        proxyUrl,
-                        ARXIV_CONFIG.fetchTimeoutMs,
-                        ARXIV_CONFIG.fetchMaxResponseBytes
-                    );
-                    if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
-
-                    // 解析摘要：<blockquote class="abstract mathjax">...<span class="descriptor">Abstract:</span> ...</blockquote>
-                    const abstractMatch = response.data.match(/<blockquote\s+class\s*=\s*['"]abstract\s+mathjax['"][^>]*>\s*<span\s+class\s*=\s*['"]descriptor['"]>Abstract:<\/span>\s*([\s\S]*?)\s*<\/blockquote>/i);
-                    const abstract = abstractMatch
-                        ? abstractMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
-                        : '';
-                    if (!abstract) throw new Error('响应中缺少非空摘要');
-                    paper.abstract = abstract;
-                    fetched++;
-                    health.fetched++;
-                    break;
-                } catch (err) {
-                    lastError = err;
-                    const is429 = err.message.includes('429');
-                    if (attempt < maxRetries) {
-                        const retry = rateLimitBudget.nextDelay(getFetchRetryDelayMs(attempt, is429), 0, is429);
-                        if (!retry.allowed) break;
-                        const delay = retry.delay;
-                        await sleepFn(delay);
+                    const cachedAbstract = await cached;
+                    if (cachedAbstract) {
+                        paper.abstract = cachedAbstract;
+                        fetched++;
+                        health.fetched++;
+                        health.cacheHits++;
+                        return;
                     }
+                } catch {
+                    // The owner removes a rejected promise; this caller retries below.
                 }
             }
+
+            let lastError = null;
+            const ownedPromise = (async () => {
+                health.attempted++;
+                for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                    try {
+                        const url = `https://arxiv.org/abs/${paper.arxivId}`;
+                        const headers = getBrowserHeaders();
+                        headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
+                        headers['Referer'] = 'https://arxiv.org/';
+
+                        const response = await requestScheduler.run('arxiv.org', () => requestFn(
+                            url,
+                            headers,
+                            proxyUrl,
+                            ARXIV_CONFIG.fetchTimeoutMs,
+                            ARXIV_CONFIG.fetchMaxResponseBytes
+                        ));
+                        if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
+
+                        const abstractMatch = response.data.match(/<blockquote\s+class\s*=\s*['"]abstract\s+mathjax['"][^>]*>\s*<span\s+class\s*=\s*['"]descriptor['"]>Abstract:<\/span>\s*([\s\S]*?)\s*<\/blockquote>/i);
+                        const abstract = abstractMatch
+                            ? abstractMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+                            : '';
+                        if (!abstract) throw new Error('响应中缺少非空摘要');
+                        return abstract;
+                    } catch (err) {
+                        lastError = err;
+                        const is429 = err.message.includes('429');
+                        if (attempt < maxRetries) {
+                            const retry = rateLimitBudget.nextDelay(getFetchRetryDelayMs(attempt, is429), 0, is429);
+                            if (!retry.allowed) break;
+                            await sleepFn(retry.delay);
+                        }
+                    }
+                }
+                throw lastError || new Error('unknown error');
+            })();
+            abstractCache.set(paperId, ownedPromise);
+            try {
+                paper.abstract = await ownedPromise;
+                fetched++;
+                health.fetched++;
+            } catch (error) {
+                lastError = error;
+            } finally {
+                if (!paper.abstract && abstractCache.get(paperId) === ownedPromise) abstractCache.delete(paperId);
+            }
             if (!paper.abstract) {
-                const paperId = normalizedId(paper) || paper.arxivId;
                 health.failedIds.push(paperId);
                 health.failures.push({ id: paperId, error: lastError?.message || 'unknown error' });
             }
         }));
 
         // 批间延迟
-        if (i + concurrency < needFetch.length) {
+        if (i + concurrency < needFetch.length && options.schedulerHandlesPacing !== true) {
             await sleepFn(5000);
         }
 
@@ -881,10 +960,12 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
     const seenIds = new Set(existingIds ? Array.from(existingIds) : []);
     const requestFn = options.requestFn || httpsRequestWithProxy;
     const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    const requestScheduler = options.requestScheduler || createHostTaskScheduler();
     const categoryRateLimitBudget = createRateLimitBudget(options);
     const perSourceOptions = {
         requestFn,
         sleepFn,
+        requestScheduler,
         maxRetries: options.maxRetries ?? retryCount,
         rateLimitMaxWaitMs: options.rateLimitMaxWaitMs,
         maxWaitMs: options.maxWaitMs,
@@ -921,6 +1002,8 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
         health.fetched = result.length;
         health.rateLimitWaitMs = categoryRateLimitBudget.waitedMs;
         health.totalRetryWaitMs = categoryRateLimitBudget.totalWaitedMs;
+        health.retryCount = categoryRateLimitBudget.retryCount;
+        health.rateLimitRetryCount = categoryRateLimitBudget.rateLimitRetryCount;
         if (health.allFailed) {
             const failureSummary = health.failures.map(item => `${item.method || 'unknown'}:${item.error}`).join('; ');
             throw makeSourceFetchError(`arXiv ${categoryId} 所有抓取请求均失败${failureSummary ? `: ${failureSummary}` : ''}`, health);
@@ -945,7 +1028,10 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
             requestFn,
             sleepFn,
             maxRetries: options.abstractMaxRetries ?? retryCount,
-            rateLimitBudget: categoryRateLimitBudget
+            rateLimitBudget: categoryRateLimitBudget,
+            requestScheduler,
+            schedulerHandlesPacing: options.schedulerHandlesPacing,
+            abstractCache: options.abstractCache
         });
         health.abstracts = getHealth(recentPapers, '_abstractHealth');
         for (const p of recentPapers) {
@@ -1003,13 +1089,13 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
 
         try {
             apiHealth.attempts++;
-            const response = await requestFn(
+            const response = await requestScheduler.run('export.arxiv.org', () => requestFn(
                 url,
                 headers,
                 proxyUrl,
                 ARXIV_CONFIG.fetchTimeoutMs,
                 ARXIV_CONFIG.fetchMaxResponseBytes
-            );
+            ));
 
             if (response.status === 200) {
                 const xml = response.data;
@@ -1596,6 +1682,7 @@ module.exports = {
     hasRecentResponseSignature,
     hasSearchResponseSignature,
     hasApiResponseSignature,
+    isStructuralPageFailure,
     getRandomUserAgent,
     getBrowserHeaders,
     getFetchRetryDelayMs,

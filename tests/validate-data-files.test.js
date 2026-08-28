@@ -24,7 +24,8 @@ const {
     validatePaperListFile,
     validateFilterDecisionsFile,
     validateCurrentDataFiles,
-    validateFilteredDeepPapersConsistency
+    validateFilteredDeepPapersConsistency,
+    resolveManualPaperIdentityMode
 } = require('../scripts/validate-data-files.js');
 
 const TIMESTAMP = '2026-07-13T10:00:00.000+08:00';
@@ -358,6 +359,31 @@ function writeMinimalCurrentBatch(dir) {
 }
 
 describe('validate-data-files', () => {
+    it('历史 v5 只兼容无 fresh/tutorial marker；带新鲜正文标记时不得绕过逐论文身份', () => {
+        assert.equal(resolveManualPaperIdentityMode({
+            contracts: { manualDepth: 'full-text-evidence-v5' }
+        }), 'historical_per_entry');
+        assert.throws(() => resolveManualPaperIdentityMode({
+            contracts: {
+                manualDepth: 'full-text-evidence-v5',
+                freshAuthoring: 'fresh-authoring-v1'
+            }
+        }), /fresh\/tutorial canonical 缺少逐论文来源身份/);
+        assert.throws(() => resolveManualPaperIdentityMode({
+            contracts: {
+                manualDepth: 'full-text-evidence-v5',
+                tutorialPayload: 'manual-v5-tutorial-payload-v1'
+            }
+        }), /fresh\/tutorial canonical 缺少逐论文来源身份/);
+        assert.equal(resolveManualPaperIdentityMode({
+            contracts: {
+                manualDepth: 'full-text-evidence-v5',
+                freshAuthoring: 'fresh-authoring-v1',
+                tutorialPayload: 'manual-v5-tutorial-payload-v1',
+                paperSourceIdentity: 'manual-paper-source-identity-v1'
+            }
+        }), 'per_paper_v1');
+    });
     it('校验抓取 checkpoint 的来源状态和同批次指纹', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-'));
         const checkpointFile = path.join(dir, 'fetch-checkpoint.json');

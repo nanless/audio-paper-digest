@@ -1,0 +1,4692 @@
+{
+  "version": 1,
+  "contract": "historical-manual-filter-spec-archive-v1",
+  "reviewedFields": [
+    "title",
+    "abstract",
+    "categories",
+    "sources"
+  ],
+  "entries": [
+    {
+      "date": "2026-08-20",
+      "reviewer": "Codex",
+      "reviewedAt": "2026-08-20T12:37:59.998+08:00",
+      "reviewProtocol": "title+abstract+categories+sources-v1",
+      "candidateCount": 296,
+      "negativeReasonKind": "legacy-object-task-v1",
+      "sourceEvidence": {
+        "rawCandidatesSha256": "4cb065613509dc7234736056196b93f11885860c3d7f68463950d45c325342bc",
+        "filterDecisionsSha256": "c343875ee726999b883b23a9139b93a946e02e520f7b6679a490bfb32f316cde",
+        "manualFilterSpecSha256": "0574c0ad62972229b1ec8213587aff1a12cafd489d8d84fcb54bdc1b1ced7e73",
+        "candidateIdsSha256": "8d9f959ee41141abe4b93ee66127be95a4709d8075d2b75e25343002f79fe8ef",
+        "decisionProjectionSha256": "9a138392e1ed1b94e566165dcd5e6dfa96ba06a3c5b9fe6afa96bf0c51141d4a"
+      },
+      "candidates": [
+        [
+          "2608.18341",
+          "Low-Power, Neuromorphic, Acoustic Anomaly Detection for Persistent Machine Monitoring"
+        ],
+        [
+          "2608.18191",
+          "ChiroEcho: extending automated bat vocalisation classification beyond the learned taxonomy"
+        ],
+        [
+          "2608.18132",
+          "Alignment Is All You Need: Instruction-Free Training for General Audio-Language Models"
+        ],
+        [
+          "2608.19174",
+          "Finetuning Strategies for Querying Sounds by Vocal Imitation"
+        ],
+        [
+          "2608.19141",
+          "Geometric Iterative Retrieval for Neural Audio Codec Resynthesis"
+        ],
+        [
+          "2608.19061",
+          "Computational Features for Symbolic Melody Analysis"
+        ],
+        [
+          "2608.18226",
+          "FM Synthesizer Audio-Parameter Shared Embeddings"
+        ],
+        [
+          "2608.18141",
+          "Mitigating Spectral Bias in Neural Operators for Underwater Transmission Loss Prediction"
+        ],
+        [
+          "2608.19084",
+          "Does Mapping Non-Maximal Probabilities to GMM Components Matter for S-JEPA Encoder Representations?"
+        ],
+        [
+          "2608.19055",
+          "Generalized Audio-Driven Synthesis of Precise Drummer Motion"
+        ],
+        [
+          "2608.18825",
+          "Understanding Multilingual Medical ASR Adaptation Through Layer-Wise Analysis"
+        ],
+        [
+          "2608.18680",
+          "Sounds Uncertain: Exploring the Affective Aspects of Sonification for Uncertainty Visualization"
+        ],
+        [
+          "2608.19109",
+          "Distributed Target Tracking using Radar Networks"
+        ],
+        [
+          "2608.19048",
+          "Robust and Efficient Feature Extraction for Spike Sorting via the Walsh-Hadamard Transform"
+        ],
+        [
+          "2608.18902",
+          "Towards Lawful ISAC in Cellular Networks"
+        ],
+        [
+          "2608.18760",
+          "Exploiting Pilot Contamination to Improve UL Sum Rate under Maximum Ratio Combining"
+        ],
+        [
+          "2608.18737",
+          "Comparing GNSS Derived Sea Ice Drift in the Arctic and Antarctic using Rotary Spectra and Principal Component Analysis"
+        ],
+        [
+          "2608.18639",
+          "Change Point--Aware Evaluation and Re-Calibration of PPG-Based Blood Pressure Estimation"
+        ],
+        [
+          "2608.18636",
+          "Coordination of Ground-to-Space Reference Networks for High-Precision GNSS"
+        ],
+        [
+          "2608.18582",
+          "Score-based Fading-Aware Decision Fusion"
+        ],
+        [
+          "2608.18395",
+          "BR-FiLM: Bounded Residual Channel-Quality Conditioning for Automatic Modulation Recognition"
+        ],
+        [
+          "2608.19049",
+          "Multi-Agent Off-Policy Deep Reinforcement Learning for Smart Campus Coverage"
+        ],
+        [
+          "2608.18873",
+          "Integrated Sensing and Communications over Hierarchical Cellular and Cell-Free MIMO Systems"
+        ],
+        [
+          "2608.18711",
+          "EgoHRV: Continuous Heart Rate Variability Estimation from Egocentric Systems for Autonomic Response and Skill Assessment"
+        ],
+        [
+          "2608.18272",
+          "SeisEvo: Evolution of Seismic Data Reconstruction Algorithms by Agents"
+        ],
+        [
+          "2608.18114",
+          "Accurate Decoding of Natural Sentences from Non-Invasive Brain Recordings"
+        ],
+        [
+          "2608.19197",
+          "SPADE: Self-Play in Adaptive Synthetic Executable Environments"
+        ],
+        [
+          "2608.19165",
+          "ChildSafeAds Shared Task 2026: Commercial Content in Child-Facing YouTube Videos"
+        ],
+        [
+          "2608.19133",
+          "Comment-level Topic Drift Analysis in the Reddit Corpus"
+        ],
+        [
+          "2608.19124",
+          "Intercepting the Kangaroo: Experimental Astrolinguistics with Constructed Lexicons, Active Probing, and Large Language Models as Informants and Hypothesis Proposers"
+        ],
+        [
+          "2608.19026",
+          "Institutional Books - Enriched Text: A customizable multilingual open-source pipeline for denoising, deduplicating, and annotating OCR text at scale"
+        ],
+        [
+          "2608.19009",
+          "Grading the Graders: Verification Autonomy Levels (L0-L5) for LLM Reasoning"
+        ],
+        [
+          "2608.19006",
+          "Introducing the Privacy-HSD Trade-off: Hate Speech Detection, but not at the Cost of Privacy"
+        ],
+        [
+          "2608.19003",
+          "Structure, Association, and Decision Value: Representation-Based Difficulty Estimation for Adaptive Inference in African-Language NLI"
+        ],
+        [
+          "2608.18988",
+          "DeepWeaver: Bridging the Evidence Synthesis Gap in Open-Ended Question Answering"
+        ],
+        [
+          "2608.18972",
+          "Institutional Newspapers Pipeline: Deriving billions of high quality tokens from historical newspapers"
+        ],
+        [
+          "2608.18937",
+          "MedUAG: Unified Understanding and Generation for Medical Multimodal Models"
+        ],
+        [
+          "2608.18931",
+          "Test-Time Scaling in the Wild: Why Exploitation, Not Exploration, Is the Bottleneck"
+        ],
+        [
+          "2608.18921",
+          "SMTrap: Cost-Effective DoS Attacks Against Large Reasoning Models via SMT Conflict Guidance"
+        ],
+        [
+          "2608.18888",
+          "Assessing Quality of Experience in Natural Language Generation of German Text"
+        ],
+        [
+          "2608.18821",
+          "Identifying Implicit Premises for Logical Reconstruction of Argument Graphs"
+        ],
+        [
+          "2608.18816",
+          "Do Large Language Models Hallucinate Electric Fata Morganas?"
+        ],
+        [
+          "2608.18795",
+          "Decomposing Wrong-Consensus Agreement in LLM Self-Consistency: A GPT-4.1 Case Study"
+        ],
+        [
+          "2608.18768",
+          "Readable, Faithful, Used: Three Dissociable Properties of Demographic Identity in a Language Model"
+        ],
+        [
+          "2608.18767",
+          "Gradient Mirage: Trainable yet Label-Unidentifiable Gradients in Large Language Model Split Learning"
+        ],
+        [
+          "2608.18765",
+          "Learning Canonical Register Automata over Ordered Data Domains"
+        ],
+        [
+          "2608.18726",
+          "Execution-grounded evaluation reveals hidden failures in language-model calculations for environmental science"
+        ],
+        [
+          "2608.18723",
+          "Budget-First Tariff Recommendation (BFTR): A Complete Algorithmic Framework for Telecom Plan Recommendation without Overcharging"
+        ],
+        [
+          "2608.18704",
+          "MemFuse: Multi-Source Memory Fusion from Fragmented Observations"
+        ],
+        [
+          "2608.18689",
+          "Aslema at NADI 2026: Augmentation through Fewshot for SLU"
+        ],
+        [
+          "2608.18681",
+          "Learning What to Fail On: Failure-Mode Contextual Bandits for Adversarial Data Curation"
+        ],
+        [
+          "2608.18661",
+          "X2Streaming-TTS: Causal Token-Level Text-to-Speech from Streaming Text with Speech-State Inheritance"
+        ],
+        [
+          "2608.18655",
+          "TranslatePsy-AfriSLM: High-Quality Data Scaling For Low-Resource Machine Translation"
+        ],
+        [
+          "2608.18581",
+          "From Storage to Access: Verifiable Activation of Parametric Knowledge in LLMs via Explicit Priming and Implicit Reasoning"
+        ],
+        [
+          "2608.18578",
+          "Compress and Forget: bitsandbytes Quantization Amplifies Proactive Interference in LLMs"
+        ],
+        [
+          "2608.18575",
+          "Beyond LLM-Based Reasoning: Lightweight GNNs for Agent Failure Attribution"
+        ],
+        [
+          "2608.18545",
+          "Shared Circuits for Shared Grammar: Tracing Subject-Verb Agreement Across Languages"
+        ],
+        [
+          "2608.18524",
+          "DART-SD: Diamond-topology Aware Retrieval and Tuning for Self-Distillation of Multi-Turn Tool-Calling Agents"
+        ],
+        [
+          "2608.18489",
+          "MissDiag: Diagnostic Evaluation of Incomplete-Knowledge Robustness in KGQA and KG-RAG"
+        ],
+        [
+          "2608.18486",
+          "WhiteMatter: All-to-All Cross-Layer Connections via KV Mixing"
+        ],
+        [
+          "2608.18474",
+          "OmniAlign: A Unified Multilingual Aligner for Word and Sentence Alignment"
+        ],
+        [
+          "2608.18438",
+          "Pedagogical AI in Mental Health: A Tri-Stream Fine-Tuned LLM Framework for Automated Clinical Supervision and Risk Triage"
+        ],
+        [
+          "2608.18437",
+          "Tangut Word Segmentation under Extreme Resource Scarcity: Integrating Traditional Lexicons and Unlabeled Text"
+        ],
+        [
+          "2608.18361",
+          "Figurative and Cultural Knowledge in LLMs: Investigating Cross-Domain Transfer through Fine-Tuning"
+        ],
+        [
+          "2608.18312",
+          "Artifact-centered Claim-aware Observability for Autonomous Scientific Agents"
+        ],
+        [
+          "2608.18182",
+          "Efficient INT8 Inference of Small NLP Models on Server CPUs with PyTorch Native Stack"
+        ],
+        [
+          "2608.18164",
+          "Are LLMs Safe Beyond Text: Do Emojis Expose Gaps in Safety Evaluation"
+        ],
+        [
+          "2608.18158",
+          "When Do LLMs Actually Help? Evaluating LLMs as Data Quality Annotators"
+        ],
+        [
+          "2608.18144",
+          "The Deontic Gap: Large Language Models and the Modal Language of Obligation"
+        ],
+        [
+          "2608.18138",
+          "Language Models for Portuguese: A Systematic Mapping Study"
+        ],
+        [
+          "2608.18116",
+          "You Are What You Prompt: Prompt Quality, Domain Shift, and Uncertainty in Agrifood Vision-Language Models"
+        ],
+        [
+          "2608.18115",
+          "Temporal Multi-Signal Fusion for Token-Level Hallucination Detection"
+        ],
+        [
+          "2608.18109",
+          "Operationalizing Narrative Entropy (Sn): A Two-Scene Registered Pilot Report and Pre-Validation Protocol"
+        ],
+        [
+          "2608.18108",
+          "Same Facts, Different Updates: Inference Setup Shapes LLM Behavior in Medical Allocation"
+        ],
+        [
+          "2608.18107",
+          "Institutional Prestige as Geographic Bias in Large Language Models: Evidence from Three Factorial Experiments with Bootstrap Confidence Intervals"
+        ],
+        [
+          "2608.18106",
+          "Different Facets of Verbalised Overconfidence: an Interpretability Study"
+        ],
+        [
+          "2608.18105",
+          "StocksTalk: A Voice-Enabled Conversational Agent for Structured Query Generation over Web Data"
+        ],
+        [
+          "2608.18103",
+          "DeepTCM1.0: A Multi-Expert AI Agent for Deciphering Mechanisms of Chinese Herbal Formulae Based on General Large Language Models"
+        ],
+        [
+          "2608.18102",
+          "Stability-Aware Feature Design for Robust Watermark Detection in Machine-Generated Text"
+        ],
+        [
+          "2608.18101",
+          "BERTilda: Explainable Topic Lifecycle Tracking with Split/Merge Detection via Similarity-and-Flow Temporal Graphs"
+        ],
+        [
+          "2608.18100",
+          "Computational Orientalism: Measuring Structural Discourse Bias in Large Language Models Using the Middle East Cultural Sensitivity Score (MECSS)"
+        ],
+        [
+          "2608.18098",
+          "Fractional Decay KV-Cache: Ownership-Aware Memory Management for Improved Inference Relevancy in Dialog Systems"
+        ],
+        [
+          "2608.18097",
+          "FrenchNews-7: Benchmarking Cross-Publisher French News Editorial Desk Classification"
+        ],
+        [
+          "2608.18096",
+          "MAVEN: A Macro-Societal Value Evaluation Framework of Multimodal Content with Compact Aligned Evaluators"
+        ],
+        [
+          "2608.18095",
+          "Backdoor Learning in Language Models and Vision-Language Models"
+        ],
+        [
+          "2608.18094",
+          "NE-BERT: A Multilingual Language Model for Nine Northeast Indian Languages"
+        ],
+        [
+          "2608.18093",
+          "Abliteration Mitigation via Refusal Aliases"
+        ],
+        [
+          "2608.18091",
+          "Self- and Other-Labels Induce Bidirectional Bias in LLM Judges"
+        ],
+        [
+          "2608.18090",
+          "Nine Emotion Centroids: A Label-Free Valence Axis That Transfers Across Four Modalities"
+        ],
+        [
+          "2608.18089",
+          "Latent Space Refusal Anchoring for Low-Resource African Languages: Mechanistic Safety Recovery Without Retraining"
+        ],
+        [
+          "2608.18087",
+          "SuTRA : Structurally-Unified Tokenization with Root Awareness"
+        ],
+        [
+          "2608.18085",
+          "Persona-Guided LLM Agents for Task-Oriented Dialogue"
+        ],
+        [
+          "2608.18084",
+          "Compiler-Guided Adaptive Proof Search with Cross-Model Synergy on Context-Dependent Theorem Proving"
+        ],
+        [
+          "2608.18083",
+          "Entity tracking emerges in sub-billion parameter language models and exceeds human performance in naturalistic narratives"
+        ],
+        [
+          "2608.18082",
+          "LongNovel: A Multi-Scale Benchmark for Hallucination Detection in Long-Context Novel Summarization"
+        ],
+        [
+          "2608.19181",
+          "Beyond Teacher Likelihood: Group-Calibrated On-Policy Distillation for Long-Context Reasoning"
+        ],
+        [
+          "2608.19098",
+          "Open-MOPD: Diagnosing and Fixing Capability Imbalance in Multi-Teacher On-Policy Distillation"
+        ],
+        [
+          "2608.19083",
+          "When Readability and Source Retention Diverge: An Evaluability Gap in AI Translation"
+        ],
+        [
+          "2608.19075",
+          "ReWEIGH the Evidence: Calibrating Token-Level Ordinal Visual Evidence to Mitigate Hallucinations in Large Vision-Language Models"
+        ],
+        [
+          "2608.19072",
+          "What is Missing from AI Post-Training AI: An Empirical Analysis"
+        ],
+        [
+          "2608.19029",
+          "Adaptive Memory and Reflection Multi-Agent System for Medical Question Answering"
+        ],
+        [
+          "2608.18952",
+          "rEDMRec: Distilling Large Language Model Reasoning into an Editable Experience Memory for Recommendation"
+        ],
+        [
+          "2608.18940",
+          "Training Chemical Plausibility-Aware Large Language Models for Single-Step Retrosynthesis"
+        ],
+        [
+          "2608.18827",
+          "MLREF: Efficient Module Reuse for Reward Design in Reinforcement Learning via Large Language Models"
+        ],
+        [
+          "2608.18752",
+          "GreekBarRetrieval: A Benchmark for Greek Statutory Retrieval"
+        ],
+        [
+          "2608.18744",
+          "Metrics That Write Themselves: Evolving an Evaluator from Its Own Blind Spots"
+        ],
+        [
+          "2608.18628",
+          "When Safety Overrides Vision: Exploring Dynamics between Vision Influence and Safety Alignment in Vision-Language Models"
+        ],
+        [
+          "2608.18591",
+          "Can a Lightweight Multimodal Model Estimate LLM Reasoning Performance? A Study for Compute-Optimal Document Inference"
+        ],
+        [
+          "2608.18539",
+          "Evaluating and Explaining Prompt Sensitivity of LLMs Using Interactions"
+        ],
+        [
+          "2608.18480",
+          "Building real-time digital twin instances with Function+Data Flow: user evaluation and extension for iterative pipelines"
+        ],
+        [
+          "2608.18448",
+          "More Context, Same Budget: Dual-Bounded Relational Recall Beyond Top-K Retrieval"
+        ],
+        [
+          "2608.18401",
+          "Multimodal Rapport Estimation in Real-World HRI"
+        ],
+        [
+          "2608.18379",
+          "Selection, Recombination, or a Fresh Solve? A Candidate-Free Control for Single-Pass Test-Time Aggregation"
+        ],
+        [
+          "2608.18339",
+          "From Inference to Adaptation: A Unified Optimal Transport View of Vision Language Model"
+        ],
+        [
+          "2608.18307",
+          "ComponentBench: Diagnosing Component-Level Failures in Computer-Use Agents"
+        ],
+        [
+          "2608.18294",
+          "Debiased Inference for AI-Generated Data without Gold-Standard Labels: Identification via Multiple Imperfect Measurements"
+        ],
+        [
+          "2608.18280",
+          "What Makes Software Issue Resolution Tasks Difficult for Agents?"
+        ],
+        [
+          "2608.18260",
+          "Redakto - The Incognito Tab for LLMs"
+        ],
+        [
+          "2608.18222",
+          "Think Shallow, Solve Deep: Controlling Recurrent Dynamics for Reliable Test-Time Depth"
+        ],
+        [
+          "2608.18160",
+          "MicroPython and CircuitPython: Pythons Quiet Takeover of IoT and Robotics"
+        ],
+        [
+          "2608.18142",
+          "Efficient Adaptation of LLMs for Hate Speech Detection in Low-Resource Languages: A Comparative Study on Roman Urdu"
+        ],
+        [
+          "2608.18131",
+          "Safety Alignment Illusion: The Cross-Lingual Safety Gap in LLMs"
+        ],
+        [
+          "2608.19171",
+          "Lévy Attention: Single-Pass Predictive Uncertainty for Continuous-Time Attention"
+        ],
+        [
+          "2608.19168",
+          "Learned, Then Lost: A Measured Single-Example Counterfactual in Pre-training"
+        ],
+        [
+          "2608.19151",
+          "Continuous-Time Reinforcement Learning for Controlled Hawkes Jump-Diffusions"
+        ],
+        [
+          "2608.19144",
+          "Bridge Graphical Models: Coupling, Projection, and Current-Preserving Dynamics for Generative Modeling"
+        ],
+        [
+          "2608.19134",
+          "SCORE: Subject Coordinate Recovery for Label-Free Cross-Subject EEG-to-Image Retrieval"
+        ],
+        [
+          "2608.19128",
+          "Beyond Trial Averaging: Anchoring Neural and Visual Representations for Few-Repetition Brain-to-Image Retrieval"
+        ],
+        [
+          "2608.19127",
+          "Leaf Values as Coordinates: Exact Contrastive Explanation for Gradient-Boosted Ensembles"
+        ],
+        [
+          "2608.19121",
+          "PGFS++: Molecular Property Improvement under Synthesis and Diversity Constraints"
+        ],
+        [
+          "2608.19119",
+          "Discretizing Continuous Time Series for Imputation with Masked Diffusion Training"
+        ],
+        [
+          "2608.19117",
+          "Enhancing EBSD throughput of battery electrode materials using super-resolution generative adversarial networks"
+        ],
+        [
+          "2608.19115",
+          "Pretraining Reusable Inference Across Views with Synthetic Task Priors"
+        ],
+        [
+          "2608.19013",
+          "Harness Continual Learning: Continual Adaptation Beyond Model Parameters"
+        ],
+        [
+          "2608.18982",
+          "Monroe: A Molecular Foundation Model for In-Context Probabilistic Inference"
+        ],
+        [
+          "2608.18969",
+          "Fuzzy Accuracy Compensates for Label Subjectivity in Classification of Skin Tone Using Wearable Photoplethysmography Signals"
+        ],
+        [
+          "2608.18936",
+          "Graphical Design of Interpretable Architectures"
+        ],
+        [
+          "2608.18932",
+          "Transportable Causal Effect Estimation across Networks under Interference"
+        ],
+        [
+          "2608.18919",
+          "Lost in Aggregation: How Benchmarks Overlook Irreplaceable Model Strengths"
+        ],
+        [
+          "2608.18918",
+          "Score the Algebra, Not the Span: Dimension Reduction for Transfer Operator Models of Dynamical Systems"
+        ],
+        [
+          "2608.18911",
+          "Converting Expert Deliberation into Financial Signals Through A Context-Aware NLP Pipeline"
+        ],
+        [
+          "2608.18910",
+          "On the Slow Convergence to Trivial Solutions of Algorithms for Hard Optimization Problems"
+        ],
+        [
+          "2608.18903",
+          "A FEM-Based Surrogate Modelling and Optimization Framework for Physics-Constrained Electromagnetic Coil Design"
+        ],
+        [
+          "2608.18887",
+          "Graph-Based Approaches to Learning Epileptogenic Zone Localization Using Stereo-EEG Recordings"
+        ],
+        [
+          "2608.18851",
+          "Multi-stage neural operator learning with application for convolutions"
+        ],
+        [
+          "2608.18849",
+          "GEAR: Generative Expansion and Real Anchoring for Two-Stage Distillation of Tabular Foundation Models"
+        ],
+        [
+          "2608.18819",
+          "A Unifying Relational Perspective on Expressive Lottery Tickets"
+        ],
+        [
+          "2608.18810",
+          "Many Optimizers But Only One Training Path: Repeated Resampling for Adaptive Optimizer Selection"
+        ],
+        [
+          "2608.18808",
+          "Tensor Field Models"
+        ],
+        [
+          "2608.18803",
+          "Forgetting, plasticity, and co-observation: a third facet of continual learning"
+        ],
+        [
+          "2608.18780",
+          "A Real-Time Tsetlin Machine-based Non-intrusive Load Monitoring System on MCUs"
+        ],
+        [
+          "2608.18777",
+          "GraphK: Variable-Size Graph Generation with Efficient Edge Construction"
+        ],
+        [
+          "2608.18770",
+          "To Go Far, Go Together: Diverse Preferences Induce a Curriculum for Reward Optimization"
+        ],
+        [
+          "2608.18762",
+          "Enhancing Distance-Based Graph Autoencoders with Structural Penalties for Dynamic Graph Embedding"
+        ],
+        [
+          "2608.18759",
+          "Beyond Predictive Fairness: Quantifying Attribution Consistency Across Demographic Groups in Diabetic Retinopathy Screening"
+        ],
+        [
+          "2608.18749",
+          "Geometric Data Perturbation with Noisy-Anchor Alignment for Privacy-Preserving Collaborative Learning"
+        ],
+        [
+          "2608.18746",
+          "Decision-Metric Alignment in Latent World Models: Diagnostics and Action-Conditioned Objectives for MPC Planning"
+        ],
+        [
+          "2608.18736",
+          "FedLNS: Leverage LayerNorm Signature Modeling to Mitigate Adversarial Manipulation in Federated LLMs"
+        ],
+        [
+          "2608.18727",
+          "Visual-Aware Representation of Web Pages for Machine Learning Applications"
+        ],
+        [
+          "2608.18716",
+          "Multi-Class Electrical and Mechanical Fault Classification Using Random Convolutional Kernels"
+        ],
+        [
+          "2608.18690",
+          "Europe's Climate Ambition Under Scrutiny: Evidence from Deep Learning Emission Projections"
+        ],
+        [
+          "2608.18687",
+          "Transforming Heart Disease Prediction with Advanced Machine Learning Techniques"
+        ],
+        [
+          "2608.18675",
+          "An Empirical Benchmark of Deep Time-Series Models for Smart Meter Energy Forecasting"
+        ],
+        [
+          "2608.18669",
+          "Reinforced Planning with Latent World Models"
+        ],
+        [
+          "2608.18660",
+          "Computational Measurement of Team-Process Phase Dynamics in Collaborative Virtual Reality"
+        ],
+        [
+          "2608.18656",
+          "FlashAttention for Scalable Vector Architectures"
+        ],
+        [
+          "2608.18643",
+          "ProxyGuard: Direct Reliability Inference for Randomized Data Release Mechanisms with Shared Targets"
+        ],
+        [
+          "2608.18634",
+          "Coordination on a Budget: Federated Active Learning with Few Labels"
+        ],
+        [
+          "2608.18611",
+          "Scalable Geospatial Machine Learning for Power-Line Asset Risk: Integrating Remote Sensing for Lightning and Vegetation Risk Modelling"
+        ],
+        [
+          "2608.18610",
+          "Denoising-Aware Inversion: Revealing Privacy Risks in Noise-Protected Text Embeddings"
+        ],
+        [
+          "2608.18597",
+          "Off-Manifold Collapse in Guided Protein Language Models"
+        ],
+        [
+          "2608.18592",
+          "Infrared Universality of Collective Dynamics across Transformer and State-Space Architectures"
+        ],
+        [
+          "2608.18576",
+          "Beyond receptive fields: sequence-pooled normalization can supply most of a sequence labeler's context"
+        ],
+        [
+          "2608.18574",
+          "Continual Reasoning Gym: Diagnosing and Harnessing Shared Reasoning in Continual RLVR"
+        ],
+        [
+          "2608.18571",
+          "NanoSleep: A Parameter-Efficient Hybrid Temporal Convolutional Network for Single-Channel Sleep Stage Classification"
+        ],
+        [
+          "2608.18558",
+          "MorphoGP: A Nonparametric Framework for Predicting Equilibrium Beach Profiles Under Tidal Influence"
+        ],
+        [
+          "2608.18555",
+          "Performance Drift Detection in Machine Learning as a Service (MLaaS) for IoT Environments"
+        ],
+        [
+          "2608.18546",
+          "MARCUS: Missing-Aware Region Representation with Contextual Urban Signals for Rent Prediction"
+        ],
+        [
+          "2608.18503",
+          "LLM-Powered Predictive Decision-Making for Sustainable Data Center Operations"
+        ],
+        [
+          "2608.18500",
+          "Tianmu-TC: Physics-constraints Generative Artificial Intelligence for Global Tropical Cyclone Forecasting"
+        ],
+        [
+          "2608.18495",
+          "Physics-Unrolled Neural Operator for Wireless Field Modeling"
+        ],
+        [
+          "2608.18469",
+          "ERASE: EaRly bAckpropagation SchEdule for Faster Training of Modern Recommendation Systems"
+        ],
+        [
+          "2608.18451",
+          "Atrial Fibrillation Detection with Arbitrary Leads via a Codebook-Based Reconstruction-Classification Framework"
+        ],
+        [
+          "2608.18450",
+          "Adaptive Multi-Agent Feature Selection for Personalized Fall Risk Prevention"
+        ],
+        [
+          "2608.18419",
+          "Mechanistic Interpretability of Structure-Aware Numerical Reasoning in LLaMA 3.1 8B"
+        ],
+        [
+          "2608.18415",
+          "The Road Taken: The Role of Optimizers at the Edge of Stability"
+        ],
+        [
+          "2608.18410",
+          "Role-Conditioned Sub-Token Routing for Efficient Vision-Language-Action Policies"
+        ],
+        [
+          "2608.18404",
+          "Vector Symbolic Policy Gradient"
+        ],
+        [
+          "2608.18330",
+          "When Does Dynamic Ensembling Pay Off? Diagnosing Regionwise Gains in Regression under Distribution Shift"
+        ],
+        [
+          "2608.18319",
+          "SingularClip: Preventing Spectral Collapse to Maintain Plasticity in Continual and Reinforcement Learning"
+        ],
+        [
+          "2608.18271",
+          "Rethinking Privileged Information in On-Policy Self-Distillation"
+        ],
+        [
+          "2608.18263",
+          "SIGMA: Symmetry-aware, Intelligent, Geometric, Multi-objective Adaptive Control for Robust, Dependable Traffic Management"
+        ],
+        [
+          "2608.18244",
+          "Bidirectional representational alignment between biological and artificial neural networks"
+        ],
+        [
+          "2608.18242",
+          "ClosureBench: A Constructive Benchmark for Compositional Graph Reasoning"
+        ],
+        [
+          "2608.18235",
+          "Classifying Directional Trajectories Near Criticality in the Three-State Majority-Vote Model with Deep Belief Networks and Bidirectional GRUs"
+        ],
+        [
+          "2608.18230",
+          "Allocating Recurrent Compute in Looped Language Models"
+        ],
+        [
+          "2608.18190",
+          "Safe Domain Adaptation for Physics: Overcoming Nuisances, Label Shifts, and Simulation Priors"
+        ],
+        [
+          "2608.18188",
+          "A systematic review of machine learning techniques to address diagnosis and treatment of autism: challenges and opportunities"
+        ],
+        [
+          "2608.18186",
+          "What Can Artificial Intelligence Learn from Medicine? Generative Analogies and Reliable Machine Learning Systems"
+        ],
+        [
+          "2608.18185",
+          "H$^2$EDL: Hyper Evidential Deep Learning for Hierarchical Classification"
+        ],
+        [
+          "2608.18183",
+          "Accelerating Visual On-Policy Distillation with Batched Speculative Jacobi Rollouts"
+        ],
+        [
+          "2608.18177",
+          "Towards Reversible Forgetting: Managing Obsolete Knowledge in Continual Enterprise AI Agents"
+        ],
+        [
+          "2608.18147",
+          "Entropy-Constrained Adaptive Stochastic Quantization"
+        ],
+        [
+          "2608.19140",
+          "Grouping the Stochastic Machine: Precision, Not Capability, as the Frontier Metric for AI Systems"
+        ],
+        [
+          "2608.19082",
+          "Learning Random Geometric Graphs Drawn in Probabilistic Metric Spaces"
+        ],
+        [
+          "2608.19080",
+          "SPK: Eliciting Structured Prior Knowledge for Interpretable Out-of-Distribution Detection in Real-Time Object Detection"
+        ],
+        [
+          "2608.19073",
+          "Robust Risk Under Evolving Uncertainty: A Wasserstein Counterpart of the Entropic Value-at-Risk"
+        ],
+        [
+          "2608.19067",
+          "Diffusion Models for High-Dimensional Clustered Data: Intrinsic-Dimension Adaptivity via Bayesian Classification"
+        ],
+        [
+          "2608.19043",
+          "Bernstein-Vazirani Networks: Quantum Machine Learning by Interference"
+        ],
+        [
+          "2608.18938",
+          "Breaking the weakest link to evade vision language models"
+        ],
+        [
+          "2608.19161",
+          "Beyond the Transcript: Detecting Covert Co ordination in Latent Multi-Agent Communication"
+        ],
+        [
+          "2608.19125",
+          "Tuning the Stochastic Machine: A Systems Engineer's Operating Model for Human-AI Engineering"
+        ],
+        [
+          "2608.19047",
+          "Eureka: Task-Conditioned Meta-Agent Orchestration for Scientific Discovery"
+        ],
+        [
+          "2608.19025",
+          "Self-prompting and cross-model consensus enable reproducible data extraction from scientific literature with large language models"
+        ],
+        [
+          "2608.19002",
+          "A Theory of Post-hoc Debate Judgement"
+        ],
+        [
+          "2608.18900",
+          "\\textsc{TestifAI}: Tomography-Based Testing for Deep Learning Systems"
+        ],
+        [
+          "2608.18899",
+          "Syntactic Simplification of OWL Class Expressions"
+        ],
+        [
+          "2608.18884",
+          "Training-Free Inference-Time Self-Reflection and Cost-Bounded Early Stopping for Large Language Models"
+        ],
+        [
+          "2608.18878",
+          "DentAgent: Evidence-Centric Multi-Agent Coordination for Multimodal Dental Reasoning"
+        ],
+        [
+          "2608.18852",
+          "SkillGate: Training In-Policy Skill Selection in Long-Horizon Agents"
+        ],
+        [
+          "2608.18846",
+          "ORBITER: Conflict-Aware Decision-Making for Agentic Last-Mile Delivery"
+        ],
+        [
+          "2608.18836",
+          "Verifiable abstention makes AI leak diagnosis accountable in water distribution networks"
+        ],
+        [
+          "2608.18820",
+          "Pairwise Logical Selection of Enthymeme Completions under Semantic-Link Uncertainty"
+        ],
+        [
+          "2608.18740",
+          "A Multi-Agent Platform for Automated Enterprise Analytics and Insight Generation"
+        ],
+        [
+          "2608.18719",
+          "Competence, Not Accuracy: A Diagnostic for Reference-Free Judge Gates in Skill Optimization"
+        ],
+        [
+          "2608.18682",
+          "RTPO: Reverse-Turn Policy Optimization for Stabilizing Agentic RL Training"
+        ],
+        [
+          "2608.18677",
+          "Sanyu Studio: A Multi-Agent System for Art-Historical Narrative Construction"
+        ],
+        [
+          "2608.18665",
+          "Candidate-Fate Accounting for Transparent Sensor Diagnostic Pipeline Search"
+        ],
+        [
+          "2608.18631",
+          "Preference Reasoning under Indeterminacy in Large Language Models"
+        ],
+        [
+          "2608.18613",
+          "CTIFoundry: An Agent-Native Corpus Scaffold for Cyber Threat Intelligence"
+        ],
+        [
+          "2608.18580",
+          "FACET: Preserving Source Intent and Executable State in Terminal Task Synthesis"
+        ],
+        [
+          "2608.18543",
+          "Bridging Search and CRM: Productionizing AI Product Research Agents for Customer Re-Engagement"
+        ],
+        [
+          "2608.18534",
+          "FinRCA-Bench: Benchmarking Evidence Retrieval and Reasoning for Financial AI Systems"
+        ],
+        [
+          "2608.18531",
+          "Pairwise Ranking Outperforms Single-Action RL for Offline Explanation Selection: A Practical Lesson"
+        ],
+        [
+          "2608.18521",
+          "Which Negatives Matter? Ask Your Text Encoder: Adaptive Similarity Margins for Dense-Caption Retrieval"
+        ],
+        [
+          "2608.18504",
+          "UMER: Unifying Embedding and Ranking via Pair-Aware Discriminative Reasoning for Universal Multimodal Retrieval"
+        ],
+        [
+          "2608.18423",
+          "FM-Bench: A Benchmark for Long-Horizon Management with Competing Agents"
+        ],
+        [
+          "2608.18409",
+          "Improving Natural-Language Combinatorial-Optimization Accuracy in Resource-Constrained Language Models via Formal Abstractions"
+        ],
+        [
+          "2608.18397",
+          "When Clean Signals Are Not Enough: Detecting Structural Ambiguity for Safe Wearable Stress Classification"
+        ],
+        [
+          "2608.18389",
+          "A Jagged Frontier: Evaluating Robustness of Code Agents to Semantics-Preserving Transformations"
+        ],
+        [
+          "2608.18336",
+          "Measuring the Partial-Credit Gap: A Strict Benchmark on Vietnam's 2025 Convex Marking Scheme"
+        ],
+        [
+          "2608.18324",
+          "Governance Records as Supervision: Verifier-Selected Self-Training for Structured Workflow Repair"
+        ],
+        [
+          "2608.18303",
+          "SESSE: Sketch, Expand, Sort, Summarize, Evaluate -- LLM-as-Judge Evaluation via Structured Decomposition"
+        ],
+        [
+          "2608.18300",
+          "The Lifecycle of LLM-as-a-Judge for Large-Scale Recommendation Explanations"
+        ],
+        [
+          "2608.18289",
+          "Evaluating Structured Information Extraction with Open Models in a High Risk Public Sector Application"
+        ],
+        [
+          "2608.18261",
+          "Cacheable by Design? Training Mixture-of-Experts Routers for Locality Against the Edge Memory-Bandwidth Wall: A Pre-Registered Negative Result with a Systems Measurement Study"
+        ],
+        [
+          "2608.18238",
+          "GenEx: A Graph-Based Representational Paradigm for SARS-CoV-2 Variant Detection via Codon Co-occurrence Networks"
+        ],
+        [
+          "2608.18194",
+          "On the Triangle Inequality for the Jaccard Distance in Arbitrary Lattices"
+        ],
+        [
+          "2608.18171",
+          "Looped Language Models Improve Compositional Tool Calling"
+        ],
+        [
+          "2608.18167",
+          "Adversarial Review: Structured Disagreement for Grounded Agentic Code Review"
+        ],
+        [
+          "2608.18165",
+          "RDFdL: Integrating RDF with Differential Dynamic Logic"
+        ],
+        [
+          "2608.18136",
+          "FraudBench: Stress-Testing Policy-Grounded Banking Agents Against Adaptive Fraud"
+        ],
+        [
+          "2608.18135",
+          "Improving Rural Medication Safety with AI: A Scoping Review"
+        ],
+        [
+          "2608.18133",
+          "Optimized Fuzzy Logic Approach with the IEEE Key Gas Method for Diagnosing Power Transformer Faults Using Dissolved Gas Analysis"
+        ],
+        [
+          "2608.18117",
+          "Position: AI Leaderboards Are Underserving the Global South: A Case Study from India"
+        ],
+        [
+          "2608.18111",
+          "Solving Is Not Drawing: A Benchmark for Diagrammatic Reasoning in Olympiad Geometry"
+        ],
+        [
+          "2608.18110",
+          "Emergence of Agentic AI: A Review on Evolution, Background, Working Principles, Applications, Adoption Factors, and Future Research Directions"
+        ],
+        [
+          "2608.18104",
+          "Self-Evolving Agents as Dynamic Graph Transformation: A Survey and New Perspective"
+        ],
+        [
+          "2608.18099",
+          "FinSkillBench: Evaluating AI Agents and Domain Skills for Investment Management"
+        ],
+        [
+          "2608.18092",
+          "Position: Multi-Agent Systems Should Prioritize Concurrency Control"
+        ],
+        [
+          "2608.18088",
+          "A Metamorphic Artificial Age Score Decision-Support Prototype for Flight-Log-Based Drone Propeller Health Monitoring"
+        ],
+        [
+          "2608.18086",
+          "Position: Current Model Cards Are Insufficient for Downstream Governance of Open-Weight Foundation Models"
+        ],
+        [
+          "2608.18081",
+          "Position: Behavioral Systems Require Behavioral Tests"
+        ],
+        [
+          "2608.18080",
+          "Large Language Models in Mental Health: A Systematic Review of Applications, Innovations, and Ethical Challenges"
+        ],
+        [
+          "2608.18079",
+          "Position: Profiling Game Worlds by Transition Complexity"
+        ],
+        [
+          "2608.18078",
+          "Position: Collusion Risks Among AI Reasoning Agents Justify Certification Requirements for Making Market Decisions"
+        ],
+        [
+          "2608.19182",
+          "ADEPT: Accelerating Dexterity via Pre-Training and Post-Training using Reinforcement Learning"
+        ],
+        [
+          "2608.19163",
+          "Interpretable AI predicts a 2026 summer dry anomaly in central China"
+        ],
+        [
+          "2608.19147",
+          "Pre-Compiled Pipeline Shards for Distributed LLM Inference on Intel AI PC Fleets"
+        ],
+        [
+          "2608.19088",
+          "Detecting Backdoors in Object Detection via Pre-NMS Prediction Distribution Shift"
+        ],
+        [
+          "2608.19085",
+          "DA-WAM: Decision-Aligned Future Latents for Driving World Models"
+        ],
+        [
+          "2608.19066",
+          "GS-VLA: Plug-and-Play Viewpoint Canonicalization for Frozen VLA Policies via Gaussian Splatting"
+        ],
+        [
+          "2608.19032",
+          "Counterfactual Contrastive Analysis"
+        ],
+        [
+          "2608.19014",
+          "One-Stage Object Detectors in Autonomous Driving"
+        ],
+        [
+          "2608.19011",
+          "From Threat Intelligence to Detection: Knowledge-driven Enrichment and Template-based Rule Grounding for Automated Sigma Rule Generation"
+        ],
+        [
+          "2608.18996",
+          "GrabVG: Graph-Attentive Binding for Visual Grounding in UAV Imagery"
+        ],
+        [
+          "2608.18946",
+          "AlphaClifford: Efficient Clifford Synthesis and Transpilation with Model-based RL"
+        ],
+        [
+          "2608.18933",
+          "SkillForge: Self-Distilling Agents for Project-Specific Issue Resolution"
+        ],
+        [
+          "2608.18907",
+          "Learning-State-Aware Dynamic Generative Data Augmentation on Small-Scale Datasets"
+        ],
+        [
+          "2608.18895",
+          "MediaGraph: A Content-Aware Data Model and Query Framework for Multimodal Knowledge Graphs"
+        ],
+        [
+          "2608.17426",
+          "SemComp-Bench: Benchmarking Semantic Task Completion in Video Generation"
+        ],
+        [
+          "2608.18063",
+          "EDITBRIDGE: Towards Faithful and Efficient Ultra-High-Resolution Image Editing"
+        ],
+        [
+          "2608.18565",
+          "SemaPLC: A Project-Grounded, Verification-Gated Agent Harness for PLC Code Generation"
+        ],
+        [
+          "2608.18701",
+          "SoftVTBench: A Deformation-Aware Visuo-Tactile Dataset and Benchmark for Deformable-Object Manipulation"
+        ],
+        [
+          "2608.16793",
+          "PixRestore: Unified Image Restoration via Pixel Diffusion Transformer"
+        ],
+        [
+          "2608.16022",
+          "OpenHarmony Bench: Evaluating LLMs and Coding Agents on OpenHarmony App Development"
+        ],
+        [
+          "2608.15360",
+          "SAPE: Sandwich Adapters for Parameter Efficiency in Large Language Model Fine-Tuning"
+        ],
+        [
+          "2608.18957",
+          "Institutional Books - Visual Elements: An open-source pipeline for extracting, classifying, deduplicating, and captioning visual elements from digital book collections"
+        ],
+        [
+          "2608.17973",
+          "LinCa: Accelerating Diffusion Models via Learnable Decomposed Feature Caching"
+        ],
+        [
+          "2608.17883",
+          "Improving Complex Moiré Removal with Generative Supervision"
+        ],
+        [
+          "2608.17386",
+          "MANIGUARD: A Benchmark and Data Suite for Specification-Grounded Safety Evaluation and Improvement of Robotic Manipulation"
+        ],
+        [
+          "2608.01035",
+          "WAM-Diff2: Hierarchical AR-to-Diffusion Distillation for Highly Efficient Autonomous Driving VLA"
+        ],
+        [
+          "2512.14629",
+          "Evaluating Music Context Preservation: A Multi-facet Framework for Music Editing Systems"
+        ],
+        [
+          "2608.15425",
+          "NumerosityVLM: A Cognitively Inspired Benchmark for Interpreting Numerosity Representations in Vision-Language Models"
+        ],
+        [
+          "2608.15380",
+          "Adaptive Bridge: A Proxy-Based Decoupling Layer for Mitigating DDS Backpressure in ROS 2"
+        ],
+        [
+          "2608.15242",
+          "LongRCA Bench: Diagnosing Responsible Roles and Root Causes in Long-Horizon Agent Failures"
+]
+      ],
+      "selectedReasons": {
+        "2608.18341": "摘要明确研究低功耗神经形态声学异常检测，使用 log-mel 声学特征和真实设备监测，属于音频/声学信号分析。",
+        "2608.18191": "摘要明确研究蝙蝠 vocalisation 的被动声学监测与分类，属于生物声学和音频事件识别。",
+        "2608.18132": "论文直接提出通用 Audio-Language Model 的无指令训练与跨模态对齐，属于音频语言模型。",
+        "2608.19174": "论文研究用人声模仿查询音效，并比较 CED/MobileNetV3 声音编码器训练策略，属于音频检索。",
+        "2608.19141": "论文研究神经音频 codec 的 RVQ 粗粒度 token 重合成，核心问题是音频质量与声码器表示。",
+        "2608.19061": "论文系统整理符号旋律的音乐理论/心理学特征并提供实现库，属于音乐信息检索与音乐分析。",
+        "2608.18226": "论文学习带信号路由结构的合成器音频参数表示，用目标声音反推 preset，属于音频合成。",
+        "2608.18141": "摘要明确是 underwater acoustic transmission loss 预测，并用频谱-空间残差恢复声学干涉细节。",
+        "2608.19055": "论文从音频生成鼓手动作，提出 audio-motion correlation 并评测节奏对齐，属于音乐驱动动作生成。",
+        "2608.18825": "论文分析多语言医疗 ASR 适配和 Whisper 行为，核心输入为语音、任务为自动语音识别。",
+        "2608.18680": "论文研究用 sonification 表达不确定性的情感和听觉属性，属于声音/听觉可视化。",
+        "2608.18689": "论文在 SLU 中用 voice cloning 生成突尼斯方言合成语音，并报告 WER 与意图/槽位结果。",
+        "2608.18661": "论文提出从流式文本逐 token 生成语音并继承 speech state，核心是低延迟 TTS。",
+        "2608.18105": "论文将 spoken financial requests 经过 streaming speech recognition 转成结构化查询，属于语音交互。",
+        "2608.18114": "论文从 MEG 解码自然句子的产生并以 WER 评估无创 speech BCI，属于语音/脑机接口。",
+        "2608.18090": "论文在四种模态间迁移情绪价轴，并在 ESC-50 audio 上报告 AUC，包含明确音频实验。",
+        "2608.18438": "论文的 VAL 框架包含 acoustic 流，使用 DAIC-WOZ 多模态会话做临床风险与治疗关系分析。",
+        "2608.18401": "论文比较 text/audio/visual 模型及 HuBERT 融合来估计真实场景 HRI rapport，属于音频多模态。",
+        "2608.18080": "综述明确讨论将 speech 与 sensor 融入心理健康多模态诊断和监测，属于语音健康方向综述。",
+        "2512.14629": "论文提出 MuseCPEval 音乐编辑上下文保持评测框架，覆盖音色、乐器替换和音乐属性保留。"
+      }
+    },
+    {
+      "date": "2026-08-25",
+      "reviewer": "Codex",
+      "reviewedAt": "2026-08-25T14:54:55.177+08:00",
+      "reviewProtocol": "title+abstract+categories+sources-v1",
+      "candidateCount": 521,
+      "negativeReasonKind": "legacy-object-task-v1",
+      "sourceEvidence": {
+        "rawCandidatesSha256": "acad860fc2191756274ade922e583f49f0fd066ae72bc4472f22b643bc8fd8d6",
+        "filterDecisionsSha256": "bd28c86ef0d30c2582d6c2c8cc1d2d4f512319aca9ca32df90237faa54c216ff",
+        "manualFilterSpecSha256": "08d467d62c02a5a9003375211bef0cf5a8bb1592329ea1a9ef5f14bfa682b1a1",
+        "candidateIdsSha256": "125ba815a87401262498a3e50fbff4e7be97be15c25ab0b84610224d24e7ae5a",
+        "decisionProjectionSha256": "7534cbda15b9e6c5941a7b3df00fb0b276418c73c8a57ebaa7a9725befdd03af"
+      },
+      "candidates": [
+        [
+          "2608.22907",
+          "Unsupervised Speech Recognition at the Syllable Level"
+        ],
+        [
+          "2608.22796",
+          "DiaScriber: A Speech LLM for Joint Diarization and Transcription in Multi-Speaker Scenarios"
+        ],
+        [
+          "2608.22196",
+          "Mitigating Speaker Leakage in Cascaded Multi-talker ASR with Diarization-based Transcript Correction"
+        ],
+        [
+          "2608.21599",
+          "Separating Voice from Age in COPD Screening"
+        ],
+        [
+          "2608.22872",
+          "Better Retrieval, Worse Robustness:How Multi-hop RAG Amplifies Upstream ASR Errors"
+        ],
+        [
+          "2608.22236",
+          "MRMAD: A Multi-Round Multi-Audio Benchmark for Evaluating Acoustic Degradation Perception in Large Audio-Language Models"
+        ],
+        [
+          "2608.21678",
+          "MusPyExpress: Extending MusPy with Enhanced Expression Text Support"
+        ],
+        [
+          "2601.18904",
+          "MetaSICL: Globalizing Auditory LLMs for Underserved Speakers and Languages via Meta Speech In-Context Learning"
+        ],
+        [
+          "2608.21343",
+          "TurboBias 2.0: Streaming Context-Biasing for Production-Efficient ASR Systems"
+        ],
+        [
+          "2608.21188",
+          "SlimDiffuSE: Towards Efficient Diffusion-Based Speech Enhancement using Slimmable Networks"
+        ],
+        [
+          "2608.21155",
+          "μNet: Ultra-Low-Memory and Low-Complexity Speech Enhancement for Embedded Digital Signal Processors"
+        ],
+        [
+          "2608.20971",
+          "Training DeepFilterNet with Accurate Room Acoustic Simulations Improves Single-Channel Speech Enhancement"
+        ],
+        [
+          "2608.20693",
+          "A Regularized Block Diagonal RLS Algorithm for Acoustic Echo Cancellation"
+        ],
+        [
+          "2608.20346",
+          "Building and Evaluating a Synthetic Bengali Speech Resource for Telecom Customer Care"
+        ],
+        [
+          "2608.23437",
+          "AT-ADD: A Benchmark and Challenge for Robust and All-Type Audio Deepfake Detection"
+        ],
+        [
+          "2608.23092",
+          "Reasoning-Oriented Post-Training and Inference-Time LoRA Rescaling for Audio-Dependent Question Answering"
+        ],
+        [
+          "2608.23038",
+          "LipsAM: Lipschitz-continuous Neural Networks for Convergent Plug-and-Play Audio Signal Recovery"
+        ],
+        [
+          "2608.22420",
+          "Cross-Subject Generalization in Decoding Perceived Speech from Non-Invasive Brain Recordings"
+        ],
+        [
+          "2608.22273",
+          "Multi-Task Learning for Non-Canonical Phoneme Recognition via Articulatory Feature Decomposition"
+        ],
+        [
+          "2608.22186",
+          "AudioNoisePrints: Model-free audio watermarking using spatial correlation in flow matching TTS"
+        ],
+        [
+          "2608.22111",
+          "FlowSep 2: Self-Supervised Flow Matching for Language-Queried Audio Source Separation"
+        ],
+        [
+          "2608.22057",
+          "Vibrato Matching for Modulation Control and Blending in Sound Mixtures"
+        ],
+        [
+          "2608.21378",
+          "sanoTTS: The Smallest Real-Time Neural TTS on a General-Purpose Microcontroller"
+        ],
+        [
+          "2608.22704",
+          "WnW: Waxing-and-Waning KV Cache for Long-Form Speech LLMs"
+        ],
+        [
+          "2608.22359",
+          "Pre-Decoding Acoustic Triage for Budgeted Vision-Language Captioning of Untrimmed Egocentric Video"
+        ],
+        [
+          "2608.22337",
+          "Motion-Aware Reasoning from Speech to Mask Tracks: Runner-up Solution for the MeViS-Audio Track of the 8th LSVOS Challenge 2026"
+        ],
+        [
+          "2608.21176",
+          "DAMOS: Learning Distortion-Aware Speech Quality Assessment through Explicit Distortion Localization"
+        ],
+        [
+          "2608.21075",
+          "AudioWorldSim: Realistic Binaural Audio Datasets For World Models"
+        ],
+        [
+          "2608.20769",
+          "Do SpeechLMs Hear Their Own Opinions? Diagnosing and Mitigating Previous-Belief Contamination in Streaming Emotion Understanding"
+        ],
+        [
+          "2608.20394",
+          "A Factorial Ablation of a Speech-to-SFT Pipeline: Differential Effects on Data Quality and Downstream Transfer"
+        ],
+        [
+          "2608.20433",
+          "Humanoid Musical Robots as Experimental Interfaces for Music-Evoked Emotion"
+        ],
+        [
+          "2608.20396",
+          "Self-Supervised Speech Representations Track Spoken Language Convergence to Adult Models in Infants and Children Who Are Deaf/Hard-of-Hearing"
+        ],
+        [
+          "2608.23562",
+          "Physics-Constrained Deep Learning Model for Contactless Blood Pressure Monitoring from Triaxial Bodyseismography"
+        ],
+        [
+          "2608.23469",
+          "Machine Learning Assisted Inverse Design of Pixelated mmWave Patch Antennas"
+        ],
+        [
+          "2608.23422",
+          "RIS-Assisted Radar-Communication Coexistence: Detection Analysis with Channel Uncertainties"
+        ],
+        [
+          "2608.23376",
+          "A Fully Reconfigurable RF Vector Modulator based Wideband Phase Shifter for NextG Beamforming Phased Array in Satellite Communications (SATCOM)"
+        ],
+        [
+          "2608.23294",
+          "Dual-Orthogonality Waveforms for Integrated Communication and Imaging in Dynamic Multipath Channels"
+        ],
+        [
+          "2608.23085",
+          "Monotonicity Principle and \"p-Laplace Signature\" for Tomography in Nonlinear Elliptic Inverse Problems"
+        ],
+        [
+          "2608.23049",
+          "Curved Waveguide-Enabled Pinching-Antenna System (C-PAS): Communication Performance Analysis"
+        ],
+        [
+          "2608.23027",
+          "Centralized RAN for Future Low-Power Wide-Area Networks: A LoRa Case Study"
+        ],
+        [
+          "2608.23016",
+          "Simultaneous Indoor and Outdoor Coverage with Conformal Intelligent Omni-Surface"
+        ],
+        [
+          "2608.22932",
+          "AirMoE: Realizing Over-the-Air Distributed Mixture-of-Experts Inference at the Wireless Edge"
+        ],
+        [
+          "2608.22918",
+          "Rethinking the Foundations of Two-Sided AI Models for 6G"
+        ],
+        [
+          "2608.22860",
+          "IMNet: Intercarrier Interference Mitigation Network for Integrated Sensing and Communication in Spectrally Efficient FDM Systems"
+        ],
+        [
+          "2608.22648",
+          "Lightweight Multi-scale Hierarchical Anomaly Detection and Localization for Geospatial Big Data Applications at the Edge"
+        ],
+        [
+          "2608.22647",
+          "Interference-Tolerant Mixer-First Receivers for FR3: Design Principles and Tradeoffs"
+        ],
+        [
+          "2608.22621",
+          "ISAC Beamforming Design Based on a Matrix Nearness Formulation With Improved Efficiency"
+        ],
+        [
+          "2608.22588",
+          "Waveform Design for Simultaneous MIMO Radar Sensing and Multi-User Communication"
+        ],
+        [
+          "2608.22530",
+          "Dynamic Metasurface Antenna Enabled Real-Time 60 GHz Wireless Video Streaming: A System-Level Demonstration with USRPs and mmWave Front-Ends"
+        ],
+        [
+          "2608.22492",
+          "Estimating Timing Advance for Sub-THz Distributed Systems from Sub-10 GHz Channel State Information"
+        ],
+        [
+          "2608.22409",
+          "EM Informed Holographic Imaging via Unrolled Deep Networks"
+        ],
+        [
+          "2608.22250",
+          "Deterministic Cramer-Rao Bounds for Coherent Direction-of-Arrival Estimation: Rank Information Versus Coherence Structure"
+        ],
+        [
+          "2608.22156",
+          "Efficient Alternating Optimization for Hybrid Digital-Wave Beamforming in SIM-Assisted Cell-Free Massive MIMO"
+        ],
+        [
+          "2608.21859",
+          "Sensing-Assisted Anti-Blockage Pinching-Antenna Systems For Indoor Immersive Communications"
+        ],
+        [
+          "2608.21838",
+          "PACC: Propagation-Aware Channel Charting with Physics-Guided Metric Learning"
+        ],
+        [
+          "2608.21770",
+          "Adaptive Payload-Aided Near-Field Beam Tracking via Thompson Sampling"
+        ],
+        [
+          "2608.21669",
+          "Reconfigurable Intelligent Surfaces for Cognitive Radio Networks: Design, Optimization, and Emerging Trends"
+        ],
+        [
+          "2608.23249",
+          "Semantic Reconstruction and 3-D Detection via Learned Multi-Pair Fusion in RF Imaging"
+        ],
+        [
+          "2608.22992",
+          "Channel-Token Attention for Reliable Dynamic Spectrum Access under Bursty Primary-User Traffic"
+        ],
+        [
+          "2608.22790",
+          "Interpretable Landsat-to-Hyperspectral Dual Super-Resolution Without Large Matrix Inversion"
+        ],
+        [
+          "2608.22768",
+          "The Loop-Gain Matrix: Coupled Rebalancing Feedback and the Blind Spots of Scalar Stability Monitoring"
+        ],
+        [
+          "2608.22387",
+          "Self-Supervised Graph Representation Learning for In-The-Wild Wearable and Smartphone based Emotion Recognition"
+        ],
+        [
+          "2608.22072",
+          "Spiking Neural Networks for Energy-Efficient Object Detection in Forward-Looking Sonar Imagery"
+        ],
+        [
+          "2608.21773",
+          "Privacy Preserving Semantic Communications in Wireless Edge Networks with Vision Language Models"
+        ],
+        [
+          "2608.21709",
+          "Posterior Information Dynamics of Diffusion Models for Linear Inverse Problems"
+        ],
+        [
+          "2608.21485",
+          "Congruence Decomposition with Neural Block Solvers for Large-Scale PCI Assignment"
+        ],
+        [
+          "2608.21404",
+          "Tolerance-Dependent Inspection Disagreement Between a Fixed CMM and a Portable Articulated-Arm CMM"
+        ],
+        [
+          "2608.21231",
+          "Pattern Multiplication Underestimates the Sidelobe Level of a Planar Slotted-Waveguide Array by 1.1 to 2.8 dB Across a 2% Band"
+        ],
+        [
+          "2608.21197",
+          "Transmit Beamformer Design for Beampattern Synthesis in Phased-Array Radar Systems"
+        ],
+        [
+          "2608.21064",
+          "Privacy-Preserving Localization via Transmit Antenna Selection and Permutation"
+        ],
+        [
+          "2608.21050",
+          "UW-OCDM for Low-Altitude UAV Communication and Cooperative Sensing"
+        ],
+        [
+          "2608.21038",
+          "HAP-Centric Flying Ad-Hoc Networks With Cell-Free Non-Terrestrial Connectivity"
+        ],
+        [
+          "2608.21020",
+          "Frequency-Selective Pinching-Antenna Systems"
+        ],
+        [
+          "2608.21013",
+          "Obstacle-Aware Online Receiver Planning in Multistatic Ranging"
+        ],
+        [
+          "2608.20943",
+          "SR-TL1: A Square-Root TL1-Norm Framework for Robust SMV DoA Estimation under Highly-Coherent Dictionaries"
+        ],
+        [
+          "2608.20846",
+          "From Sparse Probes to Sum-Rate Maximization: Electromagnetic Twin Beamforming"
+        ],
+        [
+          "2608.20813",
+          "Electromagnetic Twin: Completing the Wireless World from Sparse Channel Evidence"
+        ],
+        [
+          "2608.20731",
+          "Dispersion-aware Localization Network for Wideband OFDM Pinching-Antenna Integrated Sensing and Communication Systems"
+        ],
+        [
+          "2608.20728",
+          "Channel Modeling of Single Wire Earth Return Networks for Narrowband Power Line Communication and Sensing: A Field-Validated High-Frequency Digital Twin"
+        ],
+        [
+          "2608.20486",
+          "Wireless Physical-Layer Foundation Models: Architectures, Learning Paradigms, Applications, and Deployment"
+        ],
+        [
+          "2608.20278",
+          "Secrecy Rate Maximization for UAV-Mounted Six-Dimensional Movable IRS-Assisted ISAC Systems"
+        ],
+        [
+          "2608.20257",
+          "Synchronization and Channel Estimation of OTFS with RF Impairments"
+        ],
+        [
+          "2608.20214",
+          "Wideband MIMO Beampattern Synthesis using Adaptive Frequency Modulated Waveforms"
+        ],
+        [
+          "2608.20206",
+          "A Computationally Efficient Likelihood Approximation for Target Tracking in Time-Varying Multipath Channels"
+        ],
+        [
+          "2608.20102",
+          "Low-complexity Soft-decision LLR Calculations for Next-generation IM-DD Systems with RIN"
+        ],
+        [
+          "2608.20059",
+          "Velocity Index Modulation for Movable Antenna Systems"
+        ],
+        [
+          "2608.19927",
+          "Some Practical Issues of the Tracking Process in GNSS Receivers"
+        ],
+        [
+          "2608.19881",
+          "Interpretable Feature Learning for RF Fingerprinting via Polar MKANs"
+        ],
+        [
+          "2608.19865",
+          "A 39pJ/b 7.3Gbps 1.3mm$^2$ Multi-Subcarrier Massive MU-MIMO-OFDM Detector Exploiting Beamspace Sparsity and Frequency-Domain Correlation in 22FDX"
+        ],
+        [
+          "2608.19840",
+          "Applying the Spectral Method for Modeling Linear Filters: Bessel, Papoulis, and Legendre Filters"
+        ],
+        [
+          "2608.19820",
+          "Band-Selective Microwave Cavity Optimization Using Differentiable FDTD: Gradient-Guided Search Versus Structured Random Search"
+        ],
+        [
+          "2608.19649",
+          "Differential Privacy in Feature Reconstruction Aided Federated Learning for Agent's Semantic Communication Model Update"
+        ],
+        [
+          "2608.19431",
+          "Holographic Beamforming for Range-Doppler Sidelobe Suppression in OFDM-ISAC"
+        ],
+        [
+          "2608.19416",
+          "Robust Near-Field Beam Focusing Under Imperfect Localization"
+        ],
+        [
+          "2608.19363",
+          "COBALT: Column-swapping Optimized Bit-serial Accelerator for LSTM Tasks"
+        ],
+        [
+          "2608.19357",
+          "Untangling Dense Crowds with mmWave Radar: From Crowd Semantics to Individual Spatial Behaviors"
+        ],
+        [
+          "2608.20295",
+          "Physical-Support Confidence Sets for Highly Coherent Dictionaries"
+        ],
+        [
+          "2608.20181",
+          "A Standardized Framework for Machine Learning in Power System Protection"
+        ],
+        [
+          "2608.19850",
+          "Resilience in Trustworthy Wireless Systems"
+        ],
+        [
+          "2608.19828",
+          "Simulation-to-Real First-Break Segmentation for Efficient Inversion in Musculoskeletal Ultrasound Tomography"
+        ],
+        [
+          "2605.11460",
+          "Beyond Prediction: Interval Neural Networks for Uncertainty-Aware System Identification"
+        ],
+        [
+          "2608.19109",
+          "Distributed Target Tracking using Radar Networks"
+        ],
+        [
+          "2608.19048",
+          "Robust and Efficient Feature Extraction for Spike Sorting via the Walsh-Hadamard Transform"
+        ],
+        [
+          "2608.18902",
+          "Towards Lawful ISAC in Cellular Networks"
+        ],
+        [
+          "2608.18760",
+          "Exploiting Pilot Contamination to Improve UL Sum Rate under Maximum Ratio Combining"
+        ],
+        [
+          "2608.18737",
+          "Comparing GNSS Derived Sea Ice Drift in the Arctic and Antarctic using Rotary Spectra and Principal Component Analysis"
+        ],
+        [
+          "2608.18639",
+          "Change Point--Aware Evaluation and Re-Calibration of PPG-Based Blood Pressure Estimation"
+        ],
+        [
+          "2608.18636",
+          "Coordination of Ground-to-Space Reference Networks for High-Precision GNSS"
+        ],
+        [
+          "2608.18582",
+          "Score-based Fading-Aware Decision Fusion"
+        ],
+        [
+          "2608.18395",
+          "BR-FiLM: Bounded Residual Channel-Quality Conditioning for Automatic Modulation Recognition"
+        ],
+        [
+          "2608.19049",
+          "Multi-Agent Off-Policy Deep Reinforcement Learning for Smart Campus Coverage"
+        ],
+        [
+          "2608.18873",
+          "Integrated Sensing and Communications over Hierarchical Cellular and Cell-Free MIMO Systems"
+        ],
+        [
+          "2608.18711",
+          "EgoHRV: Continuous Heart Rate Variability Estimation from Egocentric Systems for Autonomic Response and Skill Assessment"
+        ],
+        [
+          "2608.18272",
+          "SeisEvo: Evolution of Seismic Data Reconstruction Algorithms by Agents"
+        ],
+        [
+          "2608.23242",
+          "Mind the Couch! Eliciting MLLM Reasoning in Interior Design via Weak-to-Strong Task Vector Injection"
+        ],
+        [
+          "2608.23133",
+          "SACHA: Semantic-Aware Compression for 3D Gaussian Head Avatars"
+        ],
+        [
+          "2608.22863",
+          "Adaptive Hierarchical Representation Alliance for Multimodal Learning"
+        ],
+        [
+          "2608.22329",
+          "ReART: Reference-Guided Retrieval and Refinement for Emotion-Aware Art Generation"
+        ],
+        [
+          "2608.23065",
+          "Cultural Moment Benchmark: Evaluating Video Cultural Reasoning and Grounding in Southeast Asia"
+        ],
+        [
+          "2608.22914",
+          "Results of the 1st Asynchronous CASTLE Challenge at the Joint Egocentric Vision Workshop in Conjunction with CVPR 2026"
+        ],
+        [
+          "2608.22688",
+          "FashionKG-RAG: Knowledge Graph-Enhanced Retrieval-Augmented Generation for Fashion Question Answering"
+        ],
+        [
+          "2608.22232",
+          "Beyond What Meets the Eye: Unveiling Situational Illusions for Multimodal Large Language Models"
+        ],
+        [
+          "2608.22214",
+          "Query-Driven Multimodal Information Extraction from Long Documents"
+        ],
+        [
+          "2608.21837",
+          "Towards Bitstream-corrupted Harsh Visual Understanding: Through Bitstream Language Modeling as Robust Semantic Priors"
+        ],
+        [
+          "2608.21431",
+          "Boosting Knowledge-based Visual Question Answering with Structured Context Reasoning"
+        ],
+        [
+          "2608.21424",
+          "EditStream: A Unified Autoregressive Framework for Interactive Video Generation and Editing"
+        ],
+        [
+          "2608.21364",
+          "Distinguishing Revision and Delayed Elaboration in Incremental Narrative Interpretation"
+        ],
+        [
+          "2608.20810",
+          "When Generated Images Look Right and Retrieve Wrong: Coverage-Guided Cross-Scale Re-Indexing for Knowledge-Faithful Generative Perception"
+        ],
+        [
+          "2608.21022",
+          "Recognition-Conditioned Reasoning: A Training-Free Multimodal-LLM Pipeline for Fine-Grained Micro-Action Understanding"
+        ],
+        [
+          "2608.19355",
+          "GRACE: Grounded Reasoning via Adapter Composition and Evidence-Aware Calibration for Educational Visual Question Answering"
+        ],
+        [
+          "2608.19598",
+          "PEA-DPO: Perception-Enhanced Alignment Direct Preference Optimization for MLLMs Alignment"
+        ],
+        [
+          "2608.19115",
+          "Pretraining Reusable Inference Across Views with Synthetic Task Priors"
+        ],
+        [
+          "2608.18895",
+          "MediaGraph: A Content-Aware Data Model and Query Framework for Multimodal Knowledge Graphs"
+        ],
+        [
+          "2608.23566",
+          "How to Train a Critic Stably and Efficiently"
+        ],
+        [
+          "2608.23554",
+          "Provably adaptive sampling with uniform and remasking discrete diffusion models"
+        ],
+        [
+          "2608.23473",
+          "MetaCaster: Meta-Harness-Optimized Agent for End-to-End Few-Shot Learning of Lightweight Time Series Forecasters"
+        ],
+        [
+          "2608.23468",
+          "RAD: Rule-Augmented Relational Anomaly Detection"
+        ],
+        [
+          "2608.23463",
+          "ProxyFormer: A Dual-Stream Proxy Architecture for Ultra-Long Context and High-Resolution Generation"
+        ],
+        [
+          "2608.23461",
+          "Diversity-Based Active Learning: An Evaluation of Metric Spaces for Active Learning Selection"
+        ],
+        [
+          "2608.23458",
+          "Traceable Spectral Inference via Influence Functions: Efficient Data Attribution and Error Proxies for the Ariel Mission"
+        ],
+        [
+          "2608.23429",
+          "ChebBooster: A Training-Free Approach for Efficient Diffusion Transformer Inference via Chebyshev-Inspired Extrapolation"
+        ],
+        [
+          "2608.23416",
+          "The Axiomatic Trader: Latent Regularity, Information Budgets, and the Canonical Form of a Quantitative Investment System"
+        ],
+        [
+          "2608.23382",
+          "Spectrum-Aware Bounds on Invertibility for Privacy-Enhancing Instance Encoding"
+        ],
+        [
+          "2608.23347",
+          "Test-Time Adaptation for ECG Classification via SQI-Gated Self-Training and Beat-Rhythm Consistency"
+        ],
+        [
+          "2608.23344",
+          "Towards Actionable Surgical Team Dynamics: from Teamwork to Counterfactual Annotations"
+        ],
+        [
+          "2608.23322",
+          "Beyond Point Predictions: Uncertainty-Aware Satellite Poverty Mapping for Public Policy"
+        ],
+        [
+          "2608.23296",
+          "Sigmoid Attention as a Better Substrate for Learned KV Cache Eviction"
+        ],
+        [
+          "2608.23287",
+          "Poisson Subspace Clustering: Focusing on the Essentials in Count Data"
+        ],
+        [
+          "2608.23286",
+          "How Much Regularization Survives Averaging? Update Masking in Federated Learning"
+        ],
+        [
+          "2608.23276",
+          "A Multidimensional Data-Driven Hybrid Transformer Framework for Non-invasive Continuous Blood Pressure Prediction"
+        ],
+        [
+          "2608.23254",
+          "From Multimodal Observation to Interpretable Suggestions: Counterfactual Time-Expanded Relational Modeling of Surgical Teams"
+        ],
+        [
+          "2608.23252",
+          "The Laws of Context Allocation: Causal Measurement and Closed-Loop Orchestration in Generative Search"
+        ],
+        [
+          "2608.23219",
+          "Leveraging Remote Traffic Data for Local Air Pollutant Estimation: A Scenario-Based Machine Learning Study Across London Monitoring Sites"
+        ],
+        [
+          "2608.23182",
+          "A Comparative Study of Label-free Representation Quality Metrics in Deep Learning"
+        ],
+        [
+          "2608.23164",
+          "Counterfactual Transition Graphs: Evaluating Cross-Class Transition Quality"
+        ],
+        [
+          "2608.23161",
+          "When More Modalities Hurt: Modality Dropout for Heavy-Duty Vehicle Engine Diagnostics"
+        ],
+        [
+          "2608.23153",
+          "Conformal Risk Minimization for Semi-Supervised Domain Adaptation via Optimal Transport"
+        ],
+        [
+          "2608.23144",
+          "Activation-Weighted Seeded Residual Coding for Low-Bit LLM Weight Repair"
+        ],
+        [
+          "2608.23114",
+          "DeMixPert: Decomposed Response Modeling with Gaussian Mixtures for OOD Single-Cell Perturbation Prediction"
+        ],
+        [
+          "2608.23101",
+          "PolyChirp: Multi-Species Birdsong Classification Using TinyML on Low-Power Acoustic Sensors"
+        ],
+        [
+          "2608.23055",
+          "Macro-Action Topological Navigation under Noisy Localization using Reinforcement Learning"
+        ],
+        [
+          "2608.23054",
+          "Graph Representation Learning of Lightweight IoT Ciphers"
+        ],
+        [
+          "2608.23048",
+          "Reservoir of Importance: Learning Semi-Structured Sparsity with Differentiable Subset Sampling"
+        ],
+        [
+          "2608.23034",
+          "ST$^2$U: Stateful Test-Time Unlearning via Restricted Knowledge Boundary Control"
+        ],
+        [
+          "2608.23031",
+          "FedCC: Towards Addressing Label Distribution Skews in Distillation-Based Federated Learning"
+        ],
+        [
+          "2608.23018",
+          "SplitLite: Low-Rank Residual Compression for Split Learning"
+        ],
+        [
+          "2608.22994",
+          "A Physical Response-and-Memory Model for Muon Optimization"
+        ],
+        [
+          "2608.22981",
+          "Hierarchy-Aware Semantic Losses for Knowledge Graph Link Prediction"
+        ],
+        [
+          "2608.22968",
+          "Do Time-Series Foundation Models Pay Off for Industrial Monitoring? A Cost-Aware Empirical Study"
+        ],
+        [
+          "2608.22953",
+          "Stochastic gradient descent with initial regularization"
+        ],
+        [
+          "2608.22945",
+          "A Momentum-Based Variance-Reduced Algorithm for Federated Multiobjective Optimization"
+        ],
+        [
+          "2608.22915",
+          "Safety Hacking in Constrained Best-of-$N$ Inference-time Scaling"
+        ],
+        [
+          "2608.22876",
+          "The Mask Is Not the Model: Auditing Prefix Invariance in Attention, State-Space, and Hybrid Sequence Models"
+        ],
+        [
+          "2608.22874",
+          "Stochastic Separability of Embedding Manifolds"
+        ],
+        [
+          "2608.22858",
+          "Mapping the Concept Landscape: Structural Perception of Global Distributions for Transparent Data Pruning"
+        ],
+        [
+          "2608.22854",
+          "Thinking at the Right Size: Amortized Distillation Across Post-Trained LLMs"
+        ],
+        [
+          "2608.22849",
+          "RIBOSPAN: A Long-Context RNA Foundation Model for Versatile RNA Modeling"
+        ],
+        [
+          "2608.22839",
+          "Hierarchy-Aware Supervised Uncertainty Estimation for Black-box LLM Taxonomic Reasoning"
+        ],
+        [
+          "2608.22824",
+          "DIME: Query-Efficient Framework for Membership Inference on Diffusion Models"
+        ],
+        [
+          "2608.22820",
+          "Fairness-Aware Mixture-of-Experts via Subgroup Reweighting and Gate Regularization"
+        ],
+        [
+          "2608.22809",
+          "SAGE: Stability-Aware Graph-Based Ensemble Feature Selection for Explainable Postpartum Depression Risk Prediction"
+        ],
+        [
+          "2608.22808",
+          "CatchBench: When Can an Agent Failure Be Caught?"
+        ],
+        [
+          "2608.22807",
+          "Change Detection in Probability Flow ODE: Online Testing in Diffusion Latent Spaces"
+        ],
+        [
+          "2608.22804",
+          "Contrastive Representation-Guided Genetic Minority Oversampling for Imbalanced Time-Series Classification"
+        ],
+        [
+          "2608.22786",
+          "ReCoG: Reciprocal Co-Evolution for Multimodal Graph Learning"
+        ],
+        [
+          "2608.22782",
+          "Neural Operator based Multi-Field Reconstruction of Inner Solar Boundary State"
+        ],
+        [
+          "2608.22765",
+          "Learning to Control Coupled-Dynamics Environments with Joint Markov Decision Processes"
+        ],
+        [
+          "2608.22764",
+          "LpWM: A Case for Sparse Representations in World Models"
+        ],
+        [
+          "2608.22750",
+          "MOSH-WM: Mask-Grounded Soft-Hamiltonian Dynamics for Object-Centric World Models"
+        ],
+        [
+          "2608.22729",
+          "Spiking Neural Networks for Continuous Control: Neuromorphic Reinforcement Learning in Conventional Computing"
+        ],
+        [
+          "2608.22681",
+          "Maximum-distance nonnegative matrix factorization for unmixing highly mixed grain-size distribution data: A generalization of AnalySize"
+        ],
+        [
+          "2608.22642",
+          "Mol-JEPA: A multimodal Joint Embedding Predictive Architecture for Molecules"
+        ],
+        [
+          "2608.22636",
+          "Q-Learning with Stable Infinite-Dimensional Linear Function Approximation"
+        ],
+        [
+          "2608.22631",
+          "Learning Generalizable Behaviors for Terminal Agents"
+        ],
+        [
+          "2608.22618",
+          "KMGen: A Skill-based Approach for Synthetic Individual Patient Data Generation"
+        ],
+        [
+          "2608.22614",
+          "What AstroPT knows about galaxies, and what that can teach us about LLMs"
+        ],
+        [
+          "2608.22607",
+          "Mitigating Explanation Leakage in Financial Fraud Detection Systems"
+        ],
+        [
+          "2608.22606",
+          "Adversarial Agents on Topology Optimization: Understanding the Fragility and Robustness of Deep Learning-based and Physics-Based Design Models under Adversarial Perturbation"
+        ],
+        [
+          "2608.22594",
+          "Tabular foundation models for non-tabular tasks"
+        ],
+        [
+          "2608.22593",
+          "GCA: Global Centroid Alignment in Federated Learning"
+        ],
+        [
+          "2608.22583",
+          "Clinical Graph-JEPA: Predictive Patient-State Knowledge Graphs for Cognitive Decision Support"
+        ],
+        [
+          "2608.22557",
+          "BLADE: Bilevel Low-rank Augmented-Lagrangian Erasure for LLM Unlearning"
+        ],
+        [
+          "2608.22527",
+          "Stress Testing Unlearning Algorithms"
+        ],
+        [
+          "2608.22522",
+          "From Detrimental to Beneficial: Dynamic Influence-based Valuation and Editing"
+        ],
+        [
+          "2608.22513",
+          "From Symmetry to Invariance: Learning Galois Equivalent Representations in Finite Fields"
+        ],
+        [
+          "2608.22475",
+          "Quantum-Inspired Hybrid Neural Networks for Neural Decoding: A Controlled Ablation Study of Learnable Quantum Sidecar Integration"
+        ],
+        [
+          "2608.22467",
+          "The Variance of Thought: Policy Variance, Critical Forks, and Local Credit Assignment"
+        ],
+        [
+          "2608.22462",
+          "Functional compatibility as a determinant of persistent neural learning"
+        ],
+        [
+          "2608.22460",
+          "MASH-Bench: Diagnosing Cross-Source Failure in Mass-Shooting Risk Classification"
+        ],
+        [
+          "2608.22457",
+          "KPI-Conditioned Generative Design of Automotive Hood Inner Panels: A Two-Stage Retrieval-Generation Pipeline with Surrogate-Based Performance Estimation"
+        ],
+        [
+          "2608.22453",
+          "Geometric Structures on Graphs: a Holonomy-Based Discretization of Curvature"
+        ],
+        [
+          "2608.22399",
+          "Dual-Scale State-Space Modeling with Speaker-Wise Dynamic CRF for Speech Emotion Recognition in Conversation"
+        ],
+        [
+          "2608.22358",
+          "Tracing the Unlabeled Storm: Cross-Variable Transfer in a Lagrangian Atmospheric JEPA Framework"
+        ],
+        [
+          "2608.22354",
+          "SANE: State Anomaly Neutralization for Stable Extreme-Context Delta-Rule Models"
+        ],
+        [
+          "2608.22324",
+          "Gaussian process learning with flow map refinement for parameter estimation in dynamical systems"
+        ],
+        [
+          "2608.22322",
+          "Beyond Dense Adam States: Adaptive Log-Space Quantization for Memory-Efficient Optimizers"
+        ],
+        [
+          "2608.22316",
+          "Does a Modern-Handwriting Warm-Up Help Historical Arabic OCR? A Reproducible, Compute-Matched Evaluation on Muharaf and KHATT"
+        ],
+        [
+          "2608.22309",
+          "StocBench: A Benchmark for Generative Modeling of Stochastic Dynamics"
+        ],
+        [
+          "2608.22277",
+          "DAW: Dynamics-Aware Weighting for Deep Learning Forecasts of Chaotic Systems"
+        ],
+        [
+          "2608.22253",
+          "Toward a First-Principles Update Geometry for the Language-Model Head"
+        ],
+        [
+          "2608.22235",
+          "A Query-Time Framework for Transient 2D Pore-Scale Flow Prediction and Generative Design"
+        ],
+        [
+          "2608.22233",
+          "When Test-Time Adaptation Helps, Harms, or Becomes Inactive: A Condition-Level Study on CIFAR-10-C"
+        ],
+        [
+          "2608.22227",
+          "Risk-Sensitive Reinforcement Learning with Smoothed Quantile Objectives"
+        ],
+        [
+          "2608.22224",
+          "FreKoo++: Learning Continuous Spectral Dynamics for Temporal Domain Generalization"
+        ],
+        [
+          "2608.22221",
+          "Counterfactual Evaluation of Temporal Observation Protocols"
+        ],
+        [
+          "2608.22212",
+          "Joint Causal Structure and Cluster Discovery Using Variational Inference"
+        ],
+        [
+          "2608.22197",
+          "On the Capability Separation Between World-Model Policy Learning and Imitated World-Action Models"
+        ],
+        [
+          "2608.22188",
+          "Unveiling the Depth-Performance Dilemma in Split-Federated Fine-tuning of LLMs"
+        ],
+        [
+          "2608.22155",
+          "Why Does Robustness Reduce Superposition?"
+        ],
+        [
+          "2608.22154",
+          "More accurate behavioral predictions with hybrid Bayesian-connectionist models"
+        ],
+        [
+          "2608.22145",
+          "Loss Landscape Features That Make Adam Stall: Definitions, Estimators, and the Preconditioned Hessian View"
+        ],
+        [
+          "2608.22142",
+          "Learning Reduced-Order Dynamics with Singularity via Latent-Augmented Neural Ordinary Differential Equations"
+        ],
+        [
+          "2608.23564",
+          "SWE Refactor Bench: Can Coding Agents Complete a Long-Horizon, Whole-Repository Stack Migration?"
+        ],
+        [
+          "2608.23551",
+          "ConvergeFlow: Language Flow with Provable Convergence to Token Embeddings"
+        ],
+        [
+          "2608.23507",
+          "When Names Cross Scripts: A Source-Grounded Benchmark for Historical Entity Reconciliation in the Mongol World"
+        ],
+        [
+          "2608.23476",
+          "On the Threat Model of Weird Generalization and Emergent Misalignment"
+        ],
+        [
+          "2608.23474",
+          "What's the Catch? Evaluating Temporal Consistency in Vision-Language Models"
+        ],
+        [
+          "2608.23448",
+          "How Useful are LLMs for Grammar Engineering? Cantonese ParGram Resources and Controlled Experimental Evaluation with English Baselines"
+        ],
+        [
+          "2608.23421",
+          "A Comprehensive Analysis of Arabic Natural Language Processing Research: Trends, Topic Evolution, and Research Gaps -- A Bibliometric and Topic-Based Study"
+        ],
+        [
+          "2608.23411",
+          "STONIC: A Layered Measurement Contract for LLM Value Profiling"
+        ],
+        [
+          "2608.23391",
+          "Cross-Domain, Multi-Task Data-to-Text Generation without In-Domain Training Data"
+        ],
+        [
+          "2608.23390",
+          "Cross-lingual Biography Enrichment via Claim Extraction and Alignment"
+        ],
+        [
+          "2608.23358",
+          "The Geometry of Low-Resource Language Representations"
+        ],
+        [
+          "2608.23353",
+          "FormuEvo: LLM-Guided Evolution for Discovering Solver-Efficient Mixed-Integer Programming Formulations"
+        ],
+        [
+          "2608.23338",
+          "The Emergence of Relevance Through Axiomatic Attention Patterns During LoRA Fine-Tuning"
+        ],
+        [
+          "2608.23327",
+          "Flesch-Kincaid Readability Depends Only on the Topic Distribution in Long Texts under Topic Models"
+        ],
+        [
+          "2608.23311",
+          "Beyond the Stability-Exploration Dilemma: Environmental Regularization for LLM Policy Optimization"
+        ],
+        [
+          "2608.23284",
+          "Dynamic Topic Modeling for Cross-Corpus Temporal Analysis"
+        ],
+        [
+          "2608.23265",
+          "EvoWiki: Incremental State Overwriting and Traceable Question Answering for Cross-Meeting Knowledge Evolution"
+        ],
+        [
+          "2608.23261",
+          "A Scalable Cross-Domain Event Extraction System via a Unified Generative Training Framework"
+        ],
+        [
+          "2608.23248",
+          "Future Querying: Can LLMs Serve as Implicit Medical World Models?"
+        ],
+        [
+          "2608.23244",
+          "Credal Large Language Models for Semantic Commitment under Uncertainty"
+        ],
+        [
+          "2608.23235",
+          "A Multi-Domain and Multi-Task Generative Framework with Explicit Task and Domain Conditioning for Cross-Domain Event Extraction"
+        ],
+        [
+          "2608.23214",
+          "Aligning Biomedical Texts and Knowledge Graphs: A Systematic Comparison of Lightweight Alignment Strategies"
+        ],
+        [
+          "2608.23200",
+          "LongWoF-Bench: Evaluating EvoMap Genes for Verifiable Long-Workflow Tasks"
+        ],
+        [
+          "2608.23172",
+          "CaRGo-T: Causal Reasoning Graph-of-Thought improves Multimodal Humor Comprehension"
+        ],
+        [
+          "2608.23167",
+          "Accelerating Diffusion Language Models via Structured Suffix Modeling"
+        ],
+        [
+          "2608.23152",
+          "Counter with Evidence! A Multi-Agent Memory Efficient Reasoning Framework for Hate Category Informed Counterspeech Generation"
+        ],
+        [
+          "2608.23149",
+          "Language Chain in Alignment: Cross-Lingual Ranking Preference Optimization"
+        ],
+        [
+          "2608.23124",
+          "LITERARYBIGFIVE: Author-Personalized Text Generation in a Unified Interpretable Space"
+        ],
+        [
+          "2608.23120",
+          "Statistical Machine Translation Systems of English-Pnar Language Pair : Some Insights of the Emperical Study"
+        ],
+        [
+          "2608.23104",
+          "Molecular LLM Agents: From Architectural Design to Scientific Autonomy"
+        ],
+        [
+          "2608.23095",
+          "Definitional Sensitivity in Media Bias Detection: A Multi-Definition Dataset and Benchmark"
+        ],
+        [
+          "2608.23067",
+          "Signal or Noise? A Benchmark Study of Agent Skills in Web Development"
+        ],
+        [
+          "2608.23047",
+          "Beyond Verdicts: A Graph-Based Analysis of Human and LLM Reasoning in Scientific Fact-Checking"
+        ],
+        [
+          "2608.23037",
+          "The Multilingual FrameNet Corpus"
+        ],
+        [
+          "2608.23029",
+          "Meta-Moderator: Empowering Multi-Agent Debate with Meta-Cognition"
+        ],
+        [
+          "2608.23026",
+          "Beyond Surface Cues: Disentangling Sociocultural Signals in Multilingual LLMs"
+        ],
+        [
+          "2608.23023",
+          "Most of the LLM routing gap is task type"
+        ],
+        [
+          "2608.23020",
+          "Unlearning Is Not Just Erasing: Temporal Decoupling via Generation Inequality"
+        ],
+        [
+          "2608.22993",
+          "LLM Pedagogical Behavior in AI Tutoring Interactions"
+        ],
+        [
+          "2608.22985",
+          "What Does Activation Steering Control? Attribution Across Answer Encodings and Output-Sensitive Subspaces"
+        ],
+        [
+          "2608.22967",
+          "Closed-Loop Bayesian Molecular Inverse Design with Semantic LLM Surrogates"
+        ],
+        [
+          "2608.22956",
+          "The Illusion of Control: Why Bare Classifier Inversion Silently Fails in Concept-Bottleneck Text Generation"
+        ],
+        [
+          "2608.22948",
+          "What Proves You Wrong: Benchmarking Language Models on Falsifiable Research Ideation"
+        ],
+        [
+          "2608.22922",
+          "HelaBERT: Enhancing Sinhala Language Understanding with Dual Pooling Classification Head"
+        ],
+        [
+          "2608.22917",
+          "TSWAP: A Multilingual Retrieval-Augmented Thai Wellness Advisor"
+        ],
+        [
+          "2608.22916",
+          "Knowing Isn't Always Saying: When Do Spatial Encodings Reach Answers in Vision-Language Models?"
+        ],
+        [
+          "2608.22909",
+          "Exploring Dowker Homology for Sentence Similarity"
+        ],
+        [
+          "2608.22908",
+          "Do Spoken Language Models Hear Speech as They Read Text? Bridging Structural Gaps Between Speech and Text"
+        ],
+        [
+          "2608.22898",
+          "SelFusion: Self-distillation for Diffusion Language Models"
+        ],
+        [
+          "2608.22894",
+          "AraDetox: A Multi-Dialect Arabic Detoxification Dataset"
+        ],
+        [
+          "2608.22857",
+          "SAVER: Selective Auditing of Verbal Evidence for Error Recovery in VLM Change Reasoning"
+        ],
+        [
+          "2608.22817",
+          "Industrial-Instruction: An End-to-End Framework for Building Instruction-Tuning and Benchmark Datasets from Industrial Technical Reports"
+        ],
+        [
+          "2608.22806",
+          "DIAG: Diagnostic Iterative Alignment and Generation for Data-Efficient Mathematical Preference Distillation"
+        ],
+        [
+          "2608.22802",
+          "SDoH-Aware Narrative Anchoring Bias in Medical LLMs for Trustworthy Clinical Decision Support"
+        ],
+        [
+          "2608.22793",
+          "TRACE: A Self-Evolving Skill Bank for Consistent, Limit-Aware LLM Agents"
+        ],
+        [
+          "2608.22772",
+          "SPOC-SQL: Stage-wise Preference Optimization for Controllable Text-to-SQL"
+        ],
+        [
+          "2608.22770",
+          "DelistBench: Evaluating Search-Enabled LLMs for Auditable Corporate-Event Database Completion"
+        ],
+        [
+          "2608.22761",
+          "Don't Repeat Yourself: Stopping Verbatim Loops at Sampling Time"
+        ],
+        [
+          "2608.22758",
+          "XTC: Head-Aware Sampling by Excluding Top Choices"
+        ],
+        [
+          "2608.22753",
+          "Beyond Factual Knowledge: Benchmarking and Learning Step-Level Procedural Rule Reasoning in Large Language Models"
+        ],
+        [
+          "2608.22745",
+          "DiaRelay: Relaying Dialogue Context with a Constant-Size Memory for Emotion Recognition in Conversation"
+        ],
+        [
+          "2608.22713",
+          "A Source-Grounded Framework for Constructing and Evaluating Progressive Multimodal Diagnostic Dialogues from Clinical Case Reports"
+        ],
+        [
+          "2608.22695",
+          "Enrich-Retrieve-Rank: Scaling Capability Discovery Beyond In-Context Routing"
+        ],
+        [
+          "2608.22651",
+          "Iteration Without Elaboration: A Simple ReAct Architecture Suffices for Text-to-SQL Generation"
+        ],
+        [
+          "2608.22634",
+          "GeoRisk-RAG: A Hierarchy-Aware Risk Framework for Improving RAG Reliability through Selective Answering"
+        ],
+        [
+          "2608.22622",
+          "Teaching LLMs How ICU Physicians Approach Clinical Reasoning Through OMOP-Aligned Retrieval Improves Reasoning Across Clinical Domains"
+        ],
+        [
+          "2608.22582",
+          "Hybrid Panels: Toward Human-AI Collaboration in Survey Research"
+        ],
+        [
+          "2608.22566",
+          "From Diagnosis to Redesign: Using Quantitative Ethnography to Improve Multi-Agent LLM Reasoning"
+        ],
+        [
+          "2608.22506",
+          "Kernel Token Contradiction: a Fast and Principled Approach for LLM Claim Uncertainty Quantification"
+        ],
+        [
+          "2608.22490",
+          "Who Pays More for Safety? Measuring the Disparate Cost of Safety Alignment across Languages"
+        ],
+        [
+          "2608.22483",
+          "Claim-Level Confidence Calibration for Reliable Decision Making with Large Language Models"
+        ],
+        [
+          "2608.22479",
+          "GTA-RAG: Graph-Trajectory-Augmented Reinforcement Learning for Multi-Turn Retrieval-Augmented Reasoning"
+        ],
+        [
+          "2608.22452",
+          "From Exposure to Expectation: Frequency, Surprisal, and Language Across Development in Spanish"
+        ],
+        [
+          "2608.22446",
+          "Figurative Justice: Detecting metaphors in Hindi judgements with qualitative assessment and transformers"
+        ],
+        [
+          "2608.22444",
+          "Aligned Alone, Misaligned Together: Forecasting Adversarial Capture in LLM Agent Populations"
+        ],
+        [
+          "2608.22432",
+          "Rank Reversal in Multilingual LLM Judges: A Label-Free Double-Centering Calibrator"
+        ],
+        [
+          "2608.22411",
+          "Don' t Box Me In: Dynamic Cultural Adaptation and Cognitive Tracking for Social Understanding"
+        ],
+        [
+          "2608.22390",
+          "SchemaGUI: A Schema-Driven Benchmark for Controllable GUI Generation Evaluation"
+        ],
+        [
+          "2608.22388",
+          "ProBel: Propaganda Detection with Techniques, Spans, and Explanations"
+        ],
+        [
+          "2608.22376",
+          "Can Large Language Models \"Hyper-Thread\"?"
+        ],
+        [
+          "2608.22367",
+          "Context-Aware Cluster Decoding: Semantic Anchor-Driven Coherence in dMLLMs"
+        ],
+        [
+          "2608.22339",
+          "When Not to Imitate: Boundary-Aware Skill Memory for Reliable Tool-Use LLM Agents"
+        ],
+        [
+          "2608.22335",
+          "Register Shifts Break LLM Safety: A Bengali Benchmark with Culturally Grounded Harms"
+        ],
+        [
+          "2608.22332",
+          "Mechanistic Interpretability of Chain-of-Thought Reasoning via Sequential Activation Patching"
+        ],
+        [
+          "2608.22331",
+          "Noise Floor Audit for Agent Benchmarks"
+        ],
+        [
+          "2608.22321",
+          "Semantics or Structure? Auditing Text Sensitivity in Multimodal Time-Series Forecasting"
+        ],
+        [
+          "2608.22312",
+          "Text-Anchored Semantic Perturbations for Transferable Jailbreak Attacks on Multimodal Large Language Models"
+        ],
+        [
+          "2608.22295",
+          "LLM Evaluation on Unseen Questions: Contextual Multidimensional IRT Model"
+        ],
+        [
+          "2608.22274",
+          "Length-Adaptive Decoding for Masked Diffusion Machine Translation"
+        ],
+        [
+          "2608.22246",
+          "Nürnberg NLP @ GermEval Shared Task 2026: Harmful Content Detection in German Social Media through Error-Independent LLM Voters"
+        ],
+        [
+          "2608.22244",
+          "Improving Few-Step Language Flows with Untied Self-Conditioning"
+        ],
+        [
+          "2608.22230",
+          "Whitewashing Hate, Smearing Harmless Content: Annotator-Style Rebuttal Attacks on LLM-Based Moderation"
+        ],
+        [
+          "2608.22229",
+          "Grounded Normative Rule Generation with Structured Search"
+        ],
+        [
+          "2608.22215",
+          "Dual-Layer Agentic Memory with Fast Write Routing and Slow Consolidation"
+        ],
+        [
+          "2608.22192",
+          "How Agents Represent Humans: Human-Directed Stereotypes in an Open Agent Social Network"
+        ],
+        [
+          "2608.22152",
+          "The Collaboration Tax: How Much LLM Multi-Agent Systems Pay to Coordinate"
+        ],
+        [
+          "2608.22140",
+          "Lexical Perturbations Disrupt LLM Reasoning: An Empirical Study of Attention Diversion"
+        ],
+        [
+          "2608.22132",
+          "SSE-Bio: A Structured Self-Evolving Agent with Agentic Retrieval Policy for Multi-Hop Biomedical Reasoning"
+        ],
+        [
+          "2608.23565",
+          "ReWorld: An Interactive World Model with Long-Horizon Memory"
+        ],
+        [
+          "2608.23552",
+          "Prime Agent: A Self-Improving RLM Harness"
+        ],
+        [
+          "2608.23543",
+          "How AI Assistance Affects Human Skill Development: A Study of Learning with Logic Puzzles"
+        ],
+        [
+          "2608.23526",
+          "Correcting a learned physical invariant improves world-model rollouts"
+        ],
+        [
+          "2608.23525",
+          "EarthVerse: Benchmarking Scientific Agents Across Dynamic Earth Systems and Natural Hazards"
+        ],
+        [
+          "2608.23497",
+          "Mitigating Reasoning-Induced Misalignment via Safety-Direction Penalty"
+        ],
+        [
+          "2608.23493",
+          "SRPO: Self-Reflective Policy Optimization for Long-Horizon Reasoning"
+        ],
+        [
+          "2608.23484",
+          "Multi-Modal Semantic Expansion with Constrained LLM Reranking for Conversational Music Recommendation"
+        ],
+        [
+          "2608.23475",
+          "StrategyBench: Evaluating Explicit Strategy Induction in Large Language Models"
+        ],
+        [
+          "2608.23446",
+          "Characterizing Necessary Losers to Explain Tournaments Losers"
+        ],
+        [
+          "2608.23417",
+          "SkillAlchemy: Open-World Agent Skill Creation"
+        ],
+        [
+          "2608.23397",
+          "MediSkill-Evo: Process-Constrained Self-Evolution for Evidence-Grounded Clinical Interaction"
+        ],
+        [
+          "2608.23373",
+          "Modalities Should Talk to Each Other: Dual-Stream Multimodal Learning for Long-Horizon Influenza Forecasting"
+        ],
+        [
+          "2608.23370",
+          "Walking on the DARKSIDE"
+        ],
+        [
+          "2608.23318",
+          "Agent-G$^2$: Gaussian Guidance for Agentic Reinforcement Learning"
+        ],
+        [
+          "2608.23313",
+          "EviSafe: Evidence-Grounded Safety Evaluation for Vision-Language Models"
+        ],
+        [
+          "2608.23283",
+          "Apodex 1.1: Scaling Agentic Intelligence for Complex Work"
+        ],
+        [
+          "2608.23264",
+          "Hidden in the Request: Explaining Unethical LLM Compliance through Token Relevance"
+        ],
+        [
+          "2608.23263",
+          "Automated Construction of FAIR Digital Object Knowledge Graphs from Flat Cultural Heritage Records"
+        ],
+        [
+          "2608.23256",
+          "Is Next-Chunk Reasoning RL Really Better than SFT? Revisiting Training Strategies under no-CoT Data"
+        ],
+        [
+          "2608.23218",
+          "What is mathematics now, and what should it be?"
+        ],
+        [
+          "2608.23205",
+          "Cognitive Profiling of LRMs' Reasoning Traces Using Bloom's Taxonomy"
+        ],
+        [
+          "2608.23196",
+          "AI emotional support is better only when chosen, but shifts preferences even when it is not"
+        ],
+        [
+          "2608.23098",
+          "Jiuge-Tuiqiao: An Interpretable Human-AI System for Classical Chinese Poetry Refinement"
+        ],
+        [
+          "2608.23086",
+          "POOL: Propagated Uncertainty Over Lookalikes"
+        ],
+        [
+          "2608.23078",
+          "AgentWeave: Routing Before Reasoning for Efficient Function Calling in Tool-Rich Language Models"
+        ],
+        [
+          "2608.23070",
+          "From Generation to Simulation: How Far Are World Models from Being True Simulators?"
+        ],
+        [
+          "2608.23061",
+          "Improving O-RADS Risk Stratification from Ultrasound Reports: A Comparative Evaluation of Hybrid versus End-to-End LLM Reasoning Strategies"
+        ],
+        [
+          "2608.23058",
+          "LLM-based Agents for Forecasting and Prediction: Methods, Training, Evaluation, and Applications"
+        ],
+        [
+          "2608.23045",
+          "From Inertia to Objectivity: Improving Deep Research Agents with Noise Isolation"
+        ],
+        [
+          "2608.23041",
+          "AutoSaddler: Automatic Harness Optimization with Durable Updates from Agent Execution Traces"
+        ],
+        [
+          "2608.23035",
+          "MobilePA-Bench: Benchmarking Mobile Planner Agents on Complex Real-World Tasks"
+        ],
+        [
+          "2608.23030",
+          "Artificial Empathy: Towards a Framework for Unsupervised Agency Detection and Policy Reconstruction"
+        ],
+        [
+          "2608.23028",
+          "PsychJail: Exploring Psychological Jailbreaks via Multi-Turn Persuasion of LLM Policies"
+        ],
+        [
+          "2608.23001",
+          "PatchWrite: One Line, Not One Section -- Compile-Gated, Validity-Preserving Editing for AI-Drafted Manuscripts"
+        ],
+        [
+          "2608.22979",
+          "SA-RSQ: A Versatile Sparse Representation Framework for Multi-modal Recommender Systems"
+        ],
+        [
+          "2608.22975",
+          "Budget-Constrained Embodied Perception: Four Resource Walls and a Pre-Registered Evaluation of Access-Structured Perception on Open Models at less than 31B"
+        ],
+        [
+          "2608.22974",
+          "Toward Effective and Reliable LLM Agents via Dynamic Ontology"
+        ],
+        [
+          "2608.22971",
+          "ParallelWorld: Test-Time Scaling for Embodied Reasoning"
+        ],
+        [
+          "2608.22963",
+          "Buried in Textual Debt: Context Pruning with Visual Evidence Preservation for MLLM Agents"
+        ],
+        [
+          "2608.22960",
+          "What Process Evaluation of Coding Agents Actually Measures: Action, Task, and Step Are Three Different Levels"
+        ],
+        [
+          "2608.22930",
+          "Concepts for Securing Agentic AI Coding and the Terok Environment"
+        ],
+        [
+          "2608.22920",
+          "Beyond Observed Auxiliary Relations: Environment-Conditioned Modeling for Multi-Behavior Recommendation"
+        ],
+        [
+          "2608.22899",
+          "CDEG: Learning Decision-Critical Evidence for Long-Horizon Diagnostic Agents"
+        ],
+        [
+          "2608.22887",
+          "Proxy reliance in large language model decisions is uncalibrated to predictive evidence"
+        ],
+        [
+          "2608.22852",
+          "Your AI, On a Dial: Controlling Investment Bias in LLMs with a Single Neuron"
+        ],
+        [
+          "2608.22847",
+          "GSAR: Goal-State-Anchor Rewards for Mobile GUI Agents with Self-Evolving Data Synthesis"
+        ],
+        [
+          "2608.22842",
+          "FinixDoc: Rethinking Financial Document Parsing Beyond Saturated Benchmarks"
+        ],
+        [
+          "2608.22832",
+          "Let the Bullets Fly: Multimodal Fake News Detection with Temporal-Aligned Generative Danmaku"
+        ],
+        [
+          "2608.22830",
+          "Beyond the Harness: End-to-End Optimization of Context Artifacts for Enterprise Text-to-SQL"
+        ],
+        [
+          "2608.22797",
+          "Performance of a domain-specific large language model in answering patient questions in psychiatry"
+        ],
+        [
+          "2608.22788",
+          "TailSieve: Partial-Rollout-Guided Tail Routing for LLM Rollouts"
+        ],
+        [
+          "2608.22767",
+          "The Retriever Should Remember: Experience-Amortized Reranking for Long-Term Agent Memory"
+        ],
+        [
+          "2608.22762",
+          "Compositional Chain-of-Relations for Faithful Knowledge Graph Question Answering with Large Language Models"
+        ],
+        [
+          "2608.22752",
+          "The Compaction Cliff in Long-Running AI Agent Memory"
+        ],
+        [
+          "2608.22731",
+          "LLM-Based Selection of Incongruent Verbal and Nonverbal Behavior for Virtual Humans"
+        ],
+        [
+          "2608.22725",
+          "SEAM: Shot Entity-Attribute Memory for Consistent Short-Drama Generation at Scale"
+        ],
+        [
+          "2608.22708",
+          "CacheRouter: A Dual-Path Tool Routing Architecture with Cache-Preserving Main-Model Isolation for Long-Tail Tool Discovery"
+        ],
+        [
+          "2608.22697",
+          "Does Rank Still Matter? Position Bias When AI Agents Shop on Our Behalf"
+        ],
+        [
+          "2608.22676",
+          "Robustness Analysis of Agentic AI to Inconsistent and Incomplete Tool Responses"
+        ],
+        [
+          "2608.22672",
+          "A-CPES: A Reference Framework for Agentic AI in Cyber-Physical Energy Systems"
+        ],
+        [
+          "2608.22646",
+          "CAI-DLLM: Convergence Aware Inference for Diffusion Language Models"
+        ],
+        [
+          "2608.22615",
+          "DeepSAGE: Stage-Aware Reinforcement Learning for Structured CBT Counseling Dialogue"
+        ],
+        [
+          "2608.22610",
+          "Coalition-Aware Skill Reliability for Self-Evolving Agents"
+        ],
+        [
+          "2608.22584",
+          "Weakly supervised concept Bottleneck Learning for Robust Two stage Object centric visual reasoning"
+        ],
+        [
+          "2608.22577",
+          "CausalCache: Conditional High-Fidelity Restoration for Long-Horizon GUI Agents"
+        ],
+        [
+          "2608.22559",
+          "ExecRubrics: Executable Tool-Augmented Rubrics for Verifiable and Efficient Long-Form Evaluation"
+        ],
+        [
+          "2608.22549",
+          "Scaling Curriculum Learning For Autonomous Driving"
+        ],
+        [
+          "2608.22538",
+          "STAGE: Stateful Translation to Agentic Graph Execution with Policy-Scoped Context and Deterministic Control"
+        ],
+        [
+          "2608.22533",
+          "CONTRAMEM: Learning Self-Evolving Procedural Memory from Contrasting Multi-Model Trajectories"
+        ],
+        [
+          "2608.22512",
+          "HANSARD: A Reference Architecture for Forensic Readiness, Runtime Witnessing, and Graded Attribution in Autonomous Multi-Agent AI Systems"
+        ],
+        [
+          "2608.22510",
+          "ClawProBench: Trace-Aware Evaluation of AI Agents with Runtime Coverage and Frozen Workplace-Style Holdouts"
+        ],
+        [
+          "2608.22504",
+          "When Does AI for PDEs Yield Scientific Evidence?"
+        ],
+        [
+          "2608.22472",
+          "Small Reasoning Models are Instruction Followers in Function Calling"
+        ],
+        [
+          "2608.22438",
+          "When Persona Simulations Are Informative: Graph-Structured Signals for Pluralistic Opinion Sensing"
+        ],
+        [
+          "2608.22429",
+          "Think with Structured Grounding: Perceptual Reinforcement Learning for Chart and Visual-Tabular Understanding"
+        ],
+        [
+          "2608.22421",
+          "Where World Models Break: Natural-Input Failure Discovery"
+        ],
+        [
+          "2608.22417",
+          "LLMs for Survey Text Analysis - A Performance Comparison Between Humans and GPT-5 on Inductive Content Analysis"
+        ],
+        [
+          "2608.22364",
+          "WAM-OPD: On-Policy Distillation for World Action Models"
+        ],
+        [
+          "2608.22363",
+          "Analyzing and Mitigating Cross-Lingual Degradation in Multilingual Medical VQA"
+        ],
+        [
+          "2608.22356",
+          "Addressing the Selection Problem in Explainable AI"
+        ],
+        [
+          "2608.22347",
+          "Where Cognition Lives: Dissecting Emergent from Computed Function in a Minimal Complete Cognitive Architecture"
+        ],
+        [
+          "2608.22310",
+          "HERO: Human-profile Enhanced Retrieval Optimization Framework for Long-term Agent Memory"
+        ],
+        [
+          "2608.22266",
+          "Clarify User Expertise: Towards Proactive Conversational Agents Tailoring Responses to User Proficiency"
+        ],
+        [
+          "2608.22237",
+          "Read Less, Solve More: Token-Efficient Sparse Reading for AI Agents"
+        ],
+        [
+          "2608.22191",
+          "Disagree to Explore, Agree to Commit: Routing-Guided Test-Time Scaling for Software Agents"
+        ],
+        [
+          "2608.22176",
+          "Role-Specialized Mixture-of-Agents with Open-Weight LLMs for Clinical Prediction"
+        ],
+        [
+          "2608.22167",
+          "MCP-Universe RL: A Framework for Training MCP Tool-Use Agents via Reinforcement Learning"
+        ],
+        [
+          "2608.22161",
+          "Aggregation-Aware Synthetic Text Generation Against Authorship Re-Identification"
+        ],
+        [
+          "2608.22160",
+          "AUDITA: certified auditing and causal attribution of adverse outcomes in autonomous multi-agent systems"
+        ],
+        [
+          "2608.22143",
+          "Evaluation of Small Vision-Language Models on Qualitative Mechanical Problems"
+        ],
+        [
+          "2608.22141",
+          "MEMONDEMAND: A Memory Management System for Large-Scale Enterprise Data"
+        ],
+        [
+          "2608.22138",
+          "Measuring Stability and Failure Behavior in Language Models Under Structured Perturbations"
+        ],
+        [
+          "2608.22137",
+          "MegaMem: A Retrieval Solution for Ultra-Large Context Windows"
+        ],
+        [
+          "2608.22128",
+          "Task-Driven 3D Printability Assistance via Geometry- and Knowledge-Grounded LLM Reasoning"
+        ],
+        [
+          "2608.22108",
+          "Development and Feasibility Evaluation of an Edge AI as Medical Device System for Breast Cancer Multidisciplinary Team Meetings"
+        ],
+        [
+          "2608.22103",
+          "Hack-Verifiable Terminal Bench: Evaluating Reward Hacking in Terminal Tasks"
+        ],
+        [
+          "2608.22085",
+          "Dissecting Neuro-Symbolic Quality Assurance for Synthetic Oncology Data Generation"
+        ],
+        [
+          "2608.19880",
+          "EnvHarness: Awakening Static Worlds for Agent Learning"
+        ],
+        [
+          "2608.17426",
+          "SemComp-Bench: Benchmarking Semantic Task Completion in Video Generation"
+        ],
+        [
+          "2608.18580",
+          "FACET: Preserving Source Intent and Executable State in Terminal Task Synthesis"
+        ],
+        [
+          "2608.18565",
+          "SemaPLC: A Project-Grounded, Verification-Gated Agent Harness for PLC Code Generation"
+        ],
+        [
+          "2608.20335",
+          "4DAnyone: Create Anyone in 4D from a Casual Monocular Video"
+        ],
+        [
+          "2608.19799",
+          "SWE-bench Science: Can Coding Agents Resolve Engineering Tasks in Science?"
+        ],
+        [
+          "2608.19197",
+          "SPADE: Self-Play in Adaptive Synthetic Executable Environments"
+        ],
+        [
+          "2608.21156",
+          "Graph Engineering in the Era of LLM Agents: From Individual Intelligence to System Intelligence"
+        ],
+        [
+          "2608.20336",
+          "WithEveryone: Unified Planning and Identity Grounding for Group Image Generation"
+        ],
+        [
+          "2608.20061",
+          "Let's Scale Step by Step: Compute-Efficient Hyperparameter Transfer for Large-Scale Mixture-of-Experts"
+        ],
+        [
+          "2608.20910",
+          "InfinityEdit: Infinite Video Editing with a Lightweight Edit-Ignition Adapter"
+        ],
+        [
+          "2608.18940",
+          "Training Chemical Plausibility-Aware Large Language Models for Single-Step Retrosynthesis"
+        ],
+        [
+          "2608.20202",
+          "MemTrapBench: Benchmarking Cognitive Traps in LLM Memory Use"
+        ],
+        [
+          "2608.21500",
+          "SecOPD: Mitigating Adaptive Prompt Injections by On-Policy Distillation"
+        ],
+        [
+          "2608.21360",
+          "OmniAssistBench: Assistant-style Interaction Benchmark for Omni-LLMs"
+        ],
+        [
+          "2608.18063",
+          "EDITBRIDGE: Towards Faithful and Efficient Ultra-High-Resolution Image Editing"
+        ],
+        [
+          "2608.20430",
+          "RISE: Adaptive Imagination for World Action Models"
+        ],
+        [
+          "2608.20958",
+          "TLive-Omni: An Omni-Modal Understanding Model for E-Commerce Live Streaming"
+        ],
+        [
+          "2608.18423",
+          "FM-Bench: A Benchmark for Long-Horizon Management with Competing Agents"
+        ],
+        [
+          "2608.23189",
+          "EchoWM: Open and Enterable Omnimodal World Models"
+        ],
+        [
+          "2608.19854",
+          "Repo0: Design-Driven Zero-to-All Code Generation"
+        ],
+        [
+          "2608.19758",
+          "FlashPrefill V2: Block-Sparse Prefill Attention for Long-Context LLM Serving"
+        ],
+        [
+          "2608.18746",
+          "Decision-Metric Alignment in Latent World Models: Diagnostics and Action-Conditioned Objectives for MPC Planning"
+        ],
+        [
+          "2608.19891",
+          "EXIMO: VLM Guided Exploration of VLA Policies"
+        ],
+        [
+          "2608.18701",
+          "SoftVTBench: A Deformation-Aware Visuo-Tactile Dataset and Benchmark for Deformable-Object Manipulation"
+        ],
+        [
+          "2608.21439",
+          "WorldMind: Decoupled Game World Model for State-Aware NPC Behavior"
+        ],
+        [
+          "2608.20886",
+          "EviRank: Structured Relevance Evidence for Multimodal Image Re-ranking"
+        ],
+        [
+          "2608.18933",
+          "SkillForge: Self-Distilling Agents for Project-Specific Issue Resolution"
+        ],
+        [
+          "2608.20281",
+          "Inject, Align, Recover: Staged Post-Training for Retrieval-Free Document Knowledge Internalization"
+        ],
+        [
+          "2608.19861",
+          "PolicyGuide: From Guarding One Action to Guiding the Whole Workflow for Policy-Compliant LLM Agents"
+        ],
+        [
+          "2608.18484",
+          "Partition the Support, Reconstruct the Residual: Training-Free Sparse Attention for Video Generation and World Models"
+        ],
+        [
+          "2608.20634",
+          "AgentMercury: Your Agent Can Synthesize Verifiable Environments for Business Scenarios at scale"
+        ],
+        [
+          "2608.23383",
+          "Long-Horizon Audio-Visual Generation for Persistent Stories and Interactive Worlds"
+        ],
+        [
+          "2608.20210",
+          "Daedalus-150M: A Convolution-Attention Hybrid Designed for CPU Inference"
+        ],
+        [
+          "2608.19776",
+          "CoToGrasp: Contact-Topology-Conditioned Dexterous Grasp Synthesis via Canonical Workspace Learning"
+        ],
+        [
+          "2608.18852",
+          "SkillGate: Training In-Policy Skill Selection in Long-Horizon Agents"
+        ],
+        [
+          "2608.18077",
+          "Hydra-0: Action Flow for Generalist World Modeling and Control"
+        ],
+        [
+          "2608.19759",
+          "GOAG: Generative and Object-Agnostic Grasp Planner for Dexterous Robotic Manipulation"
+        ],
+        [
+          "2608.21833",
+          "GameXpert-Bench: How Far Are Coding Agents from Expert Game Development?"
+        ],
+        [
+          "2608.19408",
+          "Beyond Imitation: Filtering On-Policy Distillation by Reasoning Progress"
+        ],
+        [
+          "2608.18184",
+          "Human-Centric Intelligence in the Era of Foundation Models: A Survey"
+        ],
+        [
+          "2608.20707",
+          "Towards Faithful Simulation of Human Shopping Behavior"
+        ],
+        [
+          "2608.21134",
+          "Llama-Mobile: Efficient 2.7-Bit Quantization of VLMs"
+        ],
+        [
+          "2608.19741",
+          "One Success Isn't Reliability: Thinkingbox, a Sandbox and Benchmark for Agents in Stateful Business Workflows"
+        ],
+        [
+          "2608.19567",
+          "Block3D: Efficient Text-to-3D Generation via Block-Wise Diffusion"
+        ],
+        [
+          "2608.20169",
+          "Task-CoEvolve: Efficient Harness Optimization via Adaptive Validation Task Selection"
+        ],
+        [
+          "2608.21031",
+          "PhysCaP: Grounding Code-as-Policy Agent with Physics-Informed Exploration"
+        ],
+        [
+          "2608.20438",
+          "Peer-Voted LLM-Agent Stress Tests Find Feed-Induced Lexical Convergence but No Reliable Matched-Exposure Advantage for Distributed Sources"
+        ],
+        [
+          "2608.20574",
+          "FlavourBench: Ranking Frontier Language Models with Executable Culinary Ground Truth"
+        ],
+        [
+          "2608.21278",
+          "CLEAR: Continuous Latent Adapter Routing for Utility-Preserving LLM Safety Alignment"
+        ],
+        [
+          "2608.22856",
+          "Same Agent, Different Answers: A Repeat-Aware Audit of Corpus-Induced Answer Churn in Retrieval-Augmented QA"
+        ],
+        [
+          "2608.19080",
+          "SPK: Eliciting Structured Prior Knowledge for Interpretable Out-of-Distribution Detection in Real-Time Object Detection"
+        ],
+        [
+          "2608.20011",
+          "Manifold Drift in Flow Preference Optimization: A Root Cause of Reward Hacking"
+        ],
+        [
+          "2608.22591",
+          "WorldToken: Time-First Sequence Modeling for Robotic Imitation Learning"
+        ],
+        [
+          "2608.22449",
+          "EMPIRE: Explicit Manipulation Planning as a Learnable Intermediate Representation for Egocentric Hand-Motion Forecasting"
+        ],
+        [
+          "2608.20953",
+          "Quantization-Aware Healing: A Practical Recipe for Recovering Compressed, 4-Bit LLMs"
+        ],
+        [
+          "2608.20318",
+          "AI4AI-Bench: Benchmarking LLM Agents in Algorithmic Design for Recursive Self-Improvement"
+        ],
+        [
+          "2608.20093",
+          "HandMvNet: Real-Time 3D Hand Pose Estimation Using Multi-View Cross-Attention Fusion"
+        ],
+        [
+          "2608.18655",
+          "TranslatePsy-AfriSLM: High-Quality Data Scaling For Low-Resource Machine Translation"
+        ],
+        [
+          "2608.19490",
+          "Fine-Tuning VLAs with Self-Demonstrated Generative Control for Multi-Task Manipulation"
+        ],
+        [
+          "2608.23392",
+          "Towards a Densing Law for User Representation Learning at Billion-Scale Capacity"
+        ],
+        [
+          "2608.23181",
+          "CyberFactory: Scaling Cyber Security Capabilities with Instances from the Wild"
+        ],
+        [
+          "2608.23090",
+          "Loopy: Seamless Video Loop Generation via Anchored Looping Shift of Positional Embedding"
+        ],
+        [
+          "2608.21251",
+          "TRACE-C: Rank-Calibrated Relational Anomaly Detection for Multi-Stream Operational Telemetry"
+        ],
+        [
+          "2608.21204",
+          "Beyond Imitation: Self-Improving Robot Policies via Off-Policy Q-Planning"
+        ],
+        [
+          "2608.20974",
+          "WA-JEPA: Rethinking the Video JEPA Paradigm for World-Action Modeling in Autonomous Driving"
+        ],
+        [
+          "2608.21357",
+          "VIALS: A Benchmark for Visual Interpretation of Artifacts in the Life Sciences"
+        ],
+        [
+          "2608.21325",
+          "Move by Move: Measuring and Steering How LLMs Conduct Psychotherapy"
+        ],
+        [
+          "2608.21023",
+          "Scaling Unsupervised Word Alignment to Documents via Structural Constraints"
+        ],
+        [
+          "2608.20853",
+          "MGAL: A Multilingual Granularity-Aware Long-Context Benchmark"
+        ],
+        [
+          "2608.20319",
+          "Inducing Task Models from Computer-Use Traces"
+        ],
+        [
+          "2608.20122",
+          "ArmorOCR: Grounded Adversarial Visual Perception via Observation-Transferred Self-Distillation"
+        ],
+        [
+          "2608.20114",
+          "DECOWAM: Decoupled Whole-Body World-Action Model for Legged Mobile Manipulation"
+        ],
+        [
+          "2608.21460",
+          "FigmaTrace: Capturing Creative Nuances in Human Figma Design Workflows"
+        ],
+        [
+          "2608.20627",
+          "When Failures Propagate: Causal Failure Attribution in Agentic Retrieval-Augmented Generation"
+        ],
+        [
+          "2608.20569",
+          "Open-Weight Masked Introspection: Measuring What Language Models Can Report About Their Own Computation"
+        ],
+        [
+          "2608.20492",
+          "Annotations as Rollouts: Efficient and Scalable Reinforcement Learning for Video MLLMs"
+        ],
+        [
+          "2608.20338",
+          "ConceptGuard: Benchmarking Context-Sensitive Unlearning in Large Language Models"
+        ],
+        [
+          "2608.20292",
+          "A new lower bound for the growth rate of Av(1324)"
+        ],
+        [
+          "2608.20187",
+          "Multi-Method Causal Evidence Synthesis: Ranking Candidate Drivers by Convergent Cross-Method Evidence from Observational Data"
+        ],
+        [
+          "2608.20157",
+          "G3Ego: Gaze-Guided Graphs for Egocentric Action Understanding"
+        ],
+        [
+          "2608.20127",
+          "ID-VTG: Image-Disambiguated Video Temporal Grounding"
+        ],
+        [
+          "2608.20054",
+          "What You Can't See Is What You Learn: Restricted Evidence Visibility Favors Compositional Generalization in Shared-Genome Language-Model Societies"
+        ],
+        [
+          "2608.19901",
+          "MaliciousSkillBench: A Comprehensive Benchmark for Malicious Agent Skill Detection"
+        ],
+        [
+          "2608.19792",
+          "Size and Distance Scales in the Nucleon and in Dense Baryonic Matter"
+        ],
+        [
+          "2608.19693",
+          "RIPE++: Reinforced Keypoint Learning from Positive Pairs Only"
+        ],
+        [
+          "2608.19601",
+          "Proton emission half-lives and shape coexistence for 71 leq Z leq 83 odd-Z nuclei"
+        ],
+        [
+          "2608.19583",
+          "VGI-BENCH: Probing Visual Intelligence in Video Generation Models"
+        ],
+        [
+          "2608.17453",
+          "EATR-Stereo: Embodiment-Aware Token Routing of Paired Stereo Evidence for Humanoid Vision-Language-Action Control"
+        ],
+        [
+          "2608.18982",
+          "Monroe: A Molecular Foundation Model for In-Context Probabilistic Inference"
+        ],
+        [
+          "2608.18948",
+          "RoboEdit: Turning Human Manipulation Videos into Scalable Robot Experience"
+        ],
+        [
+          "2608.18671",
+          "Vision-Language Models for Egocentric Video: From Hand-Object Interaction to Embodied AI"
+        ],
+        [
+          "2608.19385",
+          "Beyond Recognition: Compact Multi-Domain Arabic Manuscript HTR with Candidate-Selection Analysis and Evidence-Preserving Review"
+        ]
+      ],
+      "selectedReasons": {
+        "2608.22907": "论文提出音节级无监督语音识别框架，直接研究低资源 ASR、语音表示和字符错误率，属于语音识别。",
+        "2608.22796": "论文用 Speech LLM 联合完成多人场景的说话人分离、身份归属、时间定位和语音转写，属于多说话人语音识别。",
+        "2608.22196": "论文研究重叠语音和复杂声学环境下多说话人 ASR 的说话人泄漏，并用 diarization 校正转写。",
+        "2608.21599": "论文从持续发声录音提取声学特征筛查 COPD，并专门分析年龄对声音生物标志物的混杂。",
+        "2608.22872": "论文研究口语查询的 ASR 错误如何传播并放大到多跳 RAG，语音识别是系统的核心上游约束。",
+        "2608.22236": "论文提出覆盖语音、音乐和环境声的多轮多音频退化感知基准，直接评测音频语言模型的声学质量理解。",
+        "2608.21678": "论文扩展符号音乐表示以覆盖力度、速度等演奏表情，并支持联合生成、条件音乐生成和标注任务。",
+        "2601.18904": "论文面向低资源语言和说话人研究听觉 LLM 的语音上下文学习，覆盖 ASR、语音翻译与音频理解。",
+        "2608.21343": "论文提出生产级流式 ASR 上下文偏置框架，研究个性化短语识别、批量解码和低延迟。",
+        "2608.21188": "论文用可伸缩扩散网络降低语音增强的计算复杂度，并以 PESQ、SI-SDR 等语音指标验证。",
+        "2608.21155": "论文提出面向嵌入式 DSP 的超低内存、低复杂度和低延迟端到端语音增强模型。",
+        "2608.20971": "论文研究高保真房间脉冲响应模拟对单通道语音增强及下游 ASR 泛化的影响，属于语音与房间声学。",
+        "2608.20693": "论文直接研究声学回声消除中的正则化块对角 RLS 自适应滤波与复杂度降低。",
+        "2608.20346": "论文构建孟加拉语合成语音数据集，并用 Whisper ASR 和人工听测验证文本与音频一致性。",
+        "2608.23437": "论文提出覆盖语音、环境声、歌声和音乐的全类型音频伪造检测基准与挑战。",
+        "2608.23092": "论文研究答案依赖音频内容的 Audio-Dependent QA，并对大型音频语言模型进行推理后训练和 LoRA 缩放。",
+        "2608.23038": "论文为音频时频掩码网络建立 Lipschitz 连续与收敛保证，并在语音去混响中验证音频恢复方法。",
+        "2608.22420": "论文研究从 MEG/EEG 跨被试解码感知语音，目标是恢复语音内容，属于语音神经解码。",
+        "2608.22273": "论文面向病理和其他非规范语音，以发音方式、部位和清浊特征辅助音素识别。",
+        "2608.22186": "论文针对流匹配与扩散 TTS 提出训练免费音频水印，并评测强音频扰动下的检测。",
+        "2608.22111": "论文用文本查询和流匹配生成模型从复杂声音混合物中分离目标声源，属于音频源分离。",
+        "2608.22057": "论文研究音乐声源中的颤音抑制、迁移和混合，并分析其对听觉与声源分离的影响。",
+        "2608.21378": "论文在通用微控制器上实现从音素到波形的实时神经 TTS，并系统评测语音质量与速度。",
+        "2608.22704": "论文面向长音频 Speech LLM 研究音频 KV 缓存压缩、CPU 回调和语音任务准确率保持。",
+        "2608.22359": "论文用 AudioSet 声学特征在视频解码前筛选动作窗口，是音频驱动的多模态视频分析方法。",
+        "2608.22337": "论文以 spoken query 和 ASR 为入口驱动运动理解与视频实例分割，属于语音相关的多模态 Audio Track。",
+        "2608.21176": "论文通过局部语音失真定位辅助 MOS 预测，直接研究合成、增强和通信语音的质量评估。",
+        "2608.21075": "论文生成真实双耳音频数据以支持音频机器学习和世界模型，核心是空间声学数据模拟。",
+        "2608.20769": "论文诊断 SpeechLM 流式语音情感理解中的历史信念污染，并提出声学感知与状态更新分离方法。",
+        "2608.20394": "论文从韩语会议录音经转写和多阶段清洗构造 SFT 数据，并消融 STT 与语音数据处理环节。",
+        "2608.20433": "论文以萨克斯机器人可控声学、视觉和交互变量研究音乐诱发情绪，属于音乐认知与音频多模态。",
+        "2608.20396": "论文从长期自然录音提取儿童与照护者的语音嵌入，衡量聋或听障儿童的口语发展。",
+        "2608.22072": "论文处理前视声呐回波形成的声学图像并进行低功耗目标检测，属于主动声学感知。",
+        "2608.20206": "论文研究浅水主动声呐原始测量中的声学多径背景、弱目标似然和跟踪。",
+        "2608.19828": "论文以医学超声层析的首波到时提取和全波形反演为核心，属于超声声学信号处理。",
+        "2608.22863": "论文明确联合语言、视觉和音频层级表示，并在多模态意图识别和三模态情感分析中验证声学分支。",
+        "2608.23344": "论文从手术室录音构建说话人分离、转写和团队交互标注，属于语音相关多模态数据集。",
+        "2608.23101": "论文用低功耗声学传感器和 TinyML 实现多物种鸟鸣识别，属于生物声学。",
+        "2608.22968": "论文虽研究通用时序基础模型，但将 MIMII 机器异常声音检测作为独立且完整的主要工业监测实验。",
+        "2608.22399": "论文提出纯音频会话语音情感识别架构，用双尺度状态空间模型融合语音表征，并以说话人级动态 CRF 建模情绪演化。",
+        "2608.22908": "论文研究 Spoken Language Model 中连续语音与离散文本的结构差距，并显式对齐语音和文本表示。",
+        "2608.23484": "论文面向会话式音乐推荐，联合 CLAP 音频、歌词、曲目与用户协同过滤等多模态检索和重排信号。",
+        "2608.22108": "论文构建完全本地运行的医疗会议 ASR 与 RAG 流程，处理患者讨论音频并重点评测 Whisper 语音识别。",
+        "2608.20958": "论文将直播中的视频、音频、图像和文本统一建模，以时间对齐音频支持 ASR、说话人分析和全模态问答。",
+        "2608.23189": "论文提出同时生成视频、环境声、音乐与语音的可交互全模态世界模型，并保持长时音画同步。",
+        "2608.23383": "论文提出长时音视频联合生成系统，以语音过滤的跨镜头音频记忆保持说话人声音身份和语音保真度。"
+      }
+    },
+    {
+      "date": "2026-08-27",
+      "reviewer": "Codex",
+      "reviewedAt": "2026-08-27T12:08:41.504+08:00",
+      "reviewProtocol": "title+abstract+categories+sources-v1",
+      "candidateCount": 317,
+      "negativeReasonKind": "explicit-core-task-v1",
+      "sourceEvidence": {
+        "rawCandidatesSha256": "15c6e53af49ddc0e016e3ccbae75ab002c2bb23ca0a5e82f9b57dd797c656ad7",
+        "filterDecisionsSha256": "29736cd8ce7ccef2566ba9ea3c1894d44eb67023e2005684bee41c2d2c5f9ff2",
+        "manualFilterSpecSha256": "42e28a8841bee2db8a9b0d7d38db1fb9ae6dfd8d3a18361ef913f0a7f6fb71e5",
+        "candidateIdsSha256": "040df47c909296b9e9adcaeb5f06e53fae7e6517760f5d78c0188f37eb7dddbf",
+        "decisionProjectionSha256": "afd96fade749a4fa4b1d6ac4777d2bd3da857254dc2d4d0a3227a1aa3e0fa680"
+      },
+      "candidates": [
+        [
+          "2608.26005",
+          "VoiceMem: Streaming Dual-Brain Memory for Real-Time Interaction"
+        ],
+        [
+          "2608.25846",
+          "Why ML-based cough models do not generalize: a systematic cross-dataset evaluation for tuberculosis screening"
+        ],
+        [
+          "2608.25596",
+          "Knowledge Distillation for Efficient Acoustic Echo Control"
+        ],
+        [
+          "2608.25413",
+          "Acoustic Echo Control Based on Sound Object Identification for Suppressing Howling Caused by Complicated Acoustic Paths"
+        ],
+        [
+          "2608.25404",
+          "CSAVocoder: A Causal Spatial Audio Vocoder Towards Real-Time Spatial Audio Generation"
+        ],
+        [
+          "2608.25384",
+          "Mandarin Humorous Homophone Recognition and Disambiguation in Automatic Speech Recognition"
+        ],
+        [
+          "2608.25218",
+          "TurnBench: A Multi-Domain Benchmark for Turn-Taking Dynamics in Spoken Dialogue"
+        ],
+        [
+          "2608.25926",
+          "Formal, Executable and Explainable Runtime Monitoring of Spoken Air Traffic Control Operational Procedures"
+        ],
+        [
+          "2608.25794",
+          "Cooperative Multi-Agent Reinforcement Learning for Adaptive Aggregation in Semi-Supervised Federated Learning with non-IID Data"
+        ],
+        [
+          "2608.25621",
+          "Dissonance Spectrum explicitly models perceptual frequency interactions for better music understanding"
+        ],
+        [
+          "2608.25289",
+          "Combining Self-Embedding Audio Watermarking with Ultra-Low-Bitrate Neural Codecs"
+        ],
+        [
+          "2608.25285",
+          "A Training-Free Proactive Defense Against Partial Speech Manipulation via Self-Embedding Steganography"
+        ],
+        [
+          "2608.25244",
+          "AllMusicCaps: Album Reviews as Complementary Supervision for Music CLAP"
+        ],
+        [
+          "2608.25177",
+          "AudioLens: Multi-Perspective Speech Clustering with Reasoning Audio-Language Models"
+        ],
+        [
+          "2608.25054",
+          "SPECTRA: Subspace-Preserving Embedding Calibration, Transport, and Replay for Fully Few-Shot Class-Incremental Audio Classification"
+        ],
+        [
+          "2608.24958",
+          "Can We Read the Mind of an Audio LLM? A Verbalizable, Multilingual Middle-Layer Workspace"
+        ],
+        [
+          "2608.24916",
+          "Domain-Adaptive ASR for Telephony AI Agents: Fine-tuning Canary Flash Models for Enterprise Contact Center Applications"
+        ],
+        [
+          "2608.25157",
+          "What Do Audio-Visual Synchronization Metrics Actually Measure?"
+        ],
+        [
+          "2608.24909",
+          "Super Star: Towards Streaming Real-time Interactive Agents for Digital Humans"
+        ],
+        [
+          "2608.26040",
+          "Adaptive Peer Clustering with Hierarchical Random Linear Network Coding for Resilient Decentralized Wireless Networks"
+        ],
+        [
+          "2608.26000",
+          "CardioFusion-AI: Robust ECG--PPG Fusion for Multimodal Physiological Monitoring Under Signal Degradation"
+        ],
+        [
+          "2608.25996",
+          "Visualizing Wireless Propagation and Polarization in Augmented Reality with ESPARGOS"
+        ],
+        [
+          "2608.25847",
+          "Efficient DCT-Based Estimation and Compensation of Nonlinear Channels for OFDM Systems"
+        ],
+        [
+          "2608.25844",
+          "Output-Only Identification and Spectral Monitoring of Coupled Feedback Networks with Known Time-Varying Actuation"
+        ],
+        [
+          "2608.25694",
+          "Semi-Blind Channel Estimation for Dynamic NTN Systems via Spiked Random Matrix Theory"
+        ],
+        [
+          "2608.25634",
+          "Statistical Analysis of Primary and Random Clusters in 318 GHz Terahertz Channels for Industrial IoT"
+        ],
+        [
+          "2608.25612",
+          "A Subcarrier-Aware Approach for Robust Respiratory Monitoring with Commodity Wi-Fi"
+        ],
+        [
+          "2608.25597",
+          "Multi-UE Networked Sensing: A New Paradigm for 6G Perceptive Mobile Networks"
+        ],
+        [
+          "2608.25589",
+          "Power from Space: Coordinated Satellite Charging for Off-Grid Wireless Systems"
+        ],
+        [
+          "2608.25510",
+          "Near-Field Dual-UPA Communications: A Generalized Geometric Approach"
+        ],
+        [
+          "2608.25433",
+          "BeamGuard: Risk-Aware Multimodal Beam Forecasting and Adaptive Virtual Beamwidth Control for 6G mmWave V2I Links"
+        ],
+        [
+          "2608.25410",
+          "Token-Oriented Semantic Communication with Pretrained Vision Transformers"
+        ],
+        [
+          "2608.25393",
+          "End-to-End Mobility-Aware Multi-RIS Optimization via Blockage Detection and Closed-Form Riemannian Updates"
+        ],
+        [
+          "2608.25301",
+          "Security-Aware Pinching-Antenna Systems (PASS): Physical-Layer Security Transmission"
+        ],
+        [
+          "2608.25378",
+          "Analog Time-Frequency Analysis and Frequency Measurement of Ultra-Wideband Microwave Signals via Dual-Comb Channelization"
+        ],
+        [
+          "2608.24974",
+          "Clearing the Underbrush: AI-Enhanced RF Interference Suppression"
+        ],
+        [
+          "2608.24895",
+          "Real-time closed-loop protocol to assess neural variability in temporal coding"
+        ],
+        [
+          "2608.24459",
+          "A high-isolation wideband channelizer for MKID readouts: a custom HLS implementation on RFSoC"
+        ],
+        [
+          "2608.25818",
+          "WaveOp-LiteFM: Lightweight Neural-Operator Flow Matching for Satellite-to-Radar Precipitation Retrieval"
+        ],
+        [
+          "2608.26105",
+          "VBVR-Pro: A Scalable and Verifiable Suite for Native Visual Reasoning"
+        ],
+        [
+          "2608.25823",
+          "Learning Continuous Regional Temperature Fields with Lead-Time and Resolution Queries"
+        ],
+        [
+          "2608.25737",
+          "D3ER: Supporting Multi-Modal Recommendation via Disentangle and Distillation-based Dynamic Ensemble"
+        ],
+        [
+          "2608.25490",
+          "MMJailBench: A Factorized Benchmark for Disentangling Multimodal Jailbreak Vulnerabilities"
+        ],
+        [
+          "2608.25168",
+          "See More, Detect Less? Taming Information Leakage in Multi-View Anomaly Detection"
+        ],
+        [
+          "2608.25097",
+          "PhysElite: How Far Are LLMs from Solving Olympiad-Level Physics Problems?"
+        ],
+        [
+          "2608.24982",
+          "Unsupervised Post-Training of Foundation Models: A Survey"
+        ],
+        [
+          "2608.26093",
+          "Agentic Autoresearch for Cell-Edge Power Control: Radically Redefining the Researcher's Role"
+        ],
+        [
+          "2608.26086",
+          "TraceML: An Empirical Analysis of Human-Agent Planning in Machine Learning Development"
+        ],
+        [
+          "2608.26083",
+          "ICON Decomposition: Multivariate Concept-Level Explanations of Deep Representations for Model Auditing"
+        ],
+        [
+          "2608.26069",
+          "Group-Shared Low-Rank Approximation for Mobile-Efficient Pointwise Convolutions in Large-Kernel CNNs"
+        ],
+        [
+          "2608.26052",
+          "How Much Rank Does LoRA Need? Rank-Error Bounds for Transformer Attention"
+        ],
+        [
+          "2608.26043",
+          "Robust CurveMoE: Multi-Norm Adversarial Defense for Mixture-of-Experts Models via Mode Connectivity"
+        ],
+        [
+          "2608.26019",
+          "DualOPSD: Adaptive Privileged Teachers for On-Policy Self-Distillation"
+        ],
+        [
+          "2608.25990",
+          "Spectral Allocation: Why Muon Outperforms Adam, and How to Improve Muon"
+        ],
+        [
+          "2608.25941",
+          "When Pruning Meets Interpretability: Preserving Sparse Autoencoder Robustness in LLMs"
+        ],
+        [
+          "2608.25936",
+          "One Symptom, Three Levers: A Critical Review of On-Policy Self-Distillation"
+        ],
+        [
+          "2608.25907",
+          "Quantum-Inspired Modeling of Driving Behavior"
+        ],
+        [
+          "2608.25898",
+          "Forecasting Multiple Observables with SCROLL: Score-Trained Uncertainty for Stochastic Dynamics"
+        ],
+        [
+          "2608.25897",
+          "Towards A Unified Information Bottleneck Framework for Time Series Explanations"
+        ],
+        [
+          "2608.25893",
+          "A General-Purpose Molecular Foundation Model Transfers Across Diverse Olfactory Tasks"
+        ],
+        [
+          "2608.25873",
+          "How Edge of Stability Hinders SCAFFOLD in Federated Optimization"
+        ],
+        [
+          "2608.25871",
+          "CEDAR: Controlled and Event-Driven Demand Forecasting via Residual Decomposition"
+        ],
+        [
+          "2608.25841",
+          "VINCENT: Validated Interaction Network for Cross-drug Explanation of Therapeutics"
+        ],
+        [
+          "2608.25813",
+          "Canalization Before Generalization: Grokking as a Dynamical Probe"
+        ],
+        [
+          "2608.25807",
+          "Geometry-Constrained Kolmogorov-Arnold Networks: Learning Edge Geometry via Banach Duality"
+        ],
+        [
+          "2608.25774",
+          "EXAONE Tabular 1.0 : Technical Report"
+        ],
+        [
+          "2608.25773",
+          "Drift-Aware Multimodal User Representation Learning via Multi-Scale Temporal Modeling and Sparse Mixture-of-Experts"
+        ],
+        [
+          "2608.25759",
+          "Learning from waste: Machine Learning for health risk prediction and computer vision-based sorting in Ghana"
+        ],
+        [
+          "2608.25756",
+          "TailSFT: Filtered Fine-Tuning Improves Post-Training Performance"
+        ],
+        [
+          "2608.25745",
+          "Comparing Corrupted Constrained Learning Problems"
+        ],
+        [
+          "2608.25744",
+          "A Constitutive Markov Physics-Informed Neural Operator (MPNO) for Autoregressive Stability in Transient Dynamics"
+        ],
+        [
+          "2608.25741",
+          "Why Does Graph Learning Fail to Fully Benefit from a Text Teacher?"
+        ],
+        [
+          "2608.25727",
+          "Are LLM-Enhanced GNNs Privacy-Safe?"
+        ],
+        [
+          "2608.25723",
+          "It's a matter of timescale: non-linear utility in successor features and multi-objective planning and learning"
+        ],
+        [
+          "2608.25707",
+          "Fairness-Aware Test-Time Prompt Tuning"
+        ],
+        [
+          "2608.25700",
+          "Tropospheric temperature and humidity profile retrieval from Meteosat Flexible Combined Imager based on deep learning"
+        ],
+        [
+          "2608.25698",
+          "Modeling spatio-temporal locality in multi-step forecasting of geo-referenced time series"
+        ],
+        [
+          "2608.25681",
+          "Adversarial Training of Linear Models under Stealthy Attacks"
+        ],
+        [
+          "2608.25646",
+          "LDAC-Net: A Learnable Multi-Lag Differencing Attention-Convolution Network for Drift-Robust Recognition with Low-Cost MOX Gas Sensors"
+        ],
+        [
+          "2608.25643",
+          "A Token-Level Analysis of Sampled-Token Reverse-KL On-Policy Distillation"
+        ],
+        [
+          "2608.25635",
+          "DCEO: Direct Causal Effect Optimization for Long-Term User Value Modeling in E-commerce Search"
+        ],
+        [
+          "2608.25604",
+          "Frequency-aware forecasting for short-term typhoon gust prediction"
+        ],
+        [
+          "2608.25598",
+          "M-Fibration Theory with Applications to Neural Network Compression"
+        ],
+        [
+          "2608.25586",
+          "Individual Fairness in Hierarchical Clustering"
+        ],
+        [
+          "2608.25570",
+          "Beyond Scaling: Self-Evolving LLM Agents for Hardware Kernel Optimization via an Experience-Driven Workflow and Experience Graph Memory"
+        ],
+        [
+          "2608.25564",
+          "Physics-Informed Foresight Pruning for Sparse PINN Solvers of Nonlinear PDEs"
+        ],
+        [
+          "2608.25551",
+          "Beyond Optimal Rates in Stochastic Optimization: Trajectory-Adaptive Stopping Rules"
+        ],
+        [
+          "2608.25548",
+          "Interpreting Protein Language Model Embeddings via Orthogonal Projection for Protein Fitness Prediction"
+        ],
+        [
+          "2608.25542",
+          "Reflection Steering: Disentangling Reflection from Reasoning in Activation Space for Token-Efficient Inference"
+        ],
+        [
+          "2608.25535",
+          "Resilient Decentralized Wireless Federated Learning via Gradient Tracking with AdamW"
+        ],
+        [
+          "2608.25496",
+          "FedQoS: Federated QoS-Risk Learning for Heterogeneous Indoor-Outdoor Access Selection"
+        ],
+        [
+          "2608.25489",
+          "A Storage-Retrieval Gap in Parametric Knowledge Graph Memory"
+        ],
+        [
+          "2608.25467",
+          "Resolving Multi-Modal Regression by Difference-Quotient-Based Clustering:Fast Coarse Conditional-Label Assignment"
+        ],
+        [
+          "2608.25443",
+          "Joint Initialization of Flux Networks and Effective Multiplication Factor for Physics-Informed Neural Networks Solving Neutron Diffusion Problems"
+        ],
+        [
+          "2608.25390",
+          "Refusal geometry reflects refusal training: diverse refusal prefixes can raise stable rank and weaken refusal vector ablation attacks"
+        ],
+        [
+          "2608.25365",
+          "PaSta: Noisy Node Classification with Partial Label Learning"
+        ],
+        [
+          "2608.25354",
+          "Escaping Low-Dimensional Overlap: Multi-Task Model Merging via High-Dimensional Sparse Disentanglement"
+        ],
+        [
+          "2608.25350",
+          "Beyond Pairwise Feedback: Listwise Vision-Language Supervision for Preference-Based Reward Learning"
+        ],
+        [
+          "2608.25327",
+          "Neither Precision Nor Architecture Alone: Controlled Tests of Failure Remedies for Physics-Informed Neural Networks"
+        ],
+        [
+          "2608.25326",
+          "Two Dimensions Govern Agnostic Multiclass Transductive Learning"
+        ],
+        [
+          "2608.25315",
+          "Activation-Space Order-Swap Geometry: A Site-Asymmetry Audit"
+        ],
+        [
+          "2608.25311",
+          "Prefix-Denoising Consistency: Test-Time Verification for Diffusion Language Models"
+        ],
+        [
+          "2608.25291",
+          "InsightSR: Refining Symbolic Regression Search Spaces via Parallel Semantic and Structural LLM Guidance"
+        ],
+        [
+          "2608.25282",
+          "SHSP: Structure-Aware Hierarchical Solution Prediction for Mixed-Integer Linear Programming"
+        ],
+        [
+          "2608.25267",
+          "Mitigating LLM sycophancy with RL-based fine-tuning: Bayesian Truth Serum approach"
+        ],
+        [
+          "2608.25258",
+          "Neural-Bayesian Structure Learning for Discrete Choice Modeling"
+        ],
+        [
+          "2608.25246",
+          "ShuttleArena: Interpretable Self-Play in Physics-Based Badminton"
+        ],
+        [
+          "2608.25232",
+          "Long-Term Behavioral Evaluation for Trusted Collaborator Selection via Bidirectional Mamba"
+        ],
+        [
+          "2608.25231",
+          "Output Dilution: Redundant but Fragile Representations in MoE Models"
+        ],
+        [
+          "2608.25230",
+          "Trust the Mass: Forced Weights in KV-Cache Eviction"
+        ],
+        [
+          "2608.25221",
+          "Representing MAX functions using two-hidden-layer ReLU networks"
+        ],
+        [
+          "2608.25204",
+          "LibriBrain100: One Hundred Hours of Broad and Deep MEG Data for Neural Speech Decoding at Scale"
+        ],
+        [
+          "2608.25200",
+          "Learning Mixtures of Plackett-Luce Models for Multi-Objective Alignment"
+        ],
+        [
+          "2608.25199",
+          "Hyperbolic Latent Geometry for Tree-Structured Prototype Networks: A Local-vs-Global Trade-off"
+        ],
+        [
+          "2608.25189",
+          "What Should a Large Language Model See? Physical Invariants as a Data Representation for PDE Discovery"
+        ],
+        [
+          "2608.25188",
+          "Transforms for LLM Quantization: The Great Inversion and Format Co-Design"
+        ],
+        [
+          "2608.25181",
+          "Simultaneous inference of environmental and interaction forces in collective dynamics"
+        ],
+        [
+          "2608.25163",
+          "Bayesian Flow Networks for Offline Trajectory Planning"
+        ],
+        [
+          "2608.25149",
+          "SNAP-KG: Streaming Node Assignment via Projection for Knowledge Graph Entity Integration"
+        ],
+        [
+          "2608.25138",
+          "Drift Variation Autoencoder: Unifying Generation and Representation Learning through Conditional Posterior Flow Matching"
+        ],
+        [
+          "2608.25133",
+          "Rethinking the Transferable Adversarial Attacks and Robust Defense in Federated Learning"
+        ],
+        [
+          "2608.25128",
+          "When Does Context Routing Help? A Systematic Study of Multi-Modal Fusion in Time Series Forecasting"
+        ],
+        [
+          "2608.25126",
+          "Multimodal Injury Risk Prediction in Tennis"
+        ],
+        [
+          "2608.25118",
+          "Toward Machine Learning with the Unit as a Primitive: Learning from Unit-Linked Events"
+        ],
+        [
+          "2608.25116",
+          "GRAPE: Gradient Refinement and Progress-Aware Exploitation for Query-Efficient High-Dimensional Bayesian Optimization"
+        ],
+        [
+          "2608.25114",
+          "Flower Hub: A Reproducible Benchmarking Platform for Federated Learning in Simulation and Deployment"
+        ],
+        [
+          "2608.25096",
+          "Understanding the Energy Scaling of Large Language Model Inference Across Context Lengths and Attention Architectures"
+        ],
+        [
+          "2608.25088",
+          "The Von-Neumann State-Space Transformer for neural decoding"
+        ],
+        [
+          "2608.25084",
+          "The Frame Kernel Method for Multiscale Operator Learning"
+        ],
+        [
+          "2608.25080",
+          "NVExplain: Explaining Time Series Forecasting with Latent Trajectory Analysis and Structure-Preserving Surrogates"
+        ],
+        [
+          "2608.25073",
+          "DeMMO: Longitudinal and Cross-Disease Modelling of Digital Mobility Outcomes via Multi-Task Learning"
+        ],
+        [
+          "2608.25034",
+          "On the Representational Geometry of Dynamic Programs"
+        ],
+        [
+          "2608.25017",
+          "Rollout-Decoded Reconstruction for Long-Horizon Prediction in Latent World Models"
+        ],
+        [
+          "2608.24987",
+          "D$^3$-MOPD: Adaptive Dynamic Domain ScheDuling for Efficient Multi-Teacher Distillation"
+        ],
+        [
+          "2608.24978",
+          "MSR-IVA: Masked Structural Residual Independent Vector Analysis for State-Aware Fusion of Structural MRI and Dynamic Functional Network Connectivity"
+        ],
+        [
+          "2608.24973",
+          "Resource-Efficient Pruning for Transformer via Low-Rank Importance Estimation"
+        ],
+        [
+          "2608.24970",
+          "Physics-Informed Error Field Learning: A Post-Training Optimization Framework for Physics-Informed Neural Networks"
+        ],
+        [
+          "2608.24963",
+          "Why and When Neural Networks Improve Local Approximation in Optimization"
+        ],
+        [
+          "2608.24954",
+          "AFDBench: A Reasoning-First AI Scientist for NationalWeather Service Forecast Discussions"
+        ],
+        [
+          "2608.24949",
+          "Demystifying Reinforcement Learning Post-Training of Language Models"
+        ],
+        [
+          "2608.24947",
+          "CAT-GS: Balanced Multimodal Learning via Calibrated Gating and Fusion Surgery"
+        ],
+        [
+          "2608.24946",
+          "MacroAgent: Regularity-Aware Macro Legalization with LLM-Agent-Designed Contour Algorithms"
+        ],
+        [
+          "2608.24945",
+          "FAMPWQ: Fisher Information-based Adaptive Mixed Precision Weight Quantization for Effective LLM Inference"
+        ],
+        [
+          "2608.26070",
+          "Prefix Sliding for efficient test-time scaling"
+        ],
+        [
+          "2608.26060",
+          "Fine-Tuning Whisper for Automatic Speech Recognition in Baniwa: A Preliminary Study"
+        ],
+        [
+          "2608.26035",
+          "Beyond Local Surprise: Grounded Dialogue as Selective Belief Revision under Referential Uncertainty"
+        ],
+        [
+          "2608.26013",
+          "VISA: Agentic Self-Evolving Data Synthesis for Multimodal Instruction Following"
+        ],
+        [
+          "2608.25999",
+          "Distinct dynamics of conceptual and referential disruptions in human reading and large language model processing"
+        ],
+        [
+          "2608.25977",
+          "When Personality Meets Quantization: A Layer-wise MBTI Analysis of Quantized LLMs"
+        ],
+        [
+          "2608.25976",
+          "Lost but not erased: Finding traces of a forgotten language in neural speech models"
+        ],
+        [
+          "2608.25944",
+          "Unveiling Spectral Mechanisms in Training-Free LLM Text Detection"
+        ],
+        [
+          "2608.25922",
+          "Query-Side Attacks on GNN-Based KGQA: Tracing Failures from Entity Linking to Answer Generation"
+        ],
+        [
+          "2608.25910",
+          "SAMpLE: A SystemC-AMS Machine LEarning-based Framework for Virtual Prototyping"
+        ],
+        [
+          "2608.25904",
+          "One Form to Transfer Them All: Pretraining Multilingual Language Models Beyond Native Orthography"
+        ],
+        [
+          "2608.25894",
+          "From Passive Response to Proactive Correction: Enhancing LLM Robustness Against Input Fact Perturbations"
+        ],
+        [
+          "2608.25881",
+          "Loss-Based Active Learning for Neural Abstractive Summarization"
+        ],
+        [
+          "2608.25869",
+          "Anchoring Bias in LLM-as-a-Judge Systems: Prior Scores Compromise Evaluation Independence"
+        ],
+        [
+          "2608.25854",
+          "Key Point Analysis Needs Structure Recovery: Task Definition, Dataset Diagnosis, and a Structure-Aware Benchmark"
+        ],
+        [
+          "2608.25832",
+          "Skill Issue: Are Skills Language-Invariant in LLMs?"
+        ],
+        [
+          "2608.25826",
+          "Unfolding Scientific Papers into Multi-Turn Generation Trajectories for Continued Pre-Training"
+        ],
+        [
+          "2608.25824",
+          "Localize-Then-Decide Guarantees for LLM Judgments"
+        ],
+        [
+          "2608.25768",
+          "MoganBert-TR: A Turkish Encoder Foundation Model Trained from Scratch with a CLM-to-MLM Curriculum"
+        ],
+        [
+          "2608.25761",
+          "Beam Search, Self-Consistency, and the Limits of Inference-Time Scaling for Grammar-Constrained Text-to-SQL in Small Language Models"
+        ],
+        [
+          "2608.25717",
+          "When RAG Fails to Equalize: Geo-bias in Factual Question Answering over Public Companies"
+        ],
+        [
+          "2608.25677",
+          "Learning New Facts with QLoRA: An Acquisition-Retention Frontier"
+        ],
+        [
+          "2608.25662",
+          "Overview of SHROOM-Visions 2026: A Shared Task on Hallucination Detection in Large Vision-Language Models"
+        ],
+        [
+          "2608.25660",
+          "Think-Probe-Respond: Improving Large Language Models as Judges of Research Idea Novelty"
+        ],
+        [
+          "2608.25655",
+          "Reconstructing the Right Episode: Evaluating Interleaved Conversational Memory Beyond Long Context"
+        ],
+        [
+          "2608.25654",
+          "Unmatched Does Not Mean False: Incomplete Reference Sets Can Reverse Calibration Rankings in Open-Ended Theory-of-Mind Tracking"
+        ],
+        [
+          "2608.25637",
+          "AutoVerifier: Residual-Guided Non-Parametric Optimization for Reference-Based Answer Verification"
+        ],
+        [
+          "2608.25618",
+          "AWM: Answerable Working Memory for Long-Document VQA Agents"
+        ],
+        [
+          "2608.25605",
+          "From Specialization to Generalization: Instruction-tuned LLMs for Robust Harmful Content Mitigation"
+        ],
+        [
+          "2608.25593",
+          "JIT-Agent: Scaling Harness Intelligence via Just-in-Time Harness Evolution"
+        ],
+        [
+          "2608.25583",
+          "GRIP: Granular Reward-Guided Parameter Interpolation for Efficient Reasoning"
+        ],
+        [
+          "2608.25579",
+          "Cross-Dataset Stability of Expert-Informed Skill Prompting and Fine-Tuning for Chinese Metaphor Identification"
+        ],
+        [
+          "2608.25574",
+          "Generative vs. Encoder Large Language Models for ASR Evaluation: A Comparative Study"
+        ],
+        [
+          "2608.25569",
+          "Controllable Affective Generation via Latent Vector Steering"
+        ],
+        [
+          "2608.25561",
+          "EgoArgus: Benchmarking VLMs as Situational Assistants for Modality-Grounded User Supports"
+        ],
+        [
+          "2608.25555",
+          "Virgil: Navigating Explainability for Transformer-based Language Models"
+        ],
+        [
+          "2608.25531",
+          "ClueWeaver: Reward-Guided Dual-Agent Evidence Reasoning for Compact LLMs on Literary Long Narratives"
+        ],
+        [
+          "2608.25523",
+          "TOPAS: Workflow-Aware Prefix-State Scheduling for Multi-Agent LLM Serving"
+        ],
+        [
+          "2608.25487",
+          "ReliableRAG: Combating Misinformation in Retrieval-Augmented Generation via Reliability-Guided Reasoning Chains"
+        ],
+        [
+          "2608.25478",
+          "VietAIDetector: An Open-Source Zero-Shot Detector for Vietnamese AI-Generated Text"
+        ],
+        [
+          "2608.25449",
+          "MathAdv: What Theorem Provers Know, Reason, Formalize, and Generalize"
+        ],
+        [
+          "2608.25428",
+          "DCGC: Draft-Conditioned Global Correction for Complex Reasoning with Masked Diffusion Models"
+        ],
+        [
+          "2608.25398",
+          "OmniPhys: A Unified Multimodal Benchmark for Physics Understanding and Generation from Chinese Educational Corpora"
+        ],
+        [
+          "2608.25379",
+          "Adaptive Triggering for Bias Correction in LLM Reasoning"
+        ],
+        [
+          "2608.25359",
+          "Leveraging Speech Acts for Low-Data and Cross-Domain Conversation Derailment Forecasting"
+        ],
+        [
+          "2608.25347",
+          "Short Horizons and Sparse Concepts: a Mathematical View of the Readout in the J-lens"
+        ],
+        [
+          "2608.25343",
+          "GUIDE: Generative Unsupervised Chinese Query Correction via Phonetic and Visual Shared-ID Encoding"
+        ],
+        [
+          "2608.25336",
+          "Provenance Before Prose: Claim-Locked Reporting"
+        ],
+        [
+          "2608.25277",
+          "Routed Graph Handoff: Adaptive Format Selection for Multi-Agent LLM Delegation"
+        ],
+        [
+          "2608.25276",
+          "Groundhog Bit-Flip Attack: Seeding Infinite Generation Loops in Mixture-of-Experts LLMs through Bit Flips"
+        ],
+        [
+          "2608.25243",
+          "From Memorization to Absorption: Mixed-Policy RL for Continual Knowledge Injection"
+        ],
+        [
+          "2608.25190",
+          "BanglaMamba: Exploring State Space Models for Bangla Fake News Detection"
+        ],
+        [
+          "2608.25166",
+          "The Changing Geometry of Grammar: Dimensionality and Neighborhood Reorganization across Transformer Layers"
+        ],
+        [
+          "2608.25152",
+          "Belief Cascades Drive Persuasion in LLM Agent Networks"
+        ],
+        [
+          "2608.25123",
+          "SelfGraphRAG: Bridging the Supervision Gap in Graph-Based RAG with Synthetic QA Generation"
+        ],
+        [
+          "2608.25115",
+          "Less can be More: Relieving RAG Bottlenecks via Evidence Frontloading and Pressure-Adaptive Budgeting"
+        ],
+        [
+          "2608.25089",
+          "Apples to Apples? Towards Comparable Crosslingual Language Model Evaluation"
+        ],
+        [
+          "2608.25085",
+          "MTDiag: A Multi-Turn Diagnostic Dataset Towards Clinically Meaningful LLM Evaluation"
+        ],
+        [
+          "2608.25071",
+          "HealthBench-Psych: A Mental Health Subset of OpenAI's HealthBench"
+        ],
+        [
+          "2608.25061",
+          "DataKernelBench: Can LLMs Optimize Database Queries on GPUs?"
+        ],
+        [
+          "2608.25038",
+          "Padamitra: Grounded Glossary Generation for Classical Sanskrit"
+        ],
+        [
+          "2608.25028",
+          "Behind the [MASK]: Disentangling Representation and Faithfulness in DAPF-Based Dementia Detection"
+        ],
+        [
+          "2608.25022",
+          "A Primer on Computational Semantics for Artificial Intelligence Systems"
+        ],
+        [
+          "2608.25005",
+          "The Imperfective Paradox Is Not Necessarily in Large Language Models: A Benchmark Failure Before a Model Failure"
+        ],
+        [
+          "2608.24988",
+          "Does Fine-Tuning Undo Activation Steering? Behavioural Recovery Without Weight-Edit Reversal"
+        ],
+        [
+          "2608.24952",
+          "The Dialect Tax: Dialectal Biases Persist throughout the Language Modeling Pipeline"
+        ],
+        [
+          "2608.24920",
+          "Semantic Variability of Replies Across LLMs: Implications for Designing Conversation-Based Assessment"
+        ],
+        [
+          "2608.24901",
+          "Detection != Reliable Control: Decodable Empathy Directions Yield at Most Partial Shifts in Automated Empathy Scores"
+        ],
+        [
+          "2608.26091",
+          "PlanSightRAG: A Visual-First Multimodal RAG for Automating Question Answering and Compliance Checking for Civil Standard Plans"
+        ],
+        [
+          "2608.26081",
+          "SwarmWorld: Stigmergic technological evolution in societies of language-model agents"
+        ],
+        [
+          "2608.26053",
+          "$R^3$: Training Robots to Reason in Natural Language via Reinforcement Learning"
+        ],
+        [
+          "2608.26036",
+          "Trace Integrity for LLM Data Agents: A Vision for Auditable Structured Reasoning in Real-World Systems"
+        ],
+        [
+          "2608.26008",
+          "A Self-Evolving Multi-Agent Framework Defense against LLM Jailbreak Attacks"
+        ],
+        [
+          "2608.26004",
+          "AsymSpec: Context-Asymmetric Speculative Decoding for Agentic LLMs"
+        ],
+        [
+          "2608.25927",
+          "Code World Model: Coding Agent as World Brain"
+        ],
+        [
+          "2608.25622",
+          "Plans You Can Check: Verifier-Grounded Learning of an Open-Weight Planner for Executable Video-Editing"
+        ],
+        [
+          "2608.25553",
+          "When Stale Constraints Go Unchecked: Budgeted Verification Failures in Inherited Agent Memory"
+        ],
+        [
+          "2608.25505",
+          "Conditional Total Correlation and the Serial Depth of Adaptive Parallel Sampling"
+        ],
+        [
+          "2608.25500",
+          "CaSKG: Counterfactual-Causal Skill Graphs for Scalable Agent Skill Retrieval"
+        ],
+        [
+          "2608.25486",
+          "PonsRAG: A Pons-Inspired RAG Bridging Cognitive Islands for Coordinated Long Narrative Reasoning"
+        ],
+        [
+          "2608.25375",
+          "GGSS: Geodesic-Gated Spherical Steering for Inference-Time Debiasing of Generative Vision-Language Models"
+        ],
+        [
+          "2608.25329",
+          "Learning What to Share and What to Personalize: Hierarchical Strategy Co-Evolution for Agent Memory"
+        ],
+        [
+          "2608.25325",
+          "FinRiskAtlas: Decision-Aligned Evaluation of Large Language Models for Financial Risk Review"
+        ],
+        [
+          "2608.25245",
+          "The \"Curse of Knowledge\" in LLM Query Simulation: Concept Provenance for Tracing Answer-Side Intrusion"
+        ],
+        [
+          "2608.25236",
+          "Rare Diseases, Common Dilemmas: LLMs Prioritize Equal Resource Distribution over Patient Benefit in Decision-Making"
+        ],
+        [
+          "2608.25140",
+          "RefLAM: A Reference-Grounded Line Annotation Pipeline for Historical Arabic Manuscripts"
+        ],
+        [
+          "2608.26088",
+          "Planetary Prediction Engine: Autonomous Geospatial Prediction via Intelligent Data Selection and Foundation Model Embeddings"
+        ],
+        [
+          "2608.26009",
+          "Imitation Learning for Connection-Tableau Construction"
+        ],
+        [
+          "2608.25992",
+          "ProgRouter: Online Progress-Guided Orchestration for Multi-Agent LLM Workflows under Quality-Cost Tradeoffs"
+        ],
+        [
+          "2608.25986",
+          "Multi-Granularity Context-Enhanced RAG over Multimodal Knowledge Graphs"
+        ],
+        [
+          "2608.25973",
+          "SciMIF: Understanding Multimodal Instruction Following in Scientific Domains"
+        ],
+        [
+          "2608.25968",
+          "Quantitative Analysis of $ω$-Regular Robust MDPs"
+        ],
+        [
+          "2608.25960",
+          "LivingRAG: Augmenting Graph RAG with Experience"
+        ],
+        [
+          "2608.25937",
+          "Candidate supply and answer selection shape the value of LLM judging in multi-agent systems"
+        ],
+        [
+          "2608.25934",
+          "How Robust Are Automated Fact-Checking Systems? A Cross-Benchmark Evaluation"
+        ],
+        [
+          "2608.25920",
+          "Repair or Resample? Rethinking Failure Debugging in LLM Multi-Agent Systems"
+        ],
+        [
+          "2608.25917",
+          "Choose Your Game Wisely: Measuring Game-Theoretic Structures in Real-World Vehicle Interactions"
+        ],
+        [
+          "2608.25777",
+          "LocalLSTC: A Long Short-Term Control Architecture for Locally Deployed GUI Agents"
+        ],
+        [
+          "2608.25775",
+          "ToST: A Tree-of-Thought Socratic Teaching Framework for Multi-Path Guidance and Parallel Thinking"
+        ],
+        [
+          "2608.25657",
+          "Narcissus: Program Synthesis Using Context-Aware LLM Approximations"
+        ],
+        [
+          "2608.25623",
+          "Using profiles of cognitive capability to assess AI suitability for workplace tasks"
+        ],
+        [
+          "2608.25518",
+          "Agentic Game Development as a Verifiable Trajectory Data Engine for Scaling World Models"
+        ],
+        [
+          "2608.25460",
+          "Training Alignment Auditors via Reinforcement Learning"
+        ],
+        [
+          "2608.25429",
+          "Distance Is Not Enough: Forget-Retain Alignment Gap Predicts LLM Relearning Robustness"
+        ],
+        [
+          "2608.25417",
+          "Paint What You See: Benchmarking Dexterous Visual Tool Use in Multimodal Agents"
+        ],
+        [
+          "2608.25399",
+          "Can your AI agent be cheaper? Investigating the effects of task specifications on token spend in agentic coding tasks"
+        ],
+        [
+          "2608.25358",
+          "Where vs What: Decomposing Structural and Content Failures in LLM-Generated Structured Outputs"
+        ],
+        [
+          "2608.25286",
+          "BixBench3: Benchmarking AI agents on research-study-scale computational biology tasks"
+        ],
+        [
+          "2608.25275",
+          "PhaseShift: Topology-Aware Data Harmonization and Model Consolidation Across Signalized Intersections"
+        ],
+        [
+          "2608.25261",
+          "Hierarchical MoE for Multi-Modal ILD Diagnosis"
+        ],
+        [
+          "2608.25220",
+          "FLARE: Verifying MILP Reformulations with LLM-Based Theorem Proving"
+        ],
+        [
+          "2608.25217",
+          "LLM-Driven, Datasheet-Aware Automated Hardware Compatibility Verification for Early-Stage, Pre-Schematic Embedded System Design"
+        ],
+        [
+          "2608.25215",
+          "Federation Is Nearly Free, Reasoning Is Not: Tradeoffs for AI Co-Scientists in Protein Characterization Workflows"
+        ],
+        [
+          "2608.25198",
+          "Tunable Tool-Call Rates in LLM Agents via Representation Steering"
+        ],
+        [
+          "2608.25158",
+          "FuzzingBrain-Bench V1: Evaluating Open-Ended Bug Discovery by LLMs"
+        ],
+        [
+          "2608.25100",
+          "Towards Reliable, Generalizable, and Specific In-Context Knowledge Editing via Multi-Objective Reinforcement Learning"
+        ],
+        [
+          "2608.25091",
+          "Auto-Policy, not Auto-Skill: Compiled Agent Skills for the Physical World"
+        ],
+        [
+          "2608.25067",
+          "SimVerity: When Does Simulated Agent Success Survive Physical Deployment?"
+        ],
+        [
+          "2608.25039",
+          "LifePlanner: Evaluating LLM Agents for Geo-spatial Planning with Social Media Data"
+        ],
+        [
+          "2608.25037",
+          "Retrieve, Match, Escalate: Accurate and Scalable Product Linking with VLM-Distilled Cross-Encoders and Agentic VLMs"
+        ],
+        [
+          "2608.25023",
+          "CVE-SAI: Counterfactual Visual Evidence-Guided Selective Attribute Indexing for Risk-Controlled E-commerce Search"
+        ],
+        [
+          "2608.24986",
+          "Solving Robust POMDPs with Omega-regular Objectives via Partially Observable Stochastic Games"
+        ],
+        [
+          "2608.24979",
+          "FrontierChallenge: Evaluating Scientific Workflow Completion"
+        ],
+        [
+          "2608.24921",
+          "post-graph-rag: A PostgreSQL-Native Graph RAG Engine"
+        ],
+        [
+          "2608.24918",
+          "Semantic Graph Unification for Industrial Digital Threads: Bridging 11 Heterogeneous Manufacturing Systems Through Ontology-Driven Knowledge Graphs"
+        ],
+        [
+          "2608.24893",
+          "Same-Player Verification for Account Consistency in Counter-Strike 2"
+        ],
+        [
+          "2608.24892",
+          "Natural Language Input, Semantic Track Representation, and LLM Inference: Making the Maritime Information Exchange Model Tractable"
+        ],
+        [
+          "2608.24891",
+          "Measurement-Budget Allocation in Quantum Learning with Finite-Shot Generalization Guarantees"
+        ],
+        [
+          "2608.24890",
+          "AI-Powered Mental Health Chatbots in Africa: A Systematic Review and Culturally Adaptive Framework"
+        ],
+        [
+          "2608.24889",
+          "Reliable LLM-Powered Decision Engines for Large-Scale Supply Chain Operations: Architecture, Safety, and Performance Guarantees"
+        ],
+        [
+          "2608.24888",
+          "SIMGUIDE: Procedurally Grounded Multi-Context Representations for Personalized Agent Planning"
+        ],
+        [
+          "2608.24886",
+          "VLM-based automatic multi-granularity graph representation of building layouts for design informatics"
+        ],
+        [
+          "2608.26095",
+          "A Visual Dependence-Aware Framework for Multimodal Unsupervised Continual Post-Training"
+        ],
+        [
+          "2608.26094",
+          "MyoMechanix: Biomechanically-Grounded Compositional Skilled Activity Understanding and Coaching"
+        ],
+        [
+          "2608.26090",
+          "Finding and using interpretable latents in a neutrino foundation model with sparse autoencoders"
+        ],
+        [
+          "2608.26074",
+          "Gating Before Commitment: Anticipating Intent Divergence to Prevent Post-Interaction Decision Failures in Autonomous Driving"
+        ],
+        [
+          "2608.26051",
+          "The Value of Human Expertise"
+        ],
+        [
+          "2608.25981",
+          "FRAME: separating sampling variation from representational cause in medical imaging fairness"
+        ],
+        [
+          "2608.25970",
+          "PANDA - Prototype-Anchored Alignment for Partially Unpaired Multimodal Learning, with Applications to Alzheimers MRI and TCGA Pathology"
+        ],
+        [
+          "2608.25940",
+          "A Statistical Audit of Physical AI Benchmark Redundancy"
+        ],
+        [
+          "2608.25935",
+          "TAU-Agent: An Agentic Retrieval-Augmented Framework for Traffic Anomaly Understanding"
+        ],
+        [
+          "2608.25933",
+          "When Composition Doesn't Add Up: Humans Identifying Defects in AI-Generated Images"
+        ],
+        [
+          "2608.25855",
+          "Unlocking Multimodal Protein Language Models at Inference Time"
+        ],
+        [
+          "2608.25835",
+          "Missing the Butterfly and Predicting the Past: Features or Bugs of Accurate AI Weather Models?"
+        ],
+        [
+          "2608.25776",
+          "EVOMAL: Self-Poisoning in Self-Evolving Coding Agents"
+        ],
+        [
+          "2608.25738",
+          "MeMark: Membrane-Space Watermarking for Spiking Neural Networks"
+        ],
+        [
+          "2608.25735",
+          "Pointing the Way, Hiding the Destination: Practical Private Dense Retrieval at Scale"
+        ],
+        [
+          "2608.25710",
+          "Difficulty-Aware Sample Allocation for Adaptive Data Augmentation in Semantic Segmentation"
+        ],
+        [
+          "2608.25693",
+          "Unsupervised Anatomical Feature Learning via Diffusion Models: Enhanced Medical Image Segmentation with Denoising Diffusion Probabilistic Models"
+        ],
+        [
+          "2608.25667",
+          "AI Slop and Hallucinations in Vulnerability Assessment: A Survey on Reasoning Failures and Trustworthy Mitigation"
+        ],
+        [
+          "2608.25663",
+          "Data Citation for Large Language Models: A Challenge"
+        ],
+        [
+          "2608.25661",
+          "From General Agents to RCA Experts: A Self-Evolving Harness for Root Cause Analysis"
+        ],
+        [
+          "2608.25356",
+          "Where to Look Matters: On-Policy Self-Distillation for Long-Video Understanding"
+        ],
+        [
+          "2608.24680",
+          "Game2World Engine: Unlocking In-the-Wild Gameplay Videos for World Model Training"
+        ],
+        [
+          "2608.25580",
+          "V-Rubrics: Visual Faithfulness via Rubric-Based Reinforcement Learning"
+        ],
+        [
+          "2604.09544",
+          "Large Language Models Generate Harmful Responses Using a Distinct Mechanism, Shared Across Harm Types"
+        ],
+        [
+          "2608.23740",
+          "AgentRoom: Concurrent Multi-Agent Coding in a CRDT-Backed Shared Workspace"
+        ],
+        [
+          "2608.24738",
+          "TorchMorph: CUDA-accelerated Morphological Transforms"
+        ],
+        [
+          "2608.26067",
+          "StreamPI: Streaming Multimodal Temporal Modeling for Vision-Language-Action Models"
+        ],
+        [
+          "2608.25512",
+          "A Programming Paradigm for Spatiotemporal Composability"
+        ],
+        [
+          "2608.23691",
+          "Autonomous Mathematical Discovery in an Open-World Multi-Agent Environment"
+        ],
+        [
+          "2608.25864",
+          "MA-VLA: Multi-Arm Vision-Language-Action Model for Collaboration and Compositional Generalization"
+        ],
+        [
+          "2608.23927",
+          "GlanceWAM: Sparse Test-Time Imagination for World-Action Models"
+        ],
+        [
+          "2608.24882",
+          "Latent Action as Intention Enables Efficient Future Imagination for World Action Models"
+        ],
+        [
+          "2608.26103",
+          "Zero-WAM: In-Context World-Action Modeling from Human Videos for Open-Ended Task Generalization"
+        ],
+        [
+          "2608.25668",
+          "GeoFormer: Geometry-Aware Transformer and its application to 5D First-Arrival Picking"
+        ],
+        [
+          "2608.24293",
+          "Keep-or-Drop? Adaptive Tokenizer for Compact Video Representation"
+        ],
+        [
+          "2608.23928",
+          "RefineRank: Joint Box Refinement and Ranking for Surgical Spatio-Temporal Grounding"
+        ],
+        [
+          "2608.23486",
+          "GeoWAM: Visual Geometry World Action Models for Autonomous Driving"
+        ],
+        [
+          "2608.22712",
+          "Height functions on singular surfaces parameterized by smooth maps A-equivalent to H_k"
+        ],
+        [
+          "2608.23895",
+          "Learning the Kohn-Sham map with neural operators for quasi-linear scaling density functional theory"
+        ],
+        [
+          "2608.23869",
+          "Gen2Physics: Grounding Generated 3D Meshes in Physics via Multi-View Material Decomposition"
+        ],
+        [
+          "2608.23176",
+          "Evaluating Modern RAG: Textual, Multimodal, Dense, and Late Interaction Pipelines"
+        ],
+        [
+          "2608.22859",
+          "WARP: Wasserstein-Aligned RAG for Population Opinions"
+        ]
+      ],
+      "selectedReasons": {
+        "2608.26005": "论文面向双工语音语言模型的实时交互记忆，显式处理流式语音、情感归因与低延迟部署，属于语音交互系统。",
+        "2608.26060": "论文微调 Whisper 完成巴尼瓦语低资源自动语音识别，并以 WER/CER 建立可复现的语音识别基线。",
+        "2608.25976": "论文研究自动语音识别模型在语言切换后的前音位层表征残留，直接讨论神经语音模型的迁移与持续学习。",
+        "2608.25846": "论文以咳嗽声学特征进行结核筛查，并系统揭示跨设备、跨数据集音频模型不泛化的负结果，属于生物声学。",
+        "2608.25596": "论文针对声学回声控制的机器学习模型做知识蒸馏，直接权衡近端语音失真、计算复杂度和回声抑制性能。",
+        "2608.25574": "论文系统比较生成式与编码式语言模型作为 ASR 语义评测器，直接改进自动语音识别的评价方法。",
+        "2608.25413": "论文研究复杂会议声学路径下的声学回声与啸叫控制，属于语音通信和音频信号处理核心问题。",
+        "2608.25404": "论文提出用于实时空间音频生成的因果声码器，直接建模多通道声学线索、空间渲染和流式波形生成。",
+        "2608.25384": "论文研究二语普通话发音错误检测与诊断，以 Wav2Vec2-CTC 建模音段和声调，属于语音识别与语音教育。",
+        "2608.25289": "论文结合自嵌入音频水印与超低码率神经编解码器，直接研究语音局部篡改的检测、定位和恢复。",
+        "2608.25285": "论文用自嵌入音频隐写做免训练的局部语音深伪主动防御，直接服务于伪造音频检测和内容完整性。",
+        "2608.25244": "论文以专辑评论构造音乐文本监督，训练并评测 Music CLAP，属于音乐信息检索和音频基础模型研究。",
+        "2608.25218": "论文构建多人自然口语轮替基准，评测抢话、交接和打断检测，是语音交互与会话时序建模工作。",
+        "2608.25204": "论文发布大规模 MEG 连续语音数据与脑到文本基准，直接研究非侵入式神经语音解码。",
+        "2608.25177": "论文提出按自然语言视角聚类语音录音的音频语言模型和基准，覆盖语言与副语言线索。",
+        "2608.25157": "论文审计音视频同步指标对时移、内容扰动与人类对齐的可靠性，属于音频生成的多模态评测。",
+        "2608.25054": "论文研究极少样本类别增量音频分类，以声音类别识别和抗遗忘为核心，属于音频机器学习方法。",
+        "2608.24958": "论文分析 Audio LLM 在语音 token 上的中间层可解释表征，覆盖说话人、情感和声音来源等音频信息。",
+        "2608.24916": "论文针对电话语音的领域自适应 ASR，覆盖语音数据、噪声信道、领域词识别和实时推理。",
+        "2608.24909": "论文从流式响应语音在线生成数字人动作，研究语音—动作同步及低延迟交互部署。",
+        "2608.25621": "论文以时频表示显式刻画音乐中的感知频率交互，并在音乐问答和情感识别中验证，属于音乐音频表征。"
+      }
+    }
+  ]
+}

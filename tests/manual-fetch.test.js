@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
+const { spawn } = require('node:child_process');
 
 const {
     sourceStats,
@@ -11,7 +12,8 @@ const {
     validateManualRawCheckpoint,
     applyManualArchiveExclusion,
     applyManualFilterStatuses,
-    assertUniqueNormalizedDecisionKeys
+    assertUniqueNormalizedDecisionKeys,
+    acquireManualRunLock
 } = require('../scripts/manual-fetch.js');
 const {
     buildManifestContext,
@@ -24,6 +26,55 @@ const {
 const { applyFetchSourceIntegrity, getFetchSourcesSha256 } = require('../scripts/full-fetch.js');
 
 describe('manual fetch data consistency helpers', () => {
+    it('日期级跨进程锁让重复阶段快速失败并报告 owner', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-run-lock-'));
+        const lockTarget = path.join(dir, '2026-08-25');
+        const modulePath = path.join(__dirname, '..', 'scripts', 'manual-fetch.js');
+        const childSource = `
+            const { acquireManualRunLock } = require(process.argv[1]);
+            (async () => {
+                const release = await acquireManualRunLock('2026-08-25', 'raw', { lockTarget: process.argv[2] });
+                const stop = () => { release(); process.exit(0); };
+                process.on('SIGTERM', stop);
+                process.stdout.write('READY\\n');
+                setInterval(() => {}, 1000);
+            })().catch(error => { console.error(error); process.exit(1); });
+        `;
+        const child = spawn(process.execPath, ['-e', childSource, modulePath, lockTarget], {
+            stdio: ['ignore', 'pipe', 'pipe']
+        });
+        try {
+            await new Promise((resolve, reject) => {
+                let output = '';
+                const timer = setTimeout(() => reject(new Error('child lock setup timeout')), 5000);
+                child.stdout.on('data', chunk => {
+                    output += chunk;
+                    if (output.includes('READY')) {
+                        clearTimeout(timer);
+                        resolve();
+                    }
+                });
+                child.once('error', reject);
+                child.once('exit', code => {
+                    if (!output.includes('READY')) reject(new Error(`child exited ${code}`));
+                });
+            });
+            const started = Date.now();
+            await assert.rejects(
+                acquireManualRunLock('2026-08-25', 'fulltext', { lockTarget, timeoutMs: 0 }),
+                error => error.code === 'MANUAL_RUN_LOCKED'
+                    && error.owner?.stage === 'raw'
+                    && Number.isInteger(error.owner?.pid)
+            );
+            assert.ok(Date.now() - started < 1000);
+        } finally {
+            if (child.exitCode === null && child.signalCode === null) {
+                child.kill('SIGTERM');
+                await new Promise(resolve => child.once('exit', resolve));
+            }
+        }
+    });
+
     it('rejects manual decision keys that collapse to the same normalized arXiv ID', () => {
         assert.throws(() => assertUniqueNormalizedDecisionKeys({
             '2608.00001': { related: true },

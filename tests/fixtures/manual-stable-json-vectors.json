@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "contract": "stable-json-ascii-keys-exact-ieee754-nfkc-text-v2",
+  "accepted": [
+    {
+      "name": "nested-unicode-value",
+      "value": { "z": 7, "a": [true, null, "音频"] },
+      "canonicalJson": "{\"a\":[true,null,\"音频\"],\"z\":7}",
+      "sha256": "0cc73c37a9230f48b1bf0326ba39139b5dc624759226a5de1adcc375d784c4e5",
+      "nfkcInput": "  Ａudio K é  ",
+      "nfkcText": "Audio K é"
+    },
+    {
+      "name": "compatibility-text-preserved-in-signature",
+      "value": { "text": "Ａudio K é" },
+      "canonicalJson": "{\"text\":\"Ａudio K é\"}",
+      "sha256": "b3623187d20b50602154539e7915566f2fefd60e267b00b3503d189f54287ee1",
+      "nfkcInput": "Ａudio K é",
+      "nfkcText": "Audio K é"
+    },
+    {
+      "name": "lexical-numeric-keys-and-astral-unicode",
+      "value": { "2": "two", "emoji": "😀", "10": "ten" },
+      "canonicalJson": "{\"10\":\"ten\",\"2\":\"two\",\"emoji\":\"😀\"}",
+      "sha256": "bbbf598dd72de17c7290c8c78b5b7a2ae619469ad3254b7f5f74e9aa28bd6944",
+      "nfkcInput": "　😀\r\nÅ ",
+      "nfkcText": "😀\nÅ"
+    },
+    {
+      "name": "realistic-v6-score-record-and-small-floats",
+      "value": { "record": { "scores": { "innovation": 1.7, "application": 1.4, "reproducibility": 1.5 } }, "ratio": 0.1, "small": 0.000001 },
+      "canonicalJson": "{\"ratio\":0.1000000000000000055511151231257827021181583404541015625,\"record\":{\"scores\":{\"application\":1.399999999999999911182158029987476766109466552734375,\"innovation\":1.6999999999999999555910790149937383830547332763671875,\"reproducibility\":1.5}},\"small\":0.000000999999999999999954748111825886258685613938723690807819366455078125}",
+      "sha256": "93e582d073c867be7958aa39b6ca1271383866e03d6ab6ee22ffe12b4e0421b2",
+      "nfkcInput": "  分数 1.7  ",
+      "nfkcText": "分数 1.7"
+    }
+  ],
+  "rejected": [
+    {
+      "name": "non-ascii-object-key",
+      "value": { "论文": "audio" },
+      "error": "key"
+    }
+  ]
+}

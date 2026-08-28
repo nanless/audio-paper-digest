@@ -11,11 +11,14 @@ const {
     REQUIRED_RECOVERY_STAGES,
     manualSha256,
     manualTextSha256,
+    validateFreshAuthoringCanonicalBinding,
+    validateTutorialPayloadCanonicalBinding,
     validateManualTakeoverManifest,
     validateManualDepthContract,
     MANUAL_DEPTH_CONTRACT_VERSION_V2,
     MANUAL_DEPTH_CONTRACT_VERSION_V3,
     MANUAL_DEPTH_CONTRACT_VERSION_V4,
+    MANUAL_DEPTH_CONTRACT_VERSION_V5,
     findManualBoilerplate
 } = require('../scripts/analysis-contract.js');
 const { isSuccessfulAnalysisRecord } = require('../scripts/analysis-engine.js');
@@ -29,6 +32,7 @@ const {
     normalizeDiscoveredHttpsLinks,
     normalizeManualV4ImageArtifacts,
     parseArgs,
+    assertExplicitManualV6Mode,
     readCachedExternalResourceOutcome,
     resolveManualSpecPromptBindings,
     runFixedWorkers,
@@ -333,6 +337,37 @@ describe('manual canonical runtime controls', () => {
     });
 });
 
+describe('manual v5 fresh canonical compatibility', () => {
+    it('历史 v5 无 fresh marker 时不追溯判坏', () => {
+        const manifest = { contracts: { manualDepth: MANUAL_DEPTH_CONTRACT_VERSION_V5 } };
+        assert.equal(validateFreshAuthoringCanonicalBinding(manifest, {}), null);
+    });
+
+    it('新 v5 fresh marker 存在但缺 receipt 时必须失败', () => {
+        const manifest = { contracts: {
+            manualDepth: MANUAL_DEPTH_CONTRACT_VERSION_V5,
+            freshAuthoring: 'fresh-authoring-v1'
+        } };
+        assert.match(
+            validateFreshAuthoringCanonicalBinding(manifest, {}),
+            /manualTakeover\.freshAuthoring 缺失/
+        );
+    });
+
+    it('历史 v5 无 tutorial marker 只读兼容，新 marker 缺 sealed payload 时失败', () => {
+        const historical = { contracts: { manualDepth: MANUAL_DEPTH_CONTRACT_VERSION_V5 } };
+        assert.equal(validateTutorialPayloadCanonicalBinding(historical, {}), null);
+        const current = { contracts: {
+            manualDepth: MANUAL_DEPTH_CONTRACT_VERSION_V5,
+            tutorialPayload: 'manual-v5-tutorial-payload-v1'
+        }, sourceAcquisition: { sourceId: '2608.12345' } };
+        assert.match(
+            validateTutorialPayloadCanonicalBinding(current, {}),
+            /manualTakeover\.tutorialPayload 缺失/
+        );
+    });
+});
+
 describe('manual_complete v3 deep-analysis contract', () => {
     it('保留完整图注意义，不以字符数或分号制造半句截断', () => {
         const longSingleSentence = `Fig. 1: ${'Illustration of the considered active sonar scenario '.repeat(5).trim()} in a time-varying multipath channel.`;
@@ -368,7 +403,11 @@ describe('manual_complete v3 deep-analysis contract', () => {
     it('accepts explicit force takeover but rejects unknown or duplicate flags', () => {
         assert.deepEqual(
             parseArgs(['--date', '2026-08-20', '--spec', 'manual.json', '--force']),
-            { force: true, date: '2026-08-20', spec: 'manual.json' }
+            { force: true, v6Shadow: false, date: '2026-08-20', spec: 'manual.json' }
+        );
+        assert.deepEqual(
+            parseArgs(['--v6-shadow', '--date', '2026-08-20', '--spec', 'manual.json']),
+            { force: false, v6Shadow: true, date: '2026-08-20', spec: 'manual.json' }
         );
         assert.throws(
             () => parseArgs(['--date', '2026-08-20', '--spec', 'manual.json', '--unknown']),
@@ -378,6 +417,10 @@ describe('manual_complete v3 deep-analysis contract', () => {
             () => parseArgs(['--date', '2026-08-20', '--spec', 'manual.json', '--force', '--force']),
             /参数重复/
         );
+        assert.doesNotThrow(() => assertExplicitManualV6Mode({ version: 5 }, false));
+        assert.doesNotThrow(() => assertExplicitManualV6Mode({ version: 6 }, true));
+        assert.throws(() => assertExplicitManualV6Mode({ version: 6 }, false), /显式运行/);
+        assert.throws(() => assertExplicitManualV6Mode({ version: 5 }, true), /显式运行/);
     });
 
     it('历史 v3 spec 保留自身 prompt SHA，v4 必须绑定当前 prompt', () => {
@@ -880,6 +923,31 @@ describe('manual_complete v3 deep-analysis contract', () => {
             manualCanonicalReuseFingerprint(historicalV3),
             manualCanonicalReuseFingerprint(expectedV4)
         );
+    });
+
+    it('v6 顶层 ArtifactIndex/longform/provenance 任一变化都失效复用指纹', () => {
+        const canonical = buildReusableRecord().record;
+        canonical.manualArtifactIndex = { version: 1, outputSha256: 'a'.repeat(64) };
+        canonical.manualReaderLongform = {
+            version: 2, contract: 'reader-longform-v2', articleSha256: 'b'.repeat(64)
+        };
+        canonical.manualV6Provenance = { specVersion: 6, specRootSha256: 'c'.repeat(64) };
+        canonical.analysisManifest.manualTakeover.v6Provenance = canonical.manualV6Provenance;
+        for (const mutate of [
+            value => { value.manualArtifactIndex.outputSha256 = 'd'.repeat(64); },
+            value => { value.manualReaderLongform.articleSha256 = 'd'.repeat(64); },
+            value => {
+                value.manualV6Provenance = { ...value.manualV6Provenance, specRootSha256: 'd'.repeat(64) };
+                value.analysisManifest.manualTakeover.v6Provenance = value.manualV6Provenance;
+            }
+        ]) {
+            const changed = JSON.parse(JSON.stringify(canonical));
+            mutate(changed);
+            assert.notEqual(
+                manualCanonicalReuseFingerprint(canonical),
+                manualCanonicalReuseFingerprint(changed)
+            );
+        }
     });
 
     it('最终状态在文件锁内按最新 canonical expected IDs 重算，不接受本地旧 failures 计数', () => {

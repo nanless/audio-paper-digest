@@ -5,8 +5,28 @@ const path = require('path');
 const crypto = require('crypto');
 const Config = require('./config.js');
 const { normalizedId, writeFileAtomic, getBeijingISOString } = require('./utils.js');
-const { fetchArxivTextDetailed } = require('./deep-analyzer.js');
+const {
+    fetchArxivTextDetailed,
+    ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION
+} = require('./deep-analyzer.js');
 const { updateJsonFileLocked } = require('./analysis-engine.js');
+const { acquireManualRunLock } = require('./manual-fetch.js');
+const {
+    buildArtifactManifestContext,
+    initializeArtifactManifestLocked,
+    persistStructuredArtifactSnapshot,
+    loadStructuredArtifactSnapshot,
+    readArtifactManifestLocked,
+    ensureArtifactIndexCheckpoint,
+    isReusableArtifactCheckpoint,
+    recordArtifactFailure,
+    finalizeArtifactManifestLocked
+} = require('./manual-artifact-index.js');
+const {
+    monotonicNs,
+    unionNanoseconds,
+    persistStageMetricSafely
+} = require('./manual-performance-metrics.js');
 
 const MANIFEST_VERSION = 2;
 const MANIFEST_MODE = 'manual_full_text_fetch';
@@ -242,7 +262,18 @@ async function fetchFullTextForInput(input, fetchFn = fetchArxivTextDetailed) {
     return fetchFn(input.requestedArxivId);
 }
 
-async function main(date = process.argv[2]) {
+function isReusableStructuredSnapshotForCurrentParser(sourceEntry, structuredArtifacts) {
+    if (sourceEntry?.source !== 'html') return true;
+    if (structuredArtifacts?.parserVersion === ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION) return true;
+    // v2 complete snapshots already proved the same table, formula,
+    // external/SVG-object and bibliography closure. v3 only adds evidence for
+    // inline <svg>; re-fetch old incomplete HTML without invalidating healthy
+    // papers in the same batch.
+    return structuredArtifacts?.parserVersion === 'arxiv-html-dom-v2'
+        && structuredArtifacts?.health?.status === 'complete';
+}
+
+async function runFullText(date = process.argv[2]) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new Error('用法: node scripts/manual-fetch-fulltext.js YYYY-MM-DD');
     const filtered = JSON.parse(fs.readFileSync(Config.FILES.filteredPapers, 'utf8'));
     if (filtered.batchDate !== date || filtered.status !== 'complete' || !Array.isArray(filtered.papers)) {
@@ -253,50 +284,160 @@ async function main(date = process.argv[2]) {
     const manifestPath = path.join(outDir, 'manifest.json');
     const context = buildManifestContext(filtered, date, outDir);
     initializeManifestLocked(manifestPath, context);
+    const artifactContext = buildArtifactManifestContext(context, outDir);
+    initializeArtifactManifestLocked(artifactContext);
 
     const failures = [];
+    const artifactFailures = [];
+    const observed = {
+        fulltextIntervals: [], artifactIntervals: [],
+        fulltextHits: 0, fulltextMisses: 0,
+        artifactHits: 0, artifactMisses: 0
+    };
     let cursor = 0;
     const worker = async () => {
         while (cursor < filtered.papers.length) {
             const input = context.inputs[cursor++];
             const id = input.id;
             const current = readManifestLocked(manifestPath, context);
-            if (isReusableFullTextCheckpoint(current.papers?.[id], input.filePath, input)) {
-                console.log(`[manual-full-text] ${input.requestedArxivId} 复用完整全文 checkpoint`);
-                continue;
-            }
-            console.log(`[manual-full-text] ${input.requestedArxivId} 获取全文...`);
-            try {
-                const result = await fetchFullTextForInput(input);
-                if (!result.text || result.text.length < 1000) {
-                    throw new Error(`${input.requestedArxivId} 正文不足 1000 字符（source=${result.source || 'none'}）`);
+            let sourceEntry = current.papers?.[id];
+            let structuredSnapshotReusable = false;
+            const fulltextStartedNs = monotonicNs();
+            if (isReusableFullTextCheckpoint(sourceEntry, input.filePath, input)) {
+                try {
+                    const structuredArtifacts = loadStructuredArtifactSnapshot(input, sourceEntry);
+                    // A parser revision is an evidence-contract revision.  Do
+                    // not silently reuse a snapshot that predates a recovery
+                    // fix, even if its flattened text remains byte-identical.
+                    structuredSnapshotReusable = isReusableStructuredSnapshotForCurrentParser(
+                        sourceEntry, structuredArtifacts
+                    );
+                } catch (_error) {
+                    structuredSnapshotReusable = false;
                 }
-                writeFileAtomic(input.filePath, result.text);
-                const sourceBuffer = fs.readFileSync(input.filePath);
-                const entry = buildCompleteEntry(input, result, sourceBuffer);
-                upsertManifestPaperLocked(manifestPath, context, id, entry);
-                console.log(`[manual-full-text] ${input.requestedArxivId} 完成 ${result.source} ${result.text.length} chars`);
+            }
+            if (isReusableFullTextCheckpoint(sourceEntry, input.filePath, input) && structuredSnapshotReusable) {
+                observed.fulltextHits++;
+                console.log(`[manual-full-text] ${input.requestedArxivId} 复用完整全文 checkpoint`);
+            } else {
+                observed.fulltextMisses++;
+                console.log(`[manual-full-text] ${input.requestedArxivId} 获取全文与结构化证据...`);
+                try {
+                    const result = await fetchFullTextForInput(input);
+                    if (!result.text || result.text.length < 1000) {
+                        throw new Error(`${input.requestedArxivId} 正文不足 1000 字符（source=${result.source || 'none'}）`);
+                    }
+                    if (!result.structuredArtifacts) {
+                        throw new Error(`${input.requestedArxivId} 抓取结果缺少扁平化前 structuredArtifacts`);
+                    }
+                    writeFileAtomic(input.filePath, result.text);
+                    const sourceBuffer = fs.readFileSync(input.filePath);
+                    sourceEntry = buildCompleteEntry(input, result, sourceBuffer);
+                    sourceEntry.structuredArtifactsSnapshot = persistStructuredArtifactSnapshot(
+                        artifactContext, input, sourceEntry, result.structuredArtifacts
+                    );
+                    upsertManifestPaperLocked(manifestPath, context, id, sourceEntry);
+                    console.log(`[manual-full-text] ${input.requestedArxivId} 完成 ${result.source} ${result.text.length} chars`);
+                } catch (error) {
+                    failures.push(`${input.requestedArxivId}: ${error.message}`);
+                    upsertManifestPaperLocked(manifestPath, context, id, {
+                        status: 'failed',
+                        path: input.filePath,
+                        requestedArxivId: input.requestedArxivId,
+                        paperMetadataSha256: input.paperMetadataSha256,
+                        paperInputSha256: input.paperInputSha256,
+                        filteredBatchSha256: context.filteredBatchSha256,
+                        error: error.message,
+                        failedAt: getBeijingISOString()
+                    });
+                    recordArtifactFailure(artifactContext, input, error);
+                    const fulltextCompletedNs = monotonicNs();
+                    observed.fulltextIntervals.push([fulltextStartedNs, fulltextCompletedNs]);
+                    continue;
+                }
+            }
+            const fulltextCompletedNs = monotonicNs();
+            observed.fulltextIntervals.push([fulltextStartedNs, fulltextCompletedNs]);
+            const artifactStartedNs = monotonicNs();
+            try {
+                const artifactCurrent = readArtifactManifestLocked(artifactContext);
+                const sourceText = fs.readFileSync(sourceEntry.path, 'utf8');
+                const artifactHit = isReusableArtifactCheckpoint(
+                    artifactCurrent.papers?.[id], { context: artifactContext, input, sourceEntry, sourceText }
+                );
+                const artifactEntry = ensureArtifactIndexCheckpoint(artifactContext, input, sourceEntry);
+                if (artifactHit) observed.artifactHits++;
+                else observed.artifactMisses++;
+                console.log(`[manual-artifact] ${input.requestedArxivId} ArtifactIndex checkpoint ${artifactEntry.status}`);
             } catch (error) {
-                failures.push(`${input.requestedArxivId}: ${error.message}`);
-                upsertManifestPaperLocked(manifestPath, context, id, {
-                    status: 'failed',
-                    path: input.filePath,
-                    requestedArxivId: input.requestedArxivId,
-                    paperMetadataSha256: input.paperMetadataSha256,
-                    paperInputSha256: input.paperInputSha256,
-                    filteredBatchSha256: context.filteredBatchSha256,
-                    error: error.message,
-                    failedAt: getBeijingISOString()
-                });
+                observed.artifactMisses++;
+                artifactFailures.push(`${input.requestedArxivId}: ${error.message}`);
+                recordArtifactFailure(artifactContext, input, error, { [id]: sourceEntry });
+                console.warn(`[manual-artifact] ${input.requestedArxivId} 失败，可在下次 fulltext 续跑: ${error.message}`);
+            } finally {
+                const artifactCompletedNs = monotonicNs();
+                observed.artifactIntervals.push([artifactStartedNs, artifactCompletedNs]);
             }
         }
     };
     await Promise.all(Array.from({ length: Math.min(3, filtered.papers.length) }, worker));
     const manifest = finalizeManifestLocked(manifestPath, context);
+    const artifactManifest = finalizeArtifactManifestLocked(artifactContext, manifest.papers);
+    const completeSources = context.inputs.map(input => manifest.papers?.[input.id])
+        .filter(entry => entry?.status === 'complete');
+    const artifactEntries = context.inputs.map(input => artifactManifest.papers?.[input.id])
+        .filter(entry => ['complete', 'incomplete'].includes(entry?.status));
+    persistStageMetricSafely({
+        date, stage: 'fulltext', status: manifest.status,
+        wallNs: unionNanoseconds(observed.fulltextIntervals) ?? undefined,
+        wallAggregation: 'union_of_observed_same_stage_operation_intervals',
+        cache: { hits: observed.fulltextHits, misses: observed.fulltextMisses },
+        paperCount: context.inputs.length,
+        taskCount: observed.fulltextHits + observed.fulltextMisses,
+        inputFiles: [{ role: 'filtered_papers', path: Config.FILES.filteredPapers }],
+        outputFiles: [
+            { role: 'fulltext_manifest', path: manifestPath },
+            ...completeSources.flatMap(entry => [
+                { role: 'fulltext_source', path: entry.path },
+                ...(entry.structuredArtifactsSnapshot?.path
+                    ? [{ role: 'structured_snapshot', path: entry.structuredArtifactsSnapshot.path }] : [])
+            ])
+        ]
+    });
+    persistStageMetricSafely({
+        date, stage: 'artifact_index', status: artifactManifest.status,
+        wallNs: unionNanoseconds(observed.artifactIntervals) ?? undefined,
+        wallAggregation: 'union_of_observed_same_stage_operation_intervals',
+        cache: { hits: observed.artifactHits, misses: observed.artifactMisses },
+        paperCount: context.inputs.length,
+        taskCount: observed.artifactHits + observed.artifactMisses,
+        inputFiles: completeSources.flatMap(entry => [
+            { role: 'fulltext_source', path: entry.path },
+            ...(entry.structuredArtifactsSnapshot?.path
+                ? [{ role: 'structured_snapshot', path: entry.structuredArtifactsSnapshot.path }] : [])
+        ]),
+        outputFiles: [
+            { role: 'artifact_manifest', path: artifactContext.manifestPath },
+            ...artifactEntries.map(entry => ({ role: 'artifact_index', path: entry.path }))
+        ]
+    });
     if (manifest.failed > 0) {
         throw new Error(`manual 全文证据仍有 ${manifest.failed} 篇失败: ${failures.join('; ') || '请查看 manifest'}`);
     }
+    if (artifactManifest.failed > 0 || artifactManifest.incomplete > 0) {
+        console.warn(`⚠️ ArtifactIndex 有 ${artifactManifest.failed} 篇失败、${artifactManifest.incomplete || 0} 篇结构不完整，不阻断历史 manifest v2/spec v5: ${artifactFailures.join('; ') || '请查看 companion manifest'}`);
+    }
     console.log(`✅ manual 全文证据完成：${manifest.count} 篇，目录 ${outDir}`);
+}
+
+async function main(date = process.argv[2]) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new Error('用法: node scripts/manual-fetch-fulltext.js YYYY-MM-DD');
+    const release = await acquireManualRunLock(date, 'fulltext');
+    try {
+        return await runFullText(date);
+    } finally {
+        await release();
+    }
 }
 
 if (require.main === module) {
@@ -309,6 +450,7 @@ if (require.main === module) {
 module.exports = {
     MANIFEST_VERSION,
     main,
+    runFullText,
     stableSha256,
     getRequestedArxivId,
     buildFilteredBatchFingerprint,
@@ -321,5 +463,6 @@ module.exports = {
     upsertManifestPaperLocked,
     finalizeManifestLocked,
     buildCompleteEntry,
-    fetchFullTextForInput
+    fetchFullTextForInput,
+    isReusableStructuredSnapshotForCurrentParser
 };

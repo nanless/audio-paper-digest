@@ -49,15 +49,35 @@ const {
     validateExactFactCoverage,
     validateResultClaimCoverageV5,
     validateEditorialPlanBindings,
-    validateReaderArticle,
     validateEditorialReview
 } = require('./manual-research-contract.js');
+const {
+    validateManualTutorialReaderBundle
+} = require('./manual-tutorial-contract-orchestrator.js');
 const {
     MANIFEST_VERSION,
     stableSha256,
     buildManifestContext,
     isReusableFullTextCheckpoint
 } = require('./manual-fetch-fulltext.js');
+const {
+    FRESH_AUTHORING_CONTRACT,
+    AUTHORING_PROMPT_PATH,
+    EDITORIAL_CONTRACT_PATH,
+    BLANK_SCHEMA_PATH,
+    defaultArticlePath,
+    resolveArtifactAuthority,
+    validateFreshAuthoringReceipt
+} = require('./manual-fresh-authoring-contract.js');
+const {
+    MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT,
+    defaultTutorialPayloadPaths,
+    validateTutorialPayloadReceipt
+} = require('./manual-v5-tutorial-payload.js');
+const {
+    MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT,
+    buildManualPaperSourceIdentity
+} = require('./manual-paper-source-identity.js');
 
 const RECORDS_VERSION = 3;
 const LEGACY_RECORDS_VERSION = 2;
@@ -526,6 +546,12 @@ function validateRecordsEnvelope(document, filePath, expectedDate) {
     if (document.date !== expectedDate) throw new Error(`${filePath} date 与 --date 不一致`);
     const agent = assertString(document.agent, `${filePath}.agent`, 2);
     const reviewProtocol = assertString(document.reviewProtocol, `${filePath}.reviewProtocol`, 12);
+    const tutorialPayloadContract = document.tutorialPayloadContract;
+    if (tutorialPayloadContract !== undefined
+        && (document.version !== RECORDS_VERSION
+            || tutorialPayloadContract !== MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT)) {
+        throw new Error(`${filePath}.tutorialPayloadContract 非法`);
+    }
     if (!document.papers || typeof document.papers !== 'object' || Array.isArray(document.papers)) {
         throw new Error(`${filePath}.papers 必须是对象`);
     }
@@ -539,7 +565,18 @@ function validateRecordsEnvelope(document, filePath, expectedDate) {
             recordsVersion: document.version
         });
     }
-    return { version: document.version, mode: RECORDS_MODE, date: expectedDate, agent, reviewProtocol, papers };
+    if (tutorialPayloadContract) {
+        for (const [id, record] of Object.entries(papers)) {
+            if (!record.tutorialPayload
+                || record.tutorialPayload.contract !== MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT) {
+                throw new Error(`${filePath}.papers.${id} 缺少 sealed tutorialPayload`);
+            }
+        }
+    }
+    return {
+        version: document.version, mode: RECORDS_MODE, date: expectedDate,
+        agent, reviewProtocol, tutorialPayloadContract: tutorialPayloadContract || null, papers
+    };
 }
 
 function normalizeTemplateText(value) {
@@ -624,6 +661,7 @@ function mergeRecordsEnvelopes(inputs, expectedDate) {
     let agent;
     let reviewProtocol;
     let recordsVersion;
+    let tutorialPayloadContract;
     const sourceAgents = new Set();
     const sourceReviewProtocols = new Set();
     const papers = {};
@@ -638,6 +676,10 @@ function mergeRecordsEnvelopes(inputs, expectedDate) {
         if (recordsVersion !== undefined && envelope.version !== recordsVersion) {
             throw new Error(`records version 不一致，禁止把历史 v2 与当前 v3 shard 混成同一批: ${filePath}`);
         }
+        if (tutorialPayloadContract !== undefined
+            && envelope.tutorialPayloadContract !== tutorialPayloadContract) {
+            throw new Error(`records tutorialPayloadContract 不一致，禁止混合 sealed 与历史 shard: ${filePath}`);
+        }
         if (agent !== undefined && envelope.agent !== agent
             && envelope.version === LEGACY_RECORDS_VERSION) {
             throw new Error(`历史 records agent 不一致: ${filePath}`);
@@ -651,6 +693,7 @@ function mergeRecordsEnvelopes(inputs, expectedDate) {
         reviewProtocol = reviewProtocol || envelope.reviewProtocol;
         sourceReviewProtocols.add(envelope.reviewProtocol);
         recordsVersion = envelope.version;
+        tutorialPayloadContract = envelope.tutorialPayloadContract;
         for (const [id, record] of Object.entries(envelope.papers)) {
             if (papers[id]) throw new Error(`多个 records 文件重复提供论文: ${id}`);
             papers[id] = record;
@@ -688,6 +731,7 @@ function mergeRecordsEnvelopes(inputs, expectedDate) {
             : reviewProtocol,
         sourceReviewProtocols: [...sourceReviewProtocols].sort(),
         recordsVersion,
+        tutorialPayloadContract,
         papers,
         sources
     };
@@ -1057,9 +1101,27 @@ function buildSpec(options) {
         throw new Error('filtered-papers.json 含非法或重复规范化 ID');
     }
     const context = validateFullTextManifest(filtered, manifest, date, manifestPath);
+    const isCurrentRecords = mergedRecords.recordsVersion === RECORDS_VERSION;
+    const currentRoot = path.resolve(path.dirname(manifestPath), '..', '..');
+    const effectiveFilteredPath = path.resolve(filteredPath || path.join(currentRoot, 'filtered-papers.json'));
+    if (isCurrentRecords) {
+        if (!fs.existsSync(effectiveFilteredPath) || fs.lstatSync(effectiveFilteredPath).isSymbolicLink()
+            || stableSha256(readJson(effectiveFilteredPath, 'filtered-papers')) !== filteredSha256) {
+            throw new Error('records v3 必须绑定当前受控 filtered-papers.json 真实文件字节');
+        }
+    }
+    const artifactManifestPath = path.resolve(options.artifactManifestPath || path.join(
+        currentRoot, 'manual-full-text', date, 'artifacts', 'manifest.json'
+    ));
+    const artifactManifestSha256 = isCurrentRecords
+        ? sha256Buffer(fs.readFileSync(artifactManifestPath))
+        : null;
     exactIdSet('records', filteredIds, Object.keys(mergedRecords.papers));
     assertNoCrossPaperTemplateReuse(mergedRecords.papers);
     const promptBindings = options.promptBindings || currentStagePromptBindings();
+    const sealedTutorialPayload = isCurrentRecords
+        && mergedRecords.tutorialPayloadContract === MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT;
+    const boundTutorialFiles = [];
     const papers = {};
     for (const paper of filtered.papers) {
         const id = normalizedId(paper);
@@ -1097,8 +1159,65 @@ function buildSpec(options) {
         const analysis = normalizeExperimentTableNumericFormatting(
             buildAnalysis(effectivePaper, record)
         );
-        const isCurrentRecords = mergedRecords.recordsVersion === RECORDS_VERSION;
+        let freshAuthoring = null;
+        let tutorialPayload = null;
+        let artifactAuthority = null;
+        let paperSourceIdentity = null;
         if (isCurrentRecords) {
+            artifactAuthority = resolveArtifactAuthority(artifactManifestPath, {
+                date,
+                paperId: id,
+                filteredBatchSha256: context.filteredBatchSha256,
+                sourceSha256: entry.sourceSha256,
+                sourceIdentitySha256: entry.sourceIdentitySha256,
+                paperInputSha256: entry.paperInputSha256
+            });
+            paperSourceIdentity = buildManualPaperSourceIdentity({
+                date,
+                paperId: id,
+                fullTextEntry: entry,
+                artifactEntry: artifactAuthority.entry
+            });
+            freshAuthoring = validateFreshAuthoringReceipt(record.freshAuthoring, {
+                paperId: id,
+                articlePath: defaultArticlePath(currentRoot, date, id),
+                readerArticle: record.editorial?.readerArticle,
+                authorityPaths: {
+                    filteredPath: effectiveFilteredPath,
+                    sourcePath: entry.path,
+                    artifactPath: artifactAuthority.path,
+                    authoringPromptPath: AUTHORING_PROMPT_PATH,
+                    editorialContractPath: EDITORIAL_CONTRACT_PATH,
+                    blankSchemaPath: BLANK_SCHEMA_PATH,
+                    ...(() => {
+                        const evidencePath = path.join(
+                            currentRoot, 'manual-full-text', date, 'external-evidence',
+                            `${id}-official-project.json`
+                        );
+                        return fs.existsSync(evidencePath)
+                            ? { officialProjectEvidencePath: evidencePath }
+                            : {};
+                    })()
+                }
+            });
+            if (sealedTutorialPayload) {
+                const tutorialPaths = defaultTutorialPayloadPaths(currentRoot, date, id);
+                tutorialPayload = validateTutorialPayloadReceipt(record.tutorialPayload, {
+                    date,
+                    paperId: id,
+                    currentRoot,
+                    qualityPath: tutorialPaths.qualityPath,
+                    artifactPlanPath: tutorialPaths.artifactPlanPath,
+                    article: record.editorial?.readerArticle,
+                    articleFileSha256: freshAuthoring.articleFileSha256,
+                    freshAuthoring,
+                    artifactIndex: artifactAuthority.index
+                });
+                boundTutorialFiles.push(
+                    [tutorialPayload.qualityPath, tutorialPayload.qualityFileSha256, `${id} quality.json`],
+                    [tutorialPayload.artifactPlanPath, tutorialPayload.artifactPlanFileSha256, `${id} artifact-plan.json`]
+                );
+            }
             validateResearchBrief(record.researchBrief, {
                 paperId: id,
                 documentType: record.type,
@@ -1147,7 +1266,7 @@ function buildSpec(options) {
                 record.evidenceLedger,
                 `${id}.researchBrief.editorialPlan`
             );
-            validateReaderArticle(
+            validateManualTutorialReaderBundle(
                 record.researchBrief.editorialPlan,
                 record.editorial?.readerArticle,
                 record.evidenceLedger,
@@ -1160,7 +1279,8 @@ function buildSpec(options) {
                     ],
                     derivedFacts: record.researchBrief.derivedFacts || [],
                     readerNarratives: record.resultClaims.map(claim => claim.readerNarrative),
-                    imageInsertions: record.imageInsertions || []
+                    imageInsertions: record.imageInsertions || [],
+                    summary: record.editorial?.summary || ''
                 }
             );
             if (record.researchBrief.editorialPlan?.version === 2) {
@@ -1269,6 +1389,9 @@ function buildSpec(options) {
                 ? explicitReviewedClaimsByStage(record)
                 : reviewedClaimsByStage(record, chunks, imageInfos),
             ...(isCurrentRecords ? {
+                paperSourceIdentity,
+                freshAuthoring,
+                ...(tutorialPayload ? { tutorialPayload } : {}),
                 researchBrief: JSON.parse(JSON.stringify(record.researchBrief)),
                 ...(record.researchBrief.editorialPlan?.version === 2 ? {
                     readerArticle: record.editorial.readerArticle.trim(),
@@ -1300,9 +1423,17 @@ function buildSpec(options) {
     if (filteredPath && stableSha256(readJson(filteredPath, 'filtered-papers')) !== filteredSha256) {
         throw new Error('filtered-papers.json 在 spec 组装期间发生变化');
     }
+    if (isCurrentRecords && sha256Buffer(fs.readFileSync(artifactManifestPath)) !== artifactManifestSha256) {
+        throw new Error('ArtifactIndex manifest 在 spec 组装期间发生变化');
+    }
     for (const source of mergedRecords.sources) {
         if (sha256Buffer(fs.readFileSync(source.path)) !== source.sha256) {
             throw new Error(`records 文件在 spec 组装期间发生变化: ${source.path}`);
+        }
+    }
+    for (const [filePath, expectedSha, label] of boundTutorialFiles) {
+        if (sha256Buffer(fs.readFileSync(filePath)) !== expectedSha) {
+            throw new Error(`${label} 在 spec 组装期间发生变化`);
         }
     }
     return {
@@ -1319,7 +1450,16 @@ function buildSpec(options) {
         recordsVersion: mergedRecords.recordsVersion,
         ...(mergedRecords.recordsVersion === RECORDS_VERSION ? {
             researchContract: MANUAL_RESEARCH_CONTRACT_VERSION,
-            perPaperSubagentRequired: true
+            perPaperSubagentRequired: true,
+            paperSourceIdentityContract: MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT,
+            freshAuthoringContract: FRESH_AUTHORING_CONTRACT,
+            ...(sealedTutorialPayload ? {
+                tutorialPayloadContract: MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT
+            } : {}),
+            artifactManifest: {
+                path: artifactManifestPath,
+                sha256: artifactManifestSha256
+            }
         } : {}),
         generatedAt,
         filteredBatchSha256: context.filteredBatchSha256,

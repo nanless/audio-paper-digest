@@ -10,12 +10,22 @@
 
 默认路径使用 Manual v5；只有用户明确要求 API/LLM 时才使用关键词预筛、模型筛选、多阶段 LLM 分析和普通三层 review。Manual 路线不会因 API 状态自动改变语义：
 
-- `manual-fetch.js --raw` 仍联网抓取 arXiv/HuggingFace，只是不调用筛选模型；`--select` 接收完整覆盖候选全集的 `manual_offline` v1 逐篇裁决，并把输入 SHA、reviewer 和协议指纹写入筛选四件套。
-- `manual-deep-analysis.js` 不调用 LLM/API；当前 records v3 组装 spec v5，并写 `full-text-evidence-v5` canonical。每篇由独立 subagent 提交研究者详略计划、全文图表/算法 inventory、显式逐阶段审计、独立评分与可读性复核、跨实验组 claims、精确数量来源和全部图片决策；新 `editorialPlan` v2 的 `readerArticle` 是受哈希绑定的完整博客深度解读，用论文特有 `###` 小节覆盖读者可见的固定方法/创新/实验/细节/局限栏目。发布顺序固定为中文题目、英文题目/arXiv 链接、标签/评分、毒舌点评、核心摘要、开源资源、深度解读、文末评分证据；ingestion 必须重放 official assembler。
+> Manual v6 正在按影子链迁移：全文阶段在 HTML `.text()` 前保存表格、MathML/TeX、图和 bibliography 结构，companion ArtifactIndex 只有在结构 inventory 闭环时才 complete；PDF/text fallback 明确 incomplete。`reader-longform-v2`、持久 task runner、official assembler、隔离 canonical 和 publisher 严格双读均已接通，但 runner 不创建真实 subagent，也不自动产出完整 records v4。旧 v5 页面禁止作为新教程生成、修订或质量回归输入。默认链路仍是 v5；只有新鲜批次完成真实 records v4 与至少 3 批性能验收后才可讨论切换。详细边界见 [Manual v6 渐进改造计划](manual-v6-migration.md)。
+
+- `manual-fetch.js --raw` 仍联网抓取 arXiv/HuggingFace，只是不调用筛选模型；同日期 raw/select/fulltext 共用跨进程锁。HF 使用异步 curl 子进程，不再阻塞事件循环；recent/search/abstract/Atom 的真实 arXiv 请求由同 host scheduler 串行，批次级 normalized ID Promise cache 避免跨类别重复摘要。`--select` 接收完整覆盖候选全集的 `manual_offline` v1 逐篇裁决，并把输入 SHA、reviewer 和协议指纹写入筛选四件套。
+- `manual:fulltext` 保持既有 v2 manifest 和 v5 阻断语义，同时持久化受控结构快照并按论文增量产出 companion ArtifactIndex。HTML 表格矩阵/rowspan/colspan、公式 MathML/TeX、图和参考文献都绑定原始 HTML、最终全文和单篇 input SHA；结构缺失、截断或 PDF/text fallback 只能写 `incomplete`。artifact incomplete/failed 独立 checkpoint，不污染已成功全文，但未来 v6 不得消费为完整证据。
+- `manual:author-packet -- --date <date> --paper <id>` 是默认 v5 author 分派前的输入封印器。它只在日期/论文隔离目录写单篇 metadata projection 与 packet，不创建 subagent、不生成正文；packet 对全文、complete ArtifactIndex、prompt、编辑契约、空白 schema、source/input identity 和可选官方项目证据使用 exact allowlist，其他输入默认拒绝。canonical、旧 records、旧 article/post/blog、已填写 quality 与 review prose 只被列为 forbidden policy，构造器不读取其内容。`manual:work-queue` 的 author input SHA 与 packet 共用 `manual-v5-author-task-input-v2`；SHA 不等、目录多文件、symlink、路径逃逸或身份漂移时不得分派。
+- `manual-deep-analysis.js` 不调用 LLM/API；当前 records v3 组装 spec v5，并写 `full-text-evidence-v5` canonical。每篇由独立 subagent 提交研究者详略计划、全文图表/算法 inventory、显式逐阶段审计、独立评分与可读性复核、跨实验组 claims、精确数量来源和全部图片决策；正文任务固定携带 `prompts/manual-tutorial-article.md` 及其 SHA，外部参考的稳定结论只从 `docs/manual-editorial-reference-contract.md` 读取。新 `editorialPlan` v2 必须显式写 `readerFormatContract=graduate-researcher-tutorial-quality-v2`，旧 plan 缺字段时只读兼容；其 `readerArticle` 是受哈希绑定的完整博客深度解读，用论文特有 `###` 小节覆盖读者可见的固定方法/创新/实验/细节/局限栏目。发布顺序固定为中文题目、英文题目/arXiv 链接、标签、总分与八维分项、作者机构、一句话概括、毒舌点评、核心摘要、开源与复现资源、深度解读、文末逐维评分证据；八项为 0 也不得省略。章节标题不得含图表编号，公式只用 `\(...\)` / `\[...\]`，最终 review 同时验证 Markdown 源码与 Hugo HTML；ingestion 必须重放 official assembler。单篇 preview/cache 以本篇 metadata、canonical、ArtifactIndex、article、quality 和编辑规范 SHA 为键，其他论文变化不使本页失效。
+- 新 canonical 用 `manual-paper-source-identity-v1` 封印单篇全文 entry、图片、结构化快照与 ArtifactIndex 语义/文件 SHA。批次 manifest 的整文件 SHA 只服务集合完整性，不参与单篇复用；因此别篇 parser/checkpoint 更新不会误伤本篇，本篇证据变化仍 fail closed。带 fresh/tutorial marker 却缺该身份的记录不能按历史 v5 放行。
+- v6 只通过显式影子命令进入：`manual:v6:spec` 从 records v4 envelope 回读所有单篇工件真实字节并组装 spec v6；`manual:v6:analyze` 要求 `--v6-shadow` 与 spec v6 双向匹配，只写 `data/current/manual-v6-shadow/<date>/deep-analysis-result.json`，不写正式 canonical、不更新 `papers.json`。`manual:shadow` 只审计已有输入，历史批次缺结构快照时报告 `blocked_by_missing_structured_source`，禁止从扁平 txt 伪造 inventory；`manual:shadow:benchmark` 少于 3 批只报告 `insufficient_samples`。
+- `manual:v6:tasks` 是显式 shadow 状态机：`init/register/claim/start/submit/fail/retry/abandon/status` 全部绑定 filtered、单篇根、packet/output/receipt 真实字节和 Terra-high provenance；最多 3 个活动 claim。它不访问 LLM/API，也不会替主 Agent创建 subagent 或编写正文。质量对比只能比较两份分别从同一受控论文证据冷启动生成的 fresh 稿件，不得把旧 v5 页面带回质量回归。
+- 博客单篇灰度发布使用 generate、Manual attestation/review、push 全链路一致的 `--include-id`，禁止用普通 LLM review 代替默认 Manual 审查。已经通过 tutorial payload 密封的 fresh 页面必须额外给 generate 传 `--sealed-tutorial-preview`：生成器在读取 canonical 前分流，重放受控 manifest 与 article/quality/artifact-plan/编辑契约 SHA，逐字安装 `post.md`，并用不含旧 analysis/readerArticle 的快照建立 schema v3 generation；不得 sanitize 或生成汇总页。`blog:manual-plan` 输出按日期、规范化论文 ID 和身份哈希隔离的 shardDir/attestationPath；逐页 Terra-high shard、assembler、Manual receipt 和 push 只消费这一隔离作用域，不能回退日期整批文件。已有同日整批证据保持只读；单篇 staging/manifest 只能包含一个论文页，禁止汇总页、同日旧页删除和批次视觉任务。push 还要求博客仓库除该目标页外完全干净，防止夹带其他页面或配置变更。
 - Manual v5 的读者质量不只靠字数：系统/方法论文至少 4 条 `resultClaims` 且跨至少 2 个实验组，连续原句绑定设置、方法、基线、指标、数值、单位和方向，并提供实际写入实验正文的自然语言 `readerNarrative`，而非字段串；7 维 `readabilityRubric` 总分至少 12/14 且无 0 分。精确数量用阿拉伯数字，确定性层同时阻断篇内/跨篇模板、术语粘连、过长段落和防御性否定过密。
 - records v2/spec v4 与 spec v3 仅作历史兼容；新日更不得降级。v4 继续写 `full-text-evidence-v4`，v3 继续写 v3 + `bounded-v1`，均不追溯套用 v5。
 - 最终读者门禁覆盖作者与机构、毒舌点评、`readerArticle` 的叙事和图片邻接、评分理由和开源详情；canonical 六章仍供事实/评分/图片审计，不是 Manual v5 的发布版式。“进一步审视”仍受检。新汇总页以 `paper_digest_reader_quality: "reader-facing-v1"` 显式启用相同的精确定量、术语间距、模板与病句检查，旧汇总页无标记时保持兼容。
-- `manual-review-blog.py` 只在 LLM review 服务不可用时替代语义模型。新批次要求 v3 attestation（v2 仅历史兼容）；它要求对 generation 中每个现存文件绑定 SHA、批次内唯一且含页面标识的 notes，并逐项确认标题、技术叙事、事实、实验、复现、局限、评分和图片；唯一性比较会剥离页面 ID、日期或删除文件名，拒绝仅替换标识符的批量模板；受控删除项则显式绑定 `deleted:true`、空 SHA、`deletionVerified` 和包含文件名的删除说明。脚本仍执行确定性复验、Git 基线、review 协议和 Hugo gate 绑定，若确定性层修改页面则旧 attestation 立即失效。输出图片审查模式为 `manual_semantic` 的 receipt，push 会重验逐文件 provenance 与远端 OID。
+- `manual-review-blog.py` 只在 LLM review 服务不可用时替代语义模型。新批次要求 v3 attestation（v2 仅历史兼容）；它要求对 generation 中每个现存文件绑定 SHA、批次内唯一且含页面标识的 notes、Terra-high 单页 reviewer provenance，并逐项确认标题、技术叙事、事实、实验、复现、局限、评分和图片；唯一性比较会剥离页面 ID、日期或删除文件名，拒绝仅替换标识符的批量模板；受控删除项则显式绑定 `deleted:true`、空 SHA、`deletionVerified` 和包含文件名的删除说明。脚本仍执行确定性复验、Git 基线、review 协议和 Hugo gate 绑定，若确定性层修改页面则旧 attestation 立即失效。输出图片审查模式为 `manual_semantic` 的 receipt，push 会重验逐文件 provenance 与远端 OID。
+
+schema v3 generation 的页面 SHA/删除状态会在 review 开始、receipt 签发和 push 重验时统一与当前文件比较；generation 后改动任意字节都会在 LLM/Hugo 前失败。`content/posts` 的现存项和删除项都必须匹配目标日期；Manual durable provenance 还会重验 taskName 唯一性和论文页 paperId。
 
 三种人工模式分别只替代对应模型职责，不绕过来源健康、正文质量、发布或视觉门禁。
 
@@ -82,7 +92,7 @@
 3. **抓取参数**：
    - `parseArxivXML()` 保留“连续 20 篇已知 ID”解析选项，但正式分页/API 补全路径为保证来源覆盖会显式关闭该提前停止，不把它当作当前抓取上限
    - 核心类别优先抓取，补充类别随机排序
-   - 类别间延迟约 70-90 秒起（`categoryDelayMs=60s` + 10-30 秒随机抖动，限流时额外补偿）
+   - 默认 Manual raw 不再在健康类别末尾固定等待：真实请求按 host 严格单飞，下一次同 host 请求采用健康 1 秒、瞬时失败 5 秒、429 60 秒的自适应冷却（另有至多 1 秒抖动），并继续服从单类累计重试预算；本地解析、checkpoint 和并行 HF 工作可抵消冷却。显式 API 旧流程仍保留原 `categoryDelayMs`，两条路线不要混写
    - 无新论文时继续运行而非终止
 
 4. **终端输出**：

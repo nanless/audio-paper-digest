@@ -6,7 +6,8 @@ const {
     mergeAndDeduplicate,
     convertDailyPaper,
     convertPaper,
-    buildCurlArgs
+    buildCurlArgs,
+    fetchWithCurl
 } = require('../scripts/fetch-huggingface-papers.js');
 
 describe('HuggingFace curl proxy isolation', () => {
@@ -21,6 +22,32 @@ describe('HuggingFace curl proxy isolation', () => {
                 'https://huggingface.co/api/papers'
             ]
         );
+    });
+
+    it('悬挂 curl 使用异步子进程接口，不阻塞 Node 事件循环', async () => {
+        let curlCallback;
+        let childOptions;
+        let settled = false;
+        const pending = fetchWithCurl('https://huggingface.co/api/papers', 60, {
+            proxyUrl: 'http://127.0.0.1:7897',
+            execFileFn: (_file, _args, options, callback) => {
+                curlCallback = callback;
+                childOptions = options;
+                return { pid: 123 };
+            }
+        }).then(value => {
+            settled = true;
+            return value;
+        });
+
+        await new Promise(resolve => setImmediate(resolve));
+        assert.strictEqual(typeof curlCallback, 'function');
+        assert.strictEqual(settled, false);
+        assert.strictEqual(childOptions.timeout, 65000);
+        assert.strictEqual(childOptions.killSignal, 'SIGKILL');
+        curlCallback(null, '[]');
+        const result = await pending;
+        assert.deepStrictEqual(result, { ok: true, data: [], error: null });
     });
 });
 
@@ -109,6 +136,18 @@ describe('HuggingFace 抓取健康状态', () => {
                 && error.sourceHealth.allFailed === true
                 && error.sourceHealth.attempts === 2
                 && error.sourceHealth.successfulRequests === 0
+        );
+    });
+
+    it('异步 fetch rejection 进入来源健康状态而不是逸出追踪器', async () => {
+        await assert.rejects(
+            fetchHuggingFacePapers(new Set(), {
+                fetchFn: async () => { throw new Error('async transport down'); },
+                sleepFn: async () => {}
+            }),
+            error => error.code === 'SOURCE_FETCH_FAILED'
+                && error.sourceHealth.attempts === 2
+                && error.sourceHealth.failures.every(item => item.error === 'async transport down')
         );
     });
 

@@ -27,9 +27,193 @@ review_blog = load_script('review-blog.py')
 push_blog = load_script('push-blog.py')
 generate_blog = load_script('generate-blog.py')
 plan_visuals = load_script('plan-post-publish-visuals.py')
+assemble_manual_review = load_script('assemble-manual-review-attestation.py')
+publish_module = load_script('publish-to-blog.py')
 
 
 class BlogStageEntryTest(unittest.TestCase):
+    def test_review_entry_rejects_generation_byte_drift_before_llm_or_hugo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'blog'
+            posts = repo / 'content' / 'posts'
+            posts.mkdir(parents=True)
+            current = Path(tmp) / 'current'
+            current.mkdir()
+            page = posts / '2026-07-10.md'
+            page.write_text('changed after generation\n', encoding='utf-8')
+            manifest = {
+                'schemaVersion': 3,
+                'date': '2026-07-10',
+                'templateFingerprint': publish_module.generation_template_fingerprint(),
+                'files': [{
+                    'path': 'content/posts/2026-07-10.md',
+                    'deleted': False,
+                    'sha256': '0' * 64,
+                }],
+            }
+            (current / 'blog-generation-manifest-2026-07-10.json').write_text(
+                __import__('json').dumps(manifest), encoding='utf-8',
+            )
+            llm_review = mock.Mock(side_effect=AssertionError('LLM must not run'))
+            hugo = mock.Mock(side_effect=AssertionError('Hugo must not run'))
+            with mock.patch.object(publish_module, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_module, 'CURRENT_DIR', current), \
+                    mock.patch.object(
+                        publish_module, 'validate_publish_target',
+                        return_value=(repo, posts),
+                    ), mock.patch.object(publish_module, 'review_all_posts', llm_review), \
+                    mock.patch.object(publish_module, 'run_hugo_gate', hugo), \
+                    mock.patch.object(review_blog, 'require_external_runtime'), \
+                    mock.patch.object(review_blog, 'load_publish_to_blog', return_value=publish_module), \
+                    mock.patch.object(sys, 'argv', [
+                        'review-blog.py', '--date', '2026-07-10',
+                    ]), contextlib.redirect_stdout(io.StringIO()), \
+                    self.assertRaises(SystemExit) as caught:
+                review_blog.main()
+            self.assertEqual(caught.exception.code, 1)
+            llm_review.assert_not_called()
+            hugo.assert_not_called()
+
+    def test_cached_review_pass_rechecks_current_canonical_deterministic_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            page = Path(tmp) / '2026-07-10-paper.md'
+            content = (
+                '---\npaper_digest_page_type: paper\n'
+                'paper_digest_arxiv_id: "2607.00001"\n---\nbody\n'
+            )
+            page.write_text(content, encoding='utf-8')
+            review_and_fix = mock.Mock(return_value=(False, ['canonical mismatch']))
+            module = SimpleNamespace(
+                normalize_publish_arxiv_id=lambda value: str(value),
+                PublishDataValidationError=ValueError,
+                review_and_fix_post=review_and_fix,
+            )
+            with self.assertRaisesRegex(ValueError, '当前确定性门禁'):
+                review_blog.validate_reused_pages(
+                    module, '2026-07-10', [page], {
+                        str(page.resolve()): {'passed': True},
+                    }, {
+                        str(page.resolve()): {'content': content},
+                    }, [{'arxivId': '2607.00001', 'analysis': 'canonical'}],
+                )
+            self.assertEqual(
+                review_and_fix.call_args.args[1]['analysis'], 'canonical',
+            )
+
+    def test_manual_attestation_assembler_preserves_generation_deletion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            current = Path(tmp) / 'current'
+            shard_dir = current / 'manual-blog-review-pages' / '2026-07-10'
+            shard_dir.mkdir(parents=True)
+            manifest = {
+                'schemaVersion': 3,
+                'date': '2026-07-10',
+                'files': [
+                    {
+                        'path': 'content/posts/2026-07-10.md',
+                        'deleted': False, 'sha256': 'a' * 64,
+                    },
+                    {
+                        'path': 'content/posts/2026-07-10-stale.md',
+                        'deleted': True, 'sha256': None,
+                    },
+                ],
+            }
+            (current / 'blog-generation-manifest-2026-07-10.json').write_text(
+                __import__('json').dumps(manifest), encoding='utf-8',
+            )
+            common_subagent = {
+                'version': 1, 'singleFileOnly': True, 'isolatedContext': True,
+                'model': 'gpt-5.6-terra', 'reasoningEffort': 'high',
+            }
+            (shard_dir / 'index.json').write_text(__import__('json').dumps({
+                'path': 'content/posts/2026-07-10.md',
+                'sha256': 'a' * 64,
+                'checks': {key: True for key in assemble_manual_review.FILE_CHECKS},
+                'notes': '2026-07-10 汇总页逐项核对论文数量、排序、标题和链接均无错误。',
+                'issues': [],
+                'reviewSubagent': {**common_subagent, 'taskName': 'review-index'},
+                'imageFindings': [],
+            }), encoding='utf-8')
+            (shard_dir / 'deleted.json').write_text(__import__('json').dumps({
+                'path': 'content/posts/2026-07-10-stale.md',
+                'deleted': True, 'sha256': None,
+                'checks': {'deletionVerified': True},
+                'notes': '确认删除页面文件名 2026-07-10-stale，旧文件在博客工作树中已经不存在。',
+                'issues': [],
+                'reviewSubagent': {**common_subagent, 'taskName': 'review-deleted'},
+                'imageFindings': [],
+            }), encoding='utf-8')
+            with mock.patch.object(publish_module, 'CURRENT_DIR', current), \
+                    mock.patch.object(
+                        assemble_manual_review, 'load_publish_to_blog',
+                        return_value=publish_module,
+                    ), \
+                    mock.patch.object(sys, 'argv', [
+                        'assemble-manual-review-attestation.py',
+                        '--date', '2026-07-10',
+                    ]), contextlib.redirect_stdout(io.StringIO()):
+                assemble_manual_review.main()
+            output = __import__('json').loads(
+                (current / 'manual-review-attestation-2026-07-10.json').read_text(
+                    encoding='utf-8',
+                )
+            )
+            deleted = next(item for item in output['files'] if item.get('deleted'))
+            self.assertIsNone(deleted['sha256'])
+            self.assertEqual(deleted['checks'], {'deletionVerified': True})
+
+    def test_manual_attestation_assembler_uses_isolated_single_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            current = Path(tmp) / 'current'
+            paper_id = '2607.00001'
+            scope = {'mode': 'single-paper', 'includeId': paper_id}
+            with mock.patch.object(publish_module, 'CURRENT_DIR', current), \
+                    publish_module.publication_scope(paper_id):
+                manifest_path = publish_module.generation_manifest_path('2026-07-10')
+                shard_dir = publish_module.manual_review_page_dir('2026-07-10')
+                output_path = publish_module.manual_review_attestation_path('2026-07-10')
+            shard_dir.mkdir(parents=True)
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(__import__('json').dumps({
+                'schemaVersion': 3, 'date': '2026-07-10',
+                'publicationScope': scope,
+                'publishedPapers': [{'arxivId': paper_id}],
+                'files': [{
+                    'path': 'content/posts/2026-07-10-selected.md',
+                    'deleted': False, 'sha256': 'a' * 64,
+                }],
+            }), encoding='utf-8')
+            (shard_dir / 'selected.json').write_text(__import__('json').dumps({
+                'path': 'content/posts/2026-07-10-selected.md',
+                'sha256': 'a' * 64,
+                'checks': {key: True for key in assemble_manual_review.FILE_CHECKS},
+                'notes': '2607.00001：核对 Conformer 方法、WER 7.1% 结果和公开测试边界。',
+                'issues': [],
+                'reviewSubagent': {
+                    'version': 1, 'taskName': 'single-review-2607-00001',
+                    'paperId': paper_id, 'singleFileOnly': True,
+                    'isolatedContext': True, 'model': 'gpt-5.6-terra',
+                    'reasoningEffort': 'high',
+                },
+                'imageFindings': [],
+            }), encoding='utf-8')
+            batch_output = current / 'manual-review-attestation-2026-07-10.json'
+            batch_output.write_text('{"batch":"untouched"}', encoding='utf-8')
+            with mock.patch.object(publish_module, 'CURRENT_DIR', current), \
+                    mock.patch.object(
+                        assemble_manual_review, 'load_publish_to_blog',
+                        return_value=publish_module,
+                    ), mock.patch.object(sys, 'argv', [
+                        'assemble-manual-review-attestation.py',
+                        '--date', '2026-07-10', '--include-id', paper_id,
+                    ]), contextlib.redirect_stdout(io.StringIO()):
+                assemble_manual_review.main()
+            payload = __import__('json').loads(output_path.read_text(encoding='utf-8'))
+            self.assertEqual(payload['publicationScope'], scope)
+            self.assertEqual(len(payload['files']), 1)
+            self.assertEqual(batch_output.read_text(encoding='utf-8'), '{"batch":"untouched"}')
+
     def test_blog_stage_date_parsers_reject_missing_unknown_and_duplicate_flags(self):
         module = SimpleNamespace(
             get_today_bj=lambda value=None: value or '2026-07-10',
@@ -62,6 +246,34 @@ class BlogStageEntryTest(unittest.TestCase):
                 with self.assertRaises(SystemExit) as caught:
                     plan_visuals.parse_date(module, argv)
                 self.assertEqual(caught.exception.code, 2)
+        for parser, argv in (
+            (review_blog.parse_options, [
+                '--include-id', '2607.00001', '--include-id', '2607.00002',
+            ]),
+            (push_blog.parse_options, [
+                '--include-id', '2607.00001', '--include-id', '2607.00002',
+            ]),
+            (push_blog.parse_options, [
+                '--include-id', '2607.00001', '--require-visual-plan',
+            ]),
+        ):
+            with self.subTest(parser=parser.__module__, argv=argv), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as caught:
+                    parser(module, argv)
+                self.assertEqual(caught.exception.code, 2)
+        self.assertEqual(
+            review_blog.parse_options(module, [
+                '--date', '2026-07-10', '--include-id', '2607.00001',
+            ]),
+            ('2026-07-10', '2607.00001'),
+        )
+        self.assertEqual(
+            push_blog.parse_options(module, [
+                '--date', '2026-07-10', '--include-id', '2607.00001',
+            ]),
+            ('2026-07-10', False, '2607.00001'),
+        )
 
     def test_generate_entry_only_calls_generation(self):
         generate = mock.Mock()
@@ -153,6 +365,9 @@ body
                 run_hugo_gate=mock.Mock(return_value='hugo'),
                 save_review_receipt=mock.Mock(return_value=Path('receipt.json')),
                 save_review_failure_state=mock.Mock(),
+                save_review_page_checkpoint=mock.Mock(),
+                clear_review_page_checkpoints=mock.Mock(),
+                _sha256_file=mock.Mock(return_value='a' * 64),
                 git_push=git_push,
             )
             with mock.patch.object(review_blog, 'require_external_runtime'), \

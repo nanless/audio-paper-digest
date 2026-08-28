@@ -136,6 +136,22 @@ describe('Manual v5 audio researcher contract', () => {
         assert.doesNotThrow(() => validateReaderArticle(plan, article, [
             { id: 'E01' }, { id: 'E02' }, { id: 'E03' }, { id: 'E04' }
         ]));
+        const strictPlan = { ...plan, readerFormatContract: 'graduate-researcher-tutorial-quality-v2' };
+        assert.throws(
+            () => validateReaderArticle(strictPlan, article.replace('### 先拆开表示冲突', '### 图 1 怎样读两条表示通路'), [
+                { id: 'E01' }, { id: 'E02' }, { id: 'E03' }, { id: 'E04' }
+            ]),
+            /章节标题不得包含图号或表号/
+        );
+        assert.throws(() => validateReaderArticle(strictPlan, `${article}\n\n裸公式 $x+y$。`, [
+            { id: 'E01' }, { id: 'E02' }, { id: 'E03' }, { id: 'E04' }
+        ]), /禁止使用裸 \$\/\$\$/);
+        assert.throws(() => validateReaderArticle(strictPlan, `${article}\n\n错误行内公式 (mathbf a_i,mathbf t_i)。`, [
+            { id: 'E01' }, { id: 'E02' }, { id: 'E03' }, { id: 'E04' }
+        ]), /LaTeX 命令不能放在普通圆括号/);
+        assert.throws(() => validateReaderArticle(strictPlan, `${article}\n\n**关键判断。**论文随后给出实验。`, [
+            { id: 'E01' }, { id: 'E02' }, { id: 'E03' }, { id: 'E04' }
+        ]), /加粗结束符后必须留空格或标点/);
         const firstImage = 'https://arxiv.org/html/2608.29999/figure-1.png';
         const secondImage = 'https://arxiv.org/html/2608.29999/figure-2.png';
         const firstLead = '承接两条表示只在共享语言推理层会合，下图用于核对输入如何进入两条独立的连续表示通路。';
@@ -271,6 +287,24 @@ describe('Manual v5 audio researcher contract', () => {
             documentType: '方法研究',
             evidenceProfile: { publicGeneralizationEvaluated: false, ablationStatus: 'none' },
             label: 'accuracy-direction.resultClaims'
+        }));
+    });
+
+    it('resultClaims 接受谱图定性实验中的抑制、稳定与负例方向短语', () => {
+        const sourceDirections = ['stable', 'still suppressed', 'false passes', 'howling about 2–3 s after call start'];
+        const readerDirections = ['稳定受抑', '持续啸叫受抑制', '误放行', '通话开始后出现啸叫'];
+        const claims = Array.from({ length: 4 }, (_, index) => ({
+            evidenceScope: index === 0 ? 'target_domain' : 'qualitative',
+            sourceGroup: index < 2 ? 'Figure 2' : 'Figure 3',
+            baselineType: index === 0 ? 'same_backbone' : 'none',
+            unit: { notReported: true, reason: '论文仅报告谱图定性观察，没有定义数值单位。' },
+            sourceBindings: { direction: sourceDirections[index], value: 'qualitative observation' },
+            readerBindings: { direction: readerDirections[index], value: '定性谱图观察' }
+        }));
+        assert.doesNotThrow(() => validateResultClaimCoverageV5(claims, {
+            documentType: '方法研究',
+            evidenceProfile: { publicGeneralizationEvaluated: false, ablationStatus: 'none' },
+            label: 'qualitative-direction.resultClaims'
         }));
     });
 

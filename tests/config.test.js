@@ -52,6 +52,10 @@ describe('config', () => {
         assert.strictEqual(Config.ARXIV_CONFIG.fetchMaxResponseBytes, 8 * 1024 * 1024);
         assert.ok(Config.ARXIV_CONFIG.userAgents.includes(Config.ARXIV_CONFIG.userAgent));
         assert.strictEqual(Config.ARXIV_CONFIG.categoryDelayMs, 60000);
+        assert.strictEqual(Config.ARXIV_CONFIG.hostHealthyCooldownMs, 1000);
+        assert.strictEqual(Config.ARXIV_CONFIG.hostTransientCooldownMs, 5000);
+        assert.strictEqual(Config.ARXIV_CONFIG.hostRateLimitedCooldownMs, 60000);
+        assert.strictEqual(Config.ARXIV_CONFIG.hostCooldownJitterMs, 1000);
         assert.strictEqual(Config.HUGGINGFACE_CONFIG.maxPages, 20);
         assert.strictEqual(Config.HUGGINGFACE_CONFIG.pageLimit, 100);
         assert.strictEqual(Config.ARCHIVE_CONFIG.maxBackups, 10);
@@ -174,6 +178,20 @@ describe('config', () => {
     it('项目 .env 覆写 arXiv 429 累计退避上限', () => {
         withProjectEnv('PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS=45000', (Config) => {
             assert.strictEqual(Config.ARXIV_CONFIG.fetchRateLimitMaxWaitMs, 45000);
+        });
+    });
+
+    it('项目 .env 覆写 arXiv host 自适应冷却', () => {
+        withProjectEnv([
+            'PD_ARXIV_HEALTHY_COOLDOWN_MS=1200',
+            'PD_ARXIV_TRANSIENT_COOLDOWN_MS=7000',
+            'PD_ARXIV_RATE_LIMIT_COOLDOWN_MS=65000',
+            'PD_ARXIV_COOLDOWN_JITTER_MS=900'
+        ].join('\n'), (Config) => {
+            assert.strictEqual(Config.ARXIV_CONFIG.hostHealthyCooldownMs, 1200);
+            assert.strictEqual(Config.ARXIV_CONFIG.hostTransientCooldownMs, 7000);
+            assert.strictEqual(Config.ARXIV_CONFIG.hostRateLimitedCooldownMs, 65000);
+            assert.strictEqual(Config.ARXIV_CONFIG.hostCooldownJitterMs, 900);
         });
     });
 

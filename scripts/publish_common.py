@@ -12,6 +12,7 @@ import os
 import random
 import re
 import subprocess
+import struct
 import sys
 import time
 import unicodedata
@@ -83,16 +84,22 @@ MANUAL_DEPTH_CONTRACT_VERSION_V2 = 'full-text-evidence-v2'
 MANUAL_DEPTH_CONTRACT_VERSION_V3 = 'full-text-evidence-v3'
 MANUAL_DEPTH_CONTRACT_VERSION_V4 = 'full-text-evidence-v4'
 MANUAL_DEPTH_CONTRACT_VERSION_V5 = 'full-text-evidence-v5'
+MANUAL_DEPTH_CONTRACT_VERSION_V6 = 'full-text-evidence-v6'
+MANUAL_LONGFORM_CONTRACT_VERSION_V2 = 'reader-longform-v2'
+MANUAL_ARTIFACT_PARSER_VERSION_V2 = 'manual-artifact-parser-v2-structured'
+MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT = 'manual-paper-source-identity-v1'
 MANUAL_DEPTH_CONTRACT_VERSIONS = frozenset({
     MANUAL_DEPTH_CONTRACT_VERSION,
     MANUAL_DEPTH_CONTRACT_VERSION_V2,
     MANUAL_DEPTH_CONTRACT_VERSION_V3,
     MANUAL_DEPTH_CONTRACT_VERSION_V4,
     MANUAL_DEPTH_CONTRACT_VERSION_V5,
+    MANUAL_DEPTH_CONTRACT_VERSION_V6,
 })
 MANUAL_READER_QUALITY_VERSIONS = frozenset({
     MANUAL_DEPTH_CONTRACT_VERSION_V4,
     MANUAL_DEPTH_CONTRACT_VERSION_V5,
+    MANUAL_DEPTH_CONTRACT_VERSION_V6,
 })
 MANUAL_COMPLETE_STATUS = 'manual_complete'
 MANUAL_COMPLETE_PROVENANCE_VERSION = 2
@@ -447,6 +454,467 @@ def _validate_publish_image_exclusion_view(paper, paper_label):
 
 def _manual_hash(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
+
+
+def _manual_paper_identity_mode(contracts, paper_label='paper'):
+    contracts = contracts if isinstance(contracts, dict) else {}
+    identity_marker = contracts.get('paperSourceIdentity')
+    if identity_marker is None:
+        if contracts.get('freshAuthoring') is not None \
+                or contracts.get('tutorialPayload') is not None:
+            raise PublishDataValidationError(
+                f'{paper_label} fresh/tutorial canonical 缺少逐论文来源身份'
+            )
+        return 'historical_per_entry'
+    if identity_marker != MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT:
+        raise PublishDataValidationError(
+            f'{paper_label} 逐论文来源身份契约标记非法'
+        )
+    return 'per_paper_v1'
+
+
+MANUAL_V6_SIGNATURE_CONTRACT = 'stable-json-ascii-keys-exact-ieee754-nfkc-text-v2'
+
+
+def _manual_v6_signature_value(value, label='manual-v6-signature'):
+    """Canonical v6 signature input shared with manual-signature-contract.js.
+
+    Object keys are deliberately restricted to visible ASCII. Safe integers
+    remain ordinary JSON integers; finite floats are serialized later from
+    their IEEE-754 bits as exact decimal JSON numbers. Unicode remains fully
+    supported in string values; NFKC text normalization is explicit in
+    ``_manual_v6_text`` rather than an invisible mutation of signed JSON.
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+            raise PublishDataValidationError(f'{label} 含非法 Unicode 代理项')
+        return value
+    if isinstance(value, int):
+        if abs(value) > (2 ** 53 - 1):
+            raise PublishDataValidationError(f'{label} 含非安全整数')
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value) or (value == 0.0 and math.copysign(1.0, value) < 0):
+            raise PublishDataValidationError(f'{label} 签名对象禁止 NaN/Infinity 或负零')
+        if value.is_integer() and abs(value) > (2 ** 53 - 1):
+            raise PublishDataValidationError(f'{label} 含非安全整数')
+        return value
+    if isinstance(value, list):
+        return [
+            _manual_v6_signature_value(item, f'{label}[{index}]')
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, dict):
+        if any(not isinstance(key, str) for key in value):
+            raise PublishDataValidationError(f'{label} 签名对象 key 必须是字符串')
+        result = {}
+        for key in sorted(value):
+            if not key or any(ord(character) < 0x20 or ord(character) > 0x7E for character in key):
+                raise PublishDataValidationError(f'{label} 签名对象 key 必须是可见 ASCII')
+            result[key] = _manual_v6_signature_value(value[key], f'{label}.{key}')
+        return result
+    raise PublishDataValidationError(f'{label} 含不可签名类型: {type(value).__name__}')
+
+
+def _manual_v6_number_text(value):
+    if isinstance(value, int):
+        return str(value)
+    bits = struct.unpack('>Q', struct.pack('>d', value))[0]
+    negative = bits >> 63 == 1
+    exponent_bits = (bits >> 52) & 0x7FF
+    fraction = bits & ((1 << 52) - 1)
+    significand = fraction if exponent_bits == 0 else (1 << 52) | fraction
+    exponent2 = -1074 if exponent_bits == 0 else exponent_bits - 1023 - 52
+    scale = 0
+    if exponent2 >= 0:
+        digits = significand << exponent2
+    else:
+        scale = -exponent2
+        digits = significand * (5 ** scale)
+        while scale > 0 and digits % 10 == 0:
+            digits //= 10
+            scale -= 1
+    text = str(digits)
+    if scale > 0:
+        text = text.rjust(scale + 1, '0')
+        text = f'{text[:-scale]}.{text[-scale:]}'
+    return f'-{text}' if negative else text
+
+
+def _manual_v6_canonical_json(value):
+    if value is None or isinstance(value, bool) or isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+    if isinstance(value, (int, float)):
+        return _manual_v6_number_text(value)
+    if isinstance(value, list):
+        return '[' + ','.join(_manual_v6_canonical_json(item) for item in value) + ']'
+    return '{' + ','.join(
+        f'{json.dumps(key, ensure_ascii=False)}:{_manual_v6_canonical_json(value[key])}'
+        for key in sorted(value)
+    ) + '}'
+
+
+def _manual_v6_hash(value):
+    canonical = _manual_v6_signature_value(value)
+    encoded = _manual_v6_canonical_json(canonical).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+_MANUAL_V6_SHA_FIELDS = (
+    'specRootSha256', 'paperSpecSha256', 'sealedRecordSha256',
+    'recordFileSha256', 'artifactIndexSha256', 'artifactIndexFileSha256',
+    'recordsEnvelopeFileSha256', 'taskEvidenceSha256', 'readerLongformSha256',
+    'readerLongformArticleSha256',
+)
+_MANUAL_V6_BLOCK_KINDS = frozenset({
+    'prerequisites', 'problem', 'related_work', 'signal_path', 'architecture',
+    'component', 'training', 'formula', 'experiment_setup', 'result',
+    'ablation', 'negative_result', 'reproduction', 'limitation', 'synthesis',
+})
+
+
+def _manual_v6_text(value):
+    return unicodedata.normalize(
+        'NFKC', '' if value is None else str(value),
+    ).replace('\r\n', '\n').replace('\r', '\n').strip()
+
+
+def _manual_v6_text_sha(value):
+    # manual-longform-contract.js hashes String(value) bytes directly.  Object
+    # identities (ArtifactIndex/workflow) use stable JSON via ``_manual_hash``.
+    return hashlib.sha256(str(value or '').encode('utf-8')).hexdigest()
+
+
+def _manual_v6_require_text(value, label, minimum=1):
+    text = _manual_v6_text(value)
+    if len(text) < minimum:
+        raise PublishDataValidationError(f'{label} 至少需要 {minimum} 个字符')
+    return text
+
+
+def _manual_v6_render_table(table):
+    matrix = table.get('matrix') if isinstance(table, dict) else None
+    if not isinstance(matrix, list) or not matrix or any(not isinstance(row, list) or not row for row in matrix):
+        raise PublishDataValidationError(f'{(table or {}).get("id", "unknown table")} 缺少可确定性渲染矩阵')
+    width = max(len(row) for row in matrix)
+    rows = []
+    for row in matrix:
+        rows.append([
+            _manual_v6_text(row[index] if index < len(row) else '').replace('|', r'\|').replace('\n', '<br>')
+            for index in range(width)
+        ])
+    caption = _manual_v6_text(table.get('caption') or table.get('id') or '实验表格')
+    return '\n'.join([
+        f'**{caption}**', '', f'| {" | ".join(rows[0])} |',
+        f'| {" | ".join(["---"] * width)} |',
+        *(f'| {" | ".join(row)} |' for row in rows[1:]),
+    ])
+
+
+def _manual_v6_numeric_cell_ids(table):
+    table_id = str(table.get('id') or table.get('sourceTableId') or '').strip()
+    result = []
+    for row_index, row in enumerate(table.get('matrix') or []):
+        for column_index, raw_cell in enumerate(row if isinstance(row, list) else []):
+            cell = _manual_v6_text(raw_cell)
+            if not re.search(r'(?:^|[^A-Za-z])[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?(?:\s*%|\b)', cell):
+                continue
+            result.append(
+                f'{table_id}:r{row_index}:c{column_index}:{_manual_v6_text_sha(cell)[:12]}'
+            )
+    return result
+
+
+def _manual_v6_inventory_ids(index, field):
+    result = {}
+    for position, item in enumerate(index.get(field) or []):
+        if not isinstance(item, dict):
+            raise PublishDataValidationError(f'ArtifactIndex.{field}[{position}] 必须是对象')
+        item_id = str(item.get('id') or item.get('sourceTableId') or item.get('url') or '').strip()
+        if not item_id or item_id in result:
+            raise PublishDataValidationError(f'ArtifactIndex.{field} ID 缺失或重复')
+        result[item_id] = item
+    return result
+
+
+def validate_manual_v6_payload(paper):
+    """Validate and deterministically replay a canonical Manual v6 article.
+
+    The returned article is built exclusively from controlled longform blocks.
+    A legacy ``manualTakeover.readerArticle`` is only an optional equality
+    witness and is never a rendering input.
+    """
+    if not isinstance(paper, dict):
+        raise PublishDataValidationError('Manual v6 canonical 论文必须是对象')
+    paper_label = str(paper.get('arxivId') or paper.get('id') or '<unknown paper>')
+    paper_id = normalize_publish_arxiv_id(paper_label)
+    manifest = paper.get('analysisManifest')
+    contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
+    if not isinstance(contracts, dict) or contracts.get('manualDepth') != MANUAL_DEPTH_CONTRACT_VERSION_V6:
+        raise PublishDataValidationError(f'{paper_label} 未声明 Manual v6')
+    required_contracts = {
+        'readerLongform': MANUAL_LONGFORM_CONTRACT_VERSION_V2,
+        'artifactIndex': MANUAL_ARTIFACT_PARSER_VERSION_V2,
+        'experimentTables': EXPERIMENT_TABLE_CONTRACT_VERSION,
+        'researcherFocus': MANUAL_RESEARCH_CONTRACT_VERSION,
+        'perPaperSubagent': 'isolated-single-paper-v1',
+    }
+    for key, expected in required_contracts.items():
+        if contracts.get(key) != expected:
+            raise PublishDataValidationError(f'{paper_label} Manual v6 contracts.{key} 必须为 {expected}')
+    if paper.get('manualDepth') != MANUAL_DEPTH_CONTRACT_VERSION_V6:
+        raise PublishDataValidationError(f'{paper_label} canonical manualDepth 与 contracts 不一致')
+
+    artifact = paper.get('manualArtifactIndex')
+    bundle = paper.get('manualReaderLongform')
+    provenance = paper.get('manualV6Provenance')
+    takeover = manifest.get('manualTakeover') if isinstance(manifest, dict) else None
+    takeover_provenance = takeover.get('v6Provenance') if isinstance(takeover, dict) else None
+    acquisition = manifest.get('sourceAcquisition') if isinstance(manifest, dict) else None
+    if not all(isinstance(value, dict) for value in (artifact, bundle, provenance, takeover_provenance, acquisition)):
+        raise PublishDataValidationError(f'{paper_label} Manual v6 artifact/longform/provenance 不完整')
+    if provenance.get('specVersion') != 6 or takeover_provenance != provenance:
+        raise PublishDataValidationError(f'{paper_label} Manual v6 provenance 副本不一致')
+    if provenance.get('readerLongformContract') != MANUAL_LONGFORM_CONTRACT_VERSION_V2:
+        raise PublishDataValidationError(f'{paper_label} Manual v6 readerLongformContract 非法')
+    for field in _MANUAL_V6_SHA_FIELDS:
+        value = str(provenance.get(field) or '')
+        if not re.fullmatch(r'[a-f0-9]{64}', value):
+            raise PublishDataValidationError(f'{paper_label} manualV6Provenance.{field} 非法')
+        if field in acquisition and acquisition.get(field) != value:
+            raise PublishDataValidationError(f'{paper_label} sourceAcquisition.{field} 与 v6 provenance 不一致')
+    for field in ('specRootSha256', 'paperSpecSha256', 'sealedRecordSha256',
+                  'recordFileSha256', 'artifactIndexSha256', 'artifactIndexFileSha256'):
+        if acquisition.get(field) != provenance[field]:
+            raise PublishDataValidationError(f'{paper_label} sourceAcquisition 缺少 {field} 的强绑定')
+
+    if (artifact.get('version') != 1
+            or artifact.get('parserVersion') != MANUAL_ARTIFACT_PARSER_VERSION_V2
+            or normalize_publish_arxiv_id(artifact.get('paperId')) != paper_id):
+        raise PublishDataValidationError(f'{paper_label} ArtifactIndex 版本/parser/paperId 非法')
+    input_identity = artifact.get('inputIdentity')
+    if not isinstance(input_identity, dict):
+        raise PublishDataValidationError(f'{paper_label} ArtifactIndex.inputIdentity 缺失')
+    for field in ('sourceSha256', 'sourceIdentitySha256', 'paperInputSha256'):
+        value = str(input_identity.get(field) or '')
+        if not re.fullmatch(r'[a-f0-9]{64}', value) or acquisition.get(field) != value:
+            raise PublishDataValidationError(f'{paper_label} ArtifactIndex.inputIdentity.{field} 未绑定 sourceAcquisition')
+    if not isinstance(artifact.get('inventoryHealth'), dict) \
+            or artifact['inventoryHealth'].get('status') != 'complete':
+        raise PublishDataValidationError(f'{paper_label} ArtifactIndex inventory 未完整恢复，禁止发布 v6')
+    for field in ('sections', 'tables', 'figures', 'formulas', 'references', 'acronyms',
+                  'citations', 'baselines', 'datasets', 'metrics', 'sourceSpans'):
+        if not isinstance(artifact.get(field), list):
+            raise PublishDataValidationError(f'{paper_label} ArtifactIndex.{field} 缺失')
+    if artifact.get('images') != artifact.get('figures'):
+        raise PublishDataValidationError(f'{paper_label} ArtifactIndex images/figures 兼容投影不一致')
+    payload = {key: value for key, value in artifact.items()
+               if key not in {'artifactIndexSha256', 'outputSha256'}}
+    artifact_sha = _manual_v6_hash(payload)
+    if (artifact.get('artifactIndexSha256') != artifact_sha
+            or artifact.get('outputSha256') != artifact_sha
+            or provenance.get('artifactIndexSha256') != artifact_sha):
+        raise PublishDataValidationError(f'{paper_label} ArtifactIndex semantic SHA 漂移')
+    counts = artifact.get('counts')
+    if not isinstance(counts, dict):
+        raise PublishDataValidationError(f'{paper_label} ArtifactIndex.counts 缺失')
+    for field in ('sections', 'tables', 'figures', 'formulas', 'references', 'acronyms',
+                  'citations', 'baselines', 'datasets', 'metrics'):
+        if counts.get(field) != len(artifact[field]):
+            raise PublishDataValidationError(f'{paper_label} ArtifactIndex.counts.{field} 不闭环')
+    if counts.get('images') != len(artifact['figures']):
+        raise PublishDataValidationError(f'{paper_label} ArtifactIndex.counts.images 不闭环')
+
+    if (bundle.get('version') != 2
+            or bundle.get('contract') != MANUAL_LONGFORM_CONTRACT_VERSION_V2
+            or normalize_publish_arxiv_id(bundle.get('paperId')) != paper_id
+            or bundle.get('artifactIndexSha256') != artifact_sha):
+        raise PublishDataValidationError(f'{paper_label} reader-longform-v2 身份绑定非法')
+    bundle_sha = _manual_v6_hash(bundle)
+    if (provenance.get('readerLongformSha256') != bundle_sha
+            or acquisition.get('readerLongformSha256') != bundle_sha):
+        raise PublishDataValidationError(f'{paper_label} reader-longform-v2 semantic SHA 漂移')
+    blocks = bundle.get('blocks')
+    if not isinstance(blocks, list) or not 6 <= len(blocks) <= 32:
+        raise PublishDataValidationError(f'{paper_label} reader-longform-v2 blocks 必须为 6-32 个')
+    block_by_id = {}
+    source_ids = {item['id'] for item in artifact['sourceSpans'] if isinstance(item, dict) and item.get('id')}
+    inventory = {field: _manual_v6_inventory_ids(artifact, field)
+                 for field in ('tables', 'figures', 'formulas', 'acronyms', 'citations')}
+    positions = {}
+    for position, block in enumerate(blocks):
+        if not isinstance(block, dict):
+            raise PublishDataValidationError(f'{paper_label} blocks[{position}] 必须是对象')
+        block_id = _manual_v6_require_text(block.get('id'), f'{paper_label}.blocks[{position}].id', 2)
+        if block_id in block_by_id or block.get('kind') not in _MANUAL_V6_BLOCK_KINDS:
+            raise PublishDataValidationError(f'{paper_label} block ID 重复或 kind 非法')
+        _manual_v6_require_text(block.get('heading'), f'{paper_label}.{block_id}.heading', 6)
+        _manual_v6_require_text(block.get('learningObjective'), f'{paper_label}.{block_id}.learningObjective', 12)
+        markdown = _manual_v6_require_text(block.get('markdown'), f'{paper_label}.{block_id}.markdown', 100)
+        if len(markdown) > 4000 or any(len(_manual_v6_text(item)) > 1200 for item in re.split(r'\n\s*\n', markdown)):
+            raise PublishDataValidationError(f'{paper_label}.{block_id} 过长，未形成递进 block')
+        if re.search(r'(?:sourceBindings|readerBindings|evidenceLedger|resultClaims|schema|字段串)', markdown, re.I):
+            raise PublishDataValidationError(f'{paper_label}.{block_id} 泄露内部 schema 语言')
+        reference_fields = (('evidenceSpanIds', source_ids), ('tableIds', set(inventory['tables'])),
+                            ('figureIds', set(inventory['figures'])), ('formulaIds', set(inventory['formulas'])))
+        for field, allowed in reference_fields:
+            values = block.get(field, [])
+            if not isinstance(values, list) or len(values) != len(set(values)) or any(value not in allowed for value in values):
+                raise PublishDataValidationError(f'{paper_label}.{block_id}.{field} 引用非法')
+        block_by_id[block_id] = block
+        positions.setdefault(block['kind'], position)
+    method_positions = [positions[kind] for kind in ('signal_path', 'architecture', 'component') if kind in positions]
+    result_positions = [positions[kind] for kind in ('result', 'ablation', 'negative_result') if kind in positions]
+    required_kinds = {'prerequisites', 'problem', 'related_work', 'reproduction', 'limitation'}
+    if str((paper.get('parsed') or {}).get('documentType') or '') != '理论研究':
+        required_kinds.update({'training', 'experiment_setup'})
+    if (not required_kinds.issubset(positions) or not method_positions or not result_positions
+            or not (positions['problem'] < min(method_positions) < min(result_positions) < positions['limitation'])):
+        raise PublishDataValidationError(f'{paper_label} v6 正文未按问题→方法→结果→边界递进')
+    article = '\n\n'.join(
+        f'### {_manual_v6_text(block["heading"])}\n\n{_manual_v6_text(block["markdown"])}'
+        for block in blocks
+    )
+    article_sha = _manual_v6_text_sha(article)
+    if bundle.get('articleSha256') != article_sha:
+        raise PublishDataValidationError(f'{paper_label} longform article SHA 与 blocks 重放不一致')
+    if provenance.get('readerLongformArticleSha256') != article_sha:
+        raise PublishDataValidationError(f'{paper_label} provenance 未绑定 longform article SHA')
+    if isinstance(takeover.get('readerArticle'), str) \
+            and _manual_v6_text(takeover['readerArticle']) != article:
+        raise PublishDataValidationError(f'{paper_label} 兼容 readerArticle 与受控 blocks 不一致')
+    if takeover.get('readerArticleSha256') not in (None, article_sha):
+        raise PublishDataValidationError(f'{paper_label} 兼容 readerArticleSha256 与 blocks 不一致')
+
+    receipt = bundle.get('authorReceipt')
+    if (not isinstance(receipt, dict) or normalize_publish_arxiv_id(receipt.get('paperId')) != paper_id
+            or receipt.get('singlePaperOnly') is not True or receipt.get('isolatedContext') is not True
+            or receipt.get('model') != 'gpt-5.6-terra' or receipt.get('reasoningEffort') != 'high'
+            or receipt.get('articleSha256') != article_sha
+            or not re.fullmatch(r'[a-f0-9]{64}', str(receipt.get('inputPacketSha256') or ''))
+            or not isinstance(receipt.get('revision'), int) or receipt['revision'] < 1):
+        raise PublishDataValidationError(f'{paper_label} v6 authorReceipt 未绑定 Terra-high 单篇成稿')
+    _manual_v6_require_text(receipt.get('taskName'), f'{paper_label}.authorReceipt.taskName', 4)
+    times = []
+    for field in ('queuedAt', 'startedAt', 'completedAt'):
+        value = str(receipt.get(field) or '')
+        if not BEIJING_TIMESTAMP_RE.fullmatch(value):
+            raise PublishDataValidationError(f'{paper_label} authorReceipt.{field} 非北京时间')
+        times.append(datetime.fromisoformat(value))
+    if not times[0] <= times[1] <= times[2]:
+        raise PublishDataValidationError(f'{paper_label} authorReceipt 时间顺序非法')
+
+    table_dispositions = bundle.get('tables')
+    if not isinstance(table_dispositions, list):
+        raise PublishDataValidationError(f'{paper_label} v6 tables 处置表缺失')
+    seen = set()
+    deterministic_tables = []
+    for item in table_dispositions:
+        if not isinstance(item, dict) or item.get('sourceTableId') in seen:
+            raise PublishDataValidationError(f'{paper_label} v6 table disposition 非法或重复')
+        table_id = str(item.get('sourceTableId') or '')
+        source = inventory['tables'].get(table_id)
+        seen.add(table_id)
+        if not source or item.get('disposition') not in {'inline', 'appendix', 'omit'}:
+            raise PublishDataValidationError(f'{paper_label} v6 table 不属于 ArtifactIndex')
+        matrix_sha = _manual_v6_hash(source.get('matrix'))
+        if (source.get('matrixSha256') != matrix_sha
+                or item.get('sourceMatrixSha256') != matrix_sha):
+            raise PublishDataValidationError(f'{paper_label} {table_id} matrix SHA 漂移')
+        expected_cells = _manual_v6_numeric_cell_ids(source)
+        covered = item.get('coveredNumericCellIds')
+        if not isinstance(covered, list) or len(covered) != len(set(covered)):
+            raise PublishDataValidationError(f'{paper_label} {table_id} 数值单元格绑定非法')
+        if source.get('kind') == 'result' and (item.get('disposition') == 'omit' or set(covered) != set(expected_cells)):
+            raise PublishDataValidationError(f'{paper_label} {table_id} 结果表未逐数值完整覆盖')
+        if item.get('disposition') != 'omit':
+            block = block_by_id.get(item.get('blockId'))
+            rendered = _manual_v6_render_table(source)
+            if (not block or item.get('renderedMarkdown') != rendered
+                    or item.get('renderedFragmentSha256') != _manual_v6_text_sha(rendered)
+                    or rendered not in _manual_v6_text(block.get('markdown'))):
+                raise PublishDataValidationError(f'{paper_label} {table_id} 未由矩阵确定性渲染进入绑定 block')
+            deterministic_tables.append(rendered)
+        elif len(_manual_v6_text(item.get('omissionReason'))) < 24:
+            raise PublishDataValidationError(f'{paper_label} {table_id} 省略原因过短')
+    if seen != set(inventory['tables']):
+        raise PublishDataValidationError(f'{paper_label} v6 未逐项处置全部表格')
+
+    def validate_dispositions(field, inventory_field, *, figures=False, formulas=False):
+        items = bundle.get(field)
+        if not isinstance(items, list):
+            raise PublishDataValidationError(f'{paper_label} v6 {field} 处置表缺失')
+        handled = set()
+        for item in items:
+            if not isinstance(item, dict):
+                raise PublishDataValidationError(f'{paper_label} v6 {field} 项非法')
+            item_id = str(item.get('id') or item.get('url') or '')
+            source = inventory[inventory_field].get(item_id)
+            if not source or item_id in handled or item.get('disposition') not in {'inline', 'appendix', 'omit'}:
+                raise PublishDataValidationError(f'{paper_label} v6 {field} 身份/处置非法')
+            handled.add(item_id)
+            if item['disposition'] == 'omit':
+                if len(_manual_v6_text(item.get('omissionReason'))) < 24:
+                    raise PublishDataValidationError(f'{paper_label} {field}.{item_id} 省略原因过短')
+                continue
+            block = block_by_id.get(item.get('blockId'))
+            markdown = _manual_v6_text(block.get('markdown')) if block else ''
+            if figures:
+                url = str(source.get('url') or '')
+                facts = item.get('visibleFacts')
+                if not url or url not in markdown or not isinstance(facts, list) or not facts \
+                        or any(len(_manual_v6_text(fact)) < 12 or _manual_v6_text(fact) not in markdown for fact in facts):
+                    raise PublishDataValidationError(f'{paper_label} 图片 {item_id} 缺 URL/像素事实正文绑定')
+            if formulas:
+                formula = _manual_v6_text(source.get('raw') or source.get('latex') or source.get('text'))
+                explanation = _manual_v6_require_text(item.get('explanation'), f'{paper_label}.formula.{item_id}', 40)
+                if explanation not in markdown or (formula and formula not in markdown):
+                    raise PublishDataValidationError(f'{paper_label} 公式 {item_id} 缺原式/解释正文绑定')
+        if handled != set(inventory[inventory_field]):
+            raise PublishDataValidationError(f'{paper_label} v6 未逐项处置全部 {field}')
+    validate_dispositions('figures', 'figures', figures=True)
+    validate_dispositions('formulas', 'formulas', formulas=True)
+
+    terms = bundle.get('terms')
+    if not isinstance(terms, list):
+        raise PublishDataValidationError(f'{paper_label} v6 terms 缺失')
+    handled_terms = set()
+    for item in terms:
+        if not isinstance(item, dict) or item.get('id') in handled_terms or item.get('id') not in inventory['acronyms']:
+            raise PublishDataValidationError(f'{paper_label} v6 term 身份非法')
+        handled_terms.add(item['id'])
+        term = _manual_v6_require_text(item.get('term'), f'{paper_label}.term', 2)
+        definition = _manual_v6_require_text(item.get('definition'), f'{paper_label}.definition', 16)
+        block = block_by_id.get(item.get('firstUseBlockId'))
+        if not block or term not in _manual_v6_text(block.get('markdown')) or definition not in _manual_v6_text(block.get('markdown')):
+            raise PublishDataValidationError(f'{paper_label} 术语 {term} 未在首次出现处定义')
+    if handled_terms != set(inventory['acronyms']):
+        raise PublishDataValidationError(f'{paper_label} v6 未覆盖全部术语')
+
+    related = bundle.get('relatedWorks')
+    if not isinstance(related, list):
+        raise PublishDataValidationError(f'{paper_label} v6 relatedWorks 缺失')
+    handled_related = set()
+    for item in related:
+        if not isinstance(item, dict) or item.get('citationId') in handled_related \
+                or item.get('citationId') not in inventory['citations']:
+            raise PublishDataValidationError(f'{paper_label} v6 related-work 身份非法')
+        handled_related.add(item['citationId'])
+        relationship = _manual_v6_require_text(item.get('relationship'), f'{paper_label}.relationship', 16)
+        difference = _manual_v6_require_text(item.get('difference'), f'{paper_label}.difference', 16)
+        block = block_by_id.get(item.get('blockId'))
+        if not block or relationship not in _manual_v6_text(block.get('markdown')) or difference not in _manual_v6_text(block.get('markdown')):
+            raise PublishDataValidationError(f'{paper_label} related-work 缺关系/差异正文绑定')
+    if handled_related != set(inventory['citations']):
+        raise PublishDataValidationError(f'{paper_label} v6 未覆盖全部 related-work 引用')
+
+    return {
+        'paperId': paper_id, 'article': article, 'articleSha256': article_sha,
+        'artifactIndexSha256': artifact_sha, 'provenance': dict(provenance),
+        'bundle': bundle, 'artifactIndex': artifact, 'deterministicTables': deterministic_tables,
+    }
 
 
 def _normalize_manual_evidence(value):
@@ -955,7 +1423,10 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
                 raise PublishDataValidationError(
                     f'{paper_label} manual v4 readabilityRubric SHA 不一致'
                 )
-        if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V5:
+        if manual_depth in {
+                MANUAL_DEPTH_CONTRACT_VERSION_V5,
+                MANUAL_DEPTH_CONTRACT_VERSION_V6,
+        }:
             if contracts.get('researcherFocus') != MANUAL_RESEARCH_CONTRACT_VERSION \
                     or contracts.get('perPaperSubagent') != 'isolated-single-paper-v1':
                 raise PublishDataValidationError(
@@ -1068,11 +1539,6 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
                 raise PublishDataValidationError(
                     f'{paper_label} manual v5 发布前无法读取全文 manifest: {exc}'
                 ) from exc
-            if hashlib.sha256(source_manifest_bytes).hexdigest() != \
-                    acquisition.get('fullTextManifestSha256'):
-                raise PublishDataValidationError(
-                    f'{paper_label} manual v5 发布前全文 manifest SHA 漂移'
-                )
             source_id = normalize_publish_arxiv_id(acquisition.get('sourceId'))
             source_entry = (source_manifest.get('papers') or {}).get(source_id)
             if (not isinstance(source_entry, dict)
@@ -1083,6 +1549,72 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
                 raise PublishDataValidationError(
                     f'{paper_label} manual v5 发布前全文 manifest membership 不一致'
                 )
+            identity_mode = _manual_paper_identity_mode(contracts, paper_label)
+            if identity_mode == 'per_paper_v1':
+                artifact_manifest_path = source_manifest_path.parent / 'artifacts' / 'manifest.json'
+                try:
+                    artifact_manifest = json.loads(artifact_manifest_path.read_text(encoding='utf-8'))
+                    artifact_entry = (artifact_manifest.get('papers') or {}).get(source_id)
+                    artifact_path = Path((artifact_entry or {}).get('path', '')).resolve(strict=True)
+                    artifact_path.relative_to(artifact_manifest_path.parent.resolve(strict=True))
+                    artifact_bytes = artifact_path.read_bytes()
+                    artifact_index = json.loads(artifact_bytes.decode('utf-8'))
+                except (OSError, RuntimeError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                    raise PublishDataValidationError(
+                        f'{paper_label} 发布前无法重放逐论文 ArtifactIndex: {exc}'
+                    ) from exc
+                snapshot = source_entry.get('structuredArtifactsSnapshot')
+                if (not isinstance(artifact_entry, dict)
+                        or artifact_entry.get('status') != 'complete'
+                        or artifact_entry.get('inventoryStatus') != 'complete'
+                        or artifact_entry.get('paperId') != source_id
+                        or artifact_entry.get('parserVersion') != MANUAL_ARTIFACT_PARSER_VERSION_V2
+                        or artifact_entry.get('sourceSha256') != source_entry.get('sourceSha256')
+                        or artifact_entry.get('sourceIdentitySha256') != source_entry.get('sourceIdentitySha256')
+                        or artifact_entry.get('paperInputSha256') != source_entry.get('paperInputSha256')
+                        or not isinstance(snapshot, dict)
+                        or snapshot.get('healthStatus') != 'complete'
+                        or snapshot.get('payloadSha256') != artifact_entry.get('structuredArtifactsSha256')
+                        or artifact_entry.get('bytes') != len(artifact_bytes)
+                        or artifact_entry.get('outputSha256') != hashlib.sha256(artifact_bytes).hexdigest()
+                        or artifact_index.get('paperId') != source_id
+                        or (artifact_index.get('inventoryHealth') or {}).get('status') != 'complete'
+                        or artifact_index.get('artifactIndexSha256') != artifact_entry.get('artifactIndexSha256')):
+                    raise PublishDataValidationError(
+                        f'{paper_label} 逐论文 ArtifactIndex 未与全文、manifest 和真实文件闭环'
+                    )
+                expected_identity = {
+                    'contract': MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT,
+                    'date': source_manifest.get('date'),
+                    'paperId': source_id,
+                    'fullText': {
+                        'requestedArxivId': normalize_publish_arxiv_id(source_entry.get('requestedArxivId')),
+                        'sourceSha256': source_entry.get('sourceSha256'),
+                        'sourceIdentitySha256': source_entry.get('sourceIdentitySha256'),
+                        'paperMetadataSha256': source_entry.get('paperMetadataSha256'),
+                        'paperInputSha256': source_entry.get('paperInputSha256'),
+                        'bytes': source_entry.get('bytes'),
+                        'imageInfosSha256': _manual_hash(source_entry.get('imageInfos') or []),
+                        'fileName': Path(source_entry.get('path', '')).name,
+                    },
+                    'artifactIndex': {
+                        'parserVersion': artifact_entry.get('parserVersion'),
+                        'structuredArtifactsSha256': artifact_entry.get('structuredArtifactsSha256'),
+                        'artifactIndexSha256': artifact_entry.get('artifactIndexSha256'),
+                        'fileSha256': artifact_entry.get('outputSha256'),
+                        'bytes': artifact_entry.get('bytes'),
+                        'fileName': artifact_path.name,
+                    },
+                }
+                declared_identity = acquisition.get('paperSourceIdentity')
+                if (not isinstance(declared_identity, dict)
+                        or declared_identity.get('contract') != MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT
+                        or declared_identity.get('value') != expected_identity
+                        or declared_identity.get('sha256') != _manual_hash(expected_identity)
+                        or _manual_hash(declared_identity.get('value')) != declared_identity.get('sha256')):
+                    raise PublishDataValidationError(
+                        f'{paper_label} 逐论文来源身份与当前全文/ArtifactIndex 不一致'
+                    )
         evidence = takeover.get('stageEvidence')
         stages = manifest.get('stages') or {}
         if not isinstance(evidence, dict):
@@ -1125,7 +1657,10 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
                 for optional_key in ('mime', 'sha256', 'bytes'):
                     if optional_key in info:
                         normalized[optional_key] = info.get(optional_key)
-                if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V5:
+                if manual_depth in {
+                        MANUAL_DEPTH_CONTRACT_VERSION_V5,
+                        MANUAL_DEPTH_CONTRACT_VERSION_V6,
+                }:
                     normalized.update({
                         'reviewDecision': info.get('reviewDecision'),
                         'reviewReason': info.get('reviewReason'),
@@ -1231,6 +1766,8 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
             })
             if item['auditSha256'] != expected_audit_sha:
                 raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage}.auditSha256 闭环校验失败')
+        if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V6:
+            validate_manual_v6_payload(paper)
         return
     if takeover.get('version') != 1 or takeover.get('mode') != MANUAL_COMPLETE_STATUS:
         raise PublishDataValidationError(f'{paper_label} manualTakeover.version/mode 非法')
@@ -2083,7 +2620,7 @@ def _final_manual_depth_contract(markdown, paper=None):
                 return value
     match = re.search(
         rf'^paper_digest_manual_depth:\s*["\']?'
-        rf'({re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V4)}|{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V5)})["\']?\s*$',
+        rf'({re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V4)}|{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V5)}|{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V6)})["\']?\s*$',
         str(markdown or ''), flags=re.MULTILINE,
     )
     return match.group(1) if match else None
@@ -2133,22 +2670,105 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
         if isinstance(contracts, dict) \
                 and contracts.get('manualDepth') in MANUAL_READER_QUALITY_VERSIONS \
                 and not re.search(
-                    rf'^paper_digest_manual_depth:\s*["\']?(?:{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V4)}|{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V5)})["\']?\s*$',
+                    rf'^paper_digest_manual_depth:\s*["\']?(?:{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V4)}|{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V5)}|{re.escape(MANUAL_DEPTH_CONTRACT_VERSION_V6)})["\']?\s*$',
                     str(markdown or ''), flags=re.MULTILINE,
                 ):
             return '最终 Markdown 缺少 Manual v4 深度标记'
 
     reader_view = _manual_v4_reader_view(markdown)
-    is_v5_reader_article = manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V5
+    is_v5_reader_article = manual_depth in {
+        MANUAL_DEPTH_CONTRACT_VERSION_V5,
+        MANUAL_DEPTH_CONTRACT_VERSION_V6,
+    }
     required = (
+        ('核心摘要', '深度解读', '评分依据与证据（展开查看）')
+        if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V6 else
         ('核心摘要', '深度解读') if is_v5_reader_article else
         ('核心摘要', '方法概述和架构', '核心创新点', '实验结果',
          '细节详述', '局限与问题')
     )
     missing = [heading for heading in required if not _extract_analysis_section(reader_view, heading)]
     if missing:
-        version = 'v5' if is_v5_reader_article else 'v4'
+        version = 'v6' if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V6 \
+            else ('v5' if is_v5_reader_article else 'v4')
         return f'最终 Markdown 缺少 Manual {version} 读者章节: {"、".join(missing)}'
+
+    v6_payload = None
+    if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V6:
+        if not isinstance(paper, dict):
+            return '最终 Manual v6 页面缺少 authoritative canonical paper'
+        try:
+            v6_payload = validate_manual_v6_payload(paper)
+        except PublishDataValidationError as exc:
+            return f'最终 Manual v6 canonical 闭环无效: {exc}'
+        provenance = v6_payload['provenance']
+        marker_values = {
+            'paper_digest_reader_longform': MANUAL_LONGFORM_CONTRACT_VERSION_V2,
+            'paper_digest_reader_longform_sha256': provenance['readerLongformSha256'],
+            'paper_digest_reader_article_sha256': v6_payload['articleSha256'],
+            'paper_digest_artifact_index_sha256': v6_payload['artifactIndexSha256'],
+            'paper_digest_v6_spec_root_sha256': provenance['specRootSha256'],
+            'paper_digest_v6_paper_spec_sha256': provenance['paperSpecSha256'],
+            'paper_digest_v6_sealed_record_sha256': provenance['sealedRecordSha256'],
+            'paper_digest_v6_record_file_sha256': provenance['recordFileSha256'],
+            'paper_digest_v6_artifact_index_file_sha256': provenance['artifactIndexFileSha256'],
+            'paper_digest_v6_records_envelope_file_sha256': provenance['recordsEnvelopeFileSha256'],
+            'paper_digest_v6_task_evidence_sha256': provenance['taskEvidenceSha256'],
+        }
+        for field, expected in marker_values.items():
+            match = re.search(
+                rf'^{re.escape(field)}:\s*["\']?([^"\'\s]+)["\']?\s*$',
+                str(markdown or ''), flags=re.MULTILINE,
+            )
+            if not match or match.group(1) != expected:
+                return f'最终 Manual v6 页面 {field} 与 canonical 绑定不一致'
+        nested_article = re.sub(
+            r'^(#{1,6})(\s+)',
+            lambda match: '#' * max(len(match.group(1)), 4) + match.group(2),
+            v6_payload['article'], flags=re.MULTILINE,
+        )
+        expected_article = sanitize_markdown_for_publish(nested_article).strip()
+        actual_article = _extract_analysis_section(reader_view, '深度解读').strip()
+        actual_article = actual_article.split(
+            '\n<details>\n<summary>📎 论文与评分元数据</summary>', 1,
+        )[0].strip()
+        if actual_article != expected_article:
+            return '最终 Manual v6 深度正文不再是 canonical blocks 的确定性渲染'
+        scoring_reason = str((paper.get('parsed') or {}).get('scoringReason') or '').strip()
+        scoring_section = _extract_analysis_section(
+            reader_view, '评分依据与证据（展开查看）',
+        )
+        expected_scoring = sanitize_markdown_for_publish(re.sub(
+            r'^(#{1,6})(\s+)',
+            lambda match: '#' * max(len(match.group(1)), 4) + match.group(2),
+            scoring_reason, flags=re.MULTILINE,
+        )).strip()
+        if not expected_scoring or expected_scoring not in scoring_section:
+            return '最终 Manual v6 评分依据没有与 canonical scoringReason 闭环'
+        for table in v6_payload['deterministicTables']:
+            if table not in actual_article:
+                return '最终 Manual v6 页面遗漏或改写了 ArtifactIndex 确定性表格'
+        bundle = v6_payload['bundle']
+        artifact = v6_payload['artifactIndex']
+        formulas = {
+            str(item.get('id') or item.get('url') or ''): item
+            for item in artifact.get('formulas') or [] if isinstance(item, dict)
+        }
+        for item in bundle.get('formulas') or []:
+            if item.get('disposition') == 'omit':
+                continue
+            source = formulas.get(str(item.get('id') or item.get('url') or ''), {})
+            raw = _manual_v6_text(source.get('raw') or source.get('latex') or source.get('text'))
+            if (raw and raw not in actual_article) or _manual_v6_text(item.get('explanation')) not in actual_article:
+                return '最终 Manual v6 页面公式原式或教学解释缺失'
+        for item in bundle.get('terms') or []:
+            if (_manual_v6_text(item.get('term')) not in actual_article
+                    or _manual_v6_text(item.get('definition')) not in actual_article):
+                return '最终 Manual v6 页面术语首次定义缺失'
+        for item in bundle.get('relatedWorks') or []:
+            if (_manual_v6_text(item.get('relationship')) not in actual_article
+                    or _manual_v6_text(item.get('difference')) not in actual_article):
+                return '最终 Manual v6 页面 related-work 关系或差异缺失'
 
     if isinstance(paper, dict):
         manifest = paper.get('analysisManifest')
@@ -2177,6 +2797,20 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
         ]
     occurrences = _final_markdown_image_occurrences(reader_view)
     occurrence_urls = [url for _index, url, _blocks in occurrences]
+    if v6_payload is not None:
+        figure_sources = {
+            str(item.get('id') or item.get('url') or ''): str(item.get('url') or '')
+            for item in v6_payload['artifactIndex'].get('figures') or []
+            if isinstance(item, dict)
+        }
+        expected_figure_urls = [
+            figure_sources.get(str(item.get('id') or item.get('url') or ''), '')
+            for item in v6_payload['bundle'].get('figures') or []
+            if isinstance(item, dict) and item.get('disposition') != 'omit'
+        ]
+        if (not all(expected_figure_urls)
+                or sorted(occurrence_urls) != sorted(expected_figure_urls)):
+            return '最终 Manual v6 图片没有逐项以独立 Markdown 图块进入正文'
     if selected is not None and occurrence_urls != selected:
         return '最终 Markdown 图片 URL/顺序与 selectedImageUrls 不一致'
     for index, url, blocks in occurrences:

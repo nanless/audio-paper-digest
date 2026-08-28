@@ -24,6 +24,9 @@ load_project_env()
 from blog_entry_loader import load_publish_to_blog
 from runtime_guard import require_external_runtime
 
+REQUIRED_REVIEW_MODEL = 'gpt-5.6-terra'
+REQUIRED_REVIEW_REASONING = 'high'
+
 
 BJ = timezone(timedelta(hours=8))
 
@@ -40,7 +43,7 @@ def _sha256(path):
     return digest.hexdigest()
 
 
-def _parse_args(module):
+def _parse_args(module, argv=None):
     parser = argparse.ArgumentParser(
         prog='manual-review-blog.py',
         description='在 LLM review 不可用时，以完整 provenance 签发 manual_complete 审查凭证。',
@@ -49,8 +52,16 @@ def _parse_args(module):
     parser.add_argument('--date', required=True, metavar='YYYY-MM-DD')
     parser.add_argument('--attestation', required=True,
                         help='JSON 人工语义审查声明；必须声明所有检查为 true')
-    args = parser.parse_args()
-    return module.validate_publish_date(args.date), Path(args.attestation).expanduser().resolve()
+    parser.add_argument('--include-id', action='append', metavar='ARXIV_ID',
+                        help='只签发该单篇灰度 generation 的 Manual review 凭证')
+    args = parser.parse_args(argv)
+    if args.include_id and len(args.include_id) > 1:
+        parser.error('--include-id 只能指定一次')
+    return (
+        module.validate_publish_date(args.date),
+        Path(args.attestation).expanduser().resolve(),
+        args.include_id[0] if args.include_id else None,
+    )
 
 
 def _load_attestation(path):
@@ -133,9 +144,12 @@ def _load_attestation(path):
                 or not isinstance(subagent.get('taskName'), str)
                 or len(subagent['taskName'].strip()) < 4
                 or subagent.get('singleFileOnly') is not True
-                or subagent.get('isolatedContext') is not True):
+                or subagent.get('isolatedContext') is not True
+                or subagent.get('model') != REQUIRED_REVIEW_MODEL
+                or subagent.get('reasoningEffort') != REQUIRED_REVIEW_REASONING):
             raise ValueError(
-                f'attestation.files[{index}].reviewSubagent 必须证明独立单页 subagent 审查'
+                f'attestation.files[{index}].reviewSubagent 必须证明独立单页 '
+                f'{REQUIRED_REVIEW_MODEL}/{REQUIRED_REVIEW_REASONING} subagent 审查'
             )
         if current_v3:
             task_name = subagent['taskName'].strip()
@@ -273,6 +287,22 @@ def _require_current_attestation_version(module, generation_payload, attestation
         )
 
 
+def _validate_attestation_publication_scope(module, generation_payload, attestation):
+    generation_scope = generation_payload.get('publicationScope')
+    attestation_scope = attestation.get('publicationScope')
+    if generation_scope != attestation_scope:
+        raise module.PublishDataValidationError(
+            'Manual attestation 发布作用域与 generation manifest 不一致'
+        )
+    if generation_scope is not None:
+        module._validate_active_publication_scope(generation_payload)
+        if attestation.get('version') != 3 or len(attestation.get('files') or []) != 1:
+            raise module.PublishDataValidationError(
+                '单篇灰度 Manual attestation 必须为 v3 且精确包含一个页面'
+            )
+    return generation_scope
+
+
 def _semantic_checks(module, paths, date_str):
     """Run conservative, deterministic content checks before attestation."""
     hard_forbidden = (
@@ -340,6 +370,7 @@ def _run(module, date_str, attestation_path):
     authoritative_by_id = {}
     if generation_payload.get('schemaVersion') == 3:
         _require_current_attestation_version(module, generation_payload, attestation)
+        _validate_attestation_publication_scope(module, generation_payload, attestation)
         for paper in generation_payload.get('publishedPapers') or []:
             if not isinstance(paper, dict):
                 raise module.PublishDataValidationError(
@@ -424,10 +455,16 @@ def _run(module, date_str, attestation_path):
             )
     _reject_deterministic_fixes(module, fixes)
 
-    module.validate_staged_posts(content_dir, date_str, date_only=True)
+    module.validate_staged_posts(
+        content_dir, date_str, date_only=True, publish_paths=paths,
+    )
     checked_files = _semantic_checks(module, paths, date_str)
-    gate = module.run_hugo_gate(blog_repo, content_dir, required=True)
-    module.validate_staged_posts(content_dir, date_str, date_only=True)
+    gate = module.run_hugo_gate(
+        blog_repo, content_dir, required=True, source_paths=paths,
+    )
+    module.validate_staged_posts(
+        content_dir, date_str, date_only=True, publish_paths=paths,
+    )
 
     protocol = module.review_protocol_fingerprint()
     reviewed = {}
@@ -473,16 +510,26 @@ def main():
     setup_script_logging(__file__)
     module = load_publish_to_blog()
     try:
-        date_str, attestation = _parse_args(module)
-        with module.blog_publication_lock(date_str):
-            receipt = _run(module, date_str, attestation)
+        date_str, attestation, include_id = _parse_args(module)
+        with module.publication_scope(include_id):
+            expected_attestation = module.manual_review_attestation_path(date_str)
+            if include_id and attestation != expected_attestation.resolve():
+                raise module.PublishDataValidationError(
+                    f'单篇灰度 Manual review 只接受隔离 attestation: {expected_attestation}'
+                )
+            with module.blog_publication_lock(date_str):
+                receipt = _run(module, date_str, attestation)
     except (ValueError, module.PublishDataValidationError) as exc:
         print(f'\n❌ manual_complete review 失败，未签发凭证: {exc}')
         sys.exit(1)
     except TimeoutError as exc:
         print(f'\n❌ 博客仓库或同日期事务正在运行: {exc}')
         sys.exit(1)
-    print(f'\n✅ manual_complete review 完成；下一步: python3 scripts/push-blog.py --date {date_str}')
+    include_hint = f' --include-id {include_id}' if include_id else ''
+    print(
+        f'\n✅ manual_complete review 完成；下一步: python3 scripts/push-blog.py '
+        f'--date {date_str}{include_hint}'
+    )
     return receipt
 
 

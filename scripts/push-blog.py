@@ -3,6 +3,7 @@
 
 import argparse
 import sys
+from contextlib import nullcontext
 
 from project_env import load_project_env
 load_project_env()
@@ -21,12 +22,19 @@ def parse_options(module, argv=None):
                         help='博客批次日期（YYYY-MM-DD；省略时为北京时间今天）')
     parser.add_argument('--require-visual-plan', action='store_true',
                         help='视觉规划失败时以非零状态退出（默认日更编排使用）')
+    parser.add_argument('--include-id', action='append', metavar='ARXIV_ID',
+                        help='只推送该单篇灰度 generation；必须与生成/review 时 ID 一致')
     args = parser.parse_args(argv)
     if args.date and len(args.date) > 1:
         parser.error('--date 只能指定一次')
+    if args.include_id and len(args.include_id) > 1:
+        parser.error('--include-id 只能指定一次')
+    if args.include_id and args.require_visual_plan:
+        parser.error('单篇灰度发布不建立批次视觉任务，--include-id 与 --require-visual-plan 互斥')
     return (
         module.validate_publish_date(module.get_today_bj(args.date[0] if args.date else None)),
         args.require_visual_plan,
+        args.include_id[0] if args.include_id else None,
     )
 
 
@@ -41,27 +49,31 @@ def main():
     module = load_publish_to_blog()
     try:
         module.validate_publish_target()
-        date_str, require_visual_plan = parse_options(module)
-        with module.blog_publication_lock(date_str):
-            paths, receipt = module.load_verified_review_receipt(date_str)
-            visual_capable = module.preflight_post_publish_visual_capability(
-                date_str, require_visual_plan=require_visual_plan,
-            )
-            module.validate_git_publish_branch()
-            module.validate_git_index(paths)
-            print(f'🧾 已验证审查凭证: {receipt}')
-            print(f'📦 直接提交推送 {len(paths)} 个已审查路径（不生成、不 review）')
-            if not module.git_push(date_str, paths):
-                raise module.PublishDataValidationError('Git 提交或推送未完成')
-            if visual_capable:
-                print('🎨 全部博客已发布并通过远端 OID 校验，开始建立发布后视觉任务')
-                visual_planned = module.plan_post_publish_visual_assets(date_str)
-                if require_visual_plan and not visual_planned:
-                    print('\n❌ 博客已发布并验证远端 OID，但发布后视觉任务规划失败')
-                    print(f'   可重试: npm run visual:post-publish -- --date {date_str}')
-                    sys.exit(2)
-            else:
-                visual_planned = None
+        date_str, require_visual_plan, include_id = parse_options(module)
+        scope_context = getattr(module, 'publication_scope', lambda _value: nullcontext())
+        with scope_context(include_id):
+            with module.blog_publication_lock(date_str):
+                paths, receipt = module.load_verified_review_receipt(date_str)
+                visual_capable = module.preflight_post_publish_visual_capability(
+                    date_str, require_visual_plan=require_visual_plan,
+                )
+                module.validate_git_publish_branch()
+                if include_id:
+                    module.validate_single_publication_worktree(paths)
+                module.validate_git_index(paths)
+                print(f'🧾 已验证审查凭证: {receipt}')
+                print(f'📦 直接提交推送 {len(paths)} 个已审查路径（不生成、不 review）')
+                if not module.git_push(date_str, paths):
+                    raise module.PublishDataValidationError('Git 提交或推送未完成')
+                if visual_capable:
+                    print('🎨 全部博客已发布并通过远端 OID 校验，开始建立发布后视觉任务')
+                    visual_planned = module.plan_post_publish_visual_assets(date_str)
+                    if require_visual_plan and not visual_planned:
+                        print('\n❌ 博客已发布并验证远端 OID，但发布后视觉任务规划失败')
+                        print(f'   可重试: npm run visual:post-publish -- --date {date_str}')
+                        sys.exit(2)
+                else:
+                    visual_planned = None
     except module.PublishDataValidationError as exc:
         print(f'\n❌ 博客推送失败: {exc}')
         sys.exit(1)
@@ -72,6 +84,8 @@ def main():
         print('\n🎉 全部博客推送完成；TOP 10 论文长图与汇总图任务已建立！')
     elif visual_planned is False:
         print('\n🎉 全部博客推送完成；发布后视觉任务尚待重试。')
+    elif include_id:
+        print('\n🎉 单篇灰度博客推送完成；未修改汇总页，也未建立批次视觉任务。')
     else:
         print('\n🎉 历史维护博客推送完成；该 generation schema 不适用发布后视觉任务。')
 

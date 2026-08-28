@@ -33,6 +33,11 @@ const {
     validateManualTakeoverManifest
 } = require('./analysis-contract.js');
 const { getCanonicalAnalysisRunSummary } = require('./analysis-engine.js');
+const {
+    MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT,
+    validateManualPaperSourceIdentity
+} = require('./manual-paper-source-identity.js');
+const { resolveArtifactAuthority } = require('./manual-fresh-authoring-contract.js');
 
 const ALLOWED_DIGEST_STATUSES = new Set(['seen', 'pending_analysis', 'analyzed', 'analysis_failed']);
 const ALLOWED_ANALYSIS_ATTEMPT_STATUSES = new Set(['analyzed', 'analysis_failed']);
@@ -80,6 +85,22 @@ function stableContentSha256(value) {
         return item;
     };
     return crypto.createHash('sha256').update(JSON.stringify(normalize(value))).digest('hex');
+}
+
+function resolveManualPaperIdentityMode(manifest) {
+    const identityMarker = manifest?.contracts?.paperSourceIdentity;
+    const freshMarker = manifest?.contracts?.freshAuthoring;
+    const tutorialMarker = manifest?.contracts?.tutorialPayload;
+    if (identityMarker === undefined) {
+        if (freshMarker !== undefined || tutorialMarker !== undefined) {
+            throw new Error('fresh/tutorial canonical 缺少逐论文来源身份，禁止按历史记录放行');
+        }
+        return 'historical_per_entry';
+    }
+    if (identityMarker !== MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT) {
+        throw new Error('逐论文来源身份契约标记非法');
+    }
+    return 'per_paper_v1';
 }
 
 function getBeijingBatchDate(timestamp) {
@@ -521,12 +542,11 @@ function loadBoundManualV4SourceText(filePath, batchDate, paper, paperIndex) {
             return { required: true, error: `${prefix} 无法重建 filtered 输入身份: ${error.message}` };
         }
         const input = context.byId.get(paperId);
-        let sourceManifestSha256 = '';
+        let identityMode;
         try {
-            sourceManifestSha256 = crypto.createHash('sha256')
-                .update(fs.readFileSync(sourceManifestPath)).digest('hex');
+            identityMode = resolveManualPaperIdentityMode(manifest);
         } catch (error) {
-            return { required: true, error: `${prefix} 无法重算 full-text manifest SHA: ${error.message}` };
+            return { required: true, error: `${prefix} ${error.message}` };
         }
         if (!input
             || sourceManifest.version !== 2
@@ -543,13 +563,36 @@ function loadBoundManualV4SourceText(filePath, batchDate, paper, paperIndex) {
             || acquisition.paperMetadataSha256 !== input.paperMetadataSha256
             || acquisition.paperInputSha256 !== input.paperInputSha256
             || acquisition.filteredBatchSha256 !== context.filteredBatchSha256
-            || acquisition.fullTextManifestSha256 !== sourceManifestSha256
             || !SHA256_RE.test(String(acquisition.recordsSourcesSha256 || ''))
             || acquisition.imageInfosSha256 !== stableContentSha256(entry.imageInfos || [])) {
             return {
                 required: true,
                 error: `${prefix} 未通过 filtered/full-text/metadata/input/source/image assembler 全文闭环`
             };
+        }
+        if (identityMode === 'per_paper_v1') {
+            const artifactManifestPath = path.join(realRoot, 'artifacts', 'manifest.json');
+            try {
+                const artifact = resolveArtifactAuthority(artifactManifestPath, {
+                    date: batchDate,
+                    paperId,
+                    filteredBatchSha256: context.filteredBatchSha256,
+                    sourceSha256: entry.sourceSha256,
+                    sourceIdentitySha256: entry.sourceIdentitySha256,
+                    paperInputSha256: entry.paperInputSha256
+                });
+                validateManualPaperSourceIdentity(acquisition.paperSourceIdentity, {
+                    date: batchDate,
+                    paperId,
+                    fullTextEntry: entry,
+                    artifactEntry: artifact.entry
+                });
+            } catch (error) {
+                return {
+                    required: true,
+                    error: `${prefix} 逐论文全文/ArtifactIndex 身份闭环失败: ${error.message}`
+                };
+            }
         }
     }
 
@@ -1522,5 +1565,6 @@ module.exports = {
     validateSourceHealth,
     loadBoundManualV4SourceText,
     validateManualV4CanonicalSourceClosure: loadBoundManualV4SourceText,
+    resolveManualPaperIdentityMode,
     hasAnyCurrentDataFiles
 };

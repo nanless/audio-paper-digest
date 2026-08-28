@@ -53,6 +53,7 @@ from publish_common import (  # noqa: E402
     MANUAL_AUDIT_CHECKS,
     MANUAL_STAGE_EVIDENCE_STAGES,
     _manual_hash,
+    _manual_paper_identity_mode,
     _manual_editorial_prose_paragraphs,
     _manual_han_character_count,
     _manual_numeric_lexemes,
@@ -273,6 +274,32 @@ def manual_result_claim_fixture(
 
 
 class PublishCommonSanitizerTest(unittest.TestCase):
+    def test_manual_paper_identity_mode_only_allows_true_historical_fallback(self):
+        self.assertEqual(
+            _manual_paper_identity_mode(
+                {'manualDepth': 'full-text-evidence-v5'}, 'historical fixture'
+            ),
+            'historical_per_entry',
+        )
+        for marker in ('freshAuthoring', 'tutorialPayload'):
+            with self.subTest(marker=marker), self.assertRaisesRegex(
+                    PublishDataValidationError,
+                    'fresh/tutorial canonical 缺少逐论文来源身份'):
+                _manual_paper_identity_mode({
+                    'manualDepth': 'full-text-evidence-v5',
+                    marker: f'{marker}-fixture',
+                }, 'fresh fixture')
+        self.assertEqual(_manual_paper_identity_mode({
+            'manualDepth': 'full-text-evidence-v5',
+            'freshAuthoring': 'fresh-authoring-v1',
+            'tutorialPayload': 'manual-v5-tutorial-payload-v1',
+            'paperSourceIdentity': 'manual-paper-source-identity-v1',
+        }), 'per_paper_v1')
+        with self.assertRaisesRegex(PublishDataValidationError, '契约标记非法'):
+            _manual_paper_identity_mode({
+                'paperSourceIdentity': 'manual-paper-source-identity-v0',
+            })
+
     def test_manual_numeric_lexemes_collapse_only_adjacent_duplicate_decimals(self):
         # PDF/HTML MathML fallbacks may duplicate the same rendered decimal
         # without a separator.  Source quotes are intentionally retained as

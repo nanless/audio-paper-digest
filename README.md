@@ -4,7 +4,21 @@
 
 本项目用于生成“语音/音乐/音频论文速递”。默认日更采用 Manual v5：联网抓取后，每篇论文由独立 subagent 在隔离上下文中完成筛选、全文研究者解读、评分和页面审查；LLM/API 自动筛选与分析保留为用户显式选择的可选路线。Node 端配置集中在 `scripts/config.js`，Python 发布路径集中在 `scripts/path_config.py`。
 
-逐论文筛选、理解、主要正文、评分、可读性复核和最终单页审查 subagent 统一使用 `gpt-5.6-terra`、reasoning `high`；Sol 主 Agent 只负责队列、代码、确定性门禁、组装和发布。正文先建立“中心技术矛盾—递进读者问题—证据柱—结论回收”的编辑蓝图，再按论文主张组织图表和实验，而不是按字段或论文目录机械扩写。新 records 使用 `editorialPlan` v2：读者标题、核心判断、问题回答、证据柱和每节锚句都必须可在最终正文中逐一定位；`editorial.readerArticle` 则是发布页唯一的连续深度解读，用论文特有小节替代“方法/创新/实验/细节/局限”模板栏目。每条实验结论还须提供可直接给读者看的自然语言解释，不能把方法/基线/指标/数值拼成字段串。独立页固定按“中文题目 → 英文题目/arXiv 链接 → 标签/八维评分 → 毒舌点评 → 核心摘要 → 开源资源 → 深度解读 → 文末评分证据”组织；每日汇总卡片保留前六项中的“中文题目 + 英文题目/链接 + 标签/评分 → 毒舌点评 → 核心摘要 → 开源资源”。毒舌点评必须同时给出最扎实的优点和最该泼冷水的不足，并由深度解读中的证据支撑。历史记录没有有效 `readerArticle` 时才兼容旧固定栏目；评分证据与扣分边界统一置于文末。
+Manual v6 目前按显式影子链渐进落地，不会偷偷改变默认日更：`manual:fulltext` 在 HTML 扁平化前保存表格、MathML/TeX、图片和参考文献结构，并生成带 `complete/incomplete` 健康状态的 companion ArtifactIndex；PDF/text fallback 不再伪装完整。`reader-longform-v2` 已把结果表覆盖改为源矩阵 cell ID + 确定性正文渲染，并要求图、公式、术语和相关工作实际进入绑定 block。`manual:v6:tasks` 提供逐论文持久状态、3 槽 claim、失败恢复和 Terra-high receipt 校验，但不调用 API、不创建或冒充 subagent；`manual:v6:spec` 会从 records v4 逐项回读 record、ArtifactIndex、task packet/receipt 和 reviewer output 的真实文件字节，组装 spec v6 Merkle root；`manual:v6:analyze` 必须显式使用 shadow 模式，只写 `data/current/manual-v6-shadow/<date>/`，不会更新正式 canonical 或 `papers.json`。旧 v5 页面不再允许作为新教程生成、修订或质量回归输入；对比评测只能比较两份分别从同一原始证据冷启动生成的 fresh 稿件。默认组装、博客输入和日更仍是 records v3 → spec v5 → `full-text-evidence-v5`。尚未完成的是新鲜批次的真实 records v4 内容生产和至少 3 批性能验收。详见 [Manual v6 渐进改造计划](docs/manual-v6-migration.md)。
+
+本轮 P0 同时修复了 Manual 同日期重复进程、HF 同步 curl 阻塞、跨类别重复摘要、健康 arXiv 类别固定长等待，以及 generation schema v3 页面 SHA 未在 review/push 兑现的问题。Manual raw 的真实 socket 仍按 host 严格单飞，但冷却改为健康 1 秒、瞬时失败 5 秒、429 60 秒的自适应 next-eligible；等待只在下一次同 host 请求前支付，本地解析/checkpoint/HF 会自然抵消它。raw 阶段另在 `manual-v6-shadow/<date>/metrics/raw_fetch-*.json` 保存绑定 raw/checkpoint SHA 的 wall、类别/摘要 cache、retry wait 与 scheduler wait。性能收益必须用新鲜联网批次的 P50/P95 证明；文档不再把理论节省写成实测结果。
+
+逐论文筛选、理解、主要正文、评分、可读性复核和最终单页审查 subagent 统一使用 `gpt-5.6-terra`、reasoning `high`；Sol 主 Agent 只负责队列、代码、确定性门禁、组装和发布。正文任务包固定携带仓库内 [Manual 教程写作规范](prompts/manual-tutorial-article.md) 及其 SHA，参考依据已沉淀到 [Manual 教程编辑参考契约](docs/manual-editorial-reference-contract.md)，正常批次无需重新打开外部参考。新 record 必须显式写 `editorialPlan.readerFormatContract=graduate-researcher-tutorial-quality-v2`；缺字段仅兼容历史 plan。正文先建立“中心技术矛盾—递进读者问题—证据柱—结论回收”的编辑蓝图，再按论文主张组织图表和实验，而不是按字段或论文目录机械扩写。新 records 使用 `editorialPlan` v2：读者标题、核心判断、问题回答、证据柱和每节锚句都必须可在最终正文中逐一定位；`editorial.readerArticle` 则是发布页唯一的连续深度解读，用论文特有小节替代“方法/创新/实验/细节/局限”模板栏目。每条实验结论还须提供可直接给读者看的自然语言解释，不能把方法/基线/指标/数值拼成字段串。独立页固定按“中文题目 → 英文题目/arXiv 链接 → 标签 → 总分与八维分项 → 作者机构 → 一句话概括 → 毒舌点评 → 核心摘要 → 开源与复现资源 → 深度解读 → 文末逐维评分证据”组织，八个分项即使为 0 也不能省略；每日汇总卡片使用对应的紧凑身份信息。章节标题禁止包含图表编号，公式统一使用 `\(...\)` / `\[...\]`，最终 review 同时验证 Markdown 源码与 Hugo 渲染 HTML。毒舌点评必须同时给出最扎实的优点和最该泼冷水的不足，并由深度解读中的证据支撑。历史记录没有有效 `readerArticle` 时才兼容旧固定栏目；评分证据与扣分边界统一置于文末。
+
+新教程还必须通过 `reader-tutorial-path-v1`：背景任务与真实失败例 → 相关工作谱系 → 本文可证伪问题 → 方法端到端全貌 → 数据/模型/目标组件 → 完整实验协议 → 主结果 → 诊断/消融 → 外部比较 → 能力边界 → 复现与行动。摘要可以预告重点，但正文不得在背景和方法尚未建立时直接进入最佳数字，也不得让术语、损失或关键变体在结果之后才首次解释。
+
+教程作者任务固定使用 `fresh-authoring-v1` 冷启动：只读本篇 metadata、受控全文、ArtifactIndex、论文图表/公式、事实账本、写作契约和空白 schema；禁止读取历史 analysis、旧 `readerArticle`、`article.md`、`post.md`、博客 Markdown/HTML 或已填写质量包。旧文章不得进入教程生成、质量回归或修订输入，只能等待新页面验收后被精确替换；不能通过重排、扩写或清洗升级为新教程。review 后需要修正时，也必须从原始证据和结构化 findings 生成完整替换稿。
+
+新 Manual v5 记录同时使用 `manual-v5-tutorial-payload-v1`：`article.md`、`quality.json`、确定性 `artifact-plan.json` 与 complete ArtifactIndex 构成唯一 sealed payload。`manual-tutorial-validation-orchestrator-v1` 是 quality、artifact plan、research/longform 和八维评分的唯一正式组合入口；底层模块只保留纯子校验职责，payload 还会封印当前 orchestrator 协议指纹。预览与正式博客生成使用同一份载荷；任一文件、SHA、论文身份、质量结果、评分或图表/公式处置漂移都会在 spec、canonical 或 publisher 边界失败。旧 v5 只读兼容，不可重新包装成新教程页。
+
+默认 Manual v5 会把该冷启动声明落实为文件凭证：受控 `article.md` 绑定原始字节 SHA 与 trim+NFKC 正文 SHA；filtered metadata、完整全文、完整 ArtifactIndex、教程 prompt、编辑契约和空白 schema 逐项绑定真实路径/文件 SHA，官方项目证据存在时一并绑定。ArtifactIndex 不完整、旧 prose 输入非空或任一文件漂移都会在 spec、canonical 或发布阶段阻断。
+
+新 canonical 的来源复用键是 `manual-paper-source-identity-v1`：只包含本篇全文、图片、结构化快照和 ArtifactIndex 的语义/文件身份。日期级 manifest 仍检查整批集合和健康状态，但另一篇 entry 更新不会再让本篇 canonical 失效；本篇任一证据字节变化仍会被严格拒绝。历史只读兼容不适用于已经声明 fresh/tutorial 的页面。
 
 用户明确取消发布后图片时，运行 `npm run digest:waive-visuals -- --date YYYY-MM-DD --reason "用户明确取消视觉资产"` 记录与远端发布 commit 及当前视觉任务 SHA 绑定的可审计豁免；它不会生成图片，也不会把 pending 资产伪装成 complete。
 
@@ -35,6 +49,7 @@ LLM 筛选前默认执行高召回关键词预筛，核心音频类别提供兜�
 | `README.md` | 项目概览、快速开始、命令速查 | 人类用户 |
 | `SKILL.md` | 给 Agent 的执行规则与安全约束 | AI Agent |
 | `docs/workflow.md` | 主流程详解（归档、抓取、筛选、分析、保存） | 使用者 |
+| `docs/manual-v6-migration.md` | Manual 提质加速改造、契约、缓存 DAG 与迁移边界 | 维护者 |
 | `docs/scripts.md` | 全部脚本功能说明 | 开发者 |
 | `docs/data-format.md` | 数据文件格式与字段说明 | 开发者 |
 | `docs/setup.md` | 安装初始化、环境变量、日志、代理配置 | 新用户 |
@@ -163,6 +178,16 @@ npm run blog:generate -- --date 2026-04-21 --exclude-id 2607.12345  # 可重复�
 npm run blog:review -- --date 2026-04-21
 npm run blog:push -- --date 2026-04-21
 
+# 单篇灰度：生成、Manual attestation/review、push 全部使用同一个规范化 ID
+# 只替换这一篇论文页，不生成/修改汇总页，也不删除同日其他论文页；不调用普通 LLM review
+npm run blog:generate -- --date 2026-04-21 --include-id 2604.12345
+npm run blog:manual-plan -- --date 2026-04-21 --include-id 2604.12345
+# 按 plan 输出的隔离 shardDir 写入这一页的 Terra-high review shard，然后组装
+npm run blog:manual-attest -- --date 2026-04-21 --include-id 2604.12345
+npm run blog:manual-review -- --date 2026-04-21 --include-id 2604.12345 \
+  --attestation <manual-plan 输出的隔离 attestationPath>
+npm run blog:push -- --date 2026-04-21 --include-id 2604.12345
+
 # 生成微信公众号草稿
 npm run wechat
 # 仅生成公众号预览，不调用微信接口
@@ -234,6 +259,9 @@ python3 scripts/push-blog.py --date 2026-04-21
 # 默认使用完整 provenance 的逐页 Manual 审查；每页必须由独立 review subagent 完成
 # 当前 attestation v3 逐文件绑定 path/SHA、subagent、独立 notes、八类 checks 和每张图的像素事实；v2 仅历史兼容
 python3 scripts/manual-review-blog.py --date 2026-04-21 --attestation data/current/manual-review-attestation-2026-04-21.json
+# 单篇灰度先用 --plan 获取带日期、论文 ID 和身份哈希的隔离 shard/attestation 路径；
+# assemble、manual review 和 push 必须继续传同一个 --include-id，禁止回退读取日期整批凭证
+npm run blog:manual-plan -- --date 2026-04-21 --include-id 2604.12345
 
 # 人工全文先逐篇安全抓取并 checkpoint；失败后重跑只补失败或损坏项
 npm run manual:fulltext -- 2026-04-21
@@ -260,6 +288,45 @@ npm run manual:analyze -- --date 2026-04-21 --spec data/current/manual-analysis-
 
 # 默认续跑复用已成功 canonical；仅在人工纠错或 spec/prompt 改变时显式覆盖
 npm run manual:analyze -- --date 2026-04-21 --spec data/current/manual-analysis-spec-2026-04-21.json --force
+
+# v6 目前只允许显式影子运行：records v4 必须已由逐论文任务真实产出，不能拿 v5 record 改版本号
+npm run manual:v6:spec -- --date 2026-04-21 \
+  --records data/current/manual-v6-shadow/2026-04-21/records-v4.json
+npm run manual:v6:analyze -- --date 2026-04-21 \
+  --spec data/current/manual-v6-shadow/2026-04-21/spec.json
+
+# 持久任务状态机不启动 subagent；主 Agent只按 status/claim 输出逐篇分派 Terra-high task
+npm run manual:v6:tasks -- init --date 2026-04-21
+npm run manual:v6:tasks -- status --date 2026-04-21
+
+# 默认 v5：只读观察 author/reviewer/page-review 队列并给出 3 槽补位建议；不创建 subagent
+npm run manual:work-queue -- --date 2026-04-21
+
+# 分派某个 ready author 前物化 exact allowlist；只写单篇 packet/metadata，不写正文
+npm run manual:author-packet -- --date 2026-04-21 --paper 2604.12345
+
+# 跨批次只读性能验收；每项不足 3 个不同日期只报 insufficient_data
+npm run manual:performance-report -- \
+  --date 2026-04-19 --date 2026-04-20 --date 2026-04-21
+# 默认只打印；仅显式 --output 才写入受控 observability 目录且禁止覆盖
+npm run manual:performance-report -- --output observed-three-batches.json
+
+# 对既有批次做无副作用审计；少于 3 个真实报告时 benchmark 只返回 insufficient_samples
+npm run manual:shadow -- --date 2026-04-21 \
+  --metrics data/current/manual-v6-shadow/2026-04-21/metrics/fulltext-<run-id>.json \
+  --metrics data/current/manual-v6-shadow/2026-04-21/metrics/artifact_index-<run-id>.json \
+  --output data/current/manual-v6-shadow/reports/2026-04-21.json
+npm run manual:shadow:benchmark -- \
+  --report data/current/manual-v6-shadow/reports/2026-04-19.json \
+  --report data/current/manual-v6-shadow/reports/2026-04-20.json \
+  --report data/current/manual-v6-shadow/reports/2026-04-21.json
+
+# fulltext、ArtifactIndex、spec v6、shadow ingestion，以及显式写报告的 shadow audit
+# 会在 manual-v6-shadow/<date>/metrics/ 写入不可变 observed-stage-metrics-v1 sidecar；stdout 审计仍只读。
+# wallMs 来自 process.hrtime.bigint；只有实际可测的锁等待才有 queueMs，其余为 unknown。
+# 每份 sidecar 绑定真实 input/output bytes 与 SHA；shadow 重验后才允许进入 benchmark。
+# v6 签名对象采用 stable-json-ascii-keys-exact-ieee754-nfkc-text-v2：Unicode 字符串值受支持，
+# 有限浮点按 IEEE-754 实际值写成精确十进制；非 ASCII key、NaN/Infinity、负零和非安全整数 fail closed。
 
 # titleOverride 仅可修复元数据标题的空白粘连。存在合格候选时必须显式给出 selectedImageUrls；
 # 每张选图还须给出同序 imageInsertions，以唯一 anchorQuote/conclusionQuote 绑定同节前后论证，

@@ -32,9 +32,11 @@ const {
     validateExactFactCoverage,
     validateResultClaimCoverageV5,
     validateEditorialPlanBindings,
-    validateReaderArticle,
     validateEditorialReview
 } = require('./manual-research-contract.js');
+const {
+    validateManualTutorialReaderBundle
+} = require('./manual-tutorial-contract-orchestrator.js');
 
 function parseArgs(argv) {
     const result = {};
@@ -187,7 +189,7 @@ function validateOne(options) {
             record.evidenceLedger,
             `${options.paper}.researchBrief.editorialPlan`
         );
-        const readerArticle = validateReaderArticle(
+        const readerArticle = validateManualTutorialReaderBundle(
             record.researchBrief.editorialPlan,
             record.editorial?.readerArticle,
             record.evidenceLedger,
@@ -200,7 +202,8 @@ function validateOne(options) {
                 ],
                 derivedFacts: record.researchBrief.derivedFacts,
                 readerNarratives: record.resultClaims.map(claim => claim.readerNarrative),
-                imageInsertions: record.imageInsertions || []
+                imageInsertions: record.imageInsertions || [],
+                summary: record.editorial?.summary || ''
             }
         );
         validateEditorialReview(record.editorial.review, readerArticle, {

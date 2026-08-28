@@ -41,22 +41,73 @@ const {
     hasCompleteFetchCheckpoint,
     hasCompleteSourceHealth,
     isReusableArxivCheckpoint,
-    getArxivInterCategoryDelayMs,
     loadAnalyzedIdsFromArchive,
     loadCurrentSuccessfulAnalysisIds,
     validateFilterDecisionCoverage
 } = require('./full-fetch.js');
 const {
+    createHostTaskScheduler,
+    getAdaptiveHostCooldownMs
+} = require('./lib/fetch-scheduler.js');
+const { persistRawFetchMetricSafely } = require('./manual-raw-fetch-metrics.js');
+const {
     loadPapersDatabase,
     savePapersDatabase,
     markPaperDigestStatus
 } = require('./digest-status.js');
+const { acquireFileLock } = require('./analysis-engine.js');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 const FILTER_CONTRACT_VERSION = 'manual-offline-v1';
 const FILTER_PROMPT_HASH = crypto.createHash('sha256')
     .update(fs.readFileSync(path.join(PROJECT_ROOT, 'prompts', 'filter.md')))
     .digest('hex');
+const MANUAL_RUN_LOCK_STALE_MS = 6 * 60 * 60 * 1000;
+
+function getManualRunLockTarget(date, options = {}) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new Error('manual run lock date 必须是 YYYY-MM-DD');
+    return options.lockTarget || path.join(Config.CURRENT_DIR, '.manual-fetch-runs', date);
+}
+
+function readManualRunLockOwner(lockTarget) {
+    try {
+        return JSON.parse(fs.readFileSync(path.join(`${lockTarget}.lock`, 'owner.json'), 'utf8'));
+    } catch {
+        return null;
+    }
+}
+
+async function acquireManualRunLock(date, stage, options = {}) {
+    if (!['raw', 'select', 'fulltext'].includes(stage)) throw new Error(`未知 manual 阶段: ${stage}`);
+    const lockTarget = getManualRunLockTarget(date, options);
+    let release;
+    try {
+        release = await acquireFileLock(lockTarget, {
+            timeoutMs: options.timeoutMs ?? 0,
+            staleMs: options.staleMs ?? MANUAL_RUN_LOCK_STALE_MS
+        });
+    } catch (error) {
+        const owner = readManualRunLockOwner(lockTarget);
+        const ownerText = owner
+            ? `pid=${owner.pid || '?'} host=${owner.hostname || '?'} stage=${owner.stage || '?'} acquiredAt=${owner.acquiredAt || '?'}`
+            : 'owner=unavailable';
+        const locked = new Error(`manual ${date} 已有运行占用，当前阶段 ${stage} 快速失败；${ownerText}`);
+        locked.code = 'MANUAL_RUN_LOCKED';
+        locked.owner = owner;
+        locked.cause = error;
+        throw locked;
+    }
+
+    const ownerPath = path.join(`${lockTarget}.lock`, 'owner.json');
+    const owner = readManualRunLockOwner(lockTarget) || {};
+    try {
+        writeFileAtomic(ownerPath, JSON.stringify({ ...owner, date, stage }));
+    } catch (error) {
+        release();
+        throw error;
+    }
+    return release;
+}
 
 function readJson(filePath, label) {
     const value = readJsonSafe(filePath, null);
@@ -196,6 +247,7 @@ function makeBatchMeta(date, timestamp, candidateFingerprint) {
 }
 
 async function fetchRaw(date) {
+    const rawStartedNs = process.hrtime.bigint();
     let timestamp = getBeijingISOString();
     autoArchiveCurrentData(date);
     const papersData = loadPapersDatabase();
@@ -233,13 +285,77 @@ async function fetchRaw(date) {
     }
     saveFetchCheckpoint(checkpoint, Config.FILES.fetchCheckpoint);
 
-    let fetchAttemptIndex = 0;
+    // Category orchestration is sequential, and the same scheduler also guards
+    // abstract fan-out at the real socket edge. Healthy traffic uses a small
+    // host cooldown; transient failures and 429 raise the next-host eligibility.
+    // Retry sleeps happen concurrently with that eligibility window, so there
+    // is no second fixed category penalty after a successful retry.
+    const arxivRequestScheduler = createHostTaskScheduler({
+        cooldownAfter: outcome => getAdaptiveHostCooldownMs(outcome, {
+            healthyDelayMs: Config.ARXIV_CONFIG.hostHealthyCooldownMs,
+            transientDelayMs: Config.ARXIV_CONFIG.hostTransientCooldownMs,
+            rateLimitedDelayMs: Config.ARXIV_CONFIG.hostRateLimitedCooldownMs,
+            jitterMaxMs: Config.ARXIV_CONFIG.hostCooldownJitterMs
+        })
+    });
+    const abstractCache = new Map();
+    const categoryObservations = [];
+    const rememberAbstract = paper => {
+        const id = normalizedId(paper);
+        const abstract = String(paper?.abstract || paper?.summary || '').trim();
+        if (id && abstract && !abstractCache.has(id)) abstractCache.set(id, Promise.resolve(abstract));
+    };
+    const huggingfaceCacheHit = checkpoint.huggingface?.status === 'complete'
+        && checkpoint.huggingface.health?.ok === true
+        && Array.isArray(checkpoint.huggingface.papers);
+    const hfTask = (async () => {
+        if (huggingfaceCacheHit
+            && checkpoint.huggingface.health?.ok === true
+            && Array.isArray(checkpoint.huggingface.papers)) {
+            return {
+                papers: checkpoint.huggingface.papers,
+                health: checkpoint.huggingface.health,
+                error: null
+            };
+        }
+        try {
+            const papers = await fetchHuggingFacePapers(historicalExistingIds, {
+                fetchedAt: timestamp
+            });
+            const health = {
+                ...(papers._sourceHealth || {}),
+                ok: true,
+                totalFetched: papers.length
+            };
+            checkpoint.huggingface = { status: 'complete', papers, health };
+            saveFetchCheckpoint(checkpoint, Config.FILES.fetchCheckpoint);
+            return { papers, health, error: null };
+        } catch (error) {
+            const health = error.sourceHealth || { ok: false, error: error.message };
+            checkpoint.huggingface = { status: 'failed', papers: [], health };
+            saveFetchCheckpoint(checkpoint, Config.FILES.fetchCheckpoint);
+            return { papers: [], health, error };
+        }
+    })();
+
     for (let i = 0; i < checkpoint.categoryOrder.length; i++) {
         const category = categoryById.get(checkpoint.categoryOrder[i]);
         const cached = checkpoint.arxiv[category.id];
         if (isReusableArxivCheckpoint(cached)) {
             sourceHealth.arxiv.categories.push(cached.health);
+            categoryObservations.push({
+                id: category.id,
+                cacheHit: true,
+                durationMs: null,
+                retryCount: 0,
+                rateLimitRetryCount: 0,
+                retryWaitMs: 0,
+                rateLimitWaitMs: 0,
+                abstractCacheHits: 0,
+                abstractCacheMisses: 0
+            });
             for (const paper of cached.papers) {
+                rememberAbstract(paper);
                 const id = normalizedId(paper);
                 if (!id) continue;
                 if (arxivById.has(id)) {
@@ -252,21 +368,22 @@ async function fetchRaw(date) {
             }
             continue;
         }
-        if (fetchAttemptIndex === 0) {
-            const firstDelayMs = Config.ARXIV_CONFIG.firstRequestDelayMs + Math.floor(Math.random() * 10000);
-            await new Promise(resolve => setTimeout(resolve, firstDelayMs));
-        }
-        fetchAttemptIndex++;
-        const started = Date.now();
+        let started = null;
         let papers = [];
         let fetchError = null;
         let fetchHealth = null;
         try {
+            started = Date.now();
             papers = await fetchCategoryPapers(
                 category.id,
                 Config.ARXIV_CONFIG.maxResultsPerCategory,
                 Config.ARXIV_CONFIG.fetchMaxRetries,
-                historicalExistingIds
+                historicalExistingIds,
+                {
+                    requestScheduler: arxivRequestScheduler,
+                    schedulerHandlesPacing: true,
+                    abstractCache
+                }
             );
             pinPapersToBatch(papers, timestamp);
             fetchHealth = papers._sourceHealth || null;
@@ -277,6 +394,7 @@ async function fetchRaw(date) {
         }
         const uniqueBefore = arxivPapers.length;
         for (const paper of papers) {
+            rememberAbstract(paper);
             const id = normalizedId(paper);
             if (!id) continue;
             if (arxivById.has(id)) {
@@ -290,12 +408,23 @@ async function fetchRaw(date) {
         const health = buildArxivCategoryHealth(category, {
             papers,
             fetchHealth,
-            durationMs: Date.now() - started,
+            durationMs: started === null ? 0 : Date.now() - started,
             error: fetchError,
             newInCategory: arxivPapers.length - uniqueBefore,
             duplicateInCategory: Math.max(0, papers.length - (arxivPapers.length - uniqueBefore))
         });
         sourceHealth.arxiv.categories.push(health);
+        categoryObservations.push({
+            id: category.id,
+            cacheHit: false,
+            durationMs: health.durationMs,
+            retryCount: fetchHealth?.retryCount || 0,
+            rateLimitRetryCount: fetchHealth?.rateLimitRetryCount || 0,
+            retryWaitMs: fetchHealth?.totalRetryWaitMs || 0,
+            rateLimitWaitMs: fetchHealth?.rateLimitWaitMs || 0,
+            abstractCacheHits: fetchHealth?.abstracts?.cacheHits || 0,
+            abstractCacheMisses: fetchHealth?.abstracts?.attempted || 0
+        });
         checkpoint.arxiv[category.id] = {
             status: fetchError ? 'failed' : 'complete',
             papers: fetchError ? [] : papers,
@@ -303,33 +432,17 @@ async function fetchRaw(date) {
         };
         saveFetchCheckpoint(checkpoint, Config.FILES.fetchCheckpoint);
         if (fetchError) {
+            await hfTask;
             throw new Error(`来源不完整，不能进入 manual filter: ${category.id}`);
         }
-        const delayMs = getArxivInterCategoryDelayMs(i, checkpoint.categoryOrder.length, Date.now() - started);
-        if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
     }
 
-    let hfPapers;
-    if (checkpoint.huggingface?.status === 'complete'
-        && checkpoint.huggingface.health?.ok === true
-        && Array.isArray(checkpoint.huggingface.papers)) {
-        hfPapers = checkpoint.huggingface.papers;
-        sourceHealth.huggingface = checkpoint.huggingface.health;
-    } else try {
-        hfPapers = await fetchHuggingFacePapers(historicalExistingIds, {
-            fetchedAt: timestamp
-        });
-    } catch (error) {
-        sourceHealth.huggingface = error.sourceHealth || { ok: false, error: error.message };
-        checkpoint.huggingface = { status: 'failed', papers: [], health: sourceHealth.huggingface };
-        saveFetchCheckpoint(checkpoint, Config.FILES.fetchCheckpoint);
-        throw new Error(`来源不完整，不能进入 manual filter: HuggingFace: ${error.message}`);
+    const hfOutcome = await hfTask;
+    sourceHealth.huggingface = hfOutcome.health;
+    if (hfOutcome.error) {
+        throw new Error(`来源不完整，不能进入 manual filter: HuggingFace: ${hfOutcome.error.message}`);
     }
-    if (checkpoint.huggingface?.status !== 'complete') {
-        const hfHealth = hfPapers._sourceHealth || { ok: true, fetched: hfPapers.length };
-        sourceHealth.huggingface = { ...hfHealth, ok: true, totalFetched: hfPapers.length };
-        checkpoint.huggingface = { status: 'complete', papers: hfPapers, health: sourceHealth.huggingface };
-    }
+    const hfPapers = hfOutcome.papers;
     checkpoint.timestamp = timestamp;
     checkpoint.fetchSourcesSha256 = getFetchSourcesSha256(checkpoint);
     saveFetchCheckpoint(checkpoint, Config.FILES.fetchCheckpoint);
@@ -348,6 +461,19 @@ async function fetchRaw(date) {
     };
     raw.rawPapersSha256 = stableContentSha256(raw.papers);
     writeFileAtomic(Config.FILES.rawCandidates, JSON.stringify(raw, null, 2));
+    persistRawFetchMetricSafely({
+        date,
+        status: 'complete',
+        wallNs: process.hrtime.bigint() - rawStartedNs,
+        categories: categoryObservations,
+        scheduler: arxivRequestScheduler.getMetricsSnapshot(),
+        huggingfaceCacheHit,
+        paperCount: publishedFiltered.length,
+        outputFiles: [
+            { role: 'raw_candidates', path: Config.FILES.rawCandidates },
+            { role: 'fetch_checkpoint', path: Config.FILES.fetchCheckpoint }
+        ]
+    });
     console.log(`✅ manual raw 已保存：${publishedFiltered.length} 篇候选`);
     console.log(`🧾 人工筛选规格需覆盖全部 ID：${Config.FILES.rawCandidates}`);
     for (const paper of publishedFiltered) {
@@ -499,8 +625,13 @@ function writeSelection(date, specPath) {
 
 async function main() {
     const options = parseArgs(process.argv.slice(2));
-    if (options.mode === 'raw') await fetchRaw(options.date);
-    else writeSelection(options.date, options.spec);
+    const release = await acquireManualRunLock(options.date, options.mode);
+    try {
+        if (options.mode === 'raw') await fetchRaw(options.date);
+        else writeSelection(options.date, options.spec);
+    } finally {
+        release();
+    }
 }
 
 if (require.main === module) {
@@ -519,6 +650,9 @@ module.exports = {
     applyManualArchiveExclusion,
     applyManualFilterStatuses,
     assertUniqueNormalizedDecisionKeys,
+    getManualRunLockTarget,
+    readManualRunLockOwner,
+    acquireManualRunLock,
     fetchRaw,
     writeSelection,
     parseArgs

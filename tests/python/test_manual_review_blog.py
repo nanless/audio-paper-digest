@@ -1,10 +1,12 @@
 import hashlib
 import importlib.util
+import io
 import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -53,7 +55,8 @@ def attestation():
             'reviewSubagent': {
                 'version': 1, 'taskName': 'paper-review-2608-12345',
                 'paperId': '2608.12345', 'singleFileOnly': True,
-                'isolatedContext': True,
+                'isolatedContext': True, 'model': 'gpt-5.6-terra',
+                'reasoningEffort': 'high',
             },
             'imageFindings': [],
         }],
@@ -74,6 +77,43 @@ class ManualReviewAttestationTest(unittest.TestCase):
         self.assertEqual(payload['version'], 3)
         self.assertEqual(payload['files'][0]['checks'], FILE_CHECKS)
         self.assertEqual(digest, expected_digest)
+
+    def test_manual_single_cli_is_single_value_and_scope_is_fail_closed(self):
+        class Module:
+            class PublishDataValidationError(ValueError):
+                pass
+
+            @staticmethod
+            def validate_publish_date(value):
+                return value
+
+            @staticmethod
+            def _validate_active_publication_scope(_payload):
+                return {'mode': 'single-paper', 'includeId': '2608.12345'}
+
+        parsed = manual_review_blog._parse_args(Module, [
+            '--date', '2026-08-25', '--attestation', '/tmp/a.json',
+            '--include-id', '2608.12345',
+        ])
+        self.assertEqual(parsed[2], '2608.12345')
+        with mock.patch('sys.stderr', io.StringIO()), self.assertRaises(SystemExit):
+            manual_review_blog._parse_args(Module, [
+                '--date', '2026-08-25', '--attestation', '/tmp/a.json',
+                '--include-id', '2608.12345', '--include-id', '2608.54321',
+            ])
+        generation = {
+            'publicationScope': {'mode': 'single-paper', 'includeId': '2608.12345'},
+        }
+        exact = attestation()
+        exact['publicationScope'] = generation['publicationScope']
+        manual_review_blog._validate_attestation_publication_scope(
+            Module, generation, exact,
+        )
+        mismatched = attestation()
+        with self.assertRaisesRegex(Module.PublishDataValidationError, '作用域'):
+            manual_review_blog._validate_attestation_publication_scope(
+                Module, generation, mismatched,
+            )
 
     def test_fresh_manual_v5_generation_rejects_legacy_v2_attestation(self):
         class Module:
@@ -167,6 +207,7 @@ class ManualReviewAttestationTest(unittest.TestCase):
             'reviewSubagent': {
                 'version': 1, 'taskName': 'deleted-page-review',
                 'singleFileOnly': True, 'isolatedContext': True,
+                'model': 'gpt-5.6-terra', 'reasoningEffort': 'high',
             },
             'imageFindings': [],
         })
@@ -189,6 +230,7 @@ class ManualReviewAttestationTest(unittest.TestCase):
                 'version': 1, 'taskName': 'second-paper-review',
                 'paperId': '2608.54321',
                 'singleFileOnly': True, 'isolatedContext': True,
+                'model': 'gpt-5.6-terra', 'reasoningEffort': 'high',
             },
             'imageFindings': [],
         })
@@ -213,6 +255,19 @@ class ManualReviewAttestationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError, 'paperId'):
                 manual_review_blog._load_attestation(self.write_payload(tmp, payload))
+
+    def test_v3_requires_terra_high_review_subagent(self):
+        for field, value in (
+            ('model', 'gpt-5.6-sol'),
+            ('reasoningEffort', 'medium'),
+        ):
+            payload = attestation()
+            payload['files'][0]['reviewSubagent'][field] = value
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaisesRegex(ValueError, 'gpt-5.6-terra/high'):
+                    manual_review_blog._load_attestation(
+                        self.write_payload(tmp, payload),
+                    )
 
     def test_file_specific_notes_bind_paper_id_index_date_and_deleted_filename(self):
         class Module:

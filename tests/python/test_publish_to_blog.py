@@ -1,5 +1,6 @@
 import importlib.util
 import contextlib
+import copy
 import hashlib
 import io
 import json
@@ -21,8 +22,13 @@ sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 from publish_common import (  # noqa: E402
     PublishDataValidationError,
     _validate_publish_image_exclusion_view,
+    _manual_v6_text,
+    _manual_v6_text_sha,
+    validate_manual_v6_payload,
     validate_image_narrative_contract,
 )
+import markdown_hugo_gate  # noqa: E402
+import tutorial_payload_verifier  # noqa: E402
 SPEC = importlib.util.spec_from_file_location('publish_to_blog', MODULE_PATH)
 publish_to_blog = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(publish_to_blog)
@@ -31,6 +37,317 @@ REVIEW_SPEC = importlib.util.spec_from_file_location(
 )
 review_blog = importlib.util.module_from_spec(REVIEW_SPEC)
 REVIEW_SPEC.loader.exec_module(review_blog)
+
+
+@contextlib.contextmanager
+def manual_v5_fresh_files(paper, date_str, *, official_project_evidence=False):
+    """Attach a real file-backed fresh-authoring receipt to a v5 fixture."""
+    with tempfile.TemporaryDirectory() as tmp:
+        current = Path(tmp) / 'current'
+        paper_id = publish_to_blog.normalize_arxiv_id(paper['arxivId'])
+        article = paper['analysisManifest']['manualTakeover']['readerArticle']
+        article_path = current / 'manual-tutorial-previews' / date_str / paper_id / 'draft' / 'article.md'
+        evidence_root = current / 'manual-full-text' / date_str
+        source_path = evidence_root / f'{paper_id}.txt'
+        artifact_path = evidence_root / 'artifacts' / f'{paper_id}.json'
+        filtered_path = current / 'filtered-papers.json'
+        for target in (article_path, source_path, artifact_path, filtered_path):
+            target.parent.mkdir(parents=True, exist_ok=True)
+        article_path.write_text(article, encoding='utf-8')
+        source_path.write_text('current paper source evidence', encoding='utf-8')
+        artifact_identity = 'd' * 64
+        artifact_path.write_text(json.dumps({
+            'paperId': paper_id,
+            'inventoryHealth': {'status': 'complete', 'issues': []},
+            'artifactIndexSha256': artifact_identity,
+            'tables': [], 'figures': [], 'formulas': [],
+        }, ensure_ascii=False), encoding='utf-8')
+        filtered_path.write_text(json.dumps({
+            'batchDate': date_str, 'status': 'complete',
+            'papers': [{'arxivId': paper_id, 'title': paper['title']}],
+        }, ensure_ascii=False), encoding='utf-8')
+        paths = {
+            'paper_metadata': filtered_path,
+            'source_snapshot': source_path,
+            'artifact_index': artifact_path,
+            'authoring_prompt': Path(ROOT) / 'prompts' / 'manual-tutorial-article.md',
+            'editorial_contract': Path(ROOT) / 'docs' / 'manual-editorial-reference-contract.md',
+            'blank_schema': Path(ROOT) / 'scripts' / 'manual-tutorial-quality-contract.js',
+        }
+        if official_project_evidence:
+            evidence_path = evidence_root / 'external-evidence' / f'{paper_id}-official-project.json'
+            evidence_path.parent.mkdir(parents=True, exist_ok=True)
+            evidence_path.write_text(json.dumps({
+                'paperId': paper_id,
+                'kind': 'official_project_evidence',
+                'url': f'https://example.org/projects/{paper_id}',
+            }, ensure_ascii=False), encoding='utf-8')
+            paths['official_project_evidence'] = evidence_path
+        normalize = lambda value: __import__('unicodedata').normalize(  # noqa: E731
+            'NFKC', value.replace('\r\n', '\n').replace('\r', '\n')
+        ).strip()
+        receipt = {
+            'contract': 'fresh-authoring-v1', 'mode': 'fresh_from_evidence',
+            'authoringSessionId': f'fresh-{paper_id}-test-session',
+            'articlePath': str(article_path.resolve()),
+            'articleSha256': hashlib.sha256(normalize(article).encode('utf-8')).hexdigest(),
+            'articleFileSha256': hashlib.sha256(article_path.read_bytes()).hexdigest(),
+            'prohibitedProseInputs': [],
+            'inputs': [{
+                'kind': kind, 'path': str(target.resolve()),
+                'sha256': hashlib.sha256(target.read_bytes()).hexdigest(),
+            } for kind, target in paths.items()],
+        }
+        receipt['receiptSha256'] = publish_to_blog._stable_json_sha256(receipt)
+        takeover = paper['analysisManifest']['manualTakeover']
+        takeover['freshAuthoring'] = receipt
+        takeover['freshAuthoringSha256'] = publish_to_blog._stable_json_sha256(receipt)
+        payload_root = current / 'manual-tutorial-previews' / date_str / paper_id
+        quality_path = payload_root / 'quality.json'
+        plan_path = payload_root / 'artifact-plan.json'
+        plan = {
+            'version': 1, 'paperId': paper_id,
+            'artifactIndexSha256': artifact_identity,
+            'tables': [], 'figures': [], 'formulas': [],
+            'coverageMatrix': {'tables': [], 'figures': [], 'formulas': []},
+        }
+        plan_binding_sha = hashlib.sha256(json.dumps(
+            plan, ensure_ascii=False, separators=(',', ':'),
+        ).encode('utf-8')).hexdigest()
+        quality = {
+            'version': 2,
+            'contract': 'graduate-researcher-tutorial-quality-v2',
+            'paperId': paper_id,
+            'freshAuthoring': {
+                key: receipt[key] for key in (
+                    'contract', 'mode', 'authoringSessionId', 'articleSha256',
+                    'articleFileSha256', 'prohibitedProseInputs', 'inputs',
+                )
+            },
+            'artifactPlan': {
+                'version': 1, 'paperId': paper_id, 'sha256': plan_binding_sha,
+            },
+            'artifactDisposition': {'tables': [], 'figures': []},
+        }
+        quality_path.write_text(json.dumps(quality, ensure_ascii=False, indent=2), encoding='utf-8')
+        plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding='utf-8')
+        normalized_article = normalize(article)
+        validation = {
+            'contract': 'graduate-researcher-tutorial-quality-v2',
+            'paperId': paper_id,
+            'articleSha256': receipt['articleSha256'],
+            'articleCharacters': len(normalized_article),
+            'sectionCount': len(re.findall(r'^###\s+[^#\n].*$', normalized_article, flags=re.MULTILINE)),
+            'tableCount': 0, 'figureCount': 0,
+        }
+        payload = {
+            'contract': 'manual-v5-tutorial-payload-v1',
+            'orchestratorContract': 'manual-tutorial-validation-orchestrator-v1',
+            'orchestratorFingerprint': publish_to_blog.MANUAL_TUTORIAL_ORCHESTRATOR_FINGERPRINT,
+            'qualityContract': 'graduate-researcher-tutorial-quality-v2',
+            'paperId': paper_id,
+            'articleSha256': receipt['articleSha256'],
+            'freshAuthoringReceiptSha256': receipt['receiptSha256'],
+            'artifactIndexSha256': artifact_identity,
+            'qualityPath': str(quality_path.resolve()),
+            'qualityFileSha256': hashlib.sha256(quality_path.read_bytes()).hexdigest(),
+            'qualityPacketSha256': publish_to_blog._stable_json_sha256(quality),
+            'artifactPlanPath': str(plan_path.resolve()),
+            'artifactPlanFileSha256': hashlib.sha256(plan_path.read_bytes()).hexdigest(),
+            'artifactPlanSha256': publish_to_blog._stable_json_sha256(plan),
+            'artifactPlanBindingSha256': plan_binding_sha,
+            'validation': validation,
+        }
+        payload['receiptSha256'] = publish_to_blog._stable_json_sha256(payload)
+        takeover['tutorialPayload'] = payload
+        takeover['tutorialPayloadSha256'] = publish_to_blog._stable_json_sha256(payload)
+        paper['analysisManifest']['contracts']['tutorialPayload'] = 'manual-v5-tutorial-payload-v1'
+        with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+            yield paper
+
+
+def manual_v6_publication_fixture():
+    """Small but complete canonical v6 record using the real cross-runtime hashes."""
+    paper_id = '2608.30001'
+    matrix = [['系统', 'WER↓'], ['强基线', '8.4%'], ['完整方法', '7.1%']]
+    matrix_sha = hashlib.sha256(json.dumps(
+        matrix, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+    ).encode('utf-8')).hexdigest()
+    table = {
+        'id': 'T1', 'kind': 'result', 'caption': 'LibriSpeech test-clean 完整结果',
+        'matrix': matrix, 'matrixSha256': matrix_sha,
+    }
+    rendered_table = (
+        '**LibriSpeech test-clean 完整结果**\n\n'
+        '| 系统 | WER↓ |\n| --- | --- |\n| 强基线 | 8.4% |\n| 完整方法 | 7.1% |'
+    )
+    formula_raw = 'L = -log p(y|x)'
+    formula_explanation = '这个负对数似然把目标序列概率转成可优化损失；概率越高损失越低，但它本身不等于最终词错率。'
+    term = 'WER'
+    definition = '词错误率，表示替换、删除与插入错误总数除以参考词数，数值越低越好。'
+    relationship = '该引用提供同一语音识别任务上的强基线与常用评测设置。'
+    difference = '本文的差异在于显式加入双路径声学表示，并报告同一测试集上的直接比较。'
+    block_specs = [
+        ('B1', 'prerequisites', '先补齐评测前提', f'{term} 指 {definition} 读者应先区分训练目标与最终任务指标：前者约束参数更新，后者才回答识别输出是否改善。本文后续所有百分比都限定在明确测试划分，不能跨语料直接比较。'),
+        ('B2', 'problem', '论文究竟解决什么问题', '现有系统让同一表示同时承担声学细节保留与语言抽象，两种需求会争用容量。论文要检验的是：把职责拆成互补路径后，能否在相同训练数据与测试划分上降低识别错误，同时不把额外模块误说成普遍收益。'),
+        ('B3', 'related_work', '相关工作与真正差异', f'{relationship} {difference} 这意味着读者应比较同条件数值与结构职责，而不是只看模型名称是否更新。引用只负责建立比较坐标，不替代本文自己的实验与消融证据。'),
+        ('B4', 'architecture', '沿信号路径理解双分支', '输入波形先变换为声学特征，然后分别进入保留局部细节的声学分支与汇聚长程信息的语义分支；融合层在解码前对齐两种时间尺度，最终输出词序列。这个顺序说明每个组件接收什么、产生什么以及信息在哪里会合。'),
+        ('B5', 'training', '训练目标如何约束组件', f'训练联合优化序列目标与辅助对齐项，其中 {formula_raw}。{formula_explanation} 两个分支共同反向传播，但评测结论仍必须来自解码后的 WER，不能用训练损失下降替代任务效果。'),
+        ('B6', 'experiment_setup', '实验设置先限定比较边界', '实验在 LibriSpeech test-clean 上比较完整方法与强基线，报告相同方向的 WER，并保持数据划分和解码口径一致。这个设置能回答当前语料上的相对收益，却不能回答跨语言、噪声条件或真实设备延迟。'),
+        ('B7', 'result', '逐行读取完整结果表', f'结果表保留表头、全部系统行与每一个报告数值，避免只摘最好数字。\n\n{rendered_table}\n\n完整方法由 8.4% 降到 7.1%，绝对改善 1.3 个百分点；方向与 WER 越低越好一致，但表中没有置信区间，不能据此声称统计显著。'),
+        ('B8', 'reproduction', '复现时如何核对同一口径', '复现者应固定训练与测试划分、分词方式、解码参数和 WER 计算脚本，并逐项核对双分支输出形状与融合位置。若代码未公开，应把未报告超参数登记为风险，不应自行补值后仍声称完全复现。'),
+        ('B9', 'limitation', '证据支持到哪里为止', '当前证据只覆盖单一公开测试划分，缺少跨语料泛化、统计区间和真实部署测量。结果支持双路径在该设置下降低 WER，却不支持对所有语言、噪声环境或硬件平台的普遍外推。后续工作需要补齐这些边界实验。'),
+    ]
+    blocks = []
+    for block_id, kind, heading, markdown in block_specs:
+        if len(markdown) < 120:
+            markdown = (
+                f'{markdown} 本节围绕“{heading}”补充输入、比较口径、可核对证据与不能外推的边界，'
+                '使研究生能够从前一节点继续推导到下一节点，而不是只记住孤立术语。'
+            )
+        blocks.append({
+            'id': block_id, 'kind': kind, 'heading': heading,
+            'learningObjective': f'读完本节能够解释{heading}及其证据边界。',
+            'markdown': markdown, 'evidenceSpanIds': [],
+            'tableIds': ['T1'] if block_id == 'B7' else [],
+            'figureIds': [], 'formulaIds': ['F1'] if block_id == 'B5' else [],
+        })
+    article = '\n\n'.join(
+        f'### {block["heading"]}\n\n{block["markdown"]}' for block in blocks
+    )
+    article_sha = hashlib.sha256(article.encode('utf-8')).hexdigest()
+    artifact = {
+        'version': 1, 'parserVersion': 'manual-artifact-parser-v2-structured',
+        'paperId': paper_id,
+        'inputIdentity': {
+            'sourceSha256': '1' * 64, 'sourceIdentitySha256': '2' * 64,
+            'paperInputSha256': '3' * 64, 'structuredArtifactsSha256': '4' * 64,
+        },
+        'source': {'chars': 10000, 'bytes': 12000, 'kind': 'arxiv_html', 'sourceId': paper_id},
+        'inventoryHealth': {'status': 'complete', 'issues': []},
+        'sections': [{'id': 'SEC1'}], 'tables': [table], 'figures': [], 'images': [],
+        'formulas': [{'id': 'F1', 'raw': formula_raw}], 'references': [],
+        'acronyms': [{'id': 'A1', 'term': term}], 'citations': [{'id': 'C1'}],
+        'baselines': [], 'datasets': [], 'metrics': [], 'sourceSpans': [],
+        'counts': {'sections': 1, 'tables': 1, 'figures': 0, 'images': 0,
+                   'formulas': 1, 'references': 0, 'acronyms': 1, 'citations': 1,
+                   'baselines': 0, 'datasets': 0, 'metrics': 0},
+    }
+    artifact_payload = {key: value for key, value in artifact.items()
+                        if key not in {'artifactIndexSha256', 'outputSha256'}}
+    artifact_sha = hashlib.sha256(json.dumps(
+        artifact_payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+    ).encode('utf-8')).hexdigest()
+    artifact['artifactIndexSha256'] = artifact_sha
+    artifact['outputSha256'] = artifact_sha
+    numeric_ids = []
+    for row_index, row in enumerate(matrix):
+        for column_index, cell in enumerate(row):
+            if re.search(r'(?:^|[^A-Za-z])[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?(?:\s*%|\b)', cell):
+                numeric_ids.append(
+                    f'T1:r{row_index}:c{column_index}:'
+                    f'{hashlib.sha256(cell.encode("utf-8")).hexdigest()[:12]}'
+                )
+    provenance = {'specVersion': 6, **{
+        field: 'abcdef0'[index] * 64 for index, field in enumerate((
+            'specRootSha256', 'paperSpecSha256', 'sealedRecordSha256',
+            'recordFileSha256', 'artifactIndexFileSha256',
+            'recordsEnvelopeFileSha256', 'taskEvidenceSha256',
+        ))
+    }, 'artifactIndexSha256': artifact_sha}
+    bundle = {
+        'version': 2, 'contract': 'reader-longform-v2', 'paperId': paper_id,
+        'artifactIndexSha256': artifact_sha, 'blocks': blocks,
+        'articleSha256': article_sha,
+        'authorReceipt': {
+            'paperId': paper_id, 'singlePaperOnly': True, 'isolatedContext': True,
+            'model': 'gpt-5.6-terra', 'reasoningEffort': 'high',
+            'taskName': 'paper_2608_30001_author', 'inputPacketSha256': 'f' * 64,
+            'articleSha256': article_sha, 'queuedAt': '2026-08-28T09:00:00+08:00',
+            'startedAt': '2026-08-28T09:01:00+08:00',
+            'completedAt': '2026-08-28T09:20:00+08:00', 'revision': 1,
+        },
+        'tables': [{
+            'sourceTableId': 'T1', 'disposition': 'inline', 'blockId': 'B7',
+            'sourceMatrixSha256': matrix_sha, 'numericCellCount': len(numeric_ids),
+            'coveredNumericCellIds': numeric_ids, 'renderedMarkdown': rendered_table,
+            'renderedFragmentSha256': hashlib.sha256(rendered_table.encode('utf-8')).hexdigest(),
+        }],
+        'figures': [],
+        'formulas': [{'id': 'F1', 'disposition': 'inline', 'blockId': 'B5',
+                      'explanation': formula_explanation}],
+        'terms': [{'id': 'A1', 'term': term, 'definition': definition,
+                   'firstUseBlockId': 'B1'}],
+        'relatedWorks': [{'citationId': 'C1', 'relationship': relationship,
+                          'difference': difference, 'blockId': 'B3'}],
+    }
+    provenance.update({
+        'readerLongformSha256': hashlib.sha256(json.dumps(
+            bundle, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+        ).encode('utf-8')).hexdigest(),
+        'readerLongformContract': 'reader-longform-v2',
+        'readerLongformArticleSha256': article_sha,
+    })
+    acquisition = {
+        **{field: provenance[field] for field in (
+            'specRootSha256', 'paperSpecSha256', 'sealedRecordSha256',
+            'recordFileSha256', 'artifactIndexSha256', 'artifactIndexFileSha256',
+        )},
+        'sourceSha256': '1' * 64, 'sourceIdentitySha256': '2' * 64,
+        'paperInputSha256': '3' * 64,
+        'readerLongformSha256': provenance['readerLongformSha256'],
+    }
+    paper = {
+        'title': 'Manual V6 Publisher Fixture', 'arxivId': paper_id,
+        'manualDepth': 'full-text-evidence-v6', 'manualArtifactIndex': artifact,
+        'manualReaderLongform': bundle, 'manualV6Provenance': provenance,
+        'parsed': {
+            'score': '8.3', 'tags': ['#语音识别'], 'primaryTaskTag': '#语音识别',
+            'documentType': '方法研究',
+            'summary': '本文把双路径声学表示、完整结果表与可复现边界组织成一条递进证据链。',
+            'roast': '完整表格值得肯定，但单一测试集和缺失置信区间限制了结论力度。',
+            'opensource': '代码尚未公开；复现需按正文登记数据划分与解码参数。',
+            'scoringReason': '创新性与实验证据均有明确全文依据，扣分来自泛化与统计报告不足。',
+        },
+        'analysisManifest': {
+            'contracts': {
+                'manualDepth': 'full-text-evidence-v6', 'readerLongform': 'reader-longform-v2',
+                'artifactIndex': 'manual-artifact-parser-v2-structured',
+                'experimentTables': 'evidence-rich-v2', 'researcherFocus': 'audio-researcher-v1',
+                'perPaperSubagent': 'isolated-single-paper-v1',
+            },
+            'sourceAcquisition': acquisition,
+            'manualTakeover': {
+                'v6Provenance': copy.deepcopy(provenance),
+                'researchBrief': {'editorialPlan': {
+                    'version': 2, 'readerTitle': '从双路径信号流到完整结果证据',
+                    'oneSentenceThesis': '双路径表示在固定测试集降低词错率，但泛化和统计边界仍待补齐。',
+                }},
+            },
+        },
+        'selectedImageUrls': [],
+    }
+    # Seal from the final in-memory blocks last.  Keeping this in one tail
+    # step makes later fixture edits unable to leave an earlier article,
+    # receipt, takeover copy or bundle semantic hash stale.
+    final_article = '\n\n'.join(
+        f'### {_manual_v6_text(block["heading"])}\n\n{_manual_v6_text(block["markdown"])}'
+        for block in paper['manualReaderLongform']['blocks']
+    )
+    final_article_sha = hashlib.sha256(final_article.encode('utf-8')).hexdigest()
+    paper['manualReaderLongform']['articleSha256'] = final_article_sha
+    paper['manualReaderLongform']['authorReceipt']['articleSha256'] = final_article_sha
+    takeover = paper['analysisManifest']['manualTakeover']
+    takeover['readerArticle'] = final_article
+    takeover['readerArticleSha256'] = final_article_sha
+    provenance['readerLongformArticleSha256'] = final_article_sha
+    provenance['readerLongformSha256'] = hashlib.sha256(json.dumps(
+        paper['manualReaderLongform'], ensure_ascii=False, sort_keys=True,
+        separators=(',', ':'),
+    ).encode('utf-8')).hexdigest()
+    acquisition['readerLongformSha256'] = provenance['readerLongformSha256']
+    takeover['v6Provenance'] = copy.deepcopy(provenance)
+    return paper
 
 
 def valid_png(payload_suffix=b'', width=768, height=1200):
@@ -265,6 +582,13 @@ class PublishToBlogReviewTest(unittest.TestCase):
             ['--cat', '论文速递'],
             ['--date', '2026-07-10', '--date', '2026-07-11'],
             ['--push'],
+            ['--include-id', '2607.00001', '--include-id', '2607.00002'],
+            ['--include-id', '2607.00001', '--exclude-id', '2607.00002'],
+            ['--include-id', '2607.00001', '--all'],
+            ['--sealed-tutorial-preview'],
+            ['data.json', '--include-id', '2607.00001', '--sealed-tutorial-preview'],
+            ['--include-id', '2607.00001', '--sealed-tutorial-preview',
+             '--sealed-tutorial-preview'],
         ):
             with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as caught:
@@ -276,6 +600,15 @@ class PublishToBlogReviewTest(unittest.TestCase):
             '--exclude-id', '2607.00002',
         ])
         self.assertEqual(parsed['excluded_ids'], ['2607.00001', '2607.00002'])
+        included = publish_to_blog.parse_generation_args([
+            '--date', '2026-07-10', '--include-id', 'arXiv:2607.00001v2',
+        ])
+        self.assertEqual(included['include_id'], 'arXiv:2607.00001v2')
+        sealed_preview = publish_to_blog.parse_generation_args([
+            '--date', '2026-07-10', '--include-id', '2607.00001',
+            '--sealed-tutorial-preview',
+        ])
+        self.assertTrue(sealed_preview['sealed_tutorial_preview'])
 
     def test_empty_generation_invalidates_same_date_stale_stage_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -494,7 +827,9 @@ title: "Duplicate"
                 'contracts': {'manualDepth': 'full-text-evidence-v5'},
                 'manualTakeover': {
                     'researchBrief': {'editorialPlan': {
-                        'version': 2, 'readerTitle': '先把语音识别的关键矛盾说清楚',
+                        'version': 2,
+                        'readerFormatContract': 'graduate-researcher-tutorial-quality-v2',
+                        'readerTitle': '先把语音识别的关键矛盾说清楚',
                         'oneSentenceThesis': '以可验证的分工处理当前设置中的识别冲突，并把无法外推的边界明确留在结论中。',
                     }},
                     'readerArticle': reader_article,
@@ -502,10 +837,11 @@ title: "Duplicate"
                 },
             },
         }
-        markdown = publish_to_blog.generate_index_page(
-            [(8.0, paper, parsed)], [], '2026-08-25',
-            {'2608.00001': 'long-title-2608-00001'},
-        )
+        with manual_v5_fresh_files(paper, '2026-08-25'):
+            markdown = publish_to_blog.generate_index_page(
+                [(8.0, paper, parsed)], [], '2026-08-25',
+                {'2608.00001': 'long-title-2608-00001'},
+            )
         compact = publish_to_blog.compact_title_for_ranking(title)
         self.assertIn('✅ 筛选入选 1 篇 → 🔬 深度分析完成', markdown)
         self.assertIn('paper_digest_reader_quality: "reader-facing-v1"', markdown)
@@ -795,8 +1131,9 @@ title: "Bad table"
         ):
             passed, issues, reviewed = publish_to_blog.llm_review_post('正文没有尖括号标签。', '标题', required=True)
 
-        self.assertTrue(passed)
-        self.assertEqual(issues, [])
+        self.assertFalse(passed)
+        self.assertEqual(issues[0]['severity'], 'error')
+        self.assertIn('passed=false', issues[0]['description'])
         self.assertEqual(reviewed, '正文没有尖括号标签。')
 
     def test_required_image_review_fails_closed_on_non_json_and_invalid_severity(self):
@@ -857,7 +1194,7 @@ title: "Bad table"
             '### 再追踪两条通路\n\n'
             '这里用完整段落追踪输入、共享推理与输出如何衔接，避免把模块名称直接堆给读者。'
         )
-        markdown, _slug = publish_to_blog.generate_paper_page({
+        paper = {
             'title': 'A General Purpose Audio Model',
             'arxivId': '2608.24168',
             'parsed': {
@@ -873,12 +1210,68 @@ title: "Bad table"
                 'contracts': {'manualDepth': 'full-text-evidence-v5'},
                 'manualTakeover': {'researchBrief': {'editorialPlan': {
                     'version': 2,
+                    'readerFormatContract': 'graduate-researcher-tutorial-quality-v2',
                     'readerTitle': '两条表示如何统一听懂与生成音频',
                     'oneSentenceThesis': '共享语言推理而分离音频表示，让理解压缩与生成还原不再争抢同一个接口。',
                 }}, 'readerArticle': reader_article,
                 'readerArticleSha256': hashlib.sha256(reader_article.encode('utf-8')).hexdigest()},
             },
-        }, '2026-08-26')
+        }
+        with manual_v5_fresh_files(
+                paper, '2026-08-26', official_project_evidence=True):
+            markdown, _slug = publish_to_blog.generate_paper_page(paper, '2026-08-26')
+            takeover = paper['analysisManifest']['manualTakeover']
+            payload = takeover.pop('tutorialPayload')
+            payload_sha = takeover.pop('tutorialPayloadSha256')
+            paper['analysisManifest']['contracts'].pop('tutorialPayload')
+            with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError,
+                    '历史 v5 只读兼容但不得重新包装'):
+                publish_to_blog.generate_paper_page(paper, '2026-08-26')
+            paper['analysisManifest']['contracts']['tutorialPayload'] = 'manual-v5-tutorial-payload-v1'
+            takeover['tutorialPayload'] = payload
+            takeover['tutorialPayloadSha256'] = payload_sha
+            original_orchestrator = payload['orchestratorFingerprint']
+            payload['orchestratorFingerprint'] = '0' * 64
+            takeover['tutorialPayloadSha256'] = publish_to_blog._stable_json_sha256(payload)
+            with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError,
+                    '统一质量 orchestrator 协议'):
+                publish_to_blog.generate_paper_page(paper, '2026-08-26')
+            payload['orchestratorFingerprint'] = original_orchestrator
+            takeover['tutorialPayloadSha256'] = publish_to_blog._stable_json_sha256(payload)
+            quality_path = Path(payload['qualityPath'])
+            original_quality_bytes = quality_path.read_bytes()
+            quality_path.write_text('{"paperId":"2608.00000"}', encoding='utf-8')
+            with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError,
+                    'qualityPath 文件 SHA 漂移'):
+                publish_to_blog.generate_paper_page(paper, '2026-08-26')
+            quality_path.write_bytes(original_quality_bytes)
+            official_input = next(
+                item for item in paper['analysisManifest']['manualTakeover']['freshAuthoring']['inputs']
+                if item['kind'] == 'official_project_evidence'
+            )
+            official_path = Path(official_input['path'])
+            original_official_bytes = official_path.read_bytes()
+            official_path.write_text(json.dumps({
+                'paperId': '2608.00000',
+                'kind': 'official_project_evidence',
+                'url': 'https://example.org/wrong-paper',
+            }), encoding='utf-8')
+            with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError,
+                    'official_project_evidence paperId/kind/HTTPS URL 非法'):
+                publish_to_blog.generate_paper_page(paper, '2026-08-26')
+            official_path.write_bytes(original_official_bytes)
+            article_path = Path(
+                paper['analysisManifest']['manualTakeover']['freshAuthoring']['articlePath']
+            )
+            article_path.write_text(reader_article + '\n\n旧稿注入。', encoding='utf-8')
+            with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError,
+                    'fresh article.md raw/NFKC SHA 或正文发生漂移'):
+                publish_to_blog.generate_paper_page(paper, '2026-08-26')
         self.assertIn('# 📄 两条表示如何统一听懂与生成音频', markdown)
         self.assertIn('> 英文题目：*[A General Purpose Audio Model](https://arxiv.org/abs/2608.24168)*', markdown)
         self.assertIn('> 一句话：**共享语言推理而分离音频表示', markdown)
@@ -905,6 +1298,132 @@ title: "Bad table"
             markdown.index('<summary>📎 论文与评分元数据</summary>'),
         )
 
+    def test_manual_v5_never_falls_back_to_legacy_canonical_sections(self):
+        paper = {
+            'title': 'Legacy prose must not become a new tutorial',
+            'arxivId': '2608.29999',
+            'parsed': {
+                'score': '7.0', 'tags': ['#音频理解'],
+                'summary': '旧摘要。', 'architecture': '旧方法。',
+                'innovation': '旧创新。', 'results': '旧结果。',
+                'details': '旧细节。', 'limitations': '旧局限。',
+            },
+            'analysisManifest': {
+                'contracts': {'manualDepth': 'full-text-evidence-v5'},
+                'manualTakeover': {'researchBrief': {'editorialPlan': {
+                    'version': 2,
+                    'readerTitle': '缺少新正文的页面',
+                    'oneSentenceThesis': '这条记录故意缺少可验证的新正文。',
+                }}},
+            },
+        }
+        with self.assertRaisesRegex(
+                publish_to_blog.PublishDataValidationError,
+                '禁止从旧 canonical 固定章节回拼正文'):
+            publish_to_blog.generate_paper_page(paper, '2026-08-27')
+
+    def test_manual_v6_entry_render_uses_only_canonical_blocks_and_explicit_bindings(self):
+        paper = manual_v6_publication_fixture()
+        payload = validate_manual_v6_payload(paper)
+        markdown, _slug = publish_to_blog.generate_paper_page(
+            paper, '2026-08-28', '论文速递',
+        )
+        self.assertIn('paper_digest_manual_depth: "full-text-evidence-v6"', markdown)
+        self.assertIn('paper_digest_reader_longform: "reader-longform-v2"', markdown)
+        self.assertIn(
+            f'paper_digest_reader_article_sha256: "{payload["articleSha256"]}"',
+            markdown,
+        )
+        self.assertIn('#### 逐行读取完整结果表', markdown)
+        self.assertIn('**LibriSpeech test-clean 完整结果**', markdown)
+        self.assertIn('| 完整方法 | 7.1% |', markdown)
+        # The publisher nests canonical block headings but does not use a
+        # separately supplied Markdown article as its rendering authority.
+        self.assertNotRegex(markdown, r'(?m)^### 逐行读取完整结果表$')
+
+        bindings = publish_to_blog.manual_v6_publication_bindings([paper])
+        self.assertEqual(bindings[0]['manualDepth'], 'full-text-evidence-v6')
+        self.assertEqual(bindings[0]['recordSemanticSha256'], 'c' * 64)
+        self.assertEqual(bindings[0]['readerArticleSha256'], payload['articleSha256'])
+
+    def test_manual_v6_longform_string_sha_matches_node_raw_utf8_vector(self):
+        # manual-longform-contract.js hashes String(value) bytes directly;
+        # this guards against accidentally switching to workflow stable JSON.
+        self.assertEqual(
+            _manual_v6_text_sha('中|A\n'),
+            '84996bd499282e0fed65f8ddee3bf3aae24edbe1cb31bea3496c723960d96dbf',
+        )
+
+    def test_manual_v6_declared_payload_never_falls_back_on_missing_or_tampered_data(self):
+        missing = manual_v6_publication_fixture()
+        del missing['manualReaderLongform']['formulas']
+        with self.assertRaisesRegex(PublishDataValidationError, 'semantic SHA|formulas'):
+            publish_to_blog.generate_paper_page(missing, '2026-08-28')
+
+        tampered = manual_v6_publication_fixture()
+        tampered['manualReaderLongform']['tables'][0]['renderedMarkdown'] = '| 篡改 | 0 |'
+        with self.assertRaisesRegex(PublishDataValidationError, 'semantic SHA|确定性渲染'):
+            publish_to_blog.generate_paper_page(tampered, '2026-08-28')
+
+        provenance_drift = manual_v6_publication_fixture()
+        provenance_drift['analysisManifest']['manualTakeover']['v6Provenance'][
+            'recordFileSha256'
+        ] = '0' * 64
+        with self.assertRaisesRegex(PublishDataValidationError, 'provenance'):
+            publish_to_blog.generate_paper_page(provenance_drift, '2026-08-28')
+
+    def test_manual_v6_final_page_gate_binds_exact_rendered_block_bytes(self):
+        paper = manual_v6_publication_fixture()
+        markdown, _slug = publish_to_blog.generate_paper_page(paper, '2026-08-28')
+        sanitized = publish_to_blog.sanitize_markdown_for_publish(markdown)
+        # This compact publisher fixture deliberately omits the large v5
+        # resultClaims ledger, so a pristine page may fail later at that
+        # independent gate.  It must first pass the v6 deterministic replay.
+        pristine_issue = publish_to_blog.validate_final_manual_v4_markdown(
+            sanitized, paper,
+        ) or ''
+        self.assertNotIn('确定性渲染', pristine_issue)
+        altered = sanitized.replace('完整方法由 8.4% 降到 7.1%', '完整方法由 8.4% 降到 7.2%')
+        self.assertIn(
+            '确定性渲染',
+            publish_to_blog.validate_final_manual_v4_markdown(altered, paper),
+        )
+
+    def test_generation_manifest_recomputes_v6_explicit_bindings(self):
+        paper = manual_v6_publication_fixture()
+        date_str = '2026-08-28'
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            page = posts / f'{date_str}-manual-v6.md'
+            page.write_text('v6 page\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(
+                        publish_to_blog, 'generation_manifest_path',
+                        return_value=Path(tmp) / 'generation.json',
+                    ), mock.patch.object(
+                        publish_to_blog, 'review_receipt_path',
+                        return_value=Path(tmp) / 'receipt.json',
+                    ), mock.patch.object(
+                        publish_to_blog, 'review_failure_path',
+                        return_value=Path(tmp) / 'failure.json',
+                    ), mock.patch.object(
+                        publish_to_blog, 'save_review_pass_cache', return_value=None,
+                    ):
+                fingerprint = publish_to_blog.generation_input_fingerprint(
+                    [paper], date_str, '论文速递', False,
+                )
+                manifest_path = publish_to_blog.save_generation_manifest(
+                    date_str, [page], input_fingerprint=fingerprint,
+                    template_fingerprint='1' * 64, base_head='2' * 40,
+                    published_papers=[paper], publish_all=False,
+                )
+                manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+                self.assertEqual(len(manifest['manualV6Bindings']), 1)
+                publish_to_blog._validate_generation_input_integrity(manifest, date_str)
+                manifest['manualV6Bindings'][0]['readerArticleSha256'] = '0' * 64
+                with self.assertRaisesRegex(PublishDataValidationError, 'v6'):
+                    publish_to_blog._validate_generation_input_integrity(manifest, date_str)
+
     def test_manual_v5_renders_selected_figure_only_from_reader_article(self):
         url = 'https://arxiv.org/html/2608.29999/figure-1.png'
         legacy_lead = '摘要先概括论文问题，并说明为什么这张图只应在权威读者长文中负责图文论证。'
@@ -915,7 +1434,7 @@ title: "Bad table"
             f'![结构图]({url})\n\n'
             '图中箭头只支持已经绘出的模块连接，不能推出没有测量的训练或部署结论。'
         )
-        markdown, _slug = publish_to_blog.generate_paper_page({
+        paper = {
             'title': 'Reader-first Figure Ownership',
             'arxivId': '2608.29999',
             'selectedImageUrls': [url],
@@ -934,6 +1453,7 @@ title: "Bad table"
                 'contracts': {'manualDepth': 'full-text-evidence-v5'},
                 'manualTakeover': {'researchBrief': {'editorialPlan': {
                     'version': 2,
+                    'readerFormatContract': 'graduate-researcher-tutorial-quality-v2',
                     'readerTitle': '由读者长文唯一持有图文证据',
                     'oneSentenceThesis': '图应当只在绑定了问题、读法和边界的读者长文里出现一次。',
                 }}, 'readerArticle': reader_article,
@@ -942,7 +1462,9 @@ title: "Bad table"
             'imageManifest': {'selected': [{'index': 1, 'url': url}], 'insertionPlan': [{
                 'imageNumber': 1, 'lead': legacy_lead, 'explanation': legacy_explanation,
             }]},
-        }, '2026-08-27')
+        }
+        with manual_v5_fresh_files(paper, '2026-08-27'):
+            markdown, _slug = publish_to_blog.generate_paper_page(paper, '2026-08-27')
         self.assertEqual(markdown.count(url), 1)
         self.assertIn(f'![结构图]({url})', markdown)
         self.assertNotIn('旧摘要中的重复图', markdown)
@@ -1407,6 +1929,40 @@ body
             with mock.patch.object(publish_to_blog.shutil, 'which', return_value=None):
                 self.assertEqual(publish_to_blog.run_hugo_gate(tmp, posts), 'fallback')
 
+    def test_staged_validation_reads_each_page_once_and_returns_bound_artifact(self):
+        markdown = '''---
+title: "Test"
+date: 2026-07-10
+draft: false
+tags: []
+categories: [test]
+description: "test"
+---
+body
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            posts = Path(tmp) / 'content' / 'posts'
+            posts.mkdir(parents=True)
+            page = posts / '2026-07-10.md'
+            page.write_text(markdown, encoding='utf-8')
+            artifacts = {}
+            original_read_bytes = Path.read_bytes
+            with mock.patch.object(
+                    Path, 'read_bytes', autospec=True,
+                    side_effect=lambda path: original_read_bytes(path),
+                ) as read_bytes:
+                publish_to_blog.validate_staged_posts(
+                    posts, '2026-07-10', artifact_cache=artifacts,
+                )
+            self.assertEqual(read_bytes.call_count, 1)
+            artifact = artifacts[str(page.resolve())]
+            self.assertEqual(artifact['version'], 1)
+            self.assertEqual(
+                artifact['sha256'], hashlib.sha256(page.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(artifact['frontmatter']['title'], 'Test')
+            self.assertEqual(artifact['body'], 'body\n')
+
     def test_staged_gate_rechecks_marked_index_reader_quality(self):
         markdown = '''---
 title: "Test"
@@ -1497,6 +2053,198 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             self.assertIn('--contentDir', command)
             self.assertIn('--destination', command)
             self.assertIn('--noBuildLock', command)
+
+    def test_tutorial_markdown_format_gate_catches_reader_visible_syntax_and_contract_defects(self):
+        frontmatter = {
+            'paper_digest_manual_depth': 'full-text-evidence-v5',
+            'paper_digest_tutorial_contract': 'graduate-researcher-tutorial-quality-v2',
+            'paper_digest_fresh_authoring_contract': 'fresh-authoring-v1',
+            'paper_digest_fresh_authoring_sha256': 'a' * 64,
+            'paper_digest_reader_article_sha256': 'b' * 64,
+            'paper_digest_tutorial_payload_contract': 'manual-v5-tutorial-payload-v1',
+            'paper_digest_tutorial_payload_sha256': 'c' * 64,
+            'paper_digest_tutorial_quality_sha256': 'd' * 64,
+            'paper_digest_tutorial_artifact_plan_sha256': 'e' * 64,
+        }
+        score_line = (
+            '**八维分项：** 创新 1.5/2 ｜ 技术严谨 1.0/1.5 ｜ 实验充分 1.2/1.5 ｜ '
+            '清晰度 0.8/1 ｜ 影响力 1.1/1.5 ｜ 开源 1.0/1.5 ｜ 可复现 0.4/0.5 ｜ 工程/实践 1.2/1.5'
+        )
+        valid = f'''{score_line}
+
+### 方法流程
+
+![流程图](https://example.com/figure.svg)
+
+### 完整结果
+
+| 方法 | 分数 |
+| --- | --- |
+| A | 1.0 |
+
+公式为 \\(x+y\\)。
+'''
+        self.assertEqual(
+            publish_to_blog.validate_markdown_format_gate('tutorial.md', frontmatter, valid), [],
+        )
+        missing_fresh = dict(frontmatter)
+        missing_fresh.pop('paper_digest_fresh_authoring_contract')
+        self.assertTrue(any(
+            'fresh-authoring-v1' in issue
+            for issue in publish_to_blog.validate_markdown_format_gate(
+                'tutorial.md', missing_fresh, valid,
+            )
+        ))
+        missing_tutorial = dict(frontmatter)
+        missing_tutorial.pop('paper_digest_tutorial_contract')
+        self.assertTrue(any(
+            'graduate-researcher-tutorial-quality-v2' in issue
+            for issue in publish_to_blog.validate_markdown_format_gate(
+                'tutorial.md', missing_tutorial, valid,
+            )
+        ))
+        missing_receipt_sha = dict(frontmatter)
+        missing_receipt_sha.pop('paper_digest_fresh_authoring_sha256')
+        self.assertTrue(any(
+            'paper_digest_fresh_authoring_sha256' in issue
+            for issue in publish_to_blog.validate_markdown_format_gate(
+                'tutorial.md', missing_receipt_sha, valid,
+            )
+        ))
+        cases = {
+            'bare-dollar': valid.replace(r'\(x+y\)', '$x+y$'),
+            'bare-display-dollar': valid.replace(r'\(x+y\)', '$$x+y$$'),
+            'unpaired-delimiter': valid.replace(r'\(x+y\)', r'\(x+y'),
+            'unpaired-bold': valid + '\n**残留加粗',
+            'glued-bold': valid + '\n**关键判断。**论文随后给出实验。',
+            'missing-score': valid.replace('工程/实践 1.2/1.5', ''),
+            'numbered-section-heading': valid.replace('### 方法流程', '### 图 1：方法流程'),
+        }
+        for name, markdown in cases.items():
+            with self.subTest(name=name):
+                issues = publish_to_blog.validate_markdown_format_gate(
+                    'tutorial.md', frontmatter, markdown,
+                )
+                self.assertTrue(issues)
+
+    def test_complete_score_line_keeps_all_eight_dimensions_including_zero(self):
+        parsed = {
+            'score': 6.0,
+            'innovationScore': 1.0,
+            'technicalRigorScore': 1.0,
+            'experimentalSufficiencyScore': 1.0,
+            'clarityScore': 0.5,
+            'impactScore': 1.0,
+            'openSourceScore': 0,
+            'reproducibilityScore': 0,
+            'engineeringScore': 1.5,
+        }
+        rendered = publish_to_blog.format_complete_score_line(parsed)
+        self.assertIn('开源 0/1.5', rendered)
+        self.assertIn('可复现 0/0.5', rendered)
+        self.assertEqual(rendered.count(' | '), 8)
+        del parsed['engineeringScore']
+        self.assertNotIn('工程/实践', publish_to_blog.format_complete_score_line(parsed))
+
+    def test_hugo_rendered_html_gate_binds_source_and_catches_dropped_artifacts(self):
+        frontmatter = {
+            'title': 'Tutorial page',
+            'paper_digest_tutorial_contract': 'graduate-researcher-tutorial-quality-v2',
+            'paper_digest_fresh_authoring_contract': 'fresh-authoring-v1',
+        }
+        body = '''**八维分项：** 创新 1.5/2 ｜ 技术严谨 1.0/1.5 ｜ 实验充分 1.2/1.5 ｜ 清晰度 0.8/1 ｜ 影响力 1.1/1.5 ｜ 开源 1.0/1.5 ｜ 可复现 0.4/0.5 ｜ 工程/实践 1.2/1.5
+
+### 方法流程
+
+![流程图](https://example.com/figure.svg)
+
+### 完整结果
+
+| 方法 | 分数 |
+| --- | --- |
+| A | 1.0 |
+
+公式为 \\(x+y\\)。
+'''
+        artifact = {
+            'path': '/tmp/tutorial.md', 'frontmatter': frontmatter, 'body': body,
+        }
+        rendered_article = '''<article>
+<h1>Tutorial page</h1>
+<p>八维分项： 创新 1.5/2 ｜ 技术严谨 1.0/1.5 ｜ 实验充分 1.2/1.5 ｜ 清晰度 0.8/1 ｜ 影响力 1.1/1.5 ｜ 开源 1.0/1.5 ｜ 可复现 0.4/0.5 ｜ 工程/实践 1.2/1.5</p>
+<h3>方法流程</h3><img src="https://example.com/figure.svg">
+<h3>完整结果</h3><table><tr><td>A</td></tr></table><p>\\(x+y\\)</p>
+</article>'''
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            page = output / 'posts' / 'tutorial' / 'index.html'
+            page.parent.mkdir(parents=True)
+            page.write_text(f'<html><body>{rendered_article}</body></html>', encoding='utf-8')
+            self.assertEqual(
+                publish_to_blog.validate_hugo_rendered_html_gate(output, [artifact]), [],
+            )
+            invalid_rendered_article = rendered_article.replace(
+                '<img src="https://example.com/figure.svg">', '**',
+            )
+            page.write_text(
+                f'<html><body>{invalid_rendered_article}</body></html>',
+                encoding='utf-8',
+            )
+            issues = publish_to_blog.validate_hugo_rendered_html_gate(output, [artifact])
+            self.assertTrue(any('图片数量不足' in issue for issue in issues))
+            self.assertTrue(any('残留 Markdown 加粗标记' in issue for issue in issues))
+
+    def test_run_hugo_gate_executes_rendered_html_contract_after_build(self):
+        markdown = '''---
+title: "Tutorial page"
+date: 2026-07-10
+draft: false
+tags: []
+categories: [test]
+description: "test"
+paper_digest_tutorial_contract: "graduate-researcher-tutorial-quality-v2"
+paper_digest_fresh_authoring_contract: "fresh-authoring-v1"
+paper_digest_fresh_authoring_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+paper_digest_reader_article_sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+paper_digest_tutorial_payload_contract: "manual-v5-tutorial-payload-v1"
+paper_digest_tutorial_payload_sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+paper_digest_tutorial_quality_sha256: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+---
+**八维分项：** 创新 1.5/2 ｜ 技术严谨 1.0/1.5 ｜ 实验充分 1.2/1.5 ｜ 清晰度 0.8/1 ｜ 影响力 1.1/1.5 ｜ 开源 1.0/1.5 ｜ 可复现 0.4/0.5 ｜ 工程/实践 1.2/1.5
+
+### 方法流程
+
+![流程图](https://example.com/figure.svg)
+
+### 完整结果
+
+| 方法 | 分数 |
+| --- | --- |
+| A | 1.0 |
+
+公式为 \\(x+y\\)。
+'''
+        rendered = '''<html><body><article><h1>Tutorial page</h1>
+<p>八维分项： 创新 1.5/2 ｜ 技术严谨 1.0/1.5 ｜ 实验充分 1.2/1.5 ｜ 清晰度 0.8/1 ｜ 影响力 1.1/1.5 ｜ 开源 1.0/1.5 ｜ 可复现 0.4/0.5 ｜ 工程/实践 1.2/1.5</p>
+<h3>方法流程</h3><img src="https://example.com/figure.svg">
+<h3>完整结果</h3><table><tr><td>A</td></tr></table><p>\\(x+y\\)</p>
+</article></body></html>'''
+        with tempfile.TemporaryDirectory() as tmp:
+            posts = Path(tmp) / 'content' / 'posts'
+            posts.mkdir(parents=True)
+            (posts / '2026-07-10-tutorial.md').write_text(markdown, encoding='utf-8')
+
+            def build_output(command, **_kwargs):
+                destination = Path(command[command.index('--destination') + 1])
+                page = destination / 'posts' / 'tutorial' / 'index.html'
+                page.parent.mkdir(parents=True)
+                page.write_text(rendered, encoding='utf-8')
+                return SimpleNamespace(returncode=0, stdout='', stderr='')
+
+            with mock.patch.object(publish_to_blog.shutil, 'which', return_value='/usr/bin/hugo'), \
+                    mock.patch.object(publish_to_blog.subprocess, 'run', side_effect=build_output):
+                self.assertEqual(publish_to_blog.run_hugo_gate(tmp, posts), 'hugo')
 
     def test_push_requires_hugo_but_skip_push_allows_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1719,6 +2467,120 @@ paper_digest_manual_depth: "full-text-evidence-v4"
         ):
             publish_to_blog.exclude_papers_for_publish(papers, ['2607.99999'])
 
+    def test_single_generation_selects_exactly_one_normalized_id(self):
+        papers = [
+            {'arxivId': '2607.00001v2', 'title': 'selected'},
+            {'arxivId': '2607.00002', 'title': 'other'},
+        ]
+        selected, paper_id = publish_to_blog.include_single_paper_for_publish(
+            papers, 'arXiv:2607.00001v1',
+        )
+        self.assertEqual([paper['title'] for paper in selected], ['selected'])
+        self.assertEqual(paper_id, '2607.00001')
+        with self.assertRaisesRegex(
+            publish_to_blog.PublishDataValidationError, '未命中当前发布批次',
+        ):
+            publish_to_blog.include_single_paper_for_publish(papers, '2607.99999')
+        with self.assertRaisesRegex(
+            publish_to_blog.PublishDataValidationError, '重复规范化 ID',
+        ):
+            publish_to_blog.include_single_paper_for_publish(
+                papers + [{'arxivId': '2607.00001v3', 'title': 'duplicate'}],
+                '2607.00001',
+            )
+
+    def test_single_generation_state_and_manifest_paths_are_isolated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            current = Path(tmp) / 'current'
+            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                batch = publish_to_blog.generation_manifest_path('2026-07-10')
+                with publish_to_blog.publication_scope('arXiv:2607.00001v2'):
+                    single = publish_to_blog.generation_manifest_path('2026-07-10')
+                    receipt = publish_to_blog.review_receipt_path('2026-07-10')
+                self.assertEqual(batch.name, 'blog-generation-manifest-2026-07-10.json')
+                self.assertRegex(
+                    single.name,
+                    r'^blog-generation-manifest-2026-07-10-single-2607-00001-[0-9a-f]{10}\.json$',
+                )
+                self.assertIn('single-2607-00001', receipt.name)
+                self.assertNotEqual(batch, single)
+
+    def test_single_publish_manifest_never_adds_index_or_stale_deletions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            staged = Path(tmp) / 'stage' / 'posts'
+            posts = Path(tmp) / 'blog' / 'content' / 'posts'
+            staged.mkdir(parents=True)
+            posts.mkdir(parents=True)
+            selected = staged / '2026-07-10-selected.md'
+            selected.write_text('selected\n', encoding='utf-8')
+            (posts / '2026-07-10-other.md').write_text('other\n', encoding='utf-8')
+            paths = publish_to_blog.publish_manifest_paths(
+                staged, posts, '2026-07-10', single_page=True,
+            )
+            self.assertEqual(paths, [(posts / selected.name).resolve()])
+            (staged / '2026-07-10.md').write_text('index\n', encoding='utf-8')
+            with self.assertRaisesRegex(
+                publish_to_blog.PublishDataValidationError, '只含一个论文页',
+            ):
+                publish_to_blog.publish_manifest_paths(
+                    staged, posts, '2026-07-10', single_page=True,
+                )
+
+    def test_single_generation_manifest_binds_scope_paper_and_only_page(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'blog'
+            posts = repo / 'content' / 'posts'
+            posts.mkdir(parents=True)
+            current = Path(tmp) / 'current'
+            page = posts / '2026-07-10-selected.md'
+            page.write_text(
+                '---\npaper_digest_page_type: paper\n'
+                'paper_digest_arxiv_id: "2607.00001"\n---\nbody\n',
+                encoding='utf-8',
+            )
+            paper = {'arxivId': '2607.00001', 'title': 'Selected'}
+            fingerprint = publish_to_blog.generation_input_fingerprint(
+                [paper], '2026-07-10', '论文速递', False, '2607.00001',
+            )
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    publish_to_blog.publication_scope('2607.00001'):
+                manifest_path = publish_to_blog.save_generation_manifest(
+                    '2026-07-10', [page],
+                    input_fingerprint=fingerprint,
+                    template_fingerprint=publish_to_blog.generation_template_fingerprint(),
+                    base_head='a' * 40,
+                    category='论文速递', published_papers=[paper],
+                    publish_all=False, include_id='2607.00001',
+                )
+                payload = json.loads(manifest_path.read_text(encoding='utf-8'))
+                loaded, loaded_manifest = publish_to_blog.load_generation_manifest(
+                    '2026-07-10'
+                )
+            self.assertEqual(
+                payload['publicationScope'],
+                {'mode': 'single-paper', 'includeId': '2607.00001'},
+            )
+            self.assertEqual(len(payload['files']), 1)
+            self.assertEqual(loaded, [page.resolve()])
+            self.assertEqual(loaded_manifest, manifest_path)
+
+    def test_single_publish_rejects_any_unrelated_git_worktree_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            target = posts / '2026-07-10-selected.md'
+            target.write_text('selected\n', encoding='utf-8')
+            extra = posts / '2026-07-10-other.md'
+            extra.write_text('extra\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)):
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, '清单外 Git 修改',
+                ):
+                    publish_to_blog.validate_single_publication_worktree([target])
+            extra.unlink()
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)):
+                publish_to_blog.validate_single_publication_worktree([target])
+
     def test_review_receipt_detects_any_post_review_file_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
@@ -1825,6 +2687,46 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             self.assertEqual(plan['paths'], [failed.resolve()])
             self.assertEqual(plan['unchangedFailed'], [])
             self.assertTrue(plan['priorResults'][str(passed.resolve())]['passed'])
+
+    def test_page_checkpoint_resumes_exact_sha_without_full_batch_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10-paper.md'
+            page.write_text('reviewed exact bytes\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir), \
+                    mock.patch.object(
+                        publish_to_blog, 'review_protocol_fingerprint',
+                        return_value='9' * 64,
+                    ):
+                manifest = publish_to_blog.save_generation_manifest(
+                    '2026-07-10', [page],
+                )
+                page_sha = publish_to_blog._sha256_file(page)
+                checkpoint = publish_to_blog.save_review_page_checkpoint(
+                    '2026-07-10', page, {
+                        'passed': True,
+                        'completed': True,
+                        'failureKind': None,
+                        'reviewedSha256': page_sha,
+                        'imageReviewMode': 'manual_semantic',
+                    }, manifest, 'a' * 40,
+                )
+                self.assertTrue(checkpoint.is_file())
+                self.assertFalse(
+                    publish_to_blog.review_failure_path('2026-07-10').exists(),
+                )
+                plan = publish_to_blog.plan_incremental_review(
+                    '2026-07-10', [page], manifest, 'a' * 40,
+                )
+                self.assertEqual(plan['paths'], [])
+                self.assertEqual(plan['reusedPassed'], 1)
+                page.write_text('changed bytes\n', encoding='utf-8')
+                stale_plan = publish_to_blog.plan_incremental_review(
+                    '2026-07-10', [page], manifest, 'a' * 40,
+                )
+            self.assertEqual(stale_plan['paths'], [page.resolve()])
 
     def test_incremental_review_rechecks_only_changed_passed_and_failed_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1985,6 +2887,39 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             self.assertEqual(result['failureKind'], 'transient')
             self.assertTrue(result['completed'])
             self.assertEqual(len(callbacks), 1)
+
+    def test_final_single_page_review_is_read_only_and_blocks_proposed_fixes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            posts = Path(tmp)
+            page = posts / '2026-07-10-paper.md'
+            original = 'immutable final bytes\n'
+            page.write_text(original, encoding='utf-8')
+            with mock.patch.object(
+                    publish_to_blog, 'review_and_fix_post',
+                    return_value=(True, ['需要确定性修复']),
+                ) as deterministic, mock.patch.object(
+                    publish_to_blog, 'llm_review_post',
+                    return_value=(False, [], 'LLM proposed replacement\n'),
+                ), mock.patch.object(
+                    publish_to_blog, 'multimodal_review_images',
+                    return_value=(True, []),
+                ), mock.patch.object(
+                    publish_to_blog, 'atomic_write_text',
+                ) as write:
+                result = publish_to_blog._review_single_paper((
+                    '2607.00001', 'paper', '2026-07-10', 'Paper', True,
+                    str(posts), {'arxivId': '2607.00001'},
+                ))
+            self.assertEqual(page.read_text(encoding='utf-8'), original)
+            self.assertEqual(result[2], 0)
+            # Three independent blockers: deterministic defect, explicit
+            # reviewer rejection, and attempted replacement of immutable bytes.
+            self.assertEqual(result[3], 3)
+            deterministic.assert_called_once_with(
+                str(page), {'arxivId': '2607.00001'}, dry_run=True,
+                source_content=original,
+            )
+            write.assert_not_called()
 
     def test_generation_install_journal_adopts_crash_after_replace_and_rejects_later_edit(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2410,6 +3345,8 @@ paper_digest_manual_depth: "full-text-evidence-v4"
                                 'version': 1, 'taskName': 'review-2608-12345',
                                 'paperId': '2608.12345', 'singleFileOnly': True,
                                 'isolatedContext': True,
+                                'model': 'gpt-5.6-terra',
+                                'reasoningEffort': 'high',
                             },
                             'imageFindings': [],
                         },
@@ -2421,6 +3358,8 @@ paper_digest_manual_depth: "full-text-evidence-v4"
                             'reviewSubagent': {
                                 'version': 1, 'taskName': 'review-deleted-stale',
                                 'singleFileOnly': True, 'isolatedContext': True,
+                                'model': 'gpt-5.6-terra',
+                                'reasoningEffort': 'high',
                             },
                             'imageFindings': [],
                         },
@@ -2443,6 +3382,42 @@ paper_digest_manual_depth: "full-text-evidence-v4"
                     generation_manifest_sha256=manifest_sha,
                     expected_base_head=base_head,
                 ))
+                wrong_model = json.loads(json.dumps(receipt))
+                wrong_model['reviewProvenance']['files'][0]['reviewSubagent'][
+                    'model'
+                ] = 'gpt-5.6-sol'
+                self.assertIn(
+                    'reviewSubagent',
+                    publish_to_blog._manual_review_provenance_error(
+                        wrong_model, date_str=date_str,
+                        generation_manifest_sha256=manifest_sha,
+                        expected_base_head=base_head,
+                    ),
+                )
+                duplicate_task = json.loads(json.dumps(receipt))
+                duplicate_task['reviewProvenance']['files'][1]['reviewSubagent'][
+                    'taskName'
+                ] = 'review-2608-12345'
+                self.assertIn(
+                    'taskName 必须逐页全局唯一',
+                    publish_to_blog._manual_review_provenance_error(
+                        duplicate_task, date_str=date_str,
+                        generation_manifest_sha256=manifest_sha,
+                        expected_base_head=base_head,
+                    ),
+                )
+                missing_paper_id = json.loads(json.dumps(receipt))
+                del missing_paper_id['reviewProvenance']['files'][0][
+                    'reviewSubagent'
+                ]['paperId']
+                self.assertIn(
+                    'paperId 缺失或非法',
+                    publish_to_blog._manual_review_provenance_error(
+                        missing_paper_id, date_str=date_str,
+                        generation_manifest_sha256=manifest_sha,
+                        expected_base_head=base_head,
+                    ),
+                )
                 receipt['reviewProvenance']['files'][1]['deleted'] = False
                 self.assertIn('删除语义不一致', publish_to_blog._manual_review_provenance_error(
                     receipt, date_str=date_str,
@@ -3007,6 +3982,161 @@ body
                 adopted = json.loads(receipt_path.read_text(encoding='utf-8'))
                 self.assertEqual(adopted['publicationCommit'], committed)
             self.assertEqual(git(remote, 'rev-parse', 'refs/heads/main').stdout.strip(), committed)
+
+    def test_schema_v3_generation_tamper_fails_before_review_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current = Path(tmp) / 'data' / 'current'
+            paper = {'arxivId': '2607.12345', 'title': 'Paper'}
+            paper_page = posts / '2026-07-10-paper.md'
+            paper_page.write_text(
+                '---\npaper_digest_page_type: paper\n'
+                'paper_digest_arxiv_id: "2607.12345"\n---\noriginal\n',
+                encoding='utf-8',
+            )
+            index = posts / '2026-07-10.md'
+            index.write_text(
+                '---\npaper_digest_page_type: index\n---\nindex\n', encoding='utf-8',
+            )
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                base_head = publish_to_blog.validate_git_publish_branch()
+                manifest = publish_to_blog.save_generation_manifest(
+                    '2026-07-10', [paper_page, index],
+                    input_fingerprint=publish_to_blog.generation_input_fingerprint(
+                        [paper], '2026-07-10', '论文速递', False,
+                    ),
+                    template_fingerprint=publish_to_blog.generation_template_fingerprint(),
+                    base_head=base_head,
+                    published_papers=[paper],
+                )
+                paper_page.write_text(paper_page.read_text(encoding='utf-8') + 'tampered\n', encoding='utf-8')
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError,
+                    '文件字节与生成清单不一致',
+                ):
+                    publish_to_blog.load_generation_manifest('2026-07-10')
+                reviewed = {str(paper_page.resolve()): {
+                    'passed': True,
+                    'reviewedSha256': publish_to_blog._sha256_file(paper_page),
+                }}
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError,
+                    'generation 后页面字节',
+                ):
+                    publish_to_blog.save_review_receipt(
+                        '2026-07-10', [paper_page, index], 'hugo',
+                        expected_base_head=base_head,
+                        generation_manifest=manifest,
+                        reviewed_results=reviewed,
+                    )
+
+    def test_manifest_rejects_cross_date_post_for_existing_and_deleted_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current = Path(tmp) / 'data' / 'current'
+            wrong = posts / '2026-07-11-paper.md'
+            wrong.write_text('wrong date\n', encoding='utf-8')
+            deleted = posts / '2026-07-12-stale.md'
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                for path in (wrong, deleted):
+                    with self.subTest(path=path.name), self.assertRaisesRegex(
+                        publish_to_blog.PublishDataValidationError, '不属于目标日期',
+                    ):
+                        publish_to_blog.save_generation_manifest('2026-07-10', [path])
+
+    def test_legacy_published_receipt_is_read_only_generation_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10.md'
+            page.write_text('historical\n', encoding='utf-8')
+            current.mkdir(parents=True)
+            receipt = current / 'blog-review-receipt-2026-07-10.json'
+            receipt.write_text(json.dumps({
+                'schemaVersion': 1,
+                'date': '2026-07-10',
+                'publicationCommit': 'a' * 40,
+                'remoteVerifiedOid': 'a' * 40,
+                'remoteVerifiedAt': '2026-07-10T12:00:00+08:00',
+                'remoteIdentitySha256': 'b' * 64,
+            }), encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, '保持只读',
+                ):
+                    publish_to_blog.save_generation_manifest(
+                        '2026-07-10', [page],
+                    )
+            self.assertTrue(receipt.is_file())
+
+    def test_content_failure_retries_when_review_protocol_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10-paper.md'
+            page.write_text('same bytes\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    mock.patch.object(publish_to_blog, 'review_protocol_fingerprint', return_value='1' * 64):
+                manifest = publish_to_blog.save_generation_manifest('2026-07-10', [page])
+                publish_to_blog.save_review_failure_state(
+                    '2026-07-10', [page], manifest, 'a' * 40, {
+                        str(page.resolve()): {
+                            'passed': False, 'completed': True, 'failureKind': 'content',
+                        },
+                    },
+                )
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    mock.patch.object(publish_to_blog, 'review_protocol_fingerprint', return_value='2' * 64):
+                plan = publish_to_blog.plan_incremental_review(
+                    '2026-07-10', [page], manifest, 'a' * 40,
+                )
+            self.assertEqual(plan['paths'], [page.resolve()])
+            self.assertEqual(plan['unchangedFailed'], [])
+
+    def test_extracted_publish_gates_keep_compatibility_facades_identical(self):
+        frontmatter = {
+            'paper_digest_manual_depth': 'full-text-evidence-v5',
+            'paper_digest_tutorial_contract': 'graduate-researcher-tutorial-quality-v2',
+            'paper_digest_fresh_authoring_contract': 'fresh-authoring-v1',
+            'paper_digest_fresh_authoring_sha256': 'a' * 64,
+            'paper_digest_reader_article_sha256': 'b' * 64,
+            'paper_digest_tutorial_payload_contract': 'manual-v5-tutorial-payload-v1',
+            'paper_digest_tutorial_payload_sha256': 'c' * 64,
+            'paper_digest_tutorial_quality_sha256': 'd' * 64,
+            'paper_digest_tutorial_artifact_plan_sha256': 'e' * 64,
+        }
+        body = (
+            '**八维分项：** 创新 1.5/2 ｜ 技术严谨 1.0/1.5 ｜ '
+            '实验充分 1.2/1.5 ｜ 清晰度 0.8/1 ｜ 影响力 1.1/1.5 ｜ '
+            '开源 1.0/1.5 ｜ 可复现 0.4/0.5 ｜ 工程/实践 1.2/1.5\n\n'
+            '### 方法流程\n\n公式为 \\(x+y\\)。\n'
+        )
+        self.assertEqual(
+            publish_to_blog.validate_markdown_format_gate(
+                'tutorial.md', frontmatter, body,
+            ),
+            markdown_hugo_gate.validate_markdown_format_gate(
+                'tutorial.md', frontmatter, body,
+            ),
+        )
+
+    def test_publish_renderer_byte_golden_survives_validator_extraction(self):
+        markdown, slug = publish_to_blog.generate_paper_page({
+            'title': 'No tags',
+            'arxivId': '2607.00001',
+            'parsed': {'score': '1'},
+        }, '2026-07-10')
+        self.assertEqual(slug, 'no-tags-2607-00001')
+        self.assertEqual(len(markdown.encode('utf-8')), 430)
+        self.assertEqual(
+            hashlib.sha256(markdown.encode('utf-8')).hexdigest(),
+            'bc5af5ef60d96ea735188539675b4377d0654688231d3b5290d207c7d2d75208',
+        )
 
 
 if __name__ == '__main__':

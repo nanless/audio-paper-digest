@@ -1419,6 +1419,458 @@ function assessArxivHtmlFullText($, content) {
     };
 }
 
+const ARXIV_STRUCTURED_ARTIFACT_VERSION = 1;
+// This parser revision distinguishes a figure resource that is present in the
+// source DOM (including an SVG <object>) from a raster image that is safe for
+// the downstream multimodal downloader.  The latter deliberately remains more
+// restrictive; an SVG is evidence, not an implicit bypass of image validation.
+const ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION = 'arxiv-html-dom-v3';
+const STRUCTURED_ARTIFACT_LIMITS = Object.freeze({
+    tables: 256,
+    rowsPerTable: 512,
+    columnsPerTable: 128,
+    cellChars: 4096,
+    formulas: 2048,
+    formulaChars: 20000,
+    figures: 512,
+    inlineSvgBytes: 2 * 1024 * 1024,
+    references: 4096,
+    referenceChars: 12000
+});
+
+function compactDomText(value, maxChars, state, label) {
+    const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+    if (normalized.length <= maxChars) return normalized;
+    state.issues.push(`${label} 超过 ${maxChars} 字符，结构化快照被截断`);
+    state.truncated = true;
+    return normalized.slice(0, maxChars);
+}
+
+function positiveSpan(value) {
+    const parsed = Number.parseInt(String(value || '1'), 10);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function figureResourceMediaType(element, rawUrl = '') {
+    const declared = String(element?.attribs?.type || '').trim().toLowerCase();
+    if (declared) return declared;
+    const pathname = String(rawUrl || '').split(/[?#]/, 1)[0].toLowerCase();
+    if (pathname.endsWith('.svg')) return 'image/svg+xml';
+    if (pathname.endsWith('.png')) return 'image/png';
+    if (/\.jpe?g$/.test(pathname)) return 'image/jpeg';
+    if (pathname.endsWith('.webp')) return 'image/webp';
+    return '';
+}
+
+function isRecoverableFigureResourceUrl(url, mediaType = '') {
+    const value = String(url || '').trim();
+    if (!/^https:\/\//i.test(value)) return false;
+    if (isSupportedImageUrl(value)) return true;
+    // The trusted arXiv DOM explicitly declares these vector graphics.  Keep
+    // them in the source inventory so the author can use or reject the actual
+    // figure, while the raster-only image downloader continues to reject them.
+    return String(mediaType || '').toLowerCase() === 'image/svg+xml';
+}
+
+function isIllustrationFigure($, element) {
+    const wrapper = $(element);
+    const classNames = String(wrapper.attr('class') || '');
+    const label = String(wrapper.find('.ltx_tag_figure, .ltx_tag').first().text() || '')
+        .replace(/\s+/g, ' ').trim();
+    if (wrapper.hasClass('ltx_table') || wrapper.find('table').length > 0) return false;
+    if (/\bltx_float_(?:algorithm|listing)\b/i.test(classNames)) return false;
+    if (/^(?:table|algorithm|listing|procedure)\b/i.test(label)) return false;
+    return true;
+}
+
+function extractArxivFigureResources($, wrapper, htmlId, arxivId, ordinal, state) {
+    const resources = new Map();
+    const add = (element, attribute) => {
+        const rawUrl = String($(element).attr(attribute) || '').trim();
+        const url = resolveArxivImageUrl(rawUrl, htmlId, arxivId);
+        const mediaType = figureResourceMediaType(element, rawUrl);
+        if (!isRecoverableFigureResourceUrl(url, mediaType)) return;
+        const key = `url:${url}`;
+        const existing = resources.get(key);
+        const alt = compactDomText($(element).attr('alt'), 1024, state, `figure[${ordinal}].alt`);
+        if (existing) {
+            if (alt.length > existing.alt.length) existing.alt = alt;
+            return;
+        }
+        resources.set(key, {
+            kind: 'external_url',
+            url,
+            alt,
+            mediaType,
+            // Only these resources are eligible for the separate, byte- and
+            // MIME-verified image pipeline.  SVG stays source evidence only.
+            rasterDownloadEligible: isSupportedImageUrl(url)
+        });
+    };
+    wrapper.find('img[src]').each((_, element) => add(element, 'src'));
+    wrapper.find('object[data], embed[src]').each((_, element) => {
+        add(element, element.tagName?.toLowerCase() === 'object' ? 'data' : 'src');
+    });
+    wrapper.find('svg').filter((_, element) => $(element).parents('svg').length === 0).each((_, element) => {
+        const inlineSvg = $.html(element);
+        const inlineSvgBytes = Buffer.byteLength(inlineSvg);
+        if (inlineSvgBytes > STRUCTURED_ARTIFACT_LIMITS.inlineSvgBytes) {
+            state.issues.push(
+                `figure[${ordinal}] 内联 SVG ${inlineSvgBytes} bytes 超过受控上限 `
+                + `${STRUCTURED_ARTIFACT_LIMITS.inlineSvgBytes}`
+            );
+            state.truncated = true;
+            return;
+        }
+        const inlineSvgSha256 = crypto.createHash('sha256').update(inlineSvg).digest('hex');
+        resources.set(`inline-svg:${inlineSvgSha256}`, {
+            kind: 'inline_svg',
+            url: '',
+            alt: '',
+            mediaType: 'image/svg+xml',
+            rasterDownloadEligible: false,
+            inlineSvg,
+            inlineSvgBytes,
+            inlineSvgSha256
+        });
+    });
+    return [...resources.values()];
+}
+
+function isDescendantOf(node, ancestor) {
+    for (let current = node?.parent; current; current = current.parent) {
+        if (current === ancestor) return true;
+    }
+    return false;
+}
+
+function layoutContainerFor($, element) {
+    return $(element).closest('.ltx_flex_figure, .ltx_logical-block').first().get(0) || null;
+}
+
+/**
+ * LaTeXML can render a caption-only `figure.ltx_table` in one layout cell and
+ * place its `table.ltx_tabular` in the next.  Associate only this exact
+ * split-layout pattern: same flex/minipage container, the next table DOM, and
+ * no visible prose or competing table caption in between.  Never infer a
+ * matrix from flattened text or attach an arbitrary later table.
+ */
+function findSplitTableDom($, wrapper, allElements) {
+    if (!$(wrapper).hasClass('ltx_table') || $(wrapper).find('table').length > 0) return null;
+    const caption = $(wrapper).find('figcaption, .ltx_caption').first().text().replace(/\s+/g, ' ').trim();
+    const label = $(wrapper).find('.ltx_tag_table, .ltx_tag').first().text().replace(/\s+/g, ' ').trim();
+    if (!caption || !/^(?:table|表)\s*(?:[A-Z]?\d+|[IVXLCDM]+)/i.test(label || caption)) return null;
+
+    const wrapperIndex = allElements.indexOf(wrapper);
+    const layout = layoutContainerFor($, wrapper);
+    if (wrapperIndex < 0 || !layout) return null;
+    const followingTable = allElements.slice(wrapperIndex + 1)
+        .find(element => element.tagName?.toLowerCase() === 'table');
+    if (!followingTable || layoutContainerFor($, followingTable) !== layout) return null;
+    const tableIndex = allElements.indexOf(followingTable);
+    for (const element of allElements.slice(wrapperIndex + 1, tableIndex)) {
+        if (isDescendantOf(element, wrapper)) continue;
+        const node = $(element);
+        const tagName = element.tagName?.toLowerCase() || '';
+        if (node.hasClass('ltx_table') || tagName === 'figcaption' || node.hasClass('ltx_caption')
+            || /^h[1-6]$/.test(tagName)) return null;
+        // A non-empty leaf here is actual intervening prose, not an empty
+        // layout wrapper introduced by LaTeXML's flex/minipage rendering.
+        if (node.children().length === 0 && node.text().replace(/\s+/g, '').length > 0) return null;
+    }
+    return followingTable;
+}
+
+function serializeArxivTable($, element, ordinal, state, options = {}) {
+    const wrapper = $(element);
+    const table = options.tableElement ? $(options.tableElement) : (wrapper.is('table') ? wrapper : wrapper.find('table').first());
+    // The aggregate proof covers the caption wrapper and the separate tabular
+    // fragment; individual cells still retain their own exact DOM SHA.
+    const domHtml = [$.html(wrapper), options.tableElement ? $.html(table) : ''].join('\n');
+    const caption = compactDomText(
+        wrapper.find('figcaption, .ltx_caption, caption').first().text(),
+        STRUCTURED_ARTIFACT_LIMITS.cellChars,
+        state,
+        `table[${ordinal}].caption`
+    );
+    const label = compactDomText(
+        wrapper.find('.ltx_tag_table, .ltx_tag').first().text()
+            || caption.match(/^\s*(?:table|表)\s*[^.:：]*/i)?.[0]
+            || '',
+        256,
+        state,
+        `table[${ordinal}].label`
+    );
+    if (!table.length) {
+        state.issues.push(`table[${ordinal}]${label ? ` ${label}` : ''} 有表格容器但没有可解析 table DOM`);
+        return {
+            ordinal,
+            label,
+            caption,
+            sourceDomSha256: crypto.createHash('sha256').update(domHtml).digest('hex'),
+            headerRows: [],
+            bodyRows: [],
+            cells: [],
+            matrix: [],
+            recoveryStatus: 'unrecovered'
+        };
+    }
+
+    const matrix = [];
+    const cells = [];
+    const headerRows = new Set();
+    const bodyRows = new Set();
+    const rowElements = table.find('tr').toArray();
+    if (rowElements.length > STRUCTURED_ARTIFACT_LIMITS.rowsPerTable) {
+        state.issues.push(`table[${ordinal}] 行数 ${rowElements.length} 超过受控上限 ${STRUCTURED_ARTIFACT_LIMITS.rowsPerTable}`);
+        state.truncated = true;
+    }
+    for (const [rowIndex, rowElement] of rowElements.slice(0, STRUCTURED_ARTIFACT_LIMITS.rowsPerTable).entries()) {
+        matrix[rowIndex] ||= [];
+        let columnIndex = 0;
+        const row = $(rowElement);
+        const isHeaderRow = row.closest('thead').length > 0 || row.children('th').length > 0;
+        (isHeaderRow ? headerRows : bodyRows).add(rowIndex);
+        for (const cellElement of row.children('th, td').toArray()) {
+            while (matrix[rowIndex][columnIndex] !== undefined) columnIndex++;
+            const cell = $(cellElement);
+            const rowspan = positiveSpan(cell.attr('rowspan'));
+            const colspan = positiveSpan(cell.attr('colspan'));
+            const text = compactDomText(
+                cell.text(), STRUCTURED_ARTIFACT_LIMITS.cellChars, state,
+                `table[${ordinal}].cell[${rowIndex},${columnIndex}]`
+            );
+            const cellRecord = {
+                row: rowIndex,
+                column: columnIndex,
+                header: cellElement.tagName?.toLowerCase() === 'th' || isHeaderRow,
+                rowspan,
+                colspan,
+                text,
+                sourceDomSha256: crypto.createHash('sha256').update($.html(cell)).digest('hex')
+            };
+            cells.push(cellRecord);
+            for (let rowOffset = 0; rowOffset < rowspan; rowOffset++) {
+                const targetRow = rowIndex + rowOffset;
+                if (targetRow >= STRUCTURED_ARTIFACT_LIMITS.rowsPerTable) {
+                    state.issues.push(`table[${ordinal}] rowspan 超出受控行上限`);
+                    state.truncated = true;
+                    break;
+                }
+                matrix[targetRow] ||= [];
+                for (let colOffset = 0; colOffset < colspan; colOffset++) {
+                    const targetColumn = columnIndex + colOffset;
+                    if (targetColumn >= STRUCTURED_ARTIFACT_LIMITS.columnsPerTable) {
+                        state.issues.push(`table[${ordinal}] colspan 超出受控列上限`);
+                        state.truncated = true;
+                        break;
+                    }
+                    matrix[targetRow][targetColumn] = text;
+                }
+            }
+            columnIndex += colspan;
+        }
+    }
+    const width = Math.min(
+        STRUCTURED_ARTIFACT_LIMITS.columnsPerTable,
+        matrix.reduce((maximum, row) => Math.max(maximum, row.length), 0)
+    );
+    const normalizedMatrix = matrix.map(row => Array.from({ length: width }, (_, index) => row[index] ?? ''));
+    if (cells.length === 0 || normalizedMatrix.length === 0 || width === 0) {
+        state.issues.push(`table[${ordinal}]${label ? ` ${label}` : ''} 未恢复出任何单元格`);
+    }
+    return {
+        ordinal,
+        label,
+        caption,
+        sourceDomSha256: crypto.createHash('sha256').update(domHtml).digest('hex'),
+        headerRows: [...headerRows],
+        bodyRows: [...bodyRows],
+        cells,
+        matrix: normalizedMatrix,
+        recoveryStatus: cells.length > 0 && width > 0 ? 'complete' : 'unrecovered'
+    };
+}
+
+/** Preserve structures before the historical `.text()` projection removes them. */
+function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
+    const sourceHtml = String(html || '');
+    const $ = cheerio.load(sourceHtml);
+    const state = { issues: [], truncated: false };
+    const allElements = $('*').toArray();
+    const rawTableCandidates = $('.ltx_table, table').filter((_, element) => (
+        $(element).parents('.ltx_table, table').length === 0
+        && ($(element).hasClass('ltx_table') || $(element).closest('.ltx_equation, .ltx_equationgroup').length === 0)
+    )).toArray();
+    const consumedSplitTableDoms = new Set();
+    const tableCandidates = rawTableCandidates.flatMap(element => {
+        if (!$(element).hasClass('ltx_table') || $(element).find('table').length > 0) {
+            return consumedSplitTableDoms.has(element) ? [] : [{ element }];
+        }
+        const splitTable = findSplitTableDom($, element, allElements);
+        if (splitTable) consumedSplitTableDoms.add(splitTable);
+        return [{ element, tableElement: splitTable }];
+    }).filter(candidate => !consumedSplitTableDoms.has(candidate.element));
+    if (tableCandidates.length > STRUCTURED_ARTIFACT_LIMITS.tables) {
+        state.issues.push(`表格候选 ${tableCandidates.length} 超过受控上限 ${STRUCTURED_ARTIFACT_LIMITS.tables}`);
+        state.truncated = true;
+    }
+    const tables = tableCandidates.slice(0, STRUCTURED_ARTIFACT_LIMITS.tables)
+        .map((candidate, index) => serializeArxivTable($, candidate.element, index + 1, state, candidate));
+
+    const equationCandidates = $('.ltx_equation, .ltx_equationgroup, math[display="block"]')
+        .filter((_, element) => $(element).parents('.ltx_equation, .ltx_equationgroup, math[display="block"]').length === 0)
+        .toArray();
+    if (equationCandidates.length > STRUCTURED_ARTIFACT_LIMITS.formulas) {
+        state.issues.push(`公式候选 ${equationCandidates.length} 超过受控上限 ${STRUCTURED_ARTIFACT_LIMITS.formulas}`);
+        state.truncated = true;
+    }
+    const formulas = equationCandidates.slice(0, STRUCTURED_ARTIFACT_LIMITS.formulas).map((element, index) => {
+        const wrapper = $(element);
+        const math = wrapper.is('math') ? wrapper : wrapper.find('math').first();
+        const annotation = math.find('annotation[encoding="application/x-tex"], annotation[encoding="application/x-latex"]').first();
+        const latex = compactDomText(
+            annotation.text() || math.attr('alttext') || wrapper.attr('alttext') || '',
+            STRUCTURED_ARTIFACT_LIMITS.formulaChars, state, `formula[${index + 1}].latex`
+        );
+        const mathmlRaw = math.length ? $.html(math) : '';
+        const mathml = mathmlRaw.length <= STRUCTURED_ARTIFACT_LIMITS.formulaChars
+            ? mathmlRaw : mathmlRaw.slice(0, STRUCTURED_ARTIFACT_LIMITS.formulaChars);
+        if (mathmlRaw.length > STRUCTURED_ARTIFACT_LIMITS.formulaChars) {
+            state.issues.push(`formula[${index + 1}].mathml 超过受控上限并被截断`);
+            state.truncated = true;
+        }
+        const text = compactDomText(wrapper.text(), STRUCTURED_ARTIFACT_LIMITS.formulaChars, state, `formula[${index + 1}].text`);
+        const label = compactDomText(wrapper.find('.ltx_tag_equation, .ltx_tag').first().text(), 256, state, `formula[${index + 1}].label`);
+        if (!latex && !mathml && !text) state.issues.push(`formula[${index + 1}] 未恢复出 TeX、MathML 或可见文本`);
+        return {
+            ordinal: index + 1,
+            label,
+            latex,
+            mathml,
+            text,
+            sourceDomSha256: crypto.createHash('sha256').update($.html(wrapper)).digest('hex'),
+            recoveryStatus: latex || mathml || text ? 'complete' : 'unrecovered'
+        };
+    });
+
+    const figureCandidates = $('figure').filter((_, element) => (
+        $(element).parents('figure').length === 0 && isIllustrationFigure($, element)
+    )).toArray();
+    if (figureCandidates.length > STRUCTURED_ARTIFACT_LIMITS.figures) {
+        state.issues.push(`图片候选 ${figureCandidates.length} 超过受控上限 ${STRUCTURED_ARTIFACT_LIMITS.figures}`);
+        state.truncated = true;
+    }
+    const figures = figureCandidates.slice(0, STRUCTURED_ARTIFACT_LIMITS.figures).map((element, index) => {
+        const wrapper = $(element);
+        const images = extractArxivFigureResources($, wrapper, htmlId, arxivId, index + 1, state);
+        if (images.length === 0) state.issues.push(`figure[${index + 1}] 没有恢复出可审计图像资源 URL`);
+        return {
+            ordinal: index + 1,
+            label: compactDomText(wrapper.find('.ltx_tag_figure, .ltx_tag').first().text(), 256, state, `figure[${index + 1}].label`),
+            caption: compactDomText(wrapper.find('figcaption, .ltx_caption').first().text(), STRUCTURED_ARTIFACT_LIMITS.cellChars, state, `figure[${index + 1}].caption`),
+            images,
+            sourceDomSha256: crypto.createHash('sha256').update($.html(wrapper)).digest('hex'),
+            recoveryStatus: images.length > 0 ? 'complete' : 'unrecovered'
+        };
+    });
+
+    const bibliographyRoots = $('.ltx_bibliography, .bibtex');
+    const referenceElements = bibliographyRoots.find('.ltx_bibitem, li').toArray();
+    if (referenceElements.length > STRUCTURED_ARTIFACT_LIMITS.references) {
+        state.issues.push(`参考文献 ${referenceElements.length} 超过受控上限 ${STRUCTURED_ARTIFACT_LIMITS.references}`);
+        state.truncated = true;
+    }
+    const references = referenceElements.slice(0, STRUCTURED_ARTIFACT_LIMITS.references).map((element, index) => {
+        const item = $(element);
+        const text = compactDomText(item.text(), STRUCTURED_ARTIFACT_LIMITS.referenceChars, state, `reference[${index + 1}].text`);
+        if (!text) state.issues.push(`reference[${index + 1}] 没有恢复出可见文本`);
+        return {
+            ordinal: index + 1,
+            label: compactDomText(item.find('.ltx_tag_bibitem, .ltx_tag').first().text() || item.attr('id') || '', 256, state, `reference[${index + 1}].label`),
+            text,
+            hrefs: [...new Set(item.find('a[href]').toArray().map(anchor => String($(anchor).attr('href') || '').trim()).filter(Boolean))],
+            sourceDomSha256: crypto.createHash('sha256').update($.html(item)).digest('hex')
+        };
+    });
+    if (bibliographyRoots.length > 0 && referenceElements.length === 0) {
+        state.issues.push('检测到 bibliography 容器但没有恢复出参考文献条目');
+    }
+
+    const payload = {
+        version: ARXIV_STRUCTURED_ARTIFACT_VERSION,
+        parserVersion: ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION,
+        sourceKind: 'arxiv_html',
+        sourceId: String(htmlId || '').toLowerCase(),
+        paperId: String(arxivId || '').replace(/v\d+$/i, '').toLowerCase(),
+        sourceHtmlSha256: crypto.createHash('sha256').update(sourceHtml).digest('hex'),
+        tables,
+        formulas,
+        figures,
+        references,
+        health: {
+            status: state.issues.length === 0 && !state.truncated ? 'complete' : 'incomplete',
+            detected: {
+                tables: tableCandidates.length,
+                formulas: equationCandidates.length,
+                figures: figureCandidates.length,
+                references: referenceElements.length,
+                bibliographies: bibliographyRoots.length
+            },
+            recovered: {
+                tables: tables.filter(item => item.recoveryStatus === 'complete').length,
+                formulas: formulas.filter(item => item.recoveryStatus === 'complete').length,
+                figures: figures.filter(item => item.recoveryStatus === 'complete').length,
+                references: references.filter(item => item.text).length
+            },
+            truncated: state.truncated,
+            issues: state.issues
+        }
+    };
+    payload.payloadSha256 = crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+    return payload;
+}
+
+function buildUnstructuredTextArtifactSignals(text, sourceKind) {
+    const raw = String(text || '');
+    const tableCaptions = [...raw.matchAll(/^\s*(?:table|tbl\.?|表)\s*(?:[A-Z]?\d+|[IVXLCDM]+)\b[^\n]*/gim)]
+        .map(match => match[0].replace(/\s+/g, ' ').trim());
+    const formulaCueCount = (raw.match(/(?:\b(?:eq(?:uation)?|objective|loss function)\s*[.(]?\d*|[=∑∫]|\\(?:frac|sum|mathcal|mathbf)\b)/gi) || []).length;
+    const payload = {
+        version: ARXIV_STRUCTURED_ARTIFACT_VERSION,
+        parserVersion: 'unstructured-text-signals-v1',
+        sourceKind,
+        tables: [], formulas: [], figures: [], references: [],
+        signals: { tableCaptionCount: tableCaptions.length, tableCaptions, formulaCueCount },
+        health: {
+            status: 'incomplete',
+            detected: { tables: tableCaptions.length, formulas: formulaCueCount, figures: 0, references: 0 },
+            recovered: { tables: 0, formulas: 0, figures: 0, references: 0 },
+            truncated: false,
+            issues: [
+                `${sourceKind} 不保留 DOM/布局，不能证明表格矩阵完整`,
+                `${sourceKind} 不保留 MathML/TeX，不能证明公式 inventory 完整`,
+                ...(tableCaptions.length > 0 ? [`检测到 ${tableCaptions.length} 个表格标题但没有恢复矩阵`] : [])
+            ]
+        }
+    };
+    payload.payloadSha256 = crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+    return payload;
+}
+
+function bindStructuredArtifactsToText(structuredArtifacts, text) {
+    if (!structuredArtifacts || typeof structuredArtifacts !== 'object') {
+        throw new Error('structuredArtifacts 绑定需要结构化对象');
+    }
+    const { payloadSha256: _oldPayloadSha256, ...body } = structuredArtifacts;
+    const bound = {
+        ...body,
+        flattenedTextSha256: crypto.createHash('sha256').update(String(text || '')).digest('hex')
+    };
+    bound.payloadSha256 = crypto.createHash('sha256').update(JSON.stringify(bound)).digest('hex');
+    return bound;
+}
+
 /**
  * 从 arxiv HTML 获取全文文本（使用 cheerio 结构化解析）
  * 带重试机制，避免因并发限流偶发失败
@@ -1455,6 +1907,7 @@ async function fetchArxivTextDetailed(arxivId) {
                 if (response.ok) {
                     const html = await response.text();
                     const imageInfos = parseArxivImageInfosFromHtml(html, htmlId, arxivId);
+                    const structuredArtifacts = parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId);
                     const $ = cheerio.load(html);
 
                     // 移除噪音元素
@@ -1486,6 +1939,7 @@ async function fetchArxivTextDetailed(arxivId) {
                         .replace(/\n\s*\n/g, '\n')     // 合并多余空行
                         .replace(/[ \t]+/g, ' ')       // 合并多余空格
                         .trim();
+                    const boundStructuredArtifacts = bindStructuredArtifactsToText(structuredArtifacts, content);
 
                     const assessment = assessArxivHtmlFullText($, content);
                     if (!assessment.valid) {
@@ -1507,6 +1961,7 @@ async function fetchArxivTextDetailed(arxivId) {
                         source: 'html',
                         sourceId: htmlId,
                         imageInfos,
+                        structuredArtifacts: boundStructuredArtifacts,
                         htmlAvailability: 'available',
                         htmlAttempts,
                         warnings
@@ -1579,10 +2034,13 @@ async function fetchArxivTextDetailed(arxivId) {
                 await parser.destroy().catch(() => {});
             }
             if (result?.text) {
-                const text = result.text
+                const rawPdfText = result.text;
+                const structuredArtifacts = buildUnstructuredTextArtifactSignals(rawPdfText, 'pdf_text');
+                const text = rawPdfText
                     .replace(/\n\s*\n/g, '\n')
                     .replace(/[ \t]+/g, ' ')
                     .trim();
+                const boundStructuredArtifacts = bindStructuredArtifactsToText(structuredArtifacts, text);
                 if (text.length <= FULL_TEXT_MIN_CHARS_FOR_FULL) {
                     warnings.push(`PDF ${pdfId}: 提取正文过短 (${text.length} chars)`);
                     continue;
@@ -1593,6 +2051,7 @@ async function fetchArxivTextDetailed(arxivId) {
                     source: 'pdf',
                     sourceId: pdfId,
                     imageInfos: [],
+                    structuredArtifacts: boundStructuredArtifacts,
                     htmlAvailability,
                     htmlAttempts,
                     warnings
@@ -1613,6 +2072,7 @@ async function fetchArxivTextDetailed(arxivId) {
         source: 'unavailable',
         sourceId: '',
         imageInfos: [],
+        structuredArtifacts: null,
         htmlAvailability,
         htmlAttempts,
         warnings,
@@ -4801,6 +5261,10 @@ module.exports = {
     fetchArxivTextDetailed,
     fetchArxivImageUrls,
     parseArxivImageInfosFromHtml,
+    parseArxivStructuredArtifactsFromHtml,
+    ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION,
+    buildUnstructuredTextArtifactSignals,
+    bindStructuredArtifactsToText,
     assessArxivHtmlFullText,
     removeUnapprovedMarkdownImages,
     selectImageCandidates,

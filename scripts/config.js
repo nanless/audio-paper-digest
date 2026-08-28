@@ -53,6 +53,14 @@ const ARXIV_CONFIG = {
     fetchMaxWaitMs: 600000,
     fetchTimeoutMs: 60000,
     fetchMaxResponseBytes: 8 * 1024 * 1024,
+    // 真实 socket 请求按 host 串行。健康请求只保留最小间隔；异常和 429
+    // 由 scheduler 自适应抬高，不再在每个健康类别后固定等待 60 秒。
+    hostHealthyCooldownMs: 1000,
+    hostTransientCooldownMs: 5000,
+    hostRateLimitedCooldownMs: 60000,
+    hostCooldownJitterMs: 1000,
+    // 旧 API 自动流程仍读取 categoryDelayMs；Manual raw 不再把它作为
+    // 健康类别之间的固定 sleep。
     categoryDelayMs: 60000,
     firstRequestDelayMs: 30000,
     consecutiveExistingThreshold: 20,
@@ -157,6 +165,19 @@ const FILES = {
     digestCoverManifestDir: path.join(CURRENT_DIR, 'digest-cover-manifests'),
     postPublishVisualWaiverDir: path.join(CURRENT_DIR, 'post-publish-visual-waivers'),
     digestRunReportDir: path.join(CURRENT_DIR, 'digest-run-reports'),
+    // Manual v6 remains an explicit shadow-only experiment. Reports,
+    // checkpoints and candidate records must stay under this isolated root.
+    manualV6ShadowDir: path.join(CURRENT_DIR, 'manual-v6-shadow'),
+    manualV6ShadowReportDir: path.join(CURRENT_DIR, 'manual-v6-shadow', 'reports'),
+    manualV6MetricsDir: path.join(CURRENT_DIR, 'manual-v6-shadow'),
+    // Default v5 remains canonical; this directory contains read-only queue
+    // observations and performance snapshots, never workflow state.
+    manualV5ObservabilityDir: path.join(CURRENT_DIR, 'manual-v5-observability'),
+    // One deny-by-default, single-paper author packet per date/paper.  These
+    // files are orchestration inputs only and never canonical analysis state.
+    manualV5AuthorInputDir: path.join(CURRENT_DIR, 'manual-v5-author-inputs'),
+    // Cross-batch reports are optional, immutable, observed-only summaries.
+    manualPerformanceReportDir: path.join(CURRENT_DIR, 'manual-performance-reports'),
     digestCoverAssetDir: ARCHIVE_DIR,
     // Legacy single-file location retained only for callers migrating old state.
     visualSummaryManifest: path.join(CURRENT_DIR, 'visual-summary-manifest.json'),
@@ -286,6 +307,22 @@ function applyEnvOverrides() {
     const arxivMetadataMaxBytes = readPositiveInt('PD_ARXIV_METADATA_MAX_BYTES');
     if (arxivMetadataMaxBytes) {
         ARXIV_CONFIG.fetchMaxResponseBytes = arxivMetadataMaxBytes;
+    }
+    const arxivHealthyCooldownMs = readPositiveInt('PD_ARXIV_HEALTHY_COOLDOWN_MS');
+    if (arxivHealthyCooldownMs) {
+        ARXIV_CONFIG.hostHealthyCooldownMs = arxivHealthyCooldownMs;
+    }
+    const arxivTransientCooldownMs = readPositiveInt('PD_ARXIV_TRANSIENT_COOLDOWN_MS');
+    if (arxivTransientCooldownMs) {
+        ARXIV_CONFIG.hostTransientCooldownMs = arxivTransientCooldownMs;
+    }
+    const arxivRateLimitedCooldownMs = readPositiveInt('PD_ARXIV_RATE_LIMIT_COOLDOWN_MS');
+    if (arxivRateLimitedCooldownMs) {
+        ARXIV_CONFIG.hostRateLimitedCooldownMs = arxivRateLimitedCooldownMs;
+    }
+    const arxivCooldownJitterMs = readPositiveInt('PD_ARXIV_COOLDOWN_JITTER_MS');
+    if (arxivCooldownJitterMs) {
+        ARXIV_CONFIG.hostCooldownJitterMs = arxivCooldownJitterMs;
     }
     if (process.env.PD_ARXIV_USER_AGENT?.trim()) {
         ARXIV_CONFIG.userAgent = process.env.PD_ARXIV_USER_AGENT.trim();

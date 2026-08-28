@@ -1,6 +1,8 @@
 const { describe, it, before } = require('node:test');
 const assert = require('node:assert');
 const cheerio = require('cheerio');
+const fs = require('node:fs');
+const path = require('node:path');
 const { validAnalysisText } = require('./valid-analysis-fixture.js');
 
 before(() => {
@@ -33,6 +35,95 @@ describe('arXiv HTML full-text health gate', () => {
         assert.strictEqual(result.valid, true);
         assert.ok(result.paragraphCount >= 4);
         assert.ok(result.markerCount >= 2);
+    });
+
+    it('在 .text() 扁平化前保留 arXiv/LaTeXML 表格、公式、图片与参考文献结构', () => {
+        const { parseArxivStructuredArtifactsFromHtml } = require('../scripts/deep-analyzer.js');
+        const html = fs.readFileSync(
+            path.join(__dirname, 'fixtures', 'arxiv-structured-paper.html'), 'utf8'
+        );
+        const artifacts = parseArxivStructuredArtifactsFromHtml(
+            html, '2608.12345v2', '2608.12345v2'
+        );
+        assert.strictEqual(artifacts.health.status, 'complete');
+        assert.strictEqual(artifacts.tables.length, 1);
+        assert.strictEqual(artifacts.tables[0].matrix[2][1], '4.8');
+        assert.ok(artifacts.tables[0].cells.some(cell => cell.rowspan === 2));
+        assert.ok(artifacts.tables[0].cells.some(cell => cell.colspan === 2));
+        assert.strictEqual(artifacts.formulas.length, 1);
+        assert.match(artifacts.formulas[0].latex, /mathcal\{L\}/);
+        assert.match(artifacts.formulas[0].mathml, /<math/);
+        assert.strictEqual(artifacts.figures.length, 2);
+        assert.match(artifacts.figures[0].images[0].url, /figures\/model\.png$/);
+        assert.strictEqual(artifacts.figures[1].images[0].kind, 'inline_svg');
+        assert.strictEqual(artifacts.figures[1].images[0].url, '');
+        assert.strictEqual(artifacts.figures[1].images[0].mediaType, 'image/svg+xml');
+        assert.strictEqual(artifacts.figures[1].images[0].rasterDownloadEligible, false);
+        assert.match(artifacts.figures[1].images[0].inlineSvgSha256, /^[a-f0-9]{64}$/);
+        assert.ok(artifacts.figures[1].images[0].inlineSvgBytes > 0);
+        assert.strictEqual(artifacts.references.length, 1);
+        assert.match(artifacts.references[0].text, /Reliable speech recognition/);
+        assert.match(artifacts.payloadSha256, /^[a-f0-9]{64}$/);
+    });
+
+    it('将 SVG object 作为可审计图资源保留，但不把算法或表格浮动体误记为图片', () => {
+        const { parseArxivStructuredArtifactsFromHtml } = require('../scripts/deep-analyzer.js');
+        const html = `<article>
+          <figure class="ltx_figure"><object type="image/svg+xml" data="figures/overview.svg"></object><figcaption><span class="ltx_tag_figure">Figure 1:</span> Overview.</figcaption></figure>
+          <figure class="ltx_float ltx_float_algorithm"><figcaption><span class="ltx_tag_float">Algorithm 1</span> Procedure.</figcaption><div class="ltx_listing">step</div></figure>
+          <figure><figcaption><span class="ltx_tag_table">Table 1:</span> Results.</figcaption><table><tr><td>1</td></tr></table></figure>
+          <figure class="ltx_figure"><figcaption><span class="ltx_tag_figure">Figure 2:</span> Missing source asset.</figcaption></figure>
+        </article>`;
+        const artifacts = parseArxivStructuredArtifactsFromHtml(html, '2608.12345v2', '2608.12345v2');
+        assert.strictEqual(artifacts.health.detected.figures, 2);
+        assert.strictEqual(artifacts.figures[0].images[0].url, 'https://arxiv.org/html/2608.12345v2/figures/overview.svg');
+        assert.strictEqual(artifacts.figures[0].images[0].mediaType, 'image/svg+xml');
+        assert.strictEqual(artifacts.figures[0].images[0].rasterDownloadEligible, false);
+        assert.strictEqual(artifacts.figures[0].recoveryStatus, 'complete');
+        assert.strictEqual(artifacts.figures[1].recoveryStatus, 'unrecovered');
+        assert.match(artifacts.health.issues.join('\n'), /可审计图像资源 URL/);
+    });
+
+    it('将 arXiv 内联 SVG 的原始 DOM 字节封入受控证据，而不是伪造图片 URL', () => {
+        const { parseArxivStructuredArtifactsFromHtml } = require('../scripts/deep-analyzer.js');
+        const html = `<article><figure class="ltx_figure">
+          <svg class="ltx_picture" viewBox="0 0 10 10"><path d="M0 0L10 10"></path></svg>
+          <figcaption><span class="ltx_tag_figure">Figure 1:</span> Inline curve.</figcaption>
+        </figure></article>`;
+        const artifacts = parseArxivStructuredArtifactsFromHtml(html, '2608.12345v1', '2608.12345v1');
+        const resource = artifacts.figures[0].images[0];
+        assert.strictEqual(artifacts.health.status, 'complete');
+        assert.strictEqual(artifacts.parserVersion, 'arxiv-html-dom-v3');
+        assert.strictEqual(resource.kind, 'inline_svg');
+        assert.strictEqual(resource.url, '');
+        assert.match(resource.inlineSvg, /^<svg[\s\S]*<\/svg>$/);
+        assert.strictEqual(Buffer.byteLength(resource.inlineSvg), resource.inlineSvgBytes);
+        assert.match(resource.inlineSvgSha256, /^[a-f0-9]{64}$/);
+    });
+
+    it('只合并共享 LaTeXML 布局容器且没有中间可见内容的分离表注与 table DOM', () => {
+        const { parseArxivStructuredArtifactsFromHtml } = require('../scripts/deep-analyzer.js');
+        const splitLayout = `<article>
+          <div class="ltx_flex_figure">
+            <div class="ltx_flex_cell"><figure class="ltx_table"><figcaption class="ltx_caption"><span class="ltx_tag_table">Table 3: </span>Backend transfer.</figcaption></figure></div>
+            <div class="ltx_flex_break"></div>
+            <div class="ltx_flex_cell"><div class="ltx_transformed_outer"><table class="ltx_tabular"><tr><th>Backend</th><th>Acc.</th></tr><tr><td>Mem0</td><td>91.20</td></tr></table></div></div>
+          </div>
+        </article>`;
+        const artifacts = parseArxivStructuredArtifactsFromHtml(splitLayout, '2608.26005v1', '2608.26005v1');
+        assert.strictEqual(artifacts.health.status, 'complete');
+        assert.strictEqual(artifacts.health.detected.tables, 1);
+        assert.strictEqual(artifacts.tables.length, 1);
+        assert.match(artifacts.tables[0].caption, /Table 3/);
+        assert.deepStrictEqual(artifacts.tables[0].matrix, [['Backend', 'Acc.'], ['Mem0', '91.20']]);
+
+        const separatedByProse = splitLayout.replace(
+            '<div class="ltx_flex_break"></div>',
+            '<p>This is intervening prose, not a layout-only table continuation.</p>'
+        );
+        const rejected = parseArxivStructuredArtifactsFromHtml(separatedByProse, '2608.26005v1', '2608.26005v1');
+        assert.strictEqual(rejected.health.status, 'incomplete');
+        assert.match(rejected.health.issues.join('\n'), /有表格容器但没有可解析 table DOM/);
     });
 });
 

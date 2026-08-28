@@ -21,6 +21,18 @@ const {
 const {
     validateManualV4AssemblerProvenance
 } = require('../scripts/manual-deep-analysis.js');
+const {
+    FRESH_AUTHORING_CONTRACT,
+    FRESH_AUTHORING_MODE,
+    AUTHORING_PROMPT_PATH,
+    EDITORIAL_CONTRACT_PATH,
+    BLANK_SCHEMA_PATH,
+    articleSha256,
+    stableSha256: freshStableSha256,
+    rawFileSha256,
+    defaultArticlePath,
+    buildAuthorityInputs
+} = require('../scripts/manual-fresh-authoring-contract.js');
 
 const DATE = '2026-08-25';
 const ID = '2608.29999';
@@ -372,6 +384,8 @@ function fixture() {
         abstract: 'A speech recognition fixture.'
     };
     const filtered = { version: 1, batchDate: DATE, status: 'complete', papers: [paper] };
+    const filteredPath = path.join(root, 'filtered-papers.json');
+    writeJson(filteredPath, filtered);
     const context = buildManifestContext(filtered, DATE, outDir);
     const input = context.inputs[0];
     const text = sourceText();
@@ -388,6 +402,15 @@ function fixture() {
             source: 'arxiv_html'
         }]
     }, fs.readFileSync(input.filePath));
+    entry.structuredArtifactsSnapshot = {
+        version: 1,
+        path: path.join(outDir, 'artifacts', 'source', `${ID}.structured.json`),
+        parserVersion: 'arxiv-html-dom-v2',
+        healthStatus: 'complete',
+        payloadSha256: 'e'.repeat(64),
+        outputSha256: 'f'.repeat(64),
+        bytes: 123
+    };
     const manifest = {
         version: 2,
         mode: 'manual_full_text_fetch',
@@ -403,12 +426,79 @@ function fixture() {
     };
     const manifestPath = path.join(outDir, 'manifest.json');
     writeJson(manifestPath, manifest);
+    const artifactDir = path.join(outDir, 'artifacts');
+    fs.mkdirSync(artifactDir, { recursive: true });
+    const artifactPath = path.join(artifactDir, `${ID}.json`);
+    const artifactIndex = {
+        version: 1, parserVersion: 'manual-artifact-parser-v2-structured', paperId: ID,
+        inputIdentity: {
+            sourceSha256: entry.sourceSha256,
+            sourceIdentitySha256: entry.sourceIdentitySha256,
+            paperInputSha256: entry.paperInputSha256
+        },
+        inventoryHealth: { status: 'complete', issues: [] },
+        artifactIndexSha256: 'd'.repeat(64)
+    };
+    writeJson(artifactPath, artifactIndex);
+    const artifactBytes = fs.readFileSync(artifactPath);
+    const artifactManifestPath = path.join(artifactDir, 'manifest.json');
+    writeJson(artifactManifestPath, {
+        version: 1, mode: 'manual_artifact_index',
+        parserVersion: 'manual-artifact-parser-v2-structured', date: DATE,
+        filteredBatchSha256: context.filteredBatchSha256,
+        papers: { [ID]: {
+            status: 'complete', paperId: ID, path: artifactPath,
+            sourceSha256: entry.sourceSha256,
+            sourceIdentitySha256: entry.sourceIdentitySha256,
+            paperInputSha256: entry.paperInputSha256,
+            structuredArtifactsSha256: entry.structuredArtifactsSnapshot.payloadSha256,
+            parserVersion: 'manual-artifact-parser-v2-structured',
+            inventoryStatus: 'complete',
+            inventoryIssues: [],
+            artifactIndexSha256: artifactIndex.artifactIndexSha256,
+            outputSha256: require('node:crypto').createHash('sha256').update(artifactBytes).digest('hex'),
+            bytes: artifactBytes.length
+        } }
+    });
     const recordsPath = path.join(root, 'records.json');
     writeJson(recordsPath, envelope());
     const mergedRecords = mergeRecordsEnvelopes([
         { path: recordsPath, document: envelope() }
     ], DATE);
-    return { root, filtered, manifest, manifestPath, recordsPath, mergedRecords, input, entry };
+    return {
+        root, filtered, filteredPath, manifest, manifestPath, recordsPath, mergedRecords,
+        input, entry, artifactPath, artifactManifestPath
+    };
+}
+
+function attachFreshAuthoring(f, record) {
+    const article = record.editorial.readerArticle || record.editorial.method;
+    record.editorial.readerArticle = article;
+    const articlePath = defaultArticlePath(f.root, DATE, ID);
+    fs.mkdirSync(path.dirname(articlePath), { recursive: true });
+    fs.writeFileSync(articlePath, article);
+    const authority = buildAuthorityInputs({
+        paperId: ID,
+        filteredPath: f.filteredPath,
+        sourcePath: f.entry.path,
+        artifactPath: f.artifactPath,
+        authoringPromptPath: AUTHORING_PROMPT_PATH,
+        editorialContractPath: EDITORIAL_CONTRACT_PATH,
+        blankSchemaPath: BLANK_SCHEMA_PATH
+    });
+    const receipt = {
+        contract: FRESH_AUTHORING_CONTRACT,
+        mode: FRESH_AUTHORING_MODE,
+        authoringSessionId: `fresh-${ID}-fixture`,
+        articlePath,
+        articleSha256: articleSha256(article),
+        articleFileSha256: rawFileSha256(articlePath),
+        prohibitedProseInputs: [],
+        inputs: Object.values(authority)
+    };
+    receipt.receiptSha256 = freshStableSha256(receipt);
+    record.freshAuthoring = receipt;
+    return record;
 }
 
 describe('strict reusable manual v4 spec assembler', () => {
@@ -734,7 +824,7 @@ describe('strict reusable manual v4 spec assembler', () => {
     it('records v3 assembles Manual v5 with isolated paper/reviewer provenance', () => {
         const f = fixture();
         const currentPath = path.join(f.root, 'manual-records-v3.json');
-        const current = currentEnvelope();
+        const current = currentEnvelope({ [ID]: attachFreshAuthoring(f, currentV3Record()) });
         writeJson(currentPath, current);
         const mergedRecords = mergeRecordsEnvelopes([
             { path: currentPath, document: current }
@@ -742,6 +832,7 @@ describe('strict reusable manual v4 spec assembler', () => {
         const spec = buildSpec({
             date: DATE,
             filtered: f.filtered,
+            filteredPath: f.filteredPath,
             manifest: f.manifest,
             manifestPath: f.manifestPath,
             mergedRecords
@@ -753,12 +844,29 @@ describe('strict reusable manual v4 spec assembler', () => {
         assert.equal(spec.papers[ID].paperSubagent.singlePaperOnly, true);
         assert.equal(spec.papers[ID].stageReviews.scoringAudit.decision, 'manual_verified');
         assert.equal(spec.papers[ID].figureReview.decisions.length, 1);
+        assert.equal(spec.papers[ID].freshAuthoring.contract, 'fresh-authoring-v1');
+        assert.match(spec.papers[ID].freshAuthoring.receiptSha256, /^[a-f0-9]{64}$/);
+
+        const oldReaderOnly = JSON.parse(JSON.stringify(current));
+        delete oldReaderOnly.papers[ID].freshAuthoring;
+        const oldReaderPath = path.join(f.root, 'old-reader-only-v3.json');
+        writeJson(oldReaderPath, oldReaderOnly);
+        assert.throws(() => buildSpec({
+            date: DATE,
+            filtered: f.filtered,
+            filteredPath: f.filteredPath,
+            manifest: f.manifest,
+            manifestPath: f.manifestPath,
+            mergedRecords: mergeRecordsEnvelopes([
+                { path: oldReaderPath, document: oldReaderOnly }
+            ], DATE)
+        }), /fresh-authoring-v1/);
     });
 
     it('allows the narrow Manual v5 all-reject image exception and rejects incomplete or generic variants', () => {
         const f = fixture();
         const makeRecord = () => {
-            const record = currentV3Record();
+            const record = attachFreshAuthoring(f, currentV3Record());
             record.selectedImageUrls = [];
             record.imageInsertions = [];
             record.figureReview = {
@@ -781,6 +889,7 @@ describe('strict reusable manual v4 spec assembler', () => {
             return buildSpec({
                 date: DATE,
                 filtered: f.filtered,
+                filteredPath: f.filteredPath,
                 manifest: f.manifest,
                 manifestPath: f.manifestPath,
                 mergedRecords: mergeRecordsEnvelopes([{ path: recordsPath, document }], DATE)
