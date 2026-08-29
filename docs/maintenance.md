@@ -15,6 +15,14 @@
 - **安全审计**：定期检查代码中是否意外泄露 API key、token、凭证备份文件或环境变量快照；`data/` 和 `logs/` 目录下的临时/备份文件严禁提交到版本控制
 - **`.gitignore` 要求**：确保 `data/`、`logs/`、`*.env`、`*.backup*`、`.DS_Store`、`*-cache.json`、敏感日志等被正确忽略
 
+### Production Manual v6 维护边界
+
+- 正式状态只位于 `data/current/manual-v6/<date>/`：`task-runner/`、`records-v4.json`、`spec.json` 和 `metrics/`；正式 canonical 仍是 `data/current/deep-analysis-result.json`，spec ingestion 必须声明 `runtimeMode=production`。
+- runner 只管理 author → technical_scoring / pedagogy_readability → author_revision 的 register/claim/start/submit/失败恢复和真实性校验，不创建 subagent、不物化 packet 或 records envelope。`awaiting_packet` 与 `awaiting_records_envelope` 必须按真实缺口处理。
+- `awaiting_packet` 由主 Agent调用 `manual:packet` 后 register；`awaiting_records_envelope` 只有在四角色均 validated 后才可调用 `manual:records` 收口。sealer 会重开所有 runner-bound 文件，任何字节漂移都必须先回到相应任务重新验证。
+- `manual:v6:shadow:*` 和 runner `--shadow` 只写 `manual-v6-shadow/<date>/`，不得发布；`manual:v5:*` 只用于 legacy v5 历史只读/维护，不得与 production v6 混批。
+- Publisher、digest status 与视觉规划必须重验 records v4、spec v6、Merkle root、`reader-longform-v2` 和 production generation；缺字段不得回退 legacy v5 页面。
+
 ---
 
 ---
@@ -105,7 +113,7 @@
 4. **验证 `score` 是否从 `## 评分理由` 的八个分项正确计算**：抽样对比 `parsed.score` 与 `## 评分理由` 中各分项之和，确认上限为 10、四舍五入到 0.1
 5. 验证博客发布脚本产物，确认榜单、单篇页和热门方向正确显示新字段
 6. 验证微信/小红书/飞书脚本产物，确认文案中没有因字段缺失导致的空值或格式错位
-7. 确认发布视图正确呈现边界：Manual v5 应在论文特有 `readerArticle` 的相关小节中呈现局限/反证，并在文末保留评分证据；只有历史兼容页或自动 API canonical 版式才直接显示 `## 局限与问题`
+7. 确认发布视图正确呈现边界：production Manual v6 应在 `reader-longform-v2` 的论文特有小节中呈现局限/反证，并在文末保留评分证据；只有 legacy v5 兼容页或自动 API canonical 版式才直接显示 `## 局限与问题`
 
 ---
 

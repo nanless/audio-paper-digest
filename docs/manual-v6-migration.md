@@ -1,124 +1,220 @@
-# Manual v6 提质与加速迁移计划
+# Manual v6 正式迁移与运行设计
 
-## 目标与当前边界
+## 决策
 
-这次改造同时解决两个问题：正文不能再靠字段堆砌和模板扩写，流水线也不能用重复读全文、重复扫全批次、固定长等待来换取“看起来严格”。质量门槛和加速设计必须共用同一套可审计 artifact；任何缓存命中都以内容 SHA、协议版本、模型身份和单篇论文身份为前提。
+从 2026-08-29 起，新的 Manual 日更只允许走：
 
-当前默认日更仍是 records v3 → spec v5 → `full-text-evidence-v5`。v6 已形成显式、隔离的可运行影子链，但不是默认切换：全文命令额外保存扁平化前的结构快照并生成 ArtifactIndex；records v4/spec v6 official assembler 回读实际文件字节并生成 Merkle root；`--v6-shadow` ingestion 只写日期隔离 canonical；publisher 能严格双读 v5/v6；shadow/benchmark CLI 只审计已有输入和真实 metrics。现已提供隔离的 v5/v6 博客候选页、匿名人工盲测工件生成器和持久 task runner；runner 只输出供主 Agent 分派的 pending task，不调用 API，也不冒充 subagent 执行。尚未完成的是三批新鲜运行的性能与人工质量验收。完成前不得把默认 v5 数据重新贴标成 v6。
+```text
+manual_offline 筛选
+  → structured full text + complete ArtifactIndex
+  → records v4 持久任务 DAG
+  → spec v6 + batch Merkle root
+  → full-text-evidence-v6 canonical
+  → generation schema v3
+  → 独立逐页 Manual review
+  → push + remote OID
+  → TOP 10 长图与汇总封面
+```
 
-2026-08-28 P0 修复后的真实边界：
+records v3/spec v5/canonical v5 不再是默认路径。它们只保留为显式的历史维护读取能力，不能接受新写作、重新包装为 v6、与 v6 混批发布，或进入新教程质量回归。
 
-- HTML 表格、MathML/TeX、图片和 bibliography 在 `.text()` 前提取；结构快照同时绑定原始 HTML、最终全文、论文 input 与来源身份 SHA。
-- ArtifactIndex parser 为 `manual-artifact-parser-v2-structured`。只有 detected/recovered 数量闭环、无截断且 DOM 工件全部可审计时才是 `complete`；PDF/text fallback 固定为 `incomplete`，不再把解析不到误报为论文没有。
-- `reader-longform-v2` 的结果表覆盖由源矩阵 cell ID 集合自动计算，正文必须包含确定性渲染表；图、公式、术语和相关工作必须绑定实际正文 block。
-- records v4 validator 先重放完整 records v3/v5 门禁，再验证结构化长文、实际 task packet/receipt/review/revision 输出和 reviewer 后修订闭环；official assembler 还会校验真实文件 SHA、realpath、单篇隔离、全局 taskName 唯一和完整 filtered 集合。
-- spec v6 与 shadow canonical 已显式接通：spec/paper shard 同时绑定 sealed record 语义 SHA、record/envelope/ArtifactIndex/task evidence 文件 SHA、longform SHA 与 assembler 协议；ingestion 重放 official assembler，只写 `manual-v6-shadow/<date>`，绝不更新正式 `papers.json`。
-- publisher 对声明 v6 的页面确定性重放 blocks、完整表格、图、公式、术语和 related-work，并把 spec/record/artifact/task provenance 写入页面和 generation；任一字段漂移直接失败，不能静默回退 v5。
-- 抓取侧已经增加 Manual 日期级运行锁、HF 真异步、真实 host 请求串行和跨类别摘要 Promise cache；具体分钟收益仍须联网 benchmark，禁止沿用 12–15 分钟的推算作为实测。
-- generation schema v3 的页面 SHA/删除状态已在 review 开始、receipt 签发和 push 重验时统一兑现，跨日期路径与 durable Manual provenance 同时 fail closed。
-- fulltext、ArtifactIndex、spec v6、shadow ingestion 与显式落盘的 shadow audit 已接入 `observed-stage-metrics-v1`：每次运行写隔离且不可变的 metrics sidecar，保存单调时钟实测 wall、实际可测 queue、cache hit/miss、输入/输出 bytes+SHA 和 paper/task 数量。shadow 会重新读取并验证每个绑定文件，旧 metrics 一旦输入或输出漂移就不能进入 benchmark；只输出到 stdout 的只读审计不额外写指标。
-- metrics 是旁路可观测性而不是正文/发布质量凭证：sidecar 构建或写入失败会明确告警并保留 `unknown`，但刻意不改变 fulltext、spec 或 canonical 的原有成功/失败语义；benchmark 只能消费实际存在且 SHA 复验通过的 receipt，不能把缺失 receipt 当作 0。
-- v6 新签名使用 `stable-json-ascii-keys-exact-ieee754-nfkc-text-v2`。对象 key 限制为可见 ASCII；真实评分所需有限浮点按其 IEEE-754 实际值确定性展开为精确十进制，NaN/Infinity、负零和非安全整数拒绝。中文等 Unicode 只作为字符串值参与 UTF-8 签名，NFKC 只在显式文本函数中执行。Node/Python 使用同一 fixture 固定 canonical JSON、数字形 key、1.7/1.4/1.5/0.1/1e-6、NFKC 和 SHA。
+这次切换是契约迁移，不是版本号替换。任何旧 v5 文件即使补上 `version: 6`，也会因缺少结构化来源、records v4 task evidence、reader-longform、Merkle root 或 production runtime proof 而失败。
 
-### 2026-08-27 真实历史批次审计
+## 三种运行模式
 
-2026-08-28 使用 `manual:shadow` 对 2026-08-27 的既有 21 篇论文执行了无副作用审计。结果不是把页面分成不同质量层级，而是 21/21 全部判定为 `blocked_by_missing_structured_source`，`readyCount=0`、`v6CandidateCount=0`。现有 v5 读者正文平均约 2738 字、平均约 11.62 条事实主张，但由于历史输入没有保存 HTML 扁平化前的结构化表格、公式、图片和参考文献，数值 cell 覆盖率只能是 `blocked`，不能用扁平文本反推或伪造。
+| 模式 | 用途 | 数据根 | canonical | 是否更新 `papers.json` | 是否允许正式发布 |
+|---|---|---|---|---|---|
+| `production` | 默认新日更 | `data/current/manual-v6/<date>/` | `data/current/deep-analysis-result.json` | 是 | 是 |
+| `shadow` | 隔离审计、回归和对比 | `data/current/manual-v6-shadow/<date>/` | 该日期 shadow 目录内 | 否 | 否 |
+| `legacy_v5_maintenance` | 历史 v5 页面只读维护 | 原历史路径 | 原历史 canonical | 否 | 仅显式维护，不建立视觉任务 |
 
-同时只读检查已发布博客仓库的 21 个独立论文页：21 页都没有任何 Markdown 数据表，只有 3 页包含正文图片，其余 18 页完全无图；页面的一级栏目又统一收敛为 6 个固定 `###` 标题。这些事实与用户反馈的“不是三个层级，而是整批都不合格”一致：问题不是少数低分页面，而是旧契约允许所有页面在缺失逐表结果与大多数图像的情况下通过。
+模式必须由命令显式选择并进入签名对象。不得根据某个文件是否存在自动切换，也不得把 shadow canonical 作为自定义 `--data-file` 绕进正式 publisher。
 
-审计报告位于 `data/current/manual-v6-shadow/reports/2026-08-27.json`；它绑定 21 篇论文集合和 24 个真实输入文件，并明确记录 `fetched=false`、`canonicalWritten=false`、`blogGenerated=false`、`published=false`。该历史报告只保留流程状态证据，不得把其中任何旧正文或旧页面作为 v6 作者、回归或修订输入，也不能作为 v6 成品质量验收样本。若要做逐表、逐图、逐公式的新写作与盲测，必须重新获取原始结构化 HTML/PDF 工件并从空白正文开始。
+## 正式数据布局
 
-## 读者成品契约
+```text
+data/current/
+├── filtered-papers.json
+├── manual-full-text/<date>/
+│   ├── manifest.json
+│   ├── papers/<paper-id>.txt
+│   ├── structured/<paper-id>.json
+│   └── artifacts/
+│       ├── manifest.json
+│       └── <paper-id>.json
+├── manual-v6/<date>/
+│   ├── task-runner/
+│   │   ├── state.json
+│   │   └── tasks/<paper-id>/
+│   ├── records-v4.json
+│   ├── spec.json
+│   └── metrics/
+└── deep-analysis-result.json
+```
 
-`reader-longform-v2` 把正文拆成 6–32 个有教学职责的内容块，而不是固定六章。实证论文必须覆盖前置概念、问题、相关工作、方法/信号路径、训练、实验设置、结果、复现与边界；正文按“问题 → 方法/信号路径 → 结果 → 局限”递进。单 block 不得超过 4000 字符、单段不得超过 1200 字符、全文保持 2400–24000 字符，所有块规范化重放为最终 `readerArticle`。
+`manual-v6/<date>/` 保存 production workflow evidence；正式 publisher 仍只消费标准 canonical。这样发布、状态和视觉不需要维护另一套 v6 canonical 路径，但 canonical 中必须反向绑定日期根内的 spec、record 和 task evidence。
+
+shadow 使用同构目录，但根为 `manual-v6-shadow/<date>/`。两个根的文件不得相互引用。
+
+## 结构化来源与 ArtifactIndex
+
+`manual:fulltext` 在 HTML `.text()` 前保存表格 DOM、矩阵、rowspan/colspan、MathML、TeX、图片、bibliography、citation、章节和 source span，并绑定原始 HTML、最终全文、论文 input identity 和 source identity SHA。
+
+ArtifactIndex parser 固定为 `manual-artifact-parser-v2-structured`。只有 detected/recovered 计数闭环、无截断且所有结构工件可回放时，`inventoryHealth.status` 才能为 `complete`。PDF 或纯文本 fallback 必须为 `incomplete`，不能用“没有解析到”冒充“论文没有该工件”。
+
+production spec v6 要求批次内每篇 ArtifactIndex 都为 complete。单篇 incomplete 会保留可恢复 checkpoint，并阻断该批 spec，而不是降级成 v5。
+
+## 单篇任务 DAG
+
+每篇论文独立执行：
+
+```text
+author
+  ├── technical_scoring
+  └── pedagogy_readability
+          ↓
+     author_revision
+          ↓
+      sealed record v4
+```
+
+跨论文不得复用 task、packet、输出或 artifact root。平台有 4 个总并发槽，主 Agent占 1 个，因此最多同时运行 3 个 leaf subagent；runner 的 active limit 同样固定为 3。
+
+runner 只负责持久状态、SHA、依赖与真实性校验：
+
+- `init`：绑定同日 complete filtered 集合并建立单篇受控目录；
+- `register`：重开 packet 和 allowlist 文件，验证真实字节；
+- `claim`：只返回依赖已满足的任务，最多填满 3 槽；
+- `start`：绑定平台实际创建的唯一 task name；
+- `submit`：验证输出、receipt、Terra-high、单篇隔离与输入 SHA；`author_revision` 还会在未封印状态当场重放完整 `reader-longform-v2`，而不是把 blocks/表图公式/术语/相关工作缺口推迟到 records 阶段；
+- `fail/retry/abandon`：显式恢复，不按墙钟猜测任务已经死亡；
+- `status`：从落盘 state 和真实文件推导 pending/blocked/validated。
+
+runner 不调用 LLM/API，也不创建 subagent。主 Agent必须依据 claim 真实创建 `gpt-5.6-terra/high` leaf，并把平台 task name 回写 `start`。这是平台权限边界，不能被描述成脚本自动完成。
+
+## Packet 与冷启动
+
+author packet 采用 deny-by-default allowlist，只能读取本篇 metadata projection、source snapshot、完整全文、structured source、complete ArtifactIndex、ArtifactIndex 授权图片、固定写作 prompt、编辑契约和空白 records schema。
+
+禁止输入任何历史 analysis、readerArticle、article/post/blog、旧 record、已填写 quality 或历史 review prose。
+
+`author_revision` 必须复用 author 的同序原始证据，并且只额外读取当前 runner 已验证的 technical/readability findings。它从原始证据和 findings 冷启动输出完整替换稿，不能读取上一版正文后局部修补。
+
+revision packet 的 longform schema 以 validator 的正式字段为准：`paperId`、`articleSha256`、`artifactIndexSha256`、`blocks`、`tables`、`figures`、`formulas`、`terms`、`relatedWorks`。表格、图像与公式必须对 complete ArtifactIndex 全量处置；术语只覆盖最终正文实际使用的 ArtifactIndex acronym，避免把公式变量、短串和未使用候选误当作教程术语；相关工作至少选择两个真实 citation（候选不足两个时全部绑定），并将关系与差异逐字写入 related-work block。旧式 `artifactCoverage` / `tableCoverage` 等摘要字段不能替代这些正式对象。binder 的语义 base 固定为当前 runner-validated `draft/author-record.json`，绝不因输出路径已存在而回读遗留 `revision-record-payload.json`；遗留 payload 只能覆盖，不能成为冷启动输入。author base 缺失对象式 evidence ledger 或把 provenance 对象冒充 ledger 时必须从 author 节点重做。显式 retry/abandon 后，`register` 可以只对目标节点执行受控 packet 原子替换；其他已绑定 packet/output/receipt 仍逐字重验，不能借此绕过篡改检查。
+
+生产命令把职责明确分开：`manual:packet` 只物化当前 role 的 exact allowlist 并返回 register 参数；新 packet 还在自身稳定签名中内联角色专属 `outputContract`，明确固定输出/receipt 路径、必需字段、正式量表和跨运行时语义 SHA 算法，leaf 不再依赖口头补充 schema。旧 packet 仅保留验证兼容。`manual:records` 只在四角色都由 runner 标记为 `validated` 后执行确定性密封。两者均不创建 subagent、不调用 LLM/API，也不生成论文 prose。
+
+`technical_scoring` 的 runner submit 是正式评分闭环门禁：`dims` 必须按八维顺序、各自上限与一位小数约束填写，总分不超过 10，开源维度只接受固定锚点；同时要求 `confidence`、恰好 8 条论文特定 `scoringReasons`，以及精确覆盖八维证据 ID 的独立 Terra-high `scoringCalibration`。缺字段、自创 0–10 量表或普通 JSON hash 均在 review submit 阶段失败，不能延迟到 revision binder。
+
+`manual:bind-revision` 消除 revision 阶段重复手抄 40–60KB JSON 的序列化风险。leaf 仍独占本篇语义工作并提交终稿、修正后的未封印 payload 与 `manual-v6-revision-binding-map-v1`；binder 只执行标题拆分、表格精确渲染、artifact ID 解析和 SHA/receipt 绑定，并从 runner 已验证的 technical / pedagogy 输出确定性回填评分与可读性字段。draft 可保留其真实 allowlist 中的 `E1` 风格 ID，binder 会把 ledger 和所有精确依赖引用一起规范化为 `E01`，任何规范化碰撞都 fail closed。它不替 leaf 做语义写作或复核判断；任何未实际进入正文的像素事实、公式解释、术语定义或相关工作差异都会被正式 longform validator 拒绝。
+
+独立审计前必须先运行 `manual:bind-revision -- --date <date> --paper <id> --preflight`。它只在内存中把当前 article/map、runner validated reviews 和 author base 重放为未封印 record，执行完整 records-v4 与 longform 校验；不读取或创建 audit，不写 payload/output/receipt，也不改变 runner 状态。只有 preflight 通过的当前 article/map SHA 才能交给独立 audit，避免把审计槽浪费在 researchBrief、editorial review、开源状态或基础 record 字段错误上。
+
+revision leaf 仍不得读取旧 `author-record` prose。若完整 record 门禁要求 result claim 的 `readerNarrative` 逐字进入辅助实验栏目，binding map 可用 `recordPatches.editorialSections` 从当前允许证据冷启动替换 `summary/method/innovations/results/details/limits/open` 中必要的栏目；`editorialReview` 继续单独提交。这样 resultClaims 可以绑定 fresh `editorialSections.results`，无需为迁就旧 base 扩大 deny-by-default 读取权限。
+
+血缘分为初稿和终稿两段：`authorReceipt` 只绑定初稿 author packet/output/article；`finalRevisionAuthorReceipt` 必须来自独立 `author_revision` task，并唯一绑定最终 article。四个 taskName 必须互不相同。
+
+revision output v2 固定绑定 `draft/final-article.md` 与未封印的 `draft/revision-record-payload.json`。payload 明确不得包含 `reviewReceipts`、`reviewResolution`、`sealedRecordSha256` 或两段 author receipt。runner 重开文件并验证 raw/semantic SHA 后，sealer 才注入真实 receipts、findings resolution 与两段 author provenance，并以“删除 `sealedRecordSha256` 后的对象”计算 sealed SHA。这个顺序避免 record 与 receipt 互相包含对方哈希形成循环。
+
+revision binder 会把早期 author record 中不统一的开源描述按已验证的开源评分和真实 HTTPS 证据规范化：已发布、部分发布、承诺发布、仅 demo、仅正文引用而无直达链接、未发布分别落到 `released` / `partial_release` / `promise` / `demo_only` / `reference_only` / `none`。其中 `reference_only` 只接受 0.2 分且不得携带 URL；1.0 分以上必须有 HTTPS 资源 URL，并确定性补齐至少一种已发布资源标志。评分与证据冲突时 fail closed，不能靠中文自由文本绕过。
+
+## records v4 与 reader-longform-v2
+
+records v4 是 records v3 质量门禁的严格超集，并增加：
+
+- author、technical、readability、revision 四个互异的 Terra-high task receipt；
+- packet、receipt、output 的真实路径、字节 SHA 与语义 SHA；
+- complete ArtifactIndex 原始字节和语义身份；
+- reviewer findings 到 revision resolution 的逐项闭环；
+- `reader-longform-v2`；
+- `sealedRecordSha256`。
+
+其中 author receipt 是初稿来源，revision receipt 同时作为 `finalRevisionAuthorReceipt` 和 `reviewReceipts.authorRevision`，两处必须语义完全一致；publisher 也会再次重放这一约束。
+
+`reader-longform-v2` 将正文拆成 6–32 个承担明确教学职责的 blocks，按问题→方法/信号路径→结果→边界递进。所有 blocks 确定性重放为最终 article。
 
 硬门禁包括：
 
-- ArtifactIndex 中每张表必须有 disposition；结果表不能 omit。数值 cell ID 由源矩阵坐标与内容自动生成，record 自报计数不参与判定；正文/附录必须嵌入由源矩阵确定性渲染的完整 Markdown 表。
-- 每张图和每个公式都必须逐项选择或拒绝。选图的 URL、像素可见事实、公式原文及解释必须实际出现在绑定 block，不能只写在 sidecar。
-- ArtifactIndex 给出的术语与相关工作候选必须逐项处置；术语和定义、关系与差异必须实际出现于绑定 block。
-- 正文不能泄漏 `artifactIndex`、`sourceBindings`、`readerBindings` 等内部 schema 词。
-- 作者回执必须绑定单篇输入包 SHA、成稿 SHA、Terra-high 模型身份、北京时间排队/开始/完成时间和修订次数。
+- 每张结果表必须进入正文，数值 cell ID 覆盖率为 100%；
+- Markdown 表由 ArtifactIndex 源矩阵确定性渲染，不能手工改数；
+- 每张图、每个公式逐项使用或给出可审计 omission；
+- 图片 visible facts、公式原式与解释必须进入绑定 block；
+- 术语定义和 related-work 关系/差异必须进入正文；
+- 精确数字、设备、帧数、时长、规模与科学计数法只能来自本篇来源或显式 derived fact；
+- 内部 schema 名称不得泄漏到读者正文。
 
-## 单篇隔离任务与双分支复核
+## spec v6 与 Merkle 闭包
 
-每篇论文生成独立 task packet，只能引用该论文目录内的 metadata、全文、ArtifactIndex、论文图表、写作契约和空白模板。路径必须是安全相对路径，packet 绑定单篇 normalized arXiv ID 与输入 SHA。一个任务不得看到另一篇论文的全文或 record。`author` packet 固定为 `fresh_from_evidence`：禁止把 `readerArticle`、`article.md`、`post.md`、博客页面、已有 canonical 正文或任何 previous draft 作为输入；缓存只能复用受控论文证据和空白模板，不能复用旧文句子或段落结构。
+official assembler 必须重新打开 filtered、全文 manifest、ArtifactIndex manifest、records v4 envelope、每篇 artifact root、record、四类 packet/receipt/output、reader-longform bundle 和 sealed record，并检查全批论文集合与 task name 唯一性。
 
-双分支复核之后的 `author_revision` 也不是旧稿补段或重排器。它固定为 `fresh_replacement_from_evidence_and_findings`，允许读取同篇原始证据与两份结构化 review findings，但不得读取上一版正文；输出必须是一篇完整替换稿。这样 reviewer 可以指出缺口，最终作者却仍需从论文证据重新组织全文，而不能把旧正文换顺序后冒充新教程。
+每篇先构建 paper shard；批次使用成对哈希 Merkle tree 计算 root。spec 固定绑定 runtime mode、records/spec/manual-depth 版本、全部输入文件 SHA、per-paper shard、paper payload、task evidence、assembler protocol SHA 和 batch Merkle root。
 
-作者完成后并行进入两个互不替代的分支：
+输入变化时，未加 `--force` 不得覆盖既有 spec。`--force` 只允许明确替换，不绕开任何 validator。
 
-1. `technical_scoring`：核对技术事实、表格数字、比较方向、八维评分与证据。
-2. `pedagogy_readability`：从入门研究生视角核对概念铺垫、递进、术语解释、图表读法和模板化表达。
+## canonical production ingestion
 
-两个分支均须独立 Terra-high receipt。任一分支变化只失效自己和下游 merge/final-page 节点；例如只调整技术评分，不应重跑字节未变的可读性审查。最终页面还有独立单页 review receipt，不能拿正文作者自审冒充。
+production ingestion 只接受受控 `manual-v6/<date>/spec.json`；shadow ingestion 只接受同日 shadow spec。ingestion 会再次运行 official assembler并比较整个 spec 的稳定签名。
 
-显式 shadow runner 入口为 `npm run manual:v6:tasks -- <action> --date YYYY-MM-DD`。依次使用 `init`、`register`、`claim`、`start`、`submit`；内容失败使用 `fail` 后显式 `retry`，平台已经确认 subagent 终止的悬挂 claim 使用 `abandon`。`claim` 最多返回 3 个 ready task，主 Agent 必须据此真实创建逐篇 Terra-high subagent，再用平台实际 taskName 执行 `start`。runner 不读取 LLM 凭据、不启动 subagent、不按超时自动猜测并回收仍可能运行的 claim；`status` 的 `pendingTasks` 才是安全待分派队列。`init` 只建立受控的逐篇目录和 checkpoint，packet 仍须由主 Agent按真实单篇工件显式 `register`，不能把 runner 描述成自动完成 records v4。
+正式 canonical 逐篇写入，并包含：
 
-## ArtifactIndex 与缓存 DAG
+- `manualDepth=full-text-evidence-v6`；
+- canonical `manualTakeover` 继续使用发布侧可重放的 provenance v2；paper spec shard 另声明 `takeoverVersion=3`；
+- runtime mode；
+- spec root、paper shard、sealed record、records envelope、ArtifactIndex、task evidence 和 longform SHA；
+- 结构化 ArtifactIndex 与 reader-longform bundle；
+- 原有八维评分、claims、图片、来源和阶段审计。
 
-全文 v2 manifest 保持原成功语义；companion `manual-full-text/<date>/artifacts/manifest.json` 以论文为粒度保存：
+production 成功时同步 `papers.json.digestStatus`；shadow 永不更新。已有非 v6 成功 canonical 不能静默复用，必须显式 `--force`，且 force 仍会重放全部 v6 输入。
 
-- 章节及来源跨度；
-- 表格矩阵、确定性 replay、matrix/replay SHA 和结果表分类；
-- 图与图片 metadata；
-- 公式、缩写、引用、基线、数据集和指标；
-- 输入全文、来源文件、输出 artifact 的 SHA 与论文身份。
+## 发布、review、push 与视觉
 
-工作流按依赖而非“整批版本号”判断复用：
+默认 `blog:generate` 只接受完整 production v6 批次：每篇 canonical 都是 v6、runtime mode 都是 production、全批绑定同一个 spec Merkle root，并且不允许 v5/v6 混批。generation schema v3 保存完整 production proof 和 fingerprint。
 
-```text
-source snapshot
-      |
-ArtifactIndex
-      |
-author draft
-   /       \
-technical  readability
-   \       /
-    author revision / finding resolution
-          |
-    sealed record shard
-          |
-     spec v6 Merkle root
-          |
- canonical -> generate -> final-page review -> push
-```
+legacy v5 只能通过显式 maintenance 参数生成，不能建立发布后视觉任务。shadow canonical 即使指定 `--data-file` 也必须被 production 门禁拒绝。
 
-每个节点的 cache key 至少包含：直接输入 artifact SHA、协议/contract 版本、角色、模型与 reasoning、任务模板 SHA、论文 ID。节点输出改变时只沿依赖边传播 stale；无依赖关系的兄弟节点保持 reusable。失败项保留 checkpoint，不回滚同批已完成论文。
+逐页 review 继续使用不可变 page artifact。每个页面必须由独立 Terra-high leaf 生成 v3 shard；汇总后由 Manual attestation、确定性 Markdown/Hugo gate 签发 receipt。review worker 只读，任何修改建议都让页面失败并返回生成或修订阶段。
 
-records v4 是单篇封印结果；spec v6 首先写 per-paper shard。批次未齐时只能是 pending/running，重复 paper shard 必须拒绝，严禁后写覆盖。official assembler 使用真正的成对哈希 Merkle root，并同时绑定落盘 record、envelope、ArtifactIndex、task packet/receipt 和 review/revision output 字节。spec v6 只能由显式 shadow ingestion 消费，不能进入正式 canonical。
+push 再次复验 generation、页面字节、production proof、receipt、Git 基线和 commit delta；只有远端 `main` OID 与本地 publication commit 完全相同才记录发布成功。视觉任务只接受这种 production v6 receipt。
 
-## 抓取与发布加速
+## 性能与可观测性
 
-抓取器采用 host-aware 调度：recent、search、abstract 和 Atom API 的真实网络请求在同一 host 串行；HuggingFace 使用异步 `execFile`，不会再以同步 curl 阻塞 arXiv callback。Manual 同日期 raw/select/fulltext 共用跨进程锁；批次级 normalized arXiv ID Promise cache 避免跨类别重复摘要。来源健康、代理、checkpoint 和完整覆盖门禁不变。
+production metrics 写入 `manual-v6/<date>/metrics/`，shadow metrics 写入对应 shadow 根。所有时间必须来自单调时钟；无法观测的 queue/host wait 写 `unknown`，不能用墙钟时间戳相减。
 
-性能 sidecar 不从 `startedAt/completedAt` 猜 wall time。raw fetch 用 `observed-raw-fetch-metrics-v1` 记录端到端单调 wall、逐类别 checkpoint 命中、摘要 cache、显式 retry wait 和 host scheduler 实际 wait，并绑定最终 raw/checkpoint SHA；指标失败不改变抓取结果。fulltext 与 ArtifactIndex 目前在 worker 内交错运行，因此分别收集每篇同阶段的 `[start,end]` 单调时钟区间并计算 interval union，标记为 `union_of_observed_same_stage_operation_intervals`：同阶段并发重叠只计一次，另一阶段独占的空档不计入；两个阶段的 union 仍可真实重叠，禁止把它们相加冒充端到端 wall。spec v6 记录 assembler 锁内 wall 和真实锁等待；shadow canonical 记录整个 ingestion run wall。没有可观测 queue 的阶段保留 `unknown`。指标文件位于 `data/current/manual-v6-shadow/<date>/metrics/`，通过 `manual:shadow -- --metrics FILE` 显式选择；同一报告不得给同一阶段提供两份指标。
+sidecar 绑定输入/输出真实路径、bytes 和 SHA。metrics 写入失败不改变内容或发布结果，但报告必须显示缺失。跨批报告只有在同一指标覆盖至少 3 个不同日期后才能计算 nearest-rank P50/P95；否则为 `insufficient_data`。
 
-跨批次验收使用 `npm run manual:performance-report -- ...`。该只读层同时复核 raw fetch、stage 和 v5 work-queue sidecar 及其绑定文件；任一 symlink、realpath 逃逸、bytes/SHA 漂移或身份不一致都使整份报告 fail closed。同日重跑不增加批次数；只有每个指标覆盖至少 3 个不同日期时才输出 `nearest-rank-v1` P50/P95，否则必须是 `insufficient_data`。默认仅 stdout；显式 `--output FILE` 才写入 `data/current/manual-performance-reports/`，且禁止覆盖。
+历史 2026-08-27 审计仍保留为反例：21/21 因缺少结构化 source 而 blocked。该报告不能作为 production v6 成品或性能样本。
 
-发布 review 在每次尝试开始时为每页构造一次不可变 page artifact，统一绑定原始 SHA、front matter、body 和确定性门禁结果；正文解析、确定性 dry-run、LLM 和图片审查复用该 artifact，收口前重新读/哈希只用于发现并发变化。页面结果立即写入日期隔离 shard；调度开始时线性扫描一次，任务回调不再反复重扫全批次。终轮 LLM review 只读：只要模型建议改字，该页就失败并回到修复阶段；绝不在 review 后改写已经签名的字节。批次 receipt 在所有页面 shard 完成后一次性收口，并继续绑定 generation、博客基线、review 协议、Hugo gate、remote 身份和远端 OID。
+## 失败恢复
 
-## 迁移阶段
+- raw/select/fulltext 沿用日期锁与逐来源/逐论文 checkpoint；
+- ArtifactIndex incomplete 只重抓或重建对应论文；
+- packet/input SHA 变化只使当前节点及后代 stale，兄弟 review 可复用；
+- 活动 claim 只有平台确认任务终止后才可显式 abandon；
+- spec/canonical 任一集合、identity、路径、SHA 或 Merkle 不匹配均 fail closed；
+- review 修改页面后只重审 SHA 变化页，批次 receipt 重新收口；
+- push 失败可复用已验证本地 commit，但不能声称已发布；
+- production 失败不得自动回退 v5。
 
-1. 已完成 P0 基础：结构化 HTML 快照和诚实的 inventory health、Manual 运行锁、HF 真异步与摘要去重、generation schema v3 字节闭环、删除 attestation、durable provenance、只读 review、`reader-longform-v2` 与 records v4 严格超集 validator。
-2. 已完成 P1 影子数据链：records v4/spec v6 official assembler、真实文件/路径/task 闭环、隔离 shadow ingestion、v6 canonical schema、publisher/review 双读与 fail-closed、shadow/benchmark CLI。
-2.1 已完成真实性能与跨运行时哈希基础：五个明确入口保存真实 metrics sidecar，shadow/benchmark 复验 metrics 及其输入输出 SHA；Node/Python 共享 stable JSON/Unicode/NFKC/hash 测试向量，并对真实小数评分执行一致的 IEEE-754 精确十进制签名。
-3. 已完成 records v4 持久 runner 基础：单篇 packet 注册、3 槽 claim/start/submit、Terra-high receipt、失败/retry checkpoint、内容 SHA 缓存与仅下游失效；默认 v5 CLI 保持不动。真实 subagent 的创建和结果落盘仍由主 Agent显式执行。
-4. 成品影子运行：为新鲜批次真实生产两份都从同一受控论文证据冷启动的候选页，不写正式博客仓库、不发布；比较事实覆盖、表格数值、图文邻接、人工缺陷数、耗时和缓存命中率。严禁把旧 v5 页面、旧 canonical 正文或旧 readerArticle 带回质量回归。
-5. 性能验收：积累至少 3 个新鲜联网批次，按 `nearest-rank-v1` 报告各阶段 P50/P95；unknown/not-applicable/blocked 不得记为 0。
-6. 显式试运行：只有影子质量和性能验收通过后增加面向正式博客的显式 v6 开关；不得根据文件存在自动切换。
-7. 默认切换：端到端测试、迁移文档、回滚路径和历史数据兼容全部通过后，才更新 AGENTS/SKILL 中的默认版本。
+## 切换验收矩阵
 
-## 验收指标
+代码合并前必须通过：
 
-质量验收以零遗漏和可回放为主：结果表数值单元格覆盖率 100%，图/公式 disposition 覆盖率 100%，内部字段泄漏为 0，正文/评分/页面 reviewer 身份独立，所有精确数字能回到同篇来源。
+1. Node 单元测试与全部 JS `node -c`；
+2. Python 单元测试与全部 Python `py_compile`；
+3. shell `bash -n`；
+4. production/shadow 路径隔离测试；
+5. v5→v6 静默复用拒绝测试；
+6. shadow canonical 发布拒绝测试；
+7. v5/v6 混批发布拒绝测试；
+8. production proof 在 generation→review→push 的漂移拒绝测试；
+9. records v4/ArtifactIndex/longform/Merkle 任一字节变化的 fail-closed 测试；
+10. 一批新鲜真实数据的完整 production v6 实跑。
 
-性能验收分阶段记录 wall time、网络等待、任务运行、缓存命中和重算原因。不得预设“22 分钟降低到 12–15 分钟”为既成结果；至少完成 3 次新鲜联网批次后报告 P50/P95。review 的不变页面应为 O(N) 字节/确定性复核加 O(1) 单页 LLM pass 复用，不再因每个 worker 回调形成 O(N²) 扫描。质量门禁不得为达到耗时目标而降级。
+第 10 项是运行验收，不允许用 fixture 代替。至少 3 批数据前，性能报告只能显示 `insufficient_data`；这不阻止 v6 正式质量门禁，但禁止宣称已达到某个 P50/P95 提速数字。
 
-## 失败与回滚
+## 兼容与移除计划
 
-- ArtifactIndex 失败不改变 v5 全文成功态，只将对应 companion 项保留为 failed/pending。
-- v6 任一 receipt、identity、SHA 或集合闭包不匹配都 fail closed；不得回退到自动填充或批次级统一签名。
-- v6 pilot 失败时删除显式开关即可回到未修改语义的 v5 默认链路；已有 v5 manifest/canonical 不需要迁移。
-- review 建议修改时不签发 receipt；修改完成后页面 SHA 改变，只复审该页及依赖它的批次收口。
+- `manual:v5:*` 和 `--legacy-v5-maintenance` 只服务已有历史工件；
+- legacy 路径不得创建新 records、教程预览或质量回归稿；
+- v5 validator 可继续作为 v6 的基础子校验，但文档和日志必须称其为 compatibility/base validation，而不是默认主链；
+- 积累足够维护窗口后，可单独删除 v5 写入口；删除前不得削弱对旧 receipt 的读取和远端已发布证据复验。

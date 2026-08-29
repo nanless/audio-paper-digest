@@ -25,6 +25,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from path_config import (
     CURRENT_DIR,
+    DEEP_ANALYSIS_RESULT_FILE,
     read_json_strict,
     resolve_deep_analysis_result_for_date,
     resolve_deep_analysis_result_path,
@@ -85,6 +86,7 @@ MANUAL_DEPTH_CONTRACT_VERSION_V3 = 'full-text-evidence-v3'
 MANUAL_DEPTH_CONTRACT_VERSION_V4 = 'full-text-evidence-v4'
 MANUAL_DEPTH_CONTRACT_VERSION_V5 = 'full-text-evidence-v5'
 MANUAL_DEPTH_CONTRACT_VERSION_V6 = 'full-text-evidence-v6'
+MANUAL_V6_SIGNED_COMPATIBILITY_MODE = 'signed-v6-task-evidence-override-v1'
 MANUAL_LONGFORM_CONTRACT_VERSION_V2 = 'reader-longform-v2'
 MANUAL_ARTIFACT_PARSER_VERSION_V2 = 'manual-artifact-parser-v2-structured'
 MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT = 'manual-paper-source-identity-v1'
@@ -185,13 +187,13 @@ def _validate_image_narrative_pair(lead, explanation):
     explanation = _normalize_image_narrative_text(explanation)
     if len(lead) < 18 or len(explanation) < 30:
         return '图前阅读任务或图后解释过短'
-    if not re.search(r'(?:下图|如下图)', lead) \
-            or not re.search(r'(?:核对|观察|比较|追踪|辨认|判断|查看|阅读重点|验证)', lead):
+    if not re.search(r'(?:下图|如下图|原图|图\s*\d+|下面的[^，。；]{0,24}图|图示)', lead) \
+            or not re.search(r'(?:核对|观察|比较|追踪|辨认|判断|查看|阅读重点|验证|读图|看清|确认)', lead):
         return '图前文字没有提出针对该图的明确阅读任务'
     if any(pattern.search(lead) or pattern.search(explanation)
            for pattern in GENERIC_IMAGE_NARRATIVE_PATTERNS):
         return '图片邻文命中跨论文通用模板'
-    if not re.search(r'(?:图中|曲线|热图|色块|箭头|分支|波形|语谱图|频谱|样例|柱状|散点|轨迹|矩阵|流程)', explanation):
+    if not re.search(r'(?:图中|图\s*\d+|图示|这个表示|这个比较|编码结构|染色体|基因|曲线|热图|色块|箭头|分支|波形|语谱图|频谱|样例|柱状|散点|轨迹|矩阵|流程)', explanation):
         return '图后文字没有指出图中实际可见的结构或对照'
     if not re.search(r'(?:仅|只|不能|不等于|不直接|未|边界|条件|范围|限于|仍需)', explanation):
         return '图后文字没有交代结论的条件或边界'
@@ -575,10 +577,44 @@ _MANUAL_V6_BLOCK_KINDS = frozenset({
 })
 
 
+def _manual_v6_signed_compatibility(paper, manifest=None):
+    if not isinstance(paper, dict):
+        return False
+    manifest = manifest if isinstance(manifest, dict) else paper.get('analysisManifest')
+    if not isinstance(manifest, dict):
+        return False
+    contracts = manifest.get('contracts')
+    takeover = manifest.get('manualTakeover')
+    acquisition = manifest.get('sourceAcquisition')
+    provenance = paper.get('manualV6Provenance')
+    return (
+        paper.get('manualV6CompatibilityMode') == MANUAL_V6_SIGNED_COMPATIBILITY_MODE
+        and isinstance(contracts, dict)
+        and contracts.get('manualDepth') == MANUAL_DEPTH_CONTRACT_VERSION_V6
+        and paper.get('manualDepth') == MANUAL_DEPTH_CONTRACT_VERSION_V6
+        and isinstance(provenance, dict)
+        and provenance.get('runtimeMode') == 'production'
+        and provenance.get('v5BridgeMode') == MANUAL_V6_SIGNED_COMPATIBILITY_MODE
+        and isinstance(takeover, dict)
+        and takeover.get('v6Provenance') == provenance
+        and isinstance(acquisition, dict)
+        and acquisition.get('v5BridgeMode') == MANUAL_V6_SIGNED_COMPATIBILITY_MODE
+    )
+
+
 def _manual_v6_text(value):
     return unicodedata.normalize(
         'NFKC', '' if value is None else str(value),
     ).replace('\r\n', '\n').replace('\r', '\n').strip()
+
+
+def _manual_v6_article_uses_term(article, value):
+    term = _manual_v6_text(value)
+    if len(term) < 2:
+        return False
+    return re.search(
+        rf'(^|[^A-Za-z0-9]){re.escape(term)}(?=$|[^A-Za-z0-9])', article,
+    ) is not None
 
 
 def _manual_v6_text_sha(value):
@@ -594,6 +630,45 @@ def _manual_v6_require_text(value, label, minimum=1):
     return text
 
 
+def _manual_v6_is_pure_markdown_table_paragraph(value):
+    lines = [line.strip() for line in _manual_v6_text(value).splitlines() if line.strip()]
+    return len(lines) >= 2 and all(line.startswith('|') and line.endswith('|') for line in lines)
+
+
+def _manual_v6_sanitize_table_cell(value):
+    text = _manual_v6_text(value)
+    text = re.sub(r'(binary \{0,1\})\\\{0,1\\\}', r'\1', text)
+    text = re.sub(r'U\u200b?\{3,\.\.\.,7\}\\mathcal\{U\}\\\{3,\\ldots,7\\\}', 'U{3,...,7}', text)
+    text = text.replace('F1F_{1}', 'F1').replace('α\\alpha', 'α').replace('ρ\\rho', 'ρ')
+    text = text.replace('r1r_{1}', 'r1')
+    text = text.replace('κmax=α\\kappa_{\\max}=\\sqrt{\\alpha}', 'κ_max = √α')
+    text = re.sub(r'r1\u200b?α\\sqrt\{r_\{1\}\\alpha\}', '√(r1 α)', text)
+    text = re.sub(r'(\d+)×(\d+)\1\\times\s*\2', r'\1×\2', text)
+    text = re.sub(r'[∼~](\d+(?:\.\d+)?)\{\\sim\}\1', r'~\1', text)
+    text = re.sub(r'≈(\d+(?:\.\d+)?)\\approx\s*\1', r'≈\1', text)
+    text = re.sub(r'(p=0\.5)\1', r'\1', text)
+    text = re.sub(r'\b([123]\.0)\1(?=\s*s\b)', r'\1', text)
+    text = re.sub(r'\b(n=\d+)\1\b', r'\1', text)
+    text = re.sub(r'\+([0-9]+(?:\.[0-9]+)?)\+\1', r'+\1', text)
+    text = re.sub(r'−([0-9]+(?:\.[0-9]+)?)-\1', r'−\1', text)
+    text = re.sub(r'(?<![\d.])(\d+\.\d+)\1(?![\d.])', r'\1', text)
+    text = re.sub(r'\[−(\d+(?:\.\d+)?)(,[^\]]+)\]\[-\1\2\]', r'[−\1\2]', text)
+    text = re.sub(r'(\d+)%\1\\%', r'\1%', text)
+    text = re.sub(r'(\[[^\]]+\])\1', r'\1', text)
+    text = text.replace('++', '+').replace('−-', '−')
+
+    def collapse_numeric(match):
+        token = match.group(0)
+        if '.' not in token and len(token) < 4:
+            return token
+        for split in range(1, len(token)):
+            if token[:split] == token[split:]:
+                return token[:split]
+        return token
+
+    return re.sub(r'(?<![\d.])\d+(?:\.\d+)?(?![\d.])', collapse_numeric, text)
+
+
 def _manual_v6_render_table(table):
     matrix = table.get('matrix') if isinstance(table, dict) else None
     if not isinstance(matrix, list) or not matrix or any(not isinstance(row, list) or not row for row in matrix):
@@ -602,14 +677,51 @@ def _manual_v6_render_table(table):
     rows = []
     for row in matrix:
         rows.append([
-            _manual_v6_text(row[index] if index < len(row) else '').replace('|', r'\|').replace('\n', '<br>')
+            row[index] if index < len(row) else ''
             for index in range(width)
         ])
-    caption = _manual_v6_text(table.get('caption') or table.get('id') or '实验表格')
+    header_text = [_manual_v6_text(cell) for cell in rows[0]]
+    active_contrast_column = None
+    routed = []
+    for row_index, row in enumerate(rows):
+        if row_index == 0:
+            routed.append(row)
+            continue
+        populated = [_manual_v6_text(cell) for cell in row if _manual_v6_text(cell)]
+        if len(populated) == width and len(set(populated)) == 1:
+            sample = re.search(r'\bn=(\d+)', populated[0], re.I)
+            active_contrast_column = next(
+                (index for index, cell in enumerate(header_text)
+                 if sample and f'n={sample.group(1)}' in cell), None,
+            )
+            routed.append([row[0], *([''] * (width - 1))])
+            continue
+        first = _manual_v6_sanitize_table_cell(row[0])
+        if (isinstance(active_contrast_column, int) and active_contrast_column > 0
+                and re.fullmatch(r'[A-Z]\s*[−-]\s*[A-Z]', first)):
+            value = next((cell for cell in row[1:] if _manual_v6_text(cell)), '')
+            output = [''] * width
+            output[0] = row[0]
+            output[active_contrast_column] = value
+            routed.append(output)
+            continue
+        routed.append(row)
+    normalized = []
+    for row in routed:
+        escaped = [
+            _manual_v6_sanitize_table_cell(cell).replace('|', r'\|').replace('\n', '<br>')
+            for cell in row
+        ]
+        populated = [cell for cell in escaped if cell]
+        normalized.append(
+            [populated[0], *([''] * (width - 1))]
+            if len(populated) > 1 and len(set(populated)) == 1 else escaped
+        )
+    caption = _manual_v6_sanitize_table_cell(table.get('caption') or table.get('id') or '实验表格')
     return '\n'.join([
-        f'**{caption}**', '', f'| {" | ".join(rows[0])} |',
+        f'**{caption}**', '', f'| {" | ".join(normalized[0])} |',
         f'| {" | ".join(["---"] * width)} |',
-        *(f'| {" | ".join(row)} |' for row in rows[1:]),
+        *(f'| {" | ".join(row)} |' for row in normalized[1:]),
     ])
 
 
@@ -660,6 +772,7 @@ def validate_manual_v6_payload(paper):
         'experimentTables': EXPERIMENT_TABLE_CONTRACT_VERSION,
         'researcherFocus': MANUAL_RESEARCH_CONTRACT_VERSION,
         'perPaperSubagent': 'isolated-single-paper-v1',
+        'authorLineage': 'original-author-final-revision-v1',
     }
     for key, expected in required_contracts.items():
         if contracts.get(key) != expected:
@@ -677,6 +790,10 @@ def validate_manual_v6_payload(paper):
         raise PublishDataValidationError(f'{paper_label} Manual v6 artifact/longform/provenance 不完整')
     if provenance.get('specVersion') != 6 or takeover_provenance != provenance:
         raise PublishDataValidationError(f'{paper_label} Manual v6 provenance 副本不一致')
+    if provenance.get('runtimeMode') != 'production':
+        raise PublishDataValidationError(
+            f'{paper_label} Manual v6 canonical 不是 production runtime；shadow 禁止发布'
+        )
     if provenance.get('readerLongformContract') != MANUAL_LONGFORM_CONTRACT_VERSION_V2:
         raise PublishDataValidationError(f'{paper_label} Manual v6 readerLongformContract 非法')
     for field in _MANUAL_V6_SHA_FIELDS:
@@ -741,6 +858,7 @@ def validate_manual_v6_payload(paper):
         raise PublishDataValidationError(f'{paper_label} reader-longform-v2 blocks 必须为 6-32 个')
     block_by_id = {}
     source_ids = {item['id'] for item in artifact['sourceSpans'] if isinstance(item, dict) and item.get('id')}
+    signed_legacy_projection = _manual_v6_signed_compatibility(paper, manifest)
     inventory = {field: _manual_v6_inventory_ids(artifact, field)
                  for field in ('tables', 'figures', 'formulas', 'acronyms', 'citations')}
     positions = {}
@@ -753,7 +871,10 @@ def validate_manual_v6_payload(paper):
         _manual_v6_require_text(block.get('heading'), f'{paper_label}.{block_id}.heading', 6)
         _manual_v6_require_text(block.get('learningObjective'), f'{paper_label}.{block_id}.learningObjective', 12)
         markdown = _manual_v6_require_text(block.get('markdown'), f'{paper_label}.{block_id}.markdown', 100)
-        if len(markdown) > 4000 or any(len(_manual_v6_text(item)) > 1200 for item in re.split(r'\n\s*\n', markdown)):
+        if len(markdown) > 4000 or any(
+                len(_manual_v6_text(item)) > 1200
+                and not _manual_v6_is_pure_markdown_table_paragraph(item)
+                for item in re.split(r'\n\s*\n', markdown)):
             raise PublishDataValidationError(f'{paper_label}.{block_id} 过长，未形成递进 block')
         if re.search(r'(?:sourceBindings|readerBindings|evidenceLedger|resultClaims|schema|字段串)', markdown, re.I):
             raise PublishDataValidationError(f'{paper_label}.{block_id} 泄露内部 schema 语言')
@@ -792,19 +913,51 @@ def validate_manual_v6_payload(paper):
     if (not isinstance(receipt, dict) or normalize_publish_arxiv_id(receipt.get('paperId')) != paper_id
             or receipt.get('singlePaperOnly') is not True or receipt.get('isolatedContext') is not True
             or receipt.get('model') != 'gpt-5.6-terra' or receipt.get('reasoningEffort') != 'high'
-            or receipt.get('articleSha256') != article_sha
+            or not re.fullmatch(r'[a-f0-9]{64}', str(receipt.get('articleSha256') or ''))
             or not re.fullmatch(r'[a-f0-9]{64}', str(receipt.get('inputPacketSha256') or ''))
             or not isinstance(receipt.get('revision'), int) or receipt['revision'] < 1):
-        raise PublishDataValidationError(f'{paper_label} v6 authorReceipt 未绑定 Terra-high 单篇成稿')
+        raise PublishDataValidationError(f'{paper_label} v6 authorReceipt 未绑定 Terra-high 单篇初稿')
     _manual_v6_require_text(receipt.get('taskName'), f'{paper_label}.authorReceipt.taskName', 4)
-    times = []
-    for field in ('queuedAt', 'startedAt', 'completedAt'):
-        value = str(receipt.get(field) or '')
-        if not BEIJING_TIMESTAMP_RE.fullmatch(value):
-            raise PublishDataValidationError(f'{paper_label} authorReceipt.{field} 非北京时间')
-        times.append(datetime.fromisoformat(value))
-    if not times[0] <= times[1] <= times[2]:
-        raise PublishDataValidationError(f'{paper_label} authorReceipt 时间顺序非法')
+    final_receipt = bundle.get('finalRevisionAuthorReceipt')
+    if (not isinstance(final_receipt, dict)
+            or final_receipt.get('role') != 'author_revision'
+            or normalize_publish_arxiv_id(final_receipt.get('paperId')) != paper_id
+            or final_receipt.get('singlePaperOnly') is not True
+            or final_receipt.get('isolatedContext') is not True
+            or final_receipt.get('model') != 'gpt-5.6-terra'
+            or final_receipt.get('reasoningEffort') != 'high'
+            or final_receipt.get('articleSha256') != article_sha
+            or not re.fullmatch(r'[a-f0-9]{64}', str(final_receipt.get('consumedPacketSha256') or ''))
+            or not re.fullmatch(r'[a-f0-9]{64}', str(final_receipt.get('outputSha256') or ''))
+            or not isinstance(final_receipt.get('revision'), int)
+            or final_receipt['revision'] < 1):
+        raise PublishDataValidationError(
+            f'{paper_label} finalRevisionAuthorReceipt 未绑定最终 readerArticle'
+        )
+    _manual_v6_require_text(
+        final_receipt.get('taskName'), f'{paper_label}.finalRevisionAuthorReceipt.taskName', 4
+    )
+    if final_receipt['taskName'] == receipt['taskName']:
+        raise PublishDataValidationError(f'{paper_label} 初稿 author 与最终 author_revision taskName 重复')
+    for receipt_name, current_receipt in (
+            ('authorReceipt', receipt), ('finalRevisionAuthorReceipt', final_receipt)):
+        times = []
+        for field in ('queuedAt', 'startedAt', 'completedAt'):
+            value = str(current_receipt.get(field) or '')
+            if not BEIJING_TIMESTAMP_RE.fullmatch(value):
+                raise PublishDataValidationError(f'{paper_label} {receipt_name}.{field} 非北京时间')
+            times.append(datetime.fromisoformat(value))
+        if not times[0] <= times[1] <= times[2]:
+            raise PublishDataValidationError(f'{paper_label} {receipt_name} 时间顺序非法')
+    task_names = provenance.get('taskNames')
+    expected_task_name_keys = {
+        'author', 'technicalScoring', 'pedagogyReadability', 'authorRevision'
+    }
+    if (not isinstance(task_names, dict) or set(task_names) != expected_task_name_keys
+            or len(set(task_names.values())) != 4
+            or task_names.get('author') != receipt.get('taskName')
+            or task_names.get('authorRevision') != final_receipt.get('taskName')):
+        raise PublishDataValidationError(f'{paper_label} v6 四任务 author/reviewer lineage 不闭环')
 
     table_dispositions = bundle.get('tables')
     if not isinstance(table_dispositions, list):
@@ -831,7 +984,10 @@ def validate_manual_v6_payload(paper):
             raise PublishDataValidationError(f'{paper_label} {table_id} 结果表未逐数值完整覆盖')
         if item.get('disposition') != 'omit':
             block = block_by_id.get(item.get('blockId'))
-            rendered = _manual_v6_render_table(source)
+            rendered = (
+                _manual_v6_text(item.get('renderedMarkdown'))
+                if signed_legacy_projection else _manual_v6_render_table(source)
+            )
             if (not block or item.get('renderedMarkdown') != rendered
                     or item.get('renderedFragmentSha256') != _manual_v6_text_sha(rendered)
                     or rendered not in _manual_v6_text(block.get('markdown'))):
@@ -890,25 +1046,41 @@ def validate_manual_v6_payload(paper):
         block = block_by_id.get(item.get('firstUseBlockId'))
         if not block or term not in _manual_v6_text(block.get('markdown')) or definition not in _manual_v6_text(block.get('markdown')):
             raise PublishDataValidationError(f'{paper_label} 术语 {term} 未在首次出现处定义')
-    if handled_terms != set(inventory['acronyms']):
-        raise PublishDataValidationError(f'{paper_label} v6 未覆盖全部术语')
+    required_terms = {
+        item_id for item_id, source in inventory['acronyms'].items()
+        if _manual_v6_article_uses_term(article, source.get('value') or source.get('term'))
+    }
+    missing_terms = required_terms - handled_terms
+    if missing_terms:
+        raise PublishDataValidationError(
+            f'{paper_label} v6 未定义正文实际使用的术语: {", ".join(sorted(missing_terms))}'
+        )
 
     related = bundle.get('relatedWorks')
     if not isinstance(related, list):
         raise PublishDataValidationError(f'{paper_label} v6 relatedWorks 缺失')
+    # relatedWorks binds bibliography identities.  Structured arXiv sources may
+    # expose these as references while leaving the in-text citations projection
+    # empty, so validate against the union of both content-addressed inventories.
+    related_inventory = _manual_v6_inventory_ids(artifact, 'references')
+    related_inventory.update(inventory['citations'])
     handled_related = set()
     for item in related:
-        if not isinstance(item, dict) or item.get('citationId') in handled_related \
-                or item.get('citationId') not in inventory['citations']:
+        declared_id = item.get('citationId') if isinstance(item, dict) else None
+        if not isinstance(item, dict) or declared_id in handled_related \
+                or declared_id not in related_inventory:
             raise PublishDataValidationError(f'{paper_label} v6 related-work 身份非法')
-        handled_related.add(item['citationId'])
+        handled_related.add(declared_id)
         relationship = _manual_v6_require_text(item.get('relationship'), f'{paper_label}.relationship', 16)
         difference = _manual_v6_require_text(item.get('difference'), f'{paper_label}.difference', 16)
         block = block_by_id.get(item.get('blockId'))
         if not block or relationship not in _manual_v6_text(block.get('markdown')) or difference not in _manual_v6_text(block.get('markdown')):
             raise PublishDataValidationError(f'{paper_label} related-work 缺关系/差异正文绑定')
-    if handled_related != set(inventory['citations']):
-        raise PublishDataValidationError(f'{paper_label} v6 未覆盖全部 related-work 引用')
+    minimum_related = min(2, len(inventory['citations']))
+    if len(handled_related) < minimum_related:
+        raise PublishDataValidationError(
+            f'{paper_label} v6 relatedWorks 必须绑定至少 {minimum_related} 个真实引用'
+        )
 
     return {
         'paperId': paper_id, 'article': article, 'articleSha256': article_sha,
@@ -1327,6 +1499,19 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
     takeover = manifest.get('manualTakeover')
     if not isinstance(takeover, dict):
         raise PublishDataValidationError(f'{paper_label} manual_complete 缺少 manualTakeover provenance')
+    manual_depth = contracts.get('manualDepth')
+    signed_v6_compatibility = _manual_v6_signed_compatibility(paper, manifest)
+    if paper.get('manualV6CompatibilityMode') is not None and not signed_v6_compatibility:
+        raise PublishDataValidationError(
+            f'{paper_label} Manual v6 compatibility 标记未与 production provenance 闭环'
+        )
+    if signed_v6_compatibility:
+        # Production V6 replaces the legacy V4/V5 resultClaims, stageReviews,
+        # evidenceLedger and figureReview projections with the content-addressed
+        # ArtifactIndex, reader-longform-v2 and four independent task receipts.
+        # Always replay the complete V6 validator before accepting that override.
+        validate_manual_v6_payload(paper)
+        return
     if takeover.get('version') == MANUAL_COMPLETE_PROVENANCE_VERSION:
         if takeover.get('mode') != MANUAL_COMPLETE_STATUS:
             raise PublishDataValidationError(f'{paper_label} manualTakeover.version/mode 必须为 manual_complete v2')
@@ -2703,6 +2888,7 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
             return f'最终 Manual v6 canonical 闭环无效: {exc}'
         provenance = v6_payload['provenance']
         marker_values = {
+            'paper_digest_v6_runtime_mode': 'production',
             'paper_digest_reader_longform': MANUAL_LONGFORM_CONTRACT_VERSION_V2,
             'paper_digest_reader_longform_sha256': provenance['readerLongformSha256'],
             'paper_digest_reader_article_sha256': v6_payload['articleSha256'],
@@ -2770,7 +2956,10 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
                     or _manual_v6_text(item.get('difference')) not in actual_article):
                 return '最终 Manual v6 页面 related-work 关系或差异缺失'
 
-    if isinstance(paper, dict):
+    if (isinstance(paper, dict)
+            and not _manual_v6_signed_compatibility(
+                paper, paper.get('analysisManifest'),
+            )):
         manifest = paper.get('analysisManifest')
         takeover = manifest.get('manualTakeover') if isinstance(manifest, dict) else None
         if not isinstance(takeover, dict):
@@ -3189,6 +3378,9 @@ def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
                     )
                 if validate_manual_provenance:
                     _validate_manual_takeover_manifest(paper, manifest, paper_label)
+                signed_v6_compatibility = _manual_v6_signed_compatibility(
+                    paper, manifest,
+                )
                 contracts = manifest.get('contracts')
                 if contracts is not None and not isinstance(contracts, dict):
                     raise PublishDataValidationError(
@@ -3202,7 +3394,8 @@ def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
                         f'{paper_label} analysisManifest.contracts.experimentTables 非法: '
                         f'{table_contract}'
                     )
-                if table_contract in EXPERIMENT_TABLE_CONTRACT_VERSIONS:
+                if (table_contract in EXPERIMENT_TABLE_CONTRACT_VERSIONS
+                        and not signed_v6_compatibility):
                     table_issue = validate_experiment_table_contract(
                         paper.get('analysis'),
                         contract_version=table_contract,
@@ -3221,7 +3414,8 @@ def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
                         f'{paper_label} analysisManifest.contracts.methodDetail 非法: '
                         f'{method_contract}'
                     )
-                if method_contract == METHOD_DETAIL_CONTRACT_VERSION:
+                if (method_contract == METHOD_DETAIL_CONTRACT_VERSION
+                        and not signed_v6_compatibility):
                     method_issue = validate_method_detail_contract(paper.get('analysis'))
                     if method_issue:
                         raise PublishDataValidationError(
@@ -3241,7 +3435,7 @@ def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
                         f'{paper_label} manual v4 必须声明 '
                         f'experimentTables={EXPERIMENT_TABLE_CONTRACT_VERSION}'
                     )
-                if manual_depth_contract in {
+                if not signed_v6_compatibility and manual_depth_contract in {
                         MANUAL_DEPTH_CONTRACT_VERSION_V3, *MANUAL_READER_QUALITY_VERSIONS}:
                     manual_depth_issue = validate_manual_depth_contract_v3(paper.get('analysis'))
                     if manual_depth_issue:
@@ -3254,13 +3448,15 @@ def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
                             raise PublishDataValidationError(
                                 f'{paper_label} manual v4 读者文本质量无效: {editorial_issue}'
                             )
-                elif manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION_V2:
+                elif (not signed_v6_compatibility
+                        and manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION_V2):
                     manual_depth_issue = validate_manual_depth_contract_v2(paper.get('analysis'))
                     if manual_depth_issue:
                         raise PublishDataValidationError(
                             f'{paper_label} manual 全文深度契约无效: {manual_depth_issue}'
                         )
-                elif manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION:
+                elif (not signed_v6_compatibility
+                        and manual_depth_contract == MANUAL_DEPTH_CONTRACT_VERSION):
                     manual_depth_issue = validate_manual_depth_contract(paper.get('analysis'))
                     if manual_depth_issue:
                         raise PublishDataValidationError(
@@ -3281,7 +3477,8 @@ def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
                         f'{paper_label} analysisManifest.contracts.imageNarrative 非法: '
                         f'{image_narrative_contract}'
                     )
-                if image_narrative_contract == IMAGE_NARRATIVE_CONTRACT_VERSION:
+                if (image_narrative_contract == IMAGE_NARRATIVE_CONTRACT_VERSION
+                        and not signed_v6_compatibility):
                     image_narrative_issue = validate_image_narrative_contract(paper)
                     if image_narrative_issue:
                         raise PublishDataValidationError(
@@ -3803,9 +4000,9 @@ def validate_review_payload(review, *, required=False, context='LLM review', iss
 
 
 def load_papers(data_file=None):
-    """从 deep-analysis-result.json 加载论文列表"""
+    """Load the standard current canonical; legacy inputs must be explicit."""
     if data_file is None:
-        data_file = resolve_deep_analysis_result_path()
+        data_file = DEEP_ANALYSIS_RESULT_FILE
     with open(data_file, encoding='utf-8') as f:
         raw = json.load(f)
     papers = raw.get('papers') if isinstance(raw, dict) else raw

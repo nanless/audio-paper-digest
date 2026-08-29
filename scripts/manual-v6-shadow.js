@@ -208,6 +208,7 @@ function referencedCovered(values, key, allowedIds) {
 
 function buildCoverage(artifact, record) {
     const bundle = record?.editorial?.longformBundle;
+    const article = String(record?.editorial?.readerArticle || '').normalize('NFKC');
     const tables = Array.isArray(artifact?.tables) ? artifact.tables : [];
     const numericIds = tables.flatMap(tableNumericCellIds);
     const tableItems = Array.isArray(bundle?.tables) ? bundle.tables : null;
@@ -219,15 +220,23 @@ function buildCoverage(artifact, record) {
     const tableIds = new Set(tables.map(item => String(item?.id || item?.sourceTableId || '').trim()).filter(Boolean));
     const figureIds = new Set((artifact?.figures || []).map(item => String(item?.id || item?.url || '').trim()).filter(Boolean));
     const formulaIds = new Set((artifact?.formulas || []).map(item => String(item?.id || '').trim()).filter(Boolean));
-    const termIds = new Set((artifact?.acronyms || []).map(item => String(item?.id || '').trim()).filter(Boolean));
+    const usedTerms = (artifact?.acronyms || []).filter(item => {
+        const value = String(item?.value || item?.term || '').normalize('NFKC').trim();
+        if (value.length < 2) return false;
+        const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`(^|[^A-Za-z0-9])${escaped}(?=$|[^A-Za-z0-9])`, 'u').test(article);
+    });
+    const termIds = new Set(usedTerms.map(item => String(item?.id || '').trim()).filter(Boolean));
     const citationIds = new Set((artifact?.citations || []).map(item => String(item?.id || '').trim()).filter(Boolean));
     return {
         tables: coverageStatus(tables.length, dispositionsCovered(tableItems, 'sourceTableId', tableIds)),
         numericCells: coverageStatus(numericIds.length, validNumericCovered),
         figures: coverageStatus(artifact?.figures?.length ?? null, dispositionsCovered(bundle?.figures, 'id', figureIds)),
         formulas: coverageStatus(artifact?.formulas?.length ?? null, dispositionsCovered(bundle?.formulas, 'id', formulaIds)),
-        terms: coverageStatus(artifact?.acronyms?.length ?? null, referencedCovered(bundle?.terms, 'id', termIds)),
-        relatedWorks: coverageStatus(artifact?.citations?.length ?? null, referencedCovered(bundle?.relatedWorks, 'citationId', citationIds))
+        terms: coverageStatus(termIds.size, referencedCovered(bundle?.terms, 'id', termIds)),
+        relatedWorks: coverageStatus(Math.min(2, citationIds.size), Math.min(
+            Math.min(2, citationIds.size), referencedCovered(bundle?.relatedWorks, 'citationId', citationIds) ?? 0
+        ))
     };
 }
 

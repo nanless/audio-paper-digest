@@ -9,6 +9,9 @@ const crypto = require('node:crypto');
 const Config = require('../scripts/config.js');
 const { validAnalysisPaper } = require('./valid-analysis-fixture.js');
 const {
+    productionV6GenerationFields, productionV6ReceiptFields
+} = require('./production-v6-publication-fixture.js');
+const {
     CARD_KINDS,
     planVisualSummaries: planVisualSummariesImpl,
     recordVisualSummaryCard: recordVisualSummaryCardImpl,
@@ -148,7 +151,8 @@ function writePublishedReceipt(currentDir, targetDate, publishedPapers, override
         visualSummaryRequired: false, digestCoverRequired: false,
         inputFingerprint: 'c'.repeat(64), publishAll: false, publishedPapers,
         publishedPapersFingerprintContract: 'typed-json-f64-utf16-v1',
-        publishedPapersFingerprint: snapshotFingerprint
+        publishedPapersFingerprint: snapshotFingerprint,
+        ...productionV6GenerationFields(publishedPapers)
     };
     const raw = Buffer.from(JSON.stringify(generation));
     fs.writeFileSync(generationPath, raw);
@@ -161,7 +165,8 @@ function writePublishedReceipt(currentDir, targetDate, publishedPapers, override
         generationInputFingerprint: generation.inputFingerprint,
         publishedPapersFingerprint: snapshotFingerprint,
         publicationCommit: 'a'.repeat(40), remoteVerifiedOid: 'a'.repeat(40),
-        remoteVerifiedAt: '2026-07-14T02:00:00+08:00', ...overrides
+        remoteVerifiedAt: '2026-07-14T02:00:00+08:00',
+        ...productionV6ReceiptFields(generation), ...overrides
     }));
     return receiptPath;
 }

@@ -21,6 +21,7 @@ MODULE_PATH = os.path.join(ROOT, 'scripts', 'publish-to-blog.py')
 sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 from publish_common import (  # noqa: E402
     PublishDataValidationError,
+    _manual_v6_hash,
     _validate_publish_image_exclusion_view,
     _manual_v6_text,
     _manual_v6_text_sha,
@@ -248,7 +249,7 @@ def manual_v6_publication_fixture():
                     f'T1:r{row_index}:c{column_index}:'
                     f'{hashlib.sha256(cell.encode("utf-8")).hexdigest()[:12]}'
                 )
-    provenance = {'specVersion': 6, **{
+    provenance = {'specVersion': 6, 'runtimeMode': 'production', **{
         field: 'abcdef0'[index] * 64 for index, field in enumerate((
             'specRootSha256', 'paperSpecSha256', 'sealedRecordSha256',
             'recordFileSha256', 'artifactIndexFileSha256',
@@ -263,9 +264,19 @@ def manual_v6_publication_fixture():
             'paperId': paper_id, 'singlePaperOnly': True, 'isolatedContext': True,
             'model': 'gpt-5.6-terra', 'reasoningEffort': 'high',
             'taskName': 'paper_2608_30001_author', 'inputPacketSha256': 'f' * 64,
-            'articleSha256': article_sha, 'queuedAt': '2026-08-28T09:00:00+08:00',
+            'articleSha256': '9' * 64, 'queuedAt': '2026-08-28T09:00:00+08:00',
             'startedAt': '2026-08-28T09:01:00+08:00',
             'completedAt': '2026-08-28T09:20:00+08:00', 'revision': 1,
+        },
+        'finalRevisionAuthorReceipt': {
+            'role': 'author_revision', 'paperId': paper_id,
+            'singlePaperOnly': True, 'isolatedContext': True,
+            'model': 'gpt-5.6-terra', 'reasoningEffort': 'high',
+            'taskName': 'paper_2608_30001_author_revision',
+            'consumedPacketSha256': '8' * 64, 'outputSha256': '7' * 64,
+            'articleSha256': article_sha, 'queuedAt': '2026-08-28T10:00:00+08:00',
+            'startedAt': '2026-08-28T10:01:00+08:00',
+            'completedAt': '2026-08-28T10:20:00+08:00', 'revision': 1,
         },
         'tables': [{
             'sourceTableId': 'T1', 'disposition': 'inline', 'blockId': 'B7',
@@ -287,6 +298,12 @@ def manual_v6_publication_fixture():
         ).encode('utf-8')).hexdigest(),
         'readerLongformContract': 'reader-longform-v2',
         'readerLongformArticleSha256': article_sha,
+        'taskNames': {
+            'author': 'paper_2608_30001_author',
+            'technicalScoring': 'paper_2608_30001_technical',
+            'pedagogyReadability': 'paper_2608_30001_readability',
+            'authorRevision': 'paper_2608_30001_author_revision',
+        },
     })
     acquisition = {
         **{field: provenance[field] for field in (
@@ -315,6 +332,7 @@ def manual_v6_publication_fixture():
                 'artifactIndex': 'manual-artifact-parser-v2-structured',
                 'experimentTables': 'evidence-rich-v2', 'researcherFocus': 'audio-researcher-v1',
                 'perPaperSubagent': 'isolated-single-paper-v1',
+                'authorLineage': 'original-author-final-revision-v1',
             },
             'sourceAcquisition': acquisition,
             'manualTakeover': {
@@ -336,7 +354,7 @@ def manual_v6_publication_fixture():
     )
     final_article_sha = hashlib.sha256(final_article.encode('utf-8')).hexdigest()
     paper['manualReaderLongform']['articleSha256'] = final_article_sha
-    paper['manualReaderLongform']['authorReceipt']['articleSha256'] = final_article_sha
+    paper['manualReaderLongform']['finalRevisionAuthorReceipt']['articleSha256'] = final_article_sha
     takeover = paper['analysisManifest']['manualTakeover']
     takeover['readerArticle'] = final_article
     takeover['readerArticleSha256'] = final_article_sha
@@ -516,12 +534,13 @@ class PublishToBlogReviewTest(unittest.TestCase):
             repo, posts, _remote = init_blog_repo(tmp)
             current = Path(tmp) / 'current'
             page = posts / '2026-07-10-paper.md'
+            paper = manual_v6_publication_fixture()
             page.write_text(
                 '---\npaper_digest_page_type: paper\n'
-                'paper_digest_arxiv_id: "2607.00001"\n---\nbody\n',
+                f'paper_digest_arxiv_id: "{paper["arxivId"]}"\n---\nbody\n',
                 encoding='utf-8',
             )
-            published_papers = [{'arxivId': '2607.00001'}]
+            published_papers = [paper]
             input_fingerprint = publish_to_blog.generation_input_fingerprint(
                 published_papers, '2026-07-10', '论文速递', False,
             )
@@ -706,8 +725,21 @@ class PublishToBlogReviewTest(unittest.TestCase):
                     contextlib.redirect_stdout(io.StringIO()):
                 selected = publish_to_blog.select_generation_data_file(
                     None, '2026-07-10', publish_all=False,
+                    legacy_v5_maintenance=True,
                 )
             self.assertEqual(Path(selected), archived)
+
+    def test_default_generation_uses_only_standard_current_canonical(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            standard = Path(tmp) / 'current' / 'deep-analysis-result.json'
+            with mock.patch.object(
+                    publish_to_blog, 'DEEP_ANALYSIS_RESULT_FILE', standard):
+                self.assertEqual(
+                    Path(publish_to_blog.select_generation_data_file(
+                        None, '2026-07-10', publish_all=False,
+                    )),
+                    standard,
+                )
 
     def test_blog_review_concurrency_defaults_to_five_and_reads_project_env(self):
         with mock.patch.dict(os.environ, {}, clear=False):
@@ -1329,6 +1361,7 @@ title: "Bad table"
             paper, '2026-08-28', '论文速递',
         )
         self.assertIn('paper_digest_manual_depth: "full-text-evidence-v6"', markdown)
+        self.assertIn('paper_digest_v6_runtime_mode: "production"', markdown)
         self.assertIn('paper_digest_reader_longform: "reader-longform-v2"', markdown)
         self.assertIn(
             f'paper_digest_reader_article_sha256: "{payload["articleSha256"]}"',
@@ -1343,6 +1376,7 @@ title: "Bad table"
 
         bindings = publish_to_blog.manual_v6_publication_bindings([paper])
         self.assertEqual(bindings[0]['manualDepth'], 'full-text-evidence-v6')
+        self.assertEqual(bindings[0]['runtimeMode'], 'production')
         self.assertEqual(bindings[0]['recordSemanticSha256'], 'c' * 64)
         self.assertEqual(bindings[0]['readerArticleSha256'], payload['articleSha256'])
 
@@ -1371,6 +1405,40 @@ title: "Bad table"
         ] = '0' * 64
         with self.assertRaisesRegex(PublishDataValidationError, 'provenance'):
             publish_to_blog.generate_paper_page(provenance_drift, '2026-08-28')
+
+        shadow = manual_v6_publication_fixture()
+        shadow['manualV6Provenance']['runtimeMode'] = 'shadow'
+        shadow['analysisManifest']['manualTakeover']['v6Provenance']['runtimeMode'] = 'shadow'
+        with self.assertRaisesRegex(PublishDataValidationError, 'shadow 禁止发布'):
+            publish_to_blog.generate_paper_page(shadow, '2026-08-28')
+
+        missing_revision = manual_v6_publication_fixture()
+        del missing_revision['manualReaderLongform']['finalRevisionAuthorReceipt']
+        longform_sha = _manual_v6_hash(missing_revision['manualReaderLongform'])
+        missing_revision['manualV6Provenance']['readerLongformSha256'] = longform_sha
+        missing_revision['analysisManifest']['manualTakeover']['v6Provenance'][
+            'readerLongformSha256'
+        ] = longform_sha
+        missing_revision['analysisManifest']['sourceAcquisition'][
+            'readerLongformSha256'
+        ] = longform_sha
+        with self.assertRaisesRegex(PublishDataValidationError, 'finalRevisionAuthorReceipt'):
+            publish_to_blog.generate_paper_page(missing_revision, '2026-08-28')
+
+        colliding_tasks = manual_v6_publication_fixture()
+        colliding_tasks['manualReaderLongform']['finalRevisionAuthorReceipt'][
+            'taskName'
+        ] = colliding_tasks['manualReaderLongform']['authorReceipt']['taskName']
+        longform_sha = _manual_v6_hash(colliding_tasks['manualReaderLongform'])
+        colliding_tasks['manualV6Provenance']['readerLongformSha256'] = longform_sha
+        colliding_tasks['analysisManifest']['manualTakeover']['v6Provenance'][
+            'readerLongformSha256'
+        ] = longform_sha
+        colliding_tasks['analysisManifest']['sourceAcquisition'][
+            'readerLongformSha256'
+        ] = longform_sha
+        with self.assertRaisesRegex(PublishDataValidationError, 'taskName 重复'):
+            publish_to_blog.generate_paper_page(colliding_tasks, '2026-08-28')
 
     def test_manual_v6_final_page_gate_binds_exact_rendered_block_bytes(self):
         paper = manual_v6_publication_fixture()
@@ -1419,6 +1487,12 @@ title: "Bad table"
                 )
                 manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
                 self.assertEqual(len(manifest['manualV6Bindings']), 1)
+                self.assertEqual(manifest['publicationMode'], 'manual_v6_production')
+                self.assertEqual(manifest['manualV6Production']['recordsVersion'], 4)
+                self.assertEqual(
+                    manifest['manualV6Production']['specMerkleRootSha256'],
+                    paper['manualV6Provenance']['specRootSha256'],
+                )
                 publish_to_blog._validate_generation_input_integrity(manifest, date_str)
                 manifest['manualV6Bindings'][0]['readerArticleSha256'] = '0' * 64
                 with self.assertRaisesRegex(PublishDataValidationError, 'v6'):
@@ -1570,6 +1644,7 @@ confidence: 中
                 'category': '论文速递',
                 'publish_all': False,
                 'excluded_ids': [],
+                'legacy_v5_maintenance': True,
             }
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'CONTENT_DIR', str(posts)), \
@@ -2444,7 +2519,10 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                     mock.patch.object(publish_to_blog, 'score_and_sort', return_value=([(7.0, paper, paper['parsed'])], [])), \
                     mock.patch.object(publish_to_blog, 'review_all_posts') as review, \
                     mock.patch.object(publish_to_blog, 'git_push') as push, \
-                    mock.patch.object(sys, 'argv', ['publish-to-blog.py', '--all', '--date', '2026-07-10']), \
+                    mock.patch.object(sys, 'argv', [
+                        'publish-to-blog.py', '--all', '--date', '2026-07-10',
+                        '--legacy-v5-maintenance',
+                    ]), \
                     contextlib.redirect_stdout(io.StringIO()):
                 publish_to_blog.main()
             review.assert_not_called()
@@ -3043,6 +3121,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 'category': '论文速递',
                 'publish_all': False,
                 'excluded_ids': [],
+                'legacy_v5_maintenance': True,
             }
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'CONTENT_DIR', str(posts)), \
@@ -3209,6 +3288,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                         'category': '论文速递',
                         'publish_all': False,
                         'excluded_ids': [],
+                        'legacy_v5_maintenance': True,
                     }
                     with mock.patch.object(
                             publish_to_blog, 'validate_publish_target',

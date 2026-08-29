@@ -13,6 +13,8 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const Config = require('./config.js');
 const {
     parseAnalysis,
@@ -33,6 +35,7 @@ const {
     normalizeExperimentTableNumericFormatting,
     MANUAL_DEPTH_CONTRACT_VERSION_V3,
     MANUAL_DEPTH_CONTRACT_VERSION_V4,
+    extractSection,
     getInvalidAnalysisReason
 } = require('./analysis-contract.js');
 const {
@@ -70,6 +73,10 @@ const MANUAL_DEPTH_CONTRACT_VERSION_V5 = require('./analysis-contract.js').MANUA
 const {
     MANUAL_SPEC_VERSION_V6,
     MANUAL_DEPTH_V6,
+    MANUAL_V6_RUNTIME_MODE_PRODUCTION,
+    MANUAL_V6_RUNTIME_MODE_SHADOW,
+    MANUAL_V6_AUTHOR_LINEAGE_CONTRACT,
+    resolveManualV6RuntimePaths,
     stableSha256: manualV6StableSha256
 } = require('./manual-v6-workflow.js');
 const {
@@ -112,7 +119,12 @@ const CURRENT_MANUAL_SPEC_VERSIONS = new Set([4, 5]);
 const MANUAL_CANONICAL_WORKER_COUNT = 3;
 const MANUAL_EXTERNAL_RESOURCE_CACHE_VERSION = 1;
 const MANUAL_EXTERNAL_RESOURCE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+// Hugging Face dataset pages can take longer than 15 seconds through the
+// required project proxy. Keep a finite absolute deadline while avoiding a
+// false publication failure on an otherwise reachable public resource.
+const MANUAL_EXTERNAL_RESOURCE_TIMEOUT_MS = 45 * 1000;
 const externalResourceVerificationInFlight = new Map();
+const execFileAsync = promisify(execFile);
 
 function sha256Buffer(buffer) {
     return crypto.createHash('sha256').update(buffer).digest('hex');
@@ -134,7 +146,7 @@ function readJson(filePath, label) {
 }
 
 function parseArgs(argv) {
-    const options = { force: false, v6Shadow: false };
+    const options = { force: false, v6Production: false, v6Shadow: false };
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
         if (arg === '--force') {
@@ -143,8 +155,17 @@ function parseArgs(argv) {
             continue;
         }
         if (arg === '--v6-shadow') {
-            if (options.v6Shadow) throw new Error('参数重复: --v6-shadow');
+            if (options.v6Shadow || options.v6Production) {
+                throw new Error('--v6-production 与 --v6-shadow 必须且只能指定一个');
+            }
             options.v6Shadow = true;
+            continue;
+        }
+        if (arg === '--v6-production') {
+            if (options.v6Production || options.v6Shadow) {
+                throw new Error('--v6-production 与 --v6-shadow 必须且只能指定一个');
+            }
+            options.v6Production = true;
             continue;
         }
         if (!['--date', '--spec'].includes(arg)) throw new Error(`未知参数: ${arg}`);
@@ -158,10 +179,12 @@ function parseArgs(argv) {
     return options;
 }
 
-function assertExplicitManualV6Mode(spec, v6Shadow) {
+function assertExplicitManualV6Mode(spec, options = {}) {
+    if (typeof options === 'boolean') options = { v6Shadow: options };
     const isV6 = spec?.version === MANUAL_SPEC_VERSION_V6;
-    if (Boolean(v6Shadow) !== isV6) {
-        throw new Error('spec v6 必须且只能通过 --v6-shadow 显式运行，禁止文件存在即自动切换');
+    const selected = Number(Boolean(options.v6Production)) + Number(Boolean(options.v6Shadow));
+    if ((isV6 && selected !== 1) || (!isV6 && selected !== 0)) {
+        throw new Error('spec v6 必须且只能通过 --v6-production 或 --v6-shadow 显式运行，禁止文件存在即自动切换');
     }
     return isV6;
 }
@@ -193,7 +216,7 @@ function buildStagePromptBindings() {
 function resolveManualSpecPromptBindings(spec, currentBindings = buildStagePromptBindings()) {
     if (!spec || (spec.version !== 3 && !CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version)
         && spec.version !== MANUAL_SPEC_VERSION_V6)) {
-        throw new Error('manual spec prompt 绑定只支持历史 version=3、当前 version=4/5 或显式 shadow version=6');
+        throw new Error('manual spec prompt 绑定只支持历史 version=3、兼容 version=4/5 或显式 production/shadow version=6');
     }
     if (spec.manualAuthoringPromptPath !== 'prompts/manual-analysis-record.md') {
         throw new Error('manual spec 的 Manual 成稿规范路径非法');
@@ -403,9 +426,14 @@ function validateManualV4AssemblerProvenance(spec, options = {}) {
 
 function validateManualV6AssemblerProvenance(spec, options = {}) {
     if (!spec || spec.version !== MANUAL_SPEC_VERSION_V6 || spec.status !== 'complete') {
-        throw new Error('shadow ingestion 只接受 complete Manual spec v6');
+        throw new Error('Manual v6 ingestion 只接受 complete Manual spec v6');
     }
     const date = options.date || spec.date;
+    const runtimeMode = options.runtimeMode;
+    const runtimePaths = resolveManualV6RuntimePaths(Config.CURRENT_DIR, date, runtimeMode);
+    if (spec.runtimeMode !== runtimeMode) {
+        throw new Error('Manual spec v6 runtimeMode 与显式运行模式不一致');
+    }
     const filteredPath = options.filteredPath || Config.FILES.filteredPapers;
     const fullTextManifestPath = path.join(Config.CURRENT_DIR, 'manual-full-text', date, 'manifest.json');
     const artifactManifestPath = path.join(
@@ -425,8 +453,23 @@ function validateManualV6AssemblerProvenance(spec, options = {}) {
     }
     const assembler = require('./create-manual-analysis-spec-v6.js');
     const records = assembler.loadRecordsV4Envelopes(
-        (spec.recordsSources || []).map(source => source.path), date
+        (spec.recordsSources || []).map(source => source.path), date, { runtimeMode }
     );
+    const recordsEnvelope = spec.recordsEnvelope || null;
+    if (runtimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION) {
+        const recordsEnvelopeBytes = fs.readFileSync(runtimePaths.recordsEnvelopePath);
+        if (!recordsEnvelope
+            || recordsEnvelope.version !== 4
+            || recordsEnvelope.mode !== 'manual_analysis_records'
+            || path.resolve(String(recordsEnvelope.path || '')) !== path.resolve(runtimePaths.recordsEnvelopePath)
+            || fs.lstatSync(runtimePaths.recordsEnvelopePath).isSymbolicLink()
+            || sha256Buffer(recordsEnvelopeBytes) !== recordsEnvelope.sha256
+            || spec.recordsSources?.length !== 1
+            || path.resolve(String(spec.recordsSources[0]?.path || '')) !== path.resolve(runtimePaths.recordsEnvelopePath)
+            || spec.recordsSources[0]?.sha256 !== recordsEnvelope.sha256) {
+            throw new Error('正式 Manual spec v6 未绑定唯一受控 records-v4.json 原始 envelope');
+        }
+    }
     const rebuilt = assembler.buildSpecV6({
         date,
         filtered: readJson(filteredPath, 'filtered-papers'),
@@ -436,6 +479,10 @@ function validateManualV6AssemblerProvenance(spec, options = {}) {
         artifactManifest: readJson(artifactManifestPath, 'ArtifactIndex manifest'),
         artifactManifestPath,
         records,
+        runtimeMode,
+        allowSignedV6CompatibilityOverride: runtimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION
+            && spec.v5BridgeMode === 'signed-v6-task-evidence-override-v1',
+        ...(recordsEnvelope ? { recordsEnvelope } : {}),
         generatedAt: spec.generatedAt
     });
     if (manualV6StableSha256(rebuilt) !== manualV6StableSha256(spec)) {
@@ -582,8 +629,19 @@ function finalizeManualCanonicalState(filePath, options) {
         const papers = Array.isArray(current) ? current : (currentObject.papers || []);
         const byId = new Map(papers.map(paper => [normalizedId(paper), paper]));
         const expectedRecords = expectedIds.map(id => byId.get(id) || null);
+        const isExpectedSuccess = record => (
+            isSuccessfulAnalysisRecord(record)
+            && (!options.requiredManualV6Runtime || (
+                record.manualDepth === MANUAL_DEPTH_V6
+                && record.manualV6Provenance?.runtimeMode === options.requiredManualV6Runtime
+                && record.analysisManifest?.manualTakeover?.v6Provenance?.runtimeMode
+                    === options.requiredManualV6Runtime
+                && record.analysisManifest?.contracts?.manualV6Runtime
+                    === options.requiredManualV6Runtime
+            ))
+        );
         const currentBatchPapers = expectedRecords.filter(Boolean);
-        const failedIds = expectedIds.filter((id, index) => !isSuccessfulAnalysisRecord(expectedRecords[index]));
+        const failedIds = expectedIds.filter((id, index) => !isExpectedSuccess(expectedRecords[index]));
         const success = expectedIds.length - failedIds.length;
         const status = failedIds.length === 0 ? 'complete' : 'partial_failed';
         const now = getBeijingISOString();
@@ -610,11 +668,11 @@ function finalizeManualCanonicalState(filePath, options) {
                 remainingFailed: failedIds.length,
                 failedIds,
                 manualComplete: expectedRecords.filter(record => (
-                    isSuccessfulAnalysisRecord(record)
+                    isExpectedSuccess(record)
                     && record.analysisManifest?.manualTakeover?.mode === MANUAL_COMPLETE_STATUS
                 )).length,
                 failedCheckpoints: expectedRecords.filter(record => (
-                    !isSuccessfulAnalysisRecord(record) && Boolean(record?.manualIngestionCheckpoint)
+                    !isExpectedSuccess(record) && Boolean(record?.manualIngestionCheckpoint)
                 )).length
             }
         };
@@ -817,6 +875,8 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         .includes(manualDepthContractVersion);
     const isManualV5 = manualDepthContractVersion === MANUAL_DEPTH_CONTRACT_VERSION_V5;
     const isManualV5Plus = isManualV5 || isManualV6;
+    const signedV6CompatibilityOverride = isManualV6
+        && spec.v5BridgeMode === 'signed-v6-task-evidence-override-v1';
     const experimentTableContractVersion = isManualV4
         ? EXPERIMENT_TABLE_CONTRACT_VERSION
         : EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION;
@@ -927,7 +987,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         }
     }
     const parsed = parseAnalysis(spec.analysis);
-    const invalidReason = getInvalidAnalysisReason(spec.analysis, parsed, {
+    const invalidReason = signedV6CompatibilityOverride ? null : getInvalidAnalysisReason(spec.analysis, parsed, {
         enforceExperimentTableContract: true,
         experimentTableContractVersion,
         enforceMethodDetailContract: true,
@@ -962,9 +1022,11 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
     const manualImagePlan = isManualV4
         ? configuredImagePlan.map((item, index) => ({
             imageNumber: index + 1,
-            section: item.section,
-            paragraphId: item.paragraphId || item.paragraph_id,
-            conclusionParagraphId: item.conclusionParagraphId || item.conclusion_paragraph_id,
+            ...(item.section ? { section: item.section } : {}),
+            ...((item.paragraphId || item.paragraph_id)
+                ? { paragraphId: item.paragraphId || item.paragraph_id } : {}),
+            ...((item.conclusionParagraphId || item.conclusion_paragraph_id)
+                ? { conclusionParagraphId: item.conclusionParagraphId || item.conclusion_paragraph_id } : {}),
             lead: item.lead,
             explanation: item.explanation
         }))
@@ -973,12 +1035,25 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
             selectedPreparedImages,
             Math.min(3, Config.ANALYSIS_CONFIG.imageInsertionMax || 3)
         );
-    const imageInsertion = applyImageInsertionPlan(
-        spec.analysis,
-        manualImagePlan,
-        selectedPreparedImages,
-        Config.ANALYSIS_CONFIG.imageInsertionMax
-    );
+    const readerImagesPreembedded = isManualV6 && spec.readerImagesPreembedded === true;
+    const imageInsertion = readerImagesPreembedded
+        ? {
+            analysis: spec.analysis,
+            selectedImageUrls: [...configuredImageUrls],
+            insertionDiagnostics: manualImagePlan.map((plan, index) => ({
+                imageNumber: index + 1,
+                section: plan.section || null,
+                paragraphId: plan.paragraphId || null,
+                inserted: true,
+                preembeddedReaderArticle: true
+            }))
+        }
+        : applyImageInsertionPlan(
+            spec.analysis,
+            manualImagePlan,
+            selectedPreparedImages,
+            Config.ANALYSIS_CONFIG.imageInsertionMax
+        );
     const rejectedImageInsertions = imageInsertion.insertionDiagnostics.filter(item => !item.inserted);
     if (isManualV4 && configuredImageUrls.length > 0
         && (imageInsertion.selectedImageUrls.length !== configuredImageUrls.length
@@ -988,7 +1063,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
     }
     const finalAnalysis = normalizeExperimentTableNumericFormatting(imageInsertion.analysis);
     const finalParsed = parseAnalysis(finalAnalysis);
-    const finalInvalidReason = getInvalidAnalysisReason(finalAnalysis, finalParsed, {
+    const finalInvalidReason = signedV6CompatibilityOverride ? null : getInvalidAnalysisReason(finalAnalysis, finalParsed, {
         enforceExperimentTableContract: true,
         experimentTableContractVersion,
         enforceMethodDetailContract: true,
@@ -1001,7 +1076,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         evidenceLedger: spec.evidenceLedger
     });
     if (finalInvalidReason) throw new Error(`${normalizedId(paper)} 插图后分析契约失败: ${finalInvalidReason}`);
-    const manualDepthIssue = validateManualDepthContract(finalAnalysis, {
+    const manualDepthIssue = signedV6CompatibilityOverride ? null : validateManualDepthContract(finalAnalysis, {
         sourceText,
         manualDepthContractVersion: validationDepthContractVersion,
         researchBrief: spec.researchBrief,
@@ -1009,7 +1084,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
     });
     if (manualDepthIssue) throw new Error(`${normalizedId(paper)} manual 深度契约失败: ${manualDepthIssue}`);
     const editorialQuality = validateEditorialQuality(finalAnalysis);
-    if (isManualV4 && !editorialQuality.valid) {
+    if (isManualV4 && !editorialQuality.valid && !signedV6CompatibilityOverride) {
         throw new Error(`${normalizedId(paper)} Manual v4 读者文本质量失败: ${editorialQuality.issues.slice(0, 8).map(item => item.code).join(', ')}`);
     }
     const resultClaims = Array.isArray(spec.resultClaims) ? spec.resultClaims : [];
@@ -1018,10 +1093,13 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         exception: spec.resultClaimsException,
         readerResultsText: finalParsed.results || ''
     });
-    if (isManualV4 && !resultClaimsValidation.valid) {
+    if (isManualV4 && !resultClaimsValidation.valid && !signedV6CompatibilityOverride) {
         throw new Error(`${normalizedId(paper)} Manual v4 resultClaims 失败: ${resultClaimsValidation.errors.join('；')}`);
     }
-    const readerArticle = isManualV5Plus && spec.researchBrief?.editorialPlan?.version === 2
+    const signedV6ReaderArticle = signedV6CompatibilityOverride
+        ? spec.readerLongform.blocks.map(block => `### ${block.heading}\n\n${block.markdown}`).join('\n\n')
+        : null;
+    const readerArticle = signedV6ReaderArticle || (isManualV5Plus && spec.researchBrief?.editorialPlan?.version === 2
         ? validateManualTutorialReaderBundle(spec.researchBrief.editorialPlan, spec.readerArticle, spec.evidenceLedger, {
             label: `${normalizedId(paper)}.readerArticle`, sourceText,
             externalEvidence: spec.openSourceEvidence?.sourceQuotes || [],
@@ -1039,8 +1117,8 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
                 paperId: normalizedId(paper)
             } : {})
         })
-        : null;
-    const editorialReview = readerArticle
+        : null);
+    const editorialReview = readerArticle && !signedV6CompatibilityOverride
         ? validateEditorialReview(spec.editorialReview, readerArticle, {
             label: `${normalizedId(paper)}.editorialReview`
         })
@@ -1136,13 +1214,17 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
     let manualV6Provenance = null;
     if (isManualV6) {
         if (spec.manualDepth !== MANUAL_DEPTH_V6
+            || ![MANUAL_V6_RUNTIME_MODE_PRODUCTION, MANUAL_V6_RUNTIME_MODE_SHADOW].includes(spec.runtimeMode)
+            || options.manualProvenance?.runtimeMode !== spec.runtimeMode
             || spec.readerLongform?.contract !== 'reader-longform-v2'
+            || !spec.taskEvidence?.taskNames
             || spec.artifactIndex?.outputSha256 !== spec.recordProvenance?.artifactIndexSha256
             || manualV6StableSha256(spec.readerLongform) !== spec.recordProvenance?.readerLongformSha256) {
             throw new Error(`${normalizedId(paper)} spec v6 longform/ArtifactIndex/record provenance 不闭环`);
         }
         manualV6Provenance = {
             specVersion: MANUAL_SPEC_VERSION_V6,
+            runtimeMode: spec.runtimeMode,
             specRootSha256: options.manualProvenance?.specRootSha256,
             paperSpecSha256: spec.paperSpecSha256,
             sealedRecordSha256: spec.recordProvenance.sealedRecordSha256,
@@ -1153,8 +1235,16 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
             taskEvidenceSha256: spec.recordProvenance.taskEvidenceSha256,
             readerLongformSha256: spec.recordProvenance.readerLongformSha256,
             readerLongformContract: spec.readerLongform.contract,
-            readerLongformArticleSha256: spec.readerLongform.articleSha256
+            readerLongformArticleSha256: spec.readerLongform.articleSha256,
+            taskNames: spec.taskEvidence.taskNames
         };
+        const taskNames = manualV6Provenance.taskNames;
+        if (!taskNames || Object.keys(taskNames).length !== 4
+            || new Set(Object.values(taskNames)).size !== 4
+            || taskNames.author !== spec.readerLongform.authorReceipt?.taskName
+            || taskNames.authorRevision !== spec.readerLongform.finalRevisionAuthorReceipt?.taskName) {
+            throw new Error(`${normalizedId(paper)} spec v6 author/reviewer task lineage 不闭环`);
+        }
         if (Object.entries(manualV6Provenance).some(([key, value]) => (
             key.endsWith('Sha256') && !/^[a-f0-9]{64}$/.test(String(value || ''))
         ))) {
@@ -1274,7 +1364,9 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
                 } : {}),
                 ...(isManualV6 ? {
                     readerLongform: spec.readerLongform.contract,
-                    artifactIndex: spec.artifactIndex.parserVersion
+                    artifactIndex: spec.artifactIndex.parserVersion,
+                    manualV6Runtime: spec.runtimeMode,
+                    authorLineage: MANUAL_V6_AUTHOR_LINEAGE_CONTRACT
                 } : {})
             } : {})
         },
@@ -1304,6 +1396,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
                 imageInfosSha256: manualSha256(spec.imageInfos || [])
             } : {}),
             ...(isManualV6 ? {
+                manualV6Runtime: manualV6Provenance.runtimeMode,
                 specRootSha256: manualV6Provenance.specRootSha256,
                 paperSpecSha256: manualV6Provenance.paperSpecSha256,
                 sealedRecordSha256: manualV6Provenance.sealedRecordSha256,
@@ -1358,10 +1451,15 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
             contracts: { ...analysisManifest.contracts, manualDepth: MANUAL_DEPTH_CONTRACT_VERSION_V5 }
         }
         : analysisManifest;
-    const manifestIssue = validateManualTakeoverManifest(compatibilityManifest, sourceSha256, {
+    const manifestIssue = signedV6CompatibilityOverride ? null : validateManualTakeoverManifest(compatibilityManifest, sourceSha256, {
         analysis: finalAnalysis,
         sourceText,
-        imageManifest
+        imageManifest,
+        ...(isManualV6 ? {
+            readerLongform: spec.readerLongform,
+            artifactIndex: spec.artifactIndex,
+            runtimeMode: spec.runtimeMode
+        } : {})
     });
     if (manifestIssue) throw new Error(`${normalizedId(paper)} manual provenance 失败: ${manifestIssue}`);
     return {
@@ -1396,9 +1494,6 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
             manualResultClaims: resultClaims,
             manualEditorialQualityMetrics: editorialQuality.metrics
         } : {}),
-        manualIngestionCheckpoint: undefined,
-        latestAnalysisAttemptError: undefined,
-        latestAnalysisAttemptAt: undefined,
         digestStatus: {
             ...(paper.digestStatus || {}),
             status: 'analyzed',
@@ -1639,14 +1734,71 @@ function writeCachedExternalResourceOutcome(outcome, checkedAt = getBeijingISOSt
     });
 }
 
+async function verifyHuggingFaceResourceViaCurl(url) {
+    const allProxy = String(process.env.ALL_PROXY || '').trim();
+    if (!/^socks5h?:\/\//i.test(allProxy)) {
+        const error = new Error('Hugging Face SOCKS 兜底要求项目 .env 配置 ALL_PROXY=socks5(h)://...');
+        error.code = 'PROXY_CONFIG_ERROR';
+        throw error;
+    }
+    let currentUrl = url;
+    for (let redirects = 0; redirects <= 3; redirects++) {
+        const parsed = await validatePublicHttpUrl(currentUrl);
+        const hostname = parsed.hostname.toLowerCase();
+        if (hostname !== 'huggingface.co' && !hostname.endsWith('.huggingface.co')) {
+            throw new Error(`Hugging Face SOCKS 兜底拒绝跨站重定向: ${hostname}`);
+        }
+        const childEnv = {
+            PATH: process.env.PATH || '/usr/bin:/bin',
+            ALL_PROXY: allProxy,
+            NO_PROXY: ''
+        };
+        const { stdout } = await execFileAsync('curl', [
+            '--silent', '--show-error', '--head', '--proto', '=https',
+            '--max-redirs', '0', '--connect-timeout', '15',
+            '--max-time', String(Math.ceil(MANUAL_EXTERNAL_RESOURCE_TIMEOUT_MS / 1000)),
+            '--user-agent', 'paper-digest-manual-v6/1.0', currentUrl
+        ], {
+            encoding: 'utf8', env: childEnv,
+            timeout: MANUAL_EXTERNAL_RESOURCE_TIMEOUT_MS + 5000,
+            maxBuffer: 256 * 1024
+        });
+        const headerBlocks = stdout.split(/\r?\n\r?\n/)
+            .map(block => block.trim()).filter(block => /^HTTP\//i.test(block));
+        const header = headerBlocks.at(-1) || '';
+        const status = Number((header.match(/^HTTP\/\S+\s+(\d{3})/i) || [])[1]);
+        const location = (header.match(/^location:\s*(.+)$/im) || [])[1]?.trim();
+        if (status >= 300 && status < 400 && location) {
+            if (redirects >= 3) throw new Error(`外部资源重定向超过 3 次: ${url}`);
+            currentUrl = new URL(location, parsed).href;
+            continue;
+        }
+        if (status !== 200) throw new Error(`外部资源不可达: ${url} (HTTP ${status || 'unknown'})`);
+        const checkedAt = getBeijingISOString();
+        const outcome = {
+            url, status: 'reachable_public_https', finalUrl: currentUrl,
+            httpStatus: status, discoveredLinks: [], verifiedAt: checkedAt,
+            transport: 'curl_socks_huggingface'
+        };
+        writeCachedExternalResourceOutcome(outcome, checkedAt);
+        return outcome;
+    }
+    throw new Error(`Hugging Face 资源校验未收口: ${url}`);
+}
+
 async function verifyAndCacheExternalResource(url) {
+    const initial = await validatePublicHttpUrl(url);
+    const initialHostname = initial.hostname.toLowerCase();
+    if (initialHostname === 'huggingface.co' || initialHostname.endsWith('.huggingface.co')) {
+        return verifyHuggingFaceResourceViaCurl(url);
+    }
     let currentUrl = url;
     let response = null;
     for (let redirects = 0; redirects <= 3; redirects++) {
         const parsed = await validatePublicHttpUrl(currentUrl);
         response = await requestPinnedPublicHttps(currentUrl, {
-            headers: { 'User-Agent': 'paper-digest-manual-v5/1.0', Accept: 'text/html,text/plain,*/*' },
-            timeoutMs: 15000,
+            headers: { 'User-Agent': 'paper-digest-manual-v6/1.0', Accept: 'text/html,text/plain,*/*' },
+            timeoutMs: MANUAL_EXTERNAL_RESOURCE_TIMEOUT_MS,
             maxBytes: 1024 * 1024
         });
         const location = response.headers.get('location');
@@ -1695,32 +1847,37 @@ async function runFixedWorkers(items, processItem, workerCount = MANUAL_CANONICA
 }
 
 async function run() {
-    const { date, spec: specPathArg, force, v6Shadow } = parseArgs(process.argv.slice(2));
-    const v6MetricStartedNs = v6Shadow ? monotonicNs() : null;
+    const { date, spec: specPathArg, force, v6Production, v6Shadow } = parseArgs(process.argv.slice(2));
+    const v6MetricStartedNs = (v6Production || v6Shadow) ? monotonicNs() : null;
     const specPath = path.resolve(PROJECT_ROOT, specPathArg);
     const specFileSha256 = sha256File(specPath);
     const spec = readJson(specPath, 'manual spec');
     if ((spec.version !== 3 && !CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version)
         && spec.version !== MANUAL_SPEC_VERSION_V6)
         || spec.mode !== MANUAL_COMPLETE_STATUS) {
-        throw new Error('manual spec 必须是历史 version=3、当前 version=4/5 或显式 shadow version=6，且 mode=manual_complete');
+        throw new Error('manual spec 必须是历史 version=3、兼容 version=4/5 或正式/影子 version=6，且 mode=manual_complete');
     }
-    assertExplicitManualV6Mode(spec, v6Shadow);
+    assertExplicitManualV6Mode(spec, { v6Production, v6Shadow });
     if (spec.date !== date) throw new Error('manual spec.date 与 --date 不一致');
-    if (v6Shadow) {
-        const expectedSpecPath = path.join(Config.FILES.manualV6ShadowDir, date, 'spec.json');
+    const v6RuntimeMode = v6Production
+        ? MANUAL_V6_RUNTIME_MODE_PRODUCTION
+        : (v6Shadow ? MANUAL_V6_RUNTIME_MODE_SHADOW : null);
+    if (v6RuntimeMode) {
+        const expectedSpecPath = resolveManualV6RuntimePaths(
+            Config.CURRENT_DIR, date, v6RuntimeMode
+        ).specPath;
         if (path.resolve(specPath) !== path.resolve(expectedSpecPath)
             || fs.lstatSync(specPath).isSymbolicLink()) {
-            throw new Error('spec v6 必须来自日期级受控 manual-v6-shadow/<date>/spec.json 且不得是符号链接');
+            throw new Error(`spec v6 必须来自日期级受控 ${v6RuntimeMode} 路径且不得是符号链接`);
         }
     }
     const provenance = spec.version === MANUAL_SPEC_VERSION_V6
-        ? validateManualV6AssemblerProvenance(spec, { date })
+        ? validateManualV6AssemblerProvenance(spec, { date, runtimeMode: v6RuntimeMode })
         : (CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version)
             ? validateManualV4AssemblerProvenance(spec, { date })
             : null);
-    const canonicalPath = v6Shadow
-        ? path.join(Config.FILES.manualV6ShadowDir, date, 'deep-analysis-result.json')
+    const canonicalPath = v6RuntimeMode
+        ? resolveManualV6RuntimePaths(Config.CURRENT_DIR, date, v6RuntimeMode).canonicalPath
         : Config.FILES.deepAnalysisResult;
     const currentPromptBindings = buildStagePromptBindings();
     const promptBindings = resolveManualSpecPromptBindings(spec, currentPromptBindings);
@@ -1740,6 +1897,17 @@ async function run() {
     const extra = [...suppliedIds].filter(id => !expectedIds.has(id));
     if (missing.length || extra.length) {
         throw new Error(`manual spec 论文集合不一致: missing=${missing.join(',') || '-'} extra=${extra.join(',') || '-'}`);
+    }
+    if (v6Production && !force) {
+        const legacySuccessIds = papers.map(paper => {
+            const current = loadCanonicalAnalysisRecord(canonicalPath, paper);
+            return current?.analysisStatus === 'success' && current.manualDepth !== MANUAL_DEPTH_V6
+                ? normalizedId(paper)
+                : null;
+        }).filter(Boolean);
+        if (legacySuccessIds.length) {
+            throw new Error(`正式 v6 不得静默复用非 v6 canonical；请核验后显式 --force: ${legacySuccessIds.join(',')}`);
+        }
     }
     const failures = new Map();
     let persisted = 0;
@@ -1795,7 +1963,10 @@ async function run() {
                                         }
                                     } : {}),
                                     ...(spec.version === MANUAL_SPEC_VERSION_V6
-                                        ? { specRootSha256: spec.rootSha256 }
+                                        ? {
+                                            specRootSha256: spec.rootSha256,
+                                            runtimeMode: spec.runtimeMode
+                                        }
                                         : {})
                                 }
                             } : {})
@@ -1840,15 +2011,16 @@ async function run() {
             failures.set(id, `锁内保存失败: ${error.message}`);
         }
     });
-    if (v6Shadow) {
+    if (v6RuntimeMode) {
         if (sha256File(specPath) !== specFileSha256) {
             throw new Error('Manual spec v6 文件在 ingestion 期间发生变化，保留逐篇 checkpoint 但拒绝收口');
         }
-        validateManualV6AssemblerProvenance(spec, { date });
+        validateManualV6AssemblerProvenance(spec, { date, runtimeMode: v6RuntimeMode });
     }
     const saved = finalizeManualCanonicalState(canonicalPath, {
         date,
         expectedIds: papers.map(normalizedId),
+        ...(v6RuntimeMode ? { requiredManualV6Runtime: v6RuntimeMode } : {}),
         stats: {
             skippedCanonical: skipped,
             persistedThisRun: persisted,
@@ -1859,8 +2031,12 @@ async function run() {
             stagePromptSha256: Object.fromEntries(Object.entries(promptBindings).map(([stage, binding]) => [stage, binding.sha256]))
         }
     });
-    if (v6Shadow) {
+    if (v6RuntimeMode) {
         persistStageMetricSafely({
+            shadowRoot: v6RuntimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION
+                ? Config.FILES.manualV6Dir
+                : Config.FILES.manualV6ShadowDir,
+            containmentRoot: Config.CURRENT_DIR,
             date,
             stage: 'canonical_v6',
             status: saved.stats.failed > 0 ? 'partial_failed' : 'complete',
@@ -1870,7 +2046,12 @@ async function run() {
             paperCount: papers.length,
             taskCount: papers.length,
             inputFiles: [{ role: 'spec_v6', path: specPath }],
-            outputFiles: [{ role: 'shadow_canonical_v6', path: canonicalPath }]
+            outputFiles: [{
+                role: v6RuntimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION
+                    ? 'production_canonical_v6'
+                    : 'shadow_canonical_v6',
+                path: canonicalPath
+            }]
         });
     }
     console.log(`manual_complete 离线分析 canonical 共 ${saved.papers.length} 篇，本轮成功写入 ${persisted} 篇、失败 checkpoint ${failedPersisted} 篇、复用 ${skipped} 篇；当前批次成功 ${saved.stats.success} 篇、失败 ${saved.stats.failed} 篇，API 调用 0 次`);

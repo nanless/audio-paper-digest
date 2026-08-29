@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-/** Persistent, API-free task queue for explicit Manual v6 shadow author/review work. */
+/** Persistent, API-free task queue for production or explicit-shadow Manual v6 work. */
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -17,6 +17,17 @@ const {
     stableSha256, validateTaskPacket, validateAuthorRevisionArtifactLineage,
     validateReviewOutput, validateRevisionOutput
 } = require('./manual-v6-workflow.js');
+const {
+    validateManualTutorialLongformBundle
+} = require('./manual-tutorial-contract-orchestrator.js');
+const {
+    normalizeAuthorOwnedBaseFields,
+    validateAuthorOwnedRecordDraft
+} = require('./manual-v6-author-base-fields.js');
+const {
+    RECORDS_VERSION,
+    validateRecord
+} = require('./create-manual-analysis-spec.js');
 
 const STATE_VERSION = 1;
 const MODE = 'manual_v6_task_runner';
@@ -33,6 +44,8 @@ const DOWNSTREAM = Object.freeze(Object.fromEntries(ROLES.map(role => [role, ROL
 const ACTIVE_LIMIT = 3;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const BEIJING_RE = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?\+08:00$/;
+const AUTHOR_OUTPUT_CONTRACT = 'manual-v6-author-output-v2';
+const REVISION_OUTPUT_CONTRACT = 'manual-v6-author-revision-output-v2';
 
 function dependsTransitively(role, ancestor, seen = new Set()) {
     if (seen.has(role)) return false;
@@ -69,8 +82,8 @@ function assertInsideRealRoot(rootPath, filePath, label, kind = 'file') {
     return real;
 }
 
-function runnerPaths(date, shadowRoot = Config.FILES.manualV6ShadowDir) {
-    const root = path.join(path.resolve(shadowRoot), assertDate(date), 'task-runner');
+function runnerPaths(date, workflowRoot = Config.FILES.manualV6Dir) {
+    const root = path.join(path.resolve(workflowRoot), assertDate(date), 'task-runner');
     return { root, statePath: path.join(root, 'state.json'), taskRoot: path.join(root, 'tasks') };
 }
 
@@ -85,13 +98,17 @@ function emptyTask() {
     };
 }
 
-function initializeState(date, paperIds, generatedAt = getBeijingISOString(), filteredInput = {}) {
+function initializeState(date, paperIds, generatedAt = getBeijingISOString(), filteredInput = {}, executionScope = 'production') {
     const ids = paperIds.map(normalizedId);
     if (!ids.length || ids.some(id => !id) || new Set(ids).size !== ids.length) {
         throw new Error('expectedPaperIds 必须是非空且不重复的规范化论文集合');
     }
+    if (!['production', 'shadow'].includes(executionScope)) {
+        throw new Error('task runner executionScope 必须是 production 或 shadow');
+    }
     return {
         version: STATE_VERSION, mode: MODE, date: assertDate(date), generation: 0,
+        executionScope,
         createdAt: generatedAt, updatedAt: generatedAt, activeLimit: ACTIVE_LIMIT,
         filteredInput: {
             path: filteredInput.path || null,
@@ -108,6 +125,9 @@ function initializeState(date, paperIds, generatedAt = getBeijingISOString(), fi
 function validateState(state) {
     if (!state || state.version !== STATE_VERSION || state.mode !== MODE) throw new Error('task runner state 版本非法');
     assertDate(state.date);
+    if (!['production', 'shadow'].includes(state.executionScope)) {
+        throw new Error('task runner executionScope 非法');
+    }
     if (!Number.isInteger(state.generation) || state.generation < 0 || state.activeLimit !== ACTIVE_LIMIT
         || !state.taskNames || typeof state.taskNames !== 'object' || Array.isArray(state.taskNames)) {
         throw new Error('task runner generation/activeLimit/taskNames 非法');
@@ -199,14 +219,19 @@ function invalidateFrom(state, paperId, role, reason) {
         if (task.taskName) state.taskNames[task.taskName] = {
             ...state.taskNames[task.taskName], retired: true
         };
-        const keepPacket = affectedRole === role || task.packetSha256;
+        // The retried node may reuse its own immutable packet, but every
+        // downstream packet binds the old dependency output SHA and must be
+        // rematerialized. Keeping a downstream packet here produces an
+        // impossible state: the dependency is no longer validated while the
+        // stale packet still claims that it is.
+        const keepPacket = affectedRole === role && Boolean(task.packetSha256);
         const packetFields = keepPacket ? {
             packetSha256: task.packetSha256, packetFileSha256: task.packetFileSha256,
             packetPath: task.packetPath, artifactRoot: task.artifactRoot
         } : {};
         state.papers[paperId].tasks[affectedRole] = {
             ...emptyTask(), ...packetFields,
-            status: task.packetSha256 ? 'stale' : 'awaiting_packet', error: reason
+            status: keepPacket ? 'stale' : 'awaiting_packet', error: reason
         };
     }
 }
@@ -241,7 +266,7 @@ function registerPacket(state, options) {
     const controlledTaskRoot = fs.realpathSync(options.controlledTaskRoot);
     const expectedPaperRoot = fs.realpathSync(path.join(controlledTaskRoot, paperId));
     if (artifactRoot !== expectedPaperRoot) {
-        throw new Error(`artifactRoot 必须精确等于受控 shadow taskRoot/${paperId}`);
+        throw new Error(`artifactRoot 必须精确等于受控 taskRoot/${paperId}`);
     }
     for (const otherId of state.expectedPaperIds) {
         if (otherId === paperId) continue;
@@ -375,12 +400,14 @@ function verifyFilteredInput(state) {
     return filtered;
 }
 
-function verifyPersistedTaskFiles(state) {
+function verifyPersistedTaskFiles(state, options = {}) {
+    const ignoredPacket = options.ignoredPacket || null;
     const filtered = verifyFilteredInput(state);
     for (const paperId of state.expectedPaperIds) {
         for (const role of ROLES) {
             const task = state.papers[paperId].tasks[role];
-            if (task.packetPath) {
+            const skipPacket = ignoredPacket?.paperId === paperId && ignoredPacket?.role === role;
+            if (task.packetPath && !skipPacket) {
                 const packet = readSubmissionFile(task.artifactRoot, task.packetPath, `${paperId}.${role}.packet`);
                 if (packet.fileSha256 !== task.packetFileSha256
                     || packet.value.packetSha256 !== task.packetSha256) {
@@ -407,7 +434,9 @@ function verifyPersistedTaskFiles(state) {
             }
         }
         const tasks = state.papers[paperId].tasks;
-        if (tasks.author_revision.packetPath) {
+        const skipRevisionLineage = ignoredPacket?.paperId === paperId
+            && ignoredPacket?.role === 'author_revision';
+        if (tasks.author_revision.packetPath && !skipRevisionLineage) {
             if (tasks.author.status !== 'validated'
                 || tasks.technical_scoring.status !== 'validated'
                 || tasks.pedagogy_readability.status !== 'validated') {
@@ -436,8 +465,8 @@ function verifyPersistedTaskFiles(state) {
     }
 }
 
-function verifyBoundInputs(state) {
-    validateState(state); verifyFilteredInput(state); verifyPersistedTaskFiles(state); return state;
+function verifyBoundInputs(state, options = {}) {
+    validateState(state); verifyFilteredInput(state); verifyPersistedTaskFiles(state, options); return state;
 }
 
 function validateTerraReceipt(receipt, task, paperId, role, outputSemanticSha256) {
@@ -452,15 +481,189 @@ function validateTerraReceipt(receipt, task, paperId, role, outputSemanticSha256
     if (role !== 'author' && receipt.outputSha256 !== outputSemanticSha256) {
         throw new Error('receipt.outputSha256 未绑定真实 output 语义 SHA');
     }
-    if (role === 'author' && (receipt.queuedAt !== task.claimedAt
+    if (receipt.queuedAt !== task.claimedAt
         || receipt.startedAt !== task.startedAt
-        || !Number.isInteger(receipt.revision) || receipt.revision < 1)) {
-        throw new Error('author receipt 未绑定真实 claim/start 时间或修订序号');
+        || !Number.isInteger(receipt.revision) || receipt.revision < 1) {
+        throw new Error('receipt 未绑定真实 claim/start 时间或修订序号');
     }
     const completedAt = String(receipt.completedAt || '');
     if (!BEIJING_RE.test(completedAt) || Date.parse(completedAt) < Date.parse(task.startedAt)) {
         throw new Error('receipt.completedAt 必须是开始时间之后的北京时间');
     }
+}
+
+function normalizedArticleSha256(bytes) {
+    const text = bytes.toString('utf8').normalize('NFKC').replace(/\r\n?/g, '\n').trim();
+    return sha256Bytes(Buffer.from(text, 'utf8'));
+}
+
+function validateProductionAuthorOutput(output, receipt, task, paperId, outputSemanticSha256) {
+    if (output?.version !== 2 || output.contract !== AUTHOR_OUTPUT_CONTRACT
+        || output.role !== 'author' || normalizedId(output.paperId) !== paperId
+        || output.taskName !== task.taskName || output.passed !== true
+        || !SHA_RE.test(String(output.articleSha256 || ''))) {
+        throw new Error(`production author output 必须是 ${AUTHOR_OUTPUT_CONTRACT}`);
+    }
+    const refs = [
+        ['article', output.article, 'draft/author-article.md'],
+        ['recordDraft', output.recordDraft, 'draft/author-record.json']
+    ];
+    for (const [field, ref, expectedRelative] of refs) {
+        if (!ref || ref.path !== expectedRelative || !SHA_RE.test(String(ref.fileSha256 || ''))) {
+            throw new Error(`production author output.${field} 必须绑定固定路径与真实文件 SHA`);
+        }
+        const file = assertInsideRealRoot(
+            task.artifactRoot, path.join(task.artifactRoot, expectedRelative),
+            `production author output.${field}`
+        );
+        const bytes = fs.readFileSync(file);
+        if (sha256Bytes(bytes) !== ref.fileSha256) {
+            throw new Error(`production author output.${field} 文件 SHA 不匹配`);
+        }
+        if (field === 'article' && normalizedArticleSha256(bytes) !== output.articleSha256) {
+            throw new Error('production author output.articleSha256 未绑定真实 NFKC/trim 正文');
+        }
+        if (field === 'recordDraft') {
+            if (!SHA_RE.test(String(ref.semanticSha256 || ''))) {
+                throw new Error('production author output.recordDraft 缺少语义 SHA');
+            }
+            const draft = JSON.parse(bytes.toString('utf8'));
+            if (normalizedId(draft.paperId || draft.arxivId) !== paperId
+                || draft.sealedRecordSha256 || draft.reviewReceipts || draft.reviewResolution
+                || stableSha256(draft) !== ref.semanticSha256) {
+                throw new Error('production author record draft 身份、语义 SHA 或未封印状态非法');
+            }
+            validateAuthorOwnedRecordDraft(draft, 'production author record draft');
+            const ledger = draft.evidenceLedger;
+            if (!Array.isArray(ledger) || ledger.length < 1) {
+                throw new Error('production author record draft 缺少 evidenceLedger');
+            }
+            const canonicalIds = new Set();
+            ledger.forEach((entry, index) => {
+                const match = String(entry?.id || '').trim().match(/^E(\d{1,3})$/);
+                if (!match) {
+                    throw new Error(`production author record draft evidenceLedger[${index}].id 必须匹配 E\\d{1,3}`);
+                }
+                const canonical = `E${match[1].padStart(2, '0')}`;
+                if (canonicalIds.has(canonical)) {
+                    throw new Error(`production author record draft evidenceLedger ID 规范化冲突: ${canonical}`);
+                }
+                canonicalIds.add(canonical);
+            });
+        }
+    }
+    if (receipt.inputPacketSha256 !== task.packetSha256
+        || receipt.outputSha256 !== outputSemanticSha256
+        || receipt.articleSha256 !== output.articleSha256) {
+        throw new Error('production author receipt 必须绑定 input packet、真实 output 语义 SHA 与初稿正文 SHA');
+    }
+}
+
+function validateProductionRevisionOutput(output, receipt, task, paperId, dependencies) {
+    if (output?.version !== 2 || output.contract !== REVISION_OUTPUT_CONTRACT
+        || output.role !== 'author_revision' || normalizedId(output.paperId) !== paperId
+        || output.taskName !== task.taskName || output.passed !== true
+        || output.technicalOutputSha256 !== dependencies.technicalOutputSha256
+        || output.readabilityOutputSha256 !== dependencies.readabilityOutputSha256
+        || !SHA_RE.test(String(output.finalArticleSha256 || ''))) {
+        throw new Error(`production author_revision output 必须是 ${REVISION_OUTPUT_CONTRACT}`);
+    }
+    const refs = [
+        ['finalArticle', output.finalArticle, 'draft/final-article.md'],
+        ['recordPayload', output.recordPayload, 'draft/revision-record-payload.json']
+    ];
+    let payload;
+    for (const [field, ref, expectedRelative] of refs) {
+        if (!ref || ref.path !== expectedRelative || !SHA_RE.test(String(ref.fileSha256 || ''))) {
+            throw new Error(`production revision output.${field} 必须绑定固定路径与真实文件 SHA`);
+        }
+        const file = assertInsideRealRoot(
+            task.artifactRoot, path.join(task.artifactRoot, expectedRelative),
+            `production revision output.${field}`
+        );
+        const bytes = fs.readFileSync(file);
+        if (sha256Bytes(bytes) !== ref.fileSha256) {
+            throw new Error(`production revision output.${field} 文件 SHA 不匹配`);
+        }
+        if (field === 'finalArticle' && normalizedArticleSha256(bytes) !== output.finalArticleSha256) {
+            throw new Error('production revision output.finalArticleSha256 未绑定真实 NFKC/trim 正文');
+        }
+        if (field === 'recordPayload') {
+            if (!SHA_RE.test(String(ref.semanticSha256 || ''))) {
+                throw new Error('production revision output.recordPayload 缺少语义 SHA');
+            }
+            payload = JSON.parse(bytes.toString('utf8'));
+            const longform = payload?.editorial?.longformBundle;
+            if (payload?.version !== 4 || payload.manualDepth !== 'full-text-evidence-v6'
+                || normalizedId(payload.paperId) !== paperId
+                || payload.sealedRecordSha256 || payload.reviewReceipts || payload.reviewResolution
+                || longform?.authorReceipt || longform?.finalRevisionAuthorReceipt
+                || stableSha256(payload) !== ref.semanticSha256) {
+                throw new Error('production revision record payload 身份、语义 SHA 或未封印状态非法');
+            }
+            const normalizedBase = normalizeAuthorOwnedBaseFields(
+                payload, 'production revision record payload'
+            );
+            if (payload.type !== normalizedBase.type || payload.task !== normalizedBase.task
+                || payload.tags !== normalizedBase.tags) {
+                throw new Error('production revision record payload 的 type/task/tags 必须已规范化后再签名');
+            }
+            const article = fs.readFileSync(path.join(task.artifactRoot, 'draft', 'final-article.md'), 'utf8')
+                .normalize('NFKC').replace(/\r\n?/g, '\n').trim();
+            const payloadArticle = String(payload.editorial?.readerArticle || '')
+                .normalize('NFKC').replace(/\r\n?/g, '\n').trim();
+            if (article !== payloadArticle || longform?.articleSha256 !== output.finalArticleSha256) {
+                throw new Error('production revision payload 未逐字绑定最终正文/longform SHA');
+            }
+            const artifactIndexPath = assertInsideRealRoot(
+                task.artifactRoot,
+                path.join(task.artifactRoot, 'evidence', 'artifact-index.json'),
+                'production revision ArtifactIndex'
+            );
+            const artifactIndex = JSON.parse(fs.readFileSync(artifactIndexPath, 'utf8'));
+            validateManualTutorialLongformBundle(longform, article, artifactIndex, {
+                paperId,
+                runtimeMode: 'production',
+                unsealedRevision: true,
+                label: 'production revision payload.editorial.longformBundle'
+            });
+            validateRecord(payload, paperId, 'production revision record payload', {
+                recordsVersion: RECORDS_VERSION
+            });
+        }
+    }
+    const auditRef = output.independentAudit;
+    if (!auditRef || auditRef.path !== 'reviews/revision-independent-audit.json'
+        || !SHA_RE.test(String(auditRef.fileSha256 || ''))
+        || !SHA_RE.test(String(auditRef.semanticSha256 || ''))
+        || !String(auditRef.taskName || '').startsWith('/root/')) {
+        throw new Error('production revision output 缺少独立审计固定引用');
+    }
+    const auditPath = assertInsideRealRoot(
+        task.artifactRoot, path.join(task.artifactRoot, auditRef.path),
+        'production revision independent audit'
+    );
+    const auditBytes = fs.readFileSync(auditPath);
+    const audit = JSON.parse(auditBytes.toString('utf8'));
+    if (sha256Bytes(auditBytes) !== auditRef.fileSha256
+        || stableSha256(audit) !== auditRef.semanticSha256
+        || audit.taskName !== auditRef.taskName || normalizedId(audit.paperId) !== paperId
+        || audit.contract !== 'manual-v6-independent-revision-audit-v1'
+        || audit.finalPassed !== true) {
+        throw new Error('production revision independent audit 字节、身份或最终状态不闭环');
+    }
+    if (!Array.isArray(output.resolvedFindingSha256s)
+        || output.resolvedFindingSha256s.some(value => !SHA_RE.test(String(value || '')))
+        || !Array.isArray(output.notes) || output.notes.length < 2
+        || output.notes.some(value => String(value || '').trim().length < 20)) {
+        throw new Error('production revision output 缺少 findings resolution 或具体修订说明');
+    }
+    if (receipt.articleSha256 !== output.finalArticleSha256
+        || receipt.queuedAt !== task.claimedAt || receipt.startedAt !== task.startedAt
+        || !Number.isInteger(receipt.revision) || receipt.revision < 1) {
+        throw new Error('production revision receipt 未绑定最终正文、真实 claim/start 或修订序号');
+    }
+    return payload;
 }
 
 function submitTask(state, claimId, options) {
@@ -478,19 +681,38 @@ function submitTask(state, claimId, options) {
             throw new Error(`${role} output 必须写入受控固定路径 ${expectedOutputName}`);
         }
         validateReviewOutput(output.value, role, paperId, receiptFile.value, 'task output');
+    } else if (role === 'author_revision' && state.executionScope === 'production') {
+        if (output.path !== path.resolve(task.artifactRoot, 'outputs', 'author-revision.json')
+            || receiptFile.path !== path.resolve(task.artifactRoot, 'receipts', 'author-revision.json')) {
+            throw new Error('production author_revision output/receipt 必须写入受控固定路径');
+        }
+        const tasks = state.papers[paperId].tasks;
+        validateProductionRevisionOutput(output.value, receiptFile.value, task, paperId, {
+            technicalOutputSha256: tasks.technical_scoring.outputSemanticSha256,
+            readabilityOutputSha256: tasks.pedagogy_readability.outputSemanticSha256
+        });
     } else if (role === 'author_revision') {
         const tasks = state.papers[paperId].tasks;
         validateRevisionOutput(output.value, paperId, receiptFile.value, {
             technicalOutputSha256: tasks.technical_scoring.outputSemanticSha256,
             readabilityOutputSha256: tasks.pedagogy_readability.outputSemanticSha256,
-            finalArticleSha256: output.value.finalArticleSha256
+            finalArticleSha256: output.value.finalArticleSha256,
+            runtimeMode: 'shadow'
         });
+    } else if (state.executionScope === 'production') {
+        if (output.path !== path.resolve(task.artifactRoot, 'outputs', 'author.json')
+            || receiptFile.path !== path.resolve(task.artifactRoot, 'receipts', 'author.json')) {
+            throw new Error('production author output/receipt 必须写入受控固定路径');
+        }
+        validateProductionAuthorOutput(
+            output.value, receiptFile.value, task, paperId, output.semanticSha256
+        );
     } else {
         if (output.value?.version !== 1 || output.value.role !== 'author'
             || normalizedId(output.value.paperId) !== paperId || output.value.taskName !== task.taskName
             || output.value.passed !== true || !SHA_RE.test(String(output.value.articleSha256 || ''))
             || receiptFile.value.articleSha256 !== output.value.articleSha256) {
-            throw new Error('author output/receipt 未绑定单篇成稿 SHA');
+            throw new Error('shadow author output/receipt 未绑定单篇成稿 SHA');
         }
     }
     task.status = 'submitted';
@@ -534,7 +756,7 @@ function abandonTask(state, claimId, reason) {
     return refreshReadiness(state);
 }
 
-function stateSummary(state) {
+function stateSummary(state, options = {}) {
     refreshReadiness(state);
     const tasks = [];
     for (const paperId of state.expectedPaperIds) for (const role of ROLES) {
@@ -542,11 +764,54 @@ function stateSummary(state) {
         tasks.push({ paperId, role, status: task.status, claimId: task.claimId,
             taskName: task.taskName, packetPath: task.packetPath, inputKey: task.inputKey, error: task.error });
     }
+    const executionScope = options.executionScope || state.executionScope;
+    const allTasksValidated = tasks.length > 0 && tasks.every(item => item.status === 'validated');
+    const awaitingPackets = tasks.filter(item => item.status === 'awaiting_packet').length;
+    const recordsEnvelope = options.recordsEnvelope || {
+        status: 'awaiting_records_envelope', path: null, fileSha256: null
+    };
     return {
         version: state.version, mode: state.mode, date: state.date, activeLimit: ACTIVE_LIMIT,
+        executionScope,
+        workflow: executionScope === 'shadow' ? 'manual-v6-shadow' : 'manual-v6-production',
+        recordsContract: 'manual_analysis_records_v4',
+        specContract: 'manual_analysis_spec_v6',
+        allTasksValidated,
+        packetPreparationStatus: awaitingPackets > 0 ? 'awaiting_packet' : 'packets_registered',
+        recordsEnvelope,
         active: activeCount(state), counts: Object.fromEntries([...new Set(tasks.map(item => item.status))]
             .map(status => [status, tasks.filter(item => item.status === status).length])),
-        pendingTasks: tasks.filter(item => item.status === 'pending'), tasks
+        pendingTasks: tasks.filter(item => item.status === 'pending'),
+        orchestrationBoundary: {
+            createsSubagents: false,
+            claimOnly: true,
+            requiredModel: 'gpt-5.6-terra',
+            requiredReasoningEffort: 'high',
+            nextAction: awaitingPackets > 0
+                ? 'main Agent must materialize and register exact per-role packets'
+                : (!allTasksValidated
+                    ? 'main Agent must claim and create each real single-paper subagent'
+                    : (recordsEnvelope.status === 'awaiting_records_envelope'
+                        ? 'main Agent must assemble the real records-v4.json envelope'
+                        : 'run manual:spec; the official assembler must fully validate records-v4.json'))
+        },
+        tasks
+    };
+}
+
+function recordsEnvelopeStatus(workflowRoot, date) {
+    const filePath = path.join(path.resolve(workflowRoot), assertDate(date), 'records-v4.json');
+    const stat = fs.lstatSync(filePath, { throwIfNoEntry: false });
+    if (!stat) return { status: 'awaiting_records_envelope', path: filePath, fileSha256: null };
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+        throw new Error('records-v4.json 必须是真实普通文件且不得为 symlink');
+    }
+    const bytes = fs.readFileSync(filePath);
+    return {
+        status: 'present_pending_spec_validation',
+        path: fs.realpathSync(filePath),
+        bytes: bytes.length,
+        fileSha256: sha256Bytes(bytes)
     };
 }
 
@@ -561,7 +826,7 @@ function updateState(paths, callback, options = {}) {
         if (state) {
             state.generation = (current?.generation || 0) + 1;
             state.updatedAt = getBeijingISOString();
-            verifyBoundInputs(state);
+            verifyBoundInputs(state, options.verifyOptions || {});
             writeFileAtomic(paths.statePath, `${JSON.stringify(state, null, 2)}\n`);
         }
         return result;
@@ -569,13 +834,19 @@ function updateState(paths, callback, options = {}) {
 }
 
 function parseArgs(argv) {
-    const options = { command: argv[0], limit: ACTIVE_LIMIT };
+    const options = { command: argv[0], limit: ACTIVE_LIMIT, shadow: false };
     const seen = new Set();
     if (!['init', 'register', 'claim', 'start', 'submit', 'fail', 'retry', 'abandon', 'status'].includes(options.command)) {
         throw new Error('command 必须是 init/register/claim/start/submit/fail/retry/abandon/status');
     }
     for (let i = 1; i < argv.length; i++) {
-        const arg = argv[i]; const value = argv[++i];
+        const arg = argv[i];
+        if (arg === '--shadow') {
+            if (options.shadow) throw new Error('参数重复: --shadow');
+            options.shadow = true;
+            continue;
+        }
+        const value = argv[++i];
         if (!value || value.startsWith('--')) throw new Error(`${arg} 缺少值`);
         const key = ({ '--date': 'date', '--papers': 'papersPath', '--paper': 'paperId', '--role': 'role',
             '--artifact-root': 'artifactRoot', '--packet': 'packetPath', '--limit': 'limit',
@@ -598,7 +869,16 @@ function parseArgs(argv) {
 }
 
 function run(argv = process.argv.slice(2), overrides = {}) {
-    const args = parseArgs(argv); const paths = runnerPaths(args.date, overrides.shadowRoot);
+    const args = parseArgs(argv);
+    const executionScope = args.shadow ? 'shadow' : 'production';
+    const workflowRoot = args.shadow
+        ? (overrides.shadowRoot || Config.FILES.manualV6ShadowDir)
+        : (overrides.productionRoot || Config.FILES.manualV6Dir);
+    const paths = runnerPaths(args.date, workflowRoot);
+    const summaryOptions = {
+        executionScope,
+        recordsEnvelope: recordsEnvelopeStatus(workflowRoot, args.date)
+    };
     let result;
     if (args.command === 'init') {
         const papersPath = path.resolve(args.papersPath || Config.FILES.filteredPapers);
@@ -615,17 +895,20 @@ function run(argv = process.argv.slice(2), overrides = {}) {
         };
         result = updateState(paths, current => {
             if (current) { verifyBoundInputs(current); return current; }
-            return initializeState(args.date, ids, getBeijingISOString(), binding);
+            return initializeState(args.date, ids, getBeijingISOString(), binding, executionScope);
         });
     } else if (args.command === 'status') {
         result = withFileLockSync(paths.statePath, () => {
             const state = verifyBoundInputs(JSON.parse(fs.readFileSync(paths.statePath, 'utf8')));
-            return stateSummary(state);
+            return stateSummary(state, summaryOptions);
         }, { timeoutMs: 0 });
     } else {
+        const verifyOptions = args.command === 'register' ? {
+            ignoredPacket: { paperId: normalizedId(args.paperId), role: args.role }
+        } : {};
         result = updateState(paths, state => {
             if (!state) throw new Error('task runner 尚未 init');
-            verifyBoundInputs(state);
+            verifyBoundInputs(state, verifyOptions);
             if (args.command === 'register') {
                 return registerPacket(state, { ...args, controlledTaskRoot: paths.taskRoot });
             }
@@ -636,12 +919,18 @@ function run(argv = process.argv.slice(2), overrides = {}) {
             if (args.command === 'retry') return retryTask(state, args.paperId, args.role);
             if (args.command === 'abandon') return abandonTask(state, args.claimId, args.reason);
             return state;
-        });
+        }, { verifyOptions });
     }
     const printable = result?.state
         ? { ...result, state: undefined }
-        : (result?.mode === MODE ? stateSummary(result) : result);
-    console.log(JSON.stringify(printable, null, 2));
+        : (args.command === 'status'
+            ? result
+            : (result?.mode === MODE ? stateSummary(result, summaryOptions) : result));
+    console.log(JSON.stringify({
+        executionScope,
+        workflowRoot: path.resolve(workflowRoot),
+        ...printable
+    }, null, 2));
     return result;
 }
 
@@ -651,7 +940,10 @@ if (require.main === module) {
 
 module.exports = {
     STATE_VERSION, MODE, ROLES, DEPENDENCIES, DOWNSTREAM, ACTIVE_LIMIT,
+    AUTHOR_OUTPUT_CONTRACT, REVISION_OUTPUT_CONTRACT,
     runnerPaths, initializeState, validateState, dependencyInputKey, invalidateFrom,
     refreshReadiness, registerPacket, activeCount, claimTasks, startTask, submitTask,
-    failTask, retryTask, abandonTask, verifyBoundInputs, stateSummary, parseArgs, run
+    failTask, retryTask, abandonTask, verifyBoundInputs, stateSummary, recordsEnvelopeStatus,
+    validateProductionAuthorOutput, validateProductionRevisionOutput,
+    parseArgs, run
 };

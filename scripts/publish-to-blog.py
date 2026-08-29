@@ -49,6 +49,7 @@ from path_config import (
     PROJECT_ROOT,
     ARCHIVE_DIR,
     CURRENT_DIR,
+    DEEP_ANALYSIS_RESULT_FILE,
     resolve_deep_analysis_result_path,
     DIGEST_COVER_ASSET_DIR,
     DIGEST_COVER_MANIFEST_DIR,
@@ -111,6 +112,10 @@ PUBLISH_IMAGE_EXCLUSIONS_PATH = PROJECT_ROOT / 'config' / 'publish-image-exclusi
 PUBLISH_IMAGE_EXCLUSIONS_FIELD = 'publishImageExclusions'
 PUBLISH_IMAGE_VIEW_FIELD = 'publishImageExclusionView'
 PUBLISHED_PAPERS_FINGERPRINT_CONTRACT = 'typed-json-f64-utf16-v1'
+MANUAL_V6_PRODUCTION_MODE = 'manual_v6_production'
+MANUAL_V6_PRODUCTION_CONTRACT = 'manual-v6-production-publication-v1'
+LEGACY_V5_MAINTENANCE_MODE = 'legacy_v5_maintenance'
+SEALED_TUTORIAL_PREVIEW_MODE = 'sealed_tutorial_preview'
 MANUAL_REVIEW_MODE = 'manual_complete'
 FINAL_PAGE_ARTIFACT_VERSION = 1
 MANUAL_REVIEW_SUBAGENT_MODEL = 'gpt-5.6-terra'
@@ -2504,6 +2509,7 @@ def generate_paper_page(paper, date_str, category='论文速递'):
     if v6_payload:
         provenance = v6_payload['provenance']
         v6_marker = (
+            'paper_digest_v6_runtime_mode: "production"\n'
             f'paper_digest_reader_longform: "{MANUAL_LONGFORM_CONTRACT_VERSION_V2}"\n'
             f'paper_digest_reader_longform_sha256: "{provenance["readerLongformSha256"]}"\n'
             f'paper_digest_reader_article_sha256: "{v6_payload["articleSha256"]}"\n'
@@ -3447,7 +3453,7 @@ def build_final_page_artifact(path, paper=None):
 
 def validate_staged_posts(
     staged_posts_dir, date_str, date_only=False, artifact_cache=None,
-    publish_paths=None,
+    publish_paths=None, authoritative_papers=None,
 ):
     """Deterministically validate YAML and generated Markdown structure."""
     date_str = validate_publish_date(date_str)
@@ -3465,7 +3471,8 @@ def validate_staged_posts(
     for path in files:
         if path.name != f'{date_str}.md' and not path.name.startswith(f'{date_str}-'):
             raise PublishDataValidationError(f'发布文件名不属于本次日期: {path.name}')
-        artifact = build_final_page_artifact(path)
+        paper = (authoritative_papers or {}).get(path.name)
+        artifact = build_final_page_artifact(path, paper)
         frontmatter = artifact['frontmatter']
         body = artifact['body']
         for field in ('title', 'date', 'draft', 'tags', 'categories', 'description'):
@@ -4341,6 +4348,7 @@ def manual_v6_publication_bindings(published_papers):
         bindings.append({
             'paperId': payload['paperId'],
             'manualDepth': MANUAL_DEPTH_CONTRACT_VERSION_V6,
+            'runtimeMode': provenance['runtimeMode'],
             'specVersion': provenance['specVersion'],
             'specRootSha256': provenance['specRootSha256'],
             'paperSpecSha256': provenance['paperSpecSha256'],
@@ -4355,6 +4363,55 @@ def manual_v6_publication_bindings(published_papers):
             'readerArticleSha256': payload['articleSha256'],
         })
     return sorted(bindings, key=lambda item: item['paperId'])
+
+
+def manual_v6_production_proof(published_papers):
+    """Build the batch proof required by every production-v6 generation.
+
+    ``specRootSha256`` is the official spec-v6 Merkle root.  Per-paper
+    bindings retain the exact paper shard, sealed records-v4 envelope,
+    ArtifactIndex, task evidence and reader-longform identities.
+    """
+    if not isinstance(published_papers, list) or not published_papers:
+        raise PublishDataValidationError('production v6 发布批次不能为空')
+    bindings = manual_v6_publication_bindings(published_papers)
+    if len(bindings) != len(published_papers):
+        raise PublishDataValidationError(
+            '默认发布只接受全量 Manual v6 canonical；legacy v5 必须显式使用 maintenance 开关'
+        )
+    roots = {item['specRootSha256'] for item in bindings}
+    if len(roots) != 1:
+        raise PublishDataValidationError('production v6 论文未绑定同一个 spec v6 Merkle root')
+    paper_ids = [item['paperId'] for item in bindings]
+    if len(set(paper_ids)) != len(paper_ids):
+        raise PublishDataValidationError('production v6 论文 ID 重复')
+    return {
+        'contract': MANUAL_V6_PRODUCTION_CONTRACT,
+        'manualDepth': MANUAL_DEPTH_CONTRACT_VERSION_V6,
+        'runtimeMode': 'production',
+        'specVersion': 6,
+        'recordsVersion': 4,
+        'readerLongformContract': MANUAL_LONGFORM_CONTRACT_VERSION_V2,
+        'specMerkleRootSha256': next(iter(roots)),
+        'paperCount': len(bindings),
+        'paperIds': paper_ids,
+        'bindingsFingerprint': _stable_json_sha256(bindings),
+    }
+
+
+def validate_generation_publication_mode(papers, publication_mode):
+    """Fail closed on an implicit v5 fallback or a mixed v5/v6 generation."""
+    if publication_mode == MANUAL_V6_PRODUCTION_MODE:
+        return manual_v6_production_proof(papers)
+    if publication_mode == LEGACY_V5_MAINTENANCE_MODE:
+        if manual_v6_publication_bindings(papers):
+            raise PublishDataValidationError(
+                'legacy v5 maintenance 输入不得混入或降级 Manual v6 canonical'
+            )
+        return None
+    if publication_mode == SEALED_TUTORIAL_PREVIEW_MODE:
+        return None
+    raise PublishDataValidationError(f'未知发布数据模式: {publication_mode!r}')
 
 
 def _single_publication_scope(include_id):
@@ -4485,14 +4542,48 @@ def _validate_generation_input_integrity(manifest, date_str):
     # Historical v5-only schema-v3 generations predate the explicit field.
     # They remain readable; a manifest containing any v6 paper never gets this
     # exception and must carry the complete explicit proof map.
-    if actual_v6 is None and not expected_v6:
-        return expected_input, expected_snapshot
-    if actual_v6 != expected_v6:
-        raise PublishDataValidationError('正式生成清单 Manual v6 显式 provenance 绑定不匹配')
-    expected_v6_fingerprint = _stable_json_sha256(expected_v6)
-    if manifest.get('manualV6BindingsFingerprint') != expected_v6_fingerprint:
-        raise PublishDataValidationError('正式生成清单 Manual v6 provenance 指纹不匹配')
+    historical_v5_without_bindings = actual_v6 is None and not expected_v6
+    if not historical_v5_without_bindings:
+        if actual_v6 != expected_v6:
+            raise PublishDataValidationError('正式生成清单 Manual v6 显式 provenance 绑定不匹配')
+        expected_v6_fingerprint = _stable_json_sha256(expected_v6)
+        if manifest.get('manualV6BindingsFingerprint') != expected_v6_fingerprint:
+            raise PublishDataValidationError('正式生成清单 Manual v6 provenance 指纹不匹配')
+    publication_mode = manifest.get('publicationMode')
+    production_proof = manifest.get('manualV6Production')
+    if publication_mode == MANUAL_V6_PRODUCTION_MODE:
+        expected_proof = manual_v6_production_proof(published_papers)
+        if production_proof != expected_proof:
+            raise PublishDataValidationError(
+                '正式 generation 未强绑定 spec v6/records v4/Merkle/longform provenance'
+            )
+        expected_proof_sha = _stable_json_sha256(expected_proof)
+        if manifest.get('manualV6ProductionFingerprint') != expected_proof_sha:
+            raise PublishDataValidationError('正式 generation production v6 证明指纹不匹配')
+    elif publication_mode == LEGACY_V5_MAINTENANCE_MODE:
+        if expected_v6 or production_proof is not None:
+            raise PublishDataValidationError('legacy v5 maintenance generation 混入 v6 证明')
+    elif publication_mode == SEALED_TUTORIAL_PREVIEW_MODE:
+        if scope is None or production_proof is not None:
+            raise PublishDataValidationError('sealed tutorial generation 模式或 v6 证明非法')
+    elif publication_mode is None and not expected_v6:
+        # Immutable schema-v3 history from before the production-mode field is
+        # readable only as legacy maintenance.  It can never enter visuals.
+        pass
+    else:
+        raise PublishDataValidationError('generation publicationMode 缺失或非法')
     return expected_input, expected_snapshot
+
+
+def _expected_post_publish_visuals(manifest, publication_scope_value=None):
+    if publication_scope_value is not None:
+        return 'not_applicable_single_paper'
+    if (
+        manifest.get('schemaVersion') == 3
+        and manifest.get('publicationMode') == MANUAL_V6_PRODUCTION_MODE
+    ):
+        return 'required'
+    return 'not_applicable_legacy_maintenance'
 
 
 def generation_template_fingerprint():
@@ -4861,6 +4952,7 @@ def save_generation_manifest(
     date_str, publish_paths, *, input_fingerprint=None,
     template_fingerprint=None, base_head=None, category='论文速递',
     published_papers=None, publish_all=False, include_id=None,
+    publication_mode=None,
 ):
     """Save the exact generated/removed path list for the separate review step."""
     _require_active_publication_request(include_id)
@@ -4920,6 +5012,15 @@ def save_generation_manifest(
             raise PublishDataValidationError(
                 '拒绝保存无法从 publishedPapers 反向重算的 inputFingerprint'
             )
+        if publication_mode is None:
+            publication_mode = (
+                MANUAL_V6_PRODUCTION_MODE
+                if len(manual_v6_publication_bindings(published_papers)) == len(published_papers)
+                else LEGACY_V5_MAINTENANCE_MODE
+            )
+        production_proof = validate_generation_publication_mode(
+            published_papers, publication_mode,
+        )
         manifest.update({
             'inputFingerprint': input_fingerprint,
             'templateFingerprint': template_fingerprint,
@@ -4929,6 +5030,7 @@ def save_generation_manifest(
             'publishedPapersFingerprintContract': PUBLISHED_PAPERS_FINGERPRINT_CONTRACT,
             'publishedPapersFingerprint': published_papers_fingerprint(published_papers),
             'manualV6Bindings': manual_v6_publication_bindings(published_papers),
+            'publicationMode': publication_mode,
         })
         publication_scope_value = _single_publication_scope(include_id)
         if publication_scope_value is not None:
@@ -4944,6 +5046,12 @@ def save_generation_manifest(
         manifest['manualV6BindingsFingerprint'] = _stable_json_sha256(
             manifest['manualV6Bindings']
         )
+        if production_proof is not None:
+            manifest['manualV6Production'] = production_proof
+            manifest['manualV6ProductionFingerprint'] = _stable_json_sha256(
+                production_proof
+            )
+        _validate_generation_input_integrity(manifest, validated_date)
     path = generation_manifest_path(date_str)
     atomic_write_json(path, manifest, ensure_ascii=False, indent=2)
     # A new generation invalidates only batch-level evidence. Exact per-file
@@ -5004,6 +5112,13 @@ def preflight_post_publish_visual_capability(date_str, *, require_visual_plan=Fa
                     '单篇灰度发布不建立批次 TOP 10/汇总图任务；不得使用 --require-visual-plan'
                 )
             print('🎯 单篇灰度发布：发布后批次视觉任务明确标记为不适用')
+            return False
+        if manifest.get('publicationMode') != MANUAL_V6_PRODUCTION_MODE:
+            if require_visual_plan:
+                raise PublishDataValidationError(
+                    '发布后视觉只接受 production v6 generation；legacy v5 maintenance 不适用'
+                )
+            print('🧰 legacy v5 maintenance 发布：发布后视觉任务明确标记为不适用')
             return False
         return True
     if require_visual_plan:
@@ -5417,7 +5532,10 @@ def reusable_verified_publication_generation(
             or receipt.get('date') != date_str
             or receipt.get('strictReview') is not True
             or receipt.get('hugoGate') != 'hugo'
-            or receipt.get('postPublishVisuals') != 'required'
+            or receipt.get('postPublishVisuals')
+            != _expected_post_publish_visuals(
+                manifest, _validate_publication_scope(manifest)
+            )
             or not re.fullmatch(r'[0-9a-f]{40,64}', publication_commit)
             or remote_oid != publication_commit
             or verified_time.utcoffset() != datetime.timedelta(hours=8)
@@ -5624,9 +5742,9 @@ def save_review_receipt(
     else:
         generation_input_fingerprint_value = None
         published_snapshot_fingerprint = None
-    post_publish_visuals = (
-        'not_applicable_single_paper' if publication_scope_value is not None
-        else ('required' if generation_schema == 3 else 'not_applicable_legacy_maintenance')
+    publication_mode = generation_payload.get('publicationMode')
+    post_publish_visuals = _expected_post_publish_visuals(
+        generation_payload, publication_scope_value,
     )
     receipt = {
         'schemaVersion': 3,
@@ -5655,6 +5773,10 @@ def save_review_receipt(
         # cryptographic source of truth; this field makes maintenance intent
         # visible to push/status tooling.
         'postPublishVisuals': post_publish_visuals,
+        'publicationMode': publication_mode,
+        'manualV6ProductionFingerprint': generation_payload.get(
+            'manualV6ProductionFingerprint'
+        ),
         'publicationScope': publication_scope_value,
         'files': files,
     }
@@ -6179,12 +6301,14 @@ def load_verified_review_receipt(date_str):
         != generation_manifest.get('publishedPapersFingerprint')
     ):
         raise PublishDataValidationError('审查凭证未绑定已反向验证的 generation 输入快照')
-    expected_visual_capability = (
-        'not_applicable_single_paper' if publication_scope_value is not None
-        else (
-            'required' if generation_manifest.get('schemaVersion') == 3
-            else 'not_applicable_legacy_maintenance'
-        )
+    if (
+        receipt.get('publicationMode') != generation_manifest.get('publicationMode')
+        or receipt.get('manualV6ProductionFingerprint')
+        != generation_manifest.get('manualV6ProductionFingerprint')
+    ):
+        raise PublishDataValidationError('审查凭证未绑定 generation production v6 模式/证明')
+    expected_visual_capability = _expected_post_publish_visuals(
+        generation_manifest, publication_scope_value,
     )
     receipt_visual_capability = receipt.get('postPublishVisuals')
     if (
@@ -6324,6 +6448,8 @@ def parse_generation_args(argv=None):
     parser.add_argument('--include-id', action='append', default=[], metavar='ARXIV_ID')
     parser.add_argument('--sealed-tutorial-preview', action='count', default=0,
                         help='仅将受控单篇 tutorial preview 的 post.md 原字节发布')
+    parser.add_argument('--legacy-v5-maintenance', action='count', default=0,
+                        help='显式只读旧 v5 canonical 维护入口；禁止成为默认日更输入')
     parser.add_argument('--all', action='count', default=0)
     parser.add_argument('--skip-push', action='count', default=0,
                         help='兼容旧调用；生成入口本身从不 push')
@@ -6340,6 +6466,8 @@ def parse_generation_args(argv=None):
         parser.error('--skip-push 只能指定一次')
     if args.sealed_tutorial_preview > 1:
         parser.error('--sealed-tutorial-preview 只能指定一次')
+    if args.legacy_v5_maintenance > 1:
+        parser.error('--legacy-v5-maintenance 只能指定一次')
     if args.push:
         parser.error('生成、review 和推送已分离；请依次使用 generate-blog.py、review-blog.py、push-blog.py')
     if len(args.include_id) > 1:
@@ -6350,6 +6478,8 @@ def parse_generation_args(argv=None):
         parser.error('--sealed-tutorial-preview 必须与 --include-id 一起使用')
     if args.sealed_tutorial_preview and (args.data_file or args.exclude_id or args.all):
         parser.error('--sealed-tutorial-preview 禁止 data_file、--exclude-id 或 --all')
+    if args.sealed_tutorial_preview and args.legacy_v5_maintenance:
+        parser.error('--sealed-tutorial-preview 与 --legacy-v5-maintenance 互斥')
     return {
         'data_file': args.data_file,
         'target_date': args.date[0] if args.date else None,
@@ -6358,13 +6488,21 @@ def parse_generation_args(argv=None):
         'excluded_ids': list(args.exclude_id),
         'include_id': args.include_id[0] if args.include_id else None,
         'sealed_tutorial_preview': bool(args.sealed_tutorial_preview),
+        'legacy_v5_maintenance': bool(args.legacy_v5_maintenance),
     }
 
 
-def select_generation_data_file(data_file, target_date, publish_all=False):
-    """Resolve the default generation input without confusing current and archived batches."""
-    if data_file is not None or publish_all or not target_date:
+def select_generation_data_file(
+        data_file, target_date, publish_all=False, legacy_v5_maintenance=False):
+    """Resolve production v6 by default; archive fallback is legacy-only."""
+    if data_file is not None:
         return data_file
+    if not legacy_v5_maintenance:
+        # Production v6 is promoted into the one standard canonical.  Never
+        # infer a production input from a stale archive or data/ legacy file.
+        return str(DEEP_ANALYSIS_RESULT_FILE)
+    if publish_all or not target_date:
+        return str(resolve_deep_analysis_result_path())
     current = Path(resolve_deep_analysis_result_path())
     if current.is_file():
         try:
@@ -6416,6 +6554,7 @@ def generate_main(options=None):
     excluded_ids = options['excluded_ids']
     include_id = options.get('include_id')
     sealed_tutorial_preview = bool(options.get('sealed_tutorial_preview'))
+    legacy_v5_maintenance = bool(options.get('legacy_v5_maintenance'))
 
     try:
         blog_repo, content_dir = validate_publish_target()
@@ -6426,6 +6565,7 @@ def generate_main(options=None):
     print(f"📅 博客日期: {today}")
     sealed_preview = None
     if sealed_tutorial_preview:
+        publication_mode = SEALED_TUTORIAL_PREVIEW_MODE
         normalized_include = normalize_publish_arxiv_id(include_id)
         try:
             sealed_preview = load_sealed_tutorial_preview(today, normalized_include)
@@ -6439,7 +6579,13 @@ def generate_main(options=None):
             '原字节发布，不读取 canonical、不 sanitize、不生成汇总页'
         )
     else:
-        data_file = select_generation_data_file(data_file, today, publish_all)
+        publication_mode = (
+            LEGACY_V5_MAINTENANCE_MODE
+            if legacy_v5_maintenance else MANUAL_V6_PRODUCTION_MODE
+        )
+        data_file = select_generation_data_file(
+            data_file, today, publish_all, legacy_v5_maintenance,
+        )
         papers = load_papers(data_file)
         # 优先使用抓取器写入的不可变 fetchBatchDate，旧数据才回退严格北京 fetchedAt。
         if not publish_all:
@@ -6488,6 +6634,7 @@ def generate_main(options=None):
             papers = validate_papers_for_publish(
                 papers, validate_manual_provenance=False,
             )
+            validate_generation_publication_mode(papers, publication_mode)
         except PublishDataValidationError as exc:
             print(f"\n❌ 发布数据预检失败，未生成任何博客文件：\n{exc}")
             sys.exit(1)
@@ -6627,7 +6774,13 @@ def generate_main(options=None):
                 )
             print(f'♻️ 跳过已生成汇总页: {index_file.name}')
 
-        validate_staged_posts(staged_posts, today)
+        authoritative_papers = {
+            record['filename']: paper
+            for paper, record in zip(papers, journal['papers'])
+        }
+        validate_staged_posts(
+            staged_posts, today, authoritative_papers=authoritative_papers,
+        )
         prepare_generation_installation(
             journal, journal_path, staged_posts, content_dir, today,
             staged_assets=staged_assets,
@@ -6653,6 +6806,7 @@ def generate_main(options=None):
         published_papers=papers,
         publish_all=publish_all,
         include_id=normalized_include,
+        publication_mode=publication_mode,
     )
     generation_journal_path(today).unlink(missing_ok=True)
     shutil.rmtree(generation_stage_path(today).parent, ignore_errors=True)

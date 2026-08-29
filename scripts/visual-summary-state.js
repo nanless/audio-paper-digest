@@ -40,6 +40,8 @@ const MIN_ASSET_HEIGHT = 1024;
 const MIN_PORTRAIT_RATIO = 1.25;
 const MAX_REFERENCE_IMAGES = 2;
 const PUBLISHED_PAPERS_FINGERPRINT_CONTRACT = 'typed-json-f64-utf16-v1';
+const MANUAL_V6_PRODUCTION_MODE = 'manual_v6_production';
+const MANUAL_V6_PRODUCTION_CONTRACT = 'manual-v6-production-publication-v1';
 const REFERENCE_MIME_EXTENSIONS = Object.freeze({
     'image/png': '.png',
     'image/jpeg': '.jpg',
@@ -128,6 +130,53 @@ function stableJson(value) {
 
 function stableSha256(value) {
     return sha256Buffer(Buffer.from(JSON.stringify(stableJson(value)), 'utf8'));
+}
+
+function assertManualV6ProductionGeneration(generation, publishedPapers) {
+    const proof = generation?.manualV6Production;
+    const bindings = generation?.manualV6Bindings;
+    if (generation?.publicationMode !== MANUAL_V6_PRODUCTION_MODE
+        || proof?.contract !== MANUAL_V6_PRODUCTION_CONTRACT
+        || proof?.manualDepth !== 'full-text-evidence-v6'
+        || proof?.runtimeMode !== 'production'
+        || proof?.specVersion !== 6 || proof?.recordsVersion !== 4
+        || proof?.readerLongformContract !== 'reader-longform-v2'
+        || !/^[a-f0-9]{64}$/.test(String(proof?.specMerkleRootSha256 || ''))
+        || !Array.isArray(bindings) || bindings.length !== publishedPapers.length
+        || proof?.paperCount !== bindings.length
+        || !Array.isArray(proof?.paperIds)) {
+        throw new Error('发布后视觉只接受强绑定 spec v6/records v4/Merkle/longform 的 production generation');
+    }
+    const ids = bindings.map(item => String(item?.paperId || ''));
+    const publishedIds = publishedPapers.map(normalizedId).sort();
+    if (ids.some(id => !id) || new Set(ids).size !== ids.length
+        || JSON.stringify(ids) !== JSON.stringify([...ids].sort())
+        || JSON.stringify(ids) !== JSON.stringify(publishedIds)
+        || JSON.stringify(proof.paperIds) !== JSON.stringify(ids)
+        || bindings.some(item => (
+            item?.manualDepth !== 'full-text-evidence-v6'
+            || item?.runtimeMode !== 'production'
+            || item?.specVersion !== 6
+            || item?.specRootSha256 !== proof.specMerkleRootSha256
+            || item?.readerLongformContract !== 'reader-longform-v2'
+            || !/^[a-f0-9]{64}$/.test(String(item?.paperSpecSha256 || ''))
+            || !/^[a-f0-9]{64}$/.test(String(item?.recordSemanticSha256 || ''))
+            || !/^[a-f0-9]{64}$/.test(String(item?.recordFileSha256 || ''))
+            || !/^[a-f0-9]{64}$/.test(String(item?.recordsEnvelopeFileSha256 || ''))
+            || !/^[a-f0-9]{64}$/.test(String(item?.taskEvidenceSha256 || ''))
+            || !/^[a-f0-9]{64}$/.test(String(item?.readerLongformSha256 || ''))
+            || !/^[a-f0-9]{64}$/.test(String(item?.readerArticleSha256 || ''))
+        ))) {
+        throw new Error('production v6 generation 的逐论文 provenance 不完整或集合不闭环');
+    }
+    const bindingsFingerprint = stableSha256(bindings);
+    const proofFingerprint = stableSha256(proof);
+    if (generation.manualV6BindingsFingerprint !== bindingsFingerprint
+        || proof.bindingsFingerprint !== bindingsFingerprint
+        || generation.manualV6ProductionFingerprint !== proofFingerprint) {
+        throw new Error('production v6 generation 的 provenance 指纹不匹配');
+    }
+    return { proof, proofFingerprint };
 }
 
 function portableFingerprintValue(value, label = 'publishedPapers') {
@@ -244,13 +293,21 @@ function assertPublishedBlogReceipt(targetDate, receiptPath = null) {
         || receipt.publishedPapersFingerprint !== snapshotFingerprint) {
         throw new Error('博客发布凭证未绑定可反向验证的已发布论文权威快照');
     }
+    const production = assertManualV6ProductionGeneration(generation, publishedPapers);
+    if (receipt.publicationMode !== MANUAL_V6_PRODUCTION_MODE
+        || receipt.manualV6ProductionFingerprint !== production.proofFingerprint
+        || receipt.postPublishVisuals !== 'required') {
+        throw new Error('博客发布凭证未绑定 production v6 generation，禁止建立视觉任务');
+    }
     return {
         path: resolved,
         generationPath,
         publicationCommit: receipt.publicationCommit.toLowerCase(),
         generationManifestSha256,
         category: generation.category,
-        publishedPapers
+        publishedPapers,
+        publicationMode: receipt.publicationMode,
+        manualV6ProductionFingerprint: production.proofFingerprint
     };
 }
 
@@ -1777,6 +1834,7 @@ module.exports = {
     validateDate,
     visualSummaryManifestPath,
     assertPublishedBlogReceipt,
+    assertManualV6ProductionGeneration,
     paperBatchDate,
     withManifestSummary,
     main

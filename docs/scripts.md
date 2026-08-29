@@ -8,7 +8,7 @@
 
 #### `run-daily-digest.sh`
 
-Codex 对“运行/进行某日论文速递”请求使用的默认脚本编排入口。日期参数必须是真实公历日期；从 `fetch` 开始时还必须等于北京时间当天，因为 `full-fetch.js` 自己绑定启动时的北京时间日期、并不接收历史日期参数。脚本随后启动博客 generate、review、push、发布后视觉规划和 `visual:prepare`。历史批次只能用 `--from generate|review|push|visual` 续跑已有数据，不能借该入口补抓历史日；generate 会先使用批次匹配的 current 分析，否则自动回退 `data/archive/<日期>/deep-analysis-result.json`。支持 `--from fetch|generate|review|push|visual`，便于 review 修正或瞬时失败后从对应阶段续跑，不重复已经成功的长耗时阶段。
+Codex 对“运行/进行某日论文速递”请求使用的默认 production Manual v6 编排入口。阶段为 `fetch|tasks|spec|analyze|generate|review|push|visual`：raw 后停在人工筛选边界，tasks 初始化 `manual-v6/<date>/task-runner/` 后停在真实 subagent 边界；主 Agent逐 role 调用 `manual:packet`、分派 Terra-high task，四角色 validated 后由 spec 阶段先调用 `manual:records` 确定性密封 `records-v4.json`，再组装 spec v6 并以 `runtimeMode=production` 写标准 canonical。runner 不创建 subagent、不物化 packet 或 records envelope。历史批次可从 tasks 及其后阶段续跑；显式 `--api` 不使用 tasks/spec/analyze。
 
 该脚本保持博客三阶段为独立进程，并在任一阶段非零退出时立即停止。它不调用任何图像 API；脚本成功后，Codex 仍必须使用内置 `image_gen` 生成、目检、登记 TOP 10 论文长图和汇总封面，再运行 `visual:status` 与 `cover:status`，两者均完成才算整轮论文速递完成。npm 入口：`npm run digest:prepare -- YYYY-MM-DD`。
 
@@ -224,7 +224,7 @@ HuggingFace Papers 抓取模块。
 **Round 1 — 主深度分析**
 - `analyzePaperDeep(paper)`：获取 arXiv HTML/PDF 全文；主分析默认最多使用 200K 字符，超长来源按开头、四分位、中部、尾部和任务关键词跨全文取样，而不是只截取前缀。随后预筛候选图片；双模型模式才串行下载候选图片并由副模型最终筛选高价值图片插入正文，单模型模式只保存候选图元数据；`allImageUrls` 保存候选图，`selectedImageUrls` / `imageUrls` 保存已选图
 - 加载 `prompts/deep-analysis.md`，替换占位符后调用 LLM
-- 自动 API 路线的 canonical 输出包含：文档类型、评分、机器摘要、标签、作者与机构、毒舌点评、核心摘要、方法概述和架构、核心创新点、实验结果、细节详述、评分理由、局限与问题、开源详情。这些固定章节是解析与审计契约；Manual v5 不把它们原样当作发布页面的中段栏目，而以经 SHA 验证的 `editorial.readerArticle` 覆盖。
+- 自动 API 路线的 canonical 固定章节仍是解析与审计契约；production Manual v6 发布使用 `reader-longform-v2`，records v4 内嵌的 legacy v5 `editorial.readerArticle` 仅作为基础质量子校验重放或历史只读兼容。
 - `parseAnalysis(analysis)`：将分析文本解析为结构化对象，归一化 `document_type` 并为新结果写入 `type-aware-v1` 版本。只有八个分项完整、唯一、分母正确且分值合法时才重算 `score` 并封顶为 10；其余情况返回 `scoreValidation` 错误并阻断保存/发布
 
 **Round 2 — 开源扫描（`scanOpensource`）**
@@ -403,16 +403,17 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
   - `categories: [论文速递]`
   - `description`：`主任务标签 | 评分/10`，无则回退到标题
   - `hiddenInHomeList: true`
-- Manual v5 正文：中文读者题目 → 英文原题/arXiv 链接 → 标签/评分 → 毒舌点评 → 核心摘要 → `readerArticle` 的论文特有“深度解读”小节 → 开源资源 → 元数据与文末逐维评分依据/证据 → 返回汇总页链接。canonical 固定章节继续作为事实、图片和评分审计输入，不应被直接拼成读者可见的“方法/创新/实验/细节/局限”模板。缺少有效 `readerArticle` 的历史记录才兼容旧版式。
+- Production Manual v6 正文：中文读者题目 → 英文原题/arXiv 链接 → 标签/评分 → 毒舌点评 → 核心摘要 → `reader-longform-v2` 的论文特有深度解读 → 开源资源 → 元数据与文末逐维评分依据/证据 → 返回汇总页链接。publisher 必须验证 spec v6、records v4、Merkle root、longform 与 `runtimeMode=production`；缺字段时 fail closed。v5 旧版式仅作历史读取兼容。
 
 **发布流程**：
 1. `generate-blog.py` 只生成并安装 `.md`，然后写入 `blog-generation-manifest-YYYY-MM-DD.json`；不调用 LLM，不提交、不推送。
 2. `review-blog.py` 只读取 generation manifest，对需要审查的文件执行代码、LLM 和多模态图片三层 review，并对完整批次执行确定性校验与 Hugo gate。每个通过项立即写入 `blog-review-passes-YYYY-MM-DD.json`，以博客仓库相对路径 + 实际读取 SHA-256 为永久复用键；失败状态写入 `blog-review-failure-YYYY-MM-DD.json`。代码、脚本、文档、模型、协议、generation manifest 或博客 `main` 基线变化不会清空未改页面的通过项，只会让新增、SHA 变化、瞬时失败或内容失败修复后的文件进入 review；通过后重新签发绑定当前清单、基线、协议和 Hugo gate 的 `blog-review-receipt-YYYY-MM-DD.json`，不执行 Git 发布。HTTP 重试优先服从 `Retry-After`，否则指数退避并加入短随机抖动；协议格式修复和完整协议重试使用更小预算。若推理模型将输出预算全部用于隐藏推理、未返回最终 JSON，客户端只追加纯 JSON 指令恢复一次，默认从 4000 最多增到 8000，不再盲目翻倍到 16000。
 - 若 LLM review 服务在整批审查期间不可用，可显式调用 `python3 scripts/manual-review-blog.py --date YYYY-MM-DD --attestation ATTESTATION.json` 进入 `manual_complete` 接管。当前 attestation v3 除批次检查外，必须为每个现存文件记录 path、SHA、批次内唯一且含页面标识的 notes，并绑定独立 `reviewSubagent`；每张正文图片还要按正文顺序提交 caption、邻文、移动端可读性和至少 2 条像素事实。审查同时确认题目元数据、连续技术叙事、事实、实验比较、复现、边界、评分和图片，并在 `readerArticle` 模式下核对其论文特有小节及图文邻接，不得按旧固定栏目误判。脚本仍执行确定性 review，重新绑定 generation `publishedPapers` 快照、generation manifest/baseHead/review protocol 及 Hugo gate；若确定性层修改任何页面则拒绝复用旧声明。receipt 的逐文件模式为 `manual_semantic`，push 会重新核验逐文件 provenance。attestation v2 只兼容历史 receipt；该模式不会把普通网络/配额错误自动降级为通过。
 - 当前新页面使用 attestation v3：每个页面必须由独立 review subagent 审读，并按正文顺序为每张图提交 caption、邻文、移动端可读性和至少 2 条像素事实；attestation v2 仅用于历史 receipt 兼容。
-- 默认 Manual 深度分析用 `npm run manual:spec -- --date YYYY-MM-DD --records RECORDS.json` 将逐论文 records v3 组装为 spec v5；每个 paper 记录必须来自独立隔离 subagent，并包含 researchBrief（新 record 的 `editorialPlan` v2 加 `editorial.readerArticle`，以论文特有小节替换发布页固定方法/创新/实验栏目）、显式 stageReviews、独立评分/可读性 review、跨实验组 claims 和逐图 inventory。每条 claim 的自然语言 `readerNarrative` 也必须同时落在 canonical 实验段和 readerArticle，不能只拼接表格字段。组装器与 ingestion 都重新验证 filtered、全文、records、source/input identity 和 imageInfos，并以 SHA 绑定发布正文；records v2/spec v4 仅作历史兼容。
+- 每个 role 分派前用 `npm run manual:packet -- --date YYYY-MM-DD --paper <ID> --role <ROLE>` 物化受控 exact allowlist，并按返回值 register。四角色全部 validated 后用 `npm run manual:records -- --date YYYY-MM-DD` 从 runner-bound output/receipt 确定性密封 record v4 和唯一 envelope；该 sealer 不生成正文。
+- 默认 Manual 深度分析随后用 `npm run manual:spec -- --date YYYY-MM-DD --records data/current/manual-v6/YYYY-MM-DD/records-v4.json` 组装 production spec v6。records v4 先重放其内嵌的 legacy v5 base payload 基础质量子校验，再逐文件绑定 author、technical_scoring、pedagogy_readability、author_revision 的 packet/output/receipt、ArtifactIndex 和来源身份；assembler 绑定完整论文集合与 Merkle root。
 - 逐论文理解、正文、评分、可读性复核和最终单页审查 leaf subagent 固定使用 `gpt-5.6-terra`、reasoning `high`；Sol 只做主线程编排与代码门禁。新 record 模板在 `paperSubagent` 中记录模型策略，并增加中心技术矛盾、递进读者问题、证据柱与论文特有小节计划，避免把证据字段机械拼成正文。
-- 随后使用 `npm run manual:analyze -- --date YYYY-MM-DD --spec SPEC.json`。命令不调用任何 LLM/API。当前 spec v5 写入 `full-text-evidence-v5`，并强制 researcher、表格、精确事实、逐图和 assembler provenance；spec v4/v3 保留历史语义。各兼容阶段写 `executionKind=manual_attestation`；任何一篇失败只保存 ingestion checkpoint，不能冒充成功 canonical。
+- 随后使用 `npm run manual:analyze -- --date YYYY-MM-DD --spec data/current/manual-v6/YYYY-MM-DD/spec.json`。命令不调用 LLM/API，以 `runtimeMode=production` 写标准 canonical。显式 `manual:v6:shadow:spec/analyze` 才使用 `manual-v6-shadow/<date>/`；`manual:v5:spec/analyze` 仅用于历史维护。
 - 完全离线抓取与筛选先运行 `node scripts/manual-fetch.js --date YYYY-MM-DD --raw`。该命令只访问 arXiv/HuggingFace，保存来源健康、逐来源内容 SHA 和候选指纹，不调用筛选模型；随后人工逐篇检查标题、摘要、类别和来源，提交 `{version:1,mode:"manual_offline",date,reviewer,decisions}` 规格并运行 `node scripts/manual-fetch.js --date YYYY-MM-DD --select SPEC.json`。脚本拒绝缺失、未知、重复或理由不足的 ID，为每篇绑定输入 SHA、审核人和 `manual-offline-v1` 协议指纹，只有完整覆盖才写入 `complete` 筛选四件套。
 3. `push-blog.py` 先验证审查凭证、当前 generation 模板指纹与工作树文件哈希，并在任何 Git 变更前执行视觉能力 preflight。标准日更 `--require-visual-plan` 只接受 schema v3；schema v1/v2 仅允许显式维护 push，receipt 记录 `postPublishVisuals=not_applicable_legacy_maintenance` 并跳过视觉。通过后再精确 stage → 中文详细 commit → `git push origin HEAD:main` → 验证远端 OID，并把 remote 名称与 push URL 的 SHA-256 身份写入凭证；该脚本不生成也不 review。
 4. GitHub Actions 自动构建并部署到 Pages。

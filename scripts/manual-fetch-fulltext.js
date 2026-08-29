@@ -264,13 +264,11 @@ async function fetchFullTextForInput(input, fetchFn = fetchArxivTextDetailed) {
 
 function isReusableStructuredSnapshotForCurrentParser(sourceEntry, structuredArtifacts) {
     if (sourceEntry?.source !== 'html') return true;
-    if (structuredArtifacts?.parserVersion === ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION) return true;
-    // v2 complete snapshots already proved the same table, formula,
-    // external/SVG-object and bibliography closure. v3 only adds evidence for
-    // inline <svg>; re-fetch old incomplete HTML without invalidating healthy
-    // papers in the same batch.
-    return structuredArtifacts?.parserVersion === 'arxiv-html-dom-v2'
-        && structuredArtifacts?.health?.status === 'complete';
+    // v4 changes the table candidate inventory as well as cell extraction:
+    // earlier "complete" snapshots could omit standalone semantic span
+    // tables. Do not bless an older parser merely because its own, narrower
+    // inventory closed.
+    return structuredArtifacts?.parserVersion === ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION;
 }
 
 async function runFullText(date = process.argv[2]) {

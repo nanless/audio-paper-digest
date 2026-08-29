@@ -11,9 +11,11 @@ const {
     buildTaskPacket,
     validateTaskPacket,
     validateAuthorRevisionArtifactLineage,
+    validateRevisionOutput,
     validateManualRecordV4,
     buildPaperSpecShard,
     buildBatchSpecV6,
+    resolveManualV6RuntimePaths,
     planWorkflowReuse
 } = require('../scripts/manual-v6-workflow.js');
 
@@ -35,6 +37,19 @@ function freshArtifacts() {
 }
 
 describe('Manual v6 workflow and Merkle spec', () => {
+    it('production 与 shadow runtime 使用互斥日期根，production canonical 指向 current', () => {
+        const current = path.join(os.tmpdir(), 'manual-v6-current');
+        const production = resolveManualV6RuntimePaths(current, '2026-08-28', 'production');
+        const shadow = resolveManualV6RuntimePaths(current, '2026-08-28', 'shadow');
+        assert.equal(production.specPath, path.join(current, 'manual-v6', '2026-08-28', 'spec.json'));
+        assert.equal(production.recordsEnvelopePath,
+            path.join(current, 'manual-v6', '2026-08-28', 'records-v4.json'));
+        assert.equal(production.canonicalPath, path.join(current, 'deep-analysis-result.json'));
+        assert.equal(shadow.canonicalPath,
+            path.join(current, 'manual-v6-shadow', '2026-08-28', 'deep-analysis-result.json'));
+        assert.throws(() => resolveManualV6RuntimePaths(current, '2026-08-28', 'auto'), /显式/);
+    });
+
     it('task packet 只允许单篇根内的内容寻址工件', () => {
         const packet = buildTaskPacket({
             role: 'technical_scoring', paperId: '2608.12345',
@@ -150,7 +165,7 @@ describe('Manual v6 workflow and Merkle spec', () => {
             assemblerProtocolSha256: A
         });
         const partial = buildBatchSpecV6({
-            date: '2026-08-28', filteredBatchSha256: B,
+            date: '2026-08-28', runtimeMode: 'shadow', filteredBatchSha256: B,
             expectedPaperIds: ['2608.12345', '2608.54321'], paperShards: [shard]
         });
         assert.equal(partial.status, 'running');
@@ -165,13 +180,18 @@ describe('Manual v6 workflow and Merkle spec', () => {
             assemblerProtocolSha256: A
         });
         const complete = buildBatchSpecV6({
-            date: '2026-08-28', filteredBatchSha256: B,
+            date: '2026-08-28', runtimeMode: 'production', filteredBatchSha256: B,
             expectedPaperIds: ['2608.54321', '2608.12345'], paperShards: [second, shard]
         });
         assert.equal(complete.status, 'complete');
         assert.match(complete.rootSha256, /^[a-f0-9]{64}$/);
+        const shadowComplete = buildBatchSpecV6({
+            date: '2026-08-28', runtimeMode: 'shadow', filteredBatchSha256: B,
+            expectedPaperIds: ['2608.54321', '2608.12345'], paperShards: [second, shard]
+        });
+        assert.notEqual(complete.rootSha256, shadowComplete.rootSha256);
         assert.throws(() => buildBatchSpecV6({
-            date: '2026-08-28', filteredBatchSha256: B,
+            date: '2026-08-28', runtimeMode: 'production', filteredBatchSha256: B,
             expectedPaperIds: ['2608.12345'], paperShards: [shard, shard]
         }), /重复论文/);
     });
@@ -186,7 +206,49 @@ describe('Manual v6 workflow and Merkle spec', () => {
         }), /recordFileSha256/);
     });
 
-    it('records v4 不能用长文和若干 SHA 绕开完整 v5 record 门禁', () => {
+    it('production revision output v2 重开最终正文与未封印 record payload', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v6-revision-output-'));
+        const draftDir = path.join(root, 'draft');
+        fs.mkdirSync(draftDir);
+        const article = '最终正文包含方法、实验比较和不能外推的证据边界。';
+        const articlePath = path.join(draftDir, 'final-article.md');
+        fs.writeFileSync(articlePath, article);
+        const payload = { version: 4, manualDepth: 'full-text-evidence-v6', paperId: '2608.12345' };
+        const payloadPath = path.join(draftDir, 'revision-record-payload.json');
+        fs.writeFileSync(payloadPath, JSON.stringify(payload));
+        const shaFile = filePath => crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+        const articleSha256 = crypto.createHash('sha256').update(article).digest('hex');
+        const output = {
+            version: 2, contract: 'manual-v6-author-revision-output-v2',
+            role: 'author_revision', paperId: '2608.12345', taskName: 'revision-2608.12345',
+            passed: true, technicalOutputSha256: A, readabilityOutputSha256: B,
+            finalArticleSha256: articleSha256,
+            finalArticle: { path: 'draft/final-article.md', fileSha256: shaFile(articlePath) },
+            recordPayload: {
+                path: 'draft/revision-record-payload.json', fileSha256: shaFile(payloadPath),
+                semanticSha256: require('../scripts/manual-v6-workflow.js').stableSha256(payload)
+            },
+            resolvedFindingSha256s: [C],
+            notes: ['根据技术审查重写方法信号路径并逐项核对组件职责。', '根据可读性审查重排实验比较并补充结论边界说明。']
+        };
+        const receipt = {
+            taskName: output.taskName, outputSha256: require('../scripts/manual-v6-workflow.js').stableSha256(output)
+        };
+        assert.doesNotThrow(() => validateRevisionOutput(output, '2608.12345', receipt, {
+            runtimeMode: 'production', artifactRoot: root,
+            technicalOutputSha256: A, readabilityOutputSha256: B,
+            finalArticleSha256: articleSha256
+        }));
+        fs.writeFileSync(articlePath, `${article}漂移`);
+        assert.throws(() => validateRevisionOutput(output, '2608.12345', receipt, {
+            runtimeMode: 'production', artifactRoot: root,
+            technicalOutputSha256: A, readabilityOutputSha256: B,
+            finalArticleSha256: articleSha256
+        }), /文件 SHA 不匹配/);
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    it('records v4 不能用长文和若干 SHA 绕开 records v3 基础子校验', () => {
         const hollow = {
             version: 4, manualDepth: 'full-text-evidence-v6', paperId: '2608.12345',
             sourceSnapshot: {

@@ -165,13 +165,14 @@ const FILES = {
     digestCoverManifestDir: path.join(CURRENT_DIR, 'digest-cover-manifests'),
     postPublishVisualWaiverDir: path.join(CURRENT_DIR, 'post-publish-visual-waivers'),
     digestRunReportDir: path.join(CURRENT_DIR, 'digest-run-reports'),
-    // Manual v6 remains an explicit shadow-only experiment. Reports,
-    // checkpoints and candidate records must stay under this isolated root.
+    // Formal Manual v6 workflow state, records/spec and observed metrics.
+    manualV6Dir: path.join(CURRENT_DIR, 'manual-v6'),
+    // Explicit compatibility/audit runs remain isolated from production.
     manualV6ShadowDir: path.join(CURRENT_DIR, 'manual-v6-shadow'),
     manualV6ShadowReportDir: path.join(CURRENT_DIR, 'manual-v6-shadow', 'reports'),
-    manualV6MetricsDir: path.join(CURRENT_DIR, 'manual-v6-shadow'),
-    // Default v5 remains canonical; this directory contains read-only queue
-    // observations and performance snapshots, never workflow state.
+    manualV6MetricsDir: path.join(CURRENT_DIR, 'manual-v6'),
+    manualV6ShadowMetricsDir: path.join(CURRENT_DIR, 'manual-v6-shadow'),
+    // Legacy v5 read-only queue observations and performance snapshots.
     manualV5ObservabilityDir: path.join(CURRENT_DIR, 'manual-v5-observability'),
     // One deny-by-default, single-paper author packet per date/paper.  These
     // files are orchestration inputs only and never canonical analysis state.

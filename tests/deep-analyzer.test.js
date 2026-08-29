@@ -66,22 +66,33 @@ describe('arXiv HTML full-text health gate', () => {
         assert.match(artifacts.payloadSha256, /^[a-f0-9]{64}$/);
     });
 
-    it('将 SVG object 作为可审计图资源保留，但不把算法或表格浮动体误记为图片', () => {
+    it('保留 SVG 与 DOM 原生 framed Figure，但不把算法、表格或缺失资产伪装成图片', () => {
         const { parseArxivStructuredArtifactsFromHtml } = require('../scripts/deep-analyzer.js');
         const html = `<article>
           <figure class="ltx_figure"><object type="image/svg+xml" data="figures/overview.svg"></object><figcaption><span class="ltx_tag_figure">Figure 1:</span> Overview.</figcaption></figure>
           <figure class="ltx_float ltx_float_algorithm"><figcaption><span class="ltx_tag_float">Algorithm 1</span> Procedure.</figcaption><div class="ltx_listing">step</div></figure>
           <figure><figcaption><span class="ltx_tag_table">Table 1:</span> Results.</figcaption><table><tr><td>1</td></tr></table></figure>
-          <figure class="ltx_figure"><figcaption><span class="ltx_tag_figure">Figure 2:</span> Missing source asset.</figcaption></figure>
+          <figure class="ltx_figure"><div class="ltx_framed"><p>Shared task instruction and prompt variants.</p></div><figcaption><span class="ltx_tag_figure">Figure 2:</span> Verbatim prompt suite.</figcaption></figure>
+          <figure class="ltx_figure"><figcaption><span class="ltx_tag_figure">Figure 3:</span> Missing source asset.</figcaption></figure>
         </article>`;
         const artifacts = parseArxivStructuredArtifactsFromHtml(html, '2608.12345v2', '2608.12345v2');
-        assert.strictEqual(artifacts.health.detected.figures, 2);
+        assert.strictEqual(artifacts.health.detected.figures, 3);
         assert.strictEqual(artifacts.figures[0].images[0].url, 'https://arxiv.org/html/2608.12345v2/figures/overview.svg');
         assert.strictEqual(artifacts.figures[0].images[0].mediaType, 'image/svg+xml');
         assert.strictEqual(artifacts.figures[0].images[0].rasterDownloadEligible, false);
         assert.strictEqual(artifacts.figures[0].recoveryStatus, 'complete');
-        assert.strictEqual(artifacts.figures[1].recoveryStatus, 'unrecovered');
-        assert.match(artifacts.health.issues.join('\n'), /可审计图像资源 URL/);
+        const inlineFigure = artifacts.figures[1].images[0];
+        assert.strictEqual(inlineFigure.kind, 'inline_html');
+        assert.strictEqual(inlineFigure.url, '');
+        assert.strictEqual(inlineFigure.mediaType, 'text/html');
+        assert.strictEqual(inlineFigure.rasterDownloadEligible, false);
+        assert.match(inlineFigure.inlineHtml, /^<figure[\s\S]*<\/figure>$/);
+        assert.strictEqual(Buffer.byteLength(inlineFigure.inlineHtml), inlineFigure.inlineHtmlBytes);
+        assert.match(inlineFigure.inlineHtmlSha256, /^[a-f0-9]{64}$/);
+        const { validateStructuredArtifacts } = require('../scripts/manual-artifact-index.js');
+        assert.doesNotThrow(() => validateStructuredArtifacts(artifacts));
+        assert.strictEqual(artifacts.figures[2].recoveryStatus, 'unrecovered');
+        assert.match(artifacts.health.issues.join('\n'), /可审计图像或 DOM 资源/);
     });
 
     it('将 arXiv 内联 SVG 的原始 DOM 字节封入受控证据，而不是伪造图片 URL', () => {
@@ -93,7 +104,7 @@ describe('arXiv HTML full-text health gate', () => {
         const artifacts = parseArxivStructuredArtifactsFromHtml(html, '2608.12345v1', '2608.12345v1');
         const resource = artifacts.figures[0].images[0];
         assert.strictEqual(artifacts.health.status, 'complete');
-        assert.strictEqual(artifacts.parserVersion, 'arxiv-html-dom-v3');
+        assert.strictEqual(artifacts.parserVersion, 'arxiv-html-dom-v4');
         assert.strictEqual(resource.kind, 'inline_svg');
         assert.strictEqual(resource.url, '');
         assert.match(resource.inlineSvg, /^<svg[\s\S]*<\/svg>$/);
@@ -124,6 +135,48 @@ describe('arXiv HTML full-text health gate', () => {
         const rejected = parseArxivStructuredArtifactsFromHtml(separatedByProse, '2608.26005v1', '2608.26005v1');
         assert.strictEqual(rejected.health.status, 'incomplete');
         assert.match(rejected.health.issues.join('\n'), /有表格容器但没有可解析 table DOM/);
+    });
+
+    it('从 LaTeXML semantic span tabular 直接恢复矩阵与跨度，不依赖扁平文本', () => {
+        const { parseArxivStructuredArtifactsFromHtml } = require('../scripts/deep-analyzer.js');
+        const html = `<article>
+          <figure class="ltx_table">
+            <figcaption><span class="ltx_tag_table">Table 1:</span> Scaled benchmark results.</figcaption>
+            <div class="ltx_transformed_outer"><span class="ltx_transformed_inner">
+              <span class="ltx_tabular">
+                <span class="ltx_tr">
+                  <span class="ltx_td" rowspan="2">Model</span>
+                  <span class="ltx_td" colspan="2">WER</span>
+                </span>
+                <span class="ltx_tr"><span class="ltx_td">clean</span><span class="ltx_td">other</span></span>
+                <span class="ltx_tr"><span class="ltx_td">System A</span><span class="ltx_td">2.1</span><span class="ltx_td">4.8</span></span>
+              </span>
+            </span></div>
+          </figure>
+        </article>`;
+        const artifacts = parseArxivStructuredArtifactsFromHtml(html, '2608.26431v1', '2608.26431v1');
+        assert.strictEqual(artifacts.health.status, 'complete');
+        assert.strictEqual(artifacts.health.detected.tables, 1);
+        assert.deepStrictEqual(artifacts.tables[0].matrix, [
+            ['Model', 'WER', 'WER'],
+            ['Model', 'clean', 'other'],
+            ['System A', '2.1', '4.8']
+        ]);
+        assert.ok(artifacts.tables[0].cells.some(cell => cell.rowspan === 2));
+        assert.ok(artifacts.tables[0].cells.some(cell => cell.colspan === 2));
+        assert.ok(artifacts.tables[0].cells.every(cell => /^[a-f0-9]{64}$/.test(cell.sourceDomSha256)));
+    });
+
+    it('把没有 figure wrapper 的 LaTeXML semantic tabular 纳入 inventory', () => {
+        const { parseArxivStructuredArtifactsFromHtml } = require('../scripts/deep-analyzer.js');
+        const html = `<article><div class="ltx_para"><span class="ltx_tabular">
+          <span class="ltx_tr"><span class="ltx_td">Metric</span><span class="ltx_td">Value</span></span>
+          <span class="ltx_tr"><span class="ltx_td">SI-SDR</span><span class="ltx_td">12.4</span></span>
+        </span></div></article>`;
+        const artifacts = parseArxivStructuredArtifactsFromHtml(html, '2608.00001v1', '2608.00001v1');
+        assert.strictEqual(artifacts.health.status, 'complete');
+        assert.strictEqual(artifacts.health.detected.tables, 1);
+        assert.deepStrictEqual(artifacts.tables[0].matrix, [['Metric', 'Value'], ['SI-SDR', '12.4']]);
     });
 });
 

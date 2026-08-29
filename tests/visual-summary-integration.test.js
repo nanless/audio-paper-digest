@@ -12,6 +12,9 @@ const {
     parseArgs
 } = require('../scripts/visual-summary-integration.js');
 const { publishedPapersFingerprint } = require('../scripts/visual-summary-state.js');
+const {
+    productionV6GenerationFields, productionV6ReceiptFields
+} = require('./production-v6-publication-fixture.js');
 
 function publishedPaper(id, score) {
     return validAnalysisPaper(id, {
@@ -39,7 +42,8 @@ function writePublication(currentDir, papers, commit = 'a'.repeat(40)) {
         publishedPapersFingerprint: snapshotFingerprint,
         visualSummaryRequired: false,
         digestCoverRequired: false,
-        publishedPapers: papers
+        publishedPapers: papers,
+        ...productionV6GenerationFields(papers)
     };
     const raw = Buffer.from(JSON.stringify(generation));
     fs.writeFileSync(path.join(currentDir, `blog-generation-manifest-${date}.json`), raw);
@@ -56,7 +60,8 @@ function writePublication(currentDir, papers, commit = 'a'.repeat(40)) {
         publishedPapersFingerprint: snapshotFingerprint,
         publicationCommit: commit,
         remoteVerifiedOid: commit,
-        remoteVerifiedAt: '2026-07-14T03:00:00+08:00'
+        remoteVerifiedAt: '2026-07-14T03:00:00+08:00',
+        ...productionV6ReceiptFields(generation)
     }));
     return receipt;
 }

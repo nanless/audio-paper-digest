@@ -451,10 +451,11 @@ function normalizeExperimentTableNumericFormatting(analysis) {
 
 function sourceExperimentEvidence(sourceText) {
     const source = String(sourceText || '');
-    const start = source.search(/(?:^|\n)\s*(?:\d+(?:\.\d+)*\s+)?(?:experiments?|experimental\s+(?:setup|results?)|evaluation|results?(?:\s+and\s+discussion)?)\s*(?:\n|$)/i);
+    const sectionNumber = '(?:(?:\\d+(?:\\.\\d+)*)|(?:[IVXLCDM]+))';
+    const start = source.search(new RegExp(`(?:^|\\n)\\s*(?:${sectionNumber}\\s+)?(?:experiments?|experimental\\s+(?:setup|results?)|evaluation|results?(?:\\s+and\\s+discussion)?)\\s*(?:\\n|$)`, 'i'));
     if (start < 0) return source.slice(0, 50000);
     const tail = source.slice(start, start + 60000);
-    const end = tail.search(/(?:^|\n)\s*(?:\d+(?:\.\d+)*\s+)?(?:conclusions?|limitations?|references?)\s*(?:\n|$)/i);
+    const end = tail.search(new RegExp(`(?:^|\\n)\\s*(?:${sectionNumber}\\s+)?(?:conclusions?|limitations?|references?)\\s*(?:\\n|$)`, 'i'));
     return end > 0 ? tail.slice(0, end) : tail;
 }
 
@@ -1129,7 +1130,13 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
                     ],
                     derivedFacts: takeover.researchBrief?.derivedFacts || [],
                     readerNarratives: (takeover.resultClaims || []).map(claim => claim.readerNarrative),
-                    imageInsertions: options.imageManifest?.insertionPlan || []
+                    imageInsertions: options.imageManifest?.insertionPlan || [],
+                    ...(options.readerLongform && options.artifactIndex ? {
+                        longformBundle: options.readerLongform,
+                        artifactIndex: options.artifactIndex,
+                        paperId: manifest?.sourceAcquisition?.sourceId,
+                        runtimeMode: options.runtimeMode
+                    } : {})
                 });
                 if (!/^[a-f0-9]{64}$/.test(String(takeover.readerArticleSha256 || ''))
                     || takeover.readerArticleSha256 !== manualTextSha256(takeover.readerArticle)) {
@@ -1576,6 +1583,7 @@ module.exports = {
     REQUIRED_MACHINE_SUMMARY_KEYS,
     getMissingRequiredSections,
     getDuplicateRequiredSections,
+    extractSection,
     hasRequiredSections,
     validateMachineSummaryContract,
     validateTagSectionContract,

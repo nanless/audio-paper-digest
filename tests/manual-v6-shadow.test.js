@@ -230,7 +230,7 @@ describe('Manual v6 shadow audit', () => {
         }), /realpath 逃逸/);
     });
 
-    it('参数和 package wiring 保持显式 shadow，不改默认链路', () => {
+    it('shadow 审计参数保持显式，默认 digest wiring 已切到 production v6', () => {
         assert.throws(() => assertDate('2026-02-30'), /非法日期/);
         assert.strictEqual(coverageStatus(0, 0).status, 'not_applicable');
         assert.strictEqual(coverageStatus(null, null).status, 'unknown');
@@ -240,7 +240,11 @@ describe('Manual v6 shadow audit', () => {
         const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json')));
         assert.strictEqual(pkg.scripts['manual:shadow'], 'node scripts/manual-v6-shadow.js');
         assert.strictEqual(pkg.scripts['manual:shadow:benchmark'], 'node scripts/manual-shadow-benchmark.js');
-        assert.match(fs.readFileSync(path.join(__dirname, '..', 'run-daily-digest.sh'), 'utf8'), /manual:spec\/manual:analyze/);
+        assert.strictEqual(pkg.scripts['manual:spec'], 'node scripts/create-manual-analysis-spec-v6.js --production');
+        assert.strictEqual(pkg.scripts['manual:v6:shadow:spec'], 'node scripts/create-manual-analysis-spec-v6.js --shadow');
+        const daily = fs.readFileSync(path.join(__dirname, '..', 'run-daily-digest.sh'), 'utf8');
+        assert.match(daily, /data\/current\/manual-v6\/\$\{target_date\}/);
+        assert.doesNotMatch(daily, /manual-v6-shadow\/\$\{target_date\}/);
     });
 });
 

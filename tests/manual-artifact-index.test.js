@@ -86,11 +86,11 @@ function fixture() {
 }
 
 describe('Manual ArtifactIndex v1', () => {
-    it('only refetches incomplete v2 HTML after the inline-SVG parser upgrade', () => {
+    it('v4 表格 inventory 升级后不复用任何旧 HTML parser 快照', () => {
         assert.equal(isReusableStructuredSnapshotForCurrentParser(
             { source: 'html' },
             { parserVersion: 'arxiv-html-dom-v2', health: { status: 'complete' } }
-        ), true);
+        ), false);
         assert.equal(isReusableStructuredSnapshotForCurrentParser(
             { source: 'html' },
             { parserVersion: 'arxiv-html-dom-v2', health: { status: 'incomplete' } }
@@ -98,6 +98,14 @@ describe('Manual ArtifactIndex v1', () => {
         assert.equal(isReusableStructuredSnapshotForCurrentParser(
             { source: 'html' },
             { parserVersion: 'arxiv-html-dom-v3', health: { status: 'incomplete' } }
+        ), false);
+        assert.equal(isReusableStructuredSnapshotForCurrentParser(
+            { source: 'html' },
+            { parserVersion: 'arxiv-html-dom-v3', health: { status: 'complete' } }
+        ), false);
+        assert.equal(isReusableStructuredSnapshotForCurrentParser(
+            { source: 'html' },
+            { parserVersion: 'arxiv-html-dom-v4', health: { status: 'incomplete' } }
         ), true);
         assert.equal(isReusableStructuredSnapshotForCurrentParser(
             { source: 'pdf' },
@@ -145,6 +153,38 @@ describe('Manual ArtifactIndex v1', () => {
         assert.ok(index.metrics.some(item => item.value === 'WER'));
         assert.ok(index.sourceSpans.length >= 8);
         assert.ok(index.sourceSpans.every(span => span.id && span.sha256));
+        assert.doesNotThrow(() => validateArtifactIndex(index, options));
+    });
+
+    it('projects a numbered DOM-native framed Figure as auditable non-raster evidence', () => {
+        const { input, text, sourceEntry } = fixture();
+        const html = `<article><figure class="ltx_figure">
+          <p><span class="ltx_framed"><span class="ltx_p">Shared task instruction and prompt variants.</span></span></p>
+          <figcaption><span class="ltx_tag_figure">Figure 4:</span> Verbatim prompt suite.</figcaption>
+        </figure></article>`;
+        const structuredArtifacts = bindStructuredArtifactsToText(
+            parseArxivStructuredArtifactsFromHtml(html, sourceEntry.sourceId, input.id),
+            text
+        );
+        const options = {
+            paperId: input.id,
+            sourceText: text,
+            sourceSha256: sourceEntry.sourceSha256,
+            sourceIdentitySha256: sourceEntry.sourceIdentitySha256,
+            paperInputSha256: input.paperInputSha256,
+            imageInfos: [],
+            sourceKind: sourceEntry.source,
+            sourceId: sourceEntry.sourceId,
+            structuredArtifacts
+        };
+        const index = buildArtifactIndex(options);
+        assert.equal(index.inventoryHealth.status, 'complete');
+        assert.equal(index.figures.length, 1);
+        assert.equal(index.figures[0].source, 'arxiv_html_dom_inline_figure');
+        assert.equal(index.figures[0].url, '');
+        assert.equal(index.figures[0].rasterDownloadEligible, false);
+        assert.match(index.figures[0].inlineHtmlSha256, /^[a-f0-9]{64}$/);
+        assert.ok(index.figures[0].inlineHtmlBytes > 0);
         assert.doesNotThrow(() => validateArtifactIndex(index, options));
     });
 

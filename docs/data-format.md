@@ -339,7 +339,7 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 - `analysisSource` 为 `html` / `pdf` / `provided_full_text` / `provided_pdf_text` / `abstract`；`sourceTextChars` 记录取得的原文长度，`usedTextChars` 记录主分析实际输入长度。超长来源会按全文位置和任务关键词确定性取样，因此 `usedTextChars` 不等同于简单前缀截断。字符数、截断状态、来源哈希和告警用于识别摘要降级及 checkpoint 证据变化。`abstract` 默认阻断发布，人工批准需设置 `allowAbstractAnalysisPublish: true`
 - `selectedImageUrls` / `imageUrls` 只保存通过稳定 `paragraph_id`、目标章节匹配和每篇默认 4 张上限门禁后实际插入正文的高价值图片，并按最终正文出现顺序保存；旧精确 anchor 仅用于兼容。`allImageUrls` 不能直接当作可发布图片使用
 - Manual v4 的 records envelope 为 v2、spec 为 v4，canonical `analysisManifest.contracts.manualDepth=full-text-evidence-v4`；它继承 v3 的论证、方法流、创新、实验、复现、评分和双层局限门禁，并强制 `experimentTables=evidence-rich-v2`、`editorialQuality=reader-facing-v1` 与上下文图片叙事。`manualTakeover` 还必须保存与全文原句闭环的 `resultClaims` 及 SHA、通过 12/14 无 0 分门槛的 `readabilityRubric` 及 SHA，`review.readerQualityVerified=true`。旧 spec v3 可读取但继续写 `full-text-evidence-v3` + `bounded-v1`，不会被 v4 追溯判坏。`manualTakeover.stageEvidence[*].executionKind` 与对应 stage 必须为 `manual_attestation`。
-- 当前新日更使用 Manual v5：records v3、spec v5、`manualDepth=full-text-evidence-v5`。每篇绑定 `researchBrief=audio-researcher-v1`、单论文隔离 subagent、显式 `stageReviews`、独立 scoring/readability reviewer、跨实验组 resultClaims、精确数量来源及逐图 select/reject/render plan。新 `researchBrief.editorialPlan.version=2` 要求 `readerTitle`、`oneSentenceThesis`、每个问题回答、证据柱及小节锚句都可在最终 canonical 定位；`editorial.readerArticle` 为 2400–24000 字、带同序论文特有 `###` 小节的发布正文，写入 `manualTakeover.readerArticle` 并以精确字节 SHA 绑定。发布器只在 hash 有效时按“中文题目、英文题目/arXiv 链接、标签/评分、毒舌点评、核心摘要、readerArticle、开源资源、文末评分证据”渲染；毒舌点评须由 `editorial.review` 对深度解读的优点与不足作证据约束的双向评价。每条 claim 的 `readerNarrative` 为 40–360 字的完整读者解释，必须同时落在 canonical 实验块和 readerArticle，且方法/基线 bindings 不能退化为数值或表格碎片。ingestion 重放 official assembler，canonical 与 Python 发布预检重新核对受控全文 manifest membership。records v2/spec v4 只作历史兼容。
+- 当前新日更使用 production Manual v6：`manual_analysis_records_v4` envelope 位于 `data/current/manual-v6/<date>/records-v4.json`，逐篇内嵌并重放 legacy v5 base payload 作为基础质量子校验，并绑定 complete ArtifactIndex、author/technical/readability/revision packet、output 和 receipt；`manual_analysis_spec_v6` 位于同日根的 `spec.json`，绑定完整论文集合、records envelope SHA 与 Merkle root。ingestion 要求 `runtimeMode=production` 并写标准 `data/current/deep-analysis-result.json`；publisher/视觉规划重验 spec v6、records v4、Merkle、`reader-longform-v2` 和 production generation，缺失时 fail closed。shadow 使用 `manual-v6-shadow/<date>/`；records v3/spec v5 只作显式历史兼容。
 - `generation` 每次锁内对象写入递增：写入者先取得跨进程锁、重读最新 canonical、合并后令版本加 1。它是提交后的版本记录，不是调用方携带 expected-generation 的锁外乐观 CAS。恢复终态还包括 `no_downloadable_images`：候选均为永久不可下载；`invalid_output` 表示有插图计划但无法落地，必须只重试插图阶段
 - `analysisManifest.stages.scoringAudit` 保存模型、温度、prompt 模板哈希、证据哈希、尝试次数、前后总分/差值、稳定性告警和最终八维 JSON；分数变化超过 0.5 会写 `stabilityWarning: true`。`imageManifest.supplement` 保存副模型、温度、prompt/响应哈希及逐项插入诊断
 - 新分析和重分析在结构修复通过后写入 `analysisManifest.contracts.experimentTables=evidence-rich-v2`：除旧上限外，至少需要标识列、3 行证据、2 个数字、指标方向、表前比较问题和表后差异/边界；来源明确包含消融或负面结果时必须覆盖。`npm run validate:data` 与 Python 发布预检执行同构校验；历史 `bounded-v1` 与无标记成功记录保持原语义兼容
@@ -349,6 +349,14 @@ LLM 筛选逐篇决策缓存。每批筛选后增量写入；重跑时只复用�
 - `parsed` 中的 `machineSummary` 是 `## 机器摘要` 的解析结果；`rankBucket`、`innovationScore`、`technicalRigorScore` 等 8 个子项字段同时平铺到 `parsed` 顶层以便访问
 - `npm run validate:data` 会从 `analysis` 重解析完整正文，校验全部必需恢复阶段已进入终态，并逐字段核对 `parsed` 缓存、文档类型、rubric 版本、八个子项范围以及 `parsed.score == min(八项之和, 10)`；只有字段集合精确匹配且来源、原因完整的 `parsedOverride.type=manual` 可以解释缓存差异，最新失败标记仍存在时校验失败
 - 发布前会从 `analysis` 重新解析并与 `parsed`、顶层评分版本比较；缓存不一致会阻断发布。人工覆盖必须通过 `parsedOverride` 明确声明类型、来源、原因和允许覆盖字段，并仍满足最多一位小数及开源固定锚点契约
+
+### 5.6.1 `data/current/manual-v6/YYYY-MM-DD/`
+
+Production 日期根包含：`task-runner/state.json` 与 `task-runner/tasks/<paper>/`、`records-v4.json`、`spec.json`、`metrics/`。runner 状态绑定 filtered 输入及每个 role packet/output/receipt 的真实 bytes/SHA；状态机为 author → technical_scoring / pedagogy_readability → author_revision，最多 3 个活动 claim，但 runner 不创建 subagent、不物化 packet 或 records envelope。
+
+`manual:packet` 将 author 原始证据、两类 reviewer 输入或 revision 冷启动输入物化为单篇 exact allowlist；`manual:records` 从 runner-validated 四角色工件确定性密封 envelope。`authorReceipt` 绑定初稿，`finalRevisionAuthorReceipt` 与 `reviewReceipts.authorRevision` 语义相同并绑定最终正文；revision output v2 只绑定最终正文和未封印 payload，避免 sealed record 与 receipt 的哈希自引用。
+
+`manual_analysis_records_v4` 逐篇内嵌并重放 legacy v5 base payload 作为基础质量子校验，并绑定 complete ArtifactIndex、source identity、`reader-longform-v2` 与四类 task provenance。`manual_analysis_spec_v6` 绑定完整论文集合、records envelope 与 Merkle root。`runtimeMode=production` ingestion 写标准 canonical；`runtimeMode=shadow` 只能留在 `manual-v6-shadow/<date>/`。Publisher 与视觉门禁缺 production binding 时 fail closed。
 
 ### 5.7 `data/current/visual-summary-manifests/YYYY-MM-DD.json`
 

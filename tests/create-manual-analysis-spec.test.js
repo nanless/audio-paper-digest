@@ -9,6 +9,7 @@ const {
     validateRecord,
     validateRecordsEnvelope,
     assertNoCrossPaperTemplateReuse,
+    sourceContainsBoundQuote,
     rebalanceEditorialParagraphs,
     mergeRecordsEnvelopes,
     buildAnalysis,
@@ -502,6 +503,13 @@ function attachFreshAuthoring(f, record) {
 }
 
 describe('strict reusable manual v4 spec assembler', () => {
+    it('binds semicolon-joined adjacent author lines without fuzzy matching', () => {
+        const source = 'Weilong Huang, Shrishti Saha Shetu, Emanuël A. P. Habets\nInternational Audio Laboratories Erlangen∗';
+        assert.equal(sourceContainsBoundQuote(source,
+            'Weilong Huang, Shrishti Saha Shetu, Emanuël A. P. Habets; International Audio Laboratories Erlangen'), true);
+        assert.equal(sourceContainsBoundQuote(source,
+            'Weilong Huang, Missing Author; International Audio Laboratories Erlangen'), false);
+    });
     it('does not strip the integer part of a decimal quantity at an innovation paragraph start', () => {
         const record = validRecord();
         record.editorial.innovations = `1.3B URL 本身不等于训练集。${'该段继续说明总池、子集和边界之间的区别。'.repeat(6)}\n\n`
@@ -672,6 +680,21 @@ describe('strict reusable manual v4 spec assembler', () => {
                 `论文 ${id} 在测试集报告 WER ${(9.1 + index).toFixed(1)}，并使用独立的语料划分、解码预算和消融配置核对该结果。`,
                 record.editorial.method
             ].filter(Boolean).join('\n');
+            papers[id] = record;
+        });
+        assert.doesNotThrow(() => assertNoCrossPaperTemplateReuse(papers));
+    });
+
+    it('ignores shared Markdown table delimiter rows as structural syntax', () => {
+        const papers = {};
+        ['2608.29961', '2608.29962', '2608.29963'].forEach((id, index) => {
+            const record = distinctRecord(id, `表格论文${index + 1}`);
+            record.editorial.readerArticle = [
+                '| 方法 | 指标 | 设置 | 证据 |',
+                '| --- | --- | --- | --- |',
+                `| 方法 ${index + 1} | ${(index + 1) * 10} | 设置 ${id} | 本篇独立证据 |`,
+                record.editorial.readerArticle
+            ].join('\n');
             papers[id] = record;
         });
         assert.doesNotThrow(() => assertNoCrossPaperTemplateReuse(papers));

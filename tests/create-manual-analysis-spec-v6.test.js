@@ -19,15 +19,24 @@ const { buildManifestContext } = require('../scripts/manual-fetch-fulltext.js');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 
 describe('official Manual records v4/spec v6 assembler', () => {
-    it('CLI 只能写日期级受控 shadow 默认位置，拒绝任意 --output', () => {
+    it('CLI 必须显式选择 production/shadow 且拒绝任意 --output', () => {
         assert.deepEqual(parseArgs([
-            '--date', '2026-08-28', '--records', 'a.json', '--records', 'b.json'
-        ]), { date: '2026-08-28', records: ['a.json', 'b.json'], force: false });
+            '--production', '--date', '2026-08-28', '--records', 'a.json', '--records', 'b.json'
+        ]), {
+            date: '2026-08-28', records: ['a.json', 'b.json'], force: false,
+            runtimeMode: 'production'
+        });
         assert.equal(parseArgs([
-            '--date', '2026-08-28', '--records', 'a.json', '--force'
+            '--shadow', '--date', '2026-08-28', '--records', 'a.json', '--force'
         ]).force, true);
         assert.throws(() => parseArgs([
-            '--date', '2026-08-28', '--records', 'a.json', '--output', 'data/current/x.json'
+            '--date', '2026-08-28', '--records', 'a.json'
+        ]), /显式指定/);
+        assert.throws(() => parseArgs([
+            '--production', '--shadow', '--date', '2026-08-28', '--records', 'a.json'
+        ]), /必须且只能/);
+        assert.throws(() => parseArgs([
+            '--production', '--date', '2026-08-28', '--records', 'a.json', '--output', 'data/current/x.json'
         ]), /未知参数/);
     });
 
@@ -79,6 +88,7 @@ describe('official Manual records v4/spec v6 assembler', () => {
     it('filtered 规范化重复论文在读取下游工件前即 fail closed', () => {
         assert.throws(() => buildSpecV6({
             date: '2026-08-28',
+            runtimeMode: 'production',
             filtered: {
                 batchDate: '2026-08-28', status: 'complete',
                 papers: [{ arxivId: '2608.12345v1' }, { arxivId: '2608.12345' }]
@@ -113,7 +123,7 @@ describe('official Manual records v4/spec v6 assembler', () => {
             papers: { '2608.12345': {} }
         };
         assert.throws(() => buildSpecV6({
-            date: '2026-08-28', filtered,
+            date: '2026-08-28', runtimeMode: 'production', filtered,
             fullTextManifest, fullTextManifestPath: path.join(outDir, 'manifest.json'),
             artifactManifest: {
                 version: 1, mode: 'manual_artifact_index', date: '2026-08-28',

@@ -428,6 +428,7 @@ def _run(module, date_str, attestation_path):
     # read-only.  Any deterministic repair that *would* be applied invalidates
     # the supplied SHA and must be moved back to generation before re-review.
     fixes = []
+    authoritative_by_filename = {}
     for path in paths:
         path = Path(path)
         if not path.is_file():
@@ -445,6 +446,8 @@ def _run(module, date_str, attestation_path):
                 raise module.PublishDataValidationError(
                     f'论文页不在 generation publishedPapers 快照中: {paper_id}'
                 )
+            if paper is not None:
+                authoritative_by_filename[path.name] = paper
         fixed, issues = module.review_and_fix_post(path, paper, dry_run=True)
         if fixed:
             fixes.append({'path': str(path), 'issues': [str(item) for item in issues]})
@@ -457,6 +460,7 @@ def _run(module, date_str, attestation_path):
 
     module.validate_staged_posts(
         content_dir, date_str, date_only=True, publish_paths=paths,
+        authoritative_papers=authoritative_by_filename,
     )
     checked_files = _semantic_checks(module, paths, date_str)
     gate = module.run_hugo_gate(
@@ -464,6 +468,7 @@ def _run(module, date_str, attestation_path):
     )
     module.validate_staged_posts(
         content_dir, date_str, date_only=True, publish_paths=paths,
+        authoritative_papers=authoritative_by_filename,
     )
 
     protocol = module.review_protocol_fingerprint()

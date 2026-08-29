@@ -136,6 +136,17 @@ describe('Manual v5 audio researcher contract', () => {
         assert.doesNotThrow(() => validateReaderArticle(plan, article, [
             { id: 'E01' }, { id: 'E02' }, { id: 'E03' }, { id: 'E04' }
         ]));
+        const expandedArticle = article.replace(
+            '### 再追踪两条通路',
+            '### 额外的 V6 证据节点\n\n这一额外节点由 reader-longform-v2 完整重放，旧 editorialPlan 只保留锚点顺序。'.repeat(4)
+                + '\n\n### 再追踪两条通路'
+        );
+        assert.doesNotThrow(() => validateReaderArticle(plan, expandedArticle, [
+            { id: 'E01' }, { id: 'E02' }, { id: 'E03' }, { id: 'E04' }
+        ], { allowLongformHeadingExpansion: true }));
+        assert.throws(() => validateReaderArticle(plan, expandedArticle, [
+            { id: 'E01' }, { id: 'E02' }, { id: 'E03' }, { id: 'E04' }
+        ]), /sectionPlan/);
         const strictPlan = { ...plan, readerFormatContract: 'graduate-researcher-tutorial-quality-v2' };
         assert.throws(
             () => validateReaderArticle(strictPlan, article.replace('### 先拆开表示冲突', '### 图 1 怎样读两条表示通路'), [

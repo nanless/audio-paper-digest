@@ -403,11 +403,24 @@ describe('manual_complete v3 deep-analysis contract', () => {
     it('accepts explicit force takeover but rejects unknown or duplicate flags', () => {
         assert.deepEqual(
             parseArgs(['--date', '2026-08-20', '--spec', 'manual.json', '--force']),
-            { force: true, v6Shadow: false, date: '2026-08-20', spec: 'manual.json' }
+            {
+                force: true, v6Production: false, v6Shadow: false,
+                date: '2026-08-20', spec: 'manual.json'
+            }
         );
         assert.deepEqual(
             parseArgs(['--v6-shadow', '--date', '2026-08-20', '--spec', 'manual.json']),
-            { force: false, v6Shadow: true, date: '2026-08-20', spec: 'manual.json' }
+            {
+                force: false, v6Production: false, v6Shadow: true,
+                date: '2026-08-20', spec: 'manual.json'
+            }
+        );
+        assert.deepEqual(
+            parseArgs(['--v6-production', '--date', '2026-08-20', '--spec', 'manual.json']),
+            {
+                force: false, v6Production: true, v6Shadow: false,
+                date: '2026-08-20', spec: 'manual.json'
+            }
         );
         assert.throws(
             () => parseArgs(['--date', '2026-08-20', '--spec', 'manual.json', '--unknown']),
@@ -419,8 +432,14 @@ describe('manual_complete v3 deep-analysis contract', () => {
         );
         assert.doesNotThrow(() => assertExplicitManualV6Mode({ version: 5 }, false));
         assert.doesNotThrow(() => assertExplicitManualV6Mode({ version: 6 }, true));
+        assert.doesNotThrow(() => assertExplicitManualV6Mode(
+            { version: 6 }, { v6Production: true, v6Shadow: false }
+        ));
         assert.throws(() => assertExplicitManualV6Mode({ version: 6 }, false), /显式运行/);
         assert.throws(() => assertExplicitManualV6Mode({ version: 5 }, true), /显式运行/);
+        assert.throws(() => parseArgs([
+            '--v6-production', '--v6-shadow', '--date', '2026-08-20', '--spec', 'manual.json'
+        ]), /必须且只能/);
     });
 
     it('历史 v3 spec 保留自身 prompt SHA，v4 必须绑定当前 prompt', () => {

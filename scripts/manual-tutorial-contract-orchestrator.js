@@ -257,6 +257,14 @@ function validateManualTutorialReaderBundle(plan, article, evidenceLedger = [], 
     const researchOptions = { ...options };
     delete researchOptions.longformBundle;
     delete researchOptions.artifactIndex;
+    // V6 reader-longform-v2 is an exact replay of every sealed block, while
+    // the legacy editorial plan intentionally contains at most eight anchor
+    // sections.  In this path the plan headings must remain an ordered
+    // subsequence; validateManualLongformBundle below owns the complete and
+    // exact heading/block replay.
+    researchOptions.allowLongformHeadingExpansion = Boolean(
+        options.longformBundle && options.artifactIndex
+    );
     const readerArticle = validateReaderArticle(plan, article, evidenceLedger, researchOptions);
     if (options.longformBundle || options.artifactIndex) {
         if (!options.longformBundle || !options.artifactIndex) {
@@ -269,7 +277,8 @@ function validateManualTutorialReaderBundle(plan, article, evidenceLedger = [], 
             {
                 label: `${options.label || 'readerArticle'}.longformBundle`,
                 paperId: options.paperId,
-                documentType: options.documentType
+                documentType: options.documentType,
+                runtimeMode: options.runtimeMode
             }
         );
     }

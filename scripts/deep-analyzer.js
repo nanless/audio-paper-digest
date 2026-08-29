@@ -1420,11 +1420,12 @@ function assessArxivHtmlFullText($, content) {
 }
 
 const ARXIV_STRUCTURED_ARTIFACT_VERSION = 1;
-// This parser revision distinguishes a figure resource that is present in the
-// source DOM (including an SVG <object>) from a raster image that is safe for
-// the downstream multimodal downloader.  The latter deliberately remains more
-// restrictive; an SVG is evidence, not an implicit bypass of image validation.
-const ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION = 'arxiv-html-dom-v3';
+// v4 additionally recognizes LaTeXML's semantic span rendering for scaled
+// tabulars (`span.ltx_tabular` / `span.ltx_tr` / `span.ltx_td`) and numbered
+// DOM-native framed figures that intentionally have no image URL. Those nodes
+// are parsed directly from DOM evidence; flattened text is never promoted to a
+// matrix or image. v3's SVG evidence behavior remains unchanged.
+const ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION = 'arxiv-html-dom-v4';
 const STRUCTURED_ARTIFACT_LIMITS = Object.freeze({
     tables: 256,
     rowsPerTable: 512,
@@ -1434,6 +1435,7 @@ const STRUCTURED_ARTIFACT_LIMITS = Object.freeze({
     formulaChars: 20000,
     figures: 512,
     inlineSvgBytes: 2 * 1024 * 1024,
+    inlineHtmlFigureBytes: 2 * 1024 * 1024,
     references: 4096,
     referenceChars: 12000
 });
@@ -1534,6 +1536,49 @@ function extractArxivFigureResources($, wrapper, htmlId, arxivId, ordinal, state
             inlineSvgSha256
         });
     });
+
+    // LaTeXML can preserve a genuine numbered Figure as a DOM-native framed
+    // text panel rather than emitting an <img> (for example, a verbatim prompt
+    // suite). This remains non-raster source evidence. Admit only the narrow,
+    // auditable variant: an explicit Figure label, an ltx_framed body with
+    // visible non-caption text, and no table/listing/algorithm DOM. A plain
+    // figure whose source asset is missing therefore remains unrecovered.
+    if (resources.size === 0) {
+        const label = String(wrapper.find('.ltx_tag_figure, .ltx_tag').first().text() || '')
+            .replace(/\s+/g, ' ').trim();
+        const framed = wrapper.find('.ltx_framed').first();
+        const body = wrapper.clone();
+        body.find('figcaption, .ltx_caption').remove();
+        const bodyText = body.text().replace(/\s+/g, ' ').trim();
+        const disallowedDom = wrapper.find(
+            'table, .ltx_table, .ltx_tabular, .ltx_listing, .ltx_float_algorithm, '
+            + 'img, object, embed, svg, picture, source, canvas, video'
+        ).length > 0;
+        if (/^(?:figure|fig\.?|图)\s*(?:[A-Z]?\d+|[IVXLCDM]+)/i.test(label)
+            && framed.length > 0 && bodyText && !disallowedDom) {
+            const inlineHtml = $.html(wrapper);
+            const inlineHtmlBytes = Buffer.byteLength(inlineHtml);
+            if (inlineHtmlBytes > STRUCTURED_ARTIFACT_LIMITS.inlineHtmlFigureBytes) {
+                state.issues.push(
+                    `figure[${ordinal}] 内联 HTML ${inlineHtmlBytes} bytes 超过受控上限 `
+                    + `${STRUCTURED_ARTIFACT_LIMITS.inlineHtmlFigureBytes}`
+                );
+                state.truncated = true;
+            } else {
+                const inlineHtmlSha256 = crypto.createHash('sha256').update(inlineHtml).digest('hex');
+                resources.set(`inline-html:${inlineHtmlSha256}`, {
+                    kind: 'inline_html',
+                    url: '',
+                    alt: '',
+                    mediaType: 'text/html',
+                    rasterDownloadEligible: false,
+                    inlineHtml,
+                    inlineHtmlBytes,
+                    inlineHtmlSha256
+                });
+            }
+        }
+    }
     return [...resources.values()];
 }
 
@@ -1555,8 +1600,20 @@ function layoutContainerFor($, element) {
  * no visible prose or competing table caption in between.  Never infer a
  * matrix from flattened text or attach an arbitrary later table.
  */
+function isArxivTabularDom($, element) {
+    const node = $(element);
+    return node.is('table') || node.hasClass('ltx_tabular');
+}
+
+function findArxivTabularRoot($, wrapper) {
+    const node = $(wrapper);
+    if (isArxivTabularDom($, wrapper)) return wrapper;
+    return node.find('table, .ltx_tabular').toArray()
+        .find(element => $(element).parentsUntil(wrapper, 'table, .ltx_tabular').length === 0) || null;
+}
+
 function findSplitTableDom($, wrapper, allElements) {
-    if (!$(wrapper).hasClass('ltx_table') || $(wrapper).find('table').length > 0) return null;
+    if (!$(wrapper).hasClass('ltx_table') || findArxivTabularRoot($, wrapper)) return null;
     const caption = $(wrapper).find('figcaption, .ltx_caption').first().text().replace(/\s+/g, ' ').trim();
     const label = $(wrapper).find('.ltx_tag_table, .ltx_tag').first().text().replace(/\s+/g, ' ').trim();
     if (!caption || !/^(?:table|表)\s*(?:[A-Z]?\d+|[IVXLCDM]+)/i.test(label || caption)) return null;
@@ -1565,7 +1622,7 @@ function findSplitTableDom($, wrapper, allElements) {
     const layout = layoutContainerFor($, wrapper);
     if (wrapperIndex < 0 || !layout) return null;
     const followingTable = allElements.slice(wrapperIndex + 1)
-        .find(element => element.tagName?.toLowerCase() === 'table');
+        .find(element => isArxivTabularDom($, element));
     if (!followingTable || layoutContainerFor($, followingTable) !== layout) return null;
     const tableIndex = allElements.indexOf(followingTable);
     for (const element of allElements.slice(wrapperIndex + 1, tableIndex)) {
@@ -1583,7 +1640,8 @@ function findSplitTableDom($, wrapper, allElements) {
 
 function serializeArxivTable($, element, ordinal, state, options = {}) {
     const wrapper = $(element);
-    const table = options.tableElement ? $(options.tableElement) : (wrapper.is('table') ? wrapper : wrapper.find('table').first());
+    const tableElement = options.tableElement || findArxivTabularRoot($, element);
+    const table = tableElement ? $(tableElement) : $([]);
     // The aggregate proof covers the caption wrapper and the separate tabular
     // fragment; individual cells still retain their own exact DOM SHA.
     const domHtml = [$.html(wrapper), options.tableElement ? $.html(table) : ''].join('\n');
@@ -1620,7 +1678,9 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
     const cells = [];
     const headerRows = new Set();
     const bodyRows = new Set();
-    const rowElements = table.find('tr').toArray();
+    const rowElements = table.find('tr, .ltx_tr').filter((_, rowElement) => (
+        $(rowElement).parentsUntil(tableElement, 'tr, .ltx_tr').length === 0
+    )).toArray();
     if (rowElements.length > STRUCTURED_ARTIFACT_LIMITS.rowsPerTable) {
         state.issues.push(`table[${ordinal}] 行数 ${rowElements.length} 超过受控上限 ${STRUCTURED_ARTIFACT_LIMITS.rowsPerTable}`);
         state.truncated = true;
@@ -1629,9 +1689,9 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
         matrix[rowIndex] ||= [];
         let columnIndex = 0;
         const row = $(rowElement);
-        const isHeaderRow = row.closest('thead').length > 0 || row.children('th').length > 0;
+        const isHeaderRow = row.closest('thead').length > 0 || row.children('th, .ltx_th').length > 0;
         (isHeaderRow ? headerRows : bodyRows).add(rowIndex);
-        for (const cellElement of row.children('th, td').toArray()) {
+        for (const cellElement of row.children('th, td, .ltx_th, .ltx_td').toArray()) {
             while (matrix[rowIndex][columnIndex] !== undefined) columnIndex++;
             const cell = $(cellElement);
             const rowspan = positiveSpan(cell.attr('rowspan'));
@@ -1643,7 +1703,7 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
             const cellRecord = {
                 row: rowIndex,
                 column: columnIndex,
-                header: cellElement.tagName?.toLowerCase() === 'th' || isHeaderRow,
+                header: cellElement.tagName?.toLowerCase() === 'th' || cell.hasClass('ltx_th') || isHeaderRow,
                 rowspan,
                 colspan,
                 text,
@@ -1698,13 +1758,14 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
     const $ = cheerio.load(sourceHtml);
     const state = { issues: [], truncated: false };
     const allElements = $('*').toArray();
-    const rawTableCandidates = $('.ltx_table, table').filter((_, element) => (
-        $(element).parents('.ltx_table, table').length === 0
-        && ($(element).hasClass('ltx_table') || $(element).closest('.ltx_equation, .ltx_equationgroup').length === 0)
+    const rawTableCandidates = $('.ltx_table, table, .ltx_tabular').filter((_, element) => (
+        $(element).parents('.ltx_table, table, .ltx_tabular').length === 0
+        && ($(element).hasClass('ltx_table') || isArxivTabularDom($, element))
+        && $(element).closest('.ltx_equation, .ltx_equationgroup').length === 0
     )).toArray();
     const consumedSplitTableDoms = new Set();
     const tableCandidates = rawTableCandidates.flatMap(element => {
-        if (!$(element).hasClass('ltx_table') || $(element).find('table').length > 0) {
+        if (!$(element).hasClass('ltx_table') || findArxivTabularRoot($, element)) {
             return consumedSplitTableDoms.has(element) ? [] : [{ element }];
         }
         const splitTable = findSplitTableDom($, element, allElements);
@@ -1764,7 +1825,7 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
     const figures = figureCandidates.slice(0, STRUCTURED_ARTIFACT_LIMITS.figures).map((element, index) => {
         const wrapper = $(element);
         const images = extractArxivFigureResources($, wrapper, htmlId, arxivId, index + 1, state);
-        if (images.length === 0) state.issues.push(`figure[${index + 1}] 没有恢复出可审计图像资源 URL`);
+        if (images.length === 0) state.issues.push(`figure[${index + 1}] 没有恢复出可审计图像或 DOM 资源`);
         return {
             ordinal: index + 1,
             label: compactDomText(wrapper.find('.ltx_tag_figure, .ltx_tag').first().text(), 256, state, `figure[${index + 1}].label`),

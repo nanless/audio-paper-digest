@@ -47,7 +47,7 @@ function computeStructuredPayloadSha256(value) {
 function validateStructuredArtifacts(value, expected = {}) {
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || value.version !== 1
-        || !['arxiv-html-dom-v1', 'arxiv-html-dom-v2', 'arxiv-html-dom-v3', 'unstructured-text-signals-v1'].includes(value.parserVersion)
+        || !['arxiv-html-dom-v1', 'arxiv-html-dom-v2', 'arxiv-html-dom-v3', 'arxiv-html-dom-v4', 'unstructured-text-signals-v1'].includes(value.parserVersion)
         || !/^[a-f0-9]{64}$/.test(String(value.payloadSha256 || ''))
         || value.payloadSha256 !== computeStructuredPayloadSha256(value)) {
         throw new Error('structuredArtifacts 版本、parser 或 payload SHA 无效');
@@ -69,7 +69,7 @@ function validateStructuredArtifacts(value, expected = {}) {
         || !Array.isArray(value.health.issues)) {
         throw new Error('structuredArtifacts.health 必须显式声明 complete/incomplete 与 issues');
     }
-    if (['arxiv-html-dom-v1', 'arxiv-html-dom-v2', 'arxiv-html-dom-v3'].includes(value.parserVersion)) {
+    if (['arxiv-html-dom-v1', 'arxiv-html-dom-v2', 'arxiv-html-dom-v3', 'arxiv-html-dom-v4'].includes(value.parserVersion)) {
         if (value.sourceKind !== 'arxiv_html'
             || !/^[a-f0-9]{64}$/.test(String(value.sourceHtmlSha256 || ''))) {
             throw new Error('arXiv structuredArtifacts 必须绑定原始 HTML SHA');
@@ -107,9 +107,10 @@ function validateStructuredArtifacts(value, expected = {}) {
                     throw new Error(`structuredArtifacts.figures[${index}].images[${resourceIndex}] mediaType 非法`);
                 }
                 const inlineSvg = image?.kind === 'inline_svg';
+                const inlineHtml = image?.kind === 'inline_html';
                 if (inlineSvg) {
                     const markup = String(image.inlineSvg || '');
-                    if (value.parserVersion !== 'arxiv-html-dom-v3'
+                    if (!['arxiv-html-dom-v3', 'arxiv-html-dom-v4'].includes(value.parserVersion)
                         || image.url
                         || image.mediaType !== 'image/svg+xml'
                         || image.rasterDownloadEligible !== false
@@ -119,6 +120,23 @@ function validateStructuredArtifacts(value, expected = {}) {
                         || !/^[a-f0-9]{64}$/.test(String(image.inlineSvgSha256 || ''))
                         || image.inlineSvgSha256 !== sha256(Buffer.from(markup))) {
                         throw new Error(`structuredArtifacts.figures[${index}].images[${resourceIndex}] 内联 SVG 证据非法`);
+                    }
+                } else if (inlineHtml) {
+                    const markup = String(image.inlineHtml || '');
+                    if (value.parserVersion !== 'arxiv-html-dom-v4'
+                        || image.url
+                        || image.mediaType !== 'text/html'
+                        || image.rasterDownloadEligible !== false
+                        || !/^<figure\b[\s\S]*<\/figure>$/i.test(markup.trim())
+                        || !/\bltx_framed\b/i.test(markup)
+                        || !/\bltx_tag_figure\b[^>]*>[\s\S]*?(?:figure|fig\.?|图)\s*(?:[A-Z]?\d+|[IVXLCDM]+)/i.test(markup)
+                        || /<(?:table|script|iframe|img|object|embed|svg|picture|source|canvas|video)\b/i.test(markup)
+                        || /\bltx_(?:table|tabular|listing|float_algorithm)\b/i.test(markup)
+                        || !Number.isInteger(image.inlineHtmlBytes) || image.inlineHtmlBytes < 1
+                        || image.inlineHtmlBytes !== Buffer.byteLength(markup)
+                        || !/^[a-f0-9]{64}$/.test(String(image.inlineHtmlSha256 || ''))
+                        || image.inlineHtmlSha256 !== sha256(Buffer.from(markup))) {
+                        throw new Error(`structuredArtifacts.figures[${index}].images[${resourceIndex}] 内联 HTML Figure 证据非法`);
                     }
                 } else if (!/^https:\/\//i.test(String(image?.url || ''))) {
                     throw new Error(`structuredArtifacts.figures[${index}].images[${resourceIndex}] URL 非 HTTPS`);
@@ -452,17 +470,26 @@ function structuredFigureImages(value, imageInfos) {
         for (const image of (figure.images || [])) {
             const url = String(image?.url || '');
             const inlineSvgSha256 = String(image?.inlineSvgSha256 || '');
-            const key = url ? `url:${url}` : (inlineSvgSha256 ? `inline-svg:${inlineSvgSha256}` : '');
+            const inlineHtmlSha256 = String(image?.inlineHtmlSha256 || '');
+            const key = url
+                ? `url:${url}`
+                : (inlineSvgSha256
+                    ? `inline-svg:${inlineSvgSha256}`
+                    : (inlineHtmlSha256 ? `inline-html:${inlineHtmlSha256}` : ''));
             if (!key) continue;
             const metadata = {
                 url,
                 caption: String(figure.caption || ''),
                 alt: String(image.alt || ''),
-                source: image?.kind === 'inline_svg' ? 'arxiv_html_dom_inline_svg' : 'arxiv_html_dom',
+                source: image?.kind === 'inline_svg'
+                    ? 'arxiv_html_dom_inline_svg'
+                    : (image?.kind === 'inline_html' ? 'arxiv_html_dom_inline_figure' : 'arxiv_html_dom'),
                 mediaType: String(image.mediaType || ''),
                 rasterDownloadEligible: image.rasterDownloadEligible === true,
                 inlineSvgSha256,
                 inlineSvgBytes: Number.isInteger(image?.inlineSvgBytes) ? image.inlineSvgBytes : 0,
+                inlineHtmlSha256,
+                inlineHtmlBytes: Number.isInteger(image?.inlineHtmlBytes) ? image.inlineHtmlBytes : 0,
                 figureOrdinal: figure.ordinal ?? figureIndex + 1,
                 figureLabel: String(figure.label || ''),
                 sourceDomSha256: String(figure.sourceDomSha256 || ''),

@@ -73,6 +73,33 @@ function papersFrom(value) {
     return Array.isArray(value?.papers) ? value.papers : [];
 }
 
+function productionV6PaperComplete(paper) {
+    const contracts = paper?.analysisManifest?.contracts;
+    const provenance = paper?.manualV6Provenance;
+    const acquisition = paper?.analysisManifest?.sourceAcquisition;
+    const requiredShaFields = [
+        'specRootSha256', 'paperSpecSha256', 'sealedRecordSha256',
+        'recordFileSha256', 'artifactIndexSha256', 'artifactIndexFileSha256',
+        'recordsEnvelopeFileSha256', 'taskEvidenceSha256',
+        'readerLongformSha256', 'readerLongformArticleSha256'
+    ];
+    return Boolean(
+        paper?.manualDepth === 'full-text-evidence-v6'
+        && contracts?.manualDepth === 'full-text-evidence-v6'
+        && contracts?.readerLongform === 'reader-longform-v2'
+        && contracts?.artifactIndex === 'manual-artifact-parser-v2-structured'
+        && provenance?.specVersion === 6
+        && provenance?.runtimeMode === 'production'
+        && paper?.manualArtifactIndex?.inventoryHealth?.status === 'complete'
+        && paper?.manualReaderLongform?.contract === 'reader-longform-v2'
+        && requiredShaFields.every(field => (
+            /^[a-f0-9]{64}$/.test(String(provenance?.[field] || ''))
+            && (!Object.hasOwn(acquisition || {}, field)
+                || acquisition[field] === provenance[field])
+        ))
+    );
+}
+
 function paperDate(paper) {
     return paperBatchDate(paper);
 }
@@ -364,7 +391,9 @@ function buildDigestRunReport(targetDate, options = {}) {
         && filtered?.status === 'complete'
         && filterSnapshotsComplete
     );
-    const analysisComplete = Boolean(deep && filtered) && (
+    const productionV6Complete = deepBatch.length > 0
+        && deepBatch.every(productionV6PaperComplete);
+    const analysisComplete = Boolean(deep && filtered) && productionV6Complete && (
         failed.length === 0
         && successful.length === filteredBatch.length
         && samePaperIds(successful, filteredBatch)
@@ -372,7 +401,11 @@ function buildDigestRunReport(targetDate, options = {}) {
     const errors = [];
     if (!fetchComplete) errors.push('抓取来源健康或批次绑定不完整');
     if (!filteredComplete) errors.push('筛选状态、决定覆盖或批次绑定不完整');
-    if (!analysisComplete) errors.push('深度分析集合未精确覆盖筛选结果');
+    if (!analysisComplete) errors.push(
+        productionV6Complete
+            ? '深度分析集合未精确覆盖筛选结果'
+            : '正式 current canonical 不是完整 production v6'
+    );
     if (!reviewComplete) errors.push('博客严格 review 或远端发布验证未完成');
     if (!visualGateComplete) errors.push('TOP 10 论文长图状态或资产校验未完成');
     if (!coverGateComplete) errors.push('汇总封面状态或资产校验未完成');
@@ -412,6 +445,7 @@ function buildDigestRunReport(targetDate, options = {}) {
         },
         analysis: {
             complete: analysisComplete,
+            publicationMode: productionV6Complete ? 'manual_v6_production' : 'invalid_or_legacy',
             total: deepBatch.length,
             successful: successful.length,
             failed: failed.length,
@@ -481,6 +515,7 @@ module.exports = {
     filterSnapshotsAreConsistent,
     visualAssetsAreValid,
     postPublishVisualWaiverIsValid,
+    productionV6PaperComplete,
     buildDigestRunReport,
     formatDigestRunSummary
 };

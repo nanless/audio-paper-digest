@@ -200,7 +200,10 @@ function recordedAt(value, label) {
 
 function loadVerifiedSidecar(filePath, options = {}) {
     const projectRoot = path.resolve(options.projectRoot || Config.PROJECT_ROOT);
-    const shadowRoot = path.resolve(options.shadowRoot || Config.FILES.manualV6ShadowDir);
+    // The default report follows the production-v6 metrics root. Historical
+    // callers may still inject shadowRoot explicitly when auditing an isolated
+    // shadow run; legacy v5 queue sidecars remain a separate compatibility root.
+    const shadowRoot = path.resolve(options.shadowRoot || Config.FILES.manualV6Dir);
     const v5Root = path.resolve(options.v5Root || Config.FILES.manualV5ObservabilityDir);
     const resolved = path.resolve(filePath);
     const root = isInside(shadowRoot, resolved) ? shadowRoot : (isInside(v5Root, resolved) ? v5Root : null);
@@ -274,7 +277,7 @@ function listDateDirectories(rootPath, requestedDates = null) {
 
 function discoverSidecarPaths(options = {}) {
     const requestedDates = options.dates?.length ? new Set(options.dates) : null;
-    const shadowRoot = path.resolve(options.shadowRoot || Config.FILES.manualV6ShadowDir);
+    const shadowRoot = path.resolve(options.shadowRoot || Config.FILES.manualV6Dir);
     const v5Root = path.resolve(options.v5Root || Config.FILES.manualV5ObservabilityDir);
     const files = [];
     for (const item of listDateDirectories(shadowRoot, requestedDates)) {

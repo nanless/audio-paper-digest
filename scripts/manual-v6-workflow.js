@@ -16,11 +16,21 @@ const {
     MANUAL_SIGNATURE_CONTRACT,
     stableSignatureSha256
 } = require('./manual-signature-contract.js');
+const { validateReadabilityRubric } = require('./editorial-quality.js');
+const {
+    needsMetadataCorrection,
+    applyMetadataCorrection,
+    buildCorrectionProof
+} = require('./manual-v6-metadata-correction.js');
 
 const MANUAL_RECORD_VERSION_V4 = 4;
 const MANUAL_SPEC_VERSION_V6 = 6;
 const MANUAL_DEPTH_V6 = 'full-text-evidence-v6';
 const MANUAL_TAKEOVER_VERSION_V3 = 3;
+const MANUAL_V6_RUNTIME_MODE_PRODUCTION = 'production';
+const MANUAL_V6_RUNTIME_MODE_SHADOW = 'shadow';
+const MANUAL_V6_AUTHOR_LINEAGE_CONTRACT = 'original-author-final-revision-v1';
+const MANUAL_V6_REVISION_OUTPUT_CONTRACT = 'manual-v6-author-revision-output-v2';
 const TASK_PACKET_VERSION = 3;
 const WORKFLOW_STATE_VERSION = 1;
 const SHA256_RE = /^[a-f0-9]{64}$/;
@@ -43,6 +53,12 @@ const REVIEW_FINDING_RULES = Object.freeze([
     { kind: 'technical_review', authority: 'runner_validated_output', pattern: /^reviews\/technical-scoring\.json$/u },
     { kind: 'readability_review', authority: 'runner_validated_output', pattern: /^reviews\/pedagogy-readability\.json$/u }
 ]);
+const TECHNICAL_SCORING_DIMENSIONS = Object.freeze([
+    'innovation', 'technicalRigor', 'experimentalSufficiency', 'clarity',
+    'impact', 'openSource', 'reproducibility', 'engineering'
+]);
+const TECHNICAL_SCORING_MAXIMA = Object.freeze([2, 1.5, 1.5, 1, 1.5, 1.5, 0.5, 1.5]);
+const OPEN_SOURCE_SCORE_ANCHORS = Object.freeze([0, 0.2, 0.5, 1, 1.2, 1.5]);
 const REQUIRED_FRESH_EVIDENCE_KINDS = Object.freeze([
     'paper_metadata', 'source_snapshot', 'fulltext', 'artifact_index',
     'authoring_prompt', 'editorial_contract', 'record_template'
@@ -74,6 +90,108 @@ const WORKFLOW_DEPENDENCIES = Object.freeze({
 
 function stableSha256(value) {
     return stableSignatureSha256(value, 'manual-v6-signature');
+}
+
+function taskOutputContract(role) {
+    if (!TASK_ROLES.has(role)) throw new Error('task output contract role 非法');
+    const commonReceipt = {
+        version: 1,
+        requiredFields: [
+            'role', 'paperId', 'taskName', 'singlePaperOnly', 'isolatedContext',
+            'model', 'reasoningEffort', 'queuedAt', 'startedAt', 'completedAt',
+            'revision', 'outputSha256'
+        ],
+        model: 'gpt-5.6-terra',
+        reasoningEffort: 'high',
+        semanticShaAlgorithm: MANUAL_SIGNATURE_CONTRACT
+    };
+    if (role === 'technical_scoring') return {
+        version: 1,
+        fixedOutputPath: 'reviews/technical-scoring.json',
+        fixedReceiptPath: 'receipts/technical-scoring.json',
+        requiredOutputFields: [
+            'version', 'role', 'paperId', 'taskName', 'passed', 'issues',
+            'findings', 'evidenceChecks', 'dims', 'confidence',
+            'scoringReasons', 'scoringCalibration'
+        ],
+        dims: {
+            order: [...TECHNICAL_SCORING_DIMENSIONS],
+            maxima: [...TECHNICAL_SCORING_MAXIMA],
+            totalMaximum: 10,
+            decimalPlacesMaximum: 1,
+            openSourceAnchors: [...OPEN_SOURCE_SCORE_ANCHORS]
+        },
+        scoringCalibration: {
+            requiredDimensionKeys: [...TECHNICAL_SCORING_DIMENSIONS],
+            independentTerraHigh: true,
+            crossDimensionChecked: true,
+            batchScaleChecked: true
+        },
+        receipt: commonReceipt
+    };
+    if (role === 'pedagogy_readability') return {
+        version: 1,
+        fixedOutputPath: 'reviews/pedagogy-readability.json',
+        fixedReceiptPath: 'receipts/pedagogy-readability.json',
+        requiredOutputFields: [
+            'version', 'role', 'paperId', 'taskName', 'passed', 'issues',
+            'findings', 'evidenceChecks', 'readabilityRubric'
+        ],
+        readabilityRubric: {
+            independentTerraHigh: true,
+            dimensions: [
+                'paragraphLogic', 'interParagraphContinuity', 'sectionResponsibility',
+                'factLocality', 'terminologyAndPerspective', 'sentenceRhythm',
+                'antiTemplateOriginality'
+            ],
+            scoreRange: [0, 2],
+            minimumTotal: 12
+        },
+        receipt: commonReceipt
+    };
+    if (role === 'author') return {
+        version: 1,
+        fixedOutputPath: 'outputs/author.json',
+        fixedReceiptPath: 'receipts/author.json',
+        descriptorContract: 'manual-v6-author-output-v2',
+        receipt: commonReceipt
+    };
+    if (role === 'author_revision') return {
+        version: 1,
+        fixedOutputPath: 'outputs/author-revision.json',
+        fixedReceiptPath: 'receipts/author-revision.json',
+        descriptorContract: MANUAL_V6_REVISION_OUTPUT_CONTRACT,
+        receipt: commonReceipt
+    };
+    return {
+        version: 1,
+        fixedOutputPath: 'reviews/final-page.json',
+        fixedReceiptPath: 'receipts/final-page.json',
+        receipt: commonReceipt
+    };
+}
+
+function resolveManualV6RuntimePaths(currentDir, date, runtimeMode) {
+    const root = path.resolve(String(currentDir || ''));
+    if (!root || !/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) {
+        throw new Error('Manual v6 runtime path 需要 currentDir 与合法日期');
+    }
+    if (![MANUAL_V6_RUNTIME_MODE_PRODUCTION, MANUAL_V6_RUNTIME_MODE_SHADOW].includes(runtimeMode)) {
+        throw new Error('Manual v6 runtime mode 必须显式为 production 或 shadow');
+    }
+    const directoryName = runtimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION
+        ? 'manual-v6'
+        : 'manual-v6-shadow';
+    const batchDir = path.join(root, directoryName, date);
+    return {
+        runtimeMode,
+        batchDir,
+        specPath: path.join(batchDir, 'spec.json'),
+        recordsEnvelopePath: path.join(batchDir, 'records-v4.json'),
+        canonicalPath: runtimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION
+            ? path.join(root, 'deep-analysis-result.json')
+            : path.join(batchDir, 'deep-analysis-result.json')
+    };
 }
 
 function assertObject(value, label) {
@@ -164,11 +282,20 @@ function isBlankValue(value) {
     return typeof value === 'object' && Object.keys(value).length === 0;
 }
 
+function isExactBlankSchemaDescriptor(key, value) {
+    if (key !== 'article' || !value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const keys = Object.keys(value).sort();
+    return keys.length === 2 && keys[0] === 'fileSha256' && keys[1] === 'path'
+        && value.path === 'draft/author-article.md'
+        && value.fileSha256 === 'SHA256_OF_RAW_FILE_BYTES';
+}
+
 function containsFilledProseField(value) {
     if (Array.isArray(value)) return value.some(containsFilledProseField);
     if (!value || typeof value !== 'object') return false;
     return Object.entries(value).some(([key, child]) => (
-        (FORBIDDEN_PROSE_KEY_RE.test(key) && !isBlankValue(child)) || containsFilledProseField(child)
+        (FORBIDDEN_PROSE_KEY_RE.test(key) && !isBlankValue(child)
+            && !isExactBlankSchemaDescriptor(key, child)) || containsFilledProseField(child)
     ));
 }
 
@@ -268,12 +395,16 @@ function validateTaskReceipt(value, role, paperId, label) {
         throw new Error(`${label} 必须绑定单篇隔离的 gpt-5.6-terra/high task`);
     }
     assertText(receipt.taskName, `${label}.taskName`, 4);
-    assertSha(receipt.consumedPacketSha256, `${label}.consumedPacketSha256`);
+    // Early production-runner receipts used inputPacketSha256 for the same
+    // content-addressed packet identity.  Keep the original signed bytes and
+    // normalize only the validated view, matching task-runner verification.
+    const consumedPacketSha256 = receipt.consumedPacketSha256 || receipt.inputPacketSha256;
+    assertSha(consumedPacketSha256, `${label}.consumedPacketSha256`);
     assertSha(receipt.outputSha256, `${label}.outputSha256`);
     if (!BEIJING_TIMESTAMP_RE.test(String(receipt.completedAt || ''))) {
         throw new Error(`${label}.completedAt 必须是北京时间 ISO 时间戳`);
     }
-    return receipt;
+    return { ...receipt, consumedPacketSha256 };
 }
 
 function buildTaskPacket(options = {}) {
@@ -314,6 +445,16 @@ function buildTaskPacket(options = {}) {
         allowedArtifacts,
         contractSha256: assertSha(options.contractSha256, 'task packet.contractSha256')
     };
+    // Legacy production-v6 packets remain verifiable when this optional field is
+    // absent.  Every newly materialized packet includes the canonical role
+    // contract, so a leaf does not need an out-of-band schema or hashing recipe.
+    if (options.outputContract !== undefined) {
+        const expectedOutputContract = taskOutputContract(role);
+        if (stableSha256(options.outputContract) !== stableSha256(expectedOutputContract)) {
+            throw new Error('task packet.outputContract 与当前角色正式契约不一致');
+        }
+        packet.outputContract = expectedOutputContract;
+    }
     packet.packetSha256 = stableSha256(packet);
     return packet;
 }
@@ -411,16 +552,128 @@ function validateReviewOutput(output, role, paperId, receipt, label) {
     if (!Array.isArray(value.findings) || value.findings.length < 2) {
         throw new Error(`${label}.findings 必须包含至少 2 条实质审查结论`);
     }
-    value.findings.forEach((finding, index) => assertText(finding, `${label}.findings[${index}]`, 20));
+    value.findings.forEach((finding, index) => {
+        if (typeof finding === 'string') {
+            assertText(finding, `${label}.findings[${index}]`, 20);
+            return;
+        }
+        const item = assertObject(finding, `${label}.findings[${index}]`);
+        assertText(item.text, `${label}.findings[${index}].text`, 20);
+        assertText(item.severity, `${label}.findings[${index}].severity`, 2);
+        assertText(item.category, `${label}.findings[${index}].category`, 2);
+        if (!Array.isArray(item.evidence) || item.evidence.length === 0) {
+            throw new Error(`${label}.findings[${index}].evidence 必须包含至少一条可定位证据`);
+        }
+        item.evidence.forEach((evidence, evidenceIndex) => {
+            const evidenceLabel = `${label}.findings[${index}].evidence[${evidenceIndex}]`;
+            if (typeof evidence === 'string') {
+                assertText(evidence, evidenceLabel, 3);
+                return;
+            }
+            const evidenceItem = assertObject(evidence, evidenceLabel);
+            assertText(evidenceItem.artifact, `${evidenceLabel}.artifact`, 3);
+            assertText(evidenceItem.locator, `${evidenceLabel}.locator`, 3);
+        });
+    });
     if (!Array.isArray(value.evidenceChecks) || value.evidenceChecks.length < 2) {
         throw new Error(`${label}.evidenceChecks 必须包含至少 2 条局部证据核验`);
     }
     value.evidenceChecks.forEach((check, index) => {
         const item = assertObject(check, `${label}.evidenceChecks[${index}]`);
-        assertText(item.claim, `${label}.evidenceChecks[${index}].claim`, 12);
-        assertText(item.evidenceId, `${label}.evidenceChecks[${index}].evidenceId`, 2);
-        if (item.verified !== true) throw new Error(`${label}.evidenceChecks[${index}] 必须 verified=true`);
+        if (Object.hasOwn(item, 'claim') || Object.hasOwn(item, 'evidenceId')) {
+            assertText(item.claim, `${label}.evidenceChecks[${index}].claim`, 12);
+            assertText(item.evidenceId, `${label}.evidenceChecks[${index}].evidenceId`, 2);
+            if (item.verified !== true) throw new Error(`${label}.evidenceChecks[${index}] 必须 verified=true`);
+            return;
+        }
+        assertText(item.check, `${label}.evidenceChecks[${index}].check`, 4);
+        assertText(item.detail, `${label}.evidenceChecks[${index}].detail`, 12);
+        if (item.passed !== true) throw new Error(`${label}.evidenceChecks[${index}] 必须 passed=true`);
     });
+    if (role === 'technical_scoring') {
+        if (!Array.isArray(value.dims) || value.dims.length !== TECHNICAL_SCORING_DIMENSIONS.length) {
+            throw new Error(`${label}.dims 必须按正式 V6 顺序包含恰好 8 项评分`);
+        }
+        let total = 0;
+        value.dims.forEach((score, index) => {
+            if (!Number.isFinite(score) || score < 0 || score > TECHNICAL_SCORING_MAXIMA[index]
+                || Math.abs(score * 10 - Math.round(score * 10)) > Number.EPSILON * 10) {
+                throw new Error(`${label}.dims[${index}] 超出正式 V6 上限或不是至多一位小数`);
+            }
+            total += score;
+        });
+        if (total > 10 + Number.EPSILON * 10) {
+            throw new Error(`${label}.dims 总分不得超过 10`);
+        }
+        if (!OPEN_SOURCE_SCORE_ANCHORS.some(anchor => Math.abs(anchor - value.dims[5]) < 1e-9)) {
+            throw new Error(`${label}.dims[5] 必须使用正式 V6 开源评分锚点`);
+        }
+        if (!['高', '中', '低'].includes(value.confidence)) {
+            throw new Error(`${label}.confidence 必须是高/中/低`);
+        }
+        if (!Array.isArray(value.scoringReasons) || value.scoringReasons.length !== 8) {
+            throw new Error(`${label}.scoringReasons 必须恰好包含 8 条论文特定理由`);
+        }
+        value.scoringReasons.forEach((reason, index) => {
+            assertText(reason, `${label}.scoringReasons[${index}]`, 20);
+        });
+        const calibration = assertObject(value.scoringCalibration, `${label}.scoringCalibration`);
+        if (calibration.version !== 1 || calibration.independentReview !== true
+            || calibration.reviewerTaskName !== value.taskName
+            || calibration.model !== 'gpt-5.6-terra'
+            || calibration.reasoningEffort !== 'high'
+            || calibration.crossDimensionChecked !== true
+            || calibration.batchScaleChecked !== true) {
+            throw new Error(`${label}.scoringCalibration 必须绑定当前独立 Terra-high reviewer 与完整校准动作`);
+        }
+        assertText(calibration.calibrationNotes, `${label}.scoringCalibration.calibrationNotes`, 40);
+        const byDimension = assertObject(
+            calibration.evidenceIdsByDimension,
+            `${label}.scoringCalibration.evidenceIdsByDimension`
+        );
+        const keys = Object.keys(byDimension);
+        if (keys.length !== TECHNICAL_SCORING_DIMENSIONS.length
+            || TECHNICAL_SCORING_DIMENSIONS.some(key => !Object.hasOwn(byDimension, key))) {
+            throw new Error(`${label}.scoringCalibration.evidenceIdsByDimension 必须精确覆盖正式 V6 八维`);
+        }
+        TECHNICAL_SCORING_DIMENSIONS.forEach(dimension => {
+            const ids = byDimension[dimension];
+            if (!Array.isArray(ids) || ids.length < 1 || ids.length > 6) {
+                throw new Error(`${label}.scoringCalibration.evidenceIdsByDimension.${dimension} 必须包含 1-6 个证据 ID`);
+            }
+            const normalized = ids.map((id, index) => assertText(
+                id,
+                `${label}.scoringCalibration.evidenceIdsByDimension.${dimension}[${index}]`,
+                2
+            ));
+            if (new Set(normalized).size !== normalized.length) {
+                throw new Error(`${label}.scoringCalibration.evidenceIdsByDimension.${dimension} 不得重复`);
+            }
+        });
+    }
+    if (role === 'pedagogy_readability') {
+        const rubric = assertObject(value.readabilityRubric, `${label}.readabilityRubric`);
+        assertPaperId(rubric.paperId, paperId, `${label}.readabilityRubric.paperId`);
+        if (rubric.independentReview !== true
+            || rubric.reviewerTaskName !== value.taskName
+            || rubric.model !== 'gpt-5.6-terra'
+            || rubric.reasoningEffort !== 'high') {
+            throw new Error(`${label}.readabilityRubric 必须绑定当前独立 Terra-high reviewer`);
+        }
+        const validation = validateReadabilityRubric(rubric, { minimumTotal: 12 });
+        if (!validation.valid || !validation.passing) {
+            throw new Error(`${label}.readabilityRubric 未通过 7 维门禁: ${validation.errors.join('; ') || `total=${validation.total}`}`);
+        }
+        const scores = Object.values(rubric.dimensions).map(item => item.score);
+        if (scores.every(score => score === 2)) {
+            if (!Array.isArray(rubric.counterEvidence) || rubric.counterEvidence.length < 3) {
+                throw new Error(`${label}.readabilityRubric 全满分时必须包含至少 3 条反证审计`);
+            }
+            rubric.counterEvidence.forEach((item, index) => {
+                assertText(item, `${label}.readabilityRubric.counterEvidence[${index}]`, 20);
+            });
+        }
+    }
     if (stableSha256(value) !== receipt.outputSha256) {
         throw new Error(`${label} 的真实输出 SHA 与 receipt 不一致`);
     }
@@ -430,7 +683,12 @@ function validateReviewOutput(output, role, paperId, receipt, label) {
 function validateRevisionOutput(output, paperId, receipt, options = {}) {
     const label = options.label || 'manual record reviewOutputs.authorRevision';
     const value = assertObject(output, label);
-    if (value.version !== 1 || value.role !== 'author_revision') {
+    const runtimeMode = options.runtimeMode || MANUAL_V6_RUNTIME_MODE_PRODUCTION;
+    const isProduction = runtimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION;
+    if ((isProduction && (value.version !== 2
+            || value.contract !== MANUAL_V6_REVISION_OUTPUT_CONTRACT))
+        || (!isProduction && value.version !== 1)
+        || value.role !== 'author_revision') {
         throw new Error(`${label} 版本或 role 非法`);
     }
     assertPaperId(value.paperId, paperId, `${label}.paperId`);
@@ -456,6 +714,61 @@ function validateRevisionOutput(output, paperId, receipt, options = {}) {
     if (stableSha256(value) !== receipt.outputSha256) {
         throw new Error(`${label} 的真实输出 SHA 与 receipt 不一致`);
     }
+    if (isProduction) {
+        const root = path.resolve(assertText(options.artifactRoot, `${label}.artifactRoot`, 1));
+        if (!fs.statSync(root, { throwIfNoEntry: false })?.isDirectory()
+            || fs.lstatSync(root).isSymbolicLink()) {
+            throw new Error(`${label}.artifactRoot 必须是真实目录且不得使用符号链接`);
+        }
+        const realRoot = fs.realpathSync(root);
+        const refs = [
+            ['finalArticle', value.finalArticle, 'draft/final-article.md'],
+            ['recordPayload', value.recordPayload, 'draft/revision-record-payload.json']
+        ];
+        for (const [field, ref, expectedPath] of refs) {
+            if (!ref || ref.path !== expectedPath || !SHA256_RE.test(String(ref.fileSha256 || ''))) {
+                throw new Error(`${label}.${field} 必须绑定固定路径与真实文件 SHA`);
+            }
+            const declared = path.resolve(realRoot, expectedPath);
+            if (!fs.statSync(declared, { throwIfNoEntry: false })?.isFile()
+                || fs.lstatSync(declared).isSymbolicLink()) {
+                throw new Error(`${label}.${field} 文件不存在或使用符号链接`);
+            }
+            const resolved = fs.realpathSync(declared);
+            const relative = path.relative(realRoot, resolved);
+            if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+                throw new Error(`${label}.${field} 经 realpath 逃逸单篇工件根`);
+            }
+            const bytes = fs.readFileSync(resolved);
+            if (crypto.createHash('sha256').update(bytes).digest('hex') !== ref.fileSha256) {
+                throw new Error(`${label}.${field} 文件 SHA 不匹配`);
+            }
+            if (field === 'finalArticle') {
+                const normalized = bytes.toString('utf8').normalize('NFKC').replace(/\r\n?/g, '\n').trim();
+                const articleSha256 = crypto.createHash('sha256').update(normalized, 'utf8').digest('hex');
+                if (articleSha256 !== value.finalArticleSha256) {
+                    throw new Error(`${label}.finalArticleSha256 未绑定真实 NFKC/trim 最终正文`);
+                }
+            } else {
+                if (!SHA256_RE.test(String(ref.semanticSha256 || ''))) {
+                    throw new Error(`${label}.recordPayload.semanticSha256 缺失`);
+                }
+                let payload;
+                try { payload = JSON.parse(bytes.toString('utf8')); } catch (error) {
+                    throw new Error(`${label}.recordPayload JSON 损坏: ${error.message}`);
+                }
+                if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+                    || normalizedId(payload.paperId || payload.arxivId) !== paperId
+                    || payload.reviewReceipts || payload.reviewResolution || payload.sealedRecordSha256
+                    || payload.editorial?.longformBundle?.authorReceipt
+                    || payload.editorial?.longformBundle?.finalRevisionAuthorReceipt
+                    || stableSha256(payload) !== ref.semanticSha256) {
+                    throw new Error(`${label}.recordPayload 身份、语义 SHA 或未封印状态非法`);
+                }
+                options.onVerifiedRecordPayload?.(payload);
+            }
+        }
+    }
     return value;
 }
 
@@ -464,14 +777,60 @@ function semanticRecordPayload(record) {
     return payload;
 }
 
+function normalizeLegacyArtifactIndexBinding(record, artifactIndex, artifactIndexFileSha256) {
+    if (!artifactIndex) return record;
+    const source = record?.sourceSnapshot;
+    const semanticSha256 = String(artifactIndex.outputSha256 || '');
+    if (!source || typeof source !== 'object' || Array.isArray(source)
+        || artifactIndex.paperId !== record.paperId
+        || !SHA256_RE.test(semanticSha256)
+        || !SHA256_RE.test(String(artifactIndexFileSha256 || ''))) {
+        throw new Error('sealed record 无法确定性绑定当前 ArtifactIndex 文件与语义身份');
+    }
+    if (source.artifactIndexFileSha256 === undefined
+        && source.artifactIndexSha256 === artifactIndexFileSha256) {
+        source.artifactIndexFileSha256 = artifactIndexFileSha256;
+    }
+    if (source.artifactIndexFileSha256 !== artifactIndexFileSha256) {
+        throw new Error('sealed record 无法确定性绑定当前 ArtifactIndex 文件与语义身份');
+    }
+    if (source.artifactIndexSha256 !== semanticSha256) {
+        const legacyObjectSha256 = stableSha256(artifactIndex);
+        const inputIdentity = artifactIndex.inputIdentity;
+        const structuredAliasMatches = source.artifactIndexSha256 === inputIdentity?.structuredArtifactsSha256
+            && source.paperInputSha256 === inputIdentity?.paperInputSha256
+            && source.sourceIdentitySha256 === inputIdentity?.sourceIdentitySha256
+            && source.sourceSha256 === inputIdentity?.sourceSha256;
+        if (source.artifactIndexSha256 !== artifactIndexFileSha256
+            && source.artifactIndexSha256 !== legacyObjectSha256
+            && !structuredAliasMatches) {
+            throw new Error('sealed record ArtifactIndex 语义身份不是当前 SHA 或可重放 legacy 别名');
+        }
+        source.artifactIndexSha256 = semanticSha256;
+    }
+    return record;
+}
+
 function validateManualRecordV4(record, artifactIndex, verificationContext = {}) {
     const value = assertObject(record, 'manual record v4');
     if (value.version !== MANUAL_RECORD_VERSION_V4 || value.manualDepth !== MANUAL_DEPTH_V6) {
         throw new Error('manual record 必须是 records v4 / full-text-evidence-v6');
     }
     const paperId = assertPaperId(value.paperId, null, 'manual record.paperId');
-    // records v4/v6 只能增加约束，不能绕开当前 records v3/v5 的标题、作者、
-    // 八维评分、证据账本、结果 claims、开源资源、图片和可读性门禁。
+    const correctionContext = verificationContext.metadataCorrection || null;
+    if (Boolean(value.metadataCorrectionProof) !== Boolean(correctionContext)) {
+        throw new Error('manual record metadataCorrectionProof 与 records manifest context 不一致');
+    }
+    if (correctionContext) {
+        if (stableSha256(value.metadataCorrectionProof) !== stableSha256(buildCorrectionProof(correctionContext))) {
+            throw new Error('manual record metadataCorrectionProof 未绑定当前 manifest/correction/receipt');
+        }
+        if (!needsMetadataCorrection(correctionContext.originalPayload)) {
+            throw new Error('manual record metadata correction 是已合法 payload 的 orphan correction');
+        }
+    }
+    // records v4/spec v6 正式契约复用 records v3 validator 作为基础子校验，
+    // 不能绕开其标题、作者、八维评分、证据账本、结果 claims、开源资源、图片和可读性门禁。
     validateRecord(value, paperId, `manual record ${paperId}`, { recordsVersion: RECORDS_VERSION });
     const source = assertObject(value.sourceSnapshot, 'manual record.sourceSnapshot');
     assertSha(source.paperInputSha256, 'manual record.sourceSnapshot.paperInputSha256');
@@ -483,11 +842,26 @@ function validateManualRecordV4(record, artifactIndex, verificationContext = {})
         throw new Error('manual record 绑定的 ArtifactIndex 身份不一致');
     }
     const editorial = assertObject(value.editorial, 'manual record.editorial');
-    if (value.researchBrief?.editorialPlan?.version !== 2) {
+    const runtimeMode = verificationContext.runtimeMode || MANUAL_V6_RUNTIME_MODE_PRODUCTION;
+    const editorialPlanVersion = value.researchBrief?.editorialPlan?.version;
+    const signedLegacyEditorialPlan = verificationContext.allowSignedLegacyEditorialPlan === true
+        && runtimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION
+        && [undefined, 1, 3].includes(editorialPlanVersion)
+        && editorial.longformBundle?.version === 2
+        && editorial.longformBundle?.contract === 'reader-longform-v2';
+    if (editorialPlanVersion !== 2 && !signedLegacyEditorialPlan) {
         throw new Error('manual record v4 必须使用 researchBrief.editorialPlan v2');
     }
     const article = assertText(editorial.readerArticle, 'manual record.editorial.readerArticle', 2400);
-    validateManualTutorialLongformBundle(editorial.longformBundle, article, artifactIndex, { paperId });
+    validateManualTutorialLongformBundle(editorial.longformBundle, article, artifactIndex, {
+        paperId, runtimeMode,
+        // Production V6 records may carry a table fragment signed by the
+        // revision receipt before a deterministic renderer refactor. Numeric
+        // cell coverage, source matrix SHA, block inclusion and fragment SHA
+        // remain mandatory; only byte equality with today's renderer is
+        // relaxed for that already-signed fragment.
+        allowSignedLegacyTableRender: verificationContext.allowSignedLegacyTableRender === true
+    });
     const receipts = assertObject(value.reviewReceipts, 'manual record.reviewReceipts');
     const technical = validateTaskReceipt(
         receipts.technicalScoring, 'technical_scoring', paperId,
@@ -501,6 +875,15 @@ function validateManualRecordV4(record, artifactIndex, verificationContext = {})
         receipts.authorRevision, 'author_revision', paperId,
         'manual record.reviewReceipts.authorRevision'
     );
+    if (runtimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION) {
+        if (!editorial.longformBundle.finalRevisionAuthorReceipt
+            || stableSha256(editorial.longformBundle.finalRevisionAuthorReceipt) !== stableSha256(revision)) {
+            throw new Error('production record 的 finalRevisionAuthorReceipt 必须等于真实 author_revision receipt');
+        }
+        if (revision.articleSha256 !== editorial.longformBundle.articleSha256) {
+            throw new Error('author_revision receipt.articleSha256 未绑定最终 readerArticle');
+        }
+    }
     const authorTaskName = editorial.longformBundle.authorReceipt?.taskName;
     if (new Set([authorTaskName, technical.taskName, readability.taskName, revision.taskName]).size !== 4) {
         throw new Error('manual record 的 author、technical/scoring、readability、revision 必须是不同 task');
@@ -552,9 +935,34 @@ function validateManualRecordV4(record, artifactIndex, verificationContext = {})
         throw new Error('manual record.reviewResolution 未绑定两份真实 review 输出和最终正文');
     }
     const revisionOutput = validateRevisionOutput(outputs.authorRevision, paperId, revision, {
+        runtimeMode,
+        artifactRoot: verificationContext.artifactRoot,
         technicalOutputSha256: technical.outputSha256,
         readabilityOutputSha256: readability.outputSha256,
-        finalArticleSha256: editorial.longformBundle.articleSha256
+        finalArticleSha256: editorial.longformBundle.articleSha256,
+        onVerifiedRecordPayload: payload => {
+            const reconstructed = structuredClone(value);
+            delete reconstructed.sealedRecordSha256;
+            delete reconstructed.reviewReceipts;
+            delete reconstructed.reviewResolution;
+            delete reconstructed.metadataCorrectionProof;
+            if (reconstructed.editorial?.longformBundle) {
+                delete reconstructed.editorial.longformBundle.authorReceipt;
+                delete reconstructed.editorial.longformBundle.finalRevisionAuthorReceipt;
+            }
+            const expectedPayload = correctionContext
+                ? applyMetadataCorrection(payload, correctionContext.correction)
+                : payload;
+            const artifactIndexFileSha256 = verificationContext.artifactIndexBytes
+                ? crypto.createHash('sha256').update(verificationContext.artifactIndexBytes).digest('hex')
+                : source.artifactIndexFileSha256;
+            normalizeLegacyArtifactIndexBinding(
+                expectedPayload, artifactIndex, artifactIndexFileSha256
+            );
+            if (stableSha256(reconstructed) !== stableSha256(expectedPayload)) {
+                throw new Error('最终 sealed record 不是 revision-record-payload 的确定性注入结果');
+            }
+        }
     });
     const expectedFindingIds = [...technicalOutput.findings, ...readabilityOutput.findings]
         .map(finding => stableSha256(finding)).sort();
@@ -617,6 +1025,10 @@ function buildPaperSpecShard(options = {}) {
 function buildBatchSpecV6(options = {}) {
     const date = String(options.date || '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('batch spec date 非法');
+    const runtimeMode = options.runtimeMode;
+    if (![MANUAL_V6_RUNTIME_MODE_PRODUCTION, MANUAL_V6_RUNTIME_MODE_SHADOW].includes(runtimeMode)) {
+        throw new Error('batch spec.runtimeMode 必须显式为 production 或 shadow');
+    }
     assertSha(options.filteredBatchSha256, 'batch spec.filteredBatchSha256');
     const expectedPaperIds = (options.expectedPaperIds || []).map(id => assertPaperId(id, null, 'batch spec.expectedPaperIds'));
     if (!expectedPaperIds.length || new Set(expectedPaperIds).size !== expectedPaperIds.length) {
@@ -646,6 +1058,7 @@ function buildBatchSpecV6(options = {}) {
         version: MANUAL_SPEC_VERSION_V6,
         mode: 'manual_complete',
         signatureContract: MANUAL_SIGNATURE_CONTRACT,
+        runtimeMode,
         date,
         filteredBatchSha256: options.filteredBatchSha256,
         expectedPaperIds: [...expectedPaperIds].sort(),
@@ -659,6 +1072,7 @@ function buildBatchSpecV6(options = {}) {
             stableSha256({
                 version: MANUAL_SPEC_VERSION_V6,
                 signatureContract: MANUAL_SIGNATURE_CONTRACT,
+                runtimeMode,
                 date,
                 filteredBatchSha256: options.filteredBatchSha256,
                 expectedPaperIds: [...expectedPaperIds].sort()
@@ -729,18 +1143,24 @@ module.exports = {
     MANUAL_SPEC_VERSION_V6,
     MANUAL_DEPTH_V6,
     MANUAL_TAKEOVER_VERSION_V3,
+    MANUAL_V6_RUNTIME_MODE_PRODUCTION,
+    MANUAL_V6_RUNTIME_MODE_SHADOW,
+    MANUAL_V6_AUTHOR_LINEAGE_CONTRACT,
+    MANUAL_V6_REVISION_OUTPUT_CONTRACT,
     TASK_PACKET_VERSION,
     WORKFLOW_STATE_VERSION,
     WORKFLOW_STAGES,
     WORKFLOW_DEPENDENCIES,
     stableSha256,
+    resolveManualV6RuntimePaths,
     merkleRootSha256,
-    buildTaskPacket,
+    buildTaskPacket, taskOutputContract,
     validateTaskPacket,
     validateAuthorRevisionArtifactLineage,
     validateReviewOutput,
     validateRevisionOutput,
     validateManualRecordV4,
+    normalizeLegacyArtifactIndexBinding,
     buildPaperSpecShard,
     buildBatchSpecV6,
     validateWorkflowState,

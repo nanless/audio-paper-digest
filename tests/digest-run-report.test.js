@@ -255,7 +255,8 @@ describe('digest run report', () => {
                 assert.strictEqual(report.fetch.rawCandidateCount, 2);
                 assert.strictEqual(report.filter.complete, true);
                 assert.strictEqual(report.filter.selectedCount, 1);
-                assert.strictEqual(report.analysis.complete, true);
+                assert.strictEqual(report.analysis.complete, false);
+                assert.strictEqual(report.analysis.publicationMode, 'invalid_or_legacy');
                 assert.strictEqual(report.analysis.successful, 1);
                 assert.strictEqual(report.analysis.total, 1);
             });
@@ -372,7 +373,8 @@ describe('digest run report', () => {
                 assert.strictEqual(report.dataSources.deepAnalysisResult, 'archive');
                 assert.strictEqual(report.fetch.complete, false);
                 assert.strictEqual(report.filter.complete, false);
-                assert.strictEqual(report.analysis.complete, true);
+                assert.strictEqual(report.analysis.complete, false);
+                assert.strictEqual(report.analysis.publicationMode, 'invalid_or_legacy');
                 assert.strictEqual(report.overallStatus, 'incomplete');
             });
         } finally {

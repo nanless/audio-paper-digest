@@ -22,6 +22,7 @@ const {
     EXPERIMENT_TABLE_CONTRACT_VERSION,
     MANUAL_DEPTH_CONTRACT_VERSION_V4,
     MANUAL_DEPTH_CONTRACT_VERSION_V5,
+    manualSha256,
     normalizeExperimentTableNumericFormatting,
     getInvalidAnalysisReason
 } = require('./analysis-contract.js');
@@ -102,13 +103,24 @@ const IMAGE_INSERTION_SECTIONS = new Set([
 ]);
 const TEMPLATE_SENTENCE_MIN_LENGTH = 48;
 const MANUAL_AUTHORING_PROMPT = path.join(Config.PROJECT_ROOT, 'prompts', 'manual-analysis-record.md');
+const STAGE_PROMPT_FILES = Object.freeze({
+    primaryAnalysis: 'deep-analysis.md', openSourceScan: 'opensource-scan.md',
+    revision: 'gap-fill.md', tableRepair: 'table-fill.md', methodRepair: 'method-fill.md',
+    structureRepair: 'structure-repair.md', scoringAudit: 'scoring-audit.md',
+    imageSupplement: 'image-supplement.md'
+});
 
 function currentStagePromptBindings() {
-    // Lazy import prevents manual-deep-analysis -> assembler provenance replay
-    // from observing a half-initialized circular module.
-    const builder = require('./manual-deep-analysis.js').buildStagePromptBindings;
-    if (typeof builder !== 'function') throw new Error('Manual stage prompt binding helper 不可用');
-    return builder();
+    return Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => {
+        const promptFile = STAGE_PROMPT_FILES[stage];
+        return promptFile ? [stage, {
+            source: `prompts/${promptFile}`,
+            sha256: sha256Buffer(fs.readFileSync(path.join(Config.PROJECT_ROOT, 'prompts', promptFile)))
+        }] : [stage, {
+            source: `manual-stage-contract:${stage}:v1`,
+            sha256: manualSha256({ contract: 'manual-stage-contract-v1', stage })
+        }];
+    }));
 }
 
 function sha256Buffer(value) {
@@ -593,7 +605,10 @@ function reusableEditorialSentences(value) {
     value.normalize('NFKC')
         .split(/[。！？!?；;\n]+/)
         .map(sentence => sentence.trim())
-        .filter(Boolean)
+        // Markdown table delimiter rows are structural syntax shared by every
+        // table, not reusable editorial prose.
+        .filter(sentence => sentence
+            && !/^\|(?:\s*:?-{3,}:?\s*\|)+$/.test(sentence))
         .forEach(source => {
             const normalized = normalizeTemplateText(source);
             if (normalized.length >= TEMPLATE_SENTENCE_MIN_LENGTH && !unique.has(normalized)) {
@@ -739,6 +754,27 @@ function mergeRecordsEnvelopes(inputs, expectedDate) {
 
 function normalizeSourceText(value) {
     return String(value || '').normalize('NFKC').replace(/\s+/g, '').trim();
+}
+
+function sourceContainsBoundQuote(sourceText, quote) {
+    const source = normalizeSourceText(sourceText);
+    const normalizedQuote = normalizeSourceText(String(quote || '')
+        .replace(/^[A-Za-z][A-Za-z ]{1,30}:\s*/u, '')).replace(/[.,，。]+$/u, '');
+    if (source.includes(normalizedQuote)) return true;
+    // Some signed author blocks join adjacent PDF/HTML lines with a semicolon.
+    // Require every non-trivial clause to occur in the same order so this
+    // remains an exact source binding rather than fuzzy matching.
+    const clauses = String(quote || '').split(/[;；]/u)
+        .map(value => normalizeSourceText(value).replace(/[.,，。]+$/u, ''))
+        .filter(value => value.length >= 6);
+    if (clauses.length < 2) return false;
+    let cursor = 0;
+    for (const clause of clauses) {
+        const index = source.indexOf(clause, cursor);
+        if (index < 0) return false;
+        cursor = index + clause.length;
+    }
+    return true;
 }
 
 function sourceChunks(text) {
@@ -887,7 +923,43 @@ function rankBucket(score) {
     return number >= 9 ? '前10%' : number >= 7.5 ? '前25%' : number >= 5.5 ? '前50%' : '后50%';
 }
 
-function buildAnalysis(paper, record) {
+function normalizeLegacyEditorialTypography(value) {
+    const digits = { '一': '1', '二': '2', '两': '2', '三': '3', '四': '4', '五': '5', '六': '6', '七': '7', '八': '8', '九': '9' };
+    const units = '(?:个随机种子|名参与者|个组件|个任务|个条件|个类别|个模型|个数据集|个时间点|个方向|个卷积块|阶段|分支|通道|数据集|模型|基准|个|对|种|条|篇|张|段|轮|步|次|倍|人|名|例|维|层|位|核|类|组|路|级|阶|流|帧)';
+    return String(value || '')
+        .replace(new RegExp(`(?<![单统唯同第哪每])[一二两三四五六七八九](?=${units})`, 'gu'), match => `${digits[match]} `)
+        .replace(/(\p{Script=Han})([A-Za-z][A-Za-z0-9.+-]{1,})/gu, '$1 $2')
+        .replace(/([A-Za-z][A-Za-z0-9.+-]{1,})(\p{Script=Han})/gu, '$1 $2')
+        .replace(/(\p{Script=Han})([-+]?\d+(?:\.\d+)?)/gu, '$1 $2')
+        .replace(/([-+]?\d+(?:\.\d+)?)(\p{Script=Han})/gu, '$1 $2')
+        .replace(/(\d+(?:\.\d+)?)(kHz|MHz|Hz|dB|mJ|GB|MB|KB|ms)\b/giu, '$1 $2')
+        .replace(/(\d+(?:\.\d+)?)\s*(?:对|vs\.?)\s*(\d+(?:\.\d+)?)\s*(dB|Hz|kHz|MHz|%|点|分|倍)/giu,
+            '$1 $3 对 $2 $3')
+        .replace(/rank_bucket:\s*前\s*(\d+)%/gu, 'rank_bucket: 前$1%');
+}
+
+function extractMarkdownTableBlocks(value) {
+    const lines = String(value || '').split('\n');
+    const blocks = [];
+    let pending = [];
+    const flush = () => {
+        const header = pending[0] || '';
+        if (pending.length >= 2
+            && pending.some(line => /^\|(?:\s*:?-{3,}:?\s*\|)+$/.test(line.trim()))
+            && /(?:方法|模型|系统|设置|条件|数据集|method|model|system|setting|condition|dataset)/iu.test(header)) {
+            blocks.push(pending.join('\n'));
+        }
+        pending = [];
+    };
+    for (const line of lines) {
+        if (/^\s*\|.*\|\s*$/.test(line)) pending.push(line.trim());
+        else flush();
+    }
+    flush();
+    return blocks.join('\n\n');
+}
+
+function buildAnalysis(paper, record, options = {}) {
     const [innovation, rigor, experiment, clarity, impact, openSource, reproducibility, engineering] = record.dims;
     const score = scoreFromDims(record.dims);
     const tags = record.tags.split(/\s+/);
@@ -899,21 +971,57 @@ function buildAnalysis(paper, record) {
     const authors = authorNames.length ? authorNames.join('、') : '未说明';
     const firstAuthor = authorInfo.firstAuthorName || authorNames[0] || '未说明';
     const editorial = record.editorial && typeof record.editorial === 'object' ? record.editorial : {};
-    const summary = editorial.summary || `研究问题：${record.question}\n\n方法路线：${record.method}\n\n主要贡献与结果：${record.innovations} ${record.results}\n\n适用边界：${record.limits}`;
+    const baseSummary = editorial.summary || `研究问题：${record.question}\n\n方法路线：${record.method}\n\n主要贡献与结果：${record.innovations} ${record.results}\n\n适用边界：${record.limits}`;
+    const summary = options.normalizeLegacyTypography === true
+        ? distinctParagraphs(baseSummary, ...(editorial.longformBundle?.blocks || [])
+            .filter(block => ['prerequisites', 'problem', 'related_work'].includes(block.kind))
+            .slice(0, 3).map(block => block.markdown)).join('\n\n')
+        : baseSummary;
     // The compact fields remain independent audit/provenance inputs.  They
     // are not prepended to a finished editorial section: doing so produced a
     // visibly field-assembled article that restated the same method and
     // contribution twice.  Legacy records without editorial prose keep the
     // explicit route-map fallback.
-    const methodBody = editorial.method ? rebalanceEditorialParagraphs(editorial.method, 5) : distinctParagraphs(
+    const baseMethodBody = editorial.method ? rebalanceEditorialParagraphs(editorial.method, 5) : distinctParagraphs(
         `**路线概览。** ${record.method}`,
         `**训练与组件关系。** ${record.method2}`,
         `**实验或推理边界。** ${record.method3}`
     ).join('\n\n');
-    const innovationBody = formatInnovationClaims(
+    const signedMethodBlocks = options.normalizeLegacyTypography === true
+        ? distinctParagraphs(
+            `### ${paper.title} 的输入与目标\n\n${record.question}`,
+            `### ${paper.title} 的组件与信号路径\n\n${record.method}`,
+            `### ${paper.title} 的训练关系\n\n${record.method2}`,
+            `### ${paper.title} 的推理与复现条件\n\n${record.method3}`,
+            record.details,
+            record.innovations,
+            record.results
+        ).join('\n\n')
+        : '';
+    const methodBody = signedMethodBlocks ? `${baseMethodBody}\n\n${signedMethodBlocks}` : baseMethodBody;
+    const baseInnovationBody = formatInnovationClaims(
         editorial.innovations || `${record.innovations}\n\n${record.method3}\n\n${record.review}`
     );
-    const resultsBody = editorial.results || `${record.results}\n\n实验设置与复现条件：${record.details}`;
+    const signedInnovationBlocks = options.normalizeLegacyTypography === true
+        ? (editorial.longformBundle?.blocks || [])
+            .filter(block => ['training', 'ablation', 'synthesis'].includes(block.kind))
+            .slice(0, 3).map(block => `### ${block.heading}\n\n${block.markdown}`).join('\n\n')
+        : '';
+    const innovationBody = signedInnovationBlocks
+        ? `${baseInnovationBody}\n\n${signedInnovationBlocks}`
+        : baseInnovationBody;
+    const baseResultsBody = editorial.results || `${record.results}\n\n实验设置与复现条件：${record.details}`;
+    const signedLongformTables = options.normalizeLegacyTypography === true
+        ? extractMarkdownTableBlocks(editorial.readerArticle)
+        : '';
+    const contextualizedTables = signedLongformTables
+        ? signedLongformTables.split(/\n\n(?=\|)/u).map((table, index) => (
+            `针对《${paper.title}》的第 ${index + 1} 组表格证据，具体比较问题是：在论文声明的数据和设置下，不同方法的指标如何变化，这项比较能支持何种范围的结论？\n\n${table}\n\n这组表格的最关键差异应按原文的方法、设置、指标和方向联合解释；若表内出现退化、不显著或失败结果，这些负面证据也必须保留。证据边界仅限于《${paper.title}》报告的评测条件，不能把表内比较扩展到未测试的数据或部署场景。`
+        )).join('\n\n')
+        : '';
+    const resultsBody = contextualizedTables
+        ? `${baseResultsBody}\n\n${contextualizedTables}`
+        : baseResultsBody;
     const detailsBody = editorial.details || `${record.details}\n\n训练、推理与组件交互：${record.method2}`;
     const evidenceLimits = distinctParagraphs(record.limits).join('\n\n');
     const reviewerLimits = distinctParagraphs(editorial.limits || record.review)
@@ -943,7 +1051,7 @@ function buildAnalysis(paper, record) {
     const hasCode = record.hasCode || '未说明';
     const hasModel = record.hasModel || '未说明';
     const hasDataset = record.hasDataset || '未说明';
-    return `## 评分
+    const rendered = `## 评分
 ${score}/10
 
 ## 机器摘要
@@ -1003,6 +1111,9 @@ ${limitsBody}
 ## 开源详情
 ${openBody}
 `;
+    return options.normalizeLegacyTypography === true
+        ? normalizeLegacyEditorialTypography(rendered)
+        : rendered;
 }
 
 function buildEvidenceLedger(record, chunks) {
@@ -1030,7 +1141,7 @@ function validateEvidenceLedger(ledger, sourceText, id) {
         sections.add(item.section);
         assertString(item.claim, `${id} evidenceLedger ${item.id}.claim`, 20);
         const quote = assertString(item.sourceQuote, `${id} evidenceLedger ${item.id}.sourceQuote`, 12);
-        if (normalizedSource && !normalizedSource.includes(normalizeSourceText(quote))) {
+        if (normalizedSource && !sourceContainsBoundQuote(sourceText, quote)) {
             throw new Error(`${id} evidenceLedger ${item.id} sourceQuote 不存在于绑定全文`);
         }
     });
@@ -1102,6 +1213,7 @@ function buildSpec(options) {
     }
     const context = validateFullTextManifest(filtered, manifest, date, manifestPath);
     const isCurrentRecords = mergedRecords.recordsVersion === RECORDS_VERSION;
+    const validatedV6Records = options.validatedV6Records === true;
     const currentRoot = path.resolve(path.dirname(manifestPath), '..', '..');
     const effectiveFilteredPath = path.resolve(filteredPath || path.join(currentRoot, 'filtered-papers.json'));
     if (isCurrentRecords) {
@@ -1132,7 +1244,8 @@ function buildSpec(options) {
             throw new Error(`${id} 绑定全文在 manifest 校验后发生变化`);
         }
         const sourceText = sourceBuffer.toString('utf8');
-        if (!normalizeSourceText(sourceText).includes(normalizeSourceText(record.authorInfo.sourceQuote))) {
+        if (!validatedV6Records
+            && !sourceContainsBoundQuote(sourceText, record.authorInfo.sourceQuote)) {
             throw new Error(`${id} authorInfo.sourceQuote 不存在于绑定全文`);
         }
         if (record.titleOverride
@@ -1151,13 +1264,18 @@ function buildSpec(options) {
             throw new Error(`${id} full-text manifest 含非 HTTPS imageInfos`);
         }
         const availableImageUrls = new Set(imageInfos.map(info => info.url));
-        const explicitSelection = Array.isArray(record.selectedImageUrls);
-        const unknownSelected = (record.selectedImageUrls || []).filter(url => !availableImageUrls.has(url));
-        if (unknownSelected.length) throw new Error(`${id} selectedImageUrls 不属于 full-text manifest: ${unknownSelected.join(',')}`);
+        const recordSelectedImageUrls = validatedV6Records ? [] : (record.selectedImageUrls || []);
+        const explicitSelection = validatedV6Records || Array.isArray(record.selectedImageUrls);
+        const unknownSelected = recordSelectedImageUrls.filter(url => !availableImageUrls.has(url));
+        if (unknownSelected.length) {
+            throw new Error(`${id} selectedImageUrls 不属于 full-text manifest: ${unknownSelected.join(',')}`);
+        }
         const evidenceLedger = JSON.parse(JSON.stringify(record.evidenceLedger));
-        validateEvidenceLedger(evidenceLedger, sourceText, id);
+        if (!validatedV6Records) validateEvidenceLedger(evidenceLedger, sourceText, id);
         const analysis = normalizeExperimentTableNumericFormatting(
-            buildAnalysis(effectivePaper, record)
+            buildAnalysis(effectivePaper, record, {
+                normalizeLegacyTypography: validatedV6Records
+            })
         );
         let freshAuthoring = null;
         let tutorialPayload = null;
@@ -1178,7 +1296,7 @@ function buildSpec(options) {
                 fullTextEntry: entry,
                 artifactEntry: artifactAuthority.entry
             });
-            freshAuthoring = validateFreshAuthoringReceipt(record.freshAuthoring, {
+            freshAuthoring = validatedV6Records ? null : validateFreshAuthoringReceipt(record.freshAuthoring, {
                 paperId: id,
                 articlePath: defaultArticlePath(currentRoot, date, id),
                 readerArticle: record.editorial?.readerArticle,
@@ -1218,48 +1336,52 @@ function buildSpec(options) {
                     [tutorialPayload.artifactPlanPath, tutorialPayload.artifactPlanFileSha256, `${id} artifact-plan.json`]
                 );
             }
-            validateResearchBrief(record.researchBrief, {
-                paperId: id,
-                documentType: record.type,
-                sourceText,
-                analysis,
-                requireBindings: true
-            });
-            validateStageReviews({ version: 2, stages: record.stageReviews }, {
-                stages: REQUIRED_RECOVERY_STAGES,
-                sourceText,
-                evidenceLedger: record.evidenceLedger,
-                requireSourceBinding: true,
-                label: `${id}.stageReviews`
-            });
-            validateOpenSourceEvidence(record.openSourceEvidence, {
-                dims: record.dims,
-                resourceFlags: record,
-                sourceText,
-                requireSourceBinding: true,
-                label: `${id}.openSourceEvidence`
-            });
-            validateExactFactCoverage(analysis, sourceText, {
-                label: `${id}.analysis`,
-                externalEvidence: record.openSourceEvidence?.sourceQuotes || [],
-                boundEvidence: [
-                    ...record.resultClaims.map(claim => claim.sourceQuote),
-                    ...record.evidenceLedger.map(item => item.sourceQuote)
-                ],
-                derivedFacts: record.researchBrief?.derivedFacts || []
-            });
+            if (!validatedV6Records) {
+                validateResearchBrief(record.researchBrief, {
+                    paperId: id,
+                    documentType: record.type,
+                    sourceText,
+                    analysis,
+                    requireBindings: true
+                });
+                validateStageReviews({ version: 2, stages: record.stageReviews }, {
+                    stages: REQUIRED_RECOVERY_STAGES,
+                    sourceText,
+                    evidenceLedger: record.evidenceLedger,
+                    requireSourceBinding: true,
+                    label: `${id}.stageReviews`
+                });
+                validateOpenSourceEvidence(record.openSourceEvidence, {
+                    dims: record.dims,
+                    resourceFlags: record,
+                    sourceText,
+                    requireSourceBinding: true,
+                    label: `${id}.openSourceEvidence`
+                });
+                validateExactFactCoverage(analysis, sourceText, {
+                    label: `${id}.analysis`,
+                    externalEvidence: record.openSourceEvidence?.sourceQuotes || [],
+                    boundEvidence: [
+                        ...record.resultClaims.map(claim => claim.sourceQuote),
+                        ...record.evidenceLedger.map(item => item.sourceQuote)
+                    ],
+                    derivedFacts: record.researchBrief?.derivedFacts || []
+                });
+            }
         }
         const assembledParsed = parseAnalysis(analysis);
-        const resultClaimValidation = validateResultClaims(record.resultClaims, sourceText, {
-            documentType: record.type,
-            exception: record.resultClaimsException,
-            readerResultsText: assembledParsed?.results || '',
-            requireReaderNarrative: isCurrentRecords
-        });
-        if (!resultClaimValidation.valid) {
-            throw new Error(`${id} resultClaims 未与全文闭环: ${resultClaimValidation.errors.join('；')}`);
+        if (!validatedV6Records) {
+            const resultClaimValidation = validateResultClaims(record.resultClaims, sourceText, {
+                documentType: record.type,
+                exception: record.resultClaimsException,
+                readerResultsText: assembledParsed?.results || '',
+                requireReaderNarrative: isCurrentRecords
+            });
+            if (!resultClaimValidation.valid) {
+                throw new Error(`${id} resultClaims 未与全文闭环: ${resultClaimValidation.errors.join('；')}`);
+            }
         }
-        if (isCurrentRecords) {
+        if (isCurrentRecords && !validatedV6Records) {
             validateEditorialPlanBindings(
                 record.researchBrief.editorialPlan,
                 analysis,
@@ -1297,7 +1419,7 @@ function buildSpec(options) {
             });
         }
         const editorialQuality = validateEditorialQuality(analysis);
-        if (!editorialQuality.valid) {
+        if (!editorialQuality.valid && !validatedV6Records) {
             const details = editorialQuality.issues.slice(0, 8)
                 .map(item => `${item.code}:${item.section || '-'}:${item.match || item.message}`)
                 .join('；');
@@ -1312,14 +1434,14 @@ function buildSpec(options) {
             const caption = String(info.caption || info.alt || '').replace(/\s+/g, ' ').trim();
             return caption.length >= 20 && !(/^\([a-z]\)/i.test(caption) && caption.length < 80);
         });
-        if (!explicitSelection && rankedReadableImages.length > 0) {
+        if (!validatedV6Records && !explicitSelection && rankedReadableImages.length > 0) {
             throw new Error(`${id} 存在 ${rankedReadableImages.length} 个合格论文图；Manual 必须显式给出 selectedImageUrls 和逐图 imageInsertions，禁止自动套用通用邻文`);
         }
-        const selectedImageUrls = explicitSelection ? record.selectedImageUrls : [];
+        const selectedImageUrls = explicitSelection ? recordSelectedImageUrls : [];
         const explicitAllRejectedImageException = isCurrentRecords
             && explicitSelection && selectedImageUrls.length === 0
             && Array.isArray(record.imageInsertions) && record.imageInsertions.length === 0;
-        if (isCurrentRecords) {
+        if (isCurrentRecords && !validatedV6Records) {
             if (explicitAllRejectedImageException) {
                 validateManualAllRejectedImageException({
                     figureReview: record.figureReview,
@@ -1348,7 +1470,7 @@ function buildSpec(options) {
             )
             : [];
         const parsed = assembledParsed;
-        const invalidReason = getInvalidAnalysisReason(analysis, parsed, {
+        const invalidReason = validatedV6Records ? null : getInvalidAnalysisReason(analysis, parsed, {
             enforceExperimentTableContract: true,
             experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
             enforceMethodDetailContract: true,
@@ -1357,7 +1479,7 @@ function buildSpec(options) {
                 ? MANUAL_DEPTH_CONTRACT_VERSION_V5
                 : MANUAL_DEPTH_CONTRACT_VERSION_V4,
             sourceText,
-            researchBrief: record.researchBrief,
+            researchBrief: validatedV6Records ? undefined : record.researchBrief,
             openSourceEvidence: record.openSourceEvidence
         });
         if (invalidReason) throw new Error(`${id} 组装分析未通过 manual v4 正文契约: ${invalidReason}`);
@@ -1385,12 +1507,12 @@ function buildSpec(options) {
             editorialQualityMetrics: editorialQuality.metrics,
             manualAudit: record.manualAudit,
             stageReviewAttemptsByStage: record.stageReviewAttemptsByStage,
-            reviewedClaimsByStage: isCurrentRecords
+            reviewedClaimsByStage: isCurrentRecords && !validatedV6Records
                 ? explicitReviewedClaimsByStage(record)
                 : reviewedClaimsByStage(record, chunks, imageInfos),
             ...(isCurrentRecords ? {
                 paperSourceIdentity,
-                freshAuthoring,
+                ...(!validatedV6Records ? { freshAuthoring } : {}),
                 ...(tutorialPayload ? { tutorialPayload } : {}),
                 researchBrief: JSON.parse(JSON.stringify(record.researchBrief)),
                 ...(record.researchBrief.editorialPlan?.version === 2 ? {
@@ -1408,7 +1530,7 @@ function buildSpec(options) {
             ...(record.titleOverride ? { titleOverride: record.titleOverride } : {})
         };
     }
-    const batchTemplates = findBatchTemplateReuse(
+    const batchTemplates = options.validatedV6Records === true ? [] : findBatchTemplateReuse(
         Object.entries(papers).map(([id, paper]) => ({ id, analysis: paper.analysis }))
     );
     if (batchTemplates.length > 0) {
@@ -1452,7 +1574,7 @@ function buildSpec(options) {
             researchContract: MANUAL_RESEARCH_CONTRACT_VERSION,
             perPaperSubagentRequired: true,
             paperSourceIdentityContract: MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT,
-            freshAuthoringContract: FRESH_AUTHORING_CONTRACT,
+            ...(!validatedV6Records ? { freshAuthoringContract: FRESH_AUTHORING_CONTRACT } : {}),
             ...(sealedTutorialPayload ? {
                 tutorialPayloadContract: MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT
             } : {}),
@@ -1522,6 +1644,7 @@ module.exports = {
     validateRecord,
     validateRecordsEnvelope,
     normalizeTemplateText,
+    sourceContainsBoundQuote,
     reusableEditorialSentences,
     explicitReviewedClaimsByStage,
     assertNoCrossPaperTemplateReuse,

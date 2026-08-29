@@ -43,7 +43,12 @@ const ARTIFACT_NUMBER_HEADING_RE = /(?:图|表)\s*(?:\d+|[一二三四五六七�
 const BEIJING_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?\+08:00$/;
 
 function normalizeEvidence(value) {
-    return String(value || '').normalize('NFKC').replace(/\s+/g, '').trim();
+    return String(value || '').normalize('NFKC')
+        // LaTeXML can expose both the accessible multiplication glyph and its
+        // TeX fallback (`×\\times`) in the same flattened source span.
+        .replace(/×\\times/gi, '×')
+        .replace(/(\d)\\times(?=\d)/gi, '$1×')
+        .replace(/\s+/g, '').trim();
 }
 
 function assertText(value, label, minimum = 1) {
@@ -416,8 +421,15 @@ function validateReaderArticle(plan, article, evidenceLedger = [], options = {})
         throw new Error(`${label} 章节标题不得包含图号或表号: ${numberedHeading}`);
     }
     const expectedHeadings = plan.sectionPlan.map(item => item.heading);
-    if (headings.length !== expectedHeadings.length
-        || headings.some((heading, index) => heading !== expectedHeadings[index])) {
+    const headingContractPassed = options.allowLongformHeadingExpansion === true
+        ? expectedHeadings.reduce((cursor, expected) => {
+            if (cursor < 0) return -1;
+            const next = headings.indexOf(expected, cursor);
+            return next < 0 ? -1 : next + 1;
+        }, 0) >= 0
+        : headings.length === expectedHeadings.length
+            && headings.every((heading, index) => heading === expectedHeadings[index]);
+    if (!headingContractPassed) {
         throw new Error(`${label} 必须按 editorialPlan.sectionPlan 顺序使用全部论文特有 ### 小节`);
     }
     if (/^###\s*(?:方法概述和架构|核心创新点|实验结果|细节详述|局限与问题)\s*$/m.test(text)) {
@@ -494,7 +506,8 @@ function validateReaderArticle(plan, article, evidenceLedger = [], options = {})
         }
         validateManualLongformBundle(options.longformBundle, text, options.artifactIndex, {
             label: `${label}.longformBundle`,
-            paperId: options.paperId
+            paperId: options.paperId,
+            runtimeMode: options.runtimeMode
         });
     }
     validateTutorialArticle(plan, text, options);
@@ -700,7 +713,7 @@ function validateStageReviews(stageReviews, options = {}) {
             throw new Error(`${itemLabel}.attempts 非法；repaired 至少需要 2 次`);
         }
         const evidenceIds = assertUniqueTextArray(item.evidenceIds, `${itemLabel}.evidenceIds`, {
-            minimumItems: 1, maximumItems: 8, minimumLength: 3
+            minimumItems: 1, maximumItems: 8, minimumLength: 2
         });
         const unknownIds = evidenceIds.filter(id => !knownEvidenceIds.has(id));
         if (unknownIds.length) throw new Error(`${itemLabel}.evidenceIds 含未知证据 ID: ${unknownIds.join(', ')}`);
@@ -860,7 +873,7 @@ function validateScoringCalibration(calibration, options = {}) {
     const knownIds = new Set(evidenceLedger.map(item => item?.id).filter(Boolean));
     for (const dimension of SCORING_DIMENSIONS) {
         const ids = assertUniqueTextArray(byDimension[dimension], `${label}.evidenceIdsByDimension.${dimension}`, {
-            minimumItems: 1, maximumItems: 6, minimumLength: 3
+            minimumItems: 1, maximumItems: 6, minimumLength: 2
         });
         const unknown = ids.filter(id => !knownIds.has(id));
         if (unknown.length) throw new Error(`${label}.${dimension} 含未知 evidence ID: ${unknown.join(', ')}`);
@@ -910,7 +923,10 @@ function validateOpenSourceEvidence(evidence, options = {}) {
     if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence) || evidence.version !== 1) {
         throw new Error(`${label} 必须是 version=1 对象`);
     }
-    const allowedStates = new Set(['released', 'promise', 'demo_only', 'none', 'theoretical_artifact']);
+    const allowedStates = new Set([
+        'released', 'partial_release', 'promise', 'demo_only', 'reference_only', 'none',
+        'theoretical_artifact'
+    ]);
     if (!allowedStates.has(evidence.state)) throw new Error(`${label}.state 非法`);
     const urls = Array.isArray(evidence.urls) ? evidence.urls : [];
     if (urls.some(url => typeof url !== 'string' || !url.startsWith('https://')) || new Set(urls).size !== urls.length) {
@@ -934,16 +950,21 @@ function validateOpenSourceEvidence(evidence, options = {}) {
         if (releasedCount < 1 || urls.length < 1 || score < 1) {
             throw new Error(`${label} released 必须绑定至少一种已发布核心资源、HTTPS URL 且开源分不低于 1.0`);
         }
+    } else if (evidence.state === 'partial_release'
+        && (score !== 0.5 || urls.length < 1)) {
+        throw new Error(`${label} partial_release 必须绑定已发布子集/部分资源 URL 并使用开源分 0.5`);
     } else if (evidence.state === 'promise' && score !== 0.5) {
         throw new Error(`${label} promise 必须使用开源分 0.5`);
     } else if (evidence.state === 'demo_only' && (score !== 0.2 || urls.length < 1)) {
         throw new Error(`${label} demo_only 必须绑定可访问 URL 并使用开源分 0.2`);
+    } else if (evidence.state === 'reference_only' && (score !== 0.2 || urls.length > 0)) {
+        throw new Error(`${label} reference_only 必须表示正文仅引用资源但没有可核验直达 URL，并使用开源分 0.2`);
     } else if (evidence.state === 'none' && score !== 0) {
         throw new Error(`${label} none 必须使用开源分 0`);
     } else if (evidence.state === 'theoretical_artifact' && score < 0.5) {
         throw new Error(`${label} theoretical_artifact 必须明确评价论文内公开证明/推导并使用非零分`);
     }
-    if (!['released', 'demo_only'].includes(evidence.state) && urls.length > 0) {
+    if (!['released', 'partial_release', 'demo_only'].includes(evidence.state) && urls.length > 0) {
         throw new Error(`${label}.${evidence.state} 不应声明已发布资源 URL`);
     }
     return evidence;

@@ -2,11 +2,11 @@
 
 **[English](README.en.md)** | 中文
 
-本项目用于生成“语音/音乐/音频论文速递”。默认日更采用 Manual v5：联网抓取后，每篇论文由独立 subagent 在隔离上下文中完成筛选、全文研究者解读、评分和页面审查；LLM/API 自动筛选与分析保留为用户显式选择的可选路线。Node 端配置集中在 `scripts/config.js`，Python 发布路径集中在 `scripts/path_config.py`。
+本项目用于生成“语音/音乐/音频论文速递”。默认日更采用 production Manual v6：联网抓取后，每篇论文由独立 subagent 在隔离上下文中完成筛选、全文研究者解读、评分和页面审查；LLM/API 自动筛选与分析保留为用户显式选择的可选路线。Node 端配置集中在 `scripts/config.js`，Python 发布路径集中在 `scripts/path_config.py`。
 
-Manual v6 目前按显式影子链渐进落地，不会偷偷改变默认日更：`manual:fulltext` 在 HTML 扁平化前保存表格、MathML/TeX、图片和参考文献结构，并生成带 `complete/incomplete` 健康状态的 companion ArtifactIndex；PDF/text fallback 不再伪装完整。`reader-longform-v2` 已把结果表覆盖改为源矩阵 cell ID + 确定性正文渲染，并要求图、公式、术语和相关工作实际进入绑定 block。`manual:v6:tasks` 提供逐论文持久状态、3 槽 claim、失败恢复和 Terra-high receipt 校验，但不调用 API、不创建或冒充 subagent；`manual:v6:spec` 会从 records v4 逐项回读 record、ArtifactIndex、task packet/receipt 和 reviewer output 的真实文件字节，组装 spec v6 Merkle root；`manual:v6:analyze` 必须显式使用 shadow 模式，只写 `data/current/manual-v6-shadow/<date>/`，不会更新正式 canonical 或 `papers.json`。旧 v5 页面不再允许作为新教程生成、修订或质量回归输入；对比评测只能比较两份分别从同一原始证据冷启动生成的 fresh 稿件。默认组装、博客输入和日更仍是 records v3 → spec v5 → `full-text-evidence-v5`。尚未完成的是新鲜批次的真实 records v4 内容生产和至少 3 批性能验收。详见 [Manual v6 渐进改造计划](docs/manual-v6-migration.md)。
+Production v6 根为 `data/current/manual-v6/<date>/`：`manual:fulltext` 保存结构化全文并生成 complete/incomplete ArtifactIndex；持久 runner 管理 author → technical_scoring / pedagogy_readability → author_revision，最多 3 个活动 claim，但不调用 API、不创建或冒充 subagent，也不自动物化 role packet 或 records envelope。主 Agent负责真实 Terra-high leaf subagent 和 `records-v4.json`；official assembler 回读 records v4 内嵌并重放的 legacy v5 base payload、ArtifactIndex、各 role packet/output/receipt 的真实字节，组装含完整论文集合与 Merkle root 的 spec v6。`manual:analyze` 以 `runtimeMode=production` 写标准 `data/current/deep-analysis-result.json`，publisher 缺 v6 binding 时 fail closed。显式 shadow 仍隔离在 `data/current/manual-v6-shadow/<date>/`；v5 只保留 `manual:v5:*` 历史只读/维护兼容。
 
-本轮 P0 同时修复了 Manual 同日期重复进程、HF 同步 curl 阻塞、跨类别重复摘要、健康 arXiv 类别固定长等待，以及 generation schema v3 页面 SHA 未在 review/push 兑现的问题。Manual raw 的真实 socket 仍按 host 严格单飞，但冷却改为健康 1 秒、瞬时失败 5 秒、429 60 秒的自适应 next-eligible；等待只在下一次同 host 请求前支付，本地解析/checkpoint/HF 会自然抵消它。raw 阶段另在 `manual-v6-shadow/<date>/metrics/raw_fetch-*.json` 保存绑定 raw/checkpoint SHA 的 wall、类别/摘要 cache、retry wait 与 scheduler wait。性能收益必须用新鲜联网批次的 P50/P95 证明；文档不再把理论节省写成实测结果。
+本轮 P0 同时修复了 Manual 同日期重复进程、HF 同步 curl 阻塞、跨类别重复摘要、健康 arXiv 类别固定长等待，以及 generation schema v3 页面 SHA 未在 review/push 兑现的问题。Manual raw 的真实 socket 仍按 host 严格单飞，但冷却改为健康 1 秒、瞬时失败 5 秒、429 60 秒的自适应 next-eligible；等待只在下一次同 host 请求前支付，本地解析/checkpoint/HF 会自然抵消它。Production raw/fulltext/ArtifactIndex/spec/canonical 指标写 `manual-v6/<date>/metrics/`；只有显式 shadow 才写 `manual-v6-shadow/<date>/metrics/`。性能收益必须用新鲜联网批次的 P50/P95 证明。
 
 逐论文筛选、理解、主要正文、评分、可读性复核和最终单页审查 subagent 统一使用 `gpt-5.6-terra`、reasoning `high`；Sol 主 Agent 只负责队列、代码、确定性门禁、组装和发布。正文任务包固定携带仓库内 [Manual 教程写作规范](prompts/manual-tutorial-article.md) 及其 SHA，参考依据已沉淀到 [Manual 教程编辑参考契约](docs/manual-editorial-reference-contract.md)，正常批次无需重新打开外部参考。新 record 必须显式写 `editorialPlan.readerFormatContract=graduate-researcher-tutorial-quality-v2`；缺字段仅兼容历史 plan。正文先建立“中心技术矛盾—递进读者问题—证据柱—结论回收”的编辑蓝图，再按论文主张组织图表和实验，而不是按字段或论文目录机械扩写。新 records 使用 `editorialPlan` v2：读者标题、核心判断、问题回答、证据柱和每节锚句都必须可在最终正文中逐一定位；`editorial.readerArticle` 则是发布页唯一的连续深度解读，用论文特有小节替代“方法/创新/实验/细节/局限”模板栏目。每条实验结论还须提供可直接给读者看的自然语言解释，不能把方法/基线/指标/数值拼成字段串。独立页固定按“中文题目 → 英文题目/arXiv 链接 → 标签 → 总分与八维分项 → 作者机构 → 一句话概括 → 毒舌点评 → 核心摘要 → 开源与复现资源 → 深度解读 → 文末逐维评分证据”组织，八个分项即使为 0 也不能省略；每日汇总卡片使用对应的紧凑身份信息。章节标题禁止包含图表编号，公式统一使用 `\(...\)` / `\[...\]`，最终 review 同时验证 Markdown 源码与 Hugo 渲染 HTML。毒舌点评必须同时给出最扎实的优点和最该泼冷水的不足，并由深度解读中的证据支撑。历史记录没有有效 `readerArticle` 时才兼容旧固定栏目；评分证据与扣分边界统一置于文末。
 
@@ -14,9 +14,13 @@ Manual v6 目前按显式影子链渐进落地，不会偷偷改变默认日更�
 
 教程作者任务固定使用 `fresh-authoring-v1` 冷启动：只读本篇 metadata、受控全文、ArtifactIndex、论文图表/公式、事实账本、写作契约和空白 schema；禁止读取历史 analysis、旧 `readerArticle`、`article.md`、`post.md`、博客 Markdown/HTML 或已填写质量包。旧文章不得进入教程生成、质量回归或修订输入，只能等待新页面验收后被精确替换；不能通过重排、扩写或清洗升级为新教程。review 后需要修正时，也必须从原始证据和结构化 findings 生成完整替换稿。
 
-新 Manual v5 记录同时使用 `manual-v5-tutorial-payload-v1`：`article.md`、`quality.json`、确定性 `artifact-plan.json` 与 complete ArtifactIndex 构成唯一 sealed payload。`manual-tutorial-validation-orchestrator-v1` 是 quality、artifact plan、research/longform 和八维评分的唯一正式组合入口；底层模块只保留纯子校验职责，payload 还会封印当前 orchestrator 协议指纹。预览与正式博客生成使用同一份载荷；任一文件、SHA、论文身份、质量结果、评分或图表/公式处置漂移都会在 spec、canonical 或 publisher 边界失败。旧 v5 只读兼容，不可重新包装成新教程页。
+Production v6 的 records v4 内嵌并重放 legacy v5 base payload 作为基础质量子校验：`article.md`、`quality.json`、确定性 `artifact-plan.json` 与 complete ArtifactIndex 由 `manual-tutorial-validation-orchestrator-v1` 验证；records v4 再绑定 role task、`reader-longform-v2` 与 Merkle 语义。任一文件、SHA、论文身份、质量结果或工件处置漂移都会在 spec、canonical 或 publisher 边界失败；历史 v5 只读兼容，不可重新包装成新教程页。
 
-默认 Manual v5 会把该冷启动声明落实为文件凭证：受控 `article.md` 绑定原始字节 SHA 与 trim+NFKC 正文 SHA；filtered metadata、完整全文、完整 ArtifactIndex、教程 prompt、编辑契约和空白 schema 逐项绑定真实路径/文件 SHA，官方项目证据存在时一并绑定。ArtifactIndex 不完整、旧 prose 输入非空或任一文件漂移都会在 spec、canonical 或发布阶段阻断。
+Production review/revision 不把格式错误拖到 binder 或最终 records：新物化的 role packet 在自身稳定签名中内联固定输出/receipt 路径、必需字段、角色量表与 `stable-json-ascii-keys-exact-ieee754-nfkc-text-v2` 语义 SHA 算法；旧 packet 仅保留验证兼容。runner 在 `technical_scoring` submit 时直接拒绝缺失正式八维评分、0–10 自创量表、非法开源锚点或不完整 calibration 的输出，在 `author_revision` submit 时重放 6–32 个 blocks，并要求正式 `tables`、`figures`、`formulas` 对 complete ArtifactIndex 逐项闭环，正文实际使用的 `terms` 全部定义，`relatedWorks` 至少绑定两个真实引用。`artifactCoverage` / `tableCoverage` 等旧摘要字段不是 V6 longform 的替代品；显式 retry/abandon 后只能原子替换目标 packet，其他已绑定工件继续 fail closed。
+
+`npm run manual:bind-revision -- --date YYYY-MM-DD --paper <arXiv ID>` 是 production revision 的确定性封装器：Terra-high leaf 提交终稿与 `manual-v6-revision-binding-map-v1` 小型语义映射；未封印 base payload 只能从当前 runner-validated `draft/author-record.json` 构造。binder 永不读取自己上一次遗留的 `draft/revision-record-payload.json`，即使该文件存在也只可被覆盖，防止“冷启动 revision”暗中继承旧 prose、评分或 review binding。封装器按 `###` 标题逐字拆 block，移除局部手抄 Markdown 表并注入 ArtifactIndex 的精确矩阵，从 runner 已验证输出回填八维评分和七维可读性，并把 draft 中合法的 `E1` 风格 evidence ID 连同全部精确依赖引用原子规范化为最终 `E01` 风格（冲突即失败）。早期 V6 author 产物若只有稳定的有序对象 ledger 而遗漏 ID，binder 仅按原始顺序确定性分配 `E01…`；若使用 `dataset` / `metric-v2` 一类唯一安全短标签，则同时绑定标签与审查阶段的顺序别名 `E1…`，再一次性改写为最终 ID。缺少 ledger、把 provenance 对象冒充 ledger、路径式/含空白/过长/冲突标签都会失败并返回 author 重做。新 author output 已在 submit 门禁强制要求显式 E ID。随后封装器生成正式 longform、output、receipt 和所有 SHA。它不生成或改写论文论点，缺少图像像素事实、公式解释、术语定义或相关工作差异时仍 fail closed。
+
+Production v6 的 fresh packet 与 records v4 会重放 legacy v5 base validator 的文件凭证：受控 `article.md` 原始/NFKC SHA、filtered metadata、完整全文、complete ArtifactIndex、教程 prompt、编辑契约、空白 schema 和可选官方项目证据必须逐项闭环；随后 v6 task/longform/records bindings 再次封印。这里的 v5 仅是历史基础质量子校验，不是默认运行时。
 
 新 canonical 的来源复用键是 `manual-paper-source-identity-v1`：只包含本篇全文、图片、结构化快照和 ArtifactIndex 的语义/文件身份。日期级 manifest 仍检查整批集合和健康状态，但另一篇 entry 更新不会再让本篇 canonical 失效；本篇任一证据字节变化仍会被严格拒绝。历史只读兼容不适用于已经声明 fresh/tutorial 的页面。
 
@@ -24,7 +28,7 @@ Manual v6 目前按显式影子链渐进落地，不会偷偷改变默认日更�
 
 LLM endpoint 必须使用 HTTPS（仅 loopback 本地测试允许 HTTP）。arXiv 元数据抓取的重试、退避、累计等待、绝对截止、响应字节上限与 User-Agent 均由 `ARXIV_CONFIG` 管理，覆写项见 [环境配置](docs/setup.md)。
 
-对 Codex 说“运行/进行某一天的论文速递”，默认含义是用 Manual v5 完成抓取、逐篇独立 subagent 筛选和全文分析、博客生成、逐页人工语义/图片 review、博客发布、TOP 10 论文长图、汇总封面和最终状态验收。只有明确说“使用 API/LLM 自动流程”时才运行 `npm run digest:api -- YYYY-MM-DD`。博客发布无需再次确认；微信公众号、飞书和小红书自动发布不在默认范围。
+对 Codex 说“运行/进行某一天的论文速递”，默认含义是用 production Manual v6 完成抓取、逐篇独立 subagent 筛选和全文分析、records v4/spec v6/canonical、博客生成、逐页人工语义/图片 review、博客发布、TOP 10 论文长图、汇总封面和最终状态验收。只有明确说“使用 API/LLM 自动流程”时才运行 `npm run digest:api -- YYYY-MM-DD`。博客发布无需再次确认；微信公众号、飞书和小红书自动发布不在默认范围。
 
 Manual 写作采用 3-worker 饱和队列：主 Agent 之外的 3 个并发槽持续各处理 1 篇论文，完成即补位。普通独立二审不会与正文争抢槽位；只有高分、内部无消融、满分自评或来源/图片异常的风险论文会提前触发二审。
 
@@ -266,44 +270,43 @@ npm run blog:manual-plan -- --date 2026-04-21 --include-id 2604.12345
 # 人工全文先逐篇安全抓取并 checkpoint；失败后重跑只补失败或损坏项
 npm run manual:fulltext -- 2026-04-21
 
-# 把一份或多份逐论文 subagent 记录严格组装为 manual_complete v5 spec；不调用 API
-# 每份 records 必须是相同 date/agent/reviewProtocol 的 manual_analysis_records v3 envelope，
-# papers 需显式提供八维评分、实际 audit passes、绑定全文原句的 authorInfo
-# 和至少六条覆盖五个事实章节的 evidenceLedger；正文遵守 prompts/manual-analysis-record.md
-# 每篇带 researchBrief、显式 stageReviews、独立评分/可读性 reviewer；新 records 以 editorialPlan v2 把读者标题、核心判断和段落锚句绑定最终正文；系统/方法论文至少 4 条跨实验组 resultClaims
-# 精确数量（含技术计数、层数、轮数、设备型号与科学计数法）使用阿拉伯数字，并通过篇内/跨篇去重、禁用固定句首脚手架、段落节奏、术语间距和局部比较门禁
-# 最终页还会复检作者、毒舌点评、评分理由、开源详情和局限中的“进一步审视”；新汇总页以 `paper_digest_reader_quality: "reader-facing-v1"` 标记接入 generate/checkpoint/review/staged 同一读者质量门禁，旧汇总页无标记时兼容
-# v5 强制精确数量来源、研究者详略取舍、全部图片 select/reject 和移动端裁图计划；records v2/spec v4 与 spec v3 仅作历史兼容
-# editorial 是最终读者正文；短 method/method2/method3/innovations 仅供审计，生成器不会再前置拼接
+# 初始化 production v6 task runner；它不会创建 subagent、packet 或 records envelope
+npm run manual:tasks -- init --date 2026-04-21
+npm run manual:tasks -- status --date 2026-04-21
+# 每个 role 在分派前由主 Agent物化 exact-allowlist packet；命令会返回精确 register 参数
+npm run manual:packet -- --date 2026-04-21 --paper 2604.12345 --role author
+# 四角色全部由真实 Terra-high task 验证后，确定性密封 records v4 envelope
+npm run manual:records -- --date 2026-04-21
 npm run manual:spec -- --date 2026-04-21 \
-  --records data/current/manual-analysis-records-2026-04-21.json
-# 并行撰写时可重复传入 --records；重复、缺失、跨日期或协议不一致都会阻断
-npm run manual:spec -- --date 2026-04-21 \
-  --records data/current/manual-analysis-records-2026-04-21-part-a.json \
-  --records data/current/manual-analysis-records-2026-04-21-part-b.json
+  --records data/current/manual-v6/2026-04-21/records-v4.json
+# spec v6 写在同日 production 根；ingestion 以 runtimeMode=production 写标准 canonical
+npm run manual:analyze -- --date 2026-04-21 \
+  --spec data/current/manual-v6/2026-04-21/spec.json
 
-# 人工深度分析：spec 必须逐篇绑定全文、作者机构原文、事实引用、实际审计次数和阶段专属 prompt/契约 SHA
-# 此命令不调用 LLM API；每篇在运行锁内重读并保存，失败项保留 ingestion checkpoint
-npm run manual:analyze -- --date 2026-04-21 --spec data/current/manual-analysis-spec-2026-04-21.json
-
-# 默认续跑复用已成功 canonical；仅在人工纠错或 spec/prompt 改变时显式覆盖
-npm run manual:analyze -- --date 2026-04-21 --spec data/current/manual-analysis-spec-2026-04-21.json --force
-
-# v6 目前只允许显式影子运行：records v4 必须已由逐论文任务真实产出，不能拿 v5 record 改版本号
+# production v6：records v4 必须由逐论文真实任务产出，不能把 legacy v5 record 改版本号冒充
 npm run manual:v6:spec -- --date 2026-04-21 \
-  --records data/current/manual-v6-shadow/2026-04-21/records-v4.json
+  --records data/current/manual-v6/2026-04-21/records-v4.json
 npm run manual:v6:analyze -- --date 2026-04-21 \
+  --spec data/current/manual-v6/2026-04-21/spec.json
+
+# 显式 shadow：只写 manual-v6-shadow/<date>/，不能发布
+npm run manual:v6:shadow:spec -- --date 2026-04-21 \
+  --records data/current/manual-v6-shadow/2026-04-21/records-v4.json
+npm run manual:v6:shadow:analyze -- --date 2026-04-21 \
   --spec data/current/manual-v6-shadow/2026-04-21/spec.json
+
+# legacy v5：仅历史只读/维护，禁止与 production v6 混批
+npm run manual:v5:spec -- --date 2026-04-21 --records LEGACY_RECORDS_V3.json
+npm run manual:v5:analyze -- --date 2026-04-21 --spec LEGACY_SPEC_V5.json
 
 # 持久任务状态机不启动 subagent；主 Agent只按 status/claim 输出逐篇分派 Terra-high task
 npm run manual:v6:tasks -- init --date 2026-04-21
 npm run manual:v6:tasks -- status --date 2026-04-21
 
-# 默认 v5：只读观察 author/reviewer/page-review 队列并给出 3 槽补位建议；不创建 subagent
+# production v6 status：不创建 subagent；缺 packet/envelope 时 fail closed
 npm run manual:work-queue -- --date 2026-04-21
 
-# 分派某个 ready author 前物化 exact allowlist；只写单篇 packet/metadata，不写正文
-npm run manual:author-packet -- --date 2026-04-21 --paper 2604.12345
+# runner 不代做 packet/records；主 Agent按状态显式调用 manual:packet/manual:records
 
 # 跨批次只读性能验收；每项不足 3 个不同日期只报 insufficient_data
 npm run manual:performance-report -- \
@@ -321,8 +324,7 @@ npm run manual:shadow:benchmark -- \
   --report data/current/manual-v6-shadow/reports/2026-04-20.json \
   --report data/current/manual-v6-shadow/reports/2026-04-21.json
 
-# fulltext、ArtifactIndex、spec v6、shadow ingestion，以及显式写报告的 shadow audit
-# 会在 manual-v6-shadow/<date>/metrics/ 写入不可变 observed-stage-metrics-v1 sidecar；stdout 审计仍只读。
+# 上述显式 shadow 审计只消费 manual-v6-shadow/<date>/metrics/；production 指标位于 manual-v6/<date>/metrics/。
 # wallMs 来自 process.hrtime.bigint；只有实际可测的锁等待才有 queueMs，其余为 unknown。
 # 每份 sidecar 绑定真实 input/output bytes 与 SHA；shadow 重验后才允许进入 benchmark。
 # v6 签名对象采用 stable-json-ascii-keys-exact-ieee754-nfkc-text-v2：Unicode 字符串值受支持，

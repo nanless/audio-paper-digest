@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-/** Explicit shadow assembler for records v4 -> complete Manual spec v6. */
+/** Official records v4 -> complete Manual spec v6 assembler. */
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -25,7 +25,10 @@ const {
     MANUAL_RECORD_VERSION_V4,
     MANUAL_SPEC_VERSION_V6,
     MANUAL_DEPTH_V6,
+    MANUAL_V6_RUNTIME_MODE_PRODUCTION,
+    MANUAL_V6_RUNTIME_MODE_SHADOW,
     stableSha256,
+    resolveManualV6RuntimePaths,
     validateTaskPacket,
     validateAuthorRevisionArtifactLineage,
     validateManualRecordV4,
@@ -36,6 +39,10 @@ const {
     monotonicNs,
     persistStageMetricSafely
 } = require('./manual-performance-metrics.js');
+const {
+    loadValidatedManifest,
+    needsMetadataCorrection
+} = require('./manual-v6-metadata-correction.js');
 
 const RECORDS_V4_MODE = 'manual_analysis_records';
 const SPEC_MODE = 'manual_complete';
@@ -148,7 +155,7 @@ function validateV4EnvelopeHeader(document, envelopePath, expectedDate) {
     }
 }
 
-function loadPaperEvidence(envelope, envelopePath, rawId, descriptor, occupiedPaths) {
+function loadPaperEvidence(envelope, envelopePath, rawId, descriptor, occupiedPaths, options = {}) {
     const paperId = normalizedId(rawId);
     if (!paperId || rawId !== paperId || !descriptor || typeof descriptor !== 'object' || Array.isArray(descriptor)) {
         throw new Error(`${envelopePath}.papers 键/descriptor 非法: ${rawId}`);
@@ -230,12 +237,28 @@ function loadPaperEvidence(envelope, envelopePath, rawId, descriptor, occupiedPa
         }
     }
     validateManualRecordV4(record, artifactFile.value, {
+        runtimeMode: options.runtimeMode || MANUAL_V6_RUNTIME_MODE_PRODUCTION,
         artifactRoot: root,
         artifactIndexBytes: artifactFile.bytes,
         taskPackets: packets,
-        reviewOutputs: outputs
+        reviewOutputs: outputs,
+        allowSignedLegacyTableRender: (options.runtimeMode || MANUAL_V6_RUNTIME_MODE_PRODUCTION)
+            === MANUAL_V6_RUNTIME_MODE_PRODUCTION,
+        // A small number of runner-validated migration records predate the
+        // editorialPlan v2 metadata.  Their signed reader-longform-v2 bundle
+        // remains the authoritative article contract; fresh/shadow records
+        // still fail closed on anything other than editorialPlan v2.
+        allowSignedLegacyEditorialPlan: (options.runtimeMode || MANUAL_V6_RUNTIME_MODE_PRODUCTION)
+            === MANUAL_V6_RUNTIME_MODE_PRODUCTION,
+        metadataCorrection: options.metadataCorrection || null
     });
     const taskEvidence = {
+        taskNames: {
+            author: record.editorial.longformBundle.authorReceipt.taskName,
+            technicalScoring: record.reviewReceipts.technicalScoring.taskName,
+            pedagogyReadability: record.reviewReceipts.pedagogyReadability.taskName,
+            authorRevision: record.reviewReceipts.authorRevision.taskName
+        },
         taskPackets: Object.fromEntries(Object.entries(groups.taskPackets).map(([key, item]) => [key, {
             fileSha256: item.fileSha256,
             packetSha256: item.value.packetSha256
@@ -247,7 +270,16 @@ function loadPaperEvidence(envelope, envelopePath, rawId, descriptor, occupiedPa
         reviewOutputs: Object.fromEntries(Object.entries(groups.reviewOutputs).map(([key, item]) => [key, {
             fileSha256: item.fileSha256,
             semanticSha256: stableSha256(item.value)
-        }]))
+        }])),
+        metadataCorrection: options.metadataCorrection ? {
+            manifestSha256: options.metadataCorrection.manifestSha256,
+            manifestFileSha256: options.metadataCorrection.manifestFileSha256,
+            merkleRoot: options.metadataCorrection.merkleRoot,
+            packetSha256: options.metadataCorrection.packet.packetSha256,
+            correctionSha256: stableSha256(options.metadataCorrection.correction),
+            receiptSha256: stableSha256(options.metadataCorrection.receipt),
+            changedFields: [...options.metadataCorrection.correction.changedFields]
+        } : null
     };
     return {
         paperId,
@@ -267,7 +299,7 @@ function loadPaperEvidence(envelope, envelopePath, rawId, descriptor, occupiedPa
     };
 }
 
-function loadRecordsV4Envelopes(inputs, date) {
+function loadRecordsV4Envelopes(inputs, date, options = {}) {
     if (!Array.isArray(inputs) || inputs.length === 0) throw new Error('records v4 至少需要一个 envelope');
     const papers = {};
     const sources = [];
@@ -285,11 +317,43 @@ function loadRecordsV4Envelopes(inputs, date) {
         const bytes = fs.readFileSync(envelopePath);
         const document = readJsonBuffer(bytes, `records v4 envelope ${envelopePath}`);
         validateV4EnvelopeHeader(document, envelopePath, date);
+        const envelopeRoot = fs.realpathSync(path.dirname(envelopePath));
+        const manifestRef = document.metadataCorrectionManifest;
+        let correctionManifest = { byPaper: {} };
+        if (manifestRef) {
+            if (typeof manifestRef !== 'object' || Array.isArray(manifestRef)
+                || manifestRef.path !== 'metadata-corrections-manifest.json'
+                || !SHA256_RE.test(String(manifestRef.sha256 || ''))
+                || !SHA256_RE.test(String(manifestRef.semanticSha256 || ''))
+                || !SHA256_RE.test(String(manifestRef.merkleRoot || ''))) {
+                throw new Error(`${envelopePath}.metadataCorrectionManifest 文件引用非法`);
+            }
+            correctionManifest = loadValidatedManifest(
+                path.join(envelopeRoot, manifestRef.path),
+                { date, dateRoot: envelopeRoot, expectedPaperIds: Object.keys(document.papers) }
+            );
+            if (correctionManifest.manifestFile.fileSha256 !== manifestRef.sha256
+                || correctionManifest.manifest.manifestSha256 !== manifestRef.semanticSha256
+                || correctionManifest.manifest.merkleRoot !== manifestRef.merkleRoot) {
+                throw new Error(`${envelopePath}.metadataCorrectionManifest SHA/Merkle 绑定漂移`);
+            }
+        } else if (document.descriptorContract === 'manual-v6-production-records-envelope-v1') {
+            throw new Error(`${envelopePath}.metadataCorrectionManifest 文件缺失`);
+        }
         agents.add(document.agent.trim());
         protocols.add(document.reviewProtocol.trim());
         for (const [id, descriptor] of Object.entries(document.papers)) {
             if (papers[id]) throw new Error(`多个 records v4 envelope 重复提供论文: ${id}`);
-            const evidence = loadPaperEvidence(document, envelopePath, id, descriptor, occupiedPaths);
+            const evidence = loadPaperEvidence(
+                document, envelopePath, id, descriptor, occupiedPaths, {
+                    ...options,
+                    metadataCorrection: correctionManifest.byPaper[id] || null
+                }
+            );
+            const revisionPayload = correctionManifest.byPaper[id]?.originalPayload;
+            if (correctionManifest.byPaper[id] && !needsMetadataCorrection(revisionPayload)) {
+                throw new Error(`${id} metadata correction 是合法 revision payload 的 orphan`);
+            }
             if (roots.some(existing => existing === evidence.root
                 || existing.startsWith(`${evidence.root}${path.sep}`)
                 || evidence.root.startsWith(`${existing}${path.sep}`))) {
@@ -345,8 +409,12 @@ function assemblerProtocolSha256() {
 
 function buildSpecV6(options = {}) {
     const { date, filtered, filteredPath, fullTextManifest, fullTextManifestPath,
-        artifactManifest, artifactManifestPath, records, generatedAt = getBeijingISOString() } = options;
+        artifactManifest, artifactManifestPath, records, recordsEnvelope, runtimeMode,
+        generatedAt = getBeijingISOString() } = options;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) throw new Error('spec v6 date 非法');
+    if (![MANUAL_V6_RUNTIME_MODE_PRODUCTION, MANUAL_V6_RUNTIME_MODE_SHADOW].includes(runtimeMode)) {
+        throw new Error('spec v6 runtimeMode 必须显式为 production 或 shadow');
+    }
     if (filtered.batchDate !== date || filtered.status !== 'complete' || !Array.isArray(filtered.papers)) {
         throw new Error('spec v6 filtered 批次不完整');
     }
@@ -386,7 +454,8 @@ function buildSpecV6(options = {}) {
     };
     const base = v5Assembler.buildSpec({
         date, filtered, filteredPath, manifest: fullTextManifest,
-        manifestPath: fullTextManifestPath, mergedRecords, generatedAt
+        manifestPath: fullTextManifestPath, mergedRecords, generatedAt,
+        validatedV6Records: options.allowSignedV6CompatibilityOverride === true
     });
     const protocolSha256 = assemblerProtocolSha256();
     const papers = {};
@@ -427,6 +496,11 @@ function buildSpecV6(options = {}) {
         const paperPayload = {
             ...base.papers[id],
             manualDepth: MANUAL_DEPTH_V6,
+            runtimeMode,
+            ...(options.allowSignedV6CompatibilityOverride === true ? {
+                v5BridgeMode: 'signed-v6-task-evidence-override-v1'
+            } : {}),
+            readerImagesPreembedded: true,
             readerLongform: evidence.record.editorial.longformBundle,
             artifactIndex: evidence.artifactIndex,
             recordProvenance,
@@ -445,7 +519,7 @@ function buildSpecV6(options = {}) {
         shards.push(shard);
     }
     const batch = buildBatchSpecV6({
-        date, filteredBatchSha256: fullContext.filteredBatchSha256,
+        date, runtimeMode, filteredBatchSha256: fullContext.filteredBatchSha256,
         expectedPaperIds: ids, paperShards: shards
     });
     if (batch.status !== 'complete') throw new Error('spec v6 shard 未完整覆盖 filtered');
@@ -458,6 +532,10 @@ function buildSpecV6(options = {}) {
         reviewProtocol: records.reviewProtocol,
         recordsVersion: MANUAL_RECORD_VERSION_V4,
         manualDepth: MANUAL_DEPTH_V6,
+        runtimeMode,
+        ...(options.allowSignedV6CompatibilityOverride === true ? {
+            v5BridgeMode: 'signed-v6-task-evidence-override-v1'
+        } : {}),
         signatureContract: batch.signatureContract,
         generatedAt,
         assemblerProtocolSha256: protocolSha256,
@@ -472,6 +550,7 @@ function buildSpecV6(options = {}) {
             version: 1, parserVersion: artifactManifest.parserVersion, paperCount: ids.length
         },
         recordsSources: records.sources,
+        ...(recordsEnvelope ? { recordsEnvelope } : {}),
         paperShards: shards,
         paperIndex: batch.paperIndex,
         rootSha256: batch.rootSha256,
@@ -485,7 +564,8 @@ function buildSpecV6(options = {}) {
         papers
     };
     for (const source of [
-        spec.filteredPapers, spec.fullTextManifest, spec.artifactManifest, ...spec.recordsSources
+        spec.filteredPapers, spec.fullTextManifest, spec.artifactManifest,
+        ...(spec.recordsEnvelope ? [spec.recordsEnvelope] : []), ...spec.recordsSources
     ]) {
         if (sha256Buffer(fs.readFileSync(source.path)) !== source.sha256) {
             throw new Error(`spec v6 输入在组装期间发生变化: ${source.path}`);
@@ -495,12 +575,19 @@ function buildSpecV6(options = {}) {
 }
 
 function parseArgs(argv) {
-    const options = { records: [], force: false };
+    const options = { records: [], force: false, runtimeMode: null };
     for (let index = 0; index < argv.length; index++) {
         const arg = argv[index];
         if (arg === '--force') {
             if (options.force) throw new Error('参数重复: --force');
             options.force = true;
+            continue;
+        }
+        if (arg === '--production' || arg === '--shadow') {
+            if (options.runtimeMode) throw new Error('--production 与 --shadow 必须且只能指定一个');
+            options.runtimeMode = arg === '--production'
+                ? MANUAL_V6_RUNTIME_MODE_PRODUCTION
+                : MANUAL_V6_RUNTIME_MODE_SHADOW;
             continue;
         }
         if (!['--date', '--records'].includes(arg)) throw new Error(`未知参数: ${arg}`);
@@ -512,6 +599,7 @@ function parseArgs(argv) {
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(options.date || '')) throw new Error('--date 必须是 YYYY-MM-DD');
     if (options.records.length === 0) throw new Error('--records 至少指定一个 records v4 envelope');
+    if (!options.runtimeMode) throw new Error('必须显式指定 --production 或 --shadow');
     return options;
 }
 
@@ -520,23 +608,40 @@ function run(argv = process.argv.slice(2)) {
     const filteredPath = Config.FILES.filteredPapers;
     const fullTextManifestPath = path.join(Config.CURRENT_DIR, 'manual-full-text', args.date, 'manifest.json');
     const artifactManifestPath = path.join(Config.CURRENT_DIR, 'manual-full-text', args.date, 'artifacts', 'manifest.json');
-    const shadowDir = path.join(Config.FILES.manualV6ShadowDir, args.date);
-    const outputPath = path.join(shadowDir, 'spec.json');
+    const runtimePaths = resolveManualV6RuntimePaths(Config.CURRENT_DIR, args.date, args.runtimeMode);
+    const outputDir = runtimePaths.batchDir;
+    const outputPath = runtimePaths.specPath;
+    const recordsEnvelopePath = runtimePaths.recordsEnvelopePath;
     const recordsPaths = args.records.map(value => path.resolve(Config.PROJECT_ROOT, value));
-    fs.mkdirSync(shadowDir, { recursive: true });
+    if (args.runtimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION
+        && (recordsPaths.length !== 1
+            || path.resolve(recordsPaths[0]) !== path.resolve(recordsEnvelopePath))) {
+        throw new Error(`production records v4 必须是唯一受控 envelope: ${recordsEnvelopePath}`);
+    }
+    fs.mkdirSync(outputDir, { recursive: true });
     const queuedAtNs = monotonicNs();
     let startedAtNs = null;
     let cacheHit = false;
-    const spec = withFileLockSync(path.join(shadowDir, '.assemble'), () => {
+    const spec = withFileLockSync(path.join(outputDir, '.assemble'), () => {
         startedAtNs = monotonicNs();
         let existing = null;
         if (fs.existsSync(outputPath)) {
             if (fs.lstatSync(outputPath).isSymbolicLink()) {
-                throw new Error('shadow spec 输出不得是符号链接');
+                throw new Error('Manual spec v6 输出不得是符号链接');
             }
-            existing = readJsonFile(outputPath, 'existing shadow spec v6');
+            existing = readJsonFile(outputPath, 'existing spec v6');
         }
-        const records = loadRecordsV4Envelopes(recordsPaths, args.date);
+        const records = loadRecordsV4Envelopes(recordsPaths, args.date, {
+            runtimeMode: args.runtimeMode
+        });
+        const recordsEnvelope = args.runtimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION
+            ? {
+                path: recordsPaths[0],
+                sha256: sha256Buffer(fs.readFileSync(recordsPaths[0])),
+                version: MANUAL_RECORD_VERSION_V4,
+                mode: RECORDS_V4_MODE
+            }
+            : null;
         const assembled = buildSpecV6({
             date: args.date,
             filtered: readJsonFile(filteredPath, 'filtered-papers'),
@@ -546,6 +651,10 @@ function run(argv = process.argv.slice(2)) {
             artifactManifest: readJsonFile(artifactManifestPath, 'ArtifactIndex manifest'),
             artifactManifestPath,
             records,
+            runtimeMode: args.runtimeMode,
+            recordsEnvelope,
+            allowSignedV6CompatibilityOverride: args.runtimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION
+                && args.force === true,
             ...(existing?.generatedAt ? { generatedAt: existing.generatedAt } : {})
         });
         if (existing) {
@@ -553,13 +662,17 @@ function run(argv = process.argv.slice(2)) {
                 cacheHit = true;
                 return existing;
             }
-            if (!args.force) throw new Error('shadow spec v6 已存在且输入已变化；显式 --force 后才可替换');
+            if (!args.force) throw new Error('spec v6 已存在且输入已变化；显式 --force 后才可替换');
         }
         writeFileAtomic(outputPath, JSON.stringify(assembled, null, 2));
         return assembled;
     }, { timeoutMs: 0 });
     const completedAtNs = monotonicNs();
     persistStageMetricSafely({
+        shadowRoot: args.runtimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION
+            ? Config.FILES.manualV6Dir
+            : Config.FILES.manualV6ShadowDir,
+        containmentRoot: Config.CURRENT_DIR,
         date: args.date,
         stage: 'spec_v6',
         status: 'complete',
@@ -578,8 +691,8 @@ function run(argv = process.argv.slice(2)) {
         ],
         outputFiles: [{ role: 'spec_v6', path: outputPath }]
     });
-    console.log(`✅ 已原子写入 shadow Manual spec v6：${outputPath}（${Object.keys(spec.papers).length} 篇，API 调用 0）`);
-    return { outputPath, spec };
+    console.log(`✅ 已原子写入 ${args.runtimeMode} Manual spec v6：${outputPath}（${Object.keys(spec.papers).length} 篇，API 调用 0）`);
+    return { outputPath, recordsEnvelopePath, runtimeMode: args.runtimeMode, spec };
 }
 
 if (require.main === module) {

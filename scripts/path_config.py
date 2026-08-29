@@ -28,6 +28,10 @@ FILTER_DECISIONS_FILE = CURRENT_DIR / "filter-decisions.json"
 FILTERED_PAPERS_FILE = CURRENT_DIR / "filtered-papers.json"
 DEEP_ANALYSIS_RESULT_FILE = CURRENT_DIR / "deep-analysis-result.json"
 DEEP_ANALYSIS_RESULT_LEGACY_FILE = DATA_DIR / "deep-analysis-result.json"
+# Formal Manual v6 workflow evidence is date-isolated here.  The publisher
+# still consumes the standard canonical file above; this root is the durable
+# source of the spec-v6 / records-v4 evidence referenced by that canonical.
+MANUAL_V6_PRODUCTION_DIR = CURRENT_DIR / "manual-v6"
 VISUAL_SUMMARY_MANIFEST_DIR = CURRENT_DIR / "visual-summary-manifests"
 # 发布后视觉资产按批次日期直接归档。调用方必须继续拼接
 # <date>/visual-summaries/*.png，论文长图与汇总封面扁平归档。
