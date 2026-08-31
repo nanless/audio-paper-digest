@@ -25,6 +25,23 @@ const Config = require('./config.js');
 
 loadEnvFile();
 
+function parseTargetDate(argv = process.argv.slice(2)) {
+    if (!Array.isArray(argv)) throw new TypeError('argv 必须是数组');
+    if (argv.length === 0) return getBeijingDateString();
+    if (argv.length !== 2 || argv[0] !== '--date') {
+        throw new Error('用法: npm run deep -- --date YYYY-MM-DD');
+    }
+    const value = String(argv[1] || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        throw new Error('--date 必须是 YYYY-MM-DD');
+    }
+    const parsed = new Date(`${value}T00:00:00Z`);
+    if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+        throw new Error('--date 不是有效日期');
+    }
+    return value;
+}
+
 function validateCompleteFilteredForToday(filteredData, today) {
     if (!filteredData || filteredData.status !== 'complete' || !Array.isArray(filteredData.papers)) {
         throw new Error('筛选结果未完成或 papers 字段无效，拒绝启动深度分析');
@@ -100,13 +117,13 @@ function finalizeDeepZeroWorkState(resultPath, filteredData, today) {
     });
 }
 
-async function runDeepAnalysis() {
+async function runDeepAnalysis(options = {}) {
     console.log('=== 仅运行深度分析 ===\n');
 
     const currentPath = Config.FILES.deepAnalysisResult;
     const legacyPath = Config.FILES.deepAnalysisResultLegacy;
     const filteredPath = Config.FILES.filteredPapers;
-    const today = getBeijingDateString();
+    const today = options.date || parseTargetDate();
     const filteredData = validateCompleteFilteredForToday(readJsonFileStrict(filteredPath), today);
 
     const resultPath = currentPath;
@@ -293,6 +310,7 @@ if (require.main === module) {
 
 module.exports = {
     runDeepAnalysis,
+    parseTargetDate,
     validateCompleteFilteredForToday,
     validateDeepAnalysisInput,
     finalizeDeepZeroWorkState

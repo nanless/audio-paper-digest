@@ -26,6 +26,7 @@ const {
     saveRefilterDecisions
 } = require('../scripts/refilter-reanalyze-by-date.js');
 const {
+    parseTargetDate,
     validateCompleteFilteredForToday,
     validateDeepAnalysisInput,
     finalizeDeepZeroWorkState
@@ -36,6 +37,13 @@ const { isSuccessfulAnalysisRecord } = require('../scripts/analysis-engine.js');
 const execFileAsync = promisify(execFile);
 
 describe('papers database recovery safety', () => {
+    it('deep-only 支持严格显式日期以安全续跑跨日批次', () => {
+        assert.strictEqual(parseTargetDate(['--date', '2026-08-31']), '2026-08-31');
+        assert.throws(() => parseTargetDate(['--date', '2026-02-30']), /有效日期/);
+        assert.throws(() => parseTargetDate(['--date']), /用法/);
+        assert.throws(() => parseTargetDate(['--unknown', '2026-08-31']), /用法/);
+    });
+
     it('单篇历史重分析优先保留论文批次日期并兼容旧 fetchedAt', () => {
         assert.strictEqual(inferAnalysisBatchDate([{
             fetchBatchDate: '2026-07-08',
