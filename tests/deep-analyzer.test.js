@@ -973,6 +973,7 @@ primary_task_tag: #音视频生成
             getApiReaderFigureInventory,
             injectApiReaderFigures,
             parseArxivReaderAuthors,
+            resolveApiReaderAuthors,
             prepareTrustedArxivFigureBuffer,
             hasCompleteApiReaderFigureBinding,
             stableFingerprint
@@ -1014,6 +1015,45 @@ primary_task_tag: #音视频生成
         const authors = parseArxivReaderAuthors($);
         assert.deepStrictEqual(authors.authors, [{ name: '甲', affiliations: ['机构 A'] }]);
         assert.match(authors.sourceDomSha256, /^[0-9a-f]{64}$/);
+        const separated = cheerio.load(
+            '<div class="ltx_authors">'
+            + '<span class="ltx_creator ltx_role_author"><span class="ltx_personname">乙</span></span>'
+            + '<span class="ltx_creator ltx_role_affiliation">机构 B</span></div>'
+        );
+        assert.deepStrictEqual(
+            parseArxivReaderAuthors(separated).authors,
+            [{ name: '乙', affiliations: ['机构 B'] }]
+        );
+        const metadata = cheerio.load(
+            '<head><meta name="citation_author" content="丙">'
+            + '<meta name="citation_author_institution" content="机构 C"></head>'
+        );
+        assert.deepStrictEqual(
+            parseArxivReaderAuthors(metadata).authors,
+            [{ name: '丙', affiliations: ['机构 C'] }]
+        );
+        const pdfFallback = resolveApiReaderAuthors(
+            { authors: ['丁'] },
+            { analysisSource: 'pdf', text: 'PDF source bytes', readerAuthors: null }
+        );
+        assert.deepStrictEqual(pdfFallback.authors, [{
+            name: '丁', affiliations: ['机构信息未能从 arXiv PDF 文本可靠映射']
+        }]);
+        assert.match(pdfFallback.sourceDomSha256, /^[0-9a-f]{64}$/);
+        const completedAuthors = resolveApiReaderAuthors(
+            { authors: ['戊', '己'] },
+            {
+                text: 'HTML source bytes',
+                readerAuthors: {
+                    authors: [{ name: '戊', affiliations: ['机构 D'] }],
+                    sourceDomSha256: 'a'.repeat(64)
+                }
+            }
+        );
+        assert.deepStrictEqual(completedAuthors.authors, [
+            { name: '戊', affiliations: ['机构 D'] },
+            { name: '己', affiliations: ['机构 D'] }
+        ]);
         const png = Buffer.from(
             'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
             'base64'

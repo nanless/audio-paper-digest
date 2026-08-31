@@ -1331,10 +1331,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails) {
     const articleSha256 = crypto.createHash('sha256').update(readerResult.article).digest('hex');
     const planSha256 = stableFingerprint(readerResult.plan);
     const figuresSha256 = stableFingerprint(readerResult.figures);
-    const readerAuthors = sourceDetails.readerAuthors
-        && Array.isArray(sourceDetails.readerAuthors.authors)
-        ? sourceDetails.readerAuthors
-        : { authors: [], sourceDomSha256: '' };
+    const readerAuthors = resolveApiReaderAuthors(paper, sourceDetails);
     paper.apiReaderArticle = readerResult.article;
     paper.apiReaderPlan = readerResult.plan;
     paper.apiReaderFigures = readerResult.figures;
@@ -1370,6 +1367,29 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails) {
         qualityMetrics: readerResult.qualityMetrics,
         refreshedAt: getBeijingISOString()
     };
+    return paper;
+}
+
+function refreshApiReaderAuthorsFromSource(paper, sourceDetails) {
+    const manifest = paper?.analysisManifest;
+    const stage = manifest?.stages?.apiReaderArticle;
+    if (manifest?.contracts?.apiReaderArticle !== API_READER_ARTICLE_CONTRACT
+        || stage?.status !== 'complete') {
+        throw new Error('作者机构刷新只接受已完成 v2 读者文章的 canonical');
+    }
+    const sourceText = String(sourceDetails?.text || '');
+    const sourceSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
+    if (!sourceText || sourceSha256 !== paper.sourceSha256
+        || sourceSha256 !== manifest.sourceAcquisition?.sourceSha256) {
+        throw new Error('作者机构刷新的全文 SHA 与 canonical 来源不一致');
+    }
+    const readerAuthors = resolveApiReaderAuthors(paper, sourceDetails);
+    if (!readerAuthors.authors.length || !recoverySha256(readerAuthors.sourceDomSha256)) {
+        throw new Error('作者机构刷新未能建立来源绑定');
+    }
+    paper.apiReaderAuthors = readerAuthors;
+    stage.readerAuthorsSha256 = stableFingerprint(readerAuthors);
+    stage.refreshedAt = getBeijingISOString();
     return paper;
 }
 
@@ -2762,22 +2782,122 @@ function bindStructuredArtifactsToText(structuredArtifacts, text) {
 
 function parseArxivReaderAuthors($) {
     const wrapper = $('.ltx_authors').first();
-    if (!wrapper.length) return { authors: [], sourceDomSha256: '' };
-    const authors = wrapper.find('.ltx_creator.ltx_role_author').toArray().map(element => {
+    const normalize = value => String(value || '').replace(/\s+/g, ' ').trim();
+    const metaAuthors = $('meta[name="citation_author"]').toArray()
+        .map(node => normalize($(node).attr('content'))).filter(Boolean);
+    const metaAffiliations = $('meta[name="citation_author_institution"]').toArray()
+        .map(node => normalize($(node).attr('content'))).filter(Boolean);
+    const globalAffiliations = (wrapper.length
+        ? wrapper.find('.ltx_role_affiliation, .ltx_affiliation').toArray()
+        : []).map(node => {
+        const affiliation = $(node).clone();
+        affiliation.find(
+            '.ltx_contact_name, .ltx_note_mark, .ltx_tag, sup, a.ltx_note'
+        ).remove();
+        return normalize(affiliation.text())
+            .replace(/^(?:affiliation|institution)\s*[:：]?\s*/i, '');
+    }).filter(value => value.length >= 3 && !/@/.test(value));
+    const dedupedGlobalAffiliations = [...new Set([
+        ...globalAffiliations, ...metaAffiliations
+    ])];
+    const authorElements = wrapper.length
+        ? wrapper.find('.ltx_creator.ltx_role_author').toArray()
+        : [];
+    let authors = authorElements.map((element, index) => {
         const creator = $(element);
-        const name = creator.find('.ltx_personname').first().text().replace(/\s+/g, ' ').trim();
+        const name = normalize(creator.find('.ltx_personname').first().text())
+            || metaAuthors[index] || '';
         const affiliations = creator.find('.ltx_contact.ltx_role_affiliation').toArray()
             .map(node => {
                 const affiliation = $(node).clone();
-                affiliation.find('.ltx_contact_name').remove();
-                return affiliation.text().replace(/\s+/g, ' ').trim();
+                affiliation.find('.ltx_contact_name, .ltx_note_mark, .ltx_tag, sup').remove();
+                return normalize(affiliation.text());
             })
             .filter(Boolean);
-        return { name, affiliations: [...new Set(affiliations)] };
-    }).filter(item => item.name && item.affiliations.length > 0);
+        const fallbackAffiliations = metaAuthors.length > 0
+            && metaAffiliations.length === metaAuthors.length
+            ? [metaAffiliations[index]].filter(Boolean)
+            : dedupedGlobalAffiliations;
+        return {
+            name,
+            affiliations: [...new Set(affiliations.length > 0
+                ? affiliations : fallbackAffiliations)]
+        };
+    }).filter(item => item.name);
+    if (authors.length === 0 && metaAuthors.length > 0) {
+        authors = metaAuthors.map((name, index) => ({
+            name,
+            affiliations: metaAffiliations.length === metaAuthors.length
+                ? [metaAffiliations[index]].filter(Boolean)
+                : dedupedGlobalAffiliations
+        }));
+    }
+    authors = authors.map(item => ({
+        name: item.name,
+        affiliations: item.affiliations.length > 0
+            ? item.affiliations
+            : ['机构信息未在 arXiv HTML 中可靠披露']
+    }));
+    const sourceNodes = wrapper.length
+        ? $.html(wrapper)
+        : $('meta[name="citation_author"], meta[name="citation_author_institution"]')
+            .toArray().map(node => $.html(node)).join('\n');
     return {
         authors,
-        sourceDomSha256: crypto.createHash('sha256').update($.html(wrapper)).digest('hex')
+        sourceDomSha256: sourceNodes
+            ? crypto.createHash('sha256').update(sourceNodes).digest('hex')
+            : ''
+    };
+}
+
+function resolveApiReaderAuthors(paper, sourceDetails) {
+    const parsed = sourceDetails?.readerAuthors;
+    const normalizeName = value => String(value || '').replace(/\s+/g, ' ').trim();
+    const rawAuthors = Array.isArray(paper?.authors) ? paper.authors : [];
+    const names = rawAuthors.map(author => (
+        typeof author === 'string' ? author : author?.name
+    )).map(normalizeName).filter(Boolean);
+    if (parsed && Array.isArray(parsed.authors) && parsed.authors.length > 0
+        && recoverySha256(parsed.sourceDomSha256)) {
+        if (names.length === 0) return parsed;
+        const normalizedParsed = parsed.authors.map(author => ({
+            name: normalizeName(author?.name),
+            affiliations: Array.isArray(author?.affiliations)
+                ? author.affiliations.map(value => String(value || '').trim()).filter(Boolean)
+                : []
+        })).filter(author => author.name);
+        const allAffiliations = [...new Set(normalizedParsed
+            .flatMap(author => author.affiliations))];
+        const authors = names.map((name, index) => {
+            const exact = normalizedParsed.find(author => (
+                author.name.normalize('NFKC').toLocaleLowerCase()
+                === name.normalize('NFKC').toLocaleLowerCase()
+            ));
+            const positional = normalizedParsed.length === names.length
+                ? normalizedParsed[index]
+                : null;
+            const matched = exact || positional;
+            return {
+                name,
+                affiliations: matched?.affiliations?.length > 0
+                    ? matched.affiliations
+                    : (allAffiliations.length > 0
+                        ? allAffiliations
+                        : ['机构信息未在 arXiv HTML 中可靠披露'])
+            };
+        });
+        return { authors, sourceDomSha256: parsed.sourceDomSha256 };
+    }
+    const sourceSha256 = crypto.createHash('sha256')
+        .update(String(sourceDetails?.text || '')).digest('hex');
+    return {
+        authors: names.map(name => ({
+            name,
+            affiliations: [sourceDetails?.analysisSource === 'pdf'
+                ? '机构信息未能从 arXiv PDF 文本可靠映射'
+                : '机构信息未在 arXiv HTML 中可靠披露']
+        })),
+        sourceDomSha256: sourceSha256
     };
 }
 
@@ -5133,10 +5253,7 @@ async function analyzePaperDeep(paper) {
             paper.apiReaderArticle = readerResult.article;
             paper.apiReaderPlan = readerResult.plan;
             paper.apiReaderFigures = readerResult.figures;
-            paper.apiReaderAuthors = sourceDetails.readerAuthors
-                && Array.isArray(sourceDetails.readerAuthors.authors)
-                ? sourceDetails.readerAuthors
-                : { authors: [], sourceDomSha256: '' };
+            paper.apiReaderAuthors = resolveApiReaderAuthors(paper, sourceDetails);
             paper.apiReaderArticleSha256 = crypto.createHash('sha256')
                 .update(readerResult.article).digest('hex');
             paper.apiReaderPlanSha256 = stableFingerprint(readerResult.plan);
@@ -6320,6 +6437,7 @@ module.exports = {
     buildUnstructuredTextArtifactSignals,
     bindStructuredArtifactsToText,
     parseArxivReaderAuthors,
+    resolveApiReaderAuthors,
     assessArxivHtmlFullText,
     removeUnapprovedMarkdownImages,
     selectImageCandidates,
@@ -6385,6 +6503,7 @@ module.exports = {
     parseApiReaderArticleResult,
     generateApiReaderArticleDetailed,
     refreshApiReaderArticleFromSource,
+    refreshApiReaderAuthorsFromSource,
     hasCompleteApiReaderFigureBinding,
     API_READER_ARTICLE_CONTRACT,
     isAllowedReaderNarrativeNumeralIssue,

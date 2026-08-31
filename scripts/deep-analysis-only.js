@@ -278,6 +278,7 @@ async function runDeepAnalysis(options = {}) {
                 analyzedSuccess: canonicalSuccess,
                 analyzedFailed: remaining,
                 remainingFailed: remaining,
+                totalAfterMerge: currentPapers.length,
                 analysisStatus: status
             }
         };
