@@ -865,7 +865,7 @@ primary_task_tag: #音视频生成
         const recoveryPaper = {
             apiReaderArticle: '### 把 HRTF 做浓，再用模型去听\n\n正文。',
             apiReaderPlan: {
-                version: 1, contract: 'beginner-researcher-v1',
+                version: 1, contract: 'beginner-researcher-v2',
                 readerTitle: '把HRTF做浓', oneSentenceThesis: '解释HRTF增强。',
                 sections: [{ kind: 'method_overview', heading: '把HRTF做浓，再用模型去听' }]
             },
@@ -888,10 +888,13 @@ primary_task_tag: #音视频生成
         const specs = [
             ['background', '声音片段为什么会让传统判别器失去方向？', '背景任务输入输出失败案例直觉动机读者边界'],
             ['related_work', '既有路线分别在哪个环节丢掉了关键信息？', '相关工作监督来源能力缺口路线对照位置判断'],
+            ['problem', '论文到底想回答哪三个问题？', '中心问题子问题约束设计目标判断边界'],
             ['method_overview', '新系统如何让信号在不同分支中各尽其职？', '方法输入表示组件目标输出数据流设计取舍'],
+            ['training', '参数究竟如何得到，还是根本没有训练阶段？', '训练求解优化推理既有模型参数预算实现细节'],
             ['experiment_setup', '这些数字究竟在什么设置下才能相互比较？', '实验数据划分指标方向强基线训练条件比较口径'],
             ['result', '最强结果是全面胜出，还是只在某些条件下成立？', '主结果强基线指标数值方向负结果平局证据解释'],
             ['limitation', '哪些结论已经被证明，哪些仍然只是合理推测？', '局限样本规模外推范围缺失对照部署代价事实推断'],
+            ['reproduction', '复现时应该先核对哪几个接口和口径？', '复现代码数据参数环境步骤失败检查清单'],
             ['synthesis', '初学者应该带着哪些问题继续读原论文？', '收束中心矛盾方法选择证据代价复现路线研究行动']
         ];
         const payload = {
@@ -912,15 +915,63 @@ primary_task_tag: #音视频生成
             }))
         };
         const result = parseApiReaderArticleResult(JSON.stringify(payload));
-        assert.strictEqual(result.plan.contract, 'beginner-researcher-v1');
+        assert.strictEqual(result.plan.contract, 'beginner-researcher-v2');
         assert.match(result.article, /^### /);
+        assert.match(result.article, /^### 论文到底想回答哪三个问题？$/m);
         assert.ok(result.article.length > 1800);
 
-        payload.sections[2].heading = '方法概述';
+        payload.sections[3].heading = '方法概述';
         assert.throws(
             () => parseApiReaderArticleResult(JSON.stringify(payload)),
             /论文特有问题或判断/
         );
+    });
+
+    it('API reader v2 绑定结构化公式、官方 SVG 和作者机构', () => {
+        const cheerio = require('cheerio');
+        const {
+            buildApiReaderArtifactEvidence,
+            getApiReaderFigureInventory,
+            injectApiReaderFigures,
+            parseArxivReaderAuthors
+        } = require('../scripts/deep-analyzer.js');
+        const artifacts = {
+            formulas: [{ ordinal: 1, latex: 'M[k]=L[k]+R[k]' }],
+            tables: [],
+            figures: [1, 2].map(ordinal => ({
+                ordinal,
+                label: `Figure ${ordinal}:`,
+                caption: ordinal === 1 ? 'Figure 1: HRTF augmentation.' : 'Figure 2: Main results.',
+                sourceDomSha256: String(ordinal).repeat(64),
+                recoveryStatus: 'complete',
+                images: [{
+                    kind: 'external_url', mediaType: 'image/svg+xml',
+                    url: `https://arxiv.org/html/2608.28422v1/figure-${ordinal}.svg`
+                }]
+            }))
+        };
+        assert.strictEqual(getApiReaderFigureInventory(artifacts, '2608.28422').length, 2);
+        assert.match(buildApiReaderArtifactEvidence(artifacts, '2608.28422'), /FORMULA_1/);
+        const reader = injectApiReaderFigures({
+            plan: { sections: [
+                { kind: 'component', heading: '增强组件如何改变频谱？' },
+                { kind: 'result', heading: '主要结果支持了什么？' }
+            ] },
+            article: [
+                '### 增强组件如何改变频谱？\n\n方法正文。',
+                '### 主要结果支持了什么？\n\n结果正文。'
+            ].join('\n\n'),
+            qualityMetrics: {}
+        }, artifacts, '2608.28422');
+        assert.strictEqual(reader.figures.length, 2);
+        assert.match(reader.article, /figure-1\.svg/);
+        assert.match(reader.article, /figure-2\.svg/);
+        assert.ok(reader.article.indexOf('figure-1.svg') < reader.article.indexOf('### 主要结果'));
+
+        const $ = cheerio.load('<div class="ltx_authors"><span class="ltx_creator ltx_role_author"><span class="ltx_personname">甲</span><span class="ltx_contact ltx_role_affiliation"><span class="ltx_contact_name">Affiliation: </span>机构 A</span></span></div>');
+        const authors = parseArxivReaderAuthors($);
+        assert.deepStrictEqual(authors.authors, [{ name: '甲', affiliations: ['机构 A'] }]);
+        assert.match(authors.sourceDomSha256, /^[0-9a-f]{64}$/);
     });
 
     it('归一化后的评分审计二次校验会剥离内部派生字段', () => {

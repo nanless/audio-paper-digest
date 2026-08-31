@@ -116,7 +116,8 @@ MANUAL_V6_PRODUCTION_MODE = 'manual_v6_production'
 MANUAL_V6_PRODUCTION_CONTRACT = 'manual-v6-production-publication-v1'
 LLM_API_PRODUCTION_MODE = 'llm_api_production'
 LLM_API_PRODUCTION_CONTRACT = 'llm-api-production-publication-v1'
-LLM_API_READER_CONTRACT = 'beginner-researcher-v1'
+LLM_API_READER_CONTRACT = 'beginner-researcher-v2'
+LLM_API_READER_LEGACY_CONTRACT = 'beginner-researcher-v1'
 LLM_API_SCORING_CONTRACT = 'api-scoring-audit-v2'
 LEGACY_V5_MAINTENANCE_MODE = 'legacy_v5_maintenance'
 SEALED_TUTORIAL_PREVIEW_MODE = 'sealed_tutorial_preview'
@@ -1164,6 +1165,7 @@ def _load_review_image(url):
     allowed_prefixes = (
         f'{base}/images/visual-summaries/',
         f'{base}/images/digest-covers/',
+        f'{base}/images/papers/',
     )
     if url.startswith(allowed_prefixes):
         parsed = urlparse(url)
@@ -1173,17 +1175,19 @@ def _load_review_image(url):
         repo = Path(BLOG_REPO).expanduser().resolve()
         target = (repo / 'static' / relative_public).resolve()
         _path, relative = _manifest_record(target, repo)
-        if not relative.startswith(('static/images/visual-summaries/', 'static/images/digest-covers/')):
+        if not relative.startswith((
+                'static/images/visual-summaries/', 'static/images/digest-covers/',
+                'static/images/papers/')):
             raise PublishDataValidationError('本地图片不属于受控视觉资产目录')
         try:
             raw = target.read_bytes()
         except OSError as exc:
-            raise PublishDataValidationError('本地视觉摘要图片不可读') from exc
+            raise PublishDataValidationError('本地受控图片不可读') from exc
         if len(raw) > REVIEW_IMAGE_MAX_BYTES:
-            raise PublishDataValidationError('本地视觉摘要图片超过 8 MiB review 上限')
+            raise PublishDataValidationError('本地受控图片超过 8 MiB review 上限')
         _validate_image_signature('image/png', raw)
         return {'media_type': 'image/png', 'data': base64.b64encode(raw).decode('ascii')}
-    raise PublishDataValidationError('图片 review 只允许 data URI、HTTPS 或受控视觉资产 URL')
+    raise PublishDataValidationError('图片 review 只允许 data URI、HTTPS 或受控本地图片 URL')
 
 
 def _digest_cover_review_expectation(url):
@@ -2370,7 +2374,9 @@ def _api_reader_payload(paper):
     """Replay the API reader article contract from canonical bytes."""
     manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
     contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
-    if contracts.get('apiReaderArticle') != 'beginner-researcher-v1':
+    reader_contract = contracts.get('apiReaderArticle')
+    if reader_contract not in {
+            LLM_API_READER_LEGACY_CONTRACT, LLM_API_READER_CONTRACT}:
         return None
     article = paper.get('apiReaderArticle')
     plan = paper.get('apiReaderPlan')
@@ -2386,7 +2392,7 @@ def _api_reader_payload(paper):
             or stage.get('articleSha256') != article_sha
             or stage.get('planSha256') != plan_sha):
         raise PublishDataValidationError('API reader contract 文章/计划 SHA 或阶段状态不闭环')
-    if plan.get('version') != 1 or plan.get('contract') != 'beginner-researcher-v1':
+    if plan.get('version') != 1 or plan.get('contract') != reader_contract:
         raise PublishDataValidationError('API reader plan 版本或契约非法')
     if not isinstance(plan.get('readerTitle'), str) \
             or not isinstance(plan.get('oneSentenceThesis'), str):
@@ -2397,12 +2403,18 @@ def _api_reader_payload(paper):
         'training', 'experiment_setup', 'result', 'ablation', 'limitation',
         'reproduction', 'synthesis',
     )
-    required_kinds = {
+    required_kinds = ({
+        'background', 'related_work', 'method_overview', 'training',
+        'experiment_setup', 'result', 'limitation', 'reproduction', 'synthesis',
+    } if reader_contract == LLM_API_READER_CONTRACT else {
         'background', 'related_work', 'method_overview', 'experiment_setup',
         'result', 'limitation', 'synthesis',
-    }
-    if not isinstance(plan_sections, list) or not 6 <= len(plan_sections) <= 12:
-        raise PublishDataValidationError('API reader plan 必须包含 6-12 个小节')
+    })
+    minimum_sections = 8 if reader_contract == LLM_API_READER_CONTRACT else 6
+    if not isinstance(plan_sections, list) or not minimum_sections <= len(plan_sections) <= 12:
+        raise PublishDataValidationError(
+            f'API reader plan 必须包含 {minimum_sections}-12 个小节'
+        )
     kinds = []
     planned_headings = []
     previous_rank = -1
@@ -2424,11 +2436,104 @@ def _api_reader_payload(paper):
     article_headings = re.findall(r'^###\s+(.+?)\s*$', article, flags=re.MULTILINE)
     if article_headings != planned_headings or len(set(article_headings)) != len(article_headings):
         raise PublishDataValidationError('API reader plan 与正文小节标题/顺序不一致')
+    figures = paper.get('apiReaderFigures')
+    if reader_contract == LLM_API_READER_CONTRACT:
+        if not isinstance(figures, list):
+            raise PublishDataValidationError('API reader v2 缺少结构化 figure 绑定数组')
+        figures_sha = _stable_json_sha256(figures)
+        if stage.get('figureCount') != len(figures) \
+                or stage.get('figuresSha256') != figures_sha:
+            raise PublishDataValidationError('API reader v2 figure 数量或 SHA 未闭环')
+        article_image_urls = re.findall(r'!\[[^\]]*\]\((https://[^\s)]+)\)', article)
+        figure_urls = [item.get('url') for item in figures if isinstance(item, dict)]
+        if article_image_urls != figure_urls or len(set(figure_urls)) != len(figure_urls):
+            raise PublishDataValidationError('API reader v2 正文图片与 figure 绑定不一致')
+        paper_id = normalize_publish_arxiv_id(paper.get('arxivId') or paper.get('paper_id'))
+        figure_assets = []
+        for item in figures:
+            if not isinstance(item, dict) or set(item) != {
+                    'ordinal', 'label', 'caption', 'url', 'mediaType',
+                    'sourceDomSha256', 'targetKind', 'targetHeading',
+                    'cachePath', 'assetFilename', 'assetMediaType',
+                    'assetSha256', 'assetBytes', 'assetWidth', 'assetHeight'}:
+                raise PublishDataValidationError('API reader v2 figure 字段非法')
+            parsed_url = urlparse(item['url'])
+            if parsed_url.scheme != 'https' \
+                    or parsed_url.hostname not in {'arxiv.org', 'www.arxiv.org'} \
+                    or not re.fullmatch(r'[0-9a-f]{64}', str(item['sourceDomSha256'])):
+                raise PublishDataValidationError('API reader v2 figure 来源绑定非法')
+            declared_cache_path = Path(str(item['cachePath'] or '')).expanduser()
+            if declared_cache_path.is_symlink() or declared_cache_path.parent.is_symlink():
+                raise PublishDataValidationError('API reader v2 figure 缓存路径不得使用符号链接')
+            cache_path = declared_cache_path.resolve()
+            cache_root = (Path(CURRENT_DIR) / 'api-reader-assets' / paper_id).resolve()
+            try:
+                cache_path.relative_to(cache_root)
+            except ValueError as exc:
+                raise PublishDataValidationError('API reader v2 figure 缓存路径逃逸') from exc
+            raw_asset = cache_path.read_bytes() if cache_path.is_file() else b''
+            png_dimensions = (
+                struct.unpack('>II', raw_asset[16:24])
+                if raw_asset.startswith(PNG_SIGNATURE) and len(raw_asset) >= 24
+                else (0, 0)
+            )
+            if not cache_path.is_file() \
+                    or cache_path.name != item['assetFilename'] \
+                    or not re.fullmatch(r'figure-\d+-[0-9a-f]{16}\.png', cache_path.name) \
+                    or item['assetMediaType'] != 'image/png' \
+                    or not re.fullmatch(r'[0-9a-f]{64}', str(item['assetSha256'])) \
+                    or _sha256_file(cache_path) != item['assetSha256'] \
+                    or cache_path.stat().st_size != item['assetBytes'] \
+                    or png_dimensions != (item['assetWidth'], item['assetHeight']) \
+                    or not (600 <= item['assetWidth'] <= 4096) \
+                    or not (200 <= item['assetHeight'] <= 4096):
+                raise PublishDataValidationError('API reader v2 figure 缓存字节或 SHA 不一致')
+            destination = Path('static') / 'images' / 'papers' / paper_id / cache_path.name
+            public_url = f'{BASE_PATH.rstrip("/")}/images/papers/{paper_id}/{cache_path.name}'
+            figure_assets.append({
+                'sourcePath': str(cache_path),
+                'destination': destination.as_posix(),
+                'publicUrl': public_url,
+                'sourceUrl': item['url'],
+                'sha256': item['assetSha256'],
+            })
+        reader_authors = paper.get('apiReaderAuthors')
+        if not isinstance(reader_authors, dict) \
+                or set(reader_authors) != {'authors', 'sourceDomSha256'} \
+                or not isinstance(reader_authors.get('authors'), list) \
+                or not re.fullmatch(
+                    r'[0-9a-f]{64}', str(reader_authors.get('sourceDomSha256') or '')
+                ) \
+                or stage.get('readerAuthorsSha256') != _stable_json_sha256(reader_authors):
+            raise PublishDataValidationError('API reader v2 作者与机构来源绑定非法')
+        for author in reader_authors['authors']:
+            if not isinstance(author, dict) or set(author) != {'name', 'affiliations'} \
+                    or not isinstance(author.get('name'), str) \
+                    or not isinstance(author.get('affiliations'), list) \
+                    or not author['name'].strip() \
+                    or not author['affiliations'] \
+                    or not all(isinstance(value, str) and value.strip()
+                               for value in author['affiliations']):
+                raise PublishDataValidationError('API reader v2 作者或机构字段非法')
+    else:
+        figures = []
+        figure_assets = []
+        reader_authors = None
+    rendered_article = article
+    for asset in figure_assets:
+        rendered_article = rendered_article.replace(
+            f']({asset["sourceUrl"]})', f']({asset["publicUrl"]})'
+        )
     return {
+        'contract': reader_contract,
         'plan': plan,
         'article': article,
+        'renderedArticle': rendered_article,
         'articleSha256': article_sha,
         'planSha256': plan_sha,
+        'figures': figures,
+        'assets': figure_assets,
+        'readerAuthors': reader_authors,
     }
 
 
@@ -2601,7 +2706,7 @@ def generate_paper_page(paper, date_str, category='论文速递'):
     api_reader_marker = ''
     if api_reader_payload:
         api_reader_marker = (
-            'paper_digest_api_reader_contract: "beginner-researcher-v1"\n'
+            f'paper_digest_api_reader_contract: "{api_reader_payload["contract"]}"\n'
             f'paper_digest_api_reader_article_sha256: "{api_reader_payload["articleSha256"]}"\n'
             f'paper_digest_api_reader_plan_sha256: "{api_reader_payload["planSha256"]}"\n'
         )
@@ -2612,10 +2717,14 @@ def generate_paper_page(paper, date_str, category='论文速递'):
     )
     reader_article = (
         v6_payload['article'] if v6_payload
-        else api_reader_payload['article'] if api_reader_payload
+        else api_reader_payload['renderedArticle'] if api_reader_payload
         else _manual_reader_article(paper, reader_plan, date_str)
     )
     reader_first = reader_plan is not None and reader_article is not None
+    api_reader_v2 = bool(
+        api_reader_payload
+        and api_reader_payload.get('contract') == LLM_API_READER_CONTRACT
+    )
     # Modern Manual pages must never be reconstructed from the legacy fixed
     # canonical sections.  A missing, partial or tampered reader payload is a
     # hard failure: silently falling back would turn an old analysis into a
@@ -2669,6 +2778,12 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
         # merely “论文” made the reader-first identity block ambiguous and
         # broke the same title/link contract used by the daily index.
         md += f'> 英文题目：*{paper_link}*\n>\n> 一句话：**{reader_plan["oneSentenceThesis"].strip()}**\n\n'
+    reader_authors_content = ''
+    if api_reader_v2 and api_reader_payload.get('readerAuthors'):
+        reader_authors_content = '\n'.join(
+            f'- {author["name"]}：{"；".join(author["affiliations"])}'
+            for author in api_reader_payload['readerAuthors']['authors']
+        )
     if paper.get('analysisSource') == 'abstract':
         md += '> ⚠️ 本文仅基于论文摘要生成，未能取得可验证的全文，技术细节与评分置信度有限。\n\n'
     elif paper.get('analysisConfidence') == 'full_text' and paper.get('sourceTextChars', 0) > paper.get('usedTextChars', paper.get('sourceTextChars', 0)):
@@ -2689,13 +2804,15 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
         if meta:
             metadata_block += f"{meta}\n\n"
 
-        if pa.get('authors'):
+        if pa.get('authors') and not api_reader_v2:
             metadata_block += f"\n### 👥 作者与机构\n\n{pa['authors']}\n"
 
         if reader_first and reader_identity_lines:
             md += '> ' + '\n>\n> '.join(reader_identity_lines) + '\n\n'
         elif not reader_first:
             md += metadata_block
+        if api_reader_v2 and reader_authors_content:
+            md += f"\n## 👥 作者与机构\n\n{reader_authors_content}\n"
 
         # 分离补充信息（从 opensource 中提取）
         opensource_content = pa.get('opensource', '')
@@ -2750,10 +2867,9 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
                             content, reader_first_image_plans,
                         )
                     content = _nest_reader_headings(
-                        # The generated "深度解读" heading is level 3, so
-                        # reader-authored sections must start at level 4 to
-                        # remain true children rather than peer sections.
-                        content.strip(), minimum_level=4
+                        # API v2 exposes its teaching path at H3. Historical
+                        # Manual/API contracts retain their sealed H4 nesting.
+                        content.strip(), minimum_level=3 if api_reader_v2 else 4
                     )
                 else:
                     content = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', content.strip(), count=1)
@@ -2770,16 +2886,17 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
                             f'{content}\n\n</details>\n'
                         )
                 else:
-                    md += f'\n### {label}\n\n{content}\n'
+                    heading_level = '##' if api_reader_v2 else '###'
+                    md += f'\n{heading_level} {label}\n\n{content}\n'
 
         # 补充信息放到最后面
         if supplementary:
-            md += f'\n### 📎 补充信息\n\n{supplementary}\n'
+            md += f'\n{"##" if api_reader_v2 else "###"} 📎 补充信息\n\n{supplementary}\n'
         if reader_first and metadata_block:
             md += f'\n<details>\n<summary>📎 论文与评分元数据</summary>\n\n{metadata_block.strip()}\n\n</details>\n'
         if reader_first and scoring_evidence:
             md += (
-                '\n### ⚖️ 评分依据与证据（展开查看）\n\n'
+                f'\n{"##" if api_reader_v2 else "###"} ⚖️ 评分依据与证据（展开查看）\n\n'
                 f'<details>\n<summary>逐维得分、全文证据与扣分边界</summary>\n\n'
                 f'{scoring_evidence}\n\n</details>\n'
             )
@@ -3680,6 +3797,32 @@ def planned_publish_paths(staged_posts_dir, content_dir, date_str):
     return changed
 
 
+def prepare_api_reader_staged_assets(papers, stage_root):
+    stage_root = Path(stage_root).resolve()
+    staged = []
+    seen = set()
+    for paper in papers:
+        payload = _api_reader_payload(paper)
+        if not payload:
+            continue
+        for asset in payload.get('assets') or []:
+            relative = Path(asset['destination'])
+            if relative.as_posix() in seen:
+                raise PublishDataValidationError(f'API reader figure 目标路径重复: {relative}')
+            seen.add(relative.as_posix())
+            source = Path(asset['sourcePath']).resolve()
+            target = (stage_root / relative).resolve()
+            try:
+                target.relative_to(stage_root)
+            except ValueError as exc:
+                raise PublishDataValidationError(f'API reader figure staging 路径逃逸: {relative}') from exc
+            if _sha256_file(source) != asset['sha256']:
+                raise PublishDataValidationError(f'API reader figure 缓存写入前发生变化: {source.name}')
+            _atomic_write_bytes(target, source.read_bytes(), mode=0o600)
+            staged.append(target)
+    return staged
+
+
 def publish_manifest_paths(
     staged_posts_dir, content_dir, date_str, staged_assets=None, single_page=False,
 ):
@@ -3688,14 +3831,25 @@ def publish_manifest_paths(
     target = Path(content_dir)
     generated_names = {path.name for path in staged.glob('*.md')}
     if single_page:
-        if staged_assets:
-            raise PublishDataValidationError('单篇 generation 不得包含发布后视觉资产')
         if len(generated_names) != 1 or f'{date_str}.md' in generated_names:
             raise PublishDataValidationError('单篇 generation staging 必须只含一个论文页且不得含汇总页')
         only_name = next(iter(generated_names))
         if not only_name.startswith(f'{date_str}-'):
             raise PublishDataValidationError('单篇 generation 页面不属于目标日期')
-        return [(target / only_name).resolve()]
+        manifest = {(target / only_name).resolve()}
+        repo = Path(BLOG_REPO).expanduser().resolve()
+        stage_root = staged.resolve().parent
+        for source in staged_assets or []:
+            source = Path(source).resolve()
+            try:
+                relative = source.relative_to(stage_root)
+            except ValueError as exc:
+                raise PublishDataValidationError(f'单篇 asset staging 路径逃逸: {source}') from exc
+            destination = (repo / relative).resolve()
+            if not is_api_reader_asset_path(destination):
+                raise PublishDataValidationError('单篇 generation 只允许绑定正文论文图资产')
+            manifest.add(destination)
+        return sorted(manifest)
     manifest = {target / name for name in generated_names}
     repo = Path(BLOG_REPO).expanduser().resolve()
     stage_root = staged.resolve().parent
@@ -3921,10 +4075,12 @@ def validate_git_index(paths):
 
 
 def validate_single_publication_worktree(paths):
-    """Require a single-paper push to be the only dirty Git worktree state."""
+    """Require one paper page plus only its bound local figures to be dirty."""
     allowed = set(_git_relative_manifest(paths))
-    if len(allowed) != 1:
-        raise PublishDataValidationError('单篇灰度发布必须精确绑定一个 Git 路径')
+    pages = {item for item in allowed if item.startswith('content/posts/') and item.endswith('.md')}
+    assets = {item for item in allowed if item.startswith('static/images/papers/')}
+    if len(pages) != 1 or len(pages) + len(assets) != len(allowed):
+        raise PublishDataValidationError('单篇灰度发布必须绑定一个论文页及其受控正文图')
     result = subprocess.run(
         ['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
         cwd=BLOG_REPO,
@@ -4541,6 +4697,8 @@ def llm_api_publication_bindings(published_papers):
             'readerContract': LLM_API_READER_CONTRACT,
             'readerArticleSha256': reader['articleSha256'],
             'readerPlanSha256': reader['planSha256'],
+            'readerFiguresSha256': _stable_json_sha256(reader['figures']),
+            'readerAuthorsSha256': _stable_json_sha256(reader['readerAuthors']),
             'analysisSha256': analysis_sha,
             'sourceSha256': source_sha,
             'scoringContract': LLM_API_SCORING_CONTRACT,
@@ -5116,7 +5274,13 @@ def _manifest_record(path, repo):
         and re.fullmatch(r'\d{4}-\d{2}-\d{2}', relative.parts[3] or '')
         and relative.name == 'cover.png'
     )
-    if not (is_post or is_visual_asset or is_digest_cover):
+    is_reader_asset = (
+        relative.parts[:3] == ('static', 'images', 'papers')
+        and len(relative.parts) == 5
+        and re.fullmatch(r'\d{4}\.\d{4,5}', relative.parts[3] or '')
+        and re.fullmatch(r'figure-\d+-[0-9a-f]{16}\.png', relative.name or '')
+    )
+    if not (is_post or is_visual_asset or is_digest_cover or is_reader_asset):
         raise PublishDataValidationError(f'博客清单包含非受控路径: {relative}')
     return path, relative.as_posix()
 
@@ -5132,6 +5296,18 @@ def is_visual_summary_asset_path(path, date_str=None):
     if parts[:3] not in (('static', 'images', 'visual-summaries'), ('static', 'images', 'digest-covers')):
         return False
     return date_str is None or parts[3] == validate_publish_date(date_str)
+
+
+def is_api_reader_asset_path(path, paper_id=None):
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    try:
+        _target, relative = _manifest_record(path, repo)
+    except PublishDataValidationError:
+        return False
+    parts = Path(relative).parts
+    if parts[:3] != ('static', 'images', 'papers') or len(parts) != 5:
+        return False
+    return paper_id is None or parts[3] == normalize_publish_arxiv_id(paper_id)
 
 
 def _validate_manifest_path_date(target, repo, date_str):
@@ -5247,11 +5423,21 @@ def save_generation_manifest(
             _validate_publication_scope(
                 {'publicationScope': publication_scope_value}, published_papers,
             )
-            if len(records) != 1 or records[0]['deleted'] is True \
-                    or records[0]['path'].endswith(f'/{validated_date}.md'):
+            page_records = [record for record in records if record['path'].startswith('content/posts/')]
+            asset_records = [record for record in records if record['path'].startswith('static/images/papers/')]
+            if len(page_records) != 1 or page_records[0]['deleted'] is True \
+                    or page_records[0]['path'].endswith(f'/{validated_date}.md') \
+                    or len(page_records) + len(asset_records) != len(records):
                 raise PublishDataValidationError(
-                    '单篇 generation manifest 必须只绑定一个现存论文页'
+                    '单篇 generation manifest 必须绑定一个现存论文页及其受控正文图'
                 )
+            expected_asset_prefix = (
+                f'static/images/papers/{publication_scope_value["includeId"]}/'
+            )
+            if any(record['deleted'] is True
+                   or not record['path'].startswith(expected_asset_prefix)
+                   for record in asset_records):
+                raise PublishDataValidationError('单篇 generation 正文图与 includeId 不一致')
             manifest['publicationScope'] = publication_scope_value
         manifest['manualV6BindingsFingerprint'] = _stable_json_sha256(
             manifest['manualV6Bindings']
@@ -5608,6 +5794,77 @@ def attest_visual_summary_assets(date_str, publish_paths, manifest_path, file_re
         else:
             # The referencing page already accounts for the blocking failure.
             result.update({'failureKind': 'transient'})
+        file_results[str(asset)] = result
+    return blocking
+
+
+def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_results):
+    """Bind each local paper figure to an exact reviewed page and PNG byte record."""
+    manifest = _load_json_object(manifest_path, '生成清单')
+    records = manifest.get('files')
+    if not isinstance(records, list):
+        raise PublishDataValidationError('生成清单中没有文件记录')
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    manifest_by_path = {
+        record.get('path'): record for record in records if isinstance(record, dict)
+    }
+    pages = [
+        Path(path).resolve() for path in publish_paths
+        if Path(path).is_file() and Path(path).suffix == '.md'
+    ]
+    page_urls = {
+        page: {item['url'] for item in parse_markdown_images(page.read_text(encoding='utf-8'))}
+        for page in pages
+    }
+    blocking = 0
+    for item in publish_paths:
+        asset = Path(item).resolve()
+        if not is_api_reader_asset_path(asset):
+            continue
+        relative = asset.relative_to(repo).as_posix()
+        record = manifest_by_path.get(relative)
+        result = {
+            'passed': False, 'completed': True, 'failureKind': 'content',
+            'blockingCount': 1, 'reviewedSha256': None,
+            'imageReviewMode': 'deterministic_only',
+        }
+        expected_sha = record.get('sha256') if isinstance(record, dict) else None
+        try:
+            raw = asset.read_bytes()
+        except OSError:
+            raw = b''
+        if (
+            not isinstance(record, dict)
+            or record.get('deleted') is not False
+            or not re.fullmatch(r'[0-9a-f]{64}', str(expected_sha or ''))
+            or not raw.startswith(PNG_SIGNATURE)
+            or hashlib.sha256(raw).hexdigest() != expected_sha
+        ):
+            blocking += 1
+            file_results[str(asset)] = result
+            continue
+        public_url = f'{BASE_PATH.rstrip("/")}/{relative[len("static/"):]}'
+        references = [page for page, urls in page_urls.items() if public_url in urls]
+        reviewed_pages = [
+            page for page in references
+            if file_results.get(str(page), {}).get('passed') is True
+            and file_results.get(str(page), {}).get('reviewedSha256') == _sha256_file(page)
+        ]
+        if not reviewed_pages:
+            blocking += 1
+            file_results[str(asset)] = result
+            continue
+        page_modes = {
+            file_results[str(page)].get('imageReviewMode', 'deterministic_only')
+            for page in reviewed_pages
+        }
+        result.update({
+            'passed': True, 'failureKind': None, 'blockingCount': 0,
+            'reviewedSha256': expected_sha,
+            'imageReviewMode': (
+                next(iter(page_modes)) if len(page_modes) == 1 else 'multimodal'
+            ),
+        })
         file_results[str(asset)] = result
     return blocking
 
@@ -6916,9 +7173,11 @@ def generate_main(options=None):
             today, papers, category, publish_all, input_fingerprint,
             template_fingerprint, base_head, normalized_include,
         )
-        # 论文长图和批次汇总图严格属于远端发布验证后的独立阶段，
-        # 博客 generation 事务只安装 Markdown 页面。
-        staged_assets = []
+        # 发布后长图仍不进入本事务；读者正文实际引用的论文图则必须与页面
+        # 一起 staged、review、receipt 和 commit，避免远程热链产生空图。
+        staged_assets = prepare_api_reader_staged_assets(
+            papers, Path(staged_posts).resolve().parent,
+        )
         paper_slugs = {}
         for paper, record in zip(papers, journal['papers']):
             slug = record['filename'][len(today) + 1:-3]

@@ -374,9 +374,11 @@ def llm_api_publication_fixture():
         ('background', '为什么混合声音需要先建立空间直觉？'),
         ('related_work', '已有路线在哪些线索上留下了空白？'),
         ('method_overview', '两段式流程怎样把输入变成可比较输出？'),
+        ('training', '这里是否存在训练阶段，参数又从哪里来？'),
         ('experiment_setup', '读数字之前必须固定哪些实验口径？'),
         ('result', '主结果究竟支持了哪一段因果链？'),
         ('limitation', '模型预测与真实听感之间还隔着什么？'),
+        ('reproduction', '复现时应该先核对哪些接口与配置？'),
         ('synthesis', '初学者下一步应该验证哪一个环节？'),
     ]
     article = '\n\n'.join(
@@ -385,7 +387,7 @@ def llm_api_publication_fixture():
     )
     plan = {
         'version': 1,
-        'contract': 'beginner-researcher-v1',
+        'contract': 'beginner-researcher-v2',
         'readerTitle': '把空间线索调得更强，模型真的更容易分离音乐吗？',
         'oneSentenceThesis': '论文把频变双耳线索做成可调增强，并以受控模型实验说明收益与听损边界。',
         'sections': [{'kind': kind, 'heading': heading} for kind, heading in headings],
@@ -395,6 +397,11 @@ def llm_api_publication_fixture():
     plan_sha = publish_to_blog._stable_json_sha256(plan)
     analysis_sha = hashlib.sha256(analysis.encode('utf-8')).hexdigest()
     source_sha = '1' * 64
+    figures = []
+    reader_authors = {
+        'authors': [{'name': 'Researcher A', 'affiliations': ['Institute A']}],
+        'sourceDomSha256': '4' * 64,
+    }
     return {
         'title': 'LLM API Publisher Fixture',
         'arxivId': paper_id,
@@ -402,6 +409,8 @@ def llm_api_publication_fixture():
         'sourceSha256': source_sha,
         'apiReaderArticle': article,
         'apiReaderPlan': plan,
+        'apiReaderFigures': figures,
+        'apiReaderAuthors': reader_authors,
         'apiReaderArticleSha256': article_sha,
         'apiReaderPlanSha256': plan_sha,
         'parsed': {
@@ -412,7 +421,7 @@ def llm_api_publication_fixture():
             'scoringReason': '评分严格绑定来源与审计证据。',
         },
         'analysisManifest': {
-            'contracts': {'apiReaderArticle': 'beginner-researcher-v1'},
+            'contracts': {'apiReaderArticle': 'beginner-researcher-v2'},
             'sourceAcquisition': {'sourceSha256': source_sha},
             'stages': {
                 'scoringAudit': {
@@ -427,6 +436,9 @@ def llm_api_publication_fixture():
                     'status': 'complete',
                     'articleSha256': article_sha,
                     'planSha256': plan_sha,
+                    'figureCount': 0,
+                    'figuresSha256': publish_to_blog._stable_json_sha256(figures),
+                    'readerAuthorsSha256': publish_to_blog._stable_json_sha256(reader_authors),
                     'model': 'muse-spark-1.2-contributor',
                     'protocol': 'openai_responses',
                 },
@@ -1345,7 +1357,7 @@ title: "Bad table"
         self.assertIn('paper_digest_api_reader_contract: "beginner-researcher-v1"', markdown)
         self.assertIn('# 📄 当声学细节与语义理解不再挤在同一条路上', markdown)
         self.assertIn('> 一句话：**分路表示改善了目标设置中的主指标', markdown)
-        self.assertIn('#### 为什么旧表示会在生成任务前失真？', markdown)
+        self.assertIn('### 为什么旧表示会在生成任务前失真？', markdown)
         self.assertNotIn('这段固定栏目不应成为读者正文。', markdown)
 
         paper['apiReaderArticle'] += '\n漂移'
@@ -1353,6 +1365,19 @@ title: "Bad table"
                 publish_to_blog.PublishDataValidationError,
                 '文章/计划 SHA 或阶段状态不闭环'):
             publish_to_blog.generate_paper_page(paper, '2026-08-31')
+
+    def test_api_reader_v2_places_authors_after_identity_and_uses_visible_heading_levels(self):
+        paper = llm_api_publication_fixture()
+        markdown, _slug = publish_to_blog.generate_paper_page(paper, '2026-08-31')
+        self.assertIn('paper_digest_api_reader_contract: "beginner-researcher-v2"', markdown)
+        self.assertIn('## 👥 作者与机构', markdown)
+        self.assertIn('- Researcher A：Institute A', markdown)
+        self.assertLess(markdown.index('> 标签：'), markdown.index('## 👥 作者与机构'))
+        self.assertLess(markdown.index('## 👥 作者与机构'), markdown.index('## 💬 毒舌点评'))
+        self.assertIn('## 🧭 深度解读', markdown)
+        self.assertIn('### 为什么混合声音需要先建立空间直觉？', markdown)
+        self.assertNotIn('#### 为什么混合声音需要先建立空间直觉？', markdown)
+        self.assertEqual(markdown.count('Researcher A'), 1)
 
     def test_manual_v5_reader_plan_uses_reader_first_header_and_preserves_custom_subheads(self):
         reader_article = (
@@ -1638,7 +1663,7 @@ title: "Bad table"
         date_str = '2026-08-31'
         bindings = publish_to_blog.llm_api_publication_bindings([paper])
         self.assertEqual(len(bindings), 1)
-        self.assertEqual(bindings[0]['readerContract'], 'beginner-researcher-v1')
+        self.assertEqual(bindings[0]['readerContract'], 'beginner-researcher-v2')
         self.assertEqual(bindings[0]['scoringContract'], 'api-scoring-audit-v2')
         self.assertEqual(bindings[0]['model'], 'muse-spark-1.2-contributor')
         self.assertEqual(

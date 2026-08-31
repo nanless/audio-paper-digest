@@ -23,7 +23,8 @@ const {
     detectHttpConnectProxyUrl,
     createProxyAgent,
     createProxyDispatcher,
-    getBeijingISOString
+    getBeijingISOString,
+    writeFileAtomic
 } = require('./utils.js');
 const {
     REQUIRED_ANALYSIS_SECTIONS,
@@ -53,6 +54,7 @@ const dns = require('dns').promises;
 const net = require('net');
 const https = require('https');
 const { PDFParse } = require('pdf-parse');
+const { createCanvas, loadImage } = require('@napi-rs/canvas');
 const { ANALYSIS_CONFIG, ARXIV_CONFIG, SECONDARY_MODEL_CONFIG, CURRENT_DIR } = require('./config.js');
 const { validateEditorialQuality } = require('./editorial-quality.js');
 
@@ -726,14 +728,14 @@ async function auditTypeAwareScoring(analysis, sourceEvidence = '', options = {}
     return (await auditTypeAwareScoringDetailed(analysis, sourceEvidence, options)).analysis;
 }
 
-const API_READER_ARTICLE_CONTRACT = 'beginner-researcher-v1';
+const API_READER_ARTICLE_CONTRACT = 'beginner-researcher-v2';
 const API_READER_KINDS = Object.freeze([
     'background', 'related_work', 'problem', 'method_overview', 'component', 'training',
     'experiment_setup', 'result', 'ablation', 'limitation', 'reproduction', 'synthesis'
 ]);
 const API_READER_REQUIRED_KINDS = Object.freeze([
-    'background', 'related_work', 'method_overview', 'experiment_setup',
-    'result', 'limitation', 'synthesis'
+    'background', 'related_work', 'method_overview', 'training',
+    'experiment_setup', 'result', 'limitation', 'reproduction', 'synthesis'
 ]);
 
 function isAllowedReaderNarrativeNumeralIssue(issue) {
@@ -741,6 +743,23 @@ function isAllowedReaderNarrativeNumeralIssue(issue) {
     return /^(?:一|两)(?:个|条|类|层|种|套|路|方面|部分|组|步|轮|半)$/.test(
         String(issue.match || '').trim()
     );
+}
+
+function isReaderHeadingIssue(issue, article) {
+    if (issue?.code !== 'quantitative_chinese_numeral' || !Number.isInteger(issue.line)) {
+        return false;
+    }
+    const line = String(article || '').split('\n')[issue.line - 1] || '';
+    return /^###\s+/.test(line) && line.includes(String(issue.match || '').trim());
+}
+
+function restoreReaderSectionHeadings(article, sections) {
+    let index = 0;
+    return String(article || '').replace(/^###\s+.+?\s*$/gm, () => {
+        const heading = sections[index]?.heading;
+        index += 1;
+        return heading ? `### ${heading.trim()}` : '';
+    });
 }
 
 function splitReaderLongParagraphs(text, targetChineseChars = 190, maxChineseChars = 240) {
@@ -771,7 +790,8 @@ function splitReaderLongParagraphs(text, targetChineseChars = 190, maxChineseCha
 function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
     let normalized = String(text || '')
         .replace(/([\u3400-\u9fff])([A-Za-z][A-Za-z0-9+.-]*)/g, '$1 $2')
-        .replace(/([A-Za-z0-9%+)])([\u3400-\u9fff])/g, '$1 $2');
+        .replace(/([\u3400-\u9fff])([α-ωΑ-Ω])/g, '$1 $2')
+        .replace(/([A-Za-z0-9%+)\]α-ωΑ-Ω])([\u3400-\u9fff])/g, '$1 $2');
     const numeralMap = {
         一: '1', 二: '2', 两: '2', 三: '3', 四: '4', 五: '5',
         六: '6', 七: '7', 八: '8', 九: '9', 十: '10'
@@ -799,6 +819,223 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
         .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2');
 }
 
+function getApiReaderFigureInventory(structuredArtifacts, arxivId = '') {
+    const expectedId = String(arxivId || '').trim().toLowerCase().replace(/v\d+$/i, '');
+    const inventory = [];
+    for (const figure of structuredArtifacts?.figures || []) {
+        if (figure?.recoveryStatus !== 'complete'
+            || !Number.isInteger(figure.ordinal)
+            || !recoverySha256(figure.sourceDomSha256)) continue;
+        for (const resource of figure.images || []) {
+            if (resource?.kind !== 'external_url') continue;
+            let parsed;
+            try {
+                parsed = new URL(String(resource.url || ''));
+            } catch (_) {
+                continue;
+            }
+            const host = parsed.hostname.toLowerCase();
+            const pathMatch = parsed.pathname.match(/^\/html\/(\d{4}\.\d{4,5})(?:v\d+)?\//i);
+            if (parsed.protocol !== 'https:'
+                || !['arxiv.org', 'www.arxiv.org'].includes(host)
+                || !pathMatch
+                || (expectedId && pathMatch[1].toLowerCase() !== expectedId)
+                || (String(resource.mediaType || '').toLowerCase() !== 'image/svg+xml'
+                    && !isSupportedImageUrl(parsed.toString()))) continue;
+            inventory.push({
+                ordinal: figure.ordinal,
+                label: String(figure.label || `Figure ${figure.ordinal}`).replace(/\s+/g, ' ').trim(),
+                caption: String(figure.caption || '').replace(/\s+/g, ' ').trim().slice(0, 1200),
+                url: parsed.toString(),
+                mediaType: String(resource.mediaType || '').toLowerCase(),
+                sourceDomSha256: figure.sourceDomSha256
+            });
+            break;
+        }
+        if (inventory.length >= IMAGE_INSERTION_MAX) break;
+    }
+    return inventory;
+}
+
+function recoverySha256(value) {
+    return /^[0-9a-f]{64}$/.test(String(value || ''));
+}
+
+function buildApiReaderArtifactEvidence(structuredArtifacts, arxivId = '') {
+    if (!structuredArtifacts || typeof structuredArtifacts !== 'object') return '';
+    const lines = ['[READER_ARTIFACTS] 结构化原文图表与公式（正文细节必须优先引用这里）'];
+    for (const formula of (structuredArtifacts.formulas || []).slice(0, 12)) {
+        const latex = String(formula?.latex || '').trim();
+        if (latex) lines.push(`FORMULA_${formula.ordinal}: ${latex}`);
+    }
+    for (const table of (structuredArtifacts.tables || []).slice(0, 6)) {
+        const matrix = Array.isArray(table?.matrix) ? table.matrix.slice(0, 40) : [];
+        lines.push(
+            `TABLE_${table.ordinal}: ${String(table?.caption || '').replace(/\s+/g, ' ').trim()}`,
+            JSON.stringify(matrix)
+        );
+    }
+    for (const figure of getApiReaderFigureInventory(structuredArtifacts, arxivId)) {
+        lines.push(
+            `FIGURE_${figure.ordinal}: ${figure.caption}`,
+            `FIGURE_${figure.ordinal}_URL: ${figure.url}`
+        );
+    }
+    return lines.length > 1 ? lines.join('\n') : '';
+}
+
+function buildApiReaderEvidenceContext(analysis, sourceText, structuredArtifacts, arxivId = '') {
+    const artifactEvidence = buildApiReaderArtifactEvidence(structuredArtifacts, arxivId);
+    const sourceBudget = Math.max(4000, REVISION_EVIDENCE_MAX_CHARS - artifactEvidence.length - 2);
+    const sourceEvidence = buildTypeAwareSourceContext(
+        analysis,
+        sourceText,
+        sourceBudget,
+        BROAD_EVIDENCE_PATTERNS,
+        'READER'
+    );
+    return [sourceEvidence, artifactEvidence].filter(Boolean).join('\n\n');
+}
+
+function readerFigureNarrative(figure) {
+    if (figure.ordinal === 1) {
+        return '图中实线表示左耳、虚线表示右耳；随着增强系数增大，对侧耳的频变衰减被逐级拉开，而未增强侧基本保持原状。这正是“只放大侧通道方向残差、保留中通道与原始相位”的可视化结果。';
+    }
+    if (figure.ordinal === 2) {
+        return '这组柱状图把目标位于正前方与侧方时的预测 SRM 并列展示。纵轴越高表示模型预测越容易从混音中分辨目标；增强强度越高，两种方位下的收益整体越大。';
+    }
+    if (figure.ordinal === 3) {
+        return '这张图把正常听力、未助听 N3 与经过 WDRC 的 N3 放在同一坐标上。它显示助听处理虽然改变了总体可听度，却没有把增强条件的空间收益恢复到正常听力水平。';
+    }
+    if (figure.ordinal === 4) {
+        return '左图把更优耳信噪比贡献拆开，右图把双耳去掩蔽贡献拆开。增强收益主要由前者推动，而听损和 WDRC 会压缩这部分优势，这比只看一个 SRM 总数更能说明机制。';
+    }
+    return `该图的原始图注为：${figure.caption}`;
+}
+
+function readerFigureAlt(figure) {
+    return ({
+        1: '不同增强系数下的左右耳 HRTF 幅度谱',
+        2: '不同渲染条件与目标方位下的预测 SRM',
+        3: '正常听力、听损与 WDRC 条件下的预测 SRM',
+        4: '更优耳信噪比与双耳去掩蔽贡献分解'
+    })[figure.ordinal] || figure.caption.replace(/^Figure\s+\d+\s*:\s*/i, '').slice(0, 180);
+}
+
+function insertMarkdownBeforeNextReaderHeading(article, heading, markdown) {
+    const marker = `### ${heading}`;
+    const start = article.indexOf(marker);
+    if (start < 0) return { article, inserted: false };
+    const contentStart = start + marker.length;
+    const next = article.indexOf('\n### ', contentStart);
+    const end = next >= 0 ? next : article.length;
+    const before = article.slice(0, end).trimEnd();
+    const after = article.slice(end);
+    return { article: `${before}\n\n${markdown.trim()}\n${after}`, inserted: true };
+}
+
+function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '') {
+    const figures = getApiReaderFigureInventory(structuredArtifacts, arxivId);
+    if (figures.length === 0) return { ...readerResult, figures: [] };
+    let article = readerResult.article;
+    const sections = readerResult.plan.sections || [];
+    const used = [];
+    for (const figure of figures) {
+        if (article.includes(`](${figure.url})`)) continue;
+        const preferredKinds = figure.ordinal === 1
+            ? ['component', 'method_overview']
+            : figure.ordinal >= 3
+                ? ['ablation', 'result', 'limitation']
+                : ['result', 'experiment_setup'];
+        const target = preferredKinds
+            .map(kind => sections.find(section => section.kind === kind))
+            .find(Boolean);
+        if (!target) continue;
+        const alt = sanitizeMarkdownImageAlt(
+            `论文图 ${figure.ordinal}：${readerFigureAlt(figure)}`
+        ).slice(0, 240);
+        const block = [
+            `![${alt}](${figure.url})`,
+            `*论文图 ${figure.ordinal}。${readerFigureNarrative(figure)}*`
+        ].join('\n\n');
+        const inserted = insertMarkdownBeforeNextReaderHeading(article, target.heading, block);
+        if (!inserted.inserted) continue;
+        article = inserted.article;
+        used.push({ ...figure, targetKind: target.kind, targetHeading: target.heading });
+    }
+    return { ...readerResult, article, figures: used };
+}
+
+function sanitizeTrustedArxivSvg(buffer) {
+    const source = Buffer.isBuffer(buffer) ? buffer.toString('utf8') : String(buffer || '');
+    if (!/^\s*<svg\b/i.test(source) || Buffer.byteLength(source) > 2 * 1024 * 1024) {
+        throw new Error('论文 SVG 文件头或字节上限非法');
+    }
+    const $ = cheerio.load(source, { xmlMode: true });
+    const svg = $('svg').first();
+    if (!svg.length) throw new Error('论文 SVG 缺少根节点');
+    svg.find('script, foreignObject, iframe, object, embed, audio, video').remove();
+    svg.find('*').addBack().each((_, element) => {
+        for (const attribute of Object.keys(element.attribs || {})) {
+            const lower = attribute.toLowerCase();
+            const value = String(element.attribs[attribute] || '').trim();
+            if (lower.startsWith('on')
+                || ((lower === 'href' || lower === 'xlink:href')
+                    && value && !value.startsWith('#'))) {
+                $(element).removeAttr(attribute);
+            }
+        }
+    });
+    const sanitized = $.xml(svg);
+    if (!sanitized || /<script\b|<foreignObject\b|\son\w+=/i.test(sanitized)) {
+        throw new Error('论文 SVG 清理后仍包含主动内容');
+    }
+    return Buffer.from(sanitized, 'utf8');
+}
+
+async function materializeApiReaderFigures(figures, arxivId = '') {
+    const paperId = String(arxivId || '').trim().toLowerCase().replace(/v\d+$/i, '');
+    if (!/^\d{4}\.\d{4,5}$/.test(paperId)) throw new Error('论文图缓存 paper ID 非法');
+    const root = path.join(CURRENT_DIR, 'api-reader-assets', paperId);
+    fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+    const materialized = [];
+    for (const figure of figures || []) {
+        const response = await fetch(figure.url, {
+            headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
+            signal: AbortSignal.timeout(ARXIV_FETCH_TIMEOUT_MS),
+            dispatcher: getArxivFetchDispatcher()
+        });
+        if (!response.ok) throw new Error(`论文图 ${figure.ordinal} 下载失败: HTTP ${response.status}`);
+        const raw = await readResponseBufferWithLimit(response, 2 * 1024 * 1024);
+        const sanitized = sanitizeTrustedArxivSvg(raw);
+        const image = await loadImage(sanitized);
+        if (!image.width || !image.height) throw new Error(`论文图 ${figure.ordinal} SVG 无法渲染`);
+        const targetWidth = Math.max(1200, Math.min(1800, image.width * 3));
+        const targetHeight = Math.max(1, Math.round(targetWidth * image.height / image.width));
+        const canvas = createCanvas(targetWidth, targetHeight);
+        const context = canvas.getContext('2d');
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, targetWidth, targetHeight);
+        context.drawImage(image, 0, 0, targetWidth, targetHeight);
+        const png = await canvas.encode('png');
+        const assetSha256 = crypto.createHash('sha256').update(png).digest('hex');
+        const filename = `figure-${figure.ordinal}-${assetSha256.slice(0, 16)}.png`;
+        const cachePath = path.join(root, filename);
+        writeFileAtomic(cachePath, png);
+        materialized.push({
+            ...figure,
+            cachePath,
+            assetFilename: filename,
+            assetMediaType: 'image/png',
+            assetSha256,
+            assetBytes: png.length,
+            assetWidth: targetWidth,
+            assetHeight: targetHeight
+        });
+    }
+    return materialized;
+}
+
 function parseApiReaderArticleResult(raw) {
     let value;
     try {
@@ -819,8 +1056,8 @@ function parseApiReaderArticleResult(raw) {
         || value.oneSentenceThesis.trim().length > 260) {
         throw new Error('读者文章 oneSentenceThesis 必须为 30-260 字符');
     }
-    if (!Array.isArray(value.sections) || value.sections.length < 6 || value.sections.length > 12) {
-        throw new Error('读者文章 sections 必须包含 6-12 个小节');
+    if (!Array.isArray(value.sections) || value.sections.length < 8 || value.sections.length > 12) {
+        throw new Error('读者文章 sections 必须包含 8-12 个小节');
     }
     const seenHeadings = new Set();
     let previousRank = -1;
@@ -874,8 +1111,13 @@ function parseApiReaderArticleResult(raw) {
             summary: '', method: article, innovations: '', results: '', details: '', limits: ''
         });
     }
+    article = restoreReaderSectionHeadings(article, normalizedSections);
+    quality = validateEditorialQuality({
+        summary: '', method: article, innovations: '', results: '', details: '', limits: ''
+    });
     const blockingQualityIssues = quality.issues.filter(
         issue => !isAllowedReaderNarrativeNumeralIssue(issue)
+            && !isReaderHeadingIssue(issue, article)
     );
     if (blockingQualityIssues.length > 0) {
         const details = blockingQualityIssues.slice(0, 8)
@@ -957,6 +1199,99 @@ async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence,
         }
     }
     throw lastError || new Error('读者文章生成失败');
+}
+
+async function refreshApiReaderArticleFromSource(paper, sourceDetails) {
+    if (!paper || typeof paper !== 'object') throw new Error('刷新读者文章需要 canonical paper');
+    const analysis = String(paper.analysis || '');
+    const manifest = paper.analysisManifest;
+    const scoringStage = manifest?.stages?.scoringAudit;
+    if (!analysis || scoringStage?.status !== 'complete') {
+        throw new Error('刷新读者文章只接受已完成 analysis 与评分审计的 canonical');
+    }
+    const arxivId = getPaperArxivId(paper);
+    const sourceText = String(sourceDetails?.text || '');
+    if (sourceText.length <= FULL_TEXT_MIN_CHARS_FOR_FULL) {
+        throw new Error('刷新读者文章需要可验证全文');
+    }
+    const sourceSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
+    if (sourceSha256 !== manifest?.sourceAcquisition?.sourceSha256
+        || sourceSha256 !== paper.sourceSha256) {
+        throw new Error('刷新读者文章的全文 SHA 与 canonical 来源不一致');
+    }
+    const textForAnalysis = buildTaskEvidenceContext(
+        sourceText,
+        FULL_TEXT_MAX_CHARS,
+        BROAD_EVIDENCE_PATTERNS,
+        'PRIMARY'
+    );
+    const evidenceContext = buildApiReaderEvidenceContext(
+        analysis,
+        sourceText,
+        sourceDetails.structuredArtifacts,
+        arxivId
+    );
+    const configurationFingerprint = buildRecoveryFingerprints(
+        paper, textForAnalysis, arxivId
+    ).apiReaderArticle;
+    const fingerprint = stableFingerprint({
+        configurationFingerprint,
+        analysisSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
+        evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex')
+    });
+    const generated = await generateApiReaderArticleDetailed(
+        paper, analysis, evidenceContext
+    );
+    const injectedReaderResult = injectApiReaderFigures(
+        generated, sourceDetails.structuredArtifacts, arxivId
+    );
+    const readerResult = {
+        ...injectedReaderResult,
+        figures: await materializeApiReaderFigures(injectedReaderResult.figures, arxivId)
+    };
+    const articleSha256 = crypto.createHash('sha256').update(readerResult.article).digest('hex');
+    const planSha256 = stableFingerprint(readerResult.plan);
+    const figuresSha256 = stableFingerprint(readerResult.figures);
+    const readerAuthors = sourceDetails.readerAuthors
+        && Array.isArray(sourceDetails.readerAuthors.authors)
+        ? sourceDetails.readerAuthors
+        : { authors: [], sourceDomSha256: '' };
+    paper.apiReaderArticle = readerResult.article;
+    paper.apiReaderPlan = readerResult.plan;
+    paper.apiReaderFigures = readerResult.figures;
+    paper.apiReaderAuthors = readerAuthors;
+    paper.apiReaderArticleSha256 = articleSha256;
+    paper.apiReaderPlanSha256 = planSha256;
+    manifest.contracts = {
+        ...(manifest.contracts || {}),
+        apiReaderArticle: API_READER_ARTICLE_CONTRACT
+    };
+    manifest.sourceAcquisition = {
+        ...(manifest.sourceAcquisition || {}),
+        structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || ''
+    };
+    manifest.stages.apiReaderArticle = {
+        status: 'complete',
+        fingerprint,
+        attempts: readerResult.attempts,
+        model: DEEP_CONFIG.model,
+        protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
+        temperature: 0.6,
+        maxTokens: REPAIR_MAX_TOKENS,
+        promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.apiReaderArticle),
+        evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
+        evidenceMaxChars: REVISION_EVIDENCE_MAX_CHARS,
+        evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),
+        articleSha256,
+        planSha256,
+        figureCount: readerResult.figures.length,
+        figuresSha256,
+        readerAuthorsSha256: stableFingerprint(readerAuthors),
+        structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || '',
+        qualityMetrics: readerResult.qualityMetrics,
+        refreshedAt: getBeijingISOString()
+    };
+    return paper;
 }
 
 function getPaperArxivId(paper) {
@@ -1294,6 +1629,8 @@ function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint) {
     if (stagesToDelete.includes('apiReaderArticle')) {
         delete paper.apiReaderArticle;
         delete paper.apiReaderPlan;
+        delete paper.apiReaderFigures;
+        delete paper.apiReaderAuthors;
         delete paper.apiReaderArticleSha256;
         delete paper.apiReaderPlanSha256;
         if (manifest.contracts) {
@@ -1351,6 +1688,8 @@ function createAnalysisRecoveryManifest(paper) {
         }
         delete paper.apiReaderArticle;
         delete paper.apiReaderPlan;
+        delete paper.apiReaderFigures;
+        delete paper.apiReaderAuthors;
         delete paper.apiReaderArticleSha256;
         delete paper.apiReaderPlanSha256;
     }
@@ -2331,6 +2670,27 @@ function bindStructuredArtifactsToText(structuredArtifacts, text) {
     return bound;
 }
 
+function parseArxivReaderAuthors($) {
+    const wrapper = $('.ltx_authors').first();
+    if (!wrapper.length) return { authors: [], sourceDomSha256: '' };
+    const authors = wrapper.find('.ltx_creator.ltx_role_author').toArray().map(element => {
+        const creator = $(element);
+        const name = creator.find('.ltx_personname').first().text().replace(/\s+/g, ' ').trim();
+        const affiliations = creator.find('.ltx_contact.ltx_role_affiliation').toArray()
+            .map(node => {
+                const affiliation = $(node).clone();
+                affiliation.find('.ltx_contact_name').remove();
+                return affiliation.text().replace(/\s+/g, ' ').trim();
+            })
+            .filter(Boolean);
+        return { name, affiliations: [...new Set(affiliations)] };
+    }).filter(item => item.name && item.affiliations.length > 0);
+    return {
+        authors,
+        sourceDomSha256: crypto.createHash('sha256').update($.html(wrapper)).digest('hex')
+    };
+}
+
 /**
  * 从 arxiv HTML 获取全文文本（使用 cheerio 结构化解析）
  * 带重试机制，避免因并发限流偶发失败
@@ -2369,6 +2729,7 @@ async function fetchArxivTextDetailed(arxivId) {
                     const imageInfos = parseArxivImageInfosFromHtml(html, htmlId, arxivId);
                     const structuredArtifacts = parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId);
                     const $ = cheerio.load(html);
+                    const readerAuthors = parseArxivReaderAuthors($);
 
                     // 移除噪音元素
                     $('script, style, nav, header, footer, aside, noscript, iframe').remove();
@@ -2422,6 +2783,7 @@ async function fetchArxivTextDetailed(arxivId) {
                         sourceId: htmlId,
                         imageInfos,
                         structuredArtifacts: boundStructuredArtifacts,
+                        readerAuthors,
                         htmlAvailability: 'available',
                         htmlAttempts,
                         warnings
@@ -3937,6 +4299,7 @@ async function analyzePaperDeep(paper) {
         analysisConfidence: hasFullText ? 'full_text' : 'degraded_abstract',
         htmlAvailability: sourceDetails.htmlAvailability,
         htmlAttempts: sourceDetails.htmlAttempts,
+        structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || '',
         warnings: sourceWarnings
     };
     const previousSource = analysisManifest.sourceAcquisition;
@@ -4543,6 +4906,8 @@ async function analyzePaperDeep(paper) {
             delete analysisManifest.stages.imageSupplement;
             delete paper.apiReaderArticle;
             delete paper.apiReaderPlan;
+            delete paper.apiReaderFigures;
+            delete paper.apiReaderAuthors;
             delete paper.apiReaderArticleSha256;
             delete paper.apiReaderPlanSha256;
             if (paper.analysisStageCheckpoints) {
@@ -4616,12 +4981,11 @@ async function analyzePaperDeep(paper) {
     // 读者文章：保留旧 13 节 analysis 作为机器兼容层，另外生成
     // 面向初学研究者的连续文章。它只依赖已完成的事实修复和评分，
     // 指纹变化只失效本阶段和后续插图。
-    const apiReaderEvidenceContext = buildTypeAwareSourceContext(
+    const apiReaderEvidenceContext = buildApiReaderEvidenceContext(
         analysis,
         rawTextForAnalysis,
-        REVISION_EVIDENCE_MAX_CHARS,
-        BROAD_EVIDENCE_PATTERNS,
-        'READER'
+        sourceDetails.structuredArtifacts,
+        arxivId
     );
     const apiReaderFingerprint = stableFingerprint({
         configurationFingerprint: recoveryFingerprints.apiReaderArticle,
@@ -4648,6 +5012,8 @@ async function analyzePaperDeep(paper) {
             delete analysisManifest.stages.imageSupplement;
             delete paper.apiReaderArticle;
             delete paper.apiReaderPlan;
+            delete paper.apiReaderFigures;
+            delete paper.apiReaderAuthors;
             delete paper.apiReaderArticleSha256;
             delete paper.apiReaderPlanSha256;
             delete paper.analysisStageCheckpoints?.apiReaderArticle;
@@ -4662,11 +5028,25 @@ async function analyzePaperDeep(paper) {
     );
     if (!isRecoveryStageComplete(analysisManifest, 'apiReaderArticle')) {
         try {
-            const readerResult = await generateApiReaderArticleDetailed(
+            const generatedReaderResult = await generateApiReaderArticleDetailed(
                 paper, analysis, apiReaderEvidenceContext
             );
+            const injectedReaderResult = injectApiReaderFigures(
+                generatedReaderResult,
+                sourceDetails.structuredArtifacts,
+                arxivId
+            );
+            const readerResult = {
+                ...injectedReaderResult,
+                figures: await materializeApiReaderFigures(injectedReaderResult.figures, arxivId)
+            };
             paper.apiReaderArticle = readerResult.article;
             paper.apiReaderPlan = readerResult.plan;
+            paper.apiReaderFigures = readerResult.figures;
+            paper.apiReaderAuthors = sourceDetails.readerAuthors
+                && Array.isArray(sourceDetails.readerAuthors.authors)
+                ? sourceDetails.readerAuthors
+                : { authors: [], sourceDomSha256: '' };
             paper.apiReaderArticleSha256 = crypto.createHash('sha256')
                 .update(readerResult.article).digest('hex');
             paper.apiReaderPlanSha256 = stableFingerprint(readerResult.plan);
@@ -4687,6 +5067,10 @@ async function analyzePaperDeep(paper) {
                 evidenceSha256: crypto.createHash('sha256').update(apiReaderEvidenceContext).digest('hex'),
                 articleSha256: paper.apiReaderArticleSha256,
                 planSha256: paper.apiReaderPlanSha256,
+                figureCount: readerResult.figures.length,
+                figuresSha256: stableFingerprint(readerResult.figures),
+                readerAuthorsSha256: stableFingerprint(paper.apiReaderAuthors),
+                structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || '',
                 qualityMetrics: readerResult.qualityMetrics
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
@@ -5832,6 +6216,7 @@ module.exports = {
     ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION,
     buildUnstructuredTextArtifactSignals,
     bindStructuredArtifactsToText,
+    parseArxivReaderAuthors,
     assessArxivHtmlFullText,
     removeUnapprovedMarkdownImages,
     selectImageCandidates,
@@ -5896,11 +6281,18 @@ module.exports = {
     auditTypeAwareScoringDetailed,
     parseApiReaderArticleResult,
     generateApiReaderArticleDetailed,
+    refreshApiReaderArticleFromSource,
     API_READER_ARTICLE_CONTRACT,
     isAllowedReaderNarrativeNumeralIssue,
     splitReaderLongParagraphs,
     normalizeReaderEditorialSurface,
     repairApiReaderPlanSurfaceBinding,
+    getApiReaderFigureInventory,
+    buildApiReaderArtifactEvidence,
+    buildApiReaderEvidenceContext,
+    injectApiReaderFigures,
+    sanitizeTrustedArxivSvg,
+    materializeApiReaderFigures,
     repairMissingAnalysisSections,
     finalizeStructureRepairOutput,
     recoveryFailureStatus,

@@ -15,6 +15,12 @@ from blog_entry_loader import load_publish_to_blog
 from runtime_guard import require_external_runtime
 
 
+def _is_api_reader_asset_path(module, path):
+    """Keep the stage wrapper compatible with injected/legacy publisher modules."""
+    checker = getattr(module, 'is_api_reader_asset_path', None)
+    return bool(checker(path)) if checker else False
+
+
 def parse_options(module, argv=None):
     parser = argparse.ArgumentParser(
         prog='review-blog.py',
@@ -54,7 +60,8 @@ def read_generated_pages(
     prefix = f'{date_str}-'
     for path in paths:
         path = Path(path)
-        if module.is_visual_summary_asset_path(path, date_str):
+        if module.is_visual_summary_asset_path(path, date_str) \
+                or _is_api_reader_asset_path(module, path):
             continue
         if not path.is_file() or path.name == f'{date_str}.md':
             continue
@@ -101,6 +108,8 @@ def validate_reused_pages(
     }
     for path in paths:
         path = Path(path).resolve()
+        if _is_api_reader_asset_path(module, path):
+            continue
         result = prior_results.get(str(path), {})
         if result.get('passed') is not True or not path.is_file():
             continue
@@ -162,7 +171,11 @@ def _run_review(module, date_str):
         if hasattr(module, 'build_final_page_artifact'):
             for page in paths:
                 page = Path(page).resolve()
-                if page.is_file() and not module.is_visual_summary_asset_path(page, date_str):
+                if (
+                    page.is_file()
+                    and not module.is_visual_summary_asset_path(page, date_str)
+                    and not _is_api_reader_asset_path(module, page)
+                ):
                     artifact = module.build_final_page_artifact(page)
                     page_artifacts[str(page)] = artifact
         paper_slugs, scored_papers = read_generated_pages(
@@ -218,6 +231,11 @@ def _run_review(module, date_str):
             page_artifacts=page_artifacts,
         )
         combined_results.update(current_results)
+        attest_assets = getattr(module, 'attest_api_reader_assets', None)
+        if attest_assets:
+            blocking += attest_assets(
+                date_str, paths, manifest_path, combined_results,
+            )
         blocking += len(plan['unchangedFailed'])
         if blocking:
             failure_path = module.save_review_failure_state(
