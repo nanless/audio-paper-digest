@@ -509,6 +509,11 @@ describe('analyzePaperWithRetry', () => {
             contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
             documentType: '方法研究'
         }), null, '嵌入/基线是表示比较对象，不应误判为纯指标表');
+        const subsetIdentifier = valid.replace('方法 / 设置', '子集 / 输入');
+        assert.strictEqual(validateExperimentTableContract(subsetIdentifier, {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究'
+        }), null, '子集/输入是评测条件，不应误判为纯指标表');
 
         const neutralComparison = withResults([
             '关键比较问题是三种配置在固定测试集上的 WER 差异多大，并核验配置改变是否影响结果方向。',
