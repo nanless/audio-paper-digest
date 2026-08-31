@@ -1979,7 +1979,8 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
         if pa.get('summary'):
-            summary = pa['summary']
+            summary = reader_plan.get('oneSentenceThesis', '').strip() \
+                if reader_article else pa['summary']
             # 如果 summary 中混入了详细分析内容（因标题损坏导致解析边界失效），截断到详细分析之前
             cutoff = re.search(r'\n##\s*详细分', summary)
             if cutoff:
@@ -2029,7 +2030,8 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
         if pa.get('summary'):
-            summary = pa['summary']
+            summary = reader_plan.get('oneSentenceThesis', '').strip() \
+                if reader_article else pa['summary']
             cutoff = re.search(r'\n##\s*详细分', summary)
             if cutoff:
                 summary = summary[:cutoff.start()].strip()
