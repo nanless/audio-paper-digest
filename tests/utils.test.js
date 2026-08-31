@@ -21,6 +21,7 @@ const {
     buildHeaders,
     getClaudeCodeVersion,
     parseResponseText,
+    parseSseResponse,
     normalizedId,
     requiresLlmProxy,
     extractDatePrefix,
@@ -692,6 +693,34 @@ describe('buildRequestBody', () => {
         assert.strictEqual(body.input[1].content[1].type, 'input_image');
         assert.strictEqual(body.input[1].content[1].image_url, 'data:image/png;base64,abc');
     });
+
+    it('OpenAI Responses 可从项目 PD 配置显式降低推理强度', () => {
+        const previous = process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT;
+        process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT = 'low';
+        try {
+            const body = buildRequestBody('openai_responses', 'muse-spark-1.2-contributor', [
+                { role: 'user', content: 'hello' }
+            ], 12000, 0.7);
+            assert.deepStrictEqual(body.reasoning, { effort: 'low' });
+        } finally {
+            if (previous === undefined) delete process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT;
+            else process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT = previous;
+        }
+    });
+
+    it('OpenAI Responses 可启用 SSE 流式传输', () => {
+        const previous = process.env.PD_OPENAI_RESPONSES_STREAM;
+        process.env.PD_OPENAI_RESPONSES_STREAM = '1';
+        try {
+            const body = buildRequestBody('openai_responses', 'muse-spark-1.2-contributor', [
+                { role: 'user', content: 'hello' }
+            ], 12000, 0.7);
+            assert.strictEqual(body.stream, true);
+        } finally {
+            if (previous === undefined) delete process.env.PD_OPENAI_RESPONSES_STREAM;
+            else process.env.PD_OPENAI_RESPONSES_STREAM = previous;
+        }
+    });
 });
 
 describe('buildHeaders', () => {
@@ -769,6 +798,31 @@ describe('parseResponseText', () => {
 
     it('无效响应返回 null', () => {
         assert.strictEqual(parseResponseText('openai', {}), null);
+    });
+});
+
+describe('OpenAI Responses SSE parsing', () => {
+    it('优先重放 completed response，并兼容仅 delta 的流', () => {
+        const completed = parseSseResponse([
+            'event: response.output_text.delta',
+            'data: {"type":"response.output_text.delta","delta":"hel"}',
+            '',
+            'event: response.output_text.delta',
+            'data: {"type":"response.output_text.delta","delta":"lo"}',
+            '',
+            'event: response.completed',
+            'data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"hello"}]}]}}',
+            ''
+        ].join('\n'));
+        assert.strictEqual(parseResponseText('openai_responses', completed), 'hello');
+
+        const deltasOnly = parseSseResponse([
+            'data: {"type":"response.output_text.delta","delta":"a"}',
+            '',
+            'data: {"type":"response.output_text.delta","delta":"b"}',
+            ''
+        ].join('\n'));
+        assert.strictEqual(deltasOnly.output_text, 'ab');
     });
 });
 

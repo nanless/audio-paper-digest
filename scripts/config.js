@@ -251,6 +251,10 @@ function applyEnvOverrides() {
     if (analysisApiMaxRetries) {
         ANALYSIS_CONFIG.apiMaxRetries = analysisApiMaxRetries;
     }
+    const analysisApiMaxTokens = readPositiveInt('PD_ANALYSIS_API_MAX_TOKENS');
+    if (analysisApiMaxTokens) {
+        ANALYSIS_CONFIG.apiMaxTokens = analysisApiMaxTokens;
+    }
     const repairMaxTokens = readPositiveInt('PD_ANALYSIS_REPAIR_MAX_TOKENS');
     if (repairMaxTokens) {
         ANALYSIS_CONFIG.repairMaxTokens = repairMaxTokens;

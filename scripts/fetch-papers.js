@@ -239,8 +239,6 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
     const url = new URL(apiUrl);
     console.log(`[filter] API 类型: ${apiType} | 端点: ${url.hostname}${url.pathname}`);
 
-    const bodyObj = buildRequestBody(apiType, FILTER_CONFIG.model, messages, maxTokens, FILTER_CFG.temperature);
-
     const proxyUrl = detectProxyUrl();
     if (proxyUrl) {
         const route = FILTER_CONFIG.model.toLowerCase() === 'muse-spark-1.2-contributor'
@@ -251,6 +249,18 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
 
     let lastError = null;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        // Muse 的 Responses API 会先消耗隐藏推理 token。首次请求保持原预算；
+        // 一旦需要重试就扩大到 4096，避免连续得到 status=incomplete。
+        const attemptMaxTokens = apiType === 'openai_responses' && attempt > 1
+            ? Math.max(maxTokens, 4096)
+            : maxTokens;
+        const bodyObj = buildRequestBody(
+            apiType,
+            FILTER_CONFIG.model,
+            messages,
+            attemptMaxTokens,
+            FILTER_CFG.temperature
+        );
         const requestHeaders = buildHeaders(apiType, FILTER_CONFIG.key, JSON.stringify(bodyObj));
 
         try {
@@ -260,7 +270,11 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
                 FILTER_CONFIG.model,
                 bodyObj,
                 requestHeaders,
-                { timeoutMs: FILTER_CFG.timeoutMs }
+                {
+                    timeoutMs: FILTER_CONFIG.model.toLowerCase() === 'muse-spark-1.2-contributor'
+                        ? Math.max(FILTER_CFG.timeoutMs, 120000)
+                        : FILTER_CFG.timeoutMs
+                }
             );
             if (response.statusCode < 200 || response.statusCode >= 300) {
                 const apiError = response.body?.error;
@@ -1436,6 +1450,11 @@ async function isSpeechAudioRelated(paper) {
     return (await getSpeechAudioDecision(paper)).related;
 }
 
+function getEffectiveFilterBatchSize(configuredBatchSize, model = FILTER_CONFIG.model) {
+    const normalized = String(model || '').trim().toLowerCase();
+    return normalized === 'muse-spark-1.2-contributor' ? 1 : configuredBatchSize;
+}
+
 /**
  * 筛选论文（用大模型判断是否语音/音频相关）
  */
@@ -1449,6 +1468,9 @@ async function filterPapersWithLLM(papers, options = {}) {
         decisionFn = getSpeechAudioDecision,
         decisionMetadata = {}
     } = options;
+    const effectiveBatchSize = decisionFn === getSpeechAudioDecision
+        ? getEffectiveFilterBatchSize(batchSize)
+        : batchSize;
 
     console.log(`[filter] 开始筛选 ${papers.length} 篇论文（关键词预筛 → 大模型复筛）...`);
 
@@ -1534,11 +1556,14 @@ async function filterPapersWithLLM(papers, options = {}) {
 
     const batches = [];
 
-    for (let i = 0; i < papersNeedingDecision.length; i += batchSize) {
-        batches.push(papersNeedingDecision.slice(i, i + batchSize));
+    for (let i = 0; i < papersNeedingDecision.length; i += effectiveBatchSize) {
+        batches.push(papersNeedingDecision.slice(i, i + effectiveBatchSize));
     }
 
-    console.log(`[filter] 分成 ${batches.length} 批处理，每批 ${batchSize} 篇`);
+    if (effectiveBatchSize !== batchSize) {
+        console.log(`[filter] Muse + HTTP CONNECT 代理模式强制串行：配置并发 ${batchSize} → 1`);
+    }
+    console.log(`[filter] 分成 ${batches.length} 批处理，每批 ${effectiveBatchSize} 篇`);
 
     if (batches.length === 0 && typeof onBatchComplete === 'function') {
         await onBatchComplete({
@@ -1686,6 +1711,7 @@ module.exports = {
     parseFilterDecision,
     parseFilterDecisionDetails,
     repairMalformedFilterDecision,
+    getEffectiveFilterBatchSize,
     hasRecentResponseSignature,
     hasSearchResponseSignature,
     hasApiResponseSignature,

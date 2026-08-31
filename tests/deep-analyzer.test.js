@@ -828,7 +828,63 @@ primary_task_tag: #音视频生成
     });
 
     it('API reader article 要求初学者逻辑顺序和论文特有标题', () => {
-        const { parseApiReaderArticleResult } = require('../scripts/deep-analyzer.js');
+        const {
+            parseApiReaderArticleResult,
+            isAllowedReaderNarrativeNumeralIssue,
+            splitReaderLongParagraphs,
+            normalizeReaderEditorialSurface,
+            repairApiReaderPlanSurfaceBinding
+        } = require('../scripts/deep-analyzer.js');
+        assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
+            code: 'quantitative_chinese_numeral', match: '两类'
+        }), true);
+        assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
+            code: 'quantitative_chinese_numeral', match: '四段'
+        }), false);
+        const split = splitReaderLongParagraphs(
+            '这是用于建立任务直觉并解释输入输出关系的完整句子。'.repeat(18)
+        );
+        assert.ok(split.includes('\n\n'));
+        assert.strictEqual(
+            normalizeReaderEditorialSurface('把ITD和ILD交给两个模型。', [{
+                code: 'quantitative_chinese_numeral', match: '两个模型'
+            }]),
+            '把 ITD 和 ILD 交给 2 个模型。'
+        );
+        assert.strictEqual(
+            normalizeReaderEditorialSurface('结果为-6.84dB，到-2.76dB，延迟12ms。'),
+            '结果为 -6.84 dB，到 -2.76 dB，延迟 12 ms。'
+        );
+        assert.strictEqual(
+            normalizeReaderEditorialSurface('同 1 条曲线使用alpha 三，规模为1 万。', [
+                { code: 'quantitative_chinese_numeral', match: 'alpha 三' },
+                { code: 'quantitative_chinese_numeral', match: '1 万' }
+            ]),
+            '同一条曲线使用 alpha 3，规模为 10,000。'
+        );
+        const recoveryPaper = {
+            apiReaderArticle: '### 把 HRTF 做浓，再用模型去听\n\n正文。',
+            apiReaderPlan: {
+                version: 1, contract: 'beginner-researcher-v1',
+                readerTitle: '把HRTF做浓', oneSentenceThesis: '解释HRTF增强。',
+                sections: [{ kind: 'method_overview', heading: '把HRTF做浓，再用模型去听' }]
+            },
+            apiReaderPlanSha256: '0'.repeat(64)
+        };
+        const recoveryManifest = { stages: { apiReaderArticle: {
+            status: 'complete', planSha256: '0'.repeat(64)
+        } } };
+        assert.strictEqual(
+            repairApiReaderPlanSurfaceBinding(recoveryPaper, recoveryManifest), true
+        );
+        assert.strictEqual(
+            recoveryPaper.apiReaderPlan.sections[0].heading,
+            '把 HRTF 做浓，再用模型去听'
+        );
+        assert.strictEqual(
+            recoveryPaper.apiReaderPlanSha256,
+            recoveryManifest.stages.apiReaderArticle.planSha256
+        );
         const specs = [
             ['background', '声音片段为什么会让传统判别器失去方向？', '背景任务输入输出失败案例直觉动机读者边界'],
             ['related_work', '既有路线分别在哪个环节丢掉了关键信息？', '相关工作监督来源能力缺口路线对照位置判断'],

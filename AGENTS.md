@@ -13,8 +13,9 @@
 ```bash
 npm install              # 安装依赖（cheerio + pdf-parse）
 npm test                 # 串行运行单元测试（node --test --test-concurrency=1 tests/*.test.js）
-npm run digest:prepare -- YYYY-MM-DD # 默认 Manual 论文速递入口：先抓 raw 并在人工边界停下；Agent 必须逐篇分派独立 subagent，续完筛选/全文/records/发布/视觉
-npm run digest:api -- YYYY-MM-DD # 仅当用户显式要求 LLM/API 路线时使用旧自动筛选+分析+review 编排
+npm run digest:prepare -- YYYY-MM-DD # 默认 LLM/API 论文速递入口：自动抓取、筛选、深度分析、博客 review/push 并准备视觉任务
+npm run digest:api -- YYYY-MM-DD # 默认入口的显式同义命令，便于脚本和历史调用兼容
+npm run digest:manual -- YYYY-MM-DD # 仅当用户显式要求 Manual v6 时使用，在人工边界停下供 Agent 逐篇分派 subagent
 npm run fetch            # 仅数据流程：抓取 + 筛选 + 深度分析
 npm run deep             # 仅深度分析续跑（跳过已有 analysis；无分析结果时可从 filtered-papers.json 初始化）
 npm run reanalyze        # 强制全量重分析（支持 --concurrency N）
@@ -116,7 +117,7 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 
 **发布/视觉兼容边界**：标准日更必须在任何 Git 变更前验证 generation schema v3 和 `publishedPapers`；schema v1/v2 仅允许显式历史维护 push，receipt 将发布后视觉标记为 N/A。渠道默认按目标博客发布日期绑定远端验证的 `publishedPapers`，论文原始抓取批次可更早；current 滚动后使用日期归档，自定义输入也不得隐式绕过快照。
 
-**默认用户意图与默认模式**：用户只要说“运行/进行 YYYY-MM-DD（或中文日期）的论文速递”，就视为明确要求并授权完成整条链路：Manual 联网抓取、逐篇人工筛选、完整全文、Manual records/spec/canonical、博客生成、逐页 Manual review 与修正、博客 push、TOP 10 论文长图、汇总封面和最终状态验收。默认禁止调用项目筛选/分析/review LLM API；只有用户明确说“使用 API/LLM 自动流程”时才可运行 `digest:api`、`full-fetch.js` 或普通 `review-blog.py`。无需再次询问是否发布博客，也不能在人工边界、深度分析、review 或 push 后提前结束。微信公众号、飞书、小红书自动发布不在默认范围。
+**默认用户意图与默认模式**：用户只要说“运行/进行 YYYY-MM-DD（或中文日期）的论文速递”，就视为明确要求并授权使用 LLM/API 完成整条链路：联网抓取、关键词预筛、模型逐篇筛选、多阶段全文分析、评分校准、初学研究者长文、博客生成、普通 LLM review 与修正、博客 push、TOP 10 论文长图、汇总封面和最终状态验收。默认运行 `digest:prepare`（等价于 `digest:api`）；只有用户明确说“使用 Manual/人工流程”时才运行 `digest:manual` 和 production Manual v6。无需再次询问是否发布博客，也不能在深度分析、review 或 push 后提前结束。其他发布渠道不在默认范围。
 
 **显式视觉豁免**：用户明确说“不生图/不用生图”时，立即停止内置生图，不得把 pending 资产伪造成 complete。博客远端验证后运行 `npm run digest:waive-visuals -- --date YYYY-MM-DD --reason "用户明确理由"`，生成绑定 publication commit 与两类 manifest SHA 的 `waived` 凭证；任一 manifest 或远端绑定变化都会使豁免失效。`digest:status` 应显示 `waived` 而非视觉失败。
 
@@ -130,7 +131,7 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 
 Production v6 不使用 legacy `manual:v5:author-packet` 作为调度入口。主 Agent必须逐 role 调用 `manual:packet`，在 `manual-v6/<date>/task-runner/tasks/<paper>/` 受控物化 deny-by-default exact allowlist，逐文件绑定本篇全文、complete ArtifactIndex、prompt、编辑契约、空白 schema、source/input identity 和可选官方项目证据；runner 只 register/claim/start/submit/校验，不创建 subagent或正文。
 
-**默认 production Manual v6 链路**：raw/select/fulltext 后，runner 管理 author → technical_scoring / pedagogy_readability → author_revision 的真实任务 DAG。主 Agent直接创建每篇 Terra-high leaf subagent并逐 role 调用 `manual:packet`；四角色全部 validated 后调用 `manual:records` 确定性密封 `data/current/manual-v6/<date>/records-v4.json`。初稿 `authorReceipt`、两份独立 review 和最终 `finalRevisionAuthorReceipt` 分层绑定；revision output v2 只绑定最终正文与未封印 record payload，sealer 再注入 receipts/resolution，避免 record↔receipt 哈希环。records v4 内嵌并重放 legacy v5 base payload 作为基础质量子校验，并逐文件绑定四类 packet/output/receipt、complete ArtifactIndex 与来源身份；spec v6 绑定完整论文集合和 Merkle root。`runtimeMode=production` ingestion 写标准 `data/current/deep-analysis-result.json`，publisher 和视觉门禁缺任一 production v6 binding 时 fail closed。
+**显式 production Manual v6 链路**：raw/select/fulltext 后，runner 管理 author → technical_scoring / pedagogy_readability → author_revision 的真实任务 DAG。主 Agent直接创建每篇 Terra-high leaf subagent并逐 role 调用 `manual:packet`；四角色全部 validated 后调用 `manual:records` 确定性密封 `data/current/manual-v6/<date>/records-v4.json`。初稿 `authorReceipt`、两份独立 review 和最终 `finalRevisionAuthorReceipt` 分层绑定；revision output v2 只绑定最终正文与未封印 record payload，sealer 再注入 receipts/resolution，避免 record↔receipt 哈希环。records v4 内嵌并重放 legacy v5 base payload 作为基础质量子校验，并逐文件绑定四类 packet/output/receipt、complete ArtifactIndex 与来源身份；spec v6 绑定完整论文集合和 Merkle root。`runtimeMode=production` ingestion 写标准 `data/current/deep-analysis-result.json`，publisher 和视觉门禁缺任一 production v6 binding 时 fail closed。
 
 **legacy sealed tutorial 单篇灰度**：既有历史 preview 可用 `blog:generate -- --date <date> --include-id <id> --sealed-tutorial-preview` 复验，生成器必须在读取 canonical 前分流并重放固定 manifest/post 证据。Production v6 新日更不再提供默认 `manual:tutorial-preview` 写入口；新论文必须完成 records v4/spec v6/canonical 标准链路。该历史维护路径不得进入 production v6、不得建立新视觉任务。
 

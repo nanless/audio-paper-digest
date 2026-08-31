@@ -8,7 +8,7 @@
 
 #### `run-daily-digest.sh`
 
-Default Codex orchestrator for a request to run a dated paper digest. The date must be a real Gregorian date. Starting from `fetch` additionally requires Beijing today because the fetcher binds its own Beijing start date and receives no historical-date argument. Historical batches may resume existing production state only with `--from tasks|spec|analyze|generate|review|push|visual`; this entrypoint cannot backfill an old crawl. The default route is production Manual v6. It stops at the candidate-decision, per-paper task, and per-page review boundaries so the main Agent can create real isolated subagents, then resumes deterministic spec/analyze/generate/review/push/visual stages. Blog generation reads the standard production canonical only; it never turns an archive or v5 file into an implicit production input. `--api` is the explicit legacy automatic LLM/API route.
+Default Codex orchestrator for a dated paper digest. Starting from `fetch` requires Beijing today. The default route performs automatic LLM/API fetching, filtering, staged analysis, ordinary blog review, push, and visual preparation; `--api` is an explicit alias. Production Manual v6 is available only with `--manual`, where the entrypoint stops at candidate-decision, per-paper task, and per-page review boundaries for real isolated subagents.
 
 The three blog stages remain separate processes, and any nonzero stage stops the script. The script never calls an image API. After it succeeds, Codex must still generate, inspect, and record every TOP 10 paper infographic and the digest cover with built-in `image_gen`, then require both `visual:status` and `cover:status` to be complete. npm entry: `npm run digest:prepare -- YYYY-MM-DD`.
 

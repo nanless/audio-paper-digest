@@ -12,7 +12,7 @@ const crypto = require('crypto');
 const { fetchCategoryPapers, filterPapersWithLLM, buildFilterInputSha256 } = require('./fetch-papers.js');
 const { KEYWORD_PREFILTER_VERSION } = require('./lib/keyword-prefilter.js');
 const { fetchHuggingFacePapers, mergeAndDeduplicate } = require('./fetch-huggingface-papers.js');
-const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, normalizeToBeijingISOString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson, loadPublishedIdsFromBlog, loadPrompt, detectApiType } = require('./utils.js');
+const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, normalizeToBeijingISOString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson, loadPublishedIdsFromBlog, loadPrompt, detectApiType, requiresLlmProxy } = require('./utils.js');
 const {
     analyzeBatch,
     mergeAndSaveResults,
@@ -36,8 +36,17 @@ const {
 
 const Config = require('./config.js');
 
-// 从配置中解构常用参数
-const ANALYSIS_CONCURRENCY = Config.ANALYSIS_CONFIG.concurrency;
+function getEffectiveAnalysisConcurrency(configuredConcurrency, endpoint, model) {
+    return requiresLlmProxy(endpoint, model) ? 1 : configuredConcurrency;
+}
+
+// Muse 的长 Responses 请求通过同一本地 HTTP CONNECT 代理时必须串行，
+// 否则并发 TLS 隧道会相互打断。其他模型继续遵守配置并发度。
+const ANALYSIS_CONCURRENCY = getEffectiveAnalysisConcurrency(
+    Config.ANALYSIS_CONFIG.concurrency,
+    process.env.PAPER_ANALYZER_ENDPOINT,
+    process.env.PAPER_ANALYZER_MODEL
+);
 const ANALYSIS_RETRY_MAX = Config.ANALYSIS_CONFIG.maxRetries;
 const ANALYSIS_RETRY_DELAY_MS = Config.ANALYSIS_CONFIG.retryDelayMs;
 const FETCH_DELAY_MS = Config.ARXIV_CONFIG.categoryDelayMs;
@@ -1856,6 +1865,7 @@ if (require.main === module) {
 module.exports = {
     fullFetch,
     runFullFetch,
+    getEffectiveAnalysisConcurrency,
     getArxivInterCategoryDelayMs,
     autoArchiveCurrentData,
     inferLegacyAnalysisArrayBatchDate,

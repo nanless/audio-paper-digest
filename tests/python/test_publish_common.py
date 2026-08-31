@@ -1467,6 +1467,14 @@ primary_method_tag: #基准测试
         self.assertEqual(responses['input'][0]['content'][0]['type'], 'input_text')
         self.assertEqual(responses['input'][0]['content'][1]['type'], 'input_image')
 
+        with mock.patch.dict(os.environ, {
+                'PD_OPENAI_RESPONSES_REASONING_EFFORT': 'low'}, clear=False):
+            responses = build_publish_payload(
+                'openai_responses', 'muse-spark-1.2-contributor',
+                'review', 100, 0.1,
+            )
+        self.assertEqual(responses['reasoning'], {'effort': 'low'})
+
     def test_muse_responses_api_uses_project_proxy(self):
         response = mock.Mock()
         response.status = 200

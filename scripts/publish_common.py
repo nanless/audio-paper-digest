@@ -3667,12 +3667,18 @@ def build_publish_payload(api_type, model, prompt, max_tokens, temperature, imag
                 'image_url': data_uri,
                 'detail': 'low',
             })
-        return {
+        payload = {
             'model': model,
             'max_output_tokens': max_tokens,
             'temperature': temperature,
             'input': [{'role': 'user', 'content': content}],
         }
+        reasoning_effort = os.environ.get(
+            'PD_OPENAI_RESPONSES_REASONING_EFFORT', ''
+        ).strip().lower()
+        if reasoning_effort in {'low', 'medium', 'high'}:
+            payload['reasoning'] = {'effort': reasoning_effort}
+        return payload
     content = [{'type': 'text', 'text': prompt}]
     for image in images:
         data_uri = f"data:{image['media_type']};base64,{image['data']}"

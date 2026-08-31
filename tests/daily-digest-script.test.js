@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const scriptPath = path.resolve(__dirname, '../run-daily-digest.sh');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-test('默认论文速递脚本保持生产 v6、博客三阶段和视觉阶段顺序', () => {
+test('默认论文速递脚本保留 API、显式 Manual、博客三阶段和视觉阶段顺序', () => {
     const expected = [
         'node scripts/full-fetch.js',
         'npm run manual:tasks -- init --date "$target_date"',
@@ -40,6 +40,8 @@ test('默认论文速递脚本要求显式日期并支持从 review 续跑', () 
     assert.match(source, /\^\[0-9\]\{4\}-\[0-9\]\{2\}-\[0-9\]\{2\}\$/);
     assert.match(source, /review\) start_index=6/);
     assert.match(source, /--from fetch\|tasks\|spec\|analyze\|generate\|review\|push\|visual/);
+    assert.match(source, /--api\|--manual/);
+    assert.match(source, /PD_DAILY_API_MODE:-1/);
 });
 
 test('默认论文速递脚本校验真实公历日期，且新抓取只能绑定北京时间当天', () => {
@@ -50,7 +52,7 @@ test('默认论文速递脚本校验真实公历日期，且新抓取只能绑�
     assert.match(source, /历史批次只能使用 --from tasks\|spec\|analyze\|generate\|review\|push\|visual/);
 });
 
-test('默认 Manual 边界只声明生产 records v4/spec v6，不伪装自动 subagent DAG', () => {
+test('显式 Manual 边界只声明生产 records v4/spec v6，不伪装自动 subagent DAG', () => {
     assert.match(source, /data\/current\/manual-v6\/\$\{target_date\}/);
     assert.match(source, /records-v4\.json/);
     assert.match(source, /生产 spec v6\/canonical/);
@@ -62,6 +64,9 @@ test('默认 Manual 边界只声明生产 records v4/spec v6，不伪装自动 s
 
 test('package 默认 manual 命令进入 production v6，legacy v5 和 shadow 都必须显式命名', () => {
     const scripts = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../package.json'), 'utf8')).scripts;
+    assert.equal(scripts['digest:prepare'], 'PD_DAILY_API_MODE=1 bash run-daily-digest.sh');
+    assert.equal(scripts['digest:api'], 'PD_DAILY_API_MODE=1 bash run-daily-digest.sh');
+    assert.equal(scripts['digest:manual'], 'PD_DAILY_API_MODE=0 bash run-daily-digest.sh');
     assert.equal(scripts['manual:spec'], 'node scripts/create-manual-analysis-spec-v6.js --production');
     assert.equal(scripts['manual:analyze'], 'node scripts/manual-deep-analysis.js --v6-production');
     assert.equal(scripts['manual:packet'], 'node scripts/manual-v6-production-packet.js');
@@ -144,12 +149,12 @@ test('tasks 续跑只初始化并展示持久 runner，然后在真实 subagent 
     fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('--api 拒绝 Manual v6 专属 tasks/spec/analyze 续跑阶段', () => {
+test('默认 API 模式拒绝 Manual v6 专属 tasks/spec/analyze 续跑阶段', () => {
     const env = { ...process.env };
     delete env.CODEX_SANDBOX;
     const result = spawnSync('bash', [scriptPath, '2026-07-13', '--api', '--from', 'spec'], {
         cwd: path.dirname(scriptPath), env, encoding: 'utf8'
     });
     assert.equal(result.status, 2);
-    assert.match(result.stderr, /--api 不使用 Manual v6 的 tasks\/spec\/analyze/);
+    assert.match(result.stderr, /默认 LLM\/API 模式不使用 Manual v6 的 tasks\/spec\/analyze/);
 });

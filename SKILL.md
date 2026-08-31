@@ -28,7 +28,7 @@ description: >
 
 ## 2. 当前真实流程
 
-默认日更入口：`./run-daily-digest.sh YYYY-MM-DD`，默认走 production Manual v6，并在 raw 筛选、task runner、逐论文 records v4 和逐页 review 边界停下供 Agent 分批创建独立 subagent；Agent 必须继续完成全链路。只有用户明确要求 LLM/API 自动路线时才运行 `npm run digest:api -- YYYY-MM-DD` 或 `./run-daily-digest.sh YYYY-MM-DD --api`。从 fetch 开始时目标日期必须是北京时间当天；历史批次可从 tasks/spec/analyze/generate/review/push/visual 续跑已有数据。
+默认日更入口：`./run-daily-digest.sh YYYY-MM-DD` 或 `npm run digest:prepare -- YYYY-MM-DD`，默认走 LLM/API 自动抓取、筛选、深度分析和普通博客 review；`digest:api` 是显式同义入口。只有用户明确要求 Manual/人工路线时才运行 `npm run digest:manual -- YYYY-MM-DD` 或 `./run-daily-digest.sh YYYY-MM-DD --manual`，并在 raw 筛选、task runner、逐论文 records v4 和逐页 review 边界停下供 Agent 创建独立 subagent。从 fetch 开始时目标日期必须是北京时间当天；历史批次可从对应安全阶段续跑已有数据。
 
 1. **自动归档**：逐文件检查 `data/current/raw-candidates.json` / `filter-decisions.json` / `filtered-papers.json` / `deep-analysis-result.json` / `analyzed.json`；若记录日期早于今天（北京时间），则写入同日归档并在校验成功后移走 current 原文件。canonical 归档冲突时保留带时间戳的冲突副本，不能静默覆盖或丢弃任一版本。**`papers.json` 不归档。**
 2. **加载去重库**：读取 `data/current/papers.json` 已有 ID；扫描 Hugo 博客仓库（`PAPER_DIGEST_BLOG_REPO`）中已发布论文的 arXiv ID，两者合并为统一去重集合
@@ -45,13 +45,13 @@ description: >
 
 **视觉能力兼容边界**：标准日更在任何 Git 变更前要求 generation schema v3 及 `publishedPapers` 权威快照。schema v1/v2 只允许不带 `--require-visual-plan` 的显式历史维护 push，receipt 将视觉能力标记为 `not_applicable_legacy_maintenance`；不能等远端发布成功后才发现版本不兼容。
 
-`full-fetch.js` **不会自动发布博客/微信，也不再是默认日更入口**。用户说“运行/进行某日论文速递”时，默认用 production Manual v6 完成 raw、逐篇独立 subagent 筛选、全文、records v4/spec v6/canonical、逐页 Manual review、push 和发布后视觉；只有用户明确指定 API/LLM 时才使用 `full-fetch.js` 与普通 LLM review。Agent 必须跨越脚本的人工边界继续工作，直到论文长图与汇总封面均为 `complete`。
+`full-fetch.js` 只负责默认 LLM/API 路线的数据阶段，不单独发布博客。用户说“运行/进行某日论文速递”时，`run-daily-digest.sh` 默认调用它并继续普通 LLM review、push 和发布后视觉；只有用户明确指定 Manual/人工流程时才切换 production Manual v6。Agent 必须继续工作，直到论文长图与汇总封面均为 `complete`。
 
-### 2.1 默认无模型 API 的 production Manual v6 主流程
+### 2.1 显式 production Manual v6 兼容流程
 
 **结构化全文补充边界**：ArtifactIndex parser 当前为 `manual-artifact-parser-v2-structured`。HTML 在 `.text()` 前保存表格 DOM/矩阵/rowspan/colspan、MathML/TeX、图与 bibliography，并绑定原始 HTML、最终全文、来源和单篇 input SHA。只有 detected/recovered 计数闭环且无截断/issue 时才是 `complete`；PDF/text fallback 明确为 `incomplete`。Production v6 禁止把缺失 inventory 当成完整证据；历史 v5 全文仅作 legacy 只读兼容。
 
-日更默认执行以下严格 Manual 路径；项目 LLM/API 自动流程只能由用户显式要求。任何普通网络、配额或模型错误都不能自动降级为“人工通过”：
+仅当用户明确要求 Manual/人工流程时执行以下严格路径；默认日更使用上一节的 LLM/API 自动路线。任何普通网络、配额或模型错误都不能自动降级为“人工通过”：
 
 **当前版本边界**：新日更固定使用 production records v4 → spec v6 → 标准 canonical。正式根为 `data/current/manual-v6/<date>/`，spec v6 ingestion 声明 `runtimeMode=production` 并写 `data/current/deep-analysis-result.json`；publisher 缺 records/Merkle/longform binding 时 fail closed。`manual:v6:shadow:*` 只写隔离 shadow 根。records v3/spec v5 仅由 `manual:v5:*` 作历史只读/维护兼容。
 
@@ -396,7 +396,7 @@ npm run blog:generate -- --date YYYY-MM-DD --include-id 2607.12345 # 单篇灰�
 npm run blog:generate -- --date YYYY-MM-DD --include-id 2607.12345 --sealed-tutorial-preview # 密封 tutorial 原字节单页灰度，不读 canonical 正文
 npm run blog:review -- --date YYYY-MM-DD
 npm run blog:push -- --date YYYY-MM-DD
-# 默认 Manual 单篇灰度（不调用普通 LLM review）
+# 显式 Manual 单篇灰度（不调用普通 LLM review）
 npm run blog:manual-plan -- --date YYYY-MM-DD --include-id 2607.12345
 npm run blog:manual-attest -- --date YYYY-MM-DD --include-id 2607.12345
 npm run blog:manual-review -- --date YYYY-MM-DD --include-id 2607.12345 --attestation <plan 输出路径>
@@ -453,7 +453,7 @@ npm run xiaohongshu -- --date 2026-04-22
 - 默认读 `data/current/deep-analysis-result.json`
 - **按批次日期过滤**：优先使用抓取阶段写入的 `fetchBatchDate` 或 `batchDate`，旧数据才使用严格北京时间 `fetchedAt` 的日期；只发布匹配 `--date` 指定日期的论文（默认今天），避免历史数据被重复发布
 - 生成阶段可重复传入 `--exclude-id <arXiv ID>`，只从本次 generation 权威快照排除明确命中的论文；ID 未命中会阻断，分析数据本身不变
-- 单篇灰度必须在 generate、Manual attestation/Manual review、push 全链路都传同一个 `--include-id <arXiv ID>`。该参数只能出现一次，并与 `--all`、`--exclude-id` 互斥；规范化 ID 未命中、命中多个版本别名或阶段作用域不一致都会阻断。默认 Manual 路线依次运行 `blog:manual-plan`、逐页 Terra-high shard、`blog:manual-attest`、`blog:manual-review`，不得调用普通 LLM review 替代。单篇事务按“日期 + ID + 身份哈希”隔离 generation/journal、page shard/checkpoint、attestation、review/push 凭证，不覆盖同日整批的远端证据；Manual review 只接受 plan 报告的隔离 attestationPath，禁止回退日期整批文件。它只安装并提交目标论文页，不生成或修改汇总页、不清理同日其他论文页、不建立批次 TOP 10/汇总图任务。push 前博客仓库除目标页外存在任何 staged、unstaged 或 untracked 变化都会 fail closed。
+- 单篇灰度必须在 generate、Manual attestation/Manual review、push 全链路都传同一个 `--include-id <arXiv ID>`。该参数只能出现一次，并与 `--all`、`--exclude-id` 互斥；规范化 ID 未命中、命中多个版本别名或阶段作用域不一致都会阻断。显式 Manual 路线依次运行 `blog:manual-plan`、逐页 Terra-high shard、`blog:manual-attest`、`blog:manual-review`，不得调用普通 LLM review 替代。单篇事务按“日期 + ID + 身份哈希”隔离 generation/journal、page shard/checkpoint、attestation、review/push 凭证，不覆盖同日整批的远端证据；Manual review 只接受 plan 报告的隔离 attestationPath，禁止回退日期整批文件。它只安装并提交目标论文页，不生成或修改汇总页、不清理同日其他论文页、不建立批次 TOP 10/汇总图任务。push 前博客仓库除目标页外存在任何 staged、unstaged 或 untracked 变化都会 fail closed。
 - `--sealed-tutorial-preview` 只复验既有 legacy 单页 preview；Production v6 不提供默认 preview 写入口。该读取入口仍须在任何 canonical load 前校验固定 manifest/post 路径并原字节安装，且不得包装为 production v6 或建立新视觉任务。
 - reviewed revision 提升为 `draft/article.md` 前，`manual:promote-draft` 必须重放当前 author packet，而不是信任 subagent 自报：六类基础输入的 path/SHA 必须逐项等于 allowlist；只额外允许本篇 technical/pedagogy review findings 且绑定真实文件 SHA。旧 prose、缺 path、额外 kind、过期 schema 或 source identity 一律阻断。
 - 微信公众号、飞书和小红书默认绑定目标博客发布日期的 generation manifest 与远端验证 receipt，并严格按 `publishedPapers` 的 ID、内容和顺序发布；论文自身 `fetchBatchDate` 可以早于博客发布日期。current 已滚动时自动回退 `data/archive/<日期>/deep-analysis-result.json`，显式自定义数据文件也不会隐式绕过快照。只有明确独立运行时才传 `--ignore-blog-snapshot`。微信/飞书的 `--all` 在独立模式表示使用全部输入；小红书的 `--all` 仅表示生成完整汇总文案
@@ -472,7 +472,7 @@ npm run xiaohongshu -- --date 2026-04-22
 
 Agent 执行约束：
 
-- 用户说“运行/进行某日论文速递”即授权完整 production Manual v6 标准链路，包括 records v4/spec v6/canonical、`push-blog.py` 与视觉验收；只有明确要求 API/LLM 才切换自动路线。
+- 用户说“运行/进行某日论文速递”即授权完整 LLM/API 标准链路，包括自动筛选/分析、普通 review、`push-blog.py` 与视觉验收；只有明确要求 Manual/人工流程才切换 production Manual v6。
 - 若只是检查格式、验证新字段或预览产物，禁止触发真实 `git push`
 
 发布前保障：
@@ -555,7 +555,7 @@ PY
 1. **先查再改**：先读取相关脚本确认当前行为，再更新文档或执行命令。
 2. **发布需确认日期**：未明确日期时，先问用户；默认不要依赖"今天"。
 3. **禁止危险操作**：未获明确授权，禁止 `git reset --hard`、`git push -f`、批量删除历史文章。
-4. **默认日更必须用 production Manual v6 跑完整链路**：用户说“运行/进行某日论文速递”即明确授权博客发布，并要求 Manual 抓取、逐篇独立 subagent 筛选与写作、records v4/spec v6/canonical、逐页 Manual review/修正、push、TOP 10 论文长图、汇总封面和最终状态验收；不得在人工边界提前结束。只有用户显式点名 API/LLM 才可改走自动路线。
+4. **默认日更必须用 LLM/API 跑完整链路**：用户说“运行/进行某日论文速递”即明确授权博客发布，并要求自动抓取、筛选、全文分析、评分校准、读者长文、普通 LLM review/修正、push、TOP 10 论文长图、汇总封面和最终状态验收。只有用户显式点名 Manual/人工流程才改走 production Manual v6；不得把 API 失败伪装成 Manual 通过。
 5. **改动留痕**：流程、参数、路径变化后，同步更新 `SKILL.md`、`README.md`、`AGENTS.md` 和相关 `docs/` 文档。
 6. **禁止硬编码密钥**：不要在任何脚本或文档中写入真实 API key；所有凭证（LLM、微信公众号、飞书）统一放在 `项目根目录的 `.env` 文件`，由脚本通过项目 env loader 加载。
 7. **修改脚本时防止安全机制破坏**：本环境会静默替换 `API_KEY` 等敏感字符为 `***`。修改含有这类字符的脚本时，修改后必须重新读取文件验证关键行未被破坏。同时定期检查 `data/`、`logs/` 目录是否残留含密钥的备份文件或日志快照，发现立即清理。

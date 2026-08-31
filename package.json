@@ -4,8 +4,9 @@
   "description": "论文速递全流程自动化 - 抓取、筛选、深度分析、博客审查发布及发布后视觉摘要",
   "main": "scripts/full-fetch.js",
   "scripts": {
-    "digest:prepare": "bash run-daily-digest.sh",
+    "digest:prepare": "PD_DAILY_API_MODE=1 bash run-daily-digest.sh",
     "digest:api": "PD_DAILY_API_MODE=1 bash run-daily-digest.sh",
+    "digest:manual": "PD_DAILY_API_MODE=0 bash run-daily-digest.sh",
     "fetch": "node scripts/full-fetch.js",
     "test": "node --test --test-concurrency=1 tests/*.test.js",
     "deep": "node scripts/deep-analysis-only.js",

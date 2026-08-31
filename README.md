@@ -2,7 +2,7 @@
 
 **[English](README.en.md)** | 中文
 
-本项目用于生成“语音/音乐/音频论文速递”。默认日更采用 production Manual v6：联网抓取后，每篇论文由独立 subagent 在隔离上下文中完成筛选、全文研究者解读、评分和页面审查；LLM/API 自动筛选与分析保留为用户显式选择的可选路线。Node 端配置集中在 `scripts/config.js`，Python 发布路径集中在 `scripts/path_config.py`。
+本项目用于生成“语音/音乐/音频论文速递”。默认日更采用 LLM/API 自动路线：联网抓取后执行关键词预筛、模型逐篇筛选、多阶段全文分析、证据约束评分、面向初学研究者的连续长文、博客 review/push 与发布后视觉。Production Manual v6 保留为用户显式选择的人工高保障路线。Node 端配置集中在 `scripts/config.js`，Python 发布路径集中在 `scripts/path_config.py`。
 
 Production v6 根为 `data/current/manual-v6/<date>/`：`manual:fulltext` 保存结构化全文并生成 complete/incomplete ArtifactIndex；持久 runner 管理 author → technical_scoring / pedagogy_readability → author_revision，最多 3 个活动 claim，但不调用 API、不创建或冒充 subagent，也不自动物化 role packet 或 records envelope。主 Agent负责真实 Terra-high leaf subagent 和 `records-v4.json`；official assembler 回读 records v4 内嵌并重放的 legacy v5 base payload、ArtifactIndex、各 role packet/output/receipt 的真实字节，组装含完整论文集合与 Merkle root 的 spec v6。`manual:analyze` 以 `runtimeMode=production` 写标准 `data/current/deep-analysis-result.json`，publisher 缺 v6 binding 时 fail closed。显式 shadow 仍隔离在 `data/current/manual-v6-shadow/<date>/`；v5 只保留 `manual:v5:*` 历史只读/维护兼容。
 
@@ -28,7 +28,7 @@ Production v6 的 fresh packet 与 records v4 会重放 legacy v5 base validator
 
 LLM endpoint 必须使用 HTTPS（仅 loopback 本地测试允许 HTTP）。arXiv 元数据抓取的重试、退避、累计等待、绝对截止、响应字节上限与 User-Agent 均由 `ARXIV_CONFIG` 管理，覆写项见 [环境配置](docs/setup.md)。
 
-对 Codex 说“运行/进行某一天的论文速递”，默认含义是用 production Manual v6 完成抓取、逐篇独立 subagent 筛选和全文分析、records v4/spec v6/canonical、博客生成、逐页人工语义/图片 review、博客发布、TOP 10 论文长图、汇总封面和最终状态验收。只有明确说“使用 API/LLM 自动流程”时才运行 `npm run digest:api -- YYYY-MM-DD`。博客发布无需再次确认；微信公众号、飞书和小红书自动发布不在默认范围。
+对 Codex 说“运行/进行某一天的论文速递”，默认含义是运行 `npm run digest:prepare -- YYYY-MM-DD`，即 LLM/API 自动抓取、筛选、全文分析、评分校准、读者长文、博客 review/push、TOP 10 论文长图、汇总封面和最终状态验收。`digest:api` 是同义入口；只有明确说“使用 Manual/人工流程”时才运行 `npm run digest:manual -- YYYY-MM-DD`。博客发布无需再次确认；其他发布渠道不在默认范围。
 
 Manual 写作采用 3-worker 饱和队列：主 Agent 之外的 3 个并发槽持续各处理 1 篇论文，完成即补位。普通独立二审不会与正文争抢槽位；只有高分、内部无消融、满分自评或来源/图片异常的风险论文会提前触发二审。
 
@@ -264,7 +264,7 @@ python3 scripts/generate-blog.py --date 2026-04-21
 python3 scripts/review-blog.py --date 2026-04-21
 python3 scripts/push-blog.py --date 2026-04-21
 
-# 默认使用完整 provenance 的逐页 Manual 审查；每页必须由独立 review subagent 完成
+# 显式 Manual 流程使用完整 provenance 的逐页审查；每页必须由独立 review subagent 完成
 # 当前 attestation v3 逐文件绑定 path/SHA、subagent、独立 notes、八类 checks 和每张图的像素事实；v2 仅历史兼容
 python3 scripts/manual-review-blog.py --date 2026-04-21 --attestation data/current/manual-review-attestation-2026-04-21.json
 # 单篇灰度先用 --plan 获取带日期、论文 ID 和身份哈希的隔离 shard/attestation 路径；

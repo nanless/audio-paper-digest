@@ -40,6 +40,16 @@ function writeResumeCheckpoint(dir, common, options = {}) {
 }
 
 describe('full-fetch helpers', () => {
+    it('Muse 代理长请求强制单篇分析，其他模型保留配置并发', () => {
+        const { getEffectiveAnalysisConcurrency } = require('../scripts/full-fetch.js');
+        assert.strictEqual(getEffectiveAnalysisConcurrency(
+            3, 'https://opencode.ai/zen/go/v1', 'muse-spark-1.2-contributor'
+        ), 1);
+        assert.strictEqual(getEffectiveAnalysisConcurrency(
+            3, 'https://api.kimi.com/coding/v1', 'kimi-for-coding'
+        ), 3);
+    });
+
     it('仅在尚有下一个 arXiv 类别时计算类别间延迟', () => {
         const { getArxivInterCategoryDelayMs } = require('../scripts/full-fetch.js');
         assert.strictEqual(getArxivInterCategoryDelayMs(6, 7, 0, () => 0), 0);

@@ -7,6 +7,7 @@ const {
     parseFilterDecision,
     parseFilterDecisionDetails,
     repairMalformedFilterDecision,
+    getEffectiveFilterBatchSize,
     evaluateKeywordPrefilter,
     filterPapersByKeywords,
     filterPapersWithLLM,
@@ -24,6 +25,13 @@ const {
     getBrowserHeaders,
     getFetchRetryDelayMs
 } = require('../scripts/fetch-papers.js');
+
+describe('Muse filter transport policy', () => {
+    it('Muse 经 HTTP CONNECT 时强制串行，其他模型保留配置批次', () => {
+        assert.strictEqual(getEffectiveFilterBatchSize(5, 'muse-spark-1.2-contributor'), 1);
+        assert.strictEqual(getEffectiveFilterBatchSize(5, 'kimi-for-coding'), 5);
+    });
+});
 
 describe('parseFilterDecision', () => {
     it('正确解析是否相关格式，不被“是否”的“否”误伤', () => {

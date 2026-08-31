@@ -2,13 +2,13 @@
 
 ## 主流程详解
 
-默认日更入口是 `./run-daily-digest.sh YYYY-MM-DD`。从抓取开始时日期必须是北京时间当天；历史批次可从 `tasks/spec/analyze/generate/review/push/visual` 续跑。Production Manual v6 依次经过 raw 人工筛选边界、持久 task runner 边界、records v4/spec v6/canonical、博客 generate/逐页 Manual review/push 和视觉规划；脚本不创建 subagent，也不调用图像 API。结束后 Codex 仍须用内置 `image_gen` 完成并验收 TOP 10 长图与汇总封面。只有显式 `--api` 才走旧自动 API 链路。
+默认日更入口是 `./run-daily-digest.sh YYYY-MM-DD` 或 `npm run digest:prepare -- YYYY-MM-DD`。从抓取开始时日期必须是北京时间当天；默认依次执行 LLM/API 抓取、筛选、多阶段全文分析、博客 generate/普通 LLM review/push 和视觉规划。脚本不调用图像 API，结束后 Codex 仍须用内置 `image_gen` 完成并验收 TOP 10 长图与汇总封面。`--api` 与 `digest:api` 保留为默认路线的显式同义入口；只有 `--manual` / `digest:manual` 才切换 production Manual v6。
 
 用户说“运行/进行某日论文速递”时，默认已经授权博客 push，并要求完成上述全部阶段；不能在抓取、深度分析、review 或发布后提前停止。微信、飞书、小红书自动发布不在默认范围。
 
 ### 3.0 自动链路与人工接管链路
 
-默认路径使用 production Manual v6；只有用户明确要求 API/LLM 时才使用关键词预筛、模型筛选、多阶段 LLM 分析和普通三层 review。Manual 路线不会因 API 状态自动改变语义：
+默认路径使用关键词预筛、模型筛选、多阶段 LLM 分析和普通三层 review。只有用户明确要求 Manual/人工流程时才切换 production Manual v6；两条路线都不会因对方的失败而静默改变 provenance：
 
 > Production Manual v6 已是正式主链：全文阶段在 HTML `.text()` 前保存表格、MathML/TeX、图和 bibliography，只有结构 inventory 闭环时 ArtifactIndex 才 complete；PDF/text fallback 明确 incomplete。持久 runner 管理 author → technical_scoring / pedagogy_readability → author_revision，但不创建真实 subagent、不物化 packet，也不自动产出 records v4；这些仍由主 Agent完成。正式根为 `data/current/manual-v6/<date>/`，spec v6 经 `runtimeMode=production` 写标准 canonical；显式 shadow 使用 `manual-v6-shadow/<date>/`。v5 仅作显式历史只读/维护兼容。
 
@@ -21,7 +21,7 @@
 - `manual:tasks`/`manual:v6:tasks` 默认是 production 状态机：`init/register/claim/start/submit/fail/retry/abandon/status` 绑定 filtered、单篇根、packet/output/receipt 真实字节和 Terra-high provenance，最多 3 个活动 claim。`author_revision` submit 会在未封印状态完整重放 `reader-longform-v2`：blocks 必须逐字生成最终正文，`tables` / `figures` / `formulas` 逐项闭环，正文实际使用的 `terms` 全部定义，`relatedWorks` 至少绑定两个真实引用；旧 `*Coverage` 摘要不能代替正式字段。显式 retry/abandon 后只允许目标 packet 受控替换，其他节点仍逐字重验。附加 `--shadow` 才进入 shadow 根。runner 不访问 LLM/API，也不会替主 Agent创建 subagent、编写正文、物化 packet 或组装 records envelope。
 - `manual:packet`/`manual:v6:packet` 只物化当前论文当前 role 的 exact allowlist，并输出可直接用于 runner `register` 的参数；`manual:records`/`manual:v6:records` 只在四角色全部 validated 后重开所有 packet/output/receipt，确定性注入初稿与终稿 lineage 并密封唯一 `records-v4.json`。两者都不调用 LLM/API。
 - `manual:bind-revision`/`manual:v6:bind-revision` 只把单篇 Terra-high leaf 已完成的终稿、未封印 base payload 与 compact semantic map 确定性序列化为正式 longform/output/receipt：按标题拆 block、用 ArtifactIndex 替换手抄表格、从 runner validated technical/pedagogy 输出回填评分与可读性并重算全部 SHA；它不生成 prose，也不能替代审查 finding 的实质修订。
-- 博客单篇灰度发布使用 generate、Manual attestation/review、push 全链路一致的 `--include-id`，禁止用普通 LLM review 代替默认 Manual 审查。已经通过 tutorial payload 密封的 fresh 页面必须额外给 generate 传 `--sealed-tutorial-preview`：生成器在读取 canonical 前分流，重放受控 manifest 与 article/quality/artifact-plan/编辑契约 SHA，逐字安装 `post.md`，并用不含旧 analysis/readerArticle 的快照建立 schema v3 generation；不得 sanitize 或生成汇总页。`blog:manual-plan` 输出按日期、规范化论文 ID 和身份哈希隔离的 shardDir/attestationPath；逐页 Terra-high shard、assembler、Manual receipt 和 push 只消费这一隔离作用域，不能回退日期整批文件。已有同日整批证据保持只读；单篇 staging/manifest 只能包含一个论文页，禁止汇总页、同日旧页删除和批次视觉任务。push 还要求博客仓库除该目标页外完全干净，防止夹带其他页面或配置变更。
+- 博客单篇灰度发布使用 generate、Manual attestation/review、push 全链路一致的 `--include-id`，禁止用普通 LLM review 代替显式 Manual 审查。已经通过 tutorial payload 密封的 fresh 页面必须额外给 generate 传 `--sealed-tutorial-preview`：生成器在读取 canonical 前分流，重放受控 manifest 与 article/quality/artifact-plan/编辑契约 SHA，逐字安装 `post.md`，并用不含旧 analysis/readerArticle 的快照建立 schema v3 generation；不得 sanitize 或生成汇总页。`blog:manual-plan` 输出按日期、规范化论文 ID 和身份哈希隔离的 shardDir/attestationPath；逐页 Terra-high shard、assembler、Manual receipt 和 push 只消费这一隔离作用域，不能回退日期整批文件。已有同日整批证据保持只读；单篇 staging/manifest 只能包含一个论文页，禁止汇总页、同日旧页删除和批次视觉任务。push 还要求博客仓库除该目标页外完全干净，防止夹带其他页面或配置变更。
 - Production v6 records v4 内嵌并重放的 legacy v5 base payload 基础质量子校验不只靠字数：系统/方法论文至少 4 条 `resultClaims` 且跨至少 2 个实验组，连续原句绑定设置、方法、基线、指标、数值、单位和方向，并提供实际写入实验正文的自然语言 `readerNarrative`；v6 另要求 `reader-longform-v2` 与 task bindings。
 - records v2/spec v4 与 spec v3 仅作历史兼容；新日更不得降级。v4 继续写 `full-text-evidence-v4`，v3 继续写 v3 + `bounded-v1`，均不追溯套用 v5。
 - 最终 production v6 读者门禁覆盖作者与机构、毒舌点评、`reader-longform-v2` 的叙事和图片邻接、评分理由和开源详情；legacy v5 `readerArticle` 仅作为 records v4 内嵌基础质量子校验或历史只读版式。
@@ -94,7 +94,7 @@ schema v3 generation 的页面 SHA/删除状态会在 review 开始、receipt �
 3. **抓取参数**：
    - `parseArxivXML()` 保留“连续 20 篇已知 ID”解析选项，但正式分页/API 补全路径为保证来源覆盖会显式关闭该提前停止，不把它当作当前抓取上限
    - 核心类别优先抓取，补充类别随机排序
-   - 默认 Manual raw 不再在健康类别末尾固定等待：真实请求按 host 严格单飞，下一次同 host 请求采用健康 1 秒、瞬时失败 5 秒、429 60 秒的自适应冷却（另有至多 1 秒抖动），并继续服从单类累计重试预算；本地解析、checkpoint 和并行 HF 工作可抵消冷却。显式 API 旧流程仍保留原 `categoryDelayMs`，两条路线不要混写
+   - 显式 Manual raw 不再在健康类别末尾固定等待：真实请求按 host 严格单飞，下一次同 host 请求采用健康 1 秒、瞬时失败 5 秒、429 60 秒的自适应冷却（另有至多 1 秒抖动），并继续服从单类累计重试预算；本地解析、checkpoint 和并行 HF 工作可抵消冷却。默认 API 流程仍保留原 `categoryDelayMs`，两条路线不要混写
    - 无新论文时继续运行而非终止
 
 4. **终端输出**：

@@ -585,6 +585,17 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature) {
             max_output_tokens: maxTokens
         };
         if (Number.isFinite(temperature)) body.temperature = temperature;
+        const reasoningEffort = String(
+            process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT || ''
+        ).trim().toLowerCase();
+        if (['low', 'medium', 'high'].includes(reasoningEffort)) {
+            body.reasoning = { effort: reasoningEffort };
+        }
+        if (['1', 'true', 'yes', 'on'].includes(String(
+            process.env.PD_OPENAI_RESPONSES_STREAM || ''
+        ).trim().toLowerCase())) {
+            body.stream = true;
+        }
         return body;
     }
     // OpenAI: 标准格式
@@ -680,6 +691,46 @@ function parseResponseText(apiType, response) {
     return null;
 }
 
+function parseSseResponse(raw) {
+    const deltas = [];
+    let completed = null;
+    let failed = null;
+    for (const block of String(raw || '').split(/\r?\n\r?\n/)) {
+        let eventName = '';
+        const dataLines = [];
+        for (const line of block.split(/\r?\n/)) {
+            if (line.startsWith('event:')) eventName = line.slice(6).trim();
+            else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+        }
+        if (dataLines.length === 0) continue;
+        const dataText = dataLines.join('\n');
+        if (!dataText || dataText === '[DONE]') continue;
+        let event;
+        try {
+            event = JSON.parse(dataText);
+        } catch {
+            continue;
+        }
+        const type = event.type || eventName;
+        if (type === 'response.output_text.delta' && typeof event.delta === 'string') {
+            deltas.push(event.delta);
+        } else if (type === 'response.completed' && event.response && typeof event.response === 'object') {
+            completed = event.response;
+        } else if (type === 'response.failed') {
+            failed = event.response || event;
+        }
+    }
+    if (failed) return failed;
+    if (completed) {
+        if (!parseResponseText('openai_responses', completed) && deltas.length > 0) {
+            completed.output_text = deltas.join('');
+        }
+        return completed;
+    }
+    if (deltas.length > 0) return { status: 'completed', output_text: deltas.join('') };
+    return null;
+}
+
 function requestJson(urlString, bodyObj, headers, options = {}) {
     const {
         timeoutMs = 60000,
@@ -740,7 +791,17 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
                     const json = JSON.parse(raw);
                     finish(resolve, { statusCode: res.statusCode, headers: res.headers, body: json, raw });
                 } catch (err) {
-                    finish(reject, new Error(`JSON parse error (HTTP ${res.statusCode}): ${err.message}; body=${raw.substring(0, 300)}`));
+                    const streamed = parseSseResponse(raw);
+                    if (streamed) {
+                        finish(resolve, {
+                            statusCode: res.statusCode,
+                            headers: res.headers,
+                            body: streamed,
+                            raw
+                        });
+                    } else {
+                        finish(reject, new Error(`JSON/SSE parse error (HTTP ${res.statusCode}): ${err.message}; body=${raw.substring(0, 300)}`));
+                    }
                 }
             });
             res.on('error', error => finish(reject, error));
@@ -1653,6 +1714,7 @@ module.exports = {
     buildHeaders,
     getClaudeCodeVersion,
     parseResponseText,
+    parseSseResponse,
     requestJson,
     requiresLlmProxy,
     requestLlmJson,

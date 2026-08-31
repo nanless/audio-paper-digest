@@ -114,6 +114,10 @@ PUBLISH_IMAGE_VIEW_FIELD = 'publishImageExclusionView'
 PUBLISHED_PAPERS_FINGERPRINT_CONTRACT = 'typed-json-f64-utf16-v1'
 MANUAL_V6_PRODUCTION_MODE = 'manual_v6_production'
 MANUAL_V6_PRODUCTION_CONTRACT = 'manual-v6-production-publication-v1'
+LLM_API_PRODUCTION_MODE = 'llm_api_production'
+LLM_API_PRODUCTION_CONTRACT = 'llm-api-production-publication-v1'
+LLM_API_READER_CONTRACT = 'beginner-researcher-v1'
+LLM_API_SCORING_CONTRACT = 'api-scoring-audit-v2'
 LEGACY_V5_MAINTENANCE_MODE = 'legacy_v5_maintenance'
 SEALED_TUTORIAL_PREVIEW_MODE = 'sealed_tutorial_preview'
 MANUAL_REVIEW_MODE = 'manual_complete'
@@ -4479,10 +4483,117 @@ def manual_v6_production_proof(published_papers):
     }
 
 
+def llm_api_publication_bindings(published_papers):
+    """Replay each API canonical and bind the exact article/scoring/source bytes."""
+    bindings = []
+    for paper in published_papers:
+        if not isinstance(paper, dict):
+            continue
+        manifest = paper.get('analysisManifest')
+        contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
+        if not isinstance(contracts, dict) \
+                or contracts.get('apiReaderArticle') != LLM_API_READER_CONTRACT:
+            continue
+        reader = _api_reader_payload(paper)
+        analysis = paper.get('analysis')
+        stages = manifest.get('stages') if isinstance(manifest.get('stages'), dict) else {}
+        scoring = stages.get('scoringAudit') if isinstance(stages.get('scoringAudit'), dict) else {}
+        reader_stage = stages.get('apiReaderArticle') \
+            if isinstance(stages.get('apiReaderArticle'), dict) else {}
+        source = manifest.get('sourceAcquisition') \
+            if isinstance(manifest.get('sourceAcquisition'), dict) else {}
+        if not isinstance(analysis, str) or not analysis.strip():
+            raise PublishDataValidationError('LLM API production canonical 缺少最终 analysis')
+        analysis_sha = hashlib.sha256(analysis.encode('utf-8')).hexdigest()
+        source_sha = source.get('sourceSha256')
+        paper_source_sha = paper.get('sourceSha256')
+        if not re.fullmatch(r'[0-9a-f]{64}', str(source_sha or '')) \
+                or paper_source_sha != source_sha:
+            raise PublishDataValidationError('LLM API production 来源 SHA 未闭环')
+        if (
+            scoring.get('status') != 'complete'
+            or scoring.get('scoringContract') != LLM_API_SCORING_CONTRACT
+            or scoring.get('outputAnalysisSha256') != analysis_sha
+            or not re.fullmatch(r'[0-9a-f]{64}', str(scoring.get('auditSha256') or ''))
+            or not re.fullmatch(r'[0-9a-f]{64}', str(scoring.get('evidenceSha256') or ''))
+        ):
+            raise PublishDataValidationError('LLM API production 评分审计未闭环')
+        model = reader_stage.get('model')
+        protocol = reader_stage.get('protocol')
+        if not isinstance(model, str) or not model.strip() \
+                or not isinstance(protocol, str) or not protocol.strip():
+            raise PublishDataValidationError('LLM API production 读者文章缺少模型/协议绑定')
+        final_score = scoring.get('finalScore')
+        parsed = paper.get('parsed') if isinstance(paper.get('parsed'), dict) else {}
+        try:
+            parsed_score = float(parsed.get('score'))
+            final_score_number = float(final_score)
+        except (TypeError, ValueError) as exc:
+            raise PublishDataValidationError('LLM API production 最终评分非法') from exc
+        if not math.isfinite(parsed_score) or not math.isfinite(final_score_number) \
+                or abs(parsed_score - final_score_number) > 1e-9:
+            raise PublishDataValidationError('LLM API production parsed 与评分审计总分不一致')
+        paper_id = normalize_publish_arxiv_id(
+            paper.get('arxivId') or paper.get('paper_id')
+        )
+        bindings.append({
+            'paperId': paper_id,
+            'readerContract': LLM_API_READER_CONTRACT,
+            'readerArticleSha256': reader['articleSha256'],
+            'readerPlanSha256': reader['planSha256'],
+            'analysisSha256': analysis_sha,
+            'sourceSha256': source_sha,
+            'scoringContract': LLM_API_SCORING_CONTRACT,
+            'scoringAuditSha256': scoring['auditSha256'],
+            'scoringEvidenceSha256': scoring['evidenceSha256'],
+            'finalScore': final_score_number,
+            'model': model.strip(),
+            'protocol': protocol.strip(),
+        })
+    return sorted(bindings, key=lambda item: item['paperId'])
+
+
+def llm_api_production_proof(published_papers):
+    """Build the proof required for a fully API-authored production generation."""
+    if not isinstance(published_papers, list) or not published_papers:
+        raise PublishDataValidationError('LLM API production 发布批次不能为空')
+    bindings = llm_api_publication_bindings(published_papers)
+    if len(bindings) != len(published_papers):
+        raise PublishDataValidationError(
+            'LLM API production 只接受 reader/scoring/source 全部闭环的 API canonical'
+        )
+    if manual_v6_publication_bindings(published_papers):
+        raise PublishDataValidationError('LLM API production 不得混入 Manual v6 canonical')
+    paper_ids = [item['paperId'] for item in bindings]
+    if len(set(paper_ids)) != len(paper_ids):
+        raise PublishDataValidationError('LLM API production 论文 ID 重复')
+    return {
+        'contract': LLM_API_PRODUCTION_CONTRACT,
+        'readerContract': LLM_API_READER_CONTRACT,
+        'scoringContract': LLM_API_SCORING_CONTRACT,
+        'paperCount': len(bindings),
+        'paperIds': paper_ids,
+        'bindingsFingerprint': _stable_json_sha256(bindings),
+    }
+
+
+def infer_generation_publication_mode(papers):
+    """Infer only homogeneous production inputs; legacy always stays explicit."""
+    if len(manual_v6_publication_bindings(papers)) == len(papers):
+        return MANUAL_V6_PRODUCTION_MODE
+    if len(llm_api_publication_bindings(papers)) == len(papers):
+        return LLM_API_PRODUCTION_MODE
+    raise PublishDataValidationError(
+        '默认发布输入既不是完整 Manual v6，也不是完整 LLM API production canonical'
+    )
+
+
 def validate_generation_publication_mode(papers, publication_mode):
     """Fail closed on an implicit v5 fallback or a mixed v5/v6 generation."""
     if publication_mode == MANUAL_V6_PRODUCTION_MODE:
         return manual_v6_production_proof(papers)
+    if publication_mode == LLM_API_PRODUCTION_MODE:
+        return llm_api_production_proof(papers)
     if publication_mode == LEGACY_V5_MAINTENANCE_MODE:
         if manual_v6_publication_bindings(papers):
             raise PublishDataValidationError(
@@ -4629,9 +4740,19 @@ def _validate_generation_input_integrity(manifest, date_str):
         expected_v6_fingerprint = _stable_json_sha256(expected_v6)
         if manifest.get('manualV6BindingsFingerprint') != expected_v6_fingerprint:
             raise PublishDataValidationError('正式生成清单 Manual v6 provenance 指纹不匹配')
+    expected_api = llm_api_publication_bindings(published_papers)
+    actual_api = manifest.get('llmApiBindings')
+    if actual_api is not None or expected_api:
+        if actual_api != expected_api:
+            raise PublishDataValidationError('正式生成清单 LLM API 显式绑定不匹配')
+        if manifest.get('llmApiBindingsFingerprint') != _stable_json_sha256(expected_api):
+            raise PublishDataValidationError('正式生成清单 LLM API 绑定指纹不匹配')
     publication_mode = manifest.get('publicationMode')
     production_proof = manifest.get('manualV6Production')
+    api_proof = manifest.get('llmApiProduction')
     if publication_mode == MANUAL_V6_PRODUCTION_MODE:
+        if expected_api or api_proof is not None:
+            raise PublishDataValidationError('Manual v6 generation 混入 LLM API 证明')
         expected_proof = manual_v6_production_proof(published_papers)
         if production_proof != expected_proof:
             raise PublishDataValidationError(
@@ -4640,13 +4761,22 @@ def _validate_generation_input_integrity(manifest, date_str):
         expected_proof_sha = _stable_json_sha256(expected_proof)
         if manifest.get('manualV6ProductionFingerprint') != expected_proof_sha:
             raise PublishDataValidationError('正式 generation production v6 证明指纹不匹配')
-    elif publication_mode == LEGACY_V5_MAINTENANCE_MODE:
+    elif publication_mode == LLM_API_PRODUCTION_MODE:
         if expected_v6 or production_proof is not None:
-            raise PublishDataValidationError('legacy v5 maintenance generation 混入 v6 证明')
+            raise PublishDataValidationError('LLM API generation 混入 Manual v6 证明')
+        expected_proof = llm_api_production_proof(published_papers)
+        if api_proof != expected_proof:
+            raise PublishDataValidationError('正式 generation 未强绑定 LLM API production 证明')
+        expected_proof_sha = _stable_json_sha256(expected_proof)
+        if manifest.get('llmApiProductionFingerprint') != expected_proof_sha:
+            raise PublishDataValidationError('正式 generation LLM API production 证明指纹不匹配')
+    elif publication_mode == LEGACY_V5_MAINTENANCE_MODE:
+        if expected_v6 or expected_api or production_proof is not None or api_proof is not None:
+            raise PublishDataValidationError('legacy v5 maintenance generation 混入 production 证明')
     elif publication_mode == SEALED_TUTORIAL_PREVIEW_MODE:
-        if scope is None or production_proof is not None:
-            raise PublishDataValidationError('sealed tutorial generation 模式或 v6 证明非法')
-    elif publication_mode is None and not expected_v6:
+        if scope is None or production_proof is not None or api_proof is not None:
+            raise PublishDataValidationError('sealed tutorial generation 模式或 production 证明非法')
+    elif publication_mode is None and not expected_v6 and not expected_api:
         # Immutable schema-v3 history from before the production-mode field is
         # readable only as legacy maintenance.  It can never enter visuals.
         pass
@@ -4660,7 +4790,9 @@ def _expected_post_publish_visuals(manifest, publication_scope_value=None):
         return 'not_applicable_single_paper'
     if (
         manifest.get('schemaVersion') == 3
-        and manifest.get('publicationMode') == MANUAL_V6_PRODUCTION_MODE
+        and manifest.get('publicationMode') in {
+            MANUAL_V6_PRODUCTION_MODE, LLM_API_PRODUCTION_MODE,
+        }
     ):
         return 'required'
     return 'not_applicable_legacy_maintenance'
@@ -5093,14 +5225,11 @@ def save_generation_manifest(
                 '拒绝保存无法从 publishedPapers 反向重算的 inputFingerprint'
             )
         if publication_mode is None:
-            publication_mode = (
-                MANUAL_V6_PRODUCTION_MODE
-                if len(manual_v6_publication_bindings(published_papers)) == len(published_papers)
-                else LEGACY_V5_MAINTENANCE_MODE
-            )
+            publication_mode = infer_generation_publication_mode(published_papers)
         production_proof = validate_generation_publication_mode(
             published_papers, publication_mode,
         )
+        api_bindings = llm_api_publication_bindings(published_papers)
         manifest.update({
             'inputFingerprint': input_fingerprint,
             'templateFingerprint': template_fingerprint,
@@ -5110,6 +5239,7 @@ def save_generation_manifest(
             'publishedPapersFingerprintContract': PUBLISHED_PAPERS_FINGERPRINT_CONTRACT,
             'publishedPapersFingerprint': published_papers_fingerprint(published_papers),
             'manualV6Bindings': manual_v6_publication_bindings(published_papers),
+            'llmApiBindings': api_bindings,
             'publicationMode': publication_mode,
         })
         publication_scope_value = _single_publication_scope(include_id)
@@ -5126,9 +5256,15 @@ def save_generation_manifest(
         manifest['manualV6BindingsFingerprint'] = _stable_json_sha256(
             manifest['manualV6Bindings']
         )
-        if production_proof is not None:
+        manifest['llmApiBindingsFingerprint'] = _stable_json_sha256(api_bindings)
+        if publication_mode == MANUAL_V6_PRODUCTION_MODE:
             manifest['manualV6Production'] = production_proof
             manifest['manualV6ProductionFingerprint'] = _stable_json_sha256(
+                production_proof
+            )
+        elif publication_mode == LLM_API_PRODUCTION_MODE:
+            manifest['llmApiProduction'] = production_proof
+            manifest['llmApiProductionFingerprint'] = _stable_json_sha256(
                 production_proof
             )
         _validate_generation_input_integrity(manifest, validated_date)
@@ -5193,10 +5329,11 @@ def preflight_post_publish_visual_capability(date_str, *, require_visual_plan=Fa
                 )
             print('🎯 单篇灰度发布：发布后批次视觉任务明确标记为不适用')
             return False
-        if manifest.get('publicationMode') != MANUAL_V6_PRODUCTION_MODE:
+        if manifest.get('publicationMode') not in {
+                MANUAL_V6_PRODUCTION_MODE, LLM_API_PRODUCTION_MODE}:
             if require_visual_plan:
                 raise PublishDataValidationError(
-                    '发布后视觉只接受 production v6 generation；legacy v5 maintenance 不适用'
+                    '发布后视觉只接受 production generation；legacy v5 maintenance 不适用'
                 )
             print('🧰 legacy v5 maintenance 发布：发布后视觉任务明确标记为不适用')
             return False
@@ -5629,6 +5766,11 @@ def reusable_verified_publication_generation(
             or receipt.get('generationInputFingerprint') != manifest.get('inputFingerprint')
             or receipt.get('publishedPapersFingerprint')
             != manifest.get('publishedPapersFingerprint')
+            or receipt.get('publicationMode') != manifest.get('publicationMode')
+            or receipt.get('manualV6ProductionFingerprint')
+            != manifest.get('manualV6ProductionFingerprint')
+            or receipt.get('llmApiProductionFingerprint')
+            != manifest.get('llmApiProductionFingerprint')
         ):
             return None
 
@@ -5856,6 +5998,9 @@ def save_review_receipt(
         'publicationMode': publication_mode,
         'manualV6ProductionFingerprint': generation_payload.get(
             'manualV6ProductionFingerprint'
+        ),
+        'llmApiProductionFingerprint': generation_payload.get(
+            'llmApiProductionFingerprint'
         ),
         'publicationScope': publication_scope_value,
         'files': files,
@@ -6385,8 +6530,10 @@ def load_verified_review_receipt(date_str):
         receipt.get('publicationMode') != generation_manifest.get('publicationMode')
         or receipt.get('manualV6ProductionFingerprint')
         != generation_manifest.get('manualV6ProductionFingerprint')
+        or receipt.get('llmApiProductionFingerprint')
+        != generation_manifest.get('llmApiProductionFingerprint')
     ):
-        raise PublishDataValidationError('审查凭证未绑定 generation production v6 模式/证明')
+        raise PublishDataValidationError('审查凭证未绑定 generation production 模式/证明')
     expected_visual_capability = _expected_post_publish_visuals(
         generation_manifest, publication_scope_value,
     )
@@ -6659,10 +6806,7 @@ def generate_main(options=None):
             '原字节发布，不读取 canonical、不 sanitize、不生成汇总页'
         )
     else:
-        publication_mode = (
-            LEGACY_V5_MAINTENANCE_MODE
-            if legacy_v5_maintenance else MANUAL_V6_PRODUCTION_MODE
-        )
+        publication_mode = LEGACY_V5_MAINTENANCE_MODE if legacy_v5_maintenance else None
         data_file = select_generation_data_file(
             data_file, today, publish_all, legacy_v5_maintenance,
         )
@@ -6714,6 +6858,8 @@ def generate_main(options=None):
             papers = validate_papers_for_publish(
                 papers, validate_manual_provenance=False,
             )
+            if publication_mode is None:
+                publication_mode = infer_generation_publication_mode(papers)
             validate_generation_publication_mode(papers, publication_mode)
         except PublishDataValidationError as exc:
             print(f"\n❌ 发布数据预检失败，未生成任何博客文件：\n{exc}")

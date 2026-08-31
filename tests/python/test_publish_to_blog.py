@@ -368,6 +368,73 @@ def manual_v6_publication_fixture():
     return paper
 
 
+def llm_api_publication_fixture():
+    paper_id = '2608.30002'
+    headings = [
+        ('background', '为什么混合声音需要先建立空间直觉？'),
+        ('related_work', '已有路线在哪些线索上留下了空白？'),
+        ('method_overview', '两段式流程怎样把输入变成可比较输出？'),
+        ('experiment_setup', '读数字之前必须固定哪些实验口径？'),
+        ('result', '主结果究竟支持了哪一段因果链？'),
+        ('limitation', '模型预测与真实听感之间还隔着什么？'),
+        ('synthesis', '初学者下一步应该验证哪一个环节？'),
+    ]
+    article = '\n\n'.join(
+        f'### {heading}\n\n这是围绕本篇论文证据展开的教学段落，说明输入、处理、输出、比较口径与不能外推的边界。'
+        for _kind, heading in headings
+    )
+    plan = {
+        'version': 1,
+        'contract': 'beginner-researcher-v1',
+        'readerTitle': '把空间线索调得更强，模型真的更容易分离音乐吗？',
+        'oneSentenceThesis': '论文把频变双耳线索做成可调增强，并以受控模型实验说明收益与听损边界。',
+        'sections': [{'kind': kind, 'heading': heading} for kind, heading in headings],
+    }
+    analysis = '## 评分\n**总分：6.1/10**\n\n## 核心摘要\n最终兼容 canonical。'
+    article_sha = hashlib.sha256(article.encode('utf-8')).hexdigest()
+    plan_sha = publish_to_blog._stable_json_sha256(plan)
+    analysis_sha = hashlib.sha256(analysis.encode('utf-8')).hexdigest()
+    source_sha = '1' * 64
+    return {
+        'title': 'LLM API Publisher Fixture',
+        'arxivId': paper_id,
+        'analysis': analysis,
+        'sourceSha256': source_sha,
+        'apiReaderArticle': article,
+        'apiReaderPlan': plan,
+        'apiReaderArticleSha256': article_sha,
+        'apiReaderPlanSha256': plan_sha,
+        'parsed': {
+            'score': '6.1', 'tags': ['#空间音频'],
+            'summary': '最终兼容 canonical 摘要。',
+            'roast': '预测证据完整，但仍缺真人听音。',
+            'opensource': '代码尚未公开。',
+            'scoringReason': '评分严格绑定来源与审计证据。',
+        },
+        'analysisManifest': {
+            'contracts': {'apiReaderArticle': 'beginner-researcher-v1'},
+            'sourceAcquisition': {'sourceSha256': source_sha},
+            'stages': {
+                'scoringAudit': {
+                    'status': 'complete',
+                    'scoringContract': 'api-scoring-audit-v2',
+                    'outputAnalysisSha256': analysis_sha,
+                    'auditSha256': '2' * 64,
+                    'evidenceSha256': '3' * 64,
+                    'finalScore': 6.1,
+                },
+                'apiReaderArticle': {
+                    'status': 'complete',
+                    'articleSha256': article_sha,
+                    'planSha256': plan_sha,
+                    'model': 'muse-spark-1.2-contributor',
+                    'protocol': 'openai_responses',
+                },
+            },
+        },
+    }
+
+
 def valid_png(payload_suffix=b'', width=768, height=1200):
     def chunk(kind, payload):
         return (
@@ -470,6 +537,7 @@ def create_verified_schema_v3_publication(date_str, posts, paper):
         template_fingerprint=template_fingerprint,
         base_head=base_head,
         published_papers=[paper],
+        publication_mode=publish_to_blog.LEGACY_V5_MAINTENANCE_MODE,
     )
     reviewed_results = {
         str(path.resolve()): {
@@ -1564,6 +1632,62 @@ title: "Bad table"
                 manifest['manualV6Bindings'][0]['readerArticleSha256'] = '0' * 64
                 with self.assertRaisesRegex(PublishDataValidationError, 'v6'):
                     publish_to_blog._validate_generation_input_integrity(manifest, date_str)
+
+    def test_generation_manifest_recomputes_llm_api_production_bindings(self):
+        paper = llm_api_publication_fixture()
+        date_str = '2026-08-31'
+        bindings = publish_to_blog.llm_api_publication_bindings([paper])
+        self.assertEqual(len(bindings), 1)
+        self.assertEqual(bindings[0]['readerContract'], 'beginner-researcher-v1')
+        self.assertEqual(bindings[0]['scoringContract'], 'api-scoring-audit-v2')
+        self.assertEqual(bindings[0]['model'], 'muse-spark-1.2-contributor')
+        self.assertEqual(
+            publish_to_blog.infer_generation_publication_mode([paper]),
+            'llm_api_production',
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            page = posts / f'{date_str}-llm-api.md'
+            page.write_text('api page\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(
+                        publish_to_blog, 'generation_manifest_path',
+                        return_value=Path(tmp) / 'generation.json',
+                    ), mock.patch.object(
+                        publish_to_blog, 'review_receipt_path',
+                        return_value=Path(tmp) / 'receipt.json',
+                    ), mock.patch.object(
+                        publish_to_blog, 'review_failure_path',
+                        return_value=Path(tmp) / 'failure.json',
+                    ), mock.patch.object(
+                        publish_to_blog, 'save_review_pass_cache', return_value=None,
+                    ):
+                fingerprint = publish_to_blog.generation_input_fingerprint(
+                    [paper], date_str, '论文速递', False,
+                )
+                manifest_path = publish_to_blog.save_generation_manifest(
+                    date_str, [page], input_fingerprint=fingerprint,
+                    template_fingerprint='1' * 64, base_head='2' * 40,
+                    published_papers=[paper], publish_all=False,
+                )
+                manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+                self.assertEqual(manifest['publicationMode'], 'llm_api_production')
+                self.assertEqual(len(manifest['llmApiBindings']), 1)
+                self.assertEqual(
+                    manifest['llmApiProduction']['contract'],
+                    'llm-api-production-publication-v1',
+                )
+                publish_to_blog._validate_generation_input_integrity(manifest, date_str)
+                manifest['llmApiBindings'][0]['readerArticleSha256'] = '0' * 64
+                with self.assertRaisesRegex(PublishDataValidationError, 'LLM API'):
+                    publish_to_blog._validate_generation_input_integrity(manifest, date_str)
+
+        tampered = llm_api_publication_fixture()
+        tampered['analysisManifest']['stages']['scoringAudit'][
+            'outputAnalysisSha256'
+        ] = '0' * 64
+        with self.assertRaisesRegex(PublishDataValidationError, '评分审计'):
+            publish_to_blog.llm_api_production_proof([tampered])
 
     def test_manual_v5_renders_selected_figure_only_from_reader_article(self):
         url = 'https://arxiv.org/html/2608.29999/figure-1.png'
@@ -2697,6 +2821,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                     base_head='a' * 40,
                     category='论文速递', published_papers=[paper],
                     publish_all=False, include_id='2607.00001',
+                    publication_mode=publish_to_blog.LEGACY_V5_MAINTENANCE_MODE,
                 )
                 payload = json.loads(manifest_path.read_text(encoding='utf-8'))
                 loaded, loaded_manifest = publish_to_blog.load_generation_manifest(
@@ -3161,6 +3286,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                     '2026-07-10', [page], input_fingerprint=input_fingerprint,
                     template_fingerprint='b' * 64, base_head=base_head,
                     published_papers=published_papers,
+                    publication_mode=publish_to_blog.LEGACY_V5_MAINTENANCE_MODE,
                 )
                 reused = publish_to_blog.reusable_generation_manifest(
                     '2026-07-10', input_fingerprint, 'b' * 64, base_head,
@@ -4156,6 +4282,7 @@ body
                     template_fingerprint=publish_to_blog.generation_template_fingerprint(),
                     base_head=base_head,
                     published_papers=[paper],
+                    publication_mode=publish_to_blog.LEGACY_V5_MAINTENANCE_MODE,
                 )
                 paper_page.write_text(paper_page.read_text(encoding='utf-8') + 'tampered\n', encoding='utf-8')
                 with self.assertRaisesRegex(

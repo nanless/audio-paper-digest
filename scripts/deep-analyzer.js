@@ -736,6 +736,69 @@ const API_READER_REQUIRED_KINDS = Object.freeze([
     'result', 'limitation', 'synthesis'
 ]);
 
+function isAllowedReaderNarrativeNumeralIssue(issue) {
+    if (issue?.code !== 'quantitative_chinese_numeral') return false;
+    return /^(?:一|两)(?:个|条|类|层|种|套|路|方面|部分|组|步|轮|半)$/.test(
+        String(issue.match || '').trim()
+    );
+}
+
+function splitReaderLongParagraphs(text, targetChineseChars = 190, maxChineseChars = 240) {
+    const chineseCount = value => (String(value || '').match(/[\u3400-\u9fff]/g) || []).length;
+    const protectedBlock = value => /^(?:```|~~~|\||[-*+]\s|\d+\.\s|!\[|\$\$|\\\[)/.test(value.trim());
+    return String(text || '').trim().split(/\n\s*\n/).flatMap(paragraph => {
+        const trimmed = paragraph.trim();
+        if (!trimmed || protectedBlock(trimmed) || chineseCount(trimmed) <= maxChineseChars) {
+            return [trimmed];
+        }
+        const sentences = trimmed.match(/[^。！？；]+[。！？；]?/g) || [trimmed];
+        const groups = [];
+        let current = '';
+        for (const sentence of sentences) {
+            const next = `${current}${sentence}`;
+            if (current && chineseCount(next) > targetChineseChars) {
+                groups.push(current.trim());
+                current = sentence;
+            } else {
+                current = next;
+            }
+        }
+        if (current.trim()) groups.push(current.trim());
+        return groups;
+    }).filter(Boolean).join('\n\n');
+}
+
+function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
+    let normalized = String(text || '')
+        .replace(/([\u3400-\u9fff])([A-Za-z][A-Za-z0-9+.-]*)/g, '$1 $2')
+        .replace(/([A-Za-z0-9%+)])([\u3400-\u9fff])/g, '$1 $2');
+    const numeralMap = {
+        一: '1', 二: '2', 两: '2', 三: '3', 四: '4', 五: '5',
+        六: '6', 七: '7', 八: '8', 九: '9', 十: '10'
+    };
+    for (const issue of quantitativeIssues) {
+        if (issue?.code !== 'quantitative_chinese_numeral'
+            || isAllowedReaderNarrativeNumeralIssue(issue)) continue;
+        const match = String(issue.match || '').trim();
+        if (!match) continue;
+        const replacement = match
+            .replace(/(\d+(?:\.\d+)?)\s*万/g, (_, value) => (
+                Number(value) * 10000
+            ).toLocaleString('en-US', { maximumFractionDigits: 10 }))
+            .replace(/[一二两三四五六七八九十]/g, numeral => numeralMap[numeral] || numeral)
+            .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2');
+        normalized = normalized.split(match).join(replacement);
+    }
+    return normalized
+        .replace(/([下上这另哪])\s*1\s*(?=步|层|类|种|段|项|组|张|个)/g, '$1一')
+        .replace(/([同唯统单])\s*1\s*(?=[\u3400-\u9fff])/g, '$1一')
+        .replace(/归\s*1\s*(?=化|后|组合|处理|权重)/g, '归一')
+        .replace(/([\u3400-\u9fff])([-+]\d)/g, '$1 $2')
+        .replace(/([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?=(?:mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|MACs?|tokens?|FPS|bit)\b)/gi, '$1 ')
+        .replace(/([\u3400-\u9fff])(\d)/g, '$1 $2')
+        .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2');
+}
+
 function parseApiReaderArticleResult(raw) {
     let value;
     try {
@@ -778,12 +841,18 @@ function parseApiReaderArticleResult(raw) {
             throw new Error(`读者文章 sections[${index}].body 至少 120 字符`);
         }
     }
-    const kinds = new Set(value.sections.map(section => section.kind));
+    const normalizedSections = value.sections.map(section => ({
+        ...section,
+        heading: normalizeReaderEditorialSurface(section.heading.trim()),
+        body: splitReaderLongParagraphs(section.body)
+    }));
+    const kinds = new Set(normalizedSections.map(section => section.kind));
     const missing = API_READER_REQUIRED_KINDS.filter(kind => !kinds.has(kind));
     if (missing.length > 0) throw new Error(`读者文章缺少教学阶段: ${missing.join(', ')}`);
-    const article = value.sections.map(section => (
+    let article = normalizedSections.map(section => (
         `### ${section.heading.trim()}\n\n${section.body.trim()}`
     )).join('\n\n');
+    article = normalizeReaderEditorialSurface(article);
     const chineseChars = (article.match(/[\u3400-\u9fff]/g) || []).length;
     if (chineseChars < 1800 || chineseChars > 10000) {
         throw new Error(`读者文章中文字数必须为 1800-10000，当前 ${chineseChars}`);
@@ -791,11 +860,25 @@ function parseApiReaderArticleResult(raw) {
     if (/(?:prompt|evidence\s*id|manual_complete|证据块|代码校验反馈)/i.test(article)) {
         throw new Error('读者文章泄漏了流程或证据元话语');
     }
-    const quality = validateEditorialQuality({
+    let quality = validateEditorialQuality({
         summary: '', method: article, innovations: '', results: '', details: '', limits: ''
     });
-    if (!quality.valid) {
-        const details = quality.issues.slice(0, 8)
+    const repairableSurfaceIssues = quality.issues.filter(issue => (
+        issue.code === 'numeric_typography'
+        || (issue.code === 'quantitative_chinese_numeral'
+            && !isAllowedReaderNarrativeNumeralIssue(issue))
+    ));
+    if (repairableSurfaceIssues.length > 0) {
+        article = normalizeReaderEditorialSurface(article, repairableSurfaceIssues);
+        quality = validateEditorialQuality({
+            summary: '', method: article, innovations: '', results: '', details: '', limits: ''
+        });
+    }
+    const blockingQualityIssues = quality.issues.filter(
+        issue => !isAllowedReaderNarrativeNumeralIssue(issue)
+    );
+    if (blockingQualityIssues.length > 0) {
+        const details = blockingQualityIssues.slice(0, 8)
             .map(item => `${item.code}:${item.match || item.message}`).join('；');
         throw new Error(`读者文章文风校验失败: ${details}`);
     }
@@ -803,9 +886,9 @@ function parseApiReaderArticleResult(raw) {
         plan: {
             version: 1,
             contract: API_READER_ARTICLE_CONTRACT,
-            readerTitle: value.readerTitle.trim(),
-            oneSentenceThesis: value.oneSentenceThesis.trim(),
-            sections: value.sections.map(section => ({
+            readerTitle: normalizeReaderEditorialSurface(value.readerTitle.trim()),
+            oneSentenceThesis: normalizeReaderEditorialSurface(value.oneSentenceThesis.trim()),
+            sections: normalizedSections.map(section => ({
                 kind: section.kind,
                 heading: section.heading.trim()
             }))
@@ -813,6 +896,40 @@ function parseApiReaderArticleResult(raw) {
         article,
         qualityMetrics: quality.metrics
     };
+}
+
+function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
+    const plan = paper?.apiReaderPlan;
+    const article = paper?.apiReaderArticle;
+    const stage = analysisManifest?.stages?.apiReaderArticle;
+    if (!plan || !Array.isArray(plan.sections) || typeof article !== 'string'
+        || stage?.status !== 'complete') return false;
+    const articleHeadings = [...article.matchAll(/^###\s+(.+?)\s*$/gm)]
+        .map(match => match[1].trim());
+    if (articleHeadings.length !== plan.sections.length) return false;
+    const repairedHeadings = plan.sections.map(section => (
+        normalizeReaderEditorialSurface(String(section?.heading || '').trim())
+    ));
+    if (!repairedHeadings.every((heading, index) => heading === articleHeadings[index])) {
+        return false;
+    }
+    const repairedPlan = {
+        ...plan,
+        readerTitle: normalizeReaderEditorialSurface(plan.readerTitle),
+        oneSentenceThesis: normalizeReaderEditorialSurface(plan.oneSentenceThesis),
+        sections: plan.sections.map((section, index) => ({
+            ...section,
+            heading: articleHeadings[index]
+        }))
+    };
+    const oldSha = stableFingerprint(plan);
+    const newSha = stableFingerprint(repairedPlan);
+    if (oldSha === newSha && paper.apiReaderPlanSha256 === newSha
+        && stage.planSha256 === newSha) return false;
+    paper.apiReaderPlan = repairedPlan;
+    paper.apiReaderPlanSha256 = newSha;
+    stage.planSha256 = newSha;
+    return true;
 }
 
 async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence, options = {}) {
@@ -4512,6 +4629,9 @@ async function analyzePaperDeep(paper) {
         evidenceSha256: crypto.createHash('sha256').update(apiReaderEvidenceContext).digest('hex')
     });
     if (isRecoveryStageComplete(analysisManifest, 'apiReaderArticle')) {
+        if (repairApiReaderPlanSurfaceBinding(paper, analysisManifest)) {
+            console.log('    [deep] ✅ 已确定性对齐读者文章与计划标题排版');
+        }
         const articleSha = crypto.createHash('sha256')
             .update(String(paper.apiReaderArticle || '')).digest('hex');
         const planSha = paper.apiReaderPlan
@@ -5777,6 +5897,10 @@ module.exports = {
     parseApiReaderArticleResult,
     generateApiReaderArticleDetailed,
     API_READER_ARTICLE_CONTRACT,
+    isAllowedReaderNarrativeNumeralIssue,
+    splitReaderLongParagraphs,
+    normalizeReaderEditorialSurface,
+    repairApiReaderPlanSurfaceBinding,
     repairMissingAnalysisSections,
     finalizeStructureRepairOutput,
     recoveryFailureStatus,

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Codex 默认“某日论文速递”编排入口。默认使用生产 Manual v6；LLM/API 路线须显式 --api。
+# Codex 默认“某日论文速递”编排入口。默认使用 LLM/API；Manual v6 须显式 --manual。
 #
 # 本脚本负责所有可由项目脚本确定性执行的阶段：
 # 抓取/筛选/深度分析 → 博客生成 → review → push → 发布后视觉任务规划与参考图准备。
@@ -10,10 +10,10 @@ set -eu
 usage() {
   cat <<'EOF'
 用法:
-  ./run-daily-digest.sh YYYY-MM-DD [--from fetch|tasks|spec|analyze|generate|review|push|visual] [--api]
+  ./run-daily-digest.sh YYYY-MM-DD [--from fetch|tasks|spec|analyze|generate|review|push|visual] [--api|--manual]
 
-默认从生产 Manual v6 raw fetch 开始，并在需要逐论文人工产物的边界停下，由 Agent
-通过持久 task runner 逐篇分派真实 subagent 后继续。只有显式 --api 才运行旧 LLM/API 自动链路。
+默认运行 LLM/API 自动抓取、筛选、深度分析和博客 review。只有显式 --manual
+才切换 production Manual v6，并在需要逐论文人工产物的边界停下。
 某一阶段失败后，修复问题并用 --from 从该阶段续跑：
   ./run-daily-digest.sh 2026-07-23 --from review
 
@@ -69,7 +69,7 @@ fi
 shift
 
 start_stage="fetch"
-api_mode="${PD_DAILY_API_MODE:-0}"
+api_mode="${PD_DAILY_API_MODE:-1}"
 while [ "$#" -gt 0 ]; do
   case "${1:-}" in
     --from)
@@ -82,6 +82,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --api)
       api_mode=1
+      shift
+      ;;
+    --manual)
+      api_mode=0
       shift
       ;;
     *)
@@ -121,7 +125,7 @@ if [ "$start_index" -eq 1 ]; then
 fi
 
 if [ "$api_mode" -eq 1 ] && [ "$start_index" -ge 2 ] && [ "$start_index" -le 4 ]; then
-  echo "--api 不使用 Manual v6 的 tasks/spec/analyze 阶段；请从 fetch 或 generate/review/push/visual 续跑。" >&2
+  echo "默认 LLM/API 模式不使用 Manual v6 的 tasks/spec/analyze 阶段；请从 fetch 或 generate/review/push/visual 续跑，或显式传 --manual。" >&2
   exit 2
 fi
 
@@ -162,7 +166,7 @@ if [ "$start_index" -eq 1 ] && [ "$api_mode" -ne 1 ]; then
 fi
 
 if [ "$start_index" -eq 1 ]; then
-  run_stage 1 "显式 LLM/API 抓取、筛选、深度分析" node scripts/full-fetch.js
+  run_stage 1 "默认 LLM/API 抓取、筛选、深度分析" node scripts/full-fetch.js
 fi
 
 if [ "$api_mode" -ne 1 ]; then
