@@ -819,6 +819,13 @@ primary_task_tag: #音视频生成
                 'engineering_claim_without_measured_or_reusable_evidence'
             ]
         );
+        const missingAlias = structuredClone(payload);
+        missingAlias.evidenceProfile.ablationStatus = 'missing';
+        assert.strictEqual(
+            parseScoringAuditResult(JSON.stringify(missingAlias), allowed)
+                .evidenceProfile.ablationStatus,
+            'none'
+        );
 
         payload.evidenceProfile.evidenceIds = ['A_UNKNOWN'];
         assert.throws(

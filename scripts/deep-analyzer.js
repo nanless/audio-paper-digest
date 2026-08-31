@@ -426,6 +426,9 @@ function parseScoringAuditResult(raw, allowedEvidenceIds = null) {
                 throw new Error(`评分证据画像 ${key} 必须是布尔值`);
             }
         }
+        if (evidenceProfile.ablationStatus === 'missing') {
+            evidenceProfile.ablationStatus = 'none';
+        }
         if (!['direct', 'partial', 'none', 'not_applicable'].includes(evidenceProfile.ablationStatus)) {
             throw new Error(
                 `评分证据画像 ablationStatus 非法: ${JSON.stringify(evidenceProfile.ablationStatus)}`
