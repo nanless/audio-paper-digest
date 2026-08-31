@@ -841,6 +841,12 @@ primary_task_tag: #音视频生成
         assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
             code: 'quantitative_chinese_numeral', match: '四段'
         }), false);
+        assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
+            code: 'quantitative_chinese_numeral', match: '一个模型'
+        }), true);
+        assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
+            code: 'quantitative_chinese_numeral', match: '两个模型'
+        }), false);
         const split = splitReaderLongParagraphs(
             '这是用于建立任务直觉并解释输入输出关系的完整句子。'.repeat(18)
         );

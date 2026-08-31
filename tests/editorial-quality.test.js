@@ -106,6 +106,11 @@ describe('Manual v4 editorial quality primitives', () => {
             [],
             'Markdown 表格单元格不应进入 prose 断裂检测'
         );
+        assert.deepStrictEqual(
+            findBrokenProse('块越大，尾巴越平滑，但时间更拖沓；块越小，跟随越锐利，但纹理更粗。'),
+            [],
+            '分号分隔的平行对照不应被重复“但”规则误杀'
+        );
         for (const malformed of [
             '“听懂内容”区别于能辨别音频质量。',
             '参数高效区别于推理廉价。',

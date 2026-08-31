@@ -340,7 +340,7 @@ function findBrokenProse(text) {
     const proseValue = value.replace(/^\s*\|.*\|\s*$/gmu, match => ' '.repeat(match.length));
     for (const regex of [
         /(?:尚尚|只只|分别分别|只有仅有|单单个|能能(?!否|够)|具有有(?:吸引力|优势|价值|能力|作用|意义|效果|潜力|特点|必要性)|更接近区别于|存在也区别于其|无明显退化区别于|却区别于|提高现实性却区别于|2\s*次计算成本)/gu,
-        /但[^。！？!?]{0,80}[，,]但/gu
+        /但[^。！？!?；;]{0,80}[，,]但/gu
     ]) {
         findings.push(...collectRegexMatches(proseValue, regex, 'broken_repetition'));
     }
