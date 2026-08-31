@@ -976,11 +976,11 @@ title: "Duplicate"
 
     def test_index_normalizes_canonical_chinese_quantities(self):
         normalized = publish_to_blog.normalize_digest_index_reader_surface(
-            '同一模型的同域换库损失约五分之一，百例标注可回收约三分之二，四类表征均未跨越。'
+            '同一模型的同域换库损失约五分之一，百例标注可回收约三分之二，四类表征均未跨越，并使用 300M参数。'
         )
         self.assertEqual(
             normalized,
-            '同一模型的同域换库损失约 1/5，100 例标注可回收约 2/3，4 类表征均未跨越。',
+            '同一模型的同域换库损失约 1/5，100 例标注可回收约 2/3，4 类表征均未跨越，并使用 300 M 参数。',
         )
 
     def test_review_removes_only_high_similarity_prose_and_keeps_table_continuations(self):

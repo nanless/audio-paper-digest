@@ -1838,6 +1838,7 @@ def normalize_digest_index_reader_surface(text):
     value = re.sub(r'(\d+/\d+)(?=[一-鿿])', r'\1 ', value)
     value = re.sub(r'([一-鿿])([-+]?\d)', r'\1 \2', value)
     value = re.sub(r'(\d)([一-鿿])', r'\1 \2', value)
+    value = re.sub(r'([A-Za-z0-9%+)\]])([一-鿿])', r'\1 \2', value)
     value = re.sub(r'([同唯统单])\s*1\s*(?=[一-鿿])', r'\1一', value)
     value = re.sub(r'归\s*1\s*(?=(?:化|后|组合|处理|权重))', '归一', value)
     value = re.sub(
@@ -1846,7 +1847,7 @@ def normalize_digest_index_reader_surface(text):
         value,
     )
     value = re.sub(
-        r'([-+]?\d+(?:\.\d+)?)(?=(?:mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|MACs?|tokens?|FPS|bit|DoF|Vpp|D|B|K|M|G)\b)',
+        r'([-+]?\d+(?:\.\d+)?)(?=(?:mW|mJ|ms|dB|kHz|MHz|Hz|KiB|KB|MB|GB|MACs?|tokens?|FPS|bit|DoF|Vpp|D|B|K|M|G)(?![A-Za-z]))',
         r'\1 ',
         value,
         flags=re.I,
