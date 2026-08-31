@@ -1833,7 +1833,13 @@ def normalize_digest_index_reader_surface(text):
         lambda match: f'{chinese_integer(match.group(2))}/{chinese_integer(match.group(1))}',
         value,
     )
-    value = re.sub(r'(?<![一-鿿])一半', '1/2', value)
+    value = re.sub(r'一半', '1/2', value)
+    value = re.sub(r'半宽', '1/2 宽', value)
+    value = re.sub(
+        r'([一二两三四五六七八九])成',
+        lambda match: f'{digits[match.group(1)] * 10}%',
+        value,
+    )
     count_units = (
         '个|对|种|条|篇|张|段|轮|步|次|倍|人|名|例|维|层|位|核|类|'
         '组|路|级|阶|流|通道|阶段|分支|模型|基准|数据集|会话|样本|参数|'
