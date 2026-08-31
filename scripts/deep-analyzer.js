@@ -859,6 +859,7 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
         normalized = normalized.split(match).join(replacement);
     }
     return normalized
+        .replace(/[；;](?=\s*(?:\n\s*\n|$))/g, '。')
         .replace(/数十\s+(?=[\u3400-\u9fff])/g, '数十')
         .replace(/([下上这另哪])\s*1\s*(?=步|层|类|种|段|项|组|张|个)/g, '$1一')
         .replace(/([同唯统单])\s*1\s*(?=[\u3400-\u9fff])/g, '$1一')

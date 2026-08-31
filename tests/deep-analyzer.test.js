@@ -875,6 +875,10 @@ primary_task_tag: #音视频生成
             }]),
             '延迟为数十毫秒。'
         );
+        assert.strictEqual(
+            normalizeReaderEditorialSurface('该结论只覆盖单一宿主；\n\n下一段继续。'),
+            '该结论只覆盖单一宿主。\n\n下一段继续。'
+        );
         const recoveryPaper = {
             apiReaderArticle: '### 把 HRTF 做浓，再用模型去听\n\n正文。',
             apiReaderPlan: {
