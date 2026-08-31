@@ -1994,10 +1994,6 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         # and author details afterwards, so they do not interrupt the verdict.
         if meta:
             md += f"{meta}\n\n"
-        if pa.get('authors'):
-            authors_clean = pa['authors'].replace('- **第一作者**', '第一作者').replace('- **通讯作者**', '通讯作者').replace('- **作者列表**', '作者列表')
-            md += f"👥 **作者与机构**\n\n{authors_clean}\n\n"
-
         md += "---\n\n"
 
     for i, p in enumerate(unscored):
@@ -2042,10 +2038,6 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
 
         if meta:
             md += f"{meta}\n\n"
-        if pa.get('authors'):
-            authors_clean = pa['authors'].replace('- **第一作者**', '第一作者').replace('- **通讯作者**', '通讯作者').replace('- **作者列表**', '作者列表')
-            md += f"👥 **作者与机构**\n\n{authors_clean}\n\n"
-
         md += "---\n\n"
 
     return normalize_digest_index_reader_surface(md)
