@@ -504,6 +504,11 @@ describe('analyzePaperWithRetry', () => {
             contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
             documentType: '方法研究'
         }), null, '骨干/前端是系统比较对象，不应误判为纯指标表');
+        const embeddingIdentifier = valid.replace('方法 / 设置', '嵌入 / 基线');
+        assert.strictEqual(validateExperimentTableContract(embeddingIdentifier, {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究'
+        }), null, '嵌入/基线是表示比较对象，不应误判为纯指标表');
 
         const neutralComparison = withResults([
             '关键比较问题是三种配置在固定测试集上的 WER 差异多大，并核验配置改变是否影响结果方向。',
