@@ -2073,7 +2073,7 @@ confidence: 中
         self.assertTrue(passed)
         self.assertEqual(issues, [])
         self.assertEqual(call.call_args.kwargs['images'], [image])
-        self.assertTrue(call.call_args.kwargs['use_secondary'])
+        self.assertFalse(call.call_args.kwargs['use_secondary'])
         self.assertTrue(call.call_args.kwargs['structured_output'])
         self.assertIn('正文附近上下文', call.call_args.args[0])
 

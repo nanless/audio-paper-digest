@@ -460,7 +460,7 @@ def get_blog_review_concurrency():
 def current_image_review_mode():
     return (
         'multimodal'
-        if os.environ.get('PAPER_ANALYZER_SECONDARY_MODEL', '').strip()
+        if os.environ.get('PAPER_ANALYZER_MODEL', '').strip()
         else 'deterministic_only'
     )
 
@@ -1260,10 +1260,10 @@ def multimodal_review_images(content, title="", required=False):
 
     if not image_matches:
         return True, []
-    # The secondary model is optional for the analysis pipeline. Keep blog
-    # review consistent with that contract: without it, deterministic image
-    # syntax checks still run, but no required multimodal API call is made.
-    if not os.environ.get('PAPER_ANALYZER_SECONDARY_MODEL', '').strip():
+    # Blog image review follows the same primary model as text review.  This
+    # prevents a stale optional analysis-secondary route from silently moving
+    # publication review to a different provider or quota.
+    if not os.environ.get('PAPER_ANALYZER_MODEL', '').strip():
         return True, []
 
     img_summary = []
@@ -1343,7 +1343,7 @@ def multimodal_review_images(content, title="", required=False):
         required=required,
         context=f"多模态图片 review: {title}",
         images=image_payloads,
-        use_secondary=True,
+        use_secondary=False,
         structured_output=True,
     )
     if not result:
@@ -1373,7 +1373,7 @@ def multimodal_review_images(content, title="", required=False):
             passed, issues = repair_review_payload(
                 result,
                 f"多模态图片 review: {title}",
-                use_secondary=True,
+                use_secondary=False,
                 retry_prompt=prompt,
                 retry_images=image_payloads,
             )
