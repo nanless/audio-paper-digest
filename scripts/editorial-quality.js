@@ -98,7 +98,7 @@ const READER_TEMPLATE_PATTERNS = Object.freeze([
     /^\s*\d+[.)、]\s*是(?=\S)/gmu
 ]);
 
-const PERCENT_METRICS_RE = /(?:准确率|正确率|召回率|错误率|覆盖率|命中率|WER|CER|PER|F-?score|S-BAcc|state-balanced accuracy|step accuracy)/i;
+const PERCENT_METRICS_RE = /(?:准确率|正确率|召回率|错误率|覆盖率|命中率|\b(?:WER|CER|PER)\b|F-?score|S-BAcc|state-balanced accuracy|step accuracy)/i;
 const DIRECTION_RE = /(?:提高|提升|增加|改善|下降|降低|减少|相差|差距|高于|低于|从.+(?:到|降至|升至))/;
 const DEFENSIVE_NEGATION_RE = /(?:不能|不应|不足以|不等于|并不代表|并不能|尚不能|不可外推)/g;
 const READER_SPACED_QUANTIFIERS = Object.freeze([

@@ -317,6 +317,10 @@ describe('Manual v4 editorial quality primitives', () => {
             findMissingComparisonUnits('用一个廉价冻结规则证明无支撑调用可以被大幅拦截且不损伤支撑准确率。'),
             []
         );
+        assert.deepEqual(
+            findMissingComparisonUnits('Whisper 分数能拒掉 120/150 非语音和 46/54 babble，增量全部来自剩余样本。'),
+            []
+        );
     });
 
     it('finds batch-wide sentence templates at the configured paper threshold', () => {
