@@ -983,6 +983,18 @@ title: "Duplicate"
             '同一模型的同域换库损失约 1/5，100 例标注可回收约 2/3，4 类表征均未跨越；Aligner 约19%失败，并使用 300 M 参数。',
         )
 
+    def test_index_uses_api_v2_reader_title_and_thesis(self):
+        paper = llm_api_publication_fixture()
+        markdown = publish_to_blog.generate_index_page(
+            [(6.1, paper, paper['parsed'])],
+            [],
+            '2026-08-31',
+            {paper['arxivId']: 'llm-api-publisher-fixture-2608-30002'},
+        )
+        self.assertIn(paper['apiReaderPlan']['readerTitle'], markdown)
+        self.assertIn(paper['apiReaderPlan']['oneSentenceThesis'], markdown)
+        self.assertNotIn('最终兼容 canonical 摘要。', markdown)
+
     def test_review_removes_only_high_similarity_prose_and_keeps_table_continuations(self):
         first = (
             '该系统依次执行声学编码、上下文融合、置信度校准和序列解码，'

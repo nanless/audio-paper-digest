@@ -1954,8 +1954,13 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
         aid = p.get('arxivId', '')
         aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
-        reader_plan = _manual_reader_editorial_plan(p)
-        reader_article = _manual_reader_article(p, reader_plan, date_str)
+        api_reader = _api_reader_payload(p)
+        if api_reader:
+            reader_plan = api_reader['plan']
+            reader_article = api_reader['article']
+        else:
+            reader_plan = _manual_reader_editorial_plan(p)
+            reader_article = _manual_reader_article(p, reader_plan, date_str)
         reader_title = reader_plan['readerTitle'].strip() if reader_article else title
         if slug:
             md += f"### {m} [{reader_title}]({BASE_PATH}/posts/{date_str}-{slug})\n\n"
@@ -2004,8 +2009,13 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
         aid = p.get('arxivId', '')
         aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
-        reader_plan = _manual_reader_editorial_plan(p)
-        reader_article = _manual_reader_article(p, reader_plan)
+        api_reader = _api_reader_payload(p)
+        if api_reader:
+            reader_plan = api_reader['plan']
+            reader_article = api_reader['article']
+        else:
+            reader_plan = _manual_reader_editorial_plan(p)
+            reader_article = _manual_reader_article(p, reader_plan)
         reader_title = reader_plan['readerTitle'].strip() if reader_article else title
         if slug:
             md += f"### {len(scored)+i+1}. [{reader_title}]({BASE_PATH}/posts/{date_str}-{slug})\n\n"
