@@ -1010,6 +1010,10 @@ primary_task_tag: #音视频生成
             () => prepareTrustedArxivFigureBuffer(Buffer.from('not-an-image'), 'image/png'),
             /文件头/
         );
+        assert.match(
+            fs.readFileSync(path.join(__dirname, '..', 'scripts', 'deep-analyzer.js'), 'utf8'),
+            /API_READER_FIGURE_MAX_BYTES = 8 \* 1024 \* 1024/
+        );
     });
 
     it('归一化后的评分审计二次校验会剥离内部派生字段', () => {

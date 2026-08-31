@@ -731,6 +731,7 @@ async function auditTypeAwareScoring(analysis, sourceEvidence = '', options = {}
 }
 
 const API_READER_ARTICLE_CONTRACT = 'beginner-researcher-v2';
+const API_READER_FIGURE_MAX_BYTES = 8 * 1024 * 1024;
 const API_READER_KINDS = Object.freeze([
     'background', 'related_work', 'problem', 'method_overview', 'component', 'training',
     'experiment_setup', 'result', 'ablation', 'limitation', 'reproduction', 'synthesis'
@@ -1073,7 +1074,7 @@ async function materializeApiReaderFigures(figures, arxivId = '') {
             dispatcher: getArxivFetchDispatcher()
         });
         if (!response.ok) throw new Error(`论文图 ${figure.ordinal} 下载失败: HTTP ${response.status}`);
-        const raw = await readResponseBufferWithLimit(response, 2 * 1024 * 1024);
+        const raw = await readResponseBufferWithLimit(response, API_READER_FIGURE_MAX_BYTES);
         const trusted = prepareTrustedArxivFigureBuffer(raw, figure.mediaType);
         const image = await loadImage(trusted.buffer);
         if (!image.width || !image.height) throw new Error(`论文图 ${figure.ordinal} 无法解码`);
