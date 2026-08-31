@@ -971,31 +971,66 @@ function buildApiReaderEvidenceContext(analysis, sourceText, structuredArtifacts
     return [sourceEvidence, artifactEvidence].filter(Boolean).join('\n\n');
 }
 
+function normalizeReaderFigureCaption(figure) {
+    let caption = String(figure?.caption || '').normalize('NFKC')
+        .replace(/[\u200b-\u200d\u2061\ufeff]/g, '')
+        .replace(/^Fig(?:ure)?\.?\s*\d+[a-z]?\s*[:.]?\s*/i, '')
+        .replace(/R2R\^?(?:\{2\}|2)/g, 'R²')
+        .replace(/([Δδ])\\(?:Delta|delta)/g, '$1')
+        .replace(/([εϵ])\\(?:varepsilon|epsilon)/g, '$1')
+        .replace(/±\\pm/g, '±')
+        .replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, '$1/$2')
+        .replace(/\\(?:text|mathrm|operatorname)\{([^{}]*)\}/g, '$1')
+        .replace(/\\(?:hat|bar|mathring)\{([^{}]+)\}/g, '$1')
+        .replace(/\\(?:Delta|delta)/g, 'Δ')
+        .replace(/\\pm/g, '±')
+        .replace(/\\dagger/g, '†')
+        .replace(/[{}]/g, '')
+        .replace(/\s+/g, ' ').trim();
+    caption = caption
+        .replace(/(P\s*=\s*\d+)\s*P\s*=\s*(\d+\/\d+)/gi, 'P=$2')
+        .replace(/([A-Za-z]\s*=\s*-?\d+(?:\.\d+)?)\s*\1/gi, '$1')
+        .replace(/(p\s*[<>=]\s*\d+(?:\.\d+)?)\s*\1/gi, '$1')
+        .replace(/(\d+(?:\.\d+)?\s*(?:ms|s|dB|Hz|kHz|MHz))\s*\1/gi, '$1');
+    if (!caption || /^\(?[a-z]\)?$/i.test(caption)) {
+        try {
+            const filename = decodeURIComponent(new URL(String(figure?.url || '')).pathname)
+                .split('/').pop().replace(/\.[^.]+$/, '')
+                .replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+            if (filename) caption = filename;
+        } catch (_) {
+            caption = '';
+        }
+    }
+    return caption || '原论文图示';
+}
+
+function truncateReaderFigureCaption(value, limit = 108) {
+    const text = String(value || '').trim();
+    if (text.length <= limit) return text;
+    const sentence = text.slice(0, limit + 1).match(/^(.{36,}?[.!?。！？])(?:\s|$)/);
+    if (sentence) return sentence[1].trim();
+    const prefix = text.slice(0, limit - 1);
+    const boundary = Math.max(prefix.lastIndexOf(' '), prefix.lastIndexOf('，'), prefix.lastIndexOf(','));
+    return `${(boundary >= 48 ? prefix.slice(0, boundary) : prefix).trim()}…`;
+}
+
 function readerFigureNarrative(figure, target = null) {
-    const purposes = {
-        method_overview: '读图时应先沿输入、中间处理与输出核对数据流。',
-        component: '读图时应核对各组件的连接方向与它们在正文中的职责。',
-        experiment_setup: '读图时应先确认对照条件、坐标轴和指标方向。',
-        result: '这张图是本节结论的原始证据；请按图例与坐标轴核对比较口径。',
-        ablation: '读图时要区分完整方法、删减条件与对照组，不要将相关性外推为因果。',
-        limitation: '这张图用于界定结论边界，不应外推到论文未覆盖的条件。'
-    };
     const label = String(figure?.label || `Figure ${figure?.ordinal || ''}`)
         .replace(/\s+/g, ' ').trim();
     const panelNotice = /^\([a-z]\)$/i.test(String(figure?.caption || '').trim())
         ? `当前资源对应子图 ${String(figure.caption).trim()}；同一编号的其他面板请回原论文核对。`
         : '';
-    return `这张图来自原论文 ${label}，与“${String(target?.heading || '当前小节').trim()}”的论证直接对应。`
+    return `这张图来自原论文 ${label}，图示内容为“${truncateReaderFigureCaption(normalizeReaderFigureCaption(figure), 160)}”。`
         + panelNotice
-        + (purposes[target?.kind] || '请结合本节的比较口径阅读图例、坐标轴与边界条件。');
+        + `请结合“${String(target?.heading || '当前小节').trim()}”的正文，按图例、坐标轴或模块连线核对；图中没有呈现的内容不作外推。`;
 }
 
 function readerFigureAlt(figure, target = null) {
     const label = String(figure?.label || `Figure ${figure?.ordinal || ''}`)
         .replace(/[:：]\s*$/, '').replace(/\s+/g, ' ').trim();
-    const heading = String(target?.heading || figure?.targetHeading || '当前小节')
-        .replace(/\s+/g, ' ').trim().slice(0, 80);
-    return `原论文 ${label}：${heading}`.slice(0, 108);
+    const caption = truncateReaderFigureCaption(normalizeReaderFigureCaption(figure));
+    return truncateReaderFigureCaption(`原论文 ${label}：${caption}`, 112);
 }
 
 function insertMarkdownBeforeNextReaderHeading(article, heading, markdown) {
@@ -6776,6 +6811,8 @@ module.exports = {
     buildApiReaderEvidenceContext,
     injectApiReaderFigures,
     rewriteApiReaderFigureNarratives,
+    normalizeReaderFigureCaption,
+    truncateReaderFigureCaption,
     sanitizeTrustedArxivSvg,
     prepareTrustedArxivFigureBuffer,
     materializeApiReaderFigures,

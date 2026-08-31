@@ -839,6 +839,8 @@ primary_task_tag: #音视频生成
             parseApiReaderArticleResult,
             removeDuplicateReaderLongSentences,
             fitApiReaderFigureDimensions,
+            normalizeReaderFigureCaption,
+            truncateReaderFigureCaption,
             isAllowedReaderNarrativeNumeralIssue,
             splitReaderLongParagraphs,
             normalizeReaderEditorialSurface,
@@ -978,6 +980,8 @@ primary_task_tag: #音视频生成
             resolveApiReaderAuthors,
             removeDuplicateReaderLongSentences,
             fitApiReaderFigureDimensions,
+            normalizeReaderFigureCaption,
+            truncateReaderFigureCaption,
             prepareTrustedArxivFigureBuffer,
             hasCompleteApiReaderFigureBinding,
             stableFingerprint
@@ -1057,6 +1061,12 @@ primary_task_tag: #音视频生成
             offsetX: 0,
             offsetY: 0
         });
+        const cleanedCaption = normalizeReaderFigureCaption({
+            caption: 'Figure 3: R2R^{2}, Δ\\DeltaAUC and p<0.001p<0.001.',
+            url: 'https://arxiv.org/html/2608.00001/figure-3.svg'
+        });
+        assert.equal(cleanedCaption, 'R², ΔAUC and p<0.001.');
+        assert.ok(truncateReaderFigureCaption('word '.repeat(40), 80).length <= 80);
         const completedAuthors = resolveApiReaderAuthors(
             { authors: ['戊', '己'] },
             {
