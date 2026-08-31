@@ -56,7 +56,10 @@ const https = require('https');
 const { PDFParse } = require('pdf-parse');
 const { createCanvas, loadImage } = require('@napi-rs/canvas');
 const { ANALYSIS_CONFIG, ARXIV_CONFIG, SECONDARY_MODEL_CONFIG, CURRENT_DIR } = require('./config.js');
-const { validateEditorialQuality } = require('./editorial-quality.js');
+const {
+    validateEditorialQuality,
+    findDuplicateLongSentences
+} = require('./editorial-quality.js');
 
 // 解构配置常量（便于阅读）
 const {
@@ -1191,6 +1194,7 @@ function parseApiReaderArticleResult(raw) {
         });
     }
     article = restoreReaderSectionHeadings(article, normalizedSections);
+    article = removeDuplicateReaderLongSentences(article);
     quality = validateEditorialQuality({
         summary: '', method: article, innovations: '', results: '', details: '', limits: ''
     });
@@ -1217,6 +1221,29 @@ function parseApiReaderArticleResult(raw) {
         article,
         qualityMetrics: quality.metrics
     };
+}
+
+function removeDuplicateReaderLongSentences(article) {
+    let output = String(article || '');
+    const duplicates = findDuplicateLongSentences(output);
+    for (const duplicate of duplicates) {
+        const occurrences = Array.isArray(duplicate?.occurrences)
+            ? duplicate.occurrences
+            : [];
+        if (occurrences.length < 2) continue;
+        const firstText = String(occurrences[0]?.text || '');
+        let searchFrom = firstText ? output.indexOf(firstText) + firstText.length : 0;
+        for (const occurrence of occurrences.slice(1)) {
+            const repeatedText = String(occurrence?.text || '');
+            if (!repeatedText) continue;
+            let index = output.indexOf(repeatedText, Math.max(0, searchFrom));
+            if (index < 0 && repeatedText !== firstText) index = output.indexOf(repeatedText);
+            if (index < 0) continue;
+            output = `${output.slice(0, index)}${output.slice(index + repeatedText.length)}`;
+            searchFrom = index;
+        }
+    }
+    return output.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
@@ -6584,6 +6611,7 @@ module.exports = {
     auditTypeAwareScoring,
     auditTypeAwareScoringDetailed,
     parseApiReaderArticleResult,
+    removeDuplicateReaderLongSentences,
     generateApiReaderArticleDetailed,
     refreshApiReaderArticleFromSource,
     refreshApiScoringAndReaderFromSource,

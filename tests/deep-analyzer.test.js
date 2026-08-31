@@ -837,6 +837,7 @@ primary_task_tag: #音视频生成
     it('API reader article 要求初学者逻辑顺序和论文特有标题', () => {
         const {
             parseApiReaderArticleResult,
+            removeDuplicateReaderLongSentences,
             isAllowedReaderNarrativeNumeralIssue,
             splitReaderLongParagraphs,
             normalizeReaderEditorialSurface,
@@ -974,6 +975,7 @@ primary_task_tag: #音视频生成
             injectApiReaderFigures,
             parseArxivReaderAuthors,
             resolveApiReaderAuthors,
+            removeDuplicateReaderLongSentences,
             prepareTrustedArxivFigureBuffer,
             hasCompleteApiReaderFigureBinding,
             stableFingerprint
@@ -1040,6 +1042,11 @@ primary_task_tag: #音视频生成
             name: '丁', affiliations: ['机构信息未能从 arXiv PDF 文本可靠映射']
         }]);
         assert.match(pdfFallback.sourceDomSha256, /^[0-9a-f]{64}$/);
+        const duplicateSentence = '这是一句需要保留的论文特有长句，它包含足够多的中文字符。';
+        const dedupedArticle = removeDuplicateReaderLongSentences(
+            `### 第一节\n\n${duplicateSentence}\n\n### 第二节\n\n${duplicateSentence}`
+        );
+        assert.equal(dedupedArticle.match(new RegExp(duplicateSentence, 'g')).length, 1);
         const completedAuthors = resolveApiReaderAuthors(
             { authors: ['戊', '己'] },
             {
