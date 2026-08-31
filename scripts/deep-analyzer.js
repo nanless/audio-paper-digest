@@ -972,8 +972,6 @@ function buildApiReaderEvidenceContext(analysis, sourceText, structuredArtifacts
 }
 
 function readerFigureNarrative(figure, target = null) {
-    const caption = String(figure?.caption || '')
-        .replace(/\s+/g, ' ').trim().replace(/\*/g, '\\*').slice(0, 700);
     const purposes = {
         method_overview: '读图时应先沿输入、中间处理与输出核对数据流。',
         component: '读图时应核对各组件的连接方向与它们在正文中的职责。',
@@ -982,14 +980,22 @@ function readerFigureNarrative(figure, target = null) {
         ablation: '读图时要区分完整方法、删减条件与对照组，不要将相关性外推为因果。',
         limitation: '这张图用于界定结论边界，不应外推到论文未覆盖的条件。'
     };
-    return `原论文图注：${caption || '原文未提供可靠图注'}。`
+    const label = String(figure?.label || `Figure ${figure?.ordinal || ''}`)
+        .replace(/\s+/g, ' ').trim();
+    const panelNotice = /^\([a-z]\)$/i.test(String(figure?.caption || '').trim())
+        ? `当前资源对应子图 ${String(figure.caption).trim()}；同一编号的其他面板请回原论文核对。`
+        : '';
+    return `这张图来自原论文 ${label}，与“${String(target?.heading || '当前小节').trim()}”的论证直接对应。`
+        + panelNotice
         + (purposes[target?.kind] || '请结合本节的比较口径阅读图例、坐标轴与边界条件。');
 }
 
-function readerFigureAlt(figure) {
-    return String(figure?.caption || `Figure ${figure?.ordinal || ''}`)
-        .replace(/^Figure\s+\d+\s*[:.]?\s*/i, '')
-        .replace(/\s+/g, ' ').trim().slice(0, 180);
+function readerFigureAlt(figure, target = null) {
+    const label = String(figure?.label || `Figure ${figure?.ordinal || ''}`)
+        .replace(/[:：]\s*$/, '').replace(/\s+/g, ' ').trim();
+    const heading = String(target?.heading || figure?.targetHeading || '当前小节')
+        .replace(/\s+/g, ' ').trim().slice(0, 80);
+    return `原论文 ${label}：${heading}`.slice(0, 108);
 }
 
 function insertMarkdownBeforeNextReaderHeading(article, heading, markdown) {
@@ -1021,9 +1027,7 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
             .map(kind => sections.find(section => section.kind === kind))
             .find(Boolean);
         if (!target) continue;
-        const alt = sanitizeMarkdownImageAlt(
-            `论文图 ${figure.ordinal}：${readerFigureAlt(figure)}`
-        ).slice(0, 240);
+        const alt = sanitizeMarkdownImageAlt(readerFigureAlt(figure, target));
         const block = [
             `![${alt}](${figure.url})`,
             `*论文图 ${figure.ordinal}。${readerFigureNarrative(figure, target)}*`
@@ -1041,13 +1045,18 @@ function rewriteApiReaderFigureNarratives(article, figures) {
     for (const figure of figures || []) {
         const url = String(figure?.url || '');
         if (!url) throw new Error('论文图叙事刷新缺少 URL');
-        const alt = sanitizeMarkdownImageAlt(
-            `论文图 ${figure.ordinal}：${readerFigureAlt(figure)}`
-        ).slice(0, 240);
-        const narrative = `*论文图 ${figure.ordinal}。${readerFigureNarrative(figure, {
+        const target = {
             kind: figure.targetKind,
             heading: figure.targetHeading
-        })}*`;
+        };
+        const alt = sanitizeMarkdownImageAlt(readerFigureAlt(figure, target));
+        const narrative = `*论文图 ${figure.ordinal}。${readerFigureNarrative(figure, target)}*`;
+        if (/^\([a-z]\)$/i.test(String(figure.caption || '').trim())) {
+            rewritten = rewritten.replace(
+                new RegExp(`图\\s*${figure.ordinal}\\s*的左右对比`, 'g'),
+                `原论文图 ${figure.ordinal} 的跨面板对比`
+            );
+        }
         const pattern = new RegExp(
             `!\\[[^\\n]*\\]\\(${escapeRegExp(url)}\\)\\n\\n`
             + `\\*论文图\\s+${figure.ordinal}。[^\\n]*\\*`
