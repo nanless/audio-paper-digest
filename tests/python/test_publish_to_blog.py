@@ -974,6 +974,15 @@ title: "Duplicate"
         self.assertLess(markdown.index('💡 **毒舌点评**'), markdown.index('📌 **核心摘要**'))
         self.assertLess(markdown.index('📌 **核心摘要**'), markdown.index('🔗 **开源资源**'))
 
+    def test_index_normalizes_canonical_chinese_quantities(self):
+        normalized = publish_to_blog.normalize_digest_index_reader_surface(
+            '同域换库损失约五分之一，百例标注可回收约三分之二，四类表征均未跨越。'
+        )
+        self.assertEqual(
+            normalized,
+            '同域换库损失约 1/5，100 例标注可回收约 2/3，4 类表征均未跨越。',
+        )
+
     def test_review_removes_only_high_similarity_prose_and_keeps_table_continuations(self):
         first = (
             '该系统依次执行声学编码、上下文融合、置信度校准和序列解码，'

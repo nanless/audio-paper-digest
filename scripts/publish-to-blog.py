@@ -1780,6 +1780,73 @@ def format_complete_score_line(parsed):
     return f"**{parsed['score']}/10**" + (f' | {sub_scores}' if sub_scores else '')
 
 
+def normalize_digest_index_reader_surface(text):
+    """Normalize quantitative prose copied from canonical into the daily index."""
+    value = str(text or '')
+    protected_percentages = []
+
+    def stash_percentage(match):
+        protected_percentages.append(match.group(0))
+        return f'__PD_PERCENT_{len(protected_percentages) - 1}__'
+
+    value = re.sub(
+        r'(?:[一-鿿])?[-+]?\d+(?:\.\d+)?\s*%',
+        stash_percentage,
+        value,
+    )
+    digits = {
+        '零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4,
+        '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
+    }
+
+    def chinese_integer(raw):
+        section = digit = total = 0
+        for char in raw:
+            if char in digits:
+                digit = digits[char]
+                continue
+            unit = {'十': 10, '百': 100, '千': 1000, '万': 10000, '亿': 100000000}.get(char)
+            if not unit:
+                return raw
+            if unit < 10000:
+                section += (digit or 1) * unit
+            else:
+                total += (section + digit or 1) * unit
+                section = digit = 0
+            digit = 0
+        return str(total + section + digit)
+
+    chars = '零〇一二两三四五六七八九十百千万亿'
+    value = re.sub(
+        rf'([{chars}]+)分之([{chars}]+)',
+        lambda match: f'{chinese_integer(match.group(2))}/{chinese_integer(match.group(1))}',
+        value,
+    )
+    value = re.sub(r'(?<![一-鿿])一半', '1/2', value)
+    count_units = (
+        '个|对|种|条|篇|张|段|轮|步|次|倍|人|名|例|维|层|位|核|类|'
+        '组|路|级|阶|流|通道|阶段|分支|模型|基准|数据集|会话|样本|参数|'
+        '题|轨迹|主干|帧|秒|分钟|小时|天|赫兹|分贝|字节|豪秒|像素|采样|自由度'
+    )
+    value = re.sub(
+        rf'(?<!第)([{chars}]+)\s*({count_units})',
+        lambda match: f'{chinese_integer(match.group(1))} {match.group(2)}',
+        value,
+    )
+    value = re.sub(r'(\d+/\d+)(?=[一-鿿])', r'\1 ', value)
+    value = re.sub(r'([一-鿿])([-+]?\d)', r'\1 \2', value)
+    value = re.sub(r'(\d)([一-鿿])', r'\1 \2', value)
+    value = re.sub(
+        r'([-+]?\d+(?:\.\d+)?)(?=(?:mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|MACs?|tokens?|FPS|bit)\b)',
+        r'\1 ',
+        value,
+        flags=re.I,
+    )
+    for index, original in enumerate(protected_percentages):
+        value = value.replace(f'__PD_PERCENT_{index}__', original)
+    return value
+
+
 def generate_index_page(scored, unscored, date_str, paper_slugs, category='论文速递'):
     """生成每日汇总页面（index.md），包含概览和每篇论文的链接"""
     total = len(scored) + len(unscored)
@@ -1970,7 +2037,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
 
         md += "---\n\n"
 
-    return md
+    return normalize_digest_index_reader_surface(md)
 
 
 import urllib.request
