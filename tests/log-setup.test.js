@@ -194,10 +194,11 @@ describe('log setup', () => {
         }
     });
 
-    it('API 测试脚本复用 requestJson、禁用 agent 且不输出 Key 片段', () => {
+    it('API 测试脚本复用供应商隔离请求封装且不输出 Key 片段', () => {
         const source = fs.readFileSync(path.join(ROOT, 'scripts', 'test-api-key.js'), 'utf8');
-        assert.match(source, /requestJson\(apiUrl, body, headers/);
-        assert.match(source, /agent:\s*false/);
+        assert.match(source, /requestLlmJson\(/);
+        assert.match(source, /apiUrl,\s*endpoint,\s*model,\s*body,\s*headers/s);
+        assert.doesNotMatch(source, /requestJson\(/);
         assert.match(source, /\[已配置，内容不输出\]/);
         assert.doesNotMatch(source, /key\.slice|Object\.entries\(headers\)/);
     });

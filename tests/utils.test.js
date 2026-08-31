@@ -22,6 +22,7 @@ const {
     getClaudeCodeVersion,
     parseResponseText,
     normalizedId,
+    requiresLlmProxy,
     extractDatePrefix,
     getRecordDate,
     backupPapersJson,
@@ -534,6 +535,22 @@ describe('detectApiType', () => {
         assert.strictEqual(detectApiType(endpoint, 'deepseek-v4-flash'), 'openai');
         assert.strictEqual(detectApiType(endpoint, 'mimo-v2.5'), 'openai');
     });
+
+    it('OpenCode Go Muse Spark Contributor 走 OpenAI Responses API', () => {
+        const endpoint = 'https://opencode.ai/zen/go/v1';
+        assert.strictEqual(
+            detectApiType(endpoint, 'muse-spark-1.2-contributor'),
+            'openai_responses'
+        );
+        assert.strictEqual(
+            detectApiType(`${endpoint}/responses`, 'future-model'),
+            'openai_responses'
+        );
+        assert.strictEqual(
+            detectApiType(`${endpoint}/responses/`, 'future-model'),
+            'openai_responses'
+        );
+    });
 });
 
 describe('buildApiUrl', () => {
@@ -570,6 +587,18 @@ describe('buildApiUrl', () => {
     it('OpenCode Go 基础端点 -> 官方 chat completions URL', () => {
         const url = buildApiUrl('openai', 'https://opencode.ai/zen/go/v1');
         assert.strictEqual(url, 'https://opencode.ai/zen/go/v1/chat/completions');
+    });
+
+    it('OpenCode Go Muse 基础端点 -> 官方 responses URL', () => {
+        const base = 'https://opencode.ai/zen/go/v1';
+        assert.strictEqual(
+            buildApiUrl('openai_responses', base),
+            'https://opencode.ai/zen/go/v1/responses'
+        );
+        assert.strictEqual(
+            buildApiUrl('openai_responses', `${base}/responses`),
+            'https://opencode.ai/zen/go/v1/responses'
+        );
     });
 
     it('拒绝公网明文 HTTP LLM endpoint', () => {
@@ -645,6 +674,24 @@ describe('buildRequestBody', () => {
             }
         });
     });
+
+    it('OpenAI Responses 使用 input/max_output_tokens 并转换内容块', () => {
+        const body = buildRequestBody('openai_responses', 'muse-spark-1.2-contributor', [
+            { role: 'system', content: 'sys' },
+            {
+                role: 'user',
+                content: [
+                    { type: 'text', text: 'hello' },
+                    { type: 'image_url', image_url: { url: 'data:image/png;base64,abc', detail: 'low' } }
+                ]
+            }
+        ], 1200, 0.2);
+        assert.strictEqual(body.model, 'muse-spark-1.2-contributor');
+        assert.strictEqual(body.max_output_tokens, 1200);
+        assert.strictEqual(body.input[0].content[0].type, 'input_text');
+        assert.strictEqual(body.input[1].content[1].type, 'input_image');
+        assert.strictEqual(body.input[1].content[1].image_url, 'data:image/png;base64,abc');
+    });
 });
 
 describe('buildHeaders', () => {
@@ -683,6 +730,26 @@ describe('parseResponseText', () => {
         assert.strictEqual(text, 'hello');
     });
 
+    it('OpenAI Responses 顶层 output_text 格式', () => {
+        assert.strictEqual(
+            parseResponseText('openai_responses', { output_text: 'hello' }),
+            'hello'
+        );
+    });
+
+    it('OpenAI Responses output message blocks 会合并', () => {
+        const text = parseResponseText('openai_responses', {
+            output: [{
+                type: 'message',
+                content: [
+                    { type: 'output_text', text: 'hello' },
+                    { type: 'output_text', text: 'world' }
+                ]
+            }]
+        });
+        assert.strictEqual(text, 'hello\nworld');
+    });
+
     it('Anthropic text 格式', () => {
         const text = parseResponseText('anthropic', {
             content: [{ type: 'text', text: 'hello' }]
@@ -702,6 +769,33 @@ describe('parseResponseText', () => {
 
     it('无效响应返回 null', () => {
         assert.strictEqual(parseResponseText('openai', {}), null);
+    });
+});
+
+describe('LLM proxy policy', () => {
+    it('OpenCode Go Muse Spark Contributor 必须走代理', () => {
+        assert.strictEqual(
+            requiresLlmProxy(
+                'https://opencode.ai/zen/go/v1',
+                'muse-spark-1.2-contributor'
+            ),
+            true
+        );
+        assert.strictEqual(
+            requiresLlmProxy(
+                'https://loopback.invalid/v1',
+                'muse-spark-1.2-contributor'
+            ),
+            true
+        );
+        assert.strictEqual(
+            requiresLlmProxy('https://opencode.ai/zen/go/v1', 'deepseek-v4-flash'),
+            false
+        );
+        assert.strictEqual(
+            requiresLlmProxy('https://api.kimi.com/coding/v1', 'kimi-for-coding'),
+            false
+        );
     });
 });
 
@@ -992,6 +1086,7 @@ describe('loadPrompt', () => {
             'prompts/method-fill.md',
             'prompts/table-fill.md',
             'prompts/scoring-audit.md',
+            'prompts/api-reader-article.md',
             'prompts/structure-repair.md',
             'prompts/en/filter.md',
             'prompts/en/deep-analysis.md',
@@ -1041,6 +1136,7 @@ describe('loadPrompt', () => {
             'prompts/method-fill.md',
             'prompts/table-fill.md',
             'prompts/scoring-audit.md',
+            'prompts/api-reader-article.md',
             'prompts/structure-repair.md'
         ];
         for (const file of promptFiles) {
@@ -1052,12 +1148,14 @@ describe('loadPrompt', () => {
 });
 
 describe('LLM request invariants', () => {
-    it('筛选和深度分析请求显式禁用 agent', () => {
+    it('筛选和深度分析统一走按供应商隔离代理策略的请求封装', () => {
         const root = path.join(__dirname, '..');
         const fetchPapers = fs.readFileSync(path.join(root, 'scripts', 'fetch-papers.js'), 'utf8');
         const deepAnalyzer = fs.readFileSync(path.join(root, 'scripts', 'deep-analyzer.js'), 'utf8');
-        assert.match(fetchPapers, /agent:\s*false/);
-        assert.match(deepAnalyzer, /agent:\s*false/);
+        assert.match(fetchPapers, /requestLlmJson\(/);
+        assert.match(deepAnalyzer, /requestLlmJson\(/);
+        assert.doesNotMatch(fetchPapers, /requestJson\([^)]*agent:\s*false/s);
+        assert.doesNotMatch(deepAnalyzer, /requestJson\([^)]*agent:\s*false/s);
     });
 });
 

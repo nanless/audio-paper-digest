@@ -30,7 +30,7 @@ const {
     buildRequestBody,
     buildHeaders,
     parseResponseText,
-    requestJson,
+    requestLlmJson,
     detectProxyUrl,
     detectHttpConnectProxyUrl,
     createProxyAgent,
@@ -243,7 +243,10 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
 
     const proxyUrl = detectProxyUrl();
     if (proxyUrl) {
-        console.log(`[filter] 检测到代理: ${redactProxyUrl(proxyUrl)}，将绕过代理直连`);
+        const route = FILTER_CONFIG.model.toLowerCase() === 'muse-spark-1.2-contributor'
+            ? 'Muse Spark Contributor 将强制经此代理请求'
+            : '当前 LLM 将绕过代理直连';
+        console.log(`[filter] 检测到代理: ${redactProxyUrl(proxyUrl)}，${route}`);
     }
 
     let lastError = null;
@@ -251,10 +254,14 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
         const requestHeaders = buildHeaders(apiType, FILTER_CONFIG.key, JSON.stringify(bodyObj));
 
         try {
-            const response = await requestJson(apiUrl, bodyObj, requestHeaders, {
-                timeoutMs: FILTER_CFG.timeoutMs,
-                agent: false
-            });
+            const response = await requestLlmJson(
+                apiUrl,
+                FILTER_CONFIG.endpoint,
+                FILTER_CONFIG.model,
+                bodyObj,
+                requestHeaders,
+                { timeoutMs: FILTER_CFG.timeoutMs }
+            );
             if (response.statusCode < 200 || response.statusCode >= 300) {
                 const apiError = response.body?.error;
                 const message = apiError?.message || apiError || response.raw.substring(0, 200);

@@ -95,7 +95,7 @@ arXiv 抓取与 LLM 筛选模块。
   - `fetchCategoryFromSearchPage()`：从 arXiv 搜索页面抓取，支持分页 + 5 次重试
   - `fetchCategoryPapers()`：自动三级降级，每步获取足够即跳过后续
   - `fetchAbstracts()`：从 arXiv abs 页面批量抓取摘要（并发 5）
-- 筛选阶段统一使用 `PAPER_ANALYZER_*` 环境变量；LLM 请求强制 `agent: false` 直连，HTTP CONNECT 代理仅用于抓取侧请求
+- 筛选阶段统一使用 `PAPER_ANALYZER_*` 环境变量；LLM 默认 `agent:false` 直连，`muse-spark-1.2-contributor` 强制走项目 HTTP CONNECT 代理；抓取请求始终走代理
 - LLM 前默认启用高召回关键词预筛：明确命中音频任务/模态/方法词族、命中核心音频 arXiv 类别或摘要不足 80 字符时进入 LLM；只有摘要完整且未命中的补充类别论文才形成 `keyword_prefilter` 确定性否定决定。按日期重筛逐批保存 `refilter-filter-decisions.json`，续跑只重试未决论文；重筛收尾时 `deep-analysis-result.json` 会按本轮明确入选 ID 收敛，保留入选失败项的恢复 checkpoint，并移除本轮已明确落选的旧结果
 - `npm run keyword:recall` 同时运行人工正负金标门禁与历史回放。历史 LLM 入选中的已知误筛必须在 `tests/fixtures/keyword-prefilter-gold.json` 留下 ID 和理由；退出码只接受金标零漏召回、零误放且裁决后历史有效正样本零漏召回
 - XML 解析为 regex 实现（arXiv API 格式稳定）
@@ -253,9 +253,16 @@ HuggingFace Papers 抓取模块。
 
 **Round 7 — 类型感知评分审计（`auditTypeAwareScoring`）**
 - 加载 `prompts/scoring-audit.md`，由主模型只输出 JSON
-- 使用默认 40K 的评分相关证据账本重新审计文档类型、置信度和八维评分；跨维度理由失败时把精确错误反馈给下一次局部审计
+- 使用默认 40K 的评分相关证据账本重新审计文档类型、置信度和八维评分；`evidenceProfile` 必须引用账本内 ID，跨维度理由失败时把精确错误反馈给下一次局部审计
+- 代码按消融完整度、目标评测范围、样本规模披露与部署测量应用可解释上限；上限和原分值写入评分 manifest
 - 非理论论文无核心产物时按肯定语境承诺开放 0.5、带 URL/肯定结构化状态的 Demo 0.2、否定或未提及 0 确定性归一化；理论研究保留基于公开证明材料的文类判断
 - 代码只更新评分章节、机器摘要评分字段和评分理由，正文保持不变
+
+**Round 7.5 — 初学研究者读者文章（`generateApiReaderArticleDetailed`）**
+- 加载 `prompts/api-reader-article.md`，用已校验 canonical 与带 ID 证据生成独立 JSON 编辑计划和连续长文
+- 文章按背景、相关路线、方法、实验、结果、局限和收束的学习依赖递进，使用论文特有动态标题；术语首次出现必须先解释直觉
+- 代码要求 6–12 个小节、1800–10000 个中文字符，并执行去模板、段落、数字写法、重复句与流程元话语门禁
+- `apiReaderArticle`、`apiReaderPlan`、阶段状态和 SHA 必须闭环；博客只在闭环成立时将它作为读者正文，旧 canonical 继续用于机器解析
 
 **Round 8 — 图像筛选与插图计划（`applyImageSupplement`，双模型模式）**
 - 加载 `prompts/image-supplement.md`
@@ -292,7 +299,7 @@ HuggingFace Papers 抓取模块。
 **API 调用**：
 - `callModel(messages, maxTokens)`：带重试的 API 调用封装（内层每个 LLM API 阶段默认最多尝试 3 次，可用 `PD_ANALYSIS_API_MAX_RETRIES` 调整；第一次失败后等待 10 秒，之后指数翻倍）
 - `_callModelOnce()`：单次 API 调用共享 20 分钟活跃时间预算；每秒心跳检测系统睡眠/长时间挂起并排除墙钟跳变，唤醒后的请求错误仍可在剩余预算内重试
-- LLM API 请求强制设置 `agent: false`，禁用连接复用以绕过代理污染（避免 MiMo 403）
+- LLM API 请求统一走 `requestLlmJson()`：MiMo/Kimi 等默认使用 `agent:false`，`muse-spark-1.2-contributor` 使用每请求独立的 HTTP CONNECT agent
 
 **其他特性**：
 - 只检测项目根 `.env` 中显式配置的代理变量；不继承 shell/IDE 代理，也不读取 macOS `scutil`
@@ -319,13 +326,14 @@ Node.js 公共工具模块。被几乎所有脚本引用：
 - `parseAnalysis(analysis)`：解析完整分析文本为结构化对象（评分、标签、各章节等）
 
 **API 协议自动路由**（核心基础设施）：
-- `detectApiType(endpoint, model)`：根据端点和模型自动判断 OpenAI / Anthropic 协议
+- `detectApiType(endpoint, model)`：根据端点和模型自动判断 OpenAI Chat / OpenAI Responses / Anthropic 协议
 - `getAnthropicEndpoint(endpoint)`：将 OpenAI 风格端点转为 Anthropic 风格路径
 - `buildApiUrl(apiType, endpoint)`：构建完整请求 URL
 - `buildRequestBody(apiType, model, messages, maxTokens)`：构建请求体
 - `buildHeaders(apiType, key)`：构建请求头
 - `getClaudeCodeVersion()`：获取本地 Claude Code CLI 版本号
 - `parseResponseText(apiType, data)`：统一解析响应文本
+- `requestLlmJson(...)`：统一执行供应商隔离的传输策略；默认 one-shot 直连，Muse Spark Contributor 强制项目 HTTP CONNECT 代理
 
 **代理**：
 - `detectProxyUrl()`：只读取已经由项目环境加载器隔离过的代理变量
@@ -454,7 +462,7 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 
 Markdown 表格允许前导分组列为空；代码层不得把这类合法阶段续行当作子标题删除。LLM 提出的“普通模型名/技术术语必须加反引号”属于样式伪问题，会被过滤。
 
-LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，必须带 `fix_instruction` 并按其执行简单文本替换；`auto_fixable: false` 的阻断问题允许省略修复指令。博客 review 与小红书 one-liner 共用 `publish_common.py` 中的 `call_publish_llm_api()`，协议路由与 Node 端保持一致；客户端使用标准库的显式空代理处理器强制 LLM 直连，避免受 `requests` 版本兼容性和抓取代理污染影响；Anthropic 兼容请求会动态读取本地 `claude --version` 生成 `User-Agent`，失败时回退默认版本。
+LLM 层修复：LLM 审查返回 `auto_fixable: true` 的问题，必须带 `fix_instruction` 并按其执行简单文本替换；`auto_fixable: false` 的阻断问题允许省略修复指令。发布侧共用 `publish_common.py` 中的 `call_publish_llm_api()`，协议路由与 Node 端保持一致；客户端默认用显式空代理处理器直连，精确模型 `muse-spark-1.2-contributor` 则强制使用项目 HTTP CONNECT 代理；Anthropic 兼容请求会动态读取本地 `claude --version` 生成 `User-Agent`，失败时回退默认版本。
 
 #### `scripts/digest-run-report.js`
 
@@ -489,7 +497,7 @@ Python 发布公共模块。统一封装数据加载、评分排序、标签提�
 - `score_emoji(score)` / `format_medal(index)`：评分 emoji 和奖牌格式化
 - `build_paper_meta(pa, aurl)`：拼接评分/分档/标签元信息
 - `parse_cli_args(argv, defaults)`：通用命令行参数解析，被各发布脚本复用
-- `call_publish_llm_api()`：发布阶段公共 LLM API client，自动处理 OpenAI / Anthropic / MiMo / Kimi / DeepSeek 路由；正式发布可用 `required=True` 强制失败即阻断
+- `call_publish_llm_api()`：发布阶段公共 LLM API client，自动处理 OpenAI Chat / OpenAI Responses / Anthropic / MiMo / Kimi / DeepSeek 路由，并对 Muse 强制项目代理；正式发布可用 `required=True` 强制失败即阻断
 
 #### `scripts/path_config.py`
 

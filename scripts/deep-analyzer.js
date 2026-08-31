@@ -14,7 +14,7 @@ const {
     buildRequestBody,
     buildHeaders,
     parseResponseText,
-    requestJson,
+    requestLlmJson,
     loadPrompt,
     normalizeDocumentType,
     normalizeScoreToOneDecimal,
@@ -54,6 +54,7 @@ const net = require('net');
 const https = require('https');
 const { PDFParse } = require('pdf-parse');
 const { ANALYSIS_CONFIG, ARXIV_CONFIG, SECONDARY_MODEL_CONFIG, CURRENT_DIR } = require('./config.js');
+const { validateEditorialQuality } = require('./editorial-quality.js');
 
 // 解构配置常量（便于阅读）
 const {
@@ -321,7 +322,17 @@ function buildTypeAwareSourceContext(
 }
 
 const AUDIT_TOP_LEVEL_KEYS = Object.freeze(['documentType', 'confidence', 'dimensions']);
+const AUDIT_TOP_LEVEL_KEYS_V2 = Object.freeze([
+    'documentType', 'confidence', 'evidenceProfile', 'dimensions'
+]);
 const AUDIT_ITEM_KEYS = Object.freeze(['score', 'reason']);
+const SCORING_EVIDENCE_PROFILE_KEYS = Object.freeze([
+    'version', 'multiComponentClaimed', 'ablationStatus', 'targetEvaluation',
+    'sampleScaleReported', 'deploymentMeasured', 'publicGeneralizationEvaluated',
+    'engineeringEvidence', 'evidenceBoundary', 'evidenceIds'
+]);
+const SCORING_AUDIT_CONTRACT = 'api-scoring-audit-v2';
+const SCORING_CAP_RULES_VERSION = 'evidence-caps-v2';
 const OPEN_SOURCE_DEFICIT = /(?:不开源|闭源|未开源|没有开源|代码未提供|权重未提供|数据集未提供|缺少(?:代码|权重|数据集|核心产物)|(?:代码|权重|数据集|核心产物)(?:未|没有|尚未)公开)/;
 const REPRODUCIBILITY_DEFICIT = /(?:无法复现|不可复现|缺少|未提供|未披露|没有|不足|不完整|不清楚)[^.。；;]{0,18}(?:超参数|训练配置|硬件配置|复现步骤|实现细节)|(?:超参数|训练配置|硬件配置|复现步骤|实现细节)[^.。；;]{0,18}(?:缺失|不足|不完整|未提供|未披露|不清楚)/;
 
@@ -381,7 +392,12 @@ function parseScoringAuditResult(raw, allowedEvidenceIds = null) {
         throw new Error(`评分审计 JSON 无法解析: ${error.message}`);
     }
 
-    assertExactObjectKeys(parsed, AUDIT_TOP_LEVEL_KEYS, '评分审计顶层');
+    const hasEvidenceProfile = Object.prototype.hasOwnProperty.call(parsed, 'evidenceProfile');
+    assertExactObjectKeys(
+        parsed,
+        hasEvidenceProfile ? AUDIT_TOP_LEVEL_KEYS_V2 : AUDIT_TOP_LEVEL_KEYS,
+        '评分审计顶层'
+    );
     if (typeof parsed.documentType !== 'string' || !parsed.documentType.trim()) {
         throw new Error('评分审计 documentType 必须是非空字符串');
     }
@@ -393,6 +409,70 @@ function parseScoringAuditResult(raw, allowedEvidenceIds = null) {
     }
     const confidence = parsed.confidence.trim();
     if (!['高', '中', '低'].includes(confidence)) throw new Error('评分审计 confidence 非法');
+    let evidenceProfile = null;
+    if (hasEvidenceProfile) {
+        evidenceProfile = parsed.evidenceProfile;
+        assertExactObjectKeys(
+            evidenceProfile, SCORING_EVIDENCE_PROFILE_KEYS, '评分证据画像'
+        );
+        if (evidenceProfile.version !== 1) throw new Error('评分证据画像 version 必须为 1');
+        for (const key of [
+            'multiComponentClaimed', 'sampleScaleReported', 'deploymentMeasured',
+            'publicGeneralizationEvaluated'
+        ]) {
+            if (typeof evidenceProfile[key] !== 'boolean') {
+                throw new Error(`评分证据画像 ${key} 必须是布尔值`);
+            }
+        }
+        if (!['direct', 'partial', 'none', 'not_applicable'].includes(evidenceProfile.ablationStatus)) {
+            throw new Error('评分证据画像 ablationStatus 非法');
+        }
+        if (!['public', 'internal', 'mixed', 'not_applicable'].includes(evidenceProfile.targetEvaluation)) {
+            throw new Error('评分证据画像 targetEvaluation 非法');
+        }
+        if (!['measured_deployment', 'reusable_pipeline', 'public_artifact_or_benchmark', 'claim_only', 'not_applicable']
+            .includes(evidenceProfile.engineeringEvidence)) {
+            throw new Error('评分证据画像 engineeringEvidence 非法');
+        }
+        if (evidenceProfile.deploymentMeasured
+            !== (evidenceProfile.engineeringEvidence === 'measured_deployment')) {
+            throw new Error('评分证据画像 deploymentMeasured 与 engineeringEvidence 不一致');
+        }
+        if (evidenceProfile.multiComponentClaimed
+            && evidenceProfile.ablationStatus === 'not_applicable') {
+            throw new Error('存在多组件因果主张时 ablationStatus 不得为 not_applicable');
+        }
+        if (!evidenceProfile.multiComponentClaimed
+            && evidenceProfile.ablationStatus !== 'not_applicable') {
+            throw new Error('不存在多组件因果主张时 ablationStatus 必须为 not_applicable');
+        }
+        if (evidenceProfile.targetEvaluation === 'not_applicable'
+            && !['理论研究', '综述'].includes(documentType)) {
+            throw new Error('经验型文档的 targetEvaluation 不得为 not_applicable');
+        }
+        if (typeof evidenceProfile.evidenceBoundary !== 'string'
+            || evidenceProfile.evidenceBoundary.trim().length < 20) {
+            throw new Error('评分证据画像 evidenceBoundary 至少 20 个字符');
+        }
+        if (!Array.isArray(evidenceProfile.evidenceIds)
+            || evidenceProfile.evidenceIds.length < 1
+            || evidenceProfile.evidenceIds.length > 12
+            || new Set(evidenceProfile.evidenceIds).size !== evidenceProfile.evidenceIds.length) {
+            throw new Error('评分证据画像 evidenceIds 必须是 1-12 个不重复 ID');
+        }
+        if (allowedEvidenceIds instanceof Set) {
+            const unknown = evidenceProfile.evidenceIds.filter(id => !allowedEvidenceIds.has(id));
+            if (unknown.length > 0) {
+                throw new Error(`评分证据画像引用了账本外 ID: ${unknown.join(', ')}`);
+            }
+        }
+        const boundaryIds = [...evidenceProfile.evidenceBoundary
+            .matchAll(/\[([A-Z][A-Z0-9_/-]*)\]/g)].map(match => match[1]);
+        if (boundaryIds.length === 0
+            || !boundaryIds.some(id => evidenceProfile.evidenceIds.includes(id))) {
+            throw new Error('评分证据画像 evidenceBoundary 必须引用 evidenceIds 中的账本 ID');
+        }
+    }
     assertExactObjectKeys(parsed.dimensions, SCORING_DIMENSIONS.map(spec => spec.key), '评分审计 dimensions');
 
     const dimensions = {};
@@ -439,7 +519,10 @@ function parseScoringAuditResult(raw, allowedEvidenceIds = null) {
         dimensions[spec.key] = { score, reason };
     }
 
-    return recalculateScoringAudit({ documentType, confidence, dimensions });
+    return recalculateScoringAudit({
+        documentType, confidence, dimensions,
+        ...(evidenceProfile ? { evidenceProfile } : {})
+    });
 }
 
 function recalculateScoringAudit(audit) {
@@ -450,6 +533,41 @@ function recalculateScoringAudit(audit) {
     const total = normalizeScoreToOneDecimal(Math.min(10, subtotal));
     const rankBucket = total >= 9 ? '前10%' : total >= 7.5 ? '前25%' : total >= 5.5 ? '前50%' : '后50%';
     return { ...audit, total, rankBucket };
+}
+
+function applyScoringEvidenceCaps(audit) {
+    const profile = audit?.evidenceProfile;
+    if (!profile) return audit;
+    const updated = structuredClone(audit);
+    const capsApplied = [];
+    const cap = (dimension, maximum, rule) => {
+        const item = updated.dimensions[dimension];
+        if (!item || item.score <= maximum) return;
+        capsApplied.push({ rule, dimension, before: item.score, after: maximum });
+        item.score = maximum;
+        item.reason = `${item.reason} 代码根据证据画像应用「${rule}」上限。`;
+    };
+    if (profile.multiComponentClaimed && profile.ablationStatus === 'none') {
+        cap('experimentalSufficiency', 1.2, 'multi_component_without_direct_ablation');
+    }
+    if (profile.multiComponentClaimed && profile.ablationStatus === 'partial') {
+        cap('experimentalSufficiency', 1.3, 'multi_component_with_partial_ablation');
+    }
+    if (profile.targetEvaluation === 'internal' && !profile.sampleScaleReported) {
+        cap('experimentalSufficiency', 1.2, 'internal_evaluation_without_sample_scale');
+    }
+    if (profile.engineeringEvidence === 'claim_only') {
+        cap('engineering', 1.0, 'engineering_claim_without_measured_or_reusable_evidence');
+    }
+    const recalculated = recalculateScoringAudit(updated);
+    if (recalculated.confidence !== '高' && recalculated.total > 9.0) {
+        throw new Error('评分置信度不是“高”时总分不得超过 9.0');
+    }
+    if (profile.multiComponentClaimed && profile.ablationStatus === 'none'
+        && profile.targetEvaluation === 'internal' && recalculated.total > 8.5) {
+        throw new Error('多组件主张缺少直接消融且主要依赖内部评测时，总分不得超过 8.5');
+    }
+    return { ...recalculated, capsApplied };
 }
 
 function setMachineSummaryField(analysis, key, value) {
@@ -483,7 +601,7 @@ function validateScoringAuditAgainstAnalysis(analysis, audit) {
     const current = parseAnalysis(analysis) || {};
     // 理论论文的核心公开产物可以就是论文中完整披露的证明、推导与附录，
     // 不能仅凭没有代码/模型/数据链接就覆盖主模型已经按文类作出的判断。
-    if (audit.documentType === '理论研究') return audit;
+    if (audit.documentType === '理论研究') return applyScoringEvidenceCaps(audit);
     const hasReleasedArtifact = [current.hasCode, current.hasModel, current.hasDataset]
         .some(value => value === '是' || value === 'yes');
     if (!hasReleasedArtifact) {
@@ -506,15 +624,16 @@ function validateScoringAuditAgainstAnalysis(analysis, audit) {
                 openSource: { score: normalizedScore, reason: normalizedReason }
             }
         };
-        return recalculateScoringAudit(normalizedAudit);
+        return applyScoringEvidenceCaps(recalculateScoringAudit(normalizedAudit));
     }
-    return audit;
+    return applyScoringEvidenceCaps(audit);
 }
 
 function revalidateScoringAudit(audit, allowedEvidenceIds) {
     return parseScoringAuditResult(JSON.stringify({
         documentType: audit.documentType,
         confidence: audit.confidence,
+        ...(audit.evidenceProfile ? { evidenceProfile: audit.evidenceProfile } : {}),
         dimensions: audit.dimensions
     }), allowedEvidenceIds);
 }
@@ -568,11 +687,20 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', opti
             { temperature: SCORING_AUDIT_TEMPERATURE }
         );
         try {
+            const parsedAudit = parseScoringAuditResult(raw, allowedEvidenceIds);
+            if (!parsedAudit.evidenceProfile) {
+                throw new Error('新评分审计必须提供 evidenceProfile，禁止回退旧评分 JSON');
+            }
             const normalizedAudit = validateScoringAuditAgainstAnalysis(
                 analysis,
-                parseScoringAuditResult(raw, allowedEvidenceIds)
+                parsedAudit
             );
-            const audit = revalidateScoringAudit(normalizedAudit, allowedEvidenceIds);
+            const audit = {
+                ...revalidateScoringAudit(normalizedAudit, allowedEvidenceIds),
+                ...(Array.isArray(normalizedAudit.capsApplied)
+                    ? { capsApplied: normalizedAudit.capsApplied }
+                    : {})
+            };
             return {
                 analysis: applyScoringAuditResult(analysis, audit),
                 audit,
@@ -598,6 +726,122 @@ async function auditTypeAwareScoring(analysis, sourceEvidence = '', options = {}
     return (await auditTypeAwareScoringDetailed(analysis, sourceEvidence, options)).analysis;
 }
 
+const API_READER_ARTICLE_CONTRACT = 'beginner-researcher-v1';
+const API_READER_KINDS = Object.freeze([
+    'background', 'related_work', 'problem', 'method_overview', 'component', 'training',
+    'experiment_setup', 'result', 'ablation', 'limitation', 'reproduction', 'synthesis'
+]);
+const API_READER_REQUIRED_KINDS = Object.freeze([
+    'background', 'related_work', 'method_overview', 'experiment_setup',
+    'result', 'limitation', 'synthesis'
+]);
+
+function parseApiReaderArticleResult(raw) {
+    let value;
+    try {
+        value = JSON.parse(extractJsonObjectText(raw));
+    } catch (error) {
+        throw new Error(`读者文章 JSON 无法解析: ${error.message}`);
+    }
+    assertExactObjectKeys(
+        value, ['version', 'readerTitle', 'oneSentenceThesis', 'sections'], '读者文章顶层'
+    );
+    if (value.version !== 1) throw new Error('读者文章 version 必须为 1');
+    if (typeof value.readerTitle !== 'string' || value.readerTitle.trim().length < 8
+        || value.readerTitle.trim().length > 80) {
+        throw new Error('读者标题必须是 8-80 字符的论文特有标题');
+    }
+    if (typeof value.oneSentenceThesis !== 'string'
+        || value.oneSentenceThesis.trim().length < 30
+        || value.oneSentenceThesis.trim().length > 260) {
+        throw new Error('读者文章 oneSentenceThesis 必须为 30-260 字符');
+    }
+    if (!Array.isArray(value.sections) || value.sections.length < 6 || value.sections.length > 12) {
+        throw new Error('读者文章 sections 必须包含 6-12 个小节');
+    }
+    const seenHeadings = new Set();
+    let previousRank = -1;
+    for (const [index, section] of value.sections.entries()) {
+        assertExactObjectKeys(section, ['kind', 'heading', 'body'], `读者文章 sections[${index}]`);
+        const rank = API_READER_KINDS.indexOf(section.kind);
+        if (rank < 0) throw new Error(`读者文章 sections[${index}].kind 非法`);
+        if (rank < previousRank) throw new Error('读者文章小节未按学习依赖顺序递进');
+        previousRank = rank;
+        const heading = String(section.heading || '').trim();
+        if (heading.length < 8 || heading.length > 80
+            || /^(?:任务背景|背景与动机|问题定义|相关工作|方法(?:概述|全景|介绍)|核心创新(?:点)?|实验(?:设置|结果|分析)|结果分析|细节详述|局限(?:分析|与问题)?|复现(?:指南|说明)|总结(?:与展望)?|结论)$/.test(heading)) {
+            throw new Error(`读者文章 sections[${index}].heading 必须是论文特有问题或判断`);
+        }
+        if (seenHeadings.has(heading)) throw new Error('读者文章小节标题重复');
+        seenHeadings.add(heading);
+        if (typeof section.body !== 'string' || section.body.trim().length < 120) {
+            throw new Error(`读者文章 sections[${index}].body 至少 120 字符`);
+        }
+    }
+    const kinds = new Set(value.sections.map(section => section.kind));
+    const missing = API_READER_REQUIRED_KINDS.filter(kind => !kinds.has(kind));
+    if (missing.length > 0) throw new Error(`读者文章缺少教学阶段: ${missing.join(', ')}`);
+    const article = value.sections.map(section => (
+        `### ${section.heading.trim()}\n\n${section.body.trim()}`
+    )).join('\n\n');
+    const chineseChars = (article.match(/[\u3400-\u9fff]/g) || []).length;
+    if (chineseChars < 1800 || chineseChars > 10000) {
+        throw new Error(`读者文章中文字数必须为 1800-10000，当前 ${chineseChars}`);
+    }
+    if (/(?:prompt|evidence\s*id|manual_complete|证据块|代码校验反馈)/i.test(article)) {
+        throw new Error('读者文章泄漏了流程或证据元话语');
+    }
+    const quality = validateEditorialQuality({
+        summary: '', method: article, innovations: '', results: '', details: '', limits: ''
+    });
+    if (!quality.valid) {
+        const details = quality.issues.slice(0, 8)
+            .map(item => `${item.code}:${item.match || item.message}`).join('；');
+        throw new Error(`读者文章文风校验失败: ${details}`);
+    }
+    return {
+        plan: {
+            version: 1,
+            contract: API_READER_ARTICLE_CONTRACT,
+            readerTitle: value.readerTitle.trim(),
+            oneSentenceThesis: value.oneSentenceThesis.trim(),
+            sections: value.sections.map(section => ({
+                kind: section.kind,
+                heading: section.heading.trim()
+            }))
+        },
+        article,
+        qualityMetrics: quality.metrics
+    };
+}
+
+async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence, options = {}) {
+    let validationFeedback = '这是第一次生成，没有上一次校验错误。';
+    let lastError = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        const prompt = loadPrompt('prompts/api-reader-article.md', {
+            title: paper.title || '',
+            arxivId: getPaperArxivId(paper),
+            existingAnalysis: analysis,
+            sourceEvidence,
+            validationFeedback
+        });
+        const raw = await callModel(
+            [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+            REPAIR_MAX_TOKENS,
+            { temperature: 0.6 }
+        );
+        try {
+            return { ...parseApiReaderArticleResult(raw), attempts: attempt };
+        } catch (error) {
+            lastError = error;
+            validationFeedback = `上一次输出被代码拒绝：${error.message}。请保留论文事实，完整重写 JSON。`;
+            console.log(`    [deep] ⚠️  读者文章校验失败 (${attempt}/2): ${error.message}`);
+        }
+    }
+    throw lastError || new Error('读者文章生成失败');
+}
+
 function getPaperArxivId(paper) {
     return paper?.arxivId || paper?.paper_id || paper?.id || '';
 }
@@ -609,7 +853,7 @@ const RECOVERY_STAGE_STATUSES = new Set([
 ]);
 const RECOVERY_STAGE_ORDER = Object.freeze([
     'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision', 'tableRepair',
-    'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
+    'methodRepair', 'structureRepair', 'scoringAudit', 'apiReaderArticle', 'imageSupplement'
 ]);
 
 const RECOVERY_PROMPT_FILES = Object.freeze({
@@ -620,6 +864,7 @@ const RECOVERY_PROMPT_FILES = Object.freeze({
     methodRepair: 'prompts/method-fill.md',
     structureRepair: 'prompts/structure-repair.md',
     scoringAudit: 'prompts/scoring-audit.md',
+    apiReaderArticle: 'prompts/api-reader-article.md',
     imageSupplement: 'prompts/image-supplement.md'
 });
 
@@ -786,6 +1031,13 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
     return {
         primaryAnalysis: stableFingerprint(primaryContext),
         demoLinkScan: stableFingerprint({ implementation: 'demo-link-scan-v1' }),
+        apiReaderArticle: stableFingerprint({
+            ...modelFingerprint(DEEP_CONFIG, 0.6, REPAIR_MAX_TOKENS),
+            contract: API_READER_ARTICLE_CONTRACT,
+            promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.apiReaderArticle),
+            evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
+            evidenceMaxChars: REVISION_EVIDENCE_MAX_CHARS
+        }),
         imageSupplement: stableFingerprint({
             ...modelFingerprint(SECONDARY_CONFIG, IMAGE_PLAN_TEMPERATURE, API_MAX_TOKENS),
             enabled: isDualModel,
@@ -922,6 +1174,16 @@ function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint) {
         delete manifest.contracts.editorialLeakage;
         if (Object.keys(manifest.contracts).length === 0) delete manifest.contracts;
     }
+    if (stagesToDelete.includes('apiReaderArticle')) {
+        delete paper.apiReaderArticle;
+        delete paper.apiReaderPlan;
+        delete paper.apiReaderArticleSha256;
+        delete paper.apiReaderPlanSha256;
+        if (manifest.contracts) {
+            delete manifest.contracts.apiReaderArticle;
+            if (Object.keys(manifest.contracts).length === 0) delete manifest.contracts;
+        }
+    }
     if (stagesToDelete.includes('imageSupplement') && manifest.contracts) {
         delete manifest.contracts.imageNarrative;
         if (Object.keys(manifest.contracts).length === 0) delete manifest.contracts;
@@ -961,6 +1223,20 @@ function createAnalysisRecoveryManifest(paper) {
         'imageSupplement',
         stages.imageSupplement?.status
     ) && existing?.contracts?.imageNarrative === IMAGE_NARRATIVE_CONTRACT_VERSION;
+    const keepApiReaderContract = isRecoveryStageComplete({ stages }, 'apiReaderArticle')
+        && existing?.contracts?.apiReaderArticle === API_READER_ARTICLE_CONTRACT;
+    if (isRecoveryStageComplete({ stages }, 'apiReaderArticle') && !keepApiReaderContract) {
+        for (const stage of RECOVERY_STAGE_ORDER.slice(
+            RECOVERY_STAGE_ORDER.indexOf('apiReaderArticle')
+        )) {
+            delete stages[stage];
+            if (paper?.analysisStageCheckpoints) delete paper.analysisStageCheckpoints[stage];
+        }
+        delete paper.apiReaderArticle;
+        delete paper.apiReaderPlan;
+        delete paper.apiReaderArticleSha256;
+        delete paper.apiReaderPlanSha256;
+    }
     const contracts = existing?.contracts && typeof existing.contracts === 'object'
         ? { ...existing.contracts }
         : {};
@@ -975,6 +1251,8 @@ function createAnalysisRecoveryManifest(paper) {
     }
     if (keepImageNarrativeContract) contracts.imageNarrative = IMAGE_NARRATIVE_CONTRACT_VERSION;
     else delete contracts.imageNarrative;
+    if (keepApiReaderContract) contracts.apiReaderArticle = API_READER_ARTICLE_CONTRACT;
+    else delete contracts.apiReaderArticle;
     return {
         version: RECOVERY_MANIFEST_VERSION,
         stages,
@@ -1221,10 +1499,14 @@ async function _callModelOnce(messages, maxTokens, config, budget, apiType, time
     };
 
     try {
-        const response = await requestJson(apiUrl, bodyObj, headers, {
-            timeoutMs,
-            agent: false
-        });
+        const response = await requestLlmJson(
+            apiUrl,
+            config.endpoint,
+            config.model,
+            bodyObj,
+            headers,
+            { timeoutMs }
+        );
         const duration = (budget.elapsedMs() / 1000).toFixed(1);
         if (response.statusCode < 200 || response.statusCode >= 300) {
             const apiError = response.body?.error;
@@ -4124,7 +4406,14 @@ async function analyzePaperDeep(paper) {
             || scoringStage.scoringInputSha256 !== scoringInputSha256
             || scoringStage.evidenceSelectionVersion !== EVIDENCE_SELECTION_VERSION
             || scoringStage.evidenceMaxChars !== SCORING_EVIDENCE_MAX_CHARS
-            || scoringStage.evidenceSha256 !== currentEvidenceSha256;
+            || scoringStage.evidenceSha256 !== currentEvidenceSha256
+            || scoringStage.scoringContract !== SCORING_AUDIT_CONTRACT
+            || scoringStage.capRulesVersion !== SCORING_CAP_RULES_VERSION
+            || !scoringStage.audit?.evidenceProfile
+            || scoringStage.auditSha256 !== stableFingerprint(scoringStage.audit)
+            || scoringStage.outputAnalysisSha256 !== crypto.createHash('sha256').update(
+                String(paper.analysisStageCheckpoints?.scoringAudit || '')
+            ).digest('hex');
         if (fingerprintChanged) {
             if (typeof paper.analysisStageCheckpoints?.structureRepair === 'string') {
                 paper.analysisCheckpoint = paper.analysisStageCheckpoints.structureRepair;
@@ -4133,12 +4422,18 @@ async function analyzePaperDeep(paper) {
                 analysis = scoringInputAnalysis;
             }
             delete analysisManifest.stages.scoringAudit;
+            delete analysisManifest.stages.apiReaderArticle;
             delete analysisManifest.stages.imageSupplement;
+            delete paper.apiReaderArticle;
+            delete paper.apiReaderPlan;
+            delete paper.apiReaderArticleSha256;
+            delete paper.apiReaderPlanSha256;
             if (paper.analysisStageCheckpoints) {
                 delete paper.analysisStageCheckpoints.scoringAudit;
+                delete paper.analysisStageCheckpoints.apiReaderArticle;
                 delete paper.analysisStageCheckpoints.imageSupplement;
             }
-            console.log(`    [deep] ⚠️  评分审计指纹变化，已失效评分与插图恢复状态`);
+            console.log(`    [deep] ⚠️  评分审计指纹变化，已失效评分、读者文章与插图恢复状态`);
         }
     }
     if (!isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
@@ -4181,17 +4476,108 @@ async function analyzePaperDeep(paper) {
                 evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
                 evidenceMaxChars: SCORING_EVIDENCE_MAX_CHARS,
                 evidenceSha256: scoringResult.evidenceSha256,
+                scoringContract: SCORING_AUDIT_CONTRACT,
+                capRulesVersion: SCORING_CAP_RULES_VERSION,
                 previousScore: Number.isFinite(scoreBeforeAudit) ? scoreBeforeAudit : null,
                 previousRunScore: scoringDelta.previousRunScore,
                 finalScore: Number.isFinite(finalScore) ? finalScore : null,
                 scoreDelta,
                 stabilityWarning,
-                audit: scoringResult.audit
+                audit: scoringResult.audit,
+                auditSha256: stableFingerprint(scoringResult.audit),
+                outputAnalysisSha256: crypto.createHash('sha256').update(analysis).digest('hex')
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.log(`    [deep] ✅ 类型感知评分审计完成`);
         } catch (error) {
             markRecoveryStage(analysisManifest, 'scoringAudit', error.code === 'CONTRACT_REJECTED' ? 'contract_rejected' : 'transient_failure', { error: error.message });
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+            throw error;
+        }
+    }
+
+    // 读者文章：保留旧 13 节 analysis 作为机器兼容层，另外生成
+    // 面向初学研究者的连续文章。它只依赖已完成的事实修复和评分，
+    // 指纹变化只失效本阶段和后续插图。
+    const apiReaderEvidenceContext = buildTypeAwareSourceContext(
+        analysis,
+        rawTextForAnalysis,
+        REVISION_EVIDENCE_MAX_CHARS,
+        BROAD_EVIDENCE_PATTERNS,
+        'READER'
+    );
+    const apiReaderFingerprint = stableFingerprint({
+        configurationFingerprint: recoveryFingerprints.apiReaderArticle,
+        analysisSha256: crypto.createHash('sha256').update(String(analysis || '')).digest('hex'),
+        evidenceSha256: crypto.createHash('sha256').update(apiReaderEvidenceContext).digest('hex')
+    });
+    if (isRecoveryStageComplete(analysisManifest, 'apiReaderArticle')) {
+        const articleSha = crypto.createHash('sha256')
+            .update(String(paper.apiReaderArticle || '')).digest('hex');
+        const planSha = paper.apiReaderPlan
+            ? stableFingerprint(paper.apiReaderPlan)
+            : '';
+        const readerStage = analysisManifest.stages.apiReaderArticle;
+        if (!paper.apiReaderArticle || !paper.apiReaderPlan
+            || analysisManifest.contracts?.apiReaderArticle !== API_READER_ARTICLE_CONTRACT
+            || articleSha !== readerStage.articleSha256
+            || planSha !== readerStage.planSha256
+            || paper.apiReaderArticleSha256 !== articleSha
+            || paper.apiReaderPlanSha256 !== planSha) {
+            delete analysisManifest.stages.apiReaderArticle;
+            delete analysisManifest.stages.imageSupplement;
+            delete paper.apiReaderArticle;
+            delete paper.apiReaderPlan;
+            delete paper.apiReaderArticleSha256;
+            delete paper.apiReaderPlanSha256;
+            delete paper.analysisStageCheckpoints?.apiReaderArticle;
+            delete paper.analysisStageCheckpoints?.imageSupplement;
+        }
+    }
+    invalidateRecoveryStageIfChanged(
+        paper,
+        analysisManifest,
+        'apiReaderArticle',
+        apiReaderFingerprint
+    );
+    if (!isRecoveryStageComplete(analysisManifest, 'apiReaderArticle')) {
+        try {
+            const readerResult = await generateApiReaderArticleDetailed(
+                paper, analysis, apiReaderEvidenceContext
+            );
+            paper.apiReaderArticle = readerResult.article;
+            paper.apiReaderPlan = readerResult.plan;
+            paper.apiReaderArticleSha256 = crypto.createHash('sha256')
+                .update(readerResult.article).digest('hex');
+            paper.apiReaderPlanSha256 = stableFingerprint(readerResult.plan);
+            analysisManifest.contracts = {
+                ...(analysisManifest.contracts || {}),
+                apiReaderArticle: API_READER_ARTICLE_CONTRACT
+            };
+            markRecoveryStage(analysisManifest, 'apiReaderArticle', 'complete', {
+                fingerprint: apiReaderFingerprint,
+                attempts: readerResult.attempts,
+                model: DEEP_CONFIG.model,
+                protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
+                temperature: 0.6,
+                maxTokens: REPAIR_MAX_TOKENS,
+                promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.apiReaderArticle),
+                evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
+                evidenceMaxChars: REVISION_EVIDENCE_MAX_CHARS,
+                evidenceSha256: crypto.createHash('sha256').update(apiReaderEvidenceContext).digest('hex'),
+                articleSha256: paper.apiReaderArticleSha256,
+                planSha256: paper.apiReaderPlanSha256,
+                qualityMetrics: readerResult.qualityMetrics
+            });
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+            console.log(`    [deep] ✅ 初学研究者读者文章已生成`);
+        } catch (error) {
+            markRecoveryStage(
+                analysisManifest,
+                'apiReaderArticle',
+                error.code === 'CONTRACT_REJECTED' ? 'contract_rejected' : 'invalid_output',
+                { error: error.message, fingerprint: apiReaderFingerprint }
+            );
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             throw error;
         }
@@ -5378,6 +5764,7 @@ module.exports = {
     parseScoringAuditResult,
     revalidateScoringAudit,
     applyScoringAuditResult,
+    applyScoringEvidenceCaps,
     validateScoringAuditAgainstAnalysis,
     hasAffirmativeReleasePromise,
     hasAffirmativeDemoEvidence,
@@ -5387,6 +5774,9 @@ module.exports = {
     updateOpensourceFromDemoLinks,
     auditTypeAwareScoring,
     auditTypeAwareScoringDetailed,
+    parseApiReaderArticleResult,
+    generateApiReaderArticleDetailed,
+    API_READER_ARTICLE_CONTRACT,
     repairMissingAnalysisSections,
     finalizeStructureRepairOutput,
     recoveryFailureStatus,

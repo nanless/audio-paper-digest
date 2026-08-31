@@ -30,7 +30,7 @@ from path_config import (
     resolve_deep_analysis_result_for_date,
     resolve_deep_analysis_result_path,
 )
-from project_env import build_child_process_env
+from project_env import build_child_process_env, get_required_fetch_proxy
 from utils import parse_analysis
 
 BJ_TZ = timezone(timedelta(hours=8))
@@ -3546,10 +3546,12 @@ def get_claude_code_version():
 
 def detect_publish_api_type(endpoint, model):
     """检测发布脚本使用的 LLM API 协议，与 Node utils.js 保持一致。"""
-    ep = (endpoint or '').lower()
+    ep = (endpoint or '').rstrip('/').lower()
     m = (model or '').lower()
     if 'deepseek.com' in ep or 'deepseek' in m:
         return 'openai'
+    if ep.endswith('/responses') or m == 'muse-spark-1.2-contributor':
+        return 'openai_responses'
     is_token_plan = 'token-plan' in ep or 'coding' in ep
     is_mimo = 'xiaomimimo.com' in ep or 'mimo' in m
     is_kimi = 'kimi.com' in ep or 'kimi' in m
@@ -3612,6 +3614,8 @@ def build_publish_api_url(api_type, endpoint):
             base = re.sub(r'/coding(?:/v1)?$', '/coding/v1', base, flags=re.IGNORECASE)
             return f'{base}/messages'
         return f'{base}/messages'
+    if api_type == 'openai_responses':
+        return base if base.endswith('/responses') else f'{base}/responses'
     base = re.sub(r'/anthropic/?$', '/v1', base)
     return f'{base}/chat/completions'
 
@@ -3654,6 +3658,21 @@ def build_publish_payload(api_type, model, prompt, max_tokens, temperature, imag
             'max_tokens': max_tokens,
             'messages': [{'role': 'user', 'content': content if images else prompt}]
         }
+    if api_type == 'openai_responses':
+        content = [{'type': 'input_text', 'text': prompt}]
+        for image in images:
+            data_uri = f"data:{image['media_type']};base64,{image['data']}"
+            content.append({
+                'type': 'input_image',
+                'image_url': data_uri,
+                'detail': 'low',
+            })
+        return {
+            'model': model,
+            'max_output_tokens': max_tokens,
+            'temperature': temperature,
+            'input': [{'role': 'user', 'content': content}],
+        }
     content = [{'type': 'text', 'text': prompt}]
     for image in images:
         data_uri = f"data:{image['media_type']};base64,{image['data']}"
@@ -3676,7 +3695,22 @@ def parse_publish_response_text(api_type, data):
                 if block.get('type') == 'text':
                     return (block.get('text') or '').strip()
         return ''
+    if api_type == 'openai_responses':
+        if isinstance(data.get('output_text'), str) and data['output_text'].strip():
+            return data['output_text'].strip()
+        parts = []
+        for item in data.get('output') or []:
+            if not isinstance(item, dict):
+                continue
+            for block in item.get('content') or []:
+                if isinstance(block, dict) and isinstance(block.get('text'), str):
+                    parts.append(block['text'])
+        return '\n'.join(part for part in parts if part).strip()
     return (data.get('choices', [{}])[0].get('message', {}).get('content') or '').strip()
+
+
+def _publish_llm_requires_proxy(endpoint, model):
+    return str(model or '').lower() == 'muse-spark-1.2-contributor'
 
 
 def call_publish_llm_api(
@@ -3766,8 +3800,15 @@ def call_publish_llm_api(
                 headers={**headers, 'Content-Type': 'application/json'},
                 method='POST',
             )
-            # Publishing LLM calls must remain direct even when fetch proxies are configured.
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            # Muse Spark Contributor 有地区限制，必须使用项目 .env 的
+            # HTTP CONNECT 代理。其他模型继续显式直连，避免代理污染。
+            if _publish_llm_requires_proxy(endpoint, model):
+                proxy = get_required_fetch_proxy()
+                opener = urllib.request.build_opener(
+                    urllib.request.ProxyHandler({'http': proxy, 'https': proxy})
+                )
+            else:
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             with opener.open(request, timeout=timeout) as response:
                 status = response.status
                 if response.status < 200 or response.status >= 300:
@@ -3789,6 +3830,15 @@ def call_publish_llm_api(
                     for block in content_blocks
                     if isinstance(block, dict)
                 )
+            elif api_type == 'openai_responses':
+                finish_reason = (data.get('incomplete_details') or {}).get('reason')
+                reasoning_chars = sum(
+                    len(str(summary.get('text') or ''))
+                    for item in data.get('output') or []
+                    if isinstance(item, dict) and item.get('type') == 'reasoning'
+                    for summary in item.get('summary') or []
+                    if isinstance(summary, dict)
+                )
             else:
                 choice = (data.get('choices') or [{}])[0] or {}
                 finish_reason = choice.get('finish_reason')
@@ -3799,7 +3849,7 @@ def call_publish_llm_api(
                 f'LLM 返回内容为空 (finish_reason={finish_label}, '
                 f'reasoning_chars={reasoning_chars})'
             )
-            if finish_reason in {'length', 'max_tokens'}:
+            if finish_reason in {'length', 'max_tokens', 'max_output_tokens'}:
                 if structured_output and reasoning_chars > 0:
                     if structured_recovery_used:
                         print(

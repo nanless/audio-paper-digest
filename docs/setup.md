@@ -123,7 +123,7 @@ Node/Python 加载器会先清除外层进程中的同名项目变量，再加�
 | `ALL_PROXY` | 可选。HuggingFace `curl` 可使用的 SOCKS/全局代理，例如 `socks5h://127.0.0.1:7897` |
 | `NO_PROXY` | 本地地址白名单，例如 `localhost,127.0.0.1,::1` |
 
-抓取代理是必需项：arXiv 元数据、HTML/PDF/图片和 HuggingFace Papers 都会拒绝无代理直连；历史补录与微信的 arXiv 图片下载也使用同一项目代理。`HTTPS_PROXY` 或 `HTTP_PROXY` 至少配置一项，且必须是 HTTP CONNECT 地址；HuggingFace 的 Node `curl` 可以额外使用 `ALL_PROXY=socks5h://...`，调用时会显式指定代理并清空 `NO_PROXY` 绕过列表。LLM 请求始终直连，不会走抓取代理。代理变量只从项目根 `.env` 加载；脚本会清除 shell/IDE 继承的同名代理变量，不再读取 macOS `scutil` 系统代理。使用本机代理时，抓取、深度分析和重分析命令必须在沙箱外运行，沙箱内无法连接 `127.0.0.1` 不能作为网络故障依据。
+抓取代理是必需项：arXiv 元数据、HTML/PDF/图片和 HuggingFace Papers 都会拒绝无代理直连。`HTTPS_PROXY` 或 `HTTP_PROXY` 至少配置一项，且必须是 HTTP CONNECT 地址；HuggingFace 的 Node `curl` 可以额外使用 `ALL_PROXY=socks5h://...`，调用时会显式指定代理并清空 `NO_PROXY` 绕过列表。LLM 默认直连；精确模型 `muse-spark-1.2-contributor` 是唯一例外，必须使用项目 HTTP CONNECT 代理，缺配置立即失败。代理变量只从项目根 `.env` 加载；脚本会清除 shell/IDE 继承的同名代理变量，不再读取 macOS `scutil` 系统代理。使用本机代理时，抓取、深度分析和重分析命令必须在沙箱外运行，沙箱内无法连接 `127.0.0.1` 不能作为网络故障依据。
 
 博客的生成、审查和推送同样必须在沙箱外运行，即使生成阶段没有直接调用 LLM。`generate-blog.py`、`review-blog.py`、`push-blog.py` 与兼容 `publish-to-blog.py` 会拒绝可靠沙箱标志 `CODEX_SANDBOX`；沙箱外权限包装可能保留网络禁用标志，不能单独据此拒绝执行。这样可确保后续 LLM 审查、图片下载、Hugo 和 Git 网络操作不会因沙箱受限而产生误判。
 
@@ -134,22 +134,29 @@ Node/Python 加载器会先清除外层进程中的同名项目变量，再加�
 ```bash
 # Paper Digest 环境变量
 
-# === 方案 1: MiMo Token Plan（推荐，伪装 Claude Code 调用 Anthropic 协议）===
-PAPER_ANALYZER_API_KEY=tp-your-token-plan-key
-PAPER_ANALYZER_MODEL=mimo-v2.5
-PAPER_ANALYZER_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
+# === 方案 1: OpenCode Go Muse Spark Contributor（Responses API；必须走项目 HTTP CONNECT 代理）===
+PAPER_ANALYZER_API_KEY=your-opencode-go-key
+PAPER_ANALYZER_MODEL=muse-spark-1.2-contributor
+PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
+HTTPS_PROXY=http://127.0.0.1:7897
+HTTP_PROXY=http://127.0.0.1:7897
 
-# === 方案 2: MiMo 按量付费（通用 OpenAI 协议）===
+# === 方案 2: MiMo Token Plan（Anthropic 协议，保持直连）===
+# PAPER_ANALYZER_API_KEY=tp-your-token-plan-key
+# PAPER_ANALYZER_MODEL=mimo-v2.5
+# PAPER_ANALYZER_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
+
+# === 方案 3: MiMo 按量付费（通用 OpenAI 协议）===
 # PAPER_ANALYZER_API_KEY=sk-your-pay-as-you-go-key
 # PAPER_ANALYZER_MODEL=mimo-v2.5
 # PAPER_ANALYZER_ENDPOINT=https://api.xiaomimimo.com/v1
 
-# === 方案 3: Kimi Coding Plan（伪装 Claude Code 调用 Anthropic 协议）===
+# === 方案 4: Kimi Coding Plan（Anthropic 协议）===
 # PAPER_ANALYZER_API_KEY=sk-your-kimi-key
 # PAPER_ANALYZER_MODEL=kimi-for-coding
 # PAPER_ANALYZER_ENDPOINT=https://api.kimi.com/coding/v1
 
-# === 方案 4: 通用 OpenAI 兼容端点 ===
+# === 方案 5: 通用 OpenAI 兼容端点 ===
 # PAPER_ANALYZER_API_KEY=sk-your-openai-key
 # PAPER_ANALYZER_MODEL=gpt-4o
 # PAPER_ANALYZER_ENDPOINT=https://api.openai.com/v1

@@ -89,13 +89,13 @@ ls -lt content/posts | head -20
 
 - arXiv 元数据、HTML、PDF 与图片均强制走项目 `.env` 的 `HTTPS_PROXY` 或 `HTTP_PROXY`。至少一项必须是 `http://` 或 `https://` 的 HTTP CONNECT 地址，不能只配置 SOCKS `ALL_PROXY`
 - 在沙箱外验证：`node scripts/quick-test.js` 或完整流程；沙箱内访问本机代理失败是运行环境限制
-- LLM 与抓取代理无关：检查 LLM 时应确认所有 Node LLM 请求仍为 `agent: false`，不得给 LLM 注入代理 agent/dispatcher
+- LLM 代理策略由 `requestLlmJson()` 统一决定：MiMo/Kimi 等默认 `agent:false`；`muse-spark-1.2-contributor` 必须检测到项目 HTTP CONNECT 代理并创建 one-shot agent。调用方不得自行注入或复用 agent/dispatcher
 
 ### 12.7 MiMo API 返回 403 / 代理问题
 
 **根因**：Node.js `https.request` 的 `agent: undefined` 仍会复用全局默认 agent 的连接池。当系统配置了代理（`https_proxy` 等环境变量）时，全局 agent 的连接可能被代理污染，导致 MiMo Token Plan 服务端拒绝请求。
 
-**修复**：所有 Node LLM 请求（包括 `test-api-key.js`）的 `options.agent` 必须设为 `false`（不是 `undefined`），彻底禁用连接复用，强制每个请求建立新连接：
+**修复**：所有 Node LLM 请求（包括 `test-api-key.js`）统一走 `requestLlmJson()`；它会为 MiMo 设置 `options.agent=false`（不是 `undefined`），彻底禁用连接复用：
 
 ```javascript
 const options = {
@@ -109,6 +109,8 @@ const options = {
 ```
 
 **验证**：直接用 `curl --noproxy "xiaomimimo.com"` 测试，若绕过代理成功而脚本失败，即为此问题。
+
+上述 MiMo 诊断不适用于 Muse：`muse-spark-1.2-contributor` 的预期行为是经项目 `.env` 中的 HTTP CONNECT 代理访问 OpenCode Go；缺代理应当 fail closed。
 
 ### 12.8 图片上传微信 CDN 失败
 

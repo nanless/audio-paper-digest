@@ -14,7 +14,7 @@ const {
     buildRequestBody,
     buildHeaders,
     parseResponseText,
-    requestJson
+    requestLlmJson
 } = require('./utils.js');
 
 function parseArgs(argv) {
@@ -74,10 +74,14 @@ async function main(argv = process.argv.slice(2)) {
     console.log();
 
     try {
-        const response = await requestJson(apiUrl, body, headers, {
-            timeoutMs: 30000,
-            agent: false
-        });
+        const response = await requestLlmJson(
+            apiUrl,
+            endpoint,
+            model,
+            body,
+            headers,
+            { timeoutMs: 30000 }
+        );
         console.log(`HTTP 状态码: ${response.statusCode}`);
         console.log();
 

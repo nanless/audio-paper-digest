@@ -2362,6 +2362,72 @@ def _manual_v6_reader_payload(paper):
     return {**payload, 'plan': plan}
 
 
+def _api_reader_payload(paper):
+    """Replay the API reader article contract from canonical bytes."""
+    manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
+    contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
+    if contracts.get('apiReaderArticle') != 'beginner-researcher-v1':
+        return None
+    article = paper.get('apiReaderArticle')
+    plan = paper.get('apiReaderPlan')
+    stage = (manifest.get('stages') or {}).get('apiReaderArticle') or {}
+    if not isinstance(article, str) or not article.strip() or not isinstance(plan, dict):
+        raise PublishDataValidationError('API reader contract 缺少读者文章或编辑计划')
+    article = article.strip()
+    article_sha = hashlib.sha256(article.encode('utf-8')).hexdigest()
+    plan_sha = _stable_json_sha256(plan)
+    if (paper.get('apiReaderArticleSha256') != article_sha
+            or paper.get('apiReaderPlanSha256') != plan_sha
+            or stage.get('status') != 'complete'
+            or stage.get('articleSha256') != article_sha
+            or stage.get('planSha256') != plan_sha):
+        raise PublishDataValidationError('API reader contract 文章/计划 SHA 或阶段状态不闭环')
+    if plan.get('version') != 1 or plan.get('contract') != 'beginner-researcher-v1':
+        raise PublishDataValidationError('API reader plan 版本或契约非法')
+    if not isinstance(plan.get('readerTitle'), str) \
+            or not isinstance(plan.get('oneSentenceThesis'), str):
+        raise PublishDataValidationError('API reader plan 缺少读者标题或一句话主线')
+    plan_sections = plan.get('sections')
+    allowed_kinds = (
+        'background', 'related_work', 'problem', 'method_overview', 'component',
+        'training', 'experiment_setup', 'result', 'ablation', 'limitation',
+        'reproduction', 'synthesis',
+    )
+    required_kinds = {
+        'background', 'related_work', 'method_overview', 'experiment_setup',
+        'result', 'limitation', 'synthesis',
+    }
+    if not isinstance(plan_sections, list) or not 6 <= len(plan_sections) <= 12:
+        raise PublishDataValidationError('API reader plan 必须包含 6-12 个小节')
+    kinds = []
+    planned_headings = []
+    previous_rank = -1
+    for section in plan_sections:
+        if not isinstance(section, dict) or set(section) != {'kind', 'heading'}:
+            raise PublishDataValidationError('API reader plan 小节字段非法')
+        kind = section.get('kind')
+        heading = section.get('heading')
+        if kind not in allowed_kinds or not isinstance(heading, str) or not heading.strip():
+            raise PublishDataValidationError('API reader plan 小节 kind/heading 非法')
+        rank = allowed_kinds.index(kind)
+        if rank < previous_rank:
+            raise PublishDataValidationError('API reader plan 小节顺序违反学习依赖')
+        previous_rank = rank
+        kinds.append(kind)
+        planned_headings.append(heading.strip())
+    if not required_kinds.issubset(kinds):
+        raise PublishDataValidationError('API reader plan 缺少必需教学阶段')
+    article_headings = re.findall(r'^###\s+(.+?)\s*$', article, flags=re.MULTILINE)
+    if article_headings != planned_headings or len(set(article_headings)) != len(article_headings):
+        raise PublishDataValidationError('API reader plan 与正文小节标题/顺序不一致')
+    return {
+        'plan': plan,
+        'article': article,
+        'articleSha256': article_sha,
+        'planSha256': plan_sha,
+    }
+
+
 def _normalize_fresh_article(value):
     """Compatibility facade for the extracted payload verifier."""
     return _normalize_fresh_article_impl(value)
@@ -2497,6 +2563,7 @@ def generate_paper_page(paper, date_str, category='论文速递'):
     contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
     manual_depth = contracts.get('manualDepth')
     v6_payload = _manual_v6_reader_payload(paper)
+    api_reader_payload = _api_reader_payload(paper)
     manual_depth_marker = (
         f'paper_digest_manual_depth: "{manual_depth}"\n'
         if manual_depth in {
@@ -2527,9 +2594,22 @@ def generate_paper_page(paper, date_str, category='论文速递'):
                 )
             )
         )
-    reader_plan = v6_payload['plan'] if v6_payload else _manual_reader_editorial_plan(paper)
-    reader_article = v6_payload['article'] if v6_payload else _manual_reader_article(
-        paper, reader_plan, date_str,
+    api_reader_marker = ''
+    if api_reader_payload:
+        api_reader_marker = (
+            'paper_digest_api_reader_contract: "beginner-researcher-v1"\n'
+            f'paper_digest_api_reader_article_sha256: "{api_reader_payload["articleSha256"]}"\n'
+            f'paper_digest_api_reader_plan_sha256: "{api_reader_payload["planSha256"]}"\n'
+        )
+    reader_plan = (
+        v6_payload['plan'] if v6_payload
+        else api_reader_payload['plan'] if api_reader_payload
+        else _manual_reader_editorial_plan(paper)
+    )
+    reader_article = (
+        v6_payload['article'] if v6_payload
+        else api_reader_payload['article'] if api_reader_payload
+        else _manual_reader_article(paper, reader_plan, date_str)
     )
     reader_first = reader_plan is not None and reader_article is not None
     # Modern Manual pages must never be reconstructed from the legacy fixed
@@ -2573,7 +2653,7 @@ hiddenInHomeList: true
 paper_digest_pipeline_owned: true
 paper_digest_page_type: paper
 paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
-{manual_depth_marker}{fresh_marker}{v6_marker}---
+{manual_depth_marker}{fresh_marker}{v6_marker}{api_reader_marker}---
 
 # 📄 {reader_title}
 

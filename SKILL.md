@@ -20,6 +20,7 @@ description: >
 - `prompts/opensource-scan.md`：开源链接扫描 prompt（Round 2）
 - `prompts/structure-repair.md`：审校结果缺少必要章节时的主模型局部结构修复 prompt
 - `prompts/scoring-audit.md`：正文修复完成后的类型感知评分审计 prompt（主模型只输出 JSON 评分修订）
+- `prompts/api-reader-article.md`：评分闭环后的初学研究者连续长文 prompt（动态问题标题与去模板门禁）
 
 当文档与代码冲突时，**以 `scripts/*` 当前实现为准，并同步更新文档**。
 
@@ -134,7 +135,8 @@ Production v6 的 `manual-paper-source-identity-v1` 随 records v4 绑定本篇�
 - endpoint 必须使用 HTTPS；HTTP 只允许 `localhost` / `*.localhost` / `127.0.0.0/8` / `::1` 上的本地测试服务，公网明文 HTTP 在附加认证头前即被拒绝；Python 发布阶段的 `publish_common.py` 执行同一门禁
 - key: `PAPER_ANALYZER_API_KEY`（必填）
 - model: `PAPER_ANALYZER_MODEL`（必填）
-- **API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动判断使用 OpenAI 还是 Anthropic 协议；完整优先级见第 4.2 节，DeepSeek 强制 OpenAI，MiMo Token Plan、Kimi Coding Plan（含 `k3`）及非 DeepSeek 的 `/anthropic` 走 Anthropic
+- **API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动判断使用 OpenAI Chat、OpenAI Responses 还是 Anthropic 协议；完整优先级见第 4.2 节。DeepSeek 强制 OpenAI Chat；精确模型 `muse-spark-1.2-contributor` 走 OpenAI Responses；MiMo Token Plan、Kimi Coding Plan（含 `k3`）及非 DeepSeek 的 `/anthropic` 走 Anthropic
+  - **OpenCode Go Muse Spark Contributor**：`https://opencode.ai/zen/go/v1` → `https://opencode.ai/zen/go/v1/responses`，请求体使用 `input` / `max_output_tokens`，响应读取 `output_text` 或 `output[].content[].output_text`
   - **MiMo/Kimi Token Plan / Coding Plan**（MiMo 由 `token-plan` + MiMo 域名/模型识别；Kimi 由 `coding` + `kimi.com` 域名或 Kimi 模型识别）→ 自动切换为 **Anthropic 协议**，伪装成 Claude Code 调用
     - **MiMo**: `https://token-plan-cn.xiaomimimo.com/v1` → `https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages`（替换 `/v1` 为 `/anthropic`）
     - **Kimi**: `https://api.kimi.com/coding` 或 `https://api.kimi.com/coding/v1` → `https://api.kimi.com/coding/v1/messages`（自动补齐 `/v1`，无需 `/anthropic` 中间路径）
@@ -144,7 +146,7 @@ Production v6 的 `manual-paper-source-identity-v1` 随 records v4 绑定本篇�
   - **其他情况**（包括 DeepSeek、MiMo 按量付费、通用 OpenAI 兼容端点）→ 使用标准 **OpenAI 协议**
     - URL: `/v1/chat/completions`
     - Headers: `Authorization: Bearer {key}`
-- **agent: `false`** — LLM API 请求明确禁用连接复用，避免全局 agent 连接池被代理污染导致 MiMo 403（详见 9.2）
+- **网络隔离**：所有 Node LLM 请求统一走 `requestLlmJson()`。默认 `agent:false` 直连；精确模型 `muse-spark-1.2-contributor` 无条件使用项目 `.env` 的 HTTP CONNECT 代理，缺代理立即失败，并在请求结束销毁 one-shot agent。Python 发布 LLM 使用相同例外。
 - 超时 60 秒，重试 5 次
 - 指数退避：筛选 LLM 调用 `2^attempt * 1s`（2s/4s/8s/16s/32s）；arXiv 页面抓取 429 限流时 `60s * 2^(attempt-1)`，其他错误线性 `5s * attempt`
 - prompt 来源：`prompts/filter.md`，运行时通过 `loadPrompt()` 读取并替换 `{title}`、`{abstract}`、`{categories}` 占位符
@@ -168,7 +170,7 @@ API 调用特性：
 - 主分析输入默认上限 200K 字符；超过时使用 `task-focused-v1` 跨全文均衡取样，不再只保留开头。开源/审校/评分/表格与方法/结构后处理证据默认上限分别为 16K/60K/40K/30K/40K 字符，且使用任务关键词优先的证据块，避免重复发送完整全文。对应 `PD_*_EVIDENCE_MAX_CHARS` 和 `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` 会进入阶段指纹
 - 主分析与审校只保留支撑结论的关键表格。新分析/重分析必须写入 `analysisManifest.contracts.experimentTables=evidence-rich-v2` 并通过 Node/Python 双端硬校验：沿用每篇最多 2 张、每张最多 12 个数据行和 8 个指标列的上限，同时要求设置/数据集/基线标识、至少 3 行证据和 2 个数字、指标方向、表前具体比较问题、表后关键差异与证据边界；全文明确提供消融或负面结果时必须覆盖。Manual v4 必须绑定 v2；历史 v1-v3 的 `bounded-v1` 只校验旧上限，不追溯执行深度门禁。全文编号表缺失、已有表格过浅或非法省略标记会进入表格修复
 - **双层重试**：analysis-engine.js 层面每篇默认最多重试 2 次（总共最多 3 次尝试，`PD_ANALYSIS_MAX_RETRIES`）；deep-analyzer.js 内部每个 LLM API 阶段默认最多尝试 3 次（`PD_ANALYSIS_API_MAX_RETRIES`，指数退避：第一次等待 10 秒，之后翻倍，`2^attempt * 5s`）
-- **抓取代理为强制项**：LLM API 固定 `agent: false` 直连，不得注入代理 agent/dispatcher；arXiv/HuggingFace 抓取缺少项目 `.env` 代理必须失败，禁止直接回退。Node arXiv 使用 `HTTPS_PROXY` 或 `HTTP_PROXY` 中至少一项 HTTP CONNECT 地址，HuggingFace curl 可额外使用 SOCKS `ALL_PROXY`；访问本机代理的网络命令必须在沙箱外运行。
+- **抓取代理为强制项**：arXiv/HuggingFace 抓取缺少项目 `.env` 代理必须失败，禁止直接回退。Node arXiv 使用 `HTTPS_PROXY` 或 `HTTP_PROXY` 中至少一项 HTTP CONNECT 地址，HuggingFace curl 可额外使用 SOCKS `ALL_PROXY`。LLM 默认直连；精确模型 `muse-spark-1.2-contributor` 强制使用同一项目 HTTP CONNECT 代理且禁止静默直连。访问本机代理的网络命令必须在沙箱外运行。
 - arXiv HTML 解析使用 **cheerio** 结构化选择器，移除 script/style/nav/header/footer 等噪音元素
 - HTML 全文不能只靠字符数判定：还要满足有效长段落数及论文章节/结构标记；`too_short`、`metadata_shell`、`missing_paper_structure` 都继续 PDF fallback，并记录结构计数
 - 图片先按 caption/文件名/顺序启发式预筛（默认 `imageCandidateMax=20`）；HTML 正文与图注在同一次响应中解析并复用，预提供 URL 会按完整 URL或唯一文件名补全 caption。只有配置副模型的双模型模式才**串行下载**最多 `imageMaxCount=20` 张候选图片并送入副模型；成功内容写入 `data/current/image-cache/`，恢复时校验 MIME/文件头后复用。仅 408/425/429/5xx 和网络异常重试，404、非法 MIME、超限与安全拒绝立即终止
@@ -180,8 +182,8 @@ API 调用特性：
 输出约束：
 - prompt 来源：`prompts/deep-analysis.md`，运行时通过 `loadPrompt()` 读取并替换 `{hasFullText}`、`{title}`、`{authors}`、`{categories}`、`{arxivId}`、`{textForAnalysis}` 占位符
 - arXiv 获取结果保存结构化来源：`analysisSource`、`sourceId`、原始/实际输入/全文字符数、`truncated`、`sourceSha256`、HTML 可用性和告警。稳定 400/403/404 不重复请求；版本化 ID 只读取指定版本；PDF 有 50MB 默认上限并校验 MIME、文件头与提取长度。全文不可用时优先使用完整摘要，不允许短错误页覆盖摘要
-- checkpoint 的来源 SHA-256 变化时清除主分析及全部下游状态，避免旧全文正文被新一轮摘要审校。评分审计另保存模型、低温、prompt 模板哈希、证据哈希、尝试次数和最终 JSON；这些指纹变化只失效评分与插图阶段
-- 自动 API canonical 的固定一级标题仍是解析锚点；production Manual v6 发布使用 `reader-longform-v2`，records v4 内嵌的 legacy v5 `readerArticle` 仅作基础质量重放或历史只读兼容。
+- checkpoint 的来源 SHA-256 变化时清除主分析及全部下游状态，避免旧全文正文被新一轮摘要审校。评分审计另保存模型、低温、prompt 模板哈希、证据哈希、尝试次数、结构化证据画像、代码上限和最终 JSON；这些指纹变化失效评分、API 读者文章与插图阶段
+- 自动 API canonical 的固定一级标题仍是解析锚点；评分完成后另用 `prompts/api-reader-article.md` 生成 `beginner-researcher-v1` 连续长文，要求论文特有动态标题、初学者学习依赖顺序、1800–10000 中文字和确定性文风门禁。博客仅在文章/计划/阶段 SHA 完整闭环时优先展示它。production Manual v6 发布仍使用 `reader-longform-v2`，records v4 内嵌的 legacy v5 `readerArticle` 仅作基础质量重放或历史只读兼容。
 - `## 评分` 下先输出总分（X.X/10）
 - **代码后处理**：`parseAnalysis`/`parse_analysis` 仅在 `## 评分理由` 的八个分项完整、唯一、各自带具体理由、分母正确、数值有限且位于各自范围时重新计算总分；合计上限为 10，四舍五入到 0.1，覆盖 LLM 原始总分。缺失、重复、缺少理由、错误分母、负数、越界或非有限值会产生契约错误并阻断保存/发布，不存在最低 1 分保底
 - `## 机器摘要` 包含 `document_type`、`rank_bucket`（带顶会映射）、`innovation`（创新性 0-2）、`technical_rigor`（技术严谨性 0-1.5）、`experimental_sufficiency`（实验充分性 0-1.5）、`clarity`（清晰度 0-1）、`impact`（影响力 0-1.5）、`open_source`（开源 0-1.5）、`reproducibility`（可复现性 0-0.5）、`engineering_score`（工程/实践价值 0-1.5）、`confidence`、`primary_task_tag`、`primary_method_tag` 等固定键
@@ -190,7 +192,7 @@ API 调用特性：
 - 使用声明—证据匹配和“单一问题单一主维度扣分”：开源产物缺失、复现细节缺失、实验/证明证据不足、表达问题、技术逻辑错误分别归入对应维度；无法验证时降低 `confidence`
 - 系统/模型报告按端到端质量、延迟、吞吐、成本、规模、压力测试、竞品公平性与失败案例评估；数据集/基准、综述、理论和应用研究按各自证据标准评估，不机械要求传统方法消融
 - 正文修复后先按共享结构契约检查 13 个必要章节；缺失时使用 `prompts/structure-repair.md` 只修复当前论文结构，避免外层整篇重跑
-- 主模型使用 `prompts/scoring-audit.md` 做最终 JSON 评分审计；送审前由代码移除旧“评分理由”段，避免模型照抄待纠正的跨维度扣分，正文与原文证据账本保持不变；校验失败会把精确错误及违规分句反馈给下一次局部审计。无核心产物时，代码按“肯定语境承诺开放 0.5 / 明确 URL 或肯定结构化 Demo 0.2 / 否定或未提及 0”确定性归一化开源分和理由；理论研究按公开证明、推导和附录判断核心产物，不因代码/模型/数据标记为空而强制归零。代码只替换评分相关字段，副模型不参与评分
+- 主模型使用 `prompts/scoring-audit.md` 做最终 JSON 评分审计；送审前由代码移除旧“评分理由”段，避免模型照抄待纠正的跨维度扣分，正文与原文证据账本保持不变。输出必须带引用账本 ID 的 `evidenceProfile`；代码会对多组件无直接消融、内部评测未报告样本规模、只有工程主张而无测量/可复用产物等情形应用可解释上限，并把评分契约、cap 规则版本、audit/output SHA 和上限写入 manifest。校验失败会把精确错误及违规分句反馈给下一次局部审计。无核心产物时，代码按“肯定语境承诺开放 0.5 / 明确 URL 或肯定结构化 Demo 0.2 / 否定或未提及 0”确定性归一化开源分和理由；理论研究按公开证明、推导和附录判断核心产物，不因代码/模型/数据标记为空而强制归零。代码只替换评分相关字段，副模型不参与评分
 - 插图合并后再次执行完整分析契约；若插图计划破坏章节或解析结果，只丢弃该篇插图计划并保留已审计的主模型正文
 - 候选编号不能直接作为展示图号；代码将无真实 caption 的通用 alt 和 `selectedImageUrls` 按最终正文顺序归一化。发布 review 必须保留 Markdown 表格中前导分组列为空的合法续行
 - 副模型默认最多按价值顺序选择 4 张图（`PD_IMAGE_INSERTION_MAX` 可用正整数覆写），每张必须从代码生成的段落目录中选择稳定 `paragraph_id`；非法 ID、定位失败和超限图片由代码拒绝，不回退到章节末尾。旧自由文本 `anchor` 仅兼容历史响应。`[secondary]` 日志记录模型/协议/endpoint 与 key 来源、候选和下载数量、caption、缓存、段落 ID、JSON 解析状态、拒绝原因和最终选图；禁止打印 API key 内容
@@ -219,30 +221,37 @@ API 调用特性：
 ### 4.5 完整环境变量清单
 
 ```bash
-# LLM API（筛选 + 深度分析，下面是 4 种常见配置方案，只能选一种启用）
+# LLM API（筛选 + 深度分析，下面配置只能选一种启用）
 
-# 方案 1: MiMo Token Plan（推荐，伪装 Claude Code 自动切换 Anthropic 协议）
-PAPER_ANALYZER_API_KEY=tp-your-token-plan-key
-PAPER_ANALYZER_MODEL=mimo-v2.5
-PAPER_ANALYZER_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
+# 方案 1: OpenCode Go Muse Spark Contributor（OpenAI Responses；必须配置 HTTP CONNECT 代理）
+PAPER_ANALYZER_API_KEY=your-opencode-go-key
+PAPER_ANALYZER_MODEL=muse-spark-1.2-contributor
+PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
+HTTPS_PROXY=http://127.0.0.1:7897
+HTTP_PROXY=http://127.0.0.1:7897
 
-# 方案 2: MiMo 按量付费（通用 OpenAI 协议）
+# 方案 2: MiMo Token Plan（Anthropic 协议，保持直连）
+# PAPER_ANALYZER_API_KEY=tp-your-token-plan-key
+# PAPER_ANALYZER_MODEL=mimo-v2.5
+# PAPER_ANALYZER_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
+
+# 方案 3: MiMo 按量付费（通用 OpenAI 协议）
 # PAPER_ANALYZER_API_KEY=sk-your-pay-as-you-go-key
 # PAPER_ANALYZER_MODEL=mimo-v2.5
 # PAPER_ANALYZER_ENDPOINT=https://api.xiaomimimo.com/v1
 
-# 方案 3: Kimi Coding Plan（伪装 Claude Code 自动切换 Anthropic 协议）
+# 方案 4: Kimi Coding Plan（自动切换 Anthropic 协议）
 # PAPER_ANALYZER_API_KEY=sk-your-kimi-key
 # PAPER_ANALYZER_MODEL=kimi-for-coding
 # PAPER_ANALYZER_ENDPOINT=https://api.kimi.com/coding/v1
 
-# 方案 4: 通用 OpenAI 兼容端点
+# 方案 5: 通用 OpenAI 兼容端点
 # PAPER_ANALYZER_API_KEY=sk-your-openai-key
 # PAPER_ANALYZER_MODEL=gpt-4o
 # PAPER_ANALYZER_ENDPOINT=https://api.openai.com/v1
 
-# 方案 5: 双模型模式（主模型纯文本 + 副模型多模态图像筛选与插图计划）
-# 主模型配置同上（选方案 1-4 之一）
+# 方案 6: 双模型模式（主模型纯文本 + 副模型多模态图像筛选与插图计划）
+# 主模型配置同上（选方案 1-5 之一）
 # 副模型（可选，不设置则退回单模型纯文本模式）
 # PAPER_ANALYZER_SECONDARY_MODEL=mimo-v2.5
 # PAPER_ANALYZER_SECONDARY_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
@@ -315,7 +324,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 # 抓取代理（必需）：arXiv 的 Node 请求至少配置 HTTPS_PROXY 或 HTTP_PROXY，且必须是 HTTP CONNECT 地址
 # HTTPS_PROXY=http://127.0.0.1:7897
 # HTTP_PROXY=http://127.0.0.1:7897
-# HuggingFace 的 curl 可额外使用 SOCKS；LLM 请求固定 agent:false 直连
+# HuggingFace 的 curl 可额外使用 SOCKS；LLM 默认直连，Muse Spark Contributor 强制复用 HTTP CONNECT 代理
 # ALL_PROXY=socks5h://127.0.0.1:7897
 ```
 
@@ -560,7 +569,7 @@ PY
 13. **变更后必须做产物级验证**：至少抽样检查一份 `data/current/deep-analysis-result.json`，确认 `analysis` 文本的机器摘要包含 `document_type`、`rank_bucket`、`primary_task_tag`、`primary_method_tag`，且 `parsed` 缓存包含 `documentType`、`scoringRubricVersion`、`rankBucket`、`primaryTaskTag`、`primaryMethodTag` 等字段，再运行博客/社媒脚本验证最终产物。
 14. **变更后验证 prompt 加载**：修改 `prompts/` 目录下的 markdown 文件后，运行一次快速测试（`node scripts/quick-test.js` 或单篇分析）确认 `loadPrompt()` 能正确读取并替换占位符，无 `{变量名}` 残留。
 15. **变更后运行单元测试**：修改 `scripts/utils.js`、`scripts/config.js` 或分析引擎核心逻辑后，必须运行 `npm test` 确保测试通过。
-16. **MiMo API 请求必须禁用代理连接复用**：所有 Node LLM 调用（包括 `test-api-key.js`）的 `options.agent` 必须为 `false`（不是 `undefined`）。任何重构或修改 HTTP 请求逻辑时，禁止将 `agent: false` 改回 `agent: proxyAgent` 或 `agent: undefined`，否则 MiMo Token Plan 会在有系统代理的环境中返回 403。
+16. **LLM 代理策略必须由公共封装决定**：所有 Node LLM 调用（包括 `test-api-key.js`）必须通过 `requestLlmJson()`。MiMo/Kimi 等默认路径的 `options.agent` 必须为 `false`（不是 `undefined`）；精确模型 `muse-spark-1.2-contributor` 则必须创建并销毁项目 HTTP CONNECT one-shot agent。禁止调用方自行选择或复用 agent。
 17. **新增 LLM 端点必须接入 API 协议自动路由**：任何新增 Node 脚本调用 LLM 时，统一使用 `scripts/utils.js` 中的 `detectApiType()`、`buildApiUrl()`、`buildHeaders()`、`buildRequestBody()`、`parseResponseText()`；Python 发布阶段 LLM 调用必须复用 `publish_common.py` 的 `call_publish_llm_api()`，禁止硬编码特定协议的 URL/Header/Body。
 17.1 **视觉资产由 Codex 内置图像工具在发布后生成**：绝不在项目脚本中调用图像 API，也不读取或要求 `OPENAI_API_KEY`。全部博客页通过 review、push 且远端 OID 验证后，视觉 CLI 才可启动。登记前必须逐项核对 `generationContext.qaClaims`、标题、中文正文、数字和排行榜；论文图与封面 `record` 都必须传 `--qa-attested true`，该声明会写入 manifest。两类任务用 token 登记并独立续跑；同批次图片扁平保存到 `data/archive/<date>/visual-summaries/`，只保留 canonical 文件。
 
@@ -613,7 +622,7 @@ PY
 
 **根因**：Node.js `https.request` 的 `agent: undefined` 仍会复用全局默认 agent 的连接池。当系统配置了代理（`https_proxy` 等环境变量）时，全局 agent 的连接可能被代理污染，导致 MiMo Token Plan 服务端拒绝请求。
 
-**修复**：所有 Node LLM 请求（包括 `test-api-key.js`）的 `options.agent` 必须设为 `false`（不是 `undefined`），彻底禁用连接复用，强制每个请求建立新连接：
+**修复**：调用方统一使用 `requestLlmJson()`；它对 MiMo 将 `options.agent` 设为 `false`（不是 `undefined`），彻底禁用连接复用：
 
 ```javascript
 const options = {
@@ -627,6 +636,8 @@ const options = {
 ```
 
 **验证**：直接用 `curl --noproxy "xiaomimimo.com"` 测试，若绕过代理成功而脚本失败，即为此问题。
+
+此诊断只适用于 MiMo/Kimi 等默认直连模型；`muse-spark-1.2-contributor` 的预期行为相反，必须由 `requestLlmJson()` 使用项目 HTTP CONNECT 代理。
 
 ### 9.3 深度分析慢或频繁失败
 

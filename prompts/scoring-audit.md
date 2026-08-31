@@ -55,6 +55,9 @@
 14. 每个评分理由必须显式引用证据账本中的一个或多个 ID；不得使用账本未包含的论文事实。分析章节 ID 形如 `A_METHOD` / `A_RESULTS`，原文切片 ID 形如 `SCORING_SOURCE_3/20`，它们覆盖全文不同位置；不能只依据摘要或开头忽略实验、局限和附录。
 15. “已有完整分析”中的旧评分理由已由代码移除。占位提示不是论文证据；必须根据证据账本从零重建八维理由，不得猜测或恢复旧理由。
 16. 评分理由中的精确分数、样本量、模型规模、比例、名次和技术参数一律使用阿拉伯数字；中文与 ASCII 技术词之间保留空格，并避免重复词、双重连接和分号断段。
+17. 评分前必须建立 `evidenceProfile`：明确本文是否声称多组件因果贡献、消融是直接/部分/缺失/不适用、目标评测是公开/内部/混合/不适用，以及样本规模、真实部署测量、可复用工程证据和公开泛化是否已报告。`evidenceBoundary` 必须直接写出至少一个 `[账本ID]`，并与 `evidenceIds` 一致；不得从“系统看起来很完整”之类叙事推断。经验型方法、系统、模型、数据集或应用论文的目标评测不得填 `not_applicable`。
+18. `engineeringEvidence` 只能取：`measured_deployment`（真实延迟/吞吐/资源测量）、`reusable_pipeline`（论文给出可复用且可核对的完整工程流水线）、`public_artifact_or_benchmark`（公开工具/数据/基准形成明确工程产物）、`claim_only`（只有工程叙述或间接代理指标）、`not_applicable`。只有 `measured_deployment` 才允许 `deploymentMeasured=true`。
+19. 代码会依据 `evidenceProfile` 应用可解释上限：多组件主张无直接消融时实验充分性最高 1.2，部分消融最高 1.3；仅内部评测且未报样本规模时实验充分性最高 1.2；只有工程主张、没有测量或可复用产物时工程价值最高 1.0。对理论、综述或不作组件因果声称的论文，必须正确使用 `not_applicable`，不得机械套用方法论文上限。
 
 只输出一个合法 JSON 对象，不要输出 Markdown fence、解释、前言或结尾。键名和结构必须完全如下，任何层级都不得增加额外键；八个维度必须各出现且仅出现一次；每个维度的 `score` 必须是 JSON 数字，不得是字符串、`null`、布尔值或空值，且最多一位小数。开源分只允许 `0.0/0.2/0.5/1.0/1.2/1.5`。
 
@@ -62,6 +65,18 @@
 {
   "documentType": "系统技术报告",
   "confidence": "高",
+  "evidenceProfile": {
+    "version": 1,
+    "multiComponentClaimed": true,
+    "ablationStatus": "direct",
+    "targetEvaluation": "mixed",
+    "sampleScaleReported": true,
+    "deploymentMeasured": false,
+    "publicGeneralizationEvaluated": true,
+    "engineeringEvidence": "reusable_pipeline",
+    "evidenceBoundary": "[A_RESULTS] 主结论同时有公开基准和直接消融，但原文未报告真实部署延迟与吞吐。",
+    "evidenceIds": ["A_RESULTS", "A_METHOD"]
+  },
   "dimensions": {
     "innovation": {"score": 1.2, "reason": "[A_METHOD] 不少于20字的具体理由"},
     "technicalRigor": {"score": 1.0, "reason": "[A_METHOD] 不少于20字的具体理由"},

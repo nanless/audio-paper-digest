@@ -1219,6 +1219,73 @@ title: "Bad table"
         self.assertIn('# 📄 EXAM²: Extending Audio Understanding', markdown)
         self.assertNotIn(r'\underline', markdown)
 
+    def test_api_reader_article_is_the_reader_first_blog_body_and_sha_bound(self):
+        article = (
+            '### 为什么旧表示会在生成任务前失真？\n\n背景与任务的连续解释。\n\n'
+            '### 既有路线把代价藏在了哪里？\n\n相关工作与论文位置的连续解释。\n\n'
+            '### 分路表示如何重新安排信息流？\n\n方法全景、输入与输出的连续解释。\n\n'
+            '### 比较数字之前要先统一哪些条件？\n\n实验协议与指标方向的连续解释。\n\n'
+            '### 主结果支持了什么，又没有支持什么？\n\n结果、强基线与反证的连续解释。\n\n'
+            '### 证据边界会怎样影响下一步复现？\n\n局限与复现入口的连续解释。\n\n'
+            '### 读完以后应该沿着哪条线继续验证？\n\n研究行动与全文收束的连续解释。'
+        )
+        plan = {
+            'version': 1,
+            'contract': 'beginner-researcher-v1',
+            'readerTitle': '当声学细节与语义理解不再挤在同一条路上',
+            'oneSentenceThesis': '分路表示改善了目标设置中的主指标，但外部泛化与部署代价仍需额外证据。',
+            'sections': [
+                {'kind': kind, 'heading': heading}
+                for kind, heading in (
+                    ('background', '为什么旧表示会在生成任务前失真？'),
+                    ('related_work', '既有路线把代价藏在了哪里？'),
+                    ('method_overview', '分路表示如何重新安排信息流？'),
+                    ('experiment_setup', '比较数字之前要先统一哪些条件？'),
+                    ('result', '主结果支持了什么，又没有支持什么？'),
+                    ('limitation', '证据边界会怎样影响下一步复现？'),
+                    ('synthesis', '读完以后应该沿着哪条线继续验证？'),
+                )
+            ],
+        }
+        article_sha = hashlib.sha256(article.encode('utf-8')).hexdigest()
+        plan_sha = publish_to_blog._stable_json_sha256(plan)
+        paper = {
+            'title': 'A Split Representation Model',
+            'arxivId': '2608.30001',
+            'parsed': {
+                'score': '8.2', 'tags': ['#音频理解'],
+                'summary': '旧 canonical 摘要仍承担兼容字段。',
+                'roast': '证据很扎实，但还没有覆盖真实部署。',
+                'opensource': '代码尚未公开。',
+                'architecture': '这段固定栏目不应成为读者正文。',
+                'scoringReason': '* 创新性：证据可追溯。',
+            },
+            'apiReaderArticle': article,
+            'apiReaderPlan': plan,
+            'apiReaderArticleSha256': article_sha,
+            'apiReaderPlanSha256': plan_sha,
+            'analysisManifest': {
+                'contracts': {'apiReaderArticle': 'beginner-researcher-v1'},
+                'stages': {'apiReaderArticle': {
+                    'status': 'complete',
+                    'articleSha256': article_sha,
+                    'planSha256': plan_sha,
+                }},
+            },
+        }
+        markdown, _slug = publish_to_blog.generate_paper_page(paper, '2026-08-31')
+        self.assertIn('paper_digest_api_reader_contract: "beginner-researcher-v1"', markdown)
+        self.assertIn('# 📄 当声学细节与语义理解不再挤在同一条路上', markdown)
+        self.assertIn('> 一句话：**分路表示改善了目标设置中的主指标', markdown)
+        self.assertIn('#### 为什么旧表示会在生成任务前失真？', markdown)
+        self.assertNotIn('这段固定栏目不应成为读者正文。', markdown)
+
+        paper['apiReaderArticle'] += '\n漂移'
+        with self.assertRaisesRegex(
+                publish_to_blog.PublishDataValidationError,
+                '文章/计划 SHA 或阶段状态不闭环'):
+            publish_to_blog.generate_paper_page(paper, '2026-08-31')
+
     def test_manual_v5_reader_plan_uses_reader_first_header_and_preserves_custom_subheads(self):
         reader_article = (
             '### 先解释表示冲突\n\n'

@@ -550,6 +550,37 @@ describe('deep-analyzer section helpers', () => {
         assert.strictEqual(isRecoveryStageComplete(nextManifest, 'imageDownload'), true);
     });
 
+    it('读者文章 complete 阶段缺少当前 contract 时失效并清理下游', () => {
+        const { createAnalysisRecoveryManifest } = require('../scripts/deep-analyzer.js');
+        const paper = {
+            analysisCheckpoint: 'audited body',
+            apiReaderArticle: 'stale reader article',
+            apiReaderPlan: { version: 1 },
+            apiReaderArticleSha256: 'a'.repeat(64),
+            apiReaderPlanSha256: 'b'.repeat(64),
+            analysisStageCheckpoints: {
+                scoringAudit: 'audited body',
+                apiReaderArticle: 'audited body',
+                imageSupplement: 'body with images'
+            },
+            analysisManifest: {
+                version: 1,
+                contracts: {},
+                stages: {
+                    scoringAudit: { status: 'complete' },
+                    apiReaderArticle: { status: 'complete' },
+                    imageSupplement: { status: 'skipped' }
+                }
+            }
+        };
+        const manifest = createAnalysisRecoveryManifest(paper);
+        assert.strictEqual(manifest.stages.scoringAudit.status, 'complete');
+        assert.strictEqual(manifest.stages.apiReaderArticle, undefined);
+        assert.strictEqual(manifest.stages.imageSupplement, undefined);
+        assert.strictEqual(paper.apiReaderArticle, undefined);
+        assert.strictEqual(paper.apiReaderPlan, undefined);
+    });
+
     it('图片 HTTP 404 是永久失败且不会重试', async () => {
         const { downloadImageBase64 } = require('../scripts/deep-analyzer.js');
         let calls = 0;
@@ -741,6 +772,98 @@ primary_task_tag: #音视频生成
         assert.throws(
             () => parseScoringAuditResult(JSON.stringify(payload), allowed),
             /账本外 ID: A_UNKNOWN/
+        );
+    });
+
+    it('评分 evidenceProfile 结构化校验并应用可解释上限', () => {
+        const {
+            parseScoringAuditResult,
+            applyScoringEvidenceCaps
+        } = require('../scripts/deep-analyzer.js');
+        const reason = '[A_METHOD] 该维度依据原文中可核对的方法和实验证据独立评分。';
+        const payload = {
+            documentType: '系统技术报告',
+            confidence: '高',
+            evidenceProfile: {
+                version: 1,
+                multiComponentClaimed: true,
+                ablationStatus: 'none',
+                targetEvaluation: 'internal',
+                sampleScaleReported: false,
+                deploymentMeasured: false,
+                publicGeneralizationEvaluated: false,
+                engineeringEvidence: 'claim_only',
+                evidenceBoundary: '[A_RESULTS] 系统只报告内部评测，未给出样本规模、直接消融或部署效率。',
+                evidenceIds: ['A_METHOD', 'A_RESULTS']
+            },
+            dimensions: Object.fromEntries([
+                ['innovation', 1.2],
+                ['technicalRigor', 1.1],
+                ['experimentalSufficiency', 1.5],
+                ['clarity', 0.8],
+                ['impact', 0.8],
+                ['openSource', 0.5],
+                ['reproducibility', 0.3],
+                ['engineering', 1.4]
+            ].map(([key, score]) => [key, { score, reason }]))
+        };
+        const allowed = new Set(['A_METHOD', 'A_RESULTS']);
+        const parsed = parseScoringAuditResult(JSON.stringify(payload), allowed);
+        const capped = applyScoringEvidenceCaps(parsed);
+        assert.strictEqual(capped.dimensions.experimentalSufficiency.score, 1.2);
+        assert.strictEqual(capped.dimensions.engineering.score, 1.0);
+        assert.deepStrictEqual(
+            capped.capsApplied.map(item => item.rule),
+            [
+                'multi_component_without_direct_ablation',
+                'engineering_claim_without_measured_or_reusable_evidence'
+            ]
+        );
+
+        payload.evidenceProfile.evidenceIds = ['A_UNKNOWN'];
+        assert.throws(
+            () => parseScoringAuditResult(JSON.stringify(payload), allowed),
+            /证据画像引用了账本外 ID/
+        );
+    });
+
+    it('API reader article 要求初学者逻辑顺序和论文特有标题', () => {
+        const { parseApiReaderArticleResult } = require('../scripts/deep-analyzer.js');
+        const specs = [
+            ['background', '声音片段为什么会让传统判别器失去方向？', '背景任务输入输出失败案例直觉动机读者边界'],
+            ['related_work', '既有路线分别在哪个环节丢掉了关键信息？', '相关工作监督来源能力缺口路线对照位置判断'],
+            ['method_overview', '新系统如何让信号在不同分支中各尽其职？', '方法输入表示组件目标输出数据流设计取舍'],
+            ['experiment_setup', '这些数字究竟在什么设置下才能相互比较？', '实验数据划分指标方向强基线训练条件比较口径'],
+            ['result', '最强结果是全面胜出，还是只在某些条件下成立？', '主结果强基线指标数值方向负结果平局证据解释'],
+            ['limitation', '哪些结论已经被证明，哪些仍然只是合理推测？', '局限样本规模外推范围缺失对照部署代价事实推断'],
+            ['synthesis', '初学者应该带着哪些问题继续读原论文？', '收束中心矛盾方法选择证据代价复现路线研究行动']
+        ];
+        const payload = {
+            version: 1,
+            readerTitle: '让声音分路前行：分工究竟解决了什么？',
+            oneSentenceThesis: '论文用不同分支分别保留局部声学线索与全局语义，证据显示它在目标设置下改善主指标，但外部泛化仍需单独验证。',
+            sections: specs.map(([kind, heading, seed]) => ({
+                kind,
+                heading,
+                body: [
+                    `${seed}需要先放回真实任务，才能看清输入、输出与失败现象之间为何彼此牵连。`,
+                    `${seed}还应从直觉进入定义，让术语在具体语境中获得可以检验的含义。`,
+                    `${seed}随后沿数据流展开因果链，使各项设计选择和它所处理的困难对应起来。`,
+                    `${seed}也要分开论文直接报告的事实、作者给出的解释与仍待验证的推断。`,
+                    `${seed}进入比较时须维持基线和指标口径一致，避免被最显眼的结果带偏。`,
+                    `${seed}最终落到证据边界、复现入口，以及读者继续核对原文时可执行的路径。`
+                ].join('\n\n')
+            }))
+        };
+        const result = parseApiReaderArticleResult(JSON.stringify(payload));
+        assert.strictEqual(result.plan.contract, 'beginner-researcher-v1');
+        assert.match(result.article, /^### /);
+        assert.ok(result.article.length > 1800);
+
+        payload.sections[2].heading = '方法概述';
+        assert.throws(
+            () => parseApiReaderArticleResult(JSON.stringify(payload)),
+            /论文特有问题或判断/
         );
     });
 
@@ -1953,17 +2076,20 @@ has_dataset: 否
             analysisCheckpoint: 'body with old images',
             analysisStageCheckpoints: {
                 scoringAudit: 'audited body',
+                apiReaderArticle: 'reader body',
                 imageSupplement: 'body with old images'
             }
         };
         const manifest = { version: 1, stages: {
             scoringAudit: { status: 'complete', fingerprint: 'scoring' },
+            apiReaderArticle: { status: 'complete', fingerprint: 'reader' },
             imageSupplement: { status: 'complete', fingerprint: first }
         } };
         assert.strictEqual(invalidateRecoveryStageIfChanged(paper, manifest, 'imageSupplement', 'new-image-fingerprint'), true);
         assert.strictEqual(manifest.stages.scoringAudit.status, 'complete');
+        assert.strictEqual(manifest.stages.apiReaderArticle.status, 'complete');
         assert.strictEqual(manifest.stages.imageSupplement, undefined);
-        assert.strictEqual(paper.analysisCheckpoint, 'audited body');
+        assert.strictEqual(paper.analysisCheckpoint, 'reader body');
     });
 
     it('评分证据使用 structureRepair 快照而不是评分后 checkpoint', () => {

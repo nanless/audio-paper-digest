@@ -1351,6 +1351,24 @@ primary_method_tag: #基准测试
             build_publish_api_url('openai', 'https://api.deepseek.com/anthropic'),
             'https://api.deepseek.com/v1/chat/completions'
         )
+        self.assertEqual(
+            detect_publish_api_type(
+                'https://opencode.ai/zen/go/v1', 'muse-spark-1.2-contributor'
+            ),
+            'openai_responses'
+        )
+        self.assertEqual(
+            build_publish_api_url(
+                'openai_responses', 'https://opencode.ai/zen/go/v1'
+            ),
+            'https://opencode.ai/zen/go/v1/responses'
+        )
+        self.assertEqual(
+            detect_publish_api_type(
+                'https://opencode.ai/zen/go/v1/responses/', 'future-model'
+            ),
+            'openai_responses'
+        )
 
     def test_publish_llm_endpoint_requires_https_except_explicit_loopback(self):
         self.assertEqual(
@@ -1440,6 +1458,44 @@ primary_method_tag: #基准测试
         self.assertEqual(blocks[0], {'type': 'text', 'text': 'review'})
         self.assertEqual(blocks[1]['type'], 'image_url')
         self.assertTrue(blocks[1]['image_url']['url'].startswith('data:image/png;base64,'))
+
+        responses = build_publish_payload(
+            'openai_responses', 'muse-spark-1.2-contributor',
+            'review', 100, 0.1, images=[image]
+        )
+        self.assertEqual(responses['max_output_tokens'], 100)
+        self.assertEqual(responses['input'][0]['content'][0]['type'], 'input_text')
+        self.assertEqual(responses['input'][0]['content'][1]['type'], 'input_image')
+
+    def test_muse_responses_api_uses_project_proxy(self):
+        response = mock.Mock()
+        response.status = 200
+        response.read.return_value = (
+            b'{"output":[{"type":"message","content":['
+            b'{"type":"output_text","text":"ok"}]}]}'
+        )
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        opener = mock.Mock()
+        opener.open.return_value = response
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'opencode-key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://opencode.ai/zen/go/v1',
+            'PAPER_ANALYZER_MODEL': 'muse-spark-1.2-contributor',
+            'HTTPS_PROXY': 'http://127.0.0.1:7897',
+        }
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('urllib.request.build_opener', return_value=opener):
+            result = call_publish_llm_api(
+                'inspect', required=True, max_retries=1, max_tokens=100,
+            )
+        self.assertEqual(result, 'ok')
+        request = opener.open.call_args.args[0]
+        self.assertEqual(request.full_url, 'https://opencode.ai/zen/go/v1/responses')
+        payload = json.loads(request.data.decode('utf-8'))
+        self.assertEqual(payload['model'], 'muse-spark-1.2-contributor')
+        self.assertEqual(payload['max_output_tokens'], 100)
+        self.assertNotIn('messages', payload)
 
     def test_secondary_publish_llm_uses_secondary_model_with_primary_endpoint_and_key_fallback(self):
         response = mock.Mock()

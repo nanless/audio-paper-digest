@@ -169,12 +169,13 @@ Node 脚本通过 `scripts/env-loader.js` 加载当前项目根 `.env`：① `sc
 | 端点含 | 模型含 | 协议 | URL 转换 |
 |--------|--------|------|----------|
 | `deepseek.com` 或模型含 `deepseek` | — | OpenAI | `/anthropic` → `/v1/chat/completions`（强制 OpenAI，优先级最高） |
+| OpenCode Go 或其他 HTTPS 端点 | 精确为 `muse-spark-1.2-contributor` | OpenAI Responses | `/v1` → `/v1/responses` |
 | `token-plan` | `mimo` | Anthropic | `/v1` → `/anthropic/v1/messages` |
 | `coding` | 端点含 `kimi.com` 或模型含 `kimi` | Anthropic | `/coding` 或 `/coding/v1` → `/coding/v1/messages`；兼容 `k3` |
 | `/anthropic` | — | Anthropic | `{base}/messages` |
 | 其他 | 其他 | OpenAI | `/v1/chat/completions` |
 
-**网络职责必须隔离**：LLM API 请求中 `options.agent` 必须显式设为 `false`（禁用连接复用且强制直连），否则在有系统代理时 MiMo Token Plan 返回 403。适用于 `fetch-papers.js`、`deep-analyzer.js`、`test-api-key.js` 以及后续新增的所有 Node LLM API 调用。arXiv 元数据、HTML、PDF、图片及 HuggingFace Papers 则必须通过当前项目 `.env` 的代理访问，缺少代理配置时必须报错，严禁静默直连；Node 的 arXiv 请求只接受 `HTTPS_PROXY` / `HTTP_PROXY` 中的 HTTP CONNECT 代理，HuggingFace 的 curl 可额外使用 SOCKS `ALL_PROXY`。
+**网络职责必须隔离**：所有 Node LLM 请求必须经 `requestLlmJson()`。默认仍使用 `agent:false` 直连，避免 MiMo/Kimi 被系统代理污染；唯一例外是精确模型 `muse-spark-1.2-contributor`，它无条件要求项目 `.env` 中的 `HTTPS_PROXY` / `HTTP_PROXY` HTTP CONNECT 代理，每次请求使用独立 one-shot agent，缺代理立即失败，严禁静默直连。Python 发布 LLM 走同一例外策略。arXiv 元数据、HTML、PDF、图片及 HuggingFace Papers 也必须通过当前项目 `.env` 的代理访问；Node 的 arXiv 请求只接受 HTTP CONNECT，HuggingFace 的 curl 可额外使用 SOCKS `ALL_PROXY`。
 任意论文图片和 Demo URL 只允许 HTTPS；每一跳先解析并拒绝所有私网/保留地址，再把 CONNECT 目标固定为本次校验得到的公网 IP，同时保留原域名作为 Host 与 TLS SNI，防止 DNS 重绑定。响应必须同时受绝对截止时间与字节上限约束。
 
 ## 架构
@@ -227,6 +228,7 @@ prompts/                # LLM prompt 模板
   table-fill.md         # 实验表格补充（后处理）
   structure-repair.md   # 缺失必要章节时的主模型局部结构修复
   scoring-audit.md      # 主模型最终类型感知评分审计（JSON）
+  api-reader-article.md # API 路线初学研究者连续长文（JSON 编辑计划 + 动态小节）
   index.md              # Prompt 文档索引（含占位符规范）
   en/                   # 英文版 prompt（含 filter / deep-analysis / gap-fill / opensource-scan / index，不含 image-supplement / method-fill / table-fill / structure-repair / scoring-audit）
 ```
@@ -254,7 +256,7 @@ prompts/                # LLM prompt 模板
 - **所有脚本必须沙箱外运行**：凡是直接执行项目脚本的抓取、分析、发布、测试、语法检查或数据校验命令，Agent 必须以沙箱外权限启动；沙箱无法访问 `127.0.0.1:7897` 时不得把该失败误判为目标站点或代理故障。仅可在沙箱内阅读文件或由测试框架导入模块，禁止直接运行脚本入口。
 - **`loadPrompt()` 从 markdown 文件内的第一个 fenced code block 提取 prompt**，并替换 `{变量名}` 占位符。内部示例代码块需使用比外层更短的 fence，修改 prompt 后需验证 `utils.js` 解析逻辑兼容。
 - **原子与并发写入**：使用 `writeFileAtomic()` 保存普通数据；分析结果和 `papers.json` 的读改写必须在跨进程文件锁内重读最新 canonical、合并变更并把 `generation` 递增 1，防止多个入口后写覆盖先写。当前协议不是调用方携带 expected-generation 的锁外乐观 CAS。Python 侧复用 `path_config.py` 的原子写入和 `update_json_file_locked()`，锁目录、owner 与锁内 generation 递增语义必须与 Node 一致。
-- **阶段恢复**：深度分析失败结果必须保留 `analysisManifest`、`analysisCheckpoint`、`analysisStageCheckpoints` 和 `analysisRecoveryImageManifest`。每个阶段绑定实际输入、模型/协议、prompt、温度和图像配置指纹；指纹变化时回退到上一阶段正文快照，只重跑当前及下游。`full-fetch`、`deep`、`batch`、单篇和重分析入口均须从 canonical deep result 合并失败 checkpoint，并逐论文持久化。旧成功正文存在时也必须保留最新失败标记并在下一轮重试；成功后才清理。只有下载、主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计和插图阶段均处于终态时才算成功。
+- **阶段恢复**：深度分析失败结果必须保留 `analysisManifest`、`analysisCheckpoint`、`analysisStageCheckpoints` 和 `analysisRecoveryImageManifest`。每个阶段绑定实际输入、模型/协议、prompt、温度和图像配置指纹；指纹变化时回退到上一阶段正文快照，只重跑当前及下游。`full-fetch`、`deep`、`batch`、单篇和重分析入口均须从 canonical deep result 合并失败 checkpoint，并逐论文持久化。旧成功正文存在时也必须保留最新失败标记并在下一轮重试；成功后才清理。API 新分析还必须完成 `apiReaderArticle=beginner-researcher-v1`：旧固定结构留作机器兼容层，博客优先渲染独立、SHA 闭环的初学研究者长文。只有下载、主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计、读者文章和插图阶段均处于终态时才算成功。
 - **Token 证据切片**：production v6 内嵌的 legacy v5 base payload 仍须通过 `experimentTables=evidence-rich-v2` 基础表格质量子校验；v6 `reader-longform-v2` 还按源矩阵 cell ID 验证完整覆盖。更早 Manual v1-v3 的 `bounded-v1` 仅作历史只读兼容。
 - **同篇分析互斥**：所有经 `analysis-engine.js` 的入口都必须按规范化 arXiv ID 取得异步共享运行锁，并在锁内完成“重读最新 canonical 记录 → 分析 → 写回结果和 digest 状态”；禁止在锁外用陈旧对象覆盖较新结果。单篇失败也必须合并 `r.result`，以保留 checkpoint。
 - **博客推送凭证**：严格 review 凭证绑定 review 时博客 `main` 的 `baseHead`；push 只能从该基线创建清单对应的发布提交，或重试凭证记录的同一发布提交。成功远端验证还必须绑定当前 remote 名称和 push URL 的哈希身份。完全相同的非空批次仅在当前协议、文件、提交、remote 身份及实时远端 `main` OID 全部仍匹配时复用既有凭证；网络失败、远端分支变化或 `origin` 换仓均 fail closed。禁止借由空清单、已有本地提交或无关 HEAD 推送未审查内容；生成前必须拒绝覆盖目标日期文章的人工 Git 修改。
@@ -273,7 +275,7 @@ prompts/                # LLM prompt 模板
 - **视觉事实清单**：论文视觉任务的 `generationContext.qaClaims` 固定包含完整英文标题、四个必要内容区、方法证据、带数字实验声明、局限和参考图 caption。提示词与逐图目检都必须逐项核对这些事实，不能只依赖自由文本摘要。
 - **视觉成品唯一归档**：Agent 若先把内置 `image_gen` 输出复制到 `data/archive/<日期>/visual-summaries/`，必须逐项完成语义目检并通过 `visual-summary-state.js record ... --qa-attested true` 登记；封面同样要求 `digest-cover-state.js record ... --qa-attested true`。QA 声明写入 manifest；`record` 会按排名、论文 ID 和标题 slug 写入唯一 canonical 文件名，并自动删除同排名/同论文 ID 临时 PNG。完成后两个视觉状态门禁必须通过。
 - **分析来源与发布门禁**：结果必须保存 `analysisSource`、全文/实际输入字符数、截断状态、来源 SHA-256、抓取告警和置信度。来源指纹变化时清除主分析及下游 checkpoint。仅摘要分析默认禁止发布；人工确认后必须显式设置 `allowAbstractAnalysisPublish: true`，博客同时显示醒目降级提示。最新一次重分析失败时禁止用陈旧正文发布。
-- **评分稳定性**：最终评分审计默认低温 `0.1`（`PD_SCORING_AUDIT_TEMPERATURE`），副模型图片计划默认 `0.2`（`PD_IMAGE_PLAN_TEMPERATURE`）。送审输入必须移除旧“评分理由”段但保留正文和证据账本，禁止模型照抄待纠正理由；跨维度校验失败须反馈具体违规分句。评分 manifest 必须保留模型、温度、prompt 模板哈希、证据哈希、尝试次数、前后总分/差值和最终八维 JSON；变化超过 0.5 分必须打印稳定性告警，指纹变化时只失效评分及插图阶段。
+- **评分稳定性**：最终评分审计默认低温 `0.1`（`PD_SCORING_AUDIT_TEMPERATURE`），副模型图片计划默认 `0.2`（`PD_IMAGE_PLAN_TEMPERATURE`）。送审输入必须移除旧“评分理由”段但保留正文和证据账本，禁止模型照抄待纠正理由；跨维度校验失败须反馈具体违规分句。新评分 JSON 必须带结构化 `evidenceProfile` 与账本内证据 ID；代码按多组件缺消融、内部评测未报告样本规模、只有工程主张而无测量/可复用产物等条件应用可解释分项/总分上限。评分 manifest 必须保留评分契约与 cap 规则版本、模型、温度、prompt 模板哈希、证据哈希、audit/output SHA、尝试次数、证据画像、代码上限、前后总分/差值和最终八维 JSON；任一绑定变化都失效评分、读者文章及插图阶段。
 - **副模型日志**：插图筛选必须记录 `[secondary]` 详细输入/输出摘要（模型、协议、endpoint/key 来源、候选和下载数量、图片安全标签/MIME/负载、Prompt/响应长度、活跃请求时长、计划解析状态、`paragraph_id` 实际命中、旧 anchor 兼容命中、拒绝原因和最终选图），只能记录 key 来源，严禁记录 API key 内容。统一日志必须是 UTF-8 纯文本、唯一文件名和 `0600` 权限；每个非空物理行均须以毫秒级北京时间戳（`[YYYY-MM-DD HH:mm:ss.SSS+08:00]`）开头，并脱敏认证头、Cookie、token、secret、password、任意已配置密钥实际值和 URL userinfo；不得轮转、限量或自动清理。
 - **睡眠恢复**：LLM 的 20 分钟整体超时按进程活跃时间记账；检测到超过 30 秒的事件循环跳变时视为系统睡眠/长时间挂起，排除睡眠时长并记录 `[api]` 日志。唤醒后底层请求超时必须保留剩余预算进入正常重试，不能把睡眠墙钟时间算成 API 已用时间。
 - **评分数值契约**：八个分项与总分最多一位小数；开源分仅允许 `0/0.2/0.5/1.0/1.2/1.5`。理论研究的完整证明、推导和附录可作为核心公开产物，不能因 `hasCode/hasModel/hasDataset` 均为否而被代码强制归零。Python 发布预检与人工覆盖也必须执行同一契约。
@@ -282,7 +284,7 @@ prompts/                # LLM prompt 模板
 
 ### 致命 Bug 防御
 
-**MiMo Token Plan 403**：所有 Node LLM 请求（包括 API 测试脚本）的 `options.agent` 必须为 `false`（不是 `undefined`）。这会彻底禁用连接复用，强制直连。任何重构 HTTP 代码时绝对不能改回 `agent: proxyAgent` 或 `undefined`。
+**MiMo Token Plan 403**：所有 Node LLM 请求（包括 API 测试脚本）必须走 `requestLlmJson()`；它对 MiMo/Kimi 使用 `options.agent=false` 禁用连接复用。不要在调用方直接注入 agent。`muse-spark-1.2-contributor` 是显式反例：公共封装必须为它使用项目 HTTP CONNECT 代理。
 
 ### 长时间运行命令
 

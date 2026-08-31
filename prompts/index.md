@@ -18,6 +18,7 @@
 | [table-fill.md](table-fill.md) | 深度分析后处理：全文编号表未进入正文、已有表格证据过浅或出现非法省略标记时，补充带设置/基线/方向、表前问题和表后边界的关键证据表 | `deep-analyzer.js` |
 | [structure-repair.md](structure-repair.md) | 审校结果缺少必要章节、正文不足或实验表格超限时，由主模型局部修复完整报告契约 | `deep-analyzer.js` |
 | [scoring-audit.md](scoring-audit.md) | 正文修复完成后由主模型最终审计文档类型、八维评分与扣分归属，只输出 JSON | `deep-analyzer.js` |
+| [api-reader-article.md](api-reader-article.md) | API 路线评分闭环后，以动态问题标题生成面向初学研究者的连续中文长文 | `deep-analyzer.js` |
 
 ## 占位符规范
 
@@ -37,6 +38,7 @@
 - `image-supplement.md` 的顶层只能包含 `insertions` 数组；只有严格 `{"insertions":[]}` 表示确认没有高价值图片，schema 错误保持可重试。
 - `image-supplement.md` 额外使用 `{anchorCatalog}`；副模型必须从目录中选择稳定 `paragraph_id`，旧自由文本 `anchor` 仅用于兼容历史响应。
 - `scoring-audit.md` 的 `{validationFeedback}` 用于把代码校验错误反馈给下一次局部审计；`structure-repair.md` 仅在共享结构契约发现缺失标题时调用。
+- `api-reader-article.md` 使用 `{title}`、`{arxivId}`、`{existingAnalysis}`、`{sourceEvidence}` 与 `{validationFeedback}`；其 JSON 计划和文章必须通过代码文风门禁并以 SHA 闭环后才能发布。
 - `visual-summary.md` 仅使用已审计的摘要、方法和实验章节构造编辑性说明图；必须保持为单一第一个 fenced code block。论文长图与封面均由内置 `image_gen` 整张生成，优先使用当前最高可用纵向分辨率；真实关键图只作结构/数值依据，无法可靠校验的长文本或精确数字不得进入图中。确定性渲染器只用于本地调试或离线兜底。
 - 保持占位符名称与代码中的替换逻辑一致。
 - 修改 prompt 后建议运行一次单篇分析或 `quick-test.js` 验证效果。

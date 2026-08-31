@@ -145,9 +145,10 @@ HF 特有字段（共 7 个）：
 
 使用 `项目根目录的 `.env` 文件` 中的 `PAPER_ANALYZER_*` 配置逐篇判断是否为语音/音乐/音频相关。
 
-**API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动切换 OpenAI / Anthropic 协议
+**API 协议自动路由**：`scripts/utils.js` 中的 `detectApiType()` 会根据端点和模型名自动切换 OpenAI Chat / OpenAI Responses / Anthropic 协议；`muse-spark-1.2-contributor` 使用 OpenCode Go `/v1/responses`
 
 LLM endpoint 只允许 HTTPS；仅 loopback 本地测试服务可以使用 HTTP，避免把 API key 发送到公网明文连接。
+- **OpenCode Go Muse Spark Contributor**：精确模型 `muse-spark-1.2-contributor` 使用 OpenAI Responses 协议；`https://opencode.ai/zen/go/v1` 自动转换为 `/v1/responses`，且必须走项目 HTTP CONNECT 代理
 - **MiMo/Kimi Token Plan / Coding Plan**（MiMo 由 `token-plan` + MiMo 域名/模型识别；Kimi 由 `coding` + `kimi.com` 域名或 Kimi 模型识别）→ 自动切换为 **Anthropic 协议**，兼容 `k3`，并伪装成 Claude Code 调用
   - **MiMo**: `https://token-plan-cn.xiaomimimo.com/v1` → `/anthropic/v1/messages`
   - **Kimi**: `https://api.kimi.com/coding` 或 `https://api.kimi.com/coding/v1` → `https://api.kimi.com/coding/v1/messages`（自动补齐 `/v1`，无需 `/anthropic` 中间路径；兼容 `k3` 等模型名）
@@ -212,12 +213,12 @@ LLM endpoint 只允许 HTTPS；仅 loopback 本地测试服务可以使用 HTTP�
 > **图片与表格放置规则**：production v6 必须把图、表、公式的确定性处置写入 `reader-longform-v2` block；records v4 内嵌的 legacy v5 base payload 仍重放其 `readerArticle` 图片邻接作为基础质量子校验。严禁编造图片 URL。
 
 **技术特性**：
-- **API 协议自动路由**：与筛选阶段共用同一套 `detectApiType()` 逻辑，根据 `PAPER_ANALYZER_ENDPOINT` 和 `PAPER_ANALYZER_MODEL` 自动切换 OpenAI / Anthropic 协议
+- **API 协议自动路由**：与筛选阶段共用同一套 `detectApiType()` 逻辑，根据 `PAPER_ANALYZER_ENDPOINT` 和 `PAPER_ANALYZER_MODEL` 自动切换 OpenAI Chat / OpenAI Responses / Anthropic 协议。`muse-spark-1.2-contributor` 使用 OpenCode Go `/v1/responses`
 - 获取 arXiv HTML/PDF 全文；主分析默认最多使用 200K 字符，超长来源由 `task-focused-v1` 按开头、四分位、中部、尾部和任务关键词跨全文确定性取样，而不是简单截取前缀。依次尝试 `v1`、`v2`、无后缀版本；所有 HTML/PDF/图片请求均通过项目 `.env` 的 HTTP CONNECT 代理 dispatcher，缺失配置即失败；使用 **cheerio** 结构化解析 HTML，移除 script/style/nav/header/footer 等噪音元素
 - 提取图片 URL，过滤 logo/favicon；下载层会校验 Content-Type、Content-Length 和 PNG/JPEG/WebP 文件头，避免把 HTML 错误页或过大图片送入模型
 - **图片分析**：HTML 正文和 figure caption 同次解析，预提供 URL 用同 URL 或唯一文件名补全图注。候选按 caption/文件名/顺序预筛后串行下载，成功内容写入 `data/current/image-cache/`；404、错误 MIME、超限和安全拒绝不重试，只有限流、服务端错误和网络异常重试。副模型按价值排序输出最多 4 张计划，并从代码提供的段落目录选择稳定 `paragraph_id`；旧自由文本 anchor 只兼容历史响应。非法 ID、定位失败和超限图片不会回退到章节末尾
 - 每篇结果会保存 `imageManifest`：包含候选评分、逐 URL 下载结果、缓存命中、副模型/温度、prompt/响应哈希、插入与拒绝诊断及最终选图。严格空计划为 `no_high_value_images`；全部永久不可下载为 `no_downloadable_images`；有计划但零插入为 `invalid_output` 并只重试插图阶段
-- `analysisManifest` 记录图片下载、主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计和插图阶段；失败时保留 `analysisCheckpoint` 与 `analysisRecoveryImageManifest`。再次运行从首个未完成阶段继续，只有所有必需阶段进入完成/无需/跳过等终态才视为成功
+- `analysisManifest` 记录图片下载、主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计、API 读者文章和插图阶段；失败时保留 `analysisCheckpoint` 与 `analysisRecoveryImageManifest`。再次运行从首个未完成阶段继续，只有所有必需阶段进入完成/无需/跳过等终态才视为成功
 - **并发度：3 篇并行**（可通过项目 `.env` 中的 `PD_ANALYSIS_CONCURRENCY` 调整）
 - 每篇默认最多重试 **2 次**（外层 `analysis-engine.js`，由 `PD_ANALYSIS_MAX_RETRIES` 调整）；每次外层尝试中的每个 LLM API 阶段默认最多尝试 **3 次**（`deep-analyzer.js` 内层，由 `PD_ANALYSIS_API_MAX_RETRIES` 调整，指数退避：第一次等待 10 秒，之后翻倍，`2^attempt * 5000ms`），外层重试间隔 3 秒
 - API 整体超时为 **20 分钟活跃时间**；每秒心跳识别超过 30 秒的系统睡眠/事件循环挂起并排除该墙钟跳变，唤醒后的请求超时仍按剩余预算重试
@@ -225,7 +226,7 @@ LLM endpoint 只允许 HTTPS；仅 loopback 本地测试服务可以使用 HTTP�
 - 各后处理阶段不再重复发送整篇论文：开源扫描、审校重写、评分审计、方法/表格修复和结构修复的默认证据预算依次为 16K、60K、40K、30K、40K 字符。对应 `.env` 变量为 `PD_OPENSOURCE_EVIDENCE_MAX_CHARS`、`PD_REVISION_EVIDENCE_MAX_CHARS`、`PD_SCORING_EVIDENCE_MAX_CHARS`、`PD_REPAIR_EVIDENCE_MAX_CHARS`、`PD_STRUCTURE_EVIDENCE_MAX_CHARS`；主分析预算由 `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` 控制。选择算法版本与预算进入恢复指纹，变化时只重跑受影响阶段及下游
 - 每次模型调用日志记录文本字符数、估算文本 token 数与图片数；图片 base64 不计入也不写入文本统计
 - 代理只从项目根 `.env` 中显式配置的大小写代理变量读取；不继承 shell/IDE 代理，也不读取 macOS `scutil`。arXiv 抓取至少需要 `HTTPS_PROXY` 或 `HTTP_PROXY` 其中一项 HTTP CONNECT 地址，HuggingFace `curl` 可额外使用 SOCKS `ALL_PROXY`
-- LLM 请求与抓取请求完全隔离：全部 LLM 调用固定 `agent: false` 直连，绝不复用抓取 dispatcher；使用本机代理的网络命令必须在沙箱外运行
+- LLM 请求与抓取请求完全隔离：LLM 默认 `agent:false` 直连；精确模型 `muse-spark-1.2-contributor` 是唯一例外，必须使用项目 `.env` 的 HTTP CONNECT 代理并为每次请求创建独立 agent。它不复用抓取 dispatcher，也不允许缺代理直连；使用本机代理的网络命令必须在沙箱外运行
 - 抓取阶段只要任一 arXiv 类别或 HuggingFace 来源失败，即写入 `source_partial_failed` 并终止在筛选阶段；此状态不能复用为 `filter_complete`，也不能进入深度分析或更新持久化去重库。
 - 所有分析配置集中管理于 `scripts/config.js`，支持项目 `.env` 覆写（并发、重试、arXiv/PDF 超时与大小、各阶段证据字符预算、评分审计温度、插图计划温度及图片预算）
 
@@ -241,6 +242,7 @@ LLM endpoint 只允许 HTTPS；仅 loopback 本地测试服务可以使用 HTTP�
 | Round 5 | 方法章节修复 | 代码检测 + LLM 补充 | 检测方法概述是否过于简略（<600 字/<3 段），触发扩展至 600+ 字 |
 | Round 6 | 最终结构修复（按需） | `prompts/structure-repair.md` | 共享契约发现 13 个必要章节有缺失时，主模型只补齐当前报告结构；完整时不调用 |
 | Round 7 | 类型感知评分审计 | `prompts/scoring-audit.md` | 主模型只输出 JSON；代码把校验错误反馈给下一次局部审计，并按资源状态确定性归一化无产物论文的开源分 |
+| Round 7.5 | 初学研究者读者文章 | `prompts/api-reader-article.md` | 在事实与评分闭环后按学习依赖重组为动态小节长文；代码校验篇幅、标题、逻辑顺序、去模板和 SHA 闭环 |
 
 表格后处理会在全文存在编号表但正文缺少可读表、已有表只有叙述型结论卡/证据过浅，或出现“此处省略/详见原文”等非法占位语时调用。新分析和重分析写入 `analysisManifest.contracts.experimentTables=evidence-rich-v2`：除每篇最多 2 张表、每表最多 12 行和 8 个指标列外，还要求标识列、至少 3 行与 2 个数字、指标方向、表前具体比较问题、表后关键差异与证据边界，并在来源提供时覆盖消融或负面证据。Node 与 Python 双端同构校验；历史 `bounded-v1` 仍只执行旧上限门禁。
 | Round 8 | 图像筛选与插图计划（仅双模型模式） | `prompts/image-supplement.md` | 副模型只输出 JSON 插图计划；合并后再次校验完整契约，不合格时只丢弃插图计划并保留主模型正文 |
@@ -255,7 +257,7 @@ LLM endpoint 只允许 HTTPS；仅 loopback 本地测试服务可以使用 HTTP�
 
 > **单模型 vs 双模型**：主模型始终负责正文和最终评分审计。评分审计默认使用独立低温 0.1。设置 `PAPER_ANALYZER_SECONDARY_MODEL` 后，副模型只从候选图片中筛选高价值图、丢弃低信息图并输出章节、稳定段落 ID、图前和图后说明；代码不会接受副模型替换主模型原文。未设置副模型时图片 URL 只保存在候选元数据中，博客 review 的可选多模态 LLM 检查也会跳过，但确定性图片门禁仍执行。
 
-评分审计的“单一问题单一维度”规则是硬校验。跨维度理由会触发带精确错误反馈的局部重试，而不会立即重跑前面的全文分析。开源状态能由机器摘要与 `## 开源详情` 确定时，代码使用固定锚点：肯定语境明确承诺未来开放 0.5、带 URL 或肯定结构化状态的 Demo 0.2、否定/未提及且无承诺 0；理论研究根据公开证明、推导和附录判断核心产物，不机械要求代码/模型/数据链接。
+评分审计的“单一问题单一维度”规则是硬校验。跨维度理由会触发带精确错误反馈的局部重试，而不会立即重跑前面的全文分析。审计 JSON 还要提交引用证据账本的 `evidenceProfile`；代码对多组件无直接消融、内部评测未报告样本规模、只有工程主张而无测量/可复用产物等情况应用分项或总分上限。评分契约、cap 规则版本、audit/output SHA 都进入恢复校验，代码规则变化不会复用旧评分。开源状态能由机器摘要与 `## 开源详情` 确定时，代码使用固定锚点：肯定语境明确承诺未来开放 0.5、带 URL 或肯定结构化状态的 Demo 0.2、否定/未提及且无承诺 0；理论研究根据公开证明、推导和附录判断核心产物，不机械要求代码/模型/数据链接。
 
 全文获取会记录 `analysisSource`、字符数、截断状态、来源 SHA-256 和告警。HTML/PDF 均不可用时使用摘要并标记 `degraded_abstract`；该结果默认不能发布，只有人工设置 `allowAbstractAnalysisPublish: true` 后才允许生成带降级提示的博客。来源、评分模型、低温、评分 prompt 或证据指纹变化会精确失效对应 checkpoint，避免混用旧证据。
 

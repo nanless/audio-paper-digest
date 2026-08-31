@@ -184,6 +184,7 @@ const RECOVERY_STAGE_TERMINAL_STATUSES = Object.freeze({
     methodRepair: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
     structureRepair: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
     scoringAudit: Object.freeze(['complete', MANUAL_COMPLETE_STATUS]),
+    apiReaderArticle: Object.freeze(['complete']),
     imageSupplement: Object.freeze(['complete', 'skipped', 'no_candidates', 'no_high_value_images', 'no_downloadable_images', MANUAL_COMPLETE_STATUS])
 });
 const EXPERIMENT_TABLE_LIMITS = Object.freeze({

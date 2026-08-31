@@ -380,7 +380,7 @@ function parseMachineSummary(analysis) {
 // ═══════════════════════════════════════════════════════
 
 /**
- * 检测 API 协议类型：'openai' 或 'anthropic'
+ * 检测 API 协议类型：'openai'、'openai_responses' 或 'anthropic'
  * 
  * 规则：
  * 1. MiMo/Kimi Token Plan / Coding Plan → Anthropic（需伪装 Claude Code）
@@ -388,12 +388,18 @@ function parseMachineSummary(analysis) {
  * 3. DeepSeek 及其他 → OpenAI
  */
 function detectApiType(endpoint, model) {
-    const ep = (endpoint || '').toLowerCase();
+    const ep = (endpoint || '').replace(/\/+$/, '').toLowerCase();
     const m = (model || '').toLowerCase();
 
     // DeepSeek 强制 OpenAI 协议（优先级最高）
     if (ep.includes('deepseek.com') || m.includes('deepseek')) {
         return 'openai';
+    }
+
+    // OpenCode Go 上的 Muse Spark Contributor 只提供 OpenAI Responses API。
+    // 同时允许用户直接配置完整 /responses 端点。
+    if (ep.endsWith('/responses') || m === 'muse-spark-1.2-contributor') {
+        return 'openai_responses';
     }
 
     // Token Plan / Coding Plan 特征
@@ -451,7 +457,8 @@ function validateApiEndpointUrl(endpoint) {
  * MiMo: /v1 → /anthropic/v1/messages
  * Kimi: /coding 或 /coding/v1 → /coding/v1/messages
  * 其他 Anthropic: {base}/messages
- * OpenAI: 端点路径含 /anthropic 时自动修正为 /v1/chat/completions
+ * OpenAI Responses: 基础端点补 /responses，完整端点原样保留
+ * OpenAI Chat: 端点路径含 /anthropic 时自动修正为 /v1/chat/completions
  */
 function buildApiUrl(apiType, endpoint) {
     validateApiEndpointUrl(endpoint);
@@ -469,6 +476,9 @@ function buildApiUrl(apiType, endpoint) {
         }
         // 其他 Anthropic 兼容端点
         return `${base}/messages`;
+    }
+    if (apiType === 'openai_responses') {
+        return base.endsWith('/responses') ? base : `${base}/responses`;
     }
     // OpenAI: 标准化路径（如 /anthropic → /v1）
     const normalized = base.replace(/\/anthropic\/?$/, '/v1');
@@ -522,6 +532,29 @@ function normalizeOpenAIContent(content) {
     return content;
 }
 
+function normalizeResponsesContent(content) {
+    const blocks = Array.isArray(content) ? content : [{ type: 'text', text: String(content || '') }];
+    return blocks.map(block => {
+        if (!block || typeof block !== 'object') {
+            return { type: 'input_text', text: String(block || '') };
+        }
+        if (block.type === 'text' || block.type === 'input_text') {
+            return { type: 'input_text', text: String(block.text || '') };
+        }
+        if (block.type === 'image_url' || block.type === 'input_image') {
+            const imageUrl = block.image_url?.url || block.image_url || block.url || '';
+            return {
+                type: 'input_image',
+                image_url: imageUrl,
+                ...(block.image_url?.detail || block.detail
+                    ? { detail: block.image_url?.detail || block.detail }
+                    : {})
+            };
+        }
+        return block;
+    });
+}
+
 function buildRequestBody(apiType, model, messages, maxTokens, temperature) {
     if (apiType === 'anthropic') {
         // Anthropic: system 必须是顶级字段，不能在 messages 中
@@ -539,6 +572,18 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature) {
         }
         const body = { model, max_tokens: maxTokens, messages: anthropicMessages };
         if (system) body.system = system;
+        if (Number.isFinite(temperature)) body.temperature = temperature;
+        return body;
+    }
+    if (apiType === 'openai_responses') {
+        const body = {
+            model,
+            input: messages.map(msg => ({
+                role: msg.role,
+                content: normalizeResponsesContent(msg.content)
+            })),
+            max_output_tokens: maxTokens
+        };
         if (Number.isFinite(temperature)) body.temperature = temperature;
         return body;
     }
@@ -597,7 +642,8 @@ function buildHeaders(apiType, key, bodyStr) {
 
 /**
  * 解析响应，提取文本内容
- * OpenAI: response.choices[0].message.content
+ * OpenAI Responses: response.output_text 或 output[].content[].output_text
+ * OpenAI Chat: response.choices[0].message.content
  * Anthropic: 合并所有 text content block
  */
 function parseResponseText(apiType, response) {
@@ -612,6 +658,18 @@ function parseResponseText(apiType, response) {
             }
             const first = response.content[0];
             return first.text || first.thinking || '';
+        }
+    } else if (apiType === 'openai_responses') {
+        if (typeof response.output_text === 'string' && response.output_text) {
+            return response.output_text;
+        }
+        if (Array.isArray(response.output)) {
+            const textBlocks = response.output.flatMap(item => (
+                Array.isArray(item?.content) ? item.content : []
+            )).filter(block => block?.type === 'output_text' || typeof block?.text === 'string')
+                .map(block => block.text || '')
+                .filter(Boolean);
+            if (textBlocks.length > 0) return textBlocks.join('\n');
         }
     } else {
         if (response.choices && response.choices[0]) {
@@ -706,6 +764,41 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
         req.write(postData);
         req.end();
     });
+}
+
+function requiresLlmProxy(endpoint, model) {
+    const m = String(model || '').toLowerCase();
+    return m === 'muse-spark-1.2-contributor';
+}
+
+/**
+ * LLM 默认保持 agent:false 直连；OpenCode Go Muse Spark Contributor
+ * 因地区限制必须使用项目 .env 的 HTTP CONNECT 代理。
+ * 每次请求创建并销毁独立 Agent，不影响 MiMo/Kimi 的直连语义。
+ */
+async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options = {}) {
+    let agent = false;
+    if (requiresLlmProxy(endpoint, model)) {
+        const proxyUrl = detectHttpConnectProxyUrl();
+        if (!proxyUrl) {
+            throw new Error(
+                'OpenCode Go muse-spark-1.2-contributor 必须在项目 .env '
+                + '配置 HTTPS_PROXY 或 HTTP_PROXY（HTTP CONNECT），禁止静默直连'
+            );
+        }
+        const target = validateApiEndpointUrl(apiUrl);
+        agent = createProxyAgent(
+            proxyUrl,
+            target.hostname,
+            Number(target.port) || (target.protocol === 'https:' ? 443 : 80),
+            target.hostname
+        );
+    }
+    try {
+        return await requestJson(apiUrl, bodyObj, headers, { ...options, agent });
+    } finally {
+        if (agent && typeof agent.destroy === 'function') agent.destroy();
+    }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1561,6 +1654,8 @@ module.exports = {
     getClaudeCodeVersion,
     parseResponseText,
     requestJson,
+    requiresLlmProxy,
+    requestLlmJson,
     // 代理
     detectProxyUrl,
     detectHttpConnectProxyUrl,
