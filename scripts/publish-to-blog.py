@@ -1849,6 +1849,23 @@ def normalize_digest_index_reader_surface(text):
     return value
 
 
+def compact_index_opensource(pa, paper, limit=4):
+    """Keep the digest index navigable; full provenance remains on each paper page."""
+    oss_text = enrich_opensource(pa, paper)
+    urls = []
+    for raw in re.findall(r'https://[^\s<>()\[\]{}"\']+', oss_text):
+        url = raw.rstrip('.,;:)，。；：！？、')
+        if url and url not in urls:
+            urls.append(url)
+        if len(urls) >= limit:
+            break
+    if not urls:
+        return '资源状态、许可边界与复现证据详见单篇分析页。'
+    lines = [f'- [资源 {index}]({url})' for index, url in enumerate(urls, 1)]
+    lines.append('- 完整资源身份、许可边界与缺失项详见单篇分析页。')
+    return '\n'.join(lines)
+
+
 def generate_index_page(scored, unscored, date_str, paper_slugs, category='论文速递'):
     """生成每日汇总页面（index.md），包含概览和每篇论文的链接"""
     total = len(scored) + len(unscored)
@@ -1956,17 +1973,8 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
                 summary = summary[:cutoff.start()].strip()
             md += f"📌 **核心摘要**\n\n{summary}\n\n"
 
-        supplementary = ''
         if pa.get('opensource'):
-            oss_text = enrich_opensource(pa, p)
-            # 清理内容开头可能残留的 Markdown 标题
-            oss_text = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', oss_text.strip(), count=1)
-            # 分离补充信息
-            supp_match = re.search(r'##\s*补充信息\s*\n([\s\S]*)', oss_text)
-            if supp_match:
-                supplementary = supp_match.group(1).strip()
-                oss_text = oss_text[:supp_match.start()].strip()
-            md += f"🔗 **开源资源**\n\n{oss_text}\n\n"
+            md += f"🔗 **开源资源**\n\n{compact_index_opensource(pa, p)}\n\n"
 
         # The reader-facing sequence ends at open resources.  Keep provenance
         # and author details afterwards, so they do not interrupt the verdict.
@@ -1975,10 +1983,6 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         if pa.get('authors'):
             authors_clean = pa['authors'].replace('- **第一作者**', '第一作者').replace('- **通讯作者**', '通讯作者').replace('- **作者列表**', '作者列表')
             md += f"👥 **作者与机构**\n\n{authors_clean}\n\n"
-
-        # 补充信息放到最后面
-        if supplementary:
-            md += f"📎 **补充信息**\n\n{supplementary}\n\n"
 
         md += "---\n\n"
 
@@ -2018,24 +2022,14 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
                 summary = summary[:cutoff.start()].strip()
             md += f"📌 **核心摘要**\n\n{summary}\n\n"
 
-        supplementary = ''
         if pa.get('opensource'):
-            oss_text = enrich_opensource(pa, p)
-            oss_text = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', oss_text.strip(), count=1)
-            supp_match = re.search(r'##\s*补充信息\s*\n([\s\S]*)', oss_text)
-            if supp_match:
-                supplementary = supp_match.group(1).strip()
-                oss_text = oss_text[:supp_match.start()].strip()
-            md += f"🔗 **开源资源**\n\n{oss_text}\n\n"
+            md += f"🔗 **开源资源**\n\n{compact_index_opensource(pa, p)}\n\n"
 
         if meta:
             md += f"{meta}\n\n"
         if pa.get('authors'):
             authors_clean = pa['authors'].replace('- **第一作者**', '第一作者').replace('- **通讯作者**', '通讯作者').replace('- **作者列表**', '作者列表')
             md += f"👥 **作者与机构**\n\n{authors_clean}\n\n"
-
-        if supplementary:
-            md += f"📎 **补充信息**\n\n{supplementary}\n\n"
 
         md += "---\n\n"
 
