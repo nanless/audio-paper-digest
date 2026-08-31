@@ -305,6 +305,18 @@ describe('Manual v4 editorial quality primitives', () => {
             findMissingComparisonUnits('SylCipher 相对 wav2vec-U 的 CER 收益在匹配域与不匹配域相差多大？'),
             []
         );
+        assert.deepEqual(
+            findMissingComparisonUnits('第二段取每一步最大词元概率的时均作为置信度，低于阈值就弃权。'),
+            []
+        );
+        assert.deepEqual(
+            findMissingComparisonUnits('6 个骨干中 5 个的 WER 低于 0.05，唯 Qwen-Audio-Chat 为 0.202。'),
+            []
+        );
+        assert.deepEqual(
+            findMissingComparisonUnits('用一个廉价冻结规则证明无支撑调用可以被大幅拦截且不损伤支撑准确率。'),
+            []
+        );
     });
 
     it('finds batch-wide sentence templates at the configured paper threshold', () => {

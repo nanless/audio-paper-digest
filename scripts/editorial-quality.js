@@ -681,11 +681,19 @@ function findMissingComparisonUnits(text) {
         if (explicitScoreUnit.test(sentence.text)) continue;
         // Do not treat digits embedded in model/product names (for example
         // wav2vec-U or Qwen2-Audio) as bare percentage values.
-        const bareValues = sentence.text.match(
-            new RegExp(`(?<![A-Za-z0-9])${quantity}(?![A-Za-z0-9])`, 'gu')
-        ) || [];
+        const barePattern = new RegExp(`(?<![A-Za-z0-9])${quantity}(?![A-Za-z0-9])`, 'gu');
+        const bareValues = [...sentence.text.matchAll(barePattern)]
+            .filter(match => {
+                const before = sentence.text.slice(0, match.index);
+                const after = sentence.text.slice(match.index + match[0].length);
+                if (/第\s*$/.test(before)) return false;
+                return !/^\s*(?:个|条|段|篇|张|种|类|组|步|轮|层|模型|系统|骨干|样本|片段|词元|接口|分支)/.test(after);
+            })
+            .map(match => match[0]);
         const likelyPercentageScale = bareValues.some(raw => (
-            /^\d/.test(raw) ? Number.parseFloat(raw) > 1 : !/^[负正]?零点/.test(raw)
+            /^\d/.test(raw)
+                ? Number.parseFloat(raw) > 1
+                : raw.includes('点') && !/^[负正]?零点/.test(raw)
         ));
         if (likelyPercentageScale) {
             findings.push({
