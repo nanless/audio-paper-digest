@@ -852,12 +852,19 @@ primary_task_tag: #音视频生成
             code: 'quantitative_chinese_numeral', match: '一个模型'
         }), true);
         assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
+            code: 'quantitative_chinese_numeral', match: '一段'
+        }), true);
+        assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
             code: 'quantitative_chinese_numeral', match: '两个模型'
         }), false);
         const split = splitReaderLongParagraphs(
             '这是用于建立任务直觉并解释输入输出关系的完整句子。'.repeat(18)
         );
         assert.ok(split.includes('\n\n'));
+        const denseSplit = splitReaderLongParagraphs(
+            '这是一句。这里是二句。接着是三句。然后是四句。再来是五句。继续是六句。最后是七句。'
+        );
+        assert.ok(denseSplit.includes('\n\n'));
         assert.strictEqual(
             normalizeReaderEditorialSurface('把ITD和ILD交给两个模型。', [{
                 code: 'quantitative_chinese_numeral', match: '两个模型'

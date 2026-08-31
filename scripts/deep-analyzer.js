@@ -747,7 +747,7 @@ const API_READER_REQUIRED_KINDS = Object.freeze([
 function isAllowedReaderNarrativeNumeralIssue(issue) {
     if (issue?.code !== 'quantitative_chinese_numeral') return false;
     const match = String(issue.match || '').trim();
-    return /^(?:一|两)(?:个|条|类|层|种|套|路|方面|部分|组|步|轮|半)$/.test(match)
+    return /^(?:一|两)(?:个|条|段|类|层|种|套|路|方面|部分|组|步|轮|半)$/.test(match)
         || /^一(?:个)?(?:模型|系统|框架|方法|问题|概念|目标|接口|视角|例子|直觉)$/.test(match);
 }
 
@@ -795,19 +795,24 @@ function splitReaderLongParagraphs(text, targetChineseChars = 190, maxChineseCha
     const protectedBlock = value => /^(?:```|~~~|\||[-*+]\s|\d+\.\s|!\[|\$\$|\\\[)/.test(value.trim());
     return String(text || '').trim().split(/\n\s*\n/).flatMap(paragraph => {
         const trimmed = paragraph.trim();
-        if (!trimmed || protectedBlock(trimmed) || chineseCount(trimmed) <= maxChineseChars) {
+        const sentenceEndCount = (trimmed.match(/[。！？!?；;]/g) || []).length;
+        if (!trimmed || protectedBlock(trimmed)
+            || (chineseCount(trimmed) <= maxChineseChars && sentenceEndCount <= 6)) {
             return [trimmed];
         }
         const sentences = trimmed.match(/[^。！？；]+[。！？；]?/g) || [trimmed];
         const groups = [];
         let current = '';
+        let currentSentences = 0;
         for (const sentence of sentences) {
             const next = `${current}${sentence}`;
-            if (current && chineseCount(next) > targetChineseChars) {
+            if (current && (chineseCount(next) > targetChineseChars || currentSentences >= 5)) {
                 groups.push(current.trim());
                 current = sentence;
+                currentSentences = 1;
             } else {
                 current = next;
+                currentSentences += 1;
             }
         }
         if (current.trim()) groups.push(current.trim());
