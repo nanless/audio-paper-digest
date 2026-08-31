@@ -1846,7 +1846,7 @@ def normalize_digest_index_reader_surface(text):
         value,
     )
     value = re.sub(
-        r'([-+]?\d+(?:\.\d+)?)(?=(?:mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|MACs?|tokens?|FPS|bit)\b)',
+        r'([-+]?\d+(?:\.\d+)?)(?=(?:mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|MACs?|tokens?|FPS|bit|DoF|Vpp|D|B|K|M|G)\b)',
         r'\1 ',
         value,
         flags=re.I,
