@@ -1256,7 +1256,8 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
 async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence, options = {}) {
     let validationFeedback = '这是第一次生成，没有上一次校验错误。';
     let lastError = null;
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         const prompt = loadPrompt('prompts/api-reader-article.md', {
             title: paper.title || '',
             arxivId: getPaperArxivId(paper),
@@ -1273,8 +1274,10 @@ async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence,
             return { ...parseApiReaderArticleResult(raw), attempts: attempt };
         } catch (error) {
             lastError = error;
-            validationFeedback = `上一次输出被代码拒绝：${error.message}。请保留论文事实，完整重写 JSON。`;
-            console.log(`    [deep] ⚠️  读者文章校验失败 (${attempt}/2): ${error.message}`);
+            validationFeedback = `上一次输出被代码拒绝：${error.message}。`
+                + '请保留论文事实，完整重写 JSON；逐句去重，'
+                + '任何包含过多句子的单段都拆成 2–4 句的自然段。';
+            console.log(`    [deep] ⚠️  读者文章校验失败 (${attempt}/${maxAttempts}): ${error.message}`);
         }
     }
     throw lastError || new Error('读者文章生成失败');
