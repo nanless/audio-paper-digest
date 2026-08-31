@@ -1370,6 +1370,86 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails) {
     return paper;
 }
 
+async function refreshApiScoringAndReaderFromSource(paper, sourceDetails) {
+    if (!paper || typeof paper !== 'object') throw new Error('评分复验需要 canonical paper');
+    const manifest = paper.analysisManifest;
+    const analysis = String(paper.analysis || '');
+    const sourceText = String(sourceDetails?.text || '');
+    const sourceSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
+    if (!analysis || sourceText.length <= FULL_TEXT_MIN_CHARS_FOR_FULL) {
+        throw new Error('评分复验需要已完成 analysis 与可验证全文');
+    }
+    if (sourceSha256 !== paper.sourceSha256
+        || sourceSha256 !== manifest?.sourceAcquisition?.sourceSha256) {
+        throw new Error('评分复验的全文 SHA 与 canonical 来源不一致');
+    }
+    const scoringEvidenceContext = buildStageEvidenceContext(
+        'scoringAudit', analysis, sourceText
+    );
+    const scoringResult = await auditTypeAwareScoringDetailed(
+        analysis,
+        sourceText,
+        { evidenceContext: scoringEvidenceContext }
+    );
+    const auditedAnalysis = scoringResult.analysis;
+    const auditedParsed = parseAnalysis(auditedAnalysis);
+    const invalidReason = getInvalidAnalysisReason(auditedAnalysis, auditedParsed, {
+        enforceExperimentTableContract: true,
+        experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+        enforceMethodDetailContract: true,
+        sourceText
+    });
+    if (invalidReason) {
+        throw new Error(`评分复验后的分析未通过最终契约: ${invalidReason}`);
+    }
+    const previousScore = Number.parseFloat(paper?.parsed?.score);
+    const finalScore = Number.parseFloat(auditedParsed?.score);
+    const scoreDelta = Number.isFinite(previousScore) && Number.isFinite(finalScore)
+        ? Number((finalScore - previousScore).toFixed(1))
+        : null;
+    manifest.stages.scoringAudit = {
+        status: 'complete',
+        attempts: scoringResult.attempts,
+        model: scoringResult.model,
+        protocol: scoringResult.protocol,
+        endpointSha256: scoringResult.endpointSha256,
+        maxTokens: scoringResult.maxTokens,
+        temperature: scoringResult.temperature,
+        promptTemplateSha256: scoringResult.promptTemplateSha256,
+        scoringInputSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
+        evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
+        evidenceMaxChars: SCORING_EVIDENCE_MAX_CHARS,
+        evidenceSha256: scoringResult.evidenceSha256,
+        scoringContract: SCORING_AUDIT_CONTRACT,
+        capRulesVersion: SCORING_CAP_RULES_VERSION,
+        previousScore: Number.isFinite(previousScore) ? previousScore : null,
+        previousRunScore: Number.isFinite(previousScore) ? previousScore : null,
+        finalScore: Number.isFinite(finalScore) ? finalScore : null,
+        scoreDelta,
+        stabilityWarning: scoreDelta !== null && Math.abs(scoreDelta) > 0.5,
+        audit: scoringResult.audit,
+        auditSha256: stableFingerprint(scoringResult.audit),
+        outputAnalysisSha256: crypto.createHash('sha256').update(auditedAnalysis).digest('hex'),
+        refreshedAt: getBeijingISOString()
+    };
+    paper.analysis = auditedAnalysis;
+    paper.parsed = auditedParsed;
+    await refreshApiReaderArticleFromSource(paper, sourceDetails);
+    const figures = Array.isArray(paper.apiReaderFigures) ? paper.apiReaderFigures : [];
+    manifest.stages.imageSupplement = {
+        status: 'skipped',
+        reason: 'api_reader_v2_official_figures_bound',
+        officialFigureCount: figures.length,
+        officialFiguresSha256: stableFingerprint(figures),
+        refreshedAt: getBeijingISOString()
+    };
+    manifest.contracts = {
+        ...(manifest.contracts || {}),
+        imageNarrative: IMAGE_NARRATIVE_CONTRACT_VERSION
+    };
+    return paper;
+}
+
 function refreshApiReaderAuthorsFromSource(paper, sourceDetails) {
     const manifest = paper?.analysisManifest;
     const stage = manifest?.stages?.apiReaderArticle;
@@ -6503,6 +6583,7 @@ module.exports = {
     parseApiReaderArticleResult,
     generateApiReaderArticleDetailed,
     refreshApiReaderArticleFromSource,
+    refreshApiScoringAndReaderFromSource,
     refreshApiReaderAuthorsFromSource,
     hasCompleteApiReaderFigureBinding,
     API_READER_ARTICLE_CONTRACT,

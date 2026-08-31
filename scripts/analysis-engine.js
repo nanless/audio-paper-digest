@@ -265,6 +265,12 @@ function isCompleteAnalysisContent(paper) {
         paper.analysisManifest.sourceAcquisition?.sourceSha256 || paper.sourceSha256 || '',
         { analysis: paper.analysis, imageManifest: paper.imageManifest }
     )) return false;
+    const scoring = stages.scoringAudit;
+    if (scoring?.scoringContract === 'api-scoring-audit-v2') {
+        const analysisSha256 = crypto.createHash('sha256')
+            .update(paper.analysis).digest('hex');
+        if (scoring.outputAnalysisSha256 !== analysisSha256) return false;
+    }
     return true;
 }
 
