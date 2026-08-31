@@ -1198,6 +1198,17 @@ function parseApiReaderArticleResult(raw) {
     quality = validateEditorialQuality({
         summary: '', method: article, innovations: '', results: '', details: '', limits: ''
     });
+    const finalSurfaceIssues = quality.issues.filter(issue => (
+        issue.code === 'numeric_typography'
+        || (issue.code === 'quantitative_chinese_numeral'
+            && !isAllowedReaderNarrativeNumeralIssue(issue))
+    ));
+    if (finalSurfaceIssues.length > 0) {
+        article = normalizeReaderEditorialSurface(article, finalSurfaceIssues);
+        quality = validateEditorialQuality({
+            summary: '', method: article, innovations: '', results: '', details: '', limits: ''
+        });
+    }
     const blockingQualityIssues = quality.issues.filter(
         issue => !isAllowedReaderNarrativeNumeralIssue(issue)
             && !isReaderHeadingIssue(issue, article)
