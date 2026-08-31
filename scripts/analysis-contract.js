@@ -194,7 +194,7 @@ const EXPERIMENT_TABLE_LIMITS = Object.freeze({
     minEvidenceRows: 3,
     minNumericCells: 2
 });
-const TABLE_IDENTIFIER_HEADER_RE = /(?:^|\b)(?:method|algorithm|approach|model|system|representation|feature|encoder|config(?:uration)?|dataset|corpus|benchmark|task|experiment|evaluation|test|comparison|control|boundary|language|scenario|condition|setting|split|category|type|modality|version|stage|phase|step|round|epoch|decoder?|context|metric|measure)(?:\b|$)|方法|算法|方案|模型|系统|表征|特征|编码器|配置|数据集|语料|基准|任务|实验|检验|评估|测试|比较|对照|边界|语言|场景|条件|设置|划分|类别|类型|模态|版本|阶段|步骤|轮次|训练轮|解码|上下文|指标|度量/i;
+const TABLE_IDENTIFIER_HEADER_RE = /(?:^|\b)(?:method|algorithm|approach|model|system|backbone|front[ -]?end|pipeline|variant|representation|feature|encoder|config(?:uration)?|dataset|corpus|benchmark|task|experiment|evaluation|test|comparison|control|boundary|slice|language|scenario|condition|setting|split|category|type|modality|version|stage|phase|step|round|epoch|decoder?|context|metric|measure)(?:\b|$)|方法|算法|方案|模型|系统|骨干|前端|流程|变体|表征|特征|编码器|配置|数据集|语料|基准|任务|实验|检验|评估|测试|比较|对照|边界|切片|语言|场景|条件|设置|划分|类别|类型|模态|版本|阶段|步骤|轮次|训练轮|解码|上下文|指标|度量/i;
 const TABLE_VAGUE_METRIC_HEADER_RE = /^(?:结果|数值|数值变化|观察|观察结果|实际观测|报告结果|主要观察|说明|解释|含义|方向|关键条件|结论|结论边界|证据边界|应如何解读|对照或说明|对照或变化|结果或结论)$/i;
 const TABLE_DIRECTION_MARK_RE = /(?:↑|↓|越高越好|越低越好|higher\s+is\s+better|lower\s+is\s+better|max(?:imize)?|min(?:imize)?)/i;
 const TABLE_DIRECTIONAL_METRIC_RE = /(?:accuracy|precision|recall|f[- ]?score|\bf1\b|\bwer\b|\bcer\b|\bder\b|\bauc\b|\bmap\b|\bmiou\b|\biou\b|\bpesq\b|\bstoi\b|\bsdr\b|\bsisdr\b|\bsnr\b|\bbleu\b|\brouge\b|\bmeteor\b|\bclap\b|\bfad\b|\brmse\b|\bmae\b|\berle\b|\bmos\b|准确率|精确率|召回率|错误率|误差|损失|延迟|耗时|速度|吞吐|内存|显存|功耗|能耗|复杂度|参数量|相关系数|相似度)/i;
@@ -420,9 +420,36 @@ function extractMarkdownTables(text) {
     return tables;
 }
 
+function repairMissingMarkdownTableSeparators(text) {
+    const lines = String(text || '').split('\n');
+    const repaired = [];
+    for (let index = 0; index < lines.length;) {
+        if (!/^\s*\|.*\|\s*$/.test(lines[index])) {
+            repaired.push(lines[index]);
+            index += 1;
+            continue;
+        }
+        let end = index;
+        while (end < lines.length && /^\s*\|.*\|\s*$/.test(lines[end])) end += 1;
+        const run = lines.slice(index, end);
+        const header = splitMarkdownTableRow(run[0]);
+        const second = run[1] ? splitMarkdownTableRow(run[1]) : [];
+        if (run.length >= 2 && header.length >= 2
+            && second.length === header.length
+            && !isMarkdownTableSeparator(run[1])) {
+            repaired.push(run[0], `| ${header.map(() => '---').join(' | ')} |`, ...run.slice(1));
+        } else {
+            repaired.push(...run);
+        }
+        index = end;
+    }
+    return repaired.join('\n');
+}
+
 function normalizeExperimentTableNumericFormatting(analysis) {
     const source = String(analysis || '');
-    const results = extractSection(source, '实验结果');
+    const rawResults = extractSection(source, '实验结果');
+    const results = repairMissingMarkdownTableSeparators(rawResults);
     if (!results) return source;
     const normalized = results.split('\n').map(line => {
         if (!line.includes('|') || isMarkdownTableSeparator(line)) return line;
@@ -439,7 +466,7 @@ function normalizeExperimentTableNumericFormatting(analysis) {
             .trim());
         return `${leading ? '| ' : ''}${cleaned.join(' | ')}${trailing ? ' |' : ''}`;
     }).join('\n');
-    if (normalized === results) return source;
+    if (normalized === rawResults) return source;
     const heading = /(^|\n)##(?!#)\s*实验结果[：:\s]*\n/;
     const match = heading.exec(source);
     if (!match) return source;
@@ -1606,6 +1633,7 @@ module.exports = {
     EXPERIMENT_TABLE_LIMITS,
     splitMarkdownTableRow,
     extractMarkdownTables,
+    repairMissingMarkdownTableSeparators,
     normalizeExperimentTableNumericFormatting,
     validateExperimentTableEvidenceDepth,
     validateExperimentTableContract,

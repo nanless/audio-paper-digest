@@ -30,7 +30,9 @@ const {
     findAnalysisEditorialLeakages,
     validateAnalysisEditorialLeakageContract,
     validateExperimentTableContract,
+    extractMarkdownTables,
     normalizeExperimentTableNumericFormatting,
+    repairMissingMarkdownTableSeparators,
     validateMethodDetailContract,
     EXPERIMENT_TABLE_CONTRACT_VERSION,
     EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION,
@@ -497,6 +499,11 @@ describe('analyzePaperWithRetry', () => {
             contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
             documentType: '方法研究'
         }), null, '检验项是实验身份列，不应误判为纯指标表');
+        const backboneIdentifier = valid.replace('方法 / 设置', '骨干/前端');
+        assert.strictEqual(validateExperimentTableContract(backboneIdentifier, {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究'
+        }), null, '骨干/前端是系统比较对象，不应误判为纯指标表');
 
         const neutralComparison = withResults([
             '关键比较问题是三种配置在固定测试集上的 WER 差异多大，并核验配置改变是否影响结果方向。',
@@ -548,6 +555,23 @@ describe('analyzePaperWithRetry', () => {
         assert.strictEqual(validateExperimentTableContract(vague, {
             contractVersion: EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION
         }), null, '旧 bounded-v1 只保留历史上限兼容，不追溯判坏');
+    });
+
+    it('确定性补回 Muse 遗漏的 Markdown 表格分隔行', () => {
+        const malformed = [
+            '| 骨干/前端 | 支撑准确率 ↑ | 无支撑拒绝率 ↑ |',
+            '| Qwen2-Audio 原始 | 0.930 | 0.074 |',
+            '| Qwen2-Audio + Energy+Score | 0.930 | 0.961 |'
+        ].join('\n');
+        const repaired = repairMissingMarkdownTableSeparators(malformed);
+        assert.match(repaired, /\| --- \| --- \| --- \|/);
+        const tables = extractMarkdownTables(repaired);
+        assert.strictEqual(tables.length, 1);
+        assert.strictEqual(tables[0].dataRows, 2);
+        assert.strictEqual(
+            repairMissingMarkdownTableSeparators(repaired), repaired,
+            '重复规范化必须保持字节稳定'
+        );
     });
 
     it('detailed-v1 方法硬契约要求 600 中文字符、结构词和三个段落', () => {
