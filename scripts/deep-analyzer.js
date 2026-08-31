@@ -1372,6 +1372,17 @@ function getPaperArxivId(paper) {
     return paper?.arxivId || paper?.paper_id || paper?.id || '';
 }
 
+function hasCompleteApiReaderFigureBinding(paper, manifest = paper?.analysisManifest) {
+    const figures = paper?.apiReaderFigures;
+    const stage = manifest?.stages?.apiReaderArticle;
+    return manifest?.contracts?.apiReaderArticle === API_READER_ARTICLE_CONTRACT
+        && stage?.status === 'complete'
+        && Array.isArray(figures)
+        && figures.length > 0
+        && stage.figureCount === figures.length
+        && stage.figuresSha256 === stableFingerprint(figures);
+}
+
 const RECOVERY_MANIFEST_VERSION = 1;
 const RECOVERY_STAGE_STATUSES = new Set([
     'pending', 'complete', 'not_needed', 'skipped', 'no_candidates',
@@ -5181,7 +5192,20 @@ async function analyzePaperDeep(paper) {
     if (isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
         analysis = preImageAnalysis;
     }
-    if (isDualModel && downloadedImages.length > 0 && !isRecoveryStageComplete(analysisManifest, 'imageSupplement')) {
+    const hasBoundApiReaderFigures = hasCompleteApiReaderFigureBinding(paper, analysisManifest);
+    if (hasBoundApiReaderFigures && !isRecoveryStageComplete(analysisManifest, 'imageSupplement')) {
+        analysis = preImageAnalysis;
+        selectedImageUrls = [];
+        markRecoveryStage(analysisManifest, 'imageSupplement', 'skipped', {
+            reason: 'api_reader_v2_official_figures_bound',
+            officialFigureCount: paper.apiReaderFigures.length,
+            officialFiguresSha256: stableFingerprint(paper.apiReaderFigures),
+            fingerprint: imageSupplementFingerprint
+        });
+        console.log(
+            `    [deep] ℹ️  已绑定 ${paper.apiReaderFigures.length} 张 v2 官方正文图，跳过旧副模型插图阶段`
+        );
+    } else if (isDualModel && downloadedImages.length > 0 && !isRecoveryStageComplete(analysisManifest, 'imageSupplement')) {
         try {
             const imageResult = await applyImageSupplement(paper, arxivId, analysis, imageInfos, downloadedImages);
             const imageInvalidReason = getInvalidAnalysisReason(
@@ -6356,6 +6380,7 @@ module.exports = {
     parseApiReaderArticleResult,
     generateApiReaderArticleDetailed,
     refreshApiReaderArticleFromSource,
+    hasCompleteApiReaderFigureBinding,
     API_READER_ARTICLE_CONTRACT,
     isAllowedReaderNarrativeNumeralIssue,
     splitReaderLongParagraphs,

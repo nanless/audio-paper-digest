@@ -966,7 +966,9 @@ primary_task_tag: #音视频生成
             getApiReaderFigureInventory,
             injectApiReaderFigures,
             parseArxivReaderAuthors,
-            prepareTrustedArxivFigureBuffer
+            prepareTrustedArxivFigureBuffer,
+            hasCompleteApiReaderFigureBinding,
+            stableFingerprint
         } = require('../scripts/deep-analyzer.js');
         const artifacts = {
             formulas: [{ ordinal: 1, latex: 'M[k]=L[k]+R[k]' }],
@@ -1017,6 +1019,21 @@ primary_task_tag: #音视频生成
             () => prepareTrustedArxivFigureBuffer(Buffer.from('not-an-image'), 'image/png'),
             /文件头/
         );
+        const boundFigures = [{ ordinal: 1, assetSha256: 'a'.repeat(64) }];
+        const boundManifest = {
+            contracts: { apiReaderArticle: 'beginner-researcher-v2' },
+            stages: { apiReaderArticle: {
+                status: 'complete', figureCount: 1,
+                figuresSha256: stableFingerprint(boundFigures)
+            } }
+        };
+        assert.strictEqual(hasCompleteApiReaderFigureBinding({
+            apiReaderFigures: boundFigures
+        }, boundManifest), true);
+        boundManifest.stages.apiReaderArticle.figuresSha256 = '0'.repeat(64);
+        assert.strictEqual(hasCompleteApiReaderFigureBinding({
+            apiReaderFigures: boundFigures
+        }, boundManifest), false);
         assert.match(
             fs.readFileSync(path.join(__dirname, '..', 'scripts', 'deep-analyzer.js'), 'utf8'),
             /API_READER_FIGURE_MAX_BYTES = 8 \* 1024 \* 1024/
