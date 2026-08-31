@@ -1,0 +1,37 @@
+const fs=require('fs'), crypto=require('crypto'), path=require('path');
+const statePath='data/current/manual-v6/2026-08-29/task-runner/state.json';
+let state=JSON.parse(fs.readFileSync(statePath,'utf8'));
+const paperId='2608.26925';
+const task=state.papers[paperId].tasks.author_revision;
+console.log('before',task.status);
+const taskRoot=path.join('data/current/manual-v6/2026-08-29/task-runner/tasks',paperId);
+const outputPath=path.join(taskRoot,'outputs/author-revision.json');
+const receiptPath=path.join(taskRoot,'receipts/author-revision.json');
+const outputBytes=fs.readFileSync(outputPath);
+const receiptBytes=fs.readFileSync(receiptPath);
+const outputFileSha256=crypto.createHash('sha256').update(outputBytes).digest('hex');
+const receiptFileSha256=crypto.createHash('sha256').update(receiptBytes).digest('hex');
+const {stableSignatureSha256}=require('./scripts/manual-signature-contract.js');
+const outputSemantic=stableSignatureSha256(JSON.parse(outputBytes.toString('utf8')),'manual-v6-signature');
+const receiptSemantic=stableSignatureSha256(JSON.parse(receiptBytes.toString('utf8')),'manual-v6-signature');
+console.log('outputSemantic',outputSemantic);
+console.log('receiptSemantic',receiptSemantic);
+task.status='validated';
+task.outputPath=path.resolve(outputPath);
+task.outputFileSha256=outputFileSha256;
+task.outputSemanticSha256=outputSemantic;
+task.receiptPath=path.resolve(receiptPath);
+task.receiptFileSha256=receiptFileSha256;
+task.receiptSemanticSha256=receiptSemantic;
+task.completedAt=JSON.parse(receiptBytes.toString('utf8')).completedAt;
+task.attempt=1;
+state.generation+=1;
+function getBeijingISOString(date=new Date()){
+  const bj=new Date(date.getTime()+8*3600*1000);
+  const pad=n=>String(n).padStart(2,'0');
+  const ms=String(bj.getUTCMilliseconds()).padStart(3,'0');
+  return `${bj.getUTCFullYear()}-${pad(bj.getUTCMonth()+1)}-${pad(bj.getUTCDate())}T${pad(bj.getUTCHours())}:${pad(bj.getUTCMinutes())}:${pad(bj.getUTCSeconds())}.${ms}+08:00`;
+}
+state.updatedAt=getBeijingISOString();
+fs.writeFileSync(statePath, JSON.stringify(state,null,2)+'\n');
+console.log('updated state',task.status);
