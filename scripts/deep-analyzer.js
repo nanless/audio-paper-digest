@@ -38,6 +38,7 @@ const {
     EXPERIMENT_TABLE_CONTRACT_VERSION,
     METHOD_DETAIL_CONTRACT_VERSION,
     ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION,
+    extractMarkdownTables,
     validateExperimentTableContract,
     normalizeExperimentTableNumericFormatting,
     validateMethodDetailContract,
@@ -871,6 +872,8 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
         normalized = normalized.split(match).join(replacement);
     }
     return normalized
+        .replace(/\b1\s*到\s*5\s+5\s*级量表/g, '1 到 5 级量表')
+        .replace(/y\s*到\s*5\s+2\s*段/g, 'y 到 5 这 2 段')
         .replace(/[；;](?=\s*(?:\n\s*\n|$))/g, '。')
         .replace(/数十\s+(?=[\u3400-\u9fff])/g, '数十')
         .replace(/([下上这另哪])\s*1\s*(?=步|层|类|种|段|项|组|张|个)/g, '$1一')
@@ -960,29 +963,25 @@ function buildApiReaderEvidenceContext(analysis, sourceText, structuredArtifacts
     return [sourceEvidence, artifactEvidence].filter(Boolean).join('\n\n');
 }
 
-function readerFigureNarrative(figure) {
-    if (figure.ordinal === 1) {
-        return '图中实线表示左耳、虚线表示右耳；随着增强系数增大，对侧耳的频变衰减被逐级拉开，而未增强侧基本保持原状。这正是“只放大侧通道方向残差、保留中通道与原始相位”的可视化结果。';
-    }
-    if (figure.ordinal === 2) {
-        return '这组柱状图把目标位于正前方与侧方时的预测 SRM 并列展示。纵轴越高表示模型预测越容易从混音中分辨目标；增强强度越高，两种方位下的收益整体越大。';
-    }
-    if (figure.ordinal === 3) {
-        return '这张图把正常听力、未助听 N3 与经过 WDRC 的 N3 放在同一坐标上。它显示助听处理虽然改变了总体可听度，却没有把增强条件的空间收益恢复到正常听力水平。';
-    }
-    if (figure.ordinal === 4) {
-        return '左图把更优耳信噪比贡献拆开，右图把双耳去掩蔽贡献拆开。增强收益主要由前者推动，而听损和 WDRC 会压缩这部分优势，这比只看一个 SRM 总数更能说明机制。';
-    }
-    return `该图的原始图注为：${figure.caption}`;
+function readerFigureNarrative(figure, target = null) {
+    const caption = String(figure?.caption || '')
+        .replace(/\s+/g, ' ').trim().replace(/\*/g, '\\*').slice(0, 700);
+    const purposes = {
+        method_overview: '读图时应先沿输入、中间处理与输出核对数据流。',
+        component: '读图时应核对各组件的连接方向与它们在正文中的职责。',
+        experiment_setup: '读图时应先确认对照条件、坐标轴和指标方向。',
+        result: '这张图是本节结论的原始证据；请按图例与坐标轴核对比较口径。',
+        ablation: '读图时要区分完整方法、删减条件与对照组，不要将相关性外推为因果。',
+        limitation: '这张图用于界定结论边界，不应外推到论文未覆盖的条件。'
+    };
+    return `原论文图注：${caption || '原文未提供可靠图注'}。`
+        + (purposes[target?.kind] || '请结合本节的比较口径阅读图例、坐标轴与边界条件。');
 }
 
 function readerFigureAlt(figure) {
-    return ({
-        1: '不同增强系数下的左右耳 HRTF 幅度谱',
-        2: '不同渲染条件与目标方位下的预测 SRM',
-        3: '正常听力、听损与 WDRC 条件下的预测 SRM',
-        4: '更优耳信噪比与双耳去掩蔽贡献分解'
-    })[figure.ordinal] || figure.caption.replace(/^Figure\s+\d+\s*:\s*/i, '').slice(0, 180);
+    return String(figure?.caption || `Figure ${figure?.ordinal || ''}`)
+        .replace(/^Figure\s+\d+\s*[:.]?\s*/i, '')
+        .replace(/\s+/g, ' ').trim().slice(0, 180);
 }
 
 function insertMarkdownBeforeNextReaderHeading(article, heading, markdown) {
@@ -1019,7 +1018,7 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
         ).slice(0, 240);
         const block = [
             `![${alt}](${figure.url})`,
-            `*论文图 ${figure.ordinal}。${readerFigureNarrative(figure)}*`
+            `*论文图 ${figure.ordinal}。${readerFigureNarrative(figure, target)}*`
         ].join('\n\n');
         const inserted = insertMarkdownBeforeNextReaderHeading(article, target.heading, block);
         if (!inserted.inserted) continue;
@@ -1027,6 +1026,33 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
         used.push({ ...figure, targetKind: target.kind, targetHeading: target.heading });
     }
     return { ...readerResult, article, figures: used };
+}
+
+function rewriteApiReaderFigureNarratives(article, figures) {
+    let rewritten = String(article || '');
+    for (const figure of figures || []) {
+        const url = String(figure?.url || '');
+        if (!url) throw new Error('论文图叙事刷新缺少 URL');
+        const alt = sanitizeMarkdownImageAlt(
+            `论文图 ${figure.ordinal}：${readerFigureAlt(figure)}`
+        ).slice(0, 240);
+        const narrative = `*论文图 ${figure.ordinal}。${readerFigureNarrative(figure, {
+            kind: figure.targetKind,
+            heading: figure.targetHeading
+        })}*`;
+        const pattern = new RegExp(
+            `!\\[[^\\n]*\\]\\(${escapeRegExp(url)}\\)\\n\\n`
+            + `\\*论文图\\s+${figure.ordinal}。[^\\n]*\\*`
+        );
+        if (!pattern.test(rewritten)) {
+            throw new Error(`论文图 ${figure.ordinal} 的旧叙事块无法精确定位`);
+        }
+        rewritten = rewritten.replace(
+            pattern,
+            `![${alt}](${url})\n\n${narrative}`
+        );
+    }
+    return rewritten;
 }
 
 function sanitizeTrustedArxivSvg(buffer) {
@@ -1247,6 +1273,17 @@ function parseApiReaderArticleResult(raw) {
         const details = blockingQualityIssues.slice(0, 8)
             .map(item => `${item.code}:${item.match || item.message}`).join('；');
         throw new Error(`读者文章文风校验失败: ${details}`);
+    }
+    const malformedTable = extractMarkdownTables(article).find(table => (
+        table.separatorColumns !== table.header.length
+        || table.invalidColumnCounts.length > 0
+    ));
+    if (malformedTable) {
+        const invalid = malformedTable.invalidColumnCounts[0];
+        throw new Error(
+            `读者文章 Markdown 表格列数不一致: header=${malformedTable.header.length}`
+            + (invalid ? `, row=${invalid.row}, columns=${invalid.columns}` : '')
+        );
     }
     return {
         plan: {
@@ -1568,9 +1605,19 @@ async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
         figures,
         getPaperArxivId(paper)
     );
+    const rewrittenArticle = normalizeReaderEditorialSurface(
+        rewriteApiReaderFigureNarratives(paper.apiReaderArticle, materialized)
+    );
+    const articleSha256 = crypto.createHash('sha256').update(rewrittenArticle).digest('hex');
+    const readerAuthors = resolveApiReaderAuthors(paper, sourceDetails);
+    paper.apiReaderArticle = rewrittenArticle;
+    paper.apiReaderArticleSha256 = articleSha256;
     paper.apiReaderFigures = materialized;
+    paper.apiReaderAuthors = readerAuthors;
+    stage.articleSha256 = articleSha256;
     stage.figureCount = materialized.length;
     stage.figuresSha256 = stableFingerprint(materialized);
+    stage.readerAuthorsSha256 = stableFingerprint(readerAuthors);
     stage.structuredArtifactsSha256 = sourceDetails.structuredArtifacts?.payloadSha256 || '';
     stage.refreshedAt = getBeijingISOString();
     manifest.stages.imageSupplement = {
@@ -2973,8 +3020,11 @@ function bindStructuredArtifactsToText(structuredArtifacts, text) {
 function parseArxivReaderAuthors($) {
     const wrapper = $('.ltx_authors').first();
     const normalize = value => String(value || '').replace(/\s+/g, ' ').trim();
+    const cleanName = value => normalize(value)
+        .replace(/\d*\s*(?:\\?footnotemark|footnotemark)\s*:?[\s\d]*.*$/i, '')
+        .trim();
     const metaAuthors = $('meta[name="citation_author"]').toArray()
-        .map(node => normalize($(node).attr('content'))).filter(Boolean);
+        .map(node => cleanName($(node).attr('content'))).filter(Boolean);
     const metaAffiliations = $('meta[name="citation_author_institution"]').toArray()
         .map(node => normalize($(node).attr('content'))).filter(Boolean);
     const globalAffiliations = (wrapper.length
@@ -2995,7 +3045,7 @@ function parseArxivReaderAuthors($) {
         : [];
     let authors = authorElements.map((element, index) => {
         const creator = $(element);
-        const name = normalize(creator.find('.ltx_personname').first().text())
+        const name = cleanName(creator.find('.ltx_personname').first().text())
             || metaAuthors[index] || '';
         const affiliations = creator.find('.ltx_contact.ltx_role_affiliation').toArray()
             .map(node => {
@@ -6708,6 +6758,7 @@ module.exports = {
     buildApiReaderArtifactEvidence,
     buildApiReaderEvidenceContext,
     injectApiReaderFigures,
+    rewriteApiReaderFigureNarratives,
     sanitizeTrustedArxivSvg,
     prepareTrustedArxivFigureBuffer,
     materializeApiReaderFigures,

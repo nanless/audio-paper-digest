@@ -1784,6 +1784,17 @@ def normalize_digest_index_reader_surface(text):
     """Normalize quantitative prose copied from canonical into the daily index."""
     value = str(text or '')
     protected_percentages = []
+    protected_urls = []
+
+    def stash_url(match):
+        protected_urls.append(match.group(0))
+        return f'__PD_URL_{len(protected_urls) - 1}__'
+
+    value = re.sub(
+        r'https://[^\s<>()\[\]{}"\'，。；：！？、一-鿿]+',
+        stash_url,
+        value,
+    )
 
     def stash_percentage(match):
         protected_percentages.append(match.group(0))
@@ -1864,6 +1875,8 @@ def normalize_digest_index_reader_surface(text):
         value = value.replace(f'__PD_PERCENT_{index}__', original)
     value = re.sub(r'([前约近])\s+(\d+(?:\.\d+)?%)', r'\1\2', value)
     value = re.sub(r'(\d+(?:\.\d+)?%)\s+([一-鿿])', r'\1\2', value)
+    for index, original in enumerate(protected_urls):
+        value = value.replace(f'__PD_URL_{index}__', original)
     return value
 
 
@@ -1871,7 +1884,9 @@ def compact_index_opensource(pa, paper, limit=4):
     """Keep the digest index navigable; full provenance remains on each paper page."""
     oss_text = enrich_opensource(pa, paper)
     urls = []
-    for raw in re.findall(r'https://[^\s<>()\[\]{}"\']+', oss_text):
+    for raw in re.findall(
+            r'https://[^\s<>()\[\]{}"\'，。；：！？、一-鿿]+',
+            oss_text):
         url = raw.rstrip('.,;:)，。；：！？、')
         if url and url not in urls:
             urls.append(url)
