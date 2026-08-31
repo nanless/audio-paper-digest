@@ -1790,7 +1790,7 @@ def normalize_digest_index_reader_surface(text):
         return f'__PD_PERCENT_{len(protected_percentages) - 1}__'
 
     value = re.sub(
-        r'(?:[一-鿿])?[-+]?\d+(?:\.\d+)?\s*%',
+        r'[-+]?\d+(?:\.\d+)?\s*%',
         stash_percentage,
         value,
     )
@@ -1857,6 +1857,8 @@ def normalize_digest_index_reader_surface(text):
     )
     for index, original in enumerate(protected_percentages):
         value = value.replace(f'__PD_PERCENT_{index}__', original)
+    value = re.sub(r'([前约近])\s+(\d+(?:\.\d+)?%)', r'\1\2', value)
+    value = re.sub(r'(\d+(?:\.\d+)?%)\s+([一-鿿])', r'\1\2', value)
     return value
 
 
