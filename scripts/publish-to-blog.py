@@ -1835,6 +1835,11 @@ def normalize_digest_index_reader_surface(text):
         lambda match: f'{chinese_integer(match.group(1))} {match.group(2)}',
         value,
     )
+    value = re.sub(
+        rf'[几数]\s*(\d+(?:\.\d+)?)\s*(?=({count_units}))',
+        r'约 \1 ',
+        value,
+    )
     value = re.sub(r'(\d+/\d+)(?=[一-鿿])', r'\1 ', value)
     value = re.sub(r'([一-鿿])([-+]?\d)', r'\1 \2', value)
     value = re.sub(r'(\d)([一-鿿])', r'\1 \2', value)
