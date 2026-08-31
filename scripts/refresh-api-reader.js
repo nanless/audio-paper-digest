@@ -20,6 +20,19 @@ const {
 } = require('./digest-status.js');
 const { normalizedId, getBeijingISOString } = require('./utils.js');
 
+function canRepairScoringBinding(paper) {
+    const manifest = paper?.analysisManifest;
+    const scoring = manifest?.stages?.scoringAudit;
+    const reader = manifest?.stages?.apiReaderArticle;
+    return typeof paper?.analysis === 'string' && paper.analysis.trim().length > 0
+        && manifest?.version === 1
+        && scoring?.status === 'complete'
+        && scoring?.scoringContract === 'api-scoring-audit-v2'
+        && reader?.status === 'complete'
+        && manifest?.contracts?.apiReaderArticle === 'beginner-researcher-v2'
+        && !paper?.latestAnalysisAttemptError;
+}
+
 async function refreshApiReader(targetId, options = {}) {
     const requested = normalizedId(targetId);
     if (!requested) throw new Error('用法: node scripts/refresh-api-reader.js <arxiv-id>');
@@ -27,7 +40,8 @@ async function refreshApiReader(targetId, options = {}) {
     const current = readJsonFileStrict(resultPath);
     const papers = Array.isArray(current) ? current : current.papers;
     const existing = papers.find(paper => normalizedId(paper) === requested);
-    if (!existing || !isSuccessfulAnalysisRecord(existing)) {
+    if (!existing || (!isSuccessfulAnalysisRecord(existing)
+        && !(options.scoringAndReader && canRepairScoringBinding(existing)))) {
         throw new Error(`${requested} 不存在完整 canonical，拒绝只刷新读者文章`);
     }
 
@@ -35,7 +49,8 @@ async function refreshApiReader(targetId, options = {}) {
         const latest = readJsonFileStrict(resultPath);
         const latestPapers = Array.isArray(latest) ? latest : latest.papers;
         const canonical = latestPapers.find(paper => normalizedId(paper) === requested);
-        if (!canonical || !isSuccessfulAnalysisRecord(canonical)) {
+        if (!canonical || (!isSuccessfulAnalysisRecord(canonical)
+            && !(options.scoringAndReader && canRepairScoringBinding(canonical)))) {
             throw new Error(`${requested} canonical 在加锁后发生变化`);
         }
         const refreshLabel = options.authorsOnly
