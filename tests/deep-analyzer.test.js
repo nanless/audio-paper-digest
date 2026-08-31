@@ -862,6 +862,13 @@ primary_task_tag: #音视频生成
             ]),
             '同一条曲线使用 alpha 3，规模为 10,000。'
         );
+        assert.strictEqual(
+            normalizeReaderEditorialSurface('百例标注覆盖一百二十段音频。', [
+                { code: 'quantitative_chinese_numeral', match: '百例' },
+                { code: 'quantitative_chinese_numeral', match: '一百二十段' }
+            ]),
+            '100 例标注覆盖 120 段音频。'
+        );
         const recoveryPaper = {
             apiReaderArticle: '### 把 HRTF 做浓，再用模型去听\n\n正文。',
             apiReaderPlan: {

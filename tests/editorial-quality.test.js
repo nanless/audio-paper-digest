@@ -100,6 +100,11 @@ describe('Manual v4 editorial quality primitives', () => {
         assert.ok(findBrokenProse('只只报告结果，分别分别比较；只有仅有一组，更接近区别于基线。').length >= 4);
         assert.ok(findBrokenProse('收益存在也区别于其基线，无明显退化区别于旧版，却区别于主结果；提高现实性却区别于现场验证。').length >= 1);
         assert.ok(findBrokenProse('长度分组没有消除长上下文的 2 次计算成本。').length >= 1);
+        assert.deepStrictEqual(
+            findBrokenProse('| 条件 | 结果 |\n| --- | --- |\n| A | 但仅为 1/6，但不代表跨域成立 |'),
+            [],
+            'Markdown 表格单元格不应进入 prose 断裂检测'
+        );
         for (const malformed of [
             '“听懂内容”区别于能辨别音频质量。',
             '参数高效区别于推理廉价。',

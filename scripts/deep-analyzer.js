@@ -793,8 +793,29 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
         .replace(/([\u3400-\u9fff])([α-ωΑ-Ω])/g, '$1 $2')
         .replace(/([A-Za-z0-9%+)\]α-ωΑ-Ω])([\u3400-\u9fff])/g, '$1 $2');
     const numeralMap = {
-        一: '1', 二: '2', 两: '2', 三: '3', 四: '4', 五: '5',
-        六: '6', 七: '7', 八: '8', 九: '9', 十: '10'
+        零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5,
+        六: 6, 七: 7, 八: 8, 九: 9
+    };
+    const chineseInteger = raw => {
+        let section = 0;
+        let digit = 0;
+        let total = 0;
+        for (const char of raw) {
+            if (Object.prototype.hasOwnProperty.call(numeralMap, char)) {
+                digit = numeralMap[char];
+                continue;
+            }
+            const unit = ({ 十: 10, 百: 100, 千: 1000, 万: 10000, 亿: 100000000 })[char];
+            if (!unit) return raw;
+            if (unit < 10000) {
+                section += (digit || 1) * unit;
+            } else {
+                total += (section + digit || 1) * unit;
+                section = 0;
+            }
+            digit = 0;
+        }
+        return String(total + section + digit);
     };
     for (const issue of quantitativeIssues) {
         if (issue?.code !== 'quantitative_chinese_numeral'
@@ -805,7 +826,7 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
             .replace(/(\d+(?:\.\d+)?)\s*万/g, (_, value) => (
                 Number(value) * 10000
             ).toLocaleString('en-US', { maximumFractionDigits: 10 }))
-            .replace(/[一二两三四五六七八九十]/g, numeral => numeralMap[numeral] || numeral)
+            .replace(/[零〇一二两三四五六七八九十百千万亿]+/g, chineseInteger)
             .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2');
         normalized = normalized.split(match).join(replacement);
     }
