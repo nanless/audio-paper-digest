@@ -1838,6 +1838,13 @@ def normalize_digest_index_reader_surface(text):
     value = re.sub(r'(\d+/\d+)(?=[一-鿿])', r'\1 ', value)
     value = re.sub(r'([一-鿿])([-+]?\d)', r'\1 \2', value)
     value = re.sub(r'(\d)([一-鿿])', r'\1 \2', value)
+    value = re.sub(r'([同唯统单])\s*1\s*(?=[一-鿿])', r'\1一', value)
+    value = re.sub(r'归\s*1\s*(?=(?:化|后|组合|处理|权重))', '归一', value)
+    value = re.sub(
+        r'([下上这另哪])\s*1\s*(?=(?:步|层|类|种|段|项|组|张|个))',
+        r'\1一',
+        value,
+    )
     value = re.sub(
         r'([-+]?\d+(?:\.\d+)?)(?=(?:mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|MACs?|tokens?|FPS|bit)\b)',
         r'\1 ',
