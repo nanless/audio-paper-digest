@@ -874,6 +874,14 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
     return normalized
         .replace(/\b1\s*到\s*5\s+5\s*级量表/g, '1 到 5 级量表')
         .replace(/y\s*到\s*5\s+2\s*段/g, 'y 到 5 这 2 段')
+        .replace(
+            /((?:macro\s*)?F1|准确率|召回率|精确率|错误率|拒绝率|命中率)(\s*(?:为|达|是|=|从|由|升至|降至)\s*)(\d+(?:\.\d+)?)(?![\d.%])/gi,
+            (full, metric, separator, rawValue) => (
+                Number.parseFloat(rawValue) > 1
+                    ? `${metric}${separator}${rawValue}%`
+                    : full
+            )
+        )
         .replace(/[；;](?=\s*(?:\n\s*\n|$))/g, '。')
         .replace(/数十\s+(?=[\u3400-\u9fff])/g, '数十')
         .replace(/([下上这另哪])\s*1\s*(?=步|层|类|种|段|项|组|张|个)/g, '$1一')
