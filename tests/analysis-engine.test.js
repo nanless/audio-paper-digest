@@ -487,6 +487,16 @@ describe('analyzePaperWithRetry', () => {
             contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
             documentType: '方法研究'
         }), null, '训练阶段是可核对的设置识别列，不应误判为纯指标表');
+        const representationIdentifier = valid.replace('方法 / 设置', '表征');
+        assert.strictEqual(validateExperimentTableContract(representationIdentifier, {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究'
+        }), null, '表征是模型比较对象，不应误判为纯指标表');
+        const evaluationIdentifier = valid.replace('方法 / 设置', '检验项');
+        assert.strictEqual(validateExperimentTableContract(evaluationIdentifier, {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究'
+        }), null, '检验项是实验身份列，不应误判为纯指标表');
 
         const neutralComparison = withResults([
             '关键比较问题是三种配置在固定测试集上的 WER 差异多大，并核验配置改变是否影响结果方向。',

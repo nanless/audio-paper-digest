@@ -141,11 +141,13 @@ EXPERIMENT_TABLE_LIMITS = {
     'min_numeric_cells': 2,
 }
 TABLE_IDENTIFIER_HEADER_RE = re.compile(
-    r'(?:^|\b)(?:method|model|system|config(?:uration)?|dataset|corpus|benchmark|task|'
-    r'language|scenario|condition|setting|split|category|type|modality|version|'
-    r'stage|phase|step|round|epoch|decoder|decode|context|metric|measure|algorithm)(?:\b|$)'
-    r'|方法|模型|系统|配置|数据集|语料|基准|任务|语言|场景|条件|设置|划分|类别|类型|模态|版本|'
-    r'阶段|步骤|轮次|训练轮|解码|上下文|指标|度量|算法',
+    r'(?:^|\b)(?:method|algorithm|approach|model|system|representation|feature|encoder|'
+    r'config(?:uration)?|dataset|corpus|benchmark|task|experiment|evaluation|test|'
+    r'comparison|control|boundary|language|scenario|condition|setting|split|category|'
+    r'type|modality|version|stage|phase|step|round|epoch|decoder|decode|context|metric|'
+    r'measure)(?:\b|$)|方法|算法|方案|模型|系统|表征|特征|编码器|配置|数据集|语料|'
+    r'基准|任务|实验|检验|评估|测试|比较|对照|边界|语言|场景|条件|设置|划分|类别|'
+    r'类型|模态|版本|阶段|步骤|轮次|训练轮|解码|上下文|指标|度量',
     flags=re.IGNORECASE,
 )
 TABLE_VAGUE_METRIC_HEADER_RE = re.compile(
