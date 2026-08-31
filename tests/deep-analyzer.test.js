@@ -948,7 +948,8 @@ primary_task_tag: #音视频生成
             buildApiReaderArtifactEvidence,
             getApiReaderFigureInventory,
             injectApiReaderFigures,
-            parseArxivReaderAuthors
+            parseArxivReaderAuthors,
+            prepareTrustedArxivFigureBuffer
         } = require('../scripts/deep-analyzer.js');
         const artifacts = {
             formulas: [{ ordinal: 1, latex: 'M[k]=L[k]+R[k]' }],
@@ -987,6 +988,18 @@ primary_task_tag: #音视频生成
         const authors = parseArxivReaderAuthors($);
         assert.deepStrictEqual(authors.authors, [{ name: '甲', affiliations: ['机构 A'] }]);
         assert.match(authors.sourceDomSha256, /^[0-9a-f]{64}$/);
+        const png = Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+            'base64'
+        );
+        assert.strictEqual(
+            prepareTrustedArxivFigureBuffer(png, 'image/png').mediaType,
+            'image/png'
+        );
+        assert.throws(
+            () => prepareTrustedArxivFigureBuffer(Buffer.from('not-an-image'), 'image/png'),
+            /文件头/
+        );
     });
 
     it('归一化后的评分审计二次校验会剥离内部派生字段', () => {

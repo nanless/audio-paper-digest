@@ -1043,6 +1043,22 @@ function sanitizeTrustedArxivSvg(buffer) {
     return Buffer.from(sanitized, 'utf8');
 }
 
+function prepareTrustedArxivFigureBuffer(buffer, declaredMediaType = '') {
+    const raw = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || '');
+    const declared = String(declaredMediaType || '').toLowerCase().split(';', 1)[0].trim();
+    if (declared === 'image/svg+xml' || /^\s*<svg\b/i.test(raw.toString('utf8', 0, 256))) {
+        return { buffer: sanitizeTrustedArxivSvg(raw), mediaType: 'image/svg+xml' };
+    }
+    const sniffed = sniffImageMime(raw);
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(sniffed)) {
+        throw new Error('论文图片文件头不是支持的 SVG/PNG/JPEG/WebP');
+    }
+    if (declared && declared !== 'application/octet-stream' && declared !== sniffed) {
+        throw new Error(`论文图片声明类型与文件头不一致: ${declared} != ${sniffed}`);
+    }
+    return { buffer: raw, mediaType: sniffed };
+}
+
 async function materializeApiReaderFigures(figures, arxivId = '') {
     const paperId = String(arxivId || '').trim().toLowerCase().replace(/v\d+$/i, '');
     if (!/^\d{4}\.\d{4,5}$/.test(paperId)) throw new Error('论文图缓存 paper ID 非法');
@@ -1057,9 +1073,9 @@ async function materializeApiReaderFigures(figures, arxivId = '') {
         });
         if (!response.ok) throw new Error(`论文图 ${figure.ordinal} 下载失败: HTTP ${response.status}`);
         const raw = await readResponseBufferWithLimit(response, 2 * 1024 * 1024);
-        const sanitized = sanitizeTrustedArxivSvg(raw);
-        const image = await loadImage(sanitized);
-        if (!image.width || !image.height) throw new Error(`论文图 ${figure.ordinal} SVG 无法渲染`);
+        const trusted = prepareTrustedArxivFigureBuffer(raw, figure.mediaType);
+        const image = await loadImage(trusted.buffer);
+        if (!image.width || !image.height) throw new Error(`论文图 ${figure.ordinal} 无法解码`);
         const targetWidth = Math.max(1200, Math.min(1800, image.width * 3));
         const targetHeight = Math.max(1, Math.round(targetWidth * image.height / image.width));
         const canvas = createCanvas(targetWidth, targetHeight);
@@ -6346,6 +6362,7 @@ module.exports = {
     buildApiReaderEvidenceContext,
     injectApiReaderFigures,
     sanitizeTrustedArxivSvg,
+    prepareTrustedArxivFigureBuffer,
     materializeApiReaderFigures,
     repairMissingAnalysisSections,
     finalizeStructureRepairOutput,
