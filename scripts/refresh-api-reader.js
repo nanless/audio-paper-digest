@@ -6,7 +6,8 @@ const {
     fetchArxivTextDetailed,
     refreshApiReaderArticleFromSource,
     refreshApiScoringAndReaderFromSource,
-    refreshApiReaderAuthorsFromSource
+    refreshApiReaderAuthorsFromSource,
+    refreshApiReaderFiguresFromSource
 } = require('./deep-analyzer.js');
 const {
     readJsonFileStrict,
@@ -55,6 +56,8 @@ async function refreshApiReader(targetId, options = {}) {
         }
         const refreshLabel = options.authorsOnly
             ? '作者机构绑定'
+            : options.figuresOnly
+                ? '论文图资产'
             : options.scoringAndReader
                 ? '评分复验与读者文章'
                 : '读者文章';
@@ -64,6 +67,8 @@ async function refreshApiReader(targetId, options = {}) {
         );
         const refreshed = options.authorsOnly
             ? refreshApiReaderAuthorsFromSource(canonical, sourceDetails)
+            : options.figuresOnly
+                ? await refreshApiReaderFiguresFromSource(canonical, sourceDetails)
             : options.scoringAndReader
                 ? await refreshApiScoringAndReaderFromSource(canonical, sourceDetails)
                 : await refreshApiReaderArticleFromSource(canonical, sourceDetails);
@@ -81,6 +86,8 @@ async function refreshApiReader(targetId, options = {}) {
         const sync = updateAnalysisDigestStatuses([refreshed], { batchDate });
         console.log(options.authorsOnly
             ? `✅ 作者机构刷新完成 | authors=${refreshed.apiReaderAuthors.authors.length} | papers_sync=${sync.updated}`
+            : options.figuresOnly
+                ? `✅ 论文图资产刷新完成 | figures=${refreshed.apiReaderFigures.length} | papers_sync=${sync.updated}`
             : `✅ ${options.scoringAndReader ? '评分复验与读者文章' : '读者文章'}刷新完成`
                 + ` | score=${refreshed.parsed?.score}`
                 + ` | sections=${refreshed.apiReaderPlan.sections.length}`
@@ -95,8 +102,9 @@ if (require.main === module) {
     const args = process.argv.slice(2);
     const authorsOnly = args.includes('--authors-only');
     const scoringAndReader = args.includes('--scoring-and-reader');
-    if (authorsOnly && scoringAndReader) {
-        console.error('❌ --authors-only 与 --scoring-and-reader 不能同时使用');
+    const figuresOnly = args.includes('--figures-only');
+    if ([authorsOnly, scoringAndReader, figuresOnly].filter(Boolean).length > 1) {
+        console.error('❌ --authors-only、--figures-only 与 --scoring-and-reader 不能同时使用');
         process.exitCode = 1;
     } else {
         const ids = args.filter(value => !value.startsWith('--'));
@@ -106,7 +114,7 @@ if (require.main === module) {
         } else {
             (async () => {
                 for (const id of ids) {
-                    await refreshApiReader(id, { authorsOnly, scoringAndReader });
+                await refreshApiReader(id, { authorsOnly, figuresOnly, scoringAndReader });
                 }
             })().catch(error => {
                 console.error(`❌ API 读者文章刷新失败: ${error.message}`);

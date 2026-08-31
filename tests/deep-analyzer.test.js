@@ -838,6 +838,7 @@ primary_task_tag: #音视频生成
         const {
             parseApiReaderArticleResult,
             removeDuplicateReaderLongSentences,
+            fitApiReaderFigureDimensions,
             isAllowedReaderNarrativeNumeralIssue,
             splitReaderLongParagraphs,
             normalizeReaderEditorialSurface,
@@ -976,6 +977,7 @@ primary_task_tag: #音视频生成
             parseArxivReaderAuthors,
             resolveApiReaderAuthors,
             removeDuplicateReaderLongSentences,
+            fitApiReaderFigureDimensions,
             prepareTrustedArxivFigureBuffer,
             hasCompleteApiReaderFigureBinding,
             stableFingerprint
@@ -1047,6 +1049,14 @@ primary_task_tag: #音视频生成
             `### 第一节\n\n${duplicateSentence}\n\n### 第二节\n\n${duplicateSentence}`
         );
         assert.equal(dedupedArticle.match(new RegExp(duplicateSentence, 'g')).length, 1);
+        assert.deepStrictEqual(fitApiReaderFigureDimensions(1800, 4151), {
+            canvasWidth: 1776,
+            canvasHeight: 4096,
+            drawWidth: 1776,
+            drawHeight: 4096,
+            offsetX: 0,
+            offsetY: 0
+        });
         const completedAuthors = resolveApiReaderAuthors(
             { authors: ['戊', '己'] },
             {

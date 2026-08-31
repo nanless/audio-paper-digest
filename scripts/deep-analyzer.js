@@ -1089,13 +1089,18 @@ async function materializeApiReaderFigures(figures, arxivId = '') {
         const trusted = prepareTrustedArxivFigureBuffer(raw, figure.mediaType);
         const image = await loadImage(trusted.buffer);
         if (!image.width || !image.height) throw new Error(`论文图 ${figure.ordinal} 无法解码`);
-        const targetWidth = Math.max(1200, Math.min(1800, image.width * 3));
-        const targetHeight = Math.max(1, Math.round(targetWidth * image.height / image.width));
-        const canvas = createCanvas(targetWidth, targetHeight);
+        const dimensions = fitApiReaderFigureDimensions(image.width, image.height);
+        const canvas = createCanvas(dimensions.canvasWidth, dimensions.canvasHeight);
         const context = canvas.getContext('2d');
         context.fillStyle = '#ffffff';
-        context.fillRect(0, 0, targetWidth, targetHeight);
-        context.drawImage(image, 0, 0, targetWidth, targetHeight);
+        context.fillRect(0, 0, dimensions.canvasWidth, dimensions.canvasHeight);
+        context.drawImage(
+            image,
+            dimensions.offsetX,
+            dimensions.offsetY,
+            dimensions.drawWidth,
+            dimensions.drawHeight
+        );
         const png = await canvas.encode('png');
         const assetSha256 = crypto.createHash('sha256').update(png).digest('hex');
         const filename = `figure-${figure.ordinal}-${assetSha256.slice(0, 16)}.png`;
@@ -1108,11 +1113,36 @@ async function materializeApiReaderFigures(figures, arxivId = '') {
             assetMediaType: 'image/png',
             assetSha256,
             assetBytes: png.length,
-            assetWidth: targetWidth,
-            assetHeight: targetHeight
+            assetWidth: dimensions.canvasWidth,
+            assetHeight: dimensions.canvasHeight
         });
     }
     return materialized;
+}
+
+function fitApiReaderFigureDimensions(sourceWidth, sourceHeight) {
+    const width = Number(sourceWidth);
+    const height = Number(sourceHeight);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        throw new Error('论文图尺寸非法');
+    }
+    let drawWidth = Math.max(1200, Math.min(1800, Math.round(width * 3)));
+    let drawHeight = Math.max(1, Math.round(drawWidth * height / width));
+    if (drawHeight > 4096) {
+        const scale = 4096 / drawHeight;
+        drawWidth = Math.max(1, Math.round(drawWidth * scale));
+        drawHeight = 4096;
+    }
+    const canvasWidth = Math.max(600, Math.min(4096, drawWidth));
+    const canvasHeight = Math.max(200, Math.min(4096, drawHeight));
+    return {
+        canvasWidth,
+        canvasHeight,
+        drawWidth: Math.min(drawWidth, canvasWidth),
+        drawHeight: Math.min(drawHeight, canvasHeight),
+        offsetX: Math.max(0, Math.floor((canvasWidth - drawWidth) / 2)),
+        offsetY: Math.max(0, Math.floor((canvasHeight - drawHeight) / 2))
+    };
 }
 
 function parseApiReaderArticleResult(raw) {
@@ -1511,6 +1541,45 @@ function refreshApiReaderAuthorsFromSource(paper, sourceDetails) {
     paper.apiReaderAuthors = readerAuthors;
     stage.readerAuthorsSha256 = stableFingerprint(readerAuthors);
     stage.refreshedAt = getBeijingISOString();
+    return paper;
+}
+
+async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
+    const manifest = paper?.analysisManifest;
+    const stage = manifest?.stages?.apiReaderArticle;
+    const sourceText = String(sourceDetails?.text || '');
+    const sourceSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
+    if (manifest?.contracts?.apiReaderArticle !== API_READER_ARTICLE_CONTRACT
+        || stage?.status !== 'complete'
+        || sourceSha256 !== paper.sourceSha256
+        || sourceSha256 !== manifest.sourceAcquisition?.sourceSha256) {
+        throw new Error('论文图刷新只接受来源闭环的 v2 canonical');
+    }
+    const figures = Array.isArray(paper.apiReaderFigures) ? paper.apiReaderFigures : [];
+    const currentInventory = getApiReaderFigureInventory(
+        sourceDetails.structuredArtifacts,
+        getPaperArxivId(paper)
+    );
+    const allowedUrls = new Set(currentInventory.map(item => item.url));
+    if (figures.some(item => !allowedUrls.has(item?.url))) {
+        throw new Error('论文图刷新发现 canonical URL 与当前原文图不一致');
+    }
+    const materialized = await materializeApiReaderFigures(
+        figures,
+        getPaperArxivId(paper)
+    );
+    paper.apiReaderFigures = materialized;
+    stage.figureCount = materialized.length;
+    stage.figuresSha256 = stableFingerprint(materialized);
+    stage.structuredArtifactsSha256 = sourceDetails.structuredArtifacts?.payloadSha256 || '';
+    stage.refreshedAt = getBeijingISOString();
+    manifest.stages.imageSupplement = {
+        status: 'skipped',
+        reason: 'api_reader_v2_official_figures_bound',
+        officialFigureCount: materialized.length,
+        officialFiguresSha256: stableFingerprint(materialized),
+        refreshedAt: getBeijingISOString()
+    };
     return paper;
 }
 
@@ -6627,6 +6696,7 @@ module.exports = {
     refreshApiReaderArticleFromSource,
     refreshApiScoringAndReaderFromSource,
     refreshApiReaderAuthorsFromSource,
+    refreshApiReaderFiguresFromSource,
     hasCompleteApiReaderFigureBinding,
     API_READER_ARTICLE_CONTRACT,
     isAllowedReaderNarrativeNumeralIssue,
@@ -6641,6 +6711,7 @@ module.exports = {
     sanitizeTrustedArxivSvg,
     prepareTrustedArxivFigureBuffer,
     materializeApiReaderFigures,
+    fitApiReaderFigureDimensions,
     repairMissingAnalysisSections,
     finalizeStructureRepairOutput,
     recoveryFailureStatus,
