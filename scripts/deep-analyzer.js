@@ -427,7 +427,9 @@ function parseScoringAuditResult(raw, allowedEvidenceIds = null) {
             }
         }
         if (!['direct', 'partial', 'none', 'not_applicable'].includes(evidenceProfile.ablationStatus)) {
-            throw new Error('评分证据画像 ablationStatus 非法');
+            throw new Error(
+                `评分证据画像 ablationStatus 非法: ${JSON.stringify(evidenceProfile.ablationStatus)}`
+            );
         }
         if (!['public', 'internal', 'mixed', 'not_applicable'].includes(evidenceProfile.targetEvaluation)) {
             throw new Error('评分证据画像 targetEvaluation 非法');
@@ -762,6 +764,28 @@ function restoreReaderSectionHeadings(article, sections) {
     });
 }
 
+const GENERIC_READER_HEADING_RE = /^(?:任务背景|背景与动机|问题定义|相关工作|方法(?:概述|全景|介绍)|核心创新(?:点)?|实验(?:设置|结果|分析)|结果分析|细节详述|局限(?:分析|与问题)?|复现(?:指南|说明)|总结(?:与展望)?|结论)$/;
+
+function makeReaderHeadingSpecific(kind, heading, readerTitle) {
+    if (!GENERIC_READER_HEADING_RE.test(String(heading || '').trim())) return heading;
+    const title = String(readerTitle || '').trim().replace(/[？?！!。]+$/, '').slice(0, 48);
+    const templates = {
+        background: `理解“${title}”前，先要看清什么问题？`,
+        related_work: `围绕“${title}”，已有路线还缺了什么？`,
+        problem: `“${title}”真正要回答哪些问题？`,
+        method_overview: `“${title}”背后的完整数据流是什么？`,
+        component: `“${title}”由哪些关键组件共同完成？`,
+        training: `“${title}”怎样训练、求解或配置？`,
+        experiment_setup: `怎样公平检验“${title}”是否成立？`,
+        result: `哪些数字真正支持“${title}”？`,
+        ablation: `拆掉哪些组件后，“${title}”不再成立？`,
+        limitation: `“${title}”还不能说明什么？`,
+        reproduction: `复现“${title}”前要核对哪些细节？`,
+        synthesis: `读完“${title}”，初学者该带走什么？`
+    };
+    return (templates[kind] || `关于“${title}”，${heading}应回答什么？`).slice(0, 80);
+}
+
 function splitReaderLongParagraphs(text, targetChineseChars = 190, maxChineseChars = 240) {
     const chineseCount = value => (String(value || '').match(/[\u3400-\u9fff]/g) || []).length;
     const protectedBlock = value => /^(?:```|~~~|\||[-*+]\s|\d+\.\s|!\[|\$\$|\\\[)/.test(value.trim());
@@ -822,15 +846,20 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
             || isAllowedReaderNarrativeNumeralIssue(issue)) continue;
         const match = String(issue.match || '').trim();
         if (!match) continue;
-        const replacement = match
-            .replace(/(\d+(?:\.\d+)?)\s*万/g, (_, value) => (
-                Number(value) * 10000
-            ).toLocaleString('en-US', { maximumFractionDigits: 10 }))
-            .replace(/[零〇一二两三四五六七八九十百千万亿]+/g, chineseInteger)
-            .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2');
+        const replacement = /^[几数]\s*10$/.test(match)
+            ? '数十'
+            : /^[几数]\s*(\d+(?:\.\d+)?)$/.test(match)
+                ? match.replace(/^[几数]\s*/, '约 ')
+                : match
+                    .replace(/(\d+(?:\.\d+)?)\s*万/g, (_, value) => (
+                        Number(value) * 10000
+                    ).toLocaleString('en-US', { maximumFractionDigits: 10 }))
+                    .replace(/[零〇一二两三四五六七八九十百千万亿]+/g, chineseInteger)
+                    .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2');
         normalized = normalized.split(match).join(replacement);
     }
     return normalized
+        .replace(/数十\s+(?=[\u3400-\u9fff])/g, '数十')
         .replace(/([下上这另哪])\s*1\s*(?=步|层|类|种|段|项|组|张|个)/g, '$1一')
         .replace(/([同唯统单])\s*1\s*(?=[\u3400-\u9fff])/g, '$1一')
         .replace(/归\s*1\s*(?=化|后|组合|处理|权重)/g, '归一')
@@ -1088,9 +1117,12 @@ function parseApiReaderArticleResult(raw) {
         if (rank < 0) throw new Error(`读者文章 sections[${index}].kind 非法`);
         if (rank < previousRank) throw new Error('读者文章小节未按学习依赖顺序递进');
         previousRank = rank;
-        const heading = String(section.heading || '').trim();
+        const heading = makeReaderHeadingSpecific(
+            section.kind, String(section.heading || '').trim(), value.readerTitle
+        );
+        section.heading = heading;
         if (heading.length < 8 || heading.length > 80
-            || /^(?:任务背景|背景与动机|问题定义|相关工作|方法(?:概述|全景|介绍)|核心创新(?:点)?|实验(?:设置|结果|分析)|结果分析|细节详述|局限(?:分析|与问题)?|复现(?:指南|说明)|总结(?:与展望)?|结论)$/.test(heading)) {
+            || GENERIC_READER_HEADING_RE.test(heading)) {
             throw new Error(`读者文章 sections[${index}].heading 必须是论文特有问题或判断`);
         }
         if (seenHeadings.has(heading)) throw new Error('读者文章小节标题重复');
@@ -6308,6 +6340,7 @@ module.exports = {
     splitReaderLongParagraphs,
     normalizeReaderEditorialSurface,
     repairApiReaderPlanSurfaceBinding,
+    makeReaderHeadingSpecific,
     getApiReaderFigureInventory,
     buildApiReaderArtifactEvidence,
     buildApiReaderEvidenceContext,

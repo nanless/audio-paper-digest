@@ -281,7 +281,7 @@ function findQuantitativeChineseNumerals(text) {
     const patterns = [
         [new RegExp(`百分之[${CHINESE_DIGITS}]+(?:点[${CHINESE_DIGITS}]+)?`, 'gu'), 'percentage'],
         [new RegExp(`[负正]?[${CHINESE_DIGITS}]+点[${CHINESE_DIGITS}]+`, 'gu'), 'decimal'],
-        [new RegExp(`(?<![第${CHINESE_DIGITS}])[负正]?[${CHINESE_DIGITS}]*[十百千万亿][${CHINESE_DIGITS}]*\\s*(?:${unitAlternation})`, 'giu'), 'measured_large_integer'],
+        [new RegExp(`(?<![第几数${CHINESE_DIGITS}])[负正]?[${CHINESE_DIGITS}]*[十百千万亿][${CHINESE_DIGITS}]*\\s*(?:${unitAlternation})`, 'giu'), 'measured_large_integer'],
         [new RegExp(`(?<![第${CHINESE_DIGITS}])[一二两三四五六七八九]\\s*(?:${hardUnitAlternation})`, 'giu'), 'measured_simple_integer'],
         [new RegExp(`[负正]?[${CHINESE_DIGITS}]+(?:到|至|–|—|-)[负正]?[${CHINESE_DIGITS}]+(?=\\s*(?:的)?(?:分数|评分|范围|区间|等级))`, 'gu'), 'quantitative_range'],
         [new RegExp(`[${CHINESE_DIGITS}]+\\s*(?:比|:|：)\\s*[${CHINESE_DIGITS}]+`, 'gu'), 'exact_ratio'],

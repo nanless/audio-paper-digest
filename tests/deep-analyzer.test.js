@@ -869,6 +869,12 @@ primary_task_tag: #音视频生成
             ]),
             '100 例标注覆盖 120 段音频。'
         );
+        assert.strictEqual(
+            normalizeReaderEditorialSurface('延迟为数 10 毫秒。', [{
+                code: 'quantitative_chinese_numeral', match: '数 10'
+            }]),
+            '延迟为数十毫秒。'
+        );
         const recoveryPaper = {
             apiReaderArticle: '### 把 HRTF 做浓，再用模型去听\n\n正文。',
             apiReaderPlan: {
@@ -928,10 +934,12 @@ primary_task_tag: #音视频生成
         assert.ok(result.article.length > 1800);
 
         payload.sections[3].heading = '方法概述';
-        assert.throws(
-            () => parseApiReaderArticleResult(JSON.stringify(payload)),
-            /论文特有问题或判断/
+        const repairedGenericHeading = parseApiReaderArticleResult(JSON.stringify(payload));
+        assert.match(
+            repairedGenericHeading.plan.sections[3].heading,
+            /让声音分路前行.*完整数据流/
         );
+        assert.doesNotMatch(repairedGenericHeading.article, /^### 方法概述$/m);
     });
 
     it('API reader v2 绑定结构化公式、官方 SVG 和作者机构', () => {
