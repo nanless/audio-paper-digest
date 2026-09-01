@@ -1123,7 +1123,7 @@ primary_task_tag: #音视频生成
             'image/png'
         );
         const largeOfficialSvg = Buffer.from(
-            `<svg xmlns="http://www.w3.org/2000/svg"><text>${'a'.repeat(2 * 1024 * 1024)}</text></svg>`
+            `<svg xmlns="http://www.w3.org/2000/svg"><text>${'a'.repeat(8 * 1024 * 1024 + 1024)}</text></svg>`
         );
         assert.strictEqual(
             prepareTrustedArxivFigureBuffer(largeOfficialSvg, 'image/svg+xml').mediaType,
@@ -1150,7 +1150,7 @@ primary_task_tag: #音视频生成
         }, boundManifest), false);
         assert.match(
             fs.readFileSync(path.join(__dirname, '..', 'scripts', 'deep-analyzer.js'), 'utf8'),
-            /API_READER_FIGURE_MAX_BYTES = 8 \* 1024 \* 1024/
+            /API_READER_FIGURE_MAX_BYTES = 16 \* 1024 \* 1024/
         );
     });
 

@@ -739,7 +739,7 @@ async function auditTypeAwareScoring(analysis, sourceEvidence = '', options = {}
 }
 
 const API_READER_ARTICLE_CONTRACT = 'beginner-researcher-v2';
-const API_READER_FIGURE_MAX_BYTES = 8 * 1024 * 1024;
+const API_READER_FIGURE_MAX_BYTES = 16 * 1024 * 1024;
 const API_READER_KINDS = Object.freeze([
     'background', 'related_work', 'problem', 'method_overview', 'component', 'training',
     'experiment_setup', 'result', 'ablation', 'limitation', 'reproduction', 'synthesis'
