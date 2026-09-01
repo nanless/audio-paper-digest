@@ -925,6 +925,22 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
         )
         .replace(/([\u3400-\u9fff])([-+]\d)/g, '$1 $2')
         .replace(
+            /((?:CER|WER|PER|MER|SER)\b\s*(?:从|由)\s*)(\d+(?:\.\d+)?)(\s*(?:升至|降至|到|至)\s*)(\d+(?:\.\d+)?)(?!\s*%)/gi,
+            (full, prefix, left, separator, right) => (
+                Number.parseFloat(left) > 1 || Number.parseFloat(right) > 1
+                    ? `${prefix}${left}%${separator}${right}%`
+                    : full
+            )
+        )
+        .replace(
+            /((?:CER|WER|PER|MER|SER)\b\s*)(\d+(?:\.\d+)?)(\s*(?:差于|优于|高于|低于|好于|坏于)\s*)(\d+(?:\.\d+)?)(?!\s*%)/gi,
+            (full, prefix, left, separator, right) => (
+                Number.parseFloat(left) > 1 || Number.parseFloat(right) > 1
+                    ? `${prefix}${left}%${separator}${right}%`
+                    : full
+            )
+        )
+        .replace(
             /((?:CER|WER|PER|MER|SER)\b[^\n。！？]{0,36}?)(\d+(?:\.\d+)?)(\s*(?:对|vs\.?|与)\s*)(\d+(?:\.\d+)?)(?!\s*%)/gi,
             (full, prefix, left, separator, right) => (
                 Number.parseFloat(left) > 1 || Number.parseFloat(right) > 1
