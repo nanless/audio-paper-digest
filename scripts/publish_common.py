@@ -3088,9 +3088,16 @@ def validate_digest_index_reader_quality(markdown, required=False):
     # Keep structural/duplication checks on the index-owned prose while the
     # generation equality contract protects these reused blocks.
     index_owned_body = re.sub(
+        r'^👥 \*\*作者与机构\*\*\n\n[\s\S]*?'
+        r'(?=\n\n(?:💡 \*\*毒舌点评\*\*|📌 \*\*核心摘要\*\*))',
+        '👥 **作者与机构**\n\n已绑定单篇作者机构。\n\n',
+        body,
+        flags=re.MULTILINE,
+    )
+    index_owned_body = re.sub(
         r'^📌 \*\*核心摘要\*\*\n\n[\s\S]*?(?=^🔗 \*\*开源资源\*\*$)',
         '📌 **核心摘要**\n\n单篇已审核心摘要。\n\n',
-        body,
+        index_owned_body,
         flags=re.MULTILINE,
     )
     index_owned_body = re.sub(
