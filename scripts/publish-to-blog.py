@@ -4483,14 +4483,34 @@ def validate_manifest_clean_against_head(paths, allow_exact_pipeline_untracked=N
                 continue
             relative = entry[3:]
             target = repo / relative
-            expected_sha = allowed.get(relative)
+            allowance = allowed.get(relative)
+            expected_sha = (
+                allowance.get('sha256') if isinstance(allowance, dict) else allowance
+            )
+            controlled_binary = bool(
+                isinstance(allowance, dict) and allowance.get('controlledBinary')
+            )
+            if (not expected_sha or target.is_symlink()
+                    or not target.is_file() or _sha256_file(target) != expected_sha):
+                unsafe.append(entry)
+                continue
+            if controlled_binary:
+                try:
+                    is_valid_binary = (
+                        is_api_reader_asset_path(target)
+                        and target.read_bytes().startswith(PNG_SIGNATURE)
+                    )
+                except OSError:
+                    is_valid_binary = False
+                if not is_valid_binary:
+                    unsafe.append(entry)
+                continue
             try:
                 text = target.read_text(encoding='utf-8')
             except (OSError, UnicodeError):
                 unsafe.append(entry)
                 continue
-            if (not expected_sha or _sha256_file(target) != expected_sha
-                    or 'paper_digest_pipeline_owned: true' not in text):
+            if 'paper_digest_pipeline_owned: true' not in text:
                 unsafe.append(entry)
         entries = unsafe
     if entries:
@@ -5670,7 +5690,11 @@ def prepare_generation_installation(
                 if (isinstance(item, dict) and item.get('deleted') is not True
                         and isinstance(item.get('path'), str)
                         and re.fullmatch(r'[a-f0-9]{64}', str(item.get('sha256') or ''))):
-                    prior_exact[item['path']] = item['sha256']
+                    target = Path(BLOG_REPO).expanduser().resolve() / item['path']
+                    prior_exact[item['path']] = {
+                        'sha256': item['sha256'],
+                        'controlledBinary': is_api_reader_asset_path(target),
+                    }
         except PublishDataValidationError:
             prior_exact = {}
     validate_manifest_clean_against_head(

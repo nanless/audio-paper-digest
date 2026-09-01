@@ -2982,6 +2982,26 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                     publish_to_blog.validate_manifest_clean_against_head(
                         [untracked], allow_exact_pipeline_untracked={relative: expected},
                     )
+                asset = (
+                    repo / 'static' / 'images' / 'papers' / '2608.00001'
+                    / 'figure-1-aabbccddeeff0011.png'
+                )
+                asset.parent.mkdir(parents=True)
+                asset.write_bytes(publish_to_blog.PNG_SIGNATURE + b'pipeline-owned')
+                asset_relative = asset.relative_to(repo).as_posix()
+                asset_expected = publish_to_blog._sha256_file(asset)
+                allowance = {asset_relative: {
+                    'sha256': asset_expected,
+                    'controlledBinary': True,
+                }}
+                publish_to_blog.validate_manifest_clean_against_head(
+                    [asset], allow_exact_pipeline_untracked=allowance,
+                )
+                asset.write_bytes(publish_to_blog.PNG_SIGNATURE + b'manual-drift')
+                with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '人工'):
+                    publish_to_blog.validate_manifest_clean_against_head(
+                        [asset], allow_exact_pipeline_untracked=allowance,
+                    )
 
     def test_git_commit_failure_restores_preinstall_index_and_worktree(self):
         with tempfile.TemporaryDirectory() as tmp:
