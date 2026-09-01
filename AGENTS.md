@@ -20,6 +20,7 @@ npm run fetch            # 仅数据流程：抓取 + 筛选 + 深度分析
 npm run deep             # 仅深度分析续跑（跳过已有 analysis；无分析结果时可从 filtered-papers.json 初始化）
 npm run reanalyze        # 强制全量重分析（支持 --concurrency N）
 npm run batch            # 批量分析未分析论文
+node scripts/refilter-reanalyze-by-date.js YYYY-MM-DD # 历史重筛+重分析；完成筛选后同步归档正式 decisions/filtered 快照
 npm run validate:data    # 只读校验候选/筛选/分析 JSON 数据、筛选决策缓存一致性和完整候选覆盖
 npm run validate:data -- --allow-empty # 仅供没有运行数据的干净 checkout 使用
 npm run keyword:recall   # 用历史 filtered 正样本回放关键词预筛，报告召回率与漏召回明细

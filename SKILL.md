@@ -371,6 +371,8 @@ node scripts/refilter-reanalyze-by-date.js 2026-07-01
 # 该入口逐批保存目标目录下的 refilter-filter-decisions.json；
 # 日期、模型/端点/协议、prompt、温度、输出上限、决定契约、关键词版本或
 # 单篇筛选输入变化时自动失效，续跑只调用尚无确定性决定的论文
+# 筛选完整后会从 raw 候选与确定性决定原子重建同日正式
+# filter-decisions.json / filtered-papers.json，避免历史状态继续引用旧筛选集合
 # 收尾时 canonical 结果按本轮入选 ID 收敛：入选失败项保留恢复 checkpoint，
 # 本轮明确落选的旧分析从该批次 deep-analysis-result.json 移除
 

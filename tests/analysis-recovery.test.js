@@ -23,7 +23,8 @@ const {
     resolveResultFileForTargetDate,
     validateTargetDate,
     loadRefilterDecisions,
-    saveRefilterDecisions
+    saveRefilterDecisions,
+    promoteRefilterArtifacts
 } = require('../scripts/refilter-reanalyze-by-date.js');
 const {
     parseTargetDate,
@@ -202,6 +203,46 @@ describe('entry recovery contracts', () => {
         assert.strictEqual(reused['2607.2'].retryable, true);
         assert.deepStrictEqual(loadRefilterDecisions(checkpoint, '2026-07-09', 'config-a'), {});
         assert.deepStrictEqual(loadRefilterDecisions(checkpoint, '2026-07-08', 'config-b'), {});
+    });
+
+    it('refilter 完成后从 raw 与确定性决定原子同步正式筛选快照', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'refilter-promote-'));
+        const resultFile = path.join(root, 'deep-analysis-result.json');
+        const papers = [
+            { arxivId: '2608.10001', title: 'Related A' },
+            { arxivId: '2608.10002', title: 'Rejected B' },
+            { arxivId: '2608.10003', title: 'Related C' }
+        ];
+        fs.writeFileSync(path.join(root, 'raw-candidates.json'), JSON.stringify({
+            batchDate: '2026-08-29',
+            stats: { totalCandidates: 3 },
+            papers
+        }));
+        fs.writeFileSync(path.join(root, 'refilter-filter-decisions.json'), JSON.stringify({
+            batchDate: '2026-08-29',
+            complete: true,
+            filterConfigFingerprint: 'filter-v2',
+            decisions: {
+                '2608.10001': { related: true },
+                '2608.10002': { related: false },
+                '2608.10003': { related: true }
+            }
+        }));
+        fs.writeFileSync(path.join(root, 'filter-decisions.json'), JSON.stringify({ batchDate: '2026-08-29' }));
+        fs.writeFileSync(path.join(root, 'filtered-papers.json'), JSON.stringify({ batchDate: '2026-08-29', papers: [] }));
+
+        const promoted = promoteRefilterArtifacts(resultFile, '2026-08-29', 'filter-v2', {
+            keywordRejected: 1,
+            llmCandidates: 2
+        });
+        assert.strictEqual(promoted.paperCount, 2);
+        const decisions = JSON.parse(fs.readFileSync(promoted.decisionsPath, 'utf8'));
+        const filtered = JSON.parse(fs.readFileSync(promoted.filteredPath, 'utf8'));
+        assert.strictEqual(decisions.stats.decided, 3);
+        assert.strictEqual(decisions.stats.related, 2);
+        assert.strictEqual(filtered.status, 'complete');
+        assert.deepStrictEqual(filtered.papers.map(paper => paper.arxivId), ['2608.10001', '2608.10003']);
+        assert.strictEqual(filtered.filterConfigFingerprint, 'filter-v2');
     });
 
     it('按日期重筛只替换成功 ID，失败不会删除旧成功', () => {
@@ -425,6 +466,7 @@ describe('entry recovery contracts', () => {
         };
 
         const result = await refilterMain('2026-07-08', {
+            promoteArtifacts: false,
             today: '2026-07-10',
             papersPath,
             archiveDir,

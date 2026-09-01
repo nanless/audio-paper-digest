@@ -95,6 +95,81 @@ function saveRefilterDecisions(checkpointFile, targetDate, filterConfigFingerpri
     });
 }
 
+function promoteRefilterArtifacts(resultFile, targetDate, filterConfigFingerprint, filterStats) {
+    const directory = path.dirname(resultFile);
+    const rawPath = path.join(directory, 'raw-candidates.json');
+    const checkpointPath = resolveRefilterCheckpointFile(resultFile);
+    const decisionsPath = path.join(directory, 'filter-decisions.json');
+    const filteredPath = path.join(directory, 'filtered-papers.json');
+    const raw = readJsonFileStrict(rawPath);
+    const checkpoint = readJsonFileStrict(checkpointPath);
+    const rawPapers = Array.isArray(raw?.papers) ? raw.papers : [];
+    if ((raw.batchDate || raw.date) !== targetDate || rawPapers.length === 0) {
+        throw new Error(`refilter 正式快照缺少目标日期 raw 候选: ${rawPath}`);
+    }
+    if (checkpoint?.batchDate !== targetDate
+        || checkpoint?.filterConfigFingerprint !== filterConfigFingerprint
+        || checkpoint?.complete !== true
+        || !checkpoint.decisions
+        || typeof checkpoint.decisions !== 'object') {
+        throw new Error(`refilter 决策 checkpoint 尚未完整，拒绝提升正式快照: ${checkpointPath}`);
+    }
+    const rawIds = rawPapers.map(normalizedId).filter(Boolean);
+    const rawIdSet = new Set(rawIds);
+    const decisionEntries = Object.entries(checkpoint.decisions)
+        .map(([id, decision]) => [normalizedId(id), decision])
+        .filter(([id]) => id);
+    const decisionIds = new Set(decisionEntries.map(([id]) => id));
+    const missing = rawIds.filter(id => !decisionIds.has(id));
+    const unexpected = [...decisionIds].filter(id => !rawIdSet.has(id));
+    const retryable = decisionEntries.filter(([, decision]) => (
+        typeof decision?.related !== 'boolean' || decision.retryable || decision.fallback
+    ));
+    if (missing.length > 0 || unexpected.length > 0 || retryable.length > 0) {
+        throw new Error(`refilter 正式快照决定集合不完整: missing=${missing.length}, unexpected=${unexpected.length}, retryable=${retryable.length}`);
+    }
+    const decisions = Object.fromEntries(decisionEntries);
+    const filteredPapers = rawPapers.filter(paper => decisions[normalizedId(paper)]?.related === true);
+    const now = getBeijingISOString();
+    const stats = {
+        ...(raw.stats || {}),
+        totalCandidates: rawPapers.length,
+        decided: decisionEntries.length,
+        related: filteredPapers.length,
+        retryable: 0,
+        complete: true,
+        beforeFilter: rawPapers.length,
+        afterFilter: filteredPapers.length,
+        afterArchiveSkip: filteredPapers.length,
+        skippedFromArchive: 0,
+        decisionCount: decisionEntries.length,
+        keywordPrefilterEnabled: Config.FILTER_CONFIG.keywordPrefilterEnabled,
+        keywordRejected: Number(filterStats?.keywordRejected) || 0,
+        llmCandidates: Number(filterStats?.llmCandidates) || 0,
+        llmDecided: Number(filterStats?.llmCandidates) || 0
+    };
+    updateJsonFileLocked(decisionsPath, current => ({
+        ...(!Array.isArray(current) && current ? current : {}),
+        batchDate: targetDate,
+        timestamp: now,
+        filterConfigFingerprint,
+        decisions,
+        retryableDecisions: {},
+        stats
+    }));
+    updateJsonFileLocked(filteredPath, current => ({
+        ...(!Array.isArray(current) && current ? current : {}),
+        batchDate: targetDate,
+        timestamp: now,
+        status: 'complete',
+        filterConfigFingerprint,
+        excludedRelatedIds: [],
+        papers: filteredPapers,
+        stats
+    }));
+    return { decisionsPath, filteredPath, paperCount: filteredPapers.length };
+}
+
 function validateTargetDate(targetDate) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate || '')) {
         throw new Error(`无效目标日期: ${targetDate || '(空)'}`);
@@ -294,6 +369,15 @@ async function main(targetDate, options = {}) {
         console.error(`❌ 筛选未完成：明确决定 ${filterStats?.decided || 0}/${filterStats?.totalCandidates || targetPapers.length}，待重试 ${failed} 篇`);
         return { status: 'filter_failed', exitCode: 1, success: 0, failed };
     }
+    if (options.promoteArtifacts !== false) {
+        const promoted = promoteRefilterArtifacts(
+            resultFile,
+            targetDate,
+            filterConfigFingerprint,
+            filterStats
+        );
+        console.log(`🧾 已同步正式筛选快照: ${promoted.paperCount} 篇`);
+    }
     console.log(`✅ 筛选完成: ${targetPapers.length} → ${filtered.length} 篇\n`);
     if (filtered.length === 0) {
         console.log('没有通过筛选的论文，无需分析');
@@ -416,5 +500,6 @@ module.exports = {
     getRefilterFilterFingerprint,
     resolveRefilterCheckpointFile,
     loadRefilterDecisions,
-    saveRefilterDecisions
+    saveRefilterDecisions,
+    promoteRefilterArtifacts
 };

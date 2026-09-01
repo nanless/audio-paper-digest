@@ -2027,6 +2027,13 @@ primary_method_tag: #基准测试
                     document_type='方法研究',
                     source_text=source_text,
                 ))
+        modality_order = analysis_with('配置 C 相比配置 A 降低 2.7 个百分点').replace(
+            '| 方法 / 设置 |', '| 阶数 |')
+        self.assertIsNone(validate_experiment_table_contract(
+            modality_order,
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type='方法研究',
+        ))
         neutral = analysis_with('配置 C 的报告值为 9.7%，其余条件保持一致')
         self.assertRegex(validate_experiment_table_contract(
             neutral,

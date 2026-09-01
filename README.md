@@ -152,6 +152,9 @@ npm run fetch
 # 仅深度分析续跑（跳过已有 analysis；无分析结果时可从 filtered-papers.json 初始化）
 npm run deep
 
+# 历史批次重新筛选并重分析；同步归档中的正式 decisions/filtered 快照
+node scripts/refilter-reanalyze-by-date.js YYYY-MM-DD
+
 # 全量重分析
 npm run reanalyze
 

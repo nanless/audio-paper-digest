@@ -498,6 +498,11 @@ describe('analyzePaperWithRetry', () => {
             contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
             documentType: '方法研究'
         }), null, '训练阶段是可核对的设置识别列，不应误判为纯指标表');
+        const modalityOrderIdentifier = valid.replace('方法 / 设置', '阶数');
+        assert.strictEqual(validateExperimentTableContract(modalityOrderIdentifier, {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究'
+        }), null, '阶数是多模态实验的设置分层，不应误判为纯指标表');
         const representationIdentifier = valid.replace('方法 / 设置', '表征');
         assert.strictEqual(validateExperimentTableContract(representationIdentifier, {
             contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
