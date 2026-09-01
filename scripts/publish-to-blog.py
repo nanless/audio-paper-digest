@@ -1951,6 +1951,19 @@ def full_index_decision_block(pa, paper, key, *, reader_article='', api_reader_v
     return content.strip()
 
 
+def index_author_institution_block(paper, pa, api_reader=None):
+    """Render the same author/affiliation identity used by the paper page."""
+    reader_authors = api_reader.get('readerAuthors') if isinstance(api_reader, dict) else None
+    authors = reader_authors.get('authors') if isinstance(reader_authors, dict) else None
+    if isinstance(authors, list) and authors:
+        return '\n'.join(
+            f'- {author["name"]}：{"；".join(author["affiliations"])}'
+            for author in authors
+        )
+    fallback = pa.get('authors', '') if isinstance(pa, dict) else ''
+    return fallback.strip() if isinstance(fallback, str) else ''
+
+
 def normalize_digest_index_preserving_decision_blocks(markdown):
     """Normalize index-owned prose without rewriting copied paper sections."""
     pattern = re.compile(
@@ -2066,6 +2079,10 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         score_line = format_complete_score_line(pa)
         if score_line:
             md += f"评分：{score_line}\n\n"
+
+        author_institutions = index_author_institution_block(p, pa, api_reader)
+        if author_institutions:
+            md += f"👥 **作者与机构**\n\n{author_institutions}\n\n"
         
         meta = build_paper_meta(pa, aurl)
         if pa.get('roast'):
@@ -2120,6 +2137,9 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         if tags:
             md += f"标签：{' '.join(tags)}\n\n"
         md += '评分：N/A（分析未提供可验证的八维评分）\n\n'
+        author_institutions = index_author_institution_block(p, pa, api_reader)
+        if author_institutions:
+            md += f"👥 **作者与机构**\n\n{author_institutions}\n\n"
         meta = build_paper_meta(pa, aurl)
 
         if pa.get('roast'):

@@ -997,6 +997,11 @@ title: "Duplicate"
         self.assertNotIn(paper['apiReaderPlan']['oneSentenceThesis'], markdown)
         self.assertIn('最终兼容 canonical 摘要。', markdown)
         self.assertIn(paper['parsed']['opensource'], markdown)
+        first_author = paper['apiReaderAuthors']['authors'][0]
+        self.assertIn(first_author['name'], markdown)
+        self.assertIn(first_author['affiliations'][0], markdown)
+        self.assertLess(markdown.index('评分：**6.1/10**'), markdown.index('👥 **作者与机构**'))
+        self.assertLess(markdown.index('👥 **作者与机构**'), markdown.index('💡 **毒舌点评**'))
         paper_markdown, _slug = publish_to_blog.generate_paper_page(
             paper, '2026-08-31', category='论文速递',
         )
