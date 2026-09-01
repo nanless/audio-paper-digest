@@ -311,6 +311,9 @@ describe('Manual v4 editorial quality primitives', () => {
             '图 2 统计前 10 个词的平均 CER：从第 2 至 3 位起优势显现，且在 HAT 上相对 TG-ASR 的分离更明显。'
         ), []);
         assert.deepEqual(findMissingComparisonUnits(
+            '早期 token 不再依赖脆弱前缀，从位置 2 到 3 之后显著降低错误率。'
+        ), []);
+        assert.deepEqual(findMissingComparisonUnits(
             '图 3 显示 Base 优于上下文基线，Small 的 BLEU 高于 Medium，但 CER 反而更差。'
         ), []);
         assert.deepEqual(findMissingComparisonUnits(
