@@ -156,7 +156,7 @@ TABLE_VAGUE_METRIC_HEADER_RE = re.compile(
     flags=re.IGNORECASE,
 )
 TABLE_DIRECTION_MARK_RE = re.compile(
-    r'(?:↑|↓|越高越好|越低越好|higher\s+is\s+better|lower\s+is\s+better|max(?:imize)?|min(?:imize)?)',
+    r'(?:↑|↓|\\(?:uparrow|downarrow|nearrow|searrow)\b|越高越好|越低越好|higher\s+is\s+better|lower\s+is\s+better|max(?:imize)?|min(?:imize)?)',
     flags=re.IGNORECASE,
 )
 TABLE_DIRECTIONAL_METRIC_RE = re.compile(
@@ -2129,9 +2129,11 @@ def _validate_experiment_table_evidence_depth(
             return f'实验结果第 {index} 张表缺少方法、数据集或设置识别列'
         for header in table['header']:
             normalized = re.sub(r'[*_`]', '', header).strip()
-            if TABLE_VAGUE_METRIC_HEADER_RE.search(normalized):
+            identifier = not normalized or TABLE_IDENTIFIER_HEADER_RE.search(normalized)
+            if not identifier and TABLE_VAGUE_METRIC_HEADER_RE.search(normalized):
                 return f'实验结果第 {index} 张表含叙述型伪指标列“{normalized}”，应改为可核对指标、设置或比较对象'
-            if (TABLE_DIRECTIONAL_METRIC_RE.search(normalized)
+            if (not identifier
+                    and TABLE_DIRECTIONAL_METRIC_RE.search(normalized)
                     and not TABLE_DIRECTION_MARK_RE.search(normalized)
                     and not TABLE_NON_DIRECTIONAL_MEASURE_RE.search(normalized)):
                 return f'实验结果第 {index} 张表指标“{normalized}”缺少 ↑/↓ 方向'

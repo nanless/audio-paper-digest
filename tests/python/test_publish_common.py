@@ -1921,6 +1921,21 @@ primary_method_tag: #基准测试
             contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
             document_type='方法研究',
         ))
+        latex_direction = valid.replace('LibriSpeech WER↓', r'Macro-F1 $\uparrow$')
+        self.assertIsNone(validate_experiment_table_contract(
+            latex_direction,
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type='方法研究',
+        ))
+        loss_identifier = valid.replace(
+            '方法 / 设置',
+            '损失函数 (骨干: HyST-Net, 数据集: DNS Challenge)',
+        )
+        self.assertIsNone(validate_experiment_table_contract(
+            loss_identifier,
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type='方法研究',
+        ))
         with_inserted_figure = valid.replace(
             '表中保留主方法、最强基线与关键消融。\n\n| 方法 / 设置 |',
             '表中保留主方法、最强基线与关键消融。\n\n'
