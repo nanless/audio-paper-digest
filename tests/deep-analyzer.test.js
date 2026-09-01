@@ -1009,6 +1009,8 @@ primary_task_tag: #音视频生成
             normalizeReaderFigureCaption,
             truncateReaderFigureCaption,
             prepareTrustedArxivFigureBuffer,
+            isPermanentApiReaderFigureFailure,
+            pruneUnmaterializedApiReaderFigureBlocks,
             hasCompleteApiReaderFigureBinding,
             stableFingerprint
         } = require('../scripts/deep-analyzer.js');
@@ -1044,6 +1046,19 @@ primary_task_tag: #音视频生成
         assert.match(reader.article, /figure-1\.svg/);
         assert.match(reader.article, /figure-2\.svg/);
         assert.ok(reader.article.indexOf('figure-1.svg') < reader.article.indexOf('### 主要结果'));
+        const prunedReaderArticle = pruneUnmaterializedApiReaderFigureBlocks(
+            reader.article,
+            reader.figures,
+            [reader.figures[0]]
+        );
+        assert.match(prunedReaderArticle, /figure-1\.svg/);
+        assert.doesNotMatch(prunedReaderArticle, /figure-2\.svg/);
+        assert.match(prunedReaderArticle, /### 主要结果支持了什么？/);
+        assert.strictEqual(isPermanentApiReaderFigureFailure(Object.assign(
+            new Error('response body 16.0MB exceeds limit'),
+            { code: 'RESPONSE_TOO_LARGE' }
+        )), true);
+        assert.strictEqual(isPermanentApiReaderFigureFailure(new Error('socket hang up')), false);
 
         const $ = cheerio.load('<div class="ltx_authors"><span class="ltx_creator ltx_role_author"><span class="ltx_personname">甲</span><span class="ltx_contact ltx_role_affiliation"><span class="ltx_contact_name">Affiliation: </span>机构 A</span></span></div>');
         const authors = parseArxivReaderAuthors($);

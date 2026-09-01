@@ -1164,6 +1164,38 @@ function prepareTrustedArxivFigureBuffer(buffer, declaredMediaType = '') {
     return { buffer: raw, mediaType: sniffed };
 }
 
+function isPermanentApiReaderFigureFailure(error) {
+    if (error?.code === 'RESPONSE_TOO_LARGE') return true;
+    const message = String(error?.message || '');
+    const statusMatch = message.match(/论文图\s+\d+\s+下载失败:\s+HTTP\s+(\d{3})/);
+    if (statusMatch) {
+        const status = Number.parseInt(statusMatch[1], 10);
+        return status >= 400 && status < 500 && ![408, 425, 429].includes(status);
+    }
+    return /(?:论文 SVG 文件头或字节上限非法|论文 SVG 缺少根节点|论文 SVG 清理后仍包含主动内容|论文图片文件头不是支持的|论文图片声明类型与文件头不一致|论文图\s+\d+\s+无法解码|论文图尺寸非法)/.test(message);
+}
+
+function pruneUnmaterializedApiReaderFigureBlocks(article, plannedFigures, materializedFigures) {
+    const kept = new Set((materializedFigures || []).map(figure => (
+        `${figure.ordinal}\u0000${figure.url}`
+    )));
+    let output = String(article || '');
+    for (const figure of plannedFigures || []) {
+        if (kept.has(`${figure.ordinal}\u0000${figure.url}`)) continue;
+        const pattern = new RegExp(
+            `^!\\[[^\\n]*\\]\\(${escapeRegExp(String(figure.url || ''))}\\)\\n\\n`
+            + `\\*论文图\\s+${Number(figure.ordinal)}。[^\\n]*\\*\\n*`,
+            'gm'
+        );
+        const before = output;
+        output = output.replace(pattern, '');
+        if (output === before) {
+            throw new Error(`无法精确移除未物化论文图 ${figure.ordinal} 的正文块`);
+        }
+    }
+    return output.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 async function materializeApiReaderFigures(figures, arxivId = '') {
     const paperId = String(arxivId || '').trim().toLowerCase().replace(/v\d+$/i, '');
     if (!/^\d{4}\.\d{4,5}$/.test(paperId)) throw new Error('论文图缓存 paper ID 非法');
@@ -1171,43 +1203,48 @@ async function materializeApiReaderFigures(figures, arxivId = '') {
     fs.mkdirSync(root, { recursive: true, mode: 0o700 });
     const materialized = [];
     for (const figure of figures || []) {
-        const response = await fetch(figure.url, {
-            headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
-            signal: AbortSignal.timeout(ARXIV_FETCH_TIMEOUT_MS),
-            dispatcher: getArxivFetchDispatcher()
-        });
-        if (!response.ok) throw new Error(`论文图 ${figure.ordinal} 下载失败: HTTP ${response.status}`);
-        const raw = await readResponseBufferWithLimit(response, API_READER_FIGURE_MAX_BYTES);
-        const trusted = prepareTrustedArxivFigureBuffer(raw, figure.mediaType);
-        const image = await loadImage(trusted.buffer);
-        if (!image.width || !image.height) throw new Error(`论文图 ${figure.ordinal} 无法解码`);
-        const dimensions = fitApiReaderFigureDimensions(image.width, image.height);
-        const canvas = createCanvas(dimensions.canvasWidth, dimensions.canvasHeight);
-        const context = canvas.getContext('2d');
-        context.fillStyle = '#ffffff';
-        context.fillRect(0, 0, dimensions.canvasWidth, dimensions.canvasHeight);
-        context.drawImage(
-            image,
-            dimensions.offsetX,
-            dimensions.offsetY,
-            dimensions.drawWidth,
-            dimensions.drawHeight
-        );
-        const png = await canvas.encode('png');
-        const assetSha256 = crypto.createHash('sha256').update(png).digest('hex');
-        const filename = `figure-${figure.ordinal}-${assetSha256.slice(0, 16)}.png`;
-        const cachePath = path.join(root, filename);
-        writeFileAtomic(cachePath, png);
-        materialized.push({
-            ...figure,
-            cachePath,
-            assetFilename: filename,
-            assetMediaType: 'image/png',
-            assetSha256,
-            assetBytes: png.length,
-            assetWidth: dimensions.canvasWidth,
-            assetHeight: dimensions.canvasHeight
-        });
+        try {
+            const response = await fetch(figure.url, {
+                headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
+                signal: AbortSignal.timeout(ARXIV_FETCH_TIMEOUT_MS),
+                dispatcher: getArxivFetchDispatcher()
+            });
+            if (!response.ok) throw new Error(`论文图 ${figure.ordinal} 下载失败: HTTP ${response.status}`);
+            const raw = await readResponseBufferWithLimit(response, API_READER_FIGURE_MAX_BYTES);
+            const trusted = prepareTrustedArxivFigureBuffer(raw, figure.mediaType);
+            const image = await loadImage(trusted.buffer);
+            if (!image.width || !image.height) throw new Error(`论文图 ${figure.ordinal} 无法解码`);
+            const dimensions = fitApiReaderFigureDimensions(image.width, image.height);
+            const canvas = createCanvas(dimensions.canvasWidth, dimensions.canvasHeight);
+            const context = canvas.getContext('2d');
+            context.fillStyle = '#ffffff';
+            context.fillRect(0, 0, dimensions.canvasWidth, dimensions.canvasHeight);
+            context.drawImage(
+                image,
+                dimensions.offsetX,
+                dimensions.offsetY,
+                dimensions.drawWidth,
+                dimensions.drawHeight
+            );
+            const png = await canvas.encode('png');
+            const assetSha256 = crypto.createHash('sha256').update(png).digest('hex');
+            const filename = `figure-${figure.ordinal}-${assetSha256.slice(0, 16)}.png`;
+            const cachePath = path.join(root, filename);
+            writeFileAtomic(cachePath, png);
+            materialized.push({
+                ...figure,
+                cachePath,
+                assetFilename: filename,
+                assetMediaType: 'image/png',
+                assetSha256,
+                assetBytes: png.length,
+                assetWidth: dimensions.canvasWidth,
+                assetHeight: dimensions.canvasHeight
+            });
+        } catch (error) {
+            if (!isPermanentApiReaderFigureFailure(error)) throw error;
+            console.log(`    [deep] ⚠️  跳过无法物化的论文图 ${figure.ordinal}: ${error.message}`);
+        }
     }
     return materialized;
 }
@@ -1498,9 +1535,17 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails) {
     const injectedReaderResult = injectApiReaderFigures(
         generated, sourceDetails.structuredArtifacts, arxivId
     );
+    const materializedFigures = await materializeApiReaderFigures(
+        injectedReaderResult.figures, arxivId
+    );
     const readerResult = {
         ...injectedReaderResult,
-        figures: await materializeApiReaderFigures(injectedReaderResult.figures, arxivId)
+        article: pruneUnmaterializedApiReaderFigureBlocks(
+            injectedReaderResult.article,
+            injectedReaderResult.figures,
+            materializedFigures
+        ),
+        figures: materializedFigures
     };
     const articleSha256 = crypto.createHash('sha256').update(readerResult.article).digest('hex');
     const planSha256 = stableFingerprint(readerResult.plan);
@@ -1671,8 +1716,13 @@ async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
         figures,
         getPaperArxivId(paper)
     );
+    const prunedArticle = pruneUnmaterializedApiReaderFigureBlocks(
+        paper.apiReaderArticle,
+        figures,
+        materialized
+    );
     const rewrittenArticle = normalizeReaderEditorialSurface(
-        rewriteApiReaderFigureNarratives(paper.apiReaderArticle, materialized)
+        rewriteApiReaderFigureNarratives(prunedArticle, materialized)
     );
     const articleSha256 = crypto.createHash('sha256').update(rewrittenArticle).digest('hex');
     const readerAuthors = resolveApiReaderAuthors(paper, sourceDetails);
@@ -2491,7 +2541,9 @@ async function readResponseBufferWithLimit(response, maxBytes) {
         const arrayBuffer = await response.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
         if (maxBytes > 0 && buffer.byteLength > maxBytes) {
-            throw new Error(`response body ${(buffer.byteLength / 1024 / 1024).toFixed(1)}MB exceeds limit`);
+            const error = new Error(`response body ${(buffer.byteLength / 1024 / 1024).toFixed(1)}MB exceeds limit`);
+            error.code = 'RESPONSE_TOO_LARGE';
+            throw error;
         }
         return buffer;
     }
@@ -2511,7 +2563,9 @@ async function readResponseBufferWithLimit(response, maxBytes) {
                 } catch (e) {
                     // ignore cancel errors
                 }
-                throw new Error(`response body ${(total / 1024 / 1024).toFixed(1)}MB exceeds limit`);
+                const error = new Error(`response body ${(total / 1024 / 1024).toFixed(1)}MB exceeds limit`);
+                error.code = 'RESPONSE_TOO_LARGE';
+                throw error;
             }
             chunks.push(chunk);
         }
@@ -5552,9 +5606,17 @@ async function analyzePaperDeep(paper) {
                 sourceDetails.structuredArtifacts,
                 arxivId
             );
+            const materializedFigures = await materializeApiReaderFigures(
+                injectedReaderResult.figures, arxivId
+            );
             const readerResult = {
                 ...injectedReaderResult,
-                figures: await materializeApiReaderFigures(injectedReaderResult.figures, arxivId)
+                article: pruneUnmaterializedApiReaderFigureBlocks(
+                    injectedReaderResult.article,
+                    injectedReaderResult.figures,
+                    materializedFigures
+                ),
+                figures: materializedFigures
             };
             paper.apiReaderArticle = readerResult.article;
             paper.apiReaderPlan = readerResult.plan;
@@ -6833,6 +6895,8 @@ module.exports = {
     truncateReaderFigureCaption,
     sanitizeTrustedArxivSvg,
     prepareTrustedArxivFigureBuffer,
+    isPermanentApiReaderFigureFailure,
+    pruneUnmaterializedApiReaderFigureBlocks,
     materializeApiReaderFigures,
     fitApiReaderFigureDimensions,
     repairMissingAnalysisSections,
