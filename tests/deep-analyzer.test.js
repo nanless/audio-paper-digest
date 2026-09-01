@@ -903,6 +903,10 @@ primary_task_tag: #音视频生成
             normalizeReaderEditorialSurface('该结论只覆盖单一宿主；\n\n下一段继续。'),
             '该结论只覆盖单一宿主。\n\n下一段继续。'
         );
+        assert.strictEqual(
+            normalizeReaderEditorialSurface('该权重衡量跨窗口 1 致性。'),
+            '该权重衡量跨窗口一致性。'
+        );
         const recoveryPaper = {
             apiReaderArticle: '### 把 HRTF 做浓，再用模型去听\n\n正文。',
             apiReaderPlan: {
@@ -1066,6 +1070,13 @@ primary_task_tag: #音视频生成
             url: 'https://arxiv.org/html/2608.00001/figure-3.svg'
         });
         assert.equal(cleanedCaption, 'R², ΔAUC and p<0.001.');
+        assert.equal(
+            normalizeReaderFigureCaption({
+                caption: 'Figure 3: a) Box plots showing the VSTOI scores. b) Box plots showing the SNRi scores for both models on the same test sets as in a). In both a) and b), the center bar is the median.',
+                url: 'https://arxiv.org/html/2608.28493v1/figures/snri-comparison-300-dpi.png'
+            }),
+            'Box plots showing the SNRi scores for both models on the same test sets as in a).'
+        );
         assert.ok(truncateReaderFigureCaption('word '.repeat(40), 80).length <= 80);
         const completedAuthors = resolveApiReaderAuthors(
             { authors: ['戊', '己'] },

@@ -872,6 +872,7 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
         normalized = normalized.split(match).join(replacement);
     }
     return normalized
+        .replace(/跨窗口\s*1\s*致性/g, '跨窗口一致性')
         .replace(/\b1\s*到\s*5\s+5\s*级量表/g, '1 到 5 级量表')
         .replace(/y\s*到\s*5\s+2\s*段/g, 'y 到 5 这 2 段')
         .replace(
@@ -972,7 +973,18 @@ function buildApiReaderEvidenceContext(analysis, sourceText, structuredArtifacts
 }
 
 function normalizeReaderFigureCaption(figure) {
-    let caption = String(figure?.caption || '').normalize('NFKC')
+    const rawCaption = String(figure?.caption || '').normalize('NFKC');
+    let figureFilename = '';
+    try {
+        figureFilename = decodeURIComponent(new URL(String(figure?.url || '')).pathname)
+            .split('/').pop().replace(/\.[^.]+$/, '').toLowerCase();
+    } catch (_) {
+        figureFilename = '';
+    }
+    const panelCaption = figureFilename.includes('snri')
+        ? rawCaption.match(/(?:^|\s)b\)\s*(.*?)(?=\s+In both\b|$)/i)?.[1]
+        : null;
+    let caption = String(panelCaption || rawCaption)
         .replace(/[\u200b-\u200d\u2061\ufeff]/g, '')
         .replace(/^Fig(?:ure)?\.?\s*\d+[a-z]?\s*[:.]?\s*/i, '')
         .replace(/R2R\^?(?:\{2\}|2)/g, 'R²')
