@@ -996,7 +996,11 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
         )
         .replace(/([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?=(?:mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|MACs?|tokens?|FPS|bit)\b)/gi, '$1 ')
         .replace(/([\u3400-\u9fff])(\d)/g, '$1 $2')
-        .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2');
+        .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2')
+        // A currency amount is prose, not a TeX delimiter. Escaping the
+        // leading dollar keeps Hugo/MathJax from treating the remainder of
+        // the paragraph as an unterminated formula.
+        .replace(/(?<!\\)\$(?=\d)/g, '\\$');
     return protectedMarkdown.reduce(
         (value, original, index) => value.replace(
             `__PD_READER_PROTECTED_${index}__`, original
@@ -1937,7 +1941,10 @@ function removeDuplicateReaderLongSentences(article) {
 
 function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
     const plan = paper?.apiReaderPlan;
-    const article = paper?.apiReaderArticle;
+    const originalArticle = paper?.apiReaderArticle;
+    const article = typeof originalArticle === 'string'
+        ? originalArticle.replace(/(?<!\\)\$(?=\d)/g, '\\$')
+        : originalArticle;
     const stage = analysisManifest?.stages?.apiReaderArticle;
     if (!plan || !Array.isArray(plan.sections) || typeof article !== 'string'
         || stage?.status !== 'complete') return false;
@@ -1980,13 +1987,36 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
         sections: plan.sections.map((section, index) => ({
             ...section,
             heading: articleHeadings[index]
-        }))
+        })),
+        ...(Array.isArray(plan.figurePlacements) ? {
+            figurePlacements: plan.figurePlacements.map(placement => ({
+                ...placement,
+                leadQuote: typeof placement?.leadQuote === 'string'
+                    ? placement.leadQuote.replace(/(?<!\\)\$(?=\d)/g, '\\$')
+                    : placement?.leadQuote,
+                explanationQuote: typeof placement?.explanationQuote === 'string'
+                    ? placement.explanationQuote.replace(/(?<!\\)\$(?=\d)/g, '\\$')
+                    : placement?.explanationQuote
+            }))
+        } : {})
     };
     let repairedFigures = paper.apiReaderFigures;
     if (Array.isArray(paper.apiReaderFigures)) {
-        repairedFigures = orderApiReaderFiguresByArticle(article, paper.apiReaderFigures);
+        repairedFigures = orderApiReaderFiguresByArticle(
+            article,
+            paper.apiReaderFigures.map(figure => ({
+                ...figure,
+                leadQuote: typeof figure?.leadQuote === 'string'
+                    ? figure.leadQuote.replace(/(?<!\\)\$(?=\d)/g, '\\$')
+                    : figure?.leadQuote,
+                explanationQuote: typeof figure?.explanationQuote === 'string'
+                    ? figure.explanationQuote.replace(/(?<!\\)\$(?=\d)/g, '\\$')
+                    : figure?.explanationQuote
+            }))
+        );
         if (!repairedFigures) return false;
     }
+    const articleSha = crypto.createHash('sha256').update(article).digest('hex');
     const oldSha = stableFingerprint(plan);
     const newSha = stableFingerprint(repairedPlan);
     const oldFiguresSha = Array.isArray(paper.apiReaderFigures)
@@ -1997,13 +2027,19 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
         : null;
     if (oldSha === newSha && paper.apiReaderPlanSha256 === newSha
         && stage.planSha256 === newSha
+        && originalArticle === article
+        && paper.apiReaderArticleSha256 === articleSha
+        && stage.articleSha256 === articleSha
         && oldFiguresSha === newFiguresSha
         && (!Array.isArray(repairedFigures)
             || (stage.figureCount === repairedFigures.length
                 && stage.figuresSha256 === newFiguresSha))) return false;
     paper.apiReaderPlan = repairedPlan;
     paper.apiReaderPlanSha256 = newSha;
+    paper.apiReaderArticle = article;
+    paper.apiReaderArticleSha256 = articleSha;
     stage.planSha256 = newSha;
+    stage.articleSha256 = articleSha;
     if (Array.isArray(repairedFigures)) {
         paper.apiReaderFigures = repairedFigures;
         stage.figureCount = repairedFigures.length;

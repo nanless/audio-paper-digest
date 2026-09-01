@@ -995,6 +995,10 @@ primary_task_tag: #音视频生成
             '延迟为数十毫秒。'
         );
         assert.strictEqual(
+            normalizeReaderEditorialSurface('季度销售额为 $35 million，预算仍是 \\$20。'),
+            '季度销售额为 \\$35 million，预算仍是 \\$20。'
+        );
+        assert.strictEqual(
             normalizeReaderEditorialSurface('该结论只覆盖单一宿主；\n\n下一段继续。'),
             '该结论只覆盖单一宿主。\n\n下一段继续。'
         );
@@ -1025,7 +1029,7 @@ primary_task_tag: #音视频生成
             'CER 24.05% 差于 22.48%，另一组 CER 从 32.56% 降至 24.14%。'
         );
         const recoveryPaper = {
-            apiReaderArticle: '### 把 HRTF 做浓，再用模型去听\n\n正文。',
+            apiReaderArticle: '### 把 HRTF 做浓，再用模型去听\n\n报价为 $35 million。',
             apiReaderPlan: {
                 version: 1, contract: 'beginner-researcher-v2',
                 readerTitle: '把HRTF做浓', oneSentenceThesis: '解释HRTF增强。',
@@ -1043,6 +1047,7 @@ primary_task_tag: #音视频生成
             recoveryPaper.apiReaderPlan.sections[0].heading,
             '把 HRTF 做浓，再用模型去听'
         );
+        assert.match(recoveryPaper.apiReaderArticle, /\\\$35 million/);
         assert.strictEqual(
             recoveryPaper.apiReaderPlanSha256,
             recoveryManifest.stages.apiReaderArticle.planSha256
