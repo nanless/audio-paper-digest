@@ -1429,6 +1429,22 @@ title: "Bad table"
         self.assertNotIn('#### 为什么混合声音需要先建立空间直觉？', markdown)
         self.assertEqual(markdown.count('Researcher A'), 1)
 
+    def test_api_reader_v2_image_parser_accepts_escaped_brackets_in_alt_text(self):
+        article = (
+            '正文。\n\n'
+            '![原论文 Figure 2：数据集\\[13\\] 与流程]('
+            'https://arxiv.org/html/2608.29026v1/fig1_framework.png)\n\n'
+            '![原论文 Figure 3：配置\\[9\\] 的对照]('
+            'https://arxiv.org/html/2608.28981v1/02_image_invertible_coupling.jpg)'
+        )
+        self.assertEqual(
+            publish_to_blog._api_reader_article_image_urls(article),
+            [
+                'https://arxiv.org/html/2608.29026v1/fig1_framework.png',
+                'https://arxiv.org/html/2608.28981v1/02_image_invertible_coupling.jpg',
+            ],
+        )
+
     def test_manual_v5_reader_plan_uses_reader_first_header_and_preserves_custom_subheads(self):
         reader_article = (
             '### 先解释表示冲突\n\n'

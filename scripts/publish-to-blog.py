@@ -2563,6 +2563,14 @@ def _manual_v6_reader_payload(paper):
     return {**payload, 'plan': plan}
 
 
+def _api_reader_article_image_urls(article):
+    """Return HTTPS Markdown image URLs while honoring escaped alt-text chars."""
+    return re.findall(
+        r'!\[(?:\\.|[^\]\\])*\]\((https://[^\s)]+)\)',
+        article,
+    )
+
+
 def _api_reader_payload(paper):
     """Replay the API reader article contract from canonical bytes."""
     manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
@@ -2637,7 +2645,7 @@ def _api_reader_payload(paper):
         if stage.get('figureCount') != len(figures) \
                 or stage.get('figuresSha256') != figures_sha:
             raise PublishDataValidationError('API reader v2 figure 数量或 SHA 未闭环')
-        article_image_urls = re.findall(r'!\[[^\]]*\]\((https://[^\s)]+)\)', article)
+        article_image_urls = _api_reader_article_image_urls(article)
         figure_urls = [item.get('url') for item in figures if isinstance(item, dict)]
         if article_image_urls != figure_urls or len(set(figure_urls)) != len(figure_urls):
             raise PublishDataValidationError('API reader v2 正文图片与 figure 绑定不一致')
