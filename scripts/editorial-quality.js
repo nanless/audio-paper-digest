@@ -732,12 +732,30 @@ function findMissingComparisonUnits(text) {
                 return !/^\s*(?:个|条|段|篇|张|种|类|组|步|轮|层|模型|系统|骨干|样本|片段|词元|接口|分支)/.test(after);
             })
             .map(match => match[0]);
+        const percentageMetricHasNearbyPercentageScaleValue = [...numericText.matchAll(
+            new RegExp(PERCENT_METRICS_RE.source, 'gi')
+        )].some(metricMatch => {
+            const start = Math.max(0, metricMatch.index - 12);
+            const end = Math.min(
+                numericText.length,
+                metricMatch.index + metricMatch[0].length + 12
+            );
+            const nearbyNumbers = numericText.slice(start, end).match(
+                new RegExp(quantity, 'gu')
+            ) || [];
+            return nearbyNumbers.some(raw => (
+                /^\d/.test(raw)
+                    ? Number.parseFloat(raw) > 1
+                    : /[十百千万亿]/.test(raw)
+                        || (raw.includes('点') && !/^[负正]?零点/.test(raw))
+            ));
+        });
         const likelyPercentageScale = bareValues.some(raw => (
             /^\d/.test(raw)
                 ? Number.parseFloat(raw) > 1
                 : raw.includes('点') && !/^[负正]?零点/.test(raw)
         ));
-        if (likelyPercentageScale) {
+        if (likelyPercentageScale && percentageMetricHasNearbyPercentageScaleValue) {
             findings.push({
                 match: sentence.text,
                 line: sentence.line,

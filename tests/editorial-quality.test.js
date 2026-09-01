@@ -314,6 +314,9 @@ describe('Manual v4 editorial quality primitives', () => {
             '图 3 显示 Base 优于上下文基线，Small 的 BLEU 高于 Medium，但 CER 反而更差。'
         ), []);
         assert.deepEqual(findMissingComparisonUnits(
+            '红色 BLEU 与蓝色 CER 并非单调：HAT 上 Small BLEU 45.9 高于 Medium 43.41，但绿色 Cos Sim 0.838 低于 0.864 且 CER 更差。'
+        ), []);
+        assert.deepEqual(findMissingComparisonUnits(
             '图 3 显示 VIBE 均优于 Video-Robin 与去掉阶段 5 的消融，四项准确率呈现单调提升。'
         ), []);
         assert.deepEqual(findMissingComparisonUnits(
