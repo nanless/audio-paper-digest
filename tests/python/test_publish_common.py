@@ -464,6 +464,7 @@ class PublishCommonSanitizerTest(unittest.TestCase):
             '## 核心摘要\n一个好看的示意图不能替代真实实验，正文仍需给出可核对的比较。\n',
             '## 方法概述和架构\n### 冻结之后仍有一段必须学习\n该段说明冻结模块与可训练模块的职责边界。\n',
             '## 方法概述和架构\n### 从 306 通道到一个词标签\n该小节说明输入映射与输出标签之间的语义关系。\n',
+            '## 核心摘要\n该系统在主榜排名第二，辅助榜取得第三名。\n',
         )
         for markdown in safe_cases:
             with self.subTest(markdown=markdown):
@@ -749,7 +750,6 @@ paper_digest_manual_depth: "full-text-evidence-v4"
                 1,
             ),
             '一半': sanitized.replace('固定测试划分', '至少一半样本来自固定测试划分', 1),
-            '排名第三': sanitized.replace('强基线', '排名第三的强基线', 1),
             '批量模板句式': sanitized.replace('下图用于观察', '下图用于核对', 1),
             '段落以分号中断': sanitized.replace(
                 '训练采用论文披露的数据划分与优化目标；没有报告的硬件吞吐不能从准确率结果反推。',
@@ -769,6 +769,9 @@ paper_digest_manual_depth: "full-text-evidence-v4"
         for expected, candidate in cases.items():
             with self.subTest(expected=expected):
                 self.assertIn(expected, validate_final_manual_v4_markdown(candidate))
+
+        ordinal = sanitized.replace('强基线', '排名第三的强基线', 1)
+        self.assertIsNone(validate_final_manual_v4_markdown(ordinal))
 
         v4_paper = {
             'analysisManifest': {

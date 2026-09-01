@@ -2605,7 +2605,6 @@ def validate_manual_editorial_quality_v4(analysis):
         re.compile(rf'[{numeral_chars}]+\s*(?:到|至|–|—|-)\s*\d+(?=\s*(?:{large_count_units}))', re.I),
         re.compile(r'\d+(?:\.\d+)?\s*[万亿](?=\s*(?:更新|参数|样本|条|次|帧|token|tokens|MAC|MACs))', re.I),
         re.compile(r'(?:至少)?一半|半宽|四分之一(?:宽)?|[一二两三四五六七八九]成(?=(?:左右|上下|或|以内|以上|比例|占比|水平|样本|数据|案例|[，,。；;、]|$))'),
-        re.compile(rf'(?:排名第[{numeral_chars}]+|第[{numeral_chars}]+名)'),
         re.compile(r'(?:最高|满分|得分|评分|至少|超过|低于|高于|达到)\s*[一二两三四五六七八九]\s*分|[一二两三四五六七八九]\s*分(?:制|量表|以上|以下|满分)|[一二两三四五六七八九]\s*分(?=\s*(?:[，,。；;、]|$))'),
         re.compile(r'[几数]\s*\d+(?=\s*(?:毫秒|秒|分钟|小时|天|Hz|kHz|MHz|MB|GB|KB|mJ|dB|帧|步|倍))', re.I),
         re.compile(
