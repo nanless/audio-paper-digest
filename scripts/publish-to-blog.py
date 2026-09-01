@@ -2693,7 +2693,9 @@ def _api_reader_payload(paper):
             or stage.get('articleSha256') != article_sha
             or stage.get('planSha256') != plan_sha):
         raise PublishDataValidationError('API reader contract 文章/计划 SHA 或阶段状态不闭环')
-    if plan.get('version') != 1 or plan.get('contract') != reader_contract:
+    plan_version = plan.get('version')
+    if plan_version not in {1, 2} or plan.get('contract') != reader_contract \
+            or (plan_version == 2 and reader_contract != LLM_API_READER_CONTRACT):
         raise PublishDataValidationError('API reader plan 版本或契约非法')
     if not isinstance(plan.get('readerTitle'), str) \
             or not isinstance(plan.get('oneSentenceThesis'), str):
@@ -2711,10 +2713,14 @@ def _api_reader_payload(paper):
         'background', 'related_work', 'method_overview', 'experiment_setup',
         'result', 'limitation', 'synthesis',
     })
-    minimum_sections = 8 if reader_contract == LLM_API_READER_CONTRACT else 6
-    if not isinstance(plan_sections, list) or not minimum_sections <= len(plan_sections) <= 12:
+    minimum_sections = 10 if plan_version == 2 else (
+        8 if reader_contract == LLM_API_READER_CONTRACT else 6
+    )
+    maximum_sections = 14 if plan_version == 2 else 12
+    if not isinstance(plan_sections, list) \
+            or not minimum_sections <= len(plan_sections) <= maximum_sections:
         raise PublishDataValidationError(
-            f'API reader plan 必须包含 {minimum_sections}-12 个小节'
+            f'API reader plan 必须包含 {minimum_sections}-{maximum_sections} 个小节'
         )
     kinds = []
     planned_headings = []
@@ -2737,6 +2743,41 @@ def _api_reader_payload(paper):
     article_headings = re.findall(r'^###\s+(.+?)\s*$', article, flags=re.MULTILINE)
     if article_headings != planned_headings or len(set(article_headings)) != len(article_headings):
         raise PublishDataValidationError('API reader plan 与正文小节标题/顺序不一致')
+    if plan_version == 2:
+        concept_bridges = plan.get('conceptBridges')
+        figure_placements = plan.get('figurePlacements')
+        if not isinstance(concept_bridges, list) \
+                or not 3 <= len(concept_bridges) <= 8 \
+                or not isinstance(figure_placements, list) \
+                or len(figure_placements) > 8:
+            raise PublishDataValidationError('API reader v2 plan 缺少术语桥或 Figure marker 计划')
+        for index, bridge in enumerate(concept_bridges, 1):
+            if not isinstance(bridge, dict) or set(bridge) != {
+                    'terms', 'sectionKind', 'marker', 'explanation'} \
+                    or not isinstance(bridge.get('terms'), list) \
+                    or len(bridge['terms']) != 2 \
+                    or bridge.get('sectionKind') not in allowed_kinds \
+                    or bridge.get('marker') != f'[[CONCEPT_BRIDGE_{index}]]' \
+                    or not isinstance(bridge.get('explanation'), str) \
+                    or bridge['explanation'] not in article \
+                    or bridge['marker'] in article:
+                raise PublishDataValidationError('API reader v2 术语桥与正文绑定非法')
+        seen_placement_ordinals = set()
+        for placement in figure_placements:
+            if not isinstance(placement, dict) or set(placement) != {
+                    'figureOrdinal', 'targetKind', 'marker',
+                    'leadQuote', 'explanationQuote'} \
+                    or not isinstance(placement.get('figureOrdinal'), int) \
+                    or placement['figureOrdinal'] in seen_placement_ordinals \
+                    or placement.get('targetKind') not in allowed_kinds \
+                    or placement.get('marker') != f'[[FIGURE_{placement["figureOrdinal"]}]]' \
+                    or placement['marker'] in article \
+                    or not isinstance(placement.get('leadQuote'), str) \
+                    or not isinstance(placement.get('explanationQuote'), str) \
+                    or placement['leadQuote'] not in article \
+                    or placement['explanationQuote'] not in article:
+                raise PublishDataValidationError('API reader v2 Figure marker 计划与正文绑定非法')
+            seen_placement_ordinals.add(placement['figureOrdinal'])
     figures = paper.get('apiReaderFigures')
     if reader_contract == LLM_API_READER_CONTRACT:
         if not isinstance(figures, list):
@@ -2752,12 +2793,24 @@ def _api_reader_payload(paper):
         paper_id = normalize_publish_arxiv_id(paper.get('arxivId') or paper.get('paper_id'))
         figure_assets = []
         for item in figures:
-            if not isinstance(item, dict) or set(item) != {
+            expected_figure_fields = {
                     'ordinal', 'label', 'caption', 'url', 'mediaType',
                     'sourceDomSha256', 'targetKind', 'targetHeading',
                     'cachePath', 'assetFilename', 'assetMediaType',
-                    'assetSha256', 'assetBytes', 'assetWidth', 'assetHeight'}:
+                    'assetSha256', 'assetBytes', 'assetWidth', 'assetHeight'}
+            if plan_version == 2:
+                expected_figure_fields.update({
+                    'marker', 'leadQuote', 'explanationQuote',
+                })
+            if not isinstance(item, dict) or set(item) != expected_figure_fields:
                 raise PublishDataValidationError('API reader v2 figure 字段非法')
+            if plan_version == 2:
+                placement = next((entry for entry in plan['figurePlacements']
+                                  if entry['figureOrdinal'] == item['ordinal']), None)
+                if placement is None or any(
+                        item.get(key) != placement.get(key)
+                        for key in ('marker', 'leadQuote', 'explanationQuote', 'targetKind')):
+                    raise PublishDataValidationError('API reader v2 figure 与 marker 计划不一致')
             parsed_url = urlparse(item['url'])
             if parsed_url.scheme != 'https' \
                     or parsed_url.hostname not in {'arxiv.org', 'www.arxiv.org'} \
