@@ -204,6 +204,7 @@ function proseParagraphs(text) {
     const lines = String(text ?? '').split('\n');
     let pending = [];
     let startLine = 1;
+    let fencedBlockEnd = null;
     const flush = () => {
         const value = pending.join(' ').replace(/\s+/g, ' ').trim();
         if (value) paragraphs.push({ text: value, line: startLine });
@@ -211,8 +212,30 @@ function proseParagraphs(text) {
     };
     lines.forEach((raw, index) => {
         const line = raw.trim();
+        if (fencedBlockEnd) {
+            if (fencedBlockEnd.test(line)) fencedBlockEnd = null;
+            return;
+        }
         if (!line) {
             flush();
+            return;
+        }
+        const codeFence = line.match(/^(```|~~~)/);
+        if (codeFence) {
+            flush();
+            if (line.indexOf(codeFence[1], codeFence[1].length) < 0) {
+                fencedBlockEnd = new RegExp(`^${codeFence[1]}`);
+            }
+            return;
+        }
+        if (/^\$\$/.test(line)) {
+            flush();
+            if (line.indexOf('$$', 2) < 0) fencedBlockEnd = /\$\$\s*$/;
+            return;
+        }
+        if (/^\\\[/.test(line)) {
+            flush();
+            if (!/\\\]\s*$/.test(line)) fencedBlockEnd = /\\\]\s*$/;
             return;
         }
         if (/^(?:#{1,6}\s|\||!\[|---+$|\[←)/.test(line)) {

@@ -269,6 +269,9 @@ describe('Manual v4 editorial quality primitives', () => {
         const saturation = findDefensiveNegationSaturation(sixSections({ summary: defensive }));
         assert.equal(saturation.severity, 'warning');
         assert.equal(findDefensiveNegationSaturation(sixSections({ limits: defensive })), null);
+        assert.deepEqual(findLongParagraphs(sixSections({
+            method: '$$\na;b;c;d;e;f;g;h;\n$$\n\n```text\na;b;c;d;e;f;g;h;\n```'
+        })), []);
     });
 
     it('applies paragraph overload checks to reader-visible author and auxiliary sections', () => {
