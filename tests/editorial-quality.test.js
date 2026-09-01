@@ -287,6 +287,7 @@ describe('Manual v4 editorial quality primitives', () => {
         assert.ok(findTechnicalTermAdhesions('使用 **Conformer**编码器与 [Whisper](https://example.com)解码器。').length >= 2);
         assert.ok(findings.some(item => /F-score依/.test(item.match)));
         assert.deepEqual(findTechnicalTermAdhesions('推理时使用 LoRA 缩放；详见 `Qwen-CoT在代码中的键` 和 https://example.com/LoRA缩放。'), []);
+        assert.deepEqual(findTechnicalTermAdhesions('S2为音频分支，S2用反向传播更新；T5模型只作编号对照。'), []);
     });
 
     it('detects percentage-score deltas and asymmetric comparisons missing nearby units', () => {

@@ -660,7 +660,13 @@ function stripCodeLinksAndUrls(value) {
 function findTechnicalTermAdhesions(text) {
     const value = stripCodeLinksAndUrls(text);
     const regex = /(?:\p{Script=Han}[A-Za-z][A-Za-z0-9.+-]{1,}|[A-Za-z][A-Za-z0-9.+-]{1,}\p{Script=Han})/gu;
-    return collectRegexMatches(value, regex, 'missing_space_at_han_ascii_boundary');
+    return collectRegexMatches(value, regex, 'missing_space_at_han_ascii_boundary')
+        .filter(finding => {
+            const token = finding.match.replace(/\p{Script=Han}/gu, '');
+            // S1/S2、T5 这类单字母编号通常是公式、分支或实验条件标签，
+            // 与后接中文连写符合中文科技写作习惯，不应当作英文术语粘连。
+            return !/^[A-Za-z]\d+$/.test(token);
+        });
 }
 
 function findMissingComparisonUnits(text) {
