@@ -568,6 +568,12 @@ describe('analyzePaperWithRetry', () => {
             documentType: '方法研究'
         }), /缺少 ↑\/↓ 方向/);
 
+        const latexDirection = valid.replace('LibriSpeech WER↓', 'Macro-F1 $\\uparrow$');
+        assert.strictEqual(validateExperimentTableContract(latexDirection, {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究'
+        }), null);
+
         const dirty = valid.replace('8.4%', '8.4 %').replace('7.1%', '−.71%');
         const normalized = normalizeExperimentTableNumericFormatting(dirty);
         assert.match(normalized, /8\.4%/);
