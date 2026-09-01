@@ -2201,6 +2201,30 @@ function createAnalysisRecoveryManifest(paper) {
     };
 }
 
+const MANUAL_ONLY_ANALYSIS_CONTRACT_KEYS = new Set([
+    'manualDepth',
+    'editorialQuality',
+    'researcherFocus',
+    'perPaperSubagent',
+    'readerLongform',
+    'artifactIndex',
+    'manualV6Runtime',
+    'authorLineage'
+]);
+
+function stripManualAnalysisProvenance(paper) {
+    if (!paper || typeof paper !== 'object') return paper;
+    for (const key of Object.keys(paper)) {
+        if (/^manual/i.test(key)) delete paper[key];
+    }
+    const contracts = paper.analysisManifest?.contracts;
+    if (contracts && typeof contracts === 'object') {
+        for (const key of MANUAL_ONLY_ANALYSIS_CONTRACT_KEYS) delete contracts[key];
+        if (Object.keys(contracts).length === 0) delete paper.analysisManifest.contracts;
+    }
+    return paper;
+}
+
 function markRecoveryStage(manifest, stage, status, details = {}) {
     if (!RECOVERY_STAGE_STATUSES.has(status)) throw new Error(`非法恢复阶段状态: ${status}`);
     const updatedAt = getBeijingISOString();
@@ -4935,6 +4959,7 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
  * 深度分析单篇论文（全文 + 图片）
  */
 async function analyzePaperDeep(paper) {
+    stripManualAnalysisProvenance(paper);
     sanitizePaperImageRecovery(paper);
     const arxivId = getPaperArxivId(paper);
     const previousScore = Number.parseFloat(paper?.parsed?.score);
@@ -7047,6 +7072,7 @@ module.exports = {
     sanitizeModelMessages,
     summarizeModelInput,
     createAnalysisRecoveryManifest,
+    stripManualAnalysisProvenance,
     markRecoveryStage,
     isRecoveryStageComplete,
     saveAnalysisCheckpoint,

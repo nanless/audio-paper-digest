@@ -11,6 +11,41 @@ before(() => {
     process.env.PAPER_ANALYZER_MODEL = process.env.PAPER_ANALYZER_MODEL || 'gpt-4o-mini';
 });
 
+describe('API reanalysis provenance boundary', () => {
+    it('剥离旧 Manual 字段与合同但保留 API 恢复合同', () => {
+        const {
+            stripManualAnalysisProvenance,
+            createAnalysisRecoveryManifest
+        } = require('../scripts/deep-analyzer.js');
+        const paper = {
+            arxivId: '2608.12345',
+            manualDepth: 'full-text-evidence-v6',
+            manualArtifactIndex: { status: 'complete' },
+            manualV6Provenance: { runtimeMode: 'production' },
+            analysisManifest: {
+                version: 1,
+                stages: {},
+                contracts: {
+                    manualDepth: 'full-text-evidence-v6',
+                    readerLongform: 'reader-longform-v2',
+                    artifactIndex: 'manual-artifact-parser-v2-structured',
+                    manualV6Runtime: 'production',
+                    authorLineage: 'original-author-final-revision-v1',
+                    experimentTables: 'evidence-rich-v2'
+                }
+            }
+        };
+        stripManualAnalysisProvenance(paper);
+        assert.strictEqual(paper.manualDepth, undefined);
+        assert.strictEqual(paper.manualArtifactIndex, undefined);
+        assert.strictEqual(paper.manualV6Provenance, undefined);
+        assert.deepStrictEqual(paper.analysisManifest.contracts, {
+            experimentTables: 'evidence-rich-v2'
+        });
+        assert.deepStrictEqual(createAnalysisRecoveryManifest(paper).contracts, undefined);
+    });
+});
+
 describe('arXiv HTML full-text health gate', () => {
     it('拒绝字符数很长但没有论文段落和章节的元数据空壳', () => {
         const { assessArxivHtmlFullText } = require('../scripts/deep-analyzer.js');

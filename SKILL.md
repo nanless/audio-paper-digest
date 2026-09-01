@@ -373,6 +373,8 @@ node scripts/refilter-reanalyze-by-date.js 2026-07-01
 # 单篇筛选输入变化时自动失效，续跑只调用尚无确定性决定的论文
 # 筛选完整后会从 raw 候选与确定性决定原子重建同日正式
 # filter-decisions.json / filtered-papers.json，避免历史状态继续引用旧筛选集合
+# API 重分析入口会剥离旧 Manual-only 顶层字段与合同，禁止把新 API 正文
+# 错误包装成 Manual v6 产物，也禁止旧 Manual lineage 污染发布门禁
 # 收尾时 canonical 结果按本轮入选 ID 收敛：入选失败项保留恢复 checkpoint，
 # 本轮明确落选的旧分析从该批次 deep-analysis-result.json 移除
 
