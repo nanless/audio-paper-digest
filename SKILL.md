@@ -183,7 +183,7 @@ API 调用特性：
 - prompt 来源：`prompts/deep-analysis.md`，运行时通过 `loadPrompt()` 读取并替换 `{hasFullText}`、`{title}`、`{authors}`、`{categories}`、`{arxivId}`、`{textForAnalysis}` 占位符
 - arXiv 获取结果保存结构化来源：`analysisSource`、`sourceId`、原始/实际输入/全文字符数、`truncated`、`sourceSha256`、HTML 可用性和告警。稳定 400/403/404 不重复请求；版本化 ID 只读取指定版本；PDF 有 50MB 默认上限并校验 MIME、文件头与提取长度。全文不可用时优先使用完整摘要，不允许短错误页覆盖摘要
 - checkpoint 的来源 SHA-256 变化时清除主分析及全部下游状态，避免旧全文正文被新一轮摘要审校。评分审计另保存模型、低温、prompt 模板哈希、证据哈希、尝试次数、结构化证据画像、代码上限和最终 JSON；这些指纹变化失效评分、API 读者文章与插图阶段
-- 自动 API canonical 的固定一级标题仍是解析锚点；评分完成后另用 `prompts/api-reader-article.md` 生成 `beginner-researcher-v1` 连续长文，要求论文特有动态标题、初学者学习依赖顺序、1800–10000 中文字和确定性文风门禁。博客仅在文章/计划/阶段 SHA 完整闭环时优先展示它。production Manual v6 发布仍使用 `reader-longform-v2`，records v4 内嵌的 legacy v5 `readerArticle` 仅作基础质量重放或历史只读兼容。
+- 自动 API canonical 的固定一级标题仍是解析锚点；评分完成后另用 `prompts/api-reader-article.md` 生成 `beginner-researcher-v2` 连续长文，要求论文特有动态标题、10–14 节初学者学习依赖、2800–14000 中文字、3–8 组正文可回放的术语组合解释，以及至少 2 张表格的表前比较问题与表后净收益/反例/边界闭环。若全文有真实 Figure，模型必须从真实清单选图并在具体小节写入唯一 marker；marker 前后必须是图前导读与图后解释，代码只把 marker 替换成官方原图。禁止再按图号机械分配或使用通用图注替代图文互动。博客仅在文章/计划/阶段 SHA 完整闭环时优先展示它。production Manual v6 发布仍使用 `reader-longform-v2`，records v4 内嵌的 legacy v5 `readerArticle` 仅作基础质量重放或历史只读兼容。
 - `## 评分` 下先输出总分（X.X/10）
 - **代码后处理**：`parseAnalysis`/`parse_analysis` 仅在 `## 评分理由` 的八个分项完整、唯一、各自带具体理由、分母正确、数值有限且位于各自范围时重新计算总分；合计上限为 10，四舍五入到 0.1，覆盖 LLM 原始总分。缺失、重复、缺少理由、错误分母、负数、越界或非有限值会产生契约错误并阻断保存/发布，不存在最低 1 分保底
 - `## 机器摘要` 包含 `document_type`、`rank_bucket`（带顶会映射）、`innovation`（创新性 0-2）、`technical_rigor`（技术严谨性 0-1.5）、`experimental_sufficiency`（实验充分性 0-1.5）、`clarity`（清晰度 0-1）、`impact`（影响力 0-1.5）、`open_source`（开源 0-1.5）、`reproducibility`（可复现性 0-0.5）、`engineering_score`（工程/实践价值 0-1.5）、`confidence`、`primary_task_tag`、`primary_method_tag` 等固定键

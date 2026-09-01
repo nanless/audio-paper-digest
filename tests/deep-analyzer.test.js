@@ -872,6 +872,7 @@ primary_task_tag: #音视频生成
     it('API reader article 要求初学者逻辑顺序和论文特有标题', () => {
         const {
             parseApiReaderArticleResult,
+            validateApiReaderTableNarratives,
             removeDuplicateReaderLongSentences,
             fitApiReaderFigureDimensions,
             normalizeReaderFigureCaption,
@@ -1000,9 +1001,30 @@ primary_task_tag: #音视频生成
             ['synthesis', '初学者应该带着哪些问题继续读原论文？', '收束中心矛盾方法选择证据代价复现路线研究行动']
         ];
         const payload = {
-            version: 1,
+            version: 2,
             readerTitle: '让声音分路前行：分工究竟解决了什么？',
             oneSentenceThesis: '论文用不同分支分别保留局部声学线索与全局语义，证据显示它在目标设置下改善主指标，但外部泛化仍需单独验证。',
+            conceptBridges: [
+                {
+                    terms: ['局部声学线索', '全局语义'],
+                    sectionKind: 'method_overview',
+                    marker: '[[CONCEPT_BRIDGE_1]]',
+                    explanation: '局部声学线索与全局语义分别负责核对发音细节和限定整句含义，二者搭配后才能排除单一路径留下的歧义，并把预测落回当前输入。'
+                },
+                {
+                    terms: ['并行分支', '融合门控'],
+                    sectionKind: 'method_overview',
+                    marker: '[[CONCEPT_BRIDGE_2]]',
+                    explanation: '并行分支与融合门控各自保留独立证据和控制注入强度，合在一起避免某一种模态无条件覆盖另一种模态，并让模型学习何时相信哪一路。'
+                },
+                {
+                    terms: ['输入表示', '输出判断'],
+                    sectionKind: 'method_overview',
+                    marker: '[[CONCEPT_BRIDGE_3]]',
+                    explanation: '输入表示与输出判断分别承担保存原始证据和形成任务答案的职责，共同把抽象特征转成可以核对的预测，并保持输入到输出的因果链清晰。'
+                }
+            ],
+            figurePlacements: [],
             sections: specs.map(([kind, heading, seed]) => ({
                 kind,
                 heading,
@@ -1016,11 +1038,26 @@ primary_task_tag: #音视频生成
                 ].join('\n\n')
             }))
         };
+        payload.sections[3].body += '\n\n' + payload.conceptBridges
+            .map(item => item.marker).join('\n\n');
         const result = parseApiReaderArticleResult(JSON.stringify(payload));
         assert.strictEqual(result.plan.contract, 'beginner-researcher-v2');
         assert.match(result.article, /^### /);
         assert.match(result.article, /^### 论文到底想回答哪三个问题？$/m);
         assert.ok(result.article.length > 1800);
+        const integratedTables = [
+            '第一张表要回答数据覆盖是否公平，统一比较训练条件、基线与越低越好的错误率指标。',
+            '| 数据集 | 条件 | 错误率 ↓ |\n|---|---|---:|\n| A | 统一设置 | 12.0 |',
+            '结果说明统一设置下的差距可以比较，主方法在当前测试集上确有优势；但样本规模仍是边界，失败案例也没有完整覆盖，不能据此证明跨域泛化或真实部署中的稳定收益。',
+            '第二张表要回答模块是否带来净收益，并在同一基线、同一测试集和越高越好的准确率下检验。',
+            '| 方法 | 准确率 ↑ |\n|---|---:|\n| 基线 | 70.0 |\n| 完整方法 | 75.0 |',
+            '相比基线的差距支持模块在同一口径下有效，也给出了可以核对的净收益；但失败条件与训练方差尚未覆盖，因此不能把当前差距外推到所有数据、语言和部署场景。'
+        ].join('\n\n');
+        assert.doesNotThrow(() => validateApiReaderTableNarratives(integratedTables));
+        assert.throws(
+            () => validateApiReaderTableNarratives('| 方法 | 值 |\n|---|---:|\n| A | 1 |'),
+            /至少需要 2 张/
+        );
 
         payload.sections[0].body += '\n\n论文比较 spoken prompt 的声学条件，这是研究对象而非内部流程。';
         assert.doesNotThrow(() => parseApiReaderArticleResult(JSON.stringify(payload)));
@@ -1087,19 +1124,33 @@ primary_task_tag: #音视频生成
         );
         assert.match(buildApiReaderArtifactEvidence(artifacts, '2608.28422'), /FORMULA_1/);
         const reader = injectApiReaderFigures({
-            plan: { sections: [
-                { kind: 'component', heading: '增强组件如何改变频谱？' },
-                { kind: 'result', heading: '主要结果支持了什么？' }
-            ] },
+            plan: {
+                sections: [
+                    { kind: 'component', heading: '增强组件如何改变频谱？' },
+                    { kind: 'result', heading: '主要结果支持了什么？' }
+                ],
+                figurePlacements: [
+                    {
+                        figureOrdinal: 1, targetKind: 'component',
+                        marker: '[[FIGURE_1]]'
+                    },
+                    {
+                        figureOrdinal: 2, targetKind: 'result',
+                        marker: '[[FIGURE_2]]'
+                    }
+                ]
+            },
             article: [
-                '### 增强组件如何改变频谱？\n\n方法正文。',
-                '### 主要结果支持了什么？\n\n结果正文。'
+                '### 增强组件如何改变频谱？\n\n方法正文。\n\n先看图中的增强模块与输入箭头。\n\n[[FIGURE_1]]\n\n图中模块关系说明增强发生在特征进入骨干之前。',
+                '### 主要结果支持了什么？\n\n结果正文。\n\n再看结果图的坐标轴与两条曲线。\n\n[[FIGURE_2]]\n\n曲线差距说明增强在目标条件下改善了主指标。'
             ].join('\n\n'),
             qualityMetrics: {}
         }, artifacts, '2608.28422');
         assert.strictEqual(reader.figures.length, 2);
         assert.match(reader.article, /figure-1\.svg/);
         assert.match(reader.article, /figure-2\.svg/);
+        assert.ok(reader.article.indexOf('先看图中的增强模块') < reader.article.indexOf('figure-1.svg'));
+        assert.ok(reader.article.indexOf('figure-1.svg') < reader.article.indexOf('图中模块关系说明'));
         assert.ok(reader.article.indexOf('figure-1.svg') < reader.article.indexOf('### 主要结果'));
         const prunedReaderArticle = pruneUnmaterializedApiReaderFigureBlocks(
             reader.article,
