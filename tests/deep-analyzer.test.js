@@ -869,6 +869,14 @@ primary_task_tag: #音视频生成
             '这是一句。这里是二句。接着是三句。然后是四句。再来是五句。继续是六句。最后是七句。'
         );
         assert.ok(denseSplit.includes('\n\n'));
+        const asciiPunctuationSplit = splitReaderLongParagraphs(
+            '这是用于验证英文分号边界的短句;'.repeat(9)
+                + '这是问句?这是感叹句!'
+        );
+        assert.ok(asciiPunctuationSplit.includes('\n\n'));
+        for (const paragraph of asciiPunctuationSplit.split(/\n\s*\n/)) {
+            assert.ok((paragraph.match(/[。！？!?；;]/g) || []).length <= 5);
+        }
         assert.strictEqual(
             normalizeReaderEditorialSurface('把ITD和ILD交给两个模型。', [{
                 code: 'quantitative_chinese_numeral', match: '两个模型'

@@ -805,7 +805,7 @@ function splitReaderLongParagraphs(text, targetChineseChars = 190, maxChineseCha
             || (chineseCount(trimmed) <= maxChineseChars && sentenceEndCount <= 6)) {
             return [trimmed];
         }
-        const sentences = trimmed.match(/[^。！？；]+[。！？；]?/g) || [trimmed];
+        const sentences = trimmed.match(/[^。！？!?；;]+[。！？!?；;]?/g) || [trimmed];
         const groups = [];
         let current = '';
         let currentSentences = 0;
