@@ -1191,6 +1191,7 @@ describe('loadPrompt', () => {
             existingAnalysis: '## 评分\n8/10',
             sourceEvidence: 'Original paper evidence',
             validationFeedback: '没有校验错误',
+            previousDraft: '无',
             missingSections: '细节详述',
             methodSection: '## 方法概述和架构\n已有方法。',
             resultsSection: '## 实验结果\n已有结果。'
@@ -1241,6 +1242,7 @@ describe('loadPrompt', () => {
             existingAnalysis: '## 评分\n8/10',
             sourceEvidence: 'Original paper evidence',
             validationFeedback: '没有校验错误',
+            previousDraft: '无',
             missingSections: '细节详述',
             methodSection: '## 方法概述和架构\n已有方法。',
             resultsSection: '## 实验结果\n已有结果。'

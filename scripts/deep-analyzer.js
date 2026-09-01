@@ -1810,6 +1810,7 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
 
 async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence, options = {}) {
     let validationFeedback = '这是第一次生成，没有上一次校验错误。';
+    let previousDraft = '无';
     let lastError = null;
     const maxAttempts = 5;
     const availableFigureOrdinals = [...String(sourceEvidence || '')
@@ -1891,7 +1892,8 @@ async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence,
             arxivId: getPaperArxivId(paper),
             existingAnalysis: analysis,
             sourceEvidence,
-            validationFeedback
+            validationFeedback,
+            previousDraft
         });
         if (prompt.length > API_READER_CONTEXT_MAX_CHARS) {
             throw new Error(
@@ -1923,8 +1925,9 @@ async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence,
             };
         } catch (error) {
             lastError = error;
+            previousDraft = raw;
             validationFeedback = `上一次输出被代码拒绝：${error.message}。`
-                + '请保留论文事实，完整重写 JSON；逐句去重，'
+                + '请以上一版 JSON 为底稿精确修复，并重新输出完整 JSON；逐句去重，'
                 + '任何包含过多句子的单段都拆成 2–4 句的自然段。'
                 + '提交前逐行复算每张 Markdown 表的 pipe 单元格数量，'
                 + '并逐条确认 conceptBridges 与 figurePlacements 的引用原句真实存在且完全一致。';
