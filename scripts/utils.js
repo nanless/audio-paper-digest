@@ -1584,6 +1584,7 @@ function loadPublishedIdsFromBlog(blogRepo, options = {}) {
     const publishedIds = new Set();
     if (!blogRepo) return publishedIds;
     const readFileSync = options.readFileSync || fs.readFileSync;
+    const execFileSync = options.execFileSync || require('child_process').execFileSync;
 
     const postsDir = path.join(blogRepo, 'content', 'posts');
     if (!fs.existsSync(postsDir)) {
@@ -1592,30 +1593,62 @@ function loadPublishedIdsFromBlog(blogRepo, options = {}) {
     }
 
     try {
-        const files = [];
-        const walk = (dir) => {
-            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-                const fullPath = path.join(dir, entry.name);
-                if (entry.isDirectory()) {
-                    walk(fullPath);
-                } else if (entry.isFile() && entry.name.endsWith('.md')) {
-                    files.push(fullPath);
-                }
-            }
-        };
-        walk(postsDir);
-        // 匹配 arxiv 链接：[arxiv](https://arxiv.org/abs/XXXX.XXXXX) 或纯 URL
         const arxivUrlRegex = /arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})(?:v\d+)?/g;
-
-        for (const file of files) {
-            const content = readFileSync(file, 'utf8');
+        const collectIds = (content) => {
             let match;
             while ((match = arxivUrlRegex.exec(content)) !== null) {
                 publishedIds.add(normalizedId(match[1]));
             }
+            arxivUrlRegex.lastIndex = 0;
+        };
+
+        const gitMarker = path.join(blogRepo, '.git');
+        if (fs.existsSync(gitMarker)) {
+            // Generation installs pages into the blog worktree before review and
+            // push.  Those bytes are not published yet and must not change the
+            // fetch/filter fingerprint on a same-day retry.  Read the immutable
+            // HEAD tree instead of the mutable worktree; this also ignores staged
+            // but uncommitted pages and local edits to historical posts.
+            let committedMatches = '';
+            try {
+                committedMatches = execFileSync('git', [
+                    '-C', blogRepo,
+                    'grep', '-I', '-h', '--no-color', '-E',
+                    'arxiv\\.org/(abs|pdf)/[0-9]{4}\\.[0-9]{4,5}(v[0-9]+)?',
+                    'HEAD', '--', ':(glob)content/posts/**/*.md'
+                ], {
+                    encoding: 'utf8',
+                    maxBuffer: 64 * 1024 * 1024,
+                    env: {
+                        PATH: process.env.PATH || '/usr/bin:/bin',
+                        LC_ALL: 'C'
+                    }
+                });
+            } catch (error) {
+                // git grep uses status 1 for a valid tree with no matches.
+                if (error?.status !== 1) throw error;
+                committedMatches = String(error.stdout || '');
+            }
+            collectIds(String(committedMatches || ''));
+        } else {
+            const files = [];
+            const walk = (dir) => {
+                for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                    const fullPath = path.join(dir, entry.name);
+                    if (entry.isDirectory()) {
+                        walk(fullPath);
+                    } else if (entry.isFile() && entry.name.endsWith('.md')) {
+                        files.push(fullPath);
+                    }
+                }
+            };
+            walk(postsDir);
+            for (const file of files) {
+                collectIds(readFileSync(file, 'utf8'));
+            }
         }
 
-        console.log(`[blog-dedup] 从博客扫描到 ${publishedIds.size} 篇已发布论文`);
+        console.log(`[blog-dedup] 从博客已提交基线扫描到 ${publishedIds.size} 篇已发布论文`);
     } catch (e) {
         const error = new Error(`[blog-dedup] 已存在的博客目录扫描失败，拒绝使用不完整去重基线: ${e.message}`);
         error.code = 'BLOG_DEDUP_SCAN_FAILED';

@@ -983,6 +983,25 @@ title: "Duplicate"
             '同一模型的同域换库损失约 1/5，100 例标注可回收约 2/3，4 类表征均未跨越；Aligner 约19%失败，并使用 300 M 参数。',
         )
 
+    def test_index_normalization_preserves_3d_talking_link_and_inline_image(self):
+        paper_link = (
+            '[Audio-Driven Adversarial Defense for 3D Talking Face]'
+            '(/audio-paper-digest-blog/posts/'
+            '2026-09-01-audio-driven-adversarial-defense-for-3d-talking-2608-30951)'
+        )
+        paper_image = (
+            '![3D Talking pipeline]'
+            '(/audio-paper-digest-blog/images/3d-talking-2608-30951.png)'
+        )
+        normalized = publish_to_blog.normalize_digest_index_reader_surface(
+            f'{paper_link}\n\n{paper_image}\n\n正文使用300M参数。'
+        )
+        self.assertIn(paper_link, normalized)
+        self.assertIn(paper_image, normalized)
+        self.assertIn('正文使用 300 M 参数。', normalized)
+        self.assertNotIn('3 d-talking', normalized)
+        self.assertNotIn('3 D Talking', normalized)
+
     def test_index_uses_api_v2_reader_title_and_full_decision_blocks(self):
         paper = llm_api_publication_fixture()
         paper['parsed']['summary'] += ' 下游调用下降约 41%。'
@@ -1833,11 +1852,14 @@ title: "Bad table"
 
     def test_publish_image_exclusion_contract_rejects_broad_or_unexplained_entries(self):
         configured = publish_to_blog.load_publish_image_exclusions()
-        self.assertEqual(configured, [{
-            'normalizedArxivId': '2608.13610',
-            'url': 'https://arxiv.org/html/2608.13610v1/Fig/intro_1.jpg',
-            'reason': '图片内含 “Manul debugging” 拼写错误',
-        }])
+        self.assertEqual(
+            [(item['normalizedArxivId'], item['url']) for item in configured],
+            [
+                ('2608.13610', 'https://arxiv.org/html/2608.13610v1/Fig/intro_1.jpg'),
+                ('2608.29480', 'https://arxiv.org/html/2608.29480v1/attn6.svg'),
+                ('2608.30854', 'https://arxiv.org/html/2608.30854v1/Fig/tab-example.png'),
+            ],
+        )
         invalid_entries = (
             {
                 'normalizedArxivId': '2608.13610v1',
@@ -2057,6 +2079,66 @@ confidence: 中
         )[0]
         self.assertEqual(fallback['selectedImageUrls'], [])
         _validate_publish_image_exclusion_view(fallback, '2608.13610')
+
+    def test_publish_image_exclusion_derives_closed_api_reader_v2_view(self):
+        paper = llm_api_publication_fixture()
+        url = 'https://arxiv.org/html/2608.30002v1/blank-attention.svg'
+        figure = {
+            'ordinal': 1, 'label': 'Figure 1:', 'caption': 'Attention map.',
+            'url': url, 'mediaType': 'image/svg+xml', 'sourceDomSha256': '5' * 64,
+            'targetKind': 'result',
+            'targetHeading': paper['apiReaderPlan']['sections'][5]['heading'],
+            'cachePath': '/unused/figure-1-deadbeefdeadbeef.png',
+            'assetFilename': 'figure-1-deadbeefdeadbeef.png',
+            'assetMediaType': 'image/png', 'assetSha256': '6' * 64,
+            'assetBytes': 100, 'assetWidth': 640, 'assetHeight': 480,
+        }
+        paper['apiReaderArticle'] += (
+            f'\n\n![原论文 Figure 1：Attention map.]({url})\n\n'
+            '*论文图 1。这张图在发布审查中被判定为空白。*'
+        )
+        paper['apiReaderFigures'] = [figure]
+        article_sha = hashlib.sha256(
+            paper['apiReaderArticle'].encode('utf-8')
+        ).hexdigest()
+        figures_sha = publish_to_blog._stable_json_sha256([figure])
+        paper['apiReaderArticleSha256'] = article_sha
+        stage = paper['analysisManifest']['stages']['apiReaderArticle']
+        stage.update({
+            'articleSha256': article_sha,
+            'figureCount': 1,
+            'figuresSha256': figures_sha,
+        })
+        original = copy.deepcopy(paper)
+        exclusion = {
+            'normalizedArxivId': paper['arxivId'],
+            'url': url,
+            'reason': '多模态发布审查确认该图为空白，不能支撑正文读图任务。',
+        }
+        derived = publish_to_blog.apply_publish_image_exclusions(
+            [paper], [exclusion],
+        )[0]
+        self.assertEqual(paper, original)
+        self.assertNotIn(url, derived['apiReaderArticle'])
+        self.assertNotIn('这张图在发布审查中被判定为空白', derived['apiReaderArticle'])
+        self.assertEqual(derived['apiReaderFigures'], [])
+        self.assertEqual(derived['publishImageExclusionView']['version'], 2)
+        self.assertEqual(
+            derived['analysisManifest']['stages']['apiReaderArticle']['figureCount'], 0,
+        )
+        _validate_publish_image_exclusion_view(derived, paper['arxivId'])
+        self.assertEqual(publish_to_blog._api_reader_payload(derived)['figures'], [])
+
+        tampered = copy.deepcopy(derived)
+        tampered['apiReaderArticle'] += '\n漂移'
+        with self.assertRaisesRegex(PublishDataValidationError, '正文/figure SHA'):
+            _validate_publish_image_exclusion_view(tampered, paper['arxivId'])
+
+        with self.assertRaisesRegex(PublishDataValidationError, '未命中 canonical figure'):
+            publish_to_blog.apply_publish_image_exclusions([paper], [{
+                **exclusion,
+                'url': 'https://arxiv.org/html/2608.30002v1/not-bound.svg',
+            }])
 
     def test_published_papers_fingerprint_matches_node_utf16_key_order_probe(self):
         probe = json.loads(

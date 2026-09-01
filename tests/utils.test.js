@@ -1015,6 +1015,52 @@ describe('loadPublishedIdsFromBlog', () => {
         assert.strictEqual(ids.has('2604.12345'), true);
     });
 
+    it('Git 博客只扫描 HEAD，忽略已安装但未提交的当日页面', () => {
+        const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'paper-blog-head-'));
+        const posts = path.join(root, 'content', 'posts');
+        fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+        fs.mkdirSync(posts, { recursive: true });
+        fs.writeFileSync(
+            path.join(posts, '2026-09-01-uncommitted.md'),
+            '[arxiv](https://arxiv.org/abs/2608.30951)'
+        );
+
+        let invocation;
+        const ids = loadPublishedIdsFromBlog(root, {
+            execFileSync: (command, args, options) => {
+                invocation = { command, args, options };
+                return '[arxiv](https://arxiv.org/abs/2608.10001v2)\n';
+            },
+            readFileSync: () => {
+                throw new Error('Git 博客不得读取可变工作树 Markdown');
+            }
+        });
+
+        assert.strictEqual(ids.has('2608.10001'), true);
+        assert.strictEqual(ids.has('2608.30951'), false);
+        assert.strictEqual(invocation.command, 'git');
+        assert.ok(invocation.args.includes('HEAD'));
+        assert.ok(invocation.args.includes(':(glob)content/posts/**/*.md'));
+        assert.deepStrictEqual(Object.keys(invocation.options.env).sort(), ['LC_ALL', 'PATH']);
+    });
+
+    it('Git HEAD 扫描异常时 fail-closed，不能回退工作树', () => {
+        const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'paper-blog-head-fail-'));
+        fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'content', 'posts'), { recursive: true });
+        assert.throws(
+            () => loadPublishedIdsFromBlog(root, {
+                execFileSync: () => {
+                    const error = new Error('invalid HEAD');
+                    error.status = 128;
+                    throw error;
+                }
+            }),
+            error => error.code === 'BLOG_DEDUP_SCAN_FAILED'
+                && /不完整去重基线/.test(error.message)
+        );
+    });
+
     it('目录存在但 Markdown 读取失败时 fail-closed', () => {
         const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'paper-blog-fail-'));
         const post = path.join(root, 'content', 'posts', 'post.md');

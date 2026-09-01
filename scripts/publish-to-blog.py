@@ -21,6 +21,7 @@ load_project_env()
     python3 publish-to-blog.py --date YYYY-MM-DD
 """
 import argparse
+import copy
 import difflib
 import json, re, sys, os, subprocess, datetime, base64, concurrent.futures, hashlib, math
 import ipaddress, shutil, socket, tempfile, stat, struct, zlib, unicodedata
@@ -1632,6 +1633,31 @@ def _remove_publish_image_block(content, exact_url, insertion_plan=None):
     ).strip()
 
 
+def _remove_api_reader_figure_block(content, exact_url):
+    """Remove one v2 reader image and its generated italic figure caption."""
+    paragraphs = re.split(r'\n(?:[ \t]*\n)+', str(content or '').strip())
+    image_pattern = re.compile(
+        rf'^[ \t]*!\[(?:\\.|[^\]\\\n])*\]\({re.escape(exact_url)}\)[ \t]*$'
+    )
+    remove = set()
+    for index, paragraph in enumerate(paragraphs):
+        if not image_pattern.fullmatch(paragraph):
+            continue
+        remove.add(index)
+        if index + 1 < len(paragraphs) and re.fullmatch(
+                r'[ *_]*论文图\s*\d+[\s\S]*?[ *_]*', paragraphs[index + 1].strip()):
+            remove.add(index + 1)
+    cleaned = '\n\n'.join(
+        paragraph for index, paragraph in enumerate(paragraphs)
+        if index not in remove and paragraph
+    ).strip()
+    if exact_url in cleaned or not remove:
+        raise PublishDataValidationError(
+            f'API reader 发布图片排除未能精确移除正文图片: {exact_url}'
+        )
+    return cleaned
+
+
 def apply_publish_image_exclusions(papers, exclusions=None):
     """Attach overrides and sanitize one derived analysis/parsed publication view.
 
@@ -1657,9 +1683,71 @@ def apply_publish_image_exclusions(papers, exclusions=None):
     prepared = []
     for paper in papers:
         normalized_id = normalize_publish_arxiv_id(paper.get('arxivId'))
-        next_paper = dict(paper)
+        next_paper = copy.deepcopy(paper)
         active = [dict(item) for item in by_id.get(normalized_id, [])]
-        if active:
+        contracts = next_paper.get('analysisManifest', {}).get('contracts', {})
+        api_reader_v2 = contracts.get('apiReaderArticle') == LLM_API_READER_CONTRACT
+        if active and api_reader_v2:
+            analysis = next_paper.get('analysis')
+            article = next_paper.get('apiReaderArticle')
+            figures = next_paper.get('apiReaderFigures')
+            manifest = next_paper.get('analysisManifest')
+            stage = manifest.get('stages', {}).get('apiReaderArticle') \
+                if isinstance(manifest, dict) else None
+            if not isinstance(analysis, str) or not analysis.strip() \
+                    or not isinstance(article, str) or not article.strip() \
+                    or not isinstance(figures, list) or not isinstance(stage, dict):
+                raise PublishDataValidationError(
+                    f'{normalized_id} API reader v2 缺少可派生的正文/figure/stage'
+                )
+            source_analysis_sha256 = hashlib.sha256(analysis.encode('utf-8')).hexdigest()
+            source_article_sha256 = hashlib.sha256(article.encode('utf-8')).hexdigest()
+            source_figures_sha256 = _stable_json_sha256(figures)
+            figure_urls = [
+                item.get('url') for item in figures if isinstance(item, dict)
+            ]
+            excluded_urls = [item['url'] for item in active]
+            missing_urls = [url for url in excluded_urls if url not in figure_urls]
+            if missing_urls:
+                raise PublishDataValidationError(
+                    f'{normalized_id} API reader 发布图片排除未命中 canonical figure: '
+                    + ', '.join(missing_urls)
+                )
+            for exclusion in active:
+                article = _remove_api_reader_figure_block(article, exclusion['url'])
+            figures = [item for item in figures if item.get('url') not in excluded_urls]
+            article_sha256 = hashlib.sha256(article.encode('utf-8')).hexdigest()
+            figures_sha256 = _stable_json_sha256(figures)
+            next_paper['apiReaderArticle'] = article
+            next_paper['apiReaderArticleSha256'] = article_sha256
+            next_paper['apiReaderFigures'] = figures
+            stage['articleSha256'] = article_sha256
+            stage['figureCount'] = len(figures)
+            stage['figuresSha256'] = figures_sha256
+            image_stage = manifest.get('stages', {}).get('imageSupplement')
+            if isinstance(image_stage, dict) \
+                    and image_stage.get('reason') == 'api_reader_v2_official_figures_bound':
+                image_stage['officialFigureCount'] = len(figures)
+                image_stage['officialFiguresSha256'] = figures_sha256
+            selected = next_paper.get('selectedImageUrls')
+            if not isinstance(selected, list):
+                selected = []
+                next_paper['selectedImageUrls'] = selected
+            next_paper[PUBLISH_IMAGE_EXCLUSIONS_FIELD] = active
+            next_paper[PUBLISH_IMAGE_VIEW_FIELD] = {
+                'version': 2,
+                'sourceAnalysisSha256': source_analysis_sha256,
+                'analysisSha256': source_analysis_sha256,
+                'sourceApiReaderArticleSha256': source_article_sha256,
+                'apiReaderArticleSha256': article_sha256,
+                'sourceApiReaderFiguresSha256': source_figures_sha256,
+                'apiReaderFiguresSha256': figures_sha256,
+                'excludedUrls': excluded_urls,
+                'effectiveSelectedImageUrls': list(selected),
+                'effectiveApiReaderFigureUrls': [item['url'] for item in figures],
+                'imageNarrativeContract': 'context-bound-v1',
+            }
+        elif active:
             analysis = next_paper.get('analysis')
             if not isinstance(analysis, str) or not analysis.strip():
                 raise PublishDataValidationError(
@@ -1798,8 +1886,23 @@ def format_complete_score_line(parsed):
 def normalize_digest_index_reader_surface(text):
     """Normalize quantitative prose copied from canonical into the daily index."""
     value = str(text or '')
+    protected_markdown_links = []
     protected_percentages = []
     protected_urls = []
+
+    def stash_markdown_link(match):
+        protected_markdown_links.append(match.group(0))
+        return f'__PD_MARKDOWN_LINK_{len(protected_markdown_links) - 1}__'
+
+    # Quantitative typography is only for prose.  Preserve both the label and
+    # destination of inline links/images byte-for-byte: a unit-like paper token
+    # such as ``3D`` must not become ``3 D``, and the same rewrite inside a
+    # relative post URL would silently create a broken digest-index link.
+    value = re.sub(
+        r'!?\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)',
+        stash_markdown_link,
+        value,
+    )
 
     def stash_url(match):
         protected_urls.append(match.group(0))
@@ -1898,6 +2001,8 @@ def normalize_digest_index_reader_surface(text):
     value = re.sub(r'(\d+(?:\.\d+)?%)\s+([一-鿿])', r'\1\2', value)
     for index, original in enumerate(protected_urls):
         value = value.replace(f'__PD_URL_{index}__', original)
+    for index, original in enumerate(protected_markdown_links):
+        value = value.replace(f'__PD_MARKDOWN_LINK_{index}__', original)
     return value
 
 

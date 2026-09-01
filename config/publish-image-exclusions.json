@@ -5,6 +5,16 @@
       "normalizedArxivId": "2608.13610",
       "url": "https://arxiv.org/html/2608.13610v1/Fig/intro_1.jpg",
       "reason": "图片内含 “Manul debugging” 拼写错误"
+    },
+    {
+      "normalizedArxivId": "2608.29480",
+      "url": "https://arxiv.org/html/2608.29480v1/attn6.svg",
+      "reason": "多模态发布审查确认注意力热图主体近乎空白，无法支撑正文中的层间注意力分布观察"
+    },
+    {
+      "normalizedArxivId": "2608.30854",
+      "url": "https://arxiv.org/html/2608.30854v1/Fig/tab-example.png",
+      "reason": "多模态发布审查确认图片顶部另含未在原始图注中说明的波形面板，图注所述上下位置与实际像素不一致"
     }
   ]
 }

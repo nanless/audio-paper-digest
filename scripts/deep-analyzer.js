@@ -826,7 +826,16 @@ function splitReaderLongParagraphs(text, targetChineseChars = 190, maxChineseCha
 }
 
 function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
-    let normalized = String(text || '')
+    const protectedMarkdown = [];
+    const protectedText = String(text || '').replace(
+        /!?\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)|https:\/\/[^\s<>()\[\]{}"'，。；：！？、\u3400-\u9fff]+/g,
+        value => {
+            const token = `__PD_READER_PROTECTED_${protectedMarkdown.length}__`;
+            protectedMarkdown.push(value);
+            return token;
+        }
+    );
+    let normalized = protectedText
         .replace(/([\u3400-\u9fff])([A-Za-z][A-Za-z0-9+.-]*)/g, '$1 $2')
         .replace(/([\u3400-\u9fff])([α-ωΑ-Ω])/g, '$1 $2')
         .replace(/([A-Za-z0-9.%+)\]α-ωΑ-Ω])([\u3400-\u9fff])/g, '$1 $2');
@@ -872,7 +881,7 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
                     .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2');
         normalized = normalized.split(match).join(replacement);
     }
-    return normalized
+    normalized = normalized
         .replace(/跨窗口\s*1\s*致性/g, '跨窗口一致性')
         .replace(/\b1\s*到\s*5\s+5\s*级量表/g, '1 到 5 级量表')
         .replace(/y\s*到\s*5\s+2\s*段/g, 'y 到 5 这 2 段')
@@ -893,6 +902,12 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
         .replace(/([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?=(?:mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|MACs?|tokens?|FPS|bit)\b)/gi, '$1 ')
         .replace(/([\u3400-\u9fff])(\d)/g, '$1 $2')
         .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2');
+    return protectedMarkdown.reduce(
+        (value, original, index) => value.replace(
+            `__PD_READER_PROTECTED_${index}__`, original
+        ),
+        normalized
+    );
 }
 
 function getApiReaderFigureInventory(structuredArtifacts, arxivId = '') {
@@ -902,32 +917,36 @@ function getApiReaderFigureInventory(structuredArtifacts, arxivId = '') {
         if (figure?.recoveryStatus !== 'complete'
             || !Number.isInteger(figure.ordinal)
             || !recoverySha256(figure.sourceDomSha256)) continue;
-        for (const resource of figure.images || []) {
-            if (resource?.kind !== 'external_url') continue;
-            let parsed;
-            try {
-                parsed = new URL(String(resource.url || ''));
-            } catch (_) {
-                continue;
-            }
-            const host = parsed.hostname.toLowerCase();
-            const pathMatch = parsed.pathname.match(/^\/html\/(\d{4}\.\d{4,5})(?:v\d+)?\//i);
-            if (parsed.protocol !== 'https:'
-                || !['arxiv.org', 'www.arxiv.org'].includes(host)
-                || !pathMatch
-                || (expectedId && pathMatch[1].toLowerCase() !== expectedId)
-                || (String(resource.mediaType || '').toLowerCase() !== 'image/svg+xml'
-                    && !isSupportedImageUrl(parsed.toString()))) continue;
-            inventory.push({
-                ordinal: figure.ordinal,
-                label: String(figure.label || `Figure ${figure.ordinal}`).replace(/\s+/g, ' ').trim(),
-                caption: String(figure.caption || '').replace(/\s+/g, ' ').trim().slice(0, 1200),
-                url: parsed.toString(),
-                mediaType: String(resource.mediaType || '').toLowerCase(),
-                sourceDomSha256: figure.sourceDomSha256
-            });
-            break;
+        const resources = Array.isArray(figure.images) ? figure.images : [];
+        // arXiv frequently represents a compound figure as several sibling
+        // resources while attaching the full multi-panel caption to the
+        // wrapper.  Selecting only the first child makes the caption claim
+        // panels that are not present in the downloaded bytes.  Keep only
+        // one-resource figures until the pipeline can compose all panels.
+        if (resources.length !== 1 || resources[0]?.kind !== 'external_url') continue;
+        const resource = resources[0];
+        let parsed;
+        try {
+            parsed = new URL(String(resource.url || ''));
+        } catch (_) {
+            continue;
         }
+        const host = parsed.hostname.toLowerCase();
+        const pathMatch = parsed.pathname.match(/^\/html\/(\d{4}\.\d{4,5})(?:v\d+)?\//i);
+        if (parsed.protocol !== 'https:'
+            || !['arxiv.org', 'www.arxiv.org'].includes(host)
+            || !pathMatch
+            || (expectedId && pathMatch[1].toLowerCase() !== expectedId)
+            || (String(resource.mediaType || '').toLowerCase() !== 'image/svg+xml'
+                && !isSupportedImageUrl(parsed.toString()))) continue;
+        inventory.push({
+            ordinal: figure.ordinal,
+            label: String(figure.label || `Figure ${figure.ordinal}`).replace(/\s+/g, ' ').trim(),
+            caption: String(figure.caption || '').replace(/\s+/g, ' ').trim().slice(0, 1200),
+            url: parsed.toString(),
+            mediaType: String(resource.mediaType || '').toLowerCase(),
+            sourceDomSha256: figure.sourceDomSha256
+        });
         if (inventory.length >= IMAGE_INSERTION_MAX) break;
     }
     return inventory;
@@ -1709,11 +1728,9 @@ async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
         getPaperArxivId(paper)
     );
     const allowedUrls = new Set(currentInventory.map(item => item.url));
-    if (figures.some(item => !allowedUrls.has(item?.url))) {
-        throw new Error('论文图刷新发现 canonical URL 与当前原文图不一致');
-    }
+    const retainedFigures = figures.filter(item => allowedUrls.has(item?.url));
     const materialized = await materializeApiReaderFigures(
-        figures,
+        retainedFigures,
         getPaperArxivId(paper)
     );
     const prunedArticle = pruneUnmaterializedApiReaderFigureBlocks(
@@ -3137,26 +3154,124 @@ function bindStructuredArtifactsToText(structuredArtifacts, text) {
     return bound;
 }
 
+function normalizeReaderIdentityText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function readerIdentityKey(value) {
+    return normalizeReaderIdentityText(value).normalize('NFKC').toLocaleLowerCase();
+}
+
+function readerIdentityTokens(value) {
+    return readerIdentityKey(value).split(/\s+/).filter(Boolean);
+}
+
+function isLikelyAuthorEnumeration(value) {
+    const text = normalizeReaderIdentityText(value);
+    if (!/(?:\band\b|&)/i.test(text)
+        || /\b(?:university|institute|institution|school|college|department|laborator(?:y|ies)|centre|center|hospital|academy|research|corporation|company|inc\.?|ltd\.?|gmbh|ai)\b/i.test(text)) {
+        return false;
+    }
+    const parts = text.split(/\s*,\s*|\s+and\s+|\s*&\s*/i)
+        .map(part => part.replace(/^and\s+/i, '').trim()).filter(Boolean);
+    const nameLike = parts.filter(part => {
+        const tokens = part.split(/\s+/).filter(Boolean);
+        return tokens.length >= 2 && tokens.length <= 5
+            && tokens.every(token => /^[\p{L}][\p{L}'’.-]*$/u.test(token));
+    });
+    return nameLike.length >= 2 && nameLike.length === parts.length;
+}
+
+function countKnownAuthorNames(value, authorNames) {
+    const haystack = ` ${readerIdentityKey(value).replace(/[^\p{L}\p{N}]+/gu, ' ')} `;
+    return [...new Set((authorNames || []).map(readerIdentityKey).filter(Boolean))]
+        .filter(name => {
+            const needle = ` ${name.replace(/[^\p{L}\p{N}]+/gu, ' ')} `;
+            return needle.trim().split(/\s+/).length >= 2 && haystack.includes(needle);
+        }).length;
+}
+
+function sanitizeReaderAffiliationValue(value, authorNames = []) {
+    const text = normalizeReaderIdentityText(value)
+        .replace(/^(?:affiliation|institution)\s*[:：]?\s*/i, '');
+    if (text.length < 3
+        || /https?:\/\/|www\./i.test(text)
+        || /@/.test(text)
+        || /,\s*,/.test(text)
+        || countKnownAuthorNames(text, authorNames) >= 2
+        || isLikelyAuthorEnumeration(text)) {
+        return '';
+    }
+    return text;
+}
+
+function cleanReaderAffiliationNode($, node, authorNames = []) {
+    const affiliation = $(node).clone();
+    affiliation.find([
+        '.ltx_contact_name', '.ltx_contact_email', '.ltx_role_email',
+        '.ltx_note_mark', '.ltx_note', '.ltx_tag', 'sup',
+        'a.ltx_url', 'a[href^="http://"]', 'a[href^="https://"]'
+    ].join(', ')).remove();
+    return sanitizeReaderAffiliationValue(affiliation.text(), authorNames);
+}
+
+function cleanReaderAuthorNameNode($, node) {
+    const name = $(node).clone();
+    name.find('.ltx_note_mark, .ltx_note, .ltx_tag, sup').remove();
+    return normalizeReaderIdentityText(name.text())
+        .replace(/\d*\s*(?:\\?footnotemark|footnotemark)\s*:?[\s\d]*.*$/i, '')
+        .trim();
+}
+
+function parseReaderThanksAffiliations($) {
+    const mappings = new Map();
+    const sourceNodes = [];
+    $('.ltx_title_document .ltx_pubnote.ltx_role_thanks').toArray().forEach(node => {
+        sourceNodes.push($.html(node));
+        const note = $(node).clone();
+        note.find('.ltx_note_name, .ltx_note_mark, .ltx_note, .ltx_tag, sup').remove();
+        const text = normalizeReaderIdentityText(note.text())
+            .replace(/\s*\((?:e-?mail|email)\s*:[\s\S]*$/i, '')
+            .replace(/[.;]\s*$/, '')
+            .trim();
+        const match = text.match(/^(.+?)\s+(is also with|is with|are with)\s+(.+)$/i);
+        if (!match) return;
+        const names = match[1].split(/\s*,\s*|\s+and\s+/i)
+            .map(name => name.replace(/^and\s+/i, '').trim()).filter(Boolean);
+        const affiliation = sanitizeReaderAffiliationValue(match[3], names);
+        if (!affiliation || names.length === 0
+            || names.some(name => readerIdentityTokens(name).length < 2)) return;
+        for (const name of names) {
+            const key = readerIdentityKey(name);
+            const current = mappings.get(key) || { name, affiliations: [] };
+            if (!current.affiliations.includes(affiliation)) current.affiliations.push(affiliation);
+            mappings.set(key, current);
+        }
+    });
+    return { mappings, sourceNodes };
+}
+
 function parseArxivReaderAuthors($) {
     const wrapper = $('.ltx_authors').first();
-    const normalize = value => String(value || '').replace(/\s+/g, ' ').trim();
-    const cleanName = value => normalize(value)
+    const cleanName = value => normalizeReaderIdentityText(value)
         .replace(/\d*\s*(?:\\?footnotemark|footnotemark)\s*:?[\s\d]*.*$/i, '')
         .trim();
     const metaAuthors = $('meta[name="citation_author"]').toArray()
         .map(node => cleanName($(node).attr('content'))).filter(Boolean);
+    const thanksAffiliations = parseReaderThanksAffiliations($);
+    const domAuthorNames = wrapper.length
+        ? wrapper.find('.ltx_creator.ltx_role_author .ltx_personname').toArray()
+            .map(node => cleanReaderAuthorNameNode($, node)).filter(Boolean)
+        : [];
+    const knownAuthorNames = [...metaAuthors, ...domAuthorNames,
+        ...[...thanksAffiliations.mappings.values()].map(item => item.name)];
     const metaAffiliations = $('meta[name="citation_author_institution"]').toArray()
-        .map(node => normalize($(node).attr('content'))).filter(Boolean);
+        .map(node => sanitizeReaderAffiliationValue($(node).attr('content'), knownAuthorNames))
+        .filter(Boolean);
     const globalAffiliations = (wrapper.length
         ? wrapper.find('.ltx_role_affiliation, .ltx_affiliation').toArray()
-        : []).map(node => {
-        const affiliation = $(node).clone();
-        affiliation.find(
-            '.ltx_contact_name, .ltx_note_mark, .ltx_tag, sup, a.ltx_note'
-        ).remove();
-        return normalize(affiliation.text())
-            .replace(/^(?:affiliation|institution)\s*[:：]?\s*/i, '');
-    }).filter(value => value.length >= 3 && !/@/.test(value));
+        : []).map(node => cleanReaderAffiliationNode($, node, knownAuthorNames))
+        .filter(Boolean);
     const dedupedGlobalAffiliations = [...new Set([
         ...globalAffiliations, ...metaAffiliations
     ])];
@@ -3165,23 +3280,22 @@ function parseArxivReaderAuthors($) {
         : [];
     let authors = authorElements.map((element, index) => {
         const creator = $(element);
-        const name = cleanName(creator.find('.ltx_personname').first().text())
+        const nameNode = creator.find('.ltx_personname').first();
+        const name = cleanReaderAuthorNameNode($, nameNode)
             || metaAuthors[index] || '';
         const affiliations = creator.find('.ltx_contact.ltx_role_affiliation').toArray()
-            .map(node => {
-                const affiliation = $(node).clone();
-                affiliation.find('.ltx_contact_name, .ltx_note_mark, .ltx_tag, sup').remove();
-                return normalize(affiliation.text());
-            })
+            .map(node => cleanReaderAffiliationNode($, node, knownAuthorNames))
             .filter(Boolean);
+        const thanks = thanksAffiliations.mappings.get(readerIdentityKey(name));
         const fallbackAffiliations = metaAuthors.length > 0
             && metaAffiliations.length === metaAuthors.length
             ? [metaAffiliations[index]].filter(Boolean)
-            : dedupedGlobalAffiliations;
+            : (dedupedGlobalAffiliations.length === 1 ? dedupedGlobalAffiliations : []);
         return {
             name,
-            affiliations: [...new Set(affiliations.length > 0
-                ? affiliations : fallbackAffiliations)]
+            affiliations: [...new Set(thanks?.affiliations?.length > 0
+                ? thanks.affiliations
+                : (affiliations.length > 0 ? affiliations : fallbackAffiliations))]
         };
     }).filter(item => item.name);
     if (authors.length === 0 && metaAuthors.length > 0) {
@@ -3189,8 +3303,15 @@ function parseArxivReaderAuthors($) {
             name,
             affiliations: metaAffiliations.length === metaAuthors.length
                 ? [metaAffiliations[index]].filter(Boolean)
-                : dedupedGlobalAffiliations
+                : (dedupedGlobalAffiliations.length === 1 ? dedupedGlobalAffiliations : [])
         }));
+    }
+    const existingNames = new Set(authors.map(item => readerIdentityKey(item.name)));
+    for (const [key, item] of thanksAffiliations.mappings) {
+        if (!existingNames.has(key)) {
+            authors.push({ name: item.name, affiliations: [...item.affiliations] });
+            existingNames.add(key);
+        }
     }
     authors = authors.map(item => ({
         name: item.name,
@@ -3199,7 +3320,7 @@ function parseArxivReaderAuthors($) {
             : ['机构信息未在 arXiv HTML 中可靠披露']
     }));
     const sourceNodes = wrapper.length
-        ? $.html(wrapper)
+        ? [$.html(wrapper), ...thanksAffiliations.sourceNodes].filter(Boolean).join('\n')
         : $('meta[name="citation_author"], meta[name="citation_author_institution"]')
             .toArray().map(node => $.html(node)).join('\n');
     return {
@@ -3220,10 +3341,13 @@ function resolveApiReaderAuthors(paper, sourceDetails) {
     if (parsed && Array.isArray(parsed.authors) && parsed.authors.length > 0
         && recoverySha256(parsed.sourceDomSha256)) {
         if (names.length === 0) return parsed;
+        const knownAuthorNames = [...names, ...parsed.authors.map(author => author?.name)];
         const normalizedParsed = parsed.authors.map(author => ({
             name: normalizeName(author?.name),
             affiliations: Array.isArray(author?.affiliations)
-                ? author.affiliations.map(value => String(value || '').trim()).filter(Boolean)
+                ? author.affiliations
+                    .map(value => sanitizeReaderAffiliationValue(value, knownAuthorNames))
+                    .filter(Boolean)
                 : []
         })).filter(author => author.name);
         const allAffiliations = [...new Set(normalizedParsed
@@ -3233,15 +3357,23 @@ function resolveApiReaderAuthors(paper, sourceDetails) {
                 author.name.normalize('NFKC').toLocaleLowerCase()
                 === name.normalize('NFKC').toLocaleLowerCase()
             ));
+            const rawTokens = readerIdentityTokens(name);
+            const suffix = exact ? null : normalizedParsed.find(author => {
+                const parsedTokens = readerIdentityTokens(author.name);
+                return parsedTokens.length >= 2
+                    && rawTokens.length === parsedTokens.length + 1
+                    && rawTokens.slice(-parsedTokens.length).join(' ')
+                        === parsedTokens.join(' ');
+            });
             const positional = normalizedParsed.length === names.length
                 ? normalizedParsed[index]
                 : null;
-            const matched = exact || positional;
+            const matched = exact || suffix || positional;
             return {
-                name,
+                name: suffix?.name || name,
                 affiliations: matched?.affiliations?.length > 0
                     ? matched.affiliations
-                    : (allAffiliations.length > 0
+                    : (allAffiliations.length === 1
                         ? allAffiliations
                         : ['机构信息未在 arXiv HTML 中可靠披露'])
             };

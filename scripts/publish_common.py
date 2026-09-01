@@ -407,13 +407,25 @@ def _validate_publish_image_exclusion_view(paper, paper_label):
                 f'{paper_label} 无图片排除项却携带 publishImageExclusionView'
             )
         return
-    if not isinstance(view, dict) or set(view) != {
-            'version', 'sourceAnalysisSha256', 'analysisSha256', 'excludedUrls',
-            'effectiveSelectedImageUrls', 'imageNarrativeContract'}:
+    if not isinstance(view, dict):
         raise PublishDataValidationError(
             f'{paper_label} 发布图片排除后的派生视图凭证缺失或字段非法'
         )
-    if view.get('version') != 1 \
+    version = view.get('version')
+    expected_keys = {
+        1: {
+            'version', 'sourceAnalysisSha256', 'analysisSha256', 'excludedUrls',
+            'effectiveSelectedImageUrls', 'imageNarrativeContract',
+        },
+        2: {
+            'version', 'sourceAnalysisSha256', 'analysisSha256',
+            'sourceApiReaderArticleSha256', 'apiReaderArticleSha256',
+            'sourceApiReaderFiguresSha256', 'apiReaderFiguresSha256',
+            'excludedUrls', 'effectiveSelectedImageUrls',
+            'effectiveApiReaderFigureUrls', 'imageNarrativeContract',
+        },
+    }.get(version)
+    if expected_keys is None or set(view) != expected_keys \
             or view.get('imageNarrativeContract') != IMAGE_NARRATIVE_CONTRACT_VERSION:
         raise PublishDataValidationError(
             f'{paper_label} 发布图片排除后的派生视图版本或图片契约非法'
@@ -449,6 +461,46 @@ def _validate_publish_image_exclusion_view(paper, paper_label):
         raise PublishDataValidationError(
             f'{paper_label} 发布图片排除 URL 仍残留在读者正文'
         )
+    if version == 2:
+        article = paper.get('apiReaderArticle')
+        figures = paper.get('apiReaderFigures')
+        if not isinstance(article, str) or not article.strip() or not isinstance(figures, list):
+            raise PublishDataValidationError(
+                f'{paper_label} API reader 发布图片排除后缺少正文或 figure 数组'
+            )
+        article_sha = hashlib.sha256(article.encode('utf-8')).hexdigest()
+        figures_sha = hashlib.sha256(json.dumps(
+            figures, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+        ).encode('utf-8')).hexdigest()
+        for field in ('sourceApiReaderArticleSha256', 'sourceApiReaderFiguresSha256'):
+            if not re.fullmatch(r'[0-9a-f]{64}', str(view.get(field) or '')):
+                raise PublishDataValidationError(
+                    f'{paper_label} API reader 发布图片排除前来源 SHA 非法'
+                )
+        if view.get('apiReaderArticleSha256') != article_sha \
+                or view.get('apiReaderFiguresSha256') != figures_sha:
+            raise PublishDataValidationError(
+                f'{paper_label} API reader 发布图片排除后的正文/figure SHA 不一致'
+            )
+        effective_urls = [
+            item.get('url') for item in figures if isinstance(item, dict)
+        ]
+        if len(effective_urls) != len(figures) \
+                or view.get('effectiveApiReaderFigureUrls') != effective_urls:
+            raise PublishDataValidationError(
+                f'{paper_label} API reader 发布图片排除后的 figure URL 快照不一致'
+            )
+        if any(url in article or url in effective_urls for url in excluded_urls):
+            raise PublishDataValidationError(
+                f'{paper_label} API reader 发布图片排除 URL 仍残留在正文或 figure 数组'
+            )
+        stage = paper.get('analysisManifest', {}).get('stages', {}).get('apiReaderArticle', {})
+        if stage.get('articleSha256') != article_sha \
+                or stage.get('figureCount') != len(figures) \
+                or stage.get('figuresSha256') != figures_sha:
+            raise PublishDataValidationError(
+                f'{paper_label} API reader 发布图片排除后的 stage 未闭环'
+            )
     manifest = paper.get('analysisManifest')
     takeover = manifest.get('manualTakeover') if isinstance(manifest, dict) else None
     if isinstance(takeover, dict) and takeover.get('analysisSha256') != source_sha:

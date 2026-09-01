@@ -919,6 +919,12 @@ primary_task_tag: #音视频生成
             normalizeReaderEditorialSurface('该权重衡量跨窗口 1 致性。'),
             '该权重衡量跨窗口一致性。'
         );
+        assert.strictEqual(
+            normalizeReaderEditorialSurface(
+                '演示：https://aspire.ugent.be/demos/IWAENC2026HZ/，模型有300M参数。'
+            ),
+            '演示：https://aspire.ugent.be/demos/IWAENC2026HZ/，模型有 300M 参数。'
+        );
         const recoveryPaper = {
             apiReaderArticle: '### 把 HRTF 做浓，再用模型去听\n\n正文。',
             apiReaderPlan: {
@@ -1030,6 +1036,16 @@ primary_task_tag: #音视频生成
             }))
         };
         assert.strictEqual(getApiReaderFigureInventory(artifacts, '2608.28422').length, 2);
+        const compoundArtifacts = structuredClone(artifacts);
+        compoundArtifacts.figures[0].images.push({
+            kind: 'external_url', mediaType: 'image/svg+xml',
+            url: 'https://arxiv.org/html/2608.28422v1/figure-1b.svg'
+        });
+        assert.deepStrictEqual(
+            getApiReaderFigureInventory(compoundArtifacts, '2608.28422')
+                .map(item => item.ordinal),
+            [2]
+        );
         assert.match(buildApiReaderArtifactEvidence(artifacts, '2608.28422'), /FORMULA_1/);
         const reader = injectApiReaderFigures({
             plan: { sections: [
@@ -1073,6 +1089,16 @@ primary_task_tag: #音视频生成
             parseArxivReaderAuthors(separated).authors,
             [{ name: '乙', affiliations: ['机构 B'] }]
         );
+        const ambiguousGlobalAffiliations = cheerio.load(
+            '<div class="ltx_authors">'
+            + '<span class="ltx_creator ltx_role_author"><span class="ltx_personname">Author One</span></span>'
+            + '<span class="ltx_creator ltx_role_affiliation">Institute A</span>'
+            + '<span class="ltx_creator ltx_role_affiliation">Institute B</span>'
+            + '</div>'
+        );
+        assert.deepStrictEqual(parseArxivReaderAuthors(ambiguousGlobalAffiliations).authors, [{
+            name: 'Author One', affiliations: ['机构信息未在 arXiv HTML 中可靠披露']
+        }]);
         const metadata = cheerio.load(
             '<head><meta name="citation_author" content="丙">'
             + '<meta name="citation_author_institution" content="机构 C"></head>'
@@ -1081,6 +1107,91 @@ primary_task_tag: #音视频生成
             parseArxivReaderAuthors(metadata).authors,
             [{ name: '丙', affiliations: ['机构 C'] }]
         );
+        const malformedVocalAuthors = cheerio.load(
+            '<div class="ltx_authors">'
+            + '<span class="ltx_creator ltx_role_author"><span class="ltx_personname">Luc Debaupte</span>'
+            + '<span class="ltx_contact ltx_role_affiliation"><span class="ltx_contact_name">Affiliation: </span>Candice Fan, Bill Wang, and Yi Zhong</span></span>'
+            + '<span class="ltx_creator ltx_role_author"><span class="ltx_personname">Tyler Baumgartner</span>'
+            + '<span class="ltx_contact ltx_role_affiliation"><span class="ltx_contact_name">Affiliation: </span>Besimple AI, San Mateo, CA</span></span>'
+            + '<span class="ltx_creator ltx_role_author"><span class="ltx_personname">Brandon Tai</span>'
+            + '<span class="ltx_contact ltx_role_affiliation"><span class="ltx_contact_name">Affiliation: </span>{luc, yi}@besimple.ai</span></span>'
+            + '</div>'
+        );
+        const parsedVocalAuthors = parseArxivReaderAuthors(malformedVocalAuthors);
+        assert.deepStrictEqual(parsedVocalAuthors.authors, [
+            { name: 'Luc Debaupte', affiliations: ['Besimple AI, San Mateo, CA'] },
+            { name: 'Tyler Baumgartner', affiliations: ['Besimple AI, San Mateo, CA'] },
+            { name: 'Brandon Tai', affiliations: ['Besimple AI, San Mateo, CA'] }
+        ]);
+        const resolvedVocalAuthors = resolveApiReaderAuthors(
+            {
+                authors: [
+                    'Models Luc Debaupte', 'Tyler Baumgartner', 'Brandon Tai',
+                    'Candice Fan', 'Bill Wang', 'Yi Zhong'
+                ]
+            },
+            { text: 'HTML source bytes', readerAuthors: parsedVocalAuthors }
+        );
+        assert.deepStrictEqual(
+            resolvedVocalAuthors.authors.map(author => author.name),
+            [
+                'Luc Debaupte', 'Tyler Baumgartner', 'Brandon Tai',
+                'Candice Fan', 'Bill Wang', 'Yi Zhong'
+            ]
+        );
+        assert.ok(resolvedVocalAuthors.authors.every(author => (
+            author.affiliations.length === 1
+            && author.affiliations[0] === 'Besimple AI, San Mateo, CA'
+        )));
+        const underwaterHtml = institution => (
+            '<h1 class="ltx_title ltx_title_document">Title'
+            + '<span class="ltx_pubnote ltx_role_thanks"><span class="ltx_note_name">Thanks: </span>'
+            + 'Xin Gui is with Hubei Longzhong Laboratory, Wuhan, China.</span>'
+            + '<span class="ltx_pubnote ltx_role_thanks"><span class="ltx_note_name">Thanks: </span>'
+            + `Tianang Li, Changjia Wang, Bowen Han, Yunchuan Zhang, and Zhengying Li are with ${institution} (email:{team}@whut.edu.cn).</span>`
+            + '<span class="ltx_pubnote ltx_role_thanks"><span class="ltx_note_name">Thanks: </span>'
+            + 'Zhengying Li is also with State Key Laboratory of Advanced Technology, Wuhan, China.</span>'
+            + '</h1><div class="ltx_authors">'
+            + '<span class="ltx_creator ltx_role_author"><span class="ltx_personname">Xin Gui</span></span>'
+            + '<span class="ltx_creator ltx_role_author"><span class="ltx_personname">Tianang Li</span></span>'
+            + '<span class="ltx_creator ltx_role_author"><span class="ltx_personname">Changjia Wang</span></span>'
+            + '<span class="ltx_creator ltx_role_author"><span class="ltx_personname">Bowen Han</span>'
+            + '<span class="ltx_contact ltx_role_affiliation">Yunchuan Zhang, , and Zhengying Li</span></span>'
+            + '</div>'
+        );
+        const parsedUnderwater = parseArxivReaderAuthors(cheerio.load(
+            underwaterHtml('School of Information Engineering, Wuhan University of Technology, China')
+        ));
+        assert.deepStrictEqual(parsedUnderwater.authors.map(author => author.name), [
+            'Xin Gui', 'Tianang Li', 'Changjia Wang', 'Bowen Han',
+            'Yunchuan Zhang', 'Zhengying Li'
+        ]);
+        assert.deepStrictEqual(parsedUnderwater.authors[0].affiliations, [
+            'Hubei Longzhong Laboratory, Wuhan, China'
+        ]);
+        assert.deepStrictEqual(parsedUnderwater.authors[3].affiliations, [
+            'School of Information Engineering, Wuhan University of Technology, China'
+        ]);
+        assert.deepStrictEqual(parsedUnderwater.authors[5].affiliations, [
+            'School of Information Engineering, Wuhan University of Technology, China',
+            'State Key Laboratory of Advanced Technology, Wuhan, China'
+        ]);
+        assert.notEqual(
+            parsedUnderwater.sourceDomSha256,
+            parseArxivReaderAuthors(cheerio.load(
+                underwaterHtml('Faculty of Information Engineering, Wuhan University of Technology, China')
+            )).sourceDomSha256
+        );
+        const imageEvalAuthors = parseArxivReaderAuthors(cheerio.load(
+            '<div class="ltx_authors"><span class="ltx_creator ltx_role_author">'
+            + '<span class="ltx_personname">Md Arid Hasan<sup>5</sup></span>'
+            + '<span class="ltx_contact ltx_role_affiliation"><span class="ltx_contact_name">Affiliation: </span>'
+            + 'University of Toronto, Canada<a class="ltx_ref ltx_url" href="https://imageeval2026.github.io/">https://imageeval2026.github.io/</a>'
+            + '</span></span></div>'
+        ));
+        assert.deepStrictEqual(imageEvalAuthors.authors, [{
+            name: 'Md Arid Hasan', affiliations: ['University of Toronto, Canada']
+        }]);
         const pdfFallback = resolveApiReaderAuthors(
             { authors: ['丁'] },
             { analysisSource: 'pdf', text: 'PDF source bytes', readerAuthors: null }
@@ -1128,6 +1239,24 @@ primary_task_tag: #音视频生成
         assert.deepStrictEqual(completedAuthors.authors, [
             { name: '戊', affiliations: ['机构 D'] },
             { name: '己', affiliations: ['机构 D'] }
+        ]);
+        const noAffiliationUnionLeak = resolveApiReaderAuthors(
+            { authors: ['Author One', 'Author Two', 'Author Three'] },
+            {
+                text: 'HTML source bytes',
+                readerAuthors: {
+                    authors: [
+                        { name: 'Author One', affiliations: ['Institute A'] },
+                        { name: 'Author Two', affiliations: ['Institute B'] }
+                    ],
+                    sourceDomSha256: 'b'.repeat(64)
+                }
+            }
+        );
+        assert.deepStrictEqual(noAffiliationUnionLeak.authors, [
+            { name: 'Author One', affiliations: ['Institute A'] },
+            { name: 'Author Two', affiliations: ['Institute B'] },
+            { name: 'Author Three', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] }
         ]);
         const png = Buffer.from(
             'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
