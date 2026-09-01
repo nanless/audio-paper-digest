@@ -869,6 +869,61 @@ describe('analyzeBatch', () => {
         assert.strictEqual(results[0].error, null);
     });
 
+    it('滚动并发会持续补位，同时保持结果与逻辑批次的输入顺序', async () => {
+        const papers = Array.from({ length: 4 }, (_, index) => ({
+            arxivId: `2604.${String(index + 101).padStart(5, '0')}`,
+            title: `Rolling ${index + 1}`
+        }));
+        const started = [];
+        const doneIndexes = [];
+        const resolvers = new Map();
+        const completedBatches = [];
+        const waitFor = async predicate => {
+            for (let attempt = 0; attempt < 100; attempt++) {
+                if (predicate()) return;
+                await new Promise(resolve => setImmediate(resolve));
+            }
+            assert.fail('等待滚动并发状态超时');
+        };
+
+        const running = analyzeBatch(papers, {
+            concurrency: 2,
+            maxRetries: 0,
+            analyzeFn: paper => new Promise(resolve => {
+                started.push(paper.arxivId);
+                resolvers.set(paper.arxivId, () => resolve(validAnalyzedResult()));
+            }),
+            onPaperDone: index => { doneIndexes.push(index); },
+            onBatchDone: (batchNum, batchResults) => {
+                completedBatches.push({
+                    batchNum,
+                    ids: batchResults.map(item => item.result?.arxivId || item.paper?.arxivId)
+                });
+            }
+        });
+
+        await waitFor(() => started.length === 2);
+        resolvers.get(papers[1].arxivId)();
+        await waitFor(() => started.length === 3);
+        assert.deepStrictEqual(started, papers.slice(0, 3).map(paper => paper.arxivId));
+
+        resolvers.get(papers[2].arxivId)();
+        await waitFor(() => started.length === 4);
+        resolvers.get(papers[3].arxivId)();
+        await waitFor(() => doneIndexes.length === 3);
+        assert.deepStrictEqual(completedBatches, [], '后一逻辑批次不能越过未完成的第一批回调');
+
+        resolvers.get(papers[0].arxivId)();
+        const { results, stats } = await running;
+        assert.deepStrictEqual(doneIndexes, [1, 2, 3, 0]);
+        assert.deepStrictEqual(results.map(item => item.arxivId), papers.map(item => item.arxivId));
+        assert.deepStrictEqual(completedBatches, [
+            { batchNum: 1, ids: papers.slice(0, 2).map(item => item.arxivId) },
+            { batchNum: 2, ids: papers.slice(2, 4).map(item => item.arxivId) }
+        ]);
+        assert.strictEqual(stats.success, 4);
+    });
+
     it('阶段 checkpoint 在单篇运行锁内立即原子写入 canonical 结果', async () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-stage-checkpoint-'));
         const file = path.join(dir, 'deep-analysis-result.json');

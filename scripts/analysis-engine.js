@@ -491,7 +491,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
  * @param {number} options.saveInterval - 每 N 篇保存一次（0=不自动保存），默认 0
  * @param {Function} options.onPaperStart - 单篇开始回调 (index, total, paper) => void
  * @param {Function} options.onPaperDone - 单篇完成回调 (index, total, paper, result, durationMs) => void
- * @param {Function} options.onBatchDone - 每批完成回调 (batchIndex, batchResults) => void
+ * @param {Function} options.onBatchDone - 每个逻辑批次完成回调 (batchIndex, batchResults) => void
  * @param {Function} options.onSave - 保存回调 (results, stats) => Promise<void> | void
  * @param {Function} options.shouldSkip - 是否跳过某篇 (paper) => boolean
  * @param {Function} options.analyzeFn - 可选自定义单篇分析函数，默认使用 deep-analyzer.js
@@ -523,7 +523,7 @@ async function analyzeBatch(papers, options = {}) {
         throw new TypeError('[analyzeBatch] papers 必须是数组');
     }
 
-    const results = [];
+    const outcomes = new Array(papers.length);
     const stats = {
         total: papers.length,
         success: 0,
@@ -545,111 +545,163 @@ async function analyzeBatch(papers, options = {}) {
         return value;
     };
 
-    for (let i = 0; i < papers.length; i += concurrency) {
-        const batch = papers.slice(i, i + concurrency);
-        const batchNum = Math.floor(i / concurrency) + 1;
-        const totalBatches = Math.ceil(papers.length / concurrency);
-
-        const batchPromises = batch.map(async (paper, j) => {
-            const idx = i + j;
-
-            try {
-                if (shouldSkip) {
-                    const skip = shouldSkipCached(paper);
-                    if (skip) {
-                        stats.skipped++;
-                        if (onPaperDone) await onPaperDone(idx, papers.length, paper, { skipped: true }, 0);
-                        return { skipped: true, paper };
-                    }
-                }
-            } catch (e) {
-                console.error(`[analyzeBatch] shouldSkip 回调异常: ${e.message}`);
-            }
-
-            if (onPaperStart) {
-                try { onPaperStart(idx, papers.length, paper); } catch (e) { /* ignore callback error */ }
-            }
-
-            const startTime = Date.now();
-            const r = await withPaperAnalysisLock(paper, async () => {
-                const prepared = preparePaperLocked
-                    ? await preparePaperLocked(paper)
-                    : { paper, skip: false };
-                if (prepared?.skip) {
-                    return { skipped: true, paper: prepared.paper || paper, reason: prepared.reason || '已由其他进程完成' };
-                }
-                const paperForAnalysis = prepared?.paper || paper;
-                const result = await analyzePaperWithRetry(paperForAnalysis, {
-                    maxRetries,
-                    retryDelayMs,
-                    analyzeFn,
-                    onCheckpoint: checkpoint => {
-                        if (onPaperCheckpointLocked) {
-                            const returned = onPaperCheckpointLocked(checkpoint);
-                            if (returned && typeof returned.then === 'function') {
-                                throw new Error('onPaperCheckpointLocked 必须同步完成，以保证崩溃前 checkpoint 已落盘');
-                            }
-                        } else if (checkpointFilePath) {
-                            persistAnalysisCheckpoint(checkpointFilePath, checkpoint);
-                        }
-                    },
-                    onAttempt: (att, max) => {
-                        if (onAttempt) {
-                            try { onAttempt(att, max, paper); } catch (e) { /* ignore */ }
-                        }
-                    }
-                });
-                if (onPaperResultLocked) {
-                    await onPaperResultLocked(paperForAnalysis, result);
-                }
-                return result;
-            });
-            const duration = Date.now() - startTime;
-            if (r.skipped) {
-                stats.skipped++;
-                if (onPaperDone) await onPaperDone(idx, papers.length, paper, r, duration);
-                return r;
-            }
-            stats.durationTotal += duration;
-
-            if (r.success) {
-                stats.success++;
-                const source = r.result?.analysisSource || 'unknown';
-                stats.sourceCounts[source] = (stats.sourceCounts[source] || 0) + 1;
-            } else {
-                stats.failed++;
-            }
-
-            if (onPaperDone) await onPaperDone(idx, papers.length, paper, r, duration);
-
-            return r;
-        });
-
-        let batchResults;
+    const runOne = async (paper, idx) => {
         try {
-            batchResults = await Promise.all(batchPromises);
-        } catch (error) {
-            throw new Error(`[analyzeBatch] 批次 ${batchNum}/${totalBatches} 关键回调或执行失败: ${error.message}`, { cause: error });
+            if (shouldSkip) {
+                const skip = shouldSkipCached(paper);
+                if (skip) {
+                    stats.skipped++;
+                    if (onPaperDone) await onPaperDone(idx, papers.length, paper, { skipped: true }, 0);
+                    return { skipped: true, paper };
+                }
+            }
+        } catch (e) {
+            console.error(`[analyzeBatch] shouldSkip 回调异常: ${e.message}`);
         }
 
-        for (const r of batchResults) {
-            if (!r || !r.skipped) {
-                results.push(r?.result || r);
+        if (onPaperStart) {
+            try { onPaperStart(idx, papers.length, paper); } catch (e) { /* ignore callback error */ }
+        }
+
+        const startTime = Date.now();
+        const r = await withPaperAnalysisLock(paper, async () => {
+            const prepared = preparePaperLocked
+                ? await preparePaperLocked(paper)
+                : { paper, skip: false };
+            if (prepared?.skip) {
+                return { skipped: true, paper: prepared.paper || paper, reason: prepared.reason || '已由其他进程完成' };
+            }
+            const paperForAnalysis = prepared?.paper || paper;
+            const result = await analyzePaperWithRetry(paperForAnalysis, {
+                maxRetries,
+                retryDelayMs,
+                analyzeFn,
+                onCheckpoint: checkpoint => {
+                    if (onPaperCheckpointLocked) {
+                        const returned = onPaperCheckpointLocked(checkpoint);
+                        if (returned && typeof returned.then === 'function') {
+                            throw new Error('onPaperCheckpointLocked 必须同步完成，以保证崩溃前 checkpoint 已落盘');
+                        }
+                    } else if (checkpointFilePath) {
+                        persistAnalysisCheckpoint(checkpointFilePath, checkpoint);
+                    }
+                },
+                onAttempt: (att, max) => {
+                    if (onAttempt) {
+                        try { onAttempt(att, max, paper); } catch (e) { /* ignore */ }
+                    }
+                }
+            });
+            if (onPaperResultLocked) {
+                await onPaperResultLocked(paperForAnalysis, result);
+            }
+            return result;
+        });
+        const duration = Date.now() - startTime;
+        if (r.skipped) {
+            stats.skipped++;
+            if (onPaperDone) await onPaperDone(idx, papers.length, paper, r, duration);
+            return r;
+        }
+        stats.durationTotal += duration;
+
+        if (r.success) {
+            stats.success++;
+            const source = r.result?.analysisSource || 'unknown';
+            stats.sourceCounts[source] = (stats.sourceCounts[source] || 0) + 1;
+        } else {
+            stats.failed++;
+        }
+
+        if (onPaperDone) await onPaperDone(idx, papers.length, paper, r, duration);
+
+        return r;
+    };
+
+    // 持续饱和的滚动 worker pool：任一论文结束后立刻补入下一篇。
+    // 逻辑批次仍按原始输入切片定义，只用于保持 onBatchDone、增量保存
+    // 和日志的兼容语义，绝不再阻塞后续论文启动。
+    const totalBatches = Math.ceil(papers.length / concurrency);
+    const batchStates = Array.from({ length: totalBatches }, (_, batchIndex) => {
+        const start = batchIndex * concurrency;
+        const size = Math.min(concurrency, papers.length - start);
+        return { start, size, settled: 0, results: new Array(size) };
+    });
+    let nextIndex = 0;
+    let nextBatchToFinalize = 0;
+    let fatalError = null;
+    let finalizer = Promise.resolve();
+
+    const snapshotResults = () => outcomes
+        .filter(r => r && !r.skipped)
+        .map(r => r.result || r);
+
+    const wrapFatal = (error, batchIndex) => new Error(
+        `[analyzeBatch] 批次 ${batchIndex + 1}/${totalBatches} 关键回调或执行失败: ${error.message}`,
+        { cause: error }
+    );
+
+    const recordOutcome = (idx, result) => {
+        const batchIndex = Math.floor(idx / concurrency);
+        const state = batchStates[batchIndex];
+        outcomes[idx] = result;
+        state.results[idx - state.start] = result;
+        state.settled++;
+
+        const task = finalizer.then(async () => {
+            if (fatalError) return;
+            while (nextBatchToFinalize < batchStates.length) {
+                const ready = batchStates[nextBatchToFinalize];
+                if (ready.settled !== ready.size) break;
+                const batchNum = nextBatchToFinalize + 1;
+                if (onBatchDone) {
+                    await onBatchDone(batchNum, ready.results.slice());
+                }
+                const batchPapers = papers.slice(ready.start, ready.start + ready.size);
+                processedCount += batchPapers.filter(p => {
+                    if (!shouldSkip) return true;
+                    try { return !shouldSkipCached(p); } catch (e) { return true; }
+                }).length;
+                if (saveInterval > 0 && onSave && processedCount > 0
+                    && processedCount % saveInterval === 0) {
+                    await onSave(snapshotResults(), {
+                        ...stats,
+                        savedAt: getBeijingISOString()
+                    });
+                }
+                nextBatchToFinalize++;
+            }
+        });
+        finalizer = task.catch(error => {
+            fatalError = fatalError || wrapFatal(error, nextBatchToFinalize);
+        });
+        return task;
+    };
+
+    const worker = async () => {
+        while (!fatalError) {
+            const idx = nextIndex++;
+            if (idx >= papers.length) return;
+            try {
+                const result = await runOne(papers[idx], idx);
+                await recordOutcome(idx, result);
+            } catch (error) {
+                fatalError = fatalError || wrapFatal(error, Math.floor(idx / concurrency));
+                return;
             }
         }
+    };
 
-        if (onBatchDone) await onBatchDone(batchNum, batchResults);
+    const workers = Array.from(
+        { length: Math.min(concurrency, papers.length) },
+        () => worker()
+    );
+    await Promise.allSettled(workers);
+    await finalizer;
 
-        processedCount += batch.filter(p => {
-            if (!shouldSkip) return true;
-            try { return !shouldSkipCached(p); } catch (e) { return true; }
-        }).length;
+    if (fatalError) throw fatalError;
 
-        // 增量保存
-        if (saveInterval > 0 && onSave && processedCount > 0 && processedCount % saveInterval === 0) {
-            await onSave(results, { ...stats, savedAt: getBeijingISOString() });
-        }
-    }
+    const results = snapshotResults();
 
     // 最终保存
     if (onSave) {
