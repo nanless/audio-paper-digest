@@ -415,6 +415,7 @@ class PublishCommonSanitizerTest(unittest.TestCase):
     def test_manual_v4_reader_lexical_boundaries_and_node_parity(self):
         safe = '''## 核心摘要
 系统把标签统一成同一条件；唯一分层用于二分类。目标具有有界项与有限状态，功能能否启用取决于输入，性能能够稳定复现。
+这一类任务采用声学核心与社会学残差的二分解释，形成有趣二分。
 模型真实运行 2 次，并分别记录每次运行的计算成本。
 '''
         self.assertIsNone(validate_manual_editorial_quality_v4(safe))

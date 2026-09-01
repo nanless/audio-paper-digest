@@ -2752,9 +2752,10 @@ def validate_manual_editorial_quality_v4(analysis):
             flags=re.M,
         )
         quantity_body = re.sub(
-            r'(?:进一步|这一步|下一步|上一步|每一步|一次性)|'
+            r'(?:进一步|这一步|下一步|上一步|每一步|一次性|这一类|有趣二分)|'
             r'(?:同一|统一|唯一|单一)(?=[\u4e00-\u9fff])|'
-            r'一个(?=(?:好看|漂亮|笼统|粗糙|清晰|完整|简单|直接|孤立|统一))',
+            r'一个(?=(?:好看|漂亮|笼统|粗糙|清晰|完整|简单|直接|孤立|统一))|'
+            r'二分(?=(?:解释|结构|视角|框架|法))',
             lambda match: ' ' * len(match.group(0)),
             quantity_body,
         )

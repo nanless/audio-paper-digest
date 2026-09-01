@@ -838,7 +838,14 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
     let normalized = protectedText
         .replace(/([\u3400-\u9fff])([A-Za-z][A-Za-z0-9+.-]*)/g, '$1 $2')
         .replace(/([\u3400-\u9fff])([α-ωΑ-Ω])/g, '$1 $2')
-        .replace(/([A-Za-z0-9.%+)\]α-ωΑ-Ω])([\u3400-\u9fff])/g, '$1 $2');
+        .replace(/([A-Za-z0-9.%+)\]α-ωΑ-Ω])([\u3400-\u9fff])/g, '$1 $2')
+        // Paper prompts often spell placeholders as <S> or <True/False>.
+        // Hugo treats those bytes as raw HTML unless the reader article binds
+        // them as inline code before publication.
+        .replace(
+            /(?<!`)<([A-Za-z][A-Za-z0-9_./| -]{0,39})>(?!`)/g,
+            '`<$1>`'
+        );
     const numeralMap = {
         零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5,
         六: 6, 七: 7, 八: 8, 九: 9

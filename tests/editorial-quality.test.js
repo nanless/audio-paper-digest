@@ -67,6 +67,7 @@ describe('Manual v4 editorial quality primitives', () => {
         assert.deepEqual(findQuantitativeChineseNumerals('进一步审视外推边界；这一步承接上一步，下一步核对每一步；第一阶段与第十二轮只是序数。'), []);
         assert.deepEqual(findQuantitativeChineseNumerals('系统把不同标签统一成同一条件，但不会把它解释为比例。'), []);
         assert.deepEqual(findQuantitativeChineseNumerals('唯一分层用于二分类；单一模型具有有界损失与有限状态。'), []);
+        assert.deepEqual(findQuantitativeChineseNumerals('这一类任务采用声学核心与社会学残差的二分解释，形成有趣二分。'), []);
         assert.deepEqual(findQuantitativeChineseNumerals('耗时为数十毫秒。'), []);
         assert.ok(findQuantitativeChineseNumerals('命中率达到五成，类别比例为三比二，系统采用七十亿主干。')
             .some(item => item.reason === 'exact_fraction'));

@@ -955,6 +955,10 @@ primary_task_tag: #音视频生成
             '该权重衡量跨窗口一致性。'
         );
         assert.strictEqual(
+            normalizeReaderEditorialSurface('受限提示 The final answer is: <True/False>，另见 `<S>`。'),
+            '受限提示 The final answer is: `<True/False>`，另见 `<S>`。'
+        );
+        assert.strictEqual(
             normalizeReaderEditorialSurface(
                 '演示：https://aspire.ugent.be/demos/IWAENC2026HZ/，模型有300M参数。'
             ),
