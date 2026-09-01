@@ -782,6 +782,32 @@ function isAllowedReaderDefensiveNegationIssue(issue, article) {
     return count <= readerLimit;
 }
 
+function canonicalReaderBridgeTerm(term) {
+    const numeralMap = {
+        一: '1', 二: '2', 两: '2', 三: '3', 四: '4', 五: '5',
+        六: '6', 七: '7', 八: '8', 九: '9', 十: '10'
+    };
+    return String(term || '').normalize('NFKC')
+        .replace(/[一二两三四五六七八九十](?=阶|路|次|维|步|层|个|段|类|组|轮|种)/g,
+            value => numeralMap[value])
+        .replace(/\s+/g, '')
+        .toLowerCase();
+}
+
+function findReaderBridgeParagraph(articleBlocks, terms) {
+    if (!Array.isArray(terms) || terms.length !== 2) return null;
+    const expected = terms.map(canonicalReaderBridgeTerm);
+    const matches = articleBlocks.filter(block => {
+        const heading = /^\*\*(.+?)：\*\*/.exec(block)?.[1];
+        if (!heading) return false;
+        const actualTerms = heading.split(/\s*×\s*/);
+        return actualTerms.length === 2
+            && actualTerms.map(canonicalReaderBridgeTerm)
+                .every((value, index) => value === expected[index]);
+    });
+    return matches.length === 1 ? matches[0] : null;
+}
+
 function isReaderHeadingIssue(issue, article) {
     if (issue?.code !== 'quantitative_chinese_numeral' || !Number.isInteger(issue.line)) {
         return false;
@@ -1835,14 +1861,15 @@ function parseApiReaderArticleResult(raw, options = {}) {
         article, figurePlacements
     );
     const reboundConceptBridges = conceptBridges.map(bridge => {
-        const prefix = `**${bridge.terms[0]} × ${bridge.terms[1]}：**`;
-        const matches = article.split(/\n\s*\n/)
-            .map(block => block.trim())
-            .filter(block => block.startsWith(prefix));
-        if (matches.length !== 1) {
-            throw new Error(`读者文章术语桥无法从最终正文重绑定: ${prefix}`);
+        const paragraph = findReaderBridgeParagraph(
+            article.split(/\n\s*\n/).map(block => block.trim()), bridge.terms
+        );
+        if (!paragraph) {
+            throw new Error(
+                `读者文章术语桥无法从最终正文重绑定: ${bridge.terms.join(' × ')}`
+            );
         }
-        return { ...bridge, explanation: matches[0] };
+        return { ...bridge, explanation: paragraph };
     });
     return {
         plan: {
@@ -1913,13 +1940,12 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
             const terms = bridge.terms.map(term => (
                 normalizeReaderEditorialSurface(String(term || '').trim())
             ));
-            const prefix = `**${terms[0]} × ${terms[1]}：**`;
-            const matches = articleBlocks.filter(block => block.startsWith(prefix));
-            if (matches.length !== 1) return false;
+            const paragraph = findReaderBridgeParagraph(articleBlocks, terms);
+            if (!paragraph) return false;
             repairedConceptBridges.push({
                 ...bridge,
                 terms,
-                explanation: matches[0]
+                explanation: paragraph
             });
         }
     }

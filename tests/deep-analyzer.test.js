@@ -1050,7 +1050,9 @@ primary_task_tag: #音视频生成
         const bridgeArticle = [
             '### 声音如何重新约束词表选择？',
             '',
-            '**注意力池化 × LM head 复用：** 注意力池化负责汇总声学上下文，LM head 复用负责把上下文映射回词表；二者搭配后只需 1 次投影。'
+            '**注意力池化 × LM head 复用：** 注意力池化负责汇总声学上下文，LM head 复用负责把上下文映射回词表；二者搭配后只需 1 次投影。',
+            '',
+            '**2 阶 IIR 滤波器 × 5 路声学共识：** 2 阶 IIR 滤波器负责实现模态响应，5 路声学共识负责聚合互补判断；二者放在同一术语桥中说明计算与决策的分工。'
         ].join('\n');
         const bridgePaper = {
             apiReaderArticle: bridgeArticle,
@@ -1059,12 +1061,20 @@ primary_task_tag: #音视频生成
                 contract: 'beginner-researcher-v3',
                 readerTitle: '声音如何重约束词表',
                 oneSentenceThesis: '解释声学上下文和词表投影。',
-                conceptBridges: [{
-                    terms: ['注意力池化', 'LM head 复用'],
-                    sectionKind: 'component',
-                    marker: '[[CONCEPT_BRIDGE_1]]',
-                    explanation: '**注意力池化 × LM head 复用：** 注意力池化负责汇总声学上下文，LM head 复用负责把上下文映射回词表；二者搭配后只需一次投影。'
-                }],
+                conceptBridges: [
+                    {
+                        terms: ['注意力池化', 'LM head 复用'],
+                        sectionKind: 'component',
+                        marker: '[[CONCEPT_BRIDGE_1]]',
+                        explanation: '**注意力池化 × LM head 复用：** 注意力池化负责汇总声学上下文，LM head 复用负责把上下文映射回词表；二者搭配后只需一次投影。'
+                    },
+                    {
+                        terms: ['二阶 IIR 滤波器', '五路声学共识'],
+                        sectionKind: 'component',
+                        marker: '[[CONCEPT_BRIDGE_2]]',
+                        explanation: '**二阶 IIR 滤波器 × 五路声学共识：** 旧表面字节。'
+                    }
+                ],
                 sections: [{
                     kind: 'component', heading: '声音如何重新约束词表选择？'
                 }]
@@ -1080,6 +1090,10 @@ primary_task_tag: #音视频生成
         assert.strictEqual(
             bridgePaper.apiReaderPlan.conceptBridges[0].explanation,
             bridgeArticle.split('\n\n')[1]
+        );
+        assert.strictEqual(
+            bridgePaper.apiReaderPlan.conceptBridges[1].explanation,
+            bridgeArticle.split('\n\n')[2]
         );
         const specs = [
             ['background', '声音片段为什么会让传统判别器失去方向？', '背景任务输入输出失败案例直觉动机读者边界'],
