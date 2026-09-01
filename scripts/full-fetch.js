@@ -12,7 +12,7 @@ const crypto = require('crypto');
 const { fetchCategoryPapers, filterPapersWithLLM, buildFilterInputSha256 } = require('./fetch-papers.js');
 const { KEYWORD_PREFILTER_VERSION } = require('./lib/keyword-prefilter.js');
 const { fetchHuggingFacePapers, mergeAndDeduplicate } = require('./fetch-huggingface-papers.js');
-const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, normalizeToBeijingISOString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson, loadPublishedIdsFromBlog, loadPrompt, detectApiType, requiresLlmProxy } = require('./utils.js');
+const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, normalizeToBeijingISOString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson, loadPublishedIdsFromBlog, loadPrompt, detectApiType } = require('./utils.js');
 const {
     analyzeBatch,
     mergeAndSaveResults,
@@ -37,11 +37,12 @@ const {
 const Config = require('./config.js');
 
 function getEffectiveAnalysisConcurrency(configuredConcurrency, endpoint, model) {
-    return requiresLlmProxy(endpoint, model) ? 1 : configuredConcurrency;
+    return configuredConcurrency;
 }
 
-// Muse 的长 Responses 请求通过同一本地 HTTP CONNECT 代理时必须串行，
-// 否则并发 TLS 隧道会相互打断。其他模型继续遵守配置并发度。
+// 每个 Muse 请求都会创建独立、禁用连接复用的 HTTP CONNECT agent；
+// 分析结果则由逐论文锁和共享结果文件锁保护，因此代理模型同样遵守
+// 项目配置的分析并发度。
 const ANALYSIS_CONCURRENCY = getEffectiveAnalysisConcurrency(
     Config.ANALYSIS_CONFIG.concurrency,
     process.env.PAPER_ANALYZER_ENDPOINT,
