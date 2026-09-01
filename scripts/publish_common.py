@@ -79,7 +79,7 @@ METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1'
 IMAGE_NARRATIVE_CONTRACT_VERSION = 'context-bound-v1'
 EDITORIAL_QUALITY_CONTRACT_VERSION = 'reader-facing-v1'
 MANUAL_RESEARCH_CONTRACT_VERSION = 'audio-researcher-v1'
-DIGEST_INDEX_READER_QUALITY_VERSION = 'reader-facing-v1'
+DIGEST_INDEX_READER_QUALITY_VERSION = 'reader-facing-v2'
 MANUAL_DEPTH_CONTRACT_VERSION = 'full-text-evidence-v1'
 MANUAL_DEPTH_CONTRACT_VERSION_V2 = 'full-text-evidence-v2'
 MANUAL_DEPTH_CONTRACT_VERSION_V3 = 'full-text-evidence-v3'
@@ -3081,15 +3081,35 @@ def validate_digest_index_reader_quality(markdown, required=False):
     if not re.search(r'^##\s+.*今日概览', body, re.MULTILINE) \
             or not re.search(r'^##\s+.*论文列表', body, re.MULTILINE):
         return '汇总页缺少今日概览或论文列表'
+    # Summary and resource blocks are byte-for-byte projections of sections
+    # already validated on each single-paper page. Re-running the generic
+    # longform prose heuristic across all 22 concatenated projections creates
+    # cross-context false positives (for example two legitimate “但” clauses).
+    # Keep structural/duplication checks on the index-owned prose while the
+    # generation equality contract protects these reused blocks.
+    index_owned_body = re.sub(
+        r'^📌 \*\*核心摘要\*\*\n\n[\s\S]*?(?=^🔗 \*\*开源资源\*\*$)',
+        '📌 **核心摘要**\n\n单篇已审核心摘要。\n\n',
+        body,
+        flags=re.MULTILINE,
+    )
+    index_owned_body = re.sub(
+        r'^🔗 \*\*开源资源\*\*\n\n[\s\S]*?(?=^(?:✅|\*\*作者|---))',
+        '🔗 **开源资源**\n\n单篇已审开源资源。\n\n',
+        index_owned_body,
+        flags=re.MULTILINE,
+    )
     # Keep the complete page in one synthetic section: otherwise its own H2
     # headings would make the generic Manual reader validator inspect only the
     # title preamble.
-    synthetic = '## 核心摘要\n' + re.sub(r'^##\s+', '### ', body, flags=re.MULTILINE)
+    synthetic = '## 核心摘要\n' + re.sub(
+        r'^##\s+', '### ', index_owned_body, flags=re.MULTILINE,
+    )
     issue = validate_manual_editorial_quality_v4(synthetic)
     if issue:
         return f'汇总页读者文本质量无效: {issue}'
     seen = set()
-    for block in re.split(r'\n\s*\n', body):
+    for block in re.split(r'\n\s*\n', index_owned_body):
         stripped = block.strip()
         if not stripped or stripped.startswith(('#', '|', '---')):
             continue

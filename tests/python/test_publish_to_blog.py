@@ -956,7 +956,7 @@ title: "Duplicate"
             )
         compact = publish_to_blog.compact_title_for_ranking(title)
         self.assertIn('✅ 筛选入选 1 篇 → 🔬 深度分析完成', markdown)
-        self.assertIn('paper_digest_reader_quality: "reader-facing-v1"', markdown)
+        self.assertIn('paper_digest_reader_quality: "reader-facing-v2"', markdown)
         self.assertNotIn('📥 抓取 1 篇', markdown)
         self.assertLessEqual(len(compact), 55)
         self.assertTrue(compact.endswith('…'))
@@ -2307,7 +2307,7 @@ categories: [test]
 description: "test"
 paper_digest_pipeline_owned: true
 paper_digest_page_type: index
-paper_digest_reader_quality: "reader-facing-v1"
+paper_digest_reader_quality: "reader-facing-v2"
 ---
 # 论文速递
 

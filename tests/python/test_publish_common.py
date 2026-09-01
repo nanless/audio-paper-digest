@@ -538,7 +538,7 @@ class PublishCommonSanitizerTest(unittest.TestCase):
     def test_digest_index_reader_quality_is_marked_and_historical_compatible(self):
         valid = '''---
 paper_digest_page_type: index
-paper_digest_reader_quality: "reader-facing-v1"
+paper_digest_reader_quality: "reader-facing-v2"
 ---
 # 论文速递
 
@@ -562,7 +562,7 @@ paper_digest_reader_quality: "reader-facing-v1"
         bad = valid.replace('共分析 3 篇', '共分析三篇')
         self.assertIn('精确定量', validate_digest_index_reader_quality(bad))
         historical = bad.replace(
-            'paper_digest_reader_quality: "reader-facing-v1"\n', '',
+            'paper_digest_reader_quality: "reader-facing-v2"\n', '',
         )
         self.assertIsNone(validate_digest_index_reader_quality(historical))
         self.assertIn('协议标记', validate_digest_index_reader_quality(historical, required=True))
