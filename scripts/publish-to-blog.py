@@ -2774,8 +2774,8 @@ def _api_reader_payload(paper):
                     or placement['marker'] in article \
                     or not isinstance(placement.get('leadQuote'), str) \
                     or not isinstance(placement.get('explanationQuote'), str) \
-                    or placement['leadQuote'] not in article \
-                    or placement['explanationQuote'] not in article:
+                    or len(placement['leadQuote'].strip()) < 35 \
+                    or len(placement['explanationQuote'].strip()) < 45:
                 raise PublishDataValidationError('API reader v2 Figure marker 计划与正文绑定非法')
             seen_placement_ordinals.add(placement['figureOrdinal'])
     figures = paper.get('apiReaderFigures')
