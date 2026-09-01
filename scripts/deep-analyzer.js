@@ -1296,7 +1296,7 @@ function parseApiReaderArticleResult(raw) {
     if (chineseChars < 1800 || chineseChars > 10000) {
         throw new Error(`读者文章中文字数必须为 1800-10000，当前 ${chineseChars}`);
     }
-    if (/(?:prompt|evidence\s*id|manual_complete|证据块|代码校验反馈)/i.test(article)) {
+    if (/(?:evidence\s*id|manual_complete|证据块|代码校验反馈|(?:本|上述|当前|这个)\s*prompt|(?:根据|遵循)\s*(?:本|上述|当前)?\s*prompt|prompt\s*(?:要求|指令|中要求))/i.test(article)) {
         throw new Error('读者文章泄漏了流程或证据元话语');
     }
     let quality = validateEditorialQuality({

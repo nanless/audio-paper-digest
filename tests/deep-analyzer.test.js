@@ -965,6 +965,16 @@ primary_task_tag: #音视频生成
         assert.match(result.article, /^### 论文到底想回答哪三个问题？$/m);
         assert.ok(result.article.length > 1800);
 
+        payload.sections[0].body += '\n\n论文比较 spoken prompt 的声学条件，这是研究对象而非内部流程。';
+        assert.doesNotThrow(() => parseApiReaderArticleResult(JSON.stringify(payload)));
+        payload.sections[0].body += '\n\n根据本 prompt 的要求，下面继续输出。';
+        assert.throws(
+            () => parseApiReaderArticleResult(JSON.stringify(payload)),
+            /泄漏了流程或证据元话语/
+        );
+        payload.sections[0].body = payload.sections[0].body
+            .replace('\n\n根据本 prompt 的要求，下面继续输出。', '');
+
         payload.sections[3].heading = '方法概述';
         const repairedGenericHeading = parseApiReaderArticleResult(JSON.stringify(payload));
         assert.match(
