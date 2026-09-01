@@ -4297,7 +4297,7 @@ def fix_latex_delimiters(text):
     r"""将 $...$ 转换为 \(...\)，$$...$$ 转换为 \[...\]。"""
     if not text:
         return text
-    text = re.sub(r'(\^|_)\{<([a-zA-Z])\}', r'\1{(\2)}', text)
+    text = re.sub(r'(\^|_)\{<([a-zA-Z])\}', r'\1{\\lt \2}', text)
     text = re.sub(r'(?<!\\)\$\$(.+?)\$\$', r'\\[\1\\]', text, flags=re.DOTALL)
     text = re.sub(r'(?<!\\)\$([^\s\$][^$]*?)\$', r'\\(\1\\)', text)
     text = re.sub(r'`([^`]*?)\$([^`]*?)\$([^`]*?)`', r'`\1\\(\2\\)\3`', text)
@@ -4483,11 +4483,20 @@ def fix_yaml_unbalanced_quotes(text):
 
 def strip_internal_scoring_anchors(text):
     """Strip reader-facing scoring provenance tags from a derived text view."""
-    return re.sub(
-        r'\[(?:A|SCORING_SOURCE)_[A-Z0-9_/-]+\][ \t]*',
-        '',
-        str(text or ''),
+    value = str(text or '')
+    anchor = r'\[(?:A|SCORING_SOURCE)_[A-Z0-9_/-]+\]'
+    value = re.sub(
+        rf'(?P<prefix>与|和)[ \t]*{anchor}[ \t]*(?=(?:承认|报告|披露|给出|指出))',
+        lambda match: f'{match.group("prefix")}论文',
+        value,
     )
+    value = re.sub(
+        rf'(?P<prefix>但|不过|然而)[ \t]*{anchor}[ \t]*(?=(?:限于|仅|缺少|未))',
+        lambda match: f'{match.group("prefix")}该结论',
+        value,
+    )
+    value = re.sub(rf'{anchor}[ \t]*', '', value)
+    return re.sub(r'(?<=[㐀-鿿])[ \t]+(?=[㐀-鿿])', '', value)
 
 
 def sanitize_markdown_for_publish(text):

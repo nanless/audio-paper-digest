@@ -26,6 +26,7 @@ from publish_common import (  # noqa: E402
     EXPERIMENT_TABLE_CONTRACT_VERSION,
     EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION,
     escape_html_like_tags,
+    fix_latex_delimiters,
     METHOD_DETAIL_CONTRACT_VERSION,
     extract_markdown_tables,
     fix_empty_markdown_links,
@@ -39,6 +40,7 @@ from publish_common import (  # noqa: E402
     count_blocking_review_issues,
     resolve_publish_parsed,
     sanitize_markdown_for_publish,
+    strip_internal_scoring_anchors,
     select_blog_published_snapshot,
     strip_raw_inline_html,
     validate_publish_api_endpoint_url,
@@ -274,6 +276,21 @@ def manual_result_claim_fixture(
 
 
 class PublishCommonSanitizerTest(unittest.TestCase):
+    def test_latex_history_subscript_preserves_less_than_semantics(self):
+        self.assertEqual(
+            fix_latex_delimiters(r'\(p(y_i\mid\mathbf{y}_{<i})\)'),
+            r'\(p(y_i\mid\mathbf{y}_{\lt i})\)',
+        )
+
+    def test_scoring_anchor_removal_repairs_reader_facing_connectors(self):
+        self.assertEqual(
+            strip_internal_scoring_anchors(
+                '逻辑自洽且与 [A_LIMITS] 承认的边界一致，'
+                '但 [SCORING_SOURCE_3] 限于 2 个方言。'
+            ),
+            '逻辑自洽且与论文承认的边界一致，但该结论限于 2 个方言。',
+        )
+
     def test_manual_paper_identity_mode_only_allows_true_historical_fallback(self):
         self.assertEqual(
             _manual_paper_identity_mode(
