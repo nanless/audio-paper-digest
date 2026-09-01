@@ -900,8 +900,10 @@ primary_task_tag: #音视频生成
             normalizeReaderFigureCaption,
             truncateReaderFigureCaption,
             isAllowedReaderNarrativeNumeralIssue,
+            isAllowedReaderDefensiveNegationIssue,
             splitReaderLongParagraphs,
             normalizeReaderEditorialSurface,
+            normalizeApiReaderTableBlockSpacing,
             repairApiReaderPlanSurfaceBinding
         } = require('../scripts/deep-analyzer.js');
         assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
@@ -917,8 +919,27 @@ primary_task_tag: #音视频生成
             code: 'quantitative_chinese_numeral', match: '一段'
         }), true);
         assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
+            code: 'quantitative_chinese_numeral', match: '一张'
+        }), true);
+        assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
             code: 'quantitative_chinese_numeral', match: '两个模型'
         }), false);
+        assert.strictEqual(isAllowedReaderDefensiveNegationIssue({
+            code: 'defensive_negation_saturation', count: 12
+        }, '这是长文正文。'.repeat(900)), true);
+        assert.strictEqual(isAllowedReaderDefensiveNegationIssue({
+            code: 'defensive_negation_saturation', count: 30
+        }, '这是长文正文。'.repeat(900)), false);
+        const tableSpacing = normalizeApiReaderTableBlockSpacing([
+            '比较问题与统一条件、基线和指标方向都在这个段落中说明。',
+            '| 方法 | WER |',
+            '|---|---:|',
+            '| A | 10.0 |',
+            '这段解释最公平的净收益、一个失败项以及当前证据不能支持的结论范围。'
+        ].join('\n'));
+        assert.match(tableSpacing, /说明。\n\n\| 方法/);
+        assert.match(tableSpacing, /\| A \| 10\.0 \|\n\n这段解释/);
+        assert.doesNotThrow(() => validateApiReaderTableNarratives(tableSpacing, 1));
         const split = splitReaderLongParagraphs(
             '这是用于建立任务直觉并解释输入输出关系的完整句子。'.repeat(18)
         );

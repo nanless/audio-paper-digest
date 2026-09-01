@@ -767,8 +767,17 @@ const API_READER_REQUIRED_KINDS = Object.freeze([
 function isAllowedReaderNarrativeNumeralIssue(issue) {
     if (issue?.code !== 'quantitative_chinese_numeral') return false;
     const match = String(issue.match || '').trim();
-    return /^(?:一|两)(?:个|条|段|类|层|种|套|路|方面|部分|组|步|轮|半)$/.test(match)
+    return /^(?:一|两)(?:个|条|段|类|层|种|套|路|方面|部分|组|步|轮|半|张|幅)$/.test(match)
         || /^一(?:个)?(?:模型|系统|框架|方法|问题|概念|目标|接口|视角|例子|直觉)$/.test(match);
+}
+
+function isAllowedReaderDefensiveNegationIssue(issue, article) {
+    if (issue?.code !== 'defensive_negation_saturation') return false;
+    const count = Number(issue.count);
+    if (!Number.isFinite(count)) return false;
+    const chineseChars = (String(article || '').match(/[\u3400-\u9fff]/g) || []).length;
+    const readerLimit = Math.max(12, Math.ceil(chineseChars / 300));
+    return count <= readerLimit;
 }
 
 function isReaderHeadingIssue(issue, article) {
@@ -1453,6 +1462,27 @@ function fitApiReaderFigureDimensions(sourceWidth, sourceHeight) {
     };
 }
 
+function normalizeApiReaderTableBlockSpacing(article) {
+    const lines = String(article || '').split('\n');
+    const output = [];
+    for (let index = 0; index < lines.length;) {
+        const isTableStart = /^\s*\|.*\|\s*$/.test(lines[index] || '')
+            && /^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$/.test(lines[index + 1] || '');
+        if (!isTableStart) {
+            output.push(lines[index]);
+            index += 1;
+            continue;
+        }
+        if (output.length > 0 && output[output.length - 1].trim()) output.push('');
+        while (index < lines.length && /^\s*\|.*\|\s*$/.test(lines[index])) {
+            output.push(lines[index]);
+            index += 1;
+        }
+        if (index < lines.length && lines[index].trim()) output.push('');
+    }
+    return output.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function validateApiReaderTableNarratives(article, minimumTables = 2) {
     const blocks = String(article || '').split(/\n\s*\n/).map(value => value.trim());
     const tableIndexes = blocks.map((block, index) => (
@@ -1463,7 +1493,7 @@ function validateApiReaderTableNarratives(article, minimumTables = 2) {
             `读者文章至少需要 ${minimumTables} 张有叙事闭环的 Markdown 表，当前 ${tableIndexes.length}`
         );
     }
-    for (const index of tableIndexes) {
+    for (const [tableOffset, index] of tableIndexes.entries()) {
         const beforeParts = [];
         for (let cursor = index - 1; cursor >= Math.max(0, index - 3); cursor--) {
             if (!blocks[cursor] || /^(?:###|\|)/.test(blocks[cursor])) break;
@@ -1478,11 +1508,18 @@ function validateApiReaderTableNarratives(article, minimumTables = 2) {
         const after = afterParts.join('\n\n');
         const beforeChinese = (before.match(/[\u3400-\u9fff]/g) || []).length;
         const afterChinese = (after.match(/[\u3400-\u9fff]/g) || []).length;
+        const tableLabel = String(blocks[index] || '').split('\n', 1)[0].slice(0, 120);
         if (beforeChinese < 15) {
-            throw new Error('读者文章表格前缺少比较问题、统一口径、基线或指标方向说明');
+            throw new Error(
+                `读者文章第 ${tableOffset + 1} 张表（${tableLabel}）前缺少独立说明段`
+                + `（当前 ${beforeChinese} 个汉字，至少 15 个）`
+            );
         }
         if (afterChinese < 25) {
-            throw new Error('读者文章表格后缺少净收益、反例或证据边界解释');
+            throw new Error(
+                `读者文章第 ${tableOffset + 1} 张表（${tableLabel}）后缺少独立解释段`
+                + `（当前 ${afterChinese} 个汉字，至少 25 个）`
+            );
         }
     }
 }
@@ -1597,7 +1634,14 @@ function parseApiReaderArticleResult(raw, options = {}) {
             && String(section.body || '').split(/\n\s*\n/).map(block => block.trim()).includes(marker));
         if (marker !== `[[CONCEPT_BRIDGE_${index + 1}]]`
             || explanation.length < 45 || explanation.length > 320 || !candidate) {
-            throw new Error(`读者文章 conceptBridges[${index}] 未在正文解释术语分工与组合含义`);
+            throw new Error(
+                `读者文章 conceptBridges[${index}] 未形成有效术语桥`
+                + `（terms=${bridge.terms.join(' × ')}`
+                + `, sectionKind=${bridge.sectionKind}`
+                + `, marker=${marker || '空'}`
+                + `, explanationChars=${explanation.length}`
+                + `, markerBound=${Boolean(candidate)}）`
+            );
         }
         return {
             terms: bridge.terms.map(term => normalizeReaderEditorialSurface(term.trim())),
@@ -1662,7 +1706,16 @@ function parseApiReaderArticleResult(raw, options = {}) {
             || (value.version === 3 && (focusPoints.length < 2 || focusPoints.length > 4))
             || focusPoints.some(item => typeof item !== 'string'
                 || item.trim().length < 12 || item.trim().length > 120)) {
-            throw new Error(`读者文章 figurePlacements[${index}] 图前导读与图后解释未形成相邻闭环`);
+            throw new Error(
+                `读者文章 figurePlacements[${index}]（Figure ${placement.figureOrdinal}）`
+                + '图前导读与图后解释未形成相邻闭环'
+                + `（targetKind=${placement.targetKind}`
+                + `, markerBound=${Boolean(candidate)}`
+                + `, markerIndex=${markerIndex}`
+                + `, leadChars=${leadQuote.length}`
+                + `, explanationChars=${explanationQuote.length}`
+                + `, focusCount=${Array.isArray(focusPoints) ? focusPoints.length : 'invalid'}）`
+            );
         }
         return {
             figureOrdinal: placement.figureOrdinal,
@@ -1688,7 +1741,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
         }
         article = article.replace(bridge.marker, bridge.explanation);
     }
-    article = normalizeReaderEditorialSurface(article);
+    article = normalizeApiReaderTableBlockSpacing(normalizeReaderEditorialSurface(article));
     const chineseChars = (article.match(/[\u3400-\u9fff]/g) || []).length;
     const minimumChineseChars = value.version === 3 ? 5000 : 2800;
     const maximumChineseChars = value.version === 3 ? 18000 : 14000;
@@ -1716,6 +1769,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
     }
     article = restoreReaderSectionHeadings(article, normalizedSections);
     article = removeDuplicateReaderLongSentences(article);
+    article = normalizeApiReaderTableBlockSpacing(article);
     quality = validateEditorialQuality({
         summary: '', method: article, innovations: '', results: '', details: '', limits: ''
     });
@@ -1732,6 +1786,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
     }
     const blockingQualityIssues = quality.issues.filter(
         issue => !isAllowedReaderNarrativeNumeralIssue(issue)
+            && !isAllowedReaderDefensiveNegationIssue(issue, article)
             && !isReaderHeadingIssue(issue, article)
     );
     if (blockingQualityIssues.length > 0) {
@@ -1739,14 +1794,18 @@ function parseApiReaderArticleResult(raw, options = {}) {
             .map(item => `${item.code}:${item.match || item.message}`).join('；');
         throw new Error(`读者文章文风校验失败: ${details}`);
     }
-    const malformedTable = extractMarkdownTables(article).find(table => (
+    const readerTables = extractMarkdownTables(article);
+    const malformedTableIndex = readerTables.findIndex(table => (
         table.separatorColumns !== table.header.length
         || table.invalidColumnCounts.length > 0
     ));
-    if (malformedTable) {
+    if (malformedTableIndex >= 0) {
+        const malformedTable = readerTables[malformedTableIndex];
         const invalid = malformedTable.invalidColumnCounts[0];
         throw new Error(
-            `读者文章 Markdown 表格列数不一致: header=${malformedTable.header.length}`
+            `读者文章第 ${malformedTableIndex + 1} 张 Markdown 表列数不一致`
+            + `（表头：${malformedTable.header.join(' / ').slice(0, 160)}）`
+            + `: header=${malformedTable.header.length}`
             + (invalid ? `, row=${invalid.row}, columns=${invalid.columns}` : '')
         );
     }
@@ -1870,21 +1929,21 @@ async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence,
 function buildApiReaderValidationFeedback(error) {
     const message = String(error?.message || error || '未知校验错误');
     const fixes = [];
-    if (/表格前缺少/.test(message)) {
+    if (/表格前缺少|张表.*前缺少/.test(message)) {
         fixes.push(
             '每张表之前必须另起一个由空行隔开的普通正文段，且它必须直接成为表格前一个 Markdown 块；'
             + '该段至少写 15 个汉字，明确比较问题、统一条件、基线和指标升降方向。'
             + '不要让小节标题、列表、另一张表或同一行文字紧贴在表格前面'
         );
     }
-    if (/表格后缺少/.test(message)) {
+    if (/表格后缺少|张表.*后缺少/.test(message)) {
         fixes.push(
             '每张表之后必须另起一个由空行隔开的普通正文段，且它必须直接成为表格后一个 Markdown 块；'
             + '该段至少写 25 个汉字，解释净收益、一个失败项或反例，以及该表不能支持的结论。'
             + '不要让小节标题、列表、另一张表或同一行文字紧贴在表格后面'
         );
     }
-    if (/Markdown 表格列数不一致/.test(message)) {
+    if (/Markdown 表(?:格)?列数不一致/.test(message)) {
         fixes.push(
             '逐行数清每张 Markdown 表的单元格，表头、分隔行和每个数据行必须完全同列；'
             + '单元格正文禁止出现未转义的竖线 |，集合、范围或并列关系改用“、”“/”或文字表达，'
@@ -7647,6 +7706,7 @@ module.exports = {
     auditTypeAwareScoringDetailed,
     parseApiReaderArticleResult,
     validateApiReaderTableNarratives,
+    normalizeApiReaderTableBlockSpacing,
     rebindApiReaderFigurePlacementQuotes,
     removeDuplicateReaderLongSentences,
     generateApiReaderArticleDetailed,
@@ -7658,6 +7718,7 @@ module.exports = {
     hasCompleteApiReaderFigureBinding,
     API_READER_ARTICLE_CONTRACT,
     isAllowedReaderNarrativeNumeralIssue,
+    isAllowedReaderDefensiveNegationIssue,
     splitReaderLongParagraphs,
     normalizeReaderEditorialSurface,
     repairApiReaderPlanSurfaceBinding,
