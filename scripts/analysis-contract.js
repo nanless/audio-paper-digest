@@ -477,6 +477,50 @@ function normalizeExperimentTableNumericFormatting(analysis) {
     return source.slice(0, contentStart) + normalized + source.slice(contentEnd);
 }
 
+function capExperimentTableMetricColumns(analysis, maxMetricColumns = EXPERIMENT_TABLE_LIMITS.maxMetricColumns) {
+    const source = String(analysis || '');
+    const rawResults = extractSection(source, '实验结果');
+    const results = repairMissingMarkdownTableSeparators(rawResults);
+    if (!results) return source;
+    const lines = results.split('\n');
+    const tables = extractMarkdownTables(results);
+    let changed = false;
+    for (const table of tables.slice().reverse()) {
+        if (table.metricColumns <= maxMetricColumns
+            || table.separatorColumns !== table.header.length
+            || table.invalidColumnCounts.length > 0) continue;
+        let keptMetrics = 0;
+        const keepIndexes = table.header.reduce((indexes, cell, index) => {
+            const normalized = cell
+                .replace(/<br\s*\/?>/gi, ' ')
+                .replace(/[*_`]/g, '')
+                .trim();
+            const identifier = !normalized || TABLE_IDENTIFIER_HEADER_RE.test(normalized);
+            if (identifier || keptMetrics < maxMetricColumns) {
+                indexes.push(index);
+                if (!identifier) keptMetrics += 1;
+            }
+            return indexes;
+        }, []);
+        for (let lineIndex = table.startLine; lineIndex <= table.endLine; lineIndex += 1) {
+            const cells = splitMarkdownTableRow(lines[lineIndex]);
+            if (cells.length !== table.header.length) continue;
+            lines[lineIndex] = `| ${keepIndexes.map(index => cells[index]).join(' | ')} |`;
+        }
+        changed = true;
+    }
+    if (!changed) return source;
+    const normalized = lines.join('\n');
+    const heading = /(^|\n)##(?!#)\s*实验结果[：:\s]*\n/;
+    const match = heading.exec(source);
+    if (!match) return source;
+    const contentStart = match.index + match[0].length;
+    const rest = source.slice(contentStart);
+    const next = /\n##(?!#)\s/.exec(rest);
+    const contentEnd = next ? contentStart + next.index : source.length;
+    return source.slice(0, contentStart) + normalized + source.slice(contentEnd);
+}
+
 function sourceExperimentEvidence(sourceText) {
     const source = String(sourceText || '');
     const sectionNumber = '(?:(?:\\d+(?:\\.\\d+)*)|(?:[IVXLCDM]+))';
@@ -1635,6 +1679,7 @@ module.exports = {
     extractMarkdownTables,
     repairMissingMarkdownTableSeparators,
     normalizeExperimentTableNumericFormatting,
+    capExperimentTableMetricColumns,
     validateExperimentTableEvidenceDepth,
     validateExperimentTableContract,
     analysisManifestRequiresExperimentTableContract,

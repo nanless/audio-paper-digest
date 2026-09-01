@@ -32,6 +32,7 @@ const {
     validateExperimentTableContract,
     extractMarkdownTables,
     normalizeExperimentTableNumericFormatting,
+    capExperimentTableMetricColumns,
     repairMissingMarkdownTableSeparators,
     validateMethodDetailContract,
     EXPERIMENT_TABLE_CONTRACT_VERSION,
@@ -429,6 +430,14 @@ describe('analyzePaperWithRetry', () => {
         assert.match(validateExperimentTableContract(withTables(table(), table(), table())), /3 张/);
         assert.match(validateExperimentTableContract(withTables(table(13))), /13 个数据行/);
         assert.match(validateExperimentTableContract(withTables(table(2, 9))), /9 个指标列/);
+        const capped = capExperimentTableMetricColumns(withTables(table(2, 9)));
+        const cappedTable = extractMarkdownTables(capped)[0];
+        assert.strictEqual(cappedTable.identifierColumns, 2);
+        assert.strictEqual(cappedTable.metricColumns, 8);
+        assert.strictEqual(cappedTable.header.length, 10);
+        assert.strictEqual(cappedTable.separatorColumns, 10);
+        assert.deepStrictEqual(cappedTable.rows.map(row => row.length), [10, 10]);
+        assert.strictEqual(validateExperimentTableContract(capped), null);
         assert.match(
             validateExperimentTableContract(withTables('| 方法 | 指标 |\n| --- | --- |\n| A | 1 | 多余 |')),
             /数据行有 3 列，表头有 2 列/

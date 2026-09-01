@@ -41,6 +41,7 @@ const {
     extractMarkdownTables,
     validateExperimentTableContract,
     normalizeExperimentTableNumericFormatting,
+    capExperimentTableMetricColumns,
     validateMethodDetailContract,
     isRecoveryStageTerminal,
     getInvalidAnalysisReason
@@ -6104,8 +6105,10 @@ function getSupplementalTagFallbacks(documentType) {
 }
 
 function normalizeAnalysisStructure(analysis) {
-    let updated = normalizeExperimentTableNumericFormatting(
-        normalizeUnexpectedTopLevelHeadings(analysis)
+    let updated = capExperimentTableMetricColumns(
+        normalizeExperimentTableNumericFormatting(
+            normalizeUnexpectedTopLevelHeadings(analysis)
+        )
     );
     const originalMachine = extractSectionByTitle(updated, '机器摘要');
     if (!originalMachine) return updated;
@@ -6278,7 +6281,9 @@ function recoveryFailureStatus(error) {
 }
 
 async function finalizeStructureRepairOutput(paper, inputAnalysis, sourceText, options = {}) {
-    let analysis = normalizeExperimentTableNumericFormatting(inputAnalysis);
+    let analysis = capExperimentTableMetricColumns(
+        normalizeExperimentTableNumericFormatting(inputAnalysis)
+    );
     const tableContractIssue = validateExperimentTableContract(analysis, {
         contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
         documentType: parseAnalysis(analysis)?.documentType,
