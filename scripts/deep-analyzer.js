@@ -3681,6 +3681,23 @@ function isArxivTabularDom($, element) {
     return node.is('table') || node.hasClass('ltx_tabular');
 }
 
+function arxivCaptionText($, element) {
+    const caption = $(element).clone();
+    caption.find('math').each((_, mathElement) => {
+        const math = $(mathElement);
+        const annotation = math.find(
+            'annotation[encoding="application/x-tex"], '
+            + 'annotation[encoding="application/x-latex"]'
+        ).first().text();
+        const replacement = String(math.attr('alttext') || annotation || '')
+            .trim().replace(/^\$|\$$/g, '');
+        if (replacement) math.empty().text(replacement);
+        else math.find('annotation').remove();
+    });
+    caption.find('annotation').remove();
+    return caption.text();
+}
+
 function findArxivTabularRoot($, wrapper) {
     const node = $(wrapper);
     if (isArxivTabularDom($, wrapper)) return wrapper;
@@ -3690,7 +3707,9 @@ function findArxivTabularRoot($, wrapper) {
 
 function findSplitTableDom($, wrapper, allElements) {
     if (!$(wrapper).hasClass('ltx_table') || findArxivTabularRoot($, wrapper)) return null;
-    const caption = $(wrapper).find('figcaption, .ltx_caption').first().text().replace(/\s+/g, ' ').trim();
+    const caption = arxivCaptionText(
+        $, $(wrapper).find('figcaption, .ltx_caption').first()
+    ).replace(/\s+/g, ' ').trim();
     const label = $(wrapper).find('.ltx_tag_table, .ltx_tag').first().text().replace(/\s+/g, ' ').trim();
     if (!caption || !/^(?:table|表)\s*(?:[A-Z]?\d+|[IVXLCDM]+)/i.test(label || caption)) return null;
 
@@ -3722,7 +3741,7 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
     // fragment; individual cells still retain their own exact DOM SHA.
     const domHtml = [$.html(wrapper), options.tableElement ? $.html(table) : ''].join('\n');
     const caption = compactDomText(
-        wrapper.find('figcaption, .ltx_caption, caption').first().text(),
+        arxivCaptionText($, wrapper.find('figcaption, .ltx_caption, caption').first()),
         STRUCTURED_ARTIFACT_LIMITS.cellChars,
         state,
         `table[${ordinal}].caption`
@@ -3905,7 +3924,12 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
         return {
             ordinal: index + 1,
             label: compactDomText(wrapper.find('.ltx_tag_figure, .ltx_tag').first().text(), 256, state, `figure[${index + 1}].label`),
-            caption: compactDomText(wrapper.find('figcaption, .ltx_caption').first().text(), STRUCTURED_ARTIFACT_LIMITS.cellChars, state, `figure[${index + 1}].caption`),
+            caption: compactDomText(
+                arxivCaptionText($, wrapper.find('figcaption, .ltx_caption').first()),
+                STRUCTURED_ARTIFACT_LIMITS.cellChars,
+                state,
+                `figure[${index + 1}].caption`
+            ),
             images,
             sourceDomSha256: crypto.createHash('sha256').update($.html(wrapper)).digest('hex'),
             recoveryStatus: images.length > 0 ? 'complete' : 'unrecovered'
@@ -4504,8 +4528,14 @@ function parseArxivImageInfosFromHtml(html, htmlId, arxivId = htmlId) {
     $('figure img').each((_, elem) => {
         const $img = $(elem);
         const $figure = $img.closest('figure');
-        let caption = $figure.children('figcaption').first().text().replace(/\s+/g, ' ').trim();
-        if (!caption) caption = $figure.find('figcaption').first().text().replace(/\s+/g, ' ').trim();
+        let caption = arxivCaptionText(
+            $, $figure.children('figcaption').first()
+        ).replace(/\s+/g, ' ').trim();
+        if (!caption) {
+            caption = arxivCaptionText(
+                $, $figure.find('figcaption').first()
+            ).replace(/\s+/g, ' ').trim();
+        }
         if (!caption) {
             const alt = String($img.attr('alt') || '').trim();
             if (alt && alt !== 'Refer to caption') caption = alt;

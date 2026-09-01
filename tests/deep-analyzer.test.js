@@ -479,19 +479,22 @@ describe('deep-analyzer section helpers', () => {
                 <img src="panels/a.png" alt="Refer to caption">
                 <img src="panels/b.png" alt="Refer to caption">
                 <img src="panels/a.png" alt="duplicate">
-                <figcaption>Figure 2: Spectrogram comparison across systems.</figcaption>
+                <figcaption>Figure 2: Action
+                    <math alttext="z_{t}"><semantics><mrow><mi>z</mi><mi>t</mi></mrow>
+                    <annotation encoding="application/x-tex">z_{t}</annotation></semantics></math>
+                    across systems.</figcaption>
             </figure>`;
         const images = parseArxivImageInfosFromHtml(html, '2607.12345v1', '2607.12345');
 
         assert.deepStrictEqual(images, [
             {
                 url: 'https://arxiv.org/html/2607.12345v1/panels/a.png',
-                caption: 'Figure 2: Spectrogram comparison across systems.',
+                caption: 'Figure 2: Action z_{t} across systems.',
                 sourceOrder: 0
             },
             {
                 url: 'https://arxiv.org/html/2607.12345v1/panels/b.png',
-                caption: 'Figure 2: Spectrogram comparison across systems.',
+                caption: 'Figure 2: Action z_{t} across systems.',
                 sourceOrder: 1
             }
         ]);
