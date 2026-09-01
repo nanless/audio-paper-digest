@@ -1716,12 +1716,30 @@ def apply_publish_image_exclusions(papers, exclusions=None):
             ]
             excluded_urls = [item['url'] for item in active]
             missing_urls = [url for url in excluded_urls if url not in figure_urls]
-            if missing_urls:
+            source_candidate_urls = {
+                item.get('url')
+                for source_manifest in (
+                    next_paper.get('imageManifest'),
+                    next_paper.get('analysisRecoveryImageManifest'),
+                )
+                if isinstance(source_manifest, dict)
+                for item in source_manifest.get('candidates', [])
+                if isinstance(item, dict) and isinstance(item.get('url'), str)
+            }
+            unresolved_missing = [
+                url for url in missing_urls
+                if url in article or url not in source_candidate_urls
+            ]
+            if unresolved_missing:
                 raise PublishDataValidationError(
                     f'{normalized_id} API reader 发布图片排除未命中 canonical figure: '
-                    + ', '.join(missing_urls)
+                    + ', '.join(unresolved_missing)
                 )
-            for exclusion in active:
+            bound_exclusions = [
+                exclusion for exclusion in active
+                if exclusion['url'] in figure_urls
+            ]
+            for exclusion in bound_exclusions:
                 article = _remove_api_reader_figure_block(article, exclusion['url'])
             figures = [item for item in figures if item.get('url') not in excluded_urls]
             article_sha256 = hashlib.sha256(article.encode('utf-8')).hexdigest()

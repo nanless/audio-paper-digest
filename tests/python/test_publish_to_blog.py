@@ -2264,6 +2264,30 @@ confidence: 中
                 'url': 'https://arxiv.org/html/2608.30002v1/not-bound.svg',
             }])
 
+    def test_api_reader_exclusion_is_dormant_when_source_candidate_is_already_unselected(self):
+        paper = llm_api_publication_fixture()
+        dormant_url = 'https://arxiv.org/html/2608.30002v1/unselected-panel.svg'
+        paper['imageManifest'] = {
+            'candidates': [{'url': dormant_url, 'caption': 'Unselected panel.'}],
+        }
+        original = copy.deepcopy(paper)
+        exclusion = {
+            'normalizedArxivId': paper['arxivId'],
+            'url': dormant_url,
+            'reason': '像素审查确认该候选面板图注与实际内容不完整，发布时不得选用。',
+        }
+        derived = publish_to_blog.apply_publish_image_exclusions(
+            [paper], [exclusion],
+        )[0]
+        self.assertEqual(paper, original)
+        self.assertEqual(derived['apiReaderArticle'], paper['apiReaderArticle'])
+        self.assertEqual(derived['apiReaderFigures'], paper['apiReaderFigures'])
+        self.assertEqual(derived['publishImageExclusions'], [exclusion])
+        self.assertEqual(
+            derived['publishImageExclusionView']['excludedUrls'], [dormant_url],
+        )
+        _validate_publish_image_exclusion_view(derived, paper['arxivId'])
+
     def test_published_papers_fingerprint_matches_node_utf16_key_order_probe(self):
         probe = json.loads(
             (Path(ROOT) / 'tests' / 'fixtures' / 'published-papers-fingerprint-probe.json')
