@@ -1159,6 +1159,15 @@ function normalizeReaderFigureCaption(figure) {
         .replace(/\s+/g, ' ').trim();
     caption = caption
         .replace(/(P\s*=\s*\d+)\s*P\s*=\s*(\d+\/\d+)/gi, 'P=$2')
+        .replace(
+            /\b([A-Za-z])([A-Za-z0-9,<]+?)\1_([A-Za-z0-9,<]+)/g,
+            (full, symbol, visibleSubscript, texSubscript) => (
+                visibleSubscript === texSubscript
+                    ? `${symbol}_${texSubscript}`
+                    : full
+            )
+        )
+        .replace(/\b(style instruction)\s+SS\b/gi, '$1 S')
         .replace(/([A-Za-z]\s*=\s*-?\d+(?:\.\d+)?)\s*\1/gi, '$1')
         .replace(/(p\s*[<>=]\s*\d+(?:\.\d+)?)\s*\1/gi, '$1')
         .replace(/(\d+(?:\.\d+)?\s*(?:ms|s|dB|Hz|kHz|MHz))\s*\1/gi, '$1');

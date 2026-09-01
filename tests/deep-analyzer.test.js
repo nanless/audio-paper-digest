@@ -1554,6 +1554,13 @@ primary_task_tag: #音视频生成
         assert.equal(cleanedCaption, 'R², ΔAUC and p<0.001.');
         assert.equal(
             normalizeReaderFigureCaption({
+                caption: 'Figure 2. LPS-TC predicts action ztz_{t} based on style instruction SS and user input Ua,<tU_{a,<t}; SLM generates ata_{t}.',
+                url: 'https://arxiv.org/html/2608.28630v1/x2.png'
+            }),
+            'LPS-TC predicts action z_t based on style instruction S and user input U_a,<t; SLM generates a_t.'
+        );
+        assert.equal(
+            normalizeReaderFigureCaption({
                 caption: 'Figure 3: a) Box plots showing the VSTOI scores. b) Box plots showing the SNRi scores for both models on the same test sets as in a). In both a) and b), the center bar is the median.',
                 url: 'https://arxiv.org/html/2608.28493v1/figures/snri-comparison-300-dpi.png'
             }),
