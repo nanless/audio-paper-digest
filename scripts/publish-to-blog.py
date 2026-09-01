@@ -909,11 +909,10 @@ def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1')
         )
         issues = filter_false_positive_review_issues(content, issues)
         if passed is False and not issues:
-            _failed, protocol_issues = review_protocol_failure(
-                f"LLM 文本 review: {title}",
-                'reviewer 明确返回 passed=false，即使 issues 为空也必须阻断',
-            )
-            issues = protocol_issues
+            # All model-reported blockers were deterministically disproved
+            # against these exact page bytes. A raw false-without-reason still
+            # blocks because validate_review_payload injects a protocol issue.
+            passed = True
         # 自动应用可修复的问题
         fixed_content = apply_llm_fixes(content, issues)
         return passed, issues, fixed_content
@@ -929,11 +928,7 @@ def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1')
             )
             issues = filter_false_positive_review_issues(content, issues)
             if passed is False and not issues:
-                _failed, protocol_issues = review_protocol_failure(
-                    f"LLM 文本 review: {title}",
-                    'reviewer 明确返回 passed=false，即使 issues 为空也必须阻断',
-                )
-                issues = protocol_issues
+                passed = True
             fixed_content = apply_llm_fixes(content, issues)
             return passed, issues, fixed_content
         issues = []

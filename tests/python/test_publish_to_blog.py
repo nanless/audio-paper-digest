@@ -1312,10 +1312,20 @@ title: "Bad table"
         ):
             passed, issues, reviewed = publish_to_blog.llm_review_post('正文没有尖括号标签。', '标题', required=True)
 
+        self.assertTrue(passed)
+        self.assertEqual(issues, [])
+        self.assertEqual(reviewed, '正文没有尖括号标签。')
+
+    def test_required_text_review_keeps_raw_false_without_reason_blocking(self):
+        response = json.dumps({'passed': False, 'issues': []}, ensure_ascii=False)
+        with mock.patch.object(publish_to_blog, 'call_llm_api', return_value=response):
+            passed, issues, reviewed = publish_to_blog.llm_review_post(
+                '正文没有问题。', '标题', required=True,
+            )
         self.assertFalse(passed)
         self.assertEqual(issues[0]['severity'], 'error')
-        self.assertIn('passed=false', issues[0]['description'])
-        self.assertEqual(reviewed, '正文没有尖括号标签。')
+        self.assertIn('没有提供 error 级原因', issues[0]['description'])
+        self.assertEqual(reviewed, '正文没有问题。')
 
     def test_required_image_review_fails_closed_on_non_json_and_invalid_severity(self):
         content = '![结果图](https://arxiv.org/result.png)'
@@ -1856,6 +1866,7 @@ title: "Bad table"
             [(item['normalizedArxivId'], item['url']) for item in configured],
             [
                 ('2608.13610', 'https://arxiv.org/html/2608.13610v1/Fig/intro_1.jpg'),
+                ('2608.29021', 'https://arxiv.org/html/2608.29021v1/figures/heatmap_xlsr_weights.png'),
                 ('2608.29480', 'https://arxiv.org/html/2608.29480v1/attn6.svg'),
                 ('2608.30854', 'https://arxiv.org/html/2608.30854v1/Fig/tab-example.png'),
             ],

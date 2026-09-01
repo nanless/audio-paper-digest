@@ -7,6 +7,11 @@
       "reason": "图片内含 “Manul debugging” 拼写错误"
     },
     {
+      "normalizedArxivId": "2608.29021",
+      "url": "https://arxiv.org/html/2608.29021v1/figures/heatmap_xlsr_weights.png",
+      "reason": "多模态发布审查确认该文件只包含 XLS-R 300M 单面板，但原始 Figure 3 图注同时声称包含 EAT-large，图文绑定不完整"
+    },
+    {
       "normalizedArxivId": "2608.29480",
       "url": "https://arxiv.org/html/2608.29480v1/attn6.svg",
       "reason": "多模态发布审查确认注意力热图主体近乎空白，无法支撑正文中的层间注意力分布观察"
