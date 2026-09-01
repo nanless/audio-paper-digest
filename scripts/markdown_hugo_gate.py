@@ -108,6 +108,14 @@ def format_gate_is_current_tutorial(frontmatter):
     )
 
 
+def format_gate_is_current_api_reader(frontmatter):
+    return (
+        isinstance(frontmatter, dict)
+        and frontmatter.get('paper_digest_api_reader_contract')
+        == 'beginner-researcher-v3'
+    )
+
+
 def markdown_table_count(text):
     return sum(
         1 for line in text.splitlines()
@@ -279,7 +287,9 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
     issues = []
     for artifact in source_artifacts:
         frontmatter = artifact['frontmatter']
-        if not format_gate_is_current_tutorial(frontmatter):
+        current_tutorial = format_gate_is_current_tutorial(frontmatter)
+        current_api_reader = format_gate_is_current_api_reader(frontmatter)
+        if not current_tutorial and not current_api_reader:
             continue
         source_label = Path(artifact['path']).name
         candidates = rendered_page_candidates(
@@ -300,7 +310,8 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
                 f'{rendered_label} Hugo HTML 残留 Markdown 加粗标记 **'
             )
         rendered_text = html_to_text(reader_html)
-        issues.extend(tutorial_score_issues(rendered_text, rendered_label))
+        if current_tutorial:
+            issues.extend(tutorial_score_issues(rendered_text, rendered_label))
         expected_tables = markdown_table_count(artifact['body'])
         expected_images = markdown_image_count(artifact['body'])
         actual_tables = len(re.findall(
@@ -319,6 +330,17 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
                 f'{rendered_label} Hugo 图片数量不足: '
                 f'Markdown={expected_images}, HTML={actual_images}'
             )
+        if current_api_reader:
+            expected_focus_paths = len(re.findall(
+                r'^>\s*\*\*看图路径：\*\*',
+                artifact['body'], flags=re.MULTILINE,
+            ))
+            actual_focus_paths = rendered_text.count('看图路径：')
+            if actual_focus_paths < expected_focus_paths:
+                issues.append(
+                    f'{rendered_label} Hugo 看图路径数量不足: '
+                    f'Markdown={expected_focus_paths}, HTML={actual_focus_paths}'
+                )
         headings = '\n'.join(
             html_to_text(value)
             for value in re.findall(

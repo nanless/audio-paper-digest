@@ -30,7 +30,8 @@ function canRepairScoringBinding(paper) {
         && scoring?.status === 'complete'
         && scoring?.scoringContract === 'api-scoring-audit-v2'
         && reader?.status === 'complete'
-        && manifest?.contracts?.apiReaderArticle === 'beginner-researcher-v2'
+        && ['beginner-researcher-v2', 'beginner-researcher-v3']
+            .includes(manifest?.contracts?.apiReaderArticle)
         && !paper?.latestAnalysisAttemptError;
 }
 

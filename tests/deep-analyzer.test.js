@@ -1076,6 +1076,66 @@ primary_task_tag: #音视频生成
             /让声音分路前行.*完整数据流/
         );
         assert.doesNotMatch(repairedGenericHeading.article, /^### 方法概述$/m);
+
+        const v3Kinds = [
+            'background', 'related_work', 'problem', 'method_overview', 'component',
+            'training', 'experiment_setup', 'result', 'ablation', 'limitation',
+            'reproduction', 'synthesis'
+        ];
+        const v3Payload = {
+            version: 3,
+            readerTitle: '语义锚点与声学证据为什么必须在同一条链路上会合？',
+            oneSentenceThesis: '论文让语义条件限定候选空间，再由声学表示完成定位，实验证据支持该分工，但跨域和部署代价仍需单独验证。',
+            conceptBridges: Array.from({ length: 4 }, (_, index) => ({
+                terms: [`语义锚点${index + 1}`, `声学证据${index + 1}`],
+                sectionKind: 'method_overview',
+                marker: `[[CONCEPT_BRIDGE_${index + 1}]]`,
+                explanation: `语义锚点${index + 1}负责限定当前候选的意义范围，声学证据${index + 1}负责核对发音与时序细节。两者搭配后才能把语义排除与声学定位连成可检验的决策链。`
+            })),
+            figurePlacements: [],
+            sections: v3Kinds.map((kind, index) => {
+                const heading = `教学阶段 ${index + 1} 如何为下一个判断建立证据边界？`;
+                const paragraphs = [
+                    `进入“${heading}”时，先固定这一阶段的输入、输出和失败现象。读者需要知道当前处理的是哪一类信号，它经过什么变换，以及哪个可观测结果才能证明这步确实工作。`,
+                    `这一阶段对应的类型是 ${kind}。它不单独追求一个更好看的数字，而是把控制变量、基线、指标方向和证据来源放在同一口径下。只有比较条件一致，后续差异才有解释价值。`,
+                    `方法层面应沿着数据流检查：原始观测先变成可学习表示，组件再选择或融合证据，目标函数最后把这些选择投影到任务输出。任何一环没有说清，初学者都会把相关性错当成因果。`,
+                    `实验层面则要同时读正面结果与反例。最强结果能说明当前设置下的净收益，未胜出项、未报告方差和缺失的跨域测试则限定该结论能走多远。这些边界不是附注，而是论证的一部分。`,
+                    `因此，“${heading}”最终要交给下一节的不是一句重复摘要，而是一份可执行的核对清单：哪些事实来自原文，哪些解释需要消融，哪些判断还缺对照或测量。沿着这份清单，文章才能逐步收紧中心问题。`
+                ];
+                return { kind, heading, body: paragraphs.join('\n\n') };
+            })
+        };
+        v3Payload.sections.find(section => section.kind === 'method_overview').body += '\n\n'
+            + v3Payload.conceptBridges.map(bridge => bridge.marker).join('\n\n');
+        const tableRoles = [
+            ['training', '训练与成本'],
+            ['experiment_setup', '数据与协议'],
+            ['result', '主结果'],
+            ['ablation', '消融与失败']
+        ];
+        for (const [kind, role] of tableRoles) {
+            const section = v3Payload.sections.find(item => item.kind === kind);
+            section.body += [
+                `下表要回答${role}的比较是否在统一条件下成立，因此先固定控制变量、数据集、指标方向和对照系统。`,
+                `| 比较条件 | 控制变量 | 数据集 | 指标方向 | 报告值 | 解释 |\n|---|---|---|---|---:|---|\n| ${role} | 统一设置 | 测试集 A | 越高越好 | 1.0 | 仅支持当前口径 |`,
+                `表中数字只能支持${role}在当前数据和控制条件下的净收益。它没有覆盖的反例、方差、跨域条件和部署成本仍然是结论边界，不能从一行数字向外推广。`
+            ].join('\n\n');
+        }
+        const v3Result = parseApiReaderArticleResult(JSON.stringify(v3Payload), {
+            requiredVersion: 3,
+            requireIntegratedTables: true,
+            minimumIntegratedTables: 4,
+            availableFigureOrdinals: []
+        });
+        assert.strictEqual(v3Result.plan.contract, 'beginner-researcher-v3');
+        assert.strictEqual(v3Result.plan.version, 3);
+        assert.strictEqual((v3Result.article.match(/^\|.+\|$/gm) || []).filter(
+            line => /\u6bd4较条件/.test(line)
+        ).length, 4);
+        assert.throws(
+            () => parseApiReaderArticleResult(JSON.stringify(payload), { requiredVersion: 3 }),
+            /禁止降级生成/
+        );
     });
 
     it('API reader v2 绑定结构化公式、官方 SVG 和作者机构', () => {
@@ -1123,6 +1183,17 @@ primary_task_tag: #音视频生成
             [2]
         );
         assert.match(buildApiReaderArtifactEvidence(artifacts, '2608.28422'), /FORMULA_1/);
+        const oversizedArtifacts = structuredClone(artifacts);
+        oversizedArtifacts.tables = Array.from({ length: 12 }, (_, index) => ({
+            ordinal: index + 1,
+            caption: `Table ${index + 1} oversized matrix`,
+            matrix: Array.from({ length: 40 }, () => ['x'.repeat(500), 'y'.repeat(500)])
+        }));
+        const boundedArtifactEvidence = buildApiReaderArtifactEvidence(
+            oversizedArtifacts, '2608.28422', 4000
+        );
+        assert.ok(boundedArtifactEvidence.length <= 4000);
+        assert.match(boundedArtifactEvidence, /FIGURE_1_URL: https:\/\/arxiv\.org/);
         const reader = injectApiReaderFigures({
             plan: {
                 sections: [
@@ -1132,11 +1203,13 @@ primary_task_tag: #音视频生成
                 figurePlacements: [
                     {
                         figureOrdinal: 1, targetKind: 'component',
-                        marker: '[[FIGURE_1]]'
+                        marker: '[[FIGURE_1]]',
+                        focusPoints: ['先看输入箭头如何进入增强组件', '再看增强输出在哪里进入主干']
                     },
                     {
                         figureOrdinal: 2, targetKind: 'result',
-                        marker: '[[FIGURE_2]]'
+                        marker: '[[FIGURE_2]]',
+                        focusPoints: ['先核对横轴与纵轴的指标方向', '再比较两条曲线在同一条件下的间距']
                     }
                 ]
             },
@@ -1150,6 +1223,7 @@ primary_task_tag: #音视频生成
         assert.match(reader.article, /figure-1\.svg/);
         assert.match(reader.article, /figure-2\.svg/);
         assert.ok(reader.article.indexOf('先看图中的增强模块') < reader.article.indexOf('figure-1.svg'));
+        assert.ok(reader.article.indexOf('看图路径') < reader.article.indexOf('figure-1.svg'));
         assert.ok(reader.article.indexOf('figure-1.svg') < reader.article.indexOf('图中模块关系说明'));
         assert.ok(reader.article.indexOf('figure-1.svg') < reader.article.indexOf('### 主要结果'));
         const prunedReaderArticle = pruneUnmaterializedApiReaderFigureBlocks(
@@ -1159,6 +1233,7 @@ primary_task_tag: #音视频生成
         );
         assert.match(prunedReaderArticle, /figure-1\.svg/);
         assert.doesNotMatch(prunedReaderArticle, /figure-2\.svg/);
+        assert.doesNotMatch(prunedReaderArticle, /先核对横轴与纵轴/);
         assert.match(prunedReaderArticle, /### 主要结果支持了什么？/);
         assert.strictEqual(isPermanentApiReaderFigureFailure(Object.assign(
             new Error('response body 16.0MB exceeds limit'),
@@ -1369,7 +1444,7 @@ primary_task_tag: #音视频生成
         );
         const boundFigures = [{ ordinal: 1, assetSha256: 'a'.repeat(64) }];
         const boundManifest = {
-            contracts: { apiReaderArticle: 'beginner-researcher-v2' },
+            contracts: { apiReaderArticle: 'beginner-researcher-v3' },
             stages: { apiReaderArticle: {
                 status: 'complete', figureCount: 1,
                 figuresSha256: stableFingerprint(boundFigures)

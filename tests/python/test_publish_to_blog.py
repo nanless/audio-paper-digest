@@ -373,10 +373,13 @@ def llm_api_publication_fixture():
     headings = [
         ('background', '为什么混合声音需要先建立空间直觉？'),
         ('related_work', '已有路线在哪些线索上留下了空白？'),
+        ('problem', '论文真正要分开的困难来自哪里？'),
         ('method_overview', '两段式流程怎样把输入变成可比较输出？'),
+        ('component', '关键组件如何分工而不互相覆盖？'),
         ('training', '这里是否存在训练阶段，参数又从哪里来？'),
         ('experiment_setup', '读数字之前必须固定哪些实验口径？'),
         ('result', '主结果究竟支持了哪一段因果链？'),
+        ('ablation', '拆掉哪个环节后收益会首先消失？'),
         ('limitation', '模型预测与真实听感之间还隔着什么？'),
         ('reproduction', '复现时应该先核对哪些接口与配置？'),
         ('synthesis', '初学者下一步应该验证哪一个环节？'),
@@ -386,12 +389,25 @@ def llm_api_publication_fixture():
         for _kind, heading in headings
     )
     plan = {
-        'version': 1,
-        'contract': 'beginner-researcher-v2',
+        'version': 3,
+        'contract': 'beginner-researcher-v3',
         'readerTitle': '把空间线索调得更强，模型真的更容易分离音乐吗？',
         'oneSentenceThesis': '论文把频变双耳线索做成可调增强，并以受控模型实验说明收益与听损边界。',
+        'conceptBridges': [
+            {
+                'terms': [f'术语 {index}A', f'术语 {index}B'],
+                'sectionKind': 'method_overview',
+                'marker': f'[[CONCEPT_BRIDGE_{index}]]',
+                'explanation': f'术语 {index}A 与术语 {index}B 分别负责保留证据和限定决策，搭配后才能形成可核对的完整链路。',
+            }
+            for index in range(1, 5)
+        ],
+        'figurePlacements': [],
         'sections': [{'kind': kind, 'heading': heading} for kind, heading in headings],
     }
+    article += '\n\n' + '\n\n'.join(
+        bridge['explanation'] for bridge in plan['conceptBridges']
+    )
     analysis = '## 评分\n**总分：6.1/10**\n\n## 核心摘要\n最终兼容 canonical。'
     article_sha = hashlib.sha256(article.encode('utf-8')).hexdigest()
     plan_sha = publish_to_blog._stable_json_sha256(plan)
@@ -421,7 +437,7 @@ def llm_api_publication_fixture():
             'scoringReason': '评分严格绑定来源与审计证据。',
         },
         'analysisManifest': {
-            'contracts': {'apiReaderArticle': 'beginner-researcher-v2'},
+            'contracts': {'apiReaderArticle': 'beginner-researcher-v3'},
             'sourceAcquisition': {'sourceSha256': source_sha},
             'stages': {
                 'scoringAudit': {
@@ -1448,7 +1464,7 @@ title: "Bad table"
     def test_api_reader_v2_places_authors_after_identity_and_uses_visible_heading_levels(self):
         paper = llm_api_publication_fixture()
         markdown, _slug = publish_to_blog.generate_paper_page(paper, '2026-08-31')
-        self.assertIn('paper_digest_api_reader_contract: "beginner-researcher-v2"', markdown)
+        self.assertIn('paper_digest_api_reader_contract: "beginner-researcher-v3"', markdown)
         self.assertIn('## 👥 作者与机构', markdown)
         self.assertIn('- Researcher A：Institute A', markdown)
         self.assertLess(markdown.index('> 标签：'), markdown.index('## 👥 作者与机构'))
@@ -1457,6 +1473,103 @@ title: "Bad table"
         self.assertIn('### 为什么混合声音需要先建立空间直觉？', markdown)
         self.assertNotIn('#### 为什么混合声音需要先建立空间直觉？', markdown)
         self.assertEqual(markdown.count('Researcher A'), 1)
+        paper['apiReaderAuthors']['authors'][0]['affiliations'] = ['3D AI Lab']
+        paper['analysisManifest']['stages']['apiReaderArticle'][
+            'readerAuthorsSha256'
+        ] = publish_to_blog._stable_json_sha256(paper['apiReaderAuthors'])
+        index_markdown = publish_to_blog.generate_index_page(
+            [(6.1, paper, paper['parsed'])], [], '2026-08-31',
+            {paper['arxivId']: 'fixture'},
+        )
+        self.assertIn('- Researcher A：3D AI Lab', index_markdown)
+        self.assertNotIn('3 D AI Lab', index_markdown)
+
+    def test_api_reader_v3_replays_focus_path_and_figure_binding(self):
+        paper = llm_api_publication_fixture()
+        paper_id = paper['arxivId']
+        url = f'https://arxiv.org/html/{paper_id}v1/figure-1.png'
+        result_heading = next(
+            item['heading'] for item in paper['apiReaderPlan']['sections']
+            if item['kind'] == 'result'
+        )
+        lead = '现在看这张图，是为了核对主结果的比较口径、指标方向与曲线差距是否处在同一实验条件下。'
+        focus_points = [
+            '先核对横轴所表示的评测条件是否一致',
+            '再比较两条曲线在同一纵轴尺度下的距离',
+        ]
+        explanation = '图中横轴保持评测条件一致，纵轴按越高越好的方向读取；目标曲线与基线的间距只支持当前设置下的收益，不能代替跨域证据。'
+        focus_block = '> **看图路径：** ' + '；'.join(
+            f'{index}. {value}' for index, value in enumerate(focus_points, 1)
+        )
+        image_block = (
+            f'{lead}\n\n{focus_block}\n\n'
+            f'![原论文 Figure 1：Main result.]({url})\n\n'
+            '*论文图 1。原论文 Figure 1：Main result.*\n\n'
+            f'{explanation}'
+        )
+        result_anchor = (
+            f'### {result_heading}\n\n'
+            '这是围绕本篇论文证据展开的教学段落，说明输入、处理、输出、比较口径与不能外推的边界。'
+        )
+        paper['apiReaderArticle'] = paper['apiReaderArticle'].replace(
+            result_anchor, f'{result_anchor}\n\n{image_block}',
+        )
+        placement = {
+            'figureOrdinal': 1, 'targetKind': 'result',
+            'marker': '[[FIGURE_1]]', 'focusPoints': focus_points,
+            'leadQuote': lead, 'explanationQuote': explanation,
+        }
+        paper['apiReaderPlan']['figurePlacements'] = [placement]
+        original_current = publish_to_blog.CURRENT_DIR
+        with tempfile.TemporaryDirectory() as root:
+            try:
+                publish_to_blog.CURRENT_DIR = root
+                cache_dir = Path(root) / 'api-reader-assets' / paper_id
+                cache_dir.mkdir(parents=True)
+                raw = valid_png(width=768, height=1200)
+                asset_sha = hashlib.sha256(raw).hexdigest()
+                filename = f'figure-1-{asset_sha[:16]}.png'
+                cache_path = cache_dir / filename
+                cache_path.write_bytes(raw)
+                figure = {
+                    'ordinal': 1, 'label': 'Figure 1:', 'caption': 'Main result.',
+                    'url': url, 'mediaType': 'image/png', 'sourceDomSha256': '5' * 64,
+                    'targetKind': 'result', 'targetHeading': result_heading,
+                    'marker': '[[FIGURE_1]]', 'focusPoints': focus_points,
+                    'leadQuote': lead, 'explanationQuote': explanation,
+                    'cachePath': str(cache_path), 'assetFilename': filename,
+                    'assetMediaType': 'image/png', 'assetSha256': asset_sha,
+                    'assetBytes': len(raw), 'assetWidth': 768, 'assetHeight': 1200,
+                }
+                paper['apiReaderFigures'] = [figure]
+                article_sha = hashlib.sha256(
+                    paper['apiReaderArticle'].encode('utf-8')
+                ).hexdigest()
+                plan_sha = publish_to_blog._stable_json_sha256(paper['apiReaderPlan'])
+                paper['apiReaderArticleSha256'] = article_sha
+                paper['apiReaderPlanSha256'] = plan_sha
+                stage = paper['analysisManifest']['stages']['apiReaderArticle']
+                stage.update({
+                    'articleSha256': article_sha, 'planSha256': plan_sha,
+                    'figureCount': 1,
+                    'figuresSha256': publish_to_blog._stable_json_sha256([figure]),
+                })
+                payload = publish_to_blog._api_reader_payload(paper)
+                self.assertIn(focus_block, payload['renderedArticle'])
+                self.assertEqual(payload['figures'][0]['focusPoints'], focus_points)
+                tampered = copy.deepcopy(paper)
+                tampered['apiReaderFigures'][0]['focusPoints'] = [
+                    tampered['apiReaderFigures'][0]['focusPoints'][0] + '漂移',
+                    tampered['apiReaderFigures'][0]['focusPoints'][1],
+                ]
+                tampered_stage = tampered['analysisManifest']['stages']['apiReaderArticle']
+                tampered_stage['figuresSha256'] = publish_to_blog._stable_json_sha256(
+                    tampered['apiReaderFigures']
+                )
+                with self.assertRaisesRegex(PublishDataValidationError, 'marker 计划不一致'):
+                    publish_to_blog._api_reader_payload(tampered)
+            finally:
+                publish_to_blog.CURRENT_DIR = original_current
 
     def test_api_reader_v2_image_parser_accepts_escaped_brackets_in_alt_text(self):
         article = (
@@ -1758,7 +1871,7 @@ title: "Bad table"
         date_str = '2026-08-31'
         bindings = publish_to_blog.llm_api_publication_bindings([paper])
         self.assertEqual(len(bindings), 1)
-        self.assertEqual(bindings[0]['readerContract'], 'beginner-researcher-v2')
+        self.assertEqual(bindings[0]['readerContract'], 'beginner-researcher-v3')
         self.assertEqual(bindings[0]['scoringContract'], 'api-scoring-audit-v2')
         self.assertEqual(bindings[0]['model'], 'muse-spark-1.2-contributor')
         self.assertEqual(
@@ -2643,6 +2756,43 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             issues = publish_to_blog.validate_hugo_rendered_html_gate(output, [artifact])
             self.assertTrue(any('图片数量不足' in issue for issue in issues))
             self.assertTrue(any('残留 Markdown 加粗标记' in issue for issue in issues))
+
+    def test_hugo_rendered_html_gate_checks_api_reader_v3_focus_tables_and_images(self):
+        artifact = {
+            'path': '/tmp/api-reader-v3.md',
+            'frontmatter': {
+                'title': 'API reader v3 page',
+                'paper_digest_api_reader_contract': 'beginner-researcher-v3',
+            },
+            'body': '''### 方法细节
+
+> **看图路径：** 1. 先看输入；2. 再看输出
+
+![方法图](https://example.com/figure.png)
+
+| 条件 | 值 |
+| --- | --- |
+| A | 1 |
+''',
+        }
+        rendered = '''<article><h1>API reader v3 page</h1>
+<h3>方法细节</h3><blockquote><p><strong>看图路径：</strong> 1. 先看输入；2. 再看输出</p></blockquote>
+<img src="https://example.com/figure.png"><table><tr><td>A</td></tr></table></article>'''
+        with tempfile.TemporaryDirectory() as tmp:
+            page = Path(tmp) / 'posts' / 'api-reader-v3' / 'index.html'
+            page.parent.mkdir(parents=True)
+            page.write_text(f'<html><body>{rendered}</body></html>', encoding='utf-8')
+            self.assertEqual(
+                publish_to_blog.validate_hugo_rendered_html_gate(tmp, [artifact]), [],
+            )
+            page.write_text(
+                '<html><body><article><h1>API reader v3 page</h1></article></body></html>',
+                encoding='utf-8',
+            )
+            issues = publish_to_blog.validate_hugo_rendered_html_gate(tmp, [artifact])
+            self.assertTrue(any('表格数量不足' in issue for issue in issues))
+            self.assertTrue(any('图片数量不足' in issue for issue in issues))
+            self.assertTrue(any('看图路径数量不足' in issue for issue in issues))
 
     def test_run_hugo_gate_executes_rendered_html_contract_after_build(self):
         markdown = '''---

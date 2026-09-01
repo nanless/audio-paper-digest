@@ -222,7 +222,7 @@ LLM endpoint 只允许 HTTPS；仅 loopback 本地测试服务可以使用 HTTP�
 - **并发度：3 篇并行**（可通过项目 `.env` 中的 `PD_ANALYSIS_CONCURRENCY` 调整）
 - 每篇默认最多重试 **2 次**（外层 `analysis-engine.js`，由 `PD_ANALYSIS_MAX_RETRIES` 调整）；每次外层尝试中的每个 LLM API 阶段默认最多尝试 **3 次**（`deep-analyzer.js` 内层，由 `PD_ANALYSIS_API_MAX_RETRIES` 调整，指数退避：第一次等待 10 秒，之后翻倍，`2^attempt * 5000ms`），外层重试间隔 3 秒
 - API 整体超时为 **20 分钟活跃时间**；每秒心跳识别超过 30 秒的系统睡眠/事件循环挂起并排除该墙钟跳变，唤醒后的请求超时仍按剩余预算重试
-- 主分析 `max_tokens=64000`（config.js 中 `apiMaxTokens`）；审校/表格/方法/结构局部修复默认 `max_tokens=16000`（`repairMaxTokens`，可由 `PD_ANALYSIS_REPAIR_MAX_TOKENS` 覆写）；`temperature=0.7`
+- 主分析 `max_tokens=64000`；局部修复默认 `max_tokens=16000`。API 读者长文独立使用 `max_output_tokens=48000`、180000 证据字符和 240000 完整请求字符，分别可由 `PD_API_READER_MAX_TOKENS`、`PD_API_READER_EVIDENCE_MAX_CHARS`、`PD_API_READER_CONTEXT_MAX_CHARS` 覆写
 - 各后处理阶段不再重复发送整篇论文：开源扫描、审校重写、评分审计、方法/表格修复和结构修复的默认证据预算依次为 16K、60K、40K、30K、40K 字符。对应 `.env` 变量为 `PD_OPENSOURCE_EVIDENCE_MAX_CHARS`、`PD_REVISION_EVIDENCE_MAX_CHARS`、`PD_SCORING_EVIDENCE_MAX_CHARS`、`PD_REPAIR_EVIDENCE_MAX_CHARS`、`PD_STRUCTURE_EVIDENCE_MAX_CHARS`；主分析预算由 `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` 控制。选择算法版本与预算进入恢复指纹，变化时只重跑受影响阶段及下游
 - 每次模型调用日志记录文本字符数、估算文本 token 数与图片数；图片 base64 不计入也不写入文本统计
 - 代理只从项目根 `.env` 中显式配置的大小写代理变量读取；不继承 shell/IDE 代理，也不读取 macOS `scutil`。arXiv 抓取至少需要 `HTTPS_PROXY` 或 `HTTP_PROXY` 其中一项 HTTP CONNECT 地址，HuggingFace `curl` 可额外使用 SOCKS `ALL_PROXY`
@@ -242,7 +242,7 @@ LLM endpoint 只允许 HTTPS；仅 loopback 本地测试服务可以使用 HTTP�
 | Round 5 | 方法章节修复 | 代码检测 + LLM 补充 | 检测方法概述是否过于简略（<600 字/<3 段），触发扩展至 600+ 字 |
 | Round 6 | 最终结构修复（按需） | `prompts/structure-repair.md` | 共享契约发现 13 个必要章节有缺失时，主模型只补齐当前报告结构；完整时不调用 |
 | Round 7 | 类型感知评分审计 | `prompts/scoring-audit.md` | 主模型只输出 JSON；代码把校验错误反馈给下一次局部审计，并按资源状态确定性归一化无产物论文的开源分 |
-| Round 7.5 | 初学研究者读者文章 | `prompts/api-reader-article.md` | 在事实与评分闭环后按学习依赖重组为动态小节长文；代码校验篇幅、标题、逻辑顺序、去模板和 SHA 闭环 |
+| Round 7.5 | 初学研究者读者文章 | `prompts/api-reader-article.md` | 强制 `beginner-researcher-v3` / plan v3：12–18 节、5000–18000 中文字、4–10 术语桥、2–4 叙事表/宽表门禁，官方 Figure 作为多模态像素输入并物化逐图 focus 闭环 |
 
 表格后处理会在全文存在编号表但正文缺少可读表、已有表只有叙述型结论卡/证据过浅，或出现“此处省略/详见原文”等非法占位语时调用。新分析和重分析写入 `analysisManifest.contracts.experimentTables=evidence-rich-v2`：除每篇最多 2 张表、每表最多 12 行和 8 个指标列外，还要求标识列、至少 3 行与 2 个数字、指标方向、表前具体比较问题、表后关键差异与证据边界，并在来源提供时覆盖消融或负面证据。Node 与 Python 双端同构校验；历史 `bounded-v1` 仍只执行旧上限门禁。
 | Round 8 | 图像筛选与插图计划（仅双模型模式） | `prompts/image-supplement.md` | 副模型只输出 JSON 插图计划；合并后再次校验完整契约，不合格时只丢弃插图计划并保留主模型正文 |

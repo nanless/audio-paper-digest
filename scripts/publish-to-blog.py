@@ -45,6 +45,7 @@ from publish_common import (
     MANUAL_DEPTH_CONTRACT_VERSION_V5, MANUAL_DEPTH_CONTRACT_VERSION_V6,
     MANUAL_LONGFORM_CONTRACT_VERSION_V2, validate_manual_v6_payload,
     validate_digest_index_reader_quality, DIGEST_INDEX_READER_QUALITY_VERSION,
+    split_markdown_table_row,
 )
 from path_config import (
     PROJECT_ROOT,
@@ -117,8 +118,15 @@ MANUAL_V6_PRODUCTION_MODE = 'manual_v6_production'
 MANUAL_V6_PRODUCTION_CONTRACT = 'manual-v6-production-publication-v1'
 LLM_API_PRODUCTION_MODE = 'llm_api_production'
 LLM_API_PRODUCTION_CONTRACT = 'llm-api-production-publication-v1'
-LLM_API_READER_CONTRACT = 'beginner-researcher-v2'
-LLM_API_READER_LEGACY_CONTRACT = 'beginner-researcher-v1'
+LLM_API_READER_CONTRACT = 'beginner-researcher-v3'
+LLM_API_READER_LEGACY_CONTRACTS = {
+    'beginner-researcher-v1',
+    'beginner-researcher-v2',
+}
+LLM_API_READER_STRUCTURED_CONTRACTS = {
+    'beginner-researcher-v2',
+    LLM_API_READER_CONTRACT,
+}
 LLM_API_SCORING_CONTRACT = 'api-scoring-audit-v2'
 LEGACY_V5_MAINTENANCE_MODE = 'legacy_v5_maintenance'
 SEALED_TUTORIAL_PREVIEW_MODE = 'sealed_tutorial_preview'
@@ -1629,7 +1637,7 @@ def _remove_publish_image_block(content, exact_url, insertion_plan=None):
 
 
 def _remove_api_reader_figure_block(content, exact_url):
-    """Remove one v2 reader image and its generated italic figure caption."""
+    """Remove one reader image, its v3 focus path, and generated caption."""
     paragraphs = re.split(r'\n(?:[ \t]*\n)+', str(content or '').strip())
     image_pattern = re.compile(
         rf'^[ \t]*!\[(?:\\.|[^\]\\\n])*\]\({re.escape(exact_url)}\)[ \t]*$'
@@ -1639,6 +1647,9 @@ def _remove_api_reader_figure_block(content, exact_url):
         if not image_pattern.fullmatch(paragraph):
             continue
         remove.add(index)
+        if index > 0 and re.fullmatch(
+                r'>\s*\*\*看图路径：\*\*[\s\S]+', paragraphs[index - 1].strip()):
+            remove.add(index - 1)
         if index + 1 < len(paragraphs) and re.fullmatch(
                 r'[ *_]*论文图\s*\d+[\s\S]*?[ *_]*', paragraphs[index + 1].strip()):
             remove.add(index + 1)
@@ -1681,8 +1692,10 @@ def apply_publish_image_exclusions(papers, exclusions=None):
         next_paper = copy.deepcopy(paper)
         active = [dict(item) for item in by_id.get(normalized_id, [])]
         contracts = next_paper.get('analysisManifest', {}).get('contracts', {})
-        api_reader_v2 = contracts.get('apiReaderArticle') == LLM_API_READER_CONTRACT
-        if active and api_reader_v2:
+        api_reader_structured = contracts.get(
+            'apiReaderArticle'
+        ) in LLM_API_READER_STRUCTURED_CONTRACTS
+        if active and api_reader_structured:
             analysis = next_paper.get('analysis')
             article = next_paper.get('apiReaderArticle')
             figures = next_paper.get('apiReaderFigures')
@@ -1721,7 +1734,10 @@ def apply_publish_image_exclusions(papers, exclusions=None):
             stage['figuresSha256'] = figures_sha256
             image_stage = manifest.get('stages', {}).get('imageSupplement')
             if isinstance(image_stage, dict) \
-                    and image_stage.get('reason') == 'api_reader_v2_official_figures_bound':
+                    and image_stage.get('reason') in {
+                        'api_reader_v2_official_figures_bound',
+                        'api_reader_v3_official_figures_bound',
+                    }:
                 image_stage['officialFigureCount'] = len(figures)
                 image_stage['officialFiguresSha256'] = figures_sha256
             selected = next_paper.get('selectedImageUrls')
@@ -2067,7 +2083,8 @@ def index_author_institution_block(paper, pa, api_reader=None):
 def normalize_digest_index_preserving_decision_blocks(markdown):
     """Normalize index-owned prose without rewriting copied paper sections."""
     pattern = re.compile(
-        r'^📌 \*\*核心摘要\*\*\n\n[\s\S]*?(?=^---$)',
+        r'^(?:👥 \*\*作者与机构\*\*|📌 \*\*核心摘要\*\*)'
+        r'\n\n[\s\S]*?(?=^---$)',
         flags=re.MULTILINE,
     )
     output = []
@@ -2676,8 +2693,8 @@ def _api_reader_payload(paper):
     manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
     contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
     reader_contract = contracts.get('apiReaderArticle')
-    if reader_contract not in {
-            LLM_API_READER_LEGACY_CONTRACT, LLM_API_READER_CONTRACT}:
+    if reader_contract not in LLM_API_READER_LEGACY_CONTRACTS | {
+            LLM_API_READER_CONTRACT}:
         return None
     article = paper.get('apiReaderArticle')
     plan = paper.get('apiReaderPlan')
@@ -2694,8 +2711,13 @@ def _api_reader_payload(paper):
             or stage.get('planSha256') != plan_sha):
         raise PublishDataValidationError('API reader contract 文章/计划 SHA 或阶段状态不闭环')
     plan_version = plan.get('version')
-    if plan_version not in {1, 2} or plan.get('contract') != reader_contract \
-            or (plan_version == 2 and reader_contract != LLM_API_READER_CONTRACT):
+    expected_plan_versions = {
+        'beginner-researcher-v1': {1},
+        'beginner-researcher-v2': {1, 2},
+        LLM_API_READER_CONTRACT: {3},
+    }
+    if plan_version not in expected_plan_versions.get(reader_contract, set()) \
+            or plan.get('contract') != reader_contract:
         raise PublishDataValidationError('API reader plan 版本或契约非法')
     if not isinstance(plan.get('readerTitle'), str) \
             or not isinstance(plan.get('oneSentenceThesis'), str):
@@ -2709,14 +2731,14 @@ def _api_reader_payload(paper):
     required_kinds = ({
         'background', 'related_work', 'method_overview', 'training',
         'experiment_setup', 'result', 'limitation', 'reproduction', 'synthesis',
-    } if reader_contract == LLM_API_READER_CONTRACT else {
+    } if reader_contract in LLM_API_READER_STRUCTURED_CONTRACTS else {
         'background', 'related_work', 'method_overview', 'experiment_setup',
         'result', 'limitation', 'synthesis',
     })
-    minimum_sections = 10 if plan_version == 2 else (
-        8 if reader_contract == LLM_API_READER_CONTRACT else 6
+    minimum_sections = 12 if plan_version == 3 else 10 if plan_version == 2 else (
+        8 if reader_contract in LLM_API_READER_STRUCTURED_CONTRACTS else 6
     )
-    maximum_sections = 14 if plan_version == 2 else 12
+    maximum_sections = 18 if plan_version == 3 else 14 if plan_version == 2 else 12
     if not isinstance(plan_sections, list) \
             or not minimum_sections <= len(plan_sections) <= maximum_sections:
         raise PublishDataValidationError(
@@ -2743,14 +2765,18 @@ def _api_reader_payload(paper):
     article_headings = re.findall(r'^###\s+(.+?)\s*$', article, flags=re.MULTILINE)
     if article_headings != planned_headings or len(set(article_headings)) != len(article_headings):
         raise PublishDataValidationError('API reader plan 与正文小节标题/顺序不一致')
-    if plan_version == 2:
+    if plan_version in {2, 3}:
         concept_bridges = plan.get('conceptBridges')
         figure_placements = plan.get('figurePlacements')
+        minimum_bridges = 4 if plan_version == 3 else 3
+        maximum_bridges = 10 if plan_version == 3 else 8
         if not isinstance(concept_bridges, list) \
-                or not 3 <= len(concept_bridges) <= 8 \
+                or not minimum_bridges <= len(concept_bridges) <= maximum_bridges \
                 or not isinstance(figure_placements, list) \
                 or len(figure_placements) > 8:
-            raise PublishDataValidationError('API reader v2 plan 缺少术语桥或 Figure marker 计划')
+            raise PublishDataValidationError(
+                f'API reader v{plan_version} plan 缺少术语桥或 Figure marker 计划'
+            )
         for index, bridge in enumerate(concept_bridges, 1):
             if not isinstance(bridge, dict) or set(bridge) != {
                     'terms', 'sectionKind', 'marker', 'explanation'} \
@@ -2761,12 +2787,18 @@ def _api_reader_payload(paper):
                     or not isinstance(bridge.get('explanation'), str) \
                     or bridge['explanation'] not in article \
                     or bridge['marker'] in article:
-                raise PublishDataValidationError('API reader v2 术语桥与正文绑定非法')
+                raise PublishDataValidationError(
+                    f'API reader v{plan_version} 术语桥与正文绑定非法'
+                )
         seen_placement_ordinals = set()
         for placement in figure_placements:
-            if not isinstance(placement, dict) or set(placement) != {
+            expected_placement_fields = {
                     'figureOrdinal', 'targetKind', 'marker',
-                    'leadQuote', 'explanationQuote'} \
+                    'leadQuote', 'explanationQuote'}
+            if plan_version == 3:
+                expected_placement_fields.add('focusPoints')
+            if not isinstance(placement, dict) \
+                    or set(placement) != expected_placement_fields \
                     or not isinstance(placement.get('figureOrdinal'), int) \
                     or placement['figureOrdinal'] in seen_placement_ordinals \
                     or placement.get('targetKind') not in allowed_kinds \
@@ -2775,11 +2807,19 @@ def _api_reader_payload(paper):
                     or not isinstance(placement.get('leadQuote'), str) \
                     or not isinstance(placement.get('explanationQuote'), str) \
                     or len(placement['leadQuote'].strip()) < 35 \
-                    or len(placement['explanationQuote'].strip()) < 45:
-                raise PublishDataValidationError('API reader v2 Figure marker 计划与正文绑定非法')
+                    or len(placement['explanationQuote'].strip()) < 45 \
+                    or (plan_version == 3 and (
+                        not isinstance(placement.get('focusPoints'), list)
+                        or not 2 <= len(placement['focusPoints']) <= 4
+                        or not all(isinstance(item, str) and 12 <= len(item.strip()) <= 120
+                                   for item in placement['focusPoints'])
+                    )):
+                raise PublishDataValidationError(
+                    f'API reader v{plan_version} Figure marker 计划与正文绑定非法'
+                )
             seen_placement_ordinals.add(placement['figureOrdinal'])
     figures = paper.get('apiReaderFigures')
-    if reader_contract == LLM_API_READER_CONTRACT:
+    if reader_contract in LLM_API_READER_STRUCTURED_CONTRACTS:
         if not isinstance(figures, list):
             raise PublishDataValidationError('API reader v2 缺少结构化 figure 绑定数组')
         figures_sha = _stable_json_sha256(figures)
@@ -2791,6 +2831,7 @@ def _api_reader_payload(paper):
         if article_image_urls != figure_urls or len(set(figure_urls)) != len(figure_urls):
             raise PublishDataValidationError('API reader v2 正文图片与 figure 绑定不一致')
         paper_id = normalize_publish_arxiv_id(paper.get('arxivId') or paper.get('paper_id'))
+        article_paragraphs = re.split(r'\n(?:[ \t]*\n)+', article)
         figure_assets = []
         for item in figures:
             expected_figure_fields = {
@@ -2798,19 +2839,59 @@ def _api_reader_payload(paper):
                     'sourceDomSha256', 'targetKind', 'targetHeading',
                     'cachePath', 'assetFilename', 'assetMediaType',
                     'assetSha256', 'assetBytes', 'assetWidth', 'assetHeight'}
-            if plan_version == 2:
+            if plan_version in {2, 3}:
                 expected_figure_fields.update({
                     'marker', 'leadQuote', 'explanationQuote',
                 })
+            if plan_version == 3:
+                expected_figure_fields.add('focusPoints')
             if not isinstance(item, dict) or set(item) != expected_figure_fields:
                 raise PublishDataValidationError('API reader v2 figure 字段非法')
-            if plan_version == 2:
+            if plan_version in {2, 3}:
                 placement = next((entry for entry in plan['figurePlacements']
                                   if entry['figureOrdinal'] == item['ordinal']), None)
+                binding_keys = (
+                    'marker', 'leadQuote', 'explanationQuote', 'targetKind',
+                    *(() if plan_version == 2 else ('focusPoints',)),
+                )
                 if placement is None or any(
                         item.get(key) != placement.get(key)
-                        for key in ('marker', 'leadQuote', 'explanationQuote', 'targetKind')):
-                    raise PublishDataValidationError('API reader v2 figure 与 marker 计划不一致')
+                        for key in binding_keys):
+                    raise PublishDataValidationError(
+                        f'API reader v{plan_version} figure 与 marker 计划不一致'
+                    )
+                matching_headings = {
+                    section['heading'] for section in plan_sections
+                    if section['kind'] == item.get('targetKind')
+                }
+                if item.get('targetHeading') not in matching_headings:
+                    raise PublishDataValidationError(
+                        f'API reader v{plan_version} figure 目标标题与章节计划不一致'
+                    )
+            if plan_version == 3:
+                expected_focus = '> **看图路径：** ' + '；'.join(
+                    f'{index}. {value}'
+                    for index, value in enumerate(item['focusPoints'], 1)
+                )
+                image_index = next((
+                    index for index, paragraph in enumerate(article_paragraphs)
+                    if re.fullmatch(
+                        rf'!\[(?:\\.|[^\]\\\n])*\]\({re.escape(item["url"])}\)',
+                        paragraph.strip(),
+                    )
+                ), None)
+                if image_index is None or image_index < 2 \
+                        or image_index + 2 >= len(article_paragraphs) \
+                        or article_paragraphs[image_index - 1].strip() != expected_focus \
+                        or item['leadQuote'] not in article_paragraphs[image_index - 2] \
+                        or not re.fullmatch(
+                            rf'[ *_]*论文图\s*{item["ordinal"]}。[\s\S]+[ *_]*',
+                            article_paragraphs[image_index + 1].strip(),
+                        ) \
+                        or item['explanationQuote'] not in article_paragraphs[image_index + 2]:
+                    raise PublishDataValidationError(
+                        'API reader v3 未形成导读—看图路径—原图—图注—解释的相邻闭环'
+                    )
             parsed_url = urlparse(item['url'])
             if parsed_url.scheme != 'https' \
                     or parsed_url.hostname not in {'arxiv.org', 'www.arxiv.org'} \
@@ -3077,7 +3158,7 @@ def generate_paper_page(paper, date_str, category='论文速递'):
     reader_first = reader_plan is not None and reader_article is not None
     api_reader_v2 = bool(
         api_reader_payload
-        and api_reader_payload.get('contract') == LLM_API_READER_CONTRACT
+        and api_reader_payload.get('contract') in LLM_API_READER_STRUCTURED_CONTRACTS
     )
     # Modern Manual pages must never be reconstructed from the legacy fixed
     # canonical sections.  A missing, partial or tampered reader payload is a
@@ -3465,7 +3546,7 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
     for index, line in enumerate(table_lines):
         if not re.match(r'^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$', line):
             continue
-        expected_columns = len(re.findall(r'(?<!\\)\|', line)) - 1
+        expected_columns = len(split_markdown_table_row(line))
         start = index - 1
         end = index + 1
         while start >= 0 and table_lines[start].lstrip().startswith('|'):
@@ -3475,7 +3556,7 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
         malformed = []
         for row_index in range(start + 1, end):
             row = table_lines[row_index]
-            columns = len(re.findall(r'(?<!\\)\|', row)) - 1
+            columns = len(split_markdown_table_row(row))
             if columns != expected_columns:
                 malformed.append((row_index + 1, columns))
         if malformed:

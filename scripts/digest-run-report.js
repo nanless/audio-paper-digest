@@ -129,7 +129,8 @@ function llmApiPaperComplete(paper) {
     const finalScore = Number(scoring?.finalScore);
     const isSha256 = value => /^[a-f0-9]{64}$/.test(String(value || ''));
     return Boolean(
-        contracts?.apiReaderArticle === 'beginner-researcher-v2'
+        contracts?.apiReaderArticle === 'beginner-researcher-v3'
+        && paper?.apiReaderPlan?.version === 3
         && source?.fullTextAvailable === true
         && isSha256(source?.sourceSha256)
         && paper?.sourceSha256 === source.sourceSha256

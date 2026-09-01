@@ -14,6 +14,7 @@ const {
     buildRequestBody,
     buildHeaders,
     parseResponseText,
+    getResponsesOutputTruncationError,
     requestLlmJson,
     loadPrompt,
     normalizeDocumentType,
@@ -66,10 +67,12 @@ const {
 // 解构配置常量（便于阅读）
 const {
     apiOverallTimeoutMs: API_OVERALL_TIMEOUT_MS,
+    apiReaderOverallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS = 40 * 60 * 1000,
     apiMaxRetries: API_MAX_RETRIES,
     apiRetryBaseDelayMs: API_RETRY_BASE_DELAY_MS,
     apiMaxTokens: API_MAX_TOKENS,
     repairMaxTokens: REPAIR_MAX_TOKENS = 16000,
+    apiReaderMaxTokens: API_READER_MAX_TOKENS = 48000,
     apiTemperature: API_TEMPERATURE,
     scoringAuditTemperature: SCORING_AUDIT_TEMPERATURE = 0.1,
     imagePlanTemperature: IMAGE_PLAN_TEMPERATURE = 0.2,
@@ -86,6 +89,8 @@ const {
     fullTextMaxChars: FULL_TEXT_MAX_CHARS,
     openSourceEvidenceMaxChars: OPEN_SOURCE_EVIDENCE_MAX_CHARS = 16000,
     revisionEvidenceMaxChars: REVISION_EVIDENCE_MAX_CHARS = 60000,
+    apiReaderEvidenceMaxChars: API_READER_EVIDENCE_MAX_CHARS = 180000,
+    apiReaderContextMaxChars: API_READER_CONTEXT_MAX_CHARS = 240000,
     scoringEvidenceMaxChars: SCORING_EVIDENCE_MAX_CHARS = 40000,
     repairEvidenceMaxChars: REPAIR_EVIDENCE_MAX_CHARS = 30000,
     structureEvidenceMaxChars: STRUCTURE_EVIDENCE_MAX_CHARS = 40000,
@@ -293,6 +298,9 @@ function buildTypeAwareSourceContext(
         METHOD: new Set(['核心摘要', '方法概述和架构']),
         RESULT: new Set(['核心摘要', '方法概述和架构', '实验结果']),
         STRUCTURE: new Set(sectionDefinitions.map(([, title]) => title)),
+        // Reader prompt already carries the complete canonical analysis once;
+        // do not duplicate its sections inside the source-evidence ledger.
+        READER: new Set(),
         SCORING: new Set(sectionDefinitions.map(([, title]) => title))
     };
     const selectedTitles = sectionTitlesByTask[taskLabel] || sectionTitlesByTask.SCORING;
@@ -738,7 +746,12 @@ async function auditTypeAwareScoring(analysis, sourceEvidence = '', options = {}
     return (await auditTypeAwareScoringDetailed(analysis, sourceEvidence, options)).analysis;
 }
 
-const API_READER_ARTICLE_CONTRACT = 'beginner-researcher-v2';
+const API_READER_ARTICLE_CONTRACT = 'beginner-researcher-v3';
+const API_READER_PLAN_VERSION = 3;
+const API_READER_PARSER_VERSION = 'api-reader-parser-v3';
+const API_READER_ASSEMBLER_VERSION = 'api-reader-assembler-v3';
+const API_READER_TABLE_CONTRACT_VERSION = 'api-reader-tables-v3';
+const API_READER_FIGURE_CONTRACT_VERSION = 'api-reader-figures-v3';
 const API_READER_FIGURE_MAX_BYTES = 16 * 1024 * 1024;
 const API_READER_FIGURE_LIMIT = 8;
 const API_READER_KINDS = Object.freeze([
@@ -968,32 +981,65 @@ function recoverySha256(value) {
     return /^[0-9a-f]{64}$/.test(String(value || ''));
 }
 
-function buildApiReaderArtifactEvidence(structuredArtifacts, arxivId = '') {
+function buildApiReaderArtifactEvidence(
+    structuredArtifacts,
+    arxivId = '',
+    maxChars = Math.min(
+        60000,
+        Math.max(20000, Math.floor(API_READER_EVIDENCE_MAX_CHARS * 0.35))
+    )
+) {
     if (!structuredArtifacts || typeof structuredArtifacts !== 'object') return '';
     const lines = ['[READER_ARTIFACTS] 结构化原文图表与公式（正文细节必须优先引用这里）'];
+    let usedChars = lines[0].length;
+    const appendLine = (line, minimumChars = 0) => {
+        const remaining = maxChars - usedChars - 1;
+        if (remaining < minimumChars || remaining <= 0) return false;
+        const raw = String(line || '');
+        const value = raw.slice(0, remaining);
+        lines.push(value);
+        usedChars += value.length + 1;
+        return value.length === raw.length;
+    };
+    // Figure identity participates in publication provenance, so reserve it
+    // before verbose matrices rather than truncating its ordinal or URL.
+    for (const figure of getApiReaderFigureInventory(structuredArtifacts, arxivId)) {
+        appendLine(`FIGURE_${figure.ordinal}: ${figure.caption}`, 32);
+        appendLine(`FIGURE_${figure.ordinal}_URL: ${figure.url}`, 48);
+    }
     for (const formula of (structuredArtifacts.formulas || []).slice(0, 12)) {
         const latex = String(formula?.latex || '').trim();
-        if (latex) lines.push(`FORMULA_${formula.ordinal}: ${latex}`);
+        if (latex) appendLine(`FORMULA_${formula.ordinal}: ${latex}`, 24);
     }
-    for (const table of (structuredArtifacts.tables || []).slice(0, 6)) {
+    const tables = (structuredArtifacts.tables || []).slice(0, 12);
+    for (let index = 0; index < tables.length; index++) {
+        const table = tables[index];
         const matrix = Array.isArray(table?.matrix) ? table.matrix.slice(0, 40) : [];
-        lines.push(
-            `TABLE_${table.ordinal}: ${String(table?.caption || '').replace(/\s+/g, ' ').trim()}`,
-            JSON.stringify(matrix)
+        const header = `TABLE_${table.ordinal}: ${String(table?.caption || '').replace(/\s+/g, ' ').trim()}`;
+        if (!appendLine(header, 24)) break;
+        const remainingTables = Math.max(1, tables.length - index);
+        const matrixBudget = Math.max(
+            256,
+            Math.floor((maxChars - usedChars) / remainingTables)
         );
-    }
-    for (const figure of getApiReaderFigureInventory(structuredArtifacts, arxivId)) {
-        lines.push(
-            `FIGURE_${figure.ordinal}: ${figure.caption}`,
-            `FIGURE_${figure.ordinal}_URL: ${figure.url}`
-        );
+        appendLine(JSON.stringify(matrix).slice(0, matrixBudget), 32);
     }
     return lines.length > 1 ? lines.join('\n') : '';
 }
 
 function buildApiReaderEvidenceContext(analysis, sourceText, structuredArtifacts, arxivId = '') {
-    const artifactEvidence = buildApiReaderArtifactEvidence(structuredArtifacts, arxivId);
-    const sourceBudget = Math.max(4000, REVISION_EVIDENCE_MAX_CHARS - artifactEvidence.length - 2);
+    const artifactBudget = Math.min(
+        60000,
+        Math.max(20000, Math.floor(API_READER_EVIDENCE_MAX_CHARS * 0.35)),
+        Math.max(0, API_READER_EVIDENCE_MAX_CHARS - 4000)
+    );
+    const artifactEvidence = buildApiReaderArtifactEvidence(
+        structuredArtifacts, arxivId, artifactBudget
+    );
+    const sourceBudget = Math.max(
+        0,
+        API_READER_EVIDENCE_MAX_CHARS - artifactEvidence.length - 2
+    );
     const sourceEvidence = buildTypeAwareSourceContext(
         analysis,
         sourceText,
@@ -1001,7 +1047,13 @@ function buildApiReaderEvidenceContext(analysis, sourceText, structuredArtifacts
         BROAD_EVIDENCE_PATTERNS,
         'READER'
     );
-    return [sourceEvidence, artifactEvidence].filter(Boolean).join('\n\n');
+    const combined = [sourceEvidence, artifactEvidence].filter(Boolean).join('\n\n');
+    if (combined.length > API_READER_EVIDENCE_MAX_CHARS) {
+        throw new Error(
+            `读者文章证据超出硬上限: ${combined.length}/${API_READER_EVIDENCE_MAX_CHARS}`
+        );
+    }
+    return combined;
 }
 
 function normalizeReaderFigureCaption(figure) {
@@ -1065,9 +1117,8 @@ function readerFigureNarrative(figure, target = null) {
     const panelNotice = /^\([a-z]\)$/i.test(String(figure?.caption || '').trim())
         ? `当前资源对应子图 ${String(figure.caption).trim()}；同一编号的其他面板请回原论文核对。`
         : '';
-    return `这张图来自原论文 ${label}，图示内容为“${truncateReaderFigureCaption(normalizeReaderFigureCaption(figure), 160)}”。`
-        + panelNotice
-        + `请结合“${String(target?.heading || '当前小节').trim()}”的正文，按图例、坐标轴或模块连线核对；图中没有呈现的内容不作外推。`;
+    return `原论文 ${label}：“${truncateReaderFigureCaption(normalizeReaderFigureCaption(figure), 180)}”。`
+        + panelNotice;
 }
 
 function readerFigureAlt(figure, target = null) {
@@ -1136,10 +1187,16 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
         ).find(Boolean);
         if (!target) continue;
         const alt = sanitizeMarkdownImageAlt(readerFigureAlt(figure, target));
+        const focusBlock = placement?.focusPoints?.length
+            ? `> **看图路径：** ${placement.focusPoints.map(
+                (item, index) => `${index + 1}. ${item}`
+            ).join('；')}`
+            : null;
         const block = [
+            focusBlock,
             `![${alt}](${figure.url})`,
             `*论文图 ${figure.ordinal}。${readerFigureNarrative(figure, target)}*`
-        ].join('\n\n');
+        ].filter(Boolean).join('\n\n');
         const inserted = placement
             ? replaceReaderFigureMarker(
                 article,
@@ -1156,7 +1213,10 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
             targetHeading: target.heading,
             marker: placement?.marker || null,
             leadQuote: placement?.leadQuote || null,
-            explanationQuote: placement?.explanationQuote || null
+            explanationQuote: placement?.explanationQuote || null,
+            ...(Array.isArray(placement?.focusPoints)
+                ? { focusPoints: placement.focusPoints }
+                : {})
         });
     }
     if (placements.length > 0 && used.length !== placements.length) {
@@ -1259,8 +1319,11 @@ function pruneUnmaterializedApiReaderFigureBlocks(article, plannedFigures, mater
     let output = String(article || '');
     for (const figure of plannedFigures || []) {
         if (kept.has(`${figure.ordinal}\u0000${figure.url}`)) continue;
+        const focusPrefix = Array.isArray(figure.focusPoints) && figure.focusPoints.length > 0
+            ? `> \\*\\*看图路径：\\*\\*[^\\n]*\\n\\n`
+            : '';
         const pattern = new RegExp(
-            `^!\\[[^\\n]*\\]\\(${escapeRegExp(String(figure.url || ''))}\\)\\n\\n`
+            `^${focusPrefix}!\\[[^\\n]*\\]\\(${escapeRegExp(String(figure.url || ''))}\\)\\n\\n`
             + `\\*论文图\\s+${Number(figure.ordinal)}。[^\\n]*\\*\\n*`,
             'gm'
         );
@@ -1351,13 +1414,15 @@ function fitApiReaderFigureDimensions(sourceWidth, sourceHeight) {
     };
 }
 
-function validateApiReaderTableNarratives(article) {
+function validateApiReaderTableNarratives(article, minimumTables = 2) {
     const blocks = String(article || '').split(/\n\s*\n/).map(value => value.trim());
     const tableIndexes = blocks.map((block, index) => (
         /^\|.+\|$/m.test(block) ? index : -1
     )).filter(index => index >= 0);
-    if (tableIndexes.length < 2) {
-        throw new Error(`读者文章至少需要 2 张有叙事闭环的 Markdown 表，当前 ${tableIndexes.length}`);
+    if (tableIndexes.length < minimumTables) {
+        throw new Error(
+            `读者文章至少需要 ${minimumTables} 张有叙事闭环的 Markdown 表，当前 ${tableIndexes.length}`
+        );
     }
     for (const index of tableIndexes) {
         const beforeParts = [];
@@ -1398,7 +1463,10 @@ function parseApiReaderArticleResult(raw, options = {}) {
         ],
         '读者文章顶层'
     );
-    if (value.version !== 2) throw new Error('读者文章 version 必须为 2');
+    if (![2, 3].includes(value.version)) throw new Error('读者文章 version 必须为 2 或 3');
+    if (Number.isInteger(options.requiredVersion) && value.version !== options.requiredVersion) {
+        throw new Error(`读者文章 version 必须为 ${options.requiredVersion}，禁止降级生成`);
+    }
     if (typeof value.readerTitle !== 'string' || value.readerTitle.trim().length < 8
         || value.readerTitle.trim().length > 80) {
         throw new Error('读者标题必须是 8-80 字符的论文特有标题');
@@ -1408,8 +1476,14 @@ function parseApiReaderArticleResult(raw, options = {}) {
         || value.oneSentenceThesis.trim().length > 260) {
         throw new Error('读者文章 oneSentenceThesis 必须为 30-260 字符');
     }
-    if (!Array.isArray(value.sections) || value.sections.length < 10 || value.sections.length > 14) {
-        throw new Error('读者文章 sections 必须包含 10-14 个小节');
+    const minimumSectionCount = value.version === 3 ? 12 : 10;
+    const maximumSectionCount = value.version === 3 ? 18 : 14;
+    if (!Array.isArray(value.sections)
+        || value.sections.length < minimumSectionCount
+        || value.sections.length > maximumSectionCount) {
+        throw new Error(
+            `读者文章 sections 必须包含 ${minimumSectionCount}-${maximumSectionCount} 个小节`
+        );
     }
     const seenHeadings = new Set();
     let previousRank = -1;
@@ -1441,9 +1515,14 @@ function parseApiReaderArticleResult(raw, options = {}) {
     const kinds = new Set(normalizedSections.map(section => section.kind));
     const missing = API_READER_REQUIRED_KINDS.filter(kind => !kinds.has(kind));
     if (missing.length > 0) throw new Error(`读者文章缺少教学阶段: ${missing.join(', ')}`);
+    const minimumConceptBridges = value.version === 3 ? 4 : 3;
+    const maximumConceptBridges = value.version === 3 ? 10 : 8;
     if (!Array.isArray(value.conceptBridges)
-        || value.conceptBridges.length < 3 || value.conceptBridges.length > 8) {
-        throw new Error('读者文章 conceptBridges 必须包含 3-8 个术语组合解释');
+        || value.conceptBridges.length < minimumConceptBridges
+        || value.conceptBridges.length > maximumConceptBridges) {
+        throw new Error(
+            `读者文章 conceptBridges 必须包含 ${minimumConceptBridges}-${maximumConceptBridges} 个术语组合解释`
+        );
     }
     const conceptBridges = value.conceptBridges.map((bridge, index) => {
         assertExactObjectKeys(
@@ -1484,16 +1563,24 @@ function parseApiReaderArticleResult(raw, options = {}) {
     if (availableFigureOrdinals.size === 0 && value.figurePlacements.length !== 0) {
         throw new Error('论文没有可用 Figure，figurePlacements 必须为空');
     }
+    const minimumFigurePlacements = value.version === 3
+        ? (availableFigureOrdinals.size >= 6
+            ? 6
+            : Math.min(2, availableFigureOrdinals.size))
+        : Math.min(2, availableFigureOrdinals.size);
     if (availableFigureOrdinals.size > 0
-        && value.figurePlacements.length < Math.min(2, availableFigureOrdinals.size)) {
-        throw new Error('论文存在可用 Figure，但高价值图文绑定少于 2 张');
+        && value.figurePlacements.length < minimumFigurePlacements) {
+        throw new Error(
+            `论文存在可用 Figure，但高价值图文绑定少于 ${minimumFigurePlacements} 张`
+        );
     }
     const seenFigureOrdinals = new Set();
     const figurePlacements = value.figurePlacements.map((placement, index) => {
+        const placementKeys = value.version === 3
+            ? ['figureOrdinal', 'targetKind', 'marker', 'focusPoints']
+            : ['figureOrdinal', 'targetKind', 'marker'];
         assertExactObjectKeys(
-            placement,
-            ['figureOrdinal', 'targetKind', 'marker'],
-            `读者文章 figurePlacements[${index}]`
+            placement, placementKeys, `读者文章 figurePlacements[${index}]`
         );
         if (!Number.isInteger(placement.figureOrdinal)
             || !availableFigureOrdinals.has(placement.figureOrdinal)
@@ -1514,8 +1601,13 @@ function parseApiReaderArticleResult(raw, options = {}) {
         const markerIndex = blocks.indexOf(marker);
         const leadQuote = blocks[markerIndex - 1] || '';
         const explanationQuote = blocks[markerIndex + 1] || '';
+        const focusPoints = value.version === 3 ? placement.focusPoints : [];
         if (!candidate || markerIndex <= 0 || markerIndex >= blocks.length - 1
-            || leadQuote.length < 35 || explanationQuote.length < 45) {
+            || leadQuote.length < 35 || explanationQuote.length < 45
+            || !Array.isArray(focusPoints)
+            || (value.version === 3 && (focusPoints.length < 2 || focusPoints.length > 4))
+            || focusPoints.some(item => typeof item !== 'string'
+                || item.trim().length < 12 || item.trim().length > 120)) {
             throw new Error(`读者文章 figurePlacements[${index}] 图前导读与图后解释未形成相邻闭环`);
         }
         return {
@@ -1523,7 +1615,14 @@ function parseApiReaderArticleResult(raw, options = {}) {
             targetKind: placement.targetKind,
             marker,
             leadQuote: normalizeReaderEditorialSurface(leadQuote),
-            explanationQuote: normalizeReaderEditorialSurface(explanationQuote)
+            explanationQuote: normalizeReaderEditorialSurface(explanationQuote),
+            ...(value.version === 3
+                ? {
+                    focusPoints: focusPoints.map(
+                        item => normalizeReaderEditorialSurface(item.trim())
+                    )
+                }
+                : {})
         };
     });
     let article = normalizedSections.map(section => (
@@ -1537,8 +1636,12 @@ function parseApiReaderArticleResult(raw, options = {}) {
     }
     article = normalizeReaderEditorialSurface(article);
     const chineseChars = (article.match(/[\u3400-\u9fff]/g) || []).length;
-    if (chineseChars < 2800 || chineseChars > 14000) {
-        throw new Error(`读者文章中文字数必须为 2800-14000，当前 ${chineseChars}`);
+    const minimumChineseChars = value.version === 3 ? 5000 : 2800;
+    const maximumChineseChars = value.version === 3 ? 18000 : 14000;
+    if (chineseChars < minimumChineseChars || chineseChars > maximumChineseChars) {
+        throw new Error(
+            `读者文章中文字数必须为 ${minimumChineseChars}-${maximumChineseChars}，当前 ${chineseChars}`
+        );
     }
     if (/(?:evidence\s*id|manual_complete|证据块|代码校验反馈|(?:本|上述|当前|这个)\s*prompt|(?:根据|遵循)\s*(?:本|上述|当前)?\s*prompt|prompt\s*(?:要求|指令|中要求))/i.test(article)) {
         throw new Error('读者文章泄漏了流程或证据元话语');
@@ -1594,12 +1697,22 @@ function parseApiReaderArticleResult(raw, options = {}) {
         );
     }
     if (options.requireIntegratedTables === true) {
-        validateApiReaderTableNarratives(article);
+        const minimumTables = Number.isInteger(options.minimumIntegratedTables)
+            ? options.minimumIntegratedTables
+            : 2;
+        validateApiReaderTableNarratives(article, minimumTables);
+        const tables = extractMarkdownTables(article);
+        const minimumWideTables = Math.min(2, minimumTables);
+        if (tables.filter(table => table.header.length >= 5).length < minimumWideTables) {
+            throw new Error(`读者文章至少需要 ${minimumWideTables} 张 5 列以上的宽表`);
+        }
     }
     return {
         plan: {
-            version: 2,
-            contract: API_READER_ARTICLE_CONTRACT,
+            version: value.version,
+            contract: value.version === API_READER_PLAN_VERSION
+                ? API_READER_ARTICLE_CONTRACT
+                : 'beginner-researcher-v2',
             readerTitle: normalizeReaderEditorialSurface(value.readerTitle.trim()),
             oneSentenceThesis: normalizeReaderEditorialSurface(value.oneSentenceThesis.trim()),
             conceptBridges,
@@ -1679,6 +1792,51 @@ async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence,
         .matchAll(/^FIGURE_(\d+):/gm)]
         .map(match => Number.parseInt(match[1], 10))
         .filter(Number.isInteger);
+    const availableTableCount = [...String(sourceEvidence || '')
+        .matchAll(/^TABLE_(\d+):/gm)]
+        .map(match => Number.parseInt(match[1], 10))
+        .filter(Number.isInteger).length;
+    const minimumIntegratedTables = Math.min(4, Math.max(2, availableTableCount));
+    const figureEvidenceEntries = [...String(sourceEvidence || '')
+        .matchAll(/^FIGURE_(\d+):\s*([^\n]*)\nFIGURE_\1_URL:\s*(https:\/\/[^\s]+)$/gm)]
+        .map(match => ({
+            ordinal: Number.parseInt(match[1], 10),
+            caption: match[2].trim(),
+            url: match[3].trim()
+        }))
+        .filter(item => Number.isInteger(item.ordinal));
+    const downloadedReaderImages = figureEvidenceEntries.length > 0
+        ? await downloadImagesSerial(
+            figureEvidenceEntries.map(item => item.url),
+            API_READER_FIGURE_LIMIT,
+            IMAGE_MAX_BASE64_CHARS,
+            IMAGE_TOTAL_BASE64_CHARS
+        )
+        : [];
+    const readerImageBlocks = downloadedReaderImages.flatMap(image => {
+        const figure = figureEvidenceEntries.find(item => item.url === image.url);
+        if (!figure) return [];
+        return [
+            {
+                type: 'text',
+                text: `以下图像与证据清单 FIGURE_${figure.ordinal} 一一对应。图注：${figure.caption}`
+            },
+            buildImageContent(image.url, image.base64, image.mime)
+        ];
+    });
+    const imageEvidence = downloadedReaderImages.map(image => {
+        const figure = figureEvidenceEntries.find(item => item.url === image.url);
+        return {
+            ordinal: figure?.ordinal || null,
+            url: image.url,
+            sha256: image.sha256
+        };
+    });
+    const readerImageVisibilityNotice = imageEvidence.length > 0
+        ? `模型本次真正收到像素的图为：${imageEvidence.map(
+            item => `FIGURE_${item.ordinal}`
+        ).join(', ')}。只有这些图可以解读坐标轴、曲线、面板、颜色和箭头等像素细节。`
+        : '模型本次没有收到任何 Figure 像素；只能依据图注和正文，禁止声称看到坐标轴、曲线、颜色或模块位置。';
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         const prompt = loadPrompt('prompts/api-reader-article.md', {
             title: paper.title || '',
@@ -1687,18 +1845,33 @@ async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence,
             sourceEvidence,
             validationFeedback
         });
+        if (prompt.length > API_READER_CONTEXT_MAX_CHARS) {
+            throw new Error(
+                `读者文章完整请求上下文超限: ${prompt.length}/${API_READER_CONTEXT_MAX_CHARS} 字符`
+            );
+        }
         const raw = await callModel(
-            [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
-            REPAIR_MAX_TOKENS,
-            { temperature: 0.6 }
+            [{
+                role: 'user',
+                content: [
+                    { type: 'text', text: prompt },
+                    { type: 'text', text: readerImageVisibilityNotice },
+                    ...readerImageBlocks
+                ]
+            }],
+            API_READER_MAX_TOKENS,
+            { temperature: 0.6, overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS }
         );
         try {
             return {
                 ...parseApiReaderArticleResult(raw, {
                     availableFigureOrdinals,
-                    requireIntegratedTables: true
+                    requireIntegratedTables: true,
+                    minimumIntegratedTables,
+                    requiredVersion: API_READER_PLAN_VERSION
                 }),
-                attempts: attempt
+                attempts: attempt,
+                imageEvidence
             };
         } catch (error) {
             lastError = error;
@@ -1749,7 +1922,8 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails) {
     const fingerprint = stableFingerprint({
         configurationFingerprint,
         analysisSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
-        evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex')
+        evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),
+        structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || ''
     });
     const generated = await generateApiReaderArticleDetailed(
         paper, analysis, evidenceContext
@@ -1794,10 +1968,12 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails) {
         model: DEEP_CONFIG.model,
         protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
         temperature: 0.6,
-        maxTokens: REPAIR_MAX_TOKENS,
+        maxTokens: API_READER_MAX_TOKENS,
+        overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
         promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.apiReaderArticle),
         evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
-        evidenceMaxChars: REVISION_EVIDENCE_MAX_CHARS,
+        evidenceMaxChars: API_READER_EVIDENCE_MAX_CHARS,
+        contextMaxChars: API_READER_CONTEXT_MAX_CHARS,
         evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),
         articleSha256,
         planSha256,
@@ -1806,6 +1982,12 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails) {
         readerAuthorsSha256: stableFingerprint(readerAuthors),
         structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || '',
         qualityMetrics: readerResult.qualityMetrics,
+        parserVersion: API_READER_PARSER_VERSION,
+        assemblerVersion: API_READER_ASSEMBLER_VERSION,
+        tableContractVersion: API_READER_TABLE_CONTRACT_VERSION,
+        figureContractVersion: API_READER_FIGURE_CONTRACT_VERSION,
+        imageEvidenceCount: readerResult.imageEvidence?.length || 0,
+        imageEvidenceSha256: stableFingerprint(readerResult.imageEvidence || []),
         refreshedAt: getBeijingISOString()
     };
     return paper;
@@ -1879,7 +2061,7 @@ async function refreshApiScoringAndReaderFromSource(paper, sourceDetails) {
     const figures = Array.isArray(paper.apiReaderFigures) ? paper.apiReaderFigures : [];
     manifest.stages.imageSupplement = {
         status: 'skipped',
-        reason: 'api_reader_v2_official_figures_bound',
+        reason: 'api_reader_v3_official_figures_bound',
         officialFigureCount: figures.length,
         officialFiguresSha256: stableFingerprint(figures),
         refreshedAt: getBeijingISOString()
@@ -1896,7 +2078,7 @@ function refreshApiReaderAuthorsFromSource(paper, sourceDetails) {
     const stage = manifest?.stages?.apiReaderArticle;
     if (manifest?.contracts?.apiReaderArticle !== API_READER_ARTICLE_CONTRACT
         || stage?.status !== 'complete') {
-        throw new Error('作者机构刷新只接受已完成 v2 读者文章的 canonical');
+        throw new Error('作者机构刷新只接受已完成 v3 读者文章的 canonical');
     }
     const sourceText = String(sourceDetails?.text || '');
     const sourceSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
@@ -1923,7 +2105,7 @@ async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
         || stage?.status !== 'complete'
         || sourceSha256 !== paper.sourceSha256
         || sourceSha256 !== manifest.sourceAcquisition?.sourceSha256) {
-        throw new Error('论文图刷新只接受来源闭环的 v2 canonical');
+        throw new Error('论文图刷新只接受来源闭环的 v3 canonical');
     }
     const figures = Array.isArray(paper.apiReaderFigures) ? paper.apiReaderFigures : [];
     const currentInventory = getApiReaderFigureInventory(
@@ -1958,7 +2140,7 @@ async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
     stage.refreshedAt = getBeijingISOString();
     manifest.stages.imageSupplement = {
         status: 'skipped',
-        reason: 'api_reader_v2_official_figures_bound',
+        reason: 'api_reader_v3_official_figures_bound',
         officialFigureCount: materialized.length,
         officialFiguresSha256: stableFingerprint(materialized),
         refreshedAt: getBeijingISOString()
@@ -2167,11 +2349,20 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
         primaryAnalysis: stableFingerprint(primaryContext),
         demoLinkScan: stableFingerprint({ implementation: 'demo-link-scan-v1' }),
         apiReaderArticle: stableFingerprint({
-            ...modelFingerprint(DEEP_CONFIG, 0.6, REPAIR_MAX_TOKENS),
+            ...modelFingerprint(DEEP_CONFIG, 0.6, API_READER_MAX_TOKENS),
             contract: API_READER_ARTICLE_CONTRACT,
+            planVersion: API_READER_PLAN_VERSION,
+            parserVersion: API_READER_PARSER_VERSION,
+            assemblerVersion: API_READER_ASSEMBLER_VERSION,
+            tableContractVersion: API_READER_TABLE_CONTRACT_VERSION,
+            figureContractVersion: API_READER_FIGURE_CONTRACT_VERSION,
+            imageMaxBase64Chars: IMAGE_MAX_BASE64_CHARS,
+            imageTotalBase64Chars: IMAGE_TOTAL_BASE64_CHARS,
             promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.apiReaderArticle),
             evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
-            evidenceMaxChars: REVISION_EVIDENCE_MAX_CHARS
+            evidenceMaxChars: API_READER_EVIDENCE_MAX_CHARS,
+            contextMaxChars: API_READER_CONTEXT_MAX_CHARS,
+            overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS
         }),
         imageSupplement: stableFingerprint({
             ...modelFingerprint(SECONDARY_CONFIG, IMAGE_PLAN_TEMPERATURE, API_MAX_TOKENS),
@@ -2530,14 +2721,20 @@ function resolveApiMaxRetries(maxRetries) {
 async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RETRIES, config = null) {
     maxRetries = resolveApiMaxRetries(maxRetries);
     const cfg = config || DEEP_CONFIG;
+    const overallTimeoutMs = Number.isInteger(cfg.overallTimeoutMs) && cfg.overallTimeoutMs > 0
+        ? cfg.overallTimeoutMs
+        : API_OVERALL_TIMEOUT_MS;
     const safeMessages = sanitizeModelMessages(messages);
-    const budget = createActiveTimeBudget(API_OVERALL_TIMEOUT_MS);
+    const budget = createActiveTimeBudget(overallTimeoutMs);
     const apiType = detectApiType(cfg.endpoint, cfg.model);
     const modelUrl = buildApiUrl(apiType, cfg.endpoint);
     const url = new URL(modelUrl);
     const temperature = Number.isFinite(cfg.temperature) ? cfg.temperature : API_TEMPERATURE;
     const input = summarizeModelInput(safeMessages);
-    console.log(`    [api] → ${cfg.model} | ${apiType} | ${url.hostname}${url.pathname} | input_chars=${input.textChars} | estimated_text_tokens≈${input.estimatedTextTokens} | images=${input.images} | max_tokens=${maxTokens} | max_retries=${maxRetries} | temperature=${temperature}`);
+    const outputTokenParameter = apiType === 'openai_responses'
+        ? 'max_output_tokens'
+        : 'max_tokens';
+    console.log(`    [api] → ${cfg.model} | ${apiType} | ${url.hostname}${url.pathname} | input_chars=${input.textChars} | estimated_text_tokens≈${input.estimatedTextTokens} | images=${input.images} | output_token_param=${outputTokenParameter} | output_token_budget=${maxTokens} | max_retries=${maxRetries} | temperature=${temperature}`);
 
     let lastError = null;
     let reportedSuspendedMs = 0;
@@ -2546,10 +2743,11 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             const attemptSuspendedMs = budget.suspendedMs();
             try {
-                const timeoutMs = getActiveRemainingTimeoutMs(API_OVERALL_TIMEOUT_MS, budget.elapsedMs());
+                const timeoutMs = getActiveRemainingTimeoutMs(overallTimeoutMs, budget.elapsedMs());
                 return await _callModelOnce(safeMessages, maxTokens, cfg, budget, apiType, timeoutMs);
             } catch (err) {
                 lastError = err;
+                if (err?.code === 'MODEL_OUTPUT_TRUNCATED') throw err;
                 const duration = (budget.elapsedMs() / 1000).toFixed(1);
                 const suspendedBeforeAttempt = attemptSuspendedMs;
                 const suspendedMs = budget.suspendedMs();
@@ -2568,16 +2766,18 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
 
                 if (attempt < maxRetries) {
                     const delay = Math.pow(2, attempt) * API_RETRY_BASE_DELAY_MS;
-                    if (getActiveRemainingTimeoutMs(API_OVERALL_TIMEOUT_MS, budget.elapsedMs()) <= delay) {
-                        throw createOverallTimeoutError(budget.elapsedMs(), lastError);
+                    if (getActiveRemainingTimeoutMs(overallTimeoutMs, budget.elapsedMs()) <= delay) {
+                        throw createOverallTimeoutError(
+                            budget.elapsedMs(), lastError, overallTimeoutMs
+                        );
                     }
                     console.log(`    [api] ⏳  ${delay/1000}s 后第 ${attempt + 1} 次重试...`);
                     await new Promise(resolve => setTimeout(resolve, delay));
                 }
             }
         }
-        if (budget.elapsedMs() >= API_OVERALL_TIMEOUT_MS || lastError?.code === 'MODEL_OVERALL_TIMEOUT') {
-            throw createOverallTimeoutError(budget.elapsedMs(), lastError);
+        if (budget.elapsedMs() >= overallTimeoutMs || lastError?.code === 'MODEL_OVERALL_TIMEOUT') {
+            throw createOverallTimeoutError(budget.elapsedMs(), lastError, overallTimeoutMs);
         }
         throw new Error(`模型调用失败，已重试 ${maxRetries} 次: ${lastError.message}`);
     } finally {
@@ -2585,8 +2785,12 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
     }
 }
 
-function createOverallTimeoutError(elapsedMs, cause = null) {
-    const error = new Error(`模型调用整体超时: 预算 ${API_OVERALL_TIMEOUT_MS}ms，已用 ${elapsedMs}ms`);
+function createOverallTimeoutError(
+    elapsedMs,
+    cause = null,
+    totalMs = API_OVERALL_TIMEOUT_MS
+) {
+    const error = new Error(`模型调用整体超时: 预算 ${totalMs}ms，已用 ${elapsedMs}ms`);
     error.code = 'MODEL_OVERALL_TIMEOUT';
     if (cause) error.cause = cause;
     return error;
@@ -2677,6 +2881,10 @@ async function _callModelOnce(messages, maxTokens, config, budget, apiType, time
             console.log(`    [api] ✗ ${config.model} | HTTP ${response.statusCode} | ${duration}s | error: ${typeof message === 'string' ? message : JSON.stringify(message).substring(0, 200)}`);
             throw new Error(`HTTP ${response.statusCode}: ${typeof message === 'string' ? message : JSON.stringify(message)}`);
         }
+        const truncationError = apiType === 'openai_responses'
+            ? getResponsesOutputTruncationError(response.body, maxTokens)
+            : null;
+        if (truncationError) throw truncationError;
         const content = parseResponseText(apiType, response.body);
         if (content !== null) {
             console.log(`    [api] ✓ ${config.model} | HTTP ${response.statusCode} | ${content.length} chars | ${duration}s`);
@@ -2702,6 +2910,9 @@ async function callModel(messages, maxTokens = 8000, options = {}) {
     console.log(`    [analyzer] ╚═══════════════════════════════════════════════════╜`);
     return await callModelWithConfig(messages, maxTokens, resolveApiMaxRetries(options.maxRetries), {
         ...DEEP_CONFIG,
+        ...(Number.isInteger(options.overallTimeoutMs) && options.overallTimeoutMs > 0
+            ? { overallTimeoutMs: options.overallTimeoutMs }
+            : {}),
         ...(Number.isFinite(options.temperature) ? { temperature: options.temperature } : {})
     });
 }
@@ -5920,7 +6131,8 @@ async function analyzePaperDeep(paper) {
     const apiReaderFingerprint = stableFingerprint({
         configurationFingerprint: recoveryFingerprints.apiReaderArticle,
         analysisSha256: crypto.createHash('sha256').update(String(analysis || '')).digest('hex'),
-        evidenceSha256: crypto.createHash('sha256').update(apiReaderEvidenceContext).digest('hex')
+        evidenceSha256: crypto.createHash('sha256').update(apiReaderEvidenceContext).digest('hex'),
+        structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || ''
     });
     if (isRecoveryStageComplete(analysisManifest, 'apiReaderArticle')) {
         if (repairApiReaderPlanSurfaceBinding(paper, analysisManifest)) {
@@ -5934,6 +6146,7 @@ async function analyzePaperDeep(paper) {
         const readerStage = analysisManifest.stages.apiReaderArticle;
         if (!paper.apiReaderArticle || !paper.apiReaderPlan
             || analysisManifest.contracts?.apiReaderArticle !== API_READER_ARTICLE_CONTRACT
+            || paper.apiReaderPlan?.version !== API_READER_PLAN_VERSION
             || articleSha !== readerStage.articleSha256
             || planSha !== readerStage.planSha256
             || paper.apiReaderArticleSha256 !== articleSha
@@ -5995,10 +6208,12 @@ async function analyzePaperDeep(paper) {
                 model: DEEP_CONFIG.model,
                 protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
                 temperature: 0.6,
-                maxTokens: REPAIR_MAX_TOKENS,
+                maxTokens: API_READER_MAX_TOKENS,
+                overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
                 promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.apiReaderArticle),
                 evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
-                evidenceMaxChars: REVISION_EVIDENCE_MAX_CHARS,
+                evidenceMaxChars: API_READER_EVIDENCE_MAX_CHARS,
+                contextMaxChars: API_READER_CONTEXT_MAX_CHARS,
                 evidenceSha256: crypto.createHash('sha256').update(apiReaderEvidenceContext).digest('hex'),
                 articleSha256: paper.apiReaderArticleSha256,
                 planSha256: paper.apiReaderPlanSha256,
@@ -6006,7 +6221,13 @@ async function analyzePaperDeep(paper) {
                 figuresSha256: stableFingerprint(readerResult.figures),
                 readerAuthorsSha256: stableFingerprint(paper.apiReaderAuthors),
                 structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || '',
-                qualityMetrics: readerResult.qualityMetrics
+                qualityMetrics: readerResult.qualityMetrics,
+                parserVersion: API_READER_PARSER_VERSION,
+                assemblerVersion: API_READER_ASSEMBLER_VERSION,
+                tableContractVersion: API_READER_TABLE_CONTRACT_VERSION,
+                figureContractVersion: API_READER_FIGURE_CONTRACT_VERSION,
+                imageEvidenceCount: readerResult.imageEvidence?.length || 0,
+                imageEvidenceSha256: stableFingerprint(readerResult.imageEvidence || [])
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.log(`    [deep] ✅ 初学研究者读者文章已生成`);
@@ -6047,13 +6268,13 @@ async function analyzePaperDeep(paper) {
         analysis = preImageAnalysis;
         selectedImageUrls = [];
         markRecoveryStage(analysisManifest, 'imageSupplement', 'skipped', {
-            reason: 'api_reader_v2_official_figures_bound',
+            reason: 'api_reader_v3_official_figures_bound',
             officialFigureCount: paper.apiReaderFigures.length,
             officialFiguresSha256: stableFingerprint(paper.apiReaderFigures),
             fingerprint: imageSupplementFingerprint
         });
         console.log(
-            `    [deep] ℹ️  已绑定 ${paper.apiReaderFigures.length} 张 v2 官方正文图，跳过旧副模型插图阶段`
+            `    [deep] ℹ️  已绑定 ${paper.apiReaderFigures.length} 张 v3 官方正文图，跳过旧副模型插图阶段`
         );
     } else if (isDualModel && downloadedImages.length > 0 && !isRecoveryStageComplete(analysisManifest, 'imageSupplement')) {
         try {

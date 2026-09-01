@@ -68,7 +68,7 @@ function llmApiProductionGenerationFields(papers) {
         const marker = ((index + 2) % 10).toString().repeat(64);
         return {
             paperId: normalizedId(paper),
-            readerContract: 'beginner-researcher-v2',
+            readerContract: 'beginner-researcher-v3',
             readerArticleSha256: marker, readerPlanSha256: marker,
             readerFiguresSha256: marker, readerAuthorsSha256: marker,
             analysisSha256: marker, sourceSha256: marker,
@@ -81,7 +81,7 @@ function llmApiProductionGenerationFields(papers) {
     const bindingsFingerprint = stableApiBindingsSha256(bindings);
     const proof = {
         contract: 'llm-api-production-publication-v1',
-        readerContract: 'beginner-researcher-v2',
+        readerContract: 'beginner-researcher-v3',
         scoringContract: 'api-scoring-audit-v2',
         paperCount: bindings.length,
         paperIds: bindings.map(item => item.paperId),

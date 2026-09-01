@@ -691,6 +691,22 @@ function parseResponseText(apiType, response) {
     return null;
 }
 
+function getResponsesOutputTruncationError(response, maxOutputTokens) {
+    if (response?.status !== 'incomplete'
+        || response?.incomplete_details?.reason !== 'max_output_tokens') {
+        return null;
+    }
+    const outputTokens = response?.usage?.output_tokens;
+    const error = new Error(
+        `OpenAI Responses 输出被 max_output_tokens=${maxOutputTokens} 截断`
+        + `${Number.isFinite(outputTokens) ? `，已使用 ${outputTokens} tokens` : ''}`
+    );
+    error.code = 'MODEL_OUTPUT_TRUNCATED';
+    error.outputTokens = Number.isFinite(outputTokens) ? outputTokens : null;
+    error.maxOutputTokens = maxOutputTokens;
+    return error;
+}
+
 function parseSseResponse(raw) {
     const deltas = [];
     let completed = null;
@@ -1747,6 +1763,7 @@ module.exports = {
     buildHeaders,
     getClaudeCodeVersion,
     parseResponseText,
+    getResponsesOutputTruncationError,
     parseSseResponse,
     requestJson,
     requiresLlmProxy,

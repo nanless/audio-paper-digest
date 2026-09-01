@@ -190,7 +190,7 @@ describe('digest run report', () => {
         const paper = validAnalysisPaper('2607.00001');
         paper.analysis = '完整的 API 深度分析正文';
         paper.apiReaderArticle = '### 面向初学者的论文解释\n\n正文';
-        paper.apiReaderPlan = { version: 1, contract: 'beginner-researcher-v2' };
+        paper.apiReaderPlan = { version: 3, contract: 'beginner-researcher-v3' };
         paper.apiReaderFigures = [];
         paper.apiReaderAuthors = { authors: [{ name: 'Author', affiliations: ['Lab'] }] };
         paper.sourceSha256 = '1'.repeat(64);
@@ -198,7 +198,7 @@ describe('digest run report', () => {
         paper.apiReaderPlanSha256 = hashStable(paper.apiReaderPlan);
         paper.parsed = { ...(paper.parsed || {}), score: 7.5 };
         paper.analysisManifest = {
-            contracts: { apiReaderArticle: 'beginner-researcher-v2' },
+            contracts: { apiReaderArticle: 'beginner-researcher-v3' },
             sourceAcquisition: { fullTextAvailable: true, sourceSha256: paper.sourceSha256 },
             stages: {
                 scoringAudit: {

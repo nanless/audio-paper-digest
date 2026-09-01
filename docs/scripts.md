@@ -119,6 +119,8 @@ arXiv 抓取与 LLM 筛选模块。
 | API 内层重试次数 | 3 | — | deep-analyzer 内层每次调用重试次数 |
 | API 内层退避基数 | 5000ms | — | 指数退避：第一次 5s，之后翻倍 |
 | 主分析 max_tokens | 64000 | — | 主分析 LLM 输出长度上限；局部修复默认使用 `repairMaxTokens=16000` |
+| API 读者长文 max_output_tokens | 48000 | `PD_API_READER_MAX_TOKENS` | Muse Responses 长文独立输出预算；截断结果显式失败 |
+| API 读者证据/完整上下文 | 180000/240000 字符 | `PD_API_READER_EVIDENCE_MAX_CHARS` / `PD_API_READER_CONTEXT_MAX_CHARS` | 分别约束证据包与渲染后完整请求，并进入阶段指纹 |
 | temperature | 0.7 | — | LLM 采样温度 |
 | 图片下载超时 | 60s | `PD_IMAGE_DOWNLOAD_TIMEOUT_MS` | 单张图片下载超时，失败后仍按既定次数重试 |
 | 单张图片原始大小上限 | 6MB | `PD_IMAGE_MAX_BYTES` | 下载后按字节数校验 |
@@ -261,8 +263,9 @@ HuggingFace Papers 抓取模块。
 **Round 7.5 — 初学研究者读者文章（`generateApiReaderArticleDetailed`）**
 - 加载 `prompts/api-reader-article.md`，用已校验 canonical 与带 ID 证据生成独立 JSON 编辑计划和连续长文
 - 文章按背景、相关路线、方法、实验、结果、局限和收束的学习依赖递进，使用论文特有动态标题；术语首次出现必须先解释直觉
-- 代码要求 6–12 个小节、1800–10000 个中文字符，并执行去模板、段落、数字写法、重复句与流程元话语门禁
-- `apiReaderArticle`、`apiReaderPlan`、阶段状态和 SHA 必须闭环；博客只在闭环成立时将它作为读者正文，旧 canonical 继续用于机器解析
+- 新生成强制 `beginner-researcher-v3` / plan v3：12–18 小节、5000–18000 中文字、4–10 组术语桥、2–4 张叙事表且至少 2 张 5 列以上宽表；模型返回 v2 会被拒绝
+- 可安全下载的官方 Figure 作为多模态像素输入，正文必须物化“导读—看图路径—原图—图注—解释”闭环；未传入像素的图不得猜测可见细节
+- `apiReaderArticle`、`apiReaderPlan`、Figure/作者机构、阶段状态和 SHA 必须闭环；v1/v2 只作历史读取兼容
 
 **Round 8 — 图像筛选与插图计划（`applyImageSupplement`，双模型模式）**
 - 加载 `prompts/image-supplement.md`

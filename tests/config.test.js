@@ -41,6 +41,14 @@ describe('config', () => {
             Config.ANALYSIS_CONFIG.repairMaxTokens,
             Number(process.env.PD_ANALYSIS_REPAIR_MAX_TOKENS || 16000)
         );
+        assert.strictEqual(
+            Config.ANALYSIS_CONFIG.apiReaderMaxTokens,
+            Number(process.env.PD_API_READER_MAX_TOKENS || 48000)
+        );
+        assert.strictEqual(
+            Config.ANALYSIS_CONFIG.apiReaderOverallTimeoutMs,
+            Number(process.env.PD_API_READER_OVERALL_TIMEOUT_MS || 2400000)
+        );
         assert.strictEqual(Config.ANALYSIS_CONFIG.scoringAuditTemperature, 0.1);
         assert.strictEqual(Config.ANALYSIS_CONFIG.imagePlanTemperature, 0.2);
         assert.strictEqual(Config.ANALYSIS_CONFIG.arxivPdfMaxBytes, 50 * 1024 * 1024);
@@ -70,6 +78,14 @@ describe('config', () => {
         assert.strictEqual(Config.ANALYSIS_CONFIG.fullTextMaxChars, 200000);
         assert.strictEqual(Config.ANALYSIS_CONFIG.openSourceEvidenceMaxChars, 16000);
         assert.strictEqual(Config.ANALYSIS_CONFIG.revisionEvidenceMaxChars, 60000);
+        assert.strictEqual(
+            Config.ANALYSIS_CONFIG.apiReaderEvidenceMaxChars,
+            Number(process.env.PD_API_READER_EVIDENCE_MAX_CHARS || 180000)
+        );
+        assert.strictEqual(
+            Config.ANALYSIS_CONFIG.apiReaderContextMaxChars,
+            Number(process.env.PD_API_READER_CONTEXT_MAX_CHARS || 240000)
+        );
         assert.strictEqual(Config.ANALYSIS_CONFIG.scoringEvidenceMaxChars, 40000);
         assert.strictEqual(Config.ANALYSIS_CONFIG.repairEvidenceMaxChars, 30000);
         assert.strictEqual(Config.ANALYSIS_CONFIG.structureEvidenceMaxChars, 40000);
@@ -146,6 +162,23 @@ describe('config', () => {
         withProjectEnv('PD_ANALYSIS_REPAIR_MAX_TOKENS=12000', (Config) => {
             assert.strictEqual(Config.ANALYSIS_CONFIG.repairMaxTokens, 12000);
         });
+    });
+
+    it('项目 .env 覆写读者长文输出与上下文预算', () => {
+        withProjectEnv(
+            [
+                'PD_API_READER_MAX_TOKENS=56000',
+                'PD_API_READER_OVERALL_TIMEOUT_MS=3000000',
+                'PD_API_READER_EVIDENCE_MAX_CHARS=190000',
+                'PD_API_READER_CONTEXT_MAX_CHARS=260000'
+            ].join('\n'),
+            (Config) => {
+                assert.strictEqual(Config.ANALYSIS_CONFIG.apiReaderMaxTokens, 56000);
+                assert.strictEqual(Config.ANALYSIS_CONFIG.apiReaderOverallTimeoutMs, 3000000);
+                assert.strictEqual(Config.ANALYSIS_CONFIG.apiReaderEvidenceMaxChars, 190000);
+                assert.strictEqual(Config.ANALYSIS_CONFIG.apiReaderContextMaxChars, 260000);
+            }
+        );
     });
 
     it('项目 .env 覆写各阶段证据字符预算', () => {

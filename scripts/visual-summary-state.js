@@ -44,7 +44,7 @@ const MANUAL_V6_PRODUCTION_MODE = 'manual_v6_production';
 const MANUAL_V6_PRODUCTION_CONTRACT = 'manual-v6-production-publication-v1';
 const LLM_API_PRODUCTION_MODE = 'llm_api_production';
 const LLM_API_PRODUCTION_CONTRACT = 'llm-api-production-publication-v1';
-const LLM_API_READER_CONTRACT = 'beginner-researcher-v2';
+const LLM_API_READER_CONTRACT = 'beginner-researcher-v3';
 const LLM_API_SCORING_CONTRACT = 'api-scoring-audit-v2';
 const REFERENCE_MIME_EXTENSIONS = Object.freeze({
     'image/png': '.png',

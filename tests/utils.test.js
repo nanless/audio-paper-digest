@@ -21,6 +21,7 @@ const {
     buildHeaders,
     getClaudeCodeVersion,
     parseResponseText,
+    getResponsesOutputTruncationError,
     parseSseResponse,
     normalizedId,
     requiresLlmProxy,
@@ -798,6 +799,23 @@ describe('parseResponseText', () => {
 
     it('无效响应返回 null', () => {
         assert.strictEqual(parseResponseText('openai', {}), null);
+    });
+});
+
+describe('OpenAI Responses output truncation', () => {
+    it('把 max_output_tokens 的 incomplete 结果转成可识别截断错误', () => {
+        const error = getResponsesOutputTruncationError({
+            status: 'incomplete',
+            incomplete_details: { reason: 'max_output_tokens' },
+            usage: { output_tokens: 47999 }
+        }, 48000);
+        assert.strictEqual(error.code, 'MODEL_OUTPUT_TRUNCATED');
+        assert.strictEqual(error.outputTokens, 47999);
+        assert.strictEqual(error.maxOutputTokens, 48000);
+        assert.match(error.message, /48000/);
+        assert.strictEqual(getResponsesOutputTruncationError({
+            status: 'completed'
+        }, 48000), null);
     });
 });
 

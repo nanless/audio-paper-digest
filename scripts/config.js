@@ -101,11 +101,14 @@ const ANALYSIS_CONFIG = {
     maxRetries: 2,
     retryDelayMs: 3000,
     apiOverallTimeoutMs: 20 * 60 * 1000,  // 20 分钟
+    apiReaderOverallTimeoutMs: 40 * 60 * 1000,
     apiMaxRetries: 3,
     apiRetryBaseDelayMs: 5000,
     apiMaxTokens: 64000,
     // 局部审校/修复通常只需重写既有分析；限制输出预算可避免推理模型在网关超时前持续思考。
     repairMaxTokens: 16000,
+    // 初学研究者长文需要容纳更多章节、宽表和逐图解说，不与局部修复共用较小的输出上限。
+    apiReaderMaxTokens: 48000,
     apiTemperature: 0.7,
     scoringAuditTemperature: 0.1,
     imagePlanTemperature: 0.2,
@@ -124,6 +127,9 @@ const ANALYSIS_CONFIG = {
     // 后处理阶段只读取任务相关证据切片，避免同一全文被重复发送 4-6 次。
     openSourceEvidenceMaxChars: 16000,
     revisionEvidenceMaxChars: 60000,
+    // 读者长文使用独立证据预算，确保训练、数据、表格、公式与 Figure 能同时进入上下文。
+    apiReaderEvidenceMaxChars: 180000,
+    apiReaderContextMaxChars: 240000,
     scoringEvidenceMaxChars: 40000,
     repairEvidenceMaxChars: 30000,
     structureEvidenceMaxChars: 40000,
@@ -255,14 +261,24 @@ function applyEnvOverrides() {
     if (analysisApiMaxTokens) {
         ANALYSIS_CONFIG.apiMaxTokens = analysisApiMaxTokens;
     }
+    const apiReaderOverallTimeoutMs = readPositiveInt('PD_API_READER_OVERALL_TIMEOUT_MS');
+    if (apiReaderOverallTimeoutMs) {
+        ANALYSIS_CONFIG.apiReaderOverallTimeoutMs = apiReaderOverallTimeoutMs;
+    }
     const repairMaxTokens = readPositiveInt('PD_ANALYSIS_REPAIR_MAX_TOKENS');
     if (repairMaxTokens) {
         ANALYSIS_CONFIG.repairMaxTokens = repairMaxTokens;
+    }
+    const apiReaderMaxTokens = readPositiveInt('PD_API_READER_MAX_TOKENS');
+    if (apiReaderMaxTokens) {
+        ANALYSIS_CONFIG.apiReaderMaxTokens = apiReaderMaxTokens;
     }
     const evidenceCharOverrides = {
         PD_ANALYSIS_FULL_TEXT_MAX_CHARS: 'fullTextMaxChars',
         PD_OPENSOURCE_EVIDENCE_MAX_CHARS: 'openSourceEvidenceMaxChars',
         PD_REVISION_EVIDENCE_MAX_CHARS: 'revisionEvidenceMaxChars',
+        PD_API_READER_EVIDENCE_MAX_CHARS: 'apiReaderEvidenceMaxChars',
+        PD_API_READER_CONTEXT_MAX_CHARS: 'apiReaderContextMaxChars',
         PD_SCORING_EVIDENCE_MAX_CHARS: 'scoringEvidenceMaxChars',
         PD_REPAIR_EVIDENCE_MAX_CHARS: 'repairEvidenceMaxChars',
         PD_STRUCTURE_EVIDENCE_MAX_CHARS: 'structureEvidenceMaxChars'
