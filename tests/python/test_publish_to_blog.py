@@ -985,6 +985,8 @@ title: "Duplicate"
 
     def test_index_uses_api_v2_reader_title_and_full_decision_blocks(self):
         paper = llm_api_publication_fixture()
+        paper['parsed']['summary'] += ' 下游调用下降约 41%。'
+        paper['parsed']['opensource'] += '\n- 数据集：FSD50K'
         markdown = publish_to_blog.generate_index_page(
             [(6.1, paper, paper['parsed'])],
             [],

@@ -3094,7 +3094,8 @@ def validate_digest_index_reader_quality(markdown, required=False):
         flags=re.MULTILINE,
     )
     index_owned_body = re.sub(
-        r'^🔗 \*\*开源资源\*\*\n\n[\s\S]*?(?=^(?:✅|\*\*作者|---))',
+        r'^🔗 \*\*开源资源\*\*\n\n[\s\S]*?'
+        r'(?=\n\n[^\n]*\*\*\d+(?:\.\d+)?/10\*\*|^---$)',
         '🔗 **开源资源**\n\n单篇已审开源资源。\n\n',
         index_owned_body,
         flags=re.MULTILINE,

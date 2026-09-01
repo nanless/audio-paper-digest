@@ -1951,6 +1951,22 @@ def full_index_decision_block(pa, paper, key, *, reader_article='', api_reader_v
     return content.strip()
 
 
+def normalize_digest_index_preserving_decision_blocks(markdown):
+    """Normalize index-owned prose without rewriting copied paper sections."""
+    pattern = re.compile(
+        r'^📌 \*\*核心摘要\*\*\n\n[\s\S]*?(?=^---$)',
+        flags=re.MULTILINE,
+    )
+    output = []
+    cursor = 0
+    for match in pattern.finditer(markdown):
+        output.append(normalize_digest_index_reader_surface(markdown[cursor:match.start()]))
+        output.append(match.group(0))
+        cursor = match.end()
+    output.append(normalize_digest_index_reader_surface(markdown[cursor:]))
+    return ''.join(output)
+
+
 def generate_index_page(scored, unscored, date_str, paper_slugs, category='论文速递'):
     """生成每日汇总页面（index.md），包含概览和每篇论文的链接"""
     total = len(scored) + len(unscored)
@@ -2127,7 +2143,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             md += f"{meta}\n\n"
         md += "---\n\n"
 
-    return normalize_digest_index_reader_surface(md)
+    return normalize_digest_index_preserving_decision_blocks(md)
 
 
 import urllib.request
