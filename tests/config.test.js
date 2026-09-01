@@ -49,6 +49,10 @@ describe('config', () => {
             Config.ANALYSIS_CONFIG.apiReaderOverallTimeoutMs,
             Number(process.env.PD_API_READER_OVERALL_TIMEOUT_MS || 2400000)
         );
+        assert.strictEqual(
+            Config.ANALYSIS_CONFIG.apiReaderConcurrency,
+            Math.min(5, Number(process.env.PD_API_READER_CONCURRENCY || 5))
+        );
         assert.strictEqual(Config.ANALYSIS_CONFIG.scoringAuditTemperature, 0.1);
         assert.strictEqual(Config.ANALYSIS_CONFIG.imagePlanTemperature, 0.2);
         assert.strictEqual(Config.ANALYSIS_CONFIG.arxivPdfMaxBytes, 50 * 1024 * 1024);
@@ -169,12 +173,14 @@ describe('config', () => {
             [
                 'PD_API_READER_MAX_TOKENS=56000',
                 'PD_API_READER_OVERALL_TIMEOUT_MS=3000000',
+                'PD_API_READER_CONCURRENCY=4',
                 'PD_API_READER_EVIDENCE_MAX_CHARS=190000',
                 'PD_API_READER_CONTEXT_MAX_CHARS=260000'
             ].join('\n'),
             (Config) => {
                 assert.strictEqual(Config.ANALYSIS_CONFIG.apiReaderMaxTokens, 56000);
                 assert.strictEqual(Config.ANALYSIS_CONFIG.apiReaderOverallTimeoutMs, 3000000);
+                assert.strictEqual(Config.ANALYSIS_CONFIG.apiReaderConcurrency, 4);
                 assert.strictEqual(Config.ANALYSIS_CONFIG.apiReaderEvidenceMaxChars, 190000);
                 assert.strictEqual(Config.ANALYSIS_CONFIG.apiReaderContextMaxChars, 260000);
             }

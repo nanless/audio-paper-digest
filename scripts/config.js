@@ -102,6 +102,7 @@ const ANALYSIS_CONFIG = {
     retryDelayMs: 3000,
     apiOverallTimeoutMs: 20 * 60 * 1000,  // 20 分钟
     apiReaderOverallTimeoutMs: 40 * 60 * 1000,
+    apiReaderConcurrency: 5,
     apiMaxRetries: 3,
     apiRetryBaseDelayMs: 5000,
     apiMaxTokens: 64000,
@@ -264,6 +265,10 @@ function applyEnvOverrides() {
     const apiReaderOverallTimeoutMs = readPositiveInt('PD_API_READER_OVERALL_TIMEOUT_MS');
     if (apiReaderOverallTimeoutMs) {
         ANALYSIS_CONFIG.apiReaderOverallTimeoutMs = apiReaderOverallTimeoutMs;
+    }
+    const apiReaderConcurrency = readPositiveInt('PD_API_READER_CONCURRENCY');
+    if (apiReaderConcurrency) {
+        ANALYSIS_CONFIG.apiReaderConcurrency = Math.min(5, apiReaderConcurrency);
     }
     const repairMaxTokens = readPositiveInt('PD_ANALYSIS_REPAIR_MAX_TOKENS');
     if (repairMaxTokens) {

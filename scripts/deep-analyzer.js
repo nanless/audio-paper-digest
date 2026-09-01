@@ -68,6 +68,7 @@ const {
 const {
     apiOverallTimeoutMs: API_OVERALL_TIMEOUT_MS,
     apiReaderOverallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS = 40 * 60 * 1000,
+    apiReaderConcurrency: API_READER_CONCURRENCY = 5,
     apiMaxRetries: API_MAX_RETRIES,
     apiRetryBaseDelayMs: API_RETRY_BASE_DELAY_MS,
     apiMaxTokens: API_MAX_TOKENS,
@@ -1840,7 +1841,33 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
     return true;
 }
 
+const apiReaderGenerationQueue = [];
+let activeApiReaderGenerations = 0;
+
+async function withApiReaderGenerationSlot(callback) {
+    if (activeApiReaderGenerations >= API_READER_CONCURRENCY) {
+        await new Promise(resolve => apiReaderGenerationQueue.push(resolve));
+    }
+    activeApiReaderGenerations += 1;
+    console.log(
+        `    [deep] API reader 生成槽位: active=${activeApiReaderGenerations}`
+        + `/${API_READER_CONCURRENCY} | queued=${apiReaderGenerationQueue.length}`
+    );
+    try {
+        return await callback();
+    } finally {
+        activeApiReaderGenerations -= 1;
+        apiReaderGenerationQueue.shift()?.();
+    }
+}
+
 async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence, options = {}) {
+    return withApiReaderGenerationSlot(() => generateApiReaderArticleDetailedUnlocked(
+        paper, analysis, sourceEvidence, options
+    ));
+}
+
+async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceEvidence, options = {}) {
     let validationFeedback = '这是第一次生成，没有上一次校验错误。';
     let previousDraft = '无';
     let lastError = null;

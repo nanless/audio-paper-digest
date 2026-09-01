@@ -30,6 +30,8 @@ LLM endpoint 必须使用 HTTPS（仅 loopback 本地测试允许 HTTP）。arXi
 
 对 Codex 说“运行/进行某一天的论文速递”，默认含义是运行 `npm run digest:prepare -- YYYY-MM-DD`，即 LLM/API 自动抓取、筛选、全文分析、评分校准、读者长文、博客 review/push、TOP 10 论文长图、汇总封面和最终状态验收。`digest:api` 是同义入口；只有明确说“使用 Manual/人工流程”时才运行 `npm run digest:manual -- YYYY-MM-DD`。博客发布无需再次确认；其他发布渠道不在默认范围。
 
+已有 API 批次需要升级读者长文时，可运行 `npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader`。命令只读取 `batchDate` 精确匹配的 current canonical，按单篇锁与提交时身份校验立即持久化成功项；续跑自动跳过 SHA 闭环的当前 v3，只重试未完成论文。
+
 Manual 写作采用 3-worker 饱和队列：主 Agent 之外的 3 个并发槽持续各处理 1 篇论文，完成即补位。普通独立二审不会与正文争抢槽位；只有高分、内部无消融、满分自评或来源/图片异常的风险论文会提前触发二审。
 
 深度分析采用 `type-aware-v1` 类型感知评分：先将文档归类为方法研究、系统技术报告、模型报告、数据集与基准、综述、理论研究或应用研究，再按对应证据标准评审。八维权重、满分 11 和总分封顶 10 保持统一；分项与总分最多一位小数，开源分使用固定锚点。文档类型不提供固定加分，同一个缺陷只能在一个主要维度扣分；理论工作的完整证明材料可作为核心公开产物，不会因没有代码/模型/数据而被机械归零。

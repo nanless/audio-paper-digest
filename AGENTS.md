@@ -101,7 +101,7 @@ python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
 **抓取/筛选/分析必需变量**：`PAPER_ANALYZER_API_KEY` / `PAPER_ANALYZER_MODEL` / `PAPER_ANALYZER_ENDPOINT`
 `PAPER_ANALYZER_ENDPOINT` 必须使用 HTTPS；仅 loopback 本地测试服务允许 HTTP，禁止向公网明文 HTTP endpoint 附加 LLM 凭据。
 
-`PD_ANALYSIS_REPAIR_MAX_TOKENS` 控制审校重写、表格补充、方法补充与结构修复的输出上限，默认 16000；主分析保留 64000 上限。API 读者长文不再共用局部修复预算：`PD_API_READER_MAX_TOKENS` 默认 48000，`PD_API_READER_EVIDENCE_MAX_CHARS` 默认 180000，`PD_API_READER_CONTEXT_MAX_CHARS` 默认 240000，三者均进入阶段指纹。OpenAI Responses 返回 `incomplete/max_output_tokens` 时必须显式标记截断，不得把半截 JSON 当成成功或使用同预算盲目重试。
+`PD_ANALYSIS_REPAIR_MAX_TOKENS` 控制审校重写、表格补充、方法补充与结构修复的输出上限，默认 16000；主分析保留 64000 上限。API 读者长文不再共用局部修复预算：`PD_API_READER_MAX_TOKENS` 默认 48000，`PD_API_READER_EVIDENCE_MAX_CHARS` 默认 180000，`PD_API_READER_CONTEXT_MAX_CHARS` 默认 240000，三者均进入阶段指纹。`PD_API_READER_CONCURRENCY` 控制同一进程内读者长文重阶段并发，默认 5 且限制为 1–5；它只影响调度，不进入内容指纹。OpenAI Responses 返回 `incomplete/max_output_tokens` 时必须显式标记截断，不得把半截 JSON 当成成功或使用同预算盲目重试。
 `PD_ANALYSIS_API_MAX_RETRIES` 控制单次论文分析内部每个 LLM API 阶段的最大尝试次数，默认 3；它不同于 `PD_ANALYSIS_MAX_RETRIES` 的整篇分析重试层。
 为降低重复输入 token，主分析输入默认最多 200000 字符，超长论文按开头/中段/末尾和任务关键词跨全文取样；开源扫描、审校重写、评分审计、表格/方法修复、结构修复的默认证据预算分别为 16000/60000/40000/30000/40000 字符，可用 `PD_ANALYSIS_FULL_TEXT_MAX_CHARS`、`PD_OPENSOURCE_EVIDENCE_MAX_CHARS`、`PD_REVISION_EVIDENCE_MAX_CHARS`、`PD_SCORING_EVIDENCE_MAX_CHARS`、`PD_REPAIR_EVIDENCE_MAX_CHARS`、`PD_STRUCTURE_EVIDENCE_MAX_CHARS` 覆写。证据选择算法版本和预算属于阶段指纹，变化时只失效对应阶段及下游。
 

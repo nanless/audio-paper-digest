@@ -121,6 +121,7 @@ arXiv 抓取与 LLM 筛选模块。
 | 主分析 max_tokens | 64000 | — | 主分析 LLM 输出长度上限；局部修复默认使用 `repairMaxTokens=16000` |
 | API 读者长文 max_output_tokens | 48000 | `PD_API_READER_MAX_TOKENS` | Muse Responses 长文独立输出预算；截断结果显式失败 |
 | API 读者证据/完整上下文 | 180000/240000 字符 | `PD_API_READER_EVIDENCE_MAX_CHARS` / `PD_API_READER_CONTEXT_MAX_CHARS` | 分别约束证据包与渲染后完整请求，并进入阶段指纹 |
+| API 读者长文并发 | 5 | `PD_API_READER_CONCURRENCY` | 单进程重阶段槽位，限制 1–5；只影响调度，不使内容缓存失效 |
 | temperature | 0.7 | — | LLM 采样温度 |
 | 图片下载超时 | 60s | `PD_IMAGE_DOWNLOAD_TIMEOUT_MS` | 单张图片下载超时，失败后仍按既定次数重试 |
 | 单张图片原始大小上限 | 6MB | `PD_IMAGE_MAX_BYTES` | 下载后按字节数校验 |

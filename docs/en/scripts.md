@@ -127,6 +127,7 @@ Unified configuration center. All hardcoded parameters are centrally managed and
 | Primary-analysis max_tokens | 64000 | -- | Primary-analysis output limit; local repair stages default to `repairMaxTokens=16000` |
 | API reader max_output_tokens | 48000 | `PD_API_READER_MAX_TOKENS` | Dedicated Muse Responses budget for the long-form reader article; truncated responses fail explicitly |
 | API reader evidence/full-context chars | 180000/240000 | `PD_API_READER_EVIDENCE_MAX_CHARS` / `PD_API_READER_CONTEXT_MAX_CHARS` | Hard budgets for the evidence packet and fully rendered request; both enter the stage fingerprint |
+| API reader concurrency | 5 | `PD_API_READER_CONCURRENCY` | In-process heavy-stage slots, clamped to 1–5; scheduling only, so it does not invalidate content caches |
 | temperature | 0.7 | -- | LLM sampling temperature |
 | Image download timeout | 60s | `PD_IMAGE_DOWNLOAD_TIMEOUT_MS` | Per-image timeout; failures still use the configured retry loop |
 | Single-image raw-size limit | 6MB | `PD_IMAGE_MAX_BYTES` | Byte-size guard after download |
