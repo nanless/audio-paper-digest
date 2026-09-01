@@ -698,7 +698,7 @@ function findMissingComparisonUnits(text) {
                 /第\s*\d+(?:\s*(?:至|到|[-–—])\s*\d+)?(?=\s*(?:位|项|个|组|层|步|轮|章|节|张|表|图|词|词元|样本|阶段|版本))/gu,
                 match => ' '.repeat(match.length)
             );
-        const barePattern = new RegExp(`(?<![A-Za-z0-9])${quantity}(?![A-Za-z0-9])`, 'gu');
+        const barePattern = new RegExp(`(?<![A-Za-z0-9_.])${quantity}(?![A-Za-z0-9_.])`, 'gu');
         const bareValues = [...numericText.matchAll(barePattern)]
             .filter(match => {
                 const before = numericText.slice(0, match.index);

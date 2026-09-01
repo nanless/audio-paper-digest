@@ -311,6 +311,9 @@ describe('Manual v4 editorial quality primitives', () => {
         assert.deepEqual(findMissingComparisonUnits(
             '图 3 显示 VIBE 均优于 Video-Robin 与去掉阶段 5 的消融，四项准确率呈现单调提升。'
         ), []);
+        assert.deepEqual(findMissingComparisonUnits(
+            '奖励位于 0 到 1，密集字幕采用 F1@IoU0.5，音乐任务使用 0.45、0.20、0.15 的加权和。'
+        ), []);
         assert.deepEqual(
             findMissingComparisonUnits('SylCipher 相对 wav2vec-U 的 CER 收益在匹配域与不匹配域相差多大？'),
             []
