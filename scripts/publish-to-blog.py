@@ -1336,59 +1336,74 @@ def multimodal_review_images(content, title="", required=False):
 协议一致性要求：只有存在 `severity=error` 的问题时 `passed` 才能为 `false`；仅有 warning/info 或无问题时必须为 `true`。`passed=false` 时必须提供至少一条具体的 error 级原因。
 """
 
-    result = call_llm_api(
-        prompt,
-        max_tokens=get_blog_review_max_tokens(),
-        temperature=0.1,
-        required=required,
-        context=f"多模态图片 review: {title}",
-        images=image_payloads,
-        use_secondary=False,
-        structured_output=True,
-    )
-    if not result:
-        if required:
-            return review_protocol_failure(f"多模态图片 review: {title}", '响应为空')
-        return True, []
+    summary_blob = chr(10).join(img_summary)
 
-    try:
-        cleaned = result
-        if cleaned.startswith("```json"):
-            cleaned = cleaned[7:]
-        if cleaned.startswith("```"):
-            cleaned = cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
-        review = parse_review_json(cleaned)
-        passed, issues = validate_review_payload(
-            review,
+    def review_image_batch(batch_prompt, batch_images, context):
+        result = call_llm_api(
+            batch_prompt,
+            max_tokens=get_blog_review_max_tokens(),
+            temperature=0.1,
             required=required,
-            context=f"多模态图片 review: {title}",
+            context=context,
+            images=batch_images,
+            use_secondary=False,
+            structured_output=True,
         )
-        return passed, load_issues + issues
-    except (json.JSONDecodeError, TypeError, ValueError):
-        fallback = cleaned.strip()
-        if required:
-            passed, issues = repair_review_payload(
-                result,
-                f"多模态图片 review: {title}",
-                use_secondary=False,
-                retry_prompt=prompt,
-                retry_images=image_payloads,
-            )
-            return passed, load_issues + issues
-        lower = fallback.lower()
-        error_markers = ['error', '错误', '阻断', '不合理', '无法渲染', '过长', '空 alt', '重复 alt']
-        pass_markers = ['passed', '"passed": true', '通过', '无问题', '没有问题', '未发现问题']
-        if any(marker in lower for marker in error_markers):
-            return False, [{
-                "severity": "error",
-                "description": f"多模态图片 review 返回非 JSON，但文本中包含错误信号：{fallback[:240]}"
-            }]
-        if any(marker in lower for marker in pass_markers):
+        if not result:
+            if required:
+                return review_protocol_failure(context, '响应为空')
             return True, []
-        return True, []
+        cleaned = result
+        try:
+            if cleaned.startswith("```json"):
+                cleaned = cleaned[7:]
+            if cleaned.startswith("```"):
+                cleaned = cleaned[3:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+            cleaned = cleaned.strip()
+            review = parse_review_json(cleaned)
+            return validate_review_payload(
+                review,
+                required=required,
+                context=context,
+            )
+        except (json.JSONDecodeError, TypeError, ValueError):
+            fallback = cleaned.strip()
+            if required:
+                return repair_review_payload(
+                    result,
+                    context,
+                    use_secondary=False,
+                    retry_prompt=batch_prompt,
+                    retry_images=batch_images,
+                )
+            lower = fallback.lower()
+            error_markers = ['error', '错误', '阻断', '不合理', '无法渲染', '过长', '空 alt', '重复 alt']
+            pass_markers = ['passed', '"passed": true', '通过', '无问题', '没有问题', '未发现问题']
+            if any(marker in lower for marker in error_markers):
+                return False, [{
+                    "severity": "error",
+                    "description": f"{context} 返回非 JSON，但文本中包含错误信号：{fallback[:240]}"
+                }]
+            if any(marker in lower for marker in pass_markers):
+                return True, []
+            return True, []
+
+    passed_all = True
+    all_issues = list(load_issues)
+    # One image per request keeps the configured proxy upload bounded while
+    # preserving exact image/context alignment and full per-page coverage.
+    for index, (summary, image_payload) in enumerate(zip(img_summary, image_payloads), 1):
+        batch_prompt = prompt.replace(summary_blob, summary, 1)
+        passed, issues = review_image_batch(
+            batch_prompt,
+            [image_payload],
+            f"多模态图片 review: {title} [图 {index}/{len(image_payloads)}]",
+        )
+        passed_all = passed_all and passed
+        all_issues.extend(issues)
+    return passed_all, all_issues
 
 
 def apply_llm_fixes(content, issues):
