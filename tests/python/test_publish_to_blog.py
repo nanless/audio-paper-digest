@@ -1022,6 +1022,7 @@ title: "Duplicate"
         paper = llm_api_publication_fixture()
         paper['parsed']['summary'] += ' 下游调用下降约 41%。'
         paper['parsed']['opensource'] += '\n- 数据集：FSD50K'
+        paper['parsed']['roast'] = '亮点清楚，短板是只在两套基准上验证。'
         markdown = publish_to_blog.generate_index_page(
             [(6.1, paper, paper['parsed'])],
             [],
@@ -1032,6 +1033,8 @@ title: "Duplicate"
         self.assertNotIn(paper['apiReaderPlan']['oneSentenceThesis'], markdown)
         self.assertIn('最终兼容 canonical 摘要。', markdown)
         self.assertIn(paper['parsed']['opensource'], markdown)
+        self.assertIn('亮点清楚，短板是只在 2 套基准上验证。', markdown)
+        self.assertNotIn(paper['parsed']['roast'], markdown)
         first_author = paper['apiReaderAuthors']['authors'][0]
         self.assertIn(first_author['name'], markdown)
         self.assertIn(first_author['affiliations'][0], markdown)

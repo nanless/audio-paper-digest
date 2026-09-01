@@ -2101,8 +2101,9 @@ def index_author_institution_block(paper, pa, api_reader=None):
 def normalize_digest_index_preserving_decision_blocks(markdown):
     """Normalize index-owned prose without rewriting copied paper sections."""
     pattern = re.compile(
-        r'^(?:👥 \*\*作者与机构\*\*|📌 \*\*核心摘要\*\*)'
-        r'\n\n[\s\S]*?(?=^---$)',
+        r'^👥 \*\*作者与机构\*\*\n\n[\s\S]*?'
+        r'(?=\n\n(?:💡 \*\*毒舌点评\*\*|📌 \*\*核心摘要\*\*))|'
+        r'^📌 \*\*核心摘要\*\*\n\n[\s\S]*?(?=^---$)',
         flags=re.MULTILINE,
     )
     output = []
