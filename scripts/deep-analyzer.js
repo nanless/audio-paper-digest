@@ -1867,6 +1867,91 @@ async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence,
     ));
 }
 
+function buildApiReaderValidationFeedback(error) {
+    const message = String(error?.message || error || '未知校验错误');
+    const fixes = [];
+    if (/表格前缺少/.test(message)) {
+        fixes.push(
+            '每张表之前必须另起一个由空行隔开的普通正文段，且它必须直接成为表格前一个 Markdown 块；'
+            + '该段至少写 15 个汉字，明确比较问题、统一条件、基线和指标升降方向。'
+            + '不要让小节标题、列表、另一张表或同一行文字紧贴在表格前面'
+        );
+    }
+    if (/表格后缺少/.test(message)) {
+        fixes.push(
+            '每张表之后必须另起一个由空行隔开的普通正文段，且它必须直接成为表格后一个 Markdown 块；'
+            + '该段至少写 25 个汉字，解释净收益、一个失败项或反例，以及该表不能支持的结论。'
+            + '不要让小节标题、列表、另一张表或同一行文字紧贴在表格后面'
+        );
+    }
+    if (/Markdown 表格列数不一致/.test(message)) {
+        fixes.push(
+            '逐行数清每张 Markdown 表的单元格，表头、分隔行和每个数据行必须完全同列；'
+            + '单元格正文禁止出现未转义的竖线 |，集合、范围或并列关系改用“、”“/”或文字表达，'
+            + '不要使用会额外产生 pipe 的 LaTeX 绝对值或条件概率写法'
+        );
+    }
+    if (/至少需要 \d+ 张有叙事闭环/.test(message)) {
+        fixes.push(
+            '保留已有合格表并补足要求数量；新增表必须写在 section.body 内，使用标准表头、分隔行和数据行，'
+            + '且每张表都要有相邻的独立表前段与表后段'
+        );
+    }
+    if (/figurePlacements\[\d+\].*相邻闭环/.test(message)) {
+        fixes.push(
+            '对应 Figure marker 必须在 targetKind 指定的同一小节中独占一个 Markdown 段；'
+            + '紧邻前一段至少 35 字，紧邻后一段至少 45 字，中间不能夹标题、列表、表格或其他 marker；'
+            + 'focusPoints 必须有 2–4 项且每项 12–120 字'
+        );
+    }
+    if (/高价值图文绑定少于/.test(message)) {
+        fixes.push(
+            '从可用 Figure 清单补足不同 figureOrdinal；每张图都按“35 字以上独立导读段—独占 marker—'
+            + '45 字以上独立解释段”放入匹配的 targetKind 小节，并给出 2–4 个具体观察点'
+        );
+    }
+    if (/conceptBridges\[\d+\]/.test(message)) {
+        fixes.push(
+            '对应 concept bridge marker 必须独占一个段落；explanation 必须逐字同时包含 terms 中的两个术语，'
+            + '依次说明各自分工、搭配原因和组合后新增的含义'
+        );
+    }
+    if (/reader_template_phrase/.test(message)) {
+        fixes.push(
+            '删除校验列出的流水线短语，尤其不要写“证据边界在于”；改成以具体数据集、条件、指标或缺失对照为主语的自然句'
+        );
+    }
+    if (/defensive_negation_saturation/.test(message)) {
+        fixes.push(
+            '在 limitation 之外大幅减少“不是、不能、并非、不等于、不意味着、没有”等防御性否定；'
+            + '把句子改成正面陈述具体成立范围、观测条件和残余缺口'
+        );
+    }
+    if (/comparison_unit_missing/.test(message)) {
+        fixes.push(
+            '每组比较数字都分别补齐同一指标名与单位；不要写无单位的“从 A 到 B”或“X 对 Y”'
+        );
+    }
+    if (/numeric_typography|quantitative_chinese_numeral/.test(message)) {
+        fixes.push('数量、比例、编号和带单位数值统一使用阿拉伯数字，并在数字与拉丁单位之间留空格');
+    }
+    if (/JSON 无法解析|包含额外字段/.test(message)) {
+        fixes.push(
+            '严格按字段白名单输出单个 JSON 对象；不要新增 tables、tableMarkdown 等字段；'
+            + '字符串内的换行必须使用 JSON 转义，禁止原始控制字符'
+        );
+    }
+    if (/中文字数必须/.test(message)) {
+        fixes.push('只扩写或压缩现有小节正文，使中文字符数进入报错给出的区间，不改变事实、数字和章节顺序');
+    }
+    return `上一次输出被代码拒绝：${message}。`
+        + (fixes.length > 0 ? `必须执行以下修复：${fixes.join('；')}。` : '')
+        + '请以上一版 JSON 为底稿精确修复，并重新输出完整 JSON；逐句去重，'
+        + '任何包含过多句子的单段都拆成 2–4 句的自然段。'
+        + '提交前逐行复算每张 Markdown 表的 pipe 单元格数量，'
+        + '并逐条确认 conceptBridges 与 figurePlacements 的 marker 和相邻正文真实存在。';
+}
+
 async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceEvidence, options = {}) {
     let validationFeedback = '这是第一次生成，没有上一次校验错误。';
     let previousDraft = '无';
@@ -1985,11 +2070,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         } catch (error) {
             lastError = error;
             previousDraft = raw;
-            validationFeedback = `上一次输出被代码拒绝：${error.message}。`
-                + '请以上一版 JSON 为底稿精确修复，并重新输出完整 JSON；逐句去重，'
-                + '任何包含过多句子的单段都拆成 2–4 句的自然段。'
-                + '提交前逐行复算每张 Markdown 表的 pipe 单元格数量，'
-                + '并逐条确认 conceptBridges 与 figurePlacements 的引用原句真实存在且完全一致。';
+            validationFeedback = buildApiReaderValidationFeedback(error);
             console.log(`    [deep] ⚠️  读者文章校验失败 (${attempt}/${maxAttempts}): ${error.message}`);
         }
     }
@@ -7569,6 +7650,7 @@ module.exports = {
     rebindApiReaderFigurePlacementQuotes,
     removeDuplicateReaderLongSentences,
     generateApiReaderArticleDetailed,
+    buildApiReaderValidationFeedback,
     refreshApiReaderArticleFromSource,
     refreshApiScoringAndReaderFromSource,
     refreshApiReaderAuthorsFromSource,

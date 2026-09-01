@@ -216,6 +216,28 @@ describe('arXiv HTML full-text health gate', () => {
 });
 
 describe('deep-analyzer section helpers', () => {
+    it('读者长文重试反馈把常见结构错误翻译成可执行修复步骤', () => {
+        const { buildApiReaderValidationFeedback } = require('../scripts/deep-analyzer.js');
+        const tableFeedback = buildApiReaderValidationFeedback(
+            new Error('读者文章 Markdown 表格列数不一致: header=5, row=2, columns=7')
+        );
+        assert.match(tableFeedback, /单元格正文禁止出现未转义的竖线/);
+        assert.match(tableFeedback, /表头、分隔行和每个数据行必须完全同列/);
+
+        const narrativeFeedback = buildApiReaderValidationFeedback(
+            new Error('读者文章表格后缺少净收益、反例或证据边界解释')
+        );
+        assert.match(narrativeFeedback, /直接成为表格后一个 Markdown 块/);
+        assert.match(narrativeFeedback, /至少写 25 个汉字/);
+
+        const figureFeedback = buildApiReaderValidationFeedback(
+            new Error('读者文章 figurePlacements[1] 图前导读与图后解释未形成相邻闭环')
+        );
+        assert.match(figureFeedback, /前一段至少 35 字/);
+        assert.match(figureFeedback, /后一段至少 45 字/);
+        assert.match(figureFeedback, /focusPoints 必须有 2–4 项/);
+    });
+
     it('普通模型 HTTP 请求尝试次数默认服从分析配置并允许显式覆写', () => {
         const { resolveApiMaxRetries } = require('../scripts/deep-analyzer.js');
         const { ANALYSIS_CONFIG } = require('../scripts/config.js');
