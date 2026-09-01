@@ -965,6 +965,12 @@ primary_task_tag: #音视频生成
             ),
             '演示：https://aspire.ugent.be/demos/IWAENC2026HZ/，模型有 300M 参数。'
         );
+        assert.strictEqual(
+            normalizeReaderEditorialSurface(
+                'CER 却更差为 24.05 对 22.48，余弦相似度为 0.838 对 0.864。'
+            ),
+            'CER 却更差为 24.05% 对 22.48%，余弦相似度为 0.838 对 0.864。'
+        );
         const recoveryPaper = {
             apiReaderArticle: '### 把 HRTF 做浓，再用模型去听\n\n正文。',
             apiReaderPlan: {

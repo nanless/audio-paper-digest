@@ -924,6 +924,14 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
             '$1 个'
         )
         .replace(/([\u3400-\u9fff])([-+]\d)/g, '$1 $2')
+        .replace(
+            /((?:CER|WER|PER|MER|SER)\b[^\n。！？]{0,36}?)(\d+(?:\.\d+)?)(\s*(?:对|vs\.?|与)\s*)(\d+(?:\.\d+)?)(?!\s*%)/gi,
+            (full, prefix, left, separator, right) => (
+                Number.parseFloat(left) > 1 || Number.parseFloat(right) > 1
+                    ? `${prefix}${left}%${separator}${right}%`
+                    : full
+            )
+        )
         .replace(/([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?=(?:mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|MACs?|tokens?|FPS|bit)\b)/gi, '$1 ')
         .replace(/([\u3400-\u9fff])(\d)/g, '$1 $2')
         .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2');
