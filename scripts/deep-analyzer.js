@@ -1486,6 +1486,21 @@ function validateApiReaderTableNarratives(article, minimumTables = 2) {
     }
 }
 
+function rebindApiReaderFigurePlacementQuotes(article, placements) {
+    const blocks = String(article || '').split(/\n\s*\n/).map(block => block.trim());
+    return (placements || []).map((placement, index) => {
+        const markerIndex = blocks.indexOf(placement.marker);
+        if (markerIndex <= 0 || markerIndex >= blocks.length - 1) {
+            throw new Error(`读者文章 figurePlacements[${index}] 无法从最终正文重绑定导读与解释`);
+        }
+        return {
+            ...placement,
+            leadQuote: blocks[markerIndex - 1],
+            explanationQuote: blocks[markerIndex + 1]
+        };
+    });
+}
+
 function parseApiReaderArticleResult(raw, options = {}) {
     let value;
     try {
@@ -1745,6 +1760,9 @@ function parseApiReaderArticleResult(raw, options = {}) {
             throw new Error(`读者文章至少需要 ${minimumWideTables} 张 5 列以上的宽表`);
         }
     }
+    const reboundFigurePlacements = rebindApiReaderFigurePlacementQuotes(
+        article, figurePlacements
+    );
     return {
         plan: {
             version: value.version,
@@ -1754,7 +1772,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
             readerTitle: normalizeReaderEditorialSurface(value.readerTitle.trim()),
             oneSentenceThesis: normalizeReaderEditorialSurface(value.oneSentenceThesis.trim()),
             conceptBridges,
-            figurePlacements,
+            figurePlacements: reboundFigurePlacements,
             sections: normalizedSections.map(section => ({
                 kind: section.kind,
                 heading: section.heading.trim()
@@ -7521,6 +7539,7 @@ module.exports = {
     auditTypeAwareScoringDetailed,
     parseApiReaderArticleResult,
     validateApiReaderTableNarratives,
+    rebindApiReaderFigurePlacementQuotes,
     removeDuplicateReaderLongSentences,
     generateApiReaderArticleDetailed,
     refreshApiReaderArticleFromSource,

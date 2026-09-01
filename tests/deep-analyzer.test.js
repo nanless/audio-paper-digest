@@ -1154,6 +1154,7 @@ primary_task_tag: #音视频生成
         const cheerio = require('cheerio');
         const {
             buildApiReaderArtifactEvidence,
+            rebindApiReaderFigurePlacementQuotes,
             getApiReaderFigureInventory,
             injectApiReaderFigures,
             parseArxivReaderAuthors,
@@ -1202,6 +1203,19 @@ primary_task_tag: #音视频生成
             [2]
         );
         assert.match(buildApiReaderArtifactEvidence(artifacts, '2608.28422'), /FORMULA_1/);
+        assert.deepStrictEqual(
+            rebindApiReaderFigurePlacementQuotes(
+                '导读正文。\n\n[[FIGURE_1]]\n\n图中包含 4 条曲线。',
+                [{
+                    figureOrdinal: 1, marker: '[[FIGURE_1]]',
+                    leadQuote: '旧导读', explanationQuote: '图中包含四条曲线。'
+                }]
+            )[0],
+            {
+                figureOrdinal: 1, marker: '[[FIGURE_1]]',
+                leadQuote: '导读正文。', explanationQuote: '图中包含 4 条曲线。'
+            }
+        );
         const oversizedArtifacts = structuredClone(artifacts);
         oversizedArtifacts.tables = Array.from({ length: 12 }, (_, index) => ({
             ordinal: index + 1,
