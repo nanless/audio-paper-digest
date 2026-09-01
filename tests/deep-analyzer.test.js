@@ -1245,6 +1245,38 @@ primary_task_tag: #音视频生成
         assert.ok(reader.article.indexOf('看图路径') < reader.article.indexOf('figure-1.svg'));
         assert.ok(reader.article.indexOf('figure-1.svg') < reader.article.indexOf('图中模块关系说明'));
         assert.ok(reader.article.indexOf('figure-1.svg') < reader.article.indexOf('### 主要结果'));
+        const duplicateKindReader = injectApiReaderFigures({
+            plan: {
+                sections: [
+                    { kind: 'result', heading: '第一个结果问题' },
+                    { kind: 'result', heading: '第二个结果问题' }
+                ],
+                figurePlacements: [
+                    {
+                        figureOrdinal: 1, targetKind: 'result', marker: '[[FIGURE_1]]',
+                        focusPoints: ['先看第一张图的横轴条件和图例', '再比较第一张图的主要曲线差距']
+                    },
+                    {
+                        figureOrdinal: 2, targetKind: 'result', marker: '[[FIGURE_2]]',
+                        focusPoints: ['先看第二张图的横轴条件和图例', '再比较第二张图的主要曲线差距']
+                    }
+                ]
+            },
+            article: [
+                '### 第一个结果问题\n\n导读段落需要足够完整。\n\n[[FIGURE_1]]\n\n图后解释需要足够完整。',
+                '### 第二个结果问题\n\n导读段落需要足够完整。\n\n[[FIGURE_2]]\n\n图后解释需要足够完整。'
+            ].join('\n\n'),
+            qualityMetrics: {}
+        }, artifacts, '2608.28422');
+        assert.strictEqual(duplicateKindReader.figures.length, 2);
+        assert.ok(
+            duplicateKindReader.article.indexOf('figure-1.svg')
+            < duplicateKindReader.article.indexOf('### 第二个结果问题')
+        );
+        assert.ok(
+            duplicateKindReader.article.indexOf('### 第二个结果问题')
+            < duplicateKindReader.article.indexOf('figure-2.svg')
+        );
         const prunedReaderArticle = pruneUnmaterializedApiReaderFigureBlocks(
             reader.article,
             reader.figures,

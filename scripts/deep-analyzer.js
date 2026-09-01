@@ -1182,6 +1182,17 @@ function replaceReaderFigureMarker(article, heading, marker, markdown) {
     };
 }
 
+function readerSectionContainsMarker(article, heading, marker) {
+    const headingMarker = `### ${heading}`;
+    const sectionStart = article.indexOf(headingMarker);
+    if (sectionStart < 0) return false;
+    const bodyStart = sectionStart + headingMarker.length;
+    const next = article.indexOf('\n### ', bodyStart);
+    const sectionEnd = next >= 0 ? next : article.length;
+    const markerIndex = article.indexOf(marker, bodyStart);
+    return markerIndex >= bodyStart && markerIndex < sectionEnd;
+}
+
 function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '') {
     const figures = getApiReaderFigureInventory(structuredArtifacts, arxivId);
     if (figures.length === 0) return { ...readerResult, figures: [] };
@@ -1206,9 +1217,12 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
                 : figure.ordinal >= 3
                     ? ['ablation', 'result', 'limitation']
                     : ['result', 'experiment_setup'];
-        const target = preferredKinds.map(
-            kind => sections.find(section => section.kind === kind)
-        ).find(Boolean);
+        const target = preferredKinds.flatMap(
+            kind => sections.filter(section => section.kind === kind)
+        ).find(section => (
+            !placement
+            || readerSectionContainsMarker(article, section.heading, placement.marker)
+        ));
         if (!target) continue;
         const alt = sanitizeMarkdownImageAlt(readerFigureAlt(figure, target));
         const focusBlock = placement?.focusPoints?.length
