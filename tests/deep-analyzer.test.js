@@ -888,6 +888,10 @@ primary_task_tag: #音视频生成
             '结果为 -6.84 dB，到 -2.76 dB，延迟 12 ms。'
         );
         assert.strictEqual(
+            normalizeReaderEditorialSurface('Attn.与卷积并行，Attn.的输出进入门控层。'),
+            'Attn. 与卷积并行，Attn. 的输出进入门控层。'
+        );
+        assert.strictEqual(
             normalizeReaderEditorialSurface('同 1 条曲线使用alpha 三，规模为1 万。', [
                 { code: 'quantitative_chinese_numeral', match: 'alpha 三' },
                 { code: 'quantitative_chinese_numeral', match: '1 万' }

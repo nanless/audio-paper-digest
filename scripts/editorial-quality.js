@@ -687,11 +687,22 @@ function findMissingComparisonUnits(text) {
         if (explicitScoreUnit.test(sentence.text)) continue;
         // Do not treat digits embedded in model/product names (for example
         // wav2vec-U or Qwen2-Audio) as bare percentage values.
+        // 图表编号和“第 2 至 3 位”这类序号不是指标值。先做等长屏蔽，
+        // 避免一句定性比较仅因包含图号/排名位置就被误判为缺少单位。
+        const numericText = sentence.text
+            .replace(
+                /(?:图|表|公式|式|章节)\s*\d+(?:\s*(?:至|到|[-–—])\s*\d+)?/gu,
+                match => ' '.repeat(match.length)
+            )
+            .replace(
+                /第\s*\d+(?:\s*(?:至|到|[-–—])\s*\d+)?(?=\s*(?:位|项|个|组|层|步|轮|章|节|张|表|图|词|词元|样本|阶段|版本))/gu,
+                match => ' '.repeat(match.length)
+            );
         const barePattern = new RegExp(`(?<![A-Za-z0-9])${quantity}(?![A-Za-z0-9])`, 'gu');
-        const bareValues = [...sentence.text.matchAll(barePattern)]
+        const bareValues = [...numericText.matchAll(barePattern)]
             .filter(match => {
-                const before = sentence.text.slice(0, match.index);
-                const after = sentence.text.slice(match.index + match[0].length);
+                const before = numericText.slice(0, match.index);
+                const after = numericText.slice(match.index + match[0].length);
                 if (/第\s*$/.test(before)) return false;
                 return !/^\s*(?:个|条|段|篇|张|种|类|组|步|轮|层|模型|系统|骨干|样本|片段|词元|接口|分支)/.test(after);
             })

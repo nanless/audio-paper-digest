@@ -302,6 +302,12 @@ describe('Manual v4 editorial quality primitives', () => {
             []
         );
         assert.deepEqual(findMissingComparisonUnits('mAP 从 0.781 提高到 0.801。'), []);
+        assert.deepEqual(findMissingComparisonUnits(
+            '图 2 统计前 10 个词的平均 CER：从第 2 至 3 位起优势显现，且在 HAT 上相对 TG-ASR 的分离更明显。'
+        ), []);
+        assert.deepEqual(findMissingComparisonUnits(
+            '图 3 显示 Base 优于上下文基线，Small 的 BLEU 高于 Medium，但 CER 反而更差。'
+        ), []);
         assert.deepEqual(
             findMissingComparisonUnits('SylCipher 相对 wav2vec-U 的 CER 收益在匹配域与不匹配域相差多大？'),
             []
