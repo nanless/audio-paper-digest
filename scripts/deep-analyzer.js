@@ -4772,11 +4772,11 @@ function buildImageContent(imageUrl, base64, detectedMime = '') {
     if (base64) {
         const lower = imageUrl.toLowerCase().split('?')[0];
         let mime = isAllowedImageMime(detectedMime) ? detectedMime : 'image/png';
-        if (imageUrl.startsWith('data:image/svg+xml')) {
+        if (!detectedMime && imageUrl.startsWith('data:image/svg+xml')) {
             mime = 'image/svg+xml';
         } else if (!detectedMime && (lower.endsWith('.jpg') || lower.endsWith('.jpeg'))) {
             mime = 'image/jpeg';
-        } else if (lower.endsWith('.svg')) {
+        } else if (!detectedMime && lower.endsWith('.svg')) {
             mime = 'image/svg+xml';
         } else if (!detectedMime && lower.endsWith('.webp')) {
             mime = 'image/webp';
@@ -7432,6 +7432,7 @@ module.exports = {
     isSupportedImageUrl,
     safeImageLabel,
     normalizeModelImagePayload,
+    buildImageContent,
     isCorruptedMultimodalError,
     downloadImageBase64,
     cachePublicImageDetailed,

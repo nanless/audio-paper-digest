@@ -1151,6 +1151,7 @@ primary_task_tag: #音视频生成
             normalizeReaderFigureCaption,
             truncateReaderFigureCaption,
             prepareTrustedArxivFigureBuffer,
+            buildImageContent,
             isPermanentApiReaderFigureFailure,
             pruneUnmaterializedApiReaderFigureBlocks,
             hasCompleteApiReaderFigureBinding,
@@ -1172,6 +1173,12 @@ primary_task_tag: #音视频生成
             }))
         };
         assert.strictEqual(getApiReaderFigureInventory(artifacts, '2608.28422').length, 2);
+        const convertedSvgBlock = buildImageContent(
+            'https://arxiv.org/html/2608.28422v1/figure-1.svg',
+            Buffer.from('png bytes').toString('base64'),
+            'image/png'
+        );
+        assert.match(convertedSvgBlock.image_url.url, /^data:image\/png;base64,/);
         const compoundArtifacts = structuredClone(artifacts);
         compoundArtifacts.figures[0].images.push({
             kind: 'external_url', mediaType: 'image/svg+xml',
