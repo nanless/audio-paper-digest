@@ -755,6 +755,8 @@ const API_READER_TABLE_CONTRACT_VERSION = 'api-reader-tables-v3';
 const API_READER_FIGURE_CONTRACT_VERSION = 'api-reader-figures-v3';
 const API_READER_FIGURE_MAX_BYTES = 16 * 1024 * 1024;
 const API_READER_FIGURE_LIMIT = 8;
+const API_READER_FIGURE_LEAD_MIN_CHARS = 30;
+const API_READER_FIGURE_EXPLANATION_MIN_CHARS = 45;
 const API_READER_KINDS = Object.freeze([
     'background', 'related_work', 'problem', 'method_overview', 'component', 'training',
     'experiment_setup', 'result', 'ablation', 'limitation', 'reproduction', 'synthesis'
@@ -956,6 +958,14 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
                 Number.parseFloat(left) > 1 || Number.parseFloat(right) > 1
                     ? `${prefix}${left}%${separator}${right}%`
                     : full
+            )
+        )
+        .replace(
+            /(\d+(?:\.\d+)?)\s*(对|vs\.?|相比)\s*(\d+(?:\.\d+)?)\s*(%|个百分点|毫秒|分钟|小时|毫焦|kHz|MHz|Hz|dB|mJ|GB|MB|KB|倍|点|分|秒)(?![A-Za-z\u3400-\u9fff])/gi,
+            (full, left, separator, right, unit) => (
+                /^vs/i.test(separator)
+                    ? `${left} ${unit} ${separator} ${right} ${unit}`
+                    : `${left} ${unit}${separator}${right} ${unit}`
             )
         )
         .replace(/([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?=(?:mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|MACs?|tokens?|FPS|bit)\b)/gi, '$1 ')
@@ -1701,7 +1711,8 @@ function parseApiReaderArticleResult(raw, options = {}) {
         const explanationQuote = blocks[markerIndex + 1] || '';
         const focusPoints = value.version === 3 ? placement.focusPoints : [];
         if (!candidate || markerIndex <= 0 || markerIndex >= blocks.length - 1
-            || leadQuote.length < 35 || explanationQuote.length < 45
+            || leadQuote.length < API_READER_FIGURE_LEAD_MIN_CHARS
+            || explanationQuote.length < API_READER_FIGURE_EXPLANATION_MIN_CHARS
             || !Array.isArray(focusPoints)
             || (value.version === 3 && (focusPoints.length < 2 || focusPoints.length > 4))
             || focusPoints.some(item => typeof item !== 'string'
@@ -1712,8 +1723,8 @@ function parseApiReaderArticleResult(raw, options = {}) {
                 + `（targetKind=${placement.targetKind}`
                 + `, markerBound=${Boolean(candidate)}`
                 + `, markerIndex=${markerIndex}`
-                + `, leadChars=${leadQuote.length}`
-                + `, explanationChars=${explanationQuote.length}`
+                + `, leadChars=${leadQuote.length}/${API_READER_FIGURE_LEAD_MIN_CHARS}`
+                + `, explanationChars=${explanationQuote.length}/${API_READER_FIGURE_EXPLANATION_MIN_CHARS}`
                 + `, focusCount=${Array.isArray(focusPoints) ? focusPoints.length : 'invalid'}）`
             );
         }
@@ -1959,7 +1970,9 @@ function buildApiReaderValidationFeedback(error) {
     if (/figurePlacements\[\d+\].*相邻闭环/.test(message)) {
         fixes.push(
             '对应 Figure marker 必须在 targetKind 指定的同一小节中独占一个 Markdown 段；'
-            + '紧邻前一段至少 35 字，紧邻后一段至少 45 字，中间不能夹标题、列表、表格或其他 marker；'
+            + `紧邻前一段至少 ${API_READER_FIGURE_LEAD_MIN_CHARS} 字，`
+            + `紧邻后一段至少 ${API_READER_FIGURE_EXPLANATION_MIN_CHARS} 字，`
+            + '中间不能夹标题、列表、表格或其他 marker；'
             + 'focusPoints 必须有 2–4 项且每项 12–120 字'
         );
     }

@@ -233,7 +233,7 @@ describe('deep-analyzer section helpers', () => {
         const figureFeedback = buildApiReaderValidationFeedback(
             new Error('读者文章 figurePlacements[1] 图前导读与图后解释未形成相邻闭环')
         );
-        assert.match(figureFeedback, /前一段至少 35 字/);
+        assert.match(figureFeedback, /前一段至少 30 字/);
         assert.match(figureFeedback, /后一段至少 45 字/);
         assert.match(figureFeedback, /focusPoints 必须有 2–4 项/);
     });
@@ -965,6 +965,10 @@ primary_task_tag: #音视频生成
         assert.strictEqual(
             normalizeReaderEditorialSurface('结果为-6.84dB，到-2.76dB，延迟12ms。'),
             '结果为 -6.84 dB，到 -2.76 dB，延迟 12 ms。'
+        );
+        assert.strictEqual(
+            normalizeReaderEditorialSurface('主观选择为25对10分，延迟为0.77 vs 0.85秒。'),
+            '主观选择为 25 分对 10 分，延迟为 0.77 秒 vs 0.85 秒。'
         );
         assert.strictEqual(
             normalizeReaderEditorialSurface('Attn.与卷积并行，Attn.的输出进入门控层。'),
