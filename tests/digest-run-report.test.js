@@ -11,6 +11,7 @@ const {
     samePaperIds,
     visualAssetsAreValid,
     postPublishVisualWaiverIsValid,
+    llmApiPaperComplete,
     buildDigestRunReport,
     formatDigestRunSummary
 } = require('../scripts/digest-run-report.js');
@@ -173,6 +174,50 @@ describe('digest run report', () => {
             samePaperIds([{ arxivId: '2607.1' }, { arxivId: '2607.1v2' }], [{ arxivId: '2607.1' }]),
             false
         );
+    });
+
+    it('LLM API canonical 必须闭环 reader、评分、来源与实际正文哈希', () => {
+        const stable = value => {
+            if (Array.isArray(value)) return value.map(stable);
+            if (value && typeof value === 'object') {
+                return Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])]));
+            }
+            return value;
+        };
+        const hashText = value => crypto.createHash('sha256').update(String(value)).digest('hex');
+        const hashStable = value => crypto.createHash('sha256')
+            .update(JSON.stringify(stable(value))).digest('hex');
+        const paper = validAnalysisPaper('2607.00001');
+        paper.analysis = '完整的 API 深度分析正文';
+        paper.apiReaderArticle = '### 面向初学者的论文解释\n\n正文';
+        paper.apiReaderPlan = { version: 1, contract: 'beginner-researcher-v2' };
+        paper.apiReaderFigures = [];
+        paper.apiReaderAuthors = { authors: [{ name: 'Author', affiliations: ['Lab'] }] };
+        paper.sourceSha256 = '1'.repeat(64);
+        paper.apiReaderArticleSha256 = hashText(paper.apiReaderArticle);
+        paper.apiReaderPlanSha256 = hashStable(paper.apiReaderPlan);
+        paper.parsed = { ...(paper.parsed || {}), score: 7.5 };
+        paper.analysisManifest = {
+            contracts: { apiReaderArticle: 'beginner-researcher-v2' },
+            sourceAcquisition: { fullTextAvailable: true, sourceSha256: paper.sourceSha256 },
+            stages: {
+                scoringAudit: {
+                    status: 'complete', scoringContract: 'api-scoring-audit-v2',
+                    auditSha256: '2'.repeat(64), evidenceSha256: '3'.repeat(64),
+                    outputAnalysisSha256: hashText(paper.analysis), finalScore: 7.5
+                },
+                apiReaderArticle: {
+                    status: 'complete', model: 'muse-spark-1.2-contributor',
+                    protocol: 'openai_responses', articleSha256: paper.apiReaderArticleSha256,
+                    planSha256: paper.apiReaderPlanSha256,
+                    figuresSha256: hashStable(paper.apiReaderFigures),
+                    readerAuthorsSha256: hashStable(paper.apiReaderAuthors)
+                }
+            }
+        };
+        assert.strictEqual(llmApiPaperComplete(paper), true);
+        paper.apiReaderArticle += '漂移';
+        assert.strictEqual(llmApiPaperComplete(paper), false);
     });
 
     it('默认自动归档完整保存历史 fetch/filter/analysis companion 并可恢复报告', () => {

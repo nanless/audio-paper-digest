@@ -42,6 +42,10 @@ const MAX_REFERENCE_IMAGES = 2;
 const PUBLISHED_PAPERS_FINGERPRINT_CONTRACT = 'typed-json-f64-utf16-v1';
 const MANUAL_V6_PRODUCTION_MODE = 'manual_v6_production';
 const MANUAL_V6_PRODUCTION_CONTRACT = 'manual-v6-production-publication-v1';
+const LLM_API_PRODUCTION_MODE = 'llm_api_production';
+const LLM_API_PRODUCTION_CONTRACT = 'llm-api-production-publication-v1';
+const LLM_API_READER_CONTRACT = 'beginner-researcher-v2';
+const LLM_API_SCORING_CONTRACT = 'api-scoring-audit-v2';
 const REFERENCE_MIME_EXTENSIONS = Object.freeze({
     'image/png': '.png',
     'image/jpeg': '.jpg',
@@ -132,6 +136,17 @@ function stableSha256(value) {
     return sha256Buffer(Buffer.from(JSON.stringify(stableJson(value)), 'utf8'));
 }
 
+function stableApiBindingsSha256(bindings) {
+    // Python's json.dumps preserves an integral float as `5.0`, while
+    // JSON.stringify serializes the parsed value as `5`. finalScore is the
+    // only intentionally-float field in this cross-runtime binding.
+    const encoded = JSON.stringify(stableJson(bindings)).replace(
+        /("finalScore":)(-?\d+)(?=[,}])/g,
+        '$1$2.0'
+    );
+    return sha256Buffer(Buffer.from(encoded, 'utf8'));
+}
+
 function assertManualV6ProductionGeneration(generation, publishedPapers) {
     const proof = generation?.manualV6Production;
     const bindings = generation?.manualV6Bindings;
@@ -177,6 +192,71 @@ function assertManualV6ProductionGeneration(generation, publishedPapers) {
         throw new Error('production v6 generation 的 provenance 指纹不匹配');
     }
     return { proof, proofFingerprint };
+}
+
+function assertLlmApiProductionGeneration(generation, publishedPapers) {
+    const proof = generation?.llmApiProduction;
+    const bindings = generation?.llmApiBindings;
+    const isSha256 = value => /^[a-f0-9]{64}$/.test(String(value || ''));
+    if (generation?.publicationMode !== LLM_API_PRODUCTION_MODE
+        || proof?.contract !== LLM_API_PRODUCTION_CONTRACT
+        || proof?.readerContract !== LLM_API_READER_CONTRACT
+        || proof?.scoringContract !== LLM_API_SCORING_CONTRACT
+        || !Array.isArray(bindings) || bindings.length !== publishedPapers.length
+        || proof?.paperCount !== bindings.length
+        || !Array.isArray(proof?.paperIds)) {
+        throw new Error('发布后视觉只接受完整 reader/scoring/source 闭环的 LLM API production generation');
+    }
+    const ids = bindings.map(item => String(item?.paperId || ''));
+    const publishedIds = publishedPapers.map(normalizedId).sort();
+    const bindingInvalid = bindings.some(item => (
+        item?.readerContract !== LLM_API_READER_CONTRACT
+        || item?.scoringContract !== LLM_API_SCORING_CONTRACT
+        || !isSha256(item?.readerArticleSha256)
+        || !isSha256(item?.readerPlanSha256)
+        || !isSha256(item?.readerFiguresSha256)
+        || !isSha256(item?.readerAuthorsSha256)
+        || !isSha256(item?.analysisSha256)
+        || !isSha256(item?.sourceSha256)
+        || !isSha256(item?.scoringAuditSha256)
+        || !isSha256(item?.scoringEvidenceSha256)
+        || typeof item?.finalScore !== 'number' || !Number.isFinite(item.finalScore)
+        || typeof item?.model !== 'string' || !item.model.trim()
+        || typeof item?.protocol !== 'string' || !item.protocol.trim()
+    ));
+    if (ids.some(id => !id) || new Set(ids).size !== ids.length
+        || JSON.stringify(ids) !== JSON.stringify([...ids].sort())
+        || JSON.stringify(ids) !== JSON.stringify(publishedIds)
+        || JSON.stringify(proof.paperIds) !== JSON.stringify(ids)
+        || bindingInvalid) {
+        throw new Error('LLM API production generation 的逐论文 provenance 不完整或集合不闭环');
+    }
+    const bindingsFingerprint = stableApiBindingsSha256(bindings);
+    const proofFingerprint = stableSha256(proof);
+    if (generation.llmApiBindingsFingerprint !== bindingsFingerprint
+        || proof.bindingsFingerprint !== bindingsFingerprint
+        || generation.llmApiProductionFingerprint !== proofFingerprint) {
+        throw new Error('LLM API production generation 的 provenance 指纹不匹配');
+    }
+    return { proof, proofFingerprint };
+}
+
+function assertProductionGeneration(generation, publishedPapers) {
+    if (generation?.publicationMode === MANUAL_V6_PRODUCTION_MODE) {
+        return {
+            ...assertManualV6ProductionGeneration(generation, publishedPapers),
+            publicationMode: MANUAL_V6_PRODUCTION_MODE,
+            fingerprintField: 'manualV6ProductionFingerprint'
+        };
+    }
+    if (generation?.publicationMode === LLM_API_PRODUCTION_MODE) {
+        return {
+            ...assertLlmApiProductionGeneration(generation, publishedPapers),
+            publicationMode: LLM_API_PRODUCTION_MODE,
+            fingerprintField: 'llmApiProductionFingerprint'
+        };
+    }
+    throw new Error(`发布后视觉不接受该 publicationMode: ${generation?.publicationMode || 'missing'}`);
 }
 
 function portableFingerprintValue(value, label = 'publishedPapers') {
@@ -293,11 +373,11 @@ function assertPublishedBlogReceipt(targetDate, receiptPath = null) {
         || receipt.publishedPapersFingerprint !== snapshotFingerprint) {
         throw new Error('博客发布凭证未绑定可反向验证的已发布论文权威快照');
     }
-    const production = assertManualV6ProductionGeneration(generation, publishedPapers);
-    if (receipt.publicationMode !== MANUAL_V6_PRODUCTION_MODE
-        || receipt.manualV6ProductionFingerprint !== production.proofFingerprint
+    const production = assertProductionGeneration(generation, publishedPapers);
+    if (receipt.publicationMode !== production.publicationMode
+        || receipt[production.fingerprintField] !== production.proofFingerprint
         || receipt.postPublishVisuals !== 'required') {
-        throw new Error('博客发布凭证未绑定 production v6 generation，禁止建立视觉任务');
+        throw new Error('博客发布凭证未绑定当前 production generation，禁止建立视觉任务');
     }
     return {
         path: resolved,
@@ -307,7 +387,9 @@ function assertPublishedBlogReceipt(targetDate, receiptPath = null) {
         category: generation.category,
         publishedPapers,
         publicationMode: receipt.publicationMode,
-        manualV6ProductionFingerprint: production.proofFingerprint
+        productionFingerprint: production.proofFingerprint,
+        manualV6ProductionFingerprint: receipt.manualV6ProductionFingerprint || null,
+        llmApiProductionFingerprint: receipt.llmApiProductionFingerprint || null
     };
 }
 

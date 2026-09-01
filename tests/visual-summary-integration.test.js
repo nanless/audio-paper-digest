@@ -13,7 +13,8 @@ const {
 } = require('../scripts/visual-summary-integration.js');
 const { publishedPapersFingerprint } = require('../scripts/visual-summary-state.js');
 const {
-    productionV6GenerationFields, productionV6ReceiptFields
+    productionV6GenerationFields, productionV6ReceiptFields,
+    llmApiProductionGenerationFields, llmApiProductionReceiptFields
 } = require('./production-v6-publication-fixture.js');
 
 function publishedPaper(id, score) {
@@ -29,9 +30,12 @@ function publishedPaper(id, score) {
     });
 }
 
-function writePublication(currentDir, papers, commit = 'a'.repeat(40)) {
+function writePublication(currentDir, papers, commit = 'a'.repeat(40), mode = 'manual') {
     const date = '2026-07-13';
     const snapshotFingerprint = publishedPapersFingerprint(papers);
+    const productionFields = mode === 'api'
+        ? llmApiProductionGenerationFields(papers)
+        : productionV6GenerationFields(papers);
     const generation = {
         schemaVersion: 3,
         date,
@@ -43,7 +47,7 @@ function writePublication(currentDir, papers, commit = 'a'.repeat(40)) {
         visualSummaryRequired: false,
         digestCoverRequired: false,
         publishedPapers: papers,
-        ...productionV6GenerationFields(papers)
+        ...productionFields
     };
     const raw = Buffer.from(JSON.stringify(generation));
     fs.writeFileSync(path.join(currentDir, `blog-generation-manifest-${date}.json`), raw);
@@ -61,7 +65,9 @@ function writePublication(currentDir, papers, commit = 'a'.repeat(40)) {
         publicationCommit: commit,
         remoteVerifiedOid: commit,
         remoteVerifiedAt: '2026-07-14T03:00:00+08:00',
-        ...productionV6ReceiptFields(generation)
+        ...(mode === 'api'
+            ? llmApiProductionReceiptFields(generation)
+            : productionV6ReceiptFields(generation))
     }));
     return receipt;
 }
@@ -126,5 +132,39 @@ describe('post-publication visual orchestration', () => {
             targetDate: '2026-07-13',
             publicationReceiptPath: path.join(os.tmpdir(), `missing-${Date.now()}.json`)
         }), /缺少可验证的博客发布凭证/);
+    });
+
+    it('LLM API production 使用相同的已发布快照建立 TOP 10 与汇总图任务', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-api-integration-'));
+        const originals = {
+            current: Config.CURRENT_DIR,
+            visualManifest: Config.FILES.visualSummaryManifestDir,
+            visualAsset: Config.FILES.visualSummaryAssetDir,
+            coverManifest: Config.FILES.digestCoverManifestDir,
+            coverAsset: Config.FILES.digestCoverAssetDir
+        };
+        try {
+            Config.CURRENT_DIR = dir;
+            Config.FILES.visualSummaryManifestDir = path.join(dir, 'visual-summary-manifests');
+            Config.FILES.visualSummaryAssetDir = path.join(dir, 'archive');
+            Config.FILES.digestCoverManifestDir = path.join(dir, 'digest-cover-manifests');
+            Config.FILES.digestCoverAssetDir = path.join(dir, 'archive');
+            const papers = Array.from({ length: 12 }, (_, index) =>
+                publishedPaper(`2607.${String(index + 1).padStart(5, '0')}`, 9 - index / 10));
+            const receipt = writePublication(dir, papers, 'a'.repeat(40), 'api');
+            const result = reconcileVisualSummaryTasks({
+                targetDate: '2026-07-13', publicationReceiptPath: receipt
+            });
+            assert.strictEqual(Object.keys(result.manifest.papers).length, 10);
+            assert.strictEqual(result.pendingCards.length, 10);
+            assert.strictEqual(result.pendingCover.length, 1);
+        } finally {
+            Config.CURRENT_DIR = originals.current;
+            Config.FILES.visualSummaryManifestDir = originals.visualManifest;
+            Config.FILES.visualSummaryAssetDir = originals.visualAsset;
+            Config.FILES.digestCoverManifestDir = originals.coverManifest;
+            Config.FILES.digestCoverAssetDir = originals.coverAsset;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
     });
 });

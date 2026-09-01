@@ -100,6 +100,60 @@ function productionV6PaperComplete(paper) {
     );
 }
 
+function stableJson(value) {
+    if (Array.isArray(value)) return value.map(stableJson);
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableJson(value[key])]));
+    }
+    return value;
+}
+
+function stableSha256(value) {
+    return crypto.createHash('sha256')
+        .update(Buffer.from(JSON.stringify(stableJson(value)), 'utf8')).digest('hex');
+}
+
+function textSha256(value) {
+    return crypto.createHash('sha256').update(Buffer.from(String(value), 'utf8')).digest('hex');
+}
+
+function llmApiPaperComplete(paper) {
+    const manifest = paper?.analysisManifest;
+    const contracts = manifest?.contracts;
+    const source = manifest?.sourceAcquisition;
+    const scoring = manifest?.stages?.scoringAudit;
+    const reader = manifest?.stages?.apiReaderArticle;
+    const analysis = typeof paper?.analysis === 'string' ? paper.analysis : '';
+    const article = typeof paper?.apiReaderArticle === 'string' ? paper.apiReaderArticle : '';
+    const parsedScore = Number(paper?.parsed?.score);
+    const finalScore = Number(scoring?.finalScore);
+    const isSha256 = value => /^[a-f0-9]{64}$/.test(String(value || ''));
+    return Boolean(
+        contracts?.apiReaderArticle === 'beginner-researcher-v2'
+        && source?.fullTextAvailable === true
+        && isSha256(source?.sourceSha256)
+        && paper?.sourceSha256 === source.sourceSha256
+        && scoring?.status === 'complete'
+        && scoring?.scoringContract === 'api-scoring-audit-v2'
+        && isSha256(scoring?.auditSha256)
+        && isSha256(scoring?.evidenceSha256)
+        && scoring?.outputAnalysisSha256 === textSha256(analysis)
+        && Number.isFinite(parsedScore) && Number.isFinite(finalScore)
+        && Math.abs(parsedScore - finalScore) <= 1e-9
+        && reader?.status === 'complete'
+        && typeof reader?.model === 'string' && reader.model.trim()
+        && typeof reader?.protocol === 'string' && reader.protocol.trim()
+        && isSha256(paper?.apiReaderArticleSha256)
+        && paper.apiReaderArticleSha256 === textSha256(article)
+        && reader.articleSha256 === paper.apiReaderArticleSha256
+        && isSha256(paper?.apiReaderPlanSha256)
+        && paper.apiReaderPlanSha256 === stableSha256(paper?.apiReaderPlan)
+        && reader.planSha256 === paper.apiReaderPlanSha256
+        && reader.figuresSha256 === stableSha256(paper?.apiReaderFigures || [])
+        && reader.readerAuthorsSha256 === stableSha256(paper?.apiReaderAuthors || {})
+    );
+}
+
 function paperDate(paper) {
     return paperBatchDate(paper);
 }
@@ -393,7 +447,13 @@ function buildDigestRunReport(targetDate, options = {}) {
     );
     const productionV6Complete = deepBatch.length > 0
         && deepBatch.every(productionV6PaperComplete);
-    const analysisComplete = Boolean(deep && filtered) && productionV6Complete && (
+    const llmApiComplete = deepBatch.length > 0
+        && deepBatch.every(llmApiPaperComplete);
+    const analysisPublicationMode = productionV6Complete
+        ? 'manual_v6_production'
+        : (llmApiComplete ? 'llm_api_production' : 'invalid_or_legacy');
+    const productionAnalysisComplete = productionV6Complete || llmApiComplete;
+    const analysisComplete = Boolean(deep && filtered) && productionAnalysisComplete && (
         failed.length === 0
         && successful.length === filteredBatch.length
         && samePaperIds(successful, filteredBatch)
@@ -402,9 +462,9 @@ function buildDigestRunReport(targetDate, options = {}) {
     if (!fetchComplete) errors.push('抓取来源健康或批次绑定不完整');
     if (!filteredComplete) errors.push('筛选状态、决定覆盖或批次绑定不完整');
     if (!analysisComplete) errors.push(
-        productionV6Complete
+        productionAnalysisComplete
             ? '深度分析集合未精确覆盖筛选结果'
-            : '正式 current canonical 不是完整 production v6'
+            : '正式 current canonical 既不是完整 Manual v6，也不是完整 LLM API production'
     );
     if (!reviewComplete) errors.push('博客严格 review 或远端发布验证未完成');
     if (!visualGateComplete) errors.push('TOP 10 论文长图状态或资产校验未完成');
@@ -445,7 +505,7 @@ function buildDigestRunReport(targetDate, options = {}) {
         },
         analysis: {
             complete: analysisComplete,
-            publicationMode: productionV6Complete ? 'manual_v6_production' : 'invalid_or_legacy',
+            publicationMode: analysisPublicationMode,
             total: deepBatch.length,
             successful: successful.length,
             failed: failed.length,
@@ -516,6 +576,7 @@ module.exports = {
     visualAssetsAreValid,
     postPublishVisualWaiverIsValid,
     productionV6PaperComplete,
+    llmApiPaperComplete,
     buildDigestRunReport,
     formatDigestRunSummary
 };
