@@ -10,7 +10,8 @@ const {
     refreshApiReaderAuthorsFromSource,
     refreshApiReaderFiguresFromSource,
     API_READER_ARTICLE_CONTRACT,
-    stableFingerprint
+    stableFingerprint,
+    repairApiReaderPlanSurfaceBinding
 } = require('./deep-analyzer.js');
 const {
     readJsonFileStrict,
@@ -31,6 +32,7 @@ function parseRefreshCliArgs(args) {
         authorsOnly: false,
         scoringAndReader: false,
         figuresOnly: false,
+        surfaceBindingsOnly: false,
         all: false,
         date: null,
         concurrency: 1,
@@ -46,6 +48,7 @@ function parseRefreshCliArgs(args) {
         if (value === '--authors-only') options.authorsOnly = true;
         else if (value === '--scoring-and-reader') options.scoringAndReader = true;
         else if (value === '--figures-only') options.figuresOnly = true;
+        else if (value === '--surface-bindings-only') options.surfaceBindingsOnly = true;
         else if (value === '--all') options.all = true;
         else if (value === '--date' || value === '--concurrency') {
             const next = args[index + 1];
@@ -62,9 +65,10 @@ function parseRefreshCliArgs(args) {
             options.ids.push(value);
         }
     }
-    if ([options.authorsOnly, options.scoringAndReader, options.figuresOnly]
+    if ([options.authorsOnly, options.scoringAndReader, options.figuresOnly,
+        options.surfaceBindingsOnly]
         .filter(Boolean).length > 1) {
-        throw new Error('--authors-only、--figures-only 与 --scoring-and-reader 不能同时使用');
+        throw new Error('刷新模式参数不能同时使用');
     }
     if (!Number.isInteger(options.concurrency)
         || options.concurrency < 1 || options.concurrency > MAX_REFRESH_CONCURRENCY) {
@@ -135,7 +139,9 @@ function resolveBatchRefreshIds(options) {
     if (payload.batchDate !== options.date) {
         throw new Error(`当前深度分析批次为 ${payload.batchDate || '未知'}，拒绝按 ${options.date} 全量刷新`);
     }
-    const pending = papers.filter(paper => !hasCurrentReaderV3(paper));
+    const pending = options.surfaceBindingsOnly
+        ? papers
+        : papers.filter(paper => !hasCurrentReaderV3(paper));
     console.log(
         `📋 API reader 全量刷新: date=${options.date}`
         + ` | papers=${papers.length} | pending=${pending.length}`
@@ -216,15 +222,33 @@ async function refreshApiReader(targetId, options = {}) {
             ? '作者机构绑定'
             : options.figuresOnly
                 ? '论文图资产'
+            : options.surfaceBindingsOnly
+                ? '读者计划表面绑定'
             : options.scoringAndReader
                 ? '评分复验与读者文章'
                 : '读者文章';
         console.log(`📄 只刷新${refreshLabel}: ${canonical.title || requested}`);
-        const sourceDetails = await fetchArxivTextDetailed(
-            canonical.arxivId || canonical.paper_id || targetId
-        );
-        const refreshed = options.authorsOnly
-            ? refreshApiReaderAuthorsFromSource(canonical, sourceDetails)
+        const sourceDetails = options.surfaceBindingsOnly
+            ? null
+            : await fetchArxivTextDetailed(
+                canonical.arxivId || canonical.paper_id || targetId
+            );
+        const refreshed = options.surfaceBindingsOnly
+            ? (() => {
+                const repaired = JSON.parse(JSON.stringify(canonical));
+                repairApiReaderPlanSurfaceBinding(repaired, repaired.analysisManifest);
+                const bridges = repaired.apiReaderPlan?.conceptBridges;
+                if (!Array.isArray(bridges) || bridges.some(bridge => (
+                    typeof bridge?.explanation !== 'string'
+                    || !repaired.apiReaderArticle.includes(bridge.explanation)
+                    || repaired.apiReaderArticle.includes(String(bridge?.marker || ''))
+                ))) {
+                    throw new Error(`${requested} 读者计划表面绑定无法从最终正文闭环`);
+                }
+                return repaired;
+            })()
+            : options.authorsOnly
+                ? refreshApiReaderAuthorsFromSource(canonical, sourceDetails)
             : options.figuresOnly
                 ? await refreshApiReaderFiguresFromSource(canonical, sourceDetails)
             : options.scoringAndReader
@@ -257,7 +281,10 @@ async function refreshApiReader(targetId, options = {}) {
             [savedRecord], Array.isArray(savedPayload) ? {} : savedPayload
         );
         const sync = updateAnalysisDigestStatuses([savedRecord], { batchDate });
-        console.log(options.authorsOnly
+        console.log(options.surfaceBindingsOnly
+            ? `✅ 读者计划表面绑定完成 | plan_sha=${savedRecord.apiReaderPlanSha256}`
+                + ` | papers_sync=${sync.updated}`
+            : options.authorsOnly
             ? `✅ 作者机构刷新完成 | authors=${refreshed.apiReaderAuthors.authors.length} | papers_sync=${sync.updated}`
             : options.figuresOnly
                 ? `✅ 论文图资产刷新完成 | figures=${refreshed.apiReaderFigures.length} | papers_sync=${sync.updated}`

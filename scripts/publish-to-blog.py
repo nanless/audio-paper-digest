@@ -2824,7 +2824,7 @@ def _api_reader_payload(paper):
                     or placement['marker'] in article \
                     or not isinstance(placement.get('leadQuote'), str) \
                     or not isinstance(placement.get('explanationQuote'), str) \
-                    or len(placement['leadQuote'].strip()) < 35 \
+                    or len(placement['leadQuote'].strip()) < 30 \
                     or len(placement['explanationQuote'].strip()) < 45 \
                     or (plan_version == 3 and (
                         not isinstance(placement.get('focusPoints'), list)

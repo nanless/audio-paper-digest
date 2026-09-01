@@ -1047,6 +1047,40 @@ primary_task_tag: #音视频生成
             recoveryPaper.apiReaderPlanSha256,
             recoveryManifest.stages.apiReaderArticle.planSha256
         );
+        const bridgeArticle = [
+            '### 声音如何重新约束词表选择？',
+            '',
+            '**注意力池化 × LM head 复用：** 注意力池化负责汇总声学上下文，LM head 复用负责把上下文映射回词表；二者搭配后只需 1 次投影。'
+        ].join('\n');
+        const bridgePaper = {
+            apiReaderArticle: bridgeArticle,
+            apiReaderPlan: {
+                version: 3,
+                contract: 'beginner-researcher-v3',
+                readerTitle: '声音如何重约束词表',
+                oneSentenceThesis: '解释声学上下文和词表投影。',
+                conceptBridges: [{
+                    terms: ['注意力池化', 'LM head 复用'],
+                    sectionKind: 'component',
+                    marker: '[[CONCEPT_BRIDGE_1]]',
+                    explanation: '**注意力池化 × LM head 复用：** 注意力池化负责汇总声学上下文，LM head 复用负责把上下文映射回词表；二者搭配后只需一次投影。'
+                }],
+                sections: [{
+                    kind: 'component', heading: '声音如何重新约束词表选择？'
+                }]
+            },
+            apiReaderPlanSha256: '0'.repeat(64)
+        };
+        const bridgeManifest = { stages: { apiReaderArticle: {
+            status: 'complete', planSha256: '0'.repeat(64)
+        } } };
+        assert.strictEqual(
+            repairApiReaderPlanSurfaceBinding(bridgePaper, bridgeManifest), true
+        );
+        assert.strictEqual(
+            bridgePaper.apiReaderPlan.conceptBridges[0].explanation,
+            bridgeArticle.split('\n\n')[1]
+        );
         const specs = [
             ['background', '声音片段为什么会让传统判别器失去方向？', '背景任务输入输出失败案例直觉动机读者边界'],
             ['related_work', '既有路线分别在哪个环节丢掉了关键信息？', '相关工作监督来源能力缺口路线对照位置判断'],

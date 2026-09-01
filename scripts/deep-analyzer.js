@@ -1834,6 +1834,16 @@ function parseApiReaderArticleResult(raw, options = {}) {
     const reboundFigurePlacements = rebindApiReaderFigurePlacementQuotes(
         article, figurePlacements
     );
+    const reboundConceptBridges = conceptBridges.map(bridge => {
+        const prefix = `**${bridge.terms[0]} × ${bridge.terms[1]}：**`;
+        const matches = article.split(/\n\s*\n/)
+            .map(block => block.trim())
+            .filter(block => block.startsWith(prefix));
+        if (matches.length !== 1) {
+            throw new Error(`读者文章术语桥无法从最终正文重绑定: ${prefix}`);
+        }
+        return { ...bridge, explanation: matches[0] };
+    });
     return {
         plan: {
             version: value.version,
@@ -1842,7 +1852,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
                 : 'beginner-researcher-v2',
             readerTitle: normalizeReaderEditorialSurface(value.readerTitle.trim()),
             oneSentenceThesis: normalizeReaderEditorialSurface(value.oneSentenceThesis.trim()),
-            conceptBridges,
+            conceptBridges: reboundConceptBridges,
             figurePlacements: reboundFigurePlacements,
             sections: normalizedSections.map(section => ({
                 kind: section.kind,
@@ -1892,10 +1902,34 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
     if (!repairedHeadings.every((heading, index) => heading === articleHeadings[index])) {
         return false;
     }
+    const articleBlocks = article.split(/\n\s*\n/).map(block => block.trim());
+    let repairedConceptBridges = plan.conceptBridges;
+    if (Array.isArray(plan.conceptBridges)) {
+        repairedConceptBridges = [];
+        for (const bridge of plan.conceptBridges) {
+            if (!bridge || !Array.isArray(bridge.terms) || bridge.terms.length !== 2) {
+                return false;
+            }
+            const terms = bridge.terms.map(term => (
+                normalizeReaderEditorialSurface(String(term || '').trim())
+            ));
+            const prefix = `**${terms[0]} × ${terms[1]}：**`;
+            const matches = articleBlocks.filter(block => block.startsWith(prefix));
+            if (matches.length !== 1) return false;
+            repairedConceptBridges.push({
+                ...bridge,
+                terms,
+                explanation: matches[0]
+            });
+        }
+    }
     const repairedPlan = {
         ...plan,
         readerTitle: normalizeReaderEditorialSurface(plan.readerTitle),
         oneSentenceThesis: normalizeReaderEditorialSurface(plan.oneSentenceThesis),
+        ...(Array.isArray(repairedConceptBridges)
+            ? { conceptBridges: repairedConceptBridges }
+            : {}),
         sections: plan.sections.map((section, index) => ({
             ...section,
             heading: articleHeadings[index]

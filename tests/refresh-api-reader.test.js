@@ -23,6 +23,10 @@ describe('refresh-api-reader batch CLI', () => {
         assert.strictEqual(parsed.concurrency, MAX_REFRESH_CONCURRENCY);
         assert.strictEqual(parsed.scoringAndReader, true);
         assert.deepStrictEqual(parsed.ids, []);
+        const bindings = parseRefreshCliArgs([
+            '--all', '--date', '2026-09-01', '--surface-bindings-only'
+        ]);
+        assert.strictEqual(bindings.surfaceBindingsOnly, true);
     });
 
     it('rejects ambiguous, unbounded, and unknown arguments', () => {
@@ -50,6 +54,12 @@ describe('refresh-api-reader batch CLI', () => {
         assert.throws(
             () => parseRefreshCliArgs(['--all', '--all', '--date', '2026-09-01']),
             /参数重复/
+        );
+        assert.throws(
+            () => parseRefreshCliArgs([
+                '--surface-bindings-only', '--scoring-and-reader', '2608.1'
+            ]),
+            /刷新模式参数不能同时使用/
         );
     });
 
