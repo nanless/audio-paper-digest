@@ -688,7 +688,9 @@ function findTechnicalTermAdhesions(text) {
             const token = finding.match.replace(/\p{Script=Han}/gu, '');
             // S1/S2、T5 这类单字母编号通常是公式、分支或实验条件标签，
             // 与后接中文连写符合中文科技写作习惯，不应当作英文术语粘连。
-            return !/^[A-Za-z]\d+$/.test(token);
+            // JSD-质量、AMI-日本、L1-英语使用连字符明确连接限定词，
+            // 也不是缺少词边界；真正的 Qwen-CoT在 仍会被保留为问题。
+            return !/^[A-Za-z]\d+$/.test(token) && !token.endsWith('-');
         });
 }
 
