@@ -553,10 +553,11 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         }
         for (const header of table.header) {
             const normalized = header.replace(/[*_`]/g, '').trim();
-            if (TABLE_VAGUE_METRIC_HEADER_RE.test(normalized)) {
+            const identifier = !normalized || TABLE_IDENTIFIER_HEADER_RE.test(normalized);
+            if (!identifier && TABLE_VAGUE_METRIC_HEADER_RE.test(normalized)) {
                 return `实验结果第 ${index + 1} 张表含叙述型伪指标列“${normalized}”，应改为可核对指标、设置或比较对象`;
             }
-            if (TABLE_DIRECTIONAL_METRIC_RE.test(normalized)
+            if (!identifier && TABLE_DIRECTIONAL_METRIC_RE.test(normalized)
                 && !TABLE_DIRECTION_MARK_RE.test(normalized)
                 && !TABLE_NON_DIRECTIONAL_MEASURE_RE.test(normalized)) {
                 return `实验结果第 ${index + 1} 张表指标“${normalized}”缺少 ↑/↓ 方向`;

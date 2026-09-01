@@ -523,6 +523,11 @@ describe('analyzePaperWithRetry', () => {
             contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
             documentType: '方法研究'
         }), null, '子集/输入是评测条件，不应误判为纯指标表');
+        const lossMethodIdentifier = valid.replace('方法 / 设置', '方法（损失函数）');
+        assert.strictEqual(validateExperimentTableContract(lossMethodIdentifier, {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究'
+        }), null, '损失方法是身份列，其中“损失”不应触发指标方向要求');
 
         const neutralComparison = withResults([
             '关键比较问题是三种配置在固定测试集上的 WER 差异多大，并核验配置改变是否影响结果方向。',
