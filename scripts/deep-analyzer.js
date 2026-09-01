@@ -1239,6 +1239,23 @@ function readerSectionContainsMarker(article, heading, marker) {
     return markerIndex >= bodyStart && markerIndex < sectionEnd;
 }
 
+function orderApiReaderFiguresByArticle(article, figures) {
+    if (!Array.isArray(figures)) return null;
+    const articleUrls = [...String(article || '')
+        .matchAll(/!\[(?:\\.|[^\]\\])*\]\((https:\/\/[^\s)]+)\)/g)]
+        .map(match => match[1]);
+    if (articleUrls.length !== figures.length
+        || new Set(articleUrls).size !== articleUrls.length) return null;
+    const byUrl = new Map();
+    for (const figure of figures) {
+        const url = typeof figure?.url === 'string' ? figure.url : '';
+        if (!url || byUrl.has(url)) return null;
+        byUrl.set(url, figure);
+    }
+    const ordered = articleUrls.map(url => byUrl.get(url));
+    return ordered.every(Boolean) ? ordered : null;
+}
+
 function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '') {
     const figures = getApiReaderFigureInventory(structuredArtifacts, arxivId);
     if (figures.length === 0) return { ...readerResult, figures: [] };
@@ -1306,7 +1323,11 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
     if (placements.length > 0 && used.length !== placements.length) {
         throw new Error(`论文图计划只成功插入 ${used.length}/${placements.length} 张`);
     }
-    return { ...readerResult, article, figures: used };
+    const orderedFigures = orderApiReaderFiguresByArticle(article, used);
+    if (!orderedFigures) {
+        throw new Error('论文图正文顺序无法与结构化 figure 绑定闭环');
+    }
+    return { ...readerResult, article, figures: orderedFigures };
 }
 
 function rewriteApiReaderFigureNarratives(article, figures) {
@@ -1961,13 +1982,38 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
             heading: articleHeadings[index]
         }))
     };
+    let repairedFigures = paper.apiReaderFigures;
+    if (Array.isArray(paper.apiReaderFigures)) {
+        repairedFigures = orderApiReaderFiguresByArticle(article, paper.apiReaderFigures);
+        if (!repairedFigures) return false;
+    }
     const oldSha = stableFingerprint(plan);
     const newSha = stableFingerprint(repairedPlan);
+    const oldFiguresSha = Array.isArray(paper.apiReaderFigures)
+        ? stableFingerprint(paper.apiReaderFigures)
+        : null;
+    const newFiguresSha = Array.isArray(repairedFigures)
+        ? stableFingerprint(repairedFigures)
+        : null;
     if (oldSha === newSha && paper.apiReaderPlanSha256 === newSha
-        && stage.planSha256 === newSha) return false;
+        && stage.planSha256 === newSha
+        && oldFiguresSha === newFiguresSha
+        && (!Array.isArray(repairedFigures)
+            || (stage.figureCount === repairedFigures.length
+                && stage.figuresSha256 === newFiguresSha))) return false;
     paper.apiReaderPlan = repairedPlan;
     paper.apiReaderPlanSha256 = newSha;
     stage.planSha256 = newSha;
+    if (Array.isArray(repairedFigures)) {
+        paper.apiReaderFigures = repairedFigures;
+        stage.figureCount = repairedFigures.length;
+        stage.figuresSha256 = newFiguresSha;
+        const imageStage = analysisManifest?.stages?.imageSupplement;
+        if (imageStage && imageStage.reason === 'api_reader_v3_official_figures_bound') {
+            imageStage.officialFigureCount = repairedFigures.length;
+            imageStage.officialFiguresSha256 = newFiguresSha;
+        }
+    }
     return true;
 }
 

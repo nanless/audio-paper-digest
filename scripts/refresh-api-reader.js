@@ -245,6 +245,16 @@ async function refreshApiReader(targetId, options = {}) {
                 ))) {
                     throw new Error(`${requested} 读者计划表面绑定无法从最终正文闭环`);
                 }
+                const articleFigureUrls = [...repaired.apiReaderArticle
+                    .matchAll(/!\[(?:\\.|[^\]\\])*\]\((https:\/\/[^\s)]+)\)/g)]
+                    .map(match => match[1]);
+                const boundFigureUrls = Array.isArray(repaired.apiReaderFigures)
+                    ? repaired.apiReaderFigures.map(item => item?.url)
+                    : [];
+                if (articleFigureUrls.length !== boundFigureUrls.length
+                    || articleFigureUrls.some((url, index) => url !== boundFigureUrls[index])) {
+                    throw new Error(`${requested} 正文图片顺序无法与结构化 figure 闭环`);
+                }
                 return repaired;
             })()
             : options.authorsOnly

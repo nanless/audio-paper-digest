@@ -1330,14 +1330,14 @@ primary_task_tag: #音视频生成
                 ],
                 figurePlacements: [
                     {
-                        figureOrdinal: 1, targetKind: 'component',
-                        marker: '[[FIGURE_1]]',
-                        focusPoints: ['先看输入箭头如何进入增强组件', '再看增强输出在哪里进入主干']
-                    },
-                    {
                         figureOrdinal: 2, targetKind: 'result',
                         marker: '[[FIGURE_2]]',
                         focusPoints: ['先核对横轴与纵轴的指标方向', '再比较两条曲线在同一条件下的间距']
+                    },
+                    {
+                        figureOrdinal: 1, targetKind: 'component',
+                        marker: '[[FIGURE_1]]',
+                        focusPoints: ['先看输入箭头如何进入增强组件', '再看增强输出在哪里进入主干']
                     }
                 ]
             },
@@ -1348,6 +1348,7 @@ primary_task_tag: #音视频生成
             qualityMetrics: {}
         }, artifacts, '2608.28422');
         assert.strictEqual(reader.figures.length, 2);
+        assert.deepStrictEqual(reader.figures.map(item => item.ordinal), [1, 2]);
         assert.match(reader.article, /figure-1\.svg/);
         assert.match(reader.article, /figure-2\.svg/);
         assert.ok(reader.article.indexOf('先看图中的增强模块') < reader.article.indexOf('figure-1.svg'));
