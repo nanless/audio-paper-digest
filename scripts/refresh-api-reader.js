@@ -33,6 +33,7 @@ function parseRefreshCliArgs(args) {
         scoringAndReader: false,
         figuresOnly: false,
         surfaceBindingsOnly: false,
+        reviewFeedback: '',
         all: false,
         date: null,
         concurrency: 1,
@@ -50,11 +51,12 @@ function parseRefreshCliArgs(args) {
         else if (value === '--figures-only') options.figuresOnly = true;
         else if (value === '--surface-bindings-only') options.surfaceBindingsOnly = true;
         else if (value === '--all') options.all = true;
-        else if (value === '--date' || value === '--concurrency') {
+        else if (value === '--date' || value === '--concurrency' || value === '--feedback') {
             const next = args[index + 1];
             if (!next || next.startsWith('--')) throw new Error(`${value} 缺少参数`);
             index += 1;
             if (value === '--date') options.date = next;
+            else if (value === '--feedback') options.reviewFeedback = next.trim();
             else {
                 if (!/^\d+$/.test(next)) throw new Error('--concurrency 必须为整数');
                 options.concurrency = Number.parseInt(next, 10);
@@ -94,6 +96,17 @@ function parseRefreshCliArgs(args) {
     }
     if (!options.all && options.ids.length === 0) {
         throw new Error('必须提供论文 ID，或使用 --all --date YYYY-MM-DD');
+    }
+    if (options.reviewFeedback) {
+        if (options.all || options.ids.length !== 1) {
+            throw new Error('--feedback 只允许绑定一个显式论文 ID');
+        }
+        if (options.authorsOnly || options.figuresOnly || options.surfaceBindingsOnly) {
+            throw new Error('--feedback 只能用于完整读者文章刷新或评分+读者刷新');
+        }
+        if (options.reviewFeedback.length > 4000) {
+            throw new Error('--feedback 最多 4000 字符');
+        }
     }
     return options;
 }
@@ -263,7 +276,9 @@ async function refreshApiReader(targetId, options = {}) {
                 ? await refreshApiReaderFiguresFromSource(canonical, sourceDetails)
             : options.scoringAndReader
                 ? await refreshApiScoringAndReaderFromSource(canonical, sourceDetails)
-                : await refreshApiReaderArticleFromSource(canonical, sourceDetails);
+                : await refreshApiReaderArticleFromSource(canonical, sourceDetails, {
+                    reviewFeedback: options.reviewFeedback
+                });
         const savedPayload = updateJsonFileLocked(resultPath, payload => {
             const rows = Array.isArray(payload) ? payload : payload.papers;
             if (!Array.isArray(rows)) throw new Error('deep canonical papers 不是数组');

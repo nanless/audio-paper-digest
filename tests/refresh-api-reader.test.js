@@ -27,6 +27,10 @@ describe('refresh-api-reader batch CLI', () => {
             '--all', '--date', '2026-09-01', '--surface-bindings-only'
         ]);
         assert.strictEqual(bindings.surfaceBindingsOnly, true);
+        const feedback = parseRefreshCliArgs([
+            '--feedback', '图 4 的蓝黄柱数值对应错误', '2608.28630'
+        ]);
+        assert.strictEqual(feedback.reviewFeedback, '图 4 的蓝黄柱数值对应错误');
     });
 
     it('rejects ambiguous, unbounded, and unknown arguments', () => {
@@ -60,6 +64,18 @@ describe('refresh-api-reader batch CLI', () => {
                 '--surface-bindings-only', '--scoring-and-reader', '2608.1'
             ]),
             /刷新模式参数不能同时使用/
+        );
+        assert.throws(
+            () => parseRefreshCliArgs([
+                '--all', '--date', '2026-09-01', '--feedback', '错误'
+            ]),
+            /一个显式论文 ID/
+        );
+        assert.throws(
+            () => parseRefreshCliArgs([
+                '--figures-only', '--feedback', '错误', '2608.1'
+            ]),
+            /只能用于完整读者文章刷新/
         );
     });
 

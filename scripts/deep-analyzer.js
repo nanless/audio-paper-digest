@@ -2167,7 +2167,11 @@ function buildApiReaderValidationFeedback(error) {
 }
 
 async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceEvidence, options = {}) {
-    let validationFeedback = '这是第一次生成，没有上一次校验错误。';
+    const externalReviewFeedback = String(options.reviewFeedback || '').trim();
+    let validationFeedback = externalReviewFeedback
+        ? '上一轮只读发布审查发现以下事实或图文绑定问题；必须逐项纠正，'
+            + `不能原样复述错误：${externalReviewFeedback}`
+        : '这是第一次生成，没有上一次校验错误。';
     let previousDraft = '无';
     let lastError = null;
     const maxAttempts = 5;
@@ -2291,7 +2295,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     throw lastError || new Error('读者文章生成失败');
 }
 
-async function refreshApiReaderArticleFromSource(paper, sourceDetails) {
+async function refreshApiReaderArticleFromSource(paper, sourceDetails, options = {}) {
     if (!paper || typeof paper !== 'object') throw new Error('刷新读者文章需要 canonical paper');
     const analysis = String(paper.analysis || '');
     const manifest = paper.analysisManifest;
@@ -2324,14 +2328,20 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails) {
     const configurationFingerprint = buildRecoveryFingerprints(
         paper, textForAnalysis, arxivId
     ).apiReaderArticle;
+    const reviewFeedback = String(options.reviewFeedback || '').trim();
+    if (reviewFeedback.length > 4000) throw new Error('读者文章 review feedback 超过 4000 字符');
+    const reviewFeedbackSha256 = reviewFeedback
+        ? crypto.createHash('sha256').update(reviewFeedback).digest('hex')
+        : null;
     const fingerprint = stableFingerprint({
         configurationFingerprint,
         analysisSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
         evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),
-        structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || ''
+        structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || '',
+        reviewFeedbackSha256
     });
     const generated = await generateApiReaderArticleDetailed(
-        paper, analysis, evidenceContext
+        paper, analysis, evidenceContext, { reviewFeedback }
     );
     const injectedReaderResult = injectApiReaderFigures(
         generated, sourceDetails.structuredArtifacts, arxivId
@@ -2393,6 +2403,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails) {
         figureContractVersion: API_READER_FIGURE_CONTRACT_VERSION,
         imageEvidenceCount: readerResult.imageEvidence?.length || 0,
         imageEvidenceSha256: stableFingerprint(readerResult.imageEvidence || []),
+        reviewFeedbackSha256,
         refreshedAt: getBeijingISOString()
     };
     return paper;
