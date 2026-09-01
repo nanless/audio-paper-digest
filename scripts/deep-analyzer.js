@@ -1805,14 +1805,38 @@ async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence,
             url: match[3].trim()
         }))
         .filter(item => Number.isInteger(item.ordinal));
-    const downloadedReaderImages = figureEvidenceEntries.length > 0
-        ? await downloadImagesSerial(
-            figureEvidenceEntries.map(item => item.url),
-            API_READER_FIGURE_LIMIT,
-            IMAGE_MAX_BASE64_CHARS,
-            IMAGE_TOTAL_BASE64_CHARS
+    const materializedReaderImages = figureEvidenceEntries.length > 0
+        ? await materializeApiReaderFigures(
+            figureEvidenceEntries.map(item => ({
+                ...item,
+                label: `Figure ${item.ordinal}`,
+                mediaType: new URL(item.url).pathname.toLowerCase().endsWith('.svg')
+                    ? 'image/svg+xml'
+                    : ''
+            })),
+            getPaperArxivId(paper)
         )
         : [];
+    const downloadedReaderImages = [];
+    let readerImageBase64Chars = 0;
+    for (const image of materializedReaderImages) {
+        const raw = fs.readFileSync(image.cachePath);
+        const base64 = raw.toString('base64');
+        if (base64.length > IMAGE_MAX_BASE64_CHARS
+            || readerImageBase64Chars + base64.length > IMAGE_TOTAL_BASE64_CHARS) {
+            console.log(
+                `    [deep] 跳过超出 Muse 图像输入预算的论文图 ${image.ordinal}`
+            );
+            continue;
+        }
+        readerImageBase64Chars += base64.length;
+        downloadedReaderImages.push({
+            url: image.url,
+            base64,
+            mime: 'image/png',
+            sha256: image.assetSha256
+        });
+    }
     const readerImageBlocks = downloadedReaderImages.flatMap(image => {
         const figure = figureEvidenceEntries.find(item => item.url === image.url);
         if (!figure) return [];
