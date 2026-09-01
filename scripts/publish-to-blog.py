@@ -4258,6 +4258,52 @@ def prepare_api_reader_staged_assets(papers, stage_root):
     return staged
 
 
+def prior_api_reader_manifest_assets(date_str):
+    """Return reader assets explicitly owned by prior same-date manifests."""
+    validated_date = validate_publish_date(date_str)
+    current_dir = Path(CURRENT_DIR)
+    candidates = [current_dir / f'blog-generation-manifest-{validated_date}.json']
+    candidates.extend(sorted(current_dir.glob(
+        f'blog-generation-manifest-{validated_date}-single-*.json'
+    )))
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    owned = set()
+    for manifest_path in candidates:
+        if not manifest_path.is_file():
+            continue
+        manifest = _load_json_object(manifest_path, '既有同日 generation manifest')
+        files = manifest.get('files')
+        if not isinstance(files, list):
+            if manifest.get('schemaVersion') == 3:
+                raise PublishDataValidationError(
+                    f'既有同日 generation manifest.files 非数组: {manifest_path.name}'
+                )
+            continue
+        reader_records = [
+            record for record in files
+            if isinstance(record, dict)
+            and record.get('deleted') is not True
+            and isinstance(record.get('path'), str)
+            and record['path'].startswith('static/images/papers/')
+        ]
+        if not reader_records:
+            continue
+        if manifest.get('schemaVersion') != 3 or manifest.get('date') != validated_date:
+            raise PublishDataValidationError(
+                f'拥有 reader asset 的既有 manifest 版本或日期非法: {manifest_path.name}'
+            )
+        for record in reader_records:
+            relative = record['path']
+            target = (repo / relative).resolve()
+            _manifest_record(target, repo)
+            if not is_api_reader_asset_path(target):
+                raise PublishDataValidationError(
+                    f'既有 generation manifest 含非法 reader asset: {relative}'
+                )
+            owned.add(target)
+    return owned
+
+
 def publish_manifest_paths(
     staged_posts_dir, content_dir, date_str, staged_assets=None, single_page=False,
 ):
@@ -4301,6 +4347,9 @@ def publish_manifest_paths(
         (repo / Path(source).resolve().relative_to(stage_root)).resolve()
         for source in (staged_assets or [])
     }
+    for old_asset in prior_api_reader_manifest_assets(date_str):
+        if old_asset not in generated_assets:
+            manifest.add(old_asset)
     existing_asset_root = repo / 'static' / 'images' / 'visual-summaries' / date_str
     if existing_asset_root.is_dir():
         for old_asset in existing_asset_root.rglob('*.png'):

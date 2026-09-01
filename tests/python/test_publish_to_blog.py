@@ -3129,6 +3129,62 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                     staged, posts, '2026-07-10', single_page=True,
                 )
 
+    def test_batch_manifest_deletes_only_prior_manifest_owned_stale_reader_assets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / 'blog'
+            posts = repo / 'content' / 'posts'
+            stage_root = root / 'stage'
+            staged = stage_root / 'posts'
+            current = root / 'current'
+            posts.mkdir(parents=True)
+            staged.mkdir(parents=True)
+            current.mkdir(parents=True)
+            (staged / '2026-07-10.md').write_text('index\n', encoding='utf-8')
+
+            asset_root = repo / 'static' / 'images' / 'papers' / '2607.00001'
+            asset_root.mkdir(parents=True)
+            stale_batch = asset_root / ('figure-1-' + 'a' * 16 + '.png')
+            stale_single = asset_root / ('figure-2-' + 'b' * 16 + '.png')
+            kept = asset_root / ('figure-3-' + 'c' * 16 + '.png')
+            unowned = asset_root / ('figure-4-' + 'd' * 16 + '.png')
+            for path in (stale_batch, stale_single, kept, unowned):
+                path.write_bytes(path.name.encode('utf-8'))
+
+            staged_kept = stage_root / kept.relative_to(repo)
+            staged_kept.parent.mkdir(parents=True)
+            staged_kept.write_bytes(b'new-kept')
+            batch_manifest = {
+                'schemaVersion': 3,
+                'date': '2026-07-10',
+                'files': [
+                    {'path': stale_batch.relative_to(repo).as_posix(), 'deleted': False},
+                    {'path': kept.relative_to(repo).as_posix(), 'deleted': False},
+                ],
+            }
+            single_manifest = {
+                'schemaVersion': 3,
+                'date': '2026-07-10',
+                'files': [
+                    {'path': stale_single.relative_to(repo).as_posix(), 'deleted': False},
+                ],
+            }
+            (current / 'blog-generation-manifest-2026-07-10.json').write_text(
+                json.dumps(batch_manifest), encoding='utf-8',
+            )
+            (current / 'blog-generation-manifest-2026-07-10-single-2607-00001-test.json').write_text(
+                json.dumps(single_manifest), encoding='utf-8',
+            )
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                paths = set(publish_to_blog.publish_manifest_paths(
+                    staged, posts, '2026-07-10', staged_assets=[staged_kept],
+                ))
+            self.assertIn(stale_batch.resolve(), paths)
+            self.assertIn(stale_single.resolve(), paths)
+            self.assertIn(kept.resolve(), paths)
+            self.assertNotIn(unowned.resolve(), paths)
+
     def test_single_generation_manifest_binds_scope_paper_and_only_page(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / 'blog'
