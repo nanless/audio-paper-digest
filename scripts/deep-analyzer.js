@@ -1122,7 +1122,8 @@ function rewriteApiReaderFigureNarratives(article, figures) {
 
 function sanitizeTrustedArxivSvg(buffer) {
     const source = Buffer.isBuffer(buffer) ? buffer.toString('utf8') : String(buffer || '');
-    if (!/^\s*<svg\b/i.test(source) || Buffer.byteLength(source) > 2 * 1024 * 1024) {
+    if (!/^\s*<svg\b/i.test(source)
+        || Buffer.byteLength(source) > API_READER_FIGURE_MAX_BYTES) {
         throw new Error('论文 SVG 文件头或字节上限非法');
     }
     const $ = cheerio.load(source, { xmlMode: true });

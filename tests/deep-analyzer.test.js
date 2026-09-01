@@ -1122,6 +1122,13 @@ primary_task_tag: #音视频生成
             prepareTrustedArxivFigureBuffer(png, 'image/png').mediaType,
             'image/png'
         );
+        const largeOfficialSvg = Buffer.from(
+            `<svg xmlns="http://www.w3.org/2000/svg"><text>${'a'.repeat(2 * 1024 * 1024)}</text></svg>`
+        );
+        assert.strictEqual(
+            prepareTrustedArxivFigureBuffer(largeOfficialSvg, 'image/svg+xml').mediaType,
+            'image/svg+xml'
+        );
         assert.throws(
             () => prepareTrustedArxivFigureBuffer(Buffer.from('not-an-image'), 'image/png'),
             /文件头/
