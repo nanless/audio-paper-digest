@@ -2049,7 +2049,8 @@ primary_method_tag: #基准测试
 
         for negative in (
                 '退化', '恶化', '失败', '更差', '比基准差', '未改善',
-                '没有改善', '无效', '负面结果', '置信区间跨零', '落后', '可测损失'):
+                '没有改善', '无效', '失效', '崩溃', '接近随机', '低于随机',
+                '负面结果', '置信区间跨零', '落后', '可测损失'):
             with self.subTest(negative=negative):
                 self.assertIsNone(validate_experiment_table_contract(
                     analysis_with(f'配置 C 出现{negative}'),

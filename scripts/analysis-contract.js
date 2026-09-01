@@ -604,7 +604,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         return '全文包含消融实验，但实验结果没有保留关键消融或组件对照';
     }
     const sourceHasNegative = /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|退化|失败|更差|无效/i.test(sourceText);
-    const resultHasNegative = /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|损失|更差|比(?!较)[^。；\n]{0,30}差|未改善|没有改善|无效|负面|跨零|落后/i.test(results);
+    const resultHasNegative = /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|未改善|没有改善|无效|负面|跨零|落后/i.test(results);
     if (empirical && sourceHasNegative && !resultHasNegative) {
         return '全文包含退化、不显著或失败结果，但实验结果没有保留负面证据';
     }

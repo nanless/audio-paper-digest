@@ -2261,7 +2261,8 @@ def _validate_experiment_table_evidence_depth(
     result_has_negative = re.search(
         r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
-        r'未显著|不显著|退化|恶化|失败|更差|比(?!较)[^。；\n]{0,30}差|'
+        r'未显著|不显著|退化|恶化|失败|失效|崩溃|接近随机|低于随机|'
+        r'更差|比(?!较)[^。；\n]{0,30}差|'
         r'未改善|没有改善|无效|负面|跨零|落后|损失',
         results,
         re.I,

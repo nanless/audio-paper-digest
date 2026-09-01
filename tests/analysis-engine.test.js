@@ -585,6 +585,18 @@ describe('analyzePaperWithRetry', () => {
         assert.strictEqual(validateExperimentTableContract(vague, {
             contractVersion: EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION
         }), null, '旧 bounded-v1 只保留历史上限兼容，不追溯判坏');
+
+        for (const negative of ['失效', '崩溃', '接近随机', '低于随机']) {
+            const retainedNegative = valid.replace(
+                '完整方法相比强基线把 WER 降低 1.3 个百分点',
+                `最难子集出现${negative}；完整方法相比强基线把 WER 降低 1.3 个百分点`
+            );
+            assert.strictEqual(validateExperimentTableContract(retainedNegative, {
+                contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+                documentType: '方法研究',
+                sourceText: 'The method fails on the hardest generator.'
+            }), null, `“${negative}”应被识别为负面实验结果`);
+        }
     });
 
     it('确定性补回 Muse 遗漏的 Markdown 表格分隔行', () => {
