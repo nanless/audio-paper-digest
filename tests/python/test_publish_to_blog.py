@@ -983,7 +983,7 @@ title: "Duplicate"
             '同一模型的同域换库损失约 1/5，100 例标注可回收约 2/3，4 类表征均未跨越；Aligner 约19%失败，并使用 300 M 参数。',
         )
 
-    def test_index_uses_api_v2_reader_title_and_thesis(self):
+    def test_index_uses_api_v2_reader_title_and_full_decision_blocks(self):
         paper = llm_api_publication_fixture()
         markdown = publish_to_blog.generate_index_page(
             [(6.1, paper, paper['parsed'])],
@@ -992,8 +992,30 @@ title: "Duplicate"
             {paper['arxivId']: 'llm-api-publisher-fixture-2608-30002'},
         )
         self.assertIn(paper['apiReaderPlan']['readerTitle'], markdown)
-        self.assertIn(paper['apiReaderPlan']['oneSentenceThesis'], markdown)
-        self.assertNotIn('最终兼容 canonical 摘要。', markdown)
+        self.assertNotIn(paper['apiReaderPlan']['oneSentenceThesis'], markdown)
+        self.assertIn('最终兼容 canonical 摘要。', markdown)
+        self.assertIn(paper['parsed']['opensource'], markdown)
+        paper_markdown, _slug = publish_to_blog.generate_paper_page(
+            paper, '2026-08-31', category='论文速递',
+        )
+        index_summary = re.search(
+            r'📌 \*\*核心摘要\*\*\n\n([\s\S]*?)\n\n🔗 \*\*开源资源\*\*',
+            markdown,
+        ).group(1).strip()
+        paper_summary = re.search(
+            r'## 📌 核心摘要\n\n([\s\S]*?)\n## 🔗 开源与复现资源',
+            paper_markdown,
+        ).group(1).strip()
+        index_open = re.search(
+            r'🔗 \*\*开源资源\*\*\n\n([\s\S]*?)\n\n(?:✅|\*\*作者|---)',
+            markdown,
+        ).group(1).strip()
+        paper_open = re.search(
+            r'## 🔗 开源与复现资源\n\n([\s\S]*?)\n## 🧭 深度解读',
+            paper_markdown,
+        ).group(1).strip()
+        self.assertEqual(index_summary, paper_summary)
+        self.assertEqual(index_open, paper_open)
 
     def test_review_removes_only_high_similarity_prose_and_keeps_table_continuations(self):
         first = (

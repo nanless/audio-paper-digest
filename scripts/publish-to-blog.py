@@ -1920,6 +1920,37 @@ def compact_index_opensource(pa, paper, limit=4):
     return '\n'.join(lines)
 
 
+def full_index_decision_block(pa, paper, key, *, reader_article='', api_reader_v2=False):
+    """Replay the same summary/resource bytes shown on the single-paper page."""
+    content = pa.get(key, '') if isinstance(pa, dict) else ''
+    if not isinstance(content, str) or not content.strip():
+        return ''
+    content = content.strip()
+    if key == 'summary':
+        cutoff = re.search(r'\n##\s*详细分', content)
+        if cutoff:
+            content = content[:cutoff.start()].strip()
+    elif key == 'opensource':
+        supplement = re.search(r'##\s*补充信息\s*\n[\s\S]*', content)
+        if supplement:
+            content = content[:supplement.start()].strip()
+    if reader_article:
+        content = _strip_non_reader_article_images(
+            content, _reader_first_image_plans_by_url(paper),
+        )
+        content = _nest_reader_headings(
+            content, minimum_level=3 if api_reader_v2 else 4,
+        )
+    else:
+        content = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', content, count=1)
+    content = re.sub(r'^###\s*\d+\.\s*[^\n]+\n', '', content, flags=re.MULTILINE)
+    content = re.sub(
+        r'^\d+\.\s*\*\*([^*]+)\*\*\s*$', r'\1', content,
+        flags=re.MULTILINE,
+    )
+    return content.strip()
+
+
 def generate_index_page(scored, unscored, date_str, paper_slugs, category='论文速递'):
     """生成每日汇总页面（index.md），包含概览和每篇论文的链接"""
     total = len(scored) + len(unscored)
@@ -2024,17 +2055,19 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         if pa.get('roast'):
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
-        if pa.get('summary'):
-            summary = reader_plan.get('oneSentenceThesis', '').strip() \
-                if reader_article else pa['summary']
-            # 如果 summary 中混入了详细分析内容（因标题损坏导致解析边界失效），截断到详细分析之前
-            cutoff = re.search(r'\n##\s*详细分', summary)
-            if cutoff:
-                summary = summary[:cutoff.start()].strip()
+        summary = full_index_decision_block(
+            pa, p, 'summary', reader_article=reader_article,
+            api_reader_v2=bool(api_reader),
+        )
+        if summary:
             md += f"📌 **核心摘要**\n\n{summary}\n\n"
 
-        if pa.get('opensource'):
-            md += f"🔗 **开源资源**\n\n{compact_index_opensource(pa, p)}\n\n"
+        opensource = full_index_decision_block(
+            pa, p, 'opensource', reader_article=reader_article,
+            api_reader_v2=bool(api_reader),
+        )
+        if opensource:
+            md += f"🔗 **开源资源**\n\n{opensource}\n\n"
 
         # The reader-facing sequence ends at open resources.  Keep provenance
         # and author details afterwards, so they do not interrupt the verdict.
@@ -2076,16 +2109,19 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         if pa.get('roast'):
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
-        if pa.get('summary'):
-            summary = reader_plan.get('oneSentenceThesis', '').strip() \
-                if reader_article else pa['summary']
-            cutoff = re.search(r'\n##\s*详细分', summary)
-            if cutoff:
-                summary = summary[:cutoff.start()].strip()
+        summary = full_index_decision_block(
+            pa, p, 'summary', reader_article=reader_article,
+            api_reader_v2=bool(api_reader),
+        )
+        if summary:
             md += f"📌 **核心摘要**\n\n{summary}\n\n"
 
-        if pa.get('opensource'):
-            md += f"🔗 **开源资源**\n\n{compact_index_opensource(pa, p)}\n\n"
+        opensource = full_index_decision_block(
+            pa, p, 'opensource', reader_article=reader_article,
+            api_reader_v2=bool(api_reader),
+        )
+        if opensource:
+            md += f"🔗 **开源资源**\n\n{opensource}\n\n"
 
         if meta:
             md += f"{meta}\n\n"
