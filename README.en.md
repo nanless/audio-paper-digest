@@ -2,7 +2,7 @@
 
 English | **[中文](README.md)**
 
-This project generates "Speech / Music / Audio Paper Digests," covering the complete pipeline from arXiv and HuggingFace Papers crawling through publishing Hugo blog posts, WeChat Official Account drafts, Xiaohongshu (Little Red Book) copy, and Feishu (Lark) documents. The default daily route is production Manual v6: each paper is handled by isolated Terra-high author, technical-scoring, readability, revision, and final-page-review subagents, while the primary Agent owns deterministic gates, records/spec/canonical assembly, publication, and visual verification. LLM/API filtering and analysis remain an explicit user-selected route. Node-side tunable parameters and current runtime data-file paths are centralized in `scripts/config.js`; shared Python publish/maintenance paths are centralized in `scripts/path_config.py`.
+This project generates "Speech / Music / Audio Paper Digests," covering the complete pipeline from arXiv and HuggingFace Papers crawling through Hugo blog publication. The default daily route is the LLM/API workflow: keyword prefiltering, model selection, staged full-text analysis, evidence-bounded scoring, beginner-oriented longform generation, blog review/push, and post-publication visual planning. Production Manual v6 remains an explicit high-assurance human workflow. Node-side tunable parameters and current runtime data-file paths are centralized in `scripts/config.js`; shared Python publish/maintenance paths are centralized in `scripts/path_config.py`.
 
 To upgrade an existing API batch to the current reader contract, run `npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader`. The command only accepts the current canonical envelope with an exact `batchDate`, persists each successful paper under locks with a commit-time identity check, and skips SHA-complete v3 papers on retry.
 
@@ -12,7 +12,7 @@ Production Manual v6 uses records v4, spec v6, a complete structured ArtifactInd
 
 LLM endpoints must use HTTPS (plain HTTP is accepted only for loopback local tests). arXiv metadata retry, backoff, cumulative-wait, absolute-deadline, response-size, and User-Agent settings are controlled by `ARXIV_CONFIG`; see [Setup](docs/en/setup.md) for overrides.
 
-When a user tells Codex to run the paper digest for a given date, the default intent is the complete production Manual v6 workflow: fetch, exhaustive manual selection, structured full-text recovery, isolated per-paper author/review/revision tasks, records v4 → spec v6 → canonical assembly, page-by-page manual review and fixes, blog publication with remote-OID verification, TOP 10 paper infographics, the digest cover, and final status gates. This phrase itself authorizes the blog push; WeChat, Feishu, and Xiaohongshu auto-publishing remain outside the default scope. Use `npm run digest:api -- YYYY-MM-DD` only when the user explicitly requests API/LLM automation.
+When a user tells Codex to run the paper digest for a given date, the default intent is the complete LLM/API workflow: fetch, keyword prefiltering, model selection, staged analysis and scoring, reader longform generation, page review and fixes, blog publication with remote-OID verification, post-publication visuals, and final status gates. `npm run digest:prepare -- YYYY-MM-DD` and `npm run digest:api -- YYYY-MM-DD` are equivalent entries. Use `npm run digest:manual -- YYYY-MM-DD` only when the user explicitly requests the Manual/human workflow. Blog push is included in the dated digest request; other publishing channels remain outside the default scope.
 
 Deep analysis uses the `type-aware-v1` rubric: it first classifies a document as method research, system technical report, model report, dataset/benchmark, survey, theory, or applied research, then evaluates it with the matching evidence standard. The common eight dimensions, 11-point subtotal, and 10-point cap remain unchanged; values use at most one decimal and Open Source uses fixed anchors. New production-v6 role packets carry their fixed output/receipt paths, required fields, rubric, and cross-runtime semantic-hash algorithm inside the signed packet. The runner rejects missing dimensions, ad-hoc 0–10 review scales, invalid Open Source anchors, and incomplete Terra-high calibration during technical-review submission rather than deferring the error to the revision binder. The deterministic revision binder always rebuilds from the current runner-validated `draft/author-record.json`; it never consumes a stale `revision-record-payload.json`, even when that previous output remains on disk. Type grants no fixed bonus, and complete proof material may count as a theory paper's public core artifact instead of being forced to zero merely because code/model/data flags are absent.
 
@@ -84,9 +84,9 @@ pip3 install -r requirements.txt
 
 # 2. Configure API Key (write to `.env`)
 #    Primary model (text analysis, required)
-#    PAPER_ANALYZER_API_KEY=your-key
-#    PAPER_ANALYZER_MODEL=deepseek-v4-pro
-#    PAPER_ANALYZER_ENDPOINT=https://api.deepseek.com/anthropic
+#    PAPER_ANALYZER_API_KEY=your-opencode-go-key
+#    PAPER_ANALYZER_MODEL=muse-spark-1.2-contributor
+#    PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 #
 #    Secondary model (multimodal image analysis, optional)
 #    PAPER_ANALYZER_SECONDARY_MODEL=mimo-v2.5

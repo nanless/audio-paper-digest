@@ -4277,6 +4277,21 @@ def prepare_api_reader_staged_assets(papers, stage_root):
     return staged
 
 
+def _git_tracked_reader_asset_paths():
+    result = subprocess.run(
+        ['git', 'ls-files', '-z', '--', 'static/images/papers'],
+        cwd=BLOG_REPO,
+        capture_output=True,
+        env=_git_env(),
+    )
+    if result.returncode != 0:
+        return set()
+    return {
+        item.decode('utf-8', errors='strict')
+        for item in result.stdout.split(b'\0') if item
+    }
+
+
 def prior_api_reader_manifest_assets(date_str):
     """Return reader assets explicitly owned by prior same-date manifests."""
     validated_date = validate_publish_date(date_str)
@@ -4286,6 +4301,7 @@ def prior_api_reader_manifest_assets(date_str):
         f'blog-generation-manifest-{validated_date}-single-*.json'
     )))
     repo = Path(BLOG_REPO).expanduser().resolve()
+    tracked_reader_assets = _git_tracked_reader_asset_paths()
     owned = set()
     for manifest_path in candidates:
         if not manifest_path.is_file():
@@ -4301,7 +4317,6 @@ def prior_api_reader_manifest_assets(date_str):
         reader_records = [
             record for record in files
             if isinstance(record, dict)
-            and record.get('deleted') is not True
             and isinstance(record.get('path'), str)
             and record['path'].startswith('static/images/papers/')
         ]
@@ -4319,6 +4334,8 @@ def prior_api_reader_manifest_assets(date_str):
                 raise PublishDataValidationError(
                     f'既有 generation manifest 含非法 reader asset: {relative}'
                 )
+            if not target.exists() and relative not in tracked_reader_assets:
+                continue
             owned.add(target)
     return owned
 

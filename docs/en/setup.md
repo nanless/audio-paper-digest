@@ -121,7 +121,7 @@ The Node/Python loaders clear same-name inherited project variables before loadi
 | `ALL_PROXY` | Optional SOCKS/global proxy for HuggingFace `curl`, for example `socks5h://127.0.0.1:7897` |
 | `NO_PROXY` | Local-address allow list, for example `localhost,127.0.0.1,::1` |
 
-Fetch proxy configuration is mandatory: arXiv metadata, HTML/PDF/images, HuggingFace Papers, historical backfill, and WeChat's arXiv image downloads reject direct fallback when it is missing. At least one of `HTTPS_PROXY` or `HTTP_PROXY` must be an HTTP CONNECT URL; neither may be a SOCKS URL. HuggingFace `curl` may additionally use `ALL_PROXY=socks5h://...`, which is passed explicitly while clearing `NO_PROXY` bypasses. LLM requests always use direct connections and never use the fetch proxy. Proxy values are loaded only from the project-root `.env`; same-name shell/IDE values are cleared and macOS `scutil` is not consulted. Commands that need a local proxy must run outside the sandbox, because sandbox loopback cannot reach `127.0.0.1`.
+Fetch proxy configuration is mandatory: arXiv metadata, HTML/PDF/images, HuggingFace Papers, and historical backfill reject direct fallback when it is missing. At least one of `HTTPS_PROXY` or `HTTP_PROXY` must be an HTTP CONNECT URL; neither may be a SOCKS URL. HuggingFace `curl` may additionally use `ALL_PROXY=socks5h://...`, which is passed explicitly while clearing `NO_PROXY` bypasses. LLM requests normally disable proxy agents and connection reuse; the exact model `muse-spark-1.2-contributor` is the exception and must use the project HTTP CONNECT proxy. Proxy values are loaded only from the project-root `.env`; same-name shell/IDE values are cleared and macOS `scutil` is not consulted. Commands that need a local proxy must run outside the sandbox, because sandbox loopback cannot reach `127.0.0.1`.
 
 Blog generation, review, and push must also run outside the sandbox, including the generation-only stage. `generate-blog.py`, `review-blog.py`, `push-blog.py`, and compatibility `publish-to-blog.py` reject the reliable `CODEX_SANDBOX` marker; the elevation wrapper may preserve the network-disabled marker, so it cannot independently reject an external runtime.
 
@@ -132,10 +132,10 @@ Project-root `.env` format (**no `export` prefix needed**):
 ```bash
 # Paper Digest environment variables
 
-# === Option 1: MiMo Token Plan (recommended; masquerades as Claude Code via Anthropic protocol) ===
-PAPER_ANALYZER_API_KEY=tp-your-token-plan-key
-PAPER_ANALYZER_MODEL=mimo-v2.5
-PAPER_ANALYZER_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
+# === Option 1: OpenCode Go Muse (default; OpenAI Responses protocol) ===
+PAPER_ANALYZER_API_KEY=your-opencode-go-key
+PAPER_ANALYZER_MODEL=muse-spark-1.2-contributor
+PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 
 # === Option 2: MiMo Pay-as-you-go (generic OpenAI protocol) ===
 # PAPER_ANALYZER_API_KEY=sk-your-pay-as-you-go-key
@@ -166,9 +166,9 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 ```
 
 **Important Notes**:
-- Endpoint format is uniformly `protocol://domain/v1`, regardless of which protocol is used downstream
+- Endpoint format follows the provider's documented HTTPS base path; OpenCode Go uses `/zen/go/v1`
 - Scripts automatically determine whether to use the Anthropic protocol based on endpoint and model name
-- Token Plan keys start with `tp-`, pay-as-you-go keys start with `sk-`; the two cannot be mixed up
+- Muse uses the project HTTP CONNECT proxy; other LLM routes explicitly disable proxy agents and connection reuse
 
 ---
 

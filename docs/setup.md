@@ -27,7 +27,15 @@
 | `PD_ANALYSIS_CONCURRENCY` | 深度分析并发度 | 3 |
 | `PD_ANALYSIS_MAX_RETRIES` | 深度分析单篇重试次数 | 2 |
 | `PD_ANALYSIS_API_MAX_RETRIES` | 单次分析内部每个 LLM API 阶段的最大尝试次数 | 3 |
+| `PD_ANALYSIS_API_MAX_TOKENS` | 主分析输出 token 上限 | 64000 |
 | `PD_ANALYSIS_REPAIR_MAX_TOKENS` | 审校、表格、方法与结构局部修复的输出 token 上限 | 16000 |
+| `PD_OPENAI_RESPONSES_REASONING_EFFORT` | OpenAI Responses 推理强度；Muse 长连接建议 `low` | `low` |
+| `PD_OPENAI_RESPONSES_STREAM` | 是否使用 SSE 流式 Responses，避免代理空闲超时 | 1 |
+| `PD_API_READER_MAX_TOKENS` | 初学研究者长文独立输出 token 上限 | 48000 |
+| `PD_API_READER_OVERALL_TIMEOUT_MS` | 长文 SSE 请求活跃时间上限（毫秒） | 2400000 |
+| `PD_API_READER_CONCURRENCY` | 单进程 API Reader 重阶段并发上限，限制 1–5 | 5 |
+| `PD_API_READER_EVIDENCE_MAX_CHARS` | API Reader 全文证据字符预算 | 180000 |
+| `PD_API_READER_CONTEXT_MAX_CHARS` | API Reader 完整渲染请求上下文硬上限 | 240000 |
 | `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` | 主分析超长全文的跨文档取样字符预算 | 200000 |
 | `PD_OPENSOURCE_EVIDENCE_MAX_CHARS` | 开源扫描的任务相关证据字符预算 | 16000 |
 | `PD_REVISION_EVIDENCE_MAX_CHARS` | 审校重写的任务相关证据字符预算 | 60000 |
@@ -64,6 +72,7 @@
 
 所有 LLM endpoint 必须使用 HTTPS；只有 `localhost`、`*.localhost`、`127.0.0.0/8` 或 `::1` 上的本地测试服务允许 HTTP，公网明文 HTTP 会在附加认证头之前被拒绝。Node 的 `utils.js` 与 Python 发布侧的 `publish_common.py` 都在构造认证头之前执行该门禁。
 - **DeepSeek**：端点含 `deepseek.com` 或模型含 `deepseek` 时强制 OpenAI 协议，`/anthropic` 路径也会转为 `/v1/chat/completions`
+- **OpenCode Go Muse**：精确模型 `muse-spark-1.2-contributor` 走 OpenAI Responses 协议，`https://opencode.ai/zen/go/v1` 通过项目 HTTP CONNECT 代理发起 SSE 请求
 - **MiMo Token Plan**：端点含 `token-plan` 且模型含 `mimo` 时走 Anthropic 协议，`https://token-plan-cn.xiaomimimo.com/v1` → `https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages`
 - **Kimi Coding Plan**：`api.kimi.com` 的 `coding` 端点（包括 `k3` 等不含 `kimi` 字样的模型名）走 Anthropic 协议；`https://api.kimi.com/coding` 与 `https://api.kimi.com/coding/v1` 都会归一化为 `https://api.kimi.com/coding/v1/messages`，不需要 `/anthropic` 中间路径
 - **普通 `/anthropic` 端点**：非 DeepSeek endpoint 中含 `/anthropic` 时走 Anthropic 协议并拼接 `/messages`

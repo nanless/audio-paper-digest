@@ -1206,20 +1206,13 @@ describe('loadPrompt', () => {
             'prompts/table-fill.md',
             'prompts/scoring-audit.md',
             'prompts/api-reader-article.md',
-            'prompts/structure-repair.md',
-            'prompts/en/filter.md',
-            'prompts/en/deep-analysis.md',
-            'prompts/en/opensource-scan.md',
-            'prompts/en/gap-fill.md'
+            'prompts/structure-repair.md'
         ];
         for (const file of promptFiles) {
             const prompt = loadPrompt(file, vars);
             assert.ok(prompt.length > 20, `${file} prompt 过短`);
         }
-        const enDeep = loadPrompt('prompts/en/deep-analysis.md', vars);
-        assert.match(enDeep, /## 评分理由/, 'prompts/en/deep-analysis.md 被截断，缺少评分理由章节');
-        assert.match(enDeep, /## 开源详情/, 'prompts/en/deep-analysis.md 被截断，缺少开源详情章节');
-        for (const file of ['prompts/deep-analysis.md', 'prompts/gap-fill.md', 'prompts/en/deep-analysis.md', 'prompts/en/gap-fill.md']) {
+        for (const file of ['prompts/deep-analysis.md', 'prompts/gap-fill.md']) {
             const prompt = loadPrompt(file, vars);
             assert.match(prompt, /document_type/, `${file} 缺少文档类型契约`);
             assert.match(prompt, /系统技术报告/, `${file} 缺少系统技术报告类型`);

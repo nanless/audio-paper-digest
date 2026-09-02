@@ -32,8 +32,8 @@
 
 ## 修改建议
 
-- 调整标签体系、评分标准或输出格式时，必须同步 `scripts/utils.js`、`scripts/utils.py`、分析/发布校验器、测试 fixture 和中英文版本。
-- 类型感知评分字段为 `document_type`，受控值为方法研究、系统技术报告、模型报告、数据集与基准、综述、理论研究、应用研究；`deep-analysis.md`、`gap-fill.md` 及英文版本必须同步维护。
+- 调整标签体系、评分标准或输出格式时，必须同步 `scripts/utils.js`、`scripts/utils.py`、分析/发布校验器和测试 fixture。
+- 类型感知评分字段为 `document_type`，受控值为方法研究、系统技术报告、模型报告、数据集与基准、综述、理论研究、应用研究；`deep-analysis.md` 与 `gap-fill.md` 必须同步维护。
 - 评分必须保持声明—证据匹配和“单一问题单一主维度扣分”，副模型 `image-supplement.md` 不得参与类型判断或评分。
 - `image-supplement.md` 的顶层只能包含 `insertions` 数组；只有严格 `{"insertions":[]}` 表示确认没有高价值图片，schema 错误保持可重试。
 - `image-supplement.md` 额外使用 `{anchorCatalog}`；副模型必须从目录中选择稳定 `paragraph_id`，旧自由文本 `anchor` 仅用于兼容历史响应。

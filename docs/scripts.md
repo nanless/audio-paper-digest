@@ -1,6 +1,4 @@
-# 脚本分工
-
-## 脚本分工（全部脚本详解）
+# 核心脚本与公共模块
 
 > **运行前置条件**：所有本项目脚本必须在沙箱外执行。直接启动的 Node/Python 脚本会由公共环境加载器检测 `CODEX_SANDBOX` 并在任何业务操作前拒绝执行；`run-daily-digest.sh`、`run-full-fetch.sh` 和 `scripts/backup-data.sh` 也有同样的入口检查。单元测试导入模块不会触发该检查。
 
@@ -309,6 +307,16 @@ HuggingFace Papers 抓取模块。
 - 只检测项目根 `.env` 中显式配置的代理变量；不继承 shell/IDE 代理，也不读取 macOS `scutil`
 - 支持纯 Node 内置模块的 HTTP CONNECT 代理
 - 直接运行可测试：`node scripts/deep-analyzer.js <arxivId>`
+
+#### `scripts/refresh-api-reader.js`
+
+对现有 API canonical 单篇或按日期刷新评分/初学研究者长文，不重新执行整条抓取链。npm 入口：`npm run api:reader:refresh -- ...`。
+
+- `--all --date YYYY-MM-DD --concurrency 1..5` 只接受 `batchDate` 精确匹配的 current object envelope；滚动 worker pool 保持成功项逐篇落盘
+- 默认模式重建 API Reader；`--scoring-and-reader` 同时复验评分，`--authors-only` / `--figures-only` 仅刷新对应来源绑定
+- `--surface-bindings-only` 不联网、不调用 LLM，只按最终正文顺序重绑标题、术语桥、Figure、货币排版和 SHA
+- 单篇刷新支持 `--feedback <发布审查结论>`，把只读 review 的事实纠错纳入阶段指纹；该参数只能绑定一个显式论文 ID
+- 提交前按单篇输入身份执行 CAS，目标缺失、重复、来源/分析漂移或并发修改均拒绝覆盖；日期级续跑跳过 SHA 完整的 v3 论文
 
 #### `scripts/utils.js`
 

@@ -3195,6 +3195,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             stale_single = asset_root / ('figure-2-' + 'b' * 16 + '.png')
             kept = asset_root / ('figure-3-' + 'c' * 16 + '.png')
             unowned = asset_root / ('figure-4-' + 'd' * 16 + '.png')
+            pending_tombstone = asset_root / ('figure-5-' + 'e' * 16 + '.png')
             for path in (stale_batch, stale_single, kept, unowned):
                 path.write_bytes(path.name.encode('utf-8'))
 
@@ -3207,6 +3208,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 'files': [
                     {'path': stale_batch.relative_to(repo).as_posix(), 'deleted': False},
                     {'path': kept.relative_to(repo).as_posix(), 'deleted': False},
+                    {'path': pending_tombstone.relative_to(repo).as_posix(), 'deleted': True},
                 ],
             }
             single_manifest = {
@@ -3223,13 +3225,19 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 json.dumps(single_manifest), encoding='utf-8',
             )
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
-                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    mock.patch.object(
+                        publish_to_blog,
+                        '_git_tracked_reader_asset_paths',
+                        return_value={pending_tombstone.relative_to(repo).as_posix()},
+                    ):
                 paths = set(publish_to_blog.publish_manifest_paths(
                     staged, posts, '2026-07-10', staged_assets=[staged_kept],
                 ))
             self.assertIn(stale_batch.resolve(), paths)
             self.assertIn(stale_single.resolve(), paths)
             self.assertIn(kept.resolve(), paths)
+            self.assertIn(pending_tombstone.resolve(), paths)
             self.assertNotIn(unowned.resolve(), paths)
 
     def test_single_generation_manifest_binds_scope_paper_and_only_page(self):

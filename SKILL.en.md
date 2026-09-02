@@ -29,7 +29,7 @@ When documents conflict with code, **the current implementation in `scripts/*` p
 
 ## 2. Actual Workflow
 
-Default daily entry: `./run-daily-digest.sh YYYY-MM-DD`. It uses production Manual v6, pausing only at the human-authored boundaries where the primary Agent must dispatch isolated Terra-high leaf subagents and then continue the complete chain. The production root is `data/current/manual-v6/<date>/`; `manual-v6-shadow` is a separate, unpublishable audit runtime. Use `npm run digest:api -- YYYY-MM-DD` or `./run-daily-digest.sh YYYY-MM-DD --api` only when the user explicitly requests the API/LLM route. Data-only entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fetch`).
+Default daily entry: `./run-daily-digest.sh YYYY-MM-DD` or `npm run digest:prepare -- YYYY-MM-DD`. It uses the LLM/API route; `digest:api` and `--api` are explicit aliases. Production Manual v6 is selected only with `npm run digest:manual -- YYYY-MM-DD` or `--manual`, pausing at the human-authored boundaries where the primary Agent dispatches isolated Terra-high leaf subagents. The production root is `data/current/manual-v6/<date>/`; `manual-v6-shadow` is a separate, unpublishable audit runtime. Data-only entry: `./run-full-fetch.sh` (or `node scripts/full-fetch.js` / `npm run fetch`).
 
 1. **Auto-archive**: Checks `data/current/deep-analysis-result.json` / `filtered-papers.json` / `analyzed.json`; if their timestamps are earlier than today (Beijing time) and `data/archive/<date>/` does not exist, copies them and deletes the originals. **`papers.json` is NOT archived.**
 2. **Load dedup DB**: Reads existing IDs from `data/current/papers.json`; scans the Hugo blog repository (`PAPER_DIGEST_BLOG_REPO`) for published paper arXiv IDs, merging both into a unified deduplication set
@@ -46,9 +46,9 @@ Default daily entry: `./run-daily-digest.sh YYYY-MM-DD`. It uses production Manu
 
 `full-fetch.js` **does NOT auto-publish blog/WeChat**. However, when the user asks to run a dated paper digest, the default intent is the complete workflow in this section. The Agent runs `run-daily-digest.sh` or equivalent separate stages, fixes review blockers, completes push, then uses built-in `image_gen` for every pending paper infographic and digest cover until both visual status gates are complete. WeChat, Feishu, and Xiaohongshu auto-publishing are not part of this default.
 
-### 2.1 Default Production Manual v6 Without Project Model APIs
+### 2.1 Explicit Production Manual v6 Without Project Model APIs
 
-Production Manual v6 is the default daily workflow, not an automatic fallback from an unavailable model. The project filtering/analysis/review APIs remain disabled unless the user explicitly selects the API route. Codex subagents perform the manual semantic work, while every source, content, publication, and remote-verification gate remains mandatory:
+Production Manual v6 is an explicit user-selected workflow, not an automatic fallback from an unavailable model. In this mode the project filtering/analysis/review APIs remain disabled. Codex subagents perform the manual semantic work, while every source, content, publication, and remote-verification gate remains mandatory:
 
 1. `manual_offline` replaces only the filtering-model decision. It does not claim that the filtering API ran.
 2. Production Manual v6 replaces the automatic filtering/analysis models with controlled full-text editorial work. Every selected paper must have one isolated author task and independent technical-scoring, readability, revision, and final-page-review provenance. The persistent runner validates exact allowlisted packets, real claim/start times, `gpt-5.6-terra` with high reasoning, outputs, receipts, and task lineage; it never creates a subagent or writes prose. Newly materialized packets include a signed role-specific `outputContract`, and technical-review submission must validate the formal eight-dimension order/ranges, fixed Open Source anchors, eight reasons, complete calibration, and the project semantic-hash algorithm before the task can become validated.
