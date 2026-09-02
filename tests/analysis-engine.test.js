@@ -602,6 +602,28 @@ describe('analyzePaperWithRetry', () => {
                 sourceText: 'The method fails on the hardest generator.'
             }), null, `“${negative}”应被识别为负面实验结果`);
         }
+        for (const negative of ['轻微回退', '呈不单调性', '不保证单调改进']) {
+            const retainedNegative = valid.replace(
+                '完整方法相比强基线把 WER 降低 1.3 个百分点',
+                `最难子集${negative}；完整方法相比强基线把 WER 降低 1.3 个百分点`
+            );
+            assert.strictEqual(validateExperimentTableContract(retainedNegative, {
+                contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+                documentType: '方法研究',
+                sourceText: 'The method fails on the hardest generator.'
+            }), null, `“${negative}”应被识别为负面实验结果`);
+        }
+        assert.match(validateExperimentTableContract(
+            neutralComparison.replace(
+                '配置 C 的报告值为 9.7%',
+                '配置 C 的准确率从 0.90 微升至 0.91，WER 报告值为 9.7%'
+            ),
+            {
+                contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+                documentType: '方法研究',
+                sourceText: 'The method fails on the hardest generator.'
+            }
+        ), /没有保留负面证据/, '裸“微升”不能被方向盲地当作负面证据');
     });
 
     it('确定性补回 Muse 遗漏的 Markdown 表格分隔行', () => {

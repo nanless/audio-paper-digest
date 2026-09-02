@@ -970,6 +970,10 @@ primary_task_tag: #音视频生成
             '结果为 -6.84 dB，到 -2.76 dB，延迟 12 ms。'
         );
         assert.strictEqual(
+            normalizeReaderEditorialSurface('码率从1.1kbps升至6kbps。'),
+            '码率从 1.1 kbps 升至 6 kbps。'
+        );
+        assert.strictEqual(
             normalizeReaderEditorialSurface('主观选择为25对10分，延迟为0.77 vs 0.85秒。'),
             '主观选择为 25 分对 10 分，延迟为 0.77 秒 vs 0.85 秒。'
         );
@@ -1060,7 +1064,9 @@ primary_task_tag: #音视频生成
             '',
             '**注意力池化 × LM head 复用：** 注意力池化负责汇总声学上下文，LM head 复用负责把上下文映射回词表；二者搭配后只需 1 次投影。',
             '',
-            '**2 阶 IIR 滤波器 × 5 路声学共识：** 2 阶 IIR 滤波器负责实现模态响应，5 路声学共识负责聚合互补判断；二者放在同一术语桥中说明计算与决策的分工。'
+            '**2 阶 IIR 滤波器 × 5 路声学共识：** 2 阶 IIR 滤波器负责实现模态响应，5 路声学共识负责聚合互补判断；二者放在同一术语桥中说明计算与决策的分工。',
+            '',
+            '**1 对 1 匹配 × 1 对多检索：** 1 对 1 匹配负责核验唯一对应关系，1 对多检索负责保留多个候选；二者搭配后把精确校验与候选召回连成同一条路径。'
         ].join('\n');
         const bridgePaper = {
             apiReaderArticle: bridgeArticle,
@@ -1081,6 +1087,12 @@ primary_task_tag: #音视频生成
                         sectionKind: 'component',
                         marker: '[[CONCEPT_BRIDGE_2]]',
                         explanation: '**二阶 IIR 滤波器 × 五路声学共识：** 旧表面字节。'
+                    },
+                    {
+                        terms: ['一对一匹配', '一对多检索'],
+                        sectionKind: 'component',
+                        marker: '[[CONCEPT_BRIDGE_3]]',
+                        explanation: '**一对一匹配 × 一对多检索：** 旧表面字节。'
                     }
                 ],
                 sections: [{
@@ -1102,6 +1114,10 @@ primary_task_tag: #音视频生成
         assert.strictEqual(
             bridgePaper.apiReaderPlan.conceptBridges[1].explanation,
             bridgeArticle.split('\n\n')[2]
+        );
+        assert.strictEqual(
+            bridgePaper.apiReaderPlan.conceptBridges[2].explanation,
+            bridgeArticle.split('\n\n')[3]
         );
         const specs = [
             ['background', '声音片段为什么会让传统判别器失去方向？', '背景任务输入输出失败案例直觉动机读者边界'],

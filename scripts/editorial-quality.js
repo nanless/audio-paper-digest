@@ -729,7 +729,7 @@ function findMissingComparisonUnits(text) {
                 const before = numericText.slice(0, match.index);
                 const after = numericText.slice(match.index + match[0].length);
                 if (/第\s*$/.test(before)) return false;
-                return !/^\s*(?:个|条|段|篇|张|种|类|组|步|轮|层|模型|系统|骨干|样本|片段|词元|接口|分支)/.test(after);
+                return !/^\s*(?:个|条|段|篇|张|种|类|组|步|轮|层|题|份|例|名|台|所|对|倍|模型|系统|骨干|样本|片段|词元|接口|分支)/.test(after);
             })
             .map(match => match[0]);
         const percentageMetricHasNearbyPercentageScaleValue = [...numericText.matchAll(

@@ -2075,7 +2075,8 @@ primary_method_tag: #基准测试
         for negative in (
                 '退化', '恶化', '失败', '更差', '比基准差', '未改善',
                 '没有改善', '无效', '失效', '崩溃', '接近随机', '低于随机',
-                '负面结果', '置信区间跨零', '落后', '可测损失'):
+                '负面结果', '置信区间跨零', '落后', '可测损失',
+                '轻微回退', '呈不单调性', '不保证单调改进'):
             with self.subTest(negative=negative):
                 self.assertIsNone(validate_experiment_table_contract(
                     analysis_with(f'配置 C 出现{negative}'),
@@ -2083,6 +2084,14 @@ primary_method_tag: #基准测试
                     document_type='方法研究',
                     source_text='The third configuration fails on the hard subset.',
                 ))
+        positive_rise = analysis_with(
+            '配置 C 的准确率从 0.90 微升至 0.91，其余设置保持一致')
+        self.assertRegex(validate_experiment_table_contract(
+            positive_rise,
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type='方法研究',
+            source_text='The third configuration fails on the hard subset.',
+        ), '没有保留负面证据')
 
     def test_versioned_publish_preflight_enforces_detailed_method_contract(self):
         paper = complete_paper()

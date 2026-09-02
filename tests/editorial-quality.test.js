@@ -306,6 +306,12 @@ describe('Manual v4 editorial quality primitives', () => {
             findMissingComparisonUnits('准确率提高 23.47 个百分点；理论能耗为 97 mJ 对 322 mJ。'),
             []
         );
+        assert.deepEqual(findMissingComparisonUnits(
+            '它在 2 个骨干上将区间命中率提升至 2 倍以上，HR0.2 从 0.21 升至 0.73。'
+        ), []);
+        assert.deepEqual(findMissingComparisonUnits(
+            '在对抗门控的 202 题上，准确率从 0.188 抬至 0.267，gap 从 0.376 扩大到 0.465。'
+        ), []);
         assert.deepEqual(findMissingComparisonUnits('mAP 从 0.781 提高到 0.801。'), []);
         assert.deepEqual(findMissingComparisonUnits(
             '图 2 统计前 10 个词的平均 CER：从第 2 至 3 位起优势显现，且在 HAT 上相对 TG-ASR 的分离更明显。'

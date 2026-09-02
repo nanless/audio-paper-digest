@@ -790,6 +790,10 @@ function canonicalReaderBridgeTerm(term) {
     return String(term || '').normalize('NFKC')
         .replace(/[一二两三四五六七八九十](?=阶|路|次|维|步|层|个|段|类|组|轮|种)/g,
             value => numeralMap[value])
+        .replace(/[一二两三四五六七八九十](?=对)/g,
+            value => numeralMap[value])
+        .replace(/(对)([一二两三四五六七八九十])/g,
+            (_, prefix, value) => `${prefix}${numeralMap[value]}`)
         .replace(/\s+/g, '')
         .toLowerCase();
 }
@@ -994,7 +998,7 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
                     : `${left} ${unit}${separator}${right} ${unit}`
             )
         )
-        .replace(/([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?=(?:mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|MACs?|tokens?|FPS|bit)\b)/gi, '$1 ')
+        .replace(/([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?=(?:mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|kbps?|Mbps?|Gbps?|MACs?|tokens?|FPS|bit)\b)/gi, '$1 ')
         .replace(/([\u3400-\u9fff])(\d)/g, '$1 $2')
         .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2')
         // A currency amount is prose, not a TeX delimiter. Escaping the
