@@ -57,7 +57,7 @@ LLM 筛选前默认执行高召回关键词预筛，核心音频类别提供兜�
 | `README.md` | 项目概览、快速开始、命令速查 | 人类用户 |
 | `SKILL.md` | 给 Agent 的执行规则与安全约束 | AI Agent |
 | `docs/workflow.md` | 主流程详解（归档、抓取、筛选、分析、保存） | 使用者 |
-| `docs/manual-v6-migration.md` | Manual 提质加速改造、契约、缓存 DAG 与迁移边界 | 维护者 |
+| `docs/manual-v6-architecture.md` | Manual v6 task DAG、records/spec、发布证明与兼容边界 | 维护者 |
 | `docs/scripts.md` | 全部脚本功能说明 | 开发者 |
 | `docs/data-format.md` | 数据文件格式与字段说明 | 开发者 |
 | `docs/setup.md` | 安装初始化、环境变量、日志、代理配置 | 新用户 |
@@ -179,9 +179,6 @@ npm run cover:status -- --date 2026-04-21
 # 运行单元测试
 npm test
 
-# 快速测试（抓+筛选，不分析）
-node scripts/quick-test.js
-
 # 补录历史 paper ID
 npm run backfill
 
@@ -250,9 +247,6 @@ node scripts/reanalyze.js
 
 # 指定并发度重分析
 node scripts/reanalyze.js --concurrency 3 data/current/deep-analysis-result.json
-
-# 快速测试（抓+筛选，不分析）
-node scripts/quick-test.js
 
 # 批量分析未分析论文
 node scripts/batch-analyze.js

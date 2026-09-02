@@ -381,9 +381,6 @@ node scripts/refilter-reanalyze-by-date.js 2026-07-01
 # 运行单元测试
 npm test
 
-# 快速抓取测试（仅抓+筛选，不分析，输出 data/quick-test-result.json）
-node scripts/quick-test.js
-
 # 批量分析未分析论文（基于 deep-analysis-result.json）
 npm run batch
 
@@ -540,7 +537,7 @@ PY
 
 ## 7. 日志与运行特性
 
-- Node/Python 可执行脚本默认同时输出到终端和唯一的 `logs/<script>-YYYYMMDD-HHMMSS-<pid>-<seq>.log`；`backup-data.sh` 同样默认生成文件日志并在退出时为每一行补写北京时间戳
+- Node/Python 可执行脚本默认同时输出到终端和唯一的 `logs/<script>-YYYYMMDD-HHMMSS-<pid>-<seq>.log`
 - `PD_ENABLE_FILE_LOGS=1` / `PAPER_DIGEST_ENABLE_FILE_LOGS=1` 继续兼容，但不再是生成日志的必要条件
 - 文件日志不做数量、总量或单文件大小限制，也不会自动清理旧日志；`PAPER_DIGEST_DISABLE_FILE_LOGS=1` 或 `PD_DISABLE_FILE_LOGS=1` 可强制禁用文件日志
 - `backfill_papers.py` 复用统一的每次运行日志，不再额外追加 `logs/backfill.log`
@@ -571,7 +568,7 @@ PY
 11.1 **博客发布必须沙箱外执行**：运行 `generate-blog.py`、`review-blog.py`、`push-blog.py` 或兼容 `publish-to-blog.py` 时，Agent 必须使用沙箱外权限。脚本检测到 Codex 沙箱标志会失败退出；该失败不是内容问题，不得在沙箱内重复执行或绕过 LLM/图片/Hugo/Git 检查。
 12. **输出契约改动要同步 parser**：若修改 `prompts/deep-analysis.md` 中的 `## 机器摘要` 键名、章节顺序或标签输出格式，必须同步检查 `scripts/utils.js` 与 `scripts/utils.py` 的解析逻辑。
 13. **变更后必须做产物级验证**：至少抽样检查一份 `data/current/deep-analysis-result.json`，确认 `analysis` 文本的机器摘要包含 `document_type`、`rank_bucket`、`primary_task_tag`、`primary_method_tag`，且 `parsed` 缓存包含 `documentType`、`scoringRubricVersion`、`rankBucket`、`primaryTaskTag`、`primaryMethodTag` 等字段，再运行博客/社媒脚本验证最终产物。
-14. **变更后验证 prompt 加载**：修改 `prompts/` 目录下的 markdown 文件后，运行一次快速测试（`node scripts/quick-test.js` 或单篇分析）确认 `loadPrompt()` 能正确读取并替换占位符，无 `{变量名}` 残留。
+14. **变更后验证 prompt 加载**：修改 `prompts/` 目录下的 markdown 文件后，运行 `npm test`；需要产物级验证时再执行单篇分析，确认 `loadPrompt()` 能正确读取并替换占位符，无 `{变量名}` 残留。
 15. **变更后运行单元测试**：修改 `scripts/utils.js`、`scripts/config.js` 或分析引擎核心逻辑后，必须运行 `npm test` 确保测试通过。
 16. **LLM 代理策略必须由公共封装决定**：所有 Node LLM 调用（包括 `test-api-key.js`）必须通过 `requestLlmJson()`。MiMo/Kimi 等默认路径的 `options.agent` 必须为 `false`（不是 `undefined`）；精确模型 `muse-spark-1.2-contributor` 则必须创建并销毁项目 HTTP CONNECT one-shot agent。禁止调用方自行选择或复用 agent。
 17. **新增 LLM 端点必须接入 API 协议自动路由**：任何新增 Node 脚本调用 LLM 时，统一使用 `scripts/utils.js` 中的 `detectApiType()`、`buildApiUrl()`、`buildHeaders()`、`buildRequestBody()`、`parseResponseText()`；Python 发布阶段 LLM 调用必须复用 `publish_common.py` 的 `call_publish_llm_api()`，禁止硬编码特定协议的 URL/Header/Body。

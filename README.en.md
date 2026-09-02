@@ -70,7 +70,7 @@ audio-paper-digest/
 └── README.md / SKILL.md
 ```
 
-See [`docs/scripts.md`](docs/scripts.md) for each script's functionality, and [`docs/data-format.md`](docs/data-format.md) for data file formats.
+See [`docs/en/scripts.md`](docs/en/scripts.md) for each script's functionality, and [`docs/en/data-format.md`](docs/en/data-format.md) for data file formats.
 
 ---
 
@@ -109,7 +109,7 @@ npm run cover:status -- --date 2026-05-08
 python3 scripts/publish-xiaohongshu.py
 ```
 
-For the complete installation guide, see [`docs/setup.md`](docs/setup.md).
+For the complete installation guide, see [`docs/en/setup.md`](docs/en/setup.md).
 
 ---
 
@@ -145,9 +145,6 @@ npm run cover:status -- --date 2026-04-21
 
 # Run unit tests
 npm test
-
-# Quick test (crawl + filter, no analysis)
-node scripts/quick-test.js
 
 # Backfill historical paper IDs
 npm run backfill
@@ -206,9 +203,6 @@ node scripts/reanalyze.js
 
 # Re-analysis with specified concurrency
 node scripts/reanalyze.js --concurrency 3 data/current/deep-analysis-result.json
-
-# Quick test (crawl + filter, no analysis)
-node scripts/quick-test.js
 
 # Batch analyze unanalyzed papers
 node scripts/batch-analyze.js
@@ -271,12 +265,12 @@ node scripts/refilter-reanalyze-by-date.js 2026-07-01
 
 ## More Documentation
 
-- [Main Workflow](docs/workflow.md) — Complete flow of automatic archiving, crawling, filtering, and deep analysis
-- [Script Reference](docs/scripts.md) — Function descriptions and usage for all scripts
+- [Main Workflow](docs/en/workflow.md) — Complete flow of automatic archiving, crawling, filtering, and deep analysis
+- [Script Reference](docs/en/scripts.md) — Function descriptions and usage for all scripts
 - [Data Format](docs/en/data-format.md) — Fetch/filter checkpoints, staged analysis recovery, blog receipts, and Xiaohongshu copy cache
-- [Installation & Configuration](docs/setup.md) — Dependency installation, environment variables, model configuration, logging
-- [Troubleshooting](docs/troubleshooting.md) — Diagnosis for API errors, proxy issues, and publishing failures
-- [Maintenance Conventions](docs/maintenance.md) — Code standards, scoring and tag definitions, change checklist
+- [Installation & Configuration](docs/en/setup.md) — Dependency installation, environment variables, model configuration, logging
+- [Troubleshooting](docs/en/troubleshooting.md) — Diagnosis for API errors, proxy issues, and publishing failures
+- [Maintenance Conventions](docs/en/maintenance.md) — Code standards, scoring and tag definitions, change checklist
 
 ---
 

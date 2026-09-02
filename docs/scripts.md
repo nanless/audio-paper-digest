@@ -1,6 +1,6 @@
 # 核心脚本与公共模块
 
-> **运行前置条件**：所有本项目脚本必须在沙箱外执行。直接启动的 Node/Python 脚本会由公共环境加载器检测 `CODEX_SANDBOX` 并在任何业务操作前拒绝执行；`run-daily-digest.sh`、`run-full-fetch.sh` 和 `scripts/backup-data.sh` 也有同样的入口检查。单元测试导入模块不会触发该检查。
+> **运行前置条件**：所有本项目脚本必须在沙箱外执行。直接启动的 Node/Python 脚本会由公共环境加载器检测 `CODEX_SANDBOX` 并在任何业务操作前拒绝执行；`run-daily-digest.sh` 和 `run-full-fetch.sh` 也有同样的入口检查。单元测试导入模块不会触发该检查。
 
 ### 4.1 主链路脚本
 
@@ -45,15 +45,6 @@ Codex 对“运行/进行某日论文速递”请求使用的默认 LLM/API 编�
 #### `scripts/reanalyze-selected.js`
 
 指定 ID 重分析，固定使用默认并发 3，成功结果替换旧分析并同步 `digestStatus`。若目标论文此前尚未使用当前评分契约，成功后会把全量 `stats.reanalyzed` / `stats.reanalyzeFailed` 中对应的历史失败校正为成功；同时记录 `selectedReanalyzed`、`selectedReanalyzeFailed`、`selectedReanalyzeAt`，重复重跑当前契约论文不会重复累计恢复数。
-
-#### `scripts/quick-test.js`
-
-快速测试脚本。
-- 执行 arXiv 7 分类抓取 + 去重 + LLM 筛选（配置来自 `config.js`）
-- **不执行深度分析**
-- 输出到 `data/quick-test-result.json`（仅保存前 10 篇）
-- 用于验证抓取和筛选链路是否正常
-- 直接调用：`node scripts/quick-test.js`（`npm run test` 已改为运行单元测试）
 
 #### `scripts/batch-analyze.js`
 
@@ -202,13 +193,6 @@ arXiv 抓取与 LLM 筛选模块。
 - 成功判定要求 `analysisManifest` 版本 1 的全部必需阶段进入终态，且不存在最新失败标记；失败合并保留旧成功正文，同时叠加新的 checkpoint、恢复图片清单与最近尝试错误，成功重试后再清理失败标记
 - 文件锁 owner 带随机 token 并检查本机 PID；旧 owner 不能删除替代锁，存活进程持有的锁不会因时间过长被回收
 
-#### `scripts/validate-scores.js`
-
-评分验证与修复工具。
-- `validateAndFix(papers)`：检查子项越界、总分一致性、开源矛盾，自动修复
-- `DIM_MAX`：导出各维度上限表
-- 直接运行：`node scripts/validate-scores.js [data-file]`
-
 #### `scripts/fetch-huggingface-papers.js`
 
 HuggingFace Papers 抓取模块。
@@ -355,7 +339,7 @@ Node.js 公共工具模块。被几乎所有脚本引用：
 - `normalizedId(paper)`：生成统一论文 ID
 - `backupPapersJson()`：自动备份 `papers.json`
 - `loadPublishedIdsFromBlog(blogRepo)`：扫描 Hugo 博客仓库中已发布论文的 arXiv ID 集合（从 `content/posts/*.md` 中提取 `arxiv.org/abs/XXXX.XXXXX` 格式链接）
-- `loadPrompt(filePath, replacements)`：加载 prompt 文件并替换占位符
+- `loadPrompt(filePath, replacements)`：只读取 Markdown 中第一个 fenced code block，并替换 `{变量名}` 占位符；prompt 内要展示代码块时，外层必须使用更长 fence 或 `~~~~`，避免被内部 ``` 提前截断。新增占位符必须同步调用参数与测试，未替换占位符不得被当作有效产物。
 
 #### `scripts/utils.py`
 
@@ -382,6 +366,8 @@ Python 公共工具模块。被 `publish-to-blog.py`、`publish-wechat-full.py`�
 #### `scripts/generate-blog.py` / `scripts/review-blog.py` / `scripts/push-blog.py`
 
 发布到 Hugo 博客（GitHub Pages）。
+
+默认数据源接受且只接受一种完整、同质的 production proof：默认 API 日更使用 `llm_api_production`，逐篇绑定 API Reader v3 正文/计划/图片/作者、评分审计与来源身份；显式 Manual 日更使用 `manual_v6_production`，绑定 records v4、spec v6、Merkle root、task evidence 与 `reader-longform-v2`。旧 v5 只有显式 maintenance 模式可读，任何混批或 proof 缺失都会失败关闭。
 
 **前置依赖**：
 - 本地必须已克隆 Hugo 博客仓库到固定路径：`~/code/github_repos/audio-paper-digest-blog`
@@ -585,9 +571,5 @@ TOP N 精选版的一句话亮点使用受控并发生成，默认并发度为 5
 - 复用统一的每次运行日志，不再重复追加 `logs/backfill.log`
 - 对 `papers.json` 使用与 Node 端相同的 `.lock` 目录和 `generation` 协议，锁内重读合并，避免长时间抓取后的陈旧快照覆盖并发分析状态
 - 依赖：见根目录 `requirements.txt`（`requests`、`playwright`、`PyYAML`）；`PyYAML` 用于确定性解析并校验博客 frontmatter，缺失时发布门禁会失败关闭
-
-#### `scripts/backup-data.sh`
-
-数据备份壳脚本。
 
 ---

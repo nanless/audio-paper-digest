@@ -203,43 +203,4 @@ describe('log setup', () => {
         assert.doesNotMatch(source, /key\.slice|Object\.entries\(headers\)/);
     });
 
-    it('备份脚本默认生成唯一日志，项目 .env 可显式禁用且外层变量不能禁用', () => {
-        const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-backup-test-'));
-        const scriptsDir = path.join(projectDir, 'scripts');
-        const dataDir = path.join(projectDir, 'data', 'current');
-        const archiveDir = path.join(projectDir, 'data', 'archive');
-        fs.mkdirSync(scriptsDir, { recursive: true });
-        fs.mkdirSync(dataDir, { recursive: true });
-        fs.mkdirSync(archiveDir, { recursive: true });
-        fs.copyFileSync(
-            path.join(ROOT, 'scripts', 'backup-data.sh'),
-            path.join(scriptsDir, 'backup-data.sh')
-        );
-
-        try {
-            const env = { ...process.env, PD_DISABLE_FILE_LOGS: '1' };
-            const enabled = spawnSync('bash', ['scripts/backup-data.sh', 'test-enabled'], {
-                cwd: projectDir,
-                env,
-                encoding: 'utf8'
-            });
-            assert.strictEqual(enabled.status, 0, enabled.stderr);
-            const logsDir = path.join(projectDir, 'logs');
-            const created = fs.readdirSync(logsDir).filter(name => /^backup-data-.+-\d+\.log$/.test(name));
-            assert.strictEqual(created.length, 1);
-            assert.match(fs.readFileSync(path.join(logsDir, created[0]), 'utf8'), /备份完成/);
-            assert.match(fs.readFileSync(path.join(logsDir, created[0]), 'utf8'), /\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.000\+08:00\]/);
-
-            fs.writeFileSync(path.join(projectDir, '.env'), 'PD_DISABLE_FILE_LOGS=1\n', 'utf8');
-            const disabled = spawnSync('bash', ['scripts/backup-data.sh', 'test-disabled'], {
-                cwd: projectDir,
-                env: { ...process.env, PD_DISABLE_FILE_LOGS: '0' },
-                encoding: 'utf8'
-            });
-            assert.strictEqual(disabled.status, 0, disabled.stderr);
-            assert.strictEqual(fs.readdirSync(logsDir).filter(name => name.endsWith('.log')).length, 1);
-        } finally {
-            fs.rmSync(projectDir, { recursive: true, force: true });
-        }
-    });
 });

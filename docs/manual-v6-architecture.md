@@ -1,8 +1,8 @@
-# Manual v6 正式迁移与运行设计
+# Manual v6 生产架构与运行边界
 
-## 决策
+## 正式链路
 
-从 2026-08-29 起，新的 Manual 日更只允许走：
+用户显式选择 Manual/人工流程时，production 日更只允许走：
 
 ```text
 manual_offline 筛选
@@ -18,13 +18,13 @@ manual_offline 筛选
 
 records v3/spec v5/canonical v5 不再是默认路径。它们只保留为显式的历史维护读取能力，不能接受新写作、重新包装为 v6、与 v6 混批发布，或进入新教程质量回归。
 
-这次切换是契约迁移，不是版本号替换。任何旧 v5 文件即使补上 `version: 6`，也会因缺少结构化来源、records v4 task evidence、reader-longform、Merkle root 或 production runtime proof 而失败。
+这是契约边界，不是版本号替换。任何旧 v5 文件即使补上 `version: 6`，也会因缺少结构化来源、records v4 task evidence、reader-longform、Merkle root 或 production runtime proof 而失败。
 
 ## 三种运行模式
 
 | 模式 | 用途 | 数据根 | canonical | 是否更新 `papers.json` | 是否允许正式发布 |
 |---|---|---|---|---|---|
-| `production` | 默认新日更 | `data/current/manual-v6/<date>/` | `data/current/deep-analysis-result.json` | 是 | 是 |
+| `production` | 显式 Manual 正式运行 | `data/current/manual-v6/<date>/` | `data/current/deep-analysis-result.json` | 是 | 是 |
 | `shadow` | 隔离审计、回归和对比 | `data/current/manual-v6-shadow/<date>/` | 该日期 shadow 目录内 | 否 | 否 |
 | `legacy_v5_maintenance` | 历史 v5 页面只读维护 | 原历史路径 | 原历史 canonical | 否 | 仅显式维护，不建立视觉任务 |
 
@@ -168,21 +168,19 @@ production 成功时同步 `papers.json.digestStatus`；shadow 永不更新。�
 
 ## 发布、review、push 与视觉
 
-默认 `blog:generate` 只接受完整 production v6 批次：每篇 canonical 都是 v6、runtime mode 都是 production、全批绑定同一个 spec Merkle root，并且不允许 v5/v6 混批。generation schema v3 保存完整 production proof 和 fingerprint。
+在本文件描述的显式 Manual production 路径中，`blog:generate` 只接受完整 v6 批次：每篇 canonical 都是 v6、runtime mode 都是 production、全批绑定同一个 spec Merkle root，并且不允许 v5/v6 混批。默认 API 日更另走 `llm_api_production` proof，不属于本节的 Manual 输入。
 
 legacy v5 只能通过显式 maintenance 参数生成，不能建立发布后视觉任务。shadow canonical 即使指定 `--data-file` 也必须被 production 门禁拒绝。
 
 逐页 review 继续使用不可变 page artifact。每个页面必须由独立 Terra-high leaf 生成 v3 shard；汇总后由 Manual attestation、确定性 Markdown/Hugo gate 签发 receipt。review worker 只读，任何修改建议都让页面失败并返回生成或修订阶段。
 
-push 再次复验 generation、页面字节、production proof、receipt、Git 基线和 commit delta；只有远端 `main` OID 与本地 publication commit 完全相同才记录发布成功。视觉任务只接受这种 production v6 receipt。
+push 再次复验 generation、页面字节、Manual production proof、receipt、Git 基线和 commit delta；只有远端 `main` OID 与本地 publication commit 完全相同才记录发布成功。显式 Manual 视觉任务只接受这种 production v6 receipt；默认 API 批次使用对应的 `llm_api_production` receipt。
 
 ## 性能与可观测性
 
 production metrics 写入 `manual-v6/<date>/metrics/`，shadow metrics 写入对应 shadow 根。所有时间必须来自单调时钟；无法观测的 queue/host wait 写 `unknown`，不能用墙钟时间戳相减。
 
 sidecar 绑定输入/输出真实路径、bytes 和 SHA。metrics 写入失败不改变内容或发布结果，但报告必须显示缺失。跨批报告只有在同一指标覆盖至少 3 个不同日期后才能计算 nearest-rank P50/P95；否则为 `insufficient_data`。
-
-历史 2026-08-27 审计仍保留为反例：21/21 因缺少结构化 source 而 blocked。该报告不能作为 production v6 成品或性能样本。
 
 ## 失败恢复
 
@@ -195,7 +193,7 @@ sidecar 绑定输入/输出真实路径、bytes 和 SHA。metrics 写入失败�
 - push 失败可复用已验证本地 commit，但不能声称已发布；
 - production 失败不得自动回退 v5。
 
-## 切换验收矩阵
+## 持续验收矩阵
 
 代码合并前必须通过：
 
@@ -212,9 +210,9 @@ sidecar 绑定输入/输出真实路径、bytes 和 SHA。metrics 写入失败�
 
 第 10 项是运行验收，不允许用 fixture 代替。至少 3 批数据前，性能报告只能显示 `insufficient_data`；这不阻止 v6 正式质量门禁，但禁止宣称已达到某个 P50/P95 提速数字。
 
-## 兼容与移除计划
+## 兼容边界
 
 - `manual:v5:*` 和 `--legacy-v5-maintenance` 只服务已有历史工件；
-- legacy 路径不得创建新 records、教程预览或质量回归稿；
+- legacy 路径不得为新批次创建可发布 records、sealed preview 或质量回归输入；`manual:v5:promote-draft` 只允许维护既有 v5 工件。仓库不再提供独立 v5 record 模板、单篇 validator 或 tutorial preview 写入口；
 - v5 validator 可继续作为 v6 的基础子校验，但文档和日志必须称其为 compatibility/base validation，而不是默认主链；
-- 积累足够维护窗口后，可单独删除 v5 写入口；删除前不得削弱对旧 receipt 的读取和远端已发布证据复验。
+- 保留既有 sealed preview、legacy receipt 和远端发布证据的只读复验能力，不得用清理写入口为由削弱历史读取。

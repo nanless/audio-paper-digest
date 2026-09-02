@@ -199,7 +199,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 - **Node 脚本**：通过 `scripts/log-setup.js`
 - **Python 脚本**：通过 `scripts/log_setup.py`
 - **默认输出位置**：`logs/<script-name>-YYYYMMDD-HHMMSS-<pid>-<seq>.log`
-- **默认特性**：UTF-8 纯文本、`0600` 权限、同时输出到终端和日志文件、唯一文件名、同步落盘；每个非空物理日志行以毫秒级北京时间戳（`[YYYY-MM-DD HH:mm:ss.SSS+08:00]`）开头（`backup-data.sh` 在退出汇总日志时补写）；统一脱敏认证头、Cookie、token、secret、password、任意项目密钥实际值和 URL userinfo
+- **默认特性**：UTF-8 纯文本、`0600` 权限、同时输出到终端和日志文件、唯一文件名、同步落盘；每个非空物理日志行以毫秒级北京时间戳（`[YYYY-MM-DD HH:mm:ss.SSS+08:00]`）开头；统一脱敏认证头、Cookie、token、secret、password、任意项目密钥实际值和 URL userinfo
 - **无上限与无自动清理**：日志不做数量、总量或单文件大小限制，也不会自动删除旧日志
 
 `backfill_papers.py` 复用相同统一日志，不再额外追加 `logs/backfill.log`。`logs/full-fetch-*.log` 可用于排查抓取/分析问题；终端仍会保留完整输出。

@@ -137,7 +137,7 @@ API call characteristics:
 - Overall timeout is 20 minutes of active process time. Heartbeat gaps over 30 seconds are treated as system sleep or long suspension and excluded, so wake-up socket errors can retry with the remaining budget.
 - max_tokens=64000, temperature=0.7
 - **Double-layer retry**: analysis-engine.js level retries up to 2 times per paper (max 3 total attempts); deep-analyzer.js internally retries each API call up to 3 times (exponential backoff: first 10s, then doubles, `2^attempt * 5s`)
-- **Fetch proxy is mandatory**: LLM APIs remain direct with `agent: false` and must never receive a proxy agent/dispatcher; arXiv/HuggingFace must fail when the project `.env` proxy is absent rather than falling back to direct access. Node arXiv requires at least one HTTP CONNECT value in `HTTPS_PROXY` or `HTTP_PROXY`, while HuggingFace curl may additionally use SOCKS `ALL_PROXY`; network commands accessing a local proxy must run outside the sandbox.
+- **The project proxy is mandatory**: arXiv/HuggingFace fail when the project `.env` proxy is absent rather than falling back to direct access. Ordinary LLM providers use `agent:false`; the exact model `muse-spark-1.2-contributor` is the deliberate exception and uses a fresh HTTP CONNECT agent per request. Node arXiv and Muse require `HTTPS_PROXY` or `HTTP_PROXY`; HuggingFace curl may additionally use SOCKS `ALL_PROXY`.
 - arXiv HTML parsing uses **cheerio** structured selectors, removing noise elements such as script/style/nav/header/footer
 - Images are first preselected by caption/filename/order heuristics (default `imageCandidateMax=20`); only dual-model mode with a configured secondary model downloads up to `imageMaxCount=20` candidate images serially and sends them to the secondary model. Single-model mode only keeps candidate URL/manifest metadata. Downloads validate Content-Type, Content-Length, and PNG/JPEG/WebP file signatures; defaults are a 60-second per-image timeout (`PD_IMAGE_DOWNLOAD_TIMEOUT_MS`), 6MB raw bytes per image, 8M base64 chars per image, and 20M total base64 chars per paper
 - Every analysis stage is recorded in `analysisManifest`. Failed attempts retain `analysisCheckpoint` and a separate `analysisRecoveryImageManifest`. Merge logic validates an older body independently of the latest failed manifest, so repeated failures cannot erase usable content. arXiv HTML/image discovery uses 60 seconds per request and PDF fallback uses 180 seconds; demo pages may follow at most three redirects while revalidating public DNS/IP on every hop. Only strict `{"insertions":[]}` is a valid empty image plan; missing fields, wrong types, and malformed JSON remain retryable failures
@@ -186,30 +186,34 @@ When `PAPER_ANALYZER_SECONDARY_MODEL` is configured, dual-model mode is enabled:
 ### 4.5 Complete Environment Variable List
 
 ```bash
-# LLM API (filtering + deep analysis; the following are 4 common configuration options, only one can be enabled at a time)
+# LLM API (filtering + deep analysis)
 
-# Option 1: MiMo Token Plan (recommended, auto-switches to Anthropic protocol by masquerading as Claude Code)
-PAPER_ANALYZER_API_KEY=tp-your-token-plan-key
-PAPER_ANALYZER_MODEL=mimo-v2.5
-PAPER_ANALYZER_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
+# Default: OpenCode Go Muse Spark 1.2 Contributor (OpenAI Responses)
+PAPER_ANALYZER_API_KEY=your-api-key-here
+PAPER_ANALYZER_MODEL=muse-spark-1.2-contributor
+PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 
-# Option 2: MiMo Pay-as-you-go (generic OpenAI protocol)
+# Alternative: MiMo Token Plan
+# PAPER_ANALYZER_API_KEY=tp-your-token-plan-key
+# PAPER_ANALYZER_MODEL=mimo-v2.5
+# PAPER_ANALYZER_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
+
+# Alternative: MiMo Pay-as-you-go (generic OpenAI protocol)
 # PAPER_ANALYZER_API_KEY=sk-your-pay-as-you-go-key
 # PAPER_ANALYZER_MODEL=mimo-v2.5
 # PAPER_ANALYZER_ENDPOINT=https://api.xiaomimimo.com/v1
 
-# Option 3: Kimi Coding Plan (auto-switches to Anthropic protocol by masquerading as Claude Code)
+# Alternative: Kimi Coding Plan
 # PAPER_ANALYZER_API_KEY=sk-your-kimi-key
 # PAPER_ANALYZER_MODEL=kimi-for-coding
 # PAPER_ANALYZER_ENDPOINT=https://api.kimi.com/coding/v1
 
-# Option 4: Generic OpenAI-compatible endpoint
+# Alternative: Generic OpenAI-compatible endpoint
 # PAPER_ANALYZER_API_KEY=sk-your-openai-key
 # PAPER_ANALYZER_MODEL=gpt-4o
 # PAPER_ANALYZER_ENDPOINT=https://api.openai.com/v1
 
-# Option 5: Dual-model mode (primary text-only + secondary multimodal image selection and insertion plan)
-# Primary model config: choose one of options 1-4 above
+# Dual-model mode (primary text-only + secondary multimodal image selection and insertion plan)
 # Secondary model (optional; if not set, falls back to single-model text-only mode)
 # PAPER_ANALYZER_SECONDARY_MODEL=mimo-v2.5
 # PAPER_ANALYZER_SECONDARY_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
@@ -253,7 +257,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 # Fetch proxy (required): configure at least one of HTTPS_PROXY or HTTP_PROXY as an HTTP CONNECT URL
 # HTTPS_PROXY=http://127.0.0.1:7897
 # HTTP_PROXY=http://127.0.0.1:7897
-# HuggingFace curl may additionally use SOCKS; LLM requests stay direct with agent:false
+# HuggingFace curl may additionally use SOCKS; Muse uses the HTTP CONNECT proxy above
 # ALL_PROXY=socks5h://127.0.0.1:7897
 ```
 
@@ -302,9 +306,6 @@ node scripts/reanalyze.js --concurrency 3 data/current/deep-analysis-result.json
 # Run unit tests
 npm test
 
-# Quick fetch test (fetch + filter only, no analysis, outputs data/quick-test-result.json)
-node scripts/quick-test.js
-
 # Batch analyze unanalyzed papers (based on deep-analysis-result.json)
 npm run batch
 
@@ -342,7 +343,7 @@ npm run xiaohongshu -- --date 2026-04-22
 - Xiaohongshu single post body limit is approximately 1000 characters; curated mode defaults to TOP 5 (use `--top 3` to adjust), with roughly 800-950 characters, suitable for direct single-post publishing
 - TOP-N one-liners default to concurrency 5 and can be configured from 1 to 5 with `PD_XIAOHONGSHU_ONELINER_CONCURRENCY`; completion order never changes ranking order, and failures fall back per paper
 - Each success is checkpointed under a per-date lock. Corrupt caches are atomically quarantined and rebuilt; only exact fingerprint matches are reused, and `--date` must be strict `YYYY-MM-DD`. This workflow generates copy only
-- **The one-sentence introduction for each paper is generated by the publishing-stage LLM API** (via `publish_common.py` protocol routing, bypassing proxy); falls back to local `extract_one_liner()` on LLM failure (prioritizes the first innovation item, then a sentence in summary containing "proposes/solves/aims to", then roast)
+- **The one-sentence introduction for each paper is generated by the publishing-stage LLM API** through `publish_common.py`: ordinary providers stay direct, while exact Muse uses the project HTTP CONNECT proxy. It falls back to local `extract_one_liner()` on LLM failure (prioritizing the first innovation item, then a sentence in summary containing "proposes/solves/aims to", then roast)
 - The script automatically cleans Markdown formatting (`**bold**`, `` `code` ``) and academic prefixes ("This paper aims to", "This paper addresses", etc.) to avoid platform rendering issues
 - Copy automatically includes emoji heat indicators: 🔥≥8 pts, ✅≥6 pts, 📝<6 pts (consistent with blog and WeChat)
 - Fixed blog link and open source repository link appended at the end; tags and `---` separators are not output
@@ -468,9 +469,9 @@ PY
 11.1 **Run blog publishing outside the sandbox**: Agents must use external runtime permissions for `generate-blog.py`, `review-blog.py`, `push-blog.py`, and compatibility `publish-to-blog.py`. A Codex sandbox rejection is an execution-environment failure, not a content failure; do not retry there or bypass LLM/image/Hugo/Git checks.
 12. **Output contract changes must sync parser**: If modifying `## 机器摘要` key names, section order, or tag output format in `prompts/deep-analysis.md`, you must synchronously check the parsing logic in `scripts/utils.js` and `scripts/utils.py`.
 13. **Artifact-level verification required after changes**: At minimum, spot-check one `data/current/deep-analysis-result.json` to confirm the `analysis` machine summary contains `document_type`, `rank_bucket`, `primary_task_tag`, and `primary_method_tag`, and the `parsed` cache contains `documentType`, `scoringRubricVersion`, `rankBucket`, `primaryTaskTag`, and `primaryMethodTag`; then run blog/social media scripts to verify final artifacts.
-14. **Verify prompt loading after changes**: After modifying markdown files in the `prompts/` directory, run a quick test (`node scripts/quick-test.js` or single-paper analysis) to confirm `loadPrompt()` can correctly read and replace placeholders without `{variableName}` residue.
+14. **Verify prompt loading after changes**: After modifying markdown files in the `prompts/` directory, run `npm test`; use a single-paper analysis when artifact-level verification is needed, and confirm `loadPrompt()` replaces every placeholder without `{variableName}` residue.
 15. **Run unit tests after changes**: After modifying `scripts/utils.js`, `scripts/config.js`, or core analysis engine logic, you must run `npm test` to ensure tests pass.
-16. **MiMo API requests must disable proxy connection reuse**: Every Node LLM call, including `test-api-key.js`, must set `options.agent` to `false` (not `undefined`). During refactoring, changing it back to `proxyAgent` or `undefined` is prohibited because MiMo Token Plan can return 403 in environments with system proxies.
+16. **LLM proxy policy belongs to the shared request wrapper**: MiMo/Kimi paths must use `options.agent=false`; exact `muse-spark-1.2-contributor` requests must create and destroy a project HTTP CONNECT one-shot agent. Callers must not select or reuse agents themselves.
 17. **New LLM endpoints must integrate API protocol auto-routing**: Any new script calling an LLM must uniformly use `detectApiType()`, `buildApiUrl()`, `buildHeaders()`, `buildRequestBody()`, `parseResponseText()` from `scripts/utils.js`; hard-coding specific protocol URLs/Headers/Bodies is prohibited.
 18. **Sync the full pipeline when modifying API protocol routing logic**: When modifying `detectApiType()` judgment rules or `buildApiUrl()`/`buildHeaders()` and other functions, you must synchronously check `fetch-papers.js`, `deep-analyzer.js`, and all scripts using `analysis-engine.js` (`full-fetch.js`, `reanalyze.js`, `batch-analyze.js`, `deep-analysis-only.js`, `analyze-single-paper.js`) to ensure consistent behavior across the full pipeline.
 19. **Prohibit committing sensitive files to version control**: `data/`, `logs/`, `*.env`, `*.backup*`, cache files, log archives containing keys, etc. are strictly forbidden from entering git; before committing, confirm `.gitignore` is correctly configured and that no historically leftover sensitive files exist in the repository.
@@ -539,7 +540,7 @@ const options = {
 
 - Check logs: `logs/deep-analyzer-*.log`, `logs/full-fetch-*.log`
 - Check if the key/endpoint/model triplet matches (see Section 9.1)
-- If timeout occurs, the script will automatically downgrade to pure text retry; if it still fails, check proxy or reduce concurrency
+- If a timeout occurs, the current stage remains retryable and must not silently downgrade provenance or content quality; check the proxy and bounded concurrency before retrying
 - `node scripts/deep-analysis-only.js` can be safely used to resume
 
 ### 9.4 No Changes to Push After Publishing

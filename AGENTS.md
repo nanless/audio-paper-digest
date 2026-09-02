@@ -45,11 +45,9 @@ npm run xhs-publish      # 小红书自动发布单篇
 npm run xhs-publish-all  # 小红书自动发布全部
 
 # 直接调用（不在 package.json 中）
-node scripts/quick-test.js              # 快速测试（抓+筛选，不分析）
 node scripts/analyze-single-paper.js <arxiv-id> [--force]  # 单独分析一篇论文（--force 覆盖已有结果）
 node scripts/reanalyze-selected.js <arxivId1> [arxivId2] ...  # 重分析指定论文
 node scripts/refilter-reanalyze-by-date.js <date>  # 按日期重新筛选+分析
-node scripts/validate-scores.js         # 验证并修复评分
 node scripts/test-api-key.js [--secondary] # 测试主模型或副模型 LLM API key 可用性
 node scripts/manual-fetch.js --date YYYY-MM-DD --raw # 无筛选模型抓取候选，仍访问 arXiv/HF
 node scripts/manual-fetch.js --date YYYY-MM-DD --select SPEC.json # 提交完整 manual_offline 逐篇裁决
@@ -81,15 +79,7 @@ python3 scripts/assemble-manual-review-attestation.py --date YYYY-MM-DD # 汇总
 # 单篇灰度时以上两条与 blog:generate/blog:push 都必须传相同 --include-id；先用 blog:manual-plan 获取隔离路径
 python3 scripts/publish-to-feishu.py    # 生成飞书文档
 
-# ICML 2026 专属流程（仅 icml-2026-analysis 分支可用）
-npm run icml-fetch-openreview   # 从 OpenReview API 抓取论文元数据（需 Chrome Cookie）
-npm run icml-filter             # LLM 筛选音频/语音/音乐相关论文
-npm run icml-download-pdfs      # 下载筛选论文 PDF 并提取文本（含表格）
-npm run icml-analyze            # 批量深度分析（基于 PDF 全文 + 自动注入图片）
-npm run icml-retry              # 重试失败的分析
-npm run icml-reanalyze-pdf      # 基于 PDF 全文重分析
-python3 scripts/extract-icml-images.py   # 提取 PDF 图片到图床
-# 会议博客也须依次运行 generate-blog.py、review-blog.py、push-blog.py；生成阶段传 category/date/data file
+# ICML/ICLR/ICASSP 会议专属脚本只存在于对应会议分支；main 不登记不存在的命令。
 ```
 
 未配置 linter、typecheck 或 formatter。CI 会运行 `npm test`、`npm run validate:data`、所有 `scripts/` / `tests/` 下 JS 文件 `node -c` 语法检查、所有 `scripts/` 下 Python 文件 `py_compile` 语法检查、`tests/python` 下 Python 单测，以及所有 `.sh` 的 `bash -n`。
@@ -231,8 +221,6 @@ prompts/                # LLM prompt 模板
   structure-repair.md   # 缺失必要章节时的主模型局部结构修复
   scoring-audit.md      # 主模型最终类型感知评分审计（JSON）
   api-reader-article.md # API 路线初学研究者连续长文（JSON 编辑计划 + 动态小节）
-  index.md              # Prompt 文档索引（含占位符规范）
-  en/                   # 英文版 prompt（含 filter / deep-analysis / gap-fill / opensource-scan / index，不含 image-supplement / method-fill / table-fill / structure-repair / scoring-audit）
 ```
 
 `papers.json` 同时支持 `data/current/papers.json` 和 `data/papers.json`（旧版路径），均被 `config.js` 引用。**`papers.json` 持久化去重数据库，永不归档**。`full-fetch.js` 每次运行自动备份 `papers.json` 到 `data/archive/papers-<日期>.json`，保留最近 7 天。条目可带 `digestStatus.status`：`pending_analysis` / `analysis_failed` 不参与强去重，便于中断后重跑；所有分析入口应通过 `scripts/digest-status.js` 将成功/失败同步为 `analyzed` / `analysis_failed`。若最新一次分析失败但旧成功分析仍可用，`status` 保持 `analyzed`，失败记录写入 `digestStatus.latestAttemptStatus` / `error`。
@@ -290,7 +278,7 @@ prompts/                # LLM prompt 模板
 
 ### 长时间运行命令
 
-命令 `npm run fetch`、`npm run reanalyze`、`npm run deep`、`batch-analyze.js` 等可能运行数十分钟到数小时。**必须：**
+命令 `npm run fetch`、`npm run reanalyze`、`npm run deep`、`npm run batch` 等可能运行数十分钟到数小时。**必须：**
 1. **禁止设置 Bash timeout**，确保命令永不超时。
 2. **禁止检查进程状态**（`ps aux | grep`、`jobs`）。
 3. **禁止过滤输出**（`grep`、`head`、`tail`），完整输出是判断是否正常的唯一依据。

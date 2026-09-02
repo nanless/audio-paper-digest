@@ -1,7 +1,5 @@
 # Main Workflow Explained
 
-## Main Workflow Explained
-
 The default daily entry is `./run-daily-digest.sh YYYY-MM-DD` or `npm run digest:prepare -- YYYY-MM-DD`. Starting from fetch requires Beijing today. The default route performs LLM/API fetching, filtering, staged full-text analysis, ordinary blog review, push, and visual preparation. `digest:api` is an explicit alias for the same route. Production Manual v6 remains available only through `--manual` or `digest:manual`, where the script stops at real paper/page subagent boundaries. The script never calls an image API; after publication succeeds, Codex must use built-in `image_gen` to complete the TOP 10 paper infographics and digest cover, then pass both visual status gates.
 
 When the user asks to run a dated paper digest, that request already authorizes the blog push and requires every stage above. Do not stop after fetch, analysis, review, or publication. WeChat, Feishu, and Xiaohongshu auto-publishing are outside the default scope.
@@ -192,7 +190,7 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 - Post-processing stages no longer resend the complete source. Default evidence budgets are 16K for open-source scanning, 60K for revision, 40K for scoring audit, 30K for method/table repair, and 40K for structure repair. They are controlled by `PD_OPENSOURCE_EVIDENCE_MAX_CHARS`, `PD_REVISION_EVIDENCE_MAX_CHARS`, `PD_SCORING_EVIDENCE_MAX_CHARS`, `PD_REPAIR_EVIDENCE_MAX_CHARS`, and `PD_STRUCTURE_EVIDENCE_MAX_CHARS`; `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` controls primary analysis. The selector version and budgets are part of recovery fingerprints, so only the affected stage and downstream work rerun
 - Every model-call log includes text characters, estimated text tokens, and image count; image base64 is neither counted nor printed as text
 - Proxy settings come only from case-insensitive proxy variables explicitly configured in the project-root `.env`; inherited shell/IDE proxies and macOS `scutil` are not used. At least one of `HTTPS_PROXY` or `HTTP_PROXY` must be an HTTP CONNECT address for arXiv; HuggingFace `curl` may additionally use SOCKS `ALL_PROXY`
-- LLM and fetch transport are isolated: every LLM call is direct with `agent: false` and never reuses a fetch dispatcher; commands using a local proxy must run outside the sandbox
+- LLM and fetch transport are isolated: ordinary providers use `agent:false`, while exact `muse-spark-1.2-contributor` calls use a fresh project HTTP CONNECT agent per request. Neither path reuses the fetch dispatcher; commands using a local proxy must run outside the sandbox
 - If any arXiv category or HuggingFace source fails, the run records `source_partial_failed` and stops after filtering. That state is never reusable as `filter_complete` and cannot enter deep analysis or update the persistent deduplication database.
 - All analysis configurations are centrally managed in `scripts/config.js`, with project `.env` overrides for concurrency, retries, fetch limits, stage evidence budgets, scoring/image temperatures, and image payload limits
 

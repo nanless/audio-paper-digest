@@ -1,8 +1,6 @@
 # Script Responsibilities
 
-## Script Responsibilities (Complete Script Reference)
-
-> **Runtime precondition**: every project script must run outside the sandbox. Direct Node/Python scripts use their shared environment loaders to reject `CODEX_SANDBOX` before business operations; `run-daily-digest.sh`, `run-full-fetch.sh`, and `scripts/backup-data.sh` have the same entry check. Unit-test module imports do not trigger it.
+> **Runtime precondition**: every project script must run outside the sandbox. Direct Node/Python scripts use their shared environment loaders to reject `CODEX_SANDBOX` before business operations; `run-daily-digest.sh` and `run-full-fetch.sh` have the same entry check. Unit-test module imports do not trigger it.
 
 ### 4.1 Main Pipeline Scripts
 
@@ -57,15 +55,6 @@ Full reanalysis.
 
 Reanalyzes specified IDs with the fixed default concurrency of 3, replaces old analyses only on success, and syncs `digestStatus`. When a target did not previously use the current scoring contract, success reconciles the corresponding historical failure in `stats.reanalyzed` / `stats.reanalyzeFailed`. It also records `selectedReanalyzed`, `selectedReanalyzeFailed`, and `selectedReanalyzeAt`; rerunning an already-current result does not inflate recovered counts.
 
-#### `scripts/quick-test.js`
-
-Quick test script.
-- Executes arXiv 7-category fetch + deduplication + LLM filter (configuration from `config.js`)
-- **Does not execute deep analysis**
-- Outputs to `data/quick-test-result.json` (only saves the first 10 papers)
-- Used to verify whether the fetch and filter pipeline is working correctly
-- Direct invocation: `node scripts/quick-test.js` (`npm run test` has been changed to run unit tests)
-
 #### `scripts/batch-analyze.js`
 
 Batch analysis of unanalyzed papers (standalone entry point).
@@ -103,7 +92,7 @@ arXiv fetch and LLM filter module.
   - `fetchCategoryFromSearchPage()`: fetches from arXiv search page, supports pagination + 5 retries
   - `fetchCategoryPapers()`: auto 3-level fallback, stops at whichever level yields sufficient papers
   - `fetchAbstracts()`: batch fetches abstracts from arXiv abs pages (concurrency 5)
-- Filtering uses `PAPER_ANALYZER_*`; LLM requests force `agent: false` direct connections, while HTTP CONNECT proxy support applies to fetch-side requests
+- Filtering uses `PAPER_ANALYZER_*`; ordinary providers use `agent:false`, while exact `muse-spark-1.2-contributor` requests use the project HTTP CONNECT one-shot agent. Fetch-side requests use the separately validated proxy path
 - A high-recall local keyword gate now runs before the LLM. Explicit audio task/modality/method families or a core audio arXiv category pass through; clearly unrelated papers are discarded locally. Date-based refiltering checkpoints definitive decisions per batch and retries only unresolved papers. At finalization, the canonical deep-analysis file is narrowed to the current selected IDs: recovery checkpoints for selected failures are retained, while stale results now explicitly rejected are removed. `npm run keyword:recall` requires zero misses/leaks on the curated positive/negative gold set and zero misses on adjudicated historical positives.
 
 #### `scripts/config.js`
@@ -209,13 +198,6 @@ Unified analysis engine. Encapsulates the following functionality, eliminating d
 - Success requires every mandatory version-1 `analysisManifest` stage to be terminal. Failure merges retain an older valid body while overlaying the new checkpoint, recovery image manifest, and latest-attempt error
 - Lock owners carry random tokens and local PID liveness checks, so an old owner cannot delete a replacement lock and a live process is not reclaimed merely because its lock is old
 
-#### `scripts/validate-scores.js`
-
-Score validation and fix tool.
-- `validateAndFix(papers)`: checks sub-item bounds, total score consistency, open-source contradictions; auto-fixes
-- `DIM_MAX`: exported dimension max mapping
-- CLI: `node scripts/validate-scores.js [data-file]`
-
 #### `scripts/fetch-huggingface-papers.js`
 
 HuggingFace Papers fetch module.
@@ -297,7 +279,7 @@ Stage fingerprints bind the actual truncated primary input, the pre-scoring stru
 **API Calls**:
 - `callModel(messages, maxTokens)`: retry-wrapped API call encapsulation (each internal LLM API stage makes at most 3 attempts by default, configurable with `PD_ANALYSIS_API_MAX_RETRIES`; wait 10s after the first failure, then double exponentially)
 - `_callModelOnce()`: one bounded API call with an active-time overall budget; the underlying request has an absolute deadline, socket timeout, response-size limit, and explicit request destruction
-- LLM API requests forcibly set `agent: false`, disabling connection reuse to bypass proxy pollution (avoiding MiMo 403)
+- The shared request wrapper selects transport: MiMo/Kimi paths use `agent:false`; exact `muse-spark-1.2-contributor` calls create and destroy a project HTTP CONNECT one-shot agent
 
 **Other Features**:
 - Reads proxy variables only after project-root `.env` isolation; inherited shell/IDE proxies and macOS `scutil` are not used
@@ -324,7 +306,7 @@ Node.js common utility module. Referenced by almost all scripts:
 - `parseAnalysis(analysis)`: parse full analysis text into a structured object (score, tags, sections, etc.)
 
 **API Protocol Auto-Routing** (core infrastructure):
-- `detectApiType(endpoint, model)`: automatically determine OpenAI / Anthropic protocol based on endpoint and model; Kimi model names require a Coding Plan endpoint to select Anthropic
+- `detectApiType(endpoint, model)`: automatically determine OpenAI Chat Completions, OpenAI Responses, or Anthropic based on endpoint and model; OpenCode Go Muse uses Responses, while Kimi Coding selects Anthropic
 - `getAnthropicEndpoint(endpoint)`: convert OpenAI-style endpoint to Anthropic-style path
 - `buildApiUrl(apiType, endpoint)`: build complete request URL
 - `buildRequestBody(apiType, model, messages, maxTokens)`: build request body
@@ -340,7 +322,7 @@ Node.js common utility module. Referenced by almost all scripts:
 - `normalizedId(paper)`: generate unified paper ID
 - `backupPapersJson()`: automatic backup of `papers.json`
 - `loadPublishedIdsFromBlog(blogRepo)`: scan Hugo blog repository for published paper arXiv IDs (extracts `arxiv.org/abs/XXXX.XXXXX` format links from `content/posts/*.md`)
-- `loadPrompt(filePath, replacements)`: load prompt file and replace placeholders
+- `loadPrompt(filePath, replacements)`: read only the first fenced code block and replace `{variableName}` placeholders. Use a longer outer fence or `~~~~` when the prompt itself contains fenced examples. New placeholders must be wired into callers and tests; unresolved placeholders are not valid output.
 
 #### `scripts/utils.py`
 
@@ -374,8 +356,8 @@ Publish to Hugo blog (GitHub Pages).
 - Blog repository's `content/posts/` directory stores generated Markdown files
 
 **Data Input and Processing**:
-- Default reads the standard production canonical `data/current/deep-analysis-result.json` and requires every selected paper to be a complete Manual v6 payload with `runtimeMode=production`
-- A custom path without a maintenance switch must still contain production v6. Old v5 input is accepted only with `--legacy-v5-maintenance`; it cannot be mixed with v6 or relabeled as production
+- Default reads `data/current/deep-analysis-result.json` and accepts one homogeneous production route: default `llm_api_production` with complete API Reader v3/scoring/source bindings, or explicit Manual v6 with `runtimeMode=production`, records v4, spec v6, and a common Merkle root
+- A custom path without a maintenance switch must still satisfy one complete production proof. Old v5 input is accepted only with `--legacy-v5-maintenance`; it cannot be mixed with either production mode or relabeled as production
 - Data is processed by `publish_common.py`: sorted by score descending into `scored` (has score) and `unscored` (no score / parse failed) groups
 - Each paper's structured fields are extracted via `parse_analysis()` to generate Markdown
 
@@ -408,10 +390,11 @@ Publish to Hugo blog (GitHub Pages).
   - `categories: [Paper Digest]`
   - `description`: `main task tag | score/10`, falls back to title if absent
   - `hiddenInHomeList: true`
-- Production Manual v6 body: Chinese reader title -> English original title/arXiv link -> tags/score -> snarky review -> core summary -> deterministic `reader-longform-v2` blocks -> open resources -> metadata and final per-dimension score evidence -> link back to the summary page. Frontmatter binds `runtimeMode=production`, spec-v6 Merkle root, paper-shard, sealed record, records-v4 envelope, task evidence, ArtifactIndex, longform, and article SHA values. A declared v6 page never falls back to v5 or automatic fixed sections. Explicit v5 maintenance retains its historical reader-article layout.
+- Default API body: Reader v3 title and metadata -> score/roast/summary/resources -> the 12–18-section beginner-researcher article with deterministic figure adjacency -> final per-dimension evidence. It binds the reader article/plan/figures/authors, scoring audit/evidence, analysis/source SHA, model, and protocol.
+- Explicit Manual v6 body: Chinese reader title -> English original title/arXiv link -> tags/score -> snarky review -> core summary -> deterministic `reader-longform-v2` blocks -> open resources -> metadata and final per-dimension score evidence -> link back to the summary page. Frontmatter binds `runtimeMode=production`, spec-v6 Merkle root, paper-shard, sealed record, records-v4 envelope, task evidence, ArtifactIndex, longform, and article SHA values. A declared v6 page never falls back to v5 or API fixed sections. Explicit v5 maintenance retains its historical reader-article layout.
 
 **Publish Flow**:
-1. `generate-blog.py` only generates and installs Markdown, then writes a generation manifest. A production schema-v3 manifest binds `publicationMode=manual_v6_production`, the authoritative `publishedPapers` snapshot, every per-paper v6 provenance SHA, the common spec-v6 Merkle root, records-v4 mapping, and a production-proof fingerprint. It never calls an LLM, commits, or pushes.
+1. `generate-blog.py` only generates and installs Markdown, then writes a generation manifest. A schema-v3 production manifest declares either `publicationMode=llm_api_production` with `llmApiBindings` / `llmApiProduction`, or `publicationMode=manual_v6_production` with per-paper v6 provenance, a common spec-v6 Merkle root, records-v4 mapping, and `manualV6Production`. It never calls an LLM, commits, or pushes.
 2. The normal Manual review path creates one independent Terra-high page-review shard per generated page, assembles an exact v3 attestation, and runs `manual-review-blog.py`. It does not modify reviewed bytes. The explicit API route uses `review-blog.py` for code, strict LLM, and multimodal review. Both paths retain exact per-page SHA passes and issue a batch receipt only after deterministic and Hugo gates succeed. The receipt binds the current generation SHA, production mode/proof fingerprint, base, protocol, scope, and page hashes; only new, byte-changed, transient-failure, or repaired pages re-enter review.
 3. `push-blog.py` only verifies that receipt against the current files, then stages the exact manifest, commits with a detailed Chinese message, pushes `origin HEAD:main`, and verifies the remote OID. It never regenerates or re-reviews.
 
@@ -431,7 +414,7 @@ All stages share both per-date and repository-global locks. Generation journals 
 **Review Step**:
 Generation reparses scoring from `analysis` and compares it with cached `parsed` data and the rubric version. Production v6 additionally replays all canonical longform blocks and frontmatter provenance before any page can be reviewed. The digest page is reviewed first. Each file-level pass records its actual image-review mode; unchanged path+SHA passes remain reusable, while any page mutation invalidates that page and the batch receipt. Any missing/stale Manual attestation, indeterminate strict review, proof drift, or Hugo failure blocks receipt creation, and push fails closed on a missing or stale receipt.
 
-The shared publish LLM client uses a standard-library explicit empty proxy handler, keeping LLM calls direct and avoiding `requests` compatibility issues or fetch-proxy contamination.
+The shared publish LLM client mirrors the Node transport policy: ordinary providers use a standard-library empty proxy handler, while exact `muse-spark-1.2-contributor` uses the project HTTP CONNECT one-shot path. It never inherits unrelated system proxy state.
 
 Code-level auto-fix covers:
 1. Unescaped HTML-like tags (`<S>`, `<E>`, `<task>`, etc.) → wrap in backticks
@@ -509,7 +492,7 @@ Each successful one-liner is stored under a per-date lock and bound to analysis,
 - `--all` selects the full-copy format only; `--ignore-blog-snapshot` is the explicit snapshot bypass
 - If no paper matches the batch date, the script stops instead of falling back to historical papers
 - Outputs to `data/current/xiaohongshu-YYYY-MM-DD-<suffix>.md`
-- **One-sentence introduction per paper is generated by the publishing-stage LLM API** (via `publish_common.py` protocol routing and standard-library explicit no-proxy transport); input prioritizes `parsed.summary/results/limitations/opensource` plus primary tags, then falls back to abstracts; local `extract_one_liner()` is used when LLM generation fails
+- **One-sentence introduction per paper is generated by the publishing-stage LLM API** through `publish_common.py`; ordinary providers use explicit no-proxy transport and exact Muse uses the project HTTP CONNECT one-shot path. Input prioritizes `parsed.summary/results/limitations/opensource` plus primary tags, then falls back to abstracts; local `extract_one_liner()` is used when LLM generation fails
 - Automatically cleans Markdown formatting and academic prefixes
 - Includes emoji heat indicators: 🔥>=8 points, ✅>=6 points, 📝<6 points (consistent with blog and WeChat)
 - Under 1000 words, no tags or `---` separators are output; open source information is clearly labeled
@@ -564,9 +547,5 @@ Backfill paper IDs in the background (no analysis).
 - Uses the unified per-run log and no longer appends a duplicate `logs/backfill.log`
 - Uses the same `.lock` directory and `generation` protocol as Node when merging `papers.json`, preventing a stale post-fetch snapshot from overwriting concurrent analysis status
 - Dependency: `requests` (Python third-party library)
-
-#### `scripts/backup-data.sh`
-
-Data backup shell script.
 
 ---

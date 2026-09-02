@@ -1,7 +1,5 @@
 # 数据文件格式
 
-## 数据文件格式详解
-
 ### 5.1 `data/current/papers.json`
 
 论文去重数据库。**此文件不归档，持续累积。** 结构：
@@ -482,7 +480,7 @@ Production 日期根包含：`task-runner/state.json` 与 `task-runner/tasks/<pa
 ### 5.10 博客阶段 journal、清单与审查凭证
 
 - generation staging/install journal：逐页记录输入指纹、安装前 SHA 和目标 SHA；崩溃后只收养内容完全匹配的页面，全部论文完成后才生成汇总页和严格 manifest。
-- `blog-generation-manifest-YYYY-MM-DD.json`：正式清单为 schema v3，记录非空、唯一且结构合法的精确 Markdown 文件集合、输入/生成依赖指纹、博客基线、category、逐文件 SHA，以及经过发布预检后实际写入博客的 `publishedPapers` 权威快照；review 与 push 都会把 `templateFingerprint` 与当前生成器重算值比较，旧模板产物必须重新 generate。`visualSummaryRequired` 与 `digestCoverRequired` 必须为 `false`，发布后图片不得进入清单。
+- `blog-generation-manifest-YYYY-MM-DD.json`：正式清单为 schema v3，记录非空、唯一且结构合法的精确 Markdown 文件集合、输入/生成依赖指纹、博客基线、category、逐文件 SHA，以及经过发布预检后实际写入博客的 `publishedPapers` 权威快照。默认 API 批次声明 `publicationMode=llm_api_production`，以 `llmApiBindings` / `llmApiProduction` 绑定 Reader v3、评分审计、来源、模型与协议；显式 Manual 批次声明 `publicationMode=manual_v6_production`，以 `manualV6Bindings` / `manualV6Production` 绑定 records v4、spec v6、Merkle、task 与 longform。两种 production proof 都必须同质且完整，禁止混批或隐式降级；review 与 push 会重算对应 proof 和 `templateFingerprint`。`visualSummaryRequired` 与 `digestCoverRequired` 必须为 `false`，发布后图片不得进入清单。
 - 新生成的每日汇总页写入 `paper_digest_reader_quality: "reader-facing-v2"`：每篇条目在标签和评分后显示作者与机构；“核心摘要”和“开源资源”逐字复用对应单篇页的已审区块，不再二次压缩。汇总页自有标题、概览、排行榜、点评与元数据仍在 generate、generation checkpoint 复用、review 确定性检查与 staged 安装前重跑阿拉伯精确定量、术语间距、病句、模板句和长段门禁。无当前标记的历史汇总页按旧契约兼容读取。
 - 若配置了发布图片排除项，`publishedPapers` 中同时保存 `publishImageExclusions` 与 `publishImageExclusionView`：后者绑定排除前/后的 analysis SHA、精确 URL 顺序、有效 `selectedImageUrls` 和 `context-bound-v1` 契约。生成器会在排除后重跑读者可见正文、表格与图片邻文门禁，review/push 又通过 generation SHA 和输入指纹复核该派生视图，canonical 深度分析及其 Manual 来源 SHA 不被改写。
 - `blog-review-passes-YYYY-MM-DD.json`：持久保存已通过页面的博客仓库相对路径、实际读取 SHA-256、通过时间和当时的 review 协议指纹。复用只依赖路径 + SHA；代码、脚本、文档、模型、协议、generation manifest 或博客基线变化不会删除记录，页面内容变化时只让该页面重新进入 review。

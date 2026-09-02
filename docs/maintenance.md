@@ -1,7 +1,5 @@
 # 维护约定
 
-## 维护约定
-
 - 流程、路径、关键参数变更后，**必须同步更新** `README.md` 与 `SKILL.md`
 - 文档冲突时，以当前脚本行为为准并立即修正文档
 - **禁止在脚本中硬编码真实 API key、微信凭证或飞书凭证**，所有凭证统一写入当前项目根 `.env` 并通过项目 env loader 读取
@@ -22,6 +20,8 @@
 - `awaiting_packet` 由主 Agent调用 `manual:packet` 后 register；`awaiting_records_envelope` 只有在四角色均 validated 后才可调用 `manual:records` 收口。sealer 会重开所有 runner-bound 文件，任何字节漂移都必须先回到相应任务重新验证。
 - `manual:v6:shadow:*` 和 runner `--shadow` 只写 `manual-v6-shadow/<date>/`，不得发布；`manual:v5:*` 只用于 legacy v5 历史只读/维护，不得与 production v6 混批。
 - Publisher、digest status 与视觉规划必须重验 records v4、spec v6、Merkle root、`reader-longform-v2` 和 production generation；缺字段不得回退 legacy v5 页面。
+- 不得因为论文 ID 相同，就把 archive、legacy v5 或其他历史文件恢复为 production canonical；缺少 `runtimeMode` 必须判为非法，不能从目录名猜测模式。
+- 不得复制或改名 shadow canonical 绕过发布边界。修复时应从最早失效阶段重跑，禁止手改 fingerprint、attestation、`publicationCommit` 或 `remoteVerifiedOid`。
 
 ---
 

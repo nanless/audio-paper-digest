@@ -1,7 +1,5 @@
 # 主流程详解
 
-## 主流程详解
-
 默认日更入口是 `./run-daily-digest.sh YYYY-MM-DD` 或 `npm run digest:prepare -- YYYY-MM-DD`。从抓取开始时日期必须是北京时间当天；默认依次执行 LLM/API 抓取、筛选、多阶段全文分析、博客 generate/普通 LLM review/push 和视觉规划。脚本不调用图像 API，结束后 Codex 仍须用内置 `image_gen` 完成并验收 TOP 10 长图与汇总封面。`--api` 与 `digest:api` 保留为默认路线的显式同义入口；只有 `--manual` / `digest:manual` 才切换 production Manual v6。
 
 用户说“运行/进行某日论文速递”时，默认已经授权博客 push，并要求完成上述全部阶段；不能在抓取、深度分析、review 或发布后提前停止。微信、飞书、小红书自动发布不在默认范围。
@@ -10,7 +8,7 @@
 
 默认路径使用关键词预筛、模型筛选、多阶段 LLM 分析和普通三层 review。只有用户明确要求 Manual/人工流程时才切换 production Manual v6；两条路线都不会因对方的失败而静默改变 provenance：
 
-> Production Manual v6 已是正式主链：全文阶段在 HTML `.text()` 前保存表格、MathML/TeX、图和 bibliography，只有结构 inventory 闭环时 ArtifactIndex 才 complete；PDF/text fallback 明确 incomplete。持久 runner 管理 author → technical_scoring / pedagogy_readability → author_revision，但不创建真实 subagent、不物化 packet，也不自动产出 records v4；这些仍由主 Agent完成。正式根为 `data/current/manual-v6/<date>/`，spec v6 经 `runtimeMode=production` 写标准 canonical；显式 shadow 使用 `manual-v6-shadow/<date>/`。v5 仅作显式历史只读/维护兼容。
+> Production Manual v6 是显式选择的高保障正式链路：全文阶段在 HTML `.text()` 前保存表格、MathML/TeX、图和 bibliography，只有结构 inventory 闭环时 ArtifactIndex 才 complete；PDF/text fallback 明确 incomplete。持久 runner 管理 author → technical_scoring / pedagogy_readability → author_revision，但不创建真实 subagent、不物化 packet，也不自动产出 records v4；这些仍由主 Agent完成。正式根为 `data/current/manual-v6/<date>/`，spec v6 经 `runtimeMode=production` 写标准 canonical；显式 shadow 使用 `manual-v6-shadow/<date>/`。v5 仅作显式历史只读/维护兼容。
 
 - `manual-fetch.js --raw` 仍联网抓取 arXiv/HuggingFace，只是不调用筛选模型；同日期 raw/select/fulltext 共用跨进程锁。HF 使用异步 curl 子进程，不再阻塞事件循环；recent/search/abstract/Atom 的真实 arXiv 请求由同 host scheduler 串行，批次级 normalized ID Promise cache 避免跨类别重复摘要。`--select` 接收完整覆盖候选全集的 `manual_offline` v1 逐篇裁决，并把输入 SHA、reviewer 和协议指纹写入筛选四件套。
 - `manual:fulltext` 持久化受控结构快照并按论文增量产出 companion ArtifactIndex。HTML 表格矩阵/rowspan/colspan、MathML/TeX、图和参考文献绑定原始 HTML、最终全文和单篇 input SHA；结构缺失、截断或 PDF/text fallback 只能写 `incomplete`，production v6 不得消费为完整证据。既有 v2/v5 字段仅作为 legacy 基础校验兼容。

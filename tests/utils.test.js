@@ -37,7 +37,6 @@ const {
     detectHttpConnectProxyUrl,
     buildProxyAuthorizationHeader
 } = require('../scripts/utils.js');
-const { validateAndFix } = require('../scripts/validate-scores.js');
 const { getInvalidAnalysisReason } = require('../scripts/analysis-contract.js');
 
 function scoringAnalysis(overrides = {}) {
@@ -451,56 +450,6 @@ ${'实验内容'.repeat(20)}
         assert.ok(parsed.scoreValidation.errors.some(error => /创新性.*缺少具体评分理由/.test(error)));
     });
 
-    it('validate-scores 从 analysis 修复陈旧、NaN 和负数缓存', () => {
-        const analysis = scoringAnalysis();
-        const stale = parseAnalysis(analysis);
-        stale.score = Number.NaN;
-        stale.innovationScore = -1;
-        stale.openSourceScore = 1.2;
-        const papers = [{ arxivId: '2607.99991', analysis, parsed: stale }];
-
-        const result = validateAndFix(papers);
-        assert.strictEqual(result.fixedCount, 1);
-        assert.strictEqual(result.remainingIssueCount, 0);
-        assert.strictEqual(papers[0].parsed.score, '6.9');
-        assert.strictEqual(papers[0].parsed.innovationScore, '1.5');
-        assert.strictEqual(papers[0].parsed.openSourceScore, '0.0');
-        assert.ok(result.issues[0].oldIssues.some(issue => issue.includes('开源矛盾')));
-    });
-
-    it('validate-scores 不用残缺源分析覆盖已有缓存', () => {
-        const validAnalysis = scoringAnalysis();
-        const cached = parseAnalysis(validAnalysis);
-        const incompleteAnalysis = scoringAnalysis({ dimensions: [
-            '创新性：1.5/2',
-            '技术严谨性：1.2/1.5'
-        ] });
-        const papers = [{ arxivId: '2607.99992', analysis: incompleteAnalysis, parsed: cached }];
-
-        const result = validateAndFix(papers);
-        assert.strictEqual(result.fixedCount, 0);
-        assert.strictEqual(result.remainingIssueCount, 1);
-        assert.strictEqual(papers[0].parsed, cached);
-        assert.ok(result.issues[0].oldIssues.some(issue => issue.includes('缺少评分维度')));
-    });
-
-    it('validate-scores 接受理论研究公开证明对应的高开源锚点', () => {
-        const analysis = scoringAnalysis({ dimensions: [
-            '创新性：1.5/2，理论问题具有明确新意。',
-            '技术严谨性：1.2/1.5，主要证明链条较完整。',
-            '实验充分性：1.1/1.5，理论验证覆盖核心命题。',
-            '清晰度：0.8/1，符号与推导结构清楚。',
-            '影响力：1.0/1.5，对后续理论研究有价值。',
-            '开源：1.2/1.5，正文公开完整证明材料。',
-            '可复现性：0.3/0.5，推导步骤基本可复核。',
-            '工程/实践价值：0/1.5，属于纯理论研究。'
-        ] }).replace('document_type: 方法研究', 'document_type: 理论研究');
-        const paper = { arxivId: '2607.99992', analysis, parsed: parseAnalysis(analysis) };
-
-        const result = validateAndFix([paper]);
-        assert.strictEqual(result.remainingIssueCount, 0);
-        assert.strictEqual(paper.parsed.openSourceScore, '1.2');
-    });
 });
 
 describe('detectApiType', () => {

@@ -1,7 +1,5 @@
 # 排错手册
 
-## 排错手册
-
 ### 12.1 模型调用失败 / API 返回 401 / 403
 
 **检查步骤**：
@@ -88,7 +86,7 @@ ls -lt content/posts | head -20
 ### 12.6.1 arXiv 抓取或全文下载失败
 
 - arXiv 元数据、HTML、PDF 与图片均强制走项目 `.env` 的 `HTTPS_PROXY` 或 `HTTP_PROXY`。至少一项必须是 `http://` 或 `https://` 的 HTTP CONNECT 地址，不能只配置 SOCKS `ALL_PROXY`
-- 在沙箱外验证：`node scripts/quick-test.js` 或完整流程；沙箱内访问本机代理失败是运行环境限制
+- 在沙箱外用 `node scripts/test-api-key.js` 验证 LLM/代理，或运行完整流程；沙箱内访问本机代理失败是运行环境限制
 - LLM 代理策略由 `requestLlmJson()` 统一决定：MiMo/Kimi 等默认 `agent:false`；`muse-spark-1.2-contributor` 必须检测到项目 HTTP CONNECT 代理并创建 one-shot agent。调用方不得自行注入或复用 agent/dispatcher
 
 ### 12.7 MiMo API 返回 403 / 代理问题

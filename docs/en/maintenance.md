@@ -1,7 +1,5 @@
 # Maintenance Conventions
 
-## Maintenance Conventions
-
 - After any change to workflows, paths, or critical parameters, **you must update** `README.md` and `SKILL.md` accordingly
 - When documentation conflicts with code, treat the current script behavior as the source of truth and fix the docs immediately
 - **Hard-coding real API keys, WeChat credentials, or Feishu credentials in scripts is prohibited**; all credentials must be written to the current project-root `.env` and loaded through the project env loader

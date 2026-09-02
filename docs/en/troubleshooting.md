@@ -1,7 +1,5 @@
 # Troubleshooting Guide
 
-## Troubleshooting Guide
-
 ### 12.1 Model Call Failure / API Returns 401 / 403
 
 **Checklist**:
@@ -88,7 +86,7 @@ Possible causes:
 ### 12.6.1 arXiv Fetch or Full-Text Download Fails
 
 - arXiv metadata, HTML, PDF and images all require at least one project `.env` `HTTPS_PROXY` or `HTTP_PROXY` value. The configured value must be an `http://` or `https://` HTTP CONNECT URL; SOCKS `ALL_PROXY` alone is insufficient
-- Verify outside the sandbox with `node scripts/quick-test.js` or the full workflow. Sandbox loopback failure is an environment limitation
+- Verify the LLM/proxy outside the sandbox with `node scripts/test-api-key.js`, or run the full workflow. Sandbox loopback failure is an environment limitation
 - LLM routing is independent: non-Muse Node LLM requests use `agent: false`; exact `muse-spark-1.2-contributor` requests must use the project HTTP CONNECT proxy
 
 ### 12.7 MiMo API Returns 403 / Proxy Issues

@@ -67,7 +67,7 @@ describe('env-loader', () => {
 
     it('所有 shell 入口在沙箱标记下均于业务逻辑前拒绝运行', () => {
         const root = path.join(__dirname, '..');
-        for (const script of ['run-full-fetch.sh', 'scripts/backup-data.sh']) {
+        for (const script of ['run-full-fetch.sh']) {
             const result = spawnSync('bash', [path.join(root, script)], {
                 cwd: root,
                 env: { ...process.env, CODEX_SANDBOX: 'test-seatbelt' },

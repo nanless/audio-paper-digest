@@ -7,6 +7,10 @@ const path = require('node:path');
 const archivePath = path.join(__dirname, 'fixtures', 'historical-manual-filter-specs.json');
 const archive = JSON.parse(fs.readFileSync(archivePath, 'utf8'));
 
+// This immutable fixture replaces the former date-specific generators for
+// 2026-08-20, 2026-08-25, and 2026-08-27. Keep replaying every candidate and
+// the exact original spec bytes; never restore hard-coded production scripts.
+
 function sha256(value) {
     return crypto.createHash('sha256').update(value).digest('hex');
 }
