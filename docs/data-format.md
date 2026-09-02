@@ -59,12 +59,14 @@ canonical 的 13 个中文一级标题是机器解析契约。`parsed` 是缓存
 默认 API 发布正文来自：
 
 - `apiReaderArticle`：读者可见长文；
-- `apiReaderPlan`：章节、术语桥和 Figure placements；
+- `apiReaderPlan`：章节、术语桥、Figure placements，以及 `api-reader-source-bindings-v4` 表格/公式来源绑定；
 - `apiReaderFigures`：已物化官方图片绑定；
-- 作者/机构和评分证据；
+- `apiReaderAuthors`：`api-reader-author-identity-v1` 逐作者姓名与机构来源绑定；
+- `apiReaderResources`：`api-reader-resource-identity-v1` 原文/Demo 来源、重定向终点和可达状态绑定；
+- 评分证据与评分稳定性裁决；
 - `llm_api_production` 集合级 proof。
 
-Reader v1/v2 只作历史读取兼容，新 production 必须 v3。摘要 fallback 默认不可发布。
+Reader v1/v2，以及没有当前来源身份合同的旧 v3，只作历史读取兼容。新 production 必须同时闭合 Reader v3、source binding v4、作者/机构 identity v1 与资源 identity v1。摘要 fallback 默认不可发布。
 
 ## 博客 generation manifest
 

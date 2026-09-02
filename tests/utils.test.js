@@ -769,7 +769,7 @@ describe('OpenAI Responses output truncation', () => {
 });
 
 describe('OpenAI Responses SSE parsing', () => {
-    it('优先重放 completed response，并兼容仅 delta 的流', () => {
+    it('优先重放 completed response', () => {
         const completed = parseSseResponse([
             'event: response.output_text.delta',
             'data: {"type":"response.output_text.delta","delta":"hel"}',
@@ -783,13 +783,31 @@ describe('OpenAI Responses SSE parsing', () => {
         ].join('\n'));
         assert.strictEqual(parseResponseText('openai_responses', completed), 'hello');
 
-        const deltasOnly = parseSseResponse([
+    });
+
+    it('仅有 delta 而没有 completed 终态时拒绝伪造成功响应', () => {
+        assert.throws(() => parseSseResponse([
             'data: {"type":"response.output_text.delta","delta":"a"}',
             '',
             'data: {"type":"response.output_text.delta","delta":"b"}',
             ''
+        ].join('\n')), error => error.code === 'SSE_TERMINAL_EVENT_MISSING');
+    });
+
+    it('保留 response.incomplete 终态供上层识别截断', () => {
+        const incomplete = parseSseResponse([
+            'event: response.output_text.delta',
+            'data: {"type":"response.output_text.delta","delta":"partial"}',
+            '',
+            'event: response.incomplete',
+            'data: {"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output_text":"partial"}}',
+            ''
         ].join('\n'));
-        assert.strictEqual(deltasOnly.output_text, 'ab');
+        assert.strictEqual(incomplete.status, 'incomplete');
+        assert.strictEqual(
+            getResponsesOutputTruncationError(incomplete, 100).code,
+            'MODEL_OUTPUT_TRUNCATED'
+        );
     });
 });
 
@@ -854,6 +872,43 @@ describe('requestJson', () => {
 
             assert.strictEqual(response.statusCode, 200);
             assert.deepStrictEqual(response.body, { ok: true, echo: 'hello' });
+        } finally {
+            await new Promise(resolve => server.close(resolve));
+        }
+    });
+
+    it('SSE 连接只有 delta 时请求层会 reject，不会解析为 completed', async (t) => {
+        const server = http.createServer((_req, res) => {
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.end([
+                'event: response.output_text.delta',
+                'data: {"type":"response.output_text.delta","delta":"partial"}',
+                '',
+                'data: [DONE]',
+                ''
+            ].join('\n'));
+        });
+        try {
+            await new Promise((resolve, reject) => {
+                server.once('error', reject);
+                server.listen(0, '127.0.0.1', resolve);
+            });
+        } catch (err) {
+            if (err.code === 'EPERM' || err.code === 'EACCES') {
+                t.skip(`当前环境不允许监听本地端口: ${err.code}`);
+                return;
+            }
+            throw err;
+        }
+        try {
+            const { port } = server.address();
+            await assert.rejects(
+                requestJson(`http://127.0.0.1:${port}/v1/responses`, {}, {}, {
+                    timeoutMs: 1000,
+                    agent: false
+                }),
+                error => error.code === 'SSE_TERMINAL_EVENT_MISSING'
+            );
         } finally {
             await new Promise(resolve => server.close(resolve));
         }
@@ -1214,8 +1269,10 @@ describe('LLM request invariants', () => {
         const root = path.join(__dirname, '..');
         const fetchPapers = fs.readFileSync(path.join(root, 'scripts', 'fetch-papers.js'), 'utf8');
         const deepAnalyzer = fs.readFileSync(path.join(root, 'scripts', 'deep-analyzer.js'), 'utf8');
-        assert.match(fetchPapers, /requestLlmJson\(/);
-        assert.match(deepAnalyzer, /requestLlmJson\(/);
+        assert.match(fetchPapers, /requestFn\s*=\s*options\.requestFn\s*\|\|\s*requestLlmJson/);
+        assert.match(fetchPapers, /await\s+requestFn\(/);
+        assert.match(deepAnalyzer, /requestFn\s*=\s*typeof\s+config\.requestFn[^\n]+requestLlmJson/);
+        assert.match(deepAnalyzer, /await\s+requestFn\(/);
         assert.doesNotMatch(fetchPapers, /requestJson\([^)]*agent:\s*false/s);
         assert.doesNotMatch(deepAnalyzer, /requestJson\([^)]*agent:\s*false/s);
     });

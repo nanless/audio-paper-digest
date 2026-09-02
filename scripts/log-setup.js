@@ -5,6 +5,9 @@ const { loadProjectEnv } = require('./env-loader.js');
 let activeLogger = null;
 let fileSequence = 0;
 let configuredSecrets = [];
+const DEFAULT_LOG_RETENTION_DAYS = 30;
+const DEFAULT_LOG_MAX_TOTAL_BYTES = 256 * 1024 * 1024;
+const ACTIVE_LOG_GRACE_MS = 5 * 60 * 1000;
 
 function ensureDir(dirPath) {
     if (!fs.existsSync(dirPath)) {
@@ -107,6 +110,89 @@ function createUniqueLogFile(logsDir, base) {
     throw new Error(`无法为 ${base} 创建唯一日志文件`);
 }
 
+function readPositiveInteger(value, fallback) {
+    const parsed = Number.parseInt(String(value ?? ''), 10);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function logOwnerProcessIsAlive(filePath) {
+    const match = path.basename(filePath).match(/-(\d+)-\d+\.log$/);
+    if (!match) return false;
+    const pid = Number.parseInt(match[1], 10);
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (error) {
+        return error?.code === 'EPERM';
+    }
+}
+
+function pruneLogFiles(logsDir, options = {}) {
+    const retentionDays = readPositiveInteger(
+        options.retentionDays ?? process.env.PD_LOG_RETENTION_DAYS,
+        DEFAULT_LOG_RETENTION_DAYS
+    );
+    const maxTotalBytes = readPositiveInteger(
+        options.maxTotalBytes ?? process.env.PD_LOG_MAX_TOTAL_BYTES,
+        DEFAULT_LOG_MAX_TOTAL_BYTES
+    );
+    const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+    const cutoffMs = nowMs - retentionDays * 24 * 60 * 60 * 1000;
+    let entries = [];
+    try {
+        entries = fs.readdirSync(logsDir, { withFileTypes: true }).flatMap(entry => {
+            if (!entry.isFile() || !entry.name.endsWith('.log')) return [];
+            const filePath = path.join(logsDir, entry.name);
+            try {
+                const stat = fs.lstatSync(filePath);
+                if (!stat.isFile() || stat.isSymbolicLink()) return [];
+                return [{
+                    filePath, mtimeMs: stat.mtimeMs, size: stat.size,
+                    activeOwner: logOwnerProcessIsAlive(filePath)
+                }];
+            } catch (_) {
+                return [];
+            }
+        });
+    } catch (_) {
+        return { removed: 0, reclaimedBytes: 0 };
+    }
+
+    const remove = entry => {
+        try {
+            fs.unlinkSync(entry.filePath);
+            return true;
+        } catch (error) {
+            return error.code === 'ENOENT';
+        }
+    };
+    let removed = 0;
+    let reclaimedBytes = 0;
+    const retained = [];
+    for (const entry of entries) {
+        if (!entry.activeOwner && entry.mtimeMs < cutoffMs && remove(entry)) {
+            removed += 1;
+            reclaimedBytes += entry.size;
+        } else {
+            retained.push(entry);
+        }
+    }
+    retained.sort((a, b) => b.mtimeMs - a.mtimeMs || a.filePath.localeCompare(b.filePath));
+    let totalBytes = retained.reduce((sum, entry) => sum + entry.size, 0);
+    for (const entry of retained.slice().reverse()) {
+        if (totalBytes <= maxTotalBytes) break;
+        // A concurrently running script may still own a newly touched file.
+        // Let capacity temporarily exceed the target instead of unlinking it.
+        if (entry.activeOwner || entry.mtimeMs >= nowMs - ACTIVE_LOG_GRACE_MS) continue;
+        if (!remove(entry)) continue;
+        totalBytes -= entry.size;
+        removed += 1;
+        reclaimedBytes += entry.size;
+    }
+    return { removed, reclaimedBytes };
+}
+
 function normalizeWriteArgs(chunk, encoding, callback) {
     let resolvedEncoding = encoding;
     let resolvedCallback = callback;
@@ -146,6 +232,7 @@ function setupScriptLogging(scriptPath, options = {}) {
     let logFile = null;
     if (!disableFileLogs) {
         ensureDir(logsDir);
+        pruneLogFiles(logsDir);
         ({ fd, logFile } = createUniqueLogFile(logsDir, base));
     }
     const stdoutWrite = process.stdout.write.bind(process.stdout);
@@ -245,5 +332,9 @@ module.exports = {
     setStdoutBlocking,
     formatTs,
     formatLogTimestamp,
-    timestampLogLines
+    timestampLogLines,
+    pruneLogFiles,
+    DEFAULT_LOG_RETENTION_DAYS,
+    DEFAULT_LOG_MAX_TOTAL_BYTES,
+    ACTIVE_LOG_GRACE_MS
 };

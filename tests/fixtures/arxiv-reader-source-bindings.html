@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<body>
+<article class="ltx_document">
+  <section class="ltx_section">
+    <h2>2 Method</h2>
+    <table class="ltx_equation ltx_eqn_table"><tbody><tr><td>
+      <math display="block" alttext="J(\theta)=L_{asr}+0.3L_{align}"><semantics>
+        <annotation encoding="application/x-tex">J(\theta)=L_{asr}+0.3L_{align}</annotation>
+      </semantics></math>
+    </td><td><span class="ltx_tag ltx_tag_equation">(1)</span></td></tr></tbody></table>
+    <table class="ltx_equation ltx_eqn_table"><tbody><tr><td>
+      <math display="block" alttext="p(y|x)=\prod_t p(y_t|h_t)"><semantics>
+        <annotation encoding="application/x-tex">p(y|x)=\prod_t p(y_t|h_t)</annotation>
+      </semantics></math>
+    </td><td><span class="ltx_tag ltx_tag_equation">(2)</span></td></tr></tbody></table>
+  </section>
+  <section class="ltx_section">
+    <h2>3 Experiments</h2>
+    <p>On Eval-B, Compact reaches 88.2% while Baseline reaches 84.0% under the same protocol.</p>
+    <figure class="ltx_table">
+      <figcaption><span class="ltx_tag ltx_tag_table">Table 1:</span> WER results.</figcaption>
+      <table class="ltx_tabular">
+        <thead>
+          <tr><th rowspan="2">System</th><th colspan="2">WER</th></tr>
+          <tr><th>test-clean</th><th>test-other</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Baseline</td><td>4.8</td><td>10.2</td></tr>
+          <tr><td>Proposed</td><td>4.1</td><td>9.3</td></tr>
+        </tbody>
+      </table>
+    </figure>
+    <figure class="ltx_table">
+      <figcaption><span class="ltx_tag ltx_tag_table">Table 2:</span> Runtime.</figcaption>
+      <table class="ltx_tabular">
+        <thead><tr><th>System</th><th>RTF</th><th>Memory</th></tr></thead>
+        <tbody>
+          <tr><td>Baseline</td><td>0.72</td><td>8 GB</td></tr>
+          <tr><td>Proposed</td><td>0.81</td><td>9 GB</td></tr>
+        </tbody>
+      </table>
+    </figure>
+  </section>
+</article>
+</body>
+</html>

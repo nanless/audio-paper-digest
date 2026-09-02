@@ -34,6 +34,10 @@ describe('config', () => {
         assert.strictEqual(Config.ANALYSIS_CONFIG.maxRetries, 2);
         assert.strictEqual(Config.ANALYSIS_CONFIG.apiMaxRetries, 3);
         assert.strictEqual(
+            Config.ANALYSIS_CONFIG.apiMaxResponseBytes,
+            Number(process.env.PD_ANALYSIS_API_MAX_RESPONSE_BYTES || 16 * 1024 * 1024)
+        );
+        assert.strictEqual(
             Config.ANALYSIS_CONFIG.apiMaxTokens,
             Number(process.env.PD_ANALYSIS_API_MAX_TOKENS || 64000)
         );
@@ -159,6 +163,12 @@ describe('config', () => {
     it('项目 .env 覆写 PD_ANALYSIS_API_MAX_TOKENS', () => {
         withProjectEnv('PD_ANALYSIS_API_MAX_TOKENS=16000', (Config) => {
             assert.strictEqual(Config.ANALYSIS_CONFIG.apiMaxTokens, 16000);
+        });
+    });
+
+    it('项目 .env 覆写 LLM 响应总字节上限', () => {
+        withProjectEnv('PD_ANALYSIS_API_MAX_RESPONSE_BYTES=2097152', (Config) => {
+            assert.strictEqual(Config.ANALYSIS_CONFIG.apiMaxResponseBytes, 2097152);
         });
     });
 

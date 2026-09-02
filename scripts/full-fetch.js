@@ -12,7 +12,7 @@ const crypto = require('crypto');
 const { fetchCategoryPapers, filterPapersWithLLM, buildFilterInputSha256 } = require('./fetch-papers.js');
 const { KEYWORD_PREFILTER_VERSION } = require('./lib/keyword-prefilter.js');
 const { fetchHuggingFacePapers, mergeAndDeduplicate } = require('./fetch-huggingface-papers.js');
-const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, normalizeToBeijingISOString, readJsonSafe, getRecordDate, normalizedId, backupPapersJson, loadPublishedIdsFromBlog, loadPrompt, detectApiType } = require('./utils.js');
+const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, normalizeToBeijingISOString, readJsonSafe, getRecordDate, normalizedId, loadPublishedIdsFromBlog, loadPrompt, detectApiType } = require('./utils.js');
 const {
     analyzeBatch,
     mergeAndSaveResults,
@@ -31,7 +31,8 @@ const {
     markPaperDigestStatus,
     savePapersDatabase,
     loadPapersDatabase,
-    updateAnalysisDigestStatuses
+    updateAnalysisDigestStatuses,
+    backupPapersJson
 } = require('./digest-status.js');
 
 const Config = require('./config.js');
@@ -1131,7 +1132,7 @@ async function runFullFetch() {
     console.log('');
 
     // papers.json 自动备份（去重数据库，不归档但需备份防损坏）
-    const backupResult = backupPapersJson(PAPERS_FILE, ARCHIVE_DIR);
+    const backupResult = await backupPapersJson(PAPERS_FILE, ARCHIVE_DIR);
     console.log(`📦 ${backupResult.message}`);
     console.log('');
 

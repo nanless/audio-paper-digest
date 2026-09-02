@@ -31,12 +31,13 @@ arXiv + HuggingFace
 
 ## 5 分钟开始
 
-要求：Node `>=20.18.1 <21 || >=22.3.0`，Python 3，以及可用的 Hugo 博客仓库。
+要求：Node `>=20.18.1 <21 || >=22.3.0`、Python 3.11+（OpenSSL 后端），以及可用的 Hugo 博客仓库。
 
 ```bash
 # 1. 安装依赖
 npm install
-python3 -m pip install -r requirements.txt
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 
 # 2. 创建项目配置
 cp env.example .env
@@ -90,6 +91,8 @@ npm run digest:status -- --date "$today"
 | 续跑未完成分析 | `npm run deep -- --date YYYY-MM-DD` |
 | 刷新 API Reader | `npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader` |
 | 校验 current 数据 | `npm run validate:data` |
+| 查看运行数据占用 | `npm run storage:status` |
+| 预览引用感知清理 | `npm run storage:prune` |
 | 查看最终状态 | `npm run digest:status -- --date YYYY-MM-DD` |
 | 单独执行博客三阶段 | `npm run blog:generate` → `npm run blog:review` → `npm run blog:push` |
 | 用户明确取消视觉 | `npm run digest:waive-visuals -- --date YYYY-MM-DD --reason "..."` |
@@ -101,9 +104,9 @@ npm run digest:status -- --date "$today"
 ## 失败后从哪里继续
 
 - 抓取或筛选中断：直接重跑默认入口，健康 checkpoint 会复用。
-- 只有部分论文分析失败：运行 `npm run deep`，或按论文定向重分析。
-- 博客审查或推送失败：修复后从 `blog:review` 或 `blog:push` 继续。
-- 视觉任务缺失或失效：重新运行 `visual:post-publish`，不要重发博客。
+- 只有部分论文分析失败：运行 `npm run deep -- --date YYYY-MM-DD`，或按论文定向重分析。
+- 博客审查或推送失败：修复后运行 `npm run blog:review -- --date YYYY-MM-DD` 或 `npm run blog:push -- --date YYYY-MM-DD`。
+- 视觉任务缺失或失效：运行 `npm run visual:post-publish -- --date YYYY-MM-DD`，不要重发博客。
 - 不确定失败属于哪一层：先看[排错手册](docs/troubleshooting.md)和
   [主流程](docs/workflow.md)。
 
@@ -153,8 +156,10 @@ Prompt 或持久化契约前，请阅读[维护约定](docs/maintenance.md)。
 - [文档总览](docs/README.md)：按任务选择下一篇文档。
 - [安装与配置](docs/setup.md)：环境变量、代理、模型和博客仓库。
 - [默认主流程](docs/workflow.md)：归档、抓取、筛选、分析、发布和恢复。
+- [默认 API 架构](docs/architecture.md)：组件调用、单篇 DAG、锁和跨仓库事务。
 - [脚本说明](docs/scripts.md)：命令参数和运行语义。
 - [数据格式](docs/data-format.md)：checkpoint、canonical、receipt 和 manifest。
+- [契约兼容矩阵](docs/compatibility.md)：当前 writer、历史读取和 production 资格。
 - [排错手册](docs/troubleshooting.md)：API、代理、分析、发布和视觉问题。
 - [Manual 子系统](manual/README.md)：显式人工高保障路线。
 

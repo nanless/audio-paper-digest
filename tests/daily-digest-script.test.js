@@ -14,10 +14,10 @@ test('默认论文速递脚本保留 API、显式 Manual、博客三阶段和视
         'npm run manual:records -- --date "$target_date"',
         'npm run manual:spec -- --date "$target_date" --records "$records_v4"',
         'npm run manual:analyze -- --date "$target_date" --spec "$spec_v6"',
-        'python3 scripts/generate-blog.py --date "$target_date"',
-        'python3 scripts/review-blog.py --date "$target_date"',
-        'python3 scripts/push-blog.py --date "$target_date" --require-visual-plan',
-        'python3 scripts/plan-post-publish-visuals.py --date "$target_date"',
+        'bash scripts/python-runtime.sh scripts/generate-blog.py --date "$target_date"',
+        'bash scripts/python-runtime.sh scripts/review-blog.py --date "$target_date"',
+        'bash scripts/python-runtime.sh scripts/push-blog.py --date "$target_date" --require-visual-plan',
+        'bash scripts/python-runtime.sh scripts/plan-post-publish-visuals.py --date "$target_date"',
         'node scripts/visual-summary-state.js prepare --date "$target_date"'
     ];
     let previous = -1;
@@ -103,12 +103,16 @@ test('默认论文速递脚本在启动业务阶段前实际拒绝非法日期�
 test('push 续跑只由 push 规划一次，visual 续跑才直接调用独立规划器', () => {
     const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'daily-digest-path-'));
     const logPath = path.join(dir, 'commands.log');
-    for (const command of ['python3', 'node']) {
+    for (const command of ['python3.11', 'node']) {
         const fake = path.join(dir, command);
         fs.writeFileSync(fake, `#!/bin/sh\nprintf '%s %s\\n' '${command}' "$*" >> '${logPath}'\n`);
         fs.chmodSync(fake, 0o755);
     }
-    const env = { ...process.env, PATH: `${dir}:${process.env.PATH || ''}` };
+    const env = {
+        ...process.env,
+        PATH: `${dir}:${process.env.PATH || ''}`,
+        PD_PYTHON_RUNTIME_DISABLE_VENV: '1'
+    };
     delete env.CODEX_SANDBOX;
 
     let result = spawnSync('bash', [scriptPath, '2026-07-13', '--from', 'push'], {
@@ -116,7 +120,7 @@ test('push 续跑只由 push 规划一次，visual 续跑才直接调用独立�
     });
     assert.equal(result.status, 0, result.stderr);
     let commands = fs.readFileSync(logPath, 'utf8');
-    assert.match(commands, /python3 scripts\/push-blog\.py --date 2026-07-13 --require-visual-plan/);
+    assert.match(commands, /python3\.11 scripts\/push-blog\.py --date 2026-07-13 --require-visual-plan/);
     assert.doesNotMatch(commands, /plan-post-publish-visuals\.py/);
 
     fs.writeFileSync(logPath, '');
@@ -125,7 +129,7 @@ test('push 续跑只由 push 规划一次，visual 续跑才直接调用独立�
     });
     assert.equal(result.status, 0, result.stderr);
     commands = fs.readFileSync(logPath, 'utf8');
-    assert.match(commands, /python3 scripts\/plan-post-publish-visuals\.py --date 2026-07-13/);
+    assert.match(commands, /python3\.11 scripts\/plan-post-publish-visuals\.py --date 2026-07-13/);
     assert.doesNotMatch(commands, /push-blog\.py/);
 });
 

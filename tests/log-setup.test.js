@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const { redactLogText, formatTs, timestampLogLines } = require('../scripts/log-setup.js');
+const { redactLogText, formatTs, timestampLogLines, pruneLogFiles } = require('../scripts/log-setup.js');
 
 const ROOT = path.resolve(__dirname, '..');
 const LOGS_DIR = path.join(ROOT, 'logs');
@@ -40,6 +40,34 @@ function runLogger(base, envPath, lines = []) {
 }
 
 describe('log setup', () => {
+    it('按年龄和总容量删除最旧日志，但保留非日志文件与符号链接', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-log-prune-'));
+        const nowMs = Date.parse('2026-09-02T00:00:00Z');
+        try {
+            const files = [
+                ['expired.log', 6, nowMs - 40 * 86400000],
+                [`active-20260101-000000-${process.pid}-0.log`, 6, nowMs - 40 * 86400000],
+                ['older.log', 6, nowMs - 2 * 86400000],
+                ['newer.log', 6, nowMs - 86400000],
+                ['keep.txt', 20, nowMs - 90 * 86400000]
+            ];
+            for (const [name, size, mtimeMs] of files) {
+                const file = path.join(dir, name);
+                fs.writeFileSync(file, 'x'.repeat(size));
+                fs.utimesSync(file, mtimeMs / 1000, mtimeMs / 1000);
+            }
+            const result = pruneLogFiles(dir, {
+                nowMs, retentionDays: 30, maxTotalBytes: 12
+            });
+            assert.deepStrictEqual(result, { removed: 2, reclaimedBytes: 12 });
+            assert.deepStrictEqual(fs.readdirSync(dir).sort(), [
+                `active-20260101-000000-${process.pid}-0.log`, 'keep.txt', 'newer.log'
+            ]);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
     it('为每个非空物理日志行添加北京时间戳，分块写入不重复添加', () => {
         const state = { atLineStart: true };
         const first = timestampLogLines('first\nsecond', state);

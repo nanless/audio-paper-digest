@@ -23,10 +23,12 @@ load_project_env()
 import argparse
 import copy
 import difflib
+import html
 import json, re, sys, os, subprocess, datetime, base64, concurrent.futures, hashlib, math
-import ipaddress, shutil, socket, tempfile, stat, struct, zlib, unicodedata
+import ipaddress, shutil, socket, tempfile, stat, struct, zlib, unicodedata, time, signal
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 SHARED_SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -84,6 +86,8 @@ from markdown_hugo_gate import (
     load_frontmatter as _load_frontmatter_impl,
     validate_markdown_format_gate as _validate_markdown_format_gate_impl,
     validate_hugo_rendered_html_gate as _validate_hugo_rendered_html_gate_impl,
+    rendered_page_candidates as _rendered_page_candidates,
+    rendered_article_fragment as _rendered_article_fragment,
 )
 from sealed_tutorial_preview import load_sealed_tutorial_preview
 
@@ -132,6 +136,9 @@ LLM_API_READER_STRUCTURED_CONTRACTS = {
     'beginner-researcher-v2',
     LLM_API_READER_CONTRACT,
 }
+LLM_API_READER_SOURCE_BINDING_CONTRACT = 'api-reader-source-bindings-v4'
+LLM_API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1'
+LLM_API_READER_RESOURCE_IDENTITY_CONTRACT = 'api-reader-resource-identity-v1'
 LLM_API_SCORING_CONTRACT = 'api-scoring-audit-v2'
 LEGACY_V5_MAINTENANCE_MODE = 'legacy_v5_maintenance'
 SEALED_TUTORIAL_PREVIEW_MODE = 'sealed_tutorial_preview'
@@ -1000,6 +1007,14 @@ def llm_review_post(content, title="", required=False):
 
 REVIEW_IMAGE_MIME_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}
 REVIEW_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+REVIEW_IMAGE_DEADLINE_SECONDS = 120
+HUGO_GATE_TIMEOUT_SECONDS = 300
+HUGO_GATE_OUTPUT_TAIL_BYTES = 128 * 1024
+SUBPROCESS_SEMANTIC_OUTPUT_MAX_BYTES = 32 * 1024 * 1024
+GIT_LOCAL_TIMEOUT_SECONDS = 30
+GIT_COMMIT_TIMEOUT_SECONDS = 180
+GIT_NETWORK_TIMEOUT_SECONDS = 180
+VISUAL_PLANNER_TIMEOUT_SECONDS = 120
 
 
 def _validate_public_image_url(url):
@@ -1024,6 +1039,8 @@ def _response_peer_ip(response):
     """Extract the connected peer from requests/urllib3 without trusting DNS twice."""
     raw = getattr(response, 'raw', None)
     candidates = [
+        getattr(getattr(response, '_connection', None), 'sock', None),
+        getattr(getattr(response, 'connection', None), 'sock', None),
         getattr(getattr(raw, '_connection', None), 'sock', None),
         getattr(getattr(raw, 'connection', None), 'sock', None),
     ]
@@ -1037,7 +1054,7 @@ def _response_peer_ip(response):
             continue
         try:
             return str(ipaddress.ip_address(sock.getpeername()[0].split('%', 1)[0]))
-        except (AttributeError, OSError, ValueError):
+        except (AttributeError, OSError, TypeError, ValueError):
             continue
     raise PublishDataValidationError('无法验证图片 HTTPS 连接的实际 peer IP')
 
@@ -1058,6 +1075,119 @@ def _resolve_proxy_addresses(proxy):
         }
     except socket.gaierror as exc:
         raise PublishDataValidationError(f'图片 review 代理无法解析: {parsed.hostname}') from exc
+
+
+def _bounded_positive_seconds(env_name, default, minimum, maximum):
+    raw = str(os.environ.get(env_name, default)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = default
+    return min(maximum, max(minimum, value))
+
+
+def _remaining_deadline_seconds(deadline, label):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise PublishDataValidationError(f'{label}超过绝对截止时间')
+    return remaining
+
+
+def _pinned_https_url(parsed, address):
+    """Replace only the transport authority; Host and TLS SNI stay original."""
+    normalized = str(ipaddress.ip_address(address))
+    host = f'[{normalized}]' if ':' in normalized else normalized
+    if parsed.port and parsed.port != 443:
+        host = f'{host}:{parsed.port}'
+    return parsed._replace(netloc=host).geturl()
+
+
+def _read_pinned_review_image(current, resolved_addresses, proxy, proxy_addresses, deadline):
+    """Fetch one HTTPS hop through CONNECT pinned to a prevalidated public IP."""
+    import urllib3
+
+    parsed = urlparse(current)
+    target_address = sorted(
+        resolved_addresses,
+        key=lambda value: (ipaddress.ip_address(value).version, value),
+    )[0]
+    pinned_url = _pinned_https_url(parsed, target_address)
+    hostname = parsed.hostname.lower().rstrip('.')
+    manager = urllib3.ProxyManager(
+        proxy,
+        cert_reqs='CERT_REQUIRED',
+        assert_hostname=hostname,
+        server_hostname=hostname,
+        retries=False,
+    )
+    response = None
+    try:
+        remaining = _remaining_deadline_seconds(deadline, '图片下载')
+        response = manager.request(
+            'GET',
+            pinned_url,
+            headers={
+                'Host': parsed.netloc,
+                'User-Agent': 'audio-paper-digest/1.0',
+            },
+            redirect=False,
+            preload_content=False,
+            retries=False,
+            timeout=urllib3.Timeout(connect=min(30.0, remaining), read=min(30.0, remaining)),
+        )
+        _validate_response_peer_with_transport(
+            response, resolved_addresses, proxy_addresses,
+        )
+        status = int(response.status or 0)
+        headers = response.headers
+        if status in {301, 302, 303, 307, 308}:
+            return {
+                'status': status,
+                'location': headers.get('Location'),
+                'media_type': '',
+                'raw': b'',
+                'pinned_address': target_address,
+            }
+        if status < 200 or status >= 300:
+            raise PublishDataValidationError(f'图片下载 HTTP {status}')
+        media_type = str(headers.get('Content-Type') or '').split(';', 1)[0].lower()
+        if media_type not in REVIEW_IMAGE_MIME_TYPES:
+            raise PublishDataValidationError(f'图片 MIME 不受支持: {media_type or "unknown"}')
+        declared_size = headers.get('Content-Length')
+        if declared_size:
+            try:
+                if int(declared_size) > REVIEW_IMAGE_MAX_BYTES:
+                    raise PublishDataValidationError('图片超过 8 MiB review 上限')
+            except ValueError as exc:
+                raise PublishDataValidationError('图片 Content-Length 非法') from exc
+        chunks = []
+        size = 0
+        while True:
+            remaining = _remaining_deadline_seconds(deadline, '图片下载')
+            connection = getattr(response, 'connection', None) \
+                or getattr(response, '_connection', None)
+            sock = getattr(connection, 'sock', None)
+            if sock is not None:
+                sock.settimeout(min(30.0, remaining))
+            chunk = response.read(65536)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > REVIEW_IMAGE_MAX_BYTES:
+                raise PublishDataValidationError('图片超过 8 MiB review 上限')
+            chunks.append(chunk)
+        return {
+            'status': status,
+            'location': None,
+            'media_type': media_type,
+            'raw': b''.join(chunks),
+            'pinned_address': target_address,
+        }
+    finally:
+        if response is not None:
+            response.close()
+            response.release_conn()
+        manager.clear()
 
 
 def _validate_response_peer_with_transport(response, resolved_addresses, proxy_addresses=None):
@@ -1081,61 +1211,40 @@ def _validate_response_peer_with_transport(response, resolved_addresses, proxy_a
 
 
 def _download_review_image(url):
-    """Download a public image with redirect, MIME, and size validation."""
-    import requests
-
-    session = requests.Session()
-    session.trust_env = False
+    """Download through CONNECT pinned to the locally prevalidated public IP."""
     proxy = get_required_fetch_proxy()
     proxy_addresses = _resolve_proxy_addresses(proxy)
-    session.proxies.update({'http': proxy, 'https': proxy})
+    deadline_seconds = _bounded_positive_seconds(
+        'PD_BLOG_IMAGE_REVIEW_DEADLINE_SECONDS',
+        REVIEW_IMAGE_DEADLINE_SECONDS, 10, 300,
+    )
+    deadline = time.monotonic() + deadline_seconds
     try:
         current = url
         for _redirect in range(4):
             resolved_addresses = _validate_public_image_url(current)
-            response = session.get(current, timeout=30, stream=True, allow_redirects=False)
-            try:
-                _validate_response_peer_with_transport(response, resolved_addresses, proxy_addresses)
-                if response.status_code in {301, 302, 303, 307, 308}:
-                    location = response.headers.get('Location')
-                    if not location:
-                        raise PublishDataValidationError('图片重定向缺少 Location')
-                    from urllib.parse import urljoin
-                    current = urljoin(current, location)
-                    continue
-                response.raise_for_status()
-                media_type = response.headers.get('Content-Type', '').split(';', 1)[0].lower()
-                if media_type not in REVIEW_IMAGE_MIME_TYPES:
-                    raise PublishDataValidationError(f'图片 MIME 不受支持: {media_type or "unknown"}')
-                declared_size = response.headers.get('Content-Length')
-                if declared_size and int(declared_size) > REVIEW_IMAGE_MAX_BYTES:
-                    raise PublishDataValidationError('图片超过 8 MiB review 上限')
-                chunks = []
-                size = 0
-                for chunk in response.iter_content(65536):
-                    if not chunk:
-                        continue
-                    size += len(chunk)
-                    if size > REVIEW_IMAGE_MAX_BYTES:
-                        raise PublishDataValidationError('图片超过 8 MiB review 上限')
-                    chunks.append(chunk)
-                raw = b''.join(chunks)
-                _validate_image_signature(media_type, raw)
-                return {
-                    'media_type': media_type,
-                    'data': base64.b64encode(raw).decode('ascii'),
-                }
-            finally:
-                close = getattr(response, 'close', None)
-                if callable(close):
-                    close()
+            result = _read_pinned_review_image(
+                current, resolved_addresses, proxy, proxy_addresses, deadline,
+            )
+            if result['status'] in {301, 302, 303, 307, 308}:
+                location = result['location']
+                if not location:
+                    raise PublishDataValidationError('图片重定向缺少 Location')
+                from urllib.parse import urljoin
+                current = urljoin(current, location)
+                continue
+            raw = result['raw']
+            media_type = result['media_type']
+            _validate_image_signature(media_type, raw)
+            return {
+                'media_type': media_type,
+                'data': base64.b64encode(raw).decode('ascii'),
+            }
         raise PublishDataValidationError('图片重定向次数过多')
     except PublishDataValidationError:
         raise
-    except (requests.RequestException, OSError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         raise PublishDataValidationError(f'图片下载失败: {exc}') from exc
-    finally:
-        session.close()
 
 
 def _validate_image_signature(media_type, raw):
@@ -2703,6 +2812,7 @@ def _manual_v6_reader_payload(paper):
     """Return the strict canonical v6 rendering payload, never a fallback."""
     manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
     contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
+    contracts = contracts if isinstance(contracts, dict) else {}
     if not isinstance(contracts, dict) \
             or contracts.get('manualDepth') != MANUAL_DEPTH_CONTRACT_VERSION_V6:
         return None
@@ -2721,6 +2831,495 @@ def _api_reader_article_image_urls(article):
         r'!\[(?:\\.|[^\]\\])*\]\((https://[^\s)]+)\)',
         article,
     )
+
+
+def _api_reader_markdown_tables(article):
+    """Replay Node's table extractor while preserving the exact hashed bytes."""
+    lines = str(article or '').split('\n')
+    fence = None
+    visible_lines = []
+    for line in lines:
+        match = re.match(r'^\s*(`{3,}|~{3,})', line)
+        if fence is None:
+            if match:
+                fence = (match.group(1)[0], len(match.group(1)))
+                visible_lines.append('')
+            else:
+                visible_lines.append(line)
+            continue
+        if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= fence[1]:
+            fence = None
+        visible_lines.append('')
+
+    def separator(row):
+        cells = split_markdown_table_row(row)
+        return len(cells) >= 2 and all(
+            re.fullmatch(r':?-{3,}:?', re.sub(r'\s+', '', cell))
+            for cell in cells
+        )
+
+    tables = []
+    index = 0
+    while index + 1 < len(visible_lines):
+        header = split_markdown_table_row(visible_lines[index])
+        if len(header) < 2 or not separator(visible_lines[index + 1]):
+            index += 1
+            continue
+        end = index + 2
+        rows = []
+        while end < len(visible_lines):
+            line = visible_lines[end]
+            cells = split_markdown_table_row(line)
+            if not line.strip():
+                break
+            if len(cells) < 2 and not re.fullmatch(r'\s*\|.*\|\s*', line):
+                break
+            rows.append(cells)
+            end += 1
+        tables.append({
+            'header': header,
+            'rows': rows,
+            'markdown': '\n'.join(visible_lines[index:end]),
+        })
+        index = max(end, index + 2)
+    return tables
+
+
+def _normalize_api_reader_source_cell(value):
+    value = unicodedata.normalize('NFKC', str(value or ''))
+    value = re.sub(r'<br\s*/?>', ' ', value, flags=re.IGNORECASE)
+    value = re.sub(r'[*_`]', '', value).replace('％', '%')
+    return re.sub(r'\s+', ' ', value).strip()
+
+
+def _api_reader_numeric_tokens(value):
+    pattern = re.compile(
+        r'(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?'
+        r'(?:\s*%|\s*(?:dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp))?',
+        flags=re.IGNORECASE,
+    )
+    return [re.sub(r'\s+', '', match.group(0)).lower()
+            for match in pattern.finditer(unicodedata.normalize('NFKC', str(value or '')))]
+
+
+def _validate_api_reader_source_bindings(paper, article=None):
+    """Deterministically replay the sealed API-reader v4 source bindings."""
+    manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
+    contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
+    contracts = contracts if isinstance(contracts, dict) else {}
+    stage = (manifest.get('stages') or {}).get('apiReaderArticle') \
+        if isinstance(manifest, dict) else None
+    stage = stage if isinstance(stage, dict) else {}
+    source = manifest.get('sourceAcquisition') if isinstance(manifest, dict) else None
+    plan = paper.get('apiReaderPlan') if isinstance(paper, dict) else None
+    article = paper.get('apiReaderArticle') if article is None and isinstance(paper, dict) else article
+    if not isinstance(plan, dict) or not isinstance(stage, dict) \
+            or not isinstance(source, dict) or not isinstance(article, str):
+        raise PublishDataValidationError('API reader source-binding v4 缺少 plan/stage/source/article')
+    if contracts.get('apiReaderSourceBindings') != LLM_API_READER_SOURCE_BINDING_CONTRACT \
+            or plan.get('sourceBindingsContract') != LLM_API_READER_SOURCE_BINDING_CONTRACT \
+            or stage.get('sourceBindingsContractVersion') != LLM_API_READER_SOURCE_BINDING_CONTRACT:
+        raise PublishDataValidationError('API reader source-binding contract/version 不是 v4')
+
+    table_bindings = plan.get('tableBindings')
+    formula_bindings = plan.get('formulaBindings')
+    if not isinstance(table_bindings, list) or not isinstance(formula_bindings, list):
+        raise PublishDataValidationError('API reader source-binding v4 缺少表格或公式绑定数组')
+    bindings_sha = _stable_json_sha256({
+        'tableBindings': table_bindings,
+        'formulaBindings': formula_bindings,
+    })
+    source_sha = source.get('sourceSha256')
+    structured_sha = source.get('structuredArtifactsSha256')
+    if plan.get('sourceBindingsSha256') != bindings_sha \
+            or stage.get('sourceBindingsSha256') != bindings_sha:
+        raise PublishDataValidationError('API reader sourceBindingsSha256 无法重放')
+    if not re.fullmatch(r'[0-9a-f]{64}', str(source_sha or '')) \
+            or paper.get('sourceSha256') != source_sha \
+            or stage.get('sourceBindingsSourceTextSha256') != source_sha:
+        raise PublishDataValidationError('API reader source-binding 全文 SHA 未闭环')
+    if not re.fullmatch(r'[0-9a-f]{64}', str(structured_sha or '')) \
+            or stage.get('structuredArtifactsSha256') != structured_sha:
+        raise PublishDataValidationError('API reader structuredArtifacts SHA 未闭环')
+    if stage.get('tableBindingCount') != len(table_bindings) \
+            or stage.get('formulaBindingCount') != len(formula_bindings):
+        raise PublishDataValidationError('API reader source-binding 数量与 stage 不一致')
+
+    rendered_tables = _api_reader_markdown_tables(article)
+    if len(rendered_tables) != len(table_bindings):
+        raise PublishDataValidationError('API reader 正文表格数量与 source binding 不一致')
+    for index, (binding, rendered) in enumerate(zip(table_bindings, rendered_tables), 1):
+        required = {
+            'tableIndex', 'sourceType', 'sourceTableOrdinal',
+            'renderedTableSha256', 'cellBindings', 'sourceQuotes',
+        }
+        if not isinstance(binding, dict) or set(binding) not in (required, required | {'sourceTableDomSha256'}):
+            raise PublishDataValidationError(f'API reader tableBindings[{index - 1}] 字段非法')
+        if binding.get('tableIndex') != index \
+                or binding.get('renderedTableSha256') != hashlib.sha256(
+                    rendered['markdown'].encode('utf-8')
+                ).hexdigest():
+            raise PublishDataValidationError(f'API reader 第 {index} 个表格渲染 SHA 漂移')
+        rendered_rows = [rendered['header'], *rendered['rows']]
+        if binding.get('sourceType') == 'artifact_table':
+            if set(binding) != required | {'sourceTableDomSha256'} \
+                    or not isinstance(binding.get('sourceTableOrdinal'), int) \
+                    or isinstance(binding.get('sourceTableOrdinal'), bool) \
+                    or binding['sourceTableOrdinal'] < 1 \
+                    or not re.fullmatch(r'[0-9a-f]{64}', str(binding.get('sourceTableDomSha256') or '')) \
+                    or binding.get('sourceQuotes') != [] \
+                    or not isinstance(binding.get('cellBindings'), list):
+                raise PublishDataValidationError(f'API reader 第 {index} 个 artifact table 来源绑定非法')
+            expected_cells = sum(len(row) for row in rendered_rows)
+            if len(binding['cellBindings']) != expected_cells:
+                raise PublishDataValidationError(f'API reader 第 {index} 个表格没有逐格绑定')
+            seen = set()
+            for cell_index, cell in enumerate(binding['cellBindings']):
+                cell_keys = {
+                    'renderedRow', 'renderedColumn', 'sourceRow', 'sourceColumn',
+                    'renderedText', 'sourceText', 'sourceDomSha256',
+                }
+                if not isinstance(cell, dict) or set(cell) != cell_keys:
+                    raise PublishDataValidationError(
+                        f'API reader 第 {index} 个表格 cellBindings[{cell_index}] 字段非法'
+                    )
+                coordinates = [cell.get(key) for key in (
+                    'renderedRow', 'renderedColumn', 'sourceRow', 'sourceColumn',
+                )]
+                if any(not isinstance(value, int) or isinstance(value, bool) or value < 0
+                       for value in coordinates):
+                    raise PublishDataValidationError(f'API reader 第 {index} 个表格单元格坐标非法')
+                rendered_row, rendered_column = coordinates[:2]
+                key = (rendered_row, rendered_column)
+                if key in seen or rendered_row >= len(rendered_rows) \
+                        or rendered_column >= len(rendered_rows[rendered_row]):
+                    raise PublishDataValidationError(f'API reader 第 {index} 个表格单元格覆盖非法')
+                actual_text = rendered_rows[rendered_row][rendered_column]
+                if cell.get('renderedText') != actual_text \
+                        or _normalize_api_reader_source_cell(actual_text) \
+                        != _normalize_api_reader_source_cell(cell.get('sourceText')) \
+                        or not re.fullmatch(r'[0-9a-f]{64}', str(cell.get('sourceDomSha256') or '')):
+                    raise PublishDataValidationError(f'API reader 第 {index} 个表格单元格来源漂移')
+                seen.add(key)
+            if len(seen) != expected_cells:
+                raise PublishDataValidationError(f'API reader 第 {index} 个表格逐格覆盖不完整')
+        elif binding.get('sourceType') == 'source_quotes':
+            if set(binding) != required or binding.get('sourceTableOrdinal') is not None \
+                    or binding.get('cellBindings') != [] \
+                    or not isinstance(binding.get('sourceQuotes'), list) \
+                    or not binding['sourceQuotes']:
+                raise PublishDataValidationError(f'API reader 第 {index} 个 source_quotes 绑定非法')
+            quote_corpus = []
+            for quote_index, quote_binding in enumerate(binding['sourceQuotes']):
+                if not isinstance(quote_binding, dict) \
+                        or set(quote_binding) != {'quote', 'sourceQuoteSha256'} \
+                        or not isinstance(quote_binding.get('quote'), str) \
+                        or not 12 <= len(quote_binding['quote']) <= 4000 \
+                        or quote_binding.get('sourceQuoteSha256') != hashlib.sha256(
+                            quote_binding['quote'].encode('utf-8')
+                        ).hexdigest():
+                    raise PublishDataValidationError(
+                        f'API reader 第 {index} 个表格 sourceQuotes[{quote_index}] 非法'
+                    )
+                quote_corpus.append(quote_binding['quote'])
+            quote_tokens = set(_api_reader_numeric_tokens('\n'.join(quote_corpus)))
+            missing = set(_api_reader_numeric_tokens(rendered['markdown'])) - quote_tokens
+            if missing:
+                raise PublishDataValidationError(
+                    f'API reader 第 {index} 个表格数字缺少来源 quote: {sorted(missing)}'
+                )
+        else:
+            raise PublishDataValidationError(f'API reader 第 {index} 个表格 sourceType 非法')
+
+    display_blocks = re.findall(r'\\\[[\s\S]*?\\\]', article)
+    if len(display_blocks) != len(formula_bindings):
+        raise PublishDataValidationError('API reader 正文展示公式数量与 source binding 不一致')
+    seen_ordinals = set()
+    for index, binding in enumerate(formula_bindings):
+        expected_keys = {
+            'formulaOrdinal', 'targetKind', 'marker', 'latex',
+            'sourceDomSha256', 'renderedBlockSha256',
+        }
+        if not isinstance(binding, dict) or set(binding) != expected_keys:
+            raise PublishDataValidationError(f'API reader formulaBindings[{index}] 字段非法')
+        ordinal = binding.get('formulaOrdinal')
+        latex = binding.get('latex')
+        rendered_block = f'\\[{str(latex or "").strip()}\\]'
+        if not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 1 \
+                or ordinal in seen_ordinals \
+                or binding.get('marker') != f'[[FORMULA_{ordinal}]]' \
+                or binding.get('targetKind') not in (
+                    'background', 'related_work', 'problem', 'method_overview',
+                    'component', 'training', 'experiment_setup', 'result',
+                    'ablation', 'limitation', 'reproduction', 'synthesis',
+                ) \
+                or not isinstance(latex, str) or not latex.strip() \
+                or not re.fullmatch(r'[0-9a-f]{64}', str(binding.get('sourceDomSha256') or '')) \
+                or binding.get('renderedBlockSha256') != hashlib.sha256(
+                    rendered_block.encode('utf-8')
+                ).hexdigest() \
+                or display_blocks.count(rendered_block) != 1 \
+                or binding['marker'] in article:
+            raise PublishDataValidationError(f'API reader 第 {index + 1} 个公式来源/渲染绑定非法')
+        seen_ordinals.add(ordinal)
+    return {
+        'contract': LLM_API_READER_SOURCE_BINDING_CONTRACT,
+        'sha256': bindings_sha,
+        'tableCount': len(table_bindings),
+        'formulaCount': len(formula_bindings),
+        'structuredArtifactsSha256': structured_sha,
+    }
+
+
+def _validate_api_reader_author_identity(paper):
+    manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
+    contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
+    contracts = contracts if isinstance(contracts, dict) else {}
+    stage = (manifest.get('stages') or {}).get('apiReaderArticle') \
+        if isinstance(manifest, dict) else None
+    payload = paper.get('apiReaderAuthors') if isinstance(paper, dict) else None
+    if not isinstance(payload, dict) or set(payload) != {
+            'authors', 'sourceDomSha256', 'identity', 'identitySha256'}:
+        raise PublishDataValidationError('API reader author identity 顶层字段非法')
+    identity = payload.get('identity')
+    if not isinstance(identity, dict) or set(identity) != {
+            'contract', 'sourceDomSha256', 'sourceTextSha256',
+            'metadataSha256', 'authors'}:
+        raise PublishDataValidationError('API reader author identity 字段非法')
+    identity_sha = _stable_json_sha256(identity)
+    source_sha = paper.get('sourceSha256')
+    metadata_sha = _stable_json_sha256(
+        paper.get('authors') if isinstance(paper.get('authors'), list) else []
+    )
+    if identity.get('contract') != LLM_API_READER_AUTHOR_IDENTITY_CONTRACT \
+            or contracts.get('apiReaderAuthorIdentity') \
+            != LLM_API_READER_AUTHOR_IDENTITY_CONTRACT \
+            or stage.get('readerAuthorIdentityContractVersion') \
+            != LLM_API_READER_AUTHOR_IDENTITY_CONTRACT \
+            or payload.get('identitySha256') != identity_sha \
+            or stage.get('readerAuthorIdentitySha256') != identity_sha \
+            or identity.get('sourceTextSha256') != source_sha \
+            or identity.get('metadataSha256') != metadata_sha:
+        raise PublishDataValidationError('API reader author identity contract/SHA 未闭环')
+    source_dom_sha = identity.get('sourceDomSha256')
+    if source_dom_sha != '' and not re.fullmatch(r'[0-9a-f]{64}', str(source_dom_sha or '')):
+        raise PublishDataValidationError('API reader author identity source DOM SHA 非法')
+    if not re.fullmatch(r'[0-9a-f]{64}', str(payload.get('sourceDomSha256') or '')):
+        raise PublishDataValidationError('API reader author payload source DOM SHA 非法')
+    public_authors = payload.get('authors')
+    bound_authors = identity.get('authors')
+    if not isinstance(public_authors, list) or not isinstance(bound_authors, list) \
+            or not public_authors or len(public_authors) != len(bound_authors):
+        raise PublishDataValidationError('API reader author identity 作者集合为空或不一致')
+    for index, (author, bound) in enumerate(zip(public_authors, bound_authors)):
+        if not isinstance(author, dict) or set(author) != {'name', 'affiliations'} \
+                or not isinstance(bound, dict) or set(bound) != {
+                    'name', 'affiliations', 'nameBinding', 'affiliationBindings'} \
+                or bound.get('name') != author.get('name') \
+                or bound.get('affiliations') != author.get('affiliations') \
+                or not isinstance(author.get('name'), str) or not author['name'].strip() \
+                or not isinstance(author.get('affiliations'), list) \
+                or not author['affiliations']:
+            raise PublishDataValidationError(f'API reader 第 {index + 1} 位作者 identity 不一致')
+        if not all(isinstance(value, str) and value.strip()
+                   for value in author['affiliations']):
+            raise PublishDataValidationError(f'API reader 第 {index + 1} 位作者机构非法')
+        name_binding = bound.get('nameBinding')
+        if not isinstance(name_binding, dict) \
+                or name_binding.get('sourceValue') != author['name']:
+            raise PublishDataValidationError(f'API reader 第 {index + 1} 位作者姓名绑定非法')
+        if name_binding.get('sourceKind') == 'html_dom':
+            if set(name_binding) != {'sourceKind', 'sourceValue', 'sourceDomSha256'} \
+                    or not source_dom_sha \
+                    or name_binding.get('sourceDomSha256') != source_dom_sha:
+                raise PublishDataValidationError(f'API reader 第 {index + 1} 位作者 DOM 姓名绑定非法')
+        elif name_binding.get('sourceKind') == 'paper_metadata':
+            if set(name_binding) != {'sourceKind', 'sourceValue', 'metadataSha256'} \
+                    or name_binding.get('metadataSha256') != metadata_sha:
+                raise PublishDataValidationError(f'API reader 第 {index + 1} 位作者 metadata 姓名绑定非法')
+        else:
+            raise PublishDataValidationError(f'API reader 第 {index + 1} 位作者 name sourceKind 非法')
+        affiliation_bindings = bound.get('affiliationBindings')
+        if not isinstance(affiliation_bindings, list) \
+                or len(affiliation_bindings) != len(author['affiliations']):
+            raise PublishDataValidationError(f'API reader 第 {index + 1} 位作者机构绑定数量非法')
+        for affiliation_index, (affiliation, binding) in enumerate(zip(
+                author['affiliations'], affiliation_bindings)):
+            if not isinstance(binding, dict) or binding.get('sourceValue') != affiliation:
+                raise PublishDataValidationError(
+                    f'API reader 第 {index + 1} 位作者第 {affiliation_index + 1} 个机构绑定非法'
+                )
+            if binding.get('sourceKind') == 'html_dom':
+                if set(binding) != {
+                        'sourceKind', 'association', 'sourceValue', 'sourceDomSha256'} \
+                        or binding.get('association') not in {
+                            'direct_author', 'single_global_affiliation'} \
+                        or not source_dom_sha \
+                        or binding.get('sourceDomSha256') != source_dom_sha:
+                    raise PublishDataValidationError('API reader 作者机构 DOM binding 非法')
+            elif binding.get('sourceKind') == 'explicit_unavailable':
+                if set(binding) != {
+                        'sourceKind', 'sourceValue', 'sourceTextSha256'} \
+                        or not affiliation.startswith('机构信息未') \
+                        or binding.get('sourceTextSha256') != source_sha:
+                    raise PublishDataValidationError('API reader 作者机构 unavailable binding 非法')
+            else:
+                raise PublishDataValidationError('API reader 作者机构 sourceKind 非法')
+    if stage.get('readerAuthorsSha256') != _stable_json_sha256(payload):
+        raise PublishDataValidationError('API reader author payload SHA 与 stage 不一致')
+    return {
+        'contract': LLM_API_READER_AUTHOR_IDENTITY_CONTRACT,
+        'sha256': identity_sha,
+        'payloadSha256': _stable_json_sha256(payload),
+        'count': len(public_authors),
+        'authors': public_authors,
+    }
+
+
+def _validated_https_identity_url(value, label):
+    try:
+        parsed = urlparse(value)
+    except (TypeError, ValueError) as exc:
+        raise PublishDataValidationError(f'{label} URL 非法') from exc
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+        raise PublishDataValidationError(f'{label} 必须是无凭据 HTTPS URL')
+    return value
+
+
+def _validate_api_reader_resource_identity(paper):
+    manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
+    contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
+    contracts = contracts if isinstance(contracts, dict) else {}
+    stages = manifest.get('stages') if isinstance(manifest, dict) else None
+    reader_stage = stages.get('apiReaderArticle') if isinstance(stages, dict) else None
+    reader_stage = reader_stage if isinstance(reader_stage, dict) else {}
+    open_stage = stages.get('openSourceScan') if isinstance(stages, dict) else None
+    open_stage = open_stage if isinstance(open_stage, dict) else {}
+    demo_stage = stages.get('demoLinkScan') if isinstance(stages, dict) else None
+    payload = paper.get('apiReaderResources') if isinstance(paper, dict) else None
+    if not isinstance(payload, dict) or set(payload) != {
+            'contract', 'sourceTextSha256', 'resources', 'identitySha256'}:
+        raise PublishDataValidationError('API reader resource identity 顶层字段非法')
+    identity = {key: value for key, value in payload.items() if key != 'identitySha256'}
+    identity_sha = _stable_json_sha256(identity)
+    if payload.get('contract') != LLM_API_READER_RESOURCE_IDENTITY_CONTRACT \
+            or contracts.get('apiReaderResourceIdentity') \
+            != LLM_API_READER_RESOURCE_IDENTITY_CONTRACT \
+            or reader_stage.get('resourceIdentityContractVersion') \
+            != LLM_API_READER_RESOURCE_IDENTITY_CONTRACT \
+            or open_stage.get('resourceEvidenceContract') \
+            != LLM_API_READER_RESOURCE_IDENTITY_CONTRACT \
+            or payload.get('identitySha256') != identity_sha \
+            or reader_stage.get('resourceIdentitySha256') != identity_sha \
+            or open_stage.get('resourceEvidenceSha256') != identity_sha \
+            or payload.get('sourceTextSha256') != paper.get('sourceSha256'):
+        raise PublishDataValidationError('API reader resource identity contract/SHA 未闭环')
+    resources = payload.get('resources')
+    if not isinstance(resources, list) or len(resources) > 12 \
+            or reader_stage.get('resourceCount') != len(resources):
+        raise PublishDataValidationError('API reader resource identity 数量非法')
+    discovered_links = demo_stage.get('discoveredLinks') if isinstance(demo_stage, dict) else []
+    allowed_types = {'code', 'model', 'dataset', 'demo', 'reproduction', 'third_party'}
+    available_types = set()
+    for index, resource in enumerate(resources):
+        required = {
+            'type', 'origin', 'sourceQuote', 'sourceQuoteSha256',
+            'originalUrl', 'finalUrl', 'redirects', 'status', 'availability',
+        }
+        allowed = required | {'retryable', 'failureCode'}
+        if not isinstance(resource, dict) or not required.issubset(resource) \
+                or not set(resource).issubset(allowed):
+            raise PublishDataValidationError(f'API reader resources[{index}] 字段非法')
+        if resource.get('type') not in allowed_types \
+                or resource.get('origin') not in {'paper_source', 'validated_demo'}:
+            raise PublishDataValidationError(f'API reader resources[{index}] 类型或来源非法')
+        original_url = _validated_https_identity_url(
+            resource.get('originalUrl'), f'API reader resources[{index}].originalUrl',
+        )
+        final_url = _validated_https_identity_url(
+            resource.get('finalUrl'), f'API reader resources[{index}].finalUrl',
+        )
+        source_quote = resource.get('sourceQuote')
+        if not isinstance(source_quote, str) or not source_quote.strip() \
+                or original_url not in source_quote \
+                or resource.get('sourceQuoteSha256') != hashlib.sha256(
+                    source_quote.encode('utf-8')
+                ).hexdigest():
+            raise PublishDataValidationError(f'API reader resources[{index}] sourceQuote SHA/URL 非法')
+        if resource['origin'] == 'validated_demo' \
+                and original_url not in (discovered_links or []):
+            raise PublishDataValidationError(f'API reader resources[{index}] Demo 来源未绑定发现记录')
+        redirects = resource.get('redirects')
+        if not isinstance(redirects, list) or len(redirects) > 3:
+            raise PublishDataValidationError(f'API reader resources[{index}] 重定向链非法')
+        expected_from = original_url
+        for redirect_index, redirect in enumerate(redirects):
+            if not isinstance(redirect, dict) or set(redirect) != {'from', 'to', 'status'} \
+                    or redirect.get('from') != expected_from \
+                    or redirect.get('status') not in {301, 302, 303, 307, 308}:
+                raise PublishDataValidationError(
+                    f'API reader resources[{index}] redirects[{redirect_index}] 非法'
+                )
+            _validated_https_identity_url(redirect.get('from'), 'resource redirect.from')
+            expected_from = _validated_https_identity_url(
+                redirect.get('to'), 'resource redirect.to',
+            )
+        if expected_from != final_url:
+            raise PublishDataValidationError(f'API reader resources[{index}] 重定向终点不一致')
+        availability = resource.get('availability')
+        status = resource.get('status')
+        if isinstance(status, bool) or (status is not None and not isinstance(status, int)):
+            raise PublishDataValidationError(f'API reader resources[{index}] HTTP status 非法')
+        retryable = resource.get('retryable')
+        if retryable is not None and not isinstance(retryable, bool):
+            raise PublishDataValidationError(f'API reader resources[{index}] retryable 非法')
+        if availability == 'available':
+            valid_terminal = status is not None and 200 <= status < 400 and retryable in {None, False}
+            available_types.add(resource['type'])
+        elif availability == 'unavailable':
+            valid_terminal = status is not None and 400 <= status < 500 \
+                and status not in {408, 425, 429} and retryable in {None, False}
+        elif availability == 'temporarily_unreachable':
+            valid_terminal = retryable is True and (
+                status is None or status in {408, 425, 429} or status >= 500
+            )
+        else:
+            valid_terminal = False
+        if not valid_terminal:
+            raise PublishDataValidationError(f'API reader resources[{index}] 可用性/status 语义非法')
+        failure_code = resource.get('failureCode')
+        if failure_code is not None and (
+                availability != 'temporarily_unreachable' or status is not None
+                or not isinstance(failure_code, str) or not failure_code.strip()
+                or len(failure_code) > 100):
+            raise PublishDataValidationError(f'API reader resources[{index}] failureCode 非法')
+
+    parsed_analysis = parse_analysis(paper.get('analysis', '')) or {}
+    for field, resource_type in (
+            ('hasCode', 'code'), ('hasModel', 'model'), ('hasDataset', 'dataset')):
+        expected_yes = resource_type in available_types
+        actual_yes = str(parsed_analysis.get(field) or '').strip().lower() in {'是', 'yes'}
+        if actual_yes != expected_yes:
+            raise PublishDataValidationError(
+                f'API reader resource identity 与机器摘要 {field} 可用性不一致'
+            )
+    availability_summary = (
+        '未发现可验证的官方 HTTPS 资源 URL。' if not resources else
+        '；'.join(
+            f'{resource["type"]}={resource["availability"]}'
+            + ('' if resource['status'] is None else f'(HTTP {resource["status"]})')
+            for resource in resources
+        )
+    )
+    if availability_summary not in str(parsed_analysis.get('opensource') or ''):
+        raise PublishDataValidationError('API reader 开源详情缺少密封资源可达性摘要')
+    return {
+        'contract': LLM_API_READER_RESOURCE_IDENTITY_CONTRACT,
+        'sha256': identity_sha,
+        'count': len(resources),
+        'availableTypes': sorted(available_types),
+        'resources': resources,
+    }
 
 
 def _api_reader_payload(paper):
@@ -2754,6 +3353,18 @@ def _api_reader_payload(paper):
     if plan_version not in expected_plan_versions.get(reader_contract, set()) \
             or plan.get('contract') != reader_contract:
         raise PublishDataValidationError('API reader plan 版本或契约非法')
+    source_binding_proof = (
+        _validate_api_reader_source_bindings(paper)
+        if reader_contract == LLM_API_READER_CONTRACT else None
+    )
+    author_identity_proof = (
+        _validate_api_reader_author_identity(paper)
+        if reader_contract == LLM_API_READER_CONTRACT else None
+    )
+    resource_identity_proof = (
+        _validate_api_reader_resource_identity(paper)
+        if reader_contract == LLM_API_READER_CONTRACT else None
+    )
     if not isinstance(plan.get('readerTitle'), str) \
             or not isinstance(plan.get('oneSentenceThesis'), str):
         raise PublishDataValidationError('API reader plan 缺少读者标题或一句话主线')
@@ -2808,7 +3419,7 @@ def _api_reader_payload(paper):
         if not isinstance(concept_bridges, list) \
                 or not minimum_bridges <= len(concept_bridges) <= maximum_bridges \
                 or not isinstance(figure_placements, list) \
-                or len(figure_placements) > 8:
+                or len(figure_placements) > 4:
             raise PublishDataValidationError(
                 f'API reader v{plan_version} plan 缺少术语桥或 Figure marker 计划'
             )
@@ -2968,8 +3579,13 @@ def _api_reader_payload(paper):
                 'sha256': item['assetSha256'],
             })
         reader_authors = paper.get('apiReaderAuthors')
+        expected_author_fields = (
+            {'authors', 'sourceDomSha256', 'identity', 'identitySha256'}
+            if reader_contract == LLM_API_READER_CONTRACT else
+            {'authors', 'sourceDomSha256'}
+        )
         if not isinstance(reader_authors, dict) \
-                or set(reader_authors) != {'authors', 'sourceDomSha256'} \
+                or set(reader_authors) != expected_author_fields \
                 or not isinstance(reader_authors.get('authors'), list) \
                 or not re.fullmatch(
                     r'[0-9a-f]{64}', str(reader_authors.get('sourceDomSha256') or '')
@@ -3004,7 +3620,157 @@ def _api_reader_payload(paper):
         'figures': figures,
         'assets': figure_assets,
         'readerAuthors': reader_authors,
+        'sourceBindingProof': source_binding_proof,
+        'authorIdentityProof': author_identity_proof,
+        'resourceIdentityProof': resource_identity_proof,
     }
+
+
+def _api_reader_page_binding_issue(content, paper):
+    """Bind the final page's actual reader tables/formulas back to canonical v4."""
+    if not isinstance(paper, dict):
+        return None
+    manifest = paper.get('analysisManifest')
+    contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
+    if not isinstance(contracts, dict) \
+            or contracts.get('apiReaderArticle') != LLM_API_READER_CONTRACT:
+        return None
+    try:
+        payload = _api_reader_payload(paper)
+        proof = payload.get('sourceBindingProof') if isinstance(payload, dict) else None
+        author_proof = payload.get('authorIdentityProof') if isinstance(payload, dict) else None
+        resource_proof = payload.get('resourceIdentityProof') if isinstance(payload, dict) else None
+        if not isinstance(proof, dict):
+            raise PublishDataValidationError('API reader 页面缺少 source-binding v4 proof')
+        if not isinstance(author_proof, dict) or not isinstance(resource_proof, dict):
+            raise PublishDataValidationError('API reader 页面缺少 author/resource identity proof')
+        def frontmatter_value(field, pattern):
+            match = re.search(
+                rf'^{re.escape(field)}:\s*{pattern}\s*$', content, flags=re.MULTILINE,
+            )
+            return match.group(1) if match else None
+
+        marker_contract = re.search(
+            r'^paper_digest_api_reader_source_binding_contract:\s*"([^"]+)"\s*$',
+            content, flags=re.MULTILINE,
+        )
+        marker_sha = re.search(
+            r'^paper_digest_api_reader_source_bindings_sha256:\s*"([0-9a-f]+)"\s*$',
+            content, flags=re.MULTILINE,
+        )
+        marker_table_count = re.search(
+            r'^paper_digest_api_reader_source_table_count:\s*(\d+)\s*$',
+            content, flags=re.MULTILINE,
+        )
+        marker_formula_count = re.search(
+            r'^paper_digest_api_reader_source_formula_count:\s*(\d+)\s*$',
+            content, flags=re.MULTILINE,
+        )
+        marker_structured_sha = re.search(
+            r'^paper_digest_api_reader_structured_artifacts_sha256:\s*"([0-9a-f]+)"\s*$',
+            content, flags=re.MULTILINE,
+        )
+        if marker_contract is None or marker_contract.group(1) != proof['contract'] \
+                or marker_sha is None or marker_sha.group(1) != proof['sha256']:
+            raise PublishDataValidationError('最终页面 source-binding frontmatter 与 canonical 不一致')
+        if marker_table_count is None \
+                or int(marker_table_count.group(1)) != proof['tableCount'] \
+                or marker_formula_count is None \
+                or int(marker_formula_count.group(1)) != proof['formulaCount'] \
+                or marker_structured_sha is None \
+                or marker_structured_sha.group(1) != proof['structuredArtifactsSha256']:
+            raise PublishDataValidationError('最终页面 source-binding count/artifact SHA 与 canonical 不一致')
+        identity_markers = {
+            'authorContract': frontmatter_value(
+                'paper_digest_api_reader_author_identity_contract', r'"([^"]+)"',
+            ),
+            'authorSha': frontmatter_value(
+                'paper_digest_api_reader_author_identity_sha256', r'"([0-9a-f]+)"',
+            ),
+            'authorCount': frontmatter_value(
+                'paper_digest_api_reader_author_count', r'(\d+)',
+            ),
+            'resourceContract': frontmatter_value(
+                'paper_digest_api_reader_resource_identity_contract', r'"([^"]+)"',
+            ),
+            'resourceSha': frontmatter_value(
+                'paper_digest_api_reader_resource_identity_sha256', r'"([0-9a-f]+)"',
+            ),
+            'resourceCount': frontmatter_value(
+                'paper_digest_api_reader_resource_count', r'(\d+)',
+            ),
+        }
+        if identity_markers != {
+                'authorContract': author_proof['contract'],
+                'authorSha': author_proof['sha256'],
+                'authorCount': str(author_proof['count']),
+                'resourceContract': resource_proof['contract'],
+                'resourceSha': resource_proof['sha256'],
+                'resourceCount': str(resource_proof['count']),
+        }:
+            raise PublishDataValidationError('最终页面 author/resource identity marker 与 canonical 不一致')
+
+        def h2_section(label):
+            heading_match = re.search(
+                rf'^##\s+{re.escape(label)}\s*$', content, flags=re.MULTILINE,
+            )
+            if heading_match is None:
+                return None
+            start = heading_match.end()
+            start += len(content[start:]) - len(content[start:].lstrip('\n'))
+            next_heading = re.search(r'^##\s+', content[start:], flags=re.MULTILINE)
+            end = start + next_heading.start() if next_heading else len(content)
+            return content[start:end].strip()
+
+        actual_authors = h2_section('👥 作者与机构')
+        expected_authors = '\n'.join(
+            f'- {author["name"]}：{"；".join(author["affiliations"])}'
+            for author in author_proof['authors']
+        )
+        if actual_authors != expected_authors:
+            raise PublishDataValidationError('最终页面作者与机构段与 canonical identity 不一致')
+        page_parsed = dict(paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {})
+        expected_resources = enrich_opensource(page_parsed, paper) \
+            if page_parsed.get('opensource') else ''
+        supplementary = re.search(r'##\s*补充信息\s*\n([\s\S]*)', expected_resources)
+        if supplementary:
+            expected_resources = expected_resources[:supplementary.start()].strip()
+        expected_resources = _nest_reader_headings(expected_resources.strip(), minimum_level=3)
+        actual_resources = h2_section('🔗 开源与复现资源')
+        if not expected_resources or actual_resources != expected_resources:
+            raise PublishDataValidationError('最终页面开源与复现资源段与 canonical identity 不一致')
+        positive_claims = {
+            'code': r'代码[^\n]{0,18}(?:已开源|已经开源|可以访问|可直接下载|仓库可用)',
+            'model': r'(?:模型|权重)[^\n]{0,18}(?:已公开|已经公开|可以访问|可直接下载|权重可用)',
+            'dataset': r'数据集[^\n]{0,18}(?:已公开|已经公开|可以访问|可直接下载|数据可用)',
+        }
+        available_types = set(resource_proof['availableTypes'])
+        for resource_type, pattern in positive_claims.items():
+            if resource_type not in available_types \
+                    and re.search(pattern, actual_resources, flags=re.IGNORECASE):
+                raise PublishDataValidationError(
+                    f'最终页面把 {resource_type} 的 temporary/unavailable 资源写成可用'
+                )
+        heading = re.search(r'^##\s+🧭\s*深度解读\s*$', content, flags=re.MULTILINE)
+        if heading is None:
+            raise PublishDataValidationError('最终页面缺少 API reader 深度解读区')
+        article_start = heading.end()
+        if content[article_start:article_start + 2] == '\n\n':
+            article_start += 2
+        else:
+            article_start += len(content[article_start:]) - len(content[article_start:].lstrip('\n'))
+        expected_article = _nest_reader_headings(
+            payload['renderedArticle'].strip(), minimum_level=3,
+        )
+        page_article = content[article_start:article_start + len(expected_article)]
+        if page_article != expected_article:
+            raise PublishDataValidationError('最终页面深度解读字节与 canonical reader article 不一致')
+        page_proof = _validate_api_reader_source_bindings(paper, article=page_article)
+        if page_proof != proof:
+            raise PublishDataValidationError('最终页面表格/公式重放 proof 与 canonical 不一致')
+    except PublishDataValidationError as exc:
+        return str(exc)
+    return None
 
 
 def _normalize_fresh_article(value):
@@ -3175,10 +3941,33 @@ def generate_paper_page(paper, date_str, category='论文速递'):
         )
     api_reader_marker = ''
     if api_reader_payload:
+        source_binding_proof = api_reader_payload.get('sourceBindingProof')
+        author_identity_proof = api_reader_payload.get('authorIdentityProof')
+        resource_identity_proof = api_reader_payload.get('resourceIdentityProof')
+        source_binding_marker = (
+            f'paper_digest_api_reader_source_binding_contract: "{source_binding_proof["contract"]}"\n'
+            f'paper_digest_api_reader_source_bindings_sha256: "{source_binding_proof["sha256"]}"\n'
+            f'paper_digest_api_reader_source_table_count: {source_binding_proof["tableCount"]}\n'
+            f'paper_digest_api_reader_source_formula_count: {source_binding_proof["formulaCount"]}\n'
+            f'paper_digest_api_reader_structured_artifacts_sha256: "{source_binding_proof["structuredArtifactsSha256"]}"\n'
+            if isinstance(source_binding_proof, dict) else ''
+        )
+        identity_marker = (
+            f'paper_digest_api_reader_author_identity_contract: "{author_identity_proof["contract"]}"\n'
+            f'paper_digest_api_reader_author_identity_sha256: "{author_identity_proof["sha256"]}"\n'
+            f'paper_digest_api_reader_author_count: {author_identity_proof["count"]}\n'
+            f'paper_digest_api_reader_resource_identity_contract: "{resource_identity_proof["contract"]}"\n'
+            f'paper_digest_api_reader_resource_identity_sha256: "{resource_identity_proof["sha256"]}"\n'
+            f'paper_digest_api_reader_resource_count: {resource_identity_proof["count"]}\n'
+            if isinstance(author_identity_proof, dict)
+            and isinstance(resource_identity_proof, dict) else ''
+        )
         api_reader_marker = (
             f'paper_digest_api_reader_contract: "{api_reader_payload["contract"]}"\n'
             f'paper_digest_api_reader_article_sha256: "{api_reader_payload["articleSha256"]}"\n'
             f'paper_digest_api_reader_plan_sha256: "{api_reader_payload["planSha256"]}"\n'
+            f'{source_binding_marker}'
+            f'{identity_marker}'
         )
     reader_plan = (
         v6_payload['plan'] if v6_payload
@@ -3720,6 +4509,9 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
     manual_v4_issue = validate_final_manual_v4_markdown(content, paper)
     if manual_v4_issue:
         issues.append(f'Manual v4 最终 Markdown 门禁失败: {manual_v4_issue}')
+    api_reader_issue = _api_reader_page_binding_issue(content, paper)
+    if api_reader_issue:
+        issues.append(f'LLM API source-binding v4 最终 Markdown 门禁失败: {api_reader_issue}')
     index_quality_issue = validate_digest_index_reader_quality(content)
     if index_quality_issue:
         issues.append(f'汇总页读者质量门禁失败: {index_quality_issue}')
@@ -4094,7 +4886,39 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
     We bind a rendered page by its source title, then check only article-level
     lower bounds so theme icons never create false positives.
     """
-    return _validate_hugo_rendered_html_gate_impl(output_dir, source_artifacts)
+    issues = list(_validate_hugo_rendered_html_gate_impl(output_dir, source_artifacts))
+    for artifact in source_artifacts:
+        frontmatter = artifact.get('frontmatter') if isinstance(artifact, dict) else None
+        if not isinstance(frontmatter, dict) \
+                or frontmatter.get('paper_digest_api_reader_source_binding_contract') \
+                != LLM_API_READER_SOURCE_BINDING_CONTRACT:
+            continue
+        label = Path(artifact.get('path') or 'unknown.md').name
+        expected_count = frontmatter.get('paper_digest_api_reader_source_formula_count')
+        if not isinstance(expected_count, int) or isinstance(expected_count, bool) \
+                or expected_count < 0:
+            issues.append(f'{label} API reader v4 公式数量 marker 非法')
+            continue
+        source_blocks = re.findall(r'\\\[[\s\S]*?\\\]', str(artifact.get('body') or ''))
+        if len(source_blocks) != expected_count:
+            issues.append(
+                f'{label} API reader v4 页面公式数量与 frontmatter 不一致: '
+                f'Markdown={len(source_blocks)}, marker={expected_count}'
+            )
+            continue
+        candidates = _rendered_page_candidates(
+            output_dir, frontmatter.get('title'), artifact.get('path'),
+        )
+        if len(candidates) != 1:
+            continue  # The shared Hugo gate already reports this binding failure.
+        rendered_fragment = html.unescape(_rendered_article_fragment(candidates[0][1]))
+        for formula_index, block in enumerate(source_blocks, 1):
+            if rendered_fragment.count(block) != 1:
+                issues.append(
+                    f'{label} API reader v4 第 {formula_index} 个展示公式未在 Hugo HTML '
+                    '中原样且唯一保留'
+                )
+    return issues
 
 
 def build_final_page_artifact(path, paper=None):
@@ -4119,6 +4943,7 @@ def build_final_page_artifact(path, paper=None):
         'body': body,
         'markdownFormatIssues': validate_markdown_format_gate(path, frontmatter, body),
         'manualIssue': validate_final_manual_v4_markdown(content, paper),
+        'apiReaderIssue': _api_reader_page_binding_issue(content, paper),
         'indexQualityIssue': validate_digest_index_reader_quality(content),
     }
 
@@ -4173,6 +4998,12 @@ def validate_staged_posts(
             raise PublishDataValidationError(
                 f'{path.name} Manual v4 最终 Markdown 门禁失败: {manual_v4_issue}'
             )
+        api_reader_issue = artifact['apiReaderIssue']
+        if api_reader_issue:
+            raise PublishDataValidationError(
+                f'{path.name} LLM API source-binding v4 最终 Markdown 门禁失败: '
+                f'{api_reader_issue}'
+            )
         index_quality_issue = artifact['indexQualityIssue']
         if index_quality_issue:
             raise PublishDataValidationError(
@@ -4191,32 +5022,76 @@ def run_hugo_gate(blog_repo, staged_posts_dir, required=False, source_paths=None
             raise PublishDataValidationError('正式 --push 要求 Hugo 可用，当前未找到 hugo 命令')
         print('  ℹ️ Hugo 不可用，已执行严格 YAML/Markdown 回退门禁')
         return 'fallback'
-    with tempfile.TemporaryDirectory(prefix='paper-digest-hugo-') as output_dir:
-        result = subprocess.run(
+    source_files = (
+        sorted(
+            Path(path).resolve() for path in source_paths
+            if Path(path).is_file() and Path(path).suffix == '.md'
+        )
+        if source_paths is not None else
+        sorted(Path(staged_posts_dir).glob('*.md'))
+    )
+    if not source_files:
+        raise PublishDataValidationError('Hugo gate 没有可构建的当批次 Markdown 页面')
+    timeout_seconds = _bounded_positive_seconds(
+        'PD_HUGO_GATE_TIMEOUT_SECONDS', HUGO_GATE_TIMEOUT_SECONDS, 30, 1800,
+    )
+    with tempfile.TemporaryDirectory(prefix='paper-digest-hugo-') as workspace:
+        workspace = Path(workspace)
+        isolated_posts = workspace / 'content' / 'posts'
+        output_dir = workspace / 'public'
+        cache_dir = workspace / 'cache'
+        static_dir = workspace / 'static'
+        resource_dir = workspace / 'resources'
+        asset_dir = workspace / 'assets'
+        isolated_posts.mkdir(parents=True)
+        for directory in (cache_dir, static_dir, resource_dir, asset_dir):
+            directory.mkdir()
+        seen_names = set()
+        for source in source_files:
+            if source.name in seen_names:
+                raise PublishDataValidationError(f'Hugo gate 当批次页面文件名重复: {source.name}')
+            seen_names.add(source.name)
+            shutil.copy2(source, isolated_posts / source.name)
+        overlay_config = workspace / 'hugo-isolated-gate.json'
+        overlay_config.write_text(json.dumps({
+            'staticDir': str(static_dir),
+            'resourceDir': str(resource_dir),
+            'assetDir': str(asset_dir),
+        }), encoding='utf-8')
+        config_candidates = [
+            Path(blog_repo) / name for name in (
+                'hugo.yaml', 'hugo.yml', 'hugo.toml', 'hugo.json',
+                'config.yaml', 'config.yml', 'config.toml', 'config.json',
+            )
+            if (Path(blog_repo) / name).is_file()
+        ]
+        config_files = [*config_candidates[:1], overlay_config]
+        result = _run_bounded_subprocess(
             [
                 hugo,
-                '--contentDir', str(Path(staged_posts_dir).parent),
-                '--destination', output_dir,
+                '--config', ','.join(str(item) for item in config_files),
+                '--contentDir', str(workspace / 'content'),
+                '--destination', str(output_dir),
+                '--cacheDir', str(cache_dir),
                 '--cleanDestinationDir',
                 '--noBuildLock',
             ],
             cwd=blog_repo,
-            capture_output=True,
-            text=True,
             env=build_child_process_env(),
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=HUGO_GATE_OUTPUT_TAIL_BYTES,
+            combine_output=True,
+            tail_output=True,
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or '').strip()
+            if result.timed_out:
+                raise PublishDataValidationError(
+                    f'Hugo 构建门禁超过硬超时 {timeout_seconds}s，已终止完整进程组: '
+                    f'{detail[-2000:]}'
+                )
             raise PublishDataValidationError(f'Hugo 构建门禁失败: {detail[-2000:]}')
         source_artifacts = []
-        source_files = (
-            sorted(
-                Path(path).resolve() for path in source_paths
-                if Path(path).is_file() and Path(path).suffix == '.md'
-            )
-            if source_paths is not None else
-            sorted(Path(staged_posts_dir).glob('*.md'))
-        )
         for path in source_files:
             try:
                 source_artifacts.append(build_final_page_artifact(path))
@@ -4231,6 +5106,100 @@ def run_hugo_gate(blog_repo, staged_posts_dir, required=False, source_paths=None
             )
     print('  ✅ Hugo staging 构建通过')
     return 'hugo'
+
+
+def _terminate_process_group(process, grace_seconds=5):
+    if os.name != 'nt':
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    else:
+        process.terminate()
+    try:
+        return process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        if os.name != 'nt':
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            process.kill()
+        return process.wait(timeout=grace_seconds)
+
+
+def _read_bounded_process_output(handle, maximum, *, tail=False):
+    handle.flush()
+    size = handle.seek(0, os.SEEK_END)
+    truncated = size > maximum
+    handle.seek(max(0, size - maximum) if tail else 0)
+    return handle.read(maximum), truncated
+
+
+def _run_bounded_subprocess(
+    command, *, cwd, env, timeout_seconds, text=True, check=False,
+    max_output_bytes=SUBPROCESS_SEMANTIC_OUTPUT_MAX_BYTES,
+    combine_output=False, tail_output=False,
+):
+    """Run one child with a hard deadline, bounded output and process-group cleanup."""
+    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout_file,
+            stderr=subprocess.STDOUT if combine_output else stderr_file,
+            env=env,
+            start_new_session=(os.name != 'nt'),
+        )
+        timed_out = False
+        try:
+            try:
+                return_code = process.wait(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                return_code = _terminate_process_group(process)
+        except BaseException:
+            _terminate_process_group(process)
+            raise
+        stdout_raw, stdout_truncated = _read_bounded_process_output(
+            stdout_file, max_output_bytes, tail=tail_output,
+        )
+        if combine_output:
+            stderr_raw = b''
+            stderr_truncated = False
+        else:
+            stderr_raw, stderr_truncated = _read_bounded_process_output(
+                stderr_file, max_output_bytes, tail=tail_output,
+            )
+        output_truncated = stdout_truncated or stderr_truncated
+        if text:
+            stdout = stdout_raw.decode('utf-8', errors='replace')
+            stderr = stderr_raw.decode('utf-8', errors='replace')
+        else:
+            stdout, stderr = stdout_raw, stderr_raw
+        result = SimpleNamespace(
+            args=command,
+            returncode=return_code,
+            stdout=stdout,
+            stderr=stderr,
+            timed_out=timed_out,
+            output_truncated=output_truncated,
+        )
+        if timed_out and check:
+            raise subprocess.TimeoutExpired(
+                command, timeout_seconds, output=stdout, stderr=stderr,
+            )
+        if output_truncated and check:
+            raise PublishDataValidationError(
+                f'子进程输出超过 {max_output_bytes} 字节上限: {command[0]}'
+            )
+        if return_code != 0 and check:
+            raise subprocess.CalledProcessError(
+                return_code, command, output=stdout, stderr=stderr,
+            )
+        return result
 
 
 def _is_pipeline_owned_paper(path, date_str):
@@ -4295,11 +5264,8 @@ def prepare_api_reader_staged_assets(papers, stage_root):
 
 
 def _git_tracked_reader_asset_paths():
-    result = subprocess.run(
-        ['git', 'ls-files', '-z', '--', 'static/images/papers'],
-        cwd=BLOG_REPO,
-        capture_output=True,
-        env=_git_env(),
+    result = _run_git(
+        ['ls-files', '-z', '--', 'static/images/papers'],
     )
     if result.returncode != 0:
         return set()
@@ -4451,30 +5417,60 @@ def _git_relative_manifest(paths):
 
 
 def _git_env():
-    return build_child_process_env(allowed_keys=VCS_CHILD_ENV_KEYS)
+    return build_child_process_env(
+        extra={
+            'GIT_TERMINAL_PROMPT': '0',
+            'GCM_INTERACTIVE': 'never',
+        },
+        allowed_keys=VCS_CHILD_ENV_KEYS,
+    )
+
+
+def _run_git(args, *, text=False, check=False, timeout_kind='local'):
+    timeout_config = {
+        'local': (
+            'PD_GIT_LOCAL_TIMEOUT_SECONDS', GIT_LOCAL_TIMEOUT_SECONDS, 5, 300,
+        ),
+        'commit': (
+            'PD_GIT_COMMIT_TIMEOUT_SECONDS', GIT_COMMIT_TIMEOUT_SECONDS, 10, 900,
+        ),
+        'network': (
+            'PD_GIT_NETWORK_TIMEOUT_SECONDS', GIT_NETWORK_TIMEOUT_SECONDS, 10, 900,
+        ),
+    }
+    if timeout_kind not in timeout_config:
+        raise ValueError(f'未知 Git timeout_kind: {timeout_kind}')
+    env_name, default, minimum, maximum = timeout_config[timeout_kind]
+    timeout_seconds = _bounded_positive_seconds(
+        env_name, default, minimum, maximum,
+    )
+    result = _run_bounded_subprocess(
+        ['git', *args],
+        cwd=BLOG_REPO,
+        env=_git_env(),
+        timeout_seconds=timeout_seconds,
+        text=text,
+        check=check,
+    )
+    if result.output_truncated:
+        raise PublishDataValidationError('Git 输出超过安全上限，拒绝使用截断结果')
+    if result.timed_out and timeout_kind != 'network':
+        raise subprocess.TimeoutExpired(['git', *args], timeout_seconds)
+    return result
 
 
 def validate_git_publish_branch():
     """Formal publication is only allowed from the blog repository's main branch."""
-    branch = subprocess.run(
-        ['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'],
-        cwd=BLOG_REPO,
-        capture_output=True,
-        text=True,
-        env=_git_env(),
+    branch = _run_git(
+        ['symbolic-ref', '--quiet', '--short', 'HEAD'], text=True,
     )
     current = branch.stdout.strip() if branch.returncode == 0 else '<detached HEAD>'
     if current != 'main':
         raise PublishDataValidationError(
             f'正式发布要求博客仓库当前分支为 main，当前为 {current}'
         )
-    head = subprocess.run(
-        ['git', 'rev-parse', '--verify', 'HEAD'],
-        cwd=BLOG_REPO,
-        capture_output=True,
-        text=True,
-        check=True,
-        env=_git_env(),
+    head = _run_git(
+        ['rev-parse', '--verify', 'HEAD'], text=True, check=True,
     ).stdout.strip()
     if not re.fullmatch(r'[0-9a-fA-F]{40,64}', head):
         raise PublishDataValidationError(f'无法验证博客仓库 HEAD: {head!r}')
@@ -4494,15 +5490,12 @@ def validate_manifest_clean_against_head(paths, allow_exact_pipeline_untracked=N
     manifest = _git_relative_manifest(paths)
     if not manifest:
         return
-    result = subprocess.run(
+    result = _run_git(
         [
-            'git', 'status', '--porcelain=v1', '-z', '--untracked-files=all',
+            'status', '--porcelain=v1', '-z', '--untracked-files=all',
             '--', *manifest,
         ],
-        cwd=BLOG_REPO,
-        capture_output=True,
         check=True,
-        env=_git_env(),
     )
     entries = []
     if result.stdout:
@@ -4558,13 +5551,8 @@ def capture_git_publish_state(paths):
     """Capture the pre-install Git/index/worktree state for add/commit rollback."""
     manifest = _git_relative_manifest(paths)
     head = validate_git_publish_branch()
-    index_tree = subprocess.run(
-        ['git', 'write-tree'],
-        cwd=BLOG_REPO,
-        capture_output=True,
-        text=True,
-        check=True,
-        env=_git_env(),
+    index_tree = _run_git(
+        ['write-tree'], text=True, check=True,
     ).stdout.strip()
     snapshots = {}
     repo = Path(BLOG_REPO).expanduser().resolve()
@@ -4585,27 +5573,16 @@ def restore_git_publish_state(state):
     """Restore HEAD (if needed), the complete index, and manifest worktree files."""
     if not state:
         return
-    current = subprocess.run(
-        ['git', 'rev-parse', '--verify', 'HEAD'],
-        cwd=BLOG_REPO,
-        capture_output=True,
-        text=True,
-        check=True,
-        env=_git_env(),
+    current = _run_git(
+        ['rev-parse', '--verify', 'HEAD'], text=True, check=True,
     ).stdout.strip().lower()
     original = state['head'].lower()
     if current != original:
-        subprocess.run(
-            ['git', 'update-ref', 'refs/heads/main', original, current],
-            cwd=BLOG_REPO,
-            check=True,
-            env=_git_env(),
+        _run_git(
+            ['update-ref', 'refs/heads/main', original, current], check=True,
         )
-    subprocess.run(
-        ['git', 'read-tree', state['index_tree']],
-        cwd=BLOG_REPO,
-        check=True,
-        env=_git_env(),
+    _run_git(
+        ['read-tree', state['index_tree']], check=True,
     )
     for path, snapshot in state['snapshots'].items():
         if snapshot is None:
@@ -4616,12 +5593,8 @@ def restore_git_publish_state(state):
 
 def validate_git_index(paths):
     allowed = set(_git_relative_manifest(paths))
-    result = subprocess.run(
-        ['git', 'diff', '--cached', '--name-only', '-z'],
-        cwd=BLOG_REPO,
-        capture_output=True,
-        check=True,
-        env=_git_env(),
+    result = _run_git(
+        ['diff', '--cached', '--name-only', '-z'], check=True,
     )
     staged = {item.decode('utf-8') for item in result.stdout.split(b'\0') if item}
     unrelated = sorted(staged - allowed)
@@ -4638,12 +5611,8 @@ def validate_single_publication_worktree(paths):
     assets = {item for item in allowed if item.startswith('static/images/papers/')}
     if len(pages) != 1 or len(pages) + len(assets) != len(allowed):
         raise PublishDataValidationError('单篇灰度发布必须绑定一个论文页及其受控正文图')
-    result = subprocess.run(
-        ['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
-        cwd=BLOG_REPO,
-        capture_output=True,
-        check=True,
-        env=_git_env(),
+    result = _run_git(
+        ['status', '--porcelain=v1', '-z', '--untracked-files=all'], check=True,
     )
     unrelated = []
     for raw in (item for item in result.stdout.split(b'\0') if item):
@@ -4679,11 +5648,8 @@ def validate_git_index_against_review_receipt(receipt, paths):
 
     for relative in sorted(manifest):
         record = by_path[relative]
-        staged = subprocess.run(
-            ['git', 'show', f':{relative}'],
-            cwd=BLOG_REPO,
-            capture_output=True,
-            env=_git_env(),
+        staged = _run_git(
+            ['show', f':{relative}'],
         )
         if record.get('deleted') is True:
             if staged.returncode == 0:
@@ -4708,9 +5674,8 @@ def _expected_commit_delta_paths(receipt, base_head):
     expected = set()
     for record in receipt.get('files') or []:
         relative = record['path']
-        baseline = subprocess.run(
-            ['git', 'show', f'{base_head}:{relative}'],
-            cwd=BLOG_REPO, capture_output=True, env=_git_env(),
+        baseline = _run_git(
+            ['show', f'{base_head}:{relative}'],
         )
         if record.get('deleted') is True:
             if baseline.returncode == 0:
@@ -4737,15 +5702,14 @@ def validate_git_commit_against_review_receipt(receipt, paths, commit='HEAD'):
     if set(by_path) != manifest or len(by_path) != len(records):
         raise PublishDataValidationError('审查凭证与待提交路径集合不一致')
     base_head = str(receipt.get('baseHead') or '').lower()
-    parents = subprocess.run(
-        ['git', 'rev-list', '--parents', '-n', '1', commit],
-        cwd=BLOG_REPO, capture_output=True, text=True, check=True, env=_git_env(),
+    parents = _run_git(
+        ['rev-list', '--parents', '-n', '1', commit], text=True, check=True,
     ).stdout.strip().lower().split()
     if len(parents) != 2 or parents[1] != base_head:
         raise PublishDataValidationError('发布提交必须是 review 基线的唯一单父提交')
-    actual_delta = set(filter(None, subprocess.run(
-        ['git', 'diff-tree', '--no-commit-id', '--name-only', '-r', commit],
-        cwd=BLOG_REPO, capture_output=True, text=True, check=True, env=_git_env(),
+    actual_delta = set(filter(None, _run_git(
+        ['diff-tree', '--no-commit-id', '--name-only', '-r', commit],
+        text=True, check=True,
     ).stdout.splitlines()))
     expected_delta = _expected_commit_delta_paths(receipt, base_head)
     if actual_delta != expected_delta:
@@ -4756,11 +5720,8 @@ def validate_git_commit_against_review_receipt(receipt, paths, commit='HEAD'):
         )
     for relative in sorted(manifest):
         record = by_path[relative]
-        committed = subprocess.run(
-            ['git', 'show', f'{commit}:{relative}'],
-            cwd=BLOG_REPO,
-            capture_output=True,
-            env=_git_env(),
+        committed = _run_git(
+            ['show', f'{commit}:{relative}'],
         )
         if record.get('deleted') is True:
             if committed.returncode == 0:
@@ -4776,14 +5737,13 @@ def validate_git_commit_against_review_receipt(receipt, paths, commit='HEAD'):
 
 
 def _remote_main_oid():
-    result = subprocess.run(
-        ['git', 'ls-remote', '--exit-code', GITHUB_REMOTE, 'refs/heads/main'],
-        cwd=BLOG_REPO,
-        capture_output=True,
-        text=True,
-        env=_git_env(),
+    result = _run_git(
+        ['ls-remote', '--exit-code', GITHUB_REMOTE, 'refs/heads/main'],
+        text=True, timeout_kind='network',
     )
     if result.returncode != 0:
+        if result.timed_out:
+            return None, '查询远端 main OID 超时，子进程组已终止'
         return None, (result.stderr or result.stdout or '').strip()
     first_line = (result.stdout or '').splitlines()[0] if result.stdout else ''
     oid = first_line.split(None, 1)[0].lower() if first_line else ''
@@ -4799,12 +5759,8 @@ def _remote_identity_sha256():
     the remote name and exact Git-resolved push URL still makes changing
     ``origin`` to an unrelated repository invalidate old publication evidence.
     """
-    result = subprocess.run(
-        ['git', 'remote', 'get-url', '--push', GITHUB_REMOTE],
-        cwd=BLOG_REPO,
-        capture_output=True,
-        text=True,
-        env=_git_env(),
+    result = _run_git(
+        ['remote', 'get-url', '--push', GITHUB_REMOTE], text=True,
     )
     if result.returncode != 0:
         return None, f'无法解析当前 Git remote {GITHUB_REMOTE!r} 的 push URL'
@@ -4897,9 +5853,8 @@ def git_push(date_str, publish_paths, rollback_state=None):
             return True
         retrying_existing_commit = publication_commit and current_head == publication_commit
         if retrying_existing_commit:
-            parent = subprocess.run(
-                ['git', 'rev-parse', 'HEAD^'], cwd=BLOG_REPO, capture_output=True,
-                text=True, check=True, env=_git_env(),
+            parent = _run_git(
+                ['rev-parse', 'HEAD^'], text=True, check=True,
             ).stdout.strip().lower()
             if parent != base_head:
                 raise PublishDataValidationError('待重试发布提交的父提交与 review 基线不一致，拒绝推送')
@@ -4917,18 +5872,13 @@ def git_push(date_str, publish_paths, rollback_state=None):
         if state is None:
             state = capture_git_publish_state(publish_paths)
         if manifest and not retrying_existing_commit:
-            subprocess.run(
-                ['git', 'add', '--', *manifest],
-                check=True,
-                cwd=BLOG_REPO,
-                env=_git_env(),
+            _run_git(
+                ['add', '--', *manifest], check=True,
             )
             validate_git_index(publish_paths)
             validate_git_index_against_review_receipt(receipt, publish_paths)
-        staged = subprocess.run(
-            ['git', 'diff', '--cached', '--quiet', '--', *manifest],
-            cwd=BLOG_REPO,
-            env=_git_env(),
+        staged = _run_git(
+            ['diff', '--cached', '--quiet', '--', *manifest],
         ) if manifest else None
         if retrying_existing_commit:
             local_head = current_head
@@ -4942,15 +5892,14 @@ def git_push(date_str, publish_paths, rollback_state=None):
                 if receipt.get('reviewMode') == MANUAL_REVIEW_MODE
                 else '提交已通过严格 LLM、多模态图片与 Hugo gate 审查；'
             )
-            subprocess.run(
+            _run_git(
                 [
-                    'git', 'commit',
+                    'commit',
                     '-m', f'content: 发布 {date_str} 论文速递并同步评分与审查结果',
                     '-m', review_description
                           + '推送前已逐文件校验审查凭证 SHA-256，本步不重新生成或 review。',
                 ],
-                check=True, cwd=BLOG_REPO,
-                env=_git_env()
+                check=True, timeout_kind='commit',
             )
             local_head = validate_git_publish_branch()
             validate_git_commit_against_review_receipt(receipt, publish_paths, local_head)
@@ -4960,7 +5909,10 @@ def git_push(date_str, publish_paths, rollback_state=None):
             raise subprocess.CalledProcessError(staged.returncode, staged.args)
         else:
             raise PublishDataValidationError('审查文件相对基线没有可提交差异，拒绝推送任意已有本地提交')
-    except (subprocess.CalledProcessError, PublishDataValidationError, OSError, UnicodeError) as exc:
+    except (
+        subprocess.CalledProcessError, subprocess.TimeoutExpired,
+        PublishDataValidationError, OSError, UnicodeError,
+    ) as exc:
         try:
             restore_git_publish_state(state)
             print(f"  ❌ Git add/commit 失败，已恢复发布前 index 与工作树: {exc}")
@@ -4972,10 +5924,9 @@ def git_push(date_str, publish_paths, rollback_state=None):
     if remote_identity_before is None:
         _report_push_retry(local_head, identity_error)
         return False
-    result = subprocess.run(
-        ['git', 'push', GITHUB_REMOTE, 'HEAD:main'],
-        capture_output=True, text=True, cwd=BLOG_REPO,
-        env=_git_env(),
+    result = _run_git(
+        ['push', GITHUB_REMOTE, 'HEAD:main'],
+        text=True, timeout_kind='network',
     )
     remote_oid, verify_error = _remote_main_oid()
     remote_identity_after, identity_error = _remote_identity_sha256()
@@ -5002,7 +5953,10 @@ def git_push(date_str, publish_paths, rollback_state=None):
     detail = verify_error or identity_error
     if remote_identity_after is not None and remote_identity_after != remote_identity_before:
         detail = 'Git remote 在 push 与远端 OID 校验之间发生变化'
-    push_detail = (result.stderr or result.stdout or '').strip()
+    push_detail = (
+        'git push 超时，已终止完整进程组'
+        if result.timed_out else (result.stderr or result.stdout or '').strip()
+    )
     if push_detail:
         detail = f'{push_detail}; {detail}' if detail else push_detail
     elif remote_oid:
@@ -5260,6 +6214,20 @@ def llm_api_publication_bindings(published_papers):
         bindings.append({
             'paperId': paper_id,
             'readerContract': LLM_API_READER_CONTRACT,
+            'readerSourceBindingsContract': reader['sourceBindingProof']['contract'],
+            'readerSourceBindingsSha256': reader['sourceBindingProof']['sha256'],
+            'readerSourceTableBindingCount': reader['sourceBindingProof']['tableCount'],
+            'readerSourceFormulaBindingCount': reader['sourceBindingProof']['formulaCount'],
+            'readerStructuredArtifactsSha256': (
+                reader['sourceBindingProof']['structuredArtifactsSha256']
+            ),
+            'readerAuthorIdentityContract': reader['authorIdentityProof']['contract'],
+            'readerAuthorIdentitySha256': reader['authorIdentityProof']['sha256'],
+            'readerAuthorCount': reader['authorIdentityProof']['count'],
+            'readerResourceIdentityContract': reader['resourceIdentityProof']['contract'],
+            'readerResourceIdentitySha256': reader['resourceIdentityProof']['sha256'],
+            'readerResourceCount': reader['resourceIdentityProof']['count'],
+            'readerAvailableResourceTypes': reader['resourceIdentityProof']['availableTypes'],
             'readerArticleSha256': reader['articleSha256'],
             'readerPlanSha256': reader['planSha256'],
             'readerFiguresSha256': _stable_json_sha256(reader['figures']),
@@ -5293,6 +6261,9 @@ def llm_api_production_proof(published_papers):
     return {
         'contract': LLM_API_PRODUCTION_CONTRACT,
         'readerContract': LLM_API_READER_CONTRACT,
+        'readerSourceBindingsContract': LLM_API_READER_SOURCE_BINDING_CONTRACT,
+        'readerAuthorIdentityContract': LLM_API_READER_AUTHOR_IDENTITY_CONTRACT,
+        'readerResourceIdentityContract': LLM_API_READER_RESOURCE_IDENTITY_CONTRACT,
         'scoringContract': LLM_API_SCORING_CONTRACT,
         'paperCount': len(bindings),
         'paperIds': paper_ids,
@@ -5600,11 +6571,19 @@ def review_protocol_fingerprint():
     if cache_key in _REVIEW_PROTOCOL_CACHE:
         return _REVIEW_PROTOCOL_CACHE[cache_key]
     try:
-        hugo_version = subprocess.run(
-            [hugo_path or 'hugo', 'version'], capture_output=True, text=True, timeout=10,
+        hugo_result = _run_bounded_subprocess(
+            [hugo_path or 'hugo', 'version'],
+            cwd=PROJECT_ROOT,
             env=build_child_process_env(),
-        ).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
+            timeout_seconds=10,
+            text=True,
+        )
+        hugo_version = (
+            hugo_result.stdout.strip()
+            if hugo_result.returncode == 0 and not hugo_result.timed_out
+            else 'unavailable'
+        )
+    except OSError:
         hugo_version = 'unavailable'
     fingerprint = _stable_json_sha256({
         'contractVersion': 2,
@@ -6055,18 +7034,27 @@ def plan_post_publish_visual_assets(date_str):
         '--category', category,
     ]
     try:
-        completed = subprocess.run(
+        timeout_seconds = _bounded_positive_seconds(
+            'PD_VISUAL_PLANNER_TIMEOUT_SECONDS',
+            VISUAL_PLANNER_TIMEOUT_SECONDS, 10, 900,
+        )
+        completed = _run_bounded_subprocess(
             command,
             cwd=PROJECT_ROOT,
             text=True,
             env=build_child_process_env(),
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=HUGO_GATE_OUTPUT_TAIL_BYTES,
+            combine_output=True,
+            tail_output=True,
         )
     except OSError as exc:
         print(f'⚠️ 全部博客已经发布，但无法启动发布后视觉规划器: {exc}')
         print(f'   可重试: npm run visual:post-publish -- --date {date_str}')
         return False
     if completed.returncode != 0:
-        print('⚠️ 全部博客已经发布，但发布后视觉任务建立失败；图片不回滚博客发布')
+        reason = '超时且完整进程组已终止' if completed.timed_out else '子进程返回非零'
+        print(f'⚠️ 全部博客已经发布，但发布后视觉任务建立失败（{reason}）；图片不回滚博客发布')
         print(f'   可重试: npm run visual:post-publish -- --date {date_str}')
         return False
     return True
@@ -7698,9 +8686,6 @@ def generate_main(options=None):
             papers = validate_papers_for_publish(
                 papers, validate_manual_provenance=False,
             )
-            if publication_mode is None:
-                publication_mode = infer_generation_publication_mode(papers)
-            validate_generation_publication_mode(papers, publication_mode)
         except PublishDataValidationError as exc:
             print(f"\n❌ 发布数据预检失败，未生成任何博客文件：\n{exc}")
             sys.exit(1)
@@ -7740,6 +8725,14 @@ def generate_main(options=None):
             '无法全部复核；已保留既有 generation/receipt，拒绝重新生成覆盖。'
             '请先恢复网络与原 remote，或人工核查证据漂移'
         )
+    if sealed_preview is None:
+        try:
+            if publication_mode is None:
+                publication_mode = infer_generation_publication_mode(papers)
+            validate_generation_publication_mode(papers, publication_mode)
+        except PublishDataValidationError as exc:
+            print(f"\n❌ 发布 production 契约预检失败，未生成任何博客文件：\n{exc}")
+            sys.exit(1)
     reusable = reusable_generation_manifest(
         today, input_fingerprint, template_fingerprint, base_head,
     )

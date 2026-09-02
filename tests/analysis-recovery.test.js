@@ -15,7 +15,11 @@ const {
     savePapersDatabase,
     updateAnalysisDigestStatuses,
     normalizeCompatibleBatchDate,
-    inferAnalysisBatchDate
+    inferAnalysisBatchDate,
+    serializePapersDatabase,
+    backupPapersJson,
+    verifyPapersBackup,
+    listValidManagedBackupGroups
 } = require('../scripts/digest-status.js');
 const {
     main: refilterMain,
@@ -38,6 +42,143 @@ const { isSuccessfulAnalysisRecord } = require('../scripts/analysis-engine.js');
 const execFileAsync = promisify(execFile);
 
 describe('papers database recovery safety', () => {
+    it('papers writer 使用紧凑 JSON 且不改变字段语义', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-db-compact-'));
+        const file = path.join(dir, 'papers.json');
+        const data = {
+            generation: 0,
+            papers: {
+                '2609.00001': {
+                    arxivId: '2609.00001',
+                    title: 'Compact',
+                    analysis: 'analysis body',
+                    analysisCheckpoint: 'checkpoint body',
+                    analysisManifest: { version: 1, stages: { primaryAnalysis: { status: 'complete' } } }
+                }
+            }
+        };
+        try {
+            savePapersDatabase(data, file);
+            const raw = fs.readFileSync(file, 'utf8');
+            assert.strictEqual(raw, serializePapersDatabase(JSON.parse(raw)));
+            const restored = loadPapersDatabase(file, null);
+            assert.strictEqual(restored.papers['2609.00001'].analysis, 'analysis body');
+            assert.strictEqual(restored.papers['2609.00001'].analysisCheckpoint, 'checkpoint body');
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('压缩备份组可重放 SHA、字节数和 papers schema', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-backup-valid-'));
+        const source = path.join(dir, 'current', 'papers.json');
+        const archive = path.join(dir, 'archive');
+        fs.mkdirSync(path.dirname(source), { recursive: true });
+        const database = { generation: 3, papers: { '2609.00001': { arxivId: '2609.00001', analysis: 'x'.repeat(10000) } } };
+        fs.writeFileSync(source, JSON.stringify(database));
+        try {
+            const result = await backupPapersJson(source, archive, {
+                date: '2026-09-02', createdAt: '2026-09-02T12:00:00+08:00'
+            });
+            assert.strictEqual(result.backedUp, true);
+            assert.ok(result.compressedBytes < fs.statSync(source).size);
+            const verified = await verifyPapersBackup(result.backupPath);
+            assert.deepStrictEqual(verified.data, database);
+            assert.strictEqual(verified.manifest.sourceSha256, result.sourceSha256);
+            assert.strictEqual(verified.manifest.contract, 'papers-backup-v1');
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('历史 .json 备份仍可验证，但不进入新 writer retention', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-backup-legacy-'));
+        const legacy = path.join(dir, 'papers-2026-08-01.json');
+        const database = { generation: 1, papers: { '2608.00001': { arxivId: '2608.00001' } } };
+        fs.writeFileSync(legacy, JSON.stringify(database, null, 2));
+        try {
+            const verified = await verifyPapersBackup(legacy);
+            assert.deepStrictEqual(verified.data, database);
+            assert.strictEqual(verified.manifest, null);
+            assert.strictEqual((await listValidManagedBackupGroups(dir)).length, 0);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('相同 source SHA 跨日去重，同日并发也只发布一个完整组', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-backup-dedup-'));
+        const source = path.join(dir, 'current', 'papers.json');
+        const archive = path.join(dir, 'archive');
+        fs.mkdirSync(path.dirname(source), { recursive: true });
+        fs.writeFileSync(source, JSON.stringify({ generation: 1, papers: { '2609.1': { arxivId: '2609.1' } } }));
+        try {
+            const concurrent = await Promise.all([
+                backupPapersJson(source, archive, { date: '2026-09-01' }),
+                backupPapersJson(source, archive, { date: '2026-09-01' })
+            ]);
+            assert.strictEqual(concurrent.filter(item => item.backedUp).length, 1);
+            assert.strictEqual((await listValidManagedBackupGroups(archive)).length, 1);
+            const duplicate = await backupPapersJson(source, archive, { date: '2026-09-02' });
+            assert.strictEqual(duplicate.backedUp, false);
+            assert.ok(duplicate.duplicateOf);
+            assert.strictEqual((await listValidManagedBackupGroups(archive)).length, 1);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('retention 只删新 writer 的已验证超额组，不删旧 .json', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-backup-retention-'));
+        const source = path.join(dir, 'current', 'papers.json');
+        const archive = path.join(dir, 'archive');
+        fs.mkdirSync(path.dirname(source), { recursive: true });
+        fs.mkdirSync(archive, { recursive: true });
+        const legacy = path.join(archive, 'papers-2026-08-01.json');
+        fs.writeFileSync(legacy, JSON.stringify({ generation: 0, papers: {} }));
+        try {
+            for (const [index, date] of ['2026-08-30', '2026-08-31', '2026-09-01'].entries()) {
+                fs.writeFileSync(source, JSON.stringify({
+                    generation: index,
+                    papers: { [`2609.${index}`]: { arxivId: `2609.${index}`, title: 'x'.repeat(index + 1) } }
+                }));
+                await backupPapersJson(source, archive, {
+                    date,
+                    createdAt: `${date}T12:00:00+08:00`,
+                    maxGroups: 2
+                });
+            }
+            const groups = await listValidManagedBackupGroups(archive);
+            assert.strictEqual(groups.length, 2);
+            assert.strictEqual(fs.existsSync(legacy), true);
+            assert.strictEqual(fs.existsSync(path.join(archive, 'papers-2026-08-30.json.gz')), false);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('损坏 source 在压缩前阻断，manifest commit 崩溃也不留可见半组或影响 current', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-backup-crash-'));
+        const source = path.join(dir, 'current', 'papers.json');
+        const archive = path.join(dir, 'archive');
+        fs.mkdirSync(path.dirname(source), { recursive: true });
+        fs.writeFileSync(source, '{broken');
+        try {
+            await assert.rejects(backupPapersJson(source, archive, { date: '2026-09-01' }));
+            assert.deepStrictEqual(fs.existsSync(archive) ? fs.readdirSync(archive) : [], []);
+
+            const validRaw = JSON.stringify({ generation: 1, papers: { '2609.1': { arxivId: '2609.1' } } });
+            fs.writeFileSync(source, validRaw);
+            await assert.rejects(backupPapersJson(source, archive, {
+                date: '2026-09-02',
+                hooks: { beforeManifestCommit: async () => { throw new Error('simulated crash'); } }
+            }), /simulated crash/);
+            assert.strictEqual(fs.readFileSync(source, 'utf8'), validRaw);
+            assert.deepStrictEqual(fs.readdirSync(archive), []);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
     it('deep-only 支持严格显式日期以安全续跑跨日批次', () => {
         assert.strictEqual(parseTargetDate(['--date', '2026-08-31']), '2026-08-31');
         assert.throws(() => parseTargetDate(['--date', '2026-02-30']), /有效日期/);

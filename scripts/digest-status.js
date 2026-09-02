@@ -1,5 +1,9 @@
 const Config = require('./config.js');
 const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const zlib = require('zlib');
+const { pipeline } = require('stream/promises');
 const {
     getBeijingISOString,
     normalizeToBeijingISOString,
@@ -8,6 +12,7 @@ const {
 } = require('./utils.js');
 const {
     readJsonFileStrict,
+    withFileLock,
     withFileLockSync,
     isSuccessfulAnalysisRecord,
     hasValidAnalysisBody
@@ -36,6 +41,236 @@ const ANALYSIS_FIELDS = Object.freeze([
     'htmlAttempts',
     'sourceWarnings'
 ]);
+const PAPERS_BACKUP_CONTRACT = 'papers-backup-v1';
+const PAPERS_BACKUP_MAX_GROUPS = 7;
+const PAPERS_BACKUP_MAX_RAW_BYTES = 512 * 1024 * 1024;
+
+function serializePapersDatabase(data) {
+    return JSON.stringify(data);
+}
+
+function sha256Buffer(value) {
+    return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+async function readGzipPayloadBounded(filePath, maxBytes) {
+    const gunzip = zlib.createGunzip();
+    fs.createReadStream(filePath).pipe(gunzip);
+    const chunks = [];
+    let bytes = 0;
+    for await (const chunk of gunzip) {
+        bytes += chunk.length;
+        if (bytes > maxBytes) {
+            gunzip.destroy();
+            const error = new Error(`papers backup 解压超过 ${maxBytes} 字节上限`);
+            error.code = 'PAPERS_BACKUP_TOO_LARGE';
+            throw error;
+        }
+        chunks.push(chunk);
+    }
+    return Buffer.concat(chunks, bytes);
+}
+
+async function fsyncDirectory(directory) {
+    let handle;
+    try {
+        handle = await fs.promises.open(directory, 'r');
+        await handle.sync();
+    } catch (error) {
+        if (!['EINVAL', 'ENOTSUP', 'EISDIR'].includes(error.code)) throw error;
+    } finally {
+        await handle?.close();
+    }
+}
+
+async function verifyPapersBackup(backupPath, options = {}) {
+    const resolved = path.resolve(backupPath);
+    if (resolved.endsWith('.json.gz')) {
+        const manifestPath = options.manifestPath || `${resolved}.manifest.json`;
+        const manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf8'));
+        if (manifest.contract !== PAPERS_BACKUP_CONTRACT
+            || manifest.backupFile !== path.basename(resolved)
+            || !/^[a-f0-9]{64}$/.test(String(manifest.sourceSha256 || ''))
+            || !/^[a-f0-9]{64}$/.test(String(manifest.compressedSha256 || ''))
+            || !Number.isInteger(manifest.sourceBytes)
+            || manifest.sourceBytes < 0
+            || !Number.isInteger(manifest.compressedBytes)
+            || manifest.compressedBytes < 0) {
+            throw new Error(`papers backup manifest 无效: ${manifestPath}`);
+        }
+        const compressed = await fs.promises.readFile(resolved);
+        if (compressed.length !== manifest.compressedBytes
+            || sha256Buffer(compressed) !== manifest.compressedSha256) {
+            throw new Error(`papers backup 压缩字节与 manifest 不一致: ${resolved}`);
+        }
+        const maxRawBytes = Math.min(
+            Number.isInteger(options.maxRawBytes) ? options.maxRawBytes : PAPERS_BACKUP_MAX_RAW_BYTES,
+            manifest.sourceBytes + 1
+        );
+        const raw = await readGzipPayloadBounded(resolved, maxRawBytes);
+        if (raw.length !== manifest.sourceBytes || sha256Buffer(raw) !== manifest.sourceSha256) {
+            throw new Error(`papers backup 解压字节与 manifest 不一致: ${resolved}`);
+        }
+        const parsed = JSON.parse(raw.toString('utf8'));
+        validatePapersDatabaseSchema(parsed);
+        return { backupPath: resolved, manifestPath, manifest, data: parsed, sourceSha256: manifest.sourceSha256 };
+    }
+
+    if (!resolved.endsWith('.json')) throw new Error(`不支持的 papers backup 格式: ${resolved}`);
+    const raw = await fs.promises.readFile(resolved);
+    if (raw.length > (options.maxRawBytes || PAPERS_BACKUP_MAX_RAW_BYTES)) {
+        throw new Error(`legacy papers backup 超过字节上限: ${resolved}`);
+    }
+    const parsed = JSON.parse(raw.toString('utf8'));
+    validatePapersDatabaseSchema(parsed);
+    return {
+        backupPath: resolved,
+        manifestPath: null,
+        manifest: null,
+        data: parsed,
+        sourceSha256: sha256Buffer(raw)
+    };
+}
+
+async function listValidManagedBackupGroups(archiveDir) {
+    let names = [];
+    try {
+        names = await fs.promises.readdir(archiveDir);
+    } catch (error) {
+        if (error.code === 'ENOENT') return [];
+        throw error;
+    }
+    const groups = [];
+    for (const manifestName of names.filter(name => /^papers-\d{4}-\d{2}-\d{2}\.json\.gz\.manifest\.json$/.test(name))) {
+        const manifestPath = path.join(archiveDir, manifestName);
+        const backupPath = manifestPath.slice(0, -'.manifest.json'.length);
+        try {
+            const verified = await verifyPapersBackup(backupPath, { manifestPath });
+            groups.push({
+                backupPath,
+                manifestPath,
+                manifest: verified.manifest,
+                createdAt: Date.parse(verified.manifest.createdAt) || 0
+            });
+        } catch (_) {
+            // 损坏/不完整的组不参与去重和 retention，更不会被自动删除。
+        }
+    }
+    return groups.sort((a, b) => b.createdAt - a.createdAt || b.backupPath.localeCompare(a.backupPath));
+}
+
+async function pruneManagedBackupGroups(archiveDir, maxGroups = PAPERS_BACKUP_MAX_GROUPS) {
+    const groups = await listValidManagedBackupGroups(archiveDir);
+    const removed = [];
+    for (const group of groups.slice(maxGroups)) {
+        await fs.promises.unlink(group.manifestPath);
+        await fs.promises.unlink(group.backupPath);
+        removed.push(group.backupPath);
+    }
+    return removed;
+}
+
+async function backupPapersJson(papersFilePath, archiveDir, options = {}) {
+    const sourcePath = path.resolve(papersFilePath);
+    const targetDir = path.resolve(archiveDir);
+    const date = options.date || getBeijingISOString().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`papers backup 日期无效: ${date}`);
+    if (!fs.existsSync(sourcePath)) return { backedUp: false, message: 'papers.json 不存在，无需备份' };
+
+    return withFileLock(sourcePath, async () => {
+        const sourceStat = await fs.promises.lstat(sourcePath);
+        if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
+            throw new Error(`papers backup source 必须是普通文件: ${sourcePath}`);
+        }
+        const sourceRaw = await fs.promises.readFile(sourcePath);
+        const sourceData = JSON.parse(sourceRaw.toString('utf8'));
+        validatePapersDatabaseSchema(sourceData);
+        const sourceSha256 = sha256Buffer(sourceRaw);
+        const backupName = `papers-${date}.json.gz`;
+        const backupPath = path.join(targetDir, backupName);
+        const manifestPath = `${backupPath}.manifest.json`;
+        await fs.promises.mkdir(targetDir, { recursive: true });
+
+        const existingGroups = await listValidManagedBackupGroups(targetDir);
+        const sameDay = existingGroups.find(group => group.backupPath === backupPath);
+        if (sameDay) {
+            return { backedUp: false, backupPath, manifestPath, message: `今日可验证备份已存在: ${backupName}` };
+        }
+        const duplicate = existingGroups.find(group => group.manifest.sourceSha256 === sourceSha256);
+        if (duplicate) {
+            return {
+                backedUp: false,
+                duplicateOf: duplicate.backupPath,
+                sourceSha256,
+                message: `papers.json 与已验证备份相同，跳过重复压缩: ${path.basename(duplicate.backupPath)}`
+            };
+        }
+
+        const suffix = `${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString('hex')}`;
+        const tempBackupPath = path.join(targetDir, `.${backupName}.${suffix}.tmp`);
+        const tempManifestPath = path.join(targetDir, `.${path.basename(manifestPath)}.${suffix}.tmp`);
+        let backupPublished = false;
+        let manifestPublished = false;
+        try {
+            await pipeline(
+                fs.createReadStream(sourcePath),
+                zlib.createGzip({ level: zlib.constants.Z_BEST_SPEED }),
+                fs.createWriteStream(tempBackupPath, { mode: 0o600, flags: 'wx' })
+            );
+            const tempHandle = await fs.promises.open(tempBackupPath, 'r');
+            try { await tempHandle.sync(); } finally { await tempHandle.close(); }
+            const compressed = await fs.promises.readFile(tempBackupPath);
+            const recovered = await readGzipPayloadBounded(tempBackupPath, sourceRaw.length + 1);
+            if (recovered.length !== sourceRaw.length || sha256Buffer(recovered) !== sourceSha256) {
+                throw new Error('papers backup 写后解压 SHA 与 source 不一致');
+            }
+            const manifest = {
+                contract: PAPERS_BACKUP_CONTRACT,
+                createdAt: options.createdAt || getBeijingISOString(),
+                sourceFile: path.basename(sourcePath),
+                backupFile: backupName,
+                sourceBytes: sourceRaw.length,
+                sourceSha256,
+                compressedBytes: compressed.length,
+                compressedSha256: sha256Buffer(compressed),
+                compression: 'gzip'
+            };
+            await fs.promises.writeFile(tempManifestPath, JSON.stringify(manifest), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+            const manifestHandle = await fs.promises.open(tempManifestPath, 'r');
+            try { await manifestHandle.sync(); } finally { await manifestHandle.close(); }
+            await fs.promises.rename(tempBackupPath, backupPath);
+            backupPublished = true;
+            await fsyncDirectory(targetDir);
+            await options.hooks?.beforeManifestCommit?.({ backupPath, manifestPath });
+            await fs.promises.rename(tempManifestPath, manifestPath);
+            manifestPublished = true;
+            await fsyncDirectory(targetDir);
+            await verifyPapersBackup(backupPath, { manifestPath });
+            const removed = await pruneManagedBackupGroups(
+                targetDir,
+                Number.isInteger(options.maxGroups) && options.maxGroups > 0
+                    ? options.maxGroups
+                    : PAPERS_BACKUP_MAX_GROUPS
+            );
+            return {
+                backedUp: true,
+                backupPath,
+                manifestPath,
+                sourceSha256,
+                compressedBytes: compressed.length,
+                removed,
+                message: `已创建并验证压缩备份: ${backupName}`
+            };
+        } catch (error) {
+            await fs.promises.rm(tempBackupPath, { force: true });
+            await fs.promises.rm(tempManifestPath, { force: true });
+            if (backupPublished && !manifestPublished) await fs.promises.rm(backupPath, { force: true });
+            if (manifestPublished) await fs.promises.rm(manifestPath, { force: true });
+            if (manifestPublished) await fs.promises.rm(backupPath, { force: true });
+            throw error;
+        }
+    });
+}
 
 function normalizeCompatibleBatchDate(value) {
     const rawValue = String(value || '').trim();
@@ -223,7 +458,7 @@ function savePapersDatabase(data, filePath = Config.FILES.papers) {
         const saved = mergePapersDatabases(current, data);
         saved.lastUpdated = getBeijingISOString();
         saved.generation = current.generation + 1;
-        writeFileAtomic(filePath, JSON.stringify(saved, null, 2));
+        writeFileAtomic(filePath, serializePapersDatabase(saved));
         Object.assign(data, saved);
         return saved;
     });
@@ -307,7 +542,7 @@ function updateAnalysisDigestStatuses(analyzedPapers, options = {}) {
         if (updated > 0) {
             papersData.lastUpdated = options.updatedAt || getBeijingISOString();
             papersData.generation = (papersData.generation || 0) + 1;
-            writeFileAtomic(filePath, JSON.stringify(papersData, null, 2));
+            writeFileAtomic(filePath, serializePapersDatabase(papersData));
         }
         return { updated, papersData };
     });
@@ -325,5 +560,11 @@ module.exports = {
     markPaperDigestStatus,
     mergeAnalysisDigestPaper,
     applyAnalysisDigestStatuses,
-    updateAnalysisDigestStatuses
+    updateAnalysisDigestStatuses,
+    serializePapersDatabase,
+    backupPapersJson,
+    verifyPapersBackup,
+    listValidManagedBackupGroups,
+    pruneManagedBackupGroups,
+    PAPERS_BACKUP_CONTRACT
 };

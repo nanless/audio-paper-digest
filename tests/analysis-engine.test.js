@@ -22,6 +22,8 @@ const {
     withFileLock,
     mergeCanonicalAnalysisState,
     isSuccessfulAnalysisRecord,
+    scoringStabilityIsResolved,
+    apiReaderV3BindsCanonical,
     getAnalysisRunStatus,
     getCanonicalAnalysisRunSummary,
     getAnalysisExitCode
@@ -48,6 +50,117 @@ function validAnalyzedResult(extra = {}) {
         analysisManifest: validAnalysisPaper('fixture').analysisManifest,
         ...extra
     };
+}
+
+function bindValidApiReaderV3(paper) {
+    const stable = value => Array.isArray(value) ? value.map(stable)
+        : (value && typeof value === 'object'
+            ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])]))
+            : value);
+    const stableSha256 = value => crypto.createHash('sha256')
+        .update(JSON.stringify(stable(value))).digest('hex');
+    const textSha256 = value => crypto.createHash('sha256').update(String(value)).digest('hex');
+    paper.apiReaderArticle = '### 初学者读者文章\n\n完整解释。';
+    paper.apiReaderPlan = {
+        version: 3,
+        contract: 'beginner-researcher-v3',
+        figurePlacements: [],
+        tableBindings: [],
+        formulaBindings: [],
+        sourceBindingsContract: 'api-reader-source-bindings-v4'
+    };
+    paper.apiReaderPlan.sourceBindingsSha256 = stableSha256({
+        tableBindings: paper.apiReaderPlan.tableBindings,
+        formulaBindings: paper.apiReaderPlan.formulaBindings
+    });
+    paper.apiReaderFigures = [];
+    const authorIdentity = {
+        contract: 'api-reader-author-identity-v1',
+        sourceDomSha256: '',
+        sourceTextSha256: '1'.repeat(64),
+        metadataSha256: stableSha256(paper.authors || []),
+        authors: [{
+            name: 'Author', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'],
+            nameBinding: {
+                sourceKind: 'paper_metadata', sourceValue: 'Author',
+                metadataSha256: stableSha256(paper.authors || [])
+            },
+            affiliationBindings: [{
+                sourceKind: 'explicit_unavailable',
+                sourceValue: '机构信息未在 arXiv HTML 中可靠披露',
+                sourceTextSha256: '1'.repeat(64)
+            }]
+        }]
+    };
+    paper.apiReaderAuthors = {
+        authors: [{ name: 'Author', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] }],
+        sourceDomSha256: '1'.repeat(64),
+        identity: authorIdentity,
+        identitySha256: stableSha256(authorIdentity)
+    };
+    const resourceIdentity = {
+        contract: 'api-reader-resource-identity-v1',
+        sourceTextSha256: '1'.repeat(64),
+        resources: []
+    };
+    paper.apiReaderResources = {
+        ...resourceIdentity,
+        identitySha256: stableSha256(resourceIdentity)
+    };
+    paper.apiReaderArticleSha256 = textSha256(paper.apiReaderArticle);
+    paper.apiReaderPlanSha256 = stableSha256(paper.apiReaderPlan);
+    paper.analysisManifest.contracts = {
+        ...(paper.analysisManifest.contracts || {}),
+        apiReaderArticle: 'beginner-researcher-v3',
+        apiReaderSourceBindings: 'api-reader-source-bindings-v4',
+        apiReaderAuthorIdentity: 'api-reader-author-identity-v1',
+        apiReaderResourceIdentity: 'api-reader-resource-identity-v1'
+    };
+    paper.sourceSha256 = '1'.repeat(64);
+    paper.analysisManifest.sourceAcquisition = {
+        ...(paper.analysisManifest.sourceAcquisition || {}),
+        sourceSha256: paper.sourceSha256,
+        structuredArtifactsSha256: '2'.repeat(64)
+    };
+    paper.analysisManifest.stages.openSourceScan = {
+        ...(paper.analysisManifest.stages.openSourceScan || {}),
+        resourceEvidenceContract: 'api-reader-resource-identity-v1',
+        resourceEvidenceSha256: paper.apiReaderResources.identitySha256
+    };
+    paper.analysisManifest.stages.apiReaderArticle = {
+        status: 'complete',
+        model: 'muse-spark-1.2-contributor',
+        protocol: 'openai_responses',
+        articleSha256: paper.apiReaderArticleSha256,
+        planSha256: paper.apiReaderPlanSha256,
+        figureCount: 0,
+        figuresSha256: stableSha256(paper.apiReaderFigures),
+        readerAuthorsSha256: stableSha256(paper.apiReaderAuthors),
+        readerAuthorIdentityContractVersion: 'api-reader-author-identity-v1',
+        readerAuthorIdentitySha256: paper.apiReaderAuthors.identitySha256,
+        resourceIdentityContractVersion: 'api-reader-resource-identity-v1',
+        resourceIdentitySha256: paper.apiReaderResources.identitySha256,
+        resourceCount: 0,
+        parserVersion: 'api-reader-parser-v3',
+        assemblerVersion: 'api-reader-assembler-v3',
+        tableContractVersion: 'api-reader-tables-v3',
+        figureContractVersion: 'api-reader-figures-v3',
+        qualityMetricsContractVersion: 'api-reader-quality-metrics-v2',
+        qualityMetrics: {
+            contract: 'api-reader-quality-metrics-v2',
+            rawIssueCount: 0,
+            waivedIssueCount: 0,
+            blockingIssueCount: 0,
+            warningCount: 0
+        },
+        sourceBindingsContractVersion: 'api-reader-source-bindings-v4',
+        sourceBindingsSha256: paper.apiReaderPlan.sourceBindingsSha256,
+        sourceBindingsSourceTextSha256: paper.sourceSha256,
+        tableBindingCount: 0,
+        formulaBindingCount: 0,
+        structuredArtifactsSha256: '2'.repeat(64)
+    };
+    return paper;
 }
 
 function legacyValidAnalysisText() {
@@ -228,6 +341,51 @@ describe('mergeAndSaveResults', () => {
 });
 
 describe('analyzePaperWithRetry', () => {
+    it('深度请求明确标记 retryable=false 时整篇层不再用同预算盲目重试', async () => {
+        let calls = 0;
+        let retries = 0;
+        const result = await analyzePaperWithRetry({ arxivId: '2609.00001' }, {
+            maxRetries: 3,
+            retryDelayMs: 0,
+            analyzeFn: async () => {
+                calls += 1;
+                const error = new Error('max_output_tokens truncated');
+                error.code = 'MODEL_OUTPUT_TRUNCATED';
+                error.retryable = false;
+                throw error;
+            },
+            onRetry: () => { retries += 1; }
+        });
+        assert.strictEqual(result.success, false);
+        assert.strictEqual(calls, 1);
+        assert.strictEqual(retries, 0);
+        assert.match(result.error, /max_output_tokens/);
+        assert.strictEqual(result.result.latestAnalysisAttemptErrorCode, 'MODEL_OUTPUT_TRUNCATED');
+        assert.strictEqual(result.result.latestAnalysisAttemptRetryable, false);
+    });
+
+    it('主分析以失败结果返回非重试标记时也立即停止整篇重试', async () => {
+        let calls = 0;
+        const result = await analyzePaperWithRetry({ arxivId: '2609.00002' }, {
+            maxRetries: 3,
+            retryDelayMs: 0,
+            analyzeFn: async () => {
+                calls += 1;
+                return {
+                    analysis: null,
+                    error: 'truncated primary response',
+                    errorCode: 'MODEL_OUTPUT_TRUNCATED',
+                    errorRetryable: false
+                };
+            }
+        });
+        assert.strictEqual(result.success, false);
+        assert.strictEqual(calls, 1);
+        assert.match(result.error, /truncated primary/);
+        assert.strictEqual(result.result.latestAnalysisAttemptErrorCode, 'MODEL_OUTPUT_TRUNCATED');
+        assert.strictEqual(result.result.latestAnalysisAttemptRetryable, false);
+    });
+
     it('完整分析通过校验并返回 parsed', async () => {
         const result = await analyzePaperWithRetry(
             { arxivId: '2604.00001', title: 'Valid' },
@@ -739,9 +897,63 @@ describe('analyzePaperWithRetry', () => {
             inputAnalysisSha256: scoringOutputSha256,
             outputAnalysisSha256: finalAnalysisSha256
         };
+        bindValidApiReaderV3(paper);
         assert.strictEqual(isSuccessfulAnalysisRecord(paper), true);
 
         paper.analysisManifest.stages.imageSupplement.outputAnalysisSha256 = '0'.repeat(64);
+        assert.strictEqual(isSuccessfulAnalysisRecord(paper), false);
+    });
+
+    it('自动 API production 必须绑定 Reader v3，且不误伤非 API canonical', () => {
+        const automatic = validAnalysisPaper('2604.00021v4');
+        automatic.analysisManifest.stages.scoringAudit = {
+            status: 'complete',
+            scoringContract: 'api-scoring-audit-v2',
+            outputAnalysisSha256: crypto.createHash('sha256').update(automatic.analysis).digest('hex'),
+            stabilityWarning: false
+        };
+        assert.strictEqual(isSuccessfulAnalysisRecord(automatic), false);
+        bindValidApiReaderV3(automatic);
+        assert.strictEqual(apiReaderV3BindsCanonical(automatic), true);
+        assert.strictEqual(isSuccessfulAnalysisRecord(automatic), true);
+        const sourceBindingsSha256 = automatic.apiReaderPlan.sourceBindingsSha256;
+        automatic.apiReaderPlan.sourceBindingsSha256 = '0'.repeat(64);
+        assert.strictEqual(isSuccessfulAnalysisRecord(automatic), false);
+        automatic.apiReaderPlan.sourceBindingsSha256 = sourceBindingsSha256;
+        automatic.analysisManifest.stages.apiReaderArticle.structuredArtifactsSha256 = '9'.repeat(64);
+        assert.strictEqual(isSuccessfulAnalysisRecord(automatic), false);
+        automatic.analysisManifest.stages.apiReaderArticle.structuredArtifactsSha256 = '2'.repeat(64);
+        assert.strictEqual(isSuccessfulAnalysisRecord(automatic), true);
+
+        const nonApi = validAnalysisPaper('2604.00021v5');
+        assert.strictEqual(isSuccessfulAnalysisRecord(nonApi), true);
+        const manual = validAnalysisPaper('2604.00021v6');
+        manual.manualV6Provenance = { runtimeMode: 'production' };
+        assert.strictEqual(isSuccessfulAnalysisRecord(manual), true);
+    });
+
+    it('评分偏移超过 0.5 时必须有二次审计共识 resolution', () => {
+        const paper = bindValidApiReaderV3(validAnalysisPaper('2604.00021v7'));
+        paper.analysisManifest.stages.scoringAudit = {
+            status: 'complete',
+            scoringContract: 'api-scoring-audit-v2',
+            outputAnalysisSha256: crypto.createHash('sha256').update(paper.analysis).digest('hex'),
+            stabilityWarning: true
+        };
+        assert.strictEqual(scoringStabilityIsResolved(paper.analysisManifest.stages.scoringAudit), false);
+        assert.strictEqual(isSuccessfulAnalysisRecord(paper), false);
+        paper.analysisManifest.stages.scoringAudit.stabilityResolution = {
+            contract: 'api-scoring-stability-resolution-v1',
+            status: 'resolved',
+            method: 'second_pass_consensus',
+            firstAuditScore: 7.4,
+            secondAuditScore: 7.2,
+            scoreDifference: 0.2,
+            secondAuditSha256: 'a'.repeat(64)
+        };
+        assert.strictEqual(scoringStabilityIsResolved(paper.analysisManifest.stages.scoringAudit), true);
+        assert.strictEqual(isSuccessfulAnalysisRecord(paper), true);
+        paper.analysisManifest.stages.scoringAudit.stabilityResolution.scoreDifference = 0.31;
         assert.strictEqual(isSuccessfulAnalysisRecord(paper), false);
     });
 

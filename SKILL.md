@@ -26,7 +26,8 @@ npm run digest:manual -- YYYY-MM-DD
 
 ```bash
 npm install
-python3 -m pip install -r requirements.txt
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 cp env.example .env
 ```
 
@@ -41,7 +42,7 @@ HTTP_PROXY=http://127.0.0.1:7897
 PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
 ```
 
-Node 要求 `>=20.18.1 <21 || >=22.3.0`。项目脚本必须沙箱外执行；沙箱拒绝不是远端服务故障。
+Node 要求 `>=20.18.1 <21 || >=22.3.0`。默认发布入口要求 Python 3.11+ 且由 OpenSSL 提供 TLS；`scripts/python-runtime.sh` 依次选择项目 `.venv`、`python3.11`，最后才校验 `python3`。项目脚本必须沙箱外执行；沙箱拒绝不是远端服务故障。
 
 ## 3. 默认流程概览
 
@@ -53,7 +54,7 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。项目脚本必须沙箱外执行；�
   → LLM 逐篇筛选
   → 多阶段全文分析
   → 类型感知评分审计
-  → API Reader v3 长文与官方 Figure 闭环
+  → API Reader v3 长文、source-binding v4 与官方 Figure 闭环
   → generate
   → review
   → push + 远端 OID
@@ -80,6 +81,8 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。项目脚本必须沙箱外执行；�
 - 4–10 组术语组合桥；
 - 数据/协议、主结果、消融/失败、训练或部署成本等叙事表；
 - 官方 Figure 的“导读—看图路径—原图—图注—解释”相邻闭环；
+- Markdown 表逐格绑定原表 DOM cell 或逐字原文 quote，展示公式由结构化原始 TeX 确定性注入；
+- 作者机构逐项重放来源；开源资源逐项绑定原文或已验证 Demo、重定向终点与可达状态，暂时不可达不得冒充可用；
 - 初学研究者能分清论文事实、有限解释和未验证推测。
 
 ### 3.3 评分
@@ -111,6 +114,7 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。项目脚本必须沙箱外执行；�
 | `PD_ANALYSIS_MAX_RETRIES` | 2 |
 | `PD_ANALYSIS_API_MAX_RETRIES` | 3 |
 | `PD_ANALYSIS_API_MAX_TOKENS` | 64000 |
+| `PD_ANALYSIS_API_MAX_RESPONSE_BYTES` | 16777216（16 MiB） |
 | `PD_ANALYSIS_REPAIR_MAX_TOKENS` | 16000 |
 | `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` | 200000 |
 | `PD_API_READER_MAX_TOKENS` | 48000 |

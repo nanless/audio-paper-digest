@@ -31,7 +31,9 @@ jobs:
           python-version: '3.11'
 
       - name: Install Python test dependencies
-        run: python3 -m pip install --disable-pip-version-check -r requirements.txt
+        run: |
+          python3 -m pip install --disable-pip-version-check -r requirements.txt
+          bash scripts/python-runtime.sh -m pip check
 
       - name: Run tests
         run: npm test
@@ -55,8 +57,8 @@ jobs:
 
       - name: Run Python tests
         run: |
-          python3 -m unittest discover -s tests/python -p 'test_*.py'
-          python3 -m unittest discover -s manual/tests/python -p 'test_*.py'
+          bash scripts/python-runtime.sh -m unittest discover -s tests/python -p 'test_*.py'
+          bash scripts/python-runtime.sh -m unittest discover -s manual/tests/python -p 'test_*.py'
 
       - name: Check shell syntax
         run: |

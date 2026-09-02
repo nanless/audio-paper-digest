@@ -1867,7 +1867,7 @@ function main(argv = process.argv.slice(2)) {
         if (pending.length !== 0) process.exitCode = 1;
         return;
     }
-    throw new Error('用法: visual-summary-state.js plan --date YYYY-MM-DD | prepare --date YYYY-MM-DD [--paper ID] | archive-legacy --date YYYY-MM-DD | record --date YYYY-MM-DD --paper ID --kind infographic (--file PNG | --output-hint HINT) --token TOKEN | fail --date YYYY-MM-DD --paper ID --kind infographic --error MESSAGE --token TOKEN | status --date YYYY-MM-DD');
+    throw new Error('用法: visual-summary-state.js plan --date YYYY-MM-DD | prepare --date YYYY-MM-DD [--paper ID] | archive-legacy --date YYYY-MM-DD | record --date YYYY-MM-DD --paper ID --kind infographic (--file PNG | --output-hint HINT) --token TOKEN --qa-attested true | fail --date YYYY-MM-DD --paper ID --kind infographic --error MESSAGE --token TOKEN | status --date YYYY-MM-DD');
 }
 
 if (require.main === module) main();

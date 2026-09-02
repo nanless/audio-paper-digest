@@ -8,11 +8,12 @@ For first-time default LLM/API operators and anyone diagnosing project-environme
 
 ```bash
 npm install
-python3 -m pip install -r requirements.txt
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 cp env.example .env
 ```
 
-Node must satisfy `>=20.18.1 <21 || >=22.3.0`.
+Node must satisfy `>=20.18.1 <21 || >=22.3.0`. Python must be 3.11+ with an OpenSSL TLS backend; macOS system Python 3.9/LibreSSL is unsupported. Default blog and visual commands use `scripts/python-runtime.sh`, prefer the project `.venv`, then `python3.11`, and only then validate `python3`.
 
 ## Minimum `.env`
 
@@ -55,18 +56,20 @@ A missing proxy is an explicit failure, never a direct fallback. Project scripts
 | `PD_API_READER_MAX_TOKENS` | 48000 |
 | `PD_API_READER_EVIDENCE_MAX_CHARS` | 180000 |
 | `PD_API_READER_CONTEXT_MAX_CHARS` | 240000 |
-| `PD_API_READER_CONCURRENCY` | 5 |
+| `PD_API_READER_CONCURRENCY` | 5 (in-process Reader generation slots) |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 5 |
 
-Muse filtering is always effective batch 1, while whole-paper analysis keeps configured concurrency. Responses uses SSE only when `PD_OPENAI_RESPONSES_STREAM=1`.
+Muse filtering is always effective batch 1, while whole-paper analysis keeps configured concurrency. Responses uses SSE only when `PD_OPENAI_RESPONSES_STREAM=1`. Reader v3 sends safely materialized official Figures to the primary model; the optional secondary model only enables the legacy canonical image-supplement path. The refresh CLI `--concurrency` controls paper workers and is distinct from `PD_API_READER_CONCURRENCY`.
 
 ## Optional Secondary Model
 
-`PAPER_ANALYZER_SECONDARY_MODEL` enables image selection and insertion planning. The primary still authors text; the secondary neither replaces primary prose nor scores the paper. Secondary endpoint/key fall back to primary values when omitted.
+Reader v3 sends safely materialized official Figures directly to the primary model. `PAPER_ANALYZER_SECONDARY_MODEL` only enables the legacy canonical image-supplement selection and insertion plan; it neither replaces primary prose nor scores the paper. Secondary endpoint/key fall back to primary values when omitted.
 
 ## Blog and Hugo
 
 `PAPER_DIGEST_BLOG_REPO` must identify the actual Hugo repository. Review runs the Hugo gate outside the sandbox. A missing blog repository may skip published-paper deduplication during data-only work, but real publishing cannot proceed.
+
+Publication subprocesses cannot wait forever. Image review, Hugo, local Git operations, commit/hooks, push/remote verification, and visual planning have default absolute deadlines of 120, 300, 30, 180, 180, and 120 seconds. `PD_BLOG_IMAGE_REVIEW_DEADLINE_SECONDS`, `PD_HUGO_GATE_TIMEOUT_SECONDS`, `PD_GIT_LOCAL_TIMEOUT_SECONDS`, `PD_GIT_COMMIT_TIMEOUT_SECONDS`, `PD_GIT_NETWORK_TIMEOUT_SECONDS`, and `PD_VISUAL_PLANNER_TIMEOUT_SECONDS` may override them within the ranges documented in `env.example`. A timeout never issues a false review or remote-OID proof; a valid local publication commit that has not yet been remotely verified remains adoptable on the next run.
 
 ## Verify
 

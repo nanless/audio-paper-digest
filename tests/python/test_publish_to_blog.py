@@ -409,15 +409,126 @@ def llm_api_publication_fixture():
     article += '\n\n' + '\n\n'.join(
         bridge['explanation'] for bridge in plan['conceptBridges']
     )
-    analysis = '## 评分\n**总分：6.1/10**\n\n## 核心摘要\n最终兼容 canonical。'
+    rendered_table = (
+        '| 方法 | WER |\n'
+        '| --- | ---: |\n'
+        '| Baseline | 10.2 |\n'
+        '| Ours | 8.4 |'
+    )
+    latex = r'\mathcal{L}=\lVert y-\hat{y}\rVert_1'
+    rendered_formula = f'\\[{latex}\\]'
+    article += f'\n\n{rendered_table}\n\n{rendered_formula}'
+    table_cells = [
+        ('方法', 0, 0), ('WER', 0, 1),
+        ('Baseline', 1, 0), ('10.2', 1, 1),
+        ('Ours', 2, 0), ('8.4', 2, 1),
+    ]
+    table_binding = {
+        'tableIndex': 1,
+        'sourceType': 'artifact_table',
+        'sourceTableOrdinal': 1,
+        'sourceTableDomSha256': 'a' * 64,
+        'renderedTableSha256': hashlib.sha256(
+            rendered_table.encode('utf-8')
+        ).hexdigest(),
+        'cellBindings': [
+            {
+                'renderedRow': row,
+                'renderedColumn': column,
+                'sourceRow': row,
+                'sourceColumn': column,
+                'renderedText': text,
+                'sourceText': text,
+                'sourceDomSha256': format(index + 11, '064x'),
+            }
+            for index, (text, row, column) in enumerate(table_cells)
+        ],
+        'sourceQuotes': [],
+    }
+    formula_binding = {
+        'formulaOrdinal': 1,
+        'targetKind': 'method_overview',
+        'marker': '[[FORMULA_1]]',
+        'latex': latex,
+        'sourceDomSha256': 'b' * 64,
+        'renderedBlockSha256': hashlib.sha256(
+            rendered_formula.encode('utf-8')
+        ).hexdigest(),
+    }
+    plan['sourceBindingsContract'] = 'api-reader-source-bindings-v4'
+    plan['tableBindings'] = [table_binding]
+    plan['formulaBindings'] = [formula_binding]
+    plan['sourceBindingsSha256'] = publish_to_blog._stable_json_sha256({
+        'tableBindings': plan['tableBindings'],
+        'formulaBindings': plan['formulaBindings'],
+    })
+    resource_url = 'https://github.com/example/audio-model'
+    resource_line = f'- 代码：{resource_url}'
+    resource_summary = '- 资源可达性验证：code=available(HTTP 200)'
+    analysis = (
+        '## 机器摘要\n'
+        'has_code: 是\n'
+        'has_model: 否\n'
+        'has_dataset: 否\n\n'
+        '## 评分\n**总分：6.1/10**\n\n'
+        '## 核心摘要\n最终兼容 canonical。\n\n'
+        '## 开源详情\n'
+        f'{resource_line}\n'
+        '- 模型权重：论文中未提及\n'
+        '- 数据集：论文中未提及\n'
+        f'{resource_summary}'
+    )
     article_sha = hashlib.sha256(article.encode('utf-8')).hexdigest()
     plan_sha = publish_to_blog._stable_json_sha256(plan)
     analysis_sha = hashlib.sha256(analysis.encode('utf-8')).hexdigest()
     source_sha = '1' * 64
     figures = []
+    author_identity = {
+        'contract': 'api-reader-author-identity-v1',
+        'sourceDomSha256': '4' * 64,
+        'sourceTextSha256': source_sha,
+        'metadataSha256': publish_to_blog._stable_json_sha256([]),
+        'authors': [{
+            'name': 'Researcher A',
+            'affiliations': ['Institute A'],
+            'nameBinding': {
+                'sourceKind': 'html_dom',
+                'sourceValue': 'Researcher A',
+                'sourceDomSha256': '4' * 64,
+            },
+            'affiliationBindings': [{
+                'sourceKind': 'html_dom',
+                'association': 'direct_author',
+                'sourceValue': 'Institute A',
+                'sourceDomSha256': '4' * 64,
+            }],
+        }],
+    }
     reader_authors = {
         'authors': [{'name': 'Researcher A', 'affiliations': ['Institute A']}],
         'sourceDomSha256': '4' * 64,
+        'identity': author_identity,
+        'identitySha256': publish_to_blog._stable_json_sha256(author_identity),
+    }
+    resource_identity = {
+        'contract': 'api-reader-resource-identity-v1',
+        'sourceTextSha256': source_sha,
+        'resources': [{
+            'type': 'code',
+            'origin': 'paper_source',
+            'sourceQuote': resource_line,
+            'sourceQuoteSha256': hashlib.sha256(resource_line.encode('utf-8')).hexdigest(),
+            'originalUrl': resource_url,
+            'finalUrl': resource_url,
+            'redirects': [],
+            'status': 200,
+            'availability': 'available',
+            'retryable': False,
+        }],
+    }
+    reader_resources = {
+        **resource_identity,
+        'identitySha256': publish_to_blog._stable_json_sha256(resource_identity),
     }
     return {
         'title': 'LLM API Publisher Fixture',
@@ -428,19 +539,37 @@ def llm_api_publication_fixture():
         'apiReaderPlan': plan,
         'apiReaderFigures': figures,
         'apiReaderAuthors': reader_authors,
+        'apiReaderResources': reader_resources,
         'apiReaderArticleSha256': article_sha,
         'apiReaderPlanSha256': plan_sha,
         'parsed': {
             'score': '6.1', 'tags': ['#空间音频'],
             'summary': '最终兼容 canonical 摘要。',
             'roast': '预测证据完整，但仍缺真人听音。',
-            'opensource': '代码尚未公开。',
+            'opensource': (
+                f'{resource_line}\n'
+                '- 模型权重：论文中未提及\n'
+                '- 数据集：论文中未提及\n'
+                f'{resource_summary}'
+            ),
             'scoringReason': '评分严格绑定来源与审计证据。',
         },
         'analysisManifest': {
-            'contracts': {'apiReaderArticle': 'beginner-researcher-v3'},
-            'sourceAcquisition': {'sourceSha256': source_sha},
+            'contracts': {
+                'apiReaderArticle': 'beginner-researcher-v3',
+                'apiReaderSourceBindings': 'api-reader-source-bindings-v4',
+                'apiReaderAuthorIdentity': 'api-reader-author-identity-v1',
+                'apiReaderResourceIdentity': 'api-reader-resource-identity-v1',
+            },
+            'sourceAcquisition': {
+                'sourceSha256': source_sha,
+                'structuredArtifactsSha256': 'c' * 64,
+            },
             'stages': {
+                'openSourceScan': {
+                    'resourceEvidenceContract': 'api-reader-resource-identity-v1',
+                    'resourceEvidenceSha256': reader_resources['identitySha256'],
+                },
                 'scoringAudit': {
                     'status': 'complete',
                     'scoringContract': 'api-scoring-audit-v2',
@@ -456,12 +585,61 @@ def llm_api_publication_fixture():
                     'figureCount': 0,
                     'figuresSha256': publish_to_blog._stable_json_sha256(figures),
                     'readerAuthorsSha256': publish_to_blog._stable_json_sha256(reader_authors),
+                    'readerAuthorIdentityContractVersion': 'api-reader-author-identity-v1',
+                    'readerAuthorIdentitySha256': reader_authors['identitySha256'],
+                    'resourceIdentityContractVersion': 'api-reader-resource-identity-v1',
+                    'resourceIdentitySha256': reader_resources['identitySha256'],
+                    'resourceCount': 1,
+                    'sourceBindingsContractVersion': 'api-reader-source-bindings-v4',
+                    'sourceBindingsSha256': plan['sourceBindingsSha256'],
+                    'sourceBindingsSourceTextSha256': source_sha,
+                    'tableBindingCount': 1,
+                    'formulaBindingCount': 1,
+                    'structuredArtifactsSha256': 'c' * 64,
                     'model': 'muse-spark-1.2-contributor',
                     'protocol': 'openai_responses',
                 },
             },
         },
     }
+
+
+def reseal_llm_api_reader_fixture(paper):
+    plan = paper['apiReaderPlan']
+    article = paper['apiReaderArticle']
+    binding_sha = publish_to_blog._stable_json_sha256({
+        'tableBindings': plan.get('tableBindings'),
+        'formulaBindings': plan.get('formulaBindings'),
+    })
+    plan['sourceBindingsSha256'] = binding_sha
+    article_sha = hashlib.sha256(article.encode('utf-8')).hexdigest()
+    plan_sha = publish_to_blog._stable_json_sha256(plan)
+    paper['apiReaderArticleSha256'] = article_sha
+    paper['apiReaderPlanSha256'] = plan_sha
+    stage = paper['analysisManifest']['stages']['apiReaderArticle']
+    stage['articleSha256'] = article_sha
+    stage['planSha256'] = plan_sha
+    stage['sourceBindingsSha256'] = binding_sha
+    stage['tableBindingCount'] = len(plan.get('tableBindings') or [])
+    stage['formulaBindingCount'] = len(plan.get('formulaBindings') or [])
+    return paper
+
+
+def reseal_llm_api_resource_identity(paper):
+    payload = paper['apiReaderResources']
+    identity = {
+        'contract': payload['contract'],
+        'sourceTextSha256': payload['sourceTextSha256'],
+        'resources': payload['resources'],
+    }
+    identity_sha = publish_to_blog._stable_json_sha256(identity)
+    payload['identitySha256'] = identity_sha
+    reader_stage = paper['analysisManifest']['stages']['apiReaderArticle']
+    reader_stage['resourceIdentitySha256'] = identity_sha
+    reader_stage['resourceCount'] = len(payload['resources'])
+    open_stage = paper['analysisManifest']['stages']['openSourceScan']
+    open_stage['resourceEvidenceSha256'] = identity_sha
+    return paper
 
 
 def valid_png(payload_suffix=b'', width=768, height=1200):
@@ -1520,15 +1698,246 @@ title: "Bad table"
         self.assertNotIn('#### 为什么混合声音需要先建立空间直觉？', markdown)
         self.assertEqual(markdown.count('Researcher A'), 1)
         paper['apiReaderAuthors']['authors'][0]['affiliations'] = ['3D AI Lab']
-        paper['analysisManifest']['stages']['apiReaderArticle'][
-            'readerAuthorsSha256'
-        ] = publish_to_blog._stable_json_sha256(paper['apiReaderAuthors'])
+        bound_author = paper['apiReaderAuthors']['identity']['authors'][0]
+        bound_author['affiliations'] = ['3D AI Lab']
+        bound_author['affiliationBindings'][0]['sourceValue'] = '3D AI Lab'
+        identity_sha = publish_to_blog._stable_json_sha256(
+            paper['apiReaderAuthors']['identity']
+        )
+        paper['apiReaderAuthors']['identitySha256'] = identity_sha
+        reader_stage = paper['analysisManifest']['stages']['apiReaderArticle']
+        reader_stage['readerAuthorIdentitySha256'] = identity_sha
+        reader_stage['readerAuthorsSha256'] = publish_to_blog._stable_json_sha256(
+            paper['apiReaderAuthors']
+        )
         index_markdown = publish_to_blog.generate_index_page(
             [(6.1, paper, paper['parsed'])], [], '2026-08-31',
             {paper['arxivId']: 'fixture'},
         )
         self.assertIn('- Researcher A：3D AI Lab', index_markdown)
         self.assertNotIn('3 D AI Lab', index_markdown)
+
+    def test_api_reader_v4_replays_table_formula_and_final_page_bytes(self):
+        paper = llm_api_publication_fixture()
+        payload = publish_to_blog._api_reader_payload(paper)
+        self.assertEqual(payload['sourceBindingProof'], {
+            'contract': 'api-reader-source-bindings-v4',
+            'sha256': paper['apiReaderPlan']['sourceBindingsSha256'],
+            'tableCount': 1,
+            'formulaCount': 1,
+            'structuredArtifactsSha256': 'c' * 64,
+        })
+        markdown, _slug = publish_to_blog.generate_paper_page(
+            paper, '2026-08-31', category='论文速递',
+        )
+        self.assertIn(
+            'paper_digest_api_reader_source_binding_contract: '
+            '"api-reader-source-bindings-v4"', markdown,
+        )
+        self.assertIsNone(
+            publish_to_blog._api_reader_page_binding_issue(markdown, paper)
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            page_path = Path(tmp) / '2026-08-31-reader.md'
+            page_path.write_text(markdown, encoding='utf-8')
+            artifact = publish_to_blog.build_final_page_artifact(page_path, paper)
+            self.assertIsNone(artifact['apiReaderIssue'])
+        altered_table = markdown.replace('| Baseline | 10.2 |', '| Baseline | 10.3 |')
+        self.assertIn(
+            '字节与 canonical',
+            publish_to_blog._api_reader_page_binding_issue(altered_table, paper),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            page_path = Path(tmp) / '2026-08-31-reader.md'
+            page_path.write_text(altered_table, encoding='utf-8')
+            artifact = publish_to_blog.build_final_page_artifact(page_path, paper)
+            self.assertIn('字节与 canonical', artifact['apiReaderIssue'])
+        altered_author = markdown.replace(
+            '- Researcher A：Institute A', '- Researcher A：Invented Institute',
+        )
+        self.assertIn(
+            '作者与机构段',
+            publish_to_blog._api_reader_page_binding_issue(altered_author, paper),
+        )
+        altered_resource = markdown.replace(
+            'https://github.com/example/audio-model',
+            'https://github.com/example/invented-model',
+        )
+        self.assertIn(
+            '开源与复现资源段',
+            publish_to_blog._api_reader_page_binding_issue(altered_resource, paper),
+        )
+        altered_formula = markdown.replace(
+            r'\[\mathcal{L}=\lVert y-\hat{y}\rVert_1\]',
+            r'\[\mathcal{L}=\lVert y-\hat{y}\rVert_2\]',
+        )
+        self.assertIn(
+            '字节与 canonical',
+            publish_to_blog._api_reader_page_binding_issue(altered_formula, paper),
+        )
+
+    def test_api_reader_v4_rejects_resealed_coordinate_dom_and_old_contract_tampering(self):
+        coordinate = llm_api_publication_fixture()
+        coordinate['apiReaderPlan']['tableBindings'][0]['cellBindings'][0][
+            'renderedColumn'
+        ] = 1
+        reseal_llm_api_reader_fixture(coordinate)
+        with self.assertRaisesRegex(PublishDataValidationError, '单元格来源漂移'):
+            publish_to_blog._api_reader_payload(coordinate)
+
+        dom = llm_api_publication_fixture()
+        dom['apiReaderPlan']['formulaBindings'][0]['sourceDomSha256'] = '伪造'
+        reseal_llm_api_reader_fixture(dom)
+        with self.assertRaisesRegex(PublishDataValidationError, '公式来源/渲染绑定非法'):
+            publish_to_blog._api_reader_payload(dom)
+
+        old_contract = llm_api_publication_fixture()
+        del old_contract['analysisManifest']['contracts']['apiReaderSourceBindings']
+        with self.assertRaisesRegex(PublishDataValidationError, '不是 v4'):
+            publish_to_blog.llm_api_production_proof([old_contract])
+
+    def test_api_reader_author_resource_identity_tamper_temporary_empty_and_redirect(self):
+        missing_author = llm_api_publication_fixture()
+        del missing_author['apiReaderAuthors']['identity']['authors'][0]['nameBinding']
+        with self.assertRaisesRegex(PublishDataValidationError, 'author identity'):
+            publish_to_blog._api_reader_payload(missing_author)
+
+        redirect = llm_api_publication_fixture()
+        resource = redirect['apiReaderResources']['resources'][0]
+        resource['finalUrl'] = resource['originalUrl'] + '/final'
+        resource['redirects'] = [{
+            'from': resource['originalUrl'],
+            'to': resource['finalUrl'],
+            'status': 302,
+        }]
+        reseal_llm_api_resource_identity(redirect)
+        self.assertEqual(
+            publish_to_blog._api_reader_payload(redirect)[
+                'resourceIdentityProof'
+            ]['count'],
+            1,
+        )
+        redirect['apiReaderResources']['resources'][0]['redirects'][0]['from'] = (
+            'https://github.com/example/wrong-start'
+        )
+        reseal_llm_api_resource_identity(redirect)
+        with self.assertRaisesRegex(PublishDataValidationError, 'redirects'):
+            publish_to_blog._api_reader_payload(redirect)
+
+        temporary = llm_api_publication_fixture()
+        temporary_resource = temporary['apiReaderResources']['resources'][0]
+        temporary_resource.update({
+            'status': 503,
+            'availability': 'temporarily_unreachable',
+            'retryable': True,
+        })
+        temporary['analysis'] = temporary['analysis'].replace(
+            'has_code: 是', 'has_code: 否',
+        ).replace(
+            'code=available(HTTP 200)',
+            'code=temporarily_unreachable(HTTP 503)',
+        )
+        temporary['parsed']['opensource'] = temporary['parsed']['opensource'].replace(
+            'code=available(HTTP 200)',
+            'code=temporarily_unreachable(HTTP 503)',
+        )
+        reseal_llm_api_resource_identity(temporary)
+        temporary_payload = publish_to_blog._api_reader_payload(temporary)
+        self.assertEqual(temporary_payload['resourceIdentityProof']['availableTypes'], [])
+        temporary_page, _slug = publish_to_blog.generate_paper_page(
+            temporary, '2026-08-31',
+        )
+        self.assertIsNone(
+            publish_to_blog._api_reader_page_binding_issue(temporary_page, temporary)
+        )
+        false_claim = copy.deepcopy(temporary)
+        false_claim['parsed']['opensource'] += '\n- 代码已经开源，可以访问。'
+        false_page, _slug = publish_to_blog.generate_paper_page(
+            false_claim, '2026-08-31',
+        )
+        self.assertIn(
+            '写成可用',
+            publish_to_blog._api_reader_page_binding_issue(false_page, false_claim),
+        )
+
+        empty = llm_api_publication_fixture()
+        empty['apiReaderResources']['resources'] = []
+        empty['analysis'] = empty['analysis'].replace(
+            'has_code: 是', 'has_code: 否',
+        )
+        empty['analysis'] = re.sub(
+            r'## 开源详情[\s\S]*$',
+            '## 开源详情\n未发现可验证的官方 HTTPS 资源 URL。',
+            empty['analysis'],
+        )
+        empty['parsed']['opensource'] = '未发现可验证的官方 HTTPS 资源 URL。'
+        reseal_llm_api_resource_identity(empty)
+        empty_payload = publish_to_blog._api_reader_payload(empty)
+        self.assertEqual(empty_payload['resourceIdentityProof']['count'], 0)
+        empty_page, _slug = publish_to_blog.generate_paper_page(empty, '2026-08-31')
+        self.assertIsNone(publish_to_blog._api_reader_page_binding_issue(empty_page, empty))
+
+    def test_api_reader_v3_rejects_more_than_four_figure_placements(self):
+        paper = llm_api_publication_fixture()
+        paper['apiReaderPlan']['figurePlacements'] = [
+            {
+                'figureOrdinal': index,
+                'targetKind': 'result',
+                'marker': f'[[FIGURE_{index}]]',
+                'focusPoints': ['先核对输入条件是否一致', '再核对输出指标方向是否一致'],
+                'leadQuote': '这段导读文字长度足够，并明确说明为什么此处需要查看对应的原论文图。',
+                'explanationQuote': '这段图后解释长度足够，说明图中结构、数字、比较边界与不能外推的结论。',
+            }
+            for index in range(1, 6)
+        ]
+        reseal_llm_api_reader_fixture(paper)
+        with self.assertRaisesRegex(PublishDataValidationError, 'Figure marker 计划'):
+            publish_to_blog._api_reader_payload(paper)
+
+    def test_remote_verified_historical_api_receipt_reuses_before_new_v4_gate(self):
+        date_str = '2026-08-31'
+        paper = llm_api_publication_fixture()
+        paper['fetchBatchDate'] = date_str
+        del paper['analysisManifest']['contracts']['apiReaderSourceBindings']
+        options = {
+            'data_file': 'historical.json',
+            'target_date': date_str,
+            'category': '论文速递',
+            'publish_all': False,
+            'excluded_ids': [],
+        }
+        reused = (
+            [Path('/tmp/historical-page.md')],
+            Path('/tmp/historical-generation.json'),
+            Path('/tmp/historical-receipt.json'),
+        )
+        with mock.patch.object(
+                publish_to_blog, 'validate_publish_target', return_value=(Path('/tmp/blog'), Path('/tmp/posts')),
+        ), mock.patch.object(
+                publish_to_blog, 'load_papers', return_value=[paper],
+        ), mock.patch.object(
+                publish_to_blog, 'validate_papers_for_publish', return_value=[paper],
+        ), mock.patch.object(
+                publish_to_blog, 'apply_publish_image_exclusions', return_value=[paper],
+        ), mock.patch.object(
+                publish_to_blog, 'score_and_sort', return_value=([], [paper]),
+        ), mock.patch.object(
+                publish_to_blog, 'generation_input_fingerprint', return_value='a' * 64,
+        ), mock.patch.object(
+                publish_to_blog, 'generation_template_fingerprint', return_value='b' * 64,
+        ), mock.patch.object(
+                publish_to_blog, 'validate_git_publish_branch', return_value='c' * 40,
+        ), mock.patch.object(
+                publish_to_blog, 'reusable_verified_publication_generation', return_value=reused,
+        ), mock.patch.object(
+                publish_to_blog, 'infer_generation_publication_mode',
+                side_effect=AssertionError('已发布历史凭证不应进入新 v4 generation 门禁'),
+        ), mock.patch.object(
+                publish_to_blog, 'generation_journal_path', return_value=Path('/tmp/no-journal'),
+        ), mock.patch.object(
+                publish_to_blog, 'generation_stage_path', return_value=Path('/tmp/no-stage/pages'),
+        ), contextlib.redirect_stdout(io.StringIO()):
+            publish_to_blog.generate_main(options)
 
     def test_api_reader_v3_replays_focus_path_and_figure_binding(self):
         paper = llm_api_publication_fixture()
@@ -2469,56 +2878,88 @@ confidence: 中
         self.assertEqual(issues, [])
         call.assert_not_called()
 
-    def test_image_download_rejects_dns_rebinding_peer(self):
-        sock = mock.Mock()
-        sock.getpeername.return_value = ('10.0.0.8', 443)
-        response = mock.Mock()
-        response.raw._connection.sock = sock
-        response.status_code = 200
-        response.headers = {'Content-Type': 'image/png'}
-        session = mock.MagicMock()
-        session.get.return_value = response
-        with mock.patch.object(publish_to_blog.socket, 'getaddrinfo', return_value=[
-            (publish_to_blog.socket.AF_INET, publish_to_blog.socket.SOCK_STREAM, 6, '', ('93.184.216.34', 443)),
-        ]), mock.patch('requests.Session', return_value=session):
-            with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '已配置代理 peer'):
-                publish_to_blog._download_review_image('https://example.com/a.png')
-        response.close.assert_called_once()
-
-    def test_image_download_rejects_global_peer_outside_validated_dns_set(self):
-        sock = mock.Mock()
-        sock.getpeername.return_value = ('93.184.216.35', 443)
-        response = mock.Mock()
-        response.raw._connection.sock = sock
-        response.status_code = 200
-        response.headers = {'Content-Type': 'image/png'}
-        session = mock.MagicMock()
-        session.get.return_value = response
-        with mock.patch.object(publish_to_blog.socket, 'getaddrinfo', return_value=[
-            (publish_to_blog.socket.AF_INET, publish_to_blog.socket.SOCK_STREAM, 6, '', ('93.184.216.34', 443)),
-        ]), mock.patch('requests.Session', return_value=session):
-            with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '已配置代理 peer'):
-                publish_to_blog._download_review_image('https://example.com/a.png')
-
-    def test_image_download_accepts_the_explicit_proxy_peer_after_public_url_validation(self):
+    def test_image_download_pins_connect_target_and_preserves_host_and_sni(self):
         sock = mock.Mock()
         sock.getpeername.return_value = ('127.0.0.1', 7897)
         response = mock.Mock()
-        response.raw._connection.sock = sock
-        response.status_code = 200
+        response.connection.sock = sock
+        response.status = 200
         response.headers = {'Content-Type': 'image/png', 'Content-Length': '8'}
-        response.iter_content.return_value = [b'\x89PNG\r\n\x1a\n']
-        session = mock.MagicMock()
-        session.get.return_value = response
-        def resolve(host, *_args, **_kwargs):
-            address = '127.0.0.1' if host == '127.0.0.1' else '93.184.216.34'
-            return [(publish_to_blog.socket.AF_INET, publish_to_blog.socket.SOCK_STREAM, 6, '', (address, 443))]
+        response.read.side_effect = [b'\x89PNG\r\n\x1a\n', b'']
+        manager = mock.Mock()
+        manager.request.return_value = response
+        with mock.patch('urllib3.ProxyManager', return_value=manager) as proxy_manager:
+            result = publish_to_blog._read_pinned_review_image(
+                'https://example.com/a.png', {'93.184.216.34'},
+                'http://127.0.0.1:7897', {'127.0.0.1'},
+                publish_to_blog.time.monotonic() + 30,
+            )
+        self.assertEqual(result['raw'], b'\x89PNG\r\n\x1a\n')
+        request = manager.request.call_args
+        self.assertEqual(request.args[1], 'https://93.184.216.34/a.png')
+        self.assertEqual(request.kwargs['headers']['Host'], 'example.com')
+        self.assertEqual(proxy_manager.call_args.kwargs['server_hostname'], 'example.com')
+        self.assertEqual(proxy_manager.call_args.kwargs['assert_hostname'], 'example.com')
+        response.close.assert_called_once()
+        response.release_conn.assert_called_once()
+        manager.clear.assert_called_once()
 
-        with mock.patch.object(publish_to_blog.socket, 'getaddrinfo', side_effect=resolve), \
-                mock.patch('requests.Session', return_value=session), \
-                mock.patch.object(publish_to_blog, 'get_required_fetch_proxy', return_value='http://127.0.0.1:7897'):
-            image = publish_to_blog._download_review_image('https://example.com/a.png')
-        self.assertEqual(image['media_type'], 'image/png')
+    def test_urllib3_proxy_pool_uses_pinned_ip_for_connect_and_hostname_for_tls(self):
+        import urllib3
+
+        manager = urllib3.ProxyManager(
+            'http://127.0.0.1:7897',
+            cert_reqs='CERT_REQUIRED',
+            assert_hostname='example.com',
+            server_hostname='example.com',
+            retries=False,
+        )
+        try:
+            pool = manager.connection_from_url('https://93.184.216.34/a.png')
+            self.assertEqual(pool.host, '93.184.216.34')
+            self.assertEqual(pool.port, 443)
+            self.assertEqual(pool.proxy.host, '127.0.0.1')
+            self.assertEqual(pool.assert_hostname, 'example.com')
+            self.assertEqual(pool.conn_kw['server_hostname'], 'example.com')
+        finally:
+            manager.clear()
+
+    def test_image_download_rejects_proxy_peer_outside_prevalidated_proxy_set(self):
+        sock = mock.Mock()
+        sock.getpeername.return_value = ('10.0.0.8', 7897)
+        response = mock.Mock()
+        response.connection.sock = sock
+        response.status = 200
+        response.headers = {'Content-Type': 'image/png'}
+        manager = mock.Mock()
+        manager.request.return_value = response
+        with mock.patch('urllib3.ProxyManager', return_value=manager):
+            with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, '已配置代理 peer'):
+                publish_to_blog._read_pinned_review_image(
+                    'https://example.com/a.png', {'93.184.216.34'},
+                    'http://127.0.0.1:7897', {'127.0.0.1'},
+                    publish_to_blog.time.monotonic() + 30,
+                )
+        response.close.assert_called_once()
+
+    def test_image_download_absolute_deadline_stops_trickle_response(self):
+        sock = mock.Mock()
+        sock.getpeername.return_value = ('127.0.0.1', 7897)
+        response = mock.Mock()
+        response.connection.sock = sock
+        response.status = 200
+        response.headers = {'Content-Type': 'image/png'}
+        manager = mock.Mock()
+        manager.request.return_value = response
+        with mock.patch('urllib3.ProxyManager', return_value=manager), \
+                mock.patch.object(publish_to_blog.time, 'monotonic', side_effect=[0.0, 31.0]):
+            with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, '绝对截止时间'):
+                publish_to_blog._read_pinned_review_image(
+                    'https://example.com/a.png', {'93.184.216.34'},
+                    'http://127.0.0.1:7897', {'127.0.0.1'}, 30.0,
+                )
         response.close.assert_called_once()
 
     def test_publish_date_and_content_target_are_strict(self):
@@ -2700,14 +3141,69 @@ paper_digest_manual_depth: "full-text-evidence-v4"
         with tempfile.TemporaryDirectory() as tmp:
             posts = Path(tmp) / 'content' / 'posts'
             posts.mkdir(parents=True)
-            completed = SimpleNamespace(returncode=0, stdout='', stderr='')
+            page = posts / '2026-07-10-selected.md'
+            page.write_text('---\ntitle: selected\n---\n正文', encoding='utf-8')
+            sentinel = posts / '2000-01-01-historical-sentinel.md'
+            sentinel.write_text('历史内容不得进入本轮 Hugo 输入', encoding='utf-8')
+            completed = SimpleNamespace(returncode=0, stdout='', stderr='', timed_out=False)
+            isolated_names = []
+            isolated_runtime_dirs = {}
+            def inspect_isolated_input(command, **_kwargs):
+                isolated_content = Path(command[command.index('--contentDir') + 1])
+                isolated_names.extend(
+                    item.name for item in (isolated_content / 'posts').iterdir()
+                )
+                config_arg = command[command.index('--config') + 1]
+                overlay = Path(config_arg.split(',')[-1])
+                overlay_data = json.loads(overlay.read_text(encoding='utf-8'))
+                for key in ('staticDir', 'resourceDir', 'assetDir'):
+                    directory = Path(overlay_data[key])
+                    isolated_runtime_dirs[key] = (
+                        directory.is_dir(), list(directory.iterdir())
+                    )
+                return completed
             with mock.patch.object(publish_to_blog.shutil, 'which', return_value='/usr/bin/hugo'), \
-                    mock.patch.object(publish_to_blog.subprocess, 'run', return_value=completed) as run:
-                self.assertEqual(publish_to_blog.run_hugo_gate(tmp, posts), 'hugo')
+                    mock.patch.object(
+                        publish_to_blog, '_run_bounded_subprocess',
+                        side_effect=inspect_isolated_input,
+                    ) as run:
+                self.assertEqual(
+                    publish_to_blog.run_hugo_gate(tmp, posts, source_paths=[page]), 'hugo',
+                )
             command = run.call_args.args[0]
             self.assertIn('--contentDir', command)
             self.assertIn('--destination', command)
+            self.assertIn('--cacheDir', command)
+            self.assertIn('--config', command)
             self.assertIn('--noBuildLock', command)
+            self.assertEqual(isolated_names, [page.name])
+            self.assertEqual(isolated_runtime_dirs, {
+                'staticDir': (True, []),
+                'resourceDir': (True, []),
+                'assetDir': (True, []),
+            })
+
+    def test_hugo_bounded_runner_kills_full_process_group_after_timeout(self):
+        process = mock.Mock()
+        process.pid = 4242
+        process.wait.side_effect = [
+            subprocess.TimeoutExpired(['hugo'], 30),
+            subprocess.TimeoutExpired(['hugo'], 5),
+            -9,
+        ]
+        with mock.patch.object(publish_to_blog.subprocess, 'Popen', return_value=process), \
+                mock.patch.object(publish_to_blog.os, 'name', 'posix'), \
+                mock.patch.object(publish_to_blog.os, 'killpg') as killpg:
+            result = publish_to_blog._run_bounded_subprocess(
+                ['hugo'], cwd='.', env={}, timeout_seconds=30,
+            )
+        self.assertTrue(result.timed_out)
+        self.assertEqual(result.returncode, -9)
+        self.assertEqual(killpg.call_args_list, [
+            mock.call(4242, publish_to_blog.signal.SIGTERM),
+            mock.call(4242, publish_to_blog.signal.SIGKILL),
+        ])
+        self.assertTrue(process.wait.call_count, 3)
 
     def test_tutorial_markdown_format_gate_catches_reader_visible_syntax_and_contract_defects(self):
         frontmatter = {
@@ -2898,6 +3394,36 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             self.assertTrue(any('图片数量不足' in issue for issue in issues))
             self.assertTrue(any('看图路径数量不足' in issue for issue in issues))
 
+    def test_hugo_gate_replays_api_reader_v4_display_formula_bytes(self):
+        formula = r'\[\mathcal{L}=\lVert y-\hat{y}\rVert_1\]'
+        artifact = {
+            'path': '/tmp/reader-v4.md',
+            'frontmatter': {
+                'title': 'API reader v4 formula',
+                'paper_digest_api_reader_contract': 'beginner-researcher-v3',
+                'paper_digest_api_reader_source_binding_contract': (
+                    'api-reader-source-bindings-v4'
+                ),
+                'paper_digest_api_reader_source_formula_count': 1,
+            },
+            'body': f'## 深度解读\n\n{formula}\n',
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            rendered = Path(tmp) / 'posts' / 'reader-v4' / 'index.html'
+            rendered.parent.mkdir(parents=True)
+            rendered.write_text(
+                f'<article><h2>深度解读</h2><p>{formula}</p></article>',
+                encoding='utf-8',
+            )
+            issues = publish_to_blog.validate_hugo_rendered_html_gate(tmp, [artifact])
+            self.assertFalse(any('展示公式' in issue for issue in issues), issues)
+            rendered.write_text(
+                '<article><h2>深度解读</h2><p>公式被主题丢弃</p></article>',
+                encoding='utf-8',
+            )
+            issues = publish_to_blog.validate_hugo_rendered_html_gate(tmp, [artifact])
+            self.assertTrue(any('展示公式' in issue for issue in issues), issues)
+
     def test_run_hugo_gate_executes_rendered_html_contract_after_build(self):
         markdown = '''---
 title: "Tutorial page"
@@ -2946,8 +3472,17 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 page.write_text(rendered, encoding='utf-8')
                 return SimpleNamespace(returncode=0, stdout='', stderr='')
 
+            def bounded_build(command, **kwargs):
+                built = build_output(command, **kwargs)
+                return SimpleNamespace(
+                    returncode=built.returncode, stdout=built.stdout,
+                    stderr=built.stderr, timed_out=False,
+                )
+
             with mock.patch.object(publish_to_blog.shutil, 'which', return_value='/usr/bin/hugo'), \
-                    mock.patch.object(publish_to_blog.subprocess, 'run', side_effect=build_output):
+                    mock.patch.object(
+                        publish_to_blog, '_run_bounded_subprocess', side_effect=bounded_build,
+                    ):
                 self.assertEqual(publish_to_blog.run_hugo_gate(tmp, posts), 'hugo')
 
     def test_push_requires_hugo_but_skip_push_allows_fallback(self):
@@ -3097,6 +3632,38 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             self.assertEqual(git(repo, 'diff', '--cached', '--name-only').stdout, '')
             self.assertEqual(git(repo, 'status', '--porcelain', '--', 'content/posts').stdout, '')
 
+    def test_git_commit_timeout_restores_preinstall_index_and_worktree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            path = posts / '2026-07-10.md'
+            current = Path(tmp) / 'data' / 'current'
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                generated_paths = [
+                    path,
+                    posts / '2026-07-10-visual-gate-paper.md',
+                    posts / '2026-07-10-visual-gate-index.md',
+                ]
+                state = publish_to_blog.capture_git_publish_state(generated_paths)
+                path.write_text('generated\n', encoding='utf-8')
+                paths = [path]
+                save_bound_review_receipt('2026-07-10', paths)
+                original_run = publish_to_blog._run_git
+
+                def timeout_commit(command, *args, **kwargs):
+                    if command[:1] == ['commit']:
+                        raise subprocess.TimeoutExpired(['git', *command], 180)
+                    return original_run(command, *args, **kwargs)
+
+                with mock.patch.object(
+                        publish_to_blog, '_run_git', side_effect=timeout_commit):
+                    self.assertFalse(publish_to_blog.git_push(
+                        '2026-07-10', paths, rollback_state=state,
+                    ))
+            self.assertFalse(path.exists())
+            self.assertEqual(git(repo, 'diff', '--cached', '--name-only').stdout, '')
+            self.assertEqual(git(repo, 'status', '--porcelain', '--', 'content/posts').stdout, '')
+
     def test_git_add_failure_restores_preinstall_index_and_worktree(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
@@ -3104,14 +3671,14 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)):
                 state = publish_to_blog.capture_git_publish_state([path])
                 path.write_text('generated\n', encoding='utf-8')
-                original_run = publish_to_blog.subprocess.run
+                original_run = publish_to_blog._run_git
 
                 def fail_git_add(command, *args, **kwargs):
-                    if command[:2] == ['git', 'add']:
-                        raise subprocess.CalledProcessError(1, command)
+                    if command[:1] == ['add']:
+                        raise subprocess.CalledProcessError(1, ['git', *command])
                     return original_run(command, *args, **kwargs)
 
-                with mock.patch.object(publish_to_blog.subprocess, 'run', side_effect=fail_git_add):
+                with mock.patch.object(publish_to_blog, '_run_git', side_effect=fail_git_add):
                     self.assertFalse(publish_to_blog.git_push(
                         '2026-07-10', [path], rollback_state=state,
                     ))
@@ -3138,6 +3705,56 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             self.assertIn(local_head, report)
             self.assertIn('push origin HEAD:main', report)
             self.assertIn('ls-remote origin refs/heads/main', report)
+
+    def test_push_timeout_preserves_adoptable_commit_without_remote_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, remote = init_blog_repo(tmp, with_remote=True)
+            path = posts / '2026-07-10.md'
+            path.write_text('generated\n', encoding='utf-8')
+            current = Path(tmp) / 'data' / 'current'
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'GITHUB_REMOTE', 'origin'), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                paths = [path]
+                save_bound_review_receipt('2026-07-10', paths)
+                base_head = git(repo, 'rev-parse', 'HEAD').stdout.strip()
+                original_run = publish_to_blog._run_git
+
+                def timeout_push(command, *args, **kwargs):
+                    if command[:1] == ['push']:
+                        return SimpleNamespace(
+                            args=['git', *command], returncode=-15,
+                            stdout='', stderr='', timed_out=True,
+                            output_truncated=False,
+                        )
+                    return original_run(command, *args, **kwargs)
+
+                with mock.patch.object(
+                        publish_to_blog, '_run_git', side_effect=timeout_push):
+                    self.assertFalse(publish_to_blog.git_push('2026-07-10', paths))
+                receipt = json.loads(
+                    publish_to_blog.review_receipt_path('2026-07-10').read_text(
+                        encoding='utf-8'
+                    )
+                )
+            local_head = git(repo, 'rev-parse', 'HEAD').stdout.strip()
+            remote_head = git(remote, 'rev-parse', 'refs/heads/main').stdout.strip()
+            self.assertNotEqual(local_head, base_head)
+            self.assertEqual(remote_head, base_head)
+            self.assertEqual(receipt['publicationCommit'], local_head)
+            self.assertNotIn('remoteVerifiedOid', receipt)
+            self.assertNotIn('remoteVerifiedAt', receipt)
+
+    def test_git_environment_is_noninteractive_and_excludes_project_credentials(self):
+        with mock.patch.dict(os.environ, {
+                'PAPER_ANALYZER_API_KEY': 'must-not-leak',
+                'SSH_AUTH_SOCK': '/tmp/test-agent.sock',
+        }, clear=False):
+            env = publish_to_blog._git_env()
+        self.assertEqual(env['GIT_TERMINAL_PROMPT'], '0')
+        self.assertEqual(env['GCM_INTERACTIVE'], 'never')
+        self.assertEqual(env['SSH_AUTH_SOCK'], '/tmp/test-agent.sock')
+        self.assertNotIn('PAPER_ANALYZER_API_KEY', env)
 
     def test_formal_publish_rejects_non_main_branch(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4045,38 +4662,44 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         self.assertIn('markdown_hugo_gate.py', dependency_names)
 
     def test_review_protocol_fingerprint_binds_model_code_hugo_and_is_cached(self):
-        completed = SimpleNamespace(stdout='hugo v0.test', stderr='', returncode=0)
+        completed = SimpleNamespace(
+            stdout='hugo v0.test', stderr='', returncode=0,
+            timed_out=False, output_truncated=False,
+        )
         publish_to_blog._REVIEW_PROTOCOL_CACHE.clear()
         with mock.patch.object(publish_to_blog, '_sha256_file', return_value='a' * 64), \
                 mock.patch.object(publish_to_blog.shutil, 'which', return_value='/missing/hugo'), \
-                mock.patch.object(publish_to_blog.subprocess, 'run', return_value=completed) as run, \
+                mock.patch.object(publish_to_blog, '_run_bounded_subprocess', return_value=completed) as run, \
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'model-a'}):
             first = publish_to_blog.review_protocol_fingerprint()
             self.assertEqual(first, publish_to_blog.review_protocol_fingerprint())
             self.assertEqual(run.call_count, 1)
         with mock.patch.object(publish_to_blog, '_sha256_file', return_value='a' * 64), \
                 mock.patch.object(publish_to_blog.shutil, 'which', return_value='/missing/hugo'), \
-                mock.patch.object(publish_to_blog.subprocess, 'run', return_value=completed), \
+                mock.patch.object(publish_to_blog, '_run_bounded_subprocess', return_value=completed), \
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'model-b'}):
             second = publish_to_blog.review_protocol_fingerprint()
         self.assertNotEqual(first, second)
         publish_to_blog._REVIEW_PROTOCOL_CACHE.clear()
         with mock.patch.object(publish_to_blog, '_sha256_file', return_value='a' * 64), \
                 mock.patch.object(publish_to_blog.shutil, 'which', return_value='/missing/hugo'), \
-                mock.patch.object(publish_to_blog.subprocess, 'run', return_value=completed), \
+                mock.patch.object(publish_to_blog, '_run_bounded_subprocess', return_value=completed), \
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'model-a', 'PD_BLOG_REVIEW_MAX_TOKENS': '8000'}):
             third = publish_to_blog.review_protocol_fingerprint()
         self.assertNotEqual(first, third)
 
     def test_review_protocol_includes_manual_takeover_script_and_rejects_stale_generation_template(self):
-        completed = SimpleNamespace(stdout='hugo v0.test', stderr='', returncode=0)
+        completed = SimpleNamespace(
+            stdout='hugo v0.test', stderr='', returncode=0,
+            timed_out=False, output_truncated=False,
+        )
         publish_to_blog._REVIEW_PROTOCOL_CACHE.clear()
         with mock.patch.object(
                 publish_to_blog, '_sha256_file', return_value='a' * 64,
         ) as digest, mock.patch.object(
                 publish_to_blog.shutil, 'which', return_value='/missing/hugo',
         ), mock.patch.object(
-                publish_to_blog.subprocess, 'run', return_value=completed,
+                publish_to_blog, '_run_bounded_subprocess', return_value=completed,
         ):
             publish_to_blog.review_protocol_fingerprint()
         dependency_names = {Path(call.args[0]).name for call in digest.call_args_list}
@@ -4589,11 +5212,32 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 manifest.parent.mkdir(parents=True, exist_ok=True)
                 manifest.write_text(json.dumps({'category': '论文速递'}), encoding='utf-8')
                 with mock.patch.object(
-                    publish_to_blog.subprocess, 'run', side_effect=OSError('node missing'),
+                    publish_to_blog, '_run_bounded_subprocess', side_effect=OSError('node missing'),
                 ):
                     self.assertFalse(
                         publish_to_blog.plan_post_publish_visual_assets('2026-07-10')
                     )
+
+    def test_post_publish_planner_timeout_is_bounded_and_retryable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            current = Path(tmp)
+            completed = SimpleNamespace(
+                returncode=-15, stdout='', stderr='planner timeout',
+                timed_out=True, output_truncated=False,
+            )
+            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                manifest = publish_to_blog.generation_manifest_path('2026-07-10')
+                manifest.parent.mkdir(parents=True, exist_ok=True)
+                manifest.write_text(json.dumps({'category': '论文速递'}), encoding='utf-8')
+                with mock.patch.object(
+                    publish_to_blog, '_run_bounded_subprocess', return_value=completed,
+                ) as run, contextlib.redirect_stdout(io.StringIO()) as output:
+                    self.assertFalse(
+                        publish_to_blog.plan_post_publish_visual_assets('2026-07-10')
+                    )
+            self.assertEqual(run.call_args.kwargs['timeout_seconds'], 120)
+            self.assertTrue(run.call_args.kwargs['combine_output'])
+            self.assertIn('超时且完整进程组已终止', output.getvalue())
 
     def test_digest_cover_local_bytes_are_allowed_for_required_review(self):
         with tempfile.TemporaryDirectory() as tmp:

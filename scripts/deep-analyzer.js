@@ -72,6 +72,7 @@ const {
     apiMaxRetries: API_MAX_RETRIES,
     apiRetryBaseDelayMs: API_RETRY_BASE_DELAY_MS,
     apiMaxTokens: API_MAX_TOKENS,
+    apiMaxResponseBytes: API_MAX_RESPONSE_BYTES = 16 * 1024 * 1024,
     repairMaxTokens: REPAIR_MAX_TOKENS = 16000,
     apiReaderMaxTokens: API_READER_MAX_TOKENS = 48000,
     apiTemperature: API_TEMPERATURE,
@@ -730,6 +731,7 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', opti
                 protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
                 endpointSha256: crypto.createHash('sha256').update(DEEP_CONFIG.endpoint).digest('hex'),
                 maxTokens: 16000,
+                maxResponseBytes: API_MAX_RESPONSE_BYTES,
                 temperature: SCORING_AUDIT_TEMPERATURE,
                 promptTemplateSha256,
                 evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex')
@@ -753,8 +755,16 @@ const API_READER_PARSER_VERSION = 'api-reader-parser-v3';
 const API_READER_ASSEMBLER_VERSION = 'api-reader-assembler-v3';
 const API_READER_TABLE_CONTRACT_VERSION = 'api-reader-tables-v3';
 const API_READER_FIGURE_CONTRACT_VERSION = 'api-reader-figures-v3';
+const API_READER_QUALITY_METRICS_CONTRACT = 'api-reader-quality-metrics-v2';
+const API_READER_SOURCE_BINDING_CONTRACT = 'api-reader-source-bindings-v4';
+const API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1';
+const API_READER_RESOURCE_IDENTITY_CONTRACT = 'api-reader-resource-identity-v1';
 const API_READER_FIGURE_MAX_BYTES = 16 * 1024 * 1024;
 const API_READER_FIGURE_LIMIT = 8;
+const API_READER_FIGURE_SELECTION_LIMIT = 4;
+const SCORING_STABILITY_RESOLUTION_CONTRACT = 'api-scoring-stability-resolution-v1';
+const SCORING_STABILITY_THRESHOLD = 0.5;
+const SCORING_STABILITY_CONSENSUS_TOLERANCE = 0.3;
 const API_READER_FIGURE_LEAD_MIN_CHARS = 30;
 const API_READER_FIGURE_EXPLANATION_MIN_CHARS = 45;
 const API_READER_KINDS = Object.freeze([
@@ -765,6 +775,17 @@ const API_READER_REQUIRED_KINDS = Object.freeze([
     'background', 'related_work', 'method_overview', 'training',
     'experiment_setup', 'result', 'limitation', 'reproduction', 'synthesis'
 ]);
+
+function scoringStabilityResolutionIsValid(stage) {
+    if (stage?.stabilityWarning !== true) return true;
+    const resolution = stage.stabilityResolution;
+    return resolution?.contract === SCORING_STABILITY_RESOLUTION_CONTRACT
+        && resolution?.status === 'resolved'
+        && resolution?.method === 'second_pass_consensus'
+        && Number.isFinite(resolution?.scoreDifference)
+        && resolution.scoreDifference <= SCORING_STABILITY_CONSENSUS_TOLERANCE
+        && /^[a-f0-9]{64}$/.test(String(resolution?.secondAuditSha256 || ''));
+}
 
 function isAllowedReaderNarrativeNumeralIssue(issue) {
     if (issue?.code !== 'quantitative_chinese_numeral') return false;
@@ -780,6 +801,257 @@ function isAllowedReaderDefensiveNegationIssue(issue, article) {
     const chineseChars = (String(article || '').match(/[\u3400-\u9fff]/g) || []).length;
     const readerLimit = Math.max(12, Math.ceil(chineseChars / 300));
     return count <= readerLimit;
+}
+
+function buildApiReaderQualityMetrics(quality, article) {
+    const rawIssues = Array.isArray(quality?.issues) ? quality.issues : [];
+    const warnings = Array.isArray(quality?.warnings) ? quality.warnings : [];
+    const waivedIssues = rawIssues.filter(issue => (
+        isAllowedReaderNarrativeNumeralIssue(issue)
+        || isAllowedReaderDefensiveNegationIssue(issue, article)
+        || isReaderHeadingIssue(issue, article)
+    ));
+    const waivedSet = new Set(waivedIssues);
+    const blockingIssues = rawIssues.filter(issue => !waivedSet.has(issue));
+    const countCodes = items => Object.fromEntries(
+        [...new Set(items.map(item => item.code).filter(Boolean))].sort()
+            .map(code => [code, items.filter(item => item.code === code).length])
+    );
+    return {
+        contract: API_READER_QUALITY_METRICS_CONTRACT,
+        rawIssueCount: rawIssues.length,
+        waivedIssueCount: waivedIssues.length,
+        blockingIssueCount: blockingIssues.length,
+        warningCount: warnings.length,
+        rawIssueCodes: countCodes(rawIssues),
+        waivedIssueCodes: countCodes(waivedIssues),
+        blockingIssueCodes: countCodes(blockingIssues),
+        warningCodes: countCodes(warnings)
+    };
+}
+
+function normalizeReaderSourceCell(value) {
+    return String(value ?? '').normalize('NFKC')
+        .replace(/<br\s*\/?>/gi, ' ')
+        .replace(/[*_`]/g, '')
+        .replace(/[％]/g, '%')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function findStructuredTableCell(table, row, column) {
+    return (table?.cells || []).find(cell => (
+        Number.isInteger(cell?.row) && Number.isInteger(cell?.column)
+        && row >= cell.row && row < cell.row + Number(cell.rowspan || 1)
+        && column >= cell.column && column < cell.column + Number(cell.colspan || 1)
+    ));
+}
+
+function readerNumericTokens(value) {
+    return [...String(value || '').normalize('NFKC').matchAll(
+        /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*%|\s*(?:dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp))?/gi
+    )].map(match => match[0].replace(/\s+/g, '').toLowerCase());
+}
+
+function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFormulaBindings, options = {}) {
+    const structuredArtifacts = options.structuredArtifacts;
+    const sourceText = String(options.sourceText || '');
+    if (!structuredArtifacts || typeof structuredArtifacts !== 'object') {
+        throw new Error('Reader source-binding v4 需要 structuredArtifacts');
+    }
+    if (!sourceText || !recoverySha256(structuredArtifacts.payloadSha256)) {
+        throw new Error('Reader source-binding v4 需要已绑定全文和 structuredArtifacts payload SHA');
+    }
+    const { payloadSha256: declaredArtifactsSha256, ...artifactBody } = structuredArtifacts;
+    const replayedArtifactsSha256 = crypto.createHash('sha256')
+        .update(JSON.stringify(artifactBody)).digest('hex');
+    const sourceTextSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
+    if (declaredArtifactsSha256 !== replayedArtifactsSha256
+        || structuredArtifacts.flattenedTextSha256 !== sourceTextSha256) {
+        throw new Error('Reader source-binding v4 的 structuredArtifacts/fulltext SHA 无法重放');
+    }
+    if (!Array.isArray(declaredFormulaBindings) || !Array.isArray(declaredTableBindings)) {
+        throw new Error('Reader source-binding v4 要求 tableBindings/formulaBindings 数组');
+    }
+
+    let boundArticle = String(article || '');
+    const formulaOrdinals = new Set();
+    const formulaBindings = declaredFormulaBindings.map((binding, index) => {
+        assertExactObjectKeys(
+            binding, ['formulaOrdinal', 'targetKind', 'marker'],
+            `读者文章 formulaBindings[${index}]`
+        );
+        const formula = (structuredArtifacts.formulas || []).find(item => (
+            item?.ordinal === binding.formulaOrdinal && item?.recoveryStatus === 'complete'
+        ));
+        const marker = String(binding.marker || '').trim();
+        if (!formula || !Number.isInteger(binding.formulaOrdinal)
+            || formulaOrdinals.has(binding.formulaOrdinal)
+            || marker !== `[[FORMULA_${binding.formulaOrdinal}]]`
+            || !API_READER_KINDS.includes(binding.targetKind)) {
+            throw new Error(`读者文章 formulaBindings[${index}] 来源或 marker 非法`);
+        }
+        const markerMatches = boundArticle.split(marker).length - 1;
+        const markerBlock = boundArticle.split(/\n\s*\n/).some(block => block.trim() === marker);
+        const targetSection = (options.sections || []).find(section => (
+            section?.kind === binding.targetKind
+            && String(section.body || '').split(/\n\s*\n/).some(block => block.trim() === marker)
+        ));
+        if (markerMatches !== 1 || !markerBlock || !targetSection) {
+            throw new Error(`读者文章 formulaBindings[${index}] marker 必须在正文独占且仅出现一次`);
+        }
+        const latex = String(formula.latex || '').trim();
+        if (!latex || !recoverySha256(formula.sourceDomSha256)) {
+            throw new Error(`读者文章 formulaBindings[${index}] 原始公式缺少 TeX/DOM SHA`);
+        }
+        const renderedBlock = `\\[${latex}\\]`;
+        boundArticle = boundArticle.replace(marker, renderedBlock);
+        formulaOrdinals.add(binding.formulaOrdinal);
+        return {
+            formulaOrdinal: binding.formulaOrdinal,
+            targetKind: binding.targetKind,
+            marker,
+            latex,
+            sourceDomSha256: formula.sourceDomSha256,
+            renderedBlockSha256: crypto.createHash('sha256').update(renderedBlock).digest('hex')
+        };
+    });
+
+    const renderedTables = extractMarkdownTables(boundArticle);
+    const renderedFormulaBlocks = [...boundArticle.matchAll(/\\\[[\s\S]*?\\\]/g)]
+        .map(match => match[0]);
+    if (renderedFormulaBlocks.length !== formulaBindings.length
+        || formulaBindings.some(binding => (
+            renderedFormulaBlocks.filter(block => (
+                crypto.createHash('sha256').update(block).digest('hex')
+                    === binding.renderedBlockSha256
+            )).length !== 1
+        ))) {
+        throw new Error('Reader source-binding v4 检测到未绑定、重复或被改写的展示公式');
+    }
+    if (declaredTableBindings.length !== renderedTables.length) {
+        throw new Error(
+            `Reader source-binding v4 表格绑定数量 ${declaredTableBindings.length}`
+            + ` 与正文表格数量 ${renderedTables.length} 不一致`
+        );
+    }
+    const tableIndexes = new Set();
+    const tableBindings = declaredTableBindings.map((binding, index) => {
+        assertExactObjectKeys(
+            binding,
+            ['tableIndex', 'sourceType', 'sourceTableOrdinal', 'cellBindings', 'sourceQuotes'],
+            `读者文章 tableBindings[${index}]`
+        );
+        const rendered = renderedTables[index];
+        if (binding.tableIndex !== index + 1 || tableIndexes.has(binding.tableIndex)) {
+            throw new Error(`读者文章 tableBindings[${index}].tableIndex 必须按正文顺序唯一递增`);
+        }
+        tableIndexes.add(binding.tableIndex);
+        const renderedRows = [rendered.header, ...rendered.rows];
+        const renderedTableSha256 = crypto.createHash('sha256')
+            .update(rendered.markdown).digest('hex');
+        if (binding.sourceType === 'artifact_table') {
+            const sourceTable = (structuredArtifacts.tables || []).find(item => (
+                item?.ordinal === binding.sourceTableOrdinal && item?.recoveryStatus === 'complete'
+            ));
+            if (!sourceTable || !recoverySha256(sourceTable.sourceDomSha256)
+                || !Array.isArray(binding.cellBindings) || binding.sourceQuotes?.length !== 0) {
+                throw new Error(`读者文章 tableBindings[${index}] 原始表绑定不完整`);
+            }
+            const expectedCells = renderedRows.flatMap((row, renderedRow) => (
+                row.map((_cell, renderedColumn) => ({ renderedRow, renderedColumn }))
+            ));
+            if (binding.cellBindings.length !== expectedCells.length) {
+                throw new Error(`读者文章 tableBindings[${index}] 必须逐格绑定全部渲染单元格`);
+            }
+            const seenRenderedCells = new Set();
+            const cellBindings = binding.cellBindings.map((cellBinding, cellIndex) => {
+                assertExactObjectKeys(
+                    cellBinding,
+                    ['renderedRow', 'renderedColumn', 'sourceRow', 'sourceColumn'],
+                    `读者文章 tableBindings[${index}].cellBindings[${cellIndex}]`
+                );
+                const renderedRow = cellBinding.renderedRow;
+                const renderedColumn = cellBinding.renderedColumn;
+                const renderedText = renderedRows?.[renderedRow]?.[renderedColumn];
+                const key = `${renderedRow}:${renderedColumn}`;
+                const sourceCell = findStructuredTableCell(
+                    sourceTable, cellBinding.sourceRow, cellBinding.sourceColumn
+                );
+                if (renderedText === undefined || seenRenderedCells.has(key) || !sourceCell
+                    || !recoverySha256(sourceCell.sourceDomSha256)) {
+                    throw new Error(`读者文章 tableBindings[${index}] 单元格坐标或 DOM SHA 非法`);
+                }
+                if (normalizeReaderSourceCell(renderedText)
+                    !== normalizeReaderSourceCell(sourceCell.text)) {
+                    throw new Error(
+                        `读者文章 tableBindings[${index}] 渲染单元格与原始 cell 不一致: ${key}`
+                    );
+                }
+                seenRenderedCells.add(key);
+                return {
+                    ...cellBinding,
+                    renderedText: String(renderedText),
+                    sourceText: String(sourceCell.text),
+                    sourceDomSha256: sourceCell.sourceDomSha256
+                };
+            });
+            if (seenRenderedCells.size !== expectedCells.length) {
+                throw new Error(`读者文章 tableBindings[${index}] 渲染单元格覆盖不完整`);
+            }
+            return {
+                tableIndex: binding.tableIndex,
+                sourceType: binding.sourceType,
+                sourceTableOrdinal: binding.sourceTableOrdinal,
+                sourceTableDomSha256: sourceTable.sourceDomSha256,
+                renderedTableSha256,
+                cellBindings,
+                sourceQuotes: []
+            };
+        }
+        if (binding.sourceType !== 'source_quotes' || binding.sourceTableOrdinal !== null
+            || !Array.isArray(binding.cellBindings) || binding.cellBindings.length !== 0
+            || !Array.isArray(binding.sourceQuotes) || binding.sourceQuotes.length < 1) {
+            throw new Error(`读者文章 tableBindings[${index}] 正文 quote 绑定结构非法`);
+        }
+        const sourceQuotes = binding.sourceQuotes.map((quote, quoteIndex) => {
+            if (typeof quote !== 'string' || quote.length < 12 || quote.length > 4000
+                || !sourceText.includes(quote)) {
+                throw new Error(
+                    `读者文章 tableBindings[${index}].sourceQuotes[${quoteIndex}]` +
+                    ' 不是全文中的 exact sourceQuote'
+                );
+            }
+            return {
+                quote,
+                sourceQuoteSha256: crypto.createHash('sha256').update(quote).digest('hex')
+            };
+        });
+        const quoteCorpus = sourceQuotes.map(item => item.quote).join('\n');
+        const missingNumbers = readerNumericTokens(rendered.markdown).filter(token => (
+            !readerNumericTokens(quoteCorpus).includes(token)
+        ));
+        if (missingNumbers.length > 0) {
+            throw new Error(
+                `读者文章 tableBindings[${index}] 关键数字缺少 exact quote/cell 证据: `
+                + [...new Set(missingNumbers)].join(', ')
+            );
+        }
+        return {
+            tableIndex: binding.tableIndex,
+            sourceType: binding.sourceType,
+            sourceTableOrdinal: null,
+            renderedTableSha256,
+            cellBindings: [],
+            sourceQuotes
+        };
+    });
+    return {
+        article: boundArticle,
+        tableBindings,
+        formulaBindings,
+        sourceBindingsSha256: stableFingerprint({ tableBindings, formulaBindings })
+    };
 }
 
 function canonicalReaderBridgeTerm(term) {
@@ -1620,11 +1892,15 @@ function parseApiReaderArticleResult(raw, options = {}) {
     } catch (error) {
         throw new Error(`读者文章 JSON 无法解析: ${error.message}`);
     }
+    const hasSourceBindings = Object.prototype.hasOwnProperty.call(value, 'tableBindings')
+        || Object.prototype.hasOwnProperty.call(value, 'formulaBindings');
     assertExactObjectKeys(
         value,
         [
             'version', 'readerTitle', 'oneSentenceThesis',
-            'conceptBridges', 'figurePlacements', 'sections'
+            'conceptBridges', 'figurePlacements', 'sections',
+            ...(hasSourceBindings || options.requireSourceBindings === true
+                ? ['tableBindings', 'formulaBindings'] : [])
         ],
         '读者文章顶层'
     );
@@ -1726,25 +2002,17 @@ function parseApiReaderArticleResult(raw, options = {}) {
             )
         };
     });
-    if (!Array.isArray(value.figurePlacements) || value.figurePlacements.length > 8) {
-        throw new Error('读者文章 figurePlacements 必须是至多 8 项的数组');
+    if (!Array.isArray(value.figurePlacements)
+        || value.figurePlacements.length > API_READER_FIGURE_SELECTION_LIMIT) {
+        throw new Error(
+            `读者文章 figurePlacements 必须是至多 ${API_READER_FIGURE_SELECTION_LIMIT} 项的数组`
+        );
     }
     const availableFigureOrdinals = new Set(
         (options.availableFigureOrdinals || []).map(Number).filter(Number.isInteger)
     );
     if (availableFigureOrdinals.size === 0 && value.figurePlacements.length !== 0) {
         throw new Error('论文没有可用 Figure，figurePlacements 必须为空');
-    }
-    const minimumFigurePlacements = value.version === 3
-        ? (availableFigureOrdinals.size >= 6
-            ? 6
-            : Math.min(2, availableFigureOrdinals.size))
-        : Math.min(2, availableFigureOrdinals.size);
-    if (availableFigureOrdinals.size > 0
-        && value.figurePlacements.length < minimumFigurePlacements) {
-        throw new Error(
-            `论文存在可用 Figure，但高价值图文绑定少于 ${minimumFigurePlacements} 张`
-        );
     }
     const seenFigureOrdinals = new Set();
     const figurePlacements = value.figurePlacements.map((placement, index) => {
@@ -1859,11 +2127,25 @@ function parseApiReaderArticleResult(raw, options = {}) {
             summary: '', method: article, innovations: '', results: '', details: '', limits: ''
         });
     }
-    const blockingQualityIssues = quality.issues.filter(
-        issue => !isAllowedReaderNarrativeNumeralIssue(issue)
-            && !isAllowedReaderDefensiveNegationIssue(issue, article)
-            && !isReaderHeadingIssue(issue, article)
-    );
+    const sourceBindingResult = (hasSourceBindings || options.requireSourceBindings === true)
+        ? bindApiReaderSourceEvidence(
+            article,
+            value.tableBindings,
+            value.formulaBindings,
+            {
+                structuredArtifacts: options.structuredArtifacts,
+                sourceText: options.sourceText,
+                sections: normalizedSections
+            }
+        )
+        : null;
+    if (sourceBindingResult) article = sourceBindingResult.article;
+    const qualityMetrics = buildApiReaderQualityMetrics(quality, article);
+    const blockingQualityIssues = quality.issues.filter(issue => !(
+        isAllowedReaderNarrativeNumeralIssue(issue)
+        || isAllowedReaderDefensiveNegationIssue(issue, article)
+        || isReaderHeadingIssue(issue, article)
+    ));
     if (blockingQualityIssues.length > 0) {
         const details = blockingQualityIssues.slice(0, 8)
             .map(item => `${item.code}:${item.match || item.message}`).join('；');
@@ -1919,13 +2201,19 @@ function parseApiReaderArticleResult(raw, options = {}) {
             oneSentenceThesis: normalizeReaderEditorialSurface(value.oneSentenceThesis.trim()),
             conceptBridges: reboundConceptBridges,
             figurePlacements: reboundFigurePlacements,
+            ...(sourceBindingResult ? {
+                tableBindings: sourceBindingResult.tableBindings,
+                formulaBindings: sourceBindingResult.formulaBindings,
+                sourceBindingsContract: API_READER_SOURCE_BINDING_CONTRACT,
+                sourceBindingsSha256: sourceBindingResult.sourceBindingsSha256
+            } : {}),
             sections: normalizedSections.map(section => ({
                 kind: section.kind,
                 heading: section.heading.trim()
             }))
         },
         article,
-        qualityMetrics: quality.metrics
+        qualityMetrics
     };
 }
 
@@ -2168,6 +2456,19 @@ function buildApiReaderValidationFeedback(error) {
             + '字符串内的换行必须使用 JSON 转义，禁止原始控制字符'
         );
     }
+    if (/source-binding v4|tableBindings|渲染单元格与原始 cell|exact sourceQuote/.test(message)) {
+        fixes.push(
+            '逐张按正文顺序重建 tableBindings：原表模式必须让每个渲染单元格逐字等于绑定坐标的原始 cell，'
+            + '并覆盖表头和所有数据格；正文整理模式必须复制全文中的连续原句，且覆盖表内每个数字与单位。'
+            + '不要翻译原表 cell、沿用调列前坐标或自行计算 SHA'
+        );
+    }
+    if (/formulaBindings|未绑定、重复或被改写的展示公式/.test(message)) {
+        fixes.push(
+            '删除所有自行书写的展示公式，只保留与 READER_ARTIFACTS ordinal 对应的独占 FORMULA marker，'
+            + '并为每个 marker 建立唯一 formulaBindings 项；代码会注入原始 TeX'
+        );
+    }
     if (/中文字数必须/.test(message)) {
         fixes.push('只扩写或压缩现有小节正文，使中文字符数进入报错给出的区间，不改变事实、数字和章节顺序');
     }
@@ -2256,6 +2557,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             sha256: image.sha256
         };
     });
+    const pixelFigureOrdinals = imageEvidence.map(item => item.ordinal).filter(Number.isInteger);
     const readerImageVisibilityNotice = imageEvidence.length > 0
         ? `模型本次真正收到像素的图为：${imageEvidence.map(
             item => `FIGURE_${item.ordinal}`
@@ -2290,10 +2592,16 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         try {
             return {
                 ...parseApiReaderArticleResult(raw, {
-                    availableFigureOrdinals,
+                    // A caption in sourceEvidence is not pixel evidence.  Only
+                    // figures actually attached to this model request may be
+                    // selected for visible-fact narration.
+                    availableFigureOrdinals: pixelFigureOrdinals,
                     requireIntegratedTables: true,
                     minimumIntegratedTables,
-                    requiredVersion: API_READER_PLAN_VERSION
+                    requiredVersion: API_READER_PLAN_VERSION,
+                    requireSourceBindings: true,
+                    structuredArtifacts: options.structuredArtifacts,
+                    sourceText: options.sourceText
                 }),
                 attempts: attempt,
                 imageEvidence
@@ -2354,7 +2662,11 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         reviewFeedbackSha256
     });
     const generated = await generateApiReaderArticleDetailed(
-        paper, analysis, evidenceContext, { reviewFeedback }
+        paper, analysis, evidenceContext, {
+            reviewFeedback,
+            structuredArtifacts: sourceDetails.structuredArtifacts,
+            sourceText
+        }
     );
     const injectedReaderResult = injectApiReaderFigures(
         generated, sourceDetails.structuredArtifacts, arxivId
@@ -2362,8 +2674,14 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     const materializedFigures = await materializeApiReaderFigures(
         injectedReaderResult.figures, arxivId
     );
+    const materializedFigureOrdinals = new Set(materializedFigures.map(item => item.ordinal));
     const readerResult = {
         ...injectedReaderResult,
+        plan: {
+            ...injectedReaderResult.plan,
+            figurePlacements: (injectedReaderResult.plan.figurePlacements || [])
+                .filter(item => materializedFigureOrdinals.has(item.figureOrdinal))
+        },
         article: pruneUnmaterializedApiReaderFigureBlocks(
             injectedReaderResult.article,
             injectedReaderResult.figures,
@@ -2375,15 +2693,24 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     const planSha256 = stableFingerprint(readerResult.plan);
     const figuresSha256 = stableFingerprint(readerResult.figures);
     const readerAuthors = resolveApiReaderAuthors(paper, sourceDetails);
+    const readerResources = options.readerResources || await buildApiReaderResourceIdentity(
+        analysis, sourceText, manifest.stages.demoLinkScan
+    );
+    manifest.stages.openSourceScan.resourceEvidenceContract = API_READER_RESOURCE_IDENTITY_CONTRACT;
+    manifest.stages.openSourceScan.resourceEvidenceSha256 = readerResources.identitySha256;
     paper.apiReaderArticle = readerResult.article;
     paper.apiReaderPlan = readerResult.plan;
     paper.apiReaderFigures = readerResult.figures;
     paper.apiReaderAuthors = readerAuthors;
+    paper.apiReaderResources = readerResources;
     paper.apiReaderArticleSha256 = articleSha256;
     paper.apiReaderPlanSha256 = planSha256;
     manifest.contracts = {
         ...(manifest.contracts || {}),
-        apiReaderArticle: API_READER_ARTICLE_CONTRACT
+        apiReaderArticle: API_READER_ARTICLE_CONTRACT,
+        apiReaderSourceBindings: API_READER_SOURCE_BINDING_CONTRACT,
+        apiReaderAuthorIdentity: API_READER_AUTHOR_IDENTITY_CONTRACT,
+        apiReaderResourceIdentity: API_READER_RESOURCE_IDENTITY_CONTRACT
     };
     manifest.sourceAcquisition = {
         ...(manifest.sourceAcquisition || {}),
@@ -2397,6 +2724,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
         temperature: 0.6,
         maxTokens: API_READER_MAX_TOKENS,
+        maxResponseBytes: API_MAX_RESPONSE_BYTES,
         overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
         promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.apiReaderArticle),
         evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
@@ -2408,8 +2736,19 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         figureCount: readerResult.figures.length,
         figuresSha256,
         readerAuthorsSha256: stableFingerprint(readerAuthors),
+        readerAuthorIdentityContractVersion: API_READER_AUTHOR_IDENTITY_CONTRACT,
+        readerAuthorIdentitySha256: readerAuthors.identitySha256,
+        resourceIdentityContractVersion: API_READER_RESOURCE_IDENTITY_CONTRACT,
+        resourceIdentitySha256: readerResources.identitySha256,
+        resourceCount: readerResources.resources.length,
         structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || '',
         qualityMetrics: readerResult.qualityMetrics,
+        qualityMetricsContractVersion: API_READER_QUALITY_METRICS_CONTRACT,
+        sourceBindingsContractVersion: API_READER_SOURCE_BINDING_CONTRACT,
+        sourceBindingsSha256: readerResult.plan.sourceBindingsSha256,
+        sourceBindingsSourceTextSha256: sourceSha256,
+        tableBindingCount: readerResult.plan.tableBindings.length,
+        formulaBindingCount: readerResult.plan.formulaBindings.length,
         parserVersion: API_READER_PARSER_VERSION,
         assemblerVersion: API_READER_ASSEMBLER_VERSION,
         tableContractVersion: API_READER_TABLE_CONTRACT_VERSION,
@@ -2425,7 +2764,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
 async function refreshApiScoringAndReaderFromSource(paper, sourceDetails) {
     if (!paper || typeof paper !== 'object') throw new Error('评分复验需要 canonical paper');
     const manifest = paper.analysisManifest;
-    const analysis = String(paper.analysis || '');
+    let analysis = String(paper.analysis || '');
     const sourceText = String(sourceDetails?.text || '');
     const sourceSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
     if (!analysis || sourceText.length <= FULL_TEXT_MIN_CHARS_FOR_FULL) {
@@ -2435,16 +2774,21 @@ async function refreshApiScoringAndReaderFromSource(paper, sourceDetails) {
         || sourceSha256 !== manifest?.sourceAcquisition?.sourceSha256) {
         throw new Error('评分复验的全文 SHA 与 canonical 来源不一致');
     }
+    const readerResources = await buildApiReaderResourceIdentity(
+        analysis, sourceText, manifest?.stages?.demoLinkScan
+    );
+    analysis = applyApiReaderResourceAvailability(analysis, readerResources);
+    paper.apiReaderResources = readerResources;
     const scoringEvidenceContext = buildStageEvidenceContext(
         'scoringAudit', analysis, sourceText
     );
-    const scoringResult = await auditTypeAwareScoringDetailed(
+    let scoringResult = await auditTypeAwareScoringDetailed(
         analysis,
         sourceText,
         { evidenceContext: scoringEvidenceContext }
     );
-    const auditedAnalysis = scoringResult.analysis;
-    const auditedParsed = parseAnalysis(auditedAnalysis);
+    let auditedAnalysis = scoringResult.analysis;
+    let auditedParsed = parseAnalysis(auditedAnalysis);
     const invalidReason = getInvalidAnalysisReason(auditedAnalysis, auditedParsed, {
         enforceExperimentTableContract: true,
         experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
@@ -2455,17 +2799,68 @@ async function refreshApiScoringAndReaderFromSource(paper, sourceDetails) {
         throw new Error(`评分复验后的分析未通过最终契约: ${invalidReason}`);
     }
     const previousScore = Number.parseFloat(paper?.parsed?.score);
-    const finalScore = Number.parseFloat(auditedParsed?.score);
-    const scoreDelta = Number.isFinite(previousScore) && Number.isFinite(finalScore)
+    let finalScore = Number.parseFloat(auditedParsed?.score);
+    let scoreDelta = Number.isFinite(previousScore) && Number.isFinite(finalScore)
         ? Number((finalScore - previousScore).toFixed(1))
         : null;
+    let stabilityResolution = {
+        contract: SCORING_STABILITY_RESOLUTION_CONTRACT,
+        status: 'not_required',
+        threshold: SCORING_STABILITY_THRESHOLD
+    };
+    let totalAttempts = scoringResult.attempts;
+    if (scoreDelta !== null && Math.abs(scoreDelta) > SCORING_STABILITY_THRESHOLD) {
+        const firstAuditScore = finalScore;
+        const secondResult = await auditTypeAwareScoringDetailed(
+            analysis, sourceText, { evidenceContext: scoringEvidenceContext }
+        );
+        const secondParsed = parseAnalysis(secondResult.analysis);
+        const secondInvalidReason = getInvalidAnalysisReason(secondResult.analysis, secondParsed, {
+            enforceExperimentTableContract: true,
+            experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            enforceMethodDetailContract: true,
+            sourceText
+        });
+        if (secondInvalidReason) {
+            throw new Error(`评分稳定性二次审计未通过最终契约: ${secondInvalidReason}`);
+        }
+        const secondAuditScore = Number.parseFloat(secondParsed?.score);
+        const scoreDifference = Math.abs(secondAuditScore - firstAuditScore);
+        stabilityResolution = {
+            contract: SCORING_STABILITY_RESOLUTION_CONTRACT,
+            status: scoreDifference <= SCORING_STABILITY_CONSENSUS_TOLERANCE
+                ? 'resolved' : 'unresolved',
+            method: 'second_pass_consensus',
+            threshold: SCORING_STABILITY_THRESHOLD,
+            consensusTolerance: SCORING_STABILITY_CONSENSUS_TOLERANCE,
+            firstAuditScore,
+            secondAuditScore,
+            scoreDifference,
+            firstAuditSha256: stableFingerprint(scoringResult.audit),
+            secondAuditSha256: stableFingerprint(secondResult.audit),
+            secondAttempts: secondResult.attempts
+        };
+        if (stabilityResolution.status !== 'resolved') {
+            throw new Error(
+                `评分稳定性二次审计未收敛: first=${firstAuditScore.toFixed(1)}, `
+                + `second=${secondAuditScore.toFixed(1)}`
+            );
+        }
+        scoringResult = secondResult;
+        auditedAnalysis = secondResult.analysis;
+        auditedParsed = secondParsed;
+        finalScore = secondAuditScore;
+        scoreDelta = Number((finalScore - previousScore).toFixed(1));
+        totalAttempts += secondResult.attempts;
+    }
     manifest.stages.scoringAudit = {
         status: 'complete',
-        attempts: scoringResult.attempts,
+        attempts: totalAttempts,
         model: scoringResult.model,
         protocol: scoringResult.protocol,
         endpointSha256: scoringResult.endpointSha256,
         maxTokens: scoringResult.maxTokens,
+        maxResponseBytes: scoringResult.maxResponseBytes,
         temperature: scoringResult.temperature,
         promptTemplateSha256: scoringResult.promptTemplateSha256,
         scoringInputSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
@@ -2478,7 +2873,9 @@ async function refreshApiScoringAndReaderFromSource(paper, sourceDetails) {
         previousRunScore: Number.isFinite(previousScore) ? previousScore : null,
         finalScore: Number.isFinite(finalScore) ? finalScore : null,
         scoreDelta,
-        stabilityWarning: scoreDelta !== null && Math.abs(scoreDelta) > 0.5,
+        stabilityWarning: scoreDelta !== null
+            && Math.abs(scoreDelta) > SCORING_STABILITY_THRESHOLD,
+        stabilityResolution,
         audit: scoringResult.audit,
         auditSha256: stableFingerprint(scoringResult.audit),
         outputAnalysisSha256: crypto.createHash('sha256').update(auditedAnalysis).digest('hex'),
@@ -2486,7 +2883,7 @@ async function refreshApiScoringAndReaderFromSource(paper, sourceDetails) {
     };
     paper.analysis = auditedAnalysis;
     paper.parsed = auditedParsed;
-    await refreshApiReaderArticleFromSource(paper, sourceDetails);
+    await refreshApiReaderArticleFromSource(paper, sourceDetails, { readerResources });
     const figures = Array.isArray(paper.apiReaderFigures) ? paper.apiReaderFigures : [];
     manifest.stages.imageSupplement = {
         status: 'skipped',
@@ -2520,7 +2917,13 @@ function refreshApiReaderAuthorsFromSource(paper, sourceDetails) {
         throw new Error('作者机构刷新未能建立来源绑定');
     }
     paper.apiReaderAuthors = readerAuthors;
+    stage.readerAuthorIdentityContractVersion = API_READER_AUTHOR_IDENTITY_CONTRACT;
+    stage.readerAuthorIdentitySha256 = readerAuthors.identitySha256;
     stage.readerAuthorsSha256 = stableFingerprint(readerAuthors);
+    manifest.contracts = {
+        ...(manifest.contracts || {}),
+        apiReaderAuthorIdentity: API_READER_AUTHOR_IDENTITY_CONTRACT
+    };
     stage.refreshedAt = getBeijingISOString();
     return paper;
 }
@@ -2557,11 +2960,20 @@ async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
     );
     const articleSha256 = crypto.createHash('sha256').update(rewrittenArticle).digest('hex');
     const readerAuthors = resolveApiReaderAuthors(paper, sourceDetails);
+    const materializedOrdinals = new Set(materialized.map(item => item.ordinal));
+    const readerPlan = {
+        ...paper.apiReaderPlan,
+        figurePlacements: (paper.apiReaderPlan?.figurePlacements || [])
+            .filter(item => materializedOrdinals.has(item?.figureOrdinal))
+    };
     paper.apiReaderArticle = rewrittenArticle;
     paper.apiReaderArticleSha256 = articleSha256;
+    paper.apiReaderPlan = readerPlan;
+    paper.apiReaderPlanSha256 = stableFingerprint(readerPlan);
     paper.apiReaderFigures = materialized;
     paper.apiReaderAuthors = readerAuthors;
     stage.articleSha256 = articleSha256;
+    stage.planSha256 = paper.apiReaderPlanSha256;
     stage.figureCount = materialized.length;
     stage.figuresSha256 = stableFingerprint(materialized);
     stage.readerAuthorsSha256 = stableFingerprint(readerAuthors);
@@ -2635,7 +3047,10 @@ function modelFingerprint(config, temperature = API_TEMPERATURE, maxTokens = API
         endpoint: config.endpoint || '',
         protocol: detectApiType(config.endpoint || '', config.model || ''),
         temperature,
-        maxTokens
+        maxTokens,
+        maxResponseBytes: Number.isInteger(config.maxResponseBytes) && config.maxResponseBytes > 0
+            ? config.maxResponseBytes
+            : API_MAX_RESPONSE_BYTES
     };
 }
 
@@ -2776,7 +3191,7 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
     };
     return {
         primaryAnalysis: stableFingerprint(primaryContext),
-        demoLinkScan: stableFingerprint({ implementation: 'demo-link-scan-v1' }),
+        demoLinkScan: stableFingerprint({ implementation: 'demo-link-scan-v2-resource-identity' }),
         apiReaderArticle: stableFingerprint({
             ...modelFingerprint(DEEP_CONFIG, 0.6, API_READER_MAX_TOKENS),
             contract: API_READER_ARTICLE_CONTRACT,
@@ -2785,6 +3200,10 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
             assemblerVersion: API_READER_ASSEMBLER_VERSION,
             tableContractVersion: API_READER_TABLE_CONTRACT_VERSION,
             figureContractVersion: API_READER_FIGURE_CONTRACT_VERSION,
+            qualityMetricsContractVersion: API_READER_QUALITY_METRICS_CONTRACT,
+            sourceBindingsContractVersion: API_READER_SOURCE_BINDING_CONTRACT,
+            authorIdentityContractVersion: API_READER_AUTHOR_IDENTITY_CONTRACT,
+            resourceIdentityContractVersion: API_READER_RESOURCE_IDENTITY_CONTRACT,
             imageMaxBase64Chars: IMAGE_MAX_BASE64_CHARS,
             imageTotalBase64Chars: IMAGE_TOTAL_BASE64_CHARS,
             promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.apiReaderArticle),
@@ -2934,6 +3353,7 @@ function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint) {
         delete paper.apiReaderPlan;
         delete paper.apiReaderFigures;
         delete paper.apiReaderAuthors;
+        delete paper.apiReaderResources;
         delete paper.apiReaderArticleSha256;
         delete paper.apiReaderPlanSha256;
         if (manifest.contracts) {
@@ -2993,6 +3413,7 @@ function createAnalysisRecoveryManifest(paper) {
         delete paper.apiReaderPlan;
         delete paper.apiReaderFigures;
         delete paper.apiReaderAuthors;
+        delete paper.apiReaderResources;
         delete paper.apiReaderArticleSha256;
         delete paper.apiReaderPlanSha256;
     }
@@ -3147,6 +3568,118 @@ function resolveApiMaxRetries(maxRetries) {
         : API_MAX_RETRIES;
 }
 
+function sanitizeModelRequestError(value, config = DEEP_CONFIG) {
+    let text = String(value || 'unknown model request error');
+    for (const secret of [config?.key, DEEP_CONFIG.key, SECONDARY_CONFIG.key]) {
+        if (secret && text.includes(secret)) text = text.split(secret).join('[REDACTED]');
+    }
+    text = text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1[REDACTED]@');
+    text = text.replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '[REDACTED]');
+    return text.slice(0, 1200);
+}
+
+function makeModelRequestError(message, properties = {}, config = DEEP_CONFIG) {
+    const error = new Error(sanitizeModelRequestError(message, config));
+    for (const [key, value] of Object.entries(properties)) {
+        if (value !== undefined) error[key] = value;
+    }
+    error.modelRequestClassified = true;
+    return error;
+}
+
+function classifyModelRequestError(sourceError, config = DEEP_CONFIG) {
+    if (sourceError?.modelRequestClassified) return sourceError;
+    const code = String(sourceError?.code || '');
+    const message = sanitizeModelRequestError(sourceError?.message || sourceError, config);
+    if (code === 'RESPONSE_TOO_LARGE') {
+        const maxResponseBytes = Number.isInteger(config?.maxResponseBytes)
+            ? config.maxResponseBytes
+            : API_MAX_RESPONSE_BYTES;
+        return makeModelRequestError(`Model response exceeded maxResponseBytes=${maxResponseBytes}`, {
+            code: 'MODEL_RESPONSE_TOO_LARGE',
+            transportCode: code,
+            retryable: true,
+            category: 'response_limit',
+            maxResponseBytes
+        }, config);
+    }
+    if (['MODEL_OUTPUT_TRUNCATED', 'MODEL_OUTPUT_INCOMPLETE'].includes(code)) {
+        sourceError.retryable = false;
+        sourceError.category = 'output_incomplete';
+        sourceError.modelRequestClassified = true;
+        sourceError.message = message;
+        return sourceError;
+    }
+    if (code === 'SSE_TERMINAL_EVENT_MISSING') {
+        sourceError.retryable = true;
+        sourceError.category = 'stream_terminal';
+        sourceError.modelRequestClassified = true;
+        sourceError.message = message;
+        return sourceError;
+    }
+    const transientCodes = new Set([
+        'ECONNRESET', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT',
+        'EAI_AGAIN', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
+        'REQUEST_DEADLINE_EXCEEDED', 'REQUEST_SOCKET_TIMEOUT'
+    ]);
+    if (transientCodes.has(code)) {
+        sourceError.retryable = true;
+        sourceError.category = 'network';
+        sourceError.modelRequestClassified = true;
+        sourceError.message = message;
+        return sourceError;
+    }
+    return makeModelRequestError(message, {
+        code: code || 'MODEL_REQUEST_FAILED',
+        retryable: true,
+        category: 'request',
+        cause: sourceError
+    }, config);
+}
+
+function getModelOutputTerminationError(apiType, response, maxTokens) {
+    if (apiType === 'openai_responses') {
+        const truncated = getResponsesOutputTruncationError(response, maxTokens);
+        if (truncated) return truncated;
+        if (response?.status === 'incomplete') {
+            return makeModelRequestError(
+                `OpenAI Responses 输出未完成: ${response?.incomplete_details?.reason || 'unknown'}`,
+                { code: 'MODEL_OUTPUT_INCOMPLETE', retryable: false, category: 'output_incomplete' }
+            );
+        }
+        if (response?.status === 'failed' || response?.status === 'cancelled') {
+            return makeModelRequestError(
+                `OpenAI Responses 终态为 ${response.status}`,
+                { code: 'MODEL_RESPONSE_FAILED', retryable: true, category: 'response_terminal' }
+            );
+        }
+        return null;
+    }
+    if (apiType === 'anthropic' && response?.stop_reason === 'max_tokens') {
+        return makeModelRequestError(
+            `Anthropic 输出被 max_tokens=${maxTokens} 截断`,
+            { code: 'MODEL_OUTPUT_TRUNCATED', retryable: false, category: 'output_incomplete' }
+        );
+    }
+    if (response?.choices?.[0]?.finish_reason === 'length') {
+        return makeModelRequestError(
+            `OpenAI Chat 输出被 max_tokens=${maxTokens} 截断`,
+            { code: 'MODEL_OUTPUT_TRUNCATED', retryable: false, category: 'output_incomplete' }
+        );
+    }
+    return null;
+}
+
+function makeModelHttpError(status, message, config = DEEP_CONFIG) {
+    const retryable = [408, 425, 429].includes(status) || status >= 500;
+    return makeModelRequestError(`HTTP ${status}: ${message}`, {
+        code: retryable ? 'MODEL_HTTP_TRANSIENT' : 'MODEL_HTTP_NON_RETRYABLE',
+        status,
+        retryable,
+        category: retryable ? 'http_transient' : 'http_non_retryable'
+    }, config);
+}
+
 async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RETRIES, config = null) {
     maxRetries = resolveApiMaxRetries(maxRetries);
     const cfg = config || DEEP_CONFIG;
@@ -3154,10 +3687,24 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
         ? cfg.overallTimeoutMs
         : API_OVERALL_TIMEOUT_MS;
     const safeMessages = sanitizeModelMessages(messages);
+    const sleepFn = typeof cfg.sleepFn === 'function'
+        ? cfg.sleepFn
+        : (ms => new Promise(resolve => setTimeout(resolve, ms)));
     const budget = createActiveTimeBudget(overallTimeoutMs);
-    const apiType = detectApiType(cfg.endpoint, cfg.model);
-    const modelUrl = buildApiUrl(apiType, cfg.endpoint);
-    const url = new URL(modelUrl);
+    let apiType;
+    let modelUrl;
+    let url;
+    try {
+        apiType = detectApiType(cfg.endpoint, cfg.model);
+        modelUrl = buildApiUrl(apiType, cfg.endpoint);
+        url = new URL(modelUrl);
+    } catch (error) {
+        throw makeModelRequestError(`LLM endpoint 配置无效: ${error.message}`, {
+            code: 'MODEL_ENDPOINT_CONFIG_ERROR',
+            retryable: false,
+            category: 'endpoint_config'
+        }, cfg);
+    }
     const temperature = Number.isFinite(cfg.temperature) ? cfg.temperature : API_TEMPERATURE;
     const input = summarizeModelInput(safeMessages);
     const outputTokenParameter = apiType === 'openai_responses'
@@ -3175,8 +3722,9 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
                 const timeoutMs = getActiveRemainingTimeoutMs(overallTimeoutMs, budget.elapsedMs());
                 return await _callModelOnce(safeMessages, maxTokens, cfg, budget, apiType, timeoutMs);
             } catch (err) {
-                lastError = err;
-                if (err?.code === 'MODEL_OUTPUT_TRUNCATED') throw err;
+                const classified = classifyModelRequestError(err, cfg);
+                lastError = classified;
+                if (classified.retryable === false) throw classified;
                 const duration = (budget.elapsedMs() / 1000).toFixed(1);
                 const suspendedBeforeAttempt = attemptSuspendedMs;
                 const suspendedMs = budget.suspendedMs();
@@ -3184,10 +3732,10 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
                     console.log(`    [api] 💤 检测到系统睡眠/长时间挂起，已从超时预算排除 ${((suspendedMs - reportedSuspendedMs) / 1000).toFixed(1)}s`);
                     reportedSuspendedMs = suspendedMs;
                 }
-                console.log(`    [api] ⚠️  模型调用失败 (尝试 ${attempt}/${maxRetries}) | active=${duration}s | ${err.message}`);
+                console.log(`    [api] ⚠️  模型调用失败 (尝试 ${attempt}/${maxRetries}) | active=${duration}s | ${classified.code} | ${classified.message}`);
 
                 if (suspendedMs - suspendedBeforeAttempt >= 1000
-                        && ['REQUEST_DEADLINE_EXCEEDED', 'REQUEST_SOCKET_TIMEOUT'].includes(err.code)) {
+                        && ['REQUEST_DEADLINE_EXCEEDED', 'REQUEST_SOCKET_TIMEOUT'].includes(classified.code)) {
                     console.log('    [api] ↻ 本次失败由系统睡眠触发，不消耗重试次数，立即恢复请求');
                     attempt -= 1;
                     continue;
@@ -3201,14 +3749,15 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
                         );
                     }
                     console.log(`    [api] ⏳  ${delay/1000}s 后第 ${attempt + 1} 次重试...`);
-                    await new Promise(resolve => setTimeout(resolve, delay));
+                    await sleepFn(delay);
                 }
             }
         }
         if (budget.elapsedMs() >= overallTimeoutMs || lastError?.code === 'MODEL_OVERALL_TIMEOUT') {
             throw createOverallTimeoutError(budget.elapsedMs(), lastError, overallTimeoutMs);
         }
-        throw new Error(`模型调用失败，已重试 ${maxRetries} 次: ${lastError.message}`);
+        lastError.attempts = maxRetries;
+        throw lastError;
     } finally {
         budget.stop();
     }
@@ -3293,42 +3842,57 @@ async function _callModelOnce(messages, maxTokens, config, budget, apiType, time
         ...buildHeaders(apiType, config.key, postData),
         ...config.headers
     };
+    const maxResponseBytes = Number.isInteger(config.maxResponseBytes) && config.maxResponseBytes > 0
+        ? config.maxResponseBytes
+        : API_MAX_RESPONSE_BYTES;
+    const requestFn = typeof config.requestFn === 'function' ? config.requestFn : requestLlmJson;
 
     try {
-        const response = await requestLlmJson(
+        const response = await requestFn(
             apiUrl,
             config.endpoint,
             config.model,
             bodyObj,
             headers,
-            { timeoutMs }
+            { timeoutMs, maxResponseBytes }
         );
         const duration = (budget.elapsedMs() / 1000).toFixed(1);
         if (response.statusCode < 200 || response.statusCode >= 300) {
             const apiError = response.body?.error;
-            const message = apiError?.message || apiError || response.raw.substring(0, 200);
-            console.log(`    [api] ✗ ${config.model} | HTTP ${response.statusCode} | ${duration}s | error: ${typeof message === 'string' ? message : JSON.stringify(message).substring(0, 200)}`);
-            throw new Error(`HTTP ${response.statusCode}: ${typeof message === 'string' ? message : JSON.stringify(message)}`);
+            const message = apiError?.message || apiError || 'HTTP response did not include a structured error';
+            const safeMessage = sanitizeModelRequestError(
+                typeof message === 'string' ? message : JSON.stringify(message),
+                config
+            );
+            console.log(`    [api] ✗ ${config.model} | HTTP ${response.statusCode} | ${duration}s | error: ${safeMessage}`);
+            throw makeModelHttpError(response.statusCode, safeMessage, config);
         }
-        const truncationError = apiType === 'openai_responses'
-            ? getResponsesOutputTruncationError(response.body, maxTokens)
-            : null;
-        if (truncationError) throw truncationError;
+        const terminationError = getModelOutputTerminationError(apiType, response.body, maxTokens);
+        if (terminationError) throw terminationError;
         const content = parseResponseText(apiType, response.body);
         if (content !== null) {
             console.log(`    [api] ✓ ${config.model} | HTTP ${response.statusCode} | ${content.length} chars | ${duration}s`);
             return content;
         }
         if (response.body.error) {
-            console.log(`    [api] ✗ ${config.model} | HTTP ${response.statusCode} | ${duration}s | error: ${response.body.error.message || JSON.stringify(response.body.error).substring(0, 100)}`);
-            throw new Error(response.body.error.message || JSON.stringify(response.body.error));
+            const safeMessage = sanitizeModelRequestError(
+                response.body.error.message || JSON.stringify(response.body.error),
+                config
+            );
+            console.log(`    [api] ✗ ${config.model} | HTTP ${response.statusCode} | ${duration}s | error: ${safeMessage}`);
+            throw makeModelRequestError(safeMessage, {
+                code: 'MODEL_API_ERROR', retryable: true, category: 'api_error'
+            }, config);
         }
         console.log(`    [api] ✗ ${config.model} | HTTP ${response.statusCode} | ${duration}s | invalid response`);
-        throw new Error('Invalid response: ' + response.raw.substring(0, 200));
+        throw makeModelRequestError('Invalid model response', {
+            code: 'MODEL_INVALID_RESPONSE', retryable: true, category: 'response_parse'
+        }, config);
     } catch (err) {
+        const classified = classifyModelRequestError(err, config);
         const duration = (budget.elapsedMs() / 1000).toFixed(1);
-        console.log(`    [api] ✗ ${config.model} | request error | ${duration}s | ${err.message}`);
-        throw err;
+        console.log(`    [api] ✗ ${config.model} | request error | ${duration}s | ${classified.code} | ${classified.message}`);
+        throw classified;
     }
 }
 
@@ -3342,7 +3906,10 @@ async function callModel(messages, maxTokens = 8000, options = {}) {
         ...(Number.isInteger(options.overallTimeoutMs) && options.overallTimeoutMs > 0
             ? { overallTimeoutMs: options.overallTimeoutMs }
             : {}),
-        ...(Number.isFinite(options.temperature) ? { temperature: options.temperature } : {})
+        ...(Number.isFinite(options.temperature) ? { temperature: options.temperature } : {}),
+        ...(Number.isInteger(options.maxResponseBytes) && options.maxResponseBytes > 0
+            ? { maxResponseBytes: options.maxResponseBytes }
+            : {})
     });
 }
 
@@ -4231,7 +4798,7 @@ function resolveApiReaderAuthors(paper, sourceDetails) {
     )).map(normalizeName).filter(Boolean);
     if (parsed && Array.isArray(parsed.authors) && parsed.authors.length > 0
         && recoverySha256(parsed.sourceDomSha256)) {
-        if (names.length === 0) return parsed;
+        if (names.length === 0) return bindApiReaderAuthorIdentity(paper, sourceDetails, parsed);
         const knownAuthorNames = [...names, ...parsed.authors.map(author => author?.name)];
         const normalizedParsed = parsed.authors.map(author => ({
             name: normalizeName(author?.name),
@@ -4269,11 +4836,13 @@ function resolveApiReaderAuthors(paper, sourceDetails) {
                         : ['机构信息未在 arXiv HTML 中可靠披露'])
             };
         });
-        return { authors, sourceDomSha256: parsed.sourceDomSha256 };
+        return bindApiReaderAuthorIdentity(paper, sourceDetails, {
+            authors, sourceDomSha256: parsed.sourceDomSha256
+        });
     }
     const sourceSha256 = crypto.createHash('sha256')
         .update(String(sourceDetails?.text || '')).digest('hex');
-    return {
+    return bindApiReaderAuthorIdentity(paper, sourceDetails, {
         authors: names.map(name => ({
             name,
             affiliations: [sourceDetails?.analysisSource === 'pdf'
@@ -4281,7 +4850,229 @@ function resolveApiReaderAuthors(paper, sourceDetails) {
                 : '机构信息未在 arXiv HTML 中可靠披露']
         })),
         sourceDomSha256: sourceSha256
+    });
+}
+
+function bindApiReaderAuthorIdentity(paper, sourceDetails, resolved) {
+    const sourceTextSha256 = crypto.createHash('sha256')
+        .update(String(sourceDetails?.text || '')).digest('hex');
+    const metadataAuthors = Array.isArray(paper?.authors) ? paper.authors : [];
+    const metadataSha256 = stableFingerprint(metadataAuthors);
+    const parsedAuthors = Array.isArray(sourceDetails?.readerAuthors?.authors)
+        ? sourceDetails.readerAuthors.authors : [];
+    const sourceDomSha256 = sourceDetails?.readerAuthors?.sourceDomSha256;
+    const isUnavailable = value => /^机构信息未/.test(String(value || ''));
+    const authors = (resolved?.authors || []).map(author => {
+        const parsed = parsedAuthors.find(item => (
+            readerIdentityKey(item?.name) === readerIdentityKey(author?.name)
+        ));
+        const nameBinding = parsed && recoverySha256(sourceDomSha256)
+            ? { sourceKind: 'html_dom', sourceValue: parsed.name, sourceDomSha256 }
+            : { sourceKind: 'paper_metadata', sourceValue: author.name, metadataSha256 };
+        const affiliationBindings = (author.affiliations || []).map(affiliation => {
+            if (isUnavailable(affiliation)) {
+                return {
+                    sourceKind: 'explicit_unavailable', sourceValue: affiliation,
+                    sourceTextSha256
+                };
+            }
+            const direct = parsed?.affiliations?.find(value => (
+                readerIdentityKey(value) === readerIdentityKey(affiliation)
+            ));
+            const globallyUnique = [...new Set(parsedAuthors.flatMap(item => item.affiliations || []))]
+                .find(value => readerIdentityKey(value) === readerIdentityKey(affiliation));
+            if ((!direct && !globallyUnique) || !recoverySha256(sourceDomSha256)) {
+                throw new Error(`作者 ${author.name} 的机构“${affiliation}”无法重放到 HTML source detail`);
+            }
+            return {
+                sourceKind: 'html_dom',
+                association: direct ? 'direct_author' : 'single_global_affiliation',
+                sourceValue: direct || globallyUnique,
+                sourceDomSha256
+            };
+        });
+        return { name: author.name, affiliations: author.affiliations, nameBinding, affiliationBindings };
+    });
+    const identity = {
+        contract: API_READER_AUTHOR_IDENTITY_CONTRACT,
+        sourceDomSha256: recoverySha256(sourceDomSha256) ? sourceDomSha256 : '',
+        sourceTextSha256,
+        metadataSha256,
+        authors
     };
+    return {
+        authors: authors.map(item => ({ name: item.name, affiliations: item.affiliations })),
+        sourceDomSha256: resolved?.sourceDomSha256 || sourceTextSha256,
+        identity,
+        identitySha256: stableFingerprint(identity)
+    };
+}
+
+function extractApiReaderResourceCandidates(analysis) {
+    const section = extractSectionByTitle(analysis, '开源详情');
+    const typeByLabel = {
+        '代码': 'code', '模型权重': 'model', '数据集': 'dataset',
+        'Demo': 'demo', '复现材料': 'reproduction', '论文中引用的开源项目': 'third_party'
+    };
+    const candidates = [];
+    for (const line of String(section || '').split('\n')) {
+        const label = Object.keys(typeByLabel).find(item => line.includes(`${item}：`) || line.includes(`${item}:`));
+        if (!label) continue;
+        for (const match of line.matchAll(/https:\/\/[^\s<>()\[\]{}"']+/gi)) {
+            const url = match[0].replace(/[),.;:!?，。；：！？、）》】》」』]+$/u, '');
+            candidates.push({ type: typeByLabel[label], url, line: line.trim() });
+        }
+    }
+    return [...new Map(candidates.map(item => [`${item.type}:${item.url}`, item])).values()];
+}
+
+function exactResourceSourceQuote(sourceText, url, maxChars = 1200) {
+    const source = String(sourceText || '');
+    const index = source.indexOf(url);
+    if (index < 0) return '';
+    const lowerBound = Math.max(0, index - Math.floor(maxChars / 2));
+    const upperBound = Math.min(source.length, index + url.length + Math.floor(maxChars / 2));
+    const before = source.slice(lowerBound, index);
+    const after = source.slice(index + url.length, upperBound);
+    const boundaryBefore = Math.max(
+        before.lastIndexOf('\n'), before.lastIndexOf('。'), before.lastIndexOf('. ')
+    );
+    const afterMatches = [after.indexOf('\n'), after.indexOf('。'), after.indexOf('. ')]
+        .filter(value => value >= 0);
+    const start = index - before.length + (boundaryBefore >= 0 ? boundaryBefore + 1 : 0);
+    const end = index + url.length + (afterMatches.length > 0 ? Math.min(...afterMatches) + 1 : after.length);
+    let quote = source.slice(start, end).trim();
+    if (quote.length > maxChars) {
+        const relative = quote.indexOf(url);
+        const quoteStart = Math.max(0, Math.min(relative, quote.length - maxChars));
+        quote = quote.slice(quoteStart, quoteStart + maxChars).trim();
+    }
+    if (!quote.includes(url)) throw new Error('开源资源 exact sourceQuote 截取丢失 URL');
+    return quote;
+}
+
+async function verifyApiReaderResourceUrl(rawUrl, options = {}) {
+    const requestImpl = options.requestImpl || requestPinnedPublicHttps;
+    const validateUrlImpl = options.validateUrlImpl || validatePublicHttpUrl;
+    let currentUrl = String(rawUrl || '');
+    const redirects = [];
+    for (let count = 0; count <= 3; count++) {
+        let parsed;
+        try {
+            parsed = await validateUrlImpl(currentUrl);
+        } catch (error) {
+            if (/非公网|localhost|不支持的公网 URL 协议|用户名或密码|必须使用 HTTPS/i
+                .test(String(error?.message || ''))) throw error;
+            return {
+                originalUrl: rawUrl, finalUrl: currentUrl, redirects,
+                status: null, availability: 'temporarily_unreachable', retryable: true,
+                failureCode: String(error?.code || 'RESOURCE_DNS_TRANSIENT_FAILURE').slice(0, 100)
+            };
+        }
+        if (parsed.protocol !== 'https:') throw new Error('开源资源 URL 必须使用 HTTPS');
+        const remainingMs = Number.isFinite(options.deadlineAt)
+            ? options.deadlineAt - Date.now() : 15000;
+        if (remainingMs <= 0) {
+            return {
+                originalUrl: rawUrl, finalUrl: currentUrl, redirects,
+                status: null, availability: 'temporarily_unreachable', retryable: true,
+                failureCode: 'RESOURCE_VERIFICATION_BUDGET_EXHAUSTED'
+            };
+        }
+        let response;
+        try {
+            response = await requestImpl(currentUrl, {
+                headers: { 'User-Agent': 'PaperDigest/1.0' },
+                timeoutMs: Math.min(15000, remainingMs),
+                maxBytes: 256 * 1024
+            });
+        } catch (error) {
+            if (error?.code === 'PROXY_CONFIG_ERROR') throw error;
+            return {
+                originalUrl: rawUrl, finalUrl: currentUrl, redirects,
+                status: null, availability: 'temporarily_unreachable', retryable: true,
+                failureCode: String(error?.code || 'RESOURCE_REQUEST_TRANSIENT_FAILURE').slice(0, 100)
+            };
+        }
+        if ([301, 302, 303, 307, 308].includes(response.status)) {
+            const location = response.headers.get('location');
+            if (!location || count >= 3) throw new Error('开源资源重定向链无效或过长');
+            const nextUrl = new URL(location, currentUrl).toString();
+            redirects.push({ from: currentUrl, to: nextUrl, status: response.status });
+            currentUrl = nextUrl;
+            continue;
+        }
+        const temporary = [408, 425, 429].includes(response.status) || response.status >= 500;
+        return {
+            originalUrl: rawUrl,
+            finalUrl: currentUrl,
+            redirects,
+            status: response.status,
+            availability: response.status >= 200 && response.status < 400
+                ? 'available' : temporary ? 'temporarily_unreachable' : 'unavailable',
+            retryable: temporary
+        };
+    }
+    throw new Error('开源资源验证未产生终态');
+}
+
+async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = {}, options = {}) {
+    const candidates = extractApiReaderResourceCandidates(analysis);
+    if (candidates.length > 12) {
+        throw new Error(`开源资源候选 ${candidates.length} 超过单篇上限 12`);
+    }
+    const deadlineAt = Number.isFinite(options.deadlineAt)
+        ? options.deadlineAt : Date.now() + 60000;
+    const demoLinks = new Set(Array.isArray(demoStage?.discoveredLinks)
+        ? demoStage.discoveredLinks : []);
+    const resources = [];
+    for (const candidate of candidates) {
+        const sourceLine = exactResourceSourceQuote(sourceText, candidate.url);
+        const origin = sourceLine ? 'paper_source' : demoLinks.has(candidate.url)
+            ? 'validated_demo' : null;
+        if (!origin) {
+            throw new Error(`开源资源 URL 未绑定论文原文或已验证 Demo 发现证据: ${candidate.url}`);
+        }
+        const verified = await verifyApiReaderResourceUrl(candidate.url, {
+            ...options,
+            deadlineAt
+        });
+        resources.push({
+            type: candidate.type,
+            origin,
+            sourceQuote: sourceLine?.trim() || candidate.line,
+            sourceQuoteSha256: crypto.createHash('sha256')
+                .update(sourceLine?.trim() || candidate.line).digest('hex'),
+            ...verified
+        });
+    }
+    const identity = {
+        contract: API_READER_RESOURCE_IDENTITY_CONTRACT,
+        sourceTextSha256: crypto.createHash('sha256').update(String(sourceText || '')).digest('hex'),
+        resources
+    };
+    return { ...identity, identitySha256: stableFingerprint(identity) };
+}
+
+function applyApiReaderResourceAvailability(analysis, identity) {
+    let updated = String(analysis || '');
+    const availableTypes = new Set((identity?.resources || [])
+        .filter(item => item.availability === 'available').map(item => item.type));
+    for (const [field, type] of [['has_code', 'code'], ['has_model', 'model'], ['has_dataset', 'dataset']]) {
+        updated = setMachineSummaryField(updated, field, availableTypes.has(type) ? '是' : '否');
+    }
+    const summary = (identity?.resources || []).length === 0
+        ? '未发现可验证的官方 HTTPS 资源 URL。'
+        : identity.resources.map(item => (
+            `${item.type}=${item.availability}${item.status === null ? '' : `(HTTP ${item.status})`}`
+        )).join('；');
+    const section = extractSectionByTitle(updated, '开源详情');
+    const cleaned = String(section || '').replace(/^[-*]\s*资源可达性验证[：:].*$/m, '').trim();
+    return mergeSectionByTitle(
+        updated,
+        '开源详情',
+        `${cleaned}\n- 资源可达性验证：${summary}`.trim()
+    );
 }
 
 /**
@@ -6145,7 +6936,13 @@ async function analyzePaperDeep(paper) {
             markRecoveryStage(analysisManifest, 'primaryAnalysis', 'transient_failure', { error: err.message });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.error(`    [deep] 主模型文本分析失败: ${err.message}`);
-            return { ...paper, ...sourceProvenance, sourceWarnings, analysis: null, analysisManifest, imageManifest, error: err.message };
+            return {
+                ...paper, ...sourceProvenance, sourceWarnings,
+                analysis: null, analysisManifest, imageManifest,
+                error: err.message,
+                errorCode: err.code || null,
+                errorRetryable: err.retryable !== false
+            };
         }
     } else {
         // ========== 单模型模式：仅文本分析，不分析图片 ==========
@@ -6167,7 +6964,13 @@ async function analyzePaperDeep(paper) {
             markRecoveryStage(analysisManifest, 'primaryAnalysis', 'transient_failure', { error: err.message });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.error(`    [deep] 文本分析失败: ${err.message}`);
-            return { ...paper, ...sourceProvenance, sourceWarnings, analysis: null, analysisManifest, imageManifest, error: err.message };
+            return {
+                ...paper, ...sourceProvenance, sourceWarnings,
+                analysis: null, analysisManifest, imageManifest,
+                error: err.message,
+                errorCode: err.code || null,
+                errorRetryable: err.retryable !== false
+            };
         }
     }
 
@@ -6253,6 +7056,7 @@ async function analyzePaperDeep(paper) {
         if (!demoScanError) {
             markRecoveryStage(analysisManifest, 'demoLinkScan', 'complete', {
                 linksFound: demoFoundLinks.length,
+                discoveredLinks: demoFoundLinks,
                 fingerprint: recoveryFingerprints.demoLinkScan
             });
         }
@@ -6459,11 +7263,25 @@ async function analyzePaperDeep(paper) {
         }
     }
 
-    // 第3.7轮：主模型只审计文档类型和八维评分，避免长文审校时发生重复扣分。
-    const scoringStage = analysisManifest.stages.scoringAudit;
-    const scoringInputAnalysis = typeof paper.analysisStageCheckpoints?.structureRepair === 'string'
+    // 第3.7轮：在评分前先把开源状态收敛到真实网络验证结果。只有
+    // SSRF/重定向验证成功的 2xx/3xx 资源才能支撑“可用”声明；超时/5xx
+    // 保留为 retryable 暂不可达，不把整篇永久判死。
+    const structuralAnalysis = typeof paper.analysisStageCheckpoints?.structureRepair === 'string'
         ? paper.analysisStageCheckpoints.structureRepair
         : analysis;
+    paper.apiReaderResources = await buildApiReaderResourceIdentity(
+        structuralAnalysis, rawTextForAnalysis, analysisManifest.stages.demoLinkScan
+    );
+    const scoringInputAnalysis = applyApiReaderResourceAvailability(
+        structuralAnalysis, paper.apiReaderResources
+    );
+    analysisManifest.stages.openSourceScan.resourceEvidenceContract =
+        API_READER_RESOURCE_IDENTITY_CONTRACT;
+    analysisManifest.stages.openSourceScan.resourceEvidenceSha256 =
+        paper.apiReaderResources.identitySha256;
+
+    // 主模型只审计文档类型和八维评分，避免长文审校时发生重复扣分。
+    const scoringStage = analysisManifest.stages.scoringAudit;
     const scoringInputSha256 = crypto.createHash('sha256').update(scoringInputAnalysis).digest('hex');
     const scoringEvidenceContext = buildStageEvidenceContext(
         'scoringAudit',
@@ -6481,6 +7299,7 @@ async function analyzePaperDeep(paper) {
             || scoringStage.protocol !== detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model)
             || scoringStage.endpointSha256 !== crypto.createHash('sha256').update(DEEP_CONFIG.endpoint).digest('hex')
             || scoringStage.maxTokens !== 16000
+            || scoringStage.maxResponseBytes !== API_MAX_RESPONSE_BYTES
             || scoringStage.temperature !== SCORING_AUDIT_TEMPERATURE
             || scoringStage.promptTemplateSha256 !== currentPromptTemplateSha256
             || scoringStage.scoringInputSha256 !== scoringInputSha256
@@ -6490,6 +7309,7 @@ async function analyzePaperDeep(paper) {
             || scoringStage.scoringContract !== SCORING_AUDIT_CONTRACT
             || scoringStage.capRulesVersion !== SCORING_CAP_RULES_VERSION
             || !scoringStage.audit?.evidenceProfile
+            || !scoringStabilityResolutionIsValid(scoringStage)
             || scoringStage.auditSha256 !== stableFingerprint(scoringStage.audit)
             || scoringStage.outputAnalysisSha256 !== crypto.createHash('sha256').update(
                 String(paper.analysisStageCheckpoints?.scoringAudit || '')
@@ -6508,6 +7328,7 @@ async function analyzePaperDeep(paper) {
             delete paper.apiReaderPlan;
             delete paper.apiReaderFigures;
             delete paper.apiReaderAuthors;
+            delete paper.apiReaderResources;
             delete paper.apiReaderArticleSha256;
             delete paper.apiReaderPlanSha256;
             if (paper.analysisStageCheckpoints) {
@@ -6520,38 +7341,96 @@ async function analyzePaperDeep(paper) {
     }
     if (!isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
         try {
-            const scoringResult = await auditTypeAwareScoringDetailed(
+            let scoringResult = await auditTypeAwareScoringDetailed(
                 scoringInputAnalysis,
                 rawTextForAnalysis,
                 { evidenceContext: scoringEvidenceContext }
             );
             analysis = scoringResult.analysis;
-            const auditedParsed = parseAnalysis(analysis);
-            const auditedInvalidReason = getInvalidAnalysisReason(analysis, auditedParsed, {
-                enforceExperimentTableContract: true,
-                experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
-                enforceMethodDetailContract: true,
-                sourceText: rawTextForAnalysis
-            });
-            if (auditedInvalidReason) {
-                const error = new Error(`评分审计后的分析未通过最终契约: ${auditedInvalidReason}`);
-                error.code = 'CONTRACT_REJECTED';
-                throw error;
+            const validateScoringOutput = candidateAnalysis => {
+                const parsed = parseAnalysis(candidateAnalysis);
+                const invalidReason = getInvalidAnalysisReason(candidateAnalysis, parsed, {
+                    enforceExperimentTableContract: true,
+                    experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+                    enforceMethodDetailContract: true,
+                    sourceText: rawTextForAnalysis
+                });
+                if (invalidReason) {
+                    const error = new Error(`评分审计后的分析未通过最终契约: ${invalidReason}`);
+                    error.code = 'CONTRACT_REJECTED';
+                    throw error;
+                }
+                return parsed;
+            };
+            let auditedParsed = validateScoringOutput(analysis);
+            let scoringDelta = calculateScoringDelta(
+                previousScore, scoringInputAnalysis, auditedParsed?.score
+            );
+            const firstAuditScore = scoringDelta.finalScore;
+            let stabilityResolution = {
+                contract: SCORING_STABILITY_RESOLUTION_CONTRACT,
+                status: 'not_required',
+                threshold: SCORING_STABILITY_THRESHOLD
+            };
+            let totalScoringAttempts = scoringResult.attempts;
+            if (scoringDelta.scoreDelta !== null
+                && Math.abs(scoringDelta.scoreDelta) > SCORING_STABILITY_THRESHOLD) {
+                console.log(
+                    `    [deep] ⚠️  评分稳定性告警触发独立二次审计: previous=${scoringDelta.previousScore.toFixed(1)}`
+                    + ` | first=${firstAuditScore.toFixed(1)} | delta=${scoringDelta.scoreDelta > 0 ? '+' : ''}${scoringDelta.scoreDelta.toFixed(1)}`
+                );
+                const secondResult = await auditTypeAwareScoringDetailed(
+                    scoringInputAnalysis,
+                    rawTextForAnalysis,
+                    { evidenceContext: scoringEvidenceContext }
+                );
+                const secondParsed = validateScoringOutput(secondResult.analysis);
+                const secondScore = Number(secondParsed?.score);
+                const scoreDifference = Math.abs(secondScore - firstAuditScore);
+                const resolution = {
+                    contract: SCORING_STABILITY_RESOLUTION_CONTRACT,
+                    status: scoreDifference <= SCORING_STABILITY_CONSENSUS_TOLERANCE
+                        ? 'resolved' : 'unresolved',
+                    method: 'second_pass_consensus',
+                    threshold: SCORING_STABILITY_THRESHOLD,
+                    consensusTolerance: SCORING_STABILITY_CONSENSUS_TOLERANCE,
+                    firstAuditScore,
+                    secondAuditScore: secondScore,
+                    scoreDifference,
+                    firstAuditSha256: stableFingerprint(scoringResult.audit),
+                    secondAuditSha256: stableFingerprint(secondResult.audit),
+                    secondAttempts: secondResult.attempts
+                };
+                if (resolution.status !== 'resolved') {
+                    const error = new Error(
+                        `评分稳定性二次审计未收敛: first=${firstAuditScore.toFixed(1)}, `
+                        + `second=${secondScore.toFixed(1)}, difference=${scoreDifference.toFixed(1)}`
+                    );
+                    error.code = 'CONTRACT_REJECTED';
+                    error.stabilityResolution = resolution;
+                    throw error;
+                }
+                scoringResult = secondResult;
+                analysis = secondResult.analysis;
+                auditedParsed = secondParsed;
+                scoringDelta = calculateScoringDelta(
+                    previousScore, scoringInputAnalysis, auditedParsed?.score
+                );
+                totalScoringAttempts += secondResult.attempts;
+                stabilityResolution = resolution;
             }
-            const scoringDelta = calculateScoringDelta(previousScore, scoringInputAnalysis, auditedParsed?.score);
             const finalScore = scoringDelta.finalScore;
             const scoreBeforeAudit = scoringDelta.previousScore;
             const scoreDelta = scoringDelta.scoreDelta;
-            const stabilityWarning = scoreDelta !== null && Math.abs(scoreDelta) > 0.5;
-            if (stabilityWarning) {
-                console.log(`    [deep] ⚠️  评分稳定性告警: previous=${scoreBeforeAudit.toFixed(1)} | final=${finalScore.toFixed(1)} | delta=${scoreDelta > 0 ? '+' : ''}${scoreDelta.toFixed(1)}`);
-            }
+            const stabilityWarning = scoreDelta !== null
+                && Math.abs(scoreDelta) > SCORING_STABILITY_THRESHOLD;
             markRecoveryStage(analysisManifest, 'scoringAudit', 'complete', {
-                attempts: scoringResult.attempts,
+                attempts: totalScoringAttempts,
                 model: scoringResult.model,
                 protocol: scoringResult.protocol,
                 endpointSha256: scoringResult.endpointSha256,
                 maxTokens: scoringResult.maxTokens,
+                maxResponseBytes: scoringResult.maxResponseBytes,
                 temperature: scoringResult.temperature,
                 promptTemplateSha256: scoringResult.promptTemplateSha256,
                 scoringInputSha256,
@@ -6565,6 +7444,7 @@ async function analyzePaperDeep(paper) {
                 finalScore: Number.isFinite(finalScore) ? finalScore : null,
                 scoreDelta,
                 stabilityWarning,
+                stabilityResolution,
                 audit: scoringResult.audit,
                 auditSha256: stableFingerprint(scoringResult.audit),
                 outputAnalysisSha256: crypto.createHash('sha256').update(analysis).digest('hex')
@@ -6572,7 +7452,17 @@ async function analyzePaperDeep(paper) {
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.log(`    [deep] ✅ 类型感知评分审计完成`);
         } catch (error) {
-            markRecoveryStage(analysisManifest, 'scoringAudit', error.code === 'CONTRACT_REJECTED' ? 'contract_rejected' : 'transient_failure', { error: error.message });
+            markRecoveryStage(
+                analysisManifest,
+                'scoringAudit',
+                error.code === 'CONTRACT_REJECTED' ? 'contract_rejected' : 'transient_failure',
+                {
+                    error: error.message,
+                    ...(error.stabilityResolution
+                        ? { stabilityResolution: error.stabilityResolution }
+                        : {})
+                }
+            );
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             throw error;
         }
@@ -6616,6 +7506,7 @@ async function analyzePaperDeep(paper) {
             delete paper.apiReaderPlan;
             delete paper.apiReaderFigures;
             delete paper.apiReaderAuthors;
+            delete paper.apiReaderResources;
             delete paper.apiReaderArticleSha256;
             delete paper.apiReaderPlanSha256;
             delete paper.analysisStageCheckpoints?.apiReaderArticle;
@@ -6631,7 +7522,10 @@ async function analyzePaperDeep(paper) {
     if (!isRecoveryStageComplete(analysisManifest, 'apiReaderArticle')) {
         try {
             const generatedReaderResult = await generateApiReaderArticleDetailed(
-                paper, analysis, apiReaderEvidenceContext
+                paper, analysis, apiReaderEvidenceContext, {
+                    structuredArtifacts: sourceDetails.structuredArtifacts,
+                    sourceText: rawTextForAnalysis
+                }
             );
             const injectedReaderResult = injectApiReaderFigures(
                 generatedReaderResult,
@@ -6641,8 +7535,16 @@ async function analyzePaperDeep(paper) {
             const materializedFigures = await materializeApiReaderFigures(
                 injectedReaderResult.figures, arxivId
             );
+            const materializedFigureOrdinals = new Set(
+                materializedFigures.map(item => item.ordinal)
+            );
             const readerResult = {
                 ...injectedReaderResult,
+                plan: {
+                    ...injectedReaderResult.plan,
+                    figurePlacements: (injectedReaderResult.plan.figurePlacements || [])
+                        .filter(item => materializedFigureOrdinals.has(item.figureOrdinal))
+                },
                 article: pruneUnmaterializedApiReaderFigureBlocks(
                     injectedReaderResult.article,
                     injectedReaderResult.figures,
@@ -6654,12 +7556,25 @@ async function analyzePaperDeep(paper) {
             paper.apiReaderPlan = readerResult.plan;
             paper.apiReaderFigures = readerResult.figures;
             paper.apiReaderAuthors = resolveApiReaderAuthors(paper, sourceDetails);
+            if (!paper.apiReaderResources
+                || paper.apiReaderResources.sourceTextSha256 !== paper.sourceSha256) {
+                paper.apiReaderResources = await buildApiReaderResourceIdentity(
+                    analysis, rawTextForAnalysis, analysisManifest.stages.demoLinkScan
+                );
+            }
+            analysisManifest.stages.openSourceScan.resourceEvidenceContract =
+                API_READER_RESOURCE_IDENTITY_CONTRACT;
+            analysisManifest.stages.openSourceScan.resourceEvidenceSha256 =
+                paper.apiReaderResources.identitySha256;
             paper.apiReaderArticleSha256 = crypto.createHash('sha256')
                 .update(readerResult.article).digest('hex');
             paper.apiReaderPlanSha256 = stableFingerprint(readerResult.plan);
             analysisManifest.contracts = {
                 ...(analysisManifest.contracts || {}),
-                apiReaderArticle: API_READER_ARTICLE_CONTRACT
+                apiReaderArticle: API_READER_ARTICLE_CONTRACT,
+                apiReaderSourceBindings: API_READER_SOURCE_BINDING_CONTRACT,
+                apiReaderAuthorIdentity: API_READER_AUTHOR_IDENTITY_CONTRACT,
+                apiReaderResourceIdentity: API_READER_RESOURCE_IDENTITY_CONTRACT
             };
             markRecoveryStage(analysisManifest, 'apiReaderArticle', 'complete', {
                 fingerprint: apiReaderFingerprint,
@@ -6668,6 +7583,7 @@ async function analyzePaperDeep(paper) {
                 protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
                 temperature: 0.6,
                 maxTokens: API_READER_MAX_TOKENS,
+                maxResponseBytes: API_MAX_RESPONSE_BYTES,
                 overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
                 promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.apiReaderArticle),
                 evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
@@ -6679,8 +7595,19 @@ async function analyzePaperDeep(paper) {
                 figureCount: readerResult.figures.length,
                 figuresSha256: stableFingerprint(readerResult.figures),
                 readerAuthorsSha256: stableFingerprint(paper.apiReaderAuthors),
+                readerAuthorIdentityContractVersion: API_READER_AUTHOR_IDENTITY_CONTRACT,
+                readerAuthorIdentitySha256: paper.apiReaderAuthors.identitySha256,
+                resourceIdentityContractVersion: API_READER_RESOURCE_IDENTITY_CONTRACT,
+                resourceIdentitySha256: paper.apiReaderResources.identitySha256,
+                resourceCount: paper.apiReaderResources.resources.length,
                 structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || '',
                 qualityMetrics: readerResult.qualityMetrics,
+                qualityMetricsContractVersion: API_READER_QUALITY_METRICS_CONTRACT,
+                sourceBindingsContractVersion: API_READER_SOURCE_BINDING_CONTRACT,
+                sourceBindingsSha256: readerResult.plan.sourceBindingsSha256,
+                sourceBindingsSourceTextSha256: paper.sourceSha256,
+                tableBindingCount: readerResult.plan.tableBindings.length,
+                formulaBindingCount: readerResult.plan.formulaBindings.length,
                 parserVersion: API_READER_PARSER_VERSION,
                 assemblerVersion: API_READER_ASSEMBLER_VERSION,
                 tableContractVersion: API_READER_TABLE_CONTRACT_VERSION,
@@ -6976,7 +7903,7 @@ async function checkDemoPageForOpensource(demoUrl) {
         for (const pattern of openSourcePatterns) {
             let match;
             while ((match = pattern.exec(html)) !== null) {
-                foundLinks.push(match[0]);
+                foundLinks.push(`https://${match[0]}`);
             }
         }
         
@@ -7930,6 +8857,20 @@ module.exports = {
     refreshApiReaderFiguresFromSource,
     hasCompleteApiReaderFigureBinding,
     API_READER_ARTICLE_CONTRACT,
+    API_READER_QUALITY_METRICS_CONTRACT,
+    API_READER_SOURCE_BINDING_CONTRACT,
+    API_READER_AUTHOR_IDENTITY_CONTRACT,
+    API_READER_RESOURCE_IDENTITY_CONTRACT,
+    API_READER_FIGURE_SELECTION_LIMIT,
+    SCORING_STABILITY_RESOLUTION_CONTRACT,
+    scoringStabilityResolutionIsValid,
+    buildApiReaderQualityMetrics,
+    bindApiReaderSourceEvidence,
+    bindApiReaderAuthorIdentity,
+    extractApiReaderResourceCandidates,
+    verifyApiReaderResourceUrl,
+    buildApiReaderResourceIdentity,
+    applyApiReaderResourceAvailability,
     isAllowedReaderNarrativeNumeralIssue,
     isAllowedReaderDefensiveNegationIssue,
     splitReaderLongParagraphs,
@@ -7964,6 +8905,12 @@ module.exports = {
     sanitizeOpenSourceEvidence,
     sanitizeModelMessages,
     summarizeModelInput,
+    callModelWithConfig,
+    classifyModelRequestError,
+    getModelOutputTerminationError,
+    sanitizeModelRequestError,
+    makeModelHttpError,
+    modelFingerprint,
     createAnalysisRecoveryManifest,
     stripManualAnalysisProvenance,
     markRecoveryStage,

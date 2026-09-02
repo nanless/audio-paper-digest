@@ -30,12 +30,13 @@ arXiv + HuggingFace
 
 ## Start in five minutes
 
-Requirements: Node `>=20.18.1 <21 || >=22.3.0`, Python 3, and an available Hugo blog repository.
+Requirements: Node `>=20.18.1 <21 || >=22.3.0`, Python 3.11+ with OpenSSL, and an available Hugo blog repository.
 
 ```bash
 # 1. Install dependencies
 npm install
-python3 -m pip install -r requirements.txt
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 
 # 2. Create project configuration
 cp env.example .env
@@ -88,6 +89,8 @@ or another page review.
 | Resume incomplete analysis | `npm run deep -- --date YYYY-MM-DD` |
 | Refresh API Reader | `npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader` |
 | Validate current data | `npm run validate:data` |
+| Inspect runtime storage | `npm run storage:status` |
+| Preview reference-aware pruning | `npm run storage:prune` |
 | Inspect final status | `npm run digest:status -- --date YYYY-MM-DD` |
 | Run blog stages separately | `npm run blog:generate` → `npm run blog:review` → `npm run blog:push` |
 | Record an explicit visual waiver | `npm run digest:waive-visuals -- --date YYYY-MM-DD --reason "..."` |
@@ -99,9 +102,9 @@ See [Script responsibilities](docs/en/scripts.md) for arguments and recovery sem
 ## Where to resume after a failure
 
 - Interrupted fetch/filter: rerun the default entry; healthy checkpoints are reused.
-- Only some analyses failed: run `npm run deep` or targeted reanalysis.
-- Blog review/push failed: fix the cause and resume from `blog:review` or `blog:push`.
-- Visual tasks are missing or stale: rerun `visual:post-publish`; do not republish the blog.
+- Only some analyses failed: run `npm run deep -- --date YYYY-MM-DD` or targeted reanalysis.
+- Blog review/push failed: resume with `npm run blog:review -- --date YYYY-MM-DD` or `npm run blog:push -- --date YYYY-MM-DD`.
+- Visual tasks are missing or stale: run `npm run visual:post-publish -- --date YYYY-MM-DD`; do not republish the blog.
 - Unsure which stage failed: start with [Troubleshooting](docs/en/troubleshooting.md) and
   [Workflow](docs/en/workflow.md).
 
@@ -153,8 +156,10 @@ contracts.
 - [Documentation map](docs/README.md): choose the next document by task.
 - [Setup](docs/en/setup.md): environment, proxy, model, and blog repository.
 - [Default workflow](docs/en/workflow.md): archive, fetch, filter, analysis, publication, and recovery.
+- [Default API architecture](docs/en/architecture.md): components, state machines, locks, and publication transactions.
 - [Script responsibilities](docs/en/scripts.md): command arguments and runtime semantics.
 - [Data formats](docs/en/data-format.md): checkpoints, canonical data, receipts, and manifests.
+- [Contract compatibility](docs/en/compatibility.md): current writers, historical reads, and production eligibility.
 - [Troubleshooting](docs/en/troubleshooting.md): API, proxy, analysis, publication, and visual failures.
 - [Manual subsystem](manual/README.md): explicit high-assurance human workflow.
 

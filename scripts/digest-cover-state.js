@@ -522,7 +522,7 @@ function main(argv = process.argv.slice(2)) {
         console.log('已记录汇总页封面失败');
         return;
     }
-    throw new Error('用法: digest-cover-state.js plan|status|archive-legacy --date YYYY-MM-DD | record --date YYYY-MM-DD (--file PNG|--output-hint HINT) --token TOKEN | fail --date YYYY-MM-DD --error MESSAGE --token TOKEN');
+    throw new Error('用法: digest-cover-state.js plan|status|archive-legacy --date YYYY-MM-DD | record --date YYYY-MM-DD (--file PNG|--output-hint HINT) --token TOKEN --qa-attested true | fail --date YYYY-MM-DD --error MESSAGE --token TOKEN');
 }
 
 if (require.main === module) main();

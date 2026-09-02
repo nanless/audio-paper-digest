@@ -24,6 +24,7 @@ Thumbs.db
 .claude/
 
 # Python cache
+.venv/
 __pycache__/
 *.pyc
 *.pyo

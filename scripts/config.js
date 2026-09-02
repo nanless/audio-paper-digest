@@ -106,6 +106,8 @@ const ANALYSIS_CONFIG = {
     apiMaxRetries: 3,
     apiRetryBaseDelayMs: 5000,
     apiMaxTokens: 64000,
+    // LLM JSON/SSE 响应总字节硬上限；超限必须中止，不得截断后解析。
+    apiMaxResponseBytes: 16 * 1024 * 1024,
     // 局部审校/修复通常只需重写既有分析；限制输出预算可避免推理模型在网关超时前持续思考。
     repairMaxTokens: 16000,
     // 初学研究者长文需要容纳更多章节、宽表和逐图解说，不与局部修复共用较小的输出上限。
@@ -261,6 +263,10 @@ function applyEnvOverrides() {
     const analysisApiMaxTokens = readPositiveInt('PD_ANALYSIS_API_MAX_TOKENS');
     if (analysisApiMaxTokens) {
         ANALYSIS_CONFIG.apiMaxTokens = analysisApiMaxTokens;
+    }
+    const analysisApiMaxResponseBytes = readPositiveInt('PD_ANALYSIS_API_MAX_RESPONSE_BYTES');
+    if (analysisApiMaxResponseBytes) {
+        ANALYSIS_CONFIG.apiMaxResponseBytes = analysisApiMaxResponseBytes;
     }
     const apiReaderOverallTimeoutMs = readPositiveInt('PD_API_READER_OVERALL_TIMEOUT_MS');
     if (apiReaderOverallTimeoutMs) {

@@ -20,6 +20,7 @@ npm run digest:prepare -- YYYY-MM-DD
 ## 运行前五项检查
 
 1. Node 满足 `>=20.18.1 <21 || >=22.3.0`，依赖已安装。
+   默认博客/视觉 Python 入口还要求 Python 3.11+ 与 OpenSSL；`scripts/python-runtime.sh` 优先使用项目 `.venv`，再选择并校验 `python3.11` / `python3`。
 2. 项目根 `.env` 存在，权限由 loader 收紧为 `0600`。
 3. `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT` 完整；默认文档配置是 OpenCode Go `muse-spark-1.2-contributor`。
 4. `HTTPS_PROXY` 或 `HTTP_PROXY` 是项目 `.env` 内的 HTTP CONNECT 地址；Muse 与 arXiv 缺代理立即失败。
@@ -71,6 +72,7 @@ npm run digest:prepare -- YYYY-MM-DD
 | 筛选配置批次 | 5；Muse 实际固定 1 | `PD_FILTER_BATCH_SIZE` |
 | 整篇重试 / 单阶段尝试 | 2 / 3 | `PD_ANALYSIS_MAX_RETRIES` / `PD_ANALYSIS_API_MAX_RETRIES` |
 | 主分析 / 局部修复输出 | 64000 / 16000 tokens | `PD_ANALYSIS_API_MAX_TOKENS` / `PD_ANALYSIS_REPAIR_MAX_TOKENS` |
+| 单次分析 LLM 响应 | 16 MiB | `PD_ANALYSIS_API_MAX_RESPONSE_BYTES` |
 | API Reader 输出 | 48000 tokens | `PD_API_READER_MAX_TOKENS` |
 | Reader 证据 / 总上下文 | 180000 / 240000 字符 | 对应 `PD_API_READER_*_MAX_CHARS` |
 | Reader 重阶段并发 | 5，范围 1–5 | `PD_API_READER_CONCURRENCY` |
@@ -90,11 +92,13 @@ npm run digest:prepare -- YYYY-MM-DD
 
 ## 内容与评分门禁
 
-默认 API canonical 的 13 个一级标题是解析锚点；最终博客正文来自 `beginner-researcher-v3` API Reader：
+默认 API canonical 的 13 个一级标题是解析锚点；最终博客正文来自 `beginner-researcher-v3` API Reader，并以正交的 `api-reader-source-bindings-v4` 绑定表格与公式来源：
 
 - 12–18 节、5000–18000 中文字、4–10 组术语桥。
 - 术语首次白话解释；组合机制必须说明分工、搭配原因和新增作用。
 - 表格必须与前后论证闭环，原文证据充足时覆盖数据协议、主结果、消融/失败条件和训练/部署成本。
+- 每个表格单元格必须重放到原表 DOM cell，或由全文逐字 quote 覆盖全部数字与单位；展示公式只可由结构化原始 TeX 注入。
+- 作者姓名与机构逐项绑定 HTML DOM、论文 metadata 或显式不可得状态；资源链接逐项绑定原文/Demo 证据、重定向终点与可达状态，只有 `available` 可支撑“已开源/可用”声明。
 - Figure 必须形成“导读 → 看图路径 → 原图 → 图注 → 解释”；未传入像素不得猜坐标轴、曲线、颜色或模块。
 - 评分使用八维、类型感知、单一缺陷单一主维度原则；代码重算总分并封顶 10。缺失证据不得写成技术错误。
 - 摘要级分析默认不可发布；只有显式 `allowAbstractAnalysisPublish: true` 才允许并显示降级提示。

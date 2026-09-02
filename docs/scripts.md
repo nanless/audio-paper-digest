@@ -4,17 +4,19 @@
 
 面向操作者，按“我要完成什么”列命令。逐文件依赖图见 [scripts/README.md](../scripts/README.md)，命令别名以 `package.json` 为准。Manual 内部命令只见 [manual/README.md](../manual/README.md)。
 
-## 完整日更
+## 日更脚本阶段与业务终态
 
 | 命令 | 用途 |
 |---|---|
-| `npm run digest:prepare -- DATE` | 默认 LLM/API 完整编排 |
+| `npm run digest:prepare -- DATE` | 默认 LLM/API 脚本阶段：发布博客并准备视觉输入；退出 0 不等于视觉业务终态 |
 | `npm run digest:api -- DATE` | 同义显式别名 |
 | `./run-daily-digest.sh DATE --from STAGE` | 从安全阶段恢复 |
 | `npm run digest:status -- --date DATE` | 只读最终状态快照 |
 | `npm run digest:waive-visuals -- --date DATE --reason TEXT` | 用户明确不生图时签发 waiver |
 
 `digest:manual` 只在用户明确要求人工流程时使用。
+
+只有后续内置生图与 record 完成，或存在有效视觉 waiver，并且 `digest:status` 返回 0，整批业务才是 complete。
 
 ## 数据阶段
 
@@ -53,13 +55,14 @@
 | `npm run visual:post-publish -- --date DATE` | 从已验证 publication 规划两类任务 |
 | `npm run visual:prepare -- --date DATE` | 校验参考缓存并输出绝对图片路径 |
 | `npm run visual:status -- --date DATE` | TOP 10 长图只读状态 |
-| `npm run visual:record -- ... --qa-attested true` | 登记已目检论文图 |
+| `npm run visual:record -- --date DATE --paper ID --kind infographic --file /abs/result.png --token TOKEN --qa-attested true` | 登记已目检论文图；`--file` 可换成 `--output-hint HINT` |
 | `npm run visual:fail -- ...` | 记录论文图失败 |
 | `npm run cover:status -- --date DATE` | 汇总封面只读状态 |
-| `npm run cover:record -- ... --qa-attested true` | 登记已目检封面 |
+| `npm run cover:record -- --date DATE --file /abs/cover.png --token TOKEN --qa-attested true` | 登记已目检封面；`--file` 可换成 `--output-hint HINT` |
 | `npm run cover:fail -- ...` | 记录封面失败 |
 
 实际成图只能使用 Codex 内置 `image_gen`；`visual:render:debug` 仅供本地调试/离线兜底。
+`TOKEN` 来自对应 `visual:status` / `cover:status` 待办项打印的 `taskToken`，不得复用旧任务 token。
 
 ## 配置与公共实现
 
@@ -71,6 +74,17 @@
 - `scripts/path_config.py`：Python 发布路径。
 - `scripts/publish_common.py`：发布数据、评分、LLM 与 provenance 公共层。
 - `scripts/publish-to-blog.py`：博客 generation/review/push 共享事务实现。
+- `scripts/python-runtime.sh`：默认博客/视觉入口的 Python 3.11+、OpenSSL 与项目 `.venv` 选择门禁。
+
+## 运行存储
+
+| 命令 | 行为 |
+|---|---|
+| `npm run storage:status` | 只读统计 `data/current`、`data/archive`、`logs` 和重点缓存的大小/文件数 |
+| `npm run storage:prune` | 扫描权威 JSON 引用并输出 dry-run 删除清单，不删文件 |
+| `npm run storage:prune -- --apply` | 预检无 JSON 损坏、symlink、路径逃逸或漂移后，仅删除白名单根内超期且未引用文件 |
+
+实现为 `scripts/runtime-storage.js`。它不删 canonical JSON、发布/视觉 manifest、博客或归档成品；完整安全边界见 [维护指南](maintenance.md#运行存储诊断与清理)。
 
 ## 可选渠道
 

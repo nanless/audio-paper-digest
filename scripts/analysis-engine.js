@@ -16,6 +16,7 @@ const {
     hasRequiredSections,
     analysisManifestRequiresExperimentTableContract,
     analysisManifestRequiresMethodDetailContract,
+    extractMarkdownTables,
     REQUIRED_RECOVERY_STAGES,
     isRecoveryStageTerminal,
     validateManualTakeoverManifest
@@ -40,7 +41,7 @@ const ANALYSIS_RECOVERY_FIELDS = Object.freeze([
     'analysisSource', 'sourceId', 'sourceTextChars', 'usedTextChars', 'fullTextChars',
     'fullTextAvailable', 'truncated', 'sourceSha256', 'usedTextSha256', 'analysisConfidence',
     'htmlAvailability', 'htmlAttempts', 'sourceWarnings', 'latestAnalysisAttemptError',
-    'latestAnalysisAttemptAt'
+    'latestAnalysisAttemptAt', 'latestAnalysisAttemptErrorCode', 'latestAnalysisAttemptRetryable'
 ]);
 
 function readJsonFileStrict(filePath, options = {}) {
@@ -268,8 +269,207 @@ function isCompleteAnalysisContent(paper) {
     const scoring = stages.scoringAudit;
     if (scoring?.scoringContract === 'api-scoring-audit-v2') {
         if (!scoringAuditBindsFinalAnalysis(paper)) return false;
+        if (!scoringStabilityIsResolved(scoring)) return false;
+        if (!apiReaderV3BindsCanonical(paper)) return false;
     }
     return true;
+}
+
+const API_READER_V3_CONTRACT = 'beginner-researcher-v3';
+const API_READER_QUALITY_METRICS_CONTRACT = 'api-reader-quality-metrics-v2';
+const SCORING_STABILITY_RESOLUTION_CONTRACT = 'api-scoring-stability-resolution-v1';
+const API_READER_SOURCE_BINDING_CONTRACT = 'api-reader-source-bindings-v4';
+const API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1';
+const API_READER_RESOURCE_IDENTITY_CONTRACT = 'api-reader-resource-identity-v1';
+
+function stableSha256(value) {
+    const normalize = item => {
+        if (Array.isArray(item)) return item.map(normalize);
+        if (!item || typeof item !== 'object') return item;
+        return Object.fromEntries(Object.keys(item).sort().map(key => [key, normalize(item[key])]));
+    };
+    return crypto.createHash('sha256').update(JSON.stringify(normalize(value))).digest('hex');
+}
+
+function scoringStabilityIsResolved(scoring) {
+    if (scoring?.stabilityWarning !== true) return true;
+    const resolution = scoring.stabilityResolution;
+    return Boolean(
+        resolution?.contract === SCORING_STABILITY_RESOLUTION_CONTRACT
+        && resolution?.status === 'resolved'
+        && resolution?.method === 'second_pass_consensus'
+        && Number.isFinite(resolution?.firstAuditScore)
+        && Number.isFinite(resolution?.secondAuditScore)
+        && Number.isFinite(resolution?.scoreDifference)
+        && resolution.scoreDifference <= 0.3
+        && /^[a-f0-9]{64}$/.test(String(resolution?.secondAuditSha256 || ''))
+    );
+}
+
+function apiReaderV3BindsCanonical(paper) {
+    const manifest = paper?.analysisManifest;
+    const stage = manifest?.stages?.apiReaderArticle;
+    const plan = paper?.apiReaderPlan;
+    const article = paper?.apiReaderArticle;
+    const figures = paper?.apiReaderFigures;
+    const authors = paper?.apiReaderAuthors;
+    const resources = paper?.apiReaderResources;
+    if (manifest?.contracts?.apiReaderArticle !== API_READER_V3_CONTRACT
+        || plan?.version !== 3 || plan?.contract !== API_READER_V3_CONTRACT
+        || stage?.status !== 'complete'
+        || typeof article !== 'string' || !article.trim()
+        || !Array.isArray(figures)
+        || !authors || typeof authors !== 'object' || Array.isArray(authors)
+        || !resources || typeof resources !== 'object' || Array.isArray(resources)) return false;
+    const articleSha256 = crypto.createHash('sha256').update(article).digest('hex');
+    const planSha256 = stableSha256(plan);
+    const figuresSha256 = stableSha256(figures);
+    const authorsSha256 = stableSha256(authors);
+    const authorIdentity = authors.identity;
+    const authorIdentitySha256 = stableSha256(authorIdentity);
+    const authorIdentityValid = authorIdentity?.contract === API_READER_AUTHOR_IDENTITY_CONTRACT
+        && authors.identitySha256 === authorIdentitySha256
+        && authorIdentity.sourceTextSha256 === paper.sourceSha256
+        && authorIdentity.metadataSha256 === stableSha256(paper.authors || [])
+        && Array.isArray(authors.authors)
+        && Array.isArray(authorIdentity.authors)
+        && authors.authors.length === authorIdentity.authors.length
+        && authors.authors.every((author, index) => {
+            const identity = authorIdentity.authors[index];
+            return identity?.name === author?.name
+                && JSON.stringify(identity?.affiliations) === JSON.stringify(author?.affiliations)
+                && ['html_dom', 'paper_metadata'].includes(identity?.nameBinding?.sourceKind)
+                && identity.nameBinding.sourceValue === author.name
+                && (identity.nameBinding.sourceKind === 'html_dom'
+                    ? identity.nameBinding.sourceDomSha256 === authorIdentity.sourceDomSha256
+                        && /^[a-f0-9]{64}$/.test(String(identity.nameBinding.sourceDomSha256 || ''))
+                    : identity.nameBinding.metadataSha256 === authorIdentity.metadataSha256)
+                && Array.isArray(identity?.affiliationBindings)
+                && identity.affiliationBindings.length === author.affiliations.length
+                && identity.affiliationBindings.every((binding, affiliationIndex) => (
+                    binding?.sourceValue === author.affiliations[affiliationIndex]
+                    && ['html_dom', 'explicit_unavailable'].includes(binding?.sourceKind)
+                    && (binding.sourceKind !== 'html_dom'
+                        ? binding.sourceTextSha256 === authorIdentity.sourceTextSha256
+                        : binding.sourceDomSha256 === authorIdentity.sourceDomSha256
+                            && /^[a-f0-9]{64}$/.test(String(binding?.sourceDomSha256 || '')))
+                ));
+        });
+    const { identitySha256: _resourceIdentitySha256, ...resourceIdentity } = resources;
+    const resourceIdentitySha256 = stableSha256(resourceIdentity);
+    const resourceIdentityValid = resources.contract === API_READER_RESOURCE_IDENTITY_CONTRACT
+        && resources.identitySha256 === resourceIdentitySha256
+        && Array.isArray(resources.resources)
+        && resources.resources.every(resource => (
+            ['code', 'model', 'dataset', 'demo', 'reproduction', 'third_party'].includes(resource?.type)
+            && ['paper_source', 'validated_demo'].includes(resource?.origin)
+            && (resource.origin !== 'validated_demo'
+                || manifest?.stages?.demoLinkScan?.discoveredLinks?.includes(resource.originalUrl))
+            && /^https:\/\//.test(String(resource?.originalUrl || ''))
+            && /^https:\/\//.test(String(resource?.finalUrl || ''))
+            && ['available', 'unavailable', 'temporarily_unreachable'].includes(resource?.availability)
+            && (Number.isInteger(resource?.status)
+                || (resource?.availability === 'temporarily_unreachable'
+                    && resource?.status === null && resource?.retryable === true))
+            && (resource.availability === 'available'
+                ? resource.status >= 200 && resource.status < 400
+                : resource.availability === 'unavailable'
+                    ? resource.status >= 400 && resource.status < 500
+                        && ![408, 425, 429].includes(resource.status)
+                    : resource.retryable === true
+                        && (resource.status === null || [408, 425, 429].includes(resource.status)
+                            || resource.status >= 500))
+            && Array.isArray(resource?.redirects)
+            && /^[a-f0-9]{64}$/.test(String(resource?.sourceQuoteSha256 || ''))
+            && resource.sourceQuoteSha256 === crypto.createHash('sha256')
+                .update(String(resource?.sourceQuote || '')).digest('hex')
+        ));
+    const placements = Array.isArray(plan.figurePlacements) ? plan.figurePlacements : null;
+    const figureOrdinals = figures.map(item => item?.ordinal);
+    const placementOrdinals = placements?.map(item => item?.figureOrdinal);
+    const tableBindings = plan?.tableBindings;
+    const formulaBindings = plan?.formulaBindings;
+    const sourceBindingsSha256 = stableSha256({ tableBindings, formulaBindings });
+    const renderedTables = extractMarkdownTables(article);
+    const sourceBindingsBindArticle = Array.isArray(tableBindings)
+        && Array.isArray(formulaBindings)
+        && tableBindings.length === renderedTables.length
+        && tableBindings.every((binding, index) => (
+            binding?.tableIndex === index + 1
+            && binding?.renderedTableSha256 === crypto.createHash('sha256')
+                .update(renderedTables[index].markdown).digest('hex')
+            && (binding?.sourceType === 'artifact_table'
+                ? /^[a-f0-9]{64}$/.test(String(binding?.sourceTableDomSha256 || ''))
+                    && Array.isArray(binding?.cellBindings)
+                    && binding.cellBindings.length > 0
+                    && binding.cellBindings.every(cell => (
+                        /^[a-f0-9]{64}$/.test(String(cell?.sourceDomSha256 || ''))
+                    ))
+                : binding?.sourceType === 'source_quotes'
+                    && Array.isArray(binding?.sourceQuotes)
+                    && binding.sourceQuotes.length > 0
+                    && binding.sourceQuotes.every(item => (
+                        /^[a-f0-9]{64}$/.test(String(item?.sourceQuoteSha256 || ''))
+                        && item.sourceQuoteSha256 === crypto.createHash('sha256')
+                            .update(String(item?.quote || '')).digest('hex')
+                    ))
+            )
+        ))
+        && formulaBindings.every(binding => {
+            const block = `\\[${String(binding?.latex || '').trim()}\\]`;
+            return Number.isInteger(binding?.formulaOrdinal)
+                && /^[a-f0-9]{64}$/.test(String(binding?.sourceDomSha256 || ''))
+                && binding?.renderedBlockSha256 === crypto.createHash('sha256')
+                    .update(block).digest('hex')
+                && article.split(block).length === 2;
+        });
+    return Boolean(
+        paper.apiReaderArticleSha256 === articleSha256
+        && paper.apiReaderPlanSha256 === planSha256
+        && stage.articleSha256 === articleSha256
+        && stage.planSha256 === planSha256
+        && stage.figureCount === figures.length
+        && stage.figuresSha256 === figuresSha256
+        && stage.readerAuthorsSha256 === authorsSha256
+        && manifest?.contracts?.apiReaderAuthorIdentity === API_READER_AUTHOR_IDENTITY_CONTRACT
+        && stage.readerAuthorIdentityContractVersion === API_READER_AUTHOR_IDENTITY_CONTRACT
+        && stage.readerAuthorIdentitySha256 === authorIdentitySha256
+        && authorIdentityValid
+        && manifest?.contracts?.apiReaderResourceIdentity === API_READER_RESOURCE_IDENTITY_CONTRACT
+        && stage.resourceIdentityContractVersion === API_READER_RESOURCE_IDENTITY_CONTRACT
+        && stage.resourceIdentitySha256 === resourceIdentitySha256
+        && stage.resourceCount === resources.resources.length
+        && manifest?.stages?.openSourceScan?.resourceEvidenceContract
+            === API_READER_RESOURCE_IDENTITY_CONTRACT
+        && manifest?.stages?.openSourceScan?.resourceEvidenceSha256 === resourceIdentitySha256
+        && resourceIdentity.sourceTextSha256 === paper.sourceSha256
+        && resourceIdentityValid
+        && typeof stage.model === 'string' && stage.model.trim()
+        && typeof stage.protocol === 'string' && stage.protocol.trim()
+        && stage.parserVersion === 'api-reader-parser-v3'
+        && stage.assemblerVersion === 'api-reader-assembler-v3'
+        && stage.tableContractVersion === 'api-reader-tables-v3'
+        && stage.figureContractVersion === 'api-reader-figures-v3'
+        && stage.qualityMetricsContractVersion === API_READER_QUALITY_METRICS_CONTRACT
+        && stage.qualityMetrics?.contract === API_READER_QUALITY_METRICS_CONTRACT
+        && stage.qualityMetrics?.blockingIssueCount === 0
+        && plan.sourceBindingsContract === API_READER_SOURCE_BINDING_CONTRACT
+        && manifest?.contracts?.apiReaderSourceBindings === API_READER_SOURCE_BINDING_CONTRACT
+        && plan.sourceBindingsSha256 === sourceBindingsSha256
+        && stage.sourceBindingsContractVersion === API_READER_SOURCE_BINDING_CONTRACT
+        && stage.sourceBindingsSha256 === sourceBindingsSha256
+        && stage.sourceBindingsSourceTextSha256 === paper.sourceSha256
+        && stage.sourceBindingsSourceTextSha256 === manifest?.sourceAcquisition?.sourceSha256
+        && stage.tableBindingCount === tableBindings?.length
+        && stage.formulaBindingCount === formulaBindings?.length
+        && /^[a-f0-9]{64}$/.test(String(stage.structuredArtifactsSha256 || ''))
+        && stage.structuredArtifactsSha256 === manifest?.sourceAcquisition?.structuredArtifactsSha256
+        && sourceBindingsBindArticle
+        && placements
+        && placementOrdinals.length === figureOrdinals.length
+        && new Set(placementOrdinals).size === placementOrdinals.length
+        && placementOrdinals.every(ordinal => figureOrdinals.includes(ordinal))
+    );
 }
 
 function scoringAuditBindsFinalAnalysis(paper) {
@@ -358,6 +558,8 @@ async function analyzePaperWithRetry(paper, options = {}) {
     } = options;
 
     let lastError = null;
+    let lastErrorCode = null;
+    let lastErrorRetryable = true;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         if (onAttempt) {
@@ -454,6 +656,9 @@ async function analyzePaperWithRetry(paper, options = {}) {
                 return successfulResult;
             } else if (analyzed && analyzed.error) {
                 lastError = analyzed.error;
+                lastErrorCode = analyzed.errorCode || null;
+                lastErrorRetryable = analyzed.errorRetryable !== false;
+                if (analyzed.errorRetryable === false) break;
                 if (attempt < maxRetries) {
                     if (onRetry) onRetry(attempt + 1, new Error(analyzed.error), paper);
                     await sleep(retryDelayMs);
@@ -467,6 +672,9 @@ async function analyzePaperWithRetry(paper, options = {}) {
             }
         } catch (error) {
             lastError = error.message;
+            lastErrorCode = error.code || null;
+            lastErrorRetryable = error.retryable !== false;
+            if (error?.retryable === false) break;
             if (attempt < maxRetries) {
                 if (onRetry) onRetry(attempt + 1, error, paper);
                 await sleep(retryDelayMs);
@@ -483,6 +691,8 @@ async function analyzePaperWithRetry(paper, options = {}) {
             parsed: null,
             error: lastError || '分析失败',
             latestAnalysisAttemptError: lastError || '分析失败',
+            latestAnalysisAttemptErrorCode: lastErrorCode,
+            latestAnalysisAttemptRetryable: lastErrorRetryable,
             latestAnalysisAttemptAt: getBeijingISOString()
         }
     };
@@ -907,6 +1117,11 @@ module.exports = {
     persistAnalysisCheckpoint,
     isSuccessfulAnalysisRecord,
     scoringAuditBindsFinalAnalysis,
+    scoringStabilityIsResolved,
+    apiReaderV3BindsCanonical,
+    API_READER_QUALITY_METRICS_CONTRACT,
+    API_READER_SOURCE_BINDING_CONTRACT,
+    SCORING_STABILITY_RESOLUTION_CONTRACT,
     getAnalysisRunStatus,
     getCanonicalAnalysisRunSummary,
     getAnalysisExitCode,

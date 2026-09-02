@@ -32,7 +32,11 @@ const {
     MANUAL_DEPTH_CONTRACT_VERSIONS,
     validateManualTakeoverManifest
 } = require('./analysis-contract.js');
-const { getCanonicalAnalysisRunSummary } = require('./analysis-engine.js');
+const {
+    getCanonicalAnalysisRunSummary,
+    scoringStabilityIsResolved,
+    apiReaderV3BindsCanonical
+} = require('./analysis-engine.js');
 const {
     MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT,
     validateManualPaperSourceIdentity
@@ -424,6 +428,23 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
             } else if (!isRecoveryStageTerminal(stage, state.status)) {
                 addIssue(issues, filePath, `${prefix}.stages.${stage} 尚未完成: ${state.status}`);
             }
+        }
+    }
+    const scoring = manifest.stages.scoringAudit;
+    if (scoring?.scoringContract === 'api-scoring-audit-v2') {
+        if (!scoringStabilityIsResolved(scoring)) {
+            addIssue(
+                issues,
+                filePath,
+                `${prefix}.stages.scoringAudit 评分稳定性告警尚未形成有效二次审计 resolution`
+            );
+        }
+        if (options.requireComplete && !apiReaderV3BindsCanonical(options.paper)) {
+            addIssue(
+                issues,
+                filePath,
+                `${prefix} 自动 API production 缺少 Reader v3 完整绑定或存在 blocking quality issue`
+            );
         }
     }
     if (hasRecoverableFailure && typeof analysisCheckpoint !== 'string') {
@@ -943,7 +964,8 @@ function validatePaperListFile(filePath, options = {}) {
                         requireComplete: hasAnalysisBody,
                         analysis: paper.analysis,
                         sourceText,
-                        imageManifest: paper.imageManifest
+                        imageManifest: paper.imageManifest,
+                        paper
                     }
                 );
             } else if (hasAnalysisBody) {

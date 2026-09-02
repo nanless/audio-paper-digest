@@ -1,4 +1,12 @@
-requests
-playwright
-PyYAML
-Pillow>=10.0,<12.0
+# Runtime lock for Python 3.11+ with OpenSSL: update deliberately and verify in CI before merging.
+requests==2.32.5
+urllib3==2.6.3
+certifi==2026.2.25
+charset-normalizer==3.4.7
+idna==3.11
+playwright==1.60.0
+greenlet==3.2.5
+pyee==13.0.1
+typing-extensions==4.15.0
+PyYAML==6.0.3
+Pillow==11.3.0

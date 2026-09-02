@@ -8,7 +8,7 @@ This page is task-oriented. See [scripts/README.md](../../scripts/README.md) for
 
 | Command | Purpose |
 |---|---|
-| `npm run digest:prepare -- DATE` | default complete LLM/API orchestration |
+| `npm run digest:prepare -- DATE` | scripted LLM/API stages through blog publication and visual-input preparation; exit 0 is not the final visual state |
 | `npm run digest:api -- DATE` | exact alias |
 | `./run-daily-digest.sh DATE --from STAGE` | resume from a safe stage |
 | `npm run digest:status -- --date DATE` | read-only final snapshot |
@@ -44,6 +44,8 @@ A fetch-start run accepts Beijing today. Direct `node scripts/full-fetch.js` is 
 
 `publish-to-blog.py` is shared implementation and a generation compatibility entry, not a bypass around the three stages.
 
+Default blog and visual commands pass through `scripts/python-runtime.sh`, which prefers the project `.venv` and rejects Python versions below 3.11 or non-OpenSSL TLS runtimes.
+
 ## Visual State Machines
 
 | Command | Behavior |
@@ -51,10 +53,10 @@ A fetch-start run accepts Beijing today. Direct `node scripts/full-fetch.js` is 
 | `npm run visual:post-publish -- --date DATE` | plan both visual types from verified publication |
 | `npm run visual:prepare -- --date DATE` | validate references and emit absolute paths |
 | `npm run visual:status -- --date DATE` | paper infographic status |
-| `npm run visual:record -- ... --qa-attested true` | record inspected paper image |
+| `npm run visual:record -- --date DATE --paper ID --kind infographic --file /abs/result.png --token TOKEN --qa-attested true` | record an inspected paper image; `--output-hint` may replace `--file` |
 | `npm run visual:fail -- ...` | record paper-image failure |
 | `npm run cover:status -- --date DATE` | cover status |
-| `npm run cover:record -- ... --qa-attested true` | record inspected cover |
+| `npm run cover:record -- --date DATE --file /abs/cover.png --token TOKEN --qa-attested true` | record an inspected cover; `--output-hint` may replace `--file` |
 | `npm run cover:fail -- ...` | record cover failure |
 
 Only built-in `image_gen` creates final art. `visual:render:debug` is debugging/offline fallback.
@@ -69,6 +71,16 @@ Only built-in `image_gen` creates final art. `visual:render:debug` is debugging/
 - `path_config.py`: Python publishing paths.
 - `publish_common.py`: publishing data, scoring, LLM, provenance.
 - `publish-to-blog.py`: shared blog transaction implementation.
+
+## Runtime Storage
+
+| Command | Behavior |
+|---|---|
+| `npm run storage:status` | read-only size and file-count report for `data/current`, `data/archive`, `logs`, and important caches |
+| `npm run storage:prune` | scan authoritative JSON references and print a dry-run deletion list without deleting files |
+| `npm run storage:prune -- --apply` | after fail-closed validation, delete only expired, unreferenced files inside fixed allowlisted roots |
+
+`scripts/runtime-storage.js` never targets canonical JSON, publication/visual manifests, blog files, or archived final assets. Apply is blocked by invalid JSON, symlinks, path escapes, or a changed reference/candidate snapshot.
 
 ## Optional Channels
 

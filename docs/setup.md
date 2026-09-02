@@ -8,11 +8,12 @@
 
 ```bash
 npm install
-python3 -m pip install -r requirements.txt
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 cp env.example .env
 ```
 
-Node 必须满足 `>=20.18.1 <21 || >=22.3.0`。项目使用 Node 内置测试框架；Python 依赖用于博客、Hugo 门禁与视觉辅助。
+Node 必须满足 `>=20.18.1 <21 || >=22.3.0`。Python 必须为 3.11+ 且使用 OpenSSL TLS；macOS 系统自带的 Python 3.9/LibreSSL 不属于受支持运行时。默认博客和视觉入口通过 `scripts/python-runtime.sh` 依次选择项目 `.venv`、`python3.11`，最后才校验 `python3`。项目使用 Node 内置测试框架；Python 依赖用于博客、Hugo 门禁与视觉辅助。
 
 ## 最小 `.env`
 
@@ -59,18 +60,24 @@ Node 由 `scripts/env-loader.js`，Python 由 `scripts/project_env.py` 加载同
 | `PD_API_READER_MAX_TOKENS` | 48000 |
 | `PD_API_READER_EVIDENCE_MAX_CHARS` | 180000 |
 | `PD_API_READER_CONTEXT_MAX_CHARS` | 240000 |
-| `PD_API_READER_CONCURRENCY` | 5 |
+| `PD_API_READER_CONCURRENCY` | 5（单进程 Reader generation slot） |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 5 |
 
 Muse 的筛选实际 batch 固定为 1；整篇分析仍按 `PD_ANALYSIS_CONCURRENCY` 并发。Responses 只有 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE。
 
 ## 可选副模型
 
-设置 `PAPER_ANALYZER_SECONDARY_MODEL` 后，主模型仍只写文本，副模型只做候选图筛选和插图计划。secondary endpoint/key 未设置时复用主模型对应值。副模型必须支持图片输入；不得替换主模型原文或参与评分。
+API Reader v3 会把安全物化的官方 Figure 直接交给主模型，主模型端点因此需要支持 Responses 图片输入。设置 `PAPER_ANALYZER_SECONDARY_MODEL` 只启用旧 canonical 的额外 image-supplement：副模型筛选候选图和规划局部插入，不替换主模型原文，也不参与评分。secondary endpoint/key 未设置时复用主模型对应值。
+
+`PD_API_READER_CONCURRENCY` 限制进程内 Reader 重阶段槽；`api:reader:refresh --concurrency N` 限制刷新命令同时处理的论文 worker。两者不是同一个并发旋钮，命令的实际吞吐还受前者排队约束。
+
+文件日志默认保留 30 天且总量不超过 256 MiB，可分别用 `PD_LOG_RETENTION_DAYS` 和 `PD_LOG_MAX_TOTAL_BYTES` 覆写。
 
 ## 博客与 Hugo
 
 `PAPER_DIGEST_BLOG_REPO` 必须指向真实 Hugo 仓库。生成阶段可以在缺目录时跳过“博客已发布去重”，但真实发布不能。review 会运行 Hugo 门禁；Hugo 可执行文件必须在沙箱外环境可用。
+
+发布端不会无限等待外部进程。图片审查、Hugo、Git 本地操作、commit/hook、push/远端核验和视觉规划默认分别受 120、300、30、180、180、120 秒的绝对截止时间约束，可用 `PD_BLOG_IMAGE_REVIEW_DEADLINE_SECONDS`、`PD_HUGO_GATE_TIMEOUT_SECONDS`、`PD_GIT_LOCAL_TIMEOUT_SECONDS`、`PD_GIT_COMMIT_TIMEOUT_SECONDS`、`PD_GIT_NETWORK_TIMEOUT_SECONDS`、`PD_VISUAL_PLANNER_TIMEOUT_SECONDS` 在 `env.example` 给出的范围内覆写。超时不会签发伪造的 review 或远端 OID；已建立但尚未验证远端的本地发布提交会保留供续跑收养。
 
 ## 验证安装
 

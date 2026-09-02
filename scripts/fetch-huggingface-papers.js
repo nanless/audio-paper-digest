@@ -15,7 +15,10 @@ setupScriptLogging(__filename);
  */
 
 const { execFile } = require('child_process');
-const { buildChildProcessEnv, TRANSPORT_ENV_KEYS } = require('./env-loader.js');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { buildChildProcessEnv } = require('./env-loader.js');
 
 const { getBeijingDateString, getBeijingISOString, normalizeToBeijingISOString, normalizedId, detectProxyUrl } = require('./utils.js');
 const { HUGGINGFACE_CONFIG } = require('./config.js');
@@ -23,14 +26,125 @@ const { HUGGINGFACE_CONFIG } = require('./config.js');
 /**
  * 使用 curl 获取数据
  */
-function buildCurlArgs(proxyUrl, url, timeout) {
+function parseProxyCredentials(proxyUrl) {
+    let parsed;
+    try {
+        parsed = new URL(proxyUrl);
+    } catch {
+        throw new Error('invalid project proxy URL');
+    }
+    const hasCredentials = Boolean(parsed.username || parsed.password);
+    const encodedUsername = parsed.username;
+    const encodedPassword = parsed.password;
+    const decode = value => {
+        try {
+            return decodeURIComponent(value);
+        } catch {
+            throw new Error('invalid percent-encoding in project proxy credentials');
+        }
+    };
+    const username = decode(parsed.username);
+    const password = decode(parsed.password);
+    parsed.username = '';
+    parsed.password = '';
+    return {
+        hasCredentials,
+        username,
+        password,
+        encodedUsername,
+        encodedPassword,
+        sanitizedUrl: parsed.toString()
+    };
+}
+
+function quoteCurlConfigValue(value) {
+    const text = String(value);
+    if (/\r|\n|\0/.test(text)) {
+        throw new Error('project proxy credentials contain forbidden control characters');
+    }
+    return `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function buildCurlArgs(proxyUrl, url, timeout, options = {}) {
+    const proxy = parseProxyCredentials(proxyUrl);
+    if (proxy.hasCredentials && !options.proxyConfigPath) {
+        throw new Error('credentialed project proxy requires a private curl config');
+    }
+    const proxyArgs = options.proxyConfigPath
+        ? ['--config', options.proxyConfigPath]
+        : ['--proxy', proxyUrl];
     return [
-        '-s', '-f', '-L',
-        '--proxy', proxyUrl,
+        // curl only honors -q/--disable before every other option.  Keep it
+        // first so a user-level ~/.curlrc cannot inject credentials, cookies,
+        // proxies or output settings into this minimal subprocess.
+        '-q', '-s', '-f', '-L',
+        ...proxyArgs,
         '--noproxy', '',
         '--max-time', String(timeout),
         url
     ];
+}
+
+function prepareCurlInvocation(proxyUrl, url, timeout, options = {}) {
+    const proxy = parseProxyCredentials(proxyUrl);
+    if (!proxy.hasCredentials) {
+        return {
+            args: buildCurlArgs(proxyUrl, url, timeout),
+            configPath: null,
+            cleanup() {}
+        };
+    }
+
+    const tempRoot = options.tempRoot || os.tmpdir();
+    const tempDir = fs.mkdtempSync(path.join(tempRoot, 'paper-digest-hf-curl-'));
+    const configPath = path.join(tempDir, 'proxy.conf');
+    let cleaned = false;
+    const cleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    };
+
+    try {
+        const config = [
+            `proxy = ${quoteCurlConfigValue(proxy.sanitizedUrl)}`,
+            `proxy-user = ${quoteCurlConfigValue(`${proxy.username}:${proxy.password}`)}`,
+            ''
+        ].join('\n');
+        fs.writeFileSync(configPath, config, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+        if (process.platform !== 'win32') fs.chmodSync(configPath, 0o600);
+        return {
+            args: buildCurlArgs(proxyUrl, url, timeout, { proxyConfigPath: configPath }),
+            configPath,
+            cleanup
+        };
+    } catch (error) {
+        cleanup();
+        throw error;
+    }
+}
+
+function redactProxySecrets(message, proxyUrl) {
+    let redacted = String(message || '');
+    let proxy;
+    try {
+        proxy = parseProxyCredentials(proxyUrl);
+    } catch {
+        return redacted.replace(/([a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/gi, '$1***@');
+    }
+    const candidates = [
+        String(proxyUrl),
+        `${proxy.username}:${proxy.password}`,
+        `${proxy.encodedUsername}:${proxy.encodedPassword}`,
+        proxy.username,
+        proxy.password,
+        proxy.encodedUsername,
+        proxy.encodedPassword
+    ].filter(Boolean).sort((a, b) => b.length - a.length);
+    for (const secret of candidates) {
+        redacted = redacted.split(secret).join('***');
+    }
+    return redacted.replace(/([a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/gi, '$1***@');
 }
 
 async function fetchWithCurl(url, timeout = 60, options = {}) {
@@ -40,18 +154,33 @@ async function fetchWithCurl(url, timeout = 60, options = {}) {
         return { ok: false, data: null, error: 'missing project proxy' };
     }
 
+    let invocation = null;
     try {
+        invocation = prepareCurlInvocation(proxyUrl, url, timeout, options);
         const result = await new Promise((resolve, reject) => {
-            execFileFn('curl', buildCurlArgs(proxyUrl, url, timeout), {
-                encoding: 'utf8',
-                maxBuffer: 10 * 1024 * 1024,
-                timeout: Math.max(1000, Math.ceil(timeout * 1000) + 5000),
-                killSignal: 'SIGKILL',
-                env: buildChildProcessEnv({ NO_PROXY: '', no_proxy: '' }, TRANSPORT_ENV_KEYS)
-            }, (error, stdout) => {
-                if (error) reject(error);
-                else resolve(stdout);
-            });
+            try {
+                execFileFn('curl', invocation.args, {
+                    encoding: 'utf8',
+                    maxBuffer: 10 * 1024 * 1024,
+                    timeout: Math.max(1000, Math.ceil(timeout * 1000) + 5000),
+                    killSignal: 'SIGKILL',
+                    env: buildChildProcessEnv({
+                        HTTP_PROXY: '', HTTPS_PROXY: '', ALL_PROXY: '', NO_PROXY: '',
+                        http_proxy: '', https_proxy: '', all_proxy: '', no_proxy: ''
+                    })
+                }, (error, stdout, stderr) => {
+                    if (error) {
+                        const detail = String(stderr || '').trim() || error.message || 'curl failed';
+                        const safeError = new Error(redactProxySecrets(detail, proxyUrl));
+                        safeError.code = error.code;
+                        reject(safeError);
+                    } else {
+                        resolve(stdout);
+                    }
+                });
+            } catch (error) {
+                reject(error);
+            }
         });
 
         if (!result || result.trim() === '') {
@@ -60,15 +189,18 @@ async function fetchWithCurl(url, timeout = 60, options = {}) {
 
         return { ok: true, data: JSON.parse(result), error: null };
     } catch (e) {
+        const safeMessage = redactProxySecrets(e?.message || String(e), proxyUrl);
         if (Number(e.code) === 22) {
             // curl --fail returns exit code 22 for HTTP errors (4xx, 5xx)
-            console.error(`  HTTP 请求失败 (${url}): ${e.message.substring(0, 100)}`);
-        } else if (e.message && e.message.includes('Unexpected token')) {
+            console.error(`  HTTP 请求失败 (${url}): ${safeMessage.substring(0, 100)}`);
+        } else if (safeMessage.includes('Unexpected token')) {
             console.error(`  JSON 解析失败 (${url}): 响应不是有效的 JSON`);
         } else {
-            console.error(`  请求失败 (${url}): ${e.message.substring(0, 100)}`);
+            console.error(`  请求失败 (${url}): ${safeMessage.substring(0, 100)}`);
         }
-        return { ok: false, data: null, error: e.message || String(e) };
+        return { ok: false, data: null, error: safeMessage };
+    } finally {
+        invocation?.cleanup();
     }
 }
 
@@ -514,6 +646,8 @@ module.exports = {
     fetchHuggingFacePapers,
     fetchWithCurl,
     buildCurlArgs,
+    prepareCurlInvocation,
+    redactProxySecrets,
     mergeAndDeduplicate,
     convertDailyPaper,
     convertPaper

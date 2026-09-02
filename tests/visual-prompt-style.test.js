@@ -61,7 +61,10 @@ describe('post-publication visual prompt style contract', () => {
 
     it('确定性渲染器只暴露调试命令，不伪装成默认生图流程', () => {
         const pkg = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf8'));
-        assert.strictEqual(pkg.scripts['visual:render:debug'], 'python3 scripts/render-visual-summary.py');
+        assert.strictEqual(
+            pkg.scripts['visual:render:debug'],
+            'bash scripts/python-runtime.sh scripts/render-visual-summary.py'
+        );
         assert.ok(!Object.hasOwn(pkg.scripts, 'visual:render'));
     });
 });

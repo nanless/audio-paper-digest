@@ -10,7 +10,9 @@ const {
 } = require('./utils.js');
 const {
     isSuccessfulAnalysisRecord,
-    scoringAuditBindsFinalAnalysis
+    scoringAuditBindsFinalAnalysis,
+    scoringStabilityIsResolved,
+    apiReaderV3BindsCanonical
 } = require('./analysis-engine.js');
 const { setupScriptLogging } = require('./log-setup.js');
 const {
@@ -139,6 +141,7 @@ function llmApiPaperComplete(paper) {
         && paper?.sourceSha256 === source.sourceSha256
         && scoring?.status === 'complete'
         && scoring?.scoringContract === 'api-scoring-audit-v2'
+        && scoringStabilityIsResolved(scoring)
         && isSha256(scoring?.auditSha256)
         && isSha256(scoring?.evidenceSha256)
         && scoringAuditBindsFinalAnalysis(paper)
@@ -155,6 +158,7 @@ function llmApiPaperComplete(paper) {
         && reader.planSha256 === paper.apiReaderPlanSha256
         && reader.figuresSha256 === stableSha256(paper?.apiReaderFigures || [])
         && reader.readerAuthorsSha256 === stableSha256(paper?.apiReaderAuthors || {})
+        && apiReaderV3BindsCanonical(paper)
     );
 }
 
@@ -457,6 +461,11 @@ function buildDigestRunReport(targetDate, options = {}) {
         ? 'manual_v6_production'
         : (llmApiComplete ? 'llm_api_production' : 'invalid_or_legacy');
     const productionAnalysisComplete = productionV6Complete || llmApiComplete;
+    const unresolvedScoringIds = deepBatch.filter(paper => {
+        const scoring = paper?.analysisManifest?.stages?.scoringAudit;
+        return scoring?.scoringContract === 'api-scoring-audit-v2'
+            && !scoringStabilityIsResolved(scoring);
+    }).map(normalizedId).filter(Boolean);
     const analysisComplete = Boolean(deep && filtered) && productionAnalysisComplete && (
         failed.length === 0
         && successful.length === filteredBatch.length
@@ -465,6 +474,9 @@ function buildDigestRunReport(targetDate, options = {}) {
     const errors = [];
     if (!fetchComplete) errors.push('抓取来源健康或批次绑定不完整');
     if (!filteredComplete) errors.push('筛选状态、决定覆盖或批次绑定不完整');
+    if (unresolvedScoringIds.length > 0) {
+        errors.push(`评分稳定性二次审计尚未收敛: ${unresolvedScoringIds.join(', ')}`);
+    }
     if (!analysisComplete) errors.push(
         productionAnalysisComplete
             ? '深度分析集合未精确覆盖筛选结果'
@@ -513,7 +525,8 @@ function buildDigestRunReport(targetDate, options = {}) {
             total: deepBatch.length,
             successful: successful.length,
             failed: failed.length,
-            failedIds: failed.map(normalizedId).filter(Boolean)
+            failedIds: failed.map(normalizedId).filter(Boolean),
+            scoringStabilityUnresolvedIds: unresolvedScoringIds
         },
         blog: {
             complete: reviewComplete,
@@ -548,6 +561,9 @@ function formatDigestRunSummary(report) {
         `  抓取 ${state(report.fetch.complete)} | candidates=${report.fetch.rawCandidateCount}`,
         `  筛选 ${state(report.filter.complete)} | selected=${report.filter.selectedCount} | candidates=${report.filter.totalCandidates ?? '?'} | pending=${report.filter.pendingDecisions ?? '?'}`,
         `  分析 ${state(report.analysis.complete)} | success=${report.analysis.successful}/${report.analysis.total} | failed=${report.analysis.failed}`,
+        ...(report.analysis.scoringStabilityUnresolvedIds?.length
+            ? [`  评分稳定性 unresolved=${report.analysis.scoringStabilityUnresolvedIds.join(',')}`]
+            : []),
         `  博客 ${state(report.blog.complete)} | strictReview=${report.blog.strictReview} | remoteVerified=${report.blog.publicationVerified}`,
         `  长图 ${report.visuals.waived ? 'waived' : state(report.visuals.gateComplete === true)} | complete=${report.visuals.complete}/${report.visuals.total} | pending=${report.visuals.pending} | failed=${report.visuals.failed}`,
         `  封面 ${report.cover.waived ? 'waived' : state(report.cover.complete)} | status=${report.cover.status}`

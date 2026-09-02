@@ -7,6 +7,9 @@ const {
     parseFilterDecision,
     parseFilterDecisionDetails,
     repairMalformedFilterDecision,
+    extractFilterResponseContent,
+    callModelForFilter,
+    classifyFilterRequestError,
     getEffectiveFilterBatchSize,
     evaluateKeywordPrefilter,
     filterPapersByKeywords,
@@ -30,6 +33,210 @@ describe('Muse filter transport policy', () => {
     it('Muse 经 HTTP CONNECT 时强制串行，其他模型保留配置批次', () => {
         assert.strictEqual(getEffectiveFilterBatchSize(5, 'muse-spark-1.2-contributor'), 1);
         assert.strictEqual(getEffectiveFilterBatchSize(5, 'kimi-for-coding'), 5);
+    });
+});
+
+describe('Responses filter terminal status', () => {
+    it('先拒绝 max_output_tokens 截断，不接受其中的非空部分正文', () => {
+        assert.throws(() => extractFilterResponseContent('openai_responses', {
+            status: 'incomplete',
+            incomplete_details: { reason: 'max_output_tokens' },
+            output_text: '结论：相关',
+            usage: { output_tokens: 999 }
+        }, 1000), error => error.code === 'MODEL_OUTPUT_TRUNCATED');
+    });
+
+    it('其他 incomplete 终态也不得将部分正文当作成功', () => {
+        assert.throws(() => extractFilterResponseContent('openai_responses', {
+            status: 'incomplete',
+            incomplete_details: { reason: 'content_filter' },
+            output_text: '结论：相关'
+        }, 1000), error => error.code === 'MODEL_OUTPUT_INCOMPLETE');
+    });
+});
+
+describe('filter request retry classification and circuit breaker', () => {
+    const filterConfig = {
+        endpoint: 'https://filter.example/v1',
+        key: 'test-filter-key-secret',
+        model: 'test-filter-model'
+    };
+    const successResponse = text => ({
+        statusCode: 200,
+        headers: {},
+        body: { choices: [{ message: { content: text } }] },
+        raw: JSON.stringify({ choices: [{ message: { content: text } }] })
+    });
+
+    it('多候选 401 只发一次请求，先保存当前 checkpoint 再停止批次', async () => {
+        const papers = [1, 2, 3].map(index => ({
+            arxivId: `2609.0000${index}`,
+            title: `Audio ${index}`,
+            abstract: 'speech audio benchmark'
+        }));
+        let requests = 0;
+        let checkpoint;
+        let thrown;
+        try {
+            await filterPapersWithLLM(papers, {
+                batchSize: 1,
+                delayBetweenBatches: 0,
+                useKeywordPreFilter: false,
+                decisionOptions: {
+                    filterConfig,
+                    maxRetries: 5,
+                    sleepFn: async () => { throw new Error('401 must not sleep'); },
+                    requestFn: async () => {
+                        requests += 1;
+                        return {
+                            statusCode: 401,
+                            headers: {},
+                            body: { error: { message: 'invalid api key test-filter-key-secret' } },
+                            raw: 'invalid api key test-filter-key-secret'
+                        };
+                    }
+                },
+                onBatchComplete: async value => { checkpoint = value; }
+            });
+        } catch (error) {
+            thrown = error;
+        }
+        assert.strictEqual(requests, 1);
+        assert.strictEqual(thrown.code, 'FILTER_AUTH_ERROR');
+        assert.strictEqual(thrown.status, 401);
+        assert.ok(checkpoint);
+        assert.strictEqual(checkpoint.retryableDecisions['2609.00001'].errorCode, 'FILTER_AUTH_ERROR');
+        assert.strictEqual(checkpoint.retryableDecisions['2609.00001'].errorStatus, 401);
+        assert.doesNotMatch(checkpoint.retryableDecisions['2609.00001'].error, /test-filter-key-secret/);
+    });
+
+    it('400/403/404 确定性错误不重试并保留 status/code', async () => {
+        for (const [status, expectedCode] of [
+            [400, 'FILTER_BAD_REQUEST'],
+            [403, 'FILTER_AUTH_ERROR'],
+            [404, 'FILTER_ENDPOINT_ERROR']
+        ]) {
+            let requests = 0;
+            await assert.rejects(
+                callModelForFilter([], 100, 5, {
+                    filterConfig,
+                    sleepFn: async () => { throw new Error('non-retryable response must not sleep'); },
+                    requestFn: async () => {
+                        requests += 1;
+                        return { statusCode: status, headers: {}, body: { error: { message: 'deterministic' } }, raw: '' };
+                    }
+                }),
+                error => error.code === expectedCode && error.status === status && error.retryable === false
+            );
+            assert.strictEqual(requests, 1);
+        }
+    });
+
+    it('429 尊重有界 Retry-After 并在后续尝试恢复', async () => {
+        let requests = 0;
+        const sleeps = [];
+        const result = await callModelForFilter([], 100, 2, {
+            filterConfig,
+            retryAfterMaxMs: 5000,
+            sleepFn: async ms => { sleeps.push(ms); },
+            requestFn: async () => {
+                requests += 1;
+                if (requests === 1) {
+                    return {
+                        statusCode: 429,
+                        headers: { 'retry-after': '120' },
+                        body: { error: { message: 'rate limited' } },
+                        raw: ''
+                    };
+                }
+                return successResponse('结论：相关');
+            }
+        });
+        assert.strictEqual(result, '结论：相关');
+        assert.strictEqual(requests, 2);
+        assert.deepStrictEqual(sleeps, [5000]);
+    });
+
+    it('同一代理系统故障连续出现时熔断，已成功决定可从 checkpoint 续跑', async () => {
+        const papers = [1, 2, 3, 4].map(index => ({
+            arxivId: `2609.1000${index}`,
+            title: `Speech ${index}`,
+            abstract: 'speech recognition'
+        }));
+        let requests = 0;
+        let checkpoint;
+        await assert.rejects(() => filterPapersWithLLM(papers, {
+            batchSize: 1,
+            delayBetweenBatches: 0,
+            useKeywordPreFilter: false,
+            decisionOptions: {
+                filterConfig,
+                maxRetries: 1,
+                circuitBreakerOptions: { threshold: 2 },
+                requestFn: async () => {
+                    requests += 1;
+                    if (requests === 1) return successResponse('结论：相关');
+                    const error = new Error('HTTP CONNECT proxy unavailable');
+                    error.code = 'ECONNREFUSED';
+                    throw error;
+                }
+            },
+            onBatchComplete: async value => { checkpoint = value; }
+        }), error => error.code === 'FILTER_CIRCUIT_OPEN');
+        assert.strictEqual(requests, 3);
+        assert.deepStrictEqual(Object.keys(checkpoint.decisions), ['2609.10001']);
+        assert.deepStrictEqual(Object.keys(checkpoint.retryableDecisions), ['2609.10002', '2609.10003']);
+
+        let resumedCalls = 0;
+        const resumed = await filterPapersWithLLM(papers, {
+            batchSize: 1,
+            delayBetweenBatches: 0,
+            useKeywordPreFilter: false,
+            initialDecisions: checkpoint.decisions,
+            decisionFn: async () => {
+                resumedCalls += 1;
+                return { related: true, reason: 'recovered', parseSource: 'test' };
+            }
+        });
+        assert.strictEqual(resumedCalls, 3);
+        assert.strictEqual(resumed._filterStats.complete, true);
+        assert.strictEqual(resumed.length, 4);
+    });
+
+    it('单篇 JSON/内容格式失败不计入系统熔断，后续候选仍全部请求', async () => {
+        const papers = [1, 2, 3, 4].map(index => ({
+            arxivId: `2609.2000${index}`,
+            title: `Audio ${index}`,
+            abstract: 'audio processing'
+        }));
+        let requests = 0;
+        const filtered = await filterPapersWithLLM(papers, {
+            batchSize: 1,
+            delayBetweenBatches: 0,
+            useKeywordPreFilter: false,
+            decisionOptions: {
+                filterConfig,
+                maxRetries: 1,
+                circuitBreakerOptions: { threshold: 2 },
+                requestFn: async () => {
+                    requests += 1;
+                    return successResponse('{ malformed model decision');
+                }
+            }
+        });
+        assert.strictEqual(requests, 4);
+        assert.strictEqual(filtered._filterStats.complete, false);
+        assert.strictEqual(filtered._filterStats.retryable, 4);
+    });
+
+    it('网络错误保留原始 code 并标记为系统级瞬时故障', () => {
+        const source = new Error('socket timeout');
+        source.code = 'ETIMEDOUT';
+        const classified = classifyFilterRequestError(source);
+        assert.strictEqual(classified.code, 'ETIMEDOUT');
+        assert.strictEqual(classified.filterCode, 'FILTER_NETWORK_ERROR');
+        assert.strictEqual(classified.retryable, true);
+        assert.strictEqual(classified.systemFailure, true);
     });
 });
 

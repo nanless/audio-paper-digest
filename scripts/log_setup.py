@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import threading
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -12,6 +13,9 @@ from project_env import load_project_env
 _LOG_SETUP_DONE = False
 _ACTIVE_LOGGER = None
 _CONFIGURED_SECRETS = ()
+DEFAULT_LOG_RETENTION_DAYS = 30
+DEFAULT_LOG_MAX_TOTAL_BYTES = 256 * 1024 * 1024
+ACTIVE_LOG_GRACE_SECONDS = 5 * 60
 
 
 def redact_log_text(value):
@@ -154,6 +158,96 @@ def _create_unique_log_file(logs_dir, base_name):
     raise RuntimeError(f"无法为 {base_name} 创建唯一日志文件")
 
 
+def _positive_integer(value, fallback):
+    try:
+        parsed = int(str(value))
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if parsed > 0 else fallback
+
+
+def _log_owner_process_is_alive(file_path):
+    match = re.search(r'-(\d+)-\d+\.log$', os.path.basename(file_path))
+    if not match:
+        return False
+    try:
+        os.kill(int(match.group(1)), 0)
+        return True
+    except PermissionError:
+        return True
+    except (ProcessLookupError, ValueError, OverflowError):
+        return False
+
+
+def prune_log_files(logs_dir, *, retention_days=None, max_total_bytes=None, now=None):
+    retention_days = _positive_integer(
+        retention_days if retention_days is not None else os.environ.get('PD_LOG_RETENTION_DAYS'),
+        DEFAULT_LOG_RETENTION_DAYS,
+    )
+    max_total_bytes = _positive_integer(
+        max_total_bytes if max_total_bytes is not None else os.environ.get('PD_LOG_MAX_TOTAL_BYTES'),
+        DEFAULT_LOG_MAX_TOTAL_BYTES,
+    )
+    now = time.time() if now is None else float(now)
+    cutoff = now - retention_days * 24 * 60 * 60
+    entries = []
+    try:
+        names = os.listdir(logs_dir)
+    except OSError:
+        return {'removed': 0, 'reclaimedBytes': 0}
+    for name in names:
+        if not name.endswith('.log'):
+            continue
+        file_path = os.path.join(logs_dir, name)
+        try:
+            stat = os.lstat(file_path)
+        except OSError:
+            continue
+        if not os.path.isfile(file_path) or os.path.islink(file_path):
+            continue
+        entries.append({
+            'path': file_path,
+            'mtime': stat.st_mtime,
+            'size': stat.st_size,
+            'active_owner': _log_owner_process_is_alive(file_path),
+        })
+
+    removed = 0
+    reclaimed = 0
+    retained = []
+    for entry in entries:
+        if not entry['active_owner'] and entry['mtime'] < cutoff:
+            try:
+                os.unlink(entry['path'])
+                removed += 1
+                reclaimed += entry['size']
+                continue
+            except FileNotFoundError:
+                continue
+            except OSError:
+                pass
+        retained.append(entry)
+    retained.sort(key=lambda item: (-item['mtime'], item['path']))
+    total_bytes = sum(item['size'] for item in retained)
+    for entry in reversed(retained):
+        if total_bytes <= max_total_bytes:
+            break
+        # Do not unlink a log that another still-running process may own.
+        if entry['active_owner'] or entry['mtime'] >= now - ACTIVE_LOG_GRACE_SECONDS:
+            continue
+        try:
+            os.unlink(entry['path'])
+        except FileNotFoundError:
+            total_bytes -= entry['size']
+            continue
+        except OSError:
+            continue
+        total_bytes -= entry['size']
+        removed += 1
+        reclaimed += entry['size']
+    return {'removed': removed, 'reclaimedBytes': reclaimed}
+
+
 def setup_script_logging(script_path=None):
     global _LOG_SETUP_DONE, _ACTIVE_LOGGER, _CONFIGURED_SECRETS
     if _LOG_SETUP_DONE:
@@ -182,6 +276,7 @@ def setup_script_logging(script_path=None):
     log_file = None
     if not disable_file_logs:
         os.makedirs(logs_dir, exist_ok=True)
+        prune_log_files(logs_dir)
         fh, log_file = _create_unique_log_file(logs_dir, base_name)
 
     original_stdout = sys.stdout

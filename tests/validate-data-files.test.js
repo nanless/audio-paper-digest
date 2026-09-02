@@ -507,6 +507,22 @@ describe('validate-data-files', () => {
         assert.deepStrictEqual(validatePaperListFile(resultFile, { deepAnalysis: true }), []);
     });
 
+    it('自动 API canonical 报告未解决评分稳定性与 Reader v3 缺口', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-api-gates-'));
+        const resultFile = path.join(dir, 'deep-analysis-result.json');
+        const paper = completeAnalysisPaper('2607.00002');
+        paper.analysisManifest.stages.scoringAudit = {
+            status: 'complete',
+            scoringContract: 'api-scoring-audit-v2',
+            outputAnalysisSha256: crypto.createHash('sha256').update(paper.analysis).digest('hex'),
+            stabilityWarning: true
+        };
+        fs.writeFileSync(resultFile, JSON.stringify({ papers: [paper] }));
+        const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
+        assert.match(issues, /评分稳定性告警尚未形成有效二次审计 resolution/);
+        assert.match(issues, /自动 API production 缺少 Reader v3 完整绑定/);
+    });
+
     it('Manual v4 canonical 从同批受控全文加载原文并拒绝非连续 resultClaims 引用', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-manual-v4-source-'));
         const { resultFile } = writeManualV4BindingFixture(dir);

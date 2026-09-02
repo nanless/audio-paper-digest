@@ -1526,6 +1526,62 @@ primary_method_tag: #基准测试
         self.assertEqual(payload['max_output_tokens'], 100)
         self.assertNotIn('messages', payload)
 
+    def test_muse_incomplete_response_never_accepts_valid_looking_partial_json(self):
+        first = mock.Mock()
+        first.status = 200
+        first.read.return_value = json.dumps({
+            'status': 'incomplete',
+            'incomplete_details': {'reason': 'max_output_tokens'},
+            'output_text': '{"passed":true,"issues":[]}',
+        }).encode('utf-8')
+        first.__enter__ = mock.Mock(return_value=first)
+        first.__exit__ = mock.Mock(return_value=False)
+        second = mock.Mock()
+        second.status = 200
+        second.read.return_value = json.dumps({
+            'status': 'completed',
+            'output_text': '{"passed":true,"issues":[]}',
+        }).encode('utf-8')
+        second.__enter__ = mock.Mock(return_value=second)
+        second.__exit__ = mock.Mock(return_value=False)
+        opener = mock.Mock()
+        opener.open.side_effect = [first, second]
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://opencode.ai/zen/go/v1',
+            'PAPER_ANALYZER_MODEL': 'muse-spark-1.2-contributor',
+            'HTTPS_PROXY': 'http://127.0.0.1:7897',
+        }
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('urllib.request.build_opener', return_value=opener), \
+                mock.patch('publish_common.time.sleep'):
+            result = call_publish_llm_api(
+                'inspect', required=True, max_tokens=4000, max_retries=2,
+                structured_output=True,
+            )
+        self.assertEqual(result, '{"passed":true,"issues":[]}')
+        self.assertEqual(opener.open.call_count, 2)
+
+    def test_publish_llm_response_body_has_hard_size_limit(self):
+        response = mock.Mock()
+        response.status = 200
+        response.read.return_value = b'x' * (2 * 1024 * 1024 + 1)
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        opener = mock.Mock()
+        opener.open.return_value = response
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://api.example.com/v1',
+            'PAPER_ANALYZER_MODEL': 'text-model',
+        }
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('urllib.request.build_opener', return_value=opener), \
+                mock.patch('publish_common.time.sleep'), \
+                self.assertRaisesRegex(PublishLLMUnavailable, '2 MiB'):
+            call_publish_llm_api('inspect', required=True, max_retries=1)
+        response.read.assert_called_once_with(2 * 1024 * 1024 + 1)
+
     def test_secondary_publish_llm_uses_secondary_model_with_primary_endpoint_and_key_fallback(self):
         response = mock.Mock()
         response.status = 200

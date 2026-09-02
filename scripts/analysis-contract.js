@@ -407,6 +407,7 @@ function extractMarkdownTables(text) {
         tables.push({
             header,
             rows,
+            markdown: lines.slice(index, end).join('\n'),
             startLine: index,
             endLine: end - 1,
             dataRows,

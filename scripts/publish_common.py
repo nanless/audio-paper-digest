@@ -3909,8 +3909,16 @@ def call_publish_llm_api(
                 status = response.status
                 if response.status < 200 or response.status >= 300:
                     raise RuntimeError(f'HTTP {response.status}')
-                data = json.loads(response.read().decode('utf-8'))
+                response_limit = 2 * 1024 * 1024
+                raw_response = response.read(response_limit + 1)
+                if len(raw_response) > response_limit:
+                    raise RuntimeError('LLM 响应超过 2 MiB 安全上限')
+                data = json.loads(raw_response.decode('utf-8'))
             content = parse_publish_response_text(api_type, data)
+            # A Responses gateway may return valid-looking partial output_text
+            # together with status=incomplete. Terminal state wins over content.
+            if api_type == 'openai_responses' and data.get('status') == 'incomplete':
+                content = ''
             if content:
                 print(
                     f'  [publish-api] ✓ {context} | HTTP {status} | '

@@ -47,6 +47,12 @@ Use atomic writes. Read-modify-write operations acquire shared locks, reread can
 
 Use HTTPS except loopback tests. Revalidate public destination IPs on redirects. Logs use millisecond Beijing timestamps, `0600` permissions, and redact authentication headers, cookies, tokens, configured keys, secrets, passwords, and URL userinfo. Never commit runtime state or credentials.
 
+## Runtime storage
+
+`npm run storage:status` is read-only. `npm run storage:prune` prints a reference-aware dry run; `npm run storage:prune -- --apply` targets only expired files inside fixed log/cache/debug allowlists and fails closed on invalid JSON, symlinks, path escapes, or changed candidates. Canonical JSON, publication/visual manifests, blog files, and archived final assets are never targets.
+
+Apply is an offline maintenance operation. Run it only when acquisition, analysis, blog generation/review/push, and visual tasks are all stopped. Reference rescanning cannot replace a transaction lock shared by every writer, so concurrent creation of a new authoritative reference still has a post-scan race. During an active pipeline, use status or dry-run only.
+
 ## Verification
 
 ```bash

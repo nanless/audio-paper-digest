@@ -1,5 +1,8 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const {
     fetchHuggingFacePapers,
@@ -15,7 +18,7 @@ describe('HuggingFace curl proxy isolation', () => {
         assert.deepStrictEqual(
             buildCurlArgs('socks5h://127.0.0.1:7897', 'https://huggingface.co/api/papers', 60),
             [
-                '-s', '-f', '-L',
+                '-q', '-s', '-f', '-L',
                 '--proxy', 'socks5h://127.0.0.1:7897',
                 '--noproxy', '',
                 '--max-time', '60',
@@ -48,6 +51,60 @@ describe('HuggingFace curl proxy isolation', () => {
         curlCallback(null, '[]');
         const result = await pending;
         assert.deepStrictEqual(result, { ok: true, data: [], error: null });
+    });
+
+    it('含 userinfo 的代理凭据只写入 0600 临时 config，不进 argv 并在成功后清理', async () => {
+        const proxyUrl = 'http://alice:s3cret@proxy.example:8080';
+        const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hf-curl-test-'));
+        let configPath;
+        try {
+            const result = await fetchWithCurl('https://huggingface.co/api/papers', 60, {
+                proxyUrl,
+                tempRoot,
+                execFileFn: (_file, args, options, callback) => {
+                    const argv = args.join(' ');
+                    assert.doesNotMatch(argv, /alice|s3cret|alice:s3cret@/);
+                    assert.ok(args.includes('--config'));
+                    configPath = args[args.indexOf('--config') + 1];
+                    assert.strictEqual(fs.statSync(configPath).mode & 0o777, 0o600);
+                    const config = fs.readFileSync(configPath, 'utf8');
+                    assert.match(config, /proxy\.example:8080/);
+                    assert.match(config, /alice:s3cret/);
+                    for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) {
+                        assert.strictEqual(options.env[key], '');
+                    }
+                    callback(null, '[]', '');
+                }
+            });
+            assert.deepStrictEqual(result, { ok: true, data: [], error: null });
+            assert.strictEqual(fs.existsSync(configPath), false);
+        } finally {
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('代理凭据不会进入 curl 错误、checkpoint 可见返回值，失败后也清理 config', async () => {
+        const proxyUrl = 'http://alice:s3cret@proxy.example:8080';
+        const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hf-curl-error-test-'));
+        let configPath;
+        try {
+            const result = await fetchWithCurl('https://huggingface.co/api/papers', 60, {
+                proxyUrl,
+                tempRoot,
+                execFileFn: (_file, args, _options, callback) => {
+                    configPath = args[args.indexOf('--config') + 1];
+                    const error = new Error(`curl failed via ${proxyUrl}`);
+                    error.code = 7;
+                    callback(error, '', `could not connect to ${proxyUrl}`);
+                }
+            });
+            assert.strictEqual(result.ok, false);
+            assert.doesNotMatch(result.error, /alice|s3cret|alice:s3cret@/);
+            assert.match(result.error, /could not connect/);
+            assert.strictEqual(fs.existsSync(configPath), false);
+        } finally {
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
     });
 });
 

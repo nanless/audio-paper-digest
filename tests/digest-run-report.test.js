@@ -190,28 +190,108 @@ describe('digest run report', () => {
         const paper = validAnalysisPaper('2607.00001');
         paper.analysis = '完整的 API 深度分析正文';
         paper.apiReaderArticle = '### 面向初学者的论文解释\n\n正文';
-        paper.apiReaderPlan = { version: 3, contract: 'beginner-researcher-v3' };
+        paper.apiReaderPlan = {
+            version: 3,
+            contract: 'beginner-researcher-v3',
+            figurePlacements: [],
+            tableBindings: [],
+            formulaBindings: [],
+            sourceBindingsContract: 'api-reader-source-bindings-v4'
+        };
+        paper.apiReaderPlan.sourceBindingsSha256 = hashStable({
+            tableBindings: paper.apiReaderPlan.tableBindings,
+            formulaBindings: paper.apiReaderPlan.formulaBindings
+        });
         paper.apiReaderFigures = [];
-        paper.apiReaderAuthors = { authors: [{ name: 'Author', affiliations: ['Lab'] }] };
         paper.sourceSha256 = '1'.repeat(64);
+        const authorIdentity = {
+            contract: 'api-reader-author-identity-v1',
+            sourceDomSha256: '', sourceTextSha256: paper.sourceSha256,
+            metadataSha256: hashStable(paper.authors || []),
+            authors: [{
+                name: 'Author', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'],
+                nameBinding: {
+                    sourceKind: 'paper_metadata', sourceValue: 'Author',
+                    metadataSha256: hashStable(paper.authors || [])
+                },
+                affiliationBindings: [{
+                    sourceKind: 'explicit_unavailable',
+                    sourceValue: '机构信息未在 arXiv HTML 中可靠披露',
+                    sourceTextSha256: paper.sourceSha256
+                }]
+            }]
+        };
+        paper.apiReaderAuthors = {
+            authors: [{ name: 'Author', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] }],
+            sourceDomSha256: paper.sourceSha256,
+            identity: authorIdentity,
+            identitySha256: hashStable(authorIdentity)
+        };
+        const resourceIdentity = {
+            contract: 'api-reader-resource-identity-v1',
+            sourceTextSha256: paper.sourceSha256,
+            resources: []
+        };
+        paper.apiReaderResources = {
+            ...resourceIdentity,
+            identitySha256: hashStable(resourceIdentity)
+        };
         paper.apiReaderArticleSha256 = hashText(paper.apiReaderArticle);
         paper.apiReaderPlanSha256 = hashStable(paper.apiReaderPlan);
         paper.parsed = { ...(paper.parsed || {}), score: 7.5 };
         paper.analysisManifest = {
-            contracts: { apiReaderArticle: 'beginner-researcher-v3' },
-            sourceAcquisition: { fullTextAvailable: true, sourceSha256: paper.sourceSha256 },
+            contracts: {
+                apiReaderArticle: 'beginner-researcher-v3',
+                apiReaderSourceBindings: 'api-reader-source-bindings-v4',
+                apiReaderAuthorIdentity: 'api-reader-author-identity-v1',
+                apiReaderResourceIdentity: 'api-reader-resource-identity-v1'
+            },
+            sourceAcquisition: {
+                fullTextAvailable: true,
+                sourceSha256: paper.sourceSha256,
+                structuredArtifactsSha256: '4'.repeat(64)
+            },
             stages: {
                 scoringAudit: {
                     status: 'complete', scoringContract: 'api-scoring-audit-v2',
                     auditSha256: '2'.repeat(64), evidenceSha256: '3'.repeat(64),
                     outputAnalysisSha256: hashText(paper.analysis), finalScore: 7.5
                 },
+                openSourceScan: {
+                    status: 'complete',
+                    resourceEvidenceContract: 'api-reader-resource-identity-v1',
+                    resourceEvidenceSha256: paper.apiReaderResources.identitySha256
+                },
                 apiReaderArticle: {
                     status: 'complete', model: 'muse-spark-1.2-contributor',
                     protocol: 'openai_responses', articleSha256: paper.apiReaderArticleSha256,
                     planSha256: paper.apiReaderPlanSha256,
+                    figureCount: 0,
                     figuresSha256: hashStable(paper.apiReaderFigures),
-                    readerAuthorsSha256: hashStable(paper.apiReaderAuthors)
+                    readerAuthorsSha256: hashStable(paper.apiReaderAuthors),
+                    readerAuthorIdentityContractVersion: 'api-reader-author-identity-v1',
+                    readerAuthorIdentitySha256: paper.apiReaderAuthors.identitySha256,
+                    resourceIdentityContractVersion: 'api-reader-resource-identity-v1',
+                    resourceIdentitySha256: paper.apiReaderResources.identitySha256,
+                    resourceCount: 0,
+                    parserVersion: 'api-reader-parser-v3',
+                    assemblerVersion: 'api-reader-assembler-v3',
+                    tableContractVersion: 'api-reader-tables-v3',
+                    figureContractVersion: 'api-reader-figures-v3',
+                    qualityMetricsContractVersion: 'api-reader-quality-metrics-v2',
+                    qualityMetrics: {
+                        contract: 'api-reader-quality-metrics-v2',
+                        rawIssueCount: 0,
+                        waivedIssueCount: 0,
+                        blockingIssueCount: 0,
+                        warningCount: 0
+                    },
+                    sourceBindingsContractVersion: 'api-reader-source-bindings-v4',
+                    sourceBindingsSha256: paper.apiReaderPlan.sourceBindingsSha256,
+                    sourceBindingsSourceTextSha256: paper.sourceSha256,
+                    tableBindingCount: 0,
+                    formulaBindingCount: 0,
+                    structuredArtifactsSha256: '4'.repeat(64)
                 }
             }
         };

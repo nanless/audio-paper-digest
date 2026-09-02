@@ -58,7 +58,7 @@ Decisions persist per paper. Exact Muse uses effective batch 1, so one failure r
 
 Healthy arXiv HTML is preferred; structurally inadequate pages fall back to PDF. Metadata shells cannot claim full-text provenance, and source-SHA changes invalidate primary analysis and downstream stages.
 
-Stages are primary analysis, open-source/demo scans, factual revision, table/method/structure repair, scoring audit, API Reader v3, and official-figure materialization. Stage fingerprints bind inputs, model, protocol, prompt, temperature, budgets, and output SHA.
+Stages are primary analysis, open-source/demo scans, factual revision, table/method/structure repair, scoring audit, API Reader v3, source-identity replay for tables/formulas/authors/resources, and official-figure materialization. Stage fingerprints bind inputs, model, protocol, prompt, temperature, budgets, and output SHA.
 
 The canonical 13 headings serve parsers. Reader v3 serves humans: it explains term combinations, computation/training, datasets, metrics, results, counterevidence, reproduction, and limits. Tables and figures must sit next to the argument they support.
 

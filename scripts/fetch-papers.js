@@ -30,6 +30,7 @@ const {
     buildRequestBody,
     buildHeaders,
     parseResponseText,
+    getResponsesOutputTruncationError,
     requestLlmJson,
     detectProxyUrl,
     detectHttpConnectProxyUrl,
@@ -91,8 +92,8 @@ const FILTER_CONFIG = {
     model: process.env.PAPER_ANALYZER_MODEL || '',
     headers: {}
 };
-const FILTER_SYSTEM_FAILURE_THRESHOLD = 5;
-let consecutiveFilterApiFailures = 0;
+const FILTER_SYSTEM_FAILURE_THRESHOLD = 3;
+const FILTER_RETRY_AFTER_MAX_MS = 60000;
 
 function redactProxyUrl(proxyUrl) {
     if (!proxyUrl) return '';
@@ -222,26 +223,264 @@ async function runHostRequest(options, host, task) {
     return scheduler ? scheduler.run(host, task) : task();
 }
 
+function extractFilterResponseContent(apiType, body, maxOutputTokens) {
+    if (apiType === 'openai_responses') {
+        const truncationError = getResponsesOutputTruncationError(body, maxOutputTokens);
+        if (truncationError) throw truncationError;
+        if (body?.status === 'incomplete') {
+            const reason = body?.incomplete_details?.reason || 'unknown';
+            const error = new Error(`OpenAI Responses 筛选响应未完成: ${reason}`);
+            error.code = 'MODEL_OUTPUT_INCOMPLETE';
+            throw error;
+        }
+    }
+    if (body?.error) {
+        throw new Error(body.error.message || JSON.stringify(body.error));
+    }
+    return parseResponseText(apiType, body);
+}
+
+function sanitizeFilterErrorMessage(value, secrets = []) {
+    let text = String(value || 'unknown error');
+    for (const secret of [FILTER_CONFIG.key, ...secrets]) {
+        if (secret && text.includes(secret)) text = text.split(secret).join('[REDACTED]');
+    }
+    text = text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1[REDACTED]@');
+    text = text.replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '[REDACTED]');
+    return text.slice(0, 1000);
+}
+
+function parseRetryAfterMs(headers, options = {}) {
+    const value = headers?.['retry-after'] ?? headers?.['Retry-After'];
+    if (value === undefined || value === null || value === '') return null;
+    const maxMs = Number.isFinite(options.maxMs) ? Math.max(0, options.maxMs) : FILTER_RETRY_AFTER_MAX_MS;
+    const seconds = Number(value);
+    let delayMs;
+    if (Number.isFinite(seconds) && seconds >= 0) {
+        delayMs = seconds * 1000;
+    } else {
+        const targetMs = Date.parse(String(value));
+        if (!Number.isFinite(targetMs)) return null;
+        delayMs = Math.max(0, targetMs - (Number.isFinite(options.nowMs) ? options.nowMs : Date.now()));
+    }
+    return Math.min(maxMs, Math.ceil(delayMs));
+}
+
+function makeFilterRequestError(message, properties = {}) {
+    const error = new Error(sanitizeFilterErrorMessage(message, properties.secrets));
+    for (const [key, value] of Object.entries(properties)) {
+        if (key !== 'secrets' && value !== undefined) error[key] = value;
+    }
+    if (error.filterClassified === undefined
+        && (error.retryable !== undefined || error.systemFailure !== undefined || error.stopBatch !== undefined)) {
+        error.filterClassified = true;
+    }
+    return error;
+}
+
+function classifyFilterRequestError(sourceError, context = {}) {
+    if (sourceError?.filterClassified) return sourceError;
+    const status = Number(sourceError?.status ?? context.status);
+    const originalCode = String(sourceError?.code || '');
+    const message = sanitizeFilterErrorMessage(sourceError?.message || sourceError, context.secrets);
+    const common = {
+        status: Number.isInteger(status) ? status : undefined,
+        filterClassified: true,
+        cause: sourceError
+    };
+
+    if ([401, 403].includes(status)) {
+        return makeFilterRequestError(message, {
+            ...common,
+            code: 'FILTER_AUTH_ERROR',
+            category: 'auth',
+            retryable: false,
+            systemFailure: true,
+            stopBatch: true,
+            systemFingerprint: `auth:${status}`
+        });
+    }
+    if (status === 404) {
+        return makeFilterRequestError(message, {
+            ...common,
+            code: 'FILTER_ENDPOINT_ERROR',
+            category: 'endpoint',
+            retryable: false,
+            systemFailure: true,
+            stopBatch: true,
+            systemFingerprint: 'endpoint:404'
+        });
+    }
+    if (status === 400) {
+        return makeFilterRequestError(message, {
+            ...common,
+            code: 'FILTER_BAD_REQUEST',
+            category: 'request',
+            retryable: false,
+            systemFailure: true,
+            stopBatch: true,
+            systemFingerprint: 'request:400'
+        });
+    }
+    if ([408, 425, 429].includes(status) || status >= 500) {
+        return makeFilterRequestError(message, {
+            ...common,
+            code: status === 429 ? 'FILTER_RATE_LIMITED' : 'FILTER_HTTP_TRANSIENT',
+            category: status === 429 ? 'rate_limit' : 'http_transient',
+            retryable: true,
+            systemFailure: false,
+            retryAfterMs: context.retryAfterMs
+        });
+    }
+    if (Number.isInteger(status) && status >= 400) {
+        return makeFilterRequestError(message, {
+            ...common,
+            code: 'FILTER_HTTP_NON_RETRYABLE',
+            category: 'http_non_retryable',
+            retryable: false,
+            systemFailure: false
+        });
+    }
+
+    const transientCodes = new Set([
+        'ECONNRESET', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT',
+        'EAI_AGAIN', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
+        'REQUEST_DEADLINE_EXCEEDED', 'REQUEST_SOCKET_TIMEOUT'
+    ]);
+    const looksTransient = transientCodes.has(originalCode)
+        || /(?:proxy|connect|socket|network|timed?\s*out|timeout|dns|econnreset|econnrefused|eai_again|enotfound)/i.test(message);
+    if (looksTransient) {
+        const category = /proxy|connect tunnel|http connect/i.test(message) ? 'proxy' : 'network';
+        return makeFilterRequestError(message, {
+            ...common,
+            code: originalCode || (category === 'proxy' ? 'FILTER_PROXY_ERROR' : 'FILTER_NETWORK_ERROR'),
+            filterCode: category === 'proxy' ? 'FILTER_PROXY_ERROR' : 'FILTER_NETWORK_ERROR',
+            category,
+            retryable: true,
+            systemFailure: true,
+            systemFingerprint: `${category}:${originalCode || message.toLowerCase().slice(0, 120)}`
+        });
+    }
+
+    if (['MODEL_OUTPUT_TRUNCATED', 'MODEL_OUTPUT_INCOMPLETE'].includes(originalCode)) {
+        return makeFilterRequestError(message, {
+            ...common,
+            code: originalCode,
+            category: 'content',
+            retryable: true,
+            systemFailure: false
+        });
+    }
+    return makeFilterRequestError(message, {
+        ...common,
+        code: originalCode || 'FILTER_NON_RETRYABLE',
+        category: 'content_or_request',
+        retryable: false,
+        systemFailure: false
+    });
+}
+
+function createFilterCircuitBreaker(options = {}) {
+    const threshold = Number.isInteger(options.threshold) && options.threshold > 1
+        ? options.threshold
+        : FILTER_SYSTEM_FAILURE_THRESHOLD;
+    let signature = null;
+    let count = 0;
+    let openError = null;
+    return {
+        assertClosed() {
+            if (openError) throw openError;
+        },
+        recordSuccess() {
+            signature = null;
+            count = 0;
+        },
+        recordFailure(error) {
+            if (!error?.systemFailure) return null;
+            const nextSignature = error.systemFingerprint || `${error.category}:${error.code}`;
+            if (nextSignature === signature) count += 1;
+            else {
+                signature = nextSignature;
+                count = 1;
+            }
+            if (error.stopBatch) {
+                openError = error;
+                return openError;
+            }
+            if (count >= threshold) {
+                openError = makeFilterRequestError(
+                    `筛选系统连续 ${count} 次出现同一 ${error.category} 错误，circuit breaker 已打开: ${error.message}`,
+                    {
+                        code: 'FILTER_CIRCUIT_OPEN',
+                        status: error.status,
+                        category: error.category,
+                        retryable: false,
+                        systemFailure: true,
+                        stopBatch: true,
+                        systemFingerprint: signature,
+                        causeCode: error.code,
+                        cause: error
+                    }
+                );
+                return openError;
+            }
+            return null;
+        },
+        get state() {
+            return { threshold, signature, count, open: Boolean(openError) };
+        }
+    };
+}
+
 /**
  * 筛选阶段专用：调用 LLM（带重试机制）
  */
-async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTER_CFG.maxRetries) {
+async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTER_CFG.maxRetries, options = {}) {
+    const runtimeConfig = options.filterConfig || FILTER_CONFIG;
+    const requestFn = options.requestFn || requestLlmJson;
+    const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     const missing = [];
-    if (!FILTER_CONFIG.endpoint) missing.push('PAPER_ANALYZER_ENDPOINT');
-    if (!FILTER_CONFIG.key) missing.push('PAPER_ANALYZER_API_KEY');
-    if (!FILTER_CONFIG.model) missing.push('PAPER_ANALYZER_MODEL');
+    if (!runtimeConfig.endpoint) missing.push('PAPER_ANALYZER_ENDPOINT');
+    if (!runtimeConfig.key) missing.push('PAPER_ANALYZER_API_KEY');
+    if (!runtimeConfig.model) missing.push('PAPER_ANALYZER_MODEL');
     if (missing.length > 0) {
-        throw new Error(`[filter] 缺少环境变量: ${missing.join(', ')}。请在项目根目录的 .env 文件中配置`);
+        throw makeFilterRequestError(
+            `[filter] 缺少环境变量: ${missing.join(', ')}。请在项目根目录的 .env 文件中配置`,
+            {
+                code: 'FILTER_CONFIG_ERROR',
+                category: 'config',
+                retryable: false,
+                systemFailure: true,
+                stopBatch: true,
+                systemFingerprint: `config:${missing.join(',')}`
+            }
+        );
     }
 
-    const apiType = detectApiType(FILTER_CONFIG.endpoint, FILTER_CONFIG.model);
-    const apiUrl = buildApiUrl(apiType, FILTER_CONFIG.endpoint);
-    const url = new URL(apiUrl);
+    let apiType;
+    let apiUrl;
+    let url;
+    try {
+        apiType = detectApiType(runtimeConfig.endpoint, runtimeConfig.model);
+        apiUrl = buildApiUrl(apiType, runtimeConfig.endpoint);
+        url = new URL(apiUrl);
+    } catch (error) {
+        throw makeFilterRequestError(`筛选 API endpoint 无效: ${error.message}`, {
+            code: 'FILTER_ENDPOINT_ERROR',
+            category: 'endpoint',
+            retryable: false,
+            systemFailure: true,
+            stopBatch: true,
+            systemFingerprint: 'endpoint:invalid',
+            cause: error,
+            secrets: [runtimeConfig.key]
+        });
+    }
     console.log(`[filter] API 类型: ${apiType} | 端点: ${url.hostname}${url.pathname}`);
 
     const proxyUrl = detectProxyUrl();
     if (proxyUrl) {
-        const route = FILTER_CONFIG.model.toLowerCase() === 'muse-spark-1.2-contributor'
+        const route = runtimeConfig.model.toLowerCase() === 'muse-spark-1.2-contributor'
             ? 'Muse Spark Contributor 将强制经此代理请求'
             : '当前 LLM 将绕过代理直连';
         console.log(`[filter] 检测到代理: ${redactProxyUrl(proxyUrl)}，${route}`);
@@ -256,48 +495,61 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
             : maxTokens;
         const bodyObj = buildRequestBody(
             apiType,
-            FILTER_CONFIG.model,
+            runtimeConfig.model,
             messages,
             attemptMaxTokens,
             FILTER_CFG.temperature
         );
-        const requestHeaders = buildHeaders(apiType, FILTER_CONFIG.key, JSON.stringify(bodyObj));
+        const requestHeaders = buildHeaders(apiType, runtimeConfig.key, JSON.stringify(bodyObj));
 
         try {
-            const response = await requestLlmJson(
+            const response = await requestFn(
                 apiUrl,
-                FILTER_CONFIG.endpoint,
-                FILTER_CONFIG.model,
+                runtimeConfig.endpoint,
+                runtimeConfig.model,
                 bodyObj,
                 requestHeaders,
                 {
-                    timeoutMs: FILTER_CONFIG.model.toLowerCase() === 'muse-spark-1.2-contributor'
+                    timeoutMs: runtimeConfig.model.toLowerCase() === 'muse-spark-1.2-contributor'
                         ? Math.max(FILTER_CFG.timeoutMs, 120000)
                         : FILTER_CFG.timeoutMs
                 }
             );
             if (response.statusCode < 200 || response.statusCode >= 300) {
                 const apiError = response.body?.error;
-                const message = apiError?.message || apiError || response.raw.substring(0, 200);
-                throw new Error(`HTTP ${response.statusCode}: ${typeof message === 'string' ? message : JSON.stringify(message)}`);
+                const raw = typeof response.raw === 'string' ? response.raw : '';
+                const message = apiError?.message || apiError || raw.substring(0, 200);
+                throw classifyFilterRequestError(
+                    new Error(`HTTP ${response.statusCode}: ${typeof message === 'string' ? message : JSON.stringify(message)}`),
+                    {
+                        status: response.statusCode,
+                        retryAfterMs: parseRetryAfterMs(response.headers, {
+                            maxMs: options.retryAfterMaxMs,
+                            nowMs: options.nowMs
+                        }),
+                        secrets: [runtimeConfig.key]
+                    }
+                );
             }
-            const content = parseResponseText(apiType, response.body);
+            // Responses 可能同时带有部分 output_text 与 status=incomplete。
+            // 必须先拒绝截断终态，再接受任何非空正文。
+            const content = extractFilterResponseContent(apiType, response.body, attemptMaxTokens);
             if (content !== null) return content;
-            if (response.body.error) {
-                throw new Error(response.body.error.message || JSON.stringify(response.body.error));
-            }
             throw new Error(`Invalid response (HTTP ${response.statusCode}): ${response.raw.substring(0, 200)}`);
         } catch (err) {
-            lastError = err;
-            console.log(`[filter] ⚠️  LLM 调用失败 (尝试 ${attempt}/${maxRetries}): ${err.message}`);
+            const classified = classifyFilterRequestError(err, { secrets: [runtimeConfig.key] });
+            lastError = classified;
+            console.log(`[filter] ⚠️  LLM 调用失败 (尝试 ${attempt}/${maxRetries}, ${classified.code}): ${classified.message}`);
+            if (!classified.retryable) throw classified;
             if (attempt < maxRetries) {
-                const delay = Math.pow(2, attempt) * 1000;
+                const delay = classified.retryAfterMs ?? Math.pow(2, attempt) * 1000;
                 console.log(`[filter] ⏳  ${delay}ms 后重试...`);
-                await new Promise(r => setTimeout(r, delay));
+                await sleepFn(delay);
             }
         }
     }
-    throw new Error(`[filter] LLM 调用失败，已重试 ${maxRetries} 次: ${lastError.message}`);
+    lastError.attempts = maxRetries;
+    throw lastError;
 }
 
 // 数据文件路径（从 config.js 读取）
@@ -332,7 +584,7 @@ function loadPapers() {
 function savePapers(data) {
     const payload = Array.isArray(data) ? { papers: {}, lastUpdated: getBeijingISOString() } : data;
     payload.lastUpdated = getBeijingISOString();
-    writeFileAtomic(PAPERS_FILE, JSON.stringify(payload, null, 2));
+    writeFileAtomic(PAPERS_FILE, JSON.stringify(payload));
 }
 
 /**
@@ -1401,6 +1653,7 @@ async function repairMalformedFilterDecision(initialDecision, paperId, requestFn
         }
         return initialDecision;
     } catch (err) {
+        if (err?.stopBatch || err?.code === 'FILTER_CIRCUIT_OPEN') throw err;
         console.warn(`[filter] 格式修复失败 ${paperId}: ${err.message}`);
         return initialDecision;
     }
@@ -1415,8 +1668,9 @@ function getCaseInsensitiveField(obj, names) {
     return undefined;
 }
 
-async function getSpeechAudioDecision(paper) {
+async function getSpeechAudioDecision(paper, options = {}) {
     const paperId = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
+    const circuitBreaker = options.circuitBreaker || createFilterCircuitBreaker(options.circuitBreakerOptions);
     const prompt = loadPrompt('prompts/filter.md', {
         title: paper.title,
         abstract: paper.abstract || paper.summary || '',
@@ -1424,22 +1678,31 @@ async function getSpeechAudioDecision(paper) {
     });
 
     try {
-        const response = await callModelForFilter([{ role: 'user', content: prompt }], FILTER_CFG.maxTokens);
-        consecutiveFilterApiFailures = 0;
+        circuitBreaker.assertClosed();
+        const request = (messages, maxTokens) => callModelForFilter(
+            messages,
+            maxTokens,
+            options.maxRetries,
+            options
+        );
+        const response = await request([{ role: 'user', content: prompt }], FILTER_CFG.maxTokens);
+        circuitBreaker.recordSuccess();
         const initialDecision = parseFilterDecisionDetails(response, paperId);
-        return repairMalformedFilterDecision(initialDecision, paperId);
+        return repairMalformedFilterDecision(initialDecision, paperId, request);
     } catch (err) {
-        consecutiveFilterApiFailures++;
-        if (consecutiveFilterApiFailures >= FILTER_SYSTEM_FAILURE_THRESHOLD) {
-            throw new Error(`筛选模型连续 ${consecutiveFilterApiFailures} 次调用失败，疑似 API 配置或服务故障: ${err.message}`);
-        }
-        console.error(`[filter] 判断论文 ${paperId} 失败: ${err.message}，标记为待重试`);
+        const classified = classifyFilterRequestError(err);
+        const circuitError = circuitBreaker.recordFailure(classified);
+        if (classified.stopBatch || circuitError) throw circuitError || classified;
+        console.error(`[filter] 判断论文 ${paperId} 失败 (${classified.code}): ${classified.message}，标记为待重试`);
         return {
             related: null,
-            reason: `筛选 API 调用失败，等待重试: ${err.message}`,
+            reason: `筛选 API 调用失败，等待重试: ${classified.message}`,
             rawResponse: '',
             parseSource: 'api_error_retryable',
-            error: err.message,
+            error: classified.message,
+            errorCode: classified.code,
+            errorStatus: classified.status ?? null,
+            errorCategory: classified.category,
             fallback: true,
             retryable: true
         };
@@ -1466,8 +1729,13 @@ async function filterPapersWithLLM(papers, options = {}) {
         initialDecisions = null,
         onBatchComplete = null,
         decisionFn = getSpeechAudioDecision,
-        decisionMetadata = {}
+        decisionMetadata = {},
+        decisionOptions = {}
     } = options;
+    const circuitBreaker = createFilterCircuitBreaker(decisionOptions.circuitBreakerOptions);
+    const activeDecisionFn = decisionFn === getSpeechAudioDecision
+        ? paper => getSpeechAudioDecision(paper, { ...decisionOptions, circuitBreaker })
+        : decisionFn;
     const effectiveBatchSize = decisionFn === getSpeechAudioDecision
         ? getEffectiveFilterBatchSize(batchSize)
         : batchSize;
@@ -1556,7 +1824,14 @@ async function filterPapersWithLLM(papers, options = {}) {
 
     const batches = [];
 
-    for (let i = 0; i < papersNeedingDecision.length; i += effectiveBatchSize) {
+    let batchStart = 0;
+    // 默认运输先用一篇做认证/endpoint 健康探针。这样 401/403/404/400
+    // 不会因配置并发度而同时打到多个候选；探针通过后仍恢复配置并发。
+    if (decisionFn === getSpeechAudioDecision && papersNeedingDecision.length > 0) {
+        batches.push([papersNeedingDecision[0]]);
+        batchStart = 1;
+    }
+    for (let i = batchStart; i < papersNeedingDecision.length; i += effectiveBatchSize) {
         batches.push(papersNeedingDecision.slice(i, i + effectiveBatchSize));
     }
 
@@ -1589,7 +1864,7 @@ async function filterPapersWithLLM(papers, options = {}) {
         console.log(`[filter] 处理批次 ${batchIndex + 1}/${batches.length}...`);
 
         const settled = await Promise.allSettled(batch.map(async (paper) => {
-            const modelDecision = await decisionFn(paper);
+            const modelDecision = await activeDecisionFn(paper);
             const isDefinitive = typeof modelDecision.related === 'boolean'
                 && !modelDecision.retryable
                 && !modelDecision.fallback;
@@ -1604,6 +1879,9 @@ async function filterPapersWithLLM(papers, options = {}) {
                 rawResponse: modelDecision.rawResponse || '',
                 parseSource: modelDecision.parseSource || '',
                 error: modelDecision.error || null,
+                errorCode: modelDecision.errorCode || null,
+                errorStatus: modelDecision.errorStatus ?? null,
+                errorCategory: modelDecision.errorCategory || null,
                 fallback: Boolean(modelDecision.fallback),
                 retryable: !isDefinitive,
                 decidedAt: getBeijingISOString(),
@@ -1639,6 +1917,9 @@ async function filterPapersWithLLM(papers, options = {}) {
                 rawResponse: '',
                 parseSource: 'batch_exception_retryable',
                 error: result.reason?.message || String(result.reason),
+                errorCode: result.reason?.code || null,
+                errorStatus: result.reason?.status ?? null,
+                errorCategory: result.reason?.category || null,
                 fallback: true,
                 retryable: true,
                 decidedAt: getBeijingISOString(),
@@ -1671,7 +1952,17 @@ async function filterPapersWithLLM(papers, options = {}) {
 
         const rejected = settled.find(result => result.status === 'rejected');
         if (rejected) {
-            throw new Error(`筛选批次存在未处理异常；同批成功决定已保存，停止后续调用: ${rejected.reason?.message || rejected.reason}`);
+            const error = makeFilterRequestError(
+                `筛选批次存在未处理异常；同批成功决定已保存，停止后续调用: ${rejected.reason?.message || rejected.reason}`,
+                {
+                    code: rejected.reason?.code || 'FILTER_BATCH_ABORTED',
+                    status: rejected.reason?.status,
+                    category: rejected.reason?.category,
+                    stopBatch: true,
+                    cause: rejected.reason
+                }
+            );
+            throw error;
         }
 
         if (batchIndex < batches.length - 1) {
@@ -1711,6 +2002,12 @@ module.exports = {
     parseFilterDecision,
     parseFilterDecisionDetails,
     repairMalformedFilterDecision,
+    extractFilterResponseContent,
+    callModelForFilter,
+    classifyFilterRequestError,
+    createFilterCircuitBreaker,
+    parseRetryAfterMs,
+    sanitizeFilterErrorMessage,
     getEffectiveFilterBatchSize,
     hasRecentResponseSignature,
     hasSearchResponseSignature,

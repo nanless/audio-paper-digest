@@ -101,6 +101,113 @@ describe('arXiv HTML full-text health gate', () => {
         assert.match(artifacts.payloadSha256, /^[a-f0-9]{64}$/);
     });
 
+    it('Reader source-binding v4 重放 rowspan、多表、公式并拒绝四类篡改', () => {
+        const {
+            parseArxivStructuredArtifactsFromHtml,
+            bindStructuredArtifactsToText,
+            bindApiReaderSourceEvidence
+        } = require('../scripts/deep-analyzer.js');
+        const html = fs.readFileSync(
+            path.join(__dirname, 'fixtures', 'arxiv-reader-source-bindings.html'), 'utf8'
+        );
+        const $ = cheerio.load(html);
+        const sourceText = $('body').text();
+        const artifacts = bindStructuredArtifactsToText(
+            parseArxivStructuredArtifactsFromHtml(html, '2609.00001v1', '2609.00001v1'),
+            sourceText
+        );
+        assert.strictEqual(artifacts.tables.length, 2);
+        assert.strictEqual(artifacts.formulas.length, 2);
+        assert.ok(artifacts.tables[0].cells.some(cell => cell.rowspan === 2));
+        const article = [
+            '### 方法中的两个目标如何配合？',
+            '',
+            '先看联合目标。', '', '[[FORMULA_1]]', '',
+            '再看条件分解。', '', '[[FORMULA_2]]', '',
+            '### 结果和成本如何同时比较？', '',
+            '| System | test-clean | test-other |',
+            '|---|---:|---:|',
+            '| Baseline | 4.8 | 10.2 |',
+            '| Proposed | 4.1 | 9.3 |', '',
+            '| System | RTF | Memory |',
+            '|---|---:|---:|',
+            '| Baseline | 0.72 | 8 GB |',
+            '| Proposed | 0.81 | 9 GB |', '',
+            '| Setting | Compact | Baseline |',
+            '|---|---:|---:|',
+            '| Eval-B | 88.2% | 84.0% |'
+        ].join('\n');
+        const tableOneCells = [
+            [0, 0, 0, 0], [0, 1, 1, 1], [0, 2, 1, 2],
+            [1, 0, 2, 0], [1, 1, 2, 1], [1, 2, 2, 2],
+            [2, 0, 3, 0], [2, 1, 3, 1], [2, 2, 3, 2]
+        ].map(([renderedRow, renderedColumn, sourceRow, sourceColumn]) => ({
+            renderedRow, renderedColumn, sourceRow, sourceColumn
+        }));
+        const tableTwoCells = Array.from({ length: 3 }, (_, row) => (
+            Array.from({ length: 3 }, (_, column) => ({
+                renderedRow: row, renderedColumn: column,
+                sourceRow: row, sourceColumn: column
+            }))
+        )).flat();
+        const tableBindings = [
+            {
+                tableIndex: 1, sourceType: 'artifact_table', sourceTableOrdinal: 1,
+                cellBindings: tableOneCells, sourceQuotes: []
+            },
+            {
+                tableIndex: 2, sourceType: 'artifact_table', sourceTableOrdinal: 2,
+                cellBindings: tableTwoCells, sourceQuotes: []
+            },
+            {
+                tableIndex: 3, sourceType: 'source_quotes', sourceTableOrdinal: null,
+                cellBindings: [],
+                sourceQuotes: [
+                    'On Eval-B, Compact reaches 88.2% while Baseline reaches 84.0% under the same protocol.'
+                ]
+            }
+        ];
+        const formulaBindings = [1, 2].map(formulaOrdinal => ({
+            formulaOrdinal,
+            targetKind: 'component',
+            marker: `[[FORMULA_${formulaOrdinal}]]`
+        }));
+        const sections = [{
+            kind: 'component',
+            body: '[[FORMULA_1]]\n\n[[FORMULA_2]]'
+        }];
+        const bound = bindApiReaderSourceEvidence(
+            article, tableBindings, formulaBindings,
+            { structuredArtifacts: artifacts, sourceText, sections }
+        );
+        assert.match(bound.article, /\\\[J\(\\theta\)=L_\{asr\}/);
+        assert.strictEqual(bound.tableBindings[0].cellBindings[0].sourceDomSha256.length, 64);
+        assert.strictEqual(bound.tableBindings[2].sourceQuotes[0].sourceQuoteSha256.length, 64);
+        assert.match(bound.sourceBindingsSha256, /^[a-f0-9]{64}$/);
+
+        assert.throws(() => bindApiReaderSourceEvidence(
+            article.replace('| Proposed | 4.1 | 9.3 |', '| Proposed | 4.2 | 9.3 |'),
+            tableBindings, formulaBindings,
+            { structuredArtifacts: artifacts, sourceText, sections }
+        ), /渲染单元格与原始 cell 不一致/);
+        assert.throws(() => bindApiReaderSourceEvidence(
+            article.replace('| System | test-clean | test-other |', '| System | test-other | test-clean |'),
+            tableBindings, formulaBindings,
+            { structuredArtifacts: artifacts, sourceText, sections }
+        ), /渲染单元格与原始 cell 不一致/);
+        assert.throws(() => bindApiReaderSourceEvidence(
+            article.replace('[[FORMULA_2]]', '[[FORMULA_2]]\n\n\\[p(y|x)=fake\\]'),
+            tableBindings, formulaBindings,
+            { structuredArtifacts: artifacts, sourceText, sections }
+        ), /未绑定、重复或被改写的展示公式/);
+        const forgedQuoteBindings = structuredClone(tableBindings);
+        forgedQuoteBindings[2].sourceQuotes = ['Compact reaches 99.9% in a fabricated experiment.'];
+        assert.throws(() => bindApiReaderSourceEvidence(
+            article, forgedQuoteBindings, formulaBindings,
+            { structuredArtifacts: artifacts, sourceText, sections }
+        ), /不是全文中的 exact sourceQuote/);
+    });
+
     it('保留 SVG 与 DOM 原生 framed Figure，但不把算法、表格或缺失资产伪装成图片', () => {
         const { parseArxivStructuredArtifactsFromHtml } = require('../scripts/deep-analyzer.js');
         const html = `<article>
@@ -245,6 +352,192 @@ describe('deep-analyzer section helpers', () => {
         assert.strictEqual(resolveApiMaxRetries(), ANALYSIS_CONFIG.apiMaxRetries);
         assert.strictEqual(resolveApiMaxRetries(1), 1);
         assert.strictEqual(resolveApiMaxRetries(0), ANALYSIS_CONFIG.apiMaxRetries);
+    });
+
+    it('非流式 LLM 响应字节上限传入公共请求边界，超限可分类并有界恢复', async () => {
+        const { callModelWithConfig } = require('../scripts/deep-analyzer.js');
+        const seenOptions = [];
+        let calls = 0;
+        const result = await callModelWithConfig([], 100, 2, {
+            endpoint: 'https://model.example/v1',
+            key: 'test-key',
+            model: 'test-model',
+            maxResponseBytes: 1024,
+            overallTimeoutMs: 60000,
+            sleepFn: async () => {},
+            requestFn: async (_url, _endpoint, _model, _body, _headers, options) => {
+                calls += 1;
+                seenOptions.push(options);
+                if (calls === 1) {
+                    const error = new Error('Response exceeds 1024 byte limit');
+                    error.code = 'RESPONSE_TOO_LARGE';
+                    throw error;
+                }
+                return {
+                    statusCode: 200,
+                    headers: {},
+                    body: { choices: [{ message: { content: 'complete response' }, finish_reason: 'stop' }] },
+                    raw: '{}'
+                };
+            }
+        });
+        assert.strictEqual(result, 'complete response');
+        assert.strictEqual(calls, 2);
+        assert.deepStrictEqual(seenOptions.map(item => item.maxResponseBytes), [1024, 1024]);
+    });
+
+    it('响应超限不会返回截断正文，并保留可恢复错误码', async () => {
+        const { callModelWithConfig } = require('../scripts/deep-analyzer.js');
+        await assert.rejects(
+            callModelWithConfig([], 100, 1, {
+                endpoint: 'https://model.example/v1',
+                key: 'test-key',
+                model: 'test-model',
+                maxResponseBytes: 2048,
+                overallTimeoutMs: 60000,
+                requestFn: async () => {
+                    const error = new Error('Response exceeds limit; partial=must-not-escape');
+                    error.code = 'RESPONSE_TOO_LARGE';
+                    throw error;
+                }
+            }),
+            error => error.code === 'MODEL_RESPONSE_TOO_LARGE'
+                && error.transportCode === 'RESPONSE_TOO_LARGE'
+                && error.maxResponseBytes === 2048
+                && error.retryable === true
+                && !error.message.includes('partial=must-not-escape')
+        );
+    });
+
+    it('Responses incomplete 和 Chat finish_reason=length 即使带部分正文也不盲目重试', async () => {
+        const { callModelWithConfig } = require('../scripts/deep-analyzer.js');
+        let responseCalls = 0;
+        await assert.rejects(callModelWithConfig([], 100, 3, {
+            endpoint: 'https://model.example/v1',
+            key: 'test-key',
+            model: 'muse-spark-1.2-contributor',
+            overallTimeoutMs: 60000,
+            sleepFn: async () => { throw new Error('incomplete must not sleep'); },
+            requestFn: async () => {
+                responseCalls += 1;
+                return {
+                    statusCode: 200,
+                    headers: {},
+                    body: {
+                        status: 'incomplete',
+                        incomplete_details: { reason: 'max_output_tokens' },
+                        output_text: 'partial'
+                    },
+                    raw: '{}'
+                };
+            }
+        }), error => error.code === 'MODEL_OUTPUT_TRUNCATED' && error.retryable === false);
+        assert.strictEqual(responseCalls, 1);
+
+        let chatCalls = 0;
+        await assert.rejects(callModelWithConfig([], 100, 3, {
+            endpoint: 'https://model.example/v1',
+            key: 'test-key',
+            model: 'test-model',
+            overallTimeoutMs: 60000,
+            sleepFn: async () => { throw new Error('length must not sleep'); },
+            requestFn: async () => {
+                chatCalls += 1;
+                return {
+                    statusCode: 200,
+                    headers: {},
+                    body: { choices: [{ message: { content: 'partial' }, finish_reason: 'length' }] },
+                    raw: '{}'
+                };
+            }
+        }), error => error.code === 'MODEL_OUTPUT_TRUNCATED' && error.retryable === false);
+        assert.strictEqual(chatCalls, 1);
+    });
+
+    it('SSE 缺终态和 5xx 可有界重试，确定性 4xx 立即停止', async () => {
+        const { callModelWithConfig } = require('../scripts/deep-analyzer.js');
+        let sseCalls = 0;
+        const recovered = await callModelWithConfig([], 100, 2, {
+            endpoint: 'https://model.example/v1',
+            key: 'test-key',
+            model: 'test-model',
+            overallTimeoutMs: 60000,
+            sleepFn: async () => {},
+            requestFn: async () => {
+                sseCalls += 1;
+                if (sseCalls === 1) {
+                    const error = new Error('SSE missing terminal');
+                    error.code = 'SSE_TERMINAL_EVENT_MISSING';
+                    throw error;
+                }
+                return {
+                    statusCode: 200,
+                    headers: {},
+                    body: { choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] },
+                    raw: '{}'
+                };
+            }
+        });
+        assert.strictEqual(recovered, 'ok');
+        assert.strictEqual(sseCalls, 2);
+
+        let serviceCalls = 0;
+        const serviceRecovered = await callModelWithConfig([], 100, 2, {
+            endpoint: 'https://model.example/v1',
+            key: 'test-key',
+            model: 'test-model',
+            overallTimeoutMs: 60000,
+            sleepFn: async () => {},
+            requestFn: async () => {
+                serviceCalls += 1;
+                if (serviceCalls === 1) {
+                    return { statusCode: 503, headers: {}, body: { error: { message: 'unavailable' } }, raw: '' };
+                }
+                return {
+                    statusCode: 200,
+                    headers: {},
+                    body: { choices: [{ message: { content: 'service recovered' }, finish_reason: 'stop' }] },
+                    raw: '{}'
+                };
+            }
+        });
+        assert.strictEqual(serviceRecovered, 'service recovered');
+        assert.strictEqual(serviceCalls, 2);
+
+        let unauthorizedCalls = 0;
+        await assert.rejects(callModelWithConfig([], 100, 3, {
+            endpoint: 'https://model.example/v1',
+            key: 'test-key',
+            model: 'test-model',
+            overallTimeoutMs: 60000,
+            sleepFn: async () => { throw new Error('401 must not sleep'); },
+            requestFn: async () => {
+                unauthorizedCalls += 1;
+                return { statusCode: 401, headers: {}, body: { error: { message: 'unauthorized' } }, raw: '' };
+            }
+        }), error => error.code === 'MODEL_HTTP_NON_RETRYABLE'
+            && error.status === 401
+            && error.retryable === false);
+        assert.strictEqual(unauthorizedCalls, 1);
+    });
+
+    it('LLM 错误日志字段脱敏 key、Authorization 和代理 userinfo', () => {
+        const { sanitizeModelRequestError } = require('../scripts/deep-analyzer.js');
+        const sanitized = sanitizeModelRequestError(
+            'Bearer abcdef https://alice:secret@proxy.example failed key-value',
+            { key: 'key-value' }
+        );
+        assert.doesNotMatch(sanitized, /abcdef|alice|secret|key-value/);
+        assert.match(sanitized, /proxy\.example/);
+    });
+
+    it('LLM 响应字节预算进入模型/阶段指纹', () => {
+        const { modelFingerprint } = require('../scripts/deep-analyzer.js');
+        const first = modelFingerprint({ endpoint: 'https://model.example/v1', model: 'm', maxResponseBytes: 1024 });
+        const second = modelFingerprint({ endpoint: 'https://model.example/v1', model: 'm', maxResponseBytes: 2048 });
+        assert.strictEqual(first.maxResponseBytes, 1024);
+        assert.strictEqual(second.maxResponseBytes, 2048);
+        assert.notDeepStrictEqual(first, second);
     });
 
     it('提取当前 prompt 使用的 ## 方法和实验章节', () => {
@@ -907,8 +1200,40 @@ primary_task_tag: #音视频生成
             splitReaderLongParagraphs,
             normalizeReaderEditorialSurface,
             normalizeApiReaderTableBlockSpacing,
-            repairApiReaderPlanSurfaceBinding
+            repairApiReaderPlanSurfaceBinding,
+            buildApiReaderQualityMetrics,
+            scoringStabilityResolutionIsValid,
+            bindStructuredArtifactsToText
         } = require('../scripts/deep-analyzer.js');
+        assert.deepStrictEqual(
+            buildApiReaderQualityMetrics({
+                issues: [
+                    { code: 'quantitative_chinese_numeral', match: '两类' },
+                    { code: 'broken_prose', match: '残句' }
+                ],
+                warnings: [{ code: 'paragraph_too_long' }]
+            }, '这里比较两类方法。'),
+            {
+                contract: 'api-reader-quality-metrics-v2',
+                rawIssueCount: 2,
+                waivedIssueCount: 1,
+                blockingIssueCount: 1,
+                warningCount: 1,
+                rawIssueCodes: { quantitative_chinese_numeral: 1, broken_prose: 1 },
+                waivedIssueCodes: { quantitative_chinese_numeral: 1 },
+                blockingIssueCodes: { broken_prose: 1 },
+                warningCodes: { paragraph_too_long: 1 }
+            }
+        );
+        assert.strictEqual(scoringStabilityResolutionIsValid({
+            stabilityWarning: true,
+            stabilityResolution: {
+                contract: 'api-scoring-stability-resolution-v1',
+                status: 'resolved', method: 'second_pass_consensus',
+                firstAuditScore: 7.2, secondAuditScore: 7.1,
+                scoreDifference: 0.1, secondAuditSha256: 'a'.repeat(64)
+            }
+        }), true);
         assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
             code: 'quantitative_chinese_numeral', match: '两类'
         }), true);
@@ -1263,6 +1588,66 @@ primary_task_tag: #音视频生成
         assert.strictEqual((v3Result.article.match(/^\|.+\|$/gm) || []).filter(
             line => /\u6bd4较条件/.test(line)
         ).length, 4);
+        const boundPayload = structuredClone(v3Payload);
+        const bindingSourceText = '论文正文统一报告值为 1.0，所有整理表都只重放这一明确报告值。';
+        boundPayload.tableBindings = Array.from({ length: 4 }, (_, index) => ({
+            tableIndex: index + 1,
+            sourceType: 'source_quotes',
+            sourceTableOrdinal: null,
+            cellBindings: [],
+            sourceQuotes: [bindingSourceText]
+        }));
+        boundPayload.formulaBindings = [];
+        const bindingArtifacts = bindStructuredArtifactsToText({
+            version: 1,
+            parserVersion: 'unstructured-text-signals-v1',
+            sourceKind: 'pdf_text',
+            tables: [], formulas: [], figures: [], references: [],
+            health: {
+                status: 'incomplete', detected: {}, recovered: {},
+                truncated: false, issues: ['没有 DOM 表格']
+            }
+        }, bindingSourceText);
+        const boundV3Result = parseApiReaderArticleResult(JSON.stringify(boundPayload), {
+            requiredVersion: 3,
+            requireIntegratedTables: true,
+            minimumIntegratedTables: 4,
+            availableFigureOrdinals: [],
+            requireSourceBindings: true,
+            structuredArtifacts: bindingArtifacts,
+            sourceText: bindingSourceText
+        });
+        assert.strictEqual(boundV3Result.plan.sourceBindingsContract, 'api-reader-source-bindings-v4');
+        assert.strictEqual(boundV3Result.plan.tableBindings.length, 4);
+        assert.strictEqual(boundV3Result.plan.formulaBindings.length, 0);
+        assert.doesNotThrow(() => parseApiReaderArticleResult(JSON.stringify(v3Payload), {
+            requiredVersion: 3,
+            requireIntegratedTables: true,
+            minimumIntegratedTables: 4,
+            availableFigureOrdinals: [1, 2, 3, 4, 5, 6]
+        }), '有很多候选图时也允许按质量选择 0 张');
+        const tooManyFigures = structuredClone(v3Payload);
+        tooManyFigures.figurePlacements = Array.from({ length: 5 }, (_, index) => ({
+            figureOrdinal: index + 1,
+            sectionKind: 'method_overview',
+            marker: `[[FIGURE_${index + 1}]]`,
+            lead: '这段图前说明用于解释为什么此处需要查看该图，并指出读者应该核对的结构与证据关系。',
+            explanation: '这段图后说明用于解释图中证据如何支持当前论点，同时明确该图无法证明的外推边界与限制。'
+        }));
+        assert.throws(() => parseApiReaderArticleResult(JSON.stringify(tooManyFigures), {
+            requiredVersion: 3,
+            availableFigureOrdinals: [1, 2, 3, 4, 5]
+        }), /至多 4 项/);
+        const unavailableFigure = structuredClone(v3Payload);
+        unavailableFigure.figurePlacements = [{
+            figureOrdinal: 2,
+            targetKind: 'method_overview', marker: '[[FIGURE_2]]',
+            focusPoints: ['核对模块之间的输入输出与信息流关系', '核对该图支持的结论和没有覆盖的边界']
+        }];
+        assert.throws(() => parseApiReaderArticleResult(JSON.stringify(unavailableFigure), {
+            requiredVersion: 3,
+            availableFigureOrdinals: [1]
+        }), /figureOrdinal 非法或重复/);
         assert.throws(
             () => parseApiReaderArticleResult(JSON.stringify(payload), { requiredVersion: 3 }),
             /禁止降级生成/
@@ -1278,6 +1663,7 @@ primary_task_tag: #音视频生成
             injectApiReaderFigures,
             parseArxivReaderAuthors,
             resolveApiReaderAuthors,
+            bindApiReaderAuthorIdentity,
             removeDuplicateReaderLongSentences,
             fitApiReaderFigureDimensions,
             normalizeReaderFigureCaption,
@@ -1430,6 +1816,25 @@ primary_task_tag: #音视频生成
         const authors = parseArxivReaderAuthors($);
         assert.deepStrictEqual(authors.authors, [{ name: '甲', affiliations: ['机构 A'] }]);
         assert.match(authors.sourceDomSha256, /^[0-9a-f]{64}$/);
+        const boundAuthors = resolveApiReaderAuthors(
+            { authors: ['甲'] },
+            { text: 'HTML source bytes', readerAuthors: authors }
+        );
+        assert.strictEqual(boundAuthors.identity.contract, 'api-reader-author-identity-v1');
+        assert.strictEqual(boundAuthors.identity.authors[0].nameBinding.sourceKind, 'html_dom');
+        assert.strictEqual(
+            boundAuthors.identity.authors[0].affiliationBindings[0].association,
+            'direct_author'
+        );
+        assert.match(boundAuthors.identitySha256, /^[a-f0-9]{64}$/);
+        assert.throws(() => bindApiReaderAuthorIdentity(
+            { authors: ['甲'] },
+            { text: 'HTML source bytes', readerAuthors: authors },
+            {
+                authors: [{ name: '甲', affiliations: ['伪造机构'] }],
+                sourceDomSha256: authors.sourceDomSha256
+            }
+        ), /无法重放到 HTML source detail/);
         const separated = cheerio.load(
             '<div class="ltx_authors">'
             + '<span class="ltx_creator ltx_role_author"><span class="ltx_personname">乙</span></span>'
@@ -1549,6 +1954,10 @@ primary_task_tag: #音视频生成
         assert.deepStrictEqual(pdfFallback.authors, [{
             name: '丁', affiliations: ['机构信息未能从 arXiv PDF 文本可靠映射']
         }]);
+        assert.strictEqual(
+            pdfFallback.identity.authors[0].affiliationBindings[0].sourceKind,
+            'explicit_unavailable'
+        );
         assert.match(pdfFallback.sourceDomSha256, /^[0-9a-f]{64}$/);
         const duplicateSentence = '这是一句需要保留的论文特有长句，它包含足够多的中文字符。';
         const dedupedArticle = removeDuplicateReaderLongSentences(
@@ -1652,6 +2061,110 @@ primary_task_tag: #音视频生成
         assert.match(
             fs.readFileSync(path.join(__dirname, '..', 'scripts', 'deep-analyzer.js'), 'utf8'),
             /API_READER_FIGURE_MAX_BYTES = 16 \* 1024 \* 1024/
+        );
+    });
+
+    it('API Reader 开源资源身份绑定原文、SSRF 校验、重定向与空资源边界', async () => {
+        const {
+            buildApiReaderResourceIdentity,
+            extractApiReaderResourceCandidates,
+            applyApiReaderResourceAvailability,
+            verifyApiReaderResourceUrl
+        } = require('../scripts/deep-analyzer.js');
+        const sourceText = [
+            'Code is available at https://project.example/repo.',
+            'Model weights are not released.'
+        ].join('\n');
+        const analysis = [
+            '## 开源详情',
+            '- 代码：https://project.example/repo',
+            '- 模型权重：论文中未提及',
+            '- 数据集：论文中未提及',
+            '- Demo：论文中未提及',
+            '- 复现材料：论文中未提及',
+            '- 论文中引用的开源项目：未提及'
+        ].join('\n');
+        assert.deepStrictEqual(extractApiReaderResourceCandidates(analysis).map(item => item.type), ['code']);
+        const calls = [];
+        const identity = await buildApiReaderResourceIdentity(
+            analysis, sourceText, {}, {
+                validateUrlImpl: async raw => new URL(raw),
+                requestImpl: async raw => {
+                    calls.push(raw);
+                    const redirect = raw.endsWith('/repo');
+                    return {
+                        status: redirect ? 302 : 200,
+                        headers: { get: name => name === 'location' && redirect ? '/repo/' : null }
+                    };
+                }
+            }
+        );
+        assert.deepStrictEqual(calls, [
+            'https://project.example/repo',
+            'https://project.example/repo/'
+        ]);
+        assert.strictEqual(identity.resources[0].origin, 'paper_source');
+        assert.strictEqual(identity.resources[0].availability, 'available');
+        assert.strictEqual(identity.resources[0].redirects.length, 1);
+        assert.match(identity.resources[0].sourceQuoteSha256, /^[a-f0-9]{64}$/);
+        assert.match(identity.identitySha256, /^[a-f0-9]{64}$/);
+        const availableAnalysis = applyApiReaderResourceAvailability(validAnalysisText(), identity);
+        assert.match(availableAnalysis, /^has_code: 是$/m);
+
+        const temporary = await buildApiReaderResourceIdentity(
+            analysis, sourceText, {}, {
+                validateUrlImpl: async raw => new URL(raw),
+                requestImpl: async () => ({ status: 503, headers: { get: () => null } })
+            }
+        );
+        assert.strictEqual(temporary.resources[0].availability, 'temporarily_unreachable');
+        assert.strictEqual(temporary.resources[0].retryable, true);
+        const temporaryAnalysis = applyApiReaderResourceAvailability(validAnalysisText(), temporary);
+        assert.match(temporaryAnalysis, /^has_code: 否$/m);
+        assert.match(temporaryAnalysis, /temporarily_unreachable\(HTTP 503\)/);
+        const dnsTemporary = await verifyApiReaderResourceUrl(
+            'https://project.example/repo', {
+                validateUrlImpl: async () => {
+                    const error = new Error('DNS timeout');
+                    error.code = 'ETIMEDOUT';
+                    throw error;
+                }
+            }
+        );
+        assert.strictEqual(dnsTemporary.availability, 'temporarily_unreachable');
+        await assert.rejects(
+            verifyApiReaderResourceUrl('https://127.0.0.1/repo', {
+                validateUrlImpl: async () => { throw new Error('URL 指向非公网 IP: 127.0.0.1'); }
+            }),
+            /非公网 IP/
+        );
+
+        await assert.rejects(
+            buildApiReaderResourceIdentity(
+                analysis.replace('project.example/repo', 'invented.example/repo'),
+                sourceText, {}, {
+                    validateUrlImpl: async raw => new URL(raw),
+                    requestImpl: async () => ({ status: 200, headers: { get: () => null } })
+                }
+            ),
+            /未绑定论文原文或已验证 Demo 发现证据/
+        );
+        const empty = await buildApiReaderResourceIdentity(
+            analysis.replace('- 代码：https://project.example/repo', '- 代码：论文中未提及'),
+            sourceText
+        );
+        assert.deepStrictEqual(empty.resources, []);
+
+        const manyUrls = Array.from({ length: 13 }, (_, index) => (
+            `https://project.example/repo-${index}`
+        ));
+        const oversizedAnalysis = [
+            '## 开源详情',
+            `- 代码：${manyUrls.join(' ')}`
+        ].join('\n');
+        await assert.rejects(
+            buildApiReaderResourceIdentity(oversizedAnalysis, manyUrls.join('\n')),
+            /超过单篇上限 12/
         );
     });
 

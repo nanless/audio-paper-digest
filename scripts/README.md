@@ -19,7 +19,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 
 | 需求 | 推荐入口 |
 |---|---|
-| 跑完整当天日更 | `npm run digest:prepare -- YYYY-MM-DD` |
+| 跑完当天可脚本化阶段（博客发布 + 视觉输入准备） | `npm run digest:prepare -- YYYY-MM-DD` |
 | 只续跑分析 | `npm run deep -- --date YYYY-MM-DD` |
 | 校验运行数据 | `npm run validate:data` |
 | 查整轮最终状态 | `npm run digest:status -- --date YYYY-MM-DD` |
@@ -65,11 +65,13 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `env-loader.js` | 从项目 `.env` 重建受控环境，并守卫直接 Node/Manual 入口。 |
 | `utils.js` | Node 原子文件、时间、ID、prompt、LLM 协议和代理工具。 |
 | `log-setup.js` | Node 终端/文件日志、时间戳和敏感信息脱敏。 |
+| `runtime-storage.js` | Node 只读统计运行存储，并对受控缓存/日志执行引用感知的 dry-run 或显式 `--apply` 清理。 |
 | `project_env.py` | Python 项目环境、最小子进程环境与代理加载。 |
 | `path_config.py` | Python 共享路径、日期与原子写配置。 |
 | `utils.py` | Python 评分解析与发布侧通用文本工具。 |
 | `log_setup.py` | Python 统一日志与脱敏。 |
 | `runtime_guard.py` | Python 沙箱外运行守卫。 |
+| `python-runtime.sh` | 为默认博客/视觉入口选择并校验 Python 3.11+ 与 OpenSSL，可由 `PD_PYTHON_BIN` 覆写。 |
 
 ## 博客生成、审查与发布
 

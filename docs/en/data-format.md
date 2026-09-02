@@ -48,7 +48,7 @@ Failures retain manifests, general and per-stage checkpoints, recovery image sta
 
 The 13 Chinese canonical headings are parser anchors. `parsed` is a cache and must match reparsing.
 
-Default API publication uses Reader v3 article, plan, official figures, authors, score evidence, source identity, and exact `llm_api_production` paper-set proof. Reader v1/v2 are historical read compatibility only. Abstract fallback is publication-blocking by default.
+Default API publication binds the Reader v3 article and plan, `api-reader-source-bindings-v4` table/formula evidence, materialized official Figures, `api-reader-author-identity-v1` author/affiliation provenance, `api-reader-resource-identity-v1` project/demo availability evidence, scoring stability, and the exact `llm_api_production` paper set. Reader v1/v2 and v3 records without current source identities are historical read compatibility only. Abstract fallback is publication-blocking by default.
 
 ## Generation Manifest
 

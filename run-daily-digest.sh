@@ -186,9 +186,9 @@ if [ "$api_mode" -ne 1 ]; then
     npm run manual:analyze -- --date "$target_date" --spec "$spec_v6"
 fi
 
-run_stage 5 "生成博客" python3 scripts/generate-blog.py --date "$target_date"
+run_stage 5 "生成博客" bash scripts/python-runtime.sh scripts/generate-blog.py --date "$target_date"
 if [ "$api_mode" -eq 1 ]; then
-  run_stage 6 "LLM Review 博客" python3 scripts/review-blog.py --date "$target_date"
+  run_stage 6 "LLM Review 博客" bash scripts/python-runtime.sh scripts/review-blog.py --date "$target_date"
 elif [ "$start_index" -le 6 ]; then
   echo "==> Manual 默认链路已到逐页语义审查边界。"
   echo "==> generation 中每个页面必须由主 Agent 直接调度独立 leaf review subagent，生成逐图 attestation v3（禁止 broker 占槽）。"
@@ -196,9 +196,9 @@ elif [ "$start_index" -le 6 ]; then
   exit 3
 fi
 if [ "$start_index" -le 7 ]; then
-  run_stage 7 "发布博客并规划视觉任务" python3 scripts/push-blog.py --date "$target_date" --require-visual-plan
+  run_stage 7 "发布博客并规划视觉任务" bash scripts/python-runtime.sh scripts/push-blog.py --date "$target_date" --require-visual-plan
 else
-  run_stage 8 "规划发布后视觉任务" python3 scripts/plan-post-publish-visuals.py --date "$target_date"
+  run_stage 8 "规划发布后视觉任务" bash scripts/python-runtime.sh scripts/plan-post-publish-visuals.py --date "$target_date"
 fi
 run_stage 8 "准备论文关键图输入" node scripts/visual-summary-state.js prepare --date "$target_date"
 

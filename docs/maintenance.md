@@ -67,6 +67,20 @@
 - 脱敏认证头、Cookie、token、secret、password、配置密钥实际值和 URL userinfo。
 - `data/`、`logs/`、`.env`、备份、缓存均不提交。
 
+## 运行存储诊断与清理
+
+`npm run storage:status` 只读统计 `data/current`、`data/archive`、`logs` 及图片/Reader/视觉参考缓存的文件数和字节数。`npm run storage:prune` 默认仅输出 dry-run 删除清单；人工核对后才可运行：
+
+```bash
+npm run storage:prune -- --apply
+```
+
+清理器只能删除白名单根内超过 30 天的旧文件：`logs`、`image-cache`、`api-reader-assets`、`visual-reference-inputs` 和三个已无代码消费者的 legacy `*_input_output` 调试目录。三类缓存删除前会扫描 `data/current` / `data/archive` 的权威 JSON，重放绝对/相对路径和 URL SHA-256 引用。JSON 损坏、symlink、路径逃逸或计划后文件变化都会在 apply 前整批阻断。canonical JSON、发布/视觉 manifest、归档成品和博客文件不在删除白名单内。
+
+`--apply` 只能在全部抓取、筛选、分析、博客生成/review/push 与视觉规划任务停止后运行。清理器会读取常见 full-fetch、逐论文分析和博客事务锁；本机 owner PID 仍存活、远端/非法 owner 无法可靠判活时均 fail closed，且绝不替调用方删除锁。锁检测与 unlink 之间仍不存在跨所有 writer 的统一事务，因此“无活动任务”是操作前提，而不是可省略的建议。
+
+`--apply` 是停机维护命令：只能在抓取、分析、博客三阶段和视觉任务全部停止后运行。引用扫描无法替代所有 writer 共享的事务锁；若与新权威引用并发写入，仍存在扫描后竞态。正在运行的任务期间只允许 `storage:status` 或 dry-run。
+
 ## 验证矩阵
 
 ```bash

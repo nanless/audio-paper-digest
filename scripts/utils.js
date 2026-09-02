@@ -710,7 +710,7 @@ function getResponsesOutputTruncationError(response, maxOutputTokens) {
 function parseSseResponse(raw) {
     const deltas = [];
     let completed = null;
-    let failed = null;
+    let terminalFailure = null;
     for (const block of String(raw || '').split(/\r?\n\r?\n/)) {
         let eventName = '';
         const dataLines = [];
@@ -732,18 +732,22 @@ function parseSseResponse(raw) {
             deltas.push(event.delta);
         } else if (type === 'response.completed' && event.response && typeof event.response === 'object') {
             completed = event.response;
-        } else if (type === 'response.failed') {
-            failed = event.response || event;
+        } else if (type === 'response.incomplete' || type === 'response.failed') {
+            terminalFailure = event.response || event;
         }
     }
-    if (failed) return failed;
+    if (terminalFailure) return terminalFailure;
     if (completed) {
         if (!parseResponseText('openai_responses', completed) && deltas.length > 0) {
             completed.output_text = deltas.join('');
         }
         return completed;
     }
-    if (deltas.length > 0) return { status: 'completed', output_text: deltas.join('') };
+    if (deltas.length > 0) {
+        const error = new Error('OpenAI Responses SSE 缺少 response.completed 终态事件');
+        error.code = 'SSE_TERMINAL_EVENT_MISSING';
+        throw error;
+    }
     return null;
 }
 
@@ -807,7 +811,13 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
                     const json = JSON.parse(raw);
                     finish(resolve, { statusCode: res.statusCode, headers: res.headers, body: json, raw });
                 } catch (err) {
-                    const streamed = parseSseResponse(raw);
+                    let streamed;
+                    try {
+                        streamed = parseSseResponse(raw);
+                    } catch (sseError) {
+                        finish(reject, sseError);
+                        return;
+                    }
                     if (streamed) {
                         finish(resolve, {
                             statusCode: res.statusCode,
@@ -1541,48 +1551,15 @@ function createProxyDispatcher(proxyUrl) {
 // papers.json 自动备份
 // ═══════════════════════════════════════════════════════
 
-const PAPERS_BACKUP_MAX_DAYS = 7;
-const PAPERS_BACKUP_PREFIX = 'papers-';
-
 /**
  * 备份 papers.json 到归档目录
  * @param {string} papersFilePath - papers.json 文件路径
  * @param {string} archiveDir - 归档目录路径
  * @returns {Object} { backedUp: boolean, backupPath?: string, message: string }
  */
-function backupPapersJson(papersFilePath, archiveDir) {
-    if (!fs.existsSync(papersFilePath)) {
-        return { backedUp: false, message: 'papers.json 不存在，无需备份' };
-    }
-
-    const today = getBeijingDateString();
-    const backupName = `${PAPERS_BACKUP_PREFIX}${today}.json`;
-    const backupPath = path.join(archiveDir, backupName);
-
-    // 如果今天已备份，跳过
-    if (fs.existsSync(backupPath)) {
-        return { backedUp: false, message: `今日备份已存在: ${backupName}` };
-    }
-
-    ensureDir(archiveDir);
-    fs.copyFileSync(papersFilePath, backupPath);
-
-    // 清理旧备份（保留最近 N 天）
-    try {
-        const backups = fs.readdirSync(archiveDir)
-            .filter(f => f.startsWith(PAPERS_BACKUP_PREFIX) && f.endsWith('.json'))
-            .map(f => ({ name: f, path: path.join(archiveDir, f), mtime: fs.statSync(path.join(archiveDir, f)).mtimeMs }))
-            .sort((a, b) => b.mtime - a.mtime);
-        if (backups.length > PAPERS_BACKUP_MAX_DAYS) {
-            for (const b of backups.slice(PAPERS_BACKUP_MAX_DAYS)) {
-                fs.unlinkSync(b.path);
-            }
-        }
-    } catch (e) {
-        // ignore cleanup errors
-    }
-
-    return { backedUp: true, backupPath, message: `已备份: ${backupName}` };
+function backupPapersJson(...args) {
+    // 延迟 require 避免 utils <-> digest-status 初始化环；保留历史公共 API。
+    return require('./digest-status.js').backupPapersJson(...args);
 }
 
 // ═══════════════════════════════════════════════════════

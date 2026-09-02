@@ -44,7 +44,7 @@ arXiv ID：{arxivId}
 8. 文采来自准确的动词、自然的长短句和清晰转折，不是形容词堆叠。避免“本文提出”连续起句，避免“关键比较问题是”“下图用于核对”“证据边界在于”等流水线句式。
 9. 不得编造数字、设置、因果关系或开源状态。证据不足时要具体说明缺的是哪组对照或哪项测量，不要反复写“不能外推”。
 10. 不要输出分数、标签、机器摘要、评分理由、prompt、evidence ID 或流程元话语。
-11. `READER_ARTIFACTS` 若给出公式，方法章节必须用 `\[...\]` 原样重放 2–5 条最关键公式，并逐个解释符号、输入、输出和设计作用；不得把公式只改写成一句口语。
+11. `READER_ARTIFACTS` 若给出公式，方法章节必须选择至多 5 条关键公式（只有 1 条时就选 1 条），但正文不要直接抄 `\[...\]`：用独占段落 `[[FORMULA_<ordinal>]]` 占位，并在 `formulaBindings` 绑定同一 ordinal。代码会从结构化原文注入原始 TeX；任何自行改写的展示公式都会被拒绝。
 12. 实证论文必须至少提供两张 Markdown 表：一张整理数据集/样本构成与实验协议，另一张整理正文明确报告的关键结果。结果表至少包含“比较或条件、指标、明确报告值、这项数字支持什么”四类信息。若论文原文没有表格，必须在每张整理表前写明“根据论文正文与图中报告值整理”，不得冒充论文原表或从柱高猜造精确数字。
 13. 必须有专门段落解释数据集、样本构造、划分/采样、指标方向、基线、统计方法和硬件/训练预算。若论文没有训练可学习模型，要明确说明“没有训练阶段”，再解释复用模型、确定性求解和推理过程；不得用含糊的“模型完成评估”带过。
 14. `READER_ARTIFACTS` 若给出 Figure 清单，不要自行输出图片 Markdown 或改写 URL。你必须从真实清单中按教学价值选图，而不是按编号机械全选：方法图服务于数据流或模块关系，结果图服务于紧邻的比较，案例图服务于具体错误机制。每张选中图都要在同一小节正文里先写至少 35 字的完整图前导读，说明“为什么此处要看图、重点看什么”；marker 后紧接至少 45 字的完整解释，说明“图中可见什么、它怎样支持或限制当前论点”；代码会把官方原图插在这两个相邻段落之间。只有随请求附带了真实像素的 Figure 才能解读图例、坐标轴、曲线、颜色、柱、模块或案例；未附带像素的图只能依据图注和原文描述，禁止猜测可见细节或使用通用图注。
@@ -54,6 +54,8 @@ arXiv ID：{arxivId}
 18. 每段写完都做一次“指代与依赖”检查：本段的“它/该模块/这一结果”必须能唯一回指；新概念依赖的前置概念必须已经解释；结论必须紧邻支撑它的公式、图、表或原文事实。若读者需要跨两节猜主语、比较对象或指标方向，就重写当前段，而不是补一句“综上所述”。
 19. 区分三层事实：论文直接报告的事实、由这些事实作出的有限解释、作者未验证的推测。用“报告/显示”“说明/支持”“可能/尚不能判断”分别表达，禁止把相关性写成因果，也禁止用一串防御性否定淹没主要结论。
 20. 对带真实像素的 Figure，图后解释应引用可见的坐标轴、曲线、面板、图例、模块或案例；对未附像素但允许依据图注使用的 Figure，只能明确引用图注和原文描述，不得声称“图中可见”未实际观察的元素。两种证据来源必须在措辞上可区分。
+21. 每张 Markdown 表都必须在 `tableBindings` 中按正文出现顺序绑定。若数据来自 `READER_ARTIFACTS` 的原表，使用 `artifact_table`，并为表头和每个数据单元格给出零基 `renderedRow/renderedColumn` 到原表零基 `sourceRow/sourceColumn` 的逐格映射；渲染文本必须逐字等于对应原始 cell，不能翻译表头、调换后仍沿用旧坐标或修改数字。若论文没有可用原表而从全文整理，使用 `source_quotes`，提供全文中逐字连续的 `sourceQuotes`；表内每个数字及单位都必须出现在至少一条 quote 中。SHA 和 DOM 身份由代码计算，禁止自行填写。
+22. `tableBindings` 必须与正文表格一一对应，`formulaBindings` 必须与正文所有展示公式一一对应。论文确实没有原始表或公式时允许相应数组为空；但只要正文自己生成了表，就不能因原文无表而省略 quote 绑定。不得输出绑定之外的 Markdown 表或 `\[...\]` 公式。
 
 只输出一个合法 JSON 对象，不要 Markdown fence、前言或结尾。字段必须精确如下：
 
@@ -80,6 +82,31 @@ arXiv ID：{arxivId}
       ]
     }
   ],
+  "tableBindings": [
+    {
+      "tableIndex": 1,
+      "sourceType": "artifact_table",
+      "sourceTableOrdinal": 1,
+      "cellBindings": [
+        {"renderedRow": 0, "renderedColumn": 0, "sourceRow": 0, "sourceColumn": 0}
+      ],
+      "sourceQuotes": []
+    },
+    {
+      "tableIndex": 2,
+      "sourceType": "source_quotes",
+      "sourceTableOrdinal": null,
+      "cellBindings": [],
+      "sourceQuotes": ["全文中逐字连续、覆盖表内关键数字与单位的原句"]
+    }
+  ],
+  "formulaBindings": [
+    {
+      "formulaOrdinal": 1,
+      "targetKind": "component",
+      "marker": "[[FORMULA_1]]"
+    }
+  ],
   "sections": [
     {
       "kind": "background",
@@ -97,5 +124,9 @@ background / related_work / problem / method_overview / component / training / e
 
 `conceptBridges` 必须有 4–10 项。每项的 `terms` 必须恰有 2 个真实论文术语；`marker` 必须按数组顺序严格写成 `[[CONCEPT_BRIDGE_1]]`、`[[CONCEPT_BRIDGE_2]]` 等，并在对应 `sectionKind` 正文中独占一个段落；`explanation` 必须同时出现两个术语，并明确写出各自分工、搭配原因与组合意义，不能只是“二者结合效果更好”。代码会在该位置用 explanation 替换 marker。
 
-若 `READER_ARTIFACTS` 没有 Figure，`figurePlacements` 必须为空数组。若只有 1 张可用图，它有教学价值时选该图；有 2–5 张时至少选 2 张；有 6 张以上时至少选 6 张，且始终不能超过真实清单。每个 `figureOrdinal` 只能出现一次。`marker` 必须严格写成 `[[FIGURE_<figureOrdinal>]]`，并在目标小节正文中独占一个段落；marker 的前一段必须是完整图前导读，后一段必须是针对可见内容的完整解释。`focusPoints` 必须有 2–4 个针对该图可见元素的观察动作。代码会把 marker 替换成看图路径与官方原图。不得选择无法解释、与当前论点无关或只有装饰作用的图。
+`figurePlacements` 质量优先，允许为空且最多 4 项。只能选择请求末尾“模型本次真正收到像素”的 Figure；只出现在 `READER_ARTIFACTS` 图注、但没有收到像素的 Figure 不得选择。不要为了凑数量加入重复曲线、界面截图或装饰图。每个 `figureOrdinal` 只能出现一次。`marker` 必须严格写成 `[[FIGURE_<figureOrdinal>]]`，并在目标小节正文中独占一个段落；marker 的前一段必须是完整图前导读，后一段必须是针对可见内容的完整解释。`focusPoints` 必须有 2–4 个针对该图可见元素的观察动作。代码会把 marker 替换成看图路径与官方原图。
+
+`tableBindings` 的 `tableIndex` 从 1 开始，严格对应最终正文第几张 Markdown 表；`renderedRow=0` 是表头，`renderedRow=1` 是第一条数据行，分隔行不计数。`sourceRow/sourceColumn` 对应 `TABLE_<ordinal>` 矩阵的零基坐标；rowspan/colspan 覆盖位置仍指向被覆盖的矩阵坐标，代码会反查真实 DOM cell。每个渲染单元格必须恰好绑定一次。
+
+`formulaBindings` 只绑定 `READER_ARTIFACTS` 中 recovery 完整且含原始 TeX 的公式。`marker` 必须严格为 `[[FORMULA_<formulaOrdinal>]]`，在 `targetKind` 小节独占一个段落且只出现一次；代码会替换成原始 `\[TeX\]` 并绑定 DOM SHA。
 ~~~
