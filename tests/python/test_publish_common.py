@@ -2186,6 +2186,15 @@ primary_method_tag: #基准测试
         self.assertEqual(meta.count('#多模态模型'), 1)
         self.assertEqual(meta.count('#数据集'), 1)
 
+        compound = build_paper_meta({
+            'score': '6.0',
+            'primaryTaskTag': '#音频理解',
+            'primaryMethodTag': '#模型评估',
+            'tags': ['#音频理解', '#模型评估', '#音频事件检测 #可解释性'],
+        })
+        self.assertIn('#音频事件检测 | #可解释性', compound)
+        self.assertNotIn('#音频事件检测 #可解释性', compound)
+
 
 if __name__ == '__main__':
     unittest.main()

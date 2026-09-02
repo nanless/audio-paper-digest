@@ -4672,10 +4672,18 @@ def build_paper_meta(pa, aurl=''):
             primary_tags.append(tag)
             bits.append(tag)
 
-    extra_tags = [t for t in pa.get('tags', [])
-                  if t not in set(primary_tags)]
-    if extra_tags:
-        bits.append(' '.join(extra_tags[:2]))
+    raw_tags = pa.get('tags', [])
+    raw_tags = [raw_tags] if isinstance(raw_tags, str) else list(raw_tags or [])
+    flattened_tags = []
+    for raw_tag in raw_tags:
+        text = str(raw_tag or '').strip()
+        hashtags = re.findall(r'#[^\s#|]+', text)
+        flattened_tags.extend(hashtags or ([text] if text else []))
+    extra_tags = [
+        tag for tag in dict.fromkeys(flattened_tags)
+        if tag not in set(primary_tags)
+    ]
+    bits.extend(extra_tags[:2])
     if aurl:
         bits.append(f'[arxiv]({aurl})')
 
