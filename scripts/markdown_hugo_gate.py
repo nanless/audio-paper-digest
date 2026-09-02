@@ -273,6 +273,20 @@ def rendered_page_candidates(output_dir, title, source_path=None):
 
 def rendered_article_fragment(rendered):
     """Avoid theme JavaScript/CSS when validating reader-visible HTML."""
+    # PaperMod wraps the actual Markdown body in ``.post-content`` and may keep
+    # related-post cards inside the outer ``article``.  Those cards quote old
+    # posts and can legitimately contain truncated legacy Markdown (for
+    # example ``**S``), which must not be attributed to the page under review.
+    # Prefer the narrow body wrapper; retain article/main/body fallbacks for
+    # themes and test fixtures that do not expose it.
+    post_content = re.search(
+        r'<div\b(?=[^>]*\bclass\s*=\s*["\'][^"\']*\bpost-content\b[^"\']*["\'])'
+        r'[^>]*>(.*?)</div>',
+        rendered,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if post_content:
+        return post_content.group(1)
     for tag in ('article', 'main'):
         match = re.search(
             rf'<{tag}\b[^>]*>(.*?)</{tag}>', rendered,

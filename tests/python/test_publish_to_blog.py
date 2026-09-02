@@ -2840,6 +2840,18 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             self.assertTrue(any('图片数量不足' in issue for issue in issues))
             self.assertTrue(any('残留 Markdown 加粗标记' in issue for issue in issues))
 
+            page.write_text(
+                '<html><body><article>'
+                f'<div class="post-content md-content">{rendered_article}</div>'
+                '<section class="related-posts">旧文章截断摘要**S</section>'
+                '</article></body></html>',
+                encoding='utf-8',
+            )
+            self.assertEqual(
+                publish_to_blog.validate_hugo_rendered_html_gate(output, [artifact]), [],
+                '相关旧文章卡片的截断 Markdown 不得污染当前正文门禁',
+            )
+
     def test_hugo_rendered_html_gate_checks_api_reader_v3_focus_tables_and_images(self):
         artifact = {
             'path': '/tmp/api-reader-v3.md',
