@@ -3143,7 +3143,7 @@ def validate_digest_index_reader_quality(markdown, required=False):
     paper_list = re.split(r'^##\s+.*论文列表\s*$', body, maxsplit=1, flags=re.MULTILINE)
     paper_list = paper_list[1] if len(paper_list) == 2 else ''
     if re.search(
-            r'^(?:🔥|⭐|✅|⚪).*\*\*\d+(?:\.\d+)?/10\*\*.*'
+            r'^(?:🔥|⭐|✅|⚪|📝).*\*\*\d+(?:\.\d+)?/10\*\*.*'
             r'(?:评分置信度|\[arxiv\])',
             paper_list, flags=re.MULTILINE | re.IGNORECASE):
         return '汇总页仍包含重复的旧版评分/标签/arXiv 尾行'
@@ -4553,6 +4553,18 @@ def linkify_bare_https_urls(text):
     while ensuring every displayed resource can be clicked in Hugo.
     """
     value = str(text or '')
+    invalid_url_suffix = re.compile(
+        r'[，。；：！？、（）【】《》“”‘’\u3400-\u9fff]'
+    )
+
+    def repair_autolink(match):
+        url = match.group(1)
+        boundary = invalid_url_suffix.search(url)
+        if not boundary:
+            return match.group(0)
+        return f'<{url[:boundary.start()]}>{url[boundary.start():]}'
+
+    value = re.sub(r'<(https://[^>\s]+)>', repair_autolink, value)
     lines = value.splitlines(keepends=True)
     in_frontmatter = bool(lines and lines[0].strip() == '---')
     frontmatter_closed = not in_frontmatter
@@ -4562,16 +4574,26 @@ def linkify_bare_https_urls(text):
         r'|!?\[[^\]\n]*\]\([^\n)]*\)'
         r'|<https://[^>\s]+>',
     )
-    bare_url = re.compile(r'(?<![<(])https://[^\s<>()\[\]{}"\'`]+')
+    bare_url = re.compile(
+        r'(?<![<(])https://[^\s<>()\[\]{}"\'`，。；：！？、（）【】《》“”‘’\u3400-\u9fff]+'
+    )
+    bare_known_host = re.compile(
+        r'(?<![\w/@])(?:github\.com|gitlab\.com|huggingface\.co|'
+        r'modelscope\.cn|arxiv\.org)/'
+        r'[^\s<>()\[\]{}"\'`，。；：！？、（）【】《》“”‘’\u3400-\u9fff]+'
+    )
     trailing = '.,;:!?，。；：！？、'
 
     def linkify_segment(segment):
-        def replace(match):
-            raw = match.group(0)
+        def autolink_raw(raw):
             url = raw.rstrip(trailing)
             suffix = raw[len(url):]
             return f'<{url}>{suffix}' if url else raw
-        return bare_url.sub(replace, segment)
+        linked = bare_url.sub(lambda match: autolink_raw(match.group(0)), segment)
+        return bare_known_host.sub(
+            lambda match: autolink_raw(f'https://{match.group(0)}'),
+            linked,
+        )
 
     output = []
     for index, line in enumerate(lines):

@@ -1369,18 +1369,26 @@ primary_method_tag: #基准测试
         text = (
             '---\nsource: https://frontmatter.example/item\n---\n'
             '代码：https://github.com/example/repo。\n'
+            '备用仓库：github.com/example/bare-repo，模型：huggingface.co/example/model。\n'
             '[已有链接](https://example.com/linked)\n'
             '![图片](https://example.com/image.png)\n'
             '<https://example.com/already>\n'
+            '<https://github.com/example/repo，说明文字>\n'
             '`https://example.com/inline-code`\n'
             '```text\nhttps://example.com/fenced-code\n```\n'
         )
         fixed = sanitize_markdown_for_publish(text)
         self.assertIn('source: https://frontmatter.example/item', fixed)
         self.assertIn('代码：<https://github.com/example/repo>。', fixed)
+        self.assertIn(
+            '备用仓库：<https://github.com/example/bare-repo>，'
+            '模型：<https://huggingface.co/example/model>。',
+            fixed,
+        )
         self.assertIn('[已有链接](https://example.com/linked)', fixed)
         self.assertIn('![图片](https://example.com/image.png)', fixed)
         self.assertEqual(fixed.count('<https://example.com/already>'), 1)
+        self.assertIn('<https://github.com/example/repo>，说明文字', fixed)
         self.assertIn('`https://example.com/inline-code`', fixed)
         self.assertIn('```text\nhttps://example.com/fenced-code\n```', fixed)
 
