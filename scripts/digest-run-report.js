@@ -8,7 +8,10 @@ const {
     normalizedId,
     writeFileAtomic
 } = require('./utils.js');
-const { isSuccessfulAnalysisRecord } = require('./analysis-engine.js');
+const {
+    isSuccessfulAnalysisRecord,
+    scoringAuditBindsFinalAnalysis
+} = require('./analysis-engine.js');
 const { setupScriptLogging } = require('./log-setup.js');
 const {
     cardTaskToken,
@@ -138,7 +141,7 @@ function llmApiPaperComplete(paper) {
         && scoring?.scoringContract === 'api-scoring-audit-v2'
         && isSha256(scoring?.auditSha256)
         && isSha256(scoring?.evidenceSha256)
-        && scoring?.outputAnalysisSha256 === textSha256(analysis)
+        && scoringAuditBindsFinalAnalysis(paper)
         && Number.isFinite(parsedScore) && Number.isFinite(finalScore)
         && Math.abs(parsedScore - finalScore) <= 1e-9
         && reader?.status === 'complete'

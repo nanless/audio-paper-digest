@@ -1,6 +1,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
@@ -715,6 +716,33 @@ describe('analyzePaperWithRetry', () => {
         assert.strictEqual(isSuccessfulAnalysisRecord(validAnalysisPaper('2604.00021v2', {
             parsed: null
         })), true);
+    });
+
+    it('评分审计绑定评分 checkpoint，允许受控插图阶段只改最终正文', () => {
+        const scoringOutput = validAnalysisText();
+        const finalAnalysis = scoringOutput.replace(
+            '\n## 核心创新点',
+            '\n![原论文方法图](https://arxiv.org/html/2604.00021v3/figure.png)\n\n## 核心创新点'
+        );
+        const paper = validAnalysisPaper('2604.00021v3', {
+            analysis: finalAnalysis
+        });
+        const scoringOutputSha256 = crypto.createHash('sha256').update(scoringOutput).digest('hex');
+        const finalAnalysisSha256 = crypto.createHash('sha256').update(finalAnalysis).digest('hex');
+        paper.analysisManifest.stages.scoringAudit = {
+            status: 'complete',
+            scoringContract: 'api-scoring-audit-v2',
+            outputAnalysisSha256: scoringOutputSha256
+        };
+        paper.analysisManifest.stages.imageSupplement = {
+            status: 'complete',
+            inputAnalysisSha256: scoringOutputSha256,
+            outputAnalysisSha256: finalAnalysisSha256
+        };
+        assert.strictEqual(isSuccessfulAnalysisRecord(paper), true);
+
+        paper.analysisManifest.stages.imageSupplement.outputAnalysisSha256 = '0'.repeat(64);
+        assert.strictEqual(isSuccessfulAnalysisRecord(paper), false);
     });
 
     it('恢复 manifest 未完成时不视为成功，失败尝试会保留 checkpoint', async () => {

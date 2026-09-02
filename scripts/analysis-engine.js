@@ -267,11 +267,22 @@ function isCompleteAnalysisContent(paper) {
     )) return false;
     const scoring = stages.scoringAudit;
     if (scoring?.scoringContract === 'api-scoring-audit-v2') {
-        const analysisSha256 = crypto.createHash('sha256')
-            .update(paper.analysis).digest('hex');
-        if (scoring.outputAnalysisSha256 !== analysisSha256) return false;
+        if (!scoringAuditBindsFinalAnalysis(paper)) return false;
     }
     return true;
+}
+
+function scoringAuditBindsFinalAnalysis(paper) {
+    const stages = paper?.analysisManifest?.stages || {};
+    const scoring = stages.scoringAudit || {};
+    if (typeof paper?.analysis !== 'string' || !paper.analysis.trim()) return false;
+    const finalAnalysisSha256 = crypto.createHash('sha256')
+        .update(paper.analysis).digest('hex');
+    if (scoring.outputAnalysisSha256 === finalAnalysisSha256) return true;
+    const imageSupplement = stages.imageSupplement || {};
+    return imageSupplement.status === 'complete'
+        && imageSupplement.inputAnalysisSha256 === scoring.outputAnalysisSha256
+        && imageSupplement.outputAnalysisSha256 === finalAnalysisSha256;
 }
 
 function isSuccessfulAnalysisRecord(paper) {
@@ -895,6 +906,7 @@ module.exports = {
     updateJsonFileLocked,
     persistAnalysisCheckpoint,
     isSuccessfulAnalysisRecord,
+    scoringAuditBindsFinalAnalysis,
     getAnalysisRunStatus,
     getCanonicalAnalysisRunSummary,
     getAnalysisExitCode,

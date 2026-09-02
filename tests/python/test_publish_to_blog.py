@@ -1915,6 +1915,27 @@ title: "Bad table"
             publish_to_blog.infer_generation_publication_mode([paper]),
             'llm_api_production',
         )
+        supplemented = llm_api_publication_fixture()
+        scoring_sha = supplemented['analysisManifest']['stages']['scoringAudit'][
+            'outputAnalysisSha256'
+        ]
+        supplemented['analysis'] += (
+            '\n\n![受控插图](https://arxiv.org/html/2608.29999/figure.png)'
+        )
+        final_sha = hashlib.sha256(
+            supplemented['analysis'].encode('utf-8')
+        ).hexdigest()
+        supplemented['analysisManifest']['stages']['imageSupplement'] = {
+            'status': 'complete',
+            'inputAnalysisSha256': scoring_sha,
+            'outputAnalysisSha256': final_sha,
+        }
+        publish_to_blog.llm_api_production_proof([supplemented])
+        supplemented['analysisManifest']['stages']['imageSupplement'][
+            'outputAnalysisSha256'
+        ] = '0' * 64
+        with self.assertRaisesRegex(PublishDataValidationError, '评分审计'):
+            publish_to_blog.llm_api_production_proof([supplemented])
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
             page = posts / f'{date_str}-llm-api.md'

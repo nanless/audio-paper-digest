@@ -216,6 +216,17 @@ describe('digest run report', () => {
             }
         };
         assert.strictEqual(llmApiPaperComplete(paper), true);
+        const scoringOutputSha256 = paper.analysisManifest.stages.scoringAudit.outputAnalysisSha256;
+        paper.analysis += '\n\n![受控插图](https://arxiv.org/html/2607.00001/figure.png)';
+        paper.analysisManifest.stages.imageSupplement = {
+            status: 'complete',
+            inputAnalysisSha256: scoringOutputSha256,
+            outputAnalysisSha256: hashText(paper.analysis)
+        };
+        assert.strictEqual(llmApiPaperComplete(paper), true);
+        paper.analysisManifest.stages.imageSupplement.outputAnalysisSha256 = '0'.repeat(64);
+        assert.strictEqual(llmApiPaperComplete(paper), false);
+        paper.analysisManifest.stages.imageSupplement.outputAnalysisSha256 = hashText(paper.analysis);
         paper.apiReaderArticle += '漂移';
         assert.strictEqual(llmApiPaperComplete(paper), false);
     });

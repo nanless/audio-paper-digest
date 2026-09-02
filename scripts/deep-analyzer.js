@@ -6784,6 +6784,10 @@ async function analyzePaperDeep(paper) {
                     parseStatus: imageResult.parseDiagnostics?.status || 'unknown',
                     selectedCount: selectedImageUrls.length,
                     rejectedInsertions: (imageResult.insertionDiagnostics || []).filter(item => !item.inserted),
+                    inputAnalysisSha256: crypto.createHash('sha256')
+                        .update(preImageAnalysis).digest('hex'),
+                    outputAnalysisSha256: crypto.createHash('sha256')
+                        .update(analysis).digest('hex'),
                     fingerprint: imageSupplementFingerprint
                 });
             }

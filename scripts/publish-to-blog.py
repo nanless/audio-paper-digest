@@ -5211,10 +5211,18 @@ def llm_api_publication_bindings(published_papers):
         if not re.fullmatch(r'[0-9a-f]{64}', str(source_sha or '')) \
                 or paper_source_sha != source_sha:
             raise PublishDataValidationError('LLM API production 来源 SHA 未闭环')
+        image_supplement = stages.get('imageSupplement') \
+            if isinstance(stages.get('imageSupplement'), dict) else {}
+        scoring_binds_final = scoring.get('outputAnalysisSha256') == analysis_sha or (
+            image_supplement.get('status') == 'complete'
+            and image_supplement.get('inputAnalysisSha256')
+            == scoring.get('outputAnalysisSha256')
+            and image_supplement.get('outputAnalysisSha256') == analysis_sha
+        )
         if (
             scoring.get('status') != 'complete'
             or scoring.get('scoringContract') != LLM_API_SCORING_CONTRACT
-            or scoring.get('outputAnalysisSha256') != analysis_sha
+            or not scoring_binds_final
             or not re.fullmatch(r'[0-9a-f]{64}', str(scoring.get('auditSha256') or ''))
             or not re.fullmatch(r'[0-9a-f]{64}', str(scoring.get('evidenceSha256') or ''))
         ):
