@@ -93,6 +93,9 @@
     "cheerio": "^1.2.0",
     "pdf-parse": "^2.4.5"
   },
+  "overrides": {
+    "undici": "7.29.0"
+  },
   "engines": {
     "node": ">=20.18.1 <21 || >=22.3.0"
   }
