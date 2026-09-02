@@ -557,7 +557,7 @@ class PublishCommonSanitizerTest(unittest.TestCase):
     def test_digest_index_reader_quality_is_marked_and_historical_compatible(self):
         valid = '''---
 paper_digest_page_type: index
-paper_digest_reader_quality: "reader-facing-v2"
+paper_digest_reader_quality: "reader-facing-v3"
 ---
 # 论文速递
 
@@ -567,7 +567,17 @@ paper_digest_reader_quality: "reader-facing-v2"
 
 ## 📋 论文列表
 
-### Paper A
+### 🥇 [论文 A](/audio-paper-digest-blog/posts/2026-09-02-paper-a)
+
+> 英文题目：*[Paper A](/audio-paper-digest-blog/posts/2026-09-02-paper-a)*
+
+评分：**8.3/10**
+
+排名：前25% | 文档类型：方法研究 | [arXiv 原文](https://arxiv.org/abs/2609.00001)
+
+👥 **作者与机构**
+
+- Author A：Institute A
 
 该论文讨论流式识别的误差与延迟权衡。
 
@@ -576,12 +586,28 @@ paper_digest_reader_quality: "reader-facing-v2"
 | 1 | Paper A | 10.0 | 前10% |
 '''
         self.assertIsNone(validate_digest_index_reader_quality(valid, required=True))
+        wrong_english = valid.replace(
+            '/audio-paper-digest-blog/posts/2026-09-02-paper-a)*',
+            '/audio-paper-digest-blog/posts/another-paper)*',
+        )
+        self.assertIn(
+            '中英文论文标题',
+            validate_digest_index_reader_quality(wrong_english, required=True),
+        )
+        old_footer = valid.replace(
+            '\n| 排名 | 论文 |',
+            '\n🔥 **8.3/10** | 评分置信度：高 | [arxiv](https://arxiv.org/abs/2609.00001)\n\n| 排名 | 论文 |',
+        )
+        self.assertIn(
+            '重复的旧版',
+            validate_digest_index_reader_quality(old_footer, required=True),
+        )
         glued_score = valid.replace('| 10.0 | 前10% |', '| 10.0分 | 前10% |')
         self.assertIn('数值排版或固定词损坏', validate_digest_index_reader_quality(glued_score))
         bad = valid.replace('共分析 3 篇', '共分析三篇')
         self.assertIn('精确定量', validate_digest_index_reader_quality(bad))
         historical = bad.replace(
-            'paper_digest_reader_quality: "reader-facing-v2"\n', '',
+            'paper_digest_reader_quality: "reader-facing-v3"\n', '',
         )
         self.assertIsNone(validate_digest_index_reader_quality(historical))
         self.assertIn('协议标记', validate_digest_index_reader_quality(historical, required=True))
@@ -1338,6 +1364,25 @@ primary_method_tag: #基准测试
         self.assertIn('实验证据', fixed)
         self.assertIn('[A_METHOD]', upstream)
         self.assertIn('[SCORING_SOURCE_RESULTS]', upstream)
+
+    def test_sanitize_autolinks_bare_https_without_touching_existing_markup(self):
+        text = (
+            '---\nsource: https://frontmatter.example/item\n---\n'
+            '代码：https://github.com/example/repo。\n'
+            '[已有链接](https://example.com/linked)\n'
+            '![图片](https://example.com/image.png)\n'
+            '<https://example.com/already>\n'
+            '`https://example.com/inline-code`\n'
+            '```text\nhttps://example.com/fenced-code\n```\n'
+        )
+        fixed = sanitize_markdown_for_publish(text)
+        self.assertIn('source: https://frontmatter.example/item', fixed)
+        self.assertIn('代码：<https://github.com/example/repo>。', fixed)
+        self.assertIn('[已有链接](https://example.com/linked)', fixed)
+        self.assertIn('![图片](https://example.com/image.png)', fixed)
+        self.assertEqual(fixed.count('<https://example.com/already>'), 1)
+        self.assertIn('`https://example.com/inline-code`', fixed)
+        self.assertIn('```text\nhttps://example.com/fenced-code\n```', fixed)
 
     def test_publish_llm_api_routing(self):
         self.assertEqual(

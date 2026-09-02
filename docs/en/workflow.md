@@ -70,6 +70,8 @@ Scoring first selects document type, then audits eight dimensions against an evi
 
 Reader, authors, figures, score, source identity, and exact paper-set bindings form `llm_api_production`. Manual-only lineage in a default API batch fails closed.
 
+Digest indexes use the `reader-facing-v3` layout. Ranking entries plus Chinese and English titles all point to the corresponding standalone blog page. Tags and the eight-dimensional score appear once, followed by rank bucket, document type, the arXiv source link, and author affiliations; the legacy duplicated score/confidence/tag/arXiv footer is rejected. Reader-visible bare HTTPS URLs on both index and paper pages become Markdown autolinks without changing existing links, images, code blocks, or frontmatter.
+
 ## 6. Blog Transaction
 
 ```bash

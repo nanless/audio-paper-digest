@@ -94,6 +94,8 @@ npm run blog:push -- --date YYYY-MM-DD
 
 review worker 不修改已审页面。任何修正都返回生成/修复阶段；页面 SHA、Git 基线、协议或 remote 漂移会阻断。
 
+汇总页使用 `reader-facing-v3` 布局：排行榜、中文标题和英文标题都链接到对应独立博客；标签与八维评分只显示一次，随后依次显示排名分档、文档类型、arXiv 原文链接和作者机构。旧版重复的“分数/置信度/标签/arXiv”尾行禁止重新生成。汇总页与单篇页中的读者可见裸 HTTPS URL 会转成 Markdown autolink；已有链接、图片、代码块和 frontmatter 保持不变。
+
 ## 7. 发布后视觉
 
 远端 OID 验证后，系统规划最终评分 TOP 10 论文长图和一张汇总封面。脚本不调用图像 API；Codex 使用内置 `image_gen`。

@@ -2243,6 +2243,18 @@ def format_display_tags(tags):
     return ' | '.join(dict.fromkeys(flattened))
 
 
+def build_index_context_line(pa, aurl=''):
+    """Render non-duplicated ranking/source metadata below the score row."""
+    bits = []
+    if isinstance(pa, dict) and pa.get('rankBucket'):
+        bits.append(f'排名：{pa["rankBucket"]}')
+    if isinstance(pa, dict) and pa.get('documentType'):
+        bits.append(f'文档类型：{pa["documentType"]}')
+    if aurl:
+        bits.append(f'[arXiv 原文]({aurl})')
+    return ' | '.join(bits)
+
+
 def generate_index_page(scored, unscored, date_str, paper_slugs, category='论文速递'):
     """生成每日汇总页面（index.md），包含概览和每篇论文的链接"""
     total = len(scored) + len(unscored)
@@ -2326,12 +2338,13 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             reader_plan = _manual_reader_editorial_plan(p)
             reader_article = _manual_reader_article(p, reader_plan, date_str)
         reader_title = reader_plan['readerTitle'].strip() if reader_article else title
+        blog_url = f'{BASE_PATH}/posts/{date_str}-{slug}' if slug else ''
         if slug:
-            md += f"### {m} [{reader_title}]({BASE_PATH}/posts/{date_str}-{slug})\n\n"
+            md += f"### {m} [{reader_title}]({blog_url})\n\n"
         else:
             md += f"### {m} {reader_title}\n\n"
         if reader_article:
-            english_title = f'[{title}]({aurl})' if aurl else title
+            english_title = f'[{title}]({blog_url})' if blog_url else title
             md += f"> 英文题目：*{english_title}*\n\n"
         tags = pa.get('tags') or []
         display_tags = format_display_tags(tags)
@@ -2342,11 +2355,14 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         if score_line:
             md += f"评分：{score_line}\n\n"
 
+        context_line = build_index_context_line(pa, aurl)
+        if context_line:
+            md += f"{context_line}\n\n"
+
         author_institutions = index_author_institution_block(p, pa, api_reader)
         if author_institutions:
             md += f"👥 **作者与机构**\n\n{author_institutions}\n\n"
         
-        meta = build_paper_meta(pa, aurl)
         if pa.get('roast'):
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
@@ -2364,10 +2380,6 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         if opensource:
             md += f"🔗 **开源资源**\n\n{opensource}\n\n"
 
-        # The reader-facing sequence ends at open resources.  Keep provenance
-        # and author details afterwards, so they do not interrupt the verdict.
-        if meta:
-            md += f"{meta}\n\n"
         md += "---\n\n"
 
     for i, p in enumerate(unscored):
@@ -2386,23 +2398,25 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             reader_plan = _manual_reader_editorial_plan(p)
             reader_article = _manual_reader_article(p, reader_plan)
         reader_title = reader_plan['readerTitle'].strip() if reader_article else title
+        blog_url = f'{BASE_PATH}/posts/{date_str}-{slug}' if slug else ''
         if slug:
-            md += f"### {len(scored)+i+1}. [{reader_title}]({BASE_PATH}/posts/{date_str}-{slug})\n\n"
+            md += f"### {len(scored)+i+1}. [{reader_title}]({blog_url})\n\n"
         else:
             md += f"### {len(scored)+i+1}. {reader_title}\n\n"
         if reader_article:
-            english_title = f'[{title}]({aurl})' if aurl else title
+            english_title = f'[{title}]({blog_url})' if blog_url else title
             md += f"> 英文题目：*{english_title}*\n\n"
         tags = pa.get('tags') or []
         display_tags = format_display_tags(tags)
         if display_tags:
             md += f"标签：{display_tags}\n\n"
         md += '评分：N/A（分析未提供可验证的八维评分）\n\n'
+        context_line = build_index_context_line(pa, aurl)
+        if context_line:
+            md += f"{context_line}\n\n"
         author_institutions = index_author_institution_block(p, pa, api_reader)
         if author_institutions:
             md += f"👥 **作者与机构**\n\n{author_institutions}\n\n"
-        meta = build_paper_meta(pa, aurl)
-
         if pa.get('roast'):
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
@@ -2420,11 +2434,11 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         if opensource:
             md += f"🔗 **开源资源**\n\n{opensource}\n\n"
 
-        if meta:
-            md += f"{meta}\n\n"
         md += "---\n\n"
 
-    return normalize_digest_index_preserving_decision_blocks(md)
+    return sanitize_markdown_for_publish(
+        normalize_digest_index_preserving_decision_blocks(md)
+    )
 
 
 import urllib.request
@@ -3723,10 +3737,10 @@ def _api_reader_page_binding_issue(content, paper):
             return content[start:end].strip()
 
         actual_authors = h2_section('👥 作者与机构')
-        expected_authors = '\n'.join(
+        expected_authors = sanitize_markdown_for_publish('\n'.join(
             f'- {author["name"]}：{"；".join(author["affiliations"])}'
             for author in author_proof['authors']
-        )
+        )).strip()
         if actual_authors != expected_authors:
             raise PublishDataValidationError('最终页面作者与机构段与 canonical identity 不一致')
         page_parsed = dict(paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {})
@@ -3735,7 +3749,9 @@ def _api_reader_page_binding_issue(content, paper):
         supplementary = re.search(r'##\s*补充信息\s*\n([\s\S]*)', expected_resources)
         if supplementary:
             expected_resources = expected_resources[:supplementary.start()].strip()
-        expected_resources = _nest_reader_headings(expected_resources.strip(), minimum_level=3)
+        expected_resources = sanitize_markdown_for_publish(
+            _nest_reader_headings(expected_resources.strip(), minimum_level=3)
+        ).strip()
         actual_resources = h2_section('🔗 开源与复现资源')
         if not expected_resources or actual_resources != expected_resources:
             raise PublishDataValidationError('最终页面开源与复现资源段与 canonical identity 不一致')
@@ -3759,9 +3775,9 @@ def _api_reader_page_binding_issue(content, paper):
             article_start += 2
         else:
             article_start += len(content[article_start:]) - len(content[article_start:].lstrip('\n'))
-        expected_article = _nest_reader_headings(
+        expected_article = sanitize_markdown_for_publish(_nest_reader_headings(
             payload['renderedArticle'].strip(), minimum_level=3,
-        )
+        )).strip()
         page_article = content[article_start:article_start + len(expected_article)]
         if page_article != expected_article:
             raise PublishDataValidationError('最终页面深度解读字节与 canonical reader article 不一致')
@@ -4165,7 +4181,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
 
     md += f'\n---\n\n[← 返回 {date_str} 语音/音乐/音频论文速递]({BASE_PATH}/posts/{date_str}/)\n'
 
-    return md, slug
+    return sanitize_markdown_for_publish(md), slug
 
 
 def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=None):

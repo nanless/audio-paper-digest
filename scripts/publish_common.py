@@ -81,7 +81,7 @@ METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1'
 IMAGE_NARRATIVE_CONTRACT_VERSION = 'context-bound-v1'
 EDITORIAL_QUALITY_CONTRACT_VERSION = 'reader-facing-v1'
 MANUAL_RESEARCH_CONTRACT_VERSION = 'audio-researcher-v1'
-DIGEST_INDEX_READER_QUALITY_VERSION = 'reader-facing-v2'
+DIGEST_INDEX_READER_QUALITY_VERSION = 'reader-facing-v3'
 MANUAL_DEPTH_CONTRACT_VERSION = 'full-text-evidence-v1'
 MANUAL_DEPTH_CONTRACT_VERSION_V2 = 'full-text-evidence-v2'
 MANUAL_DEPTH_CONTRACT_VERSION_V3 = 'full-text-evidence-v3'
@@ -3140,6 +3140,40 @@ def validate_digest_index_reader_quality(markdown, required=False):
     if not re.search(r'^##\s+.*今日概览', body, re.MULTILINE) \
             or not re.search(r'^##\s+.*论文列表', body, re.MULTILINE):
         return '汇总页缺少今日概览或论文列表'
+    paper_list = re.split(r'^##\s+.*论文列表\s*$', body, maxsplit=1, flags=re.MULTILINE)
+    paper_list = paper_list[1] if len(paper_list) == 2 else ''
+    if re.search(
+            r'^(?:🔥|⭐|✅|⚪).*\*\*\d+(?:\.\d+)?/10\*\*.*'
+            r'(?:评分置信度|\[arxiv\])',
+            paper_list, flags=re.MULTILINE | re.IGNORECASE):
+        return '汇总页仍包含重复的旧版评分/标签/arXiv 尾行'
+    entries = re.split(r'(?=^###\s+)', paper_list, flags=re.MULTILINE)
+    for entry in entries:
+        heading = re.match(
+            r'^###\s+[^\n]*?\[([^\]]+)\]\(([^)]+/posts/[^)]+)\)\s*$',
+            entry, flags=re.MULTILINE,
+        )
+        if not heading:
+            continue
+        blog_target = heading.group(2)
+        english = re.search(
+            r'^>\s*英文题目：\*\[[^\]]+\]\(([^)]+)\)\*\s*$',
+            entry, flags=re.MULTILINE,
+        )
+        if english and english.group(1) != blog_target:
+            return '汇总页中英文论文标题没有指向同一篇独立博客'
+        score = re.search(r'^评分：', entry, flags=re.MULTILINE)
+        context = re.search(
+            r'^(?:排名：[^|\n]+\s*\|\s*)?'
+            r'(?:文档类型：[^|\n]+\s*\|\s*)?'
+            r'\[arXiv 原文\]\(https://arxiv\.org/abs/[^)]+\)\s*$',
+            entry, flags=re.MULTILINE,
+        )
+        authors = re.search(r'^👥 \*\*作者与机构\*\*$', entry, flags=re.MULTILINE)
+        if score and context and context.start() < score.start():
+            return '汇总页排名/文档类型/arXiv 必须位于评分之后'
+        if context and authors and context.start() > authors.start():
+            return '汇总页排名/文档类型/arXiv 必须位于作者机构之前'
     # Summary and resource blocks are byte-for-byte projections of sections
     # already validated on each single-paper page. Re-running the generic
     # longform prose heuristic across all 22 concatenated projections creates
@@ -4511,6 +4545,65 @@ def strip_internal_scoring_anchors(text):
     return re.sub(r'(?<=[㐀-鿿])[ \t]+(?=[㐀-鿿])', '', value)
 
 
+def linkify_bare_https_urls(text):
+    """Turn reader-visible bare HTTPS URLs into Markdown autolinks.
+
+    Frontmatter, fenced code, inline code, existing Markdown links/images and
+    existing autolinks remain byte-stable.  This keeps canonical URLs exact
+    while ensuring every displayed resource can be clicked in Hugo.
+    """
+    value = str(text or '')
+    lines = value.splitlines(keepends=True)
+    in_frontmatter = bool(lines and lines[0].strip() == '---')
+    frontmatter_closed = not in_frontmatter
+    fence = None
+    protected = re.compile(
+        r'`+[^`\n]*`+'
+        r'|!?\[[^\]\n]*\]\([^\n)]*\)'
+        r'|<https://[^>\s]+>',
+    )
+    bare_url = re.compile(r'(?<![<(])https://[^\s<>()\[\]{}"\'`]+')
+    trailing = '.,;:!?，。；：！？、'
+
+    def linkify_segment(segment):
+        def replace(match):
+            raw = match.group(0)
+            url = raw.rstrip(trailing)
+            suffix = raw[len(url):]
+            return f'<{url}>{suffix}' if url else raw
+        return bare_url.sub(replace, segment)
+
+    output = []
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if in_frontmatter and not frontmatter_closed:
+            output.append(line)
+            if index > 0 and stripped == '---':
+                frontmatter_closed = True
+            continue
+        fence_match = re.match(r'^\s*(`{3,}|~{3,})', line)
+        if fence_match:
+            marker = fence_match.group(1)[0]
+            if fence is None:
+                fence = marker
+            elif fence == marker:
+                fence = None
+            output.append(line)
+            continue
+        if fence is not None:
+            output.append(line)
+            continue
+        cursor = 0
+        pieces = []
+        for match in protected.finditer(line):
+            pieces.append(linkify_segment(line[cursor:match.start()]))
+            pieces.append(match.group(0))
+            cursor = match.end()
+        pieces.append(linkify_segment(line[cursor:]))
+        output.append(''.join(pieces))
+    return ''.join(output)
+
+
 def sanitize_markdown_for_publish(text):
     """发布前通用 Markdown 清洗。"""
     # LLM 输出偶尔会携带 UTF-8 替换字符；先清理后再进入 staging，
@@ -4533,7 +4626,7 @@ def sanitize_markdown_for_publish(text):
     # 但它们是内部 provenance，不应泄漏到面向读者的博客正文。这里只
     # 清理派生的发布视图，不修改 analysis / parsed canonical 数据。
     text = strip_internal_scoring_anchors(text)
-    return text
+    return linkify_bare_https_urls(text)
 
 
 def score_and_sort(papers):

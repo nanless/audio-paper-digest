@@ -467,6 +467,8 @@ def llm_api_publication_fixture():
     resource_summary = '- 资源可达性验证：code=available(HTTP 200)'
     analysis = (
         '## 机器摘要\n'
+        'document_type: 方法研究\n'
+        'rank_bucket: 前25%\n'
         'has_code: 是\n'
         'has_model: 否\n'
         'has_dataset: 否\n\n'
@@ -544,6 +546,7 @@ def llm_api_publication_fixture():
         'apiReaderPlanSha256': plan_sha,
         'parsed': {
             'score': '6.1', 'tags': ['#空间音频'],
+            'rankBucket': '前25%', 'documentType': '方法研究',
             'summary': '最终兼容 canonical 摘要。',
             'roast': '预测证据完整，但仍缺真人听音。',
             'opensource': (
@@ -1154,8 +1157,10 @@ title: "Duplicate"
             'score': '8.0',
             'rankBucket': '前25%',
             'documentType': '方法研究',
+            'confidence': '高',
             'primaryTaskTag': '#语音识别',
-            'tags': ['#语音识别'],
+            'primaryMethodTag': '#端到端',
+            'tags': ['#语音识别', '#端到端', '#语音合成'],
             'roast': '值得肯定的是它把关键比较做得足够直接；但缺少跨域验证，因此结论仍应收在当前设置内。',
             'summary': '这篇论文用明确的实验设置回答了语音识别中的一个局部问题。',
             'opensource': '代码：尚未公开。',
@@ -1184,7 +1189,7 @@ title: "Duplicate"
             )
         compact = publish_to_blog.compact_title_for_ranking(title)
         self.assertIn('✅ 筛选入选 1 篇 → 🔬 深度分析完成', markdown)
-        self.assertIn('paper_digest_reader_quality: "reader-facing-v2"', markdown)
+        self.assertIn('paper_digest_reader_quality: "reader-facing-v3"', markdown)
         self.assertNotIn('📥 抓取 1 篇', markdown)
         self.assertLessEqual(len(compact), 55)
         self.assertTrue(compact.endswith('…'))
@@ -1192,13 +1197,29 @@ title: "Duplicate"
         self.assertIn('| 8.0 | 前25% |', markdown)
         self.assertNotIn('| 8.0分 |', markdown)
         self.assertNotRegex(compact[:-1], r'\botherwis$')
-        self.assertIn('### 🥇 [先把语音识别的关键矛盾说清楚]', markdown)
-        self.assertIn('> 英文题目：*[A deliberately long English paper title', markdown)
+        blog_url = (
+            '/audio-paper-digest-blog/posts/'
+            '2026-08-25-long-title-2608-00001'
+        )
+        self.assertIn(
+            f'### 🥇 [先把语音识别的关键矛盾说清楚]({blog_url})',
+            markdown,
+        )
+        self.assertIn(f'> 英文题目：*[{title}]({blog_url})*', markdown)
         for text in ('标签：#语音识别', '评分：**8.0/10**', '💡 **毒舌点评**', '📌 **核心摘要**', '🔗 **开源资源**'):
             self.assertIn(text, markdown)
+        context = (
+            '排名：前25% | 文档类型：方法研究 | '
+            '[arXiv 原文](https://arxiv.org/abs/2608.00001)'
+        )
+        self.assertIn(context, markdown)
+        self.assertEqual(markdown.count('评分：**8.0/10**'), 1)
+        self.assertNotIn('评分置信度：高', markdown)
+        self.assertNotIn('🔥 **8.0/10**', markdown)
         self.assertLess(markdown.index('> 英文题目：'), markdown.index('标签：#语音识别'))
         self.assertLess(markdown.index('标签：#语音识别'), markdown.index('评分：**8.0/10**'))
-        self.assertLess(markdown.index('评分：**8.0/10**'), markdown.index('💡 **毒舌点评**'))
+        self.assertLess(markdown.index('评分：**8.0/10**'), markdown.index(context))
+        self.assertLess(markdown.index(context), markdown.index('💡 **毒舌点评**'))
         self.assertLess(markdown.index('💡 **毒舌点评**'), markdown.index('📌 **核心摘要**'))
         self.assertLess(markdown.index('📌 **核心摘要**'), markdown.index('🔗 **开源资源**'))
 
@@ -1253,16 +1274,44 @@ title: "Duplicate"
         self.assertIn(paper['apiReaderPlan']['readerTitle'], markdown)
         self.assertNotIn(paper['apiReaderPlan']['oneSentenceThesis'], markdown)
         self.assertIn('最终兼容 canonical 摘要。', markdown)
-        self.assertIn(paper['parsed']['opensource'], markdown)
+        self.assertIn(
+            publish_to_blog.sanitize_markdown_for_publish(
+                paper['parsed']['opensource']
+            ),
+            markdown,
+        )
         self.assertIn('亮点清楚，短板是只在 2 套基准上验证。', markdown)
         self.assertNotIn(paper['parsed']['roast'], markdown)
         first_author = paper['apiReaderAuthors']['authors'][0]
         self.assertIn(first_author['name'], markdown)
         self.assertIn(first_author['affiliations'][0], markdown)
+        blog_url = (
+            '/audio-paper-digest-blog/posts/'
+            '2026-08-31-llm-api-publisher-fixture-2608-30002'
+        )
+        self.assertIn(
+            f'> 英文题目：*[{paper["title"]}]({blog_url})*', markdown,
+        )
+        context = (
+            f'排名：{paper["parsed"]["rankBucket"]} | '
+            f'文档类型：{paper["parsed"]["documentType"]} | '
+            f'[arXiv 原文](https://arxiv.org/abs/{paper["arxivId"]})'
+        )
         self.assertLess(markdown.index('评分：**6.1/10**'), markdown.index('👥 **作者与机构**'))
+        self.assertLess(markdown.index('评分：**6.1/10**'), markdown.index(context))
+        self.assertLess(markdown.index(context), markdown.index('👥 **作者与机构**'))
         self.assertLess(markdown.index('👥 **作者与机构**'), markdown.index('💡 **毒舌点评**'))
         paper_markdown, _slug = publish_to_blog.generate_paper_page(
             paper, '2026-08-31', category='论文速递',
+        )
+        resource_url = paper['apiReaderResources']['resources'][0]['originalUrl']
+        self.assertIn(
+            f'<{resource_url}>',
+            publish_to_blog.sanitize_markdown_for_publish(markdown),
+        )
+        self.assertIn(
+            f'<{resource_url}>',
+            publish_to_blog.sanitize_markdown_for_publish(paper_markdown),
         )
         index_summary = re.search(
             r'📌 \*\*核心摘要\*\*\n\n([\s\S]*?)\n\n🔗 \*\*开源资源\*\*',
@@ -2439,7 +2488,12 @@ title: "Bad table"
         }
         with manual_v5_fresh_files(paper, '2026-08-27'):
             markdown, _slug = publish_to_blog.generate_paper_page(paper, '2026-08-27')
-        self.assertEqual(markdown.count(url), 1)
+        self.assertEqual(
+            len(re.findall(
+                rf'!\[[^\]]*\]\({re.escape(url)}\)', markdown,
+            )),
+            1,
+        )
         self.assertIn(f'![结构图]({url})', markdown)
         self.assertNotIn('旧摘要中的重复图', markdown)
         summary = re.search(
@@ -3069,7 +3123,7 @@ categories: [test]
 description: "test"
 paper_digest_pipeline_owned: true
 paper_digest_page_type: index
-paper_digest_reader_quality: "reader-facing-v2"
+paper_digest_reader_quality: "reader-facing-v3"
 ---
 # 论文速递
 
