@@ -1,10 +1,13 @@
 # Environment Variables and Configuration
 
-## Environment Variables and Model Configuration
+This page answers how to start the pipeline reliably. See [Workflow](workflow.md) for stage
+semantics, [Troubleshooting](troubleshooting.md) for failures, and the [documentation index](../README.md)
+for task-oriented navigation. Manual uses the same project `.env`, with separate rules under
+[`manual/`](../../manual/README.md).
 
 ### 6.1 Unified Storage Location
 
-**All environment variables are stored in `the `.env` file in the project root`.**
+**All environment variables are stored in the project-root `.env` file.**
 
 Benefits of this design:
 - Sensitive configurations are centralized and never written into scripts

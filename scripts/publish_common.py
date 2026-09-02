@@ -22,7 +22,9 @@ import urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_SHARED_SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SHARED_SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SHARED_SCRIPTS_DIR)
 from path_config import (
     CURRENT_DIR,
     DEEP_ANALYSIS_RESULT_FILE,

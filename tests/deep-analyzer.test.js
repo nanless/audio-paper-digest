@@ -124,7 +124,7 @@ describe('arXiv HTML full-text health gate', () => {
         assert.match(inlineFigure.inlineHtml, /^<figure[\s\S]*<\/figure>$/);
         assert.strictEqual(Buffer.byteLength(inlineFigure.inlineHtml), inlineFigure.inlineHtmlBytes);
         assert.match(inlineFigure.inlineHtmlSha256, /^[a-f0-9]{64}$/);
-        const { validateStructuredArtifacts } = require('../scripts/manual-artifact-index.js');
+        const { validateStructuredArtifacts } = require('../manual/scripts/manual-artifact-index.js');
         assert.doesNotThrow(() => validateStructuredArtifacts(artifacts));
         assert.strictEqual(artifacts.figures[2].recoveryStatus, 'unrecovered');
         assert.match(artifacts.health.issues.join('\n'), /可审计图像或 DOM 资源/);

@@ -46,17 +46,11 @@ Default daily entry: `./run-daily-digest.sh YYYY-MM-DD` or `npm run digest:prepa
 
 `full-fetch.js` **does NOT auto-publish blog/WeChat**. However, when the user asks to run a dated paper digest, the default intent is the complete workflow in this section. The Agent runs `run-daily-digest.sh` or equivalent separate stages, fixes review blockers, completes push, then uses built-in `image_gen` for every pending paper infographic and digest cover until both visual status gates are complete. WeChat, Feishu, and Xiaohongshu auto-publishing are not part of this default.
 
-### 2.1 Explicit Production Manual v6 Without Project Model APIs
+### 2.1 Explicit Manual/Human Workflow
 
-Production Manual v6 is an explicit user-selected workflow, not an automatic fallback from an unavailable model. In this mode the project filtering/analysis/review APIs remain disabled. Codex subagents perform the manual semantic work, while every source, content, publication, and remote-verification gate remains mandatory:
+Manual is enabled only when the user explicitly selects it; it is never an error fallback from the default LLM/API route. Before operating it, read [`manual/README.md`](manual/README.md) in full, then follow its navigation to the workflow, architecture, and editorial contract. Manual commands, role DAG, paper-isolated Terra-high scheduling, ArtifactIndex, records/spec, fresh authoring, page review, metrics, shadow, legacy, and recovery rules are maintained only under `manual/`.
 
-1. `manual_offline` replaces only the filtering-model decision. It does not claim that the filtering API ran.
-2. Production Manual v6 replaces the automatic filtering/analysis models with controlled full-text editorial work. Every selected paper must have one isolated author task and independent technical-scoring, readability, revision, and final-page-review provenance. The persistent runner validates exact allowlisted packets, real claim/start times, `gpt-5.6-terra` with high reasoning, outputs, receipts, and task lineage; it never creates a subagent or writes prose. Newly materialized packets include a signed role-specific `outputContract`, and technical-review submission must validate the formal eight-dimension order/ranges, fixed Open Source anchors, eight reasons, complete calibration, and the project semantic-hash algorithm before the task can become validated.
-3. Structured full text must close as complete under the current ArtifactIndex parser. PDF/text fallback is incomplete. The revision binder deterministically converts the leaf's article and semantic map into `reader-longform-v2`, injects exact ArtifactIndex tables, binds figures/formulas/terms/related work, and normalizes evidence IDs atomically. It does not invent or rewrite claims.
-4. Only when all four production tasks for every paper are validated may `manual:records` seal records v4. `manual:spec` then assembles spec v6 and its Merkle root, and `manual:analyze` writes production canonical with `manualDepth=full-text-evidence-v6`. Shadow artifacts cannot update canonical or `papers.json`, and missing production provenance fails closed rather than falling back to v5.
-5. Manual blog review replaces only the semantic review model. New batches require its v3 attestation (v2 is historical compatibility): it binds every generated file and SHA to independent notes plus eight per-file semantic checks, an independent `gpt-5.6-terra` high-reasoning review subagent per page, and ordered per-image `imageFindings` covering caption, adjacent narrative, visible facts, and mobile readability; receipts use `manual_semantic`. Deterministic checks, the generation manifest, Git baseline, review protocol, Hugo gate, normal `push-blog.py`, and remote OID verification remain mandatory.
-
-Manual work is quality- and provenance-compatible with the API route, not a claim of identical execution. Historical v5 records/specs remain readable only through explicit legacy-maintenance paths and cannot satisfy a production-v6 gate. Public articles must not expose internal evidence IDs, evidence-block numbers, scoring-source markers, stage-audit prose, prompt restatements, manual status names, template scaffolding, or repeated boilerplate left by repair templates.
+The project runner does not create subagents or write prose. The primary Agent dispatches isolated Terra-high leaves directly, and incomplete production provenance fails closed. Default `digest:prepare` / `digest:api` runs must neither consume nor fabricate Manual lineage.
 
 ---
 
@@ -105,7 +99,8 @@ Filtering uniformly calls the LLM specified by `PAPER_ANALYZER_*`:
 - endpoint: `PAPER_ANALYZER_ENDPOINT` (required)
 - key: `PAPER_ANALYZER_API_KEY` (required)
 - model: `PAPER_ANALYZER_MODEL` (required)
-- **API protocol auto-routing**: `detectApiType()` in `scripts/utils.js` automatically determines whether to use OpenAI or Anthropic protocol based on the endpoint and model name; see Section 4.2 for the full priority order. DeepSeek is forced to OpenAI, while `token-plan+mimo`, `coding+kimi`, and non-DeepSeek `/anthropic` endpoints use Anthropic
+- **API protocol auto-routing**: `detectApiType()` in `scripts/utils.js` selects OpenAI Chat, OpenAI Responses, or Anthropic from endpoint and model. DeepSeek has highest priority and uses OpenAI Chat; exact `muse-spark-1.2-contributor` uses OpenAI Responses; `token-plan+mimo`, `coding+kimi`, and non-DeepSeek `/anthropic` endpoints use Anthropic
+  - **OpenCode Go Muse Spark Contributor**: `https://opencode.ai/zen/go/v1` → `https://opencode.ai/zen/go/v1/responses`, with Responses `input` / `max_output_tokens` payloads
   - **MiMo/Kimi Token Plan / Coding Plan** (endpoint contains `token-plan` or `coding`, model contains `mimo`/`kimi`) → automatically switches to **Anthropic protocol**, masquerading as a Claude Code call
     - **MiMo**: `https://token-plan-cn.xiaomimimo.com/v1` → `https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages` (replaces `/v1` with `/anthropic`)
     - **Kimi**: `https://api.kimi.com/coding/v1` → `https://api.kimi.com/coding/v1/messages` (directly appends `/messages`, no `/anthropic` intermediate path)
@@ -115,8 +110,9 @@ Filtering uniformly calls the LLM specified by `PAPER_ANALYZER_*`:
   - **All other cases** (including DeepSeek, MiMo pay-as-you-go, generic OpenAI-compatible endpoints) → uses standard **OpenAI protocol**
     - URL: `/v1/chat/completions`
     - Headers: `Authorization: Bearer {key}`
-- **agent: `false`** — LLM API requests explicitly disable connection reuse to prevent the global agent connection pool from being polluted by proxies, which causes MiMo 403 (see 9.2)
+- **Connection policy**: ordinary LLM providers use `agent:false`. Exact `muse-spark-1.2-contributor` is the deliberate exception: every request requires a fresh project HTTP CONNECT agent and fails if the project proxy is absent
 - 60s timeout, 5 retries, each retry creates an independent AbortController
+- Configured filter batch size defaults to 5; exact Muse is forced to an effective batch size of 1 by `getEffectiveFilterBatchSize()`, regardless of `PD_FILTER_BATCH_SIZE`
 - Exponential backoff: filter LLM call `2^attempt * 1s` (2s/4s/8s/16s/32s); arXiv page-fetch 429 rate-limit `60s * 2^(attempt-1)`, other errors linear `5s * attempt`
 - Prompt source: `prompts/filter.md`, read at runtime via `loadPrompt()` and replaces `{title}`, `{abstract}`, `{categories}` placeholders
 - Judgment criteria: Multimodal models are considered relevant if they clearly involve speech/music/audio (input, output, training objective, evaluation task, or one of the core capabilities)
@@ -135,13 +131,13 @@ Deep analysis uniformly uses the LLM specified by `PAPER_ANALYZER_*`, **sharing 
 
 API call characteristics:
 - Overall timeout is 20 minutes of active process time. Heartbeat gaps over 30 seconds are treated as system sleep or long suspension and excluded, so wake-up socket errors can retry with the remaining budget.
-- max_tokens=64000, temperature=0.7
+- Primary analysis uses 64,000 output tokens; local revision/table/method/structure repair uses 16,000 by default. OpenAI Responses uses SSE only when `PD_OPENAI_RESPONSES_STREAM=1`; otherwise it waits for a normal JSON response
 - **Double-layer retry**: analysis-engine.js level retries up to 2 times per paper (max 3 total attempts); deep-analyzer.js internally retries each API call up to 3 times (exponential backoff: first 10s, then doubles, `2^attempt * 5s`)
 - **The project proxy is mandatory**: arXiv/HuggingFace fail when the project `.env` proxy is absent rather than falling back to direct access. Ordinary LLM providers use `agent:false`; the exact model `muse-spark-1.2-contributor` is the deliberate exception and uses a fresh HTTP CONNECT agent per request. Node arXiv and Muse require `HTTPS_PROXY` or `HTTP_PROXY`; HuggingFace curl may additionally use SOCKS `ALL_PROXY`.
 - arXiv HTML parsing uses **cheerio** structured selectors, removing noise elements such as script/style/nav/header/footer
 - Images are first preselected by caption/filename/order heuristics (default `imageCandidateMax=20`); only dual-model mode with a configured secondary model downloads up to `imageMaxCount=20` candidate images serially and sends them to the secondary model. Single-model mode only keeps candidate URL/manifest metadata. Downloads validate Content-Type, Content-Length, and PNG/JPEG/WebP file signatures; defaults are a 60-second per-image timeout (`PD_IMAGE_DOWNLOAD_TIMEOUT_MS`), 6MB raw bytes per image, 8M base64 chars per image, and 20M total base64 chars per paper
 - Every analysis stage is recorded in `analysisManifest`. Failed attempts retain `analysisCheckpoint` and a separate `analysisRecoveryImageManifest`. Merge logic validates an older body independently of the latest failed manifest, so repeated failures cannot erase usable content. arXiv HTML/image discovery uses 60 seconds per request and PDF fallback uses 180 seconds; demo pages may follow at most three redirects while revalidating public DNS/IP on every hop. Only strict `{"insertions":[]}` is a valid empty image plan; missing fields, wrong types, and malformed JSON remain retryable failures
-- Full text cap is approximately 500K characters (`fullTextMaxChars` in config.js)
+- Primary-analysis input is capped at 200,000 characters and uses task-focused whole-document sampling beyond that limit. API Reader v3 has separate defaults of 48,000 output tokens, 180,000 evidence characters, and 240,000 total request characters
 - All analysis configurations are centrally managed in `scripts/config.js`, supporting overrides from the project-root `.env`
 
 Output constraints:
@@ -178,7 +174,7 @@ When `PAPER_ANALYZER_SECONDARY_MODEL` is configured, dual-model mode is enabled:
 ### 4.4 WeChat Official Account (`publish-wechat-full.py`)
 
 - `WECHAT_APP_ID` and `WECHAT_APP_SECRET` are read from `os.environ`
-- `WECHAT_THUMB_MEDIA_ID` (optional): permanent cover image material ID; uses built-in default material if not set
+- `WECHAT_THUMB_MEDIA_ID`: required together with app ID and secret for real, non-`--dry-run` draft publication; the project has no built-in fallback material ID
 - Image upload: downloads arXiv images → uploads to WeChat CDN → replaces with WeChat URLs. Cache is stored in `wechat-image-cache.json` under the system temp directory
 - This script accesses real WeChat APIs; do not execute unless the user explicitly requests generating or uploading an Official Account draft
 - **Note**: All publishing scripts uniformly read credentials from environment variables; hard-coding is prohibited
@@ -192,6 +188,8 @@ When `PAPER_ANALYZER_SECONDARY_MODEL` is configured, dual-model mode is enabled:
 PAPER_ANALYZER_API_KEY=your-api-key-here
 PAPER_ANALYZER_MODEL=muse-spark-1.2-contributor
 PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
+HTTPS_PROXY=http://127.0.0.1:7897
+HTTP_PROXY=http://127.0.0.1:7897
 
 # Alternative: MiMo Token Plan
 # PAPER_ANALYZER_API_KEY=tp-your-token-plan-key
@@ -223,8 +221,8 @@ PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 # WeChat Official Account
 WECHAT_APP_ID=your-app-id
 WECHAT_APP_SECRET=your-app-secret
-# Permanent cover image material ID (optional, uses default material if not set)
-# WECHAT_THUMB_MEDIA_ID=your-thumb-media-id
+# Permanent cover image material ID (required for non-dry-run publication)
+WECHAT_THUMB_MEDIA_ID=your-thumb-media-id
 
 # Feishu (Lark) Docs
 FEISHU_APP_ID=your-feishu-app-id
@@ -246,8 +244,16 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 # PD_ANALYSIS_MAX_RETRIES=2
 # Re-analysis concurrency (defaults to ANALYSIS_CONFIG.concurrency)
 # PD_REANALYZE_CONCURRENCY=3
-# LLM filtering batch size
+# LLM filtering configured batch size; exact Muse is always effective batch 1
 # PD_FILTER_BATCH_SIZE=5
+# Primary / local-repair / API Reader output budgets
+# PD_ANALYSIS_API_MAX_TOKENS=64000
+# PD_ANALYSIS_REPAIR_MAX_TOKENS=16000
+# PD_API_READER_MAX_TOKENS=48000
+# API Reader evidence / total request-character budgets and heavy-stage concurrency (1-5)
+# PD_API_READER_EVIDENCE_MAX_CHARS=180000
+# PD_API_READER_CONTEXT_MAX_CHARS=240000
+# PD_API_READER_CONCURRENCY=5
 # arXiv fetch count per category
 # PD_ARXIV_MAX_RESULTS=100
 # PD_ARXIV_PDF_MAX_BYTES=52428800
@@ -266,6 +272,7 @@ FEISHU_APP_SECRET=your-feishu-app-secret
 | Endpoint Contains | Model Contains | Protocol | URL Conversion |
 |-------------------|---------------|----------|----------------|
 | `deepseek.com` or model contains `deepseek` | — | OpenAI | `/anthropic` → `/v1/chat/completions` (highest priority) |
+| OpenCode Go or another HTTPS endpoint | exact `muse-spark-1.2-contributor` | OpenAI Responses | `/v1` → `/v1/responses` |
 | `token-plan` | `mimo` | Anthropic | `/v1` → `/anthropic/v1/messages` |
 | `coding` | `kimi` | Anthropic | `/coding/v1` → `/coding/v1/messages` |
 | `/anthropic` | — | Anthropic | `{base}/messages` |
@@ -278,9 +285,9 @@ Endpoint configuration format is uniformly `protocol://domain/v1`, regardless of
 ## 5. Common Commands (Currently Available)
 
 ```bash
-cd /Users/francis7999/code/github_repos/audio-paper-digest
+cd /path/to/audio-paper-digest
 
-# Default deterministic daily stages; Codex continues with built-in image generation
+# Default LLM/API daily stages; Codex continues with built-in image generation
 npm run digest:prepare -- YYYY-MM-DD
 # Resume after fixing review blockers
 ./run-daily-digest.sh YYYY-MM-DD --from review
@@ -462,20 +469,20 @@ PY
 6. **Prohibit hard-coded keys**: Do not write real API keys in any script or document; all credentials (LLM, WeChat Official Account, Feishu) live in `the `.env` file in the project root` and are loaded through the project env loader.
 7. **Prevent security mechanism breakage when modifying scripts**: This environment silently replaces sensitive characters such as `API_KEY` with `***`. When modifying scripts containing such characters, you must re-read the file after modification to verify that key lines were not corrupted. Also periodically check whether `data/`, `logs/` directories contain residual backup files or log snapshots with keys, and clean them immediately if found.
 8. **Unified environment variable management**: When new scripts need to read LLM configuration, uniformly use `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, and `PAPER_ANALYZER_ENDPOINT` from the project `.env`, and reuse Node `scripts/env-loader.js` or Python `scripts/project_env.py`; alias fallback chains, hard-coding, base64-encoded variable name hacks, or inherited shell/Codex/Trae variables as project configuration are prohibited.
-8.1 **Run every script outside the sandbox**: Every direct `scripts/*.js`, `scripts/*.py`, `run-daily-digest.sh`, `run-full-fetch.sh`, and `scripts/*.sh` invocation requires external runtime permissions. The Node/Python shared environment loaders and shell entries fail before business logic, logging, networking, or writes when they detect `CODEX_SANDBOX`; do not substitute a sandbox command, disable the check, or fabricate results. Unit-test module imports do not trigger this guard.
+8.1 **Run every script outside the sandbox**: Every direct `scripts/*`, `manual/scripts/*`, `run-daily-digest.sh`, `run-full-fetch.sh`, and other project shell entry invocation requires external runtime permissions. The Node/Python shared environment loaders and shell entries fail before business logic, logging, networking, or writes when they detect `CODEX_SANDBOX`; do not substitute a sandbox command, disable the check, or fabricate results. Unit-test module imports do not trigger this guard.
 9. **New configurable parameters and runtime data paths go in shared config**: New Node scripts with adjustable parameters (concurrency, timeout, batch size, etc.) or `data/current/*.json` runtime data files must place/reuse them in `scripts/config.js` (runtime data paths via `Config.FILES`) and add project `.env` overrides for parameters when needed; new Python publish/maintenance scripts with shared paths must reuse `scripts/path_config.py` instead of hand-writing default `data/current/*.json` paths again.
 10. **New analysis scripts reuse analysis-engine.js**: When adding paper analysis-related scripts, prioritize reusing `analyzeBatch()` / `analyzePaperWithRetry()` from `analysis-engine.js` to avoid re-implementing retry, parsing, and saving logic; after saving results, sync `papers.json.digestStatus` through `scripts/digest-status.js`.
 11. **Never merge the three blog stages**: `generate-blog.py` only generates and records a manifest; `review-blog.py` only performs strict LLM/image review plus the Hugo gate and writes a per-file SHA-256 receipt; `push-blog.py` only validates that receipt and commits/pushes. Push must never regenerate or re-run review. A request to run a dated paper digest is explicit push authorization; other requests still require explicit publication authorization.
 11.1 **Run blog publishing outside the sandbox**: Agents must use external runtime permissions for `generate-blog.py`, `review-blog.py`, `push-blog.py`, and compatibility `publish-to-blog.py`. A Codex sandbox rejection is an execution-environment failure, not a content failure; do not retry there or bypass LLM/image/Hugo/Git checks.
 12. **Output contract changes must sync parser**: If modifying `## 机器摘要` key names, section order, or tag output format in `prompts/deep-analysis.md`, you must synchronously check the parsing logic in `scripts/utils.js` and `scripts/utils.py`.
 13. **Artifact-level verification required after changes**: At minimum, spot-check one `data/current/deep-analysis-result.json` to confirm the `analysis` machine summary contains `document_type`, `rank_bucket`, `primary_task_tag`, and `primary_method_tag`, and the `parsed` cache contains `documentType`, `scoringRubricVersion`, `rankBucket`, `primaryTaskTag`, and `primaryMethodTag`; then run blog/social media scripts to verify final artifacts.
-14. **Verify prompt loading after changes**: After modifying markdown files in the `prompts/` directory, run `npm test`; use a single-paper analysis when artifact-level verification is needed, and confirm `loadPrompt()` replaces every placeholder without `{variableName}` residue.
+14. **Verify prompt loading after changes**: After modifying markdown files in `prompts/` or `manual/prompts/`, run the matching tests; use a single-paper analysis when artifact-level verification is needed, and confirm prompt loading, placeholder replacement, and production SHA bindings.
 15. **Run unit tests after changes**: After modifying `scripts/utils.js`, `scripts/config.js`, or core analysis engine logic, you must run `npm test` to ensure tests pass.
 16. **LLM proxy policy belongs to the shared request wrapper**: MiMo/Kimi paths must use `options.agent=false`; exact `muse-spark-1.2-contributor` requests must create and destroy a project HTTP CONNECT one-shot agent. Callers must not select or reuse agents themselves.
 17. **New LLM endpoints must integrate API protocol auto-routing**: Any new script calling an LLM must uniformly use `detectApiType()`, `buildApiUrl()`, `buildHeaders()`, `buildRequestBody()`, `parseResponseText()` from `scripts/utils.js`; hard-coding specific protocol URLs/Headers/Bodies is prohibited.
 18. **Sync the full pipeline when modifying API protocol routing logic**: When modifying `detectApiType()` judgment rules or `buildApiUrl()`/`buildHeaders()` and other functions, you must synchronously check `fetch-papers.js`, `deep-analyzer.js`, and all scripts using `analysis-engine.js` (`full-fetch.js`, `reanalyze.js`, `batch-analyze.js`, `deep-analysis-only.js`, `analyze-single-paper.js`) to ensure consistent behavior across the full pipeline.
 19. **Prohibit committing sensitive files to version control**: `data/`, `logs/`, `*.env`, `*.backup*`, cache files, log archives containing keys, etc. are strictly forbidden from entering git; before committing, confirm `.gitignore` is correctly configured and that no historically leftover sensitive files exist in the repository.
-20. **CI checks**: CI runs serial `npm test`, `npm run validate:data -- --allow-empty`, JS syntax checks, Python `py_compile`, Python unit tests, and shell syntax checks. When adding special file types, update `.github/workflows/ci.yml` accordingly.
+20. **CI checks**: CI runs serial `npm test`, `npm run validate:data -- --allow-empty`, JS syntax checks across `scripts tests manual/scripts manual/tests`, Python compilation across `scripts manual/scripts`, both default and Manual Python test suites, and repository shell syntax checks. When adding special file types, update `.github/workflows/ci.yml` accordingly.
 21. **Use Beijing-time timestamps for runtime data**: Use `getBeijingISOString()` when writing `timestamp` / `lastUpdated` / `fetchedAt`; Python publishing code should use `now_bj_iso()` / `now_bj_date()` to avoid UTC dates causing cross-day archiving or publish filtering mistakes.
 22. **Commit messages must be detailed Chinese**: Commit messages must be written in Chinese and explain the main changes and impact scope; avoid vague one-liners such as "fix" or "update".
 

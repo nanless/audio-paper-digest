@@ -8,8 +8,6 @@ importing it is side-effect free.
 
 from project_env import load_project_env
 
-load_project_env()
-
 import argparse
 import json
 import os

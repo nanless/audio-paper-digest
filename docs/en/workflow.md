@@ -1,23 +1,23 @@
 # Main Workflow Explained
 
+This page follows the default LLM/API route in execution order. See [Setup](setup.md),
+[Data formats](data-format.md), and [Script responsibilities](scripts.md) for reference material.
+The explicit Manual route is documented separately under [`manual/`](../../manual/README.md).
+
+```text
+fetch/archive → keyword + LLM filter → staged analysis → generate → review → push
+              → visual tasks → built-in image generation/waiver → digest:status
+```
+
 The default daily entry is `./run-daily-digest.sh YYYY-MM-DD` or `npm run digest:prepare -- YYYY-MM-DD`. Starting from fetch requires Beijing today. The default route performs LLM/API fetching, filtering, staged full-text analysis, ordinary blog review, push, and visual preparation. `digest:api` is an explicit alias for the same route. Production Manual v6 remains available only through `--manual` or `digest:manual`, where the script stops at real paper/page subagent boundaries. The script never calls an image API; after publication succeeds, Codex must use built-in `image_gen` to complete the TOP 10 paper infographics and digest cover, then pass both visual status gates.
 
 When the user asks to run a dated paper digest, that request already authorizes the blog push and requires every stage above. Do not stop after fetch, analysis, review, or publication. WeChat, Feishu, and Xiaohongshu auto-publishing are outside the default scope.
 
-### 3.0 Production Manual v6, Explicit Shadow, and Legacy/API Paths
+### 3.0 Default API and Explicit Manual Boundary
 
-The normal path uses keyword prefiltering, LLM filtering, staged LLM deep analysis, and ordinary API-backed blog review. Production Manual v6 runs only when the user explicitly requests the Manual/human path. Neither model-service failures nor a manual choice may silently change a paper or batch's provenance:
+The normal path uses keyword prefiltering, LLM filtering, staged LLM deep analysis, and ordinary API-backed blog review. Production Manual v6 runs only when the user explicitly requests the Manual/human path; model, network, or quota failures never select it automatically. Its raw/select, ArtifactIndex, task DAG, records/spec, page review, shadow, and legacy rules are centralized in [`manual/README.md`](../../manual/README.md) and the [Manual workflow](../../manual/docs/workflow.md).
 
-- `manual-fetch.js --raw` still accesses arXiv and HuggingFace, but does not call the filter model. `--select` accepts a `manual_offline` v1 decision for every candidate and binds input SHA, reviewer, and protocol fingerprint into the four filter artifacts.
-- Structured full text and a complete ArtifactIndex feed one isolated author task per paper. The persistent task runner stores state, validates packets/receipts/outputs, enforces three active slots, and invalidates only downstream dependencies. It never creates a subagent, writes role content, materializes a completed packet on behalf of the Agent, or assembles a records envelope. The main Agent must create each real Terra-high leaf subagent and persist the resulting evidence.
-- Records v4 seal the author, independent technical and pedagogy reviews, fresh replacement revision, ArtifactIndex, and `reader-longform-v2` payload. The official assembler builds spec v6 paper shards and a batch Merkle root under `data/current/manual-v6/<date>/`; production ingestion promotes the verified result to the standard canonical. Every production paper and its takeover provenance copy must declare `runtimeMode=production` as part of the signed identity.
-- Reader quality is structural rather than a character-count proxy. Every result table, figure, formula, terminology item, and related-work item from the complete ArtifactIndex must be disposed and replayed into a bound longform block when selected. Exact table matrices, numeric cell coverage, the paper-specific article SHA, task evidence, records-v4 envelope SHA, paper-shard SHA, and spec-v6 Merkle root remain independently auditable.
-- The main Agent invokes `manual:packet` before each role assignment and `manual:records` only after all four roles validate. New packets sign a role-specific `outputContract` containing fixed output/receipt paths, required fields, the formal rubric, and the cross-runtime semantic-hash algorithm; legacy packets remain validation-only compatible. Technical-review submission rejects incomplete eight-dimension scoring or calibration before revision can start. The initial `authorReceipt` binds the draft; a distinct `finalRevisionAuthorReceipt` binds the final article and equals the author-revision review receipt. Revision output v2 binds a final article plus an unsealed payload, and the deterministic sealer injects receipts/resolution before computing the sealed-record SHA, avoiding a record/receipt hash cycle.
-- Manual page review is the normal Manual path, not an outage downgrade. Each generated page receives an independent Terra-high leaf review and a v3 shard. `assemble-manual-review-attestation.py` refuses missing, stale, failed, duplicate, or byte-drifted shards; `manual-review-blog.py` replays deterministic page checks and Hugo without modifying reviewed bytes. Push then revalidates the generation SHA, review receipt, Git baseline and exact delta before recording a matching remote OID.
-- `manual:v6:shadow:*` and `manual:shadow` are explicit audit/compatibility paths under `data/current/manual-v6-shadow/<date>/`. Shadow canonical uses `runtimeMode=shadow` and is unpublishable even when its other fields are structurally complete. It cannot update the standard canonical or enter generation, review, push, status completion, or visual planning.
-- Manual v5 is legacy maintenance only. Historical v5 records/specs remain readable under their original compatibility contracts, and blog generation may read them only through the explicit `--legacy-v5-maintenance` switch. A v5 maintenance publication never becomes a production-v6 generation and is ineligible for new post-publication visual planning.
-
-Each manual mode replaces one model responsibility only; source-health, content, publication, and visual gates remain mandatory.
+Both production routes share schema-v3 generation, exact page hashes, the deterministic Hugo gate, an exact Git delta, and remote-OID verification. Their content proofs remain distinct and cannot be mixed or silently downgraded.
 
 ### 3.1 Auto-Archive
 
@@ -109,7 +109,7 @@ HF-specific fields (7 total):
 
 ### 3.6 LLM Filtering
 
-Using the `PAPER_ANALYZER_*` configuration in `the `.env` file in the project root`, each paper is evaluated to determine whether it is speech / music / audio related.
+Using the `PAPER_ANALYZER_*` configuration in the project-root `.env`, each paper is evaluated to determine whether it is speech / music / audio related.
 
 **API Protocol Auto-Routing**: `detectApiType()` in `scripts/utils.js` automatically switches between OpenAI / Anthropic protocols based on the endpoint and model name
 
@@ -157,14 +157,14 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 
 **Automatic API canonical analysis content (generated by LLM, output in Chinese)**:
 
-> The fixed headings below are parser anchors and the fact/scoring/image audit contract for the automatic API route. They are not the reader-facing production Manual v6 layout. Production v6 deterministically replays `reader-longform-v2` blocks and their ArtifactIndex bindings; historical v5 maintenance pages retain their original reader-article compatibility behavior.
+> The fixed headings below are parser anchors for the automatic API route. Explicit Manual uses a separate `reader-longform-v2` contract; see the [Manual documentation](../../manual/README.md).
 
 | Section | Requirements |
 |------|------|
 | Score (`## 评分`) | `type-aware-v1`: first output `document_type` (方法研究 / 系统技术报告 / 模型报告 / 数据集与基准 / 综述 / 理论研究 / 应用研究), then use the matching evidence standard. Dimensions sum to 11 and the total is capped at 10; code recomputes it only when all eight dimensions are complete, unique, and valid. Invalid scoring fails the contract. Type grants no fixed bonus and one defect may reduce only one primary dimension |
 | Tags | 3-5, must include at least 1 [Task] and 1 [Method/Model] tag; in addition to the final tag string, also output "main task tag", "main method tag", and "supplementary tags" |
 | Authors and Affiliations | First author, corresponding author, author list and affiliations; missing information must be written as "not specified", no guessing allowed |
-| Snarky Review | An evidence-bound two-sided review: state the strongest merit first, then the most consequential limitation. Manual pages use two roughly 180–700-character paragraphs grounded in mechanisms, experiments, and boundaries; sharp but not performative |
+| Snarky Review | An evidence-bound two-sided review: state the strongest merit first, then the most consequential limitation; sharp but not performative |
 | Core Summary | 5-8 sentences, covering problem, method, results, limitations |
 | Method Overview and Architecture | Input/output flow, component structure, connection methods, design rationale; no fewer than 600 Chinese characters |
 | Core Innovations | 3-5, each including definition, shortcomings of previous methods, solution mechanism, actual effect |
@@ -174,7 +174,7 @@ The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFull
 | Limitations and Issues | Two parts: limitations explicitly acknowledged by the paper + potential issues identified by the reviewer |
 | Open Source Details | Only allowed to summarize based on paper text or current input links; write "not mentioned" when missing, strictly forbidden to fabricate repository / popularity information |
 
-> **Image and Table Placement Rules**: Images and tables are embedded at the relevant argument node, not gathered in a separate section. In the automatic API canonical body, architecture diagrams normally go in **方法概述和架构** and result figures/tables in **实验结果**. In production Manual v6, each selected figure and complete result-table replay must appear in its bound `reader-longform-v2` block and match the ArtifactIndex identity. Fabricating image URLs is strictly forbidden; only controlled paper-local artifacts may be selected.
+> **Image and Table Placement Rules**: Images and tables belong at the relevant API argument node, not in a detached gallery, and fabricated URLs are forbidden. Manual per-artifact disposition and numeric-cell closure are documented in the [Manual editorial contract](../../manual/docs/editorial-reference-contract.md).
 
 **Technical Features**:
 - **API Protocol Auto-Routing**: shares the same `detectApiType()` logic as the filtering stage, automatically switching between OpenAI / Anthropic protocols based on `PAPER_ANALYZER_ENDPOINT` and `PAPER_ANALYZER_MODEL`

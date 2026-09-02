@@ -19,6 +19,7 @@ from unittest import mock
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 MODULE_PATH = os.path.join(ROOT, 'scripts', 'publish-to-blog.py')
 sys.path.insert(0, os.path.join(ROOT, 'scripts'))
+sys.path.insert(0, os.path.join(ROOT, 'manual', 'scripts'))
 from publish_common import (  # noqa: E402
     PublishDataValidationError,
     _manual_v6_hash,
@@ -71,9 +72,9 @@ def manual_v5_fresh_files(paper, date_str, *, official_project_evidence=False):
             'paper_metadata': filtered_path,
             'source_snapshot': source_path,
             'artifact_index': artifact_path,
-            'authoring_prompt': Path(ROOT) / 'prompts' / 'manual-tutorial-article.md',
-            'editorial_contract': Path(ROOT) / 'docs' / 'manual-editorial-reference-contract.md',
-            'blank_schema': Path(ROOT) / 'scripts' / 'manual-tutorial-quality-contract.js',
+            'authoring_prompt': Path(ROOT) / 'manual' / 'prompts' / 'manual-tutorial-article.md',
+            'editorial_contract': Path(ROOT) / 'manual' / 'docs' / 'editorial-reference-contract.md',
+            'blank_schema': Path(ROOT) / 'manual' / 'scripts' / 'manual-tutorial-quality-contract.js',
         }
         if official_project_evidence:
             evidence_path = evidence_root / 'external-evidence' / f'{paper_id}-official-project.json'
@@ -3991,9 +3992,15 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         with mock.patch.object(publish_to_blog, 'BASE_PATH', '/two'):
             second = publish_to_blog.generation_template_fingerprint()
         self.assertNotEqual(first, second)
-        with mock.patch.object(publish_to_blog, '_sha256_file', return_value='f' * 64):
+        with mock.patch.object(
+                publish_to_blog, '_sha256_file', return_value='f' * 64,
+        ) as digest:
             dependency_changed = publish_to_blog.generation_template_fingerprint()
         self.assertNotEqual(first, dependency_changed)
+        dependency_names = {Path(call.args[0]).name for call in digest.call_args_list}
+        self.assertIn('sealed_tutorial_preview.py', dependency_names)
+        self.assertIn('tutorial_payload_verifier.py', dependency_names)
+        self.assertIn('markdown_hugo_gate.py', dependency_names)
 
     def test_review_protocol_fingerprint_binds_model_code_hugo_and_is_cached(self):
         completed = SimpleNamespace(stdout='hugo v0.test', stderr='', returncode=0)
@@ -4032,6 +4039,8 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             publish_to_blog.review_protocol_fingerprint()
         dependency_names = {Path(call.args[0]).name for call in digest.call_args_list}
         self.assertIn('manual-review-blog.py', dependency_names)
+        self.assertIn('markdown_hugo_gate.py', dependency_names)
+        self.assertIn('tutorial_payload_verifier.py', dependency_names)
 
         current = publish_to_blog.generation_template_fingerprint()
         publish_to_blog.validate_current_generation_template({

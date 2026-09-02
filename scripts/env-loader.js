@@ -35,8 +35,12 @@ const TRANSPORT_ENV_KEYS = Object.freeze([
 function isScriptsEntrypoint(scriptPath = process.argv[1]) {
     if (!scriptPath) return false;
     const resolved = path.resolve(scriptPath);
-    const scriptsDir = path.resolve(__dirname);
-    return resolved.startsWith(`${scriptsDir}${path.sep}`) && path.extname(resolved) === '.js';
+    const entryRoots = [
+        path.resolve(__dirname),
+        path.join(PROJECT_ROOT, 'manual', 'scripts')
+    ];
+    return entryRoots.some(root => resolved.startsWith(`${root}${path.sep}`))
+        && path.extname(resolved) === '.js';
 }
 
 function requireExternalRuntime(commandName = path.basename(process.argv[1] || 'script')) {
@@ -113,7 +117,7 @@ function loadProjectEnv(envFile) {
     return parsed;
 }
 
-// Run only for a direct scripts/*.js entrypoint, never when tests import modules.
+// Run only for a direct shared or Manual command entrypoint, never for imports.
 if (isScriptsEntrypoint()) {
     requireExternalRuntime();
 }

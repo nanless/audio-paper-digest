@@ -13,17 +13,17 @@ const {
     validateExactFactCoverage,
     validateResultClaimCoverageV5,
     validateEditorialReview
-} = require('./manual-research-contract.js');
+} = require('../manual/scripts/manual-research-contract.js');
 const {
     validateManualTutorialReaderBundle
-} = require('./manual-tutorial-contract-orchestrator.js');
+} = require('../manual/scripts/manual-tutorial-contract-orchestrator.js');
 const {
     FRESH_AUTHORING_CONTRACT,
     FRESH_AUTHORING_MODE
-} = require('./manual-fresh-authoring-contract.js');
+} = require('../manual/scripts/manual-fresh-authoring-contract.js');
 const {
     MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT
-} = require('./manual-v5-tutorial-payload.js');
+} = require('../manual/scripts/manual-v5-tutorial-payload.js');
 
 const REQUIRED_ANALYSIS_SECTIONS = Object.freeze([
     '评分',

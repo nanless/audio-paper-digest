@@ -1,5 +1,9 @@
 # Maintenance Conventions
 
+This page is for changes to code, prompts, contracts, and persisted formats. See
+[Script responsibilities](scripts.md), [Data formats](data-format.md), and the separate
+[`manual/`](../../manual/README.md) maintenance boundary.
+
 - After any change to workflows, paths, or critical parameters, **you must update** `README.md` and `SKILL.md` accordingly
 - When documentation conflicts with code, treat the current script behavior as the source of truth and fix the docs immediately
 - **Hard-coding real API keys, WeChat credentials, or Feishu credentials in scripts is prohibited**; all credentials must be written to the current project-root `.env` and loaded through the project env loader
@@ -13,17 +17,9 @@
 - **Security audit**: Periodically check the codebase for accidental leaks of API keys, tokens, credential backup files, or environment variable snapshots; temporary/backup files under `data/` and `logs/` must never be committed to version control
 - **`.gitignore` requirements**: Ensure `data/`, `logs/`, `*.env`, `*.backup*`, `.DS_Store`, `*-cache.json`, sensitive logs, and similar items are properly ignored
 
-### Production Manual v6 maintenance boundary
+### Explicit Manual maintenance
 
-- Production workflow state belongs under `data/current/manual-v6/<date>/`; the promoted publication canonical remains `data/current/deep-analysis-result.json`. Do not restore an archived or v5 file into that canonical merely because its paper IDs match.
-- A production spec must be spec v6 over records v4 with a complete paper set and Merkle root. Every promoted canonical paper and its takeover provenance copy must declare `runtimeMode=production`. Treat a missing runtime marker as invalid, not as an invitation to infer the mode from a directory name.
-- `data/current/manual-v6-shadow/<date>/` is an explicit audit/compatibility root. Shadow outputs declare `runtimeMode=shadow`, cannot update the standard canonical, and are rejected by blog generation, digest completion, and visual planning. Never copy or rename a shadow canonical to bypass this boundary.
-- Manual v5 is legacy maintenance only. Use the explicit v5 commands or blog `--legacy-v5-maintenance` input switch, keep its evidence read-only, and do not mix v5 papers into a production-v6 generation. A legacy maintenance receipt is not eligible for new visual tasks.
-- Resolve production `awaiting_packet` by invoking `manual:packet` for the exact paper/role and registering its returned file. Run `manual:records` only after author, both independent reviews, and author revision all validate; the sealer rejects any packet/output/receipt drift instead of trusting stale runner labels.
-- The persistent task runner is not an agent runtime. It may register, claim, start, submit, fail, retry, abandon, and validate controlled task evidence, but it never creates subagents, writes author/reviewer content, or assembles the final records envelope. Operational documentation must not describe it as automatic paper completion.
-- Generation schema v3, the review receipt, Git commit, remote OID, and post-publication visual manifests form one proof chain. Repair by rerunning the earliest stale stage; never edit fingerprints, attestations, `publicationCommit`, or `remoteVerifiedOid` by hand.
-
----
+Runner, records/spec, shadow, legacy, and provenance rules are centralized under [`manual/`](../../manual/README.md). Any Manual prompt, editorial-contract, or validator change must run the Manual-specific tests; default API maintenance must not duplicate or silently rewrite Manual contracts.
 
 ---
 
@@ -113,9 +109,7 @@ When `prompts/deep-analysis.md` or scoring/tag specifications change, at minimum
 4. **Verify that `score` is correctly computed from the eight sub-scores in `## 评分理由`**: sample-compare `parsed.score` against the sum of sub-scores in `## 评分理由`, confirming cap of 10 and rounding to 0.1
 5. Verify blog publishing script artifacts, confirming that leaderboards, single-post pages, and trending directions correctly display new fields
 6. Verify WeChat/Xiaohongshu/Feishu script artifacts, confirming that copy does not contain null values or formatting misalignment caused by missing fields
-7. Confirm the correct publication boundary: production Manual v6 presents limitations/counterevidence in the relevant `reader-longform-v2` blocks and retains final score evidence. Explicit v5 maintenance presents them in its paper-specific `readerArticle`; only legacy-compatible pages or the automatic API canonical layout display `## 局限与问题` directly
-
----
+7. Confirm that the default API publication view presents limitations, counterevidence, and score evidence correctly; validate Manual output separately against the [Manual editorial contract](../../manual/docs/editorial-reference-contract.md)
 
 ---
 

@@ -151,10 +151,10 @@ run_stage() {
 
 if [ "$start_index" -eq 1 ] && [ "$api_mode" -ne 1 ]; then
   run_stage 1 "Manual 联网抓取候选（不调用筛选模型）" \
-    node scripts/manual-fetch.js --date "$target_date" --raw
+    npm run manual:fetch -- --date "$target_date" --raw
   echo "==> 生产 Manual v6 默认链路已到人工筛选边界。"
   echo "==> 下一步：每篇候选由独立 subagent 审核，生成 manual_offline spec 后运行："
-  echo "    node scripts/manual-fetch.js --date ${target_date} --select FILTER_SPEC.json"
+  echo "    npm run manual:fetch -- --date ${target_date} --select FILTER_SPEC.json"
   echo "    npm run manual:fulltext -- ${target_date}"
   echo "    npm run manual:tasks -- init --date ${target_date}"
   echo "    npm run manual:packet -- --date ${target_date} --paper ARXIV_ID --role author"

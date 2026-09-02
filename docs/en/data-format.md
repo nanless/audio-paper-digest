@@ -1,5 +1,16 @@
 # Data File Formats
 
+This is a persistence-contract reference, not a first-run tutorial. Start with [Setup](setup.md)
+and [Workflow](workflow.md). During recovery, validate companion artifacts in this order:
+
+| Layer | Authoritative files | Required relationship |
+|---|---|---|
+| Fetch | `fetch-checkpoint.json`, `raw-candidates.json` | source coverage, counts, hashes, and batch agree |
+| Filter | `filter-decisions.json`, `filtered-papers.json` | decisions exactly cover candidates; selected set is replayable |
+| Analysis | `deep-analysis-result.json`, `papers.json` | canonical terminal state and paper database agree |
+| Publish | generation manifest, review receipt | page hashes, Git baseline, and remote OID close the transaction |
+| Visual | visual/cover manifests | bind the published snapshot without mutating blog pages |
+
 ### 5.1 `data/current/papers.json`
 
 Paper deduplication database. **This file is not archived; it accumulates continuously.** Structure:
@@ -321,7 +332,7 @@ Core analysis results. Structure:
 - `scoringRubricVersion: type-aware-v1` is written only for new analyses containing a valid `document_type`; historical results are not mislabeled
 - `analysisSource`, source lengths, truncation, SHA-256, confidence, and warnings distinguish HTML/PDF/full-text input from abstract fallback. `sourceTextChars` is the acquired source length and `usedTextChars` is the actual primary-analysis input; very long sources use deterministic cross-document, task-aware sampling rather than prefix-only truncation. Abstract-only results require explicit `allowAbstractAnalysisPublish: true` approval before publishing
 - `analysisManifest.stages.scoringAudit` retains model/options, prompt/evidence hashes, attempts, previous/final score and delta, the final audit JSON, and `stabilityWarning` when absolute drift exceeds 0.5
-- Automatic API analyses and reanalyses write `analysisManifest.contracts.experimentTables=evidence-rich-v2` after structure repair. Production Manual v6 instead requires `manualDepth=full-text-evidence-v6`, `readerLongform=reader-longform-v2`, a complete structured ArtifactIndex, and `manualV6Provenance.runtimeMode=production`. Its reader body is deterministically rebuilt from `manualReaderLongform.blocks`, not from a legacy fixed-section or v5 prose fallback. `manualV6Provenance` and the matching `analysisManifest.manualTakeover.v6Provenance` copy bind the spec-v6 Merkle root, paper-shard SHA, sealed records-v4 record, record/envelope files, ArtifactIndex semantic/file SHA, task evidence, longform semantic SHA, and final article SHA. Missing or shadow provenance is a publication error. Historical v5 contracts retain their original compatibility behavior only through explicit maintenance paths
+- Automatic API analyses and reanalyses write `analysisManifest.contracts.experimentTables=evidence-rich-v2` after structure repair. Explicit Manual uses a separate ArtifactIndex, records-v4/spec-v6, task-provenance, and `reader-longform-v2` contract; see the [Manual architecture](../../manual/docs/architecture.md). Default API canonical records do not need Manual fields, and the two provenance modes cannot be mixed.
 - `selectedImageUrls` / `imageUrls` contain only high-value figures inserted through a stable `paragraph_id`, target-section, and four-image-limit gate, stored in final body order. Legacy exact anchors remain compatible. `imageManifest` also preserves per-URL outcomes, cache hits, model/options, hashes, and insertion diagnostics
 - Root `generation` increments after a writer acquires the cross-process lock, re-reads canonical state, and merges its update. It is a committed-version record, not caller-supplied expected-generation optimistic CAS. Every mandatory version-1 `analysisManifest` stage must be terminal (`complete`, `not_needed`, `skipped`, `no_candidates`, or `no_high_value_images`) before the paper is successful; only a strict empty insertion plan produces `no_high_value_images`
 - `analysisStageCheckpoints` persists stage snapshots. Fingerprints cover the actual sampled primary input, the `task-focused-v1` evidence-selector version, per-stage character budgets, model/protocol/endpoint, temperatures, extracted prompts, image candidates, and downloaded hashes; a budget or input change invalidates only the affected stage and downstream work
@@ -330,16 +341,6 @@ Core analysis results. Structure:
 - `machineSummary` inside `parsed` is the parsed result of `## 机器摘要`; fields such as `rankBucket`, `innovationScore`, `technicalRigorScore`, etc. are also flattened to the top level of `parsed` for easier access
 - `npm run validate:data` reparses the complete `analysis` body, requires all mandatory recovery stages to be terminal, and compares the derived fields with cached `parsed` values before checking document type, rubric version, dimension ranges, and `parsed.score == min(sum of eight dimensions, 10)`. Only a `parsedOverride.type=manual` with complete provenance and an exact field-set match may explain cache differences. A remaining latest-attempt failure marker is an error
 - Before publishing, `analysis` is reparsed and compared with cached `parsed` data and the top-level rubric version. Mismatches block publishing; manual overrides require explicit type, source, reason, and allowed fields in `parsedOverride` and still must satisfy one-decimal values and fixed Open Source anchors
-
-#### Production Manual v6 evidence under `data/current/manual-v6/<date>/`
-
-- `records-v4.json` is the main-Agent-assembled batch envelope. Each paper seals its isolated author packet/receipt/output, independent technical and pedagogy review evidence, fresh replacement revision, finding resolutions, complete ArtifactIndex, and `reader-longform-v2` result. A self-reported task name or model is insufficient: validators reopen the controlled files, verify SHA/realpath/single-paper identity, require Terra-high receipts, and reject cross-paper path or task reuse.
-- `manual:packet` materializes the paper-local exact allowlist for each role; `manual:records` performs deterministic sealing after all four runner tasks validate. `authorReceipt` is draft provenance, while `finalRevisionAuthorReceipt` must be the same semantic receipt as `reviewReceipts.authorRevision` and bind the final article. Revision output v2 contains only the final article reference and an unsealed record payload; the sealer injects receipts and resolution before hashing the record with `sealedRecordSha256` omitted.
-- The persistent task-runner state records registered packets, direct dependency output identities, claim/start/submit/fail/retry/abandon transitions, and at most three active tasks. It is orchestration state, not authored content. The runner never launches a subagent, writes a review, constructs a role packet on behalf of the Agent, or emits the final records-v4 envelope.
-- `spec.json` is spec v6 with `recordsVersion: 4`, `runtimeMode: "production"`, exact filtered/full-text/ArtifactIndex/records inputs, per-paper shards, sorted paper index, and a paired-hash Merkle `rootSha256`. A complete spec covers the exact filtered set; duplicate, missing, or extra papers are rejected.
-- Production ingestion verifies the official assembler replay and writes the standard canonical `data/current/deep-analysis-result.json`. Each paper copies `runtimeMode: "production"` into signed v6 provenance. The formal workflow root remains date-isolated, but the standard canonical is the only default blog input.
-- Explicit shadow files stay under `data/current/manual-v6-shadow/<date>/`, use `runtimeMode: "shadow"`, and never update the standard canonical. Publisher, digest status, and visual planning reject shadow state even if its spec, records, or longform structure is otherwise complete.
-- Manual v5 files are historical maintenance inputs. They may be read with the explicit blog maintenance switch, but cannot be mixed with v6, promoted by filename convention, or used to satisfy production status.
 
 ### 5.7 `data/current/visual-summary-manifests/YYYY-MM-DD.json`
 

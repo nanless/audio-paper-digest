@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -73,6 +74,23 @@ def cover_spec():
 
 
 class RenderVisualSummaryTests(unittest.TestCase):
+    def test_import_is_environment_side_effect_free(self):
+        module_path = str(SCRIPTS / 'render-visual-summary.py')
+        code = (
+            "import importlib.util, os, sys; "
+            f"sys.path.insert(0, {str(SCRIPTS)!r}); "
+            "os.environ['PAPER_ANALYZER_API_KEY']='outer-test-key'; "
+            f"spec=importlib.util.spec_from_file_location('visual_import_probe', {module_path!r}); "
+            "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "print(os.environ.get('PAPER_ANALYZER_API_KEY',''))"
+        )
+        completed = subprocess.run(
+            [sys.executable, '-c', code], cwd=ROOT,
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.strip(), 'outer-test-key')
+
     @classmethod
     def setUpClass(cls):
         cls.font_path = renderer.resolve_cjk_font()

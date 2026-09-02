@@ -79,8 +79,9 @@ describe('env-loader', () => {
         }
     });
 
-    it('仅将 scripts 目录下的 JS 主入口识别为受守卫脚本', () => {
+    it('将共享 scripts 与 Manual scripts 的 JS 主入口识别为受守卫脚本', () => {
         assert.strictEqual(isScriptsEntrypoint(path.join(__dirname, '../scripts/full-fetch.js')), true);
+        assert.strictEqual(isScriptsEntrypoint(path.join(__dirname, '../manual/scripts/manual-fetch.js')), true);
         assert.strictEqual(isScriptsEntrypoint(path.join(__dirname, 'env-loader.test.js')), false);
     });
 

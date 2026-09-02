@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPTS = ROOT / "scripts"
@@ -11,6 +12,7 @@ sys.path.insert(0, str(SCRIPTS))
 from project_env import (  # noqa: E402
     DEFAULT_ENV_FILE, build_child_process_env, build_fetch_proxies,
     get_required_fetch_proxy, load_project_env, resolve_env_file,
+    _is_scripts_entrypoint,
 )
 
 
@@ -42,6 +44,17 @@ class SavedEnvironment:
 
 
 class ProjectEnvTest(unittest.TestCase):
+    def test_direct_entrypoint_detection_includes_shared_and_manual_commands(self):
+        shared = ROOT / 'scripts' / 'review-blog.py'
+        manual = ROOT / 'manual' / 'scripts' / 'manual-review-blog.py'
+        test_file = ROOT / 'manual' / 'tests' / 'python' / 'test_manual_review_blog.py'
+        with mock.patch.object(sys, 'argv', [str(shared)]):
+            self.assertTrue(_is_scripts_entrypoint())
+        with mock.patch.object(sys, 'argv', [str(manual)]):
+            self.assertTrue(_is_scripts_entrypoint())
+        with mock.patch.object(sys, 'argv', [str(test_file)]):
+            self.assertFalse(_is_scripts_entrypoint())
+
     def test_default_path_ignores_inherited_test_env_file(self):
         with SavedEnvironment(), tempfile.TemporaryDirectory() as tmp:
             untrusted = Path(tmp) / ".env"

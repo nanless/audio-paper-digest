@@ -36,8 +36,8 @@ const { getCanonicalAnalysisRunSummary } = require('./analysis-engine.js');
 const {
     MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT,
     validateManualPaperSourceIdentity
-} = require('./manual-paper-source-identity.js');
-const { resolveArtifactAuthority } = require('./manual-fresh-authoring-contract.js');
+} = require('../manual/scripts/manual-paper-source-identity.js');
+const { resolveArtifactAuthority } = require('../manual/scripts/manual-fresh-authoring-contract.js');
 
 const ALLOWED_DIGEST_STATUSES = new Set(['seen', 'pending_analysis', 'analyzed', 'analysis_failed']);
 const ALLOWED_ANALYSIS_ATTEMPT_STATUSES = new Set(['analyzed', 'analysis_failed']);
@@ -534,7 +534,7 @@ function loadBoundManualV4SourceText(filePath, batchDate, paper, paperIndex) {
             buildManifestContext,
             isReusableFullTextCheckpoint,
             stableSha256
-        } = require('./manual-fetch-fulltext.js');
+        } = require('../manual/scripts/manual-fetch-fulltext.js');
         let context;
         try {
             context = buildManifestContext(filtered, batchDate, realRoot);

@@ -26,6 +26,20 @@ class ExternalRuntimeGuardTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, script.name)
             self.assertIn('必须在沙箱外运行', output, script.name)
 
+    def test_direct_manual_python_commands_reject_sandbox_before_business_logic(self):
+        env = os.environ.copy()
+        env['CODEX_SANDBOX'] = 'test-seatbelt'
+        manual_scripts = ROOT / 'manual' / 'scripts'
+        for name in ('manual-review-blog.py', 'assemble-manual-review-attestation.py'):
+            script = manual_scripts / name
+            result = subprocess.run(
+                [sys.executable, str(script)], cwd=ROOT, env=env,
+                capture_output=True, text=True, timeout=5,
+            )
+            output = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0, name)
+            self.assertIn('必须在沙箱外运行', output, name)
+
     def test_rejects_codex_sandbox(self):
         with mock.patch.dict(os.environ, {'CODEX_SANDBOX': 'seatbelt'}, clear=True):
             with self.assertRaisesRegex(ExternalRuntimeRequired, '必须在沙箱外运行'):

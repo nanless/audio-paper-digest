@@ -1,23 +1,18 @@
 # Script Responsibilities
 
+This page explains behavior and recovery semantics. For a compact file-to-responsibility map,
+use [`scripts/README.md`](../../scripts/README.md). The default route starts at
+`run-daily-digest.sh`; Manual-only entries are indexed under [`manual/`](../../manual/README.md).
+
 > **Runtime precondition**: every project script must run outside the sandbox. Direct Node/Python scripts use their shared environment loaders to reject `CODEX_SANDBOX` before business operations; `run-daily-digest.sh` and `run-full-fetch.sh` have the same entry check. Unit-test module imports do not trigger it.
 
 ### 4.1 Main Pipeline Scripts
 
 #### `run-daily-digest.sh`
 
-Default Codex orchestrator for a dated paper digest. Starting from `fetch` requires Beijing today. The default route performs automatic LLM/API fetching, filtering, staged analysis, ordinary blog review, push, and visual preparation; `--api` is an explicit alias. Production Manual v6 is available only with `--manual`, where the entrypoint stops at candidate-decision, per-paper task, and per-page review boundaries for real isolated subagents.
+Default Codex orchestrator for a dated paper digest. Starting from `fetch` requires Beijing today. The default route performs automatic LLM/API fetching, filtering, staged analysis, ordinary blog review, push, and visual preparation; `--api` is an explicit alias. The explicit `--manual` route is documented under [`manual/`](../../manual/README.md).
 
 The three blog stages remain separate processes, and any nonzero stage stops the script. The script never calls an image API. After it succeeds, Codex must still generate, inspect, and record every TOP 10 paper infographic and the digest cover with built-in `image_gen`, then require both `visual:status` and `cover:status` to be complete. npm entry: `npm run digest:prepare -- YYYY-MM-DD`.
-
-#### Production Manual v6 commands
-
-- `npm run manual:tasks -- <action> --date YYYY-MM-DD` manages the production task state under `data/current/manual-v6/<date>/`. It registers and validates paper-local packets, enforces at most three active claims, checks Terra-high receipts and dependency invalidation, and persists recovery state. It never creates a subagent, authors/reviews a paper, materializes role content, or assembles `records-v4.json`; those remain main-Agent responsibilities.
-- `npm run manual:packet -- --date YYYY-MM-DD --paper <ID> --role <ROLE>` materializes the exact allowlist plus a signed role-specific output contract for one production role and returns the precise runner-register arguments. The contract fixes paths, required fields, the applicable rubric, and the cross-runtime semantic-hash algorithm. `npm run manual:records -- --date YYYY-MM-DD` reopens all four validated roles and deterministically seals the unique production records-v4 envelope. Neither command calls an LLM or creates a subagent.
-- `npm run manual:spec -- --date YYYY-MM-DD --records data/current/manual-v6/YYYY-MM-DD/records-v4.json` builds the production records-v4/spec-v6 batch, exact paper shards, and Merkle root.
-- `npm run manual:analyze -- --date YYYY-MM-DD --spec data/current/manual-v6/YYYY-MM-DD/spec.json` ingests production spec v6 and promotes the verified result to `data/current/deep-analysis-result.json`. Production canonical provenance declares `runtimeMode=production`.
-- `npm run manual:v6:shadow:spec` and `npm run manual:v6:shadow:analyze` are explicit shadow commands. They remain under `data/current/manual-v6-shadow/<date>/`, declare `runtimeMode=shadow`, and are never valid publication inputs. `manual:shadow` audits existing inputs and does not fetch, publish, or promote canonical state.
-- Manual v5 is retained only as an explicitly selected legacy-maintenance input. The production task/spec/analyze commands do not silently fall back to v5, and the runner never upgrades or relabels old records.
 
 #### `scripts/full-fetch.js`
 
@@ -215,7 +210,7 @@ Multimodal deep analyzer. The analysis flow is an **up-to-8-round progressive pr
 - `analyzePaperDeep(paper)`: fetches arXiv HTML/PDF full text. Primary analysis uses at most 200K characters by default; very long sources are sampled across the head, quartiles, middle, tail, and task-relevant chunks instead of keeping only a prefix. It then preselects candidate images. Dual-model mode downloads candidate images serially and lets the secondary model output a JSON insertion plan for high-value figures; single-model mode only stores candidate image metadata. `allImageUrls` stores candidates, while `selectedImageUrls` / `imageUrls` store selected figures
 - New analyses and reanalyses write `analysisManifest.contracts.experimentTables=evidence-rich-v2`. It preserves the maximum of two tables, 12 data rows, and eight metric columns, while requiring an identifier field, at least three evidence rows and two numeric cells, metric directions, a concrete pre-table comparison question, and a post-table synthesis plus evidence boundary. Source-provided ablations or negative results must be represented. Missing, shallow, narrative-card, or illegally omitted tables enter local repair. Node validation and Python publication preflight are kept in parity; historical `bounded-v1` retains upper-bound-only semantics.
 - Loads `prompts/deep-analysis.md`, replaces placeholders, and calls the LLM
-- The automatic API route's canonical output includes document type, score, machine summary, tags, authors and affiliations, snarky review, core summary, method overview and architecture, core innovations, experimental results, detailed description, score rationale, limitations and issues, and open source details. Those fixed sections are the parsing and audit contract. Production Manual v6 instead publishes the deterministic `reader-longform-v2` block replay; v5 `editorial.readerArticle` behavior is historical maintenance compatibility.
+- The automatic API route's fixed sections remain its parsing and audit contract. Explicit Manual uses a separate contract maintained under [`manual/`](../../manual/README.md).
 - `parseAnalysis(analysis)`: parses the analysis, normalizes `document_type`, and marks new results with `type-aware-v1`. `score` is recalculated only when all eight dimensions are complete, unique, include a concrete per-dimension reason, use the correct denominators, and contain finite in-range values; otherwise a contract error blocks saving and publishing
 
 **Round 2 -- Open Source Scan (`scanOpensource`)**
@@ -391,11 +386,11 @@ Publish to Hugo blog (GitHub Pages).
   - `description`: `main task tag | score/10`, falls back to title if absent
   - `hiddenInHomeList: true`
 - Default API body: Reader v3 title and metadata -> score/roast/summary/resources -> the 12–18-section beginner-researcher article with deterministic figure adjacency -> final per-dimension evidence. It binds the reader article/plan/figures/authors, scoring audit/evidence, analysis/source SHA, model, and protocol.
-- Explicit Manual v6 body: Chinese reader title -> English original title/arXiv link -> tags/score -> snarky review -> core summary -> deterministic `reader-longform-v2` blocks -> open resources -> metadata and final per-dimension score evidence -> link back to the summary page. Frontmatter binds `runtimeMode=production`, spec-v6 Merkle root, paper-shard, sealed record, records-v4 envelope, task evidence, ArtifactIndex, longform, and article SHA values. A declared v6 page never falls back to v5 or API fixed sections. Explicit v5 maintenance retains its historical reader-article layout.
+- Explicit Manual uses a separate `reader-longform-v2` page and provenance contract; see the [Manual workflow](../../manual/docs/workflow.md).
 
 **Publish Flow**:
 1. `generate-blog.py` only generates and installs Markdown, then writes a generation manifest. A schema-v3 production manifest declares either `publicationMode=llm_api_production` with `llmApiBindings` / `llmApiProduction`, or `publicationMode=manual_v6_production` with per-paper v6 provenance, a common spec-v6 Merkle root, records-v4 mapping, and `manualV6Production`. It never calls an LLM, commits, or pushes.
-2. The normal Manual review path creates one independent Terra-high page-review shard per generated page, assembles an exact v3 attestation, and runs `manual-review-blog.py`. It does not modify reviewed bytes. The explicit API route uses `review-blog.py` for code, strict LLM, and multimodal review. Both paths retain exact per-page SHA passes and issue a batch receipt only after deterministic and Hugo gates succeed. The receipt binds the current generation SHA, production mode/proof fingerprint, base, protocol, scope, and page hashes; only new, byte-changed, transient-failure, or repaired pages re-enter review.
+2. The default API route uses `review-blog.py` for deterministic, strict LLM, and multimodal review. Explicit Manual page-review shards and attestation are documented separately in the [Manual workflow](../../manual/docs/workflow.md). Both routes retain exact per-page SHA passes and issue a batch receipt only after deterministic and Hugo gates succeed.
 3. `push-blog.py` only verifies that receipt against the current files, then stages the exact manifest, commits with a detailed Chinese message, pushes `origin HEAD:main`, and verifies the remote OID. It never regenerates or re-reviews.
 
 **Runtime requirement**: the three entry points and compatibility `publish-to-blog.py` require an external runtime. They reject the reliable `CODEX_SANDBOX` marker; the elevation wrapper preserves the network-disabled marker, so it cannot independently identify a sandbox. Re-run the same stage outside the sandbox; never skip review or fabricate a receipt.
@@ -438,7 +433,7 @@ LLM-level fix: Issues where LLM review returns `auto_fixable: true` require `fix
 
 #### `scripts/digest-run-report.js`
 
-`npm run digest:status -- --date YYYY-MM-DD` writes an atomic machine-readable final report covering fetch, filter, production-v6 analysis, strict review, remote publication, TOP 10 infographics, and the digest cover. Analysis is complete only when the standard canonical exactly covers the filtered set and every paper carries complete production v6 provenance with `runtimeMode=production`; v5 or shadow state remains incomplete. Terminal output is a compact stage/count/error summary; full `sourceHealth` remains in the report JSON. It exits zero only when every required stage is complete and never mutates business-stage state.
+`npm run digest:status -- --date YYYY-MM-DD` writes an atomic machine-readable final report covering fetch, filter, analysis, strict review, remote publication, TOP 10 infographics, and the digest cover. Analysis is complete only when the standard canonical exactly covers the filtered set and carries a complete proof for the selected homogeneous route: `llm_api_production` by default or records-v4/spec-v6 with `runtimeMode=production` for explicit Manual. Legacy and shadow state remain incomplete. Terminal output is a compact stage/count/error summary; full `sourceHealth` remains in the report JSON. It exits zero only when every required stage is complete and never mutates business-stage state.
 
 **Important Limitation**: `fetchedAt` is the fetch time, not the paper's `published` date on arXiv. Please explicitly specify `--date` when running across midnight.
 
@@ -514,7 +509,7 @@ Xiaohongshu auto-publish script (calls Xiaohongshu Web API, unofficial interface
 Generate Feishu (Lark) documents.
 
 **Credential Reading**:
-- `FEISHU_APP_ID` / `FEISHU_APP_SECRET` are read from the project `.env` (consistent with other publish channels, all unified in `the `.env` file in the project root`)
+- `FEISHU_APP_ID` / `FEISHU_APP_SECRET` are read from the project-root `.env`, consistent with other publish channels
 
 **Data Input**:
 - Uniformly reads `data/current/deep-analysis-result.json` (consistent with other publish channels)

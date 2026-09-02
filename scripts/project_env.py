@@ -137,9 +137,14 @@ def _is_scripts_entrypoint():
         entry = Path(sys.argv[0]).resolve()
     except OSError:
         return False
-    return entry.parent == Path(__file__).resolve().parent and entry.suffix == '.py'
+    project_root = Path(__file__).resolve().parent.parent
+    entry_roots = {
+        Path(__file__).resolve().parent,
+        project_root / 'manual' / 'scripts',
+    }
+    return entry.parent in entry_roots and entry.suffix == '.py'
 
 
-# Run only for a direct scripts/*.py entrypoint, never when tests import modules.
+# Run only for a direct shared or Manual command entrypoint, never for imports.
 if _is_scripts_entrypoint():
     require_external_runtime(Path(sys.argv[0]).name)

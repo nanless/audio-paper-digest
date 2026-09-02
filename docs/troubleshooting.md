@@ -1,5 +1,16 @@
 # 排错手册
 
+先定位失败阶段，再只重跑该阶段；不要因视觉失败重新生成已发布博客，也不要因 API 失败
+切换到 Manual。配置清单见[环境配置](setup.md)，阶段恢复入口见[主流程](workflow.md)。
+
+| 现象 | 首先检查 | 常用恢复入口 |
+|---|---|---|
+| 401/403、协议或代理错误 | `.env` 的 key/model/endpoint/代理 | `node scripts/test-api-key.js` |
+| 抓取或筛选中断 | source checkpoint 与 decisions 覆盖 | 重新运行 `digest:prepare` / `full-fetch.js` |
+| 部分论文分析失败 | `analysisManifest` 与 canonical 状态 | `npm run deep` 或指定重分析 |
+| 博客 review/push 失败 | generation、page SHA、receipt、Git 基线 | 从 `blog:review` 或 `blog:push` 续跑 |
+| 发布后视觉未完成 | publication OID、visual/cover manifest | `visual:post-publish` 与状态命令 |
+
 ### 12.1 模型调用失败 / API 返回 401 / 403
 
 **检查步骤**：
@@ -20,7 +31,8 @@
 
 4. **OpenAI 协议专项检查**（输出显示 `openai` 时）
    - 确认使用 `Authorization: Bearer {key}`
-   - 确认 URL 路径是 `/v1/chat/completions`
+   - 普通 OpenAI Chat Completions 路径是 `/v1/chat/completions`
+   - 精确模型 `muse-spark-1.2-contributor` 使用 OpenAI Responses，路径是 `/v1/responses`，并且必须使用项目 `.env` 的 HTTP CONNECT 代理
 
 5. **检查代理**
    - MiMo Token Plan 在有系统代理时可能被屏蔽，尝试关闭代理或设置 `agent: false`
@@ -39,7 +51,7 @@
 
 ### 12.3 重分析启动即报 key 未配置
 
-- 在 `项目根目录的 `.env` 文件` 中配置 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT`
+- 在项目根目录的 `.env` 文件中配置 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT`
 - 重新运行脚本即可；不要依赖 `.zshrc` / Trae / Codex 外层环境变量补齐项目配置
 
 ### 12.4 发布后提示"没有新内容需要推送"

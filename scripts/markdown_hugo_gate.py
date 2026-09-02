@@ -7,7 +7,12 @@ attestation step rather than another rewriting path.
 
 import html
 import re
+import sys
 from pathlib import Path
+
+MANUAL_SCRIPTS_DIR = Path(__file__).resolve().parent.parent / 'manual' / 'scripts'
+if str(MANUAL_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(MANUAL_SCRIPTS_DIR))
 
 from publish_common import (
     MANUAL_DEPTH_CONTRACT_VERSION_V5,

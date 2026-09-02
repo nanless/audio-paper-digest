@@ -1,5 +1,17 @@
 # Troubleshooting Guide
 
+Identify the failed stage and resume only that stage. Do not regenerate a published blog because a
+visual failed, and do not switch to Manual because an API call failed. See [Setup](setup.md) and
+[Workflow](workflow.md) for configuration and recovery commands.
+
+| Symptom | Check first | Typical recovery |
+|---|---|---|
+| 401/403, protocol, or proxy error | project `.env` key/model/endpoint/proxy | `node scripts/test-api-key.js` |
+| interrupted fetch/filter | source checkpoint and decision coverage | rerun `digest:prepare` / `full-fetch.js` |
+| some analyses failed | `analysisManifest` and canonical state | `npm run deep` or targeted reanalysis |
+| blog review/push failed | generation, page SHA, receipt, Git baseline | resume `blog:review` or `blog:push` |
+| visuals incomplete | publication OID and visual/cover manifests | `visual:post-publish` and status commands |
+
 ### 12.1 Model Call Failure / API Returns 401 / 403
 
 **Checklist**:
@@ -20,7 +32,8 @@
 
 4. **OpenAI protocol checks** (when output shows `openai`)
    - Confirm you are using `Authorization: Bearer {key}`
-   - Confirm the URL path is `/v1/chat/completions`
+   - Ordinary Chat Completions uses `/v1/chat/completions`
+   - Exact model `muse-spark-1.2-contributor` uses OpenAI Responses at `/v1/responses` and requires the project `.env` HTTP CONNECT proxy
 
 5. **Check proxy settings**
    - MiMo Token Plan may be blocked when a system proxy is active; try disabling the proxy or setting `agent: false`
@@ -39,7 +52,7 @@
 
 ### 12.3 Re-analysis Reports "Key Not Configured" on Startup
 
-- Configure `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, and `PAPER_ANALYZER_ENDPOINT` in `the `.env` file in the project root`
+- Configure `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, and `PAPER_ANALYZER_ENDPOINT` in the project-root `.env`
 - Re-run the script; do not rely on `.zshrc` / Trae / Codex outer environment variables to fill project configuration
 
 ### 12.4 "No New Content to Push" After Publishing

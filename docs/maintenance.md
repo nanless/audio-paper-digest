@@ -1,5 +1,8 @@
 # 维护约定
 
+本页面向修改代码、Prompt、契约与持久化格式的人。运行命令见[脚本说明](scripts.md)，字段
+语义见[数据格式](data-format.md)，Manual 专属维护见 [`manual/`](../manual/README.md)。
+
 - 流程、路径、关键参数变更后，**必须同步更新** `README.md` 与 `SKILL.md`
 - 文档冲突时，以当前脚本行为为准并立即修正文档
 - **禁止在脚本中硬编码真实 API key、微信凭证或飞书凭证**，所有凭证统一写入当前项目根 `.env` 并通过项目 env loader 读取
@@ -13,17 +16,9 @@
 - **安全审计**：定期检查代码中是否意外泄露 API key、token、凭证备份文件或环境变量快照；`data/` 和 `logs/` 目录下的临时/备份文件严禁提交到版本控制
 - **`.gitignore` 要求**：确保 `data/`、`logs/`、`*.env`、`*.backup*`、`.DS_Store`、`*-cache.json`、敏感日志等被正确忽略
 
-### Production Manual v6 维护边界
+### 显式 Manual 维护
 
-- 正式状态只位于 `data/current/manual-v6/<date>/`：`task-runner/`、`records-v4.json`、`spec.json` 和 `metrics/`；正式 canonical 仍是 `data/current/deep-analysis-result.json`，spec ingestion 必须声明 `runtimeMode=production`。
-- runner 只管理 author → technical_scoring / pedagogy_readability → author_revision 的 register/claim/start/submit/失败恢复和真实性校验，不创建 subagent、不物化 packet 或 records envelope。`awaiting_packet` 与 `awaiting_records_envelope` 必须按真实缺口处理。
-- `awaiting_packet` 由主 Agent调用 `manual:packet` 后 register；`awaiting_records_envelope` 只有在四角色均 validated 后才可调用 `manual:records` 收口。sealer 会重开所有 runner-bound 文件，任何字节漂移都必须先回到相应任务重新验证。
-- `manual:v6:shadow:*` 和 runner `--shadow` 只写 `manual-v6-shadow/<date>/`，不得发布；`manual:v5:*` 只用于 legacy v5 历史只读/维护，不得与 production v6 混批。
-- Publisher、digest status 与视觉规划必须重验 records v4、spec v6、Merkle root、`reader-longform-v2` 和 production generation；缺字段不得回退 legacy v5 页面。
-- 不得因为论文 ID 相同，就把 archive、legacy v5 或其他历史文件恢复为 production canonical；缺少 `runtimeMode` 必须判为非法，不能从目录名猜测模式。
-- 不得复制或改名 shadow canonical 绕过发布边界。修复时应从最早失效阶段重跑，禁止手改 fingerprint、attestation、`publicationCommit` 或 `remoteVerifiedOid`。
-
----
+Manual 的 runner、records/spec、shadow、legacy 与 provenance 维护规则集中在 [`manual/`](../manual/README.md)。修改 Manual Prompt、编辑契约或 validator 时必须同时运行该目录的专属测试；默认 API 维护不得复制或隐式改写 Manual 契约。
 
 ---
 
@@ -113,9 +108,7 @@
 4. **验证 `score` 是否从 `## 评分理由` 的八个分项正确计算**：抽样对比 `parsed.score` 与 `## 评分理由` 中各分项之和，确认上限为 10、四舍五入到 0.1
 5. 验证博客发布脚本产物，确认榜单、单篇页和热门方向正确显示新字段
 6. 验证微信/小红书/飞书脚本产物，确认文案中没有因字段缺失导致的空值或格式错位
-7. 确认发布视图正确呈现边界：production Manual v6 应在 `reader-longform-v2` 的论文特有小节中呈现局限/反证，并在文末保留评分证据；只有 legacy v5 兼容页或自动 API canonical 版式才直接显示 `## 局限与问题`
-
----
+7. 确认默认 API 发布视图正确呈现局限、反证与评分证据；Manual 发布边界按 [Manual 编辑契约](../manual/docs/editorial-reference-contract.md) 单独验收
 
 ---
 

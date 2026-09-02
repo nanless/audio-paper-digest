@@ -6,7 +6,7 @@
 require('./env-loader.js');
 
 /**
- * Reader-visible editorial quality gates for Manual analyses.
+ * Reader-visible editorial quality gates shared by API and Manual analyses.
  *
  * This module is deliberately pure: it does not read files, mutate analysis
  * text, or attempt to rewrite Chinese numerals.  Callers provide the six core

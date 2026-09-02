@@ -2,6 +2,7 @@ import contextlib
 import importlib.util
 import io
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -12,11 +13,13 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / 'scripts'
+MANUAL_SCRIPTS = ROOT / 'manual' / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(MANUAL_SCRIPTS))
 
 
-def load_script(name):
-    path = SCRIPTS / name
+def load_script(name, root=SCRIPTS):
+    path = root / name
     spec = importlib.util.spec_from_file_location(name.replace('-', '_'), path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -27,11 +30,62 @@ review_blog = load_script('review-blog.py')
 push_blog = load_script('push-blog.py')
 generate_blog = load_script('generate-blog.py')
 plan_visuals = load_script('plan-post-publish-visuals.py')
-assemble_manual_review = load_script('assemble-manual-review-attestation.py')
+assemble_manual_review = load_script(
+    'assemble-manual-review-attestation.py', MANUAL_SCRIPTS,
+)
 publish_module = load_script('publish-to-blog.py')
 
 
 class BlogStageEntryTest(unittest.TestCase):
+    def test_dynamic_publisher_loader_resolves_manual_compatibility_once(self):
+        code = (
+            "import json, sys; "
+            f"sys.path.insert(0, {str(SCRIPTS)!r}); "
+            "from blog_entry_loader import load_publish_to_blog; "
+            "first=load_publish_to_blog(); second=load_publish_to_blog(); "
+            "manual=str(first.MANUAL_SCRIPTS_DIR); shared=str(first.SHARED_SCRIPTS_DIR); "
+            "print(json.dumps({'first':first.__file__,'second':second.__file__,"
+            "'manual':manual,'manualCount':sys.path.count(manual),"
+            "'sharedCount':sys.path.count(shared)}))"
+        )
+        completed = subprocess.run(
+            [sys.executable, '-c', code], cwd=ROOT,
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = __import__('json').loads(completed.stdout)
+        self.assertEqual(Path(payload['first']).resolve(), SCRIPTS / 'publish-to-blog.py')
+        self.assertEqual(Path(payload['second']).resolve(), SCRIPTS / 'publish-to-blog.py')
+        self.assertEqual(Path(payload['manual']).resolve(), MANUAL_SCRIPTS)
+        self.assertEqual(payload['manualCount'], 1)
+        self.assertEqual(payload['sharedCount'], 1)
+
+    def test_stage_module_imports_do_not_reload_project_environment(self):
+        paths = [
+            SCRIPTS / 'generate-blog.py',
+            SCRIPTS / 'review-blog.py',
+            SCRIPTS / 'push-blog.py',
+            SCRIPTS / 'plan-post-publish-visuals.py',
+            MANUAL_SCRIPTS / 'manual-review-blog.py',
+            MANUAL_SCRIPTS / 'assemble-manual-review-attestation.py',
+        ]
+        code = (
+            "import importlib.util, os, sys; "
+            f"sys.path[:0]=[{str(MANUAL_SCRIPTS)!r},{str(SCRIPTS)!r}]; "
+            "os.environ['PAPER_ANALYZER_API_KEY']='outer-test-key'; "
+            f"paths={list(map(str, paths))!r}; "
+            "[(lambda spec: spec.loader.exec_module(importlib.util.module_from_spec(spec)))("
+            "importlib.util.spec_from_file_location('stage_probe_'+str(i), p)) "
+            "for i,p in enumerate(paths)]; "
+            "print(os.environ.get('PAPER_ANALYZER_API_KEY',''))"
+        )
+        completed = subprocess.run(
+            [sys.executable, '-c', code], cwd=ROOT,
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.strip(), 'outer-test-key')
+
     def test_review_entry_rejects_generation_byte_drift_before_llm_or_hugo(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / 'blog'
