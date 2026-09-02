@@ -1024,6 +1024,15 @@ title: "Duplicate"
         self.assertLess(markdown.index('💡 **毒舌点评**'), markdown.index('📌 **核心摘要**'))
         self.assertLess(markdown.index('📌 **核心摘要**'), markdown.index('🔗 **开源资源**'))
 
+    def test_display_tags_flattens_compound_model_output(self):
+        self.assertEqual(
+            publish_to_blog.format_display_tags([
+                '#音频理解', '#模型评估', '#音频事件检测 #可解释性',
+                '#音频理解',
+            ]),
+            '#音频理解 | #模型评估 | #音频事件检测 | #可解释性',
+        )
+
     def test_index_normalizes_canonical_chinese_quantities(self):
         normalized = publish_to_blog.normalize_digest_index_reader_surface(
             '同一模型的同域换库损失约五分之一，百例标注可回收约三分之二，四类表征均未跨越；Aligner约19%失败，并使用 300M参数。'

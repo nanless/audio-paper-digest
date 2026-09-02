@@ -2121,6 +2121,19 @@ def normalize_digest_index_preserving_decision_blocks(markdown):
     return ''.join(output)
 
 
+def format_display_tags(tags):
+    """Flatten compound hashtag strings into one stable, deduplicated tag row."""
+    values = [tags] if isinstance(tags, str) else list(tags or [])
+    flattened = []
+    for value in values:
+        text = str(value or '').strip()
+        if not text:
+            continue
+        hashtags = re.findall(r'#[^\s#|]+', text)
+        flattened.extend(hashtags or [text])
+    return ' | '.join(dict.fromkeys(flattened))
+
+
 def generate_index_page(scored, unscored, date_str, paper_slugs, category='论文速递'):
     """生成每日汇总页面（index.md），包含概览和每篇论文的链接"""
     total = len(scored) + len(unscored)
@@ -2212,10 +2225,9 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             english_title = f'[{title}]({aurl})' if aurl else title
             md += f"> 英文题目：*{english_title}*\n\n"
         tags = pa.get('tags') or []
-        if isinstance(tags, str):
-            tags = [tag for tag in tags.split() if tag]
-        if tags:
-            md += f"标签：{' '.join(tags)}\n\n"
+        display_tags = format_display_tags(tags)
+        if display_tags:
+            md += f"标签：{display_tags}\n\n"
         
         score_line = format_complete_score_line(pa)
         if score_line:
@@ -2273,10 +2285,9 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             english_title = f'[{title}]({aurl})' if aurl else title
             md += f"> 英文题目：*{english_title}*\n\n"
         tags = pa.get('tags') or []
-        if isinstance(tags, str):
-            tags = [tag for tag in tags.split() if tag]
-        if tags:
-            md += f"标签：{' '.join(tags)}\n\n"
+        display_tags = format_display_tags(tags)
+        if display_tags:
+            md += f"标签：{display_tags}\n\n"
         md += '评分：N/A（分析未提供可验证的八维评分）\n\n'
         author_institutions = index_author_institution_block(p, pa, api_reader)
         if author_institutions:
@@ -3250,9 +3261,10 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
     metadata_block = ''
     if pa:
         reader_identity_lines = []
-        if tags:
-            metadata_block += f"标签：{' '.join(tags)}\n\n"
-            reader_identity_lines.append(f"标签：{' '.join(tags)}")
+        display_tags = format_display_tags(tags)
+        if display_tags:
+            metadata_block += f"标签：{display_tags}\n\n"
+            reader_identity_lines.append(f"标签：{display_tags}")
 
         score_line = format_complete_score_line(pa)
         if score_line:
