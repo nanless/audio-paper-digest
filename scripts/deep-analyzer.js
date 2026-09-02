@@ -847,10 +847,71 @@ function findStructuredTableCell(table, row, column) {
     ));
 }
 
-function readerNumericTokens(value) {
+function readerNumericTokenMatches(value) {
     return [...String(value || '').normalize('NFKC').matchAll(
         /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*%|\s*(?:dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp))?/gi
-    )].map(match => match[0].replace(/\s+/g, '').toLowerCase());
+    )];
+}
+
+function readerNumericTokens(value) {
+    return readerNumericTokenMatches(value)
+        .map(match => match[0].replace(/\s+/g, '').toLowerCase());
+}
+
+function exactSourceExcerpt(sourceText, index, length, maxChars = 800) {
+    const source = String(sourceText || '');
+    const lower = Math.max(0, index - Math.floor(maxChars / 2));
+    const upper = Math.min(source.length, index + length + Math.floor(maxChars / 2));
+    const before = source.slice(lower, index);
+    const after = source.slice(index + length, upper);
+    const beforeBoundary = Math.max(
+        before.lastIndexOf('\n'), before.lastIndexOf('。'), before.lastIndexOf('. ')
+    );
+    const afterBoundaries = [after.indexOf('\n'), after.indexOf('。'), after.indexOf('. ')]
+        .filter(value => value >= 0);
+    const start = lower + (beforeBoundary >= 0 ? beforeBoundary + 1 : 0);
+    const end = index + length + (afterBoundaries.length > 0
+        ? Math.min(...afterBoundaries) + 1 : after.length);
+    return source.slice(start, end).trim().slice(0, maxChars);
+}
+
+function deriveExactTableSourceQuotes(renderedMarkdown, sourceText) {
+    const sourceMatches = readerNumericTokenMatches(sourceText);
+    const quotes = [];
+    for (const token of [...new Set(readerNumericTokens(renderedMarkdown))]) {
+        const match = sourceMatches.find(item => (
+            item[0].replace(/\s+/g, '').toLowerCase() === token
+        ));
+        if (!match || !Number.isInteger(match.index)) return [];
+        const quote = exactSourceExcerpt(sourceText, match.index, match[0].length);
+        if (quote.length < 12 || !sourceText.includes(quote)) return [];
+        if (!quotes.includes(quote)) quotes.push(quote);
+    }
+    return quotes;
+}
+
+function artifactTableBindingCanReplay(binding, renderedRows, structuredArtifacts) {
+    const sourceTable = (structuredArtifacts.tables || []).find(item => (
+        item?.ordinal === binding?.sourceTableOrdinal && item?.recoveryStatus === 'complete'
+    ));
+    const expectedCount = renderedRows.reduce((sum, row) => sum + row.length, 0);
+    if (!sourceTable || !recoverySha256(sourceTable.sourceDomSha256)
+        || !Array.isArray(binding?.cellBindings)
+        || binding.cellBindings.length !== expectedCount) return false;
+    const seen = new Set();
+    return binding.cellBindings.every(cellBinding => {
+        const renderedText = renderedRows?.[cellBinding?.renderedRow]?.[cellBinding?.renderedColumn];
+        const key = `${cellBinding?.renderedRow}:${cellBinding?.renderedColumn}`;
+        const sourceCell = findStructuredTableCell(
+            sourceTable, cellBinding?.sourceRow, cellBinding?.sourceColumn
+        );
+        if (renderedText === undefined || seen.has(key) || !sourceCell
+            || !recoverySha256(sourceCell.sourceDomSha256)
+            || normalizeReaderSourceCell(renderedText)
+                !== normalizeReaderSourceCell(sourceCell.text)) return false;
+        seen.add(key);
+        return true;
+    }) && seen.size === expectedCount;
 }
 
 function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFormulaBindings, options = {}) {
@@ -929,25 +990,59 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         ))) {
         throw new Error('Reader source-binding v4 检测到未绑定、重复或被改写的展示公式');
     }
-    if (declaredTableBindings.length !== renderedTables.length) {
+    const effectiveTableBindings = [...declaredTableBindings];
+    if (options.allowDeterministicQuoteRepair === true
+        && effectiveTableBindings.length < renderedTables.length) {
+        for (let index = effectiveTableBindings.length; index < renderedTables.length; index++) {
+            const derived = deriveExactTableSourceQuotes(
+                renderedTables[index].markdown, sourceText
+            );
+            if (derived.length === 0) break;
+            effectiveTableBindings.push({
+                tableIndex: index + 1,
+                sourceType: 'source_quotes',
+                sourceTableOrdinal: null,
+                cellBindings: [],
+                sourceQuotes: derived
+            });
+        }
+    }
+    if (effectiveTableBindings.length !== renderedTables.length) {
         throw new Error(
-            `Reader source-binding v4 表格绑定数量 ${declaredTableBindings.length}`
+            `Reader source-binding v4 表格绑定数量 ${effectiveTableBindings.length}`
             + ` 与正文表格数量 ${renderedTables.length} 不一致`
         );
     }
     const tableIndexes = new Set();
-    const tableBindings = declaredTableBindings.map((binding, index) => {
+    const tableBindings = effectiveTableBindings.map((declaredBinding, index) => {
         assertExactObjectKeys(
-            binding,
+            declaredBinding,
             ['tableIndex', 'sourceType', 'sourceTableOrdinal', 'cellBindings', 'sourceQuotes'],
             `读者文章 tableBindings[${index}]`
         );
         const rendered = renderedTables[index];
+        const renderedRows = [rendered.header, ...rendered.rows];
+        let binding = declaredBinding;
+        if (options.allowDeterministicQuoteRepair === true
+            && binding.sourceType === 'artifact_table'
+            && !artifactTableBindingCanReplay(
+                binding, renderedRows, structuredArtifacts
+            )) {
+            const derived = deriveExactTableSourceQuotes(rendered.markdown, sourceText);
+            if (derived.length > 0) {
+                binding = {
+                    tableIndex: binding.tableIndex,
+                    sourceType: 'source_quotes',
+                    sourceTableOrdinal: null,
+                    cellBindings: [],
+                    sourceQuotes: derived
+                };
+            }
+        }
         if (binding.tableIndex !== index + 1 || tableIndexes.has(binding.tableIndex)) {
             throw new Error(`读者文章 tableBindings[${index}].tableIndex 必须按正文顺序唯一递增`);
         }
         tableIndexes.add(binding.tableIndex);
-        const renderedRows = [rendered.header, ...rendered.rows];
         const renderedTableSha256 = crypto.createHash('sha256')
             .update(rendered.markdown).digest('hex');
         if (binding.sourceType === 'artifact_table') {
@@ -1014,9 +1109,29 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
             || !Array.isArray(binding.sourceQuotes) || binding.sourceQuotes.length < 1) {
             throw new Error(`读者文章 tableBindings[${index}] 正文 quote 绑定结构非法`);
         }
-        const sourceQuotes = binding.sourceQuotes.map((quote, quoteIndex) => {
-            if (typeof quote !== 'string' || quote.length < 12 || quote.length > 4000
-                || !sourceText.includes(quote)) {
+        const validDeclaredQuotes = binding.sourceQuotes.filter(quote => (
+            typeof quote === 'string' && quote.length >= 12 && quote.length <= 4000
+            && sourceText.includes(quote)
+        ));
+        if (validDeclaredQuotes.length !== binding.sourceQuotes.length
+            && options.allowDeterministicQuoteRepair !== true) {
+            const quoteIndex = binding.sourceQuotes.findIndex(quote => (
+                typeof quote !== 'string' || quote.length < 12 || quote.length > 4000
+                || !sourceText.includes(quote)
+            ));
+            throw new Error(
+                `读者文章 tableBindings[${index}].sourceQuotes[${quoteIndex}]` +
+                ' 不是全文中的 exact sourceQuote'
+            );
+        }
+        const repairedQuotes = options.allowDeterministicQuoteRepair === true
+            ? deriveExactTableSourceQuotes(rendered.markdown, sourceText) : [];
+        const exactQuotes = [...new Set([...validDeclaredQuotes, ...repairedQuotes])];
+        if (exactQuotes.length === 0) {
+            throw new Error(`读者文章 tableBindings[${index}] 无法确定性绑定 exact sourceQuote`);
+        }
+        const sourceQuotes = exactQuotes.map((quote, quoteIndex) => {
+            if (quote.length < 12 || quote.length > 4000 || !sourceText.includes(quote)) {
                 throw new Error(
                     `读者文章 tableBindings[${index}].sourceQuotes[${quoteIndex}]` +
                     ' 不是全文中的 exact sourceQuote'
@@ -2135,7 +2250,9 @@ function parseApiReaderArticleResult(raw, options = {}) {
             {
                 structuredArtifacts: options.structuredArtifacts,
                 sourceText: options.sourceText,
-                sections: normalizedSections
+                sections: normalizedSections,
+                allowDeterministicQuoteRepair:
+                    options.allowDeterministicQuoteRepair === true
             }
         )
         : null;
@@ -2600,6 +2717,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     minimumIntegratedTables,
                     requiredVersion: API_READER_PLAN_VERSION,
                     requireSourceBindings: true,
+                    allowDeterministicQuoteRepair: true,
                     structuredArtifacts: options.structuredArtifacts,
                     sourceText: options.sourceText
                 }),
@@ -4918,7 +5036,9 @@ function extractApiReaderResourceCandidates(analysis) {
     for (const line of String(section || '').split('\n')) {
         const label = Object.keys(typeByLabel).find(item => line.includes(`${item}：`) || line.includes(`${item}:`));
         if (!label) continue;
-        for (const match of line.matchAll(/https:\/\/[^\s<>()\[\]{}"']+/gi)) {
+        for (const match of line.matchAll(
+            /https:\/\/[^\s<>()\[\]{}"'，。；：！？、（）【】《》“”‘’\u3400-\u9fff]+/giu
+        )) {
             const url = match[0].replace(/[),.;:!?，。；：！？、）》】》」』]+$/u, '');
             candidates.push({ type: typeByLabel[label], url, line: line.trim() });
         }
@@ -5030,9 +5150,11 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
         const sourceLine = exactResourceSourceQuote(sourceText, candidate.url);
         const origin = sourceLine ? 'paper_source' : demoLinks.has(candidate.url)
             ? 'validated_demo' : null;
-        if (!origin) {
-            throw new Error(`开源资源 URL 未绑定论文原文或已验证 Demo 发现证据: ${candidate.url}`);
-        }
+        // LLM prose may expand a named dataset/project into a plausible URL
+        // that the paper never states.  Omit it from the sealed identity;
+        // applyApiReaderResourceAvailability() deterministically removes the
+        // unbound URL from canonical prose before scoring and publication.
+        if (!origin) continue;
         const verified = await verifyApiReaderResourceUrl(candidate.url, {
             ...options,
             deadlineAt
@@ -5056,6 +5178,15 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
 
 function applyApiReaderResourceAvailability(analysis, identity) {
     let updated = String(analysis || '');
+    const acceptedUrls = new Set((identity?.resources || [])
+        .map(item => item.originalUrl).filter(Boolean));
+    for (const candidate of extractApiReaderResourceCandidates(updated)) {
+        if (!acceptedUrls.has(candidate.url)) {
+            updated = updated.split(candidate.url).join(
+                '未找到论文原文或已验证 Demo 中的精确链接'
+            );
+        }
+    }
     const availableTypes = new Set((identity?.resources || [])
         .filter(item => item.availability === 'available').map(item => item.type));
     for (const [field, type] of [['has_code', 'code'], ['has_model', 'model'], ['has_dataset', 'dataset']]) {

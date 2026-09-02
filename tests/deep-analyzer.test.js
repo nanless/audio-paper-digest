@@ -206,6 +206,24 @@ describe('arXiv HTML full-text health gate', () => {
             article, forgedQuoteBindings, formulaBindings,
             { structuredArtifacts: artifacts, sourceText, sections }
         ), /不是全文中的 exact sourceQuote/);
+
+        const repaired = bindApiReaderSourceEvidence(
+            article,
+            forgedQuoteBindings.slice(0, 2),
+            formulaBindings,
+            {
+                structuredArtifacts: artifacts,
+                sourceText,
+                sections,
+                allowDeterministicQuoteRepair: true
+            }
+        );
+        assert.strictEqual(repaired.tableBindings.length, 3);
+        assert.strictEqual(repaired.tableBindings[2].sourceType, 'source_quotes');
+        assert.ok(repaired.tableBindings[2].sourceQuotes.every(item => (
+            sourceText.includes(item.quote)
+        )));
+
     });
 
     it('保留 SVG 与 DOM 原生 framed Figure，但不把算法、表格或缺失资产伪装成图片', () => {
@@ -2085,6 +2103,12 @@ primary_task_tag: #音视频生成
             '- 论文中引用的开源项目：未提及'
         ].join('\n');
         assert.deepStrictEqual(extractApiReaderResourceCandidates(analysis).map(item => item.type), ['code']);
+        assert.strictEqual(
+            extractApiReaderResourceCandidates(
+                '## 开源详情\n- 代码：https://github.com/example/project，元数据见正文'
+            )[0].url,
+            'https://github.com/example/project'
+        );
         const calls = [];
         const identity = await buildApiReaderResourceIdentity(
             analysis, sourceText, {}, {
@@ -2139,15 +2163,19 @@ primary_task_tag: #音视频生成
             /非公网 IP/
         );
 
-        await assert.rejects(
-            buildApiReaderResourceIdentity(
-                analysis.replace('project.example/repo', 'invented.example/repo'),
-                sourceText, {}, {
-                    validateUrlImpl: async raw => new URL(raw),
-                    requestImpl: async () => ({ status: 200, headers: { get: () => null } })
-                }
-            ),
-            /未绑定论文原文或已验证 Demo 发现证据/
+        const inventedAnalysis = analysis.replace(
+            'project.example/repo', 'invented.example/repo'
+        );
+        const invented = await buildApiReaderResourceIdentity(
+            inventedAnalysis, sourceText, {}, {
+                validateUrlImpl: async raw => new URL(raw),
+                requestImpl: async () => ({ status: 200, headers: { get: () => null } })
+            }
+        );
+        assert.deepStrictEqual(invented.resources, []);
+        assert.doesNotMatch(
+            applyApiReaderResourceAvailability(inventedAnalysis, invented),
+            /https:\/\/invented\.example\/repo/
         );
         const empty = await buildApiReaderResourceIdentity(
             analysis.replace('- 代码：https://project.example/repo', '- 代码：论文中未提及'),
