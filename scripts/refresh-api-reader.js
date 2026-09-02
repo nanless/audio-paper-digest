@@ -21,7 +21,8 @@ const {
 } = require('./analysis-engine.js');
 const {
     updateAnalysisDigestStatuses,
-    inferAnalysisBatchDate
+    inferAnalysisBatchDate,
+    normalizeCompatibleBatchDate
 } = require('./digest-status.js');
 const { normalizedId, getBeijingISOString } = require('./utils.js');
 
@@ -142,6 +143,25 @@ function hasCurrentReaderV3(paper) {
         && !paper?.latestAnalysisAttemptError;
 }
 
+function resolvePersistedCanonicalBatchDate(payload) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return '';
+    const explicit = normalizeCompatibleBatchDate(payload.batchDate);
+    if (explicit) return explicit;
+    // Historical envelopes written before batchDate became mandatory still
+    // retain their immutable run-start timestamp.  Never fall back to the
+    // wall clock here: a missing persisted identity must stay fail-closed.
+    for (const value of [
+        payload.timestamp,
+        payload.deepAnalysisCompletedAt,
+        payload.deepAnalysisLastAttemptAt,
+        payload.lastUpdated
+    ]) {
+        const normalized = normalizeCompatibleBatchDate(value);
+        if (normalized) return normalized;
+    }
+    return '';
+}
+
 function resolveBatchRefreshIds(options) {
     if (!options.all) return options.ids;
     const payload = readJsonFileStrict(Config.FILES.deepAnalysisResult);
@@ -149,8 +169,9 @@ function resolveBatchRefreshIds(options) {
         throw new Error('按日期全量刷新只接受带 batchDate 的 canonical object envelope');
     }
     const papers = payload.papers;
-    if (payload.batchDate !== options.date) {
-        throw new Error(`当前深度分析批次为 ${payload.batchDate || '未知'}，拒绝按 ${options.date} 全量刷新`);
+    const canonicalBatchDate = resolvePersistedCanonicalBatchDate(payload);
+    if (canonicalBatchDate !== options.date) {
+        throw new Error(`当前深度分析批次为 ${canonicalBatchDate || '未知'}，拒绝按 ${options.date} 全量刷新`);
     }
     const pending = options.surfaceBindingsOnly
         ? papers
@@ -345,6 +366,7 @@ module.exports = {
     parseRefreshCliArgs,
     resolveBatchRefreshIds,
     hasCurrentReaderV3,
+    resolvePersistedCanonicalBatchDate,
     paperRefreshInputIdentity,
     MAX_REFRESH_CONCURRENCY
 };
