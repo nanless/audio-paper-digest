@@ -1,124 +1,116 @@
 # Manual 论文速递
 
-本目录集中保存显式 Manual/人工高保障路线的文档、Prompt、实现和测试。项目的默认日更仍是 LLM/API 路线；只有用户明确要求“Manual”或“人工流程”时，才运行：
+Manual 是项目的显式人工高保障路线：逐篇筛选、论文理解、教程写作、评分和页面语义审查由隔离的 paper leaf 完成；抓取、结构化证据、确定性校验、博客发布和远端验证仍由项目脚本负责。
+
+项目默认日更是 LLM/API。只有用户明确要求“Manual”或“人工流程”时才进入本目录描述的流程：
 
 ```bash
 npm run digest:manual -- YYYY-MM-DD
 ```
 
-Manual 不是 API 故障时的自动降级，也不是放宽质量门槛。它以逐篇隔离的人工语义工作替代筛选、正文和页面语义审查模型，同时保留联网来源获取、结构化全文、确定性校验、博客三阶段发布、远端 OID 和视觉验收。
+网络、模型或配额失败不会自动切换到 Manual。Manual 也不是降低质量要求的离线兜底。
 
-## 先按职责找入口
+## 这套文档给谁看
 
-| 参与者 | 负责 | 不负责 |
+| 读者 | 先读 | 需要解决的问题 |
 |---|---|---|
-| 用户/批次负责人 | 明确选择 Manual、确认批次范围与发布意图 | 为失败节点手改 SHA 或绕过门禁 |
-| 主 Agent | 维护逐论文队列、执行 packet/runner 生命周期、直接创建 leaf、收口 records/spec/publish | 代替 leaf 撰写多篇正文，或让 runner 自动创建 subagent |
-| 单篇 leaf | 只在当前 packet allowlist 内完成一个论文、一个 role 的语义工作 | 读取其他论文、历史正文或自行扩展输入 |
-| runner / binder / sealer | 验证状态、依赖、真实字节和 SHA，确定性组装已提交语义结果 | 调用模型、补写事实或替 reviewer 作判断 |
-| publisher / review gate | 绑定最终页面字节、Git 基线、publication commit 与远端 OID | 将 shadow、legacy 或未密封 canonical 提升为 production |
+| 第一次运行批次的人 | 本页 → [运行手册](docs/workflow.md) | 从哪里开始、下一条命令是什么、失败后从哪里恢复 |
+| 主 Agent | [运行手册](docs/workflow.md) | 如何管理 packet、claim、leaf、submit 和批次收口 |
+| 单篇 author/reviewer leaf | [编辑契约](docs/editorial-reference-contract.md)和 packet 内文件 | 如何把一篇论文写清楚、如何审查证据与可读性 |
+| 维护 runner/records/publisher 的开发者 | [架构契约](docs/architecture.md) | 哪些文件构成证据、SHA 为什么失效、兼容边界在哪里 |
+| 历史维护人员 | [架构契约的兼容章节](docs/architecture.md#历史兼容边界) | 哪些旧工件只能复验，哪些入口仍可显式维护 |
 
-如果你只是运行或恢复批次，直接看[工作流](docs/workflow.md)；只有修改 provenance、runner 或 records/spec 边界时才需要完整阅读[架构文档](docs/architecture.md)。
-
-## 最短生产链路
+## 最短生产路径
 
 ```text
-manual_offline 逐篇筛选
+raw candidates
+  → manual_offline 全量逐篇筛选
   → structured full text + complete ArtifactIndex
-  → author → deterministic submit validation
+  → author
   → technical_scoring + pedagogy_readability
-  → author_revision → longform preflight / independent audit
+  → author_revision + independent audit
   → records v4
   → spec v6 + batch Merkle root
   → production canonical
-  → 逐页 Manual review
-  → blog push + remote OID
-  → 发布后视觉资产
+  → blog generate → 独立逐页 review → push → remote OID
 ```
 
-入口会在需要人工工作的边界停下。持久 runner 只管理状态、依赖和真实文件 SHA；它不会创建 subagent、编写正文、物化完整 role 输出或组装 records envelope。主 Agent 必须为每篇论文直接分派独立的 `gpt-5.6-terra`、reasoning `high` leaf，并按状态补满最多 3 个可用 leaf 槽。`manual:packet` 的 JSON 输出包含当前真实路径对应的 register 参数；应使用该输出，而不是从文档示例手抄 artifact root 或 packet 路径。
+这里有三类容易混淆的对象：
 
-## 生产命令
+- **packet**：一个论文、一个角色能读取的精确文件白名单，同时给出输出契约。
+- **runner**：保存任务状态并验证 packet/output/receipt；不创建 subagent，也不写论文内容。
+- **records/spec/canonical**：从单篇已验证结果到整批发布输入的三层确定性闭包，不是三份可随意互换的 JSON。
 
-以下只列稳定的 npm 入口；具体参数、状态和失败恢复见[工作流](docs/workflow.md)。
+## 主链命令
 
 ```bash
-# 无筛选模型抓取候选；随后提交完整的 manual_offline 逐篇决定
+# 1. 抓取候选并提交完整人工筛选决定
 npm run manual:fetch -- --date YYYY-MM-DD --raw
 npm run manual:fetch -- --date YYYY-MM-DD --select FILTER_SPEC.json
 
-# 结构化全文与 ArtifactIndex
+# 2. 获取结构化全文和 ArtifactIndex
 npm run manual:fulltext -- YYYY-MM-DD
 
-# production v6 task DAG
+# 3. 初始化、查看并推进单篇角色 DAG
 npm run manual:tasks -- init --date YYYY-MM-DD
 npm run manual:tasks -- status --date YYYY-MM-DD
-npm run manual:packet -- --date YYYY-MM-DD --paper ARXIV_ID --role author
-npm run manual:packet -- --date YYYY-MM-DD --paper ARXIV_ID --role technical_scoring
-npm run manual:packet -- --date YYYY-MM-DD --paper ARXIV_ID --role pedagogy_readability
-npm run manual:packet -- --date YYYY-MM-DD --paper ARXIV_ID --role author_revision
+npm run manual:packet -- --date YYYY-MM-DD --paper ARXIV_ID --role ROLE
 
-# 四角色全部 validated 后收口
+# 4. 四个角色全部 validated 后密封整批
 npm run manual:records -- --date YYYY-MM-DD
 npm run manual:spec -- --date YYYY-MM-DD \
   --records data/current/manual-v6/YYYY-MM-DD/records-v4.json
 npm run manual:analyze -- --date YYYY-MM-DD \
   --spec data/current/manual-v6/YYYY-MM-DD/spec.json
 
-# 状态和真实观测
-npm run manual:work-queue -- --date YYYY-MM-DD
-npm run manual:performance-report -- --date YYYY-MM-DD --date YYYY-MM-DD --date YYYY-MM-DD
-```
-
-按需维护入口：
-
-| 场景 | 命令 | 边界 |
-|---|---|---|
-| 合并分片筛选决定 | `npm run manual:filter-merge -- ...` | 仍须完整覆盖 raw candidates |
-| 元数据纠错 | `npm run manual:correction -- <packet|register|claim|start|submit|retry|abandon|manifest|status> ...` | 独立受控生命周期；只接受允许字段和证明，不改论文事实 |
-| revision 确定性绑定 | `npm run manual:bind-revision -- --date DATE --paper ID [--prepare|--preflight]` | `prepare` 把 binding map 中的确定性表/工件物化进已有终稿，`preflight` 只读重放；均不创作语义正文 |
-| 显式 shadow spec/canonical | `manual:v6:shadow:spec`、`manual:v6:shadow:analyze` | 只写 shadow 根，不得发布 |
-| shadow 审计/benchmark | `manual:shadow`、`manual:shadow:benchmark` | 只消费既有真实指标与报告 |
-| legacy v5 读取维护 | `manual:v5:spec`、`manual:v5:analyze`、`manual:v5:author-packet`、`manual:v5:promote-draft`、`manual:v5:work-queue` | 不得创建或冒充 production v6 |
-
-博客仍按 generate、review、push 三阶段执行。Manual 页面审查使用隔离的逐页 shard 和 attestation：
-
-```bash
+# 5. 生成、人工逐页审查并发布
 npm run blog:generate -- --date YYYY-MM-DD
 npm run blog:manual-plan -- --date YYYY-MM-DD
-# 按 plan 路径写入逐页 Terra-high review shard
 npm run blog:manual-attest -- --date YYYY-MM-DD
 npm run blog:manual-review -- --date YYYY-MM-DD --attestation ATTESTATION.json
 npm run blog:push -- --date YYYY-MM-DD
 ```
 
-单篇灰度时，generate、plan、attest、review、push 必须传同一个 `--include-id`。既有 sealed tutorial preview 仅允许只读复验；新 production v6 不提供 preview 写入口。
+`ROLE` 只能是 `author`、`technical_scoring`、`pedagogy_readability` 或 `author_revision`。`manual:packet` 会输出绑定当前真实路径的 runner register 参数；必须使用该输出，不能从示例手抄 packet 或 artifact root。
 
-## 文档导航
+完整的 register/claim/start/submit 命令、revision binder、元数据纠错和恢复方式见[运行手册](docs/workflow.md)。
 
-- [文档索引](docs/README.md)：按运行、编辑、契约和维护职责导航。
-- [工作流与恢复](docs/workflow.md)：从 raw 到发布的逐阶段操作手册。
-- [生产架构与边界](docs/architecture.md)：task DAG、records v4、spec v6、Merkle、shadow 与 legacy 边界。
-- [教程编辑参考契约](docs/editorial-reference-contract.md)：正文教学结构、图表公式和渲染要求；该文件是运行时 SHA 输入。
-- [研究生级教程 Prompt](prompts/manual-tutorial-article.md)：production author packet 使用的写作规范。
-- [Legacy/base 分析 Prompt](prompts/manual-analysis-record.md)：历史 v5 与 records v4 基础质量子校验使用的兼容规范。
+## 谁负责什么
 
-## 目录边界
+| 参与者 | 负责 | 明确禁止 |
+|---|---|---|
+| 用户/批次负责人 | 明确选择 Manual、确定日期和发布范围 | 把普通失败解释为自动 Manual 授权 |
+| 主 Agent | 维护队列，物化并注册 packet，直接创建单篇 leaf，回写真实 task name，收口 records/spec/publish | 让 runner 创建 subagent；把多篇论文交给一个 leaf |
+| 单篇 leaf | 在 packet 白名单内完成一个论文、一个角色的语义工作 | 读取其他论文、旧博客、历史 analysis 或未授权 previous draft |
+| runner/binder/sealer | 验证依赖、路径、字节、SHA 和确定性结构 | 调用模型、补写事实、替 reviewer 作语义判断 |
+| publisher/review gate | 绑定最终页面、Git 基线、publication commit 和远端 OID | 发布 shadow、legacy 或不完整 production canonical |
 
-- `manual/docs/`：Manual 唯一详细文档来源。默认 `docs/` 只保留指针和共享边界。
-- `manual/prompts/`：Manual 专用 Prompt。修改任何字节都会改变对应 SHA 并使未完成的下游绑定失效。
-- `manual/scripts/`：Manual runner、records/spec、review、shadow 和兼容实现。
-- `manual/tests/`：Manual 单元测试、跨运行时向量与历史兼容 fixture。
-- `data/current/manual-v6/<date>/`：production 运行证据。
-- `data/current/manual-v6-shadow/<date>/`：只读审计与对比；永远不能发布。
+平台共 4 个并发槽，主 Agent 占 1 个；正文阶段最多同时保持 3 个真实 leaf。任务结束后由主 Agent补入下一篇，不能使用占槽 broker。
 
-源代码目录与运行数据目录是两套身份：把实现整理到 `manual/scripts/` 不会迁移 `data/current/` 下的证据，也不能通过复制/改名让旧证据获得新 provenance。Prompt、编辑契约或协议实现的任意字节变化都会改变相应 SHA/fingerprint；运行中的 packet 会按真实依赖变为 `stale`，应从最早失效节点重新物化并提交，而不是修改已签名 JSON。
+## 数据与源码边界
 
-## 必守边界
+```text
+manual/
+├── README.md
+├── docs/       # 本路线的详细文档
+├── prompts/    # 被 packet/spec 真实 SHA 绑定的 Prompt
+├── scripts/    # runner、records/spec、shadow、review 和历史维护实现
+└── tests/      # Manual 专用测试与 fixture
 
-- Production 只接受 records v4 → spec v6 → `runtimeMode=production` canonical；不能从目录名、文件名或版本号猜测 provenance。
-- author 与 revision 都从同一篇论文的受控原始证据冷启动；禁止读取历史正文、博客页面或 previous draft。
-- 每篇论文的 author、技术评分、可读性复核、revision 和最终页面审查都必须保留独立 task provenance。
-- complete ArtifactIndex 的表、图、公式、术语和相关工作必须在 `reader-longform-v2` 中逐项处置。
-- Shadow、legacy v5、sealed preview 和 production v6 不得混批、改名或互相提升。
-- 修复必须从最早失效阶段重跑；禁止手改 SHA、fingerprint、attestation、publication commit 或远端 OID。
+data/current/
+├── manual-full-text/<date>/       # 全文、结构化来源和 ArtifactIndex
+├── manual-v6/<date>/              # production task/record/spec/metrics 证据
+└── manual-v6-shadow/<date>/       # shadow 隔离证据；禁止发布
+```
+
+移动源码不会迁移或重签 `data/current/` 中的证据。Prompt、编辑契约、schema、validator 或协议实现的字节变化会改变 SHA/fingerprint；在途任务应从最早失效节点重做，不能手改已签名 JSON。
+
+## 开始前的五项检查
+
+1. 用户明确要求 Manual，而不是默认 API 日更。
+2. 日期使用 `YYYY-MM-DD`，raw/select/fulltext 属于同一批次。
+3. 每篇论文最终具有 `complete` ArtifactIndex。
+4. 每个 leaf 只处理一个论文和一个 role，并使用 packet 指定的模型与推理等级。
+5. production、shadow、legacy v5 和 sealed preview 没有混用路径或工件。
+
+任一项不满足时先看[恢复矩阵](docs/workflow.md#十状态与恢复矩阵)，不要用 `--force` 猜测性推进。

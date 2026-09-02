@@ -1,140 +1,76 @@
-# Troubleshooting Guide
+# Troubleshooting
 
-Identify the failed stage and resume only that stage. Do not regenerate a published blog because a
-visual failed, and do not switch to Manual because an API call failed. See [Setup](setup.md) and
-[Workflow](workflow.md) for configuration and recovery commands.
+## Method
 
-| Symptom | Check first | Typical recovery |
-|---|---|---|
-| 401/403, protocol, or proxy error | project `.env` key/model/endpoint/proxy | `node scripts/test-api-key.js` |
-| interrupted fetch/filter | source checkpoint and decision coverage | rerun `digest:prepare` / `full-fetch.js` |
-| some analyses failed | `analysisManifest` and canonical state | `npm run deep` or targeted reanalysis |
-| blog review/push failed | generation, page SHA, receipt, Git baseline | resume `blog:review` or `blog:push` |
-| visuals incomplete | publication OID and visual/cover manifests | `visual:post-publish` and status commands |
+Find the earliest failed gate. Run all diagnostics outside the sandbox; inability to reach a local proxy inside the sandbox is not a target-site diagnosis.
 
-### 12.1 Model Call Failure / API Returns 401 / 403
+## Missing Configuration
 
-**Checklist**:
+Inspect repository-root `.env`, not shell variables. The required triplet is API key/model/endpoint, and public endpoints require HTTPS. Project loaders intentionally clear inherited values.
 
-1. **Verify the key/endpoint/model triplet**
-   - MiMo Token Plan keys start with `tp-` and must be used with the Token Plan endpoint `token-plan-cn.xiaomimimo.com`
-   - MiMo pay-as-you-go keys start with `sk-` and must be used with the pay-as-you-go endpoint `api.xiaomimimo.com`
-   - Mixing the two will always return 401
+## Muse Failure or Empty Response
 
-2. **Check that the correct protocol is being used**
-   - Look for `[filter] API 类型: xxx` or `[api] → model | xxx` in terminal output or `logs/*.log` to confirm whether it shows `anthropic` or `openai`
-   - If MiMo Token Plan shows `openai`, check its `token-plan` endpoint and MiMo domain/model. Kimi Coding should use `kimi.com/coding`; models such as `k3` do not need `kimi` in the model name
+Confirm exact model, project HTTP CONNECT URL, external runtime, expected proxy region, and whether optional SSE is compatible. Muse must not be switched to direct access. `incomplete/max_output_tokens` is truncation; adjust evidence/output budgets or prompt and retry.
 
-3. **Anthropic protocol checks** (when output shows `anthropic`)
-   - Confirm the request header includes `User-Agent: claude-cli/<version> (external, cli)` (this won't appear directly in terminal output, but can be verified with tcpdump or a proxy tool)
-   - Confirm you are using `x-api-key` instead of `Authorization: Bearer`
-   - Confirm the URL path is correct: MiMo Token Plan uses `/anthropic/v1/messages`, Kimi Coding Plan uses `/coding/v1/messages`, not `/v1/chat/completions`
+## MiMo/Kimi 403
 
-4. **OpenAI protocol checks** (when output shows `openai`)
-   - Confirm you are using `Authorization: Bearer {key}`
-   - Ordinary Chat Completions uses `/v1/chat/completions`
-   - Exact model `muse-spark-1.2-contributor` uses OpenAI Responses at `/v1/responses` and requires the project `.env` HTTP CONNECT proxy
+These providers normally use `agent:false` direct connections. Check for callers bypassing `requestLlmJson()` or injecting an agent. Do not copy Muse proxy behavior to ordinary models.
 
-5. **Check proxy settings**
-   - MiMo Token Plan may be blocked when a system proxy is active; try disabling the proxy or setting `agent: false`
-   - See Section 12.7 for details
+## arXiv or HuggingFace Failure
 
-6. **Review output**: check `logs/full-fetch-*.log`, `logs/deep-analyzer-*.log`; full terminal output is still preserved
+arXiv requires HTTP CONNECT. HuggingFace curl may use SOCKS in addition. Respect 429 backoff and preserve per-source checkpoints. Proxy absence cannot be reported as a healthy empty HuggingFace source. Metadata-shell HTML should continue to PDF fallback.
 
-### 12.2 Deep Analysis Is Slow or Frequently Fails
+## Incomplete Filter State
 
-- Review `logs/deep-analyzer-*.log`, `logs/full-fetch-*.log`; full terminal output is still preserved
-- `analysisSource=abstract` means both HTML and PDF full text were unavailable. Publishing blocks it by default; explicit human approval requires `allowAbstractAnalysisPublish: true`. Never remove provenance fields to disguise an abstract-only result
-- Successful figures are cached under `data/current/image-cache/`. Use `imageManifest.downloadOutcomes` for permanent versus transient failures and `imageManifest.supplement.insertionDiagnostics` for invalid `paragraph_id` values; do not restore section-end fallback
-- Check whether the key/endpoint/model triplet is correct (see Section 12.1)
-- Primary analysis is already text-only; there is no timeout-triggered plain-text downgrade. API timeouts retry within the remaining active-time budget, while image/secondary-stage failures preserve the text checkpoint and resume only incomplete stages. For persistent failures, check the proxy, model service, `PD_ANALYSIS_API_MAX_RETRIES`, and concurrency
-- You can safely resume with `node scripts/deep-analysis-only.js`
-
-### 12.3 Re-analysis Reports "Key Not Configured" on Startup
-
-- Configure `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, and `PAPER_ANALYZER_ENDPOINT` in the project-root `.env`
-- Re-run the script; do not rely on `.zshrc` / Trae / Codex outer environment variables to fill project configuration
-
-### 12.4 "No New Content to Push" After Publishing
-
-Check in the blog repository:
 ```bash
-cd ~/code/github_repos/audio-paper-digest-blog
-git status --short
-ls -lt content/posts | head -20
+npm run validate:data
 ```
 
-Possible causes:
-- The request was explicitly limited to generation or review; a normal dated-digest run also authorizes the separate `push-blog.py` stage
-- `push-blog.py` cannot find a review receipt or a reviewed file SHA-256 changed; run `review-blog.py` again. It reuses matching path-plus-SHA entries from `blog-review-passes-YYYY-MM-DD.json` and reviews only new, changed, or failed files
-- Data file is empty or paper analysis failed
-- Target date file already exists with identical content
+Look for raw/decision SHA mismatch, incomplete coverage, pending API errors, non-related filtered items, or partially refreshed model/prompt/keyword versions. Resume filtering; do not delete unknown decisions.
 
-### 12.4.1 Post-publication visual tasks are missing or stale
+## Slow or Repeated Analysis Failure
 
-- First verify that `blog-review-receipt-YYYY-MM-DD.json` contains matching `publicationCommit` and `remoteVerifiedOid` plus `remoteVerifiedAt`; otherwise all blog pages have not been remotely verified yet
-- After verification, run `npm run visual:post-publish -- --date YYYY-MM-DD`; output lists only TOP 10 pending/failed infographics and the one digest image
-- If a manifest is missing or its publication/analysis/prompt/hot-direction/ranking/category binding changed, rerun `visual:post-publish`. Status commands are read-only: they report stale, missing, failed, damaged, or SHA-mismatched assets without rewriting tasks
-- Generate pending work with Codex built-in `image_gen`. Visually verify the exact English title, Chinese body, paper numbers, and leaderboard before registering with `visual:record` or `cover:record`. If an old token is rejected, read the latest plan; never overwrite the newer task
-- Do not upload `.bin` cache paths directly or rename them by hand. Run `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]` and pass its absolute `referencedImagePaths` to built-in `image_gen` (`relativePath` is display-only); cache-path, SHA, byte-count, MIME, or magic-byte mismatches fail before upload instead of surfacing as misleading network errors
-- Once both status commands return zero, post-publication images are complete. They are independent of the already completed blog transaction; do not regenerate or re-review the blog because of image changes
+Identify the failed stage. Whole-paper concurrency defaults to 3, Reader heavy work to 5, and Muse filtering to batch 1. Primary, repair, and Reader have separate budgets.
 
-### 12.5 Path Confusion
-
-- **Prefer** `data/current/deep-analysis-result.json`
-- The legacy path `data/deep-analysis-result.json` is only read for backward compatibility
-- If both old and new paths exist, scripts prefer `data/current/`
-
-### 12.5.1 Blog Stage Refuses to Run in Codex
-
-- `generate-blog.py`, `review-blog.py`, `push-blog.py`, and compatibility `publish-to-blog.py` deliberately reject the reliable `CODEX_SANDBOX` marker; the elevation wrapper may preserve the network-disabled marker, so it cannot independently identify a sandbox
-- Start the exact same stage outside the sandbox. Do not treat this as a content failure, do not regenerate unnecessarily, and never bypass LLM/image review or fabricate a SHA-256 receipt
-
-### 12.6 HuggingFace Fetch Returns Empty
-
-- Check the project-root `.env` contains at least one of `HTTPS_PROXY=http://127.0.0.1:7897` or `HTTP_PROXY=http://127.0.0.1:7897`; if the local proxy provides SOCKS, also set `ALL_PROXY=socks5h://127.0.0.1:7897`
-- Run `node scripts/fetch-huggingface-papers.js` **outside the sandbox**. A sandbox cannot reach the local `127.0.0.1:7897` proxy, so that result does not diagnose HuggingFace or the proxy
-- `fetch-huggingface-papers.js` uses `curl`; ensure it is available. The script deliberately errors without project proxy configuration to avoid pseudo-success empty output
-
-### 12.6.1 arXiv Fetch or Full-Text Download Fails
-
-- arXiv metadata, HTML, PDF and images all require at least one project `.env` `HTTPS_PROXY` or `HTTP_PROXY` value. The configured value must be an `http://` or `https://` HTTP CONNECT URL; SOCKS `ALL_PROXY` alone is insufficient
-- Verify the LLM/proxy outside the sandbox with `node scripts/test-api-key.js`, or run the full workflow. Sandbox loopback failure is an environment limitation
-- LLM routing is independent: non-Muse Node LLM requests use `agent: false`; exact `muse-spark-1.2-contributor` requests must use the project HTTP CONNECT proxy
-
-### 12.7 MiMo API Returns 403 / Proxy Issues
-
-**Root cause**: Node.js `https.request` with `agent: undefined` still reuses the global default agent's connection pool. When a system proxy is configured (via `https_proxy` or similar environment variables), connections from the global agent may be tainted by the proxy, causing the MiMo Token Plan server to reject the request.
-
-**Fix**: Every Node LLM request, including `test-api-key.js`, must set `options.agent` to `false` (not `undefined`), completely disabling connection reuse and forcing each request to establish a new connection:
-
-```javascript
-const options = {
-    hostname: url.hostname,
-    path: url.pathname + url.search,
-    method: 'POST',
-    headers: headers,
-    agent: false,  // ← must be false; undefined is not enough
-    signal: controller.signal
-};
+```bash
+npm run deep -- --date YYYY-MM-DD
+npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader
 ```
 
-**Verification**: Test directly with `curl --noproxy "xiaomimimo.com"`. If bypassing the proxy succeeds while the script fails, this is the issue.
+A retained older success plus a latest failure still requires retry.
 
-### 12.8 Image Upload to WeChat CDN Fails
+## Mechanical Reader, Detached Tables, or Figures
 
-- Check whether `WECHAT_APP_ID` / `WECHAT_APP_SECRET` have expired
-- Check whether the image is too large or restricted by arXiv
-- WeChat image uploads are rate-limited; large batches may need to be executed in chunks
+Check term-pair roles and combination meaning; table question/conditions/interpretation; figure lead/viewing path/caption/explanation; no-pixel visual guesses; and ambiguous pronouns. Fix analysis/structured findings and refresh Reader. Review must not rewrite the page.
 
-### 12.9 API Protocol Routing Verification
+## Generate Failure
 
-Run `node scripts/test-api-key.js` to test whether the API configuration is correct — it prints the detected protocol type (`openai` / `anthropic`), the actual request URL, and the model response. If MiMo Token Plan shows `openai`, check its `token-plan` endpoint and MiMo domain/model. Kimi Coding should use `kimi.com/coding` and supports names such as `k3`.
+Check production proof, batch date, eight scores, Reader v3, authors, safe image URLs, and target blog worktree. Generate refuses to overwrite overlapping manual Git edits. Include/exclude scope mismatches are intentional failures.
 
-### 12.10 `npm run fetch` killed by SIGTERM (exit code 143) when running in background
+## Review Failure
 
-**Root cause**: npm creates a controlling TTY to run the child process; when terminal signal handling misbehaves, the child may receive SIGTERM and npm returns exit code 143.
+Content findings return to generation or analysis. Transient API failures retry only affected pages. Page SHA, generation, protocol, or baseline drift invalidates the receipt.
 
-**Fix**: invoke `node scripts/full-fetch.js` directly to bypass npm's process management. The root-level `run-full-fetch.sh` already wraps this behavior (`exec node scripts/full-fetch.js`).
+For Hugo memory problems, first eliminate stale parallel Hugo processes and verify repository/theme selection. Never skip Hugo to issue a receipt.
 
----
+## Push Failure
+
+Verify receipt/generation binding, current HEAD versus review baseline, exact worktree/index delta, remote identity, and live remote `main`. Push neither generates nor reviews and cannot use an unrelated local commit to bypass the receipt.
+
+## Visual Pending or Record Failure
+
+```bash
+npm run visual:prepare -- --date YYYY-MM-DD
+npm run visual:status -- --date YYYY-MM-DD
+npm run cover:status -- --date YYYY-MM-DD
+```
+
+Use only emitted absolute reference paths. Record requires the current token, canonical asset, and `--qa-attested true`. Publication, manifest, or asset changes invalidate completion.
+
+## Stale Status
+
+`digest:status` is a snapshot. Regenerate it after push, record, or waiver. Current-date failures are never hidden by archives; historical archives must still satisfy cross-file contracts.
+
+## Escalation Evidence
+
+Provide command, date, earliest error, stage, manifest path, and a redacted log excerpt. Never include keys, authentication headers, cookies, or full `.env` contents.

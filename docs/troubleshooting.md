@@ -1,141 +1,125 @@
-# 排错手册
+# 故障排查
 
-先定位失败阶段，再只重跑该阶段；不要因视觉失败重新生成已发布博客，也不要因 API 失败
-切换到 Manual。配置清单见[环境配置](setup.md)，阶段恢复入口见[主流程](workflow.md)。
+## 使用方法
 
-| 现象 | 首先检查 | 常用恢复入口 |
-|---|---|---|
-| 401/403、协议或代理错误 | `.env` 的 key/model/endpoint/代理 | `node scripts/test-api-key.js` |
-| 抓取或筛选中断 | source checkpoint 与 decisions 覆盖 | 重新运行 `digest:prepare` / `full-fetch.js` |
-| 部分论文分析失败 | `analysisManifest` 与 canonical 状态 | `npm run deep` 或指定重分析 |
-| 博客 review/push 失败 | generation、page SHA、receipt、Git 基线 | 从 `blog:review` 或 `blog:push` 续跑 |
-| 发布后视觉未完成 | publication OID、visual/cover manifest | `visual:post-publish` 与状态命令 |
+先找到最早失败的门禁，不要从最后一个报错猜原因。所有诊断命令必须沙箱外运行；沙箱访问不到本地代理不代表目标站点故障。
 
-### 12.1 模型调用失败 / API 返回 401 / 403
+## 1. 启动即报缺少配置
 
-**检查步骤**：
+检查项目根 `.env`，不是 shell：
 
-1. **检查 key/endpoint/model 三元组是否匹配**
-   - MiMo Token Plan key 前缀为 `tp-`，必须配合 Token Plan 端点 `token-plan-cn.xiaomimimo.com`
-   - MiMo 按量付费 key 前缀为 `sk-`，必须配合按量付费端点 `api.xiaomimimo.com`
-   - 两者混用必返回 401
-
-2. **检查是否走对了协议**
-   - 查看终端输出或 `logs/*.log` 中的 `[filter] API 类型: xxx` / `[api] → model | xxx` 行，确认显示 `anthropic` 还是 `openai`
-   - 若 MiMo Token Plan 显示 `openai`，检查 `token-plan` 端点和 MiMo 域名/模型；Kimi Coding 应使用 `kimi.com/coding`，`k3` 无需在模型名中含 `kimi`
-
-3. **Anthropic 协议专项检查**（输出显示 `anthropic` 时）
-   - 确认请求头中包含 `User-Agent: claude-cli/<version> (external, cli)`（终端输出中不会直接显示，但可以用 tcpdump 或代理工具验证）
-   - 确认使用的是 `x-api-key` 而非 `Authorization: Bearer`
-   - 确认 URL 路径正确：MiMo Token Plan 是 `/anthropic/v1/messages`，Kimi Coding Plan 是 `/coding/v1/messages`，而不是 `/v1/chat/completions`
-
-4. **OpenAI 协议专项检查**（输出显示 `openai` 时）
-   - 确认使用 `Authorization: Bearer {key}`
-   - 普通 OpenAI Chat Completions 路径是 `/v1/chat/completions`
-   - 精确模型 `muse-spark-1.2-contributor` 使用 OpenAI Responses，路径是 `/v1/responses`，并且必须使用项目 `.env` 的 HTTP CONNECT 代理
-
-5. **检查代理**
-   - MiMo Token Plan 在有系统代理时可能被屏蔽，尝试关闭代理或设置 `agent: false`
-   - 详见 12.7 节
-
-6. **查看输出**：查看 `logs/full-fetch-*.log`、`logs/deep-analyzer-*.log`，同时保留终端完整输出
-
-### 12.2 深度分析慢或频繁失败
-
-- 查看 `logs/deep-analyzer-*.log`、`logs/full-fetch-*.log`，同时保留终端完整输出
-- 若成功结果的 `analysisSource=abstract`，说明 HTML/PDF 全文均不可用；该结果默认被博客发布预检阻断。人工确认必须发布时显式设置 `allowAbstractAnalysisPublish: true`，不要删除来源字段伪装成全文结果
-- 图片成功缓存位于 `data/current/image-cache/`；查看 `imageManifest.downloadOutcomes` 区分永久拒绝与瞬时错误，查看 `imageManifest.supplement.insertionDiagnostics` 排查非法 `paragraph_id`。禁止恢复章节末尾兜底
-- 检查 key/endpoint/model 三元组是否匹配（见 12.1 节）
-- 主分析本来就是纯文本，不存在超时后的“纯文本降级”。API 超时按剩余活跃时间预算正常重试；图片下载或副模型插图失败会保留纯文本 checkpoint，并在下次只续跑未完成阶段。持续失败时检查代理、模型服务、`PD_ANALYSIS_API_MAX_RETRIES` 和并发度
-- 可用 `node scripts/deep-analysis-only.js` 安全续跑
-
-### 12.3 重分析启动即报 key 未配置
-
-- 在项目根目录的 `.env` 文件中配置 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL`、`PAPER_ANALYZER_ENDPOINT`
-- 重新运行脚本即可；不要依赖 `.zshrc` / Trae / Codex 外层环境变量补齐项目配置
-
-### 12.4 发布后提示"没有新内容需要推送"
-
-在博客仓库检查：
 ```bash
-cd ~/code/github_repos/audio-paper-digest-blog
-git status --short
-ls -lt content/posts | head -20
+ls -l .env
+node scripts/test-api-key.js
 ```
 
-可能原因：
-- 只运行了 `generate-blog.py` 或 `review-blog.py`；正式推送必须显式运行 `push-blog.py`
-- `push-blog.py` 找不到审查凭证，或 review 后文件 SHA-256 已变更：需重新运行 `review-blog.py`；脚本会复用 `blog-review-passes-YYYY-MM-DD.json` 中路径和 SHA 均匹配的通过项，只审查新增、变化或失败文件
-- 数据文件为空或论文分析失败
-- 目标日期文件已存在且内容相同
+必需三元组为 `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT`。endpoint 必须 HTTPS。loader 会清理继承变量，因此 `.zshrc` 里的值不会补齐项目配置。
 
-### 12.4.1 全部博客发布后未建立视觉任务
+## 2. Muse 请求失败、超时或空响应
 
-- 先检查 `blog-review-receipt-YYYY-MM-DD.json` 是否同时包含相同的 `publicationCommit`、`remoteVerifiedOid` 和 `remoteVerifiedAt`；缺少时说明远端发布尚未验证，不能生图
-- 远端验证完成后运行 `npm run visual:post-publish -- --date YYYY-MM-DD`；完整输出只列出 TOP 10 pending/failed 长图和一张汇总图
-- manifest 缺失或发布版本/分析/prompt/热门方向/排名/category 变化时，重新运行 `visual:post-publish`；`status` 只读报告过期、缺失、失败、PNG 损坏或 SHA 不符，不会修改任务
-- 使用 Codex 内置 `image_gen` 生成待处理项，目视核对英文标题、中文正文、论文数字和排行榜无误后，再通过 `visual:record` 或 `cover:record` 登记；旧 token 被拒绝时必须重新读取最新规划，禁止覆盖新任务
-- 若参考图缓存路径以 `.bin` 结尾，不要直接上传或手工改名；先运行 `npm run visual:prepare -- --date YYYY-MM-DD [--paper ID]`，再把输出的绝对 `referencedImagePaths` 交给内置 `image_gen`（`relativePath` 仅供日志展示）。命令会阻断缓存 SHA、字节数、MIME、文件头或路径不一致，避免上传阶段出现误导性的 network error
-- 两个 status 都返回 0 即表示发布后图片完成；图片独立于已经完成的博客事务，无需也不得因此重新 generate/review
+确认：
 
-### 12.5 路径混淆
+- model 精确为 `muse-spark-1.2-contributor`；
+- `HTTPS_PROXY` 或 `HTTP_PROXY` 是 `http(s)://` CONNECT 地址；
+- 命令在沙箱外；
+- 代理出口和地区符合账户要求；
+- `PD_OPENAI_RESPONSES_STREAM=1` 是否与代理兼容。
 
-- **优先使用** `data/current/deep-analysis-result.json`
-- 旧路径 `data/deep-analysis-result.json` 仅在兼容场景下读取
-- 若同时存在新旧路径，脚本优先选择 `data/current/`
+Muse 必须走 one-shot CONNECT agent。不要改成直连。若返回 `incomplete/max_output_tokens`，这是截断，不是成功；调整证据/输出预算或修复 Prompt 后重试，不能接受半截 JSON。
 
-### 12.5.1 博客阶段提示必须沙箱外运行
+## 3. MiMo/Kimi 403
 
-- `generate-blog.py`、`review-blog.py`、`push-blog.py` 与兼容 `publish-to-blog.py` 会主动拒绝可靠沙箱标志 `CODEX_SANDBOX`；沙箱外权限包装可能保留网络禁用标志，不能单独据此判定仍在沙箱内
-- 应以沙箱外权限重跑**同一阶段**；这不是内容问题，不要无故重新生成，也绝不能跳过 LLM/图片审查或伪造 SHA-256 审查凭证
+普通 MiMo/Kimi 预期 `agent:false` 直连。若 curl 直连正常而脚本 403，检查是否有调用方绕过 `requestLlmJson()` 或自行注入 agent。不要把 Muse 的强制代理策略套到其他模型。
 
-### 12.6 HuggingFace 抓取为空
+## 4. arXiv/HuggingFace 抓取失败
 
-- 检查项目根 `.env` 是否至少有 `HTTPS_PROXY=http://127.0.0.1:7897` 或 `HTTP_PROXY=http://127.0.0.1:7897` 其中一项；若本机代理提供 SOCKS，可再设置 `ALL_PROXY=socks5h://127.0.0.1:7897`
-- 在**沙箱外**执行 `node scripts/fetch-huggingface-papers.js`。沙箱无法访问本机 `127.0.0.1:7897`，不能据此判断 HuggingFace 或代理失效
-- `fetch-huggingface-papers.js` 使用 `curl` 命令，确保系统 `curl` 可用；无项目代理时脚本会主动报错，避免写入伪成功空结果
+检查项目代理和来源 checkpoint：
 
-### 12.6.1 arXiv 抓取或全文下载失败
+- arXiv Node 请求只接受 HTTP CONNECT。
+- HuggingFace curl 可额外使用 `ALL_PROXY=socks5h://...`。
+- 429 会按配置退避；不要删除 checkpoint 后高并发重打。
+- 某来源候选数/SHA 不一致时，只重抓该来源。
 
-- arXiv 元数据、HTML、PDF 与图片均强制走项目 `.env` 的 `HTTPS_PROXY` 或 `HTTP_PROXY`。至少一项必须是 `http://` 或 `https://` 的 HTTP CONNECT 地址，不能只配置 SOCKS `ALL_PROXY`
-- 在沙箱外用 `node scripts/test-api-key.js` 验证 LLM/代理，或运行完整流程；沙箱内访问本机代理失败是运行环境限制
-- LLM 代理策略由 `requestLlmJson()` 统一决定：MiMo/Kimi 等默认 `agent:false`；`muse-spark-1.2-contributor` 必须检测到项目 HTTP CONNECT 代理并创建 one-shot agent。调用方不得自行注入或复用 agent/dispatcher
+HuggingFace 空结果不能在代理缺失时伪装成功。HTML 只有 metadata shell 时应继续 PDF fallback。
 
-### 12.7 MiMo API 返回 403 / 代理问题
+## 5. filtered 不完整
 
-**根因**：Node.js `https.request` 的 `agent: undefined` 仍会复用全局默认 agent 的连接池。当系统配置了代理（`https_proxy` 等环境变量）时，全局 agent 的连接可能被代理污染，导致 MiMo Token Plan 服务端拒绝请求。
+运行：
 
-**修复**：所有 Node LLM 请求（包括 `test-api-key.js`）统一走 `requestLlmJson()`；它会为 MiMo 设置 `options.agent=false`（不是 `undefined`），彻底禁用连接复用：
-
-```javascript
-const options = {
-    hostname: url.hostname,
-    path: url.pathname + url.search,
-    method: 'POST',
-    headers: headers,
-    agent: false,  // ← 必须是 false，undefined 无效
-    signal: controller.signal
-};
+```bash
+npm run validate:data
 ```
 
-**验证**：直接用 `curl --noproxy "xiaomimimo.com"` 测试，若绕过代理成功而脚本失败，即为此问题。
+常见原因：raw 与 decision 输入 SHA 不同、决定未覆盖全部候选、API 错误项仍 pending、filtered 包含非 related 项、模型/Prompt/关键词版本变化后只更新了一部分文件。不要手工删掉未知决定；恢复筛选让缓存补齐。
 
-上述 MiMo 诊断不适用于 Muse：`muse-spark-1.2-contributor` 的预期行为是经项目 `.env` 中的 HTTP CONNECT 代理访问 OpenCode Go；缺代理应当 fail closed。
+## 6. 分析慢或反复失败
 
-### 12.8 图片上传微信 CDN 失败
+先看失败处于哪个 stage，而不是整篇重跑：
 
-- 检查 `WECHAT_APP_ID` / `WECHAT_APP_SECRET` 是否过期
-- 检查图片是否过大或被 arXiv 限制
-- 微信图片上传有频率限制，大量图片可能需要分批执行
+- `PD_ANALYSIS_CONCURRENCY` 默认 3；
+- Reader 重阶段默认 5；
+- Muse 筛选 batch 固定 1；
+- 主分析、局部修复和 Reader 使用不同 token/context 预算。
 
-### 12.9 API 协议路由验证
+```bash
+npm run deep -- --date YYYY-MM-DD
+npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader
+```
 
-运行 `node scripts/test-api-key.js` 测试 API 配置是否正确——会输出检测到的协议类型（`openai` / `anthropic`）、实际请求的 URL 和模型响应。Anthropic 协议输出类似 `[test-api-key] 协议: anthropic`，OpenAI 类似 `[test-api-key] 协议: openai`。若 MiMo Token Plan 显示 `openai`，检查 `token-plan` 端点和 MiMo 域名/模型；Kimi Coding 应使用 `kimi.com/coding`，并兼容 `k3`。
+来源 SHA、Prompt 或模型变化会按指纹失效对应阶段。旧成功正文存在但最新尝试失败时仍需重试。
 
-### 12.10 后台运行时 `npm run fetch` 被 SIGTERM 终止（exit code 143）
+## 7. Reader 文章机械、表格或图片脱节
 
-**直接原因**：npm 创建一个 TTY 控制终端来运行子进程，当终端信号处理不当时，子进程可能收到 SIGTERM 终止信号，npm 返回 exit code 143。
+检查 `apiReaderPlan` 与正文：
 
-**解决方案**：用 `node scripts/full-fetch.js` 直接调用，避免 npm 的进程管理。根目录 `run-full-fetch.sh` 已经包装好这个行为（`exec node scripts/full-fetch.js`）。
+- 术语桥是否同时解释两个术语的分工、搭配原因和组合意义；
+- 表前是否提出比较问题，表后是否解释净收益、失败项和边界；
+- Figure 是否有导读、可执行看图路径、原图、图注和解释；
+- 未传像素时是否猜了颜色、坐标轴或模块；
+- 段落中的“它/该方法/这一结果”是否唯一回指。
 
----
+修复 Prompt 或结构化 findings 后刷新 Reader，不在博客 review 阶段原地改正文。
+
+## 8. blog:generate 失败
+
+优先检查 production proof、批次日期、评分八维、Reader v3、作者机构、图片 URL 安全和目标博客工作区。generate 会拒绝覆盖目标日期已有的人工 Git 修改。
+
+单篇/排除参数未命中也会失败，这是范围保护，不应忽略。
+
+## 9. blog:review 失败
+
+review 是只读门禁。内容问题回到生成/分析修复；瞬时 API 失败只重试失败页。页面 SHA、generation、协议或 Git baseline 变化会使 receipt 失效。
+
+Hugo 内存异常时先确认没有并行遗留 Hugo 进程、目标仓库和主题是否正确，再单独运行受控 Hugo gate；不要通过跳过 Hugo 签发 receipt。
+
+## 10. blog:push 失败
+
+检查：
+
+- receipt 是否绑定当前 generation；
+- 博客 HEAD 是否仍等于 review baseline；
+- staged/unstaged/untracked delta 是否精确；
+- remote 名称和 push URL 身份是否变化；
+- 实时远端 `main` 是否仍匹配可重试提交。
+
+push 不生成、不审查，也不能借已有本地 commit 绕过 receipt。
+
+## 11. 视觉 pending 或 record 失败
+
+先确认远端 publication OID，再运行：
+
+```bash
+npm run visual:prepare -- --date YYYY-MM-DD
+npm run visual:status -- --date YYYY-MM-DD
+npm run cover:status -- --date YYYY-MM-DD
+```
+
+只使用 prepare 输出的绝对参考路径。record 需要当前任务 token、canonical 文件和 `--qa-attested true`。manifest、publication 或资产 SHA 变化会使完成态失效。
+
+## 12. 状态报告与现实不一致
+
+`digest:status` 是读取时快照。push、record 或 waiver 后必须重新运行。当前日期不会用 archive 掩盖 current 故障；历史日期也只有跨文件契约闭合时才回退 archive。
+
+## 仍无法定位
+
+记录：命令、目标日期、最早错误、对应 stage、相关 manifest 路径和脱敏日志片段。不要附带 API key、认证头、Cookie 或完整 `.env`。

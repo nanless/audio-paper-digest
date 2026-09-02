@@ -14,6 +14,10 @@
 | 修改评分、Prompt、路径或契约 | [维护约定](maintenance.md) | [数据格式](data-format.md) |
 | 显式运行 Manual/人工路线 | [Manual 入口](../manual/README.md) | [Manual 工作流](../manual/docs/workflow.md) |
 
+面向新用户，推荐顺序是 `README → setup → workflow → troubleshooting`；维护者再继续阅读
+`scripts → data-format → maintenance`。Agent 的执行约束仍以根目录 `AGENTS.md` / `SKILL.md`
+为准，本文只负责导航。
+
 ## 默认生产链路
 
 ```text
@@ -28,5 +32,7 @@ Manual 不会因模型、网络或配额失败而自动启用。微信、飞书�
 
 ## English documentation
 
-English mirrors are under [`docs/en/`](en/). The Chinese documents and current code remain
-the most actively maintained source of operational detail.
+Start with the English [project README](../README.en.md), then use
+[Setup](en/setup.md), [Workflow](en/workflow.md), [Scripts](en/scripts.md),
+[Data formats](en/data-format.md), [Maintenance](en/maintenance.md), and
+[Troubleshooting](en/troubleshooting.md).

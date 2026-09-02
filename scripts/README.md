@@ -17,6 +17,14 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
   `manual/`，用于复验已有 Manual 产物；这是共享兼容边界，不代表默认 API 会启动
   Manual 写作流程。
 
+| 需求 | 推荐入口 |
+|---|---|
+| 跑完整当天日更 | `npm run digest:prepare -- YYYY-MM-DD` |
+| 只续跑分析 | `npm run deep -- --date YYYY-MM-DD` |
+| 校验运行数据 | `npm run validate:data` |
+| 查整轮最终状态 | `npm run digest:status -- --date YYYY-MM-DD` |
+| 查某个文件职责 | 继续阅读下方分类索引 |
+
 ## 默认 LLM/API：抓取、筛选与分析
 
 | 文件 | 类型 | 职责 |

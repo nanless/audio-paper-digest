@@ -1,306 +1,84 @@
-# Environment Variables and Configuration
+# Installation and Environment
 
-This page answers how to start the pipeline reliably. See [Workflow](workflow.md) for stage
-semantics, [Troubleshooting](troubleshooting.md) for failures, and the [documentation index](../README.md)
-for task-oriented navigation. Manual uses the same project `.env`, with separate rules under
-[`manual/`](../../manual/README.md).
+## Audience
 
-### 6.1 Unified Storage Location
+For first-time default LLM/API operators and anyone diagnosing project-environment issues. See [workflow.md](workflow.md) for execution and [env.example](../../env.example) for all documented variables.
 
-**All environment variables are stored in the project-root `.env` file.**
-
-Benefits of this design:
-- Sensitive configurations are centralized and never written into scripts
-- Node scripts read the project-root `.env` through `scripts/env-loader.js` / `loadEnvFile()`
-- Python scripts read the project-root `.env` through `scripts/project_env.py`
-- Scripts clear inherited project-scoped variables from Trae/Codex/shell before loading the current project's `.env`, preventing mixed-provider key/model/endpoint combinations
-
-### 6.2 Environment Variable Reference
-
-#### Filtering and Deep Analysis (unified under `PAPER_ANALYZER_*`)
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PAPER_ANALYZER_API_KEY` | LLM API Key | **Required** |
-| `PAPER_ANALYZER_ENDPOINT` | LLM API base path (for example `/v1`, `/coding/v1`, or `/anthropic`; scripts append the final request path) | **Required** |
-| `PAPER_ANALYZER_MODEL` | LLM model name | **Required** |
-| `PAPER_ANALYZER_SECONDARY_MODEL` | Secondary model name; enables image selection and insertion planning when set | Optional |
-| `PAPER_ANALYZER_SECONDARY_ENDPOINT` | Secondary model API base path; falls back to the primary endpoint when unset | Optional |
-| `PAPER_ANALYZER_SECONDARY_API_KEY` | Secondary model API key; falls back to the primary key when unset | Optional |
-| `PD_ANALYSIS_CONCURRENCY` | Deep analysis concurrency | 3 |
-| `PD_ANALYSIS_MAX_RETRIES` | Per-paper retry count for deep analysis | 2 |
-| `PD_ANALYSIS_API_MAX_RETRIES` | Maximum attempts for each internal LLM API stage within one paper-analysis attempt | 3 |
-| `PD_ANALYSIS_REPAIR_MAX_TOKENS` | Output-token cap for revision, table, method, and structure repair stages | 16000 |
-| `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` | Cross-document sampling budget for very long primary-analysis inputs | 200000 |
-| `PD_OPENSOURCE_EVIDENCE_MAX_CHARS` | Task-focused evidence budget for open-source scanning | 16000 |
-| `PD_REVISION_EVIDENCE_MAX_CHARS` | Task-focused evidence budget for revision | 60000 |
-| `PD_SCORING_EVIDENCE_MAX_CHARS` | Task-focused evidence budget for final scoring audit | 40000 |
-| `PD_REPAIR_EVIDENCE_MAX_CHARS` | Task-focused evidence budget for method and table repair | 30000 |
-| `PD_STRUCTURE_EVIDENCE_MAX_CHARS` | Task-focused evidence budget for final structure repair | 40000 |
-| `PD_REANALYZE_CONCURRENCY` | Re-analysis concurrency | 3 (matches `ANALYSIS_CONFIG.concurrency`) |
-| `PD_FILTER_BATCH_SIZE` | LLM filtering batch size | 5 |
-| `PD_ARXIV_MAX_RESULTS` | Final per-category target; recent is capped at two pages/100 papers and search/Atom API fill the remainder | 100 |
-| `PD_KEYWORD_PREFILTER_ENABLED` | Enable the high-recall keyword prefilter; set to `0` to disable temporarily | 1 |
-| `PD_ARXIV_FETCH_MAX_RETRIES` | Maximum attempts for recent/search/abstract/Atom metadata requests | 5 |
-| `PD_ARXIV_FETCH_RETRY_BASE_DELAY_MS` | Linear retry-backoff base for ordinary metadata failures, in milliseconds | 5000 |
-| `PD_ARXIV_RATE_LIMIT_BASE_DELAY_MS` | Exponential HTTP 429 backoff base, in milliseconds | 60000 |
-| `PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS` | Cumulative backoff budget per category for HTTP 429 responses, in milliseconds | 120000 |
-| `PD_ARXIV_FETCH_MAX_WAIT_MS` | Cumulative wait budget for all metadata retries in one category, in milliseconds | 600000 |
-| `PD_ARXIV_METADATA_TIMEOUT_MS` | Absolute deadline per recent/search/abstract/Atom request, in milliseconds | 60000 |
-| `PD_ARXIV_METADATA_MAX_BYTES` | Maximum bytes per recent/search/abstract/Atom response | 8388608 |
-| `PD_ARXIV_USER_AGENT` | Optional fixed arXiv User-Agent; otherwise use the built-in rotation pool | unset |
-| `PD_IMAGE_MAX_BYTES` | Raw byte-size limit per image for deep analysis | 6291456 |
-| `PD_IMAGE_DOWNLOAD_TIMEOUT_MS` | Per-candidate-image download timeout in milliseconds | 60000 |
-| `PD_IMAGE_MAX_BASE64_CHARS` | Base64 character limit per image for deep analysis | 8388608 |
-| `PD_IMAGE_TOTAL_BASE64_CHARS` | Total image base64 character limit per paper | 20971520 |
-| `PD_ARXIV_FETCH_TIMEOUT_MS` | arXiv HTML/image discovery timeout in milliseconds | 60000 |
-| `PD_ARXIV_PDF_TIMEOUT_MS` | arXiv PDF fallback timeout in milliseconds | 180000 |
-| `PD_ARXIV_PDF_MAX_BYTES` | Maximum arXiv PDF fallback size | 52428800 |
-| `PD_SCORING_AUDIT_TEMPERATURE` | Final scoring-audit temperature | 0.1 |
-| `PD_IMAGE_PLAN_TEMPERATURE` | Secondary image-plan temperature | 0.2 |
-| `PD_IMAGE_INSERTION_MAX` | Default maximum inserted high-value figures per paper; positive integers may override it | 4 |
-| `PD_VISUAL_CJK_FONT` | Absolute path to the CJK font used by the deterministic visual debug renderer | Auto-detected when unset |
-| `PAPER_DIGEST_ENABLE_FILE_LOGS` / `PD_ENABLE_FILE_LOGS` | Backward-compatible setting; file logs are now enabled by default | Enabled |
-| `PAPER_DIGEST_DISABLE_FILE_LOGS` / `PD_DISABLE_FILE_LOGS` | Set to `1` to force-disable file logs | Disabled |
-
-**API Protocol Auto-Routing**: `detectApiType()` in `scripts/utils.js` automatically selects OpenAI or Anthropic protocol based on endpoint and model, in this priority order:
-
-All LLM endpoints must use HTTPS. Plain HTTP is accepted only for local test services on `localhost`, `*.localhost`, `127.0.0.0/8`, or `::1`; public HTTP endpoints are rejected before authentication headers are attached. Both Node's `utils.js` and Python publishing's `publish_common.py` enforce this gate before constructing authentication headers.
-- **DeepSeek**: endpoints containing `deepseek.com` or models containing `deepseek` are forced to OpenAI; `/anthropic` paths are converted to `/v1/chat/completions`
-- **MiMo Token Plan**: endpoint contains `token-plan` and model contains `mimo`, using Anthropic; `https://token-plan-cn.xiaomimimo.com/v1` -> `https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages`
-- **Kimi Coding Plan**: the `coding` endpoint on `api.kimi.com` uses Anthropic, including model names such as `k3` that do not contain `kimi`; both `https://api.kimi.com/coding` and `https://api.kimi.com/coding/v1` normalize to `https://api.kimi.com/coding/v1/messages` with no `/anthropic` intermediate path
-- **Generic `/anthropic` endpoint**: non-DeepSeek endpoints containing `/anthropic` use Anthropic and append `/messages`
-- **Other endpoints/models**: use OpenAI and append `/v1/chat/completions`
-
-#### Blog Publishing
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PAPER_DIGEST_BLOG_REPO` | Local path to the Hugo blog repository | `~/code/github_repos/audio-paper-digest-blog` |
-| `PAPER_DIGEST_BLOG_BASE_PATH` | Base URL path of the blog site (affects internal links) | `/audio-paper-digest-blog` |
-| `PAPER_DIGEST_BLOG_URL` | Deployed blog URL (e.g. `https://nanless.github.io/audio-paper-digest-blog/posts`) | `https://nanless.github.io/audio-paper-digest-blog/posts` |
-| `PAPER_DIGEST_REPO_URL` | Project repository URL appended to Xiaohongshu and related copy | `github.com/nanless/audio-paper-digest` |
-| `PAPER_DIGEST_GITHUB_REMOTE` | Git remote name | `origin` |
-| `PD_BLOG_REVIEW_CONCURRENCY` | Concurrent three-layer reviews for independent paper pages, bounded to 1–5; the digest page remains first and serial | `5` |
-| `PD_BLOG_REVIEW_CHUNK_CHARS` | Text-review chunk size, bounded to 4000–16000; changes refresh the batch protocol receipt while unchanged per-file SHA passes remain reusable | `8000` |
-| `PD_BLOG_REVIEW_MAX_TOKENS` | Output budget for one blog LLM review; a reasoning-only response gets one JSON-only recovery, capped at 8000 by default | `4000` |
-
-#### WeChat Official Account
-
-| Variable | Description |
-|----------|-------------|
-| `WECHAT_APP_ID` | WeChat Official Account AppID |
-| `WECHAT_APP_SECRET` | WeChat Official Account AppSecret |
-| `WECHAT_THUMB_MEDIA_ID` | Permanent cover media ID (required for a real draft; optional only for `--dry-run`) |
-| `PAPER_DIGEST_AUTHOR` | Article author name for WeChat Official Account (optional) |
-
-#### Xiaohongshu
-
-| Variable | Description |
-|----------|-------------|
-| `XIAOHONGSHU_COOKIES` | Cookie used by automated Xiaohongshu publishing; can be obtained via `npm run xhs-login` |
-| `PD_XIAOHONGSHU_ONELINER_CONCURRENCY` | LLM concurrency for TOP-N one-liners; range 1–5 (default: `5`) |
-
-#### Feishu (Lark) Documents
-
-| Variable | Description |
-|----------|-------------|
-| `FEISHU_APP_ID` | Feishu app ID (e.g. `cli_xxx`) |
-| `FEISHU_APP_SECRET` | Feishu app App Secret |
-
-> Write these into the `.env` file in the project root (no `export` prefix needed). Scripts read the current project's `.env` directly at runtime.
-
-The Node/Python loaders clear same-name inherited project variables before loading this file and tighten `.env` permissions to `0600`. LLM calls require API key, endpoint, and model together; no entry point fills a partial configuration with hard-coded OpenAI defaults.
-
-#### Execution Environment
-
-**Every project script must run outside the sandbox**, including direct `scripts/*.js`, `scripts/*.py`, `run-daily-digest.sh`, `run-full-fetch.sh`, and `scripts/*.sh` invocations. Node `env-loader.js`, Python `project_env.py`, and shell entry points reject `CODEX_SANDBOX` before logging, network requests, file writes, or business logic. Unit-test module imports do not trigger the guard. The external-runtime wrapper may preserve a network-disabled marker, so that marker alone cannot identify a sandbox.
-
-#### Proxy
-
-| Variable | Description |
-|----------|-------------|
-| `HTTPS_PROXY` / `HTTP_PROXY` | **At least one required** HTTP CONNECT proxy for arXiv Node fetches, for example `http://127.0.0.1:7897` |
-| `ALL_PROXY` | Optional SOCKS/global proxy for HuggingFace `curl`, for example `socks5h://127.0.0.1:7897` |
-| `NO_PROXY` | Local-address allow list, for example `localhost,127.0.0.1,::1` |
-
-Fetch proxy configuration is mandatory: arXiv metadata, HTML/PDF/images, HuggingFace Papers, and historical backfill reject direct fallback when it is missing. At least one of `HTTPS_PROXY` or `HTTP_PROXY` must be an HTTP CONNECT URL; neither may be a SOCKS URL. HuggingFace `curl` may additionally use `ALL_PROXY=socks5h://...`, which is passed explicitly while clearing `NO_PROXY` bypasses. LLM requests normally disable proxy agents and connection reuse; the exact model `muse-spark-1.2-contributor` is the exception and must use the project HTTP CONNECT proxy. Proxy values are loaded only from the project-root `.env`; same-name shell/IDE values are cleared and macOS `scutil` is not consulted. Commands that need a local proxy must run outside the sandbox, because sandbox loopback cannot reach `127.0.0.1`.
-
-Blog generation, review, and push must also run outside the sandbox, including the generation-only stage. `generate-blog.py`, `review-blog.py`, `push-blog.py`, and compatibility `publish-to-blog.py` reject the reliable `CODEX_SANDBOX` marker; the elevation wrapper may preserve the network-disabled marker, so it cannot independently reject an external runtime.
-
-### 6.3 Configuration Example
-
-Project-root `.env` format (**no `export` prefix needed**):
+## Shortest Setup
 
 ```bash
-# Paper Digest environment variables
+npm install
+python3 -m pip install -r requirements.txt
+cp env.example .env
+```
 
-# === Option 1: OpenCode Go Muse (default; OpenAI Responses protocol) ===
-PAPER_ANALYZER_API_KEY=your-opencode-go-key
+Node must satisfy `>=20.18.1 <21 || >=22.3.0`.
+
+## Minimum `.env`
+
+```dotenv
+PAPER_ANALYZER_API_KEY=your-key
 PAPER_ANALYZER_MODEL=muse-spark-1.2-contributor
 PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
-
-# === Option 2: MiMo Pay-as-you-go (generic OpenAI protocol) ===
-# PAPER_ANALYZER_API_KEY=sk-your-pay-as-you-go-key
-# PAPER_ANALYZER_MODEL=mimo-v2.5
-# PAPER_ANALYZER_ENDPOINT=https://api.xiaomimimo.com/v1
-
-# === Option 3: Kimi Coding Plan (masquerades as Claude Code via Anthropic protocol) ===
-# PAPER_ANALYZER_API_KEY=sk-your-kimi-key
-# PAPER_ANALYZER_MODEL=kimi-for-coding
-# PAPER_ANALYZER_ENDPOINT=https://api.kimi.com/coding/v1
-
-# === Option 4: Generic OpenAI-compatible endpoint ===
-# PAPER_ANALYZER_API_KEY=sk-your-openai-key
-# PAPER_ANALYZER_MODEL=gpt-4o
-# PAPER_ANALYZER_ENDPOINT=https://api.openai.com/v1
-
-# WeChat Official Account (if publishing is needed)
-WECHAT_APP_ID=your-app-id
-WECHAT_APP_SECRET=your-app-secret
-# PAPER_DIGEST_AUTHOR=your-name
-
-# Feishu (shared with other projects)
-FEISHU_APP_ID=your-feishu-app-id
-FEISHU_APP_SECRET=your-feishu-app-secret
-
-# Blog / Xiaohongshu (if blog URL needs to be shown in copy)
-# PAPER_DIGEST_BLOG_URL=https://nanless.github.io/audio-paper-digest-blog/posts
+HTTPS_PROXY=http://127.0.0.1:7897
+HTTP_PROXY=http://127.0.0.1:7897
+PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
 ```
 
-**Important Notes**:
-- Endpoint format follows the provider's documented HTTPS base path; OpenCode Go uses `/zen/go/v1`
-- Scripts automatically determine whether to use the Anthropic protocol based on endpoint and model name
-- Muse uses the project HTTP CONNECT proxy; other LLM routes explicitly disable proxy agents and connection reuse
+The documented default is OpenCode Go Muse Spark 1.2 Contributor over OpenAI Responses. Public endpoints must use HTTPS; HTTP is accepted only for loopback test services.
 
----
+## Project-Scoped Environment
 
----
+Node uses `scripts/env-loader.js`; Python uses `scripts/project_env.py`. Both clear inherited project and proxy variables before loading the repository-root `.env`, then tighten it to `0600`.
 
-## Logging Mechanism
+Do not rely on `.zshrc`, IDE, Trae, or Codex variables to fill missing project configuration. Child processes must use the shared minimal-environment builders so credentials do not leak to curl, Git hooks, browsers, or unrelated CLIs.
 
-All main scripts write to both the terminal and `logs/*.log` by default. To disable file logs, set `PD_DISABLE_FILE_LOGS=1` or `PAPER_DIGEST_DISABLE_FILE_LOGS=1` in the project-root `.env`.
+## Proxy Responsibilities
 
-- **Node scripts**: via `scripts/log-setup.js`
-- **Python scripts**: via `scripts/log_setup.py`
-- **Default output location**: `logs/<script-name>-YYYYMMDD-HHMMSS-<pid>-<seq>.log`
-- **Default behavior**: UTF-8 plain text, `0600` permissions, unique files, synchronous persistence, and central redaction of authentication headers, cookies, tokens, secrets, passwords, actual configured key values, and URL userinfo
-- **No limits and no automatic cleanup**: logs have no count, total-size, or per-file-size limit, and old logs are not deleted automatically
+| Traffic | Rule |
+|---|---|
+| exact Muse model | mandatory project HTTP CONNECT, one agent per request |
+| arXiv metadata/HTML/PDF/images | mandatory HTTP CONNECT |
+| HuggingFace curl | HTTP(S) proxy; optional SOCKS `ALL_PROXY` |
+| other LLM providers | direct with `agent:false` |
+| external images/demos | HTTPS only; public-IP validation per hop |
 
-`backfill_papers.py` uses the same unified per-run log and no longer appends a second `logs/backfill.log`. `logs/full-fetch-*.log` can help debug fetch/analysis issues; terminal output is still preserved.
+A missing proxy is an explicit failure, never a direct fallback. Project scripts that reach a local proxy must run outside the sandbox.
 
-**Background Buffer Handling**: all major Node scripts call `process.stdout._handle.setBlocking(true)` to ensure real-time log flush when running in the background.
+## Capacity Defaults
 
----
+| Variable | Default |
+|---|---:|
+| `PD_ANALYSIS_CONCURRENCY` | 3 |
+| `PD_ANALYSIS_API_MAX_TOKENS` | 64000 |
+| `PD_ANALYSIS_REPAIR_MAX_TOKENS` | 16000 |
+| `PD_API_READER_MAX_TOKENS` | 48000 |
+| `PD_API_READER_EVIDENCE_MAX_CHARS` | 180000 |
+| `PD_API_READER_CONTEXT_MAX_CHARS` | 240000 |
+| `PD_API_READER_CONCURRENCY` | 5 |
+| `PD_BLOG_REVIEW_CONCURRENCY` | 5 |
 
----
+Muse filtering is always effective batch 1, while whole-paper analysis keeps configured concurrency. Responses uses SSE only when `PD_OPENAI_RESPONSES_STREAM=1`.
 
-## Installation and Initialization
+## Optional Secondary Model
 
-### 9.1 Dependencies
+`PAPER_ANALYZER_SECONDARY_MODEL` enables image selection and insertion planning. The primary still authors text; the secondary neither replaces primary prose nor scores the paper. Secondary endpoint/key fall back to primary values when omitted.
 
-- **Node.js** `>=20.18.1 <21 || >=22.3.0` (`node` / `npm`; Node 21 is outside the locked dependency support range)
-- **Python** 3.x (`python3` / `pip3`)
-- Node.js dependency: `cheerio` (arXiv HTML structured parsing)
-- Python third-party libraries: see the root `requirements.txt` (`requests`, `playwright`, `PyYAML`, `Pillow`). `PyYAML` is required by the deterministic blog-frontmatter gate, and `Pillow` is required by the visual debug renderer and its tests; relevant stages fail closed when unavailable
+## Blog and Hugo
 
-### 9.2 Initialization
+`PAPER_DIGEST_BLOG_REPO` must identify the actual Hugo repository. Review runs the Hugo gate outside the sandbox. A missing blog repository may skip published-paper deduplication during data-only work, but real publishing cannot proceed.
+
+## Verify
 
 ```bash
-cd /path/to/audio-paper-digest
-
-# Install Node.js dependencies
-npm install
-
-# Install Python dependencies (also required by blog publication)
-pip3 install -r requirements.txt
-
-# Create required directories
-mkdir -p data/current data/archive logs
-
-# Configure API Key
-cat >> the `.env` file in the project root << 'EOF'
-PAPER_ANALYZER_API_KEY=your-llm-key
-PAPER_ANALYZER_MODEL=your-llm-model
-PAPER_ANALYZER_ENDPOINT=https://your-llm-endpoint/v1
-
-# If WeChat Official Account publishing is needed, also set:
-# WECHAT_APP_ID=your-app-id
-# WECHAT_APP_SECRET=your-app-secret
-EOF
-
-# Save the file and run scripts directly; scripts read the current project-root `.env`
+node --version
+npm test
+npm run validate:data -- --allow-empty
+node scripts/test-api-key.js
 ```
 
-### 9.3 Blog Repository Setup
+Do not use a real daily run as an environment probe.
 
-Blog publishing requires a locally cloned Hugo blog repository. The default path is `~/code/github_repos/audio-paper-digest-blog`, customizable via `PAPER_DIGEST_BLOG_REPO` in the project-root `.env`:
+## Security
 
-```bash
-# Default path (default when env is not set)
-git clone https://github.com/nanless/audio-paper-digest-blog.git \
-  ~/code/github_repos/audio-paper-digest-blog
-
-# Or custom path
-PAPER_DIGEST_BLOG_REPO="~/my-blog-repo"
-```
-
-Blog repository requirements:
-- Hugo site using the PaperMod theme (or another standard theme)
-- Auto-deployed to GitHub Pages via GitHub Actions
-- `content/posts/` directory stores generated Markdown files
-- If the blog is deployed under a sub-path, set `PAPER_DIGEST_BLOG_BASE_PATH` (e.g. `/audio-paper-digest-blog`)
-
-### 9.4 Feishu Credentials Setup
-
-Publishing to Feishu documents requires the `App ID` and `App Secret` of a Feishu custom app:
-
-```bash
-# Write to the `.env` file in the project root
-FEISHU_APP_ID=cli_xxx
-FEISHU_APP_SECRET=your-full-app-secret
-```
-
-> How to obtain: Feishu Open Platform -> Developer Console -> Create enterprise self-built app -> View credentials.
-
----
-
----
-
-## Date Safety Policy (Must Follow)
-
-1. **Always explicitly specify `--date` when publishing**
-   - Do not rely on the script's default "today"
-   - Pay extra attention when running across midnight
-
-2. **Before publishing, confirm the date distribution of papers in the input data file**
-   ```bash
-   python3 - <<'PY'
-   import json
-   from collections import Counter
-   with open('data/current/deep-analysis-result.json') as f:
-       d = json.load(f)
-   papers = d.get('papers', [])
-   dates = [p.get('fetchedAt', '')[:10] for p in papers if p.get('fetchedAt')]
-   print('Total papers:', len(papers))
-   print('fetchedAt batch date distribution:', Counter(dates))
-   PY
-   ```
-
-3. **When the user explicitly says "do not touch a certain day", deleting/overwriting content for that date is prohibited**
-   - Blog generation/review/push does not depend on visual assets; `generate-blog.py` installs only the digest index and every paper page
-   - `push-blog.py` plans TOP 10 infographics and the digest image only after remote OID verification
-   - If the data file contains papers from multiple dates, split the data or confirm intent before publishing
-
-4. **Do not publish the same day repeatedly**
-   - Re-running `generate-blog.py --date 2026-04-21` overwrites that day's files and requires `review-blog.py` to refresh the batch receipt, but pages whose path and SHA-256 still match a saved pass do not re-enter three-layer review. `push-blog.py` accepts only a receipt whose SHA-256 values exactly match the current files.
-   - To append papers, regenerate the complete data first, then publish
-
-5. **Resume visual assets; do not redraw everything**
-   - A remotely verified publication receipt is mandatory; `npm run visual:post-publish -- --date YYYY-MM-DD` plans only the final-score TOP 10
-   - Then run `npm run visual:prepare -- --date YYYY-MM-DD` to validate `.bin` reference caches and emit absolute, upload-ready `referencedImagePaths` for built-in generation
-   - `visual:post-publish` plans both image types while holding the blog transaction lock; only missing, failed, damaged, publication/analysis/prompt-invalidated, or newly TOP-10 infographics return to pending
-   - the digest image is replanned only when the published-paper snapshot, hot directions, ranking, category, publication commit, or prompt changes
-   - Register assets with their own `record` commands, then rerun both status gates. Never hand-edit manifests or bypass SHA/task-token checks
-
----
+Never commit `.env`, `data/`, `logs/`, caches, or credentials. Logs must redact keys, authentication headers, cookies, secrets, passwords, and URL userinfo. Non-dry-run WeChat publishing requires app ID, app secret, and thumbnail media ID; optional channels are outside the default digest. Manual setup starts at [manual/README.md](../../manual/README.md).

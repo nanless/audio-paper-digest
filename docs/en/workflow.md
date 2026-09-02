@@ -1,239 +1,107 @@
-# Main Workflow Explained
+# Default LLM/API Workflow
 
-This page follows the default LLM/API route in execution order. See [Setup](setup.md),
-[Data formats](data-format.md), and [Script responsibilities](scripts.md) for reference material.
-The explicit Manual route is documented separately under [`manual/`](../../manual/README.md).
+## Audience and Completion Goal
 
-```text
-fetch/archive → keyword + LLM filter → staged analysis → generate → review → push
-              → visual tasks → built-in image generation/waiver → digest:status
+For anyone running, understanding, or recovering a dated digest. The shortest entry is:
+
+```bash
+npm run digest:prepare -- YYYY-MM-DD
 ```
 
-The default daily entry is `./run-daily-digest.sh YYYY-MM-DD` or `npm run digest:prepare -- YYYY-MM-DD`. Starting from fetch requires Beijing today. The default route performs LLM/API fetching, filtering, staged full-text analysis, ordinary blog review, push, and visual preparation. `digest:api` is an explicit alias for the same route. Production Manual v6 remains available only through `--manual` or `digest:manual`, where the script stops at real paper/page subagent boundaries. The script never calls an image API; after publication succeeds, Codex must use built-in `image_gen` to complete the TOP 10 paper infographics and digest cover, then pass both visual status gates.
+`digest:api` is an exact alias. Completion means closed data contracts, remotely verified blog publication, and complete post-publication visual gates. Manual is explicit only; see [manual/README.md](../../manual/README.md).
 
-When the user asks to run a dated paper digest, that request already authorizes the blog push and requires every stage above. Do not stop after fetch, analysis, review, or publication. WeChat, Feishu, and Xiaohongshu auto-publishing are outside the default scope.
+## Sequence
 
-### 3.0 Default API and Explicit Manual Boundary
+```text
+date and archive
+ → proxy-backed fetch
+ → published-paper deduplication
+ → keyword prefilter
+ → LLM filtering
+ → full-text staged analysis
+ → scoring audit
+ → API Reader longform
+ → generate/review/push
+ → remote OID
+ → visual generation and record
+ → digest:status
+```
 
-The normal path uses keyword prefiltering, LLM filtering, staged LLM deep analysis, and ordinary API-backed blog review. Production Manual v6 runs only when the user explicitly requests the Manual/human path; model, network, or quota failures never select it automatically. Its raw/select, ArtifactIndex, task DAG, records/spec, page review, shadow, and legacy rules are centralized in [`manual/README.md`](../../manual/README.md) and the [Manual workflow](../../manual/docs/workflow.md).
+## 1. Date and Archive
 
-Both production routes share schema-v3 generation, exact page hashes, the deterministic Hugo gate, an exact Git delta, and remote-OID verification. Their content proofs remain distinct and cannot be mixed or silently downgraded.
+A run starting at fetch must target Beijing today. Date-scoped raw, decision, filtered, and deep files move to `data/archive/<date>/`; `papers.json` never moves.
 
-### 3.1 Auto-Archive
+Historical batches resume only from a safe existing stage accepted by the orchestrator, for example:
 
-At startup, the script checks the following files under `data/current/`:
-- `raw-candidates.json`
-- `filter-decisions.json`
-- `deep-analysis-result.json`
-- `filtered-papers.json`
-- `analyzed.json`
+```bash
+./run-daily-digest.sh YYYY-MM-DD --from generate
+```
 
-**Note: `papers.json` is the deduplication database and is NOT moved to archive; it accumulates continuously.**
+## 2. Fetch
 
-Archive rules (evaluated per file):
-1. Read the timestamp field from the file (supports `timestamp` / `lastUpdated` / `deepAnalysisCompletedAt` / `previousTimestamp`)
-2. If the date is **earlier than today (Beijing Time)**, copy it under `data/archive/<date>/`
-3. Reuse an identical canonical archive. If it differs, first preserve the old canonical file as a timestamped conflict snapshot, then replace canonical with the current bytes and read it back for verification
-4. Delete the current file only after equality is confirmed, or after the old version is preserved and the new canonical copy verifies; keep current on any failure
+arXiv and HuggingFace require project proxy configuration. Each source checkpoint binds health, candidate count, and stable content SHA. An incomplete required source blocks a complete filter set.
 
-Additionally, before final saving of a new deep-analysis result, if an existing `deep-analysis-result.json` contains data, it is backed up to `data/archive/deep-analysis-result-<timestamp>.bak.json`, and old backups are cleaned up automatically (keeping the most recent 10). This happens during the final save after analysis, not during startup archive.
+Candidates are normalized, merged, deduplicated against published blog IDs, and saved in `raw-candidates.json`.
 
-### 3.2 Load Deduplication Database and Blog Dedup
+## 3. Keyword and LLM Filtering
 
-At startup, the deduplication set is first loaded:
+The keyword layer optimizes recall:
 
-1. **papers.json**: Read existing paper IDs from `data/current/papers.json`
-2. **Blog published**: Scan the Hugo blog repository (`PAPER_DIGEST_BLOG_REPO`, default `~/code/github_repos/audio-paper-digest-blog`) `content/posts/` directory, extract arXiv IDs in `arxiv.org/abs/XXXX.XXXXX` format from all `.md` files
+- core eess.AS/cs.SD papers always reach the LLM;
+- abstracts under 80 characters always reach the LLM;
+- audio/speech/music/model/dataset keyword matches reach the LLM;
+- only complete, clearly unmatched supplementary-category abstracts become deterministic negatives.
 
-Both are merged into a unified deduplication set. Subsequent arXiv and HuggingFace fetching will skip IDs in this set, **excluding already-published papers at the fetch stage to avoid wasting LLM API calls.**
+Decisions persist per paper. Exact Muse uses effective batch 1, so one failure remains local. Filtering completes only when decisions cover raw exactly and filtered matches positive decisions minus explicit exclusions.
 
-### 3.3 arXiv Fetching
+## 4. Full Text and Staged Analysis
 
-Fetch the latest papers from 7 categories:
+Healthy arXiv HTML is preferred; structurally inadequate pages fall back to PDF. Metadata shells cannot claim full-text provenance, and source-SHA changes invalidate primary analysis and downstream stages.
 
-| Category ID | Name | Priority |
-|---------|------|--------|
-| `eess.AS` | Audio and Speech | core |
-| `cs.SD` | Sound | core |
-| `eess.SP` | Signal Processing | core |
-| `cs.CL` | Computation and Language | supplement |
-| `cs.LG` | Machine Learning | supplement |
-| `cs.AI` | Artificial Intelligence | supplement |
-| `cs.MM` | Multimedia | supplement |
+Stages are primary analysis, open-source/demo scans, factual revision, table/method/structure repair, scoring audit, API Reader v3, and official-figure materialization. Stage fingerprints bind inputs, model, protocol, prompt, temperature, budgets, and output SHA.
 
-Fetch strategy: 3-level (recent → search → API):
+The canonical 13 headings serve parsers. Reader v3 serves humans: it explains term combinations, computation/training, datasets, metrics, results, counterevidence, reproduction, and limits. Tables and figures must sit next to the argument they support.
 
-1. **Recent page (primary)**: `arxiv.org/list/{category}/recent`, paginated (`?skip=50&show=50`) with a fixed cap of two pages/100 papers. `PD_ARXIV_MAX_RESULTS` is the final per-category target, so strict-category search and Atom API fallbacks continue filling when recent is short or the configured target exceeds 100. Abstracts are fetched afterward via `fetchAbstracts`.
-2. **Search page (fallback)**: `arxiv.org/search/` with User-Agent rotation, page delay 10-25s.
-3. **API (last resort)**: `export.arxiv.org/api/query`. 429 rate-limit: exponential backoff 60s, 120s, 240s, 480s, max 5 retries. Recent/search/abstract/Atom requests share a 60-second absolute deadline, an 8 MiB response cap, and `ARXIV_CONFIG`/`PD_ARXIV_*`-driven retry, backoff, and User-Agent settings.
+Each paper saves immediately under its paper lock and updates `papers.json.digestStatus`.
 
-Deduplication logic: `deduplicatePapers()` deduplicates by `arxivId`, with core categories (eess.AS / cs.SD / eess.SP) taking precedence over supplement categories.
+## 5. Scoring and Production Proof
 
-### 3.4 HuggingFace Papers Fetching
+Scoring first selects document type, then audits eight dimensions against an evidence ledger. Code recomputes the total, applies deterministic evidence caps, and binds audit/input/output SHA values.
 
-Dual-source fetching via `fetch-huggingface-papers.js`:
+Reader, authors, figures, score, source identity, and exact paper-set bindings form `llm_api_production`. Manual-only lineage in a default API batch fails closed.
 
-1. **`/api/daily_papers`**: Curated daily papers, including rich fields such as `ai_summary`, `githubRepo`, `upvotes`, `ai_keywords`, `projectPage`, `githubStars`, `discussionId`. Paginated (`limit=100`, up to 20 pages) until it passes the cutoff. The default `days=7` cutoff is Beijing today minus seven days and is inclusive, so it covers today plus the preceding seven calendar dates.
-2. **`/api/papers`**: Latest papers supplement, covering the last 1-2 days, used to backfill papers not included in daily_papers.
+## 6. Blog Transaction
 
-Filtering:
-- Keep the inclusive cutoff window (`published >= today-7 days`, including both the cutoff date and today)
-- Exclude historical already-known IDs (completed/published IDs from papers.json and blog-published IDs)
-- Do **not** exclude arXiv IDs fetched in the same run; same-batch overlaps are kept so the merge stage can enrich arXiv papers with HF upvotes, AI summaries, and project links
-- Sort by `upvotes` descending
+```bash
+npm run blog:generate -- --date YYYY-MM-DD
+npm run blog:review -- --date YYYY-MM-DD
+npm run blog:push -- --date YYYY-MM-DD
+```
 
-Technical implementation: data is fetched using `curl` commands (to avoid Node fetch compatibility issues in proxy environments), and returned data is normalized to a field structure consistent with arXiv. HuggingFace fetches must use the project `.env` proxy; missing proxy configuration fails immediately instead of creating an empty pseudo-success batch.
+Generate issues a schema-v3 manifest. Review uses immutable page artifacts for deterministic, LLM, image, and Hugo gates, reviewing the digest first and paper pages concurrently. Push commits only the receipt-authorized delta and verifies remote `main`.
 
-### 3.5 Merge and Deduplicate
+Review never mutates reviewed bytes. Page, baseline, protocol, generation, or remote drift invalidates the transaction.
 
-`mergeAndDeduplicate(arxivPapers, hfPapers)` rules:
+## 7. Visuals
 
-- **arXiv papers have higher priority**: all are first placed into the `merged` Map, preserving their `categories`, `abstract`, and other metadata
-- **HF papers supplement**: if an HF paper's `arxivId` already exists in an arXiv paper, all 7 HF-specific fields are merged; if not, it is added as an independent paper
-- **Source tags**: `sources: ['arxiv']`, `['huggingface']`, or `['arxiv', 'huggingface']`
-- **Abstract unification**: HF papers output both `summary` and `abstract` (same content), ensuring downstream consumers do not need to distinguish field names
+After remote verification, the system plans TOP 10 paper infographics and one digest cover. Scripts never call an image API; Codex uses built-in `image_gen`.
 
-After merging, blog-published papers are filtered out (based on the blog ID set loaded in Step 3.2), ensuring already-published papers do not enter the LLM filter stage.
+```bash
+npm run visual:prepare -- --date YYYY-MM-DD
+npm run visual:status -- --date YYYY-MM-DD
+npm run cover:status -- --date YYYY-MM-DD
+```
 
-HF-specific fields (7 total):
+Use only absolute paths emitted by prepare. Inspect every final image before recording it. An explicit user no-image request creates a bound waiver; pending work is never relabeled complete.
 
-| Field | Type | Description |
-|------|------|------|
-| `hf_upvotes` | number | HF community upvotes |
-| `hf_ai_summary` | string | HF AI-generated summary |
-| `hf_ai_keywords` | string[] | HF AI-extracted keywords |
-| `hf_github_repo` | string | Associated GitHub repository |
-| `hf_project_page` | string | Project homepage |
-| `hf_github_stars` | number | GitHub Stars count |
-| `hf_discussion_id` | string | HF Discussion ID |
+## 8. Recovery and Final Status
 
-### 3.6 LLM Filtering
+```bash
+./run-daily-digest.sh YYYY-MM-DD --from review
+npm run deep -- --date YYYY-MM-DD
+npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader
+npm run validate:data
+npm run digest:status -- --date YYYY-MM-DD
+```
 
-Using the `PAPER_ANALYZER_*` configuration in the project-root `.env`, each paper is evaluated to determine whether it is speech / music / audio related.
-
-**API Protocol Auto-Routing**: `detectApiType()` in `scripts/utils.js` automatically switches between OpenAI / Anthropic protocols based on the endpoint and model name
-
-LLM endpoints must use HTTPS. Plain HTTP is allowed only for loopback local test services, so API keys cannot be sent over public cleartext connections.
-- **MiMo / Kimi Token Plan / Coding Plan** (MiMo is recognized by `token-plan` plus its domain/model; Kimi by `coding` plus the `kimi.com` domain or Kimi model) -> automatically switches to **Anthropic protocol**, supports names such as `k3`, and masquerades as a Claude Code call
-  - **MiMo**: `https://token-plan-cn.xiaomimimo.com/v1` -> `/anthropic/v1/messages`
-  - **Kimi**: `https://api.kimi.com/coding` or `https://api.kimi.com/coding/v1` -> `https://api.kimi.com/coding/v1/messages` (automatically adds `/v1`; supports model names such as `k3`; no `/anthropic` intermediate path needed)
-  - Headers: `x-api-key` + `anthropic-version: 2023-06-01` + `User-Agent: claude-cli/<version> (external, cli)` (version dynamically obtained from local `claude --version`, fallback to `2.1.108` on failure)
-  - system message is automatically extracted as a top-level request body field
-- **Other cases** (including MiMo pay-as-you-go `api.xiaomimimo.com`, generic OpenAI endpoints) -> standard **OpenAI protocol**
-  - URL: `/v1/chat/completions`
-  - Headers: `Authorization: Bearer {key}`
-
-The filtering prompt is read from `prompts/filter.md`, with `{title}`, `{abstract}`, `{categories}` placeholders replaced at runtime. Evaluation criteria:
-- Speech synthesis / recognition / enhancement / separation / cloning / conversion -> **yes**
-- Audio generation / understanding / music / event detection -> **yes**
-- Speaker-related tasks -> **yes**
-- Speech / music / audio related models, representation learning, pre-training -> **yes**
-- Multimodal models that explicitly involve speech / music / audio (as input, output, training objective, evaluation task, or core capability) -> **yes**
-- Other domains with no substantive speech / music / audio methods or tasks -> **no**
-- Conflict resolution: if a paper simultaneously appears to satisfy "multimodal involving speech / music / audio" and "other domain", prioritize **yes**
-
-Runtime parameters:
-- `batchSize = 5` (parallel LLM calls within a batch)
-- `delayBetweenBatches = 2000` (2-second delay between batches)
-- `useKeywordPreFilter = true` (high-recall local prefiltering runs before the LLM, with core audio categories as fallback)
-- Per-paper timeout **60 seconds**, **5 retries** (backoff `2^attempt * 1s`)
-- Each request combines a socket-idle timeout, an absolute deadline, a bounded response body, and request destruction; the deep-analysis 20-minute budget counts active process time and excludes detected system sleep
-
-The filtering stage writes three files incrementally:
-- `data/current/raw-candidates.json`: candidate input after merge and blog deduplication, including request attempts, successful requests, and failure details in arXiv/HF `sourceHealth`. Fetchers distinguish a successful empty response from every request failing; all-failed sources throw and cannot produce a false-success empty batch
-- `data/current/filter-decisions.json`: per-paper LLM decisions, including filter model and prompt hash. API errors or indeterminate responses are marked `retryable`, excluded from the definitive decision cache, and prevent completion until retried
-- `data/current/filtered-papers.json`: partial/final filtered output; includes `filterModel` and `filterPromptHash`. `status: "filter_complete"` only means per-paper filtering has finished before archive deduplication, while final skip-ready output must use `status: "complete"` and match the current model/hash
-
-If today's complete `filtered-papers.json` already exists and its model/hash match the current configuration, rerunning `node scripts/full-fetch.js` skips crawling/filtering and resumes deep analysis directly. If filtering is incomplete, existing decisions in `filter-decisions.json` are reused only when the model and prompt hash match.
-`npm run validate:data` cross-checks candidate stats, decision counts, related counts, and final paper counts across `raw-candidates.json`, `filter-decisions.json`, and `filtered-papers.json`.
-
-A high-recall keyword gate runs before LLM filtering by default, with core audio categories as a fallback. `npm run keyword:recall` evaluates curated positive/negative gold cases and historical replay; known historical LLM false positives require explicit ID/reason adjudication, and the report separates raw hit rate from recall over adjudicated effective positives.
-
-### 3.7 Deep Analysis
-
-`deep-analyzer.js` performs full-text + image deep reading and comprehension for each filtered paper.
-
-The deep analysis prompt is read from `prompts/deep-analysis.md`, with `{hasFullText}`, `{title}`, `{authors}`, `{categories}`, `{arxivId}`, `{textForAnalysis}` placeholders replaced at runtime.
-
-**Automatic API canonical analysis content (generated by LLM, output in Chinese)**:
-
-> The fixed headings below are parser anchors for the automatic API route. Explicit Manual uses a separate `reader-longform-v2` contract; see the [Manual documentation](../../manual/README.md).
-
-| Section | Requirements |
-|------|------|
-| Score (`## 评分`) | `type-aware-v1`: first output `document_type` (方法研究 / 系统技术报告 / 模型报告 / 数据集与基准 / 综述 / 理论研究 / 应用研究), then use the matching evidence standard. Dimensions sum to 11 and the total is capped at 10; code recomputes it only when all eight dimensions are complete, unique, and valid. Invalid scoring fails the contract. Type grants no fixed bonus and one defect may reduce only one primary dimension |
-| Tags | 3-5, must include at least 1 [Task] and 1 [Method/Model] tag; in addition to the final tag string, also output "main task tag", "main method tag", and "supplementary tags" |
-| Authors and Affiliations | First author, corresponding author, author list and affiliations; missing information must be written as "not specified", no guessing allowed |
-| Snarky Review | An evidence-bound two-sided review: state the strongest merit first, then the most consequential limitation; sharp but not performative |
-| Core Summary | 5-8 sentences, covering problem, method, results, limitations |
-| Method Overview and Architecture | Input/output flow, component structure, connection methods, design rationale; no fewer than 600 Chinese characters |
-| Core Innovations | 3-5, each including definition, shortcomings of previous methods, solution mechanism, actual effect |
-| Experimental Results | Must prioritize giving benchmark, metrics, and specific numbers; when numbers are unavailable, explicitly write "paper did not provide specific values"; tables must be fully output |
-| Detailed Description | Training data, loss functions, training strategies, hyperparameters, hardware, inference details |
-| Score Rationale (`## 评分理由`) | Score and write specific review comments for each of 8 dimensions (Innovation/2, Technical Rigor/1.5, Experimental Sufficiency/1.5, Clarity/1, Impact/1.5, Open Source/1.5, Reproducibility/0.5, Engineering/Practical Value/1.5); 10-point scale is forbidden; code automatically recalculates total from sub-scores |
-| Limitations and Issues | Two parts: limitations explicitly acknowledged by the paper + potential issues identified by the reviewer |
-| Open Source Details | Only allowed to summarize based on paper text or current input links; write "not mentioned" when missing, strictly forbidden to fabricate repository / popularity information |
-
-> **Image and Table Placement Rules**: Images and tables belong at the relevant API argument node, not in a detached gallery, and fabricated URLs are forbidden. Manual per-artifact disposition and numeric-cell closure are documented in the [Manual editorial contract](../../manual/docs/editorial-reference-contract.md).
-
-**Technical Features**:
-- **API Protocol Auto-Routing**: shares the same `detectApiType()` logic as the filtering stage, automatically switching between OpenAI / Anthropic protocols based on `PAPER_ANALYZER_ENDPOINT` and `PAPER_ANALYZER_MODEL`
-- Fetches arXiv HTML/PDF full text. Primary analysis uses at most 200K characters by default; `task-focused-v1` samples very long sources deterministically across the head, quartiles, middle, tail, and task-relevant chunks instead of taking a prefix only. It tries `v1`, `v2`, and no-suffix versions in order; all HTML/PDF/image requests use the HTTP CONNECT proxy dispatcher from project `.env` and fail when it is absent; uses **cheerio** for structured HTML parsing, removing noise elements such as script/style/nav/header/footer
-- Extracts image URLs and filters out logo/favicon; the download layer validates Content-Type, Content-Length, and PNG/JPEG/WebP magic bytes before sending images to the model
-- **Image Analysis**: HTML body text and figure captions are parsed from the same response, and captions enrich preprovided URLs by exact URL or unique basename. Successful downloads use `data/current/image-cache/`; permanent HTTP/MIME/size/security failures are not retried. The secondary model selects a code-generated stable `paragraph_id` instead of copying free-form anchors; legacy anchors remain read-compatible. Invalid IDs and over-limit plans are rejected without section-end fallback
-- Each result stores candidate scores, per-URL download/cache outcomes, secondary model/options, prompt/response hashes, insertion diagnostics, and final URLs in `imageManifest`. `no_downloadable_images` is a successful permanent terminal state; a non-empty plan with zero insertions is `invalid_output` and retries only the image stage
-- `analysisManifest` records image download, primary analysis, open-source scan, demo scan, revision, table/method/structure repair, scoring audit, and image supplementation. Failures retain `analysisCheckpoint` and `analysisRecoveryImageManifest`; reruns resume at the first incomplete stage and success requires every mandatory stage to reach a terminal status
-- **Concurrency: 3 papers in parallel** (adjustable via `PD_ANALYSIS_CONCURRENCY` in the project `.env`)
-- By default, up to **2 retries** per paper are allowed in the outer `analysis-engine.js` layer (`PD_ANALYSIS_MAX_RETRIES`). Within each outer attempt, every LLM API stage makes at most **3 attempts** by default in `deep-analyzer.js` (`PD_ANALYSIS_API_MAX_RETRIES`, exponential backoff: wait 10s after the first failure, then double with `2^attempt * 5000ms`); the outer retry interval is 3s.
-- API overall timeout is **20 minutes of active process time**. A heartbeat excludes system-sleep or long-suspension wall-clock jumps, so a socket timeout after wake can retry with the remaining budget
-- Primary analysis uses `max_tokens=64000`; local revision/table/method/structure repair defaults to `max_tokens=16000`. The API reader has independent defaults of `max_output_tokens=48000`, 180000 evidence characters, and 240000 fully rendered request characters via `PD_API_READER_MAX_TOKENS`, `PD_API_READER_EVIDENCE_MAX_CHARS`, and `PD_API_READER_CONTEXT_MAX_CHARS`.
-- Post-processing stages no longer resend the complete source. Default evidence budgets are 16K for open-source scanning, 60K for revision, 40K for scoring audit, 30K for method/table repair, and 40K for structure repair. They are controlled by `PD_OPENSOURCE_EVIDENCE_MAX_CHARS`, `PD_REVISION_EVIDENCE_MAX_CHARS`, `PD_SCORING_EVIDENCE_MAX_CHARS`, `PD_REPAIR_EVIDENCE_MAX_CHARS`, and `PD_STRUCTURE_EVIDENCE_MAX_CHARS`; `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` controls primary analysis. The selector version and budgets are part of recovery fingerprints, so only the affected stage and downstream work rerun
-- Every model-call log includes text characters, estimated text tokens, and image count; image base64 is neither counted nor printed as text
-- Proxy settings come only from case-insensitive proxy variables explicitly configured in the project-root `.env`; inherited shell/IDE proxies and macOS `scutil` are not used. At least one of `HTTPS_PROXY` or `HTTP_PROXY` must be an HTTP CONNECT address for arXiv; HuggingFace `curl` may additionally use SOCKS `ALL_PROXY`
-- LLM and fetch transport are isolated: ordinary providers use `agent:false`, while exact `muse-spark-1.2-contributor` calls use a fresh project HTTP CONNECT agent per request. Neither path reuses the fetch dispatcher; commands using a local proxy must run outside the sandbox
-- If any arXiv category or HuggingFace source fails, the run records `source_partial_failed` and stops after filtering. That state is never reusable as `filter_complete` and cannot enter deep analysis or update the persistent deduplication database.
-- All analysis configurations are centrally managed in `scripts/config.js`, with project `.env` overrides for concurrency, retries, fetch limits, stage evidence budgets, scoring/image temperatures, and image payload limits
-
-**Deep analysis is not a single call, but a multi-round progressive process**:
-
-| Round | Name | Prompt | Purpose |
-|------|------|--------|--------|
-| Round 1 | Main Deep Analysis | `prompts/deep-analysis.md` | Primary model performs **text-only** full-text analysis, generating all sections |
-| Round 2 | Open Source Scan | `prompts/opensource-scan.md` | Extract GitHub/HF/ModelScope etc. links from paper text, supplement open source details |
-| Round 2.5 | Demo Page Link Discovery | Code fetch | If no open-source links, visit up to three demo pages, following at most three redirects per page while revalidating public DNS/IP on every hop, and recover code/model/dataset links |
-| Round 3 | Review and Rewrite | `prompts/gap-fill.md` | Compare original paper with earlier output, correct omissions, errors, over-inferences |
-| Round 4 | Table Fix | Code detection + LLM supplement | Detect missing Markdown tables in the Experimental Results section, trigger supplementation |
-| Round 5 | Method Section Fix | Code detection + LLM supplement | Detect if Method Overview is too brief (<600 chars / <3 paragraphs), trigger expansion to 600+ chars |
-| Round 6 | Final Structural Repair (conditional) | `prompts/structure-repair.md` | If the shared contract finds any of the 13 required sections missing, the primary model repairs only the current report structure; otherwise this round is skipped |
-| Round 7 | Type-aware Scoring Audit | `prompts/scoring-audit.md` | Primary model returns JSON only; code feeds validation errors into the next local attempt and deterministically normalizes Open Source when no artifact is released |
-| Round 8 | Image Selection and Insertion Plan (dual-model only) | `prompts/image-supplement.md` | Secondary model returns JSON only; the complete contract is checked after merging, and an invalid plan is discarded without losing the audited primary text |
-
-> **Single-model vs dual-model**: setting `PAPER_ANALYZER_SECONDARY_MODEL` enables the secondary model to select high-value figures and output a constrained insertion plan containing section, stable paragraph ID, lead, and explanation. Code only adds figures and adjacent text. Scoring audit and image planning use independent low temperatures (0.1 and 0.2 by default). When it is unset, image URLs remain candidate metadata and the optional multimodal blog-review LLM call is skipped; deterministic image checks still run.
-
-Single-issue-single-dimension ownership is enforced in code. A cross-dimension rationale triggers a local retry with the exact validation error instead of immediately restarting full-paper analysis. When resource state is deterministic, fixed Open Source anchors are applied: 0.5 for an explicit future release promise, 0.2 for demo-only, and 0 for fully closed with no promise. Theory papers use public proofs, derivations, and appendices as the applicable core artifact rather than mechanically requiring code/model/data links.
-
-Text acquisition persists source type, original/used/full-text lengths, truncation, SHA-256, HTML availability, and warnings. Stable HTML misses do not retry; versioned IDs never silently upgrade; PDFs are size/header/MIME checked. Abstract fallback is marked `degraded_abstract` and is blocked from publishing unless `allowAbstractAnalysisPublish: true` is explicitly approved. Source, model, temperature, prompt, or evidence fingerprint changes invalidate only the affected checkpoint stages.
-
-An arXiv HTML response is accepted as full text only when it passes both length and document-structure checks: enough substantive paragraphs plus section or academic markers. `too_short`, `metadata_shell`, and `missing_paper_structure` continue to PDF fallback and preserve structural counters in warnings.
-
-### 3.8 Mandatory Codex visual assets
-
-All generated images for a batch are archived flat under `data/archive/<date>/visual-summaries/`: the digest cover is `00-digest-cover-<date>.png`, and TOP 10 paper images are `<two-digit-rank>-<paper-id>-<title-slug>.png`, never numbered by completion order. Only resumable manifests stay in `data/current/`; a later plan migrates legacy current and archive layouts after PNG/SHA verification.
-
-After all scoring audits pass, run `generate-blog.py`, `review-blog.py`, and `push-blog.py` to publish the digest index and every paper page. Blog text review uses 8,000-character chunks by default (`PD_BLOG_REVIEW_CHUNK_CHARS`, bounded to 4,000–16,000), reducing repeated fixed instructions while preserving Markdown block boundaries; the value is bound into the batch review-receipt fingerprint. Passed page bytes are retained separately by repository-relative path plus SHA-256, so changing the chunk size or other review code/protocol metadata refreshes the batch receipt without re-reviewing unchanged pages. Push records remote verification only when remote `main` exactly matches `publicationCommit`, then automatically invokes the post-publication planner. It selects the final-score TOP 10 with normalized-arXiv-ID tie breaking. Codex creates one tall infographic per selected paper with the exact English title at the top and a Chinese body, then records it with the task token.
-
-The same post-publication stage creates one digest-image task using the category saved by blog generation and deterministic title, hot directions, and TOP 10 ranking. A paper task also selects at most two deep-analysis-approved figures whose cached URL, MIME, byte count, and SHA all match, prioritizing method overviews, architectures, and pipelines before key result figures. Reference fingerprints invalidate only the affected paper. Built-in image generation treats these figures as structural sources of truth and redraws them in the common editorial style; it must not paste an unreadable screenshot or invent missing data. The two manifests resume independently. These images neither enter nor block the completed blog transaction. Project scripts never call an image API; generated graphics remain editorial summaries, not original paper figures, and must not invent facts or display arXiv IDs on the digest image.
-
-Before built-in image generation, run `npm run visual:prepare -- --date <date>` (optionally `--paper <ID>`). It keeps task tokens unchanged, revalidates each controlled `.bin` cache path, SHA, byte count, MIME, and magic bytes, and atomically materializes upload-ready `.png/.jpg/.webp` files under `data/current/visual-reference-inputs/<date>/<rank-paper>/`. Pass the emitted absolute `referencedImagePaths` to the image tool instead of raw `.bin` paths or display-only `relativePath` values; repeated runs repair altered materialized files.
-
-Visual plan/status commands print compact task indexes by default: rank, paper ID, title, task token, reference-image count, and the absolute manifest path. `visual:prepare` additionally retains the absolute `referencedImagePaths` required by image generation. Full `generationContext.qaClaims` and cover rankings remain in their manifests. `digest:status` prints only stage counts and errors to the terminal while preserving full `sourceHealth` in the report JSON. That JSON is a read-only snapshot of the command's execution time; later push, planning, or `record` operations do not update it, so rerun the command before treating it as current state. New analyses and reanalyses write `analysisManifest.contracts.experimentTables=evidence-rich-v2`. In addition to the existing maximum of two tables, 12 data rows, and eight metric columns, the contract requires identifier fields, at least three evidence rows and two numeric cells, metric directions, a concrete comparison question before each table, and a synthesis plus evidence boundary after it; source-provided ablations or negative results must be represented. Node validation and Python publication preflight enforce the same semantics. Historical `bounded-v1` records retain their upper-bound-only behavior.
-
-### 3.9 Incremental Save and Wrap-up
-
-- **Incremental save to `data/current/deep-analysis-result.json` immediately after every paper succeeds or fails**. Result and paper-database updates re-read the latest canonical state, merge, and increment `generation` under a cross-process lock. `generation` is the committed version record, not a caller-supplied expected-generation optimistic CAS. Failed placeholders never overwrite successful analyses, and corrupt current JSON blocks writes instead of silently falling back to legacy data
-- Incremental and final saves sync `data/current/papers.json` `digestStatus.status` through `scripts/digest-status.js`: successful analyses become `analyzed`, failures become `analysis_failed`
-- `full-fetch.js` holds a single-run lock across archive, cleanup, filtering, and final merge without reducing paper-analysis concurrency. Failed checkpoints are persisted incrementally; an older valid body remains usable while `latestAttemptStatus` records the failed retry
-- After all papers are analyzed, existing results are read again, deduplicated and merged by `arxivId`/`paper_id`, preserving historical data
-- Automatically backs up the old file to `data/archive/deep-analysis-result-<timestamp>.bak.json`, and cleans up old backups (keeping the most recent 10)
-- **`papers.json` automatic backup**: before each daily run, automatically backs up `data/current/papers.json` to `data/archive/papers-<date>.json`, keeping the most recent 7 days
-- Updates `data/current/papers.json` deduplication database
+Regenerate final status after the last push, record, or waiver. Reports are snapshots, not live state.

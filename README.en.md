@@ -1,306 +1,169 @@
-# Paper Digest - Fully Automated Speech / Music / Audio Paper Digest Pipeline
+# Paper Digest
 
-English | **[中文](README.md)**
+**Automated speech, music, and audio paper digests**
 
-This project generates "Speech / Music / Audio Paper Digests," covering the complete pipeline from arXiv and HuggingFace Papers crawling through Hugo blog publication. The default daily route is the LLM/API workflow: keyword prefiltering, model selection, staged full-text analysis, evidence-bounded scoring, beginner-oriented longform generation, blog review/push, and post-publication visual planning. Production Manual v6 remains an explicit high-assurance human workflow. Node-side tunable parameters and current runtime data-file paths are centralized in `scripts/config.js`; shared Python publish/maintenance paths are centralized in `scripts/path_config.py`.
+English · **[中文](README.md)**
 
-## Shortest path to a first run
+Fetch candidate papers from arXiv and HuggingFace Papers, filter and analyze them with an LLM, publish a daily index plus beginner-oriented Chinese deep dives, then create post-publication TOP 10 infographics and a digest cover.
 
-```bash
-npm install
-cp env.example .env          # set PAPER_ANALYZER_API_KEY / MODEL / ENDPOINT and the proxy
-npm test                     # default API, shared, and explicit Manual tests
-npm run digest:prepare -- "$(TZ=Asia/Shanghai date +%F)"
-npm run digest:status -- --date "$(TZ=Asia/Shanghai date +%F)"
+## What you get
+
+- Resumable, auditable candidate, filter-decision, and deep-analysis data for each day.
+- One daily digest page and one continuous Chinese tutorial for every selected paper.
+- Author affiliations and eight-dimensional scores, plus formulas, tables, figures, and resources when the paper provides verifiable evidence.
+- One tall infographic for each final-score TOP 10 paper and one batch cover after blog publication.
+
+## Default behavior
+
+The default route is LLM/API, not the human workflow:
+
+```text
+arXiv + HuggingFace
+  → keyword prefilter → per-paper LLM filter → staged full-text analysis and scoring
+  → blog generate → review → push / remote-OID verification
+  → TOP 10 infographics and digest cover → final status gate
 ```
 
-A full digest publishes the blog and prepares post-publication visual tasks. After the script exits,
-finish those assets or record an explicit waiver. See [Setup](docs/en/setup.md),
-[Workflow](docs/en/workflow.md), or the task-oriented [documentation index](docs/README.md).
+- `digest:prepare` and `digest:api` are aliases for the same default route.
+- Manual runs only when explicitly selected; API, network, or quota failures never switch provenance.
+- WeChat, Feishu, and Xiaohongshu are optional integrations, not part of the default daily run.
 
-To upgrade an existing API batch to the current reader contract, run `npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader`. The command only accepts the current canonical envelope with an exact `batchDate`, persists each successful paper under locks with a commit-time identity check, and skips SHA-complete v3 papers on retry.
+## Start in five minutes
 
-If only final-text surface normalization has made headings or concept-bridge references differ from the stored plan bytes, run `npm run api:reader:refresh -- --all --date YYYY-MM-DD --surface-bindings-only --concurrency 5`. This mode performs no fetch or LLM call; it deterministically rebinds the plan to the final article and updates its SHA closure.
-
-The explicit Manual/human high-assurance route is isolated under [`manual/`](manual/README.md). It uses paper-local Terra-high tasks, a complete ArtifactIndex, records v4/spec v6, and independent page review; API, network, or quota failures never select it automatically. Read that entry before operating or maintaining Manual artifacts.
-
-LLM endpoints must use HTTPS (plain HTTP is accepted only for loopback local tests). arXiv metadata retry, backoff, cumulative-wait, absolute-deadline, response-size, and User-Agent settings are controlled by `ARXIV_CONFIG`; see [Setup](docs/en/setup.md) for overrides.
-
-When a user tells Codex to run the paper digest for a given date, the default intent is the complete LLM/API workflow: fetch, keyword prefiltering, model selection, staged analysis and scoring, reader longform generation, page review and fixes, blog publication with remote-OID verification, post-publication visuals, and final status gates. `npm run digest:prepare -- YYYY-MM-DD` and `npm run digest:api -- YYYY-MM-DD` are equivalent entries. Use `npm run digest:manual -- YYYY-MM-DD` only when the user explicitly requests the Manual/human workflow. Blog push is included in the dated digest request; other publishing channels remain outside the default scope.
-
-Deep analysis uses the `type-aware-v1` rubric: it first classifies a document as method research, system technical report, model report, dataset/benchmark, survey, theory, or applied research, then evaluates it with the matching evidence standard. The common eight dimensions, 11-point subtotal, and 10-point cap remain unchanged; values use at most one decimal and Open Source uses fixed anchors. Type grants no fixed bonus, and complete proof material may count as a theory paper's public core artifact instead of being forced to zero merely because code/model/data flags are absent.
-
-Visual generation is a post-publication stage. First finish deep analysis for every paper, then generate, review, push, and remotely verify all blog pages (the digest index plus every paper page). Only then does `push-blog.py` create resumable image tasks: one tall Chinese-body infographic for each final-score TOP 10 paper, with stable normalized-arXiv-ID tie breaking, plus one batch digest image containing the title, hot directions, and TOP 10 ranking. Each paper poster targets roughly 220–360 Chinese characters of substantive explanation. When deep analysis selected and cached a trustworthy method overview, architecture, pipeline, or key-result figure, the task binds up to two references and their SHA values. Built-in image generation now creates the complete final composition—title, Chinese copy, verified numbers, diagrams, captions, and paper-collage artwork—without passing through the legacy deterministic text-card compositor. Before record, every title, statement, arrow relationship, metric direction, and value must be visually verified; unreadable or materially incorrect assets are regenerated. Paper infographics and the digest cover use a fresh paper-editorial system with warm light backgrounds, restrained low-saturation colors, subtle paper grain, layered sheets, limited deckled edges and tape accents, soft shadows, and generous whitespace. Dirty vintage paper, crowded scrapbook styling, dark neon, cyberpunk HUDs, and dashboard layouts are explicitly prohibited. These assets do not enter or block the already completed blog generation/review/push transaction.
-
-A high-recall keyword gate runs before LLM filtering, with core audio categories as a fallback so clearly unrelated papers do not consume LLM quota. `npm run keyword:recall` checks curated positive/negative gold cases and adjudicated historical positives. At the end of a daily run, `npm run digest:status -- --date YYYY-MM-DD` produces the unified machine-readable completion report for fetch, filter, analysis, remote blog publication, and both visual asset types.
-
-Deep analysis now uses stage-specific evidence budgets. Primary analysis still covers the paper, with balanced whole-document sampling for very long sources; open-source scanning, revision, scoring, method/table repair, and structure repair receive task-focused evidence slices instead of repeatedly resending the complete paper. Blog text review uses 8,000-character chunks by default, halving repeated instruction overhead versus the former 4,000-character default. All budgets are project `.env` overrides and are bound into recovery fingerprints. Every passed blog page is also retained as durable repository-relative-path plus file-SHA-256 evidence. Code, script, documentation, model, protocol, generation-manifest, or blog-baseline changes refresh the batch receipt without re-reviewing unchanged page bytes; only new or content-changed pages re-enter the three-layer review.
-
----
-
-## Documentation Guide
-
-For a task-oriented map, start with [`docs/README.md`](docs/README.md).
-
-| File | Purpose | Audience |
-|------|---------|----------|
-| [README.en.md](README.en.md) | Project overview, quick start, command reference | Human users |
-| [AGENTS.md](AGENTS.md) | Compact rules an Agent is likely to miss without reading code | AI Agent |
-| [SKILL.en.md](SKILL.en.md) | Complete execution and safety rules for Agents | AI Agent |
-| [`docs/README.md`](docs/README.md) | Task-oriented documentation index and default API code map | Everyone |
-| [`scripts/README.md`](scripts/README.md) | Entrypoint, dependency, and state map for default API/shared scripts | Developers and Agents |
-| `docs/workflow.md` | Main workflow details (archiving, crawling, filtering, analysis, saving) | Users |
-| [`manual/README.md`](manual/README.md) | Explicit Manual route entry, commands, workflow, and contract navigation | Manual users and maintainers |
-| `docs/scripts.md` | All script function descriptions | Developers |
-| `docs/data-format.md` | Data file formats and field descriptions | Developers |
-| `docs/setup.md` | Installation, initialization, project `.env`, logging, proxy config | New users |
-| `docs/troubleshooting.md` | Common issues diagnosis and fixes | Users |
-| `docs/maintenance.md` | Maintenance conventions, scoring standards, tag definitions | Maintainers |
-| [`prompts/filter.md`](prompts/filter.md) | LLM prompt for filtering | Maintainers |
-| [`prompts/deep-analysis.md`](prompts/deep-analysis.md) | Deep-analysis primary prompt (Round 1) | Maintainers |
-| [`prompts/api-reader-article.md`](prompts/api-reader-article.md) | API Reader v3 beginner-researcher longform prompt | Maintainers |
-| [`prompts/image-supplement.md`](prompts/image-supplement.md) | Dual-model figure-selection and insertion-plan prompt | Maintainers |
-| `prompts/opensource-scan.md` | Open-source link scanning prompt (Round 2) | Maintainers |
-| `prompts/gap-fill.md` | Review and rewrite prompt (Round 3) | Maintainers |
-| `prompts/structure-repair.md` | Primary-model structural repair used only when required sections are missing | Maintainers |
-| `prompts/scoring-audit.md` | Final type-aware scoring audit by the primary model; scoring fields only | Maintainers |
-| `prompts/visual-summary.md` | Post-publication prompt for one tall infographic per TOP 10 paper | Maintainers |
-| `prompts/digest-cover.md` | Post-publication digest-image prompt for title, hot directions, and TOP 10 | Maintainers |
-
-All generated images for a batch are archived flat under `data/archive/<date>/visual-summaries/`: the cover is `00-digest-cover-<date>.png`, and paper images are `<two-digit-rank>-<paper-id>-<title-slug>.png`, using manifest rank rather than completion order. Only resumable manifests remain in `data/current/`.
-
-> **Iron Rule**: The actual behavior in `scripts/*.js` / `scripts/*.py` is the single source of truth. If documentation conflicts with code, trust the code and fix the documentation.
-
----
-
-## Project Structure
-
-```
-audio-paper-digest/
-├── scripts/              # Default API and shared scripts
-├── tests/                # Default API and shared tests
-├── manual/               # Explicit Manual docs, prompts, scripts, and tests
-├── data/                 # Working data and archives (gitignored)
-│   ├── current/          # Current working data
-│   └── archive/          # Automatic date-based archiving
-├── logs/                 # Runtime logs (gitignored)
-├── prompts/              # LLM prompt files
-├── docs/                 # Detailed documentation
-├── package.json          # npm scripts
-├── run-daily-digest.sh   # Default Codex daily orchestrator; built-in image generation follows its script stages
-├── run-full-fetch.sh     # Data pipeline only: fetch, filter, and deep analysis
-└── README.md / SKILL.md
-```
-
-See [`docs/en/scripts.md`](docs/en/scripts.md) for each script's functionality, and [`docs/en/data-format.md`](docs/en/data-format.md) for data file formats.
-
----
-
-## Quick Start
+Requirements: Node `>=20.18.1 <21 || >=22.3.0`, Python 3, and an available Hugo blog repository.
 
 ```bash
 # 1. Install dependencies
 npm install
-pip3 install -r requirements.txt
-# Node requirement: >=20.18.1 <21 or >=22.3.0; Python dependencies include Pillow
+python3 -m pip install -r requirements.txt
 
-# 2. Configure API Key (write to `.env`)
-#    Primary model (text analysis, required)
-#    PAPER_ANALYZER_API_KEY=your-opencode-go-key
-#    PAPER_ANALYZER_MODEL=muse-spark-1.2-contributor
-#    PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
-#    HTTPS_PROXY=http://127.0.0.1:7897  # Muse requires the project HTTP CONNECT proxy
-#
-#    Secondary model (multimodal image analysis, optional)
-#    PAPER_ANALYZER_SECONDARY_MODEL=mimo-v2.5
-#    PAPER_ANALYZER_SECONDARY_ENDPOINT=https://token-plan-cn.xiaomimimo.com/v1
-#    PAPER_ANALYZER_SECONDARY_API_KEY=tp-your-key
-
-# 3. Run the default LLM/API daily stages: data pipeline + blog generate/review/push + visual preparation.
-# Every project script must run outside the sandbox; entrypoints reject Codex sandbox execution.
-today="$(TZ=Asia/Shanghai date +%F)"
-./run-daily-digest.sh "$today"
-
-# After fixing review blockers, resume from review without rerunning fetch/analysis.
-./run-daily-digest.sh 2026-05-08 --from review
-
-# 4. Codex uses built-in image_gen to generate and record every visual, then verifies both gates.
-npm run visual:status -- --date 2026-05-08
-npm run cover:status -- --date 2026-05-08
-
-# 5. Optional: generate Xiaohongshu copy
-python3 scripts/publish-xiaohongshu.py
+# 2. Create project configuration
+cp env.example .env
 ```
 
-For the complete installation guide, see [`docs/en/setup.md`](docs/en/setup.md).
+At minimum, set these values in the project-root `.env`:
 
----
+```dotenv
+PAPER_ANALYZER_API_KEY=...
+PAPER_ANALYZER_MODEL=...
+PAPER_ANALYZER_ENDPOINT=https://...
+HTTPS_PROXY=http://127.0.0.1:7897   # HTTP_PROXY is also supported; see Setup
+```
 
-## 8. Common Commands Cheatsheet
-
-### npm scripts
+See [Setup](docs/en/setup.md) for model, protocol, and proxy requirements. Project commands must run outside the sandbox; entrypoints reject a restricted sandbox before network, logging, or writes.
 
 ```bash
-# Default daily script stages; Codex then continues with built-in image generation.
-npm run digest:prepare -- "$(TZ=Asia/Shanghai date +%F)"
-
-# Explicit Manual/human route only; see manual/README.md before use.
-npm run digest:manual -- 2026-04-21
-
-# Data pipeline only (crawl + filter + deep analysis)
-npm run fetch
-
-# Resume deep analysis only (skip existing analysis; can initialize from filtered-papers.json)
-npm run deep
-
-# Full re-analysis
-npm run reanalyze
-
-# Batch analyze unanalyzed papers
-npm run batch
-
-# Read-only validation for current JSON data files, including filter-decision cache consistency
-npm run validate:data
-# Only for a clean checkout with no runtime data:
-# npm run validate:data -- --allow-empty
-
-# Idempotently plan/resume TOP 10 infographics and the digest image after all blogs publish.
-npm run visual:post-publish -- --date 2026-04-21
-npm run visual:status -- --date 2026-04-21
-npm run cover:status -- --date 2026-04-21
-
-# Run unit tests
+# 3. Run Node tests
 npm test
 
-# Backfill historical paper IDs
-npm run backfill
-
-# Generate blog Markdown only
-python3 scripts/generate-blog.py --date 2026-04-21
-
-# Review generated Markdown and create a SHA-256 receipt
-python3 scripts/review-blog.py --date 2026-04-21
-
-# Verify the receipt, commit, and push (only after an explicit publish request)
-python3 scripts/push-blog.py --date 2026-04-21
-
-# Generate WeChat Official Account draft
-npm run wechat
-# Generate WeChat preview only, without calling WeChat APIs
-python3 scripts/publish-wechat-full.py --dry-run
-# Publish all papers from the input file to WeChat drafts
-python3 scripts/publish-wechat-full.py --all
-
-# Generate Xiaohongshu copy
-npm run xiaohongshu
-
-# Xiaohongshu auto-publish (login required first)
-npm run xhs-login
-npm run xhs-publish
-npm run xhs-publish-all
-
-# Generate Feishu (Lark) document
-python3 scripts/publish-to-feishu.py
-python3 scripts/publish-to-feishu.py --date 2026-04-21
-# Preview Feishu document size only, without creating a document
-python3 scripts/publish-to-feishu.py --dry-run --date 2026-04-21
-# Publish all papers from the input file to Feishu
-python3 scripts/publish-to-feishu.py --all
+# 4. Run the complete script stages for Beijing today
+today="$(TZ=Asia/Shanghai date +%F)"
+npm run digest:prepare -- "$today"
 ```
 
-### Direct Invocation
+`digest:prepare` completes data processing and blog publication, then prepares visual tasks. It does not call an image API. Codex built-in image generation must finish and inspect those assets, or record an explicit user-requested waiver.
 
 ```bash
-# ========== Core Pipeline ==========
-# Default daily script stages; Codex then continues with built-in image generation.
-./run-daily-digest.sh "$(TZ=Asia/Shanghai date +%F)"
-
-# Data pipeline only
-./run-full-fetch.sh
-
-# Or use Node directly
-node scripts/full-fetch.js
-
-# Resume deep analysis only (skip existing analysis; can initialize from filtered-papers.json)
-node scripts/deep-analysis-only.js
-
-# Full re-analysis
-node scripts/reanalyze.js
-
-# Re-analysis with specified concurrency
-node scripts/reanalyze.js --concurrency 3 data/current/deep-analysis-result.json
-
-# Batch analyze unanalyzed papers
-node scripts/batch-analyze.js
-
-# Analyze a single paper
-node scripts/analyze-single-paper.js 2604.16044
-
-# Read-only validation for current data structure
-node scripts/validate-data-files.js
-
-# ========== Publishing ==========
-# Blog stages are intentionally separate
-python3 scripts/generate-blog.py --date 2026-04-21
-python3 scripts/review-blog.py --date 2026-04-21
-python3 scripts/push-blog.py --date 2026-04-21
-
-# Passed pages with unchanged SHA-256 are reused permanently; retries review only new/changed/failed pages.
-
-# Publish with custom data
-python3 scripts/publish-to-blog.py --date 2026-04-21 data/current/deep-analysis-result.json
-python3 scripts/publish-to-blog.py --all data/current/deep-analysis-result.json
-
-# Generate WeChat Official Account draft
-python3 scripts/publish-wechat-full.py
-python3 scripts/publish-wechat-full.py --dry-run
-
-# Generate WeChat draft with custom data
-python3 scripts/publish-wechat-full.py data/current/deep-analysis-result.json
-python3 scripts/publish-wechat-full.py --all data/current/deep-analysis-result.json
-
-# Generate Xiaohongshu copy (default TOP 5)
-python3 scripts/publish-xiaohongshu.py
-python3 scripts/publish-xiaohongshu.py --top 7
-python3 scripts/publish-xiaohongshu.py --all
-
-# TOP-N one-liners default to concurrency 5; configurable from 1 to 5 in project .env
-# PD_XIAOHONGSHU_ONELINER_CONCURRENCY=5
-# Successful one-liners are checkpointed per paper; reruns only request failed, missing, or invalidated entries
-
-# Xiaohongshu auto-publish (login required first)
-python3 scripts/xiaohongshu-publisher.py --login
-python3 scripts/xiaohongshu-publisher.py
-python3 scripts/xiaohongshu-publisher.py --all
-
-# Generate Feishu (Lark) document
-python3 scripts/publish-to-feishu.py
-python3 scripts/publish-to-feishu.py --date 2026-04-21
-python3 scripts/publish-to-feishu.py --dry-run --date 2026-04-21
-python3 scripts/publish-to-feishu.py --all
-
-# ========== Utilities ==========
-# Backfill paper IDs (no analysis)
-python3 scripts/backfill_papers.py
-
-# Re-filter + re-analyze by date
-node scripts/refilter-reanalyze-by-date.js 2026-07-01
+# 5. Verify final status
+npm run digest:status -- --date "$today"
 ```
 
----
+## Definition of done
 
-## More Documentation
+A complete daily run means all of the following:
 
-- [Main Workflow](docs/en/workflow.md) — Complete flow of automatic archiving, crawling, filtering, and deep analysis
-- [Script Reference](docs/en/scripts.md) — Function descriptions and usage for all scripts
-- [Data Format](docs/en/data-format.md) — Fetch/filter checkpoints, staged analysis recovery, blog receipts, and Xiaohongshu copy cache
-- [Installation & Configuration](docs/en/setup.md) — Dependency installation, environment variables, model configuration, logging
-- [Troubleshooting](docs/en/troubleshooting.md) — Diagnosis for API errors, proxy issues, and publishing failures
-- [Maintenance Conventions](docs/en/maintenance.md) — Code standards, scoring and tag definitions, change checklist
-- [Explicit Manual Route](manual/README.md) — Production v6 workflow, contracts, review, shadow, and legacy boundaries
+1. Fetch sources, filter decisions, and deep analysis are in complete terminal states.
+2. The digest and every paper page passed review; the blog commit is pushed and matches the remote OID.
+3. TOP 10 infographics and the digest cover are recorded, or a waiver binds the current publication.
+4. The latest `digest:status` report no longer lists an incomplete stage.
 
----
+Once the blog is published, a visual failure does not revoke it and must not trigger blog regeneration
+or another page review.
 
-## References & Acknowledgments
+## Core commands
 
-- This project references the design and implementation ideas of [speech-paper-daily-skill](https://github.com/JusperLee/speech-paper-daily-skill)
+| Purpose | Command |
+|---|---|
+| Default daily run | `npm run digest:prepare -- YYYY-MM-DD` |
+| Resume incomplete analysis | `npm run deep -- --date YYYY-MM-DD` |
+| Refresh API Reader | `npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader` |
+| Validate current data | `npm run validate:data` |
+| Inspect final status | `npm run digest:status -- --date YYYY-MM-DD` |
+| Run blog stages separately | `npm run blog:generate` → `npm run blog:review` → `npm run blog:push` |
+| Record an explicit visual waiver | `npm run digest:waive-visuals -- --date YYYY-MM-DD --reason "..."` |
+| Explicit Manual route | `npm run digest:manual -- YYYY-MM-DD` |
+
+See [Script responsibilities](docs/en/scripts.md) for arguments and recovery semantics, or
+[`scripts/README.md`](scripts/README.md) for a compact file-to-responsibility index.
+
+## Where to resume after a failure
+
+- Interrupted fetch/filter: rerun the default entry; healthy checkpoints are reused.
+- Only some analyses failed: run `npm run deep` or targeted reanalysis.
+- Blog review/push failed: fix the cause and resume from `blog:review` or `blog:push`.
+- Visual tasks are missing or stale: rerun `visual:post-publish`; do not republish the blog.
+- Unsure which stage failed: start with [Troubleshooting](docs/en/troubleshooting.md) and
+  [Workflow](docs/en/workflow.md).
+
+A fresh fetch may bind only Beijing today. Historical dates must resume from existing controlled data;
+they cannot be fabricated by running a new crawl under an old date.
+
+## Architecture
+
+```text
+Node.js data layer
+  fetch / filter / deep analysis / state / visual manifests
+                         ↓
+Python publication layer
+  Hugo generation / page review / Git transaction / remote verification
+                         ↓
+Codex visual layer
+  built-in image generation / visual QA / asset record
+```
+
+Default API and explicit Manual share publication and visual boundaries, but keep independent content
+evidence and provenance. Manual scripts, prompts, tests, and workflow live under
+[`manual/`](manual/README.md).
+
+## Data and outputs
+
+| Location | Contents |
+|---|---|
+| `data/current/` | Current candidates, filtering, analysis, publication receipts, and visual state |
+| `data/archive/<date>/` | Daily snapshots and final visual assets |
+| `logs/` | Redacted run logs; file logging can be disabled in `.env` |
+| Hugo blog repository | Digest pages, paper pages, templates, and publication commits |
+
+See [Data formats](docs/en/data-format.md) for fields and cross-file invariants.
+
+## Development and maintenance
+
+```bash
+npm run test:default       # default API and shared Node tests
+npm run test:manual        # explicit Manual Node tests
+npm test                   # both suites
+```
+
+CI also runs Python tests, JavaScript/Python/shell syntax checks, and empty-checkout data validation.
+Read [Maintenance](docs/en/maintenance.md) before changing configuration, scoring, prompts, or persisted
+contracts.
+
+## Documentation
+
+- [Documentation map](docs/README.md): choose the next document by task.
+- [Setup](docs/en/setup.md): environment, proxy, model, and blog repository.
+- [Default workflow](docs/en/workflow.md): archive, fetch, filter, analysis, publication, and recovery.
+- [Script responsibilities](docs/en/scripts.md): command arguments and runtime semantics.
+- [Data formats](docs/en/data-format.md): checkpoints, canonical data, receipts, and manifests.
+- [Troubleshooting](docs/en/troubleshooting.md): API, proxy, analysis, publication, and visual failures.
+- [Manual subsystem](manual/README.md): explicit high-assurance human workflow.
+
+## Optional integrations
+
+WeChat, Feishu, and Xiaohongshu entrypoints remain available but are not invoked by the default daily
+route. Their commands are listed in [Script responsibilities](docs/en/scripts.md).
+
+## Acknowledgments
+
+The project design draws inspiration from
+[speech-paper-daily-skill](https://github.com/JusperLee/speech-paper-daily-skill).

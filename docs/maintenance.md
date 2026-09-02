@@ -1,117 +1,90 @@
-# 维护约定
+# 维护指南
 
-本页面向修改代码、Prompt、契约与持久化格式的人。运行命令见[脚本说明](scripts.md)，字段
-语义见[数据格式](data-format.md)，Manual 专属维护见 [`manual/`](../manual/README.md)。
+## 受众与原则
 
-- 流程、路径、关键参数变更后，**必须同步更新** `README.md` 与 `SKILL.md`
-- 文档冲突时，以当前脚本行为为准并立即修正文档
-- **禁止在脚本中硬编码真实 API key、微信凭证或飞书凭证**，所有凭证统一写入当前项目根 `.env` 并通过项目 env loader 读取
-- 新增脚本需在 `README.md` 的命令速查、`SKILL.md` 的常用命令，以及 `.github/workflows/ci.yml` 的语法检查清单中登记
-- 新增分析相关脚本应优先复用 `analysis-engine.js`，避免重复实现重试/保存逻辑
-- 新增可配置参数应放入 `config.js`，并同步添加项目 `.env` 覆写支持
-- 修改 `prompts/deep-analysis.md` 或 `prompts/filter.md` 后，代码会自动读取最新内容，无需改代码
-- 修改 `deep-analyzer.js` 输出契约后，需同步检查 `scripts/utils.js` 与 `scripts/utils.py`
-- 修改 `config.js` 后，需同步更新 `tests/config.test.js`
-- 修改评分/标签/机器摘要格式后，需抽样验证 `data/current/deep-analysis-result.json` 和最终博客/社媒产物
-- **安全审计**：定期检查代码中是否意外泄露 API key、token、凭证备份文件或环境变量快照；`data/` 和 `logs/` 目录下的临时/备份文件严禁提交到版本控制
-- **`.gitignore` 要求**：确保 `data/`、`logs/`、`*.env`、`*.backup*`、`.DS_Store`、`*-cache.json`、敏感日志等被正确忽略
+给修改默认 API、共享发布、Prompt、数据契约或文档的维护者。先确认变更属于哪个层，只改一处权威实现，再同步消费者、测试与文档。Manual 专属维护见 [manual/README.md](../manual/README.md)。
 
-### 显式 Manual 维护
+## 变更路由
 
-Manual 的 runner、records/spec、shadow、legacy 与 provenance 维护规则集中在 [`manual/`](../manual/README.md)。修改 Manual Prompt、编辑契约或 validator 时必须同时运行该目录的专属测试；默认 API 维护不得复制或隐式改写 Manual 契约。
+| 变更 | 首要文件 | 必查消费者 |
+|---|---|---|
+| Node 参数/路径 | `scripts/config.js` | 入口脚本、测试、env.example |
+| Python 发布路径 | `scripts/path_config.py` | generate/review/push、测试 |
+| API 协议/代理 | `scripts/utils.js`、`publish_common.py` | 筛选、分析、review、API key 测试 |
+| 分析恢复 | `analysis-engine.js`、`deep-analyzer.js` | 所有分析入口、digest 状态 |
+| 分析结构/评分 | `analysis-contract.js`、Prompt | Node/Python parser、publisher |
+| Reader 文风/图表 | `api-reader-article.md`、`editorial-quality.js` | Reader validator、博客 review |
+| 博客事务 | `publish-to-blog.py` | 三个独立入口、receipt 测试 |
+| 视觉状态 | 两个 state JS 与 integration | planner、status、record |
+| 命令别名 | `package.json` | README、AGENTS、SKILL、docs |
 
----
+## 不可破坏的边界
 
-## 附录：当前评分与标签口径
+- 默认日更始终 LLM/API；API 错误不切 Manual。
+- 项目环境只来自根 `.env`，凭据不进入外部子进程。
+- Muse 与 arXiv 必须代理；其他 LLM 默认 `agent:false`。
+- 同篇分析与共享 JSON 更新必须持锁并锁内重读。
+- checkpoint 指纹变化只失效必要阶段，不能无条件清空全部成功项。
+- generate、review、push 分离；review 只读最终字节。
+- production proof、页面 SHA、Git baseline、remote OID 和视觉任务逐层绑定。
+- 项目脚本不调用图像 API。
 
-`deep-analyzer.js` 当前使用顶会审稿人（NeurIPS/ICML/ICLR）风格的 **八维**评分体系，并要求同步输出机器摘要：
+## Prompt 修改
 
-### 14.1 评分公式
+`loadPrompt()` 读取 Markdown 第一个 fenced block。修改前确认：
 
-各维度满分：创新性（0-2）+ 技术严谨性（0-1.5）+ 实验充分性（0-1.5）+ 清晰度（0-1）+ 影响力（0-1.5）+ 开源（0-1.5）+ 可复现性（0-0.5）+ 工程/实践价值（0-1.5）= 11 分。总分 = 各维度之和，上限为 10 分，四舍五入到 0.1 分。
+1. 占位符与调用方一致；
+2. JSON/章节结构与 parser 一致；
+3. 示例不会被误认成外层 fence；
+4. Prompt SHA 进入正确阶段指纹；
+5. retry feedback 能精确修正而非整篇漂移；
+6. 读者正文没有模板句、证据 ID 或流程元话语。
 
-**代码后处理**：`scripts/utils.js` 与 `scripts/utils.py` 只有在 `## 评分理由` 的八个分项完整、唯一、分母正确、数值有限、最多一位小数且位于合法范围时才重算总分；开源分只能使用固定锚点。非法或残缺评分会产生契约错误，不能进入保存和发布，Python 发布预检及人工覆盖也执行同一约束。总分允许为 0，不设置未约定的最低分。
+评分 Prompt 变更还需验证八维顺序、范围、开源固定锚点、证据 ID 和 deterministic caps。Reader Prompt 变更要抽检术语桥、表格前后叙事、图前/图后邻接、未传像素的描述边界。
 
-当前契约版本为 `type-aware-v1`。评分前必须输出 `document_type`，且只能取：方法研究、系统技术报告、模型报告、数据集与基准、综述、理论研究、应用研究。解析器仅在分析文本包含合法文档类型时写入 `scoringRubricVersion: type-aware-v1`；旧结果保持兼容且不被误标为新评分。
+## 数据契约修改
 
-机器摘要字段：
-- `document_type`（受控文档类型）
-- `rank_bucket`（前10% / 前25% / 前50% / 后50%）
-- `innovation`（创新性，范围 0-2）
-- `technical_rigor`（技术严谨性，范围 0-1.5）
-- `experimental_sufficiency`（实验充分性，范围 0-1.5）
-- `clarity`（清晰度，范围 0-1）
-- `impact`（影响力，范围 0-1.5）
-- `open_source`（开源完整度，范围 0-1.5）
-- `reproducibility`（可复现性，范围 0-0.5）
-- `engineering_score`（工程/实践价值，范围 0-1.5）
-- `confidence`
-- `primary_task_tag`
-- `primary_method_tag`
-- `sota_claim`
-- `has_code`
-- `has_model`
-- `has_dataset`
+新增字段时区分：
 
-### 14.2 八维分项定义
+- 权威事实：必须进入输入/来源 SHA；
+- 派生缓存：必须可从权威字节重建；
+- 恢复状态：必须带版本和阶段指纹；
+- 发布凭证：必须绑定精确文件/外部状态；
+- 可选诊断：不得改变业务完成结果。
 
-| 维度 | 范围 | 说明 |
-|------|------|------|
-| 创新性 | 0-2 | 问题是否新颖、方法是否有本质突破、insight 是否深刻、与 SOTA 区分度是否清晰且有说服力 |
-| 技术严谨性 | 0-1.5 | 公开内容中的推导、证明、算法/系统逻辑、假设和边界是否正确；闭源、缺少超参数或缺少源码本身不在此维度扣分 |
-| 实验充分性 | 0-1.5 | 按 `document_type` 判断证据是否支撑核心声明；只有组件级因果声明才强制要求组件消融 |
-| 清晰度 | 0-1 | 只评价组织、符号、公式、图表和表达；复现细节缺失归可复现性，不能重复扣分 |
-| 影响力 | 0-1.5 | 对领域的推动作用、潜在后续工作价值、实际应用潜力、与语音/音乐/音频读者相关性 |
-| 开源 | 0-1.5 | 固定锚点：核心代码/模型/数据完整开放且文档完整为 1.5；核心产物开放但文档不完整为 1.2；只开放部分核心产物为 1.0；明确承诺未来开放但尚未发布为 0.5；只有可访问 Demo 且无核心产物为 0.2；完全关闭且无承诺为 0 |
-| 可复现性 | 0-0.5 | 除开源外的文档充分度——训练细节/超参数/硬件环境/复现步骤是否足够让他人复现 |
-| 工程/实践价值 | 0-1.5 | 工程落地能力、pipeline 完整度、实际参考价值、工业界可复用性。tech report、系统报告、benchmark 建设等工程型论文必须严格评分 |
+结构变化同步 Node validator、Python publisher、fixtures、迁移/历史兼容和 `validate:data`。
 
-### 14.3 类型证据与扣分归属
+## 并发与原子性
 
-| 文档类型 | 主要证据 |
-|----------|----------|
-| 方法研究 | 代表性基线、消融、跨数据集泛化、统计或误差分析 |
-| 系统技术报告 / 模型报告 | 端到端质量、延迟、吞吐、成本、规模、压力测试、公平竞品对比、失败案例 |
-| 数据集与基准 | 覆盖范围、标注质量、泄漏控制、评测协议、基线完整性 |
-| 综述 | 检索方法、覆盖范围、分类体系、比较框架、综合洞察 |
-| 理论研究 | 证明正确性、假设、边界条件、反例 |
-| 应用研究 | 真实场景、外部验证、用户研究、部署约束 |
+普通 JSON 用原子写。读改写对象必须使用公共文件锁，锁内重新读取最新 canonical，合并本次论文或字段并递增 generation。不要在锁外携带整份旧数组覆盖新结果。长任务使用 heartbeat/租约；只有超龄 owner 可回收。
 
-文档类型只选择证据标准，不提供固定加分、保底或豁免。评分采用声明—证据匹配，并遵守“单一问题单一主维度扣分”：缺少产物归开源，缺少复现参数归可复现性，证据不足归实验充分性，表达问题归清晰度，逻辑/推导/假设错误归技术严谨性。理论研究的完整公开证明、推导和附录可构成核心公开产物，不因没有代码/模型/数据字段被强制归零。无法验证时降低 `confidence`。
+## 安全与日志
 
-最终评分审计由主模型输出 JSON。跨维度扣分理由会被代码拒绝，并把精确错误反馈给下一次局部审计；不会直接重新执行前面的全文分析。非理论论文无核心产物时，代码按上述 0.5 / 0.2 / 0 锚点确定性归一化开源分和理由；理论研究保留基于公开证明材料的文类判断。
+- 真实 URL 只允许 HTTPS，loopback 测试除外。
+- 外部重定向逐跳 DNS/IP 校验。
+- 日志每个非空物理行使用毫秒级北京时间戳。
+- 日志和 `.env` 权限 `0600`。
+- 脱敏认证头、Cookie、token、secret、password、配置密钥实际值和 URL userinfo。
+- `data/`、`logs/`、`.env`、备份、缓存均不提交。
 
-### 14.4 分档要求
+## 验证矩阵
 
-- `rank_bucket` 只能从 `前10% / 前25% / 前50% / 后50%` 中选择
-- `9.0-10.0`：突破性贡献，领域里程碑候选，方法或结果具有范式转变潜力
-- `8.0-8.5`：高水平工作，在重要问题上做出扎实贡献，有明确影响力或显著性能提升
-- `6.5-7.5`：有价值但不够突出，或有小硬伤，属于合格到良好，对特定方向研究者有参考意义
-- `5.0-6.0`：创新有限、实验薄弱、结论不够重要或存在明显缺陷，仅适合快速浏览
-- `1.0-4.5`：问题严重，推导错误、实验不支持结论或写作极差，不推荐投入时间
+```bash
+npm test
+npm run test:default
+npm run test:manual
+npm run validate:data -- --allow-empty
+git diff --check
+```
 
-### 14.5 标签输出要求
+CI 还执行 JS `node -c`、Python `py_compile`、两处 Python 单测和全仓 shell `bash -n`。涉及 Prompt/发布时增加一篇受控产物级测试；涉及代理时分别验证 Muse 和普通直连模型。
 
-- 最终标签总数为 3-5 个
-- 必须至少包含 1 个【任务】标签和 1 个【方法/模型】标签
-- 必须额外输出 `主任务标签`、`主方法标签`、`补充标签`
-- `主任务标签` 和 `主方法标签` 都只能有 1 个，且必须来自最终标签集合
-- `音频大模型` 与 `语音大模型` 二选一；使用 `多模态模型` 时通常不再重复标 `音视频`
+## 提交前清单
 
-### 14.6 输出契约变更检查清单
-
-当 `prompts/deep-analysis.md` 或评分/标签规范发生变化时，至少检查以下内容：
-
-1. 确认 `scripts/utils.js` 中的 `loadPrompt()` 能正确读取 `prompts/` 目录下的 markdown 文件
-2. `scripts/utils.js` 与 `scripts/utils.py` 是否仍能正确解析 `## 机器摘要`、标签和评分字段（注意机器摘要从 `###` 变为 `##`）
-3. 抽样检查 `data/current/deep-analysis-result.json`：原始机器摘要包含 `document_type`、`rank_bucket`、`primary_task_tag`、`primary_method_tag`；`parsed` 包含 `documentType`、`scoringRubricVersion` 及对应 camelCase 字段
-4. **验证 `score` 是否从 `## 评分理由` 的八个分项正确计算**：抽样对比 `parsed.score` 与 `## 评分理由` 中各分项之和，确认上限为 10、四舍五入到 0.1
-5. 验证博客发布脚本产物，确认榜单、单篇页和热门方向正确显示新字段
-6. 验证微信/小红书/飞书脚本产物，确认文案中没有因字段缺失导致的空值或格式错位
-7. 确认默认 API 发布视图正确呈现局限、反证与评分证据；Manual 发布边界按 [Manual 编辑契约](../manual/docs/editorial-reference-contract.md) 单独验收
-
----
-
-## 参考与致谢
-
-- 本项目在设计和实现过程中参考了 [speech-paper-daily-skill](https://github.com/JusperLee/speech-paper-daily-skill) 的思路与结构
+- [ ] 命令与 `package.json` 一致
+- [ ] 中英文文档术语和默认值一致
+- [ ] 无旧路径、悬空链接或不存在脚本
+- [ ] 未混入 Manual 内部规则
+- [ ] 未提交运行数据、日志或凭据
+- [ ] dirty worktree 中用户无关改动被保留
+- [ ] 中文提交信息说明原因、范围和兼容影响
