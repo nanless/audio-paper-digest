@@ -80,7 +80,7 @@ describe('refresh-api-reader batch CLI', () => {
         );
     });
 
-    it('selects only non-v3 papers from the exact current batch', () => {
+    it('selects only records that fail the current production binding', () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reader-refresh-batch-'));
         const file = path.join(root, 'deep.json');
         const previous = Config.FILES.deepAnalysisResult;
@@ -122,10 +122,13 @@ describe('refresh-api-reader batch CLI', () => {
             const options = parseRefreshCliArgs([
                 '--all', '--date', '2026-09-01', '--concurrency', '5'
             ]);
-            assert.deepStrictEqual(resolveBatchRefreshIds(options), ['2608.00002']);
+            assert.deepStrictEqual(resolveBatchRefreshIds({
+                ...options,
+                isCurrentReaderFn: paper => paper.apiReaderPlan?.version === 3
+            }), ['2608.00002']);
             assert.strictEqual(hasCurrentReaderV3(JSON.parse(
                 fs.readFileSync(file, 'utf8')
-            ).papers[0]), true);
+            ).papers[0]), false);
             assert.strictEqual(hasCurrentReaderV3({ arxivId: 'missing-plan' }), false);
             assert.throws(
                 () => resolveBatchRefreshIds({ ...options, date: '2026-08-31' }),

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 'use strict';
 
-const crypto = require('crypto');
 const Config = require('./config.js');
 const {
     fetchArxivTextDetailed,
@@ -9,7 +8,6 @@ const {
     refreshApiScoringAndReaderFromSource,
     refreshApiReaderAuthorsFromSource,
     refreshApiReaderFiguresFromSource,
-    API_READER_ARTICLE_CONTRACT,
     stableFingerprint,
     repairApiReaderPlanSurfaceBinding
 } = require('./deep-analyzer.js');
@@ -17,7 +15,8 @@ const {
     readJsonFileStrict,
     updateJsonFileLocked,
     isSuccessfulAnalysisRecord,
-    withPaperAnalysisLock
+    withPaperAnalysisLock,
+    apiReaderV3BindsCanonical
 } = require('./analysis-engine.js');
 const {
     updateAnalysisDigestStatuses,
@@ -126,20 +125,7 @@ function paperRefreshInputIdentity(paper) {
 }
 
 function hasCurrentReaderV3(paper) {
-    if (!paper?.apiReaderPlan || typeof paper.apiReaderPlan !== 'object') return false;
-    const stage = paper?.analysisManifest?.stages?.apiReaderArticle;
-    const articleSha256 = crypto.createHash('sha256')
-        .update(String(paper?.apiReaderArticle || ''))
-        .digest('hex');
-    const planSha256 = stableFingerprint(paper?.apiReaderPlan);
-    return paper?.analysisManifest?.contracts?.apiReaderArticle === API_READER_ARTICLE_CONTRACT
-        && stage?.status === 'complete'
-        && paper?.apiReaderPlan?.version === 3
-        && Boolean(String(paper?.apiReaderArticle || '').trim())
-        && paper?.apiReaderArticleSha256 === articleSha256
-        && stage?.articleSha256 === articleSha256
-        && paper?.apiReaderPlanSha256 === planSha256
-        && stage?.planSha256 === planSha256
+    return apiReaderV3BindsCanonical(paper)
         && !paper?.latestAnalysisAttemptError;
 }
 
@@ -173,9 +159,10 @@ function resolveBatchRefreshIds(options) {
     if (canonicalBatchDate !== options.date) {
         throw new Error(`当前深度分析批次为 ${canonicalBatchDate || '未知'}，拒绝按 ${options.date} 全量刷新`);
     }
+    const currentReaderCheck = options.isCurrentReaderFn || hasCurrentReaderV3;
     const pending = options.surfaceBindingsOnly
         ? papers
-        : papers.filter(paper => !hasCurrentReaderV3(paper));
+        : papers.filter(paper => !currentReaderCheck(paper));
     console.log(
         `📋 API reader 全量刷新: date=${options.date}`
         + ` | papers=${papers.length} | pending=${pending.length}`
