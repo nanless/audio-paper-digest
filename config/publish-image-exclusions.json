@@ -17,6 +17,11 @@
       "reason": "多模态发布审查确认注意力热图主体近乎空白，无法支撑正文中的层间注意力分布观察"
     },
     {
+      "normalizedArxivId": "2608.30326",
+      "url": "https://arxiv.org/html/2608.30326v1/fig2_ptbm2.png",
+      "reason": "多模态发布审查确认 Figure 2 图片内部将 Interaction 错写为 Inrreation，像素文字错误无法通过正文解释修复"
+    },
+    {
       "normalizedArxivId": "2608.30854",
       "url": "https://arxiv.org/html/2608.30854v1/Fig/tab-example.png",
       "reason": "多模态发布审查确认图片顶部另含未在原始图注中说明的波形面板，图注所述上下位置与实际像素不一致"

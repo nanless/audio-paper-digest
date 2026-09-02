@@ -593,6 +593,39 @@ def create_verified_schema_v3_publication(date_str, posts, paper):
 
 
 class PublishToBlogReviewTest(unittest.TestCase):
+    def test_api_reader_asset_attestation_accepts_deleted_manifest_tombstone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'blog'
+            page = repo / 'content' / 'posts' / '2026-07-10-paper.md'
+            deleted_asset = (
+                repo / 'static' / 'images' / 'papers' / '2607.00001'
+                / 'figure-2-deleted.png'
+            )
+            manifest = Path(tmp) / 'generation.json'
+            page.parent.mkdir(parents=True)
+            page.write_text('---\ntitle: test\n---\n\n正文。\n', encoding='utf-8')
+            manifest.write_text(json.dumps({
+                'files': [
+                    {
+                        'path': page.relative_to(repo).as_posix(),
+                        'deleted': False,
+                        'sha256': hashlib.sha256(page.read_bytes()).hexdigest(),
+                    },
+                    {
+                        'path': deleted_asset.relative_to(repo).as_posix(),
+                        'deleted': True,
+                        'sha256': None,
+                    },
+                ],
+            }), encoding='utf-8')
+            results = {}
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)):
+                blocking = publish_to_blog.attest_api_reader_assets(
+                    '2026-07-10', [page, deleted_asset], manifest, results,
+                )
+            self.assertEqual(blocking, 0)
+            self.assertNotIn(str(deleted_asset.resolve()), results)
+
     def test_extract_repo_urls_stops_at_chinese_sentence_punctuation(self):
         url = (
             'https://github.com/NVIDIA-NeMo/Speech/blob/main/scripts/'
@@ -1984,6 +2017,7 @@ title: "Bad table"
                 ('2608.13610', 'https://arxiv.org/html/2608.13610v1/Fig/intro_1.jpg'),
                 ('2608.29021', 'https://arxiv.org/html/2608.29021v1/figures/heatmap_xlsr_weights.png'),
                 ('2608.29480', 'https://arxiv.org/html/2608.29480v1/attn6.svg'),
+                ('2608.30326', 'https://arxiv.org/html/2608.30326v1/fig2_ptbm2.png'),
                 ('2608.30854', 'https://arxiv.org/html/2608.30854v1/Fig/tab-example.png'),
             ],
         )

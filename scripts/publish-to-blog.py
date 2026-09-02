@@ -6367,6 +6367,8 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
             continue
         relative = asset.relative_to(repo).as_posix()
         record = manifest_by_path.get(relative)
+        if isinstance(record, dict) and record.get('deleted') is True and not asset.exists():
+            continue
         result = {
             'passed': False, 'completed': True, 'failureKind': 'content',
             'blockingCount': 1, 'reviewedSha256': None,
