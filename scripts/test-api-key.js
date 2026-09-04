@@ -16,6 +16,12 @@ const {
     parseResponseText,
     requestLlmJson
 } = require('./utils.js');
+const {
+    resolveApiKeyPool,
+    normalizeOpenCodeGoService,
+    LlmAccountPoolConfigError
+} = require('./llm-account-pool.js');
+const { FILES } = require('./config.js');
 
 function parseArgs(argv) {
     if (argv.length === 0) return { secondary: false };
@@ -23,12 +29,74 @@ function parseArgs(argv) {
     throw new Error(`未知参数: ${argv.join(' ')}；用法: node scripts/test-api-key.js [--secondary]`);
 }
 
+function resolveApiKeyTestConfig(env, secondary) {
+    const primaryEndpoint = String(env.PAPER_ANALYZER_ENDPOINT || '');
+    const primaryKey = String(env.PAPER_ANALYZER_API_KEY || '').trim();
+    if (!secondary) {
+        return {
+            endpoint: primaryEndpoint,
+            key: primaryKey,
+            apiKeys: resolveApiKeyPool(primaryKey, env.PAPER_ANALYZER_FALLBACK_API_KEYS || ''),
+            model: env.PAPER_ANALYZER_MODEL || ''
+        };
+    }
+
+    const endpoint = String(env.PAPER_ANALYZER_SECONDARY_ENDPOINT || primaryEndpoint);
+    const explicitSecondaryKey = String(env.PAPER_ANALYZER_SECONDARY_API_KEY || '').trim();
+    const key = explicitSecondaryKey || primaryKey;
+    const model = env.PAPER_ANALYZER_SECONDARY_MODEL || '';
+    if (!String(model).trim()) {
+        return { endpoint, key, apiKeys: [key].filter(Boolean), model };
+    }
+    const explicitSecondaryFallback = env.PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS || '';
+    const primaryService = normalizeOpenCodeGoService(primaryEndpoint);
+    const secondaryService = normalizeOpenCodeGoService(endpoint);
+    const sameOpenCodeGoService = Boolean(
+        primaryService && secondaryService && primaryService === secondaryService
+    );
+    const canonicalRoute = value => {
+        const goService = normalizeOpenCodeGoService(value);
+        if (goService) return goService;
+        try {
+            const parsed = new URL(String(value || ''));
+            const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+            return `${parsed.protocol}//${parsed.host}${pathname}`;
+        } catch (_) {
+            return String(value || '').trim().replace(/\/+$/, '');
+        }
+    };
+    if (!explicitSecondaryKey && canonicalRoute(primaryEndpoint) !== canonicalRoute(endpoint)) {
+        throw new LlmAccountPoolConfigError(
+            '副模型 endpoint 与主模型不属于同一 canonical 服务时，必须显式配置 PAPER_ANALYZER_SECONDARY_API_KEY'
+        );
+    }
+    let fallbackKeys = '';
+    if (explicitSecondaryFallback) {
+        if (!explicitSecondaryKey && !sameOpenCodeGoService) {
+            throw new LlmAccountPoolConfigError(
+                '副模型显式配置 fallback API keys 时，非同一 OpenCode Go 服务必须同时显式配置 PAPER_ANALYZER_SECONDARY_API_KEY'
+            );
+        }
+        fallbackKeys = explicitSecondaryFallback;
+    } else if (!explicitSecondaryKey && sameOpenCodeGoService) {
+        fallbackKeys = env.PAPER_ANALYZER_FALLBACK_API_KEYS || '';
+    }
+    return {
+        endpoint,
+        key,
+        apiKeys: resolveApiKeyPool(key, fallbackKeys),
+        model
+    };
+}
+
 async function main(argv = process.argv.slice(2)) {
     const { secondary } = parseArgs(argv);
     // 清除缓存，强制从当前项目根 .env 重新加载。
     for (const key of [
         'PAPER_ANALYZER_ENDPOINT', 'PAPER_ANALYZER_API_KEY', 'PAPER_ANALYZER_MODEL',
+        'PAPER_ANALYZER_FALLBACK_API_KEYS',
         'PAPER_ANALYZER_SECONDARY_ENDPOINT', 'PAPER_ANALYZER_SECONDARY_API_KEY',
+        'PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS',
         'PAPER_ANALYZER_SECONDARY_MODEL'
     ]) {
         delete process.env[key];
@@ -36,14 +104,12 @@ async function main(argv = process.argv.slice(2)) {
     loadEnvFile();
 
     const suffix = secondary ? '_SECONDARY' : '';
-    const endpoint = process.env[`PAPER_ANALYZER${suffix}_ENDPOINT`];
-    const key = process.env[`PAPER_ANALYZER${suffix}_API_KEY`];
-    const model = process.env[`PAPER_ANALYZER${suffix}_MODEL`];
+    const { endpoint, key, apiKeys, model } = resolveApiKeyTestConfig(process.env, secondary);
 
     console.log(`═══ ${secondary ? '副模型' : '主模型'} API Key 可用性测试 ═══`);
     console.log(`Endpoint: ${endpoint || '(未设置)'}`);
     console.log(`Model: ${model || '(未设置)'}`);
-    console.log(`Key: ${key ? '[已配置，内容不输出]' : '(未设置)'}`);
+    console.log(`Key: ${key ? `[已配置 ${apiKeys.length} 个账号，内容不输出]` : '(未设置)'}`);
     console.log();
 
     const missing = [];
@@ -80,7 +146,7 @@ async function main(argv = process.argv.slice(2)) {
             model,
             body,
             headers,
-            { timeoutMs: 30000 }
+            { timeoutMs: 30000, apiKeys, accountPoolStateFile: FILES.llmAccountPoolState }
         );
         console.log(`HTTP 状态码: ${response.statusCode}`);
         console.log();
@@ -118,4 +184,4 @@ if (require.main === module) {
         });
 }
 
-module.exports = { main, parseArgs };
+module.exports = { main, parseArgs, resolveApiKeyTestConfig };

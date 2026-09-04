@@ -69,6 +69,66 @@ describe('full-fetch helpers', () => {
         assert.match(fingerprint, /^[a-f0-9]{16}$/);
     });
 
+    it('生产 arXiv scheduler 使用配置的健康/瞬时/限流自适应冷却', async () => {
+        const { createProductionArxivRequestScheduler } = require('../scripts/full-fetch.js');
+        let now = 0;
+        const sleeps = [];
+        const scheduler = createProductionArxivRequestScheduler({
+            nowFn: () => now,
+            randomFn: () => 0,
+            sleepFn: async ms => { sleeps.push(ms); now += ms; }
+        });
+
+        await scheduler.run('arxiv.org', async () => ({ status: 200 }));
+        await scheduler.run('arxiv.org', async () => ({ status: 503 }));
+        await scheduler.run('arxiv.org', async () => ({ status: 429 }));
+        await scheduler.run('arxiv.org', async () => ({ status: 200 }));
+
+        assert.deepStrictEqual(sleeps, [
+            Config.ARXIV_CONFIG.hostHealthyCooldownMs,
+            Config.ARXIV_CONFIG.hostTransientCooldownMs,
+            Config.ARXIV_CONFIG.hostRateLimitedCooldownMs
+        ]);
+    });
+
+    it('从抓取 checkpoint 建立跨类别 normalized-ID 摘要缓存', async () => {
+        const {
+            applyFetchSourceIntegrity,
+            buildSharedAbstractCache
+        } = require('../scripts/full-fetch.js');
+        const complete = applyFetchSourceIntegrity({
+            status: 'complete',
+            health: { ok: true },
+            papers: [{ arxivId: '2609.12345v1', abstract: 'shared speech abstract' }]
+        });
+        const failed = applyFetchSourceIntegrity({
+            status: 'failed',
+            health: { ok: false },
+            papers: [{ arxivId: '2609.99999', abstract: 'must not enter cache' }]
+        });
+        const unhealthyComplete = applyFetchSourceIntegrity({
+            status: 'complete',
+            health: { ok: false },
+            papers: [{ arxivId: '2609.88888', abstract: 'must not enter cache either' }]
+        });
+        const cache = buildSharedAbstractCache({
+            arxiv: {
+                'eess.AS': complete,
+                'cs.SD': {
+                    status: 'complete',
+                    health: { ok: true },
+                    papers: [{ arxivId: '2609.12345v3', abstract: '' }]
+                },
+                'cs.CL': failed,
+                'cs.LG': unhealthyComplete
+            }
+        });
+        assert.strictEqual(await cache.get('2609.12345'), 'shared speech abstract');
+        assert.strictEqual(cache.size, 1);
+        assert.strictEqual(cache.has('2609.99999'), false);
+        assert.strictEqual(cache.has('2609.88888'), false);
+    });
+
     it('模块可安全导入且不会自动启动长流程', () => {
         const mod = require('../scripts/full-fetch.js');
         assert.strictEqual(typeof mod.fullFetch, 'function');

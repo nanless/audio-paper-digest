@@ -20,6 +20,7 @@ DATA_DIR = PROJECT_ROOT / "data"
 CURRENT_DIR = DATA_DIR / "current"
 ARCHIVE_DIR = DATA_DIR / "archive"
 LOGS_DIR = PROJECT_ROOT / "logs"
+LLM_ACCOUNT_POOL_STATE_FILE = DATA_DIR / "runtime" / "llm-account-pool.json"
 
 PAPERS_FILE = CURRENT_DIR / "papers.json"
 PAPERS_LEGACY_FILE = DATA_DIR / "papers.json"

@@ -81,6 +81,10 @@ describe('config', () => {
         assert.strictEqual(Config.HUGGINGFACE_CONFIG.maxPages, 20);
         assert.strictEqual(Config.HUGGINGFACE_CONFIG.pageLimit, 100);
         assert.strictEqual(Config.ARCHIVE_CONFIG.maxBackups, 10);
+        assert.strictEqual(
+            Config.FILES.llmAccountPoolState,
+            path.join(Config.DATA_DIR, 'runtime', 'llm-account-pool.json')
+        );
         assert.strictEqual(Config.ANALYSIS_CONFIG.imageMaxBytes, 6 * 1024 * 1024);
         assert.strictEqual(Config.ANALYSIS_CONFIG.imageTotalBase64Chars, 20 * 1024 * 1024);
         assert.strictEqual(Config.ANALYSIS_CONFIG.fullTextMaxChars, 200000);

@@ -9,6 +9,15 @@ const path = require('path');
 const http = require('http');
 const https = require('https');
 const { loadProjectEnv } = require('./env-loader.js');
+const {
+    normalizeApiKeys,
+    LlmAccountPoolExhaustedError,
+    isOpenCodeGoEndpoint,
+    classifyOpenCodeGoQuotaResponse,
+    replaceCredentialHeaders,
+    selectApiKey,
+    markQuotaExhausted
+} = require('./llm-account-pool.js');
 
 // ═══════════════════════════════════════════════════════
 // 文件操作
@@ -398,7 +407,7 @@ function detectApiType(endpoint, model) {
 
     // OpenCode Go 上的 Muse Spark Contributor 只提供 OpenAI Responses API。
     // 同时允许用户直接配置完整 /responses 端点。
-    if (ep.endsWith('/responses') || m === 'muse-spark-1.2-contributor') {
+    if (ep.endsWith('/responses') || m.startsWith('muse-spark-')) {
         return 'openai_responses';
     }
 
@@ -855,21 +864,35 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
 
 function requiresLlmProxy(endpoint, model) {
     const m = String(model || '').toLowerCase();
-    return m === 'muse-spark-1.2-contributor';
+    return m.startsWith('muse-spark-');
 }
 
-/**
- * LLM 默认保持 agent:false 直连；OpenCode Go Muse Spark Contributor
- * 因地区限制必须使用项目 .env 的 HTTP CONNECT 代理。
- * 每次请求创建并销毁独立 Agent，不影响 MiMo/Kimi 的直连语义。
- */
-async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options = {}) {
+let openCodeSessionId = null;
+
+function getOpenCodeSessionId() {
+    if (openCodeSessionId) return openCodeSessionId;
+    const configured = String(process.env.PD_OPENCODE_SESSION_ID || '').trim();
+    openCodeSessionId = configured
+        || `audio-paper-digest-${require('crypto').randomUUID()}`;
+    return openCodeSessionId;
+}
+
+function buildOpenCodeRequestHeaders(endpoint, headers) {
+    const result = { ...(headers || {}) };
+    if (!isOpenCodeGoEndpoint(endpoint)) return result;
+    const lowerNames = new Set(Object.keys(result).map(key => key.toLowerCase()));
+    if (!lowerNames.has('user-agent')) result['User-Agent'] = 'audio-paper-digest/1.0';
+    if (!lowerNames.has('x-opencode-session')) result['x-opencode-session'] = getOpenCodeSessionId();
+    return result;
+}
+
+async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options = {}) {
     let agent = false;
     if (requiresLlmProxy(endpoint, model)) {
         const proxyUrl = detectHttpConnectProxyUrl();
         if (!proxyUrl) {
             throw new Error(
-                'OpenCode Go muse-spark-1.2-contributor 必须在项目 .env '
+                'OpenCode Go muse-spark-* 必须在项目 .env '
                 + '配置 HTTPS_PROXY 或 HTTP_PROXY（HTTP CONNECT），禁止静默直连'
             );
         }
@@ -882,10 +905,111 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
         );
     }
     try {
-        return await requestJson(apiUrl, bodyObj, headers, { ...options, agent });
+        // Test-only transport seam. It deliberately lives below requestLlmJson's
+        // canonical URL check and account selection/header replacement, so tests
+        // can avoid the network without bypassing either security boundary.
+        const transportRequestFn = typeof options.transportRequestFn === 'function'
+            ? options.transportRequestFn : requestJson;
+        return await transportRequestFn(apiUrl, bodyObj, headers, { ...options, agent });
     } finally {
         if (agent && typeof agent.destroy === 'function') agent.destroy();
     }
+}
+
+/**
+ * LLM 默认保持 agent:false 直连；OpenCode Go Muse Spark Contributor
+ * 因地区限制必须使用项目 .env 的 HTTP CONNECT 代理。
+ * 每次请求创建并销毁独立 Agent，不影响 MiMo/Kimi 的直连语义。
+ */
+async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options = {}) {
+    let expectedApiUrl;
+    try {
+        expectedApiUrl = buildApiUrl(detectApiType(endpoint, model), endpoint);
+    } catch (error) {
+        error.code = error.code || 'LLM_ACCOUNT_POOL_CONFIG_ERROR';
+        error.retryable = false;
+        throw error;
+    }
+    let actualApiUrl;
+    try {
+        actualApiUrl = validateApiEndpointUrl(String(apiUrl)).href;
+    } catch (error) {
+        error.code = 'LLM_ACCOUNT_POOL_CONFIG_ERROR';
+        error.retryable = false;
+        throw error;
+    }
+    if (actualApiUrl !== new URL(expectedApiUrl).href) {
+        const error = new Error('LLM 请求 URL 与声明的 endpoint/model 路由不一致，已拒绝发送凭据');
+        error.code = 'LLM_ACCOUNT_POOL_CONFIG_ERROR';
+        error.retryable = false;
+        throw error;
+    }
+    const configuredKeys = Array.isArray(options.apiKeys)
+        ? options.apiKeys.map(value => String(value || '').trim()).filter(Boolean)
+        : [];
+    const apiKeys = normalizeApiKeys(configuredKeys);
+    if (apiKeys.length !== configuredKeys.length) {
+        const error = new Error('OpenCode Go 主账号与备用账号 API key 不能相同或重复');
+        error.code = 'LLM_ACCOUNT_POOL_CONFIG_ERROR';
+        error.retryable = false;
+        throw error;
+    }
+    if (apiKeys.length > 1 && !isOpenCodeGoEndpoint(endpoint)) {
+        const error = new Error('备用 API key 只允许用于 OpenCode Go 官方端点');
+        error.code = 'LLM_ACCOUNT_POOL_CONFIG_ERROR';
+        error.retryable = false;
+        throw error;
+    }
+
+    const baseHeaders = buildOpenCodeRequestHeaders(endpoint, headers);
+    if (apiKeys.length < 2) {
+        return requestLlmOnce(apiUrl, endpoint, model, bodyObj, baseHeaders, options);
+    }
+
+    const stateFile = options.accountPoolStateFile
+        || require('./config.js').FILES.llmAccountPoolState;
+    const totalTimeoutMs = Number.isInteger(options.timeoutMs) && options.timeoutMs > 0
+        ? options.timeoutMs : 60000;
+    const startedAt = Date.now();
+    const blockedUntilValues = [];
+    const attemptedAccountIds = new Set();
+    for (let accountAttempt = 0; accountAttempt < apiKeys.length; accountAttempt += 1) {
+        const remainingMs = totalTimeoutMs - (Date.now() - startedAt);
+        if (remainingMs <= 0) {
+            const error = new Error(`Request deadline exceeded after ${totalTimeoutMs}ms`);
+            error.code = 'REQUEST_DEADLINE_EXCEEDED';
+            throw error;
+        }
+        const selection = selectApiKey(apiKeys, endpoint, stateFile, {
+            excludeAccountIds: attemptedAccountIds
+        });
+        attemptedAccountIds.add(selection.accountId);
+        const requestHeaders = replaceCredentialHeaders(baseHeaders, selection.apiKey);
+        const response = await requestLlmOnce(
+            apiUrl,
+            endpoint,
+            model,
+            bodyObj,
+            requestHeaders,
+            { ...options, timeoutMs: remainingMs }
+        );
+        const quota = classifyOpenCodeGoQuotaResponse(response);
+        if (!quota) return response;
+        const blockedUntilMs = markQuotaExhausted(selection, quota, stateFile);
+        blockedUntilValues.push(blockedUntilMs);
+        const accountNumber = apiKeys.indexOf(selection.apiKey) + 1;
+        console.warn(
+            `[llm-account-pool] OpenCode Go 账号 ${accountNumber} 已确认额度耗尽`
+            + ` (${quota.limitClass})，冷却至 ${new Date(blockedUntilMs).toISOString()}`
+        );
+    }
+    const earliestRetryAtMs = blockedUntilValues.length > 0
+        ? Math.min(...blockedUntilValues) : null;
+    throw new LlmAccountPoolExhaustedError(
+        `本次请求已尝试全部 OpenCode Go 账号；均明确返回额度耗尽`
+        + `${earliestRetryAtMs ? `，最早恢复时间 ${new Date(earliestRetryAtMs).toISOString()}` : ''}`,
+        { earliestRetryAtMs, blockedAccountCount: blockedUntilValues.length }
+    );
 }
 
 // ═══════════════════════════════════════════════════════

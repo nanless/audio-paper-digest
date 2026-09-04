@@ -16,6 +16,7 @@ const {
 
 const PROJECT_KEYS = [
     'PAPER_ANALYZER_API_KEY',
+    'PAPER_ANALYZER_FALLBACK_API_KEYS',
     'PAPER_ANALYZER_MODEL',
     'PAPER_ANALYZER_ENDPOINT',
     'PAPER_DIGEST_BLOG_REPO',
@@ -99,6 +100,7 @@ describe('env-loader', () => {
     it('项目 .env 覆盖并清理外层项目变量', () => {
         withSavedEnv(() => {
             process.env.PAPER_ANALYZER_API_KEY = 'outer-key';
+            process.env.PAPER_ANALYZER_FALLBACK_API_KEYS = 'outer-fallback';
             process.env.PAPER_ANALYZER_MODEL = 'outer-model';
             process.env.PAPER_ANALYZER_ENDPOINT = 'outer-endpoint';
             process.env.PD_ANALYSIS_CONCURRENCY = '99';
@@ -106,6 +108,7 @@ describe('env-loader', () => {
 
             withTempEnv([
                 'PAPER_ANALYZER_API_KEY=inner-key',
+                'PAPER_ANALYZER_FALLBACK_API_KEYS=inner-fallback',
                 'PAPER_ANALYZER_MODEL=inner-model',
                 'PAPER_ANALYZER_ENDPOINT=inner-endpoint'
             ], envPath => {
@@ -113,6 +116,7 @@ describe('env-loader', () => {
             });
 
             assert.strictEqual(process.env.PAPER_ANALYZER_API_KEY, 'inner-key');
+            assert.strictEqual(process.env.PAPER_ANALYZER_FALLBACK_API_KEYS, 'inner-fallback');
             assert.strictEqual(process.env.PAPER_ANALYZER_MODEL, 'inner-model');
             assert.strictEqual(process.env.PAPER_ANALYZER_ENDPOINT, 'inner-endpoint');
             assert.strictEqual(process.env.PD_ANALYSIS_CONCURRENCY, undefined);
@@ -145,7 +149,7 @@ describe('env-loader', () => {
         withSavedEnv(() => {
             process.env.HTTPS_PROXY = 'http://outer-proxy.invalid';
             process.env.PAPER_ANALYZER_API_KEY = 'outer-secret';
-            withTempEnv(['HTTPS_PROXY=http://project-proxy.invalid', 'PAPER_ANALYZER_API_KEY=project-secret'], envPath => {
+            withTempEnv(['HTTPS_PROXY=http://project-proxy.invalid', 'PAPER_ANALYZER_API_KEY=project-secret', 'PAPER_ANALYZER_FALLBACK_API_KEYS=fallback-secret'], envPath => {
                 loadProjectEnv(envPath);
                 assert.strictEqual(process.env.HTTPS_PROXY, 'http://project-proxy.invalid');
                 assert.strictEqual(fs.statSync(envPath).mode & 0o777, 0o600);
@@ -154,6 +158,7 @@ describe('env-loader', () => {
             const childEnv = buildChildProcessEnv({}, ['HTTPS_PROXY']);
             assert.strictEqual(childEnv.HTTPS_PROXY, 'http://project-proxy.invalid');
             assert.strictEqual(childEnv.PAPER_ANALYZER_API_KEY, undefined);
+            assert.strictEqual(childEnv.PAPER_ANALYZER_FALLBACK_API_KEYS, undefined);
             assert.strictEqual(childEnv.SSH_AUTH_SOCK, undefined);
         });
     });

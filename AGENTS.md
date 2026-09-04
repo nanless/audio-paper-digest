@@ -22,7 +22,7 @@ npm run digest:prepare -- YYYY-MM-DD
 1. Node 满足 `>=20.18.1 <21 || >=22.3.0`，依赖已安装。
    默认博客/视觉 Python 入口还要求 Python 3.11+ 与 OpenSSL；`scripts/python-runtime.sh` 优先使用项目 `.venv`，再选择并校验 `python3.11` / `python3`。
 2. 项目根 `.env` 存在，权限由 loader 收紧为 `0600`。
-3. `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT` 完整；默认文档配置是 OpenCode Go `muse-spark-1.2-contributor`。
+3. `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT` 完整；默认文档配置是 OpenCode Go `muse-spark-1.2-contributor`。可选 `PAPER_ANALYZER_FALLBACK_API_KEYS` 只提供同一路由的长期 sticky 备用账号，不能替代副模型变量。
 4. `HTTPS_PROXY` 或 `HTTP_PROXY` 是项目 `.env` 内的 HTTP CONNECT 地址；Muse 与 arXiv 缺代理立即失败。
 5. `PAPER_DIGEST_BLOG_REPO` 指向真实 Hugo 仓库，工作区没有与目标日期重叠的人工修改。
 
@@ -61,6 +61,7 @@ npm run digest:prepare -- YYYY-MM-DD
 默认 Muse 精确模型走 OpenAI Responses，`/v1` 转为 `/v1/responses`。所有 Node LLM 请求必须经 `requestLlmJson()`；Python 发布请求必须经 `call_publish_llm_api()`。
 
 - Muse：强制项目 HTTP CONNECT，一次请求一个 one-shot agent，请求后销毁，禁止静默直连。
+- OpenCode Go 账号池：成功时持续使用当前账号；仅明确 `GoUsageLimitError` 才在同一逻辑请求内切换并持久化冷却。普通 429、5xx、网络错误、输出截断和正文门禁不得切号；切换后不自动切回。
 - 其他 LLM：默认 `agent:false` 直连，避免继承代理污染 MiMo/Kimi。
 - arXiv 元数据、HTML、PDF、图片：强制项目 HTTP CONNECT。
 - HuggingFace curl：继承 HTTP(S) 代理，可额外使用 `ALL_PROXY` SOCKS。
@@ -69,7 +70,7 @@ npm run digest:prepare -- YYYY-MM-DD
 | 能力 | 默认值 | 覆写 |
 |---|---:|---|
 | 整篇分析并发 | 3 | `PD_ANALYSIS_CONCURRENCY` |
-| 筛选配置批次 | 5；Muse 实际固定 1 | `PD_FILTER_BATCH_SIZE` |
+| 筛选配置批次 | 5；Muse 同样使用配置值 | `PD_FILTER_BATCH_SIZE` |
 | 整篇重试 / 单阶段尝试 | 2 / 3 | `PD_ANALYSIS_MAX_RETRIES` / `PD_ANALYSIS_API_MAX_RETRIES` |
 | 主分析 / 局部修复输出 | 64000 / 16000 tokens | `PD_ANALYSIS_API_MAX_TOKENS` / `PD_ANALYSIS_REPAIR_MAX_TOKENS` |
 | 单次分析 LLM 响应 | 16 MiB | `PD_ANALYSIS_API_MAX_RESPONSE_BYTES` |

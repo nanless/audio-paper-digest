@@ -52,7 +52,7 @@ The keyword layer optimizes recall:
 - audio/speech/music/model/dataset keyword matches reach the LLM;
 - only complete, clearly unmatched supplementary-category abstracts become deterministic negatives.
 
-Decisions persist per paper. Exact Muse uses effective batch 1, so one failure remains local. Filtering completes only when decisions cover raw exactly and filtered matches positive decisions minus explicit exclusions.
+Decisions persist per paper. Muse uses the configured filter batch size. If a sticky OpenCode Go account returns an explicit quota-exhaustion error, the same logical request immediately replays on the next eligible account; ordinary rate limits remain ordinary retries. Filtering completes only when decisions cover raw exactly and filtered matches positive decisions minus explicit exclusions.
 
 ## 4. Full Text and Staged Analysis
 

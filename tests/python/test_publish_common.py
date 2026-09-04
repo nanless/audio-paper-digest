@@ -7,6 +7,7 @@ import io
 import json
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -15,6 +16,7 @@ SCRIPTS = os.path.join(ROOT, 'scripts')
 sys.path.insert(0, SCRIPTS)
 
 from publish_common import (  # noqa: E402
+    LlmAccountPoolConfigError,
     PublishLLMUnavailable,
     PublishDataValidationError,
     build_publish_headers,
@@ -60,6 +62,7 @@ from publish_common import (  # noqa: E402
     _manual_han_character_count,
     _manual_numeric_lexemes,
     _manual_v4_reader_view,
+    _open_publish_json_with_account_pool,
     _final_markdown_image_occurrences,
     _validate_manual_result_claim_bindings,
     _validate_manual_v4_result_claims,
@@ -1506,6 +1509,43 @@ primary_method_tag: #基准测试
         build_headers.assert_not_called()
         request.assert_not_called()
 
+    def test_credential_helper_rejects_api_url_identity_drift_before_headers(self):
+        with mock.patch('publish_common.build_publish_headers') as build_headers:
+            with self.assertRaisesRegex(
+                    LlmAccountPoolConfigError, 'canonical 路由不一致'):
+                _open_publish_json_with_account_pool(
+                    api_url='https://evil.example/v1/chat/completions',
+                    endpoint='https://api.example.com/v1',
+                    model='text-model',
+                    api_type='openai',
+                    api_keys=['secret-key'],
+                    payload={'model': 'text-model'},
+                    opener=mock.Mock(),
+                    timeout=10,
+                )
+        build_headers.assert_not_called()
+
+    def test_credential_helper_accepts_equivalent_canonical_default_port_url(self):
+        response = mock.Mock()
+        response.status = 200
+        response.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        opener = mock.Mock()
+        opener.open.return_value = response
+        status, payload = _open_publish_json_with_account_pool(
+            api_url='https://API.EXAMPLE.COM:443/v1/chat/completions',
+            endpoint='https://api.example.com/v1',
+            model='text-model',
+            api_type='openai',
+            api_keys=['secret-key'],
+            payload={'model': 'text-model'},
+            opener=opener,
+            timeout=10,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload['choices'][0]['message']['content'], 'ok')
+
     def test_publish_anthropic_headers_include_claude_version(self):
         headers = build_publish_headers('anthropic', 'key', claude_version='9.8.7')
         self.assertEqual(headers['User-Agent'], 'claude-cli/9.8.7 (external, cli)')
@@ -1579,6 +1619,119 @@ primary_method_tag: #基准测试
         self.assertEqual(payload['max_output_tokens'], 100)
         self.assertNotIn('messages', payload)
 
+    def test_muse_confirmed_quota_switches_once_and_keeps_fallback_sticky(self):
+        quota_body = json.dumps({
+            'type': 'GoUsageLimitError',
+            'message': '5-hour usage limit reached. Resets in 30min.',
+            'metadata': {'limitName': '5-hour rolling'},
+        }).encode('utf-8')
+        quota_error = urllib.error.HTTPError(
+            'https://opencode.ai/zen/go/v1/responses',
+            429,
+            'Too Many Requests',
+            {'Content-Type': 'application/json', 'Retry-After': '1800'},
+            io.BytesIO(quota_body),
+        )
+        success = mock.Mock()
+        success.status = 200
+        success.read.return_value = b'{"status":"completed","output_text":"ok"}'
+        success.__enter__ = mock.Mock(return_value=success)
+        success.__exit__ = mock.Mock(return_value=False)
+        second_success = mock.Mock()
+        second_success.status = 200
+        second_success.read.return_value = b'{"status":"completed","output_text":"again"}'
+        second_success.__enter__ = mock.Mock(return_value=second_success)
+        second_success.__exit__ = mock.Mock(return_value=False)
+        opener = mock.Mock()
+        opener.open.side_effect = [quota_error, success, second_success]
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'primary-key',
+            'PAPER_ANALYZER_FALLBACK_API_KEYS': 'fallback-key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://opencode.ai/zen/go/v1',
+            'PAPER_ANALYZER_MODEL': 'muse-spark-1.2-contributor',
+            'HTTPS_PROXY': 'http://127.0.0.1:7897',
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('publish_common.LLM_ACCOUNT_POOL_STATE_FILE', Path(tmp) / 'pool.json'), \
+                mock.patch('urllib.request.build_opener', return_value=opener), \
+                mock.patch('publish_common.time.sleep') as sleep:
+            self.assertEqual(call_publish_llm_api(
+                'inspect', required=True, max_retries=1, max_tokens=100,
+            ), 'ok')
+            self.assertEqual(call_publish_llm_api(
+                'inspect again', required=True, max_retries=1, max_tokens=100,
+            ), 'again')
+        requests = [call.args[0] for call in opener.open.call_args_list]
+        self.assertEqual(
+            [request.get_header('Authorization') for request in requests],
+            ['Bearer primary-key', 'Bearer fallback-key', 'Bearer fallback-key'],
+        )
+        self.assertTrue(all(request.get_header('X-opencode-session') for request in requests))
+        sleep.assert_not_called()
+
+    def test_muse_all_accounts_quota_exhausted_is_bounded_and_typed(self):
+        def quota_error():
+            return urllib.error.HTTPError(
+                'https://opencode.ai/zen/go/v1/responses',
+                429,
+                'Too Many Requests',
+                {'Content-Type': 'application/json', 'Retry-After': '3600'},
+                io.BytesIO(json.dumps({
+                    'type': 'GoUsageLimitError',
+                    'metadata': {'limitName': '5-hour rolling'},
+                }).encode('utf-8')),
+            )
+
+        opener = mock.Mock()
+        opener.open.side_effect = [quota_error(), quota_error()]
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'primary-key',
+            'PAPER_ANALYZER_FALLBACK_API_KEYS': 'fallback-key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://opencode.ai/zen/go/v1',
+            'PAPER_ANALYZER_MODEL': 'muse-spark-1.2-contributor',
+            'HTTPS_PROXY': 'http://127.0.0.1:7897',
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('publish_common.LLM_ACCOUNT_POOL_STATE_FILE', Path(tmp) / 'pool.json'), \
+                mock.patch('urllib.request.build_opener', return_value=opener), \
+                mock.patch('publish_common.time.sleep') as sleep, \
+                self.assertRaisesRegex(PublishLLMUnavailable, '均明确返回额度耗尽'):
+            call_publish_llm_api(
+                'inspect', required=True, max_retries=5, max_tokens=100,
+            )
+        self.assertEqual(opener.open.call_count, 2)
+        sleep.assert_not_called()
+
+    def test_muse_raw_quota_marker_without_valid_json_does_not_switch_account(self):
+        quota_error = urllib.error.HTTPError(
+            'https://opencode.ai/zen/go/v1/responses',
+            429,
+            'Too Many Requests',
+            {'Content-Type': 'text/plain'},
+            io.BytesIO(b'GoUsageLimitError'),
+        )
+        opener = mock.Mock()
+        opener.open.side_effect = [quota_error]
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'primary-key',
+            'PAPER_ANALYZER_FALLBACK_API_KEYS': 'fallback-key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://opencode.ai/zen/go/v1',
+            'PAPER_ANALYZER_MODEL': 'muse-spark-1.2-contributor',
+            'HTTPS_PROXY': 'http://127.0.0.1:7897',
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('publish_common.LLM_ACCOUNT_POOL_STATE_FILE', Path(tmp) / 'pool.json'), \
+                mock.patch('urllib.request.build_opener', return_value=opener), \
+                mock.patch('publish_common.time.sleep'), \
+                self.assertRaises(PublishLLMUnavailable):
+            call_publish_llm_api(
+                'inspect', required=True, max_retries=1, max_tokens=100,
+            )
+        self.assertEqual(opener.open.call_count, 1)
+
     def test_muse_incomplete_response_never_accepts_valid_looking_partial_json(self):
         first = mock.Mock()
         first.status = 200
@@ -1645,6 +1798,7 @@ primary_method_tag: #基准测试
         opener.open.return_value = response
         env = {
             'PAPER_ANALYZER_API_KEY': 'primary-key',
+            'PAPER_ANALYZER_FALLBACK_API_KEYS': 'primary-go-fallback',
             'PAPER_ANALYZER_ENDPOINT': 'https://api.example.com/v1',
             'PAPER_ANALYZER_MODEL': 'text-model',
             'PAPER_ANALYZER_SECONDARY_MODEL': 'vision-model',
@@ -1661,6 +1815,179 @@ primary_method_tag: #基准测试
         self.assertEqual(request.full_url, 'https://api.example.com/v1/chat/completions')
         self.assertEqual(request.get_header('Authorization'), 'Bearer primary-key')
         self.assertEqual(payload['model'], 'vision-model')
+
+    def test_go_primary_cannot_supply_even_one_key_to_non_go_secondary(self):
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'primary-key',
+            'PAPER_ANALYZER_FALLBACK_API_KEYS': 'opencode-fallback-key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://opencode.ai/zen/go/v1',
+            'PAPER_ANALYZER_MODEL': 'muse-spark-1.2-contributor',
+            'PAPER_ANALYZER_SECONDARY_ENDPOINT': 'https://api.example.com/v1',
+            'PAPER_ANALYZER_SECONDARY_MODEL': 'vision-model',
+        }
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('publish_common.build_publish_headers') as build_headers, \
+                mock.patch('urllib.request.build_opener') as build_opener, \
+                self.assertRaisesRegex(PublishLLMUnavailable, '属于不同服务'):
+            call_publish_llm_api(
+                'inspect', required=True, use_secondary=True, max_retries=1,
+            )
+        build_headers.assert_not_called()
+        build_opener.assert_not_called()
+
+    def test_different_non_go_services_require_explicit_secondary_key(self):
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'primary-key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://api.primary.example/v1',
+            'PAPER_ANALYZER_MODEL': 'text-model',
+            'PAPER_ANALYZER_SECONDARY_ENDPOINT': 'https://api.secondary.example/v1',
+            'PAPER_ANALYZER_SECONDARY_MODEL': 'vision-model',
+        }
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('publish_common.build_publish_headers') as build_headers, \
+                mock.patch('urllib.request.build_opener') as build_opener, \
+                self.assertRaisesRegex(PublishLLMUnavailable, '属于不同服务'):
+            call_publish_llm_api(
+                'inspect', required=True, use_secondary=True, max_retries=1,
+            )
+        build_headers.assert_not_called()
+        build_opener.assert_not_called()
+
+    def test_explicit_secondary_key_allows_cross_service_route(self):
+        response = mock.Mock()
+        response.status = 200
+        response.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        opener = mock.Mock()
+        opener.open.return_value = response
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'primary-key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://opencode.ai/zen/go/v1',
+            'PAPER_ANALYZER_MODEL': 'muse-spark-1.2-contributor',
+            'PAPER_ANALYZER_SECONDARY_API_KEY': 'secondary-provider-key',
+            'PAPER_ANALYZER_SECONDARY_ENDPOINT': 'https://api.example.com/v1',
+            'PAPER_ANALYZER_SECONDARY_MODEL': 'vision-model',
+        }
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('urllib.request.build_opener', return_value=opener):
+            result = call_publish_llm_api(
+                'inspect', required=True, use_secondary=True, max_retries=1,
+            )
+        self.assertEqual(result, 'ok')
+        request = opener.open.call_args.args[0]
+        self.assertEqual(request.full_url, 'https://api.example.com/v1/chat/completions')
+        self.assertEqual(
+            request.get_header('Authorization'), 'Bearer secondary-provider-key'
+        )
+
+    def test_non_go_primary_cannot_supply_credentials_to_go_secondary(self):
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'primary-provider-key',
+            'PAPER_ANALYZER_FALLBACK_API_KEYS': 'stale-primary-fallback',
+            'PAPER_ANALYZER_ENDPOINT': 'https://api.primary.example/v1',
+            'PAPER_ANALYZER_MODEL': 'text-model',
+            'PAPER_ANALYZER_SECONDARY_ENDPOINT': 'https://opencode.ai/zen/go/v1',
+            'PAPER_ANALYZER_SECONDARY_MODEL': 'muse-spark-1.2-contributor',
+        }
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('publish_common.build_publish_headers') as build_headers, \
+                mock.patch('urllib.request.build_opener') as build_opener, \
+                self.assertRaisesRegex(PublishLLMUnavailable, '必须显式配置'):
+            call_publish_llm_api(
+                'inspect', required=True, use_secondary=True, max_retries=1,
+            )
+        build_headers.assert_not_called()
+        build_opener.assert_not_called()
+
+    def test_cross_service_secondary_fallback_requires_explicit_secondary_key(self):
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'primary-provider-key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://api.primary.example/v1',
+            'PAPER_ANALYZER_MODEL': 'text-model',
+            'PAPER_ANALYZER_SECONDARY_ENDPOINT': 'https://opencode.ai/zen/go/v1',
+            'PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS': 'secondary-fallback-key',
+            'PAPER_ANALYZER_SECONDARY_MODEL': 'muse-spark-1.2-contributor',
+        }
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('publish_common.build_publish_headers') as build_headers, \
+                mock.patch('urllib.request.build_opener') as build_opener, \
+                self.assertRaisesRegex(PublishLLMUnavailable, '独立账号池跨服务'):
+            call_publish_llm_api(
+                'inspect', required=True, use_secondary=True, max_retries=1,
+            )
+        build_headers.assert_not_called()
+        build_opener.assert_not_called()
+
+    def test_same_go_service_secondary_fallback_can_use_primary_key_anchor(self):
+        response = mock.Mock()
+        response.status = 200
+        response.read.return_value = b'{"status":"completed","output_text":"ok"}'
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        opener = mock.Mock()
+        opener.open.return_value = response
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'primary-key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://opencode.ai/zen/go/v1',
+            'PAPER_ANALYZER_MODEL': 'muse-spark-1.2-contributor',
+            'PAPER_ANALYZER_SECONDARY_ENDPOINT': 'https://opencode.ai/zen/go/v1/responses',
+            'PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS': 'secondary-fallback-key',
+            'PAPER_ANALYZER_SECONDARY_MODEL': 'muse-spark-1.2-contributor',
+            'HTTPS_PROXY': 'http://127.0.0.1:7897',
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('publish_common.LLM_ACCOUNT_POOL_STATE_FILE', Path(tmp) / 'pool.json'), \
+                mock.patch('urllib.request.build_opener', return_value=opener):
+            result = call_publish_llm_api(
+                'inspect', required=True, use_secondary=True, max_retries=1,
+            )
+        self.assertEqual(result, 'ok')
+        self.assertEqual(
+            opener.open.call_args.args[0].get_header('Authorization'),
+            'Bearer primary-key',
+        )
+
+    def test_opencode_secondary_without_explicit_key_inherits_primary_pool(self):
+        quota_error = urllib.error.HTTPError(
+            'https://opencode.ai/zen/go/v1/responses',
+            429,
+            'Too Many Requests',
+            {'Content-Type': 'application/json', 'Retry-After': '60'},
+            io.BytesIO(json.dumps({
+                'type': 'GoUsageLimitError',
+                'metadata': {'limitName': '5-hour rolling'},
+            }).encode('utf-8')),
+        )
+        response = mock.Mock()
+        response.status = 200
+        response.read.return_value = b'{"status":"completed","output_text":"ok"}'
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        opener = mock.Mock()
+        opener.open.side_effect = [quota_error, response]
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'primary-key',
+            'PAPER_ANALYZER_FALLBACK_API_KEYS': 'fallback-key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://opencode.ai/zen/go/v1',
+            'PAPER_ANALYZER_MODEL': 'muse-spark-1.2-contributor',
+            'PAPER_ANALYZER_SECONDARY_ENDPOINT': 'https://opencode.ai/zen/go/v1',
+            'PAPER_ANALYZER_SECONDARY_MODEL': 'muse-spark-1.2-contributor',
+            'HTTPS_PROXY': 'http://127.0.0.1:7897',
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('publish_common.LLM_ACCOUNT_POOL_STATE_FILE', Path(tmp) / 'pool.json'), \
+                mock.patch('urllib.request.build_opener', return_value=opener):
+            result = call_publish_llm_api(
+                'inspect', required=True, use_secondary=True, max_retries=1,
+            )
+        self.assertEqual(result, 'ok')
+        self.assertEqual(
+            [call.args[0].get_header('Authorization') for call in opener.open.call_args_list],
+            ['Bearer primary-key', 'Bearer fallback-key'],
+        )
 
     def test_empty_length_response_adapts_output_budget_before_retry(self):
         first = mock.Mock()

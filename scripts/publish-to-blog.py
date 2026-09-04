@@ -2906,14 +2906,81 @@ def _normalize_api_reader_source_cell(value):
     return re.sub(r'\s+', ' ', value).strip()
 
 
+def _canonical_api_reader_numeric_token(raw):
+    """与 Node 端 canonicalReaderNumericToken 保持同一归一化标准。
+
+    两端门禁必须对同一输入得出同一 token 集合，否则分析侧通过的内容会在
+    发布侧被拒绝（或反之）。规则：千分位逗号归一、去空白小写、尾零归一、
+    四位年份英文复数去掉裸 s。
+    """
+    # NFKC 不映射数学减号 U+2212 与全角连字符 U+FF0D，显式归一（与 Node 一致）。
+    token = unicodedata.normalize('NFKC', str(raw or ''))
+    token = token.replace('−', '-').replace('－', '-')
+    previous = None
+
+    while token != previous:
+        previous = token
+        token = re.sub(r'(\d),(\d{3})(?!\d)', r'\1\2', token)
+    token = re.sub(r'\s+', '', token).lower()
+    match = re.match(r'^([-+]?\d+(?:\.\d+)?)(.*)$', token, flags=re.DOTALL)
+    if not match:
+        return token
+    try:
+        number = float(match.group(1))
+    except ValueError:
+        return token
+    if not (number == number and abs(number) != float('inf')):
+        return token
+    suffix = match.group(2) or ''
+    if re.fullmatch(r'\d{4}', match.group(1)) \
+            and 1000 <= int(match.group(1)) <= 2999 and suffix == 's':
+        suffix = ''
+    number_text = str(int(number)) if float(number).is_integer() else str(number)
+    return f'{number_text}{suffix}'
+
+
+def _reader_doubled_half_token(surface):
+    """双写粘连半部提取，与 Node 端 readerDoubledHalfToken 同一规则。"""
+    def pick_half(compact):
+        match = re.fullmatch(r'([0-9.]+)\1', compact)
+        if not match:
+            return None
+        half = match.group(1)
+        if len(half.replace('.', '')) < 2:
+            return None
+        if re.fullmatch(r'[0-9]+', compact) \
+                and 1000 <= int(compact) <= 2999:
+            return None
+        return half
+
+    compact = re.sub(r'\s+', '', str(surface or ''))
+    direct = pick_half(compact)
+    if direct:
+        return direct
+    stripped = re.sub(r'[%a-zA-Z]+$', '', compact)
+    if stripped != compact:
+        return pick_half(stripped)
+    return None
+
+
 def _api_reader_numeric_tokens(value):
     pattern = re.compile(
-        r'(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?'
+        r'(?<![A-Za-z0-9])[-+−－]?\d+(?:\.\d+)?'
         r'(?:\s*%|\s*(?:dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp))?',
         flags=re.IGNORECASE,
     )
-    return [re.sub(r'\s+', '', match.group(0)).lower()
-            for match in pattern.finditer(unicodedata.normalize('NFKC', str(value or '')))]
+    tokens = []
+    for match in pattern.finditer(unicodedata.normalize('NFKC', str(value or ''))):
+        canonical = _canonical_api_reader_numeric_token(match.group(0))
+        tokens.append(canonical)
+        # 与 Node 端 readerNumericTokens 同一条双写粘连规则（4096+4096、
+        # 8.218.21、40964096s 同时索引半部；短半部不拆，避免误读 2020/1212）。
+        half = _reader_doubled_half_token(match.group(0))
+        if half:
+            half_token = _canonical_api_reader_numeric_token(half)
+            if half_token != canonical:
+                tokens.append(half_token)
+    return tokens
 
 
 def _validate_api_reader_source_bindings(paper, article=None):
@@ -3059,6 +3126,16 @@ def _validate_api_reader_source_bindings(paper, article=None):
         ordinal = binding.get('formulaOrdinal')
         latex = binding.get('latex')
         rendered_block = f'\\[{str(latex or "").strip()}\\]'
+        # fix_latex_delimiters 是发布渲染必需的确定性变换（如 _{<k} → _{\lt k}，
+        # 防止 Hugo 把 TeX 里的尖括号当 HTML 标签吃掉）。canonical 存量正文里是
+        # 原始块，最终页面里是变换后块：两种形态恰好出现一次才算合法（重复、
+        # 缺失、变换后碰撞都失败关闭）。renderedBlockSha256 仍校验原始绑定。
+        published_block = fix_latex_delimiters(rendered_block)
+        if published_block == rendered_block:
+            formula_occurrences = display_blocks.count(rendered_block)
+        else:
+            formula_occurrences = display_blocks.count(rendered_block) \
+                + display_blocks.count(published_block)
         if not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 1 \
                 or ordinal in seen_ordinals \
                 or binding.get('marker') != f'[[FORMULA_{ordinal}]]' \
@@ -3072,7 +3149,7 @@ def _validate_api_reader_source_bindings(paper, article=None):
                 or binding.get('renderedBlockSha256') != hashlib.sha256(
                     rendered_block.encode('utf-8')
                 ).hexdigest() \
-                or display_blocks.count(rendered_block) != 1 \
+                or formula_occurrences != 1 \
                 or binding['marker'] in article:
             raise PublishDataValidationError(f'API reader 第 {index + 1} 个公式来源/渲染绑定非法')
         seen_ordinals.add(ordinal)
@@ -4217,7 +4294,9 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
         normalized = re.sub(r'\s+', ' ', block).strip()
         protected = (
             len(normalized) < 80
-            or normalized.startswith(('---', '#', '|', '-', '*', '>', '```', '~~~', '!['))
+            or normalized.startswith((
+                '---', '#', '|', '-', '*', '>', '```', '~~~', '![', '评分：',
+            ))
             or '\n|' in block
             or re.search(r'!\[[^\]]*\]\([^)]+\)', block)
         )
@@ -4260,7 +4339,9 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
         normalized = re.sub(r'\s+', ' ', block).strip()
         protected = (
             len(normalized) < 100
-            or normalized.startswith(('---', '#', '|', '-', '*', '>', '```', '~~~', '!['))
+            or normalized.startswith((
+                '---', '#', '|', '-', '*', '>', '```', '~~~', '![', '评分：',
+            ))
             or '\n|' in block
             or re.search(r'!\[[^\]]*\]\([^)]+\)', block)
         )
@@ -6558,6 +6639,7 @@ def review_protocol_fingerprint():
         'markdown_hugo_gate.py': script_dir / 'markdown_hugo_gate.py',
         'manual/tutorial_payload_verifier.py': MANUAL_SCRIPTS_DIR / 'tutorial_payload_verifier.py',
         'publish_common.py': script_dir / 'publish_common.py',
+        'llm_account_pool.py': script_dir / 'llm_account_pool.py',
         'utils.py': script_dir / 'utils.py',
     }
     dependencies = {

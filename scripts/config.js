@@ -158,6 +158,9 @@ const HUGGINGFACE_CONFIG = {
 // ═══════════════════════════════════════════════════════
 
 const FILES = {
+    // 跨日期、跨 Node/Python 的 provider 账号状态。它不是日批次数据，
+    // 因此不能放进会被归档轮转的 current/。
+    llmAccountPoolState: path.join(DATA_DIR, 'runtime', 'llm-account-pool.json'),
     papers: path.join(CURRENT_DIR, 'papers.json'),
     papersLegacy: path.join(DATA_DIR, 'papers.json'),
     rawCandidates: path.join(CURRENT_DIR, 'raw-candidates.json'),

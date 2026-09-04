@@ -17,6 +17,8 @@ run-daily-digest.sh
 
 Node owns acquisition, filtering, analysis checkpoints, canonical results, and visual manifests. Python owns page generation, immutable review artifacts, Hugo validation, and the Git publication transaction. The Hugo repository is a publication target, never a source of analysis facts.
 
+Node and Python share OpenCode Go active/cooldown state in `data/runtime/llm-account-pool.json`. It contains no raw key, but its stable credential fingerprints make it `0600` sensitive operational metadata. Credential selection is transport state and does not enter paper, prompt, or publication-content fingerprints.
+
 ## Per-paper analysis DAG
 
 ```text
@@ -66,6 +68,7 @@ File existence alone is not completion. Consumers revalidate dates, paper sets, 
 - The full-fetch lock protects archive, acquisition, filtering, and batch initialization.
 - A normalized arXiv-ID lock protects each paper's checkpoints and canonical merge.
 - JSON locks protect shared read-modify-write state and generation counters.
+- The LLM account-pool lock protects cross-date OpenCode Go active/cooldown state and is held only for selection or confirmed quota transitions, never for HTTP.
 - The blog date/repository lock protects generation, review, the Git index, commit, and push.
 
 Only the implementing lease/owner checks may classify a lock as stale. Never remove a lock merely because a command appears slow.
@@ -73,3 +76,5 @@ Only the implementing lease/owner checks may classify a lock as stale. Never rem
 ## Network boundary
 
 Muse, arXiv, HuggingFace, and paper assets follow their project proxy policies; unrelated LLM providers do not inherit that proxy automatically. External assets are HTTPS-only, reject private/reserved targets on every redirect, pin the validated public IP, and preserve the original Host and TLS SNI. All network responses and subprocesses have byte and absolute-time bounds.
+
+OpenCode Go fallback is strictly long-lived sticky failover: only an explicit `GoUsageLimitError` switches credentials. Generic 429, 5xx, and network failures do not switch, and expiration of an older account's cooldown does not automatically fail traffic back. Credentials are attached only when the actual URL exactly matches the canonical route derived from the endpoint and model; a secondary model on a different service never inherits the primary account pool.

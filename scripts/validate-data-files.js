@@ -1085,11 +1085,68 @@ function validateFilterDecisionsFile(filePath = DEFAULT_FILTER_DECISIONS_FILE) {
         }
     }
 
+    const retryableEntries = isPlainObject(data.retryableDecisions)
+        ? Object.entries(data.retryableDecisions)
+        : [];
+    if (data.retryableDecisions !== undefined && !isPlainObject(data.retryableDecisions)) {
+        addIssue(issues, filePath, 'retryableDecisions 必须是对象映射');
+    }
+    const seenRetryableIds = new Map();
+    for (const [key, decision] of retryableEntries) {
+        if (!isPlainObject(decision)) {
+            addIssue(issues, filePath, `retryableDecisions.${key} 不是对象`);
+            continue;
+        }
+        const decisionId = normalizedId(decision);
+        const keyId = normalizedId(key);
+        if (decisionId && keyId && decisionId !== keyId) {
+            addIssue(issues, filePath, `retryableDecisions.${key} 的对象 key 与决定 ID 冲突: ${decisionId}`);
+        }
+        const id = decisionId || keyId;
+        if (!id) {
+            addIssue(issues, filePath, `retryableDecisions.${key} 缺少可识别 ID`);
+        } else if (seenRetryableIds.has(id)) {
+            addIssue(
+                issues,
+                filePath,
+                `retryableDecisions.${key} 与 retryableDecisions.${seenRetryableIds.get(id)} 归一化为重复 ID: ${id}`
+            );
+        } else {
+            seenRetryableIds.set(id, key);
+        }
+        if (id && seenDecisionIds.has(id)) {
+            addIssue(issues, filePath, `retryableDecisions.${key} 不得与正式 decisions 重复`);
+        }
+        if (decision.related !== null) {
+            addIssue(issues, filePath, `retryableDecisions.${key}.related 必须为 null`);
+        }
+        if (decision.retryable !== true || decision.fallback !== true) {
+            addIssue(issues, filePath, `retryableDecisions.${key} 必须同时标记 retryable=true 和 fallback=true`);
+        }
+        for (const field of ['reason', 'rawResponse', 'parseSource', 'decidedAt', 'filterModel', 'filterPromptHash']) {
+            if (decision[field] !== undefined && typeof decision[field] !== 'string') {
+                addIssue(issues, filePath, `retryableDecisions.${key}.${field} 必须是字符串`);
+            }
+        }
+        for (const field of ['error', 'errorCode', 'errorCategory']) {
+            if (decision[field] !== undefined && decision[field] !== null && typeof decision[field] !== 'string') {
+                addIssue(issues, filePath, `retryableDecisions.${key}.${field} 必须是字符串或 null`);
+            }
+        }
+        if (decision.errorStatus !== undefined && decision.errorStatus !== null
+                && (!Number.isInteger(decision.errorStatus) || decision.errorStatus < 100 || decision.errorStatus > 599)) {
+            addIssue(issues, filePath, `retryableDecisions.${key}.errorStatus 必须是 HTTP 状态码或 null`);
+        }
+        if (typeof decision.inputSha256 !== 'string' || !SHA256_RE.test(decision.inputSha256)) {
+            addIssue(issues, filePath, `retryableDecisions.${key}.inputSha256 必须是 SHA-256`);
+        }
+    }
+
     const stats = isPlainObject(data.stats) ? data.stats : {};
     validateNonNegativeInteger(filePath, 'stats.totalCandidates', stats.totalCandidates, issues);
     validateNonNegativeInteger(filePath, 'stats.decided', stats.decided, issues);
     validateNonNegativeInteger(filePath, 'stats.related', stats.related, issues);
-    for (const field of ['keywordRejected', 'llmCandidates', 'llmDecided']) {
+    for (const field of ['retryable', 'keywordRejected', 'llmCandidates', 'llmDecided']) {
         if (stats[field] !== undefined) validateNonNegativeInteger(filePath, `stats.${field}`, stats[field], issues);
     }
     if (stats.complete !== undefined && typeof stats.complete !== 'boolean') {
@@ -1100,6 +1157,12 @@ function validateFilterDecisionsFile(filePath = DEFAULT_FILTER_DECISIONS_FILE) {
     }
     if (stats.related !== undefined && stats.related !== relatedCount) {
         addIssue(issues, filePath, `stats.related (${stats.related}) 必须等于 related=true 数量 (${relatedCount})`);
+    }
+    if (stats.retryable !== undefined && stats.retryable !== retryableEntries.length) {
+        addIssue(issues, filePath, `stats.retryable (${stats.retryable}) 必须等于 retryableDecisions 数量 (${retryableEntries.length})`);
+    }
+    if (stats.complete === true && retryableEntries.length > 0) {
+        addIssue(issues, filePath, 'stats.complete=true 时 retryableDecisions 必须为空');
     }
     if (stats.keywordRejected !== undefined && stats.keywordRejected !== keywordRejectedCount) {
         addIssue(issues, filePath, `stats.keywordRejected (${stats.keywordRejected}) 必须等于 keyword_prefilter 决定数量 (${keywordRejectedCount})`);
@@ -1188,6 +1251,19 @@ function validateRawCandidateFilterConsistency(rawPath, decisionsPath, filteredP
         const paper = rawById.get(normalizedId(key));
         if (!paper || decision.inputSha256 !== buildFilterInputSha256(paper)) {
             addIssue(issues, decisionsPath, `decisions.${key}.inputSha256 与当前筛选输入不一致`);
+        }
+    }
+    const definitiveIds = new Set(Object.keys(decisionData.decisions).map(normalizedId).filter(Boolean));
+    for (const [key, decision] of Object.entries(
+        isPlainObject(decisionData.retryableDecisions) ? decisionData.retryableDecisions : {}
+    )) {
+        const id = normalizedId(key);
+        const paper = rawById.get(id);
+        if (!paper || decision?.inputSha256 !== buildFilterInputSha256(paper)) {
+            addIssue(issues, decisionsPath, `retryableDecisions.${key}.inputSha256 与当前筛选输入不一致`);
+        }
+        if (id && definitiveIds.has(id)) {
+            addIssue(issues, decisionsPath, `retryableDecisions.${key} 不得与正式 decisions 重复`);
         }
     }
     if (decisionStats.complete === true && Object.keys(decisionData.retryableDecisions || {}).length > 0) {

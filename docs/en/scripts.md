@@ -66,9 +66,11 @@ Only built-in `image_gen` creates final art. `visual:render:debug` is debugging/
 - `config.js`: Node parameters and current paths.
 - `env-loader.js` / `project_env.py`: project environment and sandbox guard.
 - `utils.js`: protocol, proxy, prompt, atomic file, time, and ID utilities.
+- `llm-account-pool.js`: OpenCode Go long-lived sticky account selection, explicit quota classification, and shared state.
 - `analysis-engine.js`: locks, retries, checkpoints, merge.
 - `deep-analyzer.js`: per-paper staged analysis and Reader.
 - `path_config.py`: Python publishing paths.
+- `llm_account_pool.py`: the matching Python account-pool state machine used by publication review.
 - `publish_common.py`: publishing data, scoring, LLM, provenance.
 - `publish-to-blog.py`: shared blog transaction implementation.
 

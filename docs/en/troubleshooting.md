@@ -12,6 +12,8 @@ Inspect repository-root `.env`, not shell variables. The required triplet is API
 
 Confirm exact model, project HTTP CONNECT URL, external runtime, expected proxy region, and whether optional SSE is compatible. Muse must not be switched to direct access. `incomplete/max_output_tokens` is truncation; adjust evidence/output budgets or prompt and retry.
 
+With fallback accounts configured, inspect `data/runtime/llm-account-pool.json` for `activeAccountId`, `limitClass`, and `blockedUntil`; raw keys are never stored there. Do not delete or edit state merely to force the primary account back. Sticky routing reselects only when the current account receives an explicit `GoUsageLimitError`. Corrupt state, an invalid generation, or an unsafe state path fails before network I/O, while a generic 429 keeps the current account and follows normal short rate-limit backoff.
+
 ## MiMo/Kimi 403
 
 These providers normally use `agent:false` direct connections. Check for callers bypassing `requestLlmJson()` or injecting an agent. Do not copy Muse proxy behavior to ordinary models.
@@ -30,7 +32,7 @@ Look for raw/decision SHA mismatch, incomplete coverage, pending API errors, non
 
 ## Slow or Repeated Analysis Failure
 
-Identify the failed stage. Whole-paper concurrency defaults to 3, Reader heavy work to 5, and Muse filtering to batch 1. Primary, repair, and Reader have separate budgets.
+Identify the failed stage. Whole-paper concurrency defaults to 3, Reader heavy work to 5, and Muse filtering follows `PD_FILTER_BATCH_SIZE`. Primary, repair, and Reader have separate budgets.
 
 ```bash
 npm run deep -- --date YYYY-MM-DD

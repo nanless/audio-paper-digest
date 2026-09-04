@@ -4,13 +4,20 @@
 
 帮助操作者判断“哪个文件是权威状态”“何时能恢复”“为什么文件存在仍不算完成”。字段级实现以 validator 和 publisher 为准；Manual 数据见 [manual/README.md](../manual/README.md)。
 
-## 三类数据
+## 四类数据
 
 1. **持久库**：跨批次累积，例如 `papers.json`。
 2. **日期批次状态**：raw、decisions、filtered、deep，可从 current 归档到日期目录。
 3. **事务凭证**：generation、review、publication、视觉 manifest，绑定精确字节和外部状态。
+4. **跨批次运输状态**：`data/runtime/llm-account-pool.json` 保存 OpenCode Go sticky 账号和配额冷却，不随 current 归档。
 
 任何对象的 `complete` 都是契约结论，不是文件名或布尔字段的自我声明。
+
+## OpenCode Go 账号池状态
+
+`data/runtime/llm-account-pool.json` 使用 `opencode-go-sticky-quota-failover-v1`。它只保存服务/账号的 SHA-256 身份、active 账号、归一化额度窗口、`blockedUntil` 和 generation，不保存 API key、认证头、请求正文或响应正文。稳定凭据指纹仍属于敏感操作元数据，因此文件固定 `0600` 且不得上传或归档。账号身份用于在 key 更换后自然形成新凭据身份，不进入论文分析、筛选或发布内容指纹。
+
+Node 与 Python 使用同一目录锁协议和耐久原子写；锁只覆盖选择与状态变换，HTTP 请求始终在锁外。未知 schema、损坏 JSON 或 symlink 状态路径都会失败关闭。冷却到期只让账号重新具备候选资格，不会把流量从当前成功账号自动切回。
 
 ## current 核心文件
 

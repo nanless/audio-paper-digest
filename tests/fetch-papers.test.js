@@ -30,8 +30,8 @@ const {
 } = require('../scripts/fetch-papers.js');
 
 describe('Muse filter transport policy', () => {
-    it('Muse 经 HTTP CONNECT 时强制串行，其他模型保留配置批次', () => {
-        assert.strictEqual(getEffectiveFilterBatchSize(5, 'muse-spark-1.2-contributor'), 1);
+    it('Muse 与其他模型均保留配置批次（2026-09-03 放宽并发）', () => {
+        assert.strictEqual(getEffectiveFilterBatchSize(5, 'muse-spark-1.2-contributor'), 5);
         assert.strictEqual(getEffectiveFilterBatchSize(5, 'kimi-for-coding'), 5);
     });
 });
@@ -237,6 +237,49 @@ describe('filter request retry classification and circuit breaker', () => {
         assert.strictEqual(classified.filterCode, 'FILTER_NETWORK_ERROR');
         assert.strictEqual(classified.retryable, true);
         assert.strictEqual(classified.systemFailure, true);
+    });
+
+    it('所有账号额度耗尽时停止批次且不进入普通重试', () => {
+        const source = new Error('all accounts blocked');
+        source.code = 'LLM_ACCOUNT_POOL_EXHAUSTED';
+        const classified = classifyFilterRequestError(source);
+        assert.strictEqual(classified.retryable, false);
+        assert.strictEqual(classified.stopBatch, true);
+        assert.strictEqual(classified.category, 'quota_exhausted');
+    });
+
+    it('账号池锁竞争可重试，但全部额度耗尽只调用一次且不等待', async () => {
+        let lockCalls = 0;
+        const recovered = await callModelForFilter([], 100, 2, {
+            filterConfig,
+            sleepFn: async () => {},
+            requestFn: async () => {
+                lockCalls += 1;
+                if (lockCalls === 1) {
+                    const error = new Error('account state lock busy');
+                    error.code = 'LLM_ACCOUNT_POOL_LOCK_TIMEOUT';
+                    throw error;
+                }
+                return successResponse('结论：相关');
+            }
+        });
+        assert.strictEqual(recovered, '结论：相关');
+        assert.strictEqual(lockCalls, 2);
+
+        let exhaustedCalls = 0;
+        await assert.rejects(callModelForFilter([], 100, 5, {
+            filterConfig,
+            sleepFn: async () => { throw new Error('exhausted must not sleep'); },
+            requestFn: async () => {
+                exhaustedCalls += 1;
+                const error = new Error('all accounts blocked');
+                error.code = 'LLM_ACCOUNT_POOL_EXHAUSTED';
+                throw error;
+            }
+        }), error => error.code === 'LLM_ACCOUNT_POOL_EXHAUSTED'
+            && error.retryable === false
+            && error.stopBatch === true);
+        assert.strictEqual(exhaustedCalls, 1);
     });
 });
 
@@ -510,6 +553,36 @@ describe('filterPapersWithLLM resume decisions', () => {
         }), /同批成功决定已保存/);
         assert.deepStrictEqual(Object.keys(checkpoint.decisions), ['2604.00001']);
         assert.strictEqual(checkpoint.retryableDecisions['2604.00002'].retryable, true);
+    });
+
+    it('批次包装保留账号池耗尽的非重试语义并先保存失败 checkpoint', async () => {
+        const papers = [{
+            arxivId: '2604.00999',
+            title: 'Speech quota boundary',
+            abstract: 'speech recognition benchmark'
+        }];
+        let checkpoint;
+        await assert.rejects(filterPapersWithLLM(papers, {
+            batchSize: 1,
+            delayBetweenBatches: 0,
+            useKeywordPreFilter: false,
+            decisionFn: async () => {
+                const error = new Error('all accounts blocked');
+                error.code = 'LLM_ACCOUNT_POOL_EXHAUSTED';
+                error.category = 'quota_exhausted';
+                error.retryable = false;
+                error.systemFailure = true;
+                throw error;
+            },
+            onBatchComplete: async value => { checkpoint = value; }
+        }), error => error.code === 'LLM_ACCOUNT_POOL_EXHAUSTED'
+            && error.category === 'quota_exhausted'
+            && error.retryable === false
+            && error.systemFailure === true
+            && error.stopBatch === true);
+        assert.ok(checkpoint);
+        assert.deepStrictEqual(Object.keys(checkpoint.decisions), []);
+        assert.deepStrictEqual(Object.keys(checkpoint.retryableDecisions), ['2604.00999']);
     });
 });
 

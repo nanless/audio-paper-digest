@@ -19,6 +19,8 @@ Node must satisfy `>=20.18.1 <21 || >=22.3.0`. Python must be 3.11+ with an Open
 
 ```dotenv
 PAPER_ANALYZER_API_KEY=your-key
+# Optional comma-separated fallback accounts for the same OpenCode Go route
+PAPER_ANALYZER_FALLBACK_API_KEYS=your-second-key
 PAPER_ANALYZER_MODEL=muse-spark-1.2-contributor
 PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
@@ -27,6 +29,8 @@ PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
 ```
 
 The documented default is OpenCode Go Muse Spark 1.2 Contributor over OpenAI Responses. Public endpoints must use HTTPS; HTTP is accepted only for loopback test services.
+
+`PAPER_ANALYZER_FALLBACK_API_KEYS` is not load balancing. The current account remains sticky until OpenCode Go returns HTTP 429 with an explicit structured `GoUsageLimitError`; only then is the next account tried immediately. Active/cooldown state persists across Node, Python, and dates in `data/runtime/llm-account-pool.json`, and an expired earlier account does not automatically take traffic back. The file contains no raw key but does contain stable credential fingerprints, so it remains `0600` sensitive operational metadata. Generic 429, 5xx, network/proxy errors, truncation, and content-contract failures never switch accounts. Use `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS` only when an explicitly configured secondary model needs its own pool. A secondary route without its own key inherits the primary pool only when both normalized endpoints identify the same canonical OpenCode Go service; a different service must provide its own key and never inherits the primary pool. Before credentials are attached, the actual request URL must exactly match the canonical API route derived from the endpoint and model.
 
 ## Project-Scoped Environment
 
@@ -59,11 +63,11 @@ A missing proxy is an explicit failure, never a direct fallback. Project scripts
 | `PD_API_READER_CONCURRENCY` | 5 (in-process Reader generation slots) |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 5 |
 
-Muse filtering is always effective batch 1, while whole-paper analysis keeps configured concurrency. Responses uses SSE only when `PD_OPENAI_RESPONSES_STREAM=1`. Reader v3 sends safely materialized official Figures to the primary model; the optional secondary model only enables the legacy canonical image-supplement path. The refresh CLI `--concurrency` controls paper workers and is distinct from `PD_API_READER_CONCURRENCY`.
+Muse filtering uses `PD_FILTER_BATCH_SIZE`, while whole-paper analysis keeps configured concurrency. Pool state uses short locks and never holds a lock across network I/O. Responses uses SSE only when `PD_OPENAI_RESPONSES_STREAM=1`. Reader v3 sends safely materialized official Figures to the primary model; the optional secondary model only enables the legacy canonical image-supplement path. The refresh CLI `--concurrency` controls paper workers and is distinct from `PD_API_READER_CONCURRENCY`.
 
 ## Optional Secondary Model
 
-Reader v3 sends safely materialized official Figures directly to the primary model. `PAPER_ANALYZER_SECONDARY_MODEL` only enables the legacy canonical image-supplement selection and insertion plan; it neither replaces primary prose nor scores the paper. Secondary endpoint/key fall back to primary values when omitted.
+Reader v3 sends safely materialized official Figures directly to the primary model. `PAPER_ANALYZER_SECONDARY_MODEL` only enables the legacy canonical image-supplement selection and insertion plan; it neither replaces primary prose nor scores the paper. An omitted secondary endpoint falls back to the primary endpoint. An omitted secondary key may be reused only when both routes identify the same canonical service; a cross-service secondary route requires an explicit key.
 
 ## Blog and Hugo
 

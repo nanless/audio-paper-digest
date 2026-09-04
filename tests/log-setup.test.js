@@ -89,6 +89,7 @@ describe('log setup', () => {
             'password: password-value',
             'Key: abc...xyz',
             'PAPER_ANALYZER_API_KEY=project-key-value',
+            'PAPER_ANALYZER_FALLBACK_API_KEYS=fallback-one,fallback-two',
             'proxy=https://alice:password@example.com/path',
             'fragment=sk-live...tail'
         ].join('\n');
@@ -97,7 +98,7 @@ describe('log setup', () => {
         for (const sensitive of [
             'bearer-value', 'x-key-value', 'cookie-value', 'token-value',
             'secret-value', 'client-secret-value', 'password-value', 'abc...xyz',
-            'project-key-value', 'alice:password',
+            'project-key-value', 'fallback-one', 'fallback-two', 'alice:password',
             'sk-live...tail'
         ]) {
             assert.ok(!output.includes(sensitive), `未脱敏: ${sensitive}`);
@@ -110,11 +111,12 @@ describe('log setup', () => {
         const before = listLogFiles();
         const runId = `${process.pid}-${Date.now()}`;
         const base = `default-log-test-${runId}`;
-        const { dir, envPath } = createEnvFile('PD_DISABLE_FILE_LOGS=0\nPAPER_ANALYZER_API_KEY=tp-provider-secret');
+        const { dir, envPath } = createEnvFile('PD_DISABLE_FILE_LOGS=0\nPAPER_ANALYZER_API_KEY=tp-provider-secret\nPAPER_ANALYZER_FALLBACK_API_KEYS=tp-fallback-one,tp-fallback-two');
         try {
             const first = runLogger(base, envPath, [
                 'Authorization: Bearer first-secret',
                 'provider error echoed tp-provider-secret without a field name',
+                'provider error echoed tp-fallback-two without a field name',
                 'final-line'
             ]);
             const second = runLogger(base, envPath, ['x-api-key: second-secret']);
@@ -123,6 +125,7 @@ describe('log setup', () => {
             assert.strictEqual(second.status, 0, second.stderr);
             assert.ok(!first.stdout.includes('first-secret'));
             assert.ok(!first.stdout.includes('tp-provider-secret'));
+            assert.ok(!first.stdout.includes('tp-fallback-two'));
             assert.ok(!second.stdout.includes('second-secret'));
             assert.match(first.stdout, /\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\+08:00\]/);
 
@@ -227,7 +230,7 @@ describe('log setup', () => {
         assert.match(source, /requestLlmJson\(/);
         assert.match(source, /apiUrl,\s*endpoint,\s*model,\s*body,\s*headers/s);
         assert.doesNotMatch(source, /requestJson\(/);
-        assert.match(source, /\[已配置，内容不输出\]/);
+        assert.match(source, /\[已配置 \$\{apiKeys\.length\} 个账号，内容不输出\]/);
         assert.doesNotMatch(source, /key\.slice|Object\.entries\(headers\)/);
     });
 

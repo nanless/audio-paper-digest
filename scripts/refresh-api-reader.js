@@ -218,6 +218,14 @@ function canRepairScoringBinding(paper) {
         && !paper?.latestAnalysisAttemptError;
 }
 
+function canRepairSurfaceBinding(paper) {
+    return typeof paper?.apiReaderArticle === 'string'
+        && paper.apiReaderArticle.trim().length > 0
+        && paper?.apiReaderPlan && typeof paper.apiReaderPlan === 'object'
+        && paper?.analysisManifest?.stages?.apiReaderArticle?.status === 'complete'
+        && !paper?.latestAnalysisAttemptError;
+}
+
 async function refreshApiReader(targetId, options = {}) {
     const requested = normalizedId(targetId);
     if (!requested) throw new Error('用法: node scripts/refresh-api-reader.js <arxiv-id>');
@@ -226,7 +234,8 @@ async function refreshApiReader(targetId, options = {}) {
     const papers = Array.isArray(current) ? current : current.papers;
     const existing = papers.find(paper => normalizedId(paper) === requested);
     if (!existing || (!isSuccessfulAnalysisRecord(existing)
-        && !(options.scoringAndReader && canRepairScoringBinding(existing)))) {
+        && !(options.scoringAndReader && canRepairScoringBinding(existing))
+        && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(existing)))) {
         throw new Error(`${requested} 不存在完整 canonical，拒绝只刷新读者文章`);
     }
 
@@ -235,7 +244,8 @@ async function refreshApiReader(targetId, options = {}) {
         const latestPapers = Array.isArray(latest) ? latest : latest.papers;
         const canonical = latestPapers.find(paper => normalizedId(paper) === requested);
         if (!canonical || (!isSuccessfulAnalysisRecord(canonical)
-            && !(options.scoringAndReader && canRepairScoringBinding(canonical)))) {
+            && !(options.scoringAndReader && canRepairScoringBinding(canonical))
+            && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(canonical)))) {
             throw new Error(`${requested} canonical 在加锁后发生变化`);
         }
         const inputIdentity = paperRefreshInputIdentity(canonical);

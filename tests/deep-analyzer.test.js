@@ -549,6 +549,118 @@ describe('deep-analyzer section helpers', () => {
         assert.match(sanitized, /proxy\.example/);
     });
 
+    it('账号池全部额度耗尽是非重试错误', () => {
+        const { classifyModelRequestError } = require('../scripts/deep-analyzer.js');
+        const source = new Error('all accounts blocked');
+        source.code = 'LLM_ACCOUNT_POOL_EXHAUSTED';
+        const classified = classifyModelRequestError(source, { key: 'test-key', apiKeys: ['test-key'] });
+        assert.strictEqual(classified.retryable, false);
+        assert.strictEqual(classified.category, 'quota_exhausted');
+    });
+
+    it('账号池锁竞争可在阶段内重试，全部额度耗尽不会重复请求', async () => {
+        const { callModelWithConfig } = require('../scripts/deep-analyzer.js');
+        let lockCalls = 0;
+        const recovered = await callModelWithConfig([], 100, 2, {
+            endpoint: 'https://model.example/v1',
+            key: 'test-key',
+            model: 'test-model',
+            overallTimeoutMs: 60000,
+            sleepFn: async () => {},
+            requestFn: async () => {
+                lockCalls += 1;
+                if (lockCalls === 1) {
+                    const error = new Error('account state lock busy');
+                    error.code = 'LLM_ACCOUNT_POOL_LOCK_TIMEOUT';
+                    throw error;
+                }
+                return {
+                    statusCode: 200,
+                    headers: {},
+                    body: { choices: [{ message: { content: 'recovered' }, finish_reason: 'stop' }] },
+                    raw: '{}'
+                };
+            }
+        });
+        assert.strictEqual(recovered, 'recovered');
+        assert.strictEqual(lockCalls, 2);
+
+        let exhaustedCalls = 0;
+        await assert.rejects(callModelWithConfig([], 100, 3, {
+            endpoint: 'https://model.example/v1',
+            key: 'test-key',
+            model: 'test-model',
+            overallTimeoutMs: 60000,
+            sleepFn: async () => { throw new Error('exhausted must not sleep'); },
+            requestFn: async () => {
+                exhaustedCalls += 1;
+                const error = new Error('all accounts blocked');
+                error.code = 'LLM_ACCOUNT_POOL_EXHAUSTED';
+                throw error;
+            }
+        }), error => error.code === 'LLM_ACCOUNT_POOL_EXHAUSTED'
+            && error.retryable === false
+            && error.category === 'quota_exhausted');
+        assert.strictEqual(exhaustedCalls, 1);
+    });
+
+    it('副模型仅在同一 OpenCode Go 服务且未显式 key 时继承主账号池', () => {
+        const { resolveSecondaryApiKeys } = require('../scripts/deep-analyzer.js');
+        const common = {
+            primaryEndpoint: 'https://opencode.ai/zen/go/v1',
+            primaryKey: 'primary-key',
+            primaryApiKeys: ['primary-key', 'fallback-key'],
+            secondaryModel: 'image-model'
+        };
+
+        assert.deepStrictEqual(resolveSecondaryApiKeys({
+            ...common,
+            secondaryEndpoint: 'https://opencode.ai/zen/go/v1/responses'
+        }), ['primary-key', 'fallback-key']);
+        assert.throws(() => resolveSecondaryApiKeys({
+            ...common,
+            secondaryEndpoint: 'https://api.example.com/v1'
+        }), error => error.code === 'LLM_ACCOUNT_POOL_CONFIG_ERROR'
+            && /必须显式配置 PAPER_ANALYZER_SECONDARY_API_KEY/.test(error.message));
+        assert.deepStrictEqual(resolveSecondaryApiKeys({
+            ...common,
+            secondaryEndpoint: 'https://api.example.com/v1',
+            secondaryKey: 'secondary-provider-key'
+        }), ['secondary-provider-key']);
+        assert.throws(() => resolveSecondaryApiKeys({
+            primaryEndpoint: 'https://api.primary.example/v1',
+            secondaryEndpoint: 'https://opencode.ai/zen/go/v1',
+            primaryKey: 'primary-key',
+            primaryApiKeys: ['primary-key', 'fallback-key'],
+            secondaryModel: 'image-model'
+        }), error => error.code === 'LLM_ACCOUNT_POOL_CONFIG_ERROR'
+            && /必须显式配置 PAPER_ANALYZER_SECONDARY_API_KEY/.test(error.message));
+        assert.deepStrictEqual(resolveSecondaryApiKeys({
+            primaryEndpoint: 'https://api.primary.example/v1',
+            secondaryEndpoint: 'https://opencode.ai/zen/go/v1',
+            primaryKey: 'primary-key',
+            primaryApiKeys: ['primary-key', 'fallback-key'],
+            secondaryKey: 'secondary-go-key',
+            secondaryModel: 'muse-spark-1.2-contributor'
+        }), ['secondary-go-key']);
+        assert.deepStrictEqual(resolveSecondaryApiKeys({
+            ...common,
+            secondaryEndpoint: 'https://api.example.com/v1',
+            secondaryModel: ''
+        }), ['primary-key']);
+        assert.deepStrictEqual(resolveSecondaryApiKeys({
+            ...common,
+            secondaryEndpoint: 'https://opencode.ai/zen/go/v1/responses',
+            secondaryFallbackApiKeys: 'secondary-fallback-key'
+        }), ['primary-key', 'secondary-fallback-key']);
+        assert.throws(() => resolveSecondaryApiKeys({
+            ...common,
+            secondaryEndpoint: 'https://api.example.com/v1',
+            secondaryFallbackApiKeys: 'secondary-fallback-key'
+        }), error => error.code === 'LLM_ACCOUNT_POOL_CONFIG_ERROR'
+            && /必须显式配置 PAPER_ANALYZER_SECONDARY_API_KEY/.test(error.message));
+    });
+
     it('LLM 响应字节预算进入模型/阶段指纹', () => {
         const { modelFingerprint } = require('../scripts/deep-analyzer.js');
         const first = modelFingerprint({ endpoint: 'https://model.example/v1', model: 'm', maxResponseBytes: 1024 });
@@ -1262,6 +1374,9 @@ primary_task_tag: #音视频生成
             code: 'quantitative_chinese_numeral', match: '一个模型'
         }), true);
         assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
+            code: 'quantitative_chinese_numeral', match: '一个组件'
+        }), true);
+        assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
             code: 'quantitative_chinese_numeral', match: '一段'
         }), true);
         assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
@@ -1346,7 +1461,7 @@ primary_task_tag: #音视频生成
         );
         assert.strictEqual(
             normalizeReaderEditorialSurface('季度销售额为 $35 million，预算仍是 \\$20。'),
-            '季度销售额为 \\$35 million，预算仍是 \\$20。'
+            '季度销售额为 35 million 美元，预算仍是 20 美元。'
         );
         assert.strictEqual(
             normalizeReaderEditorialSurface('该结论只覆盖单一宿主；\n\n下一段继续。'),
@@ -1379,11 +1494,22 @@ primary_task_tag: #音视频生成
             'CER 24.05% 差于 22.48%，另一组 CER 从 32.56% 降至 24.14%。'
         );
         const recoveryPaper = {
-            apiReaderArticle: '### 把 HRTF 做浓，再用模型去听\n\n报价为 $35 million。',
+            apiReaderArticle: [
+                '### 把 HRTF 做浓，再用模型去听',
+                '',
+                '报价为 $35 million。',
+                '',
+                '| 项目 | 成本 |',
+                '| --- | --- |',
+                '| 推理 | \\$20 |'
+            ].join('\n'),
             apiReaderPlan: {
                 version: 1, contract: 'beginner-researcher-v2',
                 readerTitle: '把HRTF做浓', oneSentenceThesis: '解释HRTF增强。',
-                sections: [{ kind: 'method_overview', heading: '把HRTF做浓，再用模型去听' }]
+                sections: [{ kind: 'method_overview', heading: '把HRTF做浓，再用模型去听' }],
+                tableBindings: [{ renderedTableSha256: '0'.repeat(64) }],
+                formulaBindings: [],
+                sourceBindingsSha256: '0'.repeat(64)
             },
             apiReaderPlanSha256: '0'.repeat(64)
         };
@@ -1397,7 +1523,16 @@ primary_task_tag: #音视频生成
             recoveryPaper.apiReaderPlan.sections[0].heading,
             '把 HRTF 做浓，再用模型去听'
         );
-        assert.match(recoveryPaper.apiReaderArticle, /\\\$35 million/);
+        assert.match(recoveryPaper.apiReaderArticle, /35 million 美元/);
+        assert.match(recoveryPaper.apiReaderArticle, /20 美元/);
+        assert.notStrictEqual(
+            recoveryPaper.apiReaderPlan.tableBindings[0].renderedTableSha256,
+            '0'.repeat(64)
+        );
+        assert.strictEqual(
+            recoveryPaper.apiReaderPlan.sourceBindingsSha256,
+            recoveryManifest.stages.apiReaderArticle.sourceBindingsSha256
+        );
         assert.strictEqual(
             recoveryPaper.apiReaderPlanSha256,
             recoveryManifest.stages.apiReaderArticle.planSha256
@@ -1550,6 +1685,11 @@ primary_task_tag: #音视频生成
             /让声音分路前行.*完整数据流/
         );
         assert.doesNotMatch(repairedGenericHeading.article, /^### 方法概述$/m);
+        const { makeReaderHeadingSpecific } = require('../scripts/deep-analyzer.js');
+        assert.match(
+            makeReaderHeadingSpecific('result', '结果', payload.readerTitle),
+            /哪些数字真正支持/
+        );
 
         const v3Kinds = [
             'background', 'related_work', 'problem', 'method_overview', 'component',
@@ -1606,6 +1746,38 @@ primary_task_tag: #音视频生成
         assert.strictEqual((v3Result.article.match(/^\|.+\|$/gm) || []).filter(
             line => /\u6bd4较条件/.test(line)
         ).length, 4);
+        const unorderedPayload = structuredClone(v3Payload);
+        [unorderedPayload.sections[4], unorderedPayload.sections[5]] = [
+            unorderedPayload.sections[5], unorderedPayload.sections[4]
+        ];
+        const orderedResult = parseApiReaderArticleResult(JSON.stringify(unorderedPayload), {
+            requiredVersion: 3,
+            requireIntegratedTables: true,
+            minimumIntegratedTables: 4,
+            availableFigureOrdinals: []
+        });
+        const orderedKinds = orderedResult.plan.sections.map(section => section.kind);
+        assert.deepStrictEqual(orderedKinds, [...orderedKinds].sort((left, right) => (
+            v3Kinds.indexOf(left) - v3Kinds.indexOf(right)
+        )));
+        const duplicateHeadingPayload = structuredClone(v3Payload);
+        duplicateHeadingPayload.sections[1].heading = duplicateHeadingPayload.sections[0].heading;
+        assert.doesNotThrow(() => parseApiReaderArticleResult(JSON.stringify(duplicateHeadingPayload), {
+            requiredVersion: 3,
+            requireIntegratedTables: true,
+            minimumIntegratedTables: 4,
+            availableFigureOrdinals: []
+        }));
+        const missingBridgeMarkerPayload = structuredClone(v3Payload);
+        missingBridgeMarkerPayload.sections.find(section => section.kind === 'method_overview').body =
+            missingBridgeMarkerPayload.sections.find(section => section.kind === 'method_overview').body
+                .replace('\n\n[[CONCEPT_BRIDGE_4]]', '');
+        assert.doesNotThrow(() => parseApiReaderArticleResult(JSON.stringify(missingBridgeMarkerPayload), {
+            requiredVersion: 3,
+            requireIntegratedTables: true,
+            minimumIntegratedTables: 4,
+            availableFigureOrdinals: []
+        }));
         const boundPayload = structuredClone(v3Payload);
         const bindingSourceText = '论文正文统一报告值为 1.0，所有整理表都只重放这一明确报告值。';
         boundPayload.tableBindings = Array.from({ length: 4 }, (_, index) => ({
@@ -2162,6 +2334,16 @@ primary_task_tag: #音视频生成
             }),
             /非公网 IP/
         );
+        const unsafeIdentity = await buildApiReaderResourceIdentity(
+            analysis,
+            sourceText,
+            {},
+            {
+                validateUrlImpl: async () => { throw new Error('URL 指向非公网 IP: 127.0.0.1'); },
+                requestImpl: async () => { throw new Error('不应请求不安全 URL'); }
+            }
+        );
+        assert.deepStrictEqual(unsafeIdentity.resources, []);
 
         const inventedAnalysis = analysis.replace(
             'project.example/repo', 'invented.example/repo'
@@ -2190,10 +2372,76 @@ primary_task_tag: #音视频生成
             '## 开源详情',
             `- 代码：${manyUrls.join(' ')}`
         ].join('\n');
-        await assert.rejects(
-            buildApiReaderResourceIdentity(oversizedAnalysis, manyUrls.join('\n')),
-            /超过单篇上限 12/
+        const boundedCalls = [];
+        const bounded = await buildApiReaderResourceIdentity(
+            oversizedAnalysis, manyUrls.join('\n'), {}, {
+                validateUrlImpl: async raw => new URL(raw),
+                requestImpl: async raw => {
+                    boundedCalls.push(raw);
+                    return { status: 200, headers: { get: () => null } };
+                }
+            }
         );
+        assert.strictEqual(bounded.resources.length, 12);
+        assert.strictEqual(boundedCalls.length, 12);
+        assert.strictEqual(bounded.resources[11].originalUrl, manyUrls[11]);
+    });
+
+    it('API Reader 确定性删除 source_quotes 表中无法逐字绑定的数值单元格', () => {
+        const {
+            deriveExactTableSourceQuotes,
+            ensureApiReaderTableNarratives,
+            normalizeApiReaderTablePasteArtifacts,
+            sanitizeUnsupportedSourceQuoteTableNumerics,
+            validateApiReaderTableNarratives
+        } = require('../scripts/deep-analyzer.js');
+        const article = [
+            '这张表比较论文明确报告的结果与缺乏来源的草稿数字。',
+            '',
+            '| 条件 | 数值 |',
+            '| --- | --- |',
+            '| 原文报告 | 0.451 |',
+            '| 草稿推断 | 9.99 |',
+            '',
+            '只有能够回放到全文的数字才能保留在最终表格中。'
+        ].join('\n');
+        const cleaned = sanitizeUnsupportedSourceQuoteTableNumerics(
+            article,
+            [{ sourceType: 'source_quotes' }],
+            'The paper reports a measured value of 0.451 on the held-out set.'
+        );
+        assert.match(cleaned, /\| 原文报告 \| 0\.451 \|/);
+        assert.doesNotMatch(cleaned, /9\.99/);
+        assert.match(cleaned, /原文中没有可逐字绑定的数值证据/);
+        const cleanedFallbackArtifact = sanitizeUnsupportedSourceQuoteTableNumerics(
+            article,
+            [{ sourceType: 'artifact_table', sourceTableOrdinal: 1, cellBindings: [] }],
+            'The paper reports a measured value of 0.451 on the held-out set.',
+            { tables: [] }
+        );
+        assert.doesNotMatch(cleanedFallbackArtifact, /9\.99/);
+
+        const longSourceLine = `${'long context '.repeat(100)}the exact budget is 20k samples`;
+        const quotes = deriveExactTableSourceQuotes(
+            '| 项目 | 数量 |\n| --- | --- |\n| 预算 | 20k |',
+            longSourceLine
+        );
+        assert.ok(quotes.some(quote => quote.includes('20k')));
+        const pasted = normalizeApiReaderTablePasteArtifacts(
+            '| 指标 | 数值 |\n| --- | --- |\n| SDR | 3.00 ±\\pm0.11 |\n| 样本 | 1,3441,344 |'
+        );
+        assert.match(pasted, /3\.00 ± 0\.11/);
+        assert.match(pasted, /\| 样本 \| 1,344 \|/);
+        assert.match(
+            normalizeApiReaderTablePasteArtifacts(
+                '| 条件 | 数值 |\n| --- | --- |\n| 帧长 | L=1024L=1024 |'
+            ),
+            /\| 帧长 \| L=1024 \|/
+        );
+        const narrated = ensureApiReaderTableNarratives(
+            '### 结果\n\n| 指标 | 数值 |\n| --- | --- |\n| SDR | 3.00 |\n\n### 局限'
+        );
+        assert.doesNotThrow(() => validateApiReaderTableNarratives(narrated, 1));
     });
 
     it('归一化后的评分审计二次校验会剥离内部派生字段', () => {

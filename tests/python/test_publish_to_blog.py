@@ -775,6 +775,36 @@ def create_verified_schema_v3_publication(date_str, posts, paper):
 
 
 class PublishToBlogReviewTest(unittest.TestCase):
+    def test_api_reader_numeric_tokens_match_node_canonicalization(self):
+        canon = publish_to_blog._canonical_api_reader_numeric_token
+        self.assertEqual(canon('04'), '4')
+        self.assertEqual(canon('2.00'), '2')
+        self.assertEqual(canon('44,000'), '44000')
+        self.assertEqual(canon('1,234,567'), '1234567')
+        self.assertEqual(canon('1,2'), '1,2')
+        self.assertEqual(canon('2025s'), '2025')
+        self.assertEqual(canon('5s'), '5s')
+        self.assertEqual(canon('20 dB'), '20db')
+        tokens = publish_to_blog._api_reader_numeric_tokens(
+            '共 40964096 个样本，2020 年，1212 项'
+        )
+        self.assertIn('4096', tokens)
+        self.assertNotIn('20', tokens)
+        self.assertIn('2020', tokens)
+        self.assertIn('1212', tokens)
+        self.assertEqual(
+            publish_to_blog._reader_doubled_half_token('40964096 s'), '4096',
+        )
+        self.assertEqual(
+            publish_to_blog._reader_doubled_half_token('8.218.21'), '8.21',
+        )
+        self.assertEqual(
+            publish_to_blog._reader_doubled_half_token('6868'), '68',
+        )
+        self.assertIsNone(publish_to_blog._reader_doubled_half_token('2020'))
+        self.assertIsNone(publish_to_blog._reader_doubled_half_token('1212'))
+        self.assertIsNone(publish_to_blog._reader_doubled_half_token('11'))
+
     def test_api_reader_asset_attestation_accepts_deleted_manifest_tombstone(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / 'blog'
@@ -1134,6 +1164,33 @@ title: "Duplicate"
             self.assertTrue(fixed)
             self.assertEqual(reviewed.count(paragraph), 1)
             self.assertTrue(any('完全重复' in issue for issue in issues))
+        finally:
+            os.unlink(path)
+
+    def test_review_keeps_identical_structured_score_paragraphs(self):
+        score = (
+            '评分：**7.2/10** | 创新 1.5/2 | 技术严谨 1.2/1.5 | '
+            '实验充分 1.2/1.5 | 清晰度 0.8/1 | 影响力 1/1.5 | '
+            '开源 0/1.5 | 可复现 0.3/0.5 | 工程/实践 1.2/1.5'
+        )
+        content = f'''---
+title: "Score rows"
+---
+{score}
+
+不同论文卡片的标题和摘要位于这里。
+
+{score}
+'''
+        with tempfile.NamedTemporaryFile('w+', suffix='.md', encoding='utf-8', delete=False) as handle:
+            handle.write(content)
+            path = handle.name
+        try:
+            fixed, issues = publish_to_blog.review_and_fix_post(path)
+            reviewed = Path(path).read_text(encoding='utf-8')
+            self.assertFalse(fixed)
+            self.assertEqual(issues, [])
+            self.assertEqual(reviewed.count(score), 2)
         finally:
             os.unlink(path)
 
@@ -4714,6 +4771,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         self.assertIn('sealed_tutorial_preview.py', dependency_names)
         self.assertIn('tutorial_payload_verifier.py', dependency_names)
         self.assertIn('markdown_hugo_gate.py', dependency_names)
+        self.assertNotIn('llm_account_pool.py', dependency_names)
 
     def test_review_protocol_fingerprint_binds_model_code_hugo_and_is_cached(self):
         completed = SimpleNamespace(
@@ -4742,6 +4800,35 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             third = publish_to_blog.review_protocol_fingerprint()
         self.assertNotEqual(first, third)
 
+    def test_account_pool_content_changes_review_but_not_generation_fingerprint(self):
+        completed = SimpleNamespace(
+            stdout='hugo v0.test', stderr='', returncode=0,
+            timed_out=False, output_truncated=False,
+        )
+        account_pool_digest = ['a' * 64]
+
+        def dependency_digest(path):
+            if Path(path).name == 'llm_account_pool.py':
+                return account_pool_digest[0]
+            return 'f' * 64
+
+        publish_to_blog._REVIEW_PROTOCOL_CACHE.clear()
+        with mock.patch.object(
+                publish_to_blog, '_sha256_file', side_effect=dependency_digest,
+        ), mock.patch.object(
+                publish_to_blog.shutil, 'which', return_value='/missing/hugo',
+        ), mock.patch.object(
+                publish_to_blog, '_run_bounded_subprocess', return_value=completed,
+        ):
+            first_generation = publish_to_blog.generation_template_fingerprint()
+            first_review = publish_to_blog.review_protocol_fingerprint()
+            account_pool_digest[0] = 'b' * 64
+            second_generation = publish_to_blog.generation_template_fingerprint()
+            second_review = publish_to_blog.review_protocol_fingerprint()
+
+        self.assertEqual(first_generation, second_generation)
+        self.assertNotEqual(first_review, second_review)
+
     def test_review_protocol_includes_manual_takeover_script_and_rejects_stale_generation_template(self):
         completed = SimpleNamespace(
             stdout='hugo v0.test', stderr='', returncode=0,
@@ -4758,6 +4845,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             publish_to_blog.review_protocol_fingerprint()
         dependency_names = {Path(call.args[0]).name for call in digest.call_args_list}
         self.assertIn('manual-review-blog.py', dependency_names)
+        self.assertIn('llm_account_pool.py', dependency_names)
         self.assertIn('markdown_hugo_gate.py', dependency_names)
         self.assertIn('tutorial_payload_verifier.py', dependency_names)
 

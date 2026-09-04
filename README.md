@@ -47,12 +47,14 @@ cp env.example .env
 
 ```dotenv
 PAPER_ANALYZER_API_KEY=...
+# 可选：同一 OpenCode Go 路由的备用账号；仅确认额度耗尽时切换
+PAPER_ANALYZER_FALLBACK_API_KEYS=...
 PAPER_ANALYZER_MODEL=...
 PAPER_ANALYZER_ENDPOINT=https://...
 HTTPS_PROXY=http://127.0.0.1:7897   # 也可按 setup 使用 HTTP_PROXY
 ```
 
-模型、协议和代理要求见[环境配置](docs/setup.md)。项目脚本需要在沙箱外运行；入口会在
+备用账号采用跨进程、跨日期的长期 sticky 策略，不做轮询或并发分摊。模型、协议和代理要求见[环境配置](docs/setup.md)。项目脚本需要在沙箱外运行；入口会在
 网络、日志和写入前拒绝受限沙箱。
 
 ```bash

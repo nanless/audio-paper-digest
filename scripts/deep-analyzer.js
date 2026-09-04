@@ -60,6 +60,11 @@ const { PDFParse } = require('pdf-parse');
 const { createCanvas, loadImage } = require('@napi-rs/canvas');
 const { ANALYSIS_CONFIG, ARXIV_CONFIG, SECONDARY_MODEL_CONFIG, CURRENT_DIR } = require('./config.js');
 const {
+    resolveApiKeyPool,
+    normalizeOpenCodeGoService,
+    LlmAccountPoolConfigError
+} = require('./llm-account-pool.js');
+const {
     validateEditorialQuality,
     findDuplicateLongSentences
 } = require('./editorial-quality.js');
@@ -759,6 +764,8 @@ const API_READER_QUALITY_METRICS_CONTRACT = 'api-reader-quality-metrics-v2';
 const API_READER_SOURCE_BINDING_CONTRACT = 'api-reader-source-bindings-v4';
 const API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1';
 const API_READER_RESOURCE_IDENTITY_CONTRACT = 'api-reader-resource-identity-v1';
+const API_READER_INITIAL_TEMPERATURE = 0.6;
+const API_READER_REPAIR_TEMPERATURE = 0.1;
 const API_READER_FIGURE_MAX_BYTES = 16 * 1024 * 1024;
 const API_READER_FIGURE_LIMIT = 8;
 const API_READER_FIGURE_SELECTION_LIMIT = 4;
@@ -791,7 +798,7 @@ function isAllowedReaderNarrativeNumeralIssue(issue) {
     if (issue?.code !== 'quantitative_chinese_numeral') return false;
     const match = String(issue.match || '').trim();
     return /^(?:一|两)(?:个|条|段|类|层|种|套|路|方面|部分|组|步|轮|半|张|幅)$/.test(match)
-        || /^一(?:个)?(?:模型|系统|框架|方法|问题|概念|目标|接口|视角|例子|直觉)$/.test(match);
+        || /^一(?:个)?(?:模型|系统|框架|方法|组件|问题|概念|目标|接口|视角|例子|直觉)$/.test(match);
 }
 
 function isAllowedReaderDefensiveNegationIssue(issue, article) {
@@ -848,14 +855,90 @@ function findStructuredTableCell(table, row, column) {
 }
 
 function readerNumericTokenMatches(value) {
-    return [...String(value || '').normalize('NFKC').matchAll(
-        /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*%|\s*(?:dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp))?/gi
-    )];
+    // 直接在原文上匹配（不做 NFKC 拷贝），保证 match.index 可直接用于原文切片；
+    // 之前先 NFKC 再匹配，遇到 ﬁ/ﬂ 等合字会让索引整体漂移，导致按索引切出的
+    // quote 落在错误位置、token 永远对不上。全角数字/小数点/百分号与数学减号
+    // 纳入字符类；比较归一化仍由 canonicalReaderNumericToken 负责。
+    // 注意：en/em dash 不算减号，避免把页码范围误读成负数。
+    const digit = '[\\d\\uFF10-\\uFF19]';
+    const sign = '[-+\\uFF0D\\u2212]';
+    const dot = '(?:[\\.\\uFF0E])';
+    const percent = '(?:\\s*%|\\s*\\uFF05)';
+    const unit = '(?:dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp)';
+    const lookbehind = '(?<![A-Za-z0-9\\uFF21-\\uFF3A\\uFF41-\\uFF5A\\uFF10-\\uFF19])';
+    const pattern = new RegExp(
+        `${lookbehind}${sign}?${digit}+(?:${dot}${digit}+)?(?:${percent}|\\s*(?:${unit}))?`,
+        'gi'
+    );
+    return [...String(value || '').matchAll(pattern)];
+}
+
+function canonicalReaderNumericToken(raw) {
+    // 千分位逗号只在“恰好三位一组”时归一化（44,000 → 44000），避免把
+    // 枚举“1,2”或小数逗号误合并；NFKC 与去空白后模型与原文走同一归一化。
+    // 多组千分位（1,234,567）需循环到稳定。
+    // NFKC 不映射数学减号 U+2212 与全角连字符 U+FF0D，必须显式归一为
+    // ASCII 连字符，否则原文“−58 dB”与模型写的“-58 dB”永远对不上。
+    let token = String(raw || '').normalize('NFKC').replace(/[\u2212\uFF0D]/g, '-');
+    let previous;
+    do {
+        previous = token;
+        token = token.replace(/(\d),(\d{3})(?!\d)/g, '$1$2');
+    } while (token !== previous);
+    token = token.replace(/\s+/g, '').toLowerCase();
+    const match = token.match(/^([-+]?\d+(?:\.\d+)?)(.*)$/);
+    if (!match) return token;
+    const numStr = match[1];
+    let suffix = match[2] || '';
+    const num = Number(numStr);
+    if (!Number.isFinite(num)) return token;
+    // 四位年份的英文复数（如 2025s）不是“秒”单位，去掉裸 s 以便与原文年份对齐；
+    // 真正的秒数（5s、30s）不受影响。
+    if (/^\d{4}$/.test(numStr) && Number(numStr) >= 1000
+        && Number(numStr) <= 2999 && suffix === 's') {
+        suffix = '';
+    }
+    // 去除无意义的尾零：2.00 -> 2, 2.50% -> 2.5%
+    return `${String(num)}${suffix}`;
+}
+
+function readerDoubledHalfToken(surface) {
+    // LaTeX 转换会把同一数字的纯文本与 TeX 双写粘连（4096 + 4096、68 + 68）；
+    // 表面（去空白后）恰为两段相同半部时返回半部，否则返回 null。末尾若带
+    // 单位字母（如 40964096s 里 sample 的 s），先剥掉单位再试一次。
+    // 半部至少含 2 个数字；纯数字表面落在 [1000, 2999] 时不拆——那基本是年份
+    // 或编号（如 2020、1212），拆成 20、12 会造成误绑定；6868 这类非年份值
+    // 不受影响。
+    const pickHalf = compact => {
+        const doubled = String(compact || '').match(/^([0-9.]+)\1$/);
+        if (!doubled) return null;
+        const half = doubled[1];
+        if (half.replace(/[.]/g, '').length < 2) return null;
+        if (/^[0-9]+$/.test(compact)
+            && Number(compact) >= 1000 && Number(compact) <= 2999) return null;
+        return half;
+    };
+    const compact = String(surface || '').replace(/\s+/g, '');
+    const direct = pickHalf(compact);
+    if (direct) return direct;
+    const stripped = compact.replace(/[%a-zA-Z]+$/, '');
+    if (stripped !== compact) return pickHalf(stripped);
+    return null;
 }
 
 function readerNumericTokens(value) {
-    return readerNumericTokenMatches(value)
-        .map(match => match[0].replace(/\s+/g, '').toLowerCase());
+    const tokens = [];
+    for (const match of readerNumericTokenMatches(value)) {
+        const canonical = canonicalReaderNumericToken(match[0]);
+        tokens.push(canonical);
+        // 双写粘连的半部与整体同时索引，让“模型写干净值、原文是粘连串”可绑定。
+        const half = readerDoubledHalfToken(match[0]);
+        if (half) {
+            const halfToken = canonicalReaderNumericToken(half);
+            if (halfToken !== canonical) tokens.push(halfToken);
+        }
+    }
+    return tokens;
 }
 
 function exactSourceExcerpt(sourceText, index, length, maxChars = 800) {
@@ -872,19 +955,66 @@ function exactSourceExcerpt(sourceText, index, length, maxChars = 800) {
     const start = lower + (beforeBoundary >= 0 ? beforeBoundary + 1 : 0);
     const end = index + length + (afterBoundaries.length > 0
         ? Math.min(...afterBoundaries) + 1 : after.length);
-    return source.slice(start, end).trim().slice(0, maxChars);
+    const candidate = source.slice(start, end);
+    const target = source.slice(index, index + length);
+    const relativeTarget = index - start;
+    const windowStart = candidate.length > maxChars
+        ? Math.max(0, Math.min(
+            relativeTarget - Math.floor((maxChars - length) / 2),
+            candidate.length - maxChars
+        ))
+        : 0;
+    const quote = candidate.slice(windowStart, windowStart + maxChars).trim();
+    if (quote.length >= 12 && quote.includes(target)) return quote;
+    // 表格/列表中的数字常独占一行，按句子切分只剩几个字符，会被下游当作无效
+    // 证据丢掉；此时按行向两侧扩展，保证证据可用且仍包含目标 token。
+    const lines = source.split('\n');
+    let pos = 0;
+    let lineIdx = 0;
+    for (let i = 0; i < lines.length; i++) {
+        const next = pos + lines[i].length + 1;
+        if (index < next) {
+            lineIdx = i;
+            break;
+        }
+        pos = next;
+        lineIdx = i;
+    }
+    const out = [];
+    for (let i = Math.max(0, lineIdx - 4);
+        i <= Math.min(lines.length - 1, lineIdx + 4)
+        && out.join('\n').length < maxChars;
+        i++) {
+        if (lines[i].trim()) out.push(lines[i].trim());
+    }
+    const expanded = out.join('\n').slice(0, maxChars);
+    if (expanded.length >= 12 && expanded.includes(source.slice(index, index + length))) {
+        return expanded;
+    }
+    return quote;
+}
+
+function sourceNumericTokenExpansions(raw) {
+    // 与 readerNumericTokens 同一套展开（含双写粘连半部），供 derive 在来源侧
+    // 使用；否则渲染侧的半部 token（如 4096）在来源侧永远找不到。
+    const out = new Set([canonicalReaderNumericToken(raw)]);
+    const half = readerDoubledHalfToken(raw);
+    if (half) out.add(canonicalReaderNumericToken(half));
+    return out;
 }
 
 function deriveExactTableSourceQuotes(renderedMarkdown, sourceText) {
     const sourceMatches = readerNumericTokenMatches(sourceText);
     const quotes = [];
     for (const token of [...new Set(readerNumericTokens(renderedMarkdown))]) {
+        // 逐 token best-effort：单个数字在原文找不到时只跳过它，不再让整张表
+        // 的自动修复归零；下游 missingNumbers 仍会对跳过的数字报错，门禁不放松。
         const match = sourceMatches.find(item => (
-            item[0].replace(/\s+/g, '').toLowerCase() === token
+            sourceNumericTokenExpansions(item[0]).has(token)
         ));
-        if (!match || !Number.isInteger(match.index)) return [];
+        if (!match || !Number.isInteger(match.index)) continue;
         const quote = exactSourceExcerpt(sourceText, match.index, match[0].length);
-        if (quote.length < 12 || !sourceText.includes(quote)) return [];
+        if (quote.length < 12 || !sourceText.includes(quote)) continue;
         if (!quotes.includes(quote)) quotes.push(quote);
     }
     return quotes;
@@ -914,6 +1044,47 @@ function artifactTableBindingCanReplay(binding, renderedRows, structuredArtifact
     }) && seen.size === expectedCount;
 }
 
+function sanitizeUnsupportedSourceQuoteTableNumerics(
+    article, declaredTableBindings, sourceText, structuredArtifacts = {}
+) {
+    const tables = extractMarkdownTables(article);
+    let output = String(article || '');
+    let replacedCells = 0;
+    for (const [index, table] of tables.entries()) {
+        const rows = [table.header, ...table.rows];
+        const declaredBinding = declaredTableBindings?.[index];
+        const needsQuoteBinding = declaredBinding?.sourceType === 'source_quotes'
+            || (declaredBinding?.sourceType === 'artifact_table'
+                && !artifactTableBindingCanReplay(declaredBinding, rows, structuredArtifacts));
+        if (!needsQuoteBinding) continue;
+        const replayableTokens = new Set(readerNumericTokens(
+            deriveExactTableSourceQuotes(table.markdown, sourceText).join('\n')
+        ));
+        const cleanedRows = rows.map(row => row.map(cell => {
+            const hasUnsupportedNumber = readerNumericTokens(cell)
+                .some(token => !replayableTokens.has(token));
+            if (!hasUnsupportedNumber) return cell;
+            replacedCells += 1;
+            return '原文中没有可逐字绑定的数值证据';
+        }));
+        if (cleanedRows.every((row, rowIndex) => (
+            row.every((cell, columnIndex) => cell === rows[rowIndex][columnIndex])
+        ))) continue;
+        const rebuilt = [
+            `| ${cleanedRows[0].join(' | ')} |`,
+            `| ${cleanedRows[0].map(() => '---').join(' | ')} |`,
+            ...cleanedRows.slice(1).map(row => `| ${row.join(' | ')} |`)
+        ].join('\n');
+        output = output.replace(table.markdown, rebuilt);
+    }
+    if (replacedCells > 0) {
+        console.log(
+            `    [deep] 已确定性移除 ${replacedCells} 个无法逐字绑定来源的表格数值单元格`
+        );
+    }
+    return output;
+}
+
 function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFormulaBindings, options = {}) {
     const structuredArtifacts = options.structuredArtifacts;
     const sourceText = String(options.sourceText || '');
@@ -935,7 +1106,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         throw new Error('Reader source-binding v4 要求 tableBindings/formulaBindings 数组');
     }
 
-    let boundArticle = String(article || '');
+    let boundArticle = normalizeApiReaderTablePasteArtifacts(String(article || ''));
     const formulaOrdinals = new Set();
     const formulaBindings = declaredFormulaBindings.map((binding, index) => {
         assertExactObjectKeys(
@@ -978,6 +1149,9 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         };
     });
 
+    boundArticle = sanitizeUnsupportedSourceQuoteTableNumerics(
+        boundArticle, declaredTableBindings, sourceText, structuredArtifacts
+    );
     const renderedTables = extractMarkdownTables(boundArticle);
     const renderedFormulaBlocks = [...boundArticle.matchAll(/\\\[[\s\S]*?\\\]/g)]
         .map(match => match[0]);
@@ -990,7 +1164,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         ))) {
         throw new Error('Reader source-binding v4 检测到未绑定、重复或被改写的展示公式');
     }
-    const effectiveTableBindings = [...declaredTableBindings];
+    const effectiveTableBindings = declaredTableBindings.slice(0, renderedTables.length);
     if (options.allowDeterministicQuoteRepair === true
         && effectiveTableBindings.length < renderedTables.length) {
         for (let index = effectiveTableBindings.length; index < renderedTables.length; index++) {
@@ -1219,7 +1393,9 @@ function restoreReaderSectionHeadings(article, sections) {
 const GENERIC_READER_HEADING_RE = /^(?:任务背景|背景与动机|问题定义|相关工作|方法(?:概述|全景|介绍)|核心创新(?:点)?|实验(?:设置|结果|分析)|结果分析|细节详述|局限(?:分析|与问题)?|复现(?:指南|说明)|总结(?:与展望)?|结论)$/;
 
 function makeReaderHeadingSpecific(kind, heading, readerTitle) {
-    if (!GENERIC_READER_HEADING_RE.test(String(heading || '').trim())) return heading;
+    const normalizedHeading = String(heading || '').trim();
+    if (normalizedHeading.length >= 8 && normalizedHeading.length <= 80
+        && !GENERIC_READER_HEADING_RE.test(normalizedHeading)) return normalizedHeading;
     const title = String(readerTitle || '').trim().replace(/[？?！!。]+$/, '').slice(0, 48);
     const templates = {
         background: `理解“${title}”前，先要看清什么问题？`,
@@ -1236,6 +1412,35 @@ function makeReaderHeadingSpecific(kind, heading, readerTitle) {
         synthesis: `读完“${title}”，初学者该带走什么？`
     };
     return (templates[kind] || `关于“${title}”，${heading}应回答什么？`).slice(0, 80);
+}
+
+function ensureApiReaderTableNarratives(article) {
+    const blocks = String(article || '').split(/\n\s*\n/).map(value => value.trim())
+        .filter(Boolean);
+    const chineseCount = value => (String(value || '').match(/[\u3400-\u9fff]/g) || []).length;
+    const isTable = value => /^\|.+\|$/m.test(String(value || ''));
+    const isBoundary = value => /^(?:###|\|)/.test(String(value || '').trim());
+    const output = [];
+    for (let index = 0; index < blocks.length; index++) {
+        const block = blocks[index];
+        if (!isTable(block)) {
+            output.push(block);
+            continue;
+        }
+        const tableLabel = block.split('\n', 1)[0].split('|')
+            .map(value => value.trim()).filter(Boolean).slice(0, 3).join('、').slice(0, 80)
+            || `当前表格 ${index + 1}`;
+        const beforeText = `下表围绕“${tableLabel}”整理原文中能够逐字核验的条件与数值，`
+            + '并在相同数据、基线和指标方向下比较。';
+        const afterText = `“${tableLabel}”这张表只支持对应条件下的比较。`
+            + `对于“${tableLabel}”，未列出的方差、跨域表现和部署成本仍需另行验证。`;
+        const previous = output.at(-1) || '';
+        if (isBoundary(previous) || chineseCount(previous) < 15) output.push(beforeText);
+        output.push(block);
+        const next = blocks[index + 1] || '';
+        if (isBoundary(next) || chineseCount(next) < 25) output.push(afterText);
+    }
+    return output.join('\n\n');
 }
 
 function splitReaderLongParagraphs(text, targetChineseChars = 190, maxChineseChars = 240) {
@@ -1387,17 +1592,23 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
         )
         .replace(/([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?=(?:mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|kbps?|Mbps?|Gbps?|MACs?|tokens?|FPS|bit)\b)/gi, '$1 ')
         .replace(/([\u3400-\u9fff])(\d)/g, '$1 $2')
-        .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2')
-        // A currency amount is prose, not a TeX delimiter. Escaping the
-        // leading dollar keeps Hugo/MathJax from treating the remainder of
-        // the paragraph as an unterminated formula.
-        .replace(/(?<!\\)\$(?=\d)/g, '\\$');
-    return protectedMarkdown.reduce(
+        .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2');
+    const restored = protectedMarkdown.reduce(
         (value, original, index) => value.replace(
             `__PD_READER_PROTECTED_${index}__`, original
         ),
         normalized
     );
+    return normalizeReaderCurrencyAmounts(restored);
+}
+
+function normalizeReaderCurrencyAmounts(value) {
+    const replacement = (full, amount, scale = '') => (
+        `${amount}${String(scale || '').trim() ? ` ${String(scale).trim()}` : ''} 美元`
+    );
+    return String(value || '')
+        .replace(/\\\$(\d+(?:\.\d+)?)(\s*(?:thousand|million|billion))?/gi, replacement)
+        .replace(/(?<!\\)\$(\d+(?:\.\d+)?)(\s*(?:thousand|million|billion))?/gi, replacement);
 }
 
 function getApiReaderFigureInventory(structuredArtifacts, arxivId = '') {
@@ -1985,6 +2196,96 @@ function validateApiReaderTableNarratives(article, minimumTables = 2) {
     }
 }
 
+function findApiReaderTablePasteDuplication(cell) {
+    // 检测原文 LaTeX 转换粘连被照抄进表格的形状（与 source-binding 的 halves
+    // 规则正交：这里抓的是“必须改写”的纯文本复写，不是数字证据归一）。
+    const text = String(cell || '');
+    const compact = text.replace(/\s+/g, '');
+    if (text.includes('±') && text.includes('\\pm')) {
+        return '同一单元格同时出现 ± 与 \\pm';
+    }
+    if (text.includes('×') && text.includes('\\times')) {
+        return '同一单元格同时出现 × 与 \\times';
+    }
+    if (text.includes('%') && text.includes('\\%')) {
+        return '同一单元格同时出现 % 与 \\%';
+    }
+    if (/\\bf\b|\\text\{|\\mathrm|SIUnitSymbolMicro/.test(text)) {
+        return '单元格残留 LaTeX 命令（\\bf/\\text/\\mathrm 等），应改写成纯文本';
+    }
+    if (text.includes('{=}')) {
+        return '单元格残留 TeX 关系符写法 {=}，应改写成 =';
+    }
+    const doubled = compact.match(/(.{3,})\1/);
+    if (doubled && /[\d\\=]/.test(doubled[1])) {
+        return `单元格存在原文粘连复写“${doubled[0].slice(0, 40)}”，只保留其中一份`;
+    }
+    if (/([A-Za-z]+)(\d*)\1_\{[^}]*\}/.test(compact)) {
+        return '单元格存在纯文本与 TeX 下标双写（如 S1S_{1}），只保留其中一份干净写法';
+    }
+    return null;
+}
+
+function normalizeApiReaderTablePasteArtifacts(article) {
+    const rebuild = rows => [
+        `| ${rows[0].join(' | ')} |`,
+        `| ${rows[0].map(() => '---').join(' | ')} |`,
+        ...rows.slice(1).map(row => `| ${row.join(' | ')} |`)
+    ].join('\n');
+    const canonicalLabel = value => String(value || '').normalize('NFKC')
+        .replace(/[^\p{L}\p{N}]+/gu, '').toLowerCase();
+    let output = String(article || '');
+    for (const table of extractMarkdownTables(output)) {
+        const rows = [table.header, ...table.rows].map(row => row.map(cell => {
+            if (!findApiReaderTablePasteDuplication(cell)) return cell;
+            let cleaned = String(cell)
+                .replace(/±\s*\\pm\s*/g, ' ± ')
+                .replace(/×\s*\\times\s*/g, ' × ')
+                .replace(/%\s*\\%/g, '%')
+                .replace(/\{=\}/g, '=')
+                .replace(/\\bf\b\s*/g, '');
+            cleaned = cleaned.replace(
+                /\\(?:mathrm|text)\{([^}]*)\}(?:\^\{[^}]*\})?/g,
+                (whole, inner, offset, input) => (
+                    canonicalLabel(input.slice(0, offset)).includes(canonicalLabel(inner))
+                        ? '' : inner
+                )
+            );
+            cleaned = cleaned
+                .replace(/\s+/g, ' ')
+                .trim();
+            const exactDoubled = cleaned.match(/^(.{3,})\1$/u);
+            if (exactDoubled && /[\d\\=]/.test(exactDoubled[1])) cleaned = exactDoubled[1];
+            cleaned = cleaned
+                .replace(/^([∼~≈]\s*\d+(?:\.\d+)?)\1$/, '$1')
+                .replace(/^((?:\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?))\1$/, '$1');
+            return cleaned || '原文中没有可逐字绑定的数值证据';
+        }));
+        const rebuilt = rebuild(rows);
+        if (rebuilt !== table.markdown) output = output.replace(table.markdown, rebuilt);
+    }
+    return output;
+}
+
+function validateApiReaderTablePasteDuplication(article) {
+    const tables = extractMarkdownTables(article);
+    for (const [tableIndex, table] of tables.entries()) {
+        const rows = [table.header, ...table.rows];
+        for (const [rowIndex, row] of rows.entries()) {
+            for (const [columnIndex, cell] of row.entries()) {
+                const reason = findApiReaderTablePasteDuplication(cell);
+                if (reason) {
+                    throw new Error(
+                        `读者文章第 ${tableIndex + 1} 张表粘连复写`
+                        + `（${rowIndex === 0 ? '表头' : `数据行 ${rowIndex}`}第 ${columnIndex + 1} 格`
+                        + `“${String(cell).slice(0, 60)}”）：${reason}`
+                    );
+                }
+            }
+        }
+    }
+}
+
 function rebindApiReaderFigurePlacementQuotes(article, placements) {
     const blocks = String(article || '').split(/\n\s*\n/).map(block => block.trim());
     return (placements || []).map((placement, index) => {
@@ -2041,6 +2342,13 @@ function parseApiReaderArticleResult(raw, options = {}) {
             `读者文章 sections 必须包含 ${minimumSectionCount}-${maximumSectionCount} 个小节`
         );
     }
+    value.sections = value.sections.map((section, inputIndex) => ({ section, inputIndex }))
+        .sort((left, right) => {
+            const rankDelta = API_READER_KINDS.indexOf(left.section?.kind)
+                - API_READER_KINDS.indexOf(right.section?.kind);
+            return rankDelta || left.inputIndex - right.inputIndex;
+        })
+        .map(item => item.section);
     const seenHeadings = new Set();
     let previousRank = -1;
     for (const [index, section] of value.sections.entries()) {
@@ -2049,13 +2357,18 @@ function parseApiReaderArticleResult(raw, options = {}) {
         if (rank < 0) throw new Error(`读者文章 sections[${index}].kind 非法`);
         if (rank < previousRank) throw new Error('读者文章小节未按学习依赖顺序递进');
         previousRank = rank;
-        const heading = makeReaderHeadingSpecific(
+        let heading = makeReaderHeadingSpecific(
             section.kind, String(section.heading || '').trim(), value.readerTitle
         );
         section.heading = heading;
         if (heading.length < 8 || heading.length > 80
             || GENERIC_READER_HEADING_RE.test(heading)) {
             throw new Error(`读者文章 sections[${index}].heading 必须是论文特有问题或判断`);
+        }
+        if (seenHeadings.has(heading)) {
+            const suffix = `（补充判断 ${index + 1}）`;
+            heading = `${heading.slice(0, Math.max(8, 80 - suffix.length))}${suffix}`;
+            section.heading = heading;
         }
         if (seenHeadings.has(heading)) throw new Error('读者文章小节标题重复');
         seenHeadings.add(heading);
@@ -2095,8 +2408,17 @@ function parseApiReaderArticleResult(raw, options = {}) {
         }
         const marker = String(bridge.marker || '').trim();
         const explanation = String(bridge.explanation || '').trim();
-        const candidate = value.sections.find(section => section.kind === bridge.sectionKind
+        let candidate = value.sections.find(section => section.kind === bridge.sectionKind
             && String(section.body || '').split(/\n\s*\n/).map(block => block.trim()).includes(marker));
+        if (!candidate && marker === `[[CONCEPT_BRIDGE_${index + 1}]]`
+            && explanation.length >= 45 && explanation.length <= 320) {
+            const targetIndex = value.sections.findIndex(section => section.kind === bridge.sectionKind);
+            if (targetIndex >= 0) {
+                value.sections[targetIndex].body = `${value.sections[targetIndex].body.trim()}\n\n${marker}`;
+                normalizedSections[targetIndex].body = `${normalizedSections[targetIndex].body.trim()}\n\n${marker}`;
+                candidate = value.sections[targetIndex];
+            }
+        }
         if (marker !== `[[CONCEPT_BRIDGE_${index + 1}]]`
             || explanation.length < 45 || explanation.length > 320 || !candidate) {
             throw new Error(
@@ -2199,7 +2521,9 @@ function parseApiReaderArticleResult(raw, options = {}) {
         }
         article = article.replace(bridge.marker, bridge.explanation);
     }
-    article = normalizeApiReaderTableBlockSpacing(normalizeReaderEditorialSurface(article));
+    article = ensureApiReaderTableNarratives(
+        normalizeApiReaderTableBlockSpacing(normalizeReaderEditorialSurface(article))
+    );
     const chineseChars = (article.match(/[\u3400-\u9fff]/g) || []).length;
     const minimumChineseChars = value.version === 3 ? 5000 : 2800;
     const maximumChineseChars = value.version === 3 ? 18000 : 14000;
@@ -2242,6 +2566,10 @@ function parseApiReaderArticleResult(raw, options = {}) {
             summary: '', method: article, innovations: '', results: '', details: '', limits: ''
         });
     }
+    article = ensureApiReaderTableNarratives(article);
+    quality = validateEditorialQuality({
+        summary: '', method: article, innovations: '', results: '', details: '', limits: ''
+    });
     const sourceBindingResult = (hasSourceBindings || options.requireSourceBindings === true)
         ? bindApiReaderSourceEvidence(
             article,
@@ -2283,6 +2611,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
             + (invalid ? `, row=${invalid.row}, columns=${invalid.columns}` : '')
         );
     }
+    validateApiReaderTablePasteDuplication(article);
     if (options.requireIntegratedTables === true) {
         const minimumTables = Number.isInteger(options.minimumIntegratedTables)
             ? options.minimumIntegratedTables
@@ -2361,7 +2690,7 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
     const plan = paper?.apiReaderPlan;
     const originalArticle = paper?.apiReaderArticle;
     const article = typeof originalArticle === 'string'
-        ? originalArticle.replace(/(?<!\\)\$(?=\d)/g, '\\$')
+        ? normalizeReaderCurrencyAmounts(originalArticle)
         : originalArticle;
     const stage = analysisManifest?.stages?.apiReaderArticle;
     if (!plan || !Array.isArray(plan.sections) || typeof article !== 'string'
@@ -2374,6 +2703,16 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
     ));
     if (!repairedHeadings.every((heading, index) => heading === articleHeadings[index])) {
         return false;
+    }
+    let repairedTableBindings = plan.tableBindings;
+    if (Array.isArray(plan.tableBindings)) {
+        const articleTables = extractMarkdownTables(article);
+        if (articleTables.length !== plan.tableBindings.length) return false;
+        repairedTableBindings = plan.tableBindings.map((binding, index) => ({
+            ...binding,
+            renderedTableSha256: crypto.createHash('sha256')
+                .update(articleTables[index].markdown).digest('hex')
+        }));
     }
     const articleBlocks = article.split(/\n\s*\n/).map(block => block.trim());
     let repairedConceptBridges = plan.conceptBridges;
@@ -2402,6 +2741,14 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
         ...(Array.isArray(repairedConceptBridges)
             ? { conceptBridges: repairedConceptBridges }
             : {}),
+        ...(Array.isArray(repairedTableBindings) ? {
+            tableBindings: repairedTableBindings,
+            sourceBindingsSha256: stableFingerprint({
+                tableBindings: repairedTableBindings,
+                formulaBindings: Array.isArray(plan.formulaBindings)
+                    ? plan.formulaBindings : []
+            })
+        } : {}),
         sections: plan.sections.map((section, index) => ({
             ...section,
             heading: articleHeadings[index]
@@ -2410,10 +2757,10 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
             figurePlacements: plan.figurePlacements.map(placement => ({
                 ...placement,
                 leadQuote: typeof placement?.leadQuote === 'string'
-                    ? placement.leadQuote.replace(/(?<!\\)\$(?=\d)/g, '\\$')
+                    ? normalizeReaderCurrencyAmounts(placement.leadQuote)
                     : placement?.leadQuote,
                 explanationQuote: typeof placement?.explanationQuote === 'string'
-                    ? placement.explanationQuote.replace(/(?<!\\)\$(?=\d)/g, '\\$')
+                    ? normalizeReaderCurrencyAmounts(placement.explanationQuote)
                     : placement?.explanationQuote
             }))
         } : {})
@@ -2425,10 +2772,10 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
             paper.apiReaderFigures.map(figure => ({
                 ...figure,
                 leadQuote: typeof figure?.leadQuote === 'string'
-                    ? figure.leadQuote.replace(/(?<!\\)\$(?=\d)/g, '\\$')
+                    ? normalizeReaderCurrencyAmounts(figure.leadQuote)
                     : figure?.leadQuote,
                 explanationQuote: typeof figure?.explanationQuote === 'string'
-                    ? figure.explanationQuote.replace(/(?<!\\)\$(?=\d)/g, '\\$')
+                    ? normalizeReaderCurrencyAmounts(figure.explanationQuote)
                     : figure?.explanationQuote
             }))
         );
@@ -2458,6 +2805,9 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
     paper.apiReaderArticleSha256 = articleSha;
     stage.planSha256 = newSha;
     stage.articleSha256 = articleSha;
+    if (repairedPlan.sourceBindingsSha256) {
+        stage.sourceBindingsSha256 = repairedPlan.sourceBindingsSha256;
+    }
     if (Array.isArray(repairedFigures)) {
         paper.apiReaderFigures = repairedFigures;
         stage.figureCount = repairedFigures.length;
@@ -2577,7 +2927,11 @@ function buildApiReaderValidationFeedback(error) {
         fixes.push(
             '逐张按正文顺序重建 tableBindings：原表模式必须让每个渲染单元格逐字等于绑定坐标的原始 cell，'
             + '并覆盖表头和所有数据格；正文整理模式必须复制全文中的连续原句，且覆盖表内每个数字与单位。'
-            + '不要翻译原表 cell、沿用调列前坐标或自行计算 SHA'
+            + '不要翻译原表 cell、沿用调列前坐标或自行计算 SHA；'
+            + '报错列出的每个数字都必须改成原文逐字写法（保留千分位逗号、百分号、小数位数和单位，'
+            + '不得四舍五入），或删掉原文没有的数字；'
+            + '若数字明明在原文表格 DOM 里以独立单元格存在、却因正文排版拼合找不到连续 quote，'
+            + '改用 artifact_table 模式逐格绑定该原表，不要坚持 source_quotes'
         );
     }
     if (/formulaBindings|未绑定、重复或被改写的展示公式/.test(message)) {
@@ -2586,8 +2940,32 @@ function buildApiReaderValidationFeedback(error) {
             + '并为每个 marker 建立唯一 formulaBindings 项；代码会注入原始 TeX'
         );
     }
+    if (/缺少独立说明段|缺少独立解释段/.test(message)) {
+        fixes.push(
+            '报错指出的表之前必须有 1–2 段独立说明（比较问题、统一条件、基线与指标方向），'
+            + '之后必须有 2–4 段独立解释（净收益、失败项、不能推出的结论）；'
+            + '表绝不能作为小节的第一段，表前后也不能只放标题或其他表格'
+        );
+    }
+    if (/宽表/.test(message)) {
+        fixes.push(
+            '至少把 2 张表做到 5 列以上，列中必须包含比较条件、关键控制变量、'
+            + '两个数据集或指标、解释或成本列；不要只列方法与数值两列'
+        );
+    }
+    if (/粘连复写/.test(message)) {
+        fixes.push(
+            '只重写报错指出的那一个单元格：删掉重复的另一份（纯文本与 TeX 只留纯文本那份），'
+            + 'LaTeX 命令残留改成纯文本或 Unicode 符号，改后数字仍须与原文一致且可绑定；'
+            + '不要整表重写，不要动其他已通过的单元格'
+        );
+    }
     if (/中文字数必须/.test(message)) {
-        fixes.push('只扩写或压缩现有小节正文，使中文字符数进入报错给出的区间，不改变事实、数字和章节顺序');
+        fixes.push(
+            '只扩写或压缩现有小节正文，使中文字符数进入报错给出的区间，不改变事实、数字和章节顺序；'
+            + '字数不足时把每节扩写到 4–5 段、每段 150–220 字，补充机制分工、对照条件与失败细节，'
+            + '不要只加空话'
+        );
     }
     return `上一次输出被代码拒绝：${message}。`
         + (fixes.length > 0 ? `必须执行以下修复：${fixes.join('；')}。` : '')
@@ -2599,13 +2977,34 @@ function buildApiReaderValidationFeedback(error) {
 
 async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceEvidence, options = {}) {
     const externalReviewFeedback = String(options.reviewFeedback || '').trim();
-    let validationFeedback = externalReviewFeedback
+    const reviewFeedbackPrefix = externalReviewFeedback
         ? '上一轮只读发布审查发现以下事实或图文绑定问题；必须逐项纠正，'
             + `不能原样复述错误：${externalReviewFeedback}`
-        : '这是第一次生成，没有上一次校验错误。';
+        : '';
+    // 振荡型失败下模型会在“修好 A 又弄坏 B”之间横跳：只给最近一次错误，
+    // 它永远看不到约束全集。本轮内累积历次错误并每次全量呈现，同时让外部
+    // review 反馈在每一轮都保留（之前第二轮起就被覆盖丢弃了）。
+    const attemptErrorHistory = [];
+    const buildAttemptFeedback = () => {
+        const parts = [];
+        if (reviewFeedbackPrefix) parts.push(reviewFeedbackPrefix);
+        if (attemptErrorHistory.length === 0) {
+            parts.push('这是第一次生成，没有上一次校验错误。');
+        } else {
+            parts.push(
+                '以下是本轮之前所有尝试被代码拒绝的错误（必须同时全部纠正，'
+                + '不要只修最后一条而把前面已通过的又改坏）：\n'
+                + attemptErrorHistory.join('\n')
+            );
+        }
+        return parts.join('\n');
+    };
+    let validationFeedback = buildAttemptFeedback();
     let previousDraft = '无';
     let lastError = null;
-    const maxAttempts = 5;
+    // 读者文章需同时满足约十项硬门禁，单次 5 轮对振荡型失败不够；8 轮不改变
+    // 指纹与终态判定，只给同一轮内更多收敛机会。
+    const maxAttempts = 8;
     const availableFigureOrdinals = [...String(sourceEvidence || '')
         .matchAll(/^FIGURE_(\d+):/gm)]
         .map(match => Number.parseInt(match[1], 10))
@@ -2704,7 +3103,11 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 ]
             }],
             API_READER_MAX_TOKENS,
-            { temperature: 0.6, overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS }
+            {
+                temperature: attempt === 1
+                    ? API_READER_INITIAL_TEMPERATURE : API_READER_REPAIR_TEMPERATURE,
+                overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS
+            }
         );
         try {
             return {
@@ -2727,7 +3130,14 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         } catch (error) {
             lastError = error;
             previousDraft = raw;
-            validationFeedback = buildApiReaderValidationFeedback(error);
+            const feedback = buildApiReaderValidationFeedback(error);
+            if (!attemptErrorHistory.includes(feedback)) {
+                attemptErrorHistory.push(feedback);
+            }
+            while (attemptErrorHistory.join('\n').length > 3000) {
+                attemptErrorHistory.shift();
+            }
+            validationFeedback = buildAttemptFeedback();
             console.log(`    [deep] ⚠️  读者文章校验失败 (${attempt}/${maxAttempts}): ${error.message}`);
         }
     }
@@ -2811,9 +3221,23 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     const planSha256 = stableFingerprint(readerResult.plan);
     const figuresSha256 = stableFingerprint(readerResult.figures);
     const readerAuthors = resolveApiReaderAuthors(paper, sourceDetails);
-    const readerResources = options.readerResources || await buildApiReaderResourceIdentity(
-        analysis, sourceText, manifest.stages.demoLinkScan
-    );
+    const existingReaderResources = paper.apiReaderResources;
+    const existingReaderResourceBody = existingReaderResources && {
+        contract: existingReaderResources.contract,
+        sourceTextSha256: existingReaderResources.sourceTextSha256,
+        resources: existingReaderResources.resources
+    };
+    const reusableExistingReaderResources = existingReaderResources
+        && existingReaderResources.contract === API_READER_RESOURCE_IDENTITY_CONTRACT
+        && existingReaderResources.sourceTextSha256 === sourceSha256
+        && Array.isArray(existingReaderResources.resources)
+        && existingReaderResources.identitySha256 === stableFingerprint(existingReaderResourceBody)
+        ? existingReaderResources : null;
+    const readerResources = options.readerResources
+        || reusableExistingReaderResources
+        || await buildApiReaderResourceIdentity(
+            analysis, sourceText, manifest.stages.demoLinkScan
+        );
     manifest.stages.openSourceScan.resourceEvidenceContract = API_READER_RESOURCE_IDENTITY_CONTRACT;
     manifest.stages.openSourceScan.resourceEvidenceSha256 = readerResources.identitySha256;
     paper.apiReaderArticle = readerResult.article;
@@ -2840,7 +3264,8 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         attempts: readerResult.attempts,
         model: DEEP_CONFIG.model,
         protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
-        temperature: 0.6,
+        temperature: API_READER_INITIAL_TEMPERATURE,
+        repairTemperature: API_READER_REPAIR_TEMPERATURE,
         maxTokens: API_READER_MAX_TOKENS,
         maxResponseBytes: API_MAX_RESPONSE_BYTES,
         overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
@@ -2970,6 +3395,17 @@ async function refreshApiScoringAndReaderFromSource(paper, sourceDetails) {
         finalScore = secondAuditScore;
         scoreDelta = Number((finalScore - previousScore).toFixed(1));
         totalAttempts += secondResult.attempts;
+    }
+    auditedAnalysis = applyApiReaderResourceAvailability(auditedAnalysis, readerResources);
+    auditedParsed = parseAnalysis(auditedAnalysis);
+    const sealedInvalidReason = getInvalidAnalysisReason(auditedAnalysis, auditedParsed, {
+        enforceExperimentTableContract: true,
+        experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+        enforceMethodDetailContract: true,
+        sourceText
+    });
+    if (sealedInvalidReason) {
+        throw new Error(`资源状态封口后的分析未通过最终契约: ${sealedInvalidReason}`);
     }
     manifest.stages.scoringAudit = {
         status: 'complete',
@@ -3311,7 +3747,7 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
         primaryAnalysis: stableFingerprint(primaryContext),
         demoLinkScan: stableFingerprint({ implementation: 'demo-link-scan-v2-resource-identity' }),
         apiReaderArticle: stableFingerprint({
-            ...modelFingerprint(DEEP_CONFIG, 0.6, API_READER_MAX_TOKENS),
+            ...modelFingerprint(DEEP_CONFIG, API_READER_INITIAL_TEMPERATURE, API_READER_MAX_TOKENS),
             contract: API_READER_ARTICLE_CONTRACT,
             planVersion: API_READER_PLAN_VERSION,
             parserVersion: API_READER_PARSER_VERSION,
@@ -3636,15 +4072,82 @@ function getPreProvidedImageUrls(paper) {
 const DEEP_CONFIG = {
     endpoint: process.env.PAPER_ANALYZER_ENDPOINT || '',
     key: process.env.PAPER_ANALYZER_API_KEY || '',
+    apiKeys: resolveApiKeyPool(
+        process.env.PAPER_ANALYZER_API_KEY || '',
+        process.env.PAPER_ANALYZER_FALLBACK_API_KEYS || ''
+    ),
     model: process.env.PAPER_ANALYZER_MODEL || '',
     headers: {}
 };
 
+function resolveSecondaryApiKeys(options = {}) {
+    const primaryEndpoint = String(options.primaryEndpoint || '');
+    const secondaryEndpoint = String(options.secondaryEndpoint || primaryEndpoint);
+    const primaryKey = String(options.primaryKey || '').trim();
+    const secondaryKey = String(options.secondaryKey || '').trim();
+    const secondaryModel = String(options.secondaryModel || '').trim();
+    const primaryApiKeys = Array.isArray(options.primaryApiKeys)
+        ? options.primaryApiKeys.map(value => String(value || '').trim()).filter(Boolean)
+        : [primaryKey].filter(Boolean);
+    const secondaryFallbackApiKeys = options.secondaryFallbackApiKeys || '';
+    if (!secondaryModel) return [secondaryKey || primaryKey].filter(Boolean);
+
+    const primaryService = normalizeOpenCodeGoService(primaryEndpoint);
+    const secondaryService = normalizeOpenCodeGoService(secondaryEndpoint);
+    const sameOpenCodeGoService = Boolean(
+        primaryService && secondaryService && primaryService === secondaryService
+    );
+    const canonicalRoute = endpoint => {
+        const goService = normalizeOpenCodeGoService(endpoint);
+        if (goService) return goService;
+        try {
+            const parsed = new URL(String(endpoint || ''));
+            const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+            return `${parsed.protocol}//${parsed.host}${pathname}`;
+        } catch (_) {
+            return String(endpoint || '').trim().replace(/\/+$/, '');
+        }
+    };
+
+    if (!secondaryKey && canonicalRoute(primaryEndpoint) !== canonicalRoute(secondaryEndpoint)) {
+        throw new LlmAccountPoolConfigError(
+            '副模型 endpoint 与主模型不属于同一 canonical 服务时，必须显式配置 PAPER_ANALYZER_SECONDARY_API_KEY'
+        );
+    }
+
+    if (secondaryFallbackApiKeys) {
+        if (!secondaryKey && !sameOpenCodeGoService) {
+            throw new LlmAccountPoolConfigError(
+                '副模型显式配置 fallback API keys 时，非同一 OpenCode Go 服务必须同时显式配置 PAPER_ANALYZER_SECONDARY_API_KEY'
+            );
+        }
+        return resolveApiKeyPool(secondaryKey || primaryKey, secondaryFallbackApiKeys);
+    }
+    if (secondaryKey) return [secondaryKey];
+
+    // A secondary model may inherit the primary account pool only when both
+    // routes are the same canonical OpenCode Go service. Cross-service routes
+    // were rejected above unless they supplied an explicit secondary key.
+    if (sameOpenCodeGoService) {
+        return primaryApiKeys;
+    }
+    return [primaryKey].filter(Boolean);
+}
+
 // 副模型配置（多模态图像分析，双模型模式）
-// 未设置时 endpoint/key 分别回退到主模型对应的值
+// endpoint 未设置时回退主端点；key 只在同一 canonical 服务内复用
 const SECONDARY_CONFIG = {
     endpoint: SECONDARY_MODEL_CONFIG.endpoint || DEEP_CONFIG.endpoint,
     key: SECONDARY_MODEL_CONFIG.key || DEEP_CONFIG.key,
+    apiKeys: resolveSecondaryApiKeys({
+        primaryEndpoint: DEEP_CONFIG.endpoint,
+        secondaryEndpoint: SECONDARY_MODEL_CONFIG.endpoint || DEEP_CONFIG.endpoint,
+        primaryKey: DEEP_CONFIG.key,
+        secondaryKey: SECONDARY_MODEL_CONFIG.key,
+        primaryApiKeys: DEEP_CONFIG.apiKeys,
+        secondaryModel: SECONDARY_MODEL_CONFIG.model,
+        secondaryFallbackApiKeys: process.env.PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS || ''
+    }),
     model: SECONDARY_MODEL_CONFIG.model || ''
 };
 
@@ -3688,7 +4191,12 @@ function resolveApiMaxRetries(maxRetries) {
 
 function sanitizeModelRequestError(value, config = DEEP_CONFIG) {
     let text = String(value || 'unknown model request error');
-    for (const secret of [config?.key, DEEP_CONFIG.key, SECONDARY_CONFIG.key]) {
+    const secrets = [
+        config?.key, ...(config?.apiKeys || []),
+        DEEP_CONFIG.key, ...(DEEP_CONFIG.apiKeys || []),
+        SECONDARY_CONFIG.key, ...(SECONDARY_CONFIG.apiKeys || [])
+    ];
+    for (const secret of secrets) {
         if (secret && text.includes(secret)) text = text.split(secret).join('[REDACTED]');
     }
     text = text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1[REDACTED]@');
@@ -3709,6 +4217,26 @@ function classifyModelRequestError(sourceError, config = DEEP_CONFIG) {
     if (sourceError?.modelRequestClassified) return sourceError;
     const code = String(sourceError?.code || '');
     const message = sanitizeModelRequestError(sourceError?.message || sourceError, config);
+    if (code === 'LLM_ACCOUNT_POOL_LOCK_TIMEOUT') {
+        sourceError.retryable = true;
+        sourceError.category = 'state_contention';
+        sourceError.modelRequestClassified = true;
+        sourceError.message = message;
+        return sourceError;
+    }
+    if ([
+        'LLM_ACCOUNT_POOL_EXHAUSTED',
+        'LLM_ACCOUNT_POOL_CONFIG_ERROR',
+        'LLM_ACCOUNT_POOL_STATE_ERROR'
+    ].includes(code)) {
+        sourceError.retryable = false;
+        sourceError.category = code === 'LLM_ACCOUNT_POOL_EXHAUSTED'
+            ? 'quota_exhausted'
+            : (code === 'LLM_ACCOUNT_POOL_STATE_ERROR' ? 'state' : 'config');
+        sourceError.modelRequestClassified = true;
+        sourceError.message = message;
+        return sourceError;
+    }
     if (code === 'RESPONSE_TOO_LARGE') {
         const maxResponseBytes = Number.isInteger(config?.maxResponseBytes)
             ? config.maxResponseBytes
@@ -3972,7 +4500,12 @@ async function _callModelOnce(messages, maxTokens, config, budget, apiType, time
             config.model,
             bodyObj,
             headers,
-            { timeoutMs, maxResponseBytes }
+            {
+                timeoutMs,
+                maxResponseBytes,
+                apiKeys: Array.isArray(config.apiKeys) ? config.apiKeys : [config.key].filter(Boolean),
+                accountPoolStateFile: require('./config.js').FILES.llmAccountPoolState
+            }
         );
         const duration = (budget.elapsedMs() / 1000).toFixed(1);
         if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -5137,28 +5670,44 @@ async function verifyApiReaderResourceUrl(rawUrl, options = {}) {
 }
 
 async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = {}, options = {}) {
-    const candidates = extractApiReaderResourceCandidates(analysis);
-    if (candidates.length > 12) {
-        throw new Error(`开源资源候选 ${candidates.length} 超过单篇上限 12`);
-    }
+    const extractedCandidates = extractApiReaderResourceCandidates(analysis);
     const deadlineAt = Number.isFinite(options.deadlineAt)
         ? options.deadlineAt : Date.now() + 60000;
     const demoLinks = new Set(Array.isArray(demoStage?.discoveredLinks)
         ? demoStage.discoveredLinks : []);
-    const resources = [];
-    for (const candidate of candidates) {
+    const boundCandidates = extractedCandidates.map(candidate => {
         const sourceLine = exactResourceSourceQuote(sourceText, candidate.url);
         const origin = sourceLine ? 'paper_source' : demoLinks.has(candidate.url)
             ? 'validated_demo' : null;
+        return { ...candidate, sourceLine, origin };
+    }).filter(candidate => candidate.origin);
+    const candidates = boundCandidates.slice(0, 12);
+    if (boundCandidates.length > candidates.length) {
+        console.log(
+            `    [deep] 开源资源候选已按来源顺序稳定截断: ${boundCandidates.length} → 12`
+        );
+    }
+    const resources = [];
+    for (const candidate of candidates) {
+        const { sourceLine, origin } = candidate;
         // LLM prose may expand a named dataset/project into a plausible URL
         // that the paper never states.  Omit it from the sealed identity;
         // applyApiReaderResourceAvailability() deterministically removes the
         // unbound URL from canonical prose before scoring and publication.
-        if (!origin) continue;
-        const verified = await verifyApiReaderResourceUrl(candidate.url, {
-            ...options,
-            deadlineAt
-        });
+        let verified;
+        try {
+            verified = await verifyApiReaderResourceUrl(candidate.url, {
+                ...options,
+                deadlineAt
+            });
+        } catch (error) {
+            if (/非公网|localhost|不支持的公网 URL 协议|用户名或密码|必须使用 HTTPS/i
+                .test(String(error?.message || ''))) {
+                console.warn(`    [deep] 跳过不安全的开源资源 URL: ${candidate.url}`);
+                continue;
+            }
+            throw error;
+        }
         resources.push({
             type: candidate.type,
             origin,
@@ -7550,6 +8099,13 @@ async function analyzePaperDeep(paper) {
                 totalScoringAttempts += secondResult.attempts;
                 stabilityResolution = resolution;
             }
+            analysis = applyApiReaderResourceAvailability(
+                analysis, paper.apiReaderResources
+            );
+            auditedParsed = validateScoringOutput(analysis);
+            scoringDelta = calculateScoringDelta(
+                previousScore, scoringInputAnalysis, auditedParsed?.score
+            );
             const finalScore = scoringDelta.finalScore;
             const scoreBeforeAudit = scoringDelta.previousScore;
             const scoreDelta = scoringDelta.scoreDelta;
@@ -7712,7 +8268,8 @@ async function analyzePaperDeep(paper) {
                 attempts: readerResult.attempts,
                 model: DEEP_CONFIG.model,
                 protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
-                temperature: 0.6,
+                temperature: API_READER_INITIAL_TEMPERATURE,
+                repairTemperature: API_READER_REPAIR_TEMPERATURE,
                 maxTokens: API_READER_MAX_TOKENS,
                 maxResponseBytes: API_MAX_RESPONSE_BYTES,
                 overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
@@ -8977,6 +9534,8 @@ module.exports = {
     auditTypeAwareScoringDetailed,
     parseApiReaderArticleResult,
     validateApiReaderTableNarratives,
+    ensureApiReaderTableNarratives,
+    normalizeApiReaderTablePasteArtifacts,
     normalizeApiReaderTableBlockSpacing,
     rebindApiReaderFigurePlacementQuotes,
     removeDuplicateReaderLongSentences,
@@ -8997,6 +9556,8 @@ module.exports = {
     scoringStabilityResolutionIsValid,
     buildApiReaderQualityMetrics,
     bindApiReaderSourceEvidence,
+    deriveExactTableSourceQuotes,
+    sanitizeUnsupportedSourceQuoteTableNumerics,
     bindApiReaderAuthorIdentity,
     extractApiReaderResourceCandidates,
     verifyApiReaderResourceUrl,
@@ -9037,6 +9598,7 @@ module.exports = {
     sanitizeModelMessages,
     summarizeModelInput,
     callModelWithConfig,
+    resolveSecondaryApiKeys,
     classifyModelRequestError,
     getModelOutputTerminationError,
     sanitizeModelRequestError,

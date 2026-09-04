@@ -12,6 +12,7 @@
 | review receipt | 当前 review protocol | 精确页面 SHA 未变时可复用逐页 pass | 必须重绑 generation、Git baseline 和 Hugo gate |
 | visual summary | v3 TOP 10 | v1/v2 由显式迁移命令处理 | 必须绑定 publication commit/OID 与当前 token |
 | Manual canonical | production v6 | v5/shadow/sealed preview 只作历史维护 | 默认 API 不读取为自动分析证明 |
+| OpenCode Go account pool | `opencode-go-sticky-quota-failover-v1` | 未知版本拒绝覆盖 | 仅明确 `GoUsageLimitError` 改变 active/cooldown；不保存原始 key |
 
 ## 迁移原则
 

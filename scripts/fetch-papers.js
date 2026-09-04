@@ -40,6 +40,7 @@ const {
 } = require('./utils.js');
 const Config = require('./config.js');
 const { createHostTaskScheduler } = require('./lib/fetch-scheduler.js');
+const { resolveApiKeyPool } = require('./llm-account-pool.js');
 
 loadEnvFile();
 
@@ -89,6 +90,10 @@ const { ARXIV_CATEGORIES: CATEGORIES, ARXIV_CONFIG, FILTER_CONFIG: FILTER_CFG } 
 const FILTER_CONFIG = {
     endpoint: process.env.PAPER_ANALYZER_ENDPOINT || '',
     key: process.env.PAPER_ANALYZER_API_KEY || '',
+    apiKeys: resolveApiKeyPool(
+        process.env.PAPER_ANALYZER_API_KEY || '',
+        process.env.PAPER_ANALYZER_FALLBACK_API_KEYS || ''
+    ),
     model: process.env.PAPER_ANALYZER_MODEL || '',
     headers: {}
 };
@@ -289,6 +294,36 @@ function classifyFilterRequestError(sourceError, context = {}) {
         cause: sourceError
     };
 
+    if (originalCode === 'LLM_ACCOUNT_POOL_LOCK_TIMEOUT') {
+        return makeFilterRequestError(message, {
+            ...common,
+            code: originalCode,
+            category: 'state_contention',
+            retryable: true,
+            systemFailure: true,
+            stopBatch: false,
+            systemFingerprint: 'llm_account_pool_lock_timeout'
+        });
+    }
+
+    if ([
+        'LLM_ACCOUNT_POOL_EXHAUSTED',
+        'LLM_ACCOUNT_POOL_CONFIG_ERROR',
+        'LLM_ACCOUNT_POOL_STATE_ERROR'
+    ].includes(originalCode)) {
+        return makeFilterRequestError(message, {
+            ...common,
+            code: originalCode,
+            category: originalCode === 'LLM_ACCOUNT_POOL_EXHAUSTED'
+                ? 'quota_exhausted'
+                : (originalCode === 'LLM_ACCOUNT_POOL_STATE_ERROR' ? 'state' : 'config'),
+            retryable: false,
+            systemFailure: true,
+            stopBatch: true,
+            systemFingerprint: originalCode.toLowerCase()
+        });
+    }
+
     if ([401, 403].includes(status)) {
         return makeFilterRequestError(message, {
             ...common,
@@ -437,6 +472,8 @@ function createFilterCircuitBreaker(options = {}) {
  */
 async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTER_CFG.maxRetries, options = {}) {
     const runtimeConfig = options.filterConfig || FILTER_CONFIG;
+    const runtimeApiKeys = Array.isArray(runtimeConfig.apiKeys) && runtimeConfig.apiKeys.length > 0
+        ? runtimeConfig.apiKeys : [runtimeConfig.key].filter(Boolean);
     const requestFn = options.requestFn || requestLlmJson;
     const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     const missing = [];
@@ -473,14 +510,14 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
             stopBatch: true,
             systemFingerprint: 'endpoint:invalid',
             cause: error,
-            secrets: [runtimeConfig.key]
+            secrets: runtimeApiKeys
         });
     }
     console.log(`[filter] API 类型: ${apiType} | 端点: ${url.hostname}${url.pathname}`);
 
     const proxyUrl = detectProxyUrl();
     if (proxyUrl) {
-        const route = runtimeConfig.model.toLowerCase() === 'muse-spark-1.2-contributor'
+        const route = runtimeConfig.model.toLowerCase().startsWith('muse-spark-')
             ? 'Muse Spark Contributor 将强制经此代理请求'
             : '当前 LLM 将绕过代理直连';
         console.log(`[filter] 检测到代理: ${redactProxyUrl(proxyUrl)}，${route}`);
@@ -510,9 +547,11 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
                 bodyObj,
                 requestHeaders,
                 {
-                    timeoutMs: runtimeConfig.model.toLowerCase() === 'muse-spark-1.2-contributor'
+                    timeoutMs: runtimeConfig.model.toLowerCase().startsWith('muse-spark-')
                         ? Math.max(FILTER_CFG.timeoutMs, 120000)
-                        : FILTER_CFG.timeoutMs
+                        : FILTER_CFG.timeoutMs,
+                    apiKeys: runtimeApiKeys,
+                    accountPoolStateFile: Config.FILES.llmAccountPoolState
                 }
             );
             if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -527,7 +566,7 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
                             maxMs: options.retryAfterMaxMs,
                             nowMs: options.nowMs
                         }),
-                        secrets: [runtimeConfig.key]
+                        secrets: runtimeApiKeys
                     }
                 );
             }
@@ -537,7 +576,7 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
             if (content !== null) return content;
             throw new Error(`Invalid response (HTTP ${response.statusCode}): ${response.raw.substring(0, 200)}`);
         } catch (err) {
-            const classified = classifyFilterRequestError(err, { secrets: [runtimeConfig.key] });
+            const classified = classifyFilterRequestError(err, { secrets: runtimeApiKeys });
             lastError = classified;
             console.log(`[filter] ⚠️  LLM 调用失败 (尝试 ${attempt}/${maxRetries}, ${classified.code}): ${classified.message}`);
             if (!classified.retryable) throw classified;
@@ -1714,8 +1753,9 @@ async function isSpeechAudioRelated(paper) {
 }
 
 function getEffectiveFilterBatchSize(configuredBatchSize, model = FILTER_CONFIG.model) {
-    const normalized = String(model || '').trim().toLowerCase();
-    return normalized === 'muse-spark-1.2-contributor' ? 1 : configuredBatchSize;
+    // 2026-09-03: 用户要求 Muse 亦支持并发 5，原先强制串行 1 已放宽；保留 probe 首批 1 的
+    // 健康检查，其余批次直接使用配置并发度（默认 5，可经 PD_FILTER_BATCH_SIZE 覆写）
+    return configuredBatchSize;
 }
 
 /**
@@ -1835,9 +1875,6 @@ async function filterPapersWithLLM(papers, options = {}) {
         batches.push(papersNeedingDecision.slice(i, i + effectiveBatchSize));
     }
 
-    if (effectiveBatchSize !== batchSize) {
-        console.log(`[filter] Muse + HTTP CONNECT 代理模式强制串行：配置并发 ${batchSize} → 1`);
-    }
     console.log(`[filter] 分成 ${batches.length} 批处理，每批 ${effectiveBatchSize} 篇`);
 
     if (batches.length === 0 && typeof onBatchComplete === 'function') {
@@ -1958,6 +1995,8 @@ async function filterPapersWithLLM(papers, options = {}) {
                     code: rejected.reason?.code || 'FILTER_BATCH_ABORTED',
                     status: rejected.reason?.status,
                     category: rejected.reason?.category,
+                    retryable: rejected.reason?.retryable,
+                    systemFailure: rejected.reason?.systemFailure,
                     stopBatch: true,
                     cause: rejected.reason
                 }

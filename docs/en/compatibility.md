@@ -12,6 +12,7 @@
 | Review receipt | current review protocol | unchanged page hashes may reuse per-page passes | rebinds generation, Git baseline, protocol, and Hugo gate |
 | Visual summary | v3 TOP 10 | v1/v2 require explicit migration | binds publication commit/OID and the current visual token |
 | Manual canonical | production v6 | v5, shadow, and sealed preview are historical maintenance | default API cannot use Manual lineage as automatic-analysis proof |
+| OpenCode Go account pool | `opencode-go-sticky-quota-failover-v1` | unknown versions fail closed | only explicit `GoUsageLimitError` changes active/cooldown; raw keys are never persisted |
 
 ## Migration rules
 

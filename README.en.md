@@ -46,12 +46,14 @@ At minimum, set these values in the project-root `.env`:
 
 ```dotenv
 PAPER_ANALYZER_API_KEY=...
+# Optional same-route OpenCode Go fallback; used only after confirmed quota exhaustion
+PAPER_ANALYZER_FALLBACK_API_KEYS=...
 PAPER_ANALYZER_MODEL=...
 PAPER_ANALYZER_ENDPOINT=https://...
 HTTPS_PROXY=http://127.0.0.1:7897   # HTTP_PROXY is also supported; see Setup
 ```
 
-See [Setup](docs/en/setup.md) for model, protocol, and proxy requirements. Project commands must run outside the sandbox; entrypoints reject a restricted sandbox before network, logging, or writes.
+Fallback accounts use persistent sticky failover across processes and dates; they are not round-robin load balancing. See [Setup](docs/en/setup.md) for model, protocol, and proxy requirements. Project commands must run outside the sandbox; entrypoints reject a restricted sandbox before network, logging, or writes.
 
 ```bash
 # 3. Run Node tests

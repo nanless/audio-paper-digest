@@ -11,6 +11,10 @@ const path = require('path');
 const crypto = require('crypto');
 const { fetchCategoryPapers, filterPapersWithLLM, buildFilterInputSha256 } = require('./fetch-papers.js');
 const { KEYWORD_PREFILTER_VERSION } = require('./lib/keyword-prefilter.js');
+const {
+    createHostTaskScheduler,
+    getAdaptiveHostCooldownMs
+} = require('./lib/fetch-scheduler.js');
 const { fetchHuggingFacePapers, mergeAndDeduplicate } = require('./fetch-huggingface-papers.js');
 const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, normalizeToBeijingISOString, readJsonSafe, getRecordDate, normalizedId, loadPublishedIdsFromBlog, loadPrompt, detectApiType } = require('./utils.js');
 const {
@@ -39,6 +43,34 @@ const Config = require('./config.js');
 
 function getEffectiveAnalysisConcurrency(configuredConcurrency, endpoint, model) {
     return configuredConcurrency;
+}
+
+function createProductionArxivRequestScheduler(options = {}) {
+    return createHostTaskScheduler({
+        sleepFn: options.sleepFn,
+        nowFn: options.nowFn,
+        cooldownAfter: outcome => getAdaptiveHostCooldownMs(outcome, {
+            healthyDelayMs: Config.ARXIV_CONFIG.hostHealthyCooldownMs,
+            transientDelayMs: Config.ARXIV_CONFIG.hostTransientCooldownMs,
+            rateLimitedDelayMs: Config.ARXIV_CONFIG.hostRateLimitedCooldownMs,
+            jitterMaxMs: Config.ARXIV_CONFIG.hostCooldownJitterMs,
+            randomFn: options.randomFn
+        })
+    });
+}
+
+function buildSharedAbstractCache(checkpoint) {
+    const cache = new Map();
+    for (const entry of Object.values(checkpoint?.arxiv || {})) {
+        if (entry?.status !== 'complete' || entry?.health?.ok !== true
+                || !hasValidFetchSourceIntegrity(entry)) continue;
+        for (const paper of entry?.papers || []) {
+            const id = normalizedId(paper);
+            const abstract = String(paper?.abstract || paper?.summary || '').trim();
+            if (id && abstract && !cache.has(id)) cache.set(id, abstract);
+        }
+    }
+    return cache;
 }
 
 // 每个 Muse 请求都会创建独立、禁用连接复用的 HTTP CONNECT agent；
@@ -1303,6 +1335,12 @@ async function runFullFetch() {
         }
         console.log(`  请求顺序: ${shuffledCategories.map(c => c.id).join(' → ')}\n`);
 
+        // One scheduler and one normalized-ID abstract cache span the complete
+        // arXiv batch.  Categories are fetched sequentially, but their internal
+        // recent/search/abs/API requests now share host cooldown state, while a
+        // paper repeated in another category reuses the first fetched abstract.
+        const arxivRequestScheduler = createProductionArxivRequestScheduler();
+        const abstractCache = buildSharedAbstractCache(fetchCheckpoint);
         let fetchAttemptIndex = 0;
         for (let i = 0; i < shuffledCategories.length; i++) {
             const category = shuffledCategories[i];
@@ -1343,7 +1381,12 @@ async function runFullFetch() {
                     Config.ARXIV_CONFIG.maxResultsPerCategory,
                     Config.ARXIV_CONFIG.fetchMaxRetries,
                     // 同批次跨类别重复项必须返回到本层合并 categories；这里只排除历史基线。
-                    historicalExistingIds
+                    historicalExistingIds,
+                    {
+                        requestScheduler: arxivRequestScheduler,
+                        schedulerHandlesPacing: true,
+                        abstractCache
+                    }
                 );
                 pinPapersToBatch(papers, batchStartedAt);
                 categoryFetchHealth = papers._sourceHealth || null;
@@ -1868,6 +1911,8 @@ module.exports = {
     fullFetch,
     runFullFetch,
     getEffectiveAnalysisConcurrency,
+    createProductionArxivRequestScheduler,
+    buildSharedAbstractCache,
     getArxivInterCategoryDelayMs,
     autoArchiveCurrentData,
     inferLegacyAnalysisArrayBatchDate,

@@ -9,8 +9,15 @@ Use this page to determine which file is authoritative, when recovery is safe, a
 1. Persistent databases, such as `papers.json`.
 2. Date-scoped batch state: raw, decisions, filtered, deep.
 3. Transaction receipts: generation, review/publication, and visual manifests.
+4. Cross-batch transport state: `data/runtime/llm-account-pool.json` persists OpenCode Go sticky routing and quota cooldown outside current/archive rotation.
 
 A `complete` value is valid only when its cross-file contract closes.
+
+## OpenCode Go account-pool state
+
+`data/runtime/llm-account-pool.json` uses `opencode-go-sticky-quota-failover-v1`. It stores only hashed service/account identities, the active account, a normalized quota-window class, `blockedUntil`, and a generation counter—never API keys, authorization headers, request bodies, or provider response bodies. Stable credential fingerprints still make this `0600` sensitive operational metadata that must not be uploaded or archived. Credential identity does not enter filtering, paper-analysis, or publication-content fingerprints.
+
+Node and Python use the same short directory-lock protocol and durable atomic replacement. Network I/O is always outside the lock. Unknown schemas, corrupt JSON, and symlink state paths fail closed. Cooldown expiry only makes an account eligible again; it never automatically takes traffic away from the current successful account.
 
 ## Current Core Files
 

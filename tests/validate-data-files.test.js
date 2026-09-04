@@ -1256,6 +1256,107 @@ describe('validate-data-files', () => {
         assert.match(allIssues, /raw-candidates\.json 缺失/);
     });
 
+    it('校验 incomplete 筛选中的 retryableDecisions 结构、计数和 raw 输入绑定', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-retryable-decisions-'));
+        const decisionsFile = path.join(dir, 'filter-decisions.json');
+        const rawCandidatesFile = path.join(dir, 'raw-candidates.json');
+        const paper = {
+            arxivId: '2607.00999',
+            title: 'Retryable speech paper',
+            abstract: 'speech recognition benchmark',
+            categories: ['cs.SD']
+        };
+        const rawPapersSha256 = papersSha256([paper]);
+        const common = {
+            timestamp: TIMESTAMP,
+            batchDate: '2026-07-13',
+            batchId: BATCH_ID,
+            candidateFingerprint: CANDIDATE_FP,
+            sourceConfigFingerprint: SOURCE_FP,
+            blogDedupFingerprint: BLOG_FP,
+            filterConfigFingerprint: FILTER_FP,
+            rawPapersSha256,
+            fetchSourcesSha256: 'f'.repeat(64)
+        };
+        const retryable = {
+            id: paper.arxivId,
+            paper_id: paper.arxivId,
+            title: paper.title,
+            related: null,
+            reason: 'temporary provider failure',
+            rawResponse: '',
+            parseSource: 'api_error_retryable',
+            error: 'timeout',
+            errorCode: 'ETIMEDOUT',
+            errorStatus: null,
+            errorCategory: 'network',
+            fallback: true,
+            retryable: true,
+            decidedAt: TIMESTAMP,
+            inputSha256: filterInputSha256(paper),
+            filterModel: 'model-a',
+            filterPromptHash: 'hash-a'
+        };
+        const envelope = {
+            ...common,
+            filterModel: 'model-a',
+            filterPromptHash: 'hash-a',
+            stats: { totalCandidates: 1, decided: 0, related: 0, retryable: 1, complete: false },
+            decisions: {},
+            retryableDecisions: { [paper.arxivId]: retryable }
+        };
+        fs.writeFileSync(decisionsFile, JSON.stringify(envelope));
+        assert.deepStrictEqual(validateFilterDecisionsFile(decisionsFile), []);
+
+        fs.writeFileSync(decisionsFile, JSON.stringify({
+            ...envelope,
+            stats: { ...envelope.stats, retryable: 2 },
+            retryableDecisions: {
+                [paper.arxivId]: {
+                    ...retryable,
+                    related: true,
+                    retryable: false,
+                    errorStatus: 99,
+                    inputSha256: 'bad'
+                }
+            }
+        }));
+        const malformed = validateFilterDecisionsFile(decisionsFile).join('\n');
+        assert.match(malformed, /related 必须为 null/);
+        assert.match(malformed, /retryable=true 和 fallback=true/);
+        assert.match(malformed, /errorStatus 必须是 HTTP 状态码或 null/);
+        assert.match(malformed, /inputSha256 必须是 SHA-256/);
+        assert.match(malformed, /stats\.retryable/);
+
+        fs.writeFileSync(rawCandidatesFile, JSON.stringify({
+            ...common,
+            stats: {
+                beforeBlogSkip: 1,
+                afterBlogSkip: 1,
+                skippedFromBlog: 0,
+                arxivOnly: 1,
+                hfOnly: 0,
+                both: 0
+            },
+            papers: [paper]
+        }));
+        fs.writeFileSync(decisionsFile, JSON.stringify({
+            ...envelope,
+            retryableDecisions: {
+                [paper.arxivId]: { ...retryable, inputSha256: '0'.repeat(64) }
+            }
+        }));
+        const stale = validateCurrentDataFiles({
+            papers: path.join(dir, 'missing-papers.json'),
+            rawCandidates: rawCandidatesFile,
+            filterDecisions: decisionsFile,
+            filteredPapers: path.join(dir, 'missing-filtered.json'),
+            deepAnalysisResult: path.join(dir, 'missing-analysis.json'),
+            fetchCheckpoint: path.join(dir, 'missing-fetch-checkpoint.json')
+        }).join('\n');
+        assert.match(stale, /retryableDecisions\.2607\.00999\.inputSha256 与当前筛选输入不一致/);
+    });
+
     it('报告 raw-candidates 与 filter-decisions 覆盖不一致', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-'));
         const rawCandidatesFile = path.join(dir, 'raw-candidates.json');

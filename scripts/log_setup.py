@@ -29,10 +29,10 @@ def redact_log_text(value):
         flags=re.IGNORECASE,
     )
     credential_name = (
-        r'(?:authorization|proxy-authorization|x-api-key|api[-_ ]?key|key|'
+        r'(?:authorization|proxy-authorization|x-api-key|api[-_ ]?keys?|key|'
         r'access[-_ ]?token|refresh[-_ ]?token|token|secret|password|passwd|'
-        r'cookie|set-cookie|paper_analyzer_api_key|kimi_api_key|'
-        r'[a-z0-9-]+_(?:api_key|token|secret|password))'
+        r'cookie|set-cookie|paper_analyzer_api_keys?|kimi_api_key|'
+        r'[a-z0-9_-]+_(?:api_keys?|token|secret|password))'
     )
     text = re.sub(
         rf'((?:["\']?{credential_name}["\']?)\s*[:=]\s*)([^\r\n]+)',
@@ -255,10 +255,12 @@ def setup_script_logging(script_path=None):
     _LOG_SETUP_DONE = True
     load_project_env()
     _CONFIGURED_SECRETS = tuple(
-        str(value)
+        item.strip()
         for key, value in os.environ.items()
-        if re.search(r'(?:API_KEY|SECRET|TOKEN|PASSWORD|PASSWD|COOKIES?)$', key, re.IGNORECASE)
+        if re.search(r'(?:API_KEYS?|SECRET|TOKEN|PASSWORD|PASSWD|COOKIES?)$', key, re.IGNORECASE)
         and len(str(value)) >= 6
+        for item in str(value).split(',')
+        if len(item.strip()) >= 6
     )
     disable_file_logs = (
         os.environ.get("PAPER_DIGEST_DISABLE_FILE_LOGS") == "1"

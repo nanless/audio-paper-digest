@@ -73,7 +73,7 @@ function redactLogText(value) {
 
     // Header, environment-variable and JSON-style credential fields.
     text = text.replace(
-        /((?:["']?(?:authorization|proxy-authorization|x-api-key|api[-_ ]?key|key|access[-_ ]?token|refresh[-_ ]?token|token|secret|password|passwd|cookie|set-cookie|paper_analyzer_api_key|kimi_api_key|[a-z0-9-]+_(?:api_key|token|secret|password))["']?)\s*[:=]\s*)([^\r\n]+)/gi,
+        /((?:["']?(?:authorization|proxy-authorization|x-api-key|api[-_ ]?keys?|key|access[-_ ]?token|refresh[-_ ]?token|token|secret|password|passwd|cookie|set-cookie|paper_analyzer_api_keys?|kimi_api_key|[a-z0-9_-]+_(?:api_keys?|token|secret|password))["']?)\s*[:=]\s*)([^\r\n]+)/gi,
         '$1[REDACTED]'
     );
 
@@ -216,8 +216,8 @@ function setupScriptLogging(scriptPath, options = {}) {
     // A non-default env file is accepted only through this explicit test/programmatic API.
     loadProjectEnv(options.envFile);
     configuredSecrets = Object.entries(process.env)
-        .filter(([key, value]) => /(?:API_KEY|SECRET|TOKEN|PASSWORD|PASSWD|COOKIES?)$/i.test(key) && String(value).length >= 6)
-        .map(([, value]) => String(value));
+        .filter(([key, value]) => /(?:API_KEYS?|SECRET|TOKEN|PASSWORD|PASSWD|COOKIES?)$/i.test(key) && String(value).length >= 6)
+        .flatMap(([, value]) => String(value).split(',').map(item => item.trim()).filter(item => item.length >= 6));
     setStdoutBlocking();
 
     if (isTestProcess() && !options.allowInTestProcess) return null;

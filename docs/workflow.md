@@ -54,7 +54,7 @@ arXiv 和 HuggingFace 都走项目代理。每个来源产生独立 checkpoint�
 - 命中语音、音乐、音频、声学、多模态语音及常见模型/数据集词族的论文进入 LLM。
 - 只有摘要完整且明显未命中的补充类别论文可形成确定性否定。
 
-LLM 决定逐篇写入 `filter-decisions.json`。Muse 实际 batch 为 1，但失败只影响该篇。只有决定完整覆盖 raw 且 filtered 精确对应相关决定时，筛选完成。
+LLM 决定逐篇写入 `filter-decisions.json`。Muse 使用配置的筛选 batch；当前 sticky 账号只有在明确额度耗尽时，才在同一次逻辑请求中改用下一账号，普通 429 仍按短期限流处理。只有决定完整覆盖 raw 且 filtered 精确对应相关决定时，筛选完成。
 
 ## 4. 全文与多阶段分析
 

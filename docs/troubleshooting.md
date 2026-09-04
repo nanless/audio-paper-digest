@@ -27,6 +27,8 @@ node scripts/test-api-key.js
 
 Muse 必须走 one-shot CONNECT agent。不要改成直连。若返回 `incomplete/max_output_tokens`，这是截断，不是成功；调整证据/输出预算或修复 Prompt 后重试，不能接受半截 JSON。
 
+配置备用账号后，可检查 `data/runtime/llm-account-pool.json` 的 `activeAccountId`、`limitClass` 和 `blockedUntil`；文件不含原始 key。不要为“切回主账号”删除或手改状态：长期 sticky 策略只在当前账号自己收到明确 `GoUsageLimitError` 后重新选择。状态损坏、非法 generation 或状态路径异常会在网络请求前失败关闭。普通 429 不切号，仍按原有短期限流退避。
+
 ## 3. MiMo/Kimi 403
 
 普通 MiMo/Kimi 预期 `agent:false` 直连。若 curl 直连正常而脚本 403，检查是否有调用方绕过 `requestLlmJson()` 或自行注入 agent。不要把 Muse 的强制代理策略套到其他模型。
@@ -58,7 +60,7 @@ npm run validate:data
 
 - `PD_ANALYSIS_CONCURRENCY` 默认 3；
 - Reader 重阶段默认 5；
-- Muse 筛选 batch 固定 1；
+- Muse 筛选 batch 服从 `PD_FILTER_BATCH_SIZE`；
 - 主分析、局部修复和 Reader 使用不同 token/context 预算。
 
 ```bash

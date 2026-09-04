@@ -71,7 +71,7 @@ class LogSetupTest(unittest.TestCase):
             env.pop(key, None)
 
         env.pop('PAPER_DIGEST_TEST_ENV_FILE', None)
-        with ProjectEnvPatch('PD_DISABLE_FILE_LOGS=0\nPAPER_DIGEST_DISABLE_FILE_LOGS=0\nPAPER_ANALYZER_API_KEY=tp-provider-secret') as env_path:
+        with ProjectEnvPatch('PD_DISABLE_FILE_LOGS=0\nPAPER_DIGEST_DISABLE_FILE_LOGS=0\nPAPER_ANALYZER_API_KEY=tp-provider-secret\nPAPER_ANALYZER_FALLBACK_API_KEYS=tp-fallback-one,tp-fallback-two') as env_path:
             result = subprocess.run(
                 [
                     sys.executable,
@@ -87,6 +87,7 @@ class LogSetupTest(unittest.TestCase):
                         "sys.stdout.write('provider echoed tp-provider-'); "
                         "sys.stdout.write('secret across writes\\n'); "
                         "print('provider echoed tp-provider-secret without a field'); "
+                        "print('provider echoed tp-fallback-two without a field'); "
                         "print('ok')"
                     ),
                     env_path,
@@ -109,6 +110,7 @@ class LogSetupTest(unittest.TestCase):
         self.assertRegex(result.stdout, r'\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\+08:00\]')
         self.assertNotIn('sk-secret-value', result.stdout)
         self.assertNotIn('tp-provider-secret', result.stdout)
+        self.assertNotIn('tp-fallback-two', result.stdout)
         self.assertIn('provider echoed [REDACTED] across writes', result.stdout)
         self.assertRegex(
             created[0], rf'^{re.escape(base_name)}-\d{{8}}-\d{{6}}-\d+-\d+\.log$',

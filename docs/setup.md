@@ -19,6 +19,8 @@ Node 必须满足 `>=20.18.1 <21 || >=22.3.0`。Python 必须为 3.11+ 且使用
 
 ```dotenv
 PAPER_ANALYZER_API_KEY=your-key
+# 可选；同一路由备用账号，逗号分隔
+PAPER_ANALYZER_FALLBACK_API_KEYS=your-second-key
 PAPER_ANALYZER_MODEL=muse-spark-1.2-contributor
 PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
@@ -27,6 +29,8 @@ PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
 ```
 
 默认模型是 OpenCode Go 的 Muse Spark 1.2 Contributor，协议为 OpenAI Responses。endpoint 必须为 HTTPS；只有 loopback 测试服务允许 HTTP。
+
+`PAPER_ANALYZER_FALLBACK_API_KEYS` 不是负载均衡。系统持续使用当前 active 账号，只有 OpenCode Go 返回 HTTP 429 且结构化类型明确为 `GoUsageLimitError` 才立即切到下一账号；切换结果跨 Node/Python 和日期保存在 `data/runtime/llm-account-pool.json`。原账号到期后不会自动切回。普通 429、5xx、网络/代理错误、截断或内容校验失败均不切换。副模型如有独立账号池，使用 `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS`；只有主/副端点规范化后属于同一 OpenCode Go 服务且副模型没有独立 key 时，副模型才继承主账号池。不同服务的副模型必须提供自己的 key，不能继承主账号池。凭据发送前，实际请求 URL 还必须精确匹配由 endpoint 与 model 推导出的规范 API 路由。
 
 ## 环境为什么只认项目 `.env`
 
@@ -63,11 +67,11 @@ Node 由 `scripts/env-loader.js`，Python 由 `scripts/project_env.py` 加载同
 | `PD_API_READER_CONCURRENCY` | 5（单进程 Reader generation slot） |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 5 |
 
-Muse 的筛选实际 batch 固定为 1；整篇分析仍按 `PD_ANALYSIS_CONCURRENCY` 并发。Responses 只有 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE。
+Muse 筛选使用 `PD_FILTER_BATCH_SIZE`；整篇分析按 `PD_ANALYSIS_CONCURRENCY` 并发。账号池状态更新使用短锁，网络请求不持锁。Responses 只有 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE。
 
 ## 可选副模型
 
-API Reader v3 会把安全物化的官方 Figure 直接交给主模型，主模型端点因此需要支持 Responses 图片输入。设置 `PAPER_ANALYZER_SECONDARY_MODEL` 只启用旧 canonical 的额外 image-supplement：副模型筛选候选图和规划局部插入，不替换主模型原文，也不参与评分。secondary endpoint/key 未设置时复用主模型对应值。
+API Reader v3 会把安全物化的官方 Figure 直接交给主模型，主模型端点因此需要支持 Responses 图片输入。设置 `PAPER_ANALYZER_SECONDARY_MODEL` 只启用旧 canonical 的额外 image-supplement：副模型筛选候选图和规划局部插入，不替换主模型原文，也不参与评分。secondary endpoint 未设置时复用主端点；secondary key 只有在主副属于同一规范服务时才可复用，跨服务必须显式配置。
 
 `PD_API_READER_CONCURRENCY` 限制进程内 Reader 重阶段槽；`api:reader:refresh --concurrency N` 限制刷新命令同时处理的论文 worker。两者不是同一个并发旋钮，命令的实际吞吐还受前者排队约束。
 

@@ -18,6 +18,7 @@ from project_env import (  # noqa: E402
 
 PROJECT_KEYS = (
     "PAPER_ANALYZER_API_KEY",
+    "PAPER_ANALYZER_FALLBACK_API_KEYS",
     "PAPER_ANALYZER_MODEL",
     "PAPER_ANALYZER_ENDPOINT",
     "PAPER_DIGEST_TEST_ENV_FILE",
@@ -67,6 +68,7 @@ class ProjectEnvTest(unittest.TestCase):
             explicit = Path(tmp) / ".env"
             explicit.write_text(
                 "PAPER_ANALYZER_API_KEY=inner-key\n"
+                "PAPER_ANALYZER_FALLBACK_API_KEYS=inner-fallback\n"
                 "PAPER_ANALYZER_MODEL=inner-model\n",
                 encoding="utf-8",
             )
@@ -79,6 +81,7 @@ class ProjectEnvTest(unittest.TestCase):
 
             self.assertEqual(parsed["PAPER_ANALYZER_API_KEY"], "inner-key")
             self.assertEqual(os.environ["PAPER_ANALYZER_API_KEY"], "inner-key")
+            self.assertEqual(os.environ["PAPER_ANALYZER_FALLBACK_API_KEYS"], "inner-fallback")
             self.assertEqual(os.environ["PAPER_ANALYZER_MODEL"], "inner-model")
             self.assertNotIn("PD_ANALYSIS_CONCURRENCY", os.environ)
             self.assertNotIn("KIMI_API_KEY", os.environ)
@@ -89,7 +92,8 @@ class ProjectEnvTest(unittest.TestCase):
             explicit = Path(tmp) / ".env"
             explicit.write_text(
                 "HTTPS_PROXY=http://project-proxy.invalid\n"
-                "PAPER_ANALYZER_API_KEY=project-secret\n",
+                "PAPER_ANALYZER_API_KEY=project-secret\n"
+                "PAPER_ANALYZER_FALLBACK_API_KEYS=fallback-secret\n",
                 encoding="utf-8",
             )
             os.environ["HTTPS_PROXY"] = "http://outer-proxy.invalid"
@@ -102,6 +106,7 @@ class ProjectEnvTest(unittest.TestCase):
             child_env = build_child_process_env(allowed_keys=("HTTPS_PROXY",))
             self.assertEqual(child_env["HTTPS_PROXY"], "http://project-proxy.invalid")
             self.assertNotIn("PAPER_ANALYZER_API_KEY", child_env)
+            self.assertNotIn("PAPER_ANALYZER_FALLBACK_API_KEYS", child_env)
             self.assertNotIn("SSH_AUTH_SOCK", child_env)
 
     def test_fetch_proxy_requires_project_http_connect_url(self):

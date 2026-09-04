@@ -69,9 +69,11 @@
 - `scripts/config.js`：Node 参数与 `data/current` 路径。
 - `scripts/env-loader.js` / `scripts/project_env.py`：项目环境与沙箱守卫。
 - `scripts/utils.js`：API 路由、代理、Prompt、原子写、时间和 ID。
+- `scripts/llm-account-pool.js`：OpenCode Go 长期 sticky 账号池、明确额度错误分类与 Node/Python 共享状态。
 - `scripts/analysis-engine.js`：论文锁、重试、checkpoint 与 canonical 合并。
 - `scripts/deep-analyzer.js`：单篇多阶段分析和 Reader。
 - `scripts/path_config.py`：Python 发布路径。
+- `scripts/llm_account_pool.py`：Python 发布链的同 schema 账号选择和配额切换。
 - `scripts/publish_common.py`：发布数据、评分、LLM 与 provenance 公共层。
 - `scripts/publish-to-blog.py`：博客 generation/review/push 共享事务实现。
 - `scripts/python-runtime.sh`：默认博客/视觉入口的 Python 3.11+、OpenSSL 与项目 `.venv` 选择门禁。

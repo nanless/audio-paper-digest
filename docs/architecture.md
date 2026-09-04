@@ -18,6 +18,7 @@ run-daily-digest.sh
 
 - Node 数据层拥有抓取、筛选、单篇分析、checkpoint 和 visual manifest。
 - Python 发布层拥有页面生成、只读 review、Hugo 门禁和 Git 事务。
+- Node 与 Python 的 OpenCode Go 请求共享 `data/runtime/llm-account-pool.json`。账号选择是 provider 运输状态，不进入论文、Prompt 或发布内容指纹。
 - 博客仓库是发布目标，不是分析事实来源；未提交页面不能反向改变筛选去重基线。
 - Codex 内置生图是唯一正式绘图执行者；项目代码只规划、校验和登记资产。
 
@@ -73,6 +74,7 @@ logs/                       脱敏日志，受年龄与容量保留策略约束
 | full-fetch run lock | 归档、抓取、筛选和批次初始化 | 活 owner 不得删除；退出后按 owner/租约规则回收 |
 | paper analysis lock | 单篇阶段 checkpoint 与 canonical 合并 | 等待已有任务；锁内重读，禁止旧对象覆盖 |
 | JSON file lock | `papers.json`、deep、manifest 等共享文件 | 同步读改写并递增 generation |
+| LLM account pool lock | 跨日期 OpenCode Go active/cooldown 状态 | 只在选择或确认 quota 时短暂持有；HTTP 永远在锁外 |
 | blog repository/date lock | generation、review、Git index、commit 与 push | 先检查 owner 和子进程，不得直接删除活锁 |
 
 锁等待时先检查 owner PID、hostname、heartbeat 和父子进程。只有实现判定为 stale 的租约才能自动回收。
@@ -81,6 +83,7 @@ logs/                       脱敏日志，受年龄与容量保留策略约束
 
 - API 网络失败不会自动切换 Manual。
 - Muse、arXiv、HuggingFace 和论文资产按各自策略使用项目代理；普通 LLM 不继承代理。
+- OpenCode Go 备用账号严格长期 sticky：只响应明确 `GoUsageLimitError`，不对普通 429、5xx 或网络故障切号，也不在冷却到期后自动 failback。认证信息只会附加到与 endpoint/model 推导结果精确一致的规范 API URL；不同服务的副模型不得继承主账号池。
 - canonical SHA 证明“这些字节被发布”，来源级 table/formula/claim binding 才证明“这些事实来自论文”。
 - 新 generation 必须重放当前来源绑定；历史页面可读取，不得只凭旧 Reader 版本号重新取得 production 资格。
 - 视觉失败不撤销已验证博客，但整批只有视觉 complete 或有效 waiver 后才是业务终态。

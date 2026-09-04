@@ -19,6 +19,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -28,11 +29,23 @@ if _SHARED_SCRIPTS_DIR not in sys.path:
 from path_config import (
     CURRENT_DIR,
     DEEP_ANALYSIS_RESULT_FILE,
+    LLM_ACCOUNT_POOL_STATE_FILE,
     read_json_strict,
     resolve_deep_analysis_result_for_date,
     resolve_deep_analysis_result_path,
 )
 from project_env import build_child_process_env, get_required_fetch_proxy
+from llm_account_pool import (
+    LlmAccountPoolExhaustedError,
+    LlmAccountPoolConfigError,
+    LlmAccountPoolStateError,
+    classify_opencode_go_quota_response,
+    is_opencode_go_endpoint,
+    mark_quota_exhausted,
+    normalize_opencode_go_service,
+    resolve_api_key_pool,
+    select_api_key,
+)
 from utils import parse_analysis
 
 BJ_TZ = timezone(timedelta(hours=8))
@@ -3674,7 +3687,7 @@ def detect_publish_api_type(endpoint, model):
     m = (model or '').lower()
     if 'deepseek.com' in ep or 'deepseek' in m:
         return 'openai'
-    if ep.endswith('/responses') or m == 'muse-spark-1.2-contributor':
+    if ep.endswith('/responses') or m.startswith('muse-spark-'):
         return 'openai_responses'
     is_token_plan = 'token-plan' in ep or 'coding' in ep
     is_mimo = 'xiaomimimo.com' in ep or 'mimo' in m
@@ -3742,6 +3755,37 @@ def build_publish_api_url(api_type, endpoint):
         return base if base.endswith('/responses') else f'{base}/responses'
     base = re.sub(r'/anthropic/?$', '/v1', base)
     return f'{base}/chat/completions'
+
+
+def _canonical_publish_request_url(url):
+    """Canonicalize a validated request URL without changing its route."""
+    parsed = validate_publish_api_endpoint_url(str(url or ''))
+    scheme = parsed.scheme.lower()
+    hostname = (parsed.hostname or '').lower()
+    host = f'[{hostname}]' if ':' in hostname else hostname
+    port = parsed.port
+    if port is not None and not (
+            (scheme == 'https' and port == 443) or (scheme == 'http' and port == 80)):
+        host = f'{host}:{port}'
+    return urllib.parse.urlunsplit((
+        scheme,
+        host,
+        parsed.path or '/',
+        parsed.query,
+        parsed.fragment,
+    ))
+
+
+def _canonical_publish_service_endpoint(url):
+    """Canonical endpoint identity for safe same-provider key inheritance."""
+    canonical = urllib.parse.urlsplit(_canonical_publish_request_url(url))
+    return urllib.parse.urlunsplit((
+        canonical.scheme,
+        canonical.netloc,
+        canonical.path.rstrip('/') or '/',
+        canonical.query,
+        canonical.fragment,
+    ))
 
 
 def build_publish_headers(api_type, api_key, claude_version=None):
@@ -3840,7 +3884,142 @@ def parse_publish_response_text(api_type, data):
 
 
 def _publish_llm_requires_proxy(endpoint, model):
-    return str(model or '').lower() == 'muse-spark-1.2-contributor'
+    return str(model or '').lower().startswith('muse-spark-')
+
+
+_PUBLISH_OPENCODE_SESSION_ID = None
+
+
+def _publish_opencode_session_id():
+    global _PUBLISH_OPENCODE_SESSION_ID
+    if _PUBLISH_OPENCODE_SESSION_ID:
+        return _PUBLISH_OPENCODE_SESSION_ID
+    _PUBLISH_OPENCODE_SESSION_ID = (
+        str(os.environ.get('PD_OPENCODE_SESSION_ID') or '').strip()
+        or f'audio-paper-digest-{uuid.uuid4()}'
+    )
+    return _PUBLISH_OPENCODE_SESSION_ID
+
+
+def _read_publish_http_error(exc):
+    cached = getattr(exc, '_paper_digest_error_raw', None)
+    if isinstance(cached, bytes):
+        raw_bytes = cached
+    else:
+        try:
+            raw_bytes = exc.read(4096)
+        except (OSError, AttributeError):
+            raw_bytes = b''
+        exc._paper_digest_error_raw = raw_bytes
+    raw_text = raw_bytes.decode('utf-8', errors='replace').strip()
+    try:
+        def reject_non_finite(value):
+            raise ValueError(f'HTTP error JSON 包含非有限数值: {value}')
+
+        parsed = json.loads(raw_text, parse_constant=reject_non_finite) if raw_text else {}
+    except (TypeError, ValueError):
+        parsed = {}
+    return raw_text, parsed
+
+
+def _sanitize_publish_llm_error(value, api_keys=()):
+    text = str(value or '')
+    for secret in api_keys:
+        if secret:
+            text = text.replace(str(secret), '[REDACTED]')
+    text = re.sub(r'\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+', '[REDACTED]', text,
+                  flags=re.IGNORECASE)
+    return text[:1200]
+
+
+def _open_publish_json_with_account_pool(
+    *, api_url, endpoint, model, api_type, api_keys, payload, opener, timeout,
+    state_file=None,
+):
+    """Execute one logical request, replaying only confirmed Go quota failures."""
+    try:
+        expected_api_type = detect_publish_api_type(endpoint, model)
+        expected_api_url = build_publish_api_url(expected_api_type, endpoint)
+        actual_canonical_url = _canonical_publish_request_url(api_url)
+        expected_canonical_url = _canonical_publish_request_url(expected_api_url)
+    except (TypeError, ValueError) as exc:
+        raise LlmAccountPoolConfigError(
+            f'LLM 请求 URL/endpoint/model 路由非法: {exc}'
+        ) from exc
+    if api_type != expected_api_type or actual_canonical_url != expected_canonical_url:
+        raise LlmAccountPoolConfigError(
+            'LLM 请求 URL 与声明的 endpoint/model canonical 路由不一致，已拒绝发送凭据'
+        )
+    state_file = Path(state_file or LLM_ACCOUNT_POOL_STATE_FILE)
+    if len(api_keys) > 1 and not is_opencode_go_endpoint(endpoint):
+        raise LlmAccountPoolConfigError('备用 API key 只允许用于 OpenCode Go 官方端点')
+    started = time.monotonic()
+    max_account_attempts = len(api_keys) if len(api_keys) > 1 else 1
+    attempted_account_ids = set()
+    blocked_until_values = []
+    for _account_attempt in range(max_account_attempts):
+        elapsed = time.monotonic() - started
+        remaining = max(0.001, float(timeout) - elapsed)
+        if elapsed >= float(timeout):
+            raise TimeoutError(f'LLM 请求在账号切换期间超过 {timeout}s deadline')
+        if len(api_keys) > 1:
+            selection = select_api_key(
+                api_keys, endpoint, state_file,
+                exclude_account_ids=attempted_account_ids,
+            )
+            selected_key = selection['api_key']
+            attempted_account_ids.add(selection['account_id'])
+        else:
+            selection = None
+            selected_key = api_keys[0]
+        headers = build_publish_headers(api_type, selected_key)
+        if is_opencode_go_endpoint(endpoint):
+            headers['User-Agent'] = 'audio-paper-digest/1.0'
+            headers['x-opencode-session'] = _publish_opencode_session_id()
+        request = urllib.request.Request(
+            api_url,
+            data=json.dumps(payload).encode('utf-8'),
+            headers={**headers, 'Content-Type': 'application/json'},
+            method='POST',
+        )
+        try:
+            with opener.open(request, timeout=remaining) as response:
+                status = response.status
+                if response.status < 200 or response.status >= 300:
+                    raise RuntimeError(f'HTTP {response.status}')
+                response_limit = 2 * 1024 * 1024
+                raw_response = response.read(response_limit + 1)
+                if len(raw_response) > response_limit:
+                    raise RuntimeError('LLM 响应超过 2 MiB 安全上限')
+                return status, json.loads(raw_response.decode('utf-8'))
+        except urllib.error.HTTPError as exc:
+            raw_text, parsed = _read_publish_http_error(exc)
+            quota = classify_opencode_go_quota_response(
+                exc.code, exc.headers, parsed, raw=raw_text,
+            )
+            if selection is None or quota is None:
+                raise
+            blocked_until_ms = mark_quota_exhausted(selection, quota, state_file)
+            blocked_until_values.append(blocked_until_ms)
+            account_number = api_keys.index(selected_key) + 1
+            limit_name = f" ({quota['limit_class']})" if quota.get('limit_class') else ''
+            blocked_until = datetime.fromtimestamp(
+                blocked_until_ms / 1000, tz=timezone.utc
+            ).isoformat()
+            print(
+                f'  [llm-account-pool] OpenCode Go 账号 {account_number} '
+                f'已确认额度耗尽{limit_name}，冷却至 {blocked_until}'
+            )
+    earliest = min(blocked_until_values) if blocked_until_values else None
+    suffix = '' if earliest is None else (
+        '，最早恢复时间 '
+        + datetime.fromtimestamp(earliest / 1000, tz=timezone.utc).isoformat()
+    )
+    raise LlmAccountPoolExhaustedError(
+        f'本次请求已尝试全部 OpenCode Go 账号；均明确返回额度耗尽{suffix}',
+        earliest_retry_at_ms=earliest,
+        blocked_account_count=len(blocked_until_values),
+    )
 
 
 def call_publish_llm_api(
@@ -3858,10 +4037,82 @@ def call_publish_llm_api(
     """调用发布阶段 LLM API。required=True 时，缺配置或连续失败会抛错。"""
     primary_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
     primary_endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', '')
+    try:
+        primary_api_keys = resolve_api_key_pool(
+            primary_key, os.environ.get('PAPER_ANALYZER_FALLBACK_API_KEYS', '')
+        )
+    except LlmAccountPoolConfigError as exc:
+        message = f'{context} 的 OpenCode Go 账号池配置非法: {exc}'
+        if required:
+            raise PublishLLMUnavailable(message) from exc
+        print(f'  ⚠️  {message}，跳过')
+        return None
     if use_secondary:
-        api_key = os.environ.get('PAPER_ANALYZER_SECONDARY_API_KEY', '') or primary_key
+        secondary_key = os.environ.get('PAPER_ANALYZER_SECONDARY_API_KEY', '')
+        api_key = secondary_key or primary_key
         endpoint = os.environ.get('PAPER_ANALYZER_SECONDARY_ENDPOINT', '') or primary_endpoint
         model = os.environ.get('PAPER_ANALYZER_SECONDARY_MODEL', '')
+        secondary_fallback_keys = os.environ.get(
+            'PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS', ''
+        )
+        if endpoint:
+            try:
+                validate_publish_api_endpoint_url(endpoint)
+            except ValueError as exc:
+                message = f'{context} 的 LLM endpoint 配置不安全: {exc}'
+                if required:
+                    raise PublishLLMUnavailable(message) from exc
+                print(f'  ⚠️  {message}，跳过')
+                return None
+        try:
+            primary_service = normalize_opencode_go_service(primary_endpoint)
+            secondary_service = normalize_opencode_go_service(endpoint)
+            same_opencode_service = (
+                primary_service is not None
+                and secondary_service is not None
+                and primary_service == secondary_service
+            )
+            try:
+                same_endpoint_service = (
+                    _canonical_publish_service_endpoint(primary_endpoint)
+                    == _canonical_publish_service_endpoint(endpoint)
+                )
+            except ValueError:
+                same_endpoint_service = False
+            if secondary_fallback_keys:
+                if not secondary_key and not same_opencode_service:
+                    raise LlmAccountPoolConfigError(
+                        '副模型独立账号池跨服务使用时必须显式配置 '
+                        'PAPER_ANALYZER_SECONDARY_API_KEY'
+                    )
+                api_keys = resolve_api_key_pool(
+                    secondary_key or primary_key, secondary_fallback_keys
+                )
+            elif secondary_key:
+                api_keys = [api_key]
+            elif secondary_service is not None:
+                if not same_opencode_service:
+                    raise LlmAccountPoolConfigError(
+                        '主模型不是同一 OpenCode Go 服务，副模型必须显式配置 '
+                        'PAPER_ANALYZER_SECONDARY_API_KEY'
+                    )
+                api_keys = primary_api_keys
+            elif same_endpoint_service:
+                # A non-Go secondary model may reuse one key only when it stays
+                # on the exact same canonical provider endpoint. It never
+                # inherits the primary fallback pool.
+                api_keys = [api_key]
+            else:
+                raise LlmAccountPoolConfigError(
+                    '主副模型属于不同服务，副模型必须显式配置 '
+                    'PAPER_ANALYZER_SECONDARY_API_KEY'
+                )
+        except LlmAccountPoolConfigError as exc:
+            message = f'{context} 的副模型 OpenCode Go 账号池配置非法: {exc}'
+            if required:
+                raise PublishLLMUnavailable(message) from exc
+            print(f'  ⚠️  {message}，跳过')
+            return None
         config_names = (
             ('PAPER_ANALYZER_SECONDARY_API_KEY 或 PAPER_ANALYZER_API_KEY', api_key),
             ('PAPER_ANALYZER_SECONDARY_ENDPOINT 或 PAPER_ANALYZER_ENDPOINT', endpoint),
@@ -3869,6 +4120,7 @@ def call_publish_llm_api(
         )
     else:
         api_key = primary_key
+        api_keys = primary_api_keys
         endpoint = primary_endpoint
         model = os.environ.get('PAPER_ANALYZER_MODEL', '')
         config_names = (
@@ -3897,7 +4149,6 @@ def call_publish_llm_api(
             raise PublishLLMUnavailable(message) from exc
         print(f'  ⚠️  {message}，跳过')
         return None
-    headers = build_publish_headers(api_type, api_key)
     last_error = None
     current_max_tokens = max(1, int(max_tokens))
     # Strict review responses are tiny JSON objects. Reasoning models may spend
@@ -3924,12 +4175,6 @@ def call_publish_llm_api(
             payload = build_publish_payload(
                 api_type, model, request_prompt, current_max_tokens, temperature, images=images
             )
-            request = urllib.request.Request(
-                api_url,
-                data=json.dumps(payload).encode('utf-8'),
-                headers={**headers, 'Content-Type': 'application/json'},
-                method='POST',
-            )
             # Muse Spark Contributor 有地区限制，必须使用项目 .env 的
             # HTTP CONNECT 代理。其他模型继续显式直连，避免代理污染。
             if _publish_llm_requires_proxy(endpoint, model):
@@ -3939,15 +4184,16 @@ def call_publish_llm_api(
                 )
             else:
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            with opener.open(request, timeout=timeout) as response:
-                status = response.status
-                if response.status < 200 or response.status >= 300:
-                    raise RuntimeError(f'HTTP {response.status}')
-                response_limit = 2 * 1024 * 1024
-                raw_response = response.read(response_limit + 1)
-                if len(raw_response) > response_limit:
-                    raise RuntimeError('LLM 响应超过 2 MiB 安全上限')
-                data = json.loads(raw_response.decode('utf-8'))
+            status, data = _open_publish_json_with_account_pool(
+                api_url=api_url,
+                endpoint=endpoint,
+                model=model,
+                api_type=api_type,
+                api_keys=api_keys,
+                payload=payload,
+                opener=opener,
+                timeout=timeout,
+            )
             content = parse_publish_response_text(api_type, data)
             # A Responses gateway may return valid-looking partial output_text
             # together with status=incomplete. Terminal state wins over content.
@@ -4018,9 +4264,8 @@ def call_publish_llm_api(
         except urllib.error.HTTPError as exc:
             detail = ''
             try:
-                raw_detail = exc.read(4096).decode('utf-8', errors='replace').strip()
+                raw_detail, parsed_detail = _read_publish_http_error(exc)
                 if raw_detail:
-                    parsed_detail = json.loads(raw_detail)
                     error_detail = parsed_detail.get('error') if isinstance(parsed_detail, dict) else None
                     if isinstance(error_detail, dict):
                         detail = str(error_detail.get('message') or error_detail.get('type') or '')
@@ -4028,6 +4273,7 @@ def call_publish_llm_api(
                         detail = error_detail
                     else:
                         detail = raw_detail[:300]
+                    detail = _sanitize_publish_llm_error(detail, api_keys)
             except (OSError, UnicodeError, ValueError, AttributeError):
                 detail = ''
             last_error = exc
@@ -4036,11 +4282,20 @@ def call_publish_llm_api(
                 f'  ⚠️  {context} 调用失败 (尝试 {attempt + 1}/{max_retries}, '
                 f'{time.monotonic() - started_at:.1f}s): HTTP {exc.code}{suffix}'
             )
+        except (
+            LlmAccountPoolExhaustedError,
+            LlmAccountPoolStateError,
+            LlmAccountPoolConfigError,
+        ) as exc:
+            last_error = exc
+            print(f'  ⛔ {context} 已停止：{exc}')
+            break
         except Exception as exc:
             last_error = exc
             print(
                 f'  ⚠️  {context} 调用失败 (尝试 {attempt + 1}/{max_retries}, '
-                f'{time.monotonic() - started_at:.1f}s): {exc}'
+                f'{time.monotonic() - started_at:.1f}s): '
+                f'{_sanitize_publish_llm_error(exc, api_keys)}'
             )
 
         if attempt < max_retries - 1 and not retry_immediately:
@@ -4058,7 +4313,9 @@ def call_publish_llm_api(
             time.sleep(max(0.0, base_delay) + random.uniform(0.0, 0.5))
 
     if required:
-        raise PublishLLMUnavailable(f'{context} 连续失败: {last_error}')
+        raise PublishLLMUnavailable(
+            f'{context} 连续失败: {_sanitize_publish_llm_error(last_error, api_keys)}'
+        )
     return None
 
 
@@ -4542,7 +4799,17 @@ def strip_internal_scoring_anchors(text):
         value,
     )
     value = re.sub(rf'{anchor}[ \t]*', '', value)
-    return re.sub(r'(?<=[㐀-鿿])[ \t]+(?=[㐀-鿿])', '', value)
+    # CJK 字符间的空格压缩只做锚点清理的善后，不得触碰 Markdown 表格行：
+    # 表格字节由 source-binding SHA 绑定，改一个空格就会导致发布门禁漂移。
+    table_lines = set()
+    for table in extract_markdown_tables(value):
+        table_lines.update(range(table['start_line'], table['end_line'] + 1))
+    lines = value.split('\n')
+    for line_number, line in enumerate(lines):
+        if line_number in table_lines:
+            continue
+        lines[line_number] = re.sub(r'(?<=[㐀-鿿])[ \t]+(?=[㐀-鿿])', '', line)
+    return '\n'.join(lines)
 
 
 def linkify_bare_https_urls(text):
