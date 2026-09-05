@@ -763,6 +763,7 @@ const API_READER_FIGURE_CONTRACT_VERSION = 'api-reader-figures-v3';
 const API_READER_QUALITY_METRICS_CONTRACT = 'api-reader-quality-metrics-v2';
 const API_READER_SOURCE_BINDING_CONTRACT = 'api-reader-source-bindings-v4';
 const API_READER_SOURCE_BINDING_REPAIR_VERSION = 'api-reader-source-repair-v3';
+const API_READER_SURFACE_REPAIR_VERSION = 'api-reader-surface-repair-v1';
 const API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1';
 const API_READER_RESOURCE_IDENTITY_CONTRACT = 'api-reader-resource-identity-v1';
 const API_READER_INITIAL_TEMPERATURE = 0.6;
@@ -1343,6 +1344,33 @@ function canonicalReaderBridgeTerm(term) {
             (_, prefix, value) => `${prefix}${numeralMap[value]}`)
         .replace(/\s+/g, '')
         .toLowerCase();
+}
+
+function collapseRepeatedReaderBridgeHeadings(article) {
+    let fence = null;
+    return String(article || '').split(/(\r?\n[ \t]*\r?\n)/).map(block => {
+        const wasFenced = Boolean(fence);
+        for (const line of block.split('\n')) {
+            const marker = line.match(/^ {0,3}(`{3,}|~{3,})/);
+            if (!marker) continue;
+            if (!fence) fence = marker[1];
+            else if (marker[1][0] === fence[0] && marker[1].length >= fence.length
+                && line.slice(marker[0].length).trim() === '') fence = null;
+        }
+        if (wasFenced || /^ {0,3}(?:`{3,}|~{3,})/.test(block)) return block;
+        const match = block.match(/^([ \t]*)(\*\*[^*×\r\n]+×[^*×\r\n]+：\*\*)/);
+        if (!match) return block;
+        const heading = match[2];
+        let remainder = block.slice(match[0].length);
+        let changed = false;
+        while (true) {
+            const spacing = remainder.match(/^[ \t\r\n]*/)[0];
+            if (!remainder.slice(spacing.length).startsWith(heading)) break;
+            remainder = remainder.slice(spacing.length + heading.length);
+            changed = true;
+        }
+        return changed ? match[0] + remainder : block;
+    }).join('');
 }
 
 function findReaderBridgeParagraph(articleBlocks, terms) {
@@ -2420,9 +2448,9 @@ function parseApiReaderArticleResult(raw, options = {}) {
             terms: bridge.terms.map(term => normalizeReaderEditorialSurface(term.trim())),
             sectionKind: bridge.sectionKind,
             marker,
-            explanation: normalizeReaderEditorialSurface(
+            explanation: collapseRepeatedReaderBridgeHeadings(normalizeReaderEditorialSurface(
                 `**${bridge.terms[0].trim()} × ${bridge.terms[1].trim()}：** ${explanation}`
-            )
+            ))
         };
     });
     if (!Array.isArray(value.figurePlacements)
@@ -2672,11 +2700,42 @@ function removeDuplicateReaderLongSentences(article) {
     return output.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+function apiReaderPreInjectionQualityView(article, plan, figures = []) {
+    let view = String(article || '');
+    for (const figure of figures) {
+        const placement = (plan.figurePlacements || []).find(item => item.figureOrdinal === figure.ordinal);
+        if (!placement || typeof placement.marker !== 'string') {
+            throw new Error('Reader 文风统计视图缺少 Figure marker 绑定');
+        }
+        const focusBlock = placement.focusPoints?.length
+            ? `> **看图路径：** ${placement.focusPoints.map((item, index) => `${index + 1}. ${item}`).join('；')}`
+            : null;
+        const block = [focusBlock,
+            `![${sanitizeMarkdownImageAlt(readerFigureAlt(figure))}](${figure.url})`,
+            `*论文图 ${figure.ordinal}。${readerFigureNarrative(figure)}*`
+        ].filter(Boolean).join('\n\n');
+        if (view.split(block).length !== 2) {
+            throw new Error(`Reader 文风统计视图无法精确重放 Figure ${figure.ordinal} 注入块`);
+        }
+        view = view.replace(block, placement.marker);
+    }
+    for (const binding of plan.formulaBindings || []) {
+        const block = `\\[${String(binding.latex || '').trim()}\\]`;
+        if (typeof binding.marker !== 'string'
+            || crypto.createHash('sha256').update(block).digest('hex') !== binding.renderedBlockSha256
+            || view.split(block).length !== 2) {
+            throw new Error('Reader 文风统计视图无法精确重放公式注入块');
+        }
+        view = view.replace(block, binding.marker);
+    }
+    return view;
+}
+
 function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
     const plan = paper?.apiReaderPlan;
     const originalArticle = paper?.apiReaderArticle;
     const article = typeof originalArticle === 'string'
-        ? normalizeReaderCurrencyAmounts(originalArticle)
+        ? collapseRepeatedReaderBridgeHeadings(normalizeReaderCurrencyAmounts(originalArticle))
         : originalArticle;
     const stage = analysisManifest?.stages?.apiReaderArticle;
     if (!plan || !Array.isArray(plan.sections) || typeof article !== 'string'
@@ -2785,12 +2844,35 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
         && (!Array.isArray(repairedFigures)
             || (stage.figureCount === repairedFigures.length
                 && stage.figuresSha256 === newFiguresSha))) return false;
+    const qualityView = apiReaderPreInjectionQualityView(article, repairedPlan, repairedFigures || []);
+    const quality = validateEditorialQuality({
+        summary: '', method: qualityView, innovations: '', results: '', details: '', limits: ''
+    });
+    const qualityMetrics = buildApiReaderQualityMetrics(quality, qualityView);
+    if (qualityMetrics.blockingIssueCount > 0) {
+        throw new Error('Reader 表面修复后仍有文风阻断问题，拒绝签发新的表面绑定');
+    }
     paper.apiReaderPlan = repairedPlan;
     paper.apiReaderPlanSha256 = newSha;
     paper.apiReaderArticle = article;
     paper.apiReaderArticleSha256 = articleSha;
     stage.planSha256 = newSha;
     stage.articleSha256 = articleSha;
+    stage.qualityMetrics = qualityMetrics;
+    stage.qualityMetricsContractVersion = API_READER_QUALITY_METRICS_CONTRACT;
+    stage.surfaceRepairVersion = API_READER_SURFACE_REPAIR_VERSION;
+    stage.surfaceRepair = {
+        executionKind: 'deterministic_surface_repair',
+        inputArticleSha256: crypto.createHash('sha256').update(originalArticle).digest('hex'),
+        outputArticleSha256: articleSha,
+        inputPlanSha256: oldSha,
+        outputPlanSha256: newSha,
+        inputFiguresSha256: oldFiguresSha,
+        outputFiguresSha256: newFiguresSha,
+        qualityInputView: 'reader-before-figure-and-formula-injection',
+        qualityInputSha256: crypto.createHash('sha256').update(qualityView).digest('hex'),
+        repairedAt: getBeijingISOString()
+    };
     if (repairedPlan.sourceBindingsSha256) {
         stage.sourceBindingsSha256 = repairedPlan.sourceBindingsSha256;
     }
@@ -3805,6 +3887,7 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
             qualityMetricsContractVersion: API_READER_QUALITY_METRICS_CONTRACT,
             sourceBindingsContractVersion: API_READER_SOURCE_BINDING_CONTRACT,
             sourceBindingRepairVersion: API_READER_SOURCE_BINDING_REPAIR_VERSION,
+            surfaceRepairVersion: API_READER_SURFACE_REPAIR_VERSION,
             authorIdentityContractVersion: API_READER_AUTHOR_IDENTITY_CONTRACT,
             resourceIdentityContractVersion: API_READER_RESOURCE_IDENTITY_CONTRACT,
             imageMaxBase64Chars: IMAGE_MAX_BASE64_CHARS,
@@ -9686,6 +9769,8 @@ module.exports = {
     splitReaderLongParagraphs,
     normalizeReaderEditorialSurface,
     repairApiReaderPlanSurfaceBinding,
+    collapseRepeatedReaderBridgeHeadings,
+    apiReaderPreInjectionQualityView,
     makeReaderHeadingSpecific,
     getApiReaderFigureInventory,
     buildApiReaderArtifactEvidence,
