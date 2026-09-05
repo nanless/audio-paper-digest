@@ -36,6 +36,34 @@ test('Reader prompt distinguishes table input modes and states character and fig
     assert.match(prompt, /不能把曲线向下直接写成性能变差/);
 });
 
+test('runtime Reader prompt keeps source identity rules without contradictory examples or extra placeholders', () => {
+    const { loadPrompt } = require('../scripts/utils.js');
+    const prompt = loadPrompt('prompts/api-reader-article.md', {
+        title: 'TEST_TITLE', arxivId: '2609.99999', sourceEvidence: 'SOURCE_ONLY_EVIDENCE',
+        validationFeedback: 'NO_ERRORS', previousDraft: '无',
+        mechanicalContract: buildReaderContractNotice({ availableTableCount: 4 })
+    });
+    assert.match(prompt, /SOURCE_ONLY_EVIDENCE/);
+    assert.doesNotMatch(prompt, /\{(?:title|arxivId|sourceEvidence|validationFeedback|previousDraft|mechanicalContract)\}/);
+    assert.match(prompt, /不能把无训练等同于确定性求解/);
+    assert.doesNotMatch(prompt, /再解释复用模型、确定性求解和推理过程/);
+    assert.match(prompt, /仅按证据说明参数冻结\/更新、梯度路径/);
+    assert.match(prompt, /数值相同不是同一指标的证据/);
+    assert.match(prompt, /不同指标的差值不能放到模型列下/);
+    assert.match(prompt, /原文表头、图注或算术互相冲突时明确标注冲突/);
+    assert.match(prompt, /单位留在同一单元格/);
+    assert.doesNotMatch(prompt, /\| 指标 \| 单位 \|/);
+    assert.match(prompt, /保留正确的图\/公式ordinal、概念桥marker与绑定关系/);
+    assert.doesNotMatch(prompt, /表后必须用 2–4 段/);
+    const schema = JSON.parse(prompt.slice(prompt.indexOf('\n{\n') + 1,
+        prompt.indexOf('\n\n`sections` 数量')));
+    assert.deepEqual(Object.keys(schema), ['version', 'readerTitle', 'oneSentenceThesis',
+        'conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings', 'sections']);
+    assert.equal(schema.version, 3);
+    assert.equal(schema.conceptBridges[0].marker, '[[CONCEPT_BRIDGE_1]]');
+    assert.match(schema.conceptBridges[0].explanation, /不照抄此占位说明/);
+});
+
 const explanation = '声学分支先把连续输入转换为局部表示，融合模块再根据上下文决定保留哪些细节，最后输出层把组合表示映射到当前任务需要的预测。这个执行顺序让读者能够沿着同一个样本检查信息如何跨越模块边界，也说明训练时的监督信号怎样约束各个组件，而评估时需要固定哪些条件才能公平比较不同系统的结果。';
 
 test('actual Reader IDs distinguish repeated component kinds and detect strong cross-section paraphrase', () => {
