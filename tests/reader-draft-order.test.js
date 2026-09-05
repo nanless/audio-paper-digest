@@ -80,3 +80,49 @@ test('stable same-kind sections and non-bound legacy drafts keep all prose and t
     assert.deepEqual(out.sections.map(item => item.body), [draft.sections[0].body, draft.sections[2].body, draft.sections[1].body]);
     assert.equal(out.tableBindings, undefined);
 });
+
+test('complete bridge marker permutation normalizes array only and records node SHA/index mapping', () => {
+    const bridge = n => ({ marker: `[[CONCEPT_BRIDGE_${n}]]`, terms: [`term ${n}`, 'other term'],
+        sectionKind: 'component', explanation: `Unchanged explanation ${n}` });
+    const input = { sections: [{ kind: 'component', body: '[[CONCEPT_BRIDGE_3]]\n\n[[CONCEPT_BRIDGE_1]]\n\n[[CONCEPT_BRIDGE_2]]' }],
+        conceptBridges: [bridge(3), bridge(1), bridge(2)] };
+    const before = JSON.stringify(input);
+    const { draft, mapping } = normalizeReaderDraftOrder(input);
+    assert.equal(JSON.stringify(input), before);
+    assert.equal(mapping.contract, 'reader-draft-order-v2');
+    assert.deepEqual(draft.sections, input.sections);
+    assert.deepEqual(draft.conceptBridges, [input.conceptBridges[1], input.conceptBridges[2], input.conceptBridges[0]]);
+    assert.deepEqual(mapping.conceptBridges.map(item => [item.rawIndex, item.canonicalIndex]), [[1, 0], [2, 1], [0, 2]]);
+    for (const item of mapping.conceptBridges) {
+        assert.equal(item.marker, draft.conceptBridges[item.canonicalIndex].marker);
+        assert.match(item.inputSha256, /^[a-f0-9]{64}$/);
+        assert.equal(item.inputSha256, item.outputSha256);
+    }
+    assert.equal(mapping.changed, true);
+    const again = normalizeReaderDraftOrder(draft);
+    assert.equal(again.mapping.changed, false);
+    assert.equal(again.mapping.inputSha256, mapping.outputSha256);
+    assert.deepEqual(again.draft, draft);
+});
+
+test('duplicate, missing, noncanonical and malformed bridge markers are not guessed or repaired', () => {
+    for (const markers of [
+        ['[[CONCEPT_BRIDGE_2]]', '[[CONCEPT_BRIDGE_2]]'],
+        ['[[CONCEPT_BRIDGE_3]]', '[[CONCEPT_BRIDGE_1]]'],
+        ['[[CONCEPT_BRIDGE_0]]', '[[CONCEPT_BRIDGE_1]]'],
+        ['[[CONCEPT_BRIDGE_02]]', '[[CONCEPT_BRIDGE_1]]'],
+        [' [[CONCEPT_BRIDGE_2]]', '[[CONCEPT_BRIDGE_1]]'],
+        ['[[CONCEPT_BRIDGE_2]]', null],
+        ['[[CONCEPT_BRIDGE_9007199254740993]]', '[[CONCEPT_BRIDGE_1]]']
+    ]) {
+        const input = { sections: [], conceptBridges: markers.map(marker => ({ marker, explanation: 'unchanged' })) };
+        const { draft, mapping } = normalizeReaderDraftOrder(input);
+        assert.deepEqual(draft, input);
+        assert.equal(mapping.changed, false);
+        assert.deepEqual(mapping.conceptBridges, []);
+    }
+    for (const conceptBridges of [null, 'invalid', [{ marker: '[[CONCEPT_BRIDGE_1]]' }, null]]) {
+        const input = { sections: [], conceptBridges };
+        assert.deepEqual(normalizeReaderDraftOrder(input).draft, input);
+    }
+});

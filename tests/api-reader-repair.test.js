@@ -286,6 +286,7 @@ test('production recovery persists canonical section/table pairs with raw-to-can
     [draft.sections[6], draft.sections[7], draft.sections[8]] = [draft.sections[7], draft.sections[8], draft.sections[6]];
     draft.tableBindings = ['result', 'ablation', 'setup'].map((quote, index) => ({ tableIndex: index + 1,
         sourceType: 'source_quotes', sourceTableOrdinal: null, cellBindings: [], sourceQuotes: [`${quote} source quote`] }));
+    draft.conceptBridges.reverse();
     const normalized = normalizeReaderDraftOrder(draft);
     const base = { sourceText: 'source', readerAttemptsDir: directory, readerMaterializeFigures: async () => [],
         readerRecordDisposition: () => {}, readerMaxAttempts: 2 };
@@ -300,7 +301,8 @@ test('production recovery persists canonical section/table pairs with raw-to-can
     assert.deepEqual(stored.payload.draftOrderMappings, [normalized.mapping]);
     assert.equal(stored.payload.attempts, 1);
     assert.equal(stored.payload.fullAttempts, 1);
-    assert.equal(stored.identity.draftOrderContract, 'reader-draft-order-v1');
+    assert.equal(stored.identity.draftOrderContract, 'reader-draft-order-v2');
+    assert.deepEqual(stored.payload.draftOrderMappings[0].conceptBridges.map(item => item.rawIndex), [3, 2, 1, 0]);
     await assert.rejects(generateApiReaderArticleDetailed(paper, '', '', { ...base, readerCallModel: async messages => {
         assert.match(messages[0].content[0].text, new RegExp(hashDraft(normalized.draft)));
         return JSON.stringify(patchFor(normalized.draft, [['/readerTitle', '短']]));
@@ -352,6 +354,18 @@ test('an exhausted candidate receives a free full-parser replay: valid retires, 
     });
     assert.doesNotThrow(() => parseApiReaderArticleResult(JSON.stringify(valid), { sourceText, structuredArtifacts: artifacts,
         requiredVersion: 3, requireSourceBindings: true, requireIntegratedTables: true, minimumIntegratedTables: 2 }));
+    const reordered = structuredClone(valid);
+    reordered.conceptBridges.reverse();
+    const parserOptions = { sourceText, structuredArtifacts: artifacts, requiredVersion: 3,
+        requireSourceBindings: true, requireIntegratedTables: true, minimumIntegratedTables: 2 };
+    assert.deepEqual(parseApiReaderArticleResult(JSON.stringify(reordered), parserOptions),
+        parseApiReaderArticleResult(JSON.stringify(valid), parserOptions));
+    for (const badMarker of ['[[CONCEPT_BRIDGE_2]]', '[[CONCEPT_BRIDGE_5]]', 'invalid']) {
+        const invalidBridges = structuredClone(valid);
+        invalidBridges.conceptBridges[0].marker = badMarker;
+        assert.throws(() => parseApiReaderArticleResult(JSON.stringify(invalidBridges), parserOptions),
+            /conceptBridges\[0\].*未形成有效术语桥/);
+    }
     const filename = path.join(directory, fs.readdirSync(directory)[0]);
     const envelope = JSON.parse(fs.readFileSync(filename, 'utf8'));
     saveFailedCandidate(directory, envelope.identity, { ...envelope.payload, draft: valid, rawDraft: JSON.stringify(valid),

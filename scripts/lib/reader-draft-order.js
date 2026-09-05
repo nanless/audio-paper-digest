@@ -2,7 +2,7 @@
 
 const crypto = require('node:crypto');
 const { extractMarkdownTables } = require('../analysis-contract.js');
-const READER_DRAFT_ORDER_CONTRACT = 'reader-draft-order-v1';
+const READER_DRAFT_ORDER_CONTRACT = 'reader-draft-order-v2';
 const READER_SECTION_KINDS = Object.freeze([
     'background', 'related_work', 'problem', 'method_overview', 'component', 'training',
     'experiment_setup', 'result', 'ablation', 'limitation', 'reproduction', 'synthesis'
@@ -75,9 +75,32 @@ function normalizeReaderDraftOrder(input) {
         }
     }
     if (Array.isArray(draft?.sections)) draft.sections = ranked.map(item => item.section);
+    // Bridge markers are stable IDs, not their order of appearance in prose.
+    // Only a complete, unambiguous 1..N permutation permits reordering. All
+    // malformed sets remain byte-for-byte unchanged for the parser to reject.
+    let bridgeMap = [];
+    if (Array.isArray(draft?.conceptBridges)) {
+        const bridges = draft.conceptBridges.map((bridge, rawIndex) => {
+            const match = typeof bridge?.marker === 'string'
+                && bridge.marker.match(/^\[\[CONCEPT_BRIDGE_([1-9]\d*)\]\]$/);
+            return { bridge, rawIndex, ordinal: match ? Number(match[1]) : null };
+        });
+        const valid = bridges.every(item => Number.isSafeInteger(item.ordinal)
+            && item.ordinal >= 1 && item.ordinal <= bridges.length)
+            && new Set(bridges.map(item => item.ordinal)).size === bridges.length;
+        if (valid) {
+            bridges.sort((a, b) => a.ordinal - b.ordinal);
+            bridgeMap = bridges.map(({ bridge, rawIndex }, canonicalIndex) => ({
+                rawIndex, canonicalIndex, marker: bridge.marker,
+                inputSha256: sha(bridge), outputSha256: sha(bridge)
+            }));
+            draft.conceptBridges = bridges.map(item => item.bridge);
+        }
+    }
     const outputSha256 = sha(draft);
     return { draft, mapping: { contract: READER_DRAFT_ORDER_CONTRACT, inputSha256, outputSha256,
-        changed: inputSha256 !== outputSha256, sections: sectionMap, tables: tableMap } };
+        changed: inputSha256 !== outputSha256, sections: sectionMap, tables: tableMap,
+        conceptBridges: bridgeMap } };
 }
 
 module.exports = { READER_DRAFT_ORDER_CONTRACT, READER_SECTION_KINDS, locateReaderDraftTables, normalizeReaderDraftOrder };

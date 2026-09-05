@@ -2402,6 +2402,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
     const orderedDraft = normalizeReaderDraftOrder(value);
     value.sections = orderedDraft.draft.sections;
     value.tableBindings = orderedDraft.draft.tableBindings;
+    value.conceptBridges = orderedDraft.draft.conceptBridges;
     const compiledTables = compileReaderTableSelections(
         value.sections, value.tableBindings, options.structuredArtifacts
     );
