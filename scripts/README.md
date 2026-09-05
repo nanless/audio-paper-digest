@@ -42,6 +42,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/filter-input-contract.js` | Node 库 | 筛选决定所绑定的最小输入 SHA。 |
 | `lib/keyword-prefilter.js` | Node 库 | 版本化高召回音频关键词预筛。 |
 | `lib/reader-repair.js` | Node 库 | Reader 候选缓存、节点 SHA 与受限 patch、局部诊断及无进展检测；候选不构成 production proof。 |
+| `lib/reader-operator-patch.js` | Node 库 | 显式应用同 fresh run 的人工局部补丁；严格来源/节点 SHA 与完整 Reader parser，保存 failed 候选并保留预算、原始字节归档和重入审计，不签发成功正文。 |
 | `lib/reader-draft-order.js` | Node 库 | 在同一候选上规范小节顺序并同步表格绑定/marker，记录原始到规范路径的 SHA 映射；歧义时拒绝重排。 |
 | `lib/reader-source-diagnostics.js` | Node 库 | 将数字/单位绑定失败定位到正文单元格与原表行列证据，给出百分号位置、千分位及可能舍入的只读修复候选；不自动改数值或放宽来源门禁。 |
 | `lib/reader-recovery-revision.js` | Node 库 | 显式升级同源 fresh run 的失败候选诊断，保留请求预算、记录索引迁移及旧无进展状态，可恢复归档旧证据；不签发成功。 |
@@ -68,7 +69,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `verify-project.js` | 沙箱外完整离线验证：固定 Hugo、全仓语法、默认/Manual JS 与 Python、只读数据门禁；`--quick` 仅语法与数据，不是完整验收。 |
 | `llm-usage-report.js` | 只读汇总请求用量事件，区分真实 usage、不可得状态和字符估算，不推算未经证实的费用。 |
 | `evaluate-reader-efficiency.js` | 显式、隔离、限额的单篇 Reader 效率实验；默认只预检，`--live` 才调用模型，不覆盖 canonical 或发布博客。 |
-| `rewrite-from-source.js` | 显式 prepare/sources/analyze/status/promote 的同源全新重写入口；默认没有网络动作，不接受任意路径。 |
+| `rewrite-from-source.js` | 显式 prepare/sources/analyze/status/patch/promote 的同源全新重写入口；patch 仅修同 run 失败候选，默认没有网络动作，不接受任意路径。 |
 | `paper-rethink-server.js` | 历史独立维护工具；博客已取消本机助手集成，不应为阅读、引用或复制 AI 提问启动此服务。旧接口实现仍保留供历史维护。 |
 | `validate-data-files.js` | 只读复验 current 数据、跨文件集合、评分和兼容 provenance。 |
 | `backfill_papers.py` | 只补录历史论文 ID，不执行深度分析。 |

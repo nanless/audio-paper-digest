@@ -235,3 +235,57 @@ test('symlink run/file escape and sandbox entry are fail closed', async t => {
         { env: { ...process.env, CODEX_SANDBOX: 'fixture-sandbox' }, encoding: 'utf8' });
     assert.notEqual(child.status, 0); assert.match(child.stderr, /必须在沙箱外运行/);
 });
+
+test('operator patch holds the run operation lock then the paper lock and never changes analysis/run status', async t => {
+    const f = fixture(t);
+    const prepared = await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
+    await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);
+    const repair = require('../scripts/lib/reader-repair.js');
+    const id = f.originals[0].arxivId;
+    const descriptor = f.descriptor(id);
+    const source = { freshSourceDescriptor: descriptor, text: `source ${id}`,
+        structuredArtifacts: { payloadSha256: descriptor.structuredArtifactsSha256, tables: [], formulas: [], figures: [] } };
+    f.cache.set(id, source);
+    const identity = { paperId: id, sourceSha256: descriptor.sourceSha256, contentMode: 'reader-source-only-v1',
+        freshAnalysis: { contract: runner.FRESHNESS_CONTRACT, runId: RUN_ID, paperId: id,
+            inputSetSha256: runner.stableHash(f.originals.map(p => p.arxivId).sort()),
+            sourceSha256: descriptor.sourceSha256, structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
+            sourceSnapshotSha256: descriptor.sourceSnapshotSha256, sourceOnly: true, oldGeneratedTextIncluded: false } };
+    const draft = { version: 3, readerTitle: '修正前的有效标题', oneSentenceThesis: '当前草稿',
+        sections: Array.from({ length: 12 }, (_, index) => ({ kind: 'component', heading: `阶段${index}`, body: '正文' })),
+        conceptBridges: [{}, {}, {}, {}], figurePlacements: [], tableBindings: [], formulaBindings: [] };
+    repair.saveFailedCandidate(path.join(prepared.runDir, 'reader-attempts'), identity, { status: 'failed', draft,
+        rawDraft: JSON.stringify(draft), attempts: 6, fullAttempts: 2, noProgress: 3, transportFailures: 5,
+        issues: [{ path: null, message: 'failure' }], failureSignature: 'keep', imageEvidence: [] });
+    fs.mkdirSync(path.join(prepared.runDir, 'patches'), { mode: 0o700 });
+    runner.writeImmutableJson(path.join(prepared.runDir, 'patches', 'test.json'), { paperId: id,
+        candidateIdentitySha256: repair.hashDraft(identity), sourceSha256: descriptor.sourceSha256,
+        reason: '依据源文修正标题', patch: { version: 1, draftSha256: repair.hashDraft(draft), replacements: [
+            { path: '/readerTitle', oldSha256: repair.hashDraft(draft.readerTitle), value: '源文支持的修正标题' }] } });
+    const beforeAnalysis = fs.readFileSync(path.join(prepared.runDir, 'analysis.json'));
+    const beforeRun = fs.readFileSync(path.join(prepared.runDir, 'run.json'));
+    const beforeCanonical = fs.readFileSync(f.files.deepAnalysisResult);
+    const order = [];
+    const overrides = { ...f.deps,
+        withFileLock: async (filename, callback) => {
+            assert.equal(filename, path.join(prepared.runDir, '.operation')); order.push('run-lock');
+            return callback();
+        },
+        withPaperAnalysisLock: async (paper, callback) => {
+            assert.equal(paper.arxivId, id); assert.deepEqual(order, ['run-lock']); order.push('paper-lock');
+            return callback();
+        },
+        operatorPatchDependencies: { buildApiReaderEvidenceContext: () => '',
+            parseApiReaderArticleResult: () => { assert.deepEqual(order, ['run-lock', 'paper-lock']); return {}; } } };
+    const result = await runner.patchRewrite({ runId: RUN_ID, patchFile: 'test.json' }, overrides);
+    assert.equal(result.status, 'failed');
+    assert.deepEqual(fs.readFileSync(path.join(prepared.runDir, 'analysis.json')), beforeAnalysis);
+    assert.deepEqual(fs.readFileSync(path.join(prepared.runDir, 'run.json')), beforeRun);
+    assert.deepEqual(fs.readFileSync(f.files.deepAnalysisResult), beforeCanonical);
+    assert.equal(f.counters.analysis, 0); assert.equal(f.counters.promotion, 0);
+    const analysisPath = path.join(prepared.runDir, 'analysis.json');
+    const analysis = runner.readRegularJson(analysisPath).value;
+    analysis.papers[0] = f.freshPaper(analysis.papers[0]);
+    fs.writeFileSync(analysisPath, JSON.stringify(analysis)); order.length = 0;
+    await assert.rejects(runner.patchRewrite({ runId: RUN_ID, patchFile: 'test.json' }, overrides), /successful analysis/);
+});

@@ -35,14 +35,14 @@ function validDate(value) {
 
 function parseRewriteArgs(args) {
     const action = args[0];
-    if (!['prepare', 'sources', 'analyze', 'status', 'promote'].includes(action)) {
-        throw new Error('Use prepare --date DATE, or sources|analyze|status|promote --run-id UUID');
+    if (!['prepare', 'sources', 'analyze', 'status', 'promote', 'patch'].includes(action)) {
+        throw new Error('Use prepare --date DATE, sources|analyze|status|promote --run-id UUID, or patch --run-id UUID --patch NAME.json');
     }
     const options = { action };
     const seen = new Set();
     for (let index = 1; index < args.length; index++) {
         const flag = args[index];
-        if (!['--date', '--run-id', '--concurrency', '--refresh-reader-diagnostics'].includes(flag) || seen.has(flag)) {
+        if (!['--date', '--run-id', '--concurrency', '--refresh-reader-diagnostics', '--patch'].includes(flag) || seen.has(flag)) {
             throw new Error(`Unknown or repeated fresh rewrite argument: ${flag}`);
         }
         seen.add(flag);
@@ -55,6 +55,7 @@ function parseRewriteArgs(args) {
         if (!value || value.startsWith('--')) throw new Error(`Missing value for ${flag}`);
         if (flag === '--date') options.date = value;
         else if (flag === '--run-id') options.runId = value;
+        else if (flag === '--patch') options.patchFile = value;
         else {
             if (!/^[1-5]$/.test(value)) throw new Error('--concurrency must be an integer from 1 to 5');
             options.concurrency = Number(value);
@@ -66,6 +67,9 @@ function parseRewriteArgs(args) {
         if (!UUID_RE.test(options.runId || '') || options.date) throw new Error(`${action} requires --run-id UUID and cannot change the date`);
         if (options.concurrency && !['sources', 'analyze'].includes(action)) throw new Error(`${action} does not accept --concurrency`);
     }
+    if (action === 'patch') {
+        require('./reader-operator-patch.js').patchPath('/unused-run', options.patchFile);
+    } else if (options.patchFile) throw new Error('Only patch accepts --patch');
     return options;
 }
 
@@ -457,7 +461,26 @@ async function promoteRewrite(options, overrides = {}) {
     });
 }
 
+async function patchRewrite(options, overrides = {}) {
+    const deps = dependencies(overrides);
+    return withRunOperation(options.runId, deps, async loaded => {
+        if (loaded.run.status === 'promoted') throw new Error('Promoted fresh run is immutable');
+        return require('./reader-operator-patch.js').applyOperatorPatch({ loaded, patchFile: options.patchFile }, {
+            rootDir: deps.rootDir, readFreshSource: deps.readFreshSource, now: deps.now, ...overrides.operatorPatchDependencies,
+            withPaperAnalysisLock: async (paper, callback) => {
+                const lock = overrides.withPaperAnalysisLock || require('../analysis-engine.js').withPaperAnalysisLock;
+                return lock(paper, async () => {
+                    const current = loadRun(options.runId, deps);
+                    const record = current.analysis.papers.find(item => paperId(item) === paperId(paper));
+                    if (deps.isSuccessfulAnalysisRecord(record)) throw new Error('Operator patch cannot edit a successful analysis');
+                    return callback();
+                });
+            }
+        });
+    });
+}
+
 module.exports = { RUN_CONTRACT, INPUT_CONTRACT, ANALYSIS_CONTRACT, FRESHNESS_CONTRACT, ORIGINAL_METADATA_FIELDS,
     stableHash, sha256, paperId, parseRewriteArgs, metadataOnly, assertSafeDirectory, readRegularJson,
     writeImmutableJson, assertAnalysisEnvelope, assertFreshProvenance, loadRun,
-    prepareRewrite, collectRewriteSources, analyzeRewrite, rewriteStatus, promoteRewrite };
+    prepareRewrite, collectRewriteSources, analyzeRewrite, rewriteStatus, promoteRewrite, patchRewrite };
