@@ -5496,6 +5496,56 @@ def validate_staged_posts(
     return files
 
 
+def _mirror_hugo_assets(blog_repo, asset_dir):
+    """Copy only regular in-repo assets through no-follow directory handles."""
+    if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
+        raise PublishDataValidationError('Hugo assets 隔离镜像需要 no-follow 文件系统支持')
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+    def copy_directory(source_fd, destination):
+        with os.scandir(source_fd) as entries:
+            for entry in sorted(entries, key=lambda item: item.name):
+                mode = entry.stat(follow_symlinks=False).st_mode
+                target = destination / entry.name
+                if stat.S_ISLNK(mode):
+                    raise PublishDataValidationError(f'Hugo assets 禁止符号链接: {entry.name}')
+                if stat.S_ISDIR(mode):
+                    child_fd = os.open(entry.name, flags, dir_fd=source_fd)
+                    try:
+                        target.mkdir()
+                        copy_directory(child_fd, target)
+                    finally:
+                        os.close(child_fd)
+                elif stat.S_ISREG(mode):
+                    file_fd = os.open(entry.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=source_fd)
+                    with os.fdopen(file_fd, 'rb') as source:
+                        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                            raise PublishDataValidationError(f'Hugo assets 不是普通文件: {entry.name}')
+                        with target.open('xb') as output:
+                            shutil.copyfileobj(source, output)
+                    target.chmod(0o444)
+                else:
+                    raise PublishDataValidationError(f'Hugo assets 包含非普通文件: {entry.name}')
+
+    root_fd = os.open(Path(blog_repo).resolve(), flags)
+    try:
+        try:
+            mode = os.stat('assets', dir_fd=root_fd, follow_symlinks=False).st_mode
+        except FileNotFoundError:
+            return
+        if not stat.S_ISDIR(mode):
+            raise PublishDataValidationError('Hugo assets 必须是仓库内真实目录，禁止符号链接')
+        source_fd = os.open('assets', flags, dir_fd=root_fd)
+        try:
+            copy_directory(source_fd, Path(asset_dir))
+        finally:
+            os.close(source_fd)
+    except OSError as exc:
+        raise PublishDataValidationError('Hugo assets 无法安全镜像，已拒绝链接或路径漂移') from exc
+    finally:
+        os.close(root_fd)
+
+
 def run_hugo_gate(blog_repo, staged_posts_dir, required=False, source_paths=None):
     """Build staged content with Hugo, then gate source Markdown and rendered HTML."""
     hugo = shutil.which('hugo')
@@ -5528,6 +5578,7 @@ def run_hugo_gate(blog_repo, staged_posts_dir, required=False, source_paths=None
         isolated_posts.mkdir(parents=True)
         for directory in (cache_dir, static_dir, resource_dir, asset_dir):
             directory.mkdir()
+        _mirror_hugo_assets(blog_repo, asset_dir)
         seen_names = set()
         for source in source_files:
             if source.name in seen_names:

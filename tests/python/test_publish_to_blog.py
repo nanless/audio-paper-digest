@@ -3597,6 +3597,84 @@ paper_digest_manual_depth: "full-text-evidence-v4"
                 'assetDir': (True, []),
             })
 
+    def test_hugo_gate_mirrors_required_assets_for_real_resource_pipeline_without_repo_writes(self):
+        if not publish_to_blog.shutil.which('hugo'):
+            self.skipTest('real Hugo is unavailable')
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'blog'
+            posts = repo / 'content' / 'posts'
+            assets = repo / 'assets' / 'js'
+            layouts = repo / 'layouts' / '_default'
+            for directory in (posts, assets, layouts):
+                directory.mkdir(parents=True)
+            (repo / 'hugo.toml').write_text('baseURL = "https://example.test/"\n', encoding='utf-8')
+            (assets / 'site.js').write_text('console.log("asset-mirror-fixture");\n', encoding='utf-8')
+            (layouts / 'single.html').write_text(
+                '{{ $asset := resources.Get "js/site.js" }}{{ if not $asset }}{{ errorf "site asset missing" }}{{ end }}'
+                '{{ $built := $asset | js.Build | fingerprint }}'
+                '<html><body><article><h1>{{ .Title }}</h1>{{ .Content }}</article>'
+                '<script src="{{ $built.RelPermalink }}"></script></body></html>', encoding='utf-8'
+            )
+            page = posts / '2020-01-01-paper.md'
+            page.write_text('---\ntitle: "Asset gate fixture"\ndate: 2020-01-01\n---\n\n正文。\n', encoding='utf-8')
+            before = {path.relative_to(repo).as_posix(): path.read_bytes() for path in repo.rglob('*') if path.is_file()}
+            runner = publish_to_blog._run_bounded_subprocess
+            inspected = []
+
+            def inspect_real_build(command, **kwargs):
+                overlay = Path(command[command.index('--config') + 1].split(',')[-1])
+                workspace = overlay.parent
+                config = json.loads(overlay.read_text(encoding='utf-8'))
+                for key in ('assetDir', 'resourceDir', 'staticDir'):
+                    self.assertTrue(Path(config[key]).is_relative_to(workspace))
+                for flag in ('--contentDir', '--destination', '--cacheDir'):
+                    self.assertTrue(Path(command[command.index(flag) + 1]).is_relative_to(workspace))
+                mirrored = Path(config['assetDir']) / 'js' / 'site.js'
+                self.assertEqual(mirrored.read_bytes(), (assets / 'site.js').read_bytes())
+                self.assertEqual(mirrored.stat().st_mode & 0o222, 0)
+                result = runner(command, **kwargs)
+                output = Path(command[command.index('--destination') + 1])
+                scripts = list(output.rglob('*.js'))
+                self.assertEqual(len(scripts), 1)
+                self.assertIn('asset-mirror-fixture', scripts[0].read_text(encoding='utf-8'))
+                inspected.append(True)
+                return result
+
+            with mock.patch.object(publish_to_blog, '_run_bounded_subprocess', side_effect=inspect_real_build):
+                self.assertEqual(publish_to_blog.run_hugo_gate(repo, posts, required=True, source_paths=[page]), 'hugo')
+            after = {path.relative_to(repo).as_posix(): path.read_bytes() for path in repo.rglob('*') if path.is_file()}
+            self.assertEqual(after, before)
+            self.assertEqual(inspected, [True])
+
+    def test_hugo_gate_rejects_asset_symlinks_and_nonregular_files_before_running_hugo(self):
+        for kind in ('root', 'directory', 'file', 'fifo'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                repo = root / 'blog'
+                posts = repo / 'content' / 'posts'
+                posts.mkdir(parents=True)
+                page = posts / '2020-01-01-paper.md'
+                page.write_text('---\ntitle: "Fixture"\n---\n正文', encoding='utf-8')
+                outside = root / 'private'
+                outside.mkdir()
+                (outside / 'private.js').write_text('private-canary', encoding='utf-8')
+                assets = repo / 'assets'
+                if kind == 'root':
+                    assets.symlink_to(outside, target_is_directory=True)
+                else:
+                    assets.mkdir()
+                    if kind == 'directory':
+                        (assets / 'js').symlink_to(outside, target_is_directory=True)
+                    elif kind == 'file':
+                        (assets / 'site.js').symlink_to(outside / 'private.js')
+                    else:
+                        os.mkfifo(assets / 'pipe.js')
+                with mock.patch.object(publish_to_blog.shutil, 'which', return_value='/usr/bin/hugo'), \
+                        mock.patch.object(publish_to_blog, '_run_bounded_subprocess') as run, \
+                        self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, 'Hugo assets'):
+                    publish_to_blog.run_hugo_gate(repo, posts, required=True, source_paths=[page])
+                run.assert_not_called()
+
     def test_hugo_bounded_runner_kills_full_process_group_after_timeout(self):
         process = mock.Mock()
         process.pid = 4242
