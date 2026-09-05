@@ -544,7 +544,7 @@ def call_llm_api(
 
 
 @contextmanager
-def review_unit_cache(date_str, page_path, *, required, paper_id=None):
+def review_unit_cache(date_str, page_path, *, required, paper_id=None, run_id=None):
     """Enable request-level recovery only within a strict publication review."""
     context = None
     if required:
@@ -553,6 +553,7 @@ def review_unit_cache(date_str, page_path, *, required, paper_id=None):
                 / hashlib.sha256(str(Path(page_path).resolve()).encode('utf-8')).hexdigest(),
             'protocol': review_protocol_fingerprint(),
             'paperId': paper_id,
+            'runId': run_id,
         }
     token = _REVIEW_UNIT_CONTEXT.set(context)
     try:
@@ -601,6 +602,7 @@ def review_cached_unit(kind, inputs, run):
         pass
     try:
         with with_llm_usage_context({
+            'runId': context.get('runId'),
             'paperId': context.get('paperId'),
             'stage': 'publish.figure' if kind == 'image' else 'publish.text',
             'unitId': key,
@@ -5103,6 +5105,14 @@ def classify_review_failure(issues):
     return 'content'
 
 
+def _paper_fresh_run_id(paper):
+    provenance = paper.get('freshRewriteProvenance') if isinstance(paper, dict) else None
+    run_id = provenance.get('runId') if isinstance(provenance, dict) else None
+    return run_id if isinstance(run_id, str) and re.fullmatch(
+        r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}', run_id,
+    ) else None
+
+
 def _review_single_paper(args):
     """并发只读 review 单篇论文，返回路径、标题、计数和输出。"""
     if len(args) == 7:
@@ -5157,7 +5167,7 @@ def _review_single_paper(args):
                 page_artifact['sha256'], blocking_details)
 
     # 2. LLM 文本审查
-    with review_unit_cache(date_str, paper_file, required=require_llm, paper_id=arxiv_id):
+    with review_unit_cache(date_str, paper_file, required=require_llm, paper_id=arxiv_id, run_id=_paper_fresh_run_id(paper)):
         llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, title, required=require_llm)
     if llm_passed is False and count_blocking_review_issues(llm_issues) == 0:
         llm_issues = list(llm_issues or []) + [{
@@ -5183,7 +5193,7 @@ def _review_single_paper(args):
         advisory_count += len(llm_issues) - llm_blocking
 
     # 3. 多模态图片审查
-    with review_unit_cache(date_str, paper_file, required=require_llm, paper_id=arxiv_id):
+    with review_unit_cache(date_str, paper_file, required=require_llm, paper_id=arxiv_id, run_id=_paper_fresh_run_id(paper)):
         img_passed, img_issues = multimodal_review_images(content, title, required=require_llm)
     if img_passed is False and count_blocking_review_issues(img_issues) == 0:
         img_issues = list(img_issues or []) + [{
@@ -5261,6 +5271,8 @@ def review_all_posts(
         paper_id = normalize_publish_arxiv_id(p.get('arxivId', ''))
         title_map[paper_id] = p.get('title', '')
         paper_map[paper_id] = p
+    fresh_run_ids = {_paper_fresh_run_id(paper) for paper in paper_map.values()}
+    index_run_id = next(iter(fresh_run_ids)) if len(fresh_run_ids) == 1 else None
 
     # Review 汇总页面（串行，只有1个）
     index_file = os.path.join(content_dir, f"{date_str}.md")
@@ -5306,7 +5318,7 @@ def review_all_posts(
             if return_details:
                 return total_fixed, total_blocking_issues, file_results
             return total_fixed, total_blocking_issues
-        with review_unit_cache(date_str, index_file, required=require_llm):
+        with review_unit_cache(date_str, index_file, required=require_llm, run_id=index_run_id):
             llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, "汇总页", required=require_llm)
         if llm_passed is False and count_blocking_review_issues(llm_issues) == 0:
             llm_issues = list(llm_issues or []) + [{
@@ -5330,7 +5342,7 @@ def review_all_posts(
         total_advisory_issues += len(llm_issues) - llm_blocking
 
         # 汇总页同样可能包含论文图片，必须经过与独立论文页一致的多模态审查。
-        with review_unit_cache(date_str, index_file, required=require_llm):
+        with review_unit_cache(date_str, index_file, required=require_llm, run_id=index_run_id):
             _img_passed, img_issues = multimodal_review_images(content, '汇总页面', required=require_llm)
         if _img_passed is False and count_blocking_review_issues(img_issues) == 0:
             img_issues = list(img_issues or []) + [{

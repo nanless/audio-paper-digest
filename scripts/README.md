@@ -45,6 +45,9 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/reader-contract.js` | Node 库 | Reader 共享机械阈值、按本次证据生成 Prompt 门禁说明，以及基于实际小节身份的近重复 warning。 |
 | `lib/reader-tables.js` | Node 库 | 将 TABLE marker 与原表行列选择确定性展开为 Markdown 和既有逐格来源绑定，保留表头身份并拒绝错位/越界。 |
 | `lib/llm-usage.js` | Node 库 | 请求级真实 usage 规范化与按论文/阶段归因；服务未提供的计费用量保持不可得。 |
+| `lib/fresh-rewrite-run.js` | Node 库 | 从 raw 元数据白名单创建隔离重写 run，编排同源缓存、仅本 run 分析恢复和完整结果提升。 |
+| `lib/fresh-analysis-context.js` | Node 库 | fresh run 的原文缓存、来源 SHA 重放与深分析上下文隔离；拒绝旧生成正文和跨 run checkpoint。 |
+| `lib/fresh-rewrite-publication.js` | Node 库 | fresh 重写前精确备份 canonical/博客基线，完整新结果通过来源与基线 CAS 后才提升 canonical。 |
 
 ## 默认 LLM/API：恢复与维护入口
 
@@ -62,6 +65,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `verify-project.js` | 沙箱外完整离线验证：固定 Hugo、全仓语法、默认/Manual JS 与 Python、只读数据门禁；`--quick` 仅语法与数据，不是完整验收。 |
 | `llm-usage-report.js` | 只读汇总请求用量事件，区分真实 usage、不可得状态和字符估算，不推算未经证实的费用。 |
 | `evaluate-reader-efficiency.js` | 显式、隔离、限额的单篇 Reader 效率实验；默认只预检，`--live` 才调用模型，不覆盖 canonical 或发布博客。 |
+| `rewrite-from-source.js` | 显式 prepare/sources/analyze/status/promote 的同源全新重写入口；默认没有网络动作，不接受任意路径。 |
 | `paper-rethink-server.js` | 历史独立维护工具；博客已取消本机助手集成，不应为阅读、引用或复制 AI 提问启动此服务。旧接口实现仍保留供历史维护。 |
 | `validate-data-files.js` | 只读复验 current 数据、跨文件集合、评分和兼容 provenance。 |
 | `backfill_papers.py` | 只补录历史论文 ID，不执行深度分析。 |

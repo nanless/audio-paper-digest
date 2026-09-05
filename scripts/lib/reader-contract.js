@@ -42,6 +42,9 @@ function buildReaderContractNotice(options = {}) {
         `本次机械门禁（${READER_MECHANICAL_CONTRACT}）：`,
         `sections ${rules.minimumSections}–${rules.maximumSections} 节；正文 ${rules.minimumChineseChars}–${rules.maximumChineseChars} 中文字；conceptBridges ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组。`,
         `至少 ${rules.minimumTables} 张有叙事闭环的表，其中至少 ${rules.minimumWideTables} 张达到 ${rules.minimumWideColumns} 列。原表选择不能自行补列或改数字；原表宽度不足时用有完整逐字证据的 source_quotes 整理表承担宽表要求。`,
+        ...(options.minimumResultTables > 0 ? [
+            `原文明确包含定量结果表：result/ablation 小节必须呈现至少 ${options.minimumResultTables} 张数字结果表，保留必要基线与实际可运行策略；只有数据集表和配置表不能通过。`
+        ] : []),
         `表前至少 ${rules.tableLeadChineseChars} 个汉字，表后至少 ${rules.tableExplanationChineseChars} 个汉字，放在与表相邻的独立正文段中。`,
         `Figure 最多 ${rules.maximumFigures} 张；仅选择本次实际收到像素的编号；没有像素时 figurePlacements 必须为空。图前至少 ${rules.figureLeadChars} 字符，图后至少 ${rules.figureExplanationChars} 字符，focusPoints ${rules.minimumFocusPoints}–${rules.maximumFocusPoints} 项。`
     ].join('\n');

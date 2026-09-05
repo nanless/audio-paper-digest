@@ -74,7 +74,8 @@ const {
     readerRequirements, findReaderSectionNearDuplicates
 } = require('./lib/reader-contract.js');
 const { READER_TABLE_SELECTION_CONTRACT, compileReaderTableSelections,
-    assessReaderTableSelectionEligibility, findReaderTablePasteDuplication } = require('./lib/reader-tables.js');
+    assessReaderTableSelectionEligibility, findReaderTablePasteDuplication,
+    readerResultTableRequirement, validateReaderResultTableCoverage } = require('./lib/reader-tables.js');
 
 // 解构配置常量（便于阅读）
 const {
@@ -2412,6 +2413,9 @@ function parseApiReaderArticleResult(raw, options = {}) {
     const kinds = new Set(normalizedSections.map(section => section.kind));
     const missing = API_READER_REQUIRED_KINDS.filter(kind => !kinds.has(kind));
     if (missing.length > 0) throw new Error(`读者文章缺少教学阶段: ${missing.join(', ')}`);
+    if (options.requireIntegratedTables === true && value.version === 3) {
+        validateReaderResultTableCoverage(normalizedSections, options.structuredArtifacts);
+    }
     const minimumConceptBridges = requirements.minimumConceptBridges;
     const maximumConceptBridges = requirements.maximumConceptBridges;
     if (!Array.isArray(value.conceptBridges)
@@ -3105,6 +3109,9 @@ function buildApiReaderGenerationStart(paper, options = {}) {
 
 async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceEvidence, options = {}) {
     const repair = require('./lib/reader-repair.js');
+    const fresh = require('./lib/fresh-analysis-context.js');
+    fresh.assertFreshPaper(paper);
+    const freshIdentity = fresh.freshAnalysisIdentity(getPaperArxivId(paper));
     const { buildReaderContractNotice, readerRequirements } = require('./lib/reader-contract.js');
     const { FILES } = require('./config.js');
     const start = buildApiReaderGenerationStart(paper, options);
@@ -3112,13 +3119,16 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const requestModel = options.readerCallModel || callModel;
     const recordDisposition = options.readerRecordDisposition || require('./lib/llm-usage.js').recordLlmDisposition;
     const materializeFigures = options.readerMaterializeFigures || materializeApiReaderFigures;
-    const candidateDirectory = options.readerAttemptsDir || FILES.apiReaderAttemptsDir;
+    const candidateDirectory = fresh.getFreshAnalysisContext()
+        ? fresh.freshReaderAttemptsDirectory(options.readerAttemptsDir)
+        : options.readerAttemptsDir || FILES.apiReaderAttemptsDir;
     if (!candidateDirectory) throw new Error('Reader candidate directory is not configured');
     const repairMaxTokens = ANALYSIS_CONFIG.apiReaderRepairMaxTokens || 8000;
     const maxAttempts = Number.isInteger(options.readerMaxAttempts)
         ? Math.min(6, Math.max(1, options.readerMaxAttempts)) : 6;
     const identity = {
         paperId: getPaperArxivId(paper),
+        ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
         contentMode,
         inputFingerprint: stableFingerprint({ contentMode, sourceEvidence,
             reviewFeedback: options.reviewFeedback || '', initialDraft: start.previousDraft,
@@ -3181,7 +3191,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         .map(match => Number.parseInt(match[1], 10))
         .filter(Number.isInteger).length;
     const minimumIntegratedTables = readerRequirements({ version: 3, availableTableCount }).minimumTables;
-    const mechanicalContract = buildReaderContractNotice({ version: 3, minimumIntegratedTables, availableTableCount });
+    const mechanicalContract = buildReaderContractNotice({ version: 3, minimumIntegratedTables, availableTableCount,
+        ...readerResultTableRequirement(options.structuredArtifacts) });
     const figureEvidenceEntries = [...String(sourceEvidence || '')
         .matchAll(/^FIGURE_(\d+):\s*([^\n]*)\nFIGURE_\1_URL:\s*(https:\/\/[^\s]+)$/gm)]
         .map(match => ({
@@ -3977,7 +3988,9 @@ function buildStageEvidenceContext(stage, analysis, sourceText) {
 function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext) {
     const config = TEXT_RECOVERY_STAGE_CONFIG[stage];
     if (!config) throw new Error(`未知的文本恢复阶段: ${stage}`);
+    const freshIdentity = require('./lib/fresh-analysis-context.js').freshAnalysisIdentity();
     return stableFingerprint({
+        ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
         ...modelFingerprint(DEEP_CONFIG, API_TEMPERATURE, config.maxTokens),
         promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES[stage]),
         evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
@@ -4029,8 +4042,10 @@ function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourc
 }
 
 function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
+    const freshIdentity = require('./lib/fresh-analysis-context.js').freshAnalysisIdentity(arxivId);
     const usedTextSha256 = crypto.createHash('sha256').update(textForAnalysis).digest('hex');
     const primaryContext = {
+        ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
         ...modelFingerprint(DEEP_CONFIG),
         promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.primaryAnalysis),
         usedTextSha256,
@@ -4045,6 +4060,7 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
         primaryAnalysis: stableFingerprint(primaryContext),
         demoLinkScan: stableFingerprint({ implementation: 'demo-link-scan-v2-resource-identity' }),
         apiReaderArticle: stableFingerprint({
+            ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
             ...modelFingerprint(DEEP_CONFIG, API_READER_INITIAL_TEMPERATURE, API_READER_MAX_TOKENS),
             contract: API_READER_ARTICLE_CONTRACT,
             contentMode: READER_SOURCE_CONTENT_MODE,
@@ -6148,6 +6164,10 @@ function applyApiReaderResourceAvailability(analysis, identity) {
  * 带重试机制，避免因并发限流偶发失败
  */
 async function fetchArxivTextDetailed(arxivId) {
+    return require('./lib/fresh-analysis-context.js').fetchFreshSource(arxivId, fetchArxivTextDetailedOriginal);
+}
+
+async function fetchArxivTextDetailedOriginal(arxivId) {
     const maxRetries = 6;
     const warnings = [];
     let htmlAvailability = 'transient_failure';
@@ -7692,7 +7712,10 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
  */
 async function analyzePaperDeep(paper) {
     const { withLlmUsageContext } = require('./lib/llm-usage.js');
-    return withLlmUsageContext({ paperId: getPaperArxivId(paper) }, () => analyzePaperDeepInternal(paper));
+    const fresh = require('./lib/fresh-analysis-context.js');
+    return fresh.withFreshPaperContext(paper, () => withLlmUsageContext(
+        { paperId: getPaperArxivId(paper) }, () => analyzePaperDeepInternal(paper)
+    ));
 }
 
 async function analyzePaperDeepInternal(paper) {
@@ -7724,6 +7747,7 @@ async function analyzePaperDeepInternal(paper) {
             }
             console.log(`    [deep] 全文长度: ${fullText.length} 字符`);
         } catch (e) {
+            if (require('./lib/fresh-analysis-context.js').getFreshAnalysisContext()) throw e;
             sourceFetchError = e;
             sourceDetails.warnings.push(`全文抓取异常: ${e.message}`);
             console.log(`    [deep] 获取全文失败: ${e.message}，使用摘要`);
@@ -7731,6 +7755,8 @@ async function analyzePaperDeepInternal(paper) {
     } else if (fullText) {
         console.log(`    [deep] 使用预提供全文: ${fullText.length} 字符`);
     }
+
+    require('./lib/fresh-analysis-context.js').attachFreshSourceProvenance(paper, analysisManifest, sourceDetails);
 
     const hasFullText = fullText.length > FULL_TEXT_MIN_CHARS_FOR_FULL;
     const abstractText = paper.abstract || paper.summary || '';

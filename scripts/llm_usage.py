@@ -91,6 +91,7 @@ def build_llm_usage_event(*, protocol, model, request, response=None, status_cod
     return {
         'version': VERSION, 'kind': 'request', 'eventId': str(uuid.uuid4()),
         'at': datetime.now(timezone.utc).isoformat(), 'runtime': 'python',
+        'runId': context.get('runId') if re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}', str(context.get('runId') or '')) else None,
         'paperId': paper_id if isinstance(paper_id, str) and re.fullmatch(r'\d{4}\.\d{4,5}(?:v\d+)?', paper_id) else None,
         'stage': _label(context.get('stage')) or 'unknown',
         'unitId': context.get('unitId') if re.fullmatch(r'[a-f0-9]{64}', str(context.get('unitId') or '')) else None,

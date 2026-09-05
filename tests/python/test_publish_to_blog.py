@@ -919,12 +919,20 @@ class PublishToBlogReviewTest(unittest.TestCase):
             with mock.patch.object(publish_to_blog, 'CURRENT_DIR', Path(tmp) / 'current'), \
                     mock.patch.object(publish_to_blog, 'review_protocol_fingerprint', return_value='a' * 64):
                 with publish_to_blog.review_unit_cache('2026-07-10', Path(tmp) / 'page.md',
-                        required=True, paper_id='2607.00001'):
+                        required=True, paper_id='2607.00001', run_id='11111111-1111-4111-8111-111111111111'):
                     publish_to_blog.review_cached_unit('text', {'content': 'private article text'}, request)
         self.assertEqual(events[0]['paperId'], '2607.00001')
+        self.assertEqual(events[0]['runId'], '11111111-1111-4111-8111-111111111111')
         self.assertEqual(events[0]['stage'], 'publish.text')
         self.assertRegex(events[0]['unitId'], r'^[a-f0-9]{64}$')
         self.assertNotIn('private article text', json.dumps(events))
+
+    def test_fresh_usage_identity_does_not_trust_malformed_provenance(self):
+        for paper in [None, {}, {'freshRewriteProvenance': 'invalid'},
+                      {'freshRewriteProvenance': {'runId': '../secret'}}]:
+            self.assertIsNone(publish_to_blog._paper_fresh_run_id(paper))
+        run_id = '11111111-1111-4111-8111-111111111111'
+        self.assertEqual(publish_to_blog._paper_fresh_run_id({'freshRewriteProvenance': {'runId': run_id}}), run_id)
 
     def test_review_wrapper_passes_generation_snapshot_to_final_workbench_gate(self):
         date_str = '2026-08-31'

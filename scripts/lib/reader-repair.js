@@ -144,6 +144,15 @@ function collectDraftIssues(draft, parserError, options = {}) {
         });
     }
     collectTableBindingIssues(draft, options).forEach(issue => issues.push(issue));
+    try {
+        const tables = require('./reader-tables.js');
+        const compiled = tables.compileReaderTableSelections(draft.sections, draft.tableBindings, options.structuredArtifacts);
+        tables.validateReaderResultTableCoverage(compiled.sections, options.structuredArtifacts);
+    } catch (error) {
+        if (error.message.startsWith('读者文章主结果表覆盖不足')) {
+            issues.push({ path: null, code: 'reader_result_table_missing', message: error.message });
+        }
+    }
     // This is a preflight estimate, not a second length gate. The parser later
     // counts its normalized/compiled article, which remains authoritative.
     const countText = draft.sections.map(section => `${section?.heading || ''}\n${section?.body || ''}`).join('\n')
@@ -266,6 +275,11 @@ function buildRepairTargets(draft, issues) {
     for (const issue of issues) {
         if (issue.path) add(issue.path);
         const message = issue.message || '';
+        if (/主结果表覆盖不足/.test(message)) {
+            draft.sections.forEach((section, index) => {
+                if (['result', 'ablation'].includes(section?.kind)) add(`/sections/${index}/body`);
+            });
+        }
         for (const match of message.matchAll(/(sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\[(\d+)\](?:\.(body|heading|kind))?/g)) {
             add(`/${match[1]}/${match[2]}${match[1] === 'sections' && match[3] === 'body' ? '/body' : ''}`);
             sectionForBinding(match[1], Number(match[2]));

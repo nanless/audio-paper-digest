@@ -83,6 +83,8 @@ npm run storage:prune -- --apply
 
 ## 验证矩阵
 
+用户明确要求完全不用旧生成正文重写历史批次时，使用 [fresh rewrite 分阶段流程](fresh-rewrite.md)。普通 `reanalyze`、Reader refresh 和清除个别 analysis 字段都不等于这一隔离保证。
+
 ```bash
 npm run verify
 git diff --check

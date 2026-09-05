@@ -2,6 +2,7 @@
 
 const READER_TABLE_SELECTION_CONTRACT = 'reader-table-selection-v2';
 const READER_TABLE_ELIGIBILITY_CONTRACT = 'reader-table-eligibility-v1';
+const READER_RESULT_COVERAGE_CONTRACT = 'reader-result-table-coverage-v1';
 const sha256 = value => /^[a-f0-9]{64}$/.test(String(value || ''));
 const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
     && Object.keys(value).sort().join(',') === keys.slice().sort().join(',');
@@ -31,6 +32,39 @@ function findReaderTablePasteDuplication(cell) {
 function unsafeMarkdownCell(text) {
     return /[|\r\n]/.test(text) || /\[\[|<\/?[A-Za-z!]|!?\[[^\]]*\]\(/.test(text)
         || /^\s*:?-{3,}:?\s*$/.test(text);
+}
+
+// A conservative source-only trigger, not a scientific classifier. Do not
+// infer an experiment from an author table or a table of training settings.
+function readerResultTableRequirement(artifacts) {
+    const sourceTableOrdinals = (Array.isArray(artifacts?.tables) ? artifacts.tables : []).filter(table => {
+        if (!Number.isInteger(table?.ordinal) || table.ordinal < 1
+            || table.recoveryStatus !== 'complete' || !sha256(table.sourceDomSha256)) return false;
+        const caption = String(table.caption || '');
+        if (!/\b(?:results?|performance|comparisons?|benchmarks?)\b|实验结果|主结果|性能比较/i.test(caption)
+            || /\b(?:authors?|affiliations?|hyperparameters?|configuration|settings|setup)\b|dataset statistics|data statistics|作者|机构|超参数|训练配置/i.test(caption)) return false;
+        const rows = Array.isArray(table.matrix) ? table.matrix.filter(Array.isArray) : [];
+        return rows.length >= 2 && rows.flat().filter(cell => typeof cell === 'string' && /\d/.test(cell)).length >= 4;
+    }).map(table => table.ordinal);
+    return { contract: READER_RESULT_COVERAGE_CONTRACT,
+        minimumResultTables: sourceTableOrdinals.length ? 1 : 0, sourceTableOrdinals };
+}
+
+function validateReaderResultTableCoverage(sections, artifacts) {
+    const requirement = readerResultTableRequirement(artifacts);
+    if (!requirement.minimumResultTables) return requirement;
+    const { extractMarkdownTables } = require('../analysis-contract.js');
+    const results = sections.filter(section => ['result', 'ablation'].includes(section?.kind));
+    const numericResultTables = results.flatMap(section => extractMarkdownTables(String(section.body || '')))
+        .filter(table => (String(table.markdown || '').match(/\d+/g) || []).length >= 4);
+    if (!numericResultTables.length) {
+        throw new Error('读者文章主结果表覆盖不足：原论文 TABLE_'
+            + requirement.sourceTableOrdinals.join('/TABLE_')
+            + ' 明确提供定量结果；result/ablation 小节必须含至少一张可核对的数字结果表。'
+            + '不能只用数据集表和配置表凑数量。保留可运行策略、必要基线与比较条件，'
+            + '必要时将一张配置表改为结果表并同步正文和 tableBindings，配置事实保留在文字中。');
+    }
+    return { ...requirement, numericResultTables: numericResultTables.length };
 }
 
 function assessReaderTableSelectionEligibility(table) {
@@ -168,5 +202,6 @@ function compileReaderTableSelections(sections, bindings, artifacts) {
 }
 
 module.exports = { READER_TABLE_SELECTION_CONTRACT, READER_TABLE_ELIGIBILITY_CONTRACT,
+    READER_RESULT_COVERAGE_CONTRACT, readerResultTableRequirement, validateReaderResultTableCoverage,
     findReaderTablePasteDuplication, assessReaderTableSelectionEligibility,
     renderReaderTableSelection, compileReaderTableSelections };

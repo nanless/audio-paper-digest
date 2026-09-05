@@ -39,6 +39,7 @@ function withLlmUsageContext(context, callback) {
 function usageContext(context = {}) {
     const value = { ...(scope.getStore() || {}), ...context };
     return {
+        runId: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(String(value.runId || '')) ? value.runId : null,
         paperId: /^\d{4}\.\d{4,5}(?:v\d+)?$/.test(String(value.paperId || '')) ? value.paperId : null,
         stage: label(value.stage) || 'unknown', unitId: digest(value.unitId),
         contentAttempt: count(value.contentAttempt), transportAttempt: count(value.transportAttempt)
@@ -133,7 +134,7 @@ function recordLlmDisposition(input, options = {}) {
 function summarizeLlmUsage(events) {
     const groups = new Map();
     const seen = new Set();
-    const dispositionKey = event => JSON.stringify([event.paperId || null, event.stage || 'unknown',
+    const dispositionKey = event => JSON.stringify([event.runId || null, event.paperId || null, event.stage || 'unknown',
         event.unitId || null, event.contentAttempt ?? null, event.outputTextSha256]);
     const dispositions = new Map();
     for (const event of events) {
@@ -147,8 +148,8 @@ function summarizeLlmUsage(events) {
     for (const event of events) {
         if (event?.version !== VERSION || event.kind !== 'request' || !event.eventId || seen.has(event.eventId)) continue;
         seen.add(event.eventId);
-        const key = JSON.stringify([event.paperId || null, event.stage || 'unknown']);
-        if (!groups.has(key)) groups.set(key, { paperId: event.paperId || null, stage: event.stage || 'unknown',
+        const key = JSON.stringify([event.runId || null, event.paperId || null, event.stage || 'unknown']);
+        if (!groups.has(key)) groups.set(key, { runId: event.runId || null, paperId: event.paperId || null, stage: event.stage || 'unknown',
             requests: 0, unsuccessfulRequests: 0, requestsWithUsage: 0,
             dispositions: { accepted: 0, rejected: 0, conflicting: 0, unknown: 0 },
             usage: Object.fromEntries(['inputTokens', 'outputTokens', 'totalTokens', 'cachedInputTokens',

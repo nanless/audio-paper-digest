@@ -163,6 +163,7 @@ const FILES = {
     // 因此不能放进会被归档轮转的 current/。
     llmAccountPoolState: path.join(DATA_DIR, 'runtime', 'llm-account-pool.json'),
     llmUsageDir: path.join(DATA_DIR, 'runtime', 'llm-usage'),
+    freshRewriteRunsDir: path.join(DATA_DIR, 'runtime', 'fresh-rewrites'),
     apiReaderAttemptsDir: path.join(DATA_DIR, 'runtime', 'reader-attempts'),
     papers: path.join(CURRENT_DIR, 'papers.json'),
     papersLegacy: path.join(DATA_DIR, 'papers.json'),

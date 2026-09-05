@@ -55,6 +55,8 @@ Apply is an offline maintenance operation. Run it only when acquisition, analysi
 
 ## Verification
 
+When a user explicitly requests a complete rewrite with no prior generated prose, use the [fresh rewrite staged workflow](../fresh-rewrite.md). Ordinary reanalysis, Reader refresh, or deleting only `analysis` does not provide the same isolation guarantee. `prepare` and `status` never call the model; `sources` and `analyze` are explicit phases, and `promote` requires complete same-run/source provenance plus baseline compare-and-swap before changing canonical data.
+
 ```bash
 npm run verify
 git diff --check

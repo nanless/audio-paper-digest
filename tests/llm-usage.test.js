@@ -83,6 +83,18 @@ test('usage report rejects impossible calendar dates before reading records', ()
     }
 });
 
+test('fresh run scope is preserved and usage from distinct rewrites never merges', () => {
+    const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'];
+    const events = ids.map(runId => withLlmUsageContext({ runId }, () => buildLlmUsageEvent({
+        request: {}, protocol: 'openai_responses', statusCode: 200,
+        context: { paperId: '2609.03622', stage: 'apiReaderArticle' }
+    })));
+    assert.deepEqual(events.map(event => event.runId), ids);
+    assert.equal(summarizeLlmUsage(events).groups.length, 2);
+    const { main } = require('../scripts/llm-usage-report.js');
+    assert.throws(() => main(['--run', '../other']), /Invalid run ID/);
+});
+
 test('transport records malformed responses and network errors without changing their result', async () => {
     const { requestLlmJson } = require('../scripts/utils.js');
     const events = [];

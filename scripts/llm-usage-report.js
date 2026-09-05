@@ -28,11 +28,12 @@ function main(args = process.argv.slice(2)) {
     const options = {};
     for (let i = 0; i < args.length; i += 2) {
         const name = args[i];
-        if (!['--dir', '--paper', '--stage', '--date'].includes(name) || !args[i + 1]
-            || args[i + 1].startsWith('--') || options[name]) throw new Error('Usage: usage:report [--paper ID] [--stage NAME] [--date YYYY-MM-DD] [--dir DIR]');
+        if (!['--dir', '--paper', '--stage', '--date', '--run'].includes(name) || !args[i + 1]
+            || args[i + 1].startsWith('--') || options[name]) throw new Error('Usage: usage:report [--paper ID] [--stage NAME] [--date YYYY-MM-DD] [--run UUID] [--dir DIR]');
         options[name] = args[i + 1];
     }
     if (options['--paper'] && !/^\d{4}\.\d{4,5}(?:v\d+)?$/.test(options['--paper'])) throw new Error('Invalid paper ID');
+    if (options['--run'] && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(options['--run'])) throw new Error('Invalid run ID');
     if (options['--date']) {
         const date = options['--date'];
         const parsed = new Date(`${date}T00:00:00Z`);
@@ -40,6 +41,7 @@ function main(args = process.argv.slice(2)) {
             || parsed.toISOString().slice(0, 10) !== date) throw new Error('Invalid date');
     }
     const events = readUsageEvents(path.resolve(options['--dir'] || Config.FILES.llmUsageDir)).filter(event => {
+        if (options['--run'] && event.runId !== options['--run']) return false;
         if (options['--paper'] && String(event.paperId || '').replace(/v\d+$/, '') !== options['--paper'].replace(/v\d+$/, '')) return false;
         if (options['--stage'] && event.stage !== options['--stage']) return false;
         if (options['--date']) {

@@ -30,7 +30,14 @@ function writeFileAtomic(filePath, content) {
     }
     const tmpPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`);
     try {
-        fs.writeFileSync(tmpPath, content, 'utf8');
+        let previousMode;
+        try {
+            const stat = fs.lstatSync(filePath);
+            if (stat.isFile()) previousMode = stat.mode & 0o777;
+        } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        // Replacing a private run/checkpoint must not reset its mode to 0644.
+        fs.writeFileSync(tmpPath, content, { encoding: 'utf8', mode: previousMode });
+        if (previousMode !== undefined) fs.chmodSync(tmpPath, previousMode);
         fs.renameSync(tmpPath, filePath);
     } catch (err) {
         if (fs.existsSync(tmpPath)) {
