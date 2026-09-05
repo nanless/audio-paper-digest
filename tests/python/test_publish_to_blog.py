@@ -792,6 +792,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertEqual(canon('1,234,567'), '1234567')
         self.assertEqual(canon('1,2'), '1,2')
         self.assertEqual(canon('2025s'), '2025')
+        self.assertEqual(canon('2025 s'), '2025s')
         self.assertEqual(canon('5s'), '5s')
         self.assertEqual(canon('20 dB'), '20db')
         tokens = publish_to_blog._api_reader_numeric_tokens(
@@ -802,7 +803,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertIn('2020', tokens)
         self.assertIn('1212', tokens)
         self.assertEqual(
-            publish_to_blog._reader_doubled_half_token('40964096 s'), '4096',
+            publish_to_blog._reader_doubled_half_token('40964096 s'), '4096 s',
         )
         self.assertEqual(
             publish_to_blog._reader_doubled_half_token('8.218.21'), '8.21',
@@ -813,6 +814,81 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertIsNone(publish_to_blog._reader_doubled_half_token('2020'))
         self.assertIsNone(publish_to_blog._reader_doubled_half_token('1212'))
         self.assertIsNone(publish_to_blog._reader_doubled_half_token('11'))
+
+    def test_api_reader_numeric_replay_preserves_exact_repeated_decimals(self):
+        tokens = publish_to_blog._api_reader_numeric_tokens(
+            'DNS Challenge\n2.222.22\n3.093.09\n3.503.50\n3.803.80\n'
+            '+0.05+0.05\n−0.02-0.02\n+0.15+0.15'
+        )
+        for expected in ('2.22', '3.09', '3.5', '3.8', '0.05', '-0.02', '0.15'):
+            self.assertIn(expected, tokens)
+        for fabricated in ('3.1', '-3.09', '3.09db'):
+            self.assertNotIn(fabricated, tokens)
+        self.assertNotIn('3.09', publish_to_blog._api_reader_numeric_tokens('3.093.08'))
+        self.assertIn('0.9', publish_to_blog._api_reader_numeric_tokens(
+            'TTA is performed using standard gradient descent with momentum 0.90.9.'
+        ))
+        self.assertNotIn('3.09', publish_to_blog._api_reader_numeric_tokens('3.093.093'))
+
+    def test_api_reader_source_binding_refuses_internal_failure_placeholders(self):
+        paper = llm_api_publication_fixture()
+        paper['apiReaderArticle'] += '\n\n原文中没有可逐字绑定的数值证据'
+        with self.assertRaisesRegex(
+                publish_to_blog.PublishDataValidationError, '内部绑定失败占位'):
+            publish_to_blog._validate_api_reader_source_bindings(paper)
+
+    def test_api_reader_numeric_units_are_whole_words_not_next_row_prefixes(self):
+        tokens = publish_to_blog._api_reader_numeric_tokens(
+            '2.39\nSE w/o TTA\n3.99\nSE w/ TTA\n4.12 BAK\n5.23 Model'
+        )
+        for value in ('2.39', '3.99', '4.12', '5.23'):
+            self.assertIn(value, tokens)
+        for wrong in ('2.39s', '3.99s', '4.12b', '5.23m'):
+            self.assertNotIn(wrong, tokens)
+        for unit in ('dB', 'ms', 's', 'Hz', 'kHz', 'MHz', 'GB', 'M', 'B', 'k', 'pp'):
+            self.assertIn('2.39' + unit.lower(), publish_to_blog._api_reader_numeric_tokens(
+                'The measurement is 2.39\n' + unit + ' in this setting.'
+            ))
+        for unit in ('second', 'seconds'):
+            self.assertIn('1s', publish_to_blog._api_reader_numeric_tokens('Duration: 1 ' + unit + '.'))
+        self.assertNotIn('1s', publish_to_blog._api_reader_numeric_tokens('Count: 1 secondsExtra.'))
+
+    def test_api_reader_numeric_doubled_units_require_the_same_displayed_unit(self):
+        for surface, correct, bare in (
+                ('3.093.09 dB', '3.09 dB', '3.09'),
+                ('3.093.09 s', '3.09 s', '3.09'),
+                ('3.093.09 seconds', '3.09 s', '3.09'),
+                ('3.093.09 %', '3.09%', '3.09'),
+                ('20202020 s', '2020 s', '2020')):
+            quote = f'The measured quantity is {surface} under the shared protocol.'
+            tokens = publish_to_blog._api_reader_numeric_tokens(quote)
+            self.assertIn(publish_to_blog._canonical_api_reader_numeric_token(correct), tokens)
+            self.assertNotIn(bare, tokens)
+            for value, accepted in ((correct, True), (bare, False)):
+                paper = llm_api_publication_fixture()
+                article = f'| Metric | Measurement |\n| --- | --- |\n| Checked | {value} |'
+                paper['apiReaderArticle'] = article
+                plan = paper['apiReaderPlan']
+                plan['formulaBindings'] = []
+                plan['tableBindings'] = [{
+                    'tableIndex': 1, 'sourceType': 'source_quotes', 'sourceTableOrdinal': None,
+                    'renderedTableSha256': hashlib.sha256(article.encode('utf-8')).hexdigest(),
+                    'cellBindings': [], 'sourceQuotes': [{
+                        'quote': quote,
+                        'sourceQuoteSha256': hashlib.sha256(quote.encode('utf-8')).hexdigest(),
+                    }],
+                }]
+                reseal_llm_api_reader_fixture(paper)
+                if accepted:
+                    publish_to_blog._validate_api_reader_source_bindings(paper)
+                else:
+                    with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '数字缺少来源 quote'):
+                        publish_to_blog._validate_api_reader_source_bindings(paper)
+        unitless = publish_to_blog._api_reader_numeric_tokens(
+            'The measured score is 3.093.09 under the shared protocol.'
+        )
+        for fabricated in ('3.09db', '3.09s', '3.09%'):
+            self.assertNotIn(fabricated, unitless)
 
     def test_api_reader_asset_attestation_accepts_deleted_manifest_tombstone(self):
         with tempfile.TemporaryDirectory() as tmp:

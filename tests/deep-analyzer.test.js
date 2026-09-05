@@ -1677,6 +1677,12 @@ primary_task_tag: #音视频生成
         );
         payload.sections[0].body = payload.sections[0].body
             .replace('\n\n根据本 prompt 的要求，下面继续输出。', '');
+        for (const leakedInstruction of ['图后解释必须紧贴像素。', '图后解释紧扣可见像素。', '不擅自断言内存消融结论。', '按反馈重写这一节。']) {
+            const originalBody = payload.sections[0].body;
+            payload.sections[0].body += `\n\n${leakedInstruction}`;
+            assert.throws(() => parseApiReaderArticleResult(JSON.stringify(payload)), /泄漏了流程或证据元话语/);
+            payload.sections[0].body = originalBody;
+        }
 
         payload.sections[3].heading = '方法概述';
         const repairedGenericHeading = parseApiReaderArticleResult(JSON.stringify(payload));
@@ -2387,12 +2393,13 @@ primary_task_tag: #音视频生成
         assert.strictEqual(bounded.resources[11].originalUrl, manyUrls[11]);
     });
 
-    it('API Reader 确定性删除 source_quotes 表中无法逐字绑定的数值单元格', () => {
+    it('API Reader 未绑定数字返回修复循环，绝不替换成公开占位文字', () => {
         const {
             deriveExactTableSourceQuotes,
             ensureApiReaderTableNarratives,
             normalizeApiReaderTablePasteArtifacts,
-            sanitizeUnsupportedSourceQuoteTableNumerics,
+            bindApiReaderSourceEvidence,
+            bindStructuredArtifactsToText,
             validateApiReaderTableNarratives
         } = require('../scripts/deep-analyzer.js');
         const article = [
@@ -2405,21 +2412,24 @@ primary_task_tag: #音视频生成
             '',
             '只有能够回放到全文的数字才能保留在最终表格中。'
         ].join('\n');
-        const cleaned = sanitizeUnsupportedSourceQuoteTableNumerics(
-            article,
-            [{ sourceType: 'source_quotes' }],
-            'The paper reports a measured value of 0.451 on the held-out set.'
-        );
-        assert.match(cleaned, /\| 原文报告 \| 0\.451 \|/);
-        assert.doesNotMatch(cleaned, /9\.99/);
-        assert.match(cleaned, /原文中没有可逐字绑定的数值证据/);
-        const cleanedFallbackArtifact = sanitizeUnsupportedSourceQuoteTableNumerics(
-            article,
-            [{ sourceType: 'artifact_table', sourceTableOrdinal: 1, cellBindings: [] }],
-            'The paper reports a measured value of 0.451 on the held-out set.',
-            { tables: [] }
-        );
-        assert.doesNotMatch(cleanedFallbackArtifact, /9\.99/);
+        const sourceText = 'The paper reports a measured value of 0.451 on the held-out set.';
+        const structuredArtifacts = bindStructuredArtifactsToText({ tables: [], formulas: [] }, sourceText);
+        const options = { sourceText, structuredArtifacts, allowDeterministicQuoteRepair: true };
+        const quoteBinding = [{ tableIndex: 1, sourceType: 'source_quotes',
+            sourceTableOrdinal: null, cellBindings: [], sourceQuotes: [sourceText] }];
+        assert.throws(() => bindApiReaderSourceEvidence(article, quoteBinding, [], options),
+            error => /关键数字缺少 exact quote\/cell 证据: 9.99/.test(error.message)
+                && /row=2,column=1 text="9.99" missing=9.99/.test(error.message));
+        assert.match(article, /\| 草稿推断 \| 9\.99 \|/);
+        assert.throws(() => bindApiReaderSourceEvidence(article,
+            [{ tableIndex: 1, sourceType: 'artifact_table', sourceTableOrdinal: 1,
+                cellBindings: [], sourceQuotes: [] }], [], options),
+        /关键数字缺少 exact quote\/cell 证据: 9.99/);
+        const valid = article.replace('| 草稿推断 | 9.99 |\n', '');
+        assert.strictEqual(bindApiReaderSourceEvidence(valid, quoteBinding, [], options).article, valid);
+        assert.throws(() => bindApiReaderSourceEvidence(
+            valid.replace('0.451', '原文中没有可逐字绑定的数值证据'), quoteBinding, [], options
+        ), /内部绑定失败占位/);
 
         const longSourceLine = `${'long context '.repeat(100)}the exact budget is 20k samples`;
         const quotes = deriveExactTableSourceQuotes(
@@ -2441,7 +2451,150 @@ primary_task_tag: #音视频生成
         const narrated = ensureApiReaderTableNarratives(
             '### 结果\n\n| 指标 | 数值 |\n| --- | --- |\n| SDR | 3.00 |\n\n### 局限'
         );
-        assert.doesNotThrow(() => validateApiReaderTableNarratives(narrated, 1));
+        assert.throws(() => validateApiReaderTableNarratives(narrated, 1), /前缺少独立说明段/);
+        assert.doesNotMatch(narrated, /下表围绕|未列出的方差|跨域表现|部署成本/);
+    });
+
+    it('表格叙事只分隔heading与已有说明，绝不补写比较结论或缺失证据', () => {
+        const { ensureApiReaderTableNarratives, validateApiReaderTableNarratives } = require('../scripts/deep-analyzer.js');
+        const before = '这张表在相同测试集上比较增强前后的信号质量，各行使用相同的评价指标。';
+        const table = '| 指标 | 数值 |\n| --- | --- |\n| SDR | 3.00 |';
+        const after = '这组结果显示目标条件下的增强收益，论文另有方差实验和部署成本分析，需要结合对应段落一起阅读。';
+        const raw = `### 在同一个测试集上比较什么？\n${before}\n\n${table}\n\n${after}`;
+        const expected = raw.replace('？\n', '？\n\n');
+        const normalized = ensureApiReaderTableNarratives(raw);
+        assert.strictEqual(normalized, expected);
+        assert.strictEqual(ensureApiReaderTableNarratives(normalized), normalized);
+        assert.doesNotThrow(() => validateApiReaderTableNarratives(normalized, 1));
+        assert.doesNotMatch(normalized, /下表围绕|未列出的方差、跨域表现和部署成本/);
+
+        const absentAfter = `### 结果\n\n${before}\n\n${table}\n\n### 下一节`;
+        assert.strictEqual(ensureApiReaderTableNarratives(absentAfter), absentAfter);
+        assert.throws(() => validateApiReaderTableNarratives(absentAfter, 1), /后缺少独立解释段/);
+        const fenced = '```markdown\n### 示例标题\n示例内容\n```\n\n~~~text\n### 另一个示例\n内容\n~~~';
+        assert.strictEqual(ensureApiReaderTableNarratives(fenced), fenced);
+    });
+
+    it('2609.03622 原表小数双写保留完整match，可按原字quote绑定干净值且不猜拆非重复串', () => {
+        const { deriveExactTableSourceQuotes, bindApiReaderSourceEvidence,
+            bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
+        // These are the exact flattened DOM cell surfaces of Table 1. The
+        // original mathematical text and its TeX annotation are concatenated.
+        const sourceText = 'DNS Challenge\nNoisy input\n2.222.22\n3.193.19\n2.382.38\n'
+            + 'SE w/o TTA (k=0)(k=0)\n3.093.09\n3.503.50\n3.803.80\n'
+            + 'SE w/ TTA\n+0.05+0.05\n−0.02-0.02\n+0.15+0.15\n';
+        const article = '| Setting | OVRL | SIG | BAK |\n| --- | --- | --- | --- |\n'
+            + '| Noisy | 2.22 | 3.19 | 2.38 |\n| Pretrained | 3.09 | 3.50 | 3.80 |\n'
+            + '| Adapted change | +0.05 | -0.02 | +0.15 |';
+        const quotes = deriveExactTableSourceQuotes(article, sourceText);
+        assert.ok(quotes.length > 0);
+        assert.ok(quotes.every(quote => sourceText.includes(quote)));
+        const bindings = [{ tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
+            cellBindings: [], sourceQuotes: quotes }];
+        const options = { sourceText,
+            structuredArtifacts: bindStructuredArtifactsToText({ tables: [], formulas: [] }, sourceText) };
+        assert.strictEqual(bindApiReaderSourceEvidence(article, bindings, [], options).article, article);
+        for (const fabricated of ['3.10', '-3.09', '3.09 dB']) {
+            assert.throws(() => bindApiReaderSourceEvidence(
+                article.replace('| 3.09 |', `| ${fabricated} |`), bindings, [], options
+            ), /关键数字缺少 exact quote\/cell 证据/);
+        }
+        assert.deepStrictEqual(deriveExactTableSourceQuotes('| Value |\n| --- |\n| 3.09 |',
+            'The malformed extracted cell is 3.093.08 on this row.'), []);
+        const ligatures = 'A ﬁne oﬃcial table follows:\n3.093.09\n3.503.50\n3.803.80';
+        assert.ok(deriveExactTableSourceQuotes('| Value |\n| --- |\n| 3.09 |', ligatures)
+            .some(quote => ligatures.includes(quote) && quote.includes('3.093.09')));
+        const momentum = 'TTA is performed using standard gradient descent with momentum 0.90.9.';
+        assert.ok(deriveExactTableSourceQuotes('| Momentum |\n| --- |\n| 0.9 |', momentum)
+            .includes(momentum));
+        assert.deepStrictEqual(deriveExactTableSourceQuotes('| Value |\n| --- |\n| 3.09 |',
+            'Malformed continuation 3.093.093 is not a complete repeated scalar.'), []);
+    });
+
+    it('短行quote保留原始空白并在首匹配无效时继续，单位门禁仍区分1与1 s', () => {
+        const { deriveExactTableSourceQuotes } = require('../scripts/deep-analyzer.js');
+        const table = value => `| Value |\n| --- |\n| ${value} |`;
+        const indented = '  7\r\n\r\n   Evaluation setup\r\n  reported count\r\n';
+        const preserved = deriveExactTableSourceQuotes(table('7'), indented);
+        assert.ok(preserved.length > 0);
+        assert.ok(preserved.every(quote => indented.includes(quote)));
+        assert.ok(preserved.some(quote => quote.includes('\r\n\r\n   Evaluation setup')));
+
+        const measured = 'The measured count is 7 on the held-out evaluation set.';
+        const later = `7${'\n'.repeat(12)}${measured}`;
+        const continued = deriveExactTableSourceQuotes(table('7'), later);
+        assert.ok(continued.some(quote => quote.includes(measured)));
+        assert.ok(continued.every(quote => later.includes(quote)));
+
+        const duration = 'Therefore, the proposed TTA technique can be viewed as a calibration '
+            + 'of the SE model to new acoustic noise characteristics, requiring only 1 second '
+            + 'of representative unlabeled noisy speech.';
+        assert.deepStrictEqual(deriveExactTableSourceQuotes(table('1'), duration), []);
+        assert.deepStrictEqual(deriveExactTableSourceQuotes(table('1 秒'), duration), []);
+        assert.ok(deriveExactTableSourceQuotes(table('1 s'), duration).includes(duration));
+        assert.deepStrictEqual(deriveExactTableSourceQuotes(table('1'),
+            'The document contains a repeated surface 11, with no independently bound scalar.'), []);
+    });
+
+    it('原表下一行英文词不冒充单位，完整seconds与s等价且原有单位跨空白可重放', () => {
+        const { deriveExactTableSourceQuotes, bindApiReaderSourceEvidence,
+            bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
+        const sourceText = 'EARS-WHAM\nNoisy input\n2.092.09\n2.722.72\n2.39\n'
+            + 'SE w/o TTA (k=0)(k=0)\n3.243.24\n3.503.50\n3.99\nSE w/ TTA\n';
+        const table = '| Setting | BAK |\n| --- | --- |\n| Noisy | 2.39 |\n| Pretrained | 3.99 |';
+        const quotes = deriveExactTableSourceQuotes(table, sourceText);
+        assert.ok(quotes.length > 0 && quotes.every(quote => sourceText.includes(quote)));
+        const bindings = [{ tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
+            cellBindings: [], sourceQuotes: quotes }];
+        const options = { sourceText,
+            structuredArtifacts: bindStructuredArtifactsToText({ tables: [], formulas: [] }, sourceText) };
+        assert.strictEqual(bindApiReaderSourceEvidence(table, bindings, [], options).article, table);
+        for (const [word, wrongUnit] of [['SE', 's'], ['BAK', 'B'], ['Model', 'M'], ['secondsExtra', 's']]) {
+            const source = `The row reports a score of 2.39\n${word} names the next row.`;
+            assert.ok(deriveExactTableSourceQuotes('| Value |\n| --- |\n| 2.39 |', source).length);
+            assert.deepStrictEqual(deriveExactTableSourceQuotes(
+                `| Value |\n| --- |\n| 2.39 ${wrongUnit} |`, source
+            ), []);
+        }
+        for (const unit of ['dB', 'ms', 's', 'Hz', 'kHz', 'MHz', 'GB', 'M', 'B', 'k', 'pp']) {
+            const source = `The measured quantity is 2.39\n${unit} under the shared protocol.`;
+            assert.ok(deriveExactTableSourceQuotes(`| Value |\n| --- |\n| 2.39 ${unit} |`, source)
+                .some(quote => source.includes(quote)));
+        }
+        for (const unit of ['second', 'seconds']) {
+            const source = `The adaptation duration is 1 ${unit} of unlabeled speech.`;
+            assert.ok(deriveExactTableSourceQuotes('| Duration |\n| --- |\n| 1 s |', source).includes(source));
+            assert.deepStrictEqual(deriveExactTableSourceQuotes('| Duration |\n| --- |\n| 1 ms |', source), []);
+        }
+    });
+
+    it('双写恢复保留dB/秒/百分号，禁止裸值借带单位来源或自行补单位', () => {
+        const { deriveExactTableSourceQuotes, bindApiReaderSourceEvidence,
+            bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
+        const table = value => `| Metric | Measurement |\n| --- | --- |\n| Checked | ${value} |`;
+        for (const [surface, correct, bare] of [
+            ['3.093.09 dB', '3.09 dB', '3.09'],
+            ['3.093.09 s', '3.09 s', '3.09'],
+            ['3.093.09 seconds', '3.09 s', '3.09'],
+            ['3.093.09 %', '3.09%', '3.09'],
+            ['20202020 s', '2020 s', '2020']
+        ]) {
+            const sourceText = `The measured quantity is ${surface} under the shared protocol.`;
+            const quotes = deriveExactTableSourceQuotes(table(correct), sourceText);
+            assert.ok(quotes.includes(sourceText), correct);
+            assert.deepStrictEqual(deriveExactTableSourceQuotes(table(bare), sourceText), [], bare);
+            const binding = [{ tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
+                cellBindings: [], sourceQuotes: [sourceText] }];
+            const options = { sourceText,
+                structuredArtifacts: bindStructuredArtifactsToText({ tables: [], formulas: [] }, sourceText) };
+            assert.strictEqual(bindApiReaderSourceEvidence(table(correct), binding, [], options).article, table(correct));
+            assert.throws(() => bindApiReaderSourceEvidence(table(bare), binding, [], options),
+                /关键数字缺少 exact quote\/cell 证据/);
+        }
+        const unitless = 'The measured score is 3.093.09 under the shared protocol.';
+        for (const fabricated of ['3.09 dB', '3.09 s', '3.09%']) {
+            assert.deepStrictEqual(deriveExactTableSourceQuotes(table(fabricated), unitless), []);
+        }
     });
 
     it('归一化后的评分审计二次校验会剥离内部派生字段', () => {

@@ -3268,8 +3268,8 @@ def _canonical_api_reader_numeric_token(raw):
     四位年份英文复数去掉裸 s。
     """
     # NFKC 不映射数学减号 U+2212 与全角连字符 U+FF0D，显式归一（与 Node 一致）。
-    token = unicodedata.normalize('NFKC', str(raw or ''))
-    token = token.replace('−', '-').replace('－', '-')
+    surface = unicodedata.normalize('NFKC', str(raw or '')).replace('−', '-').replace('－', '-')
+    token = surface
     previous = None
 
     while token != previous:
@@ -3286,9 +3286,12 @@ def _canonical_api_reader_numeric_token(raw):
     if not (number == number and abs(number) != float('inf')):
         return token
     suffix = match.group(2) or ''
-    if re.fullmatch(r'\d{4}', match.group(1)) \
+    if re.fullmatch(r'\d{4}s', surface.strip(), flags=re.IGNORECASE) \
+            and re.fullmatch(r'\d{4}', match.group(1)) \
             and 1000 <= int(match.group(1)) <= 2999 and suffix == 's':
         suffix = ''
+    if suffix in {'second', 'seconds'}:
+        suffix = 's'
     number_text = str(int(number)) if float(number).is_integer() else str(number)
     return f'{number_text}{suffix}'
 
@@ -3307,20 +3310,24 @@ def _reader_doubled_half_token(surface):
             return None
         return half
 
-    compact = re.sub(r'\s+', '', str(surface or ''))
+    compact = re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(surface or '')))
     direct = pick_half(compact)
     if direct:
         return direct
-    stripped = re.sub(r'[%a-zA-Z]+$', '', compact)
-    if stripped != compact:
-        return pick_half(stripped)
+    suffix_match = re.search(r'[%a-zA-Z]+$', compact)
+    if suffix_match:
+        half = pick_half(compact[:suffix_match.start()])
+        if half:
+            return f'{half} {suffix_match.group(0)}'
     return None
 
 
 def _api_reader_numeric_tokens(value):
     pattern = re.compile(
-        r'(?<![A-Za-z0-9])[-+−－]?\d+(?:\.\d+)?'
-        r'(?:\s*%|\s*(?:dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp))?',
+        # Consume an exact repeated decimal as one surface before half-token
+        # replay; otherwise 3.093.09 is incorrectly split into 3.093 and 09.
+        r'(?<![A-Za-z0-9])(?:(\d+\.\d+)\1(?!\d|\.\d)|[-+−－]?\d+(?:\.\d+)?)'
+        r'(?:\s*%|\s*(?:seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp)(?![A-Za-z0-9_]))?',
         flags=re.IGNORECASE,
     )
     tokens = []
@@ -3348,6 +3355,10 @@ def _validate_api_reader_source_bindings(paper, article=None):
     source = manifest.get('sourceAcquisition') if isinstance(manifest, dict) else None
     plan = paper.get('apiReaderPlan') if isinstance(paper, dict) else None
     article = paper.get('apiReaderArticle') if article is None and isinstance(paper, dict) else article
+    if isinstance(article, str) and '原文中没有可逐字绑定的数值证据' in article:
+        raise PublishDataValidationError(
+            'API reader source-binding v4 正文含内部绑定失败占位，请修复 Reader 后重新生成'
+        )
     if not isinstance(plan, dict) or not isinstance(stage, dict) \
             or not isinstance(source, dict) or not isinstance(article, str):
         raise PublishDataValidationError('API reader source-binding v4 缺少 plan/stage/source/article')
