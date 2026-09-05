@@ -595,6 +595,7 @@ describe('paper rethink HTTP boundary', () => {
     it('serves a user-clicked PDF as a real attachment and rejects ambiguous parameters', async t => {
         let downloads = 0;
         const server = await listenForTest(t, {
+            pdfRequestsPerWindow: 1,
             pdfDownloadFn: async arxivId => {
                 downloads += 1;
                 assert.strictEqual(arxivId, '2609.03620v2');
@@ -625,11 +626,10 @@ describe('paper rethink HTTP boundary', () => {
         assert.strictEqual(invalid.statusCode, 400);
         assert.strictEqual(downloads, 1);
 
-        const untrusted = await httpRequest(server, {
-            path: '/v1/paper/pdf?arxivId=2609.03620v2',
-            headers: { Referer: 'https://evil.example/' }
+        const limited = await httpRequest(server, {
+            path: '/v1/paper/pdf?arxivId=2609.03620v2'
         });
-        assert.strictEqual(untrusted.statusCode, 403);
+        assert.strictEqual(limited.statusCode, 429);
         assert.strictEqual(downloads, 1);
     });
 

@@ -129,10 +129,11 @@ hover 时 fetch localhost，也不得把本机 session token 传回博客。
 
 这是用户显式点击“下载 PDF（本机）”后的附件下载入口。它只接受唯一的
 `arxivId` 参数，支持现代及 old-style arXiv ID，并保留显式 `vN`；未知、重复参数或
-非法 ID 在联网前拒绝。请求还必须带有配置博客或本机 UI 的精确 origin referrer；
-博客链接只发送 origin，不泄露论文路径。服务只通过项目 HTTP CONNECT 请求官方 arXiv PDF，验证受控
+非法 ID 在联网前拒绝。服务只通过项目 HTTP CONNECT 请求官方 arXiv PDF，验证受控
 重定向、50 MiB 上限、MIME 与 `%PDF-` 文件头，然后用 `attachment` 响应返回。该入口
-不接受任意 URL、不读取 API key，也不在博客加载时调用。
+不接受任意 URL、不读取 API key，也不在博客加载时调用；进程级限制为最多两个并发、
+每分钟六次。HTTPS 页面跳转到 HTTP loopback 时浏览器可能按降级规则移除 referrer，
+因此服务不把可缺失、也可由非浏览器伪造的 referrer 当作授权凭据。
 
 ### `POST /v1/rethink`
 

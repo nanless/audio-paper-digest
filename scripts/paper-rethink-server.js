@@ -52,6 +52,9 @@ const MAX_ZOTERO_TICKETS = 128;
 const PDF_DOWNLOAD_TIMEOUT_MS = 180000;
 const MAX_PDF_BYTES = 50 * 1024 * 1024;
 const MAX_PDF_REDIRECTS = 2;
+const PDF_DOWNLOAD_WINDOW_MS = 60 * 1000;
+const PDF_DOWNLOADS_PER_WINDOW = 6;
+const MAX_ACTIVE_PDF_DOWNLOADS = 2;
 const SESSION_HEADER = 'x-paper-rethink-session';
 const ALLOWED_REQUEST_HEADERS = Object.freeze(['content-type', SESSION_HEADER]);
 const ALLOWED_PROTOCOLS = new Map([
@@ -1138,10 +1141,10 @@ function createPaperRethinkServer(options = {}) {
     const localUiOrigin = `http://${DEFAULT_HOST}:${port}`;
     const allowedOrigins = new Set(options.allowedOrigins || [blogOrigin, localUiOrigin]);
     const localUiOrigins = new Set(options.localUiOrigins || [localUiOrigin]);
-    const downloadReferrerOrigins = new Set(
-        options.downloadReferrerOrigins || [blogOrigin, localUiOrigin]
-    );
     const zoteroTickets = new Map();
+    let pdfWindowStartedAt = Date.now();
+    let pdfRequestsInWindow = 0;
+    let activePdfDownloads = 0;
     // Fail at startup, before a browser receives the UI.
     resolveAllowedEndpoints(env, options.allowedEndpoints);
 
@@ -1231,25 +1234,33 @@ function createPaperRethinkServer(options = {}) {
                 return;
             }
             if (req.method === 'GET' && url.pathname === '/v1/paper/pdf') {
-                let referrerOrigin = '';
-                try {
-                    referrerOrigin = new URL(String(req.headers.referer || '')).origin;
-                } catch (_) {
-                    // A missing/malformed referrer cannot prove an explicit
-                    // click from the configured blog or the local UI.
-                }
-                if (!downloadReferrerOrigins.has(referrerOrigin)) {
-                    fail('PDF_DOWNLOAD_FORBIDDEN', 'PDF 下载必须从受信任页面显式点击', 403);
-                }
                 const keys = Array.from(url.searchParams.keys());
                 if (keys.length !== 1 || keys[0] !== 'arxivId'
                     || url.searchParams.getAll('arxivId').length !== 1) {
                     fail('PDF_REQUEST_INVALID', 'PDF 下载参数无效');
                 }
+                const now = Date.now();
+                const windowMs = options.pdfWindowMs || PDF_DOWNLOAD_WINDOW_MS;
+                const requestLimit = options.pdfRequestsPerWindow || PDF_DOWNLOADS_PER_WINDOW;
+                const concurrencyLimit = options.maxActivePdfDownloads || MAX_ACTIVE_PDF_DOWNLOADS;
+                if (now - pdfWindowStartedAt >= windowMs) {
+                    pdfWindowStartedAt = now;
+                    pdfRequestsInWindow = 0;
+                }
+                if (pdfRequestsInWindow >= requestLimit || activePdfDownloads >= concurrencyLimit) {
+                    fail('PDF_DOWNLOAD_RATE_LIMITED', 'PDF 下载过于频繁，请稍后重试', 429);
+                }
+                pdfRequestsInWindow += 1;
+                activePdfDownloads += 1;
                 const downloader = options.pdfDownloadFn || downloadArxivPdf;
-                const artifact = await downloader(url.searchParams.get('arxivId'), {
-                    ...(options.pdfOptions || {})
-                });
+                let artifact;
+                try {
+                    artifact = await downloader(url.searchParams.get('arxivId'), {
+                        ...(options.pdfOptions || {})
+                    });
+                } finally {
+                    activePdfDownloads -= 1;
+                }
                 const filenameId = artifact.identity.resolvedId.replace(/[^a-z0-9.-]+/gi, '-');
                 res.writeHead(200, {
                     'Content-Type': 'application/pdf',
