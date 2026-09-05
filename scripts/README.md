@@ -43,6 +43,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/keyword-prefilter.js` | Node 库 | 版本化高召回音频关键词预筛。 |
 | `lib/reader-repair.js` | Node 库 | Reader 候选缓存、节点 SHA 与受限 patch、局部诊断及无进展检测；候选不构成 production proof。 |
 | `lib/reader-operator-patch.js` | Node 库 | 显式应用同 fresh run 的人工局部补丁；严格来源/节点 SHA 与完整 Reader parser，保存 failed 候选并保留预算、原始字节归档和重入审计，不签发成功正文。 |
+| `lib/reader-signed-draft.js` | Node 库 | 将本次同源签名 Reader 逆变换为严格等价输入；真实 parser 与原图注入后正文/计划/图片 SHA 全等才返回，不写文件、不调用模型，不把恢复稿冒充原始 API JSON。 |
 | `lib/reader-draft-order.js` | Node 库 | 在同一候选上规范小节顺序并同步表格绑定/marker，记录原始到规范路径的 SHA 映射；歧义时拒绝重排。 |
 | `lib/reader-source-diagnostics.js` | Node 库 | 将数字/单位绑定失败定位到正文单元格与原表行列证据，给出百分号位置、千分位及可能舍入的只读修复候选；不自动改数值或放宽来源门禁。 |
 | `lib/reader-recovery-revision.js` | Node 库 | 显式升级同源 fresh run 的失败候选诊断，保留请求预算、记录索引迁移及旧无进展状态，可恢复归档旧证据；不签发成功。 |

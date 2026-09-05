@@ -64,7 +64,9 @@ operator patch 后可只选已修论文，让该Reader候选先免费通过完�
 
 ### 按原文审查后的失败候选局部修正
 
-在当前新稿中发现具体事实错误时，可在本 run 的 `patches/` 内创建局部补丁，不必为同一篇重发整篇写作请求。该入口只处理活动的失败候选：先取得 run 的 `.operation` 锁（因此等待正在运行的 analyze 结束），再取得同篇分析锁。它不接受成功文章、已归档候选、跨 run 路径或陈旧 SHA。
+在当前新稿中发现具体事实错误时，可在本 run 的 `patches/` 内创建局部补丁，不必为同一篇重发整篇写作请求。该入口只处理活动的失败候选：先取得 run 的 `.operation` 锁（因此等待正在运行的 analyze 结束），再取得同篇分析锁。它不接受成功候选、已归档候选、跨 run 路径或陈旧 SHA；不直接编辑已签名文章。
+
+候选允许两种既有身份：`reader-source-only-v1` 用于尚无成功 Reader 的首次新稿；`reader-source-signed-revision-v1` 用于已有成功 Reader 的未完成定向修订 scratch。后一种必须在同篇锁内重读本 run 当前父稿，经生产 `apiReaderV3BindsCanonical` 验证正文/计划/阶段来源签名，并核对完整 fresh provenance、source/artifact/sourceSnapshot SHA。没有有效同源父稿就拒绝；不能通过 CLI 布尔开关授权覆盖成功稿。前一种遇已有成功分析或有效签名 Reader 仍拒绝。
 
 ```bash
 # 先按原文检查本 run 的新候选，生成 patches/reviewed.json，并 chmod 600。
@@ -99,7 +101,9 @@ npm run rewrite:source -- analyze --run-id "$rewrite_run_id" --ids 2609.03107 --
 
 完整生产 parser 会复验来源工件、真实传入像素的图号、表格/公式绑定和当前机械契约。最低表数按生成器实际证据中的TABLE数量计算，而不是未经裁剪的工件总表数。任何失败不覆盖候选；通过后只保存修改后的原始draft，状态仍是 `failed`，attempts/fullAttempts/transportFailures/noProgress、旧错误及其他恢复字段不清零。`operatorPatches`追加原因、原文SHA、补丁文件SHA、前后draftSHA、旧payload/envelope SHA及归档位置。
 
-归档先持久化，再原子替换候选；同一补丁中断后可以原命令重入，重复应用不重复审计、不重置预算。archive损坏、候选已变化或补丁文件已被修改均失败关闭。后续 `analyze` 在发起Reader请求前免费运行完整parser，通过后才沿正常流程形成结果；其余尚未完成的论文或阶段仍可能调用API。该入口不绕过事实审查，不写canonical/博客，也不能把parser通过称为事实通过。
+归档先持久化，再原子替换候选；同一补丁中断后可以原命令重入，重复应用不重复审计、不重置预算。archive损坏、候选已变化或补丁文件已被修改均失败关闭。首次 source-only 新稿后续由 `analyze` 在发起Reader请求前免费运行完整parser，通过后才沿正常流程形成结果；其余尚未完成的论文或阶段仍可能调用API。
+
+signed-revision scratch 则必须回到原有定向修订服务，用当前已签名父稿与原 feedback 输入重新计算候选 identity，再免费完整解析接受。operator patch 不验证未知 feedback 的语义身份、不更新成功 paper；不能运行 `analyze` 看到旧成功稿被 skip 就声称修订完成。父稿/feedback 已变化时旧候选不可自动套用。两种模式都不绕过事实审查，不写 canonical/博客，也不能把 parser 通过称为事实通过。
 
 ### 修复程序升级后的显式恢复
 

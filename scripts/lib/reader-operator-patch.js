@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const repair = require('./reader-repair.js');
+const { READER_SOURCE_CONTENT_MODE, READER_SIGNED_REVISION_CONTENT_MODE } = require('./reader-contract.js');
 const CONTRACT = 'reader-operator-patch-v1';
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const isSha = value => /^[a-f0-9]{64}$/.test(String(value || ''));
@@ -79,7 +80,7 @@ function parserOptions(details, identity, payload, deps) {
         || fresh.structuredArtifactsSha256 !== descriptor.structuredArtifactsSha256
         || fresh.sourceSnapshotSha256 !== descriptor.sourceSnapshotSha256
         || fresh.sourceOnly !== true || fresh.oldGeneratedTextIncluded !== false
-        || identity.contentMode !== 'reader-source-only-v1'
+        || ![READER_SOURCE_CONTENT_MODE, READER_SIGNED_REVISION_CONTENT_MODE].includes(identity.contentMode)
         || sha(details.text || '') !== descriptor.sourceSha256
         || details.structuredArtifacts?.payloadSha256 !== descriptor.structuredArtifactsSha256) {
         throw new Error('Operator patch candidate is not bound to the current fresh source snapshot');
@@ -103,9 +104,37 @@ function dependencies(overrides) {
     return { rootDir: require('../config.js').FILES.freshRewriteRunsDir,
         readFreshSource: (...args) => require('./fresh-analysis-context.js').readFreshSource(...args),
         withPaperAnalysisLock: (...args) => require('../analysis-engine.js').withPaperAnalysisLock(...args),
+        isSuccessfulAnalysisRecord: (...args) => require('../analysis-engine.js').isSuccessfulAnalysisRecord(...args),
+        readCurrentPaper: (runDir, paperId) => readPrivate(path.join(runDir, 'analysis.json')).value.papers
+            .find(paper => (paper.arxivId || paper.paper_id) === paperId),
         parseApiReaderArticleResult: (...args) => require('../deep-analyzer.js').parseApiReaderArticleResult(...args),
         buildApiReaderEvidenceContext: (...args) => require('../deep-analyzer.js').buildApiReaderEvidenceContext(...args),
         now: () => new Date().toISOString(), ...overrides };
+}
+
+function validateScratchParent(current, identity, details, run, deps) {
+    const { apiReaderV3BindsCanonical } = require('../analysis-engine.js');
+    if (!current || (current.arxivId || current.paper_id) !== identity.paperId) {
+        throw new Error('Operator patch requires the current same-run analysis record');
+    }
+    if (identity.contentMode === READER_SOURCE_CONTENT_MODE) {
+        if (apiReaderV3BindsCanonical(current) || deps.isSuccessfulAnalysisRecord(current)) {
+            throw new Error('Source-only operator patch cannot edit a successful analysis or signed Reader');
+        }
+        return;
+    }
+    // This only permits editing failed scratch. The signed-revision service
+    // must still recompute the parent + feedback input identity before it can
+    // consume the candidate; a valid current parent is not a revision receipt.
+    if (current.latestAnalysisAttemptError || !apiReaderV3BindsCanonical(current)) {
+        throw new Error('Signed-revision operator patch requires a valid signed parent Reader');
+    }
+    require('./fresh-rewrite-run.js').assertFreshProvenance(current, run, details.freshSourceDescriptor);
+    if (current.sourceSha256 !== identity.sourceSha256
+        || current.analysisManifest.sourceAcquisition.structuredArtifactsSha256
+            !== details.freshSourceDescriptor.structuredArtifactsSha256) {
+        throw new Error('Signed-revision parent Reader has a different source or artifact snapshot');
+    }
 }
 
 async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
@@ -145,6 +174,7 @@ async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
             }
         }
         const options = parserOptions(details, identity, payload, deps);
+        validateScratchParent(deps.readCurrentPaper(runDir, request.paperId), identity, details, run, deps);
         const archiveDir = path.join(runDir, 'patches', 'operator-archive', requestFile.sha256);
         if (payload.operatorPatches !== undefined && !Array.isArray(payload.operatorPatches)) {
             throw new Error('Operator patch audit history is malformed');

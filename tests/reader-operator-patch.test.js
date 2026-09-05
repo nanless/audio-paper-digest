@@ -64,6 +64,7 @@ function fixture(t) {
             assert.equal(options.sourceText, text); return { article: 'must never be saved as success' };
         } };
     const loaded = { runDir, run, inputs: { papers: [paper] }, analysis: { papers: [paper] } };
+    fs.writeFileSync(path.join(runDir, 'analysis.json'), JSON.stringify(loaded.analysis), { mode: 0o600 });
     return { rootDir, runDir, run, paper, loaded, source, identity, payload, draft, candidateDir, candidateFile,
         request, filename, writeRequest, calls, deps, apply: extra => applyOperatorPatch({ loaded, patchFile: 'fix.json' }, { ...deps, ...extra }) };
 }
@@ -87,7 +88,7 @@ test('operator patch saves only a failed candidate, preserves every budget, and 
     assert.deepEqual(fs.readFileSync(path.join(archive, 'patch.json')), patchBytes);
     assert.equal(fs.statSync(path.join(archive, 'before.json')).mode & 0o777, 0o600);
     assert.equal(f.calls.lock, 1); assert.equal(f.calls.parser, 1);
-    assert.equal(fs.existsSync(path.join(f.runDir, 'analysis.json')), false);
+    assert.equal(fs.readFileSync(path.join(f.runDir, 'analysis.json'), 'utf8'), JSON.stringify(f.loaded.analysis));
 });
 
 test('crashes before and after candidate save reenter with the same audit and unchanged counters', async t => {
@@ -169,4 +170,117 @@ test('CLI patch phase is explicit and accepts only run-local patch names', () =>
     for (const args of [['patch', '--run-id', RUN_ID], ['patch', '--run-id', RUN_ID, '--patch', '../fix.json'],
         ['analyze', '--run-id', RUN_ID, '--patch', 'fix.json'],
         ['patch', '--run-id', RUN_ID, '--patch', 'fix.json', '--concurrency', '1']]) assert.throws(() => runner.parseRewriteArgs(args));
+});
+
+function installSignedParent(f, mutate = () => {}) {
+    const hash = runner.stableHash, sourceSha256 = f.source.freshSourceDescriptor.sourceSha256;
+    const authorIdentity = { contract: 'api-reader-author-identity-v1', sourceTextSha256: sourceSha256,
+        sourceDomSha256: '', metadataSha256: hash([]), authors: [] };
+    const authors = { authors: [], identity: authorIdentity, identitySha256: hash(authorIdentity) };
+    const resourceIdentity = { contract: 'api-reader-resource-identity-v1', sourceTextSha256: sourceSha256, resources: [] };
+    const resources = { ...resourceIdentity, identitySha256: hash(resourceIdentity) };
+    const plan = { version: 3, contract: 'beginner-researcher-v3', sections: [], figurePlacements: [],
+        tableBindings: [], formulaBindings: [], sourceBindingsContract: 'api-reader-source-bindings-v4',
+        sourceBindingsSha256: hash({ tableBindings: [], formulaBindings: [] }) };
+    const article = '### 已签名的父稿\n\n现有成功正文必须保持完全不变。';
+    const provenance = { contract: 'fresh-source-analysis-v1', runId: RUN_ID, sourceSha256,
+        structuredArtifactsSha256: f.source.structuredArtifacts.payloadSha256,
+        sourceSnapshotSha256: f.source.freshSourceDescriptor.sourceSnapshotSha256,
+        sourceOnly: true, oldGeneratedTextIncluded: false };
+    const parent = { ...f.paper, authors: [], sourceSha256, apiReaderArticle: article, apiReaderPlan: plan,
+        apiReaderArticleSha256: runner.sha256(article), apiReaderPlanSha256: hash(plan),
+        apiReaderAuthors: authors, apiReaderResources: resources, apiReaderFigures: [], freshRewriteProvenance: provenance,
+        analysisManifest: { freshRewriteProvenance: { ...provenance },
+            sourceAcquisition: { sourceSha256, structuredArtifactsSha256: provenance.structuredArtifactsSha256 },
+            contracts: { apiReaderArticle: plan.contract, apiReaderSourceBindings: plan.sourceBindingsContract,
+                apiReaderAuthorIdentity: authorIdentity.contract, apiReaderResourceIdentity: resources.contract },
+            stages: { openSourceScan: { resourceEvidenceContract: resources.contract, resourceEvidenceSha256: resources.identitySha256 },
+                apiReaderArticle: { status: 'complete', model: 'fixture', protocol: 'openai_responses',
+                    articleSha256: runner.sha256(article), planSha256: hash(plan), figureCount: 0, figuresSha256: hash([]),
+                    readerAuthorsSha256: hash(authors), readerAuthorIdentityContractVersion: authorIdentity.contract,
+                    readerAuthorIdentitySha256: authors.identitySha256, resourceIdentityContractVersion: resources.contract,
+                    resourceIdentitySha256: resources.identitySha256, resourceCount: 0,
+                    parserVersion: 'api-reader-parser-v3', assemblerVersion: 'api-reader-assembler-v3',
+                    tableContractVersion: 'api-reader-tables-v3', figureContractVersion: 'api-reader-figures-v3',
+                    qualityMetricsContractVersion: 'api-reader-quality-metrics-v2',
+                    qualityMetrics: { contract: 'api-reader-quality-metrics-v2', blockingIssueCount: 0 },
+                    sourceBindingsContractVersion: plan.sourceBindingsContract, sourceBindingsSha256: plan.sourceBindingsSha256,
+                    sourceBindingsSourceTextSha256: sourceSha256, tableBindingCount: 0, formulaBindingCount: 0,
+                    structuredArtifactsSha256: provenance.structuredArtifactsSha256 } } } };
+    assert.equal(require('../scripts/analysis-engine.js').apiReaderV3BindsCanonical(parent), true);
+    mutate(parent);
+    fs.writeFileSync(path.join(f.runDir, 'analysis.json'), JSON.stringify({ papers: [parent] }), { mode: 0o600 });
+    return parent;
+}
+
+function useSignedCandidate(f) {
+    fs.unlinkSync(f.candidateFile);
+    f.identity.contentMode = 'reader-source-signed-revision-v1';
+    f.identity.inputFingerprint = 'b'.repeat(64); // Opaque parent+feedback identity stays unchanged.
+    f.candidateFile = repair.saveFailedCandidate(f.candidateDir, f.identity, f.payload);
+    f.request.candidateIdentitySha256 = repair.hashDraft(f.identity);
+    f.writeRequest();
+}
+
+test('signed-revision scratch patches preserve successful parent bytes and every budget', async t => {
+    const f = fixture(t); useSignedCandidate(f); const parent = installSignedParent(f);
+    const parentPath = path.join(f.runDir, 'analysis.json'), parentBytes = fs.readFileSync(parentPath);
+    const candidateBytes = fs.readFileSync(f.candidateFile), identitySha = repair.hashDraft(f.identity);
+    const result = await f.apply(); assert.equal(result.status, 'failed');
+    assert.deepEqual(fs.readFileSync(parentPath), parentBytes);
+    assert.equal(require('../scripts/analysis-engine.js').apiReaderV3BindsCanonical(parent), true);
+    const saved = repair.loadFailedCandidate(f.candidateDir, f.identity);
+    for (const key of Object.keys(f.payload).filter(key => !['draft', 'rawDraft'].includes(key))) {
+        assert.deepEqual(saved[key], f.payload[key]);
+    }
+    assert.equal(repair.hashDraft(f.identity), identitySha);
+    assert.deepEqual(fs.readFileSync(path.join(f.runDir, saved.operatorPatches[0].archive, 'before.json')), candidateBytes);
+    await f.apply(); assert.deepEqual(fs.readFileSync(parentPath), parentBytes);
+});
+
+test('signed scratch rejects absent or invalid parent signatures and fresh provenance drift without writes', async t => {
+    for (const mutate of [null,
+        p => { p.apiReaderArticle += ' stale'; },
+        p => { p.apiReaderPlan.sections.push({ kind: 'result' }); },
+        p => { p.latestAnalysisAttemptError = 'unfinished parent'; },
+        p => { p.freshRewriteProvenance.runId = 'foreign'; },
+        p => { p.sourceSha256 = '0'.repeat(64); },
+        p => { p.freshRewriteProvenance.sourceSnapshotSha256 = '0'.repeat(64); },
+        p => { p.analysisManifest.freshRewriteProvenance.sourceSha256 = '0'.repeat(64); }
+    ]) {
+        const f = fixture(t); useSignedCandidate(f); if (mutate) installSignedParent(f, mutate);
+        const before = fs.readFileSync(f.candidateFile), parent = fs.readFileSync(path.join(f.runDir, 'analysis.json'));
+        await assert.rejects(f.apply(), /signed parent|source snapshot|source or artifact/);
+        assert.deepEqual(fs.readFileSync(f.candidateFile), before);
+        assert.deepEqual(fs.readFileSync(path.join(f.runDir, 'analysis.json')), parent);
+        assert.equal(f.calls.parser, 0);
+        assert.equal(fs.existsSync(path.join(f.runDir, 'patches', 'operator-archive')), false);
+    }
+});
+
+test('source-only scratch cannot bypass a current successful Reader using stale loaded metadata', async t => {
+    const f = fixture(t); installSignedParent(f); const before = fs.readFileSync(f.candidateFile);
+    assert.equal(f.loaded.analysis.papers[0].apiReaderArticle, undefined);
+    await assert.rejects(f.apply(), /Source-only.*successful/);
+    assert.deepEqual(fs.readFileSync(f.candidateFile), before); assert.equal(f.calls.parser, 0);
+});
+
+test('signed scratch still rejects cross-run and source snapshot candidate drift', async t => {
+    for (const field of ['runId', 'sourceSha256', 'sourceSnapshotSha256', 'structuredArtifactsSha256']) {
+        const f = fixture(t); useSignedCandidate(f); installSignedParent(f);
+        fs.unlinkSync(f.candidateFile); f.identity.freshAnalysis[field] = '0'.repeat(64);
+        f.candidateFile = repair.saveFailedCandidate(f.candidateDir, f.identity, f.payload);
+        f.request.candidateIdentitySha256 = repair.hashDraft(f.identity); f.writeRequest();
+        const before = fs.readFileSync(f.candidateFile); await assert.rejects(f.apply(), /identity|source snapshot/);
+        assert.deepEqual(fs.readFileSync(f.candidateFile), before); assert.equal(f.calls.parser, 0);
+    }
+});
+
+test('signed scratch requires the full production parser and never writes a rejected candidate', async t => {
+    const f = fixture(t); useSignedCandidate(f); installSignedParent(f);
+    const before = fs.readFileSync(f.candidateFile), parent = fs.readFileSync(path.join(f.runDir, 'analysis.json'));
+    await assert.rejects(f.apply({ parseApiReaderArticleResult: require('../scripts/deep-analyzer.js').parseApiReaderArticleResult }));
+    assert.deepEqual(fs.readFileSync(f.candidateFile), before);
+    assert.deepEqual(fs.readFileSync(path.join(f.runDir, 'analysis.json')), parent);
+    assert.equal(fs.existsSync(path.join(f.runDir, 'patches', 'operator-archive')), false);
 });

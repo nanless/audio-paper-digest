@@ -486,14 +486,14 @@ async function patchRewrite(options, overrides = {}) {
         if (loaded.run.status === 'promoted') throw new Error('Promoted fresh run is immutable');
         return require('./reader-operator-patch.js').applyOperatorPatch({ loaded, patchFile: options.patchFile }, {
             rootDir: deps.rootDir, readFreshSource: deps.readFreshSource, now: deps.now, ...overrides.operatorPatchDependencies,
+            isSuccessfulAnalysisRecord: deps.isSuccessfulAnalysisRecord,
+            readCurrentPaper: (_runDir, id) => loadRun(options.runId, deps).analysis.papers
+                .find(item => paperId(item) === id),
             withPaperAnalysisLock: async (paper, callback) => {
                 const lock = overrides.withPaperAnalysisLock || require('../analysis-engine.js').withPaperAnalysisLock;
-                return lock(paper, async () => {
-                    const current = loadRun(options.runId, deps);
-                    const record = current.analysis.papers.find(item => paperId(item) === paperId(paper));
-                    if (deps.isSuccessfulAnalysisRecord(record)) throw new Error('Operator patch cannot edit a successful analysis');
-                    return callback();
-                });
+                // Helper reads the current record inside this lock and checks
+                // signed-revision scratch versus source-only mode itself.
+                return lock(paper, callback);
             }
         });
     });
