@@ -19,6 +19,8 @@ const {
     buildHeaders,
     buildRequestBody,
     detectApiType,
+    detectHttpConnectProxyUrl,
+    createProxyDispatcher,
     getResponsesOutputTruncationError,
     parseResponseText,
     requestLlmJson
@@ -33,6 +35,7 @@ const DEFAULT_BLOG_BASE_PATH = '/audio-paper-digest-blog';
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_CONTEXT_CHARS = 120000;
 const MAX_QUESTION_CHARS = 8000;
+const MAX_SELECTED_TEXT_CHARS = 2000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_OUTPUT_CHARS = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 120000;
@@ -41,6 +44,14 @@ const MAX_OUTPUT_TOKENS = 8000;
 const DEFAULT_OUTPUT_TOKENS = 3000;
 const MAX_UI_QUERY_CHARS = 8192;
 const CONTEXT_LOAD_TIMEOUT_MS = 10000;
+const ZOTERO_HOST = '127.0.0.1';
+const ZOTERO_PORT = 23119;
+const ZOTERO_TIMEOUT_MS = 10000;
+const ZOTERO_TICKET_TTL_MS = 10 * 60 * 1000;
+const MAX_ZOTERO_TICKETS = 128;
+const PDF_DOWNLOAD_TIMEOUT_MS = 180000;
+const MAX_PDF_BYTES = 50 * 1024 * 1024;
+const MAX_PDF_REDIRECTS = 2;
 const SESSION_HEADER = 'x-paper-rethink-session';
 const ALLOWED_REQUEST_HEADERS = Object.freeze(['content-type', SESSION_HEADER]);
 const ALLOWED_PROTOCOLS = new Map([
@@ -238,7 +249,9 @@ function parseUiPrefill(url, { blogOrigin, blogBasePath }) {
     if (url.search.length > MAX_UI_QUERY_CHARS) {
         fail('UI_PREFILL_INVALID', 'UI query 超过长度限制', 414);
     }
-    const allowed = new Set(['title', 'arxivId', 'sourceUrl', 'contextUrl']);
+    const allowed = new Set([
+        'title', 'arxivId', 'sourceUrl', 'contextUrl', 'selectedText'
+    ]);
     for (const key of new Set(url.searchParams.keys())) {
         if (!allowed.has(key) || url.searchParams.getAll(key).length !== 1) {
             // Never echo an unknown name/value: it may itself contain a key.
@@ -251,6 +264,18 @@ function parseUiPrefill(url, { blogOrigin, blogBasePath }) {
         }) : '';
     if (/[\u0000-\u001f\u007f]/.test(title)) {
         fail('UI_PREFILL_INVALID', 'title 包含控制字符');
+    }
+    let selectedText = url.searchParams.get('selectedText') || '';
+    selectedText = selectedText.replace(/\r\n?/g, '\n').normalize('NFC').trim();
+    if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(selectedText)) {
+        fail('UI_PREFILL_INVALID', 'selectedText 包含非法控制字符');
+    }
+    if (selectedText.length > MAX_SELECTED_TEXT_CHARS) {
+        fail(
+            'UI_PREFILL_INVALID',
+            'selectedText 超过 ' + MAX_SELECTED_TEXT_CHARS + ' 字符限制',
+            414
+        );
     }
     const arxivValue = url.searchParams.get('arxivId') || '';
     let identity = arxivValue.trim() ? parseArxivId(arxivValue) : null;
@@ -277,7 +302,8 @@ function parseUiPrefill(url, { blogOrigin, blogBasePath }) {
         identity,
         sourceUrl,
         contextUrl: context?.url || '',
-        contextPathIdentity: context
+        contextPathIdentity: context,
+        selectedText
     };
 }
 
@@ -388,30 +414,345 @@ function validateContextSidecar(payload, prefill) {
     if (payload.abstractSha256 !== abstractSha) {
         fail('CONTEXT_LOAD_FAILED', '本站论文上下文摘要 SHA 不一致', 502);
     }
+    const originalTitle = normalizedString(payload.originalTitle, 'sidecar originalTitle', {
+        maxChars: 2000
+    }).replace(/\s+/g, ' ');
+    if (/[\u0000-\u001f\u007f]/.test(originalTitle)) {
+        fail('CONTEXT_LOAD_FAILED', '本站论文标题包含控制字符', 502);
+    }
+    if (!Array.isArray(payload.authors) || payload.authors.length > 1000) {
+        fail('CONTEXT_LOAD_FAILED', '本站论文作者数组无效', 502);
+    }
+    const citationAuthors = payload.authors.map((author, index) => {
+        if (!isPlainObject(author)) {
+            fail('CONTEXT_LOAD_FAILED', `本站论文第 ${index + 1} 位作者无效`, 502);
+        }
+        const name = normalizedString(author.name, `sidecar author ${index + 1}`, {
+            maxChars: 500
+        }).replace(/\s+/g, ' ');
+        if (/[\u0000-\u001f\u007f]/.test(name)) {
+            fail('CONTEXT_LOAD_FAILED', '本站论文作者包含控制字符', 502);
+        }
+        return name;
+    });
     return {
         ...prefill,
         identity: contextIdentity,
         arxivId: contextIdentity.resolvedId,
-        sourceContext: JSON.stringify(payload, null, 2)
+        sourceContext: JSON.stringify(payload, null, 2),
+        citationMetadata: {
+            source: 'researcher-sidecars-v1',
+            title: originalTitle,
+            authors: citationAuthors
+        }
+    };
+}
+
+function boundedJsonContext(payload, maximum) {
+    let serialized = JSON.stringify(payload, null, 2);
+    if (serialized.length <= maximum) return serialized;
+    const reduced = { ...payload };
+    const abstract = String(payload.abstract || '');
+    reduced.abstract = '';
+    reduced.abstractTruncated = true;
+    reduced.originalAbstractChars = abstract.length;
+    const empty = JSON.stringify(reduced, null, 2);
+    const available = Math.max(0, maximum - empty.length - 32);
+    reduced.abstract = abstract.slice(0, available);
+    serialized = JSON.stringify(reduced, null, 2);
+    while (serialized.length > maximum && reduced.abstract) {
+        reduced.abstract = reduced.abstract.slice(
+            0, Math.max(0, reduced.abstract.length - 256)
+        );
+        serialized = JSON.stringify(reduced, null, 2);
+    }
+    if (serialized.length > maximum) {
+        fail('CONTEXT_LOAD_FAILED', '本站论文上下文无法压缩到安全长度', 502);
+    }
+    return serialized;
+}
+
+function finalizeUiPrefill(prefill, contextPayload = null, contextLoadError = '') {
+    const selected = prefill.selectedText || '';
+    const output = { ...prefill };
+    delete output.selectedText;
+    let sourceContext = '';
+    if (selected) {
+        const prefix = '[用户明确选中的论文段落]\n' + selected;
+        if (contextPayload) {
+            const separator = '\n\n[发布期论文身份与摘要上下文]\n';
+            const available = MAX_CONTEXT_CHARS - prefix.length - separator.length;
+            sourceContext = (
+                prefix + separator + boundedJsonContext(contextPayload, available)
+            );
+        } else {
+            sourceContext = prefix;
+        }
+    } else if (contextPayload) {
+        sourceContext = boundedJsonContext(contextPayload, MAX_CONTEXT_CHARS);
+    }
+    return {
+        ...output,
+        sourceContext,
+        contextLoadError,
+        selectionMode: Boolean(selected),
+        defaultQuestion: selected
+            ? '请用清晰、严谨的语言重新解释我选中的段落，并说明它在整篇论文中的作用、隐含前提和可能误读。'
+            : ''
     };
 }
 
 async function loadUiPrefill(url, options) {
     const prefill = parseUiPrefill(url, options);
-    if (!prefill.contextUrl) return { ...prefill, sourceContext: '', contextLoadError: '' };
+    if (!prefill.contextUrl) return finalizeUiPrefill(prefill);
     const loader = options.contextLoader || fetchContextSidecarJson;
     try {
         const payload = await loader(prefill.contextUrl);
-        return { ...validateContextSidecar(payload, prefill), contextLoadError: '' };
+        return finalizeUiPrefill(
+            validateContextSidecar(payload, prefill),
+            payload
+        );
     } catch (_) {
         // Keep the local UI usable for manual paste without exposing network,
         // parser or remote response details.
-        return {
-            ...prefill,
-            sourceContext: '',
-            contextLoadError: '未能载入受控论文上下文；请核对来源后手动粘贴。'
-        };
+        return finalizeUiPrefill(
+            prefill,
+            null,
+            '未能载入受控论文上下文；请核对来源后手动粘贴。'
+        );
     }
+}
+
+function buildZoteroCitationPlan(prefill) {
+    if (!prefill?.identity) return null;
+    const sidecar = prefill.citationMetadata;
+    if (!sidecar?.title && !prefill?.title) return null;
+    const title = normalizedString(
+        sidecar?.title || prefill.title, 'Zotero title', { maxChars: 2000 }
+    ).replace(/\s+/g, ' ');
+    if (/[\u0000-\u001f\u007f]/.test(title)) {
+        fail('ZOTERO_RECORD_INVALID', 'Zotero 标题包含控制字符');
+    }
+    const authors = Array.isArray(sidecar?.authors) ? sidecar.authors.slice() : [];
+    return Object.freeze({
+        title,
+        authors: Object.freeze(authors),
+        arxivId: prefill.identity.resolvedId,
+        absUrl: `https://arxiv.org/abs/${prefill.identity.resolvedId}`,
+        pdfUrl: `https://arxiv.org/pdf/${prefill.identity.resolvedId}.pdf`,
+        source: sidecar?.source || 'blog-prefill-authors-unavailable'
+    });
+}
+
+const BIBTEX_ESCAPES = Object.freeze({
+    '\\': '{\\textbackslash{}}', '{': '\\{', '}': '\\}', '&': '\\&',
+    '%': '\\%', '$': '\\$', '#': '\\#', '_': '\\_',
+    '~': '\\textasciitilde{}', '^': '\\textasciicircum{}'
+});
+
+function bibtexEscape(value) {
+    return Array.from(String(value)).map(character => BIBTEX_ESCAPES[character] || character).join('');
+}
+
+function buildZoteroBibtex(plan) {
+    if (!plan || !parseArxivId(plan.arxivId)) fail('ZOTERO_RECORD_INVALID', 'Zotero 记录无效');
+    const key = `arxiv_${plan.arxivId.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`;
+    const lines = [
+        `@misc{${key},`,
+        `  title = {${bibtexEscape(plan.title)}},`
+    ];
+    if (plan.authors.length) {
+        lines.push(`  author = {${plan.authors.map(name => `{${bibtexEscape(name)}}`).join(' and ')}},`);
+    }
+    lines.push(
+        `  eprint = {${bibtexEscape(plan.arxivId)}},`,
+        '  archivePrefix = {arXiv},',
+        `  url = {${bibtexEscape(plan.absUrl)}}`,
+        '}',
+        ''
+    );
+    return lines.join('\n');
+}
+
+function importCitationIntoZotero(plan, options = {}) {
+    const body = Buffer.from(buildZoteroBibtex(plan), 'utf8');
+    if (body.length > MAX_BODY_BYTES) {
+        fail('ZOTERO_RECORD_INVALID', 'Zotero 引用记录超过大小限制', 413);
+    }
+    const session = `paper-rethink-${crypto.randomUUID()}`;
+    const requestFn = options.requestFn || http.request;
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (handler, value) => {
+            if (settled) return;
+            settled = true;
+            handler(value);
+        };
+        const req = requestFn({
+            host: ZOTERO_HOST,
+            port: options.port || ZOTERO_PORT,
+            method: 'POST',
+            path: `/connector/import?session=${encodeURIComponent(session)}`,
+            headers: {
+                'Content-Type': 'text/plain; charset=utf-8',
+                'Content-Length': body.length,
+                Accept: 'application/json',
+                'Zotero-Allowed-Request': 'true'
+            },
+            timeout: options.timeoutMs || ZOTERO_TIMEOUT_MS
+        }, res => {
+            let responseBytes = 0;
+            res.on('data', chunk => {
+                responseBytes += chunk.length;
+                if (responseBytes > MAX_BODY_BYTES) {
+                    res.destroy();
+                    finish(reject, new PaperRethinkError(
+                        'ZOTERO_IMPORT_FAILED', 'Zotero 响应超过大小限制', 502
+                    ));
+                }
+            });
+            res.on('error', () => finish(reject, new PaperRethinkError(
+                'ZOTERO_UNAVAILABLE', 'Zotero Connector 不可用；请启动 Zotero Desktop', 503
+            )));
+            res.on('end', () => {
+                if (res.statusCode >= 200 && res.statusCode < 300) {
+                    finish(resolve, { imported: true, session });
+                } else {
+                    finish(reject, new PaperRethinkError(
+                        'ZOTERO_IMPORT_FAILED', `Zotero Connector 返回 HTTP ${res.statusCode}`, 502
+                    ));
+                }
+            });
+        });
+        req.once('timeout', () => {
+            req.destroy();
+            finish(reject, new PaperRethinkError(
+                'ZOTERO_UNAVAILABLE', '连接 Zotero Connector 超时', 504
+            ));
+        });
+        req.once('error', () => finish(reject, new PaperRethinkError(
+            'ZOTERO_UNAVAILABLE', 'Zotero Connector 不可用；请启动 Zotero Desktop', 503
+        )));
+        req.end(body);
+    });
+}
+
+async function readFetchBufferWithLimit(response, maximum = MAX_PDF_BYTES) {
+    const declared = Number(response.headers?.get?.('content-length') || 0);
+    if (Number.isFinite(declared) && declared > maximum) {
+        fail('PDF_TOO_LARGE', 'arXiv PDF 超过下载大小限制', 413);
+    }
+    if (!response.body?.getReader) {
+        const raw = Buffer.from(await response.arrayBuffer());
+        if (raw.length > maximum) fail('PDF_TOO_LARGE', 'arXiv PDF 超过下载大小限制', 413);
+        return raw;
+    }
+    const reader = response.body.getReader();
+    const chunks = [];
+    let total = 0;
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const chunk = Buffer.from(value);
+            total += chunk.length;
+            if (total > maximum) {
+                await reader.cancel().catch(() => {});
+                fail('PDF_TOO_LARGE', 'arXiv PDF 超过下载大小限制', 413);
+            }
+            chunks.push(chunk);
+        }
+    } finally {
+        reader.releaseLock?.();
+    }
+    return Buffer.concat(chunks, total);
+}
+
+function normalizeArxivPdfRedirect(value, currentUrl, resolvedId) {
+    let next;
+    try {
+        next = new URL(value, currentUrl);
+    } catch (_) {
+        fail('PDF_UPSTREAM_INVALID', 'arXiv PDF 返回无效重定向', 502);
+    }
+    if (next.protocol !== 'https:' || next.port || next.username || next.password
+        || next.search || next.hash || !['arxiv.org', 'export.arxiv.org'].includes(next.hostname)) {
+        fail('PDF_UPSTREAM_INVALID', 'arXiv PDF 重定向越出受控来源', 502);
+    }
+    const escaped = resolvedId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (!new RegExp(`^/pdf/${escaped}(?:\\.pdf)?$`, 'i').test(next.pathname)) {
+        fail('PDF_UPSTREAM_INVALID', 'arXiv PDF 重定向身份不一致', 502);
+    }
+    return next.href;
+}
+
+async function downloadArxivPdf(arxivId, options = {}) {
+    const identity = parseArxivId(arxivId);
+    let dispatcher = options.dispatcher;
+    if (!dispatcher) {
+        const proxyUrl = detectHttpConnectProxyUrl();
+        if (!proxyUrl) {
+            fail(
+                'PROXY_CONFIG_ERROR',
+                '下载 arXiv PDF 需要项目 .env 中的 HTTP CONNECT 代理',
+                500
+            );
+        }
+        try {
+            dispatcher = createProxyDispatcher(proxyUrl);
+        } catch (_) {
+            fail('PROXY_CONFIG_ERROR', '项目 HTTP CONNECT 代理配置无效', 500);
+        }
+    }
+    const fetchImpl = options.fetchImpl || global.fetch;
+    let url = `https://arxiv.org/pdf/${identity.resolvedId}.pdf`;
+    for (let redirects = 0; redirects <= MAX_PDF_REDIRECTS; redirects += 1) {
+        let response;
+        try {
+            response = await fetchImpl(url, {
+                method: 'GET',
+                redirect: 'manual',
+                headers: {
+                    Accept: 'application/pdf,application/octet-stream;q=0.8',
+                    'User-Agent': 'audio-paper-digest-rethink/1.0'
+                },
+                signal: AbortSignal.timeout(options.timeoutMs || PDF_DOWNLOAD_TIMEOUT_MS),
+                dispatcher
+            });
+        } catch (_) {
+            fail('PDF_UPSTREAM_UNAVAILABLE', '暂时无法读取 arXiv PDF', 502);
+        }
+        if ([301, 302, 303, 307, 308].includes(response.status)) {
+            if (redirects >= MAX_PDF_REDIRECTS) {
+                fail('PDF_UPSTREAM_INVALID', 'arXiv PDF 重定向次数过多', 502);
+            }
+            const location = response.headers?.get?.('location');
+            if (!location) fail('PDF_UPSTREAM_INVALID', 'arXiv PDF 重定向缺少位置', 502);
+            url = normalizeArxivPdfRedirect(location, url, identity.resolvedId);
+            continue;
+        }
+        if (!response.ok) {
+            const status = Number(response.status || 0);
+            fail(
+                status === 404 ? 'PDF_NOT_FOUND' : 'PDF_UPSTREAM_UNAVAILABLE',
+                status === 404 ? 'arXiv PDF 不存在' : 'arXiv PDF 暂时不可用',
+                status === 404 ? 404 : 502
+            );
+        }
+        const contentType = String(response.headers?.get?.('content-type') || '').toLowerCase();
+        if (!contentType.includes('application/pdf') && !contentType.includes('application/octet-stream')) {
+            fail('PDF_UPSTREAM_INVALID', 'arXiv 返回的内容不是 PDF', 502);
+        }
+        const buffer = await readFetchBufferWithLimit(
+            response, options.maxBytes || MAX_PDF_BYTES
+        );
+        if (buffer.length < 5 || buffer.subarray(0, 5).toString('ascii') !== '%PDF-') {
+            buffer.fill(0);
+            fail('PDF_UPSTREAM_INVALID', 'arXiv 返回的文件头不是 PDF', 502);
+        }
+        return { buffer, identity, sourceUrl: url };
+    }
+    fail('PDF_UPSTREAM_INVALID', 'arXiv PDF 重定向无法收敛', 502);
 }
 
 function splitCsv(value) {
@@ -445,13 +786,18 @@ function safeJsonForHtml(value) {
         .replace(/\u2029/g, '\\u2029');
 }
 
-function buildUiHtml({ sessionToken, defaultEndpoint, defaultModel, defaultProtocol, nonce, prefill }) {
+function buildUiHtml({
+    sessionToken, defaultEndpoint, defaultModel, defaultProtocol, nonce, prefill,
+    zoteroTicket = '', zoteroPlan = null
+}) {
     const boot = safeJsonForHtml({
         sessionToken,
         defaultEndpoint,
         defaultModel,
         defaultProtocol,
         prefill,
+        zoteroTicket,
+        zoteroPlan,
         limits: {
             contextChars: MAX_CONTEXT_CHARS,
             questionChars: MAX_QUESTION_CHARS,
@@ -465,13 +811,20 @@ function buildUiHtml({ sessionToken, defaultEndpoint, defaultModel, defaultProto
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>论文 AI 重理解 · 本机 Companion</title>
 <style nonce="${nonce}">
-:root{color-scheme:light dark;font:16px/1.55 system-ui,sans-serif}body{max-width:900px;margin:auto;padding:24px}h1{font-size:1.55rem}label{display:block;margin-top:14px;font-weight:650}input,select,textarea,button{box-sizing:border-box;width:100%;font:inherit;padding:10px;margin-top:5px}textarea{min-height:150px;resize:vertical}#source{min-height:260px}button{cursor:pointer;font-weight:700;margin-top:18px}.note{padding:12px;border:1px solid #8886;border-radius:8px}.muted{opacity:.78}.paper-prefill{margin:14px 0;padding:12px;border-left:4px solid #678;overflow-wrap:anywhere}.paper-prefill[hidden]{display:none}#status{min-height:1.5em;margin-top:12px}#result{white-space:pre-wrap}@media(min-width:700px){.row{display:grid;grid-template-columns:1fr 1fr;gap:14px}.row label{margin-top:14px}}
+:root{color-scheme:light dark;font:16px/1.55 system-ui,sans-serif}body{max-width:900px;margin:auto;padding:24px}h1{font-size:1.55rem}label{display:block;margin-top:14px;font-weight:650}input,select,textarea,button{box-sizing:border-box;width:100%;font:inherit;padding:10px;margin-top:5px}textarea{min-height:150px;resize:vertical}#source{min-height:260px}button{cursor:pointer;font-weight:700;margin-top:18px}.note{padding:12px;border:1px solid #8886;border-radius:8px}.muted{opacity:.78}.paper-prefill{margin:14px 0;padding:12px;border-left:4px solid #678;overflow-wrap:anywhere}.paper-prefill[hidden]{display:none}.zotero{margin:18px 0;padding:16px;border:1px solid #6788;border-radius:10px}.zotero button{min-height:44px}.zotero [role=status],#status{min-height:1.5em;margin-top:12px}#result{white-space:pre-wrap}@media(min-width:700px){.row{display:grid;grid-template-columns:1fr 1fr;gap:14px}.row label{margin-top:14px}}
 </style>
 </head>
 <body>
 <h1>论文 AI 重理解（本机）</h1>
 <p class="note">请求由本机 Node companion 发往模型服务，绕开浏览器对 OpenCode Go 的 CORS 预检限制。API key 只保留在本次请求内存中；不会写入 storage、日志、URL 或文件。论文原文和问题会发送给所选模型服务，请先确认内容与目标 endpoint。</p>
 <section id="paperPrefill" class="paper-prefill" hidden aria-label="论文预填信息"><strong id="paperTitle"></strong><div id="paperId"></div><a id="paperSource" target="_blank" rel="noopener noreferrer" hidden>查看原始来源</a><div id="contextState" class="muted"></div></section>
+<section class="zotero" aria-labelledby="zoteroTitle">
+<h2 id="zoteroTitle">导入 Zotero</h2>
+<p id="zoteroPreview"></p>
+<p class="muted">写入目标：Zotero Desktop 当前选中的库或分类。点击确认会修改你的本机 Zotero library；页面加载不会连接 Zotero。</p>
+<button id="zoteroImport" type="button">确认导入这条记录</button>
+<p id="zoteroStatus" role="status" aria-live="polite"></p>
+</section>
 <form id="form">
 <div class="row">
 <label>协议<select id="protocol" required><option value="openai_responses">OpenAI Responses</option><option value="openai_chat">OpenAI Chat Completions</option></select></label>
@@ -494,8 +847,13 @@ byId('endpoint').value=boot.defaultEndpoint;
 byId('model').value=boot.defaultModel;
 byId('protocol').value=boot.defaultProtocol;
 const prefill=boot.prefill||{};
-if(prefill.title||prefill.arxivId||prefill.sourceUrl||prefill.contextUrl){byId('paperPrefill').hidden=false;byId('paperTitle').textContent=prefill.title||'论文上下文';byId('paperId').textContent=prefill.arxivId?('arXiv: '+prefill.arxivId):'';if(prefill.sourceUrl){byId('paperSource').href=prefill.sourceUrl;byId('paperSource').hidden=false;}byId('contextState').textContent=prefill.contextLoadError||(prefill.contextUrl?'已从本站受控 sidecar 载入上下文；发送前请检查。':'未自动载入原文，请手动粘贴。');}
+if(prefill.title||prefill.arxivId||prefill.sourceUrl||prefill.contextUrl||prefill.selectionMode){byId('paperPrefill').hidden=false;byId('paperTitle').textContent=prefill.title||'论文上下文';byId('paperId').textContent=prefill.arxivId?('arXiv: '+prefill.arxivId):'';if(prefill.sourceUrl){byId('paperSource').href=prefill.sourceUrl;byId('paperSource').hidden=false;}byId('contextState').textContent=prefill.contextLoadError||(prefill.selectionMode?(prefill.contextUrl?'已载入选中段落和本站摘要上下文；发送前请检查。':'已载入你明确选中的段落；发送前请检查。'):(prefill.contextUrl?'已从本站受控 sidecar 载入上下文；发送前请检查。':'未自动载入原文，请手动粘贴。'));}
 byId('source').value=prefill.sourceContext||'';
+byId('question').value=prefill.defaultQuestion||'';
+if(window.location.search){window.history.replaceState(null,'','/ui');}
+const zoteroButton=byId('zoteroImport');
+if(boot.zoteroPlan){const authors=boot.zoteroPlan.authors.length?boot.zoteroPlan.authors.join('；'):'作者未从可信来源取得';const source=boot.zoteroPlan.source==='researcher-sidecars-v1'?'来源：已验证的本站 publication sidecar':'来源：历史博客页预填（作者不可得）';byId('zoteroPreview').textContent=boot.zoteroPlan.title+' · arXiv '+boot.zoteroPlan.arxivId+' · '+authors+' · '+source;}else{byId('zoteroPreview').textContent='当前页面没有足够的标题与 arXiv ID，无法生成导入记录。';zoteroButton.disabled=true;}
+zoteroButton.addEventListener('click',async()=>{const status=byId('zoteroStatus');if(!boot.zoteroTicket){status.textContent='导入凭证不可用，请刷新本机页面。';return;}zoteroButton.disabled=true;status.textContent='正在写入 Zotero…';try{const response=await fetch('/v1/zotero/import',{method:'POST',credentials:'omit',cache:'no-store',redirect:'error',referrerPolicy:'no-referrer',headers:{'Content-Type':'application/json','${SESSION_HEADER}':boot.sessionToken},body:JSON.stringify({ticket:boot.zoteroTicket})});const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error?.message||('HTTP '+response.status));status.textContent='已导入 Zotero。为防重复，本凭证已失效。';boot.zoteroTicket='';}catch(error){status.textContent='导入失败：'+String(error&&error.message||'未知错误')+'。如需重试，请刷新本机页面。';}});
 byId('form').addEventListener('submit',async event=>{
   event.preventDefault();
   const submit=byId('submit'); const status=byId('status'); const result=byId('result');
@@ -780,13 +1138,18 @@ function createPaperRethinkServer(options = {}) {
     const localUiOrigin = `http://${DEFAULT_HOST}:${port}`;
     const allowedOrigins = new Set(options.allowedOrigins || [blogOrigin, localUiOrigin]);
     const localUiOrigins = new Set(options.localUiOrigins || [localUiOrigin]);
+    const downloadReferrerOrigins = new Set(
+        options.downloadReferrerOrigins || [blogOrigin, localUiOrigin]
+    );
+    const zoteroTickets = new Map();
     // Fail at startup, before a browser receives the UI.
     resolveAllowedEndpoints(env, options.allowedEndpoints);
 
     const server = http.createServer(async (req, res) => {
         try {
             const url = new URL(req.url || '/', `http://${DEFAULT_HOST}:${port}`);
-            if (url.hash || (url.pathname !== '/ui' && url.search)) {
+            const queryAllowed = url.pathname === '/ui' || url.pathname === '/v1/paper/pdf';
+            if (url.hash || (!queryAllowed && url.search)) {
                 fail('NOT_FOUND', '未找到该路径', 404);
             }
             // /ui embeds the CSRF token. The public blog may navigate here, but
@@ -827,6 +1190,21 @@ function createPaperRethinkServer(options = {}) {
                     blogBasePath,
                     contextLoader: options.contextLoader
                 });
+                const zoteroPlan = buildZoteroCitationPlan(prefill);
+                const now = Date.now();
+                for (const [ticket, record] of zoteroTickets) {
+                    if (record.expiresAt <= now) zoteroTickets.delete(ticket);
+                }
+                while (zoteroTickets.size >= MAX_ZOTERO_TICKETS) {
+                    zoteroTickets.delete(zoteroTickets.keys().next().value);
+                }
+                const zoteroTicket = zoteroPlan ? crypto.randomBytes(24).toString('base64url') : '';
+                if (zoteroTicket) {
+                    zoteroTickets.set(zoteroTicket, {
+                        plan: zoteroPlan,
+                        expiresAt: now + ZOTERO_TICKET_TTL_MS
+                    });
+                }
                 const nonce = crypto.randomBytes(18).toString('base64url');
                 const html = Buffer.from(buildUiHtml({
                     sessionToken,
@@ -834,7 +1212,9 @@ function createPaperRethinkServer(options = {}) {
                     defaultModel,
                     defaultProtocol,
                     nonce,
-                    prefill
+                    prefill,
+                    zoteroTicket,
+                    zoteroPlan
                 }), 'utf8');
                 res.writeHead(200, {
                     'Content-Type': 'text/html; charset=utf-8',
@@ -848,6 +1228,38 @@ function createPaperRethinkServer(options = {}) {
                     'Cross-Origin-Opener-Policy': 'same-origin'
                 });
                 res.end(html);
+                return;
+            }
+            if (req.method === 'GET' && url.pathname === '/v1/paper/pdf') {
+                let referrerOrigin = '';
+                try {
+                    referrerOrigin = new URL(String(req.headers.referer || '')).origin;
+                } catch (_) {
+                    // A missing/malformed referrer cannot prove an explicit
+                    // click from the configured blog or the local UI.
+                }
+                if (!downloadReferrerOrigins.has(referrerOrigin)) {
+                    fail('PDF_DOWNLOAD_FORBIDDEN', 'PDF 下载必须从受信任页面显式点击', 403);
+                }
+                const keys = Array.from(url.searchParams.keys());
+                if (keys.length !== 1 || keys[0] !== 'arxivId'
+                    || url.searchParams.getAll('arxivId').length !== 1) {
+                    fail('PDF_REQUEST_INVALID', 'PDF 下载参数无效');
+                }
+                const downloader = options.pdfDownloadFn || downloadArxivPdf;
+                const artifact = await downloader(url.searchParams.get('arxivId'), {
+                    ...(options.pdfOptions || {})
+                });
+                const filenameId = artifact.identity.resolvedId.replace(/[^a-z0-9.-]+/gi, '-');
+                res.writeHead(200, {
+                    'Content-Type': 'application/pdf',
+                    'Content-Length': artifact.buffer.length,
+                    'Content-Disposition': `attachment; filename="arxiv-${filenameId}.pdf"`,
+                    'Cache-Control': 'no-store',
+                    'X-Content-Type-Options': 'nosniff',
+                    'Referrer-Policy': 'no-referrer'
+                });
+                res.end(artifact.buffer);
                 return;
             }
             if (req.method === 'POST' && url.pathname === '/v1/rethink') {
@@ -868,6 +1280,40 @@ function createPaperRethinkServer(options = {}) {
                     maxResponseBytes: options.maxResponseBytes
                 });
                 writeJson(res, 200, { ok: true, ...result });
+                return;
+            }
+            if (req.method === 'POST' && url.pathname === '/v1/zotero/import') {
+                if (!req.headers.origin || !localUiOrigins.has(req.headers.origin)) {
+                    fail('ORIGIN_FORBIDDEN', 'Zotero 写入只接受本机 companion UI', 403);
+                }
+                const suppliedToken = String(req.headers[SESSION_HEADER] || '');
+                const suppliedBytes = Buffer.from(suppliedToken, 'utf8');
+                const expectedBytes = Buffer.from(sessionToken, 'utf8');
+                const tokenValid = suppliedBytes.length === expectedBytes.length
+                    && crypto.timingSafeEqual(suppliedBytes, expectedBytes);
+                suppliedBytes.fill(0);
+                if (!tokenValid) fail('SESSION_FORBIDDEN', '本机 session token 无效', 403);
+                const payload = await readJsonBody(req, 4096);
+                if (!isPlainObject(payload) || Object.keys(payload).length !== 1
+                    || typeof payload.ticket !== 'string') {
+                    fail('ZOTERO_TICKET_INVALID', 'Zotero 导入请求格式无效');
+                }
+                const ticketRecord = zoteroTickets.get(payload.ticket);
+                zoteroTickets.delete(payload.ticket);
+                if (!ticketRecord || ticketRecord.expiresAt <= Date.now()) {
+                    fail('ZOTERO_TICKET_INVALID', 'Zotero 导入凭证无效或已过期', 403);
+                }
+                const importer = options.zoteroImportFn || importCitationIntoZotero;
+                await importer(ticketRecord.plan, options.zoteroOptions || {});
+                writeJson(res, 200, {
+                    ok: true,
+                    imported: {
+                        title: ticketRecord.plan.title,
+                        arxivId: ticketRecord.plan.arxivId,
+                        authorCount: ticketRecord.plan.authors.length,
+                        destination: 'current-selected-library-or-collection'
+                    }
+                });
                 return;
             }
             fail('NOT_FOUND', '未找到该路径', 404);
@@ -917,6 +1363,7 @@ module.exports = {
     DEFAULT_BLOG_BASE_PATH,
     MAX_BODY_BYTES,
     MAX_CONTEXT_CHARS,
+    MAX_SELECTED_TEXT_CHARS,
     MAX_RESPONSE_BYTES,
     SESSION_HEADER,
     PaperRethinkError,
@@ -927,7 +1374,15 @@ module.exports = {
     parseUiPrefill,
     fetchContextSidecarJson,
     validateContextSidecar,
+    boundedJsonContext,
+    finalizeUiPrefill,
     loadUiPrefill,
+    buildZoteroCitationPlan,
+    buildZoteroBibtex,
+    importCitationIntoZotero,
+    readFetchBufferWithLimit,
+    normalizeArxivPdfRedirect,
+    downloadArxivPdf,
     buildPrompt,
     validatePayload,
     extractCompletedText,

@@ -99,6 +99,7 @@ endpoint 规则：
 &arxivId=2609.03620v2
 &sourceUrl=https%3A%2F%2Farxiv.org%2Fabs%2F2609.03620v2
 &contextUrl=%2Faudio-paper-digest-blog%2Fdata%2Fpapers%2F2026-09-05%2F2609-03620%2Frethink-context.json
+&selectedText=用户明确选择的论文段落
 ```
 
 - query 总长不超过 8192 字符；字段不得重复；任何未知参数都拒绝。
@@ -112,9 +113,26 @@ endpoint 规则：
   读取 sidecar；本机浏览器不跨源 fetch。
 - sidecar 合同和 arXiv 身份通过后才预填原文框；暂时不可用时保留手动粘贴能力，
   只显示脱敏失败提示。
+- `selectedText` 只允许用户点击论文工具栏按钮时从当前文档选择读取，规范化为 NFC
+  纯文本；最多 2000 字符，并继续受 8192 字符的编码后总 query 上限约束。控制字符、
+  超长选择和过长 URL 在导航前后分别失败关闭。
+- 有选中段落时，UI 把它标为“不可信论文证据”并置于摘要 sidecar 之前，同时预填
+  “解释作用、前提和误读”的问题；没有选择时继续使用摘要 sidecar 或手动粘贴全文。
+- UI 完成预填后立即用 `history.replaceState` 从地址栏和当前 history entry 移除 query；
+  选中文本不会进入 API key、Zotero ticket、日志或 storage。它只会在用户再次点击
+  “发送到所选模型”后随原文框内容发给 provider。
 
 博客只能生成普通、用户点击触发的 `target="_blank"` 导航；不得在加载、滚动或
 hover 时 fetch localhost，也不得把本机 session token 传回博客。
+
+### `GET /v1/paper/pdf?arxivId=...`
+
+这是用户显式点击“下载 PDF（本机）”后的附件下载入口。它只接受唯一的
+`arxivId` 参数，支持现代及 old-style arXiv ID，并保留显式 `vN`；未知、重复参数或
+非法 ID 在联网前拒绝。请求还必须带有配置博客或本机 UI 的精确 origin referrer；
+博客链接只发送 origin，不泄露论文路径。服务只通过项目 HTTP CONNECT 请求官方 arXiv PDF，验证受控
+重定向、50 MiB 上限、MIME 与 `%PDF-` 文件头，然后用 `attachment` 响应返回。该入口
+不接受任意 URL、不读取 API key，也不在博客加载时调用。
 
 ### `POST /v1/rethink`
 
@@ -187,14 +205,33 @@ system prompt 把论文内容与用户问题都声明为不可信证据；内容
 
 本机 AI companion 与引用工具应保持独立：
 
-1. 博客页面嵌入 Highwire/JSON-LD 学术 metadata，让用户点击浏览器的 Zotero
-   Connector；网页不能替用户点击扩展。
+1. 博客页面嵌入 Highwire/JSON-LD 学术 metadata，同时提供“导入 Zotero（本机确认）”
+   链接。链接只导航到 companion `/ui`，不会在博客加载时扫描 localhost；浏览器
+   Zotero Connector 仍作为不运行 companion 时的 fallback。
 2. 同源静态 `.bib` / `.ris` 是无扩展时的确定性 fallback；它们在发布期生成并绑定
    manifest SHA，不在浏览器运行时从正文猜作者或抓 arXiv。
-3. 可选桌面直导应由专用扩展或经过配对的本地程序在用户确认后调用 Zotero Connector
-   本地接口；公共博客不得加载时扫描 `127.0.0.1:23119` 或读取本地 Zotero library。
+3. companion 在本机确认页展示将写入的标题、arXiv ID、作者来源和目标说明。只有用户
+   点击“确认导入这条记录”后，服务端才消费一个十分钟、单次使用、最多 128 个并存的
+   随机 ticket，并通过固定 `127.0.0.1:23119/connector/import` 将 BibTeX 写入 Zotero
+   当前选中的库或分类。对 Zotero 10 的本机 HTTP 加固同时发送
+   `Zotero-Allowed-Request: true`；请求还必须同时携带本机 UI Origin 与进程随机
+   session header，公共博客拿不到二者。
 4. 博客中的“AI 重理解”只显式打开 `http://127.0.0.1:43128/ui`，不与 Zotero
    localhost 能力共享 token、端口或权限。
+
+新 `researcher-sidecars-v1` 页面使用经过身份、摘要 SHA 和受控 HTTPS 路径验证的
+`rethink-context.json` 标题与作者生成引用。历史页没有 sidecar 时只使用页面携带的
+标题和严格规范化 arXiv ID，预览会明确作者未知，不从正文猜作者。Connector 未启动、
+超时或拒绝导入时，UI 只显示稳定错误并要求刷新获得新 ticket，避免网络结果不确定时
+重复写入。
+
+“打开 PDF”仍是指向固定 `https://arxiv.org/pdf/<严格ID>.pdf` 的显式导航，浏览器可能
+预览而不下载。论文工具栏另提供“下载 PDF（本机）”：只有用户点击后，companion 才
+通过项目 HTTP CONNECT 从官方 `arxiv.org`/`export.arxiv.org` 获取身份一致的 PDF，
+最多接受两次受控重定向、50 MiB、`application/pdf`/`application/octet-stream`，并在
+验证 `%PDF-` 文件头后用 `Content-Disposition: attachment` 返回。它不接受任意 URL。
+`connector/import` 的稳定合同不保证自动保存 PDF attachment，因此 Zotero 导入仍不
+伪称自动附带 PDF；下载与导入是两个分别由用户触发的动作。
 
 ## 测试重点
 
