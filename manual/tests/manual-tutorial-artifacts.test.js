@@ -31,16 +31,41 @@ function table(id, kind, caption, matrix) {
 
 function fallbackAllMusicCapsFixture() {
     const tables = [
-        table('TAB0001', 'result', 'Table 1: Downstream performance', [
-            ['Data', 'MRR↑\\uparrow', 'Acc.↑\\uparrow'], ['baseline', '7.2', '15.1'], ['baseline+AMCQuotes', '7.3', '18.8']
+        table('TAB0001', 'result', 'Table 1: Downstream performance of each review-derived text corpus, the baseline (LPMC + M4-RAG + FS + PSE), and their combinations. Bold = best per column.', [
+            ['', 'Retrieval', 'Retrieval', 'ZS Class.', 'ZS Class.'],
+            ['Data', 'MuCaps', 'SongD.', 'GTZAN', 'FMA-S'],
+            ['', 'MRR↑\\uparrow', 'MRR↑\\uparrow', 'Acc.↑\\uparrow', 'Acc.↑\\uparrow'],
+            ['baseline', '7.2', '15.1', '86.4', '55.0'],
+            ['AMCQuotes', '5.6', '14.7', '81.7', '48.0'],
+            ['AMCStruct', '4.6', '15.4', '84.3', '47.5'],
+            ['baseline+AMCQuotes', '7.3', '18.8', '87.1', '55.5'],
+            ['baseline+AMCStruct', '7.3', '17.9', '85.6', '55.0']
         ]),
-        table('TAB0002', 'other', 'Table 2: Δ\\Delta rank −- baseline', [
+        table('TAB0002', 'other', 'Table 2: Top-3 queries with the largest rank improvement when adding review supervision. Δ\\Delta rank = rank under review-augmented model −- rank under baseline. Larger is better. Captions are truncated to fit.', [
             ['baseline+AMCQuotes vs. baseline', 'baseline+AMCQuotes vs. baseline'],
-            ['Δ\\Delta rank', 'Query'], ['MusicCaps', 'MusicCaps'], ['++1951', 'MusicCaps query 1'],
-            ['Song Describer', 'Song Describer'], ['++291', 'SongD. query 1']
+            ['Δ\\Delta rank', 'Query'],
+            ['MusicCaps', 'MusicCaps'],
+            ['++1951', 'This music is instrumental. The tempo is slow with the musician plucking a single string of a ukelele. This audio is of a Ukelele being tuned.'],
+            ['++1869', 'This audio recording features a crickets sound effect, sea waves sound effect and mellow synth pad chords in the background, followed by shimmering tambourine and muffled snare…'],
+            ['++1822', 'This piece is a live performance of dancers playing the tambourine over a rock music piece in the background. The background piece has a female vocal and an electric guitar…'],
+            ['Song Describer', 'Song Describer'],
+            ['++291', 'A rock song with a slow base well marked by drums and distorted guitars.'],
+            ['++282', 'A power-pop song with a lot of idiosyncracies like flutes, a kid’s choir, and guitar solo played backwards.'],
+            ['++246', 'Male vocalist with a raspy voice singing over melancholic piano chords and drums increasing in intensity, with a slighty dissonant chorus featuring distorted guitars.']
         ]),
-        table('TAB0003', 'result', 'Table 3: Audio encoder layer selection', [
-            ['Layer', 'MuCaps', 'SongD.', 'RMSE↓\\downarrow'], ['Layer 12', '7.3', '18.8', '74.3'], ['All layers', '7.8', '19.3', '83.0']
+        table('TAB0003', 'result', 'Table 3: Audio encoder layer selection. All models use frozen text encoder and InfoNCE loss on baseline+AMCQuotes data. Bold = best per column.', [
+            ['', 'Retrieval', 'Retrieval', 'ZS Class.', 'ZS Class.', 'Sim.'],
+            ['Layer', 'MuCaps', 'SongD.', 'GTZAN', 'FMA-S', 'DimSim'],
+            ['', 'MRR↑\\uparrow', 'MRR↑\\uparrow', 'Acc.↑\\uparrow', 'Acc.↑\\uparrow', 'Acc.↑\\uparrow'],
+            ['Layer 12', '7.3', '18.8', '87.1', '55.5', '74.3'],
+            ['Layer 6', '6.5', '17.9', '83.5', '55.0', '82.0'],
+            ['All layers', '7.8', '19.3', '85.4', '55.5', '83.0'],
+            ['', 'MLP Probing', 'MLP Probing', 'MLP Probing', 'MLP Probing', 'MLP Probing'],
+            ['Layer', 'MTT', 'J.Genre', 'J.Instr.', 'J.Mood', 'MGPHot'],
+            ['', 'MAP↑\\uparrow', 'MAP↑\\uparrow', 'MAP↑\\uparrow', 'MAP↑\\uparrow', 'RMSE↓\\downarrow'],
+            ['Layer 12', '43.4', '21.7', '17.1', '15.2', '0.162'],
+            ['Layer 6', '44.7', '20.5', '15.0', '14.3', '0.162'],
+            ['All layers', '44.5', '21.6', '16.7', '15.2', '0.161']
         ])
     ];
     const figures = [
@@ -60,7 +85,7 @@ function fallbackAllMusicCapsFixture() {
 }
 
 function allMusicCapsArtifact() {
-    if (fs.existsSync(CURRENT_ALLMUSICCAPS)) {
+    if (process.env.PD_TEST_FORCE_FALLBACK_ARTIFACT !== '1' && fs.existsSync(CURRENT_ALLMUSICCAPS)) {
         return JSON.parse(fs.readFileSync(CURRENT_ALLMUSICCAPS, 'utf8'));
     }
     return fallbackAllMusicCapsFixture();

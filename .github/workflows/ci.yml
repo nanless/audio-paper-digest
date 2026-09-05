@@ -16,6 +16,7 @@ jobs:
       PAPER_ANALYZER_ENDPOINT: https://example.invalid/v1
       PAPER_ANALYZER_API_KEY: ci-placeholder-not-a-secret
       PAPER_ANALYZER_MODEL: ci-test-model
+      HTTPS_PROXY: http://127.0.0.1:9
     strategy:
       matrix:
         node-version: [20.x, 22.x]
@@ -48,7 +49,8 @@ jobs:
           printf '%s\n' \
             "PAPER_ANALYZER_ENDPOINT=$PAPER_ANALYZER_ENDPOINT" \
             "PAPER_ANALYZER_API_KEY=$PAPER_ANALYZER_API_KEY" \
-            "PAPER_ANALYZER_MODEL=$PAPER_ANALYZER_MODEL" > .env
+            "PAPER_ANALYZER_MODEL=$PAPER_ANALYZER_MODEL" \
+            "HTTPS_PROXY=$HTTPS_PROXY" > .env
 
       - name: Run tests
         run: npm test
