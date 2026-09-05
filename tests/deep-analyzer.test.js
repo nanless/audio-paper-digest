@@ -2475,6 +2475,40 @@ primary_task_tag: #音视频生成
         assert.strictEqual(ensureApiReaderTableNarratives(fenced), fenced);
     });
 
+    it('2609.02941 TeX颜色前缀只解包明确修饰且保留原字quote、符号和单位', () => {
+        const { deriveExactTableSourceQuotes, bindApiReaderSourceEvidence,
+            bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
+        const sourceText = 'Original table values:\n\\textcolorblue58.62\n\\textcolorblue62.37\n'
+            + '\\textcolorblue−3.21 dB\n\\textcolorred60.63%\n';
+        const article = '| Metric | Value |\n| --- | --- |\n| Fold A | 58.62 |\n'
+            + '| Fold B | 62.37 |\n| Change | -3.21 dB |\n| Rate | 60.63% |';
+        const quotes = deriveExactTableSourceQuotes(article, sourceText);
+        assert.ok(quotes.some(quote => quote.includes('\\textcolorblue58.62')));
+        assert.ok(quotes.every(quote => sourceText.includes(quote)));
+        const bindings = [{ tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
+            cellBindings: [], sourceQuotes: quotes }];
+        const options = { sourceText,
+            structuredArtifacts: bindStructuredArtifactsToText({ tables: [], formulas: [] }, sourceText) };
+        assert.strictEqual(bindApiReaderSourceEvidence(article, bindings, [], options).article, article);
+        for (const [before, fabricated] of [['58.62', '58.62%'], ['-3.21 dB', '3.21 dB'],
+            ['-3.21 dB', '-3.21'], ['60.63%', '0.6063']]) {
+            assert.throws(() => bindApiReaderSourceEvidence(article.replace(before, fabricated),
+                bindings, [], options), /关键数字缺少 exact quote\/cell 证据/);
+        }
+        for (const unsupported of ['model58.62', 'textcolorblue58.62', '\\textcolorunknown58.62',
+            '\\textcolorblueExtra58.62']) {
+            assert.deepStrictEqual(deriveExactTableSourceQuotes('| Metric | Value |\n| --- | --- |\n| Test | 58.62 |',
+                `Original unsupported identifier ${unsupported} in the table.`), []);
+        }
+        for (const externalSign of ['-', '−', '+', '－', '- ', '−\n']) {
+            const signedSource = `The measured change is ${externalSign}\\textcolorblue58.62 dB in the experiment.`;
+            for (const unsafeValue of ['58.62 dB', '-58.62 dB', '62 dB']) {
+                assert.deepStrictEqual(deriveExactTableSourceQuotes(
+                    `| Metric | Value |\n| --- | --- |\n| Change | ${unsafeValue} |`, signedSource), []);
+            }
+        }
+    });
+
     it('2609.03622 原表小数双写保留完整match，可按原字quote绑定干净值且不猜拆非重复串', () => {
         const { deriveExactTableSourceQuotes, bindApiReaderSourceEvidence,
             bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');

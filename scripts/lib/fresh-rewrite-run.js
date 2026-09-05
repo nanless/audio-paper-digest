@@ -42,10 +42,15 @@ function parseRewriteArgs(args) {
     const seen = new Set();
     for (let index = 1; index < args.length; index++) {
         const flag = args[index];
-        if (!['--date', '--run-id', '--concurrency'].includes(flag) || seen.has(flag)) {
+        if (!['--date', '--run-id', '--concurrency', '--refresh-reader-diagnostics'].includes(flag) || seen.has(flag)) {
             throw new Error(`Unknown or repeated fresh rewrite argument: ${flag}`);
         }
         seen.add(flag);
+        if (flag === '--refresh-reader-diagnostics') {
+            if (action !== 'analyze') throw new Error('Only analyze accepts --refresh-reader-diagnostics');
+            options.refreshReaderDiagnostics = true;
+            continue;
+        }
         const value = args[++index];
         if (!value || value.startsWith('--')) throw new Error(`Missing value for ${flag}`);
         if (flag === '--date') options.date = value;
@@ -362,7 +367,8 @@ async function analyzeRewrite(options, overrides = {}) {
         let fatal = null;
         try {
             await deps.withFreshAnalysisContext({ runId: loaded.run.runId, runDir: loaded.runDir,
-                sourceExpectations: loaded.run.sourceExpectations }, () => deps.analyzeBatch(loaded.analysis.papers, {
+                sourceExpectations: loaded.run.sourceExpectations,
+                refreshReaderDiagnostics: options.refreshReaderDiagnostics === true }, () => deps.analyzeBatch(loaded.analysis.papers, {
                 concurrency: options.concurrency || deps.defaultAnalysisConcurrency,
                 maxRetries: deps.maxRetries, checkpointFilePath: analysisPath, saveInterval: 0,
                 onAttempt: (attempt, maxRetries, paper) => {

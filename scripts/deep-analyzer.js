@@ -771,7 +771,7 @@ const API_READER_TABLE_CONTRACT_VERSION = 'api-reader-tables-v3';
 const API_READER_FIGURE_CONTRACT_VERSION = 'api-reader-figures-v3';
 const API_READER_QUALITY_METRICS_CONTRACT = 'api-reader-quality-metrics-v2';
 const API_READER_SOURCE_BINDING_CONTRACT = 'api-reader-source-bindings-v4';
-const API_READER_SOURCE_BINDING_REPAIR_VERSION = 'api-reader-source-repair-v3';
+const API_READER_SOURCE_BINDING_REPAIR_VERSION = 'api-reader-source-repair-v4';
 const API_READER_SURFACE_REPAIR_VERSION = 'api-reader-surface-repair-v1';
 const API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1';
 const API_READER_RESOURCE_IDENTITY_CONTRACT = 'api-reader-resource-identity-v1';
@@ -785,10 +785,8 @@ const SCORING_STABILITY_THRESHOLD = 0.5;
 const SCORING_STABILITY_CONSENSUS_TOLERANCE = 0.3;
 const API_READER_FIGURE_LEAD_MIN_CHARS = READER_LIMITS.figureLeadChars;
 const API_READER_FIGURE_EXPLANATION_MIN_CHARS = READER_LIMITS.figureExplanationChars;
-const API_READER_KINDS = Object.freeze([
-    'background', 'related_work', 'problem', 'method_overview', 'component', 'training',
-    'experiment_setup', 'result', 'ablation', 'limitation', 'reproduction', 'synthesis'
-]);
+const { READER_SECTION_KINDS: API_READER_KINDS, normalizeReaderDraftOrder,
+    READER_DRAFT_ORDER_CONTRACT } = require('./lib/reader-draft-order.js');
 const API_READER_REQUIRED_KINDS = Object.freeze([
     'background', 'related_work', 'method_overview', 'training',
     'experiment_setup', 'result', 'limitation', 'reproduction', 'synthesis'
@@ -891,7 +889,24 @@ function readerNumericTokenMatches(value) {
         `${lookbehind}(?:${doubledDecimal}|${sign}?${digit}+(?:${dot}${digit}+)?)(?:${percent}|\\s*(?:${unit}))?`,
         'gi'
     );
-    return [...String(value || '').matchAll(pattern)];
+    // LaTeXML can flatten an explicit TeX color command into
+    // \\textcolorblue58.62. Mask only standard named-color prefixes immediately
+    // before a number; equal-length spaces preserve source indices and exact
+    // quote bytes. Do not relax the identifier boundary or rewrite units.
+    const originalSurface = String(value || '');
+    const numericSurface = originalSurface.replace(
+        /(\\textcolor(?:black|blue|brown|cyan|darkgray|gray|green|lightgray|lime|magenta|olive|orange|pink|purple|red|teal|violet|white|yellow))([-+\uFF0D\u2212]?[0-9\uFF10-\uFF19][0-9.\uFF10-\uFF19\uFF0E]*)/g,
+        (surface, prefix, number, offset) => {
+            // An external sign would become detached by the mask. Fail closed
+            // on this ambiguous surface, including its decimal tail; never
+            // manufacture a positive token or move a sign across source bytes.
+            if (/[-+\uFF0D\u2212]\s*$/.test(originalSurface.slice(0, offset))) {
+                return ' '.repeat(surface.length);
+            }
+            return ' '.repeat(prefix.length) + number;
+        }
+    );
+    return [...numericSurface.matchAll(pattern)];
 }
 
 function canonicalReaderNumericToken(raw) {
@@ -2366,13 +2381,9 @@ function parseApiReaderArticleResult(raw, options = {}) {
             `读者文章 sections 必须包含 ${minimumSectionCount}-${maximumSectionCount} 个小节`
         );
     }
-    value.sections = value.sections.map((section, inputIndex) => ({ section, inputIndex }))
-        .sort((left, right) => {
-            const rankDelta = API_READER_KINDS.indexOf(left.section?.kind)
-                - API_READER_KINDS.indexOf(right.section?.kind);
-            return rankDelta || left.inputIndex - right.inputIndex;
-        })
-        .map(item => item.section);
+    const orderedDraft = normalizeReaderDraftOrder(value);
+    value.sections = orderedDraft.draft.sections;
+    value.tableBindings = orderedDraft.draft.tableBindings;
     const compiledTables = compileReaderTableSelections(
         value.sections, value.tableBindings, options.structuredArtifacts
     );
@@ -3140,6 +3151,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         mechanicalContractSha256: repair.shaText(fs.readFileSync(path.join(__dirname, 'lib/reader-contract.js'), 'utf8')),
         tableCompilerSha256: repair.shaText(fs.readFileSync(path.join(__dirname, 'lib/reader-tables.js'), 'utf8')),
         repairImplementationSha256: repair.shaText(fs.readFileSync(path.join(__dirname, 'lib/reader-repair.js'), 'utf8')),
+        draftOrderContract: READER_DRAFT_ORDER_CONTRACT,
+        draftOrderImplementationSha256: promptTemplateSha256('scripts/lib/reader-draft-order.js'),
+        sourceDiagnosticsImplementationSha256: promptTemplateSha256('scripts/lib/reader-source-diagnostics.js'),
         readerContract: API_READER_ARTICLE_CONTRACT,
         sourceBindingContract: API_READER_SOURCE_BINDING_CONTRACT,
         repairVersion: repair.REPAIR_VERSION,
@@ -3147,24 +3161,30 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         maxAttempts,
         repairTemperature: API_READER_REPAIR_TEMPERATURE
     };
-    const recovered = repair.loadFailedCandidate(candidateDirectory, identity);
+    const recovered = require('./lib/reader-recovery-revision.js').loadReaderRecoveryRevision(candidateDirectory, identity);
+    const readerRecoveryRevisions = recovered?.readerRecoveryRevisions || [];
     let candidate = recovered?.draft || null;
+    const draftOrderMappings = recovered?.draftOrderMappings || [];
+    const normalizeCandidate = () => {
+        if (!candidate) return;
+        const normalized = normalizeReaderDraftOrder(candidate);
+        candidate = normalized.draft;
+        if (normalized.mapping.changed) draftOrderMappings.push(normalized.mapping);
+    };
     let currentIssues = recovered?.issues || [];
     let completedAttempts = recovered?.attempts || 0;
     let fullAttempts = recovered?.fullAttempts || 0;
     let transportFailures = recovered?.transportFailures || 0;
     let noProgress = recovered?.noProgress || 0;
     let previousFailureSignature = recovered?.failureSignature || '';
-    if (completedAttempts >= maxAttempts || noProgress >= 2) {
-        throw new Error('Reader failed candidate exhausted its bounded attempts; inspect recovery evidence before changing inputs');
-    }
     const reviewFeedbackPrefix = start.reviewFeedbackPrefix;
     // 振荡型失败下模型会在“修好 A 又弄坏 B”之间横跳：只给最近一次错误，
     // 它永远看不到约束全集。本轮内累积历次错误并每次全量呈现，同时让外部
     // review 反馈在每一轮都保留（之前第二轮起就被覆盖丢弃了）。
     const attemptErrorHistory = currentIssues.map(issue => issue.message);
+    const numericSpellingGuidance = require('./lib/reader-source-diagnostics.js').readerNumericSpellingGuidance();
     const buildAttemptFeedback = () => {
-        const parts = [];
+        const parts = [numericSpellingGuidance];
         if (reviewFeedbackPrefix) parts.push(reviewFeedbackPrefix);
         if (attemptErrorHistory.length === 0) {
             parts.push(start.isRevision
@@ -3275,13 +3295,18 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     // it failed. No persisted success flag can bypass today's full gates.
     if (candidate) {
         try {
+            normalizeCandidate();
             const parsed = parseCandidate(JSON.stringify(candidate));
             const retiredCandidate = repair.retireFailedCandidate(candidateDirectory, identity);
-            return { ...parsed, contentMode, attempts: completedAttempts, imageEvidence, resumedCandidate: true, retiredCandidate };
+            return { ...parsed, contentMode, attempts: completedAttempts, imageEvidence, resumedCandidate: true,
+                retiredCandidate, draftOrderMappings };
         }
         catch (error) { currentIssues = repair.collectDraftIssues(candidate, error, {
             sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts
         }); }
+    }
+    if (completedAttempts >= maxAttempts || noProgress >= 2) {
+        throw new Error('Reader failed candidate exhausted its bounded attempts; inspect recovery evidence before changing inputs');
     }
     for (let attempt = completedAttempts + 1; attempt <= maxAttempts; attempt++) {
         const repairContext = candidate
@@ -3291,7 +3316,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         }
         const prompt = repairContext ? loadPrompt('prompts/api-reader-repair.md', {
             title: paper.title || '', arxivId: getPaperArxivId(paper),
-            validationFeedback: [reviewFeedbackPrefix, ...currentIssues.map(issue => issue.message)].filter(Boolean).join('\n'),
+            validationFeedback: [numericSpellingGuidance, reviewFeedbackPrefix,
+                ...currentIssues.map(issue => issue.message)].filter(Boolean).join('\n'),
             repairTargets: JSON.stringify({ draftSha256: repairContext.draftSha256, targets: repairContext.targets }),
             sourceEvidence: repairContext.evidence,
             mechanicalContract
@@ -3351,7 +3377,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 noProgress = failureSignature === previousFailureSignature ? noProgress + 1 : 0;
                 previousFailureSignature = failureSignature;
                 repair.saveFailedCandidate(candidateDirectory, identity, {
-                    status: 'failed', draft: candidate, rawDraft: previousDraft,
+                    status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions,
                     issues: currentIssues, attempts: attempt, fullAttempts, noProgress,
                     failureSignature, imageEvidence, transportFailures,
                     lastContentError: { code: error.code, message: String(error.message || error),
@@ -3365,7 +3391,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             // retries; this invocation stops here and a later run may resume.
             transportFailures += 1;
             repair.saveFailedCandidate(candidateDirectory, identity, {
-                status: 'failed', draft: candidate, rawDraft: previousDraft,
+                status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions,
                 issues: currentIssues, attempts: attempt - 1, fullAttempts,
                 noProgress, failureSignature: previousFailureSignature, imageEvidence,
                 transportFailures, lastTransportError: String(error?.message || error)
@@ -3389,6 +3415,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             } else {
                 candidate = repair.parseRepairableDraft(extractJsonObjectText(raw));
             }
+            normalizeCandidate();
+            if (candidate) raw = JSON.stringify(candidate);
             const parsed = parseCandidate(raw);
             recordDisposition({ ...dispositionBase, disposition: 'accepted' });
             const retiredCandidate = repair.retireFailedCandidate(candidateDirectory, identity);
@@ -3398,6 +3426,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 attempts: attempt,
                 imageEvidence,
                 repairVersion: repair.REPAIR_VERSION,
+                draftOrderMappings,
                 fullAttempts,
                 transportFailures,
                 retiredCandidate,
@@ -3418,7 +3447,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 || (candidate && repair.hashDraft(candidate) === priorCandidateSha) ? noProgress + 1 : 0;
             previousFailureSignature = failureSignature;
             repair.saveFailedCandidate(candidateDirectory, identity, {
-                status: 'failed', draft: candidate, rawDraft: previousDraft,
+                status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions,
                 issues: currentIssues, attempts: attempt, fullAttempts, noProgress, failureSignature, imageEvidence,
                 transportFailures
             });
@@ -4085,6 +4114,9 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
             promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.apiReaderArticle),
             repairPromptSha256: promptTemplateSha256('prompts/api-reader-repair.md'),
             repairImplementationSha256: promptTemplateSha256('scripts/lib/reader-repair.js'),
+            draftOrderContract: READER_DRAFT_ORDER_CONTRACT,
+            draftOrderImplementationSha256: promptTemplateSha256('scripts/lib/reader-draft-order.js'),
+            sourceDiagnosticsImplementationSha256: promptTemplateSha256('scripts/lib/reader-source-diagnostics.js'),
             repairMaxTokens: ANALYSIS_CONFIG.apiReaderRepairMaxTokens || 8000,
             repairTemperature: API_READER_REPAIR_TEMPERATURE,
             maximumContentAttempts: 6,

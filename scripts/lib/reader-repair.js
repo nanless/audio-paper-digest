@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { READER_LIMITS } = require('./reader-contract.js');
+const { locateReaderDraftTables } = require('./reader-draft-order.js');
 
 const REPAIR_VERSION = 'reader-node-repair-v1';
 const ARRAY_FIELDS = ['sections', 'conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings'];
@@ -115,6 +116,7 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
 function collectDraftIssues(draft, parserError, options = {}) {
     const issues = [];
     if (parserError) issues.push({ path: null, message: String(parserError.message || parserError) });
+    if (Array.isArray(parserError?.readerIssues)) issues.push(...parserError.readerIssues);
     if (!draft) return issues;
     draft.sections.forEach((section, index) => {
         if (!section || typeof section !== 'object' || Array.isArray(section)
@@ -144,6 +146,9 @@ function collectDraftIssues(draft, parserError, options = {}) {
         });
     }
     collectTableBindingIssues(draft, options).forEach(issue => issues.push(issue));
+    require('./reader-source-diagnostics.js').buildReaderSourceDiagnostics({ draft,
+        sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts, parserError
+    }).forEach(issue => issues.push(issue));
     try {
         const tables = require('./reader-tables.js');
         const compiled = tables.compileReaderTableSelections(draft.sections, draft.tableBindings, options.structuredArtifacts);
@@ -274,6 +279,7 @@ function buildRepairTargets(draft, issues) {
     };
     for (const issue of issues) {
         if (issue.path) add(issue.path);
+        if (issue.bindingPath) add(issue.bindingPath);
         const message = issue.message || '';
         if (/主结果表覆盖不足/.test(message)) {
             draft.sections.forEach((section, index) => {
@@ -292,18 +298,12 @@ function buildRepairTargets(draft, issues) {
             draft.sections.forEach((_section, index) => add(`/sections/${index}/body`));
         }
         if (/表|tableBindings|cell|quote/i.test(message)) {
-            let tableIndex = 0;
-            const wanted = Number(message.match(/第\s*(\d+)\s*张/)?.[1]
+            const boundIndex = /^\/tableBindings\/(\d+)$/.exec(issue.bindingPath || issue.path || '');
+            const wanted = Number(boundIndex ? Number(boundIndex[1]) + 1 : message.match(/第\s*(\d+)\s*张/)?.[1]
                 || (message.match(/tableBindings\[(\d+)\]/) ? Number(message.match(/tableBindings\[(\d+)\]/)[1]) + 1 : 0));
-            draft.sections.forEach((section, index) => {
-                const count = (String(section?.body || '').match(/^\s*\|[^\n]+\|\s*\n\s*\|\s*:?-[-| :]+/gm) || []).length;
-                const markerMatches = [...String(section?.body || '').matchAll(/\[\[TABLE_(\d+)\]\]/g)]
-                    .map(match => Number(match[1]));
-                if ((!wanted && (count || markerMatches.length))
-                    || (wanted > tableIndex && wanted <= tableIndex + count)
-                    || markerMatches.includes(wanted)) add(`/sections/${index}/body`);
-                tableIndex += count;
-            });
+            for (const table of locateReaderDraftTables(draft)) {
+                if (!wanted || wanted === table.tableIndex) add(table.path);
+            }
             draft.tableBindings.forEach((_binding, index) => {
                 if (!wanted || wanted === index + 1) add(`/tableBindings/${index}`);
             });

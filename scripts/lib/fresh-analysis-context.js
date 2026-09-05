@@ -88,10 +88,14 @@ function validateRun(runDir, identity) {
 
 function withFreshAnalysisContext(identity, callback) {
     const checked = validateRun(identity?.runDir, identity);
+    if (identity.refreshReaderDiagnostics !== undefined && typeof identity.refreshReaderDiagnostics !== 'boolean') {
+        throw fail('refreshReaderDiagnostics must be an explicit boolean');
+    }
     for (const expectation of Object.values(checked.sourceExpectations)) Object.freeze(expectation);
     Object.freeze(checked.sourceExpectations);
     const { withLlmUsageContext } = require('./llm-usage.js');
-    return scope.run(Object.freeze({ ...checked, pendingSources: new Map() }),
+    return scope.run(Object.freeze({ ...checked, refreshReaderDiagnostics: identity.refreshReaderDiagnostics === true,
+        pendingSources: new Map() }),
         () => withLlmUsageContext({ runId: checked.runId }, callback));
 }
 

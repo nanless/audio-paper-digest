@@ -42,6 +42,9 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/filter-input-contract.js` | Node 库 | 筛选决定所绑定的最小输入 SHA。 |
 | `lib/keyword-prefilter.js` | Node 库 | 版本化高召回音频关键词预筛。 |
 | `lib/reader-repair.js` | Node 库 | Reader 候选缓存、节点 SHA 与受限 patch、局部诊断及无进展检测；候选不构成 production proof。 |
+| `lib/reader-draft-order.js` | Node 库 | 在同一候选上规范小节顺序并同步表格绑定/marker，记录原始到规范路径的 SHA 映射；歧义时拒绝重排。 |
+| `lib/reader-source-diagnostics.js` | Node 库 | 将数字/单位绑定失败定位到正文单元格与原表行列证据，给出百分号位置、千分位及可能舍入的只读修复候选；不自动改数值或放宽来源门禁。 |
+| `lib/reader-recovery-revision.js` | Node 库 | 显式升级同源 fresh run 的失败候选诊断，保留请求预算、记录索引迁移及旧无进展状态，可恢复归档旧证据；不签发成功。 |
 | `lib/reader-contract.js` | Node 库 | Reader 共享机械阈值、按本次证据生成 Prompt 门禁说明，以及基于实际小节身份的近重复 warning。 |
 | `lib/reader-tables.js` | Node 库 | 将 TABLE marker 与原表行列选择确定性展开为 Markdown 和既有逐格来源绑定，保留表头身份并拒绝错位/越界。 |
 | `lib/llm-usage.js` | Node 库 | 请求级真实 usage 规范化与按论文/阶段归因；服务未提供的计费用量保持不可得。 |

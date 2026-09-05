@@ -3417,8 +3417,23 @@ def _api_reader_numeric_tokens(value):
         r'(?:\s*%|\s*(?:seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp)(?![A-Za-z0-9_]))?',
         flags=re.IGNORECASE,
     )
+    # Match Node's narrow LaTeXML named-color replay without changing quotes,
+    # numeric signs, units, or the ordinary identifier boundary.
+    original_surface = str(value or '')
+
+    def mask_color(match):
+        # A sign outside the command must not become a detached positive value
+        # (or expose a decimal tail). Leave this ambiguous form unindexed.
+        if re.search(r'[-+－−]\s*$', original_surface[:match.start()]):
+            return ' ' * len(match.group(0))
+        return ' ' * len(match.group(1)) + match.group(2)
+
+    numeric_surface = re.sub(
+        r'(\\textcolor(?:black|blue|brown|cyan|darkgray|gray|green|lightgray|lime|magenta|olive|orange|pink|purple|red|teal|violet|white|yellow))([-+－−]?[0-9０-９][0-9.０-９．]*)',
+        mask_color, original_surface,
+    )
     tokens = []
-    for match in pattern.finditer(unicodedata.normalize('NFKC', str(value or ''))):
+    for match in pattern.finditer(unicodedata.normalize('NFKC', numeric_surface)):
         canonical = _canonical_api_reader_numeric_token(match.group(0))
         tokens.append(canonical)
         # 与 Node 端 readerNumericTokens 同一条双写粘连规则（4096+4096、

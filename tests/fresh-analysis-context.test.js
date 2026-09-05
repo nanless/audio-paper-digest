@@ -34,12 +34,17 @@ test('fresh context restricts UUID/root/manifest/source-set identities and never
     const f = fixture(t);
     assert.equal(fresh.getFreshAnalysisContext(), null);
     await fresh.withFreshAnalysisContext(f.context, async () => {
+        assert.equal(fresh.getFreshAnalysisContext().refreshReaderDiagnostics, false);
         assert.equal(fresh.getFreshAnalysisContext().runId, f.context.runId);
         assert.ok(Object.isFrozen(fresh.getFreshAnalysisContext()));
         await Promise.resolve();
         assert.equal(fresh.getFreshAnalysisContext().runId, f.context.runId);
     });
     assert.equal(fresh.getFreshAnalysisContext(), null);
+    fresh.withFreshAnalysisContext({ ...f.context, refreshReaderDiagnostics: true }, () => {
+        assert.equal(fresh.getFreshAnalysisContext().refreshReaderDiagnostics, true);
+    });
+    assert.throws(() => fresh.withFreshAnalysisContext({ ...f.context, refreshReaderDiagnostics: 'true' }, () => {}), /explicit boolean/);
     assert.throws(() => fresh.withFreshAnalysisContext({ ...f.context, runId: '../outside' }, () => {}), /UUID/);
     assert.throws(() => fresh.withFreshAnalysisContext({ ...f.context, runDir: f.directory }, () => {}), /configured root/);
     const changed = structuredClone(f.context); changed.sourceExpectations[f.id].sourceSha256 = '0'.repeat(64);

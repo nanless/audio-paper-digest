@@ -78,6 +78,13 @@ test('CLI requires an explicit phase; no default API path, date override, reset 
     assert.deepEqual(runner.parseRewriteArgs(['prepare', '--date', '2026-09-04']), { action: 'prepare', date: '2026-09-04' });
     assert.deepEqual(runner.parseRewriteArgs(['analyze', '--run-id', RUN_ID, '--concurrency', '3']),
         { action: 'analyze', runId: RUN_ID, concurrency: 3 });
+    assert.deepEqual(runner.parseRewriteArgs(['analyze', '--run-id', RUN_ID, '--refresh-reader-diagnostics']),
+        { action: 'analyze', runId: RUN_ID, refreshReaderDiagnostics: true });
+    for (const action of ['prepare', 'sources', 'status', 'promote']) {
+        assert.throws(() => runner.parseRewriteArgs([action, '--refresh-reader-diagnostics']), /Only analyze/);
+    }
+    assert.throws(() => runner.parseRewriteArgs(['analyze', '--run-id', RUN_ID,
+        '--refresh-reader-diagnostics', '--refresh-reader-diagnostics']), /repeated/);
     for (const args of [[], ['prepare'], ['prepare', '--date', '2026-02-30'], ['status', '--run-id', '../escape'],
         ['sources', '--run-id', RUN_ID, '--output-dir', '/tmp'], ['analyze', '--run-id', RUN_ID, '--reset'],
         ['status', '--run-id', RUN_ID, '--date', '2026-09-04'], ['analyze', '--run-id', RUN_ID, '--concurrency', '6']]) {

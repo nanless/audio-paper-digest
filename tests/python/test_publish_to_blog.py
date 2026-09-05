@@ -1037,6 +1037,37 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertIsNone(publish_to_blog._reader_doubled_half_token('1212'))
         self.assertIsNone(publish_to_blog._reader_doubled_half_token('11'))
 
+    def test_api_reader_numeric_tex_color_replay_preserves_units_and_signs(self):
+        source = 'Original table values:\n\\textcolorblue58.62\n\\textcolorblue62.37\n' \
+            '\\textcolorblue−3.21 dB\n\\textcolorred60.63%\n'
+        tokens = publish_to_blog._api_reader_numeric_tokens(source)
+        for expected in ('58.62', '62.37', '-3.21db', '60.63%'):
+            self.assertIn(expected, tokens)
+        for fabricated in ('58.62%', '3.21db', '-3.21', '0.6063'):
+            self.assertNotIn(fabricated, tokens)
+        for unsupported in ('model58.62', 'textcolorblue58.62', '\\textcolorunknown58.62',
+                            '\\textcolorblueExtra58.62'):
+            self.assertNotIn('58.62', publish_to_blog._api_reader_numeric_tokens(unsupported))
+        for sign in ('-', '−', '+', '－', '- ', '−\n'):
+            signed_source = f'The measured change is {sign}\\textcolorblue58.62 dB in the experiment.'
+            signed_tokens = publish_to_blog._api_reader_numeric_tokens(signed_source)
+            for unsafe_value in ('58.62db', '-58.62db', '62db'):
+                self.assertNotIn(unsafe_value, signed_tokens)
+        article = '| Metric | Value |\n| --- | --- |\n| Fold A | 58.62 |\n| Fold B | 62.37 |'
+        paper = llm_api_publication_fixture()
+        paper['apiReaderArticle'] = article
+        paper['apiReaderPlan']['formulaBindings'] = []
+        paper['apiReaderPlan']['tableBindings'] = [{
+            'tableIndex': 1, 'sourceType': 'source_quotes', 'sourceTableOrdinal': None,
+            'renderedTableSha256': hashlib.sha256(article.encode()).hexdigest(),
+            'cellBindings': [], 'sourceQuotes': [{
+                'quote': source, 'sourceQuoteSha256': hashlib.sha256(source.encode()).hexdigest(),
+            }],
+        }]
+        reseal_llm_api_reader_fixture(paper)
+        publish_to_blog._validate_api_reader_source_bindings(paper)
+        self.assertEqual(paper['apiReaderPlan']['tableBindings'][0]['sourceQuotes'][0]['quote'], source)
+
     def test_api_reader_numeric_replay_preserves_exact_repeated_decimals(self):
         tokens = publish_to_blog._api_reader_numeric_tokens(
             'DNS Challenge\n2.222.22\n3.093.09\n3.503.50\n3.803.80\n'

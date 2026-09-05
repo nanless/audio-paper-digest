@@ -47,4 +47,14 @@ npm run rewrite:source -- promote --run-id "$rewrite_run_id"
 
 失败后先检查失败阶段与实际 usage，再重新运行同一 runId 的相应阶段。每篇分析继续使用规范 arXiv ID 锁；拿锁后重新读取本 run 的 `analysis.json`，不与旧 canonical 合并。只有同 run、同源快照的生成状态可恢复。Reader 持久内容预算与无进展计数保存在本 run，重新执行 analyze 不会清除这些候选。外层每次命令仍按现有 analysis-engine 的 `maxRetries` 执行，累计进入次数写入 `run.diagnostics.outerAnalysisEntries`，跨命令不归零且在 status 可见；它是审计数据，不是新的硬请求上限、Token 数或 Reader 内容尝试数。
 
+### 修复程序升级后的显式恢复
+
+仅在确认修复定位或诊断实现有缺陷、修复并完成离线验证后，可以运行：
+
+```bash
+npm run rewrite:source -- analyze --run-id "$rewrite_run_id" --concurrency 3 --refresh-reader-diagnostics
+```
+
+此开关不是预算重置。它只允许同 run、同原文、同模型、同写作 prompt、同输出预算的失败候选迁移到新版诊断实现；来源、主 prompt 或其他身份漂移仍拒绝。内容尝试、整篇尝试和传输失败次数原样保留，只有确实升级诊断实现时才记录旧值并清除旧诊断产生的无进展计数。旧候选可恢复归档，新候选仍必须重新通过完整 parser。多个兼容候选或损坏证据失败关闭。普通续跑不加此开关。
+
 结构/来源门禁通过不等于事实与视觉已审查通过。30 篇新结果的事实、图例对象、指标方向和结果覆盖仍需独立复验。promote 后再按历史日期安全入口执行 generate → review → push，最终发布与视觉状态另行验收；不能把本 run `complete` 当成整批博客已发布。
