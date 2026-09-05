@@ -88,7 +88,11 @@ npm run blog:review -- --date YYYY-MM-DD
 npm run blog:push -- --date YYYY-MM-DD
 ```
 
-- generate：从 canonical 重新解析评分与正文，安装页面并签发 schema v3 generation manifest。
+- generate：从 canonical 重新解析评分与正文；对 Reader v3/Manual v6 页面生成
+  `researcher-workbench-v1` front matter 以及 citation JSON/BibTeX/RIS、
+  rethink-context JSON 同源 sidecar，再把页面和 sidecar 作为一个 SHA 绑定事务安装并
+  签发 schema v3 generation manifest。arXiv 版本只接受输入 ID 中显式出现的 `vN`，
+  base ID 不推断 v1。
 - review：汇总页先审，论文页并发；每页以不可变 SHA artifact 执行确定性、LLM、图片与 Hugo gate。
 - push：只提交 receipt 允许的精确 delta，推送后验证远端 `main` OID。
 

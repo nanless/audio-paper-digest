@@ -9,6 +9,7 @@
 | API Reader | Reader v3 + source v4 + author/resource identity v1 | v1/v2 and v3 missing any current source contract are read-only | requires article, plan, Figure, author/affiliation, resource-state, and source hashes to close |
 | Scoring audit | `api-scoring-audit-v2` plus stability resolution when triggered | older scores may be displayed | recomputes all eight dimensions and binds the final analysis |
 | Generation manifest | schema v3 | v1/v2 only through explicit historical maintenance | requires `publishedPapers` and one homogeneous production proof |
+| Researcher workbench | `researcher-workbench-v1` + `researcher-sidecars-v1` | pages without the contract remain readable but have no structured workbench/download eligibility | new Reader-v3/Manual-v6 pages bind front matter, four sidecars, and every file SHA |
 | Review receipt | current review protocol | unchanged page hashes may reuse per-page passes | rebinds generation, Git baseline, protocol, and Hugo gate |
 | Visual summary | v3 TOP 10 | v1/v2 require explicit migration | binds publication commit/OID and the current visual token |
 | Manual canonical | production v6 | v5, shadow, and sealed preview are historical maintenance | default API cannot use Manual lineage as automatic-analysis proof |

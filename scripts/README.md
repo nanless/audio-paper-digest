@@ -54,6 +54,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `refresh-api-reader.js` | 对指定论文或日期批次刷新 API reader/评分/作者/图片阶段。 |
 | `evaluate-keyword-prefilter.js` | 只读回放金标准与历史正样本，报告关键词召回。 |
 | `test-api-key.js` | 测试主模型或副模型的协议路由、代理和响应。 |
+| `paper-rethink-server.js` | 仅监听 `127.0.0.1:43128` 的论文 AI 重理解 companion；提供隔离本机 UI，并复用公共 LLM 路由、代理和 OpenCode Go 账号池。 |
 | `validate-data-files.js` | 只读复验 current 数据、跨文件集合、评分和兼容 provenance。 |
 | `backfill_papers.py` | 只补录历史论文 ID，不执行深度分析。 |
 
@@ -82,7 +83,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `generate-blog.py` | Python 入口 | 只生成并安装 Hugo Markdown。 |
 | `review-blog.py` | Python 入口 | 对 generation 执行确定性、LLM、图片和 Hugo 审查并签发 receipt。 |
 | `push-blog.py` | Python 入口 | 复验 receipt，提交/推送并验证远端 OID，然后规划视觉任务。 |
-| `publish-to-blog.py` | Python 核心 | 三阶段共用的生成模板、Git 事务、审查缓存、receipt 与发布证明实现。 |
+| `publish-to-blog.py` | Python 核心 | 三阶段共用的生成模板、researcher-workbench-v1 front matter/citation 与 rethink sidecar、Git 事务、审查缓存、receipt 与发布证明实现。 |
 | `publish_common.py` | Python 共享 | 发布数据、评分、Manual/API provenance 和 LLM review 公共契约。 |
 | `blog_entry_loader.py` | Python 桥 | 以固定路径加载文件名含连字符的 `publish-to-blog.py`。 |
 | `markdown_hugo_gate.py` | Python 共享 | Markdown、frontmatter、公式、图片和 Hugo 渲染门禁。 |

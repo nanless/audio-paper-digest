@@ -317,11 +317,13 @@ def manual_v6_publication_fixture():
     }
     paper = {
         'title': 'Manual V6 Publisher Fixture', 'arxivId': paper_id,
+        'abstract': 'A source abstract for the manual v6 publication fixture.',
+        'authors': ['Researcher M', 'Researcher N'],
         'manualDepth': 'full-text-evidence-v6', 'manualArtifactIndex': artifact,
         'manualReaderLongform': bundle, 'manualV6Provenance': provenance,
         'parsed': {
             'score': '8.3', 'tags': ['#语音识别'], 'primaryTaskTag': '#语音识别',
-            'documentType': '方法研究',
+            'rankBucket': '前25%', 'documentType': '方法研究',
             'summary': '本文把双路径声学表示、完整结果表与可复现边界组织成一条递进证据链。',
             'roast': '完整表格值得肯定，但单一测试集和缺失置信区间限制了结论力度。',
             'opensource': '代码尚未公开；复现需按正文登记数据划分与解码参数。',
@@ -535,6 +537,7 @@ def llm_api_publication_fixture():
     return {
         'title': 'LLM API Publisher Fixture',
         'arxivId': paper_id,
+        'abstract': 'A source abstract for the API publication fixture.',
         'analysis': analysis,
         'sourceSha256': source_sha,
         'apiReaderArticle': article,
@@ -546,6 +549,7 @@ def llm_api_publication_fixture():
         'apiReaderPlanSha256': plan_sha,
         'parsed': {
             'score': '6.1', 'tags': ['#空间音频'],
+            'primaryTaskTag': '#空间音频',
             'rankBucket': '前25%', 'documentType': '方法研究',
             'summary': '最终兼容 canonical 摘要。',
             'roast': '预测证据完整，但仍缺真人听音。',
@@ -678,7 +682,12 @@ def init_blog_repo(root, with_remote=False):
     posts.mkdir(parents=True)
     readme = repo / 'README.md'
     readme.write_text('blog\n', encoding='utf-8')
-    git(repo, 'add', '--', 'README.md')
+    # Review receipts bind the Hugo runtime. Every synthetic blog repository
+    # therefore needs a minimal committed runtime instead of relying on the
+    # real BLOG_REPO or weakening the production fail-closed check.
+    hugo_config = repo / 'hugo.yaml'
+    hugo_config.write_text('baseURL: https://example.test/\n', encoding='utf-8')
+    git(repo, 'add', '--', 'README.md', 'hugo.yaml')
     git(repo, 'commit', '-m', 'initial')
     remote = None
     if with_remote:
@@ -1289,6 +1298,154 @@ title: "Score rows"
             '#音频理解 | #模型评估 | #音频事件检测 | #可解释性',
         )
 
+    def test_researcher_workbench_frontmatter_preserves_explicit_arxiv_version(self):
+        paper = llm_api_publication_fixture()
+        paper['arxivId'] = '2608.30002v2'
+        markdown, _slug = publish_to_blog.generate_paper_page(
+            paper, '2026-08-31', category='论文速递',
+        )
+        frontmatter, _body = publish_to_blog._parse_frontmatter_content(
+            'paper.md', markdown,
+        )
+        self.assertEqual(
+            frontmatter['paper_digest_workbench_contract'],
+            publish_to_blog.RESEARCHER_WORKBENCH_CONTRACT,
+        )
+        self.assertEqual(frontmatter['paper_digest_arxiv_id'], '2608.30002')
+        self.assertEqual(frontmatter['paper_digest_arxiv_version'], 2)
+        self.assertEqual(frontmatter['paper_digest_arxiv_versioned_id'], '2608.30002v2')
+        self.assertEqual(
+            frontmatter['paper_digest_arxiv_abs_url'],
+            'https://arxiv.org/abs/2608.30002v2',
+        )
+        self.assertIsInstance(frontmatter['paper_digest_score'], float)
+        self.assertEqual(frontmatter['description'], paper['apiReaderPlan']['oneSentenceThesis'])
+        self.assertEqual(
+            frontmatter['paper_digest_authors'],
+            paper['apiReaderAuthors']['authors'],
+        )
+        self.assertNotIn('abstract:', markdown.split('---', 2)[1])
+        self.assertEqual(set(frontmatter['paper_digest_sidecars']), {
+            'citation.json', 'citation.bib', 'citation.ris', 'rethink-context.json',
+        })
+
+        paper['arxivId'] = '2608.30002'
+        unversioned, _slug = publish_to_blog.generate_paper_page(
+            paper, '2026-08-31', category='论文速递',
+        )
+        unversioned_frontmatter, _body = publish_to_blog._parse_frontmatter_content(
+            'paper.md', unversioned,
+        )
+        self.assertIsNone(unversioned_frontmatter['paper_digest_arxiv_version'])
+        self.assertIsNone(unversioned_frontmatter['paper_digest_arxiv_versioned_id'])
+        self.assertEqual(
+            unversioned_frontmatter['paper_digest_arxiv_abs_url'],
+            'https://arxiv.org/abs/2608.30002',
+        )
+
+    def test_researcher_sidecars_are_deterministic_safe_and_manifest_bound(self):
+        paper = llm_api_publication_fixture()
+        paper['arxivId'] = '2608.30002v3'
+        paper['title'] = 'Audio & Speech_{x} 100%'
+        bundle = publish_to_blog.build_researcher_workbench_bundle(
+            paper, '2026-08-31',
+        )
+        self.assertEqual(set(path.name for path in bundle['sidecars']), {
+            'citation.json', 'citation.bib', 'citation.ris', 'rethink-context.json',
+        })
+        bibtex = next(
+            raw.decode('utf-8') for path, raw in bundle['sidecars'].items()
+            if path.name == 'citation.bib'
+        )
+        self.assertIn(r'Audio \& Speech\_\{x\} 100\%', bibtex)
+        context = json.loads(next(
+            raw for path, raw in bundle['sidecars'].items()
+            if path.name == 'rethink-context.json'
+        ))
+        self.assertEqual(context['abstract'], paper['abstract'])
+        self.assertEqual(context['arxivVersion'], 3)
+        self.assertEqual(context['assessment']['score'], 6.1)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'blog'
+            posts = repo / 'content' / 'posts'
+            stage_root = (Path(tmp) / 'stage').resolve()
+            posts.mkdir(parents=True)
+            stage_root.mkdir(parents=True)
+            markdown, slug = publish_to_blog.generate_paper_page(
+                paper, '2026-08-31', category='论文速递',
+            )
+            page = posts / f'2026-08-31-{slug}.md'
+            page.write_text(markdown, encoding='utf-8')
+            staged = publish_to_blog.prepare_researcher_workbench_staged_assets(
+                [paper], '2026-08-31', stage_root,
+            )
+            installed_sidecars = []
+            for source in staged:
+                destination = repo / source.relative_to(stage_root)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(source.read_bytes())
+                installed_sidecars.append(destination)
+            current = Path(tmp) / 'current'
+            fingerprint = publish_to_blog.generation_input_fingerprint(
+                [paper], '2026-08-31', '论文速递', False, '2608.30002',
+            )
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    publish_to_blog.publication_scope('2608.30002'):
+                manifest_path = publish_to_blog.save_generation_manifest(
+                    '2026-08-31', [page, *installed_sidecars],
+                    input_fingerprint=fingerprint,
+                    template_fingerprint=publish_to_blog.generation_template_fingerprint(),
+                    base_head='a' * 40, category='论文速递',
+                    published_papers=[paper], publish_all=False,
+                    include_id='2608.30002',
+                    publication_mode=publish_to_blog.LLM_API_PRODUCTION_MODE,
+                )
+                manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+                page_result = {
+                    str(page.resolve()): {
+                        'passed': True,
+                        'reviewedSha256': publish_to_blog._sha256_file(page),
+                    },
+                }
+                blocked = publish_to_blog.attest_api_reader_assets(
+                    '2026-08-31', [page, *installed_sidecars], manifest_path,
+                    page_result,
+                )
+                victim = installed_sidecars[0]
+                victim.write_bytes(victim.read_bytes() + b'tampered\n')
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError,
+                    'generation 后页面字节',
+                ):
+                    publish_to_blog.validate_generation_manifest_file_bytes(
+                        manifest_path, '2026-08-31',
+                    )
+            self.assertEqual(blocked, 0)
+            self.assertEqual(len(manifest['files']), 5)
+            self.assertTrue(all(record['sha256'] for record in manifest['files']))
+            self.assertTrue(all(
+                page_result[str(path.resolve())]['passed']
+                for path in installed_sidecars
+            ))
+
+    def test_researcher_workbench_rejects_crlf_and_sidecar_path_escape_inputs(self):
+        paper = llm_api_publication_fixture()
+        paper['abstract'] = 'first\r\nsecond'
+        with self.assertRaisesRegex(
+            publish_to_blog.PublishDataValidationError, 'CR/CRLF',
+        ):
+            publish_to_blog.build_researcher_workbench_bundle(
+                paper, '2026-08-31',
+            )
+        paper = llm_api_publication_fixture()
+        paper['arxivId'] = '../2608.30002v1'
+        with self.assertRaises(publish_to_blog.PublishDataValidationError):
+            publish_to_blog.build_researcher_workbench_bundle(
+                paper, '2026-08-31',
+            )
+
     def test_index_normalizes_canonical_chinese_quantities(self):
         normalized = publish_to_blog.normalize_digest_index_reader_surface(
             '同一模型的同域换库损失约五分之一，百例标注可回收约三分之二，四类表征均未跨越；Aligner约19%失败，并使用 300M参数。'
@@ -1802,7 +1959,7 @@ title: "Bad table"
         self.assertIn('## 🧭 深度解读', markdown)
         self.assertIn('### 为什么混合声音需要先建立空间直觉？', markdown)
         self.assertNotIn('#### 为什么混合声音需要先建立空间直觉？', markdown)
-        self.assertEqual(markdown.count('Researcher A'), 1)
+        self.assertEqual(markdown.split('---', 2)[2].count('Researcher A'), 1)
         paper['apiReaderAuthors']['authors'][0]['affiliations'] = ['3D AI Lab']
         bound_author = paper['apiReaderAuthors']['identity']['authors'][0]
         bound_author['affiliations'] = ['3D AI Lab']
@@ -4101,6 +4258,26 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)):
                 publish_to_blog.validate_single_publication_worktree([target])
 
+    def test_single_publish_worktree_accepts_only_bound_researcher_sidecars(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            target = posts / '2026-07-10-selected.md'
+            target.write_text('selected\n', encoding='utf-8')
+            sidecar_root = (
+                repo / 'static' / 'data' / 'papers'
+                / '2026-07-10' / '2607-00001'
+            )
+            sidecar_root.mkdir(parents=True)
+            sidecars = []
+            for filename in publish_to_blog.RESEARCHER_SIDECAR_FILENAMES:
+                sidecar = sidecar_root / filename
+                sidecar.write_text('{}\n', encoding='utf-8')
+                sidecars.append(sidecar)
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)):
+                publish_to_blog.validate_single_publication_worktree(
+                    [target, *sidecars]
+                )
+
     def test_review_receipt_detects_any_post_review_file_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
@@ -4799,6 +4976,84 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'model-a', 'PD_BLOG_REVIEW_MAX_TOKENS': '8000'}):
             third = publish_to_blog.review_protocol_fingerprint()
         self.assertNotEqual(first, third)
+
+    def test_blog_runtime_fingerprint_tracks_rendering_sources_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / 'layouts').mkdir()
+            (repo / 'assets' / 'js').mkdir(parents=True)
+            (repo / 'static').mkdir()
+            (repo / 'config' / '_default').mkdir(parents=True)
+            (repo / 'i18n').mkdir()
+            (repo / 'themes' / 'PaperMod' / 'layouts').mkdir(parents=True)
+            (repo / 'hugo.yaml').write_text('baseURL: https://example.test/\n')
+            layout = repo / 'layouts' / 'single.html'
+            layout.write_text('<article>{{ .Content }}</article>\n')
+            (repo / 'assets' / 'js' / 'site.js').write_text('"use strict";\n')
+            runtime_config = repo / 'config' / '_default' / 'params.yaml'
+            runtime_config.write_text('description: first\n')
+            translation = repo / 'i18n' / 'zh.yaml'
+            translation.write_text('- id: read_more\n  translation: 阅读更多\n')
+            theme_layout = repo / 'themes' / 'PaperMod' / 'layouts' / 'baseof.html'
+            theme_layout.write_text('<html>{{ block "main" . }}{{ end }}</html>\n')
+            theme_readme = repo / 'themes' / 'PaperMod' / 'README.md'
+            theme_readme.write_text('theme documentation first\n')
+            # Large content/media files are intentionally outside the runtime
+            # contract; generated page bytes and referenced images have their
+            # own review/manifest bindings.
+            (repo / 'static' / 'paper.png').write_bytes(b'first')
+            generated_sidecar = (
+                repo / 'static' / 'data' / 'papers' / '2026-09-05'
+                / '2609-03620' / 'rethink-context.json'
+            )
+            generated_sidecar.parent.mkdir(parents=True)
+            generated_sidecar.write_text('{"value":"first"}\n')
+
+            first = publish_to_blog.blog_runtime_fingerprint(repo)
+            (repo / 'static' / 'paper.png').write_bytes(b'second')
+            self.assertEqual(first, publish_to_blog.blog_runtime_fingerprint(repo))
+            generated_sidecar.write_text('{"value":"second"}\n')
+            self.assertEqual(first, publish_to_blog.blog_runtime_fingerprint(repo))
+            theme_readme.write_text('theme documentation second\n')
+            self.assertEqual(first, publish_to_blog.blog_runtime_fingerprint(repo))
+            layout.write_text('<main>{{ .Content }}</main>\n')
+            self.assertNotEqual(first, publish_to_blog.blog_runtime_fingerprint(repo))
+
+            layout.write_text('<article>{{ .Content }}</article>\n')
+            self.assertEqual(first, publish_to_blog.blog_runtime_fingerprint(repo))
+            runtime_config.write_text('description: second\n')
+            self.assertNotEqual(first, publish_to_blog.blog_runtime_fingerprint(repo))
+            runtime_config.write_text('description: first\n')
+            translation.write_text('- id: read_more\n  translation: 继续阅读\n')
+            self.assertNotEqual(first, publish_to_blog.blog_runtime_fingerprint(repo))
+            translation.write_text('- id: read_more\n  translation: 阅读更多\n')
+            theme_layout.write_text('<body>{{ block "main" . }}{{ end }}</body>\n')
+            self.assertNotEqual(first, publish_to_blog.blog_runtime_fingerprint(repo))
+
+    def test_review_protocol_binds_blog_runtime_without_binding_generation(self):
+        completed = SimpleNamespace(
+            stdout='hugo v0.test', stderr='', returncode=0,
+            timed_out=False, output_truncated=False,
+        )
+        runtime = ['a' * 64]
+        publish_to_blog._REVIEW_PROTOCOL_CACHE.clear()
+        with mock.patch.object(
+                publish_to_blog, 'blog_runtime_fingerprint', side_effect=lambda: runtime[0],
+        ), mock.patch.object(
+                publish_to_blog, '_sha256_file', return_value='f' * 64,
+        ), mock.patch.object(
+                publish_to_blog.shutil, 'which', return_value='/missing/hugo',
+        ), mock.patch.object(
+                publish_to_blog, '_run_bounded_subprocess', return_value=completed,
+        ):
+            generation_before = publish_to_blog.generation_template_fingerprint()
+            review_before = publish_to_blog.review_protocol_fingerprint()
+            runtime[0] = 'b' * 64
+            generation_after = publish_to_blog.generation_template_fingerprint()
+            review_after = publish_to_blog.review_protocol_fingerprint()
+
+        self.assertEqual(generation_before, generation_after)
+        self.assertNotEqual(review_before, review_after)
 
     def test_account_pool_content_changes_review_but_not_generation_fingerprint(self):
         completed = SimpleNamespace(

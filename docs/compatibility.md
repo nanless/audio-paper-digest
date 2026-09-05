@@ -9,6 +9,7 @@
 | API Reader | Reader v3 + source v4 + author/resource identity v1 | v1/v2 和缺任一当前来源合同的 v3 只读 | 只接受 article/plan/Figure/作者机构/资源状态及其来源 SHA 闭环 |
 | scoring audit | `api-scoring-audit-v2` | 旧评分可显示 | 必须重算八维总分并绑定最终 analysis |
 | generation manifest | schema v3 | v1/v2 仅显式历史维护 | 新日更只接受 v3、`publishedPapers` 和同质 proof |
+| researcher workbench | `researcher-workbench-v1` + `researcher-sidecars-v1` | 无合同旧页继续可读但没有结构化工作台/下载资格 | Reader v3/Manual v6 新页必须绑定 front matter、四个 sidecar 与逐文件 SHA |
 | review receipt | 当前 review protocol | 精确页面 SHA 未变时可复用逐页 pass | 必须重绑 generation、Git baseline 和 Hugo gate |
 | visual summary | v3 TOP 10 | v1/v2 由显式迁移命令处理 | 必须绑定 publication commit/OID 与当前 token |
 | Manual canonical | production v6 | v5/shadow/sealed preview 只作历史维护 | 默认 API 不读取为自动分析证明 |

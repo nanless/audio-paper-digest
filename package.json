@@ -11,6 +11,7 @@
     "test": "node --test --test-concurrency=1 tests/*.test.js manual/tests/*.test.js",
     "test:default": "node --test --test-concurrency=1 tests/*.test.js",
     "test:manual": "node --test --test-concurrency=1 manual/tests/*.test.js",
+    "paper:rethink": "node scripts/paper-rethink-server.js",
     "deep": "node scripts/deep-analysis-only.js",
     "api:reader:refresh": "node scripts/refresh-api-reader.js",
     "reanalyze": "node scripts/reanalyze.js",

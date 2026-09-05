@@ -37,6 +37,7 @@ from publish_common import (  # noqa: E402
     link_remote_images_to_original,
     normalize_arxiv_math_double_extraction,
     load_papers,
+    parse_publish_arxiv_identity,
     paper_batch_date,
     call_publish_llm_api,
     count_blocking_review_issues,
@@ -279,6 +280,28 @@ def manual_result_claim_fixture(
 
 
 class PublishCommonSanitizerTest(unittest.TestCase):
+    def test_arxiv_identity_preserves_only_explicit_version(self):
+        self.assertEqual(parse_publish_arxiv_identity('2609.01234'), {
+            'baseId': '2609.01234',
+            'version': None,
+            'versionedId': None,
+            'absUrl': 'https://arxiv.org/abs/2609.01234',
+            'pdfUrl': 'https://arxiv.org/pdf/2609.01234.pdf',
+        })
+        self.assertEqual(
+            parse_publish_arxiv_identity('https://arxiv.org/pdf/2609.01234v12.pdf'),
+            {
+                'baseId': '2609.01234',
+                'version': 12,
+                'versionedId': '2609.01234v12',
+                'absUrl': 'https://arxiv.org/abs/2609.01234v12',
+                'pdfUrl': 'https://arxiv.org/pdf/2609.01234v12.pdf',
+            },
+        )
+        for value in ('2609.01234v0', '2609.01234v01', '2609.01234v-1'):
+            with self.subTest(value=value), self.assertRaises(PublishDataValidationError):
+                parse_publish_arxiv_identity(value)
+
     def test_latex_history_subscript_preserves_less_than_semantics(self):
         self.assertEqual(
             fix_latex_delimiters(r'\(p(y_i\mid\mathbf{y}_{<i})\)'),

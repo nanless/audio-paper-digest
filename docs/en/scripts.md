@@ -29,6 +29,7 @@ This page is task-oriented. See [scripts/README.md](../../scripts/README.md) for
 | `npm run validate:data` | read-only current validation |
 | `npm run keyword:recall` | keyword-gate gold replay |
 | `npm run backfill` | ID backfill only |
+| `npm run paper:rethink` | start the local-only paper rethink companion on `127.0.0.1:43128`; see the [Chinese security and API contract](../paper-rethink-companion.md) |
 
 A fetch-start run accepts Beijing today. Direct `node scripts/full-fetch.js` is preferable for background data-only execution when npm/TTY wrappers are unreliable.
 

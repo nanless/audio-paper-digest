@@ -80,7 +80,7 @@ Reader v1/v2，以及没有当前来源身份合同的旧 v3，只作历史读�
 schema v3 generation 记录：
 
 - 目标日期、category、博客 base HEAD；
-- 精确非空页面集合与逐页 SHA；
+- 精确非空页面/受控 sidecar 集合与逐文件 SHA；
 - 新建/覆盖/删除状态；
 - 输入分析与模板指纹；
 - 实际渲染的 `publishedPapers`；
@@ -89,9 +89,23 @@ schema v3 generation 记录：
 
 默认 API 使用 `llm_api_production`；显式 Manual 使用独立 proof。混批、缺绑定或旧 schema 不能作为新日更 publication。
 
+Reader v3 与 Manual v6 的新论文页同时签发
+`researcher-workbench-v1` front matter。它保存中文读者标题、原始标题、规范
+arXiv ID、仅在输入明确携带时才保存的 `vN`、版本一致的 abs/PDF URL、主任务、
+数值评分、排名分档、文档类型、一句话主线、结构化作者与原摘要 SHA。原始摘要不
+塞入 front matter，而是保存在同批
+`static/data/papers/<date>/<safe-arxiv-id>/rethink-context.json`。
+
+每篇 workbench 论文有四个同源 sidecar：`citation.json`、`citation.bib`、
+`citation.ris` 与 `rethink-context.json`。路径、LF/UTF-8 字节、JSON/TeX/RIS
+转义和 256 KiB 上限在 staging 前验证；四个 SHA 同时写入页面 front matter、
+generation manifest 和 review receipt。review 会从 `publishedPapers` 权威快照
+重建 sidecar 并逐字比较，push 仍只允许 receipt 中的精确 delta。无版本输入绝不
+推断为 v1，而是保存 `version: null` 并使用 base abs/PDF URL。
+
 ## review receipt 与远端发布
 
-review receipt 绑定 generation SHA、逐页实际 SHA、每页 review 协议、Git baseline、Hugo gate 和 production proof。push 成功后追加：
+review receipt 绑定 generation SHA、逐页实际 SHA、每页 review 协议、Git baseline、Hugo gate、Hugo 配置/布局/数据/前端代码运行时指纹和 production proof。模板或站点脚本在 review 后变化时，push 会失败关闭并要求重新 review。push 成功后追加：
 
 - `publicationCommit`；
 - 相同的 `remoteVerifiedOid`；

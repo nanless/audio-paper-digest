@@ -46,7 +46,7 @@ from publish_common import (
     sanitize_markdown_for_publish, strip_internal_scoring_anchors,
     call_publish_llm_api, PublishLLMUnavailable,
     PublishDataValidationError, count_blocking_review_issues, is_blocking_review_issue,
-    normalize_publish_arxiv_id, review_protocol_failure,
+    normalize_publish_arxiv_id, parse_publish_arxiv_identity, review_protocol_failure,
     validate_papers_for_publish, validate_review_payload,
     validate_final_manual_v4_markdown, MANUAL_DEPTH_CONTRACT_VERSION_V4,
     MANUAL_DEPTH_CONTRACT_VERSION_V5, MANUAL_DEPTH_CONTRACT_VERSION_V6,
@@ -64,6 +64,7 @@ from path_config import (
     DIGEST_COVER_MANIFEST_DIR,
     VISUAL_SUMMARY_ASSET_DIR,
     VISUAL_SUMMARY_MANIFEST_DIR,
+    RESEARCHER_SIDECAR_RELATIVE_ROOT,
     atomic_write_json,
     atomic_write_text,
     file_lock,
@@ -144,6 +145,12 @@ LEGACY_V5_MAINTENANCE_MODE = 'legacy_v5_maintenance'
 SEALED_TUTORIAL_PREVIEW_MODE = 'sealed_tutorial_preview'
 MANUAL_REVIEW_MODE = 'manual_complete'
 FINAL_PAGE_ARTIFACT_VERSION = 1
+RESEARCHER_WORKBENCH_CONTRACT = 'researcher-workbench-v1'
+RESEARCHER_SIDECAR_CONTRACT = 'researcher-sidecars-v1'
+RESEARCHER_SIDECAR_FILENAMES = (
+    'citation.json', 'citation.bib', 'citation.ris', 'rethink-context.json',
+)
+RESEARCHER_SIDECAR_MAX_BYTES = 256 * 1024
 MANUAL_REVIEW_SUBAGENT_MODEL = 'gpt-5.6-terra'
 MANUAL_REVIEW_SUBAGENT_REASONING = 'high'
 
@@ -1972,6 +1979,353 @@ def yaml_escape(s):
              .replace('\n', ' ')
              .replace('{', '{{')
              .replace('}', '}}'))
+
+
+def _validated_workbench_text(
+        value, label, *, maximum, allow_empty=False, preserve_newlines=False):
+    if not isinstance(value, str):
+        raise PublishDataValidationError(f'{label} 必须是字符串')
+    if '\r' in value:
+        raise PublishDataValidationError(f'{label} 禁止 CR/CRLF；只允许规范 LF')
+    # The abstract sidecar is evidence: keep its exact Unicode code points and
+    # LF layout. Short presentation fields are normalized to stable NFC.
+    value = value if preserve_newlines else unicodedata.normalize('NFC', value)
+    for character in value:
+        category = unicodedata.category(character)
+        if category == 'Cs' or (
+                category == 'Cc'
+                and not (preserve_newlines and character == '\n')):
+            raise PublishDataValidationError(f'{label} 包含控制字符或非法代理项')
+    normalized = value if preserve_newlines else re.sub(r'\s+', ' ', value).strip()
+    if not allow_empty and not normalized.strip():
+        raise PublishDataValidationError(f'{label} 不能为空')
+    if len(normalized) > maximum:
+        raise PublishDataValidationError(f'{label} 超过 {maximum} 字符上限')
+    return normalized
+
+
+def _workbench_authors(paper, api_reader_payload=None):
+    reader_authors = (
+        api_reader_payload.get('readerAuthors')
+        if isinstance(api_reader_payload, dict) else None
+    )
+    source = reader_authors.get('authors') \
+        if isinstance(reader_authors, dict) else paper.get('authors')
+    if not isinstance(source, list) or not source:
+        raise PublishDataValidationError('researcher workbench 缺少结构化作者来源')
+    authors = []
+    for index, item in enumerate(source):
+        if isinstance(item, str):
+            name = item
+            affiliations = []
+        elif isinstance(item, dict):
+            if not isinstance(item.get('name'), str):
+                raise PublishDataValidationError(
+                    f'researcher workbench 第 {index + 1} 位作者缺少姓名'
+                )
+            name = item['name']
+            affiliations = item.get('affiliations', [])
+            if not isinstance(affiliations, list):
+                raise PublishDataValidationError(
+                    f'researcher workbench 第 {index + 1} 位作者机构必须是数组'
+                )
+        else:
+            raise PublishDataValidationError(
+                f'researcher workbench 第 {index + 1} 位作者格式非法'
+            )
+        name = _validated_workbench_text(
+            name, f'researcher workbench 作者 {index + 1} 姓名', maximum=500,
+        )
+        clean_affiliations = [
+            _validated_workbench_text(
+                affiliation,
+                f'researcher workbench 作者 {index + 1} 机构 {affiliation_index + 1}',
+                maximum=1000,
+            )
+            for affiliation_index, affiliation in enumerate(affiliations)
+        ]
+        if len(clean_affiliations) != len(set(clean_affiliations)):
+            raise PublishDataValidationError(
+                f'researcher workbench 第 {index + 1} 位作者机构重复'
+            )
+        authors.append({'name': name, 'affiliations': clean_affiliations})
+    if len(authors) > 1000:
+        raise PublishDataValidationError('researcher workbench 作者超过 1000 人上限')
+    return authors
+
+
+def _researcher_workbench_eligible(v6_payload, api_reader_payload):
+    return bool(
+        isinstance(v6_payload, dict)
+        or (
+            isinstance(api_reader_payload, dict)
+            and api_reader_payload.get('contract') == LLM_API_READER_CONTRACT
+        )
+    )
+
+
+_BIBTEX_ESCAPE = {
+    '\\': r'{\textbackslash{}}', '{': r'\{', '}': r'\}', '&': r'\&',
+    '%': r'\%', '$': r'\$', '#': r'\#', '_': r'\_', '~': r'\textasciitilde{}',
+    '^': r'\textasciicircum{}',
+}
+
+
+def _bibtex_escape(value, label):
+    value = _validated_workbench_text(value, label, maximum=10000)
+    return ''.join(_BIBTEX_ESCAPE.get(character, character) for character in value)
+
+
+def _json_sidecar_bytes(value):
+    raw = (json.dumps(
+        value, ensure_ascii=False, sort_keys=True, indent=2,
+    ) + '\n').encode('utf-8')
+    if b'\r' in raw or len(raw) > RESEARCHER_SIDECAR_MAX_BYTES:
+        raise PublishDataValidationError('researcher JSON sidecar 非规范或超过 256 KiB')
+    return raw
+
+
+def _researcher_sidecar_relative_root(date_str, base_id):
+    validated_date = validate_publish_date(date_str)
+    safe_id = base_id.replace('/', '-').replace('.', '-')
+    if not re.fullmatch(r'[a-z0-9][a-z0-9-]*[a-z0-9]', safe_id):
+        raise PublishDataValidationError(f'arXiv ID 无法形成安全 sidecar 路径: {base_id}')
+    return RESEARCHER_SIDECAR_RELATIVE_ROOT / validated_date / safe_id
+
+
+def _researcher_public_url(relative):
+    relative = Path(relative)
+    if relative.is_absolute() or relative.parts[:1] != ('static',) or '..' in relative.parts:
+        raise PublishDataValidationError(f'researcher sidecar URL 路径非法: {relative}')
+    base_path = str(BASE_PATH or '').rstrip('/')
+    if not re.fullmatch(r'/[A-Za-z0-9._~!$&\'()*+,;=:@%/-]*', base_path) \
+            or '//' in base_path or '/./' in f'{base_path}/' or '/../' in f'{base_path}/':
+        raise PublishDataValidationError('PAPER_DIGEST_BLOG_BASE_PATH 不是安全站内路径')
+    return f'{base_path}/{relative.relative_to("static").as_posix()}'
+
+
+def build_researcher_workbench_bundle(
+        paper, date_str, *, parsed=None, reader_plan=None,
+        api_reader_payload=None, require_reader=False):
+    """Build deterministic page metadata and four same-origin sidecars.
+
+    Legacy maintenance pages without a reader plan remain readable and do not
+    get relabelled. Modern production pages must set ``require_reader`` and
+    fail closed instead of publishing an incomplete workbench record.
+    """
+    if reader_plan is None:
+        api_reader_payload = api_reader_payload or _api_reader_payload(paper)
+        v6_payload = _manual_v6_reader_payload(paper)
+        reader_plan = (
+            v6_payload.get('plan') if isinstance(v6_payload, dict)
+            else api_reader_payload.get('plan') if isinstance(api_reader_payload, dict)
+            else _manual_reader_editorial_plan(paper)
+        )
+    if not isinstance(reader_plan, dict):
+        if require_reader:
+            raise PublishDataValidationError('production 论文缺少 researcher workbench reader plan')
+        return None
+    reader_title = _validated_workbench_text(
+        reader_plan.get('readerTitle'), 'researcher workbench readerTitle', maximum=500,
+    )
+    if not re.search(r'[\u3400-\u9fff]', reader_title):
+        raise PublishDataValidationError('researcher workbench readerTitle 必须包含中文')
+    one_sentence = _validated_workbench_text(
+        reader_plan.get('oneSentenceThesis'),
+        'researcher workbench oneSentenceThesis', maximum=2000,
+    )
+    original_title = _validated_workbench_text(
+        paper.get('title'), 'researcher workbench originalTitle', maximum=2000,
+    )
+    abstract = _validated_workbench_text(
+        paper.get('abstract'), 'researcher workbench abstract', maximum=200000,
+        preserve_newlines=True,
+    )
+    identity = parse_publish_arxiv_identity(paper.get('arxivId'))
+    pa = dict(parsed or paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {})
+    try:
+        score = float(pa.get('score'))
+    except (TypeError, ValueError) as exc:
+        raise PublishDataValidationError('researcher workbench score 必须是数值') from exc
+    if not math.isfinite(score) or score < 0 or score > 10:
+        raise PublishDataValidationError('researcher workbench score 必须在 0-10')
+    raw_primary_task = pa.get('primaryTaskTag')
+    if not isinstance(raw_primary_task, str):
+        raise PublishDataValidationError('researcher workbench primaryTask 必须是字符串')
+    primary_task = _validated_workbench_text(
+        raw_primary_task.lstrip('#'),
+        'researcher workbench primaryTask', maximum=200,
+    )
+    rank_bucket = _validated_workbench_text(
+        pa.get('rankBucket'), 'researcher workbench rankBucket', maximum=100,
+    )
+    document_type = _validated_workbench_text(
+        pa.get('documentType'), 'researcher workbench documentType', maximum=100,
+    )
+    authors = _workbench_authors(paper, api_reader_payload)
+    abstract_sha = hashlib.sha256(abstract.encode('utf-8')).hexdigest()
+    citation_id = identity['versionedId'] or identity['baseId']
+    common = {
+        'contract': RESEARCHER_SIDECAR_CONTRACT,
+        'arxivId': identity['baseId'],
+        'arxivVersion': identity['version'],
+        'arxivVersionedId': identity['versionedId'],
+        'absUrl': identity['absUrl'],
+        'pdfUrl': identity['pdfUrl'],
+        'originalTitle': original_title,
+        'authors': authors,
+    }
+    citation = dict(common)
+    citation.update({'schemaVersion': 1, 'id': citation_id, 'type': 'preprint'})
+    context = dict(common)
+    context.update({
+        'schemaVersion': 1,
+        'readerTitle': reader_title,
+        'oneSentenceThesis': one_sentence,
+        'abstract': abstract,
+        'abstractSha256': abstract_sha,
+        'assessment': {
+            'primaryTask': primary_task,
+            'score': score,
+            'rankBucket': rank_bucket,
+            'documentType': document_type,
+        },
+    })
+    author_bibtex = ' and '.join(
+        '{' + _bibtex_escape(author['name'], 'BibTeX author') + '}'
+        for author in authors
+    )
+    citation_key = 'arxiv_' + re.sub(r'[^a-z0-9]+', '_', citation_id.lower()).strip('_')
+    bibtex = (
+        f'@misc{{{citation_key},\n'
+        f'  title = {{{_bibtex_escape(original_title, "BibTeX title")}}},\n'
+        f'  author = {{{author_bibtex}}},\n'
+        f'  eprint = {{{_bibtex_escape(citation_id, "BibTeX eprint")}}},\n'
+        '  archivePrefix = {arXiv},\n'
+        f'  url = {{{_bibtex_escape(identity["absUrl"], "BibTeX URL")}}}\n'
+        '}\n'
+    ).encode('utf-8')
+    ris_lines = ['TY  - UNPB', f'TI  - {original_title}']
+    ris_lines.extend(f'AU  - {author["name"]}' for author in authors)
+    ris_lines.extend([
+        f'ID  - {citation_id}', f'UR  - {identity["absUrl"]}',
+        f'L1  - {identity["pdfUrl"]}', 'ER  - ', '',
+    ])
+    ris = '\n'.join(ris_lines).encode('utf-8')
+    root = _researcher_sidecar_relative_root(date_str, identity['baseId'])
+    sidecars = {
+        root / 'citation.json': _json_sidecar_bytes(citation),
+        root / 'citation.bib': bibtex,
+        root / 'citation.ris': ris,
+        root / 'rethink-context.json': _json_sidecar_bytes(context),
+    }
+    for relative, raw in sidecars.items():
+        if b'\r' in raw or not raw.endswith(b'\n') \
+                or not raw or len(raw) > RESEARCHER_SIDECAR_MAX_BYTES:
+            raise PublishDataValidationError(f'researcher sidecar 非规范: {relative}')
+    sidecar_records = {
+        relative.name: {
+            'url': _researcher_public_url(relative),
+            'sha256': hashlib.sha256(raw).hexdigest(),
+        }
+        for relative, raw in sidecars.items()
+    }
+    return {
+        'contract': RESEARCHER_WORKBENCH_CONTRACT,
+        'readerTitle': reader_title,
+        'originalTitle': original_title,
+        'oneSentenceThesis': one_sentence,
+        'abstractSha256': abstract_sha,
+        'identity': identity,
+        'authors': authors,
+        'primaryTask': primary_task,
+        'score': score,
+        'rankBucket': rank_bucket,
+        'documentType': document_type,
+        'sidecars': sidecars,
+        'sidecarRecords': sidecar_records,
+    }
+
+
+def _researcher_workbench_frontmatter(bundle):
+    if not bundle:
+        return ''
+    authors_json = json.dumps(
+        bundle['authors'], ensure_ascii=False, separators=(',', ':'), sort_keys=True,
+    )
+    sidecars_json = json.dumps(
+        bundle['sidecarRecords'], ensure_ascii=False, separators=(',', ':'), sort_keys=True,
+    )
+    if len(authors_json.encode('utf-8')) > 32 * 1024:
+        raise PublishDataValidationError('researcher workbench frontmatter 作者超过 32 KiB')
+    identity = bundle['identity']
+    version = 'null' if identity['version'] is None else str(identity['version'])
+    versioned_id = (
+        'null' if identity['versionedId'] is None
+        else json.dumps(identity['versionedId'], ensure_ascii=False)
+    )
+    return (
+        f'paper_digest_workbench_contract: "{RESEARCHER_WORKBENCH_CONTRACT}"\n'
+        f'paper_digest_reader_title: {json.dumps(bundle["readerTitle"], ensure_ascii=False)}\n'
+        f'paper_digest_original_title: {json.dumps(bundle["originalTitle"], ensure_ascii=False)}\n'
+        f'paper_digest_arxiv_version: {version}\n'
+        f'paper_digest_arxiv_versioned_id: {versioned_id}\n'
+        f'paper_digest_arxiv_abs_url: {json.dumps(identity["absUrl"], ensure_ascii=False)}\n'
+        f'paper_digest_arxiv_pdf_url: {json.dumps(identity["pdfUrl"], ensure_ascii=False)}\n'
+        f'paper_digest_primary_task: {json.dumps(bundle["primaryTask"], ensure_ascii=False)}\n'
+        f'paper_digest_score: {json.dumps(bundle["score"], allow_nan=False)}\n'
+        f'paper_digest_rank_bucket: {json.dumps(bundle["rankBucket"], ensure_ascii=False)}\n'
+        f'paper_digest_document_type: {json.dumps(bundle["documentType"], ensure_ascii=False)}\n'
+        f'paper_digest_one_sentence: {json.dumps(bundle["oneSentenceThesis"], ensure_ascii=False)}\n'
+        f'paper_digest_authors: {authors_json}\n'
+        f'paper_digest_abstract_sha256: "{bundle["abstractSha256"]}"\n'
+        f'paper_digest_sidecars: {sidecars_json}\n'
+    )
+
+
+def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
+    if frontmatter.get('paper_digest_workbench_contract') is None:
+        return True
+    if frontmatter.get('paper_digest_workbench_contract') != RESEARCHER_WORKBENCH_CONTRACT:
+        raise PublishDataValidationError('researcher workbench frontmatter 合同版本非法')
+    if not isinstance(paper, dict):
+        raise PublishDataValidationError('researcher workbench 页面缺少权威论文快照')
+    api_reader_payload = _api_reader_payload(paper)
+    v6_payload = _manual_v6_reader_payload(paper)
+    reader_plan = (
+        v6_payload.get('plan') if isinstance(v6_payload, dict)
+        else api_reader_payload.get('plan') if isinstance(api_reader_payload, dict)
+        else _manual_reader_editorial_plan(paper)
+    )
+    bundle = build_researcher_workbench_bundle(
+        paper, date_str, reader_plan=reader_plan,
+        api_reader_payload=api_reader_payload, require_reader=True,
+    )
+    identity = bundle['identity']
+    expected = {
+        'paper_digest_reader_title': bundle['readerTitle'],
+        'paper_digest_original_title': bundle['originalTitle'],
+        'paper_digest_arxiv_id': identity['baseId'],
+        'paper_digest_arxiv_version': identity['version'],
+        'paper_digest_arxiv_versioned_id': identity['versionedId'],
+        'paper_digest_arxiv_abs_url': identity['absUrl'],
+        'paper_digest_arxiv_pdf_url': identity['pdfUrl'],
+        'paper_digest_primary_task': bundle['primaryTask'],
+        'paper_digest_score': bundle['score'],
+        'paper_digest_rank_bucket': bundle['rankBucket'],
+        'paper_digest_document_type': bundle['documentType'],
+        'paper_digest_one_sentence': bundle['oneSentenceThesis'],
+        'paper_digest_authors': bundle['authors'],
+        'paper_digest_abstract_sha256': bundle['abstractSha256'],
+        'paper_digest_sidecars': bundle['sidecarRecords'],
+        'description': bundle['oneSentenceThesis'],
+    }
+    for field, value in expected.items():
+        if frontmatter.get(field) != value:
+            raise PublishDataValidationError(
+                f'researcher workbench frontmatter.{field} 与权威论文快照不一致'
+            )
+    return True
 
 
 def plain_title_for_publish(title):
@@ -4089,6 +4443,22 @@ def generate_paper_page(paper, date_str, category='论文速递'):
             f'{aid or title} 当前 Manual 页面缺少完整且哈希一致的 reader article；'
             '禁止从旧 canonical 固定章节回拼正文，必须从论文证据冷启动生成新稿'
         )
+    workbench_bundle = (
+        build_researcher_workbench_bundle(
+            paper, date_str, parsed=pa, reader_plan=reader_plan,
+            api_reader_payload=api_reader_payload,
+            require_reader=True,
+        )
+        if reader_first and _researcher_workbench_eligible(
+            v6_payload, api_reader_payload,
+        ) else None
+    )
+    if workbench_bundle:
+        desc = workbench_bundle['oneSentenceThesis']
+    description_yaml = (
+        json.dumps(desc, ensure_ascii=False)
+        if workbench_bundle else f'"{yaml_escape(desc)}"'
+    )
     reader_first_image_plans = _reader_first_image_plans_by_url(paper) if reader_first else {}
     fresh_marker = ''
     if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V5 and reader_first:
@@ -4107,18 +4477,19 @@ def generate_paper_page(paper, date_str, category='论文速递'):
             f'paper_digest_tutorial_artifact_plan_sha256: "{tutorial_payload["artifactPlanSha256"]}"\n'
         )
     reader_title = reader_plan['readerTitle'].strip() if reader_first else display_title
+    workbench_marker = _researcher_workbench_frontmatter(workbench_bundle)
     md = f"""---
 title: "{yaml_escape(display_title)}"
 date: {date_str}
 draft: false
 tags: [{', '.join([t.replace('#', '') for t in tags])}]
 categories: [{category}]
-description: "{yaml_escape(desc)}"
+description: {description_yaml}
 hiddenInHomeList: true
 paper_digest_pipeline_owned: true
 paper_digest_page_type: paper
 paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
-{manual_depth_marker}{fresh_marker}{v6_marker}{api_reader_marker}---
+{workbench_marker}{manual_depth_marker}{fresh_marker}{v6_marker}{api_reader_marker}---
 
 # 📄 {reader_title}
 
@@ -5085,6 +5456,9 @@ def validate_staged_posts(
             raise PublishDataValidationError(f'{path.name} 正文包含 UTF-8 替换字符')
         if re.search(r'!?\[[^\]]*\]\(\s*\)', body):
             raise PublishDataValidationError(f'{path.name} 正文包含空 Markdown 链接')
+        _validate_researcher_workbench_frontmatter(
+            frontmatter, paper, date_str,
+        )
         markdown_format_issues = artifact['markdownFormatIssues']
         if markdown_format_issues:
             raise PublishDataValidationError(
@@ -5360,9 +5734,61 @@ def prepare_api_reader_staged_assets(papers, stage_root):
     return staged
 
 
+def prepare_researcher_workbench_staged_assets(papers, date_str, stage_root):
+    """Materialize deterministic citation/context sidecars inside staging."""
+    stage_root = Path(stage_root).resolve()
+    staged = []
+    seen = set()
+    for paper in papers:
+        api_reader_payload = _api_reader_payload(paper)
+        v6_payload = _manual_v6_reader_payload(paper)
+        reader_plan = (
+            v6_payload.get('plan') if isinstance(v6_payload, dict)
+            else api_reader_payload.get('plan') if isinstance(api_reader_payload, dict)
+            else _manual_reader_editorial_plan(paper)
+        )
+        reader_article = (
+            v6_payload.get('article') if isinstance(v6_payload, dict)
+            else api_reader_payload.get('renderedArticle')
+            if isinstance(api_reader_payload, dict)
+            else _manual_reader_article(paper, reader_plan, date_str)
+        )
+        if not isinstance(reader_plan, dict) or not isinstance(reader_article, str) \
+                or not reader_article.strip():
+            continue
+        if not _researcher_workbench_eligible(v6_payload, api_reader_payload):
+            continue
+        bundle = build_researcher_workbench_bundle(
+            paper, date_str, reader_plan=reader_plan,
+            api_reader_payload=api_reader_payload, require_reader=True,
+        )
+        for relative, raw in sorted(
+                bundle['sidecars'].items(), key=lambda item: item[0].as_posix()):
+            relative_text = relative.as_posix()
+            if relative_text in seen:
+                raise PublishDataValidationError(
+                    f'researcher sidecar 目标路径重复: {relative_text}'
+                )
+            seen.add(relative_text)
+            target = (stage_root / relative).resolve()
+            try:
+                target.relative_to(stage_root)
+            except ValueError as exc:
+                raise PublishDataValidationError(
+                    f'researcher sidecar staging 路径逃逸: {relative_text}'
+                ) from exc
+            _atomic_write_bytes(target, raw, mode=0o600)
+            if _sha256_file(target) != bundle['sidecarRecords'][relative.name]['sha256']:
+                raise PublishDataValidationError(
+                    f'researcher sidecar staging SHA 不一致: {relative_text}'
+                )
+            staged.append(target)
+    return staged
+
+
 def _git_tracked_reader_asset_paths():
     result = _run_git(
-        ['ls-files', '-z', '--', 'static/images/papers'],
+        ['ls-files', '-z', '--', 'static/images/papers', 'static/data/papers'],
     )
     if result.returncode != 0:
         return set()
@@ -5398,7 +5824,9 @@ def prior_api_reader_manifest_assets(date_str):
             record for record in files
             if isinstance(record, dict)
             and isinstance(record.get('path'), str)
-            and record['path'].startswith('static/images/papers/')
+            and record['path'].startswith((
+                'static/images/papers/', 'static/data/papers/',
+            ))
         ]
         if not reader_records:
             continue
@@ -5412,7 +5840,7 @@ def prior_api_reader_manifest_assets(date_str):
             _manifest_record(target, repo)
             if not is_api_reader_asset_path(target):
                 raise PublishDataValidationError(
-                    f'既有 generation manifest 含非法 reader asset: {relative}'
+                    f'既有 generation manifest 含非法 reader/sidecar asset: {relative}'
                 )
             if not target.exists() and relative not in tracked_reader_assets:
                 continue
@@ -5444,7 +5872,7 @@ def publish_manifest_paths(
                 raise PublishDataValidationError(f'单篇 asset staging 路径逃逸: {source}') from exc
             destination = (repo / relative).resolve()
             if not is_api_reader_asset_path(destination):
-                raise PublishDataValidationError('单篇 generation 只允许绑定正文论文图资产')
+                raise PublishDataValidationError('单篇 generation 只允许绑定正文论文图/sidecar 资产')
             manifest.add(destination)
         return sorted(manifest)
     manifest = {target / name for name in generated_names}
@@ -5622,7 +6050,10 @@ def validate_manifest_clean_against_head(paths, allow_exact_pipeline_untracked=N
                 try:
                     is_valid_binary = (
                         is_api_reader_asset_path(target)
-                        and target.read_bytes().startswith(PNG_SIGNATURE)
+                        and (
+                            is_researcher_sidecar_path(target)
+                            or target.read_bytes().startswith(PNG_SIGNATURE)
+                        )
                     )
                 except OSError:
                     is_valid_binary = False
@@ -5702,12 +6133,15 @@ def validate_git_index(paths):
 
 
 def validate_single_publication_worktree(paths):
-    """Require one paper page plus only its bound local figures to be dirty."""
+    """Require one paper page plus only its bound figures/sidecars to be dirty."""
     allowed = set(_git_relative_manifest(paths))
     pages = {item for item in allowed if item.startswith('content/posts/') and item.endswith('.md')}
-    assets = {item for item in allowed if item.startswith('static/images/papers/')}
+    assets = {
+        item for item in allowed
+        if item.startswith(('static/images/papers/', 'static/data/papers/'))
+    }
     if len(pages) != 1 or len(pages) + len(assets) != len(allowed):
-        raise PublishDataValidationError('单篇灰度发布必须绑定一个论文页及其受控正文图')
+        raise PublishDataValidationError('单篇灰度发布必须绑定一个论文页及其受控正文图/sidecar')
     result = _run_git(
         ['status', '--porcelain=v1', '-z', '--untracked-files=all'], check=True,
     )
@@ -6629,6 +7063,92 @@ def validate_current_generation_template(manifest):
     return True
 
 
+def blog_runtime_fingerprint(blog_repo=None):
+    """Hash the Hugo runtime that turns reviewed Markdown into public HTML.
+
+    Generation deliberately stays independent from the blog theme: templates do
+    not alter the Markdown bytes. Review and push are different—their evidence
+    is only reusable while the Hugo config, layouts, data and executable web
+    assets remain byte-for-byte identical.
+    """
+    repo = Path(blog_repo or BLOG_REPO).expanduser().resolve()
+    config_names = (
+        'hugo.yaml', 'hugo.yml', 'hugo.toml', 'hugo.json', 'go.mod', 'go.sum',
+    )
+    candidates = [repo / name for name in config_names if (repo / name).is_file()]
+
+    # These trees are direct Hugo render inputs. Hash every regular file rather
+    # than maintaining a fragile suffix list: i18n/config may use TOML/YAML/JSON,
+    # while assets and layouts may legitimately contain SVG, templates or fonts.
+    render_roots = [
+        repo / name for name in ('layouts', 'assets', 'data', 'i18n', 'config')
+    ]
+    themes_root = repo / 'themes'
+    if themes_root.is_dir():
+        if themes_root.is_symlink():
+            raise PublishDataValidationError(f'博客运行时禁止符号链接: {themes_root}')
+        for theme in sorted(themes_root.iterdir(), key=lambda item: item.name):
+            if theme.is_symlink():
+                raise PublishDataValidationError(f'博客运行时禁止符号链接: {theme}')
+            if not theme.is_dir():
+                continue
+            render_roots.extend(
+                theme / name for name in ('layouts', 'assets', 'data', 'i18n', 'static')
+            )
+    for root in render_roots:
+        if root.is_symlink():
+            raise PublishDataValidationError(f'博客运行时禁止符号链接: {root}')
+        if not root.is_dir():
+            continue
+        for path in root.rglob('*'):
+            if path.is_symlink():
+                raise PublishDataValidationError(f'博客运行时禁止符号链接: {path}')
+            if path.is_file():
+                candidates.append(path)
+
+    # Top-level static is potentially hundreds of MiB. Only executable or
+    # browser-consumed runtime files belong here. Generated paper sidecars and
+    # media are already individually bound by generation/review receipts and
+    # must not invalidate the global review protocol on every new paper.
+    static_root = repo / 'static'
+    static_runtime_suffixes = {
+        '.css', '.html', '.js', '.mjs', '.json', '.svg', '.wasm',
+        '.webmanifest', '.xml',
+    }
+    generated_prefixes = (
+        ('static', 'data', 'papers'),
+        ('static', 'images', 'papers'),
+        ('static', 'images', 'visual-summaries'),
+        ('static', 'images', 'digest-covers'),
+    )
+    if static_root.is_symlink():
+        raise PublishDataValidationError(f'博客运行时禁止符号链接: {static_root}')
+    if static_root.is_dir():
+        for path in static_root.rglob('*'):
+            if path.is_symlink():
+                raise PublishDataValidationError(f'博客运行时禁止符号链接: {path}')
+            if not path.is_file() or path.suffix.lower() not in static_runtime_suffixes:
+                continue
+            relative = path.relative_to(repo)
+            if any(relative.parts[:len(prefix)] == prefix for prefix in generated_prefixes):
+                continue
+            candidates.append(path)
+    records = []
+    for path in sorted(set(candidates), key=lambda item: item.relative_to(repo).as_posix()):
+        if path.is_symlink():
+            raise PublishDataValidationError(f'博客运行时禁止符号链接: {path}')
+        records.append({
+            'path': path.relative_to(repo).as_posix(),
+            'sha256': _sha256_file(path),
+        })
+    if not records:
+        raise PublishDataValidationError(f'博客运行时文件缺失: {repo}')
+    return _stable_json_sha256({
+        'contract': 'hugo-blog-runtime-v1',
+        'files': records,
+    })
+
+
 def review_protocol_fingerprint():
     """Bind reusable review evidence to code, prompts/models and Hugo runtime."""
     script_dir = Path(__file__).resolve().parent
@@ -6656,6 +7176,7 @@ def review_protocol_fingerprint():
         )
     except OSError:
         hugo_identity = (hugo_path, None, None)
+    runtime_fingerprint = blog_runtime_fingerprint()
     cache_key = _stable_json_sha256({
         'dependencies': dependencies,
         'primaryModel': os.environ.get('PAPER_ANALYZER_MODEL', ''),
@@ -6665,6 +7186,7 @@ def review_protocol_fingerprint():
         'reviewChunkChars': get_blog_review_chunk_chars(),
         'reviewMaxTokens': get_blog_review_max_tokens(),
         'hugoIdentity': hugo_identity,
+        'blogRuntimeFingerprint': runtime_fingerprint,
     })
     if cache_key in _REVIEW_PROTOCOL_CACHE:
         return _REVIEW_PROTOCOL_CACHE[cache_key]
@@ -6684,7 +7206,7 @@ def review_protocol_fingerprint():
     except OSError:
         hugo_version = 'unavailable'
     fingerprint = _stable_json_sha256({
-        'contractVersion': 2,
+        'contractVersion': 3,
         'dependencies': dependencies,
         'primaryModel': os.environ.get('PAPER_ANALYZER_MODEL', ''),
         'primaryEndpoint': os.environ.get('PAPER_ANALYZER_ENDPOINT', ''),
@@ -6695,6 +7217,7 @@ def review_protocol_fingerprint():
         'reviewChunkChars': get_blog_review_chunk_chars(),
         'reviewMaxTokens': get_blog_review_max_tokens(),
         'hugoVersion': hugo_version,
+        'blogRuntimeFingerprint': runtime_fingerprint,
     })
     _REVIEW_PROTOCOL_CACHE.clear()
     _REVIEW_PROTOCOL_CACHE[cache_key] = fingerprint
@@ -6938,7 +7461,16 @@ def _manifest_record(path, repo):
         and re.fullmatch(r'\d{4}\.\d{4,5}', relative.parts[3] or '')
         and re.fullmatch(r'figure-\d+-[0-9a-f]{16}\.png', relative.name or '')
     )
-    if not (is_post or is_visual_asset or is_digest_cover or is_reader_asset):
+    is_researcher_sidecar = (
+        relative.parts[:3] == ('static', 'data', 'papers')
+        and len(relative.parts) == 6
+        and re.fullmatch(r'\d{4}-\d{2}-\d{2}', relative.parts[3] or '')
+        and re.fullmatch(r'[a-z0-9][a-z0-9-]*[a-z0-9]', relative.parts[4] or '')
+        and relative.name in RESEARCHER_SIDECAR_FILENAMES
+    )
+    if not (
+            is_post or is_visual_asset or is_digest_cover
+            or is_reader_asset or is_researcher_sidecar):
         raise PublishDataValidationError(f'博客清单包含非受控路径: {relative}')
     return path, relative.as_posix()
 
@@ -6963,9 +7495,32 @@ def is_api_reader_asset_path(path, paper_id=None):
     except PublishDataValidationError:
         return False
     parts = Path(relative).parts
-    if parts[:3] != ('static', 'images', 'papers') or len(parts) != 5:
+    if parts[:3] == ('static', 'images', 'papers') and len(parts) == 5:
+        return paper_id is None or parts[3] == normalize_publish_arxiv_id(paper_id)
+    if parts[:3] != ('static', 'data', 'papers') or len(parts) != 6:
         return False
-    return paper_id is None or parts[3] == normalize_publish_arxiv_id(paper_id)
+    if paper_id is None:
+        return True
+    safe_id = normalize_publish_arxiv_id(paper_id).replace('/', '-').replace('.', '-')
+    return parts[4] == safe_id
+
+
+def is_researcher_sidecar_path(path, paper_id=None, date_str=None):
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    try:
+        _target, relative = _manifest_record(path, repo)
+    except PublishDataValidationError:
+        return False
+    parts = Path(relative).parts
+    if parts[:3] != ('static', 'data', 'papers') or len(parts) != 6:
+        return False
+    if date_str is not None and parts[3] != validate_publish_date(date_str):
+        return False
+    if paper_id is not None:
+        safe_id = normalize_publish_arxiv_id(paper_id).replace('/', '-').replace('.', '-')
+        if parts[4] != safe_id:
+            return False
+    return True
 
 
 def _validate_manifest_path_date(target, repo, date_str):
@@ -6991,6 +7546,12 @@ def _validate_manifest_path_date(target, repo, date_str):
         asset_date = Path(relative).parts[3]
         if asset_date != validated_date:
             raise PublishDataValidationError(f'汇总页封面批次日期不匹配: {relative}')
+    if relative.startswith('static/data/papers/'):
+        asset_date = Path(relative).parts[3]
+        if asset_date != validated_date:
+            raise PublishDataValidationError(
+                f'researcher sidecar 批次日期不匹配: {relative}'
+            )
     return relative
 
 
@@ -7082,20 +7643,34 @@ def save_generation_manifest(
                 {'publicationScope': publication_scope_value}, published_papers,
             )
             page_records = [record for record in records if record['path'].startswith('content/posts/')]
-            asset_records = [record for record in records if record['path'].startswith('static/images/papers/')]
+            asset_records = [
+                record for record in records
+                if record['path'].startswith((
+                    'static/images/papers/', 'static/data/papers/',
+                ))
+            ]
             if len(page_records) != 1 or page_records[0]['deleted'] is True \
                     or page_records[0]['path'].endswith(f'/{validated_date}.md') \
                     or len(page_records) + len(asset_records) != len(records):
                 raise PublishDataValidationError(
-                    '单篇 generation manifest 必须绑定一个现存论文页及其受控正文图'
+                    '单篇 generation manifest 必须绑定一个现存论文页及其受控正文图/sidecar'
                 )
-            expected_asset_prefix = (
+            expected_image_prefix = (
                 f'static/images/papers/{publication_scope_value["includeId"]}/'
             )
-            if any(record['deleted'] is True
-                   or not record['path'].startswith(expected_asset_prefix)
-                   for record in asset_records):
-                raise PublishDataValidationError('单篇 generation 正文图与 includeId 不一致')
+            expected_sidecar_id = publication_scope_value['includeId'].replace('.', '-').replace('/', '-')
+            expected_sidecar_prefix = (
+                f'static/data/papers/{validated_date}/{expected_sidecar_id}/'
+            )
+            if any(
+                    record['deleted'] is True
+                    or not record['path'].startswith((
+                        expected_image_prefix, expected_sidecar_prefix,
+                    ))
+                    for record in asset_records):
+                raise PublishDataValidationError(
+                    '单篇 generation 正文图/sidecar 与 includeId 不一致'
+                )
             manifest['publicationScope'] = publication_scope_value
         manifest['manualV6BindingsFingerprint'] = _stable_json_sha256(
             manifest['manualV6Bindings']
@@ -7213,6 +7788,7 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
         _validate_generation_input_integrity(manifest, date_str)
     repo = Path(repo or BLOG_REPO).expanduser().resolve()
     paper_ids = set()
+    workbench_paper_ids = set()
     for record in manifest.get('files') or []:
         if not isinstance(record, dict) or record.get('deleted') is True:
             continue
@@ -7240,6 +7816,10 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
                 raise PublishDataValidationError(f'论文页缺少 arXiv ID: {relative}')
             paper_id = normalize_publish_arxiv_id(match.group(1))
             paper_ids.add(paper_id)
+            if re.search(
+                    rf'^paper_digest_workbench_contract:\s*"?{re.escape(RESEARCHER_WORKBENCH_CONTRACT)}"?\s*$',
+                    content, re.MULTILINE):
+                workbench_paper_ids.add(paper_id)
     if not paper_ids:
         raise PublishDataValidationError('生成清单中没有可绑定视觉摘要的论文页')
     if manifest.get('schemaVersion') == 3:
@@ -7259,6 +7839,48 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
             raise PublishDataValidationError('已发布论文权威快照包含重复 arXiv ID')
         if set(snapshot_ids) != paper_ids:
             raise PublishDataValidationError('已发布论文权威快照与实际生成论文页集合不一致')
+        actual_sidecars = {
+            record['path']: record
+            for record in manifest.get('files') or []
+            if isinstance(record, dict)
+            and isinstance(record.get('path'), str)
+            and record['path'].startswith('static/data/papers/')
+            and record.get('deleted') is not True
+        }
+        expected_sidecars = {}
+        for paper in published_papers:
+            paper_id = normalize_publish_arxiv_id(paper.get('arxivId'))
+            if paper_id not in workbench_paper_ids:
+                continue
+            api_reader_payload = _api_reader_payload(paper)
+            v6_payload = _manual_v6_reader_payload(paper)
+            reader_plan = (
+                v6_payload.get('plan') if isinstance(v6_payload, dict)
+                else api_reader_payload.get('plan')
+                if isinstance(api_reader_payload, dict)
+                else _manual_reader_editorial_plan(paper)
+            )
+            bundle = build_researcher_workbench_bundle(
+                paper, date_str, reader_plan=reader_plan,
+                api_reader_payload=api_reader_payload, require_reader=True,
+            )
+            for relative, raw in bundle['sidecars'].items():
+                relative_text = relative.as_posix()
+                if relative_text in expected_sidecars:
+                    raise PublishDataValidationError(
+                        f'researcher sidecar 期望路径重复: {relative_text}'
+                    )
+                expected_sidecars[relative_text] = hashlib.sha256(raw).hexdigest()
+        if set(actual_sidecars) != set(expected_sidecars):
+            raise PublishDataValidationError(
+                'researcher sidecar 路径集合与 workbench 论文集合不一致'
+            )
+        for relative, expected_sha in expected_sidecars.items():
+            record = actual_sidecars[relative]
+            if record.get('deleted') is not False or record.get('sha256') != expected_sha:
+                raise PublishDataValidationError(
+                    f'researcher sidecar manifest SHA 不一致: {relative}'
+                )
     return True
 
 
@@ -7466,7 +8088,7 @@ def attest_visual_summary_assets(date_str, publish_paths, manifest_path, file_re
 
 
 def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_results):
-    """Bind each local paper figure to an exact reviewed page and PNG byte record."""
+    """Bind every paper figure/sidecar to an exact reviewed page and byte record."""
     manifest = _load_json_object(manifest_path, '生成清单')
     records = manifest.get('files')
     if not isinstance(records, list):
@@ -7483,6 +8105,36 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
         page: {item['url'] for item in parse_markdown_images(page.read_text(encoding='utf-8'))}
         for page in pages
     }
+    page_frontmatter = {}
+    for page in pages:
+        try:
+            page_frontmatter[page] = _load_frontmatter(page)[0]
+        except (OSError, UnicodeError, PublishDataValidationError):
+            page_frontmatter[page] = {}
+    expected_sidecars = {}
+    for paper in manifest.get('publishedPapers') or []:
+        if not isinstance(paper, dict):
+            continue
+        api_reader_payload = _api_reader_payload(paper)
+        v6_payload = _manual_v6_reader_payload(paper)
+        reader_plan = (
+            v6_payload.get('plan') if isinstance(v6_payload, dict)
+            else api_reader_payload.get('plan') if isinstance(api_reader_payload, dict)
+            else _manual_reader_editorial_plan(paper)
+        )
+        if not _researcher_workbench_eligible(v6_payload, api_reader_payload):
+            continue
+        if not isinstance(reader_plan, dict):
+            continue
+        bundle = build_researcher_workbench_bundle(
+            paper, date_str, reader_plan=reader_plan,
+            api_reader_payload=api_reader_payload, require_reader=True,
+        )
+        for sidecar_relative, sidecar_raw in bundle['sidecars'].items():
+            key = sidecar_relative.as_posix()
+            if key in expected_sidecars:
+                raise PublishDataValidationError(f'researcher sidecar 权威路径重复: {key}')
+            expected_sidecars[key] = (sidecar_raw, bundle)
     blocking = 0
     for item in publish_paths:
         asset = Path(item).resolve()
@@ -7502,6 +8154,48 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
             raw = asset.read_bytes()
         except OSError:
             raw = b''
+        if is_researcher_sidecar_path(asset, date_str=date_str):
+            expected = expected_sidecars.get(relative)
+            page_candidates = [
+                page for page, frontmatter in page_frontmatter.items()
+                if frontmatter.get('paper_digest_workbench_contract')
+                == RESEARCHER_WORKBENCH_CONTRACT
+                and isinstance(expected, tuple)
+                and frontmatter.get('paper_digest_arxiv_id')
+                == expected[1]['identity']['baseId']
+            ]
+            valid = bool(
+                isinstance(record, dict)
+                and record.get('deleted') is False
+                and re.fullmatch(r'[0-9a-f]{64}', str(expected_sha or ''))
+                and isinstance(expected, tuple)
+                and raw == expected[0]
+                and hashlib.sha256(raw).hexdigest() == expected_sha
+                and len(page_candidates) == 1
+            )
+            if valid:
+                page = page_candidates[0]
+                frontmatter = page_frontmatter[page]
+                sidecar_record = frontmatter.get('paper_digest_sidecars', {}).get(asset.name) \
+                    if isinstance(frontmatter.get('paper_digest_sidecars'), dict) else None
+                expected_page_record = expected[1]['sidecarRecords'][asset.name]
+                valid = (
+                    sidecar_record == expected_page_record
+                    and frontmatter.get('paper_digest_abstract_sha256')
+                    == expected[1]['abstractSha256']
+                    and file_results.get(str(page), {}).get('passed') is True
+                    and file_results.get(str(page), {}).get('reviewedSha256')
+                    == _sha256_file(page)
+                )
+            if valid:
+                result.update({
+                    'passed': True, 'failureKind': None, 'blockingCount': 0,
+                    'reviewedSha256': expected_sha,
+                })
+            else:
+                blocking += 1
+            file_results[str(asset)] = result
+            continue
         if (
             not isinstance(record, dict)
             or record.get('deleted') is not False
@@ -8852,6 +9546,9 @@ def generate_main(options=None):
         staged_assets = prepare_api_reader_staged_assets(
             papers, Path(staged_posts).resolve().parent,
         )
+        staged_assets.extend(prepare_researcher_workbench_staged_assets(
+            papers, today, Path(staged_posts).resolve().parent,
+        ))
         paper_slugs = {}
         for paper, record in zip(papers, journal['papers']):
             slug = record['filename'][len(today) + 1:-3]

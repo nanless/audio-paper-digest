@@ -59,13 +59,28 @@ Default API publication binds the Reader v3 article and plan, `api-reader-source
 
 ## Generation Manifest
 
-Schema v3 binds date, category, blog base HEAD, exact non-empty page set, create/update/delete state, per-page SHA, input/template fingerprints, rendered `publishedPapers`, homogeneous publication mode, production proof, and visual capability.
+Schema v3 binds date, category, blog base HEAD, the exact non-empty page/controlled-sidecar set, create/update/delete state, per-file SHA, input/template fingerprints, rendered `publishedPapers`, homogeneous publication mode, production proof, and visual capability.
 
 Mixed API/Manual provenance, missing bindings, or old schema cannot establish a new production publication.
 
+New Reader-v3 and Manual-v6 paper pages carry
+`researcher-workbench-v1` front matter: reader/original titles, normalized arXiv
+ID, an explicit version only when the source ID supplied `vN`, matching abs/PDF
+URLs, task, numeric score, rank bucket, document type, one-sentence thesis,
+structured authors, and the source-abstract SHA. The full original abstract lives
+in the same-batch `rethink-context.json`, not in front matter.
+
+Each workbench paper publishes four same-origin files under
+`static/data/papers/<date>/<safe-arxiv-id>/`: citation JSON, BibTeX, RIS, and
+rethink-context JSON. Staging validates paths, UTF-8/LF bytes, JSON/TeX/RIS
+escaping, and the 256-KiB limit. Page metadata, generation, review, and push bind
+every file SHA. Review rebuilds the files from authoritative `publishedPapers`
+and compares exact bytes. An unversioned source remains `version: null`; it is
+never guessed to be v1.
+
 ## Review Receipt and Publication
 
-The receipt binds generation SHA, actual page SHAs, per-page review protocol, Git baseline, Hugo gate, and production proof. Successful push adds publication commit, matching remote-verified OID, remote identity, and Beijing verification time.
+The receipt binds generation SHA, actual page SHAs, per-page review protocol, Git baseline, Hugo gate, a runtime fingerprint of Hugo configuration/layouts/data/frontend code, and production proof. A theme or site-script change after review therefore fails closed and requires review to run again. Successful push adds publication commit, matching remote-verified OID, remote identity, and Beijing verification time.
 
 Remote branch, remote name, or push-URL identity drift invalidates reuse.
 

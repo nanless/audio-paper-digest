@@ -80,7 +80,14 @@ npm run blog:review -- --date YYYY-MM-DD
 npm run blog:push -- --date YYYY-MM-DD
 ```
 
-Generate issues a schema-v3 manifest. Review uses immutable page artifacts for deterministic, LLM, image, and Hugo gates, reviewing the digest first and paper pages concurrently. Push commits only the receipt-authorized delta and verifies remote `main`.
+Generate derives `researcher-workbench-v1` front matter plus same-origin citation
+JSON/BibTeX/RIS and rethink-context JSON for Reader-v3/Manual-v6 pages, installs
+the pages and sidecars as one SHA-bound transaction, and issues a schema-v3
+manifest. An arXiv version is preserved only when the source ID explicitly
+contains `vN`; a base ID is never guessed to be v1. Review uses immutable page
+artifacts for deterministic, LLM, image, sidecar, and Hugo gates, reviewing the
+digest first and paper pages concurrently. Push commits only the
+receipt-authorized delta and verifies remote `main`.
 
 Review never mutates reviewed bytes. Page, baseline, protocol, generation, or remote drift invalidates the transaction.
 

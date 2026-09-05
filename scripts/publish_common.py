@@ -3455,6 +3455,47 @@ def normalize_publish_arxiv_id(arxiv_id):
     return value
 
 
+def parse_publish_arxiv_identity(arxiv_id):
+    """Return a base arXiv ID plus only an explicitly supplied version.
+
+    Publication metadata must not turn an unversioned identifier into ``v1``:
+    an arXiv ``abs``/``pdf`` URL without a suffix follows the moving current
+    version, while a suffixed identifier is an immutable version reference.
+    This parser intentionally shares the accepted wrappers with
+    :func:`normalize_publish_arxiv_id` and then preserves the suffix only when
+    it was present in the authoritative input.
+    """
+    raw = str(arxiv_id or '').strip().lower()
+    raw = re.sub(r'^https?://arxiv\.org/(?:abs|pdf)/', '', raw)
+    raw = re.sub(r'^arxiv:', '', raw)
+    raw = re.sub(r'\.pdf$', '', raw)
+    if len(raw) > 128:
+        raise PublishDataValidationError(f'arXiv ID 超过 128 字符上限: {arxiv_id!r}')
+    match = re.fullmatch(
+        r'((?:\d{4}\.\d{4,5}|[a-z][a-z0-9.-]*/\d{7}))(?:v([0-9]{1,6}))?',
+        raw,
+    )
+    if not match:
+        raise PublishDataValidationError(f'无效 arXiv ID: {arxiv_id!r}')
+    version_text = match.group(2)
+    if version_text is not None and (
+            version_text.startswith('0') or int(version_text) < 1):
+        raise PublishDataValidationError(f'arXiv 版本必须是正整数且无前导零: {arxiv_id!r}')
+    base_id = normalize_publish_arxiv_id(arxiv_id)
+    if match.group(1) != base_id:
+        raise PublishDataValidationError(f'arXiv ID 规范化结果不一致: {arxiv_id!r}')
+    version = int(version_text) if version_text is not None else None
+    versioned_id = f'{base_id}v{version}' if version is not None else None
+    resolved_id = versioned_id or base_id
+    return {
+        'baseId': base_id,
+        'version': version,
+        'versionedId': versioned_id,
+        'absUrl': f'https://arxiv.org/abs/{resolved_id}',
+        'pdfUrl': f'https://arxiv.org/pdf/{resolved_id}.pdf',
+    }
+
+
 def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
     """Validate every paper before creating any publish artifact.
 
