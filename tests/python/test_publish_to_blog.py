@@ -784,6 +784,76 @@ def create_verified_schema_v3_publication(date_str, posts, paper):
 
 
 class PublishToBlogReviewTest(unittest.TestCase):
+    def test_review_wrapper_passes_generation_snapshot_to_final_workbench_gate(self):
+        date_str = '2026-08-31'
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'blog'
+            posts = repo / 'content' / 'posts'
+            posts.mkdir(parents=True)
+            current = Path(tmp) / 'current'
+            current.mkdir()
+            paper = llm_api_publication_fixture()
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CONTENT_DIR', str(posts)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                markdown, slug = publish_to_blog.generate_paper_page(paper, date_str)
+                page = posts / f'{date_str}-{slug}.md'
+                page.write_text(markdown, encoding='utf-8')
+                original_bytes = page.read_bytes()
+                manifest = current / 'generation.json'
+                result = {str(page.resolve()): {
+                    'passed': True, 'completed': True, 'reviewedSha256': hashlib.sha256(original_bytes).hexdigest(),
+                }}
+                changed_title = copy.deepcopy(paper)
+                changed_title['title'] = 'A title not used to generate this page'
+                changed_id = copy.deepcopy(paper)
+                changed_id['arxivId'] = '2608.99999'
+                duplicate = copy.deepcopy(paper)
+                duplicate['arxivId'] += 'v2'
+                for snapshot, expected_error in (
+                        ([paper], None),
+                        (None, '非空权威快照'),
+                        ([changed_id], '不在 generation publishedPapers'),
+                        ([paper, duplicate], '重复规范化论文 ID'),
+                        ([changed_title], 'researcher workbench')):
+                    payload = {'schemaVersion': 3}
+                    if snapshot is not None:
+                        payload['publishedPapers'] = snapshot
+                    manifest.write_text(json.dumps(payload), encoding='utf-8')
+                    replacements = {
+                        'validate_publish_target': (repo, posts),
+                        'load_generation_manifest': ([page], manifest),
+                        'validate_git_publish_branch': 'b' * 40,
+                        'reusable_verified_publication_review': None,
+                        'has_publication_evidence_for_generation': False,
+                        'plan_incremental_review': {'mode': 'full', 'paths': [page],
+                            'priorResults': {}, 'unchangedFailed': []},
+                        'save_review_failure_state': current / 'failure.json',
+                        'review_all_posts': (0, 0, result),
+                        'attest_api_reader_assets': 0,
+                        'validate_reviewed_file_hashes': None,
+                        'run_hugo_gate': 'hugo',
+                        'save_review_receipt': current / 'receipt.json',
+                        'clear_review_page_checkpoints': None,
+                    }
+                    with contextlib.ExitStack() as stack:
+                        mocks = {name: stack.enter_context(mock.patch.object(publish_to_blog, name, return_value=value))
+                            for name, value in replacements.items()}
+                        gate = stack.enter_context(mock.patch.object(publish_to_blog, 'validate_staged_posts',
+                            wraps=publish_to_blog.validate_staged_posts))
+                        stack.enter_context(mock.patch.object(publish_to_blog, 'load_papers',
+                            side_effect=AssertionError('review must not consult current canonical')))
+                        stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+                        if expected_error:
+                            with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, expected_error):
+                                review_blog._run_review(publish_to_blog, date_str)
+                            mocks['save_review_receipt'].assert_not_called()
+                        else:
+                            self.assertEqual(review_blog._run_review(publish_to_blog, date_str), current / 'receipt.json')
+                            self.assertEqual(gate.call_args.kwargs['authoritative_papers'], {page.name: paper})
+                            mocks['save_review_receipt'].assert_called_once()
+                        self.assertEqual(page.read_bytes(), original_bytes)
+
     def test_api_reader_numeric_tokens_match_node_canonicalization(self):
         canon = publish_to_blog._canonical_api_reader_numeric_token
         self.assertEqual(canon('04'), '4')

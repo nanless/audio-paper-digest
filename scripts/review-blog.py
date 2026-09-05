@@ -49,11 +49,18 @@ def read_generated_pages(
     paper_slugs = {}
     scored_papers = []
     normalize_id = getattr(module, 'normalize_publish_arxiv_id', lambda value: str(value or ''))
-    authoritative_by_id = {
-        normalize_id(paper.get('arxivId')): paper
-        for paper in (authoritative_papers or [])
-        if isinstance(paper, dict) and paper.get('arxivId')
-    }
+    authoritative_by_id = {}
+    if authoritative_papers is not None:
+        if not isinstance(authoritative_papers, list) or not authoritative_papers:
+            raise module.PublishDataValidationError('generation publishedPapers 缺少非空权威快照')
+        for paper in authoritative_papers:
+            if not isinstance(paper, dict) or not paper.get('arxivId'):
+                raise module.PublishDataValidationError('generation publishedPapers 权威快照缺少论文 ID')
+            normalized_id = normalize_id(paper['arxivId'])
+            if normalized_id in authoritative_by_id:
+                raise module.PublishDataValidationError('generation publishedPapers 含重复规范化论文 ID')
+            authoritative_by_id[normalized_id] = paper
+    seen_page_ids = set()
     prefix = f'{date_str}-'
     for path in paths:
         path = Path(path)
@@ -79,6 +86,9 @@ def read_generated_pages(
         slug = path.stem[len(prefix):]
         paper_slugs[arxiv_id] = slug
         normalized_id = normalize_id(arxiv_id)
+        if normalized_id in seen_page_ids:
+            raise module.PublishDataValidationError(f'生成清单论文页 ID 重复: {normalized_id}')
+        seen_page_ids.add(normalized_id)
         authoritative = authoritative_by_id.get(normalized_id)
         if authoritative_papers is not None and authoritative is None:
             raise module.PublishDataValidationError(
@@ -160,8 +170,10 @@ def _run_review(module, date_str):
         authoritative_papers = None
         try:
             generation = json.loads(Path(manifest_path).read_text(encoding='utf-8'))
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            generation = {}
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise module.PublishDataValidationError('生成清单权威快照无法读取或解析') from exc
+        if not isinstance(generation, dict):
+            raise module.PublishDataValidationError('生成清单必须是对象')
         if generation.get('schemaVersion') == 3:
             authoritative_papers = generation.get('publishedPapers') or []
         page_artifacts = {}
@@ -178,6 +190,19 @@ def _run_review(module, date_str):
         paper_slugs, scored_papers = read_generated_pages(
             module, date_str, paths, authoritative_papers, page_artifacts,
         )
+        authoritative_by_filename = None
+        if authoritative_papers is not None:
+            normalize_id = module.normalize_publish_arxiv_id
+            reviewed_by_id = {
+                normalize_id(paper['arxivId']): paper
+                for _score, paper, _parsed in scored_papers
+            }
+            authoritative_by_filename = {}
+            for paper_id, slug in paper_slugs.items():
+                paper = reviewed_by_id.get(normalize_id(paper_id))
+                if paper is None:
+                    raise module.PublishDataValidationError(f'论文页缺少 generation 权威快照: {paper_id}')
+                authoritative_by_filename[f'{date_str}-{slug}.md'] = paper
         plan = module.plan_incremental_review(
             date_str, paths, manifest_path, base_head,
         )
@@ -252,6 +277,7 @@ def _run_review(module, date_str):
             )
             module.validate_staged_posts(
                 Path(content_dir), date_str, date_only=True, publish_paths=paths,
+                authoritative_papers=authoritative_by_filename,
             )
             gate = module.run_hugo_gate(
                 blog_repo, Path(content_dir), required=True, source_paths=paths,
