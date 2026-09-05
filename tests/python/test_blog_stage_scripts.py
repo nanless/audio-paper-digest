@@ -1,6 +1,7 @@
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import subprocess
 import sys
@@ -388,6 +389,15 @@ body
             git_push = mock.Mock(side_effect=AssertionError('review must not push'))
             receipt_path = Path(tmp) / 'receipt.json'
             failure_path = Path(tmp) / 'failure.json'
+            # This test isolates stage dispatch. Use an actual supported legacy
+            # manifest rather than a nonexistent path that fails before review.
+            manifest_path = Path(tmp) / 'manifest.json'
+            manifest_path.write_text(json.dumps({
+                'schemaVersion': 1,
+                'date': '2026-07-10',
+                'files': [{'path': f'content/posts/{page.name}', 'deleted': False}
+                          for page in (index, paper)],
+            }), encoding='utf-8')
             module = SimpleNamespace(
                 PublishDataValidationError=ValueError,
                 PublishLLMUnavailable=RuntimeError,
@@ -396,7 +406,7 @@ body
                 validate_publish_date=lambda value: value,
                 blog_publication_lock=lambda _date: contextlib.nullcontext(),
                 is_visual_summary_asset_path=lambda _path, _date: False,
-                load_generation_manifest=lambda _date: ([index, paper], Path('manifest.json')),
+                load_generation_manifest=lambda _date: ([index, paper], manifest_path),
                 validate_git_publish_branch=mock.Mock(return_value='a' * 40),
                 reusable_verified_publication_review=mock.Mock(return_value=None),
                 has_publication_evidence_for_generation=mock.Mock(return_value=False),
@@ -432,6 +442,30 @@ body
             module.review_all_posts.assert_called_once()
             module.save_review_receipt.assert_called_once()
             git_push.assert_not_called()
+
+    def test_review_entry_rejects_missing_manifest_before_review_or_push(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'blog'
+            posts = repo / 'content' / 'posts'
+            posts.mkdir(parents=True)
+            module = SimpleNamespace(
+                PublishDataValidationError=ValueError,
+                validate_publish_target=lambda: (repo, posts),
+                load_generation_manifest=lambda _date: ([], Path(tmp) / 'missing-manifest.json'),
+                validate_git_publish_branch=mock.Mock(return_value='a' * 40),
+                reusable_verified_publication_review=mock.Mock(return_value=None),
+                has_publication_evidence_for_generation=mock.Mock(return_value=False),
+                review_all_posts=mock.Mock(),
+                run_hugo_gate=mock.Mock(),
+                save_review_receipt=mock.Mock(),
+                git_push=mock.Mock(),
+            )
+            with self.assertRaisesRegex(ValueError, '生成清单权威快照无法读取或解析'):
+                review_blog._run_review(module, '2026-07-10')
+            module.review_all_posts.assert_not_called()
+            module.run_hugo_gate.assert_not_called()
+            module.save_review_receipt.assert_not_called()
+            module.git_push.assert_not_called()
 
     def test_push_entry_only_verifies_receipt_and_pushes(self):
         path = Path('/tmp/content/posts/2026-07-10.md')
