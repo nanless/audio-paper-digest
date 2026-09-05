@@ -33,6 +33,14 @@ function validDate(value) {
         && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 }
 
+function validateAnalysisIds(ids) {
+    if (!Array.isArray(ids) || ids.length === 0 || new Set(ids).size !== ids.length
+        || ids.some(id => typeof id !== 'string' || !/^\d{4}\.\d{4,5}$/.test(id))) {
+        throw new Error('--ids requires a non-empty, duplicate-free list of normalized arXiv IDs');
+    }
+    return ids;
+}
+
 function parseRewriteArgs(args) {
     const action = args[0];
     if (!['prepare', 'sources', 'analyze', 'status', 'promote', 'patch'].includes(action)) {
@@ -42,7 +50,7 @@ function parseRewriteArgs(args) {
     const seen = new Set();
     for (let index = 1; index < args.length; index++) {
         const flag = args[index];
-        if (!['--date', '--run-id', '--concurrency', '--refresh-reader-diagnostics', '--patch'].includes(flag) || seen.has(flag)) {
+        if (!['--date', '--run-id', '--concurrency', '--refresh-reader-diagnostics', '--patch', '--ids'].includes(flag) || seen.has(flag)) {
             throw new Error(`Unknown or repeated fresh rewrite argument: ${flag}`);
         }
         seen.add(flag);
@@ -56,6 +64,10 @@ function parseRewriteArgs(args) {
         if (flag === '--date') options.date = value;
         else if (flag === '--run-id') options.runId = value;
         else if (flag === '--patch') options.patchFile = value;
+        else if (flag === '--ids') {
+            if (action !== 'analyze') throw new Error('Only analyze accepts --ids');
+            options.ids = validateAnalysisIds(value.split(','));
+        }
         else {
             if (!/^[1-5]$/.test(value)) throw new Error('--concurrency must be an integer from 1 to 5');
             options.concurrency = Number(value);
@@ -357,6 +369,12 @@ async function analyzeRewrite(options, overrides = {}) {
     const deps = dependencies(overrides);
     return withRunOperation(options.runId, deps, async loaded => {
         if (loaded.run.status === 'promoted') throw new Error('Promoted fresh run is immutable');
+        const selectedIds = options.ids === undefined ? loaded.run.paperIds.slice() : validateAnalysisIds(options.ids).slice();
+        if (selectedIds.some(id => !loaded.run.paperIds.includes(id))) {
+            throw new Error('--ids contains a paper outside the fixed fresh run paper set');
+        }
+        const selectedSet = new Set(selectedIds);
+        const selectedPapers = loaded.analysis.papers.filter(paper => selectedSet.has(paperId(paper)));
         const sources = sourceState(loaded, deps);
         if (sources.missing.length) throw new Error(`Run sources phase first; missing ${sources.missing.length} verified sources`);
         const analysisPath = path.join(loaded.runDir, 'analysis.json');
@@ -372,7 +390,7 @@ async function analyzeRewrite(options, overrides = {}) {
         try {
             await deps.withFreshAnalysisContext({ runId: loaded.run.runId, runDir: loaded.runDir,
                 sourceExpectations: loaded.run.sourceExpectations,
-                refreshReaderDiagnostics: options.refreshReaderDiagnostics === true }, () => deps.analyzeBatch(loaded.analysis.papers, {
+                refreshReaderDiagnostics: options.refreshReaderDiagnostics === true }, () => deps.analyzeBatch(selectedPapers, {
                 concurrency: options.concurrency || deps.defaultAnalysisConcurrency,
                 maxRetries: deps.maxRetries, checkpointFilePath: analysisPath, saveInterval: 0,
                 onAttempt: (attempt, maxRetries, paper) => {
@@ -424,7 +442,8 @@ async function analyzeRewrite(options, overrides = {}) {
             ...(fatal ? { latestError: String(fatal.message).slice(0, 1000) } : { latestError: null }) }, deps);
         if (fatal) throw fatal;
         return { runId: loaded.run.runId, status, complete: final.stats.freshSuccess,
-            total: loaded.run.paperIds.length, exitCode: status === 'complete' ? 0 : 1 };
+            total: loaded.run.paperIds.length, ...(options.ids === undefined ? {} : { selectedPaperIds: selectedIds.slice() }),
+            exitCode: status === 'complete' ? 0 : 1 };
     });
 }
 

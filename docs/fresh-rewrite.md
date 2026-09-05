@@ -50,6 +50,18 @@ npm run rewrite:source -- promote --run-id "$rewrite_run_id"
 
 失败后先检查失败阶段与实际 usage，再重新运行同一 runId 的相应阶段。每篇分析继续使用规范 arXiv ID 锁；拿锁后重新读取本 run 的 `analysis.json`，不与旧 canonical 合并。只有同 run、同源快照的生成状态可恢复。Reader 持久内容预算与无进展计数保存在本 run，重新执行 analyze 不会清除这些候选。外层每次命令仍按现有 analysis-engine 的 `maxRetries` 执行，累计进入次数写入 `run.diagnostics.outerAnalysisEntries`，跨命令不归零且在 status 可见；它是审计数据，不是新的硬请求上限、Token 数或 Reader 内容尝试数。
 
+### 只恢复指定论文
+
+`analyze` 可显式指定本 run 固定集合内的非空子集：
+
+```bash
+npm run rewrite:source -- analyze --run-id "$rewrite_run_id" --ids 2609.03586,2609.03620 --concurrency 2
+```
+
+`--ids` 仅供 `analyze` 使用，逗号分隔规范 arXiv ID，不含空项、空格、版本后缀或重复ID；集合外论文立即拒绝。它只选择交给现有分析引擎的论文，不改变 `inputs.json`、完整论文集合或 `sourceExpectations`。未选论文的状态、阶段checkpoint及Reader尝试预算保持不变；选中论文仍使用原来的锁、恢复指纹与尝试计数。
+
+operator patch 后可只选已修论文，让该Reader候选先免费通过完整parser复验，避免顺带重试其他尚未修好的失败稿。未完成的其他阶段仍可能调用API。返回的 `complete/total`、`status` 和 promotion 条件始终按整个固定批次计算：子集成功而其他论文未完成时仍为 `analysis_partial`，退出码仍为1，不代表所选论文失败。
+
 ### 按原文审查后的失败候选局部修正
 
 在当前新稿中发现具体事实错误时，可在本 run 的 `patches/` 内创建局部补丁，不必为同一篇重发整篇写作请求。该入口只处理活动的失败候选：先取得 run 的 `.operation` 锁（因此等待正在运行的 analyze 结束），再取得同篇分析锁。它不接受成功文章、已归档候选、跨 run 路径或陈旧 SHA。
@@ -57,8 +69,8 @@ npm run rewrite:source -- promote --run-id "$rewrite_run_id"
 ```bash
 # 先按原文检查本 run 的新候选，生成 patches/reviewed.json，并 chmod 600。
 npm run rewrite:source -- patch --run-id "$rewrite_run_id" --patch reviewed.json
-# 再由正常分析恢复路径免费重验该 Reader 候选：
-npm run rewrite:source -- analyze --run-id "$rewrite_run_id" --concurrency 3
+# 再由正常分析恢复路径仅重验该已修论文（其余失败稿不进入引擎）：
+npm run rewrite:source -- analyze --run-id "$rewrite_run_id" --ids 2609.03107 --concurrency 1
 ```
 
 补丁 envelope 必须且仅含：

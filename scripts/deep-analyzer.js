@@ -772,7 +772,7 @@ const API_READER_FIGURE_CONTRACT_VERSION = 'api-reader-figures-v3';
 const API_READER_QUALITY_METRICS_CONTRACT = 'api-reader-quality-metrics-v2';
 const API_READER_SOURCE_BINDING_CONTRACT = 'api-reader-source-bindings-v4';
 const API_READER_SOURCE_BINDING_REPAIR_VERSION = 'api-reader-source-repair-v4';
-const API_READER_SURFACE_REPAIR_VERSION = 'api-reader-surface-repair-v1';
+const API_READER_SURFACE_REPAIR_VERSION = 'api-reader-surface-repair-v2';
 const API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1';
 const API_READER_RESOURCE_IDENTITY_CONTRACT = 'api-reader-resource-identity-v1';
 const API_READER_INITIAL_TEMPERATURE = 0.6;
@@ -803,9 +803,14 @@ function scoringStabilityResolutionIsValid(stage) {
         && /^[a-f0-9]{64}$/.test(String(resolution?.secondAuditSha256 || ''));
 }
 
-function isAllowedReaderNarrativeNumeralIssue(issue) {
+function isAllowedReaderNarrativeNumeralIssue(issue, article = '') {
     if (issue?.code !== 'quantitative_chinese_numeral') return false;
     const match = String(issue.match || '').trim();
+    // A third-octave band is a scientific term, not a measured one-fold gain.
+    // Match the exact occurrence, never waive other 一倍 merely because the
+    // term appears elsewhere in the article.
+    if (match === '一倍' && Number.isInteger(issue.index) && issue.index >= 3
+        && String(article).slice(issue.index - 3, issue.index + 4) === '三分之一倍频程') return true;
     return /^(?:一|两)(?:个|条|段|类|层|种|套|路|方面|部分|组|步|轮|半|张|幅)$/.test(match)
         || /^一(?:个)?(?:模型|系统|框架|方法|组件|问题|概念|目标|接口|视角|例子|直觉)$/.test(match);
 }
@@ -823,7 +828,7 @@ function buildApiReaderQualityMetrics(quality, article) {
     const rawIssues = Array.isArray(quality?.issues) ? quality.issues : [];
     const warnings = Array.isArray(quality?.warnings) ? quality.warnings : [];
     const waivedIssues = rawIssues.filter(issue => (
-        isAllowedReaderNarrativeNumeralIssue(issue)
+        isAllowedReaderNarrativeNumeralIssue(issue, article)
         || isAllowedReaderDefensiveNegationIssue(issue, article)
         || isReaderHeadingIssue(issue, article)
     ));
@@ -1514,14 +1519,22 @@ function splitReaderLongParagraphs(text, targetChineseChars = 190, maxChineseCha
 
 function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
     const protectedMarkdown = [];
-    const protectedText = String(text || '').replace(
-        /!?\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)|https:\/\/[^\s<>()\[\]{}"'，。；：！？、\u3400-\u9fff]+/g,
-        value => {
-            const token = `__PD_READER_PROTECTED_${protectedMarkdown.length}__`;
-            protectedMarkdown.push(value);
-            return token;
-        }
-    );
+    const protect = value => {
+        const token = `__PD_READER_PROTECTED_${protectedMarkdown.length}__`;
+        protectedMarkdown.push(value);
+        return token;
+    };
+    // Literal evidence is not editorial prose. Protect before every surface
+    // rewrite (including currency/spacing), and restore nested spans in reverse.
+    const protectedText = String(text || '')
+        .replace(/^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]{0,3}\1[`~]*[ \t]*(?=\n|$)/gm, protect)
+        .replace(/\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|(?<!\\)\$(?!\$)[^\n$]*?(?<!\\)\$/g, protect)
+        .replace(/(`+)[^\n]*?\1/g, protect)
+        .replace(/!?\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)|https:\/\/[^\s<>()\[\]{}"'，。；：！？、\u3400-\u9fff]+/g, protect)
+        .replace(/^ {0,3}>[^\n]*/gm, protect)
+        .replace(/“[^”]*”|「[^」]*」|『[^』]*』|"[^"\n]*"|(?<!\w)'[^'\n]*'(?!\w)/g, protect)
+        .replace(/^(?:原文|原句|口语(?:转录|转写|输出)|输入(?:转录)?|Spoken(?:-form)?(?: transcript)?|Transcript|Input)\s*[:：][^\n]*/gmi, protect)
+        .replace(/^\s*\|\s*(?:输入|口语输出|原文|原句|Input|Spoken(?:-form)?)[^|\n]*\|[^\n]*/gmi, protect);
     let normalized = protectedText
         .replace(/([\u3400-\u9fff])([A-Za-z][A-Za-z0-9+.-]*)/g, '$1 $2')
         .replace(/([\u3400-\u9fff])([α-ωΑ-Ω])/g, '$1 $2')
@@ -1537,32 +1550,63 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
         零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5,
         六: 6, 七: 7, 八: 8, 九: 9
     };
-    const chineseInteger = raw => {
-        let section = 0;
-        let digit = 0;
-        let total = 0;
+    const smallChineseInteger = raw => {
+        if (!raw) return 0;
+        if (Object.prototype.hasOwnProperty.call(numeralMap, raw)) return numeralMap[raw];
+        let total = 0, digit = null, lastUnit = 10000, zero = false;
         for (const char of raw) {
             if (Object.prototype.hasOwnProperty.call(numeralMap, char)) {
+                if (numeralMap[char] === 0) {
+                    if (!total || digit !== null || zero) return null;
+                    zero = true;
+                    continue;
+                }
+                if (digit !== null) return null; // No guessing a digit sequence.
                 digit = numeralMap[char];
                 continue;
             }
-            const unit = ({ 十: 10, 百: 100, 千: 1000, 万: 10000, 亿: 100000000 })[char];
-            if (!unit) return raw;
-            if (unit < 10000) {
-                section += (digit || 1) * unit;
-            } else {
-                total += (section + digit || 1) * unit;
-                section = 0;
-            }
-            digit = 0;
+            const unit = ({ 十: 10, 百: 100, 千: 1000 })[char];
+            if (!unit || unit >= lastUnit || (digit === null && total)) return null;
+            total += (digit ?? 1) * unit;
+            lastUnit = unit; digit = null; zero = false;
         }
-        return String(total + section + digit);
+        // Colloquial 一百二 may mean 120 or 102; require an explicit place/zero.
+        if ((digit !== null && total && lastUnit > 10 && !zero) || (zero && digit === null)) return null;
+        return total + (digit ?? 0);
+    };
+    const chineseInteger = raw => {
+        for (const [symbol, multiplier] of [['亿', 100000000], ['万', 10000]]) {
+            if (!raw.includes(symbol)) continue;
+            const parts = raw.split(symbol);
+            if (parts.length !== 2 || /[万亿]/.test(parts[0])) return null;
+            const high = parts[0] ? smallChineseInteger(parts[0]) : 1;
+            const low = parts[1] ? chineseInteger(parts[1].replace(/^[零〇]/, '')) : 0;
+            if (high === null || low === null || low >= multiplier
+                || (parts[1] && !/^[零〇]|[十百千万]/.test(parts[1]))) return null;
+            const result = high * multiplier + low;
+            return Number.isSafeInteger(result) ? result : null;
+        }
+        return smallChineseInteger(raw);
+    };
+    const chineseNumber = raw => {
+        const sign = /^[负正]/.test(raw) ? (raw[0] === '负' ? '-' : '+') : '';
+        const unsigned = raw.replace(/^[负正]/, '');
+        const parts = unsigned.split('点');
+        if (parts.length > 2) return null;
+        const integer = chineseInteger(parts[0]);
+        if (integer === null) return null;
+        if (parts.length === 1) return sign + integer;
+        if (!/^[零〇一二两三四五六七八九]+$/.test(parts[1])) return null;
+        return `${sign}${integer}.${[...parts[1]].map(char => numeralMap[char]).join('')}`;
     };
     for (const issue of quantitativeIssues) {
         if (issue?.code !== 'quantitative_chinese_numeral'
-            || isAllowedReaderNarrativeNumeralIssue(issue)) continue;
+            || isAllowedReaderNarrativeNumeralIssue(issue, text)) continue;
         const match = String(issue.match || '').trim();
         if (!match) continue;
+        // Fractions and ambiguous scaled units are not local substitutions.
+        if (/分之|一半|半宽|千分贝|毫分贝/.test(match)) continue;
+        let valid = true;
         const replacement = /^[几数]\s*10$/.test(match)
             ? '数十'
             : /^[几数]\s*(\d+(?:\.\d+)?)$/.test(match)
@@ -1571,22 +1615,26 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
                     .replace(/(\d+(?:\.\d+)?)\s*万/g, (_, value) => (
                         Number(value) * 10000
                     ).toLocaleString('en-US', { maximumFractionDigits: 10 }))
-                    .replace(/[零〇一二两三四五六七八九十百千万亿]+/g, chineseInteger)
+                    .replace(/[负正]?[零〇一二两三四五六七八九十百千万亿]+(?:点[零〇一二两三四五六七八九]+)?/g, raw => {
+                        const parsed = chineseNumber(raw);
+                        if (parsed === null) { valid = false; return raw; }
+                        return parsed;
+                    })
                     .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2');
-        normalized = normalized.split(match).join(replacement);
+        if (!valid) continue;
+        normalized = normalized.replaceAll(match, (surface, offset, whole) => {
+            const before = whole.slice(0, offset), after = whole.slice(offset + surface.length);
+            // An issue can name only a suffix of a longer number/fraction.
+            if (/[零〇一二两三四五六七八九十百千万亿\d]$|分之$/.test(before)
+                || /^[零〇一二两三四五六七八九十百千万亿\d]|^点[零〇一二两三四五六七八九\d]|^分之/.test(after)
+                || (/[毫千]$/.test(surface) && /^分贝/.test(after))) return surface;
+            return replacement;
+        });
     }
     normalized = normalized
         .replace(/跨窗口\s*1\s*致性/g, '跨窗口一致性')
         .replace(/\b1\s*到\s*5\s+5\s*级量表/g, '1 到 5 级量表')
         .replace(/y\s*到\s*5\s+2\s*段/g, 'y 到 5 这 2 段')
-        .replace(
-            /((?:macro\s*)?F1|准确率|召回率|精确率|错误率|拒绝率|命中率)(\s*(?:为|达|是|=|从|由|升至|降至)\s*)(\d+(?:\.\d+)?)(?![\d.%])/gi,
-            (full, metric, separator, rawValue) => (
-                Number.parseFloat(rawValue) > 1
-                    ? `${metric}${separator}${rawValue}%`
-                    : full
-            )
-        )
         .replace(/[；;](?=\s*(?:\n\s*\n|$))/g, '。')
         .replace(/数十\s+(?=[\u3400-\u9fff])/g, '数十')
         .replace(/([下上这另哪])\s*1\s*(?=步|层|类|种|段|项|组|张|个)/g, '$1一')
@@ -1597,48 +1645,18 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
             '$1 个'
         )
         .replace(/([\u3400-\u9fff])([-+]\d)/g, '$1 $2')
-        .replace(
-            /((?:CER|WER|PER|MER|SER)\b\s*(?:从|由)\s*)(\d+(?:\.\d+)?)(\s*(?:升至|降至|到|至)\s*)(\d+(?:\.\d+)?)(?!\s*%)/gi,
-            (full, prefix, left, separator, right) => (
-                Number.parseFloat(left) > 1 || Number.parseFloat(right) > 1
-                    ? `${prefix}${left}%${separator}${right}%`
-                    : full
-            )
-        )
-        .replace(
-            /((?:CER|WER|PER|MER|SER)\b\s*)(\d+(?:\.\d+)?)(\s*(?:差于|优于|高于|低于|好于|坏于)\s*)(\d+(?:\.\d+)?)(?!\s*%)/gi,
-            (full, prefix, left, separator, right) => (
-                Number.parseFloat(left) > 1 || Number.parseFloat(right) > 1
-                    ? `${prefix}${left}%${separator}${right}%`
-                    : full
-            )
-        )
-        .replace(
-            /((?:CER|WER|PER|MER|SER)\b[^\n。！？]{0,36}?)(\d+(?:\.\d+)?)(\s*(?:对|vs\.?|与)\s*)(\d+(?:\.\d+)?)(?!\s*%)/gi,
-            (full, prefix, left, separator, right) => (
-                Number.parseFloat(left) > 1 || Number.parseFloat(right) > 1
-                    ? `${prefix}${left}%${separator}${right}%`
-                    : full
-            )
-        )
-        .replace(
-            /(\d+(?:\.\d+)?)\s*(对|vs\.?|相比)\s*(\d+(?:\.\d+)?)\s*(%|个百分点|毫秒|分钟|小时|毫焦|kHz|MHz|Hz|dB|mJ|GB|MB|KB|倍|点|分|秒)(?![A-Za-z\u3400-\u9fff])/gi,
-            (full, left, separator, right, unit) => (
-                /^vs/i.test(separator)
-                    ? `${left} ${unit} ${separator} ${right} ${unit}`
-                    : `${left} ${unit}${separator}${right} ${unit}`
-            )
-        )
         .replace(/([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?=(?:mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|kbps?|Mbps?|Gbps?|MACs?|tokens?|FPS|bit)\b)/gi, '$1 ')
         .replace(/([\u3400-\u9fff])(\d)/g, '$1 $2')
         .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2');
-    const restored = protectedMarkdown.reduce(
+    // Never infer missing %, or copy a later unit onto an earlier value.
+    // Author/source validation, not typography, decides those semantics.
+    const restored = protectedMarkdown.reduceRight(
         (value, original, index) => value.replace(
-            `__PD_READER_PROTECTED_${index}__`, original
+            `__PD_READER_PROTECTED_${index}__`, () => original
         ),
-        normalized
+        normalizeReaderCurrencyAmounts(normalized)
     );
-    return normalizeReaderCurrencyAmounts(restored);
+    return restored;
 }
 
 function normalizeReaderCurrencyAmounts(value) {
@@ -2451,9 +2469,11 @@ function parseApiReaderArticleResult(raw, options = {}) {
         }
         const marker = String(bridge.marker || '').trim();
         const explanation = String(bridge.explanation || '').trim();
+        const markerOccurrences = marker ? value.sections.reduce((count, section) =>
+            count + String(section.body || '').split(marker).length - 1, 0) : 0;
         let candidate = value.sections.find(section => section.kind === bridge.sectionKind
             && String(section.body || '').split(/\n\s*\n/).map(block => block.trim()).includes(marker));
-        if (!candidate && marker === `[[CONCEPT_BRIDGE_${index + 1}]]`
+        if (!candidate && markerOccurrences === 0 && marker === `[[CONCEPT_BRIDGE_${index + 1}]]`
             && explanation.length >= 45 && explanation.length <= 320) {
             const targetIndex = value.sections.findIndex(section => section.kind === bridge.sectionKind);
             if (targetIndex >= 0) {
@@ -2463,14 +2483,14 @@ function parseApiReaderArticleResult(raw, options = {}) {
             }
         }
         if (marker !== `[[CONCEPT_BRIDGE_${index + 1}]]`
-            || explanation.length < 45 || explanation.length > 320 || !candidate) {
+            || explanation.length < 45 || explanation.length > 320 || !candidate || markerOccurrences > 1) {
             throw new Error(
                 `读者文章 conceptBridges[${index}] 未形成有效术语桥`
                 + `（terms=${bridge.terms.join(' × ')}`
                 + `, sectionKind=${bridge.sectionKind}`
                 + `, marker=${marker || '空'}`
                 + `, explanationChars=${explanation.length}`
-                + `, markerBound=${Boolean(candidate)}）`
+                + `, markerBound=${Boolean(candidate)}, markerOccurrences=${markerOccurrences}；已有marker必须唯一独占一段且位于声明小节）`
             );
         }
         return {
@@ -2583,7 +2603,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
     const repairableSurfaceIssues = quality.issues.filter(issue => (
         issue.code === 'numeric_typography'
         || (issue.code === 'quantitative_chinese_numeral'
-            && !isAllowedReaderNarrativeNumeralIssue(issue))
+            && !isAllowedReaderNarrativeNumeralIssue(issue, article))
     ));
     if (repairableSurfaceIssues.length > 0) {
         article = normalizeReaderEditorialSurface(article, repairableSurfaceIssues);
@@ -2596,7 +2616,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
     const finalSurfaceIssues = quality.issues.filter(issue => (
         issue.code === 'numeric_typography'
         || (issue.code === 'quantitative_chinese_numeral'
-            && !isAllowedReaderNarrativeNumeralIssue(issue))
+            && !isAllowedReaderNarrativeNumeralIssue(issue, article))
     ));
     if (finalSurfaceIssues.length > 0) {
         article = normalizeReaderEditorialSurface(article, finalSurfaceIssues);
@@ -2604,6 +2624,10 @@ function parseApiReaderArticleResult(raw, options = {}) {
     }
     article = ensureApiReaderTableNarratives(article);
     quality = validateReaderEditorialQuality(article, normalizedSections);
+    // Issue offsets describe this pre-injection view. Original TeX insertion
+    // changes later offsets, so replay context-sensitive exemptions against the
+    // exact text that produced the diagnostics, not the rendered formula copy.
+    const qualityArticle = article;
     const sourceBindingResult = (hasSourceBindings || options.requireSourceBindings === true)
         ? bindApiReaderSourceEvidence(
             article,
@@ -2620,11 +2644,11 @@ function parseApiReaderArticleResult(raw, options = {}) {
         )
         : null;
     if (sourceBindingResult) article = sourceBindingResult.article;
-    const qualityMetrics = buildApiReaderQualityMetrics(quality, article);
+    const qualityMetrics = buildApiReaderQualityMetrics(quality, qualityArticle);
     const blockingQualityIssues = quality.issues.filter(issue => !(
-        isAllowedReaderNarrativeNumeralIssue(issue)
-        || isAllowedReaderDefensiveNegationIssue(issue, article)
-        || isReaderHeadingIssue(issue, article)
+        isAllowedReaderNarrativeNumeralIssue(issue, qualityArticle)
+        || isAllowedReaderDefensiveNegationIssue(issue, qualityArticle)
+        || isReaderHeadingIssue(issue, qualityArticle)
     ));
     if (blockingQualityIssues.length > 0) {
         const details = blockingQualityIssues.slice(0, 8)

@@ -92,6 +92,91 @@ test('CLI requires an explicit phase; no default API path, date override, reset 
     }
 });
 
+test('analyze --ids accepts only a non-empty unique normalized subset syntax', () => {
+    assert.deepEqual(runner.parseRewriteArgs(['analyze', '--run-id', RUN_ID, '--ids', '2609.00001,2609.00002']),
+        { action: 'analyze', runId: RUN_ID, ids: ['2609.00001', '2609.00002'] });
+    for (const value of ['', ',', '2609.00001,', ',2609.00001', '2609.00001,2609.00001',
+        '2609.00001, 2609.00002', '2609.00001v1', '../escape']) {
+        assert.throws(() => runner.parseRewriteArgs(['analyze', '--run-id', RUN_ID, '--ids', value]));
+    }
+    for (const action of ['prepare', 'sources', 'status', 'promote', 'patch']) {
+        assert.throws(() => runner.parseRewriteArgs([action, '--ids', '2609.00001']), /Only analyze/);
+    }
+    assert.throws(() => runner.parseRewriteArgs(['analyze', '--run-id', RUN_ID,
+        '--ids', '2609.00001', '--ids', '2609.00002']), /repeated/);
+});
+
+test('subset analysis calls only requested papers, preserves unselected state and Reader budget bytes, and reports whole-run partial', async t => {
+    const f = fixture(t);
+    const prepared = await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
+    await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);
+    const [selected, untouched] = f.originals.map(paper => paper.arxivId);
+    const analysisPath = path.join(prepared.runDir, 'analysis.json');
+    const analysis = runner.readRegularJson(analysisPath).value;
+    analysis.papers[1] = { ...f.freshPaper(analysis.papers[1]), analysis: null,
+        status: 'failed', error: 'Unselected failure remains untouched',
+        analysisCheckpoint: 'UNSELECTED_SAME_RUN_CHECKPOINT',
+        analysisStageCheckpoints: { primaryAnalysis: { status: 'complete', payload: 'keep stage bytes' } } };
+    fs.writeFileSync(analysisPath, JSON.stringify(analysis));
+    const unselectedBefore = JSON.stringify(analysis.papers[1]);
+    const attemptsDir = path.join(prepared.runDir, 'reader-attempts'); fs.mkdirSync(attemptsDir, { mode: 0o700 });
+    const budgetPath = path.join(attemptsDir, 'unselected-audit.json');
+    runner.writeImmutableJson(budgetPath, { paperId: untouched, attempts: 6, fullAttempts: 2,
+        noProgress: 2, transportFailures: 7, draft: 'UNSELECTED_DRAFT_BYTES' });
+    const budgetBefore = fs.readFileSync(budgetPath);
+    const inputsBefore = fs.readFileSync(path.join(prepared.runDir, 'inputs.json'));
+    const runBefore = runner.readRegularJson(path.join(prepared.runDir, 'run.json')).value;
+    let calls = 0;
+    const result = await runner.analyzeRewrite({ runId: RUN_ID, ids: [selected] }, { ...f.deps,
+        analyzeBatch: async (papers, options) => {
+            calls++; assert.deepEqual(papers.map(paper => paper.arxivId), [selected]);
+            assert.equal(options.checkpointFilePath, analysisPath);
+            return f.deps.analyzeBatch(papers, options);
+        } });
+    assert.equal(calls, 1); assert.equal(result.complete, 1); assert.equal(result.total, 2);
+    assert.equal(result.status, 'analysis_partial'); assert.equal(result.exitCode, 1);
+    assert.deepEqual(result.selectedPaperIds, [selected]);
+    const current = runner.readRegularJson(analysisPath).value;
+    assert.equal(current.papers.length, 2); assert.equal(current.status, 'partial');
+    assert.equal(JSON.stringify(current.papers.find(paper => paper.arxivId === untouched)), unselectedBefore);
+    assert.deepEqual(fs.readFileSync(budgetPath), budgetBefore);
+    assert.deepEqual(fs.readFileSync(path.join(prepared.runDir, 'inputs.json')), inputsBefore);
+    const runAfter = runner.readRegularJson(path.join(prepared.runDir, 'run.json')).value;
+    assert.equal(runAfter.identitySha256, runBefore.identitySha256);
+    assert.deepEqual(runAfter.paperIds, runBefore.paperIds);
+    assert.deepEqual(runAfter.sourceExpectations, runBefore.sourceExpectations);
+    assert.equal(runAfter.diagnostics.outerAnalysisEntries[selected].count, 1);
+    assert.equal(runAfter.diagnostics.outerAnalysisEntries[untouched], undefined);
+    await assert.rejects(runner.promoteRewrite({ runId: RUN_ID }, f.deps), /requires all sources and analysis/);
+});
+
+test('invalid or out-of-run subsets reject before run/analysis writes or engine calls', async t => {
+    const f = fixture(t);
+    const prepared = await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
+    await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);
+    const paths = ['run.json', 'analysis.json', 'inputs.json'].map(name => path.join(prepared.runDir, name));
+    const before = paths.map(filename => fs.readFileSync(filename));
+    for (const ids of [[], ['2609.99999'], ['2609.00001', '2609.00001'], ['2609.00001', ''], '2609.00001']) {
+        await assert.rejects(runner.analyzeRewrite({ runId: RUN_ID, ids }, f.deps), /--ids/);
+        paths.forEach((filename, index) => assert.deepEqual(fs.readFileSync(filename), before[index]));
+    }
+    assert.equal(f.counters.analysis, 0); assert.equal(f.counters.context, 0);
+});
+
+test('subsets retain whole-run success counting and complete only when the last missing paper succeeds', async t => {
+    const f = fixture(t);
+    await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
+    await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);
+    const first = await runner.analyzeRewrite({ runId: RUN_ID, ids: ['2609.00001'] }, f.deps);
+    assert.equal(first.status, 'analysis_partial'); assert.equal(first.complete, 1);
+    const second = await runner.analyzeRewrite({ runId: RUN_ID, ids: ['2609.00002'] }, f.deps);
+    assert.equal(second.status, 'complete'); assert.equal(second.complete, 2); assert.equal(second.total, 2);
+    const status = runner.rewriteStatus({ runId: RUN_ID }, f.deps);
+    assert.deepEqual(status.analysisRemainingIds, []);
+    assert.equal(status.diagnostics.outerAnalysisEntries['2609.00001'].count, 1);
+    assert.equal(status.diagnostics.outerAnalysisEntries['2609.00002'].count, 1);
+});
+
 test('prepare uses only raw metadata, pins exact inputs, preserves canonical, and status never fetches', async t => {
     const f = fixture(t); const before = fs.readFileSync(f.files.deepAnalysisResult);
     const prepared = await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);

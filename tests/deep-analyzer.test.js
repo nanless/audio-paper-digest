@@ -1433,7 +1433,7 @@ primary_task_tag: #音视频生成
         );
         assert.strictEqual(
             normalizeReaderEditorialSurface('主观选择为25对10分，延迟为0.77 vs 0.85秒。'),
-            '主观选择为 25 分对 10 分，延迟为 0.77 秒 vs 0.85 秒。'
+            '主观选择为 25 对 10 分，延迟为 0.77 vs 0.85 秒。'
         );
         assert.strictEqual(
             normalizeReaderEditorialSurface('Attn.与卷积并行，Attn.的输出进入门控层。'),
@@ -1485,13 +1485,13 @@ primary_task_tag: #音视频生成
             normalizeReaderEditorialSurface(
                 'CER 却更差为 24.05 对 22.48，余弦相似度为 0.838 对 0.864。'
             ),
-            'CER 却更差为 24.05% 对 22.48%，余弦相似度为 0.838 对 0.864。'
+            'CER 却更差为 24.05 对 22.48，余弦相似度为 0.838 对 0.864。'
         );
         assert.strictEqual(
             normalizeReaderEditorialSurface(
                 'CER 24.05 差于 22.48，另一组 CER 从 32.56 降至 24.14。'
             ),
-            'CER 24.05% 差于 22.48%，另一组 CER 从 32.56% 降至 24.14%。'
+            'CER 24.05 差于 22.48，另一组 CER 从 32.56 降至 24.14。'
         );
         const recoveryPaper = {
             apiReaderArticle: [
@@ -1784,6 +1784,15 @@ primary_task_tag: #音视频生成
             minimumIntegratedTables: 4,
             availableFigureOrdinals: []
         }));
+        const wrongBridgeKind = structuredClone(v3Payload);
+        wrongBridgeKind.sections.find(section => section.kind === 'method_overview').body =
+            wrongBridgeKind.sections.find(section => section.kind === 'method_overview').body.replace('\n\n[[CONCEPT_BRIDGE_4]]', '');
+        wrongBridgeKind.sections.at(-1).body += '\n\n[[CONCEPT_BRIDGE_4]]';
+        assert.throws(() => parseApiReaderArticleResult(JSON.stringify(wrongBridgeKind)), /conceptBridges\[3\]/,
+            'a misplaced existing bridge must not be copied to another section and leak its original marker');
+        const duplicateBridge = structuredClone(v3Payload);
+        duplicateBridge.sections.at(-1).body += '\n\n[[CONCEPT_BRIDGE_4]]';
+        assert.throws(() => parseApiReaderArticleResult(JSON.stringify(duplicateBridge)), /conceptBridges\[3\]/);
         const boundPayload = structuredClone(v3Payload);
         const bindingSourceText = '论文正文统一报告值为 1.0，所有整理表都只重放这一明确报告值。';
         boundPayload.tableBindings = Array.from({ length: 4 }, (_, index) => ({
@@ -1816,6 +1825,22 @@ primary_task_tag: #音视频生成
         assert.strictEqual(boundV3Result.plan.sourceBindingsContract, 'api-reader-source-bindings-v4');
         assert.strictEqual(boundV3Result.plan.tableBindings.length, 4);
         assert.strictEqual(boundV3Result.plan.formulaBindings.length, 0);
+        const indexedTermPayload = structuredClone(boundPayload);
+        indexedTermPayload.sections[0].body += '\n\n[[FORMULA_1]]';
+        indexedTermPayload.sections.at(-1).body += '\n\n复核时按三分之一倍频程划分频带，并保持输入条件一致。';
+        indexedTermPayload.formulaBindings = [{ formulaOrdinal: 1, targetKind: 'background', marker: '[[FORMULA_1]]' }];
+        const indexedTermArtifacts = bindStructuredArtifactsToText({ ...bindingArtifacts,
+            formulas: [{ ordinal: 1, recoveryStatus: 'complete',
+                latex: '\\sum_{i=1}^{100} x_i + \\sum_{j=1}^{200} y_j', sourceDomSha256: 'a'.repeat(64) }]
+        }, bindingSourceText);
+        const indexedTermResult = parseApiReaderArticleResult(JSON.stringify(indexedTermPayload), {
+            requiredVersion: 3, requireIntegratedTables: true, minimumIntegratedTables: 4,
+            availableFigureOrdinals: [], requireSourceBindings: true,
+            structuredArtifacts: indexedTermArtifacts, sourceText: bindingSourceText
+        });
+        assert.match(indexedTermResult.article, /三分之一倍频程/,
+            'formula injection must not shift the text used to replay earlier quality issue indices');
+        assert.strictEqual(indexedTermResult.qualityMetrics.blockingIssueCount, 0);
         assert.doesNotThrow(() => parseApiReaderArticleResult(JSON.stringify(v3Payload), {
             requiredVersion: 3,
             requireIntegratedTables: true,
@@ -2473,6 +2498,74 @@ primary_task_tag: #音视频生成
         assert.throws(() => validateApiReaderTableNarratives(absentAfter, 1), /后缺少独立解释段/);
         const fenced = '```markdown\n### 示例标题\n示例内容\n```\n\n~~~text\n### 另一个示例\n内容\n~~~';
         assert.strictEqual(ensureApiReaderTableNarratives(fenced), fenced);
+    });
+
+    it('Reader 数值排版保护逐字引语、转录、代码与原始公式，不跨保护边界替换', () => {
+        const { normalizeReaderEditorialSurface } = require('../scripts/deep-analyzer.js');
+        const { findQuantitativeChineseNumerals } = require('../scripts/editorial-quality.js');
+        const transcript = '零点九九九九九九五，把它十万次幂，概率是百分之九十五';
+        const literals = [
+            `原文：“${transcript}”。`, `口语转录：${transcript}`,
+            `| 输入2复杂数字 | ${transcript} |`,
+            `> ${transcript}\n> 阈值为零点五五`,
+            '`模型A在零点五五处输出$35`',
+            '```text\n模型A在零点五五处输出$35\n```',
+            '~~~text\n模型A在零点五五处输出$35\n~~~',
+            '\\[x=\\text{零点五五},y=\\text{四十八千赫},a=\\$35\\]',
+            '$$x=\\text{零点五五}$$',
+            '“先冻结模型A，再用阈值零点五五。”',
+            '「零点四五」', '"zero 点五五 $35"'
+        ];
+        for (const literal of literals) {
+            const issues = findQuantitativeChineseNumerals(literal).map(issue => ({ ...issue,
+                code: 'quantitative_chinese_numeral' }));
+            assert.equal(normalizeReaderEditorialSurface(literal, issues), literal);
+        }
+        const paired = '非引用阈值零点五五；原文“零点五五”。';
+        const issues = findQuantitativeChineseNumerals(paired).map(issue => ({ ...issue,
+            code: 'quantitative_chinese_numeral' }));
+        assert.equal(normalizeReaderEditorialSurface(paired, issues), '非引用阈值 0.55；原文“零点五五”。');
+    });
+
+    it('三分之一倍频程只在issue精确上下文豁免，普通一倍和错位索引仍阻断', () => {
+        const { isAllowedReaderNarrativeNumeralIssue, buildApiReaderQualityMetrics,
+            normalizeReaderEditorialSurface } = require('../scripts/deep-analyzer.js');
+        const { validateEditorialQuality } = require('../scripts/editorial-quality.js');
+        const article = '按三分之一倍频程划分频带，幅度增益为一倍。';
+        const quality = validateEditorialQuality({ summary: '', method: article,
+            innovations: '', results: '', details: '', limits: '' });
+        const issues = quality.issues.filter(issue => issue.code === 'quantitative_chinese_numeral');
+        assert.equal(issues.length, 2);
+        assert.equal(isAllowedReaderNarrativeNumeralIssue(issues[0], article), true);
+        assert.equal(isAllowedReaderNarrativeNumeralIssue(issues[1], article), false);
+        assert.equal(isAllowedReaderNarrativeNumeralIssue({ ...issues[0], index: 5 }, article), false);
+        assert.equal(isAllowedReaderNarrativeNumeralIssue({ code: 'quantitative_chinese_numeral', match: '一倍' }), false);
+        assert.equal(buildApiReaderQualityMetrics(quality, article).waivedIssueCount, 1);
+        assert.equal(buildApiReaderQualityMetrics(quality, article).blockingIssueCount, 1);
+        assert.ok(normalizeReaderEditorialSurface(article, issues).includes('三分之一倍频程'));
+    });
+
+    it('03414 连续小数完整解析，03320量级歧义和分之不得局部猜改', () => {
+        const { normalizeReaderEditorialSurface } = require('../scripts/deep-analyzer.js');
+        const { findQuantitativeChineseNumerals } = require('../scripts/editorial-quality.js');
+        const normalize = raw => normalizeReaderEditorialSurface(raw,
+            findQuantitativeChineseNumerals(raw).map(issue => ({ ...issue, code: 'quantitative_chinese_numeral' })));
+        assert.equal(normalize('拐点零点五五，指数零点四五；纵轴从零点六五到零点九五。'),
+            '拐点 0.55，指数 0.45；纵轴从 0.65 到 0.95。');
+        assert.equal(normalize('小数为零点九九九九九九五。'), '小数为 0.9999995。');
+        for (const raw of ['采样率是否混用十六与四十八千赫。', '把千分贝级电平保留。',
+            '毫分贝与四十八千分贝。', '百分之九十五，三分之一。', '一百二段音频。']) {
+            assert.equal(normalize(raw), raw);
+        }
+        assert.equal(normalizeReaderEditorialSurface('精确整数一百二十段与百例，alpha 三。', [
+            { code: 'quantitative_chinese_numeral', match: '一百二十段' },
+            { code: 'quantitative_chinese_numeral', match: '百例' },
+            { code: 'quantitative_chinese_numeral', match: 'alpha 三' }
+        ]), '精确整数 120 段与 100 例，alpha 3。');
+        const links = '![零点五五](https://example.org/1.png) [[TABLE_1]] [[FORMULA_2]]';
+        assert.equal(normalize(links), links);
+        assert.equal(normalize('CER 从 32.56 降至 24.14，准确率为95。'),
+            'CER 从 32.56 降至 24.14，准确率为 95。');
     });
 
     it('2609.02941 TeX颜色前缀只解包明确修饰且保留原字quote、符号和单位', () => {

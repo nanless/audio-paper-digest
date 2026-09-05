@@ -93,7 +93,7 @@ test('surface repair preserves production binding, reseals actual bytes and metr
     assert.equal(paper.apiReaderArticleSha256, sha(paper.apiReaderArticle));
     assert.equal(paper.apiReaderPlanSha256, stableFingerprint(paper.apiReaderPlan));
     assert.equal(apiReaderV3BindsCanonical(paper), true);
-    assert.equal(stage.surfaceRepairVersion, 'api-reader-surface-repair-v1');
+    assert.equal(stage.surfaceRepairVersion, 'api-reader-surface-repair-v2');
     assert.equal(stage.surfaceRepair.executionKind, 'deterministic_surface_repair');
     assert.equal(stage.surfaceRepair.inputArticleSha256, before.apiReaderArticleSha256);
     assert.equal(stage.surfaceRepair.outputArticleSha256, paper.apiReaderArticleSha256);
