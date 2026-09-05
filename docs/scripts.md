@@ -33,7 +33,7 @@
 | `npm run validate:data` | 只读 current 契约检查 |
 | `npm run keyword:recall` | 关键词预筛金标准回放 |
 | `npm run backfill` | 仅补录历史 paper ID |
-| `npm run paper:rethink` | 启动仅监听 `127.0.0.1:43128` 的安全论文 AI companion；详见[专门说明](paper-rethink-companion.md) |
+| `npm run paper:rethink` | 历史独立维护工具；博客已取消集成，读者无需启动。旧接口保留于[历史说明](paper-rethink-companion.md)。 |
 
 `full-fetch.js` 从 fetch 开始时只接受北京时间当天。后台运行可直接调用 `node scripts/full-fetch.js`，避免 npm/TTY 包装干扰。
 

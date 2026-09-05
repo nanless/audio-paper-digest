@@ -12,7 +12,7 @@
 | 理解默认日更各阶段 | [主流程](workflow.md) | [数据格式](data-format.md) |
 | 理解组件、状态机、锁与事务 | [默认 API 架构](architecture.md) | [契约兼容矩阵](compatibility.md) |
 | 查某个命令或模块职责 | [脚本说明](scripts.md) | [`scripts/` 运行时索引](../scripts/README.md) |
-| 从论文页安全使用自己的模型重新理解论文 | [本机论文 AI Companion](paper-rethink-companion.md) | [环境与配置](setup.md) |
+| 下载论文与引用、复制 AI 提问 | [无需助手的博客阅读工具](blog-reading-tools.md) | 博客“关于与方法”页面 |
 | 修改评分、Prompt、路径或契约 | [维护约定](maintenance.md) | [数据格式](data-format.md) |
 | 显式运行 Manual/人工路线 | [Manual 入口](../manual/README.md) | [Manual 工作流](../manual/docs/workflow.md) |
 

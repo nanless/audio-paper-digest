@@ -54,7 +54,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `refresh-api-reader.js` | 对指定论文或日期批次刷新 API reader/评分/作者/图片阶段。 |
 | `evaluate-keyword-prefilter.js` | 只读回放金标准与历史正样本，报告关键词召回。 |
 | `test-api-key.js` | 测试主模型或副模型的协议路由、代理和响应。 |
-| `paper-rethink-server.js` | 仅监听 `127.0.0.1:43128` 的论文 AI 重理解 companion；提供隔离本机 UI，并复用公共 LLM 路由、代理和 OpenCode Go 账号池。 |
+| `paper-rethink-server.js` | 历史独立维护工具；博客已取消本机助手集成，不应为阅读、引用或复制 AI 提问启动此服务。旧接口实现仍保留供历史维护。 |
 | `validate-data-files.js` | 只读复验 current 数据、跨文件集合、评分和兼容 provenance。 |
 | `backfill_papers.py` | 只补录历史论文 ID，不执行深度分析。 |
 
