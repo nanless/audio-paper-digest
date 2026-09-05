@@ -42,6 +42,11 @@ jobs:
           python3 -m pip install --disable-pip-version-check -r requirements.txt
           bash scripts/python-runtime.sh -m pip check
 
+      - name: Install CJK rendering font
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends fonts-noto-cjk
+
       - name: Create isolated CI project environment
         run: |
           umask 077

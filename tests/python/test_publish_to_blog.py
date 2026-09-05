@@ -4956,21 +4956,24 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             timed_out=False, output_truncated=False,
         )
         publish_to_blog._REVIEW_PROTOCOL_CACHE.clear()
-        with mock.patch.object(publish_to_blog, '_sha256_file', return_value='a' * 64), \
+        with mock.patch.object(publish_to_blog, 'blog_runtime_fingerprint', return_value='e' * 64), \
+                mock.patch.object(publish_to_blog, '_sha256_file', return_value='a' * 64), \
                 mock.patch.object(publish_to_blog.shutil, 'which', return_value='/missing/hugo'), \
                 mock.patch.object(publish_to_blog, '_run_bounded_subprocess', return_value=completed) as run, \
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'model-a'}):
             first = publish_to_blog.review_protocol_fingerprint()
             self.assertEqual(first, publish_to_blog.review_protocol_fingerprint())
             self.assertEqual(run.call_count, 1)
-        with mock.patch.object(publish_to_blog, '_sha256_file', return_value='a' * 64), \
+        with mock.patch.object(publish_to_blog, 'blog_runtime_fingerprint', return_value='e' * 64), \
+                mock.patch.object(publish_to_blog, '_sha256_file', return_value='a' * 64), \
                 mock.patch.object(publish_to_blog.shutil, 'which', return_value='/missing/hugo'), \
                 mock.patch.object(publish_to_blog, '_run_bounded_subprocess', return_value=completed), \
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'model-b'}):
             second = publish_to_blog.review_protocol_fingerprint()
         self.assertNotEqual(first, second)
         publish_to_blog._REVIEW_PROTOCOL_CACHE.clear()
-        with mock.patch.object(publish_to_blog, '_sha256_file', return_value='a' * 64), \
+        with mock.patch.object(publish_to_blog, 'blog_runtime_fingerprint', return_value='e' * 64), \
+                mock.patch.object(publish_to_blog, '_sha256_file', return_value='a' * 64), \
                 mock.patch.object(publish_to_blog.shutil, 'which', return_value='/missing/hugo'), \
                 mock.patch.object(publish_to_blog, '_run_bounded_subprocess', return_value=completed), \
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'model-a', 'PD_BLOG_REVIEW_MAX_TOKENS': '8000'}):
@@ -5071,6 +5074,8 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         with mock.patch.object(
                 publish_to_blog, '_sha256_file', side_effect=dependency_digest,
         ), mock.patch.object(
+                publish_to_blog, 'blog_runtime_fingerprint', return_value='e' * 64,
+        ), mock.patch.object(
                 publish_to_blog.shutil, 'which', return_value='/missing/hugo',
         ), mock.patch.object(
                 publish_to_blog, '_run_bounded_subprocess', return_value=completed,
@@ -5093,6 +5098,8 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         with mock.patch.object(
                 publish_to_blog, '_sha256_file', return_value='a' * 64,
         ) as digest, mock.patch.object(
+                publish_to_blog, 'blog_runtime_fingerprint', return_value='e' * 64,
+        ), mock.patch.object(
                 publish_to_blog.shutil, 'which', return_value='/missing/hugo',
         ), mock.patch.object(
                 publish_to_blog, '_run_bounded_subprocess', return_value=completed,
