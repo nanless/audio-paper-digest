@@ -9,6 +9,13 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Import-time configuration guards intentionally require the production
+    # variable names. CI uses non-routable placeholders; unit tests mock every
+    # request and must never depend on repository or organization secrets.
+    env:
+      PAPER_ANALYZER_ENDPOINT: https://example.invalid/v1
+      PAPER_ANALYZER_API_KEY: ci-placeholder-not-a-secret
+      PAPER_ANALYZER_MODEL: ci-test-model
     strategy:
       matrix:
         node-version: [20.x, 22.x]
@@ -34,6 +41,14 @@ jobs:
         run: |
           python3 -m pip install --disable-pip-version-check -r requirements.txt
           bash scripts/python-runtime.sh -m pip check
+
+      - name: Create isolated CI project environment
+        run: |
+          umask 077
+          printf '%s\n' \
+            "PAPER_ANALYZER_ENDPOINT=$PAPER_ANALYZER_ENDPOINT" \
+            "PAPER_ANALYZER_API_KEY=$PAPER_ANALYZER_API_KEY" \
+            "PAPER_ANALYZER_MODEL=$PAPER_ANALYZER_MODEL" > .env
 
       - name: Run tests
         run: npm test
