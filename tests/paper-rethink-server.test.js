@@ -18,6 +18,9 @@ const {
     buildZoteroCitationPlan,
     buildZoteroBibtex,
     importCitationIntoZotero,
+    probeZoteroConnector,
+    localConfigurationStatus,
+    buildZoteroReopenUrl,
     normalizeArxivPdfRedirect,
     downloadArxivPdf,
     buildPrompt,
@@ -135,6 +138,16 @@ function httpRequest(server, {
 }
 
 describe('paper rethink endpoint policy', () => {
+    it('uses the shared Muse family proxy policy for current and future model versions', () => {
+        for (const model of ['muse-spark-1.2-contributor', 'muse-spark-1.3-contributor', 'MUSE-SPARK-future']) {
+            const status = localConfigurationStatus({ ...TEST_ENV, PAPER_ANALYZER_MODEL: model });
+            assert.strictEqual(status.modelNeedsProxy, true, model);
+            assert.strictEqual(status.proxyConfigured, false);
+        }
+        assert.strictEqual(localConfigurationStatus(TEST_ENV).modelNeedsProxy, false);
+        assert.strictEqual(localConfigurationStatus({ ...TEST_ENV, HTTPS_PROXY: 'http://127.0.0.1:7897' }).proxyConfigured, true);
+    });
+
     it('canonicalizes an operator-approved HTTPS base endpoint', () => {
         assert.strictEqual(
             normalizeCanonicalEndpoint('https://API.Example.com:443/v1/'),
@@ -301,8 +314,10 @@ describe('paper rethink UI prefill policy', () => {
                 error => error.code === 'UI_PREFILL_INVALID'
             );
         }
-        const oversizedUrl = new URL('http://127.0.0.1:43128/ui');
-        oversizedUrl.searchParams.set('selectedText', '中'.repeat(1000));
+        const chineseUrl = new URL('http://127.0.0.1:43128/ui');
+        chineseUrl.searchParams.set('selectedText', '中'.repeat(2000));
+        assert.strictEqual(parseUiPrefill(chineseUrl, prefillOptions).selectedText.length, 2000);
+        const oversizedUrl = new URL('http://127.0.0.1:43128/ui?title=' + 'a'.repeat(32768));
         assert.throws(
             () => parseUiPrefill(oversizedUrl, prefillOptions),
             error => error.code === 'UI_PREFILL_INVALID'
@@ -326,9 +341,76 @@ describe('paper rethink UI prefill policy', () => {
         assert.match(loaded.sourceContext, /abstractTruncated/);
         assert.ok(!Object.hasOwn(loaded, 'selectedText'));
     });
+
+    it('uses an explicitly passed blog excerpt only as an unverified fallback, never as citation metadata', async () => {
+        const url = new URL('http://127.0.0.1:43128/ui');
+        url.search = new URLSearchParams({ title: 'Legacy Paper', arxivId: '2609.03620v2', pageExcerpt: '摘录私有标记\r\n方法说明。' }).toString();
+        const loaded = await loadUiPrefill(url, prefillOptions);
+        assert.strictEqual(loaded.sourceContext, '[博客导读摘录，非论文原文，未经来源绑定验证]\n摘录私有标记\n方法说明。');
+        assert.strictEqual(loaded.excerptMode, true);
+        assert.strictEqual(loaded.selectionMode, false);
+        assert.strictEqual(loaded.citationMetadata, undefined);
+        assert.strictEqual(loaded.pageExcerpt, undefined);
+        assert.match(loaded.defaultQuestion, /不是论文原文/);
+        assert.ok(!JSON.stringify(buildZoteroCitationPlan(loaded)).includes('摘录私有标记'));
+        assert.ok(!buildZoteroReopenUrl(loaded).includes('pageExcerpt'));
+        url.searchParams.set('contextUrl', '/audio-paper-digest-blog/data/papers/2026-09-05/2609-03620/rethink-context.json');
+        const failedContext = await loadUiPrefill(url, { ...prefillOptions, contextLoader: async () => { throw new Error('network-secret'); } });
+        assert.strictEqual(failedContext.excerptMode, true);
+        assert.match(failedContext.sourceContext, /摘录私有标记/);
+        assert.ok(!JSON.stringify(failedContext).includes('network-secret'));
+    });
+
+    it('prefers a valid source-bound sidecar and a deliberate selection over any page excerpt', async () => {
+        const url = new URL('http://127.0.0.1:43128/ui');
+        url.search = new URLSearchParams({
+            arxivId: '2609.03620v2', pageExcerpt: 'UNVERIFIED_EXCERPT_CANARY',
+            contextUrl: '/audio-paper-digest-blog/data/papers/2026-09-05/2609-03620/rethink-context.json'
+        }).toString();
+        const options = { ...prefillOptions, contextLoader: async () => contextSidecar() };
+        const bound = await loadUiPrefill(url, options);
+        assert.strictEqual(bound.excerptMode, false);
+        assert.match(bound.sourceContext, /Authoritative abstract text/);
+        assert.ok(!JSON.stringify(bound).includes('UNVERIFIED_EXCERPT_CANARY'));
+        url.searchParams.set('selectedText', '用户选段');
+        url.searchParams.delete('contextUrl');
+        const selected = await loadUiPrefill(url, prefillOptions);
+        assert.strictEqual(selected.excerptMode, false);
+        assert.strictEqual(selected.selectionMode, true);
+        assert.match(selected.sourceContext, /用户选段/);
+        assert.ok(!JSON.stringify(selected).includes('UNVERIFIED_EXCERPT_CANARY'));
+    });
+
+    it('bounds and normalizes plain page excerpts without accepting controls or duplicate parameters', () => {
+        const url = new URL('http://127.0.0.1:43128/ui');
+        url.searchParams.set('pageExcerpt', '中'.repeat(2000));
+        assert.strictEqual(parseUiPrefill(url, prefillOptions).pageExcerpt.length, 2000);
+        for (const excerpt of ['中'.repeat(2001), 'safe\u0001unsafe', 'safe\u0085unsafe']) {
+            url.searchParams.set('pageExcerpt', excerpt);
+            assert.throws(() => parseUiPrefill(url, prefillOptions), error => error.code === 'UI_PREFILL_INVALID');
+        }
+        url.search = 'pageExcerpt=one&pageExcerpt=two';
+        assert.throws(() => parseUiPrefill(url, prefillOptions), error => error.code === 'UI_PREFILL_INVALID');
+    });
 });
 
 describe('Zotero citation planning', () => {
+    it('probes only the fixed read-only Connector ping route', async t => {
+        let requests = 0;
+        const mock = http.createServer((req, res) => {
+            requests += 1;
+            assert.strictEqual(req.method, 'GET');
+            assert.strictEqual(req.url, '/connector/ping');
+            assert.strictEqual(req.headers['zotero-allowed-request'], 'true');
+            res.writeHead(200);
+            res.end('Zotero is running');
+        });
+        await new Promise(resolve => mock.listen(0, DEFAULT_HOST, resolve));
+        t.after(() => new Promise(resolve => mock.close(resolve)));
+        assert.deepStrictEqual(await probeZoteroConnector({ port: mock.address().port }), { available: true });
+        assert.strictEqual(requests, 1);
+    });
+
     it('uses verified sidecar title/authors and produces escaped versioned BibTeX', () => {
         const url = new URL('http://127.0.0.1:43128/ui');
         url.searchParams.set('title', 'Untrusted fallback title');
@@ -592,6 +674,90 @@ describe('paper rethink prompt and protocols', () => {
 });
 
 describe('paper rethink HTTP boundary', () => {
+    it('keeps PDF and the confirmation UI usable without model credentials', async t => {
+        let downloads = 0;
+        const server = await listenForTest(t, {
+            env: {}, allowedEndpoints: [],
+            pdfDownloadFn: async arxivId => {
+                downloads += 1;
+                return { buffer: Buffer.from('%PDF-test'), identity: { resolvedId: arxivId } };
+            }
+        });
+        if (!server) return;
+        const page = await httpRequest(server, { path: '/ui?action=zotero&title=Test&arxivId=2609.03620' });
+        assert.strictEqual(page.statusCode, 200);
+        assert.match(page.text, /"modelConfigured":false/);
+        assert.match(page.text, /"zoteroTicket":"[A-Za-z0-9_-]+"/);
+        const pdf = await httpRequest(server, { path: '/v1/paper/pdf?arxivId=2609.03620' });
+        assert.strictEqual(pdf.statusCode, 200);
+        assert.strictEqual(downloads, 1);
+        await assert.rejects(() => performRethink(basePayload(), { env: {} }),
+            error => error.code === 'CONFIG_ERROR');
+    });
+
+    it('checks local dependencies only with a local session and never calls a model or imports', async t => {
+        let probes = 0;
+        const server = await listenForTest(t, {
+            zoteroProbeFn: async () => { probes += 1; return { available: true, privateData: 'secret' }; },
+            requestFn: async () => assert.fail('status must not call a model'),
+            zoteroImportFn: async () => assert.fail('status must not write Zotero')
+        });
+        if (!server) return;
+        for (const headers of [{}, { Origin: BLOG_ORIGIN, [SESSION_HEADER]: 'test-session-token-32-bytes-long' }]) {
+            assert.strictEqual((await httpRequest(server, { path: '/v1/local/status', headers })).statusCode, 403);
+        }
+        assert.strictEqual(probes, 0);
+        const status = await httpRequest(server, {
+            path: '/v1/local/status', headers: { [SESSION_HEADER]: 'test-session-token-32-bytes-long' }
+        });
+        assert.strictEqual(status.statusCode, 200);
+        assert.deepStrictEqual(JSON.parse(status.text).zotero, { available: true });
+        assert.strictEqual(probes, 1);
+        assert.ok(!/env-provider-secret|api\.example|privateData/.test(status.text));
+    });
+
+    it('accepts 2000 Chinese selected characters through the real HTTP parser and keeps recovery identity', async t => {
+        const server = await listenForTest(t);
+        if (!server) return;
+        const query = new URLSearchParams({ action: 'zotero', title: '论文', arxivId: '2609.03620', selectedText: '中'.repeat(2000) });
+        const page = await httpRequest(server, { path: '/ui?' + query.toString() });
+        assert.strictEqual(page.statusCode, 200);
+        const script = page.text.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)?.[1];
+        const elements = new Map();
+        const focused = [];
+        require('node:vm').runInNewContext(script, {
+            document: { getElementById: id => {
+                if (!elements.has(id)) elements.set(id, { addEventListener() {}, focus() { focused.push(id); } });
+                return elements.get(id);
+            } },
+            window: { location: { search: '?selectedText=private' }, history: { replaceState(_a, _b, path) { assert.strictEqual(path, '/ui'); } }, addEventListener() {} }
+        });
+        assert.match(elements.get('source').value, /中{2000}/);
+        assert.ok(elements.get('question').value.length > 0);
+        assert.deepStrictEqual(focused, ['zoteroTitle']);
+        const reopen = new URL(elements.get('zoteroRetry').href, TEST_ORIGIN);
+        assert.strictEqual(reopen.searchParams.get('arxivId'), '2609.03620');
+        assert.strictEqual(reopen.searchParams.get('action'), 'zotero');
+        assert.ok(!reopen.searchParams.has('selectedText'));
+        assert.ok(!/token|key/i.test(reopen.search));
+        assert.strictEqual((await httpRequest(server, { path: '/ui?action=arbitrary' })).statusCode, 400);
+    });
+
+    it('gives browser PDF failures a safe official fallback while API clients retain JSON', async t => {
+        const server = await listenForTest(t, {
+            pdfDownloadFn: async () => { throw new PaperRethinkError('PDF_UPSTREAM_UNAVAILABLE', '暂时无法读取 arXiv PDF', 502); }
+        });
+        if (!server) return;
+        const path = '/v1/paper/pdf?arxivId=2609.03620v2';
+        const page = await httpRequest(server, { path, headers: { Accept: 'text/html' } });
+        assert.strictEqual(page.statusCode, 502);
+        assert.match(page.headers['content-type'], /text\/html/);
+        assert.match(page.text, /https:\/\/arxiv.org\/pdf\/2609.03620v2.pdf/);
+        assert.ok(!page.text.includes('test-session-token'));
+        const api = await httpRequest(server, { path });
+        assert.strictEqual(JSON.parse(api.text).error.code, 'PDF_UPSTREAM_UNAVAILABLE');
+    });
+
     it('serves a user-clicked PDF as a real attachment and rejects ambiguous parameters', async t => {
         let downloads = 0;
         const server = await listenForTest(t, {

@@ -19,6 +19,7 @@ const {
     buildHeaders,
     buildRequestBody,
     detectApiType,
+    requiresLlmProxy,
     detectHttpConnectProxyUrl,
     createProxyDispatcher,
     getResponsesOutputTruncationError,
@@ -36,13 +37,14 @@ const MAX_BODY_BYTES = 256 * 1024;
 const MAX_CONTEXT_CHARS = 120000;
 const MAX_QUESTION_CHARS = 8000;
 const MAX_SELECTED_TEXT_CHARS = 2000;
+const MAX_PAGE_EXCERPT_CHARS = 2000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_OUTPUT_CHARS = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 120000;
 const MIN_OUTPUT_TOKENS = 128;
 const MAX_OUTPUT_TOKENS = 8000;
 const DEFAULT_OUTPUT_TOKENS = 3000;
-const MAX_UI_QUERY_CHARS = 8192;
+const MAX_UI_QUERY_CHARS = 32768;
 const CONTEXT_LOAD_TIMEOUT_MS = 10000;
 const ZOTERO_HOST = '127.0.0.1';
 const ZOTERO_PORT = 23119;
@@ -253,13 +255,17 @@ function parseUiPrefill(url, { blogOrigin, blogBasePath }) {
         fail('UI_PREFILL_INVALID', 'UI query 超过长度限制', 414);
     }
     const allowed = new Set([
-        'title', 'arxivId', 'sourceUrl', 'contextUrl', 'selectedText'
+        'title', 'arxivId', 'sourceUrl', 'contextUrl', 'selectedText', 'pageExcerpt', 'action'
     ]);
     for (const key of new Set(url.searchParams.keys())) {
         if (!allowed.has(key) || url.searchParams.getAll(key).length !== 1) {
             // Never echo an unknown name/value: it may itself contain a key.
             fail('UI_PREFILL_INVALID', 'UI query 含未知或重复参数');
         }
+    }
+    const action = url.searchParams.get('action') || 'rethink';
+    if (!['rethink', 'zotero'].includes(action)) {
+        fail('UI_PREFILL_INVALID', 'UI action 无效');
     }
     const title = url.searchParams.has('title')
         ? normalizedString(url.searchParams.get('title'), 'title', {
@@ -279,6 +285,14 @@ function parseUiPrefill(url, { blogOrigin, blogBasePath }) {
             'selectedText 超过 ' + MAX_SELECTED_TEXT_CHARS + ' 字符限制',
             414
         );
+    }
+    const pageExcerpt = (url.searchParams.get('pageExcerpt') || '')
+        .replace(/\r\n?/g, '\n').normalize('NFC').trim();
+    if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(pageExcerpt)) {
+        fail('UI_PREFILL_INVALID', 'pageExcerpt 包含非法控制字符');
+    }
+    if (pageExcerpt.length > MAX_PAGE_EXCERPT_CHARS) {
+        fail('UI_PREFILL_INVALID', 'pageExcerpt 超过 2000 字符限制', 414);
     }
     const arxivValue = url.searchParams.get('arxivId') || '';
     let identity = arxivValue.trim() ? parseArxivId(arxivValue) : null;
@@ -300,13 +314,15 @@ function parseUiPrefill(url, { blogOrigin, blogBasePath }) {
         });
     }
     return {
+        action,
         title,
         arxivId: identity?.resolvedId || '',
         identity,
         sourceUrl,
         contextUrl: context?.url || '',
         contextPathIdentity: context,
-        selectedText
+        selectedText,
+        pageExcerpt
     };
 }
 
@@ -477,8 +493,10 @@ function boundedJsonContext(payload, maximum) {
 
 function finalizeUiPrefill(prefill, contextPayload = null, contextLoadError = '') {
     const selected = prefill.selectedText || '';
+    const excerptMode = Boolean(!selected && !contextPayload && prefill.pageExcerpt);
     const output = { ...prefill };
     delete output.selectedText;
+    delete output.pageExcerpt;
     let sourceContext = '';
     if (selected) {
         const prefix = '[用户明确选中的论文段落]\n' + selected;
@@ -493,15 +511,20 @@ function finalizeUiPrefill(prefill, contextPayload = null, contextLoadError = ''
         }
     } else if (contextPayload) {
         sourceContext = boundedJsonContext(contextPayload, MAX_CONTEXT_CHARS);
+    } else if (excerptMode) {
+        sourceContext = '[博客导读摘录，非论文原文，未经来源绑定验证]\n' + prefill.pageExcerpt;
     }
     return {
         ...output,
         sourceContext,
         contextLoadError,
         selectionMode: Boolean(selected),
+        excerptMode,
         defaultQuestion: selected
             ? '请用清晰、严谨的语言重新解释我选中的段落，并说明它在整篇论文中的作用、隐含前提和可能误读。'
-            : ''
+            : excerptMode
+            ? '请根据以下博客导读摘录解释论文的问题、方法与局限。摘录不是论文原文，未经来源绑定验证；请区分转述与可以确认的事实，并指出需要补充的原文证据。'
+            : '请解释这篇论文解决的问题、核心方法、证据与局限；如果当前上下文不足，请明确指出需要补充的原文。'
     };
 }
 
@@ -762,7 +785,7 @@ function splitCsv(value) {
     return String(value || '').split(',').map(item => item.trim()).filter(Boolean);
 }
 
-function resolveAllowedEndpoints(env, explicit) {
+function resolveAllowedEndpoints(env, explicit, { allowEmpty = false } = {}) {
     const raw = Array.isArray(explicit)
         ? explicit
         : [env.PAPER_ANALYZER_ENDPOINT, ...splitCsv(env.PD_PAPER_RETHINK_ALLOWED_ENDPOINTS)];
@@ -770,7 +793,7 @@ function resolveAllowedEndpoints(env, explicit) {
     for (const value of raw) {
         if (String(value || '').trim()) endpoints.add(normalizeCanonicalEndpoint(value));
     }
-    if (endpoints.size === 0) {
+    if (endpoints.size === 0 && !allowEmpty) {
         fail(
             'CONFIG_ERROR',
             '未配置可用 endpoint；请设置 PAPER_ANALYZER_ENDPOINT 或 PD_PAPER_RETHINK_ALLOWED_ENDPOINTS',
@@ -778,6 +801,49 @@ function resolveAllowedEndpoints(env, explicit) {
         );
     }
     return endpoints;
+}
+
+function probeZoteroConnector(options = {}) {
+    return new Promise(resolve => {
+        const requestFn = options.requestFn || http.request;
+        const req = requestFn({
+            host: ZOTERO_HOST, port: options.port || ZOTERO_PORT,
+            method: 'GET', path: '/connector/ping',
+            headers: { 'Zotero-Allowed-Request': 'true' },
+            timeout: options.timeoutMs || 3000
+        }, res => {
+            res.resume();
+            resolve({ available: res.statusCode === 200 });
+        });
+        req.once('timeout', () => { req.destroy(); resolve({ available: false }); });
+        req.once('error', () => resolve({ available: false }));
+        req.end();
+    });
+}
+
+function localConfigurationStatus(env) {
+    const endpoint = String(env.PAPER_ANALYZER_ENDPOINT || '').trim();
+    const model = String(env.PAPER_ANALYZER_MODEL || '').trim();
+    const key = Boolean(String(env.PAPER_ANALYZER_API_KEY || '').trim());
+    const protocol = detectApiType(endpoint, model);
+    const proxy = ['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy'].some(name => {
+        try { return ['http:', 'https:'].includes(new URL(env[name]).protocol); }
+        catch (_) { return false; }
+    });
+    return {
+        modelConfigured: Boolean(endpoint && model && key),
+        protocolSupported: ['openai', 'openai_responses'].includes(protocol),
+        proxyConfigured: proxy,
+        modelNeedsProxy: requiresLlmProxy(endpoint, model)
+    };
+}
+
+function buildZoteroReopenUrl(prefill = {}) {
+    const params = new URLSearchParams({ action: 'zotero' });
+    for (const key of ['title', 'arxivId', 'sourceUrl', 'contextUrl']) {
+        if (prefill[key]) params.set(key, prefill[key]);
+    }
+    return `/ui?${params.toString()}`;
 }
 
 function safeJsonForHtml(value) {
@@ -789,9 +855,28 @@ function safeJsonForHtml(value) {
         .replace(/\u2029/g, '\\u2029');
 }
 
+function writePdfFailurePage(res, error, arxivId) {
+    const escape = value => String(value).replace(/[&<>"']/g,
+        character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+    let sourceLink = '';
+    try {
+        const identity = parseArxivId(arxivId);
+        sourceLink = `<p><a href="https://arxiv.org/pdf/${escape(identity.resolvedId)}.pdf" rel="noreferrer">打开 arXiv 官方 PDF，再使用浏览器保存</a></p>`;
+    } catch (_) { /* Invalid IDs never produce an external link. */ }
+    const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PDF 下载暂未完成</title><body><h1>PDF 下载暂未完成</h1><p>${escape(error.message)}</p>${sourceLink}<p>本机下载需要项目 HTTP CONNECT 代理。检查代理后可重新点击下载；也可使用官方 PDF 链接。</p><p><a href="/ui">检查本机助手</a></p></body></html>`;
+    res.writeHead(error.statusCode || 502, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+        'Referrer-Policy': 'no-referrer',
+        'X-Content-Type-Options': 'nosniff'
+    });
+    res.end(html);
+}
+
 function buildUiHtml({
     sessionToken, defaultEndpoint, defaultModel, defaultProtocol, nonce, prefill,
-    zoteroTicket = '', zoteroPlan = null
+    zoteroTicket = '', zoteroPlan = null, configuration = {}
 }) {
     const boot = safeJsonForHtml({
         sessionToken,
@@ -801,6 +886,8 @@ function buildUiHtml({
         prefill,
         zoteroTicket,
         zoteroPlan,
+        zoteroReopenUrl: buildZoteroReopenUrl(prefill),
+        configuration,
         limits: {
             contextChars: MAX_CONTEXT_CHARS,
             questionChars: MAX_QUESTION_CHARS,
@@ -818,17 +905,20 @@ function buildUiHtml({
 </style>
 </head>
 <body>
-<h1>论文 AI 重理解（本机）</h1>
-<p class="note">请求由本机 Node companion 发往模型服务，绕开浏览器对 OpenCode Go 的 CORS 预检限制。API key 只保留在本次请求内存中；不会写入 storage、日志、URL 或文件。论文原文和问题会发送给所选模型服务，请先确认内容与目标 endpoint。</p>
+<h1>论文研究助手（本机）</h1>
+<p class="note">可以重新理解论文，也可以将引用保存到 Zotero。AI 仅在你点击发送后运行，问题与上下文会发给所选模型服务。临时 API key 不会保存。</p>
+<section class="note" aria-label="本机连接状态"><strong>本机助手已连接</strong><p id="configurationState"></p><button id="checkLocal" type="button">检查模型配置与 Zotero 连接</button><p id="localStatus" role="status" aria-live="polite"></p></section>
 <section id="paperPrefill" class="paper-prefill" hidden aria-label="论文预填信息"><strong id="paperTitle"></strong><div id="paperId"></div><a id="paperSource" target="_blank" rel="noopener noreferrer" hidden>查看原始来源</a><div id="contextState" class="muted"></div></section>
-<section class="zotero" aria-labelledby="zoteroTitle">
-<h2 id="zoteroTitle">导入 Zotero</h2>
+<section id="zoteroSection" class="zotero" aria-labelledby="zoteroTitle">
+<h2 id="zoteroTitle" tabindex="-1">导入 Zotero</h2>
 <p id="zoteroPreview"></p>
 <p class="muted">写入目标：Zotero Desktop 当前选中的库或分类。点击确认会修改你的本机 Zotero library；页面加载不会连接 Zotero。</p>
 <button id="zoteroImport" type="button">确认导入这条记录</button>
 <p id="zoteroStatus" role="status" aria-live="polite"></p>
+<a id="zoteroRetry" hidden>核对 Zotero 中尚未保存后，重新打开这篇论文的确认页</a>
 </section>
 <form id="form">
+<h2 id="rethinkTitle" tabindex="-1">AI 重理解</h2>
 <div class="row">
 <label>协议<select id="protocol" required><option value="openai_responses">OpenAI Responses</option><option value="openai_chat">OpenAI Chat Completions</option></select></label>
 <label>模型<input id="model" maxlength="128" required autocomplete="off"></label>
@@ -836,7 +926,7 @@ function buildUiHtml({
 <label>API 基础 endpoint<input id="endpoint" type="url" maxlength="2048" required spellcheck="false" autocomplete="off"></label>
 <label>临时 API key（留空则使用项目 .env）<input id="apiKey" type="password" maxlength="16384" autocomplete="new-password" spellcheck="false"></label>
 <label>你的问题<textarea id="question" maxlength="${MAX_QUESTION_CHARS}" required></textarea></label>
-<label>论文原文或可信上下文<textarea id="source" maxlength="${MAX_CONTEXT_CHARS}" required></textarea></label>
+<label>论文原文或待核对上下文<textarea id="source" maxlength="${MAX_CONTEXT_CHARS}" required></textarea></label>
 <label>最大输出 tokens<input id="maxTokens" type="number" min="${MIN_OUTPUT_TOKENS}" max="${MAX_OUTPUT_TOKENS}" value="${DEFAULT_OUTPUT_TOKENS}" required></label>
 <button id="submit" type="submit">发送到所选模型</button>
 </form>
@@ -850,13 +940,19 @@ byId('endpoint').value=boot.defaultEndpoint;
 byId('model').value=boot.defaultModel;
 byId('protocol').value=boot.defaultProtocol;
 const prefill=boot.prefill||{};
-if(prefill.title||prefill.arxivId||prefill.sourceUrl||prefill.contextUrl||prefill.selectionMode){byId('paperPrefill').hidden=false;byId('paperTitle').textContent=prefill.title||'论文上下文';byId('paperId').textContent=prefill.arxivId?('arXiv: '+prefill.arxivId):'';if(prefill.sourceUrl){byId('paperSource').href=prefill.sourceUrl;byId('paperSource').hidden=false;}byId('contextState').textContent=prefill.contextLoadError||(prefill.selectionMode?(prefill.contextUrl?'已载入选中段落和本站摘要上下文；发送前请检查。':'已载入你明确选中的段落；发送前请检查。'):(prefill.contextUrl?'已从本站受控 sidecar 载入上下文；发送前请检查。':'未自动载入原文，请手动粘贴。'));}
+const configuration=boot.configuration||{};
+byId('configurationState').textContent=!configuration.modelConfigured?'项目默认模型尚未完整配置。AI 可在下方填写已批准的服务与临时 key；Zotero 和 PDF 可独立使用。':!configuration.protocolSupported?'项目默认模型协议暂不受本机助手支持，请选择已批准的 OpenAI Responses 或 Chat 服务。':configuration.modelNeedsProxy&&!configuration.proxyConfigured?'默认模型需要 HTTP CONNECT 代理，请在项目 .env 配置 HTTPS_PROXY 后重启助手。':'默认模型配置已载入。检查连接不会调用模型或产生模型费用。';
+if(prefill.title||prefill.arxivId||prefill.sourceUrl||prefill.contextUrl||prefill.selectionMode||prefill.excerptMode){byId('paperPrefill').hidden=false;byId('paperTitle').textContent=prefill.title||'论文上下文';byId('paperId').textContent=prefill.arxivId?('arXiv: '+prefill.arxivId):'';if(prefill.sourceUrl){byId('paperSource').href=prefill.sourceUrl;byId('paperSource').hidden=false;}byId('contextState').textContent=prefill.excerptMode?'已预填博客导读摘录，非论文原文，未经来源绑定验证。发送前请核对或补充原文。':prefill.contextLoadError||(prefill.selectionMode?(prefill.contextUrl?'已载入选中段落和本站摘要上下文；发送前请检查。':'已载入你明确选中的段落；发送前请检查。'):(prefill.contextUrl?'已从本站受控 sidecar 载入上下文；发送前请检查。':'未自动载入原文，请手动粘贴。'));}
 byId('source').value=prefill.sourceContext||'';
 byId('question').value=prefill.defaultQuestion||'';
 if(window.location.search){window.history.replaceState(null,'','/ui');}
 const zoteroButton=byId('zoteroImport');
+byId('zoteroRetry').href=boot.zoteroReopenUrl;
+function localFailure(error){return error&&error.message==='Failed to fetch'?'本机助手连接已断开。请在项目目录运行 npm run paper:rethink，然后从博客重新打开这篇论文；当前文本可先复制保存。':String(error&&error.message||'未知错误');}
+byId('checkLocal').addEventListener('click',async()=>{const status=byId('localStatus');const button=byId('checkLocal');button.disabled=true;status.textContent='正在检查本机配置与 Zotero…';try{const response=await fetch('/v1/local/status',{credentials:'omit',cache:'no-store',headers:{'${SESSION_HEADER}':boot.sessionToken}});const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error?.message||('HTTP '+response.status));status.textContent=(data.configuration.modelConfigured?'模型必需配置已齐全；实际可用性在发送后确认。':'模型配置未齐全，请检查 .env 中的 PAPER_ANALYZER_API_KEY、MODEL、ENDPOINT。')+' '+(data.zotero.available?'Zotero Desktop Connector 已连接；请选择目标库或分类后确认导入。':'Zotero Desktop 未连接；请启动 Zotero Desktop 后重新检查。浏览器扩展不是此导入方式的前提。');}catch(error){status.textContent=localFailure(error);}finally{button.disabled=false;}});
 if(boot.zoteroPlan){const authors=boot.zoteroPlan.authors.length?boot.zoteroPlan.authors.join('；'):'作者未从可信来源取得';const source=boot.zoteroPlan.source==='researcher-sidecars-v1'?'来源：已验证的本站 publication sidecar':'来源：历史博客页预填（作者不可得）';byId('zoteroPreview').textContent=boot.zoteroPlan.title+' · arXiv '+boot.zoteroPlan.arxivId+' · '+authors+' · '+source;}else{byId('zoteroPreview').textContent='当前页面没有足够的标题与 arXiv ID，无法生成导入记录。';zoteroButton.disabled=true;}
-zoteroButton.addEventListener('click',async()=>{const status=byId('zoteroStatus');if(!boot.zoteroTicket){status.textContent='导入凭证不可用，请刷新本机页面。';return;}zoteroButton.disabled=true;status.textContent='正在写入 Zotero…';try{const response=await fetch('/v1/zotero/import',{method:'POST',credentials:'omit',cache:'no-store',redirect:'error',referrerPolicy:'no-referrer',headers:{'Content-Type':'application/json','${SESSION_HEADER}':boot.sessionToken},body:JSON.stringify({ticket:boot.zoteroTicket})});const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error?.message||('HTTP '+response.status));status.textContent='已导入 Zotero。为防重复，本凭证已失效。';boot.zoteroTicket='';}catch(error){status.textContent='导入失败：'+String(error&&error.message||'未知错误')+'。如需重试，请刷新本机页面。';}});
+zoteroButton.addEventListener('click',async()=>{const status=byId('zoteroStatus');if(!boot.zoteroTicket){status.textContent='导入凭证不可用，请重新打开这篇论文的确认页。';byId('zoteroRetry').hidden=false;return;}zoteroButton.disabled=true;status.textContent='正在写入 Zotero…';try{const response=await fetch('/v1/zotero/import',{method:'POST',credentials:'omit',cache:'no-store',redirect:'error',referrerPolicy:'no-referrer',headers:{'Content-Type':'application/json','${SESSION_HEADER}':boot.sessionToken},body:JSON.stringify({ticket:boot.zoteroTicket})});const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error?.message||('HTTP '+response.status));status.textContent='已导入 Zotero。为防重复，本凭证已失效。';boot.zoteroTicket='';}catch(error){status.textContent='导入未确认：'+localFailure(error)+'。请先检查 Zotero 中是否已保存，避免重复导入。';byId('zoteroRetry').hidden=false;}});
+if(prefill.action==='zotero'){byId('zoteroTitle').focus();}else if(prefill.arxivId||prefill.selectionMode){byId('rethinkTitle').focus();}
 byId('form').addEventListener('submit',async event=>{
   event.preventDefault();
   const submit=byId('submit'); const status=byId('status'); const result=byId('result');
@@ -869,7 +965,7 @@ byId('form').addEventListener('submit',async event=>{
     encoded=''; const response=await pending; const data=await response.json();
     if(!response.ok||!data.ok) throw new Error(data.error?.message||('HTTP '+response.status));
     result.value=data.text; status.textContent='完成';
-  } catch(error) { status.textContent='失败：'+String(error&&error.message||'未知错误'); }
+  } catch(error) { status.textContent='失败：'+localFailure(error); }
   finally { encoded=''; submit.disabled=false; }
 });
 window.addEventListener('pagehide',()=>{byId('apiKey').value='';});
@@ -957,7 +1053,7 @@ function extractCompletedText(apiType, body, maxOutputTokens) {
 function publicUpstreamError(error) {
     if (error instanceof PaperRethinkError) return error;
     if (error?.code === 'REQUEST_DEADLINE_EXCEEDED' || error?.code === 'REQUEST_SOCKET_TIMEOUT') {
-        return new PaperRethinkError('UPSTREAM_TIMEOUT', '模型请求超时', 504);
+        return new PaperRethinkError('UPSTREAM_TIMEOUT', '模型请求超时；请检查项目代理与网络，或缩短上下文后重新发送', 504);
     }
     if (error?.code === 'RESPONSE_TOO_LARGE') {
         return new PaperRethinkError('UPSTREAM_RESPONSE_TOO_LARGE', '模型响应超过大小限制', 502);
@@ -1145,10 +1241,11 @@ function createPaperRethinkServer(options = {}) {
     let pdfWindowStartedAt = Date.now();
     let pdfRequestsInWindow = 0;
     let activePdfDownloads = 0;
-    // Fail at startup, before a browser receives the UI.
-    resolveAllowedEndpoints(env, options.allowedEndpoints);
+    // Invalid configured endpoints still fail closed. An absent model setup
+    // must not disable the independent PDF and Zotero workflows.
+    resolveAllowedEndpoints(env, options.allowedEndpoints, { allowEmpty: true });
 
-    const server = http.createServer(async (req, res) => {
+    const server = http.createServer({ maxHeaderSize: 48 * 1024 }, async (req, res) => {
         try {
             const url = new URL(req.url || '/', `http://${DEFAULT_HOST}:${port}`);
             const queryAllowed = url.pathname === '/ui' || url.pathname === '/v1/paper/pdf';
@@ -1187,6 +1284,24 @@ function createPaperRethinkServer(options = {}) {
                 writeJson(res, 200, { ok: true, service: 'paper-rethink-companion', schemaVersion: 1 });
                 return;
             }
+            if (req.method === 'GET' && url.pathname === '/v1/local/status') {
+                if (req.headers.origin && !localUiOrigins.has(req.headers.origin)) {
+                    fail('ORIGIN_FORBIDDEN', '连接检查只接受本机 companion UI', 403);
+                }
+                const supplied = Buffer.from(String(req.headers[SESSION_HEADER] || ''));
+                const expected = Buffer.from(sessionToken);
+                const valid = supplied.length === expected.length
+                    && crypto.timingSafeEqual(supplied, expected);
+                supplied.fill(0);
+                if (!valid) fail('SESSION_FORBIDDEN', '本机 session token 无效；请从博客重新打开这篇论文', 403);
+                const probe = options.zoteroProbeFn || probeZoteroConnector;
+                const zotero = await probe(options.zoteroOptions || {});
+                writeJson(res, 200, {
+                    ok: true, configuration: localConfigurationStatus(env),
+                    zotero: { available: zotero?.available === true }
+                });
+                return;
+            }
             if (req.method === 'GET' && url.pathname === '/ui') {
                 const prefill = await loadUiPrefill(url, {
                     blogOrigin,
@@ -1217,7 +1332,8 @@ function createPaperRethinkServer(options = {}) {
                     nonce,
                     prefill,
                     zoteroTicket,
-                    zoteroPlan
+                    zoteroPlan,
+                    configuration: localConfigurationStatus(env)
                 }), 'utf8');
                 res.writeHead(200, {
                     'Content-Type': 'text/html; charset=utf-8',
@@ -1281,7 +1397,7 @@ function createPaperRethinkServer(options = {}) {
                 const tokenValid = suppliedBytes.length === expectedBytes.length
                     && crypto.timingSafeEqual(suppliedBytes, expectedBytes);
                 suppliedBytes.fill(0);
-                if (!tokenValid) fail('SESSION_FORBIDDEN', '本机 session token 无效', 403);
+                if (!tokenValid) fail('SESSION_FORBIDDEN', '本机 session token 无效；请从博客重新打开这篇论文', 403);
                 const payload = await readJsonBody(req, options.maxBodyBytes || MAX_BODY_BYTES);
                 const result = await performRethink(payload, {
                     env,
@@ -1303,7 +1419,7 @@ function createPaperRethinkServer(options = {}) {
                 const tokenValid = suppliedBytes.length === expectedBytes.length
                     && crypto.timingSafeEqual(suppliedBytes, expectedBytes);
                 suppliedBytes.fill(0);
-                if (!tokenValid) fail('SESSION_FORBIDDEN', '本机 session token 无效', 403);
+                if (!tokenValid) fail('SESSION_FORBIDDEN', '本机 session token 无效；请重新打开这篇论文的确认页', 403);
                 const payload = await readJsonBody(req, 4096);
                 if (!isPlainObject(payload) || Object.keys(payload).length !== 1
                     || typeof payload.ticket !== 'string') {
@@ -1332,6 +1448,12 @@ function createPaperRethinkServer(options = {}) {
             const publicError = error instanceof PaperRethinkError
                 ? error : publicUpstreamError(error);
             if (!res.headersSent) {
+                const failedUrl = new URL(req.url || '/', `http://${DEFAULT_HOST}:${port}`);
+                if (req.method === 'GET' && failedUrl.pathname === '/v1/paper/pdf'
+                    && String(req.headers.accept || '').includes('text/html')) {
+                    writePdfFailurePage(res, publicError, failedUrl.searchParams.get('arxivId'));
+                    return;
+                }
                 writeJson(res, publicError.statusCode || 500, {
                     ok: false,
                     error: { code: publicError.code || 'INTERNAL_ERROR', message: publicError.message }
@@ -1362,7 +1484,10 @@ async function main() {
 if (require.main === module) {
     main().catch(error => {
         // Startup errors are configuration-only; never include credentials.
-        console.error(`paper-rethink companion 启动失败：${publicUpstreamError(error).message}`);
+        const message = error?.code === 'EADDRINUSE'
+            ? `端口 ${DEFAULT_PORT} 已被使用。若助手已启动，请直接打开 http://${DEFAULT_HOST}:${DEFAULT_PORT}/ui；否则检查占用该端口的进程。`
+            : publicUpstreamError(error).message;
+        console.error(`paper-rethink companion 启动失败：${message}`);
         process.exitCode = 1;
     });
 }
@@ -1391,6 +1516,9 @@ module.exports = {
     buildZoteroCitationPlan,
     buildZoteroBibtex,
     importCitationIntoZotero,
+    probeZoteroConnector,
+    localConfigurationStatus,
+    buildZoteroReopenUrl,
     readFetchBufferWithLimit,
     normalizeArxivPdfRedirect,
     downloadArxivPdf,

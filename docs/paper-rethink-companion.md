@@ -33,6 +33,16 @@ http://127.0.0.1:43128/ui
 换端口。博客集成只能用一个普通外链显式打开这个 URL；不得在页面加载时探测
 `/health`、自动调用 `/v1/rethink`，也不得把 session token 带回博客页面。
 
+浏览器显示“无法连接 127.0.0.1”意味着本机服务未启动；静态博客不能替用户启动 Node。
+在仓库目录运行上述命令并保持终端运行，然后从论文工具栏重新打开。官方 arXiv PDF、
+浏览器保存 PDF、静态 BibTeX/RIS 和浏览器 Zotero Connector 不需要这个服务。
+本机确认导入只需要 Zotero Desktop，不依赖浏览器扩展。
+
+没有配置 LLM endpoint/key/model 时，本机 UI、PDF 和 Zotero 仍可独立使用；AI 请求仍
+要求精确 endpoint allowlist 和有效凭据。已经填写但不安全的 endpoint 仍在启动时拒绝。
+UI 的“检查模型配置与 Zotero 连接”只在用户点击后检查配置是否齐全并读取 Connector
+ping，不调用模型、不产生模型费用、不写 Zotero，也不代表模型账号实际已验证可用。
+
 ## UI 与凭据
 
 UI 可以输入 protocol、model、endpoint、临时 API key、问题和论文原文。临时 key：
@@ -92,7 +102,7 @@ endpoint 规则：
 使用，每次重启都会变化。博客可以通过普通导航打开 `/ui`，但带博客 `Origin` 的
 脚本 fetch 会被拒绝且拿不到 UI HTML/token。
 
-`/ui` 导航可携带四个可选预填参数：
+`/ui` 导航可携带以下可选预填参数：
 
 ```text
 ?title=...
@@ -100,9 +110,14 @@ endpoint 规则：
 &sourceUrl=https%3A%2F%2Farxiv.org%2Fabs%2F2609.03620v2
 &contextUrl=%2Faudio-paper-digest-blog%2Fdata%2Fpapers%2F2026-09-05%2F2609-03620%2Frethink-context.json
 &selectedText=用户明确选择的论文段落
+&pageExcerpt=用户点击时从旧博客页取得的导读摘录
+&action=zotero
 ```
 
-- query 总长不超过 8192 字符；字段不得重复；任何未知参数都拒绝。
+- 编码后的 query 总长不超过 32768 字符；HTTP 请求行与头合计上限 48 KiB。
+  这可容纳 2000 个汉字经过 URL 编码后的长度；字段不得重复，任何未知参数都拒绝。
+- `action` 只接受 `rethink`（默认）或 `zotero`，仅控制初始聚焦区域，不会发送模型请求
+  或执行导入。
 - `key`、`apiKey`、`token` 等凭据字段属于未知参数，服务在签发 UI HTML/session
   token 前拒绝，错误不回显参数名或值。
 - `sourceUrl` 只允许与 `arxivId` 一致的官方 arXiv HTTPS abs/PDF URL。
@@ -114,13 +129,25 @@ endpoint 规则：
 - sidecar 合同和 arXiv 身份通过后才预填原文框；暂时不可用时保留手动粘贴能力，
   只显示脱敏失败提示。
 - `selectedText` 只允许用户点击论文工具栏按钮时从当前文档选择读取，规范化为 NFC
-  纯文本；最多 2000 字符，并继续受 8192 字符的编码后总 query 上限约束。控制字符、
+  纯文本；最多 2000 字符，并继续受 32768 字符的编码后总 query 上限约束。控制字符、
   超长选择和过长 URL 在导航前后分别失败关闭。
 - 有选中段落时，UI 把它标为“不可信论文证据”并置于摘要 sidecar 之前，同时预填
   “解释作用、前提和误读”的问题；没有选择时继续使用摘要 sidecar 或手动粘贴全文。
+- `pageExcerpt` 是旧页面没有 sidecar 时的可选兜底，只能由博客在用户点击时提取正文
+  导读摘录并传入。最多 2000 字符，执行与选段相同的 NFC、换行和控制字符校验；
+  仍受 32768 字符编码后 query 上限约束。后端只有在没有 `selectedText`、也没有通过
+  验证的 sidecar 时才使用，明确标注“博客导读摘录，非论文原文，未经来源绑定验证”。
+  该摘录不会成为 Zotero 作者/引用 metadata、恢复链接或任何可信来源证明；原始
+  `pageExcerpt` 字段在预填后丢弃。模型调用仍等待用户在本机核对并点击发送，不自动抓全文。
 - UI 完成预填后立即用 `history.replaceState` 从地址栏和当前 history entry 移除 query；
   选中文本不会进入 API key、Zotero ticket、日志或 storage。它只会在用户再次点击
   “发送到所选模型”后随原文框内容发给 provider。
+
+UI 会给普通论文和选段各自预填问题。上下文只有 sidecar 摘要时，问题明确要求模型指出
+证据不足，用户仍可在发送前补充原文。Zotero 导入失败后，使用页面中的“重新打开这篇
+论文的确认页”链接；它保留论文身份与受控 sidecar，丢弃选段和博客摘录，且不携带 key 或 token。
+不要直接刷新已清除 query 的 `/ui`，否则论文身份会丢失。重试前先检查库中是否已保存；
+失败请求的一次性 ticket 仍会作废，不能自动重试不确定的写入。
 
 博客只能生成普通、用户点击触发的 `target="_blank"` 导航；不得在加载、滚动或
 hover 时 fetch localhost，也不得把本机 session token 传回博客。
@@ -134,6 +161,15 @@ hover 时 fetch localhost，也不得把本机 session token 传回博客。
 不接受任意 URL、不读取 API key，也不在博客加载时调用；进程级限制为最多两个并发、
 每分钟六次。HTTPS 页面跳转到 HTTP loopback 时浏览器可能按降级规则移除 referrer，
 因此服务不把可缺失、也可由非浏览器伪造的 referrer 当作授权凭据。
+下载失败时，浏览器导航收到包含官方 PDF 链接和代理恢复说明的 HTML；普通 API 客户端
+仍收到稳定 JSON 错误。附件来源、重定向、体积与文件头校验不变。
+
+### `GET /v1/local/status`
+
+仅本机 UI 用户点击连接检查后调用，必须携带当前 session header；带非本机 Origin 的
+请求拒绝。返回模型配置是否齐全、协议是否支持、代理是否配置，以及固定
+`127.0.0.1:23119/connector/ping` 的可用状态，不返回 endpoint、model、key、库内容或
+原始网络错误。它不会自动运行 LLM 验证或导入。
 
 ### `POST /v1/rethink`
 
@@ -223,8 +259,8 @@ system prompt 把论文内容与用户问题都声明为不可信证据；内容
 新 `researcher-sidecars-v1` 页面使用经过身份、摘要 SHA 和受控 HTTPS 路径验证的
 `rethink-context.json` 标题与作者生成引用。历史页没有 sidecar 时只使用页面携带的
 标题和严格规范化 arXiv ID，预览会明确作者未知，不从正文猜作者。Connector 未启动、
-超时或拒绝导入时，UI 只显示稳定错误并要求刷新获得新 ticket，避免网络结果不确定时
-重复写入。
+超时或拒绝导入时，UI 显示稳定错误和保留论文身份的重新确认链接，避免刷新后丢失上下文，
+也避免网络结果不确定时自动重复写入。
 
 “打开 PDF”仍是指向固定 `https://arxiv.org/pdf/<严格ID>.pdf` 的显式导航，浏览器可能
 预览而不下载。论文工具栏另提供“下载 PDF（本机）”：只有用户点击后，companion 才
@@ -238,7 +274,10 @@ system prompt 把论文内容与用户问题都声明为不可信证据；内容
 
 `tests/paper-rethink-server.test.js` 覆盖 canonical endpoint、allowlist、协议终态、
 prompt injection 边界、单次调用、key canary、Origin/session、CORS/PNA、UI CSP 和请求
-大小。修改 companion 后至少运行：
+大小，并覆盖缺少模型配置时独立 PDF/Zotero 可用性、2000 汉字真实 HTTP 预填、
+只读连接检查、Zotero 恢复身份、PDF 浏览器错误页及旧页摘录的优先级、标注和引用隔离。
+模型和库写入均使用 mock。
+修改 companion 后至少运行（按项目要求在沙箱外执行）：
 
 ```bash
 node --test --test-concurrency=1 tests/paper-rethink-server.test.js
