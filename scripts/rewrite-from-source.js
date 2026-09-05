@@ -8,7 +8,8 @@ async function main(args = process.argv.slice(2)) {
     const runner = require('./lib/fresh-rewrite-run.js');
     const options = runner.parseRewriteArgs(args);
     const actions = { prepare: runner.prepareRewrite, sources: runner.collectRewriteSources,
-        analyze: runner.analyzeRewrite, status: runner.rewriteStatus, promote: runner.promoteRewrite, patch: runner.patchRewrite };
+        analyze: runner.analyzeRewrite, status: runner.rewriteStatus, promote: runner.promoteRewrite,
+        patch: runner.patchRewrite, 'signed-patch': runner.signedPatchRewrite };
     const result = await actions[options.action](options);
     console.log(JSON.stringify(result, null, 2));
     return result.exitCode || 0;

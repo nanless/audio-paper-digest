@@ -3550,12 +3550,82 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             sourceText
         }
     );
+    return finalizeApiReaderRefresh(paper, sourceDetails, generated, {
+        ...options,
+        execution: {
+            contentMode, fingerprint, attempts: generated.attempts,
+            model: DEEP_CONFIG.model, protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
+            temperature: revisionSeed ? API_READER_REPAIR_TEMPERATURE : API_READER_INITIAL_TEMPERATURE,
+            repairTemperature: API_READER_REPAIR_TEMPERATURE, maxTokens: API_READER_MAX_TOKENS,
+            maxResponseBytes: API_MAX_RESPONSE_BYTES, overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
+            promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.apiReaderArticle),
+            evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION, evidenceMaxChars: API_READER_EVIDENCE_MAX_CHARS,
+            contextMaxChars: API_READER_CONTEXT_MAX_CHARS,
+            evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),
+            reviewFeedbackSha256, ...(revisionSeed?.metadata || {})
+        }
+    });
+}
+
+async function finalizeOperatorApiReaderArticleFromSource(paper, sourceDetails, draft, provenance) {
+    const previousStage = structuredClone(paper.analysisManifest?.stages?.apiReaderArticle);
+    if (provenance?.contract !== 'reader-signed-operator-v1' || provenance.executionKind !== 'operator'
+        || provenance.newApiRequests !== 0 || !require('./analysis-engine.js').apiReaderV3BindsCanonical(paper)
+        || provenance.parentPaperSha256 !== stableFingerprint(paper)
+        || provenance.parentArticleSha256 !== paper.apiReaderArticleSha256
+        || provenance.parentPlanSha256 !== paper.apiReaderPlanSha256
+        || provenance.runId !== paper.freshRewriteProvenance?.runId
+        || provenance.sourceSha256 !== paper.sourceSha256
+        || provenance.sourceSnapshotSha256 !== sourceDetails.freshSourceDescriptor?.sourceSnapshotSha256) {
+        throw new Error('Operator finalization requires a valid signed parent and explicit execution provenance');
+    }
+    require('./lib/reader-signed-draft.js').recoverSignedReaderDraft({ paper, sourceDetails, runId: provenance.runId });
+    if (crypto.createHash('sha256').update(JSON.stringify(draft)).digest('hex') !== provenance.afterDraftSha256) {
+        throw new Error('Operator finalization draft SHA mismatch');
+    }
+    const evidence = buildApiReaderEvidenceContext('', sourceDetails.text, sourceDetails.structuredArtifacts, provenance.paperId);
+    const parsed = parseApiReaderArticleResult(JSON.stringify(draft), {
+        requiredVersion: 3, requireIntegratedTables: true,
+        minimumIntegratedTables: readerRequirements({ version: 3,
+            availableTableCount: [...evidence.matchAll(/^TABLE_(\d+):/gm)].length }).minimumTables,
+        requireSourceBindings: true, allowDeterministicQuoteRepair: true,
+        sourceText: sourceDetails.text, structuredArtifacts: sourceDetails.structuredArtifacts,
+        availableFigureOrdinals: paper.apiReaderFigures.map(figure => figure.ordinal)
+    });
+    const finalized = await finalizeApiReaderRefresh(paper, sourceDetails, {
+        ...parsed, imageEvidence: paper.apiReaderFigures.map(figure => ({ ordinal: figure.ordinal,
+            url: figure.url, sha256: figure.assetSha256 }))
+    }, {
+        reuseSignedFigures: structuredClone(paper.apiReaderFigures),
+        readerAuthors: structuredClone(paper.apiReaderAuthors), readerResources: structuredClone(paper.apiReaderResources),
+        execution: {
+            executionKind: 'operator', contentMode: 'reader-source-operator-revision-v1',
+            model: 'operator-local', protocol: 'local_operator',
+            fingerprint: stableFingerprint(provenance),
+            attempts: previousStage.attempts,
+            originApiStage: previousStage.originApiStage || previousStage,
+            operatorHistory: [...(previousStage.operatorHistory || []), provenance],
+            operatorProvenance: provenance,
+            ...(previousStage.fullAttempts !== undefined ? { fullAttempts: previousStage.fullAttempts } : {}),
+            ...(previousStage.transportFailures !== undefined ? { transportFailures: previousStage.transportFailures } : {})
+        }
+    });
+    finalized.readerFactReview = { status: 'pending', executionKind: 'operator',
+        articleSha256: finalized.apiReaderArticleSha256, planSha256: finalized.apiReaderPlanSha256,
+        patchFileSha256: provenance.patchFileSha256, parentPaperSha256: provenance.parentPaperSha256 };
+    return finalized;
+}
+
+async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options) {
+    const manifest = paper.analysisManifest, analysis = String(paper.analysis || '');
+    const arxivId = getPaperArxivId(paper), sourceText = String(sourceDetails.text || '');
+    const sourceSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
     const injectedReaderResult = injectApiReaderFigures(
         generated, sourceDetails.structuredArtifacts, arxivId
     );
-    const materializedFigures = await materializeApiReaderFigures(
-        injectedReaderResult.figures, arxivId
-    );
+    const materializedFigures = options.reuseSignedFigures
+        ? reuseSignedApiReaderFigureAssets(injectedReaderResult.figures, options.reuseSignedFigures, arxivId)
+        : await materializeApiReaderFigures(injectedReaderResult.figures, arxivId);
     const materializedFigureOrdinals = new Set(materializedFigures.map(item => item.ordinal));
     const readerResult = {
         ...injectedReaderResult,
@@ -3574,7 +3644,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     const articleSha256 = crypto.createHash('sha256').update(readerResult.article).digest('hex');
     const planSha256 = stableFingerprint(readerResult.plan);
     const figuresSha256 = stableFingerprint(readerResult.figures);
-    const readerAuthors = resolveApiReaderAuthors(paper, sourceDetails);
+    const readerAuthors = options.readerAuthors || resolveApiReaderAuthors(paper, sourceDetails);
     const existingReaderResources = paper.apiReaderResources;
     const existingReaderResourceBody = existingReaderResources && {
         contract: existingReaderResources.contract,
@@ -3614,21 +3684,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     };
     manifest.stages.apiReaderArticle = {
         status: 'complete',
-        contentMode,
-        fingerprint,
-        attempts: readerResult.attempts,
-        model: DEEP_CONFIG.model,
-        protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
-        temperature: revisionSeed ? API_READER_REPAIR_TEMPERATURE : API_READER_INITIAL_TEMPERATURE,
-        repairTemperature: API_READER_REPAIR_TEMPERATURE,
-        maxTokens: API_READER_MAX_TOKENS,
-        maxResponseBytes: API_MAX_RESPONSE_BYTES,
-        overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
-        promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.apiReaderArticle),
-        evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
-        evidenceMaxChars: API_READER_EVIDENCE_MAX_CHARS,
-        contextMaxChars: API_READER_CONTEXT_MAX_CHARS,
-        evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),
+        ...options.execution,
         articleSha256,
         planSha256,
         figureCount: readerResult.figures.length,
@@ -3654,11 +3710,35 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         figureContractVersion: API_READER_FIGURE_CONTRACT_VERSION,
         imageEvidenceCount: readerResult.imageEvidence?.length || 0,
         imageEvidenceSha256: stableFingerprint(readerResult.imageEvidence || []),
-        reviewFeedbackSha256,
-        ...(revisionSeed?.metadata || {}),
-        refreshedAt: getBeijingISOString()
+        refreshedAt: options.execution.executionKind === 'operator'
+            ? options.execution.operatorProvenance.appliedAt : getBeijingISOString()
     };
     return paper;
+}
+
+function reuseSignedApiReaderFigureAssets(figures, previous, arxivId) {
+    const root = path.join(CURRENT_DIR, 'api-reader-assets', arxivId);
+    const assetKeys = ['cachePath', 'assetFilename', 'assetMediaType', 'assetSha256', 'assetBytes', 'assetWidth', 'assetHeight'];
+    if (figures.length !== previous.length) throw new Error('Operator cannot add or remove signed pixel evidence');
+    if (figures.length) require('./lib/fresh-rewrite-run.js').assertSafeDirectory(root);
+    return figures.map(figure => {
+        const prior = previous.find(item => item.ordinal === figure.ordinal && item.url === figure.url
+            && item.sourceDomSha256 === figure.sourceDomSha256);
+        const expectedFilename = prior && `figure-${figure.ordinal}-${prior.assetSha256?.slice(0, 16)}.png`;
+        if (!prior || !recoverySha256(prior.assetSha256) || prior.assetFilename !== expectedFilename
+            || prior.cachePath !== path.join(root, expectedFilename) || prior.assetMediaType !== 'image/png') {
+            throw new Error('Operator signed figure cache identity mismatch');
+        }
+        const fd = fs.openSync(prior.cachePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        try {
+            const stat = fs.fstatSync(fd), bytes = fs.readFileSync(fd);
+            if (!stat.isFile() || bytes.length !== prior.assetBytes
+                || crypto.createHash('sha256').update(bytes).digest('hex') !== prior.assetSha256) {
+                throw new Error('Operator signed figure cache bytes changed');
+            }
+        } finally { fs.closeSync(fd); }
+        return { ...figure, ...Object.fromEntries(assetKeys.map(key => [key, prior[key]])) };
+    });
 }
 
 async function refreshApiScoringAndReaderFromSource(paper, sourceDetails) {
@@ -10027,6 +10107,7 @@ module.exports = {
     buildApiReaderGenerationStart,
     buildApiReaderValidationFeedback,
     refreshApiReaderArticleFromSource,
+    finalizeOperatorApiReaderArticleFromSource,
     refreshApiScoringAndReaderFromSource,
     refreshApiReaderAuthorsFromSource,
     refreshApiReaderFiguresFromSource,

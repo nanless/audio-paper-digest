@@ -43,7 +43,7 @@ function validateAnalysisIds(ids) {
 
 function parseRewriteArgs(args) {
     const action = args[0];
-    if (!['prepare', 'sources', 'analyze', 'status', 'promote', 'patch'].includes(action)) {
+    if (!['prepare', 'sources', 'analyze', 'status', 'promote', 'patch', 'signed-patch'].includes(action)) {
         throw new Error('Use prepare --date DATE, sources|analyze|status|promote --run-id UUID, or patch --run-id UUID --patch NAME.json');
     }
     const options = { action };
@@ -79,9 +79,9 @@ function parseRewriteArgs(args) {
         if (!UUID_RE.test(options.runId || '') || options.date) throw new Error(`${action} requires --run-id UUID and cannot change the date`);
         if (options.concurrency && !['sources', 'analyze'].includes(action)) throw new Error(`${action} does not accept --concurrency`);
     }
-    if (action === 'patch') {
+    if (['patch', 'signed-patch'].includes(action)) {
         require('./reader-operator-patch.js').patchPath('/unused-run', options.patchFile);
-    } else if (options.patchFile) throw new Error('Only patch accepts --patch');
+    } else if (options.patchFile) throw new Error('Only patch or signed-patch accepts --patch');
     return options;
 }
 
@@ -469,6 +469,9 @@ async function promoteRewrite(options, overrides = {}) {
     return withRunOperation(options.runId, deps, async loaded => {
         const sources = sourceState(loaded, deps);
         if (sources.missing.length || loaded.analysis.status !== 'complete') throw new Error('Fresh rewrite promotion requires all sources and analysis to be complete');
+        if (loaded.analysis.papers.some(paper => paper.readerFactReview?.status === 'pending')) {
+            throw new Error('Operator revised Reader still requires explicit fact review');
+        }
         for (const paper of loaded.analysis.papers) {
             if (!deps.isSuccessfulAnalysisRecord(paper)) throw new Error(`${paperId(paper)} is not a complete analysis`);
             assertFreshProvenance(paper, loaded.run, sources.records[paperId(paper)]);
@@ -499,7 +502,36 @@ async function patchRewrite(options, overrides = {}) {
     });
 }
 
+async function signedPatchRewrite(options, overrides = {}) {
+    const deps = dependencies(overrides);
+    return withRunOperation(options.runId, deps, async loaded => {
+        if (loaded.run.status === 'promoted') throw new Error('Promoted fresh run is immutable');
+        return require('./reader-signed-operator.js').applySignedReaderOperator({ loaded, patchFile: options.patchFile }, {
+            rootDir: deps.rootDir, readFreshSource: deps.readFreshSource, now: deps.now,
+            updateJsonFileLocked: deps.updateJsonFileLocked,
+            withPaperAnalysisLock: overrides.withPaperAnalysisLock || require('../analysis-engine.js').withPaperAnalysisLock,
+            reload: () => loadRun(options.runId, deps),
+            updateRun: changes => updateRun(loaded, changes, deps),
+            ...(overrides.signedOperatorFaultHooks || {})
+        });
+    });
+}
+
+async function acceptSignedReaderFactReview(request, overrides = {}) {
+    const deps = dependencies(overrides);
+    return withRunOperation(request.runId, deps, async loaded => {
+        return require('./reader-signed-operator.js').acceptSignedReaderFactReview({ loaded, request }, {
+            rootDir: deps.rootDir, readFreshSource: deps.readFreshSource, now: deps.now,
+            updateJsonFileLocked: deps.updateJsonFileLocked, isSuccessfulAnalysisRecord: deps.isSuccessfulAnalysisRecord,
+            withPaperAnalysisLock: overrides.withPaperAnalysisLock || require('../analysis-engine.js').withPaperAnalysisLock,
+            reload: () => loadRun(request.runId, deps), updateRun: changes => updateRun(loaded, changes, deps),
+            ...(overrides.signedOperatorFaultHooks || {})
+        });
+    });
+}
+
 module.exports = { RUN_CONTRACT, INPUT_CONTRACT, ANALYSIS_CONTRACT, FRESHNESS_CONTRACT, ORIGINAL_METADATA_FIELDS,
     stableHash, sha256, paperId, parseRewriteArgs, metadataOnly, assertSafeDirectory, readRegularJson,
     writeImmutableJson, assertAnalysisEnvelope, assertFreshProvenance, loadRun,
-    prepareRewrite, collectRewriteSources, analyzeRewrite, rewriteStatus, promoteRewrite, patchRewrite };
+    prepareRewrite, collectRewriteSources, analyzeRewrite, rewriteStatus, promoteRewrite, patchRewrite, signedPatchRewrite,
+    acceptSignedReaderFactReview };

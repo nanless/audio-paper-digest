@@ -28,6 +28,7 @@ npm run rewrite:source -- promote --run-id "$rewrite_run_id"
 | `analyze` | 只有所有原文缓存齐全才开始；调用共享分析引擎，产生全新 canonical 与 source-only Reader，结果只写本 run。 |
 | `status` | 只读核对输入、原文缓存和本 run 分析身份；不补抓、不修复、不调用模型。 |
 | `patch` | 显式应用同 run、同源、同失败候选 SHA 的人工局部补丁；完整 parser 通过后仍保存为 failed，保留预算，不改分析/发布状态。 |
+| `signed-patch` | 对同 run 已签名成功 Reader 做精确局部 operator 修订；无模型请求，复用生产封存，将隔离分析置为事实待审。 |
 | `promote` | 全部论文成功且 fresh 来源证明完整后，由基线 CAS 模块提升 canonical 并同步论文库状态；不生成、审查或发布博客。 |
 
 `analyze` 阶段仍可能为 LLM、资源可达性和原图进行联网，但全文读取走本 run 已验证缓存。来源 SHA 漂移、源缓存丢失或损坏、跨 run 生成内容、陈旧输入等都会失败关闭，不能用摘要或旧文章继续冒充成功。
@@ -104,6 +105,53 @@ npm run rewrite:source -- analyze --run-id "$rewrite_run_id" --ids 2609.03107 --
 归档先持久化，再原子替换候选；同一补丁中断后可以原命令重入，重复应用不重复审计、不重置预算。archive损坏、候选已变化或补丁文件已被修改均失败关闭。首次 source-only 新稿后续由 `analyze` 在发起Reader请求前免费运行完整parser，通过后才沿正常流程形成结果；其余尚未完成的论文或阶段仍可能调用API。
 
 signed-revision scratch 则必须回到原有定向修订服务，用当前已签名父稿与原 feedback 输入重新计算候选 identity，再免费完整解析接受。operator patch 不验证未知 feedback 的语义身份、不更新成功 paper；不能运行 `analyze` 看到旧成功稿被 skip 就声称修订完成。父稿/feedback 已变化时旧候选不可自动套用。两种模式都不绕过事实审查，不写 canonical/博客，也不能把 parser 通过称为事实通过。
+
+### 已签名成功稿：零模型请求的局部修订
+
+```bash
+npm run rewrite:source -- signed-patch --run-id "$rewrite_run_id" --patch reviewed-success.json
+```
+
+这不是前述 failed scratch 的 `patch`。补丁仍只能是本 run `patches/` 直属 regular、单链接、0600 文件，其完整 envelope 为：
+
+```json
+{
+  "version": 1,
+  "runId": "原 run UUID",
+  "paperId": "2609.xxxxx",
+  "parentPaperSha256": "stableHash(当前完整 paper)",
+  "parentArticleSha256": "当前 apiReaderArticleSha256",
+  "parentPlanSha256": "当前 apiReaderPlanSha256",
+  "sourceSha256": "封存原文 SHA",
+  "reason": "基于原文的具体修改原因",
+  "patch": { "version": 1, "draftSha256": "逆变换 proof.draftSha256", "replacements": [] }
+}
+```
+
+先用 `recoverSignedReaderDraft({paper, sourceDetails, runId})` 获得 `{draft,proof}`；draft/node SHA 均使用 `reader-repair.hashDraft`（JSON 顺序语义），不是完整 paper/plan 的 stableHash。`replacements` 必须为 1–8 个既有节点，协议与前文相同。逆变换只恢复签名输出的严格等价合法输入，不能声称找回模型原始 JSON 空白或表格 selection 写法。
+
+执行持有 operation→paper 锁，锁内重读当前父完整 paper 并做 CAS。真实 parser 复验表格、公式与正文；共用 API refresh 的最终化/签名函数注入原图，operator 仅重放路径与 SHA 验证的原图缓存，不下载、不请求模型、不伪造 readerCallModel 返回。原图缺失或漂移直接失败。新 stage 明确 `executionKind=operator`、`model=operator-local`、`protocol=local_operator`，完整原 API stage 留在 `originApiStage`；原尝试计数不清零，新增 provenance 绑定 parent/patch/sourceSnapshot/实现 SHA，并声明 `newApiRequests=0`。不会把当前 prompt SHA 签成旧稿的生成输入。
+
+`patches/signed-operator-archive/<原补丁字节SHA>/` 保存不可变 before/request/intent/output。先封存可恢复输出，再将隔离 analysis 中的目标 paper 原子 CAS 安装，最后更新 run 的 analysis SHA。intent、output、analysis 安装、run 更新间中断都可以原命令重入；其他 paper 和 canonical/博客不改。输出具有生产结构签名，但 `readerFactReview.status=pending`，且 analysis/run 为 `fact_review_pending`，不能当作事实已通过。
+
+### 正式接受 operator 稿的独立事实报告
+
+无需手改状态。受授权的任务脚本在沙箱外调用 `scripts/lib/fresh-rewrite-run.js` 的 `acceptSignedReaderFactReview(request)`，其 request 必须精确包含：
+
+```javascript
+{
+  runId, paperId,
+  parentPaperSha256, // stableHash(当前待审 operator 完整 paper)
+  articleSha256, planSha256, sourceSha256,
+  reportFile,       // 同 run source-audits/ 直属 .md 文件名
+  reportSha256,     // 独立报告的原始文件字节 SHA256
+  reviewer, verdict: 'pass'
+}
+```
+
+报告必须 regular、单链接、0600，并明确写出该 paper ID 与上述四个完整内容 SHA；只有事实/原图独立审查确已通过才可提交 `pass`。服务重验报告字节、封存源、签名父稿和完整 paper CAS，先持久化 `patches/signed-fact-reviews/<reportSHA>/<paperId>.json`，再安装该篇事实接受状态并更新 run SHA；中断可用同一 request 重入，不重写正文/计划、不增加 API 使用量。
+
+单篇接受不代表全批事实已审完。首次 operator 修订保留全局 `operatorFactReviewBaseStatus`：原本已有的 API/signed 批次事实 pending/failed 不会被最后一个 operator 接受清除，当前新增失败也优先保留。只有 operator 自身从 complete 引入的待审、所有 operator 均已接受且全篇生产结构成功时，才能恢复原 complete。其他批次事实工作必须在操作层按全部最终 article/plan/source 与独立报告闭合后再显式恢复；状态完整性本身不是独立 QA 证书。任何仍为 `readerFactReview.pending` 的 paper 都会额外阻断 promote，即使一次普通 analyze 跳过成功稿后把整批状态改回 complete。
 
 ### 修复程序升级后的显式恢复
 

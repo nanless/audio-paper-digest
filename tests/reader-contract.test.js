@@ -52,6 +52,7 @@ test('runtime Reader prompt keeps source identity rules without contradictory ex
     assert.match(prompt, /不同指标的差值不能放到模型列下/);
     assert.match(prompt, /原文表头、图注或算术互相冲突时明确标注冲突/);
     assert.match(prompt, /单位留在同一单元格/);
+    assert.match(prompt, /原文是裸数值时不擅自添单位/);
     assert.doesNotMatch(prompt, /\| 指标 \| 单位 \|/);
     assert.match(prompt, /保留正确的图\/公式ordinal、概念桥marker与绑定关系/);
     assert.doesNotMatch(prompt, /表后必须用 2–4 段/);

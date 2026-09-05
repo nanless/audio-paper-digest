@@ -168,7 +168,7 @@ v3 为 `reader-source-only-v1`：1 次完整生成 + 1 次局部补丁后通过�
 - 原始 10 篇失败候选采用已审局部补丁后由正常引擎免费完整复验。定向修订又有 4 篇在局部段落/数量写法上阻断，现允许同 run、有效同源签名父稿的 failed scratch 经原签名修订入口恢复；父稿/反馈身份不变、预算不重置。该 4 篇恢复前后用量记录没有增加请求。
 - 签名失败候选及严格等价逆变换实现的完整验证：1090 项 JS、390 项默认 Python、24 项 Manual Python，以及 Hugo、全仓语法和严格数据检查；本地恢复点 `b2406db`，日志 `/private/tmp/fresh-signed-scratch-verify-final.log`。
 - 写作 Prompt 合并重复原则，保留原有 JSON/schema、首个 fenced block、数量门槛、表格三模式和全部来源要求；明确无训练不等于确定性、参数状态必须有源、差值不能错列、单位与数值同格、原文矛盾要揭示。去掉固定表前/表后段落数量的额外写作负担，仍须满足生产 parser 的相邻段落及汉字要求。
-- 完整 Prompt 文件从 9551 缩至 7205 字符（约 24.6%）；这是字符长度，不是 tokenizer 计数、计费量或端到端节省率。新 Prompt 只作用于后续新请求，不回写本批已生成文章的历史 Prompt SHA，也不为更新 Prompt 再生成 30 篇。运行时占位符、schema 和 source-only 回归 98 项通过，完整集成验证另行执行。
+- 完整 Prompt 文件从 9551 缩至 7244 字符（约 24.2%）；这是字符长度，不是 tokenizer 计数、计费量或端到端节省率。新 Prompt 只作用于后续新请求，不回写本批已生成文章的历史 Prompt SHA，也不为更新 Prompt 再生成 30 篇。运行时占位符、schema 和 source-only 回归 98 项通过，完整集成验证另行执行。数字带单位时不拆格；原文裸数值则不擅自补单位，避免新的示例冲突。
 - 此轮方法参照 [OpenAI 的 Prompt engineering](https://developers.openai.com/api/docs/guides/prompt-engineering) 与 [Evaluation best practices](https://developers.openai.com/api/docs/guides/evaluation-best-practices)：提示明确、按真实任务建测试，并结合事实审查校准机械指标。未套用其他模型专有设置，当前模型和调用预算保持不变。
 
 本批用量截至上述 4 篇恢复完成：296 条有 provider 回执的请求，输入 5690018、输出 1356645、总计 7046663 tokens，其中 8 条请求未成功。被早先中断而未落盘的调用可能缺少回执；此值不是完整账单，也不能证明总体 Token 节省。已确认的局部收益是这些确定性修复和重入没有再发模型请求；后续固定评测集仍须同时统计首次事实通过率、总请求和总用量。
