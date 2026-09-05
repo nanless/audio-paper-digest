@@ -3584,6 +3584,14 @@ has_dataset: 否
         const { buildRecoveryFingerprints } = require('../scripts/deep-analyzer.js');
         const base = { title: 'A', authors: ['X'], categories: ['cs.SD'] };
         const first = buildRecoveryFingerprints(base, 'actual input one', '2607.1');
+        const configuration = require('../scripts/config.js').ANALYSIS_CONFIG;
+        const priorRepairBudget = configuration.apiReaderRepairMaxTokens;
+        try {
+            configuration.apiReaderRepairMaxTokens = (priorRepairBudget || 8000) + 1;
+            const budgetChanged = buildRecoveryFingerprints(base, 'actual input one', '2607.1');
+            assert.notEqual(first.apiReaderArticle, budgetChanged.apiReaderArticle);
+            assert.equal(first.primaryAnalysis, budgetChanged.primaryAnalysis);
+        } finally { configuration.apiReaderRepairMaxTokens = priorRepairBudget; }
         const textChanged = buildRecoveryFingerprints(base, 'actual input two', '2607.1');
         const metadataChanged = buildRecoveryFingerprints({ ...base, title: 'B' }, 'actual input one', '2607.1');
         assert.notStrictEqual(first.primaryAnalysis, textChanged.primaryAnalysis);

@@ -371,6 +371,12 @@ body
             )
 
     def test_review_entry_never_calls_git_push(self):
+        self._exercise_review_entry()
+
+    def test_review_entry_hugo_preflight_failure_makes_zero_llm_calls(self):
+        self._exercise_review_entry(hugo_failure=True)
+
+    def _exercise_review_entry(self, *, hugo_failure=False):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / 'blog'
             posts = repo / 'content' / 'posts'
@@ -434,14 +440,61 @@ body
                 _sha256_file=mock.Mock(return_value='a' * 64),
                 git_push=git_push,
             )
+            order = mock.Mock()
+            order.attach_mock(module.validate_staged_posts, 'staged')
+            order.attach_mock(module.run_hugo_gate, 'hugo')
+            order.attach_mock(module.review_all_posts, 'llm')
+            if hugo_failure:
+                module.run_hugo_gate.side_effect = ValueError('Hugo preflight render failed')
+                module.review_all_posts.side_effect = AssertionError('LLM must not run after Hugo preflight failure')
             with mock.patch.object(review_blog, 'require_external_runtime'), \
                     mock.patch.object(review_blog, 'load_publish_to_blog', return_value=module), \
                     mock.patch.object(sys, 'argv', ['review-blog.py', '--date', '2026-07-10']), \
                     contextlib.redirect_stdout(io.StringIO()):
-                review_blog.main()
+                if hugo_failure:
+                    with self.assertRaises(SystemExit) as stopped:
+                        review_blog.main()
+                    self.assertEqual(stopped.exception.code, 1)
+                else:
+                    review_blog.main()
+            if hugo_failure:
+                module.run_hugo_gate.assert_called_once()
+                self.assertEqual(module.validate_staged_posts.call_count, 2)
+                self.assertEqual([call[0] for call in order.mock_calls], ['staged', 'staged', 'hugo'])
+                module.review_all_posts.assert_not_called()
+                module.save_review_receipt.assert_not_called()
+                module.save_review_page_checkpoint.assert_not_called()
+                git_push.assert_not_called()
+                batch_issues = module.save_review_failure_state.call_args.kwargs['batch_issues']
+                self.assertIn('Hugo preflight render failed', batch_issues[0]['description'])
+                return
             module.review_all_posts.assert_called_once()
             module.save_review_receipt.assert_called_once()
             git_push.assert_not_called()
+            names = [call[0] for call in order.mock_calls]
+            self.assertLess(names.index('staged'), names.index('hugo'))
+            self.assertLess(names.index('hugo'), names.index('llm'))
+            module.review_all_posts.reset_mock()
+            module.save_review_receipt.reset_mock()
+            module.run_hugo_gate.side_effect = ValueError('Hugo render failed')
+            with self.assertRaisesRegex(ValueError, 'Hugo render failed'):
+                review_blog._run_review(module, '2026-07-10')
+            module.review_all_posts.assert_not_called()
+            module.save_review_receipt.assert_not_called()
+
+            module.run_hugo_gate.side_effect = None
+            module.review_protocol_fingerprint = mock.Mock(side_effect=['a' * 64, 'b' * 64])
+            with self.assertRaisesRegex(ValueError, 'review 期间审查协议或 Hugo 运行时变化'):
+                review_blog._run_review(module, '2026-07-10')
+            module.review_all_posts.assert_called_once()
+            module.save_review_receipt.assert_not_called()
+            module.review_protocol_fingerprint.side_effect = ['a' * 64, 'b' * 64]
+            module.review_all_posts.side_effect = lambda *args, **kwargs: kwargs['result_callback'](
+                paper, {'passed': True},
+            )
+            with self.assertRaisesRegex(ValueError, '拒绝登记逐页通过凭证'):
+                review_blog._run_review(module, '2026-07-10')
+            module.save_review_page_checkpoint.assert_not_called()
 
     def test_review_entry_rejects_missing_manifest_before_review_or_push(self):
         with tempfile.TemporaryDirectory() as tmp:

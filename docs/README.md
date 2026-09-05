@@ -14,6 +14,7 @@
 | 查某个命令或模块职责 | [脚本说明](scripts.md) | [`scripts/` 运行时索引](../scripts/README.md) |
 | 下载论文与引用、复制 AI 提问 | [无需助手的博客阅读工具](blog-reading-tools.md) | 博客“关于与方法”页面 |
 | 修改评分、Prompt、路径或契约 | [维护约定](maintenance.md) | [数据格式](data-format.md) |
+| 完整离线验收、CI 与故障回放 | [维护指南：验证矩阵](maintenance.md#验证矩阵) | `npm run verify` |
 | 改进解读写法并比较重跑效果 | [Reader 写作与比较](reader-writing.md) | [维护约定](maintenance.md) |
 | 显式运行 Manual/人工路线 | [Manual 入口](../manual/README.md) | [Manual 工作流](../manual/docs/workflow.md) |
 

@@ -13,7 +13,7 @@
 | API 协议/代理 | `scripts/utils.js`、`publish_common.py` | 筛选、分析、review、API key 测试 |
 | 分析恢复 | `analysis-engine.js`、`deep-analyzer.js` | 所有分析入口、digest 状态 |
 | 分析结构/评分 | `analysis-contract.js`、Prompt | Node/Python parser、publisher |
-| Reader 文风/图表 | `api-reader-article.md`、`editorial-quality.js` | Reader validator、博客 review |
+| Reader 文风/图表/修复 | `api-reader-article.md`、`api-reader-repair.md`、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader validator、候选与阶段指纹、博客 review |
 | 博客事务 | `publish-to-blog.py` | 三个独立入口、receipt 测试 |
 | 视觉状态 | 两个 state JS 与 integration | planner、status、record |
 | 命令别名 | `package.json` | README、AGENTS、SKILL、docs |
@@ -84,14 +84,19 @@ npm run storage:prune -- --apply
 ## 验证矩阵
 
 ```bash
-npm test
-npm run test:default
-npm run test:manual
-npm run validate:data -- --allow-empty
+npm run verify
 git diff --check
 ```
 
-CI 还执行 JS `node -c`、Python `py_compile`、两处 Python 单测和全仓 shell `bash -n`。涉及 Prompt/发布时增加一篇受控产物级测试；涉及代理时分别验证 Muse 和普通直连模型。
+`verify` 是完整离线验证入口，必须沙箱外运行。先要求与博客部署一致的 Hugo **0.160.1**，然后检查全仓 JS/Python/shell 语法、运行一次 `npm test`（已包含默认与 Manual JS）、两处 Python 单测和只读 `validate:data`。任何一步失败立即非零退出；Hugo 资源管线 fixture 必须真正构建，缺少 Hugo 不能作为完整通过。遍历排除 `node_modules`、`.venv`、`data`、`logs`、`.git` 等产物目录，不跟随 symlink；Python 字节码写入独立临时目录。
+
+只有 CI 或无数据的干净 checkout 显式运行 `npm run verify -- --allow-empty`，普通维护默认复验现有数据。`npm run verify -- --quick` 仅做语法与只读数据验证，明确省略所有单测与 Hugo，**不能作为完整验收**。定向调试可单独执行 `test:default`、`test:manual` 或选定测试；完整验证无需再重复运行这些子集。
+
+CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，用该 release 的官方 checksums 校验归档后安装，再调用同一个 `verify --allow-empty`。本地入口只检查已安装版本，不自动下载或升级工具。
+
+离线回放使用临时目录与合成/脱敏 fixture，模型、网络和发布动作以 mock 注入，不读写生产 canonical 来制造成功。Reader 至少覆盖多错定位、数字/单位、图 marker、坏 JSON、陈旧或越权 patch、候选损坏、失败恢复与无进展；发布至少覆盖协议漂移、字节变化、LLM 零调用的机械阻断和真实 Hugo 资源构建。记录完整输入指纹、通过/阻断结果和失败调用数，不能把 fixture 通过当成真实长文质量或收费 Token 改善的证明。涉及 Prompt/发布时另做授权的一篇隔离产物实验；实际付费请求不属于 `verify`。
+
+原表 selection 仅覆盖能够逐字安全渲染的表子集。付费生成前的 `TABLE_N_SELECTION` 明示 eligibility 和原因；空源表头、所有行都被来源标记为表头、未处理的 MathML/TeX 双写等会禁用该表的 selection，运行时再次拒绝。不能靠猜表头角色或宽松数值等价放行；这些表可走既有 `source_quotes` 路线，但连续原句、数字和单位的完整校验仍必须通过。本轮没有引入新的跨 Node/Python 显示归一协议。
 
 ## 提交前清单
 

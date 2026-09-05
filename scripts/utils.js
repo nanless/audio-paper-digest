@@ -910,7 +910,35 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
         // can avoid the network without bypassing either security boundary.
         const transportRequestFn = typeof options.transportRequestFn === 'function'
             ? options.transportRequestFn : requestJson;
-        return await transportRequestFn(apiUrl, bodyObj, headers, { ...options, agent });
+        const started = Date.now();
+        let response;
+        let failure;
+        try {
+            response = await transportRequestFn(apiUrl, bodyObj, headers, { ...options, agent });
+            return response;
+        } catch (error) {
+            failure = error;
+            throw error;
+        } finally {
+            // Never retain headers, credentials, prompts, response text or URLs
+            // in the cost ledger. Diagnostic failures must not replay an API call.
+            try {
+                const protocol = detectApiType(endpoint, model);
+                const { recordLlmUsage, buildLlmUsageEvent } = require('./lib/llm-usage.js');
+                let outputText = null;
+                try { outputText = response?.body ? parseResponseText(protocol, response.body) : null; }
+                catch (_) { /* Malformed content must not lose request usage. */ }
+                const input = { protocol, model, request: bodyObj, response: response?.body,
+                    statusCode: response?.statusCode, durationMs: Date.now() - started,
+                    errorCode: failure?.code || (failure ? 'NETWORK_ERROR' : null),
+                    context: options.usageContext,
+                    outputText };
+                if (typeof options.usageSink === 'function') options.usageSink(buildLlmUsageEvent(input));
+                else recordLlmUsage(input, { enabled: options.recordUsage !== false, directory: options.usageDirectory });
+            } catch (_) {
+                console.warn('[llm-usage] 本次请求用量不可记录；不改变请求结果');
+            }
+        }
     } finally {
         if (agent && typeof agent.destroy === 'function') agent.destroy();
     }

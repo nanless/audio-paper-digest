@@ -47,6 +47,25 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends fonts-noto-cjk
 
+      - name: Install pinned Hugo with official release checksum
+        env:
+          HUGO_VERSION: '0.160.1'
+        run: |
+          set -euo pipefail
+          hugo_download_dir="$(mktemp -d)"
+          archive="hugo_extended_${HUGO_VERSION}_linux-amd64.tar.gz"
+          release="https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            "$release/$archive" --output "$hugo_download_dir/$archive"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            "$release/hugo_${HUGO_VERSION}_checksums.txt" --output "$hugo_download_dir/checksums.txt"
+          cd "$hugo_download_dir"
+          awk -v archive="$archive" '$2 == archive { print; count++ } END { if (count != 1) exit 1 }' checksums.txt > selected-checksum.txt
+          sha256sum --check --strict selected-checksum.txt
+          tar -xzf "$archive" hugo
+          sudo install -m 0755 hugo /usr/local/bin/hugo
+          hugo version
+
       - name: Create isolated CI project environment
         run: |
           umask 077
@@ -56,33 +75,7 @@ jobs:
             "PAPER_ANALYZER_MODEL=$PAPER_ANALYZER_MODEL" \
             "HTTPS_PROXY=http://127.0.0.1:9" > .env
 
-      - name: Run tests
-        run: npm test
-
-      - name: Validate current data schema
+      - name: Run complete offline verification
         # data/ is intentionally gitignored; the empty-checkout mode keeps CI
         # useful while the unit tests exercise representative current files.
-        run: npm run validate:data -- --allow-empty
-
-      - name: Check JavaScript syntax
-        run: |
-          find scripts tests manual/scripts manual/tests -name '*.js' -print0 | while IFS= read -r -d '' file; do
-            node -c "$file"
-          done
-
-      - name: Check Python syntax
-        run: |
-          find scripts manual/scripts -name '*.py' -print0 | while IFS= read -r -d '' file; do
-            PYTHONPYCACHEPREFIX=/tmp/audio-paper-digest-pycache python3 -m py_compile "$file"
-          done
-
-      - name: Run Python tests
-        run: |
-          bash scripts/python-runtime.sh -m unittest discover -s tests/python -p 'test_*.py'
-          bash scripts/python-runtime.sh -m unittest discover -s manual/tests/python -p 'test_*.py'
-
-      - name: Check shell syntax
-        run: |
-          find . -name '*.sh' -not -path './node_modules/*' -print0 | while IFS= read -r -d '' file; do
-            bash -n "$file"
-          done
+        run: npm run verify -- --allow-empty

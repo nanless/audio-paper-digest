@@ -142,6 +142,59 @@ def validate_reused_pages(
             )
 
 
+def preflight_generated_pages(
+    module, date_str, blog_repo, content_dir, paths, page_artifacts,
+    authoritative_by_filename, manifest_path,
+):
+    """Collect independent page defects before any paid review request."""
+    issues = []
+    for page in paths:
+        page = Path(page).resolve()
+        if not page.is_file() or page.suffix != '.md':
+            continue
+        paper = (authoritative_by_filename or {}).get(page.name)
+        artifact = page_artifacts.get(str(page), {})
+        content = artifact.get('content')
+        if hasattr(module, 'review_and_fix_post'):
+            try:
+                fixed, page_issues = module.review_and_fix_post(
+                    page, paper, dry_run=True, source_content=content,
+                )
+                issues.extend(f'{page.name}: {issue}' for issue in page_issues)
+                if fixed and not page_issues:
+                    issues.append(f'{page.name}: 最终字节需要确定性修复')
+            except module.PublishDataValidationError as exc:
+                issues.append(f'{page.name}: {exc}')
+        try:
+            module.validate_staged_posts(
+                Path(content_dir), date_str, date_only=True, publish_paths=[page],
+                authoritative_papers=authoritative_by_filename,
+            )
+        except module.PublishDataValidationError as exc:
+            issues.append(f'{page.name}: {exc}')
+    attest = getattr(module, 'attest_api_reader_assets', None)
+    if attest:
+        try:
+            asset_results = {}
+            if attest(date_str, paths, manifest_path, asset_results, preflight_only=True):
+                issues.extend(
+                    f'{Path(path).name}: 论文图片或 sidecar 确定性绑定失败'
+                    for path, result in asset_results.items() if result.get('passed') is not True
+                )
+        except module.PublishDataValidationError as exc:
+            issues.append(str(exc))
+    if issues:
+        error = module.PublishDataValidationError('发布预检失败（尚未调用 LLM）: ' + '; '.join(issues))
+        error.review_issues = [
+            {'severity': 'error', 'type': 'preflight', 'description': issue}
+            for issue in issues
+        ]
+        raise error
+    return module.run_hugo_gate(
+        blog_repo, Path(content_dir), required=True, source_paths=paths,
+    )
+
+
 def _run_review(module, date_str):
         blog_repo, content_dir = module.validate_publish_target()
         paths, manifest_path = module.load_generation_manifest(date_str)
@@ -206,11 +259,8 @@ def _run_review(module, date_str):
         plan = module.plan_incremental_review(
             date_str, paths, manifest_path, base_head,
         )
-        if hasattr(module, 'review_and_fix_post'):
-            validate_reused_pages(
-                module, date_str, paths, plan['priorResults'], page_artifacts,
-                authoritative_papers,
-            )
+        # The batch preflight below replays current deterministic gates for
+        # both cached and pending pages, collecting independent defects once.
         # Planning may migrate exact per-file passes from the older receipt.
         # The batch-level receipt itself is invalid once this attempt starts.
         module.review_receipt_path(date_str).unlink(missing_ok=True)
@@ -227,14 +277,38 @@ def _run_review(module, date_str):
             print(f'🔍 开始严格全量 review: {len(paper_slugs)} 篇论文')
         combined_results = dict(plan['priorResults'])
         manifest_sha256 = module._sha256_file(manifest_path)
+        initial_protocol = (
+            module.review_protocol_fingerprint()
+            if hasattr(module, 'review_protocol_fingerprint') else None
+        )
         # Persist pending work before the first LLM call. A crash or API outage
         # can then resume only unfinished/transient files on the next run.
         module.save_review_failure_state(
             date_str, paths, manifest_path, base_head, combined_results,
         )
 
+        try:
+            gate = preflight_generated_pages(
+                module, date_str, blog_repo, content_dir, paths, page_artifacts,
+                authoritative_by_filename, manifest_path,
+            )
+        except module.PublishDataValidationError as exc:
+            # Persist actionable details without treating preflight as semantic
+            # review evidence or replacing successful per-page checkpoints.
+            module.save_review_failure_state(
+                date_str, paths, manifest_path, base_head, combined_results,
+                batch_issues=getattr(exc, 'review_issues', [{
+                    'severity': 'error', 'type': 'preflight', 'description': str(exc),
+                }]),
+            )
+            raise
+
         def checkpoint(path, result):
             resolved = Path(path).resolve()
+            if initial_protocol is not None:
+                if module.review_protocol_fingerprint() != initial_protocol:
+                    raise module.PublishDataValidationError('review 期间审查协议变化，拒绝登记逐页通过凭证')
+                result['reviewProtocolFingerprint'] = initial_protocol
             module.save_review_page_checkpoint(
                 date_str, resolved, result, manifest_path, base_head,
                 manifest_sha256=manifest_sha256,
@@ -279,9 +353,8 @@ def _run_review(module, date_str):
                 Path(content_dir), date_str, date_only=True, publish_paths=paths,
                 authoritative_papers=authoritative_by_filename,
             )
-            gate = module.run_hugo_gate(
-                blog_repo, Path(content_dir), required=True, source_paths=paths,
-            )
+            if initial_protocol is not None and module.review_protocol_fingerprint() != initial_protocol:
+                raise module.PublishDataValidationError('review 期间审查协议或 Hugo 运行时变化，请重新审查')
             module.validate_reviewed_file_hashes(
                 date_str, paths, manifest_path, combined_results,
             )

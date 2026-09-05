@@ -1,5 +1,6 @@
 import importlib.util
 import contextlib
+import base64
 import copy
 import hashlib
 import io
@@ -784,6 +785,147 @@ def create_verified_schema_v3_publication(date_str, posts, paper):
 
 
 class PublishToBlogReviewTest(unittest.TestCase):
+    def test_review_preflight_collects_page_errors_without_llm_or_hugo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            posts = Path(tmp)
+            pages = [posts / '2026-07-10-first.md', posts / '2026-07-10-second.md']
+            for page in pages:
+                page.write_text('immutable', encoding='utf-8')
+            module = SimpleNamespace(
+                PublishDataValidationError=ValueError,
+                is_api_reader_asset_path=lambda _path: False,
+                review_and_fix_post=mock.Mock(return_value=(True, ['duplicate paragraph'])),
+                validate_staged_posts=mock.Mock(side_effect=ValueError('source binding mismatch')),
+                run_hugo_gate=mock.Mock(),
+                review_all_posts=mock.Mock(),
+            )
+            with self.assertRaisesRegex(ValueError, 'first.md.*duplicate paragraph') as caught:
+                review_blog.preflight_generated_pages(
+                    module, '2026-07-10', posts, posts, pages, {}, {}, posts / 'manifest.json',
+                )
+            self.assertIn('second.md', str(caught.exception))
+            self.assertEqual(module.validate_staged_posts.call_count, 2)
+            module.review_all_posts.assert_not_called()
+            module.run_hugo_gate.assert_not_called()
+
+    def test_push_rejects_page_evidence_from_a_different_review_protocol(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            page = posts / '2026-07-10.md'
+            page.write_text('reviewed\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', Path(tmp) / 'current'):
+                receipt_path = save_bound_review_receipt('2026-07-10', [page])
+                receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
+                receipt['files'][0]['reviewProtocolFingerprint'] = '0' * 64
+                receipt_path.write_text(json.dumps(receipt), encoding='utf-8')
+                with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '逐文件.*协议'):
+                    publish_to_blog.load_verified_review_receipt('2026-07-10')
+
+    def test_review_units_resume_only_exact_passes_and_keep_structured_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            page = Path(tmp) / 'page.md'
+            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', Path(tmp) / 'current'), \
+                    mock.patch.object(publish_to_blog, 'review_protocol_fingerprint', return_value='a' * 64):
+                with publish_to_blog.review_unit_cache('2026-07-10', page, required=True):
+                    success = mock.Mock(return_value=(True, []))
+                    self.assertEqual(publish_to_blog.review_cached_unit('text', {'chunk': 'one'}, success), (True, []))
+                    publish_to_blog.review_cached_unit('text', {'chunk': 'one'}, success)
+                    success.assert_called_once()
+                    issue = {'severity': 'error', 'type': 'content', 'description': 'exact issue'}
+                    failure = mock.Mock(return_value=(False, [issue]))
+                    publish_to_blog.review_cached_unit('text', {'chunk': 'two'}, failure)
+                    publish_to_blog.review_cached_unit('text', {'chunk': 'two'}, failure)
+                    self.assertEqual(failure.call_count, 2)
+                with publish_to_blog.review_unit_cache('2026-07-10', page, required=True):
+                    forbidden = mock.Mock(side_effect=AssertionError('successful unit must resume'))
+                    publish_to_blog.review_cached_unit('text', {'chunk': 'one'}, forbidden)
+                records = list((Path(tmp) / 'current').rglob('units/**/*.json'))
+                self.assertEqual(len(records), 2)
+                self.assertTrue(any(json.loads(path.read_text())['issues'] == [issue] for path in records))
+                with mock.patch.object(publish_to_blog, 'review_protocol_fingerprint', return_value='b' * 64):
+                    with publish_to_blog.review_unit_cache('2026-07-10', page, required=True):
+                        changed = mock.Mock(return_value=(True, []))
+                        publish_to_blog.review_cached_unit('text', {'chunk': 'one'}, changed)
+                        changed.assert_called_once()
+
+    def test_text_review_restart_skips_completed_chunks_but_retries_failed_tail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', Path(tmp) / 'current'), \
+                    mock.patch.object(publish_to_blog, 'review_protocol_fingerprint', return_value='a' * 64), \
+                    mock.patch.object(publish_to_blog, 'split_review_content', return_value=['first\n', 'last\n']), \
+                    mock.patch.object(publish_to_blog, '_llm_review_post_chunk', side_effect=[
+                        (True, [], 'first\n'), publish_to_blog.PublishLLMUnavailable('offline'),
+                        (True, [], 'last\n'),
+                    ]) as request:
+                with publish_to_blog.review_unit_cache('2026-07-10', Path(tmp) / 'page.md', required=True):
+                    with self.assertRaises(publish_to_blog.PublishLLMUnavailable):
+                        publish_to_blog.llm_review_post('first\nlast\n', 'Paper', required=True)
+                with publish_to_blog.review_unit_cache('2026-07-10', Path(tmp) / 'page.md', required=True):
+                    passed, issues, content = publish_to_blog.llm_review_post('first\nlast\n', 'Paper', required=True)
+                self.assertTrue(passed)
+                self.assertEqual(issues, [])
+                self.assertEqual(content, 'first\nlast\n')
+                self.assertEqual([call.args[0] for call in request.call_args_list], ['first\n', 'last\n', 'last\n'])
+
+    def test_image_review_cache_binds_pixels_and_nearby_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image_data = {'media_type': 'image/png', 'data': base64.b64encode(b'first pixels').decode('ascii')}
+            content = 'context one\n\n![figure](https://example.test/figure.png)\n'
+            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', Path(tmp) / 'current'), \
+                    mock.patch.object(publish_to_blog, 'review_protocol_fingerprint', return_value='a' * 64), \
+                    mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'test-model'}), \
+                    mock.patch.object(publish_to_blog, '_load_review_image', return_value=image_data), \
+                    mock.patch.object(publish_to_blog, 'call_llm_api', return_value='{"passed": true, "issues": []}') as request:
+                for _ in range(2):
+                    with publish_to_blog.review_unit_cache('2026-07-10', Path(tmp) / 'page.md', required=True):
+                        self.assertEqual(publish_to_blog.multimodal_review_images(content, 'Paper', required=True), (True, []))
+                self.assertEqual(request.call_count, 1)
+                image_data['data'] = base64.b64encode(b'changed pixels').decode('ascii')
+                with publish_to_blog.review_unit_cache('2026-07-10', Path(tmp) / 'page.md', required=True):
+                    publish_to_blog.multimodal_review_images(content, 'Paper', required=True)
+                    publish_to_blog.multimodal_review_images(content.replace('one', 'two'), 'Paper', required=True)
+                self.assertEqual(request.call_count, 3)
+
+    def test_corrupt_review_unit_cannot_skip_request_or_follow_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            current = Path(tmp) / 'current'
+            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    mock.patch.object(publish_to_blog, 'review_protocol_fingerprint', return_value='a' * 64):
+                with publish_to_blog.review_unit_cache('2026-07-10', Path(tmp) / 'page.md', required=True):
+                    request = mock.Mock(return_value=(True, []))
+                    publish_to_blog.review_cached_unit('text', {'chunk': 'one'}, request)
+                    checkpoint = next(current.rglob('units/**/*.json'))
+                    checkpoint.write_text('{"passed": true}', encoding='utf-8')
+                    publish_to_blog.review_cached_unit('text', {'chunk': 'one'}, request)
+                    self.assertEqual(request.call_count, 2)
+                    outside = Path(tmp) / 'outside.json'
+                    outside.write_text('sentinel', encoding='utf-8')
+                    checkpoint.unlink()
+                    checkpoint.symlink_to(outside)
+                    with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '符号链接'):
+                        publish_to_blog.review_cached_unit('text', {'chunk': 'one'}, request)
+                    self.assertEqual(outside.read_text(encoding='utf-8'), 'sentinel')
+
+    def test_review_unit_usage_context_contains_identity_without_page_text(self):
+        from llm_usage import build_llm_usage_event
+        events = []
+        def request():
+            events.append(build_llm_usage_event(
+                protocol='openai', model='test', request={'messages': []}, status_code=200,
+            ))
+            return True, []
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', Path(tmp) / 'current'), \
+                    mock.patch.object(publish_to_blog, 'review_protocol_fingerprint', return_value='a' * 64):
+                with publish_to_blog.review_unit_cache('2026-07-10', Path(tmp) / 'page.md',
+                        required=True, paper_id='2607.00001'):
+                    publish_to_blog.review_cached_unit('text', {'content': 'private article text'}, request)
+        self.assertEqual(events[0]['paperId'], '2607.00001')
+        self.assertEqual(events[0]['stage'], 'publish.text')
+        self.assertRegex(events[0]['unitId'], r'^[a-f0-9]{64}$')
+        self.assertNotIn('private article text', json.dumps(events))
+
     def test_review_wrapper_passes_generation_snapshot_to_final_workbench_gate(self):
         date_str = '2026-08-31'
         with tempfile.TemporaryDirectory() as tmp:
@@ -824,6 +966,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
                         'validate_publish_target': (repo, posts),
                         'load_generation_manifest': ([page], manifest),
                         'validate_git_publish_branch': 'b' * 40,
+                        'review_protocol_fingerprint': 'a' * 64,
                         'reusable_verified_publication_review': None,
                         'has_publication_evidence_for_generation': False,
                         'plan_incremental_review': {'mode': 'full', 'paths': [page],
@@ -848,6 +991,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
                             with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, expected_error):
                                 review_blog._run_review(publish_to_blog, date_str)
                             mocks['save_review_receipt'].assert_not_called()
+                            mocks['review_all_posts'].assert_not_called()
                         else:
                             self.assertEqual(review_blog._run_review(publish_to_blog, date_str), current / 'receipt.json')
                             self.assertEqual(gate.call_args.kwargs['authoritative_papers'], {page.name: paper})
@@ -3599,6 +3743,9 @@ paper_digest_manual_depth: "full-text-evidence-v4"
 
     def test_hugo_gate_mirrors_required_assets_for_real_resource_pipeline_without_repo_writes(self):
         if not publish_to_blog.shutil.which('hugo'):
+            if (os.environ.get('REQUIRE_HUGO_INTEGRATION_TESTS') == '1'
+                    or os.environ.get('PD_REQUIRE_HUGO_TESTS') == '1'):
+                self.fail('REQUIRE_HUGO_INTEGRATION_TESTS=1 requires the real Hugo integration test')
             self.skipTest('real Hugo is unavailable')
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / 'blog'
@@ -4679,7 +4826,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             self.assertIsNone(plan['reason'])
             self.assertEqual(set(plan['paths']), {passed.resolve(), failed.resolve()})
 
-    def test_incremental_review_reuses_passes_across_manifest_base_and_protocol_changes(self):
+    def test_incremental_review_rejects_passes_when_protocol_changes(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
             current_dir = Path(tmp) / 'data' / 'current'
@@ -4714,13 +4861,9 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                     '2026-07-10', [passed, pending], manifest, 'b' * 40,
                 )
             self.assertEqual(plan['mode'], 'incremental')
-            self.assertEqual(plan['paths'], [pending.resolve()])
-            self.assertEqual(plan['reusedPassed'], 1)
-            self.assertTrue(plan['priorResults'][str(passed.resolve())]['passed'])
-            self.assertEqual(
-                plan['priorResults'][str(passed.resolve())]['reviewProtocolFingerprint'],
-                '1' * 64,
-            )
+            self.assertEqual(set(plan['paths']), {passed.resolve(), pending.resolve()})
+            self.assertEqual(plan['reusedPassed'], 0)
+            self.assertNotIn(str(passed.resolve()), plan['priorResults'])
 
     def test_successful_receipt_passes_survive_new_generation(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4776,6 +4919,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                         },
                         str(content.resolve()): {
                             'passed': False, 'completed': True, 'failureKind': 'content',
+                            'issues': [{'severity': 'error', 'type': 'content', 'description': 'wrong result direction'}],
                         },
                     },
                 )
@@ -4785,6 +4929,8 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             self.assertEqual(plan['mode'], 'incremental')
             self.assertEqual(plan['paths'], [transient.resolve()])
             self.assertEqual(plan['unchangedFailed'], [content.resolve()])
+            self.assertEqual(plan['priorResults'][str(content.resolve())]['issues'][0]['description'],
+                             'wrong result direction')
 
     def test_review_worker_exception_becomes_checkpointable_transient_result(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4821,10 +4967,10 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 ) as deterministic, mock.patch.object(
                     publish_to_blog, 'llm_review_post',
                     return_value=(False, [], 'LLM proposed replacement\n'),
-                ), mock.patch.object(
+                ) as text_review, mock.patch.object(
                     publish_to_blog, 'multimodal_review_images',
                     return_value=(True, []),
-                ), mock.patch.object(
+                ) as image_review, mock.patch.object(
                     publish_to_blog, 'atomic_write_text',
                 ) as write:
                 result = publish_to_blog._review_single_paper((
@@ -4833,9 +4979,9 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 ))
             self.assertEqual(page.read_text(encoding='utf-8'), original)
             self.assertEqual(result[2], 0)
-            # Three independent blockers: deterministic defect, explicit
-            # reviewer rejection, and attempted replacement of immutable bytes.
-            self.assertEqual(result[3], 3)
+            self.assertEqual(result[3], 1)
+            text_review.assert_not_called()
+            image_review.assert_not_called()
             deterministic.assert_called_once_with(
                 str(page), {'arxivId': '2607.00001'}, dry_run=True,
                 source_content=original,

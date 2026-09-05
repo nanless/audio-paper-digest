@@ -47,6 +47,7 @@ from llm_account_pool import (
     select_api_key,
 )
 from utils import parse_analysis
+from llm_usage import record_llm_usage, with_llm_usage_context
 
 BJ_TZ = timezone(timedelta(hours=8))
 BEIJING_TIMESTAMP_RE = re.compile(
@@ -3975,7 +3976,7 @@ def _sanitize_publish_llm_error(value, api_keys=()):
 
 def _open_publish_json_with_account_pool(
     *, api_url, endpoint, model, api_type, api_keys, payload, opener, timeout,
-    state_file=None,
+    state_file=None, usage_sink=None, usage_directory=None,
 ):
     """Execute one logical request, replaying only confirmed Go quota failures."""
     try:
@@ -4023,18 +4024,25 @@ def _open_publish_json_with_account_pool(
             headers={**headers, 'Content-Type': 'application/json'},
             method='POST',
         )
+        usage_started = time.monotonic()
+        usage_status = None
+        usage_body = None
+        usage_error = None
         try:
             with opener.open(request, timeout=remaining) as response:
                 status = response.status
+                usage_status = status
                 if response.status < 200 or response.status >= 300:
                     raise RuntimeError(f'HTTP {response.status}')
                 response_limit = 2 * 1024 * 1024
                 raw_response = response.read(response_limit + 1)
                 if len(raw_response) > response_limit:
                     raise RuntimeError('LLM 响应超过 2 MiB 安全上限')
-                return status, json.loads(raw_response.decode('utf-8'))
+                usage_body = json.loads(raw_response.decode('utf-8'))
+                return status, usage_body
         except urllib.error.HTTPError as exc:
             raw_text, parsed = _read_publish_http_error(exc)
+            usage_status, usage_body = exc.code, parsed
             quota = classify_opencode_go_quota_response(
                 exc.code, exc.headers, parsed, raw=raw_text,
             )
@@ -4050,6 +4058,21 @@ def _open_publish_json_with_account_pool(
             print(
                 f'  [llm-account-pool] OpenCode Go 账号 {account_number} '
                 f'已确认额度耗尽{limit_name}，冷却至 {blocked_until}'
+            )
+        except Exception as exc:
+            usage_error = type(exc).__name__
+            raise
+        finally:
+            try:
+                usage_text = parse_publish_response_text(api_type, usage_body) if isinstance(usage_body, dict) else None
+            except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+                usage_text = None
+            record_llm_usage(
+                protocol=api_type, model=model, request=payload, response=usage_body,
+                status_code=usage_status, duration_ms=(time.monotonic() - usage_started) * 1000,
+                error_code=usage_error,
+                output_text=usage_text,
+                sink=usage_sink, directory=usage_directory,
             )
     earliest = min(blocked_until_values) if blocked_until_values else None
     suffix = '' if earliest is None else (
@@ -4074,6 +4097,9 @@ def call_publish_llm_api(
     images=None,
     use_secondary=False,
     structured_output=False,
+    usage_context=None,
+    usage_sink=None,
+    usage_directory=None,
 ):
     """调用发布阶段 LLM API。required=True 时，缺配置或连续失败会抛错。"""
     primary_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
@@ -4225,16 +4251,19 @@ def call_publish_llm_api(
                 )
             else:
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            status, data = _open_publish_json_with_account_pool(
-                api_url=api_url,
-                endpoint=endpoint,
-                model=model,
-                api_type=api_type,
-                api_keys=api_keys,
-                payload=payload,
-                opener=opener,
-                timeout=timeout,
-            )
+            with with_llm_usage_context({**(usage_context or {}), 'transportAttempt': attempt + 1}):
+                status, data = _open_publish_json_with_account_pool(
+                    api_url=api_url,
+                    endpoint=endpoint,
+                    model=model,
+                    api_type=api_type,
+                    api_keys=api_keys,
+                    payload=payload,
+                    opener=opener,
+                    timeout=timeout,
+                    usage_sink=usage_sink,
+                    usage_directory=usage_directory,
+                )
             content = parse_publish_response_text(api_type, data)
             # A Responses gateway may return valid-looking partial output_text
             # together with status=incomplete. Terminal state wins over content.

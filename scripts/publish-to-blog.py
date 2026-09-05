@@ -22,6 +22,7 @@ load_project_env()
 """
 import argparse
 import copy
+import contextvars
 import difflib
 import html
 import json, re, sys, os, subprocess, datetime, base64, concurrent.futures, hashlib, math
@@ -71,6 +72,7 @@ from path_config import (
 )
 from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env, get_required_fetch_proxy
 from runtime_guard import require_external_runtime
+from llm_usage import with_llm_usage_context
 from utils import strip_md, parse_analysis
 from tutorial_payload_verifier import (
     TUTORIAL_FORMAT_CONTRACT,
@@ -119,6 +121,7 @@ DIGEST_COVER_RENDERING_CONTRACT = {
     'maxPngBytes': VISUAL_SUMMARY_MAX_BYTES,
 }
 _REVIEW_PROTOCOL_CACHE = {}
+_REVIEW_UNIT_CONTEXT = contextvars.ContextVar('blog_review_unit_context', default=None)
 PUBLISH_IMAGE_EXCLUSIONS_SCHEMA_VERSION = 1
 PUBLISH_IMAGE_EXCLUSIONS_PATH = PROJECT_ROOT / 'config' / 'publish-image-exclusions.json'
 PUBLISH_IMAGE_EXCLUSIONS_FIELD = 'publishImageExclusions'
@@ -538,6 +541,84 @@ def call_llm_api(
         use_secondary=use_secondary,
         structured_output=structured_output,
     )
+
+
+@contextmanager
+def review_unit_cache(date_str, page_path, *, required, paper_id=None):
+    """Enable request-level recovery only within a strict publication review."""
+    context = None
+    if required:
+        context = {
+            'directory': review_page_checkpoint_dir(validate_publish_date(date_str)) / 'units'
+                / hashlib.sha256(str(Path(page_path).resolve()).encode('utf-8')).hexdigest(),
+            'protocol': review_protocol_fingerprint(),
+            'paperId': paper_id,
+        }
+    token = _REVIEW_UNIT_CONTEXT.set(context)
+    try:
+        yield
+    finally:
+        _REVIEW_UNIT_CONTEXT.reset(token)
+
+
+def review_cached_unit(kind, inputs, run):
+    """Reuse only exact successful request evidence; retain failed issues for diagnosis."""
+    context = _REVIEW_UNIT_CONTEXT.get()
+    if context is None:
+        return run()
+    identity = {
+        'schemaVersion': 1, 'kind': kind,
+        'reviewProtocolFingerprint': context['protocol'],
+        'inputSha256': _stable_json_sha256(inputs),
+    }
+    key = _stable_json_sha256(identity)
+    directory = context['directory']
+    checkpoint = directory / f'{key}.json'
+    # Never follow a cache symlink; malformed checkpoints simply cannot attest
+    # a successful request. No prompt, page body or image bytes are persisted.
+    current_root = Path(CURRENT_DIR)
+    for component in (checkpoint, directory, *directory.parents):
+        if component.is_symlink():
+            raise PublishDataValidationError('review unit checkpoint 禁止符号链接')
+        if component == current_root:
+            break
+    try:
+        if checkpoint.stat().st_size > 1024 * 1024:
+            raise ValueError('review unit checkpoint exceeds bounded result size')
+        record = json.loads(checkpoint.read_text(encoding='utf-8'))
+        if (
+            isinstance(record, dict)
+            and all(record.get(name) == value for name, value in identity.items())
+            and record.get('passed') is True
+            and record.get('resultSha256') == _stable_json_sha256({
+                'passed': record.get('passed'), 'issues': record.get('issues'),
+            })
+        ):
+            passed, issues = validate_review_payload(record, required=True, context='cached review unit')
+            if passed is True and count_blocking_review_issues(issues) == 0:
+                return passed, issues
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        pass
+    try:
+        with with_llm_usage_context({
+            'paperId': context.get('paperId'),
+            'stage': 'publish.figure' if kind == 'image' else 'publish.text',
+            'unitId': key,
+        }):
+            passed, issues = run()
+    except Exception as exc:
+        # The caller keeps the original exception/retry semantics.
+        result = {'passed': False, 'issues': [{
+            'severity': 'error', 'type': 'infrastructure',
+            'description': f'review request failed ({type(exc).__name__})',
+        }]}
+        atomic_write_json(checkpoint, {**identity, **result,
+            'resultSha256': _stable_json_sha256(result)}, ensure_ascii=False, indent=2, mode=0o600)
+        raise
+    result = {'passed': passed is True, 'issues': issues}
+    atomic_write_json(checkpoint, {**identity, **result,
+        'resultSha256': _stable_json_sha256(result)}, ensure_ascii=False, indent=2, mode=0o600)
+    return passed, issues
 
 
 def validate_publish_date(value):
@@ -979,12 +1060,14 @@ def llm_review_post(content, title="", required=False):
     chunk_results = [None] * len(chunks)
 
     def review_chunk(index):
-        return _llm_review_post_chunk(
-            chunks[index],
-            title,
-            required=required,
-            chunk_label=f'{index + 1}/{len(chunks)}',
+        label = f'{index + 1}/{len(chunks)}'
+        passed, issues = review_cached_unit(
+            'text', {'content': chunks[index], 'title': title, 'chunkLabel': label, 'required': required},
+            lambda: _llm_review_post_chunk(
+                chunks[index], title, required=required, chunk_label=label,
+            )[:2],
         )
+        return passed, issues, chunks[index]
 
     # The large daily index is otherwise the serial bottleneck. Paper pages are
     # already parallelized by review_all_posts, so keep their chunks sequential
@@ -994,7 +1077,7 @@ def llm_review_post(content, title="", required=False):
         print(f"    🔀 汇总页文本分块 review 并发度: {workers}")
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
-                executor.submit(review_chunk, index): index
+                executor.submit(contextvars.copy_context().run, review_chunk, index): index
                 for index in range(len(chunks))
             }
             for future in concurrent.futures.as_completed(futures):
@@ -1521,10 +1604,12 @@ def multimodal_review_images(content, title="", required=False):
     # preserving exact image/context alignment and full per-page coverage.
     for index, (summary, image_payload) in enumerate(zip(img_summary, image_payloads), 1):
         batch_prompt = prompt.replace(summary_blob, summary, 1)
-        passed, issues = review_image_batch(
-            batch_prompt,
-            [image_payload],
-            f"多模态图片 review: {title} [图 {index}/{len(image_payloads)}]",
+        passed, issues = review_cached_unit(
+            'image', {'prompt': batch_prompt, 'images': [image_payload], 'required': required},
+            lambda: review_image_batch(
+                batch_prompt, [image_payload],
+                f"多模态图片 review: {title} [图 {index}/{len(image_payloads)}]",
+            ),
         )
         passed_all = passed_all and passed
         all_issues.extend(issues)
@@ -5003,6 +5088,8 @@ def classify_review_failure(issues):
     blocking = [issue for issue in (issues or []) if is_blocking_review_issue(issue)]
     if not blocking:
         return None
+    if all(isinstance(issue, dict) and issue.get('type') == 'infrastructure' for issue in blocking):
+        return 'transient'
     transient_markers = (
         '连续失败', '调用失败', '返回非 json', '响应不完整', '协议',
         '下载失败', '超时', 'timeout', 'unavailable',
@@ -5061,9 +5148,17 @@ def _review_single_paper(args):
     blocking_details.extend({'severity': 'error', 'description': str(issue)} for issue in remaining_code_issues)
     for issue in issues:
         lines.append(f"    ⚠️  代码层: {issue}")
+    if fixed and not issues:
+        blocking_count += 1
+        blocking_details.append({'severity': 'error', 'type': 'deterministic',
+            'description': '最终字节需要确定性修复'})
+    if blocking_count:
+        return (expected_path, title, 0, blocking_count, 0, lines, 'content',
+                page_artifact['sha256'], blocking_details)
 
     # 2. LLM 文本审查
-    llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, title, required=require_llm)
+    with review_unit_cache(date_str, paper_file, required=require_llm, paper_id=arxiv_id):
+        llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, title, required=require_llm)
     if llm_passed is False and count_blocking_review_issues(llm_issues) == 0:
         llm_issues = list(llm_issues or []) + [{
             'severity': 'error',
@@ -5088,7 +5183,8 @@ def _review_single_paper(args):
         advisory_count += len(llm_issues) - llm_blocking
 
     # 3. 多模态图片审查
-    img_passed, img_issues = multimodal_review_images(content, title, required=require_llm)
+    with review_unit_cache(date_str, paper_file, required=require_llm, paper_id=arxiv_id):
+        img_passed, img_issues = multimodal_review_images(content, title, required=require_llm)
     if img_passed is False and count_blocking_review_issues(img_issues) == 0:
         img_issues = list(img_issues or []) + [{
             'severity': 'error',
@@ -5117,6 +5213,7 @@ def _review_single_paper(args):
     return (
         os.path.realpath(paper_file), title, fixed_count, blocking_count,
         advisory_count, lines, failure_kind, reviewed_sha256,
+        blocking_details,
     )
 
 
@@ -5192,7 +5289,25 @@ def review_all_posts(
             print(f"    ⚠️  代码层: {issue}")
 
         # 2. LLM 文本审查
-        llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, "汇总页", required=require_llm)
+        if fixed and not remaining_code_issues:
+            remaining_code_issues = ['最终字节需要确定性修复']
+            total_blocking_issues += 1
+        if remaining_code_issues:
+            result = {
+                'passed': False, 'completed': True, 'failureKind': 'content',
+                'blockingCount': len(remaining_code_issues),
+                'reviewedSha256': index_artifact['sha256'],
+                'issues': [{'severity': 'error', 'type': 'deterministic', 'description': str(issue)}
+                           for issue in remaining_code_issues],
+            }
+            file_results[index_key] = result
+            if result_callback:
+                result_callback(index_key, result)
+            if return_details:
+                return total_fixed, total_blocking_issues, file_results
+            return total_fixed, total_blocking_issues
+        with review_unit_cache(date_str, index_file, required=require_llm):
+            llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, "汇总页", required=require_llm)
         if llm_passed is False and count_blocking_review_issues(llm_issues) == 0:
             llm_issues = list(llm_issues or []) + [{
                 'severity': 'error',
@@ -5215,7 +5330,8 @@ def review_all_posts(
         total_advisory_issues += len(llm_issues) - llm_blocking
 
         # 汇总页同样可能包含论文图片，必须经过与独立论文页一致的多模态审查。
-        _img_passed, img_issues = multimodal_review_images(content, '汇总页面', required=require_llm)
+        with review_unit_cache(date_str, index_file, required=require_llm):
+            _img_passed, img_issues = multimodal_review_images(content, '汇总页面', required=require_llm)
         if _img_passed is False and count_blocking_review_issues(img_issues) == 0:
             img_issues = list(img_issues or []) + [{
                 'severity': 'error',
@@ -5256,6 +5372,7 @@ def review_all_posts(
             ),
             'reviewedSha256': index_reviewed_sha256,
             'imageReviewMode': current_image_review_mode(),
+            'issues': list(llm_issues) + list(img_issues),
         }
         if result_callback:
             result_callback(os.path.realpath(index_file), file_results[os.path.realpath(index_file)])
@@ -5298,6 +5415,8 @@ def review_all_posts(
                         'blockingCount': 1,
                         'completed': True,
                         'failureKind': 'transient',
+                        'issues': [{'severity': 'error', 'type': 'infrastructure',
+                                    'description': f'review worker failed ({type(exc).__name__})'}],
                     }
                     if result_callback:
                         result_callback(path, file_results[path])
@@ -5307,7 +5426,7 @@ def review_all_posts(
                 (
                     path, title, fixed_count, blocking_count, advisory_count,
                     lines, failure_kind, reviewed_sha256,
-                ) = result
+                ) = result[:8]
                 print(f"\n  📄 {title[:50]}...")
                 for line in lines:
                     print(line)
@@ -5321,6 +5440,7 @@ def review_all_posts(
                     'failureKind': failure_kind,
                     'reviewedSha256': reviewed_sha256,
                     'imageReviewMode': current_image_review_mode(),
+                    'issues': result[8] if len(result) > 8 else [],
                 }
                 if result_callback:
                     result_callback(path, file_results[path])
@@ -8149,7 +8269,7 @@ def attest_visual_summary_assets(date_str, publish_paths, manifest_path, file_re
     return blocking
 
 
-def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_results):
+def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_results, *, preflight_only=False):
     """Bind every paper figure/sidecar to an exact reviewed page and byte record."""
     manifest = _load_json_object(manifest_path, '生成清单')
     records = manifest.get('files')
@@ -8245,9 +8365,10 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
                     sidecar_record == expected_page_record
                     and frontmatter.get('paper_digest_abstract_sha256')
                     == expected[1]['abstractSha256']
-                    and file_results.get(str(page), {}).get('passed') is True
-                    and file_results.get(str(page), {}).get('reviewedSha256')
-                    == _sha256_file(page)
+                    and (preflight_only or (
+                        file_results.get(str(page), {}).get('passed') is True
+                        and file_results.get(str(page), {}).get('reviewedSha256') == _sha256_file(page)
+                    ))
                 )
             if valid:
                 result.update({
@@ -8272,15 +8393,17 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
         references = [page for page, urls in page_urls.items() if public_url in urls]
         reviewed_pages = [
             page for page in references
-            if file_results.get(str(page), {}).get('passed') is True
-            and file_results.get(str(page), {}).get('reviewedSha256') == _sha256_file(page)
+            if preflight_only or (
+                file_results.get(str(page), {}).get('passed') is True
+                and file_results.get(str(page), {}).get('reviewedSha256') == _sha256_file(page)
+            )
         ]
         if not reviewed_pages:
             blocking += 1
             file_results[str(asset)] = result
             continue
         page_modes = {
-            file_results[str(page)].get('imageReviewMode', 'deterministic_only')
+            file_results.get(str(page), {}).get('imageReviewMode', 'deterministic_only')
             for page in reviewed_pages
         }
         result.update({
@@ -8577,6 +8700,10 @@ def save_review_receipt(
         raise PublishDataValidationError('签发审查凭证必须绑定 generation manifest')
     if reviewed_results is None:
         raise PublishDataValidationError('签发审查凭证必须绑定逐文件 review 字节凭证')
+    current_protocol = review_protocol_fingerprint()
+    for result in reviewed_results.values():
+        if result.get('passed') is True and result.get('reviewProtocolFingerprint') not in (None, current_protocol):
+            raise PublishDataValidationError('逐文件审查协议已变化，拒绝签发当前协议凭证')
     validate_generation_manifest_file_bytes(generation_manifest, date_str)
     save_review_pass_cache(date_str, publish_paths, reviewed_results)
     pass_records = _collect_review_pass_records(date_str)
@@ -8815,6 +8942,7 @@ def save_review_page_checkpoint(
         'completed': bool(result.get('completed', False)),
         'failureKind': None if passed else (failure_kind or 'pending'),
         'blockingCount': int(result.get('blockingCount') or 0),
+        'issues': list(result.get('issues') or []),
         'reviewedSha256': reviewed_sha if passed else None,
         'reviewProtocolFingerprint': protocol,
         'imageReviewMode': (
@@ -8961,6 +9089,7 @@ def save_review_failure_state(
     manifest_path,
     base_head,
     file_results,
+    *, batch_issues=None,
 ):
     """Persist per-file failed-review evidence for a safe incremental retry."""
     save_review_pass_cache(date_str, publish_paths, file_results)
@@ -8984,6 +9113,7 @@ def save_review_failure_state(
             **fingerprint,
             'passed': result_passed if not fingerprint['deleted'] else True,
             'completed': bool(result.get('completed', False)) if not fingerprint['deleted'] else True,
+            'issues': list(result.get('issues') or []),
             'failureKind': (
                 None if result_passed or fingerprint['deleted']
                 else result.get('failureKind') or 'pending'
@@ -9011,6 +9141,7 @@ def save_review_failure_state(
             datetime.timezone(datetime.timedelta(hours=8))
         ).isoformat(),
         'files': records,
+        'issues': list(batch_issues or []),
     }
     path = review_failure_path(date_str)
     atomic_write_json(path, state, ensure_ascii=False, indent=2, mode=0o600)
@@ -9098,6 +9229,7 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
                 and checkpoint.get('sha256') == current['sha256']
                 and checkpoint.get('passed') is True
                 and checkpoint.get('reviewedSha256') == current['sha256']
+                and checkpoint.get('reviewProtocolFingerprint') == current_protocol
             ):
                 cached = {
                     'reviewProtocolFingerprint': checkpoint.get(
@@ -9108,7 +9240,7 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
                     ),
                 }
             key = str(item.resolve())
-            if cached is not None:
+            if cached is not None and cached.get('reviewProtocolFingerprint') == current_protocol:
                 prior_results[key] = {
                     'passed': True, 'completed': True, 'failureKind': None,
                     'reviewedSha256': current['sha256'],
@@ -9142,6 +9274,7 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
                 unchanged_failed.append(item.resolve())
                 prior_results[key] = {
                     'passed': False, 'completed': True, 'failureKind': 'content',
+                    'issues': list(record.get('issues') or []),
                 }
             else:
                 selected.append(item.resolve())
@@ -9272,10 +9405,8 @@ def load_verified_review_receipt(date_str):
             if not target.is_file() or not re.fullmatch(r'[0-9a-f]{64}', str(expected or '')):
                 raise PublishDataValidationError(f'已审查文件缺失或哈希非法: {key}')
             evidence_protocol = record.get('reviewProtocolFingerprint')
-            if evidence_protocol is not None and not re.fullmatch(
-                r'[0-9a-f]{64}', str(evidence_protocol)
-            ):
-                raise PublishDataValidationError(f'已审查文件协议指纹非法: {key}')
+            if evidence_protocol != receipt.get('reviewProtocolFingerprint'):
+                raise PublishDataValidationError(f'逐文件审查协议不匹配，必须重新审查: {key}')
             actual = _sha256_file(target)
             if actual != expected:
                 raise PublishDataValidationError(f'文件在 review 后已变更，拒绝推送: {key}')

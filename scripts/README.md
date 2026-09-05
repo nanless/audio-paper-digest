@@ -22,6 +22,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | 跑完当天可脚本化阶段（博客发布 + 视觉输入准备） | `npm run digest:prepare -- YYYY-MM-DD` |
 | 只续跑分析 | `npm run deep -- --date YYYY-MM-DD` |
 | 校验运行数据 | `npm run validate:data` |
+| 完整离线验证代码、数据与 Hugo | `npm run verify`；CI/干净空 checkout 显式加 `-- --allow-empty` |
 | 查整轮最终状态 | `npm run digest:status -- --date YYYY-MM-DD` |
 | 查某个文件职责 | 继续阅读下方分类索引 |
 
@@ -40,6 +41,10 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/fetch-scheduler.js` | Node 库 | 按 host 串行调度、冷却和失败类型判定。 |
 | `lib/filter-input-contract.js` | Node 库 | 筛选决定所绑定的最小输入 SHA。 |
 | `lib/keyword-prefilter.js` | Node 库 | 版本化高召回音频关键词预筛。 |
+| `lib/reader-repair.js` | Node 库 | Reader 候选缓存、节点 SHA 与受限 patch、局部诊断及无进展检测；候选不构成 production proof。 |
+| `lib/reader-contract.js` | Node 库 | Reader 共享机械阈值、按本次证据生成 Prompt 门禁说明，以及基于实际小节身份的近重复 warning。 |
+| `lib/reader-tables.js` | Node 库 | 将 TABLE marker 与原表行列选择确定性展开为 Markdown 和既有逐格来源绑定，保留表头身份并拒绝错位/越界。 |
+| `lib/llm-usage.js` | Node 库 | 请求级真实 usage 规范化与按论文/阶段归因；服务未提供的计费用量保持不可得。 |
 
 ## 默认 LLM/API：恢复与维护入口
 
@@ -54,6 +59,9 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `refresh-api-reader.js` | 对指定论文或日期批次刷新 API reader/评分/作者/图片阶段。 |
 | `evaluate-keyword-prefilter.js` | 只读回放金标准与历史正样本，报告关键词召回。 |
 | `test-api-key.js` | 测试主模型或副模型的协议路由、代理和响应。 |
+| `verify-project.js` | 沙箱外完整离线验证：固定 Hugo、全仓语法、默认/Manual JS 与 Python、只读数据门禁；`--quick` 仅语法与数据，不是完整验收。 |
+| `llm-usage-report.js` | 只读汇总请求用量事件，区分真实 usage、不可得状态和字符估算，不推算未经证实的费用。 |
+| `evaluate-reader-efficiency.js` | 显式、隔离、限额的单篇 Reader 效率实验；默认只预检，`--live` 才调用模型，不覆盖 canonical 或发布博客。 |
 | `paper-rethink-server.js` | 历史独立维护工具；博客已取消本机助手集成，不应为阅读、引用或复制 AI 提问启动此服务。旧接口实现仍保留供历史维护。 |
 | `validate-data-files.js` | 只读复验 current 数据、跨文件集合、评分和兼容 provenance。 |
 | `backfill_papers.py` | 只补录历史论文 ID，不执行深度分析。 |
@@ -71,6 +79,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `project_env.py` | Python 项目环境、最小子进程环境与代理加载。 |
 | `path_config.py` | Python 共享路径、日期与原子写配置。 |
 | `llm_account_pool.py` | Python 与 Node 共享同一 OpenCode Go 账号池 schema/锁协议。 |
+| `llm_usage.py` | Python 发布侧请求 usage 与失败事件记录，复用跨运行用量归因格式。 |
 | `utils.py` | Python 评分解析与发布侧通用文本工具。 |
 | `log_setup.py` | Python 统一日志与脱敏。 |
 | `runtime_guard.py` | Python 沙箱外运行守卫。 |

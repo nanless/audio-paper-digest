@@ -56,14 +56,19 @@ Apply is an offline maintenance operation. Run it only when acquisition, analysi
 ## Verification
 
 ```bash
-npm test
-npm run test:default
-npm run test:manual
-npm run validate:data -- --allow-empty
+npm run verify
 git diff --check
 ```
 
-CI also checks JS/Python syntax, both Python suites, and all shell scripts. Add controlled artifact tests for prompt/publication changes and test Muse plus ordinary direct providers for proxy changes.
+Run `verify` outside the sandbox. Full verification requires Hugo **0.160.1**, matching blog deployment, checks repository JS/Python/shell syntax, runs `npm test` once (both default and Manual JS suites), runs both Python suites, and performs read-only data validation. Any failure exits nonzero. The real Hugo resource pipeline fixture must build; missing Hugo is not a passing full verification. Traversal excludes vendor/runtime trees including `node_modules`, `.venv`, `data`, `logs`, and `.git`, and never follows symlinks. Python bytecode uses a private temporary directory.
+
+Only CI or a clean checkout with no data explicitly uses `npm run verify -- --allow-empty`. Normal verification validates existing data. `npm run verify -- --quick` runs syntax and data checks only, omits all tests and Hugo, and is **not full acceptance**. Use individual suites for targeted debugging; do not repeat `test:default` and `test:manual` after the full runner.
+
+CI installs the [pinned official Hugo release](https://github.com/gohugoio/hugo/releases/tag/v0.160.1), verifies its archive against that release's official checksums, then invokes the same `verify --allow-empty` entry. Local verification checks the installed tool without downloading or upgrading it.
+
+Offline replay uses temporary directories and synthetic/redacted fixtures, with model, network, and publication calls injected as mocks. Never modify production canonical data to create a passing fixture. Reader cases cover multiple errors, numeric/unit evidence, figure markers, malformed JSON, stale/unauthorized patches, corrupt candidates, failure recovery, and lack of progress. Publication cases cover protocol drift, byte changes, zero-LLM deterministic rejection, and a real Hugo resource build. Record input fingerprints and observed outcomes; fixture success does not prove article quality or actual billed-token savings. A separately authorized isolated article experiment can complement these checks. Paid API calls are outside `verify`.
+
+Original-table selection supports only tables that can be rendered verbatim safely. Before paid generation, `TABLE_N_SELECTION` reports eligibility and reasons. Blank source headers, every row marked as a header, and unresolved MathML/TeX duplication disable selection for that table; the renderer rejects it again. Do not guess header roles or loosen numeric equivalence. The existing `source_quotes` route remains available only when exact contiguous quotes pass all numeric/unit checks. This change introduces no new cross-runtime display normalization protocol.
 
 ## Before Commit
 

@@ -122,6 +122,7 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。默认发布入口要求 Python 3.11+ 
 | `PD_ANALYSIS_REPAIR_MAX_TOKENS` | 16000 |
 | `PD_ANALYSIS_FULL_TEXT_MAX_CHARS` | 200000 |
 | `PD_API_READER_MAX_TOKENS` | 48000 |
+| `PD_API_READER_REPAIR_MAX_TOKENS` | 8000；仅受限局部补丁 |
 | `PD_API_READER_EVIDENCE_MAX_CHARS` | 180000 |
 | `PD_API_READER_CONTEXT_MAX_CHARS` | 240000 |
 | `PD_API_READER_CONCURRENCY` | 5，限制 1–5 |
@@ -202,9 +203,13 @@ npm run cover:status -- --date YYYY-MM-DD
 ## 8. 维护与验证
 
 ```bash
-npm test
-npm run validate:data -- --allow-empty
+npm run verify
+# 仅 CI/干净 checkout 显式允许空数据：npm run verify -- --allow-empty
+# 快速语法+数据子集（不是完整验收）：npm run verify -- --quick
 ```
+
+完整入口包含固定 Hugo 0.160.1、全部 JS、默认/Manual Python、全仓语法和只读数据验证。
+Reader 局部修复、表格三种输入模式与真实用量统计见 [reader-writing](docs/reader-writing.md)。
 
 - 新分析入口复用 `analysis-engine.js`，新 LLM 调用复用公共路由和请求封装。
 - Node/Python 路径进入集中配置；写 JSON 使用原子写和跨进程锁。

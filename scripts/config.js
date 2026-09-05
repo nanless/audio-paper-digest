@@ -112,6 +112,7 @@ const ANALYSIS_CONFIG = {
     repairMaxTokens: 16000,
     // 初学研究者长文需要容纳更多章节、宽表和逐图解说，不与局部修复共用较小的输出上限。
     apiReaderMaxTokens: 48000,
+    apiReaderRepairMaxTokens: 8000,
     apiTemperature: 0.7,
     scoringAuditTemperature: 0.1,
     imagePlanTemperature: 0.2,
@@ -161,6 +162,8 @@ const FILES = {
     // 跨日期、跨 Node/Python 的 provider 账号状态。它不是日批次数据，
     // 因此不能放进会被归档轮转的 current/。
     llmAccountPoolState: path.join(DATA_DIR, 'runtime', 'llm-account-pool.json'),
+    llmUsageDir: path.join(DATA_DIR, 'runtime', 'llm-usage'),
+    apiReaderAttemptsDir: path.join(DATA_DIR, 'runtime', 'reader-attempts'),
     papers: path.join(CURRENT_DIR, 'papers.json'),
     papersLegacy: path.join(DATA_DIR, 'papers.json'),
     rawCandidates: path.join(CURRENT_DIR, 'raw-candidates.json'),
@@ -287,6 +290,8 @@ function applyEnvOverrides() {
     if (apiReaderMaxTokens) {
         ANALYSIS_CONFIG.apiReaderMaxTokens = apiReaderMaxTokens;
     }
+    const apiReaderRepairMaxTokens = readPositiveInt('PD_API_READER_REPAIR_MAX_TOKENS');
+    if (apiReaderRepairMaxTokens) ANALYSIS_CONFIG.apiReaderRepairMaxTokens = apiReaderRepairMaxTokens;
     const evidenceCharOverrides = {
         PD_ANALYSIS_FULL_TEXT_MAX_CHARS: 'fullTextMaxChars',
         PD_OPENSOURCE_EVIDENCE_MAX_CHARS: 'openSourceEvidenceMaxChars',
