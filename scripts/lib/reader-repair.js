@@ -12,9 +12,156 @@ const REPAIR_VERSION = 'reader-node-repair-v1';
 const ARRAY_FIELDS = ['sections', 'conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings'];
 const ROOT_FIELDS = ['version', 'readerTitle', 'oneSentenceThesis', ...ARRAY_FIELDS];
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
+const VALIDATION_SIGNATURE_PREFIX = 'reader-validation-v2:';
+const IMPLEMENTATION_ALLOWANCE_CONTRACT = 'reader-implementation-repair-allowance-v1';
+const IMPLEMENTATION_ALLOWANCE_FIELDS = new Set(['repairImplementationSha256', 'tableCompilerSha256',
+    'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256',
+    'parserImplementationSha256', 'editorialImplementationSha256', 'mechanicalContractSha256']);
 const hashDraft = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const shaText = value => crypto.createHash('sha256').update(String(value)).digest('hex');
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+
+function normalizeValidationMessage(message) {
+    return String(message || '')
+        // Exact-binding failures carry draft values that may change while the
+        // same row/column remains unbound. Preserve the structural coordinates
+        // and gate name, but remove volatile cell contents and missing values.
+        .replace(/(关键数字缺少 exact quote\/cell 证据:)\s*[^；]+/giu, '$1 <values>')
+        .replace(/\btext="[^"]*"/giu, 'text="<value>"')
+        .replace(/\bmissing=[^。；，]+/giu, 'missing=<value>')
+        // Length/count diagnostics should converge even when a repair changes
+        // the amount by a few characters. Required thresholds remain intact.
+        .replace(/(当前|已有|现有|仍缺|还缺|缺少|不足|多出|超出|超过)\s*\d+(?:\.\d+)?/gu,
+            (surface, label) => `${['已有', '现有'].includes(label) ? '当前'
+                : ['还缺', '缺少', '不足'].includes(label) ? '仍缺'
+                    : ['超出', '超过'].includes(label) ? '多出' : label} <value>`);
+}
+
+function validationDeficits(message, coordinate) {
+    const text = String(message || '');
+    const patterns = [
+        { kind: 'remaining', direction: 'lower', expression: /(?:仍缺|还缺|缺少|不足)\s*(\d+(?:\.\d+)?)/gu },
+        { kind: 'overflow', direction: 'lower', expression: /(?:多出|超出|超过)\s*(\d+(?:\.\d+)?)/gu },
+        { kind: 'current', direction: 'higher', expression: /(?:当前|已有|现有)\s*(\d+(?:\.\d+)?)/gu }
+    ];
+    return patterns.flatMap(({ kind, direction, expression }) => [...text.matchAll(expression)]
+        .map((match, index) => ({ key: `${coordinate}\0${kind}\0${index}`, direction,
+            value: Number(match[1]) })));
+}
+
+function validationFailureSignature(issues) {
+    const values = Array.isArray(issues) ? issues : [];
+    const blocking = values.filter(issue => issue?.diagnosticOnly !== true);
+    const selected = blocking.length ? blocking : values;
+    const gates = selected.map(issue => ({ path: issue?.path ?? null, code: issue?.code || null,
+        message: normalizeValidationMessage(issue?.message) }))
+        .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    const deficits = selected.flatMap(issue => {
+        const gate = { path: issue?.path ?? null, code: issue?.code || null,
+            message: normalizeValidationMessage(issue?.message) };
+        return validationDeficits(issue?.message, JSON.stringify(gate));
+    }).sort((a, b) => a.key.localeCompare(b.key));
+    return VALIDATION_SIGNATURE_PREFIX + JSON.stringify({ gateSha256: hashDraft(gates), deficits });
+}
+
+function parseValidationFailureSignature(signature) {
+    if (!String(signature || '').startsWith(VALIDATION_SIGNATURE_PREFIX)) return null;
+    try {
+        const parsed = JSON.parse(String(signature).slice(VALIDATION_SIGNATURE_PREFIX.length));
+        if (!/^[a-f0-9]{64}$/.test(parsed?.gateSha256 || '') || !Array.isArray(parsed.deficits)
+            || parsed.deficits.some(item => !item || typeof item.key !== 'string'
+                || !['lower', 'higher'].includes(item.direction) || !Number.isFinite(item.value))) return null;
+        return parsed;
+    } catch { return null; }
+}
+
+function validationFailureHasNoProgress(previousSignature, currentSignature) {
+    if (!previousSignature) return false;
+    if (previousSignature === currentSignature) return true;
+    const previous = parseValidationFailureSignature(previousSignature);
+    const current = parseValidationFailureSignature(currentSignature);
+    if (!previous || !current || previous.gateSha256 !== current.gateSha256) return false;
+    const before = new Map(previous.deficits.map(item => [item.key, item]));
+    const after = new Map(current.deficits.map(item => [item.key, item]));
+    if (before.size !== after.size || [...before.keys()].some(key => !after.has(key))) return true;
+    let improved = false;
+    for (const [key, prior] of before) {
+        const next = after.get(key);
+        if (prior.direction !== next.direction) return true;
+        const delta = prior.direction === 'lower' ? prior.value - next.value : next.value - prior.value;
+        if (delta < 0) return true;
+        if (delta > 0) improved = true;
+    }
+    return !improved;
+}
+
+function readerAttemptLimit(maxAttempts, completedAttempts, candidate, implementationRepairAllowance) {
+    if (!Number.isInteger(maxAttempts) || maxAttempts < 1
+        || !Number.isInteger(completedAttempts) || completedAttempts < 0
+        || ![0, 1].includes(implementationRepairAllowance)) {
+        throw new Error('Reader attempt limit received invalid counters');
+    }
+    return Math.max(maxAttempts,
+        completedAttempts + (candidate && implementationRepairAllowance === 1 ? 1 : 0));
+}
+
+function readAllowanceEnvelope(filename) {
+    let fd;
+    try {
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_FILE_BYTES || (stat.mode & 0o777) !== 0o600) {
+            throw new Error('Reader implementation allowance source envelope is unsafe');
+        }
+        const bytes = fs.readFileSync(fd); return { bytes, envelope: JSON.parse(bytes.toString('utf8')) };
+    } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+function validateImplementationAllowance(payload, identity, directory) {
+    const proof = payload?.implementationRepairAllowanceProof;
+    if (proof === undefined || proof === null) return false;
+    const keys = ['contract', 'fromIdentitySha256', 'toIdentitySha256', 'oldPayloadSha256',
+        'revisionAuditSha256', 'changedFields', 'allowanceSha256'];
+    const audits = Array.isArray(payload.readerRecoveryRevisions) ? payload.readerRecoveryRevisions : [];
+    const audit = audits.at(-1); const body = proof && { ...proof }; if (body) delete body.allowanceSha256;
+    const fromIdentity = String(proof?.fromIdentitySha256 || '');
+    const archivePattern = new RegExp(`^${fromIdentity}\\.migrated-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json$`);
+    if (!proof || typeof proof !== 'object' || Array.isArray(proof)
+        || Object.keys(proof).sort().join('\0') !== keys.sort().join('\0')
+        || proof.contract !== IMPLEMENTATION_ALLOWANCE_CONTRACT
+        || !Array.isArray(proof.changedFields) || !proof.changedFields.length
+        || proof.changedFields.some(field => !IMPLEMENTATION_ALLOWANCE_FIELDS.has(field))
+        || proof.changedFields.some((field, index) => index && proof.changedFields[index - 1].localeCompare(field) >= 0)
+        || !audit || audit.contract !== 'reader-recovery-diagnostics-revision-v1'
+        || audit.runId !== identity?.freshAnalysis?.runId || audit.paperId !== identity?.paperId
+        || audit.toIdentitySha256 !== hashDraft(identity) || audit.fromIdentitySha256 !== fromIdentity
+        || !archivePattern.test(String(audit.archivedName || ''))
+        || !/^[a-f0-9]{64}$/.test(String(audit.oldEnvelopeSha256 || ''))
+        || !/^[a-f0-9]{64}$/.test(String(audit.oldPayloadSha256 || ''))
+        || hashDraft(audit) !== proof.revisionAuditSha256
+        || proof.fromIdentitySha256 !== audit.fromIdentitySha256
+        || proof.oldPayloadSha256 !== audit.oldPayloadSha256
+        || proof.toIdentitySha256 !== hashDraft(identity)
+        || hashDraft([...audit.changedFields].filter(field => IMPLEMENTATION_ALLOWANCE_FIELDS.has(field)).sort()) !== hashDraft(proof.changedFields)
+        || proof.allowanceSha256 !== hashDraft(body)) throw new Error('Reader implementation repair allowance lacks a valid recovery-revision proof');
+    if (typeof directory !== 'string') throw new Error('Reader implementation repair allowance requires its private candidate directory');
+    const absolute = assertSafeDirectory(directory);
+    const archived = path.join(absolute, audit.archivedName); const original = path.join(absolute, `${fromIdentity}.json`);
+    let checked;
+    try { checked = readAllowanceEnvelope(archived); }
+    catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        checked = readAllowanceEnvelope(original);
+    }
+    const envelopeSha256 = crypto.createHash('sha256').update(checked.bytes).digest('hex');
+    if (envelopeSha256 !== audit.oldEnvelopeSha256
+        || hashDraft(checked.envelope?.identity) !== fromIdentity
+        || checked.envelope?.payloadSha256 !== audit.oldPayloadSha256
+        || hashDraft(checked.envelope?.payload) !== audit.oldPayloadSha256) {
+        throw new Error('Reader implementation repair allowance old envelope/archive proof drifted');
+    }
+    return true;
+}
 
 function assertSafeJson(value) {
     if (!value || typeof value !== 'object') return;
@@ -137,7 +284,7 @@ function collectDraftIssues(draft, parserError, options = {}) {
             const expectedKind = field === 'conceptBridges' ? binding?.sectionKind : binding?.targetKind;
             const matches = draft.sections.flatMap((section, sectionIndex) => (
                 typeof marker === 'string' && marker && typeof section?.body === 'string'
-                    ? section.body.split(/\n\s*\n/).filter(block => block.trim() === marker)
+                    ? section.body.split(/\r?\n|\\n/).filter(line => line.trim() === marker)
                         .map(() => sectionIndex) : []
             ));
             if (matches.length !== 1 || draft.sections[matches[0]]?.kind !== expectedKind) {
@@ -380,12 +527,23 @@ function loadFailedCandidate(directory, identity) {
                 && (!Number.isInteger(envelope.payload.transportFailures) || envelope.payload.transportFailures < 0))
             || !Number.isInteger(envelope.payload.noProgress) || envelope.payload.noProgress < 0
             || typeof envelope.payload.failureSignature !== 'string'
+            || (envelope.payload.validationFailureSignature !== undefined
+                && typeof envelope.payload.validationFailureSignature !== 'string')
+            || (envelope.payload.validationFailureStreak !== undefined
+                && (!Number.isInteger(envelope.payload.validationFailureStreak)
+                    || envelope.payload.validationFailureStreak < 0))
+            || Object.prototype.hasOwnProperty.call(envelope.payload, 'implementationRepairAllowance')
+            || (envelope.payload.consumedImplementationAllowanceSha256 !== undefined
+                && (!Array.isArray(envelope.payload.consumedImplementationAllowanceSha256)
+                    || envelope.payload.consumedImplementationAllowanceSha256.some(value => !/^[a-f0-9]{64}$/.test(value))
+                    || new Set(envelope.payload.consumedImplementationAllowanceSha256).size !== envelope.payload.consumedImplementationAllowanceSha256.length))
             || !Array.isArray(envelope.payload.issues)
             || envelope.payload.issues.some(issue => !issue || typeof issue.message !== 'string'
                 || (issue.path !== null && typeof issue.path !== 'string'))
             || (envelope.payload.draft && !parseRepairableDraft(envelope.payload.draft))) {
             throw new Error('Corrupt or drifted Reader candidate');
         }
+        validateImplementationAllowance(envelope.payload, envelope.identity, directory);
         return envelope.payload;
     } catch (error) {
         if (error.code === 'ENOENT') return null;
@@ -397,13 +555,32 @@ function saveFailedCandidate(directory, identity, payload) {
     assertSafeJson(identity);
     assertSafeJson(payload);
     if (payload.status !== 'failed') throw new Error('Reader candidate cannot certify success');
+    if (Object.prototype.hasOwnProperty.call(payload, 'implementationRepairAllowance')) {
+        throw new Error('Reader implementation repair allowance requires a recovery-revision proof');
+    }
     const absolute = assertSafeDirectory(directory, true);
     const filename = candidatePath(absolute, identity);
+    const previous = loadFailedCandidate(absolute, identity);
+    const storedPayload = structuredClone(payload);
+    const consumed = new Set(storedPayload.consumedImplementationAllowanceSha256 || []);
+    for (const value of previous?.consumedImplementationAllowanceSha256 || []) consumed.add(value);
+    const previousProof = previous?.implementationRepairAllowanceProof;
+    const nextProof = storedPayload.implementationRepairAllowanceProof;
+    if (previousProof && !nextProof) consumed.add(previousProof.allowanceSha256);
+    if (previousProof && nextProof && previousProof.allowanceSha256 !== nextProof.allowanceSha256) {
+        throw new Error('Reader implementation repair allowance cannot be replaced before consumption');
+    }
+    if (nextProof && consumed.has(nextProof.allowanceSha256)) {
+        throw new Error('Reader implementation repair allowance was already consumed');
+    }
+    if (consumed.size) storedPayload.consumedImplementationAllowanceSha256 = [...consumed].sort();
+    else delete storedPayload.consumedImplementationAllowanceSha256;
+    validateImplementationAllowance(storedPayload, identity, absolute);
     try {
         const stat = fs.lstatSync(filename);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('Unsafe Reader candidate destination');
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    const serialized = JSON.stringify({ version: REPAIR_VERSION, identity, payload, payloadSha256: hashDraft(payload) });
+    const serialized = JSON.stringify({ version: REPAIR_VERSION, identity, payload: storedPayload, payloadSha256: hashDraft(storedPayload) });
     if (Buffer.byteLength(serialized) > MAX_FILE_BYTES) throw new Error('Reader candidate exceeds recovery size budget');
     const temporary = path.join(absolute, `.${path.basename(filename)}.${crypto.randomUUID()}.tmp`);
     let fd;
@@ -432,6 +609,9 @@ function retireFailedCandidate(directory, identity) {
     return retired;
 }
 
-module.exports = { REPAIR_VERSION, hashDraft, shaText, parseRepairableDraft, collectDraftIssues,
+module.exports = { REPAIR_VERSION, IMPLEMENTATION_ALLOWANCE_CONTRACT, hashDraft, shaText, normalizeValidationMessage, validationFailureSignature,
+    validationFailureHasNoProgress, readerAttemptLimit,
+    validateImplementationAllowance,
+    parseRepairableDraft, collectDraftIssues,
     buildRepairTargets, applyReaderPatch, buildRepairContext, loadFailedCandidate, saveFailedCandidate,
     retireFailedCandidate };

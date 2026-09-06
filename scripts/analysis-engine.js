@@ -19,6 +19,7 @@ const {
     extractMarkdownTables,
     REQUIRED_RECOVERY_STAGES,
     isRecoveryStageTerminal,
+    validateCoreSummaryStageBinding,
     validateManualTakeoverManifest
 } = require('./analysis-contract.js');
 
@@ -37,6 +38,7 @@ const LOCK_HEARTBEAT_MS = 30 * 1000;
 const ANALYSIS_CHECKPOINT_CALLBACK = Symbol.for('audio-paper-digest.analysisCheckpointCallback');
 const ANALYSIS_RECOVERY_FIELDS = Object.freeze([
     'analysis', 'parsed', 'analysisManifest', 'analysisCheckpoint', 'analysisStageCheckpoints',
+    'analysisStaleSnapshots',
     'analysisRecoveryImageManifest', 'imageManifest', 'selectedImageUrls', 'imageUrls', 'allImageUrls',
     'analysisSource', 'sourceId', 'sourceTextChars', 'usedTextChars', 'fullTextChars',
     'fullTextAvailable', 'truncated', 'sourceSha256', 'usedTextSha256', 'analysisConfidence',
@@ -261,6 +263,7 @@ function isCompleteAnalysisContent(paper) {
         !isRecoveryStageTerminal(stage, stages[stage]?.status))) {
         return false;
     }
+    if (validateCoreSummaryStageBinding(paper)) return false;
     if (validateManualTakeoverManifest(
         paper.analysisManifest,
         paper.analysisManifest.sourceAcquisition?.sourceSha256 || paper.sourceSha256 || '',
@@ -273,6 +276,61 @@ function isCompleteAnalysisContent(paper) {
         if (!apiReaderV3BindsCanonical(paper)) return false;
     }
     return true;
+}
+
+const LEGACY_PRE_CORE_SUMMARY_RECOVERY_STAGES = Object.freeze(
+    REQUIRED_RECOVERY_STAGES.filter(stage => stage !== 'coreSummaryRepair')
+);
+const CORE_SUMMARY_V3_READ_ONLY_COMPATIBILITY_CUTOFF_MS = Date.parse(
+    '2026-09-07T00:00:00.000+08:00'
+);
+
+/**
+ * Narrow compatibility predicate for read-only validation of API results that
+ * were complete before core-summary-detailed-v3 existed.  Production analysis,
+ * scheduling and skip decisions must continue to use isSuccessfulAnalysisRecord.
+ */
+function isLegacyApiAnalysisSuccessForReadOnlyValidation(paper) {
+    const manifest = paper?.analysisManifest;
+    const stages = manifest?.stages;
+    const contracts = manifest?.contracts;
+    if (paper?.latestAnalysisAttemptError
+        || paper?.digestStatus?.latestAttemptStatus === 'analysis_failed'
+        || !hasValidAnalysisBody(paper)
+        || !manifest || manifest.version !== 1
+        || !stages || typeof stages !== 'object' || Array.isArray(stages)
+        || manifest.manualTakeover
+        || (contracts && (typeof contracts !== 'object' || Array.isArray(contracts)))
+        || Object.prototype.hasOwnProperty.call(contracts || {}, 'coreSummary')
+        || Object.prototype.hasOwnProperty.call(stages, 'coreSummaryRepair')
+        || LEGACY_PRE_CORE_SUMMARY_RECOVERY_STAGES.some(stage => {
+            const completedAt = Date.parse(stages[stage]?.updatedAt || '');
+            return !isRecoveryStageTerminal(stage, stages[stage]?.status)
+                || !Number.isFinite(completedAt)
+                || completedAt >= CORE_SUMMARY_V3_READ_ONLY_COMPATIBILITY_CUTOFF_MS;
+        })) {
+        return false;
+    }
+    const scoring = stages.scoringAudit;
+    return scoring?.scoringContract === 'api-scoring-audit-v2'
+        && scoringAuditBindsFinalAnalysis(paper)
+        && scoringStabilityIsResolved(scoring)
+        && apiReaderV3BindsCanonical(paper)
+        && !validateManualTakeoverManifest(
+            manifest,
+            manifest.sourceAcquisition?.sourceSha256 || paper.sourceSha256 || '',
+            { analysis: paper.analysis, imageManifest: paper.imageManifest }
+        );
+}
+
+function getReadOnlyValidationAnalysisRunSummary(papers) {
+    const records = Array.isArray(papers) ? papers : [];
+    const remaining = records.filter(paper => !(
+        isSuccessfulAnalysisRecord(paper)
+        || isLegacyApiAnalysisSuccessForReadOnlyValidation(paper)
+    )).length;
+    const success = records.length - remaining;
+    return { success, remaining, status: getAnalysisRunStatus({ success }, remaining) };
 }
 
 const API_READER_V3_CONTRACT = 'beginner-researcher-v3';
@@ -1048,6 +1106,7 @@ function mergePapersById(existingPapers, newPapers, options = {}) {
                     ...(p.analysisManifest ? { analysisManifest: p.analysisManifest } : {}),
                     ...(typeof p.analysisCheckpoint === 'string' ? { analysisCheckpoint: p.analysisCheckpoint } : {}),
                     ...(p.analysisStageCheckpoints ? { analysisStageCheckpoints: p.analysisStageCheckpoints } : {}),
+                    ...(p.analysisStaleSnapshots ? { analysisStaleSnapshots: p.analysisStaleSnapshots } : {}),
                     ...(p.analysisRecoveryImageManifest || p.imageManifest
                         ? { analysisRecoveryImageManifest: p.analysisRecoveryImageManifest || p.imageManifest }
                         : {}),
@@ -1128,6 +1187,8 @@ module.exports = {
     SCORING_STABILITY_RESOLUTION_CONTRACT,
     getAnalysisRunStatus,
     getCanonicalAnalysisRunSummary,
+    getReadOnlyValidationAnalysisRunSummary,
+    isLegacyApiAnalysisSuccessForReadOnlyValidation,
     getAnalysisExitCode,
     getInvalidAnalysisReason,
     hasRequiredSections,

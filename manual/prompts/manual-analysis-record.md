@@ -49,7 +49,7 @@
 - 清晰度只评价组织、符号、公式、图表与表达；可复现性只评价数据、配置、超参数、硬件与步骤；不得错位。
 - 开源只计算本文直接交付的代码、模型、数据或 Demo，第三方依赖和未来口头承诺按固定锚点处理。
 - `scoringReasons` 必须人工显式给出，禁止由摘要、创新或局限字段回填。评分 subagent 必须与正文 subagent 不同，并逐维绑定 evidence IDs。
-- 10 个兼容阶段都必须在 `stageReviews` 中独立记录 decision、attempts、evidenceIds、连续 sourceQuotes、issues 和 conclusion；decision 只能是 manual_verified、repaired、not_needed。禁止由组装器自动选择通用全文 chunk，也禁止把全局 audit.attempts 复制给全部阶段。repaired 必须保存至少 1 个实际问题和至少 2 次尝试。
+- 11 个兼容阶段（包括独立的 `coreSummaryRepair`）都必须在 `stageReviews` 中独立记录 decision、attempts、evidenceIds、连续 sourceQuotes、issues 和 conclusion；decision 只能是 manual_verified、repaired、not_needed。禁止由组装器自动选择通用全文 chunk，也禁止把全局 audit.attempts 复制给全部阶段。repaired 必须保存至少 1 个实际问题和至少 2 次尝试。
 - 无直接消融的多组件系统，实验充分性不得超过 1.2/1.5；只有部分消融不得超过 1.3/1.5。目标域评测为内部数据且不报告样本规模时，实验充分性不得超过 1.2/1.5。没有真实延迟、吞吐或资源测量时，工程价值不得超过 1.0/1.5。置信度不是“高”时总分不得超过 9.0；缺消融且主要依赖内部评测时总分不得超过 8.5。
 
 三、图片与技术表达

@@ -1784,6 +1784,34 @@ primary_task_tag: #音视频生成
             minimumIntegratedTables: 4,
             availableFigureOrdinals: []
         }));
+        const singleNewlineBridgePayload = structuredClone(v3Payload);
+        const bridgeSection = singleNewlineBridgePayload.sections.find(section => section.kind === 'method_overview');
+        bridgeSection.body = bridgeSection.body.replace(
+            '\n\n[[CONCEPT_BRIDGE_1]]\n\n', '\n[[CONCEPT_BRIDGE_1]]\n'
+        );
+        const normalizedBridgeResult = parseApiReaderArticleResult(JSON.stringify(singleNewlineBridgePayload), {
+            requiredVersion: 3,
+            requireIntegratedTables: true,
+            minimumIntegratedTables: 4,
+            availableFigureOrdinals: []
+        });
+        assert.doesNotMatch(normalizedBridgeResult.article, /\[\[CONCEPT_BRIDGE_1\]\]/,
+            'a unique marker-only line in the declared section is normalized without a model repair');
+        const escapedStructuralBreakPayload = structuredClone(v3Payload);
+        const escapedBridgeSection = escapedStructuralBreakPayload.sections.find(
+            section => section.kind === 'method_overview'
+        );
+        escapedBridgeSection.body = escapedBridgeSection.body.replace(
+            '\n\n[[CONCEPT_BRIDGE_1]]\n\n', '\\n[[CONCEPT_BRIDGE_1]]\\n'
+        );
+        const escapedBridgeResult = parseApiReaderArticleResult(JSON.stringify(escapedStructuralBreakPayload), {
+            requiredVersion: 3,
+            requireIntegratedTables: true,
+            minimumIntegratedTables: 4,
+            availableFigureOrdinals: []
+        });
+        assert.doesNotMatch(escapedBridgeResult.article, /\\n\[\[CONCEPT_BRIDGE_/,
+            'JSON double-escaped structural line breaks are normalized without rewriting prose');
         const wrongBridgeKind = structuredClone(v3Payload);
         wrongBridgeKind.sections.find(section => section.kind === 'method_overview').body =
             wrongBridgeKind.sections.find(section => section.kind === 'method_overview').body.replace('\n\n[[CONCEPT_BRIDGE_4]]', '');
@@ -2481,7 +2509,8 @@ primary_task_tag: #音视频生成
     });
 
     it('表格叙事只分隔heading与已有说明，绝不补写比较结论或缺失证据', () => {
-        const { ensureApiReaderTableNarratives, validateApiReaderTableNarratives } = require('../scripts/deep-analyzer.js');
+        const { ensureApiReaderTableNarratives, relocateExplicitReaderTableExplanations,
+            validateApiReaderTableNarratives } = require('../scripts/deep-analyzer.js');
         const before = '这张表在相同测试集上比较增强前后的信号质量，各行使用相同的评价指标。';
         const table = '| 指标 | 数值 |\n| --- | --- |\n| SDR | 3.00 |';
         const after = '这组结果显示目标条件下的增强收益，论文另有方差实验和部署成本分析，需要结合对应段落一起阅读。';
@@ -2496,8 +2525,46 @@ primary_task_tag: #音视频生成
         const absentAfter = `### 结果\n\n${before}\n\n${table}\n\n### 下一节`;
         assert.strictEqual(ensureApiReaderTableNarratives(absentAfter), absentAfter);
         assert.throws(() => validateApiReaderTableNarratives(absentAfter, 1), /后缺少独立解释段/);
+        const explicitMisplacement = `### 结果\n\n${before}。表后解释是，${after}\n\n${table}\n\n### 下一节`;
+        const relocated = relocateExplicitReaderTableExplanations(explicitMisplacement);
+        assert.ok(relocated.indexOf(table) < relocated.indexOf('表后解释是'));
+        assert.doesNotThrow(() => validateApiReaderTableNarratives(relocated, 1));
+        assert.strictEqual(relocateExplicitReaderTableExplanations(relocated), relocated);
+        assert.strictEqual(relocateExplicitReaderTableExplanations(absentAfter), absentAfter,
+            '没有显式“表后解释”原句时不得编造或移动正文');
         const fenced = '```markdown\n### 示例标题\n示例内容\n```\n\n~~~text\n### 另一个示例\n内容\n~~~';
         assert.strictEqual(ensureApiReaderTableNarratives(fenced), fenced);
+        const indentedFence = '```text\nkeep\n\n  indented semantic\n```';
+        assert.strictEqual(relocateExplicitReaderTableExplanations(indentedFence), indentedFence,
+            '零命中时 fenced code 的空行和缩进必须逐字不变');
+        const list = '- 条目\n\n    延续段必须保留缩进';
+        assert.strictEqual(relocateExplicitReaderTableExplanations(list), list,
+            '零命中时嵌套列表缩进必须逐字不变');
+    });
+
+    it('三类声明 marker 只修正确 kind 的非 fence 唯一 exact token', () => {
+        const { normalizeDeclaredReaderMarkerParagraphs } = require('../scripts/deep-analyzer.js');
+        const value = { sections: [
+            { kind: 'method_overview', body: '方法导读\\n[[CONCEPT_BRIDGE_1]]\\n方法解释' },
+            { kind: 'result', body: '图前导读\\n[[FIGURE_2]]\\n图后解释' },
+            { kind: 'component', body: '公式导读\\n[[FORMULA_3]]\\n公式解释' }
+        ], conceptBridges: [{ marker: '[[CONCEPT_BRIDGE_1]]', sectionKind: 'method_overview' }],
+        figurePlacements: [{ marker: '[[FIGURE_2]]', figureOrdinal: 2, targetKind: 'result' }],
+        formulaBindings: [{ marker: '[[FORMULA_3]]', formulaOrdinal: 3, targetKind: 'component' }] };
+        normalizeDeclaredReaderMarkerParagraphs(value);
+        for (const [index, marker] of ['[[CONCEPT_BRIDGE_1]]', '[[FIGURE_2]]', '[[FORMULA_3]]'].entries()) {
+            assert.match(value.sections[index].body, new RegExp(`\\n\\n${marker.replace(/[\[\]]/g, '\\$&')}\\n\\n`));
+        }
+        const protectedValue = { sections: [
+            { kind: 'result', body: '```text\n\\n[[FIGURE_2]]\\n\n```' },
+            { kind: 'component', body: '`\\n[[FORMULA_3]]\\n`' },
+            { kind: 'method_overview', body: '错误小节\\n[[CONCEPT_BRIDGE_1]]\\n不应修复' }
+        ], conceptBridges: [{ marker: '[[CONCEPT_BRIDGE_1]]', sectionKind: 'result' }],
+        figurePlacements: [{ marker: '[[FIGURE_2]]', figureOrdinal: 2, targetKind: 'result' }],
+        formulaBindings: [{ marker: '[[FORMULA_3]]', formulaOrdinal: 3, targetKind: 'component' }] };
+        const beforeProtected = structuredClone(protectedValue.sections);
+        normalizeDeclaredReaderMarkerParagraphs(protectedValue);
+        assert.deepStrictEqual(protectedValue.sections, beforeProtected);
     });
 
     it('Reader 数值排版保护逐字引语、转录、代码与原始公式，不跨保护边界替换', () => {
@@ -3019,18 +3086,290 @@ has_dataset: 否
             /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
             `## 核心摘要\n${summary}\n`
         );
-        const sixSentences = Array.from({ length: 6 }, (_, index) =>
-            `第${index + 1}句说明论文问题方法证据边界与应用条件并保留足够具体的机制描述和量化结论以支持独立判断，同时交代比较对象及结论适用范围。`
-        ).join('');
-        assert.strictEqual(getCoreSummaryDetailIssue(withSummary(sixSentences)), null);
-        assert.match(getCoreSummaryDetailIssue(withSummary(sixSentences.replace(/。/g, '，'))), /当前 0/);
-        assert.match(getCoreSummaryDetailIssue(withSummary(`${sixSentences}${'补充说明。'.repeat(4)}`)), /当前 10/);
-        assert.match(getCoreSummaryDetailIssue(withSummary(`${sixSentences}${'扩展证据'.repeat(100)}`)), /中文字符过多/);
+        const detailed = [
+            '本文解决噪声语音输入到文字输出时声学线索受损的问题，难点是局部干扰与长程语义错误会彼此放大。',
+            '方法首先由声学编码器负责提取多尺度表示，并把保留的时频变化传递给上下文模块。',
+            '第二步由上下文模块负责融合长程线索，随后将联合表示送入统一解码器生成识别序列。',
+            '相较只做单尺度编码的基线，这条方法链同时约束局部稳健性与全局语义一致性，因而不是简单堆叠模块。',
+            '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。',
+            '结论仅适用于论文覆盖的噪声类型与语种，对极低信噪比、未见录音环境和跨语言外推尚未验证。',
+            '训练需要额外的双路编码显存与联合优化开销，论文也未报告端侧推理延迟，因此部署收益仍需在具体目标硬件、并发负载和真实数据分布下进一步实测。'
+        ].join('');
+        const source = '公开测试集使用相同协议，基线词错误率为 12.4%，本文方法词错误率为 9.8%。';
+        assert.strictEqual(getCoreSummaryDetailIssue(withSummary(detailed), { sourceText: source }), null);
+        assert.match(getCoreSummaryDetailIssue(withSummary(detailed.replace(/。/g, '，')), { sourceText: source }), /当前 0/);
+        assert.match(getCoreSummaryDetailIssue(withSummary(`${detailed}${'补充说明。'.repeat(3)}`), { sourceText: source }), /当前 10/);
+        assert.match(getCoreSummaryDetailIssue(withSummary(`${detailed}${'扩展证据'.repeat(100)}`), { sourceText: source }), /中文字符过多/);
+
+        const unavailable = detailed.replace(
+            '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。',
+            '原文未提供可核对的关键定量结果，因此摘要不把模型生成的实验章节当成论文原文证据。'
+        );
+        const fabricatedCanonical = withSummary(unavailable).replace(
+            /## 实验结果\n[\s\S]*?(?=\n## 细节详述)/,
+            '## 实验结果\n在伪造测试集上 WER 从 12.4% 降至 9.8%。\n'
+        );
+        assert.strictEqual(getCoreSummaryDetailIssue(fabricatedCanonical, {
+            sourceText: '论文原文只给出定性讨论，没有实验数字。'
+        }), null);
+    });
+
+    it('核心摘要修复证据只来自 sourceText，不含 canonical A_* 片段', () => {
+        const { buildStageEvidenceContext } = require('../scripts/deep-analyzer.js');
+        const evidence = buildStageEvidenceContext('coreSummaryRepair', validAnalysisText(),
+            '实验结果显示方法在公开测试集上改善语音识别性能，但原文没有给出数字。');
+        assert.match(evidence, /公开测试集/);
+        assert.doesNotMatch(evidence, /\[A_(?:SUMMARY|METHOD|RESULTS|LIMITS|OPEN)\]/);
+    });
+
+    it('真实 2602.05847 摘要长度合格但缺关键数字与成本时被拒绝', () => {
+        const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
+        const currentSummary = '本文要解决全模态大模型中音频加入反而损害视觉推理的模态偏置问题，以及现有监督微调与朴素强化学习只监督答案而放任单模态捷径的问题。作者提出 OmniVideo-R1，两阶段后训练先学查询意图接地，再学模态注意力融合，让模型先定位查询相关音视频片段并生成字幕，再对比全模态与单模态回答以强制融合。与直接迁移朴素强化学习或构造多分支架构的工作不同，该方法无需过程级人工标注，用自监督时间字幕一致性与片段完备性塑造推理行为。在音视频理解套件上该模型超越了同基座的指令版与思考版，并在部分基准上超过闭源与更大规模开源对手，同时在纯视觉基准上未出现系统性退化。其实践意义在于给出了一条可复用的音视频后训练管线与数据清洗流程。主要局限是奖励高度依赖外部评判模型，且训练仍需答案真值，缺失对长尾音频类型与奖励稳定性的深入分析。';
+        const analysis = validAnalysisText()
+            .replace(/## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/, `## 核心摘要\n${currentSummary}\n`)
+            .replace(/## 实验结果\n[\s\S]*?(?=\n## 细节详述)/, '## 实验结果\n在 AV-Odyssey 上总分由 48.6 提升至 53.1。\n');
+        const issue = getCoreSummaryDetailIssue(analysis, {
+            sourceText: 'Evaluation on AV-Odyssey improves the overall score from 48.6 to 53.1.'
+        });
+        assert.match(issue, /摘要没有写清比较对象、评测设置、指标、数值与方向/);
+        assert.match(issue, /训练、推理或部署成本/);
+    });
+
+    it('无数字理论论文用显式不可得声明通过摘要内容门禁', () => {
+        const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
+        const summary = [
+            '本文研究音频表征可辨识性的理论问题，输入是满足给定生成假设的观测分布，输出是表示何时能够恢复潜在因素的条件，难点在于等价变换会造成不可区分解。',
+            '证明链首先由引理负责把观测一致性转换为映射约束，并把得到的约束传递给主定理。',
+            '第二步由主定理负责刻画可恢复的等价类，随后反例模块构建不满足假设时的不可辨识情形，从而说明各环节的分工与衔接。',
+            '相较仅给充分条件的既有论证，该工作同时给出必要边界与反例，因此实际意义是帮助研究者区分可证明结论和经验猜测。',
+            '原文未提供可核对的关键定量结果，本文据此不虚构准确率、误差或基准提升，也不把定理编号和模型名称当作实验结果。',
+            '结论仅适用于文中生成假设成立的分布，对假设违背、有限样本偏差和真实录音噪声下的外推尚未验证。',
+            '该理论工作没有训练或部署实验，原文未披露训练、推理或部署成本，因此不能据此判断工程资源负担。'
+        ].join('');
+        const analysis = validAnalysisText()
+            .replace('document_type: 方法研究', 'document_type: 理论研究')
+            .replace(/## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/, `## 核心摘要\n${summary}\n`)
+            .replace(/## 实验结果\n[\s\S]*?(?=\n## 细节详述)/, '## 实验结果\n论文以定理、证明和反例验证声明，没有报告经验评测。\n');
+        assert.strictEqual(getCoreSummaryDetailIssue(analysis, {
+            sourceText: 'The paper provides a theorem, proof, and counterexample without empirical evaluation.'
+        }), null);
+        assert.strictEqual(getCoreSummaryDetailIssue(analysis, {
+            sourceText: 'Theorem 1 improves the identifiability result compared with Theorem 2; no empirical evaluation is reported.'
+        }), null);
+    });
+
+    it('摘要最终门禁严格位于结构修复之后、评分之前', () => {
+        const { RECOVERY_STAGE_ORDER } = require('../scripts/deep-analyzer.js');
+        assert.ok(RECOVERY_STAGE_ORDER.indexOf('structureRepair') < RECOVERY_STAGE_ORDER.indexOf('coreSummaryRepair'));
+        assert.ok(RECOVERY_STAGE_ORDER.indexOf('coreSummaryRepair') < RECOVERY_STAGE_ORDER.indexOf('scoringAudit'));
+    });
+
+    it('摘要合同变化只回退到结构快照并失效评分/插图，保留 source-only Reader', () => {
+        const { invalidateRecoveryStageIfChanged } = require('../scripts/deep-analyzer.js');
+        const paper = {
+            analysisCheckpoint: 'body-after-scoring',
+            analysisStageCheckpoints: {
+                structureRepair: 'body-after-structure',
+                coreSummaryRepair: 'body-after-summary',
+                scoringAudit: 'body-after-scoring',
+                apiReaderArticle: 'reader-independent',
+                imageSupplement: 'body-after-image'
+            },
+            apiReaderArticle: 'reader bytes',
+            apiReaderPlan: { version: 3 }
+        };
+        const manifest = {
+            version: 1,
+            contracts: { coreSummary: 'core-summary-detailed-v3', experimentTables: 'bounded-v1' },
+            stages: {
+                structureRepair: { status: 'complete', fingerprint: 'structure' },
+                coreSummaryRepair: { status: 'complete', fingerprint: 'old-summary' },
+                scoringAudit: { status: 'complete', fingerprint: 'scoring' },
+                apiReaderArticle: { status: 'complete', fingerprint: 'reader' },
+                imageSupplement: { status: 'skipped', fingerprint: 'image' }
+            }
+        };
+        assert.strictEqual(
+            invalidateRecoveryStageIfChanged(paper, manifest, 'coreSummaryRepair', 'new-summary'),
+            true
+        );
+        assert.strictEqual(paper.analysisCheckpoint, 'body-after-structure');
+        assert.strictEqual(manifest.stages.structureRepair.status, 'complete');
+        assert.strictEqual(manifest.stages.coreSummaryRepair, undefined);
+        assert.strictEqual(manifest.stages.scoringAudit, undefined);
+        assert.strictEqual(manifest.stages.apiReaderArticle.status, 'complete');
+        assert.strictEqual(manifest.stages.imageSupplement, undefined);
+        assert.strictEqual(paper.apiReaderArticle, 'reader bytes');
+        assert.deepStrictEqual(paper.apiReaderPlan, { version: 3 });
+        assert.strictEqual(manifest.contracts.coreSummary, undefined);
+        assert.strictEqual(manifest.contracts.experimentTables, 'bounded-v1');
+    });
+
+    it('精确旧指纹可从请求失败前封存快照迁移且不重跑主分析', () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const textForAnalysis = 'actual primary input with sufficient source evidence';
+        const sourceText = 'source evidence without experimental tables';
+        const arxivId = '2602.05847';
+        const body = validAnalysisText();
+        const paper = {
+            arxivId,
+            title: 'OmniVideo-R1',
+            authors: ['A'],
+            categories: ['cs.SD'],
+            analysisCheckpoint: body,
+            analysisStageCheckpoints: Object.fromEntries([
+                'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
+                'tableRepair', 'methodRepair', 'coreSummaryRepair', 'structureRepair',
+                'scoringAudit'
+            ].map(stage => [stage, body]))
+        };
+        const manifest = { version: 1,
+        sourceAcquisition: { sourceSha256: require('node:crypto').createHash('sha256').update(sourceText).digest('hex') },
+        contracts: {
+            experimentTables: 'bounded-v1', methodDetail: 'detailed-v1',
+            editorialLeakage: 'high-confidence-v1'
+        }, stages: {
+            primaryAnalysis: { status: 'complete' },
+            openSourceScan: { status: 'complete' },
+            demoLinkScan: { status: 'not_needed', fingerprint: deep.stableFingerprint({
+                implementation: 'demo-link-scan-v2-resource-identity'
+            }) },
+            revision: { status: 'complete' },
+            tableRepair: { status: 'not_needed' },
+            methodRepair: { status: 'not_needed' },
+            coreSummaryRepair: { status: 'not_needed' },
+            structureRepair: { status: 'not_needed' },
+            scoringAudit: { status: 'complete', fingerprint: 'old-scoring' }
+        } };
+        manifest.stages.primaryAnalysis.fingerprint =
+            deep.buildLegacyCoreSummaryV2PrimaryFingerprint(paper, textForAnalysis, arxivId);
+        for (const stage of [
+            'openSourceScan', 'revision', 'tableRepair', 'methodRepair',
+            'coreSummaryRepair', 'structureRepair'
+        ]) {
+            const evidence = deep.buildLegacyCoreSummaryV2EvidenceContext(stage, body, sourceText);
+            manifest.stages[stage].fingerprint = deep.buildLegacyCoreSummaryV2TextFingerprint(
+                stage, body, evidence
+            );
+        }
+        const oldPrimaryFingerprint = manifest.stages.primaryAnalysis.fingerprint;
+        assert.strictEqual(deep.invalidateRecoveryStageIfChanged(
+            paper, manifest, 'primaryAnalysis', 'future-primary-fingerprint'
+        ), true);
+        assert.strictEqual(paper.analysisCheckpoint, undefined);
+        assert.strictEqual(paper.analysisStaleSnapshots.length, 1);
+        const sealed = deep.validateStaleAnalysisSnapshot(paper.analysisStaleSnapshots[0]);
+        assert.strictEqual(sealed.analysisCheckpoint, body);
+        assert.strictEqual(sealed.stages.primaryAnalysis.fingerprint, oldPrimaryFingerprint);
+        const newerIncompatible = structuredClone(paper.analysisStaleSnapshots[0]);
+        newerIncompatible.payload.stages.primaryAnalysis.fingerprint = 'f'.repeat(64);
+        newerIncompatible.payloadSha256 = deep.stableFingerprint(newerIncompatible.payload);
+        newerIncompatible.capturedAt = 'later';
+        paper.analysisStaleSnapshots.push(newerIncompatible);
+
+        // Simulate a failed/interrupted replacement request persisting an empty
+        // working checkpoint.  The sealed old success must remain recoverable.
+        manifest.stages.primaryAnalysis = { status: 'transient_failure', error: 'interrupted' };
+        deep.saveAnalysisCheckpoint(paper, '', manifest);
+        const currentPrimary = deep.buildRecoveryFingerprints(
+            paper, textForAnalysis, arxivId
+        ).primaryAnalysis;
+        assert.strictEqual(deep.tryMigrateCoreSummaryV3LegacyCheckpoints(
+            paper, manifest, textForAnalysis, sourceText, arxivId, currentPrimary
+        ), true);
+        assert.strictEqual(manifest.stages.primaryAnalysis.status, 'complete');
+        assert.strictEqual(manifest.stages.primaryAnalysis.fingerprint, currentPrimary);
+        assert.strictEqual(paper.analysisCheckpoint, body);
+        assert.strictEqual(manifest.stages.structureRepair.status, 'not_needed');
+        assert.strictEqual(manifest.stages.structureRepair.fingerprint,
+            deep.buildLegacyCoreSummaryV2TextFingerprint('structureRepair', body,
+                deep.buildLegacyCoreSummaryV2EvidenceContext('structureRepair', body, sourceText)));
+        assert.strictEqual(deep.legacyStructureCompatibilityIsValid(
+            paper, manifest, sourceText), true);
+        assert.notStrictEqual(manifest.stages.structureRepair.fingerprint,
+            deep.buildTextStageFingerprint('structureRepair', body,
+                deep.buildStageEvidenceContext('structureRepair', body, sourceText)),
+        'compatibility reuse must not masquerade as a current structure execution');
+        const exactStructure = paper.analysisStageCheckpoints.structureRepair;
+        paper.analysisStageCheckpoints.structureRepair += '\n篡改';
+        assert.strictEqual(deep.legacyStructureCompatibilityIsValid(paper, manifest, sourceText), false);
+        paper.analysisStageCheckpoints.structureRepair = exactStructure;
+        assert.strictEqual(deep.legacyStructureCompatibilityIsValid(
+            paper, manifest, `${sourceText} drift`), false);
+        const proofSnapshotIndex = paper.analysisStaleSnapshots.findIndex(item => (
+            item.payloadSha256
+            === manifest.stages.structureRepair.compatibilityProof.legacySnapshotPayloadSha256
+        ));
+        const exactSnapshot = structuredClone(paper.analysisStaleSnapshots[proofSnapshotIndex]);
+        paper.analysisStaleSnapshots[proofSnapshotIndex].payload.analysisStageCheckpoints.coreSummaryRepair += '\n伪造前序';
+        paper.analysisStaleSnapshots[proofSnapshotIndex].payloadSha256 = deep.stableFingerprint(
+            paper.analysisStaleSnapshots[proofSnapshotIndex].payload
+        );
+        assert.strictEqual(deep.legacyStructureCompatibilityIsValid(
+            paper, manifest, sourceText), false,
+        'self-resigned stale envelope cannot change the recomputed legacy structure input');
+        paper.analysisStaleSnapshots[proofSnapshotIndex] = exactSnapshot;
+        assert.strictEqual(manifest.stages.coreSummaryRepair, undefined);
+        assert.strictEqual(manifest.stages.scoringAudit, undefined);
+        assert.strictEqual(manifest.compatibilityMigrations.at(-1).restoredFromSnapshot, true);
+    });
+
+    it('迁移 allowlist 拒绝任何非摘要 Prompt 漂移', () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const observed = {
+            primaryAnalysis: deep.runtimePromptTemplateSha256(
+                'prompts/deep-analysis.md', 'core-summary-detailed-v3'
+            ),
+            openSourceScan: deep.runtimePromptTemplateSha256('prompts/opensource-scan.md'),
+            revision: deep.runtimePromptTemplateSha256('prompts/gap-fill.md'),
+            tableRepair: deep.runtimePromptTemplateSha256('prompts/table-fill.md'),
+            methodRepair: deep.runtimePromptTemplateSha256('prompts/method-fill.md'),
+            coreSummaryRepair: deep.runtimePromptTemplateSha256(
+                'prompts/core-summary-repair.md', 'core-summary-detailed-v3'
+            ),
+            structureRepair: deep.runtimePromptTemplateSha256('prompts/structure-repair.md')
+        };
+        assert.strictEqual(deep.coreSummaryV3MigrationPromptSetIsAllowed(observed), true);
+        assert.strictEqual(deep.coreSummaryV3MigrationPromptSetIsAllowed({
+            ...observed,
+            structureRepair: 'f'.repeat(64)
+        }), false);
+        assert.strictEqual(deep.coreSummaryV3MigrationPromptSetIsAllowed({
+            ...observed,
+            primaryAnalysis: 'e'.repeat(64)
+        }), false);
+    });
+
+    it('Prompt 指纹只绑定 loadPrompt 的首个 fence 与显式合同版本', () => {
+        const crypto = require('node:crypto');
+        const { runtimePromptTemplateSha256 } = require('../scripts/deep-analyzer.js');
+        const relativePath = 'prompts/core-summary-repair.md';
+        const raw = fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
+        const block = raw.match(/^(`{3,}|~{3,})(?:text)?\r?\n([\s\S]*?)\r?\n\1/m)[2];
+        const expected = crypto.createHash('sha256').update(JSON.stringify({
+            runtimePrompt: block,
+            contractVersion: 'core-summary-detailed-v3'
+        })).digest('hex');
+        assert.strictEqual(
+            runtimePromptTemplateSha256(relativePath, 'core-summary-detailed-v3'),
+            expected
+        );
+        assert.notStrictEqual(
+            runtimePromptTemplateSha256(relativePath, 'core-summary-detailed-v3'),
+            crypto.createHash('sha256').update(raw).digest('hex')
+        );
+        assert.notStrictEqual(
+            runtimePromptTemplateSha256(relativePath, 'core-summary-detailed-v3'),
+            runtimePromptTemplateSha256(relativePath, 'core-summary-detailed-v4')
+        );
     });
 
     it('核心摘要局部修复达到 320 中文字符且其他 12 节逐字不变', async () => {
         const { getCoreSummaryDetailIssue, repairCoreSummarySection } = require('../scripts/deep-analyzer.js');
-        const original = validAnalysisText();
+        const original = validAnalysisText().replace(
+            /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
+            '## 核心摘要\n本文解决噪声语音输入到文字输出的问题，方法先编码再解码，结果仍需展开说明。\n'
+        );
         const expanded = [
             '本文处理噪声环境下语音识别的输入到文本输出问题，难点是干扰会同时破坏声学线索与语言判别边界。',
             '方法第一步提取多尺度声学表示并保留局部时频变化，第二步利用上下文编码器聚合长程信息。',
@@ -3058,10 +3397,12 @@ has_dataset: 否
                 return `## 核心摘要\n${expanded}`;
             } }
         );
-        assert.strictEqual(getCoreSummaryDetailIssue(updated), null);
+        assert.strictEqual(getCoreSummaryDetailIssue(updated, {
+            sourceText: '原文含同协议 WER 12.4%、9.8% 与移除融合门后的 11.1% 结果。'
+        }), null);
         assert.strictEqual(exterior(updated), exterior(original));
         assert.match(prompt, /2–4 个步骤/);
-        assert.match(prompt, /320–600 个中文字符/);
+        assert.match(prompt, /320–600 个中文\/中文标点字符/);
         assert.strictEqual(maxTokens, 2500);
     });
 
@@ -3743,6 +4084,37 @@ has_dataset: 否
         assert.strictEqual(manifest.stages.imageSupplement, undefined);
     });
 
+    it('failed scoring cleanup follows dependency DAG and does not erase source-only Reader', () => {
+        const { createAnalysisRecoveryManifest } = require('../scripts/deep-analyzer.js');
+        const paper = {
+            analysisCheckpoint: 'summary checkpoint',
+            analysisStageCheckpoints: {
+                coreSummaryRepair: 'summary checkpoint',
+                apiReaderArticle: 'reader checkpoint',
+                imageSupplement: 'image checkpoint'
+            },
+            apiReaderArticle: 'reader bytes',
+            apiReaderPlan: { version: 3 },
+            analysisManifest: {
+                version: 1,
+                contracts: { apiReaderArticle: 'beginner-researcher-v3' },
+                stages: {
+                    primaryAnalysis: { status: 'complete' },
+                    coreSummaryRepair: { status: 'complete' },
+                    scoringAudit: { status: 'contract_rejected' },
+                    apiReaderArticle: { status: 'complete' },
+                    imageSupplement: { status: 'skipped' }
+                }
+            }
+        };
+        const manifest = createAnalysisRecoveryManifest(paper);
+        assert.equal(manifest.stages.scoringAudit.status, 'contract_rejected');
+        assert.equal(manifest.stages.apiReaderArticle.status, 'complete');
+        assert.equal(manifest.stages.imageSupplement, undefined);
+        assert.equal(paper.apiReaderArticle, 'reader bytes');
+        assert.deepStrictEqual(paper.apiReaderPlan, { version: 3 });
+    });
+
     it('阶段指纹变化时回退到前一阶段快照，只失效当前及下游', () => {
         const {
             invalidateRecoveryStageIfChanged,
@@ -4017,17 +4389,20 @@ has_dataset: 否
         assert.strictEqual(paper.analysisCheckpoint, 'reader body');
     });
 
-    it('评分证据使用 structureRepair 快照而不是评分后 checkpoint', () => {
+    it('评分证据使用结构后核心摘要快照而不是评分后 checkpoint', () => {
         const { buildTypeAwareSourceContext } = require('../scripts/deep-analyzer.js');
         const crypto = require('node:crypto');
-        const structureBody = validAnalysisText();
-        const postScoringBody = structureBody.replace('这篇论文围绕语音识别鲁棒性提出完整方法', '评分后意外改变了核心摘要');
+        const coreSummaryBody = validAnalysisText();
+        const postScoringBody = coreSummaryBody.replace(
+            '本文解决噪声语音输入到文字输出时声学线索受损的问题',
+            '评分后意外改变了核心摘要所描述的问题'
+        );
         const source = 'source evidence';
         const storedEvidence = crypto.createHash('sha256')
-            .update(buildTypeAwareSourceContext(structureBody, source))
+            .update(buildTypeAwareSourceContext(coreSummaryBody, source))
             .digest('hex');
         const resumedEvidence = crypto.createHash('sha256')
-            .update(buildTypeAwareSourceContext(structureBody, source))
+            .update(buildTypeAwareSourceContext(coreSummaryBody, source))
             .digest('hex');
         const wrongEvidence = crypto.createHash('sha256')
             .update(buildTypeAwareSourceContext(postScoringBody, source))

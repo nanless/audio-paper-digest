@@ -66,6 +66,13 @@ test('scheduler CLI is dry-run by default only when explicitly requested and cap
         { apply: false, crosswalkId: CROSSWALK, stage: 'prepare-only', queue: 'all', limit: 'pilot', concurrency: 3 });
     assert.equal(cli.parseArgs(['--apply', '--crosswalk', CROSSWALK, '--stage', 'analyze',
         '--queue', 'reader-recovery']).queue, 'reader-recovery');
+    assert.deepEqual(cli.parseArgs(['--dry-run', '--crosswalk', CROSSWALK, '--stage', 'analyze',
+        '--paper-ids', 'arxiv:2609.03622,arxiv:2604.12527', '--paper-ids', 'arxiv:2512.09066']).paperIds,
+    ['arxiv:2609.03622', 'arxiv:2604.12527', 'arxiv:2512.09066']);
+    assert.throws(() => cli.parseArgs(['--dry-run', '--crosswalk', CROSSWALK, '--stage', 'analyze',
+        '--paper-ids', 'arxiv:2609.03622,arxiv:2609.03622']), /Use/);
+    assert.throws(() => cli.parseArgs(['--dry-run', '--crosswalk', CROSSWALK, '--stage', 'analyze',
+        '--paper-ids', '2609.03622']), /Use/);
     assert.throws(() => cli.parseArgs(['--apply', '--crosswalk', CROSSWALK, '--stage', 'analyze', '--concurrency', '4']), /Use/);
 });
 
@@ -241,6 +248,34 @@ test('dry-run reports the queue-filtered offline selection without prepare or ch
     assert.equal(fs.existsSync(files.historicalAnalysisSchedulerDir), false);
 });
 
+test('paperIds scope is applied before recovery, limit and live prepare, and unknown IDs fail offline', async t => {
+    const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
+        paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
+        historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
+    const groups = scheduler.groupsFromCrosswalk(state()); const recovered = []; const live = [];
+    const deps = { files, readCrosswalk: () => state(), recoverRun: ({ runId }) => {
+        recovered.push(runId); return null;
+    }, fetchMetadata: async id => ({ metadata: { arxivId: id }, proof: {}, rawBytes: Buffer.from('atom') }),
+        prepareAuthority: async ({ arxivId }) => { live.push(arxivId); return { authorityHandle: {} }; },
+        prepareRun: ({ runId }) => ({ runId, status: 'sources_ready' }),
+        now: () => '2026-09-07T00:00:00.000Z' };
+    const preview = await scheduler.runHistoricalScheduler({ apply: false, crosswalkId: CROSSWALK,
+        stage: 'analyze', queue: 'new-full', paperIds: ['arxiv:2609.03622'], limit: 'pilot', concurrency: 1 }, deps);
+    assert.deepEqual(preview.selected.map(item => item.paperId), ['arxiv:2609.03622']);
+    assert.deepEqual(recovered, [groups[1].runId]); assert.deepEqual(live, []);
+    recovered.length = 0;
+    await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
+        stage: 'prepare-only', queue: 'new-full', paperIds: ['arxiv:2609.03622'], limit: 'pilot', concurrency: 1 }, deps);
+    assert.deepEqual(recovered, [groups[1].runId, groups[1].runId]);
+    assert.deepEqual(live, ['2609.03622']);
+    await assert.rejects(scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
+        stage: 'analyze', queue: 'all', paperIds: ['arxiv:2609.99999'], limit: 'pilot', concurrency: 1 }, deps), /Unknown/);
+    assert.deepEqual(live, ['2609.03622']);
+    await assert.rejects(scheduler.runHistoricalScheduler({ apply: false, crosswalkId: CROSSWALK,
+        stage: 'analyze', queue: 'all', paperIds: ['arxiv:2609.03622', 'arxiv:2609.03622'],
+        limit: 'pilot', concurrency: 1 }, deps), /duplicate-free/);
+});
+
 test('reader-recovery retries only an eligible upstream-complete partial and persists exhaustion idempotently', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
@@ -255,7 +290,8 @@ test('reader-recovery retries only an eligible upstream-complete partial and per
             exhausted: runId === groups[1].runId || analyzed > 0 }),
         prepareAuthority: async ({ arxivId }) => { liveIds.push(arxivId); return { authorityHandle: {} }; },
         verifyRunAuthority: () => true,
-        analyzeRun: async () => { analyzed++; return { status: 'analysis_partial' }; },
+        analyzeRun: async options => { analyzed++; assert.equal(options.refreshReaderDiagnostics, false);
+            return { status: 'analysis_partial' }; },
         now: () => '2026-09-07T00:00:00.000Z' };
     await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK, stage: 'analyze',
         queue: 'reader-recovery', limit: 2, concurrency: 2 }, deps);
@@ -306,5 +342,77 @@ test('a Reader implementation fingerprint change clears old exhaustion', () => {
         nextEligibleAt: '2026-09-08T00:00:00.000Z' }, { recoveryKind: 'reader', recoveryFingerprint: 'new',
         failureSignature: 'same', exhausted: true, cooldownMs: scheduler.READER_TRANSPORT_COOLDOWN_MS },
     '2026-09-07T00:00:00.000Z'), { recoveryKind: 'reader', recoveryFingerprint: 'new',
-        failureSignature: 'same', nextEligibleAt: null, exhausted: false });
+        failureSignature: 'same', nextEligibleAt: null, exhausted: false,
+        implementationRecoveryPendingFingerprint: 'new', operatorPatchSha256: null,
+        operatorRecoveryConsumedSha256: null });
+    const observed = { recoveryKind: 'reader', recoveryFingerprint: 'new', failureSignature: 'same',
+        exhausted: true, cooldownMs: 0 };
+    const pending = scheduler.mergeRecoveryState({ recoveryFingerprint: 'new', failureSignature: 'same',
+        exhausted: false, implementationRecoveryPendingFingerprint: 'new' }, observed,
+    '2026-09-07T00:00:01.000Z');
+    assert.equal(pending.exhausted, false, 'offline scans cannot consume an implementation recovery');
+    const attempted = scheduler.mergeRecoveryState(pending, observed, '2026-09-07T00:00:02.000Z', { attempted: true });
+    assert.equal(attempted.exhausted, true);
+    assert.equal(attempted.implementationRecoveryPendingFingerprint, null);
+});
+
+test('implementation recovery pending fingerprint enables diagnostic migration for exactly its attempted run', async t => {
+    const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
+        paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
+        historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
+    const groups = scheduler.groupsFromCrosswalk(state());
+    const runs = new Map([[groups[0].runId,
+        { runId: groups[0].runId, status: 'analysis_partial', sealedComplete: false }],
+    [groups[1].runId, { runId: groups[1].runId, status: 'complete', sealedComplete: true }]]);
+    let fingerprint = 'reader-implementation-v1'; const refreshValues = [];
+    const deps = { files, readCrosswalk: () => state(), recoverRun: ({ runId }) => runs.get(runId),
+        inspectRunRecovery: () => ({ recoveryKind: 'reader', upstreamReady: true,
+            recoveryFingerprint: fingerprint, failureSignature: 'same', exhausted: true, cooldownMs: 0 }),
+        prepareAuthority: async () => ({ authorityHandle: {} }), verifyRunAuthority: () => true,
+        analyzeRun: async options => { refreshValues.push(options.refreshReaderDiagnostics);
+            return { status: 'analysis_partial' }; }, now: () => '2026-09-07T00:00:00.000Z' };
+    const run = () => scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
+        stage: 'analyze', queue: 'reader-recovery', limit: 'pilot', concurrency: 1 }, deps);
+    await run();
+    assert.deepEqual(refreshValues, [], 'an initially observed exhausted candidate has no implementation unlock');
+    fingerprint = 'reader-implementation-v2';
+    await run();
+    assert.deepEqual(refreshValues, [true]);
+    const checkpoint = JSON.parse(fs.readFileSync(path.join(files.historicalAnalysisSchedulerDir, `${CROSSWALK}.json`)));
+    assert.equal(checkpoint.items[groups[0].paperId].implementationRecoveryPendingFingerprint, null);
+    assert.equal(checkpoint.items[groups[0].paperId].exhausted, true);
+    await run();
+    assert.deepEqual(refreshValues, [true], 'consumed implementation recovery cannot migrate a second time');
+});
+
+test('an exact operator patch audit unlocks one full-gate replay and is then consumed', t => {
+    const root = fixture(t); const runId = '22222222-2222-4222-8222-222222222222'; const paperId = '2601.18904';
+    const runDir = path.join(root, runId); const repair = require('../scripts/lib/reader-repair.js');
+    const fresh = require('../scripts/lib/fresh-rewrite-run.js');
+    const patchBytes = Buffer.from('{"operator":"fix"}'); const patchSha = fresh.sha256(patchBytes);
+    const beforeBytes = Buffer.from('{"failed":"candidate"}'); const beforeSha = fresh.sha256(beforeBytes);
+    const draft = { sections: [{ body: 'fixed' }] };
+    const audit = { contract: 'reader-operator-patch-v1', runId, paperId, patchFileSha256: patchSha,
+        oldEnvelopeSha256: beforeSha, afterDraftSha256: repair.hashDraft(draft),
+        archive: path.posix.join('patches', 'operator-archive', patchSha) };
+    const payload = { status: 'failed', draft, operatorPatches: [audit] };
+    const archive = path.join(runDir, audit.archive); fs.mkdirSync(archive, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(archive, 'before.json'), beforeBytes, { mode: 0o600 });
+    fs.writeFileSync(path.join(archive, 'patch.json'), patchBytes, { mode: 0o600 });
+    fs.writeFileSync(path.join(archive, 'intent.json'), JSON.stringify({ audit,
+        afterPayloadSha256: repair.hashDraft(payload) }), { mode: 0o600 });
+    const operatorPatchSha256 = scheduler.exactOperatorPatchRecovery(runDir, runId, paperId, payload);
+    assert.equal(operatorPatchSha256, repair.hashDraft(draft));
+    const observed = { recoveryKind: 'reader', recoveryFingerprint: 'same-reader', failureSignature: 'same-failure',
+        exhausted: true, cooldownMs: 0, operatorPatchSha256 };
+    const unlocked = scheduler.mergeRecoveryState({ recoveryFingerprint: 'same-reader',
+        failureSignature: 'same-failure', exhausted: true }, observed, '2026-09-07T00:00:00.000Z');
+    assert.equal(unlocked.exhausted, false); assert.equal(unlocked.operatorRecoveryConsumedSha256, null);
+    const consumed = scheduler.mergeRecoveryState(unlocked, observed, '2026-09-07T00:00:01.000Z', { attempted: true });
+    assert.equal(consumed.exhausted, true);
+    assert.equal(consumed.operatorRecoveryConsumedSha256, operatorPatchSha256);
+    const repeated = scheduler.mergeRecoveryState(consumed, observed, '2026-09-07T00:00:02.000Z');
+    assert.equal(repeated.exhausted, true, 'the same operator audit cannot unlock a second attempt');
+    fs.appendFileSync(path.join(archive, 'patch.json'), ' ');
+    assert.equal(scheduler.exactOperatorPatchRecovery(runDir, runId, paperId, payload), null);
 });

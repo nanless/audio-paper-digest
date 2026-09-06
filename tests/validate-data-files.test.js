@@ -16,7 +16,11 @@ const {
     manualSha256,
     manualTextSha256
 } = require('../scripts/analysis-contract.js');
-const { validAnalysisText, validAnalysisPaper } = require('./valid-analysis-fixture.js');
+const {
+    validAnalysisText,
+    validAnalysisPaper,
+    validLegacyApiAnalysisPaper
+} = require('./valid-analysis-fixture.js');
 
 const {
     validatePapersDatabase,
@@ -480,10 +484,7 @@ describe('validate-data-files', () => {
             }
         }));
         const analysis = validAnalysisText();
-        const terminalStages = Object.fromEntries([
-            'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
-            'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
-        ].map(stage => [stage, { status: stage === 'imageSupplement' ? 'no_candidates' : 'complete' }]));
+        const validManifest = validAnalysisPaper('2607.00001').analysisManifest;
         fs.writeFileSync(resultFile, JSON.stringify({
             stats: {
                 totalAfterMerge: 1
@@ -499,7 +500,7 @@ describe('validate-data-files', () => {
                 parsed: parseAnalysis(analysis),
                 selectedImageUrls: [],
                 imageManifest: { selected: [] },
-                analysisManifest: { version: 1, stages: terminalStages }
+                analysisManifest: validManifest
             }]
         }));
 
@@ -521,6 +522,60 @@ describe('validate-data-files', () => {
         const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
         assert.match(issues, /评分稳定性告警尚未形成有效二次审计 resolution/);
         assert.match(issues, /自动 API production 缺少 Reader v3 完整绑定/);
+    });
+
+    it('validate:data 拒绝缺失或未绑定 current v3 的核心摘要完成阶段', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-core-summary-gate-'));
+        const resultFile = path.join(dir, 'deep-analysis-result.json');
+        const paper = completeAnalysisPaper('2607.00012');
+        delete paper.analysisManifest.stages.coreSummaryRepair;
+        fs.writeFileSync(resultFile, JSON.stringify({ papers: [paper] }));
+        assert.match(validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n'),
+            /缺少完成态阶段 coreSummaryRepair/);
+        const rebound = completeAnalysisPaper('2607.00012');
+        rebound.analysisManifest.stages.coreSummaryRepair.summarySha256 = '0'.repeat(64);
+        fs.writeFileSync(resultFile, JSON.stringify({ papers: [rebound] }));
+        assert.match(validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n'),
+            /核心摘要正文未绑定阶段 SHA/);
+        const shallow = completeAnalysisPaper('2607.00012');
+        shallow.analysis = shallow.analysis.replace(
+            /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
+            '## 核心摘要\n本文解决语音问题，方法先编码再输出，结果很好但仍有局限与部署成本。\n'
+        );
+        fs.writeFileSync(resultFile, JSON.stringify({ papers: [shallow] }));
+        assert.match(validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n'),
+            /核心摘要未达到 core-summary-detailed-v3.*中文字符不足/);
+    });
+
+    it('validate:data 只读兼容真实旧 API 完成形状，但任何摘要声明仍执行 current 严格门禁', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-legacy-core-summary-'));
+        const resultFile = path.join(dir, 'deep-analysis-result.json');
+        const legacy = validLegacyApiAnalysisPaper('2607.00013');
+        fs.writeFileSync(resultFile, JSON.stringify({ status: 'complete', stats: {
+            totalAfterMerge: 1, remainingFailed: 0
+        }, papers: [legacy] }));
+        assert.match(validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n'),
+            /缺少完成态阶段 coreSummaryRepair/,
+            'direct validator stays strict unless the read-only compatibility option is explicit');
+        assert.deepStrictEqual(validatePaperListFile(resultFile, {
+            deepAnalysis: true, allowLegacyCoreSummarySuccess: true
+        }), []);
+
+        for (const mutate of [
+            paper => { paper.analysisManifest.contracts.coreSummary = 'core-summary-detailed-v3'; },
+            paper => { paper.analysisManifest.stages.coreSummaryRepair = { status: 'complete' }; },
+            paper => { paper.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = '0'.repeat(64); },
+            paper => { paper.apiReaderArticleSha256 = '0'.repeat(64); },
+            paper => { paper.latestAnalysisAttemptError = 'new failure'; }
+        ]) {
+            const changed = structuredClone(legacy); mutate(changed);
+            fs.writeFileSync(resultFile, JSON.stringify({ status: 'complete', stats: {
+                totalAfterMerge: 1, remainingFailed: 0
+            }, papers: [changed] }));
+            assert.notDeepStrictEqual(validatePaperListFile(resultFile, {
+                deepAnalysis: true, allowLegacyCoreSummarySuccess: true
+            }), []);
+        }
     });
 
     it('Manual v4 canonical 从同批受控全文加载原文并拒绝非连续 resultClaims 引用', () => {
@@ -879,12 +934,8 @@ describe('validate-data-files', () => {
             '\n## 细节详述',
             `\n\n| 方法 | WER |\n| --- | --- |\n${rows}\n\n## 细节详述`
         );
-        const stages = Object.fromEntries([
-            'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
-            'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
-        ].map(stage => [stage, {
-            status: stage === 'imageSupplement' ? 'no_candidates' : 'complete'
-        }]));
+        const baseManifest = validAnalysisPaper('2607.00004').analysisManifest;
+        const stages = structuredClone(baseManifest.stages);
         const paper = {
             arxivId: '2607.00004',
             analysis,
@@ -892,7 +943,8 @@ describe('validate-data-files', () => {
             scoringRubricVersion: 'type-aware-v1',
             analysisManifest: {
                 version: 1,
-                contracts: { experimentTables: EXPERIMENT_TABLE_CONTRACT_VERSION },
+                contracts: { ...baseManifest.contracts,
+                    experimentTables: EXPERIMENT_TABLE_CONTRACT_VERSION },
                 stages
             }
         };
@@ -902,7 +954,7 @@ describe('validate-data-files', () => {
             /表格契约无效.*13 个数据行/
         );
 
-        delete paper.analysisManifest.contracts;
+        delete paper.analysisManifest.contracts.experimentTables;
         fs.writeFileSync(resultFile, JSON.stringify({ papers: [paper] }));
         assert.deepStrictEqual(validatePaperListFile(resultFile, { deepAnalysis: true }), []);
     });
@@ -911,10 +963,8 @@ describe('validate-data-files', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-method-status-'));
         const resultFile = path.join(dir, 'deep-analysis-result.json');
         const analysis = validAnalysisText();
-        const stages = Object.fromEntries([
-            'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
-            'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
-        ].map(stage => [stage, { status: 'complete' }]));
+        const baseManifest = validAnalysisPaper('2607.00005').analysisManifest;
+        const stages = structuredClone(baseManifest.stages);
         stages.primaryAnalysis.status = 'skipped';
         fs.writeFileSync(resultFile, JSON.stringify({
             status: 'partial_failed',
@@ -925,7 +975,8 @@ describe('validate-data-files', () => {
                 scoringRubricVersion: 'type-aware-v1',
                 analysisManifest: {
                     version: 1,
-                    contracts: { methodDetail: METHOD_DETAIL_CONTRACT_VERSION },
+                    contracts: { ...baseManifest.contracts,
+                        methodDetail: METHOD_DETAIL_CONTRACT_VERSION },
                     stages
                 }
             }]
@@ -944,7 +995,7 @@ describe('validate-data-files', () => {
             papers: [{
                 arxivId: '2607.00005', analysis, parsed: parseAnalysis(analysis),
                 scoringRubricVersion: 'type-aware-v1',
-                analysisManifest: { version: 1, stages }
+                analysisManifest: { version: 1, contracts: baseManifest.contracts, stages }
             }]
         }));
         const remainingIssues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
@@ -963,10 +1014,8 @@ describe('validate-data-files', () => {
             innovationScore: '1.4',
             score: '6.8'
         };
-        const stages = Object.fromEntries([
-            'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
-            'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
-        ].map(stage => [stage, { status: 'complete' }]));
+        const baseManifest = validAnalysisPaper('2607.00004').analysisManifest;
+        const stages = structuredClone(baseManifest.stages);
         fs.writeFileSync(resultFile, JSON.stringify({
             papers: [{
                 arxivId: '2607.00004',
@@ -979,7 +1028,7 @@ describe('validate-data-files', () => {
                     reason: '人工复核创新性证据后调整',
                     fields: ['innovationScore', 'score']
                 },
-                analysisManifest: { version: 1, stages }
+                analysisManifest: { version: 1, contracts: baseManifest.contracts, stages }
             }]
         }));
 

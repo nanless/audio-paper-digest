@@ -5,11 +5,12 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const { getFreshAnalysisContext } = require('./fresh-analysis-context.js');
-const { loadFailedCandidate, saveFailedCandidate, hashDraft } = require('./reader-repair.js');
+const { loadFailedCandidate, saveFailedCandidate, hashDraft, IMPLEMENTATION_ALLOWANCE_CONTRACT } = require('./reader-repair.js');
 const { normalizeReaderDraftOrder } = require('./reader-draft-order.js');
 const CONTRACT = 'reader-recovery-diagnostics-revision-v1';
-const ALLOWED_FIELDS = Object.freeze(['repairImplementationSha256', 'draftOrderContract',
-    'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256']);
+const ALLOWED_FIELDS = Object.freeze(['repairImplementationSha256', 'tableCompilerSha256', 'draftOrderContract',
+    'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256',
+    'parserImplementationSha256', 'editorialImplementationSha256', 'mechanicalContractSha256']);
 const implementationFields = ALLOWED_FIELDS.filter(field => field.endsWith('Sha256'));
 const withoutRevisionFields = identity => Object.fromEntries(Object.entries(identity)
     .filter(([key]) => !ALLOWED_FIELDS.includes(key)));
@@ -71,9 +72,18 @@ function finishRevisionArchives(directory, identity, payload) {
     return payload;
 }
 
-function loadReaderRecoveryRevision(directory, identity) {
+function loadReaderRecoveryRevision(directory, identity, options = {}) {
+    const expectedPixels = options.pixelEvidenceSha256;
+    if (expectedPixels !== undefined && !/^[a-f0-9]{64}$/.test(expectedPixels)) {
+        throw new Error('Reader recovery pixel evidence identity is invalid');
+    }
+    const verifyPixels = payload => {
+        if (expectedPixels !== undefined && hashDraft(payload?.imageEvidence || []) !== expectedPixels) {
+            throw new Error('Reader failed candidate image evidence drifted; refusing to migrate pixel-dependent narration');
+        }
+    };
     const exact = loadFailedCandidate(directory, identity);
-    if (exact) return finishRevisionArchives(directory, identity, exact);
+    if (exact) { verifyPixels(exact); return finishRevisionArchives(directory, identity, exact); }
     const context = getFreshAnalysisContext();
     if (context?.refreshReaderDiagnostics !== true) return null;
     if (path.resolve(directory) !== path.join(context.runDir, 'reader-attempts')
@@ -100,6 +110,7 @@ function loadReaderRecoveryRevision(directory, identity) {
             throw new Error('Reader diagnostic revision candidate changed during audit');
         }
         if (!isDeepStrictEqual(withoutRevisionFields(envelope.identity), withoutRevisionFields(identity))) continue;
+        verifyPixels(payload);
         const changedFields = ALLOWED_FIELDS.filter(field => !isDeepStrictEqual(envelope.identity[field], identity[field]));
         if (changedFields.length) compatible.push({ identity: envelope.identity, payload, changedFields, name, envelopeSha256 });
     }
@@ -118,7 +129,8 @@ function loadReaderRecoveryRevision(directory, identity) {
     const diagnosticImplementationChanged = implementationFields.some(field => old.changedFields.includes(field));
     const archivedName = `${hashDraft(old.identity)}.migrated-${crypto.randomUUID()}.json`;
     const audit = { contract: CONTRACT, revisedAt: new Date().toISOString(),
-        runId: context.runId, fromIdentitySha256: hashDraft(old.identity), toIdentitySha256: hashDraft(identity),
+        runId: context.runId, paperId: identity.paperId,
+        fromIdentitySha256: hashDraft(old.identity), toIdentitySha256: hashDraft(identity),
         changedFields: old.changedFields, archivedName,
         oldPayloadSha256: hashDraft(old.payload), oldEnvelopeSha256: old.envelopeSha256,
         oldNoProgress: updated.noProgress, oldFailureSignature: updated.failureSignature,
@@ -127,12 +139,20 @@ function loadReaderRecoveryRevision(directory, identity) {
         transportFailures: updated.transportFailures ?? 0,
         inputDraftSha256: old.payload.draft ? hashDraft(old.payload.draft) : null,
         outputDraftSha256: updated.draft ? hashDraft(updated.draft) : null };
-    if (diagnosticImplementationChanged) { updated.noProgress = 0; updated.failureSignature = ''; }
+    if (diagnosticImplementationChanged) {
+        updated.noProgress = 0; updated.failureSignature = '';
+        updated.validationFailureStreak = 0; updated.validationFailureSignature = '';
+        // Preserve paid counters, but allow exactly one new local repair after
+        // today's full parser discovers a gate introduced by the new code.
+    }
     updated.readerRecoveryRevisions = [...(updated.readerRecoveryRevisions || []), audit];
+    delete updated.implementationRepairAllowance;
+    updated.implementationRepairAllowanceProof = diagnosticImplementationChanged
+        ? implementationAllowanceProof(identity, audit) : null;
     // The normal per-paper lock surrounds the caller. Recheck anyway before
     // installing: never overwrite an exact newer candidate or stale budgets.
     const racedExact = loadFailedCandidate(directory, identity);
-    if (racedExact) return finishRevisionArchives(directory, identity, racedExact);
+    if (racedExact) { verifyPixels(racedExact); return finishRevisionArchives(directory, identity, racedExact); }
     if (hashDraft(loadFailedCandidate(directory, old.identity)) !== hashDraft(old.payload)) {
         throw new Error('Reader diagnostic revision source changed before installation');
     }
@@ -143,3 +163,10 @@ function loadReaderRecoveryRevision(directory, identity) {
 }
 
 module.exports = { CONTRACT, ALLOWED_FIELDS, loadReaderRecoveryRevision };
+function implementationAllowanceProof(identity, audit) {
+    const body = { contract: IMPLEMENTATION_ALLOWANCE_CONTRACT,
+        fromIdentitySha256: audit.fromIdentitySha256, toIdentitySha256: hashDraft(identity),
+        oldPayloadSha256: audit.oldPayloadSha256, revisionAuditSha256: hashDraft(audit),
+        changedFields: audit.changedFields.filter(field => implementationFields.includes(field)).sort() };
+    return { ...body, allowanceSha256: hashDraft(body) };
+}

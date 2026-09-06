@@ -3,7 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
+const { once } = require('node:events');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -27,6 +28,61 @@ const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-22
     '99999999-9999-4999-8999-999999999999', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'];
 const stamp = '2026-09-06T00:00:00.000Z';
+
+function spawnLockHolder(directory) {
+    const child = spawn(process.execPath, ['-e', [
+        'const api=require(process.argv[1]);',
+        'api.acquireLock(process.argv[2], "signal.test.owner", new Date().toISOString());',
+        'process.stdout.write("READY\\n");',
+        'setInterval(() => {}, 1000);'
+    ].join(''), path.join(__dirname, '..', 'scripts', 'lib', 'page-source-crosswalk.js'), directory], {
+        stdio: ['ignore', 'pipe', 'pipe']
+    });
+    const ready = new Promise((resolve, reject) => {
+        let stdout = '', stderr = '';
+        const timer = setTimeout(() => reject(new Error(`lock holder timed out: ${stderr}`)), 5000);
+        child.stdout.on('data', chunk => {
+            stdout += chunk;
+            if (stdout.includes('READY\n')) { clearTimeout(timer); resolve(); }
+        });
+        child.stderr.on('data', chunk => { stderr += chunk; });
+        child.once('exit', (code, signal) => {
+            if (!stdout.includes('READY\n')) {
+                clearTimeout(timer); reject(new Error(`lock holder exited before ready: ${code}/${signal}: ${stderr}`));
+            }
+        });
+    });
+    return { child, ready };
+}
+
+function spawnStateWriter(crosswalkRoot, crosswalkId, decisionName) {
+    const child = spawn(process.execPath, ['-e', [
+        'const fs=require("node:fs"); const path=require("node:path");',
+        'const api=require(process.argv[1]); const root=process.argv[2]; const id=process.argv[3];',
+        'const target=path.join(root,id,"state.json"); const rename=fs.renameSync; let announced=false;',
+        'fs.renameSync=(from,to)=>{ if(to===target&&!announced){announced=true;',
+        'process.stdout.write("WRITE_WINDOW\\n"); const until=Date.now()+250; while(Date.now()<until){} }',
+        'return rename(from,to); };',
+        'api.applyDecisionFile({crosswalkRoot:root,crosswalkId:id,decisionName:process.argv[4],owner:"signal.writer"});',
+        'setInterval(() => {},1000);'
+    ].join(''), path.join(__dirname, '..', 'scripts', 'lib', 'page-source-crosswalk.js'),
+    crosswalkRoot, crosswalkId, decisionName], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const inWindow = new Promise((resolve, reject) => {
+        let stdout = '', stderr = '';
+        const timer = setTimeout(() => reject(new Error(`state writer timed out: ${stderr}`)), 5000);
+        child.stdout.on('data', chunk => {
+            stdout += chunk;
+            if (stdout.includes('WRITE_WINDOW\n')) { clearTimeout(timer); resolve(); }
+        });
+        child.stderr.on('data', chunk => { stderr += chunk; });
+        child.once('exit', (code, signal) => {
+            if (!stdout.includes('WRITE_WINDOW\n')) {
+                clearTimeout(timer); reject(new Error(`state writer exited before window: ${code}/${signal}: ${stderr}`));
+            }
+        });
+    });
+    return { child, inWindow };
+}
 
 function writeArxivAuthority(root, name = 'authority.json') {
     fs.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -462,6 +518,91 @@ test('operation lock reclaims only a verified stale lock owned by a dead local P
     assert.equal(updated.completion.needsReview, 1); assert.equal(updated.attempts.length, 1);
     assert.equal(fs.existsSync(stale.lock), false);
     assert.equal(fs.existsSync(path.join(directory, 'operation.lock.reclaim')), false);
+});
+
+test('SIGINT releases only the child-owned lock and leaves canonical state bytes intact', async t => {
+    const f = fixture(t); api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
+        crosswalkId: ids[0], now: stamp, apply: true });
+    const directory = path.join(f.crosswalk, ids[0]);
+    const stateFile = path.join(directory, 'state.json'); const stateBytes = fs.readFileSync(stateFile);
+    const holder = spawnLockHolder(directory);
+    t.after(() => { if (holder.child.exitCode === null && holder.child.signalCode === null) holder.child.kill('SIGKILL'); });
+    await holder.ready;
+    assert.equal(fs.existsSync(path.join(directory, 'operation.lock')), true);
+    holder.child.kill('SIGINT');
+    const [code, signal] = await once(holder.child, 'exit');
+    assert.deepEqual({ code, signal }, { code: 130, signal: null });
+    assert.equal(fs.existsSync(path.join(directory, 'operation.lock')), false);
+    assert.deepEqual(fs.readFileSync(stateFile), stateBytes);
+    assert.equal(fs.readdirSync(directory).some(name => /^\.state\..+\.tmp$/.test(name)), false);
+});
+
+test('SIGTERM uses the same exact-owner cleanup and exits with 143', async t => {
+    const f = fixture(t); api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
+        crosswalkId: ids[2], now: stamp, apply: true });
+    const directory = path.join(f.crosswalk, ids[2]); const holder = spawnLockHolder(directory);
+    t.after(() => { if (holder.child.exitCode === null && holder.child.signalCode === null) holder.child.kill('SIGKILL'); });
+    await holder.ready; holder.child.kill('SIGTERM');
+    const [code, signal] = await once(holder.child, 'exit');
+    assert.deepEqual({ code, signal }, { code: 143, signal: null });
+    assert.equal(fs.existsSync(path.join(directory, 'operation.lock')), false);
+});
+
+test('SIGINT delivered during synchronous state replacement cannot tear the atomic state', async t => {
+    const f = fixture(t); const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk,
+        inventoryHandle: load(f), crosswalkId: ids[5], now: stamp, apply: true });
+    const pageKey = Object.keys(state.assignments)[0];
+    const artifact = api.buildDecisionArtifact({ state, pageKey, operationId: ids[6], actorId: 'reviewer',
+        status: 'needs-review', reason: 'signal-window', now: stamp });
+    api.writeDecisionArtifact({ crosswalkRoot: f.crosswalk, crosswalkId: ids[5],
+        decisionName: 'signal-window.json', artifact });
+    const writer = spawnStateWriter(f.crosswalk, ids[5], 'signal-window.json');
+    t.after(() => { if (writer.child.exitCode === null && writer.child.signalCode === null) writer.child.kill('SIGKILL'); });
+    await writer.inWindow;
+    writer.child.kill('SIGINT');
+    const [code, signal] = await once(writer.child, 'exit');
+    assert.deepEqual({ code, signal }, { code: 130, signal: null });
+    const replayed = api.readCrosswalk({ crosswalkRoot: f.crosswalk, crosswalkId: ids[5] });
+    assert.equal(replayed.attempts.length, 1);
+    assert.equal(replayed.assignments[pageKey].status, 'needs-review');
+    const directory = path.join(f.crosswalk, ids[5]);
+    assert.equal(fs.existsSync(path.join(directory, 'operation.lock')), false);
+    assert.equal(fs.readdirSync(directory).some(name => /^\.state\..+\.tmp$/.test(name)), false);
+});
+
+test('SIGINT refuses owner-file inode replacement and concurrent lock-owner replacement', async t => {
+    await t.test('owner inode replaced with identical bytes', async tt => {
+        const f = fixture(tt); api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
+            crosswalkId: ids[3], now: stamp, apply: true });
+        const directory = path.join(f.crosswalk, ids[3]); const lockPath = path.join(directory, 'operation.lock');
+        const holder = spawnLockHolder(directory);
+        tt.after(() => { if (holder.child.exitCode === null && holder.child.signalCode === null) holder.child.kill('SIGKILL'); });
+        await holder.ready;
+        const ownerPath = path.join(lockPath, 'owner.json'); const ownerBytes = fs.readFileSync(ownerPath);
+        fs.renameSync(ownerPath, path.join(directory, 'displaced-owner.json'));
+        fs.writeFileSync(ownerPath, ownerBytes, { mode: 0o600 });
+        holder.child.kill('SIGINT');
+        const [code] = await once(holder.child, 'exit');
+        assert.equal(code, 130); assert.equal(fs.existsSync(lockPath), true);
+        assert.deepEqual(fs.readFileSync(ownerPath), ownerBytes);
+    });
+
+    await t.test('operation lock directory replaced by another live owner', async tt => {
+        const f = fixture(tt); api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
+            crosswalkId: ids[4], now: stamp, apply: true });
+        const directory = path.join(f.crosswalk, ids[4]); const lockPath = path.join(directory, 'operation.lock');
+        const holder = spawnLockHolder(directory);
+        tt.after(() => { if (holder.child.exitCode === null && holder.child.signalCode === null) holder.child.kill('SIGKILL'); });
+        await holder.ready;
+        fs.renameSync(lockPath, path.join(directory, 'displaced-operation.lock'));
+        const replacement = writeOperationLock(directory, { pid: process.pid,
+            startedAt: new Date().toISOString(), heartbeatAt: new Date().toISOString() });
+        const replacementBytes = fs.readFileSync(replacement.ownerFile);
+        holder.child.kill('SIGINT');
+        const [code] = await once(holder.child, 'exit');
+        assert.equal(code, 130); assert.equal(fs.existsSync(lockPath), true);
+        assert.deepEqual(fs.readFileSync(replacement.ownerFile), replacementBytes);
+    });
 });
 
 test('self-authored arXiv fixtures cannot authorize verified decisions in the core API or a separate CLI process', t => {

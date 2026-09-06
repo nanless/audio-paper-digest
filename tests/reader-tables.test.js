@@ -5,7 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const cheerio = require('cheerio');
 const { renderReaderTableSelection, compileReaderTableSelections,
-    assessReaderTableSelectionEligibility } = require('../scripts/lib/reader-tables.js');
+    assessReaderTableSelectionEligibility, findReaderTablePasteDuplication,
+    hasExplicitRepeatedScientificMeasurement } = require('../scripts/lib/reader-tables.js');
 
 function artifactsFixture() {
     const { parseArxivStructuredArtifactsFromHtml, bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
@@ -74,6 +75,38 @@ test('cleanup eligibility is conservative and does not convert arbitrary values 
         assert.equal(assessReaderTableSelectionEligibility(table).eligible, true, text);
         assert.equal(table.matrix[1][1], text);
     }
+});
+
+test('2512.09066 repeated scientific learning rates need staged semantics while extraction shadows still fail', () => {
+    const cell = '10k、5k、2k，5e-5、2e-5、2e-5，批量16';
+    assert.match(findReaderTablePasteDuplication(cell), /粘连复写/);
+    assert.equal(findReaderTablePasteDuplication(cell, { columnIndex: 2,
+        header: ['环节', '需对齐的关键量', '原文口径'],
+        row: ['训练优化', '步数、学习率、批量与早停', cell] }), null);
+    assert.equal(findReaderTablePasteDuplication(
+        's1 学习率 5e-5；s2 学习率 2e-5；s3 学习率 2e-5'), null);
+    for (const shadow of ['2.222.22', '3.093.09', '5e-55e-5', '值5e-5、2e-5、2e-5']) {
+        assert.ok(findReaderTablePasteDuplication(shadow), shadow);
+    }
+    assert.ok(findReaderTablePasteDuplication(`2.222.22；${cell}`, { columnIndex: 2,
+        header: ['环节', '需对齐的关键量', '原文口径'],
+        row: ['训练优化', '步数、学习率、批量与早停', `2.222.22；${cell}`] }),
+    'a legitimate learning-rate list cannot hide an unrelated extraction shadow');
+    assert.ok(findReaderTablePasteDuplication(`${cell}；2.222.22`, { columnIndex: 2,
+        header: ['环节', '需对齐的关键量', '原文口径'],
+        row: ['训练优化', '步数、学习率、批量与早停', `${cell}；2.222.22`] }),
+    'a legitimate learning-rate list cannot hide a later extraction shadow');
+});
+
+test('explicit staged scientific measurements use real whitespace and digit regex tokens', () => {
+    assert.equal(hasExplicitRepeatedScientificMeasurement(
+        'stage 1 lr 5e-5、2e-5、2e-5'), true);
+    assert.equal(hasExplicitRepeatedScientificMeasurement(
+        '第 2阶段 学习率 5e-5, 2e-5, 2e-5'), true);
+    assert.equal(hasExplicitRepeatedScientificMeasurement(
+        '值 5e-5、2e-5、2e-5'), false);
+    assert.equal(hasExplicitRepeatedScientificMeasurement(
+        'stage 1 lr 5e-5、2e-5、1e-5'), false);
 });
 
 test('source row/column selection preserves multilevel headers, spanning DOM identity, values and legacy v4 output', () => {

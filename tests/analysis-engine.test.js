@@ -26,6 +26,8 @@ const {
     apiReaderV3BindsCanonical,
     getAnalysisRunStatus,
     getCanonicalAnalysisRunSummary,
+    getReadOnlyValidationAnalysisRunSummary,
+    isLegacyApiAnalysisSuccessForReadOnlyValidation,
     getAnalysisExitCode
 } = require('../scripts/analysis-engine.js');
 const {
@@ -813,6 +815,7 @@ describe('analyzePaperWithRetry', () => {
         assert.strictEqual(validateMethodDetailContract(detailed), null);
         const versioned = validAnalysisPaper('2604.00888', { analysis: detailed });
         versioned.analysisManifest.contracts = {
+            ...versioned.analysisManifest.contracts,
             methodDetail: METHOD_DETAIL_CONTRACT_VERSION
         };
         assert.strictEqual(isSuccessfulAnalysisRecord(versioned), true);
@@ -888,6 +891,7 @@ describe('analyzePaperWithRetry', () => {
         const scoringOutputSha256 = crypto.createHash('sha256').update(scoringOutput).digest('hex');
         const finalAnalysisSha256 = crypto.createHash('sha256').update(finalAnalysis).digest('hex');
         paper.analysisManifest.stages.scoringAudit = {
+            ...paper.analysisManifest.stages.scoringAudit,
             status: 'complete',
             scoringContract: 'api-scoring-audit-v2',
             outputAnalysisSha256: scoringOutputSha256
@@ -907,6 +911,7 @@ describe('analyzePaperWithRetry', () => {
     it('自动 API production 必须绑定 Reader v3，且不误伤非 API canonical', () => {
         const automatic = validAnalysisPaper('2604.00021v4');
         automatic.analysisManifest.stages.scoringAudit = {
+            ...automatic.analysisManifest.stages.scoringAudit,
             status: 'complete',
             scoringContract: 'api-scoring-audit-v2',
             outputAnalysisSha256: crypto.createHash('sha256').update(automatic.analysis).digest('hex'),
@@ -915,6 +920,38 @@ describe('analyzePaperWithRetry', () => {
         assert.strictEqual(isSuccessfulAnalysisRecord(automatic), false);
         bindValidApiReaderV3(automatic);
         assert.strictEqual(apiReaderV3BindsCanonical(automatic), true);
+        const deep = require('../scripts/deep-analyzer.js');
+        const readerBytesBefore = JSON.stringify({
+            article: automatic.apiReaderArticle,
+            plan: automatic.apiReaderPlan,
+            figures: automatic.apiReaderFigures,
+            authors: automatic.apiReaderAuthors,
+            resources: automatic.apiReaderResources,
+            articleSha256: automatic.apiReaderArticleSha256,
+            planSha256: automatic.apiReaderPlanSha256
+        });
+        const legacyFingerprint = 'a'.repeat(64);
+        const currentFingerprint = 'b'.repeat(64);
+        automatic.analysisManifest.stages.apiReaderArticle.fingerprint = legacyFingerprint;
+        assert.strictEqual(deep.migrateSourceOnlyApiReaderFingerprint(
+            automatic,
+            automatic.analysisManifest,
+            currentFingerprint,
+            legacyFingerprint
+        ), true);
+        assert.strictEqual(
+            automatic.analysisManifest.stages.apiReaderArticle.fingerprint,
+            currentFingerprint
+        );
+        assert.strictEqual(JSON.stringify({
+            article: automatic.apiReaderArticle,
+            plan: automatic.apiReaderPlan,
+            figures: automatic.apiReaderFigures,
+            authors: automatic.apiReaderAuthors,
+            resources: automatic.apiReaderResources,
+            articleSha256: automatic.apiReaderArticleSha256,
+            planSha256: automatic.apiReaderPlanSha256
+        }), readerBytesBefore);
         assert.strictEqual(isSuccessfulAnalysisRecord(automatic), true);
         const sourceBindingsSha256 = automatic.apiReaderPlan.sourceBindingsSha256;
         automatic.apiReaderPlan.sourceBindingsSha256 = '0'.repeat(64);
@@ -948,6 +985,7 @@ describe('analyzePaperWithRetry', () => {
     it('评分偏移超过 0.5 时必须有二次审计共识 resolution', () => {
         const paper = bindValidApiReaderV3(validAnalysisPaper('2604.00021v7'));
         paper.analysisManifest.stages.scoringAudit = {
+            ...paper.analysisManifest.stages.scoringAudit,
             status: 'complete',
             scoringContract: 'api-scoring-audit-v2',
             outputAnalysisSha256: crypto.createHash('sha256').update(paper.analysis).digest('hex'),
@@ -1013,6 +1051,99 @@ describe('analyzePaperWithRetry', () => {
         assert.match(attempt.result.latestAnalysisAttemptAt, /\+08:00$/);
     });
 
+    it('完成态必须绑定 current v3 核心摘要阶段、合同、fingerprint 与正文 SHA', () => {
+        const paper = validAnalysisPaper('2604.00022');
+        assert.strictEqual(isSuccessfulAnalysisRecord(paper), true);
+        for (const mutate of [
+            item => { delete item.analysisManifest.stages.coreSummaryRepair; },
+            item => { delete item.analysisManifest.contracts.coreSummary; },
+            item => { item.analysisManifest.stages.coreSummaryRepair.fingerprint = 'old'; },
+            item => { item.analysisManifest.stages.coreSummaryRepair.summarySha256 = '0'.repeat(64); },
+            item => { item.analysisManifest.stages.structureRepair.outputAnalysisSha256 = '0'.repeat(64); },
+            item => { item.analysisManifest.stages.coreSummaryRepair.inputStructureProjectionSha256 = '0'.repeat(64); },
+            item => { item.analysisManifest.stages.coreSummaryRepair.bindingSha256 = '0'.repeat(64); },
+            item => { item.analysisManifest.stages.scoringAudit.inputCoreSummarySha256 = '0'.repeat(64); },
+            item => { item.analysisManifest.stages.scoringAudit.outputCoreSummarySha256 = '0'.repeat(64); }
+        ]) {
+            const changed = structuredClone(paper); mutate(changed);
+            assert.strictEqual(isSuccessfulAnalysisRecord(changed), false);
+        }
+    });
+
+    it('只读校验可识别无摘要声明的旧 API 成功，但生产完成态仍要求 current v3', () => {
+        const legacy = bindValidApiReaderV3(validAnalysisPaper('2604.00022v1'));
+        legacy.analysisManifest.stages.scoringAudit = {
+            ...legacy.analysisManifest.stages.scoringAudit,
+            scoringContract: 'api-scoring-audit-v2',
+            outputAnalysisSha256: crypto.createHash('sha256').update(legacy.analysis).digest('hex'),
+            stabilityWarning: false
+        };
+        delete legacy.analysisManifest.stages.coreSummaryRepair;
+        delete legacy.analysisManifest.contracts.coreSummary;
+        for (const stage of Object.values(legacy.analysisManifest.stages)) {
+            stage.updatedAt = '2026-09-06T23:59:59.000+08:00';
+        }
+        assert.strictEqual(isSuccessfulAnalysisRecord(legacy), false);
+        assert.strictEqual(isLegacyApiAnalysisSuccessForReadOnlyValidation(legacy), true);
+        assert.deepStrictEqual(getCanonicalAnalysisRunSummary([legacy]), {
+            success: 0, remaining: 1, status: 'failed'
+        });
+        assert.deepStrictEqual(getReadOnlyValidationAnalysisRunSummary([legacy]), {
+            success: 1, remaining: 0, status: 'complete'
+        });
+
+        for (const mutate of [
+            paper => { paper.analysisManifest.contracts.coreSummary = 'core-summary-detailed-v3'; },
+            paper => { paper.analysisManifest.stages.coreSummaryRepair = { status: 'complete' }; },
+            paper => { paper.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = '0'.repeat(64); },
+            paper => { paper.apiReaderPlan.sourceBindingsSha256 = '0'.repeat(64); },
+            paper => { paper.analysisManifest.stages.primaryAnalysis.updatedAt = '2026-09-07T00:00:00.000+08:00'; },
+            paper => { paper.latestAnalysisAttemptError = 'new failure'; }
+        ]) {
+            const changed = structuredClone(legacy); mutate(changed);
+            assert.strictEqual(isLegacyApiAnalysisSuccessForReadOnlyValidation(changed), false);
+        }
+    });
+
+    it('浅核心摘要即使自重签全部 SHA 仍不能成为成功记录', () => {
+        const contract = require('../scripts/analysis-contract.js');
+        const paper = validAnalysisPaper('2604.00022');
+        paper.analysis = paper.analysis.replace(
+            /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
+            '## 核心摘要\n本文解决语音问题，方法先编码再输出，结果很好但仍有局限与部署成本。\n'
+        );
+        const stage = paper.analysisManifest.stages.coreSummaryRepair;
+        const analysisSha = crypto.createHash('sha256').update(paper.analysis).digest('hex');
+        const summary = contract.extractSection(paper.analysis, '核心摘要');
+        const summarySha = crypto.createHash('sha256').update(summary).digest('hex');
+        const projectionSha = contract.coreSummaryProjectionSha256(paper.analysis);
+        paper.analysisManifest.stages.structureRepair.outputAnalysisSha256 = analysisSha;
+        Object.assign(stage, {
+            inputAnalysisSha256: analysisSha,
+            outputAnalysisSha256: analysisSha,
+            inputSummarySha256: summarySha,
+            summarySha256: summarySha,
+            inputStructureProjectionSha256: projectionSha,
+            outputStructureProjectionSha256: projectionSha
+        });
+        stage.bindingSha256 = contract.manualSha256({
+            contractVersion: stage.contractVersion,
+            inputAnalysisSha256: stage.inputAnalysisSha256,
+            outputAnalysisSha256: stage.outputAnalysisSha256,
+            inputSummarySha256: stage.inputSummarySha256,
+            summarySha256: stage.summarySha256,
+            inputStructureProjectionSha256: stage.inputStructureProjectionSha256,
+            outputStructureProjectionSha256: stage.outputStructureProjectionSha256
+        });
+        Object.assign(paper.analysisManifest.stages.scoringAudit, {
+            coreSummaryInputAnalysisSha256: analysisSha,
+            inputCoreSummarySha256: summarySha,
+            outputCoreSummarySha256: summarySha
+        });
+        assert.strictEqual(isSuccessfulAnalysisRecord(paper), false);
+        assert.match(contract.validateCoreSummaryStageBinding(paper), /中文字符不足/);
+    });
+
     it('失败重试不覆盖旧成功正文，但合并恢复元数据供下次续跑', () => {
         const complete = {
             arxivId: '2604.00024', title: 'Existing', analysis: validAnalysisText(),
@@ -1025,6 +1156,8 @@ describe('analyzePaperWithRetry', () => {
             error: 'secondary timeout',
             imageManifest: { selected: [], downloaded: [] },
             analysisCheckpoint: validAnalysisText(),
+            analysisStaleSnapshots: [{ contract: 'stale-analysis-snapshot-v1',
+                payloadSha256: 'a'.repeat(64), payload: { retained: true } }],
             manualIngestionCheckpoint: { version: 1, mode: 'manual_complete', analysisSha256: 'a'.repeat(64) },
             analysisManifest: { version: 1, stages: { imageDownload: { status: 'transient_failure' } } }
         };
@@ -1032,7 +1165,17 @@ describe('analyzePaperWithRetry', () => {
         const [merged] = mergePapersById([complete], [failed], { preserveSuccessfulAnalysis: true });
         assert.strictEqual(merged.analysis, complete.analysis);
         assert.strictEqual(merged.analysisCheckpoint, failed.analysisCheckpoint);
+        assert.deepStrictEqual(merged.analysisStaleSnapshots, failed.analysisStaleSnapshots);
         assert.deepStrictEqual(merged.imageManifest, complete.imageManifest);
+
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-stale-snapshot-persist-'));
+        const file = path.join(dir, 'deep-analysis-result.json');
+        fs.writeFileSync(file, JSON.stringify({ papers: [complete] }));
+        const { persistAnalysisCheckpoint } = require('../scripts/analysis-engine.js');
+        persistAnalysisCheckpoint(file, failed);
+        const reloaded = readJsonFileStrict(file).papers[0];
+        assert.deepStrictEqual(reloaded.analysisStaleSnapshots, failed.analysisStaleSnapshots);
+        assert.strictEqual(reloaded.analysis, complete.analysis);
         assert.deepStrictEqual(merged.analysisRecoveryImageManifest, failed.imageManifest);
         assert.deepStrictEqual(merged.manualIngestionCheckpoint, failed.manualIngestionCheckpoint);
         assert.strictEqual(merged.latestAnalysisAttemptError, 'secondary timeout');

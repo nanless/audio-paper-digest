@@ -27,14 +27,17 @@ function fixture(t) {
         repairImplementationSha256: 'c'.repeat(64) };
     const identity = { ...oldIdentity, repairImplementationSha256: 'd'.repeat(64),
         draftOrderContract: 'reader-draft-order-v1', draftOrderImplementationSha256: 'e'.repeat(64),
-        sourceDiagnosticsImplementationSha256: 'f'.repeat(64) };
+        sourceDiagnosticsImplementationSha256: 'f'.repeat(64),
+        parserImplementationSha256: '1'.repeat(64), editorialImplementationSha256: '2'.repeat(64),
+        mechanicalContractSha256: '3'.repeat(64) };
     const draft = { version: 3, readerTitle: '只读恢复测试正文', oneSentenceThesis: '保持所有来源和调用预算不变。',
         sections: READER_SECTION_KINDS.map(kind => ({ kind, heading: kind, body: kind.repeat(130) })),
         conceptBridges: Array.from({ length: 4 }, () => ({})), figurePlacements: [], tableBindings: [], formulaBindings: [] };
     [draft.sections[6], draft.sections[7]] = [draft.sections[7], draft.sections[6]];
     const payload = { status: 'failed', draft, rawDraft: JSON.stringify(draft),
         issues: [{ path: null, message: 'old diagnostic' }], attempts: 4, fullAttempts: 1,
-        transportFailures: 2, noProgress: 2, failureSignature: 'old failure' };
+        transportFailures: 2, noProgress: 2, failureSignature: 'old failure',
+        validationFailureStreak: 2, validationFailureSignature: 'old normalized failure', imageEvidence: [] };
     return { root, context, directory, oldIdentity, identity, payload,
         enabled: fn => withFreshAnalysisContext(context, fn) };
 }
@@ -44,6 +47,8 @@ test('explicit same-run revision preserves paid budgets, records mappings, archi
     const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
     for (const key of ['attempts', 'fullAttempts', 'transportFailures']) assert.equal(migrated[key], f.payload[key]);
     assert.equal(migrated.noProgress, 0); assert.equal(migrated.failureSignature, '');
+    assert.equal(migrated.validationFailureStreak, 0); assert.equal(migrated.validationFailureSignature, '');
+    assert.match(migrated.implementationRepairAllowanceProof.allowanceSha256, /^[a-f0-9]{64}$/);
     assert.deepEqual(migrated.draft, normalizeReaderDraftOrder(f.payload.draft).draft);
     assert.equal(migrated.draftOrderMappings.length, 1);
     assert.equal(migrated.readerRecoveryRevisions[0].oldNoProgress, 2);
@@ -104,6 +109,70 @@ test('only a changed implementation permits resetting no-progress, never the con
     assert.equal(loaded.readerRecoveryRevisions[0].clearedNoProgress, false);
 });
 
+test('a table-compiler implementation change migrates the draft for full revalidation without restoring budgets', t => {
+    const f = fixture(t);
+    const oldIdentity = { ...f.oldIdentity, repairImplementationSha256: f.identity.repairImplementationSha256,
+        tableCompilerSha256: '1'.repeat(64) };
+    const currentIdentity = { ...f.identity, tableCompilerSha256: '2'.repeat(64) };
+    saveFailedCandidate(f.directory, oldIdentity, f.payload);
+    const loaded = f.enabled(() => loadReaderRecoveryRevision(f.directory, currentIdentity));
+    assert.equal(loaded.attempts, f.payload.attempts); assert.equal(loaded.fullAttempts, f.payload.fullAttempts);
+    assert.equal(loaded.noProgress, 0); assert.equal(loaded.validationFailureStreak, 0);
+    assert.match(loaded.implementationRepairAllowanceProof.allowanceSha256, /^[a-f0-9]{64}$/);
+    assert.ok(loaded.readerRecoveryRevisions[0].changedFields.includes('tableCompilerSha256'));
+});
+
+test('an exhausted paid budget retains its counters but receives exactly one implementation repair slot', t => {
+    const f = fixture(t); const exhausted = { ...f.payload, attempts: 6, fullAttempts: 2 };
+    saveFailedCandidate(f.directory, f.oldIdentity, exhausted);
+    const loaded = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
+    assert.equal(loaded.attempts, 6); assert.equal(loaded.fullAttempts, 2);
+    assert.match(loaded.implementationRepairAllowanceProof.allowanceSha256, /^[a-f0-9]{64}$/);
+    const repair = require('../scripts/lib/reader-repair.js');
+    assert.equal(repair.readerAttemptLimit(6, loaded.attempts, loaded.draft,
+        loaded.implementationRepairAllowanceProof ? 1 : 0), 7);
+    assert.equal(repair.readerAttemptLimit(6, 7, loaded.draft, 0), 7);
+});
+
+test('implementation allowance proof is consumed once and cannot be restored', t => {
+    const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
+    const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
+    const proof = migrated.implementationRepairAllowanceProof;
+    saveFailedCandidate(f.directory, f.identity, { ...migrated, implementationRepairAllowanceProof: null });
+    const consumed = loadFailedCandidate(f.directory, f.identity);
+    assert.ok(consumed.consumedImplementationAllowanceSha256.includes(proof.allowanceSha256));
+    assert.throws(() => saveFailedCandidate(f.directory, f.identity,
+        { ...consumed, implementationRepairAllowanceProof: proof }), /already consumed/);
+});
+
+test('parser, editorial and mechanical gate implementation changes each permit one diagnostic migration', async t => {
+    for (const field of ['parserImplementationSha256', 'editorialImplementationSha256',
+        'mechanicalContractSha256']) {
+        await t.test(field, tt => {
+            const f = fixture(tt); const baseline = structuredClone(f.identity);
+            const oldIdentity = { ...baseline, [field]: '4'.repeat(64) };
+            const currentIdentity = { ...baseline, [field]: '5'.repeat(64) };
+            saveFailedCandidate(f.directory, oldIdentity, f.payload);
+            const loaded = f.enabled(() => loadReaderRecoveryRevision(f.directory, currentIdentity));
+            assert.equal(loaded.attempts, f.payload.attempts);
+            assert.equal(loaded.fullAttempts, f.payload.fullAttempts);
+            assert.equal(loaded.validationFailureStreak, 0);
+            assert.deepEqual(loaded.readerRecoveryRevisions.at(-1).changedFields, [field]);
+        });
+    }
+});
+
+test('pixel drift cannot migrate a candidate while an exact legacy pixel payload can be bound', t => {
+    const f = fixture(t); const oldPixels = [{ ordinal: 1, sha256: '6'.repeat(64) }];
+    const oldIdentity = { ...f.identity, parserImplementationSha256: '4'.repeat(64) };
+    const oldPayload = { ...f.payload, imageEvidence: oldPixels };
+    saveFailedCandidate(f.directory, oldIdentity, oldPayload);
+    const changedPixels = hashDraft([{ ordinal: 1, sha256: '7'.repeat(64) }]);
+    assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity,
+        { pixelEvidenceSha256: changedPixels })), /image evidence drifted/);
+    assert.deepEqual(loadFailedCandidate(f.directory, oldIdentity), oldPayload);
+});
+
 test('corrupt and symlink candidate files fail closed before a new candidate is installed', t => {
     const f = fixture(t); const filename = saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     fs.writeFileSync(filename, '{invalid JSON', { mode: 0o600 });
@@ -154,7 +223,7 @@ test('EIO reentry refuses complete old-payload drift even when draft and all cou
 test('missing archive and old evidence refuse reentry, and archived bytes remain verified on later loads', t => {
     const f = fixture(t); const filename = interruptArchival(f);
     fs.unlinkSync(filename);
-    assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), /ENOENT/);
+    assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), /ENOENT|changed during audit/);
     saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     const resumed = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
     const archived = path.join(f.directory, resumed.readerRecoveryRevisions[0].archivedName);
@@ -169,6 +238,5 @@ test('archive traversal and archive symlinks are refused on exact-candidate reen
     const outside = path.join(f.root, 'archive-copy.json'); fs.renameSync(archive, outside); fs.symlinkSync(outside, archive);
     assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), /ELOOP|symlink/i);
     const tampered = structuredClone(migrated); tampered.readerRecoveryRevisions[0].archivedName = '../outside.json';
-    saveFailedCandidate(f.directory, f.identity, tampered);
-    assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), /archive audit/);
+    assert.throws(() => saveFailedCandidate(f.directory, f.identity, tampered), /allowance lacks a valid recovery-revision proof|ELOOP|symbolic/i);
 });

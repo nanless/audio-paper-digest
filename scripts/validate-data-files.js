@@ -26,6 +26,7 @@ const {
     analysisManifestRequiresMethodDetailContract,
     REQUIRED_RECOVERY_STAGES,
     isRecoveryStageTerminal,
+    validateCoreSummaryStageBinding,
     MANUAL_COMPLETE_STATUS,
     MANUAL_DEPTH_CONTRACT_VERSION_V4,
     MANUAL_DEPTH_CONTRACT_VERSION_V5,
@@ -34,6 +35,8 @@ const {
 } = require('./analysis-contract.js');
 const {
     getCanonicalAnalysisRunSummary,
+    getReadOnlyValidationAnalysisRunSummary,
+    isLegacyApiAnalysisSuccessForReadOnlyValidation,
     scoringStabilityIsResolved,
     apiReaderV3BindsCanonical
 } = require('./analysis-engine.js');
@@ -420,8 +423,11 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
             addIssue(issues, filePath, `${prefix}.stages.${stage} 使用 manual_complete 但缺少 manifest.manualTakeover`);
         }
     }
+    const legacyCoreSummaryCompatible = options.allowLegacyCoreSummarySuccess === true
+        && isLegacyApiAnalysisSuccessForReadOnlyValidation(options.paper);
     if (options.requireComplete) {
         for (const stage of REQUIRED_RECOVERY_STAGES) {
+            if (legacyCoreSummaryCompatible && stage === 'coreSummaryRepair') continue;
             const state = manifest.stages[stage];
             if (!state) {
                 addIssue(issues, filePath, `${prefix}.stages 缺少完成态阶段 ${stage}`);
@@ -429,6 +435,9 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
                 addIssue(issues, filePath, `${prefix}.stages.${stage} 尚未完成: ${state.status}`);
             }
         }
+        const coreSummaryBindingIssue = manifest.stages.coreSummaryRepair
+            ? validateCoreSummaryStageBinding(options.paper) : null;
+        if (coreSummaryBindingIssue) addIssue(issues, filePath, `${prefix} ${coreSummaryBindingIssue}`);
     }
     const scoring = manifest.stages.scoringAudit;
     if (scoring?.scoringContract === 'api-scoring-audit-v2') {
@@ -687,7 +696,7 @@ function validateFilteredMetadata(filePath, data, papers, issues) {
     }
 }
 
-function validateDeepAnalysisMetadata(filePath, data, papers, issues) {
+function validateDeepAnalysisMetadata(filePath, data, papers, issues, options = {}) {
     if (Array.isArray(data)) return;
     const allowedStatuses = new Set(['running', 'complete', 'partial_failed', 'failed', 'filter_failed']);
     if (data.status !== undefined && !allowedStatuses.has(data.status)) {
@@ -713,7 +722,9 @@ function validateDeepAnalysisMetadata(filePath, data, papers, issues) {
         addIssue(issues, filePath, 'deepAnalysisCompletedAt 必须是北京时间 ISO 时间戳');
     }
     if (['complete', 'partial_failed', 'failed'].includes(data.status)) {
-        const canonicalSummary = getCanonicalAnalysisRunSummary(papers);
+        const canonicalSummary = options.allowLegacyCoreSummarySuccess === true
+            ? getReadOnlyValidationAnalysisRunSummary(papers)
+            : getCanonicalAnalysisRunSummary(papers);
         if (canonicalSummary.status !== data.status) {
             addIssue(
                 issues,
@@ -809,7 +820,7 @@ function validatePaperListFile(filePath, options = {}) {
             validateFilteredMetadata(filePath, data, papers, issues);
         }
         if (options.deepAnalysis) {
-            validateDeepAnalysisMetadata(filePath, data, papers, issues);
+            validateDeepAnalysisMetadata(filePath, data, papers, issues, options);
         }
     }
 
@@ -965,7 +976,9 @@ function validatePaperListFile(filePath, options = {}) {
                         analysis: paper.analysis,
                         sourceText,
                         imageManifest: paper.imageManifest,
-                        paper
+                        paper,
+                        allowLegacyCoreSummarySuccess:
+                            options.allowLegacyCoreSummarySuccess === true
                     }
                 );
             } else if (hasAnalysisBody) {
@@ -1564,7 +1577,7 @@ function validateFilteredDeepPapersConsistency(files = Config.FILES) {
 
                 const deepPaper = deepById.get(id);
                 if (!deepPaper) continue;
-                const deepSucceeded = getCanonicalAnalysisRunSummary([deepPaper]).success === 1;
+                const deepSucceeded = getReadOnlyValidationAnalysisRunSummary([deepPaper]).success === 1;
                 const digestStatus = databasePaper.digestStatus?.status;
                 const latestAttemptStatus = databasePaper.digestStatus?.latestAttemptStatus;
                 if (deepSucceeded) {
@@ -1606,7 +1619,10 @@ function validateCurrentDataFiles(files = Config.FILES) {
         ...validatePaperListFile(files.rawCandidates, { rawCandidates: true }),
         ...validateFilterDecisionsFile(filterDecisions),
         ...validatePaperListFile(files.filteredPapers, { filtered: true }),
-        ...validatePaperListFile(files.deepAnalysisResult, { deepAnalysis: true }),
+        ...validatePaperListFile(files.deepAnalysisResult, {
+            deepAnalysis: true,
+            allowLegacyCoreSummarySuccess: true
+        }),
         ...validateFilterArtifactsConsistency(files.filteredPapers, filterDecisions),
         ...validateRawCandidateFilterConsistency(files.rawCandidates, filterDecisions, files.filteredPapers),
         ...validateFetchArtifactConsistency(fetchCheckpoint, files.rawCandidates, filterDecisions, files.filteredPapers),

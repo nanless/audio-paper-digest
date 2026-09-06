@@ -5,7 +5,8 @@ const os = require('node:os');
 const path = require('node:path');
 const {
     REPAIR_VERSION, hashDraft, parseRepairableDraft, collectDraftIssues, buildRepairTargets,
-    applyReaderPatch, buildRepairContext, loadFailedCandidate, saveFailedCandidate, retireFailedCandidate
+    applyReaderPatch, buildRepairContext, loadFailedCandidate, saveFailedCandidate, retireFailedCandidate,
+    validationFailureSignature, validationFailureHasNoProgress
 } = require('../scripts/lib/reader-repair.js');
 
 function fixture() {
@@ -200,7 +201,7 @@ test('candidate rejects symlink directories/files, altered identity and damaged 
     const target = path.join(targetDirectory, 'target.json'); fs.writeFileSync(target, '{}', { mode: 0o600 });
     fs.symlinkSync(target, filename);
     assert.throws(() => loadFailedCandidate(directory, identity), /refused/);
-    assert.throws(() => saveFailedCandidate(directory, identity, failed()), /Unsafe/);
+    assert.throws(() => saveFailedCandidate(directory, identity, failed()), /Unsafe|ELOOP|symbolic/i);
     assert.equal(fs.readFileSync(target, 'utf8'), '{}');
 });
 
@@ -385,10 +386,99 @@ test('production stops unchanged patches and refuses another call on exhausted r
         readerRecordDisposition: () => {},
         readerCallModel: async () => (++calls === 1 ? JSON.stringify(draft)
             : JSON.stringify(patchFor(draft, [['/readerTitle', '短']]))) };
-    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /连续无进展/);
-    assert.equal(calls, 3);
+    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /连续无进展|规范化验证门禁/);
+    assert.equal(calls, 2);
     await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
+    assert.equal(calls, 2);
+});
+
+test('normalized validation signatures stop the same binding issue after two changing drafts', async t => {
+    const first = [{ path: null, message: '读者文章 tableBindings[0] 关键数字缺少 exact quote/cell 证据: 200；未绑定单元格（行列从 0 开始，表头为第 0 行）：row=1,column=1 text="dev 划分约 200–430 utterances" missing=200。' }];
+    const second = [{ path: null, message: '读者文章 tableBindings[0] 关键数字缺少 exact quote/cell 证据: 430；未绑定单元格（行列从 0 开始，表头为第 0 行）：row=1,column=1 text="dev 划分约 200–430 utterances" missing=430。' }];
+    assert.equal(validationFailureSignature(first), validationFailureSignature(second));
+    assert.notEqual(validationFailureSignature(first), validationFailureSignature([{ path: null,
+        message: '读者文章 tableBindings[1] 关键数字缺少 exact quote/cell 证据: 430；未绑定单元格（行列从 0 开始，表头为第 0 行）：row=2,column=1 text="test 430" missing=430。' }]));
+
+    const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
+    const directory = temporary(t); const paper = { arxivId: '2609.99978', title: '同门禁变化草稿' };
+    const draft = fixture(); draft.readerTitle = '短';
+    const changedBody = `${draft.sections[0].body}补充一个不改变标题错误的来源说明。`;
+    let calls = 0;
+    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', {
+        sourceText: 'source', readerAttemptsDir: directory, readerMaxAttempts: 6,
+        readerMaterializeFigures: async () => [], readerRecordDisposition: () => {},
+        readerCallModel: async () => {
+            calls++;
+            return calls === 1 ? JSON.stringify(draft)
+                : JSON.stringify(patchFor(draft, [['/sections/0/body', changedBody]]));
+        }
+    }), /同一规范化验证门禁连续 2 次无改善/);
+    assert.equal(calls, 2);
+    const envelope = JSON.parse(fs.readFileSync(path.join(directory, fs.readdirSync(directory)[0])));
+    assert.equal(envelope.payload.validationFailureStreak, 2);
+    assert.equal(envelope.payload.noProgress, 0, 'draft changed, so the old draft-hash heuristic did not stop it');
+});
+
+test('validation signatures preserve monotonic deficit improvement while ignoring volatile wording', () => {
+    const issue = (current, remaining, wording = '当前') => [{ path: null, code: 'reader_length_preflight',
+        message: `读者文章篇幅预估：${wording} ${current}，仍缺 ${remaining}。` }];
+    const first = validationFailureSignature(issue(200, 120));
+    const improved = validationFailureSignature(issue(260, 60));
+    const stalled = validationFailureSignature(issue(260, 60, '现有'));
+    const regressed = validationFailureSignature(issue(220, 100));
+    assert.notEqual(first, improved, 'comparable deficits remain in the persisted signature');
+    assert.equal(validationFailureHasNoProgress(first, improved), false);
+    assert.equal(validationFailureHasNoProgress(improved, stalled), true,
+        'wording changes cannot disguise an unchanged deficit');
+    assert.equal(validationFailureHasNoProgress(improved, regressed), true,
+        'a regression is not progress merely because its numbers changed');
+});
+
+test('public candidate save cannot mint an implementation allowance from a bare field', t => {
+    const directory = temporary(t); const identity = { paperId: '2609.99976', sourceSha256: 'a'.repeat(64) };
+    assert.throws(() => saveFailedCandidate(directory, identity, { status: 'failed', draft: fixture(),
+        rawDraft: '', issues: [], attempts: 1, fullAttempts: 1, noProgress: 0, failureSignature: '',
+        implementationRepairAllowance: 1 }), /recovery-revision proof/);
+});
+
+test('self-consistent fake revision fields cannot mint an implementation allowance proof', t => {
+    const directory = temporary(t); const identity = { paperId: '2609.99975',
+        freshAnalysis: { runId: '11111111-1111-4111-8111-111111111111', paperId: '2609.99975' } };
+    const audit = { contract: 'fake-revision-contract', runId: identity.freshAnalysis.runId,
+        paperId: identity.paperId, fromIdentitySha256: 'a'.repeat(64), toIdentitySha256: hashDraft(identity),
+        oldPayloadSha256: 'b'.repeat(64), oldEnvelopeSha256: 'c'.repeat(64),
+        archivedName: `${'a'.repeat(64)}.migrated-22222222-2222-4222-8222-222222222222.json`,
+        changedFields: ['parserImplementationSha256'] };
+    const body = { contract: 'reader-implementation-repair-allowance-v1',
+        fromIdentitySha256: audit.fromIdentitySha256, toIdentitySha256: hashDraft(identity),
+        oldPayloadSha256: audit.oldPayloadSha256, revisionAuditSha256: hashDraft(audit),
+        changedFields: ['parserImplementationSha256'] };
+    const proof = { ...body, allowanceSha256: hashDraft(body) };
+    assert.throws(() => saveFailedCandidate(directory, identity, { status: 'failed', draft: fixture(), rawDraft: '',
+        issues: [], attempts: 6, fullAttempts: 2, noProgress: 2, failureSignature: 'failed',
+        readerRecoveryRevisions: [audit], implementationRepairAllowanceProof: proof }), /valid recovery-revision proof/);
+});
+
+test('a changed validation issue may continue and transport errors do not advance its streak', async t => {
+    const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
+    const directory = temporary(t); const paper = { arxivId: '2609.99977', title: '门禁变化继续修复' };
+    const draft = fixture(); draft.readerTitle = '短'; draft.sections[0].body = '太短';
+    const titled = structuredClone(draft); titled.readerTitle = '声音表示如何与语义条件连接起来';
+    let calls = 0;
+    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', {
+        sourceText: 'source', readerAttemptsDir: directory, readerMaxAttempts: 3,
+        readerMaterializeFigures: async () => [], readerRecordDisposition: () => {},
+        readerCallModel: async () => {
+            calls++;
+            if (calls === 1) return JSON.stringify(draft);
+            if (calls === 2) return JSON.stringify(patchFor(draft, [['/readerTitle', titled.readerTitle]]));
+            throw new Error('transport after changed issue');
+        }
+    }), /transport after changed issue/);
     assert.equal(calls, 3);
+    const envelope = JSON.parse(fs.readFileSync(path.join(directory, fs.readdirSync(directory)[0])));
+    assert.equal(envelope.payload.validationFailureStreak, 1);
+    assert.equal(envelope.payload.transportFailures, 1);
 });
 
 test('transport failure preserves the latest candidate and source drift starts a separate identity', async t => {
@@ -434,6 +524,7 @@ test('changed pixel evidence refuses candidate reuse before another model reques
     const candidateDirectory = path.join(directory, 'candidates');
     const imagePath = path.join(directory, 'figure.png');
     fs.writeFileSync(imagePath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aT9sAAAAASUVORK5CYII=', 'base64'));
+    const pixelSha256 = require('node:crypto').createHash('sha256').update(fs.readFileSync(imagePath)).digest('hex');
     const url = 'https://arxiv.org/html/2609.99995/figure.png';
     const sourceEvidence = `FIGURE_1: 论文的真实方法图\nFIGURE_1_URL: ${url}`;
     const paper = { arxivId: '2609.99995', title: '离线像素变化' };
@@ -444,12 +535,13 @@ test('changed pixel evidence refuses candidate reuse before another model reques
             if (++calls === 1) return JSON.stringify(draft);
             throw new Error('simulated interruption before patch response');
         },
-        readerMaterializeFigures: async () => [{ url, cachePath: imagePath, assetSha256: 'a'.repeat(64) }] };
+        readerMaterializeFigures: async () => [{ ordinal: 1, url, cachePath: imagePath, assetSha256: pixelSha256 }] };
     await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', sourceEvidence, options), /simulated interruption/);
+    fs.appendFileSync(imagePath, 'changed pixels');
     await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', sourceEvidence, {
         ...options, readerMaxAttempts: 2,
-        readerMaterializeFigures: async () => [{ url, cachePath: imagePath, assetSha256: 'b'.repeat(64) }]
-    }), /image evidence drifted/);
+        readerMaterializeFigures: async () => [{ ordinal: 1, url, cachePath: imagePath, assetSha256: pixelSha256 }]
+    }), /cache bytes differ/);
     assert.equal(calls, 2);
 });
 

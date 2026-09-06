@@ -149,6 +149,7 @@ const MANUAL_STAGE_CLAIM_HINTS = Object.freeze({
     tableRepair: /(?:表|指标|数值|实验|基线|消融)/i,
     methodRepair: /(?:方法|架构|模块|训练|推理|数据流)/i,
     structureRepair: /(?:章节|结构|标题|摘要|标签|格式)/i,
+    coreSummaryRepair: /(?:核心摘要|问题|方法链|结果|边界|成本)/i,
     scoringAudit: /(?:评分|维度|总分|分数|严谨|实验充分)/i,
     imageSupplement: /(?:图|图片|插图|caption|视觉|段落)/i
 });
@@ -171,8 +172,20 @@ const MANUAL_BOILERPLATE_PATTERNS = Object.freeze([
 ]);
 const REQUIRED_RECOVERY_STAGES = Object.freeze([
     'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
-    'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
+    'tableRepair', 'methodRepair', 'structureRepair', 'coreSummaryRepair',
+    'scoringAudit', 'imageSupplement'
 ]);
+const CORE_SUMMARY_CONTRACT_VERSION = 'core-summary-detailed-v3';
+const CORE_SUMMARY_MIN_CHINESE_CHARS = 320;
+const CORE_SUMMARY_MAX_CHINESE_CHARS = 600;
+const CORE_SUMMARY_MIN_SENTENCES = 6;
+const CORE_SUMMARY_MAX_SENTENCES = 9;
+const CORE_SUMMARY_RESULT_UNAVAILABLE = '原文未提供可核对的关键定量结果';
+const CORE_SUMMARY_COST_UNAVAILABLE = '原文未披露训练、推理或部署成本';
+const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分))?(?![A-Za-z0-9])/g;
+const CORE_SUMMARY_METRIC_PATTERN = /(?:WER|CER|PER|F1|BLEU|COMET|ROUGE|MOS|PESQ|STOI|SDR|SI-SDR|SNR|EER|mAP|AUC|accuracy|error rate|score|latency|throughput|RTF|准确率|正确率|错误率|误差率|召回率|精确率|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|性能|指标)/i;
+const CORE_SUMMARY_COMPARISON_PATTERN = /(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|从[^。！？!?]{0,40}(?:降至|降到|提升至|提高到)|相比|相较|优于|超过|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先)/i;
+const CORE_SUMMARY_NON_RESULT_PATTERN = /(?:模型|版本|参数量|样本量|训练步数|轮次|批量|batch|学习率|年份|第\s*\d+|图\s*\d+|表\s*\d+|式\s*\d+|章节|引用)/i;
 const RECOVERY_STAGE_TERMINAL_STATUSES = Object.freeze({
     imageDiscovery: Object.freeze(['complete', 'no_candidates', MANUAL_COMPLETE_STATUS]),
     imageDownload: Object.freeze(['complete', 'skipped', 'no_candidates', 'no_downloadable_images', MANUAL_COMPLETE_STATUS]),
@@ -906,6 +919,180 @@ function analysisManifestRequiresMethodDetailContract(manifest) {
 
 function isRecoveryStageTerminal(stage, status) {
     return Boolean(RECOVERY_STAGE_TERMINAL_STATUSES[stage]?.includes(status));
+}
+
+function stripCoreSummaryNonResultNumerals(text) {
+    return String(text || '')
+        .replace(/https?:\/\/\S+/g, ' ')
+        .replace(/\[[0-9,;\s-]+\]/g, ' ')
+        .replace(/\b(?:theorem|lemma|proposition|corollary|definition|assumption|equation|figure|table|section|appendix)\s*\d+(?:\.\d+)*/gi, ' ')
+        .replace(/(?:定理|引理|命题|推论|公理|定义|假设|公式|方程|等式|式|图|表|章节|附录)\s*(?:编号)?\s*\d+(?:\.\d+)*/g, ' ')
+        .replace(/\b(?:19|20)\d{2}\b/g, ' ')
+        .replace(/\b\d+(?:\.\d+)?\s*[BbMmKk]\b/g, ' ')
+        .replace(/\b(?:v|ver(?:sion)?\.?)[-_ ]?\d+(?:\.\d+)*\b/gi, ' ')
+        .replace(/\b[A-Za-z][A-Za-z0-9_-]*[-_]\d+(?:\.\d+)+(?:[-_][A-Za-z0-9.]+)?\b/g, ' ')
+        .replace(/\b(?:Qwen|Llama|Gemma|Phi|GPT|Claude|Mistral|Whisper|HuBERT|WavLM)\s*[-_ ]?\d+(?:\.\d+)*(?:\s*[BbMmKk])?\b/gi, ' ');
+}
+
+function hasCoreSummaryQuantitativeEvidence(text) {
+    return String(text || '').split(/[。！？!?\n]/).some(rawSentence => {
+        const sentence = stripCoreSummaryNonResultNumerals(rawSentence.trim());
+        if (!sentence) return false;
+        const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
+        if (!numbers.length) return false;
+        if (CORE_SUMMARY_METRIC_PATTERN.test(sentence)) return true;
+        if (!CORE_SUMMARY_COMPARISON_PATTERN.test(sentence)) return false;
+        const measuredUnit = numbers.some(value => /(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分)$/i.test(value.trim()));
+        const resultNoun = /(?:结果|数值|增益|差值|百分点|相对|绝对)/.test(sentence);
+        return !(CORE_SUMMARY_NON_RESULT_PATTERN.test(sentence) && !measuredUnit && !resultNoun)
+            && (numbers.length >= 2 || measuredUnit || resultNoun);
+    });
+}
+
+function hasCompleteCoreSummaryQuantitativeResult(text) {
+    return String(text || '').split(/[。！？!?\n]/).some(rawSentence => {
+        const sentence = stripCoreSummaryNonResultNumerals(rawSentence.trim());
+        if (!sentence || !CORE_SUMMARY_METRIC_PATTERN.test(sentence)
+            || !CORE_SUMMARY_COMPARISON_PATTERN.test(sentence)) return false;
+        const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
+        if (!numbers.length) return false;
+        const setting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|同一|相同|公开|内部|外部|on\b)/i.test(sentence);
+        const comparison = numbers.length >= 2
+            || /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)/.test(sentence);
+        return setting && comparison;
+    });
+}
+
+function validateCoreSummarySemanticContract(analysis, options = {}) {
+    const summary = extractSection(String(analysis || ''), '核心摘要');
+    const count = chineseCharacterCount(summary);
+    const sentences = (summary.match(/[。！？!?]/g) || []).length;
+    const issues = [];
+    if (count < CORE_SUMMARY_MIN_CHINESE_CHARS) {
+        issues.push(`中文字符不足: ${count}/${CORE_SUMMARY_MIN_CHINESE_CHARS}`);
+    } else if (count > CORE_SUMMARY_MAX_CHINESE_CHARS) {
+        issues.push(`中文字符过多: ${count}/${CORE_SUMMARY_MAX_CHINESE_CHARS}`);
+    }
+    if (sentences < CORE_SUMMARY_MIN_SENTENCES || sentences > CORE_SUMMARY_MAX_SENTENCES) {
+        issues.push(`句数必须为 ${CORE_SUMMARY_MIN_SENTENCES}–${CORE_SUMMARY_MAX_SENTENCES}，当前 ${sentences}`);
+    }
+    if (!/(?:问题|难点|任务|目标|输入|输出|旨在|针对|解决)/.test(summary)) {
+        issues.push('缺少任务问题、输入输出或实际难点');
+    }
+    const chain = summary.match(/(?:第一|第二|第三|第四|首先|其次|然后|随后|接着|最后|先|再|阶段|步骤|模块|组件)/g) || [];
+    const roles = summary.match(/(?:负责|用于|承担|提取|编码|定位|筛选|生成|融合|对比|优化|校准|解码|预测|输出|构建|约束|传递|送入)/g) || [];
+    if (chain.length < 2 || roles.length < 2) issues.push('缺少 2–4 步方法链的分工与衔接');
+    const sourceText = typeof options === 'string' ? options : String(options.sourceText || '');
+    const sourceHasQuantitativeEvidence = sourceText
+        ? sourceText.split(/[。！？!?\n]/).some(sentence => (
+            /(?:experiment|evaluation|result|benchmark|test set|dataset|实验|评测|结果|基准|测试集|数据集)/i.test(sentence)
+            && hasCoreSummaryQuantitativeEvidence(sentence)
+        ))
+        : null;
+    const completeQuantitativeResult = hasCompleteCoreSummaryQuantitativeResult(summary);
+    if (sourceHasQuantitativeEvidence === true && !completeQuantitativeResult) {
+        issues.push('已有证据包含关键定量结果，但摘要没有写清比较对象、评测设置、指标、数值与方向');
+    } else if (sourceHasQuantitativeEvidence === false
+        && !summary.includes(CORE_SUMMARY_RESULT_UNAVAILABLE)) {
+        issues.push(`原文无可核定量结果时必须明确写“${CORE_SUMMARY_RESULT_UNAVAILABLE}”`);
+    } else if (sourceHasQuantitativeEvidence === null && !completeQuantitativeResult
+        && !summary.includes(CORE_SUMMARY_RESULT_UNAVAILABLE)) {
+        issues.push(`缺少完整关键定量结果或明确的“${CORE_SUMMARY_RESULT_UNAVAILABLE}”声明`);
+    }
+    if (!/(?:边界|局限|适用|失败|尚未|未覆盖|未验证|外推|仅限|受限)/.test(summary)) {
+        issues.push('缺少结论适用边界、失败条件或未验证范围');
+    }
+    const cost = summary.includes(CORE_SUMMARY_COST_UNAVAILABLE)
+        || /(?:成本|代价|开销|硬件|算力|显存|内存|延迟|吞吐|实时率|能耗)/.test(summary)
+        || /(?:训练|推理|部署)[^。！？!?]{0,24}(?:需要|增加|额外|占用|耗时|更高|更低|受限|负担)/.test(summary);
+    if (!cost) issues.push(`缺少训练、推理或部署成本；未披露时必须写“${CORE_SUMMARY_COST_UNAVAILABLE}”`);
+    return issues.length ? `核心摘要未达到 ${CORE_SUMMARY_CONTRACT_VERSION}: ${issues.join('；')}` : null;
+}
+
+function coreSummaryProjectionSha256(analysis) {
+    const source = String(analysis || '');
+    const matches = [...source.matchAll(/^##\s*核心摘要\s*\r?\n/gm)];
+    if (matches.length !== 1) return '';
+    const start = matches[0].index + matches[0][0].length;
+    const next = /^##\s+/gm;
+    next.lastIndex = start;
+    const found = next.exec(source);
+    const end = found ? found.index : source.length;
+    return crypto.createHash('sha256')
+        .update(`${source.slice(0, start)}<CORE_SUMMARY_BODY>${source.slice(end)}`)
+        .digest('hex');
+}
+
+function validateCoreSummaryStageBinding(paper, options = {}) {
+    const manifest = paper?.analysisManifest;
+    const stage = manifest?.stages?.coreSummaryRepair;
+    if (stage?.status === MANUAL_COMPLETE_STATUS) return null;
+    const summary = extractSection(String(paper?.analysis || ''), '核心摘要');
+    const summarySha256 = crypto.createHash('sha256').update(String(summary || '')).digest('hex');
+    if (!isRecoveryStageTerminal('coreSummaryRepair', stage?.status)) return 'coreSummaryRepair 未完成';
+    if (manifest?.contracts?.coreSummary !== CORE_SUMMARY_CONTRACT_VERSION
+        || stage.contractVersion !== CORE_SUMMARY_CONTRACT_VERSION) return '核心摘要合同不是 current v3';
+    if (!/^[a-f0-9]{64}$/.test(String(stage.fingerprint || ''))) return '核心摘要阶段缺少 sealed fingerprint';
+    if (!/^[a-f0-9]{64}$/.test(String(stage.outputAnalysisSha256 || ''))) return '核心摘要阶段缺少输出 SHA';
+    const semanticIssue = validateCoreSummarySemanticContract(paper?.analysis, options);
+    if (semanticIssue) return semanticIssue;
+    if (stage.summarySha256 !== summarySha256) return '核心摘要正文未绑定阶段 SHA';
+    const structure = manifest?.stages?.structureRepair;
+    const scoring = manifest?.stages?.scoringAudit;
+    const requiredShaFields = [
+        'inputAnalysisSha256', 'inputSummarySha256',
+        'inputStructureProjectionSha256', 'outputStructureProjectionSha256', 'bindingSha256'
+    ];
+    if (requiredShaFields.some(field => !/^[a-f0-9]{64}$/.test(String(stage[field] || '')))) {
+        return '核心摘要阶段缺少可重放输入/投影 SHA 链';
+    }
+    if (structure?.outputAnalysisSha256 !== stage.inputAnalysisSha256) {
+        return '核心摘要输入没有绑定 structureRepair 输出';
+    }
+    if (stage.inputStructureProjectionSha256 !== stage.outputStructureProjectionSha256) {
+        return '核心摘要局部修复改变了其他 12 节投影';
+    }
+    const structureCheckpoint = paper?.analysisStageCheckpoints?.structureRepair;
+    if (typeof structureCheckpoint === 'string') {
+        const checkpointSummarySha256 = crypto.createHash('sha256')
+            .update(extractSection(structureCheckpoint, '核心摘要')).digest('hex');
+        if (crypto.createHash('sha256').update(structureCheckpoint).digest('hex')
+                !== stage.inputAnalysisSha256
+            || checkpointSummarySha256 !== stage.inputSummarySha256
+            || coreSummaryProjectionSha256(structureCheckpoint)
+                !== stage.inputStructureProjectionSha256) {
+            return '核心摘要输入不能从 structureRepair checkpoint 重放';
+        }
+    }
+    const summaryCheckpoint = paper?.analysisStageCheckpoints?.coreSummaryRepair;
+    if (typeof summaryCheckpoint === 'string'
+        && (crypto.createHash('sha256').update(summaryCheckpoint).digest('hex')
+                !== stage.outputAnalysisSha256
+            || crypto.createHash('sha256')
+                .update(extractSection(summaryCheckpoint, '核心摘要')).digest('hex')
+                !== stage.summarySha256
+            || coreSummaryProjectionSha256(summaryCheckpoint)
+                !== stage.outputStructureProjectionSha256)) {
+        return '核心摘要输出不能从 coreSummaryRepair checkpoint 重放';
+    }
+    const bindingBody = {
+        contractVersion: stage.contractVersion,
+        inputAnalysisSha256: stage.inputAnalysisSha256,
+        outputAnalysisSha256: stage.outputAnalysisSha256,
+        inputSummarySha256: stage.inputSummarySha256,
+        summarySha256: stage.summarySha256,
+        inputStructureProjectionSha256: stage.inputStructureProjectionSha256,
+        outputStructureProjectionSha256: stage.outputStructureProjectionSha256
+    };
+    if (stage.bindingSha256 !== manualSha256(bindingBody)) return '核心摘要阶段 binding SHA 不可重放';
+    if (scoring?.status !== MANUAL_COMPLETE_STATUS) {
+        if (scoring?.coreSummaryInputAnalysisSha256 !== stage.outputAnalysisSha256
+            || scoring?.inputCoreSummarySha256 !== stage.summarySha256
+            || scoring?.outputCoreSummarySha256 !== stage.summarySha256) {
+            return '评分阶段没有绑定核心摘要输入/输出 SHA 链';
+        }
+    }
+    return null;
 }
 
 function manualStableValue(value) {
@@ -1671,6 +1858,7 @@ module.exports = {
     METHOD_DETAIL_CONTRACT_VERSION,
     EDITORIAL_QUALITY_CONTRACT_VERSION,
     ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION,
+    CORE_SUMMARY_CONTRACT_VERSION,
     REQUIRED_RECOVERY_STAGES,
     RECOVERY_STAGE_TERMINAL_STATUSES,
     MANUAL_COMPLETE_STATUS,
@@ -1700,6 +1888,14 @@ module.exports = {
     validateManualDepthContractV3,
     analysisManifestRequiresMethodDetailContract,
     isRecoveryStageTerminal,
+    CORE_SUMMARY_CONTRACT_VERSION,
+    CORE_SUMMARY_MIN_CHINESE_CHARS,
+    CORE_SUMMARY_MAX_CHINESE_CHARS,
+    CORE_SUMMARY_MIN_SENTENCES,
+    CORE_SUMMARY_MAX_SENTENCES,
+    validateCoreSummarySemanticContract,
+    coreSummaryProjectionSha256,
+    validateCoreSummaryStageBinding,
     manualSha256,
     manualTextSha256,
     findManualBoilerplate,

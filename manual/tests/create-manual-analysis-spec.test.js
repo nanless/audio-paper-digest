@@ -11,6 +11,7 @@ const {
     assertNoCrossPaperTemplateReuse,
     sourceContainsBoundQuote,
     rebalanceEditorialParagraphs,
+    reviewedClaimsByStage,
     mergeRecordsEnvelopes,
     buildAnalysis,
     buildSpec
@@ -620,6 +621,18 @@ describe('strict reusable manual v4 spec assembler', () => {
         assert.doesNotThrow(() => validateRecord(reversedBinding, ID));
     });
 
+    it('legacy reviewed claims cover every required stage and reject missing evidence shapes', () => {
+        const chunks = sourceText().split('\n'); const record = validRecord();
+        const reviewed = reviewedClaimsByStage(record, chunks, []);
+        const required = require('../../scripts/analysis-contract.js').REQUIRED_RECOVERY_STAGES;
+        assert.deepEqual(Object.keys(reviewed), required);
+        assert.ok(reviewed.coreSummaryRepair.some(claim => /任务、方法链、关键结果、边界与成本/.test(claim)));
+        const missingMethod = validRecord(); delete missingMethod.method;
+        assert.throws(() => reviewedClaimsByStage(missingMethod, chunks, []), /records\.method/);
+        assert.throws(() => reviewedClaimsByStage(record, chunks.slice(0, 5), []), /至少 6 条/);
+        assert.throws(() => reviewedClaimsByStage(record, chunks, {}), /imageInfos 必须是数组/);
+    });
+
     it('rejects duplicate papers across shards and cross-date envelopes', () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-record-shards-'));
         const first = path.join(root, 'first.json');
@@ -723,7 +736,10 @@ describe('strict reusable manual v4 spec assembler', () => {
         assert.match(spec.papers[ID].imageInsertions[0].paragraphId, /^s\d+p\d+$/);
         assert.match(spec.papers[ID].imageInsertions[0].conclusionParagraphId, /^s\d+p\d+$/);
         assert.equal(spec.papers[ID].manualAudit.attempts, 3);
-        assert.equal(Object.keys(spec.stagePromptSha256).length, 10);
+        assert.equal(
+            Object.keys(spec.stagePromptSha256).length,
+            require('../../scripts/analysis-contract.js').REQUIRED_RECOVERY_STAGES.length
+        );
         assert.match(spec.papers[ID].analysis, /方法第一阶段/);
         assert.doesNotMatch(spec.papers[ID].analysis, /人工记录方法主干/);
         assert.match(spec.papers[ID].analysis, /既有系统在复杂噪声下/);

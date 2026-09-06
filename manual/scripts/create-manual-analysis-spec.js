@@ -803,6 +803,19 @@ function sourceChunks(text) {
 }
 
 function reviewedClaimsByStage(record, chunks, imageInfos = []) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) {
+        throw new Error('reviewedClaimsByStage 需要已验证的单篇 records 对象');
+    }
+    if (!Array.isArray(chunks) || chunks.length < 6
+        || chunks.slice(0, 6).some(value => typeof value !== 'string' || value.trim().length < 12)) {
+        throw new Error(`${record.arxivId || 'unknown'} reviewedClaimsByStage 需要至少 6 条已绑定全文引用`);
+    }
+    for (const field of ['question', 'method', 'method2', 'method3', 'results', 'limits', 'open', 'review']) {
+        if (typeof record[field] !== 'string' || record[field].trim().length < 12) {
+            throw new Error(`${record.arxivId || 'unknown'} reviewedClaimsByStage 缺少 records.${field} 具体声明`);
+        }
+    }
+    if (!Array.isArray(imageInfos)) throw new Error(`${record.arxivId || 'unknown'} imageInfos 必须是数组`);
     const imageClaim = imageInfos.length > 0
         ? `图片下载与 caption 候选仅采用全文 manifest 绑定的 ${imageInfos.length} 个 HTTPS 图像元数据。`
         : '图片下载阶段已核对全文 manifest，本篇没有可声明的论文图像候选。';
@@ -815,12 +828,18 @@ function reviewedClaimsByStage(record, chunks, imageInfos = []) {
         tableRepair: [`实验表格、指标、基线与数值复核：${record.results}`, chunks[5]],
         methodRepair: [`方法架构、模块、训练与推理复核：${record.method}`, record.method3, chunks[1]],
         structureRepair: [`章节结构、标题、摘要、标签与格式复核：${record.question}`, chunks[0]],
+        coreSummaryRepair: [`核心摘要任务、方法链、关键结果、边界与成本复核：${record.question}`,
+            `核心摘要实验结论复核：${record.results}`, `核心摘要适用边界与代价复核：${record.limits}`],
         scoringAudit: [`评分八维与总分复算：${record.review}`, record.limits, chunks[5]],
         imageSupplement: [`插图 caption、视觉语义与正文段落位置复核：${imageClaim}`, chunks[2]]
     };
-    return Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => [stage,
-        claims[stage].map(value => String(value || '').trim()).filter(value => value.length >= 12).slice(0, 3)
-    ]));
+    return Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => {
+        if (!Array.isArray(claims[stage])) throw new Error(`reviewedClaimsByStage 缺少 ${stage} 的生产映射`);
+        const reviewed = claims[stage].map(value => String(value || '').trim())
+            .filter(value => value.length >= 12).slice(0, 3);
+        if (!reviewed.length) throw new Error(`${record.arxivId || 'unknown'} reviewedClaimsByStage.${stage} 缺少具体审查声明`);
+        return [stage, reviewed];
+    }));
 }
 
 function explicitReviewedClaimsByStage(record) {

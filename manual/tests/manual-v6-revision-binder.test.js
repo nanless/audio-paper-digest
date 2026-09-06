@@ -11,6 +11,7 @@ const {
     applyRevisionAuthorPatches, applyReviewDecisionsAndRevisionPatches
 } = require('../scripts/manual-v6-revision-binder.js');
 const { renderArtifactTableMarkdown } = require('../scripts/manual-longform-contract.js');
+const { REQUIRED_RECOVERY_STAGES } = require('../../scripts/analysis-contract.js');
 
 function paragraph(heading) {
     return `本节围绕${heading}建立一段可核对的教学叙事，明确交代输入、组件职责、比较条件、实验结论和不能外推的边界。为了让研究生沿证据链继续推导，文字还区分论文直接报告的事实与仍需额外实验确认的判断，避免只记住孤立结论。`;
@@ -81,12 +82,8 @@ describe('Manual v6 deterministic revision binder', () => {
             evidenceLedger: [{ id: 'E01' }],
             researchBrief: { centralQuestion: { sourceQuote: '这是绑定全文的连续原句，长度足够用于测试审计来源。' } }
         };
-        const stages = [
-            'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
-            'tableRepair', 'methodRepair', 'structureRepair', 'scoringAudit', 'imageSupplement'
-        ];
         const stageMap = (status, findings = []) => Object.fromEntries(
-            stages.map(stage => [stage, { status, findings }])
+            REQUIRED_RECOVERY_STAGES.map(stage => [stage, { status, findings }])
         );
         const audit = {
             version: 1, contract: 'manual-v6-independent-revision-audit-v1',
@@ -106,10 +103,24 @@ describe('Manual v6 deterministic revision binder', () => {
         assert.equal(result.manualAudit.passes[0].status, 'revise');
         assert.ok(Object.values(result.manualAudit.checks).every(Boolean));
         assert.ok(Object.values(result.stageReviewAttemptsByStage).every(value => value === 2));
+        assert.deepEqual(Object.keys(result.stageReviews.stages), REQUIRED_RECOVERY_STAGES);
+        assert.equal(result.stageReviewAttemptsByStage.coreSummaryRepair, 2);
         assert.deepEqual(base.manualAudit, { version: 0 });
         assert.throws(() => bindIndependentRevisionAudit(base, audit, {
             paperId: '2608.12345', articleFileSha256: 'c'.repeat(64), mapFileSha256: 'b'.repeat(64)
         }), /未绑定当前 article\/map 字节/);
+
+        const missingSummary = structuredClone(audit);
+        delete missingSummary.passes[0].stages.coreSummaryRepair;
+        assert.throws(() => bindIndependentRevisionAudit(base, missingSummary, {
+            paperId: '2608.12345', articleFileSha256: 'a'.repeat(64), mapFileSha256: 'b'.repeat(64)
+        }), /passes\[0\] 结构非法/);
+
+        const extraStage = structuredClone(audit);
+        extraStage.passes[1].stages.unboundStage = { status: 'pass', findings: [] };
+        assert.throws(() => bindIndependentRevisionAudit(base, extraStage, {
+            paperId: '2608.12345', articleFileSha256: 'a'.repeat(64), mapFileSha256: 'b'.repeat(64)
+        }), /passes\[1\] 结构非法/);
     });
 
     it('只允许按既有 evidence ID 全量替换为全文连续 sourceQuote', () => {

@@ -65,6 +65,10 @@ const DECISION_HANDLES = new WeakSet();
 const DECISION_HANDLE_DATA = new WeakMap();
 const LOCK_HANDLES = new WeakSet();
 const LOCK_HANDLE_DATA = new WeakMap();
+const ACTIVE_LOCK_HANDLES = new Set();
+const LOCK_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM']);
+let lockSignalHandlersInstalled = false;
+let handlingLockSignal = false;
 
 class PageSourceCrosswalkError extends Error {
     constructor(message) {
@@ -1156,6 +1160,28 @@ function clearOrRejectReclaimMarker(reclaimPath) {
     if (!reclaimableLock(snapshot)) fail('crosswalk lock reclaim marker is not stale');
     removeVerifiedLockDirectory(snapshot, 'crosswalk lock reclaim marker');
 }
+function uninstallLockSignalHandlers() {
+    if (!lockSignalHandlersInstalled) return;
+    for (const signal of LOCK_SIGNALS) process.removeListener(signal, handleLockSignal);
+    lockSignalHandlersInstalled = false;
+}
+function handleLockSignal(signal) {
+    if (handlingLockSignal) return;
+    handlingLockSignal = true;
+    for (const handle of [...ACTIVE_LOCK_HANDLES]) {
+        try { releaseLock(handle); }
+        catch (error) {
+            try { process.stderr.write(`[crosswalk-lock] ${signal} cleanup refused: ${error.message}\n`); } catch {}
+        }
+    }
+    uninstallLockSignalHandlers();
+    process.exit(signal === 'SIGINT' ? 130 : 143);
+}
+function installLockSignalHandlers() {
+    if (lockSignalHandlersInstalled) return;
+    for (const signal of LOCK_SIGNALS) process.on(signal, handleLockSignal);
+    lockSignalHandlersInstalled = true;
+}
 function acquireLock(directory, owner, now) {
     if (typeof owner !== 'string' || !OWNER_RE.test(owner)) fail('owner is malformed');
     const lockPath = path.join(directory, 'operation.lock');
@@ -1166,8 +1192,8 @@ function acquireLock(directory, owner, now) {
         try {
             const snapshot = createLockDirectory(lockPath, owner, now);
             const handle = Object.freeze(Object.create(null)); LOCK_HANDLES.add(handle);
-            LOCK_HANDLE_DATA.set(handle, Object.freeze({ lockPath, token: snapshot.record.token,
-                ownerSha256: snapshot.record.ownerSha256 }));
+            LOCK_HANDLE_DATA.set(handle, Object.freeze({ lockPath, snapshot }));
+            ACTIVE_LOCK_HANDLES.add(handle); installLockSignalHandlers();
             return handle;
         } catch (error) {
             if (error.code !== 'EEXIST') throw error;
@@ -1196,11 +1222,24 @@ function acquireLock(directory, owner, now) {
 function releaseLock(handle) {
     if (!handle || typeof handle !== 'object' || !LOCK_HANDLES.has(handle)) fail('authenticated crosswalk lock handle required');
     const expected = LOCK_HANDLE_DATA.get(handle); const snapshot = readLockDirectory(expected.lockPath);
-    if (snapshot.record.token !== expected.token || snapshot.record.ownerSha256 !== expected.ownerSha256) {
+    if (!sameLockSnapshot(expected.snapshot, snapshot)
+        || snapshot.record.token !== expected.snapshot.record.token
+        || snapshot.record.pid !== process.pid || snapshot.record.pid !== expected.snapshot.record.pid
+        || snapshot.record.hostname !== os.hostname()
+        || snapshot.record.hostname !== expected.snapshot.record.hostname) {
         fail('crosswalk operation lock changed while held');
     }
     removeVerifiedLockDirectory(snapshot, 'crosswalk operation lock');
-    LOCK_HANDLES.delete(handle); LOCK_HANDLE_DATA.delete(handle);
+    ACTIVE_LOCK_HANDLES.delete(handle); LOCK_HANDLES.delete(handle); LOCK_HANDLE_DATA.delete(handle);
+    if (ACTIVE_LOCK_HANDLES.size === 0 && !handlingLockSignal) {
+        // A signal delivered during a synchronous fsync/rename is dispatched
+        // only after the current JS stack unwinds. Keep handlers through one
+        // turn so that the completed atomic write and its finally release are
+        // followed by the expected 128+signal exit instead of losing SIGINT.
+        setImmediate(() => {
+            if (ACTIVE_LOCK_HANDLES.size === 0 && !handlingLockSignal) uninstallLockSignalHandlers();
+        });
+    }
 }
 function applyDecision({ crosswalkRoot, crosswalkId, decisionHandle, owner, now } = {}) {
     const directory = crosswalkDirectory(crosswalkRoot, crosswalkId);

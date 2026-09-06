@@ -7,13 +7,38 @@ const path = require('node:path');
 const CONTRACT = 'historical-arxiv-analysis-scheduler-v1';
 const VERSION = 1;
 const READER_TRANSPORT_COOLDOWN_MS = 5 * 60 * 1000;
+const READER_RECOVERY_POLICY_VERSION = 'reader-recovery-policy-v2';
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
 function readerImplementationFingerprint() {
     const root = path.join(__dirname, '..', '..');
     const files = ['prompts/api-reader-article.md', 'prompts/api-reader-repair.md',
-        'scripts/deep-analyzer.js', 'scripts/lib/reader-repair.js', 'scripts/lib/reader-source-diagnostics.js'];
-    return sha256(files.map(name => `${name}\0${sha256(fs.readFileSync(path.join(root, name)))}\0`).join(''));
+        'scripts/deep-analyzer.js', 'scripts/editorial-quality.js', 'scripts/lib/reader-contract.js',
+        'scripts/lib/reader-tables.js', 'scripts/lib/reader-repair.js', 'scripts/lib/reader-draft-order.js',
+        'scripts/lib/reader-recovery-revision.js', 'scripts/lib/reader-source-diagnostics.js'];
+    return sha256(`${READER_RECOVERY_POLICY_VERSION}\0`
+        + files.map(name => `${name}\0${sha256(fs.readFileSync(path.join(root, name)))}\0`).join(''));
+}
+
+function exactOperatorPatchRecovery(runDir, runId, paperId, payload) {
+    const repair = require('./reader-repair.js'); const fresh = require('./fresh-rewrite-run.js');
+    const audits = payload?.operatorPatches;
+    if (!Array.isArray(audits) || !audits.length || !payload.draft) return null;
+    const audit = audits.at(-1); const patchSha = String(audit?.patchFileSha256 || '');
+    if (audit?.contract !== 'reader-operator-patch-v1' || audit.runId !== runId || audit.paperId !== paperId
+        || !/^[a-f0-9]{64}$/.test(patchSha) || !/^[a-f0-9]{64}$/.test(String(audit.oldEnvelopeSha256 || ''))
+        || audit.afterDraftSha256 !== repair.hashDraft(payload.draft)
+        || audit.archive !== path.posix.join('patches', 'operator-archive', patchSha)) return null;
+    try {
+        const archive = path.join(runDir, audit.archive);
+        const before = fresh.readRegularJson(path.join(archive, 'before.json'));
+        const patch = fresh.readRegularJson(path.join(archive, 'patch.json'));
+        const intent = fresh.readRegularJson(path.join(archive, 'intent.json')).value;
+        if (before.sha256 !== audit.oldEnvelopeSha256 || patch.sha256 !== patchSha
+            || fresh.stableHash(intent.audit) !== fresh.stableHash(audit)
+            || intent.afterPayloadSha256 !== repair.hashDraft(payload)) return null;
+        return audit.afterDraftSha256;
+    } catch { return null; }
 }
 
 function inspectReaderRecovery({ runId, rootDir, now = new Date().toISOString() } = {}) {
@@ -23,12 +48,15 @@ function inspectReaderRecovery({ runId, rootDir, now = new Date().toISOString() 
     const upstreamReady = stages.primaryAnalysis?.status === 'complete' && stages.scoringAudit?.status === 'complete';
     const attemptsRoot = path.join(loaded.runDir, 'reader-attempts'); const candidates = [];
     try {
-        for (const name of fs.readdirSync(attemptsRoot).filter(name => name.endsWith('.json')).sort()) {
+        for (const name of fs.readdirSync(attemptsRoot).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort()) {
             const filename = path.join(attemptsRoot, name); const stat = fs.lstatSync(filename);
             if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) continue;
             const envelope = fresh.readRegularJson(filename).value;
             if (envelope?.identity?.freshAnalysis?.runId !== runId || envelope.identity.paperId !== loaded.run.paperIds[0]) continue;
-            candidates.push({ payload: envelope.payload || {}, mtimeMs: stat.mtimeMs });
+            const repair = require('./reader-repair.js');
+            if (name !== `${repair.hashDraft(envelope.identity)}.json`) continue;
+            const payload = repair.loadFailedCandidate(attemptsRoot, envelope.identity);
+            candidates.push({ payload, mtimeMs: stat.mtimeMs });
         }
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
     candidates.sort((a, b) => b.mtimeMs - a.mtimeMs); const latestCandidate = candidates[0];
@@ -37,35 +65,58 @@ function inspectReaderRecovery({ runId, rootDir, now = new Date().toISOString() 
     const failureSignature = String(error ? sha256(error) : payload.failureSignature || '');
     const attempts = Number.isSafeInteger(payload.attempts) ? payload.attempts : 0;
     const noProgress = Number.isSafeInteger(payload.noProgress) ? payload.noProgress : 0;
+    const validationFailureStreak = Number.isSafeInteger(payload.validationFailureStreak)
+        ? payload.validationFailureStreak : 0;
+    const implementationRepairAllowance = Boolean(payload.implementationRepairAllowanceProof);
     const exhausted = /failed candidate exhausted|bounded attempts|连续无进展/i.test(error)
-        || attempts >= 6 || noProgress >= 2;
+        || (attempts >= 6 && !implementationRepairAllowance) || noProgress >= 2 || validationFailureStreak >= 2;
     const transportOnly = /HTTP 429|rate_limit_exceeded|SSE.*(?:终态|terminal)|SSE_TERMINAL/i.test(error);
     const baseFingerprint = String(reader.fingerprint || loaded.run.sourceExpectations?.[loaded.run.paperIds[0]]?.sourceSnapshotSha256 || '');
     const readerUpdatedMs = new Date(reader.updatedAt || '').getTime();
     const observedAt = Number.isFinite(readerUpdatedMs) ? new Date(readerUpdatedMs).toISOString()
         : latestCandidate ? new Date(latestCandidate.mtimeMs).toISOString() : new Date(now).toISOString();
+    const operatorPatchSha256 = exactOperatorPatchRecovery(
+        loaded.runDir, runId, loaded.run.paperIds[0], payload);
     return { recoveryKind: upstreamReady && reader.status !== 'complete' ? 'reader' : 'full', upstreamReady,
         recoveryFingerprint: sha256(`${baseFingerprint}\0${readerImplementationFingerprint()}`),
         failureSignature, exhausted, transportOnly, cooldownMs: transportOnly ? READER_TRANSPORT_COOLDOWN_MS : 0,
-        attempts, noProgress, observedAt };
+        attempts, noProgress, validationFailureStreak, implementationRepairAllowance,
+        operatorPatchSha256, observedAt };
 }
 
 function mergeRecoveryState(existing, observed, now, { attempted = false } = {}) {
     if (!observed || observed.recoveryKind !== 'reader') return { recoveryKind: 'full',
-        recoveryFingerprint: null, failureSignature: null, nextEligibleAt: null, exhausted: false };
+        recoveryFingerprint: null, failureSignature: null, nextEligibleAt: null, exhausted: false,
+        implementationRecoveryPendingFingerprint: null, operatorPatchSha256: null,
+        operatorRecoveryConsumedSha256: null };
     const fingerprintChanged = Boolean(existing?.recoveryFingerprint
         && existing.recoveryFingerprint !== observed.recoveryFingerprint);
+    const pendingImplementationFingerprint = existing?.implementationRecoveryPendingFingerprint || null;
+    const implementationRecoveryAvailable = fingerprintChanged
+        || pendingImplementationFingerprint === observed.recoveryFingerprint;
+    const implementationRecoveryPendingFingerprint = attempted && implementationRecoveryAvailable
+        ? null : implementationRecoveryAvailable ? observed.recoveryFingerprint : null;
+    const operatorPatchSha256 = observed.operatorPatchSha256 || null;
+    const consumedOperatorPatch = existing?.operatorRecoveryConsumedSha256 || null;
+    const operatorRecoveryAvailable = Boolean(operatorPatchSha256
+        && consumedOperatorPatch !== operatorPatchSha256);
+    const operatorRecoveryConsumedSha256 = attempted && operatorRecoveryAvailable
+        ? operatorPatchSha256 : consumedOperatorPatch;
     const sameFailure = existing?.recoveryFingerprint === observed.recoveryFingerprint
         && existing?.failureSignature === observed.failureSignature;
     if (sameFailure && !attempted) return { recoveryKind: 'reader', recoveryFingerprint: observed.recoveryFingerprint,
         failureSignature: observed.failureSignature, nextEligibleAt: existing.nextEligibleAt || null,
-        exhausted: existing.exhausted === true || observed.exhausted === true };
+        exhausted: operatorRecoveryAvailable || implementationRecoveryAvailable
+            ? false : existing.exhausted === true || observed.exhausted === true,
+        implementationRecoveryPendingFingerprint, operatorPatchSha256, operatorRecoveryConsumedSha256 };
     const base = new Date(attempted ? now : observed.observedAt || now).getTime();
     return { recoveryKind: 'reader', recoveryFingerprint: observed.recoveryFingerprint,
         failureSignature: observed.failureSignature,
         nextEligibleAt: !fingerprintChanged && observed.cooldownMs > 0
             ? new Date(base + observed.cooldownMs).toISOString() : null,
-        exhausted: fingerprintChanged ? false : observed.exhausted === true };
+        exhausted: (implementationRecoveryAvailable || operatorRecoveryAvailable) && !attempted
+            ? false : observed.exhausted === true,
+        implementationRecoveryPendingFingerprint, operatorPatchSha256, operatorRecoveryConsumedSha256 };
 }
 
 function deterministicRunId(crosswalkId, paperId) {
@@ -96,6 +147,19 @@ function groupsFromCrosswalk(state) {
             authorityName: authorityNames[0], authorityFileSha256: authorityShas[0],
             runId: deterministicRunId(state.crosswalkId, group.paperId) };
     }).sort((a, b) => a.paperId.localeCompare(b.paperId));
+}
+
+function scopeGroups(groups, requestedPaperIds) {
+    if (requestedPaperIds === undefined || requestedPaperIds === null) return groups;
+    if (!Array.isArray(requestedPaperIds) || requestedPaperIds.length === 0
+        || requestedPaperIds.some(id => !/^arxiv:\d{4}\.\d{4,5}$/.test(id))
+        || new Set(requestedPaperIds).size !== requestedPaperIds.length) {
+        throw new Error('paperIds must be a non-empty duplicate-free list of canonical arxiv: IDs');
+    }
+    const requested = new Set(requestedPaperIds); const known = new Set(groups.map(group => group.paperId));
+    const unknown = requestedPaperIds.filter(id => !known.has(id));
+    if (unknown.length) throw new Error(`Unknown verified arXiv paperIds: ${unknown.join(', ')}`);
+    return groups.filter(group => requested.has(group.paperId));
 }
 
 function defaultDependencies() {
@@ -221,13 +285,14 @@ async function runHistoricalScheduler(options, overrides = {}) {
     const deps = { ...defaultDependencies(), ...overrides }; const files = deps.files;
     const crosswalk = deps.readCrosswalk({ crosswalkRoot: files.pageSourceCrosswalkDir, crosswalkId: options.crosswalkId });
     const groups = groupsFromCrosswalk(crosswalk);
-    const maximum = options.limit === 'pilot' ? 1 : options.limit === null ? groups.length : options.limit;
+    const scopedGroups = scopeGroups(groups, options.paperIds);
+    const maximum = options.limit === 'pilot' ? 1 : options.limit === null ? scopedGroups.length : options.limit;
     const queue = options.queue || 'all';
     if (!Number.isSafeInteger(maximum) || maximum < 1 || !['prepare-only', 'analyze'].includes(options.stage)
         || !['new-full', 'reader-recovery', 'all'].includes(queue)
         || !Number.isInteger(options.concurrency) || options.concurrency < 1 || options.concurrency > 3) throw new Error('Invalid scheduler stage/limit/concurrency');
     if (!options.apply) {
-        const snapshot = dryRunState(groups, options.crosswalkId, files, deps);
+        const snapshot = dryRunState(scopedGroups, options.crosswalkId, files, deps);
         const selected = selectCandidates(snapshot.effectiveGroups, snapshot.items,
             { stage: options.stage, queue, maximum, now: deps.now() });
         return { status: 'dry-run', stage: options.stage, queue, verifiedArxivIdentities: groups.length,
@@ -238,7 +303,7 @@ async function runHistoricalScheduler(options, overrides = {}) {
     }
     const filename = schedulerPath(files.historicalAnalysisSchedulerDir, options.crosswalkId);
     let checkpoint = syncCheckpoint(filename, crosswalk, groups, deps);
-    const effectiveGroups = groups.map(group => ({ ...group,
+    const effectiveGroups = scopedGroups.map(group => ({ ...group,
         analysisDate: checkpoint.items[group.paperId].analysisDate }));
     for (const group of effectiveGroups) {
         const recovered = deps.recoverRun({ runId: group.runId, date: group.analysisDate,
@@ -289,7 +354,9 @@ async function runHistoricalScheduler(options, overrides = {}) {
             while (cursor < prepared.length) {
                 const group = prepared[cursor++];
                 try {
-                    const result = await deps.analyzeRun({ runId: group.runId, concurrency: 1 });
+                    const item = checkpoint.items[group.paperId];
+                    const result = await deps.analyzeRun({ runId: group.runId, concurrency: 1,
+                        refreshReaderDiagnostics: item?.implementationRecoveryPendingFingerprint === item?.recoveryFingerprint });
                     const sealed = deps.recoverRun({ runId: group.runId, date: group.analysisDate,
                         arxivId: group.arxivId, rootDir: files.freshRewriteRunsDir });
                     if (result.status === 'complete' && sealed?.sealedComplete !== true) {
@@ -321,6 +388,7 @@ async function runHistoricalScheduler(options, overrides = {}) {
         failed: values.filter(item => /failed$/.test(item.status)).length, checkpoint: filename };
 }
 
-module.exports = { CONTRACT, VERSION, READER_TRANSPORT_COOLDOWN_MS, readerImplementationFingerprint,
-    inspectReaderRecovery, mergeRecoveryState, checkpointBindingMatches, selectCandidates, deterministicRunId,
-    groupsFromCrosswalk, runHistoricalScheduler };
+module.exports = { CONTRACT, VERSION, READER_TRANSPORT_COOLDOWN_MS, READER_RECOVERY_POLICY_VERSION,
+    readerImplementationFingerprint,
+    exactOperatorPatchRecovery, inspectReaderRecovery, mergeRecoveryState, checkpointBindingMatches,
+    selectCandidates, deterministicRunId, groupsFromCrosswalk, scopeGroups, runHistoricalScheduler };

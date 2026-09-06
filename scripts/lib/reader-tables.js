@@ -9,7 +9,29 @@ const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.
 
 // Shared with the final Reader paste gate: selection must not promise exact
 // source-cell replay when later display cleanup would change those bytes.
-function findReaderTablePasteDuplication(cell) {
+function hasExplicitRepeatedScientificMeasurement(cell, context = {}, duplicate = null) {
+    const text = String(cell || '');
+    const scientific = '[+-]?\\d+(?:\\.\\d+)?[eE][+-]?\\d+';
+    const list = new RegExp(`${scientific}(?:\\s*[、,，;；/]\\s*${scientific})+`, 'g');
+    const repeated = [...text.matchAll(list)].some(match => {
+        const values = match[0].match(new RegExp(scientific, 'g')) || [];
+        const duplicateOverlaps = !duplicate || duplicate.index < match.index + match[0].length
+            && match.index < duplicate.index + duplicate.length;
+        return duplicateOverlaps
+            && new Set(values.map(value => value.toLowerCase())).size < values.length;
+    });
+    if (!repeated) return false;
+    const localLabels = /(?:^|[，,；;])\s*(?:s\s*\d+|stage\s*\d+|第?\s*\d+\s*阶段)\s*(?:学习率|lr)?/i.test(text);
+    const rowContext = [context.header?.[context.columnIndex], ...(context.row || []).filter(value => value !== cell)]
+        .map(value => String(value || '')).join(' ');
+    // Repeated learning rates are meaningful when the row/column explicitly
+    // says they belong to staged training. This exception is deliberately
+    // limited to delimited scientific-notation lists; concatenated extraction
+    // shadows such as 2.222.22 or 5e-55e-5 remain rejected.
+    return localLabels || /(?:训练|阶段|stage|课程).*(?:学习率|learning rate|\blr\b)|(?:学习率|learning rate|\blr\b).*(?:训练|阶段|stage|课程)/i.test(rowContext);
+}
+
+function findReaderTablePasteDuplication(cell, context = {}) {
     const text = String(cell || '');
     const compact = text.replace(/\s+/g, '');
     if (text.includes('±') && text.includes('\\pm')) return '同一单元格同时出现 ± 与 \\pm';
@@ -19,8 +41,11 @@ function findReaderTablePasteDuplication(cell) {
         return '单元格残留 LaTeX 命令（\\bf/\\text/\\mathrm 等），应改写成纯文本';
     }
     if (text.includes('{=}')) return '单元格残留 TeX 关系符写法 {=}，应改写成 =';
-    const doubled = compact.match(/(.{3,})\1/);
-    if (doubled && /[\d\\=]/.test(doubled[1])) {
+    const doubledSpans = [...compact.matchAll(/(.{3,}?)\1/g)];
+    for (const doubled of doubledSpans) {
+        if (!/[\d\\=]/.test(doubled[1])) continue;
+        if (hasExplicitRepeatedScientificMeasurement(compact, context,
+            { index: doubled.index, length: doubled[0].length })) continue;
         return `单元格存在原文粘连复写“${doubled[0].slice(0, 40)}”，只保留其中一份`;
     }
     if (/([A-Za-z]+)(\d*)\1_\{[^}]*\}/.test(compact)) {
@@ -203,5 +228,5 @@ function compileReaderTableSelections(sections, bindings, artifacts) {
 
 module.exports = { READER_TABLE_SELECTION_CONTRACT, READER_TABLE_ELIGIBILITY_CONTRACT,
     READER_RESULT_COVERAGE_CONTRACT, readerResultTableRequirement, validateReaderResultTableCoverage,
-    findReaderTablePasteDuplication, assessReaderTableSelectionEligibility,
+    hasExplicitRepeatedScientificMeasurement, findReaderTablePasteDuplication, assessReaderTableSelectionEligibility,
     renderReaderTableSelection, compileReaderTableSelections };
