@@ -123,6 +123,31 @@ def canonical_conference_id(conference: Mapping[str, Any], external_id: Mapping[
     return f"conference:{conference['slug']}:{conference['year']}:{external_id['scheme']}:{external_id['value']}"
 
 
+def conference_coordinates(conference: Any) -> dict[str, Any]:
+    raw = _exact_object(conference, ("id", "year"), "conference coordinates")
+    year = _year(raw["year"], "conference coordinates.year")
+    suffix = f"-{year}"
+    if not isinstance(raw["id"], str) or not raw["id"].endswith(suffix):
+        _fail("conference coordinates.id must end with its exact year")
+    slug = raw["id"][:-len(suffix)]
+    if not SLUG_RE.fullmatch(slug):
+        _fail("conference coordinates.id must contain a normalized slug")
+    return {"slug": slug, "year": year}
+
+
+def canonical_conference_paper_id(conference: Any, source_identity: Any) -> str:
+    raw = _exact_object(source_identity, ("type", "value"), "conference source identity")
+    external_id = validate_external_id({"scheme": raw["type"], "value": raw["value"]})
+    return canonical_conference_id(conference_coordinates(conference), external_id)
+
+
+def assert_canonical_conference_paper_id(value: Any, conference: Any, source_identity: Any) -> str:
+    expected = canonical_conference_paper_id(conference, source_identity)
+    if value != expected:
+        _fail(f"conference paperId must be {expected}")
+    return expected
+
+
 def normalize_identity(value: Any) -> dict[str, Any]:
     raw = _exact_object(value, ("contract", "kind", "canonicalId", "arxivId", "conference", "externalId", "source", "citation"), "paper identity")
     if raw["contract"] != CONTRACT:
@@ -189,7 +214,8 @@ def is_sha256(value: Any) -> bool:
     return bool(SHA_RE.fullmatch(str(value or "")))
 
 
-__all__ = ["CONTRACT", "ARXIV_ID_RE", "SCHEMES", "canonical_conference_id", "validate_external_id",
+__all__ = ["CONTRACT", "ARXIV_ID_RE", "SCHEMES", "canonical_conference_id", "conference_coordinates",
+           "canonical_conference_paper_id", "assert_canonical_conference_paper_id", "validate_external_id",
            "validate_official_url", "validate_source", "validate_citation", "normalize_identity", "identity_payload",
            "stable_json", "sha256", "stable_sha256", "identity_sha256", "record_sha256", "is_sha256"]
 

@@ -15,6 +15,7 @@ test('full plan covers each suite once and never implicitly permits empty data',
     assert.deepEqual(plan.filter(step => step.command === 'npm').map(step => step.args), [['test']]);
     assert.equal(plan.filter(step => step.args.includes('unittest')).length, 2);
     assert.deepEqual(plan.at(-1).args, ['scripts/validate-data-files.js']);
+    assert.deepEqual(plan.at(-1).env, { VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' });
     assert.equal(plan.some(step => /generate|review|push|fetch/.test(step.args.join(' '))), false);
 });
 
@@ -23,6 +24,7 @@ test('quick plan is an explicit syntax and data subset; invalid flags fail close
     assert.equal(plan.length, 4);
     assert.equal(plan.some(step => step.command === 'npm' || step.args.includes('unittest')), false);
     assert.deepEqual(plan.at(-1).args, ['scripts/validate-data-files.js', '--allow-empty']);
+    assert.deepEqual(plan.at(-1).env, { VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' });
     assert.throws(() => parseOptions(['--skip-hugo']), /未知验证参数/);
 });
 

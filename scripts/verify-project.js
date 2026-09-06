@@ -68,7 +68,7 @@ function buildVerificationPlan(options, files) {
     }
     plan.push({ group: 'Read-only data validation', command: process.execPath, args: [
         'scripts/validate-data-files.js', ...(options.allowEmpty ? ['--allow-empty'] : [])
-    ] });
+    ], env: { VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' } });
     return plan;
 }
 
@@ -120,7 +120,7 @@ function main(args = process.argv.slice(2)) {
         for (const step of plan) {
             if (step.group !== previousGroup) console.log(`[verify] ${step.group}`);
             previousGroup = step.group;
-            executeCommand(step, { env });
+            executeCommand(step, { env: { ...env, ...(step.env || {}) } });
         }
         console.log(`[verify] ${options.quick ? 'QUICK subset' : 'FULL verification'} passed.`);
     } finally {

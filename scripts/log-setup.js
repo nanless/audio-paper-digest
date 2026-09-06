@@ -222,7 +222,8 @@ function setupScriptLogging(scriptPath, options = {}) {
 
     if (isTestProcess() && !options.allowInTestProcess) return null;
     const disableFileLogs = process.env.PAPER_DIGEST_DISABLE_FILE_LOGS === '1'
-        || process.env.PD_DISABLE_FILE_LOGS === '1';
+        || process.env.PD_DISABLE_FILE_LOGS === '1'
+        || process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS === '1';
 
     const entryPath = scriptPath || process.argv[1] || __filename;
     const projectRoot = path.resolve(__dirname, '..');

@@ -6,11 +6,27 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
+    getLayout,
     getStorageStatus,
     buildPrunePlan,
     pruneStorage,
     main
 } = require('../scripts/runtime-storage.js');
+
+const CONFERENCE_PROTECTED_KEYS = [
+    'conference-discovery-catalogs',
+    'conference-discovery-reports',
+    'conference-filter-specs',
+    'conference-filters',
+    'conference-staging-specs',
+    'conference-staging-sources',
+    'conference-staging',
+    'conference-ledgers',
+    'conference-sources',
+    'conference-runs',
+    'conference-executions'
+];
+const HISTORY_PROTECTED_KEYS = ['historical-page-inventories', 'page-source-crosswalks'];
 
 const NOW_MS = Date.parse('2026-09-02T00:00:00.000Z');
 const OLD_MS = NOW_MS - 40 * 24 * 60 * 60 * 1000;
@@ -26,8 +42,17 @@ function makeProject() {
         'data/current/iclr_filter_input_output',
         'data/runtime/conference-ledgers',
         'data/runtime/conference-sources',
+        'data/runtime/conference-discovery-catalogs',
+        'data/runtime/conference-discovery-reports',
+        'data/runtime/conference-filter-specs',
+        'data/runtime/conference-filters',
+        'data/runtime/conference-staging-specs',
+        'data/runtime/conference-staging-sources',
+        'data/runtime/conference-staging',
         'data/runtime/conference-runs',
         'data/runtime/conference-executions',
+        'data/runtime/historical-page-inventories',
+        'data/runtime/page-source-crosswalks',
         'data/archive',
         'logs'
     ]) fs.mkdirSync(path.join(projectRoot, relative), { recursive: true });
@@ -63,19 +88,22 @@ describe('runtime storage status', () => {
         }
     });
 
-    it('会议来源账本、缓存和运行对状态可见但永不进入自动清理候选', () => {
+    it('会议与历史来源账本对状态可见但永不进入自动清理候选', () => {
         const projectRoot = makeProject();
         try {
-            const oldSource = writeFile(projectRoot, 'data/runtime/conference-sources/pdf/1001.pdf', '%PDF-1.4', NOW_MS - 90 * 24 * 60 * 60 * 1000);
-            writeFile(projectRoot, 'data/runtime/conference-ledgers/icassp-2026.json', '{}');
-            const oldExecution = writeFile(projectRoot, 'data/runtime/conference-executions/run/state.json', '{}', NOW_MS - 90 * 24 * 60 * 60 * 1000);
+            const layout = getLayout(projectRoot);
+            const protectedKeys = [...CONFERENCE_PROTECTED_KEYS, ...HISTORY_PROTECTED_KEYS];
+            assert.deepEqual(layout.protectedRuntime.map(item => item.key), protectedKeys);
+            const oldFiles = protectedKeys.map(key => writeFile(projectRoot,
+                `data/runtime/${key}/old-fixture.bin`, key, NOW_MS - 90 * 24 * 60 * 60 * 1000));
             const status = getStorageStatus({ projectRoot, nowMs: NOW_MS });
-            assert.ok(status.targets.some(item => item.key === 'conference-sources' && item.files === 1));
-            assert.ok(status.targets.some(item => item.key === 'conference-ledgers' && item.files === 1));
-            assert.ok(status.targets.some(item => item.key === 'conference-executions' && item.files === 1));
+            assert.deepEqual(status.targets.filter(item => item.key.startsWith('conference-')).map(item => item.key),
+                CONFERENCE_PROTECTED_KEYS);
+            for (const key of protectedKeys) {
+                assert.ok(status.targets.some(item => item.key === key && item.files === 1));
+            }
             const plan = buildPrunePlan({ projectRoot, nowMs: NOW_MS, retentionDays: 30 });
-            assert.ok(!plan.candidates.some(item => item.path === oldSource));
-            assert.ok(!plan.candidates.some(item => item.path === oldExecution));
+            for (const oldFile of oldFiles) assert.ok(!plan.candidates.some(item => item.path === oldFile));
         } finally {
             fs.rmSync(projectRoot, { recursive: true, force: true });
         }

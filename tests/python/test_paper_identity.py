@@ -32,6 +32,17 @@ class PaperIdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "canonicalId|invalid"):
             identity.normalize_identity(record)
 
+    def test_conference_ledger_coordinates_match_js_canonical_id(self) -> None:
+        conference = {"id": "icassp-2026", "year": 2026}
+        source_identity = {"type": "icassp-arnumber", "value": "10910001"}
+        expected = "conference:icassp:2026:icassp-arnumber:10910001"
+        self.assertEqual(identity.canonical_conference_paper_id(conference, source_identity), expected)
+        self.assertEqual(identity.assert_canonical_conference_paper_id(
+            expected, conference, source_identity), expected)
+        with self.assertRaisesRegex(ValueError, "conference paperId"):
+            identity.assert_canonical_conference_paper_id(
+                "icassp-2026:icassp-arnumber:10910001", conference, source_identity)
+
     def test_unknown_fields_and_unsafe_url_fail_closed(self) -> None:
         record = copy.deepcopy(VECTORS["vectors"][0]["record"])
         record["title"] = "not a schema field"

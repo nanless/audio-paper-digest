@@ -9,17 +9,22 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const ledgerApi = require('./conference-source-ledger.js');
+const paperIdentity = require('./paper-identity.js');
 
-const CONTRACT = 'conference-import-manifest-v1';
-const VERSION = 1;
+const CONTRACT = 'conference-import-manifest-v2';
+const VERSION = 2;
 const MAX_METADATA_BYTES = 16 * 1024 * 1024;
 const MAX_PDF_BYTES = 256 * 1024 * 1024;
 const MAX_DERIVED_BYTES = 64 * 1024 * 1024;
 const SOURCE_KINDS = new Set(['official-metadata', 'official-pdf', 'conference-proceedings', 'openreview', 'local-confirmed-copy']);
 const EVIDENCE_KINDS = ['metadata', 'pdf', 'text', 'artifacts'];
 const SHA_RE = /^[a-f0-9]{64}$/;
+const IMPORT_RECEIPT_CONTRACT = 'conference-import-receipt-v2';
+const IMPORT_HANDLES = new WeakSet();
+const IMPORT_HANDLE_DATA = new WeakMap();
 
 const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+const clone = value => JSON.parse(JSON.stringify(value));
 const plain = value => value && typeof value === 'object' && !Array.isArray(value)
     && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 
@@ -95,13 +100,30 @@ function metadataIdentityEvidence(value) {
     };
 }
 
+function metadataDiscoveryBinding(value) {
+    exact(value, ['catalogSha256', 'metadataSnapshotSha256', 'metadataIndex', 'metadataRecordSha256'],
+        'metadata.discoveryBinding');
+    if (!Number.isSafeInteger(value.metadataIndex) || value.metadataIndex < 0) {
+        throw fail('metadata.discoveryBinding.metadataIndex must be a nonnegative safe integer');
+    }
+    return { catalogSha256: expectedSha256(value.catalogSha256, 'metadata.discoveryBinding.catalogSha256'),
+        metadataSnapshotSha256: expectedSha256(value.metadataSnapshotSha256, 'metadata.discoveryBinding.metadataSnapshotSha256'),
+        metadataIndex: value.metadataIndex,
+        metadataRecordSha256: expectedSha256(value.metadataRecordSha256, 'metadata.discoveryBinding.metadataRecordSha256') };
+}
+
 function sourceEntry(value, kind) {
     if (value === null) return null;
-    exact(value, kind === 'metadata' ? ['file', 'identityEvidence', 'provenance', 'sha256'] : ['file', 'provenance', 'sha256'], kind);
+    exact(value, kind === 'metadata'
+        ? ['file', 'identityEvidence', 'discoveryBinding', 'provenance', 'sha256']
+        : ['file', 'provenance', 'sha256'], kind);
     const entry = { file: relativeFile(value.file, `${kind}.file`), sha256: expectedSha256(value.sha256, `${kind}.sha256`),
         provenance: kind === 'metadata' || kind === 'pdf'
             ? sourceProvenance(value.provenance, kind) : derivedProvenance(value.provenance, kind) };
-    if (kind === 'metadata') entry.identityEvidence = metadataIdentityEvidence(value.identityEvidence);
+    if (kind === 'metadata') {
+        entry.identityEvidence = metadataIdentityEvidence(value.identityEvidence);
+        entry.discoveryBinding = metadataDiscoveryBinding(value.discoveryBinding);
+    }
     return entry;
 }
 
@@ -164,13 +186,18 @@ function placeholderMember() {
     };
 }
 
-function safeDirectory(root, name) {
+function safeDirectory(root, name, { allowMissing = false } = {}) {
     if (typeof root !== 'string' || !path.isAbsolute(root)) throw fail(`${name} must be an absolute path`);
     const absolute = path.resolve(root);
     let cursor = path.parse(absolute).root;
     for (const part of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
         cursor = path.join(cursor, part);
-        const stat = fs.lstatSync(cursor);
+        let stat;
+        try { stat = fs.lstatSync(cursor); }
+        catch (error) {
+            if (allowMissing && error.code === 'ENOENT' && cursor === absolute) return absolute;
+            throw error;
+        }
         if (!stat.isDirectory() || stat.isSymbolicLink()) throw fail(`${name} contains an unsafe directory: ${cursor}`);
     }
     if (fs.realpathSync(absolute) !== absolute) throw fail(`${name} must not resolve through a symbolic link`);
@@ -278,11 +305,19 @@ function writeAtomicallyOnce(filename, bytes) {
     fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
     // Re-check each newly-created directory before accepting it as a cache path.
     safeDirectory(parent, 'cache destination directory');
+    const temporary = path.join(parent, `.${path.basename(filename)}.${crypto.randomUUID()}.tmp`);
     let fd;
     try {
-        fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+        // Publish only after the complete bytes have reached a same-directory
+        // temporary inode.  A short write must never reserve the immutable
+        // destination name with corrupt bytes and poison every later retry.
+        fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
         fs.writeFileSync(fd, bytes); fs.fsyncSync(fd);
-    } finally { if (fd !== undefined) fs.closeSync(fd); }
+        fs.linkSync(temporary, filename);
+    } finally {
+        if (fd !== undefined) fs.closeSync(fd);
+        try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
 }
 
 function cacheArtifact(cacheRoot, destinationRelative, bytes) {
@@ -350,7 +385,7 @@ function importConferenceSources({ manifest, sourceRoot, cacheRoot, updatedAt, a
     const normalized = validateManifest(manifest);
     timestamp(updatedAt, 'updatedAt');
     const safeSourceRoot = safeDirectory(sourceRoot, 'sourceRoot');
-    const safeCacheRoot = safeDirectory(cacheRoot, 'cacheRoot');
+    const safeCacheRoot = safeDirectory(cacheRoot, 'cacheRoot', { allowMissing: !apply });
     if (safeSourceRoot === safeCacheRoot || safeSourceRoot.startsWith(`${safeCacheRoot}${path.sep}`)
         || safeCacheRoot.startsWith(`${safeSourceRoot}${path.sep}`)) {
         throw fail('sourceRoot and cacheRoot must not overlap');
@@ -363,7 +398,146 @@ function importConferenceSources({ manifest, sourceRoot, cacheRoot, updatedAt, a
         mode: apply ? 'apply' : 'dry-run' };
 }
 
+function importConferenceSourcesFromStaging({ stagingHandle, sourceRoot, cacheRoot, updatedAt, apply = false } = {}) {
+    // Lazy loading avoids a module-init cycle: conference-staging deliberately
+    // reuses this module's import-manifest validator.
+    const stagingApi = require('./conference-staging.js');
+    let staged;
+    try { staged = stagingApi.stagingHandleSnapshot(stagingHandle); }
+    catch (error) { throw fail(`requires an authenticated staging handle: ${error.message}`); }
+    const result = importConferenceSources({ manifest: staged.importManifest, sourceRoot, cacheRoot, updatedAt, apply });
+    return { ...result, stagingBinding: {
+        filterPolicySha256: staged.receipt.selection.filterPolicySha256,
+        selectedMemberSetSha256: staged.receipt.selection.selectedMemberSetSha256,
+        selectionReceiptSha256: staged.receipt.selection.selectionReceiptSha256,
+        stagingReceiptSha256: staged.receipt.receiptSha256,
+        stagingReceiptFileSha256: staged.receiptFileSha256,
+        importManifestFileSha256: staged.importManifestFileSha256
+    } };
+}
+
+function createImportReceipt({ result, ledgerName } = {}) {
+    if (!plain(result) || !plain(result.ledger) || !plain(result.stagingBinding)) throw fail('import receipt requires a staging-bound import result');
+    if (typeof ledgerName !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(ledgerName)) {
+        throw fail('import receipt ledgerName must be a safe direct JSON filename');
+    }
+    validateLedgerForReceipt(result.ledger);
+    for (const [field, value] of Object.entries(result.stagingBinding)) expectedSha256(value, `stagingBinding.${field}`);
+    const ledgerBytes = Buffer.from(`${JSON.stringify(result.ledger, null, 2)}\n`, 'utf8');
+    const body = {
+        contract: IMPORT_RECEIPT_CONTRACT, version: VERSION,
+        filterPolicySha256: result.stagingBinding.filterPolicySha256,
+        selectedMemberSetSha256: result.stagingBinding.selectedMemberSetSha256,
+        selectionReceiptSha256: result.stagingBinding.selectionReceiptSha256,
+        stagingReceiptSha256: result.stagingBinding.stagingReceiptSha256,
+        stagingReceiptFileSha256: result.stagingBinding.stagingReceiptFileSha256,
+        importManifestFileSha256: result.stagingBinding.importManifestFileSha256,
+        importManifestSha256: result.manifestSha256,
+        ledger: { name: ledgerName, sha256: sha256(ledgerBytes), memberSetSha256: result.ledger.memberSetSha256 },
+        counts: { imported: result.imported, verified: result.verified, blocked: result.blocked }
+    };
+    return { ledgerBytes, receipt: { ...body, receiptSha256: ledgerApi.stableHash(body) } };
+}
+
+function normalizeImportReceipt(value) {
+    exact(value, ['contract', 'version', 'filterPolicySha256', 'selectedMemberSetSha256',
+        'selectionReceiptSha256', 'stagingReceiptSha256', 'stagingReceiptFileSha256',
+        'importManifestFileSha256', 'importManifestSha256', 'ledger', 'counts', 'receiptSha256'], 'import receipt');
+    if (value.contract !== IMPORT_RECEIPT_CONTRACT || value.version !== VERSION) throw fail('import receipt contract/version is unsupported');
+    for (const field of ['filterPolicySha256', 'selectedMemberSetSha256', 'selectionReceiptSha256',
+        'stagingReceiptSha256', 'stagingReceiptFileSha256',
+        'importManifestFileSha256', 'importManifestSha256']) expectedSha256(value[field], `import receipt ${field}`);
+    exact(value.ledger, ['name', 'sha256', 'memberSetSha256'], 'import receipt ledger');
+    if (typeof value.ledger.name !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(value.ledger.name)) {
+        throw fail('import receipt ledger.name is unsafe');
+    }
+    expectedSha256(value.ledger.sha256, 'import receipt ledger.sha256');
+    expectedSha256(value.ledger.memberSetSha256, 'import receipt ledger.memberSetSha256');
+    exact(value.counts, ['imported', 'verified', 'blocked'], 'import receipt counts');
+    for (const [field, amount] of Object.entries(value.counts)) {
+        if (!Number.isSafeInteger(amount) || amount < 0) throw fail(`import receipt counts.${field} must be nonnegative`);
+    }
+    const body = clone(value); delete body.receiptSha256;
+    if (expectedSha256(value.receiptSha256, 'import receipt receiptSha256') !== ledgerApi.stableHash(body)) {
+        throw fail('import receipt SHA does not bind its content');
+    }
+    return { ...body, receiptSha256: value.receiptSha256 };
+}
+
+function loadImportHandle(ledgerFile, importReceiptFile, stagingHandle) {
+    const stagingApi = require('./conference-staging.js');
+    let staged;
+    try { staged = stagingApi.stagingHandleSnapshot(stagingHandle); }
+    catch (error) { throw fail(`requires an authenticated staging handle: ${error.message}`); }
+    let loadedLedger; let loadedReceipt; let ledgerHandle;
+    try {
+        ledgerHandle = ledgerApi.loadLedgerHandle(ledgerFile);
+        const ledgerSnapshot = ledgerApi.ledgerHandleSnapshot(ledgerHandle);
+        loadedLedger = { ledger: ledgerSnapshot.ledger, ledgerSha256: ledgerSnapshot.ledgerSha256,
+            filename: ledgerSnapshot.filename };
+        loadedReceipt = ledgerApi.readRegularJson(importReceiptFile);
+    } catch (error) { throw fail(`import bundle cannot be read safely: ${error.message}`); }
+    const receipt = normalizeImportReceipt(loadedReceipt.value);
+    const expectedStaging = {
+        filterPolicySha256: staged.receipt.selection.filterPolicySha256,
+        selectedMemberSetSha256: staged.receipt.selection.selectedMemberSetSha256,
+        selectionReceiptSha256: staged.receipt.selection.selectionReceiptSha256,
+        stagingReceiptSha256: staged.receipt.receiptSha256,
+        stagingReceiptFileSha256: staged.receiptFileSha256,
+        importManifestFileSha256: staged.importManifestFileSha256,
+        importManifestSha256: ledgerApi.stableHash(staged.importManifest)
+    };
+    for (const [field, expected] of Object.entries(expectedStaging)) {
+        if (receipt[field] !== expected) throw fail(`import receipt ${field} does not bind staging`);
+    }
+    if (receipt.ledger.name !== path.basename(ledgerFile) || receipt.ledger.sha256 !== loadedLedger.ledgerSha256
+        || receipt.ledger.memberSetSha256 !== loadedLedger.ledger.memberSetSha256) {
+        throw fail('import receipt does not bind the exact ledger file');
+    }
+    const counts = { imported: loadedLedger.ledger.members.length,
+        verified: loadedLedger.ledger.members.filter(member => member.status.state === 'verified').length,
+        blocked: loadedLedger.ledger.members.filter(member => member.status.state === 'blocked').length };
+    if (ledgerApi.stableHash(receipt.counts) !== ledgerApi.stableHash(counts)) throw fail('import receipt counts drifted from ledger');
+    const stagedIdentities = staged.importManifest.members.map(member => ledgerApi.identityKey(member.identity)).sort();
+    const ledgerIdentities = loadedLedger.ledger.members.map(member => ledgerApi.identityKey(member.identity)).sort();
+    if (ledgerApi.stableHash(stagedIdentities) !== ledgerApi.stableHash(ledgerIdentities)) {
+        throw fail('ledger identity set differs from staged included selection');
+    }
+    const verifiedMembers = loadedLedger.ledger.members.filter(member => member.status.state === 'verified').map(member => {
+        const sourceIdentity = ledgerApi.identityKey(member.identity);
+        return { paperId: paperIdentity.canonicalConferencePaperId(
+            loadedLedger.ledger.conference, member.identity), sourceIdentity };
+    });
+    const handle = Object.freeze(Object.create(null)); IMPORT_HANDLES.add(handle);
+    IMPORT_HANDLE_DATA.set(handle, Object.freeze({ ledger: clone(loadedLedger.ledger), ledgerSha256: loadedLedger.ledgerSha256,
+        ledgerFile: loadedLedger.filename, ledgerHandle, receipt: clone(receipt),
+        receiptFile: fs.realpathSync(importReceiptFile), receiptFileSha256: loadedReceipt.sha256,
+        staging: staged, verifiedMembers }));
+    return handle;
+}
+
+function importHandleSnapshot(handle) {
+    if (!handle || typeof handle !== 'object' || !IMPORT_HANDLES.has(handle)) throw fail('requires an authenticated import handle');
+    const value = IMPORT_HANDLE_DATA.get(handle);
+    return { ledger: clone(value.ledger), ledgerSha256: value.ledgerSha256, ledgerFile: value.ledgerFile,
+        receipt: clone(value.receipt), receiptFile: value.receiptFile, receiptFileSha256: value.receiptFileSha256,
+        staging: clone(value.staging), verifiedMembers: clone(value.verifiedMembers) };
+}
+
+function importHandleAuthority(handle) {
+    if (!handle || typeof handle !== 'object' || !IMPORT_HANDLES.has(handle)) throw fail('requires an authenticated import handle');
+    const value = IMPORT_HANDLE_DATA.get(handle);
+    return { snapshot: importHandleSnapshot(handle), ledgerHandle: value.ledgerHandle };
+}
+
+function validateLedgerForReceipt(value) {
+    try { return ledgerApi.validateLedger(value); }
+    catch (error) { throw fail(`import receipt ledger is invalid: ${error.message}`); }
+}
+
 module.exports = {
-    CONTRACT, VERSION, MAX_METADATA_BYTES, MAX_PDF_BYTES, MAX_DERIVED_BYTES,
-    validateManifest, importConferenceSources, safeDirectory, readSource, cacheStem
+    CONTRACT, VERSION, IMPORT_RECEIPT_CONTRACT, MAX_METADATA_BYTES, MAX_PDF_BYTES, MAX_DERIVED_BYTES,
+    validateManifest, importConferenceSources, importConferenceSourcesFromStaging, createImportReceipt,
+    normalizeImportReceipt, loadImportHandle, importHandleSnapshot, importHandleAuthority,
+    safeDirectory, readSource, cacheStem
 };

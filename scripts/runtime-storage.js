@@ -43,10 +43,19 @@ function getLayout(projectRoot = PROJECT_ROOT) {
     // visible to status, but storage:prune has no authority to remove it.
     // A future conference execution owns its own explicit retention protocol.
     const protectedRuntime = [
+        { key: 'conference-discovery-catalogs', root: path.join(runtime, 'conference-discovery-catalogs') },
+        { key: 'conference-discovery-reports', root: path.join(runtime, 'conference-discovery-reports') },
+        { key: 'conference-filter-specs', root: path.join(runtime, 'conference-filter-specs') },
+        { key: 'conference-filters', root: path.join(runtime, 'conference-filters') },
+        { key: 'conference-staging-specs', root: path.join(runtime, 'conference-staging-specs') },
+        { key: 'conference-staging-sources', root: path.join(runtime, 'conference-staging-sources') },
+        { key: 'conference-staging', root: path.join(runtime, 'conference-staging') },
         { key: 'conference-ledgers', root: path.join(runtime, 'conference-ledgers') },
         { key: 'conference-sources', root: path.join(runtime, 'conference-sources') },
         { key: 'conference-runs', root: path.join(runtime, 'conference-runs') },
-        { key: 'conference-executions', root: path.join(runtime, 'conference-executions') }
+        { key: 'conference-executions', root: path.join(runtime, 'conference-executions') },
+        { key: 'historical-page-inventories', root: path.join(runtime, 'historical-page-inventories') },
+        { key: 'page-source-crosswalks', root: path.join(runtime, 'page-source-crosswalks') }
     ];
     return { projectRoot: root, current, archive, runtime, logs, controlled, protectedRuntime };
 }

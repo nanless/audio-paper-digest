@@ -68,11 +68,17 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/fresh-rewrite-publication.js` | Node 库 | fresh 重写前精确备份 canonical/博客基线，完整新结果通过来源与基线 CAS 后才提升 canonical。 |
 | `lib/conference-source-ledger.js` | Node 库 | 会议来源账本的身份、四类工件 SHA、审查证据、不可变读写和本地文件重放；标题绝不作为身份。 |
 | `lib/conference-pdf-source.js` | Node 库 | 受控本机 PDF 的字节/路径/链接安全校验和可重放来源 descriptor；无可靠结构化 TeX 时公式明确不可用。 |
-| `lib/conference-run.js` | Node 库 | 冻结会议成员、分片、taxonomy/选择策略版本和逐篇状态；只向汇总投影已完成论文。 |
-| `lib/conference-plan.js` | Node 库 | 从受控 ledger 与显式 selection/shards 生成强绑定会议 run 及不可变 plan receipt；拒绝任意路径和未验证成员。 |
-| `lib/conference-importer.js` | Node 库 | 按显式 manifest 安全导入会议 metadata/PDF/派生工件到私有 cache，并生成可验证或明确 blocked 的 ledger。 |
-| `lib/conference-execution.js` | Node 库 | 在隔离 runtime 目录中以锁、CAS 和受控 patch 持久化强绑定会议 run；不调用模型或写日更数据。 |
+| `lib/conference-run.js` | Node 库 | 冻结会议成员、分片、taxonomy/选择策略版本和逐篇状态；completion proof 上线前拒绝 completed 与 publishable 聚合。 |
+| `lib/conference-plan.js` | Node 库 | 从认证 import handle、reviewed plan 和当前 taxonomy 生成强绑定 run/plan receipt；拒绝任意路径、别名和非完整成员集。 |
+| `lib/conference-importer.js` | Node 库 | 从认证 staging handle 安全导入会议 metadata/PDF/派生工件到私有 cache，并生成 ledger/import receipt；低层 manifest helper 只供隔离测试。 |
+| `lib/conference-execution.js` | Node 库 | 仅从认证 plan handle 创建隔离 execution，持久化不可变 authority receipt；每次读取/推进都重放 plan authority，以锁、CAS 和受控 patch 持久化，completion proof 上线前不接受完成态。 |
+| `lib/conference-discovery.js` | Node 库 | 从 ICASSP/ICLR/ICML 元数据快照与本机 PDF 目录生成只读候选 catalog 和匹配报告；标题匹配永不直接 verified。 |
+| `lib/conference-source-context.js` | Node 库 | 生产入口仅从 opaque plan handle 重放完整上游证明与会议全文；不导出 ledger/run 测试捷径。 |
+| `lib/conference-filter.js` | Node 库 | 冻结会议 catalog/Prompt/model/taxonomy 指纹并以 CAS/attempt receipt 管理全集筛选决定；不执行模型请求。 |
+| `lib/conference-extraction-receipt.js` | Node 库 | 重放请求、来源和派生工件，并在每次 handle 加载时调用固定 Python/pypdf 临时重提取验证；只有字节一致且达到门槛的 weak profile 可进入 staging。 |
+| `lib/conference-staging.js` | Node 库 | 将 authenticated filter selection 与人工复核 extraction 精确绑定为 import manifest/receipt；excluded 或身份别名不能进入。 |
 | `lib/paper-identity.js` | Node 库 | `paper-identity-v1` 的 Node 规范化、官方来源 URL 门禁与稳定 SHA；不替换既有 arXiv helper。 |
+| `lib/page-source-crosswalk.js` | Node 库 | 跨运行时重放历史 inventory 的 pageId、tracked tree、逐次解析链接和安全发布证据，以 opaque handle 建立 CAS/append-only 身份审核状态；可信来源 adapter 上线前拒绝 verified、identity groups 与 finalize。 |
 
 ## 默认 LLM/API：恢复与维护入口
 
@@ -80,9 +86,17 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 |---|---|
 | `taxonomy-tools.js` | 校验标签registry并启动仅四个只读路由的回环预览服务；不提供本机助手或生产迁移。 |
 | `conference-tools.js` | 只读校验私有会议 ledger/run；只接受受控 runtime 目录内的直接文件名，不导入 PDF、不联网、不调用模型。 |
-| `conference-import.js` | 显式 `--dry-run/--apply` 的本机会议来源导入；按 manifest 的主身份复制并 SHA 校验，不发现文件、不联网、不调用模型。 |
-| `conference-plan.js` | 从受控 ledger、显式 selection/shards 和当前 taxonomy SHA 创建不可覆盖会议 run 及 plan receipt；不接收任意路径。 |
-| `conference-execution.js` | 从强绑定 verified ledger run 创建隔离会议执行状态，并以受控 patch/CAS 推进逐篇状态；不写日更 `current`。 |
+| `conference-import.js` | 只接受 staging/import 双文件及完整 discovery/filter 证明，复制认证来源并成对写 ledger/import receipt；不接收任意路径。 |
+| `conference-discover.js` | 只读扫描显式会议元数据/PDF目录并生成 O_EXCL 候选 catalog/report；不确认身份、不调用模型。 |
+| `conference-plan.js` | 重放 discovery→filter→staging→import 全链、reviewed plan 和 taxonomy SHA，成对创建不可覆盖 run/plan receipt。 |
+| `conference-execution.js` | 重放 run/plan/import/staging/filter/discovery 全链创建隔离 execution，并以受控 patch/CAS 推进；不写日更 `current`。 |
+| `conference-filter.js` | 创建、检查和应用受控会议筛选 decision patch；transport 永久禁用，真实 LLM 调度由后续 runner 接入。 |
+| `conference-staging.js` | 把完整 filter included 集合与已审 extraction 工件绑定成不可覆盖 import manifest/receipt；不复制文件或调用模型。 |
+| `conference-extract.py` | 对 staging-source 中一篇显式 PDF 执行 text-only 页级提取；`--verify --source-root ABS` 用固定 pypdf 临时重提取并比较已有 bundle，仍不声明公式/表格/图片可靠。 |
+| `conference_extractor.py` | Python 会议 PDF 提取实现：严格文件/SHA、UTF-8 byte offset、pypdf 页文本、O_EXCL 和 typed blocked/integrity 状态。 |
+| `history-inventory.py` | 只读扫描配置博客的历史页面、URL 与聚合拓扑；dry-run 零写，apply 在 clean main 上成对写不可变 ledger/receipt。 |
+| `historical_page_scan.py` | `historical-page-ledger-v1` 严格扫描：无旧正文、稳定 pageId/cohort、逐次链接目标、未核 taxonomy 候选、Git tree/remote-main proof，以及 scan→O_EXCL 写入前后 CAS。 |
+| `page-source-crosswalk.js` | 从直接命名的历史 ledger/receipt 创建隔离 crosswalk，管理受控 decision/CAS；当前不允许伪造 verified 身份。 |
 | `paper_identity.py` | `paper-identity-v1` 的 Python 同构实现，使用共享向量防止发布侧与 Node 身份/SHA 漂移。 |
 | `paper_taxonomy.py` | 与Node共用registry的Python加载、验证和精确映射；未知/歧义不自动收窄。 |
 | `taxonomy_paths.py` | 集中管理独立标签预览的Python路径，复用项目根与环境；不改变正式发布path_config模板指纹。 |

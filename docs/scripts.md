@@ -49,6 +49,30 @@
 
 不得把三个入口合并为一个模糊的“发布脚本”。`publish-to-blog.py` 是共享实现与生成兼容入口，不替代三阶段门禁。
 
+## 会议论文（建设中）
+
+会议命令按 `discover → filter → extract → staging → import → plan → execution` 顺序运行，
+所有写入阶段都有显式 dry-run/apply 或 receipt/CAS 门禁。当前主分支只接通到可信来源与
+隔离执行状态，尚未提供实际 LLM 筛选 runner、会议分析/Reader、completion proof 或会议
+博客发布器，因此不能把 `conference:*` 当成已完成的端到端发布入口。准确参数、运行目录
+和人工工件格式见[会议论文工作流](conference-workflow.md)。
+
+## 全历史重写（建设中）
+
+`npm run history:inventory -- --dry-run` 只读扫描配置博客的历史页面、公开 URL、逐次聚合
+入链、Git tracked tree、日期/cohort 与旧标签的未核验 URL 候选，并只保存正文 SHA，不保存
+旧正文或 sidecar 路径。确认博客位于 clean `main` 后，使用：
+
+```bash
+npm run history:inventory -- --apply \
+  --ledger all-history.json --receipt all-history.receipt.json
+```
+
+双文件会写入受保护的 `data/runtime/historical-page-inventories`。当前尚未实现页面到
+可信论文来源的 verified adapter、历史分析或发布；`history:crosswalk` 目前只建立 pending
+审核状态，通过 `status`/受控 decision CAS 记录待核、阻断或冲突，并拒绝 verified 与
+finalize。准确命令和当前预期失败边界见[历史重写底座](history-rewrite.md)。
+
 ## 视觉状态机
 
 | 命令 | 行为 |

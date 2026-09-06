@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { createLedger, writeLedger, loadLedgerHandle } = require('../scripts/lib/conference-source-ledger.js');
 const { createConferenceRunFromVerifiedLedger } = require('../scripts/lib/conference-run.js');
+const paperIdentity = require('../scripts/lib/paper-identity.js');
 const { parseArgs, safeRuntimeFile, validateLedgerFile, validateRunFile } = require('../scripts/conference-tools.js');
 
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -46,7 +47,12 @@ test('conference CLI validates ledger files and run files only below configured 
     const checked = validateLedgerFile({ ledgerDirectory, sourceRoot, ledgerName: 'icassp-2026.json', verifyFiles: true });
     assert.equal(checked.members, 1); assert.equal(checked.filesVerified, true);
     const ledgerHandle = loadLedgerHandle(path.join(ledgerDirectory, 'icassp-2026.json'));
-    const run = createConferenceRunFromVerifiedLedger({ ledgerHandle, taxonomyVersion: 'paper-taxonomy-v1', selectionPolicySha256: 'a'.repeat(64), members: [{ paperId: 'icassp-1001', sourceIdentity: 'icassp-arnumber:1001' }], shards: [{ shardId: 'all', paperIds: ['icassp-1001'] }] });
+    const paperId = paperIdentity.canonicalConferencePaperId(
+        { id: 'icassp-2026', year: 2026 }, { type: 'icassp-arnumber', value: '1001' });
+    const run = createConferenceRunFromVerifiedLedger({ ledgerHandle, taxonomyVersion: 'paper-taxonomy-v1',
+        filterPolicySha256: 'a'.repeat(64), selectionReceiptSha256: 'b'.repeat(64),
+        selectedMemberSetSha256: require('../scripts/lib/conference-run.js').stableHash([paperId]),
+        members: [{ paperId, sourceIdentity: 'icassp-arnumber:1001' }], shards: [{ shardId: 'all', paperIds: [paperId] }] });
     fs.writeFileSync(path.join(runsDirectory, 'run-1.json'), JSON.stringify(run));
     assert.equal(validateRunFile({ runsDirectory, runName: 'run-1.json', ledgerDirectory, ledgerName: 'icassp-2026.json' }).conference, 'icassp-2026');
     assert.throws(() => safeRuntimeFile(ledgerDirectory, '../icassp-2026.json'));

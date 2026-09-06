@@ -23,6 +23,8 @@ LOGS_DIR = PROJECT_ROOT / "logs"
 LLM_ACCOUNT_POOL_STATE_FILE = DATA_DIR / "runtime" / "llm-account-pool.json"
 LLM_USAGE_DIR = DATA_DIR / "runtime" / "llm-usage"
 FRESH_REWRITE_RUNS_DIR = DATA_DIR / "runtime" / "fresh-rewrites"
+HISTORICAL_PAGE_INVENTORY_DIR = DATA_DIR / "runtime" / "historical-page-inventories"
+CONFERENCE_STAGING_SOURCE_DIR = DATA_DIR / "runtime" / "conference-staging-sources"
 PUBLICATION_ACTIVATION_DIRNAME = 'blog-publication-activations'
 # Repository-relative Hugo publication root. The publisher joins this only to
 # its already validated blog repo or transaction staging root.

@@ -10,3 +10,4 @@ pyee==13.0.1
 typing-extensions==4.15.0
 PyYAML==6.0.3
 Pillow==11.3.0
+pypdf==6.17.0

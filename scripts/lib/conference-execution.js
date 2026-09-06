@@ -1,17 +1,20 @@
 'use strict';
 
-// Isolated, local-only execution state for a verified conference run.  This
-// deliberately knows nothing about LLMs, daily `data/current`, or publishing:
-// callers record an already-performed state transition through a CAS patch.
+// Isolated, local-only execution state for an import-bound conference plan.
+// Every durable read/transition replays an immutable authority receipt against
+// a live authenticated plan handle. This module knows nothing about LLMs,
+// daily `data/current`, or publishing.
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const ledgerApi = require('./conference-source-ledger.js');
 const runApi = require('./conference-run.js');
+const planApi = require('./conference-plan.js');
 
-const VERSION = 1;
-const CONTRACT = 'conference-execution-v1';
+const VERSION = 2;
+const CONTRACT = 'conference-execution-v2';
+const AUTHORITY_CONTRACT = 'conference-execution-authority-v2';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const OWNER_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/;
@@ -69,6 +72,26 @@ function executionDirectory(root, executionId, { create = false } = {}) {
     return target;
 }
 
+function ensurePatchDirectory(directory) {
+    const safeRoot = safeDirectory(directory);
+    const target = path.resolve(safeRoot, 'patches');
+    if (path.dirname(target) !== safeRoot) fail('patch directory escapes execution directory');
+    let created = false;
+    try {
+        fs.mkdirSync(target, { mode: 0o700 });
+        created = true;
+    } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+    }
+    const stat = fs.lstatSync(target);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(target) !== target) {
+        fail('unsafe patch directory');
+    }
+    return { directory: target, created, descriptor: created
+        ? { path: target, dev: stat.dev, ino: stat.ino }
+        : null };
+}
+
 function safeDirectFile(directory, name, { mustExist = true } = {}) {
     const safeRoot = safeDirectory(directory);
     if (typeof name !== 'string' || !SAFE_JSON_NAME.test(name)) fail('unsafe controlled JSON filename');
@@ -89,22 +112,74 @@ function readRegularJson(filename, label) {
     catch (error) { fail(`${label}: ${error.message}`); }
 }
 
+function rawSha256(bytes) { return crypto.createHash('sha256').update(bytes).digest('hex'); }
+function syncDirectory(directory) {
+    const fd = fs.openSync(directory, fs.constants.O_RDONLY);
+    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+}
 function writeExclusive(filename, bytes) {
     const raw = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes, 'utf8');
     const temporary = path.join(path.dirname(filename), `.${path.basename(filename)}.${crypto.randomUUID()}.tmp`);
-    let fd;
+    let fd; let collision = false;
     try {
         fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
         fs.writeFileSync(fd, raw); fs.fsyncSync(fd);
         fs.linkSync(temporary, filename);
     } catch (error) {
-        if (error.code === 'EEXIST') return false;
-        throw error;
+        if (error.code === 'EEXIST') collision = true;
+        else throw error;
     } finally {
         if (fd !== undefined) fs.closeSync(fd);
         try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     }
-    return true;
+    if (collision) return { created: false, descriptor: null };
+    const stat = fs.lstatSync(filename);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size !== raw.length) {
+        fail('new exclusive JSON file changed before its creation could be recorded');
+    }
+    const descriptor = { path: filename, dev: stat.dev, ino: stat.ino,
+        size: stat.size, sha256: rawSha256(raw) };
+    try { syncDirectory(path.dirname(filename)); }
+    catch (error) { error.createdFileDescriptor = descriptor; throw error; }
+    return { created: true, descriptor };
+}
+function createdFileMatches(descriptor) {
+    if (!descriptor) return false;
+    let fd;
+    try {
+        const named = fs.lstatSync(descriptor.path);
+        if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1
+            || named.dev !== descriptor.dev || named.ino !== descriptor.ino || named.size !== descriptor.size) return false;
+        fd = fs.openSync(descriptor.path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+        const opened = fs.fstatSync(fd); const bytes = fs.readFileSync(fd); const current = fs.lstatSync(descriptor.path);
+        if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== descriptor.dev || opened.ino !== descriptor.ino
+            || opened.size !== descriptor.size || current.isSymbolicLink() || current.nlink !== 1
+            || current.dev !== descriptor.dev || current.ino !== descriptor.ino || current.size !== descriptor.size
+            || bytes.length !== descriptor.size || rawSha256(bytes) !== descriptor.sha256) return false;
+        return true;
+    } catch (error) {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+    } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+function removeCreatedFile(descriptor) {
+    if (!createdFileMatches(descriptor)) return false;
+    const finalCheck = fs.lstatSync(descriptor.path);
+    if (finalCheck.isSymbolicLink() || finalCheck.nlink !== 1 || finalCheck.dev !== descriptor.dev
+        || finalCheck.ino !== descriptor.ino || finalCheck.size !== descriptor.size) return false;
+    fs.unlinkSync(descriptor.path); syncDirectory(path.dirname(descriptor.path)); return true;
+}
+function removeCreatedEmptyDirectory(descriptor) {
+    if (!descriptor) return false;
+    try {
+        const stat = fs.lstatSync(descriptor.path);
+        if (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== descriptor.dev || stat.ino !== descriptor.ino
+            || fs.realpathSync(descriptor.path) !== descriptor.path || fs.readdirSync(descriptor.path).length) return false;
+        fs.rmdirSync(descriptor.path); syncDirectory(path.dirname(descriptor.path)); return true;
+    } catch (error) {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+    }
 }
 
 function replaceRegularFile(filename, bytes) {
@@ -130,18 +205,28 @@ function usageAtLeast(previous, next) {
     return true;
 }
 
-function sourceForRun(run) {
+function sourceForPlan(run, planSnapshot) {
+    const receipt = planSnapshot.receipt;
     return {
         conferenceId: run.conferenceId, ledgerSha256: run.ledgerSha256,
         runIdentitySha256: run.identitySha256, runStateSha256: run.stateSha256,
-        membershipSha256: run.membershipSha256
+        membershipSha256: run.membershipSha256,
+        planReceiptSha256: receipt.receiptSha256,
+        planReceiptFileSha256: planSnapshot.receiptFileSha256,
+        runFileSha256: planSnapshot.runFileSha256,
+        importReceiptSha256: receipt.import.receiptSha256,
+        filterPolicySha256: receipt.filter.filterPolicySha256,
+        selectionReceiptSha256: receipt.filter.selectionReceiptSha256,
+        selectedMemberSetSha256: receipt.filter.selectedMemberSetSha256
     };
 }
 function runTemplate(run) {
     const value = {
         version: run.version, contract: run.contract, conferenceId: run.conferenceId,
         ledgerSha256: run.ledgerSha256, membershipSha256: run.membershipSha256,
-        taxonomyVersion: run.taxonomyVersion, selectionPolicySha256: run.selectionPolicySha256,
+        taxonomyVersion: run.taxonomyVersion, filterPolicySha256: run.filterPolicySha256,
+        selectionReceiptSha256: run.selectionReceiptSha256,
+        selectedMemberSetSha256: run.selectedMemberSetSha256,
         members: clone(run.members), shards: clone(run.shards), identitySha256: run.identitySha256
     };
     if (run.ledgerBinding) value.ledgerBinding = clone(run.ledgerBinding);
@@ -176,10 +261,44 @@ function stateDigest(execution) {
 }
 
 function normalizeSource(value) {
-    exact(value, ['conferenceId', 'ledgerSha256', 'runIdentitySha256', 'runStateSha256', 'membershipSha256'], 'source');
+    const fields = ['conferenceId', 'ledgerSha256', 'runIdentitySha256', 'runStateSha256', 'membershipSha256',
+        'planReceiptSha256', 'planReceiptFileSha256', 'runFileSha256', 'importReceiptSha256',
+        'filterPolicySha256', 'selectionReceiptSha256', 'selectedMemberSetSha256'];
+    exact(value, fields, 'source');
     if (typeof value.conferenceId !== 'string' || !value.conferenceId) fail('source conferenceId is malformed');
-    for (const field of ['ledgerSha256', 'runIdentitySha256', 'runStateSha256', 'membershipSha256']) assertSha(value[field], `source.${field}`);
+    for (const field of fields.filter(field => field !== 'conferenceId')) assertSha(value[field], `source.${field}`);
     return clone(value);
+}
+
+function authorityDigest(value) {
+    const body = clone(value); delete body.authoritySha256; return stableHash(body);
+}
+function normalizeAuthority(value) {
+    exact(value, ['contract', 'version', 'executionId', 'source', 'runTemplateSha256', 'authoritySha256'],
+        'execution authority');
+    if (value.contract !== AUTHORITY_CONTRACT || value.version !== VERSION) fail('execution authority contract/version mismatch');
+    assertUuid(value.executionId); const source = normalizeSource(value.source);
+    assertSha(value.runTemplateSha256, 'execution authority runTemplateSha256');
+    if (value.authoritySha256 !== authorityDigest(value)) fail('execution authority SHA drifted');
+    return { ...clone(value), source };
+}
+function authorityFor(execution) {
+    const body = { contract: AUTHORITY_CONTRACT, version: VERSION, executionId: execution.executionId,
+        source: clone(execution.source), runTemplateSha256: stableHash(execution.runTemplate) };
+    return { ...body, authoritySha256: stableHash(body) };
+}
+function assertPlanAuthority(execution, authority, planHandle) {
+    let plan;
+    try { plan = planApi.planHandleSnapshot(planHandle); }
+    catch (error) { fail(`requires an authenticated plan handle: ${error.message}`); }
+    const expectedSource = sourceForPlan(plan.run, plan);
+    if (authority.executionId !== execution.executionId
+        || stableHash(authority.source) !== stableHash(expectedSource)
+        || stableHash(execution.source) !== stableHash(expectedSource)
+        || authority.runTemplateSha256 !== stableHash(execution.runTemplate)) {
+        fail('execution authority does not replay the authenticated plan bundle');
+    }
+    return plan;
 }
 function normalizeAttempt(value, paperIds, previousStates, template) {
     exact(value, ['operationId', 'patchSha256', 'patch', 'paperId', 'fromStatus', 'toStatus', 'usage', 'recordedAt', 'priorStateSha256', 'nextStateSha256'], 'attempt');
@@ -214,6 +333,10 @@ function assertConferenceExecution(value) {
     assertUuid(value.executionId); assertTimestamp(value.createdAt, 'createdAt');
     const source = normalizeSource(value.source);
     if (!Array.isArray(value.attempts)) fail('attempts must be an array');
+    if ((isPlainObject(value.paperStates) && Object.values(value.paperStates).some(state => state?.status === 'completed'))
+        || value.attempts.some(attempt => attempt?.toStatus === 'completed' || attempt?.patch?.nextState?.status === 'completed')) {
+        fail('completed state requires an authenticated conference completion-proof handle');
+    }
     const baselineStates = runFromState(value.runTemplate, value.paperStates).paperStates;
     const initialStates = initialPaperStates(value.runTemplate);
     const templateRun = runFromState(value.runTemplate, initialStates);
@@ -248,7 +371,9 @@ function assertConferenceExecution(value) {
     }
     for (const paperId of paperIds) {
         const finalState = baselineStates[paperId]; const recorded = history[paperId];
-        if (finalState.status !== recorded.status || !usageEqual(finalState.usage, recorded.usage)) fail('paper state does not match append-only attempts');
+        if (stableHash(finalState) !== stableHash(recorded)) {
+            fail('complete paper state does not match append-only attempts');
+        }
     }
     const rebuilt = {
         version: VERSION, contract: CONTRACT, executionId: value.executionId, createdAt: value.createdAt,
@@ -260,39 +385,116 @@ function assertConferenceExecution(value) {
     return { ...rebuilt, stateSha256: digest };
 }
 
-function prepareExecution({ executionRoot, run, ledgerHandle, executionId = crypto.randomUUID(), now } = {}) {
-    const verifiedRun = runApi.assertConferenceRunFromVerifiedLedger(run, ledgerHandle);
+function prepareExecutionFromPlan({ executionRoot, planHandle, executionId = crypto.randomUUID(), now } = {}) {
+    let authority;
+    try { authority = planApi.planHandleAuthority(planHandle); }
+    catch (error) { fail(`requires an authenticated plan handle: ${error.message}`); }
+    const verifiedRun = runApi.assertConferenceRunFromVerifiedLedger(authority.snapshot.run, authority.ledgerHandle);
     assertInitialRun(verifiedRun); assertUuid(executionId);
-    const root = safeDirectory(executionRoot, true);
-    const directory = path.resolve(root, executionId);
-    const state = {
-        version: VERSION, contract: CONTRACT, executionId, createdAt: nowIso(now), source: sourceForRun(verifiedRun),
-        runTemplate: runTemplate(verifiedRun), paperStates: clone(verifiedRun.paperStates), attempts: []
-    };
+    const root = safeDirectory(executionRoot, true); const directory = path.resolve(root, executionId);
+    const state = { version: VERSION, contract: CONTRACT, executionId, createdAt: nowIso(now),
+        source: sourceForPlan(verifiedRun, authority.snapshot), runTemplate: runTemplate(verifiedRun),
+        paperStates: clone(verifiedRun.paperStates), attempts: [] };
     state.stateSha256 = stateDigest(state);
+    const durableAuthority = authorityFor(state);
     try { fs.mkdirSync(directory, { mode: 0o700 }); }
     catch (error) {
         if (error.code !== 'EEXIST') throw error;
-        const existing = readExecution({ executionRoot: root, executionId });
-        if (stableHash(existing.source) !== stableHash(state.source) || stableHash(existing.runTemplate) !== stableHash(state.runTemplate)) {
-            fail('existing executionId is bound to a different source run');
+        const directoryStat = fs.lstatSync(directory);
+        if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() || fs.realpathSync(directory) !== directory) {
+            fail('existing execution path is not a safe directory');
         }
-        return existing;
+        const allowed = new Set(['patches', 'authority.json', 'state.json']);
+        const entries = fs.readdirSync(directory).sort();
+        if (entries.some(name => !allowed.has(name))) fail('existing execution directory contains unknown recovery content');
+        if (entries.includes('patches')) {
+            const patches = ensurePatchDirectory(directory).directory;
+            if ((!entries.includes('authority.json') || !entries.includes('state.json')) && fs.readdirSync(patches).length !== 0) {
+                fail('partial execution preparation has non-empty patches');
+            }
+        }
+        if (entries.includes('authority.json') && entries.includes('state.json')) {
+            const existing = readExecution({ executionRoot: root, executionId, planHandle });
+            if (stableHash(existing.source) !== stableHash(state.source)
+                || stableHash(existing.runTemplate) !== stableHash(state.runTemplate)) {
+                fail('existing executionId is bound to a different source plan');
+            }
+            ensurePatchDirectory(directory);
+            return existing;
+        }
+        if (entries.includes('authority.json') && !entries.includes('state.json')) {
+            // An authority-only directory is indistinguishable from a progressed
+            // execution whose mutable state was deleted.  Recreating the initial
+            // state would erase its append-only history and reopen the run.
+            normalizeAuthority(readRegularJson(
+                safeDirectFile(directory, 'authority.json'), 'execution recovery authority').value);
+            fail('authority-only execution cannot be recovered without its state history');
+        }
+        let existingState = null;
+        if (entries.includes('state.json')) {
+            existingState = assertConferenceExecution(readRegularJson(
+                safeDirectFile(directory, 'state.json'), 'execution recovery state').value);
+            if (existingState.attempts.length !== 0
+                || stableHash(existingState.source) !== stableHash(state.source)
+                || stableHash(existingState.runTemplate) !== stableHash(state.runTemplate)
+                || stableHash(existingState.paperStates) !== stableHash(state.paperStates)) {
+                fail('partial execution state does not match the current authenticated plan');
+            }
+        }
+        ensurePatchDirectory(directory);
+        if (!existingState) {
+            const recoveredState = writeExclusive(path.join(directory, 'state.json'), `${JSON.stringify(state, null, 2)}\n`);
+            if (!recoveredState.created) fail('execution recovery state appeared concurrently');
+        }
+        const recoveredAuthority = writeExclusive(path.join(directory, 'authority.json'), `${JSON.stringify(durableAuthority, null, 2)}\n`);
+        if (!recoveredAuthority.created) {
+            return readExecution({ executionRoot: root, executionId, planHandle });
+        }
+        return readExecution({ executionRoot: root, executionId, planHandle });
     }
+    const directoryStat = fs.lstatSync(directory);
+    const directoryDescriptor = { path: directory, dev: directoryStat.dev, ino: directoryStat.ino };
+    let patches; let authorityWrite = null; let stateWrite = null; let sharedCollision = false;
     try {
-        const created = writeExclusive(path.join(directory, 'state.json'), `${JSON.stringify(state, null, 2)}\n`);
-        if (!created) fail('execution state already exists');
+        patches = ensurePatchDirectory(directory);
+        stateWrite = writeExclusive(path.join(directory, 'state.json'), `${JSON.stringify(state, null, 2)}\n`);
+        if (!stateWrite.created) {
+            sharedCollision = true;
+            return prepareExecutionFromPlan({ executionRoot: root, planHandle, executionId, now });
+        }
+        authorityWrite = writeExclusive(path.join(directory, 'authority.json'), `${JSON.stringify(durableAuthority, null, 2)}\n`);
+        if (!authorityWrite.created) {
+            sharedCollision = true;
+            return readExecution({ executionRoot: root, executionId, planHandle });
+        }
+        return readExecution({ executionRoot: root, executionId, planHandle });
     } catch (error) {
-        try { fs.rmdirSync(directory); } catch { /* leave an auditable failed creation directory */ }
+        if (error.createdFileDescriptor?.path === path.join(directory, 'state.json')) {
+            stateWrite = { created: true, descriptor: error.createdFileDescriptor };
+        } else if (error.createdFileDescriptor?.path === path.join(directory, 'authority.json')) {
+            authorityWrite = { created: true, descriptor: error.createdFileDescriptor };
+        }
+        if (!sharedCollision) {
+            const fileDescriptors = [authorityWrite, stateWrite].filter(result => result?.created).map(result => result.descriptor);
+            const exactOwnedFiles = fileDescriptors.every(createdFileMatches);
+            if (exactOwnedFiles) {
+                for (const descriptor of fileDescriptors) removeCreatedFile(descriptor);
+                if (patches?.created) removeCreatedEmptyDirectory(patches.descriptor);
+                removeCreatedEmptyDirectory(directoryDescriptor);
+            }
+        }
         throw error;
     }
-    return assertConferenceExecution(state);
 }
 
-function readExecution({ executionRoot, executionId } = {}) {
+function readExecution({ executionRoot, executionId, planHandle } = {}) {
     const directory = executionDirectory(executionRoot, executionId);
     const filename = safeDirectFile(directory, 'state.json');
-    return assertConferenceExecution(readRegularJson(filename, 'execution state').value);
+    const authorityFile = safeDirectFile(directory, 'authority.json');
+    const execution = assertConferenceExecution(readRegularJson(filename, 'execution state').value);
+    const authority = normalizeAuthority(readRegularJson(authorityFile, 'execution authority').value);
+    assertPlanAuthority(execution, authority, planHandle);
+    return execution;
 }
 
 function acquireOperationLock(directory, owner, now) {
@@ -322,13 +524,16 @@ function normalizePatch(value) {
     return clone(value);
 }
 
-function transitionExecution({ executionRoot, executionId, patch, owner, now } = {}) {
+function transitionExecution({ executionRoot, executionId, patch, owner, now, planHandle } = {}) {
     const root = safeDirectory(executionRoot); const directory = executionDirectory(root, executionId);
     const normalizedPatch = normalizePatch(patch); const patchSha256 = stableHash(normalizedPatch);
+    if (normalizedPatch.nextState.status === 'completed') {
+        fail('completed transition requires the future conference completion-proof receipt bundle');
+    }
     const lock = acquireOperationLock(directory, owner, now);
     try {
         const filename = safeDirectFile(directory, 'state.json');
-        const current = assertConferenceExecution(readRegularJson(filename, 'execution state').value);
+        const current = readExecution({ executionRoot: root, executionId, planHandle });
         const priorAttempt = current.attempts.find(item => item.operationId === normalizedPatch.operationId);
         if (priorAttempt) {
             if (priorAttempt.patchSha256 !== patchSha256) fail('operationId has already been used by a different patch');
@@ -356,14 +561,15 @@ function transitionExecution({ executionRoot, executionId, patch, owner, now } =
     } finally { releaseOperationLock(lock); }
 }
 
-function transitionExecutionFromPatchFile({ executionRoot, executionId, patchName, owner, now } = {}) {
+function transitionExecutionFromPatchFile({ executionRoot, executionId, patchName, owner, now, planHandle } = {}) {
     const directory = executionDirectory(executionRoot, executionId);
     const filename = safeDirectFile(path.join(directory, 'patches'), patchName);
-    return transitionExecution({ executionRoot, executionId, patch: readRegularJson(filename, 'transition patch').value, owner, now });
+    return transitionExecution({ executionRoot, executionId, patch: readRegularJson(filename, 'transition patch').value,
+        owner, now, planHandle });
 }
 
 module.exports = {
-    VERSION, CONTRACT, UUID_RE, SAFE_JSON_NAME, safeDirectory, executionDirectory,
-    assertConferenceExecution, prepareExecution, readExecution, transitionExecution,
+    VERSION, CONTRACT, AUTHORITY_CONTRACT, UUID_RE, SAFE_JSON_NAME, safeDirectory, executionDirectory, ensurePatchDirectory,
+    assertConferenceExecution, prepareExecutionFromPlan, readExecution, transitionExecution,
     transitionExecutionFromPatchFile, normalizePatch
 };

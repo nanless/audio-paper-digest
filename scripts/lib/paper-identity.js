@@ -110,6 +110,30 @@ function canonicalConferenceId(conference, externalId) {
     return `conference:${conference.slug}:${conference.year}:${externalId.scheme}:${externalId.value}`;
 }
 
+function conferenceCoordinates(conference) {
+    assertExactFields(conference, ['id', 'year'], 'conference coordinates');
+    const year = assertYear(conference.year, 'conference coordinates.year');
+    const suffix = `-${year}`;
+    if (typeof conference.id !== 'string' || !conference.id.endsWith(suffix)) {
+        fail('conference coordinates.id must end with its exact year');
+    }
+    const slug = conference.id.slice(0, -suffix.length);
+    if (!SLUG_RE.test(slug)) fail('conference coordinates.id must contain a normalized slug');
+    return { slug, year };
+}
+
+function canonicalConferencePaperId(conference, sourceIdentity) {
+    assertExactFields(sourceIdentity, ['type', 'value'], 'conference source identity');
+    const externalId = validateExternalId({ scheme: sourceIdentity.type, value: sourceIdentity.value });
+    return canonicalConferenceId(conferenceCoordinates(conference), externalId);
+}
+
+function assertCanonicalConferencePaperId(value, conference, sourceIdentity) {
+    const expected = canonicalConferencePaperId(conference, sourceIdentity);
+    if (value !== expected) fail(`conference paperId must be ${expected}`);
+    return expected;
+}
+
 function normalizeIdentity(value) {
     assertExactFields(value, ['contract', 'kind', 'canonicalId', 'arxivId', 'conference', 'externalId', 'source', 'citation'], 'paper identity');
     if (value.contract !== CONTRACT) fail(`contract must be ${CONTRACT}`);
@@ -163,7 +187,8 @@ function recordSha256(value) { return stableSha256(normalizeIdentity(value)); }
 function isSha256(value) { return SHA_RE.test(String(value || '')); }
 
 module.exports = {
-    CONTRACT, ARXIV_ID_RE, SCHEMES, canonicalConferenceId, validateExternalId,
+    CONTRACT, ARXIV_ID_RE, SCHEMES, canonicalConferenceId, conferenceCoordinates,
+    canonicalConferencePaperId, assertCanonicalConferencePaperId, validateExternalId,
     validateOfficialUrl, validateSource, validateCitation, normalizeIdentity,
     identityPayload, stableJson, sha256, stableSha256, identitySha256, recordSha256, isSha256
 };

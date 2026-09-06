@@ -30,6 +30,18 @@ test('conference canonical identity includes meeting slug, year, scheme and exte
     assert.throws(() => identity.normalizeIdentity(record), /canonicalId|invalid/);
 });
 
+test('conference ledger coordinates produce the same canonical ID and reject the retired temporary form', () => {
+    const conference = { id: 'icassp-2026', year: 2026 };
+    const sourceIdentity = { type: 'icassp-arnumber', value: '10910001' };
+    const expected = 'conference:icassp:2026:icassp-arnumber:10910001';
+    assert.equal(identity.canonicalConferencePaperId(conference, sourceIdentity), expected);
+    assert.equal(identity.assertCanonicalConferencePaperId(expected, conference, sourceIdentity), expected);
+    assert.throws(() => identity.assertCanonicalConferencePaperId(
+        'icassp-2026:icassp-arnumber:10910001', conference, sourceIdentity), /conference paperId/);
+    assert.throws(() => identity.canonicalConferencePaperId(
+        { id: 'icassp-2025', year: 2026 }, sourceIdentity), /exact year/);
+});
+
 test('all unknown fields and arxiv/conference field confusion fail closed', () => {
     const arxiv = structuredClone(vectors.vectors[0].record);
     arxiv.title = 'titles are citation metadata only';

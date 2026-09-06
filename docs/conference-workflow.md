@@ -1,8 +1,10 @@
 # 会议论文：受控来源、分片重写与汇总
 
-状态：`conference-source-ledger-v1` 与 `conference-run-v1` 是主分支中的基础
+状态：`conference-source-ledger-v1` 与 `conference-run-v2` 是主分支中的基础
 契约。它们用于把已下载的会议 PDF 变成可审计的**候选来源**；它们不自动调用
-模型、不自动改历史页面，也不把某个会议全集自动发布到博客。
+模型、不负责下载论文、不自动改历史页面，也不把某个会议全集自动发布到博客。
+source ledger 继续保留 v1 是因为其四类来源工件格式未变；所有携带 canonical `paperId`
+的 discovery/filter/staging/import plan/run/execution 合同均已升级为 v2。
 
 ## 为什么不能把会议 PDF 当作普通日更
 
@@ -12,8 +14,9 @@
 
 ```text
 会议元数据 + 本机 PDF
-  → source ledger（身份、SHA、来源状态）
-  → 受控 PDF 缓存与结构化来源工件
+  → discovery → filter → PDF extract → reviewed staging
+  → 受控 PDF 缓存 + source ledger（身份、SHA、来源状态）
+  → plan → 隔离 execution
   → 同源 fresh analysis / Reader / 评分
   → taxonomy 证据 sidecar
   → 独立论文页
@@ -29,13 +32,15 @@
 每个 ledger 固定一个会议与年份，并对每个成员记录：
 
 - 主身份：IEEE `arnumber`、OpenReview `forumId` 或会议官方 paper ID；标题只可作
-  人工发现候选，不能充当身份或去重键。
+  人工发现候选，不能充当身份或去重键。公开 `paperId` 是
+  `conference:<slug>:<year>:<scheme>:<value>`；短形式 `sourceIdentity` 只用于 ledger 定位。
 - 官方元数据的 SHA、受控缓存内 PDF 的相对路径与字节 SHA、提取文本 SHA、结构化
   工件 SHA、提取器版本。
 - 明确的来源/身份审查状态和证据。无身份、无全文或来源冲突必须保持 blocked，不能
   被投影为可分析或可发布。
 
-本机 PDF 必须先复制到项目控制的私有运行缓存，再由相对路径引用。账本、缓存、运行
+本机 PDF 与逐篇 metadata 先放入 `conference-staging-sources`，通过提取、复核后再由 importer
+复制到项目控制的 `conference-sources` 私有缓存。账本、缓存、运行
 状态和绝对本机路径均是运行数据，位于 `data/runtime/`，不会提交 Git；提交到 `main`
 的是契约、校验器、CLI、测试和文档。
 
@@ -54,63 +59,296 @@ npm run conference:validate-run -- --run icassp-2026-pilot.json --ledger icassp-
 
 ## P1：显式导入与隔离执行
 
-导入不是日更抓取，也不会扫描下载目录。操作者必须准备一份身份优先的 manifest，其中
-逐项指定官方主身份和 metadata/PDF/文本/工件的相对源路径；标题只能是 manifest 外的
-人工发现线索。先用 dry-run 检查，再以不可覆盖的 ledger 输出显式写入：
+在导入前，先把会议官方 metadata 快照与本机 PDF 目录做只读 discovery。ICASSP 的标题
+只能寻找候选文件；ICLR/ICML 只按 OpenReview forum ID 精确匹配。discovery 的任何结果
+都不是 `verified`，这个命令也不会下载缺失 PDF：
 
 ```bash
-npm run conference:import -- --dry-run --manifest /absolute/import.json \
-  --source-root /absolute/source --cache-root /absolute/private-cache \
-  --updated-at 2026-09-06T00:00:00.000Z
-
-npm run conference:import -- --apply --manifest /absolute/import.json \
-  --source-root /absolute/source --cache-root /absolute/private-cache \
-  --ledger-output /absolute/private-ledger.json \
-  --updated-at 2026-09-06T00:00:00.000Z
+npm run conference:discover -- --dry-run --adapter icassp --year 2026 \
+  --metadata /absolute/papers_2026.json --pdf-root /absolute/papers_2026
 ```
 
-`--apply` 仅把 manifest 列出的单链接常规文件复制进受控 cache，并以 O_EXCL 防止覆盖；
-它不联网、不调用模型。缺 PDF、文本或工件的成员会成为 `blocked`，而不是伪造
-`verified`。
-
-要进入后续会议流程，`--cache-root` 必须是项目配置的
-`data/runtime/conference-sources`，`--ledger-output` 必须是
-`data/runtime/conference-ledgers/` 中的新文件；导入器接受绝对路径是为了明确界定
-本机输入/输出，不能把任意位置的 ledger 当作可执行会议来源。
-
-导入后必须用受控 plan 创建 run，不能手写 `conference-run-v1`：
+apply 时只提供直接文件名，程序会把 candidate/report 分别写入配置的
+`data/runtime/conference-discovery-catalogs` 与 `conference-discovery-reports`，且 O_EXCL
+不覆盖已有快照：
 
 ```bash
-npm run conference:plan -- --dry-run --ledger icassp-2026.json \
-  --plan icassp-2026-pilot.json --run icassp-2026-pilot-run.json
-
-npm run conference:plan -- --apply --ledger icassp-2026.json \
-  --plan icassp-2026-pilot.json --run icassp-2026-pilot-run.json
+npm run conference:discover -- --apply --adapter icassp --year 2026 \
+  --metadata /absolute/papers_2026.json --pdf-root /absolute/papers_2026 \
+  --candidate-output icassp-2026.json --report-output icassp-2026-report.json
 ```
 
-plan 与 ledger 都只能是配置的 `conference-ledgers` 目录中的直接 JSON 文件名。plan
-冻结当前 taxonomy 原始字节 SHA、显式选择的 verified 身份和无重叠分片；apply 以
-O_EXCL 同时写 run 与不可变 plan receipt。
-
-执行器只能从已验证 ledger 派生的 run 创建，状态文件放在
-`data/runtime/conference-executions/<UUID>/`。它使用操作锁、状态 SHA CAS 和受控 patch
-保证可恢复；此阶段仍不运行模型：
+筛选的状态合同为 `conference-filter-v2`。它绑定完整 discovery catalog、逐篇 source
+SHA、选择策略、Prompt、模型/协议和 taxonomy registry SHA；included、excluded、
+pending、failed 四种决定彼此独立，只有全集无 pending/failed 才能 complete。当前
+`conference:filter` 只管理受控 decision patch，transport 明确禁用，不会调用模型：
 
 ```bash
-npm run conference:execution -- prepare --run icassp-2026-pilot.json \
-  --ledger icassp-2026.json --execution 00000000-0000-4000-8000-000000000001
+npm run conference:filter -- prepare --catalog NAME.json --report REPORT.json --spec NAME.json
+npm run conference:filter -- status --filter UUID
+npm run conference:filter -- apply --filter UUID --decision DECISION.json --owner OPERATOR
 ```
 
-模型分析、taxonomy 分类和博客发布是后续独立阶段；它们不得通过向 execution JSON 手填
-`completed` 来绕过来源和 Reader 证明。
+最终 included/excluded 必须绑定受控 decision artifact；LLM 决定要求真实请求/响应字节、
+模型/协议和非零请求 usage，manual 决定使用独立 actor，不得冒充模型。筛选 complete 后
+生成只包含 included 身份的 selection receipt。当前没有实际 LLM 筛选 runner，也没有
+面向操作者的 decision artifact 生成命令；因此这仍是状态/证据合同，不是可直接跑完全程
+的筛选器。
+
+filter spec 放在 `data/runtime/conference-filter-specs/`。最小 v2 形状如下；所有 SHA 都必须由
+对应原始字节或规范化对象真实计算，下面的占位符故意不能直接通过校验：
+
+```json
+{
+  "contract": "conference-filter-spec-v2",
+  "version": 2,
+  "filterPolicySha256": "<64-hex-filter-policy-sha256>",
+  "promptSha256": "<64-hex-prompt-sha256>",
+  "model": "muse-spark-1.2-contributor",
+  "endpointProtocol": "openai-responses",
+  "taxonomyRegistrySha256": "<64-hex-current-registry-bytes-sha256>"
+}
+```
+
+每篇 included 论文随后必须在固定的 `conference-staging-sources` 目录内执行 PDF 提取，
+并由人工复核清单只引用 `paperId`、`sourceIdentity` 和 extraction receipt 文件名。staging
+会重放 request、metadata、PDF、文本、weak artifact 和 receipt 的全部字节与 SHA；不能
+手写路径或哈希绕过提取：
+
+```bash
+npm run conference:extract -- --dry-run --manifest PAPER-extract.json
+npm run conference:extract -- --apply --manifest PAPER-extract.json
+npm run conference:extract -- --verify --manifest PAPER-extract.json \
+  --source-root /absolute/conference-staging-sources
+
+npm run conference:staging -- --dry-run \
+  --catalog icassp-2026.json --report icassp-2026-report.json --filter UUID \
+  --extraction icassp-2026-reviewed.json \
+  --import-output icassp-2026-import.json --receipt-output icassp-2026-staging-receipt.json
+```
+
+extraction request 与其 metadata/PDF/输出都使用 staging source 根下的直接文件名。ICASSP
+示例的最小 v2 形状如下；`discoveryBinding` 必须来自已认证 discovery 对该 metadata index 的
+重放，PDF 必须等于唯一 `exact` 候选。当前没有 resolution receipt adapter，因此
+`normalized`、`ambiguous` 和 `unmatched` 候选不能进入 staging。
+
+```json
+{
+  "contract": "conference-pdf-extraction-request-v2",
+  "version": 2,
+  "paperId": "conference:icassp:2026:icassp-arnumber:10910001",
+  "sourceIdentity": "icassp-arnumber:10910001",
+  "source": {
+    "metadata": {
+      "file": "10910001-metadata.json",
+      "sha256": "<64-hex-metadata-bytes-sha256>",
+      "identityEvidence": {
+        "conferenceIdPointer": "/conferenceId",
+        "conferenceYearPointer": "/year",
+        "identityTypePointer": "/identity/type",
+        "identityValuePointer": "/identity/value"
+      },
+      "discoveryBinding": {
+        "catalogSha256": "<64-hex-catalog-file-sha256>",
+        "metadataSnapshotSha256": "<64-hex-metadata-snapshot-sha256>",
+        "metadataIndex": 0,
+        "metadataRecordSha256": "<64-hex-discovery-record-sha256>"
+      },
+      "provenance": {
+        "kind": "official-metadata",
+        "locator": "<official-record-locator>",
+        "retrievedAt": "2026-09-06T00:00:00.000Z"
+      }
+    },
+    "pdf": {
+      "file": "10910001.pdf",
+      "sha256": "<64-hex-pdf-bytes-sha256>",
+      "provenance": {
+        "kind": "official-pdf",
+        "locator": "<official-pdf-locator>",
+        "retrievedAt": "2026-09-06T00:00:00.000Z"
+      }
+    }
+  },
+  "outputs": {
+    "textFile": "10910001.txt",
+    "artifactsFile": "10910001-artifacts.json",
+    "receiptFile": "10910001-extraction-receipt.json"
+  },
+  "options": {
+    "minimumTextCharacters": 5000,
+    "normalization": "unicode-nfc-lf-rstrip-v1",
+    "pageSeparator": "\n\f\n"
+  }
+}
+```
+
+`--verify` 不信任已有派生文件：它在临时目录用固定 `pypdf==6.17.0` 重新提取，并要求新旧
+text/artifact/receipt 字节完全一致。Node extraction handle 每次加载 receipt 都会内部执行
+这条验证；staging 创建、staging 重载以及 importer 消费 staging handle 时又会逐篇重放，
+所以人工单独运行 `--verify` 只用于诊断，不能代替后续门禁。
+
+人工复核清单放在 `data/runtime/conference-staging-specs/`，只引用 canonical `paperId`、locator
+`sourceIdentity` 与已经生成的 receipt；成员按 `paperId` 排序，`membersSha256` 绑定整个数组：
+
+```json
+{
+  "contract": "conference-reviewed-extraction-v2",
+  "version": 2,
+  "conference": {"id": "icassp-2026", "year": 2026},
+  "review": {"actor": "reviewer.1", "reviewedAt": "2026-09-06T00:10:00.000Z"},
+  "members": [
+    {
+      "paperId": "conference:icassp:2026:icassp-arnumber:10910001",
+      "sourceIdentity": "icassp-arnumber:10910001",
+      "receiptName": "10910001-extraction-receipt.json"
+    }
+  ],
+  "membersSha256": "<64-hex-canonical-members-sha256>"
+}
+```
+
+确认所有 dry-run 后，把 `conference:staging` 的 `--dry-run` 改为 `--apply`。apply 只在配置的 `conference-staging` 目录以
+O_EXCL 写入 import manifest/receipt；它不复制来源、不调用模型。
+
+生产导入只接收刚才的 staging 双文件及完整 discovery/filter 证明，不再接受任意
+`--manifest`、`--source-root` 或 `--cache-root`：
+
+```bash
+npm run conference:import -- --dry-run \
+  --import icassp-2026-import.json --receipt icassp-2026-staging-receipt.json \
+  --filter UUID --catalog icassp-2026.json --report icassp-2026-report.json \
+  --updated-at 2026-09-06T00:00:00.000Z --ledger-output icassp-2026-ledger.json
+```
+
+确认后改为 `--apply`。导入器只从配置的 staging source 读取被认证文件，复制进
+`conference-sources`，并在 `conference-ledgers` 中以 O_EXCL 同时写 ledger 和自动命名的
+`icassp-2026-ledger.import-receipt.json`。
+
+导入后必须准备一份 `conference-run-plan-v2` 计划文件放在 `conference-ledgers`。它要
+精确列出全部 included 且 verified 的身份、当前 taxonomy SHA 和无重叠完整分片。创建
+run 时仍需重放全部上游凭证：
+
+```json
+{
+  "contract": "conference-run-plan-v2",
+  "version": 2,
+  "ledgerName": "icassp-2026-ledger.json",
+  "taxonomy": {
+    "version": "paper-taxonomy-v1",
+    "sha256": "<64-hex-current-registry-bytes-sha256>"
+  },
+  "selectionPolicy": {
+    "contract": "conference-selected-members-v2",
+    "identities": [
+      {
+        "paperId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "sourceIdentity": "icassp-arnumber:10910001"
+      }
+    ],
+    "selectedMemberSetSha256": "<SHA-256-of-sorted-canonical-paperId-array>"
+  },
+  "shards": [
+    {
+      "shardId": "part-001",
+      "paperIds": ["conference:icassp:2026:icassp-arnumber:10910001"]
+    }
+  ]
+}
+```
+
+```bash
+npm run conference:plan -- --dry-run \
+  --catalog icassp-2026.json --report icassp-2026-report.json --filter UUID \
+  --import icassp-2026-import.json --staging-receipt icassp-2026-staging-receipt.json \
+  --ledger icassp-2026-ledger.json --import-receipt icassp-2026-ledger.import-receipt.json \
+  --plan icassp-2026-plan.json --run icassp-2026-run.json
+```
+
+确认后改为 `--apply`。run 与自动命名的 `icassp-2026-run.plan-receipt.json` 会在
+`conference-runs` 中成对、不可覆盖地写入。
+
+execution prepare 同样不能只拿一份手写 run；它必须重放 reviewed plan 和整个上游链：
+
+```bash
+npm run conference:execution -- prepare \
+  --run icassp-2026-run.json --plan-receipt icassp-2026-run.plan-receipt.json \
+  --plan icassp-2026-plan.json --ledger icassp-2026-ledger.json \
+  --import-receipt icassp-2026-ledger.import-receipt.json \
+  --import icassp-2026-import.json --staging-receipt icassp-2026-staging-receipt.json \
+  --filter UUID --catalog icassp-2026.json --report icassp-2026-report.json \
+  --execution 00000000-0000-4000-8000-000000000001
+```
+
+状态文件与不可变 `authority.json` 放在 `data/runtime/conference-executions/<UUID>/`。authority
+绑定 plan receipt 文件 SHA、run 文件 SHA、import receipt、筛选策略、筛选结果 receipt 和最终成员集；
+每次 status/transition 都必须重新提供上面 prepare 的完整参数链并逐次重放，不能只凭一份 execution
+state 继续推进。创建顺序固定为 `patches/ → 初始 state.json → authority.json`；prepare 只会
+自愈可由当前 plan authority 完整证明的空目录、空 `patches/` 或无 attempt 的初始
+`state.json` 单件。`authority.json` 单件无法区分创建中断与已推进 state 被删除，因此一律
+失败关闭，绝不重建 pending；未知文件、非空孤立 patch、symlink 或任一字节漂移也都会失败关闭。
+并发 writer 已经落下同一 authority 时，失败方只重放完整 bundle，绝不回滚共享文件；其他创建
+错误的 cleanup 只删除本进程记录且当前 `dev/ino/size/SHA` 仍与写入描述符一致的文件和目录。
+目录使用锁、状态 SHA CAS 和受控 patch 保证可恢复。当前仍没有模型分析、Reader、production taxonomy、completion proof
+或会议博客发布器；`completed` transition 和 publishable aggregate 会主动失败关闭。
+
+`transition` 只读取 `data/runtime/conference-executions/<UUID>/patches/` 下的直接 JSON 文件。
+首个来源就绪 patch 的最小形状如下；`expectedStateSha256` 必须取当前 status 输出对应状态，
+`operationId` 不可复用给不同字节。当前不要构造 `completed`：没有 completion-proof bundle 时
+它一定失败。
+
+```json
+{
+  "operationId": "11111111-1111-4111-8111-111111111111",
+  "expectedStateSha256": "<64-hex-current-execution-state-sha256>",
+  "paperId": "conference:icassp:2026:icassp-arnumber:10910001",
+  "nextState": {
+    "status": "source_ready",
+    "usage": {}
+  }
+}
+```
+
+```bash
+npm run conference:execution -- status \
+  --run icassp-2026-run.json --plan-receipt icassp-2026-run.plan-receipt.json \
+  --plan icassp-2026-plan.json --ledger icassp-2026-ledger.json \
+  --import-receipt icassp-2026-ledger.import-receipt.json \
+  --import icassp-2026-import.json --staging-receipt icassp-2026-staging-receipt.json \
+  --filter UUID --catalog icassp-2026.json --report icassp-2026-report.json \
+  --execution UUID
+npm run conference:execution -- transition --execution UUID \
+  --run icassp-2026-run.json --plan-receipt icassp-2026-run.plan-receipt.json \
+  --plan icassp-2026-plan.json --ledger icassp-2026-ledger.json \
+  --import-receipt icassp-2026-ledger.import-receipt.json \
+  --import icassp-2026-import.json --staging-receipt icassp-2026-staging-receipt.json \
+  --filter UUID --catalog icassp-2026.json --report icassp-2026-report.json \
+  --patch source-ready-10910001.json --owner worker.1
+```
+
+会议全文生产入口是 `conference-source-context-v2`：只接受 opaque `planHandle`、canonical
+`paperId` 和受控 source root，并把 plan/import/filter receipt 写入 production authority
+binding。生产模块不导出 ledger + run/execution 的低层 context builder，也不会返回
+`analysisReady=true` 的 test-only context。
+生产入口仍会重放 metadata/PDF/text/artifact 字节；可靠正文达到门槛即可分析。固定 pypdf
+重提取只证明 text-only weak artifact 的字节来源，不会凭空恢复 TeX、表格 DOM 或图片像素，
+因此公式、表格和图片能力仍为 unavailable。稳定 source SHA 不包含可变 execution 状态，
+观察状态另有独立 SHA。它不接受任意全文、旧博客文本、arXiv fallback 或外部图下载。
 
 PDF 是弱结构来源：不能可靠复原原始 TeX 时，不展示“可验证公式”；不能定位完整表格
 和数值时，不展示表格；图片必须记录页码/图号及工件 SHA。不得从旧博客正文反向补造
 这些证据。
 
-## `conference-run-v1`
+## `conference-run-v2`
 
-一个会议运行冻结以下输入 SHA：ledger、成员清单、选择策略和 taxonomy 版本。成员可
+所有 discovery 下游 `paperId` 都使用 `paper-identity-v1` 的完整 canonical ID，例如
+`conference:icassp:2026:icassp-arnumber:10910001`。`sourceIdentity` 仍是 ledger 内部定位符
+`icassp-arnumber:10910001`，不能替代论文主键。早期形如
+`icassp-2026:icassp-arnumber:10910001` 的临时 ID 已由 v2 合同拒绝，且没有运行数据迁移入口。
+
+一个会议运行分别冻结 ledger、`filterPolicySha256`、`selectionReceiptSha256`、
+`selectedMemberSetSha256` 和 taxonomy 版本，禁止再用一个 `selectionPolicySha256` 混指
+筛选规则、筛选结果或成员集合。成员可
 按主题、session 或连续编号分片，但分片必须不重叠且完整覆盖固定成员清单。论文状态为
 来源、分析、分类、发布的逐层状态；`blocked`、未完成或尚未分类的成员不会进入可发布
 聚合输入。

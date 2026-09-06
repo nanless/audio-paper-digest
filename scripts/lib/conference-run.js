@@ -5,14 +5,16 @@
 // writes a blog.  Its only job is to make the member set, sharding, status
 // transitions and summary hand-off independently auditable.
 const crypto = require('node:crypto');
+const paperIdentity = require('./paper-identity.js');
 
-const VERSION = 1;
-const CONTRACT = 'conference-run-v1';
-const LEDGER_BINDING_CONTRACT = 'conference-run-ledger-binding-v1';
-const PAPER_PROJECTION_CONTRACT = 'conference-paper-projection-v1';
-const SUMMARY_INPUT_CONTRACT = 'conference-summary-input-v1';
+const VERSION = 2;
+const CONTRACT = 'conference-run-v2';
+const LEDGER_BINDING_CONTRACT = 'conference-run-ledger-binding-v2';
+const PAPER_PROJECTION_CONTRACT = 'conference-paper-projection-v2';
+const SUMMARY_INPUT_CONTRACT = 'conference-summary-input-v2';
+const COMPLETION_PROOF_REQUIRED = 'completed state requires an authenticated conference completion-proof handle';
 const SHA_RE = /^[a-f0-9]{64}$/;
-const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}$/;
+const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,319}$/;
 const CONFERENCE_RE = /^[a-z0-9][a-z0-9-]{1,79}$/;
 const TAXONOMY_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const USAGE_FIELDS = Object.freeze([
@@ -74,12 +76,22 @@ function assertSha(value, label) {
     return value;
 }
 
-function normalizeMembers(members) {
+function normalizeMembers(members, conferenceId = null) {
     if (!Array.isArray(members) || !members.length) fail('members must be a non-empty array');
     const normalized = members.map(member => {
         assertExactFields(member, ['paperId', 'sourceIdentity'], 'member');
         const paperId = assertSafeId(member.paperId, 'member paperId');
         const sourceIdentity = assertSafeId(member.sourceIdentity, 'member sourceIdentity');
+        if (conferenceId !== null) {
+            const conferenceMatch = String(conferenceId).match(/^([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)-(\d{4})$/);
+            const sourceMatch = sourceIdentity.match(/^([^:]+):([^:]+)$/);
+            if (!conferenceMatch || !sourceMatch) fail('member conference/source identity is malformed');
+            const conference = { id: conferenceId, year: Number(conferenceMatch[2]) };
+            const identity = { type: sourceMatch[1], value: sourceMatch[2] };
+            if (paperId !== paperIdentity.canonicalConferencePaperId(conference, identity)) {
+                fail(`${paperId} is not a canonical paper-identity-v1 conference ID`);
+            }
+        }
         return { paperId, sourceIdentity };
     }).sort((left, right) => left.paperId.localeCompare(right.paperId));
     if (new Set(normalized.map(member => member.paperId)).size !== normalized.length) fail('members contain duplicate paperId values');
@@ -188,7 +200,9 @@ function immutableIdentity(run) {
     const identity = {
         version: run.version, contract: run.contract, conferenceId: run.conferenceId,
         ledgerSha256: run.ledgerSha256, membershipSha256: run.membershipSha256,
-        taxonomyVersion: run.taxonomyVersion, selectionPolicySha256: run.selectionPolicySha256,
+        taxonomyVersion: run.taxonomyVersion, filterPolicySha256: run.filterPolicySha256,
+        selectionReceiptSha256: run.selectionReceiptSha256,
+        selectedMemberSetSha256: run.selectedMemberSetSha256,
         members: run.members, shards: run.shards
     };
     if (run.ledgerBinding) identity.ledgerBinding = run.ledgerBinding;
@@ -216,7 +230,7 @@ function normalizeLedgerBinding(value, members, ledgerSha256, conferenceId) {
         fail('ledgerBinding identity is malformed');
     }
     assertSha(value.ledgerMemberSetSha256, 'ledgerBinding ledgerMemberSetSha256');
-    const bindingMembers = normalizeMembers(value.members);
+    const bindingMembers = normalizeMembers(value.members, conferenceId);
     if (stableHash(bindingMembers) !== stableHash(members)) fail('ledgerBinding members do not bind run members');
     const { bindingSha256, ...bound } = value;
     if (!isSha(bindingSha256) || bindingSha256 !== stableHash(bound)) fail('ledgerBinding SHA does not bind its content');
@@ -226,11 +240,11 @@ function normalizeLedgerBinding(value, members, ledgerSha256, conferenceId) {
 function createRun(input, { allowInitialStates = false, ledgerBinding = undefined } = {}) {
     assertPlainObject(input, 'input');
     const allowedInput = ['conferenceId', 'ledgerSha256', 'membershipSha256', 'taxonomyVersion',
-        'selectionPolicySha256', 'members', 'shards', 'paperStates'];
+        'filterPolicySha256', 'selectionReceiptSha256', 'selectedMemberSetSha256', 'members', 'shards', 'paperStates'];
     for (const key of Object.keys(input)) if (!allowedInput.includes(key)) fail(`input has unknown field ${key}`);
     if (typeof input.conferenceId !== 'string' || !CONFERENCE_RE.test(input.conferenceId)) fail('conferenceId is malformed');
     if (typeof input.taxonomyVersion !== 'string' || !TAXONOMY_RE.test(input.taxonomyVersion)) fail('taxonomyVersion is malformed');
-    const members = normalizeMembers(input.members);
+    const members = normalizeMembers(input.members, input.conferenceId);
     const paperIds = members.map(member => member.paperId);
     const membershipSha256 = stableHash(members);
     if (input.membershipSha256 !== undefined && input.membershipSha256 !== membershipSha256) fail('membershipSha256 does not bind members');
@@ -238,7 +252,9 @@ function createRun(input, { allowInitialStates = false, ledgerBinding = undefine
         version: VERSION, contract: CONTRACT, conferenceId: input.conferenceId,
         ledgerSha256: assertSha(input.ledgerSha256, 'ledgerSha256'), membershipSha256,
         taxonomyVersion: input.taxonomyVersion,
-        selectionPolicySha256: assertSha(input.selectionPolicySha256, 'selectionPolicySha256'),
+        filterPolicySha256: assertSha(input.filterPolicySha256, 'filterPolicySha256'),
+        selectionReceiptSha256: assertSha(input.selectionReceiptSha256, 'selectionReceiptSha256'),
+        selectedMemberSetSha256: assertSha(input.selectedMemberSetSha256, 'selectedMemberSetSha256'),
         members, shards: normalizeShards(input.shards, paperIds),
         paperStates: allowInitialStates ? normalizeStates(input.paperStates, paperIds) : normalizeInitialStates(input.paperStates, paperIds)
     };
@@ -286,20 +302,29 @@ function trustedLedger(handle) {
 }
 
 function createConferenceRunFromVerifiedLedger(input) {
-    assertExactFields(input, ['ledgerHandle', 'taxonomyVersion', 'selectionPolicySha256', 'members', 'shards'], 'verified ledger run input');
+    assertExactFields(input, ['ledgerHandle', 'taxonomyVersion', 'filterPolicySha256', 'selectionReceiptSha256',
+        'selectedMemberSetSha256', 'members', 'shards'], 'verified ledger run input');
     const loaded = trustedLedger(input.ledgerHandle);
     const ledger = loaded.ledger;
     const ledgerSha256 = loaded.ledgerSha256;
     const members = normalizeMembers(input.members);
+    if (input.selectedMemberSetSha256 !== stableHash(members.map(member => member.paperId))) {
+        fail('selectedMemberSetSha256 does not bind the canonical selected paper IDs');
+    }
     for (const member of members) {
         const source = ledgerMemberByIdentity(ledger, member.sourceIdentity);
         if (source.status.state !== 'verified') fail(`${member.sourceIdentity} is not verified in the supplied ledger`);
+        if (member.paperId !== paperIdentity.canonicalConferencePaperId(ledger.conference, source.identity)) {
+            fail(`${member.paperId} is not the canonical paper-identity-v1 ID for ${member.sourceIdentity}`);
+        }
     }
     const provisional = {
         conferenceId: ledger.conference.id,
         ledgerSha256,
         taxonomyVersion: input.taxonomyVersion,
-        selectionPolicySha256: input.selectionPolicySha256,
+        filterPolicySha256: input.filterPolicySha256,
+        selectionReceiptSha256: input.selectionReceiptSha256,
+        selectedMemberSetSha256: input.selectedMemberSetSha256,
         members,
         shards: input.shards
     };
@@ -311,14 +336,20 @@ function assertConferenceRun(run) {
     assertPlainObject(run, 'run');
     if (run.version !== VERSION || run.contract !== CONTRACT) fail('contract/version mismatch');
     const expectedKeys = ['version', 'contract', 'conferenceId', 'ledgerSha256', 'membershipSha256', 'taxonomyVersion',
-        'selectionPolicySha256', 'members', 'shards', 'paperStates', 'identitySha256', 'stateSha256'];
+        'filterPolicySha256', 'selectionReceiptSha256', 'selectedMemberSetSha256',
+        'members', 'shards', 'paperStates', 'identitySha256', 'stateSha256'];
     if (run.ledgerBinding !== undefined) expectedKeys.push('ledgerBinding');
     assertExactFields(run, expectedKeys, 'run');
     const reconstructed = createRun({
         conferenceId: run.conferenceId, ledgerSha256: run.ledgerSha256, membershipSha256: run.membershipSha256,
-        taxonomyVersion: run.taxonomyVersion, selectionPolicySha256: run.selectionPolicySha256,
+        taxonomyVersion: run.taxonomyVersion, filterPolicySha256: run.filterPolicySha256,
+        selectionReceiptSha256: run.selectionReceiptSha256,
+        selectedMemberSetSha256: run.selectedMemberSetSha256,
         members: run.members, shards: run.shards, paperStates: run.paperStates
     }, { allowInitialStates: true, ledgerBinding: run.ledgerBinding });
+    if (Object.values(reconstructed.paperStates).some(state => state.status === 'completed')) {
+        fail(COMPLETION_PROOF_REQUIRED);
+    }
     if (run.identitySha256 !== reconstructed.identitySha256) fail('immutable run identity drifted');
     if (run.stateSha256 !== reconstructed.stateSha256) fail('paper state drifted');
     return clone(reconstructed);
@@ -336,6 +367,9 @@ function assertConferenceRunFromVerifiedLedger(run, ledgerHandle) {
     for (const member of current.members) {
         const source = ledgerMemberByIdentity(ledger, member.sourceIdentity);
         if (source.status.state !== 'verified') fail(`${member.sourceIdentity} is not verified in the supplied ledger`);
+        if (member.paperId !== paperIdentity.canonicalConferencePaperId(ledger.conference, source.identity)) {
+            fail(`${member.paperId} is not the canonical paper-identity-v1 ID for ${member.sourceIdentity}`);
+        }
     }
     return current;
 }
@@ -345,6 +379,7 @@ function transitionPaperState(run, paperId, nextState) {
     assertSafeId(paperId, 'paperId');
     if (!Object.prototype.hasOwnProperty.call(current.paperStates, paperId)) fail('transition references a non-member paperId');
     const oldState = current.paperStates[paperId].status;
+    if (nextState?.status === 'completed') fail(COMPLETION_PROOF_REQUIRED);
     const requested = normalizePaperState(nextState, paperId);
     if (!STATUS_TRANSITIONS[oldState].includes(requested.status)) fail(`illegal transition ${oldState} -> ${requested.status} for ${paperId}`);
     for (const key of USAGE_FIELDS) {
@@ -389,7 +424,9 @@ function buildConferenceAggregateInput(run, trustedLedgerContext) {
         version: VERSION, contract: SUMMARY_INPUT_CONTRACT, conferenceId: current.conferenceId,
         runIdentitySha256: current.identitySha256, runStateSha256: current.stateSha256,
         ledgerSha256: current.ledgerSha256, membershipSha256: current.membershipSha256,
-        taxonomyVersion: current.taxonomyVersion, selectionPolicySha256: current.selectionPolicySha256,
+        taxonomyVersion: current.taxonomyVersion, filterPolicySha256: current.filterPolicySha256,
+        selectionReceiptSha256: current.selectionReceiptSha256,
+        selectedMemberSetSha256: current.selectedMemberSetSha256,
         ledgerBinding: current.ledgerBinding,
         status: completedIds.length === paperIds.length ? 'complete' : 'partial',
         publicationEligible: completedIds.length === paperIds.length,
@@ -403,24 +440,13 @@ function buildConferenceAggregateInput(run, trustedLedgerContext) {
 }
 
 function assertPublishableConferenceInput(input) {
-    const trustedLedgerContext = arguments[1];
-    if (!input || typeof input !== 'object' || Array.isArray(input) || input.version !== VERSION || input.contract !== SUMMARY_INPUT_CONTRACT || input.status !== 'complete'
-        || input.publicationEligible !== true || !Array.isArray(input.papers) || !input.ledgerBinding) {
-        throw new Error('Conference aggregate input is not publishable');
-    }
-    if (Object.entries(input.excluded || {}).some(([status, ids]) => status !== 'completed' && Array.isArray(ids) && ids.length)) {
-        throw new Error('Conference aggregate input contains excluded incomplete or blocked papers');
-    }
-    const { inputSha256, ...bound } = input;
-    if (!isSha(inputSha256) || inputSha256 !== stableHash(bound)) throw new Error('Conference aggregate input SHA drifted');
-    const run = assertTrustedLedgerContext(trustedLedgerContext, true);
-    const expected = buildConferenceAggregateInput(run, { ledgerHandle: trustedLedgerContext.ledgerHandle });
-    if (stableHash(input) !== stableHash(expected)) throw new Error('Conference aggregate input was not rebuilt from the trusted strong-bound run');
-    return clone(expected);
+    void input;
+    throw new Error('Conference aggregate publishing is disabled until an authenticated completion-proof handle is implemented');
 }
 
 module.exports = {
-    VERSION, CONTRACT, LEDGER_BINDING_CONTRACT, PAPER_PROJECTION_CONTRACT, SUMMARY_INPUT_CONTRACT, STATUS_TRANSITIONS, USAGE_FIELDS,
+    VERSION, CONTRACT, LEDGER_BINDING_CONTRACT, PAPER_PROJECTION_CONTRACT, SUMMARY_INPUT_CONTRACT,
+    COMPLETION_PROOF_REQUIRED, STATUS_TRANSITIONS, USAGE_FIELDS,
     sha256, stableHash, normalizeMembers, normalizeShards, normalizeUsage, normalizeProjection,
     createConferenceRun, createConferenceRunFromVerifiedLedger, assertConferenceRun, assertConferenceRunFromVerifiedLedger,
     transitionPaperState, buildConferenceAggregateInput,
