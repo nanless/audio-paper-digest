@@ -167,6 +167,12 @@ const FILES = {
     llmAccountPoolState: path.join(DATA_DIR, 'runtime', 'llm-account-pool.json'),
     llmUsageDir: path.join(DATA_DIR, 'runtime', 'llm-usage'),
     freshRewriteRunsDir: path.join(DATA_DIR, 'runtime', 'fresh-rewrites'),
+    // Conference PDFs and their source ledgers are private runtime inputs.
+    // They are isolated from current/ so incomplete imports cannot alter a
+    // daily production batch.
+    conferenceSourceLedgerDir: path.join(DATA_DIR, 'runtime', 'conference-ledgers'),
+    conferenceSourceCacheDir: path.join(DATA_DIR, 'runtime', 'conference-sources'),
+    conferenceRunsDir: path.join(DATA_DIR, 'runtime', 'conference-runs'),
     apiReaderAttemptsDir: path.join(DATA_DIR, 'runtime', 'reader-attempts'),
     papers: path.join(CURRENT_DIR, 'papers.json'),
     papersLegacy: path.join(DATA_DIR, 'papers.json'),
