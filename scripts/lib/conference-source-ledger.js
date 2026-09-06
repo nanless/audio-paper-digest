@@ -14,6 +14,8 @@ const SHA_RE = /^[a-f0-9]{64}$/;
 const IDENTITY_TYPES = new Set(['icassp-arnumber', 'openreview-forum-id', 'conference-paper-id']);
 const EVIDENCE_KINDS = new Set(['metadata', 'pdf', 'text', 'artifacts']);
 const STATUS_STATES = new Set(['verified', 'needs-review', 'blocked']);
+const AVAILABILITY_STATES = new Set(['present', 'absent']);
+const SOURCE_KINDS = new Set(['official-metadata', 'official-pdf', 'conference-proceedings', 'openreview', 'local-confirmed-copy', 'legacy-unrecorded']);
 
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const compareIdentityKeys = (left, right) => left < right ? -1 : left > right ? 1 : 0;
@@ -85,9 +87,53 @@ function identityKey(identity) {
     return `${normalized.type}:${normalized.value}`;
 }
 
+function validateAvailability(availability) {
+    plainObject(availability, ['metadata', 'pdf', 'text', 'artifacts'], 'member.availability');
+    for (const kind of EVIDENCE_KINDS) {
+        if (!AVAILABILITY_STATES.has(availability[kind])) {
+            throw new Error(`member.availability.${kind} must be present or absent`);
+        }
+    }
+    if (availability.metadata !== 'present') {
+        throw new Error('member.availability.metadata must be present for a verified conference identity');
+    }
+    return availability;
+}
+
+function validateSourceRecord(value, name) {
+    plainObject(value, ['kind', 'locator', 'retrievedAt'], name);
+    if (!SOURCE_KINDS.has(value.kind)) throw new Error(`${name}.kind is unsupported`);
+    nonemptyString(value.locator, `${name}.locator`);
+    assertTimestamp(value.retrievedAt, `${name}.retrievedAt`);
+}
+
+function validateDerivedRecord(value, name, expectedPdfSha256) {
+    plainObject(value, ['extractor', 'version', 'inputSha256'], name);
+    nonemptyString(value.extractor, `${name}.extractor`);
+    nonemptyString(value.version, `${name}.version`);
+    assertSha(value.inputSha256, `${name}.inputSha256`);
+    if (value.inputSha256 !== expectedPdfSha256) {
+        throw new Error(`${name}.inputSha256 must bind the member PDF SHA-256`);
+    }
+}
+
+function validateProvenance(provenance, availability, member) {
+    plainObject(provenance, ['metadata', 'pdf', 'text', 'artifacts'], 'member.provenance');
+    for (const kind of EVIDENCE_KINDS) {
+        const value = provenance[kind];
+        if (availability[kind] === 'absent') {
+            if (value !== null) throw new Error(`member.provenance.${kind} must be null when its artifact is absent`);
+            continue;
+        }
+        if (kind === 'metadata' || kind === 'pdf') validateSourceRecord(value, `member.provenance.${kind}`);
+        else validateDerivedRecord(value, `member.provenance.${kind}`, member.pdfSha256);
+    }
+}
+
 function validateEvidence(evidence, member) {
-    if (!Array.isArray(evidence) || evidence.length !== EVIDENCE_KINDS.size) {
-        throw new Error('member.status.evidence must contain the four source bindings');
+    const presentKinds = [...EVIDENCE_KINDS].filter(kind => member.availability[kind] === 'present');
+    if (!Array.isArray(evidence) || evidence.length !== presentKinds.length) {
+        throw new Error('member.status.evidence must bind exactly the present source artifacts');
     }
     const expected = new Map([
         ['metadata', member.metadataSha256], ['pdf', member.pdfSha256],
@@ -105,6 +151,9 @@ function validateEvidence(evidence, member) {
         }
         found.add(item.kind);
     }
+    if (presentKinds.some(kind => !found.has(kind))) {
+        throw new Error('member.status.evidence must bind exactly the present source artifacts');
+    }
 }
 
 function validateStatus(status, member) {
@@ -112,30 +161,54 @@ function validateStatus(status, member) {
     if (!STATUS_STATES.has(status.state)) throw new Error('member.status.state is unsupported');
     assertTimestamp(status.updatedAt, 'member.status.updatedAt');
     nonemptyString(status.reason, 'member.status.reason');
+    const complete = [...EVIDENCE_KINDS].every(kind => member.availability[kind] === 'present');
+    if ((status.state === 'verified') !== complete) {
+        throw new Error('only verified members may have all four replayable source artifacts');
+    }
     validateEvidence(status.evidence, member);
 }
 
 function validateMember(member) {
     const fields = [
         'identity', 'metadataFile', 'metadataSha256', 'pdfFile', 'pdfSha256',
-        'textFile', 'textSha256', 'artifactsFile', 'artifactsSha256', 'status'
+        'textFile', 'textSha256', 'artifactsFile', 'artifactsSha256',
+        'availability', 'provenance', 'status'
     ];
     plainObject(member, fields, 'member');
     const normalized = {
         identity: validateIdentity(member.identity),
-        metadataFile: assertRelativePath(member.metadataFile, 'member.metadataFile'),
+        metadataFile: member.metadataFile,
         metadataSha256: member.metadataSha256,
-        pdfFile: assertRelativePath(member.pdfFile, 'member.pdfFile'),
+        pdfFile: member.pdfFile,
         pdfSha256: member.pdfSha256,
-        textFile: assertRelativePath(member.textFile, 'member.textFile'),
+        textFile: member.textFile,
         textSha256: member.textSha256,
-        artifactsFile: assertRelativePath(member.artifactsFile, 'member.artifactsFile'),
+        artifactsFile: member.artifactsFile,
         artifactsSha256: member.artifactsSha256,
+        availability: member.availability,
+        provenance: member.provenance,
         status: member.status
     };
-    for (const field of ['metadataSha256', 'pdfSha256', 'textSha256', 'artifactsSha256']) assertSha(normalized[field], `member.${field}`);
-    const files = [normalized.metadataFile, normalized.pdfFile, normalized.textFile, normalized.artifactsFile];
+    validateAvailability(normalized.availability);
+    for (const kind of EVIDENCE_KINDS) {
+        const fileField = `${kind}File`;
+        const shaField = `${kind}Sha256`;
+        if (normalized.availability[kind] === 'present') {
+            normalized[fileField] = assertRelativePath(normalized[fileField], `member.${fileField}`);
+            assertSha(normalized[shaField], `member.${shaField}`);
+        } else if (normalized[fileField] !== null || normalized[shaField] !== null) {
+            throw new Error(`member.${fileField} and member.${shaField} must be null when ${kind} is absent`);
+        }
+    }
+    if ((normalized.availability.text === 'present' || normalized.availability.artifacts === 'present')
+        && normalized.availability.pdf !== 'present') {
+        throw new Error('derived text or artifacts require a present PDF source artifact');
+    }
+    const files = [...EVIDENCE_KINDS]
+        .filter(kind => normalized.availability[kind] === 'present')
+        .map(kind => normalized[`${kind}File`]);
     if (new Set(files).size !== files.length) throw new Error('member source files must not alias each other');
+    validateProvenance(normalized.provenance, normalized.availability, normalized);
     validateStatus(normalized.status, normalized);
     return normalized;
 }
@@ -243,25 +316,58 @@ function safeArtifactPath(root, relativePath) {
 function verifyMemberFiles(ledger, root) {
     validateLedger(ledger);
     const safeRoot = assertSafeRoot(root);
+    const notReady = [];
     for (const member of ledger.members) {
-        for (const [fileField, shaField] of [
-            ['metadataFile', 'metadataSha256'], ['pdfFile', 'pdfSha256'],
-            ['textFile', 'textSha256'], ['artifactsFile', 'artifactsSha256']
-        ]) {
+        for (const kind of EVIDENCE_KINDS) {
+            if (member.availability[kind] !== 'present') continue;
+            const fileField = `${kind}File`;
+            const shaField = `${kind}Sha256`;
             const target = safeArtifactPath(safeRoot, member[fileField]);
             const bytes = readRegularBytes(target);
             if (sha256(bytes) !== member[shaField]) {
                 throw new Error(`${identityKey(member.identity)} ${fileField} SHA-256 mismatch`);
             }
         }
+        if (member.status.state !== 'verified') notReady.push(identityKey(member.identity));
+    }
+    if (notReady.length) {
+        throw new Error(`Conference ledger contains non-verified members and is not ready for replay: ${notReady.join(', ')}`);
     }
     return true;
+}
+
+// v1 had no runtime ledger when this contract was tightened.  Keep this
+// narrow authoring compatibility only for callers which create an in-memory
+// all-present fixture, then emit the canonical schema rather than accepting
+// an un-auditable legacy object in validateLedger/loadLedger.
+function upgradeLegacyCreateMember(member) {
+    const legacyFields = [
+        'identity', 'metadataFile', 'metadataSha256', 'pdfFile', 'pdfSha256',
+        'textFile', 'textSha256', 'artifactsFile', 'artifactsSha256', 'status'
+    ];
+    const actual = member && typeof member === 'object' && !Array.isArray(member) ? Object.keys(member).sort() : [];
+    if (actual.length !== legacyFields.length || actual.some((key, index) => key !== [...legacyFields].sort()[index])) return member;
+    const identity = validateIdentity(member.identity);
+    const updatedAt = member.status?.updatedAt;
+    assertTimestamp(updatedAt, 'member.status.updatedAt');
+    const baseLocator = `legacy-unrecorded:${identityKey(identity)}`;
+    return {
+        ...member,
+        availability: { metadata: 'present', pdf: 'present', text: 'present', artifacts: 'present' },
+        provenance: {
+            metadata: { kind: 'legacy-unrecorded', locator: `${baseLocator}:metadata`, retrievedAt: updatedAt },
+            pdf: { kind: 'legacy-unrecorded', locator: `${baseLocator}:pdf`, retrievedAt: updatedAt },
+            text: { extractor: 'legacy-unrecorded', version: 'v1', inputSha256: member.pdfSha256 },
+            artifacts: { extractor: 'legacy-unrecorded', version: 'v1', inputSha256: member.pdfSha256 }
+        }
+    };
 }
 
 function createLedger(conference, members) {
     plainObject(conference, ['id', 'year'], 'conference');
     if (!Array.isArray(members) || !members.length) throw new Error('conference source ledger requires nonempty members');
-    const ordered = members.map(validateMember).sort((left, right) => compareIdentityKeys(identityKey(left.identity), identityKey(right.identity)));
+    const ordered = members.map(upgradeLegacyCreateMember).map(validateMember)
+        .sort((left, right) => compareIdentityKeys(identityKey(left.identity), identityKey(right.identity)));
     const keys = ordered.map(member => identityKey(member.identity));
     if (new Set(keys).size !== keys.length) throw new Error('conference source ledger contains duplicate identities');
     const result = { version: CONTRACT, conference: { ...conference }, members: ordered, memberSetSha256: memberSetSha256(ordered) };

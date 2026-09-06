@@ -30,11 +30,31 @@ function member(root, type, value) {
     const result = {
         identity: { type, value }, ...files,
         metadataSha256: ledger.sha256(contents.metadataFile), pdfSha256: ledger.sha256(contents.pdfFile),
-        textSha256: ledger.sha256(contents.textFile), artifactsSha256: ledger.sha256(contents.artifactsFile)
+        textSha256: ledger.sha256(contents.textFile), artifactsSha256: ledger.sha256(contents.artifactsFile),
+        availability: { metadata: 'present', pdf: 'present', text: 'present', artifacts: 'present' }
+    };
+    result.provenance = {
+        metadata: { kind: 'official-metadata', locator: `https://example.test/metadata/${stem}`, retrievedAt: NOW },
+        pdf: { kind: 'official-pdf', locator: `https://example.test/pdf/${stem}`, retrievedAt: NOW },
+        text: { extractor: 'fixture-text-extractor', version: '1.0.0', inputSha256: result.pdfSha256 },
+        artifacts: { extractor: 'fixture-artifact-extractor', version: '1.0.0', inputSha256: result.pdfSha256 }
     };
     result.status = {
         state: 'verified', updatedAt: NOW, reason: '本机 PDF、提取文本和工件已逐项校验。',
         evidence: ['metadata', 'pdf', 'text', 'artifacts'].map(kind => ({ kind, sha256: result[`${kind}Sha256`] }))
+    };
+    return result;
+}
+
+function removeArtifact(memberValue, kind, state = 'blocked') {
+    const result = structuredClone(memberValue);
+    result.availability[kind] = 'absent';
+    result[`${kind}File`] = null;
+    result[`${kind}Sha256`] = null;
+    result.provenance[kind] = null;
+    result.status = {
+        state, updatedAt: NOW, reason: `已核身份，但 ${kind} 来源尚不可重放。`,
+        evidence: result.status.evidence.filter(item => item.kind !== kind)
     };
     return result;
 }
@@ -92,7 +112,7 @@ test('schema fails closed on unbound evidence, malformed statuses, and invalid i
     assert.throws(() => ledger.validateLedger(badEvidence), /not bound/);
     const missingEvidence = structuredClone(source);
     missingEvidence.members[0].status.evidence.pop();
-    assert.throws(() => ledger.validateLedger(missingEvidence), /four source bindings/);
+    assert.throws(() => ledger.validateLedger(missingEvidence), /exactly the present/);
     const badStatus = structuredClone(source);
     badStatus.members[0].status.updatedAt = '2026-09-06';
     assert.throws(() => ledger.validateLedger(badStatus), /canonical UTC/);
@@ -100,6 +120,72 @@ test('schema fails closed on unbound evidence, malformed statuses, and invalid i
         ['icassp-arnumber', '001'], ['conference-paper-id', '0'], ['openreview-forum-id', 'short'],
         ['openreview-forum-id', 'a space 9'], ['unknown', '123']
     ]) assert.throws(() => ledger.validateIdentity({ type, value }));
+});
+
+test('identity-verified members can remain blocked or needs-review with explicitly absent replay artifacts', t => {
+    const root = fixture(t);
+    const base = member(root, 'icassp-arnumber', '102');
+    const blocked = removeArtifact(removeArtifact(removeArtifact(base, 'artifacts'), 'text'), 'pdf');
+    const source = makeLedger(root, [blocked]);
+    assert.equal(ledger.validateLedger(source), source);
+    assert.throws(() => ledger.verifyMemberFiles(source, root), /non-verified members.*not ready/);
+
+    const review = removeArtifact(base, 'artifacts', 'needs-review');
+    assert.equal(ledger.validateLedger(makeLedger(root, [review])).members[0].status.state, 'needs-review');
+
+    const absentWithBytes = structuredClone(source);
+    absentWithBytes.members[0].pdfFile = 'pdf/icassp-arnumber-102.pdf';
+    assert.throws(() => ledger.validateLedger(absentWithBytes), /must be null when pdf is absent/);
+    const absentWithEvidence = structuredClone(source);
+    absentWithEvidence.members[0].status.evidence.push({ kind: 'pdf', sha256: base.pdfSha256 });
+    assert.throws(() => ledger.validateLedger(absentWithEvidence), /exactly the present/);
+
+    // The stale physical artifact is deliberately left in the cache.  A
+    // blocked ledger may be inspected, but its absent artifact is not part of
+    // byte replay and cannot accidentally turn the member into ready.
+    const onlyArtifactsAbsent = removeArtifact(base, 'artifacts');
+    fs.writeFileSync(path.join(root, base.artifactsFile), 'stale absent bytes');
+    assert.throws(() => ledger.verifyMemberFiles(makeLedger(root, [onlyArtifactsAbsent]), root), /non-verified members.*not ready/);
+});
+
+test('complete replay artifacts, complete SHA evidence, and derived extraction provenance are exclusive to verified members', t => {
+    const root = fixture(t);
+    const base = member(root, 'conference-paper-id', '103');
+    const nonVerifiedComplete = structuredClone(base);
+    nonVerifiedComplete.status.state = 'needs-review';
+    assert.throws(() => ledger.validateLedger(makeLedger(root, [nonVerifiedComplete])), /only verified/);
+
+    const verifiedIncomplete = removeArtifact(base, 'artifacts');
+    verifiedIncomplete.status.state = 'verified';
+    assert.throws(() => ledger.validateLedger(makeLedger(root, [verifiedIncomplete])), /only verified/);
+
+    const noExtractor = structuredClone(base);
+    noExtractor.provenance.text.version = '';
+    assert.throws(() => ledger.validateLedger(makeLedger(root, [noExtractor])), /provenance\.text\.version/);
+    const wrongInput = structuredClone(base);
+    wrongInput.provenance.artifacts.inputSha256 = 'a'.repeat(64);
+    assert.throws(() => ledger.validateLedger(makeLedger(root, [wrongInput])), /must bind the member PDF/);
+    const absentProvenance = removeArtifact(base, 'artifacts');
+    absentProvenance.provenance.artifacts = { extractor: 'x', version: '1', inputSha256: base.pdfSha256 };
+    assert.throws(() => ledger.validateLedger(makeLedger(root, [absentProvenance])), /must be null when its artifact is absent/);
+    const noSourceLocator = structuredClone(base);
+    noSourceLocator.provenance.pdf.locator = '';
+    assert.throws(() => ledger.validateLedger(makeLedger(root, [noSourceLocator])), /provenance\.pdf\.locator/);
+    const unknownProvenance = structuredClone(base);
+    unknownProvenance.provenance.pdf.extra = 'not accepted';
+    assert.throws(() => ledger.validateLedger(makeLedger(root, [unknownProvenance])), /unexpected or missing/);
+});
+
+test('createLedger upgrades only the old all-present in-memory authoring shape, while persisted ledgers remain fail-closed', t => {
+    const root = fixture(t);
+    const canonical = member(root, 'icassp-arnumber', '104');
+    const legacy = structuredClone(canonical);
+    delete legacy.availability;
+    delete legacy.provenance;
+    const created = ledger.createLedger({ id: 'icassp-2026', year: 2026 }, [legacy]);
+    assert.equal(created.members[0].provenance.metadata.kind, 'legacy-unrecorded');
+    assert.equal(ledger.validateLedger(created), created);
+    assert.throws(() => ledger.validateLedger({ ...created, members: [legacy] }), /unexpected or missing/);
 });
 
 test('all source files are portable relative paths; traversal, absolute paths, aliases, and symlinks are rejected', t => {

@@ -24,6 +24,9 @@ function makeProject() {
         'data/current/deep_analyzer_input_output',
         'data/current/filter_input_output',
         'data/current/iclr_filter_input_output',
+        'data/runtime/conference-ledgers',
+        'data/runtime/conference-sources',
+        'data/runtime/conference-runs',
         'data/archive',
         'logs'
     ]) fs.mkdirSync(path.join(projectRoot, relative), { recursive: true });
@@ -54,6 +57,21 @@ describe('runtime storage status', () => {
             assert.ok(status.targets.some(item => item.key === 'data/current' && item.files === 1 && item.bytes === 4));
             assert.ok(status.targets.some(item => item.key === 'logs' && item.files === 1 && item.bytes === 2));
             assert.strictEqual(fs.existsSync(path.join(projectRoot, 'data/current/image-cache/a.bin')), true);
+        } finally {
+            fs.rmSync(projectRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('会议来源账本、缓存和运行对状态可见但永不进入自动清理候选', () => {
+        const projectRoot = makeProject();
+        try {
+            const oldSource = writeFile(projectRoot, 'data/runtime/conference-sources/pdf/1001.pdf', '%PDF-1.4', NOW_MS - 90 * 24 * 60 * 60 * 1000);
+            writeFile(projectRoot, 'data/runtime/conference-ledgers/icassp-2026.json', '{}');
+            const status = getStorageStatus({ projectRoot, nowMs: NOW_MS });
+            assert.ok(status.targets.some(item => item.key === 'conference-sources' && item.files === 1));
+            assert.ok(status.targets.some(item => item.key === 'conference-ledgers' && item.files === 1));
+            const plan = buildPrunePlan({ projectRoot, nowMs: NOW_MS, retentionDays: 30 });
+            assert.ok(!plan.candidates.some(item => item.path === oldSource));
         } finally {
             fs.rmSync(projectRoot, { recursive: true, force: true });
         }

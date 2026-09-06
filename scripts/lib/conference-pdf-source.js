@@ -8,6 +8,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const ledgerApi = require('./conference-source-ledger.js');
 
 const CONTRACT = 'conference-pdf-source-v1';
 const VERSION = 1;
@@ -103,6 +104,42 @@ function requireRecord(record) {
     return { identity, relativePath, pdfSha256: record.pdfSha256 };
 }
 
+function requireExactKeys(value, keys, name) {
+    if (!isPlainObject(value)) throw fail(`${name} must be a plain object`);
+    const actual = Object.keys(value).sort();
+    const expected = [...keys].sort();
+    if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+        throw fail(`${name} has unexpected or missing fields`);
+    }
+}
+
+function requireDescriptorHash(value, name) {
+    if (value !== null && !isSha256(value)) throw fail(`${name} must be a lowercase SHA-256 or null`);
+}
+
+function requireLedgerBinding(value) {
+    requireExactKeys(value, ['ledgerSha256', 'identityKey', 'metadataSha256', 'textSha256', 'artifactsSha256'], 'Conference PDF ledger binding');
+    if (!isSha256(value.ledgerSha256)) throw fail('Conference PDF ledger binding requires a lowercase ledger SHA-256');
+    if (typeof value.identityKey !== 'string' || !value.identityKey.trim()) {
+        throw fail('Conference PDF ledger binding requires a non-empty identity key');
+    }
+    for (const field of ['metadataSha256', 'textSha256', 'artifactsSha256']) {
+        if (!isSha256(value[field])) throw fail(`Conference PDF ledger binding requires ${field}`);
+    }
+    return clone(value);
+}
+
+function ledgerBindingForMember(member, ledgerSha256) {
+    if (!isSha256(ledgerSha256)) throw fail('ledgerSha256 must be a lowercase SHA-256');
+    return requireLedgerBinding({
+        ledgerSha256,
+        identityKey: ledgerApi.identityKey(member.identity),
+        metadataSha256: member.metadataSha256,
+        textSha256: member.textSha256,
+        artifactsSha256: member.artifactsSha256,
+    });
+}
+
 function requireMaxBytes(value) {
     const maxBytes = value === undefined ? DEFAULT_MAX_PDF_BYTES : value;
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > ABSOLUTE_MAX_PDF_BYTES) {
@@ -162,6 +199,29 @@ function readVerifiedPdf(cacheRoot, relativePath, maxBytes) {
     }
 }
 
+function readVerifiedArtifact(cacheRoot, relativePath, expectedSha256, label) {
+    const filename = safePdfFilename(cacheRoot, relativePath);
+    let fd;
+    try {
+        try { fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); }
+        catch (error) {
+            if (error.code === 'ELOOP') throw fail(`${label} must be a regular, non-linked cache file`);
+            throw error;
+        }
+        const opened = fs.fstatSync(fd);
+        const named = fs.lstatSync(filename);
+        if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1
+            || opened.dev !== named.dev || opened.ino !== named.ino) {
+            throw fail(`${label} must be a regular, non-linked cache file`);
+        }
+        const bytes = fs.readFileSync(fd);
+        if (sha256(bytes) !== expectedSha256) throw fail(`${label} SHA-256 differs from the verified conference ledger`);
+        return bytes;
+    } finally {
+        if (fd !== undefined) fs.closeSync(fd);
+    }
+}
+
 function unavailableExtraction() {
     return {
         extractorVersion: 'none',
@@ -211,11 +271,11 @@ function normalizeExtraction(value) {
         formulaTeX: { available: true, reliability: 'reliable', formulas } };
 }
 
-function descriptorBody({ identity, relativePath, pdfSha256, pdfBytes, extraction }) {
+function descriptorBody({ identity, relativePath, pdfSha256, pdfBytes, extraction, ledgerBinding = null }) {
     const textSha256 = extraction.text === null ? null : sha256(extraction.text);
     const structuredArtifactsSha256 = extraction.structuredArtifacts === null ? null : stableSha256(extraction.structuredArtifacts);
     const formulaTeXSha256 = extraction.formulaTeX.available ? stableSha256(extraction.formulaTeX) : null;
-    return {
+    const body = {
         contract: CONTRACT,
         version: VERSION,
         kind: KIND,
@@ -238,6 +298,8 @@ function descriptorBody({ identity, relativePath, pdfSha256, pdfBytes, extractio
             formulaTeX: extraction.formulaTeX.available,
         },
     };
+    if (ledgerBinding !== null) body.ledgerBinding = requireLedgerBinding(ledgerBinding);
+    return body;
 }
 
 function signedDescriptor(body) {
@@ -250,7 +312,7 @@ function signedDescriptor(body) {
  * and may return text/structured artifacts; absent extractors are valid and
  * result in explicit unavailable fields rather than an invented full text.
  */
-function buildConferencePdfSource({ cacheRoot, record, maxBytes, extractPdf } = {}) {
+function buildSource({ cacheRoot, record, maxBytes, extractPdf, ledgerBinding = null } = {}) {
     const root = requireSafeDirectory(cacheRoot);
     const checked = requireRecord(record);
     const bytes = readVerifiedPdf(root, checked.relativePath, requireMaxBytes(maxBytes));
@@ -260,7 +322,7 @@ function buildConferencePdfSource({ cacheRoot, record, maxBytes, extractPdf } = 
     const extraction = normalizeExtraction(extractPdf && extractPdf({
         pdfBytes: Buffer.from(bytes), pdfSha256: actualPdfSha256, identity: clone(checked.identity), record: clone(record),
     }));
-    const descriptor = signedDescriptor(descriptorBody({ ...checked, pdfBytes: bytes.length, extraction }));
+    const descriptor = signedDescriptor(descriptorBody({ ...checked, pdfBytes: bytes.length, extraction, ledgerBinding }));
     return Object.freeze({
         descriptor,
         text: extraction.text,
@@ -269,16 +331,90 @@ function buildConferencePdfSource({ cacheRoot, record, maxBytes, extractPdf } = 
     });
 }
 
+function buildConferencePdfSource({ cacheRoot, record, maxBytes, extractPdf } = {}) {
+    return buildSource({ cacheRoot, record, maxBytes, extractPdf });
+}
+
+function resolveVerifiedLedgerMember({ sourceRoot, ledger, ledgerSha256, identityKey }) {
+    try { ledgerApi.validateLedger(ledger); }
+    catch (error) { throw fail(`Conference PDF source requires a valid loaded ledger: ${error.message}`); }
+    if (typeof identityKey !== 'string' || !identityKey.trim()) throw fail('identityKey must be a non-empty canonical ledger identity');
+    const member = ledger.members.find(item => ledgerApi.identityKey(item.identity) === identityKey);
+    if (!member) throw fail('identityKey does not identify a member in the loaded conference ledger');
+    if (member.status.state !== 'verified') throw fail('Conference PDF source requires a verified ledger member');
+    const root = requireSafeDirectory(sourceRoot);
+    const binding = ledgerBindingForMember(member, ledgerSha256);
+    // Verify all four ledger-bound artifacts at admission/replay time.  The
+    // PDF is also re-read by build/replay below; this deliberate redundancy
+    // closes substitution between the ledger and the adapter descriptor.
+    readVerifiedArtifact(root, member.metadataFile, member.metadataSha256, 'Conference metadata artifact');
+    readVerifiedArtifact(root, member.textFile, member.textSha256, 'Conference text artifact');
+    readVerifiedArtifact(root, member.artifactsFile, member.artifactsSha256, 'Conference structured-artifacts file');
+    return { root, member: clone(member), binding };
+}
+
+/**
+ * Ledger-only admission bridge.  It never accepts caller-controlled PDF
+ * records: the PDF location, identity, and all source hashes come from the
+ * supplied already-loaded ledger member.
+ */
+function buildConferencePdfSourceFromLedger({ sourceRoot, ledger, ledgerSha256, identityKey, maxBytes, extractPdf } = {}) {
+    const checked = resolveVerifiedLedgerMember({ sourceRoot, ledger, ledgerSha256, identityKey });
+    return buildSource({
+        cacheRoot: checked.root,
+        record: { identity: checked.member.identity, pdfRelativePath: checked.member.pdfFile, pdfSha256: checked.member.pdfSha256 },
+        maxBytes,
+        extractPdf,
+        ledgerBinding: checked.binding,
+    });
+}
+
 /** Re-read the immutable PDF and prove a previously persisted descriptor/artifacts still replay it. */
-function replayConferencePdfSource({ cacheRoot, record, descriptor, text = null, structuredArtifacts = null, formulaTeX = null, maxBytes } = {}) {
+function validateDescriptorBody(body, expectedLedgerBinding) {
+    const baseFields = [
+        'contract', 'version', 'kind', 'identity', 'pdfRelativePath', 'pdfSha256', 'pdfBytes',
+        'textSha256', 'structuredArtifactsSha256', 'formulaTeXSha256', 'extractor', 'availability'
+    ];
+    const fields = expectedLedgerBinding === null ? baseFields : [...baseFields, 'ledgerBinding'];
+    requireExactKeys(body, fields, 'Conference PDF descriptor');
+    if (body.contract !== CONTRACT || body.version !== VERSION || body.kind !== KIND) {
+        throw fail('Conference PDF descriptor has an unsupported contract');
+    }
+    const checked = requireRecord({ identity: body.identity, pdfRelativePath: body.pdfRelativePath, pdfSha256: body.pdfSha256 });
+    if (!Number.isSafeInteger(body.pdfBytes) || body.pdfBytes < 5) throw fail('Conference PDF descriptor has invalid PDF byte length');
+    for (const field of ['textSha256', 'structuredArtifactsSha256', 'formulaTeXSha256']) requireDescriptorHash(body[field], `Conference PDF descriptor ${field}`);
+    requireExactKeys(body.extractor, ['version', 'textAvailable', 'structuredArtifactsAvailable', 'formulaTeXAvailable'], 'Conference PDF descriptor extractor');
+    if (typeof body.extractor.version !== 'string' || !body.extractor.version.trim()) throw fail('Conference PDF descriptor extractor version is invalid');
+    requireExactKeys(body.availability, ['text', 'structuredArtifacts', 'formulaTeX'], 'Conference PDF descriptor availability');
+    for (const field of ['text', 'structuredArtifacts', 'formulaTeX']) {
+        if (typeof body.availability[field] !== 'boolean' || typeof body.extractor[`${field}Available`] !== 'boolean') {
+            throw fail('Conference PDF descriptor availability must be explicit booleans');
+        }
+        const hashField = field === 'text' ? 'textSha256' : field === 'structuredArtifacts' ? 'structuredArtifactsSha256' : 'formulaTeXSha256';
+        const present = body[hashField] !== null;
+        if (body.availability[field] !== present || body.extractor[`${field}Available`] !== present) {
+            throw fail('Conference PDF descriptor availability, hash, and extractor fields are internally inconsistent');
+        }
+    }
+    if (body.availability.formulaTeX && !body.availability.structuredArtifacts) {
+        throw fail('Conference PDF formula availability requires structured artifacts');
+    }
+    if (expectedLedgerBinding !== null && stableJson(requireLedgerBinding(body.ledgerBinding)) !== stableJson(expectedLedgerBinding)) {
+        throw fail('Conference PDF descriptor does not belong to this loaded ledger member');
+    }
+    return checked;
+}
+
+function replaySource({ cacheRoot, record, descriptor, text = null, structuredArtifacts = null, formulaTeX = null, maxBytes, expectedLedgerBinding = null } = {}) {
     if (!isPlainObject(descriptor) || descriptor.contract !== CONTRACT || descriptor.version !== VERSION || descriptor.kind !== KIND) {
         throw fail('Conference PDF descriptor has an unsupported contract');
     }
     const { descriptorSha256, ...body } = descriptor;
     if (!isSha256(descriptorSha256) || stableSha256(body) !== descriptorSha256) throw fail('Conference PDF descriptor checksum changed');
+    const bodyRecord = validateDescriptorBody(body, expectedLedgerBinding);
     const root = requireSafeDirectory(cacheRoot);
     const checked = requireRecord(record);
-    if (stableJson(checked.identity) !== stableJson(body.identity) || checked.relativePath !== body.pdfRelativePath
+    if (stableJson(checked.identity) !== stableJson(bodyRecord.identity) || checked.relativePath !== bodyRecord.relativePath
         || checked.pdfSha256 !== body.pdfSha256) throw fail('Conference PDF descriptor does not belong to this verified record');
     const bytes = readVerifiedPdf(root, checked.relativePath, requireMaxBytes(maxBytes));
     if (bytes.length !== body.pdfBytes || sha256(bytes) !== body.pdfSha256) throw fail('Conference PDF bytes no longer replay the descriptor');
@@ -295,10 +431,30 @@ function replayConferencePdfSource({ cacheRoot, record, descriptor, text = null,
             || stableSha256(formulaTeX) !== body.formulaTeXSha256))) {
         throw fail('Conference PDF formula TeX artifact does not replay the descriptor');
     }
-    if (body.availability?.formulaTeX === true && body.extractor?.formulaTeXAvailable !== true) {
-        throw fail('Conference PDF formula availability is internally inconsistent');
-    }
     return Object.freeze(clone(descriptor));
+}
+
+function replayConferencePdfSource({ cacheRoot, record, descriptor, text = null, structuredArtifacts = null, formulaTeX = null, maxBytes } = {}) {
+    return replaySource({ cacheRoot, record, descriptor, text, structuredArtifacts, formulaTeX, maxBytes });
+}
+
+/**
+ * Replay only through the same loaded ledger SHA and canonical identity used
+ * for admission.  A ledger-bound descriptor is intentionally not replayable
+ * through the record-only API above.
+ */
+function replayConferencePdfSourceFromLedger({ sourceRoot, ledger, ledgerSha256, identityKey, descriptor, text = null, structuredArtifacts = null, formulaTeX = null, maxBytes } = {}) {
+    const checked = resolveVerifiedLedgerMember({ sourceRoot, ledger, ledgerSha256, identityKey });
+    return replaySource({
+        cacheRoot: checked.root,
+        record: { identity: checked.member.identity, pdfRelativePath: checked.member.pdfFile, pdfSha256: checked.member.pdfSha256 },
+        descriptor,
+        text,
+        structuredArtifacts,
+        formulaTeX,
+        maxBytes,
+        expectedLedgerBinding: checked.binding,
+    });
 }
 
 module.exports = {
@@ -308,6 +464,8 @@ module.exports = {
     DEFAULT_MAX_PDF_BYTES,
     buildConferencePdfSource,
     replayConferencePdfSource,
+    buildConferencePdfSourceFromLedger,
+    replayConferencePdfSourceFromLedger,
     // Exported for ledger adapters to preflight records without reading a PDF.
     requireRecord,
 };

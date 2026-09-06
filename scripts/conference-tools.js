@@ -15,13 +15,21 @@ const runApi = require('./lib/conference-run.js');
 const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 
 function parseArgs(args) {
-    const [command, flag, filename, ...rest] = args;
-    const expectedFlag = command === 'validate-run' ? '--run' : '--ledger';
-    if (!['validate-ledger', 'verify-ledger', 'validate-run'].includes(command)
-        || flag !== expectedFlag || rest.length || !SAFE_JSON_NAME.test(String(filename || ''))) {
-        throw new Error('Use validate-ledger|verify-ledger --ledger NAME.json, or validate-run --run NAME.json');
+    const [command, ...rest] = args;
+    if (!['validate-ledger', 'verify-ledger', 'validate-run'].includes(command)) {
+        throw new Error('Use validate-ledger|verify-ledger --ledger NAME.json, or validate-run --run NAME.json --ledger NAME.json');
     }
-    return command === 'validate-run' ? { command, runName: filename } : { command, ledgerName: filename };
+    if (command !== 'validate-run') {
+        if (rest.length !== 2 || rest[0] !== '--ledger' || !SAFE_JSON_NAME.test(String(rest[1] || ''))) {
+            throw new Error('Use validate-ledger|verify-ledger --ledger NAME.json');
+        }
+        return { command, ledgerName: rest[1] };
+    }
+    if (rest.length !== 4 || rest[0] !== '--run' || rest[2] !== '--ledger'
+        || !SAFE_JSON_NAME.test(String(rest[1] || '')) || !SAFE_JSON_NAME.test(String(rest[3] || ''))) {
+        throw new Error('Use validate-run --run NAME.json --ledger NAME.json');
+    }
+    return { command, runName: rest[1], ledgerName: rest[3] };
 }
 
 function safeRuntimeFile(root, name) {
@@ -48,13 +56,15 @@ function validateLedgerFile({ ledgerDirectory, sourceRoot, ledgerName, verifyFil
     };
 }
 
-function validateRunFile({ runsDirectory, runName }) {
+function validateRunFile({ runsDirectory, runName, ledgerDirectory, ledgerName }) {
     const filename = safeRuntimeFile(runsDirectory, runName);
     const { value, sha256 } = ledgerApi.readRegularJson(filename);
-    const run = runApi.assertConferenceRun(value);
+    const ledgerFile = safeRuntimeFile(ledgerDirectory, ledgerName);
+    const { ledger, ledgerSha256 } = ledgerApi.loadLedger(ledgerFile);
+    const run = runApi.assertConferenceRunFromVerifiedLedger(value, ledger, ledgerSha256);
     return {
         kind: 'conference-run', conference: run.conferenceId, members: run.members.length,
-        ledgerSha256: run.ledgerSha256, membershipSha256: run.membershipSha256,
+        ledgerSha256, membershipSha256: run.membershipSha256,
         identitySha256: run.identitySha256, stateSha256: run.stateSha256, fileSha256: sha256
     };
 }
@@ -64,7 +74,8 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
     const options = parseArgs(argv);
     const files = dependencies.files || Config.FILES;
     const result = options.command === 'validate-run'
-        ? validateRunFile({ runsDirectory: files.conferenceRunsDir, runName: options.runName })
+        ? validateRunFile({ runsDirectory: files.conferenceRunsDir, runName: options.runName,
+            ledgerDirectory: files.conferenceSourceLedgerDir, ledgerName: options.ledgerName })
         : validateLedgerFile({ ledgerDirectory: files.conferenceSourceLedgerDir,
             sourceRoot: files.conferenceSourceCacheDir, ledgerName: options.ledgerName,
             verifyFiles: options.command === 'verify-ledger' });

@@ -25,6 +25,7 @@ function getLayout(projectRoot = PROJECT_ROOT) {
     const root = path.resolve(projectRoot);
     const current = path.join(root, 'data', 'current');
     const archive = path.join(root, 'data', 'archive');
+    const runtime = path.join(root, 'data', 'runtime');
     const logs = path.join(root, 'logs');
     const controlled = [
         { key: 'logs', root: logs, referenceAware: false },
@@ -38,7 +39,15 @@ function getLayout(projectRoot = PROJECT_ROOT) {
             legacyDebug: true
         }))
     ];
-    return { projectRoot: root, current, archive, logs, controlled };
+    // Conference source evidence is immutable operational input: it must be
+    // visible to status, but storage:prune has no authority to remove it.
+    // A future conference execution owns its own explicit retention protocol.
+    const protectedRuntime = [
+        { key: 'conference-ledgers', root: path.join(runtime, 'conference-ledgers') },
+        { key: 'conference-sources', root: path.join(runtime, 'conference-sources') },
+        { key: 'conference-runs', root: path.join(runtime, 'conference-runs') }
+    ];
+    return { projectRoot: root, current, archive, runtime, logs, controlled, protectedRuntime };
 }
 
 function readRetentionDays(value = process.env.PD_STORAGE_RETENTION_DAYS) {
@@ -150,7 +159,8 @@ function getStorageStatus(options = {}) {
         { key: 'data/current', root: layout.current },
         { key: 'data/archive', root: layout.archive },
         { key: 'logs', root: layout.logs },
-        ...layout.controlled.filter(item => item.key !== 'logs').map(item => ({ key: item.key, root: item.root }))
+        ...layout.controlled.filter(item => item.key !== 'logs').map(item => ({ key: item.key, root: item.root })),
+        ...layout.protectedRuntime
     ];
     return {
         projectRoot: layout.projectRoot,

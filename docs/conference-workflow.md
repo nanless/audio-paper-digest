@@ -44,12 +44,13 @@
 ```bash
 npm run conference:validate-ledger -- --ledger icassp-2026.json
 npm run conference:verify-ledger -- --ledger icassp-2026.json
-npm run conference:validate-run -- --run icassp-2026-pilot.json
+npm run conference:validate-run -- --run icassp-2026-pilot.json --ledger icassp-2026.json
 ```
 
 名称只能是对应私有运行目录下的直接 `.json` 文件名；命令不接收任意路径、不导入文件、
 不联网、不调用模型。`verify-ledger` 会重放账本中 metadata、PDF、文本与结构化工件的
-字节 SHA。
+字节 SHA。run 校验还会重放指定 ledger 的 SHA、会议身份和可执行成员，不能只靠
+手写的 `ledgerSha256` 字段通过。
 
 PDF 是弱结构来源：不能可靠复原原始 TeX 时，不展示“可验证公式”；不能定位完整表格
 和数值时，不展示表格；图片必须记录页码/图号及工件 SHA。不得从旧博客正文反向补造
