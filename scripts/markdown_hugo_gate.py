@@ -6,6 +6,7 @@ attestation step rather than another rewriting path.
 """
 
 import html
+from html.parser import HTMLParser
 import re
 import sys
 from pathlib import Path
@@ -18,6 +19,7 @@ from publish_common import (
     MANUAL_DEPTH_CONTRACT_VERSION_V5,
     PublishDataValidationError,
     publish_table_currency_spans,
+    is_publish_currency_literal,
 )
 from tutorial_payload_verifier import (
     FRESH_AUTHORING_CONTRACT,
@@ -150,7 +152,68 @@ def heading_figure_table_number_issues(text, label):
     return issues
 
 
-def math_and_emphasis_issues(text, label):
+def _rendered_currency_dollar_positions(text):
+    """Keep HTML td/th parent identity instead of treating cells as prose.
+
+    Only direct plain text in a real table row qualifies. Nested markup,
+    comments, equations and multiple dollars do not inherit a currency waiver.
+    This produces a read-only diagnostic view, never changes rendered bytes.
+    """
+    offsets = [0]
+    for line in text.splitlines(keepends=True):
+        offsets.append(offsets[-1] + len(line))
+
+    class CurrencyCells(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=False)
+            self.stack = []
+            self.cell = None
+            self.positions = set()
+
+        def handle_starttag(self, tag, attrs):
+            if self.cell is not None:
+                self.cell['valid'] = False
+            if tag in ('td', 'th') and self.stack and self.stack[-1] == 'tr' and 'table' in self.stack:
+                self.cell = {'tag': tag, 'valid': True, 'parts': []}
+            if tag not in ('area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
+                           'link', 'meta', 'param', 'source', 'track', 'wbr'):
+                self.stack.append(tag)
+
+        def handle_data(self, data):
+            if self.cell is not None:
+                line, column = self.getpos()
+                self.cell['parts'].append((offsets[line - 1] + column, data))
+
+        def handle_endtag(self, tag):
+            if self.cell is not None and tag == self.cell['tag']:
+                parts = self.cell['parts']
+                value = ''.join(data for _position, data in parts)
+                if self.cell['valid'] and parts and is_publish_currency_literal(value):
+                    for position, data in parts:
+                        if '$' in data:
+                            self.positions.add(position + data.index('$'))
+                self.cell = None
+            if tag in self.stack:
+                del self.stack[len(self.stack) - 1 - self.stack[::-1].index(tag):]
+
+        def handle_comment(self, data):
+            if self.cell is not None:
+                self.cell['valid'] = False
+
+        def handle_entityref(self, name):
+            if self.cell is not None:
+                self.cell['valid'] = False
+
+        def handle_charref(self, name):
+            self.handle_entityref(name)
+
+    parser = CurrencyCells()
+    parser.feed(text)
+    parser.close()
+    return parser.positions
+
+
+def math_and_emphasis_issues(text, label, *, rendered_html=False):
     """Fail closed on syntax Hugo may otherwise render as broken plain text."""
     clean = strip_fenced_code_for_format_gate(text)
     issues = []
@@ -167,7 +230,8 @@ def math_and_emphasis_issues(text, label):
         issues.append(
             f'{label} 包含裸 $$；块级公式必须使用 \\[…\\] 而非 $$…$$'
         )
-    currency_dollars = {start for start, _end in publish_table_currency_spans(clean)}
+    currency_dollars = (_rendered_currency_dollar_positions(clean) if rendered_html
+                        else {start for start, _end in publish_table_currency_spans(clean)})
     if any(match.start() not in currency_dollars
            for match in re.finditer(r'(?<![\\$])\$(?!\$)', clean)):
         issues.append(
@@ -326,7 +390,7 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
         rendered_path, rendered = candidates[0]
         reader_html = rendered_article_fragment(rendered)
         rendered_label = f'{source_label} -> {rendered_path.name}'
-        issues.extend(math_and_emphasis_issues(reader_html, rendered_label))
+        issues.extend(math_and_emphasis_issues(reader_html, rendered_label, rendered_html=True))
         if '**' in reader_html:
             issues.append(
                 f'{rendered_label} Hugo HTML 残留 Markdown 加粗标记 **'

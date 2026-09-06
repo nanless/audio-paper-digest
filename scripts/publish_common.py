@@ -4666,6 +4666,11 @@ def format_medal(index):
     return medals[index] if index < 3 else f'{index + 1}.'
 
 
+def is_publish_currency_literal(value):
+    """A whole cell containing one explicit dollar amount, never dollar math."""
+    return bool(re.fullmatch(r'\s*\$\d+(?:,\d{3})*(?:\.\d+)?(?:/[1-9]\d*)?\s*', value))
+
+
 def publish_table_currency_spans(text):
     """Exact lone dollar amounts in established Markdown table cells only.
 
@@ -4685,7 +4690,7 @@ def publish_table_currency_spans(text):
             pipes = list(re.finditer(r'(?<!\\)\|', line))
             for left, right in zip(pipes, pipes[1:]):
                 cell = line[left.end():right.start()]
-                if re.fullmatch(r'\s*\$\d+(?:,\d{3})*(?:\.\d+)?(?:/[1-9]\d*)?\s*', cell):
+                if is_publish_currency_literal(cell):
                     start = left.end() + len(cell) - len(cell.lstrip())
                     spans.append((offset + start, offset + right.start() - len(cell) + len(cell.rstrip())))
         else:
