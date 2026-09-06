@@ -10,7 +10,9 @@ const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
 function deterministicRunId(crosswalkId, paperId) {
     const bytes = Buffer.from(sha256(`${crosswalkId}\0${paperId}`).slice(0, 32), 'hex');
-    bytes[6] = (bytes[6] & 0x0f) | 0x50; bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    // Keep the stable digest-derived identity, but use UUID v4 variant bits
+    // because the existing fresh-run loader intentionally admits only v4.
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; bytes[8] = (bytes[8] & 0x3f) | 0x80;
     const hex = bytes.toString('hex');
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }

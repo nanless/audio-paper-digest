@@ -35,6 +35,7 @@ test('verified duplicate pages collapse to one deterministic analysis identity a
     assert.deepEqual(groups[0].cohortDates, ['2026-04-19', '2026-04-21']);
     assert.equal(groups[0].analysisDate, '2026-04-19');
     assert.equal(groups[0].runId, scheduler.deterministicRunId(CROSSWALK, groups[0].paperId));
+    assert.match(groups[0].runId, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
 });
 
 test('pilot then full rerun skips complete identity and resumes the remaining unique identity', async t => {
