@@ -79,6 +79,12 @@ function resolveOne(taxonomy, label, facet, reasons, role) {
     if (matches[0].status !== 'active') { reasons.push(`${role}:deprecated:${matches[0].id}`); return null; }
     return matches[0];
 }
+function conceptMatchesLabel(concept, label) {
+    if (!concept) return false;
+    const normalized = taxonomyApi.normalizeLabel(label);
+    return [concept.preferredLabel.zh, concept.preferredLabel.en, ...concept.aliases]
+        .some(value => taxonomyApi.normalizeLabel(value) === normalized);
+}
 
 function buildAssignment({ runHandle, paper, taxonomy } = {}) {
     const run = runSnapshot(runHandle);
@@ -91,7 +97,8 @@ function buildAssignment({ runHandle, paper, taxonomy } = {}) {
     const task = resolveOne(taxonomy, input.primaryTaskTag, 'task', reasons, 'primary-task');
     const method = resolveOne(taxonomy, input.primaryMethodTag, 'method', reasons, 'primary-method');
     for (const label of input.tags) {
-        const concept = resolveOne(taxonomy, label, undefined, reasons, 'tag');
+        const roleMatches = [task, method].filter(concept => conceptMatchesLabel(concept, label));
+        const concept = roleMatches.length === 1 ? roleMatches[0] : resolveOne(taxonomy, label, undefined, reasons, 'tag');
         if (concept) concepts.set(concept.id, concept);
     }
     for (const concept of [task, method]) if (concept) concepts.set(concept.id, concept);
@@ -125,10 +132,10 @@ function buildAssignments({ runHandle, taxonomy, paperId = null } = {}) {
         .sort((a, b) => a.paperId.localeCompare(b.paperId));
 }
 
-function assignmentFilename(paperId) {
+function assignmentFilename(paperId, registrySha256) {
     const match = String(paperId || '').match(/^arxiv:(\d{4}\.\d{4,5})$/);
-    if (!match) fail('only canonical arXiv paper IDs are supported');
-    return `arxiv-${match[1]}.taxonomy.json`;
+    if (!match || !SHA_RE.test(String(registrySha256 || ''))) fail('canonical arXiv paper ID and registry SHA are required');
+    return `arxiv-${match[1]}.taxonomy.${registrySha256}.json`;
 }
 
 function writeAssignments({ outputRoot, assignments } = {}) {
@@ -138,7 +145,7 @@ function writeAssignments({ outputRoot, assignments } = {}) {
     const root = fresh.assertSafeDirectory(outputRoot, true);
     const runRoot = fresh.assertSafeDirectory(path.join(root, runIds[0]), true); const outputs = [];
     for (const assignment of assignments) {
-        const filename = path.join(runRoot, assignmentFilename(assignment.paperId));
+        const filename = path.join(runRoot, assignmentFilename(assignment.paperId, assignment.registrySha256));
         const bytes = canonicalBytes(assignment); let fd;
         try {
             fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);

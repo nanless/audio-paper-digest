@@ -2160,6 +2160,10 @@ function pruneUnmaterializedApiReaderFigureBlocks(article, plannedFigures, mater
 }
 
 async function materializeApiReaderFigures(figures, arxivId = '') {
+    if (!Array.isArray(figures) || figures.length === 0) return [];
+    if (require('./lib/conference-analysis-context.js').getConferenceAnalysisContext()) {
+        throw new Error('会议 weak PDF 不允许物化非空 Figure 列表');
+    }
     const paperId = String(arxivId || '').trim().toLowerCase().replace(/v\d+$/i, '');
     if (!/^\d{4}\.\d{4,5}$/.test(paperId)) throw new Error('论文图缓存 paper ID 非法');
     const root = path.join(CURRENT_DIR, 'api-reader-assets', paperId);
@@ -3188,9 +3192,12 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const requestModel = options.readerCallModel || callModel;
     const recordDisposition = options.readerRecordDisposition || require('./lib/llm-usage.js').recordLlmDisposition;
     const materializeFigures = options.readerMaterializeFigures || materializeApiReaderFigures;
+    const conference = require('./lib/conference-analysis-context.js');
     const candidateDirectory = fresh.getFreshAnalysisContext()
         ? fresh.freshReaderAttemptsDirectory(options.readerAttemptsDir)
-        : options.readerAttemptsDir || FILES.apiReaderAttemptsDir;
+        : conference.getConferenceAnalysisContext()
+            ? conference.conferenceReaderAttemptsDirectory(options.readerAttemptsDir)
+            : options.readerAttemptsDir || FILES.apiReaderAttemptsDir;
     if (!candidateDirectory) throw new Error('Reader candidate directory is not configured');
     const repairMaxTokens = ANALYSIS_CONFIG.apiReaderRepairMaxTokens || 8000;
     const maxAttempts = Number.isInteger(options.readerMaxAttempts)
@@ -6074,6 +6081,11 @@ function resolveApiReaderAuthors(paper, sourceDetails) {
     let names = rawAuthors.map(author => (
         typeof author === 'string' ? author : author?.name
     )).map(normalizeName).filter(Boolean);
+    const unavailableAffiliation = sourceDetails?.source === 'conference_pdf_text'
+        ? '机构信息未能从会议 PDF 纯文本可靠映射'
+        : sourceDetails?.analysisSource === 'pdf'
+            ? '机构信息未能从 arXiv PDF 文本可靠映射'
+            : '机构信息未在 arXiv HTML 中可靠披露';
     if (parsed && Array.isArray(parsed.authors) && parsed.authors.length > 0
         && recoverySha256(parsed.sourceDomSha256)) {
         if (names.length === 0) names = parsed.authors.map(author => normalizeName(author?.name)).filter(Boolean);
@@ -6113,7 +6125,7 @@ function resolveApiReaderAuthors(paper, sourceDetails) {
                     ? matched.affiliations
                     : (!matched?.rejectedResourceLabel && allAffiliations.length === 1
                         ? allAffiliations
-                        : ['机构信息未在 arXiv HTML 中可靠披露'])
+                        : [unavailableAffiliation])
             };
         });
         return bindApiReaderAuthorIdentity(paper, sourceDetails, {
@@ -6125,9 +6137,7 @@ function resolveApiReaderAuthors(paper, sourceDetails) {
     return bindApiReaderAuthorIdentity(paper, sourceDetails, {
         authors: names.map(name => ({
             name,
-            affiliations: [sourceDetails?.analysisSource === 'pdf'
-                ? '机构信息未能从 arXiv PDF 文本可靠映射'
-                : '机构信息未在 arXiv HTML 中可靠披露']
+            affiliations: [unavailableAffiliation]
         })),
         sourceDomSha256: sourceSha256
     });
@@ -7951,13 +7961,14 @@ async function analyzePaperDeepInternal(paper) {
     stripManualAnalysisProvenance(paper);
     sanitizePaperImageRecovery(paper);
     const arxivId = getPaperArxivId(paper);
+    const conferenceSource = require('./lib/conference-analysis-context.js').getConferenceAnalysisSource(paper);
     const previousScore = Number.parseFloat(paper?.parsed?.score);
     const analysisManifest = createAnalysisRecoveryManifest(paper);
     console.log(`    [deep] 获取全文: ${arxivId}`);
 
     // 优先使用预提供的全文（ICML/会议场景），否则从 arXiv 抓取
-    let fullText = paper.fullText || paper.pdfText || '';
-    let sourceDetails = {
+    let fullText = conferenceSource?.text || paper.fullText || paper.pdfText || '';
+    let sourceDetails = conferenceSource || {
         source: fullText ? (paper.fullText ? 'provided_full_text' : 'provided_pdf_text') : 'unavailable',
         sourceId: '',
         imageInfos: [],
@@ -8517,7 +8528,7 @@ async function analyzePaperDeepInternal(paper) {
     // 第3.62轮：新生成内容的核心摘要深度目标使用单节修复。
     // 该阶段不属于历史 canonical 的通用 80 字符兼容门禁；只有真正执行
     // 新分析/续跑时才写入 checkpoint，且不得借摘要不足触发完整 13 节重写。
-    const coreSummaryRepairStage = prepareTextRecoveryStage(
+    let coreSummaryRepairStage = prepareTextRecoveryStage(
         paper,
         analysisManifest,
         'coreSummaryRepair',
@@ -8525,6 +8536,26 @@ async function analyzePaperDeepInternal(paper) {
         rawTextForAnalysis
     );
     analysis = coreSummaryRepairStage.analysis;
+    // 旧的单节 checkpoint 若已经满足当前详细摘要合同，直接复用，避免仅因
+    // 校验器升级再次付费；只有实际不合格时才失效该阶段及下游并局部重做。
+    if (isRecoveryStageComplete(analysisManifest, 'coreSummaryRepair')
+        && getCoreSummaryDetailIssue(analysis)) {
+        invalidateRecoveryStageIfChanged(
+            paper,
+            analysisManifest,
+            'coreSummaryRepair',
+            `${coreSummaryRepairStage.fingerprint}:invalid-${CORE_SUMMARY_CONTRACT_VERSION}`
+        );
+        analysis = paper.analysisCheckpoint || coreSummaryRepairStage.inputAnalysis;
+        coreSummaryRepairStage = prepareTextRecoveryStage(
+            paper,
+            analysisManifest,
+            'coreSummaryRepair',
+            analysis,
+            rawTextForAnalysis
+        );
+        analysis = coreSummaryRepairStage.analysis;
+    }
     if (!isRecoveryStageComplete(analysisManifest, 'coreSummaryRepair')) {
         const missingCoreSummary = getMissingRequiredSections(analysis).includes('核心摘要');
         const duplicateCoreSummary = getDuplicateRequiredSections(analysis).includes('核心摘要');
@@ -8545,6 +8576,9 @@ async function analyzePaperDeepInternal(paper) {
             }
             markRecoveryStage(analysisManifest, 'coreSummaryRepair', changed ? 'complete' : 'not_needed', {
                 targetMinimumChineseChars: CORE_SUMMARY_MIN_CHINESE_CHARS,
+                targetMaximumChineseChars: CORE_SUMMARY_MAX_CHINESE_CHARS,
+                targetMinimumSentences: CORE_SUMMARY_MIN_SENTENCES,
+                targetMaximumSentences: CORE_SUMMARY_MAX_SENTENCES,
                 deferredToStructureRepair: Boolean(summaryIssue && (missingCoreSummary || duplicateCoreSummary)),
                 evidenceChars: coreSummaryRepairStage.evidenceChars,
                 evidenceSha256: coreSummaryRepairStage.evidenceSha256,
@@ -9674,14 +9708,26 @@ function normalizeAnalysisStructure(analysis) {
     return updated;
 }
 
+const CORE_SUMMARY_CONTRACT_VERSION = 'core-summary-detailed-v2';
 const CORE_SUMMARY_MIN_CHINESE_CHARS = 320;
+const CORE_SUMMARY_MAX_CHINESE_CHARS = 600;
+const CORE_SUMMARY_MIN_SENTENCES = 6;
+const CORE_SUMMARY_MAX_SENTENCES = 9;
 
 function getCoreSummaryDetailIssue(analysis) {
     const summary = extractSectionByTitle(analysis, '核心摘要');
     const count = countChineseChars(summary);
-    return count >= CORE_SUMMARY_MIN_CHINESE_CHARS
-        ? null
-        : `核心摘要未达到新默认深度: ${count}/${CORE_SUMMARY_MIN_CHINESE_CHARS} 个中文字符`;
+    const sentences = (summary.match(/[。！？!?]/g) || []).length;
+    const issues = [];
+    if (count < CORE_SUMMARY_MIN_CHINESE_CHARS) {
+        issues.push(`中文字符不足: ${count}/${CORE_SUMMARY_MIN_CHINESE_CHARS}`);
+    } else if (count > CORE_SUMMARY_MAX_CHINESE_CHARS) {
+        issues.push(`中文字符过多: ${count}/${CORE_SUMMARY_MAX_CHINESE_CHARS}`);
+    }
+    if (sentences < CORE_SUMMARY_MIN_SENTENCES || sentences > CORE_SUMMARY_MAX_SENTENCES) {
+        issues.push(`句数必须为 ${CORE_SUMMARY_MIN_SENTENCES}–${CORE_SUMMARY_MAX_SENTENCES}，当前 ${sentences}`);
+    }
+    return issues.length > 0 ? `核心摘要未达到新默认深度: ${issues.join('；')}` : null;
 }
 
 function sectionExteriorBytes(analysis, title) {

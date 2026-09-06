@@ -50,6 +50,10 @@ test('live authority creates an isolated fresh-engine run without old generated 
     assert.equal(history.recoverHistoricalArxivRun({ runId: RUN_ID, date: '2026-09-04',
         arxivId: '2609.03622', rootDir: runRoot }).recovered, true);
     const generic = authority.loadAuthorityHandle({ authorityRoot, authorityName: 'arxiv-2609.03622.json' });
+    assert.equal(history.verifyHistoricalArxivRunAuthority({ runId: RUN_ID, rootDir: runRoot,
+        authorityHandle: prepared.authorityHandle }), true);
+    assert.throws(() => history.verifyHistoricalArxivRunAuthority({ runId: RUN_ID, rootDir: runRoot,
+        authorityHandle: generic }), /production-authorized/);
     assert.throws(() => history.prepareHistoricalArxivRun({ authorityHandle: generic, metadata,
         metadataProof: proof, date: '2026-09-04', rootDir: runRoot }), /production-authorized/);
 });
@@ -115,4 +119,10 @@ test('isolated run executes the fresh analysis callbacks and persists its own ca
     const canonical = fresh.readRegularJson(path.join(runRoot, RUN_ID, 'analysis.json')).value;
     assert.equal(canonical.status, 'complete');
     assert.equal(canonical.papers[0].analysis, 'fresh source analysis');
+    assert.equal(history.recoverHistoricalArxivRun({ runId: RUN_ID, date: '2026-09-04',
+        arxivId: '2609.03622', rootDir: runRoot }).sealedComplete, true);
+    canonical.papers[0].analysis = 'tampered after seal';
+    fs.writeFileSync(path.join(runRoot, RUN_ID, 'analysis.json'), JSON.stringify(canonical));
+    assert.throws(() => history.recoverHistoricalArxivRun({ runId: RUN_ID, date: '2026-09-04',
+        arxivId: '2609.03622', rootDir: runRoot }), /does not seal/);
 });

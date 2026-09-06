@@ -94,6 +94,8 @@ function prepareHistoricalArxivRun({ authorityHandle, metadata, metadataProof, m
             || fresh.stableHash(loaded.inputs.papers[0]) !== fresh.stableHash(paper)) {
             fail('existing runId belongs to different source, metadata, date, or paper set');
         }
+        recoverHistoricalArxivRun({ runId, date, arxivId: id, rootDir: absoluteRoot });
+        verifyHistoricalArxivRunAuthority({ runId, rootDir: absoluteRoot, authorityHandle });
         return { runId, runDir, paperId: `arxiv:${id}`, status: 'recovered',
             canonicalPath: path.join(runDir, 'analysis.json') };
     }
@@ -163,9 +165,42 @@ function recoverHistoricalArxivRun({ runId, date, arxivId, rootDir } = {}) {
         finally { if (fd !== undefined) fs.closeSync(fd); }
         if (sha256(bytes) !== loaded.run.baseline.metadata.fileSha256) fail('official metadata artifact SHA drifted');
     }
+    const analysisFile = fresh.readRegularJson(path.join(runDir, 'analysis.json'));
+    const sealedComplete = loaded.run.status === 'complete';
+    if (sealedComplete && (loaded.analysis.status !== 'complete'
+        || !SHA_RE.test(String(loaded.run.analysisSha256 || ''))
+        || loaded.run.analysisSha256 !== analysisFile.sha256)) {
+        fail('complete historical run does not seal its canonical analysis bytes');
+    }
     return { runId, runDir, paperId: `arxiv:${arxivId}`, status: loaded.run.status,
-        canonicalPath: path.join(runDir, 'analysis.json'), recovered: true };
+        canonicalPath: path.join(runDir, 'analysis.json'), sealedComplete, recovered: true };
+}
+
+function verifyHistoricalArxivRunAuthority({ runId, rootDir, authorityHandle } = {}) {
+    const loaded = fresh.loadRun(runId, { rootDir: path.resolve(rootDir) });
+    const replayed = authorityApi.replayAuthorityHandle(authorityHandle, { requireProduction: true });
+    const authority = authorityApi.authorityHandleSnapshot(replayed);
+    const id = loaded.run.paperIds[0]; const expected = loaded.run.sourceExpectations[id];
+    if (loaded.run.paperIds.length !== 1 || loaded.run.baseline.contract !== BASELINE_CONTRACT
+        || authority.productionAuthorized !== true || authority.authority.paperId !== `arxiv:${id}`
+        || authority.authorityName !== loaded.run.baseline.authorityName
+        || authority.authorityFileSha256 !== loaded.run.baseline.authorityFileSha256
+        || authority.authority.authoritySha256 !== loaded.run.baseline.authoritySha256
+        || authority.sourceSnapshotSha256 !== loaded.run.baseline.authoritySourceSnapshotSha256
+        || authority.fulltextSha256 !== loaded.run.baseline.fulltextSha256
+        || expected.authorityFileSha256 !== authority.authorityFileSha256
+        || expected.authoritySha256 !== authority.authority.authoritySha256
+        || expected.authoritySourceSnapshotSha256 !== authority.sourceSnapshotSha256) {
+        fail('live arXiv authority differs from the prepared historical run');
+    }
+    const details = arxivApi.readLiveProductionSourceDetails(authorityHandle);
+    if (sha256(Buffer.from(details.text, 'utf8')) !== expected.sourceSha256
+        || details.structuredArtifacts?.payloadSha256 !== expected.structuredArtifactsSha256) {
+        fail('live arXiv source details differ from the prepared historical run');
+    }
+    return true;
 }
 
 module.exports = { BASELINE_CONTRACT, METADATA_CONTRACT, prepareHistoricalArxivRun,
-    recoverHistoricalArxivRun, normalizedMetadata, normalizedMetadataProof };
+    recoverHistoricalArxivRun, verifyHistoricalArxivRunAuthority,
+    normalizedMetadata, normalizedMetadataProof };

@@ -24,10 +24,12 @@ const CONFERENCE_PROTECTED_KEYS = [
     'conference-ledgers',
     'conference-sources',
     'conference-runs',
-    'conference-executions'
+    'conference-executions',
+    'conference-analysis-executions'
 ];
 const HISTORY_PROTECTED_KEYS = ['historical-page-inventories', 'page-source-crosswalks',
-    'historical-arxiv-batches', 'historical-analysis-schedulers', 'historical-taxonomy-assignments', 'paper-source-authorities'];
+    'historical-arxiv-batches', 'historical-analysis-schedulers', 'historical-taxonomy-assignments',
+    'historical-page-staging', 'historical-daily-aggregates', 'paper-source-authorities'];
 
 const NOW_MS = Date.parse('2026-09-02T00:00:00.000Z');
 const OLD_MS = NOW_MS - 40 * 24 * 60 * 60 * 1000;
@@ -52,11 +54,14 @@ function makeProject() {
         'data/runtime/conference-staging',
         'data/runtime/conference-runs',
         'data/runtime/conference-executions',
+        'data/runtime/conference-analysis-executions',
         'data/runtime/historical-page-inventories',
         'data/runtime/page-source-crosswalks',
         'data/runtime/historical-arxiv-batches',
         'data/runtime/historical-analysis-schedulers',
         'data/runtime/historical-taxonomy-assignments',
+        'data/runtime/historical-page-staging',
+        'data/runtime/historical-daily-aggregates',
         'data/runtime/paper-source-authorities',
         'data/archive',
         'logs'

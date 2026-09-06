@@ -1367,6 +1367,25 @@
       "replacedBy": null
     },
     {
+      "id": "method.end-to-end-learning",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "端到端学习",
+        "en": "End-to-end learning"
+      },
+      "aliases": [
+        "端到端",
+        "端到端训练",
+        "End-to-end",
+        "E2E"
+      ],
+      "broaderId": null,
+      "definition": "以输入到目标输出的统一可微目标联合学习原本可由多个独立模块完成的映射。",
+      "scopeNote": "只在端到端联合优化本身是主要方法时使用；仅描述系统输入输出直连时使用setting.end-to-end，且不能替代Transformer等具体架构。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
       "id": "method.autoregressive",
       "facet": "method",
       "preferredLabel": {

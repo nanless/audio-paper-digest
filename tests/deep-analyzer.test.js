@@ -3008,8 +3008,24 @@ has_dataset: 否
         );
 
         assert.match(getCoreSummaryDetailIssue(placeholder), /0\/320/);
+        assert.match(getCoreSummaryDetailIssue(placeholder), /当前 0/);
         assert.strictEqual(getRepairableAnalysisStructureIssues(placeholder)
             .some(issue => issue.startsWith('核心摘要内容不足')), false);
+    });
+
+    it('核心摘要深度门禁同时限制 320–600 中文字符与 6–9 句', () => {
+        const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
+        const withSummary = summary => validAnalysisText().replace(
+            /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
+            `## 核心摘要\n${summary}\n`
+        );
+        const sixSentences = Array.from({ length: 6 }, (_, index) =>
+            `第${index + 1}句说明论文问题方法证据边界与应用条件并保留足够具体的机制描述和量化结论以支持独立判断，同时交代比较对象及结论适用范围。`
+        ).join('');
+        assert.strictEqual(getCoreSummaryDetailIssue(withSummary(sixSentences)), null);
+        assert.match(getCoreSummaryDetailIssue(withSummary(sixSentences.replace(/。/g, '，'))), /当前 0/);
+        assert.match(getCoreSummaryDetailIssue(withSummary(`${sixSentences}${'补充说明。'.repeat(4)}`)), /当前 10/);
+        assert.match(getCoreSummaryDetailIssue(withSummary(`${sixSentences}${'扩展证据'.repeat(100)}`)), /中文字符过多/);
     });
 
     it('核心摘要局部修复达到 320 中文字符且其他 12 节逐字不变', async () => {

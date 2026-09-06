@@ -58,6 +58,19 @@ test('completed historical canonical maps exact concepts, prunes task ancestors,
     assert.equal(assignment.assignmentSha256, api.stableHash(body));
 });
 
+test('2403.14817 #端到端 resolves as the primary method despite the distinct setting label', t => {
+    const analysis = validAnalysisText()
+        .replace('primary_method_tag: #Transformer', 'primary_method_tag: #端到端')
+        .replace('#语音识别 #Transformer #鲁棒性', '#语音识别 #端到端 #鲁棒性')
+        .replace('主方法标签: #Transformer', '主方法标签: #端到端');
+    const f = runFixture(t, [paper('2403.14817', analysis)]);
+    const assignment = api.buildAssignments({ runHandle: f.handle, taxonomy: registry() })[0];
+    assert.equal(assignment.status, 'assigned');
+    assert.equal(assignment.primaryMethodId, 'method.end-to-end-learning');
+    assert.ok(assignment.conceptIds.includes('method.end-to-end-learning'));
+    assert.ok(!assignment.blockedReasons.some(reason => reason.includes('ambiguous:#端到端')));
+});
+
 test('unknown, cross-facet ambiguous, deprecated, or missing primary labels become blocked', t => {
     const unknownAnalysis = validAnalysisText().replaceAll('#鲁棒性', '#在线');
     const f = runFixture(t, [paper('2609.03622', unknownAnalysis)]);
@@ -103,8 +116,22 @@ test('CLI supports batch and single dry-run with zero writes; apply writes priva
     assert.equal(applied.outputs.length, 1);
     assert.equal(fs.statSync(f.output).mode & 0o777, 0o700);
     assert.equal(fs.statSync(applied.outputs[0].filename).mode & 0o777, 0o600);
+    assert.match(path.basename(applied.outputs[0].filename), new RegExp(`^arxiv-2609\\.03622\\.taxonomy\\.${registry().registrySha256}\\.json$`));
     assert.equal(cli.main(['assign', '--apply', '--analysis-run', RUN_ID,
         '--paper-id', 'arxiv:2609.03622'], runtime).outputs[0].fileSha256, applied.outputs[0].fileSha256);
     assert.throws(() => cli.parseArgs(['assign', '--dry-run', '--analysis-run', RUN_ID,
         '--paper-id', '../escape']));
+});
+
+test('registry upgrades create a new immutable artifact beside the previous audit record', t => {
+    const f = runFixture(t); const firstTaxonomy = registry();
+    const first = api.buildAssignments({ runHandle: f.handle, taxonomy: firstTaxonomy });
+    const firstOutput = api.writeAssignments({ outputRoot: f.output, assignments: first })[0];
+    const upgraded = structuredClone(firstTaxonomy); upgraded.registrySha256 = 'f'.repeat(64);
+    const second = api.buildAssignments({ runHandle: f.handle, taxonomy: upgraded });
+    const secondOutput = api.writeAssignments({ outputRoot: f.output, assignments: second })[0];
+    assert.notEqual(firstOutput.filename, secondOutput.filename);
+    assert.equal(fs.existsSync(firstOutput.filename), true);
+    assert.equal(fs.existsSync(secondOutput.filename), true);
+    assert.throws(() => api.assignmentFilename('arxiv:2609.03622'), /registry SHA/);
 });

@@ -12,9 +12,11 @@ test('all shared taxonomy labels, aliases and ancestors agree across Node and Py
         labels.push(label,`#${label}`,`  ${label}  `,label.replace(/[a-z]/g,c=>c.toUpperCase()));
     }
     labels.push('未说明','not-a-real-topic','#说话人分离','在线','ＬｏＲＡ','参数高效微调','数据增强','说话人识别');
-    const input={labels,ids:taxonomy.concepts.map(c=>c.id),groups:taxonomy.concepts.map(c=>[c.id,...ancestors(taxonomy,c.id)])};
+    const faceted=[['#端到端','method'],['#端到端','setting'],['E2E','method']];
+    const input={labels,faceted,ids:taxonomy.concepts.map(c=>c.id),groups:taxonomy.concepts.map(c=>[c.id,...ancestors(taxonomy,c.id)])};
     const expected={version:taxonomy.version,registrySha256:taxonomy.registrySha256,
         resolved:labels.map(label=>resolveLabel(taxonomy,label)?.id||null),
+        faceted:faceted.map(([label,facet])=>resolveLabel(taxonomy,label,facet)?.id||null),
         ancestors:input.ids.map(id=>ancestors(taxonomy,id)),pruned:input.groups.map(ids=>pruneAncestors(taxonomy,ids))};
     const script=[
         'import json, sys',
@@ -23,6 +25,7 @@ test('all shared taxonomy labels, aliases and ancestors agree across Node and Py
         't=load_taxonomy(); p=json.load(sys.stdin)',
         'r={"version":t["version"],"registrySha256":t["registrySha256"],',
         '"resolved":[(resolve_label(t,s) or {}).get("id") for s in p["labels"]],',
+        '"faceted":[(resolve_label(t,s,f) or {}).get("id") for s,f in p["faceted"]],',
         '"ancestors":[ancestors(t,s) for s in p["ids"]],',
         '"pruned":[prune_ancestors(t,s) for s in p["groups"]]}',
         'print(json.dumps(r,ensure_ascii=False))'

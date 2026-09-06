@@ -70,6 +70,9 @@ test('ancestry and pruning preserve leaf order and unrelated branches', () => {
 
 test('cross-facet ambiguity returns null until the facet is supplied', () => {
     const r = raw();
+    assert.equal(resolveLabel(r, '#端到端'), null);
+    assert.equal(resolveLabel(r, '#端到端', 'method').id, 'method.end-to-end-learning');
+    assert.equal(resolveLabel(r, '#端到端', 'setting').id, 'setting.end-to-end');
     concept(r, 'method.transformer').aliases.push('shared-test-label');
     concept(r, 'task.asr').aliases.push('shared-test-label');
     validateTaxonomy(r);

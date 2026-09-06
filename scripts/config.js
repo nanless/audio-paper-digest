@@ -187,10 +187,13 @@ const FILES = {
     conferenceStagingDir: path.join(DATA_DIR, 'runtime', 'conference-staging'),
     conferenceRunsDir: path.join(DATA_DIR, 'runtime', 'conference-runs'),
     conferenceExecutionsDir: path.join(DATA_DIR, 'runtime', 'conference-executions'),
+    conferenceAnalysisDir: path.join(DATA_DIR, 'runtime', 'conference-analysis-executions'),
     historicalPageInventoryDir: path.join(DATA_DIR, 'runtime', 'historical-page-inventories'),
     pageSourceCrosswalkDir: path.join(DATA_DIR, 'runtime', 'page-source-crosswalks'),
     historicalArxivBatchDir: path.join(DATA_DIR, 'runtime', 'historical-arxiv-batches'),
     historicalTaxonomyAssignmentDir: path.join(DATA_DIR, 'runtime', 'historical-taxonomy-assignments'),
+    historicalPageStagingDir: path.join(DATA_DIR, 'runtime', 'historical-page-staging'),
+    historicalDailyAggregateDir: path.join(DATA_DIR, 'runtime', 'historical-daily-aggregates'),
     historicalAnalysisSchedulerDir: path.join(DATA_DIR, 'runtime', 'historical-analysis-schedulers'),
     // Immutable official-source request/snapshot/fulltext/receipt bundles used
     // by the historical page crosswalk. Never archive with daily current/.

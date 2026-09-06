@@ -31,6 +31,7 @@ function groupsFromCrosswalk(state) {
         const cohortDates = [...new Set(group.pageKeys.map(key => pages.get(key)?.cohortDate))].sort();
         if (!cohortDates.length || cohortDates.some(date => !/^\d{4}-\d{2}-\d{2}$/.test(date || ''))) throw new Error(`${group.paperId} has invalid cohort dates`);
         return { paperId: group.paperId, arxivId, groupSha256: group.groupSha256,
+            identitySha256: group.identitySha256, identityRecordSha256: group.identityRecordSha256,
             pageKeys: group.pageKeys.slice(), cohortDates, analysisDate: cohortDates[0],
             authorityName: authorityNames[0], authorityFileSha256: authorityShas[0],
             runId: deterministicRunId(state.crosswalkId, group.paperId) };
@@ -45,6 +46,7 @@ function defaultDependencies() {
         fetchMetadata: id => require('./arxiv-metadata-source.js').fetchOfficialArxivMetadata(id),
         prepareAuthority: args => require('./arxiv-source-authority.js').prepareArxivSourceAuthority(args),
         prepareRun: args => history.prepareHistoricalArxivRun(args), recoverRun: args => history.recoverHistoricalArxivRun(args),
+        verifyRunAuthority: args => history.verifyHistoricalArxivRunAuthority(args),
         analyzeRun: args => fresh.analyzeRewrite(args), runStatus: args => fresh.rewriteStatus(args),
         updateLocked: engine.updateJsonFileLocked, now: () => new Date().toISOString() };
 }
@@ -63,8 +65,18 @@ function syncCheckpoint(filename, crosswalk, groups, deps) {
         const items = { ...prior.items };
         for (const group of groups) {
             const existing = items[group.paperId];
-            if (existing && (existing.groupSha256 !== group.groupSha256
-                || existing.authorityFileSha256 !== group.authorityFileSha256)) {
+            const legacyIdentityBinding = existing && existing.identitySha256 === undefined
+                && existing.identityRecordSha256 === undefined
+                && existing.groupSha256 === require('./fresh-rewrite-run.js').stableHash({
+                    paperId: group.paperId, identitySha256: group.identitySha256,
+                    identityRecordSha256: group.identityRecordSha256,
+                    pageKeys: existing.pageKeys
+                });
+            if (existing && (existing.authorityFileSha256 !== group.authorityFileSha256
+                || existing.authorityName !== group.authorityName
+                || !legacyIdentityBinding && existing.identitySha256 !== group.identitySha256
+                || !legacyIdentityBinding && existing.identityRecordSha256 !== group.identityRecordSha256
+                || existing.pageKeys.some(pageKey => !group.pageKeys.includes(pageKey)))) {
                 throw new Error(`${group.paperId} scheduler binding drifted`);
             }
             if (existing && existing.runId !== group.runId) {
@@ -76,7 +88,9 @@ function syncCheckpoint(filename, crosswalk, groups, deps) {
                 if (!untouchedLegacyId) throw new Error(`${group.paperId} scheduler binding drifted`);
                 items[group.paperId] = { ...group, status: 'pending', lastError: null };
             } else {
-                items[group.paperId] = existing || { ...group, status: 'pending', lastError: null };
+                items[group.paperId] = existing ? { ...existing, ...group,
+                    analysisDate: existing.analysisDate, status: existing.status, lastError: existing.lastError }
+                    : { ...group, status: 'pending', lastError: null };
             }
         }
         return { ...prior, crosswalkStateSha256: crosswalk.stateSha256,
@@ -104,15 +118,22 @@ async function runHistoricalScheduler(options, overrides = {}) {
             pageCount: group.pageKeys.length, cohortDates: group.cohortDates })) };
     const filename = schedulerPath(files.historicalAnalysisSchedulerDir, options.crosswalkId);
     let checkpoint = syncCheckpoint(filename, crosswalk, groups, deps);
-    for (const group of groups) {
+    const effectiveGroups = groups.map(group => ({ ...group,
+        analysisDate: checkpoint.items[group.paperId].analysisDate }));
+    for (const group of effectiveGroups) {
         const recovered = deps.recoverRun({ runId: group.runId, date: group.analysisDate,
             arxivId: group.arxivId, rootDir: files.freshRewriteRunsDir });
-        if (!recovered) continue;
-        let status = recovered.status;
-        if (deps.runStatus({ runId: group.runId }).analysisRemainingIds?.length === 0) status = 'complete';
+        if (!recovered) {
+            if (checkpoint.items[group.paperId].status !== 'pending') {
+                checkpoint = updateItem(filename, group, { status: 'pending',
+                    lastError: 'analysis run missing; checkpoint completion was not trusted' }, deps);
+            }
+            continue;
+        }
+        const status = recovered.sealedComplete === true ? 'complete' : recovered.status;
         checkpoint = updateItem(filename, group, { status, lastError: null }, deps);
     }
-    const candidates = groups.filter(group => {
+    const candidates = effectiveGroups.filter(group => {
         const status = checkpoint.items[group.paperId].status;
         return options.stage === 'prepare-only' ? !['sources_ready', 'complete', 'analysis_partial', 'analyzing'].includes(status) : status !== 'complete';
     }).slice(0, maximum);
@@ -121,13 +142,19 @@ async function runHistoricalScheduler(options, overrides = {}) {
         try {
             let recovered = deps.recoverRun({ runId: group.runId, date: group.analysisDate,
                 arxivId: group.arxivId, rootDir: files.freshRewriteRunsDir });
+            let live;
             if (!recovered) {
                 const metadata = await deps.fetchMetadata(group.arxivId);
-                const live = await deps.prepareAuthority({ authorityRoot: files.paperSourceAuthorityDir,
+                live = await deps.prepareAuthority({ authorityRoot: files.paperSourceAuthorityDir,
                     arxivId: group.arxivId, authorityName: group.authorityName, apply: true, requireLiveAuthorization: true });
                 recovered = deps.prepareRun({ authorityHandle: live.authorityHandle, metadata: metadata.metadata,
                     metadataProof: metadata.proof, metadataArtifact: metadata.rawBytes, date: group.analysisDate,
                     rootDir: files.freshRewriteRunsDir, runId: group.runId });
+            } else {
+                live = await deps.prepareAuthority({ authorityRoot: files.paperSourceAuthorityDir,
+                    arxivId: group.arxivId, authorityName: group.authorityName, apply: true, requireLiveAuthorization: true });
+                deps.verifyRunAuthority({ runId: group.runId, rootDir: files.freshRewriteRunsDir,
+                    authorityHandle: live.authorityHandle });
             }
             updateItem(filename, group, { status: recovered.status === 'recovered' ? 'sources_ready' : recovered.status,
                 lastError: null }, deps); prepared.push(group);
@@ -142,7 +169,12 @@ async function runHistoricalScheduler(options, overrides = {}) {
                 const group = prepared[cursor++];
                 try {
                     const result = await deps.analyzeRun({ runId: group.runId, concurrency: 1 });
-                    updateItem(filename, group, { status: result.status === 'complete' ? 'complete' : 'analysis_partial', lastError: null }, deps);
+                    const sealed = deps.recoverRun({ runId: group.runId, date: group.analysisDate,
+                        arxivId: group.arxivId, rootDir: files.freshRewriteRunsDir });
+                    if (result.status === 'complete' && sealed?.sealedComplete !== true) {
+                        throw new Error('analysis reported complete without a sealed run proof');
+                    }
+                    updateItem(filename, group, { status: sealed?.sealedComplete === true ? 'complete' : 'analysis_partial', lastError: null }, deps);
                 } catch (error) {
                     updateItem(filename, group, { status: 'analysis_failed', lastError: String(error.message).slice(0, 2000) }, deps);
                 }
