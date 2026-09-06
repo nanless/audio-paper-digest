@@ -1,0 +1,56 @@
+{
+  "contract": "paper-identity-v1",
+  "vectors": [
+    {
+      "name": "arxiv-official-with-display-citation",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "arxiv",
+        "canonicalId": "arxiv:2609.03622",
+        "arxivId": "2609.03622",
+        "conference": null,
+        "externalId": null,
+        "source": { "status": "official", "url": "https://arxiv.org/abs/2609.03622" },
+        "citation": { "title": "Test-Time Adaptation for Speech Enhancement", "authors": ["Ada Example", "Bohr Example"], "venue": null, "year": 2026 }
+      },
+      "normalized": {"contract":"paper-identity-v1","kind":"arxiv","canonicalId":"arxiv:2609.03622","arxivId":"2609.03622","conference":null,"externalId":null,"source":{"status":"official","url":"https://arxiv.org/abs/2609.03622"},"citation":{"title":"Test-Time Adaptation for Speech Enhancement","authors":["Ada Example","Bohr Example"],"venue":null,"year":2026}},
+      "stableJson": "{\"arxivId\":\"2609.03622\",\"canonicalId\":\"arxiv:2609.03622\",\"citation\":{\"authors\":[\"Ada Example\",\"Bohr Example\"],\"title\":\"Test-Time Adaptation for Speech Enhancement\",\"venue\":null,\"year\":2026},\"conference\":null,\"contract\":\"paper-identity-v1\",\"externalId\":null,\"kind\":\"arxiv\",\"source\":{\"status\":\"official\",\"url\":\"https://arxiv.org/abs/2609.03622\"}}",
+      "identitySha256": "97e5c69dd43248dc7a96b41b88cf6e691b2bbe2a1ca93feb745e66470bbb9891",
+      "recordSha256": "fe1ab6d85db3b68070b7b430845e6723f4be2753ff810a0f4e8f8cd7025e110d"
+    },
+    {
+      "name": "icassp-official-conference-identity",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": { "slug": "icassp", "year": 2026 },
+        "externalId": { "scheme": "icassp-arnumber", "value": "10910001" },
+        "source": { "status": "official", "url": "https://ieeexplore.ieee.org/document/10910001" },
+        "citation": { "title": "A Conference Paper", "authors": ["Chen Example"], "venue": "ICASSP 2026", "year": 2026 }
+      },
+      "normalized": {"contract":"paper-identity-v1","kind":"conference","canonicalId":"conference:icassp:2026:icassp-arnumber:10910001","arxivId":null,"conference":{"slug":"icassp","year":2026},"externalId":{"scheme":"icassp-arnumber","value":"10910001"},"source":{"status":"official","url":"https://ieeexplore.ieee.org/document/10910001"},"citation":{"title":"A Conference Paper","authors":["Chen Example"],"venue":"ICASSP 2026","year":2026}},
+      "stableJson": "{\"arxivId\":null,\"canonicalId\":\"conference:icassp:2026:icassp-arnumber:10910001\",\"citation\":{\"authors\":[\"Chen Example\"],\"title\":\"A Conference Paper\",\"venue\":\"ICASSP 2026\",\"year\":2026},\"conference\":{\"slug\":\"icassp\",\"year\":2026},\"contract\":\"paper-identity-v1\",\"externalId\":{\"scheme\":\"icassp-arnumber\",\"value\":\"10910001\"},\"kind\":\"conference\",\"source\":{\"status\":\"official\",\"url\":\"https://ieeexplore.ieee.org/document/10910001\"}}",
+      "identitySha256": "52dec963af3d879f07f7449d8dfa17e377ec398705f603e8d4946882a87735bf",
+      "recordSha256": "4e236466e7d417ae579800f151e4a8bc66df7b692b1abcf74301c8fda9fd4bdb"
+    },
+    {
+      "name": "openreview-identity-with-unavailable-source",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:iclr:2026:openreview-forum-id:AbCdef_12",
+        "arxivId": null,
+        "conference": { "slug": "iclr", "year": 2026 },
+        "externalId": { "scheme": "openreview-forum-id", "value": "AbCdef_12" },
+        "source": { "status": "unavailable", "url": null },
+        "citation": null
+      },
+      "normalized": {"contract":"paper-identity-v1","kind":"conference","canonicalId":"conference:iclr:2026:openreview-forum-id:AbCdef_12","arxivId":null,"conference":{"slug":"iclr","year":2026},"externalId":{"scheme":"openreview-forum-id","value":"AbCdef_12"},"source":{"status":"unavailable","url":null},"citation":null},
+      "stableJson": "{\"arxivId\":null,\"canonicalId\":\"conference:iclr:2026:openreview-forum-id:AbCdef_12\",\"citation\":null,\"conference\":{\"slug\":\"iclr\",\"year\":2026},\"contract\":\"paper-identity-v1\",\"externalId\":{\"scheme\":\"openreview-forum-id\",\"value\":\"AbCdef_12\"},\"kind\":\"conference\",\"source\":{\"status\":\"unavailable\",\"url\":null}}",
+      "identitySha256": "71c9ebf1e350356e9c75059458cf2107cce1071c17d4a8132932d923421c7fe9",
+      "recordSha256": "ed4e89663d6212ac7c9af3493c2923502142fbebccf38e18b7bffa18791954e8"
+    }
+  ]
+}

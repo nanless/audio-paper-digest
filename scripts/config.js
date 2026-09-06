@@ -173,6 +173,7 @@ const FILES = {
     conferenceSourceLedgerDir: path.join(DATA_DIR, 'runtime', 'conference-ledgers'),
     conferenceSourceCacheDir: path.join(DATA_DIR, 'runtime', 'conference-sources'),
     conferenceRunsDir: path.join(DATA_DIR, 'runtime', 'conference-runs'),
+    conferenceExecutionsDir: path.join(DATA_DIR, 'runtime', 'conference-executions'),
     apiReaderAttemptsDir: path.join(DATA_DIR, 'runtime', 'reader-attempts'),
     papers: path.join(CURRENT_DIR, 'papers.json'),
     papersLegacy: path.join(DATA_DIR, 'papers.json'),

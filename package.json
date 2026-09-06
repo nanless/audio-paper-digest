@@ -19,6 +19,8 @@
     "conference:validate-ledger": "node scripts/conference-tools.js validate-ledger",
     "conference:verify-ledger": "node scripts/conference-tools.js verify-ledger",
     "conference:validate-run": "node scripts/conference-tools.js validate-run",
+    "conference:import": "node scripts/conference-import.js",
+    "conference:execution": "node scripts/conference-execution.js",
     "rewrite:source": "node scripts/rewrite-from-source.js",
     "paper:rethink": "node scripts/paper-rethink-server.js",
     "deep": "node scripts/deep-analysis-only.js",
