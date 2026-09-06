@@ -17,6 +17,7 @@ if str(MANUAL_SCRIPTS_DIR) not in sys.path:
 from publish_common import (
     MANUAL_DEPTH_CONTRACT_VERSION_V5,
     PublishDataValidationError,
+    publish_table_currency_spans,
 )
 from tutorial_payload_verifier import (
     FRESH_AUTHORING_CONTRACT,
@@ -166,7 +167,9 @@ def math_and_emphasis_issues(text, label):
         issues.append(
             f'{label} 包含裸 $$；块级公式必须使用 \\[…\\] 而非 $$…$$'
         )
-    if re.search(r'(?<![\\$])\$(?!\$)', clean):
+    currency_dollars = {start for start, _end in publish_table_currency_spans(clean)}
+    if any(match.start() not in currency_dollars
+           for match in re.finditer(r'(?<![\\$])\$(?!\$)', clean)):
         issues.append(
             f'{label} 包含裸 $；行内公式必须使用 \\(…\\) 而非 $…$'
         )

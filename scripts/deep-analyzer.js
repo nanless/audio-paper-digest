@@ -3569,6 +3569,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
 
 async function finalizeOperatorApiReaderArticleFromSource(paper, sourceDetails, draft, provenance) {
     const previousStage = structuredClone(paper.analysisManifest?.stages?.apiReaderArticle);
+    const parentAnalysis = paper.analysis;
     if (provenance?.contract !== 'reader-signed-operator-v1' || provenance.executionKind !== 'operator'
         || provenance.newApiRequests !== 0 || !require('./analysis-engine.js').apiReaderV3BindsCanonical(paper)
         || provenance.parentPaperSha256 !== stableFingerprint(paper)
@@ -3578,6 +3579,10 @@ async function finalizeOperatorApiReaderArticleFromSource(paper, sourceDetails, 
         || provenance.sourceSha256 !== paper.sourceSha256
         || provenance.sourceSnapshotSha256 !== sourceDetails.freshSourceDescriptor?.sourceSnapshotSha256) {
         throw new Error('Operator finalization requires a valid signed parent and explicit execution provenance');
+    }
+    if (typeof parentAnalysis === 'string'
+        && applyApiReaderResourceAvailability(parentAnalysis, paper.apiReaderResources) !== parentAnalysis) {
+        throw new Error('Reader operator patch requires explicit resource synchronization first; canonical analysis is outside its scope');
     }
     require('./lib/reader-signed-draft.js').recoverSignedReaderDraft({ paper, sourceDetails, runId: provenance.runId });
     if (crypto.createHash('sha256').update(JSON.stringify(draft)).digest('hex') !== provenance.afterDraftSha256) {
@@ -3610,6 +3615,9 @@ async function finalizeOperatorApiReaderArticleFromSource(paper, sourceDetails, 
             ...(previousStage.transportFailures !== undefined ? { transportFailures: previousStage.transportFailures } : {})
         }
     });
+    if (finalized.analysis !== parentAnalysis) {
+        throw new Error('Reader operator patch changed canonical analysis outside the authorized Reader nodes');
+    }
     finalized.readerFactReview = { status: 'pending', executionKind: 'operator',
         articleSha256: finalized.apiReaderArticleSha256, planSha256: finalized.apiReaderPlanSha256,
         patchFileSha256: provenance.patchFileSha256, parentPaperSha256: provenance.parentPaperSha256 };
@@ -3713,6 +3721,9 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
         refreshedAt: options.execution.executionKind === 'operator'
             ? options.execution.operatorProvenance.appliedAt : getBeijingISOString()
     };
+    if (paper.analysis && manifest.stages.scoringAudit?.status === 'complete') {
+        require('./lib/reader-resource-sync.js').synchronizeReaderResourceAvailability(paper, sourceDetails);
+    }
     return paper;
 }
 
@@ -6267,6 +6278,10 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
 }
 
 function applyApiReaderResourceAvailability(analysis, identity) {
+    if (identity?.contract !== API_READER_RESOURCE_IDENTITY_CONTRACT || !Array.isArray(identity.resources)
+        || !recoverySha256(identity.identitySha256)) {
+        throw new Error('资源状态同步需要已验证 identity，不能把缺失身份当作空资源列表');
+    }
     let updated = String(analysis || '');
     const acceptedUrls = new Set((identity?.resources || [])
         .map(item => item.originalUrl).filter(Boolean));
@@ -8505,9 +8520,10 @@ async function analyzePaperDeepInternal(paper) {
     const structuralAnalysis = typeof paper.analysisStageCheckpoints?.structureRepair === 'string'
         ? paper.analysisStageCheckpoints.structureRepair
         : analysis;
-    paper.apiReaderResources = await buildApiReaderResourceIdentity(
+    const verifiedReaderResources = await buildApiReaderResourceIdentity(
         structuralAnalysis, rawTextForAnalysis, analysisManifest.stages.demoLinkScan
     );
+    paper.apiReaderResources = verifiedReaderResources;
     const scoringInputAnalysis = applyApiReaderResourceAvailability(
         structuralAnalysis, paper.apiReaderResources
     );
@@ -8656,7 +8672,7 @@ async function analyzePaperDeepInternal(paper) {
                 stabilityResolution = resolution;
             }
             analysis = applyApiReaderResourceAvailability(
-                analysis, paper.apiReaderResources
+                analysis, verifiedReaderResources
             );
             auditedParsed = validateScoringOutput(analysis);
             scoringDelta = calculateScoringDelta(
@@ -8714,6 +8730,9 @@ async function analyzePaperDeepInternal(paper) {
     // 保留 13 节 analysis 与评分作为机器兼容层。Reader 在评分后调度，
     // 但写作输入仅用原文证据与真实像素，不传入 canonical 生成正文。
     // 指纹继续绑定 canonical 发布身份，变化只失效本阶段和后续插图。
+    // Scoring/Reader invalidation may discard stale paper fields, but must not
+    // discard the resource identity freshly verified for this same execution.
+    paper.apiReaderResources = verifiedReaderResources;
     const apiReaderEvidenceContext = buildApiReaderEvidenceContext(
         analysis,
         rawTextForAnalysis,
@@ -8764,6 +8783,7 @@ async function analyzePaperDeepInternal(paper) {
     );
     if (!isRecoveryStageComplete(analysisManifest, 'apiReaderArticle')) {
         try {
+            paper.apiReaderResources = verifiedReaderResources;
             const generatedReaderResult = await generateApiReaderArticleDetailed(
                 paper, analysis, apiReaderEvidenceContext, {
                     structuredArtifacts: sourceDetails.structuredArtifacts,
@@ -8801,9 +8821,7 @@ async function analyzePaperDeepInternal(paper) {
             paper.apiReaderAuthors = resolveApiReaderAuthors(paper, sourceDetails);
             if (!paper.apiReaderResources
                 || paper.apiReaderResources.sourceTextSha256 !== paper.sourceSha256) {
-                paper.apiReaderResources = await buildApiReaderResourceIdentity(
-                    analysis, rawTextForAnalysis, analysisManifest.stages.demoLinkScan
-                );
+                paper.apiReaderResources = verifiedReaderResources;
             }
             analysisManifest.stages.openSourceScan.resourceEvidenceContract =
                 API_READER_RESOURCE_IDENTITY_CONTRACT;
@@ -8877,6 +8895,15 @@ async function analyzePaperDeepInternal(paper) {
 
     // 最后一轮：副模型基于最终文本筛选高价值图片，代码按 JSON 计划做受限局部插图合并。
     // 必须放在纯文本修复之后，否则 gap-fill / 表格补充 / 方法补充可能删掉图片。
+    if (isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
+        const synchronized = require('./lib/reader-resource-sync.js').synchronizeReaderResourceAvailability(
+            { ...paper, analysis, parsed: parseAnalysis(analysis), analysisManifest }, sourceDetails
+        );
+        analysis = synchronized.analysis;
+        Object.assign(analysisManifest, synchronized.analysisManifest);
+        if (synchronized.analysisStageCheckpoints) paper.analysisStageCheckpoints = synchronized.analysisStageCheckpoints;
+        if (typeof synchronized.analysisCheckpoint === 'string') paper.analysisCheckpoint = synchronized.analysisCheckpoint;
+    }
     const preImageAnalysis = isRecoveryStageComplete(analysisManifest, 'scoringAudit')
         ? String(paper.analysisStageCheckpoints?.scoringAudit || paper.analysisCheckpoint || analysis)
         : analysis;

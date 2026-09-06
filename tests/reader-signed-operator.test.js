@@ -113,6 +113,18 @@ test('operator never downloads a missing or foreign signed pixel cache',async t=
     assert.equal(fetches,0);
 });
 
+test('Reader operator rejects a canonical availability mismatch instead of silently synchronizing outside its node patch',async t=>{
+    const f=setup(t);
+    f.paper.analysis=require('./valid-analysis-fixture.js').validAnalysisText();
+    f.paper.parsed=require('../scripts/utils.js').parseAnalysis(f.paper.analysis);
+    f.paper.analysisManifest.stages.scoringAudit={status:'complete',outputAnalysisSha256:runner.sha256(f.paper.analysis),audit:{total:6.9}};
+    f.request.parentPaperSha256=runner.stableHash(f.paper);
+    const before=JSON.stringify(f.paper);
+    await assert.rejects(prepareSignedReaderOperatorResult({parent:f.paper,sourceDetails:f.sourceDetails,run:f.run,
+        request:f.request,patchFileSha256:'f'.repeat(64),appliedAt:'2026-09-06T08:00:00Z'}),/explicit resource synchronization first/);
+    assert.equal(JSON.stringify(f.paper),before);
+});
+
 test('signed-patch CLI is explicit and rejects other-stage flags and paths',()=>{
     const id='11111111-2222-4333-8444-555555555555';
     assert.equal(runner.parseRewriteArgs(['signed-patch','--run-id',id,'--patch','reviewed.json']).action,'signed-patch');

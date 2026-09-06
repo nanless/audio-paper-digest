@@ -30,7 +30,7 @@ import ipaddress, shutil, socket, tempfile, stat, struct, zlib, unicodedata, tim
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 SHARED_SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SHARED_SCRIPTS_DIR) not in sys.path:
@@ -2609,9 +2609,84 @@ def compact_index_opensource(pa, paper, limit=4):
     return '\n'.join(lines)
 
 
-def full_index_decision_block(pa, paper, key, *, reader_article='', api_reader_v2=False):
+API_READER_DECISION_PROJECTION_CONTRACT = 'api-reader-decision-projection-v1'
+
+
+def _modern_api_reader_projection(paper, payload=None):
+    """One visible scientific summary/resource source for modern API pages."""
+    payload = _api_reader_payload(paper) if payload is None else payload
+    if not payload or payload.get('contract') != LLM_API_READER_CONTRACT:
+        return None
+    labels = {
+        'code': '代码相关资源', 'model': '模型相关资源', 'dataset': '数据相关资源',
+        'demo': '演示资源', 'reproduction': '复现相关资源', 'third_party': '第三方资源',
+    }
+    statuses = {
+        'available': '链接可访问', 'unavailable': '链接不可用',
+        'temporarily_unreachable': '暂时无法访问',
+    }
+    resources = payload['resourceIdentityProof']['resources']
+    lines = []
+    for resource in resources:
+        # Keep source URLs clickable without permitting Markdown/HTML escapes.
+        def link(url):
+            return '<' + re.sub(r'[<>"\\\s]', lambda m: quote(m.group(0), safe=''), url) + '>'
+        url_text = link(resource['originalUrl'])
+        if resource['finalUrl'] != resource['originalUrl']:
+            url_text += ' → ' + link(resource['finalUrl'])
+        status = statuses[resource['availability']]
+        if resource['status'] is not None:
+            status += f'（HTTP {resource["status"]}）'
+        lines.append(f'- {labels[resource["type"]]}：{url_text} — {status}')
+    if not lines:
+        lines.append('本次未形成可展示的已核验资源记录，开放状态尚未核实。')
+    lines.append('可达状态仅表示本次链接检查结果，不代表许可证、本文权重或运行复现已验证。')
+    parsed = paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
+    ledger = ['评分属于系统判断，不是论文实验结果；八维数值与总分见页首，原始审计记录保留在后端。']
+    stages = (paper.get('analysisManifest') or {}).get('stages') or {}
+    scoring = stages.get('scoringAudit') or {}
+    for label, value in (
+            ('评分规则', paper.get('scoringRubricVersion') or parsed.get('scoringRubricVersion')),
+            ('评分模型', scoring.get('model')), ('评分请求协议', scoring.get('protocol'))):
+        if isinstance(value, str) and value.strip():
+            safe_value = html.escape(re.sub(r'\s+', ' ', value.strip()))
+            ledger.append(f'- {label}：{safe_value}')
+    return {
+        'summary': payload['plan']['oneSentenceThesis'].strip(),
+        'opensource': '\n\n'.join(lines),
+        'scoringReason': '\n\n'.join(ledger),
+    }
+
+
+def _api_reader_index_projection_issue(content, papers):
+    """Replay modern per-paper decision blocks in an immutable daily index."""
+    blocks = re.split(r'^### ', content.split('## 📋 论文列表', 1)[-1], flags=re.MULTILINE)[1:]
+    for paper in papers:
+        projection = _modern_api_reader_projection(paper)
+        if projection is None:
+            continue
+        aid = paper.get('arxivId', '')
+        matches = [block for block in blocks if f'https://arxiv.org/abs/{aid})' in block]
+        if len(matches) != 1:
+            return f'{aid} 汇总页现代决策投影缺失或重复'
+        block = matches[0]
+        if '毒舌点评' in block:
+            return f'{aid} 汇总页现代决策投影混入 canonical 点评'
+        for key, label, end in (
+                ('summary', '📌 **核心摘要**', r'\n\n🔗 \*\*开源资源\*\*'),
+                ('opensource', '🔗 **开源资源**', r'\n\n---')):
+            match = re.search(re.escape(label) + r'\n\n([\s\S]*?)' + end, block)
+            expected = sanitize_markdown_for_publish(projection[key]).strip()
+            if not match or match.group(1).strip() != expected:
+                return f'{aid} 汇总页 {key} 与签名 Reader 决策投影不一致'
+    return None
+
+
+def full_index_decision_block(pa, paper, key, *, reader_article='', api_reader_v2=False,
+                              modern_projection=None):
     """Replay the same summary/resource bytes shown on the single-paper page."""
-    content = pa.get(key, '') if isinstance(pa, dict) else ''
+    content = modern_projection[key] if modern_projection is not None \
+        else pa.get(key, '') if isinstance(pa, dict) else ''
     if not isinstance(content, str) or not content.strip():
         return ''
     content = content.strip()
@@ -2772,6 +2847,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         aid = p.get('arxivId', '')
         aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
         api_reader = _api_reader_payload(p)
+        modern_projection = _modern_api_reader_projection(p, api_reader)
         if api_reader:
             reader_plan = api_reader['plan']
             reader_article = api_reader['article']
@@ -2804,12 +2880,13 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         if author_institutions:
             md += f"👥 **作者与机构**\n\n{author_institutions}\n\n"
         
-        if pa.get('roast'):
+        if modern_projection is None and pa.get('roast'):
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
         summary = full_index_decision_block(
             pa, p, 'summary', reader_article=reader_article,
             api_reader_v2=bool(api_reader),
+            modern_projection=modern_projection,
         )
         if summary:
             md += f"📌 **核心摘要**\n\n{summary}\n\n"
@@ -2817,6 +2894,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         opensource = full_index_decision_block(
             pa, p, 'opensource', reader_article=reader_article,
             api_reader_v2=bool(api_reader),
+            modern_projection=modern_projection,
         )
         if opensource:
             md += f"🔗 **开源资源**\n\n{opensource}\n\n"
@@ -2832,6 +2910,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         aid = p.get('arxivId', '')
         aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
         api_reader = _api_reader_payload(p)
+        modern_projection = _modern_api_reader_projection(p, api_reader)
         if api_reader:
             reader_plan = api_reader['plan']
             reader_article = api_reader['article']
@@ -2858,12 +2937,13 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         author_institutions = index_author_institution_block(p, pa, api_reader)
         if author_institutions:
             md += f"👥 **作者与机构**\n\n{author_institutions}\n\n"
-        if pa.get('roast'):
+        if modern_projection is None and pa.get('roast'):
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
         summary = full_index_decision_block(
             pa, p, 'summary', reader_article=reader_article,
             api_reader_v2=bool(api_reader),
+            modern_projection=modern_projection,
         )
         if summary:
             md += f"📌 **核心摘要**\n\n{summary}\n\n"
@@ -2871,6 +2951,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         opensource = full_index_decision_block(
             pa, p, 'opensource', reader_article=reader_article,
             api_reader_v2=bool(api_reader),
+            modern_projection=modern_projection,
         )
         if opensource:
             md += f"🔗 **开源资源**\n\n{opensource}\n\n"
@@ -3880,6 +3961,46 @@ def _validate_api_reader_resource_identity(paper):
     }
 
 
+def _modern_api_bridge_render_spacing(article, plan):
+    """Fix only a signed bridge paragraph's CommonMark delimiter boundary.
+
+    This is a rendered view, like official-image URL materialization. The
+    canonical article/plan and all table/formula bytes remain untouched.
+    """
+    fences = []
+    opened = None
+    offset = 0
+    for line in article.splitlines(keepends=True):
+        token = re.match(r'^ {0,3}(`{3,}|~{3,})', line)
+        if token:
+            mark = token.group(1)
+            if opened is None:
+                opened = (mark[0], len(mark), offset)
+            elif mark[0] == opened[0] and len(mark) >= opened[1]:
+                fences.append((opened[2], offset + len(line)))
+                opened = None
+        offset += len(line)
+    if opened:
+        fences.append((opened[2], len(article)))
+    insertions = []
+    for bridge in plan.get('conceptBridges', []):
+        explanation = bridge['explanation']
+        prefix = re.match(r'^\*\*[^*\n]+\*\*', explanation)
+        if not prefix or not explanation[prefix.end():prefix.end() + 1].isalnum():
+            continue
+        matches = list(re.finditer(
+            r'(?:\A|(?<=\n\n))' + re.escape(explanation) + r'(?=\n\n|\Z)', article,
+        ))
+        if len(matches) != 1:
+            raise PublishDataValidationError('现代 Reader 术语桥缺少唯一完整渲染段落')
+        start = matches[0].start()
+        if not any(begin <= start < end for begin, end in fences):
+            insertions.append(start + prefix.end())
+    for position in sorted(set(insertions), reverse=True):
+        article = article[:position] + ' ' + article[position:]
+    return article
+
+
 def _api_reader_payload(paper):
     """Replay the API reader article contract from canonical bytes."""
     manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
@@ -4163,7 +4284,8 @@ def _api_reader_payload(paper):
         figures = []
         figure_assets = []
         reader_authors = None
-    rendered_article = article
+    rendered_article = _modern_api_bridge_render_spacing(article, plan) \
+        if reader_contract == LLM_API_READER_CONTRACT else article
     for asset in figure_assets:
         rendered_article = rendered_article.replace(
             f']({asset["sourceUrl"]})', f']({asset["publicUrl"]})'
@@ -4287,18 +4409,27 @@ def _api_reader_page_binding_issue(content, paper):
         )).strip()
         if actual_authors != expected_authors:
             raise PublishDataValidationError('最终页面作者与机构段与 canonical identity 不一致')
-        page_parsed = dict(paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {})
-        expected_resources = enrich_opensource(page_parsed, paper) \
-            if page_parsed.get('opensource') else ''
-        supplementary = re.search(r'##\s*补充信息\s*\n([\s\S]*)', expected_resources)
-        if supplementary:
-            expected_resources = expected_resources[:supplementary.start()].strip()
+        projection = _modern_api_reader_projection(paper, payload)
+        if frontmatter_value('paper_digest_api_reader_decision_projection', r'"([^"]+)"') \
+                != API_READER_DECISION_PROJECTION_CONTRACT:
+            raise PublishDataValidationError('最终页面缺少现代 Reader 决策投影契约')
+        if h2_section('📌 核心摘要') != sanitize_markdown_for_publish(projection['summary']).strip():
+            raise PublishDataValidationError('最终页面核心摘要与签名 Reader 主线不一致')
+        if re.search(r'^##\s+(?:💬\s*毒舌点评|💡\s*研究者判断|📎\s*补充信息|⚖️\s*评分依据与证据)',
+                     content, flags=re.MULTILINE):
+            raise PublishDataValidationError('现代 Reader 页面混入未经独立事实审查的 canonical 解释')
+        expected_resources = projection['opensource']
         expected_resources = sanitize_markdown_for_publish(
             _nest_reader_headings(expected_resources.strip(), minimum_level=3)
         ).strip()
         actual_resources = h2_section('🔗 开源与复现资源')
         if not expected_resources or actual_resources != expected_resources:
             raise PublishDataValidationError('最终页面开源与复现资源段与 canonical identity 不一致')
+        actual_scores = h2_section('⚖️ 评分明细')
+        if actual_scores is not None:
+            actual_scores = re.split(r'^---\s*$', actual_scores, maxsplit=1, flags=re.MULTILINE)[0].strip()
+        if actual_scores != sanitize_markdown_for_publish(projection['scoringReason']).strip():
+            raise PublishDataValidationError('最终页面评分明细与确定性系统评分投影不一致')
         positive_claims = {
             'code': r'代码[^\n]{0,18}(?:已开源|已经开源|可以访问|可直接下载|仓库可用)',
             'model': r'(?:模型|权重)[^\n]{0,18}(?:已公开|已经公开|可以访问|可直接下载|权重可用)',
@@ -4529,6 +4660,10 @@ def generate_paper_page(paper, date_str, category='论文速递'):
             f'{source_binding_marker}'
             f'{identity_marker}'
         )
+        if api_reader_payload['contract'] == LLM_API_READER_CONTRACT:
+            api_reader_marker += (
+                f'paper_digest_api_reader_decision_projection: "{API_READER_DECISION_PROJECTION_CONTRACT}"\n'
+            )
     reader_plan = (
         v6_payload['plan'] if v6_payload
         else api_reader_payload['plan'] if api_reader_payload
@@ -4544,6 +4679,7 @@ def generate_paper_page(paper, date_str, category='论文速递'):
         api_reader_payload
         and api_reader_payload.get('contract') in LLM_API_READER_STRUCTURED_CONTRACTS
     )
+    modern_projection = _modern_api_reader_projection(paper, api_reader_payload)
     # Modern Manual pages must never be reconstructed from the legacy fixed
     # canonical sections.  A missing, partial or tampered reader payload is a
     # hard failure: silently falling back would turn an old analysis into a
@@ -4613,7 +4749,9 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
         # original English title and canonical link explicitly.  Calling this
         # merely “论文” made the reader-first identity block ambiguous and
         # broke the same title/link contract used by the daily index.
-        md += f'> 英文题目：*{paper_link}*\n>\n> 一句话：**{reader_plan["oneSentenceThesis"].strip()}**\n\n'
+        md += f'> 英文题目：*{paper_link}*\n\n' if modern_projection is not None else (
+            f'> 英文题目：*{paper_link}*\n>\n> 一句话：**{reader_plan["oneSentenceThesis"].strip()}**\n\n'
+        )
     reader_authors_content = ''
     if api_reader_v2 and api_reader_payload.get('readerAuthors'):
         reader_authors_content = '\n'.join(
@@ -4640,6 +4778,8 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
         meta = build_paper_meta(pa, aurl)
         if meta:
             metadata_block += f"{meta}\n\n"
+        if modern_projection is not None:
+            metadata_block = (build_index_context_line(pa, aurl) or '') + '\n\n'
 
         if pa.get('authors') and not api_reader_v2:
             metadata_block += f"\n### 👥 作者与机构\n\n{pa['authors']}\n"
@@ -4652,7 +4792,8 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
             md += f"\n## 👥 作者与机构\n\n{reader_authors_content}\n"
 
         # 分离补充信息（从 opensource 中提取）
-        opensource_content = pa.get('opensource', '')
+        opensource_content = modern_projection['opensource'] if modern_projection is not None \
+            else pa.get('opensource', '')
         supplementary = ''
         if opensource_content:
             supp_match = re.search(r'##\s*补充信息\s*\n([\s\S]*)', opensource_content)
@@ -4660,7 +4801,11 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
                 supplementary = supp_match.group(1).strip()
                 opensource_content = opensource_content[:supp_match.start()].strip()
 
-        sections = (
+        sections = ([
+            ('📌 核心摘要', 'summary', modern_projection['summary']),
+            ('🔗 开源与复现资源', 'opensource', modern_projection['opensource']),
+            ('🧭 深度解读', 'readerArticle', reader_article),
+        ] if modern_projection is not None else (
             [
                 ('💬 毒舌点评', 'roast'),
                 ('📌 核心摘要', 'summary'),
@@ -4681,7 +4826,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
                 ('💡 研究者判断', 'roast'),
                 ('⚖️ 评分理由', 'scoringReason'),
             ]
-        )
+        ))
         scoring_evidence = ''
         for item in sections:
             if len(item) == 3:
@@ -4731,6 +4876,8 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
             md += f'\n{"##" if api_reader_v2 else "###"} 📎 补充信息\n\n{supplementary}\n'
         if reader_first and metadata_block:
             md += f'\n<details>\n<summary>📎 论文与评分元数据</summary>\n\n{metadata_block.strip()}\n\n</details>\n'
+        if modern_projection is not None:
+            md += f'\n## ⚖️ 评分明细\n\n{modern_projection["scoringReason"]}\n'
         if reader_first and scoring_evidence:
             md += (
                 f'\n{"##" if api_reader_v2 else "###"} ⚖️ 评分依据与证据（展开查看）\n\n'
@@ -5628,6 +5775,11 @@ def validate_staged_posts(
                 f'{path.name} Manual v4 最终 Markdown 门禁失败: {manual_v4_issue}'
             )
         api_reader_issue = artifact['apiReaderIssue']
+        if path.name == f'{date_str}.md' and authoritative_papers:
+            api_reader_issue = _api_reader_index_projection_issue(
+                artifact['content'], list(authoritative_papers.values()),
+            )
+            artifact['apiReaderIssue'] = api_reader_issue
         if api_reader_issue:
             raise PublishDataValidationError(
                 f'{path.name} LLM API source-binding v4 最终 Markdown 门禁失败: '

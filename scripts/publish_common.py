@@ -4666,15 +4666,86 @@ def format_medal(index):
     return medals[index] if index < 3 else f'{index + 1}.'
 
 
+def publish_table_currency_spans(text):
+    """Exact lone dollar amounts in established Markdown table cells only.
+
+    MathJax pairs delimiters within one HTML parent. Each accepted cell has
+    exactly one dollar and becomes its own td; prose is deliberately excluded.
+    Return byte-preserving character ranges, shared by renderer and format gate.
+    """
+    spans = []
+    offset = 0
+    table_width = 0
+    previous = ''
+    for line in text.splitlines(keepends=True):
+        if _is_markdown_table_separator(line) and previous.lstrip().startswith('|'):
+            table_width = len(split_markdown_table_row(line))
+        elif (table_width and line.lstrip().startswith('|')
+              and len(split_markdown_table_row(line)) == table_width):
+            pipes = list(re.finditer(r'(?<!\\)\|', line))
+            for left, right in zip(pipes, pipes[1:]):
+                cell = line[left.end():right.start()]
+                if re.fullmatch(r'\s*\$\d+(?:,\d{3})*(?:\.\d+)?(?:/[1-9]\d*)?\s*', cell):
+                    start = left.end() + len(cell) - len(cell.lstrip())
+                    spans.append((offset + start, offset + right.start() - len(cell) + len(cell.rstrip())))
+        else:
+            table_width = 0
+        previous = line
+        offset += len(line)
+    return spans
+
+
 def fix_latex_delimiters(text):
-    r"""将 $...$ 转换为 \(...\)，$$...$$ 转换为 \[...\]。"""
+    r"""转换明确的数学定界符；不把金额、代码或跨表格单元格内容当公式。"""
     if not text:
         return text
-    text = re.sub(r'(\^|_)\{<([a-zA-Z])\}', r'\1{\\lt \2}', text)
-    text = re.sub(r'(?<!\\)\$\$(.+?)\$\$', r'\\[\1\\]', text, flags=re.DOTALL)
-    text = re.sub(r'(?<!\\)\$([^\s\$][^$]*?)\$', r'\\(\1\\)', text)
-    text = re.sub(r'`([^`]*?)\$([^`]*?)\$([^`]*?)`', r'`\1\\(\2\\)\3`', text)
-    return text
+    # These are literal source bytes, not prose eligible for math rewriting.
+    # An unclosed fenced block is conservatively protected through EOF.
+    protected = re.compile(
+        r'^[ \t]{0,3}(?P<fence>`{3,}|~{3,})[^\n]*(?:\n|$).*?'
+        r'(?:^[ \t]{0,3}(?P=fence)(?![`~])[ \t]*(?:\n|$)|\Z)'
+        r'|(?P<ticks>`+)(?!`).*?(?<!`)(?P=ticks)(?!`)'
+        r'|https?://[^\s<>()]+',
+        re.MULTILINE | re.DOTALL,
+    )
+
+    def convert_prose(prose):
+        prose = re.sub(r'(\^|_)\{<([a-zA-Z])\}', r'\1{\\lt \2}', prose)
+        prose = re.sub(r'(?<!\\)\$\$(.+?)\$\$', r'\\[\1\\]', prose, flags=re.DOTALL)
+
+        def inline_math(match):
+            body = match.group(1)
+            line_start = prose.rfind('\n', 0, match.start()) + 1
+            line_end = prose.find('\n', match.end())
+            line = prose[line_start:line_end if line_end >= 0 else len(prose)]
+            # An unescaped pipe in a Markdown table is a cell boundary, not
+            # permission to pair dollars in separate cells. Outside tables,
+            # ordinary conditional-probability math keeps its existing syntax.
+            if line.lstrip().startswith('|') and re.search(r'(?<!\\)\|', body):
+                return match.group(0)
+            return r'\(' + body + r'\)'
+
+        # A closing dollar must follow non-whitespace and cannot open the next
+        # numeric amount. Inline math cannot span lines. Thus $0.2 | $1.0/1000
+        # remains exact, while $x$, $5$ and same-cell formulas still convert.
+        return re.sub(
+            r'(?<![\\$])\$(?!\$)([^\s$](?:[^$\n]*?[^\s$])?)\$(?![\d$])',
+            inline_math,
+            prose,
+        )
+
+    output = []
+    cursor = 0
+    protected_spans = [(match.start(), match.end()) for match in protected.finditer(text)]
+    protected_spans.extend(publish_table_currency_spans(text))
+    for start, end in sorted(protected_spans):
+        if start < cursor:
+            continue
+        output.append(convert_prose(text[cursor:start]))
+        output.append(text[start:end])
+        cursor = end
+    output.append(convert_prose(text[cursor:]))
+    return ''.join(output)
 
 
 def escape_html_like_tags(text):

@@ -1391,6 +1391,41 @@ primary_method_tag: #基准测试
         self.assertIn('[A_METHOD]', upstream)
         self.assertIn('[SCORING_SOURCE_RESULTS]', upstream)
 
+    def test_publish_04173_cost_table_keeps_currency_cells_exact(self):
+        table = (
+            '| 尝试次数 | 1000 例翻译成本 | 1000 例验证成本 | 单接受例成本 | 平均规则数 |\n'
+            '| --- | --- | --- | --- | --- |\n'
+            '| 10 | $0.2 | $1.0/1000 | 0.12 美元 | 1.9 |'
+        )
+        self.assertEqual(sanitize_markdown_for_publish(table), table)
+        self.assertEqual(sanitize_markdown_for_publish(sanitize_markdown_for_publish(table)), table)
+
+    def test_latex_delimiters_do_not_pair_currency_or_cross_table_cells(self):
+        for text in ('$0.2 and $1.0', '$20, $30 and $40', r'\$20 and \$30',
+                     '| $0.2|$1.0 |', '$0.2\n$1.0', '| $x | y$ |'):
+            with self.subTest(text=text):
+                self.assertEqual(fix_latex_delimiters(text), text)
+
+    def test_latex_delimiters_preserve_code_urls_and_explicit_math(self):
+        literals = (
+            '`echo "$a$"`\n``code `$b$` code``\n'
+            '```python\nprice = "$0.2"\nformula = "$x$"\n```\n'
+            '~~~text\n$x$\n~~~\n'
+            'https://example.com/$x$/file\n'
+            '[source](https://example.com/$y$/file)'
+        )
+        self.assertEqual(fix_latex_delimiters(literals), literals)
+        self.assertEqual(fix_latex_delimiters(r'$x_i$ and $5$ and $x+1$'),
+                         r'\(x_i\) and \(5\) and \(x+1\)')
+        self.assertEqual(fix_latex_delimiters(r'| $x_i$ | $5$ |'),
+                         r'| \(x_i\) | \(5\) |')
+        self.assertEqual(fix_latex_delimiters(r'$p(x|y)$ and | $p(x\|y)$ |'),
+                         r'\(p(x|y)\) and | \(p(x\|y)\) |')
+        self.assertEqual(fix_latex_delimiters('$$a\nb$$'), '\\[a\nb\\]')
+        explicit = r'\(p(y_i\mid\mathbf{y}_{<i})\) and \[x+y\]'
+        self.assertEqual(fix_latex_delimiters(explicit),
+                         r'\(p(y_i\mid\mathbf{y}_{\lt i})\) and \[x+y\]')
+
     def test_sanitize_autolinks_bare_https_without_touching_existing_markup(self):
         text = (
             '---\nsource: https://frontmatter.example/item\n---\n'

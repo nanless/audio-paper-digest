@@ -785,6 +785,108 @@ def create_verified_schema_v3_publication(date_str, posts, paper):
 
 
 class PublishToBlogReviewTest(unittest.TestCase):
+    def test_modern_reader_projection_excludes_all_unreviewed_canonical_prose(self):
+        paper = llm_api_publication_fixture()
+        for key in ('summary', 'roast', 'opensource', 'scoringReason'):
+            paper['parsed'][key] = f'UNREVIEWED_{key}_SENTINEL'
+        page, _ = publish_to_blog.generate_paper_page(paper, '2026-08-31')
+        index = publish_to_blog.generate_index_page(
+            [(6.1, paper, paper['parsed'])], [], '2026-08-31',
+            {paper['arxivId']: 'fixture'},
+        )
+        thesis = publish_to_blog.sanitize_markdown_for_publish(
+            paper['apiReaderPlan']['oneSentenceThesis']
+        )
+        for output in (page, index):
+            self.assertIn(thesis, output)
+            self.assertNotIn('UNREVIEWED_', output)
+            self.assertNotIn('毒舌点评', output)
+            self.assertIn('链接可访问', output)
+            self.assertIn('不代表许可证、本文权重或运行复现已验证', output)
+        self.assertIn('## ⚖️ 评分明细', page)
+        self.assertIn('系统判断，不是论文实验结果', page)
+        self.assertEqual(page.count(publish_to_blog.format_complete_score_line(paper['parsed'])), 1)
+        self.assertEqual(page.count('标签：#空间音频'), 1)
+        self.assertIsNone(publish_to_blog._api_reader_page_binding_issue(page, paper))
+        self.assertIsNone(publish_to_blog._api_reader_index_projection_issue(index, [paper]))
+        for changed in (
+                page.replace('## 📌 核心摘要\n\n' + thesis, '## 📌 核心摘要\n\n虚构摘要'),
+                page.replace('## ⚖️ 评分明细', '## ⚖️ 未绑定评分解释'),
+                page.replace('## 🧭 深度解读', '## 💬 毒舌点评\n\n错误前言\n\n## 🧭 深度解读')):
+            self.assertIsNotNone(publish_to_blog._api_reader_page_binding_issue(changed, paper))
+        self.assertIsNotNone(publish_to_blog._api_reader_index_projection_issue(
+            index.replace(thesis, '未经事实核查的旧摘要'), [paper],
+        ))
+
+    def test_modern_resources_show_identity_type_and_status_without_weight_claims(self):
+        paper = llm_api_publication_fixture()
+        resource = paper['apiReaderResources']['resources'][0]
+        resource['type'] = 'model'
+        paper['analysis'] = paper['analysis'].replace('has_code: 是', 'has_code: 否').replace(
+            'has_model: 否', 'has_model: 是',
+        ).replace('code=available', 'model=available')
+        reseal_llm_api_resource_identity(paper)
+        page, _ = publish_to_blog.generate_paper_page(paper, '2026-08-31')
+        self.assertIn('模型相关资源', page)
+        self.assertNotIn('模型权重：', page)
+        self.assertIsNone(publish_to_blog._api_reader_page_binding_issue(page, paper))
+
+    def test_modern_index_projection_is_replayed_by_staged_preflight(self):
+        paper = llm_api_publication_fixture()
+        markdown = publish_to_blog.generate_index_page(
+            [], [paper], '2026-08-31', {paper['arxivId']: 'fixture'},
+        )
+        self.assertIsNone(publish_to_blog._api_reader_index_projection_issue(markdown, [paper]))
+        with tempfile.TemporaryDirectory() as tmp:
+            index = Path(tmp) / '2026-08-31.md'
+            index.write_text(markdown.replace(paper['apiReaderPlan']['oneSentenceThesis'],
+                                             '未审查的摘要替换'), encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'llm_review_post') as llm:
+                with self.assertRaisesRegex(PublishDataValidationError, '决策投影不一致'):
+                    publish_to_blog.validate_staged_posts(
+                        tmp, '2026-08-31', date_only=True,
+                        authoritative_papers={'2026-08-31-fixture.md': paper},
+                    )
+                llm.assert_not_called()
+
+    def test_modern_bridge_render_spacing_preserves_signed_bytes_and_table_formula_proof(self):
+        paper = llm_api_publication_fixture()
+        bridge = paper['apiReaderPlan']['conceptBridges'][0]
+        old = bridge['explanation']
+        replacement = '**术语桥：**' + old
+        bridge['explanation'] = replacement
+        paper['apiReaderArticle'] = paper['apiReaderArticle'].replace(old, replacement)
+        reseal_llm_api_reader_fixture(paper)
+        before = copy.deepcopy(paper)
+        page, _ = publish_to_blog.generate_paper_page(paper, '2026-08-31')
+        self.assertIn('**术语桥：** ' + old, page)
+        self.assertIsNone(publish_to_blog._api_reader_page_binding_issue(page, paper))
+        self.assertEqual(paper, before)
+        self.assertIn('| Baseline | 10.2 |', page)
+        self.assertIn(r'\[\mathcal{L}=\lVert y-\hat{y}\rVert_1\]', page)
+        fenced = '```text\n\n' + replacement + '\n\n```'
+        self.assertEqual(publish_to_blog._modern_api_bridge_render_spacing(
+            fenced, {'conceptBridges': [bridge]},
+        ), fenced)
+        unrelated = '**未声明术语：**保留原文'
+        self.assertEqual(publish_to_blog._modern_api_bridge_render_spacing(
+            unrelated, {'conceptBridges': []},
+        ), unrelated)
+
+    def test_modern_resource_temporary_status_is_not_an_open_weight_claim(self):
+        paper = llm_api_publication_fixture()
+        resource = paper['apiReaderResources']['resources'][0]
+        resource['type'] = 'model'
+        paper['analysis'] = paper['analysis'].replace('has_code: 是', 'has_code: 否').replace(
+            'code=available(HTTP 200)', 'model=temporarily_unreachable(HTTP 503)',
+        )
+        resource.update(status=503, availability='temporarily_unreachable', retryable=True)
+        reseal_llm_api_resource_identity(paper)
+        page, _ = publish_to_blog.generate_paper_page(paper, '2026-08-31')
+        self.assertIn('暂时无法访问', page)
+        self.assertNotIn('链接可访问（HTTP 503）', page)
+        self.assertIsNone(publish_to_blog._api_reader_page_binding_issue(page, paper))
+
     def test_review_preflight_collects_page_errors_without_llm_or_hugo(self):
         with tempfile.TemporaryDirectory() as tmp:
             posts = Path(tmp)
@@ -1803,7 +1905,7 @@ title: "Score rows"
         self.assertNotIn('3 d-talking', normalized)
         self.assertNotIn('3 D Talking', normalized)
 
-    def test_index_uses_api_v2_reader_title_and_full_decision_blocks(self):
+    def test_index_uses_modern_reader_title_and_signed_decision_blocks(self):
         paper = llm_api_publication_fixture()
         paper['parsed']['summary'] += ' 下游调用下降约 41%。'
         paper['parsed']['opensource'] += '\n- 数据集：FSD50K'
@@ -1815,15 +1917,15 @@ title: "Score rows"
             {paper['arxivId']: 'llm-api-publisher-fixture-2608-30002'},
         )
         self.assertIn(paper['apiReaderPlan']['readerTitle'], markdown)
-        self.assertNotIn(paper['apiReaderPlan']['oneSentenceThesis'], markdown)
-        self.assertIn('最终兼容 canonical 摘要。', markdown)
-        self.assertIn(
+        self.assertIn(paper['apiReaderPlan']['oneSentenceThesis'], markdown)
+        self.assertNotIn('最终兼容 canonical 摘要。', markdown)
+        self.assertNotIn(
             publish_to_blog.sanitize_markdown_for_publish(
                 paper['parsed']['opensource']
             ),
             markdown,
         )
-        self.assertIn('亮点清楚，短板是只在 2 套基准上验证。', markdown)
+        self.assertNotIn('亮点清楚，短板是只在 2 套基准上验证。', markdown)
         self.assertNotIn(paper['parsed']['roast'], markdown)
         first_author = paper['apiReaderAuthors']['authors'][0]
         self.assertIn(first_author['name'], markdown)
@@ -1843,7 +1945,7 @@ title: "Score rows"
         self.assertLess(markdown.index('评分：**6.1/10**'), markdown.index('👥 **作者与机构**'))
         self.assertLess(markdown.index('评分：**6.1/10**'), markdown.index(context))
         self.assertLess(markdown.index(context), markdown.index('👥 **作者与机构**'))
-        self.assertLess(markdown.index('👥 **作者与机构**'), markdown.index('💡 **毒舌点评**'))
+        self.assertLess(markdown.index('👥 **作者与机构**'), markdown.index('📌 **核心摘要**'))
         paper_markdown, _slug = publish_to_blog.generate_paper_page(
             paper, '2026-08-31', category='论文速递',
         )
@@ -2284,7 +2386,8 @@ title: "Bad table"
         self.assertIn('## 👥 作者与机构', markdown)
         self.assertIn('- Researcher A：Institute A', markdown)
         self.assertLess(markdown.index('> 标签：'), markdown.index('## 👥 作者与机构'))
-        self.assertLess(markdown.index('## 👥 作者与机构'), markdown.index('## 💬 毒舌点评'))
+        self.assertLess(markdown.index('## 👥 作者与机构'), markdown.index('## 📌 核心摘要'))
+        self.assertNotIn('## 💬 毒舌点评', markdown)
         self.assertIn('## 🧭 深度解读', markdown)
         self.assertIn('### 为什么混合声音需要先建立空间直觉？', markdown)
         self.assertNotIn('#### 为什么混合声音需要先建立空间直觉？', markdown)
@@ -2447,10 +2550,8 @@ title: "Bad table"
         false_page, _slug = publish_to_blog.generate_paper_page(
             false_claim, '2026-08-31',
         )
-        self.assertIn(
-            '写成可用',
-            publish_to_blog._api_reader_page_binding_issue(false_page, false_claim),
-        )
+        self.assertNotIn('代码已经开源，可以访问', false_page)
+        self.assertIsNone(publish_to_blog._api_reader_page_binding_issue(false_page, false_claim))
 
         empty = llm_api_publication_fixture()
         empty['apiReaderResources']['resources'] = []
@@ -2467,6 +2568,8 @@ title: "Bad table"
         empty_payload = publish_to_blog._api_reader_payload(empty)
         self.assertEqual(empty_payload['resourceIdentityProof']['count'], 0)
         empty_page, _slug = publish_to_blog.generate_paper_page(empty, '2026-08-31')
+        self.assertIn('本次未形成可展示的已核验资源记录，开放状态尚未核实', empty_page)
+        self.assertNotIn('论文中未提及', empty_page)
         self.assertIsNone(publish_to_blog._api_reader_page_binding_issue(empty_page, empty))
 
     def test_api_reader_v3_rejects_more_than_four_figure_placements(self):
