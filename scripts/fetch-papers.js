@@ -40,7 +40,7 @@ const {
 } = require('./utils.js');
 const Config = require('./config.js');
 const { createHostTaskScheduler } = require('./lib/fetch-scheduler.js');
-const { resolveApiKeyPool } = require('./llm-account-pool.js');
+const { resolvePrimaryApiKeyPool } = require('./llm-account-pool.js');
 
 loadEnvFile();
 
@@ -90,9 +90,10 @@ const { ARXIV_CATEGORIES: CATEGORIES, ARXIV_CONFIG, FILTER_CONFIG: FILTER_CFG } 
 const FILTER_CONFIG = {
     endpoint: process.env.PAPER_ANALYZER_ENDPOINT || '',
     key: process.env.PAPER_ANALYZER_API_KEY || '',
-    apiKeys: resolveApiKeyPool(
+    apiKeys: resolvePrimaryApiKeyPool(
         process.env.PAPER_ANALYZER_API_KEY || '',
-        process.env.PAPER_ANALYZER_FALLBACK_API_KEYS || ''
+        process.env.PAPER_ANALYZER_FALLBACK_API_KEYS || '',
+        process.env.PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY || ''
     ),
     model: process.env.PAPER_ANALYZER_MODEL || '',
     headers: {}

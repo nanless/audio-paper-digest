@@ -21,6 +21,7 @@ Node 必须满足 `>=20.18.1 <21 || >=22.3.0`。Python 必须为 3.11+ 且使用
 PAPER_ANALYZER_API_KEY=your-key
 # 可选；同一路由备用账号，逗号分隔
 PAPER_ANALYZER_FALLBACK_API_KEYS=your-second-key
+PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY=your-third-key
 PAPER_ANALYZER_MODEL=muse-spark-1.2-contributor
 PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
@@ -30,7 +31,7 @@ PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
 
 默认模型是 OpenCode Go 的 Muse Spark 1.2 Contributor，协议为 OpenAI Responses。endpoint 必须为 HTTPS；只有 loopback 测试服务允许 HTTP。
 
-`PAPER_ANALYZER_FALLBACK_API_KEYS` 不是负载均衡。系统持续使用当前 active 账号，只有 OpenCode Go 返回 HTTP 429 且结构化类型明确为 `GoUsageLimitError` 才立即切到下一账号；切换结果跨 Node/Python 和日期保存在 `data/runtime/llm-account-pool.json`。原账号到期后不会自动切回。普通 429、5xx、网络/代理错误、截断或内容校验失败均不切换。副模型如有独立账号池，使用 `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS`；只有主/副端点规范化后属于同一 OpenCode Go 服务且副模型没有独立 key 时，副模型才继承主账号池。不同服务的副模型必须提供自己的 key，不能继承主账号池。凭据发送前，实际请求 URL 还必须精确匹配由 endpoint 与 model 推导出的规范 API 路由。
+`PAPER_ANALYZER_FALLBACK_API_KEYS` 不是负载均衡。系统持续使用当前 active 账号，只有 OpenCode Go 返回 HTTP 429 且结构化类型明确为 `GoUsageLimitError` 才立即切到下一账号；切换结果跨 Node/Python 和日期保存在 `data/runtime/llm-account-pool.json`。原账号到期后不会自动切回。普通 429、5xx、网络/代理错误、截断或内容校验失败均不切换。若只需固定第三顺位，可用 `PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY`；它总排在 `PAPER_ANALYZER_FALLBACK_API_KEYS` 的所有账号之后。副模型如有独立账号池，使用 `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS`；只有主/副端点规范化后属于同一 OpenCode Go 服务且副模型没有独立 key 时，副模型才继承主账号池。不同服务的副模型必须提供自己的 key，不能继承主账号池。凭据发送前，实际请求 URL 还必须精确匹配由 endpoint 与 model 推导出的规范 API 路由。
 
 ## 环境为什么只认项目 `.env`
 

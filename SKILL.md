@@ -37,6 +37,7 @@ cp env.example .env
 PAPER_ANALYZER_API_KEY=your-key
 # 可选；同一 OpenCode Go 路由的备用账号，逗号分隔
 PAPER_ANALYZER_FALLBACK_API_KEYS=your-second-key
+PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY=your-third-key
 PAPER_ANALYZER_MODEL=muse-spark-1.2-contributor
 PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
@@ -108,7 +109,7 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。默认发布入口要求 Python 3.11+ 
 
 所有 Node LLM 调用经 `requestLlmJson()`。Muse 每次使用独立 HTTP CONNECT agent；其他模型默认 `agent:false`。Python 发布使用同一 Muse 例外。
 
-配置 `PAPER_ANALYZER_FALLBACK_API_KEYS` 后启用 OpenCode Go 长期 sticky 账号池。初始使用主 key；只有 HTTP 429 且结构化错误明确为 `GoUsageLimitError` 时，才记录该账号的额度窗口并立即改用下一账号。成功账号跨请求、跨 Node/Python、跨日期保持 active，旧账号冷却到期也不自动切回。普通 429、5xx、网络/代理错误、Responses incomplete 和内容校验失败都不切号。状态保存在 `data/runtime/llm-account-pool.json`，不含原始 key 但包含稳定凭据指纹，按敏感操作元数据以 `0600` 保护；损坏时失败关闭。认证信息只会发往由 endpoint/model 精确推导的规范 API URL；主副模型只有属于同一规范 OpenCode Go 服务时才可共享账号池，不同服务必须使用独立 key。
+配置 `PAPER_ANALYZER_FALLBACK_API_KEYS` 后启用 OpenCode Go 长期 sticky 账号池。初始使用主 key；只有 HTTP 429 且结构化错误明确为 `GoUsageLimitError` 时，才记录该账号的额度窗口并立即改用下一账号。`PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 仅作为所有普通备用账号之后的固定第三顺位。成功账号跨请求、跨 Node/Python、跨日期保持 active，旧账号冷却到期也不自动切回。普通 429、5xx、网络/代理错误、Responses incomplete 和内容校验失败都不切号。状态保存在 `data/runtime/llm-account-pool.json`，不含原始 key 但包含稳定凭据指纹，按敏感操作元数据以 `0600` 保护；损坏时失败关闭。认证信息只会发往由 endpoint/model 精确推导的规范 API URL；主副模型只有属于同一规范 OpenCode Go 服务时才可共享账号池，不同服务必须使用独立 key。
 
 ### 4.2 默认预算
 

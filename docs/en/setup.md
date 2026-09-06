@@ -21,6 +21,7 @@ Node must satisfy `>=20.18.1 <21 || >=22.3.0`. Python must be 3.11+ with an Open
 PAPER_ANALYZER_API_KEY=your-key
 # Optional comma-separated fallback accounts for the same OpenCode Go route
 PAPER_ANALYZER_FALLBACK_API_KEYS=your-second-key
+PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY=your-third-key
 PAPER_ANALYZER_MODEL=muse-spark-1.2-contributor
 PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
@@ -30,7 +31,7 @@ PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
 
 The documented default is OpenCode Go Muse Spark 1.2 Contributor over OpenAI Responses. Public endpoints must use HTTPS; HTTP is accepted only for loopback test services.
 
-`PAPER_ANALYZER_FALLBACK_API_KEYS` is not load balancing. The current account remains sticky until OpenCode Go returns HTTP 429 with an explicit structured `GoUsageLimitError`; only then is the next account tried immediately. Active/cooldown state persists across Node, Python, and dates in `data/runtime/llm-account-pool.json`, and an expired earlier account does not automatically take traffic back. The file contains no raw key but does contain stable credential fingerprints, so it remains `0600` sensitive operational metadata. Generic 429, 5xx, network/proxy errors, truncation, and content-contract failures never switch accounts. Use `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS` only when an explicitly configured secondary model needs its own pool. A secondary route without its own key inherits the primary pool only when both normalized endpoints identify the same canonical OpenCode Go service; a different service must provide its own key and never inherits the primary pool. Before credentials are attached, the actual request URL must exactly match the canonical API route derived from the endpoint and model.
+`PAPER_ANALYZER_FALLBACK_API_KEYS` is not load balancing. The current account remains sticky until OpenCode Go returns HTTP 429 with an explicit structured `GoUsageLimitError`; only then is the next account tried immediately. `PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` is a fixed trailing third-priority account, used after every normal fallback account. Active/cooldown state persists across Node, Python, and dates in `data/runtime/llm-account-pool.json`, and an expired earlier account does not automatically take traffic back. The file contains no raw key but does contain stable credential fingerprints, so it remains `0600` sensitive operational metadata. Generic 429, 5xx, network/proxy errors, truncation, and content-contract failures never switch accounts. Use `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS` only when an explicitly configured secondary model needs its own pool. A secondary route without its own key inherits the primary pool only when both normalized endpoints identify the same canonical OpenCode Go service; a different service must provide its own key and never inherits the primary pool. Before credentials are attached, the actual request URL must exactly match the canonical API route derived from the endpoint and model.
 
 ## Project-Scoped Environment
 

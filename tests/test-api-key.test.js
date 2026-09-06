@@ -30,6 +30,18 @@ describe('test-api-key secondary account boundary', () => {
         assert.deepStrictEqual(config.apiKeys, ['primary-key', 'primary-fallback-key']);
     });
 
+    it('主账号池将第三顺位追加在原备用账号之后', () => {
+        const config = resolveApiKeyTestConfig({
+            ...primaryGo,
+            PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY: 'primary-third-key'
+        }, false);
+        assert.deepStrictEqual(config.apiKeys, [
+            'primary-key',
+            'primary-fallback-key',
+            'primary-third-key'
+        ]);
+    });
+
     it('Go 到非 Go 且无显式 secondary key 时 typed fail-closed', () => {
         assert.throws(() => resolveApiKeyTestConfig({
             ...primaryGo,

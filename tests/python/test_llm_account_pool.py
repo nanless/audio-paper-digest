@@ -30,6 +30,7 @@ from llm_account_pool import (  # noqa: E402
     normalize_opencode_go_service,
     read_state_strict,
     resolve_api_key_pool,
+    resolve_primary_api_key_pool,
     select_api_key,
 )
 
@@ -40,6 +41,14 @@ class LlmAccountPoolTest(unittest.TestCase):
     def test_duplicate_primary_and_fallback_credentials_are_rejected(self):
         with self.assertRaisesRegex(ValueError, '不能相同或重复'):
             resolve_api_key_pool('same-key', 'same-key')
+
+    def test_third_account_follows_existing_fallback(self):
+        self.assertEqual(
+            resolve_primary_api_key_pool('account-a', 'account-b', 'account-c'),
+            ['account-a', 'account-b', 'account-c'],
+        )
+        with self.assertRaisesRegex(ValueError, '不能相同或重复'):
+            resolve_primary_api_key_pool('account-a', 'account-b', 'account-b')
 
     def test_credential_bearing_or_query_mutated_endpoint_is_rejected(self):
         for endpoint in (
@@ -85,6 +94,18 @@ class LlmAccountPoolTest(unittest.TestCase):
             self.assertNotIn('account-b-secret', raw)
             self.assertEqual(stat.S_IMODE(state_file.stat().st_mode), 0o600)
             self.assertEqual(read_state_strict(state_file)['policyVersion'], POLICY_VERSION)
+
+    def test_third_account_is_selected_only_after_two_explicit_quota_blocks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / 'state.json'
+            keys = resolve_primary_api_key_pool('account-a-secret', 'account-b-secret', 'account-c-secret')
+            first = select_api_key(keys, ENDPOINT, state_file, now_ms=1000)
+            mark_quota_exhausted(first, {'limit_name': 'quota', 'blocked_until_ms': 9000}, state_file, now_ms=1000)
+            second = select_api_key(keys, ENDPOINT, state_file, now_ms=1100)
+            self.assertEqual(second['api_key'], 'account-b-secret')
+            mark_quota_exhausted(second, {'limit_name': 'quota', 'blocked_until_ms': 9000}, state_file, now_ms=1100)
+            third = select_api_key(keys, ENDPOINT, state_file, now_ms=1200)
+            self.assertEqual(third['api_key'], 'account-c-secret')
 
     def test_only_explicit_go_usage_limit_is_quota(self):
         self.assertIsNone(classify_opencode_go_quota_response(

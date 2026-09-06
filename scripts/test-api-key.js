@@ -18,6 +18,7 @@ const {
 } = require('./utils.js');
 const {
     resolveApiKeyPool,
+    resolvePrimaryApiKeyPool,
     normalizeOpenCodeGoService,
     LlmAccountPoolConfigError
 } = require('./llm-account-pool.js');
@@ -36,7 +37,11 @@ function resolveApiKeyTestConfig(env, secondary) {
         return {
             endpoint: primaryEndpoint,
             key: primaryKey,
-            apiKeys: resolveApiKeyPool(primaryKey, env.PAPER_ANALYZER_FALLBACK_API_KEYS || ''),
+            apiKeys: resolvePrimaryApiKeyPool(
+                primaryKey,
+                env.PAPER_ANALYZER_FALLBACK_API_KEYS || '',
+                env.PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY || ''
+            ),
             model: env.PAPER_ANALYZER_MODEL || ''
         };
     }
@@ -95,6 +100,7 @@ async function main(argv = process.argv.slice(2)) {
     for (const key of [
         'PAPER_ANALYZER_ENDPOINT', 'PAPER_ANALYZER_API_KEY', 'PAPER_ANALYZER_MODEL',
         'PAPER_ANALYZER_FALLBACK_API_KEYS',
+        'PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY',
         'PAPER_ANALYZER_SECONDARY_ENDPOINT', 'PAPER_ANALYZER_SECONDARY_API_KEY',
         'PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS',
         'PAPER_ANALYZER_SECONDARY_MODEL'

@@ -44,6 +44,7 @@ from llm_account_pool import (
     mark_quota_exhausted,
     normalize_opencode_go_service,
     resolve_api_key_pool,
+    resolve_primary_api_key_pool,
     select_api_key,
 )
 from utils import parse_analysis
@@ -4105,8 +4106,10 @@ def call_publish_llm_api(
     primary_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
     primary_endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', '')
     try:
-        primary_api_keys = resolve_api_key_pool(
-            primary_key, os.environ.get('PAPER_ANALYZER_FALLBACK_API_KEYS', '')
+        primary_api_keys = resolve_primary_api_key_pool(
+            primary_key,
+            os.environ.get('PAPER_ANALYZER_FALLBACK_API_KEYS', ''),
+            os.environ.get('PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY', ''),
         )
     except LlmAccountPoolConfigError as exc:
         message = f'{context} 的 OpenCode Go 账号池配置非法: {exc}'

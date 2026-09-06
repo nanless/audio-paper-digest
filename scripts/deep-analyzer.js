@@ -61,6 +61,7 @@ const { createCanvas, loadImage } = require('@napi-rs/canvas');
 const { ANALYSIS_CONFIG, ARXIV_CONFIG, SECONDARY_MODEL_CONFIG, CURRENT_DIR } = require('./config.js');
 const {
     resolveApiKeyPool,
+    resolvePrimaryApiKeyPool,
     normalizeOpenCodeGoService,
     LlmAccountPoolConfigError
 } = require('./llm-account-pool.js');
@@ -4575,9 +4576,10 @@ function getPreProvidedImageUrls(paper) {
 const DEEP_CONFIG = {
     endpoint: process.env.PAPER_ANALYZER_ENDPOINT || '',
     key: process.env.PAPER_ANALYZER_API_KEY || '',
-    apiKeys: resolveApiKeyPool(
+    apiKeys: resolvePrimaryApiKeyPool(
         process.env.PAPER_ANALYZER_API_KEY || '',
-        process.env.PAPER_ANALYZER_FALLBACK_API_KEYS || ''
+        process.env.PAPER_ANALYZER_FALLBACK_API_KEYS || '',
+        process.env.PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY || ''
     ),
     model: process.env.PAPER_ANALYZER_MODEL || '',
     headers: {}

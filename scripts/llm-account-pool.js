@@ -87,6 +87,16 @@ function resolveApiKeyPool(primaryKey, fallbackValue) {
     return rawKeys;
 }
 
+// Keep the ordinary comma-separated fallback setting intact. The optional
+// trailing credential is deliberately appended after it, never load-balanced
+// or promoted ahead of an existing fallback account.
+function resolvePrimaryApiKeyPool(primaryKey, fallbackValue, tertiaryFallbackValue = '') {
+    return resolveApiKeyPool(primaryKey, [
+        ...parseFallbackApiKeys(fallbackValue),
+        ...parseFallbackApiKeys(tertiaryFallbackValue)
+    ]);
+}
+
 function normalizeOpenCodeGoService(endpoint) {
     const rawEndpoint = String(endpoint || '');
     // WHATWG URL parsing removes literal and percent-encoded dot segments.
@@ -641,6 +651,7 @@ module.exports = {
     normalizeApiKeys,
     parseFallbackApiKeys,
     resolveApiKeyPool,
+    resolvePrimaryApiKeyPool,
     normalizeOpenCodeGoService,
     isOpenCodeGoEndpoint,
     getAccountId,

@@ -27,7 +27,7 @@ const {
     requestLlmJson
 } = require('./utils.js');
 const { loadProjectEnv } = require('./env-loader.js');
-const { resolveApiKeyPool } = require('./llm-account-pool.js');
+const { resolvePrimaryApiKeyPool } = require('./llm-account-pool.js');
 
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 43128;
@@ -1100,7 +1100,11 @@ async function performRethink(payload, options = {}) {
             required: true,
             maxChars: 16384
         });
-        apiKeys = resolveApiKeyPool(key, env.PAPER_ANALYZER_FALLBACK_API_KEYS || '');
+        apiKeys = resolvePrimaryApiKeyPool(
+            key,
+            env.PAPER_ANALYZER_FALLBACK_API_KEYS || '',
+            env.PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY || ''
+        );
     }
 
     const apiType = ALLOWED_PROTOCOLS.get(input.protocol);

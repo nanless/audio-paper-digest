@@ -99,6 +99,14 @@ def resolve_api_key_pool(primary_key, fallback_value):
     return keys
 
 
+def resolve_primary_api_key_pool(primary_key, fallback_value, tertiary_fallback_value=''):
+    """Append an explicitly configured third account after normal fallbacks."""
+    return resolve_api_key_pool(
+        primary_key,
+        [*parse_fallback_api_keys(fallback_value), *parse_fallback_api_keys(tertiary_fallback_value)],
+    )
+
+
 def normalize_opencode_go_service(endpoint):
     try:
         parsed = urlsplit(str(endpoint or ''))
@@ -637,7 +645,7 @@ __all__ = [
     'LlmAccountPoolExhaustedError',
     'LlmAccountPoolStateError', 'LlmAccountPoolConfigError',
     'LlmAccountPoolLockTimeoutError',
-    'normalize_api_keys', 'parse_fallback_api_keys', 'resolve_api_key_pool',
+    'normalize_api_keys', 'parse_fallback_api_keys', 'resolve_api_key_pool', 'resolve_primary_api_key_pool',
     'normalize_opencode_go_service', 'is_opencode_go_endpoint', 'get_account_id',
     'get_pool_identity', 'select_api_key', 'mark_quota_exhausted',
     'classify_opencode_go_quota_response', 'read_state_strict',

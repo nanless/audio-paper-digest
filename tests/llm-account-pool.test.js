@@ -16,6 +16,7 @@ const {
     markQuotaExhausted,
     readStateStrict,
     resolveApiKeyPool,
+    resolvePrimaryApiKeyPool,
     sanitizeLimitName,
     selectApiKey
 } = require('../scripts/llm-account-pool.js');
@@ -32,6 +33,17 @@ describe('OpenCode Go sticky account state', () => {
     it('rejects duplicate primary and fallback credentials', () => {
         assert.throws(
             () => resolveApiKeyPool('same-key', 'same-key'),
+            error => error.code === 'LLM_ACCOUNT_POOL_CONFIG_ERROR'
+        );
+    });
+
+    it('keeps the explicitly configured third account after the normal fallback', () => {
+        assert.deepEqual(
+            resolvePrimaryApiKeyPool('account-a', 'account-b', 'account-c'),
+            ['account-a', 'account-b', 'account-c']
+        );
+        assert.throws(
+            () => resolvePrimaryApiKeyPool('account-a', 'account-b', 'account-b'),
             error => error.code === 'LLM_ACCOUNT_POOL_CONFIG_ERROR'
         );
     });
@@ -88,6 +100,18 @@ describe('OpenCode Go sticky account state', () => {
         assert.ok(!raw.includes('account-b-secret'));
         assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600);
         assert.strictEqual(readStateStrict(file).policyVersion, POLICY_VERSION);
+    });
+
+    it('uses the third account only after the first and normal fallback receive quota blocks', () => {
+        const { file } = tempState();
+        const keys = resolvePrimaryApiKeyPool('account-a-secret', 'account-b-secret', 'account-c-secret');
+        const first = selectApiKey(keys, ENDPOINT, file, { nowMs: 1000 });
+        markQuotaExhausted(first, { limitName: 'quota', blockedUntilMs: 9000 }, file, { nowMs: 1000 });
+        const second = selectApiKey(keys, ENDPOINT, file, { nowMs: 1100 });
+        assert.strictEqual(second.apiKey, 'account-b-secret');
+        markQuotaExhausted(second, { limitName: 'quota', blockedUntilMs: 9000 }, file, { nowMs: 1100 });
+        const third = selectApiKey(keys, ENDPOINT, file, { nowMs: 1200 });
+        assert.strictEqual(third.apiKey, 'account-c-secret');
     });
 
     it('only classifies explicit GoUsageLimitError as quota exhaustion', () => {
