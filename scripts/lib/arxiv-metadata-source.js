@@ -2,10 +2,17 @@
 
 const crypto = require('node:crypto');
 const { detectHttpConnectProxyUrl } = require('../utils.js');
+const { createHostTaskScheduler, getAdaptiveHostCooldownMs } = require('./fetch-scheduler.js');
 
 const CONTRACT = 'official-arxiv-atom-metadata-v1';
 const MAX_BYTES = 2 * 1024 * 1024;
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
+const SHARED_METADATA_SCHEDULER = createHostTaskScheduler({
+    cooldownAfter: outcome => getAdaptiveHostCooldownMs(outcome, {
+        healthyDelayMs: 3000, transientDelayMs: 15000, rateLimitedDelayMs: 60000,
+        jitterMaxMs: 2000
+    })
+});
 
 function fail(message) {
     const error = new Error(`Official arXiv metadata rejected: ${message}`);
@@ -18,10 +25,20 @@ async function fetchOfficialArxivMetadata(arxivId, dependencies = {}) {
     if (!proxyUrl) fail('HTTPS_PROXY/HTTP_PROXY HTTP CONNECT proxy is required');
     const url = `https://export.arxiv.org/api/query?id_list=${encodeURIComponent(arxivId)}&max_results=1`;
     const fetchPapers = dependencies.fetchPapers || require('../fetch-papers.js');
-    const response = await (dependencies.requestFn || fetchPapers.httpsRequestWithProxy)(url, {
-        'User-Agent': dependencies.userAgent || 'audio-paper-digest historical metadata/1.0',
-        Accept: 'application/atom+xml,application/xml,text/xml;q=0.9'
-    }, proxyUrl, dependencies.timeoutMs || 60000, MAX_BYTES);
+    const requestFn = dependencies.requestFn || fetchPapers.httpsRequestWithProxy;
+    // Injected test transports remain immediate. Production shares one host
+    // scheduler across every historical run so the arXiv Atom API is not hit
+    // in a tight per-paper loop.
+    const scheduler = dependencies.requestScheduler || (dependencies.requestFn
+        ? { run: (_host, task) => task() } : SHARED_METADATA_SCHEDULER);
+    let response;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        response = await scheduler.run('export.arxiv.org', () => requestFn(url, {
+            'User-Agent': dependencies.userAgent || 'audio-paper-digest historical metadata/1.0',
+            Accept: 'application/atom+xml,application/xml,text/xml;q=0.9'
+        }, proxyUrl, dependencies.timeoutMs || 60000, MAX_BYTES));
+        if (response?.status !== 429 || attempt === 3) break;
+    }
     if (response?.status !== 200 || typeof response.data !== 'string') fail(`Atom API returned HTTP ${response?.status ?? 'unknown'}`);
     if (!(dependencies.hasSignature || fetchPapers.hasApiResponseSignature)(response.data)) fail('Atom response signature is missing');
     const parsed = (dependencies.parseXml || fetchPapers.parseArxivXML)(response.data, 'official-id-list', null,

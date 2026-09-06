@@ -36,3 +36,18 @@ test('official Atom adapter fails closed without proxy or exact identity coverag
                 { _meta: { entryCount: 1, legalEntryCount: 1 } }) }
     }), /another paper/);
 });
+
+test('production-style Atom scheduling retries explicit 429 through one shared host queue', async () => {
+    const statuses = [429, 200]; const hosts = [];
+    const result = await api.fetchOfficialArxivMetadata('2609.03622', {
+        detectProxy: () => 'http://127.0.0.1:7897',
+        requestScheduler: { run: async (host, task) => { hosts.push(host); return task(); } },
+        requestFn: async () => ({ status: statuses.shift(), data: atom }),
+        fetchPapers: { hasApiResponseSignature: () => true,
+            parseArxivXML: () => Object.assign([{ arxivId: '2609.03622v1', title: 'Official title',
+                abstract: 'Official abstract with evidence.', authors: ['Author One'], categories: ['cs.SD'],
+                published: '2026-09-04T08:00:00+08:00' }], { _meta: { entryCount: 1, legalEntryCount: 1 } }) }
+    });
+    assert.equal(result.metadata.arxivId, '2609.03622');
+    assert.deepEqual(hosts, ['export.arxiv.org', 'export.arxiv.org']);
+});
