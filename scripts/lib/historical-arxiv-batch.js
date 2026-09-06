@@ -74,8 +74,11 @@ function defaultDependencies() {
 }
 
 async function runSingleHintBatch({ crosswalkRoot, authorityRoot, batchRoot, crosswalkId, owner,
-    limit = null, apply = true } = {}, overrides = {}) {
+    limit = null, apply = true, concurrency = 2 } = {}, overrides = {}) {
     const deps = { ...defaultDependencies(), ...overrides };
+    if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 3) {
+        throw new Error('Batch concurrency must be an integer from 1 to 3');
+    }
     const initial = deps.readCrosswalk({ crosswalkRoot, crosswalkId });
     const allGroups = eligibleGroups(initial);
     const maximum = limit === 'pilot' ? 1 : limit === null ? allGroups.length : limit;
@@ -84,50 +87,74 @@ async function runSingleHintBatch({ crosswalkRoot, authorityRoot, batchRoot, cro
     if (!apply) return { status: 'dry-run', crosswalkId, eligibleIdentities: allGroups.length,
         eligiblePages: allGroups.reduce((count, item) => count + item.pageKeys.length, 0),
         selectedIdentities: selected.length, selectedPages: selected.reduce((count, item) => count + item.pageKeys.length, 0),
-        identities: selected.map(item => ({ arxivId: item.arxivId, pageCount: item.pageKeys.length })) };
+        concurrency, identities: selected.map(item => ({ arxivId: item.arxivId, pageCount: item.pageKeys.length })) };
 
-    const results = [];
-    for (const group of selected) {
+    const results = new Array(selected.length); let cursor = 0; let decisionTail = Promise.resolve();
+    const serializeDecision = callback => {
+        const pending = decisionTail.then(callback, callback);
+        decisionTail = pending.catch(() => {});
+        return pending;
+    };
+    const processGroup = async (group, resultIndex) => {
         const attemptId = deps.uuid(); const startedAt = deps.now(); let authorityName = null;
         const completedPageKeys = [];
         try {
             let current = deps.readCrosswalk({ crosswalkRoot, crosswalkId });
             const pending = eligibleGroups(current).find(item => item.arxivId === group.arxivId)?.pageKeys || [];
-            if (!pending.length) continue;
+            if (!pending.length) {
+                const record = { crosswalkId, attemptId, arxivId: group.arxivId, authorityName: null,
+                    status: 'complete', startedAt, finishedAt: deps.now(), requestedPageKeys: group.pageKeys,
+                    completedPageKeys: [], remainingPageKeys: [], error: null };
+                deps.writeAttemptRecord(batchRoot, record); results[resultIndex] = record; return;
+            }
             authorityName = reusableAuthorityName(current, group.arxivId);
             const prepared = await deps.prepareAuthority({ authorityRoot, arxivId: group.arxivId,
                 authorityName, apply: true, requireLiveAuthorization: true });
             for (const pageKey of pending) {
-                current = deps.readCrosswalk({ crosswalkRoot, crosswalkId });
-                if (current.assignments[pageKey]?.status !== 'pending') continue;
-                const operationId = deps.uuid();
-                const artifact = deps.buildDecision({ state: current, pageKey,
-                    authorityHandle: prepared.authorityHandle, operationId, actorId: owner });
-                const decisionName = `batch-${group.arxivId.replace('.', '-')}-${attemptId}-${pageKey.slice(5)}.json`;
-                const decisionFile = deps.writeDecision({ crosswalkRoot, crosswalkId, decisionName, artifact });
-                const handle = deps.loadDecision(decisionFile, { authorityHandle: prepared.authorityHandle });
-                deps.applyDecision({ crosswalkRoot, crosswalkId, decisionHandle: handle, owner });
-                completedPageKeys.push(pageKey);
+                const applied = await serializeDecision(() => {
+                    // Source fetches may run concurrently, but every mutation
+                    // re-reads the global state inside this process-wide queue.
+                    current = deps.readCrosswalk({ crosswalkRoot, crosswalkId });
+                    if (current.assignments[pageKey]?.status !== 'pending') return false;
+                    const operationId = deps.uuid();
+                    const artifact = deps.buildDecision({ state: current, pageKey,
+                        authorityHandle: prepared.authorityHandle, operationId, actorId: owner });
+                    const decisionName = `batch-${group.arxivId.replace('.', '-')}-${attemptId}-${pageKey.slice(5)}.json`;
+                    const decisionFile = deps.writeDecision({ crosswalkRoot, crosswalkId, decisionName, artifact });
+                    const handle = deps.loadDecision(decisionFile, { authorityHandle: prepared.authorityHandle });
+                    deps.applyDecision({ crosswalkRoot, crosswalkId, decisionHandle: handle, owner });
+                    return true;
+                });
+                if (applied) completedPageKeys.push(pageKey);
             }
             const after = deps.readCrosswalk({ crosswalkRoot, crosswalkId });
             const remainingPageKeys = pending.filter(pageKey => after.assignments[pageKey]?.status === 'pending');
             const record = { crosswalkId, attemptId, arxivId: group.arxivId, authorityName,
                 status: remainingPageKeys.length ? 'partial' : 'complete', startedAt, finishedAt: deps.now(),
                 requestedPageKeys: pending, completedPageKeys, remainingPageKeys, error: null };
-            deps.writeAttemptRecord(batchRoot, record); results.push(record);
+            deps.writeAttemptRecord(batchRoot, record); results[resultIndex] = record;
         } catch (error) {
             const current = deps.readCrosswalk({ crosswalkRoot, crosswalkId });
             const remainingPageKeys = group.pageKeys.filter(pageKey => current.assignments[pageKey]?.status === 'pending');
             const record = { crosswalkId, attemptId, arxivId: group.arxivId, authorityName,
                 status: 'failed', startedAt, finishedAt: deps.now(), requestedPageKeys: group.pageKeys,
                 completedPageKeys, remainingPageKeys, error: String(error.message).slice(0, 2000) };
-            deps.writeAttemptRecord(batchRoot, record); results.push(record);
+            deps.writeAttemptRecord(batchRoot, record); results[resultIndex] = record;
         }
-    }
+    };
+    const worker = async () => {
+        while (cursor < selected.length) {
+            const index = cursor++;
+            await processGroup(selected[index], index);
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, selected.length) }, worker));
     const final = deps.readCrosswalk({ crosswalkRoot, crosswalkId });
-    const failures = results.filter(item => item.status !== 'complete');
+    const completedResults = results.filter(Boolean);
+    const failures = completedResults.filter(item => item.status !== 'complete');
     return { status: failures.length ? 'partial' : 'complete', crosswalkId,
-        processedIdentities: results.length, processedPages: results.reduce((count, item) => count + item.completedPageKeys.length, 0),
+        concurrency, processedIdentities: completedResults.length,
+        processedPages: completedResults.reduce((count, item) => count + item.completedPageKeys.length, 0),
         failures: failures.map(item => ({ arxivId: item.arxivId, error: item.error, remainingPages: item.remainingPageKeys.length })),
         remainingEligibleIdentities: eligibleGroups(final).length, crosswalkVerified: final.completion.verified,
         crosswalkTotal: final.completion.total, exitCode: failures.length ? 1 : 0 };

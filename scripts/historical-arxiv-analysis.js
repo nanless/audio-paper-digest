@@ -1,9 +1,6 @@
 #!/usr/bin/env node
 'use strict';
 
-const crypto = require('node:crypto');
-const fs = require('node:fs');
-const path = require('node:path');
 const { requireExternalRuntime } = require('./env-loader.js');
 
 const USAGE = 'prepare --dry-run|--apply --run-id UUID --id YYMM.NNNNN --date YYYY-MM-DD --authority arxiv-YYMM.NNNNN.json | analyze|status --run-id UUID [--concurrency 1-5]';
@@ -44,29 +41,6 @@ function parseArgs(argv) {
     return { action, runId: flags['--run-id'], ...(flags['--concurrency'] ? { concurrency: Number(flags['--concurrency']) } : {}) };
 }
 
-function readMetadata(date, arxivId, config) {
-    const candidates = [config.FILES.rawCandidates, path.join(config.ARCHIVE_DIR, date, 'raw-candidates.json')];
-    for (const filename of candidates) {
-        let bytes;
-        try {
-            const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-            try { const stat = fs.fstatSync(fd); if (!stat.isFile() || stat.nlink !== 1) throw new Error('unsafe raw metadata file'); bytes = fs.readFileSync(fd); }
-            finally { fs.closeSync(fd); }
-        } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-        const value = JSON.parse(bytes.toString('utf8'));
-        if (value.batchDate !== date || !Array.isArray(value.papers)) continue;
-        const matches = value.papers.filter(paper => (paper.arxivId || paper.paper_id) === arxivId);
-        if (matches.length !== 1) continue;
-        const allowed = new Set(require('./lib/fresh-rewrite-run.js').ORIGINAL_METADATA_FIELDS);
-        const metadata = Object.fromEntries(Object.entries(matches[0]).filter(([key]) => allowed.has(key)));
-        return { metadata, proof: { contract: require('./lib/historical-arxiv-analysis.js').METADATA_CONTRACT,
-            paperId: `arxiv:${arxivId}`, sourceName: path.relative(config.PROJECT_ROOT, filename),
-            fileSha256: crypto.createHash('sha256').update(bytes).digest('hex'),
-            recordSha256: require('./lib/fresh-rewrite-run.js').stableHash(metadata) } };
-    }
-    throw new Error(`No unique raw metadata record for ${arxivId} on ${date}`);
-}
-
 async function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('historical-arxiv-analysis.js');
     const options = parseArgs(argv);
@@ -104,4 +78,4 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
 }
 
 if (require.main === module) main().catch(error => { console.error(`[historical-arxiv-analysis] ${error.message}`); process.exitCode = 1; });
-module.exports = { USAGE, validDate, parseArgs, readMetadata, main };
+module.exports = { USAGE, validDate, parseArgs, main };

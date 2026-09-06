@@ -101,9 +101,13 @@ test('dry-run is zero mutation and attempt records are append-only mode 0600', a
 });
 
 test('CLI accepts pilot or numeric limit and routes configured roots', async () => {
-    assert.equal(cli.parseArgs(['--apply', '--crosswalk', UUIDS[0], '--owner', 'batch.worker', '--limit', 'pilot']).limit, 'pilot');
-    assert.equal(cli.parseArgs(['--dry-run', '--crosswalk', UUIDS[0], '--owner', 'batch.worker', '--limit', '3']).limit, 3);
+    const pilot = cli.parseArgs(['--apply', '--crosswalk', UUIDS[0], '--owner', 'batch.worker', '--limit', 'pilot']);
+    assert.equal(pilot.limit, 'pilot'); assert.equal(pilot.concurrency, 2);
+    const numeric = cli.parseArgs(['--dry-run', '--crosswalk', UUIDS[0], '--owner', 'batch.worker',
+        '--limit', '3', '--concurrency', '3']);
+    assert.equal(numeric.limit, 3); assert.equal(numeric.concurrency, 3);
     assert.throws(() => cli.parseArgs(['--apply', '--crosswalk', UUIDS[0], '--owner', 'batch.worker', '--limit', 'all']), /Use/);
+    assert.throws(() => cli.parseArgs(['--apply', '--crosswalk', UUIDS[0], '--owner', 'batch.worker', '--concurrency', '4']), /Use/);
     let received;
     const result = await cli.main(['--dry-run', '--crosswalk', UUIDS[0], '--owner', 'batch.worker'], {
         files: { pageSourceCrosswalkDir: '/tmp/crosswalk', paperSourceAuthorityDir: '/tmp/authority',
@@ -111,4 +115,35 @@ test('CLI accepts pilot or numeric limit and routes configured roots', async () 
         runBatch: async options => { received = options; return { status: 'dry-run', exitCode: 0 }; }
     });
     assert.equal(result.status, 'dry-run'); assert.equal(received.limit, null);
+});
+
+test('source fetches run concurrently while decision mutations remain globally serialized', async () => {
+    const current = state(); let activeFetches = 0; let maximumFetches = 0;
+    let activeDecisions = 0; let maximumDecisions = 0; let uuidIndex = 0; const artifacts = new Map();
+    const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+    const result = await batch.runSingleHintBatch({ crosswalkRoot: '/tmp/crosswalk', authorityRoot: '/tmp/authority',
+        batchRoot: '/tmp/batch', crosswalkId: UUIDS[0], owner: 'batch.worker', apply: true, concurrency: 3 }, {
+        readCrosswalk: () => structuredClone(current),
+        prepareAuthority: async options => {
+            activeFetches += 1; maximumFetches = Math.max(maximumFetches, activeFetches);
+            await delay(8); activeFetches -= 1; return { authorityHandle: { id: options.arxivId } };
+        },
+        buildDecision: options => ({ pageKey: options.pageKey, authorityHandle: options.authorityHandle }),
+        writeDecision: options => { const filename = `/tmp/${options.decisionName}`; artifacts.set(filename, options.artifact); return filename; },
+        loadDecision: (filename, options) => ({ ...artifacts.get(filename), authorityHandle: options.authorityHandle }),
+        applyDecision: options => {
+            activeDecisions += 1; maximumDecisions = Math.max(maximumDecisions, activeDecisions);
+            current.assignments[options.decisionHandle.pageKey].status = 'verified';
+            current.assignments[options.decisionHandle.pageKey].sourceAuthority = {
+                paperId: `arxiv:${options.decisionHandle.authorityHandle.id}`,
+                authorityName: `arxiv-${options.decisionHandle.authorityHandle.id}-history.json`
+            };
+            current.completion.verified += 1; activeDecisions -= 1;
+        },
+        uuid: () => UUIDS[uuidIndex++], now: () => '2026-09-07T00:00:00.000Z',
+        writeAttemptRecord: () => {}
+    });
+    assert.equal(maximumFetches, 2);
+    assert.equal(result.status, 'complete');
+    assert.equal(maximumDecisions, 1); assert.equal(activeDecisions, 0);
 });

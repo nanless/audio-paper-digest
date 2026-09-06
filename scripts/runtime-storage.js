@@ -57,6 +57,8 @@ function getLayout(projectRoot = PROJECT_ROOT) {
         { key: 'historical-page-inventories', root: path.join(runtime, 'historical-page-inventories') },
         { key: 'page-source-crosswalks', root: path.join(runtime, 'page-source-crosswalks') },
         { key: 'historical-arxiv-batches', root: path.join(runtime, 'historical-arxiv-batches') },
+        { key: 'historical-analysis-schedulers', root: path.join(runtime, 'historical-analysis-schedulers') },
+        { key: 'historical-taxonomy-assignments', root: path.join(runtime, 'historical-taxonomy-assignments') },
         // Official arXiv source bundles are crosswalk inputs and must remain
         // replayable for final-receipt verification; automatic prune has no authority here.
         { key: 'paper-source-authorities', root: path.join(runtime, 'paper-source-authorities') }

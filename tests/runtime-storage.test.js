@@ -27,7 +27,7 @@ const CONFERENCE_PROTECTED_KEYS = [
     'conference-executions'
 ];
 const HISTORY_PROTECTED_KEYS = ['historical-page-inventories', 'page-source-crosswalks',
-    'historical-arxiv-batches', 'paper-source-authorities'];
+    'historical-arxiv-batches', 'historical-analysis-schedulers', 'historical-taxonomy-assignments', 'paper-source-authorities'];
 
 const NOW_MS = Date.parse('2026-09-02T00:00:00.000Z');
 const OLD_MS = NOW_MS - 40 * 24 * 60 * 60 * 1000;
@@ -55,6 +55,8 @@ function makeProject() {
         'data/runtime/historical-page-inventories',
         'data/runtime/page-source-crosswalks',
         'data/runtime/historical-arxiv-batches',
+        'data/runtime/historical-analysis-schedulers',
+        'data/runtime/historical-taxonomy-assignments',
         'data/runtime/paper-source-authorities',
         'data/archive',
         'logs'

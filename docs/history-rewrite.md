@@ -66,10 +66,10 @@ Reader 或自行拼出的 legacy snapshot/receipt 都不能取得 production aut
 authority，最后写入 verified decision 并 CAS apply。它不读取博客正文、不按标题猜测，也不会把
 单一 hint 页导入这条人工例外路径；目前 CLI 只接通已有官方适配器支持的 arXiv 身份。
 
-`history:arxiv-analyze prepare` 只从对应日期的 `raw-candidates.json` 读取白名单原始元数据，并以
-live 官方全文 authority 创建独立 source-only run；旧博客正文、旧 analysis、旧 Reader 和旧
-checkpoint 都不会进入输入。`analyze` 才调用现有多阶段分析引擎并产生 LLM 用量，结果留在该
-run 的 `analysis.json`，不会覆盖 `data/current/deep-analysis-result.json`。
+`history:arxiv-analyze prepare` 通过项目代理重新抓取精确单篇 arXiv Atom 元数据，并以 live
+官方全文 authority 创建独立 source-only run；原始 Atom XML 一并按 SHA 封存，旧博客正文、旧
+analysis、旧 Reader 和旧 checkpoint 都不会进入输入。`analyze` 才调用现有多阶段分析引擎并产生
+LLM 用量，结果留在该 run 的 `analysis.json`，不会覆盖 `data/current/deep-analysis-result.json`。
 
 `page-source-crosswalk-v1` 会严格重放 canonical ledger/receipt 字节与自校验 SHA，再以 opaque
 handle 为每个 `kind=paper` 页面建立隔离、可恢复的 pending 状态。assignment 只含页面路径和

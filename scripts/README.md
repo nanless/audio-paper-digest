@@ -50,7 +50,8 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `digest-status.js` | Node 共享 | `papers.json` 的分析状态、批次日期和恢复状态同步。 |
 | `lib/fetch-scheduler.js` | Node 库 | 按 host 串行调度、冷却和失败类型判定。 |
 | `lib/filter-input-contract.js` | Node 库 | 筛选决定所绑定的最小输入 SHA。 |
-| `lib/paper-taxonomy.js` | Node 库 | 共享标签registry的严格加载、同义解析、祖先查询与展示去重；不修改旧canonical标签。 |
+| `lib/paper-taxonomy.js` | Node 库 | 共享标签registry的严格加载、同义解析、候选枚举、祖先查询与展示去重；不修改旧canonical标签。 |
+| `lib/historical-taxonomy-assignment.js` | Node 库 | 从完成且来源绑定的历史 analysis run 重放 canonical 标签，精确映射 concept ID、裁剪祖先，并生成逐论文 assignment；未知、歧义或主任务/主方法不闭合时 blocked。 |
 | `lib/keyword-prefilter.js` | Node 库 | 版本化高召回音频关键词预筛。 |
 | `lib/reader-repair.js` | Node 库 | Reader 候选缓存、节点 SHA 与受限 patch、局部诊断及无进展检测；候选不构成 production proof。 |
 | `lib/reader-operator-patch.js` | Node 库 | 显式应用同 fresh run 的人工局部补丁；严格来源/节点 SHA 与完整 Reader parser，保存 failed 候选并保留预算、原始字节归档和重入审计，不签发成功正文。 |
@@ -84,6 +85,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/page-source-crosswalk.js` | Node 库 | 跨运行时重放历史 inventory，以锁内 CAS/append-only 决策绑定 pageId/页面 SHA 与 production-authorized source authority；标题不能 verified，同 identity 多页确定性分组，finalize 与每次 final receipt 读取都重新验证来源。 |
 | `lib/history-conflict-identity.js` | Node 库 | 仅对冻结 inventory 中 `conflict/multiple` 页面接受操作者明确选择的已有非标题 hint，并要求 production authority 精确匹配后生成 verified decision。 |
 | `lib/historical-arxiv-analysis.js` | Node 库 | 将 live arXiv 全文 authority 和官方 Atom 元数据封装为可恢复的隔离 fresh-analysis run，不读取旧生成正文。 |
+| `lib/historical-arxiv-analysis-scheduler.js` | Node 库 | 从 crosswalk 已 verified 的唯一 arXiv identity groups 派生稳定 run ID，按 pilot/限额可恢复准备或执行隔离历史分析。 |
 | `lib/historical-arxiv-batch.js` | Node 库 | 按唯一 arXiv 身份批处理 single-hint 历史页面；同身份多页共用一次 live 来源授权，逐页 CAS 并持久化尝试记录。 |
 
 ## 默认 LLM/API：恢复与维护入口
@@ -107,6 +109,8 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `history-conflict-identity.js` | 同一进程现场验证官方 arXiv 来源，并将操作者选择的已有冲突 hint 写成 verified decision 后 CAS apply；不读旧正文或标题。 |
 | `arxiv-source-authority.js` | 对规范化 arXiv ID 规划或抓取官方全文；组合参数在同一进程用 live opaque handle 完成 verified decision/CAS，磁盘重载会降级；dry-run 不联网、不写盘。 |
 | `historical-arxiv-analysis.js` | 用 live arXiv authority 与白名单原始抓取元数据建立隔离 source-only run；`analyze` 复用现有多阶段引擎，canonical 不写入 daily current。 |
+| `historical-arxiv-analysis-scheduler.js` | 从 finalized crosswalk 批量调度历史 arXiv run；支持 prepare-only/analyze、pilot/数值 limit 与小并发恢复。 |
+| `historical-taxonomy-assignment.js` | 对完成的历史 analysis run 执行单篇或批量 deterministic 重标；dry-run 零写，apply 只写独立 assignment artifact，不调用 LLM。 |
 | `historical-arxiv-batch.js` | 对 pending single-hint arXiv 页面按唯一论文分组抓取与 verified 映射；支持 pilot/数值 limit 和可恢复全量续跑，不调用 LLM。 |
 | `paper_identity.py` | `paper-identity-v1` 的 Python 同构实现，使用共享向量防止发布侧与 Node 身份/SHA 漂移。 |
 | `paper_taxonomy.py` | 与Node共用registry的Python加载、验证和精确映射；未知/歧义不自动收窄。 |

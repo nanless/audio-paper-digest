@@ -7,14 +7,14 @@ const Config = require('./config.js');
 const api = require('./lib/historical-arxiv-batch.js');
 const crosswalkApi = require('./lib/page-source-crosswalk.js');
 
-const USAGE = '--dry-run|--apply --crosswalk UUID --owner OWNER [--limit pilot|N]';
+const USAGE = '--dry-run|--apply --crosswalk UUID --owner OWNER [--limit pilot|N] [--concurrency 1-3]';
 function parseArgs(argv) {
     const [mode, ...rest] = argv;
     if (!['--dry-run', '--apply'].includes(mode)) throw new Error(`Use ${USAGE}`);
     const values = {};
     for (let index = 0; index < rest.length; index += 2) {
         const flag = rest[index]; const value = rest[index + 1];
-        if (!['--crosswalk', '--owner', '--limit'].includes(flag) || value === undefined || Object.hasOwn(values, flag)) {
+        if (!['--crosswalk', '--owner', '--limit', '--concurrency'].includes(flag) || value === undefined || Object.hasOwn(values, flag)) {
             throw new Error(`Use ${USAGE}`);
         }
         values[flag] = value;
@@ -22,9 +22,11 @@ function parseArgs(argv) {
     if (!crosswalkApi.UUID_RE.test(String(values['--crosswalk'] || ''))
         || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(String(values['--owner'] || ''))
         || (values['--limit'] !== undefined && values['--limit'] !== 'pilot'
-            && !/^[1-9]\d{0,4}$/.test(values['--limit']))) throw new Error(`Use ${USAGE}`);
+            && !/^[1-9]\d{0,4}$/.test(values['--limit']))
+        || (values['--concurrency'] !== undefined && !/^[1-3]$/.test(values['--concurrency']))) throw new Error(`Use ${USAGE}`);
     return { apply: mode === '--apply', crosswalkId: values['--crosswalk'], owner: values['--owner'],
-        limit: values['--limit'] === undefined ? null : values['--limit'] === 'pilot' ? 'pilot' : Number(values['--limit']) };
+        limit: values['--limit'] === undefined ? null : values['--limit'] === 'pilot' ? 'pilot' : Number(values['--limit']),
+        concurrency: values['--concurrency'] === undefined ? 2 : Number(values['--concurrency']) };
 }
 
 async function main(argv = process.argv.slice(2), runtime = {}) {

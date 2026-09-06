@@ -154,6 +154,15 @@ function recoverHistoricalArxivRun({ runId, date, arxivId, rootDir } = {}) {
     if (loaded.run.date !== date || loaded.run.paperIds.length !== 1 || loaded.run.paperIds[0] !== arxivId
         || loaded.run.baseline.contract !== BASELINE_CONTRACT
         || loaded.run.baseline.paperId !== `arxiv:${arxivId}`) fail('existing runId belongs to another historical analysis');
+    normalizedMetadataProof(loaded.run.baseline.metadata, loaded.inputs.papers[0]);
+    if (loaded.run.baseline.metadata.contract === require('./arxiv-metadata-source.js').CONTRACT) {
+        const filename = path.join(runDir, `metadata-${arxivId}.atom.xml`);
+        let bytes; let fd;
+        try { fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); bytes = fs.readFileSync(fd); }
+        catch (error) { fail(`official metadata artifact cannot be replayed: ${error.message}`); }
+        finally { if (fd !== undefined) fs.closeSync(fd); }
+        if (sha256(bytes) !== loaded.run.baseline.metadata.fileSha256) fail('official metadata artifact SHA drifted');
+    }
     return { runId, runDir, paperId: `arxiv:${arxivId}`, status: loaded.run.status,
         canonicalPath: path.join(runDir, 'analysis.json'), recovered: true };
 }

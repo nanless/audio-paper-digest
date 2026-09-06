@@ -33,6 +33,8 @@
     "history:arxiv-batch": "node scripts/historical-arxiv-batch.js",
     "history:resolve-conflict": "node scripts/history-conflict-identity.js",
     "history:arxiv-analyze": "node scripts/historical-arxiv-analysis.js",
+    "history:analyze-batch": "node scripts/historical-arxiv-analysis-scheduler.js",
+    "history:taxonomy": "node scripts/historical-taxonomy-assignment.js",
     "rewrite:source": "node scripts/rewrite-from-source.js",
     "paper:rethink": "node scripts/paper-rethink-server.js",
     "deep": "node scripts/deep-analysis-only.js",

@@ -134,15 +134,20 @@ function loadTaxonomy(filePath) {
 }
 
 function resolveLabel(taxonomy, label, facet) {
+    const matches = resolveLabelCandidates(taxonomy, label, facet);
+    // Deprecated concepts remain explicit objects; no silent forward migration.
+    return matches.length === 1 ? matches[0] : null;
+}
+
+function resolveLabelCandidates(taxonomy, label, facet) {
     const data = registryData(taxonomy);
     if (facet === null) facet = undefined;
     if (facet !== undefined && !FACET_IDS.includes(facet)) throw new Error(`Unknown facet: ${facet}`);
     const normalized = normalizeLabel(label);
-    if (!normalized) return null;
+    if (!normalized) return [];
     const matches = data.concepts.filter(c => (facet === undefined || c.facet === facet)
         && [...Object.values(c.preferredLabel), ...c.aliases].some(value => normalizeLabel(value) === normalized));
-    // Deprecated concepts remain explicit objects; no silent forward migration.
-    return matches.length === 1 ? matches[0] : null;
+    return matches.map(item => structuredClone(item));
 }
 
 function ancestors(taxonomy, id) {
@@ -165,4 +170,5 @@ function pruneAncestors(taxonomy, ids) {
     return ids.filter(id => !covered.has(id));
 }
 
-module.exports = { loadTaxonomy, validateTaxonomy, resolveLabel, ancestors, pruneAncestors };
+module.exports = { loadTaxonomy, validateTaxonomy, normalizeLabel, resolveLabelCandidates,
+    resolveLabel, ancestors, pruneAncestors };
