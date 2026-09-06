@@ -103,6 +103,18 @@ npm run digest:status -- --date "$today"
 所有入口、参数和恢复语义见[脚本说明](docs/scripts.md)；文件到职责的一页索引见
 [`scripts/README.md`](scripts/README.md)。
 
+## 标签体系与只读历史预览
+
+```bash
+npm run taxonomy:validate
+npm run taxonomy:preview
+npm run taxonomy:serve
+```
+
+共享词表提供稳定ID、任务父子层级与分面。预览扫描项目配置中的Hugo仓库，保留旧标签及未映射项；界面支持父级查询、同分面“或”和跨分面“且”。所有结果只是历史标签的确定性映射，**不是已审的论文语义重标**，不会修改旧正文、评分或标签URL，也不调用论文模型API。服务只在本机回环地址开放静态预览，不是本机AI助手。
+
+详见[实施与验收计划](docs/tag-taxonomy-implementation.md)和[标签设计](docs/tag-taxonomy-design.md)。
+
 ## 失败后从哪里继续
 
 - 抓取或筛选中断：直接重跑默认入口，健康 checkpoint 会复用。

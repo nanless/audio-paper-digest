@@ -159,6 +159,9 @@ const HUGGINGFACE_CONFIG = {
 // ═══════════════════════════════════════════════════════
 
 const FILES = {
+    taxonomyRegistry: path.join(PROJECT_ROOT, 'config', 'paper-taxonomy.json'),
+    taxonomyPreviewDir: path.join(DATA_DIR, 'runtime', 'taxonomy-preview'),
+    taxonomyExplorerAssets: path.join(PROJECT_ROOT, 'web', 'tag-explorer'),
     // 跨日期、跨 Node/Python 的 provider 账号状态。它不是日批次数据，
     // 因此不能放进会被归档轮转的 current/。
     llmAccountPoolState: path.join(DATA_DIR, 'runtime', 'llm-account-pool.json'),

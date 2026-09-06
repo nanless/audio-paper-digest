@@ -1,6 +1,6 @@
 # 论文标签体系设计：受控词表、任务层级与分面检索
 
-状态：设计提案，尚未接入生产；不改变现有论文、历史评分、标签 URL 或刚发布的 2026-09-04 批次。调查日期：2026-09-06。本文的数量门槛是本站建议，不是学术界统一标准。
+状态：设计与[第一批代码实施](tag-taxonomy-implementation.md)已完成，共享词表和只读历史检索预览可运行；正式语义重标及生产切换仍未执行，不改变现有论文、评分、标签URL或2026-09-04发布。调查日期：2026-09-06。本文的数量门槛是本站建议，不是学术界统一标准。
 
 ## 0. 全量历史盘点与证据边界
 
@@ -194,7 +194,7 @@
   "paperId": "2609.03622",
   "primaryTask": "task.speech-enhancement",
   "secondaryTasks": [],
-  "methods": ["method.test-time-adaptation", "method.autoregressive-modeling"],
+  "methods": ["method.test-time-adaptation", "method.autoregressive"],
   "settings": [],
   "signals": ["speech"],
   "inputModalities": ["audio"],
@@ -213,9 +213,9 @@
 
 ## 7. 唯一词表与治理
 
-建议未来新增一个共享 registry，供 Node、Python、Prompt 和 Hugo 导航共同读取；本轮仅设计，不先修改任一生产白名单。
+共享registry已在 `config/paper-taxonomy.json` 实现，Node、Python和只读检索预览使用同一份数据；生产Prompt、legacy解析和Hugo正式导航尚未切换。
 
-每个概念至少含：`id`、`facet`、中英文 `preferredLabel`、`aliases`、`definition`、`includeExamples`、`excludeExamples`、`broaderId`、`relatedIds`、`status`、`introducedVersion`、`replacedBy`。别名规范化限制为已审核的语言、大小写、全半角与明确拼写，不用模糊字符串相似度自动合并技术概念。
+正式治理设计包括稳定ID、分面、中英文名称、别名、定义、正反例、父级与相关关系、版本和弃用。已实施v1使用 `id/facet/preferredLabel/aliases/broaderId/definition/scopeNote/status/replacedBy`，正反边界写在scopeNote，全概念继承首版版本；独立相关边与逐概念引入版本留给后续协议。别名规范化限制为已审核名称、ASCII大小写、全半角与明确拼写，不用模糊相似度自动合并技术概念。
 
 规则：ID 永不复用；每个语言只有一个首选名；同一分面别名不能指向多个 ID；父级必须存在且同分面；层级无环；deprecated 词保留到新词的定向解释；删除和拆分必须有迁移记录。为每个新增叶子提供定义与至少一个正例、反例或排除条件。低频但有独立学术意义的任务可以保留，不用“出现少”作为删除理由。
 
@@ -225,7 +225,7 @@
 
 ## 8. 省 Token 的生成与审核路径
 
-这部分是待实施方案，不宣称已经测得节省比例。
+本地映射、结构校验、SHA失效与无需论文模型的历史预览已实现；面向新论文的LLM分类接入仍是后续方案，不宣称已测得节省比例。
 
 - 优先复用主分析已提取的任务、方法、输入输出及评测证据，避免另发一次全文分类调用。
 - Prompt 先提供短的分面规则与适用领域候选词表；返回稳定 ID，而不是让模型反复抄写全部标签规则。
@@ -272,4 +272,4 @@
 
 ## 10. 本轮交付边界
 
-2026-09-04 博客重写和四篇纠错已作为独立事务发布；本设计不再次修改该批次。标签阶段交付历史盘点、来源依据、分面/父子规则、候选覆盖目录和迁移验收方法。历史批量重标、生产 schema 变更和新标签导航上线是后续实施阶段，必须有独立差异与发布验收，不能混入已验收的正文重写。
+2026-09-04博客重写与四篇纠错已独立发布，标签工作不修改该批次。已交付历史盘点、设计及首批204概念共享词表、Node/Python校验、全历史映射和可运行检索预览；详见实施记录。历史语义重标、生产schema变更与正式导航上线仍需独立差异和发布验收，不能混入已验收的正文重写。

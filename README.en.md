@@ -101,6 +101,18 @@ or another page review.
 See [Script responsibilities](docs/en/scripts.md) for arguments and recovery semantics, or
 [`scripts/README.md`](scripts/README.md) for a compact file-to-responsibility index.
 
+## Taxonomy and read-only historical preview
+
+```bash
+npm run taxonomy:validate
+npm run taxonomy:preview
+npm run taxonomy:serve
+```
+
+A shared registry defines stable IDs, task ancestry and facets. The preview reads the configured Hugo checkout, retains original and unresolved tags, and supports parent queries, OR within a facet and AND across facets. These are **legacy-label mappings, not reviewed semantic reclassifications**. No article, score or old tag URL is changed and no paper-model API is called. The loopback server only serves static preview assets, not a local AI companion.
+
+See the [implementation plan](docs/tag-taxonomy-implementation.md) and [taxonomy design](docs/tag-taxonomy-design.md) (Chinese).
+
 ## Where to resume after a failure
 
 - Interrupted fetch/filter: rerun the default entry; healthy checkpoints are reused.

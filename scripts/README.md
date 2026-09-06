@@ -50,6 +50,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `digest-status.js` | Node 共享 | `papers.json` 的分析状态、批次日期和恢复状态同步。 |
 | `lib/fetch-scheduler.js` | Node 库 | 按 host 串行调度、冷却和失败类型判定。 |
 | `lib/filter-input-contract.js` | Node 库 | 筛选决定所绑定的最小输入 SHA。 |
+| `lib/paper-taxonomy.js` | Node 库 | 共享标签registry的严格加载、同义解析、祖先查询与展示去重；不修改旧canonical标签。 |
 | `lib/keyword-prefilter.js` | Node 库 | 版本化高召回音频关键词预筛。 |
 | `lib/reader-repair.js` | Node 库 | Reader 候选缓存、节点 SHA 与受限 patch、局部诊断及无进展检测；候选不构成 production proof。 |
 | `lib/reader-operator-patch.js` | Node 库 | 显式应用同 fresh run 的人工局部补丁；严格来源/节点 SHA 与完整 Reader parser，保存 failed 候选并保留预算、原始字节归档和重入审计，不签发成功正文。 |
@@ -70,6 +71,10 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 
 | 文件 | 职责 |
 |---|---|
+| `taxonomy-tools.js` | 校验标签registry并启动仅四个只读路由的回环预览服务；不提供本机助手或生产迁移。 |
+| `paper_taxonomy.py` | 与Node共用registry的Python加载、验证和精确映射；未知/歧义不自动收窄。 |
+| `taxonomy_paths.py` | 集中管理独立标签预览的Python路径，复用项目根与环境；不改变正式发布path_config模板指纹。 |
+| `build-taxonomy-preview.py` | 只读扫描Hugo历史论文，生成有来源指纹的映射预览、完整旧词处置与待核报告；不修改博客或current。 |
 | `deep-analysis-only.js` | 从 complete 筛选结果安全续跑未完成分析。 |
 | `batch-analyze.js` | 对现有 canonical 中的未完成论文批量分析。 |
 | `reanalyze.js` | 强制全量重分析，支持显式并发与数据文件。 |
