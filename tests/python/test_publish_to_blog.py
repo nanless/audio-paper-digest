@@ -1192,6 +1192,28 @@ class PublishToBlogReviewTest(unittest.TestCase):
                 publish_to_blog.PublishDataValidationError, '内部绑定失败占位'):
             publish_to_blog._validate_api_reader_source_bindings(paper)
 
+    def test_api_reader_display_formula_count_ignores_escaped_reference_in_image_alt(self):
+        paper = llm_api_publication_fixture()
+        formula = r'\[\mathcal{L}=\lVert y-\hat{y}\rVert_1\]'
+        paper['apiReaderArticle'] = paper['apiReaderArticle'].replace(formula, '') \
+            + '\n\n![Figure caption under laboratory \\[28\\] and crowdsourcing](' \
+              'https://arxiv.org/html/2403.14817v1/figures/E3_feature.png)'
+        paper['apiReaderPlan']['formulaBindings'] = []
+        reseal_llm_api_reader_fixture(paper)
+        self.assertEqual(
+            publish_to_blog._api_reader_display_formula_blocks(
+                paper['apiReaderArticle'],
+            ),
+            [],
+        )
+        publish_to_blog._validate_api_reader_source_bindings(paper)
+        paper['apiReaderArticle'] += r'\n\n\[x=1\]'
+        reseal_llm_api_reader_fixture(paper)
+        with self.assertRaisesRegex(
+                publish_to_blog.PublishDataValidationError,
+                '正文展示公式数量与 source binding 不一致'):
+            publish_to_blog._validate_api_reader_source_bindings(paper)
+
     def test_api_reader_numeric_units_are_whole_words_not_next_row_prefixes(self):
         tokens = publish_to_blog._api_reader_numeric_tokens(
             '2.39\nSE w/o TTA\n3.99\nSE w/ TTA\n4.12 BAK\n5.23 Model'

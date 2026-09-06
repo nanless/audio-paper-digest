@@ -925,6 +925,19 @@ describe('analyzePaperWithRetry', () => {
         automatic.analysisManifest.stages.apiReaderArticle.structuredArtifactsSha256 = '2'.repeat(64);
         assert.strictEqual(isSuccessfulAnalysisRecord(automatic), true);
 
+        const resealArticle = () => {
+            const articleSha256 = crypto.createHash('sha256')
+                .update(automatic.apiReaderArticle).digest('hex');
+            automatic.apiReaderArticleSha256 = articleSha256;
+            automatic.analysisManifest.stages.apiReaderArticle.articleSha256 = articleSha256;
+        };
+        automatic.apiReaderArticle += '\n\n![Figure under laboratory \\[28\\]](https://arxiv.org/html/2403.14817v1/figure.png)';
+        resealArticle();
+        assert.strictEqual(apiReaderV3BindsCanonical(automatic), true);
+        automatic.apiReaderArticle += '\n\n\\[x=1\\]';
+        resealArticle();
+        assert.strictEqual(apiReaderV3BindsCanonical(automatic), false);
+
         const nonApi = validAnalysisPaper('2604.00021v5');
         assert.strictEqual(isSuccessfulAnalysisRecord(nonApi), true);
         const manual = validAnalysisPaper('2604.00021v6');

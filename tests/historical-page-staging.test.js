@@ -143,3 +143,27 @@ test('writeExact rejects leaf and parent symlinks on recovery paths', t => {
     const parent = path.join(f.root, 'linked-parent'); fs.symlinkSync(safe, parent);
     assert.throws(() => api.writeExact(path.join(parent, 'child.bin'), Buffer.from('fresh')), /Unsafe fresh rewrite directory/);
 });
+
+test('renderer failure leaves only an immutable input intent and same run ID resumes safely', t => {
+    const f = fixture(t); const runId = '66666666-6666-4666-8666-666666666666';
+    const args = { apply: true, crosswalkId: CROSSWALK, stagingRunId: runId,
+        analysisRunId: ANALYSIS_RUN, limit: 'pilot', crosswalkRoot: '/unused', analysisRoot: '/unused',
+        taxonomyRoot: '/unused', taxonomyRegistry: '/unused', stagingRoot: f.root };
+    assert.throws(() => api.stageHistoricalPages(args, { ...f.dependencies,
+        render: () => { throw new Error('real publisher contract rejected'); } }), /publisher contract/);
+    assert.deepEqual(fs.readdirSync(path.join(f.root, runId)), ['intent.json']);
+    assert.equal(api.stageHistoricalPages(args, f.dependencies).status, 'staged');
+    const intent = api.normalizeStagingIntent(JSON.parse(fs.readFileSync(path.join(f.root, runId, 'intent.json'))));
+    const manifest = api.normalizeStagingManifest(JSON.parse(fs.readFileSync(path.join(f.root, runId, 'manifest.json'))));
+    assert.equal(intent.selectedBindingSha256, manifest.selectedBindingSha256);
+});
+
+test('manifest-less legacy partial files are rejected because they lack an input intent', t => {
+    const f = fixture(t); const runId = '77777777-7777-4777-8777-777777777777';
+    const runRoot = path.join(f.root, runId); fs.mkdirSync(path.join(runRoot, 'pages'), { recursive: true });
+    fs.writeFileSync(path.join(runRoot, 'pages', 'orphan.md'), 'partial');
+    assert.throws(() => api.stageHistoricalPages({ apply: true, crosswalkId: CROSSWALK,
+        stagingRunId: runId, analysisRunId: ANALYSIS_RUN, limit: 'pilot', crosswalkRoot: '/unused',
+        analysisRoot: '/unused', taxonomyRoot: '/unused', taxonomyRegistry: '/unused', stagingRoot: f.root },
+    f.dependencies), /unbound partial files/);
+});

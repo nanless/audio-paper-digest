@@ -3374,6 +3374,16 @@ def _api_reader_article_image_urls(article):
     )
 
 
+def _api_reader_display_formula_blocks(article):
+    """Count display math in prose, never escaped citations inside image alt text."""
+    visible = re.sub(
+        r'!\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)',
+        '',
+        str(article or ''),
+    )
+    return re.findall(r'\\\[[\s\S]*?\\\]', visible)
+
+
 def _api_reader_markdown_tables(article):
     """Replay Node's table extractor while preserving the exact hashed bytes."""
     lines = str(article or '').split('\n')
@@ -3665,7 +3675,7 @@ def _validate_api_reader_source_bindings(paper, article=None):
         else:
             raise PublishDataValidationError(f'API reader 第 {index} 个表格 sourceType 非法')
 
-    display_blocks = re.findall(r'\\\[[\s\S]*?\\\]', article)
+    display_blocks = _api_reader_display_formula_blocks(article)
     if len(display_blocks) != len(formula_bindings):
         raise PublishDataValidationError('API reader 正文展示公式数量与 source binding 不一致')
     seen_ordinals = set()
@@ -5677,7 +5687,7 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
                 or expected_count < 0:
             issues.append(f'{label} API reader v4 公式数量 marker 非法')
             continue
-        source_blocks = re.findall(r'\\\[[\s\S]*?\\\]', str(artifact.get('body') or ''))
+        source_blocks = _api_reader_display_formula_blocks(artifact.get('body'))
         if len(source_blocks) != expected_count:
             issues.append(
                 f'{label} API reader v4 页面公式数量与 frontmatter 不一致: '

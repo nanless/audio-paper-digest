@@ -10,6 +10,7 @@ const registryApi = require('./paper-taxonomy.js');
 const fresh = require('./fresh-rewrite-run.js');
 
 const CONTRACT = 'historical-paper-page-staging-v1';
+const INTENT_CONTRACT = 'historical-paper-page-staging-intent-v1';
 const VERSION = 1;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
@@ -180,6 +181,25 @@ function normalizeStagingManifest(value) {
     return structuredClone(value);
 }
 
+function stagingIntent(options, loaded, selectedBindings, pageBindings) {
+    const body = { contract: INTENT_CONTRACT, version: VERSION, stagingRunId: options.stagingRunId,
+        crosswalkId: loaded.crosswalk.crosswalkId, selectedBindings,
+        selectedBindingSha256: stableHash(selectedBindings), pageBindings,
+        pageBindingSha256: stableHash(pageBindings) };
+    return { ...body, intentSha256: stableHash(body) };
+}
+
+function normalizeStagingIntent(value) {
+    if (!value || value.contract !== INTENT_CONTRACT || value.version !== VERSION
+        || !UUID_RE.test(value.stagingRunId || '') || !Array.isArray(value.selectedBindings)
+        || !Array.isArray(value.pageBindings)
+        || value.selectedBindingSha256 !== stableHash(value.selectedBindings)
+        || value.pageBindingSha256 !== stableHash(value.pageBindings)) throw new Error('Historical page staging intent schema/SHA is invalid');
+    const body = { ...value }; delete body.intentSha256;
+    if (!SHA_RE.test(value.intentSha256 || '') || value.intentSha256 !== stableHash(body)) throw new Error('Historical page staging intent self-SHA drifted');
+    return structuredClone(value);
+}
+
 function defaultRender(packet) {
     const script = path.join(__dirname, '..', 'historical-page-render.py');
     const runtime = path.join(__dirname, '..', 'python-runtime.sh');
@@ -213,12 +233,17 @@ function stageHistoricalPages(options, dependencies = {}) {
     if (!UUID_RE.test(options.stagingRunId || '')) throw new Error('stagingRunId must be a UUID');
     const root = fresh.assertSafeDirectory(options.stagingRoot, true);
     const runRoot = fresh.assertSafeDirectory(path.join(root, options.stagingRunId), true);
-    const selectedBindings = selectedBindingsFor(selected); const manifestFile = path.join(runRoot, 'manifest.json');
+    const selectedBindings = selectedBindingsFor(selected); const pageBindings = pageInputBindings(selected);
+    const intent = stagingIntent(options, loaded, selectedBindings, pageBindings);
+    const intentFile = path.join(runRoot, 'intent.json'); const manifestFile = path.join(runRoot, 'manifest.json');
     if (fs.existsSync(manifestFile)) {
+        const loadedIntent = normalizeStagingIntent(strictJson(
+            readRegular(intentFile, 16 * 1024 * 1024, 'existing staging intent').bytes, 'existing staging intent'));
         const loadedManifest = readRegular(manifestFile, 16 * 1024 * 1024, 'existing staging manifest');
         const manifest = normalizeStagingManifest(strictJson(loadedManifest.bytes, 'existing staging manifest'));
         if (manifest.stagingRunId !== options.stagingRunId || manifest.crosswalkId !== loaded.crosswalk.crosswalkId
-            || manifest.selectedBindingSha256 !== stableHash(selectedBindings)) throw new Error('Existing staging run belongs to different selected inputs');
+            || manifest.selectedBindingSha256 !== stableHash(selectedBindings)
+            || stableHash(loadedIntent) !== stableHash(intent)) throw new Error('Existing staging run belongs to different selected inputs');
         replaySelectedBindings(manifest, loaded.crosswalk);
         const recoveredPageBindings = manifest.pages.map(page => { const copy = { ...page }; delete copy.contentSha256; return copy; });
         if (stableHash(recoveredPageBindings) !== stableHash(pageInputBindings(selected))) {
@@ -238,6 +263,14 @@ function stageHistoricalPages(options, dependencies = {}) {
         return { ...plan, status: 'recovered', stagingRunId: options.stagingRunId, stagingRoot: runRoot,
             pageCount: manifest.pages.length, manifestSha256: manifest.manifestSha256 };
     }
+    const priorEntries = fs.readdirSync(runRoot).sort();
+    if (priorEntries.some(name => name !== 'intent.json')) {
+        throw new Error('Manifest-less legacy staging run contains unbound partial files; use a new run ID');
+    }
+    writeExact(intentFile, Buffer.from(`${JSON.stringify(intent, null, 2)}\n`));
+    const replayedIntent = normalizeStagingIntent(strictJson(
+        readRegular(intentFile, 16 * 1024 * 1024, 'staging intent').bytes, 'staging intent'));
+    if (stableHash(replayedIntent) !== stableHash(intent)) throw new Error('Staging intent differs from selected inputs');
     const records = []; const assetRecords = new Map();
     for (const group of selected) for (const page of group.pages) {
         const rendered = (dependencies.render || defaultRender)({ paper: group.paper,
@@ -278,6 +311,6 @@ function stageHistoricalPages(options, dependencies = {}) {
         pageCount: records.length, manifestSha256: manifest.manifestSha256 };
 }
 
-module.exports = { CONTRACT, VERSION, readAssignment, findAssignment, loadProjectionInputs,
+module.exports = { CONTRACT, INTENT_CONTRACT, VERSION, readAssignment, findAssignment, loadProjectionInputs,
     selectedBindingsFor, replaySelectedBindings, pageInputBindings, normalizeStagingManifest,
-    strictJson, readRegular, defaultRender, writeExact, stageHistoricalPages };
+    stagingIntent, normalizeStagingIntent, strictJson, readRegular, defaultRender, writeExact, stageHistoricalPages };

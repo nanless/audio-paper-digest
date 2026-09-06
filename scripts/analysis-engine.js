@@ -391,9 +391,13 @@ function apiReaderV3BindsCanonical(paper) {
     const formulaBindings = plan?.formulaBindings;
     const sourceBindingsSha256 = stableSha256({ tableBindings, formulaBindings });
     const renderedTables = extractMarkdownTables(article);
+    const renderedFormulaBlocks = String(article || '')
+        .replace(/!\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)/g, '')
+        .match(/\\\[[\s\S]*?\\\]/g) || [];
     const sourceBindingsBindArticle = Array.isArray(tableBindings)
         && Array.isArray(formulaBindings)
         && tableBindings.length === renderedTables.length
+        && formulaBindings.length === renderedFormulaBlocks.length
         && tableBindings.every((binding, index) => (
             binding?.tableIndex === index + 1
             && binding?.renderedTableSha256 === crypto.createHash('sha256')
