@@ -351,6 +351,9 @@ describe('Manual v4 editorial quality primitives', () => {
             findMissingComparisonUnits('Whisper 分数能拒掉 120/150 非语音和 46/54 babble，增量全部来自剩余样本。'),
             []
         );
+        assert.deepEqual(findMissingComparisonUnits(
+            '反例是 v2、v3、v4、v5 的微调即使加到 4 或 8 小时，也不降低新攻击漂移，等错误率表上 v3、v4、v5 本身起点已接近 0。'
+        ), []);
     });
 
     it('finds batch-wide sentence templates at the configured paper threshold', () => {

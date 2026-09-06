@@ -716,6 +716,10 @@ function findMissingComparisonUnits(text) {
         // 避免一句定性比较仅因包含图号/排名位置就被误判为缺少单位。
         const numericText = sentence.text
             .replace(
+                new RegExp(`\\d+(?:\\.\\d+)?\\s*(?:或|和|、|至|到|[-–—])\\s*\\d+(?:\\.\\d+)?\\s*${unit}`, 'giu'),
+                match => ' '.repeat(match.length)
+            )
+            .replace(
                 /(?:图|表|公式|式|章节|阶段|步骤|版本|实验|配置|设置|位置|序位)\s*\d+(?:\s*(?:至|到|[-–—])\s*\d+)?/gu,
                 match => ' '.repeat(match.length)
             )
