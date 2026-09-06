@@ -279,25 +279,31 @@ function signLedgerBinding(binding) {
 // it cannot produce aggregate or publish input.  The caller must have loaded
 // the ledger bytes and supply their SHA, so a copied member list or a title
 // spelling can never become a source identity.
-function createConferenceRunFromVerifiedLedger(input) {
-    assertExactFields(input, ['ledger', 'ledgerSha256', 'taxonomyVersion', 'selectionPolicySha256', 'members', 'shards'], 'verified ledger run input');
+function trustedLedger(handle) {
     const ledgerApi = require('./conference-source-ledger.js');
-    ledgerApi.validateLedger(input.ledger);
-    const ledgerSha256 = assertSha(input.ledgerSha256, 'ledgerSha256');
+    try { return ledgerApi.ledgerHandleSnapshot(handle); }
+    catch (error) { fail(`requires an authenticated loaded ledger handle: ${error.message}`); }
+}
+
+function createConferenceRunFromVerifiedLedger(input) {
+    assertExactFields(input, ['ledgerHandle', 'taxonomyVersion', 'selectionPolicySha256', 'members', 'shards'], 'verified ledger run input');
+    const loaded = trustedLedger(input.ledgerHandle);
+    const ledger = loaded.ledger;
+    const ledgerSha256 = loaded.ledgerSha256;
     const members = normalizeMembers(input.members);
     for (const member of members) {
-        const source = ledgerMemberByIdentity(input.ledger, member.sourceIdentity);
+        const source = ledgerMemberByIdentity(ledger, member.sourceIdentity);
         if (source.status.state !== 'verified') fail(`${member.sourceIdentity} is not verified in the supplied ledger`);
     }
     const provisional = {
-        conferenceId: input.ledger.conference.id,
+        conferenceId: ledger.conference.id,
         ledgerSha256,
         taxonomyVersion: input.taxonomyVersion,
         selectionPolicySha256: input.selectionPolicySha256,
         members,
         shards: input.shards
     };
-    const unsignedBinding = ledgerBindingForRun({ ...provisional, members }, input.ledger);
+    const unsignedBinding = ledgerBindingForRun({ ...provisional, members }, ledger);
     return createRun(provisional, { ledgerBinding: signLedgerBinding(unsignedBinding) });
 }
 
@@ -318,11 +324,9 @@ function assertConferenceRun(run) {
     return clone(reconstructed);
 }
 
-function assertConferenceRunFromVerifiedLedger(run, ledger, ledgerSha256) {
+function assertConferenceRunFromVerifiedLedger(run, ledgerHandle) {
     const current = assertConferenceRun(run);
-    const ledgerApi = require('./conference-source-ledger.js');
-    ledgerApi.validateLedger(ledger);
-    assertSha(ledgerSha256, 'ledgerSha256');
+    const { ledger, ledgerSha256 } = trustedLedger(ledgerHandle);
     if (current.ledgerSha256 !== ledgerSha256 || current.conferenceId !== ledger.conference.id) {
         fail('run is not bound to the supplied ledger identity');
     }
@@ -368,10 +372,10 @@ function usageTotals(states) {
 // record in `papers`; callers that need a publishable conference page must use
 // `assertPublishableConferenceInput`, which rejects a partial/blocked run.
 function assertTrustedLedgerContext(context, requireRun = false) {
-    const fields = requireRun ? ['run', 'ledger', 'ledgerSha256'] : ['ledger', 'ledgerSha256'];
+    const fields = requireRun ? ['run', 'ledgerHandle'] : ['ledgerHandle'];
     assertExactFields(context, fields, 'trusted ledger context');
-    if (requireRun) return assertConferenceRunFromVerifiedLedger(context.run, context.ledger, context.ledgerSha256);
-    return { ledger: context.ledger, ledgerSha256: context.ledgerSha256 };
+    if (requireRun) return assertConferenceRunFromVerifiedLedger(context.run, context.ledgerHandle);
+    return trustedLedger(context.ledgerHandle);
 }
 
 function buildConferenceAggregateInput(run, trustedLedgerContext) {
@@ -410,7 +414,7 @@ function assertPublishableConferenceInput(input) {
     const { inputSha256, ...bound } = input;
     if (!isSha(inputSha256) || inputSha256 !== stableHash(bound)) throw new Error('Conference aggregate input SHA drifted');
     const run = assertTrustedLedgerContext(trustedLedgerContext, true);
-    const expected = buildConferenceAggregateInput(run, { ledger: trustedLedgerContext.ledger, ledgerSha256: trustedLedgerContext.ledgerSha256 });
+    const expected = buildConferenceAggregateInput(run, { ledgerHandle: trustedLedgerContext.ledgerHandle });
     if (stableHash(input) !== stableHash(expected)) throw new Error('Conference aggregate input was not rebuilt from the trusted strong-bound run');
     return clone(expected);
 }

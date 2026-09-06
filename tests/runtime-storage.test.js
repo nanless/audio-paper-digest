@@ -27,6 +27,7 @@ function makeProject() {
         'data/runtime/conference-ledgers',
         'data/runtime/conference-sources',
         'data/runtime/conference-runs',
+        'data/runtime/conference-executions',
         'data/archive',
         'logs'
     ]) fs.mkdirSync(path.join(projectRoot, relative), { recursive: true });
@@ -67,11 +68,14 @@ describe('runtime storage status', () => {
         try {
             const oldSource = writeFile(projectRoot, 'data/runtime/conference-sources/pdf/1001.pdf', '%PDF-1.4', NOW_MS - 90 * 24 * 60 * 60 * 1000);
             writeFile(projectRoot, 'data/runtime/conference-ledgers/icassp-2026.json', '{}');
+            const oldExecution = writeFile(projectRoot, 'data/runtime/conference-executions/run/state.json', '{}', NOW_MS - 90 * 24 * 60 * 60 * 1000);
             const status = getStorageStatus({ projectRoot, nowMs: NOW_MS });
             assert.ok(status.targets.some(item => item.key === 'conference-sources' && item.files === 1));
             assert.ok(status.targets.some(item => item.key === 'conference-ledgers' && item.files === 1));
+            assert.ok(status.targets.some(item => item.key === 'conference-executions' && item.files === 1));
             const plan = buildPrunePlan({ projectRoot, nowMs: NOW_MS, retentionDays: 30 });
             assert.ok(!plan.candidates.some(item => item.path === oldSource));
+            assert.ok(!plan.candidates.some(item => item.path === oldExecution));
         } finally {
             fs.rmSync(projectRoot, { recursive: true, force: true });
         }

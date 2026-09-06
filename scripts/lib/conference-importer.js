@@ -17,6 +17,7 @@ const MAX_PDF_BYTES = 256 * 1024 * 1024;
 const MAX_DERIVED_BYTES = 64 * 1024 * 1024;
 const SOURCE_KINDS = new Set(['official-metadata', 'official-pdf', 'conference-proceedings', 'openreview', 'local-confirmed-copy']);
 const EVIDENCE_KINDS = ['metadata', 'pdf', 'text', 'artifacts'];
+const SHA_RE = /^[a-f0-9]{64}$/;
 
 const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const plain = value => value && typeof value === 'object' && !Array.isArray(value)
@@ -73,11 +74,35 @@ function derivedProvenance(value, kind) {
         version: text(value.version, `${kind}.provenance.version`) };
 }
 
+function expectedSha256(value, name) {
+    if (!SHA_RE.test(String(value || ''))) throw fail(`${name} must be a lowercase SHA-256`);
+    return value;
+}
+
+function jsonPointer(value, name) {
+    text(value, name);
+    if (!value.startsWith('/') || /~(?:[^01]|$)/u.test(value)) throw fail(`${name} must be a strict JSON Pointer`);
+    return value;
+}
+
+function metadataIdentityEvidence(value) {
+    exact(value, ['conferenceIdPointer', 'conferenceYearPointer', 'identityTypePointer', 'identityValuePointer'], 'metadata.identityEvidence');
+    return {
+        conferenceIdPointer: jsonPointer(value.conferenceIdPointer, 'metadata.identityEvidence.conferenceIdPointer'),
+        conferenceYearPointer: jsonPointer(value.conferenceYearPointer, 'metadata.identityEvidence.conferenceYearPointer'),
+        identityTypePointer: jsonPointer(value.identityTypePointer, 'metadata.identityEvidence.identityTypePointer'),
+        identityValuePointer: jsonPointer(value.identityValuePointer, 'metadata.identityEvidence.identityValuePointer')
+    };
+}
+
 function sourceEntry(value, kind) {
     if (value === null) return null;
-    exact(value, ['file', 'provenance'], kind);
-    return { file: relativeFile(value.file, `${kind}.file`), provenance: kind === 'metadata' || kind === 'pdf'
-        ? sourceProvenance(value.provenance, kind) : derivedProvenance(value.provenance, kind) };
+    exact(value, kind === 'metadata' ? ['file', 'identityEvidence', 'provenance', 'sha256'] : ['file', 'provenance', 'sha256'], kind);
+    const entry = { file: relativeFile(value.file, `${kind}.file`), sha256: expectedSha256(value.sha256, `${kind}.sha256`),
+        provenance: kind === 'metadata' || kind === 'pdf'
+            ? sourceProvenance(value.provenance, kind) : derivedProvenance(value.provenance, kind) };
+    if (kind === 'metadata') entry.identityEvidence = metadataIdentityEvidence(value.identityEvidence);
+    return entry;
 }
 
 function normalizeMember(value) {
@@ -169,9 +194,15 @@ function readSource(root, relative, maxBytes, label) {
     const filename = safePath(root, relative, label);
     let fd;
     try {
-        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        // lstat before open prevents opening a FIFO/device (which can block),
+        // while O_NONBLOCK and the post-open inode check close the TOCTOU gap.
+        const namedBefore = fs.lstatSync(filename);
+        if (!namedBefore.isFile() || namedBefore.isSymbolicLink() || namedBefore.nlink !== 1 || namedBefore.size > maxBytes) {
+            throw fail(`${label} must be a regular single-link file within its size limit`);
+        }
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         const opened = fs.fstatSync(fd); const named = fs.lstatSync(filename);
-        if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1
+        if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || !named.isFile() || named.nlink !== 1
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size > maxBytes) {
             throw fail(`${label} must be a regular single-link file within its size limit`);
         }
@@ -181,9 +212,60 @@ function readSource(root, relative, maxBytes, label) {
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
-function assertJson(bytes, label) {
-    try { JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
+function rejectDuplicateJsonKeys(source, label) {
+    const stack = [];
+    for (const match of source.matchAll(/"(?:\\[\s\S]|[^"\\])*"|[{}\[\]:,]/g)) {
+        const token = match[0];
+        const top = stack[stack.length - 1];
+        if (token === '{') stack.push({ object: true, keys: new Set(), expectKey: true });
+        else if (token === '[') stack.push({ object: false });
+        else if (token === '}' || token === ']') stack.pop();
+        else if (token === ',' && top?.object) top.expectKey = true;
+        else if (token.startsWith('"') && top?.object && top.expectKey) {
+            const key = JSON.parse(token);
+            if (top.keys.has(key)) throw fail(`${label} must not contain duplicate JSON key: ${key}`);
+            top.keys.add(key); top.expectKey = false;
+        }
+    }
+}
+
+function parseStrictJson(bytes, label) {
+    try {
+        const source = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+        rejectDuplicateJsonKeys(source, label);
+        return JSON.parse(source);
+    }
     catch { throw fail(`${label} must contain valid UTF-8 JSON`); }
+}
+
+function parseStrictUtf8(bytes, label) {
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+    catch { throw fail(`${label} must contain strict UTF-8 text`); }
+}
+
+function resolveJsonPointer(document, pointer, label) {
+    let current = document;
+    for (const encoded of pointer.slice(1).split('/')) {
+        const key = encoded.replace(/~1/g, '/').replace(/~0/g, '~');
+        if (Array.isArray(current)) {
+            if (!/^(?:0|[1-9]\d*)$/.test(key) || Number(key) >= current.length) throw fail(`${label} does not resolve in metadata JSON`);
+            current = current[Number(key)];
+        } else if (plain(current) && Object.prototype.hasOwnProperty.call(current, key)) current = current[key];
+        else throw fail(`${label} does not resolve in metadata JSON`);
+    }
+    return current;
+}
+
+function assertMetadataIdentity(metadata, evidence, conference, identity) {
+    const expected = [
+        ['conferenceIdPointer', conference.id], ['conferenceYearPointer', conference.year],
+        ['identityTypePointer', identity.type], ['identityValuePointer', identity.value]
+    ];
+    for (const [field, value] of expected) {
+        if (resolveJsonPointer(metadata, evidence[field], `metadata.identityEvidence.${field}`) !== value) {
+            throw fail(`metadata.identityEvidence.${field} must exactly bind the manifest conference and identity`);
+        }
+    }
 }
 
 function cacheStem(conference, identity) {
@@ -225,11 +307,17 @@ function importMember(member, conference, sourceRoot, cacheRoot, updatedAt, appl
         if (!entry) { artifacts[kind] = null; continue; }
         const limit = kind === 'metadata' ? MAX_METADATA_BYTES : kind === 'pdf' ? MAX_PDF_BYTES : MAX_DERIVED_BYTES;
         const bytes = readSource(sourceRoot, entry.file, limit, `manifest ${kind} source`);
-        if (kind === 'metadata' || kind === 'artifacts') assertJson(bytes, `manifest ${kind} source`);
+        const actualSha256 = sha256(bytes);
+        if (actualSha256 !== entry.sha256) throw fail(`manifest ${kind} source SHA-256 does not match its declared expected SHA-256`);
+        if (kind === 'metadata') {
+            const metadata = parseStrictJson(bytes, 'manifest metadata source');
+            assertMetadataIdentity(metadata, entry.identityEvidence, conference, member.identity);
+        } else if (kind === 'artifacts') parseStrictJson(bytes, 'manifest artifacts source');
+        else if (kind === 'text') parseStrictUtf8(bytes, 'manifest text source');
         if (kind === 'pdf' && (bytes.length < 5 || bytes.subarray(0, 5).toString('ascii') !== '%PDF-')) throw fail('manifest PDF source is not a standard PDF');
         const extension = kind === 'metadata' || kind === 'artifacts' ? '.json' : kind === 'pdf' ? '.pdf' : '.txt';
         const destination = `${stem}/${kind}${extension}`;
-        artifacts[kind] = apply ? cacheArtifact(cacheRoot, destination, bytes) : { file: destination, sha256: sha256(bytes) };
+        artifacts[kind] = apply ? cacheArtifact(cacheRoot, destination, bytes) : { file: destination, sha256: actualSha256 };
     }
     const availability = Object.fromEntries(EVIDENCE_KINDS.map(kind => [kind, artifacts[kind] ? 'present' : 'absent']));
     const hasAll = EVIDENCE_KINDS.every(kind => artifacts[kind]);
@@ -263,6 +351,10 @@ function importConferenceSources({ manifest, sourceRoot, cacheRoot, updatedAt, a
     timestamp(updatedAt, 'updatedAt');
     const safeSourceRoot = safeDirectory(sourceRoot, 'sourceRoot');
     const safeCacheRoot = safeDirectory(cacheRoot, 'cacheRoot');
+    if (safeSourceRoot === safeCacheRoot || safeSourceRoot.startsWith(`${safeCacheRoot}${path.sep}`)
+        || safeCacheRoot.startsWith(`${safeSourceRoot}${path.sep}`)) {
+        throw fail('sourceRoot and cacheRoot must not overlap');
+    }
     const members = normalized.members.map(member => importMember(member, normalized.conference, safeSourceRoot, safeCacheRoot, updatedAt, apply));
     const ledger = ledgerApi.createLedger(normalized.conference, members);
     return { manifestSha256: ledgerApi.stableHash(normalized), ledger, imported: members.length,

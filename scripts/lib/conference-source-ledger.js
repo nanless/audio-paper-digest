@@ -16,6 +16,14 @@ const EVIDENCE_KINDS = new Set(['metadata', 'pdf', 'text', 'artifacts']);
 const STATUS_STATES = new Set(['verified', 'needs-review', 'blocked']);
 const AVAILABILITY_STATES = new Set(['present', 'absent']);
 const SOURCE_KINDS = new Set(['official-metadata', 'official-pdf', 'conference-proceedings', 'openreview', 'local-confirmed-copy', 'legacy-unrecorded']);
+// A raw ledger SHA is only meaningful when it was computed over bytes which
+// this module has just opened and schema-validated.  Do not use a structural
+// object plus a caller-supplied SHA as an authentication boundary: that lets a
+// caller pair arbitrary content with a syntactically valid digest.  Handles
+// are deliberately capability objects backed by this module's private
+// WeakMap.  They have no enumerable data and cannot be cloned or forged.
+const LEDGER_HANDLES = new WeakSet();
+const LEDGER_HANDLE_DATA = new WeakMap();
 
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const compareIdentityKeys = (left, right) => left < right ? -1 : left > right ? 1 : 0;
@@ -401,8 +409,45 @@ function loadLedger(filename) {
     return { ledger: loaded.value, ledgerSha256: loaded.sha256 };
 }
 
+function deepFreeze(value) {
+    if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+        for (const child of Object.values(value)) deepFreeze(child);
+        Object.freeze(value);
+    }
+    return value;
+}
+
+/**
+ * Load a ledger as a non-forgeable local capability.  Consumers which make
+ * executable decisions must accept this handle, never `{ ledger, sha256 }`.
+ * The ledger and its raw-byte SHA live in private module state; callers may
+ * inspect a defensive snapshot through `ledgerHandleSnapshot` only.
+ */
+function loadLedgerHandle(filename) {
+    const loaded = loadLedger(filename);
+    const handle = Object.freeze(Object.create(null));
+    LEDGER_HANDLES.add(handle);
+    LEDGER_HANDLE_DATA.set(handle, Object.freeze({
+        filename: fs.realpathSync(filename),
+        ledger: deepFreeze(loaded.ledger),
+        ledgerSha256: loaded.ledgerSha256
+    }));
+    return handle;
+}
+
+function ledgerHandleSnapshot(handle) {
+    if (!handle || typeof handle !== 'object' || !LEDGER_HANDLES.has(handle)) {
+        throw new Error('Conference ledger requires an authenticated loaded handle');
+    }
+    const data = LEDGER_HANDLE_DATA.get(handle);
+    // JSON clone is intentional: a consumer cannot alter the authoritative
+    // ledger held by the capability after it has been admitted.
+    return { filename: data.filename, ledger: JSON.parse(JSON.stringify(data.ledger)), ledgerSha256: data.ledgerSha256 };
+}
+
 module.exports = {
     CONTRACT, sha256, stableHash, identityKey, memberSetSha256, createLedger,
     validateIdentity, validateMember, validateLedger, readRegularJson,
-    assertRelativePath, safeArtifactPath, verifyMemberFiles, writeLedger, loadLedger
+    assertRelativePath, safeArtifactPath, verifyMemberFiles, writeLedger, loadLedger,
+    loadLedgerHandle, ledgerHandleSnapshot
 };

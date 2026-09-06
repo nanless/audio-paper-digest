@@ -87,7 +87,10 @@ function ledgerFixture() {
     };
     const members = [createMember('1001', 'first'), createMember('1002', 'second')];
     const ledger = ledgerApi.createLedger({ id: 'icassp-2026', year: 2026 }, members);
-    return { ...f, ledger, ledgerSha256: digest(Buffer.from('loaded-ledger-a')), first: ledger.members[0], second: ledger.members[1] };
+    const ledgerFile = path.join(f.root, 'ledger.json'); ledgerApi.writeLedger(ledgerFile, ledger);
+    const ledgerHandle = ledgerApi.loadLedgerHandle(ledgerFile);
+    const { ledgerSha256 } = ledgerApi.ledgerHandleSnapshot(ledgerHandle);
+    return { ...f, ledger, ledgerHandle, ledgerSha256, first: ledger.members[0], second: ledger.members[1] };
 }
 
 test('local PDF source descriptor binds verified identity, bytes and explicit unavailable extraction', () => {
@@ -168,7 +171,7 @@ test('ledger bridge admits only the selected verified member and binds all non-P
     const f = ledgerFixture();
     const identityKey = ledgerApi.identityKey(f.first.identity);
     const result = source.buildConferencePdfSourceFromLedger({
-        sourceRoot: f.root, ledger: f.ledger, ledgerSha256: f.ledgerSha256, identityKey,
+        sourceRoot: f.root, ledgerHandle: f.ledgerHandle, identityKey,
     });
     assert.deepEqual(result.descriptor.ledgerBinding, {
         ledgerSha256: f.ledgerSha256,
@@ -179,10 +182,10 @@ test('ledger bridge admits only the selected verified member and binds all non-P
     });
     assert.equal(result.descriptor.pdfRelativePath, f.first.pdfFile);
     assert.deepEqual(source.replayConferencePdfSourceFromLedger({
-        sourceRoot: f.root, ledger: f.ledger, ledgerSha256: f.ledgerSha256, identityKey, descriptor: result.descriptor,
+        sourceRoot: f.root, ledgerHandle: f.ledgerHandle, identityKey, descriptor: result.descriptor,
     }), result.descriptor);
     assert.throws(() => source.buildConferencePdfSourceFromLedger({
-        sourceRoot: f.root, ledger: f.ledger, ledgerSha256: f.ledgerSha256, identityKey: 'icassp-arnumber:9999',
+        sourceRoot: f.root, ledgerHandle: f.ledgerHandle, identityKey: 'icassp-arnumber:9999',
     }), /does not identify/);
 
     const blocked = structuredClone(f.ledger);
@@ -193,8 +196,8 @@ test('ledger bridge admits only the selected verified member and binds all non-P
     blockedMember.provenance.text = blockedMember.provenance.artifacts = null;
     blockedMember.status = { ...blockedMember.status, state: 'blocked', evidence: blockedMember.status.evidence.filter(item => ['metadata', 'pdf'].includes(item.kind)) };
     assert.throws(() => source.buildConferencePdfSourceFromLedger({
-        sourceRoot: f.root, ledger: blocked, ledgerSha256: f.ledgerSha256, identityKey,
-    }), /requires a verified ledger member/);
+        sourceRoot: f.root, ledgerHandle: structuredClone(f.ledgerHandle), identityKey,
+    }), /authenticated loaded ledger handle/);
 });
 
 test('ledger replay rejects cross-member, cross-ledger, source drift, and recomputed descriptor-field forgery', () => {
@@ -202,26 +205,26 @@ test('ledger replay rejects cross-member, cross-ledger, source drift, and recomp
     const firstKey = ledgerApi.identityKey(f.first.identity);
     const secondKey = ledgerApi.identityKey(f.second.identity);
     const result = source.buildConferencePdfSourceFromLedger({
-        sourceRoot: f.root, ledger: f.ledger, ledgerSha256: f.ledgerSha256, identityKey: firstKey,
+        sourceRoot: f.root, ledgerHandle: f.ledgerHandle, identityKey: firstKey,
     });
     assert.throws(() => source.replayConferencePdfSourceFromLedger({
-        sourceRoot: f.root, ledger: f.ledger, ledgerSha256: f.ledgerSha256, identityKey: secondKey, descriptor: result.descriptor,
+        sourceRoot: f.root, ledgerHandle: f.ledgerHandle, identityKey: secondKey, descriptor: result.descriptor,
     }), /does not belong to this loaded ledger member/);
     assert.throws(() => source.replayConferencePdfSourceFromLedger({
-        sourceRoot: f.root, ledger: f.ledger, ledgerSha256: digest(Buffer.from('loaded-ledger-b')), identityKey: firstKey, descriptor: result.descriptor,
-    }), /does not belong to this loaded ledger member/);
+        sourceRoot: f.root, ledgerHandle: structuredClone(f.ledgerHandle), identityKey: firstKey, descriptor: result.descriptor,
+    }), /authenticated loaded ledger handle/);
 
     const unknown = resign({ ...result.descriptor, untrustedField: 'forged' });
     assert.throws(() => source.replayConferencePdfSourceFromLedger({
-        sourceRoot: f.root, ledger: f.ledger, ledgerSha256: f.ledgerSha256, identityKey: firstKey, descriptor: unknown,
+        sourceRoot: f.root, ledgerHandle: f.ledgerHandle, identityKey: firstKey, descriptor: unknown,
     }), /unexpected or missing fields/);
     const inconsistent = resign({ ...result.descriptor, extractor: { ...result.descriptor.extractor, textAvailable: true } });
     assert.throws(() => source.replayConferencePdfSourceFromLedger({
-        sourceRoot: f.root, ledger: f.ledger, ledgerSha256: f.ledgerSha256, identityKey: firstKey, descriptor: inconsistent,
+        sourceRoot: f.root, ledgerHandle: f.ledgerHandle, identityKey: firstKey, descriptor: inconsistent,
     }), /availability, hash, and extractor/);
 
     fs.writeFileSync(path.join(f.root, f.first.metadataFile), 'metadata drift', { mode: 0o600 });
     assert.throws(() => source.replayConferencePdfSourceFromLedger({
-        sourceRoot: f.root, ledger: f.ledger, ledgerSha256: f.ledgerSha256, identityKey: firstKey, descriptor: result.descriptor,
+        sourceRoot: f.root, ledgerHandle: f.ledgerHandle, identityKey: firstKey, descriptor: result.descriptor,
     }), /metadata artifact SHA-256 differs/);
 });

@@ -42,8 +42,8 @@ function loadBoundRun(files, options) {
     const runFile = safeRuntimeFile(files.conferenceRunsDir, options.runName);
     const ledgerFile = safeRuntimeFile(files.conferenceSourceLedgerDir, options.ledgerName);
     const { value: run } = ledgerApi.readRegularJson(runFile);
-    const { ledger, ledgerSha256 } = ledgerApi.loadLedger(ledgerFile);
-    return { run: runApi.assertConferenceRunFromVerifiedLedger(run, ledger, ledgerSha256), ledger, ledgerSha256 };
+    const ledgerHandle = ledgerApi.loadLedgerHandle(ledgerFile);
+    return { run: runApi.assertConferenceRunFromVerifiedLedger(run, ledgerHandle), ledgerHandle };
 }
 function publicStatus(execution) {
     const statusCounts = Object.values(execution.paperStates).reduce((counts, state) => {

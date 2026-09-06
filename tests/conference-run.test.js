@@ -2,6 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const conference = require('../scripts/lib/conference-run.js');
 const ledgerApi = require('../scripts/lib/conference-source-ledger.js');
 
@@ -32,10 +35,13 @@ function verifiedLedger(states = {}) {
     }));
 }
 function boundRun(states) {
-    const ledger = verifiedLedger(states); const ledgerSha256 = sha('trusted-ledger-bytes');
-    const run = conference.createConferenceRunFromVerifiedLedger({ ledger, ledgerSha256, taxonomyVersion: 'paper-taxonomy-v2',
+    const ledger = verifiedLedger(states); const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-ledger-handle-'));
+    const filename = path.join(directory, 'ledger.json'); ledgerApi.writeLedger(filename, ledger);
+    const ledgerHandle = ledgerApi.loadLedgerHandle(filename); const { ledgerSha256 } = ledgerApi.ledgerHandleSnapshot(ledgerHandle);
+    fs.rmSync(directory, { recursive: true, force: true });
+    const run = conference.createConferenceRunFromVerifiedLedger({ ledgerHandle, taxonomyVersion: 'paper-taxonomy-v2',
         selectionPolicySha256: sha('policy'), members, shards: base().shards });
-    return { run, ledger, ledgerSha256 };
+    return { run, ledger, ledgerSha256, ledgerHandle };
 }
 function projection(paperId) {
     const value = { contract: conference.PAPER_PROJECTION_CONTRACT, paperId,
@@ -91,17 +97,17 @@ test('only legal state transitions can add a completed independent-paper project
 });
 
 test('only a verified ledger can create an executable run, with exact canonical source identities', () => {
-    const { run, ledger, ledgerSha256 } = boundRun();
-    assert.equal(conference.assertConferenceRunFromVerifiedLedger(run, ledger, ledgerSha256).identitySha256, run.identitySha256);
-    assert.throws(() => conference.createConferenceRunFromVerifiedLedger({ ledger, ledgerSha256, taxonomyVersion: 'paper-taxonomy-v2', selectionPolicySha256: sha('policy'),
+    const { run, ledger, ledgerSha256, ledgerHandle } = boundRun();
+    assert.equal(conference.assertConferenceRunFromVerifiedLedger(run, ledgerHandle).identitySha256, run.identitySha256);
+    assert.throws(() => conference.createConferenceRunFromVerifiedLedger({ ledgerHandle, taxonomyVersion: 'paper-taxonomy-v2', selectionPolicySha256: sha('policy'),
         members: [{ ...members[0], sourceIdentity: 'ieee-arnumber:100' }, ...members.slice(1)], shards: base().shards }), /not present/);
     const blockedLedger = verifiedLedger(); const blocked = blockedLedger.members.find(member => member.identity.value === '200');
     blocked.availability.artifacts = 'absent'; blocked.artifactsFile = null; blocked.artifactsSha256 = null;
     blocked.provenance.artifacts = null; blocked.status.state = 'blocked'; blocked.status.evidence = blocked.status.evidence.filter(item => item.kind !== 'artifacts');
     assert.equal(ledgerApi.validateLedger(blockedLedger), blockedLedger);
-    assert.throws(() => conference.createConferenceRunFromVerifiedLedger({ ledger: blockedLedger, ledgerSha256, taxonomyVersion: 'paper-taxonomy-v2', selectionPolicySha256: sha('policy'), members, shards: base().shards }), /not verified/);
+    assert.throws(() => conference.createConferenceRunFromVerifiedLedger({ ledgerHandle: structuredClone(ledgerHandle), taxonomyVersion: 'paper-taxonomy-v2', selectionPolicySha256: sha('policy'), members, shards: base().shards }), /authenticated loaded ledger handle/);
     const forged = conference.createConferenceRun({ ...base(), ledgerSha256 });
-    assert.throws(() => conference.assertConferenceRunFromVerifiedLedger(forged, ledger, ledgerSha256), /lacks a verified ledger binding/);
+    assert.throws(() => conference.assertConferenceRunFromVerifiedLedger(forged, ledgerHandle), /lacks a verified ledger binding/);
 });
 
 test('creation cannot inject completed states, unknown fields, or a fabricated binding', () => {
@@ -126,7 +132,7 @@ test('summary hand-off is deterministic, projection-only, and marks incomplete o
     const trusted = boundRun(); let run = trusted.run;
     run = complete(run, 'icassp-2026:100', { requests: 2, totalTokens: 100 });
     run = conference.transitionPaperState(run, 'icassp-2026:200', { status: 'blocked', usage: { requests: 1 }, reason: 'missing local full text' });
-    const context = { ledger: trusted.ledger, ledgerSha256: trusted.ledgerSha256 };
+    const context = { ledgerHandle: trusted.ledgerHandle };
     const one = conference.buildConferenceAggregateInput(run, context);
     const two = conference.buildConferenceAggregateInput(conference.assertConferenceRun(run), context);
     assert.deepEqual(one, two);
@@ -143,7 +149,7 @@ test('summary hand-off is deterministic, projection-only, and marks incomplete o
 test('only a fully completed run yields a signed publishable aggregate input', () => {
     const trusted = boundRun(); let run = trusted.run;
     for (const member of run.members) run = complete(run, member.paperId, { requests: 1, totalTokens: 10 });
-    const context = { ledger: trusted.ledger, ledgerSha256: trusted.ledgerSha256 };
+    const context = { ledgerHandle: trusted.ledgerHandle };
     const input = conference.buildConferenceAggregateInput(run, context);
     assert.equal(input.status, 'complete'); assert.equal(input.publicationEligible, true);
     assert.deepEqual(input.papers.map(paper => paper.paperId), run.members.map(member => member.paperId));
@@ -153,7 +159,7 @@ test('only a fully completed run yields a signed publishable aggregate input', (
     const handMade = structuredClone(input); handMade.ledgerBinding = undefined;
     assert.throws(() => conference.assertPublishableConferenceInput(handMade, { ...context, run }), /not publishable/);
     assert.throws(() => conference.assertPublishableConferenceInput(input, { ...context, run,
-        ledger: ledgerApi.createLedger({ id: 'icassp-2026', year: 2026 }, verifiedLedger().members.slice(0, 1)) }), /supplied ledger|binding/);
+        ledgerHandle: structuredClone(trusted.ledgerHandle) }), /authenticated loaded ledger handle/);
 });
 
 test('failed and blocked states need a reason and can only resume through source_ready', () => {

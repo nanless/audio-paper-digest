@@ -159,6 +159,12 @@ function assertInitialRun(run) {
         }
     }
 }
+function initialPaperStates(template) {
+    const ids = runFromState(template, Object.fromEntries(
+        template.members.map(member => [member.paperId, { status: 'pending', usage: runApi.normalizeUsage() }])
+    )).members.map(member => member.paperId);
+    return Object.fromEntries(ids.map(id => [id, { status: 'pending', usage: runApi.normalizeUsage() }]));
+}
 function stateDigest(execution) {
     return stableHash({ executionId: execution.executionId, source: execution.source,
         paperStates: execution.paperStates,
@@ -175,9 +181,13 @@ function normalizeSource(value) {
     for (const field of ['ledgerSha256', 'runIdentitySha256', 'runStateSha256', 'membershipSha256']) assertSha(value[field], `source.${field}`);
     return clone(value);
 }
-function normalizeAttempt(value, paperIds, previousStates) {
-    exact(value, ['operationId', 'patchSha256', 'paperId', 'fromStatus', 'toStatus', 'usage', 'recordedAt', 'priorStateSha256', 'nextStateSha256'], 'attempt');
+function normalizeAttempt(value, paperIds, previousStates, template) {
+    exact(value, ['operationId', 'patchSha256', 'patch', 'paperId', 'fromStatus', 'toStatus', 'usage', 'recordedAt', 'priorStateSha256', 'nextStateSha256'], 'attempt');
     assertUuid(value.operationId, 'attempt operationId'); assertSha(value.patchSha256, 'attempt patchSha256');
+    const patch = normalizePatch(value.patch);
+    if (patch.operationId !== value.operationId || patch.paperId !== value.paperId
+        || patch.expectedStateSha256 !== value.priorStateSha256) fail('attempt patch does not bind its operation receipt');
+    if (stableHash(patch) !== value.patchSha256) fail('attempt patch SHA does not bind patch content');
     if (!paperIds.has(value.paperId)) fail('attempt references non-member paperId');
     if (!Object.prototype.hasOwnProperty.call(runApi.STATUS_TRANSITIONS, value.fromStatus)
         || !Object.prototype.hasOwnProperty.call(runApi.STATUS_TRANSITIONS, value.toStatus)
@@ -186,8 +196,16 @@ function normalizeAttempt(value, paperIds, previousStates) {
     const usage = runApi.normalizeUsage(value.usage);
     if (!usageAtLeast(previousStates[value.paperId].usage, usage)) fail('attempt usage regresses');
     assertTimestamp(value.recordedAt, 'attempt recordedAt'); assertSha(value.priorStateSha256, 'attempt priorStateSha256'); assertSha(value.nextStateSha256, 'attempt nextStateSha256');
-    previousStates[value.paperId] = { status: value.toStatus, usage };
-    return { ...clone(value), usage };
+    // The stored full nextState is required: status/usage alone would lose the
+    // reason or completed projection that the run contract records.
+    const boundNext = runApi.transitionPaperState(
+        runFromState(template, previousStates), patch.paperId, patch.nextState
+    ).paperStates[patch.paperId];
+    if (boundNext.status !== value.toStatus || !usageEqual(boundNext.usage, usage)) {
+        fail('attempt receipt does not match bound patch nextState');
+    }
+    previousStates[value.paperId] = boundNext;
+    return { ...clone(value), patch, usage };
 }
 
 function assertConferenceExecution(value) {
@@ -197,19 +215,37 @@ function assertConferenceExecution(value) {
     const source = normalizeSource(value.source);
     if (!Array.isArray(value.attempts)) fail('attempts must be an array');
     const baselineStates = runFromState(value.runTemplate, value.paperStates).paperStates;
-    const templateRun = runFromState(value.runTemplate, Object.fromEntries(Object.keys(baselineStates).map(id => [id, { status: 'pending', usage: runApi.normalizeUsage() }])));
+    const initialStates = initialPaperStates(value.runTemplate);
+    const templateRun = runFromState(value.runTemplate, initialStates);
     if (templateRun.conferenceId !== source.conferenceId || templateRun.ledgerSha256 !== source.ledgerSha256
         || templateRun.identitySha256 !== source.runIdentitySha256 || templateRun.membershipSha256 !== source.membershipSha256) fail('source does not bind run template');
+    if (source.runStateSha256 !== templateRun.stateSha256) fail('source runStateSha256 does not bind the rebuilt initial run state');
     const paperIds = new Set(Object.keys(baselineStates));
-    const history = Object.fromEntries([...paperIds].map(id => [id, { status: 'pending', usage: runApi.normalizeUsage() }]));
-    const operations = new Set(); let expectedPrior = null;
-    const attempts = value.attempts.map(attempt => {
-        const normalized = normalizeAttempt(attempt, paperIds, history);
+    const history = clone(initialStates);
+    const initialExecution = {
+        version: VERSION, contract: CONTRACT, executionId: value.executionId, createdAt: value.createdAt,
+        source, runTemplate: clone(value.runTemplate), paperStates: clone(initialStates), attempts: []
+    };
+    const initialDigest = stateDigest(initialExecution);
+    const operations = new Set(); let expectedPrior = initialDigest; let previousTime = value.createdAt;
+    const attempts = [];
+    for (const attempt of value.attempts) {
+        // Supply the immutable template only to reproduce the patch's complete
+        // run-state effect; it is not persisted as part of an attempt.
+        const normalized = normalizeAttempt(attempt, paperIds, history, value.runTemplate);
         if (operations.has(normalized.operationId)) fail('attempt operationId is duplicated');
-        if (expectedPrior !== null && normalized.priorStateSha256 !== expectedPrior) fail('attempt SHA history is discontinuous');
-        operations.add(normalized.operationId); expectedPrior = normalized.nextStateSha256;
-        return normalized;
-    });
+        if (normalized.priorStateSha256 !== expectedPrior) fail('attempt SHA history is discontinuous');
+        if (normalized.recordedAt < previousTime) fail('attempt recordedAt moves backwards in time');
+        operations.add(normalized.operationId);
+        const prefix = {
+            version: VERSION, contract: CONTRACT, executionId: value.executionId, createdAt: value.createdAt,
+            source, runTemplate: clone(value.runTemplate), paperStates: clone(history), attempts: [...attempts, normalized]
+        };
+        const prefixDigest = stateDigest(prefix);
+        if (normalized.nextStateSha256 !== prefixDigest) fail('attempt nextStateSha256 does not bind its reconstructed state');
+        expectedPrior = prefixDigest; previousTime = normalized.recordedAt;
+        attempts.push(normalized);
+    }
     for (const paperId of paperIds) {
         const finalState = baselineStates[paperId]; const recorded = history[paperId];
         if (finalState.status !== recorded.status || !usageEqual(finalState.usage, recorded.usage)) fail('paper state does not match append-only attempts');
@@ -224,8 +260,8 @@ function assertConferenceExecution(value) {
     return { ...rebuilt, stateSha256: digest };
 }
 
-function prepareExecution({ executionRoot, run, ledger, ledgerSha256, executionId = crypto.randomUUID(), now } = {}) {
-    const verifiedRun = runApi.assertConferenceRunFromVerifiedLedger(run, ledger, ledgerSha256);
+function prepareExecution({ executionRoot, run, ledgerHandle, executionId = crypto.randomUUID(), now } = {}) {
+    const verifiedRun = runApi.assertConferenceRunFromVerifiedLedger(run, ledgerHandle);
     assertInitialRun(verifiedRun); assertUuid(executionId);
     const root = safeDirectory(executionRoot, true);
     const directory = path.resolve(root, executionId);
@@ -305,7 +341,7 @@ function transitionExecution({ executionRoot, executionId, patch, owner, now } =
         catch (error) { fail(error.message.replace(/^Invalid conference run:\s*/, '')); }
         const next = clone(current); next.paperStates = nextRun.paperStates;
         const attempt = {
-            operationId: normalizedPatch.operationId, patchSha256, paperId: normalizedPatch.paperId,
+            operationId: normalizedPatch.operationId, patchSha256, patch: clone(normalizedPatch), paperId: normalizedPatch.paperId,
             fromStatus: current.paperStates[normalizedPatch.paperId].status,
             toStatus: nextRun.paperStates[normalizedPatch.paperId].status,
             usage: clone(nextRun.paperStates[normalizedPatch.paperId].usage), recordedAt: nowIso(now),

@@ -35,30 +35,38 @@ function verifiedLedger() {
 }
 function fixture() {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-execution-'));
-    const ledger = verifiedLedger(); const ledgerSha256 = sha('trusted-ledger-bytes');
+    const ledger = verifiedLedger(); const ledgerFile = path.join(root, 'ledger.json'); ledgerApi.writeLedger(ledgerFile, ledger);
+    const ledgerHandle = ledgerApi.loadLedgerHandle(ledgerFile); const { ledgerSha256 } = ledgerApi.ledgerHandleSnapshot(ledgerHandle);
     const members = [{ paperId: 'icassp-1001', sourceIdentity: 'icassp-arnumber:1001' }, { paperId: 'icassp-1002', sourceIdentity: 'icassp-arnumber:1002' }];
-    const run = runApi.createConferenceRunFromVerifiedLedger({ ledger, ledgerSha256, taxonomyVersion: 'paper-taxonomy-v2',
+    const run = runApi.createConferenceRunFromVerifiedLedger({ ledgerHandle, taxonomyVersion: 'paper-taxonomy-v2',
         selectionPolicySha256: sha('selection'), members, shards: [{ shardId: 'all', paperIds: members.map(member => member.paperId) }] });
-    return { root, ledger, ledgerSha256, run };
+    return { root, ledger, ledgerHandle, ledgerSha256, run };
 }
 function patch(operationId, expectedStateSha256, paperId, nextState) { return { operationId, expectedStateSha256, paperId, nextState }; }
+function resealExecution(state) {
+    state.stateSha256 = runApi.stableHash({
+        executionId: state.executionId, source: state.source, paperStates: state.paperStates,
+        attempts: state.attempts.map(({ nextStateSha256: _receipt, ...attempt }) => attempt)
+    });
+    return state;
+}
 
 test('prepare isolates a strongly-bound initial verified run and is idempotent for the same UUID', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
-    const first = execution.prepareExecution({ executionRoot: f.root, run: f.run, ledger: f.ledger, ledgerSha256: f.ledgerSha256, executionId: ids[0], now: stamp });
-    const second = execution.prepareExecution({ executionRoot: f.root, run: f.run, ledger: f.ledger, ledgerSha256: f.ledgerSha256, executionId: ids[0], now: '2026-09-07T00:00:00.000Z' });
+    const first = execution.prepareExecution({ executionRoot: f.root, run: f.run, ledgerHandle: f.ledgerHandle, executionId: ids[0], now: stamp });
+    const second = execution.prepareExecution({ executionRoot: f.root, run: f.run, ledgerHandle: f.ledgerHandle, executionId: ids[0], now: '2026-09-07T00:00:00.000Z' });
     assert.equal(first.contract, 'conference-execution-v1'); assert.equal(first.stateSha256, second.stateSha256);
     assert.equal(first.source.runIdentitySha256, f.run.identitySha256); assert.equal(first.attempts.length, 0);
     assert.equal(fs.statSync(path.join(f.root, ids[0], 'state.json')).mode & 0o777, 0o600);
     const altered = structuredClone(f.run); altered.paperStates['icassp-1001'] = { status: 'source_ready', usage: runApi.normalizeUsage() };
     altered.stateSha256 = runApi.stableHash({ identitySha256: altered.identitySha256, paperStates: altered.paperStates });
-    assert.throws(() => execution.prepareExecution({ executionRoot: f.root, run: altered, ledger: f.ledger, ledgerSha256: f.ledgerSha256, executionId: ids[1] }), /initial pending/);
-    assert.throws(() => execution.prepareExecution({ executionRoot: f.root, run: f.run, ledger: f.ledger, ledgerSha256: sha('other'), executionId: ids[1] }), /bound/);
+    assert.throws(() => execution.prepareExecution({ executionRoot: f.root, run: altered, ledgerHandle: f.ledgerHandle, executionId: ids[1] }), /initial pending/);
+    assert.throws(() => execution.prepareExecution({ executionRoot: f.root, run: f.run, ledgerHandle: structuredClone(f.ledgerHandle), executionId: ids[1] }), /authenticated loaded ledger handle/);
 });
 
 test('transition is CAS-protected, append-only, monotonic and idempotent by operation ID', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
-    let state = execution.prepareExecution({ executionRoot: f.root, run: f.run, ledger: f.ledger, ledgerSha256: f.ledgerSha256, executionId: ids[0], now: stamp });
+    let state = execution.prepareExecution({ executionRoot: f.root, run: f.run, ledgerHandle: f.ledgerHandle, executionId: ids[0], now: stamp });
     const first = patch(ids[1], state.stateSha256, 'icassp-1001', { status: 'source_ready', usage: { requests: 1, totalTokens: 10 } });
     state = execution.transitionExecution({ executionRoot: f.root, executionId: ids[0], patch: first, owner: 'worker-1', now: stamp });
     assert.equal(state.paperStates['icassp-1001'].status, 'source_ready'); assert.equal(state.attempts.length, 1);
@@ -73,7 +81,7 @@ test('transition is CAS-protected, append-only, monotonic and idempotent by oper
 
 test('state, locks, execution directories and patch paths fail closed on tampering', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
-    let state = execution.prepareExecution({ executionRoot: f.root, run: f.run, ledger: f.ledger, ledgerSha256: f.ledgerSha256, executionId: ids[0], now: stamp });
+    let state = execution.prepareExecution({ executionRoot: f.root, run: f.run, ledgerHandle: f.ledgerHandle, executionId: ids[0], now: stamp });
     const dir = path.join(f.root, ids[0]);
     fs.writeFileSync(path.join(dir, 'operation.lock'), '{"owner":"other"}\n', { mode: 0o600 });
     assert.throws(() => execution.transitionExecution({ executionRoot: f.root, executionId: ids[0], patch: patch(ids[1], state.stateSha256, 'icassp-1001', { status: 'source_ready', usage: {} }), owner: 'worker' }), /locked/);
@@ -86,6 +94,30 @@ test('state, locks, execution directories and patch paths fail closed on tamperi
     const raw = JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8')); raw.paperStates['icassp-1001'].status = 'blocked';
     fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(raw));
     assert.throws(() => execution.readExecution({ executionRoot: f.root, executionId: ids[0] }), /state SHA|attempt|state does not match|requires a reason/);
+});
+
+test('execution receipts replay the initial source state, full patch payload and monotonic clock', t => {
+    const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+    let state = execution.prepareExecution({ executionRoot: f.root, run: f.run, ledgerHandle: f.ledgerHandle, executionId: ids[0], now: stamp });
+    state = execution.transitionExecution({ executionRoot: f.root, executionId: ids[0], owner: 'worker', now: '2026-09-06T00:01:00.000Z',
+        patch: patch(ids[1], state.stateSha256, 'icassp-1001', { status: 'source_ready', usage: { requests: 1 } }) });
+    state = execution.transitionExecution({ executionRoot: f.root, executionId: ids[0], owner: 'worker', now: '2026-09-06T00:02:00.000Z',
+        patch: patch(ids[2], state.stateSha256, 'icassp-1001', { status: 'analyzing', usage: { requests: 2 } }) });
+
+    const badSource = structuredClone(state); badSource.source.runStateSha256 = sha('not-the-initial-run');
+    assert.throws(() => execution.assertConferenceExecution(resealExecution(badSource)), /rebuilt initial run state/);
+
+    const badFirstPrior = structuredClone(state); badFirstPrior.attempts[0].priorStateSha256 = sha('bad-first-prior');
+    badFirstPrior.attempts[0].patch.expectedStateSha256 = badFirstPrior.attempts[0].priorStateSha256;
+    badFirstPrior.attempts[0].patchSha256 = runApi.stableHash(badFirstPrior.attempts[0].patch);
+    assert.throws(() => execution.assertConferenceExecution(resealExecution(badFirstPrior)), /SHA history is discontinuous/);
+
+    const badPatch = structuredClone(state); badPatch.attempts[0].patch.nextState.usage.requests = 99;
+    assert.throws(() => execution.assertConferenceExecution(resealExecution(badPatch)), /patch SHA does not bind patch content/);
+
+    const backwards = structuredClone(state); backwards.attempts[1].recordedAt = '2026-09-06T00:00:30.000Z';
+    backwards.attempts[1].nextStateSha256 = resealExecution(backwards).stateSha256;
+    assert.throws(() => execution.assertConferenceExecution(resealExecution(backwards)), /moves backwards in time/);
 });
 
 test('CLI accepts only direct names, safe UUIDs and controlled patch files', () => {

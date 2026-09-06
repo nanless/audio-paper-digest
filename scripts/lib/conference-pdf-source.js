@@ -335,9 +335,11 @@ function buildConferencePdfSource({ cacheRoot, record, maxBytes, extractPdf } = 
     return buildSource({ cacheRoot, record, maxBytes, extractPdf });
 }
 
-function resolveVerifiedLedgerMember({ sourceRoot, ledger, ledgerSha256, identityKey }) {
-    try { ledgerApi.validateLedger(ledger); }
-    catch (error) { throw fail(`Conference PDF source requires a valid loaded ledger: ${error.message}`); }
+function resolveVerifiedLedgerMember({ sourceRoot, ledgerHandle, identityKey }) {
+    let loaded;
+    try { loaded = ledgerApi.ledgerHandleSnapshot(ledgerHandle); }
+    catch (error) { throw fail(`Conference PDF source requires an authenticated loaded ledger handle: ${error.message}`); }
+    const { ledger, ledgerSha256 } = loaded;
     if (typeof identityKey !== 'string' || !identityKey.trim()) throw fail('identityKey must be a non-empty canonical ledger identity');
     const member = ledger.members.find(item => ledgerApi.identityKey(item.identity) === identityKey);
     if (!member) throw fail('identityKey does not identify a member in the loaded conference ledger');
@@ -358,8 +360,8 @@ function resolveVerifiedLedgerMember({ sourceRoot, ledger, ledgerSha256, identit
  * records: the PDF location, identity, and all source hashes come from the
  * supplied already-loaded ledger member.
  */
-function buildConferencePdfSourceFromLedger({ sourceRoot, ledger, ledgerSha256, identityKey, maxBytes, extractPdf } = {}) {
-    const checked = resolveVerifiedLedgerMember({ sourceRoot, ledger, ledgerSha256, identityKey });
+function buildConferencePdfSourceFromLedger({ sourceRoot, ledgerHandle, identityKey, maxBytes, extractPdf } = {}) {
+    const checked = resolveVerifiedLedgerMember({ sourceRoot, ledgerHandle, identityKey });
     return buildSource({
         cacheRoot: checked.root,
         record: { identity: checked.member.identity, pdfRelativePath: checked.member.pdfFile, pdfSha256: checked.member.pdfSha256 },
@@ -443,8 +445,8 @@ function replayConferencePdfSource({ cacheRoot, record, descriptor, text = null,
  * for admission.  A ledger-bound descriptor is intentionally not replayable
  * through the record-only API above.
  */
-function replayConferencePdfSourceFromLedger({ sourceRoot, ledger, ledgerSha256, identityKey, descriptor, text = null, structuredArtifacts = null, formulaTeX = null, maxBytes } = {}) {
-    const checked = resolveVerifiedLedgerMember({ sourceRoot, ledger, ledgerSha256, identityKey });
+function replayConferencePdfSourceFromLedger({ sourceRoot, ledgerHandle, identityKey, descriptor, text = null, structuredArtifacts = null, formulaTeX = null, maxBytes } = {}) {
+    const checked = resolveVerifiedLedgerMember({ sourceRoot, ledgerHandle, identityKey });
     return replaySource({
         cacheRoot: checked.root,
         record: { identity: checked.member.identity, pdfRelativePath: checked.member.pdfFile, pdfSha256: checked.member.pdfSha256 },

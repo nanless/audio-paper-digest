@@ -48,7 +48,8 @@ function safeRuntimeFile(root, name) {
 
 function validateLedgerFile({ ledgerDirectory, sourceRoot, ledgerName, verifyFiles = false }) {
     const filename = safeRuntimeFile(ledgerDirectory, ledgerName);
-    const { ledger, ledgerSha256 } = ledgerApi.loadLedger(filename);
+    const ledgerHandle = ledgerApi.loadLedgerHandle(filename);
+    const { ledger, ledgerSha256 } = ledgerApi.ledgerHandleSnapshot(ledgerHandle);
     if (verifyFiles) ledgerApi.verifyMemberFiles(ledger, sourceRoot);
     return {
         kind: 'conference-source-ledger', conference: ledger.conference.id, year: ledger.conference.year,
@@ -60,8 +61,9 @@ function validateRunFile({ runsDirectory, runName, ledgerDirectory, ledgerName }
     const filename = safeRuntimeFile(runsDirectory, runName);
     const { value, sha256 } = ledgerApi.readRegularJson(filename);
     const ledgerFile = safeRuntimeFile(ledgerDirectory, ledgerName);
-    const { ledger, ledgerSha256 } = ledgerApi.loadLedger(ledgerFile);
-    const run = runApi.assertConferenceRunFromVerifiedLedger(value, ledger, ledgerSha256);
+    const ledgerHandle = ledgerApi.loadLedgerHandle(ledgerFile);
+    const { ledgerSha256 } = ledgerApi.ledgerHandleSnapshot(ledgerHandle);
+    const run = runApi.assertConferenceRunFromVerifiedLedger(value, ledgerHandle);
     return {
         kind: 'conference-run', conference: run.conferenceId, members: run.members.length,
         ledgerSha256, membershipSha256: run.membershipSha256,

@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -23,18 +24,23 @@ function fixture(t) {
 }
 
 function input(f, { full = true } = {}) {
-    fs.writeFileSync(path.join(f.source, 'metadata', '100.json'), '{"title":"This title is only metadata"}', { mode: 0o600 });
-    fs.writeFileSync(path.join(f.source, 'pdf', '100.pdf'), '%PDF-1.4\nsource', { mode: 0o600 });
+    const metadata = '{"conference":{"id":"icassp-2026","year":2026},"identity":{"type":"icassp-arnumber","value":"100"},"title":"This title is only metadata"}';
+    const pdf = '%PDF-1.4\nsource'; const extracted = 'extracted text'; const artifacts = '{"pages":[]}';
+    fs.writeFileSync(path.join(f.source, 'metadata', '100.json'), metadata, { mode: 0o600 });
+    fs.writeFileSync(path.join(f.source, 'pdf', '100.pdf'), pdf, { mode: 0o600 });
     if (full) {
-        fs.writeFileSync(path.join(f.source, 'text', '100.txt'), 'extracted text', { mode: 0o600 });
-        fs.writeFileSync(path.join(f.source, 'artifacts', '100.json'), '{"pages":[]}', { mode: 0o600 });
+        fs.writeFileSync(path.join(f.source, 'text', '100.txt'), extracted, { mode: 0o600 });
+        fs.writeFileSync(path.join(f.source, 'artifacts', '100.json'), artifacts, { mode: 0o600 });
     }
     const member = {
         identity: { type: 'icassp-arnumber', value: '100' },
-        metadata: { file: 'metadata/100.json', provenance: { kind: 'official-metadata', locator: 'ieee:100', retrievedAt: NOW } },
-        pdf: { file: 'pdf/100.pdf', provenance: { kind: 'official-pdf', locator: 'ieee-pdf:100', retrievedAt: NOW } },
-        text: full ? { file: 'text/100.txt', provenance: { extractor: 'pdftotext', version: '24.02' } } : null,
-        artifacts: full ? { file: 'artifacts/100.json', provenance: { extractor: 'layout', version: '1' } } : null
+        metadata: { file: 'metadata/100.json', sha256: sha(metadata), identityEvidence: {
+            conferenceIdPointer: '/conference/id', conferenceYearPointer: '/conference/year',
+            identityTypePointer: '/identity/type', identityValuePointer: '/identity/value'
+        }, provenance: { kind: 'official-metadata', locator: 'ieee:100', retrievedAt: NOW } },
+        pdf: { file: 'pdf/100.pdf', sha256: sha(pdf), provenance: { kind: 'official-pdf', locator: 'ieee-pdf:100', retrievedAt: NOW } },
+        text: full ? { file: 'text/100.txt', sha256: sha(extracted), provenance: { extractor: 'pdftotext', version: '24.02' } } : null,
+        artifacts: full ? { file: 'artifacts/100.json', sha256: sha(artifacts), provenance: { extractor: 'layout', version: '1' } } : null
     };
     return { contract: importer.CONTRACT, version: importer.VERSION, conference: { id: 'icassp-2026', year: 2026 },
         members: [member], memberSetSha256: ledgerApi.memberSetSha256([{ identity: member.identity }]) };
@@ -78,8 +84,42 @@ test('rejects undeclared/traversing/link/hard-link files, malformed PDFs and pre
     assert.throws(() => importer.importConferenceSources({ manifest: hard, sourceRoot: f.source, cacheRoot: f.cache, updatedAt: NOW }), /single-link/);
     fs.unlinkSync(path.join(f.source, 'pdf', 'hard.pdf'));
     importer.importConferenceSources({ manifest, sourceRoot: f.source, cacheRoot: f.cache, updatedAt: NOW, apply: true });
-    fs.writeFileSync(path.join(f.source, 'pdf', '100.pdf'), '%PDF-1.4\nchanged');
-    assert.throws(() => importer.importConferenceSources({ manifest, sourceRoot: f.source, cacheRoot: f.cache, updatedAt: NOW, apply: true }), /different bytes/);
+    const changedPdf = '%PDF-1.4\nchanged'; fs.writeFileSync(path.join(f.source, 'pdf', '100.pdf'), changedPdf);
+    const drift = structuredClone(manifest); drift.members[0].pdf.sha256 = sha(changedPdf);
+    assert.throws(() => importer.importConferenceSources({ manifest: drift, sourceRoot: f.source, cacheRoot: f.cache, updatedAt: NOW, apply: true }), /different bytes/);
+});
+
+test('requires manifest input SHA values and strict metadata identity evidence before any member can verify', t => {
+    const f = fixture(t); const manifest = input(f);
+    const badSha = structuredClone(manifest); badSha.members[0].pdf.sha256 = 'a'.repeat(64);
+    assert.throws(() => importer.importConferenceSources({ manifest: badSha, sourceRoot: f.source, cacheRoot: f.cache, updatedAt: NOW }), /expected SHA-256/);
+    const missingSha = structuredClone(manifest); delete missingSha.members[0].text.sha256;
+    assert.throws(() => importer.validateManifest(missingSha), /unknown or missing fields/);
+    const wrongIdentity = structuredClone(manifest); wrongIdentity.members[0].metadata.identityEvidence.identityValuePointer = '/title';
+    assert.throws(() => importer.importConferenceSources({ manifest: wrongIdentity, sourceRoot: f.source, cacheRoot: f.cache, updatedAt: NOW }), /must exactly bind/);
+    const missingEvidence = structuredClone(manifest); delete missingEvidence.members[0].metadata.identityEvidence;
+    assert.throws(() => importer.validateManifest(missingEvidence), /unknown or missing fields/);
+});
+
+test('rejects overlapping roots, FIFO sources, non-UTF8 text, and duplicate metadata/artifact JSON keys', t => {
+    const f = fixture(t); const manifest = input(f);
+    assert.throws(() => importer.importConferenceSources({ manifest, sourceRoot: f.source, cacheRoot: f.source, updatedAt: NOW }), /must not overlap/);
+    const nestedCache = path.join(f.source, 'nested-cache'); fs.mkdirSync(nestedCache, { mode: 0o700 });
+    assert.throws(() => importer.importConferenceSources({ manifest, sourceRoot: f.source, cacheRoot: nestedCache, updatedAt: NOW }), /must not overlap/);
+    const fifo = structuredClone(manifest); fs.unlinkSync(path.join(f.source, 'text', '100.txt'));
+    execFileSync('mkfifo', [path.join(f.source, 'text', '100.txt')]);
+    assert.throws(() => importer.importConferenceSources({ manifest: fifo, sourceRoot: f.source, cacheRoot: f.cache, updatedAt: NOW }), /regular single-link/);
+    fs.unlinkSync(path.join(f.source, 'text', '100.txt'));
+    fs.writeFileSync(path.join(f.source, 'text', '100.txt'), Buffer.from([0xc3, 0x28]), { mode: 0o600 });
+    fifo.members[0].text.sha256 = sha(Buffer.from([0xc3, 0x28]));
+    assert.throws(() => importer.importConferenceSources({ manifest: fifo, sourceRoot: f.source, cacheRoot: f.cache, updatedAt: NOW }), /strict UTF-8/);
+    const duplicateMetadata = structuredClone(manifest); const duplicated = '{"conference":{"id":"icassp-2026","year":2026},"identity":{"type":"icassp-arnumber","value":"100"},"identity":{"type":"icassp-arnumber","value":"100"}}';
+    fs.writeFileSync(path.join(f.source, 'metadata', '100.json'), duplicated, { mode: 0o600 }); duplicateMetadata.members[0].metadata.sha256 = sha(duplicated);
+    assert.throws(() => importer.importConferenceSources({ manifest: duplicateMetadata, sourceRoot: f.source, cacheRoot: f.cache, updatedAt: NOW }), /valid UTF-8 JSON/);
+    const f2 = fixture(t); const artifactsManifest = input(f2); const duplicateArtifacts = '{"pages":[],"pages":[]}';
+    fs.writeFileSync(path.join(f2.source, 'artifacts', '100.json'), duplicateArtifacts, { mode: 0o600 });
+    artifactsManifest.members[0].artifacts.sha256 = sha(duplicateArtifacts);
+    assert.throws(() => importer.importConferenceSources({ manifest: artifactsManifest, sourceRoot: f2.source, cacheRoot: f2.cache, updatedAt: NOW }), /valid UTF-8 JSON/);
 });
 
 test('CLI requires explicit mode and writes an O_EXCL ledger only in apply mode', t => {

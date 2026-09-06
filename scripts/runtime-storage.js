@@ -45,7 +45,8 @@ function getLayout(projectRoot = PROJECT_ROOT) {
     const protectedRuntime = [
         { key: 'conference-ledgers', root: path.join(runtime, 'conference-ledgers') },
         { key: 'conference-sources', root: path.join(runtime, 'conference-sources') },
-        { key: 'conference-runs', root: path.join(runtime, 'conference-runs') }
+        { key: 'conference-runs', root: path.join(runtime, 'conference-runs') },
+        { key: 'conference-executions', root: path.join(runtime, 'conference-executions') }
     ];
     return { projectRoot: root, current, archive, runtime, logs, controlled, protectedRuntime };
 }

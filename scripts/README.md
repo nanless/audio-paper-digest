@@ -69,6 +69,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/conference-source-ledger.js` | Node 库 | 会议来源账本的身份、四类工件 SHA、审查证据、不可变读写和本地文件重放；标题绝不作为身份。 |
 | `lib/conference-pdf-source.js` | Node 库 | 受控本机 PDF 的字节/路径/链接安全校验和可重放来源 descriptor；无可靠结构化 TeX 时公式明确不可用。 |
 | `lib/conference-run.js` | Node 库 | 冻结会议成员、分片、taxonomy/选择策略版本和逐篇状态；只向汇总投影已完成论文。 |
+| `lib/conference-plan.js` | Node 库 | 从受控 ledger 与显式 selection/shards 生成强绑定会议 run 及不可变 plan receipt；拒绝任意路径和未验证成员。 |
 | `lib/conference-importer.js` | Node 库 | 按显式 manifest 安全导入会议 metadata/PDF/派生工件到私有 cache，并生成可验证或明确 blocked 的 ledger。 |
 | `lib/conference-execution.js` | Node 库 | 在隔离 runtime 目录中以锁、CAS 和受控 patch 持久化强绑定会议 run；不调用模型或写日更数据。 |
 | `lib/paper-identity.js` | Node 库 | `paper-identity-v1` 的 Node 规范化、官方来源 URL 门禁与稳定 SHA；不替换既有 arXiv helper。 |
@@ -80,6 +81,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `taxonomy-tools.js` | 校验标签registry并启动仅四个只读路由的回环预览服务；不提供本机助手或生产迁移。 |
 | `conference-tools.js` | 只读校验私有会议 ledger/run；只接受受控 runtime 目录内的直接文件名，不导入 PDF、不联网、不调用模型。 |
 | `conference-import.js` | 显式 `--dry-run/--apply` 的本机会议来源导入；按 manifest 的主身份复制并 SHA 校验，不发现文件、不联网、不调用模型。 |
+| `conference-plan.js` | 从受控 ledger、显式 selection/shards 和当前 taxonomy SHA 创建不可覆盖会议 run 及 plan receipt；不接收任意路径。 |
 | `conference-execution.js` | 从强绑定 verified ledger run 创建隔离会议执行状态，并以受控 patch/CAS 推进逐篇状态；不写日更 `current`。 |
 | `paper_identity.py` | `paper-identity-v1` 的 Python 同构实现，使用共享向量防止发布侧与 Node 身份/SHA 漂移。 |
 | `paper_taxonomy.py` | 与Node共用registry的Python加载、验证和精确映射；未知/歧义不自动收窄。 |

@@ -73,6 +73,25 @@ npm run conference:import -- --apply --manifest /absolute/import.json \
 它不联网、不调用模型。缺 PDF、文本或工件的成员会成为 `blocked`，而不是伪造
 `verified`。
 
+要进入后续会议流程，`--cache-root` 必须是项目配置的
+`data/runtime/conference-sources`，`--ledger-output` 必须是
+`data/runtime/conference-ledgers/` 中的新文件；导入器接受绝对路径是为了明确界定
+本机输入/输出，不能把任意位置的 ledger 当作可执行会议来源。
+
+导入后必须用受控 plan 创建 run，不能手写 `conference-run-v1`：
+
+```bash
+npm run conference:plan -- --dry-run --ledger icassp-2026.json \
+  --plan icassp-2026-pilot.json --run icassp-2026-pilot-run.json
+
+npm run conference:plan -- --apply --ledger icassp-2026.json \
+  --plan icassp-2026-pilot.json --run icassp-2026-pilot-run.json
+```
+
+plan 与 ledger 都只能是配置的 `conference-ledgers` 目录中的直接 JSON 文件名。plan
+冻结当前 taxonomy 原始字节 SHA、显式选择的 verified 身份和无重叠分片；apply 以
+O_EXCL 同时写 run 与不可变 plan receipt。
+
 执行器只能从已验证 ledger 派生的 run 创建，状态文件放在
 `data/runtime/conference-executions/<UUID>/`。它使用操作锁、状态 SHA CAS 和受控 patch
 保证可恢复；此阶段仍不运行模型：
