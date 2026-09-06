@@ -71,6 +71,22 @@ authority，最后写入 verified decision 并 CAS apply。它不读取博客正
 analysis、旧 Reader 和旧 checkpoint 都不会进入输入。`analyze` 才调用现有多阶段分析引擎并产生
 LLM 用量，结果留在该 run 的 `analysis.json`，不会覆盖 `data/current/deep-analysis-result.json`。
 
+完成历史分析后，后处理使用单一可恢复入口；它不再调用 LLM，也不写博客仓库：
+
+```bash
+npm run history:postprocess -- --dry-run --crosswalk UUID --concurrency 3
+npm run history:postprocess -- --apply --crosswalk UUID --concurrency 3
+# 只尝试一个日期；当日任一历史论文尚未完成单篇 staging 时保持 blocked
+npm run history:postprocess -- --apply --crosswalk UUID --date YYYY-MM-DD --concurrency 3
+```
+
+该入口只接受 analysis scheduler 中状态为 complete、且实际 run 可重放为 sealed-complete 的
+per-paper 项。每篇先按当前 registry 确定性生成 SHA 命名的 taxonomy assignment；blocked assignment
+仍保留审计，但不会进入页面。随后由 crosswalk、analysis run、registry 与 scheduler item SHA
+稳定派生单篇 staging run ID。每日汇总只有在该日期的全部历史论文页面都能由已验证 staging 覆盖时
+才生成；它合并多份 per-paper manifest，仍只写受保护的 runtime staging。postprocess checkpoint
+按 crosswalk 与 registry SHA 隔离，自带 self-SHA，registry 升级不会覆盖旧审计链。
+
 `page-source-crosswalk-v1` 会严格重放 canonical ledger/receipt 字节与自校验 SHA，再以 opaque
 handle 为每个 `kind=paper` 页面建立隔离、可恢复的 pending 状态。assignment 只含页面路径和
 整页 SHA，不带标题、标签或旧正文；受控 decision/CAS 可以记录 `needs-review`、`blocked`、

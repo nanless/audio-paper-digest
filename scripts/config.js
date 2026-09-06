@@ -195,6 +195,7 @@ const FILES = {
     historicalPageStagingDir: path.join(DATA_DIR, 'runtime', 'historical-page-staging'),
     historicalDailyAggregateDir: path.join(DATA_DIR, 'runtime', 'historical-daily-aggregates'),
     historicalAnalysisSchedulerDir: path.join(DATA_DIR, 'runtime', 'historical-analysis-schedulers'),
+    historicalPostprocessSchedulerDir: path.join(DATA_DIR, 'runtime', 'historical-postprocess-schedulers'),
     // Immutable official-source request/snapshot/fulltext/receipt bundles used
     // by the historical page crosswalk. Never archive with daily current/.
     paperSourceAuthorityDir: path.join(DATA_DIR, 'runtime', 'paper-source-authorities'),

@@ -38,6 +38,7 @@
     "history:taxonomy": "node scripts/historical-taxonomy-assignment.js",
     "history:stage": "node scripts/historical-page-staging.js",
     "history:aggregate": "node scripts/historical-daily-aggregate.js",
+    "history:postprocess": "node scripts/historical-postprocess-scheduler.js",
     "rewrite:source": "node scripts/rewrite-from-source.js",
     "paper:rethink": "node scripts/paper-rethink-server.js",
     "deep": "node scripts/deep-analysis-only.js",

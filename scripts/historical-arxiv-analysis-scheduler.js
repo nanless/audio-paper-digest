@@ -5,20 +5,22 @@ const path = require('node:path');
 const { requireExternalRuntime } = require('./env-loader.js');
 const api = require('./lib/historical-arxiv-analysis-scheduler.js');
 
-const USAGE = '--dry-run|--apply --crosswalk UUID --stage prepare-only|analyze [--limit pilot|N] [--concurrency 1-3]';
+const USAGE = '--dry-run|--apply --crosswalk UUID --stage prepare-only|analyze [--queue new-full|reader-recovery|all] [--limit pilot|N] [--concurrency 1-3]';
 function parseArgs(argv) {
     const mode = argv[0]; if (!['--dry-run', '--apply'].includes(mode)) throw new Error(`Use ${USAGE}`);
     const values = {};
     for (let i = 1; i < argv.length; i += 2) {
-        if (!['--crosswalk', '--stage', '--limit', '--concurrency'].includes(argv[i])
+        if (!['--crosswalk', '--stage', '--queue', '--limit', '--concurrency'].includes(argv[i])
             || argv[i + 1] === undefined || Object.hasOwn(values, argv[i])) throw new Error(`Use ${USAGE}`);
         values[argv[i]] = argv[i + 1];
     }
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(values['--crosswalk'] || '')
         || !['prepare-only', 'analyze'].includes(values['--stage'])
+        || (values['--queue'] !== undefined && !['new-full', 'reader-recovery', 'all'].includes(values['--queue']))
         || (values['--limit'] !== undefined && values['--limit'] !== 'pilot' && !/^[1-9]\d{0,5}$/.test(values['--limit']))
         || (values['--concurrency'] !== undefined && !/^[1-3]$/.test(values['--concurrency']))) throw new Error(`Use ${USAGE}`);
     return { apply: mode === '--apply', crosswalkId: values['--crosswalk'], stage: values['--stage'],
+        queue: values['--queue'] || 'all',
         limit: values['--limit'] === undefined ? null : values['--limit'] === 'pilot' ? 'pilot' : Number(values['--limit']),
         concurrency: Number(values['--concurrency'] || 1) };
 }

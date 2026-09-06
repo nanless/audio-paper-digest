@@ -6,7 +6,67 @@ const path = require('node:path');
 
 const CONTRACT = 'historical-arxiv-analysis-scheduler-v1';
 const VERSION = 1;
+const READER_TRANSPORT_COOLDOWN_MS = 5 * 60 * 1000;
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
+
+function readerImplementationFingerprint() {
+    const root = path.join(__dirname, '..', '..');
+    const files = ['prompts/api-reader-article.md', 'prompts/api-reader-repair.md',
+        'scripts/deep-analyzer.js', 'scripts/lib/reader-repair.js', 'scripts/lib/reader-source-diagnostics.js'];
+    return sha256(files.map(name => `${name}\0${sha256(fs.readFileSync(path.join(root, name)))}\0`).join(''));
+}
+
+function inspectReaderRecovery({ runId, rootDir, now = new Date().toISOString() } = {}) {
+    const fresh = require('./fresh-rewrite-run.js');
+    const loaded = fresh.loadRun(runId, { rootDir }); const paper = loaded.analysis.papers[0];
+    const stages = paper.analysisManifest?.stages || {}; const reader = stages.apiReaderArticle || {};
+    const upstreamReady = stages.primaryAnalysis?.status === 'complete' && stages.scoringAudit?.status === 'complete';
+    const attemptsRoot = path.join(loaded.runDir, 'reader-attempts'); const candidates = [];
+    try {
+        for (const name of fs.readdirSync(attemptsRoot).filter(name => name.endsWith('.json')).sort()) {
+            const filename = path.join(attemptsRoot, name); const stat = fs.lstatSync(filename);
+            if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) continue;
+            const envelope = fresh.readRegularJson(filename).value;
+            if (envelope?.identity?.freshAnalysis?.runId !== runId || envelope.identity.paperId !== loaded.run.paperIds[0]) continue;
+            candidates.push({ payload: envelope.payload || {}, mtimeMs: stat.mtimeMs });
+        }
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    candidates.sort((a, b) => b.mtimeMs - a.mtimeMs); const latestCandidate = candidates[0];
+    const payload = latestCandidate?.payload || {};
+    const error = String(reader.error || paper.latestAnalysisAttemptError || paper.error || '');
+    const failureSignature = String(error ? sha256(error) : payload.failureSignature || '');
+    const attempts = Number.isSafeInteger(payload.attempts) ? payload.attempts : 0;
+    const noProgress = Number.isSafeInteger(payload.noProgress) ? payload.noProgress : 0;
+    const exhausted = /failed candidate exhausted|bounded attempts|连续无进展/i.test(error)
+        || attempts >= 6 || noProgress >= 2;
+    const transportOnly = /HTTP 429|rate_limit_exceeded|SSE.*(?:终态|terminal)|SSE_TERMINAL/i.test(error);
+    const baseFingerprint = String(reader.fingerprint || loaded.run.sourceExpectations?.[loaded.run.paperIds[0]]?.sourceSnapshotSha256 || '');
+    const readerUpdatedMs = new Date(reader.updatedAt || '').getTime();
+    const observedAt = Number.isFinite(readerUpdatedMs) ? new Date(readerUpdatedMs).toISOString()
+        : latestCandidate ? new Date(latestCandidate.mtimeMs).toISOString() : new Date(now).toISOString();
+    return { recoveryKind: upstreamReady && reader.status !== 'complete' ? 'reader' : 'full', upstreamReady,
+        recoveryFingerprint: sha256(`${baseFingerprint}\0${readerImplementationFingerprint()}`),
+        failureSignature, exhausted, transportOnly, cooldownMs: transportOnly ? READER_TRANSPORT_COOLDOWN_MS : 0,
+        attempts, noProgress, observedAt };
+}
+
+function mergeRecoveryState(existing, observed, now, { attempted = false } = {}) {
+    if (!observed || observed.recoveryKind !== 'reader') return { recoveryKind: 'full',
+        recoveryFingerprint: null, failureSignature: null, nextEligibleAt: null, exhausted: false };
+    const fingerprintChanged = Boolean(existing?.recoveryFingerprint
+        && existing.recoveryFingerprint !== observed.recoveryFingerprint);
+    const sameFailure = existing?.recoveryFingerprint === observed.recoveryFingerprint
+        && existing?.failureSignature === observed.failureSignature;
+    if (sameFailure && !attempted) return { recoveryKind: 'reader', recoveryFingerprint: observed.recoveryFingerprint,
+        failureSignature: observed.failureSignature, nextEligibleAt: existing.nextEligibleAt || null,
+        exhausted: existing.exhausted === true || observed.exhausted === true };
+    const base = new Date(attempted ? now : observed.observedAt || now).getTime();
+    return { recoveryKind: 'reader', recoveryFingerprint: observed.recoveryFingerprint,
+        failureSignature: observed.failureSignature,
+        nextEligibleAt: !fingerprintChanged && observed.cooldownMs > 0
+            ? new Date(base + observed.cooldownMs).toISOString() : null,
+        exhausted: fingerprintChanged ? false : observed.exhausted === true };
+}
 
 function deterministicRunId(crosswalkId, paperId) {
     const bytes = Buffer.from(sha256(`${crosswalkId}\0${paperId}`).slice(0, 32), 'hex');
@@ -47,6 +107,7 @@ function defaultDependencies() {
         prepareAuthority: args => require('./arxiv-source-authority.js').prepareArxivSourceAuthority(args),
         prepareRun: args => history.prepareHistoricalArxivRun(args), recoverRun: args => history.recoverHistoricalArxivRun(args),
         verifyRunAuthority: args => history.verifyHistoricalArxivRunAuthority(args),
+        inspectRunRecovery: args => inspectReaderRecovery(args),
         analyzeRun: args => fresh.analyzeRewrite(args), runStatus: args => fresh.rewriteStatus(args),
         updateLocked: engine.updateJsonFileLocked, now: () => new Date().toISOString() };
 }
@@ -57,6 +118,21 @@ function schedulerPath(root, crosswalkId) {
     return path.join(absolute, `${crosswalkId}.json`);
 }
 
+function checkpointBindingMatches(existing, group) {
+    if (!existing || !Array.isArray(existing.pageKeys)) return false;
+    const legacyIdentityBinding = existing.identitySha256 === undefined
+        && existing.identityRecordSha256 === undefined
+        && existing.groupSha256 === require('./fresh-rewrite-run.js').stableHash({
+            paperId: group.paperId, identitySha256: group.identitySha256,
+            identityRecordSha256: group.identityRecordSha256, pageKeys: existing.pageKeys
+        });
+    return existing.authorityFileSha256 === group.authorityFileSha256
+        && existing.authorityName === group.authorityName
+        && (legacyIdentityBinding || existing.identitySha256 === group.identitySha256
+            && existing.identityRecordSha256 === group.identityRecordSha256)
+        && existing.pageKeys.every(pageKey => group.pageKeys.includes(pageKey));
+}
+
 function syncCheckpoint(filename, crosswalk, groups, deps) {
     return deps.updateLocked(filename, current => {
         const prior = current || { contract: CONTRACT, version: VERSION, crosswalkId: crosswalk.crosswalkId,
@@ -65,18 +141,7 @@ function syncCheckpoint(filename, crosswalk, groups, deps) {
         const items = { ...prior.items };
         for (const group of groups) {
             const existing = items[group.paperId];
-            const legacyIdentityBinding = existing && existing.identitySha256 === undefined
-                && existing.identityRecordSha256 === undefined
-                && existing.groupSha256 === require('./fresh-rewrite-run.js').stableHash({
-                    paperId: group.paperId, identitySha256: group.identitySha256,
-                    identityRecordSha256: group.identityRecordSha256,
-                    pageKeys: existing.pageKeys
-                });
-            if (existing && (existing.authorityFileSha256 !== group.authorityFileSha256
-                || existing.authorityName !== group.authorityName
-                || !legacyIdentityBinding && existing.identitySha256 !== group.identitySha256
-                || !legacyIdentityBinding && existing.identityRecordSha256 !== group.identityRecordSha256
-                || existing.pageKeys.some(pageKey => !group.pageKeys.includes(pageKey)))) {
+            if (existing && !checkpointBindingMatches(existing, group)) {
                 throw new Error(`${group.paperId} scheduler binding drifted`);
             }
             if (existing && existing.runId !== group.runId) {
@@ -106,16 +171,71 @@ function updateItem(filename, group, patch, deps) {
     });
 }
 
+function selectCandidates(groups, items, { stage, queue, maximum, now }) {
+    const nowMs = new Date(now).getTime();
+    return groups.filter(group => {
+        const item = items[group.paperId] || { status: 'pending' };
+        const status = item.status;
+        if (stage === 'prepare-only') return queue !== 'reader-recovery'
+            && !['sources_ready', 'complete', 'analysis_partial', 'analyzing'].includes(status);
+        const reader = ['analysis_partial', 'analyzing'].includes(status) && item.recoveryKind === 'reader';
+        const eligibleReader = reader && item.exhausted !== true
+            && (!item.nextEligibleAt || new Date(item.nextEligibleAt).getTime() <= nowMs);
+        if (queue === 'new-full') return !['complete', 'analysis_partial', 'analyzing'].includes(status);
+        if (queue === 'reader-recovery') return eligibleReader;
+        if (status === 'complete') return false;
+        if (status === 'analyzing' || reader) return eligibleReader;
+        return true;
+    }).slice(0, maximum);
+}
+
+function dryRunState(groups, crosswalkId, files, deps) {
+    const filename = path.join(path.resolve(files.historicalAnalysisSchedulerDir), `${crosswalkId}.json`);
+    let stored = {};
+    if (fs.existsSync(filename)) {
+        const snapshot = require('./fresh-rewrite-run.js').readRegularJson(filename).value;
+        if (snapshot.contract !== CONTRACT || snapshot.version !== VERSION || snapshot.crosswalkId !== crosswalkId) {
+            throw new Error('Scheduler checkpoint identity drifted');
+        }
+        stored = snapshot.items || {};
+    }
+    const items = {}; const effectiveGroups = [];
+    for (const group of groups) {
+        const prior = stored[group.paperId];
+        const trustedPrior = prior && prior.runId === group.runId && checkpointBindingMatches(prior, group)
+            ? prior : null;
+        const effective = { ...group, analysisDate: trustedPrior?.analysisDate || group.analysisDate };
+        effectiveGroups.push(effective);
+        const recovered = deps.recoverRun({ runId: effective.runId, date: effective.analysisDate,
+            arxivId: effective.arxivId, rootDir: files.freshRewriteRunsDir });
+        const status = recovered ? recovered.sealedComplete === true ? 'complete' : recovered.status : 'pending';
+        const observed = ['analysis_partial', 'analyzing'].includes(status)
+            ? deps.inspectRunRecovery({ runId: effective.runId, rootDir: files.freshRewriteRunsDir, now: deps.now() }) : null;
+        items[effective.paperId] = { ...effective, ...(trustedPrior || {}), status,
+            ...mergeRecoveryState(trustedPrior, observed, deps.now()) };
+    }
+    return { effectiveGroups, items };
+}
+
 async function runHistoricalScheduler(options, overrides = {}) {
     const deps = { ...defaultDependencies(), ...overrides }; const files = deps.files;
     const crosswalk = deps.readCrosswalk({ crosswalkRoot: files.pageSourceCrosswalkDir, crosswalkId: options.crosswalkId });
     const groups = groupsFromCrosswalk(crosswalk);
     const maximum = options.limit === 'pilot' ? 1 : options.limit === null ? groups.length : options.limit;
+    const queue = options.queue || 'all';
     if (!Number.isSafeInteger(maximum) || maximum < 1 || !['prepare-only', 'analyze'].includes(options.stage)
+        || !['new-full', 'reader-recovery', 'all'].includes(queue)
         || !Number.isInteger(options.concurrency) || options.concurrency < 1 || options.concurrency > 3) throw new Error('Invalid scheduler stage/limit/concurrency');
-    if (!options.apply) return { status: 'dry-run', stage: options.stage, verifiedArxivIdentities: groups.length,
-        selected: groups.slice(0, maximum).map(group => ({ paperId: group.paperId, runId: group.runId,
-            pageCount: group.pageKeys.length, cohortDates: group.cohortDates })) };
+    if (!options.apply) {
+        const snapshot = dryRunState(groups, options.crosswalkId, files, deps);
+        const selected = selectCandidates(snapshot.effectiveGroups, snapshot.items,
+            { stage: options.stage, queue, maximum, now: deps.now() });
+        return { status: 'dry-run', stage: options.stage, queue, verifiedArxivIdentities: groups.length,
+            selected: selected.map(group => ({ paperId: group.paperId, runId: group.runId,
+                pageCount: group.pageKeys.length, cohortDates: group.cohortDates,
+                currentStatus: snapshot.items[group.paperId].status,
+                recoveryKind: snapshot.items[group.paperId].recoveryKind })) };
+    }
     const filename = schedulerPath(files.historicalAnalysisSchedulerDir, options.crosswalkId);
     let checkpoint = syncCheckpoint(filename, crosswalk, groups, deps);
     const effectiveGroups = groups.map(group => ({ ...group,
@@ -131,12 +251,13 @@ async function runHistoricalScheduler(options, overrides = {}) {
             continue;
         }
         const status = recovered.sealedComplete === true ? 'complete' : recovered.status;
-        checkpoint = updateItem(filename, group, { status, lastError: null }, deps);
+        const observed = ['analysis_partial', 'analyzing'].includes(status)
+            ? deps.inspectRunRecovery({ runId: group.runId, rootDir: files.freshRewriteRunsDir, now: deps.now() }) : null;
+        const recovery = mergeRecoveryState(checkpoint.items[group.paperId], observed, deps.now());
+        checkpoint = updateItem(filename, group, { status, lastError: null, ...recovery }, deps);
     }
-    const candidates = effectiveGroups.filter(group => {
-        const status = checkpoint.items[group.paperId].status;
-        return options.stage === 'prepare-only' ? !['sources_ready', 'complete', 'analysis_partial', 'analyzing'].includes(status) : status !== 'complete';
-    }).slice(0, maximum);
+    const candidates = selectCandidates(effectiveGroups, checkpoint.items,
+        { stage: options.stage, queue, maximum, now: deps.now() });
     const prepared = [];
     for (const group of candidates) {
         try {
@@ -174,9 +295,19 @@ async function runHistoricalScheduler(options, overrides = {}) {
                     if (result.status === 'complete' && sealed?.sealedComplete !== true) {
                         throw new Error('analysis reported complete without a sealed run proof');
                     }
-                    updateItem(filename, group, { status: sealed?.sealedComplete === true ? 'complete' : 'analysis_partial', lastError: null }, deps);
+                    const status = sealed?.sealedComplete === true ? 'complete' : 'analysis_partial';
+                    const observed = status === 'analysis_partial'
+                        ? deps.inspectRunRecovery({ runId: group.runId, rootDir: files.freshRewriteRunsDir, now: deps.now() }) : null;
+                    updateItem(filename, group, { status, lastError: null,
+                        ...mergeRecoveryState(checkpoint.items[group.paperId], observed, deps.now(), { attempted: true }) }, deps);
                 } catch (error) {
-                    updateItem(filename, group, { status: 'analysis_failed', lastError: String(error.message).slice(0, 2000) }, deps);
+                    const recovered = deps.recoverRun({ runId: group.runId, date: group.analysisDate,
+                        arxivId: group.arxivId, rootDir: files.freshRewriteRunsDir });
+                    const observed = recovered && ['analysis_partial', 'analyzing'].includes(recovered.status)
+                        ? deps.inspectRunRecovery({ runId: group.runId, rootDir: files.freshRewriteRunsDir, now: deps.now() }) : null;
+                    updateItem(filename, group, { status: observed?.recoveryKind === 'reader' ? 'analysis_partial' : 'analysis_failed',
+                        lastError: String(error.message).slice(0, 2000),
+                        ...mergeRecoveryState(checkpoint.items[group.paperId], observed, deps.now(), { attempted: true }) }, deps);
                 }
             }
         };
@@ -184,10 +315,12 @@ async function runHistoricalScheduler(options, overrides = {}) {
     }
     checkpoint = JSON.parse(fs.readFileSync(filename, 'utf8'));
     const values = Object.values(checkpoint.items);
-    return { status: values.every(item => item.status === 'complete') ? 'complete' : 'partial', stage: options.stage,
+    return { status: values.every(item => item.status === 'complete') ? 'complete' : 'partial', stage: options.stage, queue,
         total: groups.length, complete: values.filter(item => item.status === 'complete').length,
         prepared: values.filter(item => ['sources_ready', 'analysis_partial', 'complete'].includes(item.status)).length,
         failed: values.filter(item => /failed$/.test(item.status)).length, checkpoint: filename };
 }
 
-module.exports = { CONTRACT, VERSION, deterministicRunId, groupsFromCrosswalk, runHistoricalScheduler };
+module.exports = { CONTRACT, VERSION, READER_TRANSPORT_COOLDOWN_MS, readerImplementationFingerprint,
+    inspectReaderRecovery, mergeRecoveryState, checkpointBindingMatches, selectCandidates, deterministicRunId,
+    groupsFromCrosswalk, runHistoricalScheduler };

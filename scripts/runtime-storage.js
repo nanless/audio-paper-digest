@@ -59,6 +59,7 @@ function getLayout(projectRoot = PROJECT_ROOT) {
         { key: 'page-source-crosswalks', root: path.join(runtime, 'page-source-crosswalks') },
         { key: 'historical-arxiv-batches', root: path.join(runtime, 'historical-arxiv-batches') },
         { key: 'historical-analysis-schedulers', root: path.join(runtime, 'historical-analysis-schedulers') },
+        { key: 'historical-postprocess-schedulers', root: path.join(runtime, 'historical-postprocess-schedulers') },
         { key: 'historical-taxonomy-assignments', root: path.join(runtime, 'historical-taxonomy-assignments') },
         { key: 'historical-page-staging', root: path.join(runtime, 'historical-page-staging') },
         { key: 'historical-daily-aggregates', root: path.join(runtime, 'historical-daily-aggregates') },

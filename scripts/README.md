@@ -54,6 +54,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/historical-taxonomy-assignment.js` | Node 库 | 从完成且来源绑定的历史 analysis run 重放 canonical 标签，精确映射 concept ID、裁剪祖先，并生成逐论文 assignment；文件名绑定 registry SHA，升级后保留旧 blocked/assigned 审计件。 |
 | `lib/historical-page-staging.js` | Node 库 | 将完成 canonical 与新 taxonomy 投影到 crosswalk 保留的单篇路径；同一论文的重复历史页面共用新分析，输出隔离 staging run 与逐页 SHA。 |
 | `lib/historical-daily-aggregate.js` | Node 库 | 完整重放并合并多份 per-paper staging、crosswalk/inventory 与新 canonical/taxonomy，按稳定次序重建每日汇总 staging manifest；旧汇总正文从不进入输入。 |
+| `lib/historical-postprocess-scheduler.js` | Node 库 | 从 sealed-complete 历史 analysis scheduler 确定性执行重标、单篇 staging 与完整日期 daily aggregate；checkpoint 绑定逐项 SHA，最多并发 3，不写博客仓库。 |
 | `lib/keyword-prefilter.js` | Node 库 | 版本化高召回音频关键词预筛。 |
 | `lib/reader-repair.js` | Node 库 | Reader 候选缓存、节点 SHA 与受限 patch、局部诊断及无进展检测；候选不构成 production proof。 |
 | `lib/reader-operator-patch.js` | Node 库 | 显式应用同 fresh run 的人工局部补丁；严格来源/节点 SHA 与完整 Reader parser，保存 failed 候选并保留预算、原始字节归档和重入审计，不签发成功正文。 |
@@ -119,6 +120,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `historical-taxonomy-assignment.js` | 对完成的历史 analysis run 执行单篇或批量 deterministic 重标；dry-run 零写，apply 只写独立 assignment artifact，不调用 LLM。 |
 | `historical-page-staging.js` | 按显式 analysis run 与当前 registry SHA 精确选择 assignment，从 verified crosswalk 生成隔离单篇页面 staging；不写博客仓库。 |
 | `historical-daily-aggregate.js` | 以 `--staging-runs UUID[,UUID...]` 合并多份单篇 staging run，重建 daily summary 的隔离 manifest；保留原路径/URL，dry-run 零写，apply 不写博客仓库。 |
+| `historical-postprocess-scheduler.js` | 可恢复批量编排历史重标、per-paper staging 和就绪日期汇总；支持 dry-run/apply、pilot/限额、日期和 1–3 并发。 |
 | `historical-arxiv-batch.js` | 对 pending single-hint arXiv 页面按唯一论文分组抓取与 verified 映射；支持 pilot/数值 limit 和可恢复全量续跑，不调用 LLM。 |
 | `paper_identity.py` | `paper-identity-v1` 的 Python 同构实现，使用共享向量防止发布侧与 Node 身份/SHA 漂移。 |
 | `paper_taxonomy.py` | 与Node共用registry的Python加载、验证和精确映射；未知/歧义不自动收窄。 |
