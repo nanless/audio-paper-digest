@@ -148,7 +148,7 @@ function prepareHistoricalArxivRun({ authorityHandle, metadata, metadataProof, m
     }
 }
 
-function recoverHistoricalArxivRun({ runId, date, arxivId, rootDir } = {}) {
+function recoverHistoricalArxivRun({ runId, date, arxivId, rootDir, now = new Date().toISOString() } = {}) {
     if (!UUID_RE.test(String(runId || '')) || !/^\d{4}\.\d{4,5}$/.test(String(arxivId || ''))) fail('valid runId and arxivId are required');
     const runDir = path.join(path.resolve(rootDir), runId);
     if (!fs.existsSync(path.join(runDir, 'run.json'))) return null;
@@ -166,14 +166,51 @@ function recoverHistoricalArxivRun({ runId, date, arxivId, rootDir } = {}) {
         if (sha256(bytes) !== loaded.run.baseline.metadata.fileSha256) fail('official metadata artifact SHA drifted');
     }
     const analysisFile = fresh.readRegularJson(path.join(runDir, 'analysis.json'));
-    const sealedComplete = loaded.run.status === 'complete';
-    if (sealedComplete && (loaded.analysis.status !== 'complete'
+    const storageSealed = loaded.run.status === 'complete';
+    if (storageSealed && (loaded.analysis.status !== 'complete'
         || !SHA_RE.test(String(loaded.run.analysisSha256 || ''))
         || loaded.run.analysisSha256 !== analysisFile.sha256)) {
         fail('complete historical run does not seal its canonical analysis bytes');
     }
-    return { runId, runDir, paperId: `arxiv:${arxivId}`, status: loaded.run.status,
-        canonicalPath: path.join(runDir, 'analysis.json'), sealedComplete, recovered: true };
+    const engine = require('../analysis-engine.js');
+    const paper = loaded.analysis.papers[0];
+    let currentContractComplete = false;
+    if (storageSealed && loaded.analysis.papers.length === 1
+        && engine.isSuccessfulAnalysisRecord(paper)) {
+        try {
+            currentContractComplete = fresh.assertFreshProvenance(
+                paper, loaded.run, loaded.run.sourceRecords?.[arxivId]
+            ) === true;
+        } catch {
+            currentContractComplete = false;
+        }
+    }
+    const upgradeRequired = storageSealed && !currentContractComplete;
+    let operationLock = null;
+    if (!currentContractComplete) {
+        const nowMs = new Date(now).getTime();
+        if (!Number.isFinite(nowMs)) fail('recovery time must be an ISO timestamp');
+        operationLock = engine.inspectFileLockState(path.join(runDir, '.operation'), { nowMs });
+    }
+    const operationBlocked = operationLock?.exists === true
+        && operationLock.reclaimable !== true;
+    const interruptedRecoverable = loaded.run.status === 'analyzing'
+        && operationLock?.reclaimable === true;
+    const status = currentContractComplete ? 'complete'
+        : operationBlocked ? 'analyzing'
+            : upgradeRequired || interruptedRecoverable ? 'analysis_partial'
+            : loaded.run.status;
+    return { runId, runDir, paperId: `arxiv:${arxivId}`, status,
+        storedStatus: loaded.run.status,
+        canonicalPath: path.join(runDir, 'analysis.json'),
+        storageSealed,
+        currentContractComplete,
+        upgradeRequired,
+        recoveryKind: currentContractComplete ? null : 'full',
+        interruptedRecoverable,
+        operationBlocked,
+        operationLock,
+        recovered: true };
 }
 
 function verifyHistoricalArxivRunAuthority({ runId, rootDir, authorityHandle } = {}) {

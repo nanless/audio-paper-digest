@@ -40,6 +40,56 @@ test('verified duplicate pages collapse to one deterministic analysis identity a
     assert.match(groups[0].runId, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
 });
 
+test('only current-contract storage seals count complete and queue all resumes full upgrades', () => {
+    const group = scheduler.groupsFromCrosswalk(state())[0];
+    assert.equal(scheduler.recoveredSchedulerStatus({ status: 'complete',
+        storageSealed: true, currentContractComplete: false }), 'analysis_partial');
+    assert.equal(scheduler.recoveredSchedulerStatus({ status: 'complete',
+        storageSealed: false, currentContractComplete: true }), 'analysis_partial');
+    assert.equal(scheduler.recoveredSchedulerStatus({ status: 'complete',
+        storageSealed: true, currentContractComplete: true }), 'complete');
+    assert.deepEqual(scheduler.selectCandidates([group], {
+        [group.paperId]: { status: 'analysis_partial', recoveryKind: 'full' }
+    }, { stage: 'analyze', queue: 'all', maximum: 1,
+        now: '2026-09-07T00:00:00.000Z' }), [group]);
+});
+
+test('an active analyzing operation is never selected even if Reader recovery looks eligible', () => {
+    const group = scheduler.groupsFromCrosswalk(state())[0];
+    const item = { status: 'analyzing', recoveryKind: 'reader', exhausted: false,
+        nextEligibleAt: null };
+    assert.deepEqual(scheduler.selectCandidates([group], { [group.paperId]: item }, {
+        stage: 'analyze', queue: 'all', maximum: 1,
+        now: '2026-09-07T00:00:00.000Z'
+    }), []);
+    assert.deepEqual(scheduler.selectCandidates([group], { [group.paperId]: item }, {
+        stage: 'analyze', queue: 'reader-recovery', maximum: 1,
+        now: '2026-09-07T00:00:00.000Z'
+    }), []);
+});
+
+test('active analyzing reconciliation performs no Reader scan, authority prepare, or analysis', async t => {
+    const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
+        paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
+        historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
+    const groups = scheduler.groupsFromCrosswalk(state());
+    let authority = 0; let analyzed = 0;
+    const result = await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
+        stage: 'analyze', queue: 'all', limit: 'pilot', concurrency: 1 }, {
+        files, readCrosswalk: () => state(),
+        recoverRun: ({ runId }) => runId === groups[0].runId
+            ? { runId, status: 'analyzing', storedStatus: 'analyzing', storageSealed: false,
+                currentContractComplete: false, operationBlocked: true }
+            : { runId, status: 'complete', storageSealed: true, currentContractComplete: true },
+        inspectRunRecovery: () => { throw new Error('active run must not be inspected'); },
+        prepareAuthority: async () => { authority += 1; return { authorityHandle: {} }; },
+        analyzeRun: async () => { analyzed += 1; return { status: 'complete' }; },
+        now: () => '2026-09-07T00:00:00.000Z'
+    });
+    assert.deepEqual({ authority, analyzed }, { authority: 0, analyzed: 0 });
+    assert.equal(result.complete, 1);
+});
+
 test('pilot then full rerun skips complete identity and resumes the remaining unique identity', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
@@ -51,7 +101,7 @@ test('pilot then full rerun skips complete identity and resumes the remaining un
         fetchMetadata: async id => { calls.metadata++; return { metadata: { arxivId: id }, proof: {}, rawBytes: Buffer.from('atom') }; },
         prepareAuthority: async () => { calls.authority++; return { authorityHandle: {} }; }, verifyRunAuthority: () => true,
         prepareRun: ({ runId }) => { calls.prepare++; const value = { runId, status: 'sources_ready' }; runs.set(runId, value); return value; },
-        analyzeRun: async ({ runId }) => { calls.analyze++; const value = { runId, status: 'complete', sealedComplete: true }; runs.set(runId, value); return value; },
+        analyzeRun: async ({ runId }) => { calls.analyze++; const value = { runId, status: 'complete', storageSealed: true, currentContractComplete: true }; runs.set(runId, value); return value; },
         now: () => '2026-09-07T00:00:00.000Z' };
     const first = await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
         stage: 'analyze', limit: 'pilot', concurrency: 2 }, deps);
@@ -115,7 +165,7 @@ test('legacy checkpoint without explicit identity hashes migrates only when its 
         createdAt: '2026-09-07T00:00:00.000Z', items: legacyItems, generation: 1 }));
     await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
         stage: 'analyze', limit: 'pilot', concurrency: 1 }, { files, readCrosswalk: () => state(),
-        recoverRun: ({ runId }) => ({ runId, status: 'complete', sealedComplete: true }),
+        recoverRun: ({ runId }) => ({ runId, status: 'complete', storageSealed: true, currentContractComplete: true }),
         now: () => '2026-09-07T00:00:01.000Z' });
     const migrated = JSON.parse(fs.readFileSync(path.join(files.historicalAnalysisSchedulerDir, `${CROSSWALK}.json`)));
     assert.equal(migrated.items[group.paperId].identitySha256, group.identitySha256);
@@ -136,7 +186,7 @@ test('a later duplicate page extends the checkpoint without changing the existin
     },
         fetchMetadata: async id => ({ metadata: { arxivId: id }, proof: {}, rawBytes: Buffer.from('atom') }),
         prepareAuthority: async () => ({ authorityHandle: {} }),
-        prepareRun: ({ runId }) => { const value = { runId, status: 'sources_ready', sealedComplete: false }; runs.set(runId, value); return value; },
+        prepareRun: ({ runId }) => { const value = { runId, status: 'sources_ready', storageSealed: false, currentContractComplete: false }; runs.set(runId, value); return value; },
         now: () => '2026-09-07T00:00:00.000Z' };
     await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
         stage: 'prepare-only', limit: 'pilot', concurrency: 1 }, deps);
@@ -160,13 +210,13 @@ test('resuming a prepared run refetches and verifies live authority before analy
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
     const group = scheduler.groupsFromCrosswalk(state())[0]; const runs = new Map([[group.runId,
-        { runId: group.runId, status: 'sources_ready', sealedComplete: false }]]);
+        { runId: group.runId, status: 'sources_ready', storageSealed: false, currentContractComplete: false }]]);
     let live = 0; let verified = 0; let analyzed = 0;
     const deps = { files, readCrosswalk: () => state(), recoverRun: ({ runId }) => runs.get(runId) || null,
         fetchMetadata: async () => { throw new Error('prepared recovery must not fetch metadata'); },
         prepareAuthority: async options => { live++; assert.equal(options.requireLiveAuthorization, true); return { authorityHandle: {} }; },
         verifyRunAuthority: () => { verified++; return true; },
-        analyzeRun: async ({ runId }) => { analyzed++; const sealed = { runId, status: 'complete', sealedComplete: true }; runs.set(runId, sealed); return sealed; },
+        analyzeRun: async ({ runId }) => { analyzed++; const sealed = { runId, status: 'complete', storageSealed: true, currentContractComplete: true }; runs.set(runId, sealed); return sealed; },
         now: () => '2026-09-07T00:00:00.000Z' };
     await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
         stage: 'analyze', limit: 'pilot', concurrency: 1 }, deps);
@@ -178,7 +228,7 @@ test('analyze cannot mark complete until recover observes a sealed run proof', a
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
     const group = scheduler.groupsFromCrosswalk(state())[0];
-    const unsealed = { runId: group.runId, status: 'sources_ready', sealedComplete: false };
+    const unsealed = { runId: group.runId, status: 'sources_ready', storageSealed: false, currentContractComplete: false };
     const result = await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
         stage: 'analyze', limit: 'pilot', concurrency: 1 }, { files, readCrosswalk: () => state(),
         recoverRun: () => unsealed, prepareAuthority: async () => ({ authorityHandle: {} }),
@@ -212,7 +262,7 @@ test('new-full classifies before limit and never live-prepares a skipped Reader 
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
     const groups = scheduler.groupsFromCrosswalk(state());
-    const runs = new Map([[groups[0].runId, { runId: groups[0].runId, status: 'analysis_partial', sealedComplete: false }]]);
+    const runs = new Map([[groups[0].runId, { runId: groups[0].runId, status: 'analysis_partial', storageSealed: false, currentContractComplete: false }]]);
     const liveIds = []; let metadata = 0; let analyzed = 0;
     await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK, stage: 'analyze',
         queue: 'new-full', limit: 'pilot', concurrency: 1 }, { files, readCrosswalk: () => state(),
@@ -221,9 +271,9 @@ test('new-full classifies before limit and never live-prepares a skipped Reader 
             recoveryFingerprint: 'reader-v1', failureSignature: 'content-v1', exhausted: false, cooldownMs: 0 }),
         fetchMetadata: async id => { metadata++; return { metadata: { arxivId: id }, proof: {}, rawBytes: Buffer.from('atom') }; },
         prepareAuthority: async ({ arxivId }) => { liveIds.push(arxivId); return { authorityHandle: {} }; },
-        prepareRun: ({ runId }) => { const value = { runId, status: 'sources_ready', sealedComplete: false }; runs.set(runId, value); return value; },
+        prepareRun: ({ runId }) => { const value = { runId, status: 'sources_ready', storageSealed: false, currentContractComplete: false }; runs.set(runId, value); return value; },
         verifyRunAuthority: () => true,
-        analyzeRun: async ({ runId }) => { analyzed++; const value = { runId, status: 'complete', sealedComplete: true }; runs.set(runId, value); return value; },
+        analyzeRun: async ({ runId }) => { analyzed++; const value = { runId, status: 'complete', storageSealed: true, currentContractComplete: true }; runs.set(runId, value); return value; },
         now: () => '2026-09-07T00:00:00.000Z' });
     assert.deepEqual(liveIds, ['2609.03622']);
     assert.equal(metadata, 1); assert.equal(analyzed, 1);
@@ -237,7 +287,7 @@ test('dry-run reports the queue-filtered offline selection without prepare or ch
     const result = await scheduler.runHistoricalScheduler({ apply: false, crosswalkId: CROSSWALK, stage: 'analyze',
         queue: 'new-full', limit: 'pilot', concurrency: 1 }, { files, readCrosswalk: () => state(),
         recoverRun: ({ runId }) => runId === groups[0].runId
-            ? { runId, status: 'analysis_partial', sealedComplete: false } : null,
+            ? { runId, status: 'analysis_partial', storageSealed: false, currentContractComplete: false } : null,
         inspectRunRecovery: () => ({ recoveryKind: 'reader', upstreamReady: true,
             recoveryFingerprint: 'reader-v1', failureSignature: 'failed', exhausted: true, cooldownMs: 0 }),
         prepareAuthority: async () => { prepared++; throw new Error('dry-run prepared live authority'); },
@@ -282,7 +332,7 @@ test('reader-recovery retries only an eligible upstream-complete partial and per
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
     const groups = scheduler.groupsFromCrosswalk(state());
     const runs = new Map(groups.map(group => [group.runId,
-        { runId: group.runId, status: 'analysis_partial', sealedComplete: false }]));
+        { runId: group.runId, status: 'analysis_partial', storageSealed: false, currentContractComplete: false }]));
     let analyzed = 0; const liveIds = [];
     const deps = { files, readCrosswalk: () => state(), recoverRun: ({ runId }) => runs.get(runId),
         inspectRunRecovery: ({ runId }) => ({ recoveryKind: 'reader', upstreamReady: true,
@@ -312,8 +362,8 @@ test('Reader transport cooldown is stable while scanned and restarts only after 
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
     const groups = scheduler.groupsFromCrosswalk(state());
-    const runs = new Map([[groups[0].runId, { runId: groups[0].runId, status: 'analysis_partial', sealedComplete: false }],
-        [groups[1].runId, { runId: groups[1].runId, status: 'complete', sealedComplete: true }]]);
+    const runs = new Map([[groups[0].runId, { runId: groups[0].runId, status: 'analysis_partial', storageSealed: false, currentContractComplete: false }],
+        [groups[1].runId, { runId: groups[1].runId, status: 'complete', storageSealed: true, currentContractComplete: true }]]);
     let current = '2026-09-07T00:00:00.000Z'; let live = 0; let analyzed = 0;
     const deps = { files, readCrosswalk: () => state(), recoverRun: ({ runId }) => runs.get(runId),
         inspectRunRecovery: () => ({ recoveryKind: 'reader', upstreamReady: true,
@@ -362,8 +412,8 @@ test('implementation recovery pending fingerprint enables diagnostic migration f
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
     const groups = scheduler.groupsFromCrosswalk(state());
     const runs = new Map([[groups[0].runId,
-        { runId: groups[0].runId, status: 'analysis_partial', sealedComplete: false }],
-    [groups[1].runId, { runId: groups[1].runId, status: 'complete', sealedComplete: true }]]);
+        { runId: groups[0].runId, status: 'analysis_partial', storageSealed: false, currentContractComplete: false }],
+    [groups[1].runId, { runId: groups[1].runId, status: 'complete', storageSealed: true, currentContractComplete: true }]]);
     let fingerprint = 'reader-implementation-v1'; const refreshValues = [];
     const deps = { files, readCrosswalk: () => state(), recoverRun: ({ runId }) => runs.get(runId),
         inspectRunRecovery: () => ({ recoveryKind: 'reader', upstreamReady: true,

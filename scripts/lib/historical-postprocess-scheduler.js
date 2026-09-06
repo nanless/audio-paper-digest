@@ -113,8 +113,11 @@ async function runHistoricalPostprocess(options, overrides = {}) {
     const allComplete = completeItems(analysisScheduler);
     const relevantComplete = options.date ? allComplete.filter(item => (item.cohortDates || []).includes(options.date)) : allComplete;
     const drySealed = options.apply ? relevantComplete : relevantComplete.filter(item => {
-        try { return deps.recoverRun({ runId: item.runId, date: item.analysisDate,
-            arxivId: item.paperId.slice(6), rootDir: files.freshRewriteRunsDir })?.sealedComplete === true; }
+        try { const recovered = deps.recoverRun({ runId: item.runId, date: item.analysisDate,
+            arxivId: item.paperId.slice(6), rootDir: files.freshRewriteRunsDir,
+            now: deps.now() });
+            return recovered?.storageSealed === true
+                && recovered.currentContractComplete === true; }
         catch { return false; }
     });
     const available = options.apply ? relevantComplete : drySealed; const maximum = options.limit === 'pilot' ? 1
@@ -133,8 +136,12 @@ async function runHistoricalPostprocess(options, overrides = {}) {
         let assignmentProof = null;
         try {
             const recovered = deps.recoverRun({ runId: item.runId, date: item.analysisDate,
-                arxivId: item.paperId.slice(6), rootDir: files.freshRewriteRunsDir });
-            if (recovered?.sealedComplete !== true) fail(`${item.paperId} analysis run is not sealed complete`);
+                arxivId: item.paperId.slice(6), rootDir: files.freshRewriteRunsDir,
+                now: deps.now() });
+            if (!(recovered?.storageSealed === true
+                && recovered.currentContractComplete === true)) {
+                fail(`${item.paperId} analysis run is not current-contract complete`);
+            }
             const handle = deps.loadAnalysisRun({ analysisRoot: files.freshRewriteRunsDir, runId: item.runId });
             const assignments = deps.buildAssignments({ runHandle: handle, taxonomy, paperId: item.paperId });
             if (assignments.length !== 1) fail(`${item.paperId} taxonomy assignment result is not singular`);

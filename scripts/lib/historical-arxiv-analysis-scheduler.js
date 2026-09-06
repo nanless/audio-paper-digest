@@ -245,12 +245,25 @@ function selectCandidates(groups, items, { stage, queue, maximum, now }) {
         const reader = ['analysis_partial', 'analyzing'].includes(status) && item.recoveryKind === 'reader';
         const eligibleReader = reader && item.exhausted !== true
             && (!item.nextEligibleAt || new Date(item.nextEligibleAt).getTime() <= nowMs);
+        // A positively stale/missing operation lock is normalized to
+        // analysis_partial by recovery.  Remaining analyzing is live or
+        // indeterminate and is ineligible in every queue.
+        if (status === 'analyzing') return false;
         if (queue === 'new-full') return !['complete', 'analysis_partial', 'analyzing'].includes(status);
         if (queue === 'reader-recovery') return eligibleReader;
         if (status === 'complete') return false;
-        if (status === 'analyzing' || reader) return eligibleReader;
+        if (reader) return eligibleReader;
         return true;
     }).slice(0, maximum);
+}
+
+function recoveredSchedulerStatus(recovered) {
+    if (!recovered) return 'pending';
+    if (recovered.storageSealed === true
+        && recovered.currentContractComplete === true) return 'complete';
+    if (recovered.status === 'complete' || recovered.storedStatus === 'complete'
+        || recovered.storageSealed === true) return 'analysis_partial';
+    return recovered.status;
 }
 
 function dryRunState(groups, crosswalkId, files, deps) {
@@ -271,9 +284,9 @@ function dryRunState(groups, crosswalkId, files, deps) {
         const effective = { ...group, analysisDate: trustedPrior?.analysisDate || group.analysisDate };
         effectiveGroups.push(effective);
         const recovered = deps.recoverRun({ runId: effective.runId, date: effective.analysisDate,
-            arxivId: effective.arxivId, rootDir: files.freshRewriteRunsDir });
-        const status = recovered ? recovered.sealedComplete === true ? 'complete' : recovered.status : 'pending';
-        const observed = ['analysis_partial', 'analyzing'].includes(status)
+            arxivId: effective.arxivId, rootDir: files.freshRewriteRunsDir, now: deps.now() });
+        const status = recoveredSchedulerStatus(recovered);
+        const observed = status === 'analysis_partial'
             ? deps.inspectRunRecovery({ runId: effective.runId, rootDir: files.freshRewriteRunsDir, now: deps.now() }) : null;
         items[effective.paperId] = { ...effective, ...(trustedPrior || {}), status,
             ...mergeRecoveryState(trustedPrior, observed, deps.now()) };
@@ -307,7 +320,7 @@ async function runHistoricalScheduler(options, overrides = {}) {
         analysisDate: checkpoint.items[group.paperId].analysisDate }));
     for (const group of effectiveGroups) {
         const recovered = deps.recoverRun({ runId: group.runId, date: group.analysisDate,
-            arxivId: group.arxivId, rootDir: files.freshRewriteRunsDir });
+            arxivId: group.arxivId, rootDir: files.freshRewriteRunsDir, now: deps.now() });
         if (!recovered) {
             if (checkpoint.items[group.paperId].status !== 'pending') {
                 checkpoint = updateItem(filename, group, { status: 'pending',
@@ -315,8 +328,8 @@ async function runHistoricalScheduler(options, overrides = {}) {
             }
             continue;
         }
-        const status = recovered.sealedComplete === true ? 'complete' : recovered.status;
-        const observed = ['analysis_partial', 'analyzing'].includes(status)
+        const status = recoveredSchedulerStatus(recovered);
+        const observed = status === 'analysis_partial'
             ? deps.inspectRunRecovery({ runId: group.runId, rootDir: files.freshRewriteRunsDir, now: deps.now() }) : null;
         const recovery = mergeRecoveryState(checkpoint.items[group.paperId], observed, deps.now());
         checkpoint = updateItem(filename, group, { status, lastError: null, ...recovery }, deps);
@@ -327,7 +340,7 @@ async function runHistoricalScheduler(options, overrides = {}) {
     for (const group of candidates) {
         try {
             let recovered = deps.recoverRun({ runId: group.runId, date: group.analysisDate,
-                arxivId: group.arxivId, rootDir: files.freshRewriteRunsDir });
+                arxivId: group.arxivId, rootDir: files.freshRewriteRunsDir, now: deps.now() });
             let live;
             if (!recovered) {
                 const metadata = await deps.fetchMetadata(group.arxivId);
@@ -358,19 +371,21 @@ async function runHistoricalScheduler(options, overrides = {}) {
                     const result = await deps.analyzeRun({ runId: group.runId, concurrency: 1,
                         refreshReaderDiagnostics: item?.implementationRecoveryPendingFingerprint === item?.recoveryFingerprint });
                     const sealed = deps.recoverRun({ runId: group.runId, date: group.analysisDate,
-                        arxivId: group.arxivId, rootDir: files.freshRewriteRunsDir });
-                    if (result.status === 'complete' && sealed?.sealedComplete !== true) {
-                        throw new Error('analysis reported complete without a sealed run proof');
+                        arxivId: group.arxivId, rootDir: files.freshRewriteRunsDir, now: deps.now() });
+                    if (result.status === 'complete' && !(sealed?.storageSealed === true
+                        && sealed.currentContractComplete === true)) {
+                        throw new Error('analysis reported complete without a current-contract proof');
                     }
-                    const status = sealed?.sealedComplete === true ? 'complete' : 'analysis_partial';
+                    const status = sealed ? recoveredSchedulerStatus(sealed) : 'analysis_partial';
                     const observed = status === 'analysis_partial'
                         ? deps.inspectRunRecovery({ runId: group.runId, rootDir: files.freshRewriteRunsDir, now: deps.now() }) : null;
                     updateItem(filename, group, { status, lastError: null,
                         ...mergeRecoveryState(checkpoint.items[group.paperId], observed, deps.now(), { attempted: true }) }, deps);
                 } catch (error) {
                     const recovered = deps.recoverRun({ runId: group.runId, date: group.analysisDate,
-                        arxivId: group.arxivId, rootDir: files.freshRewriteRunsDir });
-                    const observed = recovered && ['analysis_partial', 'analyzing'].includes(recovered.status)
+                        arxivId: group.arxivId, rootDir: files.freshRewriteRunsDir, now: deps.now() });
+                    const recoveredStatus = recoveredSchedulerStatus(recovered);
+                    const observed = recoveredStatus === 'analysis_partial'
                         ? deps.inspectRunRecovery({ runId: group.runId, rootDir: files.freshRewriteRunsDir, now: deps.now() }) : null;
                     updateItem(filename, group, { status: observed?.recoveryKind === 'reader' ? 'analysis_partial' : 'analysis_failed',
                         lastError: String(error.message).slice(0, 2000),
@@ -391,4 +406,5 @@ async function runHistoricalScheduler(options, overrides = {}) {
 module.exports = { CONTRACT, VERSION, READER_TRANSPORT_COOLDOWN_MS, READER_RECOVERY_POLICY_VERSION,
     readerImplementationFingerprint,
     exactOperatorPatchRecovery, inspectReaderRecovery, mergeRecoveryState, checkpointBindingMatches,
-    selectCandidates, deterministicRunId, groupsFromCrosswalk, scopeGroups, runHistoricalScheduler };
+    selectCandidates, recoveredSchedulerStatus,
+    deterministicRunId, groupsFromCrosswalk, scopeGroups, runHistoricalScheduler };

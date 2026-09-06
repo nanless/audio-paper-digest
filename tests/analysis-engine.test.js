@@ -19,6 +19,7 @@ const {
     initializeJsonFileLocked,
     acquireFileLockSync,
     canReclaimFileLock,
+    inspectFileLockState,
     withFileLock,
     mergeCanonicalAnalysisState,
     isSuccessfulAnalysisRecord,
@@ -308,16 +309,19 @@ describe('mergeAndSaveResults', () => {
         assert.strictEqual(saved.generation, 48);
     });
 
-    it('进程崩溃遗留的锁可由后续写入立即回收', () => {
+    it('超过安全阈值的进程崩溃锁可由后续写入回收', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-dead-lock-'));
         const file = path.join(dir, 'result.json');
         const lockDir = `${file}.lock`;
         fs.mkdirSync(lockDir);
         fs.writeFileSync(path.join(lockDir, 'owner.json'), JSON.stringify({
             pid: 2147483647,
-            hostname: os.hostname()
+            hostname: os.hostname(),
+            token: 'dead-owner'
         }));
-        updateJsonFileLocked(file, () => ({ papers: [] }), { timeoutMs: 100 });
+        const old = new Date(Date.now() - 60_000);
+        fs.utimesSync(path.join(lockDir, 'owner.json'), old, old);
+        updateJsonFileLocked(file, () => ({ papers: [] }), { timeoutMs: 100, staleMs: 1000 });
         assert.strictEqual(readJsonFileStrict(file).generation, 1);
         assert.strictEqual(fs.existsSync(lockDir), false);
     });
@@ -1470,7 +1474,7 @@ describe('analysis run status', () => {
             token: 'live-owner'
         }));
         const old = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        fs.utimesSync(lockPath, old, old);
+        fs.utimesSync(path.join(lockPath, 'owner.json'), old, old);
 
         assert.strictEqual(canReclaimFileLock(lockPath, 1), false);
     });
@@ -1485,7 +1489,7 @@ describe('analysis run status', () => {
             token: 'remote-owner'
         }));
         const old = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        fs.utimesSync(lockPath, old, old);
+        fs.utimesSync(path.join(lockPath, 'owner.json'), old, old);
 
         assert.strictEqual(canReclaimFileLock(lockPath, 1), true);
     });
@@ -1500,6 +1504,88 @@ describe('analysis run status', () => {
         assert.strictEqual(releaseOld(), false);
         assert.strictEqual(fs.existsSync(`${target}.lock`), true);
         assert.strictEqual(releaseNew(), true);
+    });
+
+    it('release 拒绝目录 ABA，即使 replacement 复用了完全相同的 owner 字节', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-lock-dir-aba-'));
+        const target = path.join(dir, 'result.json'); const lockPath = `${target}.lock`;
+        const release = acquireFileLockSync(target);
+        const ownerBytes = fs.readFileSync(path.join(lockPath, 'owner.json'));
+        fs.renameSync(lockPath, `${lockPath}.old`);
+        fs.mkdirSync(lockPath, { mode: 0o700 });
+        fs.writeFileSync(path.join(lockPath, 'owner.json'), ownerBytes, { mode: 0o600 });
+        assert.strictEqual(release(), false);
+        assert.deepStrictEqual(fs.readFileSync(path.join(lockPath, 'owner.json')), ownerBytes);
+    });
+
+    it('release 拒绝同目录 owner inode ABA，即使 replacement 字节完全相同', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-lock-owner-aba-'));
+        const target = path.join(dir, 'result.json'); const ownerPath = `${target}.lock/owner.json`;
+        const release = acquireFileLockSync(target);
+        const ownerBytes = fs.readFileSync(ownerPath);
+        fs.renameSync(ownerPath, `${ownerPath}.old`);
+        fs.writeFileSync(ownerPath, ownerBytes, { mode: 0o600 });
+        assert.strictEqual(release(), false);
+        assert.deepStrictEqual(fs.readFileSync(ownerPath), ownerBytes);
+    });
+
+    it('只读锁检查仅把超过阈值的非活跃 owner 判为可恢复', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-lock-inspect-'));
+        const target = path.join(dir, '.operation');
+        assert.deepStrictEqual(inspectFileLockState(target, { staleMs: 1000 }).reclaimable, true);
+        const lockPath = `${target}.lock`;
+        fs.mkdirSync(lockPath);
+        fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+            pid: process.pid, hostname: os.hostname(), token: 'live'
+        }));
+        const nowMs = Date.now();
+        fs.utimesSync(path.join(lockPath, 'owner.json'), new Date(nowMs - 5000), new Date(nowMs - 5000));
+        let state = inspectFileLockState(target, { staleMs: 1000, nowMs });
+        assert.strictEqual(state.active, true);
+        assert.strictEqual(state.reclaimable, false);
+
+        fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+            pid: 2147483647, hostname: os.hostname(), token: 'dead'
+        }));
+        fs.utimesSync(path.join(lockPath, 'owner.json'), new Date(nowMs - 500), new Date(nowMs - 500));
+        state = inspectFileLockState(target, { staleMs: 1000, nowMs });
+        assert.strictEqual(state.reclaimable, false);
+        assert.strictEqual(state.reason, 'within_stale_threshold');
+        fs.utimesSync(path.join(lockPath, 'owner.json'), new Date(nowMs - 5000), new Date(nowMs - 5000));
+        state = inspectFileLockState(target, { staleMs: 1000, nowMs });
+        assert.strictEqual(state.active, false);
+        assert.strictEqual(state.reclaimable, true);
+    });
+
+    it('同步和异步竞争只会串行接管同一个 stale owner', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-lock-reclaim-race-'));
+        const target = path.join(dir, 'result.json'); const lockPath = `${target}.lock`;
+        fs.mkdirSync(lockPath, { mode: 0o700 });
+        fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+            pid: 2147483647, hostname: os.hostname(), token: 'stale-owner'
+        }), { mode: 0o600 });
+        const old = new Date(Date.now() - 60_000);
+        fs.utimesSync(path.join(lockPath, 'owner.json'), old, old);
+        let active = 0; let maximum = 0; const order = [];
+        await Promise.all(['a', 'b'].map(label => withFileLock(target, async () => {
+            active += 1; maximum = Math.max(maximum, active); order.push(`${label}:start`);
+            await new Promise(resolve => setTimeout(resolve, 10));
+            order.push(`${label}:end`); active -= 1;
+        }, { timeoutMs: 1000, staleMs: 1000 })));
+        assert.strictEqual(maximum, 1);
+        assert.strictEqual(order.length, 4);
+        assert.strictEqual(fs.existsSync(lockPath), false);
+    });
+
+    it('年轻 dead owner 不会被同步 acquisition 提前删除', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-lock-young-dead-'));
+        const target = path.join(dir, 'result.json'); const lockPath = `${target}.lock`;
+        fs.mkdirSync(lockPath, { mode: 0o700 });
+        fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+            pid: 2147483647, hostname: os.hostname(), token: 'young-dead'
+        }), { mode: 0o600 });
+        assert.throws(() => acquireFileLockSync(target, { timeoutMs: 20, staleMs: 60_000 }), /超时/);
+        assert.strictEqual(fs.existsSync(path.join(lockPath, 'owner.json')), true);
     });
 
     it('异步锁在 callback 完成前保持持有', async () => {

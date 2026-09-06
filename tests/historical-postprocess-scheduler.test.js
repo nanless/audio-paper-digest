@@ -46,7 +46,7 @@ function fixture(t, secondStatus = 'complete') {
     };
     const deps = { files, now: () => `2026-09-07T00:00:${String(tick++).padStart(2, '0')}.000Z`,
         updateLocked, loadTaxonomy: () => ({ registrySha256: REGISTRY }), readCrosswalk: () => crosswalk,
-        recoverRun: () => ({ sealedComplete: true }), loadAnalysisRun: ({ runId }) => ({ runId }),
+        recoverRun: () => ({ storageSealed: true, currentContractComplete: true }), loadAnalysisRun: ({ runId }) => ({ runId }),
         buildAssignments: ({ runHandle, paperId }) => [{ paperId, analysisRunId: runHandle.runId,
             registrySha256: REGISTRY, status: 'assigned', assignmentSha256: sha(paperId) }],
         writeAssignments: ({ assignments }) => { assignmentWrites += 1; return [{ paperId: assignments[0].paperId,
@@ -101,7 +101,7 @@ test('dry-run is zero-write and reports only sealed-complete scheduler candidate
 });
 
 test('dry-run never advertises checkpoint-complete but unsealed analysis', async t => {
-    const f = fixture(t, 'pending'); f.deps.recoverRun = () => ({ sealedComplete: false });
+    const f = fixture(t, 'pending'); f.deps.recoverRun = () => ({ storageSealed: true, currentContractComplete: false });
     const result = await api.runHistoricalPostprocess({ apply: false, crosswalkId: CROSSWALK,
         date: null, limit: null, concurrency: 1 }, f.deps);
     assert.equal(result.checkpointComplete, 1); assert.equal(result.completeAvailable, 0);
@@ -117,7 +117,7 @@ test('a date remains blocked until every historical paper has completed single-p
 });
 
 test('unsealed analysis run is recorded failed and never reaches staging', async t => {
-    const f = fixture(t, 'pending'); f.deps.recoverRun = () => ({ sealedComplete: false });
+    const f = fixture(t, 'pending'); f.deps.recoverRun = () => ({ storageSealed: true, currentContractComplete: false });
     const result = await api.runHistoricalPostprocess({ apply: true, crosswalkId: CROSSWALK,
         date: DATE, limit: null, concurrency: 1 }, f.deps);
     assert.equal(result.processed[0].status, 'failed'); assert.equal(f.stageCalls.length, 0);

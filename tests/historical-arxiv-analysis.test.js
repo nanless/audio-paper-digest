@@ -119,10 +119,96 @@ test('isolated run executes the fresh analysis callbacks and persists its own ca
     const canonical = fresh.readRegularJson(path.join(runRoot, RUN_ID, 'analysis.json')).value;
     assert.equal(canonical.status, 'complete');
     assert.equal(canonical.papers[0].analysis, 'fresh source analysis');
-    assert.equal(history.recoverHistoricalArxivRun({ runId: RUN_ID, date: '2026-09-04',
-        arxivId: '2609.03622', rootDir: runRoot }).sealedComplete, true);
+    const recovered = history.recoverHistoricalArxivRun({ runId: RUN_ID, date: '2026-09-04',
+        arxivId: '2609.03622', rootDir: runRoot });
+    assert.equal(recovered.storageSealed, true);
+    assert.equal(recovered.currentContractComplete, false,
+        'mockComplete is storage-complete but not a current production contract');
+    assert.equal(recovered.upgradeRequired, true);
+    assert.equal(recovered.status, 'analysis_partial');
     canonical.papers[0].analysis = 'tampered after seal';
     fs.writeFileSync(path.join(runRoot, RUN_ID, 'analysis.json'), JSON.stringify(canonical));
     assert.throws(() => history.recoverHistoricalArxivRun({ runId: RUN_ID, date: '2026-09-04',
         arxivId: '2609.03622', rootDir: runRoot }), /does not seal/);
+});
+
+test('real 2403/2512 v2 storage seals are explicitly queued for full contract upgrade', t => {
+    const rootDir = path.resolve(__dirname, '..', 'data', 'runtime', 'fresh-rewrites');
+    const fixtures = [
+        ['66759276-f030-4e3c-886e-6f5ca858b278', '2403.14817'],
+        ['2a95c85b-f493-4d82-9ef1-758d7dfe2705', '2512.14629']
+    ];
+    if (fixtures.some(([runId]) => !fs.existsSync(path.join(rootDir, runId, 'run.json')))) {
+        t.skip('real historical v2 fixtures are not present in this checkout');
+        return;
+    }
+    for (const [runId, arxivId] of fixtures) {
+        const run = JSON.parse(fs.readFileSync(path.join(rootDir, runId, 'run.json')));
+        const recovered = history.recoverHistoricalArxivRun({
+            runId, date: run.date, arxivId, rootDir,
+            now: '2026-09-07T00:00:00.000Z'
+        });
+        assert.equal(recovered.storageSealed, true, arxivId);
+        assert.equal(recovered.currentContractComplete, false, arxivId);
+        assert.equal(recovered.upgradeRequired, true, arxivId);
+        assert.equal(recovered.status, 'analysis_partial', arxivId);
+        assert.equal(recovered.recoveryKind, 'full', arxivId);
+    }
+});
+
+test('real interrupted 2602 run with no operation owner is recoverable as full analysis', t => {
+    const rootDir = path.resolve(__dirname, '..', 'data', 'runtime', 'fresh-rewrites');
+    const runId = 'd663ab14-abae-4196-a363-a8d295befce5';
+    if (!fs.existsSync(path.join(rootDir, runId, 'run.json'))) {
+        t.skip('real interrupted 2602 fixture is not present in this checkout');
+        return;
+    }
+    const run = JSON.parse(fs.readFileSync(path.join(rootDir, runId, 'run.json')));
+    const recovered = history.recoverHistoricalArxivRun({ runId, date: run.date,
+        arxivId: run.paperIds[0], rootDir, now: '2026-09-07T00:00:00.000Z' });
+    assert.equal(recovered.storedStatus, 'analyzing');
+    assert.ok(['missing', 'stale_non_live_owner', 'stale_unowned'].includes(
+        recovered.operationLock.reason
+    ));
+    assert.equal(recovered.operationLock.reclaimable, true);
+    assert.equal(recovered.interruptedRecoverable, true);
+    assert.equal(recovered.status, 'analysis_partial');
+    assert.equal(recovered.recoveryKind, 'full');
+});
+
+test('interrupted 2602 recovery blocks a live operation owner and accepts only an old dead owner', t => {
+    const sourceRoot = path.resolve(__dirname, '..', 'data', 'runtime', 'fresh-rewrites');
+    const runId = 'd663ab14-abae-4196-a363-a8d295befce5';
+    const sourceDir = path.join(sourceRoot, runId);
+    if (!fs.existsSync(path.join(sourceDir, 'run.json'))) {
+        t.skip('real interrupted 2602 fixture is not present in this checkout');
+        return;
+    }
+    const rootDir = fixture(t);
+    const runDir = path.join(rootDir, runId);
+    fs.cpSync(sourceDir, runDir, { recursive: true });
+    const run = JSON.parse(fs.readFileSync(path.join(runDir, 'run.json')));
+    const lockPath = path.join(runDir, '.operation.lock');
+    fs.mkdirSync(lockPath, { mode: 0o700, recursive: true });
+    fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+        pid: process.pid, hostname: os.hostname(), token: 'active-owner'
+    }), { mode: 0o600 });
+    const old = new Date('2026-09-06T00:00:00.000Z');
+    fs.utimesSync(path.join(lockPath, 'owner.json'), old, old);
+    let recovered = history.recoverHistoricalArxivRun({ runId, date: run.date,
+        arxivId: run.paperIds[0], rootDir, now: '2026-09-07T00:00:00.000Z' });
+    assert.equal(recovered.operationLock.reason, 'live_local_owner');
+    assert.equal(recovered.operationBlocked, true);
+    assert.equal(recovered.status, 'analyzing');
+
+    fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+        pid: 2147483647, hostname: os.hostname(), token: 'dead-owner'
+    }), { mode: 0o600 });
+    fs.utimesSync(path.join(lockPath, 'owner.json'), old, old);
+    recovered = history.recoverHistoricalArxivRun({ runId, date: run.date,
+        arxivId: run.paperIds[0], rootDir, now: '2026-09-07T00:00:00.000Z' });
+    assert.equal(recovered.operationLock.reclaimable, true);
+    assert.equal(recovered.interruptedRecoverable, true);
+    assert.equal(recovered.status, 'analysis_partial');
+    assert.equal(fs.existsSync(lockPath), true, 'read-only recovery must never delete the stale lock');
 });
