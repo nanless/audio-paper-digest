@@ -22,6 +22,8 @@ ARCHIVE_DIR = DATA_DIR / "archive"
 LOGS_DIR = PROJECT_ROOT / "logs"
 LLM_ACCOUNT_POOL_STATE_FILE = DATA_DIR / "runtime" / "llm-account-pool.json"
 LLM_USAGE_DIR = DATA_DIR / "runtime" / "llm-usage"
+FRESH_REWRITE_RUNS_DIR = DATA_DIR / "runtime" / "fresh-rewrites"
+PUBLICATION_ACTIVATION_DIRNAME = 'blog-publication-activations'
 # Repository-relative Hugo publication root. The publisher joins this only to
 # its already validated blog repo or transaction staging root.
 RESEARCHER_SIDECAR_RELATIVE_ROOT = Path("static") / "data" / "papers"

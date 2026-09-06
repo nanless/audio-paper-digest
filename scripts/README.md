@@ -9,6 +9,16 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 
 ## 从哪里开始
 
+显式全量 fresh rewrite 已 `promoted`、需要接替同日旧发布时，先运行
+`npm run blog:activate-fresh -- --run-id UUID --dry-run`，再去掉 `--dry-run`。
+此维护入口只支持基线中的一个整批和一个单篇旧事务，精确归档其 6 个
+manifest/receipt/pass 文件到该 run 的 `publication-archive/`；不改科学状态、
+博客页面、视觉证据，不调用模型或推送。它复验旧 receipt 各自原提交、当前
+Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted canonical。
+中断时同命令恢复；日期级 pending 门禁持续拦住 generate/review/push，不能
+手删标记或凭证。成功后按正常 `blog:generate → blog:review → blog:push` 重建
+全部证明；旧视觉 waiver 不自动代表新发布完成。完成后再次调用不会退休新 generation。
+
 - 完整日更由根目录 [`run-daily-digest.sh`](../run-daily-digest.sh) 编排；默认走
   LLM/API，只有显式 `--manual` 才进入 `manual/`。
 - `package.json` 是命令别名的权威清单。直接执行任意项目脚本仍必须遵守项目根
@@ -101,6 +111,8 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | 文件 | 类型 | 职责 |
 |---|---|---|
 | `generate-blog.py` | Python 入口 | 只生成并安装 Hugo Markdown。 |
+| `activate-fresh-publication.js` | Node 入口 | 显式激活已提升的 fresh 重发事务；持 run 操作锁调用 Python 凭证归档，不生成或推送内容。 |
+| `publication_activation.py` | Python 入口/共享库 | 复验旧提交、基线与实时远端，私有归档六个精确状态文件；pending 门禁保护三阶段，支持中断重入，不修改已提升科学状态。 |
 | `review-blog.py` | Python 入口 | 对 generation 执行确定性、LLM、图片和 Hugo 审查并签发 receipt。 |
 | `push-blog.py` | Python 入口 | 复验 receipt，提交/推送并验证远端 OID，然后规划视觉任务。 |
 | `publish-to-blog.py` | Python 核心 | 三阶段共用的生成模板、researcher-workbench-v1 front matter/citation 与 rethink sidecar、Git 事务、审查缓存、receipt 与发布证明实现。 |
@@ -112,7 +124,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 
 | 文件 | 类型 | 职责 |
 |---|---|---|
-| `visual-summary-state.js` | Node 入口/状态机 | TOP 10 论文长图任务规划、校验、登记、失败和历史归档。 |
+| `visual-summary-state.js` | Node 入口/状态机 | TOP 10 论文长图任务规划、校验、登记、失败和历史归档；modern v3 仅取已签 Reader thesis/完整章节及原图缓存，QA 按章节 SHA 回指，不回退 canonical 摘要。 |
 | `digest-cover-state.js` | Node 入口/状态机 | 每日汇总封面任务规划、校验、登记、失败和历史归档。 |
 | `visual-summary-integration.js` | Node 共享 | 在同一发布证明下协调论文长图与汇总封面。 |
 | `plan-post-publish-visuals.py` | Python 入口 | 从已验证博客发布调用视觉规划桥。 |

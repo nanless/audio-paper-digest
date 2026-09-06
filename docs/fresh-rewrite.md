@@ -33,6 +33,29 @@ npm run rewrite:source -- promote --run-id "$rewrite_run_id"
 
 `analyze` 阶段仍可能为 LLM、资源可达性和原图进行联网，但全文读取走本 run 已验证缓存。来源 SHA 漂移、源缓存丢失或损坏、跨 run 生成内容、陈旧输入等都会失败关闭，不能用摘要或旧文章继续冒充成功。
 
+### 已发布批次的凭证交接
+
+已发布日期的旧 generation/receipt 是不可覆盖的历史证据，不能删掉它们来绕过 generate 保护。
+本轮提供一个保守的显式入口，仅支持基线中恰有一次整批和一次单篇发布的拓扑：
+
+```bash
+# 全部正文验收并 promote 后，先复验，不修改凭证：
+npm run blog:activate-fresh -- --run-id "$rewrite_run_id" --dry-run
+# ready 后归档旧事务，再正常生成/审查/推送：
+npm run blog:activate-fresh -- --run-id "$rewrite_run_id"
+npm run blog:generate -- --date YYYY-MM-DD
+npm run blog:review -- --date YYYY-MM-DD
+npm run blog:push -- --date YYYY-MM-DD
+```
+
+交接仅退休两组 manifest、receipt、pass cache 共六个精确路径，原字节保存在本 run 的 `publication-archive/`，
+并记录 `publication-activation-intent.json` 与 `publication-activation.json`。原图、博客内容、visual/cover/waiver 不在退休范围。
+旧 receipt 必须在各自原 commit 重放通过；当前干净博客 HEAD、基线和实时 remote OID/identity 也须一致。
+Node 持 run 操作锁，Python 再持博客 repository/date 锁；任何半完成交接都由独立 pending 标记阻断 generate/review/push，重入原命令恢复。
+
+科学 run 的 `status=promoted` 和 `run.json` 原字节保持不变；完成标记仍绑定它们和全部归档 SHA，不可把后续发布状态写进该文件。
+其他历史拓扑或来源/远端/文件漂移均失败关闭，需另外核查，不能使用此入口扩大退休范围。
+
 ## 隔离工件与恢复
 
 所有路径来自 `Config.FILES.freshRewriteRunsDir`，默认 `data/runtime/fresh-rewrites/<runId>/`。目录和私有文件拒绝 symlink/path escape，不允许 CLI 改到任意位置。

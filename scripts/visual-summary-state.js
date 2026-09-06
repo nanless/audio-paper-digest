@@ -17,6 +17,7 @@ const {
 } = require('./utils.js');
 const {
     isSuccessfulAnalysisRecord,
+    apiReaderV3BindsCanonical,
     updateJsonFileLocked,
     withFileLockSync,
     readJsonFileStrict
@@ -46,6 +47,7 @@ const LLM_API_PRODUCTION_MODE = 'llm_api_production';
 const LLM_API_PRODUCTION_CONTRACT = 'llm-api-production-publication-v1';
 const LLM_API_READER_CONTRACT = 'beginner-researcher-v3';
 const LLM_API_SCORING_CONTRACT = 'api-scoring-audit-v2';
+const READER_VISUAL_SOURCE_CONTRACT = 'signed-reader-visual-source-v1';
 const REFERENCE_MIME_EXTENSIONS = Object.freeze({
     'image/png': '.png',
     'image/jpeg': '.jpg',
@@ -471,6 +473,83 @@ function validatePublishImageExclusions(paper) {
     });
 }
 
+function isModernReaderVisualPaper(paper) {
+    return paper?.analysisManifest?.contracts?.apiReaderArticle === LLM_API_READER_CONTRACT
+        || paper?.apiReaderPlan?.contract === LLM_API_READER_CONTRACT
+        || paper?.apiReaderPlan?.version === 3;
+}
+
+function signedReaderVisualSource(paper) {
+    if (paper?.latestAnalysisAttemptError || !apiReaderV3BindsCanonical(paper)) {
+        throw new Error(`${normalizedId(paper)} 视觉文案缺少有效已签 Reader，禁止回退 canonical 摘要`);
+    }
+    const plan = paper.apiReaderPlan, article = paper.apiReaderArticle;
+    const headings = [...article.matchAll(/^### ([^\n]+)\n\n/gm)];
+    if (!Array.isArray(plan.sections) || headings[0]?.index !== 0
+        || headings.length !== plan.sections.length
+        || new Set(plan.sections.map(section => section.heading)).size !== headings.length
+        || typeof plan.oneSentenceThesis !== 'string' || !plan.oneSentenceThesis.trim()) {
+        throw new Error('已签 Reader 章节不能精确回放到视觉来源');
+    }
+    const sections = plan.sections.map((section, index) => {
+        if (headings[index][1] !== section.heading) throw new Error('Reader 视觉章节标题/次序漂移');
+        const start = headings[index].index + headings[index][0].length;
+        const end = index + 1 < headings.length ? headings[index + 1].index - 2 : article.length;
+        const body = article.slice(start, end);
+        if (!body.trim() || body !== body.trim()) throw new Error('Reader 视觉章节正文边界漂移');
+        return { sectionIndex: index, kind: section.kind, heading: section.heading, body };
+    });
+    const stage = paper.analysisManifest.stages.apiReaderArticle;
+    if (!Number.isInteger(stage.imageEvidenceCount) || stage.imageEvidenceCount < paper.apiReaderFigures.length
+        || !/^[a-f0-9]{64}$/.test(String(stage.imageEvidenceSha256 || ''))) {
+        throw new Error('Reader 视觉来源缺少已签像素证据身份');
+    }
+    return { sections, sourceIdentity: {
+        contract: READER_VISUAL_SOURCE_CONTRACT,
+        articleSha256: paper.apiReaderArticleSha256,
+        planSha256: paper.apiReaderPlanSha256,
+        figuresSha256: stage.figuresSha256,
+        sourceSha256: paper.sourceSha256,
+        structuredArtifactsSha256: stage.structuredArtifactsSha256,
+        imageEvidenceCount: stage.imageEvidenceCount,
+        imageEvidenceSha256: stage.imageEvidenceSha256
+    } };
+}
+
+function readSignedReaderVisualReference(reference, paperId) {
+    const id = normalizedId(paperId);
+    const url = new URL(String(reference.url || ''));
+    const sourceId = url.pathname.match(/^\/html\/(\d{4}\.\d{4,5})(?:v[1-9]\d*)?\//)?.[1];
+    if (url.protocol !== 'https:' || !['arxiv.org', 'www.arxiv.org'].includes(url.hostname)
+        || url.username || url.password || url.port || url.hash || url.search || sourceId !== id
+        || !Number.isInteger(reference.ordinal) || reference.ordinal < 1
+        || !/^[a-f0-9]{64}$/.test(String(reference.sourceDomSha256 || ''))
+        || !/^[a-f0-9]{64}$/.test(String(reference.sha256 || ''))
+        || reference.mime !== 'image/png') throw new Error('Reader 视觉原图 URL/ordinal/DOM/SHA 身份非法');
+    const expected = path.resolve(Config.CURRENT_DIR, 'api-reader-assets', id,
+        `figure-${reference.ordinal}-${reference.sha256.slice(0, 16)}.png`);
+    const recorded = path.resolve(Config.PROJECT_ROOT, String(reference.cachePath || ''));
+    if (recorded !== expected) throw new Error('Reader 视觉原图缓存路径不受控');
+    // Check every ancestor, including the configured current root, without
+    // downloading or granting this new visual task any pixel-seen attestation.
+    let cursor = path.parse(recorded).root;
+    for (const part of path.dirname(recorded).slice(cursor.length).split(path.sep).filter(Boolean)) {
+        cursor = path.join(cursor, part);
+        const stat = fs.lstatSync(cursor);
+        if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('Reader 视觉缓存父目录不安全');
+    }
+    const fd = fs.openSync(recorded, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_ASSET_BYTES
+            || stat.size !== reference.bytes) throw new Error('Reader 视觉缓存文件/大小非法');
+        const raw = fs.readFileSync(fd);
+        if (sha256Buffer(raw) !== reference.sha256) throw new Error('Reader 视觉缓存 SHA 漂移');
+        validatePngBuffer(raw, { requirePortrait: false });
+        return raw;
+    } finally { fs.closeSync(fd); }
+}
+
 function selectVisualReferenceImages(paper, limit = MAX_REFERENCE_IMAGES) {
     if (!Number.isInteger(limit) || limit < 0 || limit > MAX_REFERENCE_IMAGES) {
         throw new Error(`论文视觉参考图数量非法: ${limit}`);
@@ -478,6 +557,27 @@ function selectVisualReferenceImages(paper, limit = MAX_REFERENCE_IMAGES) {
     const excludedUrls = new Set(
         validatePublishImageExclusions(paper).map(entry => entry.url)
     );
+    if (isModernReaderVisualPaper(paper)) {
+        signedReaderVisualSource(paper);
+        const references = paper.apiReaderFigures.map((figure, sourceOrder) => {
+            const expectedFilename = `figure-${figure.ordinal}-${String(figure.assetSha256).slice(0, 16)}.png`;
+            if (figure.assetFilename !== expectedFilename) throw new Error('Reader 视觉原图文件名漂移');
+            const role = ['method_overview', 'component', 'training'].includes(figure.targetKind)
+                ? { role: 'method_reference', priority: 0 }
+                : ['result', 'ablation', 'experiment_setup'].includes(figure.targetKind)
+                    ? { role: 'result_reference', priority: 1 } : referenceFigureRole(figure.caption);
+            const reference = { ...role, sourceOrder, sourceContract: READER_VISUAL_SOURCE_CONTRACT,
+                ordinal: figure.ordinal, url: figure.url, caption: figure.caption,
+                sourceDomSha256: figure.sourceDomSha256, targetKind: figure.targetKind,
+                focusPoints: figure.focusPoints, explanationQuote: figure.explanationQuote,
+                mime: figure.assetMediaType, bytes: figure.assetBytes, sha256: figure.assetSha256,
+                cachePath: path.relative(Config.PROJECT_ROOT, figure.cachePath).split(path.sep).join('/') };
+            readSignedReaderVisualReference(reference, normalizedId(paper));
+            return reference;
+        });
+        return references.filter(reference => !excludedUrls.has(reference.url))
+            .sort((a, b) => a.priority - b.priority || a.sourceOrder - b.sourceOrder).slice(0, limit);
+    }
     const manifest = paper?.imageManifest || {};
     const selected = [...new Set([
         ...(Array.isArray(paper?.selectedImageUrls) ? paper.selectedImageUrls : []),
@@ -578,12 +678,17 @@ function prepareVisualReferenceInputs(manifest, {
                 throw new Error(`视觉参考图准备路径逃逸: ${directory}`);
             }
             const references = (paper.generationContext?.referenceImages || []).map((reference, index) => {
-                const expectedCache = path.resolve(visualReferenceCachePaths(reference.url).data);
+                const modern = paper.generationContext?.sourceIdentity?.contract === READER_VISUAL_SOURCE_CONTRACT;
+                if (modern !== (reference.sourceContract === READER_VISUAL_SOURCE_CONTRACT)) {
+                    throw new Error('视觉参考图来源协议与上下文不匹配');
+                }
+                const expectedCache = modern ? path.resolve(Config.PROJECT_ROOT, reference.cachePath)
+                    : path.resolve(visualReferenceCachePaths(reference.url).data);
                 const recordedCache = path.resolve(Config.PROJECT_ROOT, String(reference.cachePath || ''));
                 if (recordedCache !== expectedCache) {
                     throw new Error(`${id} 视觉参考图缓存路径不受控: ${reference.cachePath}`);
                 }
-                const raw = fs.readFileSync(recordedCache);
+                const raw = modern ? readSignedReaderVisualReference(reference, id) : fs.readFileSync(recordedCache);
                 const actualSha = sha256Buffer(raw);
                 if (actualSha !== reference.sha256 || raw.length !== reference.bytes) {
                     throw new Error(`${id} 视觉参考图缓存 SHA/字节数不匹配: ${reference.cachePath}`);
@@ -600,6 +705,8 @@ function prepareVisualReferenceInputs(manifest, {
                 return {
                     role: reference.role,
                     caption: reference.caption,
+                    ...(modern ? { sourceContract: reference.sourceContract, ordinal: reference.ordinal,
+                        url: reference.url, sourceDomSha256: reference.sourceDomSha256 } : {}),
                     mime: reference.mime,
                     sha256: actualSha,
                     // image_gen accepts only absolute normalized local paths.
@@ -630,6 +737,9 @@ function prepareVisualReferenceInputs(manifest, {
                 if (!paper) throw new Error(`参考图准备记录缺少论文: ${item.arxivId}`);
                 const references = item.referenceImages.map(reference => ({
                     role: reference.role,
+                    ...(reference.sourceContract === READER_VISUAL_SOURCE_CONTRACT
+                        ? { sourceContract: reference.sourceContract, ordinal: reference.ordinal,
+                            url: reference.url, sourceDomSha256: reference.sourceDomSha256 } : {}),
                     mime: reference.mime,
                     sha256: reference.sha256,
                     preparedPath: reference.preparedPath,
@@ -688,6 +798,11 @@ function assertPreparedReferenceInputs(paper, targetDate) {
             || reference.sha256 !== expectedReference.sha256) {
             throw new Error(`视觉参考图 prepared 元数据不匹配: ${normalizedId(paper)}`);
         }
+        if (expectedReference.sourceContract === READER_VISUAL_SOURCE_CONTRACT
+            && ['sourceContract', 'ordinal', 'url', 'sourceDomSha256'].some(
+                key => reference[key] !== expectedReference[key])) {
+            throw new Error('Reader 视觉 prepared 原图来源身份漂移');
+        }
         const extension = REFERENCE_MIME_EXTENSIONS[String(expectedReference.mime || '').toLowerCase()];
         if (!extension) {
             throw new Error(`视觉参考图 prepared MIME 不受支持: ${expectedReference.mime}`);
@@ -715,6 +830,14 @@ function assertPreparedReferenceInputs(paper, targetDate) {
 }
 
 function analysisSha256(paper) {
+    if (isModernReaderVisualPaper(paper)) {
+        const context = buildGenerationContext(paper);
+        return stableSha256({ sourceIdentity: context.sourceIdentity, title: context.title,
+            generationContextSha256: stableSha256(context),
+            documentType: context.documentType, primaryTask: context.primaryTask, primaryMethod: context.primaryMethod,
+            score: paper.parsed?.score, publishImageExclusions: validatePublishImageExclusions(paper),
+            referenceImages: context.referenceImages, rendering: RENDERING_CONTRACT });
+    }
     return stableSha256({
         arxivId: normalizedId(paper),
         analysis: paper.analysis,
@@ -1249,6 +1372,34 @@ function archiveLegacyVisualManifestAssets({ targetDate, manifestPath, generatio
 
 function buildGenerationContext(paper) {
     const parsed = paper.parsed || {};
+    if (isModernReaderVisualPaper(paper)) {
+        const { sections, sourceIdentity } = signedReaderVisualSource(paper);
+        const select = kinds => sections.filter(section => kinds.includes(section.kind));
+        const methods = select(['method_overview', 'component', 'training', 'reproduction']);
+        const results = select(['experiment_setup', 'result', 'ablation']);
+        const limits = select(['limitation', 'synthesis']);
+        if (!methods.length || !results.length || !limits.length) throw new Error('Reader 视觉来源缺少方法/实验/边界章节');
+        const blocks = items => items.map(section => `### ${section.heading}\n\n${section.body}`).join('\n\n');
+        const claims = items => items.map(section => ({ sectionIndex: section.sectionIndex,
+            kind: section.kind, heading: section.heading, bodySha256: sha256Buffer(Buffer.from(section.body)) }));
+        const referenceImages = selectVisualReferenceImages(paper);
+        return {
+            title: String(paper.title || ''), documentType: String(parsed.documentType || ''),
+            primaryTask: String(parsed.primaryTaskTag || ''), primaryMethod: String(parsed.primaryMethodTag || ''),
+            summary: paper.apiReaderPlan.oneSentenceThesis,
+            method: blocks(methods), experiments: blocks(results), limitations: blocks(limits),
+            readerBackground: blocks(select(['background', 'related_work', 'problem'])),
+            sourceIdentity, referenceImages,
+            qaClaims: { exactEnglishTitle: String(paper.title || ''), bodyLanguage: '简体中文',
+                requiredSections: ['研究问题与核心贡献', '方法模块与信号流', '关键实验发现', '结论与局限'],
+                sourceContract: READER_VISUAL_SOURCE_CONTRACT,
+                // References to complete signed sections avoid stripping table
+                // columns/units or dropping counterexamples via first-N lines.
+                methodClaims: claims(methods), metricClaims: claims(results), limitationClaims: claims(limits),
+                referenceCaptions: referenceImages.map(item => item.caption) },
+            rendering: RENDERING_CONTRACT
+        };
+    }
     const cleanLines = value => String(value || '')
         .split(/\n+/)
         .map(line => line.replace(/!\[[^\]]*\]\([^)]+\)/g, '')
@@ -1879,6 +2030,8 @@ module.exports = {
     CARD_LABELS,
     CARD_DIRECTIONS,
     RENDERING_CONTRACT,
+    READER_VISUAL_SOURCE_CONTRACT,
+    buildGenerationContext,
     analysisSha256,
     selectTopRankedPapers,
     bindPublishedPapersToDate,

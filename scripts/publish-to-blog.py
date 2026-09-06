@@ -475,6 +475,11 @@ def blog_publication_lock(date_str, *, timeout_seconds=30):
     date_str = validate_publish_date(date_str)
     with blog_repository_lock(timeout_seconds=timeout_seconds):
         with blog_transaction_lock(date_str, timeout_seconds=timeout_seconds):
+            from publication_activation import assert_no_pending
+            try:
+                assert_no_pending(CURRENT_DIR, date_str)
+            except ValueError as exc:
+                raise PublishDataValidationError(str(exc)) from exc
             yield
 
 

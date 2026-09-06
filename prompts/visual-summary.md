@@ -24,6 +24,10 @@ Verified experiment evidence: {experiments}
 Verified limitations: {limitations}
 Required coverage: {focus}
 
+For modern beginner-researcher-v3 tasks, these fields come only from the signed Reader: summary is its exact oneSentenceThesis; method, experiments and limitations retain complete Reader sections, including comparison conditions and counterexamples. Use the accompanying readerBackground field, when present, for the research question. Never substitute canonical analysis, parsed summary/results/limitations, or roast commentary. QA claim entries are section-index/heading/body-SHA references to these complete sections, not new claims to invent or shorten into contradictory slogans. Preserve metric direction, dataset, deployment versus oracle conditions, and absolute values versus changes when selecting a few findings.
+
+Only the referenceImages actually supplied as prepared image paths are pixel references for this task. Their ordinal, source URL, source DOM SHA and asset SHA identify the signed Reader images. Do not claim to see a Reader figure omitted from this task's reference list. If the list is empty, use an explicitly explanatory illustration based on the signed text, never an invented reconstruction of a paper figure. A prior Reader signature is not a new image-generation pixel-seen attestation.
+
 Visual direction: {direction}
 
 Art direction and palette:

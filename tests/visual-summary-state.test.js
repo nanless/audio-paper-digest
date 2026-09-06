@@ -27,6 +27,8 @@ const {
     assertPublishedBlogReceipt,
     assertVisualManifestCurrent,
     selectVisualReferenceImages,
+    buildGenerationContext,
+    analysisSha256,
     publishedPapersFingerprint,
     validateReferenceImageBytes,
     prepareVisualReferenceInputs,
@@ -127,6 +129,173 @@ function makePng(width = 768, height = 1200) {
 }
 
 const PNG = makePng();
+
+describe('modern Reader 视觉来源闭环', () => {
+    function withReader(callback, options = {}) {
+        const old = Config.CURRENT_DIR;
+        const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'visual-reader-source-')));
+        Config.CURRENT_DIR = dir;
+        try {
+            const { fixture, sign } = require('./reader-signed-draft-fixture.js');
+            const { paper: reader } = fixture(options);
+            reader.title = 'Exact English Paper Title';
+            reader.parsed = { score: 8.1, documentType: 'empirical', primaryTaskTag: '#语音增强',
+                primaryMethodTag: '#测试时适应', summary: 'POISON_CANONICAL_SUMMARY',
+                architecture: 'POISON_CANONICAL_METHOD', results: 'POISON_CANONICAL_RESULTS',
+                limitations: 'POISON_CANONICAL_LIMITS', roast: 'POISON_CANONICAL_ROAST' };
+            reader.analysis = 'POISON_CANONICAL_ANALYSIS';
+            for (const figure of reader.apiReaderFigures) {
+                const sha = crypto.createHash('sha256').update(PNG).digest('hex');
+                const filename = `figure-${figure.ordinal}-${sha.slice(0, 16)}.png`;
+                Object.assign(figure, { assetSha256: sha, assetBytes: PNG.length, assetFilename: filename,
+                    cachePath: path.join(dir, 'api-reader-assets', reader.arxivId, filename) });
+                fs.mkdirSync(path.dirname(figure.cachePath), { recursive: true });
+                fs.writeFileSync(figure.cachePath, PNG);
+            }
+            const { stableHash } = require('../scripts/lib/fresh-rewrite-run.js');
+            const stage = reader.analysisManifest.stages.apiReaderArticle;
+            stage.imageEvidenceCount = reader.apiReaderFigures.length;
+            stage.imageEvidenceSha256 = stableHash(reader.apiReaderFigures.map(figure => ({
+                ordinal: figure.ordinal, url: figure.url, sha256: figure.assetSha256 })));
+            sign(reader);
+            return callback(reader, sign, dir);
+        } finally {
+            Config.CURRENT_DIR = old;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    }
+
+    it('文案/thesis/完整QA段落身份只来自签名Reader，忽略canonical毒化文案及旧选图', () => withReader(reader => {
+        reader.selectedImageUrls = ['https://example.com/poison.png'];
+        reader.imageManifest = { selected: reader.selectedImageUrls };
+        const context = buildGenerationContext(reader);
+        assert.equal(context.title, reader.title);
+        assert.equal(context.summary, reader.apiReaderPlan.oneSentenceThesis);
+        assert.equal(context.primaryTask, '#语音增强');
+        assert.ok(!JSON.stringify(context).includes('POISON_CANONICAL'));
+        assert.ok(context.method.includes('### ' + reader.apiReaderPlan.sections[3].heading));
+        assert.ok(context.experiments.includes('| 比较条件 |'));
+        assert.equal(context.qaClaims.metricClaims[0].sectionIndex, 6);
+        assert.equal(context.sourceIdentity.articleSha256, reader.apiReaderArticleSha256);
+        assert.equal(context.sourceIdentity.planSha256, reader.apiReaderPlanSha256);
+        assert.equal(context.referenceImages[0].ordinal, 1);
+        assert.equal(context.referenceImages[0].url, reader.apiReaderFigures[0].url);
+        assert.equal(context.referenceImages[0].sha256, reader.apiReaderFigures[0].assetSha256);
+        assert.equal(Object.hasOwn(context.referenceImages[0], 'pixelSeen'), false);
+    }));
+
+    it('canonical文案变化不影响modern来源指纹，签名Reader修订必须改变指纹', () => withReader((reader, sign) => {
+        const first = analysisSha256(reader);
+        reader.parsed.summary = 'another unsupported summary';
+        reader.analysis = 'another canonical body';
+        assert.equal(analysisSha256(reader), first);
+        reader.apiReaderPlan.oneSentenceThesis += ' 同一指标的外推仍须谨慎。';
+        sign(reader);
+        assert.notEqual(analysisSha256(reader), first);
+    }));
+
+    it('仅投影/QA选择逻辑改变也使旧complete成图失效，Reader和prompt保持原身份', () => withReader((reader, _sign, dir) => {
+        const Module = require('node:module');
+        const filename = require.resolve('../scripts/visual-summary-state.js');
+        const source = fs.readFileSync(filename, 'utf8');
+        const baseline = require(filename);
+        const oldSha = baseline.analysisSha256(reader), promptSha = 'p'.repeat(64);
+        const oldToken = baseline.cardTaskToken(reader.arxivId, 'infographic', oldSha, promptSha, 1, TEST_PUBLICATION);
+        const assetPath = path.join(dir, 'old-complete.png'); fs.writeFileSync(assetPath, PNG);
+        const oldRoot = Config.FILES.visualSummaryAssetDir;
+        Config.FILES.visualSummaryAssetDir = dir;
+        try {
+            const card = { status: 'complete', analysisSha256: oldSha, promptSha256: promptSha,
+                taskToken: oldToken, assetPath,
+                assetSha256: crypto.createHash('sha256').update(PNG).digest('hex'),
+                qaAttestation: { attested: true, checklistVersion: 'visual-semantic-v1',
+                    attestedAt: '2026-07-13T12:00:00.000+08:00' } };
+            assert.equal(baseline.validateCompletedCard(card, oldSha, promptSha, oldToken, assetPath), true);
+            for (const [before, after] of [
+                ['method: blocks(methods)', 'method: blocks(methods.slice(0, -1))'],
+                ['metricClaims: claims(results)', 'metricClaims: claims(results).slice(0, 1)']
+            ]) {
+                // Compile an isolated projection revision in memory, never edit
+                // production source or run a real visual planning operation.
+                assert.ok(source.includes(before));
+                const revised = new Module(filename, module);
+                revised.filename = filename; revised.paths = module.paths;
+                revised._compile(source.replace(before, after), filename);
+                const updated = revised.exports;
+                assert.deepEqual(updated.buildGenerationContext(reader).sourceIdentity,
+                    baseline.buildGenerationContext(reader).sourceIdentity);
+                const newSha = updated.analysisSha256(reader);
+                assert.notEqual(newSha, oldSha);
+                const newToken = updated.cardTaskToken(reader.arxivId, 'infographic', newSha, promptSha, 1, TEST_PUBLICATION);
+                assert.notEqual(newToken, oldToken);
+                assert.equal(updated.validateCompletedCard(card, newSha, promptSha, newToken, assetPath), false);
+                assert.equal(updated.analysisSha256(paper()), baseline.analysisSha256(paper()));
+            }
+        } finally { Config.FILES.visualSummaryAssetDir = oldRoot; }
+    }));
+
+    it('坏article/plan/figure或像素证据身份均失败关闭，不降级旧文案', () => withReader(reader => {
+        for (const mutate of [
+            p => { p.apiReaderArticle += 'drift'; },
+            p => { p.apiReaderPlan.oneSentenceThesis = 'drift'; },
+            p => { p.apiReaderFigures[0].url = 'https://example.com/drift.png'; },
+            p => { delete p.analysisManifest.stages.apiReaderArticle.imageEvidenceSha256; }
+        ]) {
+            const bad = structuredClone(reader); mutate(bad);
+            assert.throws(() => buildGenerationContext(bad), /Reader|像素/);
+        }
+    }));
+
+    it('同签名但错章节映射、私网或跨论文URL及伪cache路径仍拒绝', () => withReader((reader, sign) => {
+        for (const mutate of [
+            p => { p.apiReaderPlan.sections[0].heading += 'drift'; },
+            p => { p.apiReaderFigures[0].url = 'https://127.0.0.1/a.png'; },
+            p => { p.apiReaderFigures[0].url = 'https://arxiv.org/html/2609.99999v1/a.png'; },
+            p => { p.apiReaderFigures[0].cachePath = '/private/tmp/arbitrary.png'; }
+        ]) {
+            const bad = structuredClone(reader); mutate(bad); sign(bad);
+            assert.throws(() => buildGenerationContext(bad), /Reader/);
+        }
+    }));
+
+    it('当前asset字节漂移、叶子及父目录symlink都拒绝', () => withReader((reader, _sign, dir) => {
+        const file = reader.apiReaderFigures[0].cachePath;
+        fs.writeFileSync(file, Buffer.alloc(PNG.length));
+        assert.throws(() => selectVisualReferenceImages(reader), /SHA/);
+        fs.unlinkSync(file);
+        const other = path.join(dir, 'same.png'); fs.writeFileSync(other, PNG);
+        fs.symlinkSync(other, file);
+        assert.throws(() => selectVisualReferenceImages(reader), /ELOOP|symbolic/i);
+        fs.unlinkSync(file); fs.writeFileSync(file, PNG);
+        const folder = path.dirname(file), moved = folder + '-moved';
+        fs.renameSync(folder, moved); fs.symlinkSync(moved, folder);
+        assert.throws(() => selectVisualReferenceImages(reader), /父目录不安全/);
+    }));
+
+    it('合法无绑定原图不伪造像素见证或回退旧图', () => withReader(reader => {
+        reader.selectedImageUrls = ['https://example.com/old.png'];
+        const context = buildGenerationContext(reader);
+        assert.deepEqual(context.referenceImages, []);
+        assert.equal(context.sourceIdentity.imageEvidenceCount, 0);
+    }, { noFigures: true }));
+
+    it('离线prepare仍输出受控绝对PNG路径且保留签名原图身份', () => withReader(reader => {
+        const context = buildGenerationContext(reader);
+        const manifest = { batchDate: '2026-07-13', papers: { [reader.arxivId]: {
+            arxivId: reader.arxivId, rank: 1, title: reader.title,
+            generationContext: context, cards: { infographic: { taskToken: 'offline-fixture' } }
+        } } };
+        const result = prepareVisualReferenceInputs(manifest, { targetDate: manifest.batchDate });
+        const reference = result[0].referenceImages[0];
+        assert.equal(reference.ordinal, reader.apiReaderFigures[0].ordinal);
+        assert.equal(reference.url, reader.apiReaderFigures[0].url);
+        assert.equal(reference.sourceDomSha256, reader.apiReaderFigures[0].sourceDomSha256);
+        assert.ok(path.isAbsolute(result[0].referencedImagePaths[0]));
+        assert.equal(path.extname(result[0].referencedImagePaths[0]), '.png');
+        assert.deepEqual(fs.readFileSync(result[0].referencedImagePaths[0]), PNG);
+        assert.equal(Object.hasOwn(reference, 'pixelSeen'), false);
+    }));
+});
 
 function patchVisualDirs(currentDir) {
     Config.CURRENT_DIR = currentDir;

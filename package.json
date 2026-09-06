@@ -38,6 +38,7 @@
     "cover:fail": "node scripts/digest-cover-state.js fail",
     "backfill": "python3 scripts/backfill_papers.py",
     "blog:generate": "bash scripts/python-runtime.sh scripts/generate-blog.py",
+    "blog:activate-fresh": "node scripts/activate-fresh-publication.js",
     "blog:review": "bash scripts/python-runtime.sh scripts/review-blog.py",
     "blog:manual-review": "python3 manual/scripts/manual-review-blog.py",
     "blog:manual-attest": "python3 manual/scripts/assemble-manual-review-attestation.py",
