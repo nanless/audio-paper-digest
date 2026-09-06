@@ -17,6 +17,7 @@
 | 完整离线验收、CI 与故障回放 | [维护指南：验证矩阵](maintenance.md#验证矩阵) | `npm run verify` |
 | 完全不用旧生成文本重写已发布批次 | [从原文完整重写](fresh-rewrite.md) | `npm run rewrite:source` 分阶段入口 |
 | 改进解读写法并比较重跑效果 | [Reader 写作与比较](reader-writing.md) | [维护约定](maintenance.md) |
+| 整理历史标签、任务层级与分面检索 | [标签体系设计提案](tag-taxonomy-design.md) | 本地 `data/runtime/tag-taxonomy-audit/` 全量盘点 |
 | 显式运行 Manual/人工路线 | [Manual 入口](../manual/README.md) | [Manual 工作流](../manual/docs/workflow.md) |
 
 面向新用户，推荐顺序是 `README → setup → workflow → troubleshooting`；维护者再继续阅读
