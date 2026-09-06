@@ -26,6 +26,36 @@ test('artifact table coordinate bindings strip derived cell proof then rebuild e
     assert.equal(result.proof.planSha256,f.paper.apiReaderPlanSha256);
 });
 
+test('04102 exact historical bridge prefix with zero or one space round-trips without changing signed bytes',()=>{
+    for (const spacing of ['', ' ']) {
+        const f=fixture(),bridge=f.paper.apiReaderPlan.conceptBridges[0];
+        const old=bridge.explanation;
+        bridge.terms=['预量化潜变量','离散 token 接口'];
+        bridge.explanation='**预量化潜变量 × 离散 token 接口：**'+spacing
+            +'预量化潜变量是量化器查找离散编号之前的连续表示，离散 token 接口则把查得的编号映射到语言模型词表。两者的分工在于先保留可微的声学表示，再提供既有离散输入，不能把两条路径视为两个都必须训练的解码器。';
+        f.paper.apiReaderArticle=f.paper.apiReaderArticle.replace(old,bridge.explanation);
+        sign(f.paper);
+        const before=JSON.stringify(f),result=recoverSignedReaderDraft(f);
+        assert.equal(result.proof.articleSha256,f.paper.apiReaderArticleSha256);
+        assert.equal(result.proof.planSha256,f.paper.apiReaderPlanSha256);
+        assert.equal(JSON.stringify(f),before);
+        assert.equal(result.draft.conceptBridges[0].explanation.startsWith('**'),spacing==='');
+    }
+});
+
+test('bridge inverse refuses multi-space/tab boundary and duplicate exact paragraphs rather than choosing one',()=>{
+    for (const spacing of ['  ', '\t', '\n']) {
+        const f=fixture(),bridge=f.paper.apiReaderPlan.conceptBridges[0],old=bridge.explanation;
+        bridge.explanation=old.replace('：** ', '：**'+spacing);
+        f.paper.apiReaderArticle=f.paper.apiReaderArticle.replace(old,bridge.explanation);sign(f.paper);
+        assert.throws(()=>recoverSignedReaderDraft(f),/prefix/);
+    }
+    const f=fixture(),bridge=f.paper.apiReaderPlan.conceptBridges[0],old=bridge.explanation;
+    bridge.explanation=old.replace('：** ', '：**');
+    f.paper.apiReaderArticle=f.paper.apiReaderArticle.replace(old,bridge.explanation)+'\n\n'+bridge.explanation;sign(f.paper);
+    assert.throws(()=>recoverSignedReaderDraft(f),/unique exact paragraph/);
+});
+
 test('irreversible signed text shortened below current bridge gate fails rather than padding it',()=>{
     const f=fixture(),bridge=f.paper.apiReaderPlan.conceptBridges[0];
     const shortened=`**${bridge.terms[0]} × ${bridge.terms[1]}：** 原文解释过短。`;

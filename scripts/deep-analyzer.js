@@ -1599,11 +1599,39 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
         if (!/^[零〇一二两三四五六七八九]+$/.test(parts[1])) return null;
         return `${sign}${integer}.${[...parts[1]].map(char => numeralMap[char]).join('')}`;
     };
+    // A diagnostic may name only “万词/万步”, after typography inserted a
+    // space between the Arabic coefficient and its scale. Convert only the
+    // complete, unambiguous coefficient+scale; never replace that suffix alone.
+    if (quantitativeIssues.some(issue => issue?.code === 'quantitative_chinese_numeral'
+        && /[万亿]/.test(String(issue.match || '')))) {
+        const amount = '[+-]?\\d+(?:\\.\\d+)?';
+        const units = '(?:词|步|更新|参数|样本|条|次|帧|tokens?|MACs?)(?![A-Za-z])';
+        const range = `(?:[-–—至到][ \\t]*${amount}[ \\t]*[万亿][ \\t]*${units})`;
+        const pattern = new RegExp(`(?<![A-Za-z0-9.,/])(${amount})[ \\t]*([万亿])(?=[ \\t]*(?:${units}|${range}|[，。；：,.;:]|$))`, 'g');
+        normalized = normalized.replace(pattern, (surface, value, scale, offset, whole) => {
+            const before = whole.slice(0, offset).trimEnd();
+            if (/[A-Za-z0-9.,/^×*]$/.test(before)
+                || (/[万亿]$/.test(before) && !/^[+-]/.test(value))) return surface;
+            const sign = /^[+-]/.test(value) ? value[0] : '';
+            const [integer, fraction = ''] = value.replace(/^[+-]/, '').split('.');
+            const shift = scale === '万' ? 4 : 8;
+            const digits = (integer + fraction).padEnd(integer.length + shift, '0');
+            const wholePart = digits.slice(0, integer.length + shift).replace(/^0+(?=\d)/, '');
+            const fractionalPart = digits.slice(integer.length + shift).replace(/0+$/, '');
+            // Decimal-point shifting is exact; no Number multiplication or
+            // locale rounding may silently alter a scientific decimal tail.
+            return sign + wholePart.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+                + (fractionalPart ? `.${fractionalPart}` : '');
+        });
+    }
     for (const issue of quantitativeIssues) {
         if (issue?.code !== 'quantitative_chinese_numeral'
             || isAllowedReaderNarrativeNumeralIssue(issue, text)) continue;
         const match = String(issue.match || '').trim();
         if (!match) continue;
+        // Explicit mixed scales were handled as a whole above. Unsupported
+        // compound scales remain visible for the authoritative gate to reject.
+        if (/\d[ \t]*[万亿]/.test(match)) continue;
         // Fractions and ambiguous scaled units are not local substitutions.
         if (/分之|一半|半宽|千分贝|毫分贝/.test(match)) continue;
         let valid = true;
@@ -1625,7 +1653,7 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
         normalized = normalized.replaceAll(match, (surface, offset, whole) => {
             const before = whole.slice(0, offset), after = whole.slice(offset + surface.length);
             // An issue can name only a suffix of a longer number/fraction.
-            if (/[零〇一二两三四五六七八九十百千万亿\d]$|分之$/.test(before)
+            if (/[零〇一二两三四五六七八九十百千万亿\d]$|分之$/.test(before.trimEnd())
                 || /^[零〇一二两三四五六七八九十百千万亿\d]|^点[零〇一二两三四五六七八九\d]|^分之/.test(after)
                 || (/[毫千]$/.test(surface) && /^分贝/.test(after))) return surface;
             return replacement;
@@ -5785,10 +5813,19 @@ function countKnownAuthorNames(value, authorNames) {
         }).length;
 }
 
+function isReaderResourceAffiliationLabel(value) {
+    const text = normalizeReaderIdentityText(value)
+        .replace(/^(?:affiliation|institution)\s*[:：]?\s*/i, '');
+    // A removed project URL can leave a plausible-looking nonempty label.
+    // These explicit resource labels are not institutional evidence.
+    return /^(?:project\s+(?:page|website|webpage)|(?:code|demo|dataset)(?:\s+(?:page|website|url|link))?)(?:\s*[:：]\s*.*|\s*)$/i.test(text);
+}
+
 function sanitizeReaderAffiliationValue(value, authorNames = []) {
     const text = normalizeReaderIdentityText(value)
         .replace(/^(?:affiliation|institution)\s*[:：]?\s*/i, '');
     if (text.length < 3
+        || isReaderResourceAffiliationLabel(text)
         || /https?:\/\/|www\./i.test(text)
         || /@/.test(text)
         || /,\s*,/.test(text)
@@ -5940,11 +5977,13 @@ function parseArxivReaderAuthors($) {
         const nameNode = creator.find('.ltx_personname').first();
         const name = cleanReaderAuthorNameNode($, nameNode)
             || metaAuthors[index] || '';
-        const affiliations = creator.find('.ltx_contact.ltx_role_affiliation').toArray()
+        const affiliationNodes = creator.find('.ltx_contact.ltx_role_affiliation').toArray();
+        const rejectedResourceLabel = affiliationNodes.some(node => isReaderResourceAffiliationLabel($(node).text()));
+        const affiliations = affiliationNodes
             .map(node => cleanReaderAffiliationNode($, node, knownAuthorNames))
             .filter(Boolean);
         const thanks = thanksAffiliations.mappings.get(readerIdentityKey(name));
-        const fallbackAffiliations = metaAuthors.length > 0
+        const fallbackAffiliations = rejectedResourceLabel ? [] : metaAuthors.length > 0
             && metaAffiliations.length === metaAuthors.length
             ? [metaAffiliations[index]].filter(Boolean)
             : (dedupedGlobalAffiliations.length === 1 ? dedupedGlobalAffiliations : []);
@@ -5996,15 +6035,17 @@ function resolveApiReaderAuthors(paper, sourceDetails) {
     const parsed = sourceDetails?.readerAuthors;
     const normalizeName = value => String(value || '').replace(/\s+/g, ' ').trim();
     const rawAuthors = Array.isArray(paper?.authors) ? paper.authors : [];
-    const names = rawAuthors.map(author => (
+    let names = rawAuthors.map(author => (
         typeof author === 'string' ? author : author?.name
     )).map(normalizeName).filter(Boolean);
     if (parsed && Array.isArray(parsed.authors) && parsed.authors.length > 0
         && recoverySha256(parsed.sourceDomSha256)) {
-        if (names.length === 0) return bindApiReaderAuthorIdentity(paper, sourceDetails, parsed);
+        if (names.length === 0) names = parsed.authors.map(author => normalizeName(author?.name)).filter(Boolean);
         const knownAuthorNames = [...names, ...parsed.authors.map(author => author?.name)];
         const normalizedParsed = parsed.authors.map(author => ({
             name: normalizeName(author?.name),
+            rejectedResourceLabel: Array.isArray(author?.affiliations)
+                && author.affiliations.some(isReaderResourceAffiliationLabel),
             affiliations: Array.isArray(author?.affiliations)
                 ? author.affiliations
                     .map(value => sanitizeReaderAffiliationValue(value, knownAuthorNames))
@@ -6034,7 +6075,7 @@ function resolveApiReaderAuthors(paper, sourceDetails) {
                 name: suffix?.name || name,
                 affiliations: matched?.affiliations?.length > 0
                     ? matched.affiliations
-                    : (allAffiliations.length === 1
+                    : (!matched?.rejectedResourceLabel && allAffiliations.length === 1
                         ? allAffiliations
                         : ['机构信息未在 arXiv HTML 中可靠披露'])
             };

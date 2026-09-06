@@ -53,13 +53,23 @@ function recoverSignedReaderDraft({ paper, sourceDetails, runId }) {
         .every(key => Array.isArray(plan[key]))) fail('signed plan lacks inverse schema arrays');
     let view = apiReaderPreInjectionQualityView(paper.apiReaderArticle, plan, paper.apiReaderFigures);
     const bridges = plan.conceptBridges.map((bridge, index) => {
-        const prefix = `**${bridge.terms?.[0]} × ${bridge.terms?.[1]}：** `;
+        const prefix = `**${bridge.terms?.[0]} × ${bridge.terms?.[1]}：**`;
         if (bridge.marker !== `[[CONCEPT_BRIDGE_${index + 1}]]`
             || typeof bridge.explanation !== 'string' || !bridge.explanation.startsWith(prefix)
             || view.split(bridge.explanation).length !== 2
             || !view.split('\n\n').includes(bridge.explanation)) fail(`bridge ${index} lacks a unique exact paragraph/prefix`);
+        const remainder = bridge.explanation.slice(prefix.length);
+        const hasSingleSpace = remainder.startsWith(' ');
+        const body = hasSingleSpace ? remainder.slice(1) : remainder;
+        if (!body || /^\s/.test(body)) fail(`bridge ${index} has ambiguous prefix spacing`);
         view = view.replace(bridge.explanation, bridge.marker);
-        return { ...pick(bridge, ['terms', 'sectionKind', 'marker']), explanation: bridge.explanation.slice(prefix.length) };
+        // The assembler adds one heading plus a space. A historical no-space
+        // signed bridge can only round-trip by retaining its exact heading:
+        // production's existing duplicate-heading collapse then retains the
+        // original last-heading boundary. Never rewrite the signed paragraph
+        // or waive the final article/plan/figure byte-equality checks below.
+        return { ...pick(bridge, ['terms', 'sectionKind', 'marker']),
+            explanation: hasSingleSpace ? body : bridge.explanation };
     });
     const headings = [...view.matchAll(/^### ([^\n]+)\n\n/gm)];
     if (!Array.isArray(plan.sections) || headings.length !== plan.sections.length || headings[0]?.index !== 0
