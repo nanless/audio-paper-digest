@@ -64,3 +64,24 @@ test('scheduler CLI is dry-run by default only when explicitly requested and cap
         { apply: false, crosswalkId: CROSSWALK, stage: 'prepare-only', limit: 'pilot', concurrency: 3 });
     assert.throws(() => cli.parseArgs(['--apply', '--crosswalk', CROSSWALK, '--stage', 'analyze', '--concurrency', '4']), /Use/);
 });
+
+test('untouched pending v5 checkpoint migrates to the stable v4-compatible run ID', async t => {
+    const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
+        paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
+        historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
+    fs.mkdirSync(files.historicalAnalysisSchedulerDir, { recursive: true });
+    const groups = scheduler.groupsFromCrosswalk(state());
+    const old = { contract: scheduler.CONTRACT, version: scheduler.VERSION, crosswalkId: CROSSWALK,
+        createdAt: '2026-09-07T00:00:00.000Z', items: Object.fromEntries(groups.map(group => [group.paperId,
+            { ...group, runId: group.runId.replace(/-4([a-f0-9]{3})-/, '-5$1-'), status: 'pending', lastError: null }])),
+        generation: 1 };
+    fs.writeFileSync(path.join(files.historicalAnalysisSchedulerDir, `${CROSSWALK}.json`), JSON.stringify(old));
+    const result = await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
+        stage: 'prepare-only', limit: 'pilot', concurrency: 1 }, { files, readCrosswalk: () => state(),
+        recoverRun: () => null, fetchMetadata: async () => { throw new Error('stop after migration'); },
+        updateLocked: require('../scripts/analysis-engine.js').updateJsonFileLocked,
+        now: () => '2026-09-07T00:00:01.000Z' });
+    assert.equal(result.failed, 1);
+    const migrated = JSON.parse(fs.readFileSync(path.join(files.historicalAnalysisSchedulerDir, `${CROSSWALK}.json`)));
+    assert.match(migrated.items[groups[0].paperId].runId, /^[a-f0-9-]{14}4/);
+});

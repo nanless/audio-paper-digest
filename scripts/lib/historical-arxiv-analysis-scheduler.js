@@ -63,9 +63,21 @@ function syncCheckpoint(filename, crosswalk, groups, deps) {
         const items = { ...prior.items };
         for (const group of groups) {
             const existing = items[group.paperId];
-            if (existing && (existing.groupSha256 !== group.groupSha256 || existing.runId !== group.runId
-                || existing.authorityFileSha256 !== group.authorityFileSha256)) throw new Error(`${group.paperId} scheduler binding drifted`);
-            items[group.paperId] = existing || { ...group, status: 'pending', lastError: null };
+            if (existing && (existing.groupSha256 !== group.groupSha256
+                || existing.authorityFileSha256 !== group.authorityFileSha256)) {
+                throw new Error(`${group.paperId} scheduler binding drifted`);
+            }
+            if (existing && existing.runId !== group.runId) {
+                const oldRunDirectory = deps.files?.freshRewriteRunsDir
+                    ? path.join(deps.files.freshRewriteRunsDir, existing.runId) : null;
+                const untouchedLegacyId = existing.status === 'pending' && existing.lastError === null
+                    && /^[a-f0-9]{8}-[a-f0-9]{4}-5[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(existing.runId)
+                    && (!oldRunDirectory || !fs.existsSync(oldRunDirectory));
+                if (!untouchedLegacyId) throw new Error(`${group.paperId} scheduler binding drifted`);
+                items[group.paperId] = { ...group, status: 'pending', lastError: null };
+            } else {
+                items[group.paperId] = existing || { ...group, status: 'pending', lastError: null };
+            }
         }
         return { ...prior, crosswalkStateSha256: crosswalk.stateSha256,
             identityGroupsSha256: crosswalk.identityGroupsSha256, items, updatedAt: deps.now() };
