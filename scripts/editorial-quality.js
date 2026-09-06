@@ -322,6 +322,12 @@ function findQuantitativeChineseNumerals(text) {
     const candidates = [];
     for (const [regex, reason] of patterns) {
         for (const finding of collectRegexMatches(value, regex, reason)) {
+            if (reason === 'measured_large_integer'
+                && /^[万亿]\s*对$/u.test(finding.match)
+                && /\d\s*$/u.test(value.slice(0, finding.index))
+                && /^\s*\d/u.test(value.slice(finding.index + finding.match.length))) {
+                continue;
+            }
             candidates.push(finding);
         }
     }

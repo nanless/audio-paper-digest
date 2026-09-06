@@ -127,6 +127,12 @@ describe('Manual v4 editorial quality primitives', () => {
         );
     });
 
+    it('does not read the scale suffix in an Arabic comparison as a Chinese count classifier', () => {
+        assert.deepEqual(findQuantitativeChineseNumerals(
+            '第一段约 500 万对 48 万，此外为 2,459 对 6,578。'
+        ), []);
+    });
+
     it('blocks numeric-unit adhesion and digit-damaged Chinese connectives without flagging identifiers', () => {
         const findings = findNumericTypographyDefects([
             '该实验包括5个场景，训练50轮，提升19.5个百分点，并把误差从81.7降至81.0。',
