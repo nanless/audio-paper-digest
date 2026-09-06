@@ -78,37 +78,52 @@ npm run conference:discover -- --apply --adapter icassp --year 2026 \
   --candidate-output icassp-2026.json --report-output icassp-2026-report.json
 ```
 
-筛选的状态合同为 `conference-filter-v2`。它绑定完整 discovery catalog、逐篇 source
+筛选的状态合同为 `conference-filter-v3`。它绑定完整 discovery catalog、逐篇 source
 SHA、选择策略、Prompt、模型/协议和 taxonomy registry SHA；included、excluded、
 pending、failed 四种决定彼此独立，只有全集无 pending/failed 才能 complete。当前
-`conference:filter` 只管理受控 decision patch，transport 明确禁用，不会调用模型：
+`conference:filter` 管理状态与显式人工 decision；`conference:filter:run` 才是唯一生产 LLM
+入口。runner 逐篇重放官方 metadata record、catalog/source SHA、spec/prompt/model/endpoint/taxonomy，
+统一通过固定的 `requestLlmJson()` 使用项目代理和 sticky 账号池。每篇先在全局单飞锁内 O_EXCL
+保存请求 intent，网络返回后保存 terminal HTTP 原始响应、provider usage 及各物理请求的 usage-ledger
+事件绑定，再生成 decision artifact 并应用 CAS：
 
 ```bash
 npm run conference:filter -- prepare --catalog NAME.json --report REPORT.json --spec NAME.json
+npm run conference:filter:run -- --apply --catalog NAME.json --report REPORT.json --spec NAME.json \
+  --filter UUID --owner filter.worker [--limit N] [--retry-failed]
 npm run conference:filter -- status --filter UUID
 npm run conference:filter -- apply --filter UUID --decision DECISION.json --owner OPERATOR
 ```
 
 最终 included/excluded 必须绑定受控 decision artifact；LLM 决定要求真实请求/响应字节、
-模型/协议和非零请求 usage，manual 决定使用独立 actor，不得冒充模型。筛选 complete 后
-生成只包含 included 身份的 selection receipt。当前没有实际 LLM 筛选 runner，也没有
-面向操作者的 decision artifact 生成命令；因此这仍是状态/证据合同，不是可直接跑完全程
-的筛选器。
+模型/协议和非零逻辑请求 usage，manual 决定使用独立 actor，不得冒充模型。普通
+`buildDecisionArtifact` 和 `conference:filter apply` 都拒绝 LLM actor；生产 signer 不接收 transport
+函数注入，只能消费固定公共路由形成的私有证据。请求中断后先恢复已有 receipt/artifact；若 intent
+存在但终态响应不可知，则保守记为 typed `failed`，绝不自动重复计费。pending 总是优先；failed
+只有显式 `--retry-failed`、超过五分钟退避且累计少于三次时才可重试。只有 usage 完整、输出非零且
+严格 JSON 的 `included`/`excluded` 才成为终态。账号池切换前的响应无法由公共 wrapper 提供完整 raw，
+因此 decision receipt 保存各物理请求的 usage-ledger event SHA，terminal raw 单独保存；不可得状态不得
+伪装成完整响应。筛选 complete 后生成只包含 included 身份的 selection receipt。
 
 filter spec 放在 `data/runtime/conference-filter-specs/`。最小 v2 形状如下；所有 SHA 都必须由
 对应原始字节或规范化对象真实计算，下面的占位符故意不能直接通过校验：
 
 ```json
 {
-  "contract": "conference-filter-spec-v2",
-  "version": 2,
-  "filterPolicySha256": "<64-hex-filter-policy-sha256>",
-  "promptSha256": "<64-hex-prompt-sha256>",
+  "contract": "conference-filter-spec-v3",
+  "version": 3,
+  "filterPolicySha256": "2b96a65d4069a84ec1592d5d6893af6a84107ab30822ebd0ff8a2b305946ffde",
+  "promptSha256": "657342ff5deae423d50bbd4835c7e479b2d1abe3f88d1d8bcd8950483c95f396",
   "model": "muse-spark-1.2-contributor",
   "endpointProtocol": "openai-responses",
+  "endpointIdentitySha256": "4de319c45169889bd6be02e65d8a8eec1003647910ba0a54490345ae52276af3",
   "taxonomyRegistrySha256": "<64-hex-current-registry-bytes-sha256>"
 }
 ```
+
+`endpointIdentitySha256` 是 `endpointIdentitySha256(endpoint, model)` 对公共路由最终规范 API URL
+UTF-8 字节计算的 SHA-256；它不包含 API key。endpoint、协议或模型任一漂移都必须重新 prepare
+新的 filter，不能在旧状态上混跑。
 
 每篇 included 论文随后必须在固定的 `conference-staging-sources` 目录内执行 PDF 提取，
 并由人工复核清单只引用 `paperId`、`sourceIdentity` 和 extraction receipt 文件名。staging

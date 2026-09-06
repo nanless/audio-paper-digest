@@ -36,6 +36,7 @@ function productionPlanFixture(t, { value = '100', pdfLines = 120 } = {}) {
     let filterState = filter.prepareFilter({ filterRoot: roots.filters, discoveryHandle, filterId, now: NOW,
         spec: { contract: filter.SPEC_CONTRACT, version: filter.VERSION, filterPolicySha256: sha256('policy'),
             promptSha256: sha256('prompt'), model: 'fixture', endpointProtocol: 'openai-responses',
+            endpointIdentitySha256: sha256('endpoint identity'),
             taxonomyRegistrySha256: sha256('taxonomy') } });
     const paperId = paperIdentity.canonicalConferencePaperId(
         { id: 'icassp-2026', year: 2026 }, { type: 'icassp-arnumber', value });

@@ -53,7 +53,7 @@
 
 会议命令按 `discover → filter → extract → staging → import → plan → execution` 顺序运行，
 所有写入阶段都有显式 dry-run/apply 或 receipt/CAS 门禁。当前主分支只接通到可信来源与
-隔离执行状态，尚未提供实际 LLM 筛选 runner、会议分析/Reader、completion proof 或会议
+隔离执行状态；实际 LLM 筛选 runner 已接通，尚未提供会议分析/Reader、completion proof 或会议
 博客发布器，因此不能把 `conference:*` 当成已完成的端到端发布入口。准确参数、运行目录
 和人工工件格式见[会议论文工作流](conference-workflow.md)。
 
@@ -68,10 +68,12 @@ npm run history:inventory -- --apply \
   --ledger all-history.json --receipt all-history.receipt.json
 ```
 
-双文件会写入受保护的 `data/runtime/historical-page-inventories`。当前尚未实现页面到
-可信论文来源的 verified adapter、历史分析或发布；`history:crosswalk` 目前只建立 pending
-审核状态，通过 `status`/受控 decision CAS 记录待核、阻断或冲突，并拒绝 verified 与
-finalize。准确命令和当前预期失败边界见[历史重写底座](history-rewrite.md)。
+双文件会写入受保护的 `data/runtime/historical-page-inventories`。`history:crosswalk` 建立 pending
+审核状态，通过受控 decision/CAS 记录待核、阻断、冲突，或在现场重放 authenticated
+production-authorized `paper-source-authority-v1` 后记录 verified；全部 verified 且每次读取均可重新
+解析当前 authority handle，才能生成或消费不可变 final receipt。
+真实 arXiv authority 采集 runner、会议 authority 跨进程装载、历史分析与发布仍未实现。
+准确命令和当前预期失败边界见[历史重写底座](history-rewrite.md)。
 
 ## 视觉状态机
 

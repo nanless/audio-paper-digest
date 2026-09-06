@@ -26,7 +26,7 @@ const CONFERENCE_PROTECTED_KEYS = [
     'conference-runs',
     'conference-executions'
 ];
-const HISTORY_PROTECTED_KEYS = ['historical-page-inventories', 'page-source-crosswalks'];
+const HISTORY_PROTECTED_KEYS = ['historical-page-inventories', 'page-source-crosswalks', 'paper-source-authorities'];
 
 const NOW_MS = Date.parse('2026-09-02T00:00:00.000Z');
 const OLD_MS = NOW_MS - 40 * 24 * 60 * 60 * 1000;
@@ -53,6 +53,7 @@ function makeProject() {
         'data/runtime/conference-executions',
         'data/runtime/historical-page-inventories',
         'data/runtime/page-source-crosswalks',
+        'data/runtime/paper-source-authorities',
         'data/archive',
         'logs'
     ]) fs.mkdirSync(path.join(projectRoot, relative), { recursive: true });

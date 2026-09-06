@@ -55,7 +55,8 @@ function getLayout(projectRoot = PROJECT_ROOT) {
         { key: 'conference-runs', root: path.join(runtime, 'conference-runs') },
         { key: 'conference-executions', root: path.join(runtime, 'conference-executions') },
         { key: 'historical-page-inventories', root: path.join(runtime, 'historical-page-inventories') },
-        { key: 'page-source-crosswalks', root: path.join(runtime, 'page-source-crosswalks') }
+        { key: 'page-source-crosswalks', root: path.join(runtime, 'page-source-crosswalks') },
+        { key: 'paper-source-authorities', root: path.join(runtime, 'paper-source-authorities') }
     ];
     return { projectRoot: root, current, archive, runtime, logs, controlled, protectedRuntime };
 }

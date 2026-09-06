@@ -9,6 +9,10 @@ const os = require('node:os');
 const path = require('node:path');
 const api = require('../scripts/lib/page-source-crosswalk.js');
 const cli = require('../scripts/page-source-crosswalk.js');
+const authorityApi = require('../scripts/lib/paper-source-authority.js');
+const identityApi = require('../scripts/lib/paper-identity.js');
+const contextApi = require('../scripts/lib/conference-source-context.js');
+const { productionPlanFixture } = require('./helpers/conference-production-plan-fixture.js');
 
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222',
@@ -18,6 +22,78 @@ const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-22
     '99999999-9999-4999-8999-999999999999', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'];
 const stamp = '2026-09-06T00:00:00.000Z';
+
+function writeArxivAuthority(root, name = 'authority.json') {
+    fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+    const fulltextName = 'paper.txt'; const text = `${'authenticated source text '.repeat(1200)}\n`;
+    fs.writeFileSync(path.join(root, fulltextName), text, { mode: 0o600 }); const fulltextSha256 = sha(text);
+    const snapshotName = 'snapshot.json'; const snapshotBody = { contract: authorityApi.ARXIV_SNAPSHOT_CONTRACT,
+        version: authorityApi.VERSION, paperId: 'arxiv:2601.00001', arxivId: '2601.00001',
+        officialUrl: 'https://arxiv.org/abs/2601.00001', fulltextSha256 };
+    const snapshot = { ...snapshotBody, snapshotSha256: authorityApi.stableHash(snapshotBody) };
+    const snapshotBytes = authorityApi.prettyBytes(snapshot); fs.writeFileSync(path.join(root, snapshotName), snapshotBytes, { mode: 0o600 });
+    const receiptName = 'source-receipt.json'; const receiptBody = { contract: authorityApi.ARXIV_RECEIPT_CONTRACT,
+        version: authorityApi.VERSION, snapshotName, snapshotFileSha256: sha(snapshotBytes),
+        snapshotSha256: snapshot.snapshotSha256, fulltextName, fulltextSha256 };
+    const receipt = { ...receiptBody, receiptSha256: authorityApi.stableHash(receiptBody) };
+    const receiptBytes = authorityApi.prettyBytes(receipt); fs.writeFileSync(path.join(root, receiptName), receiptBytes, { mode: 0o600 });
+    const identity = { contract: identityApi.CONTRACT, kind: 'arxiv', canonicalId: 'arxiv:2601.00001',
+        arxivId: '2601.00001', conference: null, externalId: null,
+        source: { status: 'official', url: 'https://arxiv.org/abs/2601.00001' }, citation: null };
+    const body = { contract: authorityApi.CONTRACT, version: authorityApi.VERSION, paperId: identity.canonicalId,
+        identity, identitySha256: identityApi.identitySha256(identity),
+        identityRecordSha256: identityApi.recordSha256(identity), evidenceKind: 'arxiv-official-fulltext',
+        proof: { snapshotName, snapshotFileSha256: sha(snapshotBytes), snapshotSha256: snapshot.snapshotSha256,
+            receiptName, receiptFileSha256: sha(receiptBytes), receiptSha256: receipt.receiptSha256,
+            fulltextName, fulltextSha256 } };
+    const authority = { ...body, authoritySha256: authorityApi.stableHash(body) };
+    fs.writeFileSync(path.join(root, name), authorityApi.prettyBytes(authority), { mode: 0o600 });
+    return authorityApi.loadAuthorityHandle({ authorityRoot: root, authorityName: name });
+}
+
+function useConferenceHint(f, value = '100') {
+    const paper = f.ledger.pages.find(page => page.kind === 'paper');
+    paper.identityHints = { status: 'single', candidates: [
+        { scheme: 'icassp-arnumber', value, sources: ['frontmatter:paper_digest_icassp_arnumber'] }
+    ] };
+    rehashPage(paper); rehashLedger(f.ledger);
+    const ledgerBytes = api.prettyBytes(f.ledger);
+    fs.writeFileSync(path.join(f.inventory, f.ledgerName), ledgerBytes, { mode: 0o600 });
+    const receiptBody = structuredClone(f.receipt); delete receiptBody.receiptSha256;
+    receiptBody.ledger.fileSha256 = sha(ledgerBytes);
+    receiptBody.ledger.ledgerSha256 = f.ledger.ledgerSha256;
+    receiptBody.ledger.pageSetSha256 = f.ledger.pageSetSha256;
+    f.receipt = { ...receiptBody, receiptSha256: api.stableHash(receiptBody) };
+    fs.writeFileSync(path.join(f.inventory, f.receiptName), api.prettyBytes(f.receipt), { mode: 0o600 });
+}
+
+function writeConferenceAuthority(t, root, value = '100', name = 'conference-authority.json') {
+    const fixture = productionPlanFixture(t, { value });
+    fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+    const context = contextApi.buildConferenceSourceContext({ planHandle: fixture.planHandle,
+        paperId: fixture.paperId, sourceRoot: fixture.sourceRoot });
+    const sourceContextName = 'conference-context.json';
+    const contextBytes = authorityApi.prettyBytes(context);
+    fs.writeFileSync(path.join(root, sourceContextName), contextBytes, { mode: 0o600 });
+    const identity = { contract: identityApi.CONTRACT, kind: 'conference', canonicalId: fixture.paperId,
+        arxivId: null, conference: { slug: 'icassp', year: 2026 },
+        externalId: { scheme: 'icassp-arnumber', value }, source: { status: 'unavailable', url: null }, citation: null };
+    const proof = { sourceContextName, sourceContextFileSha256: sha(contextBytes),
+        sourceContextSha256: authorityApi.stableHash(context), sourceSnapshotSha256: context.sourceSnapshotSha256,
+        observationBindingSha256: context.observationBindingSha256,
+        planAuthorityBindingSha256: context.productionAuthorization.binding.bindingSha256,
+        fulltextSha256: sha(Buffer.from(context.text, 'utf8')) };
+    const body = { contract: authorityApi.CONTRACT, version: authorityApi.VERSION, paperId: fixture.paperId,
+        identity, identitySha256: identityApi.identitySha256(identity), identityRecordSha256: identityApi.recordSha256(identity),
+        evidenceKind: 'conference-plan-source-context', proof };
+    const authority = { ...body, authoritySha256: authorityApi.stableHash(body) };
+    fs.writeFileSync(path.join(root, name), authorityApi.prettyBytes(authority), { mode: 0o600 });
+    const handle = authorityApi.loadAuthorityHandle({ authorityRoot: root, authorityName: name,
+        conferencePlanHandle: fixture.planHandle, conferenceSourceRoot: fixture.sourceRoot });
+    const bundle = { handle, name, sourceContextName, fixture };
+    bundle.resolver = reference => { assert.equal(reference.authorityName, name); return bundle.handle; };
+    return bundle;
+}
 
 function eio(stage) {
     const error = new Error(`${stage} injected EIO`); error.code = 'EIO'; return error;
@@ -364,19 +440,160 @@ test('operation lock reclaims only a verified stale lock owned by a dead local P
     assert.equal(fs.existsSync(path.join(directory, 'operation.lock.reclaim')), false);
 });
 
-test('verified/completion/identity-group injection and finalize all fail closed', t => {
-    const f = fixture(t); const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
+test('self-authored arXiv fixtures cannot authorize verified decisions in the core API or a separate CLI process', t => {
+    const f = fixture(t); const authorityRoot = path.join(f.root, 'authorities');
+    const authorityHandle = writeArxivAuthority(authorityRoot);
+    const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
         crosswalkId: ids[0], now: stamp, apply: true }); const pageKey = Object.keys(state.assignments)[0];
     assert.throws(() => api.buildDecisionArtifact({ state, pageKey, actorId: 'reviewer', status: 'verified',
-        reason: 'forged', now: stamp }), /future authenticated source-authority/);
-    const forged = structuredClone(state); forged.assignments[pageKey] = { ...forged.assignments[pageKey], status: 'verified',
-        reason: 'forged', decisionArtifactSha256: sha('forged') };
-    assert.throws(() => api.assertCrosswalkState(forged), /future authenticated source-authority/);
-    const groups = structuredClone(state); groups.identityGroups = [{ forged: true }]; groups.identityGroupsSha256 = api.stableHash(groups.identityGroups);
-    assert.throws(() => api.assertCrosswalkState(groups), /identityGroups must remain empty/);
-    assert.throws(() => api.finalizeCrosswalk({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0] }), /every paper/);
-    assert.throws(() => cli.main(['finalize', '--crosswalk', ids[0]],
-        { roots: { inventoryRoot: f.inventory, crosswalkRoot: f.crosswalk } }), /every paper/);
+        reason: 'forged', now: stamp }), /authenticated paper source authority/);
+    assert.throws(() => api.buildVerifiedDecisionArtifact({ state, pageKey, authorityHandle,
+        operationId: ids[1], actorId: 'reviewer', now: stamp }), /production-authorized/);
+    const roots = { inventoryRoot: f.inventory, crosswalkRoot: f.crosswalk, authorityRoot };
+    assert.throws(() => cli.main(['apply-verified', '--crosswalk', ids[0], '--decision', 'verified.json',
+        '--authority', 'authority.json', '--owner', 'worker'], { roots, now: stamp }), /adapter is not installed/);
+    const child = spawnSync(process.execPath, ['-e', [
+        'const cli=require(process.argv[1]);',
+        'const roots=JSON.parse(process.argv[2]);',
+        'try { cli.main(["apply-verified","--crosswalk",process.argv[3],"--decision","verified.json",',
+        '"--authority","authority.json","--owner","worker"], { roots }); process.exit(0); }',
+        'catch (error) { console.error(error.message); process.exit(9); }'
+    ].join(''), path.join(__dirname, '..', 'scripts', 'page-source-crosswalk.js'), JSON.stringify(roots), ids[0]],
+    { cwd: path.join(__dirname, '..'), encoding: 'utf8' });
+    assert.equal(child.status, 9); assert.match(child.stderr, /fixture bundles cannot verify history/);
+
+    // A state written by the earlier permissive implementation must not be
+    // grandfathered into a production final receipt.
+    const snapshot = authorityApi.authorityHandleSnapshot(authorityHandle);
+    const sourceAuthority = { paperId: snapshot.authority.paperId, identity: snapshot.authority.identity,
+        identitySha256: snapshot.authority.identitySha256, identityRecordSha256: snapshot.authority.identityRecordSha256,
+        authorityContract: snapshot.authority.contract, authorityName: snapshot.authorityName,
+        authorityFileSha256: snapshot.authorityFileSha256, authoritySha256: snapshot.authority.authoritySha256,
+        evidenceKind: snapshot.authority.evidenceKind, fulltextSha256: snapshot.fulltextSha256,
+        sourceSnapshotSha256: snapshot.sourceSnapshotSha256 };
+    const decisionBody = { contract: api.DECISION_CONTRACT, version: 1, crosswalkId: ids[0], operationId: ids[1],
+        expectedStateSha256: state.stateSha256, pageKey, pagePath: state.assignments[pageKey].pagePath,
+        pageContentSha256: state.assignments[pageKey].pageContentSha256, actorId: 'legacy.writer',
+        result: { status: 'verified', reason: 'legacy fixture' }, sourceAuthority, createdAt: stamp };
+    const decision = { ...decisionBody, artifactSha256: api.stableHash(decisionBody) };
+    const decisionFile = api.writeDecisionArtifact({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0],
+        decisionName: 'legacy-verified.json', artifact: decision });
+    const legacy = structuredClone(state);
+    legacy.assignments[pageKey] = { ...legacy.assignments[pageKey], status: 'verified', reason: 'legacy fixture',
+        decisionArtifactSha256: decision.artifactSha256, sourceAuthority };
+    legacy.completion = api.completionFor(legacy.assignments);
+    legacy.identityGroups = api.identityGroupsFor(legacy.assignments);
+    legacy.identityGroupsSha256 = api.stableHash(legacy.identityGroups);
+    const attempt = { operationId: ids[1], decisionName: path.basename(decisionFile),
+        decisionFileSha256: sha(fs.readFileSync(decisionFile)), decisionArtifactSha256: decision.artifactSha256,
+        pageKey, fromStatus: 'pending', toStatus: 'verified', reason: 'legacy fixture', actorId: 'legacy.writer',
+        sourceAuthority, recordedAt: stamp, priorStateSha256: state.stateSha256, nextStateSha256: '' };
+    legacy.attempts.push(attempt);
+    const digestBody = structuredClone(legacy); delete digestBody.stateSha256;
+    digestBody.attempts = digestBody.attempts.map(({ nextStateSha256: _next, ...item }) => item);
+    legacy.stateSha256 = api.stableHash(digestBody); attempt.nextStateSha256 = legacy.stateSha256;
+    const checkedLegacy = api.assertCrosswalkState(legacy);
+    fs.writeFileSync(path.join(f.crosswalk, ids[0], 'state.json'), api.prettyBytes(checkedLegacy), { mode: 0o600 });
+    assert.throws(() => api.finalizeCrosswalk({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], authorityRoot }),
+        /production-authorized/);
+    assert.equal(fs.existsSync(path.join(f.crosswalk, ids[0], 'final-receipt.json')), false);
+});
+
+test('verified conference decision replays locked bytes and final receipt requires live production authority', t => {
+    const f = fixture(t); useConferenceHint(f); const authorityRoot = path.join(f.root, 'authorities');
+    const production = writeConferenceAuthority(t, authorityRoot);
+    const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
+        crosswalkId: ids[0], now: stamp, apply: true }); const pageKey = Object.keys(state.assignments)[0];
+    const artifact = api.buildVerifiedDecisionArtifact({ state, pageKey, authorityHandle: production.handle,
+        operationId: ids[1], actorId: 'reviewer', now: stamp });
+    const decisionFile = api.writeDecisionArtifact({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0],
+        decisionName: 'verified.json', artifact });
+    assert.throws(() => api.loadDecisionHandle(decisionFile), /authenticated source authority/);
+    const staleHandle = api.loadDecisionHandle(decisionFile, { authorityHandle: production.handle });
+    const decisionBytes = fs.readFileSync(decisionFile); fs.renameSync(decisionFile, `${decisionFile}.old`);
+    fs.writeFileSync(decisionFile, decisionBytes, { mode: 0o600 });
+    assert.throws(() => api.applyDecision({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0],
+        decisionHandle: staleHandle, owner: 'worker', now: stamp }), /decision file changed/);
+    const authorityFile = path.join(authorityRoot, production.name); const authorityBytes = fs.readFileSync(authorityFile);
+    fs.renameSync(authorityFile, `${authorityFile}.old`); fs.writeFileSync(authorityFile, authorityBytes, { mode: 0o600 });
+    const authorityStaleDecision = api.loadDecisionHandle(decisionFile, { authorityHandle: production.handle });
+    assert.throws(() => api.applyDecision({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0],
+        decisionHandle: authorityStaleDecision, owner: 'worker', now: stamp }), /changed after handle creation/);
+    production.handle = authorityApi.loadAuthorityHandle({ authorityRoot, authorityName: production.name,
+        conferencePlanHandle: production.fixture.planHandle, conferenceSourceRoot: production.fixture.sourceRoot });
+    const updated = api.applyDecision({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0],
+        decisionHandle: api.loadDecisionHandle(decisionFile, { authorityHandle: production.handle }),
+        owner: 'worker', now: stamp });
+    assert.equal(updated.completion.status, 'complete'); assert.equal(updated.completion.verified, 1);
+    assert.equal(updated.identityGroups.length, 1); assert.deepEqual(updated.identityGroups[0].pageKeys, [pageKey]);
+    const result = api.finalizeCrosswalk({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], authorityRoot,
+        authorityResolver: production.resolver });
+    assert.equal(result.receipt.contract, api.FINAL_RECEIPT_CONTRACT);
+    assert.equal(fs.statSync(result.receiptFile).mode & 0o777, 0o600);
+    assert.throws(() => api.readFinalReceipt({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], authorityRoot }),
+        /live authenticated plan handle|could not replay/);
+    assert.equal(api.readFinalReceipt({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], authorityRoot,
+        authorityResolver: production.resolver })
+        .receipt.receiptSha256, result.receipt.receiptSha256);
+    assert.equal(api.finalizeCrosswalk({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], authorityRoot,
+        authorityResolver: production.resolver })
+        .receipt.receiptSha256, result.receipt.receiptSha256);
+    assert.equal(api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
+        crosswalkId: ids[0], now: stamp, apply: true }).completion.status, 'complete');
+
+    const titleOnly = structuredClone(state); titleOnly.source.papers[0].identityHints.candidates[0].sources = ['title'];
+    assert.throws(() => api.buildVerifiedDecisionArtifact({ state: titleOnly, pageKey, authorityHandle: production.handle,
+        actorId: 'reviewer' }), /title-only/);
+
+    const conflict = structuredClone(state);
+    conflict.source.papers[0].identityHints = { status: 'conflict', candidates: [
+        { scheme: 'icassp-arnumber', value: '100', sources: ['filename'] },
+        { scheme: 'icassp-arnumber', value: '101', sources: ['frontmatter:paper_id'] }
+    ] };
+    conflict.source.paperPageSetSha256 = api.stableHash(conflict.source.papers);
+    const conflictBody = structuredClone(conflict); delete conflictBody.stateSha256;
+    conflict.stateSha256 = api.stableHash(conflictBody);
+    assert.throws(() => api.buildVerifiedDecisionArtifact({ state: conflict, pageKey, authorityHandle: production.handle,
+        actorId: 'reviewer' }), /single unambiguous/);
+
+    const tamperedReceipt = structuredClone(result.receipt);
+    tamperedReceipt.identityGroups[0].identityRecordSha256 = 'f'.repeat(64);
+    tamperedReceipt.identityGroupsSha256 = api.stableHash(tamperedReceipt.identityGroups);
+    const tamperedBody = structuredClone(tamperedReceipt); delete tamperedBody.receiptSha256;
+    tamperedReceipt.receiptSha256 = api.stableHash(tamperedBody);
+    fs.writeFileSync(result.receiptFile, api.prettyBytes(tamperedReceipt), { mode: 0o600 });
+    assert.throws(() => api.readFinalReceipt({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], authorityRoot,
+        authorityResolver: production.resolver }), /groupSha256 drifted/);
+    fs.writeFileSync(result.receiptFile, api.prettyBytes(result.receipt), { mode: 0o600 });
+    fs.appendFileSync(path.join(authorityRoot, production.sourceContextName), ' ');
+    assert.throws(() => api.readFinalReceipt({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], authorityRoot,
+        authorityResolver: production.resolver }), /proof file\/SHA drifted|canonical pretty JSON/);
+});
+
+test('same canonical identity across pages forms one deterministic group and rejects conflicting records', t => {
+    const f = fixture(t); useConferenceHint(f); const authorityRoot = path.join(f.root, 'authorities');
+    const production = writeConferenceAuthority(t, authorityRoot);
+    const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
+        crosswalkId: ids[0], now: stamp, apply: true }); const pageKey = Object.keys(state.assignments)[0];
+    const artifact = api.buildVerifiedDecisionArtifact({ state, pageKey, authorityHandle: production.handle,
+        operationId: ids[1], actorId: 'reviewer', now: stamp });
+    const secondKey = `page:${sha('second page')}`; const assignments = {
+        [pageKey]: { ...state.assignments[pageKey], status: 'verified', reason: 'verified',
+            decisionArtifactSha256: artifact.artifactSha256, sourceAuthority: artifact.sourceAuthority },
+        [secondKey]: { pagePath: 'content/posts/second.md', pageContentSha256: sha('second'),
+            status: 'verified', reason: 'verified', decisionArtifactSha256: artifact.artifactSha256,
+            sourceAuthority: structuredClone(artifact.sourceAuthority) }
+    };
+    const groups = api.identityGroupsFor(assignments);
+    assert.equal(groups.length, 1); assert.deepEqual(groups[0].pageKeys, [pageKey, secondKey].sort());
+    const inconsistent = structuredClone(assignments);
+    inconsistent[secondKey].sourceAuthority.identity.source = {
+        status: 'official', url: 'https://example.test/papers/100'
+    };
+    inconsistent[secondKey].sourceAuthority.identityRecordSha256 = identityApi.recordSha256(
+        inconsistent[secondKey].sourceAuthority.identity);
+    assert.throws(() => api.identityGroupsFor(inconsistent), /conflicting identity record/);
+    assert.equal(state.completion.pending, 1);
 });
 
 test('paths, links, duplicate JSON and CLI grammar fail closed without writes', t => {

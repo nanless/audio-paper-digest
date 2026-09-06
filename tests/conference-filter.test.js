@@ -17,12 +17,16 @@ const stamp = '2026-09-06T00:00:00.000Z';
 const papers = ['100', '200'].map(value => paperIdentity.canonicalConferencePaperId(
     { id: 'icassp-2026', year: 2026 }, { type: 'icassp-arnumber', value }));
 function spec(overrides = {}) { return { contract: filter.SPEC_CONTRACT, version: filter.VERSION, filterPolicySha256: h('policy'), promptSha256: h('prompt'),
-    model: 'muse-spark-1.2-contributor', endpointProtocol: 'openai-responses', taxonomyRegistrySha256: h('taxonomy'), ...overrides }; }
+    model: 'muse-spark-1.2-contributor', endpointProtocol: 'openai-responses', endpointIdentitySha256: h('endpoint'),
+    taxonomyRegistrySha256: h('taxonomy'), ...overrides }; }
 function fixture() {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-filter-'));
     for (const name of ['filters', 'catalogs', 'reports']) fs.mkdirSync(path.join(root, name), { mode: 0o700 });
+    const metadataRecords = [100, 200].map(number => ({ arnumber: String(number), title: `Paper ${number}` }));
+    const metadataBytes = Buffer.from(JSON.stringify(metadataRecords));
+    fs.writeFileSync(path.join(root, 'metadata.json'), metadataBytes, { mode: 0o600 });
     const manifest = { contract: discovery.CONTRACT, version: discovery.VERSION, adapter: 'icassp', conference: { id: 'icassp-2026', year: 2026 },
-        metadataSnapshot: { file: path.join(root, 'metadata.json'), sha256: h('metadata'), size: 100 }, pdfRoot: root,
+        metadataSnapshot: { file: path.join(root, 'metadata.json'), sha256: h(metadataBytes), size: metadataBytes.length }, pdfRoot: root,
         pdfCatalogSha256: ledger.stableHash([]), pdfCatalog: [], members: [100, 200].map((number, index) => ({
             identity: { type: 'icassp-arnumber', value: String(number) }, metadataIndex: index, title: `Paper ${number}`,
             numericAlias: null, match: { kind: 'unmatched', candidates: [] }
@@ -37,12 +41,10 @@ function fixture() {
 function prepare(f) { return filter.prepareFilter({ filterRoot: f.filters, discoveryHandle: f.discoveryHandle,
     spec: spec(), filterId: ids[0], now: stamp }); }
 function artifactHandle(f, state, paperId, status, operationId, options = {}) {
-    const manual = options.actor === 'manual'; const n = options.n ?? 1;
     const artifact = filter.buildDecisionArtifact({ state, paperId, operationId,
-        actor: { type: manual ? 'manual' : 'llm', id: manual ? 'reviewer.1' : 'filter-worker' },
-        model: manual ? null : (options.model || spec().model), endpointProtocol: manual ? 'manual' : spec().endpointProtocol,
+        actor: { type: 'manual', id: 'reviewer.1' }, model: null, endpointProtocol: 'manual',
         requestBytes: `request for ${paperId}`, responseBytes: status === 'failed' ? null : `${status} evidence`,
-        status, reason: `${status} fixture`, usage: manual ? {} : { requests: n, inputTokens: n * 10, outputTokens: n * 5, totalTokens: n * 15 },
+        status, reason: `${status} fixture`, usage: {},
         now: options.now || stamp });
     const name = `${operationId}.json`;
     const filename = filter.writeDecisionArtifact({ filterRoot: f.filters, filterId: state.filterId, decisionName: name, artifact });
@@ -114,20 +116,23 @@ test('idempotent final-decision retry heals a selection receipt write interrupte
     assert.equal(filter.readSelectionReceipt({ filterRoot: f.filters, filterId: ids[0] }).filterId, ids[0]);
 });
 
-test('bare response hashes, zero-usage LLM finals and forged handles fail closed', t => {
+test('handwritten LLM actors and forged handles fail closed', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const state = prepare(f);
     assert.throws(() => filter.applyDecision({ filterRoot: f.filters, filterId: ids[0], decisionHandle: {}, owner: 'worker' }), /authenticated decision/);
     assert.throws(() => filter.buildDecisionArtifact({ state, paperId: papers[0], operationId: ids[1], actor: { type: 'llm', id: 'worker' },
         model: spec().model, endpointProtocol: spec().endpointProtocol, requestBytes: 'request', responseBytes: 'response',
-        status: 'included', reason: 'yes', usage: {} }), /at least one request/);
-    assert.throws(() => filter.buildDecisionArtifact({ state, paperId: papers[0], operationId: ids[1], actor: { type: 'llm', id: 'worker' },
-        model: spec().model, endpointProtocol: spec().endpointProtocol, requestBytes: 'request', responseBytes: 'response',
-        status: 'included', reason: 'yes', usage: { requests: 1, inputTokens: 10, outputTokens: 0, totalTokens: 10 } }),
-    /positive output\/total tokens/);
-    assert.doesNotThrow(() => filter.buildDecisionArtifact({ state, paperId: papers[0], operationId: ids[1], actor: { type: 'llm', id: 'worker' },
-        model: spec().model, endpointProtocol: spec().endpointProtocol, requestBytes: 'request', responseBytes: 'response',
-        status: 'included', reason: 'yes', usage: { requests: 1, inputTokens: null, outputTokens: null, totalTokens: null } }));
+        status: 'included', reason: 'yes', usage: { requests: 1, inputTokens: 10, outputTokens: 5, totalTokens: 15 } }),
+    /authenticated conference filter runner/);
+    const manual = filter.buildDecisionArtifact({ state, paperId: papers[0], operationId: ids[1],
+        actor: { type: 'manual', id: 'reviewer' }, model: null, endpointProtocol: 'manual', requestBytes: 'request',
+        responseBytes: 'response', status: 'included', reason: 'yes', usage: {}, now: stamp });
+    const forged = { ...manual, actor: { type: 'llm', id: 'forged' }, model: spec().model,
+        endpointProtocol: spec().endpointProtocol,
+        result: { ...manual.result, usage: { requests: 1, inputTokens: 10, outputTokens: 5, totalTokens: 15 } } };
+    const body = { ...forged }; delete body.artifactSha256; forged.artifactSha256 = filter.stableHash(body);
+    assert.throws(() => filter.writeDecisionArtifact({ filterRoot: f.filters, filterId: ids[0],
+        decisionName: 'forged-llm.json', artifact: forged }), /endpointIdentity|requestEnvelope|transportReceipt/);
     assert.equal(filter.adaptDiscoveryCatalog, undefined); assert.equal(filter.discoveryDocumentToFilterCatalog, undefined);
 });
 
@@ -144,16 +149,17 @@ test('failed remains retryable, cumulative usage monotonic, final cannot change'
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     let state = prepare(f); state = apply(f, state, papers[0], 'failed', ids[1]);
     assert.equal(state.completion.failed, 1); assert.equal(state.completion.excluded, 0);
-    assert.throws(() => apply(f, state, papers[0], 'included', ids[2], { n: 0 }), /at least one request|usage cannot regress/);
-    state = apply(f, state, papers[0], 'included', ids[2], { n: 2, now: '2026-09-06T00:01:00.000Z' });
-    assert.throws(() => apply(f, state, papers[0], 'excluded', ids[3], { n: 3 }), /final decision cannot be changed/);
+    state = apply(f, state, papers[0], 'included', ids[2], { now: '2026-09-06T00:01:00.000Z' });
+    assert.throws(() => apply(f, state, papers[0], 'excluded', ids[3]), /final decision cannot be changed/);
 });
 
-test('model and protocol drift are rejected at apply', t => {
+test('manual decision cannot impersonate a model or protocol', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
-    const state = prepare(f); const decision = artifactHandle(f, state, papers[0], 'included', ids[1], { model: 'wrong-model' });
-    assert.throws(() => filter.applyDecision({ filterRoot: f.filters, filterId: ids[0],
-        decisionHandle: decision.handle, owner: 'worker' }), /model\/protocol drifted/);
+    const state = prepare(f);
+    assert.throws(() => filter.buildDecisionArtifact({ state, paperId: papers[0], operationId: ids[1],
+        actor: { type: 'manual', id: 'reviewer' }, model: 'fixture-model', endpointProtocol: 'openai-responses',
+        requestBytes: 'request', responseBytes: 'response', status: 'included', reason: 'yes', usage: {} }),
+    /manual decision must use/);
 });
 
 test('operation idempotency is bound to the exact preserved decision artifact', t => {
@@ -161,9 +167,9 @@ test('operation idempotency is bound to the exact preserved decision artifact', 
     const state = prepare(f);
     const first = artifactHandle(f, state, papers[0], 'included', ids[1]);
     const different = filter.buildDecisionArtifact({ state, paperId: papers[0], operationId: ids[1],
-        actor: { type: 'llm', id: 'filter-worker' }, model: spec().model, endpointProtocol: spec().endpointProtocol,
+        actor: { type: 'manual', id: 'reviewer' }, model: null, endpointProtocol: 'manual',
         requestBytes: 'different request bytes', responseBytes: 'included evidence', status: 'included', reason: 'included fixture',
-        usage: { requests: 1, inputTokens: 10, outputTokens: 5, totalTokens: 15 }, now: stamp });
+        usage: {}, now: stamp });
     const secondFile = filter.writeDecisionArtifact({ filterRoot: f.filters, filterId: ids[0], decisionName: 'different.json', artifact: different });
     const applied = filter.applyDecision({ filterRoot: f.filters, filterId: ids[0], decisionHandle: first.handle, owner: 'worker', now: stamp });
     assert.equal(filter.applyDecision({ filterRoot: f.filters, filterId: ids[0], decisionHandle: first.handle, owner: 'worker', now: stamp }).attempts.length, 1);

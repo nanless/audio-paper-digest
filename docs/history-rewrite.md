@@ -32,13 +32,18 @@ npm run history:inventory -- --apply \
   --ledger all-history.json --receipt all-history.receipt.json
 ```
 
-## 仍未完成
+## 已接通的来源身份基础
 
 `page-source-crosswalk-v1` 会严格重放 canonical ledger/receipt 字节与自校验 SHA，再以 opaque
 handle 为每个 `kind=paper` 页面建立隔离、可恢复的 pending 状态。assignment 只含页面路径和
-整页 SHA，不带标题、标签或旧正文；受控 decision/CAS 目前只能记录 `needs-review`、`blocked`
-或 `conflict`。可信 arXiv/会议 source-authority adapter 尚未上线，所以 `verified`、非空
-`identityGroups`、complete 和 finalize 都会主动失败关闭；标题匹配不能单独成为身份依据。
+整页 SHA，不带标题、标签或旧正文；受控 decision/CAS 可以记录 `needs-review`、`blocked`、
+`conflict`，也可以在已重放 `paper-source-authority-v1` opaque handle 时记录 `verified`。
+
+authority bundle 必须同时绑定 canonical `paper-identity-v1` 完整记录、身份核心 SHA、完整记录
+SHA、authority 文件 SHA/self-SHA、证据类型、全文 SHA 与来源快照 SHA。arXiv fixture 合同会重放
+official abs URL、source snapshot、receipt 和完整全文字节；会议合同会重放真实 plan/import/ledger/
+source-context opaque 链。页面还必须有一个与 authority 精确相同、来自文件名、显式 frontmatter
+ID 或正文官方链接的 identity hint；标题永远不能成为 verified 证据。
 
 ```bash
 npm run history:crosswalk -- prepare --dry-run \
@@ -48,12 +53,24 @@ npm run history:crosswalk -- prepare --apply \
 npm run history:crosswalk -- status --crosswalk UUID
 npm run history:crosswalk -- apply --crosswalk UUID \
   --decision page-review.json --owner reviewer.1
+npm run history:crosswalk -- apply-verified --crosswalk UUID \
+  --decision page-verified.json --authority paper-authority.json --owner reviewer.1
 npm run history:crosswalk -- finalize --crosswalk UUID
 ```
 
-decision 文件只能放在 `data/runtime/page-source-crosswalks/<UUID>/decisions/`；当前没有自动
-生成 decision 或可信 verified decision 的 runner。上面的 finalize 命令用于检查门禁，在
-source-authority adapter 上线前预期返回失败，不能把“所有页面已人工看过”解释成 complete。
+decision 文件只能放在 `data/runtime/page-source-crosswalks/<UUID>/decisions/`，authority 文件及其
+直接命名的 proof 文件只能放在受保护的 `data/runtime/paper-source-authorities/`。生产 CLI 不接受
+任意路径或序列化伪 handle；`apply-verified` 会先现场重放 bundle，普通 `apply` 拒绝 verified。
+当前尚未提供自动生成 arXiv authority/decision 的生产 runner，因此 CLI 会明确拒绝自包含的 arXiv
+fixture；会议 authority 还要求当前进程中的 authenticated plan handle，因此命令行消费同样会有意
+失败关闭。测试 fixture 只证明合同与重放机制，不能当作真实历史来源收集已完成。
+
+同一 canonical identity 的多个页面形成按 `paperId`、`pageKey` 排序的确定性 `identityGroups`。
+只有全部页面都是 authenticated verified 时状态才为 complete；`finalize` 会逐项重新加载来源
+authority，并以 O_EXCL 写入不可变 `page-source-crosswalk-final-receipt-v1`。任一来源 proof 缺失、
+替换、SHA 漂移或会议上游 handle 不可重放都会拒绝 finalize。后续读取 final receipt 也必须传入
+当前 production-authorized authority resolver/opaque handles 并再次重放；只持有 receipt/state 文件
+不能作为持久来源授权。
 
 `prepare --apply` 可重放并自愈三种可验证的中断状态：安全空目录、仅含空 `decisions/`
 的目录、或仅含 canonical 初始 `state.json` 的目录；任意额外文件、非空孤立 decision、
@@ -62,7 +79,8 @@ symlink 或不可重放状态都会失败关闭。decision apply 使用目录锁
 只有同机死 PID、owner 证据完整且文件时间和 heartbeat 都超过 lease 时，才在独占 reclaim
 marker 下回收。跨主机、刚死亡、被篡改或带额外内容的锁都不会被猜测删除。
 
-后续接通可信来源后，才可以生成受 SHA 约束的 identity groups，按唯一论文分析一次，再向
+后续仍需实现真实 arXiv authority 采集 runner、会议 plan authority 的耐久跨进程装载，以及按
+final receipt 中唯一 identity group 获取完整来源。完成这些以后，才能按唯一论文分析一次，再向
 重复页面和各类汇总做确定性投影。
 
 发布前还需要历史专属 completion proof 与 publication transaction，保证所有旧 URL

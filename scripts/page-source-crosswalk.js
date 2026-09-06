@@ -5,6 +5,7 @@ const path = require('node:path');
 const { requireExternalRuntime } = require('./env-loader.js');
 const Config = require('./config.js');
 const api = require('./lib/page-source-crosswalk.js');
+const authorityApi = require('./lib/paper-source-authority.js');
 
 const DEFAULT_INVENTORY_ROOT = Config.FILES.historicalPageInventoryDir;
 const DEFAULT_CROSSWALK_ROOT = Config.FILES.pageSourceCrosswalkDir;
@@ -39,12 +40,23 @@ function parseArgs(argv) {
         && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(String(rest[5] || ''))) {
         return { command, crosswalkId: rest[1], decisionName: rest[3], owner: rest[5] };
     }
-    throw new Error('Use prepare, status, apply, or finalize with controlled names/UUIDs');
+    if (command === 'apply-verified' && rest.length === 8 && rest[0] === '--crosswalk'
+        && rest[2] === '--decision' && rest[4] === '--authority' && rest[6] === '--owner'
+        && api.UUID_RE.test(String(rest[1] || '')) && api.SAFE_JSON_NAME.test(String(rest[3] || ''))
+        && authorityApi.SAFE_JSON_NAME.test(String(rest[5] || ''))
+        && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(String(rest[7] || ''))) {
+        return { command, crosswalkId: rest[1], decisionName: rest[3], authorityName: rest[5], owner: rest[7] };
+    }
+    throw new Error('Use prepare, status, apply, apply-verified, or finalize with controlled names/UUIDs');
 }
 
 function requireRoots(roots) {
     for (const field of ['inventoryRoot', 'crosswalkRoot']) {
         if (typeof roots?.[field] !== 'string' || !path.isAbsolute(roots[field])) throw new Error(`${field} must be configured absolute path`);
+    }
+    if (roots.authorityRoot !== undefined
+        && (typeof roots.authorityRoot !== 'string' || !path.isAbsolute(roots.authorityRoot))) {
+        throw new Error('authorityRoot must be a configured absolute path');
     }
     return roots;
 }
@@ -59,7 +71,7 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
     const options = parseArgs(argv);
     const configured = dependencies.files || Config.FILES;
     const roots = requireRoots(dependencies.roots || { inventoryRoot: configured.historicalPageInventoryDir,
-        crosswalkRoot: configured.pageSourceCrosswalkDir });
+        crosswalkRoot: configured.pageSourceCrosswalkDir, authorityRoot: configured.paperSourceAuthorityDir });
     if (options.command === 'prepare') {
         const inventoryHandle = api.loadHistoricalInventoryHandle({ inventoryRoot: roots.inventoryRoot,
             ledgerName: options.ledgerName, receiptName: options.receiptName });
@@ -71,12 +83,45 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
         const output = summary(api.readCrosswalk({ crosswalkRoot: roots.crosswalkRoot, crosswalkId: options.crosswalkId }));
         console.log(JSON.stringify(output)); return output;
     }
-    if (options.command === 'apply') {
-        const state = api.applyDecisionFile({ crosswalkRoot: roots.crosswalkRoot, crosswalkId: options.crosswalkId,
-            decisionName: options.decisionName, owner: options.owner, now: dependencies.now });
+    if (options.command === 'apply' || options.command === 'apply-verified') {
+        let state;
+        if (options.command === 'apply') state = api.applyDecisionFile({ crosswalkRoot: roots.crosswalkRoot,
+            crosswalkId: options.crosswalkId, decisionName: options.decisionName,
+            owner: options.owner, now: dependencies.now });
+        else {
+            if (!roots.authorityRoot) throw new Error('apply-verified requires configured paperSourceAuthorityDir');
+            const authorityHandle = authorityApi.loadAuthorityHandle({ authorityRoot: roots.authorityRoot,
+                authorityName: options.authorityName });
+            const authority = authorityApi.authorityHandleSnapshot(authorityHandle).authority;
+            if (authority.evidenceKind === 'arxiv-official-fulltext') {
+                throw new Error('production arXiv source-authority adapter is not installed; fixture bundles cannot verify history');
+            }
+            const directory = api.crosswalkDirectory(roots.crosswalkRoot, options.crosswalkId);
+            const decisionFile = api.safeDirectJson(path.join(directory, 'decisions'), options.decisionName);
+            state = api.applyDecision({ crosswalkRoot: roots.crosswalkRoot, crosswalkId: options.crosswalkId,
+                decisionHandle: api.loadDecisionHandle(decisionFile, { authorityHandle }),
+                owner: options.owner, now: dependencies.now });
+        }
         const output = summary(state, 'updated'); console.log(JSON.stringify(output)); return output;
     }
-    return api.finalizeCrosswalk({ crosswalkRoot: roots.crosswalkRoot, crosswalkId: options.crosswalkId });
+    if (!roots.authorityRoot) throw new Error('finalize requires configured paperSourceAuthorityDir');
+    const state = api.readCrosswalk({ crosswalkRoot: roots.crosswalkRoot, crosswalkId: options.crosswalkId });
+    if (state.completion.status === 'complete') {
+        const kinds = new Set(Object.values(state.assignments).map(item => item.sourceAuthority?.evidenceKind));
+        if (kinds.has('arxiv-official-fulltext')) {
+            throw new Error('production arXiv source-authority adapter is not installed; fixture bundles cannot finalize history');
+        }
+        if (kinds.has('conference-plan-source-context')) {
+            throw new Error('production conference plan-authority bundle loader is not installed; CLI finalize fails closed');
+        }
+    }
+    const finalized = api.finalizeCrosswalk({ crosswalkRoot: roots.crosswalkRoot, crosswalkId: options.crosswalkId,
+        authorityRoot: roots.authorityRoot, now: dependencies.now });
+    const output = { status: 'finalized', contract: finalized.receipt.contract, crosswalkId: options.crosswalkId,
+        receiptSha256: finalized.receipt.receiptSha256, receiptFileSha256: finalized.receiptFileSha256,
+        verified: finalized.receipt.verified, total: finalized.receipt.total,
+        identityGroups: finalized.receipt.identityGroups.length };
+    console.log(JSON.stringify(output)); return output;
 }
 
 if (require.main === module) {

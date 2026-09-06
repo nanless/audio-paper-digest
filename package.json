@@ -24,6 +24,7 @@
     "conference:plan": "node scripts/conference-plan.js",
     "conference:execution": "node scripts/conference-execution.js",
     "conference:filter": "node scripts/conference-filter.js",
+    "conference:filter:run": "node scripts/conference-filter-run.js",
     "conference:staging": "node scripts/conference-staging.js",
     "conference:extract": "bash scripts/python-runtime.sh scripts/conference-extract.py",
     "history:inventory": "bash scripts/python-runtime.sh scripts/history-inventory.py",

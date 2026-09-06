@@ -1,19 +1,21 @@
 'use strict';
 
-// Source-identity crosswalk foundation. It consumes only an authenticated
-// historical-page inventory and cannot verify an identity until a future
-// arXiv/conference source-authority adapter is explicitly introduced.
+// Source-identity crosswalk. Verified assignments require a replayed,
+// authenticated paper-source authority; titles are never identity evidence.
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const authorityApi = require('./paper-source-authority.js');
+const identityApi = require('./paper-identity.js');
 
 const LEDGER_CONTRACT = 'historical-page-ledger-v1';
 const LEDGER_RECEIPT_CONTRACT = 'historical-page-ledger-receipt-v1';
 const CONTRACT = 'page-source-crosswalk-v1';
 const DECISION_CONTRACT = 'page-source-crosswalk-decision-v1';
 const LOCK_OWNER_CONTRACT = 'page-source-crosswalk-lock-owner-v1';
+const FINAL_RECEIPT_CONTRACT = 'page-source-crosswalk-final-receipt-v1';
 const VERSION = 1;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA_RE = /^[a-f0-9]{64}$/;
@@ -226,7 +228,8 @@ function readRegular(filename, maximum, label) {
             || opened.size > maximum) fail(`${label} changed or became unsafe while opening`);
         const bytes = fs.readFileSync(fd);
         if (bytes.length !== opened.size) fail(`${label} changed while reading`);
-        return { bytes, sha256: sha256(bytes), value: strictJson(bytes, label) };
+        return { bytes, sha256: sha256(bytes), value: strictJson(bytes, label),
+            dev: opened.dev, ino: opened.ino };
     } catch (error) {
         if (error instanceof PageSourceCrosswalkError) throw error;
         fail(`${label} cannot be read safely: ${error.message}`);
@@ -289,17 +292,7 @@ function validateHistoricalPage(page, index) {
         fail('historical page legacy marker is malformed');
     }
     assertSha(page.legacy.marker.fieldsSha256, 'historical page legacy marker fields SHA');
-    exact(page.identityHints, ['status', 'candidates'], 'historical page identityHints');
-    if (!['none', 'single', 'multiple', 'conflict'].includes(page.identityHints.status)
-        || !Array.isArray(page.identityHints.candidates)) fail('historical page identityHints is malformed');
-    for (const candidate of page.identityHints.candidates) {
-        exact(candidate, ['scheme', 'value', 'sources'], 'historical identity hint');
-        text(candidate.scheme, 'historical identity scheme'); text(candidate.value, 'historical identity value');
-        if (!Array.isArray(candidate.sources) || candidate.sources.some(item => typeof item !== 'string' || !item)
-            || stableHash(candidate.sources) !== stableHash([...new Set(candidate.sources)].sort())) {
-            fail('historical identity hint sources are malformed');
-        }
-    }
+    normalizeIdentityHints(page.identityHints, 'historical page identityHints');
     if (!Array.isArray(page.outboundPostLinks)) fail('historical outboundPostLinks must be an array');
     page.outboundPostLinks.forEach((link, linkIndex) => {
         exact(link, ['ordinal', 'linkType', 'sourceByteStart', 'sourceByteEnd', 'targetRawSha256', 'targetUrl',
@@ -523,12 +516,52 @@ function inventoryHandleSnapshot(handle) {
     return clone(INVENTORY_HANDLE_DATA.get(handle));
 }
 
+function normalizeIdentityHints(value, label = 'identityHints') {
+    exact(value, ['status', 'candidates'], label);
+    if (!['none', 'single', 'multiple', 'conflict'].includes(value.status) || !Array.isArray(value.candidates)) {
+        fail(`${label} is malformed`);
+    }
+    const candidates = value.candidates.map((candidate, index) => {
+        exact(candidate, ['scheme', 'value', 'sources'], `${label}.candidates[${index}]`);
+        if (!['arxiv', 'openreview-forum-id', 'icassp-arnumber'].includes(candidate.scheme)) {
+            fail(`${label} candidate scheme is unsupported`);
+        }
+        text(candidate.value, `${label} candidate value`, 128);
+        const valid = candidate.scheme === 'arxiv' ? /^\d{4}\.\d{4,5}$/.test(candidate.value)
+            : candidate.scheme === 'openreview-forum-id' ? /^[A-Za-z0-9_-]{6,128}$/.test(candidate.value)
+                : /^[1-9]\d*$/.test(candidate.value);
+        if (!valid || !Array.isArray(candidate.sources) || !candidate.sources.length
+            || candidate.sources.some(source => typeof source !== 'string'
+                || !/^(?:filename|frontmatter:[A-Za-z0-9_]+|body:(?:arxiv|openreview|ieee)-link)$/.test(source))
+            || [...candidate.sources].sort().some((source, sourceIndex) => source !== candidate.sources[sourceIndex])
+            || new Set(candidate.sources).size !== candidate.sources.length) {
+            fail(`${label} candidate value/sources are invalid; title-only evidence is never accepted`);
+        }
+        return clone(candidate);
+    });
+    const keys = candidates.map(candidate => `${candidate.scheme}:${candidate.value}`);
+    if ([...keys].sort().some((key, index) => key !== keys[index]) || new Set(keys).size !== keys.length) {
+        fail(`${label} candidates must be unique and sorted`);
+    }
+    const byScheme = new Map();
+    for (const candidate of candidates) {
+        const values = byScheme.get(candidate.scheme) || new Set();
+        values.add(candidate.value); byScheme.set(candidate.scheme, values);
+    }
+    const expectedStatus = !candidates.length ? 'none'
+        : [...byScheme.values()].some(values => values.size > 1) ? 'conflict'
+            : candidates.length === 1 ? 'single' : 'multiple';
+    if (value.status !== expectedStatus) fail(`${label}.status drifted from its candidates`);
+    return { status: value.status, candidates };
+}
+
 function assignmentKey(page) { return page.pageId; }
 function sourceBinding(inventory) {
     const papers = inventory.ledger.pages.filter(page => page.kind === 'paper')
         .map(page => ({ pageKey: assignmentKey(page), pagePath: page.path, pageContentSha256: page.contentSha256,
             pageRecordSha256: page.recordSha256, primaryUrl: page.primaryUrl,
-            scope: clone(page.scope), cohortDate: page.cohortDate }));
+            scope: clone(page.scope), cohortDate: page.cohortDate,
+            identityHints: normalizeIdentityHints(page.identityHints, `identity hints for ${page.pageId}`) }));
     if (!papers.length) fail('historical inventory contains no paper pages');
     return { ledgerName: path.basename(inventory.ledgerFile), ledgerFileSha256: inventory.ledgerFileSha256,
         ledgerSha256: inventory.ledger.ledgerSha256, receiptName: path.basename(inventory.receiptFile),
@@ -538,7 +571,7 @@ function sourceBinding(inventory) {
 }
 function initialAssignment(page) {
     return { pagePath: page.pagePath, pageContentSha256: page.pageContentSha256,
-        status: 'pending', reason: null, decisionArtifactSha256: null };
+        status: 'pending', reason: null, decisionArtifactSha256: null, sourceAuthority: null };
 }
 function completionFor(assignments) {
     const counts = { pending: 0, needsReview: 0, blocked: 0, conflict: 0, verified: 0 };
@@ -556,16 +589,95 @@ function stateDigest(value) {
     body.attempts = body.attempts.map(({ nextStateSha256: _next, ...attempt }) => attempt);
     return stableHash(body);
 }
+function authorityReference(snapshot) {
+    const authority = snapshot.authority;
+    return { paperId: authority.paperId, identity: clone(authority.identity), identitySha256: authority.identitySha256,
+        identityRecordSha256: authority.identityRecordSha256,
+        authorityContract: authority.contract, authorityName: snapshot.authorityName,
+        authorityFileSha256: snapshot.authorityFileSha256, authoritySha256: authority.authoritySha256,
+        evidenceKind: authority.evidenceKind, fulltextSha256: snapshot.fulltextSha256,
+        sourceSnapshotSha256: snapshot.sourceSnapshotSha256 };
+}
+function validateAuthorityReference(value, label = 'sourceAuthority') {
+    if (value === null) return null;
+    exact(value, ['paperId', 'identity', 'identitySha256', 'identityRecordSha256', 'authorityContract', 'authorityName', 'authorityFileSha256',
+        'authoritySha256', 'evidenceKind', 'fulltextSha256', 'sourceSnapshotSha256'], label);
+    let identity;
+    try { identity = identityApi.normalizeIdentity(value.identity); }
+    catch (error) { fail(`${label}.identity is invalid: ${error.message}`); }
+    if (identity.citation !== null) {
+        fail(`${label}.identity.citation must remain null until an authenticated official-metadata adapter exists`);
+    }
+    if (value.paperId !== identity.canonicalId
+        || value.identitySha256 !== identityApi.identitySha256(identity)
+        || value.identityRecordSha256 !== identityApi.recordSha256(identity)) {
+        fail(`${label} paperId/identity/SHA binding is invalid`);
+    }
+    if (value.authorityContract !== authorityApi.CONTRACT || !authorityApi.isEvidenceKind(value.evidenceKind)
+        || !SAFE_JSON_NAME.test(value.authorityName)) fail(`${label} contract/name/evidenceKind is invalid`);
+    for (const field of ['identitySha256', 'identityRecordSha256', 'authorityFileSha256', 'authoritySha256', 'fulltextSha256',
+        'sourceSnapshotSha256']) assertSha(value[field], `${label}.${field}`);
+    return { ...clone(value), identity };
+}
+function identityGroupsFor(assignments) {
+    const groups = new Map();
+    for (const [pageKey, assignment] of Object.entries(assignments)) {
+        if (assignment.status !== 'verified') continue;
+        const authority = validateAuthorityReference(assignment.sourceAuthority, `assignment ${pageKey} sourceAuthority`);
+        const existing = groups.get(authority.paperId) || { paperId: authority.paperId,
+            identitySha256: authority.identitySha256, identityRecordSha256: authority.identityRecordSha256, pageKeys: [] };
+        if (existing.identitySha256 !== authority.identitySha256
+            || existing.identityRecordSha256 !== authority.identityRecordSha256) {
+            fail('one canonical paperId has conflicting identity record/SHA values');
+        }
+        existing.pageKeys.push(pageKey); groups.set(authority.paperId, existing);
+    }
+    return [...groups.values()].map(group => {
+        group.pageKeys.sort();
+        const body = clone(group); return { ...body, groupSha256: stableHash(body) };
+    }).sort((left, right) => left.paperId < right.paperId ? -1 : left.paperId > right.paperId ? 1 : 0);
+}
+function normalizeIdentityGroups(value, label = 'identityGroups') {
+    if (!Array.isArray(value)) fail(`${label} must be an array`);
+    const seenPapers = new Set(); const seenPages = new Set(); let previousPaper = null;
+    return value.map((group, index) => {
+        exact(group, ['paperId', 'identitySha256', 'identityRecordSha256', 'pageKeys', 'groupSha256'], `${label}[${index}]`);
+        text(group.paperId, `${label}[${index}].paperId`, 512);
+        for (const field of ['identitySha256', 'identityRecordSha256', 'groupSha256']) {
+            assertSha(group[field], `${label}[${index}].${field}`);
+        }
+        if (seenPapers.has(group.paperId) || (previousPaper !== null && previousPaper >= group.paperId)) {
+            fail(`${label} paperId values must be unique and code-unit sorted`);
+        }
+        if (!Array.isArray(group.pageKeys) || !group.pageKeys.length) fail(`${label}[${index}].pageKeys must be non-empty`);
+        const pageKeys = group.pageKeys.map((pageKey, pageIndex) => {
+            if (!PAGE_KEY_RE.test(pageKey)) fail(`${label}[${index}].pageKeys[${pageIndex}] is malformed`);
+            if (seenPages.has(pageKey)) fail(`${label} cannot contain a page more than once`);
+            seenPages.add(pageKey); return pageKey;
+        });
+        if (pageKeys.some((pageKey, pageIndex) => pageIndex > 0 && pageKeys[pageIndex - 1] >= pageKey)) {
+            fail(`${label}[${index}].pageKeys must be unique and code-unit sorted`);
+        }
+        const body = { paperId: group.paperId, identitySha256: group.identitySha256,
+            identityRecordSha256: group.identityRecordSha256, pageKeys };
+        if (group.groupSha256 !== stableHash(body)) fail(`${label}[${index}].groupSha256 drifted`);
+        seenPapers.add(group.paperId); previousPaper = group.paperId;
+        return { ...body, groupSha256: group.groupSha256 };
+    });
+}
 function validateAssignment(value, pageKey) {
-    exact(value, ['pagePath', 'pageContentSha256', 'status', 'reason', 'decisionArtifactSha256'], `assignment ${pageKey}`);
+    exact(value, ['pagePath', 'pageContentSha256', 'status', 'reason', 'decisionArtifactSha256', 'sourceAuthority'], `assignment ${pageKey}`);
     if (!PAGE_KEY_RE.test(pageKey)) fail('assignment page key is malformed');
     text(value.pagePath, 'assignment pagePath'); assertSha(value.pageContentSha256, 'assignment page content SHA');
     if (!ALL_STATUSES.has(value.status)) fail('assignment status is unsupported');
-    if (value.status === 'verified') fail('verified requires a future authenticated source-authority adapter');
     if (value.status === 'pending') {
-        if (value.reason !== null || value.decisionArtifactSha256 !== null) fail('pending assignment cannot carry a decision');
+        if (value.reason !== null || value.decisionArtifactSha256 !== null || value.sourceAuthority !== null) {
+            fail('pending assignment cannot carry a decision or authority');
+        }
     } else {
         text(value.reason, 'assignment reason', 2000); assertSha(value.decisionArtifactSha256, 'assignment decision SHA');
+        if (value.status === 'verified') validateAuthorityReference(value.sourceAuthority, `assignment ${pageKey} sourceAuthority`);
+        else if (value.sourceAuthority !== null) fail('review-only assignment cannot carry source authority');
     }
     return clone(value);
 }
@@ -573,19 +685,21 @@ function validateCompletion(value, assignments) {
     exact(value, ['total', 'pending', 'needsReview', 'blocked', 'conflict', 'verified', 'status', 'assignmentSetSha256'], 'completion');
     const expected = completionFor(assignments);
     if (stableHash(value) !== stableHash(expected)) fail('completion counts/status drifted');
-    if (value.status === 'complete') fail('complete requires future authenticated verified assignments');
     return clone(value);
 }
 function validateAttempt(value, index, assignments, priorStateSha256) {
     exact(value, ['operationId', 'decisionName', 'decisionFileSha256', 'decisionArtifactSha256', 'pageKey',
-        'fromStatus', 'toStatus', 'reason', 'actorId', 'recordedAt', 'priorStateSha256', 'nextStateSha256'], `attempt[${index}]`);
+        'fromStatus', 'toStatus', 'reason', 'actorId', 'sourceAuthority', 'recordedAt',
+        'priorStateSha256', 'nextStateSha256'], `attempt[${index}]`);
     if (!UUID_RE.test(value.operationId)) fail('attempt operationId must be UUID v4');
     if (!SAFE_JSON_NAME.test(value.decisionName)) fail('attempt decisionName is unsafe');
     for (const field of ['decisionFileSha256', 'decisionArtifactSha256', 'priorStateSha256', 'nextStateSha256']) {
         assertSha(value[field], `attempt ${field}`);
     }
     if (!PAGE_KEY_RE.test(value.pageKey) || !Object.hasOwn(assignments, value.pageKey)) fail('attempt pageKey is unknown');
-    if (value.fromStatus !== 'pending' || !FINAL_REVIEW_STATUSES.has(value.toStatus)) fail('attempt transition is unsupported');
+    if (value.fromStatus !== 'pending' || ![...FINAL_REVIEW_STATUSES, 'verified'].includes(value.toStatus)) fail('attempt transition is unsupported');
+    if (value.toStatus === 'verified') validateAuthorityReference(value.sourceAuthority, `attempt[${index}].sourceAuthority`);
+    else if (value.sourceAuthority !== null) fail('review-only attempt cannot carry source authority');
     text(value.reason, 'attempt reason', 2000); text(value.actorId, 'attempt actorId', 120); timestamp(value.recordedAt, 'attempt recordedAt');
     if (value.priorStateSha256 !== priorStateSha256) fail('attempt SHA history is discontinuous');
     return clone(value);
@@ -603,12 +717,13 @@ function assertCrosswalkState(value) {
     if (!Array.isArray(value.source.papers) || !value.source.papers.length) fail('source papers must be non-empty');
     const papers = value.source.papers.map(item => {
         exact(item, ['pageKey', 'pagePath', 'pageContentSha256', 'pageRecordSha256', 'primaryUrl', 'scope',
-            'cohortDate'], 'source paper');
+            'cohortDate', 'identityHints'], 'source paper');
         if (!PAGE_KEY_RE.test(item.pageKey)) fail('source paper pageId is malformed');
         text(item.pagePath, 'source paper path'); text(item.primaryUrl, 'source paper primary URL');
         assertSha(item.pageContentSha256, 'source paper content SHA');
         assertSha(item.pageRecordSha256, 'source paper record SHA');
         exact(item.scope, ['type', 'key'], 'source paper scope');
+        normalizeIdentityHints(item.identityHints, `source paper ${item.pageKey} identityHints`);
         if (typeof item.cohortDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(item.cohortDate)) {
             fail('source paper cohortDate is invalid');
         }
@@ -623,10 +738,7 @@ function assertCrosswalkState(value) {
             fail('assignment differs from source paper snapshot');
         }
     }
-    if (!Array.isArray(value.identityGroups) || value.identityGroups.length !== 0
-        || assertSha(value.identityGroupsSha256, 'identityGroupsSha256') !== stableHash([])) {
-        fail('identityGroups must remain empty until verified authority is available');
-    }
+    if (!Array.isArray(value.identityGroups)) fail('identityGroups must be an array');
     if (!Array.isArray(value.attempts)) fail('attempts must be an array');
     const replayed = Object.fromEntries(papers.map(paper => [paper.pageKey, initialAssignment(paper)]));
     const operations = new Set(); let previousTime = value.createdAt; let expectedPrior = stateDigest({ contract: CONTRACT, version: VERSION,
@@ -639,18 +751,26 @@ function assertCrosswalkState(value) {
         if (attempt.recordedAt < previousTime) fail('attempt time moves backwards');
         if (replayed[attempt.pageKey].status !== 'pending') fail('attempt repeats a terminal page assignment');
         replayed[attempt.pageKey] = { ...replayed[attempt.pageKey], status: attempt.toStatus, reason: attempt.reason,
-            decisionArtifactSha256: attempt.decisionArtifactSha256 };
+            decisionArtifactSha256: attempt.decisionArtifactSha256, sourceAuthority: clone(attempt.sourceAuthority) };
         const prefix = { contract: CONTRACT, version: VERSION, crosswalkId: value.crosswalkId, createdAt: value.createdAt,
             source: clone(value.source), assignments: clone(replayed), attempts: [...attempts, attempt],
-            completion: completionFor(replayed), identityGroups: [], identityGroupsSha256: stableHash([]) };
+            completion: completionFor(replayed), identityGroups: identityGroupsFor(replayed),
+            identityGroupsSha256: stableHash(identityGroupsFor(replayed)) };
         const digest = stateDigest(prefix);
         if (attempt.nextStateSha256 !== digest) fail('attempt nextStateSha256 does not bind replayed state');
         expectedPrior = digest; previousTime = attempt.recordedAt; operations.add(attempt.operationId); attempts.push(attempt);
     }
     if (stableHash(replayed) !== stableHash(assignments)) fail('assignments do not match append-only attempt history');
     const completion = validateCompletion(value.completion, assignments);
+    const identityGroups = identityGroupsFor(assignments);
+    normalizeIdentityGroups(identityGroups);
+    if (stableHash(value.identityGroups) !== stableHash(identityGroups)
+        || assertSha(value.identityGroupsSha256, 'identityGroupsSha256') !== stableHash(identityGroups)) {
+        fail('identityGroups drifted from verified assignments');
+    }
     const rebuilt = { contract: CONTRACT, version: VERSION, crosswalkId: value.crosswalkId, createdAt: value.createdAt,
-        source: clone(value.source), assignments, attempts, completion, identityGroups: [], identityGroupsSha256: stableHash([]) };
+        source: clone(value.source), assignments, attempts, completion, identityGroups,
+        identityGroupsSha256: stableHash(identityGroups) };
     const digest = stateDigest(rebuilt);
     if (assertSha(value.stateSha256, 'stateSha256') !== digest) fail('crosswalk state SHA drifted');
     if (attempts.length && attempts.at(-1).nextStateSha256 !== digest) fail('last attempt does not bind current state');
@@ -725,10 +845,12 @@ function prepareDirectoryState(directory, expectedState) {
         fail('existing crosswalk prepare directory is unsafe');
     }
     const entries = fs.readdirSync(directory).sort();
-    if (entries.some(name => !['decisions', 'state.json'].includes(name))) {
+    if (entries.some(name => !['decisions', 'state.json', 'final-receipt.json'].includes(name))) {
         fail('existing crosswalk prepare directory contains unknown content');
     }
     const hasDecisions = entries.includes('decisions'); const hasState = entries.includes('state.json');
+    const hasFinalReceipt = entries.includes('final-receipt.json');
+    if (hasFinalReceipt && (!hasState || !hasDecisions)) fail('finalized crosswalk lacks its state or decision evidence directory');
     if (hasDecisions) {
         const decisions = safeDirectory(path.join(directory, 'decisions'));
         if (!hasState && fs.readdirSync(decisions).length) {
@@ -745,6 +867,16 @@ function prepareDirectoryState(directory, expectedState) {
     }
     if (!hasDecisions && existing.attempts.length) {
         fail('crosswalk prepare state has attempts but no decision evidence directory');
+    }
+    if (hasFinalReceipt) {
+        if (existing.completion.status !== 'complete') fail('final receipt cannot accompany an incomplete crosswalk');
+        const loadedReceipt = readRegular(path.join(directory, 'final-receipt.json'), MAX_RECEIPT_BYTES,
+            'crosswalk prepare final receipt');
+        const receipt = normalizeFinalReceipt(loadedReceipt.value);
+        if (!loadedReceipt.bytes.equals(prettyBytes(receipt))
+            || stableHash(receipt) !== stableHash(finalReceiptFor(existing))) {
+            fail('crosswalk prepare final receipt does not bind the existing state');
+        }
     }
     return { hasDecisions, state: existing, complete: hasDecisions };
 }
@@ -829,7 +961,8 @@ function readCrosswalk({ crosswalkRoot, crosswalkId } = {}) {
             || artifact.pagePath !== state.assignments[attempt.pageKey].pagePath
             || artifact.pageContentSha256 !== state.assignments[attempt.pageKey].pageContentSha256
             || artifact.actorId !== attempt.actorId || artifact.result.status !== attempt.toStatus
-            || artifact.result.reason !== attempt.reason) {
+            || artifact.result.reason !== attempt.reason
+            || stableHash(artifact.sourceAuthority) !== stableHash(attempt.sourceAuthority)) {
             fail(`decision artifact replay drifted for attempt[${index}]`);
         }
     }
@@ -839,7 +972,7 @@ function readCrosswalk({ crosswalkRoot, crosswalkId } = {}) {
 function decisionDigest(value) { const body = clone(value); delete body.artifactSha256; return stableHash(body); }
 function normalizeDecisionArtifact(value) {
     exact(value, ['contract', 'version', 'crosswalkId', 'operationId', 'expectedStateSha256', 'pageKey',
-        'pagePath', 'pageContentSha256', 'actorId', 'result', 'createdAt', 'artifactSha256'], 'decision artifact');
+        'pagePath', 'pageContentSha256', 'actorId', 'result', 'sourceAuthority', 'createdAt', 'artifactSha256'], 'decision artifact');
     if (value.contract !== DECISION_CONTRACT || value.version !== VERSION || !UUID_RE.test(value.crosswalkId)
         || !UUID_RE.test(value.operationId)) fail('decision contract/version/UUID is invalid');
     assertSha(value.expectedStateSha256, 'decision expectedStateSha256');
@@ -847,19 +980,51 @@ function normalizeDecisionArtifact(value) {
     text(value.pagePath, 'decision pagePath'); assertSha(value.pageContentSha256, 'decision page content SHA');
     text(value.actorId, 'decision actorId', 120); timestamp(value.createdAt, 'decision createdAt');
     exact(value.result, ['status', 'reason'], 'decision result');
-    if (value.result.status === 'verified') fail('verified decisions require a future authenticated source-authority adapter');
-    if (!FINAL_REVIEW_STATUSES.has(value.result.status)) fail('decision status must be needs-review, blocked, or conflict');
+    if (![...FINAL_REVIEW_STATUSES, 'verified'].includes(value.result.status)) fail('decision status is unsupported');
+    if (value.result.status === 'verified') validateAuthorityReference(value.sourceAuthority, 'decision sourceAuthority');
+    else if (value.sourceAuthority !== null) fail('review-only decision cannot carry source authority');
     text(value.result.reason, 'decision reason', 2000);
     if (assertSha(value.artifactSha256, 'decision artifactSha256') !== decisionDigest(value)) fail('decision artifact self-SHA drifted');
     return clone(value);
 }
 function buildDecisionArtifact({ state, pageKey, operationId = crypto.randomUUID(), actorId, status, reason, now } = {}) {
+    if (status === 'verified') fail('verified decision requires an authenticated paper source authority handle');
     const checked = assertCrosswalkState(state);
     if (!Object.hasOwn(checked.assignments, pageKey)) fail('decision pageKey is absent from crosswalk');
     const assignment = checked.assignments[pageKey];
     const body = { contract: DECISION_CONTRACT, version: VERSION, crosswalkId: checked.crosswalkId,
         operationId, expectedStateSha256: checked.stateSha256, pageKey, pagePath: assignment.pagePath,
-        pageContentSha256: assignment.pageContentSha256, actorId, result: { status, reason }, createdAt: nowIso(now) };
+        pageContentSha256: assignment.pageContentSha256, actorId, result: { status, reason },
+        sourceAuthority: null, createdAt: nowIso(now) };
+    return normalizeDecisionArtifact({ ...body, artifactSha256: stableHash(body) });
+}
+function buildVerifiedDecisionArtifact({ state, pageKey, authorityHandle, operationId = crypto.randomUUID(),
+    actorId, reason = 'Authenticated paper source authority exactly matches an explicit page identity hint.', now } = {}) {
+    const checked = assertCrosswalkState(state);
+    if (!Object.hasOwn(checked.assignments, pageKey)) fail('verified decision pageKey is absent from crosswalk');
+    let snapshot;
+    try { snapshot = authorityApi.authorityHandleSnapshot(authorityHandle); }
+    catch (error) { fail(`verified decision requires authenticated source authority: ${error.message}`); }
+    if (snapshot.productionAuthorized !== true) {
+        fail('verified decision requires a production-authorized paper source authority');
+    }
+    const identity = snapshot.authority.identity;
+    const expectedHint = identity.kind === 'arxiv'
+        ? { scheme: 'arxiv', value: identity.arxivId }
+        : { scheme: identity.externalId.scheme, value: identity.externalId.value };
+    const paper = checked.source.papers.find(item => item.pageKey === pageKey);
+    if (paper.identityHints.status !== 'single') {
+        fail('verified authority requires a single unambiguous page identity hint; conflict/multiple requires separate resolution authority');
+    }
+    const matches = paper.identityHints.candidates.filter(candidate => candidate.scheme === expectedHint.scheme
+        && candidate.value === expectedHint.value
+        && candidate.sources.every(source => !/(?:^|:)title(?:$|:)/i.test(source)));
+    if (matches.length !== 1) fail('verified authority must match one explicit non-title page identity hint');
+    const assignment = checked.assignments[pageKey]; const sourceAuthority = authorityReference(snapshot);
+    const body = { contract: DECISION_CONTRACT, version: VERSION, crosswalkId: checked.crosswalkId,
+        operationId, expectedStateSha256: checked.stateSha256, pageKey, pagePath: assignment.pagePath,
+        pageContentSha256: assignment.pageContentSha256, actorId, result: { status: 'verified', reason },
+        sourceAuthority, createdAt: nowIso(now) };
     return normalizeDecisionArtifact({ ...body, artifactSha256: stableHash(body) });
 }
 function writeDecisionArtifact({ crosswalkRoot, crosswalkId, decisionName, artifact } = {}) {
@@ -872,17 +1037,33 @@ function writeDecisionArtifact({ crosswalkRoot, crosswalkId, decisionName, artif
     catch (error) { if (error instanceof PageSourceCrosswalkError) throw error; fail(`could not preserve decision: ${error.message}`); }
     return filename;
 }
-function loadDecisionHandle(filename) {
+function loadDecisionHandle(filename, { authorityHandle = null } = {}) {
     const loaded = readRegular(filename, MAX_DECISION_BYTES, 'crosswalk decision');
     const artifact = normalizeDecisionArtifact(loaded.value);
     if (!loaded.bytes.equals(prettyBytes(artifact))) fail('decision artifact bytes are not canonical');
+    let authorityAuthenticated = false;
+    if (artifact.result.status === 'verified') {
+        let snapshot;
+        try { snapshot = authorityApi.authorityHandleSnapshot(authorityHandle); }
+        catch (error) { fail(`verified decision requires authenticated source authority: ${error.message}`); }
+        if (stableHash(artifact.sourceAuthority) !== stableHash(authorityReference(snapshot))) {
+            fail('verified decision authority differs from authenticated authority handle');
+        }
+        if (snapshot.productionAuthorized !== true) {
+            fail('verified decision authority is not production-authorized');
+        }
+        authorityAuthenticated = true;
+    } else if (authorityHandle !== null) fail('review-only decision must not receive source authority');
     const handle = Object.freeze(Object.create(null)); DECISION_HANDLES.add(handle);
-    DECISION_HANDLE_DATA.set(handle, Object.freeze({ artifact, filename: fs.realpathSync(filename), fileSha256: loaded.sha256 }));
+    DECISION_HANDLE_DATA.set(handle, Object.freeze({ artifact, filename: fs.realpathSync(filename),
+        fileSha256: loaded.sha256, fileDev: loaded.dev, fileIno: loaded.ino,
+        authorityAuthenticated, authorityHandle }));
     return handle;
 }
 function decisionHandleSnapshot(handle) {
     if (!handle || typeof handle !== 'object' || !DECISION_HANDLES.has(handle)) fail('authenticated decision handle required');
-    return clone(DECISION_HANDLE_DATA.get(handle));
+    const { authorityHandle: _authorityHandle, ...snapshot } = DECISION_HANDLE_DATA.get(handle);
+    return clone(snapshot);
 }
 function lockOwnerRecord(owner, now, token = crypto.randomUUID()) {
     if (typeof owner !== 'string' || !OWNER_RE.test(owner)) fail('owner is malformed');
@@ -1023,12 +1204,36 @@ function releaseLock(handle) {
 }
 function applyDecision({ crosswalkRoot, crosswalkId, decisionHandle, owner, now } = {}) {
     const directory = crosswalkDirectory(crosswalkRoot, crosswalkId);
+    if (!decisionHandle || typeof decisionHandle !== 'object' || !DECISION_HANDLES.has(decisionHandle)) {
+        fail('authenticated decision handle required');
+    }
+    const originalDecision = DECISION_HANDLE_DATA.get(decisionHandle);
     const decision = decisionHandleSnapshot(decisionHandle);
     const expectedDirectory = fs.realpathSync(path.join(directory, 'decisions'));
     if (path.dirname(decision.filename) !== expectedDirectory) fail('decision handle is outside this crosswalk decision directory');
     const lock = acquireLock(directory, owner, now);
     try {
+        let replayedAuthorityHandle = null;
+        if (originalDecision.authorityAuthenticated) {
+            try {
+                replayedAuthorityHandle = authorityApi.replayAuthorityHandle(originalDecision.authorityHandle,
+                    { requireProduction: true });
+            } catch (error) {
+                fail(`verified decision authority replay failed while locked: ${error.message}`);
+            }
+        }
+        const currentDecisionHandle = loadDecisionHandle(originalDecision.filename,
+            { authorityHandle: replayedAuthorityHandle });
+        const currentDecision = DECISION_HANDLE_DATA.get(currentDecisionHandle);
+        if (currentDecision.fileDev !== originalDecision.fileDev || currentDecision.fileIno !== originalDecision.fileIno
+            || currentDecision.fileSha256 !== originalDecision.fileSha256
+            || stableHash(currentDecision.artifact) !== stableHash(originalDecision.artifact)) {
+            fail('decision file changed after its handle was loaded');
+        }
         const state = readCrosswalk({ crosswalkRoot, crosswalkId }); const artifact = decision.artifact;
+        if (artifact.result.status === 'verified' && decision.authorityAuthenticated !== true) {
+            fail('verified decision handle lacks authenticated source authority');
+        }
         if (artifact.crosswalkId !== crosswalkId) fail('decision belongs to another crosswalk');
         const prior = state.attempts.find(item => item.operationId === artifact.operationId);
         if (prior) {
@@ -1047,13 +1252,17 @@ function applyDecision({ crosswalkRoot, crosswalkId, decisionHandle, owner, now 
         if (artifact.createdAt > recordedAt) fail('decision artifact cannot be recorded before it was created');
         const next = clone(state);
         next.assignments[artifact.pageKey] = { ...current, status: artifact.result.status,
-            reason: artifact.result.reason, decisionArtifactSha256: artifact.artifactSha256 };
+            reason: artifact.result.reason, decisionArtifactSha256: artifact.artifactSha256,
+            sourceAuthority: clone(artifact.sourceAuthority) };
         const attempt = { operationId: artifact.operationId, decisionName: path.basename(decision.filename),
             decisionFileSha256: decision.fileSha256, decisionArtifactSha256: artifact.artifactSha256,
             pageKey: artifact.pageKey, fromStatus: 'pending', toStatus: artifact.result.status,
-            reason: artifact.result.reason, actorId: artifact.actorId, recordedAt,
+            reason: artifact.result.reason, actorId: artifact.actorId,
+            sourceAuthority: clone(artifact.sourceAuthority), recordedAt,
             priorStateSha256: state.stateSha256, nextStateSha256: '' };
         next.attempts.push(attempt); next.completion = completionFor(next.assignments);
+        next.identityGroups = identityGroupsFor(next.assignments);
+        next.identityGroupsSha256 = stableHash(next.identityGroups);
         next.stateSha256 = stateDigest(next); attempt.nextStateSha256 = next.stateSha256;
         const checked = assertCrosswalkState(next);
         replaceState(path.join(directory, 'state.json'), prettyBytes(checked));
@@ -1065,20 +1274,106 @@ function applyDecisionFile({ crosswalkRoot, crosswalkId, decisionName, owner, no
     const filename = safeDirectJson(path.join(directory, 'decisions'), decisionName);
     return applyDecision({ crosswalkRoot, crosswalkId, decisionHandle: loadDecisionHandle(filename), owner, now });
 }
-function finalizeCrosswalk({ crosswalkRoot, crosswalkId } = {}) {
-    const state = readCrosswalk({ crosswalkRoot, crosswalkId });
-    if (state.completion.status !== 'complete' || state.completion.verified !== state.completion.total) {
-        fail('finalize requires every paper to have authenticated verified source authority; current adapter is unavailable');
+function finalReceiptFor(state) {
+    const body = { contract: FINAL_RECEIPT_CONTRACT, version: VERSION, crosswalkId: state.crosswalkId,
+        stateSha256: state.stateSha256, stateFileSha256: sha256(prettyBytes(state)),
+        ledgerSha256: state.source.ledgerSha256, ledgerFileSha256: state.source.ledgerFileSha256,
+        historicalReceiptSha256: state.source.receiptSha256,
+        verifiedAssignmentSetSha256: state.completion.assignmentSetSha256,
+        identityGroups: clone(state.identityGroups), identityGroupsSha256: state.identityGroupsSha256,
+        verified: state.completion.verified, total: state.completion.total };
+    return { ...body, receiptSha256: stableHash(body) };
+}
+function normalizeFinalReceipt(value) {
+    exact(value, ['contract', 'version', 'crosswalkId', 'stateSha256', 'stateFileSha256', 'ledgerSha256',
+        'ledgerFileSha256', 'historicalReceiptSha256', 'verifiedAssignmentSetSha256', 'identityGroups',
+        'identityGroupsSha256', 'verified', 'total', 'receiptSha256'], 'crosswalk final receipt');
+    if (value.contract !== FINAL_RECEIPT_CONTRACT || value.version !== VERSION || !UUID_RE.test(value.crosswalkId)) {
+        fail('crosswalk final receipt contract/version/UUID is invalid');
     }
-    fail('authenticated source-authority finalize adapter is unavailable');
+    for (const field of ['stateSha256', 'stateFileSha256', 'ledgerSha256', 'ledgerFileSha256',
+        'historicalReceiptSha256', 'verifiedAssignmentSetSha256', 'identityGroupsSha256']) {
+        assertSha(value[field], `crosswalk final receipt ${field}`);
+    }
+    if (!Number.isSafeInteger(value.verified) || !Number.isSafeInteger(value.total)
+        || value.verified < 1 || value.verified !== value.total) fail('crosswalk final receipt counts are invalid');
+    const identityGroups = normalizeIdentityGroups(value.identityGroups, 'crosswalk final receipt identityGroups');
+    if (stableHash(identityGroups) !== value.identityGroupsSha256
+        || identityGroups.reduce((count, group) => count + group.pageKeys.length, 0) !== value.total) {
+        fail('crosswalk final receipt identity groups drifted');
+    }
+    const body = clone(value); delete body.receiptSha256;
+    if (assertSha(value.receiptSha256, 'crosswalk final receipt receiptSha256') !== stableHash(body)) {
+        fail('crosswalk final receipt self-SHA drifted');
+    }
+    return { ...clone(value), identityGroups };
+}
+function replaySourceAuthorities(state, authorityRoot, authorityResolver) {
+    for (const assignment of Object.values(state.assignments)) {
+        const reference = validateAuthorityReference(assignment.sourceAuthority);
+        let handle;
+        try {
+            handle = authorityResolver
+                ? authorityResolver(clone(reference))
+                : authorityApi.loadAuthorityHandle({ authorityRoot, authorityName: reference.authorityName });
+            const replayed = authorityApi.replayAuthorityHandle(handle, { requireProduction: true });
+            const snapshot = authorityApi.authorityHandleSnapshot(replayed);
+            if (stableHash(reference) !== stableHash(authorityReference(snapshot))) {
+                fail('finalize source authority differs from verified assignment');
+            }
+        } catch (error) {
+            if (error instanceof PageSourceCrosswalkError) throw error;
+            fail(`finalize could not replay source authority: ${error.message}`);
+        }
+    }
+}
+function readFinalReceipt({ crosswalkRoot, crosswalkId, authorityRoot, authorityResolver = null } = {}) {
+    const state = readCrosswalk({ crosswalkRoot, crosswalkId });
+    const directory = crosswalkDirectory(crosswalkRoot, crosswalkId);
+    const receiptFile = safeDirectJson(directory, 'final-receipt.json');
+    const loaded = readRegular(receiptFile, MAX_RECEIPT_BYTES, 'crosswalk final receipt');
+    const receipt = normalizeFinalReceipt(loaded.value); const expected = finalReceiptFor(state);
+    if (!loaded.bytes.equals(prettyBytes(receipt)) || stableHash(receipt) !== stableHash(expected)) {
+        fail('crosswalk final receipt does not bind the current complete state');
+    }
+    replaySourceAuthorities(state, authorityRoot, authorityResolver);
+    return { state, receipt, receiptFile, receiptFileSha256: loaded.sha256 };
+}
+function finalizeCrosswalk({ crosswalkRoot, crosswalkId, authorityRoot, authorityResolver = null, now } = {}) {
+    const directory = crosswalkDirectory(crosswalkRoot, crosswalkId);
+    const lock = acquireLock(directory, 'crosswalk.finalize', now);
+    try {
+        const state = readCrosswalk({ crosswalkRoot, crosswalkId });
+        if (state.completion.status !== 'complete' || state.completion.verified !== state.completion.total) {
+            fail('finalize requires every paper to have authenticated verified source authority');
+        }
+        replaySourceAuthorities(state, authorityRoot, authorityResolver);
+        const receipt = finalReceiptFor(state);
+        const receiptFile = safeDirectJson(directory, 'final-receipt.json', { mustExist: false });
+        try { writeExclusive(receiptFile, prettyBytes(receipt)); }
+        catch (error) {
+            if (error.code !== 'EEXIST') throw error;
+        }
+        const current = readCrosswalk({ crosswalkRoot, crosswalkId });
+        if (current.stateSha256 !== state.stateSha256) fail('crosswalk state changed while finalizing');
+        replaySourceAuthorities(current, authorityRoot, authorityResolver);
+        return readFinalReceipt({ crosswalkRoot, crosswalkId, authorityRoot, authorityResolver });
+    } finally {
+        releaseLock(lock);
+    }
 }
 
 module.exports = {
     LEDGER_CONTRACT, LEDGER_RECEIPT_CONTRACT, CONTRACT, DECISION_CONTRACT, LOCK_OWNER_CONTRACT,
+    FINAL_RECEIPT_CONTRACT,
     VERSION, UUID_RE, SAFE_JSON_NAME, LOCK_STALE_MS,
     PageSourceCrosswalkError, stableHash, prettyBytes, safeDirectory, safeDirectJson,
     validateHistoricalLedger, validateHistoricalReceipt, loadHistoricalInventoryHandle, inventoryHandleSnapshot,
-    assignmentKey, sourceBinding, completionFor, assertCrosswalkState, buildInitialState, prepareCrosswalk,
-    readCrosswalk, normalizeDecisionArtifact, buildDecisionArtifact, writeDecisionArtifact, loadDecisionHandle,
-    decisionHandleSnapshot, acquireLock, releaseLock, applyDecision, applyDecisionFile, finalizeCrosswalk
+    assignmentKey, sourceBinding, completionFor, identityGroupsFor, normalizeIdentityGroups,
+    assertCrosswalkState, buildInitialState,
+    crosswalkDirectory, prepareCrosswalk,
+    readCrosswalk, normalizeDecisionArtifact, buildDecisionArtifact, buildVerifiedDecisionArtifact,
+    writeDecisionArtifact, loadDecisionHandle,
+    decisionHandleSnapshot, acquireLock, releaseLock, applyDecision, applyDecisionFile,
+    normalizeFinalReceipt, readFinalReceipt, finalizeCrosswalk
 };

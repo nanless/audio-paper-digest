@@ -64,6 +64,10 @@ describe('config', () => {
         assert.strictEqual(Config.FILTER_CONFIG.temperature, 0.3);
         assert.strictEqual(Config.FILTER_CONFIG.keywordPrefilterEnabled, true);
         assert.strictEqual(Config.FILTER_CONFIG.decisionContractVersion, 3);
+        assert.strictEqual(Config.FILTER_CONFIG.conferenceTimeoutMs, 60000);
+        assert.strictEqual(Config.FILTER_CONFIG.conferenceMaxTokens, 1200);
+        assert.strictEqual(Config.FILTER_CONFIG.conferenceMaxResponseBytes, 2 * 1024 * 1024);
+        assert.strictEqual(Config.FILTER_CONFIG.conferenceTemperature, 0);
         assert.strictEqual(Config.ARXIV_CONFIG.maxResultsPerCategory, 100);
         assert.strictEqual(Config.ARXIV_CONFIG.fetchMaxRetries, 5);
         assert.strictEqual(Config.ARXIV_CONFIG.fetchRetryBaseDelayMs, 5000);

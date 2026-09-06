@@ -182,7 +182,8 @@ function productionFixture(t) {
     const filterId = '11111111-1111-4111-8111-111111111111';
     let state = filterApi.prepareFilter({ filterRoot: filters, discoveryHandle, filterId, now: NOW,
         spec: { contract: filterApi.SPEC_CONTRACT, version: filterApi.VERSION, filterPolicySha256: sha('policy'), promptSha256: sha('prompt'),
-            model: 'fixture', endpointProtocol: 'openai-responses', taxonomyRegistrySha256: sha('taxonomy') } });
+            model: 'fixture', endpointProtocol: 'openai-responses', endpointIdentitySha256: sha('endpoint'),
+            taxonomyRegistrySha256: sha('taxonomy') } });
     for (const [index, value] of ['100', '200'].entries()) {
         const paperId = pid(value); const status = value === '100' ? 'included' : 'excluded';
         const artifact = filterApi.buildDecisionArtifact({ state, paperId,

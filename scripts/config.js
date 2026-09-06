@@ -89,7 +89,13 @@ const FILTER_CONFIG = {
     temperature: 0.3,
     maxTokens: 1000,
     decisionContractVersion: 3,
-    keywordPrefilterEnabled: true
+    keywordPrefilterEnabled: true,
+    conferenceTimeoutMs: 60000,
+    conferenceMaxTokens: 1200,
+    conferenceMaxResponseBytes: 2 * 1024 * 1024,
+    conferenceTemperature: 0,
+    conferenceMaxAttempts: 3,
+    conferenceRetryBackoffMs: 5 * 60 * 1000
 };
 
 // ═══════════════════════════════════════════════════════
@@ -183,6 +189,7 @@ const FILES = {
     conferenceExecutionsDir: path.join(DATA_DIR, 'runtime', 'conference-executions'),
     historicalPageInventoryDir: path.join(DATA_DIR, 'runtime', 'historical-page-inventories'),
     pageSourceCrosswalkDir: path.join(DATA_DIR, 'runtime', 'page-source-crosswalks'),
+    paperSourceAuthorityDir: path.join(DATA_DIR, 'runtime', 'paper-source-authorities'),
     apiReaderAttemptsDir: path.join(DATA_DIR, 'runtime', 'reader-attempts'),
     papers: path.join(CURRENT_DIR, 'papers.json'),
     papersLegacy: path.join(DATA_DIR, 'papers.json'),

@@ -53,7 +53,7 @@ function completeFilter(root, discoveryHandle) {
     let state = filter.prepareFilter({ filterRoot, discoveryHandle,
         spec: { contract: filter.SPEC_CONTRACT, version: filter.VERSION, filterPolicySha256: h('policy'),
             promptSha256: h('prompt'), model: 'fixture-model', endpointProtocol: 'openai-responses',
-            taxonomyRegistrySha256: h('taxonomy') }, filterId, now: stamp });
+            endpointIdentitySha256: h('endpoint'), taxonomyRegistrySha256: h('taxonomy') }, filterId, now: stamp });
     for (const [index, value] of ['100', '200', '300'].entries()) {
         const paperId = pid(value);
         const status = value === '300' ? 'excluded' : 'included';
