@@ -94,8 +94,10 @@ function withFreshAnalysisContext(identity, callback) {
     for (const expectation of Object.values(checked.sourceExpectations)) Object.freeze(expectation);
     Object.freeze(checked.sourceExpectations);
     const { withLlmUsageContext } = require('./llm-usage.js');
-    return scope.run(Object.freeze({ ...checked, refreshReaderDiagnostics: identity.refreshReaderDiagnostics === true,
-        pendingSources: new Map() }),
+    const context = Object.freeze({ ...checked,
+        refreshReaderDiagnostics: identity.refreshReaderDiagnostics === true,
+        pendingSources: new Map() });
+    return scope.run(context,
         () => withLlmUsageContext({ runId: checked.runId }, callback));
 }
 

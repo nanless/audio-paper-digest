@@ -125,7 +125,6 @@ function writeImmutableJson(filename, value) {
     finally { fs.closeSync(fd); }
     return sha256(bytes);
 }
-
 function metadataOnly(paper) {
     const id = paperId(paper);
     if (typeof paper.title !== 'string' || !paper.title.trim()
@@ -383,14 +382,17 @@ async function analyzeRewrite(options, overrides = {}) {
             assertFreshProvenance(paper, loaded.run, sources.records[paperId(paper)]);
             return true;
         };
-        updateRun(loaded, current => ({ status: 'analyzing', analysisStartedAt: current.analysisStartedAt || deps.now(),
-            diagnostics: { ...(current.diagnostics || {}),
-                analysisInvocations: (current.diagnostics?.analysisInvocations || 0) + 1 } }), deps);
         let fatal = null;
         try {
             await deps.withFreshAnalysisContext({ runId: loaded.run.runId, runDir: loaded.runDir,
                 sourceExpectations: loaded.run.sourceExpectations,
-                refreshReaderDiagnostics: options.refreshReaderDiagnostics === true }, () => deps.analyzeBatch(selectedPapers, {
+                refreshReaderDiagnostics: options.refreshReaderDiagnostics === true
+            }, () => {
+                updateRun(loaded, current => ({ status: 'analyzing',
+                    analysisStartedAt: current.analysisStartedAt || deps.now(),
+                    diagnostics: { ...(current.diagnostics || {}),
+                        analysisInvocations: (current.diagnostics?.analysisInvocations || 0) + 1 } }), deps);
+                return deps.analyzeBatch(selectedPapers, {
                 concurrency: options.concurrency || deps.defaultAnalysisConcurrency,
                 maxRetries: deps.maxRetries, checkpointFilePath: analysisPath, saveInterval: 0,
                 onAttempt: (attempt, maxRetries, paper) => {
@@ -428,7 +430,8 @@ async function analyzeRewrite(options, overrides = {}) {
                         return { ...current, papers, status: 'running', updatedAt: deps.now() };
                     });
                 }
-            }));
+                });
+            });
         } catch (error) { fatal = error; }
         const final = deps.updateJsonFileLocked(analysisPath, current => {
             assertAnalysisEnvelope(current, loaded.run, loaded.inputs);
