@@ -55,6 +55,8 @@ function getLayout(projectRoot = PROJECT_ROOT) {
         { key: 'conference-runs', root: path.join(runtime, 'conference-runs') },
         { key: 'conference-executions', root: path.join(runtime, 'conference-executions') },
         { key: 'conference-analysis-executions', root: path.join(runtime, 'conference-analysis-executions') },
+        { key: 'conference-page-staging', root: path.join(runtime, 'conference-page-staging') },
+        { key: 'conference-aggregates', root: path.join(runtime, 'conference-aggregates') },
         { key: 'historical-page-inventories', root: path.join(runtime, 'historical-page-inventories') },
         { key: 'page-source-crosswalks', root: path.join(runtime, 'page-source-crosswalks') },
         { key: 'historical-arxiv-batches', root: path.join(runtime, 'historical-arxiv-batches') },
@@ -63,6 +65,7 @@ function getLayout(projectRoot = PROJECT_ROOT) {
         { key: 'historical-taxonomy-assignments', root: path.join(runtime, 'historical-taxonomy-assignments') },
         { key: 'historical-page-staging', root: path.join(runtime, 'historical-page-staging') },
         { key: 'historical-daily-aggregates', root: path.join(runtime, 'historical-daily-aggregates') },
+        { key: 'historical-publications', root: path.join(runtime, 'historical-publications') },
         // Official arXiv source bundles are crosswalk inputs and must remain
         // replayable for final-receipt verification; automatic prune has no authority here.
         { key: 'paper-source-authorities', root: path.join(runtime, 'paper-source-authorities') }

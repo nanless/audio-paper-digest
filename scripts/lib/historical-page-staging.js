@@ -209,15 +209,33 @@ function defaultRender(packet) {
     return parsed;
 }
 
-function writeExact(filename, bytes) {
-    fresh.assertSafeDirectory(path.dirname(filename), true); const payload = Buffer.from(bytes); let fd;
-    try { fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-        fs.writeFileSync(fd, payload); fs.fsyncSync(fd); }
+function writeExact(filename, bytes, dependencies = {}) {
+    fresh.assertSafeDirectory(path.dirname(filename), true); const payload = Buffer.from(bytes); const io = dependencies.io || fs;
+    let fd; let created = null; let completed = false;
+    try {
+        fd = io.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+        created = fs.fstatSync(fd, { bigint: true }); let offset = 0;
+        while (offset < payload.length) {
+            const written = io.writeSync(fd, payload, offset, payload.length - offset, offset);
+            if (!Number.isSafeInteger(written) || written <= 0 || written > payload.length - offset) throw new Error(`Short staging write: ${filename}`);
+            offset += written;
+        }
+        io.fsyncSync(fd); completed = true;
+    }
     catch (error) {
         if (error.code !== 'EEXIST') throw error;
         if (!readRegular(filename, 64 * 1024 * 1024, 'existing staging file').bytes.equals(payload)) throw new Error(`Refuses to overwrite staging bytes: ${filename}`);
     }
-    finally { if (fd !== undefined) fs.closeSync(fd); }
+    finally {
+        if (fd !== undefined) io.closeSync(fd);
+        if (!completed && created) {
+            try { const named = fs.lstatSync(filename, { bigint: true });
+                if (named.isFile() && !named.isSymbolicLink() && named.nlink === 1n
+                    && named.dev === created.dev && named.ino === created.ino) fs.unlinkSync(filename); }
+            catch (cleanupError) { if (cleanupError.code !== 'ENOENT') throw cleanupError; }
+        }
+    }
+    if (!readRegular(filename, 64 * 1024 * 1024, 'written staging file').bytes.equals(payload)) throw new Error(`Staging write verification failed: ${filename}`);
     return sha256(payload);
 }
 

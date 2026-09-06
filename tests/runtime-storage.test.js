@@ -25,11 +25,13 @@ const CONFERENCE_PROTECTED_KEYS = [
     'conference-sources',
     'conference-runs',
     'conference-executions',
-    'conference-analysis-executions'
+    'conference-analysis-executions',
+    'conference-page-staging',
+    'conference-aggregates'
 ];
 const HISTORY_PROTECTED_KEYS = ['historical-page-inventories', 'page-source-crosswalks',
     'historical-arxiv-batches', 'historical-analysis-schedulers', 'historical-postprocess-schedulers', 'historical-taxonomy-assignments',
-    'historical-page-staging', 'historical-daily-aggregates', 'paper-source-authorities'];
+    'historical-page-staging', 'historical-daily-aggregates', 'historical-publications', 'paper-source-authorities'];
 
 const NOW_MS = Date.parse('2026-09-02T00:00:00.000Z');
 const OLD_MS = NOW_MS - 40 * 24 * 60 * 60 * 1000;

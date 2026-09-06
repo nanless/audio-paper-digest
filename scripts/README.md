@@ -43,7 +43,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `full-fetch.js` | Node 入口 | 默认数据总编排：归档、抓取、筛选、去重、深度分析和增量落盘。 |
 | `fetch-papers.js` | Node 模块/入口 | arXiv 抓取、摘要补全、关键词预筛和逐篇 LLM 筛选。 |
 | `fetch-huggingface-papers.js` | Node 模块/入口 | 通过最小环境中的 `curl` 抓取 HuggingFace Papers。 |
-| `deep-analyzer.js` | Node 核心 | 单篇全文获取、多阶段分析、评分审计、API reader 长文和图片计划。 |
+| `deep-analyzer.js` | Node 核心 | 单篇全文获取、多阶段分析、评分审计、API reader 长文和图片计划；结构修复后以 source-only 证据封口 `core-summary-detailed-v3`，并用显式阶段 DAG、SHA 投影和 stale snapshot 减少安全恢复时的整篇返工。 |
 | `analysis-engine.js` | Node 共享 | 论文锁、重试、checkpoint、批量并发、canonical 合并与终态判断。 |
 | `analysis-contract.js` | Node 共享 | API 分析结构、评分、方法/表格门禁及历史 Manual 兼容校验。 |
 | `editorial-quality.js` | Node 共享 | API/Manual 共用的读者可见文风、事实、评分与可读性门禁。 |
@@ -55,6 +55,8 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/historical-page-staging.js` | Node 库 | 将完成 canonical 与新 taxonomy 投影到 crosswalk 保留的单篇路径；同一论文的重复历史页面共用新分析，输出隔离 staging run 与逐页 SHA。 |
 | `lib/historical-daily-aggregate.js` | Node 库 | 完整重放并合并多份 per-paper staging、crosswalk/inventory 与新 canonical/taxonomy，按稳定次序重建每日汇总 staging manifest；旧汇总正文从不进入输入。 |
 | `lib/historical-postprocess-scheduler.js` | Node 库 | 从 sealed-complete 历史 analysis scheduler 确定性执行重标、单篇 staging 与完整日期 daily aggregate；checkpoint 绑定逐项 SHA，最多并发 3，不写博客仓库。 |
+| `lib/conference-postprocess.js` | Node 库 | 只接受 authenticated conference plan handle，逐篇重放 plan/source/completion/current taxonomy 与页面渲染；单篇目录同时绑定 registry 与 renderer/projection 实现指纹，代码升级不会覆盖旧 staging；仅在 execution 精确覆盖完整 selected member set 时生成隔离会议汇总。 |
+| `lib/historical-publication.js` | Node 库 | 重放 page/daily producer 权威链，冻结 clean-main/remote/Hugo/baseline 与批次 DAG，并先生成不可变私有 bundle；本阶段不写博客、不 review、不 commit/push。 |
 | `lib/keyword-prefilter.js` | Node 库 | 版本化高召回音频关键词预筛。 |
 | `lib/reader-repair.js` | Node 库 | Reader 候选缓存、节点 SHA 与受限 patch、局部诊断及无进展检测；候选不构成 production proof。 |
 | `lib/reader-operator-patch.js` | Node 库 | 显式应用同 fresh run 的人工局部补丁；严格来源/节点 SHA 与完整 Reader parser，保存 failed 候选并保留预算、原始字节归档和重入审计，不签发成功正文。 |
@@ -77,7 +79,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/conference-importer.js` | Node 库 | 从认证 staging handle 安全导入会议 metadata/PDF/派生工件到私有 cache，并生成 ledger/import receipt；低层 manifest helper 只供隔离测试。 |
 | `lib/conference-execution.js` | Node 库 | 仅从认证 plan handle 创建隔离 execution，持久化不可变 authority receipt；每次读取/推进都重放 plan authority，以锁、CAS 和受控 patch 持久化，completion proof 上线前不接受完成态。 |
 | `lib/conference-analysis-context.js` | Node 库 | 将已认证会议 execution 的单篇来源封装为进程内 opaque 分析上下文；固定 Reader 尝试目录并拒绝 arXiv 身份、跨 execution 路径和伪造来源能力。 |
-| `lib/conference-analysis-adapter.js` | Node 库 | 重放完整会议 plan/source authority 后复用公共深度分析引擎，隔离保存 canonical、逐阶段 checkpoint 与完成 receipt，并以文件 SHA/CAS 恢复崩溃窗口。 |
+| `lib/conference-analysis-adapter.js` | Node 库 | 重放完整会议 plan/source authority 后复用公共深度分析引擎；prepare 先写不可变 intent，再以原子文件和精确前缀恢复保存 canonical、逐阶段 checkpoint 与完成 receipt。旧版缺少 prepare intent 的 execution 不会静默迁移，必须用同一 authenticated plan 新建 execution UUID。 |
 | `lib/conference-discovery.js` | Node 库 | 从 ICASSP/ICLR/ICML 元数据快照与本机 PDF 目录生成只读候选 catalog 和匹配报告；标题匹配永不直接 verified。 |
 | `lib/conference-source-context.js` | Node 库 | 生产入口仅从 opaque plan handle 重放完整上游证明与会议全文；不导出 ledger/run 测试捷径。 |
 | `lib/conference-filter.js` | Node 库 | 冻结会议 catalog/Prompt/model/endpoint/taxonomy 指纹，以 durable intent→transport receipt→decision→CAS 管理决定；生产 signer 固定公共 LLM 路由，不接受 transport 注入，并以安全 stale lock 保证单飞恢复。 |
@@ -116,11 +118,14 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `history-conflict-identity.js` | 同一进程现场验证官方 arXiv 来源，并将操作者选择的已有冲突 hint 写成 verified decision 后 CAS apply；不读旧正文或标题。 |
 | `arxiv-source-authority.js` | 对规范化 arXiv ID 规划或抓取官方全文；组合参数在同一进程用 live opaque handle 完成 verified decision/CAS，磁盘重载会降级；dry-run 不联网、不写盘。 |
 | `historical-arxiv-analysis.js` | 用 live arXiv authority 与白名单原始抓取元数据建立隔离 source-only run；`analyze` 复用现有多阶段引擎，canonical 不写入 daily current。 |
-| `historical-arxiv-analysis-scheduler.js` | 从 finalized crosswalk 批量调度历史 arXiv run；支持 prepare-only/analyze、pilot/数值 limit 与小并发恢复。 |
+| `historical-arxiv-analysis-scheduler.js` | 从 finalized crosswalk 批量调度历史 arXiv run；以 `new-full`、`reader-recovery`、`all` 分离队列，支持联网前 fail-closed 的精确 `--paper-ids`、pilot/数值 limit 与小并发恢复。 |
 | `historical-taxonomy-assignment.js` | 对完成的历史 analysis run 执行单篇或批量 deterministic 重标；dry-run 零写，apply 只写独立 assignment artifact，不调用 LLM。 |
 | `historical-page-staging.js` | 按显式 analysis run 与当前 registry SHA 精确选择 assignment，从 verified crosswalk 生成隔离单篇页面 staging；不写博客仓库。 |
 | `historical-daily-aggregate.js` | 以 `--staging-runs UUID[,UUID...]` 合并多份单篇 staging run，重建 daily summary 的隔离 manifest；保留原路径/URL，dry-run 零写，apply 不写博客仓库。 |
+| `historical-publication.js` | `plan` 冻结历史发布输入、博客基线与逐路径操作；`generate` 再重放 producer 并 O_EXCL 写私有 bundle。conference refs 在有 authenticated aggregate 前明确拒绝。 |
 | `historical-postprocess-scheduler.js` | 可恢复批量编排历史重标、per-paper staging 和就绪日期汇总；支持 dry-run/apply、pilot/限额、日期和 1–3 并发。 |
+| `conference-postprocess.js` | 使用完整 conference plan authority flags 对单篇执行重标/staging，或对 plan 全量 selected members 生成隔离 aggregate；roots 全部来自项目配置。 |
+| `conference-page-render.py` | 从已封存 conference Reader 与 assigned taxonomy 渲染无 arXiv 别名的弱结构会议单篇页；不生成资产，不读取旧博客正文。 |
 | `historical-arxiv-batch.js` | 对 pending single-hint arXiv 页面按唯一论文分组抓取与 verified 映射；支持 pilot/数值 limit 和可恢复全量续跑，不调用 LLM。 |
 | `paper_identity.py` | `paper-identity-v1` 的 Python 同构实现，使用共享向量防止发布侧与 Node 身份/SHA 漂移。 |
 | `paper_taxonomy.py` | 与Node共用registry的Python加载、验证和精确映射；未知/歧义不自动收窄。 |

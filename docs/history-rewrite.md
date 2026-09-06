@@ -71,6 +71,28 @@ authority，最后写入 verified decision 并 CAS apply。它不读取博客正
 analysis、旧 Reader 和旧 checkpoint 都不会进入输入。`analyze` 才调用现有多阶段分析引擎并产生
 LLM 用量，结果留在该 run 的 `analysis.json`，不会覆盖 `data/current/deep-analysis-result.json`。
 
+批量分析必须先用 dry-run 核对队列和精确论文范围：
+
+```bash
+npm run history:analyze-batch -- --dry-run --crosswalk UUID --stage analyze \
+  --queue new-full --limit pilot --concurrency 1
+npm run history:analyze-batch -- --apply --crosswalk UUID --stage analyze \
+  --queue reader-recovery --paper-ids arxiv:2512.09066 --limit pilot --concurrency 1
+```
+
+`new-full` 只选择从未进入分析的完整来源，`reader-recovery` 只选择上游已完成但 Reader 未封口的
+记录，`all` 才合并两者。`--paper-ids` 支持重复 flag 或逗号列表，但每项必须是规范
+`arxiv:YYMM.NNNNN`；空项、重复或 crosswalk 未验证 ID 都会在联网前失败。实现升级只为旧失败
+候选签发一次带 archive/SHA 的局部修复额度；dry-run 不消费额度，来源、模型、Prompt 或像素漂移
+不能迁移。
+
+API 分析的核心摘要使用 `core-summary-detailed-v3`：6–9 句、320–600 个中文/标点字符，必须交代
+实际问题、2–4 步方法链及分工、原文关键定量结果（原文确无时显式声明不可得）、结论边界以及
+训练/推理/部署成本（未披露时显式说明）。摘要修复只读取 source-only 证据，只替换该节并逐字
+保护其余 12 节；顺序固定为 structure repair → core summary → scoring。旧 v2 fresh checkpoint 只有
+在旧/新 Prompt 双 allowlist、模型、来源、证据和阶段 SHA 全部可重放时才做摘要-only 迁移；阶段
+失效前保存最多两份 SHA 封口的 fresh-analysis stale snapshot，替代全链成功后再清除。
+
 完成历史分析后，后处理使用单一可恢复入口；它不再调用 LLM，也不写博客仓库：
 
 ```bash
@@ -97,6 +119,10 @@ SHA、authority 文件 SHA/self-SHA、证据类型、全文 SHA 与来源快照 
 official abs URL、source snapshot、receipt 和完整全文字节；会议合同会重放真实 plan/import/ledger/
 source-context opaque 链。页面还必须有一个与 authority 精确相同、来自文件名、显式 frontmatter
 ID 或正文官方链接的 identity hint；标题永远不能成为 verified 证据。
+
+`history:arxiv-batch` 可安全续跑 pending single-hint 页面。SIGINT/SIGTERM 只在 token、PID、hostname、
+锁目录 inode、owner inode 与 owner SHA 均仍属于当前进程时释放锁；换主或 inode 漂移时拒绝删除。
+遗留死锁仍必须等 lease 到期并由脚本双重校验回收，禁止手工删除。
 
 ```bash
 npm run history:crosswalk -- prepare --dry-run \
@@ -139,6 +165,24 @@ marker 下回收。跨主机、刚死亡、被篡改或带额外内容的锁都�
 final receipt 中唯一 identity group 获取完整来源。完成这些以后，才能按唯一论文分析一次，再向
 重复页面和各类汇总做确定性投影。
 
-发布前还需要历史专属 completion proof 与 publication transaction，保证所有旧 URL
-继续可达，并把新增的 ICML 任务页或兼容 redirect 作为受授权 addition。当前 inventory
-通过不等于允许改写或发布历史博客。
+历史 publication transaction 的第一阶段只生成 plan 与私有 bundle，不写博客，也不执行 review、
+commit 或 push：
+
+```bash
+npm run history:publication -- plan --dry-run --plan-id UUID \
+  --page-staging-runs UUID[,UUID...] --daily-aggregates UUID@YYYY-MM-DD[,UUID@YYYY-MM-DD...]
+npm run history:publication -- plan --apply --plan-id UUID \
+  --page-staging-runs UUID[,UUID...] --daily-aggregates UUID@YYYY-MM-DD[,UUID@YYYY-MM-DD...]
+npm run history:publication -- generate --apply --plan-id UUID --batch-id daily-YYYY-MM-DD
+```
+
+plan/generate 都会重放 selectedBindings、crosswalk/inventory、sealed analysis source、当前 taxonomy
+和 daily aggregate 的确定性整件。plan 冻结 clean `main`、HEAD/tree、remote identity/OID、Hugo config、
+逐路径 Git/worktree baseline 和 create/replace/unchanged 操作；未知资产只允许目标不存在，或已存在完全
+相同 SHA。generate 再次重放 producer，要求前序 batch 的完整 generation/bundle proof，以 O_EXCL 写入
+`data/runtime/historical-publications/`，并在封 manifest 前完成 closing CAS 与 bundle 精确文件集检查。
+`oldGeneratedTextIncluded:false` 的准确含义是：旧正文不进入创作输入或任何新产物；事务只短暂读取旧
+Git/worktree 字节计算 baseline SHA。conference aggregate 尚未接入，非空 conference refs 会失败关闭。
+
+后续仍需实现历史专属 review/activation/push receipt，保证所有旧 URL 继续可达，并把新增的 ICML
+任务页或兼容 redirect 作为受授权 addition。plan/bundle complete 仍不等于允许改写或发布历史博客。

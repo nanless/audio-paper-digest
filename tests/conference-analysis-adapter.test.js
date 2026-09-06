@@ -47,6 +47,8 @@ function successfulReaderDraft(sourceText) {
 test('weak conference PDF prepares isolated canonical identity with unavailable structured capabilities', t => {
     const fixture = productionPlanFixture(t);
     const analysisRoot = path.join(fixture.root, 'analysis');
+    assert.throws(() => adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
+        sourceRoot: fixture.sourceRoot, analysisRoot, executionId: '../escape' }), /UUID v4/);
     const prepared = adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle,
         paperId: fixture.paperId, sourceRoot: fixture.sourceRoot, analysisRoot,
         executionId: EXECUTION, now: '2026-09-07T00:00:00.000Z' });
@@ -63,6 +65,64 @@ test('weak conference PDF prepares isolated canonical identity with unavailable 
     assert.equal(adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle,
         paperId: fixture.paperId, sourceRoot: fixture.sourceRoot, analysisRoot,
         executionId: EXECUTION }).recovered, true);
+});
+
+test('prepare intent recovers every authenticated prefix and rejects a re-signed mismatch', t => {
+    const fixture = productionPlanFixture(t); const analysisRoot = path.join(fixture.root, 'analysis-recovery');
+    for (const [index, crashAfter] of ['intent.json', 'source.json', 'analysis.json'].entries()) {
+        const executionId = `${index + 1}aaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`;
+        let crashed = false;
+        assert.throws(() => adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
+            sourceRoot: fixture.sourceRoot, analysisRoot, executionId, now: '2026-09-07T00:00:00.000Z' }, {
+            afterPersist: name => { if (!crashed && name === crashAfter) { crashed = true; throw new Error(`crash after ${name}`); } }
+        }), new RegExp(`crash after ${crashAfter.replace('.', '\\.')}`));
+        const recovered = adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
+            sourceRoot: fixture.sourceRoot, analysisRoot, executionId, now: '2026-09-07T00:00:01.000Z' });
+        assert.equal(recovered.recovered, true); assert.equal(adapter.loadConferenceAnalysis({ analysisRoot, executionId }).run.status, 'source_ready');
+    }
+    const executionId = '4aaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'; let crashed = false;
+    assert.throws(() => adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
+        sourceRoot: fixture.sourceRoot, analysisRoot, executionId }, { afterPersist: name => {
+        if (!crashed && name === 'intent.json') { crashed = true; throw new Error('intent crash'); }
+    } }), /intent crash/);
+    const filename = path.join(analysisRoot, executionId, 'intent.json'); const intent = JSON.parse(fs.readFileSync(filename));
+    intent.sourceFileSha256 = 'f'.repeat(64); const body = structuredClone(intent); delete body.intentSha256;
+    intent.intentSha256 = adapter.stableHash(body); fs.writeFileSync(filename, `${JSON.stringify(intent, null, 2)}\n`);
+    assert.throws(() => adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
+        sourceRoot: fixture.sourceRoot, analysisRoot, executionId }), /differs from authenticated prepare intent/);
+});
+
+test('atomic analysis writer removes its own short EIO temporary and legacy executions fail with migration guidance', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-analysis-write-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true })); const filename = path.join(root, 'record.json');
+    let calls = 0; const io = { openSync: fs.openSync, closeSync: fs.closeSync, fsyncSync: fs.fsyncSync,
+        writeSync: (fd, buffer, offset, length, position) => {
+            calls += 1; if (calls === 1) return fs.writeSync(fd, buffer, offset, Math.min(3, length), position);
+            const error = new Error('analysis EIO'); error.code = 'EIO'; throw error;
+        } };
+    assert.throws(() => adapter.writeBytesAtomic(filename, Buffer.from('{"complete":true}\n'), { io,
+        randomUUID: () => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }), /analysis EIO/);
+    assert.equal(fs.existsSync(filename), false); assert.deepEqual(fs.readdirSync(root), []);
+
+    const fixture = productionPlanFixture(t); const analysisRoot = path.join(fixture.root, 'legacy-analysis');
+    adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
+        sourceRoot: fixture.sourceRoot, analysisRoot, executionId: EXECUTION });
+    fs.unlinkSync(path.join(analysisRoot, EXECUTION, 'intent.json'));
+    assert.throws(() => adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION }), /create a new execution UUID/);
+
+    const partialId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'; const partialDir = path.join(analysisRoot, partialId);
+    fs.mkdirSync(partialDir); fs.writeFileSync(path.join(partialDir, 'source.json'), '{}');
+    assert.throws(() => adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
+        sourceRoot: fixture.sourceRoot, analysisRoot, executionId: partialId }), /partial lacks prepare intent/);
+});
+
+test('prepare intent binds the untouched pending analysis authoring input', t => {
+    const fixture = productionPlanFixture(t); const analysisRoot = path.join(fixture.root, 'analysis-input-binding');
+    adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
+        sourceRoot: fixture.sourceRoot, analysisRoot, executionId: EXECUTION });
+    const filename = path.join(analysisRoot, EXECUTION, 'analysis.json'); const analysis = JSON.parse(fs.readFileSync(filename));
+    analysis.papers[0].title = 'self-resigned attacker title'; fs.writeFileSync(filename, `${JSON.stringify(analysis, null, 2)}\n`);
+    assert.throws(() => adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION }), /evidence drifted/);
 });
 
 test('mock common analysis observes source only through authenticated context and persists isolated canonical', async t => {
