@@ -50,6 +50,11 @@ test('apply preserves request/source/snapshot/receipt/authority and recovers wit
     const created = await api.prepareArxivSourceAuthority(options);
     assert.equal(created.status, 'created'); assert.equal(calls, 1);
     assert.equal(authorityApi.authorityHandleSnapshot(created.authorityHandle).productionAuthorized, true);
+    const liveDetails = api.readLiveProductionSourceDetails(created.authorityHandle);
+    assert.equal(liveDetails.text, source().text);
+    assert.deepEqual(liveDetails.imageInfos, []);
+    assert.equal(liveDetails.structuredArtifacts.flattenedTextSha256,
+        authorityApi.authorityHandleSnapshot(created.authorityHandle).fulltextSha256);
     for (const name of Object.values(created.artifacts)) {
         const file = path.join(root, name); assert.equal(fs.existsSync(file), true);
         assert.equal(fs.statSync(file).mode & 0o777, 0o600);
@@ -60,6 +65,7 @@ test('apply preserves request/source/snapshot/receipt/authority and recovers wit
     assert.throws(() => authorityApi.replayAuthorityHandle(recovered.authorityHandle, { requireProduction: true }), /production-authorized/);
     const durableOnly = authorityApi.loadAuthorityHandle({ authorityRoot: root, authorityName: options.authorityName });
     assert.equal(authorityApi.authorityHandleSnapshot(durableOnly).productionAuthorized, false);
+    assert.throws(() => api.readLiveProductionSourceDetails(durableOnly), /authenticated paper source authority handle|required/);
     const live = await api.prepareArxivSourceAuthority({ ...options, requireLiveAuthorization: true });
     assert.equal(live.status, 'live-verified'); assert.equal(calls, 2);
     assert.equal(authorityApi.authorityHandleSnapshot(

@@ -113,6 +113,10 @@ const {
     fullTextMinCharsForFull: FULL_TEXT_MIN_CHARS_FOR_FULL
 } = ANALYSIS_CONFIG;
 const IMAGE_CACHE_DIR = path.join(CURRENT_DIR, 'image-cache');
+// Reader carries the largest text+image payload. A transport failure produces
+// no reusable draft, so repeat it only on a later explicit run; all upstream
+// checkpoints remain reusable then.
+const API_READER_TRANSPORT_MAX_RETRIES = 1;
 
 function getArxivFetchDispatcher() {
     const proxyUrl = detectHttpConnectProxyUrl();
@@ -3416,6 +3420,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 temperature: attempt === 1 && !repairContext
                     ? start.temperature : API_READER_REPAIR_TEMPERATURE,
                 overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
+                maxRetries: API_READER_TRANSPORT_MAX_RETRIES,
                 usageContext: { paperId: getPaperArxivId(paper),
                     stage: repairContext ? 'apiReaderRepair' : 'apiReaderArticle', contentAttempt: attempt }
             }
@@ -4048,7 +4053,7 @@ const RECOVERY_STAGE_STATUSES = new Set([
 ]);
 const RECOVERY_STAGE_ORDER = Object.freeze([
     'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision', 'tableRepair',
-    'methodRepair', 'structureRepair', 'scoringAudit', 'apiReaderArticle', 'imageSupplement'
+    'methodRepair', 'coreSummaryRepair', 'structureRepair', 'scoringAudit', 'apiReaderArticle', 'imageSupplement'
 ]);
 
 const RECOVERY_PROMPT_FILES = Object.freeze({
@@ -4057,6 +4062,7 @@ const RECOVERY_PROMPT_FILES = Object.freeze({
     revision: 'prompts/gap-fill.md',
     tableRepair: 'prompts/table-fill.md',
     methodRepair: 'prompts/method-fill.md',
+    coreSummaryRepair: 'prompts/core-summary-repair.md',
     structureRepair: 'prompts/structure-repair.md',
     scoringAudit: 'prompts/scoring-audit.md',
     apiReaderArticle: 'prompts/api-reader-article.md',
@@ -4119,6 +4125,13 @@ const TEXT_RECOVERY_STAGE_CONFIG = Object.freeze({
         evidenceMaxChars: REPAIR_EVIDENCE_MAX_CHARS,
         patterns: METHOD_EVIDENCE_PATTERNS,
         taskLabel: 'METHOD',
+        typeAware: true
+    },
+    coreSummaryRepair: {
+        maxTokens: 2500,
+        evidenceMaxChars: 24000,
+        patterns: BROAD_EVIDENCE_PATTERNS,
+        taskLabel: 'CORE_SUMMARY',
         typeAware: true
     },
     structureRepair: {
@@ -4185,13 +4198,23 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext) {
 
 function getTextStageInputAnalysis(paper, stage, currentAnalysis) {
     const index = RECOVERY_STAGE_ORDER.indexOf(stage);
-    const previousStage = index > 0 ? RECOVERY_STAGE_ORDER[index - 1] : null;
-    const previousCheckpoint = previousStage
-        ? paper.analysisStageCheckpoints?.[previousStage]
-        : null;
-    return typeof previousCheckpoint === 'string'
-        ? previousCheckpoint
-        : String(currentAnalysis || '');
+    // Optional stages may be introduced without invalidating historical
+    // manifests. Walk backward to the nearest actual checkpoint rather than
+    // assuming the immediately preceding stage existed in that older run.
+    for (let candidate = index - 1; candidate >= 0; candidate--) {
+        const checkpoint = paper.analysisStageCheckpoints?.[RECOVERY_STAGE_ORDER[candidate]];
+        if (typeof checkpoint === 'string') return checkpoint;
+    }
+    return String(currentAnalysis || '');
+}
+
+function previousStageCheckpoint(paper, stage) {
+    const index = RECOVERY_STAGE_ORDER.indexOf(stage);
+    for (let candidate = index - 1; candidate >= 0; candidate--) {
+        const checkpoint = paper.analysisStageCheckpoints?.[RECOVERY_STAGE_ORDER[candidate]];
+        if (typeof checkpoint === 'string') return checkpoint;
+    }
+    return null;
 }
 
 function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourceText) {
@@ -4268,7 +4291,8 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
             evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
             evidenceMaxChars: API_READER_EVIDENCE_MAX_CHARS,
             contextMaxChars: API_READER_CONTEXT_MAX_CHARS,
-            overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS
+            overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
+            transportMaxRetries: API_READER_TRANSPORT_MAX_RETRIES
         }),
         imageSupplement: stableFingerprint({
             ...modelFingerprint(SECONDARY_CONFIG, IMAGE_PLAN_TEMPERATURE, API_MAX_TOKENS),
@@ -4389,9 +4413,9 @@ function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint) {
     const index = RECOVERY_STAGE_ORDER.indexOf(stage);
     const stagesToDelete = index >= 0 ? RECOVERY_STAGE_ORDER.slice(index) : [stage];
     const checkpoints = paper.analysisStageCheckpoints || {};
-    const previousStage = index > 0 ? RECOVERY_STAGE_ORDER[index - 1] : null;
-    if (previousStage && typeof checkpoints[previousStage] === 'string') {
-        paper.analysisCheckpoint = checkpoints[previousStage];
+    const previousCheckpoint = previousStageCheckpoint(paper, stage);
+    if (previousCheckpoint !== null) {
+        paper.analysisCheckpoint = previousCheckpoint;
     } else {
         delete paper.analysisCheckpoint;
         for (const recoveryStage of RECOVERY_STAGE_ORDER) delete manifest.stages[recoveryStage];
@@ -4537,6 +4561,16 @@ function markRecoveryStage(manifest, stage, status, details = {}) {
 
 function isRecoveryStageComplete(manifest, stage) {
     return isRecoveryStageTerminal(stage, manifest?.stages?.[stage]?.status);
+}
+
+function suppressOuterRetryAfterReaderExhaustion(error) {
+    const exhausted = error instanceof Error ? error : new Error(String(error || 'Reader stage failed'));
+    // generateApiReaderArticleDetailed already owns its bounded full/repair
+    // attempts.  Do not restart the complete analysis in analyzePaperWithRetry
+    // during this invocation.  Its non-terminal stage remains checkpointed, so
+    // a later explicit resume still retries Reader normally.
+    exhausted.retryable = false;
+    return exhausted;
 }
 
 function hasIncompleteRecoveryStage(manifest) {
@@ -8480,6 +8514,57 @@ async function analyzePaperDeepInternal(paper) {
         }
     }
 
+    // 第3.62轮：新生成内容的核心摘要深度目标使用单节修复。
+    // 该阶段不属于历史 canonical 的通用 80 字符兼容门禁；只有真正执行
+    // 新分析/续跑时才写入 checkpoint，且不得借摘要不足触发完整 13 节重写。
+    const coreSummaryRepairStage = prepareTextRecoveryStage(
+        paper,
+        analysisManifest,
+        'coreSummaryRepair',
+        analysis,
+        rawTextForAnalysis
+    );
+    analysis = coreSummaryRepairStage.analysis;
+    if (!isRecoveryStageComplete(analysisManifest, 'coreSummaryRepair')) {
+        const missingCoreSummary = getMissingRequiredSections(analysis).includes('核心摘要');
+        const duplicateCoreSummary = getDuplicateRequiredSections(analysis).includes('核心摘要');
+        const summaryIssue = getCoreSummaryDetailIssue(analysis);
+        try {
+            let changed = false;
+            if (summaryIssue && !missingCoreSummary && !duplicateCoreSummary) {
+                console.log(`    [deep] 🔧 核心摘要执行单节扩写: ${summaryIssue}`);
+                const fixed = await repairCoreSummarySection(
+                    paper,
+                    analysis,
+                    rawTextForAnalysis,
+                    coreSummaryRepairStage.evidenceContext
+                );
+                changed = fixed !== analysis;
+                analysis = fixed;
+                console.log('    [deep] ✅ 核心摘要单节扩写完成，其他 12 节字节保持不变');
+            }
+            markRecoveryStage(analysisManifest, 'coreSummaryRepair', changed ? 'complete' : 'not_needed', {
+                targetMinimumChineseChars: CORE_SUMMARY_MIN_CHINESE_CHARS,
+                deferredToStructureRepair: Boolean(summaryIssue && (missingCoreSummary || duplicateCoreSummary)),
+                evidenceChars: coreSummaryRepairStage.evidenceChars,
+                evidenceSha256: coreSummaryRepairStage.evidenceSha256,
+                inputAnalysisSha256: coreSummaryRepairStage.inputAnalysisSha256,
+                outputAnalysisSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
+                fingerprint: coreSummaryRepairStage.fingerprint
+            });
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+        } catch (error) {
+            markRecoveryStage(
+                analysisManifest,
+                'coreSummaryRepair',
+                recoveryFailureStatus(error),
+                { error: error.message, fingerprint: coreSummaryRepairStage.fingerprint }
+            );
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+            throw error;
+        }
+    }
+
     // 第3.65轮：修复缺失/重复章节、机器摘要和标签契约。
     const structureRepairStage = prepareTextRecoveryStage(
         paper,
@@ -8891,6 +8976,7 @@ async function analyzePaperDeepInternal(paper) {
                 maxTokens: API_READER_MAX_TOKENS,
                 maxResponseBytes: API_MAX_RESPONSE_BYTES,
                 overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
+                transportMaxRetries: API_READER_TRANSPORT_MAX_RETRIES,
                 promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.apiReaderArticle),
                 evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
                 evidenceMaxChars: API_READER_EVIDENCE_MAX_CHARS,
@@ -8932,7 +9018,7 @@ async function analyzePaperDeepInternal(paper) {
                 { error: error.message, fingerprint: apiReaderFingerprint }
             );
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
-            throw error;
+            throw suppressOuterRetryAfterReaderExhaustion(error);
         }
     }
 
@@ -9588,6 +9674,62 @@ function normalizeAnalysisStructure(analysis) {
     return updated;
 }
 
+const CORE_SUMMARY_MIN_CHINESE_CHARS = 320;
+
+function getCoreSummaryDetailIssue(analysis) {
+    const summary = extractSectionByTitle(analysis, '核心摘要');
+    const count = countChineseChars(summary);
+    return count >= CORE_SUMMARY_MIN_CHINESE_CHARS
+        ? null
+        : `核心摘要未达到新默认深度: ${count}/${CORE_SUMMARY_MIN_CHINESE_CHARS} 个中文字符`;
+}
+
+function sectionExteriorBytes(analysis, title) {
+    const bounds = findSectionBounds(analysis, title);
+    if (!bounds) throw contractRejectedError(`局部修复找不到 ## ${title}`);
+    return `${analysis.slice(0, bounds.contentStart)}\u0000${analysis.slice(bounds.end)}`;
+}
+
+async function repairCoreSummarySection(
+    paper, existingAnalysis, sourceText, preparedEvidence = null, options = {}
+) {
+    const original = String(existingAnalysis || '');
+    const originalExterior = sectionExteriorBytes(original, '核心摘要');
+    const existingSummary = extractSectionByTitle(original, '核心摘要');
+    const evidenceContext = typeof preparedEvidence === 'string'
+        ? preparedEvidence
+        : buildStageEvidenceContext('coreSummaryRepair', original, sourceText);
+    let issue = getCoreSummaryDetailIssue(original);
+    if (!issue) return original;
+    let feedback = issue;
+    const repairCallModel = options.callModelFn || callModel;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        const prompt = loadPrompt('prompts/core-summary-repair.md', {
+            title: paper.title,
+            arxivId: getPaperArxivId(paper),
+            summaryIssue: feedback,
+            existingSummary,
+            textForAnalysis: evidenceContext
+        });
+        const raw = String(await repairCallModel([{ role: 'user', content: prompt }],
+            TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens,
+            { usageContext: { stage: 'coreSummaryRepair' } }) || '').trim();
+        const match = raw.match(/^##\s*核心摘要[：:\s]*\n([\s\S]+)$/);
+        if (!match || /^#{1,6}\s/m.test(match[1])) {
+            feedback = '输出必须且只能包含一节 ## 核心摘要，不得包含其他标题。';
+            continue;
+        }
+        const updated = mergeSectionByTitle(original, '核心摘要', match[1]);
+        if (sectionExteriorBytes(updated, '核心摘要') !== originalExterior) {
+            throw contractRejectedError('核心摘要局部修复改变了其他一级章节字节');
+        }
+        issue = getCoreSummaryDetailIssue(updated);
+        if (!issue) return updated;
+        feedback = issue;
+    }
+    throw contractRejectedError(`核心摘要局部修复失败: ${feedback}`);
+}
+
 async function repairMissingAnalysisSections(
     paper, existingAnalysis, sourceText, preparedEvidence = null, options = {}
 ) {
@@ -9708,9 +9850,6 @@ function getRepairableAnalysisStructureIssues(analysis, options = {}) {
     // 结构修复必须在评分审计之前兜住最终契约要求的叙事正文长度。
     // 否则标题齐全但正文仍是 `TD` / 编辑指令等占位内容时，评分审计只会
     // 反复改写评分，永远无法修复真正位于上游的核心摘要或方法/结果章节。
-    if (!parsed?.summary || parsed.summary.trim().length < 80) {
-        issues.push(`核心摘要内容不足: ${parsed?.summary?.trim().length || 0}/80 字符`);
-    }
     if (!parsed?.architecture || parsed.architecture.trim().length < 80) {
         issues.push(`方法概述内容不足: ${parsed?.architecture?.trim().length || 0}/80 字符`);
     }
@@ -10219,6 +10358,9 @@ module.exports = {
     pruneUnmaterializedApiReaderFigureBlocks,
     materializeApiReaderFigures,
     fitApiReaderFigureDimensions,
+    CORE_SUMMARY_MIN_CHINESE_CHARS,
+    getCoreSummaryDetailIssue,
+    repairCoreSummarySection,
     repairMissingAnalysisSections,
     finalizeStructureRepairOutput,
     recoveryFailureStatus,
@@ -10245,6 +10387,7 @@ module.exports = {
     stripManualAnalysisProvenance,
     markRecoveryStage,
     isRecoveryStageComplete,
+    suppressOuterRetryAfterReaderExhaustion,
     saveAnalysisCheckpoint,
     shouldRetainFullTextCheckpoint,
     calculateScoringDelta,

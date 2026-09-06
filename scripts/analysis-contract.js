@@ -182,6 +182,7 @@ const RECOVERY_STAGE_TERMINAL_STATUSES = Object.freeze({
     revision: Object.freeze(['complete', MANUAL_COMPLETE_STATUS]),
     tableRepair: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
     methodRepair: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
+    coreSummaryRepair: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
     structureRepair: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
     scoringAudit: Object.freeze(['complete', MANUAL_COMPLETE_STATUS]),
     apiReaderArticle: Object.freeze(['complete']),

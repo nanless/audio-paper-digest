@@ -42,6 +42,15 @@ npm run history:arxiv-source -- --apply --id 2609.03622 --authority arxiv-2609.0
 # 试点：同一进程完成官方抓取、verified decision 与 crosswalk CAS apply
 npm run history:arxiv-source -- --apply --id 2609.03622 --authority arxiv-2609.03622.json \
   --crosswalk UUID --page-key page:SHA256 --decision page-verified.json --owner reviewer.1
+# 页面已有多个/冲突 ID 时，操作者必须明确选择 inventory 中已有的非标题 hint
+npm run history:resolve-conflict -- --apply --crosswalk UUID --page-key page:SHA256 \
+  --scheme arxiv --value 2608.26786 --authority arxiv-2608.26786.json \
+  --decision page-conflict-resolved.json --owner reviewer.1 --operation-id UUID
+# 从已核来源和原始抓取元数据建立隔离分析 run；prepare 不调用 LLM
+npm run history:arxiv-analyze -- prepare --apply --id 2609.03622 --date 2026-09-04 \
+  --authority arxiv-2609.03622.json
+npm run history:arxiv-analyze -- analyze --run-id UUID --concurrency 1
+npm run history:arxiv-analyze -- status --run-id UUID
 ```
 
 `--dry-run` 不联网也不写盘。`--apply` 复用默认全文抓取器，因此仍强制项目 HTTP CONNECT
@@ -51,6 +60,16 @@ npm run history:arxiv-source -- --apply --id 2609.03622 --authority arxiv-2609.0
 但进程在 observation 落盘前退出，下一次会重复抓取这个非 LLM 公共来源；孤立 request 不代表成功，
 也不能据此签发 verified/final。只有单边 source 工件时失败关闭等待人工检查。旧博客正文、分析、
 Reader 或自行拼出的 legacy snapshot/receipt 都不能取得 production authorization。
+
+`history:resolve-conflict` 只适用于 `identityHints.status=conflict|multiple`。它在联网前先确认
+`--scheme/--value` 精确存在于该页冻结的非标题 hints，再现场取得完全相同身份的 production
+authority，最后写入 verified decision 并 CAS apply。它不读取博客正文、不按标题猜测，也不会把
+单一 hint 页导入这条人工例外路径；目前 CLI 只接通已有官方适配器支持的 arXiv 身份。
+
+`history:arxiv-analyze prepare` 只从对应日期的 `raw-candidates.json` 读取白名单原始元数据，并以
+live 官方全文 authority 创建独立 source-only run；旧博客正文、旧 analysis、旧 Reader 和旧
+checkpoint 都不会进入输入。`analyze` 才调用现有多阶段分析引擎并产生 LLM 用量，结果留在该
+run 的 `analysis.json`，不会覆盖 `data/current/deep-analysis-result.json`。
 
 `page-source-crosswalk-v1` 会严格重放 canonical ledger/receipt 字节与自校验 SHA，再以 opaque
 handle 为每个 `kind=paper` 页面建立隔离、可恢复的 pending 状态。assignment 只含页面路径和

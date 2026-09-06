@@ -156,7 +156,34 @@ function normalizeFetchedSource(details, arxivId, fetchedAt) {
         warnings: Array.isArray(details.warnings) ? details.warnings.map(item => String(item).slice(0, 4096)) : [],
         structuredArtifacts: durableStructuredArtifacts, fetchedAt: nowIso(fetchedAt) };
     const observation = seal(observationBody, 'observationSha256');
-    return { text: details.text, observation };
+    let optional;
+    try {
+        optional = clone({
+            imageInfos: details.imageInfos === undefined ? [] : details.imageInfos,
+            ...(details.readerAuthors === undefined ? {} : { readerAuthors: details.readerAuthors })
+        });
+    } catch (error) {
+        fail(`official fetch returned non-JSON source metadata: ${error.message}`);
+    }
+    if (!Array.isArray(optional.imageInfos)
+        || (optional.readerAuthors !== undefined
+            && (!optional.readerAuthors || typeof optional.readerAuthors !== 'object'
+                || (Array.isArray(optional.readerAuthors) && optional.readerAuthors.length !== 0)))) {
+        fail('official fetch returned malformed image/author source metadata');
+    }
+    if (Array.isArray(optional.readerAuthors)) delete optional.readerAuthors;
+    const sourceDetails = {
+        text: details.text,
+        source: observation.sourceKind,
+        sourceId: observation.sourceId,
+        imageInfos: optional.imageInfos,
+        ...(optional.readerAuthors === undefined ? {} : { readerAuthors: optional.readerAuthors }),
+        htmlAvailability: observation.htmlAvailability,
+        htmlAttempts: observation.htmlAttempts,
+        warnings: clone(observation.warnings),
+        structuredArtifacts: clone(observation.structuredArtifacts)
+    };
+    return { text: details.text, observation, sourceDetails };
 }
 function acquireLock(root, arxivId) {
     const lock = path.join(root, `.arxiv-${arxivId}.lock`);
@@ -177,11 +204,18 @@ function acquireLock(root, arxivId) {
 }
 function releaseLock(lock) { fs.rmSync(lock, { recursive: true }); }
 
-function liveProductionHandle(genericHandle) {
+function liveProductionHandle(genericHandle, sourceDetails) {
     const base = authorityApi.authorityHandleSnapshot(genericHandle);
     const publicSnapshot = Object.freeze({ ...clone(base), productionAuthorized: true });
     const handle = Object.freeze(Object.create(null));
-    PRODUCTION_HANDLES.add(handle); PRODUCTION_HANDLE_DATA.set(handle, Object.freeze({ genericHandle, publicSnapshot }));
+    const details = clone(sourceDetails);
+    if (sha256(Buffer.from(details.text, 'utf8')) !== publicSnapshot.fulltextSha256
+        || details.structuredArtifacts?.flattenedTextSha256 !== publicSnapshot.fulltextSha256
+        || details.sourceId.replace(/v\d+$/i, '') !== publicSnapshot.authority.identity.arxivId) {
+        fail('live official source details do not replay the authority evidence');
+    }
+    PRODUCTION_HANDLES.add(handle); PRODUCTION_HANDLE_DATA.set(handle,
+        Object.freeze({ genericHandle, publicSnapshot, sourceDetails: Object.freeze(details) }));
     return handle;
 }
 function productionAuthorityHandleSnapshot(handle) {
@@ -196,6 +230,17 @@ function replayProductionAuthorityHandle(handle) {
     const expected = { ...clone(stored.publicSnapshot), productionAuthorized: false };
     if (stableHash(current) !== stableHash(expected)) fail('live official authority evidence changed after fetch');
     return handle;
+}
+
+function readLiveProductionSourceDetails(handle) {
+    if (!replayProductionAuthorityHandle(handle)) fail('live production-authorized arXiv source handle required');
+    const stored = PRODUCTION_HANDLE_DATA.get(handle);
+    const details = clone(stored.sourceDetails);
+    if (sha256(Buffer.from(details.text, 'utf8')) !== stored.publicSnapshot.fulltextSha256
+        || details.structuredArtifacts?.flattenedTextSha256 !== stored.publicSnapshot.fulltextSha256) {
+        fail('live source details changed after official fetch');
+    }
+    return details;
 }
 
 async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityName,
@@ -221,7 +266,7 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
                 || stableHash(comparable(persistedObservation)) !== stableHash(comparable(fetched.observation))) {
                 fail('live official refetch differs from the durable source bundle; create a separately named authority after review');
             }
-            const handle = liveProductionHandle(generic);
+            const handle = liveProductionHandle(generic, fetched.sourceDetails);
             return { ...planned, status: 'live-verified', authorityHandle: handle,
                 authority: authorityApi.authorityHandleSnapshot(handle) };
         }
@@ -232,7 +277,7 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
             writeExact(requestFile, prettyBytes(request));
         }
         const observationFile = path.join(root, names.observationName); const fulltextFile = path.join(root, names.fulltextName);
-        let observation; let text;
+        let observation; let text; let liveSourceDetails = null;
         if (fs.existsSync(observationFile) || fs.existsSync(fulltextFile)) {
             if (!fs.existsSync(observationFile) || !fs.existsSync(fulltextFile)) fail('partial source evidence requires operator review');
             observation = readCanonicalJson(observationFile).value; text = new TextDecoder('utf-8', { fatal: true }).decode(readBytes(fulltextFile));
@@ -240,7 +285,7 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
         } else {
             const fetched = normalizeFetchedSource(
                 await require('../deep-analyzer.js').fetchArxivTextDetailed(arxivId), arxivId, now);
-            observation = fetched.observation; text = fetched.text;
+            observation = fetched.observation; text = fetched.text; liveSourceDetails = fetched.sourceDetails;
             writeExact(observationFile, prettyBytes(observation)); writeExact(fulltextFile, Buffer.from(text, 'utf8'));
         }
         const requestRead = readCanonicalJson(requestFile); const observationRead = readCanonicalJson(observationFile);
@@ -273,7 +318,17 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
                 fulltextName: names.fulltextName, fulltextSha256 } };
         const authority = seal(authorityBody, 'authoritySha256'); writeExact(authorityFile, prettyBytes(authority));
         const generic = authorityApi.loadAuthorityHandle({ authorityRoot: root, authorityName });
-        const handle = liveProductionHandle(generic);
+        if (!liveSourceDetails && requireLiveAuthorization) {
+            const fetched = normalizeFetchedSource(
+                await require('../deep-analyzer.js').fetchArxivTextDetailed(arxivId), arxivId, now);
+            const comparable = value => { const copy = clone(value); delete copy.fetchedAt; delete copy.observationSha256; return copy; };
+            if (!fulltextBytes.equals(Buffer.from(fetched.text, 'utf8'))
+                || stableHash(comparable(observation)) !== stableHash(comparable(fetched.observation))) {
+                fail('live official refetch differs from the recovered durable source bundle');
+            }
+            liveSourceDetails = fetched.sourceDetails;
+        }
+        const handle = liveSourceDetails ? liveProductionHandle(generic, liveSourceDetails) : generic;
         return { ...planned, status: 'created', authorityHandle: handle,
             authority: authorityApi.authorityHandleSnapshot(handle) };
     } finally { releaseLock(lock); }
@@ -282,4 +337,4 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
 module.exports = { REQUEST_CONTRACT, SNAPSHOT_CONTRACT, RECEIPT_CONTRACT, OBSERVATION_CONTRACT,
     FETCHER_CONTRACT, VERSION, SAFE_AUTHORITY_NAME, ArxivSourceAuthorityError, identityFor, namesFor,
     requestFor, validateRequest, normalizeFetchedSource, prepareArxivSourceAuthority,
-    productionAuthorityHandleSnapshot, replayProductionAuthorityHandle };
+    productionAuthorityHandleSnapshot, replayProductionAuthorityHandle, readLiveProductionSourceDetails };

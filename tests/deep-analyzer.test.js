@@ -3000,17 +3000,61 @@ has_dataset: 否
         assert.deepStrictEqual(getRepairableAnalysisStructureIssues(mismatched), []);
     });
 
-    it('结构预修复会在评分前拒绝核心摘要占位符和过短正文', () => {
-        const { getRepairableAnalysisStructureIssues } = require('../scripts/deep-analyzer.js');
+    it('核心摘要新深度目标独立于历史 80 字符兼容门禁', () => {
+        const { getCoreSummaryDetailIssue, getRepairableAnalysisStructureIssues } = require('../scripts/deep-analyzer.js');
         const placeholder = validAnalysisText().replace(
             /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
             '## 核心摘要\nTD\n'
         );
 
-        assert.deepStrictEqual(
-            getRepairableAnalysisStructureIssues(placeholder).filter(issue => issue.startsWith('核心摘要内容不足')),
-            ['核心摘要内容不足: 2/80 字符']
+        assert.match(getCoreSummaryDetailIssue(placeholder), /0\/320/);
+        assert.strictEqual(getRepairableAnalysisStructureIssues(placeholder)
+            .some(issue => issue.startsWith('核心摘要内容不足')), false);
+    });
+
+    it('核心摘要局部修复达到 320 中文字符且其他 12 节逐字不变', async () => {
+        const { getCoreSummaryDetailIssue, repairCoreSummarySection } = require('../scripts/deep-analyzer.js');
+        const original = validAnalysisText();
+        const expanded = [
+            '本文处理噪声环境下语音识别的输入到文本输出问题，难点是干扰会同时破坏声学线索与语言判别边界。',
+            '方法第一步提取多尺度声学表示并保留局部时频变化，第二步利用上下文编码器聚合长程信息。',
+            '第三步通过自适应融合门把两路表示送入统一解码器，第四步再以任务损失联合校准输出，因此各组件形成连续的数据流。',
+            '相较只做单尺度编码的基线，关键差异是模型同时约束局部稳健性与全局语义一致性，而不是简单堆叠模块。',
+            '在公开测试集上，论文报告词错误率从 12.4% 降至 9.8%，相对改善方向明确，并且该数字直接对应相同评测协议。',
+            '另一组消融显示移除融合门后词错误率回升到 11.1%，说明性能并非只由更大的编码器容量带来。',
+            '该结论主要适用于论文覆盖的噪声类型与语种，对跨领域录音、极低信噪比以及未见说话风格仍缺少外部验证。',
+            '代价方面需要额外的双路编码计算和联合训练显存，论文未披露端侧实时延迟与完整硬件成本，因此部署收益仍需实测。'
+        ].join('');
+        assert.ok((expanded.match(/[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]/g) || []).length >= 320);
+        const exterior = text => text.replace(
+            /(## 核心摘要\n)[\s\S]*?(?=\n## 方法概述和架构)/,
+            '$1<CORE_SUMMARY_BYTES>'
         );
+        let prompt = ''; let maxTokens = null;
+        const updated = await repairCoreSummarySection(
+            { arxivId: '2608.13817', title: 'Local summary repair' },
+            original,
+            '原文含同协议 WER 12.4%、9.8% 与移除融合门后的 11.1% 结果。',
+            '局部证据',
+            { callModelFn: async (messages, requestedMaxTokens) => {
+                prompt = messages[0].content;
+                maxTokens = requestedMaxTokens;
+                return `## 核心摘要\n${expanded}`;
+            } }
+        );
+        assert.strictEqual(getCoreSummaryDetailIssue(updated), null);
+        assert.strictEqual(exterior(updated), exterior(original));
+        assert.match(prompt, /2–4 个步骤/);
+        assert.match(prompt, /320–600 个中文字符/);
+        assert.strictEqual(maxTokens, 2500);
+    });
+
+    it('Reader 内部尝试耗尽后只抑制本次 outer retry', () => {
+        const { suppressOuterRetryAfterReaderExhaustion } = require('../scripts/deep-analyzer.js');
+        const error = new Error('three inner ECONNRESET attempts exhausted');
+        const returned = suppressOuterRetryAfterReaderExhaustion(error);
+        assert.strictEqual(returned, error);
+        assert.strictEqual(returned.retryable, false);
     });
 
     it('结构预修复会在评分前接管模型编辑和自检批注泄漏', () => {

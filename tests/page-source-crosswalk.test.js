@@ -14,6 +14,8 @@ const identityApi = require('../scripts/lib/paper-identity.js');
 const contextApi = require('../scripts/lib/conference-source-context.js');
 const arxivAdapter = require('../scripts/lib/arxiv-source-authority.js');
 const arxivCli = require('../scripts/arxiv-source-authority.js');
+const conflictResolver = require('../scripts/lib/history-conflict-identity.js');
+const conflictCli = require('../scripts/history-conflict-identity.js');
 const deep = require('../scripts/deep-analyzer.js');
 const { productionPlanFixture } = require('./helpers/conference-production-plan-fixture.js');
 
@@ -58,6 +60,25 @@ function useConferenceHint(f, value = '100') {
     const paper = f.ledger.pages.find(page => page.kind === 'paper');
     paper.identityHints = { status: 'single', candidates: [
         { scheme: 'icassp-arnumber', value, sources: ['frontmatter:paper_digest_icassp_arnumber'] }
+    ] };
+    rehashPage(paper); rehashLedger(f.ledger);
+    const ledgerBytes = api.prettyBytes(f.ledger);
+    fs.writeFileSync(path.join(f.inventory, f.ledgerName), ledgerBytes, { mode: 0o600 });
+    const receiptBody = structuredClone(f.receipt); delete receiptBody.receiptSha256;
+    receiptBody.ledger.fileSha256 = sha(ledgerBytes);
+    receiptBody.ledger.ledgerSha256 = f.ledger.ledgerSha256;
+    receiptBody.ledger.pageSetSha256 = f.ledger.pageSetSha256;
+    f.receipt = { ...receiptBody, receiptSha256: api.stableHash(receiptBody) };
+    fs.writeFileSync(path.join(f.inventory, f.receiptName), api.prettyBytes(f.receipt), { mode: 0o600 });
+}
+
+function useArxivConflictHints(f, secondScheme = 'arxiv') {
+    const paper = f.ledger.pages.find(page => page.kind === 'paper');
+    paper.identityHints = { status: secondScheme === 'arxiv' ? 'conflict' : 'multiple', candidates: [
+        { scheme: 'arxiv', value: '2601.00001', sources: ['filename'] },
+        secondScheme === 'arxiv'
+            ? { scheme: 'arxiv', value: '2601.00002', sources: ['frontmatter:paper_digest_arxiv_id'] }
+            : { scheme: secondScheme, value: 'Forum_000002', sources: ['body:openreview-link'] }
     ] };
     rehashPage(paper); rehashLedger(f.ledger);
     const ledgerBytes = api.prettyBytes(f.ledger);
@@ -523,6 +544,72 @@ test('official arXiv adapter authority can drive the verified crosswalk CLI path
     { files: { paperSourceAuthorityDir: authorityRoot, pageSourceCrosswalkDir: f.crosswalk } });
     assert.equal(output.productionAuthorized, true); assert.equal(output.crosswalk.verified, 1);
     assert.equal(output.crosswalk.completion, 'complete');
+});
+
+test('explicit conflict resolver accepts only an existing non-title hint with exact production authority', async t => {
+    const f = fixture(t); useArxivConflictHints(f); const authorityRoot = path.join(f.root, 'authorities');
+    const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
+        crosswalkId: ids[0], now: stamp, apply: true });
+    const pageKey = Object.keys(state.assignments)[0];
+    const originalFetch = deep.fetchArxivTextDetailed;
+    t.after(() => { deep.fetchArxivTextDetailed = originalFetch; });
+    let calls = 0; const text = `${'official conflict resolution source evidence '.repeat(400)}\n`;
+    const flattenedTextSha256 = sha(text);
+    const artifactBody = { version: 1, source: 'arxiv_html', tables: [], formulas: [], flattenedTextSha256 };
+    deep.fetchArxivTextDetailed = async id => {
+        calls += 1;
+        return { text, source: 'html', sourceId: id, htmlAvailability: 'available', htmlAttempts: 1,
+            warnings: [], imageInfos: [], structuredArtifacts: { ...artifactBody,
+                payloadSha256: sha(JSON.stringify(artifactBody)) } };
+    };
+    const common = ['--apply', '--crosswalk', ids[0], '--page-key', pageKey, '--scheme', 'arxiv',
+        '--authority', 'arxiv-2601.00001.json', '--decision', 'resolved.json', '--owner', 'operator.1',
+        '--operation-id', ids[1]];
+    await assert.rejects(conflictCli.main([...common.slice(0, 7), '--value', '2601.99999', ...common.slice(7)],
+        { files: { paperSourceAuthorityDir: authorityRoot, pageSourceCrosswalkDir: f.crosswalk } }),
+    /not exactly one existing page hint/);
+    assert.equal(calls, 0, 'invalid operator selection must fail before network access');
+
+    const output = await conflictCli.main([...common.slice(0, 7), '--value', '2601.00001', ...common.slice(7)],
+        { files: { paperSourceAuthorityDir: authorityRoot, pageSourceCrosswalkDir: f.crosswalk } });
+    assert.equal(calls, 1); assert.equal(output.status, 'resolved');
+    assert.equal(output.productionAuthorized, true); assert.equal(output.verified, 1);
+    const updated = api.readCrosswalk({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0] });
+    assert.equal(updated.assignments[pageKey].sourceAuthority.paperId, 'arxiv:2601.00001');
+    assert.match(updated.assignments[pageKey].reason, /Operator selected existing non-title hint/);
+});
+
+test('conflict resolver rejects single pages, durable-only authority, and authority/selection mismatch', async t => {
+    const single = fixture(t);
+    const singleState = api.prepareCrosswalk({ crosswalkRoot: single.crosswalk, inventoryHandle: load(single),
+        crosswalkId: ids[0], now: stamp, apply: true });
+    const singlePageKey = Object.keys(singleState.assignments)[0];
+    assert.throws(() => conflictResolver.assertConflictSelection({ state: singleState, pageKey: singlePageKey,
+        selectedHint: { scheme: 'arxiv', value: '2601.00001' } }), /only allowed for conflict\/multiple/);
+
+    const f = fixture(t); useArxivConflictHints(f, 'openreview-forum-id');
+    const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
+        crosswalkId: ids[2], now: stamp, apply: true });
+    const pageKey = Object.keys(state.assignments)[0];
+    const durable = writeArxivAuthority(path.join(f.root, 'legacy-authority'));
+    assert.throws(() => conflictResolver.buildConflictVerifiedDecisionArtifact({ state, pageKey,
+        selectedHint: { scheme: 'arxiv', value: '2601.00001' }, authorityHandle: durable,
+        operationId: ids[3], actorId: 'operator.2', now: stamp }), /production-authorized/);
+
+    const authorityRoot = path.join(f.root, 'production-authority');
+    const originalFetch = deep.fetchArxivTextDetailed;
+    t.after(() => { deep.fetchArxivTextDetailed = originalFetch; });
+    const text = `${'official mismatch source evidence '.repeat(500)}\n`; const flattenedTextSha256 = sha(text);
+    const artifactBody = { version: 1, source: 'arxiv_html', tables: [], formulas: [], flattenedTextSha256 };
+    deep.fetchArxivTextDetailed = async id => ({ text, source: 'html', sourceId: id,
+        htmlAvailability: 'available', htmlAttempts: 1, warnings: [], imageInfos: [],
+        structuredArtifacts: { ...artifactBody, payloadSha256: sha(JSON.stringify(artifactBody)) } });
+    const production = await arxivAdapter.prepareArxivSourceAuthority({ authorityRoot, arxivId: '2601.00001',
+        authorityName: 'arxiv-2601.00001.json', apply: true, now: stamp, operationId: ids[4] });
+    assert.throws(() => conflictResolver.buildConflictVerifiedDecisionArtifact({ state, pageKey,
+        selectedHint: { scheme: 'openreview-forum-id', value: 'Forum_000002' },
+        authorityHandle: production.authorityHandle, operationId: ids[5], actorId: 'operator.2', now: stamp }),
+    /does not exactly match/);
 });
 
 test('verified conference decision replays locked bytes and final receipt requires live production authority', t => {

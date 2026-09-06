@@ -189,6 +189,7 @@ const FILES = {
     conferenceExecutionsDir: path.join(DATA_DIR, 'runtime', 'conference-executions'),
     historicalPageInventoryDir: path.join(DATA_DIR, 'runtime', 'historical-page-inventories'),
     pageSourceCrosswalkDir: path.join(DATA_DIR, 'runtime', 'page-source-crosswalks'),
+    historicalArxivBatchDir: path.join(DATA_DIR, 'runtime', 'historical-arxiv-batches'),
     // Immutable official-source request/snapshot/fulltext/receipt bundles used
     // by the historical page crosswalk. Never archive with daily current/.
     paperSourceAuthorityDir: path.join(DATA_DIR, 'runtime', 'paper-source-authorities'),

@@ -1198,6 +1198,8 @@ describe('loadPrompt', () => {
             previousDraft: '无',
             mechanicalContract: require('../scripts/lib/reader-contract.js').buildReaderContractNotice({ minimumIntegratedTables: 2 }),
             missingSections: '细节详述',
+            summaryIssue: '核心摘要未达到新默认深度',
+            existingSummary: '已有核心摘要。',
             methodSection: '## 方法概述和架构\n已有方法。',
             resultsSection: '## 实验结果\n已有结果。'
         };
@@ -1211,6 +1213,7 @@ describe('loadPrompt', () => {
             'prompts/table-fill.md',
             'prompts/scoring-audit.md',
             'prompts/api-reader-article.md',
+            'prompts/core-summary-repair.md',
             'prompts/structure-repair.md'
         ];
         for (const file of promptFiles) {
@@ -1243,6 +1246,8 @@ describe('loadPrompt', () => {
             previousDraft: '无',
             mechanicalContract: require('../scripts/lib/reader-contract.js').buildReaderContractNotice({ minimumIntegratedTables: 2 }),
             missingSections: '细节详述',
+            summaryIssue: '核心摘要未达到新默认深度',
+            existingSummary: '已有核心摘要。',
             methodSection: '## 方法概述和架构\n已有方法。',
             resultsSection: '## 实验结果\n已有结果。'
         };
@@ -1256,6 +1261,7 @@ describe('loadPrompt', () => {
             'prompts/table-fill.md',
             'prompts/scoring-audit.md',
             'prompts/api-reader-article.md',
+            'prompts/core-summary-repair.md',
             'prompts/structure-repair.md'
         ];
         for (const file of promptFiles) {
