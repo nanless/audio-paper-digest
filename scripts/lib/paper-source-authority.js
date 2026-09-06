@@ -15,6 +15,11 @@ const CONTRACT = 'paper-source-authority-v1';
 const VERSION = 1;
 const ARXIV_SNAPSHOT_CONTRACT = 'arxiv-paper-source-snapshot-v1';
 const ARXIV_RECEIPT_CONTRACT = 'arxiv-paper-source-receipt-v1';
+const ARXIV_PRODUCTION_SNAPSHOT_CONTRACT = 'arxiv-paper-source-production-snapshot-v1';
+const ARXIV_PRODUCTION_RECEIPT_CONTRACT = 'arxiv-paper-source-production-receipt-v1';
+const ARXIV_REQUEST_CONTRACT = 'arxiv-paper-source-request-v1';
+const ARXIV_OBSERVATION_CONTRACT = 'arxiv-paper-source-observation-v1';
+const ARXIV_FETCHER_CONTRACT = 'deep-analyzer-official-arxiv-fulltext-v1';
 const EVIDENCE_KINDS = Object.freeze(['arxiv-official-fulltext', 'conference-plan-source-context']);
 const EVIDENCE_KIND_SET = new Set(EVIDENCE_KINDS);
 const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
@@ -133,11 +138,20 @@ function normalizeArxivReceipt(value) {
 }
 function normalizeProof(value, evidenceKind) {
     if (evidenceKind === 'arxiv-official-fulltext') {
-        exact(value, ['snapshotName', 'snapshotFileSha256', 'snapshotSha256', 'receiptName', 'receiptFileSha256',
-            'receiptSha256', 'fulltextName', 'fulltextSha256'], 'arXiv authority proof');
+        const legacy = Object.keys(value || {}).length === 8;
+        exact(value, legacy
+            ? ['snapshotName', 'snapshotFileSha256', 'snapshotSha256', 'receiptName', 'receiptFileSha256',
+                'receiptSha256', 'fulltextName', 'fulltextSha256']
+            : ['requestName', 'requestFileSha256', 'requestSha256', 'observationName', 'observationFileSha256',
+                'observationSha256', 'snapshotName', 'snapshotFileSha256', 'snapshotSha256', 'receiptName',
+                'receiptFileSha256', 'receiptSha256', 'fulltextName', 'fulltextSha256'], 'arXiv authority proof');
         safeName(value.snapshotName, SAFE_JSON_NAME, 'proof.snapshotName');
         safeName(value.receiptName, SAFE_JSON_NAME, 'proof.receiptName');
         safeName(value.fulltextName, SAFE_TEXT_NAME, 'proof.fulltextName');
+        if (!legacy) {
+            safeName(value.requestName, SAFE_JSON_NAME, 'proof.requestName');
+            safeName(value.observationName, SAFE_JSON_NAME, 'proof.observationName');
+        }
     } else {
         exact(value, ['sourceContextName', 'sourceContextFileSha256', 'sourceContextSha256', 'sourceSnapshotSha256',
             'observationBindingSha256', 'planAuthorityBindingSha256', 'fulltextSha256'], 'conference authority proof');
@@ -145,6 +159,56 @@ function normalizeProof(value, evidenceKind) {
     }
     for (const [field, item] of Object.entries(value)) if (field.toLowerCase().includes('sha256')) sha(item, `proof.${field}`);
     return clone(value);
+}
+function normalizeProductionArxivRequest(value) {
+    exact(value, ['contract', 'version', 'operationId', 'paperId', 'arxivId', 'identitySha256', 'authorityName',
+        'officialAbsUrl', 'officialHtmlUrl', 'officialPdfUrl', 'fetcherContract', 'requestedAt', 'requestSha256'], 'arXiv production request');
+    if (value.contract !== ARXIV_REQUEST_CONTRACT || value.version !== VERSION
+        || value.paperId !== `arxiv:${value.arxivId}` || value.officialAbsUrl !== `https://arxiv.org/abs/${value.arxivId}`
+        || value.officialHtmlUrl !== `https://arxiv.org/html/${value.arxivId}`
+        || value.officialPdfUrl !== `https://arxiv.org/pdf/${value.arxivId}.pdf`
+        || value.fetcherContract !== ARXIV_FETCHER_CONTRACT || !identityApi.ARXIV_ID_RE.test(value.arxivId)) {
+        fail('arXiv production request identity/source/fetcher is invalid');
+    }
+    safeName(value.authorityName, SAFE_JSON_NAME, 'arXiv production request authorityName');
+    sha(value.identitySha256, 'arXiv production request identitySha256');
+    return selfBound(value, 'requestSha256', 'arXiv production request');
+}
+function normalizeProductionArxivObservation(value) {
+    exact(value, ['contract', 'version', 'paperId', 'arxivId', 'sourceKind', 'sourceId', 'sourceUrl',
+        'htmlAvailability', 'htmlAttempts', 'warnings', 'structuredArtifacts', 'fetchedAt', 'observationSha256'], 'arXiv production observation');
+    if (value.contract !== ARXIV_OBSERVATION_CONTRACT || value.version !== VERSION
+        || value.paperId !== `arxiv:${value.arxivId}` || !identityApi.ARXIV_ID_RE.test(value.arxivId)
+        || !['html', 'pdf'].includes(value.sourceKind) || String(value.sourceId || '').replace(/v\d+$/i, '') !== value.arxivId
+        || value.sourceUrl !== (value.sourceKind === 'html' ? `https://arxiv.org/html/${value.sourceId}` : `https://arxiv.org/pdf/${value.sourceId}.pdf`)
+        || !Number.isSafeInteger(value.htmlAttempts) || value.htmlAttempts < 0 || !Array.isArray(value.warnings)
+        || !plain(value.structuredArtifacts) || !Array.isArray(value.structuredArtifacts.tables)
+        || !Array.isArray(value.structuredArtifacts.formulas)) fail('arXiv production observation is invalid');
+    return selfBound(value, 'observationSha256', 'arXiv production observation');
+}
+function normalizeProductionArxivSnapshot(value) {
+    exact(value, ['contract', 'version', 'paperId', 'arxivId', 'officialUrl', 'requestName', 'requestFileSha256',
+        'requestSha256', 'observationName', 'observationFileSha256', 'observationSha256', 'fulltextName',
+        'fulltextSha256', 'snapshotSha256'], 'arXiv production snapshot');
+    if (value.contract !== ARXIV_PRODUCTION_SNAPSHOT_CONTRACT || value.version !== VERSION
+        || value.paperId !== `arxiv:${value.arxivId}` || value.officialUrl !== `https://arxiv.org/abs/${value.arxivId}`) {
+        fail('arXiv production snapshot identity/source is invalid');
+    }
+    for (const field of ['requestName', 'observationName']) safeName(value[field], SAFE_JSON_NAME, `arXiv production snapshot ${field}`);
+    safeName(value.fulltextName, SAFE_TEXT_NAME, 'arXiv production snapshot fulltextName');
+    for (const field of ['requestFileSha256', 'requestSha256', 'observationFileSha256', 'observationSha256', 'fulltextSha256']) sha(value[field], `arXiv production snapshot ${field}`);
+    return selfBound(value, 'snapshotSha256', 'arXiv production snapshot');
+}
+function normalizeProductionArxivReceipt(value) {
+    exact(value, ['contract', 'version', 'operationId', 'requestName', 'requestFileSha256', 'requestSha256',
+        'snapshotName', 'snapshotFileSha256', 'snapshotSha256', 'observationName', 'observationFileSha256',
+        'observationSha256', 'fulltextName', 'fulltextSha256', 'fetcherContract', 'receiptSha256'], 'arXiv production receipt');
+    if (value.contract !== ARXIV_PRODUCTION_RECEIPT_CONTRACT || value.version !== VERSION
+        || value.fetcherContract !== ARXIV_FETCHER_CONTRACT) fail('arXiv production receipt contract/version/fetcher is invalid');
+    for (const field of ['requestName', 'snapshotName', 'observationName']) safeName(value[field], SAFE_JSON_NAME, `arXiv production receipt ${field}`);
+    safeName(value.fulltextName, SAFE_TEXT_NAME, 'arXiv production receipt fulltextName');
+    for (const [field, item] of Object.entries(value)) if (field.toLowerCase().includes('sha256')) sha(item, `arXiv production receipt ${field}`);
+    return selfBound(value, 'receiptSha256', 'arXiv production receipt');
 }
 function normalizeAuthority(value) {
     exact(value, ['contract', 'version', 'paperId', 'identity', 'identitySha256', 'identityRecordSha256',
@@ -172,11 +236,46 @@ function normalizeAuthority(value) {
         evidenceKind: value.evidenceKind, proof, authoritySha256: value.authoritySha256 };
     return selfBound(normalized, 'authoritySha256', 'authority');
 }
-function replayArxiv(root, authority) {
+function replayArxiv(root, authority, authorityName) {
     const proof = authority.proof;
     const snapshot = readJson(root, proof.snapshotName, 'arXiv source snapshot');
     const receipt = readJson(root, proof.receiptName, 'arXiv source receipt');
     const fulltext = readText(root, proof.fulltextName, 'arXiv full text');
+    if (snapshot.value.contract === ARXIV_PRODUCTION_SNAPSHOT_CONTRACT) {
+        const request = readJson(root, proof.requestName, 'arXiv source request');
+        const observation = readJson(root, proof.observationName, 'arXiv source observation');
+        const normalizedRequest = normalizeProductionArxivRequest(request.value);
+        const normalizedObservation = normalizeProductionArxivObservation(observation.value);
+        const normalizedSnapshot = normalizeProductionArxivSnapshot(snapshot.value);
+        const normalizedReceipt = normalizeProductionArxivReceipt(receipt.value);
+        const identity = authority.identity;
+        const { payloadSha256, ...artifactBody } = normalizedObservation.structuredArtifacts;
+        if (request.sha256 !== proof.requestFileSha256 || normalizedRequest.requestSha256 !== proof.requestSha256
+            || observation.sha256 !== proof.observationFileSha256 || normalizedObservation.observationSha256 !== proof.observationSha256
+            || snapshot.sha256 !== proof.snapshotFileSha256 || normalizedSnapshot.snapshotSha256 !== proof.snapshotSha256
+            || receipt.sha256 !== proof.receiptFileSha256 || normalizedReceipt.receiptSha256 !== proof.receiptSha256
+            || fulltext.sha256 !== proof.fulltextSha256 || normalizedRequest.paperId !== authority.paperId
+            || normalizedRequest.identitySha256 !== authority.identitySha256 || normalizedRequest.authorityName !== authorityName
+            || normalizedObservation.paperId !== authority.paperId || normalizedSnapshot.paperId !== authority.paperId
+            || normalizedSnapshot.officialUrl !== identity.source.url || normalizedSnapshot.requestName !== proof.requestName
+            || normalizedSnapshot.requestFileSha256 !== request.sha256 || normalizedSnapshot.requestSha256 !== normalizedRequest.requestSha256
+            || normalizedSnapshot.observationName !== proof.observationName || normalizedSnapshot.observationFileSha256 !== observation.sha256
+            || normalizedSnapshot.observationSha256 !== normalizedObservation.observationSha256
+            || normalizedSnapshot.fulltextName !== proof.fulltextName || normalizedSnapshot.fulltextSha256 !== fulltext.sha256
+            || normalizedObservation.structuredArtifacts.flattenedTextSha256 !== fulltext.sha256
+            || payloadSha256 !== sha256(JSON.stringify(artifactBody))
+            || normalizedReceipt.operationId !== normalizedRequest.operationId || normalizedReceipt.requestName !== proof.requestName
+            || normalizedReceipt.requestFileSha256 !== request.sha256 || normalizedReceipt.requestSha256 !== normalizedRequest.requestSha256
+            || normalizedReceipt.snapshotName !== proof.snapshotName || normalizedReceipt.snapshotFileSha256 !== snapshot.sha256
+            || normalizedReceipt.snapshotSha256 !== normalizedSnapshot.snapshotSha256
+            || normalizedReceipt.observationName !== proof.observationName || normalizedReceipt.observationFileSha256 !== observation.sha256
+            || normalizedReceipt.observationSha256 !== normalizedObservation.observationSha256
+            || normalizedReceipt.fulltextName !== proof.fulltextName || normalizedReceipt.fulltextSha256 !== fulltext.sha256) {
+            fail('production arXiv request/observation/snapshot/receipt/fulltext chain drifted');
+        }
+        return { fulltextSha256: fulltext.sha256, sourceSnapshotSha256: normalizedSnapshot.snapshotSha256,
+            productionAuthorized: false };
+    }
     const normalizedSnapshot = normalizeArxivSnapshot(snapshot.value);
     const normalizedReceipt = normalizeArxivReceipt(receipt.value);
     if (snapshot.sha256 !== proof.snapshotFileSha256 || normalizedSnapshot.snapshotSha256 !== proof.snapshotSha256
@@ -220,7 +319,7 @@ function loadAuthorityHandle({ authorityRoot, authorityName, conferencePlanHandl
     const loaded = readJson(root, authorityName, 'paper source authority');
     const authority = normalizeAuthority(loaded.value);
     const replay = authority.evidenceKind === 'arxiv-official-fulltext'
-        ? replayArxiv(root, authority)
+        ? replayArxiv(root, authority, authorityName)
         : replayConference(root, authority, { conferencePlanHandle, conferenceSourceRoot });
     const handle = Object.freeze(Object.create(null)); AUTHORITY_HANDLES.add(handle);
     AUTHORITY_HANDLE_DATA.set(handle, Object.freeze({ public: Object.freeze({ authority: clone(authority), authorityName,
@@ -231,11 +330,21 @@ function loadAuthorityHandle({ authorityRoot, authorityName, conferencePlanHandl
     return handle;
 }
 function authorityHandleSnapshot(handle) {
-    if (!handle || typeof handle !== 'object' || !AUTHORITY_HANDLES.has(handle)) fail('authenticated paper source authority handle required');
+    if (!handle || typeof handle !== 'object') fail('authenticated paper source authority handle required');
+    if (!AUTHORITY_HANDLES.has(handle)) {
+        const delegated = require('./arxiv-source-authority.js').productionAuthorityHandleSnapshot(handle);
+        if (delegated) return delegated;
+        fail('authenticated paper source authority handle required');
+    }
     return clone(AUTHORITY_HANDLE_DATA.get(handle).public);
 }
 function replayAuthorityHandle(handle, { requireProduction = false } = {}) {
-    if (!handle || typeof handle !== 'object' || !AUTHORITY_HANDLES.has(handle)) fail('authenticated paper source authority handle required');
+    if (!handle || typeof handle !== 'object') fail('authenticated paper source authority handle required');
+    if (!AUTHORITY_HANDLES.has(handle)) {
+        const delegated = require('./arxiv-source-authority.js').replayProductionAuthorityHandle(handle);
+        if (!delegated) fail('authenticated paper source authority handle required');
+        return delegated;
+    }
     const original = AUTHORITY_HANDLE_DATA.get(handle);
     if (requireProduction && original.public.productionAuthorized !== true) {
         fail('production-authorized paper source authority handle required');
@@ -255,7 +364,10 @@ function replayAuthorityHandle(handle, { requireProduction = false } = {}) {
 }
 
 module.exports = { CONTRACT, VERSION, ARXIV_SNAPSHOT_CONTRACT, ARXIV_RECEIPT_CONTRACT, EVIDENCE_KINDS,
+    ARXIV_PRODUCTION_SNAPSHOT_CONTRACT, ARXIV_PRODUCTION_RECEIPT_CONTRACT, ARXIV_REQUEST_CONTRACT,
+    ARXIV_OBSERVATION_CONTRACT, ARXIV_FETCHER_CONTRACT,
     SAFE_JSON_NAME, SAFE_TEXT_NAME, MIN_FULLTEXT_CHARACTERS, PaperSourceAuthorityError,
     isEvidenceKind,
-    stableHash, prettyBytes, normalizeArxivSnapshot, normalizeArxivReceipt, normalizeAuthority,
+    stableHash, prettyBytes, normalizeArxivSnapshot, normalizeArxivReceipt, normalizeProductionArxivRequest,
+    normalizeProductionArxivObservation, normalizeProductionArxivSnapshot, normalizeProductionArxivReceipt, normalizeAuthority,
     loadAuthorityHandle, authorityHandleSnapshot, replayAuthorityHandle };

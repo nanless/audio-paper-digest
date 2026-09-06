@@ -92,9 +92,10 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
             if (!roots.authorityRoot) throw new Error('apply-verified requires configured paperSourceAuthorityDir');
             const authorityHandle = authorityApi.loadAuthorityHandle({ authorityRoot: roots.authorityRoot,
                 authorityName: options.authorityName });
-            const authority = authorityApi.authorityHandleSnapshot(authorityHandle).authority;
-            if (authority.evidenceKind === 'arxiv-official-fulltext') {
-                throw new Error('production arXiv source-authority adapter is not installed; fixture bundles cannot verify history');
+            const authoritySnapshot = authorityApi.authorityHandleSnapshot(authorityHandle);
+            if (authoritySnapshot.authority.evidenceKind === 'arxiv-official-fulltext'
+                && authoritySnapshot.productionAuthorized !== true) {
+                throw new Error('legacy/self-authored arXiv fixture bundles cannot verify history; use history:arxiv-source');
             }
             const directory = api.crosswalkDirectory(roots.crosswalkRoot, options.crosswalkId);
             const decisionFile = api.safeDirectJson(path.join(directory, 'decisions'), options.decisionName);
@@ -108,9 +109,6 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
     const state = api.readCrosswalk({ crosswalkRoot: roots.crosswalkRoot, crosswalkId: options.crosswalkId });
     if (state.completion.status === 'complete') {
         const kinds = new Set(Object.values(state.assignments).map(item => item.sourceAuthority?.evidenceKind));
-        if (kinds.has('arxiv-official-fulltext')) {
-            throw new Error('production arXiv source-authority adapter is not installed; fixture bundles cannot finalize history');
-        }
         if (kinds.has('conference-plan-source-context')) {
             throw new Error('production conference plan-authority bundle loader is not installed; CLI finalize fails closed');
         }

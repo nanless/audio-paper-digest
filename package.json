@@ -29,6 +29,7 @@
     "conference:extract": "bash scripts/python-runtime.sh scripts/conference-extract.py",
     "history:inventory": "bash scripts/python-runtime.sh scripts/history-inventory.py",
     "history:crosswalk": "node scripts/page-source-crosswalk.js",
+    "history:arxiv-source": "node scripts/arxiv-source-authority.js",
     "rewrite:source": "node scripts/rewrite-from-source.js",
     "paper:rethink": "node scripts/paper-rethink-server.js",
     "deep": "node scripts/deep-analysis-only.js",

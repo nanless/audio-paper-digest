@@ -12,6 +12,9 @@ const cli = require('../scripts/page-source-crosswalk.js');
 const authorityApi = require('../scripts/lib/paper-source-authority.js');
 const identityApi = require('../scripts/lib/paper-identity.js');
 const contextApi = require('../scripts/lib/conference-source-context.js');
+const arxivAdapter = require('../scripts/lib/arxiv-source-authority.js');
+const arxivCli = require('../scripts/arxiv-source-authority.js');
+const deep = require('../scripts/deep-analyzer.js');
 const { productionPlanFixture } = require('./helpers/conference-production-plan-fixture.js');
 
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -451,7 +454,7 @@ test('self-authored arXiv fixtures cannot authorize verified decisions in the co
         operationId: ids[1], actorId: 'reviewer', now: stamp }), /production-authorized/);
     const roots = { inventoryRoot: f.inventory, crosswalkRoot: f.crosswalk, authorityRoot };
     assert.throws(() => cli.main(['apply-verified', '--crosswalk', ids[0], '--decision', 'verified.json',
-        '--authority', 'authority.json', '--owner', 'worker'], { roots, now: stamp }), /adapter is not installed/);
+        '--authority', 'authority.json', '--owner', 'worker'], { roots, now: stamp }), /fixture bundles cannot verify history/);
     const child = spawnSync(process.execPath, ['-e', [
         'const cli=require(process.argv[1]);',
         'const roots=JSON.parse(process.argv[2]);',
@@ -497,6 +500,29 @@ test('self-authored arXiv fixtures cannot authorize verified decisions in the co
     assert.throws(() => api.finalizeCrosswalk({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], authorityRoot }),
         /production-authorized/);
     assert.equal(fs.existsSync(path.join(f.crosswalk, ids[0], 'final-receipt.json')), false);
+});
+
+test('official arXiv adapter authority can drive the verified crosswalk CLI path', async t => {
+    const f = fixture(t); const authorityRoot = path.join(f.root, 'authorities');
+    const originalFetch = deep.fetchArxivTextDetailed;
+    t.after(() => { deep.fetchArxivTextDetailed = originalFetch; });
+    const text = `${'official methods experiments results limitations and references '.repeat(300)}\n`;
+    const flattenedTextSha256 = sha(text);
+    const artifactBody = { version: 1, source: 'arxiv_html', tables: [], formulas: [], flattenedTextSha256 };
+    deep.fetchArxivTextDetailed = async () => ({ text, source: 'html', sourceId: '2601.00001',
+        htmlAvailability: 'available', htmlAttempts: 1, warnings: [], imageInfos: [],
+        structuredArtifacts: { ...artifactBody, payloadSha256: sha(JSON.stringify(artifactBody)) } });
+    const produced = await arxivAdapter.prepareArxivSourceAuthority({ authorityRoot, arxivId: '2601.00001',
+        authorityName: 'arxiv-2601.00001.json', apply: true, now: stamp, operationId: ids[2] });
+    const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
+        crosswalkId: ids[0], now: stamp, apply: true });
+    const pageKey = Object.keys(state.assignments)[0];
+    assert.equal(authorityApi.authorityHandleSnapshot(produced.authorityHandle).productionAuthorized, true);
+    const output = await arxivCli.main(['--apply', '--id', '2601.00001', '--authority', 'arxiv-2601.00001.json',
+        '--crosswalk', ids[0], '--page-key', pageKey, '--decision', 'official-verified.json', '--owner', 'official.adapter'],
+    { files: { paperSourceAuthorityDir: authorityRoot, pageSourceCrosswalkDir: f.crosswalk } });
+    assert.equal(output.productionAuthorized, true); assert.equal(output.crosswalk.verified, 1);
+    assert.equal(output.crosswalk.completion, 'complete');
 });
 
 test('verified conference decision replays locked bytes and final receipt requires live production authority', t => {

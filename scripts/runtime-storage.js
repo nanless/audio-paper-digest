@@ -56,6 +56,8 @@ function getLayout(projectRoot = PROJECT_ROOT) {
         { key: 'conference-executions', root: path.join(runtime, 'conference-executions') },
         { key: 'historical-page-inventories', root: path.join(runtime, 'historical-page-inventories') },
         { key: 'page-source-crosswalks', root: path.join(runtime, 'page-source-crosswalks') },
+        // Official arXiv source bundles are crosswalk inputs and must remain
+        // replayable for final-receipt verification; automatic prune has no authority here.
         { key: 'paper-source-authorities', root: path.join(runtime, 'paper-source-authorities') }
     ];
     return { projectRoot: root, current, archive, runtime, logs, controlled, protectedRuntime };

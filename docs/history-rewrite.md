@@ -1,6 +1,6 @@
 # 全历史博客重写底座
 
-状态：当前只接通 `historical-page-ledger-v1` 页面 inventory；它不会调用模型、不会改博客，
+状态：已接通页面 inventory、crosswalk 和单篇官方 arXiv 来源授权；它们不会调用模型、不会改博客，
 也不能单独证明已经具备全量重写能力。
 
 ## 已冻结的对象
@@ -34,6 +34,24 @@ npm run history:inventory -- --apply \
 
 ## 已接通的来源身份基础
 
+单篇 arXiv 页面在进入 `verified` 前，先从官方来源生成不可变授权束：
+
+```bash
+npm run history:arxiv-source -- --dry-run --id 2609.03622 --authority arxiv-2609.03622.json
+npm run history:arxiv-source -- --apply --id 2609.03622 --authority arxiv-2609.03622.json
+# 试点：同一进程完成官方抓取、verified decision 与 crosswalk CAS apply
+npm run history:arxiv-source -- --apply --id 2609.03622 --authority arxiv-2609.03622.json \
+  --crosswalk UUID --page-key page:SHA256 --decision page-verified.json --owner reviewer.1
+```
+
+`--dry-run` 不联网也不写盘。`--apply` 复用默认全文抓取器，因此仍强制项目 HTTP CONNECT
+代理；依次保存 request、来源 observation、全文、snapshot、receipt 和 authority，全部为
+`0600` 且拒绝覆盖不同字节。中断后重跑同一命令：已有完整束只能作磁盘完整性重放；组合命令
+会再次访问官方来源并逐字比较后，才在本进程取得不可序列化的 production handle。若 HTTP 已返回
+但进程在 observation 落盘前退出，下一次会重复抓取这个非 LLM 公共来源；孤立 request 不代表成功，
+也不能据此签发 verified/final。只有单边 source 工件时失败关闭等待人工检查。旧博客正文、分析、
+Reader 或自行拼出的 legacy snapshot/receipt 都不能取得 production authorization。
+
 `page-source-crosswalk-v1` 会严格重放 canonical ledger/receipt 字节与自校验 SHA，再以 opaque
 handle 为每个 `kind=paper` 页面建立隔离、可恢复的 pending 状态。assignment 只含页面路径和
 整页 SHA，不带标题、标签或旧正文；受控 decision/CAS 可以记录 `needs-review`、`blocked`、
@@ -61,9 +79,12 @@ npm run history:crosswalk -- finalize --crosswalk UUID
 decision 文件只能放在 `data/runtime/page-source-crosswalks/<UUID>/decisions/`，authority 文件及其
 直接命名的 proof 文件只能放在受保护的 `data/runtime/paper-source-authorities/`。生产 CLI 不接受
 任意路径或序列化伪 handle；`apply-verified` 会先现场重放 bundle，普通 `apply` 拒绝 verified。
-当前尚未提供自动生成 arXiv authority/decision 的生产 runner，因此 CLI 会明确拒绝自包含的 arXiv
-fixture；会议 authority 还要求当前进程中的 authenticated plan handle，因此命令行消费同样会有意
-失败关闭。测试 fixture 只证明合同与重放机制，不能当作真实历史来源收集已完成。
+通用 `history:crosswalk apply-verified` 重新加载磁盘 arXiv bundle 时始终得到
+`productionAuthorized=false`；必须使用上述组合命令，让实际官方抓取产生的 module-private opaque
+handle 在同一进程完成 decision 与 apply。旧式 fixture 和自行拼出的新式磁盘链同样不能升级权限。
+会议 authority 还要求当前进程中的 authenticated plan
+handle，因此命令行消费同样会有意失败关闭。当前仍需人工生成与页面绑定的 verified decision，
+不会按标题自动确认身份。
 
 同一 canonical identity 的多个页面形成按 `paperId`、`pageKey` 排序的确定性 `identityGroups`。
 只有全部页面都是 authenticated verified 时状态才为 complete；`finalize` 会逐项重新加载来源
@@ -79,7 +100,7 @@ symlink 或不可重放状态都会失败关闭。decision apply 使用目录锁
 只有同机死 PID、owner 证据完整且文件时间和 heartbeat 都超过 lease 时，才在独占 reclaim
 marker 下回收。跨主机、刚死亡、被篡改或带额外内容的锁都不会被猜测删除。
 
-后续仍需实现真实 arXiv authority 采集 runner、会议 plan authority 的耐久跨进程装载，以及按
+后续仍需实现批量 arXiv authority/decision 编排、会议 plan authority 的耐久跨进程装载，以及按
 final receipt 中唯一 identity group 获取完整来源。完成这些以后，才能按唯一论文分析一次，再向
 重复页面和各类汇总做确定性投影。
 

@@ -78,7 +78,8 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/conference-extraction-receipt.js` | Node 库 | 重放请求、来源和派生工件，并在每次 handle 加载时调用固定 Python/pypdf 临时重提取验证；只有字节一致且达到门槛的 weak profile 可进入 staging。 |
 | `lib/conference-staging.js` | Node 库 | 将 authenticated filter selection 与人工复核 extraction 精确绑定为 import manifest/receipt；excluded 或身份别名不能进入。 |
 | `lib/paper-identity.js` | Node 库 | `paper-identity-v1` 的 Node 规范化、官方来源 URL 门禁与稳定 SHA；不替换既有 arXiv helper。 |
-| `lib/paper-source-authority.js` | Node 库 | 重放 canonical identity、完整 identity record、来源 snapshot/receipt/fulltext SHA 并返回 source-only opaque handle；arXiv 自哈希 fixture 永远不是 production authorization，会议合同还要求当前进程真实 plan handle。 |
+| `lib/paper-source-authority.js` | Node 库 | 重放 canonical identity、完整 identity record、来源 snapshot/receipt/fulltext SHA 并返回 source-only opaque handle；通用磁盘 arXiv loader 永远不恢复 production authorization，会议合同还要求当前进程真实 plan handle。 |
+| `lib/arxiv-source-authority.js` | Node 库 | 复用默认强制代理 arXiv 全文抓取器，把官方来源封存为 request→observation→fulltext→snapshot→receipt→authority；支持 O_EXCL 恢复且拒绝旧博客正文。 |
 | `lib/page-source-crosswalk.js` | Node 库 | 跨运行时重放历史 inventory，以锁内 CAS/append-only 决策绑定 pageId/页面 SHA 与 production-authorized source authority；标题不能 verified，同 identity 多页确定性分组，finalize 与每次 final receipt 读取都重新验证来源。 |
 
 ## 默认 LLM/API：恢复与维护入口
@@ -98,7 +99,8 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `conference_extractor.py` | Python 会议 PDF 提取实现：严格文件/SHA、UTF-8 byte offset、pypdf 页文本、O_EXCL 和 typed blocked/integrity 状态。 |
 | `history-inventory.py` | 只读扫描配置博客的历史页面、URL 与聚合拓扑；dry-run 零写，apply 在 clean main 上成对写不可变 ledger/receipt。 |
 | `historical_page_scan.py` | `historical-page-ledger-v1` 严格扫描：无旧正文、稳定 pageId/cohort、逐次链接目标、未核 taxonomy 候选、Git tree/remote-main proof，以及 scan→O_EXCL 写入前后 CAS。 |
-| `page-source-crosswalk.js` | 从直接命名的历史 ledger/receipt 创建隔离 crosswalk，管理受控 decision/CAS；`apply-verified` 只消费配置 authority 目录的直接文件名并重放完整 proof，真实 adapter 缺失时 fail closed；`finalize` 要求全部 verified 且来源可现场重放。 |
+| `page-source-crosswalk.js` | 从直接命名的历史 ledger/receipt 创建隔离 crosswalk，管理受控 decision/CAS；普通磁盘 arXiv bundle 不能升级 production 权限；`finalize` 要求全部 verified 且来源可现场重放。 |
+| `arxiv-source-authority.js` | 对规范化 arXiv ID 规划或抓取官方全文；组合参数在同一进程用 live opaque handle 完成 verified decision/CAS，磁盘重载会降级；dry-run 不联网、不写盘。 |
 | `paper_identity.py` | `paper-identity-v1` 的 Python 同构实现，使用共享向量防止发布侧与 Node 身份/SHA 漂移。 |
 | `paper_taxonomy.py` | 与Node共用registry的Python加载、验证和精确映射；未知/歧义不自动收窄。 |
 | `taxonomy_paths.py` | 集中管理独立标签预览的Python路径，复用项目根与环境；不改变正式发布path_config模板指纹。 |
